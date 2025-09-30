@@ -398,9 +398,10 @@ type LocalBackend struct {
 }
 
 // HealthTracker returns the health tracker for the backend.
-func (b *LocalBackend) HealthTracker() *health.Tracker {
-	return b.health
-}
+func (b *LocalBackend) HealthTracker() *health.Tracker { return b.health }
+
+// Logger returns the logger for the backend.
+func (b *LocalBackend) Logger() logger.Logf { return b.logf }
 
 // UserMetricsRegistry returns the usermetrics registry for the backend
 func (b *LocalBackend) UserMetricsRegistry() *usermetric.Registry {
@@ -4154,6 +4155,9 @@ func (b *LocalBackend) SetUseExitNodeEnabled(actor ipnauth.Actor, v bool) (ipn.P
 // MaybeClearAppConnector clears the routes from any AppConnector if
 // AdvertiseRoutes has been set in the MaskedPrefs.
 func (b *LocalBackend) MaybeClearAppConnector(mp *ipn.MaskedPrefs) error {
+	if !buildfeatures.HasAppConnectors {
+		return nil
+	}
 	var err error
 	if ac := b.AppConnector(); ac != nil && mp.AdvertiseRoutesSet {
 		err = ac.ClearRoutes()
@@ -4770,6 +4774,9 @@ func (b *LocalBackend) blockEngineUpdates(block bool) {
 // current network map and preferences.
 // b.mu must be held.
 func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
+	if !buildfeatures.HasAppConnectors {
+		return
+	}
 	const appConnectorCapName = "tailscale.com/app-connectors"
 	defer func() {
 		if b.hostinfo != nil {
@@ -4943,7 +4950,9 @@ func (b *LocalBackend) authReconfig() {
 	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", prefs.RouteAll(), prefs.CorpDNS(), flags, err)
 
 	b.initPeerAPIListener()
-	b.readvertiseAppConnectorRoutes()
+	if buildfeatures.HasAppConnectors {
+		b.readvertiseAppConnectorRoutes()
+	}
 }
 
 // shouldUseOneCGNATRoute reports whether we should prefer to make one big
@@ -6363,6 +6372,9 @@ func (b *LocalBackend) OfferingExitNode() bool {
 // OfferingAppConnector reports whether b is currently offering app
 // connector services.
 func (b *LocalBackend) OfferingAppConnector() bool {
+	if !buildfeatures.HasAppConnectors {
+		return false
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.appConnector != nil
@@ -6372,6 +6384,9 @@ func (b *LocalBackend) OfferingAppConnector() bool {
 //
 // TODO(nickkhyl): move app connectors to [nodeBackend], or perhaps a feature package?
 func (b *LocalBackend) AppConnector() *appc.AppConnector {
+	if !buildfeatures.HasAppConnectors {
+		return nil
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.appConnector
@@ -6917,6 +6932,9 @@ func (b *LocalBackend) DebugBreakDERPConns() error {
 // ObserveDNSResponse passes a DNS response from the PeerAPI DNS server to the
 // App Connector to enable route discovery.
 func (b *LocalBackend) ObserveDNSResponse(res []byte) error {
+	if !buildfeatures.HasAppConnectors {
+		return nil
+	}
 	var appConnector *appc.AppConnector
 	b.mu.Lock()
 	if b.appConnector == nil {
@@ -7020,6 +7038,9 @@ func namespaceKeyForCurrentProfile(pm *profileManager, key ipn.StateKey) ipn.Sta
 const routeInfoStateStoreKey ipn.StateKey = "_routeInfo"
 
 func (b *LocalBackend) storeRouteInfo(ri *appc.RouteInfo) error {
+	if !buildfeatures.HasAppConnectors {
+		return feature.ErrUnavailable
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.pm.CurrentProfile().ID() == "" {
@@ -7034,6 +7055,9 @@ func (b *LocalBackend) storeRouteInfo(ri *appc.RouteInfo) error {
 }
 
 func (b *LocalBackend) readRouteInfoLocked() (*appc.RouteInfo, error) {
+	if !buildfeatures.HasAppConnectors {
+		return nil, feature.ErrUnavailable
+	}
 	if b.pm.CurrentProfile().ID() == "" {
 		return &appc.RouteInfo{}, nil
 	}

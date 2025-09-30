@@ -51,9 +51,6 @@ var c2nHandlers = map[methodAndPath]c2nHandler{
 	// SSH
 	req("/ssh/usernames"): handleC2NSSHUsernames,
 
-	// App Connectors.
-	req("GET /appconnector/routes"): handleC2NAppConnectorDomainRoutesGet,
-
 	// Linux netfilter.
 	req("POST /netfilter-kind"): handleC2NSetNetfilterKind,
 }
@@ -292,27 +289,6 @@ func handleC2NSockStats(b *LocalBackend, w http.ResponseWriter, r *http.Request)
 	b.sockstatLogger.Flush()
 	fmt.Fprintf(w, "logid: %s\n", b.sockstatLogger.LogID())
 	fmt.Fprintf(w, "debug info: %v\n", sockstats.DebugInfo())
-}
-
-// handleC2NAppConnectorDomainRoutesGet handles returning the domains
-// that the app connector is responsible for, as well as the resolved
-// IP addresses for each domain. If the node is not configured as
-// an app connector, an empty map is returned.
-func handleC2NAppConnectorDomainRoutesGet(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
-	b.logf("c2n: GET /appconnector/routes received")
-
-	var res tailcfg.C2NAppConnectorDomainRoutesResponse
-	appConnector := b.AppConnector()
-	if appConnector == nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(res)
-		return
-	}
-
-	res.Domains = appConnector.DomainRoutes()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
 }
 
 func handleC2NSetNetfilterKind(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
