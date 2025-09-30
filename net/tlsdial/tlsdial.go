@@ -28,6 +28,7 @@ import (
 
 	"tailscale.com/derp/derpconst"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/bakedroots"
@@ -35,12 +36,6 @@ import (
 )
 
 var counterFallbackOK int32 // atomic
-
-// If SSLKEYLOGFILE is set, it's a file to which we write our TLS private keys
-// in a way that WireShark can read.
-//
-// See https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
-var sslKeyLogFile = os.Getenv("SSLKEYLOGFILE")
 
 var debug = envknob.RegisterBool("TS_DEBUG_TLS_DIAL")
 
@@ -80,13 +75,19 @@ func Config(ht *health.Tracker, base *tls.Config) *tls.Config {
 	// the real TCP connection) because host is the ultimate hostname, but this
 	// tls.Config is used for both the proxy and the ultimate target.
 
-	if n := sslKeyLogFile; n != "" {
-		f, err := os.OpenFile(n, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil {
-			log.Fatal(err)
+	if buildfeatures.HasDebug {
+		// If SSLKEYLOGFILE is set, it's a file to which we write our TLS private keys
+		// in a way that WireShark can read.
+		//
+		// See https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
+		if n := os.Getenv("SSLKEYLOGFILE"); n != "" {
+			f, err := os.OpenFile(n, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("WARNING: writing to SSLKEYLOGFILE %v", n)
+			conf.KeyLogWriter = f
 		}
-		log.Printf("WARNING: writing to SSLKEYLOGFILE %v", n)
-		conf.KeyLogWriter = f
 	}
 
 	if conf.InsecureSkipVerify {
@@ -164,10 +165,12 @@ func Config(ht *health.Tracker, base *tls.Config) *tls.Config {
 		if debug() {
 			log.Printf("tlsdial(sys %q): %v", dialedHost, errSys)
 		}
+		if !buildfeatures.HasBakedRoots || (errSys == nil && !debug()) {
+			return errSys
+		}
 
-		// Always verify with our baked-in Let's Encrypt certificate,
-		// so we can log an informational message. This is useful for
-		// detecting SSL MiTM.
+		// If we have baked-in LetsEncrypt roots and we either failed above, or
+		// debug logging is enabled, also verify with LetsEncrypt.
 		opts.Roots = bakedroots.Get()
 		_, bakedErr := cs.PeerCertificates[0].Verify(opts)
 		if debug() {
@@ -239,8 +242,8 @@ func SetConfigExpectedCert(c *tls.Config, certDNSName string) {
 		if debug() {
 			log.Printf("tlsdial(sys %q/%q): %v", c.ServerName, certDNSName, errSys)
 		}
-		if errSys == nil {
-			return nil
+		if !buildfeatures.HasBakedRoots || errSys == nil {
+			return errSys
 		}
 		opts.Roots = bakedroots.Get()
 		_, err := certs[0].Verify(opts)

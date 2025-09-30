@@ -9,13 +9,19 @@ package blockblame
 import (
 	"crypto/x509"
 	"strings"
+	"sync"
+
+	"tailscale.com/feature/buildfeatures"
 )
 
 // VerifyCertificate checks if the given certificate c is issued by a firewall manufacturer
 // that is known to block Tailscale connections. It returns true and the Manufacturer of
 // the equipment if it is, or false and nil if it is not.
 func VerifyCertificate(c *x509.Certificate) (m *Manufacturer, ok bool) {
-	for _, m := range Manufacturers {
+	if !buildfeatures.HasDebug {
+		return nil, false
+	}
+	for _, m := range manufacturers() {
 		if m.match != nil && m.match(c) {
 			return m, true
 		}
@@ -33,45 +39,55 @@ type Manufacturer struct {
 	match matchFunc
 }
 
-var Manufacturers = []*Manufacturer{
-	{
-		Name:  "Aruba Networks",
-		match: issuerContains("Aruba"),
-	},
-	{
-		Name:  "Cisco",
-		match: issuerContains("Cisco"),
-	},
-	{
-		Name: "Fortinet",
-		match: matchAny(
-			issuerContains("Fortinet"),
-			certEmail("support@fortinet.com"),
-		),
-	},
-	{
-		Name:  "Huawei",
-		match: certEmail("mobile@huawei.com"),
-	},
-	{
-		Name: "Palo Alto Networks",
-		match: matchAny(
-			issuerContains("Palo Alto Networks"),
-			issuerContains("PAN-FW"),
-		),
-	},
-	{
-		Name:  "Sophos",
-		match: issuerContains("Sophos"),
-	},
-	{
-		Name: "Ubiquiti",
-		match: matchAny(
-			issuerContains("UniFi"),
-			issuerContains("Ubiquiti"),
-		),
-	},
+func manufacturers() []*Manufacturer {
+	manufacturersOnce.Do(func() {
+		manufacturersList = []*Manufacturer{
+			{
+				Name:  "Aruba Networks",
+				match: issuerContains("Aruba"),
+			},
+			{
+				Name:  "Cisco",
+				match: issuerContains("Cisco"),
+			},
+			{
+				Name: "Fortinet",
+				match: matchAny(
+					issuerContains("Fortinet"),
+					certEmail("support@fortinet.com"),
+				),
+			},
+			{
+				Name:  "Huawei",
+				match: certEmail("mobile@huawei.com"),
+			},
+			{
+				Name: "Palo Alto Networks",
+				match: matchAny(
+					issuerContains("Palo Alto Networks"),
+					issuerContains("PAN-FW"),
+				),
+			},
+			{
+				Name:  "Sophos",
+				match: issuerContains("Sophos"),
+			},
+			{
+				Name: "Ubiquiti",
+				match: matchAny(
+					issuerContains("UniFi"),
+					issuerContains("Ubiquiti"),
+				),
+			},
+		}
+	})
+	return manufacturersList
 }
+
+var (
+	manufacturersOnce sync.Once
+	manufacturersList []*Manufacturer
+)
 
 type matchFunc func(*x509.Certificate) bool
 

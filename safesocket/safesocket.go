@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 )
 
 type closeable interface {
@@ -108,7 +109,12 @@ func LocalTCPPortAndToken() (port int, token string, err error) {
 
 // PlatformUsesPeerCreds reports whether the current platform uses peer credentials
 // to authenticate connections.
-func PlatformUsesPeerCreds() bool { return GOOSUsesPeerCreds(runtime.GOOS) }
+func PlatformUsesPeerCreds() bool {
+	if !buildfeatures.HasUnixSocketIdentity {
+		return false
+	}
+	return GOOSUsesPeerCreds(runtime.GOOS)
+}
 
 // GOOSUsesPeerCreds is like PlatformUsesPeerCreds but takes a
 // runtime.GOOS value instead of using the current one.

@@ -354,33 +354,35 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if strings.HasPrefix(r.URL.Path, "/dns-query") {
+	if buildfeatures.HasDNS && strings.HasPrefix(r.URL.Path, "/dns-query") {
 		metricDNSCalls.Add(1)
 		h.handleDNSQuery(w, r)
 		return
 	}
-	switch r.URL.Path {
-	case "/v0/goroutines":
-		h.handleServeGoroutines(w, r)
-		return
-	case "/v0/env":
-		h.handleServeEnv(w, r)
-		return
-	case "/v0/metrics":
-		h.handleServeMetrics(w, r)
-		return
-	case "/v0/magicsock":
-		h.handleServeMagicsock(w, r)
-		return
-	case "/v0/dnsfwd":
-		h.handleServeDNSFwd(w, r)
-		return
-	case "/v0/interfaces":
-		h.handleServeInterfaces(w, r)
-		return
-	case "/v0/sockstats":
-		h.handleServeSockStats(w, r)
-		return
+	if buildfeatures.HasDebug {
+		switch r.URL.Path {
+		case "/v0/goroutines":
+			h.handleServeGoroutines(w, r)
+			return
+		case "/v0/env":
+			h.handleServeEnv(w, r)
+			return
+		case "/v0/metrics":
+			h.handleServeMetrics(w, r)
+			return
+		case "/v0/magicsock":
+			h.handleServeMagicsock(w, r)
+			return
+		case "/v0/dnsfwd":
+			h.handleServeDNSFwd(w, r)
+			return
+		case "/v0/interfaces":
+			h.handleServeInterfaces(w, r)
+			return
+		case "/v0/sockstats":
+			h.handleServeSockStats(w, r)
+			return
+		}
 	}
 	if ph, ok := peerAPIHandlers[r.URL.Path]; ok {
 		ph(h, w, r)

@@ -435,7 +435,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 	e.tundev.PreFilterPacketOutboundToWireGuardEngineIntercept = e.handleLocalPackets
 
-	if envknob.BoolDefaultTrue("TS_DEBUG_CONNECT_FAILURES") {
+	if buildfeatures.HasDebug && envknob.BoolDefaultTrue("TS_DEBUG_CONNECT_FAILURES") {
 		if e.tundev.PreFilterPacketInboundFromWireGuard != nil {
 			return nil, errors.New("unexpected PreFilterIn already set")
 		}

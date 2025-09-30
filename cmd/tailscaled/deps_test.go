@@ -237,16 +237,22 @@ func minTags() string {
 }
 
 func TestMinTailscaledNoCLI(t *testing.T) {
+	badSubstrs := []string{
+		"cbor",
+		"regexp",
+		"golang.org/x/net/proxy",
+		"internal/socks",
+		"github.com/tailscale/peercred",
+	}
 	deptest.DepChecker{
 		GOOS:   "linux",
 		GOARCH: "amd64",
 		Tags:   minTags(),
 		OnDep: func(dep string) {
-			if strings.Contains(dep, "regexp") {
-				t.Errorf("unexpected dep: %q", dep)
-			}
-			if strings.Contains(dep, "cbor") {
-				t.Errorf("unexpected dep: %q", dep)
+			for _, bad := range badSubstrs {
+				if strings.Contains(dep, bad) {
+					t.Errorf("unexpected dep: %q", dep)
+				}
 			}
 		},
 	}.Check(t)

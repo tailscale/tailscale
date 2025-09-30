@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/util/set"
 )
 
@@ -130,15 +131,17 @@ func (m *Metric) Publish() {
 	metrics[m.name] = m
 	sortedDirty = true
 
-	if m.f != nil {
-		lastLogVal = append(lastLogVal, scanEntry{f: m.f})
-	} else {
-		if len(valFreeList) == 0 {
-			valFreeList = make([]int64, 256)
+	if buildfeatures.HasLogTail {
+		if m.f != nil {
+			lastLogVal = append(lastLogVal, scanEntry{f: m.f})
+		} else {
+			if len(valFreeList) == 0 {
+				valFreeList = make([]int64, 256)
+			}
+			m.v = &valFreeList[0]
+			valFreeList = valFreeList[1:]
+			lastLogVal = append(lastLogVal, scanEntry{v: m.v})
 		}
-		m.v = &valFreeList[0]
-		valFreeList = valFreeList[1:]
-		lastLogVal = append(lastLogVal, scanEntry{v: m.v})
 	}
 
 	m.regIdx = len(unsorted)
@@ -319,6 +322,9 @@ const (
 //   - increment a metric: (decrements if negative)
 //     'I' + hex(varint(wireid)) + hex(varint(value))
 func EncodeLogTailMetricsDelta() string {
+	if !buildfeatures.HasLogTail {
+		return ""
+	}
 	mu.Lock()
 	defer mu.Unlock()
 
