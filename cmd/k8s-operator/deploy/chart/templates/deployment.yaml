@@ -29,6 +29,9 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.operatorConfig.priorityClassName }}
+      priorityClassName: {{ .Values.operatorConfig.priorityClassName }}
+      {{- end }}
       serviceAccountName: operator
       {{- with .Values.operatorConfig.podSecurityContext }}
       securityContext:
