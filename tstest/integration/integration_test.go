@@ -272,11 +272,17 @@ func TestStateSavedOnStart(t *testing.T) {
 // and if it sees them, completes the auth process.
 //
 // It counts how many auth URLs it's seen.
-func authURLHandler(t *testing.T, control *testcontrol.Server, authCountAtomic *atomic.Int32) *authURLParserWriter {
+func authURLHandler(t *testing.T, node *TestNode, authCountAtomic *atomic.Int32, machineAuthCountAtomic *atomic.Int32) *authURLParserWriter {
 	t.Helper()
-	return &authURLParserWriter{fn: func(urlStr string) error {
-		t.Logf("saw auth URL %q", urlStr)
-		if control.CompleteAuth(urlStr) {
+	control := node.env.Control
+	return &authURLParserWriter{
+		authFn: func(urlStr string) error {
+			t.Logf("saw auth URL %q", urlStr)
+			if !control.CompleteAuth(urlStr) {
+				err := fmt.Errorf("Failed to complete initial login to %q", urlStr)
+				t.Fatal(err)
+				return err
+			}
 			if authCountAtomic.Add(1) > 1 {
 				err := errors.New("completed multiple auth URLs")
 				t.Error(err)
@@ -284,81 +290,149 @@ func authURLHandler(t *testing.T, control *testcontrol.Server, authCountAtomic *
 			}
 			t.Logf("completed login to %s", urlStr)
 			return nil
-		} else {
-			err := fmt.Errorf("Failed to complete initial login to %q", urlStr)
-			t.Fatal(err)
-			return err
-		}
-	}}
+		},
+		machineAuthFn: func(urlStr string) error {
+			t.Logf("saw machine auth URL %q", urlStr)
+			nodeKey := node.MustStatus().Self.PublicKey
+			if !control.CompleteMachineAuth(&nodeKey) {
+				err := fmt.Errorf("Failed to complete machine approval with %q", urlStr)
+				t.Fatal(err)
+				return err
+			}
+			if machineAuthCountAtomic.Add(1) > 1 {
+				err := errors.New("completed multiple machine auth URLs")
+				t.Error(err)
+				return err
+			}
+			t.Logf("completed machine approval for %s", urlStr)
+			return nil
+		},
+	}
 }
 
 func TestOneNodeUpAuth(t *testing.T) {
+	type step struct {
+		args []string
+		//
+		// Do we need to log in again with a new /auth/ URL?
+		needsNewAuthURL bool
+		//
+		// Do we need to print a machine approval URL?
+		needsMachineAuthURL bool
+	}
+
 	for _, tt := range []struct {
 		name string
-		args []string
 		//
 		// What auth key should we use for control?
 		authKey string
 		//
-		// Is tailscaled already logged in before we run this `up` command?
-		alreadyLoggedIn bool
+		// Do we require device approval in the tailnet?
+		requireMachineAuth bool
 		//
-		// Do we need to log in again with a new /auth/ URL?
-		needsNewAuthURL bool
+		// What steps should we take in the test?
+		steps []step
 	}{
 		{
-			name:            "up",
-			args:            []string{"up"},
-			needsNewAuthURL: true,
+			name: "up",
+			steps: []step{
+				{args: []string{"up"}, needsNewAuthURL: true},
+			},
 		},
 		{
-			name:            "up-with-force-reauth",
-			args:            []string{"up", "--force-reauth"},
-			needsNewAuthURL: true,
+			name: "up-with-machine-auth",
+			steps: []step{
+				{args: []string{"up"}, needsNewAuthURL: true, needsMachineAuthURL: true},
+			},
+			requireMachineAuth: true,
 		},
 		{
-			name:            "up-with-auth-key",
-			args:            []string{"up", "--auth-key=opensesame"},
-			authKey:         "opensesame",
-			needsNewAuthURL: false,
+			name: "up-with-force-reauth",
+			steps: []step{
+				{args: []string{"up", "--force-reauth"}, needsNewAuthURL: true},
+			},
 		},
 		{
-			name:            "up-with-force-reauth-and-auth-key",
-			args:            []string{"up", "--force-reauth", "--auth-key=opensesame"},
-			authKey:         "opensesame",
-			needsNewAuthURL: false,
+			name:    "up-with-auth-key",
+			authKey: "opensesame",
+			steps: []step{
+				{args: []string{"up", "--auth-key=opensesame"}},
+			},
 		},
 		{
-			name:            "up-after-login",
-			args:            []string{"up"},
-			alreadyLoggedIn: true,
-			needsNewAuthURL: false,
+			name:    "up-with-auth-key-with-machine-auth",
+			authKey: "opensesame",
+			steps: []step{
+				{
+					args:                []string{"up", "--auth-key=opensesame"},
+					needsNewAuthURL:     false,
+					needsMachineAuthURL: true,
+				},
+			},
+			requireMachineAuth: true,
 		},
 		{
-			name:            "up-with-force-reauth-after-login",
-			args:            []string{"up", "--force-reauth"},
-			alreadyLoggedIn: true,
-			needsNewAuthURL: true,
+			name:    "up-with-force-reauth-and-auth-key",
+			authKey: "opensesame",
+			steps: []step{
+				{args: []string{"up", "--force-reauth", "--auth-key=opensesame"}},
+			},
 		},
 		{
-			name:            "up-with-auth-key-after-login",
-			args:            []string{"up", "--auth-key=opensesame"},
-			authKey:         "opensesame",
-			alreadyLoggedIn: true,
-			needsNewAuthURL: false,
+			name: "up-after-login",
+			steps: []step{
+				{args: []string{"up"}, needsNewAuthURL: true},
+				{args: []string{"up"}, needsNewAuthURL: false},
+			},
 		},
 		{
-			name:            "up-with-force-reauth-and-auth-key-after-login",
-			args:            []string{"up", "--force-reauth", "--auth-key=opensesame"},
-			authKey:         "opensesame",
-			alreadyLoggedIn: true,
-			needsNewAuthURL: false,
+			name: "up-after-login-with-machine-approval",
+			steps: []step{
+				{args: []string{"up"}, needsNewAuthURL: true, needsMachineAuthURL: true},
+				{args: []string{"up"}, needsNewAuthURL: false, needsMachineAuthURL: false},
+			},
+			requireMachineAuth: true,
+		},
+		{
+			name: "up-with-force-reauth-after-login",
+			steps: []step{
+				{args: []string{"up"}, needsNewAuthURL: true},
+				{args: []string{"up", "--force-reauth"}, needsNewAuthURL: true},
+			},
+		},
+		{
+			name: "up-with-force-reauth-after-login-with-machine-approval",
+			steps: []step{
+				{args: []string{"up"}, needsNewAuthURL: true, needsMachineAuthURL: true},
+				{args: []string{"up", "--force-reauth"}, needsNewAuthURL: true, needsMachineAuthURL: false},
+			},
+			requireMachineAuth: true,
+		},
+		{
+			name:    "up-with-auth-key-after-login",
+			authKey: "opensesame",
+			steps: []step{
+				{args: []string{"up", "--auth-key=opensesame"}},
+				{args: []string{"up", "--auth-key=opensesame"}},
+			},
+		},
+		{
+			name:    "up-with-force-reauth-and-auth-key-after-login",
+			authKey: "opensesame",
+			steps: []step{
+				{args: []string{"up", "--auth-key=opensesame"}},
+				{args: []string{"up", "--force-reauth", "--auth-key=opensesame"}},
+			},
 		},
 	} {
 		tstest.Shard(t)
 
 		for _, useSeamlessKeyRenewal := range []bool{true, false} {
-			t.Run(fmt.Sprintf("%s-seamless-%t", tt.name, useSeamlessKeyRenewal), func(t *testing.T) {
+			name := tt.name
+			if useSeamlessKeyRenewal {
+				name += "-with-seamless"
+			}
+			t.Run(name, func(t *testing.T) {
 				tstest.Parallel(t)
 
 				env := NewTestEnv(t, ConfigureControl(
@@ -367,6 +441,10 @@ func TestOneNodeUpAuth(t *testing.T) {
 							control.RequireAuthKey = tt.authKey
 						} else {
 							control.RequireAuth = true
+						}
+
+						if tt.requireMachineAuth {
+							control.RequireMachineAuth = true
 						}
 
 						control.AllNodesSameUser = true
@@ -383,49 +461,41 @@ func TestOneNodeUpAuth(t *testing.T) {
 				d1 := n1.StartDaemon()
 				defer d1.MustCleanShutdown(t)
 
-				cmdArgs := append(tt.args, "--login-server="+env.ControlURL())
+				for i, step := range tt.steps {
+					t.Logf("Running step %d", i)
+					cmdArgs := append(step.args, "--login-server="+env.ControlURL())
 
-				// If we should be logged in at the start of the test case, go ahead
-				// and run the login command.
-				//
-				// Otherwise, just wait for tailscaled to be listening.
-				var authCountAtomic atomic.Int32
+					t.Logf("Running command: %s", strings.Join(cmdArgs, " "))
 
-				if tt.alreadyLoggedIn {
-					t.Logf("Running initial login: %s", strings.Join(cmdArgs, " "))
+					var authCountAtomic atomic.Int32
+					var machineAuthCountAtomic atomic.Int32
+
 					cmd := n1.Tailscale(cmdArgs...)
-					cmd.Stdout = authURLHandler(t, env.Control, &authCountAtomic)
+					cmd.Stdout = authURLHandler(t, n1, &authCountAtomic, &machineAuthCountAtomic)
 					cmd.Stderr = cmd.Stdout
 					if err := cmd.Run(); err != nil {
 						t.Fatalf("up: %v", err)
 					}
-					authCountAtomic.Store(0)
+
 					n1.AwaitRunning()
-				} else {
-					n1.AwaitListening()
-				}
 
-				st := n1.MustStatus()
-				t.Logf("Status: %s", st.BackendState)
+					var expectedAuthUrls int32
+					if step.needsNewAuthURL {
+						expectedAuthUrls = 1
+					}
+					if n := authCountAtomic.Load(); n != expectedAuthUrls {
+						t.Errorf("Auth URLs completed = %d; want %d", n, expectedAuthUrls)
+					}
+					authCountAtomic.Store(0)
 
-				t.Logf("Running command: %s", strings.Join(cmdArgs, " "))
-				cmd := n1.Tailscale(cmdArgs...)
-				cmd.Stdout = authURLHandler(t, env.Control, &authCountAtomic)
-				cmd.Stderr = cmd.Stdout
-
-				if err := cmd.Run(); err != nil {
-					t.Fatalf("up: %v", err)
-				}
-				t.Logf("Got IP: %v", n1.AwaitIP4())
-
-				n1.AwaitRunning()
-
-				var expectedAuthUrls int32
-				if tt.needsNewAuthURL {
-					expectedAuthUrls = 1
-				}
-				if n := authCountAtomic.Load(); n != expectedAuthUrls {
-					t.Errorf("Auth URLs completed = %d; want %d", n, expectedAuthUrls)
+					var expectedMachineAuthUrls int32
+					if step.needsMachineAuthURL {
+						expectedMachineAuthUrls = 1
+					}
+					if n := machineAuthCountAtomic.Load(); n != expectedMachineAuthUrls {
+						t.Errorf("Machine auth URLs completed = %d; want %d", n, expectedMachineAuthUrls)
+					}
+					machineAuthCountAtomic.Store(0)
 				}
 			})
 		}
@@ -460,7 +530,7 @@ func TestOneNodeUpInterruptedAuth(t *testing.T) {
 
 	// This handler watches for auth URLs in stdout, then cancels the
 	// running `tailscale up` CLI command.
-	cmd1.Stdout = &authURLParserWriter{fn: func(urlStr string) error {
+	cmd1.Stdout = &authURLParserWriter{authFn: func(urlStr string) error {
 		t.Logf("saw auth URL %q", urlStr)
 		cmd1.Process.Kill()
 		return nil
@@ -480,9 +550,10 @@ func TestOneNodeUpInterruptedAuth(t *testing.T) {
 	t.Logf("Running second command: %s", strings.Join(cmdArgs, " "))
 
 	var authCountAtomic atomic.Int32
+	var machineAuthCountAtomic atomic.Int32
 
 	cmd2 := n.Tailscale(cmdArgs...)
-	cmd2.Stdout = authURLHandler(t, env.Control, &authCountAtomic)
+	cmd2.Stdout = authURLHandler(t, n, &authCountAtomic, &machineAuthCountAtomic)
 	cmd2.Stderr = cmd2.Stdout
 
 	if err := cmd2.Run(); err != nil {
@@ -490,6 +561,92 @@ func TestOneNodeUpInterruptedAuth(t *testing.T) {
 	}
 
 	n.AwaitRunning()
+}
+
+// Regression test for https://github.com/tailscale/tailscale/issues/17361
+//
+// If we run `tailscale up` when a device is authorized but waiting to be
+// approved, we should only print a single URL.
+func TestNodeUpOnlyPrintsOneMachineAuthURL(t *testing.T) {
+	tstest.Shard(t)
+	tstest.Parallel(t)
+
+	env := NewTestEnv(t, ConfigureControl(
+		func(control *testcontrol.Server) {
+			control.RequireAuth = true
+			control.RequireMachineAuth = true
+			control.AllNodesSameUser = true
+		},
+	))
+
+	n := NewTestNode(t, env)
+	d := n.StartDaemon()
+	defer d.MustCleanShutdown(t)
+
+	var machineAuthCountAtomic atomic.Int32
+
+	cmdArgs := []string{"up", "--login-server=" + env.ControlURL()}
+
+	// The first time we run the command, we wait for an auth URL to be
+	// printed, we complete the auth, and then we ^C before going
+	// through the device approval flow.
+	t.Logf("Running first command: %s", strings.Join(cmdArgs, " "))
+	cmd1 := n.Tailscale(cmdArgs...)
+
+	cmd1.Stdout = &authURLParserWriter{authFn: func(urlStr string) error {
+		t.Logf("saw auth URL %q", urlStr)
+		if !env.Control.CompleteAuth(urlStr) {
+			err := fmt.Errorf("Failed to complete initial login to %q", urlStr)
+			t.Fatal(err)
+			return err
+		}
+		t.Logf("completed login to %s", urlStr)
+		cmd1.Process.Kill()
+		return nil
+	}}
+	cmd1.Stderr = cmd1.Stdout
+
+	if err := cmd1.Start(); err != nil {
+		t.Fatalf("Could not start command: %q", err)
+	}
+
+	n.AwaitBackendState("NeedsMachineAuth")
+
+	// The second time we run the command, we should go straight to
+	// the machine approval URL.
+	//
+	// We want to make sure we don't print multiple machine approval
+	// URLs, and there's no good way to do that -- sleeping sucks, but
+	// it does reproduce this bug. Unfortunately we can't use synctest,
+	// because we can't easily put the `tailscale up` command we're
+	// running inside a synctest bubble.
+	t.Logf("Running second command: %s", strings.Join(cmdArgs, " "))
+	cmd2 := n.Tailscale(cmdArgs...)
+
+	timer := time.NewTimer(3 * time.Second)
+
+	cmd2.Stdout = &authURLParserWriter{
+		authFn: func(urlStr string) error {
+			t.Fatalf("saw unexpected auth URL %q", urlStr)
+			return nil
+		},
+		machineAuthFn: func(urlStr string) error {
+			t.Logf("saw machine auth URL %q", urlStr)
+			if machineAuthCountAtomic.Add(1) > 1 {
+				t.Fatalf("got more than one machine auth URL")
+			}
+			return nil
+		},
+	}
+	cmd2.Stderr = cmd2.Stdout
+
+	if err := cmd2.Start(); err != nil {
+		t.Fatalf("Could not start command: %q", err)
+	}
+
+	<-timer.C
+
+	cmd2.Process.Kill()
 }
 
 func TestConfigFileAuthKey(t *testing.T) {
@@ -1407,7 +1564,7 @@ func TestNetstackTCPLoopback(t *testing.T) {
 		defer lis.Close()
 
 		writeFn := func(conn net.Conn) error {
-			for i := 0; i < writeBufIterations; i++ {
+			for range writeBufIterations {
 				toWrite := make([]byte, writeBufSize)
 				var wrote int
 				for {
