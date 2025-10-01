@@ -65,6 +65,8 @@ import (
 // Even if they're tied to the local node, instead of moving them here, we should extract the entire feature
 // into a separate package and have it install proper hooks.
 type nodeBackend struct {
+	logf logger.Logf
+
 	ctx       context.Context         // canceled by [nodeBackend.shutdown]
 	ctxCancel context.CancelCauseFunc // cancels ctx
 
@@ -104,9 +106,10 @@ type nodeBackend struct {
 	nodeByAddr map[netip.Addr]tailcfg.NodeID
 }
 
-func newNodeBackend(ctx context.Context, bus *eventbus.Bus) *nodeBackend {
+func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *nodeBackend {
 	ctx, ctxCancel := context.WithCancelCause(ctx)
 	nb := &nodeBackend{
+		logf:        logf,
 		ctx:         ctx,
 		ctxCancel:   ctxCancel,
 		eventClient: bus.Client("ipnlocal.nodeBackend"),
@@ -520,10 +523,10 @@ func (nb *nodeBackend) setFilter(f *filter.Filter) {
 	nb.filterPub.Publish(magicsock.FilterUpdate{Filter: f})
 }
 
-func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
+func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, versionOS string) *dns.Config {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	return dnsConfigForNetmap(nb.netMap, nb.peers, prefs, selfExpired, logf, versionOS)
+	return dnsConfigForNetmap(nb.netMap, nb.peers, prefs, selfExpired, nb.logf, versionOS)
 }
 
 func (nb *nodeBackend) exitNodeCanProxyDNS(exitNodeID tailcfg.StableNodeID) (dohURL string, ok bool) {

@@ -9,11 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/tstest"
 	"tailscale.com/util/eventbus"
 )
 
 func TestNodeBackendReadiness(t *testing.T) {
-	nb := newNodeBackend(t.Context(), eventbus.New())
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
 
 	// The node backend is not ready until [nodeBackend.ready] is called,
 	// and [nodeBackend.Wait] should fail with [context.DeadlineExceeded].
@@ -44,7 +45,7 @@ func TestNodeBackendReadiness(t *testing.T) {
 }
 
 func TestNodeBackendShutdown(t *testing.T) {
-	nb := newNodeBackend(t.Context(), eventbus.New())
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
 
 	shutdownCause := errors.New("test shutdown")
 
@@ -82,7 +83,7 @@ func TestNodeBackendShutdown(t *testing.T) {
 }
 
 func TestNodeBackendReadyAfterShutdown(t *testing.T) {
-	nb := newNodeBackend(t.Context(), eventbus.New())
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
 
 	shutdownCause := errors.New("test shutdown")
 	nb.shutdown(shutdownCause)
@@ -94,7 +95,7 @@ func TestNodeBackendReadyAfterShutdown(t *testing.T) {
 
 func TestNodeBackendParentContextCancellation(t *testing.T) {
 	ctx, cancelCtx := context.WithCancel(context.Background())
-	nb := newNodeBackend(ctx, eventbus.New())
+	nb := newNodeBackend(ctx, tstest.WhileTestRunningLogger(t), eventbus.New())
 
 	cancelCtx()
 
@@ -111,7 +112,7 @@ func TestNodeBackendParentContextCancellation(t *testing.T) {
 }
 
 func TestNodeBackendConcurrentReadyAndShutdown(t *testing.T) {
-	nb := newNodeBackend(t.Context(), eventbus.New())
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
 
 	// Calling [nodeBackend.ready] and [nodeBackend.shutdown] concurrently
 	// should not cause issues, and [nodeBackend.Wait] should unblock,
