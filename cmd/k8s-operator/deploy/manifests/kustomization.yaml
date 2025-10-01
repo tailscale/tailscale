@@ -1,0 +1,5 @@
+namespace: tailscale
+
+resources:
+  - operator.yaml
+  - authproxy-rbac.yaml
