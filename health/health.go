@@ -27,7 +27,6 @@ import (
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/multierr"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 )
@@ -992,8 +991,8 @@ func (t *Tracker) selfCheckLocked() {
 
 // OverallError returns a summary of the health state.
 //
-// If there are multiple problems, the error will be of type
-// multierr.Error.
+// If there are multiple problems, the error will be joined using
+// [errors.Join].
 func (t *Tracker) OverallError() error {
 	if t.nil() {
 		return nil
@@ -1071,7 +1070,7 @@ func (t *Tracker) errorsLocked() []error {
 // This function is here for legacy compatibility purposes and is deprecated.
 func (t *Tracker) multiErrLocked() error {
 	errs := t.errorsLocked()
-	return multierr.New(errs...)
+	return errors.Join(errs...)
 }
 
 var fakeErrForTesting = envknob.RegisterString("TS_DEBUG_FAKE_HEALTH_ERROR")

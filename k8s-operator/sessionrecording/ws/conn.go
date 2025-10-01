@@ -21,7 +21,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/remotecommand"
 	"tailscale.com/k8s-operator/sessionrecording/tsrecorder"
 	"tailscale.com/sessionrecording"
-	"tailscale.com/util/multierr"
 )
 
 // New wraps the provided network connection and returns a connection whose reads and writes will get triggered as data is received on the hijacked connection.
@@ -316,7 +315,7 @@ func (c *conn) Close() error {
 	c.closed = true
 	connCloseErr := c.Conn.Close()
 	recCloseErr := c.rec.Close()
-	return multierr.New(connCloseErr, recCloseErr)
+	return errors.Join(connCloseErr, recCloseErr)
 }
 
 // writeBufHasIncompleteFragment returns true if the latest data message

@@ -32,7 +32,6 @@ import (
 	"tailscale.com/types/preftype"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/linuxfw"
-	"tailscale.com/util/multierr"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine/router"
 )
@@ -488,7 +487,7 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		r.enableIPForwarding()
 	}
 
-	return multierr.New(errs...)
+	return errors.Join(errs...)
 }
 
 var dockerStatefulFilteringWarnable = health.Register(&health.Warnable{

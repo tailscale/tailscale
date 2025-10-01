@@ -6,6 +6,7 @@ package tap
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -29,7 +30,6 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/multierr"
 )
 
 // TODO: this was randomly generated once. Maybe do it per process start? But
@@ -482,7 +482,7 @@ func (t *tapDevice) Write(buffs [][]byte, offset int) (int, error) {
 			wrote++
 		}
 	}
-	return wrote, multierr.New(errs...)
+	return wrote, errors.Join(errs...)
 }
 
 func (t *tapDevice) MTU() (int, error) {

@@ -7,14 +7,13 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/netip"
 	"slices"
 	"time"
-
-	"tailscale.com/util/multierr"
 )
 
 const expiresSoon = 7 * 24 * time.Hour // 7 days from now
@@ -69,7 +68,7 @@ func probeTLS(ctx context.Context, config *tls.Config, dialHostPort string) erro
 func validateConnState(ctx context.Context, cs *tls.ConnectionState) (returnerr error) {
 	var errs []error
 	defer func() {
-		returnerr = multierr.New(errs...)
+		returnerr = errors.Join(errs...)
 	}()
 	latestAllowedExpiration := time.Now().Add(expiresSoon)
 

@@ -60,7 +60,6 @@ import (
 	_ "tailscale.com/util/backoff"
 	_ "tailscale.com/util/clientmetric"
 	_ "tailscale.com/util/eventbus"
-	_ "tailscale.com/util/multierr"
 	_ "tailscale.com/util/osdiag"
 	_ "tailscale.com/util/osshare"
 	_ "tailscale.com/util/syspolicy/pkey"

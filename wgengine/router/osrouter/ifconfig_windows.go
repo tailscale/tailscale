@@ -18,7 +18,6 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
-	"tailscale.com/util/multierr"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/winnet"
 
@@ -831,5 +830,5 @@ func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*routeData, dontDelete 
 		}
 	}
 
-	return multierr.New(errs...)
+	return errors.Join(errs...)
 }

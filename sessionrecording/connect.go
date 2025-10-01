@@ -21,7 +21,6 @@ import (
 	"tailscale.com/net/netx"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/httpm"
-	"tailscale.com/util/multierr"
 )
 
 const (
@@ -91,7 +90,7 @@ func ConnectToRecorder(ctx context.Context, recs []netip.AddrPort, dial netx.Dia
 		}
 		return pw, attempts, errChan, nil
 	}
-	return nil, attempts, nil, multierr.New(errs...)
+	return nil, attempts, nil, errors.Join(errs...)
 }
 
 // supportsV2 checks whether a recorder instance supports the /v2/record
