@@ -45,6 +45,13 @@ func NewDialer(netMon *netmon.Monitor) *Dialer {
 	return d
 }
 
+// NewFromFuncForDebug is like NewDialer but takes a netx.DialFunc
+// and no netMon. It's meant exclusively for the "tailscale debug ts2021"
+// debug command, and perhaps tests.
+func NewFromFuncForDebug(logf logger.Logf, dial netx.DialFunc) *Dialer {
+	return &Dialer{sysDialForTest: dial, Logf: logf}
+}
+
 // Dialer dials out of tailscaled, while taking care of details while
 // handling the dozens of edge cases depending on the server mode
 // (TUN, netstack), the OS network sandboxing style (macOS/iOS
@@ -420,7 +427,7 @@ func (d *Dialer) SetSystemDialerForTest(fn netx.DialFunc) {
 // Control and (in the future, as of 2022-04-27) DERPs..
 func (d *Dialer) SystemDial(ctx context.Context, network, addr string) (net.Conn, error) {
 	d.mu.Lock()
-	if d.netMon == nil {
+	if d.netMon == nil && d.sysDialForTest == nil {
 		d.mu.Unlock()
 		if testenv.InTest() {
 			panic("SystemDial requires a netmon.Monitor; call SetNetMon first")

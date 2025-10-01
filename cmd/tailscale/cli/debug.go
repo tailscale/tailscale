@@ -17,6 +17,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
@@ -28,17 +29,18 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"golang.org/x/net/http2"
 	"tailscale.com/client/tailscale/apitype"
-	"tailscale.com/control/controlhttp"
 	"tailscale.com/control/ts2021"
 	"tailscale.com/feature"
 	_ "tailscale.com/feature/condregister/useproxy"
+	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/net/ace"
+	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
@@ -1062,22 +1064,8 @@ func runTS2021(ctx context.Context, args []string) error {
 		if err := json.Unmarshal(b, dialPlan); err != nil {
 			return fmt.Errorf("unmarshaling dial plan JSON file: %w", err)
 		}
-	}
-
-	noiseDialer := &controlhttp.Dialer{
-		Hostname:        ts2021Args.host,
-		HTTPPort:        "80",
-		HTTPSPort:       "443",
-		MachineKey:      machinePrivate,
-		ControlKey:      keys.PublicKey,
-		ProtocolVersion: uint16(ts2021Args.version),
-		DialPlan:        dialPlan,
-		Dialer:          dialFunc,
-		Logf:            logf,
-		NetMon:          netMon,
-	}
-	if ts2021Args.aceHost != "" {
-		noiseDialer.DialPlan = &tailcfg.ControlDialPlan{
+	} else if ts2021Args.aceHost != "" {
+		dialPlan = &tailcfg.ControlDialPlan{
 			Candidates: []tailcfg.ControlIPCandidate{
 				{
 					ACEHost:        ts2021Args.aceHost,
@@ -1086,9 +1074,25 @@ func runTS2021(ctx context.Context, args []string) error {
 			},
 		}
 	}
+
+	opts := ts2021.ClientOpts{
+		ServerURL: "https://" + ts2021Args.host,
+		DialPlan: func() *tailcfg.ControlDialPlan {
+			return dialPlan
+		},
+		Logf:          logf,
+		NetMon:        netMon,
+		PrivKey:       machinePrivate,
+		ServerPubKey:  keys.PublicKey,
+		Dialer:        tsdial.NewFromFuncForDebug(logf, dialFunc),
+		DNSCache:      &dnscache.Resolver{},
+		HealthTracker: &health.Tracker{},
+	}
+
+	// TODO: 	ProtocolVersion: uint16(ts2021Args.version),
 	const tries = 2
 	for i := range tries {
-		err := tryConnect(ctx, keys.PublicKey, noiseDialer)
+		err := tryConnect(ctx, keys.PublicKey, opts)
 		if err != nil {
 			log.Printf("error on attempt %d/%d: %v", i+1, tries, err)
 			continue
@@ -1098,44 +1102,37 @@ func runTS2021(ctx context.Context, args []string) error {
 	return nil
 }
 
-func tryConnect(ctx context.Context, controlPublic key.MachinePublic, noiseDialer *controlhttp.Dialer) error {
-	conn, err := noiseDialer.Dial(ctx)
-	log.Printf("controlhttp.Dial = %p, %v", conn, err)
-	if err != nil {
-		return err
-	}
-	log.Printf("did noise handshake")
+func tryConnect(ctx context.Context, controlPublic key.MachinePublic, opts ts2021.ClientOpts) error {
 
-	gotPeer := conn.Peer()
-	if gotPeer != controlPublic {
-		log.Printf("peer = %v, want %v", gotPeer, controlPublic)
-		return errors.New("key mismatch")
-	}
-
-	log.Printf("final underlying conn: %v / %v", conn.LocalAddr(), conn.RemoteAddr())
-
-	h2Transport, err := http2.ConfigureTransports(&http.Transport{
-		IdleConnTimeout: time.Second,
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GotConn: func(ci httptrace.GotConnInfo) {
+			log.Printf("GotConn: %T", ci.Conn)
+			ncc, ok := ci.Conn.(*ts2021.Conn)
+			if !ok {
+				return
+			}
+			log.Printf("did noise handshake")
+			log.Printf("final underlying conn: %v / %v", ncc.LocalAddr(), ncc.RemoteAddr())
+			gotPeer := ncc.Peer()
+			if gotPeer != controlPublic {
+				log.Fatalf("peer = %v, want %v", gotPeer, controlPublic)
+			}
+		},
 	})
-	if err != nil {
-		return fmt.Errorf("http2.ConfigureTransports: %w", err)
-	}
 
-	// Now, create a Noise conn over the existing conn.
-	nc, err := ts2021.New(conn.Conn, h2Transport, 0, nil)
+	nc, err := ts2021.NewClient(opts)
 	if err != nil {
-		return fmt.Errorf("noiseconn.New: %w", err)
+		return fmt.Errorf("NewNoiseClient: %w", err)
 	}
-	defer nc.Close()
 
 	// Make a /whoami request to the server to verify that we can actually
 	// communicate over the newly-established connection.
-	whoamiURL := "http://" + ts2021Args.host + "/machine/whoami"
+	whoamiURL := "https://" + ts2021Args.host + "/machine/whoami"
 	req, err := http.NewRequestWithContext(ctx, "GET", whoamiURL, nil)
 	if err != nil {
 		return err
 	}
-	resp, err := nc.RoundTrip(req)
+	resp, err := nc.Do(req)
 	if err != nil {
 		return fmt.Errorf("RoundTrip whoami request: %w", err)
 	}

@@ -19,7 +19,6 @@ func TestDeps(t *testing.T) {
 			"gvisor.dev/gvisor/pkg/tcpip/header": "https://github.com/tailscale/tailscale/issues/9756",
 			"tailscale.com/wgengine/filter":      "brings in bart, etc",
 			"github.com/bits-and-blooms/bitset":  "unneeded in CLI",
-			"github.com/gaissmai/bart":           "unneeded in CLI",
 			"tailscale.com/net/ipset":            "unneeded in CLI",
 		},
 	}.Check(t)
