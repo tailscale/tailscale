@@ -5,18 +5,4 @@
 
 package condregister
 
-import (
-	"strings"
-
-	"tailscale.com/ipn"
-	"tailscale.com/ipn/store"
-	"tailscale.com/ipn/store/kubestore"
-	"tailscale.com/types/logger"
-)
-
-func init() {
-	store.Register("kube:", func(logf logger.Logf, path string) (ipn.StateStore, error) {
-		secretName := strings.TrimPrefix(path, "kube:")
-		return kubestore.New(logf, secretName)
-	})
-}
+import _ "tailscale.com/ipn/store/kubestore"
