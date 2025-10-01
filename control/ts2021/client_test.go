@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package controlclient
+package ts2021
 
 import (
 	"context"
@@ -10,19 +10,20 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/http/httptrace"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"golang.org/x/net/http2"
 	"tailscale.com/control/controlhttp/controlhttpserver"
-	"tailscale.com/control/ts2021"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/nettest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/eventbus/eventbustest"
+	"tailscale.com/util/must"
 )
 
 // maxAllowedNoiseVersion is the highest we expect the Tailscale
@@ -55,14 +56,23 @@ func TestNoiseClientHTTP2Upgrade_earlyPayload(t *testing.T) {
 	}.run(t)
 }
 
-func makeClientWithURL(t *testing.T, url string) *NoiseClient {
-	nc, err := NewNoiseClient(NoiseOpts{
-		Logf:      t.Logf,
-		ServerURL: url,
+var (
+	testPrivKey   = key.NewMachine()
+	testServerPub = key.NewMachine().Public()
+)
+
+func makeClientWithURL(t *testing.T, url string) *Client {
+	nc, err := NewClient(ClientOpts{
+		Logf:         t.Logf,
+		PrivKey:      testPrivKey,
+		ServerPubKey: testServerPub,
+		ServerURL:    url,
+		Dialer:       tsdial.NewDialer(netmon.NewStatic()),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { nc.Close() })
 	return nc
 }
 
@@ -176,7 +186,6 @@ func (tt noiseClientTest) run(t *testing.T) {
 	serverPrivate := key.NewMachine()
 	clientPrivate := key.NewMachine()
 	chalPrivate := key.NewChallenge()
-	bus := eventbustest.NewBus(t)
 
 	const msg = "Hello, client"
 	h2 := &http2.Server{}
@@ -196,12 +205,11 @@ func (tt noiseClientTest) run(t *testing.T) {
 	defer hs.Close()
 
 	dialer := tsdial.NewDialer(netmon.NewStatic())
-	dialer.SetBus(bus)
 	if nettest.PreferMemNetwork() {
 		dialer.SetSystemDialerForTest(nw.Dial)
 	}
 
-	nc, err := NewNoiseClient(NoiseOpts{
+	nc, err := NewClient(ClientOpts{
 		PrivKey:      clientPrivate,
 		ServerPubKey: serverPrivate.Public(),
 		ServerURL:    hs.URL,
@@ -212,28 +220,39 @@ func (tt noiseClientTest) run(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Get a conn and verify it read its early payload before the http/2
-	// handshake.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	c, err := nc.getConn(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload, err := c.GetEarlyPayload(ctx)
-	if err != nil {
-		t.Fatal("timed out waiting for didReadHeaderCh")
-	}
+	var sawConn atomic.Bool
+	trace := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{
+		GotConn: func(ci httptrace.GotConnInfo) {
+			ncc, ok := ci.Conn.(*Conn)
+			if !ok {
+				// This trace hook sees two dials: the lower-level controlhttp upgrade's
+				// dial (a tsdial.sysConn), and then the *ts2021.Conn we want.
+				// Ignore the first one.
+				return
+			}
+			sawConn.Store(true)
 
-	gotNonNil := payload != nil
-	if gotNonNil != tt.sendEarlyPayload {
-		t.Errorf("sendEarlyPayload = %v but got earlyPayload = %T", tt.sendEarlyPayload, payload)
-	}
-	if payload != nil {
-		if payload.NodeKeyChallenge != chalPrivate.Public() {
-			t.Errorf("earlyPayload.NodeKeyChallenge = %v; want %v", payload.NodeKeyChallenge, chalPrivate.Public())
-		}
-	}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+
+			payload, err := ncc.GetEarlyPayload(ctx)
+			if err != nil {
+				t.Errorf("GetEarlyPayload: %v", err)
+				return
+			}
+
+			gotNonNil := payload != nil
+			if gotNonNil != tt.sendEarlyPayload {
+				t.Errorf("sendEarlyPayload = %v but got earlyPayload = %T", tt.sendEarlyPayload, payload)
+			}
+			if payload != nil {
+				if payload.NodeKeyChallenge != chalPrivate.Public() {
+					t.Errorf("earlyPayload.NodeKeyChallenge = %v; want %v", payload.NodeKeyChallenge, chalPrivate.Public())
+				}
+			}
+		},
+	})
+	req := must.Get(http.NewRequestWithContext(trace, "GET", "https://unused.example/", nil))
 
 	checkRes := func(t *testing.T, res *http.Response) {
 		t.Helper()
@@ -247,15 +266,19 @@ func (tt noiseClientTest) run(t *testing.T) {
 		}
 	}
 
-	// And verify we can do HTTP/2 against that conn.
-	res, err := (&http.Client{Transport: c}).Get("https://unused.example/")
+	// Verify we can do HTTP/2 against that conn.
+	res, err := nc.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	checkRes(t, res)
 
+	if !sawConn.Load() {
+		t.Error("ClientTrace.GotConn never saw the *ts2021.Conn")
+	}
+
 	// And try using the high-level nc.post API as well.
-	res, err = nc.post(context.Background(), "/", key.NodePublic{}, nil)
+	res, err = nc.Post(context.Background(), "/", key.NodePublic{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +333,7 @@ func (up *Upgrader) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// https://httpwg.org/specs/rfc7540.html#rfc.section.4.1 (Especially not
 		// an HTTP/2 settings frame, which isn't of type 'T')
 		var notH2Frame [5]byte
-		copy(notH2Frame[:], ts2021.EarlyPayloadMagic)
+		copy(notH2Frame[:], EarlyPayloadMagic)
 		var lenBuf [4]byte
 		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(earlyJSON)))
 		// These writes are all buffered by caller, so fine to do them

@@ -13,10 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net/http"
 	"sync"
 
-	"golang.org/x/net/http2"
 	"tailscale.com/control/controlbase"
 	"tailscale.com/tailcfg"
 )
@@ -27,11 +25,11 @@ import (
 // the pool when the connection is closed, properly handles an optional "early
 // payload" that's sent prior to beginning the HTTP/2 session, and provides a
 // way to return a connection to a pool when the connection is closed.
+//
+// Use [NewConn] to build a new Conn if you want [Conn.GetEarlyPayload] to work.
+// Otherwise making a Conn directly, only setting Conn, is fine.
 type Conn struct {
 	*controlbase.Conn
-	id      int
-	onClose func(int)
-	h2cc    *http2.ClientConn
 
 	readHeaderOnce    sync.Once     // guards init of reader field
 	reader            io.Reader     // (effectively Conn.Reader after header)
@@ -40,31 +38,18 @@ type Conn struct {
 	earlyPayloadErr   error
 }
 
-// New creates a new Conn that wraps the given controlbase.Conn.
+// NewConn creates a new Conn that wraps the given controlbase.Conn.
 //
 // h2t is the HTTP/2 transport to use for the connection; a new
 // http2.ClientConn will be created that reads from the returned Conn.
 //
 // connID should be a unique ID for this connection. When the Conn is closed,
 // the onClose function will be called with the connID if it is non-nil.
-func New(conn *controlbase.Conn, h2t *http2.Transport, connID int, onClose func(int)) (*Conn, error) {
-	ncc := &Conn{
+func NewConn(conn *controlbase.Conn) *Conn {
+	return &Conn{
 		Conn:              conn,
-		id:                connID,
-		onClose:           onClose,
 		earlyPayloadReady: make(chan struct{}),
 	}
-	h2cc, err := h2t.NewClientConn(ncc)
-	if err != nil {
-		return nil, err
-	}
-	ncc.h2cc = h2cc
-	return ncc, nil
-}
-
-// RoundTrip implements the http.RoundTripper interface.
-func (c *Conn) RoundTrip(r *http.Request) (*http.Response, error) {
-	return c.h2cc.RoundTrip(r)
 }
 
 // GetEarlyPayload waits for the early Noise payload to arrive.
@@ -74,18 +59,21 @@ func (c *Conn) RoundTrip(r *http.Request) (*http.Response, error) {
 // early Noise payload is ready (if any) and will return the same result for
 // the lifetime of the Conn.
 func (c *Conn) GetEarlyPayload(ctx context.Context) (*tailcfg.EarlyNoise, error) {
+	if c.earlyPayloadReady == nil {
+		return nil, errors.New("Conn was not created with NewConn; early payload not supported")
+	}
+	select {
+	case <-c.earlyPayloadReady:
+		return c.earlyPayload, c.earlyPayloadErr
+	default:
+		go c.readHeaderOnce.Do(c.readHeader)
+	}
 	select {
 	case <-c.earlyPayloadReady:
 		return c.earlyPayload, c.earlyPayloadErr
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-}
-
-// CanTakeNewRequest reports whether the underlying HTTP/2 connection can take
-// a new request, meaning it has not been closed or received or sent a GOAWAY.
-func (c *Conn) CanTakeNewRequest() bool {
-	return c.h2cc.CanTakeNewRequest()
 }
 
 // The first 9 bytes from the server to client over Noise are either an HTTP/2
@@ -122,7 +110,9 @@ func (c *Conn) Read(p []byte) (n int, err error) {
 // c.earlyPayload, closing c.earlyPayloadReady, and initializing c.reader for
 // future reads.
 func (c *Conn) readHeader() {
-	defer close(c.earlyPayloadReady)
+	if c.earlyPayloadReady != nil {
+		defer close(c.earlyPayloadReady)
+	}
 
 	setErr := func(err error) {
 		c.reader = returnErrReader{err}
@@ -155,15 +145,4 @@ func (c *Conn) readHeader() {
 		return
 	}
 	c.reader = c.Conn
-}
-
-// Close closes the connection.
-func (c *Conn) Close() error {
-	if err := c.Conn.Close(); err != nil {
-		return err
-	}
-	if c.onClose != nil {
-		c.onClose(c.id)
-	}
-	return nil
 }

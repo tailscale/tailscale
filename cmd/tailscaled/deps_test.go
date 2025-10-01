@@ -276,5 +276,8 @@ func TestMinTailscaledWithCLI(t *testing.T) {
 				}
 			}
 		},
+		BadDeps: map[string]string{
+			"golang.org/x/net/http2": "unexpected x/net/http2 dep; tailscale/tailscale#17305",
+		},
 	}.Check(t)
 }
