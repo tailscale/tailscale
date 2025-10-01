@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux && !ts_omit_aws
+//go:build !ts_omit_aws
 
 // Package awsstore contains an ipn.StateStore implementation using AWS SSM.
 package awsstore
@@ -20,9 +20,20 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmTypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/types/logger"
 )
+
+func init() {
+	store.Register("arn:", func(logf logger.Logf, arg string) (ipn.StateStore, error) {
+		ssmARN, opts, err := ParseARNAndOpts(arg)
+		if err != nil {
+			return nil, err
+		}
+		return New(logf, ssmARN, opts...)
+	})
+}
 
 const (
 	parameterNameRxStr = `^parameter(/.*)`

@@ -16,6 +16,7 @@ import (
 
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/kube/kubeapi"
 	"tailscale.com/kube/kubeclient"
@@ -24,6 +25,13 @@ import (
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 )
+
+func init() {
+	store.Register("kube:", func(logf logger.Logf, path string) (ipn.StateStore, error) {
+		secretName := strings.TrimPrefix(path, "kube:")
+		return New(logf, secretName)
+	})
+}
 
 const (
 	// timeout is the timeout for a single state update that includes calls to the API server to write or read a
