@@ -31,6 +31,7 @@ import (
 	"k8s.io/utils/strings/slices"
 	"tailscale.com/client/local"
 	"tailscale.com/cmd/k8s-proxy/internal/config"
+	_ "tailscale.com/feature/condregister"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store"
