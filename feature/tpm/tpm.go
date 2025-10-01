@@ -39,6 +39,7 @@ var infoOnce = sync.OnceValue(info)
 
 func init() {
 	feature.Register("tpm")
+	feature.HookTPMAvailable.Set(tpmSupported)
 	hostinfo.RegisterHostinfoNewHook(func(hi *tailcfg.Hostinfo) {
 		hi.TPM = infoOnce()
 	})
@@ -49,6 +50,15 @@ func init() {
 			func() (key.HardwareAttestationKey, error) { return newAttestationKey() },
 		)
 	}
+}
+
+func tpmSupported() bool {
+	tpm, err := open()
+	if err != nil {
+		return false
+	}
+	tpm.Close()
+	return true
 }
 
 var verboseTPM = envknob.RegisterBool("TS_DEBUG_TPM")
