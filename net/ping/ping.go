@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -24,7 +25,6 @@ import (
 	"golang.org/x/net/ipv6"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/multierr"
 )
 
 const (
@@ -157,17 +157,17 @@ func (p *Pinger) Close() error {
 	p.conns = nil
 	p.mu.Unlock()
 
-	var errors []error
+	var errs []error
 	for _, c := range conns {
 		if err := c.Close(); err != nil {
-			errors = append(errors, err)
+			errs = append(errs, err)
 		}
 	}
 
 	p.wg.Wait()
 	p.cleanupOutstanding()
 
-	return multierr.New(errors...)
+	return errors.Join(errs...)
 }
 
 func (p *Pinger) run(ctx context.Context, conn net.PacketConn, typ string) {

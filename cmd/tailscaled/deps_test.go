@@ -257,6 +257,7 @@ func TestMinTailscaledWithCLI(t *testing.T) {
 		"cbor",
 		"hujson",
 		"pprof",
+		"multierr", // https://github.com/tailscale/tailscale/pull/17379
 	}
 	deptest.DepChecker{
 		GOOS:   "linux",

@@ -56,7 +56,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/policyclient"
@@ -701,7 +700,7 @@ func createEngine(logf logger.Logf, sys *tsd.System) (onlyNetstack bool, err err
 		logf("wgengine.NewUserspaceEngine(tun %q) error: %v", name, err)
 		errs = append(errs, err)
 	}
-	return false, multierr.New(errs...)
+	return false, errors.Join(errs...)
 }
 
 // handleSubnetsInNetstack reports whether netstack should handle subnet routers

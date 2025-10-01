@@ -90,7 +90,6 @@ import (
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/multierr"
 	"tailscale.com/util/osuser"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
@@ -3981,7 +3980,7 @@ func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
 	if err := b.checkAutoUpdatePrefsLocked(p); err != nil {
 		errs = append(errs, err)
 	}
-	return multierr.New(errs...)
+	return errors.Join(errs...)
 }
 
 func (b *LocalBackend) checkSSHPrefsLocked(p *ipn.Prefs) error {
@@ -4225,7 +4224,7 @@ func (b *LocalBackend) checkEditPrefsAccessLocked(actor ipnauth.Actor, prefs ipn
 		}
 	}
 
-	return multierr.New(errs...)
+	return errors.Join(errs...)
 }
 
 // changeDisablesExitNodeLocked reports whether applying the change

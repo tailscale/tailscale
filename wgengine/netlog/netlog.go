@@ -10,6 +10,7 @@ package netlog
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -28,7 +29,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netlogtype"
-	"tailscale.com/util/multierr"
 	"tailscale.com/wgengine/router"
 )
 
@@ -272,5 +272,5 @@ func (nl *Logger) Shutdown(ctx context.Context) error {
 	nl.addrs = nil
 	nl.prefixes = nil
 
-	return multierr.New(err1, err2)
+	return errors.Join(err1, err2)
 }

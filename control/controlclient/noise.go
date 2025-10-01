@@ -28,7 +28,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/multierr"
 	"tailscale.com/util/singleflight"
 )
 
@@ -295,13 +294,13 @@ func (nc *NoiseClient) Close() error {
 	nc.connPool = nil
 	nc.mu.Unlock()
 
-	var errors []error
+	var errs []error
 	for _, c := range conns {
 		if err := c.Close(); err != nil {
-			errors = append(errors, err)
+			errs = append(errs, err)
 		}
 	}
-	return multierr.New(errors...)
+	return errors.Join(errs...)
 }
 
 // dial opens a new connection to tailcontrol, fetching the server noise key

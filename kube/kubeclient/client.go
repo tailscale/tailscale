@@ -15,6 +15,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -29,7 +30,6 @@ import (
 
 	"tailscale.com/kube/kubeapi"
 	"tailscale.com/tstime"
-	"tailscale.com/util/multierr"
 )
 
 const (
@@ -397,7 +397,7 @@ func (c *client) CheckSecretPermissions(ctx context.Context, secretName string) 
 		}
 	}
 	if len(errs) > 0 {
-		return false, false, multierr.New(errs...)
+		return false, false, errors.Join(errs...)
 	}
 	canPatch, err = c.checkPermission(ctx, "patch", TypeSecrets, secretName)
 	if err != nil {

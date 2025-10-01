@@ -4,6 +4,7 @@
 package wgcfg
 
 import (
+	"errors"
 	"io"
 	"sort"
 
@@ -11,7 +12,6 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/multierr"
 )
 
 // NewDevice returns a wireguard-go Device configured for Tailscale use.
@@ -31,7 +31,7 @@ func DeviceConfig(d *device.Device) (*Config, error) {
 	cfg, fromErr := FromUAPI(r)
 	r.Close()
 	getErr := <-errc
-	err := multierr.New(getErr, fromErr)
+	err := errors.Join(getErr, fromErr)
 	if err != nil {
 		return nil, err
 	}
@@ -64,5 +64,5 @@ func ReconfigDevice(d *device.Device, cfg *Config, logf logger.Logf) (err error)
 	toErr := cfg.ToUAPI(logf, w, prev)
 	w.Close()
 	setErr := <-errc
-	return multierr.New(setErr, toErr)
+	return errors.Join(setErr, toErr)
 }

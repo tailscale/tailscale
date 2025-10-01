@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,7 +20,6 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/k8s-operator/sessionrecording/spdy"
@@ -31,7 +31,6 @@ import (
 	"tailscale.com/tsnet"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/multierr"
 )
 
 const (
@@ -166,7 +165,7 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 		}
 		msg = msg + "; failure mode is 'fail closed'; closing connection."
 		if err := closeConnWithWarning(conn, msg); err != nil {
-			return nil, multierr.New(errors.New(msg), err)
+			return nil, errors.Join(errors.New(msg), err)
 		}
 		return nil, errors.New(msg)
 	} else {
@@ -245,7 +244,7 @@ func closeConnWithWarning(conn net.Conn, msg string) error {
 	b := io.NopCloser(bytes.NewBuffer([]byte(msg)))
 	resp := http.Response{Status: http.StatusText(http.StatusForbidden), StatusCode: http.StatusForbidden, Body: b}
 	if err := resp.Write(conn); err != nil {
-		return multierr.New(fmt.Errorf("error writing msg %q to conn: %v", msg, err), conn.Close())
+		return errors.Join(fmt.Errorf("error writing msg %q to conn: %v", msg, err), conn.Close())
 	}
 	return conn.Close()
 }

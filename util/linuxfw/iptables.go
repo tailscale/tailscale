@@ -18,7 +18,6 @@ import (
 
 	"github.com/coreos/go-iptables/iptables"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/multierr"
 	"tailscale.com/version/distro"
 )
 
@@ -67,7 +66,7 @@ func detectIptables() (int, error) {
 	default:
 		return 0, FWModeNotSupportedError{
 			Mode: FirewallModeIPTables,
-			Err:  fmt.Errorf("iptables command run fail: %w", multierr.New(err, ip6err)),
+			Err:  fmt.Errorf("iptables command run fail: %w", errors.Join(err, ip6err)),
 		}
 	}
 
@@ -232,5 +231,5 @@ func clearRules(proto iptables.Protocol, logf logger.Logf) error {
 		errs = append(errs, err)
 	}
 
-	return multierr.New(errs...)
+	return errors.Join(errs...)
 }

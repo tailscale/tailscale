@@ -54,7 +54,6 @@ import (
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
-	"tailscale.com/util/multierr"
 	"tailscale.com/util/singleflight"
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/policyclient"
@@ -1307,7 +1306,7 @@ func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string
 	out = tailcfg.OverTLSPublicKeyResponse{}
 	k, err := key.ParseMachinePublicUntyped(mem.B(b))
 	if err != nil {
-		return nil, multierr.New(jsonErr, err)
+		return nil, errors.Join(jsonErr, err)
 	}
 	out.LegacyPublicKey = k
 	return &out, nil
