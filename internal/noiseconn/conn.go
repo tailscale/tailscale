@@ -84,22 +84,6 @@ func (c *Conn) GetEarlyPayload(ctx context.Context) (*tailcfg.EarlyNoise, error)
 	}
 }
 
-// ReserveNewRequest will reserve a new concurrent request on the connection.
-//
-// It returns whether the reservation was successful, and any early Noise
-// payload if present. If a reservation was not successful, it will return
-// false and nil for the early payload.
-func (c *Conn) ReserveNewRequest(ctx context.Context) (bool, *tailcfg.EarlyNoise, error) {
-	earlyPayloadMaybeNil, err := c.GetEarlyPayload(ctx)
-	if err != nil {
-		return false, nil, err
-	}
-	if c.h2cc.ReserveNewRequest() {
-		return true, earlyPayloadMaybeNil, nil
-	}
-	return false, nil, nil
-}
-
 // CanTakeNewRequest reports whether the underlying HTTP/2 connection can take
 // a new request, meaning it has not been closed or received or sent a GOAWAY.
 func (c *Conn) CanTakeNewRequest() bool {

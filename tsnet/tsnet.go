@@ -931,41 +931,6 @@ func (s *Server) getUDPHandlerForFlow(src, dst netip.AddrPort) (handler func(net
 	return func(c nettype.ConnPacketConn) { ln.handle(c) }, true
 }
 
-// I_Acknowledge_This_API_Is_Experimental must be set true to use AuthenticatedAPITransport()
-// for now.
-var I_Acknowledge_This_API_Is_Experimental = false
-
-// AuthenticatedAPITransport provides an HTTP transport that can be used with
-// the control server API without needing additional authentication details. It
-// authenticates using the current client's nodekey.
-//
-// It requires the user to set I_Acknowledge_This_API_Is_Experimental.
-//
-// For example:
-//
-//	import "net/http"
-//	import "tailscale.com/client/tailscale/v2"
-//	import "tailscale.com/tsnet"
-//
-//	var s *tsnet.Server
-//	...
-//	rt, err := s.AuthenticatedAPITransport()
-//	// handler err ...
-//	var client tailscale.Client{HTTP: http.Client{
-//	    Timeout: 1*time.Minute,
-//	    UserAgent: "your-useragent-here",
-//	    Transport: rt,
-//	}}
-func (s *Server) AuthenticatedAPITransport() (http.RoundTripper, error) {
-	if !I_Acknowledge_This_API_Is_Experimental {
-		return nil, errors.New("use of AuthenticatedAPITransport without setting I_Acknowledge_This_API_Is_Experimental")
-	}
-	if err := s.Start(); err != nil {
-		return nil, err
-	}
-	return s.lb.KeyProvingNoiseRoundTripper(), nil
-}
-
 // Listen announces only on the Tailscale network.
 // It will start the server if it has not been started yet.
 //
