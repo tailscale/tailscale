@@ -2307,15 +2307,17 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 func TestOfferingAppConnector(t *testing.T) {
 	for _, shouldStore := range []bool{false, true} {
 		b := newTestBackend(t)
+		bus := b.sys.Bus.Get()
 		if b.OfferingAppConnector() {
 			t.Fatal("unexpected offering app connector")
 		}
+		rc := &appctest.RouteCollector{}
 		if shouldStore {
 			b.appConnector = appc.NewAppConnector(appc.Config{
-				Logf: t.Logf, RouteInfo: &appc.RouteInfo{}, StoreRoutesFunc: fakeStoreRoutes,
+				Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc, RouteInfo: &appc.RouteInfo{}, StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
-			b.appConnector = appc.NewAppConnector(appc.Config{Logf: t.Logf})
+			b.appConnector = appc.NewAppConnector(appc.Config{Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc})
 		}
 		if !b.OfferingAppConnector() {
 			t.Fatal("unexpected not offering app connector")
@@ -2366,6 +2368,7 @@ func TestRouterAdvertiserIgnoresContainedRoutes(t *testing.T) {
 func TestObserveDNSResponse(t *testing.T) {
 	for _, shouldStore := range []bool{false, true} {
 		b := newTestBackend(t)
+		bus := b.sys.Bus.Get()
 
 		// ensure no error when no app connector is configured
 		if err := b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
@@ -2376,12 +2379,13 @@ func TestObserveDNSResponse(t *testing.T) {
 		if shouldStore {
 			b.appConnector = appc.NewAppConnector(appc.Config{
 				Logf:            t.Logf,
+				EventBus:        bus,
 				RouteAdvertiser: rc,
 				RouteInfo:       &appc.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
-			b.appConnector = appc.NewAppConnector(appc.Config{Logf: t.Logf, RouteAdvertiser: rc})
+			b.appConnector = appc.NewAppConnector(appc.Config{Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc})
 		}
 		b.appConnector.UpdateDomains([]string{"example.com"})
 		b.appConnector.Wait(context.Background())

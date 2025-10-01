@@ -259,12 +259,17 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 		if shouldStore {
 			a = appc.NewAppConnector(appc.Config{
 				Logf:            t.Logf,
+				EventBus:        sys.Bus.Get(),
 				RouteAdvertiser: &appctest.RouteCollector{},
 				RouteInfo:       &appc.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
-			a = appc.NewAppConnector(appc.Config{Logf: t.Logf, RouteAdvertiser: &appctest.RouteCollector{}})
+			a = appc.NewAppConnector(appc.Config{
+				Logf:            t.Logf,
+				EventBus:        sys.Bus.Get(),
+				RouteAdvertiser: &appctest.RouteCollector{},
+			})
 		}
 		sys.Set(pm.Store())
 		sys.Set(eng)
@@ -339,12 +344,13 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 		if shouldStore {
 			a = appc.NewAppConnector(appc.Config{
 				Logf:            t.Logf,
+				EventBus:        sys.Bus.Get(),
 				RouteAdvertiser: rc,
 				RouteInfo:       &appc.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
-			a = appc.NewAppConnector(appc.Config{Logf: t.Logf, RouteAdvertiser: rc})
+			a = appc.NewAppConnector(appc.Config{Logf: t.Logf, EventBus: sys.Bus.Get(), RouteAdvertiser: rc})
 		}
 		sys.Set(pm.Store())
 		sys.Set(eng)
@@ -411,12 +417,13 @@ func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
 		if shouldStore {
 			a = appc.NewAppConnector(appc.Config{
 				Logf:            t.Logf,
+				EventBus:        sys.Bus.Get(),
 				RouteAdvertiser: rc,
 				RouteInfo:       &appc.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
-			a = appc.NewAppConnector(appc.Config{Logf: t.Logf, RouteAdvertiser: rc})
+			a = appc.NewAppConnector(appc.Config{Logf: t.Logf, EventBus: sys.Bus.Get(), RouteAdvertiser: rc})
 		}
 		sys.Set(pm.Store())
 		sys.Set(eng)
