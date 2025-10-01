@@ -4802,7 +4802,12 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 			}
 			storeFunc = b.storeRouteInfo
 		}
-		b.appConnector = appc.NewAppConnector(b.logf, b, ri, storeFunc)
+		b.appConnector = appc.NewAppConnector(appc.Config{
+			Logf:            b.logf,
+			RouteAdvertiser: b,
+			RouteInfo:       ri,
+			StoreRoutesFunc: storeFunc,
+		})
 	}
 	if nm == nil {
 		return
