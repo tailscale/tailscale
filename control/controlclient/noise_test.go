@@ -15,7 +15,7 @@ import (
 
 	"golang.org/x/net/http2"
 	"tailscale.com/control/controlhttp/controlhttpserver"
-	"tailscale.com/internal/noiseconn"
+	"tailscale.com/control/ts2021"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
@@ -310,7 +310,7 @@ func (up *Upgrader) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// https://httpwg.org/specs/rfc7540.html#rfc.section.4.1 (Especially not
 		// an HTTP/2 settings frame, which isn't of type 'T')
 		var notH2Frame [5]byte
-		copy(notH2Frame[:], noiseconn.EarlyPayloadMagic)
+		copy(notH2Frame[:], ts2021.EarlyPayloadMagic)
 		var lenBuf [4]byte
 		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(earlyJSON)))
 		// These writes are all buffered by caller, so fine to do them
