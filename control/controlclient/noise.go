@@ -181,29 +181,6 @@ func NewNoiseClient(opts NoiseOpts) (*NoiseClient, error) {
 	return np, nil
 }
 
-// GetSingleUseRoundTripper returns a RoundTripper that can be only be used once
-// (and must be used once) to make a single HTTP request over the noise channel
-// to the coordination server.
-//
-// In addition to the RoundTripper, it returns the HTTP/2 channel's early noise
-// payload, if any.
-func (nc *NoiseClient) GetSingleUseRoundTripper(ctx context.Context) (http.RoundTripper, *tailcfg.EarlyNoise, error) {
-	for tries := 0; tries < 3; tries++ {
-		conn, err := nc.getConn(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
-		ok, earlyPayloadMaybeNil, err := conn.ReserveNewRequest(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
-		if ok {
-			return conn, earlyPayloadMaybeNil, nil
-		}
-	}
-	return nil, nil, errors.New("[unexpected] failed to reserve a request on a connection")
-}
-
 // contextErr is an error that wraps another error and is used to indicate that
 // the error was because a context expired.
 type contextErr struct {

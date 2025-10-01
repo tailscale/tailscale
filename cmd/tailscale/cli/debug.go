@@ -1128,15 +1128,6 @@ func tryConnect(ctx context.Context, controlPublic key.MachinePublic, noiseDiale
 	}
 	defer nc.Close()
 
-	// Reserve a RoundTrip for the whoami request.
-	ok, _, err := nc.ReserveNewRequest(ctx)
-	if err != nil {
-		return fmt.Errorf("ReserveNewRequest: %w", err)
-	}
-	if !ok {
-		return errors.New("ReserveNewRequest failed")
-	}
-
 	// Make a /whoami request to the server to verify that we can actually
 	// communicate over the newly-established connection.
 	whoamiURL := "http://" + ts2021Args.host + "/machine/whoami"

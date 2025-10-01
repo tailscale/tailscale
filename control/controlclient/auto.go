@@ -845,13 +845,3 @@ func (c *Auto) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) error {
 func (c *Auto) DoNoiseRequest(req *http.Request) (*http.Response, error) {
 	return c.direct.DoNoiseRequest(req)
 }
-
-// GetSingleUseNoiseRoundTripper returns a RoundTripper that can be only be used
-// once (and must be used once) to make a single HTTP request over the noise
-// channel to the coordination server.
-//
-// In addition to the RoundTripper, it returns the HTTP/2 channel's early noise
-// payload, if any.
-func (c *Auto) GetSingleUseNoiseRoundTripper(ctx context.Context) (http.RoundTripper, *tailcfg.EarlyNoise, error) {
-	return c.direct.GetSingleUseNoiseRoundTripper(ctx)
-}
