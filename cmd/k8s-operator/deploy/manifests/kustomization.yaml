@@ -1,5 +1,6 @@
 namespace: tailscale
 
 resources:
+  - crds.yaml
   - operator.yaml
   - authproxy-rbac.yaml
