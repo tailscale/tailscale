@@ -1,12 +1,10 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package noiseconn contains an internal-only wrapper around controlbase.Conn
-// that properly handles the early payload sent by the server before the HTTP/2
-// session begins.
-//
-// See the documentation on the Conn type for more details.
-package noiseconn
+// Package ts2021 handles the details of the Tailscale 2021 control protocol
+// that are after (above) the Noise layer. In particular, the
+// "tailcfg.EarlyNoise" message and the subsequent HTTP/2 connection.
+package ts2021
 
 import (
 	"bytes"
