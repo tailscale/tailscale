@@ -501,7 +501,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		needsCaptiveDetection: make(chan bool),
 	}
 
-	nb := newNodeBackend(ctx, b.sys.Bus.Get())
+	nb := newNodeBackend(ctx, b.logf, b.sys.Bus.Get())
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
 
@@ -629,7 +629,7 @@ func (b *LocalBackend) currentNode() *nodeBackend {
 	if v := b.currentNodeAtomic.Load(); v != nil || !testenv.InTest() {
 		return v
 	}
-	v := newNodeBackend(cmp.Or(b.ctx, context.Background()), b.sys.Bus.Get())
+	v := newNodeBackend(cmp.Or(b.ctx, context.Background()), b.logf, b.sys.Bus.Get())
 	if b.currentNodeAtomic.CompareAndSwap(nil, v) {
 		v.ready()
 	}
@@ -4890,7 +4890,7 @@ func (b *LocalBackend) authReconfig() {
 	hasPAC := b.prevIfState.HasPAC()
 	disableSubnetsIfPAC := cn.SelfHasCap(tailcfg.NodeAttrDisableSubnetsIfPAC)
 	dohURL, dohURLOK := cn.exitNodeCanProxyDNS(prefs.ExitNodeID())
-	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, b.logf, version.OS())
+	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, version.OS())
 	// If the current node is an app connector, ensure the app connector machine is started
 	b.reconfigAppConnectorLocked(nm, prefs)
 	closing := b.shutdownCalled
@@ -6797,7 +6797,7 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 		// down, so no need to do any work.
 		return nil
 	}
-	newNode := newNodeBackend(b.ctx, b.sys.Bus.Get())
+	newNode := newNodeBackend(b.ctx, b.logf, b.sys.Bus.Get())
 	if oldNode := b.currentNodeAtomic.Swap(newNode); oldNode != nil {
 		oldNode.shutdown(errNodeContextChanged)
 	}
