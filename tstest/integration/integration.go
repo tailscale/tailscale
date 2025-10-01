@@ -1098,21 +1098,38 @@ func (tt *trafficTrap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type authURLParserWriter struct {
-	buf bytes.Buffer
-	fn  func(urlStr string) error
+	buf           bytes.Buffer
+	authFn        func(urlStr string) error
+	machineAuthFn func(urlStr string) error
 }
 
+// Note: auth URLs from testcontrol look slightly different to real auth URLs,
+// e.g. http://127.0.0.1:60456/auth/96af2ff7e04ae1499a9a
 var authURLRx = regexp.MustCompile(`(https?://\S+/auth/\S+)`)
+
+// Looks for any machine auth URL, which is any URL ending with `/admin`
+// e.g. http://127.0.0.1:60456/admin
+var machineAuthUrlRx = regexp.MustCompile(`(https?://\S+/admin)[^\S]`)
 
 func (w *authURLParserWriter) Write(p []byte) (n int, err error) {
 	n, err = w.buf.Write(p)
 	m := authURLRx.FindSubmatch(w.buf.Bytes())
 	if m != nil {
 		urlStr := string(m[1])
-		w.buf.Reset() // so it's not matched again
-		if err := w.fn(urlStr); err != nil {
+		if err := w.authFn(urlStr); err != nil {
 			return 0, err
 		}
 	}
+
+	m = machineAuthUrlRx.FindSubmatch(w.buf.Bytes())
+	if m != nil && w.machineAuthFn != nil {
+		urlStr := string(m[1])
+		if err := w.machineAuthFn(urlStr); err != nil {
+			return 0, err
+		}
+	}
+
+	w.buf.Reset() // so the URLs aren't matched again
+
 	return n, err
 }
