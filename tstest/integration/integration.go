@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1098,8 +1099,9 @@ func (tt *trafficTrap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type authURLParserWriter struct {
-	buf bytes.Buffer
-	fn  func(urlStr string) error
+	buf          bytes.Buffer
+	fn           func(urlStr string) error
+	authURLCount *atomic.Int32
 }
 
 var authURLRx = regexp.MustCompile(`(https?://\S+/auth/\S+)`)
