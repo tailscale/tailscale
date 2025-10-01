@@ -59,8 +59,9 @@ type notifyThrottler struct {
 
 	// ch gets replaced frequently. Lock the mutex before getting or
 	// setting it, but not while waiting on it.
-	mu sync.Mutex
-	ch chan ipn.Notify
+	mu     sync.Mutex
+	ch     chan ipn.Notify
+	putErr error // set by put if the channel is full
 }
 
 // expect tells the throttler to expect count upcoming notifications.
@@ -81,7 +82,11 @@ func (nt *notifyThrottler) put(n ipn.Notify) {
 	case ch <- n:
 		return
 	default:
-		nt.t.Fatalf("put: channel full: %v", n)
+		err := fmt.Errorf("put: channel full: %v", n)
+		nt.t.Log(err)
+		nt.mu.Lock()
+		nt.putErr = err
+		nt.mu.Unlock()
 	}
 }
 
@@ -91,7 +96,12 @@ func (nt *notifyThrottler) drain(count int) []ipn.Notify {
 	nt.t.Helper()
 	nt.mu.Lock()
 	ch := nt.ch
+	putErr := nt.putErr
 	nt.mu.Unlock()
+
+	if putErr != nil {
+		nt.t.Fatalf("drain: previous call to put errored: %s", putErr)
+	}
 
 	nn := []ipn.Notify{}
 	for i := range count {
