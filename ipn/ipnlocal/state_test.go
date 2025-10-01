@@ -348,6 +348,14 @@ func (b *LocalBackend) nonInteractiveLoginForStateTest() {
 // predictable, but maybe a bit less thorough. This is more of an overall
 // state machine test than a test of the wgengine+magicsock integration.
 func TestStateMachine(t *testing.T) {
+	runTestStateMachine(t, false)
+}
+
+func TestStateMachineSeamless(t *testing.T) {
+	runTestStateMachine(t, true)
+}
+
+func runTestStateMachine(t *testing.T, seamless bool) {
 	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
 	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
 	c := qt.New(t)
@@ -545,6 +553,13 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(3)
 	cc.persist.UserProfile.LoginName = "user1"
 	cc.persist.NodeID = "node1"
+
+	// even if seamless is being enabled by default rather than by policy, this is
+	// the point where it will first get enabled.
+	if seamless {
+		sys.ControlKnobs().SeamlessKeyRenewal.Store(true)
+	}
+
 	cc.send(nil, "", true, &netmap.NetworkMap{})
 	{
 		nn := notifies.drain(3)
