@@ -548,7 +548,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	// notification with the auth URL we should print for the user.  The
 	// initial state could contain the auth URL, but only if IPN is in the
 	// NeedsLogin state -- sometimes it's in Starting, and we don't get the URL.
-	watcher, err := localClient.WatchIPNBus(watchCtx, ipn.NotifyInitialState)
+	watcher, err := localClient.WatchIPNBus(watchCtx, 0)
 	if err != nil {
 		return err
 	}
