@@ -10,6 +10,7 @@ import (
 
 	"tailscale.com/tstime"
 	"tailscale.com/types/logid"
+	"tailscale.com/util/eventbus"
 )
 
 // DefaultHost is the default host name to upload logs to when
@@ -34,6 +35,7 @@ type Config struct {
 	LowMemory      bool            // if true, logtail minimizes memory use
 	Clock          tstime.Clock    // if set, Clock.Now substitutes uses of time.Now
 	Stderr         io.Writer       // if set, logs are sent here instead of os.Stderr
+	Bus            *eventbus.Bus   // if set, uses the eventbus for awaitInternetUp instead of callback
 	StderrLevel    int             // max verbosity level to write to stderr; 0 means the non-verbose messages only
 	Buffer         Buffer          // temp storage, if nil a MemoryBuffer
 	CompressLogs   bool            // whether to compress the log uploads

@@ -30,6 +30,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/syspolicy/policyclient"
 )
@@ -600,7 +601,7 @@ func (m *Manager) FlushCaches() error {
 // No other state needs to be instantiated before this runs.
 //
 // health must not be nil
-func CleanUp(logf logger.Logf, netMon *netmon.Monitor, health *health.Tracker, interfaceName string) {
+func CleanUp(logf logger.Logf, netMon *netmon.Monitor, bus *eventbus.Bus, health *health.Tracker, interfaceName string) {
 	if !buildfeatures.HasDNS {
 		return
 	}
@@ -611,6 +612,7 @@ func CleanUp(logf logger.Logf, netMon *netmon.Monitor, health *health.Tracker, i
 	}
 	d := &tsdial.Dialer{Logf: logf}
 	d.SetNetMon(netMon)
+	d.SetBus(bus)
 	dns := NewManager(logf, oscfg, health, d, nil, nil, runtime.GOOS)
 	if err := dns.Down(); err != nil {
 		logf("dns down: %v", err)

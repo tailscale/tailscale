@@ -54,6 +54,8 @@ func fakeControlClient(t *testing.T, c *http.Client) (*controlclient.Auto, *even
 	bus := eventbustest.NewBus(t)
 
 	k := key.NewMachine()
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	dialer.SetBus(bus)
 	opts := controlclient.Options{
 		ServerURL: "https://example.com",
 		Hostinfo:  hi,
@@ -63,7 +65,7 @@ func fakeControlClient(t *testing.T, c *http.Client) (*controlclient.Auto, *even
 		HTTPTestClient:  c,
 		NoiseTestClient: c,
 		Observer:        observerFunc(func(controlclient.Status) {}),
-		Dialer:          tsdial.NewDialer(netmon.NewStatic()),
+		Dialer:          dialer,
 		Bus:             bus,
 	}
 

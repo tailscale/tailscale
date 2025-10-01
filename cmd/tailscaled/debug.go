@@ -104,14 +104,10 @@ func runMonitor(ctx context.Context, loop bool) error {
 	}
 	defer mon.Close()
 
-	mon.RegisterChangeCallback(func(delta *netmon.ChangeDelta) {
-		if !delta.Major {
-			log.Printf("Network monitor fired; not a major change")
-			return
-		}
-		log.Printf("Network monitor fired. New state:")
-		dump(delta.New)
-	})
+	eventClient := b.Client("debug.runMonitor")
+	m := eventClient.Monitor(changeDeltaWatcher(eventClient, ctx, dump))
+	defer m.Close()
+
 	if loop {
 		log.Printf("Starting link change monitor; initial state:")
 	}
@@ -122,6 +118,27 @@ func runMonitor(ctx context.Context, loop bool) error {
 	mon.Start()
 	log.Printf("Started link change monitor; waiting...")
 	select {}
+}
+
+func changeDeltaWatcher(ec *eventbus.Client, ctx context.Context, dump func(st *netmon.State)) func(*eventbus.Client) {
+	changeSub := eventbus.Subscribe[netmon.ChangeDelta](ec)
+	return func(ec *eventbus.Client) {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ec.Done():
+				return
+			case delta := <-changeSub.Events():
+				if !delta.Major {
+					log.Printf("Network monitor fired; not a major change")
+					return
+				}
+				log.Printf("Network monitor fired. New state:")
+				dump(delta.New)
+			}
+		}
+	}
 }
 
 func getURL(ctx context.Context, urlStr string) error {

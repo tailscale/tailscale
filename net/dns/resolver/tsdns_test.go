@@ -353,10 +353,13 @@ func TestRDNSNameToIPv6(t *testing.T) {
 }
 
 func newResolver(t testing.TB) *Resolver {
+	bus := eventbustest.NewBus(t)
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	dialer.SetBus(bus)
 	return New(t.Logf,
 		nil, // no link selector
-		tsdial.NewDialer(netmon.NewStatic()),
-		health.NewTracker(eventbustest.NewBus(t)),
+		dialer,
+		health.NewTracker(bus),
 		nil, // no control knobs
 	)
 }
