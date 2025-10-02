@@ -1064,13 +1064,13 @@ func (s *testStateStorage) sawWrite() bool {
 }
 
 func TestWGEngineStatusRace(t *testing.T) {
-	t.Skip("test fails")
+	// t.Skip("test fails")
 	c := qt.New(t)
 	logf := tstest.WhileTestRunningLogger(t)
 	sys := tsd.NewSystem()
 	sys.Set(new(mem.Store))
 
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.Bus.Get())
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker.Get(), sys.UserMetricsRegistry(), sys.Bus.Get())
 	c.Assert(err, qt.IsNil)
 	t.Cleanup(eng.Close)
 	sys.Set(eng)
@@ -1087,26 +1087,36 @@ func TestWGEngineStatusRace(t *testing.T) {
 	var state ipn.State
 	b.SetNotifyCallback(func(n ipn.Notify) {
 		if n.State != nil {
+			t.Logf("Notify: %v", n.State)
 			state = *n.State
 		}
 	})
 	wantState := func(want ipn.State) {
-		c.Assert(want, qt.Equals, state)
+		t.Helper()
+		c.Assert(state, qt.Equals, want)
 	}
 
 	// Start with the zero value.
 	wantState(ipn.NoState)
 
 	// Start the backend.
-	err = b.Start(ipn.Options{})
+	err = b.Start(ipn.Options{
+		UpdatePrefs: &ipn.Prefs{
+			WantRunning: true,
+		},
+	})
 	c.Assert(err, qt.IsNil)
 	wantState(ipn.NeedsLogin)
 
 	// Assert that we are logged in and authorized.
+	cc.persist.UserProfile.LoginName = "user1"
+	cc.persist.NodeID = "node1"
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	})
 	wantState(ipn.Starting)
+
+	timestamp := time.Now()
 
 	// Simulate multiple concurrent callbacks from wgengine.
 	// Any single callback with DERPS > 0 is enough to transition
@@ -1123,11 +1133,20 @@ func TestWGEngineStatusRace(t *testing.T) {
 			if i == 0 {
 				n = 1
 			}
-			b.setWgengineStatus(&wgengine.Status{AsOf: time.Now(), DERPs: n}, nil)
+			b.setWgengineStatus(&wgengine.Status{AsOf: timestamp, DERPs: n}, nil)
 		}(i)
 	}
 	wg.Wait()
-	wantState(ipn.Running)
+
+	err = tstest.WaitFor(100*time.Millisecond, func() error {
+		if state == ipn.Running {
+			return nil
+		}
+		return fmt.Errorf("got state = %v; want Running", state)
+	})
+	if err != nil {
+		t.Error(err)
+	}
 }
 
 // TestEngineReconfigOnStateChange verifies that wgengine is properly reconfigured
