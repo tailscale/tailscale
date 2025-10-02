@@ -97,6 +97,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"cloud":         {Sym: "Cloud", Desc: "detect cloud environment to learn instances IPs and DNS servers"},
 	"cli":           {Sym: "CLI", Desc: "embed the CLI into the tailscaled binary"},
 	"cliconndiag":   {Sym: "CLIConnDiag", Desc: "CLI connection error diagnostics"},
+	"clientmetrics": {Sym: "ClientMetrics", Desc: "Client metrics support"},
 	"clientupdate":  {Sym: "ClientUpdate", Desc: "Client auto-update support"},
 	"completion":    {Sym: "Completion", Desc: "CLI shell completion"},
 	"dbus":          {Sym: "DBus", Desc: "Linux DBus support"},

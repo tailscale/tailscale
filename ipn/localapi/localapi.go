@@ -1218,6 +1218,11 @@ func (h *Handler) serveHandlePushMessage(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasClientMetrics {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct{}{})
+		return
+	}
 	if r.Method != httpm.POST {
 		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
 		return
