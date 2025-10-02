@@ -31,10 +31,12 @@ import (
 	"k8s.io/utils/strings/slices"
 	"tailscale.com/client/local"
 	"tailscale.com/cmd/k8s-proxy/internal/config"
-	_ "tailscale.com/feature/condregister"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store"
+
+	// we need to import this package so that the `kube:` ipn store gets registered
+	_ "tailscale.com/ipn/store/kubestore"
 	apiproxy "tailscale.com/k8s-operator/api-proxy"
 	"tailscale.com/kube/certs"
 	healthz "tailscale.com/kube/health"
