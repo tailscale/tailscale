@@ -4,8 +4,10 @@
 package e2e
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
@@ -14,25 +16,18 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"tailscale.com/ipn"
 	"tailscale.com/tstest"
 )
 
 // See [TestMain] for test requirements.
 func TestProxy(t *testing.T) {
-	if apiClient == nil {
-		t.Skip("TestIngress requires TS_API_CLIENT_SECRET set")
-	}
-
-	cfg := config.GetConfigOrDie()
-	cl, err := client.New(cfg, client.Options{})
-	if err != nil {
-		t.Fatal(err)
+	if tnClient == nil {
+		t.Skip("TestProxy requires a working tailnet client")
 	}
 
 	// Create role and role binding to allow a group we'll impersonate to do stuff.
-	createAndCleanup(t, cl, &rbacv1.Role{
+	createAndCleanup(t, kubeClient, &rbacv1.Role{
 		ObjectMeta: objectMeta("tailscale", "read-secrets"),
 		Rules: []rbacv1.PolicyRule{{
 			APIGroups: []string{""},
@@ -40,7 +35,7 @@ func TestProxy(t *testing.T) {
 			Resources: []string{"secrets"},
 		}},
 	})
-	createAndCleanup(t, cl, &rbacv1.RoleBinding{
+	createAndCleanup(t, kubeClient, &rbacv1.RoleBinding{
 		ObjectMeta: objectMeta("tailscale", "read-secrets"),
 		Subjects: []rbacv1.Subject{{
 			Kind: "Group",
@@ -56,16 +51,25 @@ func TestProxy(t *testing.T) {
 	operatorSecret := corev1.Secret{
 		ObjectMeta: objectMeta("tailscale", "operator"),
 	}
-	if err := get(t.Context(), cl, &operatorSecret); err != nil {
+	if err := get(t.Context(), kubeClient, &operatorSecret); err != nil {
 		t.Fatal(err)
 	}
 
 	// Join tailnet as a client of the API server proxy.
 	proxyCfg := &rest.Config{
 		Host: fmt.Sprintf("https://%s:443", hostNameFromOperatorSecret(t, operatorSecret)),
-		Dial: tailnetClient.Dial,
 	}
-	proxyCl, err := client.New(proxyCfg, client.Options{})
+	proxyCl, err := client.New(proxyCfg, client.Options{
+		HTTPClient: &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					RootCAs: testCAs,
+				},
+				DialContext: tnClient.Dial,
+			},
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +81,9 @@ func TestProxy(t *testing.T) {
 	// Wait for up to a minute the first time we use the proxy, to give it time
 	// to provision the TLS certs.
 	if err := tstest.WaitFor(time.Minute, func() error {
-		return get(t.Context(), proxyCl, &allowedSecret)
+		err := get(t.Context(), proxyCl, &allowedSecret)
+		t.Logf("get Secret via proxy: %v", err)
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
