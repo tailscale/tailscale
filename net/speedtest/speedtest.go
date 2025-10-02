@@ -24,7 +24,7 @@ const (
 // conduct the test.
 type config struct {
 	Version      int           `json:"version"`
-	TestDuration time.Duration `json:"time"`
+	TestDuration time.Duration `json:"time,format:nano"`
 	Direction    Direction     `json:"direction"`
 }
 
