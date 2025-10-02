@@ -14,6 +14,9 @@ import (
 
 // State contains the health status of the backend, and is
 // provided to the client UI via LocalAPI through ipn.Notify.
+//
+// It is also exposed via c2n for debugging purposes, so try
+// not to change its structure too gratuitously.
 type State struct {
 	// Each key-value pair in Warnings represents a Warnable that is currently
 	// unhealthy. If a Warnable is healthy, it will not be present in this map.

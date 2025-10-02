@@ -18,6 +18,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
@@ -63,6 +64,7 @@ func init() {
 		RegisterC2N("/debug/component-logging", handleC2NDebugComponentLogging)
 		RegisterC2N("/debug/logheap", handleC2NDebugLogHeap)
 		RegisterC2N("/debug/netmap", handleC2NDebugNetMap)
+		RegisterC2N("/debug/health", handleC2NDebugHealth)
 	}
 	if runtime.GOOS == "linux" && buildfeatures.HasOSRouter {
 		RegisterC2N("POST /netfilter-kind", handleC2NSetNetfilterKind)
@@ -143,6 +145,14 @@ func handleC2NLogtailFlush(b *LocalBackend, w http.ResponseWriter, r *http.Reque
 	} else {
 		http.Error(w, "no log flusher wired up", http.StatusInternalServerError)
 	}
+}
+
+func handleC2NDebugHealth(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
+	var st *health.State
+	if buildfeatures.HasDebug && b.health != nil {
+		st = b.health.CurrentState()
+	}
+	writeJSON(w, st)
 }
 
 func handleC2NDebugNetMap(b *LocalBackend, w http.ResponseWriter, r *http.Request) {

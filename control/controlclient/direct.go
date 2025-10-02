@@ -1678,47 +1678,6 @@ func postPingResult(start time.Time, logf logger.Logf, c *http.Client, pr *tailc
 	return nil
 }
 
-// ReportWarnableChange reports to the control plane a change to this node's
-// health. w must be non-nil. us can be nil to indicate a healthy state for w.
-func (c *Direct) ReportWarnableChange(w *health.Warnable, us *health.UnhealthyState) {
-	if w == health.NetworkStatusWarnable || w == health.IPNStateWarnable || w == health.LoginStateWarnable {
-		// We don't report these. These include things like the network is down
-		// (in which case we can't report anyway) or the user wanted things
-		// stopped, as opposed to the more unexpected failure types in the other
-		// subsystems.
-		return
-	}
-	np, err := c.getNoiseClient()
-	if err != nil {
-		// Don't report errors to control if the server doesn't support noise.
-		return
-	}
-	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
-	if !ok {
-		return
-	}
-	if c.panicOnUse {
-		panic("tainted client")
-	}
-	// TODO(angott): at some point, update `Subsys` in the request to be `Warnable`
-	req := &tailcfg.HealthChangeRequest{
-		Subsys:  string(w.Code),
-		NodeKey: nodeKey,
-	}
-	if us != nil {
-		req.Error = us.Text
-	}
-
-	// Best effort, no logging:
-	ctx, cancel := context.WithTimeout(c.closedCtx, 5*time.Second)
-	defer cancel()
-	res, err := np.Post(ctx, "/machine/update-health", nodeKey, req)
-	if err != nil {
-		return
-	}
-	res.Body.Close()
-}
-
 // SetDeviceAttrs does a synchronous call to the control plane to update
 // the node's attributes.
 //
