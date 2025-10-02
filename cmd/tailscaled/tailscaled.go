@@ -120,7 +120,7 @@ var args struct {
 	debug          string
 	port           uint16
 	statepath      string
-	encryptState   bool
+	encryptState   boolFlag
 	statedir       string
 	socketpath     string
 	birdSocketPath string
@@ -197,7 +197,7 @@ func main() {
 	flag.StringVar(&args.tunname, "tun", defaultTunName(), `tunnel interface name; use "userspace-networking" (beta) to not use TUN`)
 	flag.Var(flagtype.PortValue(&args.port, defaultPort()), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
 	flag.StringVar(&args.statepath, "state", "", "absolute path of state file; use 'kube:<secret-name>' to use Kubernetes secrets or 'arn:aws:ssm:...' to store in AWS SSM; use 'mem:' to not store state and register as an ephemeral node. If empty and --statedir is provided, the default is <statedir>/tailscaled.state. Default: "+paths.DefaultTailscaledStateFile())
-	flag.BoolVar(&args.encryptState, "encrypt-state", defaultEncryptState(), "encrypt the state file on disk; uses TPM on Linux and Windows, on all other platforms this flag is not supported")
+	flag.Var(&args.encryptState, "encrypt-state", `encrypt the state file on disk; when not set encryption will be enabled if supported on this platform; uses TPM on Linux and Windows, on all other platforms this flag is not supported`)
 	flag.StringVar(&args.statedir, "statedir", "", "path to directory for storage of config state, TLS certs, temporary incoming Taildrop files, etc. If empty, it's derived from --state when possible.")
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
@@ -275,7 +275,10 @@ func main() {
 		}
 	}
 
-	if args.encryptState {
+	if !args.encryptState.set {
+		args.encryptState.v = defaultEncryptState()
+	}
+	if args.encryptState.v {
 		if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 			log.SetFlags(0)
 			log.Fatalf("--encrypt-state is not supported on %s", runtime.GOOS)
@@ -351,7 +354,7 @@ func statePathOrDefault() string {
 	if path == "" && args.statedir != "" {
 		path = filepath.Join(args.statedir, "tailscaled.state")
 	}
-	if path != "" && !store.HasKnownProviderPrefix(path) && args.encryptState {
+	if path != "" && !store.HasKnownProviderPrefix(path) && args.encryptState.v {
 		path = store.TPMPrefix + path
 	}
 	return path
@@ -909,6 +912,6 @@ func defaultEncryptState() bool {
 		// (plan9/FreeBSD/etc).
 		return false
 	}
-	v, _ := policyclient.Get().GetBoolean(pkey.EncryptState, false)
+	v, _ := policyclient.Get().GetBoolean(pkey.EncryptState, feature.TPMAvailable())
 	return v
 }

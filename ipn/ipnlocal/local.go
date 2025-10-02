@@ -7559,11 +7559,7 @@ func (b *LocalBackend) stateEncrypted() opt.Bool {
 		case version.IsMacAppStore():
 			return opt.NewBool(true)
 		case version.IsMacSysExt():
-			// MacSys still stores its state in plaintext on disk in addition to
-			// the Keychain. A future release will clean up the on-disk state
-			// files.
-			// TODO(#15830): always return true here once MacSys is fully migrated.
-			sp, _ := b.polc.GetBoolean(pkey.EncryptState, false)
+			sp, _ := b.polc.GetBoolean(pkey.EncryptState, true)
 			return opt.NewBool(sp)
 		default:
 			// Probably self-compiled tailscaled, we don't use the Keychain

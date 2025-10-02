@@ -277,15 +277,6 @@ func TestMigrateStateToTPM(t *testing.T) {
 	}
 }
 
-func tpmSupported() bool {
-	tpm, err := open()
-	if err != nil {
-		return false
-	}
-	tpm.Close()
-	return true
-}
-
 type mockTPMSealProvider struct {
 	path string
 	data map[ipn.StateKey][]byte

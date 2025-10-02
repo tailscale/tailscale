@@ -40,3 +40,15 @@ var HookProxySetSelfProxy Hook[func(...string)]
 // HookProxySetTransportGetProxyConnectHeader is a hook for feature/useproxy to register
 // [tshttpproxy.SetTransportGetProxyConnectHeader].
 var HookProxySetTransportGetProxyConnectHeader Hook[func(*http.Transport)]
+
+// HookTPMAvailable is a hook that reports whether a TPM device is supported
+// and available.
+var HookTPMAvailable Hook[func() bool]
+
+// TPMAvailable reports whether a TPM device is supported and available.
+func TPMAvailable() bool {
+	if f, ok := HookTPMAvailable.GetOk(); ok {
+		return f()
+	}
+	return false
+}
