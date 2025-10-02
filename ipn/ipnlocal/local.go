@@ -616,6 +616,11 @@ func (b *LocalBackend) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus
 					b.setPortlistServices(pl)
 				}
 			case ru := <-routeUpdateSub.Events():
+				// TODO(creachadair, 2025-10-02): It is currently possible for updates produced under
+				// one profile to arrive and be applied after a switch to another profile.
+				// We need to find a way to ensure that changes to the backend state are applied
+				// consistently in the presnce of profile changes, which currently may not happen in
+				// a single atomic step.  See: https://github.com/tailscale/tailscale/issues/17414
 				if err := b.AdvertiseRoute(ru.Advertise...); err != nil {
 					b.logf("appc: failed to advertise routes: %v: %v", ru.Advertise, err)
 				}
