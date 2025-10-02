@@ -887,6 +887,81 @@ func TestCurrentStateETagControlHealth(t *testing.T) {
 	}
 }
 
+// TestIgnoreNoDERPConnectionUnlessRunning check that  noDERPConnectionWarnable is only
+// posted when wantRunning is true and has been set relatively recently.
+func TestIgnoreNoDERPConnectionUnlessRunning(t *testing.T) {
+	type test struct {
+		name                   string
+		derpHomeRegion         int
+		ipnState               string
+		ipnWantRunning         bool
+		ipnWantRunningLastTrue time.Time
+		wantWarning            bool
+	}
+	tests := []test{
+		{
+			// wantRunning was far enough in the past that we should warn
+			name:                   "Running Derp Home Set",
+			derpHomeRegion:         1,
+			ipnState:               "Running",
+			ipnWantRunning:         true,
+			ipnWantRunningLastTrue: time.Now().Add(-time.Minute),
+			wantWarning:            true,
+		},
+		{
+			// wantRunning wasn't set far enough in the past
+			name:                   "Running Derp Home Set Recently",
+			derpHomeRegion:         1,
+			ipnState:               "Running",
+			ipnWantRunning:         true,
+			ipnWantRunningLastTrue: time.Now().Add(-1 * time.Second),
+			wantWarning:            false,
+		},
+		{
+			// no warning if derpHomeRegion is unset
+			name:                   "Running No Derp Home Set",
+			derpHomeRegion:         0,
+			ipnState:               "Running",
+			ipnWantRunning:         true,
+			ipnWantRunningLastTrue: time.Now().Add(-time.Minute),
+			wantWarning:            false,
+		},
+		{
+			// no warning in the stopped state
+			name:                   "Stopped Derp Home Set",
+			derpHomeRegion:         1,
+			ipnState:               "Stopped",
+			ipnWantRunning:         false,
+			ipnWantRunningLastTrue: time.Now().Add(-time.Minute),
+			wantWarning:            false,
+		},
+		{
+			// no warning in the stopped state
+			name:                   "Stopped Derp Home Set",
+			derpHomeRegion:         0,
+			ipnState:               "Stopped",
+			ipnWantRunning:         false,
+			ipnWantRunningLastTrue: time.Now().Add(-time.Minute),
+			wantWarning:            false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ht := NewTracker(eventbustest.NewBus(t))
+			ht.derpHomeRegion = tc.derpHomeRegion
+			ht.SetIPNState(tc.ipnState, tc.ipnWantRunning)
+			ht.ipnWantRunningLastTrue = tc.ipnWantRunningLastTrue
+			ht.updateBuiltinWarnablesLocked()
+
+			_, ok := ht.warnableVal[noDERPConnectionWarnable]
+			if ok != tc.wantWarning {
+				t.Fatalf("got warning = %v, want %v", ok, tc.wantWarning)
+			}
+		})
+	}
+}
+
 // TestCurrentStateETagWarnable tests that the ETag on an [UnhealthyState]
 // created from a Warnable & returned by [Tracker.CurrentState] is different
 // when the details of the Warnable are different.
