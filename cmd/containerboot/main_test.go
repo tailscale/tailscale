@@ -1338,6 +1338,14 @@ func (l *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Write([]byte("fake metrics"))
 		return
+	case "/localapi/v0/disconnect-control":
+		if r.Method != "POST" {
+			panic(fmt.Sprintf("unsupported method %q", r.Method))
+		}
+	case "/localapi/v0/prefs":
+		if r.Method != "GET" {
+			panic(fmt.Sprintf("unsupported method %q", r.Method))
+		}
 	default:
 		panic(fmt.Sprintf("unsupported path %q", r.URL.Path))
 	}
