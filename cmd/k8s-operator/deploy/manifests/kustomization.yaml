@@ -1,0 +1,12 @@
+namespace: tailscale
+
+resources:
+  - crds.yaml
+  - operator.yaml
+  - authproxy-rbac.yaml
+
+images:
+  - name: tailscale/tailscale
+    newTag: "v1.88.3"
+  - name: tailscale/k8s-operator
+    newTag: "v1.88.3"
