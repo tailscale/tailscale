@@ -49,6 +49,7 @@ import (
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/deptest"
+	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
@@ -74,7 +75,7 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 )
 
-func fakeStoreRoutes(*appc.RouteInfo) error { return nil }
+func fakeStoreRoutes(*appctype.RouteInfo) error { return nil }
 
 func inRemove(ip netip.Addr) bool {
 	for _, pfx := range removeFromDefaultRoute {
@@ -2314,7 +2315,7 @@ func TestOfferingAppConnector(t *testing.T) {
 		rc := &appctest.RouteCollector{}
 		if shouldStore {
 			b.appConnector = appc.NewAppConnector(appc.Config{
-				Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc, RouteInfo: &appc.RouteInfo{}, StoreRoutesFunc: fakeStoreRoutes,
+				Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc, RouteInfo: &appctype.RouteInfo{}, StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
 			b.appConnector = appc.NewAppConnector(appc.Config{Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc})
@@ -2381,7 +2382,7 @@ func TestObserveDNSResponse(t *testing.T) {
 				Logf:            t.Logf,
 				EventBus:        bus,
 				RouteAdvertiser: rc,
-				RouteInfo:       &appc.RouteInfo{},
+				RouteInfo:       &appctype.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
@@ -2548,7 +2549,7 @@ func TestBackfillAppConnectorRoutes(t *testing.T) {
 
 	// Store the test IP in profile data, but not in Prefs.AdvertiseRoutes.
 	b.ControlKnobs().AppCStoreRoutes.Store(true)
-	if err := b.storeRouteInfo(&appc.RouteInfo{
+	if err := b.storeRouteInfo(&appctype.RouteInfo{
 		Domains: map[string][]netip.Addr{
 			"example.com": {ip},
 		},
@@ -5501,10 +5502,10 @@ func TestReadWriteRouteInfo(t *testing.T) {
 	b.pm.currentProfile = prof1.View()
 
 	// set up routeInfo
-	ri1 := &appc.RouteInfo{}
+	ri1 := &appctype.RouteInfo{}
 	ri1.Wildcards = []string{"1"}
 
-	ri2 := &appc.RouteInfo{}
+	ri2 := &appctype.RouteInfo{}
 	ri2.Wildcards = []string{"2"}
 
 	// read before write

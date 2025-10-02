@@ -23,6 +23,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
+	"tailscale.com/types/appctype"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/eventbus/eventbustest"
@@ -261,7 +262,7 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 				Logf:            t.Logf,
 				EventBus:        sys.Bus.Get(),
 				RouteAdvertiser: &appctest.RouteCollector{},
-				RouteInfo:       &appc.RouteInfo{},
+				RouteInfo:       &appctype.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
@@ -346,7 +347,7 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 				Logf:            t.Logf,
 				EventBus:        sys.Bus.Get(),
 				RouteAdvertiser: rc,
-				RouteInfo:       &appc.RouteInfo{},
+				RouteInfo:       &appctype.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
@@ -419,7 +420,7 @@ func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
 				Logf:            t.Logf,
 				EventBus:        sys.Bus.Get(),
 				RouteAdvertiser: rc,
-				RouteInfo:       &appc.RouteInfo{},
+				RouteInfo:       &appctype.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {

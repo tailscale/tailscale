@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
-	"tailscale.com/appc"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/feature"
@@ -38,6 +37,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
+	"tailscale.com/types/appctype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -1684,7 +1684,7 @@ func (h *Handler) serveGetAppcRouteInfo(w http.ResponseWriter, r *http.Request) 
 	res, err := h.b.ReadRouteInfo()
 	if err != nil {
 		if errors.Is(err, ipn.ErrStateNotExist) {
-			res = &appc.RouteInfo{}
+			res = &appctype.RouteInfo{}
 		} else {
 			WriteErrorJSON(w, err)
 			return
