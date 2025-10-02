@@ -41,11 +41,16 @@ func main() {
 	if len(os.Args) < 2 {
 		log.Fatalf("usage ./generate [staticmanifests|helmcrd]")
 	}
-	repoRoot := "../../"
+	gitOut, err := exec.Command("git", "rev-parse", "--show-toplevel").CombinedOutput()
+	if err != nil {
+		log.Fatalf("error determining git root: %v: %s", err, gitOut)
+	}
+
+	repoRoot := strings.TrimSpace(string(gitOut))
 	switch os.Args[1] {
 	case "helmcrd": // insert CRDs to Helm templates behind a installCRDs=true conditional check
 		log.Print("Adding CRDs to Helm templates")
-		if err := generate("./"); err != nil {
+		if err := generate(repoRoot); err != nil {
 			log.Fatalf("error adding CRDs to Helm templates: %v", err)
 		}
 		return
