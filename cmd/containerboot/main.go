@@ -118,6 +118,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	kubeutils "tailscale.com/k8s-operator"
@@ -205,34 +206,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("failed to bring up tailscale: %w", err)
 	}
-	killTailscaled := func() {
-		// The default termination grace period for a Pod is 30s. We wait 25s at
-		// most so that we still reserve some of that budget for tailscaled
-		// to receive and react to a SIGTERM before the SIGKILL that k8s
-		// will send at the end of the grace period.
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		defer cancel()
-
-		if err := services.EnsureServicesNotAdvertised(ctx, client, log.Printf); err != nil {
-			log.Printf("Error ensuring services are not advertised: %v", err)
-		}
-
-		if hasKubeStateStore(cfg) {
-			// Check we're not shutting tailscaled down while it's still writing
-			// state. If we authenticate and fail to write all the state, we'll
-			// never recover automatically.
-			log.Printf("Checking for consistent state")
-			err := kc.waitForConsistentState(ctx)
-			if err != nil {
-				log.Printf("Error waiting for consistent state on shutdown: %v", err)
-			}
-		}
-		log.Printf("Sending SIGTERM to tailscaled")
-		if err := daemonProcess.Signal(unix.SIGTERM); err != nil {
-			log.Fatalf("error shutting tailscaled down: %v", err)
-		}
-	}
-	defer killTailscaled()
+	defer killTailscaled(client, cfg, daemonProcess, kc)
 
 	var healthCheck *healthz.Healthz
 	ep := &egressProxy{}
@@ -491,7 +465,7 @@ runLoop:
 			// have started the reaper defined below, we need to
 			// kill tailscaled and let reaper clean up child
 			// processes.
-			killTailscaled()
+			killTailscaled(client, cfg, daemonProcess, kc)
 			break runLoop
 		case err := <-errChan:
 			return fmt.Errorf("failed to read from tailscaled: %w", err)
@@ -499,7 +473,7 @@ runLoop:
 			return fmt.Errorf("failed to watch tailscaled config: %w", err)
 		case n := <-notifyChan:
 			if n.State != nil && *n.State != ipn.Running {
-				// Something's gone wrong and we've left the authenticated state.
+				// Something's gone wrong, and we've left the authenticated state.
 				// Our container image never recovered gracefully from this, and the
 				// control flow required to make it work now is hard. So, just crash
 				// the container and rely on the container runtime to restart us,
@@ -632,11 +606,11 @@ runLoop:
 				// route setup has succeeded. IPs and FQDN are
 				// read from the Secret by the Tailscale
 				// Kubernetes operator and, for some proxy
-				// types, such as Tailscale Ingress, advertized
+				// types, such as Tailscale Ingress, advertised
 				// on the Ingress status. Writing them to the
 				// Secret only after the proxy routing has been
 				// set up ensures that the operator does not
-				// advertize endpoints of broken proxies.
+				// advertise endpoints of broken proxies.
 				// TODO (irbekrm): instead of using the IP and FQDN, have some other mechanism for the proxy signal that it is 'Ready'.
 				deviceEndpoints := []any{n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses()}
 				if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceEndpoints, &deviceEndpoints) {
@@ -890,5 +864,40 @@ func runHTTPServer(mux *http.ServeMux, addr string) (close func() error) {
 	return func() error {
 		err := srv.Shutdown(context.Background())
 		return errors.Join(err, ln.Close())
+	}
+}
+
+func killTailscaled(client *local.Client, cfg *settings, daemonProcess *os.Process, kc *kubeClient) {
+	// The default termination grace period for a Pod is 30s. We wait 25s at
+	// most so that we still reserve some of that budget for tailscaled
+	// to receive and react to a SIGTERM before the SIGKILL that k8s
+	// will send at the end of the grace period.
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	if err := services.EnsureServicesNotAdvertised(ctx, client, log.Printf); err != nil {
+		log.Printf("Error ensuring services are not advertised: %v", err)
+	}
+
+	if hasKubeStateStore(cfg) {
+		// Check we're not shutting tailscaled down while it's still writing
+		// state. If we authenticate and fail to write all the state, we'll
+		// never recover automatically.
+		log.Printf("Checking for consistent state")
+		err := kc.waitForConsistentState(ctx)
+		if err != nil {
+			log.Printf("Error waiting for consistent state on shutdown: %v", err)
+		}
+	}
+
+	// Forcibly disconnect the local Tailscale instance from the control plane. This is useful when running as a HA
+	// app connector or subnet router to speed up switching over to another replica.
+	if err := client.DisconnectControl(ctx); err != nil {
+		log.Printf("Error disconnecting from control: %v", err)
+	}
+
+	log.Printf("Sending SIGTERM to tailscaled")
+	if err := daemonProcess.Signal(unix.SIGTERM); err != nil {
+		log.Fatalf("error shutting tailscaled down: %v", err)
 	}
 }
