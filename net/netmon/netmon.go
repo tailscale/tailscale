@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
@@ -181,6 +182,9 @@ func (m *Monitor) SetTailscaleInterfaceName(ifName string) {
 // It's the same as interfaces.LikelyHomeRouterIP, but it caches the
 // result until the monitor detects a network change.
 func (m *Monitor) GatewayAndSelfIP() (gw, myIP netip.Addr, ok bool) {
+	if !buildfeatures.HasPortMapper {
+		return
+	}
 	if m.static {
 		return
 	}

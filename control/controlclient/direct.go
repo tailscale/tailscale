@@ -1409,6 +1409,9 @@ func (c *Direct) answerPing(pr *tailcfg.PingRequest) {
 		answerHeadPing(c.logf, httpc, pr)
 		return
 	case "c2n":
+		if !buildfeatures.HasC2N {
+			return
+		}
 		if !useNoise && !envknob.Bool("TS_DEBUG_PERMIT_HTTP_C2N") {
 			c.logf("refusing to answer c2n ping without noise")
 			return

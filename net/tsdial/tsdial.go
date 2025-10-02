@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/gaissmai/bart"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
@@ -135,6 +137,9 @@ func (d *Dialer) TUNName() string {
 //
 // For example, "http://100.68.82.120:47830/dns-query".
 func (d *Dialer) SetExitDNSDoH(doh string) {
+	if !buildfeatures.HasUseExitNode {
+		return
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.exitDNSDoHBase == doh {
@@ -372,7 +377,7 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 	}
 
 	var r net.Resolver
-	if exitDNSDoH != "" {
+	if buildfeatures.HasUseExitNode && buildfeatures.HasPeerAPIClient && exitDNSDoH != "" {
 		r.PreferGo = true
 		r.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
 			return &dohConn{
@@ -509,6 +514,9 @@ func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, 
 // network must a "tcp" type, and addr must be an ip:port. Name resolution
 // is not supported.
 func (d *Dialer) dialPeerAPI(ctx context.Context, network, addr string) (net.Conn, error) {
+	if !buildfeatures.HasPeerAPIClient {
+		return nil, feature.ErrUnavailable
+	}
 	switch network {
 	case "tcp", "tcp6", "tcp4":
 	default:
@@ -551,6 +559,9 @@ func (d *Dialer) getPeerDialer() *net.Dialer {
 // The returned Client must not be mutated; it's owned by the Dialer
 // and shared by callers.
 func (d *Dialer) PeerAPIHTTPClient() *http.Client {
+	if !buildfeatures.HasPeerAPIClient {
+		panic("unreachable")
+	}
 	d.peerClientOnce.Do(func() {
 		t := http.DefaultTransport.(*http.Transport).Clone()
 		t.Dial = nil

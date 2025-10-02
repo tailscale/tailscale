@@ -6,6 +6,7 @@ package ipnlocal
 import (
 	"errors"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
@@ -85,6 +86,9 @@ func (e *prefsMetricsEditEvent) record() error {
 // false otherwise.  The caller is responsible for ensuring that the id belongs to
 // an exit node.
 func (e *prefsMetricsEditEvent) exitNodeType(id tailcfg.StableNodeID) (props []exitNodeProperty, isNode bool) {
+	if !buildfeatures.HasUseExitNode {
+		return nil, false
+	}
 	var peer tailcfg.NodeView
 
 	if peer, isNode = e.node.PeerByStableID(id); isNode {

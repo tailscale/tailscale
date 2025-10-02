@@ -20,6 +20,7 @@ import (
 
 	"go4.org/mem"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
@@ -262,10 +263,13 @@ func NewClient(c Config) *Client {
 		panic("nil EventBus")
 	}
 	ret := &Client{
-		logf:         c.Logf,
-		netMon:       c.NetMon,
-		ipAndGateway: netmon.LikelyHomeRouterIP, // TODO(bradfitz): move this to method on netMon
-		onChange:     c.OnChange,
+		logf:     c.Logf,
+		netMon:   c.NetMon,
+		onChange: c.OnChange,
+	}
+	if buildfeatures.HasPortMapper {
+		// TODO(bradfitz): move this to method on netMon
+		ret.ipAndGateway = netmon.LikelyHomeRouterIP
 	}
 	ret.pubClient = c.EventBus.Client("portmapper")
 	ret.updates = eventbus.Publish[portmappertype.Mapping](ret.pubClient)

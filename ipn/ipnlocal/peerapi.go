@@ -26,6 +26,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/net/http/httpguts"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
@@ -131,6 +132,9 @@ type peerAPIListener struct {
 }
 
 func (pln *peerAPIListener) Close() error {
+	if !buildfeatures.HasPeerAPIServer {
+		return nil
+	}
 	if pln.ln != nil {
 		return pln.ln.Close()
 	}
@@ -138,6 +142,9 @@ func (pln *peerAPIListener) Close() error {
 }
 
 func (pln *peerAPIListener) serve() {
+	if !buildfeatures.HasPeerAPIServer {
+		return
+	}
 	if pln.ln == nil {
 		return
 	}
@@ -319,6 +326,9 @@ func peerAPIRequestShouldGetSecurityHeaders(r *http.Request) bool {
 //
 // It panics if the path is already registered.
 func RegisterPeerAPIHandler(path string, f func(PeerAPIHandler, http.ResponseWriter, *http.Request)) {
+	if !buildfeatures.HasPeerAPIServer {
+		return
+	}
 	if _, ok := peerAPIHandlers[path]; ok {
 		panic(fmt.Sprintf("duplicate PeerAPI handler %q", path))
 	}
@@ -337,6 +347,10 @@ var (
 )
 
 func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasPeerAPIServer {
+		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
+		return
+	}
 	if err := h.validatePeerAPIRequest(r); err != nil {
 		metricInvalidRequests.Add(1)
 		h.logf("invalid request from %v: %v", h.remoteAddr, err)

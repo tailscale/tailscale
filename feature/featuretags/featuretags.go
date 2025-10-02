@@ -82,6 +82,12 @@ type FeatureMeta struct {
 	Sym  string       // exported Go symbol for boolean const
 	Desc string       // human-readable description
 	Deps []FeatureTag // other features this feature requires
+
+	// ImplementationDetail is whether the feature is an internal implementation
+	// detail. That is, it's not something a user wuold care about having or not
+	// having, but we'd like to able to omit from builds if no other
+	// user-visible features depend on it.
+	ImplementationDetail bool
 }
 
 // Features are the known Tailscale features that can be selectively included or
@@ -90,17 +96,45 @@ var Features = map[FeatureTag]FeatureMeta{
 	"acme":          {Sym: "ACME", Desc: "ACME TLS certificate management"},
 	"appconnectors": {Sym: "AppConnectors", Desc: "App Connectors support"},
 	"aws":           {Sym: "AWS", Desc: "AWS integration"},
-	"bakedroots":    {Sym: "BakedRoots", Desc: "Embed CA (LetsEncrypt) x509 roots to use as fallback"},
-	"bird":          {Sym: "Bird", Desc: "Bird BGP integration"},
+	"advertiseexitnode": {
+		Sym:  "AdvertiseExitNode",
+		Desc: "Run an exit node",
+		Deps: []FeatureTag{
+			"peerapiserver", // to run the ExitDNS server
+			"advertiseroutes",
+		},
+	},
+	"advertiseroutes": {
+		Sym:  "AdvertiseRoutes",
+		Desc: "Advertise routes for other nodes to use",
+		Deps: []FeatureTag{
+			"c2n", // for control plane to probe health for HA subnet router leader election
+		},
+	},
+	"bakedroots": {Sym: "BakedRoots", Desc: "Embed CA (LetsEncrypt) x509 roots to use as fallback"},
+	"bird":       {Sym: "Bird", Desc: "Bird BGP integration"},
+	"c2n": {
+		Sym:                  "C2N",
+		Desc:                 "Control-to-node (C2N) support",
+		ImplementationDetail: true,
+	},
 	"captiveportal": {Sym: "CaptivePortal", Desc: "Captive portal detection"},
 	"capture":       {Sym: "Capture", Desc: "Packet capture"},
-	"cloud":         {Sym: "Cloud", Desc: "detect cloud environment to learn instances IPs and DNS servers"},
 	"cli":           {Sym: "CLI", Desc: "embed the CLI into the tailscaled binary"},
 	"cliconndiag":   {Sym: "CLIConnDiag", Desc: "CLI connection error diagnostics"},
 	"clientmetrics": {Sym: "ClientMetrics", Desc: "Client metrics support"},
-	"clientupdate":  {Sym: "ClientUpdate", Desc: "Client auto-update support"},
-	"completion":    {Sym: "Completion", Desc: "CLI shell completion"},
-	"dbus":          {Sym: "DBus", Desc: "Linux DBus support"},
+	"clientupdate": {
+		Sym:  "ClientUpdate",
+		Desc: "Client auto-update support",
+		Deps: []FeatureTag{"c2n"},
+	},
+	"completion": {Sym: "Completion", Desc: "CLI shell completion"},
+	"cloud":      {Sym: "Cloud", Desc: "detect cloud environment to learn instances IPs and DNS servers"},
+	"dbus": {
+		Sym:                  "DBus",
+		Desc:                 "Linux DBus support",
+		ImplementationDetail: true,
+	},
 	"debug":         {Sym: "Debug", Desc: "various debug support, for things that don't have or need their own more specific feature"},
 	"debugeventbus": {Sym: "DebugEventBus", Desc: "eventbus debug support"},
 	"debugportmapper": {
@@ -144,6 +178,16 @@ var Features = map[FeatureTag]FeatureMeta{
 		// by some other feature are missing, then it's an error by default unless you accept
 		// that it's okay to proceed without that meta feature.
 	},
+	"peerapiclient": {
+		Sym:                  "PeerAPIClient",
+		Desc:                 "PeerAPI client support",
+		ImplementationDetail: true,
+	},
+	"peerapiserver": {
+		Sym:                  "PeerAPIServer",
+		Desc:                 "PeerAPI server support",
+		ImplementationDetail: true,
+	},
 	"portlist":   {Sym: "PortList", Desc: "Optionally advertise listening service ports"},
 	"portmapper": {Sym: "PortMapper", Desc: "NAT-PMP/PCP/UPnP port mapping support"},
 	"posture":    {Sym: "Posture", Desc: "Device posture checking support"},
@@ -180,7 +224,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"ssh": {
 		Sym:  "SSH",
 		Desc: "Tailscale SSH support",
-		Deps: []FeatureTag{"dbus", "netstack"},
+		Deps: []FeatureTag{"c2n", "dbus", "netstack"},
 	},
 	"synology": {
 		Sym:  "Synology",
@@ -192,13 +236,28 @@ var Features = map[FeatureTag]FeatureMeta{
 		Desc: "Linux system tray",
 		Deps: []FeatureTag{"dbus"},
 	},
-	"taildrop":    {Sym: "Taildrop", Desc: "Taildrop (file sending) support"},
+	"taildrop": {
+		Sym:  "Taildrop",
+		Desc: "Taildrop (file sending) support",
+		Deps: []FeatureTag{
+			"peerapiclient", "peerapiserver", // assume Taildrop is both sides for now
+		},
+	},
 	"tailnetlock": {Sym: "TailnetLock", Desc: "Tailnet Lock support"},
 	"tap":         {Sym: "Tap", Desc: "Experimental Layer 2 (ethernet) support"},
 	"tpm":         {Sym: "TPM", Desc: "TPM support"},
 	"unixsocketidentity": {
 		Sym:  "UnixSocketIdentity",
 		Desc: "differentiate between users accessing the LocalAPI over unix sockets (if omitted, all users have full access)",
+	},
+	"useroutes": {
+		Sym:  "UseRoutes",
+		Desc: "Use routes advertised by other nodes",
+	},
+	"useexitnode": {
+		Sym:  "UseExitNode",
+		Desc: "Use exit nodes",
+		Deps: []FeatureTag{"peerapiclient", "useroutes"},
 	},
 	"useproxy": {
 		Sym:  "UseProxy",
