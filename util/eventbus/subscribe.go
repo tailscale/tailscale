@@ -179,13 +179,31 @@ func (s *subscribeState) closed() <-chan struct{} {
 // A Subscriber delivers one type of event from a [Client].
 type Subscriber[T any] struct {
 	stop       stopFlag
-	read       chan T
+	read       chan T  // mutually exclusive with readFunc
+	readFunc   func(T) // mutually exclusive with read
 	unregister func()
+}
+
+// SubscriberFunc is like [Subscriber] but has no channel
+// for delivery. They're returned by [SubscribeFunc].
+type SubscriberFunc[T any] struct {
+	s *Subscriber[T] // but don't use its Events or Done methods
+}
+
+func (s *SubscriberFunc[T]) Close() {
+	s.s.Close()
 }
 
 func newSubscriber[T any](r *subscribeState) *Subscriber[T] {
 	return &Subscriber[T]{
 		read:       make(chan T),
+		unregister: func() { r.deleteSubscriber(reflect.TypeFor[T]()) },
+	}
+}
+
+func newSubscriberFunc[T any](r *subscribeState, f func(T)) *Subscriber[T] {
+	return &Subscriber[T]{
+		readFunc:   f,
 		unregister: func() { r.deleteSubscriber(reflect.TypeFor[T]()) },
 	}
 }
@@ -211,6 +229,19 @@ func (s *Subscriber[T]) monitor(debugEvent T) {
 
 func (s *Subscriber[T]) dispatch(ctx context.Context, vals *queue[DeliveredEvent], acceptCh func() chan DeliveredEvent, snapshot chan chan []DeliveredEvent) bool {
 	t := vals.Peek().Event.(T)
+
+	if s.readFunc != nil {
+		select {
+		case <-ctx.Done():
+			return false
+		case ch := <-snapshot:
+			ch <- vals.Snapshot()
+		default:
+		}
+		s.readFunc(t)
+		vals.Drop()
+		return true
+	}
 	for {
 		// Keep the cases in this select in sync with subscribeState.pump
 		// above. The only different should be that this select

@@ -548,7 +548,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.prevIfState = netMon.InterfaceState()
 	// Call our linkChange code once with the current state.
 	// Following changes are triggered via the eventbus.
-	b.linkChange(&netmon.ChangeDelta{New: netMon.InterfaceState()})
+	b.linkChange(netmon.ChangeDelta{New: netMon.InterfaceState()})
 
 	if buildfeatures.HasPeerAPIServer {
 		if tunWrap, ok := b.sys.Tun.GetOK(); ok {
@@ -573,48 +573,15 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	// Start the event bus late, once all the assignments above are done.
 	// (See previous race in tailscale/tailscale#17252)
 	ec := b.Sys().Bus.Get().Client("ipnlocal.LocalBackend")
-	b.eventSubs = ec.Monitor(b.consumeEventbusTopics(ec))
+	eventbus.SubscribeFunc(ec, b.onClientVersion)
+	eventbus.SubscribeFunc(ec, b.onTailnetDefaultAutoUpdateEvent)
+	eventbus.SubscribeFunc(ec, b.onHealthChange)
+	eventbus.SubscribeFunc(ec, b.linkChange)
+	if buildfeatures.HasPortList {
+		eventbus.SubscribeFunc(ec, b.setPortlistServices)
+	}
 
 	return b, nil
-}
-
-// consumeEventbusTopics consumes events from all relevant
-// [eventbus.Subscriber]'s and passes them to their related handler. Events are
-// always handled in the order they are received, i.e. the next event is not
-// read until the previous event's handler has returned. It returns when the
-// [eventbus.Client] is closed.
-func (b *LocalBackend) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus.Client) {
-	clientVersionSub := eventbus.Subscribe[tailcfg.ClientVersion](ec)
-	autoUpdateSub := eventbus.Subscribe[controlclient.AutoUpdate](ec)
-	healthChangeSub := eventbus.Subscribe[health.Change](ec)
-	changeDeltaSub := eventbus.Subscribe[netmon.ChangeDelta](ec)
-
-	var portlist <-chan PortlistServices
-	if buildfeatures.HasPortList {
-		portlistSub := eventbus.Subscribe[PortlistServices](ec)
-		portlist = portlistSub.Events()
-	}
-
-	return func(ec *eventbus.Client) {
-		for {
-			select {
-			case <-ec.Done():
-				return
-			case clientVersion := <-clientVersionSub.Events():
-				b.onClientVersion(&clientVersion)
-			case au := <-autoUpdateSub.Events():
-				b.onTailnetDefaultAutoUpdate(au.Value)
-			case change := <-healthChangeSub.Events():
-				b.onHealthChange(change)
-			case changeDelta := <-changeDeltaSub.Events():
-				b.linkChange(&changeDelta)
-			case pl := <-portlist:
-				if buildfeatures.HasPortList { // redundant, but explicit for linker deadcode and humans
-					b.setPortlistServices(pl)
-				}
-			}
-		}
-	}
 }
 
 func (b *LocalBackend) Clock() tstime.Clock { return b.clock }
@@ -933,7 +900,7 @@ func (b *LocalBackend) DisconnectControl() {
 }
 
 // linkChange is our network monitor callback, called whenever the network changes.
-func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
+func (b *LocalBackend) linkChange(delta netmon.ChangeDelta) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -3399,12 +3366,17 @@ func (b *LocalBackend) tellRecipientToBrowseToURL(url string, recipient notifica
 
 // onClientVersion is called on MapResponse updates when a MapResponse contains
 // a non-nil ClientVersion message.
-func (b *LocalBackend) onClientVersion(v *tailcfg.ClientVersion) {
+func (b *LocalBackend) onClientVersion(cv tailcfg.ClientVersion) {
+	v := &cv
 	b.mu.Lock()
 	b.lastClientVersion = v
 	b.health.SetLatestVersion(v)
 	b.mu.Unlock()
 	b.send(ipn.Notify{ClientVersion: v})
+}
+
+func (b *LocalBackend) onTailnetDefaultAutoUpdateEvent(a controlclient.AutoUpdate) {
+	b.onTailnetDefaultAutoUpdate(a.Value)
 }
 
 func (b *LocalBackend) onTailnetDefaultAutoUpdate(au bool) {
@@ -4708,7 +4680,7 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 // to advertise the running services on the host.
 type PortlistServices []tailcfg.Service
 
-func (b *LocalBackend) setPortlistServices(sl []tailcfg.Service) {
+func (b *LocalBackend) setPortlistServices(sl PortlistServices) {
 	if !buildfeatures.HasPortList { // redundant, but explicit for linker deadcode and humans
 		return
 	}
