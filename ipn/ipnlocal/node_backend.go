@@ -362,6 +362,40 @@ func (nb *nodeBackend) PeerAPIBase(p tailcfg.NodeView) string {
 	return peerAPIBase(nm, p)
 }
 
+// PeerIsReachable reports whether the current node can reach p. If the ctx is
+// done, this function may return a result based on stale reachability data.
+func (nb *nodeBackend) PeerIsReachable(ctx context.Context, p tailcfg.NodeView) bool {
+	if !nb.SelfHasCap(tailcfg.NodeAttrClientSideReachability) {
+		// Legacy behavior is to always trust the control plane, which
+		// isn’t always correct because the peer could be slow to check
+		// in so that control marks it as offline.
+		// See tailscale/corp#32686.
+		return p.Online().Get()
+	}
+
+	nb.mu.Lock()
+	nm := nb.netMap
+	nb.mu.Unlock()
+
+	if self := nm.SelfNode; self.Valid() && self.ID() == p.ID() {
+		// This node can always reach itself.
+		return true
+	}
+	return nb.peerIsReachable(ctx, p)
+}
+
+func (nb *nodeBackend) peerIsReachable(ctx context.Context, p tailcfg.NodeView) bool {
+	// TODO(sfllaw): The following does not actually test for client-side
+	// reachability. This would require a mechanism that tracks whether the
+	// current node can actually reach this peer, either because they are
+	// already communicating or because they can ping each other.
+	//
+	// Instead, it makes the client ignore p.Online completely.
+	//
+	// See tailscale/corp#32686.
+	return true
+}
+
 func nodeIP(n tailcfg.NodeView, pred func(netip.Addr) bool) netip.Addr {
 	for _, pfx := range n.Addresses().All() {
 		if pfx.IsSingleIP() && pred(pfx.Addr()) {

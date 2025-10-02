@@ -7240,6 +7240,10 @@ func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion ta
 // the lowest latency to this device. For peers without a DERP home, we look for
 // geographic proximity to this device's DERP home.
 func suggestExitNodeUsingDERP(report *netcheck.Report, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
+	// TODO(sfllaw): Context needs to be plumbed down here to support
+	// reachability testing.
+	ctx := context.TODO()
+
 	netMap := nb.NetMap()
 	if report == nil || report.PreferredDERP == 0 || netMap == nil || netMap.DERPMap == nil {
 		return res, ErrNoPreferredDERP
@@ -7248,7 +7252,7 @@ func suggestExitNodeUsingDERP(report *netcheck.Report, nb *nodeBackend, prevSugg
 	// since the netmap doesn't include delta updates (e.g., home DERP or Online
 	// status changes) from the control plane since the last full update.
 	candidates := nb.AppendMatchingPeers(nil, func(peer tailcfg.NodeView) bool {
-		if !peer.Valid() || !peer.Online().Get() {
+		if !peer.Valid() || !nb.PeerIsReachable(ctx, peer) {
 			return false
 		}
 		if allowList != nil && !allowList.Contains(peer.StableID()) {
@@ -7367,6 +7371,10 @@ var ErrNoNetMap = errors.New("no network map, try again later")
 // the node’s [tailcfg.Location]. To be eligible for consideration, the node
 // must have NodeAttrSuggestExitNode in its CapMap.
 func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcfg.StableNodeID]) (apitype.ExitNodeSuggestionResponse, error) {
+	// TODO(sfllaw): Context needs to be plumbed down here to support
+	// reachability testing.
+	ctx := context.TODO()
+
 	nm := nb.NetMap()
 	if nm == nil {
 		return apitype.ExitNodeSuggestionResponse{}, ErrNoNetMap
@@ -7386,7 +7394,7 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcf
 		if !p.Valid() {
 			return false
 		}
-		if !p.Online().Get() {
+		if !nb.PeerIsReachable(ctx, p) {
 			return false
 		}
 		if allowed != nil && !allowed.Contains(p.StableID()) {

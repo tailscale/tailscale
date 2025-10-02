@@ -2692,6 +2692,12 @@ const (
 	// numbers, apostrophe, spaces, and hyphens. This may not be true for the default.
 	// Values can look like "foo.com" or "Foo's Test Tailnet - Staging".
 	NodeAttrTailnetDisplayName NodeCapability = "tailnet-display-name"
+
+	// NodeAttrClientSideReachability configures the node to determine
+	// reachability itself when choosing connectors. When absent, the
+	// default behavior is to trust the control plane when it claims that a
+	// node is no longer online, but that is not a reliable signal.
+	NodeAttrClientSideReachability = "client-side-reachability"
 )
 
 // SetDNSRequest is a request to add a DNS record.
