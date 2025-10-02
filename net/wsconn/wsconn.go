@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package wsconn contains an adapter type that turns
-// a websocket connection into a net.Conn. It a temporary fork of the
-// netconn.go file from the github.com/coder/websocket package while we wait for
-// https://github.com/nhooyr/websocket/pull/350 to be merged.
+// a websocket connection into a net.Conn.
 package wsconn
 
 import (
