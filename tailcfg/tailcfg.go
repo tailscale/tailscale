@@ -172,7 +172,8 @@ type CapabilityVersion int
 //   - 125: 2025-08-11: dnstype.Resolver adds UseWithExitNode field.
 //   - 126: 2025-09-17: Client uses seamless key renewal unless disabled by control (tailscale/corp#31479)
 //   - 127: 2025-09-19: can handle C2N /debug/netmap.
-const CurrentCapabilityVersion CapabilityVersion = 127
+//   - 128: 2025-10-02: can handle C2N /debug/health.
+const CurrentCapabilityVersion CapabilityVersion = 128
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2734,6 +2735,9 @@ type SetDNSResponse struct{}
 // node health changes to:
 //
 //	POST https://<control-plane>/machine/update-health.
+//
+// As of 2025-10-02, we stopped sending this to the control plane proactively.
+// It was never useful enough with its current design and needs more thought.
 type HealthChangeRequest struct {
 	Subsys string // a health.Subsystem value in string form
 	Error  string // or empty if cleared
