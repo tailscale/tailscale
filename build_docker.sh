@@ -38,6 +38,7 @@ TARGET="${TARGET:-${DEFAULT_TARGET}}"
 TAGS="${TAGS:-${DEFAULT_TAGS}}"
 BASE="${BASE:-${DEFAULT_BASE}}"
 PLATFORM="${PLATFORM:-}" # default to all platforms
+FILES="${FILES:-}" # default to no extra files
 # OCI annotations that will be added to the image.
 # https://github.com/opencontainers/image-spec/blob/main/annotations.md
 ANNOTATIONS="${ANNOTATIONS:-${DEFAULT_ANNOTATIONS}}"
@@ -62,6 +63,7 @@ case "$TARGET" in
       --push="${PUSH}" \
       --target="${PLATFORM}" \
       --annotations="${ANNOTATIONS}" \
+      --files="${FILES}" \
       /usr/local/bin/containerboot
     ;;
   k8s-operator)
@@ -80,6 +82,7 @@ case "$TARGET" in
       --push="${PUSH}" \
       --target="${PLATFORM}" \
       --annotations="${ANNOTATIONS}" \
+      --files="${FILES}" \
       /usr/local/bin/operator
     ;;
   k8s-nameserver)
@@ -98,6 +101,7 @@ case "$TARGET" in
       --push="${PUSH}" \
       --target="${PLATFORM}" \
       --annotations="${ANNOTATIONS}" \
+      --files="${FILES}" \
       /usr/local/bin/k8s-nameserver
     ;;
   tsidp)
@@ -116,6 +120,7 @@ case "$TARGET" in
       --push="${PUSH}" \
       --target="${PLATFORM}" \
       --annotations="${ANNOTATIONS}" \
+      --files="${FILES}" \
       /usr/local/bin/tsidp
     ;;
   k8s-proxy)
@@ -134,6 +139,7 @@ case "$TARGET" in
       --push="${PUSH}" \
       --target="${PLATFORM}" \
       --annotations="${ANNOTATIONS}" \
+      --files="${FILES}" \
       /usr/local/bin/k8s-proxy
     ;;
   *)
