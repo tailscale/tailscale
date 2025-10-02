@@ -32,12 +32,17 @@ import (
 // c2nHandlers maps an HTTP method and URI path (without query parameters) to
 // its handler. The exact method+path match is preferred, but if no entry
 // exists for that, a map entry with an empty method is used as a fallback.
-var c2nHandlers = map[methodAndPath]c2nHandler{
-	// Debug.
-	req("/echo"): handleC2NEcho,
-}
+var c2nHandlers map[methodAndPath]c2nHandler
 
 func init() {
+	c2nHandlers = map[methodAndPath]c2nHandler{}
+	if buildfeatures.HasC2N {
+		// Echo is the basic "ping" handler as used by the control plane to probe
+		// whether a node is reachable. In particular, it's important for
+		// high-availability subnet routers for the control plane to probe which of
+		// several candidate nodes is reachable and actually alive.
+		RegisterC2N("/echo", handleC2NEcho)
+	}
 	if buildfeatures.HasSSH {
 		RegisterC2N("/ssh/usernames", handleC2NSSHUsernames)
 	}
@@ -69,6 +74,9 @@ func init() {
 // A pattern is like "GET /foo" (specific to an HTTP method) or "/foo" (all
 // methods). It panics if the pattern is already registered.
 func RegisterC2N(pattern string, h func(*LocalBackend, http.ResponseWriter, *http.Request)) {
+	if !buildfeatures.HasC2N {
+		return
+	}
 	k := req(pattern)
 	if _, ok := c2nHandlers[k]; ok {
 		panic(fmt.Sprintf("c2n: duplicate handler for %q", pattern))

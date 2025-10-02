@@ -530,6 +530,9 @@ func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool,
 }
 
 func (nb *nodeBackend) exitNodeCanProxyDNS(exitNodeID tailcfg.StableNodeID) (dohURL string, ok bool) {
+	if !buildfeatures.HasUseExitNode {
+		return "", false
+	}
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	return exitNodeCanProxyDNS(nb.netMap, nb.peers, exitNodeID)
@@ -769,18 +772,20 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// If we're using an exit node and that exit node is new enough (1.19.x+)
 	// to run a DoH DNS proxy, then send all our DNS traffic through it,
 	// unless we find resolvers with UseWithExitNode set, in which case we use that.
-	if dohURL, ok := exitNodeCanProxyDNS(nm, peers, prefs.ExitNodeID()); ok {
-		filtered := useWithExitNodeResolvers(nm.DNS.Resolvers)
-		if len(filtered) > 0 {
-			addDefault(filtered)
-		} else {
-			// If no default global resolvers with the override
-			// are configured, configure the exit node's resolver.
-			addDefault([]*dnstype.Resolver{{Addr: dohURL}})
-		}
+	if buildfeatures.HasUseExitNode {
+		if dohURL, ok := exitNodeCanProxyDNS(nm, peers, prefs.ExitNodeID()); ok {
+			filtered := useWithExitNodeResolvers(nm.DNS.Resolvers)
+			if len(filtered) > 0 {
+				addDefault(filtered)
+			} else {
+				// If no default global resolvers with the override
+				// are configured, configure the exit node's resolver.
+				addDefault([]*dnstype.Resolver{{Addr: dohURL}})
+			}
 
-		addSplitDNSRoutes(useWithExitNodeRoutes(nm.DNS.Routes))
-		return dcfg
+			addSplitDNSRoutes(useWithExitNodeRoutes(nm.DNS.Routes))
+			return dcfg
+		}
 	}
 
 	// If the user has set default resolvers ("override local DNS"), prefer to
@@ -788,7 +793,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// node resolvers, use those as the default.
 	if len(nm.DNS.Resolvers) > 0 {
 		addDefault(nm.DNS.Resolvers)
-	} else {
+	} else if buildfeatures.HasUseExitNode {
 		if resolvers, ok := wireguardExitNodeDNSResolvers(nm, peers, prefs.ExitNodeID()); ok {
 			addDefault(resolvers)
 		}

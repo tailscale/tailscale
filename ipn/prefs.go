@@ -20,6 +20,7 @@ import (
 
 	"tailscale.com/atomicfile"
 	"tailscale.com/drive"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
@@ -787,6 +788,9 @@ func (p *Prefs) AdvertisesExitNode() bool {
 // SetAdvertiseExitNode mutates p (if non-nil) to add or remove the two
 // /0 exit node routes.
 func (p *Prefs) SetAdvertiseExitNode(runExit bool) {
+	if !buildfeatures.HasAdvertiseExitNode {
+		return
+	}
 	if p == nil {
 		return
 	}
