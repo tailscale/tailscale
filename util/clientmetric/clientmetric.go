@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_clientmetrics
+
 // Package clientmetric provides client-side metrics whose values
 // get occasionally logged.
 package clientmetric
