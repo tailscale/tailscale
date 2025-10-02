@@ -282,6 +282,11 @@ func (v PrefsView) InternalExitNodePrior() tailcfg.StableNodeID { return v.ж.In
 // routed directly or via the exit node.
 func (v PrefsView) ExitNodeAllowLANAccess() bool { return v.ж.ExitNodeAllowLANAccess }
 
+// ExitNodeRouteLAN indicates whether LAN/private address ranges
+// (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) should be routed locally
+// when advertising default routes as an exit node.
+func (v PrefsView) ExitNodeRouteLAN() bool { return v.ж.ExitNodeRouteLAN }
+
 // CorpDNS specifies whether to install the Tailscale network's
 // DNS configuration, if it exists.
 func (v PrefsView) CorpDNS() bool { return v.ж.CorpDNS }
@@ -469,6 +474,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	AutoExitNode           ExitNodeExpression
 	InternalExitNodePrior  tailcfg.StableNodeID
 	ExitNodeAllowLANAccess bool
+	ExitNodeRouteLAN       bool
 	CorpDNS                bool
 	RunSSH                 bool
 	RunWebClient           bool

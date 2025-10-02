@@ -161,7 +161,7 @@ func TestShrinkDefaultRoute(t *testing.T) {
 
 	for _, test := range tests {
 		def := netip.MustParsePrefix(test.route)
-		got, err := shrinkDefaultRoute(def, localInterfaceRoutes, hostIPs)
+		got, err := shrinkDefaultRoute(def, localInterfaceRoutes, hostIPs, nil)
 		if err != nil {
 			t.Fatalf("shrinkDefaultRoute(%q): %v", test.route, err)
 		}
@@ -180,6 +180,132 @@ func TestShrinkDefaultRoute(t *testing.T) {
 			if gotContains := got.Contains(ip); gotContains != want {
 				t.Errorf("shrink(%q).Contains(%v) = %v, want %v", test.route, ip, gotContains, want)
 			}
+		}
+	}
+}
+
+func TestShrinkDefaultRouteAllowLAN(t *testing.T) {
+	// Test that when LAN ranges are whitelisted, they are not filtered out
+	// but other ranges are still filtered
+
+	// Construct a fake local network environment
+	var b netipx.IPSetBuilder
+	for _, c := range []string{"127.0.0.0/8", "192.168.9.0/24", "fe80::/32"} {
+		p := netip.MustParsePrefix(c)
+		b.AddPrefix(p)
+	}
+	localInterfaceRoutes, err := b.IPSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostIPs := []netip.Addr{
+		netip.MustParseAddr("127.0.0.1"),
+		netip.MustParseAddr("192.168.9.39"),
+		netip.MustParseAddr("fe80::1"),
+	}
+
+	// Test IPv4 default route with LAN ranges whitelisted
+	def := netip.MustParsePrefix("0.0.0.0/0")
+	whitelistRanges := []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("172.16.0.0/12"),
+		netip.MustParsePrefix("192.168.0.0/16"),
+	}
+	got, err := shrinkDefaultRoute(def, localInterfaceRoutes, hostIPs, whitelistRanges)
+	if err != nil {
+		t.Fatalf("shrinkDefaultRoute(%q, whitelistRanges): %v", def, err)
+	}
+
+	// LAN addresses should be allowed (not filtered out)
+	lanTests := []string{
+		"10.0.0.1",
+		"10.255.255.255",
+		"192.168.0.1",
+		"192.168.255.255",
+		"172.16.0.1",
+		"172.31.255.255",
+	}
+	for _, ip := range lanTests {
+		if !got.Contains(netip.MustParseAddr(ip)) {
+			t.Errorf("shrinkDefaultRoute(whitelistRanges).Contains(%v) = false, want true (LAN should be allowed)", ip)
+		}
+	}
+
+	// Non-LAN filtered addresses should still be filtered out
+	otherFilteredTests := []string{
+		"100.101.102.103", // Tailscale range
+		"224.0.0.1",       // Multicast
+		"169.254.169.254", // Link-local
+	}
+	for _, ip := range otherFilteredTests {
+		if got.Contains(netip.MustParseAddr(ip)) {
+			t.Errorf("shrinkDefaultRoute(whitelistRanges).Contains(%v) = true, want false (non-LAN should still be filtered)", ip)
+		}
+	}
+
+	// Regular internet addresses should be allowed
+	internetTests := []string{
+		"1.2.3.4",
+		"8.8.8.8",
+		"25.0.0.1",
+	}
+	for _, ip := range internetTests {
+		if !got.Contains(netip.MustParseAddr(ip)) {
+			t.Errorf("shrinkDefaultRoute(whitelistRanges).Contains(%v) = false, want true (internet addresses should be allowed)", ip)
+		}
+	}
+}
+
+func TestShrinkDefaultRouteNoWhitelist(t *testing.T) {
+	// Test that when no whitelist is provided, RFC1918 ranges are filtered out (default behavior)
+
+	// Construct a fake local network environment
+	var b netipx.IPSetBuilder
+	for _, c := range []string{"127.0.0.0/8", "192.168.9.0/24", "fe80::/32"} {
+		p := netip.MustParsePrefix(c)
+		b.AddPrefix(p)
+	}
+	localInterfaceRoutes, err := b.IPSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostIPs := []netip.Addr{
+		netip.MustParseAddr("127.0.0.1"),
+		netip.MustParseAddr("192.168.9.39"),
+		netip.MustParseAddr("fe80::1"),
+	}
+
+	// Test IPv4 default route with no whitelist (empty slice)
+	def := netip.MustParsePrefix("0.0.0.0/0")
+	got, err := shrinkDefaultRoute(def, localInterfaceRoutes, hostIPs, nil)
+	if err != nil {
+		t.Fatalf("shrinkDefaultRoute(%q, nil): %v", def, err)
+	}
+
+	// RFC1918 addresses should be filtered out (not allowed)
+	rfc1918Tests := []string{
+		"10.0.0.1",
+		"10.255.255.255",
+		"192.168.0.1",
+		"192.168.255.255",
+		"172.16.0.1",
+		"172.31.255.255",
+	}
+	for _, ip := range rfc1918Tests {
+		if got.Contains(netip.MustParseAddr(ip)) {
+			t.Errorf("shrinkDefaultRoute(nil).Contains(%v) = true, want false (RFC1918 should be filtered when no whitelist)", ip)
+		}
+	}
+
+	// Regular internet addresses should be allowed
+	internetTests := []string{
+		"1.2.3.4",
+		"8.8.8.8",
+		"25.0.0.1",
+	}
+	for _, ip := range internetTests {
+		if !got.Contains(netip.MustParseAddr(ip)) {
+			t.Errorf("shrinkDefaultRoute(nil).Contains(%v) = false, want true (internet addresses should be allowed)", ip)
 		}
 	}
 }

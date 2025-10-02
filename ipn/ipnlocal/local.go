@@ -2636,7 +2636,11 @@ func (b *LocalBackend) updateFilterLocked(prefs ipn.PrefsView) {
 					b.logf("getting local interface routes: %v", err)
 					continue
 				}
-				s, err := shrinkDefaultRoute(r, localInterfaceRoutes, hostIPs)
+				var whitelistRanges []netip.Prefix
+				if prefs.ExitNodeRouteLAN() {
+					whitelistRanges = rfc1918Ranges
+				}
+				s, err := shrinkDefaultRoute(r, localInterfaceRoutes, hostIPs, whitelistRanges)
 				if err != nil {
 					b.logf("computing default route filter: %v", err)
 					continue
@@ -2754,11 +2758,15 @@ func (b *LocalBackend) setFilter(f *filter.Filter) {
 	b.e.SetFilter(f)
 }
 
-var removeFromDefaultRoute = []netip.Prefix{
-	// RFC1918 LAN ranges
+// RFC1918 LAN ranges that can be conditionally filtered based on ExitNodeAllowLANAccess
+var rfc1918Ranges = []netip.Prefix{
 	netip.MustParsePrefix("192.168.0.0/16"),
 	netip.MustParsePrefix("172.16.0.0/12"),
 	netip.MustParsePrefix("10.0.0.0/8"),
+}
+
+// Other ranges that are always filtered from default routes
+var otherFilteredRanges = []netip.Prefix{
 	// IPv4 link-local
 	netip.MustParsePrefix("169.254.0.0/16"),
 	// IPv4 multicast
@@ -2772,6 +2780,9 @@ var removeFromDefaultRoute = []netip.Prefix{
 	// Tailscale IPv6 range
 	tsaddr.TailscaleULARange(),
 }
+
+// Legacy variable for backward compatibility - combines both ranges
+var removeFromDefaultRoute = append(append([]netip.Prefix{}, rfc1918Ranges...), otherFilteredRanges...)
 
 // internalAndExternalInterfaces splits interface routes into "internal"
 // and "external" sets. Internal routes are those of virtual ethernet
@@ -2856,7 +2867,8 @@ func interfaceRoutes() (ips *netipx.IPSet, hostIPs []netip.Addr, err error) {
 // shrinkDefaultRoute returns an IPSet representing the IPs in route,
 // minus those in removeFromDefaultRoute and localInterfaceRoutes,
 // plus the IPs in hostIPs.
-func shrinkDefaultRoute(route netip.Prefix, localInterfaceRoutes *netipx.IPSet, hostIPs []netip.Addr) (*netipx.IPSet, error) {
+// whitelistRanges contains IP ranges that should NOT be filtered out.
+func shrinkDefaultRoute(route netip.Prefix, localInterfaceRoutes *netipx.IPSet, hostIPs []netip.Addr, whitelistRanges []netip.Prefix) (*netipx.IPSet, error) {
 	var b netipx.IPSetBuilder
 	// Add the default route.
 	b.AddPrefix(route)
@@ -2875,8 +2887,24 @@ func shrinkDefaultRoute(route netip.Prefix, localInterfaceRoutes *netipx.IPSet, 
 		}
 	}
 
-	for _, pfx := range removeFromDefaultRoute {
+	// Always remove other filtered ranges (non-RFC1918)
+	for _, pfx := range otherFilteredRanges {
 		b.RemovePrefix(pfx)
+	}
+
+	// Remove RFC1918 ranges unless they are in the whitelist
+	for _, pfx := range rfc1918Ranges {
+		// Check if this range is whitelisted
+		whitelisted := false
+		for _, whitelistPfx := range whitelistRanges {
+			if pfx == whitelistPfx {
+				whitelisted = true
+				break
+			}
+		}
+		if !whitelisted {
+			b.RemovePrefix(pfx)
+		}
 	}
 	return b.IPSet()
 }

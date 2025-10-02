@@ -47,6 +47,7 @@ type setArgsT struct {
 	acceptDNS              bool
 	exitNodeIP             string
 	exitNodeAllowLANAccess bool
+	exitNodeRouteLAN       bool
 	shieldsUp              bool
 	runSSH                 bool
 	runWebClient           bool
@@ -75,6 +76,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
 	setf.StringVar(&setArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP, base name, or auto:any) for internet traffic, or empty string to not use an exit node")
 	setf.BoolVar(&setArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "Allow direct access to the local network when routing traffic via an exit node")
+	setf.BoolVar(&setArgs.exitNodeRouteLAN, "exit-node-route-lan", false, "Route LAN/private address ranges locally when advertising default routes as an exit node")
 	setf.BoolVar(&setArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	setf.BoolVar(&setArgs.runSSH, "ssh", false, "run an SSH server, permitting access per tailnet admin's declared policy")
 	setf.StringVar(&setArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
@@ -142,6 +144,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			RouteAll:               setArgs.acceptRoutes,
 			CorpDNS:                setArgs.acceptDNS,
 			ExitNodeAllowLANAccess: setArgs.exitNodeAllowLANAccess,
+			ExitNodeRouteLAN:       setArgs.exitNodeRouteLAN,
 			ShieldsUp:              setArgs.shieldsUp,
 			RunSSH:                 setArgs.runSSH,
 			RunWebClient:           setArgs.runWebClient,
