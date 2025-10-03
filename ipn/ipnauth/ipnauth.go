@@ -15,6 +15,7 @@ import (
 	"strconv"
 
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/safesocket"
 	"tailscale.com/types/logger"
@@ -77,6 +78,13 @@ type ConnIdentity struct {
 // It's suitable for passing to LookupUserFromID (os/user.LookupId) on any
 // operating system.
 func (ci *ConnIdentity) WindowsUserID() ipn.WindowsUserID {
+	if !buildfeatures.HasDebug && runtime.GOOS != "windows" {
+		// This function is only implemented on non-Windows for simulating
+		// Windows in tests. But that test (per comments below) is broken
+		// anyway. So disable this testing path in non-debug builds
+		// and just do the thing that optimizes away.
+		return ""
+	}
 	if envknob.GOOS() != "windows" {
 		return ""
 	}

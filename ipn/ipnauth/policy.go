@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/syspolicy/pkey"
@@ -51,6 +52,9 @@ func (a actorWithPolicyChecks) CheckProfileAccess(profile ipn.LoginProfileView, 
 // TODO(nickkhyl): unexport it when we move [ipn.Actor] implementations from [ipnserver]
 // and corp to this package.
 func CheckDisconnectPolicy(actor Actor, profile ipn.LoginProfileView, reason string, auditFn AuditLogFunc) error {
+	if !buildfeatures.HasSystemPolicy {
+		return nil
+	}
 	if alwaysOn, _ := policyclient.Get().GetBoolean(pkey.AlwaysOn, false); !alwaysOn {
 		return nil
 	}
