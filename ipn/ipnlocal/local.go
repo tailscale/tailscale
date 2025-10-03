@@ -7255,9 +7255,9 @@ func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion ta
 // the lowest latency to this device. For peers without a DERP home, we look for
 // geographic proximity to this device's DERP home.
 func suggestExitNodeUsingDERP(report *netcheck.Report, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
-	// TODO(sfllaw): Context needs to be plumbed down here to support
-	// reachability testing.
-	ctx := context.TODO()
+	// Calculating the suggested exit node needs to complete, so this
+	// context should be valid as long as the nodeBackend is.
+	ctx := nb.ctx
 
 	netMap := nb.NetMap()
 	if report == nil || report.PreferredDERP == 0 || netMap == nil || netMap.DERPMap == nil {
@@ -7386,9 +7386,9 @@ var ErrNoNetMap = errors.New("no network map, try again later")
 // the node’s [tailcfg.Location]. To be eligible for consideration, the node
 // must have NodeAttrSuggestExitNode in its CapMap.
 func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcfg.StableNodeID]) (apitype.ExitNodeSuggestionResponse, error) {
-	// TODO(sfllaw): Context needs to be plumbed down here to support
-	// reachability testing.
-	ctx := context.TODO()
+	// Calculating the suggested exit node needs to complete, so this
+	// context should be valid as long as the nodeBackend is.
+	ctx := nb.ctx
 
 	nm := nb.NetMap()
 	if nm == nil {
