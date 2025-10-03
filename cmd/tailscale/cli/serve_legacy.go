@@ -172,6 +172,7 @@ type serveEnv struct {
 	yes              bool                // update without prompt
 	service          tailcfg.ServiceName // service name
 	tun              bool                // redirect traffic to OS for service
+	allServices      bool                // apply config file to all services
 
 	lc localServeClient // localClient interface, specific to serve
 
