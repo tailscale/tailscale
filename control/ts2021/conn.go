@@ -31,6 +31,7 @@ import (
 type Conn struct {
 	*controlbase.Conn
 
+	onClose           func()        // or nil
 	readHeaderOnce    sync.Once     // guards init of reader field
 	reader            io.Reader     // (effectively Conn.Reader after header)
 	earlyPayloadReady chan struct{} // closed after earlyPayload is set (including set to nil)
@@ -44,11 +45,12 @@ type Conn struct {
 // http2.ClientConn will be created that reads from the returned Conn.
 //
 // connID should be a unique ID for this connection. When the Conn is closed,
-// the onClose function will be called with the connID if it is non-nil.
-func NewConn(conn *controlbase.Conn) *Conn {
+// the onClose function will be called if it is non-nil.
+func NewConn(conn *controlbase.Conn, onClose func()) *Conn {
 	return &Conn{
 		Conn:              conn,
 		earlyPayloadReady: make(chan struct{}),
+		onClose:           sync.OnceFunc(onClose),
 	}
 }
 
@@ -101,6 +103,14 @@ func (r returnErrReader) Read([]byte) (int, error) { return 0, r.err }
 func (c *Conn) Read(p []byte) (n int, err error) {
 	c.readHeaderOnce.Do(c.readHeader)
 	return c.reader.Read(p)
+}
+
+// Close closes the connection.
+func (c *Conn) Close() error {
+	if c.onClose != nil {
+		defer c.onClose()
+	}
+	return c.Conn.Close()
 }
 
 // readHeader reads the optional "early payload" from the server that arrives

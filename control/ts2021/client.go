@@ -28,6 +28,8 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
 )
 
 // Client provides a http.Client to connect to tailcontrol over
@@ -44,8 +46,9 @@ type Client struct {
 	httpsPort string // the fallback Noise-over-https port or empty if none
 
 	// mu protects the following
-	mu     sync.Mutex
-	closed bool
+	mu       sync.Mutex
+	closed   bool
+	connPool set.HandleSet[*Conn] // all live connections
 }
 
 // ClientOpts contains options for the [NewClient] function. All fields are
@@ -175,9 +178,15 @@ func NewClient(opts ClientOpts) (*Client, error) {
 // It is a no-op and returns nil if the connection is already closed.
 func (nc *Client) Close() error {
 	nc.mu.Lock()
-	defer nc.mu.Unlock()
+	live := nc.connPool
 	nc.closed = true
+	nc.mu.Unlock()
+
+	for _, c := range live {
+		c.Close()
+	}
 	nc.Client.CloseIdleConnections()
+
 	return nil
 }
 
@@ -249,16 +258,29 @@ func (nc *Client) dial(ctx context.Context) (*Conn, error) {
 		return nil, err
 	}
 
-	ncc := NewConn(clientConn.Conn)
-
 	nc.mu.Lock()
+
+	handle := set.NewHandle()
+	ncc := NewConn(clientConn.Conn, func() { nc.noteConnClosed(handle) })
+	mak.Set(&nc.connPool, handle, ncc)
+
 	if nc.closed {
 		nc.mu.Unlock()
 		ncc.Close() // Needs to be called without holding the lock.
 		return nil, errors.New("noise client closed")
 	}
+
 	defer nc.mu.Unlock()
 	return ncc, nil
+}
+
+// noteConnClosed notes that the *Conn with the given handle has closed and
+// should be removed from the live connPool (which is usually of size 0 or 1,
+// except perhaps briefly 2 during a network failure and reconnect).
+func (nc *Client) noteConnClosed(handle set.Handle) {
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+	nc.connPool.Delete(handle)
 }
 
 // post does a POST to the control server at the given path, JSON-encoding body.
