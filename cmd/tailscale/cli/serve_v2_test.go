@@ -857,6 +857,53 @@ func TestServeDevConfigMutations(t *testing.T) {
 				wantErr: anyErr(),
 			}},
 		},
+		{
+			name: "forward_grant_header",
+			steps: []step{
+				{
+					command: cmd("serve --bg --usercaps=example.com/cap/foo 3000"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {
+									Proxy:    "http://127.0.0.1:3000",
+									UserCaps: []tailcfg.PeerCapability{"example.com/cap/foo"},
+								},
+							}},
+						},
+					},
+				},
+				{
+					command: cmd("serve --bg --usercaps=example.com/cap/foo --usercaps=example.com/cap/bar 3000"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {
+									Proxy:    "http://127.0.0.1:3000",
+									UserCaps: []tailcfg.PeerCapability{"example.com/cap/foo", "example.com/cap/bar"},
+								},
+							}},
+						},
+					},
+				},
+				{
+					command: cmd("serve --bg --usercaps=example.com/cap/bar 3000"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {
+									Proxy:    "http://127.0.0.1:3000",
+									UserCaps: []tailcfg.PeerCapability{"example.com/cap/bar"},
+								},
+							}},
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, group := range groups {
@@ -2009,7 +2056,7 @@ func TestSetServe(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := e.setServe(tt.cfg, tt.dnsName, tt.srvType, tt.srvPort, tt.mountPath, tt.target, tt.allowFunnel, magicDNSSuffix)
+			err := e.setServe(tt.cfg, tt.dnsName, tt.srvType, tt.srvPort, tt.mountPath, tt.target, tt.allowFunnel, magicDNSSuffix, nil)
 			if err != nil && !tt.expectErr {
 				t.Fatalf("got error: %v; did not expect error.", err)
 			}

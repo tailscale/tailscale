@@ -40,6 +40,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
 	"tailscale.com/util/backoff"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/ctxkey"
@@ -64,6 +65,7 @@ func init() {
 const (
 	contentTypeHeader   = "Content-Type"
 	grpcBaseContentType = "application/grpc"
+	grantHeaderMaxSize  = 15360 // 15 KiB
 )
 
 // ErrETagMismatch signals that the given
@@ -79,7 +81,8 @@ type serveHTTPContext struct {
 	DestPort      uint16
 
 	// provides funnel-specific context, nil if not funneled
-	Funnel *funnelFlow
+	Funnel         *funnelFlow
+	PeerCapsFilter views.Slice[tailcfg.PeerCapability]
 }
 
 // funnelFlow represents a funneled connection initiated via IngressPeer
@@ -803,6 +806,7 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Out.Host = r.In.Host
 		addProxyForwardedHeaders(r)
 		rp.lb.addTailscaleIdentityHeaders(r)
+		rp.lb.addTailscaleGrantHeader(r)
 	}}
 
 	// There is no way to autodetect h2c as per RFC 9113
@@ -927,6 +931,62 @@ func encTailscaleHeaderValue(v string) string {
 	return mime.QEncoding.Encode("utf-8", v)
 }
 
+func (b *LocalBackend) addTailscaleGrantHeader(r *httputil.ProxyRequest) {
+	r.Out.Header.Del("Tailscale-User-Capabilities")
+
+	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
+	if !ok || c.Funnel != nil {
+		return
+	}
+	filter := c.PeerCapsFilter
+	if filter.IsNil() {
+		return
+	}
+	peerCaps := b.PeerCaps(c.SrcAddr.Addr())
+	if peerCaps == nil {
+		return
+	}
+
+	peerCapsFiltered := make(map[tailcfg.PeerCapability][]tailcfg.RawMessage, filter.Len())
+	for _, cap := range filter.AsSlice() {
+		if peerCaps.HasCapability(cap) {
+			peerCapsFiltered[cap] = peerCaps[cap]
+		}
+	}
+
+	serialized, truncated, err := serializeUpToNBytes(peerCapsFiltered, grantHeaderMaxSize)
+	if err != nil {
+		b.logf("serve: failed to serialize PeerCapMap: %v", err)
+		return
+	}
+	if truncated {
+		b.logf("serve: serialized PeerCapMap exceeds %d bytes, forwarding truncated PeerCapMap", grantHeaderMaxSize)
+	}
+
+	r.Out.Header.Set("Tailscale-User-Capabilities", encTailscaleHeaderValue(serialized))
+}
+
+// serializeUpToNBytes serializes capMap. It arbitrarily truncates entries from the capMap
+// if the size of the serialized capMap would exceed N bytes.
+func serializeUpToNBytes(capMap tailcfg.PeerCapMap, N int) (string, bool, error) {
+	numBytes := 0
+	capped := false
+	result := tailcfg.PeerCapMap{}
+	for k, v := range capMap {
+		numBytes += len(k) + len(v)
+		if numBytes > N {
+			capped = true
+			break
+		}
+		result[k] = v
+	}
+	marshalled, err := json.Marshal(result)
+	if err != nil {
+		return "", false, err
+	}
+	return string(marshalled), capped, nil
+}
+
 // serveWebHandler is an http.HandlerFunc that maps incoming requests to the
 // correct *http.
 func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
@@ -950,6 +1010,12 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown proxy destination", http.StatusInternalServerError)
 			return
 		}
+		// Inject user capabilities to forward into the request context
+		c, ok := serveHTTPContextKey.ValueOk(r.Context())
+		if !ok {
+			return
+		}
+		c.PeerCapsFilter = h.UserCaps()
 		h := p.(http.Handler)
 		// Trim the mount point from the URL path before proxying. (#6571)
 		if r.URL.Path != "/" {

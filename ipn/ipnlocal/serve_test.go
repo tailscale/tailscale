@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -27,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/control/controlclient"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
@@ -41,6 +43,7 @@ import (
 	"tailscale.com/util/must"
 	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/filter"
 )
 
 func TestExpandProxyArg(t *testing.T) {
@@ -768,6 +771,156 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 	}
 }
 
+func TestServeHTTPProxyGrantHeader(t *testing.T) {
+	b := newTestBackend(t)
+
+	nm := b.NetMap()
+	matches, err := filter.MatchesFromFilterRules([]tailcfg.FilterRule{
+		{
+			SrcIPs: []string{"100.150.151.152"},
+			CapGrant: []tailcfg.CapGrant{{
+				Dsts: []netip.Prefix{
+					netip.MustParsePrefix("100.150.151.151/32"),
+				},
+				CapMap: tailcfg.PeerCapMap{
+					"example.com/cap/interesting": []tailcfg.RawMessage{
+						`{"role": "🐿"}`,
+					},
+				},
+			}},
+		},
+		{
+			SrcIPs: []string{"100.150.151.153"},
+			CapGrant: []tailcfg.CapGrant{{
+				Dsts: []netip.Prefix{
+					netip.MustParsePrefix("100.150.151.151/32"),
+				},
+				CapMap: tailcfg.PeerCapMap{
+					"example.com/cap/boring": []tailcfg.RawMessage{
+						`{"role": "Viewer"}`,
+					},
+					"example.com/cap/irrelevant": []tailcfg.RawMessage{
+						`{"role": "Editor"}`,
+					},
+				},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nm.PacketFilter = matches
+	b.SetControlClientStatus(nil, controlclient.Status{NetMap: nm})
+
+	// Start test serve endpoint.
+	testServ := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			// Piping all the headers through the response writer
+			// so we can check their values in tests below.
+			for key, val := range r.Header {
+				w.Header().Add(key, strings.Join(val, ","))
+			}
+		},
+	))
+	defer testServ.Close()
+
+	conf := &ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			"example.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+				"/": {
+					Proxy:    testServ.URL,
+					UserCaps: []tailcfg.PeerCapability{"example.com/cap/interesting", "example.com/cap/boring"},
+				},
+			}},
+		},
+	}
+	if err := b.SetServeConfig(conf, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	type headerCheck struct {
+		header string
+		want   string
+	}
+
+	tests := []struct {
+		name        string
+		srcIP       string
+		wantHeaders []headerCheck
+	}{
+		{
+			name:  "request-from-user-within-tailnet",
+			srcIP: "100.150.151.152",
+			wantHeaders: []headerCheck{
+				{"X-Forwarded-Proto", "https"},
+				{"X-Forwarded-For", "100.150.151.152"},
+				{"Tailscale-User-Login", "someone@example.com"},
+				{"Tailscale-User-Name", "Some One"},
+				{"Tailscale-User-Profile-Pic", "https://example.com/photo.jpg"},
+				{"Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers"},
+				{"Tailscale-User-Capabilities", `{"example.com/cap/interesting":[{"role":"🐿"}]}`},
+			},
+		},
+		{
+			name:  "request-from-tagged-node-within-tailnet",
+			srcIP: "100.150.151.153",
+			wantHeaders: []headerCheck{
+				{"X-Forwarded-Proto", "https"},
+				{"X-Forwarded-For", "100.150.151.153"},
+				{"Tailscale-User-Login", ""},
+				{"Tailscale-User-Name", ""},
+				{"Tailscale-User-Profile-Pic", ""},
+				{"Tailscale-Headers-Info", ""},
+				{"Tailscale-User-Capabilities", `{"example.com/cap/boring":[{"role":"Viewer"}]}`},
+			},
+		},
+		{
+			name:  "request-from-outside-tailnet",
+			srcIP: "100.160.161.162",
+			wantHeaders: []headerCheck{
+				{"X-Forwarded-Proto", "https"},
+				{"X-Forwarded-For", "100.160.161.162"},
+				{"Tailscale-User-Login", ""},
+				{"Tailscale-User-Name", ""},
+				{"Tailscale-User-Profile-Pic", ""},
+				{"Tailscale-Headers-Info", ""},
+				{"Tailscale-User-Capabilities", ""},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &http.Request{
+				URL: &url.URL{Path: "/"},
+				TLS: &tls.ConnectionState{ServerName: "example.ts.net"},
+			}
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
+				DestPort: 443,
+				SrcAddr:  netip.MustParseAddrPort(tt.srcIP + ":1234"), // random src port for tests
+			}))
+
+			w := httptest.NewRecorder()
+			b.serveWebHandler(w, req)
+
+			// Verify the headers. The contract with users is that identity and grant headers containing non-ASCII
+			// UTF-8 characters will be Q-encoded.
+			h := w.Result().Header
+			dec := new(mime.WordDecoder)
+			for _, c := range tt.wantHeaders {
+				maybeEncoded := h.Get(c.header)
+				got, err := dec.DecodeHeader(maybeEncoded)
+				if err != nil {
+					t.Fatalf("invalid %q header; failed to decode: %v", maybeEncoded, err)
+				}
+				if got != c.want {
+					t.Errorf("invalid %q header; want=%q, got=%q", c.header, c.want, got)
+				}
+			}
+		})
+	}
+}
+
 func Test_reverseProxyConfiguration(t *testing.T) {
 	b := newTestBackend(t)
 	type test struct {
@@ -926,6 +1079,9 @@ func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 	b.currentNode().SetNetMap(&netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{
 			Name: "example.ts.net",
+			Addresses: []netip.Prefix{
+				netip.MustParsePrefix("100.150.151.151/32"),
+			},
 		}).View(),
 		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
 			tailcfg.UserID(1): (&tailcfg.UserProfile{
@@ -1168,6 +1324,92 @@ func TestServeGRPCProxy(t *testing.T) {
 			if string(got) != msg {
 				t.Errorf("got body %q, want %q", got, msg)
 			}
+		})
+	}
+}
+
+func TestSerialisePeerCapMap(t *testing.T) {
+	var tests = []struct {
+		name                string
+		capMap              tailcfg.PeerCapMap
+		maxNumBytes         int
+		wantOneOfSerialized []string
+		wantTruncated       bool
+	}{
+		{
+			name:                "empty cap map",
+			capMap:              tailcfg.PeerCapMap{},
+			maxNumBytes:         50,
+			wantOneOfSerialized: []string{"{}"},
+			wantTruncated:       false,
+		},
+		{
+			name: "cap map with one capability",
+			capMap: tailcfg.PeerCapMap{
+				"tailscale.com/cap/kubernetes": []tailcfg.RawMessage{
+					`{"impersonate": {"groups": ["tailnet-readers"]}}`,
+				},
+			},
+			maxNumBytes: 50,
+			wantOneOfSerialized: []string{
+				`{"tailscale.com/cap/kubernetes":[{"impersonate":{"groups":["tailnet-readers"]}}]}`,
+			},
+			wantTruncated: false,
+		},
+		{
+			name: "cap map with two capabilities",
+			capMap: tailcfg.PeerCapMap{
+				"foo.com/cap/something": []tailcfg.RawMessage{
+					`{"role": "Admin"}`,
+				},
+				"bar.com/cap/other-thing": []tailcfg.RawMessage{
+					`{"role": "Viewer"}`,
+				},
+			},
+			maxNumBytes: 50,
+			// Both cap map entries will be included, but they could appear in any order.
+			wantOneOfSerialized: []string{
+				`{"foo.com/cap/something":[{"role":"Admin"}],"bar.com/cap/other-thing":[{"role":"Viewer"}]}`,
+				`{"bar.com/cap/other-thing":[{"role":"Viewer"}],"foo.com/cap/something":[{"role":"Admin"}]}`,
+			},
+			wantTruncated: false,
+		},
+		{
+			name: "cap map that should be truncated to stay within size limits",
+			capMap: tailcfg.PeerCapMap{
+				"foo.com/cap/something": []tailcfg.RawMessage{
+					`{"role": "Admin"}`,
+				},
+				"bar.com/cap/other-thing": []tailcfg.RawMessage{
+					`{"role": "Viewer"}`,
+				},
+			},
+			maxNumBytes: 40,
+			// Only one cap map entry will be included, but we don't know which one.
+			wantOneOfSerialized: []string{
+				`{"foo.com/cap/something":[{"role":"Admin"}]}`,
+				`{"bar.com/cap/other-thing":[{"role":"Viewer"}]}`,
+			},
+			wantTruncated: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotSerialized, gotCapped, err := serializeUpToNBytes(tt.capMap, tt.maxNumBytes)
+
+			if err != nil {
+				t.Fatal(err)
+			}
+			if gotCapped != tt.wantTruncated {
+				t.Errorf("got %t, want %t", gotCapped, tt.wantTruncated)
+			}
+			for _, wantSerialized := range tt.wantOneOfSerialized {
+				if gotSerialized == wantSerialized {
+					return
+				}
+			}
+			t.Errorf("want one of %v, got %q", tt.wantOneOfSerialized, gotSerialized)
 		})
 	}
 }
