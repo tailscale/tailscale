@@ -1710,7 +1710,7 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 	var epCache epAddrEndpointCache
 
 	return func(buffs [][]byte, sizes []int, eps []conn.Endpoint) (_ int, retErr error) {
-		if healthItem != nil {
+		if buildfeatures.HasHealth && healthItem != nil {
 			healthItem.Enter()
 			defer healthItem.Exit()
 			defer func() {
