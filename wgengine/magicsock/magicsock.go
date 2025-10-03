@@ -180,6 +180,7 @@ type Conn struct {
 	// config changes between magicsock and wireguard.
 	syncPub               *eventbus.Publisher[syncPoint]
 	allocRelayEndpointPub *eventbus.Publisher[UDPRelayAllocReq]
+	portUpdatePub         *eventbus.Publisher[PortUpdate]
 
 	// pconn4 and pconn6 are the underlying UDP sockets used to
 	// send/receive packets for wireguard and other magicsock
@@ -394,10 +395,6 @@ type Conn struct {
 	// wgPinger is the WireGuard only pinger used for latency measurements.
 	wgPinger lazy.SyncValue[*ping.Pinger]
 
-	// onPortUpdate is called with the new port when magicsock rebinds to
-	// a new port.
-	onPortUpdate func(port uint16, network string)
-
 	// getPeerByKey optionally specifies a function to look up a peer's
 	// wireguard state by its public key. If nil, it's not used.
 	getPeerByKey func(key.NodePublic) (_ wgint.Peer, ok bool)
@@ -491,10 +488,6 @@ type Options struct {
 	// ControlKnobs are the set of control knobs to use.
 	// If nil, they're ignored and not updated.
 	ControlKnobs *controlknobs.Knobs
-
-	// OnPortUpdate is called with the new port when magicsock rebinds to
-	// a new port.
-	OnPortUpdate func(port uint16, network string)
 
 	// PeerByKeyFunc optionally specifies a function to look up a peer's
 	// WireGuard state by its public key. If nil, it's not used.
@@ -735,6 +728,7 @@ func NewConn(opts Options) (*Conn, error) {
 	cli := c.eventBus.Client("magicsock.Conn")
 	c.syncPub = eventbus.Publish[syncPoint](cli)
 	c.allocRelayEndpointPub = eventbus.Publish[UDPRelayAllocReq](cli)
+	c.portUpdatePub = eventbus.Publish[PortUpdate](cli)
 	c.eventSubs = cli.Monitor(c.consumeEventbusTopics(cli))
 
 	c.connCtx, c.connCtxCancel = context.WithCancel(context.Background())
@@ -759,7 +753,6 @@ func NewConn(opts Options) (*Conn, error) {
 
 	c.netMon = opts.NetMon
 	c.health = opts.HealthTracker
-	c.onPortUpdate = opts.OnPortUpdate
 	c.getPeerByKey = opts.PeerByKeyFunc
 
 	if err := c.rebind(keepCurrentPort); err != nil {
@@ -3471,6 +3464,12 @@ func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, er
 	return nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, c.netMon)).ListenPacket(ctx, network, addr)
 }
 
+// PortUpdate is an eventbus value, reporting the port and address family of a magicsock connection.
+type PortUpdate struct {
+	UDPPort         uint16
+	EndpointNetwork string // either "udp4" or "udp6".
+}
+
 // bindSocket binds a UDP socket to ruc.
 // Network indicates the UDP socket type; it must be "udp4" or "udp6".
 // If ruc had an existing UDP socket bound, it closes that socket.
@@ -3531,7 +3530,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 			c.logf("magicsock: unable to bind %v port %d: %v", network, port, err)
 			continue
 		}
-		if c.onPortUpdate != nil {
+		if c.portUpdatePub.ShouldPublish() {
 			_, gotPortStr, err := net.SplitHostPort(pconn.LocalAddr().String())
 			if err != nil {
 				c.logf("could not parse port from %s: %w", pconn.LocalAddr().String(), err)
@@ -3540,7 +3539,10 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 				if err != nil {
 					c.logf("could not parse port from %s: %w", gotPort, err)
 				} else {
-					c.onPortUpdate(uint16(gotPort), network)
+					c.portUpdatePub.Publish(PortUpdate{
+						UDPPort:         uint16(gotPort),
+						EndpointNetwork: network,
+					})
 				}
 			}
 		}
