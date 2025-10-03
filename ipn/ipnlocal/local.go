@@ -7397,7 +7397,6 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcf
 		panic("missing traffic-steering capability")
 	}
 
-	var force tailcfg.NodeView
 	nodes := nb.AppendMatchingPeers(nil, func(p tailcfg.NodeView) bool {
 		if !p.Valid() {
 			return false
@@ -7416,9 +7415,6 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcf
 		}
 		return true
 	})
-	if force.Valid() {
-		nodes = append(nodes[:0], force)
-	}
 
 	scores := make(map[tailcfg.NodeID]int, len(nodes))
 	score := func(n tailcfg.NodeView) int {
