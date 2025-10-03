@@ -32,6 +32,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/types/opt"
 	"tailscale.com/version"
@@ -463,7 +464,12 @@ var allowRemoteUpdate = RegisterBool("TS_ALLOW_ADMIN_CONSOLE_REMOTE_UPDATE")
 // AllowsRemoteUpdate reports whether this node has opted-in to letting the
 // Tailscale control plane initiate a Tailscale update (e.g. on behalf of an
 // admin on the admin console).
-func AllowsRemoteUpdate() bool { return allowRemoteUpdate() }
+func AllowsRemoteUpdate() bool {
+	if !buildfeatures.HasClientUpdate {
+		return false
+	}
+	return allowRemoteUpdate()
+}
 
 // SetNoLogsNoSupport enables no-logs-no-support mode.
 func SetNoLogsNoSupport() {
@@ -474,6 +480,9 @@ func SetNoLogsNoSupport() {
 var notInInit atomic.Bool
 
 func assertNotInInit() {
+	if !buildfeatures.HasDebug {
+		return
+	}
 	if notInInit.Load() {
 		return
 	}
@@ -533,6 +542,11 @@ func ApplyDiskConfigError() error { return applyDiskConfigErr }
 //     for App Store builds
 //   - /etc/tailscale/tailscaled-env.txt for tailscaled-on-macOS (homebrew, etc)
 func ApplyDiskConfig() (err error) {
+	if runtime.GOOS == "linux" && !(buildfeatures.HasDebug || buildfeatures.HasSynology) {
+		// This function does nothing on Linux, unless you're
+		// using TS_DEBUG_ENV_FILE or are on Synology.
+		return nil
+	}
 	var f *os.File
 	defer func() {
 		if err != nil {
@@ -593,7 +607,7 @@ func getPlatformEnvFiles() []string {
 			filepath.Join(os.Getenv("ProgramData"), "Tailscale", "tailscaled-env.txt"),
 		}
 	case "linux":
-		if distro.Get() == distro.Synology {
+		if buildfeatures.HasSynology && distro.Get() == distro.Synology {
 			return []string{"/etc/tailscale/tailscaled-env.txt"}
 		}
 	case "darwin":

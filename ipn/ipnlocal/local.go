@@ -1135,7 +1135,7 @@ func (b *LocalBackend) Shutdown() {
 }
 
 func (b *LocalBackend) awaitNoGoroutinesInTest() {
-	if !testenv.InTest() {
+	if !buildfeatures.HasDebug || !testenv.InTest() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -1836,6 +1836,9 @@ var preferencePolicies = []preferencePolicyInfo{
 //
 // b.mu must be held.
 func (b *LocalBackend) applySysPolicyLocked(prefs *ipn.Prefs) (anyChange bool) {
+	if !buildfeatures.HasSystemPolicy {
+		return false
+	}
 	if controlURL, err := b.polc.GetString(pkey.ControlURL, prefs.ControlURL); err == nil && prefs.ControlURL != controlURL {
 		prefs.ControlURL = controlURL
 		anyChange = true
@@ -5328,7 +5331,7 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 		NetfilterKind:     netfilterKind,
 	}
 
-	if distro.Get() == distro.Synology {
+	if buildfeatures.HasSynology && distro.Get() == distro.Synology {
 		// Issue 1995: we don't use iptables on Synology.
 		rs.NetfilterMode = preftype.NetfilterOff
 	}
@@ -5339,7 +5342,7 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 	// likely to break some functionality, but if the user expressed a
 	// preference for routing remotely, we want to avoid leaking
 	// traffic at the expense of functionality.
-	if prefs.ExitNodeID() != "" || prefs.ExitNodeIP().IsValid() {
+	if buildfeatures.HasUseExitNode && (prefs.ExitNodeID() != "" || prefs.ExitNodeIP().IsValid()) {
 		var default4, default6 bool
 		for _, route := range rs.Routes {
 			switch route {
@@ -5411,7 +5414,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.RoutableIPs = prefs.AdvertiseRoutes().AsSlice()
 	hi.RequestTags = prefs.AdvertiseTags().AsSlice()
 	hi.ShieldsUp = prefs.ShieldsUp()
-	hi.AllowsUpdate = envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true)
+	hi.AllowsUpdate = buildfeatures.HasClientUpdate && (envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true))
 
 	b.metrics.advertisedRoutes.Set(float64(tsaddr.WithoutExitRoute(prefs.AdvertiseRoutes()).Len()))
 
@@ -6076,18 +6079,22 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		b.health.SetControlHealth(nil)
 	}
 
-	if nm.HasCap(tailcfg.NodeAttrLinuxMustUseIPTables) {
-		b.capForcedNetfilter = "iptables"
-	} else if nm.HasCap(tailcfg.NodeAttrLinuxMustUseNfTables) {
-		b.capForcedNetfilter = "nftables"
-	} else {
-		b.capForcedNetfilter = "" // empty string means client can auto-detect
+	if runtime.GOOS == "linux" && buildfeatures.HasOSRouter {
+		if nm.HasCap(tailcfg.NodeAttrLinuxMustUseIPTables) {
+			b.capForcedNetfilter = "iptables"
+		} else if nm.HasCap(tailcfg.NodeAttrLinuxMustUseNfTables) {
+			b.capForcedNetfilter = "nftables"
+		} else {
+			b.capForcedNetfilter = "" // empty string means client can auto-detect
+		}
 	}
 
 	b.MagicConn().SetSilentDisco(b.ControlKnobs().SilentDisco.Load())
 	b.MagicConn().SetProbeUDPLifetime(b.ControlKnobs().ProbeUDPLifetime.Load())
 
-	b.setDebugLogsByCapabilityLocked(nm)
+	if buildfeatures.HasDebug {
+		b.setDebugLogsByCapabilityLocked(nm)
+	}
 
 	// See the netns package for documentation on what this capability does.
 	netns.SetBindToInterfaceByRoute(nm.HasCap(tailcfg.CapabilityBindToInterfaceByRoute))
@@ -6104,25 +6111,26 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		}
 	}
 
-	if nm == nil {
-		// If there is no netmap, the client is going into a "turned off"
-		// state so reset the metrics.
-		b.metrics.approvedRoutes.Set(0)
-		return
-	}
-
-	if nm.SelfNode.Valid() {
-		var approved float64
-		for _, route := range nm.SelfNode.AllowedIPs().All() {
-			if !views.SliceContains(nm.SelfNode.Addresses(), route) && !tsaddr.IsExitRoute(route) {
-				approved++
+	if buildfeatures.HasAdvertiseRoutes {
+		if nm == nil {
+			// If there is no netmap, the client is going into a "turned off"
+			// state so reset the metrics.
+			b.metrics.approvedRoutes.Set(0)
+		} else if nm.SelfNode.Valid() {
+			var approved float64
+			for _, route := range nm.SelfNode.AllowedIPs().All() {
+				if !views.SliceContains(nm.SelfNode.Addresses(), route) && !tsaddr.IsExitRoute(route) {
+					approved++
+				}
 			}
+			b.metrics.approvedRoutes.Set(approved)
 		}
-		b.metrics.approvedRoutes.Set(approved)
 	}
 
-	if f, ok := hookSetNetMapLockedDrive.GetOk(); ok {
-		f(b, nm)
+	if buildfeatures.HasDrive && nm != nil {
+		if f, ok := hookSetNetMapLockedDrive.GetOk(); ok {
+			f(b, nm)
+		}
 	}
 }
 
