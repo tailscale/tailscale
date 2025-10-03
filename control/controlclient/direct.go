@@ -64,7 +64,7 @@ import (
 
 // Direct is the client that connects to a tailcontrol server for a node.
 type Direct struct {
-	httpc                 *http.Client // HTTP client used to talk to tailcontrol
+	httpc                 *http.Client // HTTP client used to do TLS requests to control (just https://controlplane.tailscale.com/key?v=123)
 	interceptedDial       *atomic.Bool // if non-nil, pointer to bool whether ScreenTime intercepted our dial
 	dialer                *tsdial.Dialer
 	dnsCache              *dnscache.Resolver
@@ -97,7 +97,7 @@ type Direct struct {
 	serverNoiseKey  key.MachinePublic
 
 	sfGroup     singleflight.Group[struct{}, *ts2021.Client] // protects noiseClient creation.
-	noiseClient *ts2021.Client
+	noiseClient *ts2021.Client                               // also protected by mu
 
 	persist                 persist.PersistView
 	authKey                 string
