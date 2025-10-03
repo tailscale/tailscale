@@ -549,7 +549,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 // [eventbus.Client] is closed.
 func (e *userspaceEngine) consumeEventbusTopics(cli *eventbus.Client) func(*eventbus.Client) {
 	changeDeltaSub := eventbus.Subscribe[netmon.ChangeDelta](cli)
-	portUpdateSub := eventbus.Subscribe[magicsock.PortUpdate](cli)
 	return func(cli *eventbus.Client) {
 		for {
 			select {
@@ -560,11 +559,6 @@ func (e *userspaceEngine) consumeEventbusTopics(cli *eventbus.Client) func(*even
 					f()
 				}
 				e.linkChange(&changeDelta)
-			case pu := <-portUpdateSub.Events():
-				e.logf("portUpdate(port=%v, network=%s)", pu.UDPPort, pu.EndpointNetwork)
-				if err := e.router.UpdateMagicsockPort(pu.UDPPort, pu.EndpointNetwork); err != nil {
-					e.logf("UpdateMagicsockPort(port=%v, network=%s) failed: %v", pu.UDPPort, pu.EndpointNetwork, err)
-				}
 			}
 		}
 	}

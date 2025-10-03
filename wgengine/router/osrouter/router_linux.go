@@ -34,6 +34,7 @@ import (
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/linuxfw"
 	"tailscale.com/version/distro"
+	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/router"
 )
 
@@ -171,6 +172,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 // [eventbus.Client] is closed.
 func (r *linuxRouter) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus.Client) {
 	ruleDeletedSub := eventbus.Subscribe[netmon.RuleDeleted](ec)
+	portUpdateSub := eventbus.Subscribe[magicsock.PortUpdate](ec)
 	return func(ec *eventbus.Client) {
 		for {
 			select {
@@ -178,6 +180,11 @@ func (r *linuxRouter) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus.
 				return
 			case rs := <-ruleDeletedSub.Events():
 				r.onIPRuleDeleted(rs.Table, rs.Priority)
+			case pu := <-portUpdateSub.Events():
+				r.logf("portUpdate(port=%v, network=%s)", pu.UDPPort, pu.EndpointNetwork)
+				if err := r.updateMagicsockPort(pu.UDPPort, pu.EndpointNetwork); err != nil {
+					r.logf("updateMagicsockPort(port=%v, network=%s) failed: %v", pu.UDPPort, pu.EndpointNetwork, err)
+				}
 			}
 		}
 	}
@@ -540,8 +547,8 @@ func (r *linuxRouter) updateStatefulFilteringWithDockerWarning(cfg *router.Confi
 	r.health.SetHealthy(dockerStatefulFilteringWarnable)
 }
 
-// UpdateMagicsockPort implements the Router interface.
-func (r *linuxRouter) UpdateMagicsockPort(port uint16, network string) error {
+// updateMagicsockPort implements the Router interface.
+func (r *linuxRouter) updateMagicsockPort(port uint16, network string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.nfr == nil {

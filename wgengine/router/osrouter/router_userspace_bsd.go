@@ -206,13 +206,6 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
 	return reterr
 }
 
-// UpdateMagicsockPort implements the Router interface. This implementation
-// does nothing and returns nil because this router does not currently need
-// to know what the magicsock UDP port is.
-func (r *userspaceBSDRouter) UpdateMagicsockPort(_ uint16, _ string) error {
-	return nil
-}
-
 func (r *userspaceBSDRouter) Close() error {
 	return nil
 }

@@ -3464,7 +3464,9 @@ func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, er
 	return nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, c.netMon)).ListenPacket(ctx, network, addr)
 }
 
-// PortUpdate is an eventbus value, reporting the port and address family of a magicsock connection.
+// PortUpdate is an eventbus value, reporting the port and address family
+// magicsock is currently listening on, so it can be threaded through firewalls
+// and such.
 type PortUpdate struct {
 	UDPPort         uint16
 	EndpointNetwork string // either "udp4" or "udp6".
