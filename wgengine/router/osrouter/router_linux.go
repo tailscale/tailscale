@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -54,21 +55,14 @@ const (
 )
 
 type linuxRouter struct {
-	closed            atomic.Bool
-	logf              func(fmt string, args ...any)
-	tunname           string
-	netMon            *netmon.Monitor
-	health            *health.Tracker
-	eventSubs         eventbus.Monitor
-	rulesAddedPub     *eventbus.Publisher[AddIPRules]
-	unregNetMon       func()
-	addrs             map[netip.Prefix]bool
-	routes            map[netip.Prefix]bool
-	localRoutes       map[netip.Prefix]bool
-	snatSubnetRoutes  bool
-	statefulFiltering bool
-	netfilterMode     preftype.NetfilterMode
-	netfilterKind     string
+	closed        atomic.Bool
+	logf          func(fmt string, args ...any)
+	tunname       string
+	netMon        *netmon.Monitor
+	health        *health.Tracker
+	eventSubs     eventbus.Monitor
+	rulesAddedPub *eventbus.Publisher[AddIPRules]
+	unregNetMon   func()
 
 	// ruleRestorePending is whether a timer has been started to
 	// restore deleted ip rules.
@@ -86,8 +80,16 @@ type linuxRouter struct {
 	cmd commandRunner
 	nfr linuxfw.NetfilterRunner
 
-	magicsockPortV4 atomic.Uint32 // actually a uint16
-	magicsockPortV6 atomic.Uint32 // actually a uint16
+	mu                sync.Mutex
+	addrs             map[netip.Prefix]bool
+	routes            map[netip.Prefix]bool
+	localRoutes       map[netip.Prefix]bool
+	snatSubnetRoutes  bool
+	statefulFiltering bool
+	netfilterMode     preftype.NetfilterMode
+	netfilterKind     string
+	magicsockPortV4   uint16
+	magicsockPortV6   uint16
 }
 
 func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
@@ -169,6 +171,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 // [eventbus.Client] is closed.
 func (r *linuxRouter) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus.Client) {
 	ruleDeletedSub := eventbus.Subscribe[netmon.RuleDeleted](ec)
+	portUpdateSub := eventbus.Subscribe[router.PortUpdate](ec)
 	return func(ec *eventbus.Client) {
 		for {
 			select {
@@ -176,6 +179,11 @@ func (r *linuxRouter) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus.
 				return
 			case rs := <-ruleDeletedSub.Events():
 				r.onIPRuleDeleted(rs.Table, rs.Priority)
+			case pu := <-portUpdateSub.Events():
+				r.logf("portUpdate(port=%v, network=%s)", pu.UDPPort, pu.EndpointNetwork)
+				if err := r.updateMagicsockPort(pu.UDPPort, pu.EndpointNetwork); err != nil {
+					r.logf("updateMagicsockPort(port=%v, network=%s) failed: %v", pu.UDPPort, pu.EndpointNetwork, err)
+				}
 			}
 		}
 	}
@@ -355,7 +363,9 @@ func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
 }
 
 func (r *linuxRouter) Up() error {
-	if err := r.setNetfilterMode(netfilterOff); err != nil {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.setNetfilterModeLocked(netfilterOff); err != nil {
 		return fmt.Errorf("setting netfilter mode: %w", err)
 	}
 	if err := r.addIPRules(); err != nil {
@@ -369,6 +379,8 @@ func (r *linuxRouter) Up() error {
 }
 
 func (r *linuxRouter) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.closed.Store(true)
 	if r.unregNetMon != nil {
 		r.unregNetMon()
@@ -380,7 +392,7 @@ func (r *linuxRouter) Close() error {
 	if err := r.delIPRules(); err != nil {
 		return err
 	}
-	if err := r.setNetfilterMode(netfilterOff); err != nil {
+	if err := r.setNetfilterModeLocked(netfilterOff); err != nil {
 		return err
 	}
 	if err := r.delRoutes(); err != nil {
@@ -394,10 +406,10 @@ func (r *linuxRouter) Close() error {
 	return nil
 }
 
-// setupNetfilter initializes the NetfilterRunner in r.nfr. It expects r.nfr
+// setupNetfilterLocked initializes the NetfilterRunner in r.nfr. It expects r.nfr
 // to be nil, or the current netfilter to be set to netfilterOff.
 // kind should be either a linuxfw.FirewallMode, or the empty string for auto.
-func (r *linuxRouter) setupNetfilter(kind string) error {
+func (r *linuxRouter) setupNetfilterLocked(kind string) error {
 	r.netfilterKind = kind
 
 	var err error
@@ -411,24 +423,26 @@ func (r *linuxRouter) setupNetfilter(kind string) error {
 
 // Set implements the Router interface.
 func (r *linuxRouter) Set(cfg *router.Config) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var errs []error
 	if cfg == nil {
 		cfg = &shutdownConfig
 	}
 
 	if cfg.NetfilterKind != r.netfilterKind {
-		if err := r.setNetfilterMode(netfilterOff); err != nil {
+		if err := r.setNetfilterModeLocked(netfilterOff); err != nil {
 			err = fmt.Errorf("could not disable existing netfilter: %w", err)
 			errs = append(errs, err)
 		} else {
 			r.nfr = nil
-			if err := r.setupNetfilter(cfg.NetfilterKind); err != nil {
+			if err := r.setupNetfilterLocked(cfg.NetfilterKind); err != nil {
 				errs = append(errs, err)
 			}
 		}
 	}
 
-	if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
+	if err := r.setNetfilterModeLocked(cfg.NetfilterMode); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -470,11 +484,11 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	case cfg.StatefulFiltering == r.statefulFiltering:
 		// state already correct, nothing to do.
 	case cfg.StatefulFiltering:
-		if err := r.addStatefulRule(); err != nil {
+		if err := r.addStatefulRuleLocked(); err != nil {
 			errs = append(errs, err)
 		}
 	default:
-		if err := r.delStatefulRule(); err != nil {
+		if err := r.delStatefulRuleLocked(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -538,15 +552,17 @@ func (r *linuxRouter) updateStatefulFilteringWithDockerWarning(cfg *router.Confi
 	r.health.SetHealthy(dockerStatefulFilteringWarnable)
 }
 
-// UpdateMagicsockPort implements the Router interface.
-func (r *linuxRouter) UpdateMagicsockPort(port uint16, network string) error {
+// updateMagicsockPort implements the Router interface.
+func (r *linuxRouter) updateMagicsockPort(port uint16, network string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.nfr == nil {
-		if err := r.setupNetfilter(r.netfilterKind); err != nil {
+		if err := r.setupNetfilterLocked(r.netfilterKind); err != nil {
 			return fmt.Errorf("could not setup netfilter: %w", err)
 		}
 	}
 
-	var magicsockPort *atomic.Uint32
+	var magicsockPort *uint16
 	switch network {
 	case "udp4":
 		magicsockPort = &r.magicsockPortV4
@@ -566,45 +582,41 @@ func (r *linuxRouter) UpdateMagicsockPort(port uint16, network string) error {
 
 	// set the port, we'll make the firewall rule when netfilter turns back on
 	if r.netfilterMode == netfilterOff {
-		magicsockPort.Store(uint32(port))
+		*magicsockPort = port
 		return nil
 	}
 
-	cur := magicsockPort.Load()
-
-	if cur == uint32(port) {
+	if *magicsockPort == port {
 		return nil
 	}
 
-	if cur != 0 {
-		if err := r.nfr.DelMagicsockPortRule(uint16(cur), network); err != nil {
+	if *magicsockPort != 0 {
+		if err := r.nfr.DelMagicsockPortRule(*magicsockPort, network); err != nil {
 			return fmt.Errorf("del magicsock port rule: %w", err)
 		}
 	}
 
 	if port != 0 {
-		if err := r.nfr.AddMagicsockPortRule(uint16(port), network); err != nil {
+		if err := r.nfr.AddMagicsockPortRule(*magicsockPort, network); err != nil {
 			return fmt.Errorf("add magicsock port rule: %w", err)
 		}
 	}
 
-	magicsockPort.Store(uint32(port))
+	*magicsockPort = port
 	return nil
 }
 
-// setNetfilterMode switches the router to the given netfilter
+// setNetfilterModeLocked switches the router to the given netfilter
 // mode. Netfilter state is created or deleted appropriately to
 // reflect the new mode, and r.snatSubnetRoutes is updated to reflect
 // the current state of subnet SNATing.
-func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
+func (r *linuxRouter) setNetfilterModeLocked(mode preftype.NetfilterMode) error {
 	if !platformCanNetfilter() {
 		mode = netfilterOff
 	}
 
 	if r.nfr == nil {
-		var err error
-		r.nfr, err = linuxfw.New(r.logf, r.netfilterKind)
-		if err != nil {
+		if err := r.setupNetfilterLocked(r.netfilterKind); err != nil {
 			return err
 		}
 	}
@@ -660,13 +672,13 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 			if err := r.nfr.AddBase(r.tunname); err != nil {
 				return err
 			}
-			if mport := uint16(r.magicsockPortV4.Load()); mport != 0 {
-				if err := r.nfr.AddMagicsockPortRule(mport, "udp4"); err != nil {
+			if r.magicsockPortV4 != 0 {
+				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV4, "udp4"); err != nil {
 					return fmt.Errorf("could not add magicsock port rule v4: %w", err)
 				}
 			}
-			if mport := uint16(r.magicsockPortV6.Load()); mport != 0 && r.getV6FilteringAvailable() {
-				if err := r.nfr.AddMagicsockPortRule(mport, "udp6"); err != nil {
+			if r.magicsockPortV6 != 0 && r.getV6FilteringAvailable() {
+				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV6, "udp6"); err != nil {
 					return fmt.Errorf("could not add magicsock port rule v6: %w", err)
 				}
 			}
@@ -700,13 +712,13 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 			if err := r.nfr.AddBase(r.tunname); err != nil {
 				return err
 			}
-			if mport := uint16(r.magicsockPortV4.Load()); mport != 0 {
-				if err := r.nfr.AddMagicsockPortRule(mport, "udp4"); err != nil {
+			if r.magicsockPortV4 != 0 {
+				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV4, "udp4"); err != nil {
 					return fmt.Errorf("could not add magicsock port rule v4: %w", err)
 				}
 			}
-			if mport := uint16(r.magicsockPortV6.Load()); mport != 0 && r.getV6FilteringAvailable() {
-				if err := r.nfr.AddMagicsockPortRule(mport, "udp6"); err != nil {
+			if r.magicsockPortV6 != 0 && r.getV6FilteringAvailable() {
+				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV6, "udp6"); err != nil {
 					return fmt.Errorf("could not add magicsock port rule v6: %w", err)
 				}
 			}
@@ -1483,9 +1495,9 @@ func (r *linuxRouter) delSNATRule() error {
 	return nil
 }
 
-// addStatefulRule adds a netfilter rule to perform stateful filtering from
+// addStatefulRuleLocked adds a netfilter rule to perform stateful filtering from
 // subnets onto the tailnet.
-func (r *linuxRouter) addStatefulRule() error {
+func (r *linuxRouter) addStatefulRuleLocked() error {
 	if r.netfilterMode == netfilterOff {
 		return nil
 	}
@@ -1493,9 +1505,9 @@ func (r *linuxRouter) addStatefulRule() error {
 	return r.nfr.AddStatefulRule(r.tunname)
 }
 
-// delStatefulRule removes the netfilter rule to perform stateful filtering
+// delStatefulRuleLocked removes the netfilter rule to perform stateful filtering
 // from subnets onto the tailnet.
-func (r *linuxRouter) delStatefulRule() error {
+func (r *linuxRouter) delStatefulRuleLocked() error {
 	if r.netfilterMode == netfilterOff {
 		return nil
 	}

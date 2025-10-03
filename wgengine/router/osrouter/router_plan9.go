@@ -115,13 +115,6 @@ func (r *plan9Router) Set(cfg *router.Config) error {
 	return nil
 }
 
-// UpdateMagicsockPort implements the Router interface. This implementation
-// does nothing and returns nil because this router does not currently need
-// to know what the magicsock UDP port is.
-func (r *plan9Router) UpdateMagicsockPort(_ uint16, _ string) error {
-	return nil
-}
-
 func (r *plan9Router) Close() error {
 	// TODO(bradfitz): unbind
 	return nil
