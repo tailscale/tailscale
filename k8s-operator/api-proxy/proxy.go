@@ -378,6 +378,7 @@ func (ap *APIServerProxy) recordRequestAsEvent(req *http.Request, who *apitype.W
 	}
 
 	var errs []error
+	// TODO: ChaosInTheCRD ensure that if there are multiple addrs timing out we don't experience slowdown on client waiting for response.
 	for _, ad := range addrs {
 		eventJSON, err := json.Marshal(event)
 		if err != nil {
@@ -387,8 +388,12 @@ func (ap *APIServerProxy) recordRequestAsEvent(req *http.Request, who *apitype.W
 		data := bytes.NewBuffer(eventJSON)
 
 		if err := ap.sendEventFunc(req.Context(), ad, data, ap.ts.Dial); err != nil {
-			err := fmt.Errorf("error sending event to recorder with address %q: %v", ad.String(), err)
-			errs = append(errs, err)
+			if apiSupportErr, ok := err.(sessionrecording.EventAPINotSupportedErr); ok {
+				ap.log.Warnf(apiSupportErr.Error())
+			} else {
+				err := fmt.Errorf("error sending event to recorder with address %q: %v", ad.String(), err)
+				errs = append(errs, err)
+			}
 		}
 	}
 
