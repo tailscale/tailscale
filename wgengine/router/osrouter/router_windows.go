@@ -114,13 +114,6 @@ func hasDefaultRoute(routes []netip.Prefix) bool {
 	return false
 }
 
-// UpdateMagicsockPort implements the Router interface. This implementation
-// does nothing and returns nil because this router does not currently need
-// to know what the magicsock UDP port is.
-func (r *winRouter) UpdateMagicsockPort(_ uint16, _ string) error {
-	return nil
-}
-
 func (r *winRouter) Close() error {
 	r.firewall.clear()
 
