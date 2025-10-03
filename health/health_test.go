@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"tailscale.com/metrics"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
@@ -497,7 +498,11 @@ func TestHealthMetric(t *testing.T) {
 			tr.applyUpdates = tt.apply
 			tr.latestVersion = tt.cv
 			tr.SetMetricsRegistry(&usermetric.Registry{})
-			if val := tr.metricHealthMessage.Get(metricHealthMessageLabel{Type: MetricLabelWarning}).String(); val != strconv.Itoa(tt.wantMetricCount) {
+			m, ok := tr.metricHealthMessage.(*metrics.MultiLabelMap[metricHealthMessageLabel])
+			if !ok {
+				t.Fatal("metricHealthMessage has wrong type or is nil")
+			}
+			if val := m.Get(metricHealthMessageLabel{Type: MetricLabelWarning}).String(); val != strconv.Itoa(tt.wantMetricCount) {
 				t.Fatalf("metric value: %q, want: %q", val, strconv.Itoa(tt.wantMetricCount))
 			}
 			for _, w := range tr.CurrentState().Warnings {
@@ -634,7 +639,11 @@ func TestControlHealth(t *testing.T) {
 		var r usermetric.Registry
 		ht.SetMetricsRegistry(&r)
 
-		got := ht.metricHealthMessage.Get(metricHealthMessageLabel{
+		m, ok := ht.metricHealthMessage.(*metrics.MultiLabelMap[metricHealthMessageLabel])
+		if !ok {
+			t.Fatal("metricHealthMessage has wrong type or is nil")
+		}
+		got := m.Get(metricHealthMessageLabel{
 			Type: MetricLabelWarning,
 		}).String()
 		want := strconv.Itoa(

@@ -8,7 +8,6 @@ package health
 import (
 	"context"
 	"errors"
-	"expvar"
 	"fmt"
 	"maps"
 	"net/http"
@@ -20,14 +19,13 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
-	"tailscale.com/metrics"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 )
 
@@ -132,12 +130,15 @@ type Tracker struct {
 	lastLoginErr                error
 	localLogConfigErr           error
 	tlsConnectionErrors         map[string]error // map[ServerName]error
-	metricHealthMessage         *metrics.MultiLabelMap[metricHealthMessageLabel]
+	metricHealthMessage         any              // nil or *metrics.MultiLabelMap[metricHealthMessageLabel]
 }
 
 // NewTracker contructs a new [Tracker] and attaches the given eventbus.
 // NewTracker will panic is no eventbus is given.
 func NewTracker(bus *eventbus.Bus) *Tracker {
+	if !buildfeatures.HasHealth {
+		return &Tracker{}
+	}
 	if bus == nil {
 		panic("no eventbus set")
 	}
@@ -221,6 +222,9 @@ const legacyErrorArgKey = "LegacyError"
 // temporarily (2024-06-14) while we migrate the old health infrastructure based
 // on Subsystems to the new Warnables architecture.
 func (s Subsystem) Warnable() *Warnable {
+	if !buildfeatures.HasHealth {
+		return &noopWarnable
+	}
 	w, ok := subsystemsWarnables[s]
 	if !ok {
 		panic(fmt.Sprintf("health: no Warnable for Subsystem %q", s))
@@ -230,10 +234,15 @@ func (s Subsystem) Warnable() *Warnable {
 
 var registeredWarnables = map[WarnableCode]*Warnable{}
 
+var noopWarnable Warnable
+
 // Register registers a new Warnable with the health package and returns it.
 // Register panics if the Warnable was already registered, because Warnables
 // should be unique across the program.
 func Register(w *Warnable) *Warnable {
+	if !buildfeatures.HasHealth {
+		return &noopWarnable
+	}
 	if registeredWarnables[w.Code] != nil {
 		panic(fmt.Sprintf("health: a Warnable with code %q was already registered", w.Code))
 	}
@@ -245,6 +254,9 @@ func Register(w *Warnable) *Warnable {
 // unregister removes a Warnable from the health package. It should only be used
 // for testing purposes.
 func unregister(w *Warnable) {
+	if !buildfeatures.HasHealth {
+		return
+	}
 	if registeredWarnables[w.Code] == nil {
 		panic(fmt.Sprintf("health: attempting to unregister Warnable %q that was not registered", w.Code))
 	}
@@ -317,6 +329,9 @@ func StaticMessage(s string) func(Args) string {
 // some lost Tracker plumbing, we want to capture stack trace
 // samples when it occurs.
 func (t *Tracker) nil() bool {
+	if !buildfeatures.HasHealth {
+		return true
+	}
 	if t != nil {
 		return false
 	}
@@ -385,37 +400,10 @@ func (w *Warnable) IsVisible(ws *warningState, clockNow func() time.Time) bool {
 	return clockNow().Sub(ws.BrokenSince) >= w.TimeToVisible
 }
 
-// SetMetricsRegistry sets up the metrics for the Tracker. It takes
-// a usermetric.Registry and registers the metrics there.
-func (t *Tracker) SetMetricsRegistry(reg *usermetric.Registry) {
-	if reg == nil || t.metricHealthMessage != nil {
-		return
-	}
-
-	t.metricHealthMessage = usermetric.NewMultiLabelMapWithRegistry[metricHealthMessageLabel](
-		reg,
-		"tailscaled_health_messages",
-		"gauge",
-		"Number of health messages broken down by type.",
-	)
-
-	t.metricHealthMessage.Set(metricHealthMessageLabel{
-		Type: MetricLabelWarning,
-	}, expvar.Func(func() any {
-		if t.nil() {
-			return 0
-		}
-		t.mu.Lock()
-		defer t.mu.Unlock()
-		t.updateBuiltinWarnablesLocked()
-		return int64(len(t.stringsLocked()))
-	}))
-}
-
 // IsUnhealthy reports whether the current state is unhealthy because the given
 // warnable is set.
 func (t *Tracker) IsUnhealthy(w *Warnable) bool {
-	if t.nil() {
+	if !buildfeatures.HasHealth || t.nil() {
 		return false
 	}
 	t.mu.Lock()
@@ -429,7 +417,7 @@ func (t *Tracker) IsUnhealthy(w *Warnable) bool {
 // SetUnhealthy takes ownership of args. The args can be nil if no additional information is
 // needed for the unhealthy state.
 func (t *Tracker) SetUnhealthy(w *Warnable, args Args) {
-	if t.nil() {
+	if !buildfeatures.HasHealth || t.nil() {
 		return
 	}
 	t.mu.Lock()
@@ -438,7 +426,7 @@ func (t *Tracker) SetUnhealthy(w *Warnable, args Args) {
 }
 
 func (t *Tracker) setUnhealthyLocked(w *Warnable, args Args) {
-	if w == nil {
+	if !buildfeatures.HasHealth || w == nil {
 		return
 	}
 
@@ -489,7 +477,7 @@ func (t *Tracker) setUnhealthyLocked(w *Warnable, args Args) {
 
 // SetHealthy removes any warningState for the given Warnable.
 func (t *Tracker) SetHealthy(w *Warnable) {
-	if t.nil() {
+	if !buildfeatures.HasHealth || t.nil() {
 		return
 	}
 	t.mu.Lock()
@@ -498,7 +486,7 @@ func (t *Tracker) SetHealthy(w *Warnable) {
 }
 
 func (t *Tracker) setHealthyLocked(w *Warnable) {
-	if t.warnableVal[w] == nil {
+	if !buildfeatures.HasHealth || t.warnableVal[w] == nil {
 		// Nothing to remove
 		return
 	}
@@ -1009,7 +997,7 @@ func (t *Tracker) OverallError() error {
 // each Warning to show a localized version of them instead. This function is
 // here for legacy compatibility purposes and is deprecated.
 func (t *Tracker) Strings() []string {
-	if t.nil() {
+	if !buildfeatures.HasHealth || t.nil() {
 		return nil
 	}
 	t.mu.Lock()
@@ -1018,6 +1006,9 @@ func (t *Tracker) Strings() []string {
 }
 
 func (t *Tracker) stringsLocked() []string {
+	if !buildfeatures.HasHealth {
+		return nil
+	}
 	result := []string{}
 	for w, ws := range t.warnableVal {
 		if !w.IsVisible(ws, t.now) {
@@ -1078,6 +1069,9 @@ var fakeErrForTesting = envknob.RegisterString("TS_DEBUG_FAKE_HEALTH_ERROR")
 // updateBuiltinWarnablesLocked performs a number of checks on the state of the backend,
 // and adds/removes Warnings from the Tracker as needed.
 func (t *Tracker) updateBuiltinWarnablesLocked() {
+	if !buildfeatures.HasHealth {
+		return
+	}
 	t.updateWarmingUpWarnableLocked()
 
 	if w, show := t.showUpdateWarnable(); show {
@@ -1316,11 +1310,17 @@ func (s *ReceiveFuncStats) Name() string {
 }
 
 func (s *ReceiveFuncStats) Enter() {
+	if !buildfeatures.HasHealth {
+		return
+	}
 	s.numCalls.Add(1)
 	s.inCall.Store(true)
 }
 
 func (s *ReceiveFuncStats) Exit() {
+	if !buildfeatures.HasHealth {
+		return
+	}
 	s.inCall.Store(false)
 }
 
@@ -1329,7 +1329,7 @@ func (s *ReceiveFuncStats) Exit() {
 //
 // If t is nil, it returns nil.
 func (t *Tracker) ReceiveFuncStats(which ReceiveFunc) *ReceiveFuncStats {
-	if t == nil {
+	if !buildfeatures.HasHealth || t == nil {
 		return nil
 	}
 	t.initOnce.Do(t.doOnceInit)
@@ -1337,6 +1337,9 @@ func (t *Tracker) ReceiveFuncStats(which ReceiveFunc) *ReceiveFuncStats {
 }
 
 func (t *Tracker) doOnceInit() {
+	if !buildfeatures.HasHealth {
+		return
+	}
 	for i := range t.MagicSockReceiveFuncs {
 		f := &t.MagicSockReceiveFuncs[i]
 		f.name = (ReceiveFunc(i)).String()
@@ -1384,11 +1387,4 @@ func (t *Tracker) LastNoiseDialWasRecent() bool {
 	dur := now.Sub(t.lastNoiseDial)
 	t.lastNoiseDial = now
 	return dur < 2*time.Minute
-}
-
-const MetricLabelWarning = "warning"
-
-type metricHealthMessageLabel struct {
-	// TODO: break down by warnable.severity as well?
-	Type string
 }

@@ -150,6 +150,7 @@ var Features = map[FeatureTag]FeatureMeta{
 		Desc: "Generic Receive Offload support (performance)",
 		Deps: []FeatureTag{"netstack"},
 	},
+	"health":        {Sym: "Health", Desc: "Health checking support"},
 	"hujsonconf":    {Sym: "HuJSONConf", Desc: "HuJSON config file support"},
 	"iptables":      {Sym: "IPTables", Desc: "Linux iptables support"},
 	"kube":          {Sym: "Kube", Desc: "Kubernetes integration"},
