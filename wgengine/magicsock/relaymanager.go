@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"tailscale.com/disco"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/stun"
 	udprelay "tailscale.com/net/udprelay/endpoint"
@@ -419,6 +420,9 @@ func (r *relayManager) handleCallMeMaybeVia(ep *endpoint, lastBest addrQuality, 
 // [*disco.AllocateUDPRelayEndpointResponse] then relayServerNodeKey must be
 // nonzero.
 func (r *relayManager) handleRxDiscoMsg(conn *Conn, dm disco.Message, relayServerNodeKey key.NodePublic, discoKey key.DiscoPublic, src epAddr) {
+	if !buildfeatures.HasRelayServer {
+		return
+	}
 	relayManagerInputEvent(r, nil, &r.rxDiscoMsgCh, relayDiscoMsgEvent{
 		conn:               conn,
 		msg:                dm,
@@ -445,6 +449,9 @@ func (r *relayManager) handleRelayServersSet(servers set.Set[candidatePeerRelay]
 // goroutine to return, i.e. the calling goroutine was birthed by runLoop and is
 // cancelable via 'ctx'. 'ctx' may be nil.
 func relayManagerInputEvent[T any](r *relayManager, ctx context.Context, eventCh *chan T, event T) {
+	if !buildfeatures.HasRelayServer {
+		return
+	}
 	r.init()
 	var ctxDoneCh <-chan struct{}
 	if ctx != nil {
