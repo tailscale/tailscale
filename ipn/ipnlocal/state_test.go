@@ -1706,6 +1706,157 @@ func runTestStateMachineURLRace(t *testing.T, seamless bool) {
 	}
 }
 
+func TestDownThenUpRace(t *testing.T) {
+	var cc *mockControl
+	b := newLocalBackendWithTestControl(t, true, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+		cc = newClient(t, opts)
+		return cc
+	})
+
+	var stateLock sync.Mutex
+	var state ipn.State
+	stateChanged := sync.NewCond(&stateLock)
+
+	b.SetNotifyCallback(func(n ipn.Notify) {
+		if n.State != nil || (n.Prefs != nil && n.Prefs.Valid()) || n.BrowseToURL != nil || n.LoginFinished != nil {
+			b.logf("Received notify: %+v", n)
+			if n.State != nil {
+				stateLock.Lock()
+				state = *n.State
+				stateLock.Unlock()
+				stateChanged.Broadcast()
+			}
+		} else {
+			b.logf("(ignored) %v", n)
+		}
+	})
+
+	waitForState := func(want ipn.State) {
+		t.Helper()
+		t.Logf("waiting for state: %v", want)
+		stateLock.Lock()
+		defer stateLock.Unlock()
+		for {
+			s := state
+			if s == want {
+				return
+			}
+			c := make(chan struct{})
+			go func() {
+				stateChanged.Wait()
+				close(c)
+			}()
+			select {
+			case <-c:
+				continue
+			case <-time.After(6 * time.Second):
+				t.Fatalf("timed out waiting for state %v; currently %v", want, s)
+				stateChanged.Broadcast()
+				return
+			}
+		}
+	}
+
+	t.Logf("Start")
+	b.Start(ipn.Options{
+		UpdatePrefs: &ipn.Prefs{
+			WantRunning: true,
+			ControlURL:  "https://localhost:1/",
+		},
+	})
+
+	waitForState(ipn.NeedsLogin)
+
+	t.Logf("LoginFinished")
+	cc.persist.UserProfile.LoginName = "user1"
+	cc.persist.NodeID = "node1"
+
+	cc.send(nil, "", true, &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
+	})
+	waitForState(ipn.Starting)
+
+	t.Logf("Running")
+	b.setWgengineStatus(&wgengine.Status{AsOf: time.Now(), DERPs: 1}, nil)
+	waitForState(ipn.Running)
+
+	t.Logf("Re-auth (StartLoginInteractive)")
+	b.StartLoginInteractive(t.Context())
+
+	var timeLock sync.RWMutex
+	timestamp := b.lastStatusTime
+
+	engineShutdown := make(chan struct{})
+	gotShutdown := sync.OnceFunc(func() {
+		t.Logf("engineShutdown")
+		engineShutdown <- struct{}{}
+	})
+
+	b.e.SetStatusCallback(func(s *wgengine.Status, err error) {
+		timeLock.Lock()
+		if s.AsOf.After(timestamp) {
+			timestamp = s.AsOf
+		}
+		timeLock.Unlock()
+
+		if err != nil || (s.DERPs == 0 && len(s.Peers) == 0) {
+			gotShutdown()
+		} else {
+			b.setWgengineStatus(s, err)
+		}
+	})
+
+	t.Logf("Re-auth (receive URL)")
+	url1 := "https://localhost:1/1"
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+
+	wg.Go(func() {
+		t.Log("cc.send starting")
+		cc.send(nil, url1, false, nil) // will block until engine stops
+		t.Log("cc.send returned")
+	})
+
+	<-engineShutdown // will get called once cc.send is blocked
+	gotShutdown = sync.OnceFunc(func() {
+		t.Logf("engineShutdown")
+		engineShutdown <- struct{}{}
+	})
+
+	wg.Go(func() {
+		t.Log("StartLoginInteractive starting")
+		b.StartLoginInteractive(t.Context()) // will also block until engine stops
+		t.Log("StartLoginInteractive returned")
+	})
+
+	<-engineShutdown // will get called once StartLoginInteractive is blocked
+
+	st := controlclient.Status{}
+	st.SetStateForTest(controlclient.StateAuthenticated)
+	b.SetControlClientStatus(cc, st)
+
+	timeLock.RLock()
+	b.setWgengineStatus(&wgengine.Status{AsOf: timestamp}, nil)           // engine is down event finally arrives
+	b.setWgengineStatus(&wgengine.Status{AsOf: timestamp, DERPs: 1}, nil) // engine is back up
+	timeLock.RUnlock()
+
+	go func() {
+		wg.Wait()
+		done <- struct{}{}
+	}()
+
+	t.Log("waiting for .send and .StartLoginInteractive to return")
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting")
+	}
+
+	t.Log("both returned")
+}
+
 func buildNetmapWithPeers(self tailcfg.NodeView, peers ...tailcfg.NodeView) *netmap.NetworkMap {
 	const (
 		firstAutoUserID = tailcfg.UserID(10000)

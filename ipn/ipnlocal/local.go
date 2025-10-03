@@ -5699,6 +5699,10 @@ func (b *LocalBackend) requestEngineStatusAndWaitForStopped() {
 	for {
 		b.statusChanged.Wait() // temporarily releases lock while waiting
 
+		if !b.blocked {
+			b.logf("requestEngineStatusAndWaitForStopped: engine is no longer blocked, must have stopped and started again, not safe to wait.")
+			break
+		}
 		if b.engineStatus.NumLive == 0 && b.engineStatus.LiveDERPs == 0 {
 			b.logf("requestEngineStatusAndWaitForStopped: engine is stopped.")
 			break
