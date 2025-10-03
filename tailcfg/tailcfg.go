@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1477,6 +1478,15 @@ func (pr PortRange) Contains(port uint16) bool {
 }
 
 var PortRangeAny = PortRange{0, 65535}
+
+func (pr PortRange) String() string {
+	if pr.First == pr.Last {
+		return strconv.FormatUint(uint64(pr.First), 10)
+	} else if pr == PortRangeAny {
+		return "*"
+	}
+	return fmt.Sprintf("%d-%d", pr.First, pr.Last)
+}
 
 // NetPortRange represents a range of ports that's allowed for one or more IPs.
 type NetPortRange struct {

@@ -28,10 +28,13 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/prompt"
+	"tailscale.com/util/set"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/version"
 )
@@ -127,6 +130,22 @@ const (
 	serveTypeTLSTerminatedTCP
 	serveTypeTUN
 )
+
+func serveTypeFromConfString(sp conffile.ServiceProtocol) (st serveType, ok bool) {
+	switch sp {
+	case conffile.ProtoHTTP:
+		return serveTypeHTTP, true
+	case conffile.ProtoHTTPS, conffile.ProtoHTTPSInsecure, conffile.ProtoFile:
+		return serveTypeHTTPS, true
+	case conffile.ProtoTCP:
+		return serveTypeTCP, true
+	case conffile.ProtoTLSTerminatedTCP:
+		return serveTypeTLSTerminatedTCP, true
+	case conffile.ProtoTUN:
+		return serveTypeTUN, true
+	}
+	return -1, false
+}
 
 const noService tailcfg.ServiceName = ""
 
@@ -231,6 +250,33 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 					"useful to bring a service back after it has been drained. (i.e. after running \n" +
 					"`tailscale serve drain <service>`). This is not needed if you are using `tailscale serve` to initialize a service.",
 				Exec: e.runServeAdvertise,
+			},
+			{
+				Name:       "get-config",
+				ShortUsage: fmt.Sprintf("tailscale %s get-config <file> [--service=<service>] [--all]", info.Name),
+				ShortHelp:  "Get service configuration to save to a file",
+				LongHelp: hidden + "Get the configuration for services that this node is currently hosting in a\n" +
+					"format that can later be provided to set-config. This can be used to declaratively set\n" +
+					"configuration for a service host.",
+				Exec: e.runServeGetConfig,
+				FlagSet: e.newFlags("serve-get-config", func(fs *flag.FlagSet) {
+					fs.BoolVar(&e.allServices, "all", false, "read config from all services")
+					fs.Var(&serviceNameFlag{Value: &e.service}, "service", "read config from a particular service")
+				}),
+			},
+			{
+				Name:       "set-config",
+				ShortUsage: fmt.Sprintf("tailscale %s set-config <file> [--service=<service>] [--all]", info.Name),
+				ShortHelp:  "Define service configuration from a file",
+				LongHelp: hidden + "Read the provided configuration file and use it to declaratively set the configuration\n" +
+					"for either a single service, or for all services that this node is hosting. If --service is specified,\n" +
+					"all endpoint handlers for that service are overwritten. If --all is specified, all endpoint handlers for\n" +
+					"all services are overwritten.",
+				Exec: e.runServeSetConfig,
+				FlagSet: e.newFlags("serve-set-config", func(fs *flag.FlagSet) {
+					fs.BoolVar(&e.allServices, "all", false, "apply config to all services")
+					fs.Var(&serviceNameFlag{Value: &e.service}, "service", "apply config to a particular service")
+				}),
 			},
 		},
 	}
@@ -540,7 +586,7 @@ func (e *serveEnv) runServeClear(ctx context.Context, args []string) error {
 
 func (e *serveEnv) runServeAdvertise(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("error: missing service name argument")
+		return errors.New("error: missing service name argument")
 	}
 	if len(args) != 1 {
 		fmt.Fprintf(Stderr, "error: invalid number of arguments\n\n")
@@ -551,6 +597,258 @@ func (e *serveEnv) runServeAdvertise(ctx context.Context, args []string) error {
 		return fmt.Errorf("invalid service name: %w", err)
 	}
 	return e.addServiceToPrefs(ctx, svc)
+}
+
+func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err error) {
+	forSingleService := e.service.Validate() == nil
+	sc, err := e.lc.GetServeConfig(ctx)
+	if err != nil {
+		return err
+	}
+
+	prefs, err := e.lc.GetPrefs(ctx)
+	if err != nil {
+		return err
+	}
+	advertised := set.SetOf(prefs.AdvertiseServices)
+
+	st, err := e.getLocalClientStatusWithoutPeers(ctx)
+	if err != nil {
+		return err
+	}
+	magicDNSSuffix := st.CurrentTailnet.MagicDNSSuffix
+
+	handleService := func(svcName tailcfg.ServiceName, serviceConfig *ipn.ServiceConfig) (*conffile.ServiceDetailsFile, error) {
+		var sdf conffile.ServiceDetailsFile
+		// Leave unset for true case since that's the default.
+		if !advertised.Contains(svcName.String()) {
+			sdf.Advertised.Set(false)
+		}
+
+		if serviceConfig.Tun {
+			mak.Set(&sdf.Endpoints, &tailcfg.ProtoPortRange{Ports: tailcfg.PortRangeAny}, &conffile.Target{
+				Protocol:         conffile.ProtoTUN,
+				Destination:      "",
+				DestinationPorts: tailcfg.PortRange{},
+			})
+		}
+
+		for port, config := range serviceConfig.TCP {
+			sniName := fmt.Sprintf("%s.%s", svcName.WithoutPrefix(), magicDNSSuffix)
+			ppr := tailcfg.ProtoPortRange{Proto: int(ipproto.TCP), Ports: tailcfg.PortRange{First: port, Last: port}}
+			if config.TCPForward != "" {
+				var proto conffile.ServiceProtocol
+				if config.TerminateTLS != "" {
+					proto = conffile.ProtoTLSTerminatedTCP
+				} else {
+					proto = conffile.ProtoTCP
+				}
+				destHost, destPortStr, err := net.SplitHostPort(config.TCPForward)
+				if err != nil {
+					return nil, fmt.Errorf("parse TCPForward=%q: %w", config.TCPForward, err)
+				}
+				destPort, err := strconv.ParseUint(destPortStr, 10, 16)
+				if err != nil {
+					return nil, fmt.Errorf("parse port %q: %w", destPortStr, err)
+				}
+				mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
+					Protocol:         proto,
+					Destination:      destHost,
+					DestinationPorts: tailcfg.PortRange{First: uint16(destPort), Last: uint16(destPort)},
+				})
+			} else if config.HTTP || config.HTTPS {
+				webKey := ipn.HostPort(net.JoinHostPort(sniName, strconv.FormatUint(uint64(port), 10)))
+				handlers, ok := serviceConfig.Web[webKey]
+				if !ok {
+					return nil, fmt.Errorf("service %q: HTTP/HTTPS is set but no handlers in config", svcName)
+				}
+				defaultHandler, ok := handlers.Handlers["/"]
+				if !ok {
+					return nil, fmt.Errorf("service %q: root handler not set", svcName)
+				}
+				if defaultHandler.Path != "" {
+					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
+						Protocol:         conffile.ProtoFile,
+						Destination:      defaultHandler.Path,
+						DestinationPorts: tailcfg.PortRange{},
+					})
+				} else if defaultHandler.Proxy != "" {
+					proto, rest, ok := strings.Cut(defaultHandler.Proxy, "://")
+					if !ok {
+						return nil, fmt.Errorf("service %q: invalid proxy handler %q", svcName, defaultHandler.Proxy)
+					}
+					host, portStr, err := net.SplitHostPort(rest)
+					if err != nil {
+						return nil, fmt.Errorf("service %q: invalid proxy handler %q: %w", svcName, defaultHandler.Proxy, err)
+					}
+
+					port, err := strconv.ParseUint(portStr, 10, 16)
+					if err != nil {
+						return nil, fmt.Errorf("service %q: parse port %q: %w", svcName, portStr, err)
+					}
+
+					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
+						Protocol:         conffile.ServiceProtocol(proto),
+						Destination:      host,
+						DestinationPorts: tailcfg.PortRange{First: uint16(port), Last: uint16(port)},
+					})
+				}
+			}
+		}
+
+		return &sdf, nil
+	}
+
+	var j []byte
+
+	if e.allServices && forSingleService {
+		return errors.New("cannot specify both --all and --service")
+	} else if e.allServices {
+		var scf conffile.ServicesConfigFile
+		scf.Version = "0.0.1"
+		for svcName, serviceConfig := range sc.Services {
+			sdf, err := handleService(svcName, serviceConfig)
+			if err != nil {
+				return err
+			}
+			mak.Set(&scf.Services, svcName, sdf)
+		}
+		j, err = json.MarshalIndent(scf, "", "  ")
+		if err != nil {
+			return err
+		}
+	} else if forSingleService {
+		serviceConfig, ok := sc.Services[e.service]
+		if !ok {
+			j = []byte("{}")
+		} else {
+			sdf, err := handleService(e.service, serviceConfig)
+			if err != nil {
+				return err
+			}
+			sdf.Version = "0.0.1"
+			j, err = json.MarshalIndent(sdf, "", "  ")
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		return errors.New("must specify either --service=svc:<service-name> or --all")
+	}
+
+	j = append(j, '\n')
+	_, err = e.stdout().Write(j)
+	return err
+}
+
+func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err error) {
+	if len(args) != 1 {
+		return errors.New("must specify filename")
+	}
+	forSingleService := e.service.Validate() == nil
+
+	var scf *conffile.ServicesConfigFile
+	if e.allServices && forSingleService {
+		return errors.New("cannot specify both --all and --service")
+	} else if e.allServices {
+		scf, err = conffile.LoadServicesConfig(args[0], "")
+	} else if forSingleService {
+		scf, err = conffile.LoadServicesConfig(args[0], e.service.String())
+	} else {
+		return errors.New("must specify either --service=svc:<service-name> or --all")
+	}
+	if err != nil {
+		return fmt.Errorf("could not read config from file %q: %w", args[0], err)
+	}
+
+	st, err := e.getLocalClientStatusWithoutPeers(ctx)
+	if err != nil {
+		return fmt.Errorf("getting client status: %w", err)
+	}
+	magicDNSSuffix := st.CurrentTailnet.MagicDNSSuffix
+	sc, err := e.lc.GetServeConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("getting current serve config: %w", err)
+	}
+
+	// Clear all existing config.
+	if forSingleService {
+		if sc.Services != nil {
+			if sc.Services[e.service] != nil {
+				delete(sc.Services, e.service)
+			}
+		}
+	} else {
+		sc.Services = map[tailcfg.ServiceName]*ipn.ServiceConfig{}
+	}
+	advertisedServices := set.Set[string]{}
+
+	for name, details := range scf.Services {
+		for ppr, ep := range details.Endpoints {
+			if ep.Protocol == conffile.ProtoTUN {
+				err := e.setServe(sc, name.String(), serveTypeTUN, 0, "", "", false, magicDNSSuffix)
+				if err != nil {
+					return err
+				}
+				// TUN mode is exclusive.
+				break
+			}
+
+			if ppr.Proto != int(ipproto.TCP) {
+				return fmt.Errorf("service %q: source ports must be TCP", name)
+			}
+			serveType, _ := serveTypeFromConfString(ep.Protocol)
+			for port := ppr.Ports.First; port <= ppr.Ports.Last; port++ {
+				var target string
+				if ep.Protocol == conffile.ProtoFile {
+					target = ep.Destination
+				} else {
+					// map source port range 1-1 to destination port range
+					destPort := ep.DestinationPorts.First + (port - ppr.Ports.First)
+					portStr := fmt.Sprint(destPort)
+					target = fmt.Sprintf("%s://%s", ep.Protocol, net.JoinHostPort(ep.Destination, portStr))
+				}
+				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix)
+				if err != nil {
+					return fmt.Errorf("service %q: %w", name, err)
+				}
+			}
+		}
+		if v, set := details.Advertised.Get(); !set || v {
+			advertisedServices.Add(name.String())
+		}
+	}
+
+	var changed bool
+	var servicesList []string
+	if e.allServices {
+		servicesList = advertisedServices.Slice()
+		changed = true
+	} else if advertisedServices.Contains(e.service.String()) {
+		// If allServices wasn't set, the only service that could have been
+		// advertised is the one that was provided as a flag.
+		prefs, err := e.lc.GetPrefs(ctx)
+		if err != nil {
+			return err
+		}
+		if !slices.Contains(prefs.AdvertiseServices, e.service.String()) {
+			servicesList = append(prefs.AdvertiseServices, e.service.String())
+			changed = true
+		}
+	}
+	if changed {
+		_, err = e.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+			AdvertiseServicesSet: true,
+			Prefs: ipn.Prefs{
+				AdvertiseServices: servicesList,
+			},
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return e.lc.SetServeConfig(ctx, sc)
 }
 
 const backgroundExistsMsg = "background configuration already exists, use `tailscale %s --%s=%d off` to remove the existing configuration"
