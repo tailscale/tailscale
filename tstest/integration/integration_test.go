@@ -828,6 +828,7 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 // jailed node cannot initiate connections to the other node however the other
 // node can initiate connections to the jailed node.
 func TestClientSideJailing(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/17419")
 	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
