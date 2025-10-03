@@ -96,6 +96,28 @@ func (b *bgBoolFlag) String() string {
 	return strconv.FormatBool(b.Value)
 }
 
+type userCapsFlag struct {
+	Value *[]tailcfg.PeerCapability
+}
+
+// Set appends s to the list of userCaps.
+func (u *userCapsFlag) Set(s string) error {
+	if s == "" {
+		return nil
+	}
+	*u.Value = append(*u.Value, tailcfg.PeerCapability(s))
+	return nil
+}
+
+// String returns the string representation of the userCaps slice.
+func (u *userCapsFlag) String() string {
+	s := make([]string, len(*u.Value))
+	for i, v := range *u.Value {
+		s[i] = string(v)
+	}
+	return strings.Join(s, ",")
+}
+
 var serveHelpCommon = strings.TrimSpace(`
 <target> can be a file, directory, text, or most commonly the location to a service running on the
 local machine. The location to the location service can be expressed as a port number (e.g., 3000),
@@ -199,6 +221,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			fs.UintVar(&e.https, "https", 0, "Expose an HTTPS server at the specified port (default mode)")
 			if subcmd == serve {
 				fs.UintVar(&e.http, "http", 0, "Expose an HTTP server at the specified port")
+				fs.Var(&userCapsFlag{Value: &e.userCaps}, "usercaps", "User capability to forward to the server (can be specified multiple times)")
 			}
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
@@ -469,7 +492,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			if len(args) > 0 {
 				target = args[0]
 			}
-			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix)
+			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix, e.userCaps)
 			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
 		}
 		if err != nil {
@@ -790,7 +813,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	for name, details := range scf.Services {
 		for ppr, ep := range details.Endpoints {
 			if ep.Protocol == conffile.ProtoTUN {
-				err := e.setServe(sc, name.String(), serveTypeTUN, 0, "", "", false, magicDNSSuffix)
+				err := e.setServe(sc, name.String(), serveTypeTUN, 0, "", "", false, magicDNSSuffix, nil)
 				if err != nil {
 					return err
 				}
@@ -812,7 +835,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 					portStr := fmt.Sprint(destPort)
 					target = fmt.Sprintf("%s://%s", ep.Protocol, net.JoinHostPort(ep.Destination, portStr))
 				}
-				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix)
+				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix, nil)
 				if err != nil {
 					return fmt.Errorf("service %q: %w", name, err)
 				}
@@ -915,12 +938,12 @@ func serveFromPortHandler(tcp *ipn.TCPPortHandler) serveType {
 	}
 }
 
-func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string) error {
+func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []tailcfg.PeerCapability) error {
 	// update serve config based on the type
 	switch srvType {
 	case serveTypeHTTPS, serveTypeHTTP:
 		useTLS := srvType == serveTypeHTTPS
-		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target, mds)
+		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target, mds, caps)
 		if err != nil {
 			return fmt.Errorf("failed apply web serve: %w", err)
 		}
@@ -1084,7 +1107,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	return output.String()
 }
 
-func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target string, mds string) error {
+func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target, mds string, caps []tailcfg.PeerCapability) error {
 	h := new(ipn.HTTPHandler)
 	switch {
 	case strings.HasPrefix(target, "text:"):
@@ -1118,6 +1141,7 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 			return err
 		}
 		h.Proxy = t
+		h.UserCaps = caps
 	}
 
 	// TODO: validation needs to check nested foreground configs
