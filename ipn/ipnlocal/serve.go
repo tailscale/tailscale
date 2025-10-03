@@ -803,6 +803,7 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Out.Host = r.In.Host
 		addProxyForwardedHeaders(r)
 		rp.lb.addTailscaleIdentityHeaders(r)
+		rp.lb.addTailscaleCapabilitiesHeaders(r)
 	}}
 
 	// There is no way to autodetect h2c as per RFC 9113
@@ -925,6 +926,22 @@ func encTailscaleHeaderValue(v string) string {
 		return ""
 	}
 	return mime.QEncoding.Encode("utf-8", v)
+}
+
+func (b *LocalBackend) addTailscaleCapabilitiesHeaders(r *httputil.ProxyRequest) {
+	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
+	if !ok {
+		return
+	}
+	peerCaps := b.PeerCaps(c.SrcAddr.Addr())
+	if peerCaps != nil {
+		header, err := json.Marshal(peerCaps)
+		if err != nil {
+			b.logf("failed to serialise peer capabilities %v", err)
+			return
+		}
+		r.Out.Header.Set("Tailscale-User-Capabilities", string(header))
+	}
 }
 
 // serveWebHandler is an http.HandlerFunc that maps incoming requests to the
