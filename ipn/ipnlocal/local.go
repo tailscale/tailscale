@@ -2200,12 +2200,12 @@ func (b *LocalBackend) resolveExitNodeIPLocked(prefs *ipn.Prefs) (prefsChanged b
 func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 	if err != nil {
 		b.logf("wgengine status error: %v", err)
-		b.broadcastStatusChanged()
+		b.maybeBroadcastStatusChanged(nil)
 		return
 	}
 	if s == nil {
 		b.logf("[unexpected] non-error wgengine update with status=nil: %v", s)
-		b.broadcastStatusChanged()
+		b.maybeBroadcastStatusChanged(nil)
 		return
 	}
 
@@ -2214,6 +2214,7 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 		// Don't process a status update that is older than the one we have
 		// already processed. (corp#2579)
 		b.mu.Unlock()
+		b.maybeBroadcastStatusChanged(s)
 		return
 	}
 	b.lastStatusTime = s.AsOf
@@ -2232,12 +2233,15 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 		}
 		b.stateMachine()
 	}
-	b.broadcastStatusChanged()
+	b.maybeBroadcastStatusChanged(s)
 	b.send(ipn.Notify{Engine: &es})
 }
 
-// broadcastStatusChanged must not be called with b.mu held.
-func (b *LocalBackend) broadcastStatusChanged() {
+// maybeBroadcastStatusChanged must not be called with b.mu held.
+func (b *LocalBackend) maybeBroadcastStatusChanged(s *wgengine.Status) {
+	if s != nil && (s.DERPs != 0 || len(s.Peers) != 0) {
+		return
+	}
 	// The sync.Cond docs say: "It is allowed but not required for the caller to hold c.L during the call."
 	// In this particular case, we must acquire b.mu. Otherwise we might broadcast before
 	// the waiter (in requestEngineStatusAndWait) starts to wait, in which case
@@ -5696,19 +5700,8 @@ func (b *LocalBackend) requestEngineStatusAndWaitForStopped() {
 
 	b.goTracker.Go(b.e.RequestStatus)
 	b.logf("requestEngineStatusAndWaitForStopped: waiting...")
-	for {
-		b.statusChanged.Wait() // temporarily releases lock while waiting
-
-		if !b.blocked {
-			b.logf("requestEngineStatusAndWaitForStopped: engine is no longer blocked, must have stopped and started again, not safe to wait.")
-			break
-		}
-		if b.engineStatus.NumLive == 0 && b.engineStatus.LiveDERPs == 0 {
-			b.logf("requestEngineStatusAndWaitForStopped: engine is stopped.")
-			break
-		}
-		b.logf("requestEngineStatusAndWaitForStopped: engine is still running. Waiting...")
-	}
+	b.statusChanged.Wait() // temporarily releases lock while waiting
+	b.logf("requestEngineStatusAndWaitForStopped: engine was stopped.")
 }
 
 // setControlClientLocked sets the control client to cc,
