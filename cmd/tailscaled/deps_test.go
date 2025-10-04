@@ -243,6 +243,7 @@ func TestMinTailscaledNoCLI(t *testing.T) {
 		"golang.org/x/net/proxy",
 		"internal/socks",
 		"github.com/tailscale/peercred",
+		"tailscale.com/types/netlogtype",
 	}
 	deptest.DepChecker{
 		GOOS:   "linux",

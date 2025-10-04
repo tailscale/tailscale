@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_connstats
+
 // Package connstats maintains statistics about connections
 // flowing through a TUN device (which operate at the IP layer).
 package connstats

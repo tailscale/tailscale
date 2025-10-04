@@ -1865,8 +1865,10 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 	now := mono.Now()
 	ep.lastRecvUDPAny.StoreAtomic(now)
 	connNoted := ep.noteRecvActivity(src, now)
-	if stats := c.stats.Load(); stats != nil {
-		stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, geneveInclusivePacketLen)
+	if buildfeatures.HasConnStats {
+		if stats := c.stats.Load(); stats != nil {
+			stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, geneveInclusivePacketLen)
+		}
 	}
 	if src.vni.IsSet() && (connNoted || looksLikeInitiationMsg(b)) {
 		// connNoted is periodic, but we also want to verify if the peer is who
@@ -3743,7 +3745,9 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 // SetStatistics specifies a per-connection statistics aggregator.
 // Nil may be specified to disable statistics gathering.
 func (c *Conn) SetStatistics(stats *connstats.Statistics) {
-	c.stats.Store(stats)
+	if buildfeatures.HasConnStats {
+		c.stats.Store(stats)
+	}
 }
 
 // SetHomeless sets whether magicsock should idle harder and not have a DERP
