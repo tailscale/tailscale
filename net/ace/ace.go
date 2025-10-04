@@ -28,6 +28,8 @@ type Dialer struct {
 	ACEHostIP netip.Addr // optional; if non-zero, use this IP instead of DNS
 	ACEPort   int        // zero means 443
 
+	// NetDialer optionally specifies the underlying dialer to use to reach the
+	// ACEHost. If nil, net.Dialer.DialContext is used.
 	NetDialer func(ctx context.Context, network, address string) (net.Conn, error)
 }
 

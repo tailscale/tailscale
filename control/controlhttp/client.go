@@ -42,7 +42,6 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
-	"tailscale.com/net/ace"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netutil"
@@ -395,6 +394,8 @@ var macOSScreenTime = health.Register(&health.Warnable{
 	ImpactsConnectivity: true,
 })
 
+var HookMakeACEDialer feature.Hook[func(dialer netx.DialFunc, aceHost string, optIP netip.Addr) netx.DialFunc]
+
 // tryURLUpgrade connects to u, and tries to upgrade it to a net.Conn.
 //
 // If optAddr is valid, then no DNS is used and the connection will be made to
@@ -424,11 +425,14 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 	}
 
 	if optACEHost != "" {
-		dialer = (&ace.Dialer{
-			ACEHost:   optACEHost,
-			ACEHostIP: optAddr, // may be zero
-			NetDialer: dialer,
-		}).Dial
+		if !buildfeatures.HasACE {
+			return nil, feature.ErrUnavailable
+		}
+		f, ok := HookMakeACEDialer.GetOk()
+		if !ok {
+			return nil, feature.ErrUnavailable
+		}
+		dialer = f(dialer, optACEHost, optAddr)
 	}
 
 	// On macOS, see if Screen Time is blocking things.
