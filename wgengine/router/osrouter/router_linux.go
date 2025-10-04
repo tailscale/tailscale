@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -65,10 +66,7 @@ type linuxRouter struct {
 	addrs             map[netip.Prefix]bool
 	routes            map[netip.Prefix]bool
 	localRoutes       map[netip.Prefix]bool
-	snatSubnetRoutes  bool
 	statefulFiltering bool
-	netfilterMode     preftype.NetfilterMode
-	netfilterKind     string
 
 	// ruleRestorePending is whether a timer has been started to
 	// restore deleted ip rules.
@@ -86,8 +84,12 @@ type linuxRouter struct {
 	cmd commandRunner
 	nfr linuxfw.NetfilterRunner
 
-	magicsockPortV4 uint16
-	magicsockPortV6 uint16
+	mu               sync.Mutex
+	snatSubnetRoutes bool
+	netfilterMode    preftype.NetfilterMode
+	netfilterKind    string
+	magicsockPortV4  uint16
+	magicsockPortV6  uint16
 }
 
 func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
@@ -169,6 +171,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 // [eventbus.Client] is closed.
 func (r *linuxRouter) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus.Client) {
 	ruleDeletedSub := eventbus.Subscribe[netmon.RuleDeleted](ec)
+	portUpdateSub := eventbus.Subscribe[router.PortUpdate](ec)
 	return func(ec *eventbus.Client) {
 		for {
 			select {
@@ -176,6 +179,11 @@ func (r *linuxRouter) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus.
 				return
 			case rs := <-ruleDeletedSub.Events():
 				r.onIPRuleDeleted(rs.Table, rs.Priority)
+			case pu := <-portUpdateSub.Events():
+				r.logf("portUpdate(port=%v, network=%s)", pu.UDPPort, pu.EndpointNetwork)
+				if err := r.updateMagicsockPort(pu.UDPPort, pu.EndpointNetwork); err != nil {
+					r.logf("updateMagicsockPort(port=%v, network=%s) failed: %v", pu.UDPPort, pu.EndpointNetwork, err)
+				}
 			}
 		}
 	}
@@ -394,10 +402,10 @@ func (r *linuxRouter) Close() error {
 	return nil
 }
 
-// setupNetfilter initializes the NetfilterRunner in r.nfr. It expects r.nfr
+// setupNetfilterLocked initializes the NetfilterRunner in r.nfr. It expects r.nfr
 // to be nil, or the current netfilter to be set to netfilterOff.
 // kind should be either a linuxfw.FirewallMode, or the empty string for auto.
-func (r *linuxRouter) setupNetfilter(kind string) error {
+func (r *linuxRouter) setupNetfilterLocked(kind string) error {
 	r.netfilterKind = kind
 
 	var err error
@@ -422,9 +430,11 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 			errs = append(errs, err)
 		} else {
 			r.nfr = nil
-			if err := r.setupNetfilter(cfg.NetfilterKind); err != nil {
+			r.mu.Lock()
+			if err := r.setupNetfilterLocked(cfg.NetfilterKind); err != nil {
 				errs = append(errs, err)
 			}
+			r.mu.Unlock()
 		}
 	}
 
@@ -538,10 +548,12 @@ func (r *linuxRouter) updateStatefulFilteringWithDockerWarning(cfg *router.Confi
 	r.health.SetHealthy(dockerStatefulFilteringWarnable)
 }
 
-// UpdateMagicsockPort implements the Router interface.
-func (r *linuxRouter) UpdateMagicsockPort(port uint16, network string) error {
+// updateMagicsockPort implements the Router interface.
+func (r *linuxRouter) updateMagicsockPort(port uint16, network string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.nfr == nil {
-		if err := r.setupNetfilter(r.netfilterKind); err != nil {
+		if err := r.setupNetfilterLocked(r.netfilterKind); err != nil {
 			return fmt.Errorf("could not setup netfilter: %w", err)
 		}
 	}
@@ -595,6 +607,8 @@ func (r *linuxRouter) UpdateMagicsockPort(port uint16, network string) error {
 // reflect the new mode, and r.snatSubnetRoutes is updated to reflect
 // the current state of subnet SNATing.
 func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if !platformCanNetfilter() {
 		mode = netfilterOff
 	}

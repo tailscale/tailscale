@@ -27,11 +27,6 @@ func (r fakeRouter) Set(cfg *Config) error {
 	return nil
 }
 
-func (r fakeRouter) UpdateMagicsockPort(_ uint16, _ string) error {
-	r.logf("[v1] warning: fakeRouter.UpdateMagicsockPort: not implemented.")
-	return nil
-}
-
 func (r fakeRouter) Close() error {
 	r.logf("[v1] warning: fakeRouter.Close: not implemented.")
 	return nil
