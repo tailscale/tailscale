@@ -443,6 +443,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `image` _[NameserverImage](#nameserverimage)_ | Nameserver image. Defaults to tailscale/k8s-nameserver:unstable. |  |  |
 | `service` _[NameserverService](#nameserverservice)_ | Service configuration. |  |  |
+| `pod` _[NameserverPod](#nameserverpod)_ | Pod configuration. |  |  |
 | `replicas` _integer_ | Replicas specifies how many Pods to create. Defaults to 1. |  | Minimum: 0 <br /> |
 
 
@@ -461,6 +462,22 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `repo` _string_ | Repo defaults to tailscale/k8s-nameserver. |  |  |
 | `tag` _string_ | Tag defaults to unstable. |  |  |
+
+
+#### NameserverPod
+
+
+
+
+
+
+
+_Appears in:_
+- [Nameserver](#nameserver)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `tolerations` _[Toleration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#toleration-v1-core) array_ | If specified, applies tolerations to the pods deployed by the DNSConfig resource. |  |  |
 
 
 #### NameserverService
