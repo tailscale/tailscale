@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_debug
+
 package wgengine
 
 import (
@@ -19,6 +21,8 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/wgengine/filter"
 )
+
+type flowtrackTuple = flowtrack.Tuple
 
 const tcpTimeoutBeforeDebug = 5 * time.Second
 
@@ -56,6 +60,10 @@ func (e *userspaceEngine) noteFlowProblemFromPeer(f flowtrack.Tuple, problem pac
 	of.problem = problem
 }
 
+func tsRejectFlow(rh packet.TailscaleRejectedHeader) flowtrack.Tuple {
+	return flowtrack.MakeTuple(rh.Proto, rh.Src, rh.Dst)
+}
+
 func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapper) (res filter.Response) {
 	res = filter.Accept // always
 
@@ -66,8 +74,8 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapp
 			return
 		}
 		if rh.MaybeBroken {
-			e.noteFlowProblemFromPeer(rh.Flow(), rh.Reason)
-		} else if f := rh.Flow(); e.removeFlow(f) {
+			e.noteFlowProblemFromPeer(tsRejectFlow(rh), rh.Reason)
+		} else if f := tsRejectFlow(rh); e.removeFlow(f) {
 			e.logf("open-conn-track: flow %v %v > %v rejected due to %v", rh.Proto, rh.Src, rh.Dst, rh.Reason)
 		}
 		return

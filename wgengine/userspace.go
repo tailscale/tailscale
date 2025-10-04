@@ -29,7 +29,6 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dns/resolver"
-	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/ipset"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
@@ -147,7 +146,7 @@ type userspaceEngine struct {
 	statusCallback StatusCallback
 	peerSequence   []key.NodePublic
 	endpoints      []tailcfg.Endpoint
-	pendOpen       map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
+	pendOpen       map[flowtrackTuple]*pendingOpenFlow // see pendopen.go
 
 	// pongCallback is the map of response handlers waiting for disco or TSMP
 	// pong callbacks. The map key is a random slice of bytes.
