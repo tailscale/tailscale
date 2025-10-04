@@ -122,7 +122,7 @@ func (h *Hijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 		return nil, nil, fmt.Errorf("error hijacking connection: %w", err)
 	}
 
-	conn, err := h.setUpRecording(h.req.Context(), reqConn)
+	conn, err := h.setUpRecording(reqConn)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error setting up session recording: %w", err)
 	}
@@ -133,7 +133,7 @@ func (h *Hijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // spdyHijacker.addrs. Returns conn from provided opts, wrapped in recording
 // logic. If connecting to the recorder fails or an error is received during the
 // session and spdyHijacker.failOpen is false, connection will be closed.
-func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn, error) {
+func (h *Hijacker) setUpRecording(conn net.Conn) (net.Conn, error) {
 	const (
 		// https://docs.asciinema.org/manual/asciicast/v2/
 		asciicastv2  = 2
@@ -147,6 +147,7 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 		errChan <-chan error
 	)
 	h.log.Infof("kubectl %s session will be recorded, recorders: %v, fail open policy: %t", h.sessionType, h.addrs, h.failOpen)
+	ctx, cancel := context.WithCancel(context.Background())
 	qp := h.req.URL.Query()
 	container := strings.Join(qp[containerKey], "")
 	var recorderAddr net.Addr
@@ -157,6 +158,7 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 	}
 	wc, _, errChan, err = h.connectToRecorder(httptrace.WithClientTrace(ctx, trace), h.addrs, h.ts.Dial)
 	if err != nil {
+		cancel()
 		msg := fmt.Sprintf("error connecting to session recorders: %v", err)
 		if h.failOpen {
 			msg = msg + "; failure mode is 'fail open'; continuing session without recording."
@@ -201,18 +203,22 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 	case SPDYProtocol:
 		lc, err = spdy.New(ctx, conn, rec, ch, hasTerm, h.log)
 		if err != nil {
+			cancel()
 			return nil, fmt.Errorf("failed to initialize spdy connection: %w", err)
 		}
 	case WSProtocol:
 		lc, err = ws.New(ctx, conn, rec, ch, hasTerm, h.log)
 		if err != nil {
+			cancel()
 			return nil, fmt.Errorf("failed to initialize websocket connection: %w", err)
 		}
 	default:
+		cancel()
 		return nil, fmt.Errorf("unknown protocol: %s", h.proto)
 	}
 
 	go func() {
+		defer cancel()
 		var err error
 		select {
 		case <-ctx.Done():
