@@ -256,22 +256,12 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 		reg := new(usermetric.Registry)
 		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, sys.Bus.Get(), sys.Set)
 		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
-		var a *appc.AppConnector
-		if shouldStore {
-			a = appc.NewAppConnector(appc.Config{
-				Logf:            t.Logf,
-				EventBus:        sys.Bus.Get(),
-				RouteAdvertiser: &appctest.RouteCollector{},
-				RouteInfo:       &appctype.RouteInfo{},
-				StoreRoutesFunc: fakeStoreRoutes,
-			})
-		} else {
-			a = appc.NewAppConnector(appc.Config{
-				Logf:            t.Logf,
-				EventBus:        sys.Bus.Get(),
-				RouteAdvertiser: &appctest.RouteCollector{},
-			})
-		}
+		a := appc.NewAppConnector(appc.Config{
+			Logf:            t.Logf,
+			EventBus:        sys.Bus.Get(),
+			HasStoredRoutes: shouldStore,
+		})
+		t.Cleanup(a.Close)
 		sys.Set(pm.Store())
 		sys.Set(eng)
 
@@ -329,11 +319,11 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 
 func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 	for _, shouldStore := range []bool{false, true} {
-		ctx := context.Background()
 		var h peerAPIHandler
 		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
 		sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
+		bw := eventbustest.NewWatcher(t, sys.Bus.Get())
 
 		rc := &appctest.RouteCollector{}
 		ht := health.NewTracker(sys.Bus.Get())
@@ -341,18 +331,13 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 
 		reg := new(usermetric.Registry)
 		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, sys.Bus.Get(), sys.Set)
-		var a *appc.AppConnector
-		if shouldStore {
-			a = appc.NewAppConnector(appc.Config{
-				Logf:            t.Logf,
-				EventBus:        sys.Bus.Get(),
-				RouteAdvertiser: rc,
-				RouteInfo:       &appctype.RouteInfo{},
-				StoreRoutesFunc: fakeStoreRoutes,
-			})
-		} else {
-			a = appc.NewAppConnector(appc.Config{Logf: t.Logf, EventBus: sys.Bus.Get(), RouteAdvertiser: rc})
-		}
+		a := appc.NewAppConnector(appc.Config{
+			Logf:            t.Logf,
+			EventBus:        sys.Bus.Get(),
+			RouteAdvertiser: rc,
+			HasStoredRoutes: shouldStore,
+		})
+		t.Cleanup(a.Close)
 		sys.Set(pm.Store())
 		sys.Set(eng)
 
@@ -362,7 +347,7 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 
 		h.ps = &peerAPIServer{b: b}
 		h.ps.b.appConnector.UpdateDomains([]string{"example.com"})
-		h.ps.b.appConnector.Wait(ctx)
+		a.Wait(t.Context())
 
 		h.ps.resolver = &fakeResolver{build: func(b *dnsmessage.Builder) {
 			b.AResource(
@@ -392,11 +377,17 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Errorf("unexpected status code: %v", w.Code)
 		}
-		h.ps.b.appConnector.Wait(ctx)
+		a.Wait(t.Context())
 
 		wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
 		if !slices.Equal(rc.Routes(), wantRoutes) {
 			t.Errorf("got %v; want %v", rc.Routes(), wantRoutes)
+		}
+
+		if err := eventbustest.Expect(bw,
+			eqUpdate(appctype.RouteUpdate{Advertise: mustPrefix("192.0.0.8/32")}),
+		); err != nil {
+			t.Error(err)
 		}
 	}
 }
@@ -408,24 +399,20 @@ func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
 		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
 		sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
+		bw := eventbustest.NewWatcher(t, sys.Bus.Get())
 
 		ht := health.NewTracker(sys.Bus.Get())
 		reg := new(usermetric.Registry)
 		rc := &appctest.RouteCollector{}
 		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, sys.Bus.Get(), sys.Set)
 		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
-		var a *appc.AppConnector
-		if shouldStore {
-			a = appc.NewAppConnector(appc.Config{
-				Logf:            t.Logf,
-				EventBus:        sys.Bus.Get(),
-				RouteAdvertiser: rc,
-				RouteInfo:       &appctype.RouteInfo{},
-				StoreRoutesFunc: fakeStoreRoutes,
-			})
-		} else {
-			a = appc.NewAppConnector(appc.Config{Logf: t.Logf, EventBus: sys.Bus.Get(), RouteAdvertiser: rc})
-		}
+		a := appc.NewAppConnector(appc.Config{
+			Logf:            t.Logf,
+			EventBus:        sys.Bus.Get(),
+			RouteAdvertiser: rc,
+			HasStoredRoutes: shouldStore,
+		})
+		t.Cleanup(a.Close)
 		sys.Set(pm.Store())
 		sys.Set(eng)
 
@@ -481,6 +468,12 @@ func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
 		wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
 		if !slices.Equal(rc.Routes(), wantRoutes) {
 			t.Errorf("got %v; want %v", rc.Routes(), wantRoutes)
+		}
+
+		if err := eventbustest.Expect(bw,
+			eqUpdate(appctype.RouteUpdate{Advertise: mustPrefix("192.0.0.8/32")}),
+		); err != nil {
+			t.Error(err)
 		}
 	}
 }
