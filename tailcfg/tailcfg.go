@@ -1473,6 +1473,18 @@ func (pr PortRange) Contains(port uint16) bool {
 
 var PortRangeAny = PortRange{0, 65535}
 
+func (pr PortRange) String() string {
+	var buf bytes.Buffer
+	if pr.First == pr.Last {
+		fmt.Fprintf(&buf, "%d", pr.First)
+	} else if pr == PortRangeAny {
+		buf.WriteByte('*')
+	} else {
+		fmt.Fprintf(&buf, "%d-%d", pr.First, pr.Last)
+	}
+	return buf.String()
+}
+
 // NetPortRange represents a range of ports that's allowed for one or more IPs.
 type NetPortRange struct {
 	_     structs.Incomparable

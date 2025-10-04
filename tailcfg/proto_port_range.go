@@ -5,7 +5,6 @@ package tailcfg
 
 import (
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -70,14 +69,7 @@ func (ppr ProtoPortRange) String() string {
 		buf.Write(text)
 		buf.Write([]byte(":"))
 	}
-	pr := ppr.Ports
-	if pr.First == pr.Last {
-		fmt.Fprintf(&buf, "%d", pr.First)
-	} else if pr == PortRangeAny {
-		buf.WriteByte('*')
-	} else {
-		fmt.Fprintf(&buf, "%d-%d", pr.First, pr.Last)
-	}
+	buf.WriteString(ppr.Ports.String())
 	return buf.String()
 }
 
@@ -104,7 +96,7 @@ func parseProtoPortRange(ipProtoPort string) (*ProtoPortRange, error) {
 	if !strings.Contains(ipProtoPort, ":") {
 		ipProtoPort = "*:" + ipProtoPort
 	}
-	protoStr, portRange, err := parseHostPortRange(ipProtoPort)
+	protoStr, portRange, err := ParseHostPortRange(ipProtoPort)
 	if err != nil {
 		return nil, err
 	}
@@ -126,9 +118,9 @@ func parseProtoPortRange(ipProtoPort string) (*ProtoPortRange, error) {
 	return ppr, nil
 }
 
-// parseHostPortRange parses hostport as HOST:PORTS where HOST is
+// ParseHostPortRange parses hostport as HOST:PORTS where HOST is
 // returned unchanged and PORTS is is either "*" or PORTLOW-PORTHIGH ranges.
-func parseHostPortRange(hostport string) (host string, ports PortRange, err error) {
+func ParseHostPortRange(hostport string) (host string, ports PortRange, err error) {
 	hostport = strings.ToLower(hostport)
 	colon := strings.LastIndexByte(hostport, ':')
 	if colon < 0 {
