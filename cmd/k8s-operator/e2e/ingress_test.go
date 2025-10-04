@@ -14,8 +14,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	kube "tailscale.com/k8s-operator"
 	"tailscale.com/tstest"
 	"tailscale.com/types/ptr"
@@ -24,17 +22,12 @@ import (
 
 // See [TestMain] for test requirements.
 func TestIngress(t *testing.T) {
-	if apiClient == nil {
-		t.Skip("TestIngress requires TS_API_CLIENT_SECRET set")
+	if tnClient == nil {
+		t.Skip("TestIngress requires a working tailnet client")
 	}
 
-	cfg := config.GetConfigOrDie()
-	cl, err := client.New(cfg, client.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
 	// Apply nginx
-	createAndCleanup(t, cl,
+	createAndCleanup(t, kubeClient,
 		&appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "nginx",
@@ -73,8 +66,7 @@ func TestIngress(t *testing.T) {
 			Name:      "test-ingress",
 			Namespace: "default",
 			Annotations: map[string]string{
-				"tailscale.com/expose":      "true",
-				"tailscale.com/proxy-class": "prod",
+				"tailscale.com/expose": "true",
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -90,12 +82,12 @@ func TestIngress(t *testing.T) {
 			},
 		},
 	}
-	createAndCleanup(t, cl, svc)
+	createAndCleanup(t, kubeClient, svc)
 
 	// TODO: instead of timing out only when test times out, cancel context after 60s or so.
 	if err := wait.PollUntilContextCancel(t.Context(), time.Millisecond*100, true, func(ctx context.Context) (done bool, err error) {
 		maybeReadySvc := &corev1.Service{ObjectMeta: objectMeta("default", "test-ingress")}
-		if err := get(ctx, cl, maybeReadySvc); err != nil {
+		if err := get(ctx, kubeClient, maybeReadySvc); err != nil {
 			return false, err
 		}
 		isReady := kube.SvcIsReady(maybeReadySvc)
@@ -118,7 +110,7 @@ func TestIngress(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
-		resp, err = tailnetClient.HTTPClient().Do(req.WithContext(ctx))
+		resp, err = tnClient.HTTPClient().Do(req.WithContext(ctx))
 		return err
 	}); err != nil {
 		t.Fatalf("error trying to reach Service: %v", err)
