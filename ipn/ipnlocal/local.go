@@ -5416,7 +5416,9 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.ShieldsUp = prefs.ShieldsUp()
 	hi.AllowsUpdate = buildfeatures.HasClientUpdate && (envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true))
 
-	b.metrics.advertisedRoutes.Set(float64(tsaddr.WithoutExitRoute(prefs.AdvertiseRoutes()).Len()))
+	if buildfeatures.HasAdvertiseRoutes {
+		b.metrics.advertisedRoutes.Set(float64(tsaddr.WithoutExitRoute(prefs.AdvertiseRoutes()).Len()))
+	}
 
 	var sshHostKeys []string
 	if buildfeatures.HasSSH && prefs.RunSSH() && envknob.CanSSHD() {
@@ -5445,7 +5447,10 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	// DNS records are needed, so we can save bandwidth and not send
 	// WireIngress.
 	hi.WireIngress = b.shouldWireInactiveIngressLocked()
-	hi.AppConnector.Set(prefs.AppConnector().Advertise)
+
+	if buildfeatures.HasAppConnectors {
+		hi.AppConnector.Set(prefs.AppConnector().Advertise)
+	}
 
 	// The [tailcfg.Hostinfo.ExitNodeID] field tells control which exit node
 	// was selected, if any.
@@ -5461,8 +5466,10 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	// ExitNodeID here; [LocalBackend.ResolveExitNode] will be called once
 	// the netmap and/or net report have been received to both pick the exit
 	// node and notify control of the change.
-	if sid := prefs.ExitNodeID(); sid != unresolvedExitNodeID {
-		hi.ExitNodeID = prefs.ExitNodeID()
+	if buildfeatures.HasUseExitNode {
+		if sid := prefs.ExitNodeID(); sid != unresolvedExitNodeID {
+			hi.ExitNodeID = prefs.ExitNodeID()
+		}
 	}
 }
 
