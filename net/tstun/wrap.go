@@ -973,8 +973,10 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 			panic(fmt.Sprintf("short copy: %d != %d", n, len(data)-res.dataOffset))
 		}
 		sizes[buffsPos] = n
-		if stats := t.stats.Load(); stats != nil {
-			stats.UpdateTxVirtual(p.Buffer())
+		if buildfeatures.HasConnStats {
+			if stats := t.stats.Load(); stats != nil {
+				stats.UpdateTxVirtual(p.Buffer())
+			}
 		}
 		buffsPos++
 	}
@@ -1098,9 +1100,11 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 		n, err = tun.GSOSplit(pkt, gsoOptions, outBuffs, sizes, offset)
 	}
 
-	if stats := t.stats.Load(); stats != nil {
-		for i := 0; i < n; i++ {
-			stats.UpdateTxVirtual(outBuffs[i][offset : offset+sizes[i]])
+	if buildfeatures.HasConnStats {
+		if stats := t.stats.Load(); stats != nil {
+			for i := 0; i < n; i++ {
+				stats.UpdateTxVirtual(outBuffs[i][offset : offset+sizes[i]])
+			}
 		}
 	}
 
@@ -1266,9 +1270,11 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 }
 
 func (t *Wrapper) tdevWrite(buffs [][]byte, offset int) (int, error) {
-	if stats := t.stats.Load(); stats != nil {
-		for i := range buffs {
-			stats.UpdateRxVirtual((buffs)[i][offset:])
+	if buildfeatures.HasConnStats {
+		if stats := t.stats.Load(); stats != nil {
+			for i := range buffs {
+				stats.UpdateRxVirtual((buffs)[i][offset:])
+			}
 		}
 	}
 	return t.tdev.Write(buffs, offset)
@@ -1490,7 +1496,9 @@ func (t *Wrapper) Unwrap() tun.Device {
 // SetStatistics specifies a per-connection statistics aggregator.
 // Nil may be specified to disable statistics gathering.
 func (t *Wrapper) SetStatistics(stats *connstats.Statistics) {
-	t.stats.Store(stats)
+	if buildfeatures.HasConnStats {
+		t.stats.Store(stats)
+	}
 }
 
 var (

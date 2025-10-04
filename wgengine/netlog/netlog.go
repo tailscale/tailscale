@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
@@ -130,20 +131,24 @@ func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID lo
 	// can upload to the Tailscale log service, so stay below this limit.
 	const maxLogSize = 256 << 10
 	const maxConns = (maxLogSize - netlogtype.MaxMessageJSONSize) / netlogtype.MaxConnectionCountsJSONSize
-	nl.stats = connstats.NewStatistics(pollPeriod, maxConns, func(start, end time.Time, virtual, physical map[netlogtype.Connection]netlogtype.Counts) {
-		nl.mu.Lock()
-		addrs := nl.addrs
-		prefixes := nl.prefixes
-		nl.mu.Unlock()
-		recordStatistics(nl.logger, nodeID, start, end, virtual, physical, addrs, prefixes, logExitFlowEnabledEnabled)
-	})
+	if buildfeatures.HasConnStats {
+		nl.stats = connstats.NewStatistics(pollPeriod, maxConns, func(start, end time.Time, virtual, physical map[netlogtype.Connection]netlogtype.Counts) {
+			nl.mu.Lock()
+			addrs := nl.addrs
+			prefixes := nl.prefixes
+			nl.mu.Unlock()
+			recordStatistics(nl.logger, nodeID, start, end, virtual, physical, addrs, prefixes, logExitFlowEnabledEnabled)
+		})
+	}
 
 	// Register the connection tracker into the TUN device.
 	if tun == nil {
 		tun = noopDevice{}
 	}
 	nl.tun = tun
-	nl.tun.SetStatistics(nl.stats)
+	if buildfeatures.HasConnStats {
+		nl.tun.SetStatistics(nl.stats)
+	}
 
 	// Register the connection tracker into magicsock.
 	if sock == nil {
