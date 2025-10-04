@@ -404,19 +404,21 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		}
 	}
 	magicsockOpts := magicsock.Options{
-		EventBus:         e.eventBus,
-		Logf:             logf,
-		Port:             conf.ListenPort,
-		EndpointsFunc:    endpointsFn,
-		DERPActiveFunc:   e.RequestStatus,
-		IdleFunc:         e.tundev.IdleDuration,
-		NoteRecvActivity: e.noteRecvActivity,
-		NetMon:           e.netMon,
-		HealthTracker:    e.health,
-		Metrics:          conf.Metrics,
-		ControlKnobs:     conf.ControlKnobs,
-		OnPortUpdate:     onPortUpdate,
-		PeerByKeyFunc:    e.PeerByKey,
+		EventBus:       e.eventBus,
+		Logf:           logf,
+		Port:           conf.ListenPort,
+		EndpointsFunc:  endpointsFn,
+		DERPActiveFunc: e.RequestStatus,
+		IdleFunc:       e.tundev.IdleDuration,
+		NetMon:         e.netMon,
+		HealthTracker:  e.health,
+		Metrics:        conf.Metrics,
+		ControlKnobs:   conf.ControlKnobs,
+		OnPortUpdate:   onPortUpdate,
+		PeerByKeyFunc:  e.PeerByKey,
+	}
+	if buildfeatures.HasLazyWG {
+		magicsockOpts.NoteRecvActivity = e.noteRecvActivity
 	}
 
 	var err error
@@ -748,15 +750,22 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 	// the past 5 minutes. That's more than WireGuard's key
 	// rotation time anyway so it's no harm if we remove it
 	// later if it's been inactive.
-	activeCutoff := e.timeNow().Add(-lazyPeerIdleThreshold)
+	var activeCutoff mono.Time
+	if buildfeatures.HasLazyWG {
+		activeCutoff = e.timeNow().Add(-lazyPeerIdleThreshold)
+	}
 
 	// Not all peers can be trimmed from the network map (see
 	// isTrimmablePeer). For those that are trimmable, keep track of
 	// their NodeKey and Tailscale IPs. These are the ones we'll need
 	// to install tracking hooks for to watch their send/receive
 	// activity.
-	trackNodes := make([]key.NodePublic, 0, len(full.Peers))
-	trackIPs := make([]netip.Addr, 0, len(full.Peers))
+	var trackNodes []key.NodePublic
+	var trackIPs []netip.Addr
+	if buildfeatures.HasLazyWG {
+		trackNodes = make([]key.NodePublic, 0, len(full.Peers))
+		trackIPs = make([]netip.Addr, 0, len(full.Peers))
+	}
 
 	// Don't re-alloc the map; the Go compiler optimizes map clears as of
 	// Go 1.11, so we can re-use the existing + allocated map.
@@ -770,7 +779,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 	for i := range full.Peers {
 		p := &full.Peers[i]
 		nk := p.PublicKey
-		if !e.isTrimmablePeer(p, len(full.Peers)) {
+		if !buildfeatures.HasLazyWG || !e.isTrimmablePeer(p, len(full.Peers)) {
 			min.Peers = append(min.Peers, *p)
 			if discoChanged[nk] {
 				needRemoveStep = true
@@ -803,7 +812,9 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 		return nil
 	}
 
-	e.updateActivityMapsLocked(trackNodes, trackIPs)
+	if buildfeatures.HasLazyWG {
+		e.updateActivityMapsLocked(trackNodes, trackIPs)
+	}
 
 	if needRemoveStep {
 		minner := min
@@ -839,6 +850,9 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 //
 // e.wgLock must be held.
 func (e *userspaceEngine) updateActivityMapsLocked(trackNodes []key.NodePublic, trackIPs []netip.Addr) {
+	if !buildfeatures.HasLazyWG {
+		return
+	}
 	// Generate the new map of which nodekeys we want to track
 	// receive times for.
 	mr := map[key.NodePublic]mono.Time{} // TODO: only recreate this if set of keys changed
@@ -943,7 +957,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	peerMTUEnable := e.magicConn.ShouldPMTUD()
 
 	isSubnetRouter := false
-	if e.birdClient != nil && nm != nil && nm.SelfNode.Valid() {
+	if buildfeatures.HasBird && e.birdClient != nil && nm != nil && nm.SelfNode.Valid() {
 		isSubnetRouter = hasOverlap(nm.SelfNode.PrimaryRoutes(), nm.SelfNode.Hostinfo().RoutableIPs())
 		e.logf("[v1] Reconfig: hasOverlap(%v, %v) = %v; isSubnetRouter=%v lastIsSubnetRouter=%v",
 			nm.SelfNode.PrimaryRoutes(), nm.SelfNode.Hostinfo().RoutableIPs(),
