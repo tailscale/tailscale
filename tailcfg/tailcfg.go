@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -1088,6 +1089,9 @@ func (ni *NetInfo) String() string {
 }
 
 func (ni *NetInfo) portMapSummary() string {
+	if !buildfeatures.HasPortMapper {
+		return "x"
+	}
 	if !ni.HavePortMap && ni.UPnP == "" && ni.PMP == "" && ni.PCP == "" {
 		return "?"
 	}
