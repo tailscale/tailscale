@@ -21,7 +21,7 @@ func fieldsOf(t reflect.Type) (fields []string) {
 }
 
 func TestPersistEqual(t *testing.T) {
-	persistHandles := []string{"PrivateNodeKey", "OldPrivateNodeKey", "UserProfile", "NetworkLockKey", "NodeID", "DisallowedTKAStateIDs"}
+	persistHandles := []string{"PrivateNodeKey", "OldPrivateNodeKey", "UserProfile", "NetworkLockKey", "NodeID", "AttestationKey", "DisallowedTKAStateIDs"}
 	if have := fieldsOf(reflect.TypeFor[Persist]()); !reflect.DeepEqual(have, persistHandles) {
 		t.Errorf("Persist.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, persistHandles)

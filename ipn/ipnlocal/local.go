@@ -393,6 +393,23 @@ type LocalBackend struct {
 	//
 	// See tailscale/corp#29969.
 	overrideExitNodePolicy bool
+
+	// whether backend should use a hardware-backed key to bind the node
+	// identity to this device.
+	hardwareAttested atomic.Bool
+}
+
+// SetHardwareAttested enables hardware attestation key signatures in map
+// requests, if supported on this platform. SetHardwareAttested should be called
+// before Start.
+func (b *LocalBackend) SetHardwareAttested() {
+	b.hardwareAttested.Store(true)
+}
+
+// HardwareAttested reports whether hardware-backed attestation keys should be
+// used to bind the node's identity to this device.
+func (b *LocalBackend) HardwareAttested() bool {
+	return b.hardwareAttested.Load()
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -2423,10 +2440,35 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	if b.reconcilePrefsLocked(newPrefs) {
 		prefsChanged = true
 	}
+
+	// neither UpdatePrefs or reconciliation should change Persist
+	newPrefs.Persist = b.pm.CurrentPrefs().Persist().AsStruct()
+
+	// attempt to generate a new hardware attestion key if none exists
+	var ak key.HardwareAttestationKey
+	if newPrefs.Persist != nil {
+		ak = newPrefs.Persist.AttestationKey
+	}
+	if ak == nil || ak.IsZero() {
+		var err error
+		ak, err = key.NewHardwareAttestationKey()
+		if err != nil {
+			if !errors.Is(err, key.ErrUnsupported) {
+				b.logf("failed to create hardware attestation key: %v", err)
+			}
+		} else if ak != nil {
+			b.logf("using new hardware attestation key: %v", ak.Public())
+			if newPrefs.Persist == nil {
+				newPrefs.Persist = &persist.Persist{}
+			}
+			newPrefs.Persist.AttestationKey = ak
+			prefsChanged = true
+		}
+	} else {
+		b.logf("using existing hardware attestation key: %s", key.HardwareAttestationPublicFromPlatformKey(newPrefs.Persist.AttestationKey))
+	}
+
 	if prefsChanged {
-		// Neither opts.UpdatePrefs nor prefs reconciliation
-		// is allowed to modify Persist; retain the old value.
-		newPrefs.Persist = b.pm.CurrentPrefs().Persist().AsStruct()
 		if err := b.pm.SetPrefs(newPrefs.View(), cn.NetworkProfile()); err != nil {
 			b.logf("failed to save updated and reconciled prefs: %v", err)
 		}

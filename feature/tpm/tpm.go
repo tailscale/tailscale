@@ -40,6 +40,8 @@ var infoOnce = sync.OnceValue(info)
 func init() {
 	feature.Register("tpm")
 	feature.HookTPMAvailable.Set(tpmSupported)
+	feature.HookHardwareAttestationAvailable.Set(tpmSupported)
+
 	hostinfo.RegisterHostinfoNewHook(func(hi *tailcfg.Hostinfo) {
 		hi.TPM = infoOnce()
 	})

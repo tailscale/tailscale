@@ -26,6 +26,7 @@ type Persist struct {
 	UserProfile       tailcfg.UserProfile
 	NetworkLockKey    key.NLPrivate
 	NodeID            tailcfg.StableNodeID
+	AttestationKey    key.HardwareAttestationKey `json:",omitempty"`
 
 	// DisallowedTKAStateIDs stores the tka.State.StateID values which
 	// this node will not operate network lock on. This is used to
@@ -84,17 +85,27 @@ func (p *Persist) Equals(p2 *Persist) bool {
 		return false
 	}
 
+	var pub, p2Pub key.HardwareAttestationPublic
+	if p.AttestationKey != nil && !p.AttestationKey.IsZero() {
+		pub = key.HardwareAttestationPublicFromPlatformKey(p.AttestationKey)
+	}
+	if p2.AttestationKey != nil && !p2.AttestationKey.IsZero() {
+		p2Pub = key.HardwareAttestationPublicFromPlatformKey(p2.AttestationKey)
+	}
+
 	return p.PrivateNodeKey.Equal(p2.PrivateNodeKey) &&
 		p.OldPrivateNodeKey.Equal(p2.OldPrivateNodeKey) &&
 		p.UserProfile.Equal(&p2.UserProfile) &&
 		p.NetworkLockKey.Equal(p2.NetworkLockKey) &&
 		p.NodeID == p2.NodeID &&
+		pub.Equal(p2Pub) &&
 		reflect.DeepEqual(nilIfEmpty(p.DisallowedTKAStateIDs), nilIfEmpty(p2.DisallowedTKAStateIDs))
 }
 
 func (p *Persist) Pretty() string {
 	var (
 		ok, nk key.NodePublic
+		ak     key.HardwareAttestationKey
 	)
 	if !p.OldPrivateNodeKey.IsZero() {
 		ok = p.OldPrivateNodeKey.Public()
@@ -102,6 +113,9 @@ func (p *Persist) Pretty() string {
 	if !p.PrivateNodeKey.IsZero() {
 		nk = p.PublicNodeKey()
 	}
-	return fmt.Sprintf("Persist{o=%v, n=%v u=%#v}",
-		ok.ShortString(), nk.ShortString(), p.UserProfile.LoginName)
+	if p.AttestationKey != nil && !p.AttestationKey.IsZero() {
+		ak = p.AttestationKey
+	}
+	return fmt.Sprintf("Persist{o=%v, n=%v u=%#v ak=%v}",
+		ok.ShortString(), nk.ShortString(), p.UserProfile.LoginName, ak)
 }

@@ -52,3 +52,17 @@ func TPMAvailable() bool {
 	}
 	return false
 }
+
+// HookHardwareAttestationAvailable is a hook that reports whether hardware
+// attestation is supported and available.
+var HookHardwareAttestationAvailable Hook[func() bool]
+
+// HardwareAttestationAvailable reports whether hardware attestation is
+// supported and available (TPM on Windows/Linux, Secure Enclave on macOS|iOS,
+// KeyStore on Android)
+func HardwareAttestationAvailable() bool {
+	if f, ok := HookHardwareAttestationAvailable.GetOk(); ok {
+		return f()
+	}
+	return false
+}
