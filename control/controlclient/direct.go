@@ -4,7 +4,6 @@
 package controlclient
 
 import (
-	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -44,7 +43,6 @@ import (
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tempfork/httprec"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -1389,6 +1387,10 @@ func (c *Direct) isUniquePingRequest(pr *tailcfg.PingRequest) bool {
 	return true
 }
 
+// HookAnswerC2NPing is where feature/c2n conditionally registers support
+// for handling C2N (control-to-node) HTTP requests.
+var HookAnswerC2NPing feature.Hook[func(logger.Logf, http.Handler, *http.Client, *tailcfg.PingRequest)]
+
 func (c *Direct) answerPing(pr *tailcfg.PingRequest) {
 	httpc := c.httpc
 	useNoise := pr.URLIsNoise || pr.Types == "c2n"
@@ -1416,7 +1418,9 @@ func (c *Direct) answerPing(pr *tailcfg.PingRequest) {
 			c.logf("refusing to answer c2n ping without noise")
 			return
 		}
-		answerC2NPing(c.logf, c.c2nHandler, httpc, pr)
+		if f, ok := HookAnswerC2NPing.GetOk(); ok {
+			f(c.logf, c.c2nHandler, httpc, pr)
+		}
 		return
 	}
 	for _, t := range strings.Split(pr.Types, ",") {
@@ -1448,54 +1452,6 @@ func answerHeadPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest) {
 		logf("answerHeadPing error: %v to %v (after %v)", err, pr.URL, d)
 	} else if pr.Log {
 		logf("answerHeadPing complete to %v (after %v)", pr.URL, d)
-	}
-}
-
-func answerC2NPing(logf logger.Logf, c2nHandler http.Handler, c *http.Client, pr *tailcfg.PingRequest) {
-	if c2nHandler == nil {
-		logf("answerC2NPing: c2nHandler not defined")
-		return
-	}
-	hreq, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(pr.Payload)))
-	if err != nil {
-		logf("answerC2NPing: ReadRequest: %v", err)
-		return
-	}
-	if pr.Log {
-		logf("answerC2NPing: got c2n request for %v ...", hreq.RequestURI)
-	}
-	handlerTimeout := time.Minute
-	if v := hreq.Header.Get("C2n-Handler-Timeout"); v != "" {
-		handlerTimeout, _ = time.ParseDuration(v)
-	}
-	handlerCtx, cancel := context.WithTimeout(context.Background(), handlerTimeout)
-	defer cancel()
-	hreq = hreq.WithContext(handlerCtx)
-	rec := httprec.NewRecorder()
-	c2nHandler.ServeHTTP(rec, hreq)
-	cancel()
-
-	c2nResBuf := new(bytes.Buffer)
-	rec.Result().Write(c2nResBuf)
-
-	replyCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(replyCtx, "POST", pr.URL, c2nResBuf)
-	if err != nil {
-		logf("answerC2NPing: NewRequestWithContext: %v", err)
-		return
-	}
-	if pr.Log {
-		logf("answerC2NPing: sending POST ping to %v ...", pr.URL)
-	}
-	t0 := clock.Now()
-	_, err = c.Do(req)
-	d := time.Since(t0).Round(time.Millisecond)
-	if err != nil {
-		logf("answerC2NPing error: %v to %v (after %v)", err, pr.URL, d)
-	} else if pr.Log {
-		logf("answerC2NPing complete to %v (after %v)", pr.URL, d)
 	}
 }
 
