@@ -14,9 +14,6 @@ import (
 	"net/http"
 	"net/textproto"
 	"strconv"
-	"strings"
-
-	"golang.org/x/net/http/httpguts"
 )
 
 // ResponseRecorder is an implementation of [http.ResponseWriter] that
@@ -58,10 +55,6 @@ func NewRecorder() *ResponseRecorder {
 		Code:      200,
 	}
 }
-
-// DefaultRemoteAddr is the default remote address to return in RemoteAddr if
-// an explicit DefaultRemoteAddr isn't set on [ResponseRecorder].
-const DefaultRemoteAddr = "1.2.3.4"
 
 // Header implements [http.ResponseWriter]. It returns the response
 // headers to mutate within a handler. To test the headers that were
@@ -206,37 +199,6 @@ func (rw *ResponseRecorder) Result() *http.Response {
 		res.Body = http.NoBody
 	}
 	res.ContentLength = parseContentLength(res.Header.Get("Content-Length"))
-
-	if trailers, ok := rw.snapHeader["Trailer"]; ok {
-		res.Trailer = make(http.Header, len(trailers))
-		for _, k := range trailers {
-			for _, k := range strings.Split(k, ",") {
-				k = http.CanonicalHeaderKey(textproto.TrimString(k))
-				if !httpguts.ValidTrailerHeader(k) {
-					// Ignore since forbidden by RFC 7230, section 4.1.2.
-					continue
-				}
-				vv, ok := rw.HeaderMap[k]
-				if !ok {
-					continue
-				}
-				vv2 := make([]string, len(vv))
-				copy(vv2, vv)
-				res.Trailer[k] = vv2
-			}
-		}
-	}
-	for k, vv := range rw.HeaderMap {
-		if !strings.HasPrefix(k, http.TrailerPrefix) {
-			continue
-		}
-		if res.Trailer == nil {
-			res.Trailer = make(http.Header)
-		}
-		for _, v := range vv {
-			res.Trailer.Add(strings.TrimPrefix(k, http.TrailerPrefix), v)
-		}
-	}
 	return res
 }
 
