@@ -311,7 +311,7 @@ func (c *Auto) authRoutine() {
 			// don't send status updates for context errors,
 			// since context cancelation is always on purpose.
 			if ctx.Err() == nil {
-				c.sendStatus("authRoutine-report", err, "", nil)
+				c.sendStatus(ctx, "authRoutine-report", err, "", nil)
 			}
 		}
 
@@ -366,7 +366,7 @@ func (c *Auto) authRoutine() {
 			c.state = StateURLVisitRequired
 			c.mu.Unlock()
 
-			c.sendStatus("authRoutine-url", err, url, nil)
+			c.sendStatus(ctx, "authRoutine-url", err, url, nil)
 			if goal.url == url {
 				// The server sent us the same URL we already tried,
 				// backoff to avoid a busy loop.
@@ -386,7 +386,7 @@ func (c *Auto) authRoutine() {
 		c.state = StateAuthenticated
 		c.mu.Unlock()
 
-		c.sendStatus("authRoutine-success", nil, "", nil)
+		c.sendStatus(ctx, "authRoutine-success", nil, "", nil)
 		c.restartMap()
 		bo.BackOff(ctx, nil)
 	}
@@ -444,7 +444,7 @@ func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	c.mu.Unlock()
 
 	if stillAuthed {
-		c.sendStatus("mapRoutine-got-netmap", nil, "", nm)
+		c.sendStatus(ctx, "mapRoutine-got-netmap", nil, "", nm)
 	}
 	// Reset the backoff timer if we got a netmap.
 	mrs.bo.BackOff(ctx, nil)
@@ -499,7 +499,7 @@ func (c *Auto) mapRoutine() {
 			// don't send status updates for context errors,
 			// since context cancelation is always on purpose.
 			if ctx.Err() == nil {
-				c.sendStatus("mapRoutine1", err, "", nil)
+				c.sendStatus(ctx, "mapRoutine1", err, "", nil)
 			}
 		}
 
@@ -582,7 +582,7 @@ func (c *Auto) SetTKAHead(headHash string) {
 }
 
 // sendStatus can not be called with the c.mu held.
-func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkMap) {
+func (c *Auto) sendStatus(ctx context.Context, who string, err error, url string, nm *netmap.NetworkMap) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -733,7 +733,7 @@ func (c *Auto) Logout(ctx context.Context) error {
 	c.cancelMapCtxLocked()
 	c.mu.Unlock()
 
-	c.sendStatus("authRoutine-wantout", nil, "", nil)
+	c.sendStatus(ctx, "authRoutine-wantout", nil, "", nil)
 	return nil
 }
 
