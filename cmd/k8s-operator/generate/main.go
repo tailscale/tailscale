@@ -69,7 +69,7 @@ func main() {
 	}()
 	log.Print("Templating Helm chart contents")
 	helmTmplCmd := exec.Command("./tool/helm", "template", "operator", "./cmd/k8s-operator/deploy/chart",
-		"--namespace=tailscale")
+		"--namespace=tailscale", "--set=oauth.clientSecret=''")
 	helmTmplCmd.Dir = repoRoot
 	var out bytes.Buffer
 	helmTmplCmd.Stdout = &out
