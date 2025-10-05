@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"reflect"
 	"runtime"
+	"slices"
 
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/feature"
@@ -145,4 +146,16 @@ func (a *Config) Equal(b *Config) bool {
 		return false
 	}
 	return reflect.DeepEqual(a, b)
+}
+
+func (c *Config) Clone() *Config {
+	if c == nil {
+		return nil
+	}
+	c2 := *c
+	c2.LocalAddrs = slices.Clone(c.LocalAddrs)
+	c2.Routes = slices.Clone(c.Routes)
+	c2.LocalRoutes = slices.Clone(c.LocalRoutes)
+	c2.SubnetRoutes = slices.Clone(c.SubnetRoutes)
+	return &c2
 }

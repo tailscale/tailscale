@@ -651,9 +651,35 @@ var _VIPServiceCloneNeedsRegeneration = VIPService(struct {
 	Active bool
 }{})
 
+// Clone makes a deep copy of SSHPolicy.
+// The result aliases no memory with the original.
+func (src *SSHPolicy) Clone() *SSHPolicy {
+	if src == nil {
+		return nil
+	}
+	dst := new(SSHPolicy)
+	*dst = *src
+	if src.Rules != nil {
+		dst.Rules = make([]*SSHRule, len(src.Rules))
+		for i := range dst.Rules {
+			if src.Rules[i] == nil {
+				dst.Rules[i] = nil
+			} else {
+				dst.Rules[i] = src.Rules[i].Clone()
+			}
+		}
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _SSHPolicyCloneNeedsRegeneration = SSHPolicy(struct {
+	Rules []*SSHRule
+}{})
+
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService.
+// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService,SSHPolicy.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *User:
@@ -833,6 +859,15 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **VIPService:
+			*dst = src.Clone()
+			return true
+		}
+	case *SSHPolicy:
+		switch dst := dst.(type) {
+		case *SSHPolicy:
+			*dst = *src.Clone()
+			return true
+		case **SSHPolicy:
 			*dst = src.Clone()
 			return true
 		}

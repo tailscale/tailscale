@@ -244,6 +244,8 @@ func TestMinTailscaledNoCLI(t *testing.T) {
 		"internal/socks",
 		"github.com/tailscale/peercred",
 		"tailscale.com/types/netlogtype",
+		"deephash",
+		"util/hashx",
 	}
 	deptest.DepChecker{
 		GOOS:   "linux",
@@ -268,6 +270,8 @@ func TestMinTailscaledWithCLI(t *testing.T) {
 		"tailscale.com/metrics",
 		"tailscale.com/tsweb/varz",
 		"dirwalk",
+		"deephash",
+		"util/hashx",
 	}
 	deptest.DepChecker{
 		GOOS:   "linux",

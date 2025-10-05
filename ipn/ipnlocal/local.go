@@ -83,8 +83,8 @@ import (
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
+	"tailscale.com/util/checkchange"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/goroutines"
@@ -262,13 +262,13 @@ type LocalBackend struct {
 	// of [LocalBackend]'s own state that is not tied to the node context.
 	currentNodeAtomic atomic.Pointer[nodeBackend]
 
-	conf           *conffile.Config   // latest parsed config, or nil if not in declarative mode
-	pm             *profileManager    // mu guards access
-	filterHash     deephash.Sum       // TODO(nickkhyl): move to nodeBackend
-	httpTestClient *http.Client       // for controlclient. nil by default, used by tests.
-	ccGen          clientGen          // function for producing controlclient; lazily populated
-	sshServer      SSHServer          // or nil, initialized lazily.
-	appConnector   *appc.AppConnector // or nil, initialized when configured.
+	conf             *conffile.Config // latest parsed config, or nil if not in declarative mode
+	pm               *profileManager  // mu guards access
+	lastFilterInputs *filterInputs
+	httpTestClient   *http.Client       // for controlclient. nil by default, used by tests.
+	ccGen            clientGen          // function for producing controlclient; lazily populated
+	sshServer        SSHServer          // or nil, initialized lazily.
+	appConnector     *appc.AppConnector // or nil, initialized when configured.
 	// notifyCancel cancels notifications to the current SetNotifyCallback.
 	notifyCancel   context.CancelFunc
 	cc             controlclient.Client // TODO(nickkhyl): move to nodeBackend
@@ -2626,6 +2626,36 @@ var invalidPacketFilterWarnable = health.Register(&health.Warnable{
 	Text:     health.StaticMessage("The coordination server sent an invalid packet filter permitting traffic to unlocked nodes; rejecting all packets for safety"),
 })
 
+// filterInputs holds the inputs to the packet filter.
+//
+// Any field changes or additions here should be accompanied by a change to
+// [filterInputs.Equal] and [filterInputs.Clone] if necessary. (e.g. non-view
+// and non-value fields)
+type filterInputs struct {
+	HaveNetmap  bool
+	Addrs       views.Slice[netip.Prefix]
+	FilterMatch views.Slice[filter.Match]
+	LocalNets   views.Slice[netipx.IPRange]
+	LogNets     views.Slice[netipx.IPRange]
+	ShieldsUp   bool
+	SSHPolicy   tailcfg.SSHPolicyView
+}
+
+func (fi *filterInputs) Equal(o *filterInputs) bool {
+	if fi == nil || o == nil {
+		return fi == o
+	}
+	return reflect.DeepEqual(fi, o)
+}
+
+func (fi *filterInputs) Clone() *filterInputs {
+	if fi == nil {
+		return nil
+	}
+	v := *fi // all fields are shallow copyable
+	return &v
+}
+
 // updateFilterLocked updates the packet filter in wgengine based on the
 // given netMap and user preferences.
 //
@@ -2722,20 +2752,20 @@ func (b *LocalBackend) updateFilterLocked(prefs ipn.PrefsView) {
 	}
 	localNets, _ := localNetsB.IPSet()
 	logNets, _ := logNetsB.IPSet()
-	var sshPol tailcfg.SSHPolicy
-	if haveNetmap && netMap.SSHPolicy != nil {
-		sshPol = *netMap.SSHPolicy
+	var sshPol tailcfg.SSHPolicyView
+	if buildfeatures.HasSSH && haveNetmap && netMap.SSHPolicy != nil {
+		sshPol = netMap.SSHPolicy.View()
 	}
 
-	changed := deephash.Update(&b.filterHash, &struct {
-		HaveNetmap  bool
-		Addrs       views.Slice[netip.Prefix]
-		FilterMatch []filter.Match
-		LocalNets   []netipx.IPRange
-		LogNets     []netipx.IPRange
-		ShieldsUp   bool
-		SSHPolicy   tailcfg.SSHPolicy
-	}{haveNetmap, addrs, packetFilter, localNets.Ranges(), logNets.Ranges(), shieldsUp, sshPol})
+	changed := checkchange.Update(&b.lastFilterInputs, &filterInputs{
+		HaveNetmap:  haveNetmap,
+		Addrs:       addrs,
+		FilterMatch: views.SliceOf(packetFilter),
+		LocalNets:   views.SliceOf(localNets.Ranges()),
+		LogNets:     views.SliceOf(logNets.Ranges()),
+		ShieldsUp:   shieldsUp,
+		SSHPolicy:   sshPol,
+	})
 	if !changed {
 		return
 	}
