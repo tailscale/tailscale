@@ -73,10 +73,16 @@ func info() *tailcfg.TPMInfo {
 
 	tpm, err := open()
 	if err != nil {
-		logf("error opening: %v", err)
+		if !os.IsNotExist(err) || verboseTPM() {
+			// Only log if it's an interesting error, not just "no TPM",
+			// as is very common, especially in VMs.
+			logf("error opening: %v", err)
+		}
 		return nil
 	}
-	logf("successfully opened")
+	if verboseTPM() {
+		logf("successfully opened")
+	}
 	defer tpm.Close()
 
 	info := new(tailcfg.TPMInfo)
