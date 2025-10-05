@@ -758,7 +758,10 @@ func (r *relayManager) handleNewServerEndpointRunLoop(newServerEndpoint newRelay
 		ctx:          ctx,
 		cancel:       cancel,
 	}
-	if byServerDisco == nil {
+	// We must look up byServerDisco again. The previous value may have been
+	// deleted from the outer map when cleaning up duplicate work.
+	byServerDisco, ok = r.handshakeWorkByServerDiscoByEndpoint[newServerEndpoint.wlb.ep]
+	if !ok {
 		byServerDisco = make(map[key.DiscoPublic]*relayHandshakeWork)
 		r.handshakeWorkByServerDiscoByEndpoint[newServerEndpoint.wlb.ep] = byServerDisco
 	}

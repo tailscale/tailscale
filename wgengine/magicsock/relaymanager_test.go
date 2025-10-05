@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"tailscale.com/disco"
+	udprelay "tailscale.com/net/udprelay/endpoint"
 	"tailscale.com/types/key"
 	"tailscale.com/util/set"
 )
@@ -76,5 +77,43 @@ func TestRelayManagerGetServers(t *testing.T) {
 	got := rm.getServers()
 	if !servers.Equal(got) {
 		t.Errorf("got %v != want %v", got, servers)
+	}
+}
+
+// Test for http://go/corp/32978
+func TestRelayManager_handleNewServerEndpointRunLoop(t *testing.T) {
+	rm := relayManager{}
+	rm.init()
+	<-rm.runLoopStoppedCh // prevent runLoop() from starting, we will inject/handle events in the test
+	ep := &endpoint{}
+	conn := newConn(t.Logf)
+	ep.c = conn
+	serverDisco := key.NewDisco().Public()
+	rm.handleNewServerEndpointRunLoop(newRelayServerEndpointEvent{
+		wlb: endpointWithLastBest{
+			ep: ep,
+		},
+		se: udprelay.ServerEndpoint{
+			ServerDisco: serverDisco,
+			LamportID:   1,
+			VNI:         1,
+		},
+	})
+	rm.handleNewServerEndpointRunLoop(newRelayServerEndpointEvent{
+		wlb: endpointWithLastBest{
+			ep: ep,
+		},
+		se: udprelay.ServerEndpoint{
+			ServerDisco: serverDisco,
+			LamportID:   2,
+			VNI:         2,
+		},
+	})
+	rm.stopWorkRunLoop(ep)
+	if len(rm.handshakeWorkByServerDiscoByEndpoint) != 0 ||
+		len(rm.handshakeWorkByServerDiscoVNI) != 0 ||
+		len(rm.handshakeWorkAwaitingPong) != 0 ||
+		len(rm.addrPortVNIToHandshakeWork) != 0 {
+		t.Fatal("stranded relayHandshakeWork state")
 	}
 }
