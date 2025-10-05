@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"fmt"
 	"net/netip"
+	"reflect"
 	"slices"
 	"sort"
 
@@ -187,4 +188,24 @@ func sameResolverNames(a, b []*dnstype.Resolver) bool {
 		}
 	}
 	return true
+}
+
+func (c *Config) Clone() *Config {
+	if c == nil {
+		return nil
+	}
+	return &Config{
+		DefaultResolvers: slices.Clone(c.DefaultResolvers),
+		Routes:           make(map[dnsname.FQDN][]*dnstype.Resolver, len(c.Routes)),
+		SearchDomains:    slices.Clone(c.SearchDomains),
+		Hosts:            make(map[dnsname.FQDN][]netip.Addr, len(c.Hosts)),
+		OnlyIPv6:         c.OnlyIPv6,
+	}
+}
+
+func (c *Config) Equal(o *Config) bool {
+	if c == nil || o == nil {
+		return c == o
+	}
+	return reflect.DeepEqual(c, o)
 }

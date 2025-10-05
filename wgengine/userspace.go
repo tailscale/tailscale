@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/netip"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -45,8 +47,8 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
+	"tailscale.com/util/checkchange"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/deephash"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
@@ -128,9 +130,9 @@ type userspaceEngine struct {
 	wgLock              sync.Mutex // serializes all wgdev operations; see lock order comment below
 	lastCfgFull         wgcfg.Config
 	lastNMinPeers       int
-	lastRouterSig       deephash.Sum // of router.Config
-	lastEngineSigFull   deephash.Sum // of full wireguard config
-	lastEngineSigTrim   deephash.Sum // of trimmed wireguard config
+	lastRouter          *router.Config
+	lastEngineFull      *wgcfg.Config // of full wireguard config, not trimmed
+	lastEngineInputs    *maybeReconfigInputs
 	lastDNSConfig       *dns.Config
 	lastIsSubnetRouter  bool // was the node a primary subnet router in the last run.
 	recvActivityAt      map[key.NodePublic]mono.Time
@@ -725,6 +727,29 @@ func (e *userspaceEngine) isActiveSinceLocked(nk key.NodePublic, ip netip.Addr, 
 	return timePtr.LoadAtomic().After(t)
 }
 
+// maybeReconfigInputs holds the inputs to the maybeReconfigWireguardLocked
+// function. If these things don't change between calls, there's nothing to do.
+type maybeReconfigInputs struct {
+	WGConfig     *wgcfg.Config
+	TrimmedNodes map[key.NodePublic]bool
+	TrackNodes   views.Slice[key.NodePublic]
+	TrackIPs     views.Slice[netip.Addr]
+}
+
+func (i *maybeReconfigInputs) Equal(o *maybeReconfigInputs) bool {
+	return reflect.DeepEqual(i, o)
+}
+
+func (i *maybeReconfigInputs) Clone() *maybeReconfigInputs {
+	if i == nil {
+		return nil
+	}
+	v := *i
+	v.WGConfig = i.WGConfig.Clone()
+	v.TrimmedNodes = maps.Clone(i.TrimmedNodes)
+	return &v
+}
+
 // discoChanged are the set of peers whose disco keys have changed, implying they've restarted.
 // If a peer is in this set and was previously in the live wireguard config,
 // it needs to be first removed and then re-added to flush out its wireguard session key.
@@ -803,12 +828,12 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 	}
 	e.lastNMinPeers = len(min.Peers)
 
-	if changed := deephash.Update(&e.lastEngineSigTrim, &struct {
-		WGConfig     *wgcfg.Config
-		TrimmedNodes map[key.NodePublic]bool
-		TrackNodes   []key.NodePublic
-		TrackIPs     []netip.Addr
-	}{&min, e.trimmedNodes, trackNodes, trackIPs}); !changed {
+	if changed := checkchange.Update(&e.lastEngineInputs, &maybeReconfigInputs{
+		WGConfig:     &min,
+		TrimmedNodes: e.trimmedNodes,
+		TrackNodes:   views.SliceOf(trackNodes),
+		TrackIPs:     views.SliceOf(trackIPs),
+	}); !changed {
 		return nil
 	}
 
@@ -937,7 +962,6 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 	e.tundev.SetWGConfig(cfg)
-	e.lastDNSConfig = dnsCfg
 
 	peerSet := make(set.Set[key.NodePublic], len(cfg.Peers))
 	e.mu.Lock()
@@ -965,14 +989,12 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	}
 	isSubnetRouterChanged := isSubnetRouter != e.lastIsSubnetRouter
 
-	engineChanged := deephash.Update(&e.lastEngineSigFull, cfg)
-	routerChanged := deephash.Update(&e.lastRouterSig, &struct {
-		RouterConfig *router.Config
-		DNSConfig    *dns.Config
-	}{routerCfg, dnsCfg})
+	engineChanged := checkchange.Update(&e.lastEngineFull, cfg)
+	dnsChanged := checkchange.Update(&e.lastDNSConfig, dnsCfg)
+	routerChanged := checkchange.Update(&e.lastRouter, routerCfg)
 	listenPortChanged := listenPort != e.magicConn.LocalPort()
 	peerMTUChanged := peerMTUEnable != e.magicConn.PeerMTUEnabled()
-	if !engineChanged && !routerChanged && !listenPortChanged && !isSubnetRouterChanged && !peerMTUChanged {
+	if !engineChanged && !routerChanged && !dnsChanged && !listenPortChanged && !isSubnetRouterChanged && !peerMTUChanged {
 		return ErrNoChanges
 	}
 	newLogIDs := cfg.NetworkLogging

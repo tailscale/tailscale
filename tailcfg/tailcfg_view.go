@@ -21,7 +21,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService,SSHPolicy
 
 // View returns a read-only view of User.
 func (p *User) View() UserView {
@@ -2603,4 +2603,95 @@ var _VIPServiceViewNeedsRegeneration = VIPService(struct {
 	Name   ServiceName
 	Ports  []ProtoPortRange
 	Active bool
+}{})
+
+// View returns a read-only view of SSHPolicy.
+func (p *SSHPolicy) View() SSHPolicyView {
+	return SSHPolicyView{ж: p}
+}
+
+// SSHPolicyView provides a read-only view over SSHPolicy.
+//
+// Its methods should only be called if `Valid()` returns true.
+type SSHPolicyView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *SSHPolicy
+}
+
+// Valid reports whether v's underlying value is non-nil.
+func (v SSHPolicyView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v SSHPolicyView) AsStruct() *SSHPolicy {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v SSHPolicyView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v SSHPolicyView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
+func (v *SSHPolicyView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x SSHPolicy
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *SSHPolicyView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x SSHPolicy
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// Rules are the rules to process for an incoming SSH connection. The first
+// matching rule takes its action and stops processing further rules.
+//
+// When an incoming connection first starts, all rules are evaluated in
+// "none" auth mode, where the client hasn't even been asked to send a
+// public key. All SSHRule.Principals requiring a public key won't match. If
+// a rule matches on the first pass and its Action is reject, the
+// authentication fails with that action's rejection message, if any.
+//
+// If the first pass rule evaluation matches nothing without matching an
+// Action with Reject set, the rules are considered to see whether public
+// keys might still result in a match. If not, "none" auth is terminated
+// before proceeding to public key mode. If so, the client is asked to try
+// public key authentication and the rules are evaluated again for each of
+// the client's present keys.
+func (v SSHPolicyView) Rules() views.SliceView[*SSHRule, SSHRuleView] {
+	return views.SliceOfViews[*SSHRule, SSHRuleView](v.ж.Rules)
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _SSHPolicyViewNeedsRegeneration = SSHPolicy(struct {
+	Rules []*SSHRule
 }{})
