@@ -164,22 +164,24 @@ func main() {
 	runReconcilers(rOpts)
 }
 
-// initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
-// CLIENT_ID_FILE and CLIENT_SECRET_FILE environment variables to authenticate
-// with Tailscale.
+// initTSNet initializes the tsnet.Server and logs in to Tailscale. If CLIENT_ID
+// is set, it authenticates to the Tailscale API using the federated OIDC workload
+// identity flow. Otherwise, it uses the CLIENT_ID_FILE and CLIENT_SECRET_FILE
+// environment variables to authenticate with static credentials.
 func initTSNet(zlog *zap.SugaredLogger, loginServer string) (*tsnet.Server, tsClient) {
 	var (
-		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
-		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
+		clientID         = defaultEnv("CLIENT_ID", "")          // Used for workload identity federation.
+		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")     // Used for static client credentials.
+		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "") // Used for static client credentials.
 		hostname         = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
 		kubeSecret       = defaultEnv("OPERATOR_SECRET", "")
 		operatorTags     = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
 	)
 	startlog := zlog.Named("startup")
-	if clientIDPath == "" || clientSecretPath == "" {
-		startlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set")
+	if clientID == "" && (clientIDPath == "" || clientSecretPath == "") {
+		startlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set") // TODO(tomhjp): error message can mention WIF once it's publicly available.
 	}
-	tsc, err := newTSClient(context.Background(), clientIDPath, clientSecretPath, loginServer)
+	tsc, err := newTSClient(zlog.Named("ts-api-client"), clientID, clientIDPath, clientSecretPath, loginServer)
 	if err != nil {
 		startlog.Fatalf("error creating Tailscale client: %v", err)
 	}
