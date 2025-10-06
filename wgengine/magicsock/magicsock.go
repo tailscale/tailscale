@@ -645,7 +645,11 @@ func (c *Conn) consumeEventbusTopics(cli *eventbus.Client) func(*eventbus.Client
 	nodeViewsSub := eventbus.Subscribe[NodeViewsUpdate](cli)
 	nodeMutsSub := eventbus.Subscribe[NodeMutationsUpdate](cli)
 	syncSub := eventbus.Subscribe[syncPoint](cli)
-	allocRelayEndpointSub := eventbus.Subscribe[UDPRelayAllocResp](cli)
+
+	var relayCh <-chan UDPRelayAllocResp
+	if buildfeatures.HasRelayServer {
+		relayCh = eventbus.Subscribe[UDPRelayAllocResp](cli).Events()
+	}
 	return func(cli *eventbus.Client) {
 		for {
 			select {
@@ -662,8 +666,10 @@ func (c *Conn) consumeEventbusTopics(cli *eventbus.Client) func(*eventbus.Client
 			case syncPoint := <-syncSub.Events():
 				c.dlogf("magicsock: received sync point after reconfig")
 				syncPoint.Signal()
-			case allocResp := <-allocRelayEndpointSub.Events():
-				c.onUDPRelayAllocResp(allocResp)
+			case allocResp := <-relayCh:
+				if buildfeatures.HasRelayServer {
+					c.onUDPRelayAllocResp(allocResp)
+				}
 			}
 		}
 	}
@@ -1948,11 +1954,13 @@ func (c *Conn) sendDiscoMessage(dst epAddr, dstKey key.NodePublic, dstDisco key.
 	var di *discoInfo
 	switch {
 	case isRelayHandshakeMsg:
-		var ok bool
-		di, ok = c.relayManager.discoInfo(dstDisco)
-		if !ok {
-			c.mu.Unlock()
-			return false, errors.New("unknown relay server")
+		if buildfeatures.HasRelayServer {
+			var ok bool
+			di, ok = c.relayManager.discoInfo(dstDisco)
+			if !ok {
+				c.mu.Unlock()
+				return false, errors.New("unknown relay server")
+			}
 		}
 	case c.peerMap.knownPeerDiscoKey(dstDisco):
 		di = c.discoInfoForKnownPeerLocked(dstDisco)
@@ -2172,13 +2180,15 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 	var di *discoInfo
 	switch {
 	case shouldBeRelayHandshakeMsg:
-		var ok bool
-		di, ok = c.relayManager.discoInfo(sender)
-		if !ok {
-			if debugDisco() {
-				c.logf("magicsock: disco: ignoring disco-looking relay handshake frame, no active handshakes with key %v over %v", sender.ShortString(), src)
+		if buildfeatures.HasRelayServer {
+			var ok bool
+			di, ok = c.relayManager.discoInfo(sender)
+			if !ok {
+				if debugDisco() {
+					c.logf("magicsock: disco: ignoring disco-looking relay handshake frame, no active handshakes with key %v over %v", sender.ShortString(), src)
+				}
+				return
 			}
-			return
 		}
 	case c.peerMap.knownPeerDiscoKey(sender):
 		di = c.discoInfoForKnownPeerLocked(sender)
@@ -2897,6 +2907,9 @@ func (c *Conn) onFilterUpdate(f FilterUpdate) {
 //  2. Moving this work upstream into [nodeBackend] or similar, and publishing
 //     the computed result over the eventbus instead.
 func (c *Conn) updateRelayServersSet(filt *filter.Filter, self tailcfg.NodeView, peers views.Slice[tailcfg.NodeView]) {
+	if !buildfeatures.HasRelayServer {
+		return
+	}
 	relayServers := make(set.Set[candidatePeerRelay])
 	nodes := append(peers.AsSlice(), self)
 	for _, maybeCandidate := range nodes {
