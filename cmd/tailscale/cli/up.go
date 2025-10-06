@@ -393,10 +393,26 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 
 	tagsChanged := !reflect.DeepEqual(curPrefs.AdvertiseTags, prefs.AdvertiseTags)
 
-	simpleUp = env.flagSet.NFlag() == 0 &&
+	// We want to know if the user ran:
+	//
+	//	  - a simple `tailscale up` with no flags, and the default control server, or
+	//	  - `tailscale up --login-server=<…>` with no other flags, and they didn't change
+	//		their control server
+	//
+	flagIsSet := map[string]bool{}
+	env.flagSet.Visit(func(f *flag.Flag) {
+		flagIsSet[f.Name] = true
+	})
+
+	hasNoFlags := env.flagSet.NFlag() == 0
+	hasOnlyLoginServerFlag := (env.flagSet.NFlag() == 1 && flagIsSet["login-server"])
+
+	simpleUp = !controlURLChanged &&
+		(hasNoFlags || hasOnlyLoginServerFlag) &&
 		curPrefs.Persist != nil &&
 		curPrefs.Persist.UserProfile.LoginName != "" &&
-		env.backendState != ipn.NeedsLogin.String()
+		env.backendState != ipn.NeedsLogin.String() &&
+		env.backendState != ipn.NeedsMachineAuth.String()
 
 	justEdit := env.backendState == ipn.Running.String() &&
 		!env.upArgs.forceReauth &&

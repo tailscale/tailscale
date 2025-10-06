@@ -606,6 +606,87 @@ func TestOneNodeUpInterruptedAuth(t *testing.T) {
 	n.AwaitRunning()
 }
 
+// If we interrupt `tailscale up` and login successfully, but don't
+// complete the machine auth, we should see the machine auth URL
+// when we run `tailscale up` a second time.
+func TestOneNodeUpInterruptedMachineAuth(t *testing.T) {
+	tstest.Shard(t)
+	tstest.Parallel(t)
+
+	env := NewTestEnv(t, ConfigureControl(
+		func(control *testcontrol.Server) {
+			control.RequireAuth = true
+			control.RequireMachineAuth = true
+			control.AllNodesSameUser = true
+		},
+	))
+
+	n := NewTestNode(t, env)
+	d := n.StartDaemon()
+	defer d.MustCleanShutdown(t)
+
+	cmdArgs := []string{"up", "--login-server=" + env.ControlURL()}
+
+	// The first time we run the command, we:
+	//
+	//    * wait for an auth URL to be printed
+	//    * click it to complete the login process
+	//    * wait for a machine auth URL to be printed
+	//    * cancel the command, equivalent to ^C
+	//
+	// At this point, we've logged in to control, but our node isn't
+	// approved to connect to the tailnet.
+	t.Logf("Running command for the first time: %s", strings.Join(cmdArgs, " "))
+	cmd1 := n.Tailscale(cmdArgs...)
+
+	handler1 := &authURLParserWriter{t: t,
+		authURLFn: completeLogin(t, env.Control, &atomic.Int32{}),
+		deviceApprovalURLFn: func(urlStr string) error {
+			t.Logf("saw device approval URL %q", urlStr)
+			cmd1.Process.Kill()
+			return nil
+		},
+	}
+	cmd1.Stdout = handler1
+	cmd1.Stderr = cmd1.Stdout
+
+	if err := cmd1.Run(); !isNonZeroExitCode(err) {
+		t.Fatalf("Command did not fail with non-zero exit code: %q", err)
+	}
+
+	// Because we logged in but we aren't in the machine auth state, we should
+	// be in state NeedsMachineAuth.
+	n.AwaitBackendState("NeedsMachineAuth")
+
+	// The second time we run the command, we expect not to get an auth URL
+	// and go straight to the machine auth URL.
+	t.Logf("Running command for the second time: %s", strings.Join(cmdArgs, " "))
+
+	var machineAuthURLCount atomic.Int32
+
+	cmd2 := n.Tailscale(cmdArgs...)
+	cmd2.Stdout = &authURLParserWriter{t: t,
+		authURLFn: func(urlStr string) error {
+			t.Fatalf("got unexpected auth URL: %q", urlStr)
+			cmd2.Process.Kill()
+			return nil
+		},
+		deviceApprovalURLFn: completeDeviceApproval(t, n, &machineAuthURLCount),
+	}
+	cmd2.Stderr = cmd2.Stdout
+
+	if err := cmd2.Run(); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+
+	wantMachineAuthURLCount := int32(1)
+	if n := machineAuthURLCount.Load(); n != wantMachineAuthURLCount {
+		t.Errorf("Machine auth URLs completed = %d; want %d", n, wantMachineAuthURLCount)
+	}
+
+	n.AwaitRunning()
+}
+
 func TestConfigFileAuthKey(t *testing.T) {
 	tstest.SkipOnUnshardedCI(t)
 	tstest.Shard(t)
