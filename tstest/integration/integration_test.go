@@ -1644,6 +1644,7 @@ func TestEncryptStateMigration(t *testing.T) {
 // relay between all 3 nodes, and "tailscale debug peer-relay-sessions" returns
 // expected values.
 func TestPeerRelayPing(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/17251")
 	tstest.Shard(t)
 	tstest.Parallel(t)
 
