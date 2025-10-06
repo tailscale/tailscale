@@ -268,7 +268,65 @@ func TestStateSavedOnStart(t *testing.T) {
 	d1.MustCleanShutdown(t)
 }
 
+// This handler receives auth URLs, and logs into control.
+//
+// It counts how many URLs it sees, and will fail the test if it
+// sees multiple login URLs.
+func completeLogin(t *testing.T, control *testcontrol.Server, counter *atomic.Int32) func(string) error {
+	return func(urlStr string) error {
+		t.Logf("saw auth URL %q", urlStr)
+		if control.CompleteAuth(urlStr) {
+			if counter.Add(1) > 1 {
+				err := errors.New("completed multiple auth URLs")
+				t.Error(err)
+				return err
+			}
+			t.Logf("completed login to %s", urlStr)
+			return nil
+		} else {
+			err := fmt.Errorf("failed to complete initial login to %q", urlStr)
+			t.Fatal(err)
+			return err
+		}
+	}
+}
+
+// This handler receives device approval URLs, and approves the device.
+//
+// It counts how many URLs it sees, and will fail the test if it
+// sees multiple device approval URLs.
+func completeDeviceApproval(t *testing.T, node *TestNode, counter *atomic.Int32) func(string) error {
+	return func(urlStr string) error {
+		control := node.env.Control
+		nodeKey := node.MustStatus().Self.PublicKey
+		t.Logf("saw device approval URL %q", urlStr)
+		if control.CompleteDeviceApproval(&nodeKey) {
+			if counter.Add(1) > 1 {
+				err := errors.New("completed multiple device approval URLs")
+				t.Error(err)
+				return err
+			}
+			t.Log("completed device approval")
+			return nil
+		} else {
+			err := errors.New("failed to complete device approval")
+			t.Fatal(err)
+			return err
+		}
+	}
+}
+
 func TestOneNodeUpAuth(t *testing.T) {
+	type step struct {
+		args []string
+		//
+		// Do we expect to log in again with a new /auth/ URL?
+		wantAuthURL bool
+		//
+		// Do we expect to need a device approval URL?
+		wantDeviceApprovalURL bool
+	}
+
 	for _, tt := range []struct {
 		name string
 		args []string
@@ -276,65 +334,112 @@ func TestOneNodeUpAuth(t *testing.T) {
 		// What auth key should we use for control?
 		authKey string
 		//
-		// Is tailscaled already logged in before we run this `up` command?
-		alreadyLoggedIn bool
+		// Do we require device approval in the tailnet?
+		requireDeviceApproval bool
 		//
-		// Do we need to log in again with a new /auth/ URL?
-		needsNewAuthURL bool
+		// What CLI commands should we run in this test?
+		steps []step
 	}{
 		{
-			name:            "up",
-			args:            []string{"up"},
-			needsNewAuthURL: true,
+			name: "up",
+			steps: []step{
+				{args: []string{"up"}, wantAuthURL: true},
+			},
 		},
 		{
-			name:            "up-with-force-reauth",
-			args:            []string{"up", "--force-reauth"},
-			needsNewAuthURL: true,
+			name: "up-with-machine-auth",
+			steps: []step{
+				{args: []string{"up"}, wantAuthURL: true, wantDeviceApprovalURL: true},
+			},
+			requireDeviceApproval: true,
 		},
 		{
-			name:            "up-with-auth-key",
-			args:            []string{"up", "--auth-key=opensesame"},
-			authKey:         "opensesame",
-			needsNewAuthURL: false,
+			name: "up-with-force-reauth",
+			steps: []step{
+				{args: []string{"up", "--force-reauth"}, wantAuthURL: true},
+			},
 		},
 		{
-			name:            "up-with-force-reauth-and-auth-key",
-			args:            []string{"up", "--force-reauth", "--auth-key=opensesame"},
-			authKey:         "opensesame",
-			needsNewAuthURL: false,
+			name:    "up-with-auth-key",
+			authKey: "opensesame",
+			steps: []step{
+				{args: []string{"up", "--auth-key=opensesame"}},
+			},
 		},
 		{
-			name:            "up-after-login",
-			args:            []string{"up"},
-			alreadyLoggedIn: true,
-			needsNewAuthURL: false,
+			name:    "up-with-auth-key-with-machine-auth",
+			authKey: "opensesame",
+			steps: []step{
+				{
+					args:                  []string{"up", "--auth-key=opensesame"},
+					wantAuthURL:           false,
+					wantDeviceApprovalURL: true,
+				},
+			},
+			requireDeviceApproval: true,
 		},
 		{
-			name:            "up-with-force-reauth-after-login",
-			args:            []string{"up", "--force-reauth"},
-			alreadyLoggedIn: true,
-			needsNewAuthURL: true,
+			name:    "up-with-force-reauth-and-auth-key",
+			authKey: "opensesame",
+			steps: []step{
+				{args: []string{"up", "--force-reauth", "--auth-key=opensesame"}},
+			},
 		},
 		{
-			name:            "up-with-auth-key-after-login",
-			args:            []string{"up", "--auth-key=opensesame"},
-			authKey:         "opensesame",
-			alreadyLoggedIn: true,
-			needsNewAuthURL: false,
+			name: "up-after-login",
+			steps: []step{
+				{args: []string{"up"}, wantAuthURL: true},
+				{args: []string{"up"}, wantAuthURL: false},
+			},
 		},
 		{
-			name:            "up-with-force-reauth-and-auth-key-after-login",
-			args:            []string{"up", "--force-reauth", "--auth-key=opensesame"},
-			authKey:         "opensesame",
-			alreadyLoggedIn: true,
-			needsNewAuthURL: false,
+			name: "up-after-login-with-machine-approval",
+			steps: []step{
+				{args: []string{"up"}, wantAuthURL: true, wantDeviceApprovalURL: true},
+				{args: []string{"up"}, wantAuthURL: false, wantDeviceApprovalURL: false},
+			},
+			requireDeviceApproval: true,
+		},
+		{
+			name: "up-with-force-reauth-after-login",
+			steps: []step{
+				{args: []string{"up"}, wantAuthURL: true},
+				{args: []string{"up", "--force-reauth"}, wantAuthURL: true},
+			},
+		},
+		{
+			name: "up-with-force-reauth-after-login-with-machine-approval",
+			steps: []step{
+				{args: []string{"up"}, wantAuthURL: true, wantDeviceApprovalURL: true},
+				{args: []string{"up", "--force-reauth"}, wantAuthURL: true, wantDeviceApprovalURL: false},
+			},
+			requireDeviceApproval: true,
+		},
+		{
+			name:    "up-with-auth-key-after-login",
+			authKey: "opensesame",
+			steps: []step{
+				{args: []string{"up", "--auth-key=opensesame"}},
+				{args: []string{"up", "--auth-key=opensesame"}},
+			},
+		},
+		{
+			name:    "up-with-force-reauth-and-auth-key-after-login",
+			authKey: "opensesame",
+			steps: []step{
+				{args: []string{"up", "--auth-key=opensesame"}},
+				{args: []string{"up", "--force-reauth", "--auth-key=opensesame"}},
+			},
 		},
 	} {
 		tstest.Shard(t)
 
 		for _, useSeamlessKeyRenewal := range []bool{true, false} {
-			t.Run(fmt.Sprintf("%s-seamless-%t", tt.name, useSeamlessKeyRenewal), func(t *testing.T) {
+			name := tt.name
+			if useSeamlessKeyRenewal {
+				name += "-with-seamless"
+			}
+			t.Run(name, func(t *testing.T) {
 				tstest.Parallel(t)
 
 				env := NewTestEnv(t, ConfigureControl(
@@ -343,6 +448,10 @@ func TestOneNodeUpAuth(t *testing.T) {
 							control.RequireAuthKey = tt.authKey
 						} else {
 							control.RequireAuth = true
+						}
+
+						if tt.requireDeviceApproval {
+							control.RequireMachineAuth = true
 						}
 
 						control.AllNodesSameUser = true
@@ -359,69 +468,45 @@ func TestOneNodeUpAuth(t *testing.T) {
 				d1 := n1.StartDaemon()
 				defer d1.MustCleanShutdown(t)
 
-				cmdArgs := append(tt.args, "--login-server="+env.ControlURL())
+				for i, step := range tt.steps {
+					t.Logf("Running step %d", i)
+					cmdArgs := append(step.args, "--login-server="+env.ControlURL())
 
-				// This handler looks for /auth/ URLs in the stdout from "tailscale up",
-				// and if it sees them, completes the auth process.
-				//
-				// It counts how many auth URLs it's seen.
-				var authCountAtomic atomic.Int32
-				authURLHandler := &authURLParserWriter{fn: func(urlStr string) error {
-					t.Logf("saw auth URL %q", urlStr)
-					if env.Control.CompleteAuth(urlStr) {
-						if authCountAtomic.Add(1) > 1 {
-							err := errors.New("completed multiple auth URLs")
-							t.Error(err)
-							return err
-						}
-						t.Logf("completed login to %s", urlStr)
-						return nil
-					} else {
-						err := fmt.Errorf("Failed to complete initial login to %q", urlStr)
-						t.Fatal(err)
-						return err
+					t.Logf("Running command: %s", strings.Join(cmdArgs, " "))
+
+					var authURLCount atomic.Int32
+					var deviceApprovalURLCount atomic.Int32
+
+					handler := &authURLParserWriter{
+						authURLFn:           completeLogin(t, env.Control, &authURLCount),
+						deviceApprovalURLFn: completeDeviceApproval(t, n1, &deviceApprovalURLCount),
 					}
-				}}
 
-				// If we should be logged in at the start of the test case, go ahead
-				// and run the login command.
-				//
-				// Otherwise, just wait for tailscaled to be listening.
-				if tt.alreadyLoggedIn {
-					t.Logf("Running initial login: %s", strings.Join(cmdArgs, " "))
 					cmd := n1.Tailscale(cmdArgs...)
-					cmd.Stdout = authURLHandler
+					cmd.Stdout = handler
+					cmd.Stdout = handler
 					cmd.Stderr = cmd.Stdout
 					if err := cmd.Run(); err != nil {
 						t.Fatalf("up: %v", err)
 					}
-					authCountAtomic.Store(0)
+
 					n1.AwaitRunning()
-				} else {
-					n1.AwaitListening()
-				}
 
-				st := n1.MustStatus()
-				t.Logf("Status: %s", st.BackendState)
+					var wantAuthURLCount int32
+					if step.wantAuthURL {
+						wantAuthURLCount = 1
+					}
+					if n := authURLCount.Load(); n != wantAuthURLCount {
+						t.Errorf("Auth URLs completed = %d; want %d", n, wantAuthURLCount)
+					}
 
-				t.Logf("Running command: %s", strings.Join(cmdArgs, " "))
-				cmd := n1.Tailscale(cmdArgs...)
-				cmd.Stdout = authURLHandler
-				cmd.Stderr = cmd.Stdout
-
-				if err := cmd.Run(); err != nil {
-					t.Fatalf("up: %v", err)
-				}
-				t.Logf("Got IP: %v", n1.AwaitIP4())
-
-				n1.AwaitRunning()
-
-				var expectedAuthUrls int32
-				if tt.needsNewAuthURL {
-					expectedAuthUrls = 1
-				}
-				if n := authCountAtomic.Load(); n != expectedAuthUrls {
-					t.Errorf("Auth URLs completed = %d; want %d", n, expectedAuthUrls)
+					var wantDeviceApprovalURLCount int32
+					if step.wantDeviceApprovalURL {
+						wantDeviceApprovalURLCount = 1
+					}
+					if n := deviceApprovalURLCount.Load(); n != wantDeviceApprovalURLCount {
+						t.Errorf("Device approval URLs completed = %d; want %d", n, wantDeviceApprovalURLCount)
+					}
 				}
 			})
 		}
