@@ -1099,20 +1099,40 @@ func (tt *trafficTrap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 type authURLParserWriter struct {
 	buf bytes.Buffer
-	fn  func(urlStr string) error
+	// Handle login URLs, and count how many times they were seen
+	authURLFn func(urlStr string) error
+	// Handle machine approval URLs, and count how many times they were seen.
+	deviceApprovalURLFn func(urlStr string) error
 }
 
+// Note: auth URLs from testcontrol look slightly different to real auth URLs,
+// e.g. http://127.0.0.1:60456/auth/96af2ff7e04ae1499a9a
 var authURLRx = regexp.MustCompile(`(https?://\S+/auth/\S+)`)
+
+// Looks for any device approval URL, which is any URL ending with `/admin`
+// e.g. http://127.0.0.1:60456/admin
+var deviceApprovalURLRx = regexp.MustCompile(`(https?://\S+/admin)[^\S]`)
 
 func (w *authURLParserWriter) Write(p []byte) (n int, err error) {
 	n, err = w.buf.Write(p)
+
+	defer w.buf.Reset() // so it's not matched again
+
 	m := authURLRx.FindSubmatch(w.buf.Bytes())
 	if m != nil {
 		urlStr := string(m[1])
-		w.buf.Reset() // so it's not matched again
-		if err := w.fn(urlStr); err != nil {
+		if err := w.authURLFn(urlStr); err != nil {
 			return 0, err
 		}
 	}
+
+	m = deviceApprovalURLRx.FindSubmatch(w.buf.Bytes())
+	if m != nil && w.deviceApprovalURLFn != nil {
+		urlStr := string(m[1])
+		if err := w.deviceApprovalURLFn(urlStr); err != nil {
+			return 0, err
+		}
+	}
+
 	return n, err
 }
