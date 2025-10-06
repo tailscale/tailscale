@@ -1098,6 +1098,7 @@ func (tt *trafficTrap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type authURLParserWriter struct {
+	t   *testing.T
 	buf bytes.Buffer
 	// Handle login URLs, and count how many times they were seen
 	authURLFn func(urlStr string) error
@@ -1114,6 +1115,8 @@ var authURLRx = regexp.MustCompile(`(https?://\S+/auth/\S+)`)
 var deviceApprovalURLRx = regexp.MustCompile(`(https?://\S+/admin)[^\S]`)
 
 func (w *authURLParserWriter) Write(p []byte) (n int, err error) {
+	w.t.Helper()
+	w.t.Logf("received bytes: %s", string(p))
 	n, err = w.buf.Write(p)
 
 	defer w.buf.Reset() // so it's not matched again
