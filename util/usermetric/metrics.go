@@ -10,15 +10,15 @@ package usermetric
 import (
 	"sync"
 
-	"tailscale.com/metrics"
+	"tailscale.com/feature/buildfeatures"
 )
 
 // Metrics contains user-facing metrics that are used by multiple packages.
 type Metrics struct {
 	initOnce sync.Once
 
-	droppedPacketsInbound  *metrics.MultiLabelMap[DropLabels]
-	droppedPacketsOutbound *metrics.MultiLabelMap[DropLabels]
+	droppedPacketsInbound  *MultiLabelMap[DropLabels]
+	droppedPacketsOutbound *MultiLabelMap[DropLabels]
 }
 
 // DropReason is the reason why a packet was dropped.
@@ -55,6 +55,9 @@ type DropLabels struct {
 
 // initOnce initializes the common metrics.
 func (r *Registry) initOnce() {
+	if !buildfeatures.HasUserMetrics {
+		return
+	}
 	r.m.initOnce.Do(func() {
 		r.m.droppedPacketsInbound = NewMultiLabelMapWithRegistry[DropLabels](
 			r,
@@ -73,13 +76,13 @@ func (r *Registry) initOnce() {
 
 // DroppedPacketsOutbound returns the outbound dropped packet metric, creating it
 // if necessary.
-func (r *Registry) DroppedPacketsOutbound() *metrics.MultiLabelMap[DropLabels] {
+func (r *Registry) DroppedPacketsOutbound() *MultiLabelMap[DropLabels] {
 	r.initOnce()
 	return r.m.droppedPacketsOutbound
 }
 
 // DroppedPacketsInbound returns the inbound dropped packet metric.
-func (r *Registry) DroppedPacketsInbound() *metrics.MultiLabelMap[DropLabels] {
+func (r *Registry) DroppedPacketsInbound() *MultiLabelMap[DropLabels] {
 	r.initOnce()
 	return r.m.droppedPacketsInbound
 }

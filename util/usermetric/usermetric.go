@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_usermetrics
+
 // Package usermetric provides a container and handler
 // for user-facing metrics.
 package usermetric
@@ -24,6 +26,10 @@ type Registry struct {
 	// m contains common metrics owned by the registry.
 	m Metrics
 }
+
+// MultiLabelMap is an alias for metrics.MultiLabelMap in the common case,
+// or an alias to a lighter type when usermetrics are omitted from the build.
+type MultiLabelMap[T comparable] = metrics.MultiLabelMap[T]
 
 // NewMultiLabelMapWithRegistry creates and register a new
 // MultiLabelMap[T] variable with the given name and returns it.

@@ -265,6 +265,9 @@ func TestMinTailscaledWithCLI(t *testing.T) {
 		"hujson",
 		"pprof",
 		"multierr", // https://github.com/tailscale/tailscale/pull/17379
+		"tailscale.com/metrics",
+		"tailscale.com/tsweb/varz",
+		"dirwalk",
 	}
 	deptest.DepChecker{
 		GOOS:   "linux",

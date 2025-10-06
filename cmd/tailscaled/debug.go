@@ -28,7 +28,9 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/key"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
 )
 
@@ -56,6 +58,12 @@ func newDebugMux() *http.ServeMux {
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	return mux
+}
+
+func servePrometheusMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	varz.Handler(w, r)
+	clientmetric.WritePrometheusExpositionFormat(w)
 }
 
 func debugMode(args []string) error {
