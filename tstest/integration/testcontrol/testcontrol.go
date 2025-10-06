@@ -687,12 +687,20 @@ func (s *Server) CompleteAuth(authPathOrURL string) bool {
 	return true
 }
 
-func (s *Server) CompleteDeviceApproval(nodeKey *key.NodePublic) bool {
+// Complete the device approval for this node.
+//
+// This function returns false if the node does not exist, or you try to
+// approve a device against a different control server.
+func (s *Server) CompleteDeviceApproval(controlUrl string, urlStr string, nodeKey *key.NodePublic) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	node, ok := s.nodes[*nodeKey]
 	if !ok {
+		return false
+	}
+
+	if urlStr != controlUrl+"/admin" {
 		return false
 	}
 
