@@ -1561,6 +1561,235 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 	}
 }
 
+// TestStateMachineURLRace tests that wgengine updates arriving in the middle of
+// processing an auth URL doesn't result in the auth URL being cleared.
+func TestStateMachineURLRace(t *testing.T) {
+	runTestStateMachineURLRace(t, false)
+}
+
+func TestStateMachineURLRaceSeamless(t *testing.T) {
+	runTestStateMachineURLRace(t, true)
+}
+
+func runTestStateMachineURLRace(t *testing.T, seamless bool) {
+	var cc *mockControl
+	b := newLocalBackendWithTestControl(t, true, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+		cc = newClient(t, opts)
+		return cc
+	})
+
+	nw := newNotificationWatcher(t, b, &ipnauth.TestActor{})
+
+	t.Logf("Start")
+	nw.watch(0, []wantedNotification{
+		wantStateNotify(ipn.NeedsLogin)})
+	b.Start(ipn.Options{
+		UpdatePrefs: &ipn.Prefs{
+			WantRunning: true,
+			ControlURL:  "https://localhost:1/",
+		},
+	})
+	nw.check()
+
+	t.Logf("LoginFinished")
+	cc.persist.UserProfile.LoginName = "user1"
+	cc.persist.NodeID = "node1"
+
+	if seamless {
+		b.sys.ControlKnobs().SeamlessKeyRenewal.Store(true)
+	}
+
+	nw.watch(0, []wantedNotification{
+		wantStateNotify(ipn.Starting)})
+	cc.send(nil, "", true, &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
+	})
+	nw.check()
+
+	t.Logf("Running")
+	nw.watch(0, []wantedNotification{
+		wantStateNotify(ipn.Running)})
+	b.setWgengineStatus(&wgengine.Status{AsOf: time.Now(), DERPs: 1}, nil)
+	nw.check()
+
+	t.Logf("Re-auth (StartLoginInteractive)")
+	b.StartLoginInteractive(t.Context())
+
+	stop := make(chan struct{})
+	stopSpamming := sync.OnceFunc(func() {
+		stop <- struct{}{}
+	})
+	// if seamless renewal is enabled, the engine won't be disabled, and we won't
+	// ever call stopSpamming, so make sure it does get called
+	defer stopSpamming()
+
+	// Intercept updates between the engine and localBackend, so that we can see
+	// when the "stopped" update comes in and ensure we stop sending our "we're
+	// up" updates after that point.
+	b.e.SetStatusCallback(func(s *wgengine.Status, err error) {
+		// This is not one of our fake status updates, this is generated from the
+		// engine in response to LocalBackend calling RequestStatus. Stop spamming
+		// our fake statuses.
+		//
+		// TODO(zofrex): This is fragile, it works right now but would break if the
+		// calling pattern of RequestStatus changes. We should ensure that we keep
+		// sending "we're up" statuses right until Reconfig is called with
+		// zero-valued configs, and after that point only send "stopped" statuses.
+		stopSpamming()
+
+		// Once stopSpamming returns we are guaranteed to not send any more updates,
+		// so we can now send the real update (indicating shutdown) and be certain
+		// it will be received after any fake updates we sent. This is possibly a
+		// stronger guarantee than we get from the real engine?
+		b.setWgengineStatus(s, err)
+	})
+
+	// time needs to be >= last time for the status to be accepted, send all our
+	// spam with the same stale time so that when a real update comes in it will
+	// definitely be accepted.
+	time := b.lastStatusTime
+
+	// Flood localBackend with a lot of wgengine status updates, so if there are
+	// any race conditions in the multiple locks/unlocks that happen as we process
+	// the received auth URL, we will hit them.
+	go func() {
+		t.Logf("sending lots of fake wgengine status updates")
+		for {
+			select {
+			case <-stop:
+				t.Logf("stopping fake wgengine status updates")
+				return
+			default:
+				b.setWgengineStatus(&wgengine.Status{AsOf: time, DERPs: 1}, nil)
+			}
+		}
+	}()
+
+	t.Logf("Re-auth (receive URL)")
+	url1 := "https://localhost:1/1"
+	cc.send(nil, url1, false, nil)
+
+	// Don't need to wait on anything else - once .send completes, authURL should
+	// be set, and once .send has completed, any opportunities for a WG engine
+	// status update to trample it have ended as well.
+	if b.authURL == "" {
+		t.Fatalf("expected authURL to be set")
+	}
+}
+
+func TestWGEngineDownThenUpRace(t *testing.T) {
+	var cc *mockControl
+	b := newLocalBackendWithTestControl(t, true, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+		cc = newClient(t, opts)
+		return cc
+	})
+
+	nw := newNotificationWatcher(t, b, &ipnauth.TestActor{})
+
+	t.Logf("Start")
+	nw.watch(0, []wantedNotification{
+		wantStateNotify(ipn.NeedsLogin)})
+	b.Start(ipn.Options{
+		UpdatePrefs: &ipn.Prefs{
+			WantRunning: true,
+			ControlURL:  "https://localhost:1/",
+		},
+	})
+	nw.check()
+
+	t.Logf("LoginFinished")
+	cc.persist.UserProfile.LoginName = "user1"
+	cc.persist.NodeID = "node1"
+
+	nw.watch(0, []wantedNotification{
+		wantStateNotify(ipn.Starting)})
+	cc.send(nil, "", true, &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
+	})
+	nw.check()
+
+	nw.watch(0, []wantedNotification{
+		wantStateNotify(ipn.Running)})
+	b.setWgengineStatus(&wgengine.Status{AsOf: time.Now(), DERPs: 1}, nil)
+	nw.check()
+
+	t.Logf("Re-auth (StartLoginInteractive)")
+	b.StartLoginInteractive(t.Context())
+
+	var timeLock sync.RWMutex
+	timestamp := b.lastStatusTime
+
+	engineShutdown := make(chan struct{})
+	gotShutdown := sync.OnceFunc(func() {
+		t.Logf("engineShutdown")
+		engineShutdown <- struct{}{}
+	})
+
+	b.e.SetStatusCallback(func(s *wgengine.Status, err error) {
+		timeLock.Lock()
+		if s.AsOf.After(timestamp) {
+			timestamp = s.AsOf
+		}
+		timeLock.Unlock()
+
+		if err != nil || (s.DERPs == 0 && len(s.Peers) == 0) {
+			gotShutdown()
+		} else {
+			b.setWgengineStatus(s, err)
+		}
+	})
+
+	t.Logf("Re-auth (receive URL)")
+	url1 := "https://localhost:1/1"
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+
+	wg.Go(func() {
+		t.Log("cc.send starting")
+		cc.send(nil, url1, false, nil) // will block until engine stops
+		t.Log("cc.send returned")
+	})
+
+	<-engineShutdown // will get called once cc.send is blocked
+	gotShutdown = sync.OnceFunc(func() {
+		t.Logf("engineShutdown")
+		engineShutdown <- struct{}{}
+	})
+
+	wg.Go(func() {
+		t.Log("StartLoginInteractive starting")
+		b.StartLoginInteractive(t.Context()) // will also block until engine stops
+		t.Log("StartLoginInteractive returned")
+	})
+
+	<-engineShutdown // will get called once StartLoginInteractive is blocked
+
+	st := controlclient.Status{}
+	st.SetStateForTest(controlclient.StateAuthenticated)
+	b.SetControlClientStatus(cc, st)
+
+	timeLock.RLock()
+	b.setWgengineStatus(&wgengine.Status{AsOf: timestamp}, nil)           // engine is down event finally arrives
+	b.setWgengineStatus(&wgengine.Status{AsOf: timestamp, DERPs: 1}, nil) // engine is back up
+	timeLock.RUnlock()
+
+	go func() {
+		wg.Wait()
+		done <- struct{}{}
+	}()
+
+	t.Log("waiting for .send and .StartLoginInteractive to return")
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting")
+	}
+
+	t.Log("both returned")
+}
+
 func buildNetmapWithPeers(self tailcfg.NodeView, peers ...tailcfg.NodeView) *netmap.NetworkMap {
 	const (
 		firstAutoUserID = tailcfg.UserID(10000)

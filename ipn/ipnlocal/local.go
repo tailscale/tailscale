@@ -313,9 +313,8 @@ type LocalBackend struct {
 	serveListeners     map[netip.AddrPort]*localListener // listeners for local serve traffic
 	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *reverseProxy
 
-	// statusLock must be held before calling statusChanged.Wait() or
+	// mu must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
-	statusLock    sync.Mutex
 	statusChanged *sync.Cond
 
 	// dialPlan is any dial plan that we've received from the control
@@ -542,7 +541,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 
 	b.setTCPPortsIntercepted(nil)
 
-	b.statusChanged = sync.NewCond(&b.statusLock)
+	b.statusChanged = sync.NewCond(&b.mu)
 	b.e.SetStatusCallback(b.setWgengineStatus)
 
 	b.prevIfState = netMon.InterfaceState()
@@ -2265,14 +2264,15 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 	b.send(ipn.Notify{Engine: &es})
 }
 
+// broadcastStatusChanged must not be called with b.mu held.
 func (b *LocalBackend) broadcastStatusChanged() {
 	// The sync.Cond docs say: "It is allowed but not required for the caller to hold c.L during the call."
-	// In this particular case, we must acquire b.statusLock. Otherwise we might broadcast before
+	// In this particular case, we must acquire b.mu. Otherwise we might broadcast before
 	// the waiter (in requestEngineStatusAndWait) starts to wait, in which case
 	// the waiter can get stuck indefinitely. See PR 2865.
-	b.statusLock.Lock()
+	b.mu.Lock()
 	b.statusChanged.Broadcast()
-	b.statusLock.Unlock()
+	b.mu.Unlock()
 }
 
 // SetNotifyCallback sets the function to call when the backend has something to
@@ -3343,11 +3343,12 @@ func (b *LocalBackend) popBrowserAuthNow(url string, keyExpired bool, recipient 
 	if !b.seamlessRenewalEnabled() || keyExpired {
 		b.blockEngineUpdates(true)
 		b.stopEngineAndWait()
+
+		if b.State() == ipn.Running {
+			b.enterState(ipn.Starting)
+		}
 	}
 	b.tellRecipientToBrowseToURL(url, toNotificationTarget(recipient))
-	if b.State() == ipn.Running {
-		b.enterState(ipn.Starting)
-	}
 }
 
 // validPopBrowserURL reports whether urlStr is a valid value for a
@@ -5513,7 +5514,13 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 	activeLogin := b.activeLogin
 	authURL := b.authURL
 	if newState == ipn.Running {
-		b.resetAuthURLLocked()
+		// TODO(zofrex): Is this needed? As of 2025-10-03 it doesn't seem to be
+		// necessary when logging in or authenticating. When do we need to reset it
+		// here, rather than the other places it is reset? We should test if it is
+		// necessary and add unit tests to cover those cases, or remove it.
+		if oldState != ipn.Running {
+			b.resetAuthURLLocked()
+		}
 
 		// Start a captive portal detection loop if none has been
 		// started. Create a new context if none is present, since it
@@ -5750,29 +5757,38 @@ func (u unlockOnce) UnlockEarly() {
 }
 
 // stopEngineAndWait deconfigures the local network data plane, and
-// waits for it to deliver a status update before returning.
-//
-// TODO(danderson): this may be racy. We could unblock upon receiving
-// a status update that predates the "I've shut down" update.
+// waits for it to deliver a status update indicating it has stopped
+// before returning.
 func (b *LocalBackend) stopEngineAndWait() {
 	b.logf("stopEngineAndWait...")
 	b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
-	b.requestEngineStatusAndWait()
+	b.requestEngineStatusAndWaitForStopped()
 	b.logf("stopEngineAndWait: done.")
 }
 
-// Requests the wgengine status, and does not return until the status
-// was delivered (to the usual callback).
-func (b *LocalBackend) requestEngineStatusAndWait() {
-	b.logf("requestEngineStatusAndWait")
+// Requests the wgengine status, and does not return until a status was
+// delivered (to the usual callback) that indicates the engine is stopped.
+func (b *LocalBackend) requestEngineStatusAndWaitForStopped() {
+	b.logf("requestEngineStatusAndWaitForStopped")
 
-	b.statusLock.Lock()
-	defer b.statusLock.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	b.goTracker.Go(b.e.RequestStatus)
-	b.logf("requestEngineStatusAndWait: waiting...")
-	b.statusChanged.Wait() // temporarily releases lock while waiting
-	b.logf("requestEngineStatusAndWait: got status update.")
+	b.logf("requestEngineStatusAndWaitForStopped: waiting...")
+	for {
+		b.statusChanged.Wait() // temporarily releases lock while waiting
+
+		if !b.blocked {
+			b.logf("requestEngineStatusAndWaitForStopped: engine is no longer blocked, must have stopped and started again, not safe to wait.")
+			break
+		}
+		if b.engineStatus.NumLive == 0 && b.engineStatus.LiveDERPs == 0 {
+			b.logf("requestEngineStatusAndWaitForStopped: engine is stopped.")
+			break
+		}
+		b.logf("requestEngineStatusAndWaitForStopped: engine is still running. Waiting...")
+	}
 }
 
 // setControlClientLocked sets the control client to cc,

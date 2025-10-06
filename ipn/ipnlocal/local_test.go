@@ -1505,6 +1505,15 @@ func wantExitNodeIDNotify(want tailcfg.StableNodeID) wantedNotification {
 	}
 }
 
+func wantStateNotify(want ipn.State) wantedNotification {
+	return wantedNotification{
+		name: "State=" + want.String(),
+		cond: func(_ testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+			return n.State != nil && *n.State == want
+		},
+	}
+}
+
 func TestInternalAndExternalInterfaces(t *testing.T) {
 	type interfacePrefix struct {
 		i   netmon.Interface
