@@ -1578,51 +1578,18 @@ func runTestStateMachineURLRace(t *testing.T, seamless bool) {
 		return cc
 	})
 
-	var stateLock sync.Mutex
-	var state ipn.State
-	stateChanged := make(chan struct{})
-
-	b.SetNotifyCallback(func(n ipn.Notify) {
-		if n.State != nil || (n.Prefs != nil && n.Prefs.Valid()) || n.BrowseToURL != nil || n.LoginFinished != nil {
-			b.logf("Received notify: %+v", n)
-			if n.State != nil {
-				stateLock.Lock()
-				state = *n.State
-				stateLock.Unlock()
-				stateChanged <- struct{}{}
-			}
-		} else {
-			b.logf("(ignored) %v", n)
-		}
-	})
-
-	waitForState := func(want ipn.State) {
-		t.Helper()
-		t.Logf("waiting for state: %v", want)
-		for {
-			stateLock.Lock()
-			s := state
-			stateLock.Unlock()
-			if s == want {
-				return
-			}
-			select {
-			case <-stateChanged:
-			case <-time.After(6 * time.Second):
-				t.Fatalf("timed out waiting for state %v; currently %v", want, s)
-			}
-		}
-	}
+	nw := newNotificationWatcher(t, b, &ipnauth.TestActor{})
 
 	t.Logf("Start")
+	nw.watch(0, []wantedNotification{
+		wantStateNotify(ipn.NeedsLogin)})
 	b.Start(ipn.Options{
 		UpdatePrefs: &ipn.Prefs{
 			WantRunning: true,
 			ControlURL:  "https://localhost:1/",
 		},
 	})
-
-	waitForState(ipn.NeedsLogin)
+	nw.check()
 
 	t.Logf("LoginFinished")
 	cc.persist.UserProfile.LoginName = "user1"
@@ -1632,14 +1599,18 @@ func runTestStateMachineURLRace(t *testing.T, seamless bool) {
 		b.sys.ControlKnobs().SeamlessKeyRenewal.Store(true)
 	}
 
+	nw.watch(0, []wantedNotification{
+		wantStateNotify(ipn.Starting)})
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	})
-	waitForState(ipn.Starting)
+	nw.check()
 
 	t.Logf("Running")
+	nw.watch(0, []wantedNotification{
+		wantStateNotify(ipn.Running)})
 	b.setWgengineStatus(&wgengine.Status{AsOf: time.Now(), DERPs: 1}, nil)
-	waitForState(ipn.Running)
+	nw.check()
 
 	t.Logf("Re-auth (StartLoginInteractive)")
 	b.StartLoginInteractive(t.Context())
@@ -1706,79 +1677,41 @@ func runTestStateMachineURLRace(t *testing.T, seamless bool) {
 	}
 }
 
-func TestDownThenUpRace(t *testing.T) {
+func TestWGEngineDownThenUpRace(t *testing.T) {
 	var cc *mockControl
 	b := newLocalBackendWithTestControl(t, true, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
 		cc = newClient(t, opts)
 		return cc
 	})
 
-	var stateLock sync.Mutex
-	var state ipn.State
-	stateChanged := sync.NewCond(&stateLock)
-
-	b.SetNotifyCallback(func(n ipn.Notify) {
-		if n.State != nil || (n.Prefs != nil && n.Prefs.Valid()) || n.BrowseToURL != nil || n.LoginFinished != nil {
-			b.logf("Received notify: %+v", n)
-			if n.State != nil {
-				stateLock.Lock()
-				state = *n.State
-				stateLock.Unlock()
-				stateChanged.Broadcast()
-			}
-		} else {
-			b.logf("(ignored) %v", n)
-		}
-	})
-
-	waitForState := func(want ipn.State) {
-		t.Helper()
-		t.Logf("waiting for state: %v", want)
-		stateLock.Lock()
-		defer stateLock.Unlock()
-		for {
-			s := state
-			if s == want {
-				return
-			}
-			c := make(chan struct{})
-			go func() {
-				stateChanged.Wait()
-				close(c)
-			}()
-			select {
-			case <-c:
-				continue
-			case <-time.After(6 * time.Second):
-				t.Fatalf("timed out waiting for state %v; currently %v", want, s)
-				stateChanged.Broadcast()
-				return
-			}
-		}
-	}
+	nw := newNotificationWatcher(t, b, &ipnauth.TestActor{})
 
 	t.Logf("Start")
+	nw.watch(0, []wantedNotification{
+		wantStateNotify(ipn.NeedsLogin)})
 	b.Start(ipn.Options{
 		UpdatePrefs: &ipn.Prefs{
 			WantRunning: true,
 			ControlURL:  "https://localhost:1/",
 		},
 	})
-
-	waitForState(ipn.NeedsLogin)
+	nw.check()
 
 	t.Logf("LoginFinished")
 	cc.persist.UserProfile.LoginName = "user1"
 	cc.persist.NodeID = "node1"
 
+	nw.watch(0, []wantedNotification{
+		wantStateNotify(ipn.Starting)})
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	})
-	waitForState(ipn.Starting)
+	nw.check()
 
-	t.Logf("Running")
+	nw.watch(0, []wantedNotification{
+		wantStateNotify(ipn.Running)})
 	b.setWgengineStatus(&wgengine.Status{AsOf: time.Now(), DERPs: 1}, nil)
-	waitForState(ipn.Running)
+	nw.check()
 
 	t.Logf("Re-auth (StartLoginInteractive)")
 	b.StartLoginInteractive(t.Context())
