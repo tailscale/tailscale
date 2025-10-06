@@ -50,14 +50,15 @@ const msgLimit = 1 << 20 // encrypted message length limit
 // Server is a control plane server. Its zero value is ready for use.
 // Everything is stored in-memory in one tailnet.
 type Server struct {
-	Logf           logger.Logf      // nil means to use the log package
-	DERPMap        *tailcfg.DERPMap // nil means to use prod DERP map
-	RequireAuth    bool
-	RequireAuthKey string // required authkey for all nodes
-	Verbose        bool
-	DNSConfig      *tailcfg.DNSConfig // nil means no DNS config
-	MagicDNSDomain string
-	C2NResponses   syncs.Map[string, func(*http.Response)] // token => onResponse func
+	Logf               logger.Logf      // nil means to use the log package
+	DERPMap            *tailcfg.DERPMap // nil means to use prod DERP map
+	RequireAuth        bool
+	RequireAuthKey     string // required authkey for all nodes
+	RequireMachineAuth bool
+	Verbose            bool
+	DNSConfig          *tailcfg.DNSConfig // nil means no DNS config
+	MagicDNSDomain     string
+	C2NResponses       syncs.Map[string, func(*http.Response)] // token => onResponse func
 
 	// PeerRelayGrants, if true, inserts relay capabilities into the wildcard
 	// grants rules.
@@ -686,6 +687,21 @@ func (s *Server) CompleteAuth(authPathOrURL string) bool {
 	return true
 }
 
+func (s *Server) CompleteDeviceApproval(nodeKey *key.NodePublic) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	node, ok := s.nodes[*nodeKey]
+	if !ok {
+		return false
+	}
+
+	sendUpdate(s.updates[node.ID], updateSelfChanged)
+
+	node.MachineAuthorized = true
+	return true
+}
+
 func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.MachinePublic) {
 	msg, err := io.ReadAll(io.LimitReader(r.Body, msgLimit))
 	r.Body.Close()
@@ -761,7 +777,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		s.nodes = map[key.NodePublic]*tailcfg.Node{}
 	}
 	_, ok := s.nodes[nk]
-	machineAuthorized := true // TODO: add Server.RequireMachineAuth
+	machineAuthorized := !s.RequireMachineAuth
 	if !ok {
 
 		nodeID := len(s.nodes) + 1
