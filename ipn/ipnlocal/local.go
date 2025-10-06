@@ -586,7 +586,12 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 func (b *LocalBackend) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus.Client) {
 	clientVersionSub := eventbus.Subscribe[tailcfg.ClientVersion](ec)
 	autoUpdateSub := eventbus.Subscribe[controlclient.AutoUpdate](ec)
-	healthChangeSub := eventbus.Subscribe[health.Change](ec)
+
+	var healthChange <-chan health.Change
+	if buildfeatures.HasHealth {
+		healthChangeSub := eventbus.Subscribe[health.Change](ec)
+		healthChange = healthChangeSub.Events()
+	}
 	changeDeltaSub := eventbus.Subscribe[netmon.ChangeDelta](ec)
 
 	var portlist <-chan PortlistServices
@@ -604,7 +609,7 @@ func (b *LocalBackend) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus
 				b.onClientVersion(&clientVersion)
 			case au := <-autoUpdateSub.Events():
 				b.onTailnetDefaultAutoUpdate(au.Value)
-			case change := <-healthChangeSub.Events():
+			case change := <-healthChange:
 				b.onHealthChange(change)
 			case changeDelta := <-changeDeltaSub.Events():
 				b.linkChange(&changeDelta)
@@ -996,6 +1001,9 @@ var (
 )
 
 func (b *LocalBackend) onHealthChange(change health.Change) {
+	if !buildfeatures.HasHealth {
+		return
+	}
 	if change.WarnableChanged {
 		w := change.Warnable
 		us := change.UnhealthyState
@@ -6025,10 +6033,10 @@ func (b *LocalBackend) resolveExitNode() (changed bool) {
 //
 // b.mu must be held.
 func (b *LocalBackend) reconcilePrefsLocked(prefs *ipn.Prefs) (changed bool) {
-	if b.applySysPolicyLocked(prefs) {
+	if buildfeatures.HasSystemPolicy && b.applySysPolicyLocked(prefs) {
 		changed = true
 	}
-	if b.resolveExitNodeInPrefsLocked(prefs) {
+	if buildfeatures.HasUseExitNode && b.resolveExitNodeInPrefsLocked(prefs) {
 		changed = true
 	}
 	if changed {
@@ -6043,6 +6051,9 @@ func (b *LocalBackend) reconcilePrefsLocked(prefs *ipn.Prefs) (changed bool) {
 //
 // b.mu must be held.
 func (b *LocalBackend) resolveExitNodeInPrefsLocked(prefs *ipn.Prefs) (changed bool) {
+	if !buildfeatures.HasUseExitNode {
+		return false
+	}
 	if b.resolveAutoExitNodeLocked(prefs) {
 		changed = true
 	}
@@ -6338,6 +6349,9 @@ func peerAPIPorts(peer tailcfg.NodeView) (p4, p6 uint16) {
 }
 
 func (b *LocalBackend) CheckIPForwarding() error {
+	if !buildfeatures.HasAdvertiseRoutes {
+		return nil
+	}
 	if b.sys.IsNetstackRouter() {
 		return nil
 	}

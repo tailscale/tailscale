@@ -752,6 +752,9 @@ func (lc *Client) PushFile(ctx context.Context, target tailcfg.StableNodeID, siz
 // machine is properly configured to forward IP packets as a subnet router
 // or exit node.
 func (lc *Client) CheckIPForwarding(ctx context.Context) error {
+	if !buildfeatures.HasAdvertiseRoutes {
+		return nil
+	}
 	body, err := lc.get200(ctx, "/localapi/v0/check-ip-forwarding")
 	if err != nil {
 		return err

@@ -945,7 +945,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		ConnectionHandleForTest: connectionHandleForTest,
 	}
 	var extraDebugFlags []string
-	if hi != nil && c.netMon != nil && !c.skipIPForwardingCheck &&
+	if buildfeatures.HasAdvertiseRoutes && hi != nil && c.netMon != nil && !c.skipIPForwardingCheck &&
 		ipForwardingBroken(hi.RoutableIPs, c.netMon.InterfaceState()) {
 		extraDebugFlags = append(extraDebugFlags, "warn-ip-forwarding-off")
 	}
