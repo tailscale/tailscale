@@ -23,6 +23,9 @@ var nilErrPtr = ptr.To[error](nil)
 // Recursive use of a SyncValue from its own fill function will deadlock.
 //
 // SyncValue is safe for concurrent use.
+//
+// Unlike [sync.OnceValue], the linker can do better dead code elimination
+// with SyncValue. See https://github.com/golang/go/issues/62202.
 type SyncValue[T any] struct {
 	once sync.Once
 	v    T
