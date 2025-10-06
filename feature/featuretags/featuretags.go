@@ -270,6 +270,10 @@ var Features = map[FeatureTag]FeatureMeta{
 		Sym:  "UseProxy",
 		Desc: "Support using system proxies as specified by env vars or the system configuration to reach Tailscale servers.",
 	},
+	"usermetrics": {
+		Sym:  "UserMetrics",
+		Desc: "Usermetrics (documented, stable) metrics support",
+	},
 	"wakeonlan": {Sym: "WakeOnLAN", Desc: "Wake-on-LAN support"},
 	"webclient": {
 		Sym: "WebClient", Desc: "Web client support",

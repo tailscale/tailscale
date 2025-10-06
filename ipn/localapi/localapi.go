@@ -99,7 +99,6 @@ var handler = map[string]LocalAPIHandler{
 	"status":                       (*Handler).serveStatus,
 	"update/check":                 (*Handler).serveUpdateCheck,
 	"upload-client-metrics":        (*Handler).serveUploadClientMetrics,
-	"usermetrics":                  (*Handler).serveUserMetrics,
 	"watch-ipn-bus":                (*Handler).serveWatchIPNBus,
 	"whois":                        (*Handler).serveWhoIs,
 }
@@ -125,6 +124,9 @@ func init() {
 	if buildfeatures.HasDNS {
 		Register("dns-osconfig", (*Handler).serveDNSOSConfig)
 		Register("dns-query", (*Handler).serveDNSQuery)
+	}
+	if buildfeatures.HasUserMetrics {
+		Register("usermetrics", (*Handler).serveUserMetrics)
 	}
 }
 
