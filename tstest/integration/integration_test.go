@@ -268,6 +268,29 @@ func TestStateSavedOnStart(t *testing.T) {
 	d1.MustCleanShutdown(t)
 }
 
+// This handler receives auth URLs, and logs into control.
+//
+// It counts how many URLs it sees, and will fail the test if it
+// sees multiple login URLs.
+func completeLogin(t *testing.T, control *testcontrol.Server, counter *atomic.Int32) func(string) error {
+	return func(urlStr string) error {
+		t.Logf("saw auth URL %q", urlStr)
+		if control.CompleteAuth(urlStr) {
+			if counter.Add(1) > 1 {
+				err := errors.New("completed multiple auth URLs")
+				t.Error(err)
+				return err
+			}
+			t.Logf("completed login to %s", urlStr)
+			return nil
+		} else {
+			err := fmt.Errorf("Failed to complete initial login to %q", urlStr)
+			t.Fatal(err)
+			return err
+		}
+	}
+}
+
 func TestOneNodeUpAuth(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -366,22 +389,9 @@ func TestOneNodeUpAuth(t *testing.T) {
 				//
 				// It counts how many auth URLs it's seen.
 				var authCountAtomic atomic.Int32
-				authURLHandler := &authURLParserWriter{fn: func(urlStr string) error {
-					t.Logf("saw auth URL %q", urlStr)
-					if env.Control.CompleteAuth(urlStr) {
-						if authCountAtomic.Add(1) > 1 {
-							err := errors.New("completed multiple auth URLs")
-							t.Error(err)
-							return err
-						}
-						t.Logf("completed login to %s", urlStr)
-						return nil
-					} else {
-						err := fmt.Errorf("Failed to complete initial login to %q", urlStr)
-						t.Fatal(err)
-						return err
-					}
-				}}
+				authURLHandler := &authURLParserWriter{
+					fn: completeLogin(t, env.Control, &authCountAtomic),
+				}
 
 				// If we should be logged in at the start of the test case, go ahead
 				// and run the login command.
@@ -426,6 +436,99 @@ func TestOneNodeUpAuth(t *testing.T) {
 			})
 		}
 	}
+}
+
+// Returns true if the error returned by [exec.Run] fails with a non-zero
+// exit code, false otherwise.
+func isNonZeroExitCode(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	exitError, ok := err.(*exec.ExitError)
+	if !ok {
+		return false
+	}
+
+	return exitError.ExitCode() != 0
+}
+
+// If we interrupt `tailscale up` and then run it again, we should only
+// print a single auth URL.
+func TestOneNodeUpInterruptedAuth(t *testing.T) {
+	tstest.Shard(t)
+	tstest.Parallel(t)
+
+	env := NewTestEnv(t, ConfigureControl(
+		func(control *testcontrol.Server) {
+			control.RequireAuth = true
+			control.AllNodesSameUser = true
+		},
+	))
+
+	n := NewTestNode(t, env)
+	d := n.StartDaemon()
+	defer d.MustCleanShutdown(t)
+
+	cmdArgs := []string{"up", "--login-server=" + env.ControlURL()}
+
+	// The first time we run the command, we wait for an auth URL to be
+	// printed, and then we cancel the command -- equivalent to ^C.
+	//
+	// At this point, we've connected to control to get an auth URL,
+	// and printed it in the CLI, but not clicked it.
+	t.Logf("Running command for the first time: %s", strings.Join(cmdArgs, " "))
+	cmd1 := n.Tailscale(cmdArgs...)
+
+	// This handler watches for auth URLs in stdout, then cancels the
+	// running `tailscale up` CLI command.
+	cmd1.Stdout = &authURLParserWriter{fn: func(urlStr string) error {
+		t.Logf("saw auth URL %q", urlStr)
+		cmd1.Process.Kill()
+		return nil
+	}}
+	cmd1.Stderr = cmd1.Stdout
+
+	if err := cmd1.Run(); !isNonZeroExitCode(err) {
+		t.Fatalf("Command did not fail with non-zero exit code: %q", err)
+	}
+
+	// Because we didn't click the auth URL, we should still be in NeedsLogin.
+	n.AwaitBackendState("NeedsLogin")
+
+	// The second time we run the command, we click the first auth URL we see
+	// and check that we log in correctly.
+	//
+	// In #17361, there was a bug where we'd print two auth URLs, and you could
+	// click either auth URL and log in to control, but logging in through the
+	// first URL would leave `tailscale up` hanging.
+	//
+	// Using `authURLHandler` ensures we only print the new, correct auth URL.
+	//
+	// If we print both URLs, it will throw an error because it only expects
+	// to log in with one auth URL.
+	//
+	// If we only print the stale auth URL, the test will timeout because
+	// `tailscale up` will never return.
+	t.Logf("Running command for the second time: %s", strings.Join(cmdArgs, " "))
+
+	var authURLCount atomic.Int32
+
+	cmd2 := n.Tailscale(cmdArgs...)
+	cmd2.Stdout = &authURLParserWriter{
+		fn: completeLogin(t, env.Control, &authURLCount),
+	}
+	cmd2.Stderr = cmd2.Stdout
+
+	if err := cmd2.Run(); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+
+	if urls := authURLCount.Load(); urls != 1 {
+		t.Errorf("Auth URLs completed = %d; want %d", urls, 1)
+	}
+
+	n.AwaitRunning()
 }
 
 func TestConfigFileAuthKey(t *testing.T) {
