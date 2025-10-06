@@ -357,6 +357,13 @@ func netfilterModeFromFlag(v string) (_ preftype.NetfilterMode, warning string, 
 // It returns simpleUp if we're running a simple "tailscale up" to
 // transition to running from a previously-logged-in but down state,
 // without changing any settings.
+//
+// Note this can also mutate prefs to add implicit preferences for the
+// user operator.
+//
+// TODO(alexc): the name of this function is confusing, and perhaps a
+// sign that it's doing too much. Consider refactoring this so it's just
+// telling the caller what to do next, but not changing anything itself.
 func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, justEditMP *ipn.MaskedPrefs, err error) {
 	if !env.upArgs.reset {
 		applyImplicitPrefs(prefs, curPrefs, env)
@@ -497,6 +504,8 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	if err != nil {
 		return err
 	}
+	effectivePrefs := curPrefs
+
 	if cmd == "up" {
 		// "tailscale up" should not be able to change the
 		// profile name.
@@ -546,10 +555,8 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	// or we could miss IPN notifications.
 	//
 	// In particular, if we're doing a force-reauth, we could miss the
-	// notification with the auth URL we should print for the user.  The
-	// initial state could contain the auth URL, but only if IPN is in the
-	// NeedsLogin state -- sometimes it's in Starting, and we don't get the URL.
-	watcher, err := localClient.WatchIPNBus(watchCtx, ipn.NotifyInitialState)
+	// notification with the auth URL we should print for the user.
+	watcher, err := localClient.WatchIPNBus(watchCtx, 0)
 	if err != nil {
 		return err
 	}
@@ -591,6 +598,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		if err != nil {
 			return err
 		}
+		effectivePrefs = prefs
 		if upArgs.forceReauth || !st.HaveNodeKey {
 			err := localClient.StartLoginInteractive(ctx)
 			if err != nil {
@@ -604,7 +612,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 
 	go func() {
 		var printed bool // whether we've yet printed anything to stdout or stderr
-		var lastURLPrinted string
+		lastURLPrinted := ""
 
 		// If we're doing a force-reauth, we need to get two notifications:
 		//
@@ -616,6 +624,15 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		// track them separately.
 		ipnIsRunning := false
 		waitingForKeyChange := upArgs.forceReauth
+
+		// If we're doing a simple up (i.e. `tailscale up`, no flags) and
+		// the initial state is NeedsMachineAuth, then we never receive a
+		// state notification from ipn, so we print the device approval URL
+		// immediately.
+		if simpleUp && st.BackendState == ipn.NeedsMachineAuth.String() {
+			printed = true
+			printDeviceApprovalInfo(env.upArgs.json, effectivePrefs, &lastURLPrinted)
+		}
 
 		for {
 			n, err := watcher.Next()
@@ -629,11 +646,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 			}
 			if s := n.State; s != nil && *s == ipn.NeedsMachineAuth {
 				printed = true
-				if env.upArgs.json {
-					printUpDoneJSON(ipn.NeedsMachineAuth, "")
-				} else {
-					fmt.Fprintf(Stderr, "\nTo approve your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL(policyclient.Get()))
-				}
+				printDeviceApprovalInfo(env.upArgs.json, effectivePrefs, &lastURLPrinted)
 			}
 			if s := n.State; s != nil {
 				ipnIsRunning = *s == ipn.Running
@@ -734,6 +747,21 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		return err
 	case <-timeoutCh:
 		return errors.New(`timeout waiting for Tailscale service to enter a Running state; check health with "tailscale status"`)
+	}
+}
+
+func printDeviceApprovalInfo(printJson bool, prefs *ipn.Prefs, lastURLPrinted *string) {
+	if printJson {
+		printUpDoneJSON(ipn.NeedsMachineAuth, "")
+	} else {
+		deviceApprovalURL := prefs.AdminPageURL(policyclient.Get())
+
+		if lastURLPrinted != nil && deviceApprovalURL == *lastURLPrinted {
+			return
+		}
+
+		*lastURLPrinted = deviceApprovalURL
+		errf("\nTo approve your machine, visit (as admin):\n\n\t%s\n\n", deviceApprovalURL)
 	}
 }
 
