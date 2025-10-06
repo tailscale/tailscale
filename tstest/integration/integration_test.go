@@ -477,7 +477,7 @@ func TestOneNodeUpAuth(t *testing.T) {
 					var authURLCount atomic.Int32
 					var deviceApprovalURLCount atomic.Int32
 
-					handler := &authURLParserWriter{
+					handler := &authURLParserWriter{t: t,
 						authURLFn:           completeLogin(t, env.Control, &authURLCount),
 						deviceApprovalURLFn: completeDeviceApproval(t, n1, &deviceApprovalURLCount),
 					}
