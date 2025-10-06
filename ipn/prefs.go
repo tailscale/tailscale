@@ -532,12 +532,16 @@ func (p *Prefs) Pretty() string { return p.pretty(runtime.GOOS) }
 func (p *Prefs) pretty(goos string) string {
 	var sb strings.Builder
 	sb.WriteString("Prefs{")
-	fmt.Fprintf(&sb, "ra=%v ", p.RouteAll)
-	fmt.Fprintf(&sb, "dns=%v want=%v ", p.CorpDNS, p.WantRunning)
-	if p.RunSSH {
+	if buildfeatures.HasUseRoutes {
+		fmt.Fprintf(&sb, "ra=%v ", p.RouteAll)
+	}
+	if buildfeatures.HasDNS {
+		fmt.Fprintf(&sb, "dns=%v want=%v ", p.CorpDNS, p.WantRunning)
+	}
+	if buildfeatures.HasSSH && p.RunSSH {
 		sb.WriteString("ssh=true ")
 	}
-	if p.RunWebClient {
+	if buildfeatures.HasWebClient && p.RunWebClient {
 		sb.WriteString("webclient=true ")
 	}
 	if p.LoggedOut {
@@ -552,26 +556,30 @@ func (p *Prefs) pretty(goos string) string {
 	if p.ShieldsUp {
 		sb.WriteString("shields=true ")
 	}
-	if p.ExitNodeIP.IsValid() {
-		fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeIP, p.ExitNodeAllowLANAccess)
-	} else if !p.ExitNodeID.IsZero() {
-		fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeID, p.ExitNodeAllowLANAccess)
+	if buildfeatures.HasUseExitNode {
+		if p.ExitNodeIP.IsValid() {
+			fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeIP, p.ExitNodeAllowLANAccess)
+		} else if !p.ExitNodeID.IsZero() {
+			fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeID, p.ExitNodeAllowLANAccess)
+		}
+		if p.AutoExitNode.IsSet() {
+			fmt.Fprintf(&sb, "auto=%v ", p.AutoExitNode)
+		}
 	}
-	if p.AutoExitNode.IsSet() {
-		fmt.Fprintf(&sb, "auto=%v ", p.AutoExitNode)
-	}
-	if len(p.AdvertiseRoutes) > 0 || goos == "linux" {
-		fmt.Fprintf(&sb, "routes=%v ", p.AdvertiseRoutes)
-	}
-	if len(p.AdvertiseRoutes) > 0 || p.NoSNAT {
-		fmt.Fprintf(&sb, "snat=%v ", !p.NoSNAT)
-	}
-	if len(p.AdvertiseRoutes) > 0 || p.NoStatefulFiltering.EqualBool(true) {
-		// Only print if we're advertising any routes, or the user has
-		// turned off stateful filtering (NoStatefulFiltering=true ⇒
-		// StatefulFiltering=false).
-		bb, _ := p.NoStatefulFiltering.Get()
-		fmt.Fprintf(&sb, "statefulFiltering=%v ", !bb)
+	if buildfeatures.HasAdvertiseRoutes {
+		if len(p.AdvertiseRoutes) > 0 || goos == "linux" {
+			fmt.Fprintf(&sb, "routes=%v ", p.AdvertiseRoutes)
+		}
+		if len(p.AdvertiseRoutes) > 0 || p.NoSNAT {
+			fmt.Fprintf(&sb, "snat=%v ", !p.NoSNAT)
+		}
+		if len(p.AdvertiseRoutes) > 0 || p.NoStatefulFiltering.EqualBool(true) {
+			// Only print if we're advertising any routes, or the user has
+			// turned off stateful filtering (NoStatefulFiltering=true ⇒
+			// StatefulFiltering=false).
+			bb, _ := p.NoStatefulFiltering.Get()
+			fmt.Fprintf(&sb, "statefulFiltering=%v ", !bb)
+		}
 	}
 	if len(p.AdvertiseTags) > 0 {
 		fmt.Fprintf(&sb, "tags=%s ", strings.Join(p.AdvertiseTags, ","))
@@ -594,9 +602,13 @@ func (p *Prefs) pretty(goos string) string {
 	if p.NetfilterKind != "" {
 		fmt.Fprintf(&sb, "netfilterKind=%s ", p.NetfilterKind)
 	}
-	sb.WriteString(p.AutoUpdate.Pretty())
-	sb.WriteString(p.AppConnector.Pretty())
-	if p.RelayServerPort != nil {
+	if buildfeatures.HasClientUpdate {
+		sb.WriteString(p.AutoUpdate.Pretty())
+	}
+	if buildfeatures.HasAppConnectors {
+		sb.WriteString(p.AppConnector.Pretty())
+	}
+	if buildfeatures.HasRelayServer && p.RelayServerPort != nil {
 		fmt.Fprintf(&sb, "relayServerPort=%d ", *p.RelayServerPort)
 	}
 	if p.Persist != nil {

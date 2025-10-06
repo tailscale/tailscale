@@ -24,6 +24,7 @@ import (
 	shellquote "github.com/kballard/go-shellquote"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	qrcode "github.com/skip2/go-qrcode"
+	"tailscale.com/feature/buildfeatures"
 	_ "tailscale.com/feature/condregister/oauthkey"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/internal/client/tailscale"
@@ -1136,7 +1137,8 @@ func exitNodeIP(p *ipn.Prefs, st *ipnstate.Status) (ip netip.Addr) {
 }
 
 func warnOnAdvertiseRoutes(ctx context.Context, prefs *ipn.Prefs) {
-	if len(prefs.AdvertiseRoutes) > 0 || prefs.AppConnector.Advertise {
+	if buildfeatures.HasAdvertiseRoutes && len(prefs.AdvertiseRoutes) > 0 ||
+		buildfeatures.HasAppConnectors && prefs.AppConnector.Advertise {
 		// TODO(jwhited): compress CheckIPForwarding and CheckUDPGROForwarding
 		//  into a single HTTP req.
 		if err := localClient.CheckIPForwarding(ctx); err != nil {
