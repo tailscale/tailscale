@@ -41,6 +41,14 @@ while [ "$#" -gt 1 ]; do
 		fi
 		shift
 		ldflags="$ldflags -w -s"
+		tags="${tags:+$tags,},$(GOOS= GOARCH= $go run ./cmd/featuretags --min --add=osrouter)"
+		;;
+	--min)
+	    # --min is like --extra-small but even smaller, removing all features,
+		# even if it results in a useless binary (e.g. removing both netstack +
+		# osrouter). It exists for benchmarking purposes only.
+		shift
+		ldflags="$ldflags -w -s"
 		tags="${tags:+$tags,},$(GOOS= GOARCH= $go run ./cmd/featuretags --min)"
 		;;
 	--box)
