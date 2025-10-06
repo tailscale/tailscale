@@ -14,7 +14,8 @@ func TestIssueFormat(t *testing.T) {
 		want  bool
 	}{
 		{"https://github.com/tailscale/cOrp/issues/1234", true},
-		{"https://github.com/otherproject/corp/issues/1234", false},
+		{"https://github.com/otherproject/corp/issues/1234", true},
+		{"https://not.huyb/tailscale/corp/issues/1234", false},
 		{"https://github.com/tailscale/corp/issues/", false},
 	}
 	for _, testCase := range testCases {
