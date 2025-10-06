@@ -79,13 +79,11 @@ func defaultTunName() string {
 	case "aix", "solaris", "illumos":
 		return "userspace-networking"
 	case "linux":
-		switch distro.Get() {
-		case distro.Synology:
+		if buildfeatures.HasSynology && buildfeatures.HasNetstack && distro.Get() == distro.Synology {
 			// Try TUN, but fall back to userspace networking if needed.
 			// See https://github.com/tailscale/tailscale-synology/issues/35
 			return "tailscale0,userspace-networking"
 		}
-
 	}
 	return "tailscale0"
 }
@@ -195,10 +193,14 @@ func main() {
 	flag.StringVar(&args.tunname, "tun", defaultTunName(), `tunnel interface name; use "userspace-networking" (beta) to not use TUN`)
 	flag.Var(flagtype.PortValue(&args.port, defaultPort()), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
 	flag.StringVar(&args.statepath, "state", "", "absolute path of state file; use 'kube:<secret-name>' to use Kubernetes secrets or 'arn:aws:ssm:...' to store in AWS SSM; use 'mem:' to not store state and register as an ephemeral node. If empty and --statedir is provided, the default is <statedir>/tailscaled.state. Default: "+paths.DefaultTailscaledStateFile())
-	flag.Var(&args.encryptState, "encrypt-state", `encrypt the state file on disk; when not set encryption will be enabled if supported on this platform; uses TPM on Linux and Windows, on all other platforms this flag is not supported`)
+	if buildfeatures.HasTPM {
+		flag.Var(&args.encryptState, "encrypt-state", `encrypt the state file on disk; when not set encryption will be enabled if supported on this platform; uses TPM on Linux and Windows, on all other platforms this flag is not supported`)
+	}
 	flag.StringVar(&args.statedir, "statedir", "", "path to directory for storage of config state, TLS certs, temporary incoming Taildrop files, etc. If empty, it's derived from --state when possible.")
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
-	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
+	if buildfeatures.HasBird {
+		flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
+	}
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
 	flag.StringVar(&args.confFile, "config", "", "path to config file, or 'vm:user-data' to use the VM's user-data (EC2)")
@@ -252,7 +254,7 @@ func main() {
 		log.Fatalf("--socket is required")
 	}
 
-	if args.birdSocketPath != "" && createBIRDClient == nil {
+	if buildfeatures.HasBird && args.birdSocketPath != "" && createBIRDClient == nil {
 		log.SetFlags(0)
 		log.Fatalf("--bird-socket is not supported on %s", runtime.GOOS)
 	}
@@ -273,28 +275,30 @@ func main() {
 		}
 	}
 
-	if !args.encryptState.set {
-		args.encryptState.v = defaultEncryptState()
-	}
-	if args.encryptState.v {
-		if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
-			log.SetFlags(0)
-			log.Fatalf("--encrypt-state is not supported on %s", runtime.GOOS)
+	if buildfeatures.HasTPM {
+		if !args.encryptState.set {
+			args.encryptState.v = defaultEncryptState()
 		}
-		// Check if we have TPM support in this build.
-		if !store.HasKnownProviderPrefix(store.TPMPrefix + "/") {
-			log.SetFlags(0)
-			log.Fatal("--encrypt-state is not supported in this build of tailscaled")
-		}
-		// Check if we have TPM access.
-		if !hostinfo.New().TPM.Present() {
-			log.SetFlags(0)
-			log.Fatal("--encrypt-state is not supported on this device or a TPM is not accessible")
-		}
-		// Check for conflicting prefix in --state, like arn: or kube:.
-		if args.statepath != "" && store.HasKnownProviderPrefix(args.statepath) {
-			log.SetFlags(0)
-			log.Fatal("--encrypt-state can only be used with --state set to a local file path")
+		if args.encryptState.v {
+			if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+				log.SetFlags(0)
+				log.Fatalf("--encrypt-state is not supported on %s", runtime.GOOS)
+			}
+			// Check if we have TPM support in this build.
+			if !store.HasKnownProviderPrefix(store.TPMPrefix + "/") {
+				log.SetFlags(0)
+				log.Fatal("--encrypt-state is not supported in this build of tailscaled")
+			}
+			// Check if we have TPM access.
+			if !hostinfo.New().TPM.Present() {
+				log.SetFlags(0)
+				log.Fatal("--encrypt-state is not supported on this device or a TPM is not accessible")
+			}
+			// Check for conflicting prefix in --state, like arn: or kube:.
+			if args.statepath != "" && store.HasKnownProviderPrefix(args.statepath) {
+				log.SetFlags(0)
+				log.Fatal("--encrypt-state can only be used with --state set to a local file path")
+			}
 		}
 	}
 
@@ -308,8 +312,10 @@ func main() {
 
 	err := run()
 
-	// Remove file sharing from Windows shell (noop in non-windows)
-	osshare.SetFileSharingEnabled(false, logger.Discard)
+	if buildfeatures.HasTaildrop {
+		// Remove file sharing from Windows shell (noop in non-windows)
+		osshare.SetFileSharingEnabled(false, logger.Discard)
+	}
 
 	if err != nil {
 		log.Fatal(err)
