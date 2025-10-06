@@ -174,7 +174,8 @@ type CapabilityVersion int
 //   - 126: 2025-09-17: Client uses seamless key renewal unless disabled by control (tailscale/corp#31479)
 //   - 127: 2025-09-19: can handle C2N /debug/netmap.
 //   - 128: 2025-10-02: can handle C2N /debug/health.
-const CurrentCapabilityVersion CapabilityVersion = 128
+//   - 129: 2025-10-04: Fixed sleep/wake deadlock in magicsock when using peer relay (PR #17449)
+const CurrentCapabilityVersion CapabilityVersion = 129
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
