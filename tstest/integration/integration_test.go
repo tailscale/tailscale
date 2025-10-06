@@ -477,7 +477,7 @@ func TestOneNodeUpAuth(t *testing.T) {
 					var authURLCount atomic.Int32
 					var deviceApprovalURLCount atomic.Int32
 
-					handler := &authURLParserWriter{
+					handler := &authURLParserWriter{t: t,
 						authURLFn:           completeLogin(t, env.Control, &authURLCount),
 						deviceApprovalURLFn: completeDeviceApproval(t, n1, &deviceApprovalURLCount),
 					}
@@ -557,7 +557,7 @@ func TestOneNodeUpInterruptedAuth(t *testing.T) {
 
 	// This handler watches for auth URLs in stdout, then cancels the
 	// running `tailscale up` CLI command.
-	cmd1.Stdout = &authURLParserWriter{authURLFn: func(urlStr string) error {
+	cmd1.Stdout = &authURLParserWriter{t: t, authURLFn: func(urlStr string) error {
 		t.Logf("saw auth URL %q", urlStr)
 		cmd1.Process.Kill()
 		return nil
@@ -591,7 +591,7 @@ func TestOneNodeUpInterruptedAuth(t *testing.T) {
 
 	cmd2 := n.Tailscale(cmdArgs...)
 	cmd2.Stdout = &authURLParserWriter{
-		authURLFn: completeLogin(t, env.Control, &authURLCount),
+		t: t, authURLFn: completeLogin(t, env.Control, &authURLCount),
 	}
 	cmd2.Stderr = cmd2.Stdout
 
