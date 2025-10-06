@@ -592,6 +592,8 @@ func (b *LocalBackend) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus
 		healthChange = healthChangeSub.Events()
 	}
 	changeDeltaSub := eventbus.Subscribe[netmon.ChangeDelta](ec)
+	routeUpdateSub := eventbus.Subscribe[appctype.RouteUpdate](ec)
+	storeRoutesSub := eventbus.Subscribe[appctype.RouteInfo](ec)
 
 	var portlist <-chan PortlistServices
 	if buildfeatures.HasPortList {
@@ -612,9 +614,30 @@ func (b *LocalBackend) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus
 				b.onHealthChange(change)
 			case changeDelta := <-changeDeltaSub.Events():
 				b.linkChange(&changeDelta)
+
 			case pl := <-portlist:
 				if buildfeatures.HasPortList { // redundant, but explicit for linker deadcode and humans
 					b.setPortlistServices(pl)
+				}
+			case ru := <-routeUpdateSub.Events():
+				// TODO(creachadair, 2025-10-02): It is currently possible for updates produced under
+				// one profile to arrive and be applied after a switch to another profile.
+				// We need to find a way to ensure that changes to the backend state are applied
+				// consistently in the presnce of profile changes, which currently may not happen in
+				// a single atomic step.  See: https://github.com/tailscale/tailscale/issues/17414
+				if err := b.AdvertiseRoute(ru.Advertise...); err != nil {
+					b.logf("appc: failed to advertise routes: %v: %v", ru.Advertise, err)
+				}
+				if err := b.UnadvertiseRoute(ru.Unadvertise...); err != nil {
+					b.logf("appc: failed to unadvertise routes: %v: %v", ru.Unadvertise, err)
+				}
+			case ri := <-storeRoutesSub.Events():
+				// Whether or not routes should be stored can change over time.
+				shouldStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
+				if shouldStoreRoutes {
+					if err := b.storeRouteInfo(ri); err != nil {
+						b.logf("appc: failed to store route info: %v", err)
+					}
 				}
 			}
 		}
@@ -4836,35 +4859,27 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 		}
 	}()
 
+	// App connectors have been disabled.
 	if !prefs.AppConnector().Advertise {
 		b.appConnector.Close() // clean up a previous connector (safe on nil)
 		b.appConnector = nil
 		return
 	}
 
-	shouldAppCStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
-	if b.appConnector == nil || b.appConnector.ShouldStoreRoutes() != shouldAppCStoreRoutes {
-		var ri *appctype.RouteInfo
-		var storeFunc func(*appctype.RouteInfo) error
-		if shouldAppCStoreRoutes {
-			var err error
-			ri, err = b.readRouteInfoLocked()
-			if err != nil {
-				ri = &appctype.RouteInfo{}
-				if err != ipn.ErrStateNotExist {
-					b.logf("Unsuccessful Read RouteInfo: ", err)
-				}
-			}
-			storeFunc = b.storeRouteInfo
+	// We don't (yet) have an app connector configured, or the configured
+	// connector has a different route persistence setting.
+	shouldStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
+	if b.appConnector == nil || (shouldStoreRoutes != b.appConnector.ShouldStoreRoutes()) {
+		ri, err := b.readRouteInfoLocked()
+		if err != nil && err != ipn.ErrStateNotExist {
+			b.logf("Unsuccessful Read RouteInfo: %v", err)
 		}
-
 		b.appConnector.Close() // clean up a previous connector (safe on nil)
 		b.appConnector = appc.NewAppConnector(appc.Config{
 			Logf:            b.logf,
 			EventBus:        b.sys.Bus.Get(),
-			RouteAdvertiser: b,
 			RouteInfo:       ri,
-			StoreRoutesFunc: storeFunc,
+			HasStoredRoutes: shouldStoreRoutes,
 		})
 	}
 	if nm == nil {
@@ -7008,9 +7023,9 @@ func (b *LocalBackend) ObserveDNSResponse(res []byte) error {
 // ErrDisallowedAutoRoute is returned by AdvertiseRoute when a route that is not allowed is requested.
 var ErrDisallowedAutoRoute = errors.New("route is not allowed")
 
-// AdvertiseRoute implements the appc.RouteAdvertiser interface. It sets a new
-// route advertisement if one is not already present in the existing routes.
-// If the route is disallowed, ErrDisallowedAutoRoute is returned.
+// AdvertiseRoute implements the appctype.RouteAdvertiser interface. It sets a
+// new route advertisement if one is not already present in the existing
+// routes.  If the route is disallowed, ErrDisallowedAutoRoute is returned.
 func (b *LocalBackend) AdvertiseRoute(ipps ...netip.Prefix) error {
 	finalRoutes := b.Prefs().AdvertiseRoutes().AsSlice()
 	var newRoutes []netip.Prefix
@@ -7066,8 +7081,8 @@ func coveredRouteRangeNoDefault(finalRoutes []netip.Prefix, ipp netip.Prefix) bo
 	return false
 }
 
-// UnadvertiseRoute implements the appc.RouteAdvertiser interface. It removes
-// a route advertisement if one is present in the existing routes.
+// UnadvertiseRoute implements the appctype.RouteAdvertiser interface. It
+// removes a route advertisement if one is present in the existing routes.
 func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 	currentRoutes := b.Prefs().AdvertiseRoutes().AsSlice()
 	finalRoutes := currentRoutes[:0]
@@ -7095,7 +7110,7 @@ func namespaceKeyForCurrentProfile(pm *profileManager, key ipn.StateKey) ipn.Sta
 
 const routeInfoStateStoreKey ipn.StateKey = "_routeInfo"
 
-func (b *LocalBackend) storeRouteInfo(ri *appctype.RouteInfo) error {
+func (b *LocalBackend) storeRouteInfo(ri appctype.RouteInfo) error {
 	if !buildfeatures.HasAppConnectors {
 		return feature.ErrUnavailable
 	}
