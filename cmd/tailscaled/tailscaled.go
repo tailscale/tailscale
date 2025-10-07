@@ -276,30 +276,7 @@ func main() {
 	}
 
 	if buildfeatures.HasTPM {
-		if !args.encryptState.set {
-			args.encryptState.v = defaultEncryptState()
-		}
-		if args.encryptState.v {
-			if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
-				log.SetFlags(0)
-				log.Fatalf("--encrypt-state is not supported on %s", runtime.GOOS)
-			}
-			// Check if we have TPM support in this build.
-			if !store.HasKnownProviderPrefix(store.TPMPrefix + "/") {
-				log.SetFlags(0)
-				log.Fatal("--encrypt-state is not supported in this build of tailscaled")
-			}
-			// Check if we have TPM access.
-			if !hostinfo.New().TPM.Present() {
-				log.SetFlags(0)
-				log.Fatal("--encrypt-state is not supported on this device or a TPM is not accessible")
-			}
-			// Check for conflicting prefix in --state, like arn: or kube:.
-			if args.statepath != "" && store.HasKnownProviderPrefix(args.statepath) {
-				log.SetFlags(0)
-				log.Fatal("--encrypt-state can only be used with --state set to a local file path")
-			}
-		}
+		handleTPMFlags()
 	}
 
 	if args.disableLogs {
@@ -902,14 +879,47 @@ func applyIntegrationTestEnvKnob() {
 	}
 }
 
-func defaultEncryptState() bool {
+// handleTPMFlags validates the --encrypt-state flag if set, and defaults
+// state encryption on if it's supported and compatible with other settings.
+func handleTPMFlags() {
+	switch {
+	case args.encryptState.v:
+		// Explicitly enabled, validate.
+		if err := canEncryptState(); err != nil {
+			log.SetFlags(0)
+			log.Fatal(err)
+		}
+	case !args.encryptState.set:
+		policyEncrypt, _ := policyclient.Get().GetBoolean(pkey.EncryptState, feature.TPMAvailable())
+		if !policyEncrypt {
+			// Default disabled, no need to validate.
+			return
+		}
+		// Default enabled if available.
+		if err := canEncryptState(); err == nil {
+			args.encryptState.v = true
+		}
+	}
+}
+
+// canEncryptState returns an error if state encryption can't be enabled,
+// either due to availability or compatibility with other settings.
+func canEncryptState() error {
 	if runtime.GOOS != "windows" && runtime.GOOS != "linux" {
 		// TPM encryption is only configurable on Windows and Linux. Other
 		// platforms either use system APIs and are not configurable
 		// (Android/Apple), or don't support any form of encryption yet
 		// (plan9/FreeBSD/etc).
-		return false
+		return fmt.Errorf("--encrypt-state is not supported on %s", runtime.GOOS)
 	}
-	v, _ := policyclient.Get().GetBoolean(pkey.EncryptState, feature.TPMAvailable())
-	return v
+	// Check if we have TPM access.
+	if !feature.TPMAvailable() {
+		return errors.New("--encrypt-state is not supported on this device or a TPM is not accessible")
+	}
+	// Check for conflicting prefix in --state, like arn: or kube:.
+	if args.statepath != "" && store.HasKnownProviderPrefix(args.statepath) {
+		return errors.New("--encrypt-state can only be used with --state set to a local file path")
+	}
+
+	return nil
 }
