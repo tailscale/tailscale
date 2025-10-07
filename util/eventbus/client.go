@@ -147,6 +147,29 @@ func Subscribe[T any](c *Client) *Subscriber[T] {
 	return s
 }
 
+// SubscribeFunc is like [Subscribe], but calls the provided func for each
+// event of type T.
+//
+// A SubscriberFunc calls f synchronously from the client's goroutine.
+// This means the callback must not block for an extended period of time,
+// as this will block the subscriber and slow event processing for all
+// subscriptions on c.
+func SubscribeFunc[T any](c *Client, f func(T)) *SubscriberFunc[T] {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// The caller should not race subscriptions with close, give them a useful
+	// diagnostic at the call site.
+	if c.isClosed() {
+		panic("cannot SubscribeFunc on a closed client")
+	}
+
+	r := c.subscribeStateLocked()
+	s := newSubscriberFunc[T](r, f)
+	r.addSubscriber(s)
+	return s
+}
+
 // Publish returns a publisher for event type T using the given client.
 // It panics if c is closed.
 func Publish[T any](c *Client) *Publisher[T] {
