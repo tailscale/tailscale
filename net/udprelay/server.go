@@ -536,6 +536,7 @@ func (s *Server) listenOn(port int) error {
 			s.uc6 = bc
 			s.uc6Port = uint16(portUint)
 		}
+		s.logf("listening on %s:%d", network, portUint)
 	}
 	return nil
 }

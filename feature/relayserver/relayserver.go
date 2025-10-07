@@ -21,10 +21,8 @@ import (
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/udprelay"
-	"tailscale.com/net/udprelay/endpoint"
 	"tailscale.com/net/udprelay/status"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/eventbus"
@@ -89,13 +87,6 @@ type extension struct {
 	eventSubs                     *eventbus.Monitor                // nil if not connected to eventbus
 	debugSessionsCh               chan chan []status.ServerSession // non-nil if consumeEventbusTopics is running
 	hasNodeAttrDisableRelayServer bool                             // tailcfg.NodeAttrDisableRelayServer
-}
-
-// relayServer is the interface of [udprelay.Server].
-type relayServer interface {
-	AllocateEndpoint(discoA key.DiscoPublic, discoB key.DiscoPublic) (endpoint.ServerEndpoint, error)
-	Close() error
-	GetSessions() []status.ServerSession
 }
 
 // Name implements [ipnext.Extension].
@@ -182,7 +173,11 @@ func (e *extension) consumeEventbusTopics(ec *eventbus.Client, port int) func(*e
 	debugSessionsCh := e.debugSessionsCh
 
 	return func(ec *eventbus.Client) {
-		var rs relayServer // lazily initialized
+		rs, err := udprelay.NewServer(e.logf, port, overrideAddrs())
+		if err != nil {
+			e.logf("error initializing server: %v", err)
+		}
+
 		defer func() {
 			if rs != nil {
 				rs.Close()
@@ -194,7 +189,6 @@ func (e *extension) consumeEventbusTopics(ec *eventbus.Client, port int) func(*e
 				return
 			case respCh := <-debugSessionsCh:
 				if rs == nil {
-					// Don't initialize the server simply for a debug request.
 					respCh <- nil
 					continue
 				}
@@ -202,7 +196,8 @@ func (e *extension) consumeEventbusTopics(ec *eventbus.Client, port int) func(*e
 				respCh <- sessions
 			case req := <-reqSub.Events():
 				if rs == nil {
-					var err error
+					// The server may have previously failed to initialize if
+					// the configured port was in use, try again.
 					rs, err = udprelay.NewServer(e.logf, port, overrideAddrs())
 					if err != nil {
 						e.logf("error initializing server: %v", err)
