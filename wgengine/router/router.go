@@ -35,14 +35,6 @@ type Router interface {
 	// implementation should handle gracefully.
 	Set(*Config) error
 
-	// UpdateMagicsockPort tells the OS network stack what port magicsock
-	// is currently listening on, so it can be threaded through firewalls
-	// and such. This is distinct from Set() since magicsock may rebind
-	// ports independently from the Config changing.
-	//
-	// network should be either "udp4" or "udp6".
-	UpdateMagicsockPort(port uint16, network string) error
-
 	// Close closes the router.
 	Close() error
 }
@@ -54,6 +46,14 @@ type NewOpts struct {
 	NetMon *netmon.Monitor // optional
 	Health *health.Tracker // required (but TODO: support optional later)
 	Bus    *eventbus.Bus   // required
+}
+
+// PortUpdate is an eventbus value, reporting the port and address family
+// magicsock is currently listening on, so it can be threaded through firewalls
+// and such.
+type PortUpdate struct {
+	UDPPort         uint16
+	EndpointNetwork string // either "udp4" or "udp6".
 }
 
 // HookNewUserspaceRouter is the registration point for router implementations
