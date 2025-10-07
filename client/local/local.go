@@ -381,6 +381,9 @@ func (lc *Client) UserMetrics(ctx context.Context) ([]byte, error) {
 //
 // IncrementCounter does not support gauge metrics or negative delta values.
 func (lc *Client) IncrementCounter(ctx context.Context, name string, delta int) error {
+	if !buildfeatures.HasClientMetrics {
+		return nil
+	}
 	type metricUpdate struct {
 		Name  string `json:"name"`
 		Type  string `json:"type"`
