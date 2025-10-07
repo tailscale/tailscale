@@ -46,8 +46,9 @@
     systems,
     flake-compat,
   }: let
-    go125Version = "1.25.1";
-    goHash = "sha256-0BDBCc7pTYDv5oHqtGvepJGskGv0ZYPDLp8NuwvRpZQ=";
+    goVersion = "1.25.1";
+    toolChainRev = nixpkgs.lib.fileContents ./go.toolchain.rev;
+    gitHash = "sha256-1OCmJ7sZL6G/6wO2+lnW4uYPCIdbXhscD5qSTIPoxDk=";
     eachSystem = f:
       nixpkgs.lib.genAttrs (import systems) (system:
         f (import nixpkgs {
@@ -55,10 +56,12 @@
           overlays = [
             (final: prev: {
               go_1_25 = prev.go_1_25.overrideAttrs {
-                version = go125Version;
-                src = prev.fetchurl {
-                  url = "https://go.dev/dl/go${go125Version}.src.tar.gz";
-                  hash = goHash;
+                version = goVersion;
+                src = prev.fetchFromGitHub {
+                  owner = "tailscale";
+                  repo = "go";
+                  rev = toolChainRev;
+                  hash = gitHash;
                 };
               };
             })
