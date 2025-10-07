@@ -1,16 +1,21 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !android
+//go:build linux && !android
 
-package tstun
+package linkspeed
 
 import (
 	"github.com/mdlayher/genetlink"
 	"github.com/mdlayher/netlink"
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/unix"
+	"tailscale.com/net/tstun"
 )
+
+func init() {
+	tstun.HookSetLinkAttrs.Set(setLinkAttrs)
+}
 
 // setLinkSpeed sets the advertised link speed of the TUN interface.
 func setLinkSpeed(iface tun.Device, mbps int) error {
