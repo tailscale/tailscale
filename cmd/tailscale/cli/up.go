@@ -921,7 +921,20 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 		flagIsSet[f.Name] = true
 	})
 
-	if len(flagIsSet) == 0 {
+	// Check if the user wants us to bring the network up without any changes,
+	// which means either:
+	//
+	//	  - `tailscale up` with no flags, when they use the default control, or
+	//	  - `tailscale up --login-server=<…>` with no other flags, and the same
+	//		control server as specified previously
+	//
+	hasNoFlags := env.flagSet.NFlag() == 0
+	hasOnlyLoginServerFlag := (env.flagSet.NFlag() == 1 && flagIsSet["login-server"])
+
+	isSameControlURL := (curPrefs.ControlURL == newPrefs.ControlURL ||
+		(ipn.IsLoginServerSynonym(curPrefs.ControlURL) && ipn.IsLoginServerSynonym(newPrefs.ControlURL)))
+
+	if (hasNoFlags || hasOnlyLoginServerFlag) && isSameControlURL {
 		// A bare "tailscale up" is a special case to just
 		// mean bringing the network up without any changes.
 		return nil

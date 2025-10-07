@@ -687,6 +687,91 @@ func TestOneNodeUpInterruptedMachineAuth(t *testing.T) {
 	n.AwaitRunning()
 }
 
+// Regression test for https://github.com/tailscale/tailscale/issues/17476
+//
+// If you join a tailnet on a alternative control server that requires device
+// approval, and you log in but don't complete device approval, running a plain
+// `tailscale up` should not default you back to controlplane.tailscale.com.
+func TestOneNodeUpInterruptedAuthWithCustomLoginServer(t *testing.T) {
+	tstest.Shard(t)
+	tstest.Parallel(t)
+
+	env := NewTestEnv(t, ConfigureControl(
+		func(control *testcontrol.Server) {
+			control.RequireAuth = true
+			control.RequireMachineAuth = true
+			control.AllNodesSameUser = true
+		},
+	))
+
+	n := NewTestNode(t, env)
+	d := n.StartDaemon()
+	defer d.MustCleanShutdown(t)
+
+	// The first time we run the command, we:
+	//
+	//    * wait for an auth URL to be printed
+	//    * click it to complete the login process
+	//    * wait for a machine auth URL to be printed
+	//    * cancel the command, equivalent to ^C
+	//
+	// At this point, we've logged in to the alternative control server,
+	// but our node isn't approved to connect to the tailnet.
+	cmd1Args := []string{"up", "--login-server=" + env.ControlURL(), "--hostname=example"}
+	t.Logf("Running command: %s", strings.Join(cmd1Args, " "))
+	cmd1 := n.Tailscale(cmd1Args...)
+
+	handler1 := &authURLParserWriter{t: t,
+		authURLFn: completeLogin(t, env.Control, &atomic.Int32{}),
+		deviceApprovalURLFn: func(urlStr string) error {
+			t.Logf("saw device approval URL %q", urlStr)
+			cmd1.Process.Kill()
+			return nil
+		},
+	}
+	cmd1.Stdout = handler1
+	cmd1.Stderr = cmd1.Stdout
+
+	if err := cmd1.Run(); !isNonZeroExitCode(err) {
+		t.Fatalf("Command did not fail with non-zero exit code: %q", err)
+	}
+
+	// The second time we run the command, we do not pass the --login-server
+	// flag, but because we already logged in, we expect `tailscale up` to fail.
+	//
+	// As of 7 October 2025, the error we receive is:
+	//
+	//     Error: changing settings via 'tailscale up' requires mentioning all
+	//     non-default flags. To proceed, either re-run your command with --reset or
+	//     use the command below to explicitly mention the current value of
+	//     all non-default settings:
+	//
+	//         tailscale up --login-server=http://localhost:31544/
+	//
+	//     exit status 1
+	//
+	cmd2Args := []string{"up"}
+	t.Logf("Running command: %s", strings.Join(cmd2Args, " "))
+
+	var outBuf, errBuf bytes.Buffer
+
+	cmd2 := n.Tailscale(cmd2Args...)
+	cmd2.Stdout = &outBuf
+	cmd2.Stderr = &errBuf
+
+	if err := cmd2.Run(); !isNonZeroExitCode(err) {
+		t.Fatalf("Command did not fail with non-zero exit code: %q", err)
+	}
+
+	if s := outBuf.String(); s != "" {
+		t.Fatalf("unexpected text in stdout; got: %q", s)
+	}
+
+	if s := errBuf.String(); !strings.HasPrefix(s, "Error: changing settings via 'tailscale up'") {
+		t.Fatalf("stderr did not tell us to change settings; got: %q", s)
+	}
+}
+
 func TestConfigFileAuthKey(t *testing.T) {
 	tstest.SkipOnUnshardedCI(t)
 	tstest.Shard(t)
