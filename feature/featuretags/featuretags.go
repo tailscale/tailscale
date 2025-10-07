@@ -161,6 +161,10 @@ var Features = map[FeatureTag]FeatureMeta{
 	"kube":          {Sym: "Kube", Desc: "Kubernetes integration"},
 	"lazywg":        {Sym: "LazyWG", Desc: "Lazy WireGuard configuration for memory-constrained devices with large netmaps"},
 	"linuxdnsfight": {Sym: "LinuxDNSFight", Desc: "Linux support for detecting DNS fights (inotify watching of /etc/resolv.conf)"},
+	"linkspeed": {
+		Sym:  "LinkSpeed",
+		Desc: "Set link speed on TUN device for better OS integration (Linux only)",
+	},
 	"listenrawdisco": {
 		Sym:  "ListenRawDisco",
 		Desc: "Use raw sockets for more robust disco (NAT traversal) message receiving (Linux only)",
