@@ -139,7 +139,7 @@ type Options struct {
 	Dialer               *tsdial.Dialer      // non-nil
 	C2NHandler           http.Handler        // or nil
 	ControlKnobs         *controlknobs.Knobs // or nil to ignore
-	Bus                  *eventbus.Bus
+	Bus                  *eventbus.Bus       // non-nil, for setting up publishers
 
 	// Observer is called when there's a change in status to report
 	// from the control client.
