@@ -180,6 +180,7 @@ func (nc *Client) Close() error {
 	nc.mu.Lock()
 	live := nc.connPool
 	nc.closed = true
+	nc.connPool = nil // stop noteConnClosed from mutating it as we loop over it (in live) below
 	nc.mu.Unlock()
 
 	for _, c := range live {
