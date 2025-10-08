@@ -17,7 +17,7 @@ type EqualCloner[T any] interface {
 //
 // It only modifies *old if they are different. old must be non-nil.
 func Update[T EqualCloner[T]](old *T, new T) (changed bool) {
-	if new.Equal(*old) {
+	if (*old).Equal(new) {
 		return false
 	}
 	*old = new.Clone()
