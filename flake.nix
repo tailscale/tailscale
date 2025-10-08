@@ -46,9 +46,9 @@
     systems,
     flake-compat,
   }: let
-    goVersion = "1.25.1";
+    goVersion = nixpkgs.lib.fileContents ./go.toolchain.version;
     toolChainRev = nixpkgs.lib.fileContents ./go.toolchain.rev;
-    gitHash = "sha256-1OCmJ7sZL6G/6wO2+lnW4uYPCIdbXhscD5qSTIPoxDk=";
+    gitHash = nixpkgs.lib.fileContents ./go.toolchain.rev.sri;
     eachSystem = f:
       nixpkgs.lib.genAttrs (import systems) (system:
         f (import nixpkgs {
@@ -61,7 +61,7 @@
                   owner = "tailscale";
                   repo = "go";
                   rev = toolChainRev;
-                  hash = gitHash;
+                  sha256 = gitHash;
                 };
               };
             })
