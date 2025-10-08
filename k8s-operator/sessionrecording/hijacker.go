@@ -122,7 +122,7 @@ func (h *Hijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 		return nil, nil, fmt.Errorf("error hijacking connection: %w", err)
 	}
 
-	conn, err := h.setUpRecording(h.req.Context(), reqConn)
+	conn, err := h.setUpRecording(reqConn)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error setting up session recording: %w", err)
 	}
@@ -133,7 +133,7 @@ func (h *Hijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // spdyHijacker.addrs. Returns conn from provided opts, wrapped in recording
 // logic. If connecting to the recorder fails or an error is received during the
 // session and spdyHijacker.failOpen is false, connection will be closed.
-func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn, error) {
+func (h *Hijacker) setUpRecording(conn net.Conn) (_ net.Conn, retErr error) {
 	const (
 		// https://docs.asciinema.org/manual/asciicast/v2/
 		asciicastv2  = 2
@@ -147,6 +147,14 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 		errChan <-chan error
 	)
 	h.log.Infof("kubectl %s session will be recorded, recorders: %v, fail open policy: %t", h.sessionType, h.addrs, h.failOpen)
+	// NOTE: (ChaosInTheCRD) we want to use a dedicated context here, rather than the context from the request,
+	// otherwise the context can be cancelled by the client (kubectl) while we are still streaming to tsrecorder.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		if retErr != nil {
+			cancel()
+		}
+	}()
 	qp := h.req.URL.Query()
 	container := strings.Join(qp[containerKey], "")
 	var recorderAddr net.Addr
@@ -213,6 +221,7 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 	}
 
 	go func() {
+		defer cancel()
 		var err error
 		select {
 		case <-ctx.Done():

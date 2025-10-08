@@ -95,7 +95,7 @@ func Test_Hijacker(t *testing.T) {
 				proto:    tt.proto,
 			}
 			ctx := context.Background()
-			_, err := h.setUpRecording(ctx, tc)
+			_, err := h.setUpRecording(tc)
 			if (err != nil) != tt.wantsSetupErr {
 				t.Errorf("spdyHijacker.setupRecording() error = %v, wantErr %v", err, tt.wantsSetupErr)
 				return
