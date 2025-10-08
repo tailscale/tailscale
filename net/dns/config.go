@@ -7,6 +7,7 @@ package dns
 import (
 	"bufio"
 	"fmt"
+	"maps"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -190,15 +191,21 @@ func sameResolverNames(a, b []*dnstype.Resolver) bool {
 	return true
 }
 
+// Clone makes a shallow clone of c.
+//
+// The returned Config still references slices and maps from c.
+//
+// TODO(bradfitz): use cmd/{viewer,cloner} for these and make the
+// caller use views instead.
 func (c *Config) Clone() *Config {
 	if c == nil {
 		return nil
 	}
 	return &Config{
 		DefaultResolvers: slices.Clone(c.DefaultResolvers),
-		Routes:           make(map[dnsname.FQDN][]*dnstype.Resolver, len(c.Routes)),
+		Routes:           maps.Clone(c.Routes),
 		SearchDomains:    slices.Clone(c.SearchDomains),
-		Hosts:            make(map[dnsname.FQDN][]netip.Addr, len(c.Hosts)),
+		Hosts:            maps.Clone(c.Hosts),
 		OnlyIPv6:         c.OnlyIPv6,
 	}
 }

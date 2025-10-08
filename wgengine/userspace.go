@@ -965,8 +965,9 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	isSubnetRouterChanged := isSubnetRouter != e.lastIsSubnetRouter
 
 	engineChanged := checkchange.Update(&e.lastEngineFull, cfg)
-	dnsChanged := checkchange.Update(&e.lastDNSConfig, dnsCfg)
+	dnsChanged := buildfeatures.HasDNS && checkchange.Update(&e.lastDNSConfig, dnsCfg)
 	routerChanged := checkchange.Update(&e.lastRouter, routerCfg)
+
 	listenPortChanged := listenPort != e.magicConn.LocalPort()
 	peerMTUChanged := peerMTUEnable != e.magicConn.PeerMTUEnabled()
 	if !engineChanged && !routerChanged && !dnsChanged && !listenPortChanged && !isSubnetRouterChanged && !peerMTUChanged {
@@ -987,7 +988,9 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	// instead have ipnlocal populate a map of DNS IP => linkName and
 	// put that in the *dns.Config instead, and plumb it down to the
 	// dns.Manager. Maybe also with isLocalAddr above.
-	e.isDNSIPOverTailscale.Store(ipset.NewContainsIPFunc(views.SliceOf(dnsIPsOverTailscale(dnsCfg, routerCfg))))
+	if buildfeatures.HasDNS {
+		e.isDNSIPOverTailscale.Store(ipset.NewContainsIPFunc(views.SliceOf(dnsIPsOverTailscale(dnsCfg, routerCfg))))
+	}
 
 	// See if any peers have changed disco keys, which means they've restarted.
 	// If so, we need to update the wireguard-go/device.Device in two phases:
@@ -1063,7 +1066,18 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		if err != nil {
 			return err
 		}
+	}
 
+	// We've historically re-set DNS even after just a router change. While
+	// refactoring in tailscale/tailscale#17448 and and
+	// tailscale/tailscale#17499, I'm erring on the side of keeping that
+	// historical quirk for now (2025-10-08), lest it's load bearing in
+	// unexpected ways
+	//
+	// TODO(bradfitz): try to do the "configuring DNS" part below only if
+	// dnsChanged, not routerChanged. The "resolver.ShouldUseRoutes" part
+	// probably needs to keep happening for both.
+	if buildfeatures.HasDNS && (routerChanged || dnsChanged) {
 		if resolver.ShouldUseRoutes(e.controlKnobs) {
 			e.logf("wgengine: Reconfig: user dialer")
 			e.dialer.SetRoutes(routerCfg.Routes, routerCfg.LocalRoutes)
@@ -1075,7 +1089,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		// DNS managers refuse to apply settings if the device has no
 		// assigned address.
 		e.logf("wgengine: Reconfig: configuring DNS")
-		err = e.dns.Set(*dnsCfg)
+		err := e.dns.Set(*dnsCfg)
 		e.health.SetDNSHealth(err)
 		if err != nil {
 			return err
@@ -1097,7 +1111,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		}
 	}
 
-	if isSubnetRouterChanged && e.birdClient != nil {
+	if buildfeatures.HasBird && isSubnetRouterChanged && e.birdClient != nil {
 		e.logf("wgengine: Reconfig: configuring BIRD")
 		var err error
 		if isSubnetRouter {
