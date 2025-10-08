@@ -9,11 +9,13 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,9 +150,9 @@ func TestConnectToRecorder(t *testing.T) {
 				// Wire up h2c-compatible HTTP/2 server. This is optional
 				// because the v1 recorder didn't support HTTP/2 and we try to
 				// mimic that.
-				h2s := &http2.Server{}
-				srv.Config.Handler = h2c.NewHandler(mux, h2s)
-				if err := http2.ConfigureServer(srv.Config, h2s); err != nil {
+				s := &http2.Server{}
+				srv.Config.Handler = h2c.NewHandler(mux, s)
+				if err := http2.ConfigureServer(srv.Config, s); err != nil {
 					t.Errorf("configuring HTTP/2 support in server: %v", err)
 				}
 			}
@@ -186,4 +188,98 @@ func TestConnectToRecorder(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSendEvent(t *testing.T) {
+	t.Run("supported", func(t *testing.T) {
+		eventBody := `{"foo":"bar"}`
+		eventRecieved := make(chan []byte, 1)
+		mux := http.NewServeMux()
+		mux.HandleFunc("HEAD /v2/event", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		mux.HandleFunc("POST /v2/event", func(w http.ResponseWriter, r *http.Request) {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Error(err)
+			}
+			eventRecieved <- body
+			w.WriteHeader(http.StatusOK)
+		})
+
+		srv := httptest.NewUnstartedServer(mux)
+		s := &http2.Server{}
+		srv.Config.Handler = h2c.NewHandler(mux, s)
+		if err := http2.ConfigureServer(srv.Config, s); err != nil {
+			t.Fatalf("configuring HTTP/2 support in server: %v", err)
+		}
+		srv.Start()
+		t.Cleanup(srv.Close)
+
+		d := new(net.Dialer)
+		addr := netip.MustParseAddrPort(srv.Listener.Addr().String())
+		err := SendEvent(addr, bytes.NewBufferString(eventBody), d.DialContext)
+		if err != nil {
+			t.Fatalf("SendEvent: %v", err)
+		}
+
+		if recv := string(<-eventRecieved); recv != eventBody {
+			t.Errorf("mismatch in event body, sent %q, received %q", eventBody, recv)
+		}
+	})
+
+	t.Run("not_supported", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("HEAD /v2/event", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		})
+
+		srv := httptest.NewUnstartedServer(mux)
+		s := &http2.Server{}
+		srv.Config.Handler = h2c.NewHandler(mux, s)
+		if err := http2.ConfigureServer(srv.Config, s); err != nil {
+			t.Fatalf("configuring HTTP/2 support in server: %v", err)
+		}
+		srv.Start()
+		t.Cleanup(srv.Close)
+
+		d := new(net.Dialer)
+		addr := netip.MustParseAddrPort(srv.Listener.Addr().String())
+		err := SendEvent(addr, nil, d.DialContext)
+		if err == nil {
+			t.Fatal("expected an error, got nil")
+		}
+		if !strings.Contains(err.Error(), fmt.Sprintf(addressNotSupportEventv2, srv.Listener.Addr().String())) {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("server_error", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("HEAD /v2/event", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		mux.HandleFunc("POST /v2/event", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		})
+
+		srv := httptest.NewUnstartedServer(mux)
+		s := &http2.Server{}
+		srv.Config.Handler = h2c.NewHandler(mux, s)
+		if err := http2.ConfigureServer(srv.Config, s); err != nil {
+			t.Fatalf("configuring HTTP/2 support in server: %v", err)
+		}
+		srv.Start()
+		t.Cleanup(srv.Close)
+
+		d := new(net.Dialer)
+		addr := netip.MustParseAddrPort(srv.Listener.Addr().String())
+		err := SendEvent(addr, nil, d.DialContext)
+		if err == nil {
+			t.Fatal("expected an error, got nil")
+		}
+		if !strings.Contains(err.Error(), "server returned non-OK status") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }

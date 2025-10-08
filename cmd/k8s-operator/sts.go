@@ -63,7 +63,7 @@ const (
 	AnnotationHostname           = "tailscale.com/hostname"
 	annotationTailnetTargetIPOld = "tailscale.com/ts-tailnet-target-ip"
 	AnnotationTailnetTargetIP    = "tailscale.com/tailnet-ip"
-	//MagicDNS name of tailnet node.
+	// MagicDNS name of tailnet node.
 	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
 
 	AnnotationProxyGroup = "tailscale.com/proxy-group"

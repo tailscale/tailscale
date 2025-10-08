@@ -136,6 +136,7 @@ require (
 	github.com/alecthomas/go-check-sumtype v0.1.4 // indirect
 	github.com/alexkohler/nakedret/v2 v2.0.4 // indirect
 	github.com/armon/go-metrics v0.4.1 // indirect
+	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/boltdb/bolt v1.3.1 // indirect
 	github.com/bombsimon/wsl/v4 v4.2.1 // indirect
 	github.com/butuzov/mirror v1.1.0 // indirect
@@ -186,6 +187,7 @@ require (
 	go.uber.org/automaxprocs v1.5.3 // indirect
 	golang.org/x/xerrors v0.0.0-20240716161551-93cc26a95ae9 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
+	k8s.io/component-base v0.32.0 // indirect
 )
 
 require (
