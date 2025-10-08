@@ -99,7 +99,7 @@ func TestContainerBoot(t *testing.T) {
 		NetMap: &netmap.NetworkMap{
 			SelfNode: (&tailcfg.Node{
 				StableID:  tailcfg.StableNodeID("myID"),
-				Name:      "test-node.test.ts.net",
+				Name:      "test-node.test.ts.net.",
 				Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
 			}).View(),
 		},
@@ -356,7 +356,7 @@ func TestContainerBoot(t *testing.T) {
 			return testCase{
 				Env: map[string]string{
 					"TS_AUTHKEY":               "tskey-key",
-					"TS_TAILNET_TARGET_FQDN":   "ipv6-node.test.ts.net", // resolves to IPv6 address
+					"TS_TAILNET_TARGET_FQDN":   "ipv6-node.test.ts.net.", // resolves to IPv6 address
 					"TS_USERSPACE":             "false",
 					"TS_TEST_FAKE_NETFILTER_6": "false",
 				},
@@ -377,13 +377,13 @@ func TestContainerBoot(t *testing.T) {
 							NetMap: &netmap.NetworkMap{
 								SelfNode: (&tailcfg.Node{
 									StableID:  tailcfg.StableNodeID("myID"),
-									Name:      "test-node.test.ts.net",
+									Name:      "test-node.test.ts.net.",
 									Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
 								}).View(),
 								Peers: []tailcfg.NodeView{
 									(&tailcfg.Node{
 										StableID:  tailcfg.StableNodeID("ipv6ID"),
-										Name:      "ipv6-node.test.ts.net",
+										Name:      "ipv6-node.test.ts.net.",
 										Addresses: []netip.Prefix{netip.MustParsePrefix("::1/128")},
 									}).View(),
 								},
@@ -481,7 +481,7 @@ func TestContainerBoot(t *testing.T) {
 						Notify: runningNotify,
 						WantKubeSecret: map[string]string{
 							"authkey":           "tskey-key",
-							"device_fqdn":       "test-node.test.ts.net",
+							"device_fqdn":       "test-node.test.ts.net.",
 							"device_id":         "myID",
 							"device_ips":        `["100.64.0.1"]`,
 							kubetypes.KeyCapVer: capver,
@@ -580,7 +580,7 @@ func TestContainerBoot(t *testing.T) {
 							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
 						},
 						WantKubeSecret: map[string]string{
-							"device_fqdn":       "test-node.test.ts.net",
+							"device_fqdn":       "test-node.test.ts.net.",
 							"device_id":         "myID",
 							"device_ips":        `["100.64.0.1"]`,
 							kubetypes.KeyCapVer: capver,
@@ -613,7 +613,7 @@ func TestContainerBoot(t *testing.T) {
 						Notify: runningNotify,
 						WantKubeSecret: map[string]string{
 							"authkey":           "tskey-key",
-							"device_fqdn":       "test-node.test.ts.net",
+							"device_fqdn":       "test-node.test.ts.net.",
 							"device_id":         "myID",
 							"device_ips":        `["100.64.0.1"]`,
 							kubetypes.KeyCapVer: capver,
@@ -625,14 +625,14 @@ func TestContainerBoot(t *testing.T) {
 							NetMap: &netmap.NetworkMap{
 								SelfNode: (&tailcfg.Node{
 									StableID:  tailcfg.StableNodeID("newID"),
-									Name:      "new-name.test.ts.net",
+									Name:      "new-name.test.ts.net.",
 									Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
 								}).View(),
 							},
 						},
 						WantKubeSecret: map[string]string{
 							"authkey":           "tskey-key",
-							"device_fqdn":       "new-name.test.ts.net",
+							"device_fqdn":       "new-name.test.ts.net.",
 							"device_id":         "newID",
 							"device_ips":        `["100.64.0.1"]`,
 							kubetypes.KeyCapVer: capver,
@@ -927,7 +927,7 @@ func TestContainerBoot(t *testing.T) {
 						Notify: runningNotify,
 						WantKubeSecret: map[string]string{
 							"authkey":           "tskey-key",
-							"device_fqdn":       "test-node.test.ts.net",
+							"device_fqdn":       "test-node.test.ts.net.",
 							"device_id":         "myID",
 							"device_ips":        `["100.64.0.1"]`,
 							"https_endpoint":    "no-https",
@@ -967,7 +967,7 @@ func TestContainerBoot(t *testing.T) {
 						WantKubeSecret: map[string]string{
 							"egress-services":   string(mustJSON(t, egressStatus)),
 							"authkey":           "tskey-key",
-							"device_fqdn":       "test-node.test.ts.net",
+							"device_fqdn":       "test-node.test.ts.net.",
 							"device_id":         "myID",
 							"device_ips":        `["100.64.0.1"]`,
 							kubetypes.KeyCapVer: capver,
@@ -1337,6 +1337,11 @@ func (l *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			panic(fmt.Sprintf("unsupported method %q", r.Method))
 		}
 		w.Write([]byte("fake metrics"))
+		return
+	case "/localapi/v0/prefs":
+		if r.Method != "GET" {
+			panic(fmt.Sprintf("unsupported method %q", r.Method))
+		}
 		return
 	default:
 		panic(fmt.Sprintf("unsupported path %q", r.URL.Path))

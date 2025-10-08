@@ -27,7 +27,6 @@ import (
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/tailcfg"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/linuxfw"
 	"tailscale.com/util/mak"
@@ -477,30 +476,23 @@ func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, n ipn.N
 		log.Printf("netmap is not available, unable to determine backend addresses for %s", svc.TailnetTarget.FQDN)
 		return addrs, nil
 	}
-	var (
-		node      tailcfg.NodeView
-		nodeFound bool
-	)
-	for _, nn := range n.NetMap.Peers {
-		if equalFQDNs(nn.Name(), svc.TailnetTarget.FQDN) {
-			node = nn
-			nodeFound = true
-			break
-		}
+	egressAddrs, err := resolveTailnetFQDN(n.NetMap, svc.TailnetTarget.FQDN)
+	if err != nil || len(egressAddrs) == 0 {
+		log.Printf("tailnet target %q does not have any backend addresses, skipping", svc.TailnetTarget.FQDN)
+		return addrs, nil
 	}
-	if nodeFound {
-		for _, addr := range node.Addresses().AsSlice() {
-			if addr.Addr().Is6() && !ep.nfr.HasIPV6NAT() {
-				log.Printf("tailnet target %v is an IPv6 address, but this host does not support IPv6 in the chosen firewall mode, skipping.", addr.Addr().String())
-				continue
-			}
-			addrs = append(addrs, addr.Addr())
+
+	for _, addr := range egressAddrs {
+		if addr.Addr().Is6() && !ep.nfr.HasIPV6NAT() {
+			log.Printf("tailnet target %v is an IPv6 address, but this host does not support IPv6 in the chosen firewall mode, skipping.", addr.Addr().String())
+			continue
 		}
-		// Egress target endpoints configured via FQDN are stored, so
-		// that we can determine if a netmap update should trigger a
-		// resync.
-		mak.Set(&ep.targetFQDNs, svc.TailnetTarget.FQDN, node.Addresses().AsSlice())
+		addrs = append(addrs, addr.Addr())
 	}
+	// Egress target endpoints configured via FQDN are stored, so
+	// that we can determine if a netmap update should trigger a
+	// resync.
+	mak.Set(&ep.targetFQDNs, svc.TailnetTarget.FQDN, egressAddrs)
 	return addrs, nil
 }
 
