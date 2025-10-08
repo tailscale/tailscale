@@ -879,14 +879,6 @@ func (de *endpoint) setHeartbeatDisabled(v bool) {
 
 // discoverUDPRelayPathsLocked starts UDP relay path discovery.
 func (de *endpoint) discoverUDPRelayPathsLocked(now mono.Time) {
-	if !de.c.hasPeerRelayServers.Load() {
-		// Changes in this value between its access and the logic following
-		// are fine, we will eventually do the "right" thing during future path
-		// discovery. The worst case is we suppress path discovery for the
-		// current cycle, or we unnecessarily call into [relayManager] and do
-		// some wasted work.
-		return
-	}
 	de.lastUDPRelayPathDiscovery = now
 	lastBest := de.bestAddr
 	lastBestIsTrusted := mono.Now().Before(de.trustBestAddrUntil)
@@ -897,6 +889,14 @@ func (de *endpoint) discoverUDPRelayPathsLocked(now mono.Time) {
 // path discovery.
 func (de *endpoint) wantUDPRelayPathDiscoveryLocked(now mono.Time) bool {
 	if runtime.GOOS == "js" {
+		return false
+	}
+	if !de.c.hasPeerRelayServers.Load() {
+		// Changes in this value between its access and a call to
+		// [endpoint.discoverUDPRelayPathsLocked] are fine, we will eventually
+		// do the "right" thing during future path discovery. The worst case is
+		// we suppress path discovery for the current cycle, or we unnecessarily
+		// call into [relayManager] and do some wasted work.
 		return false
 	}
 	if !de.relayCapable {
@@ -1013,13 +1013,17 @@ func (de *endpoint) discoPing(res *ipnstate.PingResult, size int, cb func(*ipnst
 		// order to also try all candidate direct paths.
 		fallthrough
 	default:
-		// Ping all candidate direct paths. This work overlaps with what
-		// [de.heartbeat] will periodically fire when it calls
-		// [de.sendDiscoPingsLocked], but a user-initiated [pingCLI] is a
-		// "do it now" operation that should not be subject to
+		// Ping all candidate direct paths and start peer relay path discovery,
+		// if appropriate. This work overlaps with what [de.heartbeat] will
+		// periodically fire when it calls [de.sendDiscoPingsLocked] and
+		// [de.discoveryUDPRelayPathsLocked], but a user-initiated [pingCLI] is
+		// a "do it now" operation that should not be subject to
 		// [heartbeatInterval] tick or [discoPingInterval] rate-limiting.
 		for ep := range de.endpointState {
 			de.startDiscoPingLocked(epAddr{ap: ep}, now, pingCLI, size, resCB)
+		}
+		if de.wantUDPRelayPathDiscoveryLocked(now) {
+			de.discoverUDPRelayPathsLocked(now)
 		}
 	}
 }
@@ -1046,14 +1050,10 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 		}
 	} else if !udpAddr.isDirect() || now.After(de.trustBestAddrUntil) {
 		de.sendDiscoPingsLocked(now, true)
+		if de.wantUDPRelayPathDiscoveryLocked(now) {
+			de.discoverUDPRelayPathsLocked(now)
+		}
 	}
-	// TODO(jwhited): consider triggering UDP relay path discovery here under
-	//  certain conditions. We currently only trigger it in heartbeat(), which
-	//  is both good and bad. It's good because the first heartbeat() tick is 3s
-	//  after the first packet, which gives us time to discover a UDP direct
-	//  path and potentially avoid what would be wasted UDP relay path discovery
-	//  work. It's bad because we might not discover a UDP direct path, and we
-	//  incur a 3s delay before we try to discover a UDP relay path.
 	de.noteTxActivityExtTriggerLocked(now)
 	de.lastSendAny = now
 	de.mu.Unlock()
