@@ -840,7 +840,7 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 
 // deregisterMetrics unregisters the underlying usermetrics expvar counters
 // from clientmetrics.
-func deregisterMetrics(m *metrics) {
+func deregisterMetrics() {
 	metricRecvDataPacketsIPv4.UnregisterAll()
 	metricRecvDataPacketsIPv6.UnregisterAll()
 	metricRecvDataPacketsDERP.UnregisterAll()
@@ -3329,7 +3329,7 @@ func (c *Conn) Close() error {
 		pinger.Close()
 	}
 
-	deregisterMetrics(c.metrics)
+	deregisterMetrics()
 
 	return nil
 }
