@@ -113,7 +113,11 @@ var Features = map[FeatureTag]FeatureMeta{
 		},
 	},
 	"bakedroots": {Sym: "BakedRoots", Desc: "Embed CA (LetsEncrypt) x509 roots to use as fallback"},
-	"bird":       {Sym: "Bird", Desc: "Bird BGP integration"},
+	"bird": {
+		Sym:  "Bird",
+		Desc: "Bird BGP integration",
+		Deps: []FeatureTag{"advertiseroutes"},
+	},
 	"c2n": {
 		Sym:                  "C2N",
 		Desc:                 "Control-to-node (C2N) support",
