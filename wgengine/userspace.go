@@ -132,8 +132,8 @@ type userspaceEngine struct {
 	lastRouter          *router.Config
 	lastEngineFull      *wgcfg.Config // of full wireguard config, not trimmed
 	lastEngineInputs    *maybeReconfigInputs
-	lastDNSConfig       *dns.Config
-	lastIsSubnetRouter  bool // was the node a primary subnet router in the last run.
+	lastDNSConfig       dns.ConfigView // or invalid if none
+	lastIsSubnetRouter  bool           // was the node a primary subnet router in the last run.
 	recvActivityAt      map[key.NodePublic]mono.Time
 	trimmedNodes        map[key.NodePublic]bool   // set of node keys of peers currently excluded from wireguard config
 	sentActivityAt      map[netip.Addr]*mono.Time // value is accessed atomically
@@ -965,8 +965,11 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	isSubnetRouterChanged := isSubnetRouter != e.lastIsSubnetRouter
 
 	engineChanged := checkchange.Update(&e.lastEngineFull, cfg)
-	dnsChanged := buildfeatures.HasDNS && checkchange.Update(&e.lastDNSConfig, dnsCfg)
 	routerChanged := checkchange.Update(&e.lastRouter, routerCfg)
+	dnsChanged := buildfeatures.HasDNS && !e.lastDNSConfig.Equal(dnsCfg.View())
+	if dnsChanged {
+		e.lastDNSConfig = dnsCfg.View()
+	}
 
 	listenPortChanged := listenPort != e.magicConn.LocalPort()
 	peerMTUChanged := peerMTUEnable != e.magicConn.PeerMTUEnabled()
@@ -1322,8 +1325,8 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 			e.wgLock.Lock()
 			dnsCfg := e.lastDNSConfig
 			e.wgLock.Unlock()
-			if dnsCfg != nil {
-				if err := e.dns.Set(*dnsCfg); err != nil {
+			if dnsCfg.Valid() {
+				if err := e.dns.Set(*dnsCfg.AsStruct()); err != nil {
 					e.logf("wgengine: error setting DNS config after major link change: %v", err)
 				} else if err := e.reconfigureVPNIfNecessary(); err != nil {
 					e.logf("wgengine: error reconfiguring VPN after major link change: %v", err)

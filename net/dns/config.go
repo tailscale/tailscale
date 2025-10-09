@@ -1,13 +1,14 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:generate go run tailscale.com/cmd/viewer --type=Config --clonefunc
+
 // Package dns contains code to configure and manage DNS settings.
 package dns
 
 import (
 	"bufio"
 	"fmt"
-	"maps"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -189,25 +190,6 @@ func sameResolverNames(a, b []*dnstype.Resolver) bool {
 		}
 	}
 	return true
-}
-
-// Clone makes a shallow clone of c.
-//
-// The returned Config still references slices and maps from c.
-//
-// TODO(bradfitz): use cmd/{viewer,cloner} for these and make the
-// caller use views instead.
-func (c *Config) Clone() *Config {
-	if c == nil {
-		return nil
-	}
-	return &Config{
-		DefaultResolvers: slices.Clone(c.DefaultResolvers),
-		Routes:           maps.Clone(c.Routes),
-		SearchDomains:    slices.Clone(c.SearchDomains),
-		Hosts:            maps.Clone(c.Hosts),
-		OnlyIPv6:         c.OnlyIPv6,
-	}
 }
 
 func (c *Config) Equal(o *Config) bool {
