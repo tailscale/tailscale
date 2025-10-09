@@ -3929,12 +3929,19 @@ var (
 	metricSendDERPErrorClosed = clientmetric.NewCounter("magicsock_send_derp_error_closed")
 	metricSendDERPErrorQueue  = clientmetric.NewCounter("magicsock_send_derp_error_queue")
 	metricSendDERPDropped     = clientmetric.NewCounter("magicsock_send_derp_dropped")
-	metricSendUDP             = clientmetric.NewAggregateCounter("magicsock_send_udp")
 	metricSendUDPError        = clientmetric.NewCounter("magicsock_send_udp_error")
-	metricSendPeerRelay       = clientmetric.NewAggregateCounter("magicsock_send_peer_relay")
 	metricSendPeerRelayError  = clientmetric.NewCounter("magicsock_send_peer_relay_error")
-	metricSendDERP            = clientmetric.NewAggregateCounter("magicsock_send_derp")
 	metricSendDERPError       = clientmetric.NewCounter("magicsock_send_derp_error")
+
+	// Sends (data)
+	//
+	// Note: Prior to v1.78 metricSendUDP & metricSendDERP counted sends of data
+	// AND disco packets. They were updated in v1.78 to only count data packets.
+	// metricSendPeerRelay was added in v1.86 and has always counted only data
+	// packets.
+	metricSendUDP       = clientmetric.NewAggregateCounter("magicsock_send_udp")
+	metricSendPeerRelay = clientmetric.NewAggregateCounter("magicsock_send_peer_relay")
+	metricSendDERP      = clientmetric.NewAggregateCounter("magicsock_send_derp")
 
 	// Data packets (non-disco)
 	metricSendData                     = clientmetric.NewCounter("magicsock_send_data")
