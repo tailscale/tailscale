@@ -8,6 +8,7 @@ import (
 
 	"tailscale.com/ipn"
 	"tailscale.com/tsd"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/eventbus"
 )
@@ -96,6 +97,7 @@ func Test_extension_profileStateChanged(t *testing.T) {
 			sys := tsd.NewSystem()
 			bus := sys.Bus.Get()
 			e := &extension{
+				logf: logger.Discard,
 				port: tt.fields.port,
 				bus:  bus,
 			}
@@ -154,6 +156,7 @@ func Test_extension_handleBusLifetimeLocked(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := &extension{
+				logf:                          logger.Discard,
 				bus:                           eventbus.New(),
 				shutdown:                      tt.shutdown,
 				port:                          tt.port,
