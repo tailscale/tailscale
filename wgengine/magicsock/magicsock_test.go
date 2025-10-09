@@ -1302,6 +1302,8 @@ func assertConnStatsAndUserMetricsEqual(t *testing.T, ms *magicStack) {
 	c.Assert(metricSendUDP.Value(), qt.Equals, metricIPv4TxPackets*2)
 	c.Assert(metricRecvDataPacketsIPv4.Value(), qt.Equals, metricIPv4RxPackets*2)
 	c.Assert(metricRecvDataPacketsDERP.Value(), qt.Equals, metricDERPRxPackets*2)
+	c.Assert(metricRecvDataBytesIPv4.Value(), qt.Equals, metricIPv4RxBytes*2)
+	c.Assert(metricRecvDataBytesDERP.Value(), qt.Equals, metricDERPRxBytes*2)
 }
 
 // tests that having a endpoint.String prevents wireguard-go's
