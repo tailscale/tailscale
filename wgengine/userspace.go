@@ -962,7 +962,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 			nm.SelfNode.PrimaryRoutes(), nm.SelfNode.Hostinfo().RoutableIPs(),
 			isSubnetRouter, isSubnetRouter, e.lastIsSubnetRouter)
 	}
-	isSubnetRouterChanged := isSubnetRouter != e.lastIsSubnetRouter
+	isSubnetRouterChanged := buildfeatures.HasAdvertiseRoutes && isSubnetRouter != e.lastIsSubnetRouter
 
 	engineChanged := checkchange.Update(&e.lastEngineFull, cfg)
 	routerChanged := checkchange.Update(&e.lastRouter, routerCfg)
