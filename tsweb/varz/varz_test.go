@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"tailscale.com/metrics"
+	"tailscale.com/syncs"
 	"tailscale.com/tstest"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/version"
@@ -282,6 +283,20 @@ foo_foo_a 1
 # TYPE foo_foo_b counter
 foo_foo_b 1
 `) + "\n",
+		},
+		{
+			"metrics_sharded_int",
+			"counter_api_status_code",
+			func() *syncs.ShardedInt {
+				m := syncs.NewShardedInt()
+				m.Add(40)
+				m.Add(2)
+				return m
+			}(),
+			strings.TrimSpace(`
+# TYPE api_status_code counter
+api_status_code 42
+			`) + "\n",
 		},
 	}
 	for _, tt := range tests {
