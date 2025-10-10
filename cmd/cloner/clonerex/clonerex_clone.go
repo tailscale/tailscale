@@ -35,9 +35,28 @@ var _SliceContainerCloneNeedsRegeneration = SliceContainer(struct {
 	Slice []*int
 }{})
 
+// Clone makes a deep copy of InterfaceContainer.
+// The result aliases no memory with the original.
+func (src *InterfaceContainer) Clone() *InterfaceContainer {
+	if src == nil {
+		return nil
+	}
+	dst := new(InterfaceContainer)
+	*dst = *src
+	if src.Interface != nil {
+		dst.Interface = src.Interface.Clone()
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _InterfaceContainerCloneNeedsRegeneration = InterfaceContainer(struct {
+	Interface Cloneable
+}{})
+
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of SliceContainer.
+// where T is one of SliceContainer,InterfaceContainer.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *SliceContainer:
@@ -46,6 +65,15 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **SliceContainer:
+			*dst = src.Clone()
+			return true
+		}
+	case *InterfaceContainer:
+		switch dst := dst.(type) {
+		case *InterfaceContainer:
+			*dst = *src.Clone()
+			return true
+		case **InterfaceContainer:
 			*dst = src.Clone()
 			return true
 		}
