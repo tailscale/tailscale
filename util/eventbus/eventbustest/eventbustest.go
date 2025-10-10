@@ -27,13 +27,9 @@ func NewBus(t testing.TB) *eventbus.Bus {
 // [Expect] and [ExpectExactly], to verify that the desired events were captured.
 func NewWatcher(t *testing.T, bus *eventbus.Bus) *Watcher {
 	tw := &Watcher{
-		mon:     bus.Debugger().WatchBus(),
-		TimeOut: 5 * time.Second,
-		chDone:  make(chan bool, 1),
-		events:  make(chan any, 100),
-	}
-	if deadline, ok := t.Deadline(); ok {
-		tw.TimeOut = deadline.Sub(time.Now())
+		mon:    bus.Debugger().WatchBus(),
+		chDone: make(chan bool, 1),
+		events: make(chan any, 100),
 	}
 	t.Cleanup(tw.done)
 	go tw.watch()
@@ -41,16 +37,15 @@ func NewWatcher(t *testing.T, bus *eventbus.Bus) *Watcher {
 }
 
 // Watcher monitors and holds events for test expectations.
+// The Watcher works with [synctest], and some scenarios does require the use of
+// [synctest]. This is amongst others true if you are testing for the absence of
+// events.
+//
+// For usage examples, see the documentation in the top of the package.
 type Watcher struct {
 	mon    *eventbus.Subscriber[eventbus.RoutedEvent]
 	events chan any
 	chDone chan bool
-	// TimeOut defines when the Expect* functions should stop looking for events
-	// coming from the Watcher. The value is set by [NewWatcher] and defaults to
-	// the deadline passed in by [testing.T]. If looking to verify the absence
-	// of an event, the TimeOut can be set to a lower value after creating the
-	// Watcher.
-	TimeOut time.Duration
 }
 
 // Type is a helper representing the expectation to see an event of type T, without
@@ -103,7 +98,8 @@ func Expect(tw *Watcher, filters ...any) error {
 			} else if ok {
 				head++
 			}
-		case <-time.After(tw.TimeOut):
+		// Use synctest when you want an error here.
+		case <-time.After(100 * time.Second): // "indefinitely", to advance a synctest clock
 			return fmt.Errorf(
 				"timed out waiting for event, saw %d events, %d was expected",
 				eventCount, len(filters))
@@ -118,12 +114,16 @@ func Expect(tw *Watcher, filters ...any) error {
 // in a given order, returning an error if the events does not match the given list
 // exactly. The given events are represented by a function as described in
 // [Expect]. Use [Expect] if other events are allowed.
+//
+// If you are expecting ExpectExactly to fail because of a missing event, or if
+// you are testing for the absence of events, call [synctest.Wait] after
+// actions that would publish an event, but before calling ExpectExactly.
 func ExpectExactly(tw *Watcher, filters ...any) error {
 	if len(filters) == 0 {
 		select {
 		case event := <-tw.events:
 			return fmt.Errorf("saw event type %s, expected none", reflect.TypeOf(event))
-		case <-time.After(tw.TimeOut):
+		case <-time.After(100 * time.Second): // "indefinitely", to advance a synctest clock
 			return nil
 		}
 	}
@@ -146,7 +146,7 @@ func ExpectExactly(tw *Watcher, filters ...any) error {
 				return fmt.Errorf(
 					"expected test ok for type %s, at index %d", argType, pos)
 			}
-		case <-time.After(tw.TimeOut):
+		case <-time.After(100 * time.Second): // "indefinitely", to advance a synctest clock
 			return fmt.Errorf(
 				"timed out waiting for event, saw %d events, %d was expected",
 				eventCount, len(filters))
@@ -162,6 +162,9 @@ func (tw *Watcher) watch() {
 		select {
 		case event := <-tw.mon.Events():
 			tw.events <- event.Event
+		case <-tw.mon.Done():
+			tw.done()
+			return
 		case <-tw.chDone:
 			tw.mon.Close()
 			return

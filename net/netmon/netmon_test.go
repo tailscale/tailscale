@@ -144,7 +144,7 @@ func TestMonitorMode(t *testing.T) {
 		<-done
 		t.Logf("%v callbacks", n)
 	case "eventbus":
-		tw.TimeOut = *monitorDuration
+		time.AfterFunc(*monitorDuration, bus.Close)
 		n := 0
 		mon.Start()
 		eventbustest.Expect(tw, func(event *ChangeDelta) (bool, error) {

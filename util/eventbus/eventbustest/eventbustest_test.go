@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
+	"testing/synctest"
 
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/eventbus/eventbustest"
@@ -110,37 +110,35 @@ func TestExpectFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bus := eventbustest.NewBus(t)
-			t.Cleanup(bus.Close)
+			synctest.Test(t, func(t *testing.T) {
+				bus := eventbustest.NewBus(t)
 
-			if *doDebug {
-				eventbustest.LogAllEvents(t, bus)
-			}
-			tw := eventbustest.NewWatcher(t, bus)
-
-			// TODO(cmol): When synctest is out of experimental, use that instead:
-			// https://go.dev/blog/synctest
-			tw.TimeOut = 10 * time.Millisecond
-
-			client := bus.Client("testClient")
-			defer client.Close()
-			updater := eventbus.Publish[EventFoo](client)
-
-			for _, i := range tt.events {
-				updater.Publish(EventFoo{i})
-			}
-
-			if err := eventbustest.Expect(tw, tt.expectFunc); err != nil {
-				if tt.wantErr == "" {
-					t.Errorf("Expect[EventFoo]: unexpected error: %v", err)
-				} else if !strings.Contains(err.Error(), tt.wantErr) {
-					t.Errorf("Expect[EventFoo]: err = %v, want %q", err, tt.wantErr)
-				} else {
-					t.Logf("Got expected error: %v (OK)", err)
+				if *doDebug {
+					eventbustest.LogAllEvents(t, bus)
 				}
-			} else if tt.wantErr != "" {
-				t.Errorf("Expect[EventFoo]: unexpectedly succeeded, want error %q", tt.wantErr)
-			}
+				tw := eventbustest.NewWatcher(t, bus)
+
+				client := bus.Client("testClient")
+				updater := eventbus.Publish[EventFoo](client)
+
+				for _, i := range tt.events {
+					updater.Publish(EventFoo{i})
+				}
+
+				synctest.Wait()
+
+				if err := eventbustest.Expect(tw, tt.expectFunc); err != nil {
+					if tt.wantErr == "" {
+						t.Errorf("Expect[EventFoo]: unexpected error: %v", err)
+					} else if !strings.Contains(err.Error(), tt.wantErr) {
+						t.Errorf("Expect[EventFoo]: err = %v, want %q", err, tt.wantErr)
+					} else {
+						t.Logf("Got expected error: %v (OK)", err)
+					}
+				} else if tt.wantErr != "" {
+					t.Errorf("Expect[EventFoo]: unexpectedly succeeded, want error %q", tt.wantErr)
+				}
+			})
 		})
 	}
 }
@@ -244,37 +242,35 @@ func TestExpectEvents(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bus := eventbustest.NewBus(t)
-			t.Cleanup(bus.Close)
+			synctest.Test(t, func(t *testing.T) {
+				bus := eventbustest.NewBus(t)
 
-			tw := eventbustest.NewWatcher(t, bus)
-			// TODO(cmol): When synctest is out of experimental, use that instead:
-			// https://go.dev/blog/synctest
-			tw.TimeOut = 100 * time.Millisecond
+				tw := eventbustest.NewWatcher(t, bus)
 
-			client := bus.Client("testClient")
-			defer client.Close()
-			updaterFoo := eventbus.Publish[EventFoo](client)
-			updaterBar := eventbus.Publish[EventBar](client)
-			updaterBaz := eventbus.Publish[EventBaz](client)
+				client := bus.Client("testClient")
+				updaterFoo := eventbus.Publish[EventFoo](client)
+				updaterBar := eventbus.Publish[EventBar](client)
+				updaterBaz := eventbus.Publish[EventBaz](client)
 
-			for _, ev := range tt.events {
-				switch ev.(type) {
-				case EventFoo:
-					evCast := ev.(EventFoo)
-					updaterFoo.Publish(evCast)
-				case EventBar:
-					evCast := ev.(EventBar)
-					updaterBar.Publish(evCast)
-				case EventBaz:
-					evCast := ev.(EventBaz)
-					updaterBaz.Publish(evCast)
+				for _, ev := range tt.events {
+					switch ev := ev.(type) {
+					case EventFoo:
+						evCast := ev
+						updaterFoo.Publish(evCast)
+					case EventBar:
+						evCast := ev
+						updaterBar.Publish(evCast)
+					case EventBaz:
+						evCast := ev
+						updaterBaz.Publish(evCast)
+					}
 				}
-			}
 
-			if err := eventbustest.Expect(tw, tt.expectEvents...); (err != nil) != tt.wantErr {
-				t.Errorf("ExpectEvents: error = %v, wantErr %v", err, tt.wantErr)
-			}
+				synctest.Wait()
+				if err := eventbustest.Expect(tw, tt.expectEvents...); (err != nil) != tt.wantErr {
+					t.Errorf("ExpectEvents: error = %v, wantErr %v", err, tt.wantErr)
+				}
+			})
 		})
 	}
 }
@@ -378,37 +374,35 @@ func TestExpectExactlyEventsFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bus := eventbustest.NewBus(t)
-			t.Cleanup(bus.Close)
+			synctest.Test(t, func(t *testing.T) {
+				bus := eventbustest.NewBus(t)
 
-			tw := eventbustest.NewWatcher(t, bus)
-			// TODO(cmol): When synctest is out of experimental, use that instead:
-			// https://go.dev/blog/synctest
-			tw.TimeOut = 10 * time.Millisecond
+				tw := eventbustest.NewWatcher(t, bus)
 
-			client := bus.Client("testClient")
-			defer client.Close()
-			updaterFoo := eventbus.Publish[EventFoo](client)
-			updaterBar := eventbus.Publish[EventBar](client)
-			updaterBaz := eventbus.Publish[EventBaz](client)
+				client := bus.Client("testClient")
+				updaterFoo := eventbus.Publish[EventFoo](client)
+				updaterBar := eventbus.Publish[EventBar](client)
+				updaterBaz := eventbus.Publish[EventBaz](client)
 
-			for _, ev := range tt.events {
-				switch ev.(type) {
-				case EventFoo:
-					evCast := ev.(EventFoo)
-					updaterFoo.Publish(evCast)
-				case EventBar:
-					evCast := ev.(EventBar)
-					updaterBar.Publish(evCast)
-				case EventBaz:
-					evCast := ev.(EventBaz)
-					updaterBaz.Publish(evCast)
+				for _, ev := range tt.events {
+					switch ev := ev.(type) {
+					case EventFoo:
+						evCast := ev
+						updaterFoo.Publish(evCast)
+					case EventBar:
+						evCast := ev
+						updaterBar.Publish(evCast)
+					case EventBaz:
+						evCast := ev
+						updaterBaz.Publish(evCast)
+					}
 				}
-			}
 
-			if err := eventbustest.ExpectExactly(tw, tt.expectEvents...); (err != nil) != tt.wantErr {
-				t.Errorf("ExpectEvents: error = %v, wantErr %v", err, tt.wantErr)
-			}
+				synctest.Wait()
+				if err := eventbustest.ExpectExactly(tw, tt.expectEvents...); (err != nil) != tt.wantErr {
+					t.Errorf("ExpectEvents: error = %v, wantErr %v", err, tt.wantErr)
+				}
+			})
 		})
 	}
 }
