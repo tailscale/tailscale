@@ -37,6 +37,9 @@ type Event struct {
 
 	// Source provides details about the client that initiated the request.
 	Source Source `json:"source"`
+
+	// Destination provides details about the node receiving the request.
+	Destination Destination `json:"destination"`
 }
 
 // copied from https://github.com/kubernetes/kubernetes/blob/11ade2f7dd264c2f52a4a1342458abbbaa3cb2b1/staging/src/k8s.io/apiserver/pkg/endpoints/request/requestinfo.go#L44
@@ -93,6 +96,17 @@ type Source struct {
 
 	// NodeUser is the LoginName of the node originating the connection (if not tagged).
 	NodeUser string `json:"nodeUser,omitempty"`
+}
+
+type Destination struct {
+	// Node is the FQDN of the node receiving the connection.
+	// It is also the MagicDNS name for the node.
+	// It does not have a trailing dot.
+	// e.g. "host.tail-scale.ts.net"
+	Node string `json:"node"`
+
+	// NodeID is the node ID of the node receiving the connection.
+	NodeID tailcfg.StableNodeID `json:"nodeID"`
 }
 
 // Request holds information about a request.
