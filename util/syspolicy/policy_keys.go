@@ -43,6 +43,7 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(pkey.PostureChecking, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(pkey.ReconnectAfter, setting.DeviceSetting, setting.DurationValue),
 	setting.NewDefinition(pkey.Tailnet, setting.DeviceSetting, setting.StringValue),
+	setting.NewDefinition(pkey.HardwareAttestation, setting.DeviceSetting, setting.BooleanValue),
 
 	// User policy settings (can be configured on a user- or device-basis):
 	setting.NewDefinition(pkey.AdminConsoleVisibility, setting.UserSetting, setting.VisibilityValue),

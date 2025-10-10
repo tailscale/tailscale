@@ -709,6 +709,7 @@ func NewPrefs() *Prefs {
 	// Provide default values for options which might be missing
 	// from the json data for any reason. The json can still
 	// override them to false.
+
 	p := &Prefs{
 		// ControlURL is explicitly not set to signal that
 		// it's not yet configured, which relaxes the CLI "up"

@@ -176,7 +176,8 @@ type CapabilityVersion int
 //   - 127: 2025-09-19: can handle C2N /debug/netmap.
 //   - 128: 2025-10-02: can handle C2N /debug/health.
 //   - 129: 2025-10-04: Fixed sleep/wake deadlock in magicsock when using peer relay (PR #17449)
-const CurrentCapabilityVersion CapabilityVersion = 129
+//   - 130: 2025-10-06: client can send key.HardwareAttestationPublic and key.HardwareAttestationKeySignature in MapRequest
+const CurrentCapabilityVersion CapabilityVersion = 130
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -1372,9 +1373,13 @@ type MapRequest struct {
 	// HardwareAttestationKey is the public key of the node's hardware-backed
 	// identity attestation key, if any.
 	HardwareAttestationKey key.HardwareAttestationPublic `json:",omitzero"`
-	// HardwareAttestationKeySignature is the signature of the NodeKey
-	// serialized using MarshalText using its hardware attestation key, if any.
+	// HardwareAttestationKeySignature is the signature of
+	// "$UNIX_TIMESTAMP|$NODE_KEY" using its hardware attestation key, if any.
 	HardwareAttestationKeySignature []byte `json:",omitempty"`
+	// HardwareAttestationKeySignatureTimestamp is the time at which the
+	// HardwareAttestationKeySignature was created, if any. This UNIX timestamp
+	// value is prepended to the node key when signing.
+	HardwareAttestationKeySignatureTimestamp time.Time `json:",omitzero"`
 
 	// Stream is whether the client wants to receive multiple MapResponses over
 	// the same HTTP connection.
