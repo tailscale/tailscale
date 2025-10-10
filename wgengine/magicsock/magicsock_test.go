@@ -1300,6 +1300,10 @@ func assertConnStatsAndUserMetricsEqual(t *testing.T, ms *magicStack) {
 	// the metrics by 2 to get the expected value.
 	// TODO(kradalby): https://github.com/tailscale/tailscale/issues/13420
 	c.Assert(metricSendUDP.Value(), qt.Equals, metricIPv4TxPackets*2)
+	c.Assert(metricSendDataPacketsIPv4.Value(), qt.Equals, metricIPv4TxPackets*2)
+	c.Assert(metricSendDataPacketsDERP.Value(), qt.Equals, metricDERPTxPackets*2)
+	c.Assert(metricSendDataBytesIPv4.Value(), qt.Equals, metricIPv4TxBytes*2)
+	c.Assert(metricSendDataBytesDERP.Value(), qt.Equals, metricDERPTxBytes*2)
 	c.Assert(metricRecvDataPacketsIPv4.Value(), qt.Equals, metricIPv4RxPackets*2)
 	c.Assert(metricRecvDataPacketsDERP.Value(), qt.Equals, metricDERPRxPackets*2)
 	c.Assert(metricRecvDataBytesIPv4.Value(), qt.Equals, metricIPv4RxBytes*2)
