@@ -81,6 +81,12 @@ type settings struct {
 	// certs) and 'rw' for Pods that should manage the TLS certs shared
 	// amongst the replicas.
 	CertShareMode string
+	// WaitForTermination is set for subnet routers & app connectors that
+	// are running in an HA configuration. When set, it forces the application
+	// to wait for the entirety of the termination grace period before exiting
+	// to give time for clients to receive an updated netmap that points them
+	// to an active subnet router/app connector.
+	WaitForTermination bool
 }
 
 func configFromEnv() (*settings, error) {
@@ -117,6 +123,7 @@ func configFromEnv() (*settings, error) {
 		EgressProxiesCfgPath:                  defaultEnv("TS_EGRESS_PROXIES_CONFIG_PATH", ""),
 		IngressProxiesCfgPath:                 defaultEnv("TS_INGRESS_PROXIES_CONFIG_PATH", ""),
 		PodUID:                                defaultEnv("POD_UID", ""),
+		WaitForTermination:                    defaultBool("EXPERIMENTAL_WAIT_FOR_TERMINATION", false),
 	}
 	podIPs, ok := os.LookupEnv("POD_IPS")
 	if ok {
