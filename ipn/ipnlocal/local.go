@@ -1216,6 +1216,7 @@ func stripKeysFromPrefs(p ipn.PrefsView) ipn.PrefsView {
 	p2.Persist.PrivateNodeKey = key.NodePrivate{}
 	p2.Persist.OldPrivateNodeKey = key.NodePrivate{}
 	p2.Persist.NetworkLockKey = key.NLPrivate{}
+	p2.Persist.AttestationKey = nil
 	return p2.View()
 }
 
