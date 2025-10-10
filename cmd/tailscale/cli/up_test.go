@@ -43,6 +43,8 @@ var validUpFlags = set.Of(
 	"stateful-filtering",
 	"timeout",
 	"unattended",
+	"wif-client-id",
+	"wif-id-token",
 )
 
 // TestUpFlagSetIsFrozen complains when new flags are added to tailscale up.
