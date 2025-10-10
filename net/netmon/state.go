@@ -183,6 +183,10 @@ func (ifaces InterfaceList) ForeachInterfaceAddress(fn func(Interface, netip.Pre
 				if pfx, ok := netaddr.FromStdIPNet(v); ok {
 					fn(iface, pfx)
 				}
+			case *net.IPAddr:
+				if ip, ok := netip.AddrFromSlice(v.IP); ok {
+					fn(iface, netip.PrefixFrom(ip, ip.BitLen()))
+				}
 			}
 		}
 	}
@@ -214,6 +218,10 @@ func (ifaces InterfaceList) ForeachInterface(fn func(Interface, []netip.Prefix))
 			case *net.IPNet:
 				if pfx, ok := netaddr.FromStdIPNet(v); ok {
 					pfxs = append(pfxs, pfx)
+				}
+			case *net.IPAddr:
+				if ip, ok := netip.AddrFromSlice(v.IP); ok {
+					pfxs = append(pfxs, netip.PrefixFrom(ip, ip.BitLen()))
 				}
 			}
 		}
