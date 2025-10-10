@@ -55,6 +55,9 @@ operatorConfig:
 
   resources: {}
 
+  # Specifies annotations for deployment
+  annotations: {}
+
   podAnnotations: {}
   podLabels: {}
 
