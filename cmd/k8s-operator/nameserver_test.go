@@ -42,6 +42,16 @@ func TestNameserverReconciler(t *testing.T) {
 				Service: &tsapi.NameserverService{
 					ClusterIP: "5.4.3.2",
 				},
+				Pod: &tsapi.NameserverPod{
+					Tolerations: []corev1.Toleration{
+						{
+							Key:      "some-key",
+							Operator: corev1.TolerationOpEqual,
+							Value:    "some-value",
+							Effect:   corev1.TaintEffectNoSchedule,
+						},
+					},
+				},
 			},
 		},
 	}
@@ -79,6 +89,15 @@ func TestNameserverReconciler(t *testing.T) {
 		wantsDeploy.Spec.Replicas = ptr.To[int32](3)
 		wantsDeploy.Namespace = tsNamespace
 		wantsDeploy.ObjectMeta.Labels = nameserverLabels
+		wantsDeploy.Spec.Template.Spec.Tolerations = []corev1.Toleration{
+			{
+				Key:      "some-key",
+				Operator: corev1.TolerationOpEqual,
+				Value:    "some-value",
+				Effect:   corev1.TaintEffectNoSchedule,
+			},
+		}
+
 		expectEqual(t, fc, wantsDeploy)
 	})
 
