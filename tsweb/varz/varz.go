@@ -25,6 +25,7 @@ import (
 
 	"golang.org/x/exp/constraints"
 	"tailscale.com/metrics"
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
 )
@@ -134,6 +135,9 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 
 	switch v := kv.Value.(type) {
 	case *expvar.Int:
+		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, cmp.Or(typ, "counter"), name, v.Value())
+		return
+	case *syncs.ShardedInt:
 		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, cmp.Or(typ, "counter"), name, v.Value())
 		return
 	case *expvar.Float:
