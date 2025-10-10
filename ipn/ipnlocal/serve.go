@@ -64,6 +64,7 @@ func init() {
 const (
 	contentTypeHeader   = "Content-Type"
 	grpcBaseContentType = "application/grpc"
+	grantHeaderMaxSize  = 15360 // 15 KiB
 )
 
 // ErrETagMismatch signals that the given
@@ -803,6 +804,7 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Out.Host = r.In.Host
 		addProxyForwardedHeaders(r)
 		rp.lb.addTailscaleIdentityHeaders(r)
+		rp.lb.addTailscaleGrantHeader(r)
 	}}
 
 	// There is no way to autodetect h2c as per RFC 9113
@@ -925,6 +927,52 @@ func encTailscaleHeaderValue(v string) string {
 		return ""
 	}
 	return mime.QEncoding.Encode("utf-8", v)
+}
+
+func (b *LocalBackend) addTailscaleGrantHeader(r *httputil.ProxyRequest) {
+	r.Out.Header.Del("Tailscale-User-Capabilities")
+
+	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
+	if !ok || c.Funnel != nil {
+		return
+	}
+	peerCaps := b.PeerCaps(c.SrcAddr.Addr())
+	if peerCaps == nil {
+		return
+	}
+
+	serialized, capped, err := serializeUpToNBytes(peerCaps, grantHeaderMaxSize)
+	if err != nil {
+		b.logf("serve: failed to serialize PeerCapMap: %v", err)
+		return
+	}
+	if capped {
+		b.logf("serve: serialized PeerCapMap exceeds %d bytes, forwarding truncated PeerCapMap", grantHeaderMaxSize)
+		r.Out.Header.Set("Tailscale-User-Capabilities-Truncated", "yes")
+	}
+
+	r.Out.Header.Set("Tailscale-User-Capabilities", encTailscaleHeaderValue(serialized))
+}
+
+// serializeUpToNBytes serializes capMap. It arbitrarily truncates entries from the capMap
+// if the size of the serialized capMap would exceed N bytes.
+func serializeUpToNBytes(capMap tailcfg.PeerCapMap, N int) (string, bool, error) {
+	numBytes := 0
+	capped := false
+	result := tailcfg.PeerCapMap{}
+	for k, v := range capMap {
+		numBytes += len(k) + len(v)
+		if numBytes > N {
+			capped = true
+			break
+		}
+		result[k] = v
+	}
+	marshalled, err := json.Marshal(result)
+	if err != nil {
+		return "", false, err
+	}
+	return string(marshalled), capped, nil
 }
 
 // serveWebHandler is an http.HandlerFunc that maps incoming requests to the
