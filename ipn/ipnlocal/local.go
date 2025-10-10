@@ -498,7 +498,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		needsCaptiveDetection: make(chan bool),
 	}
 
-	nb := newNodeBackend(ctx, b.logf, b.sys.Bus.Get())
+	nb := newNodeBackend(ctx, b.logf, b.sys.Bus.Get(), b)
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
 
@@ -656,7 +656,7 @@ func (b *LocalBackend) currentNode() *nodeBackend {
 	if v := b.currentNodeAtomic.Load(); v != nil || !testenv.InTest() {
 		return v
 	}
-	v := newNodeBackend(cmp.Or(b.ctx, context.Background()), b.logf, b.sys.Bus.Get())
+	v := newNodeBackend(cmp.Or(b.ctx, context.Background()), b.logf, b.sys.Bus.Get(), b)
 	if b.currentNodeAtomic.CompareAndSwap(nil, v) {
 		v.ready()
 	}
@@ -3763,81 +3763,6 @@ func (b *LocalBackend) StartLoginInteractiveAs(ctx context.Context, user ipnauth
 	return nil
 }
 
-func (b *LocalBackend) Ping(ctx context.Context, ip netip.Addr, pingType tailcfg.PingType, size int) (*ipnstate.PingResult, error) {
-	if pingType == tailcfg.PingPeerAPI {
-		t0 := b.clock.Now()
-		node, base, err := b.pingPeerAPI(ctx, ip)
-		if err != nil && ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		d := b.clock.Since(t0)
-		pr := &ipnstate.PingResult{
-			IP:             ip.String(),
-			NodeIP:         ip.String(),
-			LatencySeconds: d.Seconds(),
-			PeerAPIURL:     base,
-		}
-		if err != nil {
-			pr.Err = err.Error()
-		}
-		if node.Valid() {
-			pr.NodeName = node.Name()
-		}
-		return pr, nil
-	}
-	ch := make(chan *ipnstate.PingResult, 1)
-	b.e.Ping(ip, pingType, size, func(pr *ipnstate.PingResult) {
-		select {
-		case ch <- pr:
-		default:
-		}
-	})
-	select {
-	case pr := <-ch:
-		return pr, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-func (b *LocalBackend) pingPeerAPI(ctx context.Context, ip netip.Addr) (peer tailcfg.NodeView, peerBase string, err error) {
-	if !buildfeatures.HasPeerAPIClient {
-		return peer, peerBase, feature.ErrUnavailable
-	}
-	var zero tailcfg.NodeView
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	nm := b.NetMap()
-	if nm == nil {
-		return zero, "", errors.New("no netmap")
-	}
-	peer, ok := nm.PeerByTailscaleIP(ip)
-	if !ok {
-		return zero, "", fmt.Errorf("no peer found with Tailscale IP %v", ip)
-	}
-	if peer.Expired() {
-		return zero, "", errors.New("peer's node key has expired")
-	}
-	base := peerAPIBase(nm, peer)
-	if base == "" {
-		return zero, "", fmt.Errorf("no PeerAPI base found for peer %v (%v)", peer.ID(), ip)
-	}
-	outReq, err := http.NewRequestWithContext(ctx, "HEAD", base, nil)
-	if err != nil {
-		return zero, "", err
-	}
-	tr := b.Dialer().PeerAPITransport()
-	res, err := tr.RoundTrip(outReq)
-	if err != nil {
-		return zero, "", err
-	}
-	defer res.Body.Close() // but unnecessary on HEAD responses
-	if res.StatusCode != http.StatusOK {
-		return zero, "", fmt.Errorf("HTTP status %v", res.Status)
-	}
-	return peer, base, nil
-}
-
 // parseWgStatusLocked returns an EngineStatus based on s.
 //
 // b.mu must be held; mostly because the caller is about to anyway, and doing so
@@ -6905,7 +6830,7 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 		// down, so no need to do any work.
 		return nil
 	}
-	newNode := newNodeBackend(b.ctx, b.logf, b.sys.Bus.Get())
+	newNode := newNodeBackend(b.ctx, b.logf, b.sys.Bus.Get(), b)
 	if oldNode := b.currentNodeAtomic.Swap(newNode); oldNode != nil {
 		oldNode.shutdown(errNodeContextChanged)
 	}
@@ -7335,9 +7260,9 @@ func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion ta
 // the lowest latency to this device. For peers without a DERP home, we look for
 // geographic proximity to this device's DERP home.
 func suggestExitNodeUsingDERP(report *netcheck.Report, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
-	// TODO(sfllaw): Context needs to be plumbed down here to support
-	// reachability testing.
-	ctx := context.TODO()
+	// Calculating the suggested exit node needs to complete, so this
+	// context should be valid as long as the nodeBackend is.
+	ctx := nb.ctx
 
 	netMap := nb.NetMap()
 	if report == nil || report.PreferredDERP == 0 || netMap == nil || netMap.DERPMap == nil {
@@ -7466,9 +7391,9 @@ var ErrNoNetMap = errors.New("no network map, try again later")
 // the node’s [tailcfg.Location]. To be eligible for consideration, the node
 // must have NodeAttrSuggestExitNode in its CapMap.
 func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcfg.StableNodeID]) (apitype.ExitNodeSuggestionResponse, error) {
-	// TODO(sfllaw): Context needs to be plumbed down here to support
-	// reachability testing.
-	ctx := context.TODO()
+	// Calculating the suggested exit node needs to complete, so this
+	// context should be valid as long as the nodeBackend is.
+	ctx := nb.ctx
 
 	nm := nb.NetMap()
 	if nm == nil {
