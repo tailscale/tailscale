@@ -25,6 +25,7 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	qrcode "github.com/skip2/go-qrcode"
 	"tailscale.com/feature/buildfeatures"
+	_ "tailscale.com/feature/condregister/identityfederation"
 	_ "tailscale.com/feature/condregister/oauthkey"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/internal/client/tailscale"
@@ -111,6 +112,8 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.BoolVar(&upArgs.advertiseConnector, "advertise-connector", false, "advertise this node as an app connector")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
 	upf.BoolVar(&upArgs.postureChecking, "report-posture", false, hidden+"allow management plane to gather device posture information")
+	upf.StringVar(&upArgs.wifClientID, "wif-client-id", "", "Client ID used to generate authkeys via identity federation")
+	upf.StringVar(&upArgs.wifIDToken, "wif-id-token", "", "ID token from the identity provider to exchange with the control server")
 
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		upf.StringVar(&upArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
@@ -191,6 +194,8 @@ type upArgsT struct {
 	acceptedRisks          string
 	profileName            string
 	postureChecking        bool
+	wifClientID            string
+	wifIDToken             string
 }
 
 func (a upArgsT) getAuthKey() (string, error) {
@@ -591,6 +596,15 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 				return err
 			}
 		}
+		// Try to resolve the auth key via workload identity federation if that functionality
+		// is available and no auth key is yet determined.
+		if f, ok := tailscale.HookResolveAuthKeyViaWIF.GetOk(); ok && authKey == "" {
+			authKey, err = f(ctx, prefs.ControlURL, upArgs.wifClientID, upArgs.wifIDToken, strings.Split(upArgs.advertiseTags, ","))
+			if err != nil {
+				return err
+			}
+		}
+
 		err = localClient.Start(ctx, ipn.Options{
 			AuthKey:     authKey,
 			UpdatePrefs: prefs,
@@ -869,7 +883,7 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 // correspond to an ipn.Pref.
 func preflessFlag(flagName string) bool {
 	switch flagName {
-	case "auth-key", "force-reauth", "reset", "qr", "qr-format", "json", "timeout", "accept-risk", "host-routes":
+	case "auth-key", "force-reauth", "reset", "qr", "qr-format", "json", "timeout", "accept-risk", "host-routes", "wif-client-id", "wif-id-token":
 		return true
 	}
 	return false
