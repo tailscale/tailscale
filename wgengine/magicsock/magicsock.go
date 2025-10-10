@@ -2958,7 +2958,12 @@ func (c *Conn) onNodeViewsUpdate(update NodeViewsUpdate) {
 	filt := c.filt
 	self := c.self
 	peers := c.peers
+	isClosed := c.closed
 	c.mu.Unlock() // release c.mu before potentially calling c.updateRelayServersSet which is O(m * n)
+
+	if isClosed {
+		return // nothing to do here, the conn is closed and the update is no longer relevant
+	}
 
 	if peersChanged || relayClientChanged {
 		if !relayClientEnabled {
