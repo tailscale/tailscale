@@ -5,6 +5,8 @@ package eventbustest_test
 
 import (
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/eventbus/eventbustest"
@@ -198,4 +200,61 @@ func TestExample_ExpectExactly_WithMultipleFunctions(t *testing.T) {
 	}
 	// Output:
 	// expected event type eventbustest.eventOfCuriosity, saw eventbustest.eventOfNoConcern, at index 1
+}
+
+func TestExample_ExpectExactly_NoEvents(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		bus := eventbustest.NewBus(t)
+		tw := eventbustest.NewWatcher(t, bus)
+
+		go func() {
+			// Do some work that does not produce an event
+			time.Sleep(10 * time.Second)
+			t.Log("Not producing events")
+		}()
+
+		// Wait for all other routines to be stale before continuing to ensure that
+		// there is nothing running that would produce an event at a later time.
+		synctest.Wait()
+
+		if err := eventbustest.ExpectExactly(tw); err != nil {
+			t.Error(err.Error())
+		} else {
+			t.Log("OK")
+		}
+		// Output:
+		// OK
+	})
+}
+
+func TestExample_ExpectExactly_OneEventExpectingTwo(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		type eventOfInterest struct{}
+
+		bus := eventbustest.NewBus(t)
+		tw := eventbustest.NewWatcher(t, bus)
+		client := bus.Client("testClient")
+		updater := eventbus.Publish[eventOfInterest](client)
+
+		go func() {
+			// Do some work that does not produce an event
+			time.Sleep(10 * time.Second)
+			updater.Publish(eventOfInterest{})
+		}()
+
+		// Wait for all other routines to be stale before continuing to ensure that
+		// there is nothing running that would produce an event at a later time.
+		synctest.Wait()
+
+		if err := eventbustest.ExpectExactly(tw,
+			eventbustest.Type[eventOfInterest](),
+			eventbustest.Type[eventOfInterest](),
+		); err != nil {
+			t.Log(err.Error())
+		} else {
+			t.Log("OK")
+		}
+		// Output:
+		// timed out waiting for event, saw 1 events, 2 was expected
+	})
 }

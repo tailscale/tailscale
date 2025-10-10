@@ -5,12 +5,14 @@ package health
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"maps"
 	"reflect"
 	"slices"
 	"strconv"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -25,6 +27,8 @@ import (
 	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 )
+
+var doDebug = flag.Bool("debug", false, "Enable debug logging")
 
 func wantChange(c Change) func(c Change) (bool, error) {
 	return func(cEv Change) (bool, error) {
@@ -724,72 +728,83 @@ func TestControlHealthNotifies(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			bus := eventbustest.NewBus(t)
-			tw := eventbustest.NewWatcher(t, bus)
-			tw.TimeOut = time.Second
-
-			ht := NewTracker(bus)
-			ht.SetIPNState("NeedsLogin", true)
-			ht.GotStreamedMapResponse()
-
-			// Expect events at starup, before doing anything else
-			if err := eventbustest.ExpectExactly(tw,
-				eventbustest.Type[Change](), // warming-up
-				eventbustest.Type[Change](), // is-using-unstable-version
-				eventbustest.Type[Change](), // not-in-map-poll
-			); err != nil {
-				t.Errorf("startup error: %v", err)
-			}
-
-			// Only set initial state if we need to
-			if len(test.initialState) != 0 {
-				ht.SetControlHealth(test.initialState)
-				if err := eventbustest.ExpectExactly(tw, eventbustest.Type[Change]()); err != nil {
-					t.Errorf("initial state error: %v", err)
+			synctest.Test(t, func(t *testing.T) {
+				bus := eventbustest.NewBus(t)
+				if *doDebug {
+					eventbustest.LogAllEvents(t, bus)
 				}
-			}
+				tw := eventbustest.NewWatcher(t, bus)
 
-			ht.SetControlHealth(test.newState)
+				ht := NewTracker(bus)
+				ht.SetIPNState("NeedsLogin", true)
+				ht.GotStreamedMapResponse()
 
-			if err := eventbustest.ExpectExactly(tw, test.wantEvents...); err != nil {
-				t.Errorf("event error: %v", err)
-			}
+				// Expect events at starup, before doing anything else
+				synctest.Wait()
+				if err := eventbustest.ExpectExactly(tw,
+					eventbustest.Type[Change](), // warming-up
+					eventbustest.Type[Change](), // is-using-unstable-version
+					eventbustest.Type[Change](), // not-in-map-poll
+				); err != nil {
+					t.Errorf("startup error: %v", err)
+				}
+
+				// Only set initial state if we need to
+				if len(test.initialState) != 0 {
+					ht.SetControlHealth(test.initialState)
+					synctest.Wait()
+					if err := eventbustest.ExpectExactly(tw, eventbustest.Type[Change]()); err != nil {
+						t.Errorf("initial state error: %v", err)
+					}
+				}
+
+				ht.SetControlHealth(test.newState)
+				// Close the bus early to avoid timers triggering more events.
+				bus.Close()
+
+				synctest.Wait()
+				if err := eventbustest.ExpectExactly(tw, test.wantEvents...); err != nil {
+					t.Errorf("event error: %v", err)
+				}
+			})
 		})
 	}
 }
 
 func TestControlHealthIgnoredOutsideMapPoll(t *testing.T) {
-	bus := eventbustest.NewBus(t)
-	tw := eventbustest.NewWatcher(t, bus)
-	tw.TimeOut = 100 * time.Millisecond
-	ht := NewTracker(bus)
-	ht.SetIPNState("NeedsLogin", true)
+	synctest.Test(t, func(t *testing.T) {
+		bus := eventbustest.NewBus(t)
+		tw := eventbustest.NewWatcher(t, bus)
+		ht := NewTracker(bus)
+		ht.SetIPNState("NeedsLogin", true)
 
-	ht.SetControlHealth(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
-		"control-health": {},
-	})
+		ht.SetControlHealth(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+			"control-health": {},
+		})
 
-	state := ht.CurrentState()
-	_, ok := state.Warnings["control-health"]
+		state := ht.CurrentState()
+		_, ok := state.Warnings["control-health"]
 
-	if ok {
-		t.Error("got a warning with code 'control-health', want none")
-	}
-
-	// An event is emitted when SetIPNState is run above,
-	// so only fail on the second event.
-	eventCounter := 0
-	expectOne := func(c *Change) error {
-		eventCounter++
-		if eventCounter == 1 {
-			return nil
+		if ok {
+			t.Error("got a warning with code 'control-health', want none")
 		}
-		return errors.New("saw more than 1 event")
-	}
 
-	if err := eventbustest.Expect(tw, expectOne); err == nil {
-		t.Error("event got emitted, want it to not be called")
-	}
+		// An event is emitted when SetIPNState is run above,
+		// so only fail on the second event.
+		eventCounter := 0
+		expectOne := func(c *Change) error {
+			eventCounter++
+			if eventCounter == 1 {
+				return nil
+			}
+			return errors.New("saw more than 1 event")
+		}
+
+		synctest.Wait()
+		if err := eventbustest.Expect(tw, expectOne); err == nil {
+			t.Error("event got emitted, want it to not be called")
+		}
+	})
 }
 
 // TestCurrentStateETagControlHealth tests that the ETag on an [UnhealthyState]

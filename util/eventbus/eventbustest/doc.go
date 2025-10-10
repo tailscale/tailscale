@@ -39,6 +39,20 @@
 // checks that the stream contains exactly the given events in the given order,
 // and no others.
 //
+// To test for the absence of events, use [ExpectExactly] without any
+// expected events, along side [testing/synctest] to avoid waiting for timers
+// to ensure that no events are produced. This will look like:
+//
+//	synctest.Test(t, func(t *testing.T) {
+//		bus := eventbustest.NewBus(t)
+//		tw := eventbustest.NewWatcher(t, bus)
+//		somethingThatShouldNotEmitsSomeEvent()
+//		synctest.Wait()
+//		if err := eventbustest.ExpectExactly(tw); err != nil {
+//			t.Errorf("Expected no events or errors, got %v", err)
+//		}
+//	})
+//
 // See the [usage examples].
 //
 // [usage examples]: https://github.com/tailscale/tailscale/blob/main/util/eventbus/eventbustest/examples_test.go
