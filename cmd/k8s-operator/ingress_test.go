@@ -605,7 +605,7 @@ func TestIngressLetsEncryptStaging(t *testing.T) {
 	}
 }
 
-func TestEmptyPath(t *testing.T) {
+func TestIngressPaths(t *testing.T) {
 	testCases := []struct {
 		name           string
 		paths          []networkingv1.HTTPIngressPath
@@ -669,6 +669,41 @@ func TestEmptyPath(t *testing.T) {
 				"Normal PathUndefined configured backend is missing a path, defaulting to '/'",
 			},
 		},
+		{
+			name: "shared_prefix_paths_not_conflicting",
+			paths: []networkingv1.HTTPIngressPath{
+				{
+					PathType: ptrPathType(networkingv1.PathTypePrefix),
+					Path:     "/aaa/bb",
+					Backend:  *backend(),
+				},
+				{
+					PathType: ptrPathType(networkingv1.PathTypePrefix),
+					Path:     "/aaa/bbb",
+					Backend:  *backend(),
+				},
+			},
+			expectedEvents: []string{},
+		},
+		{
+			name: "exact_duplicate_paths_conflicting",
+			paths: []networkingv1.HTTPIngressPath{
+				{
+					PathType: ptrPathType(networkingv1.PathTypePrefix),
+					Path:     "/aaa/bb",
+					Backend:  *backend(),
+				},
+				{
+					PathType: ptrPathType(networkingv1.PathTypePrefix),
+					Path:     "/aaa/bb",
+					Backend:  *backend(),
+				},
+			},
+			// Expect a conflict event for exact duplicate paths
+			expectedEvents: []string{
+				"Warning ConflictingPaths exact duplicate path \"/aaa/bb\" found, this may cause unexpected routing behavior",
+			},
+		},
 	}
 
 	for _, tt := range testCases {
@@ -718,6 +753,12 @@ func TestEmptyPath(t *testing.T) {
 				hostname:   "foo",
 				app:        kubetypes.AppIngressResource,
 			}
+			// Skip the Secret validation for the new test cases with custom paths and only verify the events
+			if tt.name == "shared_prefix_paths_not_conflicting" || tt.name == "exact_duplicate_paths_conflicting" {
+				expectEvents(t, fr, tt.expectedEvents)
+				return
+			}
+
 			serveConfig := &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 				Web: map[ipn.HostPort]*ipn.WebServerConfig{"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://1.2.3.4:8080/"}}}},
@@ -733,7 +774,7 @@ func TestEmptyPath(t *testing.T) {
 	}
 }
 
-// ptrPathType is a helper function to return a pointer to the pathtype string (required for TestEmptyPath)
+// ptrPathType is a helper function to return a pointer to the pathtype string (required for TestIngressPaths)
 func ptrPathType(p networkingv1.PathType) *networkingv1.PathType {
 	return &p
 }
