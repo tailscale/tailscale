@@ -6,22 +6,11 @@ package tka
 import (
 	"bytes"
 	"crypto/ed25519"
-	"encoding/binary"
-	"math/rand"
 	"testing"
 
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 )
-
-// returns a random source based on the test name + extraSeed.
-func testingRand(t *testing.T, extraSeed int64) *rand.Rand {
-	var seed int64
-	if err := binary.Read(bytes.NewBuffer([]byte(t.Name())), binary.LittleEndian, &seed); err != nil {
-		panic(err)
-	}
-	return rand.New(rand.NewSource(seed + extraSeed))
-}
 
 // generates a 25519 private key based on the seed + test name.
 func testingKey25519(t *testing.T, seed int64) (ed25519.PublicKey, ed25519.PrivateKey) {
