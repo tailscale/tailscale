@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -203,10 +204,6 @@ func ChonkDir(dir string) (*FS, error) {
 		return nil, fmt.Errorf("chonk directory %q is a file", dir)
 	}
 
-	// TODO(tom): *FS marks AUMs as deleted but does not actually
-	// delete them, to avoid data loss in the event of a bug.
-	// Implement deletion after we are fairly sure in the implementation.
-
 	return &FS{base: dir}, nil
 }
 
@@ -223,14 +220,6 @@ type fsHashInfo struct {
 	Children    []AUMHash `cbor:"1,keyasint"`
 	AUM         *AUM      `cbor:"2,keyasint"`
 	CreatedUnix int64     `cbor:"3,keyasint,omitempty"`
-
-	// PurgedUnix is set when the AUM is deleted. The value is
-	// the unix epoch at the time it was deleted.
-	//
-	// While a non-zero PurgedUnix symbolizes the AUM is deleted,
-	// the fsHashInfo entry can continue to exist to track children
-	// of this AUMHash.
-	PurgedUnix int64 `cbor:"4,keyasint,omitempty"`
 }
 
 // aumDir returns the directory an AUM is stored in, and its filename
@@ -254,7 +243,7 @@ func (c *FS) AUM(hash AUMHash) (AUM, error) {
 		}
 		return AUM{}, err
 	}
-	if info.AUM == nil || info.PurgedUnix > 0 {
+	if info.AUM == nil {
 		return AUM{}, os.ErrNotExist
 	}
 	return *info.AUM, nil
@@ -273,9 +262,6 @@ func (c *FS) CommitTime(h AUMHash) (time.Time, error) {
 			return time.Time{}, os.ErrNotExist
 		}
 		return time.Time{}, err
-	}
-	if info.PurgedUnix > 0 {
-		return time.Time{}, os.ErrNotExist
 	}
 	if info.CreatedUnix > 0 {
 		return time.Unix(info.CreatedUnix, 0), nil
@@ -306,9 +292,6 @@ func (c *FS) ChildAUMs(prevAUMHash AUMHash) ([]AUM, error) {
 		}
 		return nil, err
 	}
-	// NOTE(tom): We don't check PurgedUnix here because 'purged'
-	// only applies to that specific AUM (i.e. info.AUM) and not to
-	// any information about children stored against that hash.
 
 	out := make([]AUM, len(info.Children))
 	for i, h := range info.Children {
@@ -317,7 +300,7 @@ func (c *FS) ChildAUMs(prevAUMHash AUMHash) ([]AUM, error) {
 			// We expect any AUM recorded as a child on its parent to exist.
 			return nil, fmt.Errorf("reading child %d of %x: %v", i, h, err)
 		}
-		if c.AUM == nil || c.PurgedUnix > 0 {
+		if c.AUM == nil {
 			return nil, fmt.Errorf("child %d of %x: AUM not stored", i, h)
 		}
 		out[i] = *c.AUM
@@ -361,7 +344,7 @@ func (c *FS) Heads() ([]AUM, error) {
 
 	out := make([]AUM, 0, 6) // 6 is arbitrary.
 	err := c.scanHashes(func(info *fsHashInfo) {
-		if len(info.Children) == 0 && info.AUM != nil && info.PurgedUnix == 0 {
+		if len(info.Children) == 0 && info.AUM != nil {
 			out = append(out, *info.AUM)
 		}
 	})
@@ -375,7 +358,7 @@ func (c *FS) AllAUMs() ([]AUMHash, error) {
 
 	out := make([]AUMHash, 0, 6) // 6 is arbitrary.
 	err := c.scanHashes(func(info *fsHashInfo) {
-		if info.AUM != nil && info.PurgedUnix == 0 {
+		if info.AUM != nil {
 			out = append(out, info.AUM.Hash())
 		}
 	})
@@ -477,7 +460,6 @@ func (c *FS) CommitVerifiedAUMs(updates []AUM) error {
 		}
 
 		err := c.commit(h, func(info *fsHashInfo) {
-			info.PurgedUnix = 0 // just in-case it was set for some reason
 			info.AUM = &aum
 		})
 		if err != nil {
@@ -488,26 +470,36 @@ func (c *FS) CommitVerifiedAUMs(updates []AUM) error {
 	return nil
 }
 
-// PurgeAUMs marks the specified AUMs for deletion from storage.
+// PurgeAUMs deletes the specified AUMs from storage.
 func (c *FS) PurgeAUMs(hashes []AUMHash) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	now := time.Now()
 	for i, h := range hashes {
 		stored, err := c.get(h)
 		if err != nil {
 			return fmt.Errorf("reading %d (%x): %w", i, h, err)
 		}
-		if stored.AUM == nil || stored.PurgedUnix > 0 {
+		if stored.AUM == nil {
 			continue
 		}
 
-		err = c.commit(h, func(info *fsHashInfo) {
-			info.PurgedUnix = now.Unix()
-		})
+		dir, base := c.aumDir(h)
+		err = os.Remove(filepath.Join(dir, base))
 		if err != nil {
 			return fmt.Errorf("committing purge[%d] (%x): %w", i, h, err)
+		}
+
+		// The files are sharded based on the first two digits of
+		// the hash, e.g. `AB/ABCDEFGHIJ`.
+		//
+		// If this was the last file in this directory, go ahead and
+		// clean up the directory also.
+		//
+		// Note: os.Remove() will only clean up the dir if it's empty;
+		// if it contains other entries, the call will fail.
+		if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("cleaning up directory %s: %w", dir, err)
 		}
 	}
 	return nil

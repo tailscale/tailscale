@@ -175,12 +175,9 @@ func TestTailchonkFS_Commit(t *testing.T) {
 		t.Errorf("stat of AUM parent failed: %v", err)
 	}
 
-	info, err := chonk.get(aum.Hash())
+	_, err := chonk.get(aum.Hash())
 	if err != nil {
 		t.Fatal(err)
-	}
-	if info.PurgedUnix > 0 {
-		t.Errorf("recently-created AUM PurgedUnix = %d, want 0", info.PurgedUnix)
 	}
 }
 
@@ -202,28 +199,121 @@ func TestTailchonkFS_CommitTime(t *testing.T) {
 }
 
 func TestTailchonkFS_PurgeAUMs(t *testing.T) {
-	chonk := &FS{base: t.TempDir()}
-	parentHash := randHash(t, 1)
-	aum := AUM{MessageKind: AUMNoOp, PrevAUMHash: parentHash[:]}
+	t.Run("delete-existing-aum", func(t *testing.T) {
+		chonk := &FS{base: t.TempDir()}
+		parentHash := randHash(t, 1)
+		aum := AUM{MessageKind: AUMNoOp, PrevAUMHash: parentHash[:]}
 
-	if err := chonk.CommitVerifiedAUMs([]AUM{aum}); err != nil {
-		t.Fatal(err)
-	}
-	if err := chonk.PurgeAUMs([]AUMHash{aum.Hash()}); err != nil {
-		t.Fatal(err)
-	}
+		if err := chonk.CommitVerifiedAUMs([]AUM{aum}); err != nil {
+			t.Fatal(err)
+		}
+		if err := chonk.PurgeAUMs([]AUMHash{aum.Hash()}); err != nil {
+			t.Fatal(err)
+		}
 
-	if _, err := chonk.AUM(aum.Hash()); err != os.ErrNotExist {
-		t.Errorf("AUM() on purged AUM returned err = %v, want ErrNotExist", err)
-	}
+		if _, err := chonk.AUM(aum.Hash()); err != os.ErrNotExist {
+			t.Errorf("AUM() on purged AUM returned err = %v, want ErrNotExist", err)
+		}
 
-	info, err := chonk.get(aum.Hash())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.PurgedUnix == 0 {
-		t.Errorf("recently-created AUM PurgedUnix = %d, want non-zero", info.PurgedUnix)
-	}
+		info, err := chonk.get(aum.Hash())
+		if info != nil {
+			t.Fatalf("get() on purged AUM returned info = %v, want nil", info)
+		}
+		if err == nil {
+			t.Fatal("get() on purged AUM returned err = nil, want ErrNotExist")
+		}
+
+		dir, base := chonk.aumDir(aum.Hash())
+		_, err = os.Stat(filepath.Join(dir, base))
+		if err == nil {
+			t.Fatalf("expected AUM file to be deleted, but present on filesystem")
+		}
+	})
+
+	t.Run("delete-nonexistent-aum", func(t *testing.T) {
+		chonk := &FS{base: t.TempDir()}
+		parentHash := randHash(t, 1)
+		aum := AUM{MessageKind: AUMNoOp, PrevAUMHash: parentHash[:]}
+
+		if err := chonk.PurgeAUMs([]AUMHash{aum.Hash()}); err == nil {
+			t.Fatal("expected purging non-existent AUM to fail with error; completed successfully")
+		}
+	})
+
+	t.Run("double-delete-aum", func(t *testing.T) {
+		chonk := &FS{base: t.TempDir()}
+		parentHash := randHash(t, 1)
+		aum := AUM{MessageKind: AUMNoOp, PrevAUMHash: parentHash[:]}
+
+		if err := chonk.CommitVerifiedAUMs([]AUM{aum}); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := chonk.PurgeAUMs([]AUMHash{aum.Hash()}); err != nil {
+			t.Fatalf("expected purging AUM to succeed on first attempt, got err = %s", err)
+		}
+		if err := chonk.PurgeAUMs([]AUMHash{aum.Hash()}); err == nil {
+			t.Fatal("expected purging AUM to fail on second attempt; completed successfully")
+		}
+	})
+
+	t.Run("delete-directory", func(t *testing.T) {
+		chonk := &FS{base: t.TempDir()}
+		parentHash := randHash(t, 1)
+		aum := AUM{MessageKind: AUMNoOp, PrevAUMHash: parentHash[:]}
+
+		if err := chonk.CommitVerifiedAUMs([]AUM{aum}); err != nil {
+			t.Fatal(err)
+		}
+
+		dir, _ := chonk.aumDir(aum.Hash())
+		if _, err := os.Stat(dir); err != nil {
+			t.Fatalf("could not find dir %s: %s", dir, err)
+		}
+		if err := chonk.PurgeAUMs([]AUMHash{aum.Hash()}); err != nil {
+			t.Fatalf("failed to purge AUM; got err = %s", err)
+		}
+		if _, err := os.Stat(dir); err == nil {
+			t.Fatalf("parent directory %s was not deleted", dir)
+		}
+	})
+
+	t.Run("does-not-delete-directory-if-other-entries", func(t *testing.T) {
+		chonk := &FS{base: t.TempDir()}
+
+		// These are two AUMs whose hash both starts with `AA`, so they should
+		// be stored in the same directories.
+		aum1 := AUM{MessageKind: AUMNoOp, PrevAUMHash: []byte{38, 14}}
+		aum2 := AUM{MessageKind: AUMNoOp, PrevAUMHash: []byte{31, 4}}
+
+		if err := chonk.CommitVerifiedAUMs([]AUM{aum1, aum2}); err != nil {
+			t.Fatal(err)
+		}
+
+		dir1, _ := chonk.aumDir(aum1.Hash())
+		dir2, _ := chonk.aumDir(aum2.Hash())
+
+		if dir1 != dir2 {
+			t.Fatalf("AUMs have different directories: dir1 = %q, dir2 = %q", dir1, dir2)
+		}
+
+		if _, err := os.Stat(dir1); err != nil {
+			t.Fatalf("could not find dir %s: %s", dir1, err)
+		}
+		if err := chonk.PurgeAUMs([]AUMHash{aum1.Hash()}); err != nil {
+			t.Fatalf("failed to purge AUM; got err = %s", err)
+		}
+		if _, err := os.Stat(dir1); err != nil {
+			t.Fatalf("could not find dir %s: %s", dir1, err)
+		}
+
+		if _, err := chonk.AUM(aum1.Hash()); err != os.ErrNotExist {
+			t.Errorf("AUM() on purged AUM returned err = %v, want ErrNotExist", err)
+		}
+		if _, err := chonk.AUM(aum2.Hash()); err != nil {
+			t.Errorf("AUM() on AUM returned err = %v, want nil", err)
+		}
+	})
 }
 
 func TestTailchonkFS_AllAUMs(t *testing.T) {
