@@ -28,6 +28,7 @@ import (
 	"k8s.io/client-go/transport"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/envknob"
 	ksr "tailscale.com/k8s-operator/sessionrecording"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/netx"
@@ -96,6 +97,7 @@ func NewAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, ts *tsn
 		upstreamURL:   u,
 		ts:            ts,
 		sendEventFunc: sessionrecording.SendEvent,
+		eventsEnabled: envknob.Bool("TS_EXPERIMENTAL_KUBE_API_EVENTS"),
 	}
 	ap.rp = &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -192,6 +194,9 @@ type APIServerProxy struct {
 	upstreamURL *url.URL
 
 	sendEventFunc func(ap netip.AddrPort, event io.Reader, dial netx.DialFunc) error
+
+	// Flag used to enable sending API requests as events to tsrecorder.
+	eventsEnabled bool
 }
 
 // serveDefault is the default handler for Kubernetes API server requests.
@@ -310,6 +315,10 @@ func (ap *APIServerProxy) sessionForProto(w http.ResponseWriter, r *http.Request
 }
 
 func (ap *APIServerProxy) recordRequestAsEvent(req *http.Request, who *apitype.WhoIsResponse) error {
+	if !ap.eventsEnabled {
+		return nil
+	}
+
 	failOpen, addrs, err := determineRecorderConfig(who)
 	if err != nil {
 		return fmt.Errorf("error trying to determine whether the kubernetes api request needs to be recorded: %w", err)
