@@ -828,8 +828,8 @@ func TestServeHTTPProxyGrantHeader(t *testing.T) {
 		Web: map[ipn.HostPort]*ipn.WebServerConfig{
 			"example.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
 				"/": {
-					Proxy:    testServ.URL,
-					UserCaps: []tailcfg.PeerCapability{"example.com/cap/interesting", "example.com/cap/boring"},
+					Proxy:         testServ.URL,
+					AcceptAppCaps: []tailcfg.PeerCapability{"example.com/cap/interesting", "example.com/cap/boring"},
 				},
 			}},
 		},
@@ -858,7 +858,7 @@ func TestServeHTTPProxyGrantHeader(t *testing.T) {
 				{"Tailscale-User-Name", "Some One"},
 				{"Tailscale-User-Profile-Pic", "https://example.com/photo.jpg"},
 				{"Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers"},
-				{"Tailscale-User-Capabilities", `{"example.com/cap/interesting":[{"role":"🐿"}]}`},
+				{"Tailscale-App-Capabilities", `{"example.com/cap/interesting":[{"role":"🐿"}]}`},
 			},
 		},
 		{
@@ -871,7 +871,7 @@ func TestServeHTTPProxyGrantHeader(t *testing.T) {
 				{"Tailscale-User-Name", ""},
 				{"Tailscale-User-Profile-Pic", ""},
 				{"Tailscale-Headers-Info", ""},
-				{"Tailscale-User-Capabilities", `{"example.com/cap/boring":[{"role":"Viewer"}]}`},
+				{"Tailscale-App-Capabilities", `{"example.com/cap/boring":[{"role":"Viewer"}]}`},
 			},
 		},
 		{
@@ -884,7 +884,7 @@ func TestServeHTTPProxyGrantHeader(t *testing.T) {
 				{"Tailscale-User-Name", ""},
 				{"Tailscale-User-Profile-Pic", ""},
 				{"Tailscale-Headers-Info", ""},
-				{"Tailscale-User-Capabilities", ""},
+				{"Tailscale-App-Capabilities", ""},
 			},
 		},
 	}
@@ -1324,92 +1324,6 @@ func TestServeGRPCProxy(t *testing.T) {
 			if string(got) != msg {
 				t.Errorf("got body %q, want %q", got, msg)
 			}
-		})
-	}
-}
-
-func TestSerialisePeerCapMap(t *testing.T) {
-	var tests = []struct {
-		name                string
-		capMap              tailcfg.PeerCapMap
-		maxNumBytes         int
-		wantOneOfSerialized []string
-		wantTruncated       bool
-	}{
-		{
-			name:                "empty cap map",
-			capMap:              tailcfg.PeerCapMap{},
-			maxNumBytes:         50,
-			wantOneOfSerialized: []string{"{}"},
-			wantTruncated:       false,
-		},
-		{
-			name: "cap map with one capability",
-			capMap: tailcfg.PeerCapMap{
-				"tailscale.com/cap/kubernetes": []tailcfg.RawMessage{
-					`{"impersonate": {"groups": ["tailnet-readers"]}}`,
-				},
-			},
-			maxNumBytes: 50,
-			wantOneOfSerialized: []string{
-				`{"tailscale.com/cap/kubernetes":[{"impersonate":{"groups":["tailnet-readers"]}}]}`,
-			},
-			wantTruncated: false,
-		},
-		{
-			name: "cap map with two capabilities",
-			capMap: tailcfg.PeerCapMap{
-				"foo.com/cap/something": []tailcfg.RawMessage{
-					`{"role": "Admin"}`,
-				},
-				"bar.com/cap/other-thing": []tailcfg.RawMessage{
-					`{"role": "Viewer"}`,
-				},
-			},
-			maxNumBytes: 50,
-			// Both cap map entries will be included, but they could appear in any order.
-			wantOneOfSerialized: []string{
-				`{"foo.com/cap/something":[{"role":"Admin"}],"bar.com/cap/other-thing":[{"role":"Viewer"}]}`,
-				`{"bar.com/cap/other-thing":[{"role":"Viewer"}],"foo.com/cap/something":[{"role":"Admin"}]}`,
-			},
-			wantTruncated: false,
-		},
-		{
-			name: "cap map that should be truncated to stay within size limits",
-			capMap: tailcfg.PeerCapMap{
-				"foo.com/cap/something": []tailcfg.RawMessage{
-					`{"role": "Admin"}`,
-				},
-				"bar.com/cap/other-thing": []tailcfg.RawMessage{
-					`{"role": "Viewer"}`,
-				},
-			},
-			maxNumBytes: 40,
-			// Only one cap map entry will be included, but we don't know which one.
-			wantOneOfSerialized: []string{
-				`{"foo.com/cap/something":[{"role":"Admin"}]}`,
-				`{"bar.com/cap/other-thing":[{"role":"Viewer"}]}`,
-			},
-			wantTruncated: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotSerialized, gotCapped, err := serializeUpToNBytes(tt.capMap, tt.maxNumBytes)
-
-			if err != nil {
-				t.Fatal(err)
-			}
-			if gotCapped != tt.wantTruncated {
-				t.Errorf("got %t, want %t", gotCapped, tt.wantTruncated)
-			}
-			for _, wantSerialized := range tt.wantOneOfSerialized {
-				if gotSerialized == wantSerialized {
-					return
-				}
-			}
-			t.Errorf("want one of %v, got %q", tt.wantOneOfSerialized, gotSerialized)
 		})
 	}
 }

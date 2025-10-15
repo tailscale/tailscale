@@ -861,42 +861,42 @@ func TestServeDevConfigMutations(t *testing.T) {
 			name: "forward_grant_header",
 			steps: []step{
 				{
-					command: cmd("serve --bg --usercaps=example.com/cap/foo 3000"),
+					command: cmd("serve --bg --accept-app-caps=example.com/cap/foo 3000"),
 					want: &ipn.ServeConfig{
 						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
 								"/": {
-									Proxy:    "http://127.0.0.1:3000",
-									UserCaps: []tailcfg.PeerCapability{"example.com/cap/foo"},
+									Proxy:         "http://127.0.0.1:3000",
+									AcceptAppCaps: []tailcfg.PeerCapability{"example.com/cap/foo"},
 								},
 							}},
 						},
 					},
 				},
 				{
-					command: cmd("serve --bg --usercaps=example.com/cap/foo --usercaps=example.com/cap/bar 3000"),
+					command: cmd("serve --bg --accept-app-caps=example.com/cap/foo --accept-app-caps=example.com/cap/bar 3000"),
 					want: &ipn.ServeConfig{
 						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
 								"/": {
-									Proxy:    "http://127.0.0.1:3000",
-									UserCaps: []tailcfg.PeerCapability{"example.com/cap/foo", "example.com/cap/bar"},
+									Proxy:         "http://127.0.0.1:3000",
+									AcceptAppCaps: []tailcfg.PeerCapability{"example.com/cap/foo", "example.com/cap/bar"},
 								},
 							}},
 						},
 					},
 				},
 				{
-					command: cmd("serve --bg --usercaps=example.com/cap/bar 3000"),
+					command: cmd("serve --bg --accept-app-caps=example.com/cap/bar 3000"),
 					want: &ipn.ServeConfig{
 						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
 								"/": {
-									Proxy:    "http://127.0.0.1:3000",
-									UserCaps: []tailcfg.PeerCapability{"example.com/cap/bar"},
+									Proxy:         "http://127.0.0.1:3000",
+									AcceptAppCaps: []tailcfg.PeerCapability{"example.com/cap/bar"},
 								},
 							}},
 						},
