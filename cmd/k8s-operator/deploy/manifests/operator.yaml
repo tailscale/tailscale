@@ -5340,7 +5340,21 @@ spec:
                             fieldPath: metadata.uid
                   image: tailscale/k8s-operator:unstable
                   imagePullPolicy: Always
+                  livenessProbe:
+                    failureThreshold: 3
+                    httpGet:
+                        path: /metrics
+                        port: 8080
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
                   name: operator
+                  readinessProbe:
+                    failureThreshold: 3
+                    httpGet:
+                        path: /metrics
+                        port: 8080
+                    initialDelaySeconds: 10
+                    periodSeconds: 5
                   volumeMounts:
                     - mountPath: /oauth
                       name: oauth
