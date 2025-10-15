@@ -24,7 +24,6 @@ import (
 	"go4.org/mem"
 	"tailscale.com/disco"
 	"tailscale.com/feature/buildfeatures"
-	"tailscale.com/net/connstats"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
 	"tailscale.com/net/tsaddr"
@@ -33,6 +32,7 @@ import (
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netlogfunc"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/filter"
@@ -203,8 +203,8 @@ type Wrapper struct {
 	// disableTSMPRejected disables TSMP rejected responses. For tests.
 	disableTSMPRejected bool
 
-	// stats maintains per-connection counters.
-	stats atomic.Pointer[connstats.Statistics]
+	// connCounter maintains per-connection counters.
+	connCounter syncs.AtomicValue[netlogfunc.ConnectionCounter]
 
 	captureHook syncs.AtomicValue[packet.CaptureCallback]
 
@@ -977,8 +977,8 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		}
 		sizes[buffsPos] = n
 		if buildfeatures.HasConnStats {
-			if stats := t.stats.Load(); stats != nil {
-				stats.UpdateTxVirtual(p.Buffer())
+			if update := t.connCounter.Load(); update != nil {
+				updateConnCounter(update, p.Buffer(), false)
 			}
 		}
 		buffsPos++
@@ -1106,9 +1106,9 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 	}
 
 	if buildfeatures.HasConnStats {
-		if stats := t.stats.Load(); stats != nil {
+		if update := t.connCounter.Load(); update != nil {
 			for i := 0; i < n; i++ {
-				stats.UpdateTxVirtual(outBuffs[i][offset : offset+sizes[i]])
+				updateConnCounter(update, outBuffs[i][offset:offset+sizes[i]], false)
 			}
 		}
 	}
@@ -1276,9 +1276,9 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 
 func (t *Wrapper) tdevWrite(buffs [][]byte, offset int) (int, error) {
 	if buildfeatures.HasConnStats {
-		if stats := t.stats.Load(); stats != nil {
+		if update := t.connCounter.Load(); update != nil {
 			for i := range buffs {
-				stats.UpdateRxVirtual((buffs)[i][offset:])
+				updateConnCounter(update, buffs[i][offset:], true)
 			}
 		}
 	}
@@ -1498,11 +1498,11 @@ func (t *Wrapper) Unwrap() tun.Device {
 	return t.tdev
 }
 
-// SetStatistics specifies a per-connection statistics aggregator.
+// SetConnectionCounter specifies a per-connection statistics aggregator.
 // Nil may be specified to disable statistics gathering.
-func (t *Wrapper) SetStatistics(stats *connstats.Statistics) {
+func (t *Wrapper) SetConnectionCounter(fn netlogfunc.ConnectionCounter) {
 	if buildfeatures.HasConnStats {
-		t.stats.Store(stats)
+		t.connCounter.Store(fn)
 	}
 }
 
@@ -1523,4 +1523,14 @@ func (t *Wrapper) InstallCaptureHook(cb packet.CaptureCallback) {
 		return
 	}
 	t.captureHook.Store(cb)
+}
+
+func updateConnCounter(update netlogfunc.ConnectionCounter, b []byte, receive bool) {
+	var p packet.Parsed
+	p.Decode(b)
+	if receive {
+		update(p.IPProto, p.Dst, p.Src, 1, len(b), true)
+	} else {
+		update(p.IPProto, p.Src, p.Dst, 1, len(b), false)
+	}
 }

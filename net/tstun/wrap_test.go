@@ -5,7 +5,6 @@ package tstun
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"expvar"
@@ -27,7 +26,6 @@ import (
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
-	"tailscale.com/net/connstats"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/tstest"
@@ -370,9 +368,8 @@ func TestFilter(t *testing.T) {
 	}()
 
 	var buf [MaxPacketSize]byte
-	stats := connstats.NewStatistics(0, 0, nil)
-	defer stats.Shutdown(context.Background())
-	tun.SetStatistics(stats)
+	var stats netlogtype.CountsByConnection
+	tun.SetConnectionCounter(stats.Add)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var n int
@@ -380,9 +377,10 @@ func TestFilter(t *testing.T) {
 			var filtered bool
 			sizes := make([]int, 1)
 
-			tunStats, _ := stats.TestExtract()
+			tunStats := stats.Clone()
+			stats.Reset()
 			if len(tunStats) > 0 {
-				t.Errorf("connstats.Statistics.Extract = %v, want {}", stats)
+				t.Errorf("connstats.Statistics.Extract = %v, want {}", tunStats)
 			}
 
 			if tt.dir == in {
@@ -415,7 +413,8 @@ func TestFilter(t *testing.T) {
 				}
 			}
 
-			got, _ := stats.TestExtract()
+			got := stats.Clone()
+			stats.Reset()
 			want := map[netlogtype.Connection]netlogtype.Counts{}
 			var wasUDP bool
 			if !tt.drop {

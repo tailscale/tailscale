@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/netlogtype"
 )
 
@@ -85,14 +86,18 @@ func NewStatistics(maxPeriod time.Duration, maxConns int, dump func(start, end t
 // The source and destination of the packet directly correspond with
 // the source and destination in netlogtype.Connection.
 func (s *Statistics) UpdateTxVirtual(b []byte) {
-	s.updateVirtual(b, false)
+	var p packet.Parsed
+	p.Decode(b)
+	s.UpdateVirtual(p.IPProto, p.Src, p.Dst, 1, len(b), false)
 }
 
 // UpdateRxVirtual updates the counters for a received IP packet.
 // The source and destination of the packet are inverted with respect to
 // the source and destination in netlogtype.Connection.
 func (s *Statistics) UpdateRxVirtual(b []byte) {
-	s.updateVirtual(b, true)
+	var p packet.Parsed
+	p.Decode(b)
+	s.UpdateVirtual(p.IPProto, p.Dst, p.Src, 1, len(b), true)
 }
 
 var (
@@ -100,22 +105,17 @@ var (
 	tailscaleServiceIPv6 = tsaddr.TailscaleServiceIPv6()
 )
 
-func (s *Statistics) updateVirtual(b []byte, receive bool) {
-	var p packet.Parsed
-	p.Decode(b)
-	conn := netlogtype.Connection{Proto: p.IPProto, Src: p.Src, Dst: p.Dst}
-	if receive {
-		conn.Src, conn.Dst = conn.Dst, conn.Src
-	}
-
+func (s *Statistics) UpdateVirtual(proto ipproto.Proto, src, dst netip.AddrPort, packets, bytes int, receive bool) {
 	// Network logging is defined as traffic between two Tailscale nodes.
 	// Traffic with the internal Tailscale service is not with another node
 	// and should not be logged. It also happens to be a high volume
 	// amount of discrete traffic flows (e.g., DNS lookups).
-	switch conn.Dst.Addr() {
+	switch dst.Addr() {
 	case tailscaleServiceIPv4, tailscaleServiceIPv6:
 		return
 	}
+
+	conn := netlogtype.Connection{Proto: proto, Src: src, Dst: dst}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -124,11 +124,11 @@ func (s *Statistics) updateVirtual(b []byte, receive bool) {
 		return
 	}
 	if receive {
-		cnts.RxPackets++
-		cnts.RxBytes += uint64(len(b))
+		cnts.RxPackets += uint64(packets)
+		cnts.RxBytes += uint64(bytes)
 	} else {
-		cnts.TxPackets++
-		cnts.TxBytes += uint64(len(b))
+		cnts.TxPackets += uint64(packets)
+		cnts.TxBytes += uint64(bytes)
 	}
 	s.virtual[conn] = cnts
 }
@@ -138,7 +138,7 @@ func (s *Statistics) updateVirtual(b []byte, receive bool) {
 // The dst is a remote IP address and port that corresponds
 // with some physical peer backing the Tailscale IP address.
 func (s *Statistics) UpdateTxPhysical(src netip.Addr, dst netip.AddrPort, packets, bytes int) {
-	s.updatePhysical(src, dst, packets, bytes, false)
+	s.UpdatePhysical(0, netip.AddrPortFrom(src, 0), dst, packets, bytes, false)
 }
 
 // UpdateRxPhysical updates the counters for zero or more received wireguard packets.
@@ -146,11 +146,11 @@ func (s *Statistics) UpdateTxPhysical(src netip.Addr, dst netip.AddrPort, packet
 // The dst is a remote IP address and port that corresponds
 // with some physical peer backing the Tailscale IP address.
 func (s *Statistics) UpdateRxPhysical(src netip.Addr, dst netip.AddrPort, packets, bytes int) {
-	s.updatePhysical(src, dst, packets, bytes, true)
+	s.UpdatePhysical(0, netip.AddrPortFrom(src, 0), dst, packets, bytes, true)
 }
 
-func (s *Statistics) updatePhysical(src netip.Addr, dst netip.AddrPort, packets, bytes int, receive bool) {
-	conn := netlogtype.Connection{Src: netip.AddrPortFrom(src, 0), Dst: dst}
+func (s *Statistics) UpdatePhysical(proto ipproto.Proto, src, dst netip.AddrPort, packets, bytes int, receive bool) {
+	conn := netlogtype.Connection{Proto: proto, Src: src, Dst: dst}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

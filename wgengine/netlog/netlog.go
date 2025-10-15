@@ -8,6 +8,7 @@
 package netlog
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
@@ -29,6 +29,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logid"
+	"tailscale.com/types/netlogfunc"
 	"tailscale.com/types/netlogtype"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/wgengine/router"
@@ -40,12 +41,12 @@ const pollPeriod = 5 * time.Second
 // Device is an abstraction over a tunnel device or a magic socket.
 // Both *tstun.Wrapper and *magicsock.Conn implement this interface.
 type Device interface {
-	SetStatistics(*connstats.Statistics)
+	SetConnectionCounter(netlogfunc.ConnectionCounter)
 }
 
 type noopDevice struct{}
 
-func (noopDevice) SetStatistics(*connstats.Statistics) {}
+func (noopDevice) SetConnectionCounter(netlogfunc.ConnectionCounter) {}
 
 // Logger logs statistics about every connection.
 // At present, it only logs connections within a tailscale network.
@@ -131,31 +132,21 @@ func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID lo
 	// can upload to the Tailscale log service, so stay below this limit.
 	const maxLogSize = 256 << 10
 	const maxConns = (maxLogSize - netlogtype.MaxMessageJSONSize) / netlogtype.MaxConnectionCountsJSONSize
-	if buildfeatures.HasConnStats {
-		nl.stats = connstats.NewStatistics(pollPeriod, maxConns, func(start, end time.Time, virtual, physical map[netlogtype.Connection]netlogtype.Counts) {
-			nl.mu.Lock()
-			addrs := nl.addrs
-			prefixes := nl.prefixes
-			nl.mu.Unlock()
-			recordStatistics(nl.logger, nodeID, start, end, virtual, physical, addrs, prefixes, logExitFlowEnabledEnabled)
-		})
-	}
+	nl.stats = connstats.NewStatistics(pollPeriod, maxConns, func(start, end time.Time, virtual, physical map[netlogtype.Connection]netlogtype.Counts) {
+		nl.mu.Lock()
+		addrs := nl.addrs
+		prefixes := nl.prefixes
+		nl.mu.Unlock()
+		recordStatistics(nl.logger, nodeID, start, end, virtual, physical, addrs, prefixes, logExitFlowEnabledEnabled)
+	})
 
 	// Register the connection tracker into the TUN device.
-	if tun == nil {
-		tun = noopDevice{}
-	}
-	nl.tun = tun
-	if buildfeatures.HasConnStats {
-		nl.tun.SetStatistics(nl.stats)
-	}
+	nl.tun = cmp.Or[Device](tun, noopDevice{})
+	nl.tun.SetConnectionCounter(nl.stats.UpdateVirtual)
 
 	// Register the connection tracker into magicsock.
-	if sock == nil {
-		sock = noopDevice{}
-	}
-	nl.sock = sock
-	nl.sock.SetStatistics(nl.stats)
+	nl.sock = cmp.Or[Device](sock, noopDevice{})
+	nl.sock.SetConnectionCounter(nl.stats.UpdatePhysical)
 
 	return nil
 }
@@ -265,8 +256,8 @@ func (nl *Logger) Shutdown(ctx context.Context) error {
 	// Shutdown in reverse order of Startup.
 	// Do not hold lock while shutting down since this may flush one last time.
 	nl.mu.Unlock()
-	nl.sock.SetStatistics(nil)
-	nl.tun.SetStatistics(nil)
+	nl.sock.SetConnectionCounter(nil)
+	nl.tun.SetConnectionCounter(nil)
 	err1 := nl.stats.Shutdown(ctx)
 	err2 := nl.logger.Shutdown(ctx)
 	nl.mu.Lock()

@@ -32,6 +32,7 @@ import (
 	"unsafe"
 
 	qt "github.com/frankban/quicktest"
+	"github.com/google/go-cmp/cmp"
 	wgconn "github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
@@ -45,7 +46,6 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/connstats"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
@@ -158,14 +158,14 @@ func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, st
 // happiness.
 type magicStack struct {
 	privateKey key.NodePrivate
-	epCh       chan []tailcfg.Endpoint // endpoint updates produced by this peer
-	stats      *connstats.Statistics   // per-connection statistics
-	conn       *Conn                   // the magicsock itself
-	tun        *tuntest.ChannelTUN     // TUN device to send/receive packets
-	tsTun      *tstun.Wrapper          // wrapped tun that implements filtering and wgengine hooks
-	dev        *device.Device          // the wireguard-go Device that connects the previous things
-	wgLogger   *wglog.Logger           // wireguard-go log wrapper
-	netMon     *netmon.Monitor         // always non-nil
+	epCh       chan []tailcfg.Endpoint       // endpoint updates produced by this peer
+	counts     netlogtype.CountsByConnection // per-connection statistics
+	conn       *Conn                         // the magicsock itself
+	tun        *tuntest.ChannelTUN           // TUN device to send/receive packets
+	tsTun      *tstun.Wrapper                // wrapped tun that implements filtering and wgengine hooks
+	dev        *device.Device                // the wireguard-go Device that connects the previous things
+	wgLogger   *wglog.Logger                 // wireguard-go log wrapper
+	netMon     *netmon.Monitor               // always non-nil
 	metrics    *usermetric.Registry
 }
 
@@ -1143,22 +1143,19 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		}
 	}
 
-	m1.stats = connstats.NewStatistics(0, 0, nil)
-	defer m1.stats.Shutdown(context.Background())
-	m1.conn.SetStatistics(m1.stats)
-	m2.stats = connstats.NewStatistics(0, 0, nil)
-	defer m2.stats.Shutdown(context.Background())
-	m2.conn.SetStatistics(m2.stats)
+	m1.conn.SetConnectionCounter(m1.counts.Add)
+	m2.conn.SetConnectionCounter(m2.counts.Add)
 
 	checkStats := func(t *testing.T, m *magicStack, wantConns []netlogtype.Connection) {
-		_, stats := m.stats.TestExtract()
+		defer m.counts.Reset()
+		counts := m.counts.Clone()
 		for _, conn := range wantConns {
-			if _, ok := stats[conn]; ok {
+			if _, ok := counts[conn]; ok {
 				return
 			}
 		}
 		t.Helper()
-		t.Errorf("missing any connection to %s from %s", wantConns, slicesx.MapKeys(stats))
+		t.Errorf("missing any connection to %s from %s", wantConns, slicesx.MapKeys(counts))
 	}
 
 	addrPort := netip.MustParseAddrPort
@@ -1221,9 +1218,9 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		setT(t)
 		defer setT(outerT)
 		m1.conn.resetMetricsForTest()
-		m1.stats.TestExtract()
+		m1.counts.Reset()
 		m2.conn.resetMetricsForTest()
-		m2.stats.TestExtract()
+		m2.counts.Reset()
 		t.Logf("Metrics before: %s\n", m1.metrics.String())
 		ping1(t)
 		ping2(t)
@@ -1249,8 +1246,6 @@ func (c *Conn) resetMetricsForTest() {
 }
 
 func assertConnStatsAndUserMetricsEqual(t *testing.T, ms *magicStack) {
-	_, phys := ms.stats.TestExtract()
-
 	physIPv4RxBytes := int64(0)
 	physIPv4TxBytes := int64(0)
 	physDERPRxBytes := int64(0)
@@ -1259,7 +1254,7 @@ func assertConnStatsAndUserMetricsEqual(t *testing.T, ms *magicStack) {
 	physIPv4TxPackets := int64(0)
 	physDERPRxPackets := int64(0)
 	physDERPTxPackets := int64(0)
-	for conn, count := range phys {
+	for conn, count := range ms.counts.Clone() {
 		t.Logf("physconn src: %s, dst: %s", conn.Src.String(), conn.Dst.String())
 		if conn.Dst.String() == "127.3.3.40:1" {
 			physDERPRxBytes += int64(count.RxBytes)
@@ -1273,6 +1268,7 @@ func assertConnStatsAndUserMetricsEqual(t *testing.T, ms *magicStack) {
 			physIPv4TxPackets += int64(count.TxPackets)
 		}
 	}
+	ms.counts.Reset()
 
 	metricIPv4RxBytes := ms.conn.metrics.inboundBytesIPv4Total.Value()
 	metricIPv4RxPackets := ms.conn.metrics.inboundPacketsIPv4Total.Value()
@@ -3986,7 +3982,8 @@ func TestConn_receiveIP(t *testing.T) {
 			c.noteRecvActivity = func(public key.NodePublic) {
 				noteRecvActivityCalled = true
 			}
-			c.SetStatistics(connstats.NewStatistics(0, 0, nil))
+			var counts netlogtype.CountsByConnection
+			c.SetConnectionCounter(counts.Add)
 
 			if tt.insertWantEndpointTypeInPeerMap {
 				var insertEPIntoPeerMap *endpoint
@@ -4059,9 +4056,8 @@ func TestConn_receiveIP(t *testing.T) {
 			}
 
 			// Verify physical rx stats
-			stats := c.stats.Load()
-			_, gotPhy := stats.TestExtract()
 			wantNonzeroRxStats := false
+			gotPhy := counts.Clone()
 			switch ep := tt.wantEndpointType.(type) {
 			case *lazyEndpoint:
 				if ep.maybeEP != nil {
@@ -4081,8 +4077,8 @@ func TestConn_receiveIP(t *testing.T) {
 						RxBytes:   wantRxBytes,
 					},
 				}
-				if !reflect.DeepEqual(gotPhy, wantPhy) {
-					t.Errorf("receiveIP() got physical conn stats = %v, want %v", gotPhy, wantPhy)
+				if d := cmp.Diff(gotPhy, wantPhy); d != "" {
+					t.Errorf("receiveIP() stats mismatch (-got +want):\n%s", d)
 				}
 			} else {
 				if len(gotPhy) != 0 {

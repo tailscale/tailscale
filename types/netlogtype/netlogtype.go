@@ -5,7 +5,9 @@
 package netlogtype
 
 import (
+	"maps"
 	"net/netip"
+	"sync"
 	"time"
 
 	"tailscale.com/tailcfg"
@@ -82,4 +84,44 @@ func (c1 Counts) Add(c2 Counts) Counts {
 	c1.RxPackets += c2.RxPackets
 	c1.RxBytes += c2.RxBytes
 	return c1
+}
+
+// CountsByConnection is a count of packets and bytes for each connection.
+// All methods are safe for concurrent calls.
+type CountsByConnection struct {
+	mu sync.Mutex
+	m  map[Connection]Counts
+}
+
+// Add adds packets and bytes for the specified connection.
+func (c *CountsByConnection) Add(proto ipproto.Proto, src, dst netip.AddrPort, packets, bytes int, recv bool) {
+	conn := Connection{Proto: proto, Src: src, Dst: dst}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.m == nil {
+		c.m = make(map[Connection]Counts)
+	}
+	cnts := c.m[conn]
+	if recv {
+		cnts.RxPackets += uint64(packets)
+		cnts.RxBytes += uint64(bytes)
+	} else {
+		cnts.TxPackets += uint64(packets)
+		cnts.TxBytes += uint64(bytes)
+	}
+	c.m[conn] = cnts
+}
+
+// Clone deep copies the map.
+func (c *CountsByConnection) Clone() map[Connection]Counts {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return maps.Clone(c.m)
+}
+
+// Reset clear the map.
+func (c *CountsByConnection) Reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	clear(c.m)
 }
