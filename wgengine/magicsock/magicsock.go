@@ -1861,7 +1861,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 	now := mono.Now()
 	ep.lastRecvUDPAny.StoreAtomic(now)
 	connNoted := ep.noteRecvActivity(src, now)
-	if buildfeatures.HasConnStats {
+	if buildfeatures.HasNetLog {
 		if update := c.connCounter.Load(); update != nil {
 			update(0, netip.AddrPortFrom(ep.nodeAddr, 0), ipp, 1, geneveInclusivePacketLen, true)
 		}
@@ -3748,7 +3748,7 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 // SetConnectionCounter specifies a per-connection statistics aggregator.
 // Nil may be specified to disable statistics gathering.
 func (c *Conn) SetConnectionCounter(fn netlogfunc.ConnectionCounter) {
-	if buildfeatures.HasConnStats {
+	if buildfeatures.HasNetLog {
 		c.connCounter.Store(fn)
 	}
 }

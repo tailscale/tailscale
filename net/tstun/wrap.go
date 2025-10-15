@@ -976,7 +976,7 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 			panic(fmt.Sprintf("short copy: %d != %d", n, len(data)-res.dataOffset))
 		}
 		sizes[buffsPos] = n
-		if buildfeatures.HasConnStats {
+		if buildfeatures.HasNetLog {
 			if update := t.connCounter.Load(); update != nil {
 				updateConnCounter(update, p.Buffer(), false)
 			}
@@ -1105,7 +1105,7 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 		n, err = tun.GSOSplit(pkt, gsoOptions, outBuffs, sizes, offset)
 	}
 
-	if buildfeatures.HasConnStats {
+	if buildfeatures.HasNetLog {
 		if update := t.connCounter.Load(); update != nil {
 			for i := 0; i < n; i++ {
 				updateConnCounter(update, outBuffs[i][offset:offset+sizes[i]], false)
@@ -1275,7 +1275,7 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 }
 
 func (t *Wrapper) tdevWrite(buffs [][]byte, offset int) (int, error) {
-	if buildfeatures.HasConnStats {
+	if buildfeatures.HasNetLog {
 		if update := t.connCounter.Load(); update != nil {
 			for i := range buffs {
 				updateConnCounter(update, buffs[i][offset:], true)
@@ -1501,7 +1501,7 @@ func (t *Wrapper) Unwrap() tun.Device {
 // SetConnectionCounter specifies a per-connection statistics aggregator.
 // Nil may be specified to disable statistics gathering.
 func (t *Wrapper) SetConnectionCounter(fn netlogfunc.ConnectionCounter) {
-	if buildfeatures.HasConnStats {
+	if buildfeatures.HasNetLog {
 		t.connCounter.Store(fn)
 	}
 }
