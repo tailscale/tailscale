@@ -232,16 +232,16 @@ func (src *HTTPHandler) Clone() *HTTPHandler {
 	}
 	dst := new(HTTPHandler)
 	*dst = *src
-	dst.UserCaps = append(src.UserCaps[:0:0], src.UserCaps...)
+	dst.AcceptAppCaps = append(src.AcceptAppCaps[:0:0], src.AcceptAppCaps...)
 	return dst
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HTTPHandlerCloneNeedsRegeneration = HTTPHandler(struct {
-	Path     string
-	Proxy    string
-	Text     string
-	UserCaps []tailcfg.PeerCapability
+	Path          string
+	Proxy         string
+	Text          string
+	AcceptAppCaps []tailcfg.PeerCapability
 }{})
 
 // Clone makes a deep copy of WebServerConfig.

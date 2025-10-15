@@ -96,12 +96,12 @@ func (b *bgBoolFlag) String() string {
 	return strconv.FormatBool(b.Value)
 }
 
-type userCapsFlag struct {
+type acceptAppCapsFlag struct {
 	Value *[]tailcfg.PeerCapability
 }
 
-// Set appends s to the list of userCaps.
-func (u *userCapsFlag) Set(s string) error {
+// Set appends s to the list of appCaps to accept.
+func (u *acceptAppCapsFlag) Set(s string) error {
 	if s == "" {
 		return nil
 	}
@@ -109,8 +109,8 @@ func (u *userCapsFlag) Set(s string) error {
 	return nil
 }
 
-// String returns the string representation of the userCaps slice.
-func (u *userCapsFlag) String() string {
+// String returns the string representation of the slice of appCaps to accept.
+func (u *acceptAppCapsFlag) String() string {
 	s := make([]string, len(*u.Value))
 	for i, v := range *u.Value {
 		s[i] = string(v)
@@ -221,7 +221,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			fs.UintVar(&e.https, "https", 0, "Expose an HTTPS server at the specified port (default mode)")
 			if subcmd == serve {
 				fs.UintVar(&e.http, "http", 0, "Expose an HTTP server at the specified port")
-				fs.Var(&userCapsFlag{Value: &e.userCaps}, "usercaps", "User capability to forward to the server (can be specified multiple times)")
+				fs.Var(&acceptAppCapsFlag{Value: &e.acceptAppCaps}, "accept-app-caps", "App capability to forward to the server (can be specified multiple times)")
 			}
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
@@ -492,7 +492,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			if len(args) > 0 {
 				target = args[0]
 			}
-			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix, e.userCaps)
+			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix, e.acceptAppCaps)
 			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
 		}
 		if err != nil {
@@ -1141,7 +1141,7 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 			return err
 		}
 		h.Proxy = t
-		h.UserCaps = caps
+		h.AcceptAppCaps = caps
 	}
 
 	// TODO: validation needs to check nested foreground configs

@@ -173,7 +173,7 @@ type serveEnv struct {
 	service          tailcfg.ServiceName      // service name
 	tun              bool                     // redirect traffic to OS for service
 	allServices      bool                     // apply config file to all services
-	userCaps         []tailcfg.PeerCapability // user capabilities to forward
+	acceptAppCaps    []tailcfg.PeerCapability // app capabilities to forward
 
 	lc localServeClient // localClient interface, specific to serve
 	// optional stuff for tests:
