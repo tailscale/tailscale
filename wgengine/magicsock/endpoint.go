@@ -1105,8 +1105,8 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 		}
 
 		// TODO(raggi): needs updating for accuracy, as in error conditions we may have partial sends.
-		if stats := de.c.stats.Load(); err == nil && stats != nil {
-			stats.UpdateTxPhysical(de.nodeAddr, udpAddr.ap, len(buffs), txBytes)
+		if update := de.c.connCounter.Load(); err == nil && update != nil {
+			update(0, netip.AddrPortFrom(de.nodeAddr, 0), udpAddr.ap, len(buffs), txBytes, false)
 		}
 	}
 	if derpAddr.IsValid() {
@@ -1123,8 +1123,8 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 			}
 		}
 
-		if stats := de.c.stats.Load(); stats != nil {
-			stats.UpdateTxPhysical(de.nodeAddr, derpAddr, len(buffs), txBytes)
+		if update := de.c.connCounter.Load(); update != nil {
+			update(0, netip.AddrPortFrom(de.nodeAddr, 0), derpAddr, len(buffs), txBytes, false)
 		}
 		if allOk {
 			return nil

@@ -717,8 +717,8 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 	}
 
 	ep.noteRecvActivity(srcAddr, mono.Now())
-	if stats := c.stats.Load(); stats != nil {
-		stats.UpdateRxPhysical(ep.nodeAddr, srcAddr.ap, 1, dm.n)
+	if update := c.connCounter.Load(); update != nil {
+		update(0, netip.AddrPortFrom(ep.nodeAddr, 0), srcAddr.ap, 1, dm.n, true)
 	}
 
 	c.metrics.inboundPacketsDERPTotal.Add(1)

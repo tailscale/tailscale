@@ -37,7 +37,6 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/batching"
-	"tailscale.com/net/connstats"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
@@ -56,6 +55,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netlogfunc"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/views"
@@ -261,8 +261,8 @@ type Conn struct {
 	//lint:ignore U1000 used on Linux/Darwin only
 	peerMTUEnabled atomic.Bool
 
-	// stats maintains per-connection counters.
-	stats atomic.Pointer[connstats.Statistics]
+	// connCounter maintains per-connection counters.
+	connCounter syncs.AtomicValue[netlogfunc.ConnectionCounter]
 
 	// captureHook, if non-nil, is the pcap logging callback when capturing.
 	captureHook syncs.AtomicValue[packet.CaptureCallback]
@@ -1862,8 +1862,8 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 	ep.lastRecvUDPAny.StoreAtomic(now)
 	connNoted := ep.noteRecvActivity(src, now)
 	if buildfeatures.HasConnStats {
-		if stats := c.stats.Load(); stats != nil {
-			stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, geneveInclusivePacketLen)
+		if update := c.connCounter.Load(); update != nil {
+			update(0, netip.AddrPortFrom(ep.nodeAddr, 0), ipp, 1, geneveInclusivePacketLen, true)
 		}
 	}
 	if src.vni.IsSet() && (connNoted || looksLikeInitiationMsg(b)) {
@@ -3745,11 +3745,11 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	})
 }
 
-// SetStatistics specifies a per-connection statistics aggregator.
+// SetConnectionCounter specifies a per-connection statistics aggregator.
 // Nil may be specified to disable statistics gathering.
-func (c *Conn) SetStatistics(stats *connstats.Statistics) {
+func (c *Conn) SetConnectionCounter(fn netlogfunc.ConnectionCounter) {
 	if buildfeatures.HasConnStats {
-		c.stats.Store(stats)
+		c.connCounter.Store(fn)
 	}
 }
 
