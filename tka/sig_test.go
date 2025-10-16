@@ -507,7 +507,7 @@ func TestDecodeWrappedAuthkey(t *testing.T) {
 }
 
 func TestResignNKS(t *testing.T) {
-	// Tailnet lock keypair of a signing node.
+	// Tailnet Lock keypair of a signing node.
 	authPub, authPriv := testingKey25519(t, 1)
 	authKey := Key{Kind: Key25519, Public: authPub, Votes: 2}
 
