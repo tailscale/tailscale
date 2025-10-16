@@ -134,11 +134,7 @@ var Features = map[FeatureTag]FeatureMeta{
 		Deps: []FeatureTag{"c2n"},
 	},
 	"completion": {Sym: "Completion", Desc: "CLI shell completion"},
-	"connstats": {
-		Sym:  "ConnStats",
-		Desc: "Track per-packet connection statistics",
-	},
-	"cloud": {Sym: "Cloud", Desc: "detect cloud environment to learn instances IPs and DNS servers"},
+	"cloud":      {Sym: "Cloud", Desc: "detect cloud environment to learn instances IPs and DNS servers"},
 	"dbus": {
 		Sym:                  "DBus",
 		Desc:                 "Linux DBus support",

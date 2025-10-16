@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package connstats
+package netlog
 
 import (
 	"context"
@@ -54,7 +54,7 @@ func TestInterval(t *testing.T) {
 	const maxConns = 2048
 
 	gotDump := make(chan struct{}, 1)
-	stats := NewStatistics(maxPeriod, maxConns, func(_, _ time.Time, _, _ map[netlogtype.Connection]netlogtype.Counts) {
+	stats := newStatistics(maxPeriod, maxConns, func(_, _ time.Time, _, _ map[netlogtype.Connection]netlogtype.Counts) {
 		select {
 		case gotDump <- struct{}{}:
 		default:
@@ -86,7 +86,7 @@ func TestConcurrent(t *testing.T) {
 	const maxPeriod = 10 * time.Millisecond
 	const maxConns = 10
 	virtualAggregate := make(map[netlogtype.Connection]netlogtype.Counts)
-	stats := NewStatistics(maxPeriod, maxConns, func(start, end time.Time, virtual, physical map[netlogtype.Connection]netlogtype.Counts) {
+	stats := newStatistics(maxPeriod, maxConns, func(start, end time.Time, virtual, physical map[netlogtype.Connection]netlogtype.Counts) {
 		c.Assert(start.IsZero(), qt.IsFalse)
 		c.Assert(end.IsZero(), qt.IsFalse)
 		c.Assert(end.Before(start), qt.IsFalse)
@@ -170,7 +170,7 @@ func Benchmark(b *testing.B) {
 		b.ResetTimer()
 		b.ReportAllocs()
 		for range b.N {
-			s := NewStatistics(0, 0, nil)
+			s := newStatistics(0, 0, nil)
 			for j := 0; j < 1e3; j++ {
 				s.UpdateTxVirtual(p)
 			}
@@ -181,7 +181,7 @@ func Benchmark(b *testing.B) {
 		b.ResetTimer()
 		b.ReportAllocs()
 		for range b.N {
-			s := NewStatistics(0, 0, nil)
+			s := newStatistics(0, 0, nil)
 			for j := 0; j < 1e3; j++ {
 				binary.BigEndian.PutUint32(p[20:], uint32(j)) // unique port combination
 				s.UpdateTxVirtual(p)
@@ -193,7 +193,7 @@ func Benchmark(b *testing.B) {
 		b.ResetTimer()
 		b.ReportAllocs()
 		for range b.N {
-			s := NewStatistics(0, 0, nil)
+			s := newStatistics(0, 0, nil)
 			var group sync.WaitGroup
 			for j := 0; j < runtime.NumCPU(); j++ {
 				group.Add(1)
@@ -215,7 +215,7 @@ func Benchmark(b *testing.B) {
 		b.ResetTimer()
 		b.ReportAllocs()
 		for range b.N {
-			s := NewStatistics(0, 0, nil)
+			s := newStatistics(0, 0, nil)
 			var group sync.WaitGroup
 			for j := 0; j < runtime.NumCPU(); j++ {
 				group.Add(1)

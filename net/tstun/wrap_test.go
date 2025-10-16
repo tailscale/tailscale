@@ -380,7 +380,7 @@ func TestFilter(t *testing.T) {
 			tunStats := stats.Clone()
 			stats.Reset()
 			if len(tunStats) > 0 {
-				t.Errorf("connstats.Statistics.Extract = %v, want {}", tunStats)
+				t.Errorf("netlogtype.CountsByConnection = %v, want {}", tunStats)
 			}
 
 			if tt.dir == in {

@@ -23,7 +23,6 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
-	"tailscale.com/net/connstats"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tsaddr"
@@ -56,7 +55,7 @@ type Logger struct {
 	mu sync.Mutex // protects all fields below
 
 	logger *logtail.Logger
-	stats  *connstats.Statistics
+	stats  *statistics
 	tun    Device
 	sock   Device
 
@@ -132,7 +131,7 @@ func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID lo
 	// can upload to the Tailscale log service, so stay below this limit.
 	const maxLogSize = 256 << 10
 	const maxConns = (maxLogSize - netlogtype.MaxMessageJSONSize) / netlogtype.MaxConnectionCountsJSONSize
-	nl.stats = connstats.NewStatistics(pollPeriod, maxConns, func(start, end time.Time, virtual, physical map[netlogtype.Connection]netlogtype.Counts) {
+	nl.stats = newStatistics(pollPeriod, maxConns, func(start, end time.Time, virtual, physical map[netlogtype.Connection]netlogtype.Counts) {
 		nl.mu.Lock()
 		addrs := nl.addrs
 		prefixes := nl.prefixes
@@ -151,7 +150,7 @@ func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID lo
 	return nil
 }
 
-func recordStatistics(logger *logtail.Logger, nodeID tailcfg.StableNodeID, start, end time.Time, connstats, sockStats map[netlogtype.Connection]netlogtype.Counts, addrs map[netip.Addr]bool, prefixes map[netip.Prefix]bool, logExitFlowEnabled bool) {
+func recordStatistics(logger *logtail.Logger, nodeID tailcfg.StableNodeID, start, end time.Time, connStats, sockStats map[netlogtype.Connection]netlogtype.Counts, addrs map[netip.Addr]bool, prefixes map[netip.Prefix]bool, logExitFlowEnabled bool) {
 	m := netlogtype.Message{NodeID: nodeID, Start: start.UTC(), End: end.UTC()}
 
 	classifyAddr := func(a netip.Addr) (isTailscale, withinRoute bool) {
@@ -170,7 +169,7 @@ func recordStatistics(logger *logtail.Logger, nodeID tailcfg.StableNodeID, start
 	}
 
 	exitTraffic := make(map[netlogtype.Connection]netlogtype.Counts)
-	for conn, cnts := range connstats {
+	for conn, cnts := range connStats {
 		srcIsTailscaleIP, srcWithinSubnet := classifyAddr(conn.Src.Addr())
 		dstIsTailscaleIP, dstWithinSubnet := classifyAddr(conn.Dst.Addr())
 		switch {
