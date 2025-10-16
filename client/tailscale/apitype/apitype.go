@@ -94,3 +94,10 @@ type DNSQueryResponse struct {
 	// Resolvers is the list of resolvers that the forwarder deemed able to resolve the query.
 	Resolvers []*dnstype.Resolver
 }
+
+type DNSFullQueryResponse struct {
+	// Results is the list of raw DNS response bytes.
+	Results [][]byte
+	// Resolvers is the list of resolvers that the forwarder deemed able to resolve the query.
+	Resolvers []*dnstype.Resolver
+}

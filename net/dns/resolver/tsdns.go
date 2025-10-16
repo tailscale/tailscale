@@ -331,6 +331,44 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 	return out, err
 }
 
+func (r *Resolver) FullQuery(ctx context.Context, bs []byte, family string, from netip.AddrPort) ([][]byte, error) {
+	if !buildfeatures.HasDNS {
+		return nil, feature.ErrUnavailable
+	}
+	metricDNSQueryLocal.Add(1)
+	select {
+	case <-r.closed:
+		metricDNSQueryErrorClosed.Add(1)
+		return nil, net.ErrClosed
+	default:
+	}
+
+	var outlist [][]byte
+
+	out, err := r.respond(bs)
+	if err == errNotOurName {
+		domain, _, err := nameFromQuery(bs)
+		resolvers := r.forwarder.resolvers(domain)
+		for _, resolver := range resolvers {
+			ch := make(chan packet, 1)
+			ctx, cancel := context.WithTimeout(ctx, dnsQueryTimeout)
+			defer close(ch)
+			defer cancel()
+			err = r.forwarder.forwardWithDestChan(ctx, packet{bs, family, from}, ch, resolver)
+			if err != nil {
+				outlist = append(outlist, nil)
+				continue
+			}
+			outlist = append(outlist, (<-ch).bs)
+		}
+		return outlist, nil
+	}
+
+	outlist = append(outlist, out)
+
+	return outlist, err
+}
+
 // GetUpstreamResolvers returns the resolvers that would be used to resolve
 // the given FQDN.
 func (r *Resolver) GetUpstreamResolvers(name dnsname.FQDN) []*dnstype.Resolver {
