@@ -61,6 +61,7 @@ func TestRecordRequestAsEvent(t *testing.T) {
 		log:           zl.Sugar(),
 		ts:            &tsnet.Server{},
 		sendEventFunc: sender.Send,
+		eventsEnabled: true,
 	}
 
 	defaultWho := &apitype.WhoIsResponse{
