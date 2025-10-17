@@ -138,11 +138,11 @@ export default function useAuth() {
     // Check if we have a pending auth session when the component mounts.
     const pendingAuth = localStorage.getItem("ts-web-needs-auth-wait")
     if (pendingAuth === "true") {
-      localStorage.removeItem("ts-web-needs-auth-wait")
       // Wait for the auth session to complete.
       apiFetch("/auth/session/wait", "GET")
         .then(() => {
           loadAuth()
+          localStorage.removeItem("ts-web-needs-auth-wait")
         })
         .catch((error) => {
           console.error(error)

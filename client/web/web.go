@@ -370,6 +370,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			s.serveAPIAuthSessionNew(w, r) // create new session
 			return
 		case r.URL.Path == "/api/auth/session/wait" && r.Method == httpm.GET:
+			s.logf("web: wait for auth session")
 			s.serveAPIAuthSessionWait(w, r) // wait for session to be authorized
 			return
 		}
