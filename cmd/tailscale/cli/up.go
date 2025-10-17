@@ -25,6 +25,7 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	qrcode "github.com/skip2/go-qrcode"
 	"tailscale.com/feature/buildfeatures"
+	_ "tailscale.com/feature/condregister/identityfederation"
 	_ "tailscale.com/feature/condregister/oauthkey"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/internal/client/tailscale"
@@ -96,6 +97,9 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.BoolVar(&upArgs.qr, "qr", false, "show QR code for login URLs")
 	upf.StringVar(&upArgs.qrFormat, "qr-format", "small", "QR code formatting (small or large)")
 	upf.StringVar(&upArgs.authKeyOrFile, "auth-key", "", `node authorization key; if it begins with "file:", then it's a path to a file containing the authkey`)
+	upf.StringVar(&upArgs.clientID, "client-id", "", "Client ID used to generate authkeys via workload identity federation")
+	upf.StringVar(&upArgs.clientSecretOrFile, "client-secret", "", `Client Secret used to generate authkeys via OAuth; if it begins with "file:", then it's a path to a file containing the secret`)
+	upf.StringVar(&upArgs.idTokenOrFile, "id-token", "", `ID token from the identity provider to exchange with the control server for workload identity federation; if it begins with "file:", then it's a path to a file containing the token`)
 
 	upf.StringVar(&upArgs.server, "login-server", ipn.DefaultControlURL, "base URL of control server")
 	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", acceptRouteDefault(goos), "accept routes advertised by other Tailscale nodes")
@@ -184,6 +188,9 @@ type upArgsT struct {
 	statefulFiltering      bool
 	netfilterMode          string
 	authKeyOrFile          string // "secret" or "file:/path/to/secret"
+	clientID               string
+	clientSecretOrFile     string // "secret" or "file:/path/to/secret"
+	idTokenOrFile          string // "secret" or "file:/path/to/secret"
 	hostname               string
 	opUser                 string
 	json                   bool
@@ -193,8 +200,9 @@ type upArgsT struct {
 	postureChecking        bool
 }
 
-func (a upArgsT) getAuthKey() (string, error) {
-	v := a.authKeyOrFile
+// resolveValueFromFile returns the value as-is, or if it starts with "file:",
+// reads and returns the trimmed contents of the file.
+func resolveValueFromFile(v string) (string, error) {
 	if file, ok := strings.CutPrefix(v, "file:"); ok {
 		b, err := os.ReadFile(file)
 		if err != nil {
@@ -203,6 +211,18 @@ func (a upArgsT) getAuthKey() (string, error) {
 		return strings.TrimSpace(string(b)), nil
 	}
 	return v, nil
+}
+
+func (a upArgsT) getAuthKey() (string, error) {
+	return resolveValueFromFile(a.authKeyOrFile)
+}
+
+func (a upArgsT) getClientSecret() (string, error) {
+	return resolveValueFromFile(a.clientSecretOrFile)
+}
+
+func (a upArgsT) getIDToken() (string, error) {
+	return resolveValueFromFile(a.idTokenOrFile)
 }
 
 var upArgsGlobal upArgsT
@@ -586,11 +606,33 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		// Try to use an OAuth secret to generate an auth key if that functionality
 		// is available.
 		if f, ok := tailscale.HookResolveAuthKey.GetOk(); ok {
-			authKey, err = f(ctx, authKey, strings.Split(upArgs.advertiseTags, ","))
+			clientSecret := authKey // the authkey argument accepts client secrets, if both arguments are provided authkey has precedence
+			if clientSecret == "" {
+				clientSecret, err = upArgs.getClientSecret()
+				if err != nil {
+					return err
+				}
+			}
+
+			authKey, err = f(ctx, clientSecret, strings.Split(upArgs.advertiseTags, ","))
 			if err != nil {
 				return err
 			}
 		}
+		// Try to resolve the auth key via workload identity federation if that functionality
+		// is available and no auth key is yet determined.
+		if f, ok := tailscale.HookResolveAuthKeyViaWIF.GetOk(); ok && authKey == "" {
+			idToken, err := upArgs.getIDToken()
+			if err != nil {
+				return err
+			}
+
+			authKey, err = f(ctx, prefs.ControlURL, upArgs.clientID, idToken, strings.Split(upArgs.advertiseTags, ","))
+			if err != nil {
+				return err
+			}
+		}
+
 		err = localClient.Start(ctx, ipn.Options{
 			AuthKey:     authKey,
 			UpdatePrefs: prefs,
@@ -869,7 +911,7 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 // correspond to an ipn.Pref.
 func preflessFlag(flagName string) bool {
 	switch flagName {
-	case "auth-key", "force-reauth", "reset", "qr", "qr-format", "json", "timeout", "accept-risk", "host-routes":
+	case "auth-key", "force-reauth", "reset", "qr", "qr-format", "json", "timeout", "accept-risk", "host-routes", "client-id", "client-secret", "id-token":
 		return true
 	}
 	return false

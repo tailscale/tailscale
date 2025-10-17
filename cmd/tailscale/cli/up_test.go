@@ -43,6 +43,9 @@ var validUpFlags = set.Of(
 	"stateful-filtering",
 	"timeout",
 	"unattended",
+	"client-id",
+	"client-secret",
+	"id-token",
 )
 
 // TestUpFlagSetIsFrozen complains when new flags are added to tailscale up.

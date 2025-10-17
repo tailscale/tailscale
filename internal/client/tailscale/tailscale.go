@@ -25,6 +25,9 @@ func init() {
 // AuthMethod is an alias to tailscale.com/client/tailscale.
 type AuthMethod = tsclient.AuthMethod
 
+// APIKey is an alias to tailscale.com/client/tailscale.
+type APIKey = tsclient.APIKey
+
 // Device is an alias to tailscale.com/client/tailscale.
 type Device = tsclient.Device
 
