@@ -176,8 +176,11 @@ updateLoop:
 //
 // FS implements the Chonk interface.
 type FS struct {
-	base string
-	mu   sync.RWMutex
+	mu sync.RWMutex
+
+	// Base is the root directory where AUMs will be stored.
+	// The dir will be created automatically if it does not already exist.
+	Base string
 }
 
 // ChonkDir returns an implementation of Chonk which uses the
@@ -195,7 +198,7 @@ func ChonkDir(dir string) (*FS, error) {
 	// delete them, to avoid data loss in the event of a bug.
 	// Implement deletion after we are fairly sure in the implementation.
 
-	return &FS{base: dir}, nil
+	return &FS{Base: dir}, nil
 }
 
 // fsHashInfo describes how information about an AUMHash is represented
@@ -229,7 +232,7 @@ type fsHashInfo struct {
 // within the directory.
 func (c *FS) aumDir(h AUMHash) (dir, base string) {
 	s := h.String()
-	return filepath.Join(c.base, s[:2]), s
+	return filepath.Join(c.Base, s[:2]), s
 }
 
 // AUM returns the AUM with the specified digest.
@@ -390,7 +393,7 @@ func (c *FS) AllAUMs() ([]AUMHash, error) {
 }
 
 func (c *FS) scanHashes(eachHashInfo func(*fsHashInfo)) error {
-	prefixDirs, err := os.ReadDir(c.base)
+	prefixDirs, err := os.ReadDir(c.Base)
 	if err != nil {
 		return fmt.Errorf("reading prefix dirs: %v", err)
 	}
@@ -398,7 +401,7 @@ func (c *FS) scanHashes(eachHashInfo func(*fsHashInfo)) error {
 		if !prefix.IsDir() {
 			continue
 		}
-		files, err := os.ReadDir(filepath.Join(c.base, prefix.Name()))
+		files, err := os.ReadDir(filepath.Join(c.Base, prefix.Name()))
 		if err != nil {
 			return fmt.Errorf("reading prefix dir: %v", err)
 		}
@@ -429,7 +432,7 @@ func (c *FS) scanHashes(eachHashInfo func(*fsHashInfo)) error {
 func (c *FS) SetLastActiveAncestor(hash AUMHash) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return atomicfile.WriteFile(filepath.Join(c.base, "last_active_ancestor"), hash[:], 0644)
+	return atomicfile.WriteFile(filepath.Join(c.Base, "last_active_ancestor"), hash[:], 0644)
 }
 
 // LastActiveAncestor returns the oldest-known AUM that was (in a
@@ -442,7 +445,7 @@ func (c *FS) LastActiveAncestor() (*AUMHash, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	hash, err := os.ReadFile(filepath.Join(c.base, "last_active_ancestor"))
+	hash, err := os.ReadFile(filepath.Join(c.Base, "last_active_ancestor"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil // Not exist == none set.

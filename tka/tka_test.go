@@ -496,7 +496,7 @@ func TestAuthorityCompact(t *testing.T) {
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
 
-	storage := &FS{base: t.TempDir()}
+	storage := &FS{Base: t.TempDir()}
 	a, err := Bootstrap(storage, c.AUMs["G"])
 	if err != nil {
 		t.Fatalf("Bootstrap() failed: %v", err)
