@@ -127,19 +127,6 @@ func (c *Mem) AUM(hash AUMHash) (AUM, error) {
 	return aum, nil
 }
 
-// Orphans returns all AUMs which do not have a parent.
-func (c *Mem) Orphans() ([]AUM, error) {
-	c.l.RLock()
-	defer c.l.RUnlock()
-	out := make([]AUM, 0, 6)
-	for _, a := range c.aums {
-		if _, ok := a.Parent(); !ok {
-			out = append(out, a)
-		}
-	}
-	return out, nil
-}
-
 // ChildAUMs returns all AUMs with a specified previous
 // AUM hash.
 func (c *Mem) ChildAUMs(prevAUMHash AUMHash) ([]AUM, error) {
