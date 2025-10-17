@@ -10,7 +10,6 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"os"
-	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -18,8 +17,16 @@ import (
 	"tailscale.com/util/must"
 )
 
+type Testing interface {
+	Name() string
+	Logf(format string, args ...any)
+	Errorf(format string, args ...any)
+	Fatal(...any)
+	Fatalf(format string, args ...any)
+}
+
 // returns a random source based on the test name + extraSeed.
-func testingRand(t *testing.T, extraSeed int64) *rand.Rand {
+func testingRand(t Testing, extraSeed int64) *rand.Rand {
 	var seed int64
 	if err := binary.Read(bytes.NewBuffer([]byte(t.Name())), binary.LittleEndian, &seed); err != nil {
 		panic(err)
@@ -29,7 +36,7 @@ func testingRand(t *testing.T, extraSeed int64) *rand.Rand {
 
 // randHash derives a fake blake2s hash from the test name
 // and the given seed.
-func randHash(t *testing.T, seed int64) [blake2s.Size]byte {
+func randHash(t Testing, seed int64) [blake2s.Size]byte {
 	var out [blake2s.Size]byte
 	testingRand(t, seed).Read(out[:])
 	return out
@@ -43,10 +50,9 @@ func aumHashesLess(x, y AUM) bool {
 	return hashesLess(x.Hash(), y.Hash())
 }
 
-func RunChonkTests(t *testing.T, newChonk func(t *testing.T) Chonk) {
-	t.Run("ChildAUMs", func(t *testing.T) {
-		t.Parallel()
-		chonk := newChonk(t)
+func RunChonkTests(t Testing, Run func(name string, f func()), newChonk func() Chonk) {
+	Run("ChildAUMs", func() {
+		chonk := newChonk()
 		parentHash := randHash(t, 1)
 		data := []AUM{
 			{
@@ -73,9 +79,8 @@ func RunChonkTests(t *testing.T, newChonk func(t *testing.T) Chonk) {
 		}
 	})
 
-	t.Run("AUMMissing", func(t *testing.T) {
-		t.Parallel()
-		chonk := newChonk(t)
+	Run("AUMMissing", func() {
+		chonk := newChonk()
 		var notExists AUMHash
 		notExists[:][0] = 42
 		if _, err := chonk.AUM(notExists); err != os.ErrNotExist {
@@ -83,9 +88,8 @@ func RunChonkTests(t *testing.T, newChonk func(t *testing.T) Chonk) {
 		}
 	})
 
-	t.Run("ReadChainFromHead", func(t *testing.T) {
-		t.Parallel()
-		chonk := newChonk(t)
+	Run("ReadChainFromHead", func() {
+		chonk := newChonk()
 		genesis := AUM{MessageKind: AUMRemoveKey, KeyID: []byte{1, 2}}
 		gHash := genesis.Hash()
 		intermediate := AUM{PrevAUMHash: gHash[:]}
@@ -132,9 +136,8 @@ func RunChonkTests(t *testing.T, newChonk func(t *testing.T) Chonk) {
 		}
 	})
 
-	t.Run("LastActiveAncestor", func(t *testing.T) {
-		t.Parallel()
-		chonk := newChonk(t)
+	Run("LastActiveAncestor", func() {
+		chonk := newChonk()
 
 		aum := AUM{MessageKind: AUMRemoveKey, KeyID: []byte{1, 2}}
 		hash := aum.Hash()
@@ -152,10 +155,9 @@ func RunChonkTests(t *testing.T, newChonk func(t *testing.T) Chonk) {
 	})
 }
 
-func RunCompactableChonkTests(t *testing.T, newChonk func(t *testing.T) CompactableChonk) {
-	t.Run("PurgeAUMs", func(t *testing.T) {
-		t.Parallel()
-		chonk := newChonk(t)
+func RunCompactableChonkTests(t Testing, Run func(name string, f func()), newChonk func() CompactableChonk) {
+	Run("PurgeAUMs", func() {
+		chonk := newChonk()
 		parentHash := randHash(t, 1)
 		aum := AUM{MessageKind: AUMNoOp, PrevAUMHash: parentHash[:]}
 
@@ -171,8 +173,8 @@ func RunCompactableChonkTests(t *testing.T, newChonk func(t *testing.T) Compacta
 		}
 	})
 
-	t.Run("AllAUMs", func(t *testing.T) {
-		chonk := newChonk(t)
+	Run("AllAUMs", func() {
+		chonk := newChonk()
 		genesis := AUM{MessageKind: AUMRemoveKey, KeyID: []byte{1, 2}}
 		gHash := genesis.Hash()
 		intermediate := AUM{PrevAUMHash: gHash[:]}
@@ -197,9 +199,8 @@ func RunCompactableChonkTests(t *testing.T, newChonk func(t *testing.T) Compacta
 		}
 	})
 
-	t.Run("ChildAUMsOfPurgedAUM", func(t *testing.T) {
-		t.Parallel()
-		chonk := newChonk(t)
+	Run("ChildAUMsOfPurgedAUM", func() {
+		chonk := newChonk()
 		parent := AUM{MessageKind: AUMRemoveKey, KeyID: []byte{0, 0}}
 
 		parentHash := parent.Hash()

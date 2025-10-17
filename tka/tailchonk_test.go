@@ -16,11 +16,19 @@ import (
 )
 
 func TestMemImplementsChonk(t *testing.T) {
-	RunChonkTests(t, func(t *testing.T) Chonk { return &Mem{} })
+	RunChonkTests(
+		t,
+		func(name string, f func()) { t.Run(name, func(t *testing.T) { f() }) },
+		func() Chonk { return &Mem{} },
+	)
 }
 
 func TestFSImplementsChonk(t *testing.T) {
-	RunChonkTests(t, func(t *testing.T) Chonk { return &FS{base: t.TempDir()} })
+	RunChonkTests(
+		t,
+		func(name string, f func()) { t.Run(name, func(t *testing.T) { f() }) },
+		func() Chonk { return &FS{base: t.TempDir()} },
+	)
 }
 
 func TestTailchonkMem_Orphans(t *testing.T) {
