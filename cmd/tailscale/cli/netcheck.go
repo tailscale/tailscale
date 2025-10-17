@@ -180,7 +180,11 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 		printf("\t* Nearest DERP: unknown (no response to latency probes)\n")
 	} else {
 		if report.PreferredDERP != 0 {
-			printf("\t* Nearest DERP: %v\n", dm.Regions[report.PreferredDERP].RegionName)
+			if region, ok := dm.Regions[report.PreferredDERP]; ok {
+				printf("\t* Nearest DERP: %v\n", region.RegionName)
+			} else {
+				printf("\t* Nearest DERP: %v (region not found in map)\n", report.PreferredDERP)
+			}
 		} else {
 			printf("\t* Nearest DERP: [none]\n")
 		}
