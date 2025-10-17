@@ -125,6 +125,11 @@ var Features = map[FeatureTag]FeatureMeta{
 	},
 	"captiveportal": {Sym: "CaptivePortal", Desc: "Captive portal detection"},
 	"capture":       {Sym: "Capture", Desc: "Packet capture"},
+	"chonk_tests": {
+		Sym:  "ChonkTests",
+		Desc: "Shared tests for Chonk (part of TKA/Tailnet Lock)",
+		Deps: []FeatureTag{"tailnetlock"},
+	},
 	"cli":           {Sym: "CLI", Desc: "embed the CLI into the tailscaled binary"},
 	"cliconndiag":   {Sym: "CLIConnDiag", Desc: "CLI connection error diagnostics"},
 	"clientmetrics": {Sym: "ClientMetrics", Desc: "Client metrics support"},

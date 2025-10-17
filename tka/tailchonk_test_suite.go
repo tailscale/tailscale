@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !ts_omit_tailnetlock
+//go:build !ts_omit_chonk_tests
 
 package tka
 
