@@ -32,7 +32,6 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/net/dnscache"
-	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netx"
@@ -471,8 +470,9 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 
 // getArbitraryDoHClient returns an HTTP client for regular DoH servers
 // that aren't in our known list of providers. As we don't know their IPs,
-// we have to resolve the hostname normally via the system resolver.
-func (f *forwarder) getArbitraryDoHClient(urlBase string) (c *http.Client, ok bool) {
+// we have to resolve them using other resolvers by a SubResolver, which will
+// recursively resolve the domain by other configured DNS resolvers.
+func (f *forwarder) getArbitraryDoHClient(urlBase string, ourRr resolverAndDelay) (c *http.Client, ok bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if c, ok := f.dohClient[urlBase]; ok {
@@ -480,9 +480,8 @@ func (f *forwarder) getArbitraryDoHClient(urlBase string) (c *http.Client, ok bo
 	}
 
 	dialer := dnscache.Dialer(f.getDialerType(), &dnscache.Resolver{
-		Forward:          dnscache.Get().Forward,
-		UseLastGood:      true,
-		LookupIPFallback: dnsfallback.MakeLookupFunc(f.logf, f.netMon),
+		Forward:     NewSubResolver(f, ourRr),
+		UseLastGood: true,
 	})
 	tlsConfig := &tls.Config{
 		// From well-known DNSes
@@ -592,7 +591,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		if hc, ok := f.getKnownDoHClientForProvider(urlBase); ok {
 			return f.sendDoH(ctx, urlBase, hc, fq.packet)
 		}
-		if hc, ok := f.getArbitraryDoHClient(urlBase); ok {
+		if hc, ok := f.getArbitraryDoHClient(urlBase, rr); ok {
 			return f.sendDoH(ctx, urlBase, hc, fq.packet)
 		}
 		metricDNSFwdErrorType.Add(1)
@@ -972,7 +971,7 @@ type forwardQuery struct {
 // non-nil error (without sending to the channel).
 //
 // If resolvers is non-empty, it's used explicitly (notably, for exit
-// node DNS proxy queries), otherwise f.resolvers is used.
+// node DNS proxy queries), otherwise parentForwarder.resolvers is used.
 func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, responseChan chan<- packet, resolvers ...resolverAndDelay) error {
 	metricDNSFwd.Add(1)
 	domain, typ, err := nameFromQuery(query.bs)

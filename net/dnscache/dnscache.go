@@ -54,6 +54,10 @@ func preferGoResolver() bool {
 // Get returns a caching Resolver singleton.
 func Get() *Resolver { return single }
 
+type forwardResolver interface {
+	LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
+}
+
 // Resolver is a minimal DNS caching resolver.
 //
 // The TTL is always fixed for now. It's not intended for general use.
@@ -62,7 +66,7 @@ func Get() *Resolver { return single }
 type Resolver struct {
 	// Forward is the resolver to use to populate the cache.
 	// If nil, net.DefaultResolver is used.
-	Forward *net.Resolver
+	Forward forwardResolver
 
 	// LookupIPForTest, if non-nil and in tests, handles requests instead
 	// of the usual mechanisms.
@@ -114,7 +118,7 @@ type ipCacheEntry struct {
 	expires time.Time
 }
 
-func (r *Resolver) fwd() *net.Resolver {
+func (r *Resolver) fwd() forwardResolver {
 	if r.Forward != nil {
 		return r.Forward
 	}
