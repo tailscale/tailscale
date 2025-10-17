@@ -73,33 +73,6 @@ func TestTailchonk_AUMMissing(t *testing.T) {
 	}
 }
 
-func TestTailchonkMem_Orphans(t *testing.T) {
-	chonk := Mem{}
-
-	parentHash := randHash(t, 1)
-	orphan := AUM{MessageKind: AUMNoOp}
-	aums := []AUM{
-		orphan,
-		// A parent is specified, so we shouldnt see it in GetOrphans()
-		{
-			MessageKind: AUMRemoveKey,
-			KeyID:       []byte{3, 4},
-			PrevAUMHash: parentHash[:],
-		},
-	}
-	if err := chonk.CommitVerifiedAUMs(aums); err != nil {
-		t.Fatalf("CommitVerifiedAUMs failed: %v", err)
-	}
-
-	stored, err := chonk.Orphans()
-	if err != nil {
-		t.Fatalf("Orphans failed: %v", err)
-	}
-	if diff := cmp.Diff([]AUM{orphan}, stored); diff != "" {
-		t.Errorf("stored AUM differs (-want, +got):\n%s", diff)
-	}
-}
-
 func TestTailchonk_ReadChainFromHead(t *testing.T) {
 	for _, chonk := range []Chonk{&Mem{}, &FS{base: t.TempDir()}} {
 
