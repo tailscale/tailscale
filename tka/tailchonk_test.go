@@ -15,6 +15,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"golang.org/x/crypto/blake2s"
+	"tailscale.com/util/must"
 )
 
 // randHash derives a fake blake2s hash from the test name
@@ -144,9 +145,6 @@ func TestTailchonkFS_Commit(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, base)); err != nil {
 		t.Errorf("stat of AUM file failed: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(chonk.base, "M7", "M7LL2NDB4NKCZIUPVS6RDM2GUOIMW6EEAFVBWMVCPUANQJPHT3SQ")); err != nil {
-		t.Errorf("stat of AUM parent failed: %v", err)
-	}
 
 	info, err := chonk.get(aum.Hash())
 	if err != nil {
@@ -199,6 +197,14 @@ func TestTailchonkFS_PurgeAUMs(t *testing.T) {
 	}
 }
 
+func hashesLess(x, y AUMHash) bool {
+	return bytes.Compare(x[:], y[:]) < 0
+}
+
+func aumHashesLess(x, y AUM) bool {
+	return hashesLess(x.Hash(), y.Hash())
+}
+
 func TestTailchonkFS_AllAUMs(t *testing.T) {
 	chonk := &FS{base: t.TempDir()}
 	genesis := AUM{MessageKind: AUMRemoveKey, KeyID: []byte{1, 2}}
@@ -220,11 +226,51 @@ func TestTailchonkFS_AllAUMs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hashesLess := func(a, b AUMHash) bool {
-		return bytes.Compare(a[:], b[:]) < 0
-	}
 	if diff := cmp.Diff([]AUMHash{genesis.Hash(), intermediate.Hash(), leaf.Hash()}, hashes, cmpopts.SortSlices(hashesLess)); diff != "" {
 		t.Fatalf("AllAUMs() output differs (-want, +got):\n%s", diff)
+	}
+}
+
+func TestTailchonkFS_ChildAUMsOfPurgedAUM(t *testing.T) {
+	chonk := &FS{base: t.TempDir()}
+	parent := AUM{MessageKind: AUMRemoveKey, KeyID: []byte{0, 0}}
+
+	parentHash := parent.Hash()
+
+	child1 := AUM{MessageKind: AUMAddKey, KeyID: []byte{1, 1}, PrevAUMHash: parentHash[:]}
+	child2 := AUM{MessageKind: AUMAddKey, KeyID: []byte{2, 2}, PrevAUMHash: parentHash[:]}
+	child3 := AUM{MessageKind: AUMAddKey, KeyID: []byte{3, 3}, PrevAUMHash: parentHash[:]}
+
+	child2Hash := child2.Hash()
+	grandchild2A := AUM{MessageKind: AUMAddKey, KeyID: []byte{2, 2, 2, 2}, PrevAUMHash: child2Hash[:]}
+	grandchild2B := AUM{MessageKind: AUMAddKey, KeyID: []byte{2, 2, 2, 2, 2}, PrevAUMHash: child2Hash[:]}
+
+	commitSet := []AUM{parent, child1, child2, child3, grandchild2A, grandchild2B}
+
+	if err := chonk.CommitVerifiedAUMs(commitSet); err != nil {
+		t.Fatalf("CommitVerifiedAUMs failed: %v", err)
+	}
+
+	// Check the set of hashes is correct
+	childHashes := must.Get(chonk.ChildAUMs(parentHash))
+	if diff := cmp.Diff([]AUM{child1, child2, child3}, childHashes, cmpopts.SortSlices(aumHashesLess)); diff != "" {
+		t.Fatalf("ChildAUMs() output differs (-want, +got):\n%s", diff)
+	}
+
+	// Purge the parent AUM, and check the set of child AUMs is unchanged
+	chonk.PurgeAUMs([]AUMHash{parent.Hash()})
+
+	childHashes = must.Get(chonk.ChildAUMs(parentHash))
+	if diff := cmp.Diff([]AUM{child1, child2, child3}, childHashes, cmpopts.SortSlices(aumHashesLess)); diff != "" {
+		t.Fatalf("ChildAUMs() output differs (-want, +got):\n%s", diff)
+	}
+
+	// Now purge one of the child AUMs, and check it no longer appears as a child of the parent
+	chonk.PurgeAUMs([]AUMHash{child3.Hash()})
+
+	childHashes = must.Get(chonk.ChildAUMs(parentHash))
+	if diff := cmp.Diff([]AUM{child1, child2}, childHashes, cmpopts.SortSlices(aumHashesLess)); diff != "" {
+		t.Fatalf("ChildAUMs() output differs (-want, +got):\n%s", diff)
 	}
 }
 
@@ -585,10 +631,7 @@ func (c *compactingChonkFake) CommitTime(hash AUMHash) (time.Time, error) {
 }
 
 func (c *compactingChonkFake) PurgeAUMs(hashes []AUMHash) error {
-	lessHashes := func(a, b AUMHash) bool {
-		return bytes.Compare(a[:], b[:]) < 0
-	}
-	if diff := cmp.Diff(c.wantDelete, hashes, cmpopts.SortSlices(lessHashes)); diff != "" {
+	if diff := cmp.Diff(c.wantDelete, hashes, cmpopts.SortSlices(hashesLess)); diff != "" {
 		c.t.Errorf("deletion set differs (-want, +got):\n%s", diff)
 	}
 	return nil
