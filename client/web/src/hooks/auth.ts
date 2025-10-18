@@ -81,7 +81,25 @@ export default function useAuth() {
     return apiFetch<{ authUrl?: string }>("/auth/session/new", "GET")
       .then((d) => {
         if (d.authUrl) {
+          // Store a flag to signal that auth is in progress.
+          // We try to open the auth URL in a new tab, but it might open
+          // in the same tab depending on browser settings
+          // (https://github.com/tailscale/tailscale/issues/11905).
+          // The flag will be used when returning to the app (in any tab).
+          localStorage.setItem("ts-web-needs-auth-wait", "true")
+
+          // Open the auth URL - this might open in a new tab or
+          // replace the current tab depending on browser settings.
           window.open(d.authUrl, "_blank")
+
+          // If execution continues here, we're still in the original tab
+          // (the URL opened in a new tab or the popup was blocked).
+          // If it opened in the same tab, we'll handle this when the user
+          // returns via the effect that checks for the pending auth flag.
+          // If it opened in a new tab, we can wait for auth to complete now.
+          // (If the popup was blocked, we'll also wait here.)
+
+          // Wait for the auth session to complete.
           return apiFetch("/auth/session/wait", "GET")
         }
       })
@@ -114,6 +132,23 @@ export default function useAuth() {
     loadAuth() // Refresh auth state after syno auth runs
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ranSynoAuth])
+
+  // Handle returning to the UI after having completed the auth flow in any tab.
+  useEffect(() => {
+    // Check if we have a pending auth session when the component mounts.
+    const pendingAuth = localStorage.getItem("ts-web-needs-auth-wait")
+    if (pendingAuth === "true") {
+      localStorage.removeItem("ts-web-needs-auth-wait")
+      // Wait for the auth session to complete.
+      apiFetch("/auth/session/wait", "GET")
+        .then(() => {
+          loadAuth()
+        })
+        .catch((error) => {
+          console.error(error)
+        })
+    }
+  }, [loadAuth])
 
   return {
     data,
