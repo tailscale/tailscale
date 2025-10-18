@@ -468,6 +468,50 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 	return c, true
 }
 
+// getArbitraryDoHClient returns an HTTP client for regular DoH servers
+// that aren't in our known list of providers. As we don't know their IPs,
+// we have to resolve them using other resolvers by a SubResolver, which will
+// recursively resolve the domain by other configured DNS resolvers.
+func (f *forwarder) getArbitraryDoHClient(urlBase string, ourRr resolverAndDelay) (c *http.Client, ok bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, ok := f.dohClient[urlBase]; ok {
+		return c, true
+	}
+
+	dialer := dnscache.Dialer(f.getDialerType(), &dnscache.Resolver{
+		Forward:     NewSubResolver(f, ourRr),
+		UseLastGood: true,
+	})
+	tlsConfig := &tls.Config{
+		// From well-known DNSes
+		MinVersion: tls.VersionTLS13,
+	}
+	c = &http.Client{
+		Transport: &http.Transport{
+			ForceAttemptHTTP2: true,
+			IdleConnTimeout:   dohIdleConnTimeout,
+			// On mobile platforms TCP KeepAlive is disabled in the dialer,
+			// ensure that we timeout if the connection appears to be hung.
+			ResponseHeaderTimeout: 10 * time.Second,
+			MaxIdleConnsPerHost:   1,
+			DialContext: func(ctx context.Context, netw, addr string) (net.Conn, error) {
+				if !strings.HasPrefix(netw, "tcp") {
+					return nil, fmt.Errorf("unexpected network %q", netw)
+				}
+				return dialer(ctx, netw, addr)
+			},
+			TLSClientConfig: tlsConfig,
+		},
+	}
+	if f.dohClient == nil {
+		f.dohClient = map[string]*http.Client{}
+	}
+	f.dohClient[urlBase] = c
+	return c, true
+
+}
+
 const dohType = "application/dns-message"
 
 func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client, packet []byte) ([]byte, error) {
@@ -547,8 +591,11 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		if hc, ok := f.getKnownDoHClientForProvider(urlBase); ok {
 			return f.sendDoH(ctx, urlBase, hc, fq.packet)
 		}
+		if hc, ok := f.getArbitraryDoHClient(urlBase, rr); ok {
+			return f.sendDoH(ctx, urlBase, hc, fq.packet)
+		}
 		metricDNSFwdErrorType.Add(1)
-		return nil, fmt.Errorf("arbitrary https:// resolvers not supported yet")
+		return nil, fmt.Errorf("invalid https:// resolvers")
 	}
 	if strings.HasPrefix(rr.name.Addr, "tls://") {
 		metricDNSFwdErrorType.Add(1)
@@ -924,7 +971,7 @@ type forwardQuery struct {
 // non-nil error (without sending to the channel).
 //
 // If resolvers is non-empty, it's used explicitly (notably, for exit
-// node DNS proxy queries), otherwise f.resolvers is used.
+// node DNS proxy queries), otherwise parentForwarder.resolvers is used.
 func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, responseChan chan<- packet, resolvers ...resolverAndDelay) error {
 	metricDNSFwd.Add(1)
 	domain, typ, err := nameFromQuery(query.bs)
