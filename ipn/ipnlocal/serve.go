@@ -40,6 +40,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
 	"tailscale.com/util/backoff"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/ctxkey"
@@ -79,7 +80,8 @@ type serveHTTPContext struct {
 	DestPort      uint16
 
 	// provides funnel-specific context, nil if not funneled
-	Funnel *funnelFlow
+	Funnel         *funnelFlow
+	PeerCapsFilter views.Slice[tailcfg.PeerCapability]
 }
 
 // funnelFlow represents a funneled connection initiated via IngressPeer
@@ -803,6 +805,7 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Out.Host = r.In.Host
 		addProxyForwardedHeaders(r)
 		rp.lb.addTailscaleIdentityHeaders(r)
+		rp.lb.addTailscaleGrantHeader(r)
 	}}
 
 	// There is no way to autodetect h2c as per RFC 9113
@@ -927,6 +930,38 @@ func encTailscaleHeaderValue(v string) string {
 	return mime.QEncoding.Encode("utf-8", v)
 }
 
+func (b *LocalBackend) addTailscaleGrantHeader(r *httputil.ProxyRequest) {
+	r.Out.Header.Del("Tailscale-User-Capabilities")
+
+	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
+	if !ok || c.Funnel != nil {
+		return
+	}
+	filter := c.PeerCapsFilter
+	if filter.IsNil() {
+		return
+	}
+	peerCaps := b.PeerCaps(c.SrcAddr.Addr())
+	if peerCaps == nil {
+		return
+	}
+
+	peerCapsFiltered := make(map[tailcfg.PeerCapability][]tailcfg.RawMessage, filter.Len())
+	for _, cap := range filter.AsSlice() {
+		if peerCaps.HasCapability(cap) {
+			peerCapsFiltered[cap] = peerCaps[cap]
+		}
+	}
+
+	peerCapsSerialized, err := json.Marshal(peerCapsFiltered)
+	if err != nil {
+		b.logf("serve: failed to serialize filtered PeerCapMap: %v", err)
+		return
+	}
+
+	r.Out.Header.Set("Tailscale-User-Capabilities", encTailscaleHeaderValue(string(peerCapsSerialized)))
+}
+
 // serveWebHandler is an http.HandlerFunc that maps incoming requests to the
 // correct *http.
 func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
@@ -950,6 +985,12 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown proxy destination", http.StatusInternalServerError)
 			return
 		}
+		// Inject user capabilities to forward into the request context
+		c, ok := serveHTTPContextKey.ValueOk(r.Context())
+		if !ok {
+			return
+		}
+		c.PeerCapsFilter = h.UserCaps()
 		h := p.(http.Handler)
 		// Trim the mount point from the URL path before proxying. (#6571)
 		if r.URL.Path != "/" {

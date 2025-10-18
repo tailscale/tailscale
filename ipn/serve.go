@@ -160,6 +160,8 @@ type HTTPHandler struct {
 
 	Text string `json:",omitempty"` // plaintext to serve (primarily for testing)
 
+	UserCaps []tailcfg.PeerCapability `json:",omitempty"` // peer capabilities to forward in grant header, e.g. example.com/cap/mon
+
 	// TODO(bradfitz): bool to not enumerate directories? TTL on mapping for
 	// temporary ones? Error codes? Redirects?
 }

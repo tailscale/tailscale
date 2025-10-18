@@ -891,11 +891,17 @@ func (v HTTPHandlerView) Proxy() string { return v.ж.Proxy }
 // plaintext to serve (primarily for testing)
 func (v HTTPHandlerView) Text() string { return v.ж.Text }
 
+// peer capabilities to forward in grant header, e.g. example.com/cap/mon
+func (v HTTPHandlerView) UserCaps() views.Slice[tailcfg.PeerCapability] {
+	return views.SliceOf(v.ж.UserCaps)
+}
+
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HTTPHandlerViewNeedsRegeneration = HTTPHandler(struct {
-	Path  string
-	Proxy string
-	Text  string
+	Path     string
+	Proxy    string
+	Text     string
+	UserCaps []tailcfg.PeerCapability
 }{})
 
 // View returns a read-only view of WebServerConfig.
