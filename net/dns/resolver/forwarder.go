@@ -450,6 +450,7 @@ func (f *forwarder) DialUDP(srcAddrPort, dstAddrPort netip.AddrPort) (net.Conn, 
 	if f.ft != nil {
 		return f.ft.DialUDP(srcAddrPort, dstAddrPort)
 	} else {
+		// Specify the exact UDP family to work around https://github.com/golang/go/issues/52264
 		udpFam := "udp4"
 		if dstAddrPort.Addr().Is6() {
 			udpFam = "udp6"
@@ -463,6 +464,7 @@ func (f *forwarder) DialTCP(ctx context.Context, srcAddrPort, dstAddrPort netip.
 	if f.ft != nil {
 		return f.ft.DialTCP(ctx, srcAddrPort, dstAddrPort)
 	} else {
+		// Specify the exact UDP family to work around https://github.com/golang/go/issues/52264
 		tcpFam := "tcp4"
 		if dstAddrPort.Addr().Is6() {
 			tcpFam = "tcp6"
