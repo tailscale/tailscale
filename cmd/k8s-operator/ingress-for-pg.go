@@ -289,6 +289,21 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		ingCfg.Web[epHTTP] = &ipn.WebServerConfig{
 			Handlers: handlers,
 		}
+	} else if isHTTPRedirectEnabled(ing) {
+		logger.Infof("HTTP redirect enabled, setting up port 80 redirect handlers")
+		epHTTP := ipn.HostPort(fmt.Sprintf("%s:80", dnsName))
+		ingCfg.TCP[80] = &ipn.TCPPortHandler{HTTP: true}
+		ingCfg.Web[epHTTP] = &ipn.WebServerConfig{
+			Handlers: map[string]*ipn.HTTPHandler{},
+		}
+		web80 := ingCfg.Web[epHTTP]
+		for mountPoint := range handlers {
+			redirectURL := "https://${HOST}${REQUEST_URI}"
+			logger.Debugf("Creating redirect handler: %s -> %s", mountPoint, redirectURL)
+			web80.Handlers[mountPoint] = &ipn.HTTPHandler{
+				Redirect: redirectURL,
+			}
+		}
 	}
 
 	var gotCfg *ipn.ServiceConfig
@@ -315,7 +330,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	}
 
 	tsSvcPorts := []string{"tcp:443"} // always 443 for Ingress
-	if isHTTPEndpointEnabled(ing) {
+	if isHTTPEndpointEnabled(ing) || isHTTPRedirectEnabled(ing) {
 		tsSvcPorts = append(tsSvcPorts, "tcp:80")
 	}
 
@@ -345,7 +360,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	// 5. Update tailscaled's AdvertiseServices config, which should add the Tailscale Service
 	// IPs to the ProxyGroup Pods' AllowedIPs in the next netmap update if approved.
 	mode := serviceAdvertisementHTTPS
-	if isHTTPEndpointEnabled(ing) {
+	if isHTTPEndpointEnabled(ing) || isHTTPRedirectEnabled(ing) {
 		mode = serviceAdvertisementHTTPAndHTTPS
 	}
 	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pg.Name, serviceName, mode, logger); err != nil {
@@ -376,7 +391,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 				Port:     443,
 			})
 		}
-		if isHTTPEndpointEnabled(ing) {
+		if isHTTPEndpointEnabled(ing) || isHTTPRedirectEnabled(ing) {
 			ports = append(ports, networkingv1.IngressPortStatus{
 				Protocol: "TCP",
 				Port:     80,
