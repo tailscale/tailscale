@@ -22,6 +22,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/views"
 )
 
 func TestServeDevConfigMutations(t *testing.T) {
@@ -33,10 +34,11 @@ func TestServeDevConfigMutations(t *testing.T) {
 	}
 
 	// group is a group of steps that share the same
-	// config mutation, but always starts from an empty config
+	// config mutation
 	type group struct {
-		name  string
-		steps []step
+		name         string
+		steps        []step
+		initialState fakeLocalServeClient // use the zero value for empty config
 	}
 
 	// creaet a temporary directory for path-based destinations
@@ -814,17 +816,58 @@ func TestServeDevConfigMutations(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "advertise_service",
+			initialState: fakeLocalServeClient{
+				statusWithoutPeers: &ipnstate.Status{
+					BackendState: ipn.Running.String(),
+					Self: &ipnstate.PeerStatus{
+						DNSName: "foo.test.ts.net",
+						CapMap: tailcfg.NodeCapMap{
+							tailcfg.NodeAttrFunnel:                            nil,
+							tailcfg.CapabilityFunnelPorts + "?ports=443,8443": nil,
+						},
+						Tags: ptrToReadOnlySlice([]string{"some-tag"}),
+					},
+					CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
+				},
+			},
+			steps: []step{{
+				command: cmd("serve --service=svc:foo --http=80 text:foo"),
+				want: &ipn.ServeConfig{
+					Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+						"svc:foo": {
+							TCP: map[uint16]*ipn.TCPPortHandler{
+								80: {HTTP: true},
+							},
+							Web: map[ipn.HostPort]*ipn.WebServerConfig{
+								"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+									"/": {Text: "foo"},
+								}},
+							},
+						},
+					},
+				},
+			}},
+		},
+		{
+			name: "advertise_service_from_untagged_node",
+			steps: []step{{
+				command: cmd("serve --service=svc:foo --http=80 text:foo"),
+				wantErr: anyErr(),
+			}},
+		},
 	}
 
 	for _, group := range groups {
 		t.Run(group.name, func(t *testing.T) {
-			lc := &fakeLocalServeClient{}
+			lc := group.initialState
 			for i, st := range group.steps {
 				var stderr bytes.Buffer
 				var stdout bytes.Buffer
 				var flagOut bytes.Buffer
 				e := &serveEnv{
-					lc:          lc,
+					lc:          &lc,
 					testFlagOut: &flagOut,
 					testStdout:  &stdout,
 					testStderr:  &stderr,
@@ -2248,4 +2291,9 @@ func exactErrMsg(want error) func(error) string {
 		}
 		return fmt.Sprintf("\ngot:  %v\nwant: %v\n", got, want)
 	}
+}
+
+func ptrToReadOnlySlice[T any](s []T) *views.Slice[T] {
+	vs := views.SliceOf(s)
+	return &vs
 }

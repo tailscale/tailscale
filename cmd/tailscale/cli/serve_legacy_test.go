@@ -860,6 +860,7 @@ type fakeLocalServeClient struct {
 	setCount             int                       // counts calls to SetServeConfig
 	queryFeatureResponse *mockQueryFeatureResponse // mock response to QueryFeature calls
 	prefs                *ipn.Prefs                // fake preferences, used to test GetPrefs and SetPrefs
+	statusWithoutPeers   *ipnstate.Status          // nil for fakeStatus
 }
 
 // fakeStatus is a fake ipnstate.Status value for tests.
@@ -880,7 +881,10 @@ var fakeStatus = &ipnstate.Status{
 }
 
 func (lc *fakeLocalServeClient) StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
-	return fakeStatus, nil
+	if lc.statusWithoutPeers == nil {
+		return fakeStatus, nil
+	}
+	return lc.statusWithoutPeers, nil
 }
 
 func (lc *fakeLocalServeClient) GetServeConfig(ctx context.Context) (*ipn.ServeConfig, error) {
