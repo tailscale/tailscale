@@ -33,6 +33,7 @@ import (
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/ipset"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tsaddr"
@@ -391,6 +392,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	// TODO: there's probably a better place for this
 	sockstats.SetNetMon(e.netMon)
+	netns.SetGlobalRouteCache(netns.NewRouteCache(), e.eventBus, logf)
 
 	logf("link state: %+v", e.netMon.InterfaceState())
 
