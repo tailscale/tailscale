@@ -72,6 +72,41 @@ func TestExpandProxyArg(t *testing.T) {
 	}
 }
 
+func TestParseRedirectWithRedirectCode(t *testing.T) {
+	tests := []struct {
+		in       string
+		wantCode int
+		wantURL  string
+	}{
+		{"301:https://example.com", 301, "https://example.com"},
+		{"302:https://example.com", 302, "https://example.com"},
+		{"303:/path", 303, "/path"},
+		{"307:https://example.com/path?query=1", 307, "https://example.com/path?query=1"},
+		{"308:https://example.com", 308, "https://example.com"},
+
+		{"https://example.com", 302, "https://example.com"},
+		{"/path", 302, "/path"},
+		{"http://example.com", 302, "http://example.com"},
+		{"git://example.com", 302, "git://example.com"},
+
+		{"200:https://example.com", 302, "200:https://example.com"},
+		{"404:https://example.com", 302, "404:https://example.com"},
+		{"500:https://example.com", 302, "500:https://example.com"},
+		{"30:https://example.com", 302, "30:https://example.com"},
+		{"3:https://example.com", 302, "3:https://example.com"},
+		{"3012:https://example.com", 302, "3012:https://example.com"},
+		{"abc:https://example.com", 302, "abc:https://example.com"},
+		{"301", 302, "301"},
+	}
+	for _, tt := range tests {
+		gotCode, gotURL := parseRedirectWithCode(tt.in)
+		if gotCode != tt.wantCode || gotURL != tt.wantURL {
+			t.Errorf("parseRedirectWithCode(%q) = (%d, %q), want (%d, %q)",
+				tt.in, gotCode, gotURL, tt.wantCode, tt.wantURL)
+		}
+	}
+}
+
 func TestGetServeHandler(t *testing.T) {
 	const serverName = "example.ts.net"
 	conf1 := &ipn.ServeConfig{
@@ -1323,6 +1358,98 @@ func TestServeGRPCProxy(t *testing.T) {
 			}
 			if string(got) != msg {
 				t.Errorf("got body %q, want %q", got, msg)
+			}
+		})
+	}
+}
+
+func TestServeHTTPRedirect(t *testing.T) {
+	b := newTestBackend(t)
+
+	tests := []struct {
+		host     string
+		path     string
+		redirect string
+		reqURI   string
+		wantCode int
+		wantLoc  string
+	}{
+		{
+			host:     "hardcoded-root",
+			path:     "/",
+			redirect: "https://example.com/",
+			reqURI:   "/old",
+			wantCode: http.StatusFound, // 302 is the default
+			wantLoc:  "https://example.com/",
+		},
+		{
+			host:     "template-host-and-uri",
+			path:     "/",
+			redirect: "https://${HOST}${REQUEST_URI}",
+			reqURI:   "/path?foo=bar",
+			wantCode: http.StatusFound, // 302 is the default
+			wantLoc:  "https://template-host-and-uri/path?foo=bar",
+		},
+		{
+			host:     "custom-301",
+			path:     "/",
+			redirect: "301:https://example.com/",
+			reqURI:   "/old",
+			wantCode: http.StatusMovedPermanently, // 301
+			wantLoc:  "https://example.com/",
+		},
+		{
+			host:     "custom-307",
+			path:     "/",
+			redirect: "307:https://example.com/new",
+			reqURI:   "/old",
+			wantCode: http.StatusTemporaryRedirect, // 307
+			wantLoc:  "https://example.com/new",
+		},
+		{
+			host:     "custom-308",
+			path:     "/",
+			redirect: "308:https://example.com/permanent",
+			reqURI:   "/old",
+			wantCode: http.StatusPermanentRedirect, // 308
+			wantLoc:  "https://example.com/permanent",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.host, func(t *testing.T) {
+			conf := &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort(tt.host + ":80"): {
+						Handlers: map[string]*ipn.HTTPHandler{
+							tt.path: {Redirect: tt.redirect},
+						},
+					},
+				},
+			}
+			if err := b.SetServeConfig(conf, ""); err != nil {
+				t.Fatal(err)
+			}
+
+			req := &http.Request{
+				Host:       tt.host,
+				URL:        &url.URL{Path: tt.path},
+				RequestURI: tt.reqURI,
+				TLS:        &tls.ConnectionState{ServerName: tt.host},
+			}
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
+				DestPort: 80,
+				SrcAddr:  netip.MustParseAddrPort("1.2.3.4:1234"),
+			}))
+
+			w := httptest.NewRecorder()
+			b.serveWebHandler(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Errorf("got status %d, want %d", w.Code, tt.wantCode)
+			}
+			if got := w.Header().Get("Location"); got != tt.wantLoc {
+				t.Errorf("got Location %q, want %q", got, tt.wantLoc)
 			}
 		})
 	}

@@ -966,6 +966,19 @@ func (b *LocalBackend) addAppCapabilitiesHeader(r *httputil.ProxyRequest) error 
 	return nil
 }
 
+// parseRedirectWithCode parses a redirect string that may optionally start with
+// a HTTP redirect status code ("3xx:").
+// Returns the status code and the final redirect URL.
+// If no code prefix is found, returns http.StatusFound (302).
+func parseRedirectWithCode(redirect string) (code int, url string) {
+	if len(redirect) >= 4 && redirect[3] == ':' {
+		if statusCode, err := strconv.Atoi(redirect[:3]); err == nil && statusCode >= 300 && statusCode <= 399 {
+			return statusCode, redirect[4:]
+		}
+	}
+	return http.StatusFound, redirect
+}
+
 // serveWebHandler is an http.HandlerFunc that maps incoming requests to the
 // correct *http.
 func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
@@ -977,6 +990,13 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 	if s := h.Text(); s != "" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		io.WriteString(w, s)
+		return
+	}
+	if v := h.Redirect(); v != "" {
+		code, v := parseRedirectWithCode(v)
+		v = strings.ReplaceAll(v, "${HOST}", r.Host)
+		v = strings.ReplaceAll(v, "${REQUEST_URI}", r.RequestURI)
+		http.Redirect(w, r, v, code)
 		return
 	}
 	if v := h.Path(); v != "" {

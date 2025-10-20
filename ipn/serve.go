@@ -162,8 +162,17 @@ type HTTPHandler struct {
 
 	AcceptAppCaps []tailcfg.PeerCapability `json:",omitempty"` // peer capabilities to forward in grant header, e.g. example.com/cap/mon
 
+	// Redirect, if not empty, is the target URL to redirect requests to.
+	// By default, we redirect with HTTP 302 (Found) status.
+	// If Redirect starts with '<httpcode>:', then we use that status instead.
+	//
+	// The target URL supports the following expansion variables:
+	//   - ${HOST}: replaced with the request's Host header value
+	//   - ${REQUEST_URI}: replaced with the request's full URI (path and query string)
+	Redirect string `json:",omitempty"`
+
 	// TODO(bradfitz): bool to not enumerate directories? TTL on mapping for
-	// temporary ones? Error codes? Redirects?
+	// temporary ones? Error codes?
 }
 
 // WebHandlerExists reports whether if the ServeConfig Web handler exists for
