@@ -218,10 +218,11 @@ func (src *TCPPortHandler) Clone() *TCPPortHandler {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _TCPPortHandlerCloneNeedsRegeneration = TCPPortHandler(struct {
-	HTTPS        bool
-	HTTP         bool
-	TCPForward   string
-	TerminateTLS string
+	HTTPS         bool
+	HTTP          bool
+	TCPForward    string
+	TerminateTLS  string
+	ProxyProtocol int
 }{})
 
 // Clone makes a deep copy of HTTPHandler.

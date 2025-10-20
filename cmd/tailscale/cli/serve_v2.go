@@ -240,6 +240,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			}
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
+			fs.UintVar(&e.proxyProtocol, "proxy-protocol", 0, "PROXY protocol version (1 or 2) for TCP forwarding")
 			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
 			fs.BoolVar(&e.tun, "tun", false, "Forward all traffic to the local machine (default false), only supported for services. Refer to docs for more information.")
 		}),
@@ -413,6 +414,14 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			return errHelpFunc(subcmd)
 		}
 
+		if (srvType == serveTypeHTTP || srvType == serveTypeHTTPS) && e.proxyProtocol != 0 {
+			return fmt.Errorf("PROXY protocol is only supported for TCP forwarding, not HTTP/HTTPS")
+		}
+		// Validate PROXY protocol version
+		if e.proxyProtocol != 0 && e.proxyProtocol != 1 && e.proxyProtocol != 2 {
+			return fmt.Errorf("invalid PROXY protocol version %d; must be 1 or 2", e.proxyProtocol)
+		}
+
 		sc, err := e.lc.GetServeConfig(ctx)
 		if err != nil {
 			return fmt.Errorf("error getting serve config: %w", err)
@@ -507,7 +516,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			if len(args) > 0 {
 				target = args[0]
 			}
-			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix, e.acceptAppCaps)
+			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix, e.acceptAppCaps, int(e.proxyProtocol))
 			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
 		}
 		if err != nil {
@@ -828,7 +837,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	for name, details := range scf.Services {
 		for ppr, ep := range details.Endpoints {
 			if ep.Protocol == conffile.ProtoTUN {
-				err := e.setServe(sc, name.String(), serveTypeTUN, 0, "", "", false, magicDNSSuffix, nil)
+				err := e.setServe(sc, name.String(), serveTypeTUN, 0, "", "", false, magicDNSSuffix, nil, 0 /* proxy protocol */)
 				if err != nil {
 					return err
 				}
@@ -850,7 +859,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 					portStr := fmt.Sprint(destPort)
 					target = fmt.Sprintf("%s://%s", ep.Protocol, net.JoinHostPort(ep.Destination, portStr))
 				}
-				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix, nil)
+				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix, nil, 0 /* proxy protocol */)
 				if err != nil {
 					return fmt.Errorf("service %q: %w", name, err)
 				}
@@ -953,7 +962,7 @@ func serveFromPortHandler(tcp *ipn.TCPPortHandler) serveType {
 	}
 }
 
-func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []tailcfg.PeerCapability) error {
+func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []tailcfg.PeerCapability, proxyProtocol int) error {
 	// update serve config based on the type
 	switch srvType {
 	case serveTypeHTTPS, serveTypeHTTP:
@@ -966,7 +975,7 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveTy
 		if e.setPath != "" {
 			return fmt.Errorf("cannot mount a path for TCP serve")
 		}
-		err := e.applyTCPServe(sc, dnsName, srvType, srvPort, target)
+		err := e.applyTCPServe(sc, dnsName, srvType, srvPort, target, proxyProtocol)
 		if err != nil {
 			return fmt.Errorf("failed to apply TCP serve: %w", err)
 		}
@@ -1092,6 +1101,9 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		if tcpHandler.TerminateTLS != "" {
 			tlsStatus = "TLS terminated"
 		}
+		if ver := tcpHandler.ProxyProtocol; ver != 0 {
+			tlsStatus = fmt.Sprintf("%s, PROXY protocol v%d", tlsStatus, ver)
+		}
 
 		output.WriteString(fmt.Sprintf("|-- tcp://%s:%d (%s)\n", host, srvPort, tlsStatus))
 		for _, a := range ips {
@@ -1170,7 +1182,7 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 	return nil
 }
 
-func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType serveType, srcPort uint16, target string) error {
+func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType serveType, srcPort uint16, target string, proxyProtocol int) error {
 	var terminateTLS bool
 	switch srcType {
 	case serveTypeTCP:
@@ -1197,8 +1209,7 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 		return fmt.Errorf("cannot serve TCP; already serving web on %d for %s", srcPort, dnsName)
 	}
 
-	sc.SetTCPForwarding(srcPort, dstURL.Host, terminateTLS, dnsName)
-
+	sc.SetTCPForwarding(srcPort, dstURL.Host, terminateTLS, proxyProtocol, dnsName)
 	return nil
 }
 
