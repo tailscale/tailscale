@@ -187,18 +187,6 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		}
 	}
 
-	if opt.Bool(ing.Annotations[AnnotationHTTPRedirect]).EqualBool(true) {
-		logger.Infof("Adding HTTP port 80 handler for redirect")
-		const magic80 = "${TS_CERT_DOMAIN}:80"
-		sc.TCP[80] = &ipn.TCPPortHandler{HTTP: true}
-		sc.Web[magic80] = &ipn.WebServerConfig{
-			Handlers: map[string]*ipn.HTTPHandler{},
-		}
-		if sc.AllowFunnel != nil && sc.AllowFunnel[magic443] {
-			sc.AllowFunnel[magic80] = true
-		}
-	}
-
 	web := sc.Web[magic443]
 
 	var tlsHost string // hostname or FQDN or empty
@@ -217,12 +205,19 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 
 	if opt.Bool(ing.Annotations[AnnotationHTTPRedirect]).EqualBool(true) {
-		logger.Infof("HTTP redirect enabled, creating redirect handlers for port 80")
+		logger.Infof("HTTP redirect enabled, setting up port 80 redirect handlers")
 		const magic80 = "${TS_CERT_DOMAIN}:80"
+		sc.TCP[80] = &ipn.TCPPortHandler{HTTP: true}
+		sc.Web[magic80] = &ipn.WebServerConfig{
+			Handlers: map[string]*ipn.HTTPHandler{},
+		}
+		if sc.AllowFunnel != nil && sc.AllowFunnel[magic443] {
+			sc.AllowFunnel[magic80] = true
+		}
 		web80 := sc.Web[magic80]
 		for mountPoint := range handlers {
 			redirectURL := "https://${HOST}${REQUEST_URI}"
-			logger.Infof("Creating redirect handler: %s -> %s", mountPoint, redirectURL)
+			logger.Debugf("Creating redirect handler: %s -> %s", mountPoint, redirectURL)
 			web80.Handlers[mountPoint] = &ipn.HTTPHandler{
 				Redirect: redirectURL,
 			}
@@ -406,3 +401,4 @@ func hostnameForIngress(ing *networkingv1.Ingress) string {
 	}
 	return ing.Namespace + "-" + ing.Name + "-ingress"
 }
+
