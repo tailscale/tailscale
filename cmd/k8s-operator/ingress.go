@@ -204,7 +204,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
-	if opt.Bool(ing.Annotations[AnnotationHTTPRedirect]).EqualBool(true) {
+	if isHTTPRedirectEnabled(ing) {
 		logger.Infof("HTTP redirect enabled, setting up port 80 redirect handlers")
 		const magic80 = "${TS_CERT_DOMAIN}:80"
 		sc.TCP[80] = &ipn.TCPPortHandler{HTTP: true}
@@ -270,7 +270,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 				Port:     443,
 			},
 		}
-		if opt.Bool(ing.Annotations[AnnotationHTTPRedirect]).EqualBool(true) {
+		if isHTTPRedirectEnabled(ing) {
 			ports = append(ports, networkingv1.IngressPortStatus{
 				Protocol: "TCP",
 				Port:     80,
@@ -401,4 +401,3 @@ func hostnameForIngress(ing *networkingv1.Ingress) string {
 	}
 	return ing.Namespace + "-" + ing.Name + "-ingress"
 }
-
