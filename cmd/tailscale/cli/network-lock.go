@@ -690,6 +690,14 @@ func nlDescribeUpdate(update ipnstate.NetworkLockUpdate, color bool) (string, er
 }
 
 func runNetworkLockLog(ctx context.Context, args []string) error {
+	st, err := localClient.NetworkLockStatus(ctx)
+	if err != nil {
+		return fixTailscaledConnectError(err)
+	}
+	if !st.Enabled {
+		return errors.New("Tailnet Lock is not enabled")
+	}
+
 	updates, err := localClient.NetworkLockLog(ctx, nlLogArgs.limit)
 	if err != nil {
 		return fixTailscaledConnectError(err)
