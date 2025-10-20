@@ -596,7 +596,7 @@ func markActiveChain(storage Chonk, verdict map[AUMHash]retainState, minChain in
 				// We've reached the end of the chain we have stored.
 				return h, nil
 			}
-			return AUMHash{}, fmt.Errorf("reading active chain (retainStateActive) (%d): %w", i, err)
+			return AUMHash{}, fmt.Errorf("reading active chain (retainStateActive) (%d, %v): %w", i, parent, err)
 		}
 	}
 
@@ -616,7 +616,7 @@ func markActiveChain(storage Chonk, verdict map[AUMHash]retainState, minChain in
 			return AUMHash{}, errors.New("reached genesis AUM without finding an appropriate lastActiveAncestor")
 		}
 		if next, err = storage.AUM(parent); err != nil {
-			return AUMHash{}, fmt.Errorf("searching for compaction target: %w", err)
+			return AUMHash{}, fmt.Errorf("searching for compaction target (%v): %w", parent, err)
 		}
 	}
 
@@ -632,7 +632,7 @@ func markActiveChain(storage Chonk, verdict map[AUMHash]retainState, minChain in
 				// We've reached the end of the chain we have stored.
 				break
 			}
-			return AUMHash{}, fmt.Errorf("reading active chain (retainStateCandidate): %w", err)
+			return AUMHash{}, fmt.Errorf("reading active chain (retainStateCandidate, %v): %w", parent, err)
 		}
 	}
 
@@ -744,7 +744,7 @@ func markAncestorIntersectionAUMs(storage Chonk, verdict map[AUMHash]retainState
 	if didAdjustCandidateAncestor {
 		var next AUM
 		if next, err = storage.AUM(candidateAncestor); err != nil {
-			return AUMHash{}, fmt.Errorf("searching for compaction target: %w", err)
+			return AUMHash{}, fmt.Errorf("searching for compaction target (%v): %w", candidateAncestor, err)
 		}
 
 		for {
@@ -760,7 +760,7 @@ func markAncestorIntersectionAUMs(storage Chonk, verdict map[AUMHash]retainState
 				return AUMHash{}, errors.New("reached genesis AUM without finding an appropriate candidateAncestor")
 			}
 			if next, err = storage.AUM(parent); err != nil {
-				return AUMHash{}, fmt.Errorf("searching for compaction target: %w", err)
+				return AUMHash{}, fmt.Errorf("searching for compaction target (%v): %w", parent, err)
 			}
 		}
 	}

@@ -288,8 +288,11 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 		return nil
 	}
 
-	if b.tka != nil || nm.TKAEnabled {
-		b.logf("tkaSyncIfNeeded: enabled=%v, head=%v", nm.TKAEnabled, nm.TKAHead)
+	isEnabled := b.tka != nil
+	wantEnabled := nm.TKAEnabled
+
+	if isEnabled || wantEnabled {
+		b.logf("tkaSyncIfNeeded: isEnabled=%t, wantEnabled=%t, head=%v", isEnabled, wantEnabled, nm.TKAHead)
 	}
 
 	ourNodeKey, ok := prefs.Persist().PublicNodeKeyOK()
@@ -297,8 +300,6 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 		return errors.New("tkaSyncIfNeeded: no node key in prefs")
 	}
 
-	isEnabled := b.tka != nil
-	wantEnabled := nm.TKAEnabled
 	didJustEnable := false
 	if isEnabled != wantEnabled {
 		var ourHead tka.AUMHash
@@ -948,7 +949,7 @@ func (b *LocalBackend) NetworkLockLog(maxEntries int) ([]ipnstate.NetworkLockUpd
 			if err == os.ErrNotExist {
 				break
 			}
-			return out, fmt.Errorf("reading AUM: %w", err)
+			return out, fmt.Errorf("reading AUM (%v): %w", cursor, err)
 		}
 
 		update := ipnstate.NetworkLockUpdate{
