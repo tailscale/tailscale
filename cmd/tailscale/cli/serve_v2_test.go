@@ -919,6 +919,73 @@ func TestServeDevConfigMutations(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "tcp_with_proxy_protocol_v1",
+			steps: []step{{
+				command: cmd("serve --tcp=8000 --proxy-protocol=1 --bg tcp://localhost:5432"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{
+						8000: {
+							TCPForward:    "localhost:5432",
+							ProxyProtocol: 1,
+						},
+					},
+				},
+			}},
+		},
+		{
+			name: "tls_terminated_tcp_with_proxy_protocol_v2",
+			steps: []step{{
+				command: cmd("serve --tls-terminated-tcp=443 --proxy-protocol=2 --bg tcp://localhost:5432"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{
+						443: {
+							TCPForward:    "localhost:5432",
+							TerminateTLS:  "foo.test.ts.net",
+							ProxyProtocol: 2,
+						},
+					},
+				},
+			}},
+		},
+		{
+			name: "tcp_update_to_add_proxy_protocol",
+			steps: []step{
+				{
+					command: cmd("serve --tcp=8000 --bg tcp://localhost:5432"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							8000: {TCPForward: "localhost:5432"},
+						},
+					},
+				},
+				{
+					command: cmd("serve --tcp=8000 --proxy-protocol=1 --bg tcp://localhost:5432"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							8000: {
+								TCPForward:    "localhost:5432",
+								ProxyProtocol: 1,
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "tcp_proxy_protocol_invalid_version",
+			steps: []step{{
+				command: cmd("serve --tcp=8000 --proxy-protocol=3 --bg tcp://localhost:5432"),
+				wantErr: anyErr(),
+			}},
+		},
+		{
+			name: "proxy_protocol_without_tcp",
+			steps: []step{{
+				command: cmd("serve --https=443 --proxy-protocol=1 --bg http://localhost:3000"),
+				wantErr: anyErr(),
+			}},
+		},
 	}
 
 	for _, group := range groups {
@@ -1889,18 +1956,19 @@ func TestSetServe(t *testing.T) {
 	e := &serveEnv{}
 	magicDNSSuffix := "test.ts.net"
 	tests := []struct {
-		name        string
-		desc        string
-		cfg         *ipn.ServeConfig
-		st          *ipnstate.Status
-		dnsName     string
-		srvType     serveType
-		srvPort     uint16
-		mountPath   string
-		target      string
-		allowFunnel bool
-		expected    *ipn.ServeConfig
-		expectErr   bool
+		name          string
+		desc          string
+		cfg           *ipn.ServeConfig
+		st            *ipnstate.Status
+		dnsName       string
+		srvType       serveType
+		srvPort       uint16
+		mountPath     string
+		target        string
+		allowFunnel   bool
+		proxyProtocol int
+		expected      *ipn.ServeConfig
+		expectErr     bool
 	}{
 		{
 			name:      "add new handler",
@@ -2183,7 +2251,7 @@ func TestSetServe(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := e.setServe(tt.cfg, tt.dnsName, tt.srvType, tt.srvPort, tt.mountPath, tt.target, tt.allowFunnel, magicDNSSuffix, nil)
+			err := e.setServe(tt.cfg, tt.dnsName, tt.srvType, tt.srvPort, tt.mountPath, tt.target, tt.allowFunnel, magicDNSSuffix, nil, tt.proxyProtocol)
 			if err != nil && !tt.expectErr {
 				t.Fatalf("got error: %v; did not expect error.", err)
 			}

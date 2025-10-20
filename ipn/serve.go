@@ -149,6 +149,12 @@ type TCPPortHandler struct {
 	// SNI name with this value. It is only used if TCPForward is non-empty.
 	// (the HTTPS mode uses ServeConfig.Web)
 	TerminateTLS string `json:",omitempty"`
+
+	// ProxyProtocol indicates whether to send a PROXY protocol header
+	// before forwarding the connection to TCPForward.
+	//
+	// This is only valid if TCPForward is non-empty.
+	ProxyProtocol int `json:",omitzero"`
 }
 
 // HTTPHandler is either a path or a proxy to serve.
@@ -404,7 +410,10 @@ func (sc *ServeConfig) SetWebHandler(handler *HTTPHandler, host string, port uin
 // connections from the given port. If terminateTLS is true, TLS connections
 // are terminated with only the given host name permitted before passing them
 // to the fwdAddr.
-func (sc *ServeConfig) SetTCPForwarding(port uint16, fwdAddr string, terminateTLS bool, host string) {
+//
+// If proxyProtocol is non-zero, the corresponding PROXY protocol version
+// header is sent before forwarding the connection.
+func (sc *ServeConfig) SetTCPForwarding(port uint16, fwdAddr string, terminateTLS bool, proxyProtocol int, host string) {
 	if sc == nil {
 		sc = new(ServeConfig)
 	}
@@ -417,11 +426,15 @@ func (sc *ServeConfig) SetTCPForwarding(port uint16, fwdAddr string, terminateTL
 		}
 		tcpPortHandler = &svcConfig.TCP
 	}
-	mak.Set(tcpPortHandler, port, &TCPPortHandler{TCPForward: fwdAddr})
 
-	if terminateTLS {
-		(*tcpPortHandler)[port].TerminateTLS = host
+	handler := &TCPPortHandler{
+		TCPForward:    fwdAddr,
+		ProxyProtocol: proxyProtocol, // can be 0
 	}
+	if terminateTLS {
+		handler.TerminateTLS = host
+	}
+	mak.Set(tcpPortHandler, port, handler)
 }
 
 // SetFunnel sets the sc.AllowFunnel value for the given host and port.
