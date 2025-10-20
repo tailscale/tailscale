@@ -102,14 +102,14 @@ func computeChainCandidates(storage Chonk, lastKnownOldest *AUMHash, maxIter int
 
 		iterAgain = false
 		for j := range candidates {
-			parent, hasParent := candidates[j].Oldest.Parent()
+			parentHash, hasParent := candidates[j].Oldest.Parent()
 			if hasParent {
-				parent, err := storage.AUM(parent)
+				parent, err := storage.AUM(parentHash)
 				if err != nil {
 					if err == os.ErrNotExist {
 						continue
 					}
-					return nil, fmt.Errorf("reading parent: %v", err)
+					return nil, fmt.Errorf("reading parent %s: %v", parentHash, err)
 				}
 				candidates[j].Oldest = parent
 				if lastKnownOldest != nil && *lastKnownOldest == parent.Hash() {
@@ -210,7 +210,7 @@ func fastForwardWithAdvancer(
 	}
 	nextAUM, err := storage.AUM(*startState.LastAUMHash)
 	if err != nil {
-		return AUM{}, State{}, fmt.Errorf("reading next: %v", err)
+		return AUM{}, State{}, fmt.Errorf("reading next (%v): %v", *startState.LastAUMHash, err)
 	}
 
 	curs := nextAUM
@@ -297,7 +297,7 @@ func computeStateAt(storage Chonk, maxIter int, wantHash AUMHash) (State, error)
 		// If we got here, the current state is dependent on the previous.
 		// Keep iterating backwards till thats not the case.
 		if curs, err = storage.AUM(parent); err != nil {
-			return State{}, fmt.Errorf("reading parent: %v", err)
+			return State{}, fmt.Errorf("reading parent (%v): %v", parent, err)
 		}
 	}
 

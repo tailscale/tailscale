@@ -136,7 +136,7 @@ func (b *UpdateBuilder) Finalize(storage Chonk) ([]AUM, error) {
 				needCheckpoint = false
 				break
 			}
-			return nil, fmt.Errorf("reading AUM: %v", err)
+			return nil, fmt.Errorf("reading AUM (%v): %v", cursor, err)
 		}
 
 		if aum.MessageKind == AUMCheckpoint {
