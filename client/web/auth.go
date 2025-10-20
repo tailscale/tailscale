@@ -37,6 +37,7 @@ type browserSession struct {
 	AuthURL       string // from tailcfg.WebClientAuthResponse
 	Created       time.Time
 	Authenticated bool
+	PendingAuth   bool
 }
 
 // isAuthorized reports true if the given session is authorized
@@ -127,23 +128,12 @@ func (s *Server) getSession(r *http.Request) (*browserSession, *apitype.WhoIsRes
 
 	cookie, err := r.Cookie(sessionCookieName)
 	if errors.Is(err, http.ErrNoCookie) {
-		s.logf("auth: no session cookie found")
 		return nil, whoIs, status, errNoSession
 	} else if err != nil {
 		return nil, whoIs, status, err
 	}
 	v, ok := s.browserSessions.Load(cookie.Value)
 	if !ok {
-		s.logf("auth: session for %v not found in session store", cookie.Value)
-		count := 0
-		s.browserSessions.Range(func(k, v interface{}) bool {
-			count++
-			bs := v.(*browserSession)
-			s.logf("auth: session for %v: ID=%v, AuthID=%v, SrcNode=%v, SrcUser=%v, Created=%v, Authenticated=%v",
-				k, bs.ID, bs.AuthID, bs.SrcNode, bs.SrcUser, bs.Created, bs.Authenticated)
-			return true
-		})
-		s.logf("auth: total sessions in store: %d", count)
 		return nil, whoIs, status, errNoSession
 	}
 	session := v.(*browserSession)
@@ -175,7 +165,7 @@ func (s *Server) newSession(ctx context.Context, src *apitype.WhoIsResponse) (*b
 		Created: s.timeNow(),
 	}
 
-	if true {
+	if s.controlSupportsCheckMode(ctx) {
 		// control supports check mode, so get a new auth URL and return.
 		a, err := s.newAuthURL(ctx, src.Node.ID)
 		if err != nil {
@@ -183,22 +173,14 @@ func (s *Server) newSession(ctx context.Context, src *apitype.WhoIsResponse) (*b
 		}
 		session.AuthID = a.ID
 		session.AuthURL = a.URL
+		session.PendingAuth = true
 	} else {
 		// control does not support check mode, so there is no additional auth we can do.
 		session.Authenticated = true
 	}
 
-	s.logf("auth: session created for %v, %v", session.AuthID, session.ID)
-	// Make a deep copy of the session to ensure it's properly stored
-	sessionCopy := *session
-	s.browserSessions.Store(sid, &sessionCopy)
-	value, ok := s.browserSessions.Load(sid)
-	if !ok {
-		s.logf("auth: session not stored for %v", session.AuthID)
-	} else {
-		session = value.(*browserSession)
-		s.logf("auth: session stored for %v, %v: %v", session.AuthID, session.ID, value)
-	}
+	s.browserSessions.Store(sid, session)
+
 	return session, nil
 }
 
@@ -227,23 +209,24 @@ func (s *Server) awaitUserAuth(ctx context.Context, session *browserSession) err
 	if session.isAuthorized(s.timeNow()) {
 		return nil // already authorized
 	}
+
 	a, err := s.waitAuthURL(ctx, session.AuthID, session.SrcNode)
 	if err != nil {
 		// Don't delete the session on context cancellation, as this is expected
-		// when users navigate away or refresh the page
+		// when users navigate away or refresh the page.
 		if errors.Is(err, context.Canceled) {
-			s.logf("awaitUserAuth: context canceled for session %v - not deleting session", session.ID)
 			return err
 		}
 
-		s.logf("awaitUserAuth: ERROR from waitAuthURL: %v - DELETING SESSION %v", err, session.ID)
 		// Clean up the session for non-cancellation errors from control server
 		// to avoid the user getting stuck with a bad session cookie.
 		s.browserSessions.Delete(session.ID)
 		return err
 	}
+
 	if a.Complete {
 		session.Authenticated = a.Complete
+		session.PendingAuth = false
 		s.browserSessions.Store(session.ID, session)
 	}
 	return nil
