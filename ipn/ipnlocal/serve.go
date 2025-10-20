@@ -33,6 +33,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/pires/go-proxyproto"
 	"go4.org/mem"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netutil"
@@ -665,10 +666,55 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, 
 				})
 			}
 
+			var proxyHeader []byte
+			if ver := tcph.ProxyProtocol(); ver > 0 {
+				// destAddr is the final "destination" of the connection,
+				// which is the connection to the proxied-to backend.
+				destAddr := backConn.RemoteAddr().(*net.TCPAddr)
+
+				// proxySrcAddr is the source address. To make
+				// it a bit nicer for the backend, if the
+				// destination address is an IPv4 address,
+				// ensure we "unmap" the source address to
+				// ensure that IPv6-mapped IPv4 addresses are
+				// represented as IPv4 addresses.
+				proxySrcAddr := srcAddr
+				if destAddr.AddrPort().Addr().Is4() {
+					proxySrcAddr = netip.AddrPortFrom(
+						proxySrcAddr.Addr().Unmap(),
+						proxySrcAddr.Port(),
+					)
+				}
+
+				header := &proxyproto.Header{
+					Version:         byte(ver),
+					Command:         proxyproto.PROXY,
+					SourceAddr:      net.TCPAddrFromAddrPort(proxySrcAddr),
+					DestinationAddr: destAddr,
+				}
+				if destAddr.AddrPort().Addr().Is4() {
+					header.TransportProtocol = proxyproto.TCPv4
+				} else {
+					header.TransportProtocol = proxyproto.TCPv6
+				}
+				var err error
+				proxyHeader, err = header.Format()
+				if err != nil {
+					b.logf("localbackend: failed to format proxy protocol header for port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
+				}
+			}
+
 			// TODO(bradfitz): do the RegisterIPPortIdentity and
 			// UnregisterIPPortIdentity stuff that netstack does
 			errc := make(chan error, 1)
 			go func() {
+				if len(proxyHeader) > 0 {
+					if _, err := backConn.Write(proxyHeader); err != nil {
+						errc <- err
+						backConn.Close() // to ensure that the other side gets EOF
+						return
+					}
+				}
 				_, err := io.Copy(backConn, conn)
 				errc <- err
 			}()
