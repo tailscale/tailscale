@@ -251,6 +251,7 @@ func warnLogConfig() Config {
 }
 
 func TestStart(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/15627")
 	testConfig(t)
 	control, controlURL := startControl(t)
 	ctx := context.Background()
@@ -371,6 +372,7 @@ func createConsensusCluster(t testing.TB, ctx context.Context, clusterTag string
 }
 
 func TestApply(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/15627")
 	testConfig(t)
 	ctx := context.Background()
 	clusterTag := "tag:whatever"
@@ -435,6 +437,7 @@ func assertCommandsWorkOnAnyNode(t testing.TB, participants []*participant) {
 }
 
 func TestConfig(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/15627")
 	testConfig(t)
 	ctx := context.Background()
 	clusterTag := "tag:whatever"
@@ -474,6 +477,7 @@ func TestConfig(t *testing.T) {
 }
 
 func TestFollowerFailover(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/15627")
 	testConfig(t)
 	ctx := context.Background()
 	clusterTag := "tag:whatever"
@@ -545,6 +549,7 @@ func TestFollowerFailover(t *testing.T) {
 }
 
 func TestRejoin(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/15627")
 	testConfig(t)
 	ctx := context.Background()
 	clusterTag := "tag:whatever"
