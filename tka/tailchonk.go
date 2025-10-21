@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -403,9 +404,16 @@ func (c *FS) scanHashes(eachHashInfo func(*fsHashInfo)) error {
 			return fmt.Errorf("reading prefix dir: %v", err)
 		}
 		for _, file := range files {
+			// Ignore files whose names aren't valid AUM hashes, which may be
+			// temporary files which are partway through being written, or other
+			// files added by the OS (like .DS_Store) which we can ignore.
+			// TODO(alexc): it might be useful to append a suffix like `.aum` to
+			// filenames, so we can more easily distinguish between AUMs and
+			// arbitrary other files.
 			var h AUMHash
 			if err := h.UnmarshalText([]byte(file.Name())); err != nil {
-				return fmt.Errorf("invalid aum file: %s: %w", file.Name(), err)
+				log.Printf("ignoring unexpected non-AUM: %s: %v", file.Name(), err)
+				continue
 			}
 			info, err := c.get(h)
 			if err != nil {
