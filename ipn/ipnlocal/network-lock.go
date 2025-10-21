@@ -288,6 +288,10 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 		return nil
 	}
 
+	if err := b.CanSupportNetworkLock(); err != nil {
+		return err
+	}
+
 	isEnabled := b.tka != nil
 	wantEnabled := nm.TKAEnabled
 
