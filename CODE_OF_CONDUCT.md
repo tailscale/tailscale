@@ -1,4 +1,4 @@
-# Contributor Covenant Code of Conduct
+# Tailscale Community Code of Conduct
 
 ## Our Pledge
 
@@ -86,7 +86,7 @@ For more information, please see the Tailscale Acceptable Use Policy, available 
 
 ## Privacy
 
-Please see the Tailscale [Privacy Policy](http://tailscale.com/privacy-policy) for more information about how Tailscale collects, uses, discloses and protects information.
+Please see the Tailscale [Privacy Policy](https://tailscale.com/privacy-policy) for more information about how Tailscale collects, uses, discloses and protects information.
 
 ## Attribution
 
