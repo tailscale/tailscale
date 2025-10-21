@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -80,6 +81,49 @@ func TestTailchonkFS_CommitTime(t *testing.T) {
 	}
 	if ct.Before(time.Now().Add(-time.Minute)) || ct.After(time.Now().Add(time.Minute)) {
 		t.Errorf("commit time was wrong: %v more than a minute off from now (%v)", ct, time.Now())
+	}
+}
+
+// If we were interrupted while writing a temporary file, AllAUMs()
+// should ignore it when scanning the AUM directory.
+func TestTailchonkFS_IgnoreTempFile(t *testing.T) {
+	base := t.TempDir()
+	chonk := must.Get(ChonkDir(base))
+	parentHash := randHash(t, 1)
+	aum := AUM{MessageKind: AUMNoOp, PrevAUMHash: parentHash[:]}
+	must.Do(chonk.CommitVerifiedAUMs([]AUM{aum}))
+
+	writeAUMFile := func(filename, contents string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(base, filename[0:2]), os.ModePerm); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(base, filename[0:2], filename), []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Check that calling AllAUMs() returns the single committed AUM
+	got, err := chonk.AllAUMs()
+	if err != nil {
+		t.Fatalf("AllAUMs() failed: %v", err)
+	}
+	want := []AUMHash{aum.Hash()}
+	if !slices.Equal(got, want) {
+		t.Fatalf("AllAUMs() is wrong: got %v, want %v", got, want)
+	}
+
+	// Write some temporary files which are named like partially-committed AUMs,
+	// then check that AllAUMs() only returns the single committed AUM.
+	writeAUMFile("AUM1234.tmp", "incomplete AUM\n")
+	writeAUMFile("AUM1234.tmp_123", "second incomplete AUM\n")
+
+	got, err = chonk.AllAUMs()
+	if err != nil {
+		t.Fatalf("AllAUMs() failed: %v", err)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("AllAUMs() is wrong: got %v, want %v", got, want)
 	}
 }
 
