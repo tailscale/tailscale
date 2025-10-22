@@ -35,6 +35,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
@@ -72,20 +73,21 @@ var handler = map[string]LocalAPIHandler{
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
-	"check-prefs":       (*Handler).serveCheckPrefs,
-	"derpmap":           (*Handler).serveDERPMap,
-	"goroutines":        (*Handler).serveGoroutines,
-	"login-interactive": (*Handler).serveLoginInteractive,
-	"logout":            (*Handler).serveLogout,
-	"ping":              (*Handler).servePing,
-	"prefs":             (*Handler).servePrefs,
-	"reload-config":     (*Handler).reloadConfig,
-	"reset-auth":        (*Handler).serveResetAuth,
-	"set-expiry-sooner": (*Handler).serveSetExpirySooner,
-	"shutdown":          (*Handler).serveShutdown,
-	"start":             (*Handler).serveStart,
-	"status":            (*Handler).serveStatus,
-	"whois":             (*Handler).serveWhoIs,
+	"check-prefs":          (*Handler).serveCheckPrefs,
+	"check-so-mark-in-use": (*Handler).serveCheckSOMarkInUse,
+	"derpmap":              (*Handler).serveDERPMap,
+	"goroutines":           (*Handler).serveGoroutines,
+	"login-interactive":    (*Handler).serveLoginInteractive,
+	"logout":               (*Handler).serveLogout,
+	"ping":                 (*Handler).servePing,
+	"prefs":                (*Handler).servePrefs,
+	"reload-config":        (*Handler).reloadConfig,
+	"reset-auth":           (*Handler).serveResetAuth,
+	"set-expiry-sooner":    (*Handler).serveSetExpirySooner,
+	"shutdown":             (*Handler).serveShutdown,
+	"start":                (*Handler).serveStart,
+	"status":               (*Handler).serveStatus,
+	"whois":                (*Handler).serveWhoIs,
 }
 
 func init() {
@@ -757,6 +759,23 @@ func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request)
 		Warning string
 	}{
 		Warning: warning,
+	})
+}
+
+// serveCheckSOMarkInUse reports whether SO_MARK is in use on the linux while
+// running without TUN. For any other OS, it reports false.
+func (h *Handler) serveCheckSOMarkInUse(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "SO_MARK check access denied", http.StatusForbidden)
+		return
+	}
+	usingSOMark := netns.UseSocketMark()
+	usingUserspaceNetworking := h.b.Sys().IsNetstack()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		UseSOMark bool
+	}{
+		UseSOMark: usingSOMark || usingUserspaceNetworking,
 	})
 }
 
