@@ -20,6 +20,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -100,12 +101,25 @@ type acceptAppCapsFlag struct {
 	Value *[]tailcfg.PeerCapability
 }
 
+// An application capability name has the form {domain}/{name}.
+// Both parts must use the (simplified) FQDN label character set.
+// The "name" can contain forward slashes.
+// \pL = Unicode Letter, \pN = Unicode Number, - = Hyphen
+var validAppCap = regexp.MustCompile(`^([\pL\pN-]+\.)+[\pL\pN-]+\/[\pL\pN-/]+$`)
+
 // Set appends s to the list of appCaps to accept.
 func (u *acceptAppCapsFlag) Set(s string) error {
 	if s == "" {
 		return nil
 	}
-	*u.Value = append(*u.Value, tailcfg.PeerCapability(s))
+	appCaps := strings.Split(s, ",")
+	for _, appCap := range appCaps {
+		appCap = strings.TrimSpace(appCap)
+		if !validAppCap.MatchString(appCap) {
+			return fmt.Errorf("%q does not match the form {domain}/{name}, where domain must be a fully qualified domain name", s)
+		}
+		*u.Value = append(*u.Value, tailcfg.PeerCapability(appCap))
+	}
 	return nil
 }
 
@@ -221,7 +235,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			fs.UintVar(&e.https, "https", 0, "Expose an HTTPS server at the specified port (default mode)")
 			if subcmd == serve {
 				fs.UintVar(&e.http, "http", 0, "Expose an HTTP server at the specified port")
-				fs.Var(&acceptAppCapsFlag{Value: &e.acceptAppCaps}, "accept-app-caps", "App capability to forward to the server (can be specified multiple times)")
+				fs.Var(&acceptAppCapsFlag{Value: &e.acceptAppCaps}, "accept-app-caps", "App capabilities to forward to the server (specify multiple capabilities with a comma-separated list)")
 			}
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
