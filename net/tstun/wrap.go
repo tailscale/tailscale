@@ -967,6 +967,11 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 				continue
 			}
 		}
+		if buildfeatures.HasNetLog {
+			if update := t.connCounter.Load(); update != nil {
+				updateConnCounter(update, p.Buffer(), false)
+			}
+		}
 
 		// Make sure to do SNAT after filtering, so that any flow tracking in
 		// the filter sees the original source address. See #12133.
@@ -976,11 +981,6 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 			panic(fmt.Sprintf("short copy: %d != %d", n, len(data)-res.dataOffset))
 		}
 		sizes[buffsPos] = n
-		if buildfeatures.HasNetLog {
-			if update := t.connCounter.Load(); update != nil {
-				updateConnCounter(update, p.Buffer(), false)
-			}
-		}
 		buffsPos++
 	}
 	if buffsGRO != nil {

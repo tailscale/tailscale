@@ -7,7 +7,8 @@ package netlog
 
 type Logger struct{}
 
-func (*Logger) Startup(...any) error { return nil }
-func (*Logger) Running() bool        { return false }
-func (*Logger) Shutdown(any) error   { return nil }
-func (*Logger) ReconfigRoutes(any)   {}
+func (*Logger) Startup(...any) error   { return nil }
+func (*Logger) Running() bool          { return false }
+func (*Logger) Shutdown(any) error     { return nil }
+func (*Logger) ReconfigNetworkMap(any) {}
+func (*Logger) ReconfigRoutes(any)     {}
