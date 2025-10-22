@@ -875,7 +875,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					},
 				},
 				{
-					command: cmd("serve --bg --accept-app-caps=example.com/cap/foo --accept-app-caps=example.com/cap/bar 3000"),
+					command: cmd("serve --bg --accept-app-caps=example.com/cap/foo,example.com/cap/bar 3000"),
 					want: &ipn.ServeConfig{
 						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -901,6 +901,15 @@ func TestServeDevConfigMutations(t *testing.T) {
 							}},
 						},
 					},
+				},
+			},
+		},
+		{
+			name: "invalid_accept_caps_invalid_app_cap",
+			steps: []step{
+				{
+					command: cmd("serve --bg --accept-app-caps=example/cap/foo 3000"), // should be {domain.tld}/{name}
+					wantErr: anyErr(),
 				},
 			},
 		},
@@ -1215,6 +1224,108 @@ func TestSrcTypeFromFlags(t *testing.T) {
 			}
 			if srcPort != tt.expectedPort {
 				t.Errorf("Expected srcPort: %d, got: %d", tt.expectedPort, srcPort)
+			}
+		})
+	}
+}
+
+func TestAcceptSetAppCapsFlag(t *testing.T) {
+	testCases := []struct {
+		name          string
+		inputs        []string
+		expectErr     bool
+		expectedValue []tailcfg.PeerCapability
+	}{
+		{
+			name:          "valid_simple",
+			inputs:        []string{"example.com/name"},
+			expectErr:     false,
+			expectedValue: []tailcfg.PeerCapability{"example.com/name"},
+		},
+		{
+			name:          "valid_unicode",
+			inputs:        []string{"bücher.de/something"},
+			expectErr:     false,
+			expectedValue: []tailcfg.PeerCapability{"bücher.de/something"},
+		},
+		{
+			name:          "more_valid_unicode",
+			inputs:        []string{"example.tw/某某某"},
+			expectErr:     false,
+			expectedValue: []tailcfg.PeerCapability{"example.tw/某某某"},
+		},
+		{
+			name:          "valid_path_slashes",
+			inputs:        []string{"domain.com/path/to/name"},
+			expectErr:     false,
+			expectedValue: []tailcfg.PeerCapability{"domain.com/path/to/name"},
+		},
+		{
+			name:          "valid_multiple_sets",
+			inputs:        []string{"one.com/foo", "two.com/bar"},
+			expectErr:     false,
+			expectedValue: []tailcfg.PeerCapability{"one.com/foo", "two.com/bar"},
+		},
+		{
+			name:          "valid_empty_string",
+			inputs:        []string{""},
+			expectErr:     false,
+			expectedValue: nil, // Empty string should be a no-op and not append anything.
+		},
+		{
+			name:          "invalid_path_chars",
+			inputs:        []string{"domain.com/path_with_underscore"},
+			expectErr:     true,
+			expectedValue: nil, // Slice should remain empty.
+		},
+		{
+			name:          "valid_subdomain",
+			inputs:        []string{"sub.domain.com/name"},
+			expectErr:     false,
+			expectedValue: []tailcfg.PeerCapability{"sub.domain.com/name"},
+		},
+		{
+			name:          "invalid_no_path",
+			inputs:        []string{"domain.com/"},
+			expectErr:     true,
+			expectedValue: nil,
+		},
+		{
+			name:          "invalid_no_domain",
+			inputs:        []string{"/path/only"},
+			expectErr:     true,
+			expectedValue: nil,
+		},
+		{
+			name:          "some_invalid_some_valid",
+			inputs:        []string{"one.com/foo", "bad/bar", "two.com/baz"},
+			expectErr:     true,
+			expectedValue: []tailcfg.PeerCapability{"one.com/foo"}, // Parsing will stop after first error
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var v []tailcfg.PeerCapability
+			flag := &acceptAppCapsFlag{Value: &v}
+
+			var err error
+			for _, s := range tc.inputs {
+				err = flag.Set(s)
+				if err != nil {
+					break
+				}
+			}
+
+			if tc.expectErr && err == nil {
+				t.Errorf("expected an error, but got none")
+			}
+			if !tc.expectErr && err != nil {
+				t.Errorf("did not expect an error, but got: %v", err)
+			}
+
+			if !reflect.DeepEqual(tc.expectedValue, v) {
+				t.Errorf("unexpected value, got: %q, want: %q", v, tc.expectedValue)
 			}
 		})
 	}
