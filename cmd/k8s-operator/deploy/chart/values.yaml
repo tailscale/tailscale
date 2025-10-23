@@ -75,6 +75,24 @@ operatorConfig:
   # - name: EXTRA_VAR2
   #   value: "value2"
 
+  # livenessProbe configuration for the operator container
+  livenessProbe:
+    httpGet:
+      path: /metrics
+      port: 8080
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    failureThreshold: 3
+
+  # readinessProbe configuration for the operator container
+  readinessProbe:
+    httpGet:
+      path: /metrics
+      port: 8080
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    failureThreshold: 3
+
 # In the case that you already have a tailscale ingressclass in your cluster (or vcluster), you can disable the creation here
 ingressClass:
   # Allows for customization of the ingress class name used by the operator to identify ingresses to reconcile. This does
