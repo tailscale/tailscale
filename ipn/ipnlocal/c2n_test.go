@@ -384,6 +384,7 @@ func TestRedactNetmapPrivateKeys(t *testing.T) {
 		f(tailcfg.Service{}, "Port"):                       false,
 		f(tailcfg.Service{}, "Proto"):                      false,
 		f(tailcfg.Service{}, "_"):                          false,
+		f(tailcfg.TPMInfo{}, "FamilyIndicator"):            false,
 		f(tailcfg.TPMInfo{}, "FirmwareVersion"):            false,
 		f(tailcfg.TPMInfo{}, "Manufacturer"):               false,
 		f(tailcfg.TPMInfo{}, "Model"):                      false,

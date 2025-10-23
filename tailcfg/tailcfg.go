@@ -928,6 +928,10 @@ type TPMInfo struct {
 	// https://trustedcomputinggroup.org/resource/tpm-library-specification/.
 	// Before revision 184, TCG used the "01.83" format for revision 183.
 	SpecRevision int `json:",omitempty"`
+
+	// FamilyIndicator is the TPM spec family, like "2.0".
+	// Read from TPM_PT_FAMILY_INDICATOR.
+	FamilyIndicator string `json:",omitempty"`
 }
 
 // Present reports whether a TPM device is present on this machine.
