@@ -55,12 +55,11 @@ func init() {
 }
 
 func tpmSupported() bool {
-	tpm, err := open()
-	if err != nil {
+	hi := infoOnce()
+	if hi == nil {
 		return false
 	}
-	tpm.Close()
-	return true
+	return hi.FamilyIndicator == "2.0"
 }
 
 var verboseTPM = envknob.RegisterBool("TS_DEBUG_TPM")
@@ -104,6 +103,7 @@ func info() *tailcfg.TPMInfo {
 		{tpm2.TPMPTVendorTPMType, func(info *tailcfg.TPMInfo, value uint32) { info.Model = int(value) }},
 		{tpm2.TPMPTFirmwareVersion1, func(info *tailcfg.TPMInfo, value uint32) { info.FirmwareVersion += uint64(value) << 32 }},
 		{tpm2.TPMPTFirmwareVersion2, func(info *tailcfg.TPMInfo, value uint32) { info.FirmwareVersion += uint64(value) }},
+		{tpm2.TPMPTFamilyIndicator, toStr(&info.FamilyIndicator)},
 	} {
 		resp, err := tpm2.GetCapability{
 			Capability:    tpm2.TPMCapTPMProperties,

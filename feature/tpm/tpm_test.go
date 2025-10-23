@@ -133,6 +133,19 @@ func TestStore(t *testing.T) {
 	})
 }
 
+func BenchmarkInfo(b *testing.B) {
+	b.StopTimer()
+	skipWithoutTPM(b)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		hi := info()
+		if hi == nil {
+			b.Fatalf("tpm info error")
+		}
+	}
+	b.StopTimer()
+}
+
 func BenchmarkStore(b *testing.B) {
 	skipWithoutTPM(b)
 	b.StopTimer()
