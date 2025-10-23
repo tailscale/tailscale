@@ -59,7 +59,22 @@ func tpmSupported() bool {
 	if hi == nil {
 		return false
 	}
-	return hi.FamilyIndicator == "2.0"
+	if hi.FamilyIndicator != "2.0" {
+		return false
+	}
+
+	tpm, err := open()
+	if err != nil {
+		return false
+	}
+	defer tpm.Close()
+
+	if err := withSRK(logger.Discard, tpm, func(srk tpm2.AuthHandle) error {
+		return nil
+	}); err != nil {
+		return false
+	}
+	return true
 }
 
 var verboseTPM = envknob.RegisterBool("TS_DEBUG_TPM")
