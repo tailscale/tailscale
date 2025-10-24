@@ -40,6 +40,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
 	"tailscale.com/util/backoff"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/ctxkey"
@@ -80,6 +81,8 @@ type serveHTTPContext struct {
 
 	// provides funnel-specific context, nil if not funneled
 	Funnel *funnelFlow
+	// AcceptCapabilities lists all PeerCapabilities that should be forwarded by serve
+	AppCapabilities views.Slice[tailcfg.PeerCapability]
 }
 
 // funnelFlow represents a funneled connection initiated via IngressPeer
@@ -803,9 +806,11 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Out.Host = r.In.Host
 		addProxyForwardedHeaders(r)
 		rp.lb.addTailscaleIdentityHeaders(r)
-	}}
-
-	// There is no way to autodetect h2c as per RFC 9113
+		if err := rp.lb.addAppCapabilitiesHeader(r); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}} // There is no way to autodetect h2c as per RFC 9113
 	// https://datatracker.ietf.org/doc/html/rfc9113#name-starting-http-2.
 	// However, we assume that http:// proxy prefix in combination with the
 	// protoccol being HTTP/2 is sufficient to detect h2c for our needs. Only use this for
@@ -927,6 +932,40 @@ func encTailscaleHeaderValue(v string) string {
 	return mime.QEncoding.Encode("utf-8", v)
 }
 
+func (b *LocalBackend) addAppCapabilitiesHeader(r *httputil.ProxyRequest) error {
+	const appCapabilitiesHeaderName = "Tailscale-App-Capabilities"
+	r.Out.Header.Del(appCapabilitiesHeaderName)
+
+	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
+	if !ok || c.Funnel != nil {
+		return nil
+	}
+	acceptCaps := c.AppCapabilities
+	if acceptCaps.IsNil() {
+		return nil
+	}
+	peerCaps := b.PeerCaps(c.SrcAddr.Addr())
+	if peerCaps == nil {
+		return nil
+	}
+
+	peerCapsFiltered := make(map[tailcfg.PeerCapability][]tailcfg.RawMessage, acceptCaps.Len())
+	for _, cap := range acceptCaps.AsSlice() {
+		if peerCaps.HasCapability(cap) {
+			peerCapsFiltered[cap] = peerCaps[cap]
+		}
+	}
+
+	peerCapsSerialized, err := json.Marshal(peerCapsFiltered)
+	if err != nil {
+		b.logf("serve: failed to serialize filtered PeerCapMap: %v", err)
+		return fmt.Errorf("unable to process app capabilities")
+	}
+
+	r.Out.Header.Set(appCapabilitiesHeaderName, encTailscaleHeaderValue(string(peerCapsSerialized)))
+	return nil
+}
+
 // serveWebHandler is an http.HandlerFunc that maps incoming requests to the
 // correct *http.
 func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
@@ -950,6 +989,12 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown proxy destination", http.StatusInternalServerError)
 			return
 		}
+		// Inject app capabilities to forward into the request context
+		c, ok := serveHTTPContextKey.ValueOk(r.Context())
+		if !ok {
+			return
+		}
+		c.AppCapabilities = h.AcceptAppCaps()
 		h := p.(http.Handler)
 		// Trim the mount point from the URL path before proxying. (#6571)
 		if r.URL.Path != "/" {

@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -27,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/control/controlclient"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
@@ -41,6 +43,7 @@ import (
 	"tailscale.com/util/must"
 	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/filter"
 )
 
 func TestExpandProxyArg(t *testing.T) {
@@ -768,6 +771,156 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 	}
 }
 
+func TestServeHTTPProxyGrantHeader(t *testing.T) {
+	b := newTestBackend(t)
+
+	nm := b.NetMap()
+	matches, err := filter.MatchesFromFilterRules([]tailcfg.FilterRule{
+		{
+			SrcIPs: []string{"100.150.151.152"},
+			CapGrant: []tailcfg.CapGrant{{
+				Dsts: []netip.Prefix{
+					netip.MustParsePrefix("100.150.151.151/32"),
+				},
+				CapMap: tailcfg.PeerCapMap{
+					"example.com/cap/interesting": []tailcfg.RawMessage{
+						`{"role": "🐿"}`,
+					},
+				},
+			}},
+		},
+		{
+			SrcIPs: []string{"100.150.151.153"},
+			CapGrant: []tailcfg.CapGrant{{
+				Dsts: []netip.Prefix{
+					netip.MustParsePrefix("100.150.151.151/32"),
+				},
+				CapMap: tailcfg.PeerCapMap{
+					"example.com/cap/boring": []tailcfg.RawMessage{
+						`{"role": "Viewer"}`,
+					},
+					"example.com/cap/irrelevant": []tailcfg.RawMessage{
+						`{"role": "Editor"}`,
+					},
+				},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nm.PacketFilter = matches
+	b.SetControlClientStatus(nil, controlclient.Status{NetMap: nm})
+
+	// Start test serve endpoint.
+	testServ := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			// Piping all the headers through the response writer
+			// so we can check their values in tests below.
+			for key, val := range r.Header {
+				w.Header().Add(key, strings.Join(val, ","))
+			}
+		},
+	))
+	defer testServ.Close()
+
+	conf := &ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			"example.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+				"/": {
+					Proxy:         testServ.URL,
+					AcceptAppCaps: []tailcfg.PeerCapability{"example.com/cap/interesting", "example.com/cap/boring"},
+				},
+			}},
+		},
+	}
+	if err := b.SetServeConfig(conf, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	type headerCheck struct {
+		header string
+		want   string
+	}
+
+	tests := []struct {
+		name        string
+		srcIP       string
+		wantHeaders []headerCheck
+	}{
+		{
+			name:  "request-from-user-within-tailnet",
+			srcIP: "100.150.151.152",
+			wantHeaders: []headerCheck{
+				{"X-Forwarded-Proto", "https"},
+				{"X-Forwarded-For", "100.150.151.152"},
+				{"Tailscale-User-Login", "someone@example.com"},
+				{"Tailscale-User-Name", "Some One"},
+				{"Tailscale-User-Profile-Pic", "https://example.com/photo.jpg"},
+				{"Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers"},
+				{"Tailscale-App-Capabilities", `{"example.com/cap/interesting":[{"role":"🐿"}]}`},
+			},
+		},
+		{
+			name:  "request-from-tagged-node-within-tailnet",
+			srcIP: "100.150.151.153",
+			wantHeaders: []headerCheck{
+				{"X-Forwarded-Proto", "https"},
+				{"X-Forwarded-For", "100.150.151.153"},
+				{"Tailscale-User-Login", ""},
+				{"Tailscale-User-Name", ""},
+				{"Tailscale-User-Profile-Pic", ""},
+				{"Tailscale-Headers-Info", ""},
+				{"Tailscale-App-Capabilities", `{"example.com/cap/boring":[{"role":"Viewer"}]}`},
+			},
+		},
+		{
+			name:  "request-from-outside-tailnet",
+			srcIP: "100.160.161.162",
+			wantHeaders: []headerCheck{
+				{"X-Forwarded-Proto", "https"},
+				{"X-Forwarded-For", "100.160.161.162"},
+				{"Tailscale-User-Login", ""},
+				{"Tailscale-User-Name", ""},
+				{"Tailscale-User-Profile-Pic", ""},
+				{"Tailscale-Headers-Info", ""},
+				{"Tailscale-App-Capabilities", ""},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &http.Request{
+				URL: &url.URL{Path: "/"},
+				TLS: &tls.ConnectionState{ServerName: "example.ts.net"},
+			}
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
+				DestPort: 443,
+				SrcAddr:  netip.MustParseAddrPort(tt.srcIP + ":1234"), // random src port for tests
+			}))
+
+			w := httptest.NewRecorder()
+			b.serveWebHandler(w, req)
+
+			// Verify the headers. The contract with users is that identity and grant headers containing non-ASCII
+			// UTF-8 characters will be Q-encoded.
+			h := w.Result().Header
+			dec := new(mime.WordDecoder)
+			for _, c := range tt.wantHeaders {
+				maybeEncoded := h.Get(c.header)
+				got, err := dec.DecodeHeader(maybeEncoded)
+				if err != nil {
+					t.Fatalf("invalid %q header; failed to decode: %v", maybeEncoded, err)
+				}
+				if got != c.want {
+					t.Errorf("invalid %q header; want=%q, got=%q", c.header, c.want, got)
+				}
+			}
+		})
+	}
+}
+
 func Test_reverseProxyConfiguration(t *testing.T) {
 	b := newTestBackend(t)
 	type test struct {
@@ -926,6 +1079,9 @@ func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 	b.currentNode().SetNetMap(&netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{
 			Name: "example.ts.net",
+			Addresses: []netip.Prefix{
+				netip.MustParsePrefix("100.150.151.151/32"),
+			},
 		}).View(),
 		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
 			tailcfg.UserID(1): (&tailcfg.UserProfile{
