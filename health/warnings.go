@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/tsconst"
 	"tailscale.com/version"
 )
 
@@ -26,7 +27,7 @@ This file contains definitions for the Warnables maintained within this `health`
 // updateAvailableWarnable is a Warnable that warns the user that an update is available.
 var updateAvailableWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:     "update-available",
+		Code:     tsconst.HealthWarnableUpdateAvailable,
 		Title:    "Update available",
 		Severity: SeverityLow,
 		Text: func(args Args) string {
@@ -42,7 +43,7 @@ var updateAvailableWarnable = condRegister(func() *Warnable {
 // securityUpdateAvailableWarnable is a Warnable that warns the user that an important security update is available.
 var securityUpdateAvailableWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:     "security-update-available",
+		Code:     tsconst.HealthWarnableSecurityUpdateAvailable,
 		Title:    "Security update available",
 		Severity: SeverityMedium,
 		Text: func(args Args) string {
@@ -59,7 +60,7 @@ var securityUpdateAvailableWarnable = condRegister(func() *Warnable {
 // so they won't be surprised by all the issues that may arise.
 var unstableWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:     "is-using-unstable-version",
+		Code:     tsconst.HealthWarnableIsUsingUnstableVersion,
 		Title:    "Using an unstable version",
 		Severity: SeverityLow,
 		Text:     StaticMessage("This is an unstable version of Tailscale meant for testing and development purposes. Please report any issues to Tailscale."),
@@ -69,7 +70,7 @@ var unstableWarnable = condRegister(func() *Warnable {
 // NetworkStatusWarnable is a Warnable that warns the user that the network is down.
 var NetworkStatusWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:                "network-status",
+		Code:                tsconst.HealthWarnableNetworkStatus,
 		Title:               "Network down",
 		Severity:            SeverityMedium,
 		Text:                StaticMessage("Tailscale cannot connect because the network is down. Check your Internet connection."),
@@ -81,7 +82,7 @@ var NetworkStatusWarnable = condRegister(func() *Warnable {
 // IPNStateWarnable is a Warnable that warns the user that Tailscale is stopped.
 var IPNStateWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:     "wantrunning-false",
+		Code:     tsconst.HealthWarnableWantRunningFalse,
 		Title:    "Tailscale off",
 		Severity: SeverityLow,
 		Text:     StaticMessage("Tailscale is stopped."),
@@ -91,7 +92,7 @@ var IPNStateWarnable = condRegister(func() *Warnable {
 // localLogWarnable is a Warnable that warns the user that the local log is misconfigured.
 var localLogWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:     "local-log-config-error",
+		Code:     tsconst.HealthWarnableLocalLogConfigError,
 		Title:    "Local log misconfiguration",
 		Severity: SeverityLow,
 		Text: func(args Args) string {
@@ -104,7 +105,7 @@ var localLogWarnable = condRegister(func() *Warnable {
 // and provides the last login error if available.
 var LoginStateWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:     "login-state",
+		Code:     tsconst.HealthWarnableLoginState,
 		Title:    "Logged out",
 		Severity: SeverityMedium,
 		Text: func(args Args) string {
@@ -121,7 +122,7 @@ var LoginStateWarnable = condRegister(func() *Warnable {
 // notInMapPollWarnable is a Warnable that warns the user that we are using a stale network map.
 var notInMapPollWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:      "not-in-map-poll",
+		Code:      tsconst.HealthWarnableNotInMapPoll,
 		Title:     "Out of sync",
 		Severity:  SeverityMedium,
 		DependsOn: []*Warnable{NetworkStatusWarnable, IPNStateWarnable},
@@ -134,7 +135,7 @@ var notInMapPollWarnable = condRegister(func() *Warnable {
 // noDERPHomeWarnable is a Warnable that warns the user that Tailscale doesn't have a home DERP.
 var noDERPHomeWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:                "no-derp-home",
+		Code:                tsconst.HealthWarnableNoDERPHome,
 		Title:               "No home relay server",
 		Severity:            SeverityMedium,
 		DependsOn:           []*Warnable{NetworkStatusWarnable},
@@ -147,7 +148,7 @@ var noDERPHomeWarnable = condRegister(func() *Warnable {
 // noDERPConnectionWarnable is a Warnable that warns the user that Tailscale couldn't connect to a specific DERP server.
 var noDERPConnectionWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:     "no-derp-connection",
+		Code:     tsconst.HealthWarnableNoDERPConnection,
 		Title:    "Relay server unavailable",
 		Severity: SeverityMedium,
 		DependsOn: []*Warnable{
@@ -177,7 +178,7 @@ var noDERPConnectionWarnable = condRegister(func() *Warnable {
 // heard from the home DERP region for a while.
 var derpTimeoutWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:     "derp-timed-out",
+		Code:     tsconst.HealthWarnableDERPTimedOut,
 		Title:    "Relay server timed out",
 		Severity: SeverityMedium,
 		DependsOn: []*Warnable{
@@ -198,7 +199,7 @@ var derpTimeoutWarnable = condRegister(func() *Warnable {
 // derpRegionErrorWarnable is a Warnable that warns the user that a DERP region is reporting an issue.
 var derpRegionErrorWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:      "derp-region-error",
+		Code:      tsconst.HealthWarnableDERPRegionError,
 		Title:     "Relay server error",
 		Severity:  SeverityLow,
 		DependsOn: []*Warnable{NetworkStatusWarnable},
@@ -211,7 +212,7 @@ var derpRegionErrorWarnable = condRegister(func() *Warnable {
 // noUDP4BindWarnable is a Warnable that warns the user that Tailscale couldn't listen for incoming UDP connections.
 var noUDP4BindWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:                "no-udp4-bind",
+		Code:                tsconst.HealthWarnableNoUDP4Bind,
 		Title:               "NAT traversal setup failure",
 		Severity:            SeverityMedium,
 		DependsOn:           []*Warnable{NetworkStatusWarnable, IPNStateWarnable},
@@ -223,7 +224,7 @@ var noUDP4BindWarnable = condRegister(func() *Warnable {
 // mapResponseTimeoutWarnable is a Warnable that warns the user that Tailscale hasn't received a network map from the coordination server in a while.
 var mapResponseTimeoutWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:      "mapresponse-timeout",
+		Code:      tsconst.HealthWarnableMapResponseTimeout,
 		Title:     "Network map response timeout",
 		Severity:  SeverityMedium,
 		DependsOn: []*Warnable{NetworkStatusWarnable, IPNStateWarnable},
@@ -236,7 +237,7 @@ var mapResponseTimeoutWarnable = condRegister(func() *Warnable {
 // tlsConnectionFailedWarnable is a Warnable that warns the user that Tailscale could not establish an encrypted connection with a server.
 var tlsConnectionFailedWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:      "tls-connection-failed",
+		Code:      tsconst.HealthWarnableTLSConnectionFailed,
 		Title:     "Encrypted connection failed",
 		Severity:  SeverityMedium,
 		DependsOn: []*Warnable{NetworkStatusWarnable},
@@ -249,7 +250,7 @@ var tlsConnectionFailedWarnable = condRegister(func() *Warnable {
 // magicsockReceiveFuncWarnable is a Warnable that warns the user that one of the Magicsock functions is not running.
 var magicsockReceiveFuncWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:     "magicsock-receive-func-error",
+		Code:     tsconst.HealthWarnableMagicsockReceiveFuncError,
 		Title:    "MagicSock function not running",
 		Severity: SeverityMedium,
 		Text: func(args Args) string {
@@ -261,7 +262,7 @@ var magicsockReceiveFuncWarnable = condRegister(func() *Warnable {
 // testWarnable is a Warnable that is used within this package for testing purposes only.
 var testWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:     "test-warnable",
+		Code:     tsconst.HealthWarnableTestWarnable,
 		Title:    "Test warnable",
 		Severity: SeverityLow,
 		Text: func(args Args) string {
@@ -273,7 +274,7 @@ var testWarnable = condRegister(func() *Warnable {
 // applyDiskConfigWarnable is a Warnable that warns the user that there was an error applying the envknob config stored on disk.
 var applyDiskConfigWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:     "apply-disk-config",
+		Code:     tsconst.HealthWarnableApplyDiskConfig,
 		Title:    "Could not apply configuration",
 		Severity: SeverityMedium,
 		Text: func(args Args) string {
@@ -291,7 +292,7 @@ const warmingUpWarnableDuration = 5 * time.Second
 // the backend is fully started.
 var warmingUpWarnable = condRegister(func() *Warnable {
 	return &Warnable{
-		Code:     "warming-up",
+		Code:     tsconst.HealthWarnableWarmingUp,
 		Title:    "Tailscale is starting",
 		Severity: SeverityLow,
 		Text:     StaticMessage("Tailscale is starting. Please wait."),
