@@ -433,7 +433,6 @@ func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	c := mrs.c
 
 	c.mu.Lock()
-	ctx := c.mapCtx
 	c.inMapPoll = true
 	if c.loggedIn {
 		c.state = StateSynchronized
@@ -447,7 +446,7 @@ func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
 		c.sendStatus("mapRoutine-got-netmap", nil, "", nm)
 	}
 	// Reset the backoff timer if we got a netmap.
-	mrs.bo.BackOff(ctx, nil)
+	mrs.bo.Reset()
 }
 
 func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
