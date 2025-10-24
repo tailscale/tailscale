@@ -160,8 +160,16 @@ type HTTPHandler struct {
 
 	Text string `json:",omitempty"` // plaintext to serve (primarily for testing)
 
+	// Redirect is the target URL for an HTTP redirect.
+	// Redirects are always sent with HTTP 301 (Moved Permanently) status.
+	//
+	// The target URL supports the following expansion variables:
+	//   - ${HOST}: replaced with the request's Host header value
+	//   - ${REQUEST_URI}: replaced with the request's full URI (path and query string)
+	Redirect string `json:",omitempty"`
+
 	// TODO(bradfitz): bool to not enumerate directories? TTL on mapping for
-	// temporary ones? Error codes? Redirects?
+	// temporary ones? Error codes?
 }
 
 // WebHandlerExists reports whether if the ServeConfig Web handler exists for

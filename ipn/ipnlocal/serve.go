@@ -940,6 +940,12 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, s)
 		return
 	}
+	if v := h.Redirect(); v != "" {
+		v = strings.ReplaceAll(v, "${HOST}", r.Host)
+		v = strings.ReplaceAll(v, "${REQUEST_URI}", r.RequestURI)
+		http.Redirect(w, r, v, http.StatusMovedPermanently)
+		return
+	}
 	if v := h.Path(); v != "" {
 		b.serveFileOrDirectory(w, r, v, mountPoint)
 		return
