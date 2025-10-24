@@ -2190,3 +2190,43 @@ func TestC2NDebugNetmap(t *testing.T) {
 		t.Errorf("expected peer to be online; got %+v", nm.Peers[0].AsStruct())
 	}
 }
+
+func TestNetworkLock(t *testing.T) {
+
+	// If you run `tailscale lock log` on a node where Tailnet Lock isn't
+	// enabled, you get an error explaining that.
+	t.Run("log-when-not-enabled", func(t *testing.T) {
+		tstest.Shard(t)
+		t.Parallel()
+
+		env := NewTestEnv(t)
+		n1 := NewTestNode(t, env)
+		d1 := n1.StartDaemon()
+		defer d1.MustCleanShutdown(t)
+
+		n1.MustUp()
+		n1.AwaitRunning()
+
+		cmdArgs := []string{"lock", "log"}
+		t.Logf("Running command: %s", strings.Join(cmdArgs, " "))
+
+		var outBuf, errBuf bytes.Buffer
+
+		cmd := n1.Tailscale(cmdArgs...)
+		cmd.Stdout = &outBuf
+		cmd.Stderr = &errBuf
+
+		if err := cmd.Run(); !isNonZeroExitCode(err) {
+			t.Fatalf("command did not fail with non-zero exit code: %q", err)
+		}
+
+		if outBuf.String() != "" {
+			t.Fatalf("stdout: want '', got %q", outBuf.String())
+		}
+
+		wantErr := "Tailnet Lock is not enabled\n"
+		if errBuf.String() != wantErr {
+			t.Fatalf("stderr: want %q, got %q", wantErr, errBuf.String())
+		}
+	})
+}

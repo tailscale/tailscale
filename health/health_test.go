@@ -19,6 +19,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/metrics"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsconst"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/opt"
@@ -739,21 +740,27 @@ func TestControlHealthNotifies(t *testing.T) {
 				ht.SetIPNState("NeedsLogin", true)
 				ht.GotStreamedMapResponse()
 
-				// Expect events at starup, before doing anything else
+				// Expect events at starup, before doing anything else, skip unstable
+				// event and no warning event as they show up at different times.
 				synctest.Wait()
-				if err := eventbustest.ExpectExactly(tw,
-					eventbustest.Type[Change](), // warming-up
-					eventbustest.Type[Change](), // is-using-unstable-version
-					eventbustest.Type[Change](), // not-in-map-poll
+				if err := eventbustest.Expect(tw,
+					CompareWarnableCode(t, tsconst.HealthWarnableWarmingUp),
+					CompareWarnableCode(t, tsconst.HealthWarnableNotInMapPoll),
+					CompareWarnableCode(t, tsconst.HealthWarnableWarmingUp),
 				); err != nil {
 					t.Errorf("startup error: %v", err)
 				}
 
 				// Only set initial state if we need to
 				if len(test.initialState) != 0 {
+					t.Log("Setting initial state")
 					ht.SetControlHealth(test.initialState)
 					synctest.Wait()
-					if err := eventbustest.ExpectExactly(tw, eventbustest.Type[Change]()); err != nil {
+					if err := eventbustest.Expect(tw,
+						CompareWarnableCode(t, tsconst.HealthWarnableMagicsockReceiveFuncError),
+						// Skip event with no warnable
+						CompareWarnableCode(t, tsconst.HealthWarnableNoDERPHome),
+					); err != nil {
 						t.Errorf("initial state error: %v", err)
 					}
 				}
@@ -768,6 +775,22 @@ func TestControlHealthNotifies(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+func CompareWarnableCode(t *testing.T, code string) func(Change) bool {
+	t.Helper()
+	return func(c Change) bool {
+		t.Helper()
+		if c.Warnable != nil {
+			t.Logf("Warnable code: %s", c.Warnable.Code)
+			if string(c.Warnable.Code) == code {
+				return true
+			}
+		} else {
+			t.Log("No Warnable")
+		}
+		return false
 	}
 }
 

@@ -158,6 +158,18 @@ func init() {
 // onReady is called by the systray package when the menu is ready to be built.
 func (menu *Menu) onReady() {
 	log.Printf("starting")
+	if os.Getuid() == 0 || os.Getuid() != os.Geteuid() || os.Getenv("SUDO_USER") != "" || os.Getenv("DOAS_USER") != "" {
+		fmt.Fprintln(os.Stderr, `
+It appears that you might be running the systray with sudo/doas.
+This can lead to issues with D-Bus, and should be avoided.
+
+The systray application should be run with the same user as your desktop session.
+This usually means that you should run the application like:
+
+tailscale systray
+
+See https://tailscale.com/kb/1597/linux-systray for more information.`)
+	}
 	setAppIcon(disconnected)
 	menu.rebuild()
 
