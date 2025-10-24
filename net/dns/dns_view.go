@@ -125,8 +125,14 @@ func (v ConfigView) Hosts() views.MapSlice[dnsname.FQDN, netip.Addr] {
 
 // OnlyIPv6, if true, uses the IPv6 service IP (for MagicDNS)
 // instead of the IPv4 version (100.100.100.100).
-func (v ConfigView) OnlyIPv6() bool           { return v.ж.OnlyIPv6 }
-func (v ConfigView) Equal(v2 ConfigView) bool { return v.ж.Equal(v2.ж) }
+func (v ConfigView) OnlyIPv6() bool { return v.ж.OnlyIPv6 }
+
+// IP addresses for this tsnet node
+func (v ConfigView) SelfAddrs() views.Slice[netip.Prefix] { return views.SliceOf(v.ж.SelfAddrs) }
+
+// Source-NAT prefix
+func (v ConfigView) SrcNatPrefix() netip.Prefix { return v.ж.SrcNatPrefix }
+func (v ConfigView) Equal(v2 ConfigView) bool   { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ConfigViewNeedsRegeneration = Config(struct {
@@ -135,4 +141,6 @@ var _ConfigViewNeedsRegeneration = Config(struct {
 	SearchDomains    []dnsname.FQDN
 	Hosts            map[dnsname.FQDN][]netip.Addr
 	OnlyIPv6         bool
+	SelfAddrs        []netip.Prefix
+	SrcNatPrefix     netip.Prefix
 }{})

@@ -115,6 +115,8 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.BoolVar(&upArgs.advertiseConnector, "advertise-connector", false, "advertise this node as an app connector")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
 	upf.BoolVar(&upArgs.postureChecking, "report-posture", false, hidden+"allow management plane to gather device posture information")
+	upf.StringVar(&upArgs.dnsUpstreamResolver, "dns-upstream-resolver", "", "use this exit-node upstream DNS resolver, rather than auto-detect via resolvconf, etc")
+	upf.StringVar(&upArgs.dnsUpstreamSnatNetMap, "dns-upstream-snat-netmap", "", "apply source-NAT NETMAP rule for exit-node upstream DNS requests (via a dedicated TUN interface named tailscale0-dns, 10.64.0.0/10 by default). Must not overlap tailnet subnet!")
 
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		upf.StringVar(&upArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
@@ -198,6 +200,8 @@ type upArgsT struct {
 	acceptedRisks          string
 	profileName            string
 	postureChecking        bool
+	dnsUpstreamResolver    string
+	dnsUpstreamSnatNetMap  string
 }
 
 // resolveValueFromFile returns the value as-is, or if it starts with "file:",
@@ -339,6 +343,37 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 			warnf(warning)
 		}
 	}
+
+	// Attempt first to parse IPv4/v6 addr:port format, followed by IPv4/v6 addr format (DNS port default is 53)
+	// Note that IPv6 format must be formatted as [IPv6]:port
+	if upArgs.dnsUpstreamResolver != "" {
+		prefs.DNSUpstreamResolver, err = netip.ParseAddrPort(upArgs.dnsUpstreamResolver)
+		if err != nil {
+			dnsUpstreamResolverAddr, err := netip.ParseAddr(upArgs.dnsUpstreamResolver)
+			if err != nil {
+				return nil, fmt.Errorf("%w; --dns-upstream-resolver parsing failed", err)
+			}
+			// Apply the well-known DNS port by default
+			prefs.DNSUpstreamResolver = netip.AddrPortFrom(dnsUpstreamResolverAddr, 53)
+		}
+	} else {
+		prefs.DNSUpstreamResolver = netip.AddrPort{}
+	}
+	
+	// Attempt to parse a network subnet prefix (CIDR). eg "192.168.1.0/24" or "2001:db8::/32"
+	if upArgs.dnsUpstreamSnatNetMap != "" {
+		prefs.DNSUpstreamSnatNetMap, err = netip.ParsePrefix(upArgs.dnsUpstreamSnatNetMap)
+		if err != nil {
+			if strings.HasPrefix(upArgs.dnsUpstreamSnatNetMap, "default") {
+				prefs.DNSUpstreamSnatNetMap = netip.MustParsePrefix("10.64.0.0/10")
+			} else {
+				return nil, fmt.Errorf("%w; --dns-upstream-snat-netmap parsing failed", err)
+			}
+		}
+	} else {
+		prefs.DNSUpstreamSnatNetMap = netip.Prefix{}
+	}
+
 	return prefs, nil
 }
 
@@ -889,6 +924,8 @@ func init() {
 	addPrefFlagMapping("advertise-connector", "AppConnector")
 	addPrefFlagMapping("report-posture", "PostureChecking")
 	addPrefFlagMapping("relay-server-port", "RelayServerPort")
+	addPrefFlagMapping("dns-upstream-resolver", "DNSUpstreamResolver")
+	addPrefFlagMapping("dns-upstream-snat-netmap", "DNSUpstreamSnatNetMap")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {
@@ -1078,7 +1115,7 @@ func applyImplicitPrefs(prefs, oldPrefs *ipn.Prefs, env upCheckEnv) {
 
 func flagAppliesToOS(flag, goos string) bool {
 	switch flag {
-	case "netfilter-mode", "snat-subnet-routes", "stateful-filtering":
+	case "netfilter-mode", "snat-subnet-routes", "stateful-filtering", "dns-upstream-resolver", "dns-upstream-snat-netmap":
 		return goos == "linux"
 	case "unattended":
 		return goos == "windows"
@@ -1097,6 +1134,20 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			return ""
 		}
 		return env.curExitNodeIP.String()
+	}
+
+	dnsUpstreamResolverStr := func() string {
+		if prefs.DNSUpstreamResolver.IsValid() {
+			return prefs.DNSUpstreamResolver.String()
+		}
+		return ""
+	}
+
+	dnsUpstreamSnatNetMapStr := func() string {
+		if prefs.DNSUpstreamSnatNetMap.IsValid() {
+			return prefs.DNSUpstreamSnatNetMap.String()
+		}
+		return ""
 	}
 
 	fs := newUpFlagSet(env.goos, new(upArgsT) /* dummy */, "up")
@@ -1167,6 +1218,10 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			set(prefs.ForceDaemon)
 		case "report-posture":
 			set(prefs.PostureChecking)
+		case "dns-upstream-resolver":
+			set(dnsUpstreamResolverStr())
+		case "dns-upstream-snat-netmap":
+			set(dnsUpstreamSnatNetMapStr())
 		}
 	})
 	return ret

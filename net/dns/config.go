@@ -51,6 +51,10 @@ type Config struct {
 	// OnlyIPv6, if true, uses the IPv6 service IP (for MagicDNS)
 	// instead of the IPv4 version (100.100.100.100).
 	OnlyIPv6 bool
+	// IP addresses for this tsnet node
+	SelfAddrs []netip.Prefix
+	// Source-NAT prefix
+	SrcNatPrefix netip.Prefix
 }
 
 var magicDNSDualStack = envknob.RegisterBool("TS_DEBUG_MAGIC_DNS_DUAL_STACK")

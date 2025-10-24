@@ -39,6 +39,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/client/local"
 )
 
 const dnsSymbolicFQDN = "magicdns.localhost-tailscale-daemon."
@@ -79,6 +80,10 @@ type Config struct {
 	// LocalDomains is a list of DNS name suffixes that should not be
 	// routed to upstream resolvers.
 	LocalDomains []dnsname.FQDN
+	// IP addresses for this tsnet node
+	SelfAddrs []netip.Prefix
+	// Source-NAT prefix applied to tsnet nodes
+	SrcNatPrefix netip.Prefix
 }
 
 // WriteToBufioWriter write a debug version of c for logs to w, omitting
@@ -273,6 +278,11 @@ func (r *Resolver) SetConfig(cfg Config) error {
 
 	r.forwarder.setRoutes(cfg.Routes)
 
+	err := r.forwarder.setSnatPrefix(cfg.SrcNatPrefix, cfg.SelfAddrs)
+	if err != nil {
+		return err
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.localDomains = cfg.LocalDomains
@@ -393,7 +403,7 @@ func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.
 		// want to blend in everything from scutil --dns.
 		fallthrough
 	case "linux", "freebsd", "openbsd", "illumos", "solaris", "ios":
-		nameserver, err := stubResolverForOS()
+		nameserver, err := stubResolverForOS(ctx, r.logf)
 		if err != nil {
 			r.logf("stubResolverForOS: %v", err)
 			metricDNSExitProxyErrorResolvConf.Add(1)
@@ -402,7 +412,7 @@ func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.
 		// TODO: more than 1 resolver from /etc/resolv.conf?
 
 		var resolvers []resolverAndDelay
-		switch nameserver {
+		switch nameserver.Addr() {
 		case tsaddr.TailscaleServiceIP(), tsaddr.TailscaleServiceIPv6():
 			// If resolv.conf says 100.100.100.100, it's coming right back to us anyway
 			// so avoid the loop through the kernel and just do what we
@@ -412,7 +422,7 @@ func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.
 			// Likewise, if the platform has no resolv.conf, just use our defaults.
 		default:
 			resolvers = []resolverAndDelay{{
-				name: &dnstype.Resolver{Addr: net.JoinHostPort(nameserver.String(), "53")},
+				name: &dnstype.Resolver{Addr: nameserver.String()},
 			}}
 		}
 
@@ -565,9 +575,9 @@ func isGoNoSuchHostError(err error) bool {
 }
 
 type resolvConfCache struct {
-	mod  time.Time
-	size int64
-	ip   netip.Addr
+	mod      time.Time
+	size     int64
+	addrPort netip.AddrPort
 	// TODO: inode/dev?
 }
 
@@ -577,37 +587,47 @@ var resolvConfCacheValue syncs.AtomicValue[resolvConfCache]
 
 var errEmptyResolvConf = errors.New("resolv.conf has no nameservers")
 
-// stubResolverForOS returns the IP address of the first nameserver in
+var localClient local.Client
+
+// stubResolverForOS returns the IP+port address of the first nameserver in
 // /etc/resolv.conf.
 //
-// It may also return the netip.Addr zero value and a nil error to mean
+// It may also return the netip.AddrPort zero value and a nil error to mean
 // that the platform has no resolv.conf.
-func stubResolverForOS() (ip netip.Addr, err error) {
+func stubResolverForOS(ctx context.Context, logf logger.Logf) (addrPort netip.AddrPort, err error) {
+	prefs, err := localClient.GetPrefs(ctx)
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+	if prefs.DNSUpstreamResolver.IsValid() {
+		// logf("Using supplied DNS stub resolver: %v", prefs.DNSUpstreamResolver)
+		return prefs.DNSUpstreamResolver, nil
+	}
 	if runtime.GOOS == "ios" {
-		return netip.Addr{}, nil // no resolv.conf on iOS
+		return netip.AddrPort{}, nil // no resolv.conf on iOS
 	}
 	fi, err := os.Stat(resolvconffile.Path)
 	if err != nil {
-		return netip.Addr{}, err
+		return netip.AddrPort{}, err
 	}
 	cur := resolvConfCache{
 		mod:  fi.ModTime(),
 		size: fi.Size(),
 	}
 	if c, ok := resolvConfCacheValue.LoadOk(); ok && c.mod == cur.mod && c.size == cur.size {
-		return c.ip, nil
+		return c.addrPort, nil
 	}
 	conf, err := resolvconffile.ParseFile(resolvconffile.Path)
 	if err != nil {
-		return netip.Addr{}, err
+		return netip.AddrPort{}, err
 	}
 	if len(conf.Nameservers) == 0 {
-		return netip.Addr{}, errEmptyResolvConf
+		return netip.AddrPort{}, errEmptyResolvConf
 	}
-	ip = conf.Nameservers[0]
-	cur.ip = ip
+	cur.addrPort = netip.AddrPortFrom(conf.Nameservers[0], 53)
 	resolvConfCacheValue.Store(cur)
-	return ip, nil
+	logf("Using DNS stub resolver from %s: %v", resolvconffile.Path, cur.addrPort)
+	return cur.addrPort, nil
 }
 
 // resolveLocal returns an IP for the given domain, if domain is in
