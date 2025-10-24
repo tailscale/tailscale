@@ -149,6 +149,7 @@ type localServeClient interface {
 	IncrementCounter(ctx context.Context, name string, delta int) error
 	GetPrefs(ctx context.Context) (*ipn.Prefs, error)
 	EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error)
+	CheckSOMarkInUse(ctx context.Context) (bool, error)
 }
 
 // serveEnv is the environment the serve command runs within. All I/O should be

@@ -860,6 +860,7 @@ type fakeLocalServeClient struct {
 	setCount             int                       // counts calls to SetServeConfig
 	queryFeatureResponse *mockQueryFeatureResponse // mock response to QueryFeature calls
 	prefs                *ipn.Prefs                // fake preferences, used to test GetPrefs and SetPrefs
+	SOMarkInUse          bool                      // fake SO mark in use status
 	statusWithoutPeers   *ipnstate.Status          // nil for fakeStatus
 }
 
@@ -935,6 +936,10 @@ func (lc *fakeLocalServeClient) WatchIPNBus(ctx context.Context, mask ipn.Notify
 
 func (lc *fakeLocalServeClient) IncrementCounter(ctx context.Context, name string, delta int) error {
 	return nil // unused in tests
+}
+
+func (lc *fakeLocalServeClient) CheckSOMarkInUse(ctx context.Context) (bool, error) {
+	return lc.SOMarkInUse, nil
 }
 
 // exactError returns an error checker that wants exactly the provided want error.
