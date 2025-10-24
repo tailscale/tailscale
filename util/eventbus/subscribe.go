@@ -296,6 +296,7 @@ func (s *SubscriberFunc[T]) dispatch(ctx context.Context, vals *queue[DeliveredE
 		case val := <-acceptCh():
 			vals.Add(val)
 		case <-ctx.Done():
+			<-callDone // wait for this callback to be complete
 			return false
 		case ch := <-snapshot:
 			ch <- vals.Snapshot()

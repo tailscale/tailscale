@@ -86,6 +86,28 @@ func TestSubscriberFunc(t *testing.T) {
 		}
 	})
 
+	t.Run("CloseWait", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			b := eventbus.New()
+			defer b.Close()
+
+			c := b.Client(t.Name())
+
+			eventbus.SubscribeFunc[EventA](c, func(e EventA) {
+				time.Sleep(1 * time.Second)
+			})
+
+			p := eventbus.Publish[EventA](c)
+			p.Publish(EventA{12345})
+
+			synctest.Wait() // subscriber has the event
+			c.Close()
+
+			// If close does not wait for the subscriber, the test will fail
+			// because an active goroutine remains in the bubble.
+		})
+	})
+
 	t.Run("SubscriberPublishes", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			b := eventbus.New()
