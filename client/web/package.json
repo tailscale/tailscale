@@ -4,7 +4,7 @@
   "license": "BSD-3-Clause",
   "engines": {
     "node": "22.14.0",
-    "yarn": "1.22.19"
+    "yarn": "1.22.22"
   },
   "type": "module",
   "private": true,
@@ -12,6 +12,7 @@
     "@radix-ui/react-collapsible": "^1.0.3",
     "@radix-ui/react-dialog": "^1.0.5",
     "@radix-ui/react-popover": "^1.0.6",
+    "@tailscale/tailscale-ui-components": "^0.0.5",
     "classnames": "^2.3.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

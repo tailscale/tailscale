@@ -111,7 +111,12 @@ const config = {
       addVariant("state-inactive", ["&[data-state=“inactive”]"])
     }),
   ],
-  content: ["./src/**/*.html", "./src/**/*.{ts,tsx}", "./index.html"],
+  content: ["./src/**/*.html", "./src/**/*.{ts,tsx}", "./index.html", 
+    // Also scan the source files of the local component library
+    process.env.USE_LOCAL_UI_COMPONENTS
+      ? "../../../tailscale-ui-components/src/**/*.{js,ts,jsx,tsx}"
+      : "./node_modules/@tailscale/tailscale-ui-components/dist/**/*.{js,ts,jsx,tsx}",
+  ],
 }
 
 export default config
