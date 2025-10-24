@@ -741,11 +741,18 @@ func TestControlHealthNotifies(t *testing.T) {
 
 				// Expect events at starup, before doing anything else
 				synctest.Wait()
-				if err := eventbustest.ExpectExactly(tw,
+				initialEvents := []any{
 					eventbustest.Type[Change](), // warming-up
-					eventbustest.Type[Change](), // is-using-unstable-version
+				}
+				if version.IsUnstableBuild() {
+					initialEvents = append(initialEvents,
+						eventbustest.Type[Change](), // is-using-unstable-version
+					)
+				}
+				initialEvents = append(initialEvents,
 					eventbustest.Type[Change](), // not-in-map-poll
-				); err != nil {
+				)
+				if err := eventbustest.ExpectExactly(tw, initialEvents...); err != nil {
 					t.Errorf("startup error: %v", err)
 				}
 
