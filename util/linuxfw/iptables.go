@@ -1,9 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux && (arm64 || amd64) && !ts_omit_iptables
-
-// TODO(#8502): add support for more architectures
+//go:build linux && !ts_omit_iptables
 
 package linuxfw
 
