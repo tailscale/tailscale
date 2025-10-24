@@ -891,11 +891,20 @@ func (v HTTPHandlerView) Proxy() string { return v.ж.Proxy }
 // plaintext to serve (primarily for testing)
 func (v HTTPHandlerView) Text() string { return v.ж.Text }
 
+// Redirect is the target URL for an HTTP redirect.
+// Redirects are always sent with HTTP 301 (Moved Permanently) status.
+//
+// The target URL supports the following expansion variables:
+//   - ${HOST}: replaced with the request's Host header value
+//   - ${REQUEST_URI}: replaced with the request's full URI (path and query string)
+func (v HTTPHandlerView) Redirect() string { return v.ж.Redirect }
+
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HTTPHandlerViewNeedsRegeneration = HTTPHandler(struct {
-	Path  string
-	Proxy string
-	Text  string
+	Path     string
+	Proxy    string
+	Text     string
+	Redirect string
 }{})
 
 // View returns a read-only view of WebServerConfig.

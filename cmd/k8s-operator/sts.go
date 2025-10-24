@@ -69,7 +69,8 @@ const (
 	AnnotationProxyGroup = "tailscale.com/proxy-group"
 
 	// Annotations settable by users on ingresses.
-	AnnotationFunnel = "tailscale.com/funnel"
+	AnnotationFunnel       = "tailscale.com/funnel"
+	AnnotationHTTPRedirect = "tailscale.com/http-redirect"
 
 	// If set to true, set up iptables/nftables rules in the proxy forward
 	// cluster traffic to the tailnet IP of that proxy. This can only be set

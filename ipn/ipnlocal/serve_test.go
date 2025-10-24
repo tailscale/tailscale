@@ -1171,3 +1171,68 @@ func TestServeGRPCProxy(t *testing.T) {
 		})
 	}
 }
+
+func TestServeHTTPRedirect(t *testing.T) {
+	b := newTestBackend(t)
+
+	tests := []struct {
+		host     string
+		path     string
+		redirect string
+		reqURI   string
+		wantLoc  string
+	}{
+		{
+			host:     "hardcoded-root",
+			path:     "/",
+			redirect: "https://example.com/",
+			reqURI:   "/old",
+			wantLoc:  "https://example.com/",
+		},
+		{
+			host:     "template-host-and-uri",
+			path:     "/",
+			redirect: "https://${HOST}${REQUEST_URI}",
+			reqURI:   "/path?foo=bar",
+			wantLoc:  "https://template-host-and-uri/path?foo=bar",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.host, func(t *testing.T) {
+			conf := &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort(tt.host + ":80"): {
+						Handlers: map[string]*ipn.HTTPHandler{
+							tt.path: {Redirect: tt.redirect},
+						},
+					},
+				},
+			}
+			if err := b.SetServeConfig(conf, ""); err != nil {
+				t.Fatal(err)
+			}
+
+			req := &http.Request{
+				Host:       tt.host,
+				URL:        &url.URL{Path: tt.path},
+				RequestURI: tt.reqURI,
+				TLS:        &tls.ConnectionState{ServerName: tt.host},
+			}
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
+				DestPort: 80,
+				SrcAddr:  netip.MustParseAddrPort("1.2.3.4:1234"),
+			}))
+
+			w := httptest.NewRecorder()
+			b.serveWebHandler(w, req)
+
+			if w.Code != http.StatusMovedPermanently {
+				t.Errorf("got status %d, want %d", w.Code, http.StatusMovedPermanently)
+			}
+			if got := w.Header().Get("Location"); got != tt.wantLoc {
+				t.Errorf("got Location %q, want %q", got, tt.wantLoc)
+			}
+		})
+	}
+}
