@@ -222,10 +222,11 @@ func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.Suga
 		return nil, fmt.Errorf("failed to reconcile statefulset: %w", err)
 	}
 	mo := &metricsOpts{
-		proxyStsName: hsvc.Name,
-		tsNamespace:  hsvc.Namespace,
-		proxyLabels:  hsvc.Labels,
-		proxyType:    sts.proxyType,
+		proxyStsName:    hsvc.Name,
+		tsNamespace:     hsvc.Namespace,
+		proxyLabels:     hsvc.Labels,
+		proxyType:       sts.proxyType,
+		metricsPortName: metricsPortName(sts.ProxyClass),
 	}
 	if err = reconcileMetricsResources(ctx, logger, mo, sts.ProxyClass, a.Client); err != nil {
 		return nil, fmt.Errorf("failed to ensure metrics resources: %w", err)
