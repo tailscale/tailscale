@@ -48,9 +48,12 @@ func runConfigureJetKVM(ctx context.Context, args []string) error {
 	if runtime.GOOS != "linux" || distro.Get() != distro.JetKVM {
 		return errors.New("only implemented on JetKVM")
 	}
-	err := os.WriteFile("/etc/init.d/S22tailscale", bytes.TrimLeft([]byte(`
+	if err := os.MkdirAll("/userdata/init.d", 0755); err != nil {
+		return errors.New("unable to create /userdata/init.d")
+	}
+	err := os.WriteFile("/userdata/init.d/S22tailscale", bytes.TrimLeft([]byte(`
 #!/bin/sh
-# /etc/init.d/S22tailscale
+# /userdata/init.d/S22tailscale
 # Start/stop tailscaled
 
 case "$1" in
