@@ -762,7 +762,7 @@ func (b *LocalBackend) GetDNSOSConfig() (dns.OSConfig, error) {
 // QueryDNS performs a DNS query for name and queryType using the built-in DNS resolver, and returns
 // the raw DNS response and the resolvers that are were able to handle the query (the internal forwarder
 // may race multiple resolvers).
-func (b *LocalBackend) QueryDNS(name string, queryType dnsmessage.Type) (res []byte, resolvers []*dnstype.Resolver, err error) {
+func (b *LocalBackend) QueryDNS(name string, queryType dnsmessage.Type, full bool) (res [][]byte, resolvers []*dnstype.Resolver, err error) {
 	if !buildfeatures.HasDNS {
 		return nil, nil, feature.ErrUnavailable
 	}
@@ -797,11 +797,22 @@ func (b *LocalBackend) QueryDNS(name string, queryType dnsmessage.Type) (res []b
 		b.logf("DNSQuery: failed to build query: %v", err)
 		return nil, nil, err
 	}
-	res, err = manager.Query(b.ctx, q, "tcp", from)
-	if err != nil {
-		b.logf("DNSQuery: failed to query %q: %v", name, err)
-		return nil, nil, err
+
+	if full {
+		res, err = manager.FullQuery(b.ctx, q, "tcp", from)
+		if err != nil {
+			b.logf("DNSQuery: failed to query %q: %v", name, err)
+			return nil, nil, err
+		}
+	} else {
+		r0, err := manager.Query(b.ctx, q, "tcp", from)
+		if err != nil {
+			b.logf("DNSQuery: failed to query %q: %v", name, err)
+			return nil, nil, err
+		}
+		res = [][]byte{r0}
 	}
+
 	rr := manager.Resolver().GetUpstreamResolvers(fqdn)
 	return res, rr, nil
 }

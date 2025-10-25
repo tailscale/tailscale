@@ -10,7 +10,12 @@ import (
 	"testing"
 
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/health"
 	"tailscale.com/net/dns/publicdns"
+	"tailscale.com/net/netmon"
+	"tailscale.com/net/tsdial"
+	"tailscale.com/tstest"
+	"tailscale.com/util/eventbus/eventbustest"
 )
 
 var testDoH = flag.Bool("test-doh", false, "do real DoH tests against the network")
@@ -53,6 +58,67 @@ func TestDoH(t *testing.T) {
 			if !ok {
 				t.Fatal("expected DoH")
 			}
+			res, err := f.sendDoH(context.Background(), urlBase, c, someDNSQuestion(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.Transport.(*http.Transport).CloseIdleConnections()
+
+			var p dnsmessage.Parser
+			h, err := p.Start(res)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if h.ID != someDNSID {
+				t.Errorf("response DNS ID = %v; want %v", h.ID, someDNSID)
+			}
+
+			p.SkipAllQuestions()
+			aa, err := p.AllAnswers()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(aa) == 0 {
+				t.Fatal("no answers")
+			}
+			for _, r := range aa {
+				t.Logf("got: %v", r.GoString())
+			}
+		})
+	}
+}
+
+func TestArbitraryDoH(t *testing.T) {
+	if !*testDoH {
+		t.Skip("skipping manual test without --test-doh flag")
+	}
+
+	// Use known DoH prefixes, but deliberately not using well-known IPs
+	prefixes := publicdns.KnownDoHPrefixes()
+	if len(prefixes) == 0 {
+		t.Fatal("no known DoH")
+	}
+
+	logf := tstest.WhileTestRunningLogger(t)
+	bus := eventbustest.NewBus(t)
+	netMon, err := netmon.New(bus, logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dialer tsdial.Dialer
+	dialer.SetNetMon(netMon)
+	dialer.SetBus(bus)
+
+	// Need to have a real forwarder as getArbitraryDoHClient must resolve the URL
+	f := newForwarder(logf, netMon, nil, &dialer, health.NewTracker(bus), nil)
+
+	for _, urlBase := range prefixes {
+		t.Run(urlBase, func(t *testing.T) {
+			c, ok := f.getArbitraryDoHClient(urlBase)
+			if !ok {
+				t.Fatal("expected DoH")
+			}
+
 			res, err := f.sendDoH(context.Background(), urlBase, c, someDNSQuestion(t))
 			if err != nil {
 				t.Fatal(err)

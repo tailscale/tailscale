@@ -445,6 +445,23 @@ func (m *Manager) Query(ctx context.Context, bs []byte, family string, from neti
 	return m.resolver.Query(ctx, bs, family, from)
 }
 
+func (m *Manager) FullQuery(ctx context.Context, bs []byte, family string, from netip.AddrPort) ([][]byte, error) {
+	select {
+	case <-m.ctx.Done():
+		return nil, net.ErrClosed
+	default:
+		// continue
+	}
+
+	if n := atomic.AddInt32(&m.activeQueriesAtomic, 1); n > maxActiveQueries {
+		atomic.AddInt32(&m.activeQueriesAtomic, -1)
+		metricDNSQueryErrorQueue.Add(1)
+		return nil, errFullQueue
+	}
+	defer atomic.AddInt32(&m.activeQueriesAtomic, -1)
+	return m.resolver.FullQuery(ctx, bs, family, from)
+}
+
 const (
 	// RFC 7766 6.2 recommends connection reuse & request pipelining
 	// be undertaken, and the connection be closed by the server
