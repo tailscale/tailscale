@@ -728,8 +728,35 @@ runLoop:
 							if err != nil {
 								log.Fatalf("Waiting for tailscaled to exit: %v", err)
 							}
-							log.Print("tailscaled exited")
-							os.Exit(0)
+
+							// Distinguish between graceful shutdown and unexpected failure.
+							// Graceful shutdown (SIGTERM/SIGINT to containerboot) should exit 0
+							// so Kubernetes treats the pod as completed successfully.
+							// Unexpected failures should exit non-zero so Kubernetes restarts the pod.
+							select {
+							case <-ctx.Done():
+								// Graceful shutdown: containerboot received SIGTERM/SIGINT
+								// and told tailscaled to exit. This is expected, exit 0.
+								log.Print("tailscaled exited after graceful shutdown")
+								os.Exit(0)
+							default:
+								// Unexpected exit: tailscaled crashed or was killed directly.
+								// Exit non-zero to signal failure to the orchestrator.
+								exitCode := 1
+								if status.Exited() {
+									exitCode = status.ExitStatus()
+								} else if status.Signaled() {
+									log.Printf("tailscaled terminated by signal: %v", status.Signal())
+									exitCode = 128 + int(status.Signal())
+								}
+								log.Printf("tailscaled exited unexpectedly with code %d", exitCode)
+								if exitCode == 0 {
+									// If tailscaled exited cleanly on its own, this is still unexpected.
+									// Force non-zero to ensure the container orchestrator restarts us.
+									exitCode = 1
+								}
+								os.Exit(exitCode)
+							}
 						}
 					}
 					wg.Add(1)
