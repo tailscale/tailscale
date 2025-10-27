@@ -19,9 +19,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/persist"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
 )
@@ -656,14 +654,6 @@ func (pm *profileManager) loadSavedPrefs(k ipn.StateKey) (ipn.PrefsView, error) 
 		return ipn.PrefsView{}, err
 	}
 	savedPrefs := ipn.NewPrefs()
-
-	// if supported by the platform, create an empty hardware attestation key to use when deserializing
-	// to avoid type exceptions from json.Unmarshaling into an interface{}.
-	hw, _ := key.NewEmptyHardwareAttestationKey()
-	savedPrefs.Persist = &persist.Persist{
-		AttestationKey: hw,
-	}
-
 	if err := ipn.PrefsFromBytes(bs, savedPrefs); err != nil {
 		return ipn.PrefsView{}, fmt.Errorf("parsing saved prefs: %v", err)
 	}
