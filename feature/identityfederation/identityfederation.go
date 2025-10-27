@@ -42,12 +42,12 @@ func resolveAuthKey(ctx context.Context, baseURL, clientID, idToken string, tags
 		baseURL = ipn.DefaultControlURL
 	}
 
-	ephemeral, preauth, err := parseOptionalAttributes(clientID)
+	strippedID, ephemeral, preauth, err := parseOptionalAttributes(clientID)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse optional config attributes: %w", err)
 	}
 
-	accessToken, err := exchangeJWTForToken(ctx, baseURL, clientID, idToken)
+	accessToken, err := exchangeJWTForToken(ctx, baseURL, strippedID, idToken)
 	if err != nil {
 		return "", fmt.Errorf("failed to exchange JWT for access token: %w", err)
 	}
@@ -79,15 +79,15 @@ func resolveAuthKey(ctx context.Context, baseURL, clientID, idToken string, tags
 	return authkey, nil
 }
 
-func parseOptionalAttributes(clientID string) (ephemeral bool, preauthorized bool, err error) {
-	_, attrs, found := strings.Cut(clientID, "?")
+func parseOptionalAttributes(clientID string) (strippedID string, ephemeral bool, preauthorized bool, err error) {
+	strippedID, attrs, found := strings.Cut(clientID, "?")
 	if !found {
-		return true, false, nil
+		return clientID, true, false, nil
 	}
 
 	parsed, err := url.ParseQuery(attrs)
 	if err != nil {
-		return false, false, fmt.Errorf("failed to parse optional config attributes: %w", err)
+		return "", false, false, fmt.Errorf("failed to parse optional config attributes: %w", err)
 	}
 
 	for k := range parsed {
@@ -97,11 +97,14 @@ func parseOptionalAttributes(clientID string) (ephemeral bool, preauthorized boo
 		case "preauthorized":
 			preauthorized, err = strconv.ParseBool(parsed.Get(k))
 		default:
-			return false, false, fmt.Errorf("unknown optional config attribute %q", k)
+			return "", false, false, fmt.Errorf("unknown optional config attribute %q", k)
 		}
 	}
+	if err != nil {
+		return "", false, false, err
+	}
 
-	return ephemeral, preauthorized, err
+	return strippedID, ephemeral, preauthorized, nil
 }
 
 // exchangeJWTForToken exchanges a JWT for a Tailscale access token.

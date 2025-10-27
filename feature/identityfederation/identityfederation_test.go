@@ -87,6 +87,7 @@ func TestParseOptionalAttributes(t *testing.T) {
 	tests := []struct {
 		name          string
 		clientID      string
+		wantClientID  string
 		wantEphemeral bool
 		wantPreauth   bool
 		wantErr       string
@@ -94,6 +95,7 @@ func TestParseOptionalAttributes(t *testing.T) {
 		{
 			name:          "default values",
 			clientID:      "client-123",
+			wantClientID:  "client-123",
 			wantEphemeral: true,
 			wantPreauth:   false,
 			wantErr:       "",
@@ -101,6 +103,7 @@ func TestParseOptionalAttributes(t *testing.T) {
 		{
 			name:          "custom values",
 			clientID:      "client-123?ephemeral=false&preauthorized=true",
+			wantClientID:  "client-123",
 			wantEphemeral: false,
 			wantPreauth:   true,
 			wantErr:       "",
@@ -108,6 +111,7 @@ func TestParseOptionalAttributes(t *testing.T) {
 		{
 			name:          "unknown attribute",
 			clientID:      "client-123?unknown=value",
+			wantClientID:  "",
 			wantEphemeral: false,
 			wantPreauth:   false,
 			wantErr:       `unknown optional config attribute "unknown"`,
@@ -115,6 +119,7 @@ func TestParseOptionalAttributes(t *testing.T) {
 		{
 			name:          "invalid value",
 			clientID:      "client-123?ephemeral=invalid",
+			wantClientID:  "",
 			wantEphemeral: false,
 			wantPreauth:   false,
 			wantErr:       `strconv.ParseBool: parsing "invalid": invalid syntax`,
@@ -123,7 +128,7 @@ func TestParseOptionalAttributes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ephemeral, preauth, err := parseOptionalAttributes(tt.clientID)
+			strippedID, ephemeral, preauth, err := parseOptionalAttributes(tt.clientID)
 			if tt.wantErr != "" {
 				if err == nil {
 					t.Errorf("parseOptionalAttributes() error = nil, want %q", tt.wantErr)
@@ -137,6 +142,9 @@ func TestParseOptionalAttributes(t *testing.T) {
 					t.Errorf("parseOptionalAttributes() error = %v, want nil", err)
 					return
 				}
+			}
+			if strippedID != tt.wantClientID {
+				t.Errorf("parseOptionalAttributes() strippedID = %v, want %v", strippedID, tt.wantClientID)
 			}
 			if ephemeral != tt.wantEphemeral {
 				t.Errorf("parseOptionalAttributes() ephemeral = %v, want %v", ephemeral, tt.wantEphemeral)
