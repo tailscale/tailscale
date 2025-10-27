@@ -237,7 +237,7 @@ func connIsLocalAdmin(logf logger.Logf, ci *ipnauth.ConnIdentity, operatorUID st
 		// This is a standalone tailscaled setup, use the same logic as on
 		// Linux.
 		fallthrough
-	case "linux":
+	case "linux", "solaris", "illumos":
 		if !buildfeatures.HasUnixSocketIdentity {
 			// Everybody is an admin if support for unix socket identities
 			// is omitted for the build.
