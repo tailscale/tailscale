@@ -1055,7 +1055,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		tid := cfg.NetworkLogging.DomainID
 		logExitFlowEnabled := cfg.NetworkLogging.LogExitFlowEnabled
 		e.logf("wgengine: Reconfig: starting up network logger (node:%s tailnet:%s)", nid.Public(), tid.Public())
-		if err := e.networkLogger.Startup(cfg.NodeID, nid, tid, e.tundev, e.magicConn, e.netMon, e.health, e.eventBus, logExitFlowEnabled); err != nil {
+		if err := e.networkLogger.Startup(e.logf, nm, nid, tid, e.tundev, e.magicConn, e.netMon, e.health, e.eventBus, logExitFlowEnabled); err != nil {
 			e.logf("wgengine: Reconfig: error starting up network logger: %v", err)
 		}
 		e.networkLogger.ReconfigRoutes(routerCfg)
@@ -1352,6 +1352,9 @@ func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.mu.Lock()
 	e.netMap = nm
 	e.mu.Unlock()
+	if e.networkLogger.Running() {
+		e.networkLogger.ReconfigNetworkMap(nm)
+	}
 }
 
 func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
