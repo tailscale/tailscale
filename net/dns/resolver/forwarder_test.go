@@ -112,6 +112,11 @@ func TestResolversWithDelays(t *testing.T) {
 			in:   q("https://dns.controld.com/hyq3ipr2ct"),
 			want: o("https://dns.controld.com/hyq3ipr2ct"),
 		},
+		{
+			name: "arbitrary-doh-input",
+			in:   q("https://example.com/dns-query"),
+			want: o("https://example.com/dns-query"),
+		},
 	}
 
 	for _, tt := range tests {

@@ -45,7 +45,7 @@ func runDNSQuery(ctx context.Context, args []string) error {
 	}
 	fmt.Printf("DNS query for %q (%s) using internal resolver:\n", name, queryType)
 	fmt.Println()
-	bytes, resolvers, err := localClient.QueryDNS(ctx, name, queryType)
+	bytesList, resolvers, err := localClient.QueryFullDNS(ctx, name, queryType)
 	if err != nil {
 		fmt.Printf("failed to query DNS: %v\n", err)
 		return nil
@@ -60,37 +60,51 @@ func runDNSQuery(ctx context.Context, args []string) error {
 		}
 	}
 	fmt.Println()
-	var p dnsmessage.Parser
-	header, err := p.Start(bytes)
-	if err != nil {
-		fmt.Printf("failed to parse DNS response: %v\n", err)
-		return err
-	}
-	fmt.Printf("Response code: %v\n", header.RCode.String())
-	fmt.Println()
-	p.SkipAllQuestions()
-	if header.RCode != dnsmessage.RCodeSuccess {
-		fmt.Println("No answers were returned.")
-		return nil
-	}
-	answers, err := p.AllAnswers()
-	if err != nil {
-		fmt.Printf("failed to parse DNS answers: %v\n", err)
-		return err
-	}
-	if len(answers) == 0 {
-		fmt.Println("  (no answers found)")
+	for idx, bytes := range bytesList {
+		var p dnsmessage.Parser
+		if len(resolvers) >= 1 {
+			fmt.Printf("Response #%d (Resolver %v):\n", idx+1, makeResolverString(*resolvers[idx]))
+		}
+		if bytes == nil || len(bytes) == 0 {
+			fmt.Println("  (no response)")
+			fmt.Println()
+			continue
+		}
+
+		header, err := p.Start(bytes)
+
+		if err != nil {
+			fmt.Printf("failed to parse DNS response: %v\n", err)
+			fmt.Println()
+			continue
+		}
+		fmt.Printf("Response code: %v\n", header.RCode.String())
+		fmt.Println()
+		p.SkipAllQuestions()
+		if header.RCode != dnsmessage.RCodeSuccess {
+			fmt.Println("No answers were returned.")
+			return nil
+		}
+		answers, err := p.AllAnswers()
+		if err != nil {
+			fmt.Printf("failed to parse DNS answers: %v\n", err)
+			return err
+		}
+		if len(answers) == 0 {
+			fmt.Println("  (no answers found)")
+		}
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "Name\tTTL\tClass\tType\tBody")
+		fmt.Fprintln(w, "----\t---\t-----\t----\t----")
+		for _, a := range answers {
+			fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\n", a.Header.Name.String(), a.Header.TTL, a.Header.Class.String(), a.Header.Type.String(), makeAnswerBody(a))
+		}
+		w.Flush()
+
+		fmt.Println()
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "Name\tTTL\tClass\tType\tBody")
-	fmt.Fprintln(w, "----\t---\t-----\t----\t----")
-	for _, a := range answers {
-		fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\n", a.Header.Name.String(), a.Header.TTL, a.Header.Class.String(), a.Header.Type.String(), makeAnswerBody(a))
-	}
-	w.Flush()
-
-	fmt.Println()
 	return nil
 }
 

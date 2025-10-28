@@ -905,6 +905,21 @@ func (lc *Client) QueryDNS(ctx context.Context, name string, queryType string) (
 	return res.Bytes, res.Resolvers, nil
 }
 
+func (lc *Client) QueryFullDNS(ctx context.Context, name string, queryType string) (bytes [][]byte, resolvers []*dnstype.Resolver, err error) {
+	if !buildfeatures.HasDNS {
+		return nil, nil, feature.ErrUnavailable
+	}
+	body, err := lc.get200(ctx, fmt.Sprintf("/localapi/v0/dns-query?name=%s&type=%s&full=1", url.QueryEscape(name), queryType))
+	if err != nil {
+		return nil, nil, err
+	}
+	var res apitype.DNSFullQueryResponse
+	if err := json.Unmarshal(body, &res); err != nil {
+		return nil, nil, fmt.Errorf("invalid query response: %w", err)
+	}
+	return res.Results, res.Resolvers, nil
+}
+
 // StartLoginInteractive starts an interactive login.
 func (lc *Client) StartLoginInteractive(ctx context.Context) error {
 	_, err := lc.send(ctx, "POST", "/localapi/v0/login-interactive", http.StatusNoContent, nil)

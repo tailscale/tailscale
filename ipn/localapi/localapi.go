@@ -1590,6 +1590,7 @@ func (h *Handler) serveDNSQuery(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	name := q.Get("name")
 	queryType := q.Get("type")
+	full := q.Get("full") != ""
 	qt := dnsmessage.TypeA
 	if queryType != "" {
 		t, err := dnsMessageTypeForString(queryType)
@@ -1600,17 +1601,31 @@ func (h *Handler) serveDNSQuery(w http.ResponseWriter, r *http.Request) {
 		qt = t
 	}
 
-	res, rrs, err := h.b.QueryDNS(name, qt)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	if full {
+		res, rrs, err := h.b.QueryDNS(name, qt, true)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(&apitype.DNSQueryResponse{
-		Bytes:     res,
-		Resolvers: rrs,
-	})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(&apitype.DNSFullQueryResponse{
+			Results:   res,
+			Resolvers: rrs,
+		})
+	} else {
+		res, rrs, err := h.b.QueryDNS(name, qt, false)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(&apitype.DNSQueryResponse{
+			Bytes:     res[0],
+			Resolvers: rrs,
+		})
+	}
 }
 
 // dnsMessageTypeForString returns the dnsmessage.Type for the given string.
