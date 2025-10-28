@@ -4,7 +4,7 @@
 package tstime
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"testing"
 	"time"
 
@@ -40,13 +40,13 @@ func TestParseDuration(t *testing.T) {
 
 func TestGoDuration(t *testing.T) {
 	wantDur := GoDuration{time.Hour + time.Minute + time.Second + time.Millisecond + time.Microsecond + time.Nanosecond}
-	gotJSON := string(must.Get(json.Marshal(wantDur)))
+	gotJSON := string(must.Get(jsonv1.Marshal(wantDur)))
 	wantJSON := `"1h1m1.001001001s"`
 	if gotJSON != wantJSON {
 		t.Errorf("json.Marshal(%v) = %s, want %s", wantDur, gotJSON, wantJSON)
 	}
 	var gotDur GoDuration
-	must.Do(json.Unmarshal([]byte(wantJSON), &gotDur))
+	must.Do(jsonv1.Unmarshal([]byte(wantJSON), &gotDur))
 	if gotDur != wantDur {
 		t.Errorf("json.Unmarshal(%s) = %v, want %v", wantJSON, gotDur, wantDur)
 	}

@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"net/netip"
@@ -67,7 +67,7 @@ func TestServicePGReconciler(t *testing.T) {
 		}
 
 		cfgs := ingressservices.Configs{}
-		if err := json.Unmarshal(cm.BinaryData[ingressservices.IngressConfigKey], &cfgs); err != nil {
+		if err := jsonv1.Unmarshal(cm.BinaryData[ingressservices.IngressConfigKey], &cfgs); err != nil {
 			t.Fatalf("unmarshaling serve config: %v", err)
 		}
 
@@ -368,7 +368,7 @@ func updateIngressConfigSecret(t *testing.T, fc client.Client, stateSecret *core
 		PodIPv4: "4.3.2.1",
 	}
 
-	icJson, err := json.Marshal(ingressStatus)
+	icJson, err := jsonv1.Marshal(ingressStatus)
 	if err != nil {
 		t.Fatalf("failed to json marshal ingress config: %s", err.Error())
 	}

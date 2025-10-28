@@ -14,7 +14,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"expvar"
 	"flag"
@@ -133,7 +133,7 @@ func loadConfig() config {
 		panic("unreachable")
 	default:
 		var cfg config
-		if err := json.Unmarshal(b, &cfg); err != nil {
+		if err := jsonv1.Unmarshal(b, &cfg); err != nil {
 			log.Fatalf("derper: config: %v", err)
 		}
 		return cfg
@@ -148,7 +148,7 @@ func writeNewConfig() config {
 	cfg := config{
 		PrivateKey: k,
 	}
-	b, err := json.MarshalIndent(cfg, "", "\t")
+	b, err := jsonv1.MarshalIndent(cfg, "", "\t")
 	if err != nil {
 		log.Fatal(err)
 	}

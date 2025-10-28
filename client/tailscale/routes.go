@@ -8,7 +8,7 @@ package tailscale
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -48,7 +48,7 @@ func (c *Client) Routes(ctx context.Context, deviceID string) (routes *Routes, e
 	}
 
 	var sr Routes
-	err = json.Unmarshal(b, &sr)
+	err = jsonv1.Unmarshal(b, &sr)
 	return &sr, err
 }
 
@@ -67,7 +67,7 @@ func (c *Client) SetRoutes(ctx context.Context, deviceID string, subnets []netip
 		}
 	}()
 	params := &postRoutesParams{Routes: subnets}
-	data, err := json.Marshal(params)
+	data, err := jsonv1.Marshal(params)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +88,7 @@ func (c *Client) SetRoutes(ctx context.Context, deviceID string, subnets []netip
 	}
 
 	var srr *Routes
-	if err := json.Unmarshal(b, &srr); err != nil {
+	if err := jsonv1.Unmarshal(b, &srr); err != nil {
 		return nil, err
 	}
 	return srr, err

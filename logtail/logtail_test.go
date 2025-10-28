@@ -6,7 +6,7 @@ package logtail
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -224,7 +224,7 @@ func TestParseAndRemoveLogLevel(t *testing.T) {
 func unmarshalOne(t *testing.T, body []byte) map[string]any {
 	t.Helper()
 	var entries []map[string]any
-	err := json.Unmarshal(body, &entries)
+	err := jsonv1.Unmarshal(body, &entries)
 	if err != nil {
 		t.Error(err)
 	}
@@ -288,7 +288,7 @@ func TestEncode(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("for %q,\n got: %#q\nwant: %#q\n", tt.in, got, tt.want)
 		}
-		if err := json.Compact(new(bytes.Buffer), buf.buf.Bytes()); err != nil {
+		if err := jsonv1.Compact(new(bytes.Buffer), buf.buf.Bytes()); err != nil {
 			t.Errorf("invalid output JSON for %q: %s", tt.in, got)
 		}
 	}

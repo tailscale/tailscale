@@ -16,7 +16,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -116,7 +116,7 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 		if !acmeDebug() {
 			return
 		}
-		j, _ := json.MarshalIndent(v, "", "\t")
+		j, _ := jsonv1.MarshalIndent(v, "", "\t")
 		log.Printf("acme %T: %s", v, j)
 	}
 

@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -314,12 +314,12 @@ func (dnsRR *dnsRecordsReconciler) updateDNSConfig(ctx context.Context, update f
 	}
 	dnsRecords := operatorutils.Records{Version: operatorutils.Alpha1Version, IP4: map[string][]string{}}
 	if cm.Data != nil && cm.Data[operatorutils.DNSRecordsCMKey] != "" {
-		if err := json.Unmarshal([]byte(cm.Data[operatorutils.DNSRecordsCMKey]), &dnsRecords); err != nil {
+		if err := jsonv1.Unmarshal([]byte(cm.Data[operatorutils.DNSRecordsCMKey]), &dnsRecords); err != nil {
 			return err
 		}
 	}
 	update(&dnsRecords)
-	dnsRecordsBs, err := json.Marshal(dnsRecords)
+	dnsRecordsBs, err := jsonv1.Marshal(dnsRecords)
 	if err != nil {
 		return fmt.Errorf("error marshalling DNS records: %w", err)
 	}

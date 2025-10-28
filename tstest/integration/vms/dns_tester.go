@@ -11,7 +11,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"flag"
 	"net"
 	"os"
@@ -49,6 +49,6 @@ func lookup(ctx context.Context, target string) error {
 		return err
 	}
 
-	json.NewEncoder(os.Stdout).Encode(hosts)
+	jsonv1.NewEncoder(os.Stdout).Encode(hosts)
 	return nil
 }

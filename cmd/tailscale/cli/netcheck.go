@@ -5,7 +5,7 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -135,9 +135,9 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 	switch netcheckArgs.format {
 	case "":
 	case "json":
-		j, err = json.MarshalIndent(report, "", "\t")
+		j, err = jsonv1.MarshalIndent(report, "", "\t")
 	case "json-line":
-		j, err = json.Marshal(report)
+		j, err = jsonv1.Marshal(report)
 	default:
 		return fmt.Errorf("unknown output format %q", netcheckArgs.format)
 	}
@@ -256,7 +256,7 @@ func prodDERPMap(ctx context.Context, httpc *http.Client) (*tailcfg.DERPMap, err
 		return nil, fmt.Errorf("fetch prodDERPMap: %v: %s", res.Status, b)
 	}
 	var derpMap tailcfg.DERPMap
-	if err = json.Unmarshal(b, &derpMap); err != nil {
+	if err = jsonv1.Unmarshal(b, &derpMap); err != nil {
 		return nil, fmt.Errorf("fetch prodDERPMap: %w", err)
 	}
 	return &derpMap, nil

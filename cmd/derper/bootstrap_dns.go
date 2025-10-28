@@ -6,7 +6,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"expvar"
 	"log"
 	"math/rand/v2"
@@ -75,7 +75,7 @@ func refreshBootstrapDNS() {
 	for _, vv := range dnsEntries.IPs {
 		slicesx.Shuffle(vv)
 	}
-	j, err := json.MarshalIndent(dnsEntries.IPs, "", "\t")
+	j, err := jsonv1.MarshalIndent(dnsEntries.IPs, "", "\t")
 	if err != nil {
 		// leave the old values in place
 		return
@@ -156,7 +156,7 @@ func handleBootstrapDNS(w http.ResponseWriter, r *http.Request) {
 			if remoteAddrMatchesPercent(r.RemoteAddr, percent) {
 				// Only return the specific query, not everything.
 				m := map[string][]net.IP{q: m.IPs[q]}
-				j, err := json.MarshalIndent(m, "", "\t")
+				j, err := jsonv1.MarshalIndent(m, "", "\t")
 				if err == nil {
 					w.Write(j)
 					return

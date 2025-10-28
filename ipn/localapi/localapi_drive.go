@@ -6,7 +6,7 @@
 package localapi
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -53,7 +53,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case httpm.PUT:
 		var share drive.Share
-		err := json.NewDecoder(r.Body).Decode(&share)
+		err := jsonv1.NewDecoder(r.Body).Decode(&share)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -105,7 +105,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case httpm.POST:
 		var names [2]string
-		err := json.NewDecoder(r.Body).Decode(&names)
+		err := jsonv1.NewDecoder(r.Body).Decode(&names)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -130,7 +130,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case httpm.GET:
 		shares := h.b.DriveGetShares()
-		err := json.NewEncoder(w).Encode(shares)
+		err := jsonv1.NewEncoder(w).Encode(shares)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

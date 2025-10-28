@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -317,7 +317,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 	existingCfg := cfgs[serviceName.String()]
 	if !reflect.DeepEqual(existingCfg, cfg) {
 		mak.Set(&cfgs, serviceName.String(), cfg)
-		cfgBytes, err := json.Marshal(cfgs)
+		cfgBytes, err := jsonv1.Marshal(cfgs)
 		if err != nil {
 			return false, fmt.Errorf("error marshaling ingress config: %w", err)
 		}
@@ -417,7 +417,7 @@ func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string,
 	}
 	logger.Infof("Removing Tailscale Service %q from ingress config for ProxyGroup %q", hostname, pgName)
 	delete(cfgs, serviceName.String())
-	cfgBytes, err := json.Marshal(cfgs)
+	cfgBytes, err := jsonv1.Marshal(cfgs)
 	if err != nil {
 		return false, fmt.Errorf("error marshaling ingress config: %w", err)
 	}
@@ -470,7 +470,7 @@ func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 	}
 
 	if ingressConfigChanged {
-		configBytes, err := json.Marshal(config)
+		configBytes, err := jsonv1.Marshal(config)
 		if err != nil {
 			return false, fmt.Errorf("marshaling serve config: %w", err)
 		}
@@ -573,7 +573,7 @@ func cleanupTailscaleService(ctx context.Context, tsClient tsClient, name tailcf
 	}
 	o.OwnerRefs = slices.Delete(o.OwnerRefs, ix, ix+1)
 	logger.Infof("Updating Tailscale Service %q", name)
-	json, err := json.Marshal(o)
+	json, err := jsonv1.Marshal(o)
 	if err != nil {
 		return false, fmt.Errorf("error marshalling updated Tailscale Service owner reference: %w", err)
 	}
@@ -606,7 +606,7 @@ func (a *HAServiceReconciler) backendRoutesSetup(ctx context.Context, serviceNam
 	}
 	gotCfgB := secret.Data[ingressservices.IngressConfigKey]
 	var gotCfgs ingressservices.Status
-	if err := json.Unmarshal(gotCfgB, &gotCfgs); err != nil {
+	if err := jsonv1.Unmarshal(gotCfgB, &gotCfgs); err != nil {
 		return false, fmt.Errorf("error unmarshalling ingress config: %w", err)
 	}
 	statusUpToDate, err := isCurrentStatus(gotCfgs, pod, logger)
@@ -668,7 +668,7 @@ func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 		var updated bool
 		for fileName, confB := range secret.Data {
 			var conf ipn.ConfigVAlpha
-			if err := json.Unmarshal(confB, &conf); err != nil {
+			if err := jsonv1.Unmarshal(confB, &conf); err != nil {
 				return fmt.Errorf("error unmarshalling ProxyGroup config: %w", err)
 			}
 
@@ -701,7 +701,7 @@ func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 
 				conf.AdvertiseServices = append(conf.AdvertiseServices, serviceName.String())
 			}
-			confB, err := json.Marshal(conf)
+			confB, err := jsonv1.Marshal(conf)
 			if err != nil {
 				return fmt.Errorf("error marshalling ProxyGroup config: %w", err)
 			}
@@ -770,7 +770,7 @@ func ingressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, t
 	}
 	cfgs = ingressservices.Configs{}
 	if len(cm.BinaryData[ingressservices.IngressConfigKey]) != 0 {
-		if err := json.Unmarshal(cm.BinaryData[ingressservices.IngressConfigKey], &cfgs); err != nil {
+		if err := jsonv1.Unmarshal(cm.BinaryData[ingressservices.IngressConfigKey], &cfgs); err != nil {
 			return nil, nil, fmt.Errorf("error unmarshaling ingress services config %v: %w", cm.BinaryData[ingressservices.IngressConfigKey], err)
 		}
 	}

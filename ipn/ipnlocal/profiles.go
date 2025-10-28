@@ -6,7 +6,7 @@ package ipnlocal
 import (
 	"cmp"
 	"crypto/rand"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
@@ -788,7 +788,7 @@ func (pm *profileManager) DeleteAllProfilesForUser() error {
 }
 
 func (pm *profileManager) writeKnownProfiles() error {
-	b, err := json.Marshal(pm.knownProfiles)
+	b, err := jsonv1.Marshal(pm.knownProfiles)
 	if err != nil {
 		return err
 	}
@@ -884,7 +884,7 @@ func readKnownProfiles(store ipn.StateStore) (map[ipn.ProfileID]ipn.LoginProfile
 	prfB, err := store.ReadState(ipn.KnownProfilesStateKey)
 	switch err {
 	case nil:
-		if err := json.Unmarshal(prfB, &knownProfiles); err != nil {
+		if err := jsonv1.Unmarshal(prfB, &knownProfiles); err != nil {
 			return nil, fmt.Errorf("unmarshaling known profiles: %w", err)
 		}
 	case ipn.ErrStateNotExist:

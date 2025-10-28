@@ -6,7 +6,7 @@ package derp
 import (
 	"bufio"
 	"encoding/binary"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -154,7 +154,7 @@ func (c *Client) parseServerInfo(b []byte) (*ServerInfo, error) {
 		return nil, fmt.Errorf("failed to open naclbox from server key %s", c.serverKey)
 	}
 	info := new(ServerInfo)
-	if err := json.Unmarshal(msg, info); err != nil {
+	if err := jsonv1.Unmarshal(msg, info); err != nil {
 		return nil, fmt.Errorf("invalid JSON: %v", err)
 	}
 	return info, nil
@@ -193,7 +193,7 @@ func (c *ClientInfo) Equal(other *ClientInfo) bool {
 }
 
 func (c *Client) sendClientKey() error {
-	msg, err := json.Marshal(ClientInfo{
+	msg, err := jsonv1.Marshal(ClientInfo{
 		Version:     ProtocolVersion,
 		MeshKey:     c.meshKey,
 		CanAckPings: c.canAckPings,

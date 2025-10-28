@@ -12,7 +12,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1207,7 +1207,7 @@ func latestPackages(track string) (*trackPackages, error) {
 	}
 	defer res.Body.Close()
 	var latest trackPackages
-	if err := json.NewDecoder(res.Body).Decode(&latest); err != nil {
+	if err := jsonv1.NewDecoder(res.Body).Decode(&latest); err != nil {
 		return nil, fmt.Errorf("decoding JSON: %v: %w", res.Status, err)
 	}
 	return &latest, nil

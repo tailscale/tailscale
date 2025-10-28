@@ -6,7 +6,7 @@
 package main
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -61,7 +61,7 @@ func runBuild() {
 // which are awkward if we're running with a different cwd at serving time).
 func fixEsbuildMetadataPaths(metadataStr string) ([]byte, error) {
 	var metadata EsbuildMetadata
-	if err := json.Unmarshal([]byte(metadataStr), &metadata); err != nil {
+	if err := jsonv1.Unmarshal([]byte(metadataStr), &metadata); err != nil {
 		return nil, fmt.Errorf("Cannot parse metadata: %w", err)
 	}
 	distAbsPath, err := filepath.Abs(*distDir)
@@ -80,7 +80,7 @@ func fixEsbuildMetadataPaths(metadataStr string) ([]byte, error) {
 		delete(metadata.Outputs, outputPath)
 		metadata.Outputs[outputRelPath] = output
 	}
-	return json.Marshal(metadata)
+	return jsonv1.Marshal(metadata)
 }
 
 func precompressDist(fastCompression bool) error {

@@ -7,7 +7,7 @@ package conffile
 
 import (
 	"bytes"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"os"
 	"runtime"
@@ -75,7 +75,7 @@ func Load(path string) (*Config, error) {
 	var ver struct {
 		Version string `json:"version"`
 	}
-	if err := json.Unmarshal(c.Std, &ver); err != nil {
+	if err := jsonv1.Unmarshal(c.Std, &ver); err != nil {
 		if !buildfeatures.HasHuJSONConf {
 			return nil, fmt.Errorf("error parsing config file %s, which must be valid standard JSON: %w", path, err)
 		}
@@ -90,7 +90,7 @@ func Load(path string) (*Config, error) {
 	}
 	c.Version = ver.Version
 
-	jd := json.NewDecoder(bytes.NewReader(c.Std))
+	jd := jsonv1.NewDecoder(bytes.NewReader(c.Std))
 	jd.DisallowUnknownFields()
 	err = jd.Decode(&c.Parsed)
 	if err != nil {

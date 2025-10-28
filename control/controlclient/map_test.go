@@ -6,7 +6,7 @@ package controlclient
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"maps"
 	"net/netip"
@@ -524,7 +524,7 @@ func TestNetmapForResponse(t *testing.T) {
 			t.Fatal("nil Node in 1st netmap")
 		}
 		if !reflect.DeepEqual(nm1.SelfNode, wantNode) {
-			j, _ := json.Marshal(nm1.SelfNode)
+			j, _ := jsonv1.Marshal(nm1.SelfNode)
 			t.Errorf("Node mismatch in 1st netmap; got: %s", j)
 		}
 
@@ -534,7 +534,7 @@ func TestNetmapForResponse(t *testing.T) {
 			t.Fatal("nil Node in 1st netmap")
 		}
 		if !reflect.DeepEqual(nm2.SelfNode, wantNode) {
-			j, _ := json.Marshal(nm2.SelfNode)
+			j, _ := jsonv1.Marshal(nm2.SelfNode)
 			t.Errorf("Node mismatch in 2nd netmap; got: %s", j)
 		}
 	})
@@ -1002,7 +1002,7 @@ func TestPatchifyPeersChanged(t *testing.T) {
 			ms := newTestMapSession(t, nu)
 			ms.updateStateFromResponse(tt.mr0)
 			mr1 := new(tailcfg.MapResponse)
-			must.Do(json.Unmarshal(must.Get(json.Marshal(tt.mr1)), mr1))
+			must.Do(jsonv1.Unmarshal(must.Get(jsonv1.Marshal(tt.mr1)), mr1))
 			ms.patchifyPeersChanged(mr1)
 			opts := []cmp.Option{
 				cmp.Comparer(func(a, b netip.AddrPort) bool { return a == b }),
@@ -1450,7 +1450,7 @@ func TestNetmapForMapResponseForDebug(t *testing.T) {
 
 func TestLearnZstdOfKeepAlive(t *testing.T) {
 	keepAliveMsgZstd := (func() []byte {
-		msg := must.Get(json.Marshal(tailcfg.MapResponse{
+		msg := must.Get(jsonv1.Marshal(tailcfg.MapResponse{
 			KeepAlive: true,
 		}))
 		return zstdframe.AppendEncode(nil, msg, zstdframe.FastestCompression)

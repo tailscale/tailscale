@@ -5,7 +5,7 @@ package tsconsensus
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -65,7 +65,7 @@ func (m *monitor) handleFullStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
-	if err := json.NewEncoder(w).Encode(s); err != nil {
+	if err := jsonv1.NewEncoder(w).Encode(s); err != nil {
 		log.Printf("monitor: error encoding full status: %v", err)
 		return
 	}
@@ -124,7 +124,7 @@ func (m *monitor) handleNetmap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
-	encoder := json.NewEncoder(w)
+	encoder := jsonv1.NewEncoder(w)
 	encoder.SetIndent("", "\t")
 	if err := encoder.Encode(n); err != nil {
 		log.Printf("monitor: error encoding netmap: %v", err)
@@ -143,7 +143,7 @@ func (m *monitor) handleDial(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
-	err = json.Unmarshal(bs, &dialParams)
+	err = jsonv1.Unmarshal(bs, &dialParams)
 	if err != nil {
 		log.Printf("monitor: error unmarshalling json: %v", err)
 		http.Error(w, "", http.StatusBadRequest)

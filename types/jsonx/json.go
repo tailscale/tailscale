@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/go-json-experiment/json"
+	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
 )
 
@@ -122,7 +122,7 @@ func MakeInterfaceCoders[T any](valuesByName map[string]T) (c struct {
 		if err := enc.WriteToken(jsontext.String(name)); err != nil {
 			return err
 		}
-		if err := json.MarshalEncode(enc, *val); err != nil {
+		if err := jsonv2.MarshalEncode(enc, *val); err != nil {
 			return err
 		}
 		if err := enc.WriteToken(jsontext.EndObject); err != nil {
@@ -139,7 +139,7 @@ func MakeInterfaceCoders[T any](valuesByName map[string]T) (c struct {
 			*val = zero // store nil interface value for JSON null
 			return nil
 		case tok.Kind() != '{':
-			return &json.SemanticError{JSONKind: tok.Kind(), GoType: reflect.TypeFor[T]()}
+			return &jsonv2.SemanticError{JSONKind: tok.Kind(), GoType: reflect.TypeFor[T]()}
 		}
 		var v reflect.Value
 		switch tok, err := dec.ReadToken(); {
@@ -154,7 +154,7 @@ func MakeInterfaceCoders[T any](valuesByName map[string]T) (c struct {
 			}
 			v = reflect.New(t)
 		}
-		if err := json.UnmarshalDecode(dec, v.Interface()); err != nil {
+		if err := jsonv2.UnmarshalDecode(dec, v.Interface()); err != nil {
 			return err
 		}
 		*val = v.Elem().Interface().(T)

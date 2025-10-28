@@ -5,7 +5,7 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -53,7 +53,7 @@ func getBootstrapDNS(t *testing.T, q string) map[string][]net.IP {
 	}
 	var m map[string][]net.IP
 	var buf bytes.Buffer
-	if err := json.NewDecoder(io.TeeReader(res.Body, &buf)).Decode(&m); err != nil {
+	if err := jsonv1.NewDecoder(io.TeeReader(res.Body, &buf)).Decode(&m); err != nil {
 		t.Fatalf("error decoding response body %q: %v", buf.Bytes(), err)
 	}
 	return m

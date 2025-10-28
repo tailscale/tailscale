@@ -21,7 +21,7 @@ package main // import "tailscale.com/cmd/tailscaled"
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -380,7 +380,7 @@ func beFirewallKillswitch() bool {
 	// Note(maisem): when local lan access toggled, tailscaled needs to
 	// inform the firewall to let local routes through. The set of routes
 	// is passed in via stdin encoded in json.
-	dcd := json.NewDecoder(os.Stdin)
+	dcd := jsonv1.NewDecoder(os.Stdin)
 	for {
 		var routes []netip.Prefix
 		if err := dcd.Decode(&routes); err != nil {

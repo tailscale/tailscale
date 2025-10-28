@@ -5,7 +5,7 @@ package vms
 
 import (
 	_ "embed"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"log"
 
 	"github.com/tailscale/hujson"
@@ -55,7 +55,7 @@ var Distros []Distro = func() []Distro {
 	if err != nil {
 		log.Fatalf("error decoding distros: %v", err)
 	}
-	if err := json.Unmarshal(b, &result); err != nil {
+	if err := jsonv1.Unmarshal(b, &result); err != nil {
 		log.Fatalf("error decoding distros: %v", err)
 	}
 	return result

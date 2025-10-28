@@ -5,7 +5,7 @@
 package appconnectors
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"net/http"
 
 	"tailscale.com/ipn/ipnlocal"
@@ -28,12 +28,12 @@ func handleC2NAppConnectorDomainRoutesGet(b *ipnlocal.LocalBackend, w http.Respo
 	appConnector := b.AppConnector()
 	if appConnector == nil {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(res)
+		jsonv1.NewEncoder(w).Encode(res)
 		return
 	}
 
 	res.Domains = appConnector.DomainRoutes()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
+	jsonv1.NewEncoder(w).Encode(res)
 }

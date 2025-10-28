@@ -6,7 +6,7 @@ package kubestore
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -718,7 +718,7 @@ func TestNewWithClient(t *testing.T) {
 				return
 			}
 			var got map[ipn.StateKey][]byte
-			if err := json.Unmarshal(gotJSON, &got); err != nil {
+			if err := jsonv1.Unmarshal(gotJSON, &got); err != nil {
 				t.Errorf("failed to unmarshal memory store JSON: %v", err)
 				return
 			}

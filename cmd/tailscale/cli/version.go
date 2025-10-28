@@ -5,7 +5,7 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"flag"
 	"fmt"
 
@@ -69,7 +69,7 @@ func runVersion(ctx context.Context, args []string) error {
 			Meta:     m,
 			Upstream: upstreamVer,
 		}
-		e := json.NewEncoder(Stdout)
+		e := jsonv1.NewEncoder(Stdout)
 		e.SetIndent("", "\t")
 		return e.Encode(out)
 	}

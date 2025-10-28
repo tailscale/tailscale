@@ -9,7 +9,7 @@ package sockstatlog
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -208,7 +208,7 @@ func (l *Logger) poll() {
 // logEvents reads events from the event channel at logInterval and logs them to disk.
 // This method does not return.
 func (l *Logger) logEvents() {
-	enc := json.NewEncoder(l)
+	enc := jsonv1.NewEncoder(l)
 	flush := func() {
 		for {
 			select {

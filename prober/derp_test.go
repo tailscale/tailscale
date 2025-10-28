@@ -7,7 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -61,7 +61,7 @@ func TestDerpProber(t *testing.T) {
 		},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp, err := json.Marshal(dm)
+		resp, err := jsonv1.Marshal(dm)
 		if err != nil {
 			t.Fatal(err)
 		}

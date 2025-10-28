@@ -10,7 +10,7 @@ import (
 	"crypto"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -379,7 +379,7 @@ func (c *Direct) SetHostinfo(hi *tailcfg.Hostinfo) bool {
 		return false
 	}
 	c.hostinfo = hi.Clone()
-	j, _ := json.Marshal(c.hostinfo)
+	j, _ := jsonv1.Marshal(c.hostinfo)
 	c.logf("[v1] HostInfo: %s", j)
 	return true
 }
@@ -681,7 +681,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		}
 	}
 	if DevKnob.DumpRegister() {
-		j, _ := json.MarshalIndent(request, "", "\t")
+		j, _ := jsonv1.MarshalIndent(request, "", "\t")
 		c.logf("RegisterRequest: %s", j)
 	}
 
@@ -722,7 +722,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		return regen, opt.URL, nil, fmt.Errorf("register request: %v", err)
 	}
 	if DevKnob.DumpRegister() {
-		j, _ := json.MarshalIndent(resp, "", "\t")
+		j, _ := jsonv1.MarshalIndent(resp, "", "\t")
 		c.logf("RegisterResponse: %s", j)
 	}
 
@@ -1257,7 +1257,7 @@ func decode(res *http.Response, v any) error {
 	if res.StatusCode != 200 {
 		return fmt.Errorf("%d: %v", res.StatusCode, string(msg))
 	}
-	return json.Unmarshal(msg, v)
+	return jsonv1.Unmarshal(msg, v)
 }
 
 var jsonEscapedZero = []byte(`\u0000`)
@@ -1281,14 +1281,14 @@ func (sess *mapSession) decodeMsg(compressedMsg []byte, v *tailcfg.MapResponse) 
 
 	if DevKnob.DumpNetMaps() {
 		var buf bytes.Buffer
-		json.Indent(&buf, b, "", "    ")
+		jsonv1.Indent(&buf, b, "", "    ")
 		log.Printf("MapResponse: %s", buf.Bytes())
 	}
 
 	if bytes.Contains(b, jsonEscapedZero) {
 		log.Printf("[unexpected] zero byte in controlclient.Direct.decodeMsg into %T: %q", v, b)
 	}
-	if err := json.Unmarshal(b, v); err != nil {
+	if err := jsonv1.Unmarshal(b, v); err != nil {
 		return fmt.Errorf("response: %v", err)
 	}
 	if v.KeepAlive && string(b) == justKeepAliveStr {
@@ -1300,7 +1300,7 @@ func (sess *mapSession) decodeMsg(compressedMsg []byte, v *tailcfg.MapResponse) 
 // encode JSON encodes v as JSON, logging tailcfg.MapRequest values if
 // debugMap is set.
 func encode(v any) ([]byte, error) {
-	b, err := json.Marshal(v)
+	b, err := jsonv1.Marshal(v)
 	if err != nil {
 		return nil, err
 	}
@@ -1331,7 +1331,7 @@ func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string
 		return nil, fmt.Errorf("fetch control key: %v", res.Status)
 	}
 	var out tailcfg.OverTLSPublicKeyResponse
-	jsonErr := json.Unmarshal(b, &out)
+	jsonErr := jsonv1.Unmarshal(b, &out)
 	if jsonErr == nil {
 		return &out, nil
 	}
@@ -1568,7 +1568,7 @@ func (c *Direct) setDNSNoise(ctx context.Context, req *tailcfg.SetDNSRequest) er
 		return fmt.Errorf("set-dns response: %v, %.200s", res.Status, strings.TrimSpace(string(msg)))
 	}
 	var setDNSRes tailcfg.SetDNSResponse
-	if err := json.NewDecoder(res.Body).Decode(&setDNSRes); err != nil {
+	if err := jsonv1.NewDecoder(res.Body).Decode(&setDNSRes); err != nil {
 		c.logf("error decoding SetDNSResponse: %v", err)
 		return fmt.Errorf("set-dns-response: %w", err)
 	}
@@ -1635,7 +1635,7 @@ func postPingResult(start time.Time, logf logger.Logf, c *http.Client, pr *tailc
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	jsonPingRes, err := json.Marshal(res)
+	jsonPingRes, err := jsonv1.Marshal(res)
 	if err != nil {
 		return err
 	}

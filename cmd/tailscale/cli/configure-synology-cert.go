@@ -7,7 +7,7 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -153,7 +153,7 @@ func listCerts(ctx context.Context, c synoAPICaller) ([]certificateInfo, error) 
 	var payload struct {
 		Certificates []certificateInfo `json:"certificates"`
 	}
-	if err := json.Unmarshal(rawData, &payload); err != nil {
+	if err := jsonv1.Unmarshal(rawData, &payload); err != nil {
 		return nil, fmt.Errorf("decoding certificate list response payload: %w", err)
 	}
 
@@ -179,7 +179,7 @@ func uploadCert(ctx context.Context, c synoAPICaller, certFile, keyFile string, 
 	var payload struct {
 		NewID string `json:"id"`
 	}
-	if err := json.Unmarshal(rawData, &payload); err != nil {
+	if err := jsonv1.Unmarshal(rawData, &payload); err != nil {
 		return fmt.Errorf("decoding certificate upload response payload: %w", err)
 	}
 	log.Printf("Tailnet Certificate uploaded with ID %q.", payload.NewID)
@@ -189,13 +189,13 @@ func uploadCert(ctx context.Context, c synoAPICaller, certFile, keyFile string, 
 }
 
 type synoAPICaller interface {
-	Call(context.Context, string, string, map[string]string) (json.RawMessage, error)
+	Call(context.Context, string, string, map[string]string) (jsonv1.RawMessage, error)
 }
 
 type apiResponse struct {
-	Success bool            `json:"success"`
-	Error   *apiError       `json:"error,omitempty"`
-	Data    json.RawMessage `json:"data"`
+	Success bool              `json:"success"`
+	Error   *apiError         `json:"error,omitempty"`
+	Data    jsonv1.RawMessage `json:"data"`
 }
 
 type apiError struct {
@@ -206,7 +206,7 @@ type apiError struct {
 // synowebapiCommand implements synoAPICaller using the /usr/syno/bin/synowebapi binary. Must be run as root.
 type synowebapiCommand struct{}
 
-func (s synowebapiCommand) Call(ctx context.Context, api, method string, params map[string]string) (json.RawMessage, error) {
+func (s synowebapiCommand) Call(ctx context.Context, api, method string, params map[string]string) (jsonv1.RawMessage, error) {
 	args := []string{"--exec", fmt.Sprintf("api=%s", api), fmt.Sprintf("method=%s", method)}
 
 	for k, v := range params {
@@ -219,7 +219,7 @@ func (s synowebapiCommand) Call(ctx context.Context, api, method string, params 
 	}
 
 	var payload apiResponse
-	if err := json.Unmarshal(out, &payload); err != nil {
+	if err := jsonv1.Unmarshal(out, &payload); err != nil {
 		return nil, fmt.Errorf("decoding response json from %q method of %q API: %w", method, api, err)
 	}
 

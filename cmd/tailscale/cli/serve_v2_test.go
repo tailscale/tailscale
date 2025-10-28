@@ -6,7 +6,7 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/netip"
 	"os"
@@ -966,8 +966,8 @@ func TestServeDevConfigMutations(t *testing.T) {
 					got = lc.config
 				}
 				if !reflect.DeepEqual(got, st.want) {
-					gotbts, _ := json.MarshalIndent(got, "", "\t")
-					wantbts, _ := json.MarshalIndent(st.want, "", "\t")
+					gotbts, _ := jsonv1.MarshalIndent(got, "", "\t")
+					wantbts, _ := jsonv1.MarshalIndent(st.want, "", "\t")
 					t.Fatalf("step: %d, cmd: %v, diff:\n%s", i, st.command, cmp.Diff(string(gotbts), string(wantbts)))
 
 				}
@@ -1484,7 +1484,7 @@ func TestMessageForPort(t *testing.T) {
 			netip.MustParseAddr("fd7a:115c:a1e0:ab12:4843:cd96:6565:6565"),
 		},
 	}
-	svcIPMapJSON, _ := json.Marshal(svcIPMap)
+	svcIPMapJSON, _ := jsonv1.Marshal(svcIPMap)
 	svcIPMapJSONRawMSG := tailcfg.RawMessage(svcIPMapJSON)
 
 	tests := []struct {

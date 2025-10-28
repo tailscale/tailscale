@@ -5,7 +5,7 @@ package speedtest
 
 import (
 	"crypto/rand"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -42,9 +42,9 @@ func handleConnection(conn net.Conn) error {
 	defer conn.Close()
 	var conf config
 
-	decoder := json.NewDecoder(conn)
+	decoder := jsonv1.NewDecoder(conn)
 	err := decoder.Decode(&conf)
-	encoder := json.NewEncoder(conn)
+	encoder := jsonv1.NewEncoder(conn)
 
 	// Both return and encode errors that occurred before the test started.
 	if err != nil {

@@ -6,7 +6,7 @@ package web
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -796,7 +796,7 @@ func TestServeAuth(t *testing.T) {
 			}
 			var wantResp string
 			if tt.wantResp != nil {
-				b, _ := json.Marshal(tt.wantResp)
+				b, _ := jsonv1.Marshal(tt.wantResp)
 				wantResp = string(b)
 			}
 			if diff := cmp.Diff(gotResp, string(wantResp)); diff != "" {
@@ -1458,7 +1458,7 @@ func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self fu
 			}
 
 			var metricNames []metricName
-			if err := json.NewDecoder(r.Body).Decode(&metricNames); err != nil {
+			if err := jsonv1.NewDecoder(r.Body).Decode(&metricNames); err != nil {
 				http.Error(w, "invalid JSON body", http.StatusBadRequest)
 				return
 			}

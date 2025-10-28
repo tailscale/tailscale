@@ -11,7 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -7158,7 +7158,7 @@ func (b *LocalBackend) storeRouteInfo(ri appctype.RouteInfo) error {
 		return nil
 	}
 	key := namespaceKeyForCurrentProfile(b.pm, routeInfoStateStoreKey)
-	bs, err := json.Marshal(ri)
+	bs, err := jsonv1.Marshal(ri)
 	if err != nil {
 		return err
 	}
@@ -7178,7 +7178,7 @@ func (b *LocalBackend) readRouteInfoLocked() (*appctype.RouteInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(bs, ri); err != nil {
+	if err := jsonv1.Unmarshal(bs, ri); err != nil {
 		return nil, err
 	}
 	return ri, nil
@@ -7713,7 +7713,7 @@ func (b *LocalBackend) vipServiceHash(services []*tailcfg.VIPService) string {
 	if len(services) == 0 {
 		return ""
 	}
-	buf, err := json.Marshal(services)
+	buf, err := jsonv1.Marshal(services)
 	if err != nil {
 		b.logf("vipServiceHashLocked: %v", err)
 		return ""

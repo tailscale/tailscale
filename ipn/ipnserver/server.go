@@ -8,7 +8,7 @@ package ipnserver
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -145,7 +145,7 @@ func (s *Server) serveServerStatus(w http.ResponseWriter, r *http.Request) {
 	if lb == nil {
 		res.Error = "backend not ready"
 	}
-	json.NewEncoder(w).Encode(res)
+	jsonv1.NewEncoder(w).Encode(res)
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {

@@ -4,7 +4,7 @@
 package set
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"slices"
 	"testing"
 )
@@ -128,13 +128,13 @@ func TestSetJSONRoundTrip(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
 			t.Run("strings", func(t *testing.T) {
-				buf, err := json.Marshal(tt.strings)
+				buf, err := jsonv1.Marshal(tt.strings)
 				if err != nil {
 					t.Fatalf("json.Marshal: %v", err)
 				}
 				t.Logf("marshaled: %s", buf)
 				var s Set[string]
-				if err := json.Unmarshal(buf, &s); err != nil {
+				if err := jsonv1.Unmarshal(buf, &s); err != nil {
 					t.Fatalf("json.Unmarshal: %v", err)
 				}
 				if !s.Equal(tt.strings) {
@@ -142,13 +142,13 @@ func TestSetJSONRoundTrip(t *testing.T) {
 				}
 			})
 			t.Run("ints", func(t *testing.T) {
-				buf, err := json.Marshal(tt.ints)
+				buf, err := jsonv1.Marshal(tt.ints)
 				if err != nil {
 					t.Fatalf("json.Marshal: %v", err)
 				}
 				t.Logf("marshaled: %s", buf)
 				var s Set[int]
-				if err := json.Unmarshal(buf, &s); err != nil {
+				if err := jsonv1.Unmarshal(buf, &s); err != nil {
 					t.Fatalf("json.Unmarshal: %v", err)
 				}
 				if !s.Equal(tt.ints) {

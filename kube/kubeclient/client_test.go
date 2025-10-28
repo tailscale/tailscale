@@ -5,7 +5,7 @@ package kubeclient
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -114,7 +114,7 @@ func Test_client_Event(t *testing.T) {
 func TestReturnsKubeStatusError(t *testing.T) {
 	cl := clientForKubeHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
-		_ = json.NewEncoder(w).Encode(kubeapi.Status{Code: http.StatusForbidden, Message: "test error"})
+		_ = jsonv1.NewEncoder(w).Encode(kubeapi.Status{Code: http.StatusForbidden, Message: "test error"})
 	}))
 
 	_, err := cl.GetSecret(t.Context(), "test-secret")
@@ -185,7 +185,7 @@ func fakeKubeAPIRequest(t *testing.T, argSets []args) kubeAPIRequestFunc {
 			t.Errorf("[%d] unexpected payload (-want + got):\n%s", count, d)
 		}
 		if len(a.setOut) != 0 {
-			if err := json.Unmarshal(a.setOut, gotOut); err != nil {
+			if err := jsonv1.Unmarshal(a.setOut, gotOut); err != nil {
 				t.Fatalf("[%d] error unmarshalling output: %v", count, err)
 			}
 		}

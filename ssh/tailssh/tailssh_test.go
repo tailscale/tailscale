@@ -12,7 +12,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -461,7 +461,7 @@ func (ts *localState) DoNoiseRequest(req *http.Request) (*http.Response, error) 
 		return rec.Result(), nil
 	}
 	rec.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(rec).Encode(a); err != nil {
+	if err := jsonv1.NewEncoder(rec).Encode(a); err != nil {
 		return nil, err
 	}
 	return rec.Result(), nil
@@ -783,7 +783,7 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 
 	<-ctx.Done() // wait for recording to finish
 	var ch sessionrecording.CastHeader
-	if err := json.NewDecoder(bytes.NewReader(recording)).Decode(&ch); err != nil {
+	if err := jsonv1.NewDecoder(bytes.NewReader(recording)).Decode(&ch); err != nil {
 		t.Fatal(err)
 	}
 	if ch.SSHUser != sshUser {

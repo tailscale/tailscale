@@ -11,7 +11,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -442,10 +442,10 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var jreq []Entry
 	if len(bodyBytes) > 0 && bodyBytes[0] == '[' {
-		err = json.Unmarshal(bodyBytes, &jreq)
+		err = jsonv1.Unmarshal(bodyBytes, &jreq)
 	} else {
 		var ent Entry
-		err = json.Unmarshal(bodyBytes, &ent)
+		err = jsonv1.Unmarshal(bodyBytes, &ent)
 		jreq = append(jreq, ent)
 	}
 
@@ -1057,7 +1057,7 @@ func (n *TestNode) Status() (*ipnstate.Status, error) {
 		return nil, fmt.Errorf("running tailscale status: %v, %s", err, out)
 	}
 	st := new(ipnstate.Status)
-	if err := json.Unmarshal(out, st); err != nil {
+	if err := jsonv1.Unmarshal(out, st); err != nil {
 		return nil, fmt.Errorf("decoding tailscale status JSON: %w\njson:\n%s", err, out)
 	}
 	return st, nil

@@ -6,7 +6,7 @@
 package tailssh
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -41,7 +41,7 @@ func TestDoDropPrivileges(t *testing.T) {
 		t.Logf("in child process")
 
 		var input SubprocInput
-		if err := json.Unmarshal([]byte(v), &input); err != nil {
+		if err := jsonv1.Unmarshal([]byte(v), &input); err != nil {
 			t.Fatal(err)
 		}
 
@@ -54,7 +54,7 @@ func TestDoDropPrivileges(t *testing.T) {
 		additional, _ := syscall.Getgroups()
 
 		// Print our IDs
-		json.NewEncoder(f).Encode(SubprocOutput{
+		jsonv1.NewEncoder(f).Encode(SubprocOutput{
 			UID:              os.Getuid(),
 			GID:              os.Getgid(),
 			EUID:             os.Geteuid(),
@@ -82,7 +82,7 @@ func TestDoDropPrivileges(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		inputb, err := json.Marshal(input)
+		inputb, err := jsonv1.Marshal(input)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -156,7 +156,7 @@ func TestDoDropPrivileges(t *testing.T) {
 			})
 
 			var out SubprocOutput
-			if err := json.Unmarshal(subprocOut, &out); err != nil {
+			if err := jsonv1.Unmarshal(subprocOut, &out); err != nil {
 				t.Logf("%s", subprocOut)
 				t.Fatal(err)
 			}

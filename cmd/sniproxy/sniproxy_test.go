@@ -5,7 +5,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -144,7 +144,7 @@ func TestSNIProxyWithNetmapConfig(t *testing.T) {
 			},
 		},
 	}
-	b, err := json.Marshal(config)
+	b, err := jsonv1.Marshal(config)
 	if err != nil {
 		t.Fatal(err)
 	}

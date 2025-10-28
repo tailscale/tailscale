@@ -12,7 +12,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -325,7 +325,7 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 		// and not use b.lastServeConfJSON as that might
 		// be a Go nil value, which produces a different
 		// checksum from a JSON "null" value.
-		prevBytes, err := json.Marshal(prevConfig)
+		prevBytes, err := jsonv1.Marshal(prevConfig)
 		if err != nil {
 			return fmt.Errorf("error encoding previous config: %w", err)
 		}
@@ -338,7 +338,7 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 
 	var bs []byte
 	if config != nil {
-		j, err := json.Marshal(config)
+		j, err := jsonv1.Marshal(config)
 		if err != nil {
 			return fmt.Errorf("encoding serve config: %w", err)
 		}
@@ -956,7 +956,7 @@ func (b *LocalBackend) addAppCapabilitiesHeader(r *httputil.ProxyRequest) error 
 		}
 	}
 
-	peerCapsSerialized, err := json.Marshal(peerCapsFiltered)
+	peerCapsSerialized, err := jsonv1.Marshal(peerCapsFiltered)
 	if err != nil {
 		b.logf("serve: failed to serialize filtered PeerCapMap: %v", err)
 		return fmt.Errorf("unable to process app capabilities")
@@ -1230,7 +1230,7 @@ func handleC2NVIPServicesGet(b *LocalBackend, w http.ResponseWriter, r *http.Req
 	res.ServicesHash = b.vipServiceHash(res.VIPServices)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
+	jsonv1.NewEncoder(w).Encode(res)
 }
 
 var metricIngressCalls = clientmetric.NewCounter("peerapi_ingress")
@@ -1397,7 +1397,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 	}
 	b.lastServeConfJSON = mem.B(confj)
 	var conf ipn.ServeConfig
-	if err := json.Unmarshal(confj, &conf); err != nil {
+	if err := jsonv1.Unmarshal(confj, &conf); err != nil {
 		b.logf("invalid ServeConfig %q in StateStore: %v", confKey, err)
 		b.serveConfig = ipn.ServeConfigView{}
 		return

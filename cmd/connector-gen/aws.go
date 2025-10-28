@@ -4,7 +4,7 @@
 package main
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -40,7 +40,7 @@ func aws() {
 	defer r.Body.Close()
 
 	var aws AWSMeta
-	if err := json.NewDecoder(r.Body).Decode(&aws); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&aws); err != nil {
 		log.Fatal(err)
 	}
 

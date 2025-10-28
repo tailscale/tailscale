@@ -10,7 +10,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -288,7 +288,7 @@ func applyNewACL(ctx context.Context, client *http.Client, tailnet, apiKey, poli
 	want := http.StatusOK
 	if got != want {
 		var ate ACLGitopsTestError
-		err := json.NewDecoder(resp.Body).Decode(&ate)
+		err := jsonv1.NewDecoder(resp.Body).Decode(&ate)
 		if err != nil {
 			return err
 		}
@@ -324,7 +324,7 @@ func testNewACLs(ctx context.Context, client *http.Client, tailnet, apiKey, poli
 	defer resp.Body.Close()
 
 	var ate ACLGitopsTestError
-	err = json.NewDecoder(resp.Body).Decode(&ate)
+	err = jsonv1.NewDecoder(resp.Body).Decode(&ate)
 	if err != nil {
 		return err
 	}

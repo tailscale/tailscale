@@ -8,7 +8,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -352,7 +352,7 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 	if !reflect.DeepEqual(gotCfg, wantsCfg) {
 		l.Debugf("updating egress services ConfigMap %s", cm.Name)
 		mak.Set(cfgs, tailnetSvc, wantsCfg)
-		bs, err := json.Marshal(cfgs)
+		bs, err := jsonv1.Marshal(cfgs)
 		if err != nil {
 			return nil, false, fmt.Errorf("error marshalling egress services configs: %w", err)
 		}
@@ -485,7 +485,7 @@ func (esr *egressSvcsReconciler) ensureEgressSvcCfgDeleted(ctx context.Context, 
 		return nil
 	}
 	cfgs := &egressservices.Configs{}
-	if err := json.Unmarshal(bs, cfgs); err != nil {
+	if err := jsonv1.Unmarshal(bs, cfgs); err != nil {
 		return fmt.Errorf("error unmarshalling egress services configs")
 	}
 	tailnetSvc := tailnetSvcName(svc)
@@ -497,7 +497,7 @@ func (esr *egressSvcsReconciler) ensureEgressSvcCfgDeleted(ctx context.Context, 
 	l.Infof("before deleting config %+#v", *cfgs)
 	delete(*cfgs, tailnetSvc)
 	l.Infof("after deleting config %+#v", *cfgs)
-	bs, err := json.Marshal(cfgs)
+	bs, err := jsonv1.Marshal(cfgs)
 	if err != nil {
 		return fmt.Errorf("error marshalling egress services configs: %w", err)
 	}
@@ -665,7 +665,7 @@ func egressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, ts
 	}
 	cfgs = &egressservices.Configs{}
 	if len(cm.BinaryData[egressservices.KeyEgressServices]) != 0 {
-		if err := json.Unmarshal(cm.BinaryData[egressservices.KeyEgressServices], cfgs); err != nil {
+		if err := jsonv1.Unmarshal(cm.BinaryData[egressservices.KeyEgressServices], cfgs); err != nil {
 			return nil, nil, fmt.Errorf("error unmarshaling egress services config %v: %w", cm.BinaryData[egressservices.KeyEgressServices], err)
 		}
 	}
@@ -715,7 +715,7 @@ func svcConfigurationUpToDate(svc *corev1.Service, l *zap.SugaredLogger) bool {
 }
 
 func cfgHash(c cfg, l *zap.SugaredLogger) string {
-	bs, err := json.Marshal(c)
+	bs, err := jsonv1.Marshal(c)
 	if err != nil {
 		// Don't use l.Error as that messes up component logs with, in this case, unnecessary stack trace.
 		l.Infof("error marhsalling Config: %v", err)

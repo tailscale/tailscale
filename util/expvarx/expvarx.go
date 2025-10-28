@@ -5,7 +5,7 @@
 package expvarx
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"expvar"
 	"sync"
 	"time"
@@ -84,6 +84,6 @@ func (s *SafeFunc) Value() any {
 // String implements stringer in the same pattern as [expvar.Func], calling
 // Value and serializing the result as JSON, ignoring errors.
 func (s *SafeFunc) String() string {
-	v, _ := json.Marshal(s.Value())
+	v, _ := jsonv1.Marshal(s.Value())
 	return string(v)
 }

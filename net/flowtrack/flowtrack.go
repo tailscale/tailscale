@@ -11,7 +11,7 @@ package flowtrack
 
 import (
 	"container/list"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/netip"
 
@@ -62,7 +62,7 @@ func (t Tuple) String() string {
 }
 
 func (t Tuple) MarshalJSON() ([]byte, error) {
-	return json.Marshal(tupleOld{
+	return jsonv1.Marshal(tupleOld{
 		Proto: t.proto,
 		Src:   netip.AddrPortFrom(t.SrcAddr(), t.srcPort),
 		Dst:   netip.AddrPortFrom(t.DstAddr(), t.dstPort),
@@ -71,7 +71,7 @@ func (t Tuple) MarshalJSON() ([]byte, error) {
 
 func (t *Tuple) UnmarshalJSON(b []byte) error {
 	var ot tupleOld
-	if err := json.Unmarshal(b, &ot); err != nil {
+	if err := jsonv1.Unmarshal(b, &ot); err != nil {
 		return err
 	}
 	*t = MakeTuple(ot.Proto, ot.Src, ot.Dst)

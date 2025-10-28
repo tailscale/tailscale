@@ -5,7 +5,7 @@ package ipnauth
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 
 	"tailscale.com/client/tailscale/apitype"
@@ -100,13 +100,13 @@ func (id ClientID) String() string {
 // MarshalJSON implements [json.Marshaler].
 // It is primarily used for testing.
 func (id ClientID) MarshalJSON() ([]byte, error) {
-	return json.Marshal(id.v)
+	return jsonv1.Marshal(id.v)
 }
 
 // UnmarshalJSON implements [json.Unmarshaler].
 // It is primarily used for testing.
 func (id *ClientID) UnmarshalJSON(b []byte) error {
-	return json.Unmarshal(b, &id.v)
+	return jsonv1.Unmarshal(b, &id.v)
 }
 
 type actorWithRequestReason struct {

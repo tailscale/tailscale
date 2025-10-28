@@ -7,7 +7,7 @@ package web
 import (
 	"cmp"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -604,7 +604,7 @@ func (a *apiHandler[data]) handle(h http.HandlerFunc) {
 func (a *apiHandler[data]) handleJSON(h func(ctx context.Context, data data) error) {
 	defer a.r.Body.Close()
 	var body data
-	if err := json.NewDecoder(a.r.Body).Decode(&body); err != nil {
+	if err := jsonv1.NewDecoder(a.r.Body).Decode(&body); err != nil {
 		http.Error(a.w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1275,9 +1275,9 @@ func (s *Server) serveTailscaleUp(w http.ResponseWriter, r *http.Request) {
 
 	var opt tailscaleUpOptions
 	type mi map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&opt); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&opt); err != nil {
 		w.WriteHeader(400)
-		json.NewEncoder(w).Encode(mi{"error": err.Error()})
+		jsonv1.NewEncoder(w).Encode(mi{"error": err.Error()})
 		return
 	}
 
@@ -1287,11 +1287,11 @@ func (s *Server) serveTailscaleUp(w http.ResponseWriter, r *http.Request) {
 	s.logf("tailscaleUp = (URL %v, %v)", url != "", err)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(mi{"error": err.Error()})
+		jsonv1.NewEncoder(w).Encode(mi{"error": err.Error()})
 		return
 	}
 	if url != "" {
-		json.NewEncoder(w).Encode(mi{"url": url})
+		jsonv1.NewEncoder(w).Encode(mi{"url": url})
 	} else {
 		io.WriteString(w, "{}")
 	}
@@ -1376,7 +1376,7 @@ func enforcePrefix(prefix string, h http.HandlerFunc) http.HandlerFunc {
 
 func writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(data); err != nil {
+	if err := jsonv1.NewEncoder(w).Encode(data); err != nil {
 		w.Header().Set("Content-Type", "text/plain")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

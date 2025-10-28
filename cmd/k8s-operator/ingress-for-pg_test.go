@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"maps"
 	"reflect"
@@ -166,7 +166,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	}
 
 	cfg := &ipn.ServeConfig{}
-	if err := json.Unmarshal(cm.BinaryData[serveConfigKey], cfg); err != nil {
+	if err := jsonv1.Unmarshal(cm.BinaryData[serveConfigKey], cfg); err != nil {
 		t.Fatalf("unmarshaling serve config: %v", err)
 	}
 
@@ -215,7 +215,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	}
 
 	cfg = &ipn.ServeConfig{}
-	if err := json.Unmarshal(cm.BinaryData[serveConfigKey], cfg); err != nil {
+	if err := jsonv1.Unmarshal(cm.BinaryData[serveConfigKey], cfg); err != nil {
 		t.Fatalf("unmarshaling serve config: %v", err)
 	}
 
@@ -771,7 +771,7 @@ func verifyServeConfig(t *testing.T, fc client.Client, serviceName string, wantH
 	}
 
 	cfg := &ipn.ServeConfig{}
-	if err := json.Unmarshal(cm.BinaryData["serve-config.json"], cfg); err != nil {
+	if err := jsonv1.Unmarshal(cm.BinaryData["serve-config.json"], cfg); err != nil {
 		t.Fatalf("unmarshaling serve config: %v", err)
 	}
 
@@ -814,7 +814,7 @@ func verifyTailscaledConfig(t *testing.T, fc client.Client, pgName string, expec
 	t.Helper()
 	var expected string
 	if expectedServices != nil && len(expectedServices) > 0 {
-		expectedServicesJSON, err := json.Marshal(expectedServices)
+		expectedServicesJSON, err := jsonv1.Marshal(expectedServices)
 		if err != nil {
 			t.Fatalf("marshaling expected services: %v", err)
 		}

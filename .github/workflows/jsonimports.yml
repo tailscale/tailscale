@@ -1,0 +1,37 @@
+name: jsonimports
+
+env:
+  HOME: ${{ github.workspace }}
+
+on:
+  push:
+    branches:
+      - main
+      - "release-branch/*"
+    paths:
+      - "**.go"
+  pull_request:
+    paths:
+      - "**.go"
+
+concurrency:
+  group: ${{ github.workflow }}-$${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: [ self-hosted, linux ]
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          cache: true
+          go-version-file: go.mod
+
+      - name: Check that all Go files use the right "json" import
+        run: go run tailscale.com/cmd/jsonimports -ignore=tempfork/

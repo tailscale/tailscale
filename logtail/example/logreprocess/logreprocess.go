@@ -6,7 +6,7 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"flag"
 	"io"
 	"log"
@@ -61,7 +61,7 @@ func main() {
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		var msg Msg
-		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+		if err := jsonv1.Unmarshal(scanner.Bytes(), &msg); err != nil {
 			log.Fatalf("logreprocess of %q: %v", string(scanner.Bytes()), err)
 		}
 		var pMsg *ProcessedMsg
@@ -85,7 +85,7 @@ func main() {
 			continue // write later
 		}
 
-		b, err := json.Marshal(pMsg)
+		b, err := jsonv1.Marshal(pMsg)
 		if err != nil {
 			log.Fatal(err)
 		}

@@ -8,7 +8,7 @@ package integration
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -167,7 +167,7 @@ func TestControlKnobs(t *testing.T) {
 	}
 	t.Logf("control-knobs output:\n%s", out)
 	var m map[string]any
-	if err := json.Unmarshal(out, &m); err != nil {
+	if err := jsonv1.Unmarshal(out, &m); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := m["DisableUPnP"], true; got != want {
@@ -725,7 +725,7 @@ func TestConfigFileAuthKey(t *testing.T) {
 	n1.configFile = filepath.Join(n1.dir, "config.json")
 	authKeyFile := filepath.Join(n1.dir, "my-auth-key")
 	must.Do(os.WriteFile(authKeyFile, fmt.Appendf(nil, "%s\n", authKey), 0666))
-	must.Do(os.WriteFile(n1.configFile, must.Get(json.Marshal(ipn.ConfigVAlpha{
+	must.Do(os.WriteFile(n1.configFile, must.Get(jsonv1.Marshal(ipn.ConfigVAlpha{
 		Version:   "alpha0",
 		AuthKey:   ptr.To("file:" + authKeyFile),
 		ServerURL: ptr.To(n1.env.ControlServer.URL),
@@ -1894,7 +1894,7 @@ func TestEncryptStateMigration(t *testing.T) {
 		}
 		t.Logf("state file content:\n%s", buf)
 		var content map[string]any
-		if err := json.Unmarshal(buf, &content); err != nil {
+		if err := jsonv1.Unmarshal(buf, &content); err != nil {
 			t.Fatalf("parsing %q: %v", n.stateFile, err)
 		}
 		for _, k := range wantStateKeys {
@@ -1965,7 +1965,7 @@ func TestPeerRelayPing(t *testing.T) {
 					return fmt.Errorf("debug peer-relay-servers failed: %v", err)
 				}
 				servers := make([]string, 0)
-				err = json.Unmarshal(out, &servers)
+				err = jsonv1.Unmarshal(out, &servers)
 				if err != nil {
 					return fmt.Errorf("failed to unmarshal debug peer-relay-servers: %v", err)
 				}
@@ -2108,7 +2108,7 @@ func TestC2NDebugNetmap(t *testing.T) {
 
 		var req *http.Request
 		if cand != nil {
-			body := must.Get(json.Marshal(&tailcfg.C2NDebugNetmapRequest{Candidate: cand}))
+			body := must.Get(jsonv1.Marshal(&tailcfg.C2NDebugNetmapRequest{Candidate: cand}))
 			req = must.Get(http.NewRequestWithContext(ctx, "POST", "/debug/netmap", bytes.NewReader(body)))
 		} else {
 			req = must.Get(http.NewRequestWithContext(ctx, "GET", "/debug/netmap", nil))
@@ -2123,10 +2123,10 @@ func TestC2NDebugNetmap(t *testing.T) {
 
 		respBody := must.Get(io.ReadAll(httpResp.Body))
 		var resp tailcfg.C2NDebugNetmapResponse
-		must.Do(json.Unmarshal(respBody, &resp))
+		must.Do(jsonv1.Unmarshal(respBody, &resp))
 
 		var current netmap.NetworkMap
-		must.Do(json.Unmarshal(resp.Current, &current))
+		must.Do(jsonv1.Unmarshal(resp.Current, &current))
 
 		if !current.PrivateKey.IsZero() {
 			t.Errorf("current netmap has non-zero private key: %v", current.PrivateKey)
@@ -2134,7 +2134,7 @@ func TestC2NDebugNetmap(t *testing.T) {
 		// Check candidate netmap if we sent a map response.
 		if cand != nil {
 			var candidate netmap.NetworkMap
-			must.Do(json.Unmarshal(resp.Candidate, &candidate))
+			must.Do(jsonv1.Unmarshal(resp.Candidate, &candidate))
 			if !candidate.PrivateKey.IsZero() {
 				t.Errorf("candidate netmap has non-zero private key: %v", candidate.PrivateKey)
 			}

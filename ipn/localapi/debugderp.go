@@ -9,7 +9,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -38,7 +38,7 @@ func (h *Handler) serveDebugDERPRegion(w http.ResponseWriter, r *http.Request) {
 	}
 	var st ipnstate.DebugDERPRegionReport
 	defer func() {
-		j, _ := json.Marshal(st)
+		j, _ := jsonv1.Marshal(st)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(j)
 	}()

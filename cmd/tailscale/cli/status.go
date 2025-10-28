@@ -6,7 +6,7 @@ package cli
 import (
 	"cmp"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -94,7 +94,7 @@ func runStatus(ctx context.Context, args []string) error {
 				}
 			}
 		}
-		j, err := json.MarshalIndent(st, "", "  ")
+		j, err := jsonv1.MarshalIndent(st, "", "  ")
 		if err != nil {
 			return err
 		}

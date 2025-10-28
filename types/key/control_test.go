@@ -4,7 +4,7 @@
 package key
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"testing"
 )
 
@@ -19,7 +19,7 @@ func TestControlKey(t *testing.T) {
 	var got struct {
 		PrivateKey ControlPrivate
 	}
-	if err := json.Unmarshal([]byte(serialized), &got); err != nil {
+	if err := jsonv1.Unmarshal([]byte(serialized), &got); err != nil {
 		t.Fatalf("decoding serialized ControlPrivate: %v", err)
 	}
 
@@ -27,7 +27,7 @@ func TestControlKey(t *testing.T) {
 		t.Fatalf("Serialized ControlPrivate didn't deserialize as expected, got %v want %v", got.PrivateKey, want)
 	}
 
-	bs, err := json.Marshal(got)
+	bs, err := jsonv1.Marshal(got)
 	if err != nil {
 		t.Fatalf("json reserialization of ControlPrivate failed: %v", err)
 	}

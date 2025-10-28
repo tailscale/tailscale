@@ -8,7 +8,7 @@ package tailscale
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/http"
 
@@ -65,7 +65,7 @@ func (c *Client) dnsGETRequest(ctx context.Context, endpoint string) ([]byte, er
 
 func (c *Client) dnsPOSTRequest(ctx context.Context, endpoint string, postData any) ([]byte, error) {
 	path := c.BuildTailnetURL("dns", endpoint)
-	data, err := json.Marshal(&postData)
+	data, err := jsonv1.Marshal(&postData)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func (c *Client) DNSConfig(ctx context.Context) (cfg *apitype.DNSConfig, err err
 		return nil, err
 	}
 	var dnsResp apitype.DNSConfig
-	err = json.Unmarshal(b, &dnsResp)
+	err = jsonv1.Unmarshal(b, &dnsResp)
 	return &dnsResp, err
 }
 
@@ -119,7 +119,7 @@ func (c *Client) SetDNSConfig(ctx context.Context, cfg apitype.DNSConfig) (resp 
 	if err != nil {
 		return nil, err
 	}
-	err = json.Unmarshal(b, &dnsResp)
+	err = jsonv1.Unmarshal(b, &dnsResp)
 	return &dnsResp, err
 }
 
@@ -136,7 +136,7 @@ func (c *Client) NameServers(ctx context.Context) (nameservers []string, err err
 		return nil, err
 	}
 	var dnsResp DNSNameServers
-	err = json.Unmarshal(b, &dnsResp)
+	err = jsonv1.Unmarshal(b, &dnsResp)
 	return dnsResp.DNS, err
 }
 
@@ -157,7 +157,7 @@ func (c *Client) SetNameServers(ctx context.Context, nameservers []string) (dnsR
 	if err != nil {
 		return nil, err
 	}
-	err = json.Unmarshal(b, &dnsResp)
+	err = jsonv1.Unmarshal(b, &dnsResp)
 	return dnsResp, err
 }
 
@@ -175,7 +175,7 @@ func (c *Client) DNSPreferences(ctx context.Context) (dnsResp *DNSPreferences, e
 	if err != nil {
 		return nil, err
 	}
-	err = json.Unmarshal(b, &dnsResp)
+	err = jsonv1.Unmarshal(b, &dnsResp)
 	return dnsResp, err
 }
 
@@ -195,7 +195,7 @@ func (c *Client) SetDNSPreferences(ctx context.Context, magicDNS bool) (dnsResp 
 	if err != nil {
 		return
 	}
-	err = json.Unmarshal(b, &dnsResp)
+	err = jsonv1.Unmarshal(b, &dnsResp)
 	return dnsResp, err
 }
 
@@ -211,7 +211,7 @@ func (c *Client) SearchPaths(ctx context.Context) (searchpaths []string, err err
 		return nil, err
 	}
 	var dnsResp *DNSSearchPaths
-	err = json.Unmarshal(b, &dnsResp)
+	err = jsonv1.Unmarshal(b, &dnsResp)
 	return dnsResp.SearchPaths, err
 }
 
@@ -228,6 +228,6 @@ func (c *Client) SetSearchPaths(ctx context.Context, searchpaths []string) (newS
 		return nil, err
 	}
 	var dnsResp DNSSearchPaths
-	err = json.Unmarshal(b, &dnsResp)
+	err = jsonv1.Unmarshal(b, &dnsResp)
 	return dnsResp.SearchPaths, err
 }

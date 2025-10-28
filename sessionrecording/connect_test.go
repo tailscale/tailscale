@@ -8,7 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -78,7 +78,7 @@ func TestConnectToRecorder(t *testing.T) {
 					// Send acks for received bytes.
 					tick := time.NewTicker(time.Millisecond)
 					defer tick.Stop()
-					enc := json.NewEncoder(w)
+					enc := jsonv1.NewEncoder(w)
 				outer:
 					for {
 						select {

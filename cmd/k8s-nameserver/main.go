@@ -10,7 +10,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -240,7 +240,7 @@ func (n *nameserver) resetRecords() error {
 		return nil
 	}
 	dnsCfg := &operatorutils.Records{}
-	err = json.Unmarshal(dnsCfgBytes, dnsCfg)
+	err = jsonv1.Unmarshal(dnsCfgBytes, dnsCfg)
 	if err != nil {
 		return fmt.Errorf("error unmarshalling nameserver configuration: %v\n", err)
 	}

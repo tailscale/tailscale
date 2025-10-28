@@ -8,7 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	_ "embed"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"html/template"
@@ -41,7 +41,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		e := json.NewEncoder(os.Stdout)
+		e := jsonv1.NewEncoder(os.Stdout)
 		e.SetIndent("", "\t")
 		e.Encode(res)
 		return

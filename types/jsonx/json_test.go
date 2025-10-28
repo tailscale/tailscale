@@ -7,7 +7,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/go-json-experiment/json"
+	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/types/ptr"
@@ -46,9 +46,9 @@ func (w *InterfaceWrapper) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 }
 
 func TestInterfaceCoders(t *testing.T) {
-	var opts json.Options = json.JoinOptions(
-		json.WithMarshalers(json.MarshalToFunc(interfaceCoders.Marshal)),
-		json.WithUnmarshalers(json.UnmarshalFromFunc(interfaceCoders.Unmarshal)),
+	var opts jsonv2.Options = jsonv2.JoinOptions(
+		jsonv2.WithMarshalers(jsonv2.MarshalToFunc(interfaceCoders.Marshal)),
+		jsonv2.WithUnmarshalers(jsonv2.UnmarshalFromFunc(interfaceCoders.Unmarshal)),
 	)
 
 	errSkipMarshal := errors.New("skip marshal")
@@ -105,13 +105,13 @@ func TestInterfaceCoders(t *testing.T) {
 	}} {
 		t.Run(tt.label, func(t *testing.T) {
 			if tt.wantMarshalError != errSkipMarshal {
-				switch gotJSON, err := json.Marshal(&tt.wantVal); {
+				switch gotJSON, err := jsonv2.Marshal(&tt.wantVal); {
 				case !errors.Is(err, tt.wantMarshalError):
 					t.Fatalf("json.Marshal(%v) error = %v, want %v", tt.wantVal, err, tt.wantMarshalError)
 				case string(gotJSON) != tt.wantJSON:
 					t.Fatalf("json.Marshal(%v) = %s, want %s", tt.wantVal, gotJSON, tt.wantJSON)
 				}
-				switch gotJSON, err := json.Marshal(&tt.wantVal.Interface, opts); {
+				switch gotJSON, err := jsonv2.Marshal(&tt.wantVal.Interface, opts); {
 				case !errors.Is(err, tt.wantMarshalError):
 					t.Fatalf("json.Marshal(%v) error = %v, want %v", tt.wantVal, err, tt.wantMarshalError)
 				case string(gotJSON) != tt.wantJSON:
@@ -121,14 +121,14 @@ func TestInterfaceCoders(t *testing.T) {
 
 			if tt.wantJSON != "" {
 				gotVal := makeFiller()
-				if err := json.Unmarshal([]byte(tt.wantJSON), &gotVal); !errors.Is(err, tt.wantUnmarshalError) {
+				if err := jsonv2.Unmarshal([]byte(tt.wantJSON), &gotVal); !errors.Is(err, tt.wantUnmarshalError) {
 					t.Fatalf("json.Unmarshal(%v) error = %v, want %v", tt.wantJSON, err, tt.wantUnmarshalError)
 				}
 				if d := cmp.Diff(gotVal, tt.wantVal); d != "" {
 					t.Fatalf("json.Unmarshal(%v):\n%s", tt.wantJSON, d)
 				}
 				gotVal = makeFiller()
-				if err := json.Unmarshal([]byte(tt.wantJSON), &gotVal.Interface, opts); !errors.Is(err, tt.wantUnmarshalError) {
+				if err := jsonv2.Unmarshal([]byte(tt.wantJSON), &gotVal.Interface, opts); !errors.Is(err, tt.wantUnmarshalError) {
 					t.Fatalf("json.Unmarshal(%v) error = %v, want %v", tt.wantJSON, err, tt.wantUnmarshalError)
 				}
 				if d := cmp.Diff(gotVal, tt.wantVal); d != "" {

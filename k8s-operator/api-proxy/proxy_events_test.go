@@ -7,7 +7,7 @@ package apiproxy
 
 import (
 	"bytes"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -331,7 +331,7 @@ func TestRecordRequestAsEvent(t *testing.T) {
 				Request: sessionrecording.Request{
 					Method:          "POST",
 					Path:            "/api/v1/pods",
-					Body:            json.RawMessage(`{"foo":"bar"}`),
+					Body:            jsonv1.RawMessage(`{"foo":"bar"}`),
 					QueryParameters: url.Values{},
 				},
 				Kubernetes: sessionrecording.KubernetesRequestInfo{
@@ -523,7 +523,7 @@ func TestRecordRequestAsEvent(t *testing.T) {
 			if tt.wantEvent != nil {
 				for _, sentData := range sender.sent {
 					var got sessionrecording.Event
-					if err := json.Unmarshal(sentData, &got); err != nil {
+					if err := jsonv1.Unmarshal(sentData, &got); err != nil {
 						t.Fatalf("failed to unmarshal sent event: %v", err)
 					}
 

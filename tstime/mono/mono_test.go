@@ -4,7 +4,7 @@
 package mono
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"testing"
 	"time"
 )
@@ -19,12 +19,12 @@ func TestNow(t *testing.T) {
 
 func TestUnmarshalZero(t *testing.T) {
 	var tt time.Time
-	buf, err := json.Marshal(tt)
+	buf, err := jsonv1.Marshal(tt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var m Time
-	err = json.Unmarshal(buf, &m)
+	err = jsonv1.Unmarshal(buf, &m)
 	if err != nil {
 		t.Fatal(err)
 	}

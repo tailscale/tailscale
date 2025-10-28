@@ -5,7 +5,7 @@ package ipnlocal
 
 import (
 	"cmp"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"net/netip"
 	"reflect"
 	"testing"
@@ -354,8 +354,8 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			var log tstest.MemLogger
 			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), tt.expired, log.Logf, verOS)
 			if !reflect.DeepEqual(got, tt.want) {
-				gotj, _ := json.MarshalIndent(got, "", "\t")
-				wantj, _ := json.MarshalIndent(tt.want, "", "\t")
+				gotj, _ := jsonv1.MarshalIndent(got, "", "\t")
+				wantj, _ := jsonv1.MarshalIndent(tt.want, "", "\t")
 				t.Errorf("wrong\n got: %s\n\nwant: %s\n", gotj, wantj)
 			}
 			if got := log.String(); got != tt.wantLog {

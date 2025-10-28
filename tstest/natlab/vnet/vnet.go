@@ -16,7 +16,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -80,7 +80,7 @@ func (s *Server) PopulateDERPMapIPs() error {
 		return fmt.Errorf("tailscale debug derp-map: %v", err)
 	}
 	var dm tailcfg.DERPMap
-	if err := json.Unmarshal(out, &dm); err != nil {
+	if err := jsonv1.Unmarshal(out, &dm); err != nil {
 		return fmt.Errorf("unmarshal DERPMap: %v", err)
 	}
 	for _, r := range dm.Regions {
@@ -423,7 +423,7 @@ func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn) {
 			}
 			Text string
 		}
-		if err := json.Unmarshal(all, &logs); err != nil {
+		if err := jsonv1.Unmarshal(all, &logs); err != nil {
 			log.Printf("Logs decode error: %v", err)
 			return
 		}

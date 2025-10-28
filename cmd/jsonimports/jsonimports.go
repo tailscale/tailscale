@@ -60,8 +60,23 @@ import (
 	"tailscale.com/util/safediff"
 )
 
+type ignoreList []string
+
+func (s *ignoreList) String() string {
+	return strings.Join(*s, ",")
+}
+
+func (s *ignoreList) Set(value string) error {
+	for v := range strings.SplitSeq(value, ",") {
+		*s = append(*s, strings.TrimSpace(v))
+	}
+	return nil
+}
+
 func main() {
+	var ignore ignoreList
 	update := flag.Bool("update", false, "update all Go source files")
+	flag.Var(&ignore, "ignore", "files and directories to ignore (may be repeated)")
 	flag.Parse()
 
 	// Change working directory to Git repository root.
@@ -85,6 +100,13 @@ func main() {
 			file = strings.TrimSuffix(file, "\n")
 			if !strings.HasSuffix(file, ".go") {
 				return
+			}
+
+			// Ignore files that match the ignore prefixes.
+			for _, prefix := range ignore {
+				if strings.HasPrefix(file, prefix) {
+					return
+				}
 			}
 
 			// Format all "json" imports in the Go source file.
@@ -118,7 +140,11 @@ func main() {
 	if numDiffs > 0 && !*update {
 		fmt.Printf(`%d files with "json" imports that need formatting`+"\n", numDiffs)
 		fmt.Println("Please run:")
-		fmt.Println("\t./tool/go run tailscale.com/cmd/jsonimports -update")
+		var ignoreFlags string
+		for _, path := range ignore {
+			ignoreFlags += " -ignore=" + path
+		}
+		fmt.Println("\t./tool/go run tailscale.com/cmd/jsonimports -update" + ignoreFlags)
 		os.Exit(1)
 	}
 }

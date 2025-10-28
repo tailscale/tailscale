@@ -11,7 +11,7 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -83,7 +83,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("reading config.json: %v", err)
 	}
-	if err := json.Unmarshal(confJSON, &conf); err != nil {
+	if err := jsonv1.Unmarshal(confJSON, &conf); err != nil {
 		log.Fatalf("unmarshaling config.json: %v", err)
 	}
 	switch conf.GOARCH() {
@@ -200,7 +200,7 @@ func startImportSnapshot() (importTaskID string, err error) {
 			"Tags": []
 		}
 	*/
-	if err := json.Unmarshal(out, &resp); err != nil {
+	if err := jsonv1.Unmarshal(out, &resp); err != nil {
 		return "", fmt.Errorf("unmarshal response: %v: %s", err, out)
 	}
 	return resp.ImportTaskID, nil
@@ -244,7 +244,7 @@ func waitForImportSnapshot(importTaskID string) (snapID string, err error) {
 				} `json:"SnapshotTaskDetail"`
 			} `json:"ImportSnapshotTasks"`
 		}
-		if err := json.Unmarshal(out, &resp); err != nil {
+		if err := jsonv1.Unmarshal(out, &resp); err != nil {
 			return "", fmt.Errorf("unmarshal response: %v: %s", err, out)
 		}
 		if len(resp.ImportSnapshotTasks) > 0 {
@@ -311,7 +311,7 @@ func makeAMI(name, ebsSnapID string) (ami string, err error) {
 	var resp struct {
 		ImageID string `json:"ImageId"`
 	}
-	if err := json.Unmarshal(out, &resp); err != nil {
+	if err := jsonv1.Unmarshal(out, &resp); err != nil {
 		return "", fmt.Errorf("unmarshal response: %v: %s", err, out)
 	}
 	if resp.ImageID == "" {

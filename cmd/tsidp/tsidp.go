@@ -16,7 +16,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"encoding/pem"
 	"errors"
 	"flag"
@@ -223,7 +223,7 @@ func main() {
 
 	f, err := os.Open(clientsFilePath)
 	if err == nil {
-		if err := json.NewDecoder(f).Decode(&srv.funnelClients); err != nil {
+		if err := jsonv1.NewDecoder(f).Decode(&srv.funnelClients); err != nil {
 			log.Fatalf("could not parse %s: %v", clientsFilePath, err)
 		}
 		f.Close()
@@ -694,7 +694,7 @@ func (s *idpServer) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 
 	// Write the final result
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(userInfo); err != nil {
+	if err := jsonv1.NewEncoder(w).Encode(userInfo); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -810,14 +810,14 @@ func addClaimValue(sets map[string]map[string]struct{}, claim string, val any) {
 // Returns the merged claims map or an error if any protected claim is violated or JSON (un)marshaling fails.
 func withExtraClaims(v any, rules []capRule) (map[string]any, error) {
 	// Marshal the static struct
-	data, err := json.Marshal(v)
+	data, err := jsonv1.Marshal(v)
 	if err != nil {
 		return nil, err
 	}
 
 	// Unmarshal into a generic map
 	var claimMap map[string]any
-	if err := json.Unmarshal(data, &claimMap); err != nil {
+	if err := jsonv1.Unmarshal(data, &claimMap); err != nil {
 		return nil, err
 	}
 
@@ -993,7 +993,7 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(oidcTokenResponse{
+	if err := jsonv1.NewEncoder(w).Encode(oidcTokenResponse{
 		AccessToken: at,
 		TokenType:   "Bearer",
 		ExpiresIn:   5 * 60,
@@ -1074,7 +1074,7 @@ func (s *idpServer) serveJWKS(w http.ResponseWriter, r *http.Request) {
 	}
 	// TODO(maisem): maybe only marshal this once and reuse?
 	// TODO(maisem): implement key rotation.
-	je := json.NewEncoder(w)
+	je := jsonv1.NewEncoder(w)
 	je.SetIndent("", "  ")
 	if err := je.Encode(jose.JSONWebKeySet{
 		Keys: []jose.JSONWebKey{
@@ -1202,7 +1202,7 @@ func (s *idpServer) serveOpenIDConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	je := json.NewEncoder(w)
+	je := jsonv1.NewEncoder(w)
 	je.SetIndent("", "  ")
 	if err := je.Encode(openIDProviderMetadata{
 		AuthorizationEndpoint:            authorizeEndpoint,
@@ -1261,7 +1261,7 @@ func (s *idpServer) serveClients(w http.ResponseWriter, r *http.Request) {
 	case "DELETE":
 		s.serveDeleteClient(w, r, path)
 	case "GET":
-		json.NewEncoder(w).Encode(&funnelClient{
+		jsonv1.NewEncoder(w).Encode(&funnelClient{
 			ID:          c.ID,
 			Name:        c.Name,
 			Secret:      "",
@@ -1301,7 +1301,7 @@ func (s *idpServer) serveNewClient(w http.ResponseWriter, r *http.Request) {
 		delete(s.funnelClients, clientID)
 		return
 	}
-	json.NewEncoder(w).Encode(newClient)
+	jsonv1.NewEncoder(w).Encode(newClient)
 }
 
 func (s *idpServer) serveGetClientsList(w http.ResponseWriter, r *http.Request) {
@@ -1320,7 +1320,7 @@ func (s *idpServer) serveGetClientsList(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 	s.mu.Unlock()
-	json.NewEncoder(w).Encode(redactedClients)
+	jsonv1.NewEncoder(w).Encode(redactedClients)
 }
 
 func (s *idpServer) serveDeleteClient(w http.ResponseWriter, r *http.Request, clientID string) {
@@ -1356,7 +1356,7 @@ func (s *idpServer) serveDeleteClient(w http.ResponseWriter, r *http.Request, cl
 // otherwise uses oidc-funnel-clients.json. s.mu must be held while calling this.
 func (s *idpServer) storeFunnelClientsLocked() error {
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(s.funnelClients); err != nil {
+	if err := jsonv1.NewEncoder(&buf).Encode(s.funnelClients); err != nil {
 		return err
 	}
 
@@ -1421,7 +1421,7 @@ func (sk *signingKey) MarshalJSON() ([]byte, error) {
 		Bytes: x509.MarshalPKCS1PrivateKey(sk.k),
 	}
 	bts := pem.EncodeToMemory(&b)
-	return json.Marshal(rsaPrivateKeyJSONWrapper{
+	return jsonv1.Marshal(rsaPrivateKeyJSONWrapper{
 		Key: base64.URLEncoding.EncodeToString(bts),
 		ID:  sk.kid,
 	})
@@ -1429,7 +1429,7 @@ func (sk *signingKey) MarshalJSON() ([]byte, error) {
 
 func (sk *signingKey) UnmarshalJSON(b []byte) error {
 	var wrapper rsaPrivateKeyJSONWrapper
-	if err := json.Unmarshal(b, &wrapper); err != nil {
+	if err := jsonv1.Unmarshal(b, &wrapper); err != nil {
 		return err
 	}
 	if len(wrapper.Key) == 0 {
