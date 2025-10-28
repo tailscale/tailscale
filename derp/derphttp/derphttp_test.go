@@ -620,6 +620,9 @@ func TestURLDial(t *testing.T) {
 	}
 	netMon := netmon.NewStatic()
 	c, err := derphttp.NewClient(key.NewNode(), "https://"+hostname+"/", t.Logf, netMon)
+	if err != nil {
+		t.Errorf("NewClient: %v", err)
+	}
 	defer c.Close()
 
 	if err := c.Connect(context.Background()); err != nil {
