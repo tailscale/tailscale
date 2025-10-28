@@ -94,3 +94,13 @@ type DNSQueryResponse struct {
 	// Resolvers is the list of resolvers that the forwarder deemed able to resolve the query.
 	Resolvers []*dnstype.Resolver
 }
+
+// OptionalFeatures describes which optional features are enabled in the build.
+type OptionalFeatures struct {
+	// Features is the map of optional feature names to whether they are
+	// enabled.
+	//
+	// Disabled features may be absent from the map. (That is, false values
+	// are not guaranteed to be present.)
+	Features map[string]bool
+}
