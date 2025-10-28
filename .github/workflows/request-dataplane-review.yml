@@ -2,8 +2,6 @@ name: request-dataplane-review
 
 on:
   pull_request:
-    branches:
-      - "*"
     paths:
       - ".github/workflows/request-dataplane-review.yml"
       - "**/*derp*"
