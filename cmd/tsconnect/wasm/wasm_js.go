@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"math/rand/v2"
@@ -48,6 +49,9 @@ import (
 var ControlURL = ipn.DefaultControlURL
 
 func main() {
+	// skip portmapper check by setting test env
+	flag.Bool("test.v", true, "")
+
 	js.Global().Set("newIPN", js.FuncOf(func(this js.Value, args []js.Value) any {
 		if len(args) != 1 {
 			log.Fatal("Usage: newIPN(config)")
