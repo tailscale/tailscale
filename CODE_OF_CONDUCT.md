@@ -3,6 +3,7 @@
 ## Our Pledge
 
 We are committed to creating an open, welcoming, diverse, inclusive, healthy and respectful community.
+Unacceptable, harmful and inappropriate behavior will not be tolerated.
 
 ## Our Standards
 
@@ -16,15 +17,18 @@ Examples of behavior that contributes to a positive environment for our communit
 
 Examples of unacceptable behavior include without limitation:
 
-- The use of sexualized language or imagery, and sexual attention or advances of any kind.
-- The use of violent, intimidating or bullying language or imagery.
-- Trolling, insulting or derogatory comments, and personal or political attacks.
+- The use of language, imagery or emojis (collectively "content") that is racist, sexist, homophobic, transphobic, or otherwise harassing or discriminatory based on any protected characteristic.
+- The use of sexualized content and sexual attention or advances of any kind.
+- The use of violent, intimidating or bullying content.
+- Trolling, concern trolling, insulting or derogatory comments, and personal or political attacks.
 - Public or private harassment.
-- Publishing others' private information, such as a physical or email address, without their explicit permission.
+- Publishing others' personal information, such as a photo, physical address, email address, online profile information, or other personal information, without their explicit permission or with the intent to bully or harass the other person.
+- Posting deep fake or other AI generated content about or involving another person without the explicit permission.
 - Spamming community channels and members, such as sending repeat messages, low-effort content, or automated messages.
-- Phishing or any similar activity;
-- Distributing or promoting malware;
-- Other conduct which could reasonably be considered inappropriate in a professional setting.
+- Phishing or any similar activity.
+- Distributing or promoting malware.
+- The use of any coded or suggestive content to hide or provoke otherwise unacceptable behavior.
+- Other conduct which could reasonably be considered harmful, illegal, or inappropriate in a professional setting.
 
 Please also see the Tailscale Acceptable Use Policy, available at [tailscale.com/tailscale-aup](https://tailscale.com/tailscale-aup).
 
@@ -38,7 +42,7 @@ Please note that this community is not moderated by staff 24/7, and we do not ha
 While we strive to keep the community safe and welcoming, moderation may not be immediate at all hours.
 If you encounter any issues, report them using the appropriate channels.
 
-## Enforcement
+## Enforcement Guidelines
 
 Community leaders and moderators are responsible for clarifying and enforcing our standards of acceptable behavior and will take appropriate and fair corrective action in response to any behavior that they deem inappropriate, threatening, offensive, or harmful.
 
@@ -46,9 +50,8 @@ Community leaders and moderators have the right and responsibility to remove, ed
 Tailscale retains full discretion to take action (or not) in response to a violation of these guidelines with or without notice or liability to you.
 We will interpret our policies and resolve disputes in favor of protecting users, customers, the public, our community and our company, as a whole.
 
-## Enforcement Guidelines
-
-Community leaders will follow these Community Impact Guidelines in determining the consequences for any action they deem in violation of this Code of Conduct:
+Community leaders will follow these community enforcement guidelines in determining the consequences for any action they deem in violation of this Code of Conduct,
+and retain full discretion to apply the enforcement guidelines as necessary depending on the circumstances:
 
 ### 1. Correction
 
