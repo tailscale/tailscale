@@ -145,6 +145,15 @@
 
     nixosModules = {
       tailscale = import ./nixos/tailscaled-module.nix self;
+      # Module that disables upstream and uses this one
+      override = {
+        config,
+        pkgs,
+        ...
+      }: {
+        imports = [(import ./nixos/tailscaled-module.nix self)];
+        disabledModules = ["services/networking/tailscale.nix"];
+      };
       default = self.nixosModules.tailscale;
     };
 

@@ -17,7 +17,7 @@ self: {
 in {
   # Tailscale config options
   options.services.tailscale = {
-    enable = mkEnabledOption "Enable Tailscale service";
+    enable = mkEnableOption "Enable Tailscale service";
 
     package = mkOption {
       type = types.package;
