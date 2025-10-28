@@ -219,10 +219,20 @@ func TestServeDevConfigMutations(t *testing.T) {
 			}},
 		},
 		{
-			name: "invalid_host",
+			name: "ip_host",
+			initialState: fakeLocalServeClient{
+				SOMarkInUse: true,
+			},
 			steps: []step{{
-				command: cmd("serve --https=443 --bg http://somehost:3000"), // invalid host
-				wantErr: anyErr(),
+				command: cmd("serve --https=443 --bg http://192.168.1.1:3000"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://192.168.1.1:3000"},
+						}},
+					},
+				},
 			}},
 		},
 		{
@@ -230,6 +240,16 @@ func TestServeDevConfigMutations(t *testing.T) {
 			steps: []step{{
 				command: cmd("serve --https=443 --bg httpz://127.0.0.1"), // invalid scheme
 				wantErr: anyErr(),
+			}},
+		},
+		{
+			name: "no_scheme_remote_host_tcp",
+			initialState: fakeLocalServeClient{
+				SOMarkInUse: true,
+			},
+			steps: []step{{
+				command: cmd("serve --https=443 --bg 192.168.1.1:3000"),
+				wantErr: exactErrMsg(errHelp),
 			}},
 		},
 		{
@@ -402,14 +422,10 @@ func TestServeDevConfigMutations(t *testing.T) {
 			}},
 		},
 		{
-			name: "unknown_host_tcp",
-			steps: []step{{
-				command: cmd("serve --tls-terminated-tcp=443 --bg tcp://somehost:5432"),
-				wantErr: exactErrMsg(errHelp),
-			}},
-		},
-		{
 			name: "tcp_port_too_low",
+			initialState: fakeLocalServeClient{
+				SOMarkInUse: true,
+			},
 			steps: []step{{
 				command: cmd("serve --tls-terminated-tcp=443 --bg tcp://somehost:0"),
 				wantErr: exactErrMsg(errHelp),
@@ -417,6 +433,9 @@ func TestServeDevConfigMutations(t *testing.T) {
 		},
 		{
 			name: "tcp_port_too_high",
+			initialState: fakeLocalServeClient{
+				SOMarkInUse: true,
+			},
 			steps: []step{{
 				command: cmd("serve --tls-terminated-tcp=443 --bg tcp://somehost:65536"),
 				wantErr: exactErrMsg(errHelp),
@@ -531,6 +550,9 @@ func TestServeDevConfigMutations(t *testing.T) {
 		},
 		{
 			name: "bad_path",
+			initialState: fakeLocalServeClient{
+				SOMarkInUse: true,
+			},
 			steps: []step{{
 				command: cmd("serve --bg --https=443 bad/path"),
 				wantErr: exactErrMsg(errHelp),
@@ -831,6 +853,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					},
 					CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
 				},
+				SOMarkInUse: true,
 			},
 			steps: []step{{
 				command: cmd("serve --service=svc:foo --http=80 text:foo"),

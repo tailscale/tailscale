@@ -20,3 +20,7 @@ func control(logger.Logf, *netmon.Monitor) func(network, address string, c sysca
 func controlC(network, address string, c syscall.RawConn) error {
 	return nil
 }
+
+func UseSocketMark() bool {
+	return false
+}

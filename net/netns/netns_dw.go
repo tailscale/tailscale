@@ -25,3 +25,7 @@ func parseAddress(address string) (addr netip.Addr, err error) {
 
 	return netip.ParseAddr(host)
 }
+
+func UseSocketMark() bool {
+	return false
+}
