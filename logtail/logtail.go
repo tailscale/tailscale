@@ -124,7 +124,6 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 
 	if cfg.Bus != nil {
 		l.eventClient = cfg.Bus.Client("logtail.Logger")
-		l.changeDeltaSub = eventbus.Subscribe[netmon.ChangeDelta](l.eventClient)
 	}
 	l.SetSockstatsLabel(sockstats.LabelLogtailLogger)
 	l.compressLogs = cfg.CompressLogs
@@ -163,7 +162,6 @@ type Logger struct {
 	httpDoCalls    atomic.Int32
 	sockstatsLabel atomicSocktatsLabel
 	eventClient    *eventbus.Client
-	changeDeltaSub *eventbus.Subscriber[netmon.ChangeDelta]
 
 	procID              uint32
 	includeProcSequence bool
@@ -429,23 +427,8 @@ func (l *Logger) internetUp() bool {
 
 func (l *Logger) awaitInternetUp(ctx context.Context) {
 	if l.eventClient != nil {
-		for {
-			if l.internetUp() {
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return // give up
-			case <-l.changeDeltaSub.Done():
-				return // give up (closing down)
-			case delta := <-l.changeDeltaSub.Events():
-				if delta.New.AnyInterfaceUp() || l.internetUp() {
-					fmt.Fprintf(l.stderr, "logtail: internet back up\n")
-					return
-				}
-				fmt.Fprintf(l.stderr, "logtail: network changed, but is not up")
-			}
-		}
+		l.awaitInternetUpBus(ctx)
+		return
 	}
 	upc := make(chan bool, 1)
 	defer l.netMonitor.RegisterChangeCallback(func(delta *netmon.ChangeDelta) {
@@ -463,6 +446,24 @@ func (l *Logger) awaitInternetUp(ctx context.Context) {
 	case <-upc:
 		fmt.Fprintf(l.stderr, "logtail: internet back up\n")
 	case <-ctx.Done():
+	}
+}
+
+func (l *Logger) awaitInternetUpBus(ctx context.Context) {
+	if l.internetUp() {
+		return
+	}
+	sub := eventbus.Subscribe[netmon.ChangeDelta](l.eventClient)
+	defer sub.Close()
+	select {
+	case delta := <-sub.Events():
+		if delta.New.AnyInterfaceUp() {
+			fmt.Fprintf(l.stderr, "logtail: internet back up\n")
+			return
+		}
+		fmt.Fprintf(l.stderr, "logtail: network changed, but is not up")
+	case <-ctx.Done():
+		return
 	}
 }
 
