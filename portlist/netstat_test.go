@@ -7,7 +7,7 @@ package portlist
 
 import (
 	"bufio"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -75,8 +75,8 @@ func TestParsePortsNetstat(t *testing.T) {
 				t.Fatal(err)
 			}
 			pl = sortAndDedup(pl)
-			jgot, _ := json.MarshalIndent(pl, "", "\t")
-			jwant, _ := json.MarshalIndent(want, "", "\t")
+			jgot, _ := jsonv1.MarshalIndent(pl, "", "\t")
+			jwant, _ := jsonv1.MarshalIndent(want, "", "\t")
 			if len(pl) != len(want) {
 				t.Fatalf("Got:\n%s\n\nWant:\n%s\n", jgot, jwant)
 			}

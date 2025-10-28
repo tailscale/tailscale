@@ -9,7 +9,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/base64"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -1347,7 +1347,7 @@ func (l *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
-	enc := json.NewEncoder(w)
+	enc := jsonv1.NewEncoder(w)
 	l.Lock()
 	defer l.Unlock()
 	for {
@@ -1456,7 +1456,7 @@ func (k *kubeServer) serveSSAR(w http.ResponseWriter, r *http.Request) {
 			} `json:"resourceAttributes"`
 		} `json:"spec"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&req); err != nil {
 		panic(fmt.Sprintf("decoding SSAR request: %v", err))
 	}
 	ok := true
@@ -1490,7 +1490,7 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 			v := base64.StdEncoding.EncodeToString([]byte(v))
 			ret["data"][k] = v
 		}
-		if err := json.NewEncoder(w).Encode(ret); err != nil {
+		if err := jsonv1.NewEncoder(w).Encode(ret); err != nil {
 			panic("encode failed")
 		}
 	case "PATCH":
@@ -1502,7 +1502,7 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 		switch r.Header.Get("Content-Type") {
 		case "application/json-patch+json":
 			req := []kubeclient.JSONPatch{}
-			if err := json.Unmarshal(bs, &req); err != nil {
+			if err := jsonv1.Unmarshal(bs, &req); err != nil {
 				panic(fmt.Sprintf("json decode failed: %v. Body:\n\n%s", err, string(bs)))
 			}
 			for _, op := range req {
@@ -1534,7 +1534,7 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 			req := struct {
 				Data map[string][]byte `json:"data"`
 			}{}
-			if err := json.Unmarshal(bs, &req); err != nil {
+			if err := jsonv1.Unmarshal(bs, &req); err != nil {
 				panic(fmt.Sprintf("json decode failed: %v. Body:\n\n%s", err, string(bs)))
 			}
 			for key, val := range req.Data {
@@ -1555,7 +1555,7 @@ func mustBase64(t *testing.T, v any) string {
 }
 
 func mustJSON(t *testing.T, v any) []byte {
-	b, err := json.Marshal(v)
+	b, err := jsonv1.Marshal(v)
 	if err != nil {
 		t.Fatalf("error converting %v to json: %v", v, err)
 	}

@@ -11,7 +11,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -142,7 +142,7 @@ func (c *Config) Validate(collection string) error {
 
 // ToBytes returns the JSON representation of c.
 func (c *Config) ToBytes() []byte {
-	data, err := json.MarshalIndent(c, "", "\t")
+	data, err := jsonv1.MarshalIndent(c, "", "\t")
 	if err != nil {
 		log.Fatalf("logpolicy.Config marshal: %v", err)
 	}
@@ -174,7 +174,7 @@ func ConfigFromFile(statefile string) (*Config, error) {
 // ConfigFromBytes parses a Config from its JSON encoding.
 func ConfigFromBytes(jsonEnc []byte) (*Config, error) {
 	c := &Config{}
-	if err := json.Unmarshal(jsonEnc, c); err != nil {
+	if err := jsonv1.Unmarshal(jsonEnc, c); err != nil {
 		return nil, err
 	}
 	return c, nil

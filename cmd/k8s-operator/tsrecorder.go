@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -433,7 +433,7 @@ func getDevicePrefs(secret *corev1.Secret) (prefs prefs, ok bool, err error) {
 	if !ok {
 		return prefs, false, nil
 	}
-	if err := json.Unmarshal(profileBytes, &prefs); err != nil {
+	if err := jsonv1.Unmarshal(profileBytes, &prefs); err != nil {
 		return prefs, false, fmt.Errorf("failed to extract node profile info from state Secret %s: %w", secret.Name, err)
 	}
 

@@ -4,7 +4,7 @@
 package e2e
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -99,7 +99,7 @@ func hostNameFromOperatorSecret(t *testing.T, s corev1.Secret) string {
 	}
 
 	prefs := ipn.Prefs{}
-	if err := json.Unmarshal(prefsBytes, &prefs); err != nil {
+	if err := jsonv1.Unmarshal(prefsBytes, &prefs); err != nil {
 		t.Fatal(err)
 	}
 

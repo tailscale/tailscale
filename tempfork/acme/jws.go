@@ -14,7 +14,7 @@ import (
 	_ "crypto/sha512" // need for EC keys
 	"encoding/asn1"
 	"encoding/base64"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -68,11 +68,11 @@ func jwsEncodeJSON(claimset interface{}, key crypto.Signer, kid KeyID, nonce, ur
 		return nil, ErrUnsupportedKey
 	}
 	headers := struct {
-		Alg   string          `json:"alg"`
-		KID   string          `json:"kid,omitempty"`
-		JWK   json.RawMessage `json:"jwk,omitempty"`
-		Nonce string          `json:"nonce,omitempty"`
-		URL   string          `json:"url"`
+		Alg   string            `json:"alg"`
+		KID   string            `json:"kid,omitempty"`
+		JWK   jsonv1.RawMessage `json:"jwk,omitempty"`
+		Nonce string            `json:"nonce,omitempty"`
+		URL   string            `json:"url"`
 	}{
 		Alg:   alg,
 		Nonce: nonce,
@@ -84,11 +84,11 @@ func jwsEncodeJSON(claimset interface{}, key crypto.Signer, kid KeyID, nonce, ur
 		if err != nil {
 			return nil, err
 		}
-		headers.JWK = json.RawMessage(jwk)
+		headers.JWK = jsonv1.RawMessage(jwk)
 	default:
 		headers.KID = string(kid)
 	}
-	phJSON, err := json.Marshal(headers)
+	phJSON, err := jsonv1.Marshal(headers)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +97,7 @@ func jwsEncodeJSON(claimset interface{}, key crypto.Signer, kid KeyID, nonce, ur
 	if val, ok := claimset.(string); ok {
 		payload = val
 	} else {
-		cs, err := json.Marshal(claimset)
+		cs, err := jsonv1.Marshal(claimset)
 		if err != nil {
 			return nil, err
 		}
@@ -114,7 +114,7 @@ func jwsEncodeJSON(claimset interface{}, key crypto.Signer, kid KeyID, nonce, ur
 		Payload:   payload,
 		Sig:       base64.RawURLEncoding.EncodeToString(sig),
 	}
-	return json.Marshal(&enc)
+	return jsonv1.Marshal(&enc)
 }
 
 // jwsWithMAC creates and signs a JWS using the given key and the HS256
@@ -134,7 +134,7 @@ func jwsWithMAC(key []byte, kid, url string, rawPayload []byte) (*jsonWebSignatu
 		KID:       kid,
 		URL:       url,
 	}
-	rawProtected, err := json.Marshal(header)
+	rawProtected, err := jsonv1.Marshal(header)
 	if err != nil {
 		return nil, err
 	}

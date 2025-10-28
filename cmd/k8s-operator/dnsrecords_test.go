@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"testing"
 
@@ -469,7 +469,7 @@ func expectHostsRecords(t *testing.T, cl client.Client, wantsHosts map[string][]
 		t.Fatal("dnsconfig ConfigMap does not contain dnsconfig")
 	}
 	dnsConfig := &operatorutils.Records{}
-	if err := json.Unmarshal([]byte(dnsConfigString), dnsConfig); err != nil {
+	if err := jsonv1.Unmarshal([]byte(dnsConfigString), dnsConfig); err != nil {
 		t.Fatalf("unmarshaling dnsconfig: %v", err)
 	}
 	if diff := cmp.Diff(dnsConfig.IP4, wantsHosts); diff != "" {
@@ -491,7 +491,7 @@ func expectHostsRecordsWithIPv6(t *testing.T, cl client.Client, wantsHostsIPv4, 
 		t.Fatal("dnsconfig ConfigMap does not contain dnsconfig")
 	}
 	dnsConfig := &operatorutils.Records{}
-	if err := json.Unmarshal([]byte(dnsConfigString), dnsConfig); err != nil {
+	if err := jsonv1.Unmarshal([]byte(dnsConfigString), dnsConfig); err != nil {
 		t.Fatalf("unmarshaling dnsconfig: %v", err)
 	}
 	if diff := cmp.Diff(dnsConfig.IP4, wantsHostsIPv4); diff != "" {

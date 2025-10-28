@@ -43,7 +43,9 @@ func mustFormatFile(in []byte) (out []byte) {
 			"github.com/go-json-experiment/json",
 			"github.com/go-json-experiment/json/v1",
 			"github.com/go-json-experiment/json/jsontext":
-			jsonImports[pkgPath] = append(jsonImports[pkgPath], imp)
+			if imp.Name.String() != "_" {
+				jsonImports[pkgPath] = append(jsonImports[pkgPath], imp)
+			}
 		}
 	}
 	if len(jsonImports) == 0 {

@@ -9,7 +9,7 @@ package fakes
 
 import (
 	"bytes"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"math/rand"
 	"net"
@@ -96,7 +96,7 @@ func (t *TestSessionRecorder) Bytes() []byte {
 
 func CastLine(t *testing.T, p []byte, clock tstime.Clock) []byte {
 	t.Helper()
-	j, err := json.Marshal([]any{
+	j, err := jsonv1.Marshal([]any{
 		clock.Now().Sub(clock.Now()).Seconds(),
 		"o",
 		string(p),
@@ -119,7 +119,7 @@ func AsciinemaCastHeaderMsg(t *testing.T, width, height int) []byte {
 		Width:  width,
 		Height: height,
 	}
-	bs, err := json.Marshal(ch)
+	bs, err := jsonv1.Marshal(ch)
 	if err != nil {
 		t.Fatalf("error marshalling CastHeader: %v", err)
 	}

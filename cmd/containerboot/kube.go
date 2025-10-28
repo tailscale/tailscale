@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -73,7 +73,7 @@ func (kc *kubeClient) storeDeviceEndpoints(ctx context.Context, fqdn string, add
 	for _, addr := range addresses {
 		ips = append(ips, addr.Addr().String())
 	}
-	deviceIPs, err := json.Marshal(ips)
+	deviceIPs, err := jsonv1.Marshal(ips)
 	if err != nil {
 		return err
 	}

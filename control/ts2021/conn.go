@@ -10,7 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"io"
 	"sync"
@@ -150,7 +150,7 @@ func (c *Conn) readHeader() {
 		setErr(err)
 		return
 	}
-	if err := json.Unmarshal(payBuf, &c.earlyPayload); err != nil {
+	if err := jsonv1.Unmarshal(payBuf, &c.earlyPayload); err != nil {
 		setErr(err)
 		return
 	}

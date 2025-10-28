@@ -5,7 +5,7 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -47,7 +47,7 @@ func runWhoIs(ctx context.Context, args []string) error {
 		return err
 	}
 	if whoIsArgs.json {
-		ec := json.NewEncoder(Stdout)
+		ec := jsonv1.NewEncoder(Stdout)
 		ec.SetIndent("", "  ")
 		ec.Encode(who)
 		return nil
@@ -77,7 +77,7 @@ func runWhoIs(ctx context.Context, args []string) error {
 			// To make the output more readable, we have to reindent the JSON
 			// values so they line up with the cap name.
 			if len(vals) > 0 {
-				v, _ := json.MarshalIndent(vals, "      ", "  ")
+				v, _ := jsonv1.MarshalIndent(vals, "      ", "  ")
 
 				printf("  - %s:\n", cap)
 				printf("      %s\n", v)

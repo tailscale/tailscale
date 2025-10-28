@@ -6,7 +6,7 @@ package health
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"time"
 
 	"tailscale.com/feature/buildfeatures"
@@ -57,7 +57,7 @@ type UnhealthyState struct {
 // different runs of the same binary.
 func (u UnhealthyState) hash() []byte {
 	hasher := sha256.New()
-	enc := json.NewEncoder(hasher)
+	enc := jsonv1.NewEncoder(hasher)
 
 	// hash.Hash.Write never returns an error, so this will only fail if u is
 	// not marshalable, in which case we have much bigger problems.

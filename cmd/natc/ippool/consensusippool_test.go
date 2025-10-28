@@ -5,7 +5,7 @@ package ippool
 
 import (
 	"bytes"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"io"
 	"net/netip"
@@ -30,7 +30,7 @@ type FakeConsensus struct {
 }
 
 func (c *FakeConsensus) ExecuteCommand(cmd tsconsensus.Command) (tsconsensus.CommandResult, error) {
-	b, err := json.Marshal(cmd)
+	b, err := jsonv1.Marshal(cmd)
 	if err != nil {
 		return tsconsensus.CommandResult{}, err
 	}
@@ -345,7 +345,7 @@ func TestConsensusRestore(t *testing.T) {
 	}
 
 	// restore the snapshot
-	bs, err := json.Marshal(snap)
+	bs, err := jsonv1.Marshal(snap)
 	if err != nil {
 		t.Fatal(err)
 	}

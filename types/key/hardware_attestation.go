@@ -8,7 +8,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/subtle"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"io"
 
@@ -28,8 +28,8 @@ const pubkeyLength = 65 // uncompressed P-256
 // This key can only be marshalled and unmarshaled on the same machine.
 type HardwareAttestationKey interface {
 	crypto.Signer
-	json.Marshaler
-	json.Unmarshaler
+	jsonv1.Marshaler
+	jsonv1.Unmarshaler
 	io.Closer
 	Clone() HardwareAttestationKey
 	IsZero() bool

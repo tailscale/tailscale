@@ -8,7 +8,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"log"
 	"os"
 	"path/filepath"
@@ -164,7 +164,7 @@ func readServeConfig(path, certDomain string) (*ipn.ServeConfig, error) {
 	}
 	j = bytes.ReplaceAll(j, []byte("${TS_CERT_DOMAIN}"), []byte(certDomain))
 	var sc ipn.ServeConfig
-	if err := json.Unmarshal(j, &sc); err != nil {
+	if err := jsonv1.Unmarshal(j, &sc); err != nil {
 		return nil, err
 	}
 	return &sc, nil

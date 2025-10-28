@@ -9,7 +9,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/binary"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -387,7 +387,7 @@ func runGoBuildInfo(ctx context.Context, args []string) error {
 	if !ok {
 		return errors.New("no Go build info")
 	}
-	e := json.NewEncoder(os.Stdout)
+	e := jsonv1.NewEncoder(os.Stdout)
 	e.SetIndent("", "\t")
 	return e.Encode(bi)
 }
@@ -453,7 +453,7 @@ func runDebug(ctx context.Context, args []string) error {
 			if err != nil {
 				fatalf("%v\n", err)
 			}
-			e := json.NewEncoder(Stdout)
+			e := jsonv1.NewEncoder(Stdout)
 			e.SetIndent("", "\t")
 			e.Encode(wfs)
 			return nil
@@ -607,7 +607,7 @@ func runPrefs(ctx context.Context, args []string) error {
 	if prefsArgs.pretty {
 		outln(prefs.Pretty())
 	} else {
-		j, _ := json.MarshalIndent(prefs, "", "\t")
+		j, _ := jsonv1.MarshalIndent(prefs, "", "\t")
 		outln(string(j))
 	}
 	return nil
@@ -646,7 +646,7 @@ func runWatchIPN(ctx context.Context, args []string) error {
 		if !watchIPNArgs.netmap {
 			n.NetMap = nil
 		}
-		j, _ := json.MarshalIndent(n, "", "\t")
+		j, _ := jsonv1.MarshalIndent(n, "", "\t")
 		fmt.Printf("%s\n", j)
 	}
 	return nil
@@ -674,7 +674,7 @@ func runNetmap(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	j, _ := json.MarshalIndent(n.NetMap, "", "\t")
+	j, _ := jsonv1.MarshalIndent(n.NetMap, "", "\t")
 	fmt.Printf("%s\n", j)
 	return nil
 }
@@ -686,7 +686,7 @@ func runDERPMap(ctx context.Context, args []string) error {
 			"failed to get local derp map, instead `curl %s/derpmap/default`: %w", ipn.DefaultControlURL, err,
 		)
 	}
-	enc := json.NewEncoder(Stdout)
+	enc := jsonv1.NewEncoder(Stdout)
 	enc.SetIndent("", "\t")
 	enc.Encode(dm)
 	return nil
@@ -701,7 +701,7 @@ func forcePreferDERP(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("expected exactly one integer argument: %w", err)
 	}
-	b, err := json.Marshal(n)
+	b, err := jsonv1.Marshal(n)
 	if err != nil {
 		return fmt.Errorf("failed to marshal DERP region: %w", err)
 	}
@@ -765,7 +765,7 @@ func runStat(ctx context.Context, args []string) error {
 
 func runHostinfo(ctx context.Context, args []string) error {
 	hi := hostinfo.New()
-	j, _ := json.MarshalIndent(hi, "", "  ")
+	j, _ := jsonv1.MarshalIndent(hi, "", "  ")
 	Stdout.Write(j)
 	return nil
 }
@@ -789,7 +789,7 @@ func runDaemonLogs(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	d := json.NewDecoder(logs)
+	d := jsonv1.NewDecoder(logs)
 	for {
 		var line struct {
 			Text    string `json:"text"`
@@ -837,7 +837,7 @@ func runDaemonBusGraph(ctx context.Context, args []string) error {
 	}
 	if daemonBusGraphArgs.format == "dot" {
 		var topics eventbus.DebugTopics
-		if err := json.Unmarshal(graph, &topics); err != nil {
+		if err := jsonv1.Unmarshal(graph, &topics); err != nil {
 			return fmt.Errorf("unable to parse json: %w", err)
 		}
 		fmt.Print(generateDOTGraph(topics.Topics))
@@ -1019,7 +1019,7 @@ func runTS2021(ctx context.Context, args []string) error {
 		log.Printf("Status: %v", res.Status)
 		return errors.New(res.Status)
 	}
-	if err := json.NewDecoder(res.Body).Decode(&keys); err != nil {
+	if err := jsonv1.NewDecoder(res.Body).Decode(&keys); err != nil {
 		log.Printf("JSON: %v", err)
 		return fmt.Errorf("decoding /keys JSON: %w", err)
 	}
@@ -1061,7 +1061,7 @@ func runTS2021(ctx context.Context, args []string) error {
 			return fmt.Errorf("reading dial plan JSON file: %w", err)
 		}
 		dialPlan = new(tailcfg.ControlDialPlan)
-		if err := json.Unmarshal(b, dialPlan); err != nil {
+		if err := jsonv1.Unmarshal(b, dialPlan); err != nil {
 			return fmt.Errorf("unmarshaling dial plan JSON file: %w", err)
 		}
 	} else if ts2021Args.aceHost != "" {
@@ -1203,7 +1203,7 @@ func runDebugDERP(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s\n", must.Get(json.MarshalIndent(st, "", " ")))
+	fmt.Printf("%s\n", must.Get(jsonv1.MarshalIndent(st, "", " ")))
 	return nil
 }
 
@@ -1265,7 +1265,7 @@ func runPeerEndpointChanges(ctx context.Context, args []string) error {
 	}
 
 	var dst bytes.Buffer
-	if err := json.Indent(&dst, body, "", "  "); err != nil {
+	if err := jsonv1.Indent(&dst, body, "", "  "); err != nil {
 		return fmt.Errorf("indenting returned JSON: %w", err)
 	}
 
@@ -1284,7 +1284,7 @@ func debugControlKnobs(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	e := json.NewEncoder(os.Stdout)
+	e := jsonv1.NewEncoder(os.Stdout)
 	e.SetIndent("", "  ")
 	e.Encode(v)
 	return nil
@@ -1379,7 +1379,7 @@ func runPeerRelayServers(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	e := json.NewEncoder(os.Stdout)
+	e := jsonv1.NewEncoder(os.Stdout)
 	e.SetIndent("", "  ")
 	e.Encode(v)
 	return nil

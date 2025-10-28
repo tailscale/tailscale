@@ -6,7 +6,7 @@
 package main
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -77,12 +77,12 @@ func updateVersion() error {
 	if err != nil {
 		return fmt.Errorf("Could not standardize template package.json: %w", err)
 	}
-	if err := json.Unmarshal(packageJSONBytes, &packageJSON); err != nil {
+	if err := jsonv1.Unmarshal(packageJSONBytes, &packageJSON); err != nil {
 		return fmt.Errorf("Could not unmarshal package.json: %w", err)
 	}
 	packageJSON["version"] = version.Long()
 
-	packageJSONBytes, err = json.MarshalIndent(packageJSON, "", "  ")
+	packageJSONBytes, err = jsonv1.MarshalIndent(packageJSON, "", "  ")
 	if err != nil {
 		return fmt.Errorf("Could not marshal package.json: %w", err)
 	}

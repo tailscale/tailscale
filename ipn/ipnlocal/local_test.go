@@ -6,7 +6,7 @@ package ipnlocal
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -3819,7 +3819,7 @@ func TestTCPHandlerForDstWithVIPService(t *testing.T) {
 			netip.MustParseAddr("fd7a:115c:a1e0:ab12:4843:cd96:8585:8585"),
 		},
 	}
-	svcIPMapJSON, err := json.Marshal(svcIPMap)
+	svcIPMapJSON, err := jsonv1.Marshal(svcIPMap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4234,11 +4234,11 @@ func TestDriveManageShares(t *testing.T) {
 				} else {
 					r := <-result
 
-					got, err := json.MarshalIndent(r, "", "  ")
+					got, err := jsonv1.MarshalIndent(r, "", "  ")
 					if err != nil {
 						t.Fatalf("can't marshal got: %v", err)
 					}
-					want, err := json.MarshalIndent(e, "", "  ")
+					want, err := jsonv1.MarshalIndent(e, "", "  ")
 					if err != nil {
 						t.Fatalf("can't marshal want: %v", err)
 					}
@@ -6257,7 +6257,7 @@ func TestConfigFileReload(t *testing.T) {
 			path := filepath.Join(dir, "tailscale.conf")
 
 			// Write initial config
-			initialJSON, err := json.Marshal(tc.initial.Parsed)
+			initialJSON, err := jsonv1.Marshal(tc.initial.Parsed)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6273,7 +6273,7 @@ func TestConfigFileReload(t *testing.T) {
 			b := newTestLocalBackendWithSys(t, sys)
 
 			// Update config file
-			updatedJSON, err := json.Marshal(tc.updated.Parsed)
+			updatedJSON, err := jsonv1.Marshal(tc.updated.Parsed)
 			if err != nil {
 				t.Fatal(err)
 			}

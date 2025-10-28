@@ -10,7 +10,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -553,7 +553,7 @@ func (c *conn) sshPolicy() (_ *tailcfg.SSHPolicy, ok bool) {
 			return nil, false
 		}
 		p := new(tailcfg.SSHPolicy)
-		if err := json.Unmarshal(f, p); err != nil {
+		if err := jsonv1.Unmarshal(f, p); err != nil {
 			c.logf("invalid JSON in %v: %v", debugPolicyFile, err)
 			return nil, false
 		}
@@ -775,7 +775,7 @@ func (c *conn) fetchSSHAction(ctx context.Context, url string) (*tailcfg.SSHActi
 			continue
 		}
 		a := new(tailcfg.SSHAction)
-		err = json.NewDecoder(res.Body).Decode(a)
+		err = jsonv1.NewDecoder(res.Body).Decode(a)
 		res.Body.Close()
 		if err != nil {
 			c.logf("invalid next SSHAction JSON from %v: %v", url, err)
@@ -1364,7 +1364,7 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 	} else {
 		ch.SrcNodeTags = ss.conn.info.node.Tags().AsSlice()
 	}
-	j, err := json.Marshal(ch)
+	j, err := jsonv1.Marshal(ch)
 	if err != nil {
 		return nil, err
 	}
@@ -1396,7 +1396,7 @@ func (ss *sshSession) notifyControl(ctx context.Context, nodeKey key.NodePublic,
 		RecordingAttempts: attempts,
 	}
 
-	body, err := json.Marshal(re)
+	body, err := jsonv1.Marshal(re)
 	if err != nil {
 		ss.logf("notifyControl: unable to marshal SSHNotifyRequest:", err)
 		return
@@ -1478,7 +1478,7 @@ type loggingWriter struct {
 
 func (w *loggingWriter) Write(p []byte) (n int, err error) {
 	if !w.recordingFailedOpen {
-		j, err := json.Marshal([]any{
+		j, err := jsonv1.Marshal([]any{
 			time.Since(w.r.start).Seconds(),
 			w.dir,
 			string(p),

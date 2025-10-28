@@ -6,7 +6,7 @@
 package main
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -705,7 +705,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 							config := &ipn.ConfigVAlpha{}
 							foundConfig := false
 							for _, d := range sec.Data {
-								if err := json.Unmarshal(d, config); err == nil {
+								if err := jsonv1.Unmarshal(d, config); err == nil {
 									foundConfig = true
 									break
 								}
@@ -1383,7 +1383,7 @@ func TestKubeAPIServerType_DoesNotOverwriteServicesConfig(t *testing.T) {
 			HealthCheckEnabled: opt.NewBool(true),
 		},
 	}
-	cfgB, err := json.Marshal(cfg)
+	cfgB, err := jsonv1.Marshal(cfg)
 	if err != nil {
 		t.Fatalf("failed to marshal config: %v", err)
 	}
@@ -1405,7 +1405,7 @@ func TestKubeAPIServerType_DoesNotOverwriteServicesConfig(t *testing.T) {
 	// then check the proxygroup reconciler doesn't overwrite it.
 	cfg.APIServerProxy.ServiceName = ptr.To(tailcfg.ServiceName("svc:some-svc-name"))
 	cfg.AdvertiseServices = []string{"svc:should-not-be-overwritten"}
-	cfgB, err = json.Marshal(cfg)
+	cfgB, err = jsonv1.Marshal(cfg)
 	if err != nil {
 		t.Fatalf("failed to marshal config: %v", err)
 	}
@@ -1433,7 +1433,7 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 	}
 
 	existingServices := []string{"svc1", "svc2"}
-	existingConfigBytes, err := json.Marshal(ipn.ConfigVAlpha{
+	existingConfigBytes, err := jsonv1.Marshal(ipn.ConfigVAlpha{
 		AdvertiseServices: existingServices,
 		Version:           "should-get-overwritten",
 	})
@@ -1464,7 +1464,7 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 	})
 	expectReconciled(t, reconciler, "", pgName)
 
-	expectedConfigBytes, err := json.Marshal(ipn.ConfigVAlpha{
+	expectedConfigBytes, err := jsonv1.Marshal(ipn.ConfigVAlpha{
 		// Preserved.
 		AdvertiseServices: existingServices,
 
@@ -1802,7 +1802,7 @@ func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyG
 	t.Helper()
 	const key = "profile-abc"
 	for i := range pgReplicas(pg) {
-		bytes, err := json.Marshal(map[string]any{
+		bytes, err := jsonv1.Marshal(map[string]any{
 			"Config": map[string]any{
 				"NodeID": fmt.Sprintf("nodeid-%d", i),
 			},

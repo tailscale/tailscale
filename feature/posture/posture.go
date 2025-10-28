@@ -7,7 +7,7 @@
 package posture
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"net/http"
 
 	"tailscale.com/ipn/ipnext"
@@ -91,7 +91,7 @@ func handleC2NPostureIdentityGet(b *ipnlocal.LocalBackend, w http.ResponseWriter
 	e.logf("c2n: posture identity disabled=%v reported %d serials %d hwaddrs", res.PostureDisabled, len(res.SerialNumbers), len(res.IfaceHardwareAddrs))
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
+	jsonv1.NewEncoder(w).Encode(res)
 }
 
 // getHardwareAddrs returns the hardware addresses for the machine. If the list

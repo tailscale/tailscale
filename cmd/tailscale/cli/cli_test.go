@@ -6,7 +6,7 @@ package cli
 import (
 	"bytes"
 	stdcmp "cmp"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -905,8 +905,8 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				t.Fatal("tt.want is nil")
 			}
 			if !got.Equals(tt.want) {
-				jgot, _ := json.MarshalIndent(got, "", "\t")
-				jwant, _ := json.MarshalIndent(tt.want, "", "\t")
+				jgot, _ := jsonv1.MarshalIndent(got, "", "\t")
+				jwant, _ := jsonv1.MarshalIndent(tt.want, "", "\t")
 				if bytes.Equal(jgot, jwant) {
 					t.Logf("prefs differ only in non-JSON-visible ways (nil/non-nil zero-length arrays)")
 				}

@@ -10,7 +10,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/binary"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -427,7 +427,7 @@ func (s *Server) serveKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(&tailcfg.OverTLSPublicKeyResponse{
+	jsonv1.NewEncoder(w).Encode(&tailcfg.OverTLSPublicKeyResponse{
 		LegacyPublicKey: legacyKey,
 		PublicKey:       noiseKey,
 	})
@@ -729,7 +729,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		go panic("serveRegister: request has zero node key")
 	}
 	if s.Verbose {
-		j, _ := json.MarshalIndent(req, "", "\t")
+		j, _ := jsonv1.MarshalIndent(req, "", "\t")
 		log.Printf("Got %T: %s", req, j)
 	}
 	if s.RequireAuthKey != "" && (req.Auth == nil || req.Auth.AuthKey != s.RequireAuthKey) {
@@ -1023,7 +1023,7 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 				res.Node.KeyExpiry = time.Now().Add(-1 * time.Minute)
 			}
 			// TODO: add minner if/when needed
-			resBytes, err := json.Marshal(res)
+			resBytes, err := jsonv1.Marshal(res)
 			if err != nil {
 				s.logf("json.Marshal: %v", err)
 				return
@@ -1228,7 +1228,7 @@ func (s *Server) takeRawMapMessage(nk key.NodePublic) (mapResJSON []byte, ok boo
 	}
 
 	var err error
-	mapResJSON, err = json.Marshal(mr)
+	mapResJSON, err = jsonv1.Marshal(mr)
 	if err != nil {
 		panic(err)
 	}
@@ -1263,13 +1263,13 @@ func (s *Server) decode(msg []byte, v any) error {
 	if len(msg) == msgLimit {
 		return errors.New("encrypted message too long")
 	}
-	return json.Unmarshal(msg, v)
+	return jsonv1.Unmarshal(msg, v)
 }
 
 func (s *Server) encode(compress bool, v any) (b []byte, err error) {
 	var isBytes bool
 	if b, isBytes = v.([]byte); !isBytes {
-		b, err = json.Marshal(v)
+		b, err = jsonv1.Marshal(v)
 		if err != nil {
 			return nil, err
 		}

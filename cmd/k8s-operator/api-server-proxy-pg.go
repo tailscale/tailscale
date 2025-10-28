@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -392,7 +392,7 @@ func (r *KubeAPIServerTSServiceReconciler) maybeAdvertiseServices(ctx context.Co
 		}
 
 		// Update the config Secret.
-		cfgB, err := json.Marshal(conf.VersionedConfig{
+		cfgB, err := jsonv1.Marshal(conf.VersionedConfig{
 			Version:        "v1alpha1",
 			ConfigV1Alpha1: &cfg.Parsed,
 		})
@@ -437,7 +437,7 @@ func exclusiveOwnerAnnotations(pg *tsapi.ProxyGroup, operatorID string, svc *tai
 	}
 	if svc == nil {
 		c := ownerAnnotationValue{OwnerRefs: []OwnerRef{ref}}
-		json, err := json.Marshal(c)
+		json, err := jsonv1.Marshal(c)
 		if err != nil {
 			return nil, fmt.Errorf("[unexpected] unable to marshal Tailscale Service's owner annotation contents: %w, please report this", err)
 		}
@@ -466,7 +466,7 @@ func exclusiveOwnerAnnotations(pg *tsapi.ProxyGroup, operatorID string, svc *tai
 		o.OwnerRefs[0].Resource.Name = pg.Name
 	}
 
-	oBytes, err := json.Marshal(o)
+	oBytes, err := jsonv1.Marshal(o)
 	if err != nil {
 		return nil, err
 	}

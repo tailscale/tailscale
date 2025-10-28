@@ -9,7 +9,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -391,7 +391,7 @@ func (ap *APIServerProxy) recordRequestAsEvent(req *http.Request, who *apitype.W
 	fail := true
 	for _, addr := range addrs {
 		data := new(bytes.Buffer)
-		if err := json.NewEncoder(data).Encode(event); err != nil {
+		if err := jsonv1.NewEncoder(data).Encode(event); err != nil {
 			return fmt.Errorf("error marshaling request event: %w", err)
 		}
 

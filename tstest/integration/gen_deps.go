@@ -7,7 +7,7 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -31,7 +31,7 @@ func generate(goos string) {
 	if err != nil {
 		log.Fatalf("GOOS=%s GOARCH=amd64 %s: %v", goos, cmd, err)
 	}
-	if err := json.Unmarshal(j, &x); err != nil {
+	if err := jsonv1.Unmarshal(j, &x); err != nil {
 		log.Fatal(err)
 	}
 	var out bytes.Buffer

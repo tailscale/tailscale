@@ -6,7 +6,7 @@ package auditlog
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -438,7 +438,7 @@ func (s *logStateStore) save(key ipn.ProfileID, txns []*transaction) error {
 		return errors.New("empty key")
 	}
 
-	data, err := json.Marshal(txns)
+	data, err := jsonv1.Marshal(txns)
 	if err != nil {
 		return err
 	}
@@ -463,6 +463,6 @@ func (s *logStateStore) load(key ipn.ProfileID) ([]*transaction, error) {
 	}
 
 	var txns []*transaction
-	err = json.Unmarshal(data, &txns)
+	err = jsonv1.Unmarshal(data, &txns)
 	return txns, err
 }

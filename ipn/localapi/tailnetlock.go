@@ -6,7 +6,7 @@
 package localapi
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"io"
 	"net/http"
 	"strconv"
@@ -43,7 +43,7 @@ func (h *Handler) serveTKAStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	j, err := json.MarshalIndent(h.b.NetworkLockStatus(), "", "\t")
+	j, err := jsonv1.MarshalIndent(h.b.NetworkLockStatus(), "", "\t")
 	if err != nil {
 		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
 		return
@@ -67,7 +67,7 @@ func (h *Handler) serveTKASign(w http.ResponseWriter, r *http.Request) {
 		RotationPublic []byte
 	}
 	var req signRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
@@ -96,7 +96,7 @@ func (h *Handler) serveTKAInit(w http.ResponseWriter, r *http.Request) {
 		SupportDisablement []byte
 	}
 	var req initRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
@@ -111,7 +111,7 @@ func (h *Handler) serveTKAInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	j, err := json.MarshalIndent(h.b.NetworkLockStatus(), "", "\t")
+	j, err := jsonv1.MarshalIndent(h.b.NetworkLockStatus(), "", "\t")
 	if err != nil {
 		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
 		return
@@ -135,7 +135,7 @@ func (h *Handler) serveTKAModify(w http.ResponseWriter, r *http.Request) {
 		RemoveKeys []tka.Key
 	}
 	var req modifyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
@@ -162,7 +162,7 @@ func (h *Handler) serveTKAWrapPreauthKey(w http.ResponseWriter, r *http.Request)
 		TKAKey string // key.NLPrivate.MarshalText
 	}
 	var req wrapRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 12*1024)).Decode(&req); err != nil {
+	if err := jsonv1.NewDecoder(http.MaxBytesReader(w, r.Body, 12*1024)).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
@@ -195,13 +195,13 @@ func (h *Handler) serveTKAVerifySigningDeeplink(w http.ResponseWriter, r *http.R
 		URL string
 	}
 	var req verifyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON for verifyRequest body", http.StatusBadRequest)
 		return
 	}
 
 	res := h.b.NetworkLockVerifySigningDeeplink(req.URL)
-	j, err := json.MarshalIndent(res, "", "\t")
+	j, err := jsonv1.MarshalIndent(res, "", "\t")
 	if err != nil {
 		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
 		return
@@ -246,7 +246,7 @@ func (h *Handler) serveTKALocalDisable(w http.ResponseWriter, r *http.Request) {
 
 	// Require a JSON stanza for the body as an additional CSRF protection.
 	var req struct{}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
@@ -280,7 +280,7 @@ func (h *Handler) serveTKALog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	j, err := json.MarshalIndent(updates, "", "\t")
+	j, err := jsonv1.MarshalIndent(updates, "", "\t")
 	if err != nil {
 		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
 		return
@@ -306,7 +306,7 @@ func (h *Handler) serveTKAAffectedSigs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	j, err := json.MarshalIndent(sigs, "", "\t")
+	j, err := jsonv1.MarshalIndent(sigs, "", "\t")
 	if err != nil {
 		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
 		return
@@ -330,7 +330,7 @@ func (h *Handler) serveTKAGenerateRecoveryAUM(w http.ResponseWriter, r *http.Req
 		ForkFrom string
 	}
 	var req verifyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON for verifyRequest body", http.StatusBadRequest)
 		return
 	}

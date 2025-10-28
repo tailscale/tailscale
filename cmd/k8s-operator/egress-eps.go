@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/netip"
 	"reflect"
@@ -189,7 +189,7 @@ func (er *egressEpsReconciler) podIsReadyToRouteTraffic(ctx context.Context, pod
 		return false, nil
 	}
 	svcStatus := &egressservices.Status{}
-	if err := json.Unmarshal(svcStatusBS, svcStatus); err != nil {
+	if err := jsonv1.Unmarshal(svcStatusBS, svcStatus); err != nil {
 		return false, fmt.Errorf("error unmarshalling egress service status: %w", err)
 	}
 	if !strings.EqualFold(podIP, svcStatus.PodIPv4) {

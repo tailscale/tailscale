@@ -4,7 +4,7 @@
 package kubetypes
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"testing"
 )
 
@@ -24,7 +24,7 @@ func TestUnmarshalAPIServerProxyMode(t *testing.T) {
 		var s struct {
 			Mode *APIServerProxyMode `json:",omitempty"`
 		}
-		err := json.Unmarshal([]byte(tc.data), &s)
+		err := jsonv1.Unmarshal([]byte(tc.data), &s)
 		if tc.expected == "" {
 			if err == nil {
 				t.Errorf("expected error for %q, got none", tc.data)

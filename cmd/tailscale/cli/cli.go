@@ -7,7 +7,7 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -505,7 +505,7 @@ type flagDoc struct {
 
 func printJSONDocs(root *ffcli.Command) error {
 	docs := jsonDocsWalk(root)
-	return json.NewEncoder(os.Stdout).Encode(docs)
+	return jsonv1.NewEncoder(os.Stdout).Encode(docs)
 }
 
 func jsonDocsWalk(cmd *ffcli.Command) *commandDoc {

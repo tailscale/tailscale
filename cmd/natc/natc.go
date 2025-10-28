@@ -8,7 +8,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"expvar"
 	"flag"
@@ -652,7 +652,7 @@ func httpClusterAdmin(ipp *ippool.ConsensusIPPool) http.Handler {
 			http.Error(w, "", http.StatusInternalServerError)
 			return
 		}
-		if err := json.NewEncoder(w).Encode(c); err != nil {
+		if err := jsonv1.NewEncoder(w).Encode(c); err != nil {
 			log.Printf("cluster admin http: error encoding raft configuration: %v", err)
 		}
 	})
@@ -664,7 +664,7 @@ func httpClusterAdmin(ipp *ippool.ConsensusIPPool) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if err := json.NewEncoder(w).Encode(idx); err != nil {
+		if err := jsonv1.NewEncoder(w).Encode(idx); err != nil {
 			log.Printf("cluster admin http: error encoding delete index: %v", err)
 			return
 		}

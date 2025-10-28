@@ -6,7 +6,7 @@ package tsconsensus
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -40,7 +40,7 @@ func readAllMaxBytes(r io.Reader) ([]byte, error) {
 func (rac *commandClient) join(host string, jr joinRequest) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	rBs, err := json.Marshal(jr)
+	rBs, err := jsonv1.Marshal(jr)
 	if err != nil {
 		return err
 	}
@@ -85,7 +85,7 @@ func (rac *commandClient) executeCommand(host string, bs []byte) (CommandResult,
 		return CommandResult{}, fmt.Errorf("remote responded %d: %s", resp.StatusCode, string(respBs))
 	}
 	var cr CommandResult
-	if err = json.Unmarshal(respBs, &cr); err != nil {
+	if err = jsonv1.Unmarshal(respBs, &cr); err != nil {
 		return CommandResult{}, err
 	}
 	return cr, nil
@@ -119,7 +119,7 @@ func (h authedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (c *Consensus) handleJoinHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes+1))
+	decoder := jsonv1.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes+1))
 	var jr joinRequest
 	err := decoder.Decode(&jr)
 	if err != nil {
@@ -149,7 +149,7 @@ func (c *Consensus) handleJoinHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (c *Consensus) handleExecuteCommandHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-	decoder := json.NewDecoder(r.Body)
+	decoder := jsonv1.NewDecoder(r.Body)
 	var cmd Command
 	err := decoder.Decode(&cmd)
 	if err != nil {
@@ -161,7 +161,7 @@ func (c *Consensus) handleExecuteCommandHTTP(w http.ResponseWriter, r *http.Requ
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := json.NewEncoder(w).Encode(result); err != nil {
+	if err := jsonv1.NewEncoder(w).Encode(result); err != nil {
 		log.Printf("error encoding execute command result: %v", err)
 		return
 	}

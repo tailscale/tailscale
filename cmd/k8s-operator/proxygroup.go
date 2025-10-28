@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -796,7 +796,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 				}
 				if !deviceAuthed {
 					existingCfg := conf.ConfigV1Alpha1{}
-					if err := json.Unmarshal(existingCfgSecret.Data[kubetypes.KubeAPIServerConfigFile], &existingCfg); err != nil {
+					if err := jsonv1.Unmarshal(existingCfgSecret.Data[kubetypes.KubeAPIServerConfigFile], &existingCfg); err != nil {
 						return nil, fmt.Errorf("error unmarshalling existing config: %w", err)
 					}
 					if existingCfg.AuthKey != nil {
@@ -835,7 +835,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			if existingCfgSecret != nil {
 				if k8sProxyCfg, ok := cfgSecret.Data[kubetypes.KubeAPIServerConfigFile]; ok {
 					k8sCfg := &conf.ConfigV1Alpha1{}
-					if err := json.Unmarshal(k8sProxyCfg, k8sCfg); err != nil {
+					if err := jsonv1.Unmarshal(k8sProxyCfg, k8sCfg); err != nil {
 						return nil, fmt.Errorf("failed to unmarshal kube-apiserver config: %w", err)
 					}
 
@@ -862,7 +862,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 				cfg.StaticEndpoints = endpoints[nodePortSvcName]
 			}
 
-			cfgB, err := json.Marshal(cfg)
+			cfgB, err := jsonv1.Marshal(cfg)
 			if err != nil {
 				return nil, fmt.Errorf("error marshalling k8s-proxy config: %w", err)
 			}
@@ -881,7 +881,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			}
 
 			for cap, cfg := range configs {
-				cfgJSON, err := json.Marshal(cfg)
+				cfgJSON, err := jsonv1.Marshal(cfg)
 				if err != nil {
 					return nil, fmt.Errorf("error marshalling tailscaled config: %w", err)
 				}
@@ -923,7 +923,7 @@ func (r *ProxyGroupReconciler) findStaticEndpoints(ctx context.Context, existing
 		oldConfB := existingCfgSecret.Data[tsoperator.TailscaledConfigFileName(106)]
 		if len(oldConfB) > 0 {
 			var oldConf ipn.ConfigVAlpha
-			if err := json.Unmarshal(oldConfB, &oldConf); err == nil {
+			if err := jsonv1.Unmarshal(oldConfB, &oldConf); err == nil {
 				currAddrs = oldConf.StaticEndpoints
 			} else {
 				logger.Debugf("failed to unmarshal tailscaled config from secret %q: %v", existingCfgSecret.Name, err)
@@ -1150,7 +1150,7 @@ func (r *ProxyGroupReconciler) getRunningProxies(ctx context.Context, pg *tsapi.
 
 		if ipsB := m.stateSecret.Data[kubetypes.KeyDeviceIPs]; len(ipsB) > 0 {
 			ips := []string{}
-			if err := json.Unmarshal(ipsB, &ips); err != nil {
+			if err := jsonv1.Unmarshal(ipsB, &ips); err != nil {
 				return nil, fmt.Errorf("failed to extract device IPs from state Secret %q: %w", m.stateSecret.Name, err)
 			}
 			device.TailnetIPs = ips

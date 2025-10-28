@@ -6,7 +6,7 @@ package ipnlocal
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -628,7 +628,7 @@ func (h *peerAPIHandler) handleServeEnv(w http.ResponseWriter, r *http.Request) 
 	data.Env = os.Environ()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	jsonv1.NewEncoder(w).Encode(data)
 }
 
 func (h *peerAPIHandler) handleServeMagicsock(w http.ResponseWriter, r *http.Request) {
@@ -842,7 +842,7 @@ func dnsQueryForName(name, typStr string) []byte {
 func writePrettyDNSReply(w io.Writer, res []byte) (err error) {
 	defer func() {
 		if err != nil {
-			j, _ := json.Marshal(struct {
+			j, _ := jsonv1.Marshal(struct {
 				Error string
 			}{err.Error()})
 			j = append(j, '\n')
@@ -902,7 +902,7 @@ func writePrettyDNSReply(w io.Writer, res []byte) (err error) {
 			}
 		}
 	}
-	j, _ := json.Marshal(gotIPs)
+	j, _ := jsonv1.Marshal(gotIPs)
 	j = append(j, '\n')
 	w.Write(j)
 	return nil

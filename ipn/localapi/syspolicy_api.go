@@ -6,7 +6,7 @@
 package localapi
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -62,7 +62,7 @@ func (h *Handler) servePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	e := json.NewEncoder(w)
+	e := jsonv1.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(effectivePolicy)
 }

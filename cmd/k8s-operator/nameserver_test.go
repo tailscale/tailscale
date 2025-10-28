@@ -9,7 +9,7 @@
 package main
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"testing"
 	"time"
 
@@ -150,7 +150,7 @@ func TestNameserverReconciler(t *testing.T) {
 		// Verify that when another actor sets ConfigMap data, it does not get
 		// overwritten by nameserver reconciler.
 		dnsRecords := &operatorutils.Records{Version: "v1alpha1", IP4: map[string][]string{"foo.ts.net": {"1.2.3.4"}}}
-		bs, err := json.Marshal(dnsRecords)
+		bs, err := jsonv1.Marshal(dnsRecords)
 		if err != nil {
 			t.Fatalf("error marshalling ConfigMap contents: %v", err)
 		}

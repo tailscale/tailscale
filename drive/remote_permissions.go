@@ -4,7 +4,7 @@
 package drive
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 )
 
@@ -37,7 +37,7 @@ func ParsePermissions(rawGrants [][]byte) (Permissions, error) {
 	permissions := make(Permissions)
 	for _, rawGrant := range rawGrants {
 		var g grant
-		err := json.Unmarshal(rawGrant, &g)
+		err := jsonv1.Unmarshal(rawGrant, &g)
 		if err != nil {
 			return nil, fmt.Errorf("unmarshal raw grants %s: %v", rawGrant, err)
 		}

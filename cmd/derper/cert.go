@@ -11,7 +11,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -107,7 +107,7 @@ func NewManualCertManager(certdir, hostname string) (certProvider, error) {
 			HostName: hostname,
 			CertName: fmt.Sprintf("sha256-raw:%-02x", sha256.Sum256(x509Cert.Raw)),
 		}
-		dnJSON, _ := json.Marshal(dn)
+		dnJSON, _ := jsonv1.Marshal(dn)
 		log.Printf("Using self-signed certificate for IP address %q. Configure it in DERPMap using: (https://tailscale.com/s/custom-derp)\n  %s", hostname, dnJSON)
 	}
 	return &manualCertManager{

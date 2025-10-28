@@ -10,7 +10,7 @@ package tailcfg
 import (
 	"bytes"
 	"cmp"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -321,7 +321,7 @@ func (m *RawMessage) UnmarshalJSON(data []byte) error {
 
 // MarshalCapJSON returns a capability rule in RawMessage string format.
 func MarshalCapJSON[T any](capRule T) (RawMessage, error) {
-	bs, err := json.Marshal(capRule)
+	bs, err := jsonv1.Marshal(capRule)
 	if err != nil {
 		return "", fmt.Errorf("error marshalling capability rule: %w", err)
 	}
@@ -1603,7 +1603,7 @@ func UnmarshalNodeCapViewJSON[T any](cm views.MapSlice[NodeCapability, RawMessag
 	out := make([]T, 0, vals.Len())
 	for _, v := range vals.All() {
 		var t T
-		if err := json.Unmarshal([]byte(v), &t); err != nil {
+		if err := jsonv1.Unmarshal([]byte(v), &t); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -1645,7 +1645,7 @@ func UnmarshalCapViewJSON[T any](cm views.MapSlice[PeerCapability, RawMessage], 
 	out := make([]T, 0, vals.Len())
 	for _, v := range vals.All() {
 		var t T
-		if err := json.Unmarshal([]byte(v), &t); err != nil {
+		if err := jsonv1.Unmarshal([]byte(v), &t); err != nil {
 			return nil, err
 		}
 		out = append(out, t)

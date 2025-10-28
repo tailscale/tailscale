@@ -10,7 +10,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -216,7 +216,7 @@ func IsPreconditionsFailedError(err error) bool {
 // object of type errorJSON, its non-empty error body.
 func bestError(err error, body []byte) error {
 	var j errorJSON
-	if err := json.Unmarshal(body, &j); err == nil && j.Error != "" {
+	if err := jsonv1.Unmarshal(body, &j); err == nil && j.Error != "" {
 		return errors.New(j.Error)
 	}
 	return err
@@ -224,7 +224,7 @@ func bestError(err error, body []byte) error {
 
 func errorMessageFromBody(body []byte) string {
 	var j errorJSON
-	if err := json.Unmarshal(body, &j); err == nil && j.Error != "" {
+	if err := jsonv1.Unmarshal(body, &j); err == nil && j.Error != "" {
 		return j.Error
 	}
 	return strings.TrimSpace(string(body))
@@ -300,7 +300,7 @@ func WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, erro
 }
 
 func decodeJSON[T any](b []byte) (ret T, err error) {
-	if err := json.Unmarshal(b, &ret); err != nil {
+	if err := jsonv1.Unmarshal(b, &ret); err != nil {
 		var zero T
 		return zero, fmt.Errorf("failed to unmarshal JSON into %T: %w", ret, err)
 	}
@@ -462,7 +462,7 @@ func (lc *Client) StreamBusEvents(ctx context.Context) iter.Seq2[eventbus.DebugE
 			return
 		}
 		defer res.Body.Close()
-		dec := json.NewDecoder(bufio.NewReader(res.Body))
+		dec := jsonv1.NewDecoder(bufio.NewReader(res.Body))
 		for {
 			var evt eventbus.DebugEvent
 			if err := dec.Decode(&evt); err == io.EOF {
@@ -590,7 +590,7 @@ func (lc *Client) DebugResultJSON(ctx context.Context, action string) (any, erro
 		return nil, fmt.Errorf("error %w: %s", err, body)
 	}
 	var x any
-	if err := json.Unmarshal(body, &x); err != nil {
+	if err := jsonv1.Unmarshal(body, &x); err != nil {
 		return nil, err
 	}
 	return x, nil
@@ -603,7 +603,7 @@ func (lc *Client) QueryOptionalFeatures(ctx context.Context) (*apitype.OptionalF
 		return nil, fmt.Errorf("error %w: %s", err, body)
 	}
 	var x apitype.OptionalFeatures
-	if err := json.Unmarshal(body, &x); err != nil {
+	if err := jsonv1.Unmarshal(body, &x); err != nil {
 		return nil, err
 	}
 	return &x, nil
@@ -638,7 +638,7 @@ func (lc *Client) SetComponentDebugLogging(ctx context.Context, component string
 	var res struct {
 		Error string
 	}
-	if err := json.Unmarshal(body, &res); err != nil {
+	if err := jsonv1.Unmarshal(body, &res); err != nil {
 		return err
 	}
 	if res.Error != "" {
@@ -778,7 +778,7 @@ func (lc *Client) CheckIPForwarding(ctx context.Context) error {
 	var jres struct {
 		Warning string
 	}
-	if err := json.Unmarshal(body, &jres); err != nil {
+	if err := jsonv1.Unmarshal(body, &jres); err != nil {
 		return fmt.Errorf("invalid JSON from check-ip-forwarding: %w", err)
 	}
 	if jres.Warning != "" {
@@ -798,7 +798,7 @@ func (lc *Client) CheckUDPGROForwarding(ctx context.Context) error {
 	var jres struct {
 		Warning string
 	}
-	if err := json.Unmarshal(body, &jres); err != nil {
+	if err := jsonv1.Unmarshal(body, &jres); err != nil {
 		return fmt.Errorf("invalid JSON from check-udp-gro-forwarding: %w", err)
 	}
 	if jres.Warning != "" {
@@ -817,7 +817,7 @@ func (lc *Client) CheckReversePathFiltering(ctx context.Context) error {
 	var jres struct {
 		Warning string
 	}
-	if err := json.Unmarshal(body, &jres); err != nil {
+	if err := jsonv1.Unmarshal(body, &jres); err != nil {
 		return fmt.Errorf("invalid JSON from check-reverse-path-filtering: %w", err)
 	}
 	if jres.Warning != "" {
@@ -838,7 +838,7 @@ func (lc *Client) SetUDPGROForwarding(ctx context.Context) error {
 	var jres struct {
 		Warning string
 	}
-	if err := json.Unmarshal(body, &jres); err != nil {
+	if err := jsonv1.Unmarshal(body, &jres); err != nil {
 		return fmt.Errorf("invalid JSON from set-udp-gro-forwarding: %w", err)
 	}
 	if jres.Warning != "" {
@@ -864,7 +864,7 @@ func (lc *Client) GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
 		return nil, err
 	}
 	var p ipn.Prefs
-	if err := json.Unmarshal(body, &p); err != nil {
+	if err := jsonv1.Unmarshal(body, &p); err != nil {
 		return nil, fmt.Errorf("invalid prefs JSON: %w", err)
 	}
 	return &p, nil
@@ -894,7 +894,7 @@ func (lc *Client) GetDNSOSConfig(ctx context.Context) (*apitype.DNSOSConfig, err
 		return nil, err
 	}
 	var osCfg apitype.DNSOSConfig
-	if err := json.Unmarshal(body, &osCfg); err != nil {
+	if err := jsonv1.Unmarshal(body, &osCfg); err != nil {
 		return nil, fmt.Errorf("invalid dns.OSConfig: %w", err)
 	}
 	return &osCfg, nil
@@ -912,7 +912,7 @@ func (lc *Client) QueryDNS(ctx context.Context, name string, queryType string) (
 		return nil, nil, err
 	}
 	var res apitype.DNSQueryResponse
-	if err := json.Unmarshal(body, &res); err != nil {
+	if err := jsonv1.Unmarshal(body, &res); err != nil {
 		return nil, nil, fmt.Errorf("invalid query response: %w", err)
 	}
 	return res.Bytes, res.Resolvers, nil
@@ -1011,7 +1011,7 @@ func (lc *Client) CurrentDERPMap(ctx context.Context) (*tailcfg.DERPMap, error) 
 	if err != nil {
 		return nil, err
 	}
-	if err = json.Unmarshal(res, &derpMap); err != nil {
+	if err = jsonv1.Unmarshal(res, &derpMap); err != nil {
 		return nil, fmt.Errorf("invalid derp map json: %w", err)
 	}
 	return &derpMap, nil
@@ -1098,7 +1098,7 @@ type jsonReader struct {
 
 // jsonBody returns an io.Reader that marshals v as JSON and then reads it.
 func jsonBody(v any) jsonReader {
-	b, err := json.Marshal(v)
+	b, err := jsonv1.Marshal(v)
 	if err != nil {
 		return jsonReader{err: err}
 	}
@@ -1271,7 +1271,7 @@ func (lc *Client) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*IP
 		res.Body.Close()
 		return nil, errors.New(res.Status)
 	}
-	dec := json.NewDecoder(res.Body)
+	dec := jsonv1.NewDecoder(res.Body)
 	return &IPNBusWatcher{
 		ctx:     ctx,
 		httpRes: res,
@@ -1350,7 +1350,7 @@ func (lc *Client) DriveShareList(ctx context.Context) ([]*drive.Share, error) {
 		return nil, err
 	}
 	var shares []*drive.Share
-	err = json.Unmarshal(result, &shares)
+	err = jsonv1.Unmarshal(result, &shares)
 	return shares, err
 }
 
@@ -1361,7 +1361,7 @@ func (lc *Client) DriveShareList(ctx context.Context) ([]*drive.Share, error) {
 type IPNBusWatcher struct {
 	ctx     context.Context // from original WatchIPNBus call
 	httpRes *http.Response
-	dec     *json.Decoder
+	dec     *jsonv1.Decoder
 
 	mu     sync.Mutex
 	closed bool

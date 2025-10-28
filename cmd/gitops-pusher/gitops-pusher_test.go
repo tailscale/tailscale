@@ -4,7 +4,7 @@
 package main
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"strings"
 	"testing"
 
@@ -31,9 +31,9 @@ func TestEmbeddedTypeUnmarshal(t *testing.T) {
 	}
 
 	t.Run("unmarshal gitops type from acl type", func(t *testing.T) {
-		b, _ := json.Marshal(aclTestErr)
+		b, _ := jsonv1.Marshal(aclTestErr)
 		var e ACLGitopsTestError
-		err := json.Unmarshal(b, &e)
+		err := jsonv1.Unmarshal(b, &e)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -42,9 +42,9 @@ func TestEmbeddedTypeUnmarshal(t *testing.T) {
 		}
 	})
 	t.Run("unmarshal acl type from gitops type", func(t *testing.T) {
-		b, _ := json.Marshal(gitopsErr)
+		b, _ := jsonv1.Marshal(gitopsErr)
 		var e tailscale.ACLTestError
-		err := json.Unmarshal(b, &e)
+		err := jsonv1.Unmarshal(b, &e)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -10,7 +10,7 @@ import (
 	"bufio"
 	"bytes"
 	"container/list"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -45,12 +45,12 @@ type Context context.Context
 // jenc is a json.Encode + bytes.Buffer pair wired up to be reused in a pool.
 type jenc struct {
 	buf bytes.Buffer
-	enc *json.Encoder
+	enc *jsonv1.Encoder
 }
 
 var jencPool = &sync.Pool{New: func() any {
 	je := new(jenc)
-	je.enc = json.NewEncoder(&je.buf)
+	je.enc = jsonv1.NewEncoder(&je.buf)
 	return je
 }}
 
@@ -378,7 +378,7 @@ func AsJSON(v any) fmt.Formatter {
 type asJSONResult struct{ v any }
 
 func (a asJSONResult) Format(s fmt.State, verb rune) {
-	v, err := json.Marshal(a.v)
+	v, err := jsonv1.Marshal(a.v)
 	if err != nil {
 		fmt.Fprintf(s, "%%!JSON-ERROR:%v", err)
 		return

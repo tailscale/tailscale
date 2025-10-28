@@ -6,7 +6,7 @@
 package ipnlocal
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"reflect"
 	"testing"
 
@@ -58,5 +58,5 @@ func TestGetSSHUsernames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("Got: %s", must.Get(json.Marshal(res)))
+	t.Logf("Got: %s", must.Get(jsonv1.Marshal(res)))
 }

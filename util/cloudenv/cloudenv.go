@@ -6,7 +6,7 @@ package cloudenv
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"log"
 	"math/rand/v2"
 	"net"
@@ -202,7 +202,7 @@ func getCloud() Cloud {
 		var meta struct {
 			AzEnvironment string `json:"azEnvironment"`
 		}
-		if err := json.NewDecoder(res.Body).Decode(&meta); err != nil {
+		if err := jsonv1.NewDecoder(res.Body).Decode(&meta); err != nil {
 			return ""
 		}
 		if strings.HasPrefix(meta.AzEnvironment, "Azure") {

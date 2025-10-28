@@ -5,7 +5,7 @@ package winutil
 
 import (
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"strings"
 	"unsafe"
@@ -37,7 +37,7 @@ func LogSvcState(logf logger.Logf, rootSvcName string) {
 		return
 	}
 
-	json, err := json.MarshalIndent(logEntries, "", "  ")
+	json, err := jsonv1.MarshalIndent(logEntries, "", "  ")
 	if err != nil {
 		logf("Error marshaling service log entries: %v", err)
 		return
@@ -149,7 +149,7 @@ func (tsdi *_SERVICE_TRIGGER_SPECIFIC_DATA_ITEM) MarshalJSON() ([]byte, error) {
 		m.Data = hex.EncodeToString(data)
 	}
 
-	return json.Marshal(m)
+	return jsonv1.Marshal(m)
 }
 
 type _SERVICE_TRIGGER struct {
@@ -176,7 +176,7 @@ func (ti *_SERVICE_TRIGGER) MarshalJSON() ([]byte, error) {
 	if ti.triggerSubtype != nil {
 		m.TriggerSubtype = ti.triggerSubtype.String()
 	}
-	return json.Marshal(m)
+	return jsonv1.Marshal(m)
 }
 
 type _SERVICE_TRIGGER_INFO struct {
@@ -187,7 +187,7 @@ type _SERVICE_TRIGGER_INFO struct {
 
 func (sti *_SERVICE_TRIGGER_INFO) MarshalJSON() ([]byte, error) {
 	triggers := unsafe.Slice(sti.pTriggers, sti.cTriggers)
-	return json.Marshal(triggers)
+	return jsonv1.Marshal(triggers)
 }
 
 // getSvcTriggerInfo obtains information about any system events that may be

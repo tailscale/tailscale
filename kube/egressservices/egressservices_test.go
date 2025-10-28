@@ -4,7 +4,7 @@
 package egressservices
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -32,7 +32,7 @@ func Test_jsonUnmarshalConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := Config{}
-			if gotErr := json.Unmarshal(tt.bs, &cfg); (gotErr != nil) != tt.wantsErr {
+			if gotErr := jsonv1.Unmarshal(tt.bs, &cfg); (gotErr != nil) != tt.wantsErr {
 				t.Errorf("json.Unmarshal returned error %v, wants error %v", gotErr, tt.wantsErr)
 			}
 			if diff := cmp.Diff(cfg, tt.wantsCfg); diff != "" {
@@ -65,7 +65,7 @@ func Test_jsonMarshalConfig(t *testing.T) {
 				MatchPort:  tt.matchPort,
 				TargetPort: tt.targetPort}: {}}}
 
-			gotBs, gotErr := json.Marshal(&cfg)
+			gotBs, gotErr := jsonv1.Marshal(&cfg)
 			if gotErr != nil {
 				t.Errorf("json.Marshal(%+#v) returned unexpected error %v", cfg, gotErr)
 			}

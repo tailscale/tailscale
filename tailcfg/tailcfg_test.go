@@ -4,7 +4,7 @@
 package tailcfg_test
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"net/netip"
 	"os"
 	"reflect"
@@ -674,7 +674,7 @@ func TestEndpointTypeMarshal(t *testing.T) {
 		EndpointPortmapped,
 		EndpointSTUN4LocalPort,
 	}
-	got, err := json.Marshal(eps)
+	got, err := jsonv1.Marshal(eps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -721,7 +721,7 @@ func TestUnmarshalHealth(t *testing.T) {
 	}
 	for _, tt := range tests {
 		var mr MapResponse
-		if err := json.Unmarshal([]byte(tt.in), &mr); err != nil {
+		if err := jsonv1.Unmarshal([]byte(tt.in), &mr); err != nil {
 			t.Fatal(err)
 		}
 		if !reflect.DeepEqual(mr.Health, tt.want) {
@@ -788,18 +788,18 @@ func TestRawMessage(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			j := must.Get(json.Marshal(tc.val))
+			j := must.Get(jsonv1.Marshal(tc.val))
 			var gotWire map[string][]RawMessage
-			if err := json.Unmarshal(j, &gotWire); err != nil {
+			if err := jsonv1.Unmarshal(j, &gotWire); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
 			if !reflect.DeepEqual(gotWire, tc.wire) {
 				t.Errorf("got %#v; want %#v", gotWire, tc.wire)
 			}
 
-			j = must.Get(json.Marshal(tc.wire))
+			j = must.Get(jsonv1.Marshal(tc.wire))
 			var gotVal map[string][]rule
-			if err := json.Unmarshal(j, &gotVal); err != nil {
+			if err := jsonv1.Unmarshal(j, &gotVal); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
 			if !reflect.DeepEqual(gotVal, tc.val) {
@@ -1017,8 +1017,8 @@ func TestDisplayMessageEqual(t *testing.T) {
 			got := test.value1.Equal(test.value2)
 
 			if got != test.wantEqual {
-				value1 := must.Get(json.MarshalIndent(test.value1, "", "  "))
-				value2 := must.Get(json.MarshalIndent(test.value2, "", "  "))
+				value1 := must.Get(jsonv1.MarshalIndent(test.value1, "", "  "))
+				value2 := must.Get(jsonv1.MarshalIndent(test.value2, "", "  "))
 				t.Errorf("value1.Equal(value2): got %t, want %t\nvalue1:\n%s\nvalue2:\n%s", got, test.wantEqual, value1, value2)
 			}
 		})

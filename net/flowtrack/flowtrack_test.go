@@ -4,7 +4,7 @@
 package flowtrack
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"net/netip"
 	"testing"
 
@@ -109,7 +109,7 @@ func TestStringJSON(t *testing.T) {
 		t.Errorf("String = %q; want %q", got, want)
 	}
 
-	got, err := json.Marshal(v)
+	got, err := jsonv1.Marshal(v)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestStringJSON(t *testing.T) {
 	}
 
 	var back Tuple
-	if err := json.Unmarshal(got, &back); err != nil {
+	if err := jsonv1.Unmarshal(got, &back); err != nil {
 		t.Fatal(err)
 	}
 	if back != v {

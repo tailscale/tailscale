@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -393,7 +393,7 @@ func (ep *egressProxy) getConfigs() (*egressservices.Configs, error) {
 		return nil, nil
 	}
 	cfg := &egressservices.Configs{}
-	if err := json.Unmarshal(j, &cfg); err != nil {
+	if err := jsonv1.Unmarshal(j, &cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
@@ -413,7 +413,7 @@ func (ep *egressProxy) getStatus(ctx context.Context) (*egressservices.Status, e
 	if !ok {
 		return nil, nil
 	}
-	if err := json.Unmarshal([]byte(raw), status); err != nil {
+	if err := jsonv1.Unmarshal([]byte(raw), status); err != nil {
 		return nil, fmt.Errorf("error unmarshalling previous config: %w", err)
 	}
 	if reflect.DeepEqual(status.PodIPv4, ep.podIPv4) {
@@ -434,7 +434,7 @@ func (ep *egressProxy) setStatus(ctx context.Context, status *egressservices.Sta
 	if err != nil {
 		return fmt.Errorf("error retrieving state Secret: %w", err)
 	}
-	bs, err := json.Marshal(status)
+	bs, err := jsonv1.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("error marshalling service config: %w", err)
 	}
