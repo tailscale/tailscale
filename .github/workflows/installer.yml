@@ -10,8 +10,6 @@ on:
       - scripts/installer.sh
       - .github/workflows/installer.yml
   pull_request:
-    branches:
-      - "*"
     paths:
       - scripts/installer.sh
       - .github/workflows/installer.yml

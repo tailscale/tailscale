@@ -3,8 +3,6 @@ on:
   workflow_dispatch:
   # For now, only run on requests, not the main branches.
   pull_request:
-    branches:
-      - "*"
     paths:
       - "client/web/**"
       - ".github/workflows/webclient.yml"
