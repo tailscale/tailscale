@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
@@ -39,6 +40,7 @@ func init() {
 	Register("debug-packet-filter-matches", (*Handler).serveDebugPacketFilterMatches)
 	Register("debug-packet-filter-rules", (*Handler).serveDebugPacketFilterRules)
 	Register("debug-peer-endpoint-changes", (*Handler).serveDebugPeerEndpointChanges)
+	Register("debug-optional-features", (*Handler).serveDebugOptionalFeatures)
 }
 
 func (h *Handler) serveDebugPeerEndpointChanges(w http.ResponseWriter, r *http.Request) {
@@ -462,4 +464,12 @@ func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) serveDebugOptionalFeatures(w http.ResponseWriter, r *http.Request) {
+	of := &apitype.OptionalFeatures{
+		Features: feature.Registered(),
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(of)
 }

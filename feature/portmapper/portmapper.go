@@ -6,6 +6,7 @@
 package portmapper
 
 import (
+	"tailscale.com/feature"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/portmapper"
 	"tailscale.com/net/portmapper/portmappertype"
@@ -14,6 +15,7 @@ import (
 )
 
 func init() {
+	feature.Register("portmapper")
 	portmappertype.HookNewPortMapper.Set(newPortMapper)
 }
 

@@ -719,9 +719,13 @@ func NewConn(opts Options) (*Conn, error) {
 		newPortMapper, ok := portmappertype.HookNewPortMapper.GetOk()
 		if ok {
 			c.portMapper = newPortMapper(portmapperLogf, opts.EventBus, opts.NetMon, disableUPnP, c.onlyTCP443.Load)
-		} else if !testenv.InTest() {
-			panic("unexpected: HookNewPortMapper not set")
 		}
+		// If !ok, the HookNewPortMapper hook is not set (so feature/portmapper
+		// isn't linked), but the build tag to explicitly omit the portmapper
+		// isn't set either. This should only happen to js/wasm builds, where
+		// the portmapper is a no-op even if linked (but it's no longer linked,
+		// since the move to feature/portmapper), or if people are wiring up
+		// their own Tailscale build from pieces.
 	}
 
 	c.netMon = opts.NetMon
