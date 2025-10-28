@@ -175,6 +175,28 @@ func TestControlKnobs(t *testing.T) {
 	}
 }
 
+func TestExpectedFeaturesLinked(t *testing.T) {
+	tstest.Shard(t)
+	tstest.Parallel(t)
+	env := NewTestEnv(t)
+	n1 := NewTestNode(t, env)
+
+	d1 := n1.StartDaemon()
+	n1.AwaitResponding()
+	lc := n1.LocalClient()
+	got, err := lc.QueryOptionalFeatures(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Features["portmapper"] {
+		t.Errorf("optional feature portmapper unexpectedly not found: got %v", got.Features)
+	}
+
+	d1.MustCleanShutdown(t)
+
+	t.Logf("number of HTTP logcatcher requests: %v", env.LogCatcher.numRequests())
+}
+
 func TestCollectPanic(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/15865")
 	tstest.Shard(t)

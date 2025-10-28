@@ -13,6 +13,12 @@ var ErrUnavailable = errors.New("feature not included in this build")
 
 var in = map[string]bool{}
 
+// Registered reports the set of registered features.
+//
+// The returned map should not be modified by the caller,
+// not accessed concurrently with calls to Register.
+func Registered() map[string]bool { return in }
+
 // Register notes that the named feature is linked into the binary.
 func Register(name string) {
 	if _, ok := in[name]; ok {

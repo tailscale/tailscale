@@ -596,6 +596,19 @@ func (lc *Client) DebugResultJSON(ctx context.Context, action string) (any, erro
 	return x, nil
 }
 
+// QueryOptionalFeatures queries the optional features supported by the Tailscale daemon.
+func (lc *Client) QueryOptionalFeatures(ctx context.Context) (*apitype.OptionalFeatures, error) {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/debug-optional-features", 200, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error %w: %s", err, body)
+	}
+	var x apitype.OptionalFeatures
+	if err := json.Unmarshal(body, &x); err != nil {
+		return nil, err
+	}
+	return &x, nil
+}
+
 // SetDevStoreKeyValue set a statestore key/value. It's only meant for development.
 // The schema (including when keys are re-read) is not a stable interface.
 func (lc *Client) SetDevStoreKeyValue(ctx context.Context, key, value string) error {
