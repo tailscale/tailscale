@@ -405,10 +405,7 @@ func clientHTTP2(dialCtx context.Context, dial netx.DialFunc) *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
 			Protocols: &p,
-			// Pretend like we're using TLS, but actually use the provided
-			// DialFunc underneath. This is necessary to convince the transport
-			// to actually dial.
-			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				perAttemptCtx, cancel := context.WithTimeout(ctx, perDialAttemptTimeout)
 				defer cancel()
 				go func() {
