@@ -23,6 +23,7 @@ import (
 	"slices"
 	"time"
 
+	"tailscale.com/health"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -54,7 +55,7 @@ var (
 type tkaState struct {
 	profile   ipn.ProfileID
 	authority *tka.Authority
-	storage   *tka.FS
+	storage   tka.CompactableChonk
 	filtered  []ipnstate.TKAPeer
 }
 
@@ -75,7 +76,7 @@ func (b *LocalBackend) initTKALocked() error {
 	root := b.TailscaleVarRoot()
 	if root == "" {
 		b.tka = nil
-		b.logf("network-lock unavailable; no state directory")
+		b.logf("cannot fetch existing TKA state; no state directory for network-lock")
 		return nil
 	}
 
@@ -90,6 +91,7 @@ func (b *LocalBackend) initTKALocked() error {
 		if err != nil {
 			return fmt.Errorf("initializing tka: %v", err)
 		}
+
 		if err := authority.Compact(storage, tkaCompactionDefaults); err != nil {
 			b.logf("tka compaction failed: %v", err)
 		}
@@ -104,6 +106,16 @@ func (b *LocalBackend) initTKALocked() error {
 
 	return nil
 }
+
+// noNetworkLockStateDirWarnable is a Warnable to warn the user that Tailnet Lock data
+// (in particular, the list of AUMs in the TKA state) is being stored in memory and will
+// be lost when tailscaled restarts.
+var noNetworkLockStateDirWarnable = health.Register(&health.Warnable{
+	Code:     "no-tailnet-lock-state-dir",
+	Title:    "No statedir for Tailnet Lock",
+	Severity: health.SeverityMedium,
+	Text:     health.StaticMessage(healthmsg.InMemoryTailnetLockState),
+})
 
 // tkaFilterNetmapLocked checks the signatures on each node key, dropping
 // nodes from the netmap whose signature does not verify.
@@ -442,7 +454,7 @@ func (b *LocalBackend) tkaSyncLocked(ourNodeKey key.NodePublic) error {
 // b.mu must be held & TKA must be initialized.
 func (b *LocalBackend) tkaApplyDisablementLocked(secret []byte) error {
 	if b.tka.authority.ValidDisablement(secret) {
-		if err := os.RemoveAll(b.chonkPathLocked()); err != nil {
+		if err := b.tka.storage.RemoveAll(); err != nil {
 			return err
 		}
 		b.tka = nil
@@ -486,19 +498,21 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, per
 		}
 	}
 
-	chonkDir := b.chonkPathLocked()
-	if err := os.Mkdir(filepath.Dir(chonkDir), 0755); err != nil && !os.IsExist(err) {
-		return fmt.Errorf("creating chonk root dir: %v", err)
+	root := b.TailscaleVarRoot()
+	var storage tka.CompactableChonk
+	if root == "" {
+		b.health.SetUnhealthy(noNetworkLockStateDirWarnable, nil)
+		b.logf("network-lock using in-memory storage; no state directory")
+		storage = &tka.Mem{}
+	} else {
+		chonkDir := b.chonkPathLocked()
+		chonk, err := tka.ChonkDir(chonkDir)
+		if err != nil {
+			return fmt.Errorf("chonk: %v", err)
+		}
+		storage = chonk
 	}
-	if err := os.Mkdir(chonkDir, 0755); err != nil && !os.IsExist(err) {
-		return fmt.Errorf("mkdir: %v", err)
-	}
-
-	chonk, err := tka.ChonkDir(chonkDir)
-	if err != nil {
-		return fmt.Errorf("chonk: %v", err)
-	}
-	authority, err := tka.Bootstrap(chonk, genesis)
+	authority, err := tka.Bootstrap(storage, genesis)
 	if err != nil {
 		return fmt.Errorf("tka bootstrap: %v", err)
 	}
@@ -506,7 +520,7 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, per
 	b.tka = &tkaState{
 		profile:   b.pm.CurrentProfile().ID(),
 		authority: authority,
-		storage:   chonk,
+		storage:   storage,
 	}
 	return nil
 }
@@ -517,10 +531,6 @@ func (b *LocalBackend) CanSupportNetworkLock() error {
 	if b.tka != nil {
 		// If the TKA is being used, it is supported.
 		return nil
-	}
-
-	if b.TailscaleVarRoot() == "" {
-		return errors.New("network-lock is not supported in this configuration, try setting --statedir")
 	}
 
 	// There's a var root (aka --statedir), so if network lock gets
@@ -642,6 +652,7 @@ func tkaStateFromPeer(p tailcfg.NodeView) ipnstate.TKAPeer {
 // needing signatures is returned as a response.
 // The Finish RPC submits signatures for all these nodes, at which point
 // Control has everything it needs to atomically enable network lock.
+// TODO(alexc): Only with persistent backend
 func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byte, supportDisablement []byte) error {
 	if err := b.CanSupportNetworkLock(); err != nil {
 		return err
@@ -762,7 +773,7 @@ func (b *LocalBackend) NetworkLockForceLocalDisable() error {
 		return fmt.Errorf("saving prefs: %w", err)
 	}
 
-	if err := os.RemoveAll(b.chonkPathLocked()); err != nil {
+	if err := b.tka.storage.RemoveAll(); err != nil {
 		return fmt.Errorf("deleting TKA state: %w", err)
 	}
 	b.tka = nil
@@ -771,6 +782,7 @@ func (b *LocalBackend) NetworkLockForceLocalDisable() error {
 
 // NetworkLockSign signs the given node-key and submits it to the control plane.
 // rotationPublic, if specified, must be an ed25519 public key.
+// TODO(alexc): in-memory only
 func (b *LocalBackend) NetworkLockSign(nodeKey key.NodePublic, rotationPublic []byte) error {
 	ourNodeKey, sig, err := func(nodeKey key.NodePublic, rotationPublic []byte) (key.NodePublic, tka.NodeKeySignature, error) {
 		b.mu.Lock()

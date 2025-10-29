@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -57,6 +58,10 @@ type Chonk interface {
 	// as a hint to pick the correct chain in the event that the Chonk stores
 	// multiple distinct chains.
 	LastActiveAncestor() (*AUMHash, error)
+
+	// RemoveAll permanently and completely clears the TKA state. This should
+	// be called when the user disables Tailnet Lock.
+	RemoveAll() error
 }
 
 // CompactableChonk implementation are extensions of Chonk, which are
@@ -78,12 +83,21 @@ type CompactableChonk interface {
 }
 
 // Mem implements in-memory storage of TKA state, suitable for
-// tests.
+// tests or cases where filesystem storage is unavailable.
 //
 // Mem implements the Chonk interface.
+//
+// Mem is thread-safe.
 type Mem struct {
 	mu          sync.RWMutex
 	aums        map[AUMHash]AUM
+	commitTimes map[AUMHash]time.Time
+
+	// parentIndex is a map of AUMs to the AUMs for which they are
+	// the parent.
+	//
+	// For example, if parent index is {1 -> {2, 3, 4}}, that means
+	// that AUMs 2, 3, 4 all have aum.PrevAUMHash = 1.
 	parentIndex map[AUMHash][]AUMHash
 
 	lastActiveAncestor *AUMHash
@@ -152,12 +166,14 @@ func (c *Mem) CommitVerifiedAUMs(updates []AUM) error {
 	if c.aums == nil {
 		c.parentIndex = make(map[AUMHash][]AUMHash, 64)
 		c.aums = make(map[AUMHash]AUM, 64)
+		c.commitTimes = make(map[AUMHash]time.Time, 64)
 	}
 
 updateLoop:
 	for _, aum := range updates {
 		aumHash := aum.Hash()
 		c.aums[aumHash] = aum
+		c.commitTimes[aumHash] = time.Now()
 
 		parent, ok := aum.Parent()
 		if ok {
@@ -168,6 +184,71 @@ updateLoop:
 			}
 			c.parentIndex[parent] = append(c.parentIndex[parent], aumHash)
 		}
+	}
+
+	return nil
+}
+
+// RemoveAll permanently and completely clears the TKA state.
+func (c *Mem) RemoveAll() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.aums = nil
+	c.commitTimes = nil
+	c.parentIndex = nil
+	c.lastActiveAncestor = nil
+	return nil
+}
+
+// AllAUMs returns all AUMs stored in the chonk.
+func (c *Mem) AllAUMs() ([]AUMHash, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return slices.Collect(maps.Keys(c.aums)), nil
+}
+
+// CommitTime returns the time at which the AUM was committed.
+//
+// If the AUM does not exist, then os.ErrNotExist is returned.
+func (c *Mem) CommitTime(h AUMHash) (time.Time, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	t, ok := c.commitTimes[h]
+	if ok {
+		return t, nil
+	} else {
+		return time.Time{}, os.ErrNotExist
+	}
+}
+
+// PurgeAUMs marks the specified AUMs for deletion from storage.
+func (c *Mem) PurgeAUMs(hashes []AUMHash) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, h := range hashes {
+		// Remove the deleted AUM from the list of its parents' children.
+		//
+		// However, we leave the list of this AUM's children in parentIndex,
+		// so we can find them later in ChildAUMs().
+		if aum, ok := c.aums[h]; ok {
+			parent, hasParent := aum.Parent()
+			if hasParent {
+				c.parentIndex[parent] = slices.DeleteFunc(
+					c.parentIndex[parent],
+					func(other AUMHash) bool { return bytes.Equal(h[:], other[:]) },
+				)
+				if len(c.parentIndex[parent]) == 0 {
+					delete(c.parentIndex, parent)
+				}
+			}
+		}
+
+		// Delete this AUM from the list of AUMs and commit times.
+		delete(c.aums, h)
+		delete(c.commitTimes, h)
 	}
 
 	return nil
@@ -184,6 +265,10 @@ type FS struct {
 // ChonkDir returns an implementation of Chonk which uses the
 // given directory to store TKA state.
 func ChonkDir(dir string) (*FS, error) {
+	if err := os.MkdirAll(dir, 0755); err != nil && !os.IsExist(err) {
+		return nil, fmt.Errorf("creating chonk root dir: %v", err)
+	}
+
 	stat, err := os.Stat(dir)
 	if err != nil {
 		return nil, err
@@ -374,6 +459,11 @@ func (c *FS) Heads() ([]AUM, error) {
 	}
 
 	return out, nil
+}
+
+// RemoveAll permanently and completely clears the TKA state.
+func (c *FS) RemoveAll() error {
+	return os.RemoveAll(c.base)
 }
 
 // AllAUMs returns all AUMs stored in the chonk.
