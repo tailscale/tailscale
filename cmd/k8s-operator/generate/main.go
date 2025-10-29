@@ -144,7 +144,7 @@ func generate(baseDir string) error {
 		if _, err := file.Write([]byte(helmConditionalEnd)); err != nil {
 			return fmt.Errorf("error writing helm if-statement end: %w", err)
 		}
-		return nil
+		return file.Close()
 	}
 	for _, crd := range []struct {
 		crdPath, templatePath string
