@@ -292,7 +292,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 				Name:       "get-config",
 				ShortUsage: fmt.Sprintf("tailscale %s get-config <file> [--service=<service>] [--all]", info.Name),
 				ShortHelp:  "Get service configuration to save to a file",
-				LongHelp: hidden + "Get the configuration for services that this node is currently hosting in a\n" +
+				LongHelp: "Get the configuration for services that this node is currently hosting in a\n" +
 					"format that can later be provided to set-config. This can be used to declaratively set\n" +
 					"configuration for a service host.",
 				Exec: e.runServeGetConfig,
@@ -305,10 +305,11 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 				Name:       "set-config",
 				ShortUsage: fmt.Sprintf("tailscale %s set-config <file> [--service=<service>] [--all]", info.Name),
 				ShortHelp:  "Define service configuration from a file",
-				LongHelp: hidden + "Read the provided configuration file and use it to declaratively set the configuration\n" +
+				LongHelp: "Read the provided configuration file and use it to declaratively set the configuration\n" +
 					"for either a single service, or for all services that this node is hosting. If --service is specified,\n" +
 					"all endpoint handlers for that service are overwritten. If --all is specified, all endpoint handlers for\n" +
-					"all services are overwritten.",
+					"all services are overwritten.\n\n" +
+					"For information on the file format, see tailscale.com/kb/1589/tailscale-services-configuration-file",
 				Exec: e.runServeSetConfig,
 				FlagSet: e.newFlags("serve-set-config", func(fs *flag.FlagSet) {
 					fs.BoolVar(&e.allServices, "all", false, "apply config to all services")
