@@ -82,7 +82,7 @@ type CompactableChonk interface {
 //
 // Mem implements the Chonk interface.
 type Mem struct {
-	l           sync.RWMutex
+	mu          sync.RWMutex
 	aums        map[AUMHash]AUM
 	parentIndex map[AUMHash][]AUMHash
 
@@ -90,23 +90,23 @@ type Mem struct {
 }
 
 func (c *Mem) SetLastActiveAncestor(hash AUMHash) error {
-	c.l.Lock()
-	defer c.l.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.lastActiveAncestor = &hash
 	return nil
 }
 
 func (c *Mem) LastActiveAncestor() (*AUMHash, error) {
-	c.l.RLock()
-	defer c.l.RUnlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.lastActiveAncestor, nil
 }
 
 // Heads returns AUMs for which there are no children. In other
 // words, the latest AUM in all chains (the 'leaf').
 func (c *Mem) Heads() ([]AUM, error) {
-	c.l.RLock()
-	defer c.l.RUnlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	out := make([]AUM, 0, 6)
 
 	// An AUM is a 'head' if there are no nodes for which it is the parent.
@@ -120,8 +120,8 @@ func (c *Mem) Heads() ([]AUM, error) {
 
 // AUM returns the AUM with the specified digest.
 func (c *Mem) AUM(hash AUMHash) (AUM, error) {
-	c.l.RLock()
-	defer c.l.RUnlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	aum, ok := c.aums[hash]
 	if !ok {
 		return AUM{}, os.ErrNotExist
@@ -132,8 +132,8 @@ func (c *Mem) AUM(hash AUMHash) (AUM, error) {
 // ChildAUMs returns all AUMs with a specified previous
 // AUM hash.
 func (c *Mem) ChildAUMs(prevAUMHash AUMHash) ([]AUM, error) {
-	c.l.RLock()
-	defer c.l.RUnlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	out := make([]AUM, 0, 6)
 	for _, entry := range c.parentIndex[prevAUMHash] {
 		out = append(out, c.aums[entry])
@@ -147,8 +147,8 @@ func (c *Mem) ChildAUMs(prevAUMHash AUMHash) ([]AUM, error) {
 // as the rest of the TKA implementation assumes that only
 // verified AUMs are stored.
 func (c *Mem) CommitVerifiedAUMs(updates []AUM) error {
-	c.l.Lock()
-	defer c.l.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.aums == nil {
 		c.parentIndex = make(map[AUMHash][]AUMHash, 64)
 		c.aums = make(map[AUMHash]AUM, 64)

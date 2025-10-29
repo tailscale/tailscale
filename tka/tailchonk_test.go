@@ -496,7 +496,7 @@ func (c *compactingChonkFake) PurgeAUMs(hashes []AUMHash) error {
 
 // Avoid go vet complaining about copying a lock value
 func cloneMem(src, dst *Mem) {
-	dst.l = sync.RWMutex{}
+	dst.mu = sync.RWMutex{}
 	dst.aums = src.aums
 	dst.parentIndex = src.parentIndex
 	dst.lastActiveAncestor = src.lastActiveAncestor
