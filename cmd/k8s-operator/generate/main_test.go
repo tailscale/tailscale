@@ -7,26 +7,50 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"tailscale.com/tstest/nettest"
+	"tailscale.com/util/cibuild"
 )
 
 func Test_generate(t *testing.T) {
+	nettest.SkipIfNoNetwork(t)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if _, err := net.DefaultResolver.LookupIPAddr(ctx, "get.helm.sh"); err != nil {
+		// https://github.com/helm/helm/issues/31434
+		t.Skipf("get.helm.sh seems down or unreachable; skipping test")
+	}
+
 	base, err := os.Getwd()
 	base = filepath.Join(base, "../../../")
 	if err != nil {
 		t.Fatalf("error getting current working directory: %v", err)
 	}
 	defer cleanup(base)
+
+	helmCLIPath := filepath.Join(base, "tool/helm")
+	if out, err := exec.Command(helmCLIPath, "version").CombinedOutput(); err != nil && cibuild.On() {
+		// It's not just DNS. Azure is generating bogus certs within GitHub Actions at least for
+		// helm. So try to run it and see if we can even fetch it.
+		//
+		// https://github.com/helm/helm/issues/31434
+		t.Skipf("error fetching helm; skipping test in CI: %v, %s", err, out)
+	}
+
 	if err := generate(base); err != nil {
 		t.Fatalf("CRD template generation: %v", err)
 	}
 
 	tempDir := t.TempDir()
-	helmCLIPath := filepath.Join(base, "tool/helm")
 	helmChartTemplatesPath := filepath.Join(base, "cmd/k8s-operator/deploy/chart")
 	helmPackageCmd := exec.Command(helmCLIPath, "package", helmChartTemplatesPath, "--destination", tempDir, "--version", "0.0.1")
 	helmPackageCmd.Stderr = os.Stderr
