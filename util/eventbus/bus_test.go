@@ -4,8 +4,11 @@
 package eventbus_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"log"
+	"regexp"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -434,6 +437,76 @@ func TestMonitor(t *testing.T) {
 	}
 	t.Run("Close", testMon(t, func(_ *eventbus.Client, m eventbus.Monitor) { m.Close() }))
 	t.Run("Wait", testMon(t, func(c *eventbus.Client, m eventbus.Monitor) { c.Close(); m.Wait() }))
+}
+
+func TestSlowSubs(t *testing.T) {
+	swapLogBuf := func(t *testing.T) *bytes.Buffer {
+		logBuf := new(bytes.Buffer)
+		save := log.Writer()
+		log.SetOutput(logBuf)
+		t.Cleanup(func() { log.SetOutput(save) })
+		return logBuf
+	}
+
+	t.Run("Subscriber", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			buf := swapLogBuf(t)
+
+			b := eventbus.New()
+			defer b.Close()
+
+			pc := b.Client("pub")
+			p := eventbus.Publish[EventA](pc)
+
+			sc := b.Client("sub")
+			s := eventbus.Subscribe[EventA](sc)
+
+			go func() {
+				time.Sleep(6 * time.Second) // trigger the slow check at 5s.
+				t.Logf("Subscriber accepted %v", <-s.Events())
+			}()
+
+			p.Publish(EventA{12345})
+
+			time.Sleep(7 * time.Second) // advance time...
+			synctest.Wait()             // subscriber is done
+
+			want := regexp.MustCompile(`^.* tailscale.com/util/eventbus_test bus_test.go:\d+: ` +
+				`subscriber for eventbus_test.EventA is slow.*`)
+			if got := buf.String(); !want.MatchString(got) {
+				t.Errorf("Wrong log output\ngot:  %q\nwant: %s", got, want)
+			}
+		})
+	})
+
+	t.Run("SubscriberFunc", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			buf := swapLogBuf(t)
+
+			b := eventbus.New()
+			defer b.Close()
+
+			pc := b.Client("pub")
+			p := eventbus.Publish[EventB](pc)
+
+			sc := b.Client("sub")
+			eventbus.SubscribeFunc[EventB](sc, func(e EventB) {
+				time.Sleep(6 * time.Second) // trigger the slow check at 5s.
+				t.Logf("SubscriberFunc processed %v", e)
+			})
+
+			p.Publish(EventB{67890})
+
+			time.Sleep(7 * time.Second) // advance time...
+			synctest.Wait()             // subscriber is done
+
+			want := regexp.MustCompile(`^.* tailscale.com/util/eventbus_test bus_test.go:\d+: ` +
+				`subscriber for eventbus_test.EventB is slow.*`)
+			if got := buf.String(); !want.MatchString(got) {
+				t.Errorf("Wrong log output\ngot:  %q\nwant: %s", got, want)
+			}
+		})
+	})
 }
 
 func TestRegression(t *testing.T) {
