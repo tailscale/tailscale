@@ -71,11 +71,11 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsUser: ptr.To(int64(0)),
 					},
-					ImagePullSecrets: []corev1.LocalObjectReference{{Name: "docker-creds"}},
-					NodeName:         "some-node",
-					NodeSelector:     map[string]string{"beta.kubernetes.io/os": "linux"},
-					Affinity:         &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{}}},
-					Tolerations:      []corev1.Toleration{{Key: "", Operator: "Exists"}},
+					ImagePullSecrets:  []corev1.LocalObjectReference{{Name: "docker-creds"}},
+					NodeName:          "some-node",
+					NodeSelector:      map[string]string{"beta.kubernetes.io/os": "linux"},
+					Affinity:          &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{}}},
+					Tolerations:       []corev1.Toleration{{Key: "", Operator: "Exists"}},
 					PriorityClassName: "high-priority",
 					TopologySpreadConstraints: []corev1.TopologySpreadConstraint{
 						{

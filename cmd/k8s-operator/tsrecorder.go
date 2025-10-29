@@ -54,7 +54,7 @@ var gaugeRecorderResources = clientmetric.NewGauge(kubetypes.MetricRecorderCount
 // Recorder CRs.
 type RecorderReconciler struct {
 	client.Client
-	l           *zap.SugaredLogger
+	log         *zap.SugaredLogger
 	recorder    record.EventRecorder
 	clock       tstime.Clock
 	tsNamespace string
@@ -66,7 +66,7 @@ type RecorderReconciler struct {
 }
 
 func (r *RecorderReconciler) logger(name string) *zap.SugaredLogger {
-	return r.l.With("Recorder", name)
+	return r.log.With("Recorder", name)
 }
 
 func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, err error) {

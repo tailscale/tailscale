@@ -52,7 +52,7 @@ func TestRecorder(t *testing.T) {
 		Client:      fc,
 		tsClient:    tsClient,
 		recorder:    fr,
-		l:           zl.Sugar(),
+		log:         zl.Sugar(),
 		clock:       cl,
 		loginServer: tsLoginServer,
 	}

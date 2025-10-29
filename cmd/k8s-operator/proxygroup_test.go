@@ -670,7 +670,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 						t.Logf("created node %q with data", n.name)
 					}
 
-					reconciler.l = zl.Sugar().With("TestName", tt.name).With("Reconcile", i)
+					reconciler.log = zl.Sugar().With("TestName", tt.name).With("Reconcile", i)
 					pg.Spec.Replicas = r.replicas
 					pc.Spec.StaticEndpoints = r.staticEndpointConfig
 
@@ -784,7 +784,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 					Client:   fc,
 					tsClient: tsClient,
 					recorder: fr,
-					l:        zl.Sugar().With("TestName", tt.name).With("Reconcile", "cleanup"),
+					log:      zl.Sugar().With("TestName", tt.name).With("Reconcile", "cleanup"),
 					clock:    cl,
 				}
 
@@ -845,7 +845,7 @@ func TestProxyGroup(t *testing.T) {
 		Client:   fc,
 		tsClient: tsClient,
 		recorder: fr,
-		l:        zl.Sugar(),
+		log:      zl.Sugar(),
 		clock:    cl,
 	}
 	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
@@ -1049,7 +1049,7 @@ func TestProxyGroupTypes(t *testing.T) {
 		tsNamespace:  tsNamespace,
 		tsProxyImage: testProxyImage,
 		Client:       fc,
-		l:            zl.Sugar(),
+		log:          zl.Sugar(),
 		tsClient:     &fakeTSClient{},
 		clock:        tstest.NewClock(tstest.ClockOpts{}),
 	}
@@ -1289,24 +1289,24 @@ func TestKubeAPIServerStatusConditionFlow(t *testing.T) {
 		tsNamespace:  tsNamespace,
 		tsProxyImage: testProxyImage,
 		Client:       fc,
-		l:            zap.Must(zap.NewDevelopment()).Sugar(),
+		log:          zap.Must(zap.NewDevelopment()).Sugar(),
 		tsClient:     &fakeTSClient{},
 		clock:        tstest.NewClock(tstest.ClockOpts{}),
 	}
 
 	expectReconciled(t, r, "", pg.Name)
 	pg.ObjectMeta.Finalizers = append(pg.ObjectMeta.Finalizers, FinalizerName)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionFalse, reasonProxyGroupCreating, "", 0, r.clock, r.l)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "", 1, r.clock, r.l)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionFalse, reasonProxyGroupCreating, "", 0, r.clock, r.log)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "", 1, r.clock, r.log)
 	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
 
 	// Set kube-apiserver valid.
 	mustUpdateStatus(t, fc, "", pg.Name, func(p *tsapi.ProxyGroup) {
-		tsoperator.SetProxyGroupCondition(p, tsapi.KubeAPIServerProxyValid, metav1.ConditionTrue, reasonKubeAPIServerProxyValid, "", 1, r.clock, r.l)
+		tsoperator.SetProxyGroupCondition(p, tsapi.KubeAPIServerProxyValid, metav1.ConditionTrue, reasonKubeAPIServerProxyValid, "", 1, r.clock, r.log)
 	})
 	expectReconciled(t, r, "", pg.Name)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionTrue, reasonKubeAPIServerProxyValid, "", 1, r.clock, r.l)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "", 1, r.clock, r.l)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionTrue, reasonKubeAPIServerProxyValid, "", 1, r.clock, r.log)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "", 1, r.clock, r.log)
 	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
 
 	// Set available.
@@ -1318,17 +1318,17 @@ func TestKubeAPIServerStatusConditionFlow(t *testing.T) {
 			TailnetIPs: []string{"1.2.3.4", "::1"},
 		},
 	}
-	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupAvailable, "", 0, r.clock, r.l)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "", 1, r.clock, r.l)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupAvailable, "", 0, r.clock, r.log)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "", 1, r.clock, r.log)
 	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
 
 	// Set kube-apiserver configured.
 	mustUpdateStatus(t, fc, "", pg.Name, func(p *tsapi.ProxyGroup) {
-		tsoperator.SetProxyGroupCondition(p, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionTrue, reasonKubeAPIServerProxyConfigured, "", 1, r.clock, r.l)
+		tsoperator.SetProxyGroupCondition(p, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionTrue, reasonKubeAPIServerProxyConfigured, "", 1, r.clock, r.log)
 	})
 	expectReconciled(t, r, "", pg.Name)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionTrue, reasonKubeAPIServerProxyConfigured, "", 1, r.clock, r.l)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, "", 1, r.clock, r.l)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionTrue, reasonKubeAPIServerProxyConfigured, "", 1, r.clock, r.log)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, "", 1, r.clock, r.log)
 	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
 }
 
@@ -1342,7 +1342,7 @@ func TestKubeAPIServerType_DoesNotOverwriteServicesConfig(t *testing.T) {
 		tsNamespace:  tsNamespace,
 		tsProxyImage: testProxyImage,
 		Client:       fc,
-		l:            zap.Must(zap.NewDevelopment()).Sugar(),
+		log:          zap.Must(zap.NewDevelopment()).Sugar(),
 		tsClient:     &fakeTSClient{},
 		clock:        tstest.NewClock(tstest.ClockOpts{}),
 	}
@@ -1427,7 +1427,7 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 		tsNamespace:  tsNamespace,
 		tsProxyImage: testProxyImage,
 		Client:       fc,
-		l:            zap.Must(zap.NewDevelopment()).Sugar(),
+		log:          zap.Must(zap.NewDevelopment()).Sugar(),
 		tsClient:     &fakeTSClient{},
 		clock:        tstest.NewClock(tstest.ClockOpts{}),
 	}
@@ -1902,7 +1902,7 @@ func TestProxyGroupLetsEncryptStaging(t *testing.T) {
 				defaultProxyClass: tt.defaultProxyClass,
 				Client:            fc,
 				tsClient:          &fakeTSClient{},
-				l:                 zl.Sugar(),
+				log:               zl.Sugar(),
 				clock:             cl,
 			}
 

@@ -636,7 +636,7 @@ func runReconcilers(opts reconcilerOpts) {
 			recorder:    eventRecorder,
 			tsNamespace: opts.tailscaleNamespace,
 			Client:      mgr.GetClient(),
-			l:           opts.log.Named("recorder-reconciler"),
+			log:         opts.log.Named("recorder-reconciler"),
 			clock:       tstime.DefaultClock{},
 			tsClient:    opts.tsClient,
 			loginServer: opts.loginServer,
@@ -691,7 +691,7 @@ func runReconcilers(opts reconcilerOpts) {
 		Complete(&ProxyGroupReconciler{
 			recorder: eventRecorder,
 			Client:   mgr.GetClient(),
-			l:        opts.log.Named("proxygroup-reconciler"),
+			log:      opts.log.Named("proxygroup-reconciler"),
 			clock:    tstime.DefaultClock{},
 			tsClient: opts.tsClient,
 
