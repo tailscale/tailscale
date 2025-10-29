@@ -35,4 +35,8 @@ fi
 ln -s "$TS_TEST_SOCKET" "$socket"
 trap 'rm -f "$socket"' EXIT
 
+if [[ -n "$TS_TEST_ONLY_ROOT" ]]; then
+	echo $$ > "$TS_TEST_ONLY_ROOT/tmp/tailscaled.pid"
+fi
+
 while sleep 10; do :; done
