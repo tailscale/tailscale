@@ -87,6 +87,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/execqueue"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/osuser"
@@ -187,6 +188,7 @@ type LocalBackend struct {
 	statsLogf   logger.Logf             // for printing peers stats on change
 	sys         *tsd.System
 	eventClient *eventbus.Client
+	appcTask    execqueue.ExecQueue // handles updates from appc
 
 	health                   *health.Tracker     // always non-nil
 	polc                     policyclient.Client // always non-nil
@@ -613,12 +615,14 @@ func (b *LocalBackend) onAppConnectorRouteUpdate(ru appctype.RouteUpdate) {
 	// We need to find a way to ensure that changes to the backend state are applied
 	// consistently in the presnce of profile changes, which currently may not happen in
 	// a single atomic step.  See: https://github.com/tailscale/tailscale/issues/17414
-	if err := b.AdvertiseRoute(ru.Advertise...); err != nil {
-		b.logf("appc: failed to advertise routes: %v: %v", ru.Advertise, err)
-	}
-	if err := b.UnadvertiseRoute(ru.Unadvertise...); err != nil {
-		b.logf("appc: failed to unadvertise routes: %v: %v", ru.Unadvertise, err)
-	}
+	b.appcTask.Add(func() {
+		if err := b.AdvertiseRoute(ru.Advertise...); err != nil {
+			b.logf("appc: failed to advertise routes: %v: %v", ru.Advertise, err)
+		}
+		if err := b.UnadvertiseRoute(ru.Unadvertise...); err != nil {
+			b.logf("appc: failed to unadvertise routes: %v: %v", ru.Unadvertise, err)
+		}
+	})
 }
 
 func (b *LocalBackend) onAppConnectorStoreRoutes(ri appctype.RouteInfo) {
@@ -1082,6 +1086,7 @@ func (b *LocalBackend) Shutdown() {
 	//  1. Event handlers also acquire b.mu, they can deadlock with c.Shutdown().
 	//  2. Event handlers may not guard against undesirable post/in-progress
 	//     LocalBackend.Shutdown() behaviors.
+	b.appcTask.Shutdown()
 	b.eventClient.Close()
 
 	b.em.close()
