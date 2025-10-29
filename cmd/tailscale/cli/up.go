@@ -818,6 +818,7 @@ func upWorthyWarning(s string) bool {
 		strings.Contains(s, healthmsg.WarnAcceptRoutesOff) ||
 		strings.Contains(s, healthmsg.LockedOut) ||
 		strings.Contains(s, healthmsg.WarnExitNodeUsage) ||
+		strings.Contains(s, healthmsg.InMemoryTailnetLockState) ||
 		strings.Contains(strings.ToLower(s), "update available: ")
 }
 
