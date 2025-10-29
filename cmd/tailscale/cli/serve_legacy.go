@@ -168,6 +168,7 @@ type serveEnv struct {
 	http             uint                     // HTTP port
 	tcp              uint                     // TCP port
 	tlsTerminatedTCP uint                     // a TLS terminated TCP port
+	proxyProtocol    uint                     // PROXY protocol version (1 or 2)
 	subcmd           serveMode                // subcommand
 	yes              bool                     // update without prompt
 	service          tailcfg.ServiceName      // service name

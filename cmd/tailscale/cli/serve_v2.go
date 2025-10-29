@@ -239,6 +239,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			}
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
+			fs.UintVar(&e.proxyProtocol, "proxy-protocol", 0, "PROXY protocol version (1 or 2) for TCP forwarding")
 			fs.Var(&serviceNameFlag{Value: &e.service}, "service", "Serve for a service with distinct virtual IP instead on node itself.")
 			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
 			fs.BoolVar(&e.tun, "tun", false, "Forward all traffic to the local machine (default false), only supported for services. Refer to docs for more information.")
@@ -957,6 +958,9 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveTy
 	// update serve config based on the type
 	switch srvType {
 	case serveTypeHTTPS, serveTypeHTTP:
+		if e.proxyProtocol != 0 {
+			return fmt.Errorf("PROXY protocol is only supported for TCP forwarding, not HTTP/HTTPS")
+		}
 		useTLS := srvType == serveTypeHTTPS
 		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target, mds, caps)
 		if err != nil {
@@ -1092,6 +1096,9 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		if tcpHandler.TerminateTLS != "" {
 			tlsStatus = "TLS terminated"
 		}
+		if ver := tcpHandler.ProxyProtocol; ver != 0 {
+			tlsStatus = fmt.Sprintf("%s, PROXY protocol v%d", tlsStatus, ver)
+		}
 
 		output.WriteString(fmt.Sprintf("|-- tcp://%s:%d (%s)\n", host, srvPort, tlsStatus))
 		for _, a := range ips {
@@ -1181,6 +1188,11 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 		return fmt.Errorf("invalid TCP target %q", target)
 	}
 
+	// Validate PROXY protocol version
+	if e.proxyProtocol != 0 && e.proxyProtocol != 1 && e.proxyProtocol != 2 {
+		return fmt.Errorf("invalid PROXY protocol version %d; must be 1 or 2", e.proxyProtocol)
+	}
+
 	targetURL, err := ipn.ExpandProxyTargetValue(target, []string{"tcp"}, "tcp")
 	if err != nil {
 		return fmt.Errorf("unable to expand target: %v", err)
@@ -1198,6 +1210,14 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 	}
 
 	sc.SetTCPForwarding(srcPort, dstURL.Host, terminateTLS, dnsName)
+
+	// Set PROXY protocol version if specified
+	if e.proxyProtocol != 0 {
+		handler := sc.GetTCPPortHandler(srcPort, svcName)
+		if handler != nil {
+			handler.ProxyProtocol = int(e.proxyProtocol)
+		}
+	}
 
 	return nil
 }

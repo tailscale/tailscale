@@ -807,12 +807,19 @@ func (v TCPPortHandlerView) TCPForward() string { return v.ж.TCPForward }
 // (the HTTPS mode uses ServeConfig.Web)
 func (v TCPPortHandlerView) TerminateTLS() string { return v.ж.TerminateTLS }
 
+// ProxyProtocol indicates whether to send a PROXY protocol header
+// before forwarding the connection to TCPForward.
+//
+// This is only valid if TCPForward is non-empty.
+func (v TCPPortHandlerView) ProxyProtocol() int { return v.ж.ProxyProtocol }
+
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _TCPPortHandlerViewNeedsRegeneration = TCPPortHandler(struct {
-	HTTPS        bool
-	HTTP         bool
-	TCPForward   string
-	TerminateTLS string
+	HTTPS         bool
+	HTTP          bool
+	TCPForward    string
+	TerminateTLS  string
+	ProxyProtocol int
 }{})
 
 // View returns a read-only view of HTTPHandler.
