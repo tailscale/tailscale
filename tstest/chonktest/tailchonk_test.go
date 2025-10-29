@@ -40,6 +40,12 @@ func TestImplementsCompactableChonk(t *testing.T) {
 		newChonk func(t *testing.T) tka.CompactableChonk
 	}{
 		{
+			name: "Mem",
+			newChonk: func(t *testing.T) tka.CompactableChonk {
+				return &tka.Mem{}
+			},
+		},
+		{
 			name: "FS",
 			newChonk: func(t *testing.T) tka.CompactableChonk {
 				return must.Get(tka.ChonkDir(t.TempDir()))

@@ -127,6 +127,43 @@ func TestTailchonkFS_IgnoreTempFile(t *testing.T) {
 	}
 }
 
+// If we use a non-existent directory with filesystem Chonk storage,
+// it's automatically created.
+func TestTailchonkFS_CreateChonkDir(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "a", "b", "c")
+
+	chonk, err := ChonkDir(base)
+	if err != nil {
+		t.Fatalf("ChonkDir: %v", err)
+	}
+
+	aum := AUM{MessageKind: AUMNoOp}
+	must.Do(chonk.CommitVerifiedAUMs([]AUM{aum}))
+
+	got, err := chonk.AUM(aum.Hash())
+	if err != nil {
+		t.Errorf("Chonk.AUM: %v", err)
+	}
+	if diff := cmp.Diff(got, aum); diff != "" {
+		t.Errorf("wrong AUM; (-got+want):%v", diff)
+	}
+
+	if _, err := os.Stat(base); err != nil {
+		t.Errorf("os.Stat: %v", err)
+	}
+}
+
+// You can't use a file as the root of your filesystem Chonk storage.
+func TestTailchonkFS_CannotUseFile(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "tka_storage.txt")
+	must.Do(os.WriteFile(base, []byte("this won't work"), 0644))
+
+	_, err := ChonkDir(base)
+	if err == nil {
+		t.Fatal("ChonkDir succeeded; expected an error")
+	}
+}
+
 func TestMarkActiveChain(t *testing.T) {
 	type aumTemplate struct {
 		AUM AUM
