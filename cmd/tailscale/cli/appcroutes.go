@@ -5,7 +5,7 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"flag"
 	"fmt"
 	"slices"
@@ -52,11 +52,11 @@ https://tailscale.com/kb/1281/app-connectors
 }
 
 func getAllOutput(ri *appctype.RouteInfo) (string, error) {
-	domains, err := json.MarshalIndent(ri.Domains, " ", "  ")
+	domains, err := jsonv1.MarshalIndent(ri.Domains, " ", "  ")
 	if err != nil {
 		return "", err
 	}
-	control, err := json.MarshalIndent(ri.Control, " ", "  ")
+	control, err := jsonv1.MarshalIndent(ri.Control, " ", "  ")
 	if err != nil {
 		return "", err
 	}
@@ -131,7 +131,7 @@ func runAppcRoutesInfo(ctx context.Context, args []string) error {
 	}
 
 	if appcRoutesArgs.domainMap {
-		domains, err := json.Marshal(routeInfo.Domains)
+		domains, err := jsonv1.Marshal(routeInfo.Domains)
 		if err != nil {
 			return err
 		}

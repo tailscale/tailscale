@@ -8,7 +8,7 @@ package tailscale
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -103,7 +103,7 @@ func (c *Client) ACL(ctx context.Context) (acl *ACL, err error) {
 
 	// Otherwise, try to decode the response.
 	var aclDetails ACLDetails
-	if err = json.Unmarshal(b, &aclDetails); err != nil {
+	if err = jsonv1.Unmarshal(b, &aclDetails); err != nil {
 		return nil, err
 	}
 	acl = &ACL{
@@ -146,7 +146,7 @@ func (c *Client) ACLHuJSON(ctx context.Context) (acl *ACLHuJSON, err error) {
 		ACL      []byte   `json:"acl"`
 		Warnings []string `json:"warnings"`
 	}{}
-	if err := json.Unmarshal(b, &data); err != nil {
+	if err := jsonv1.Unmarshal(b, &data); err != nil {
 		return nil, fmt.Errorf("json.Unmarshal %q: %w", b, err)
 	}
 
@@ -206,7 +206,7 @@ func (c *Client) aclPOSTRequest(ctx context.Context, body []byte, avoidCollision
 	if resp.StatusCode != http.StatusOK {
 		// check if test error
 		var ate ACLTestError
-		if err := json.Unmarshal(b, &ate); err != nil {
+		if err := jsonv1.Unmarshal(b, &ate); err != nil {
 			return nil, "", err
 		}
 		ate.Status = resp.StatusCode
@@ -230,7 +230,7 @@ func (c *Client) SetACL(ctx context.Context, acl ACL, avoidCollisions bool) (res
 			err = fmt.Errorf("tailscale.SetACL: %w", err)
 		}
 	}()
-	postData, err := json.Marshal(acl.ACL)
+	postData, err := jsonv1.Marshal(acl.ACL)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +241,7 @@ func (c *Client) SetACL(ctx context.Context, acl ACL, avoidCollisions bool) (res
 
 	// Otherwise, try to decode the response.
 	var aclDetails ACLDetails
-	if err = json.Unmarshal(b, &aclDetails); err != nil {
+	if err = jsonv1.Unmarshal(b, &aclDetails); err != nil {
 		return nil, err
 	}
 	res = &ACL{
@@ -353,7 +353,7 @@ func (c *Client) previewACLPostRequest(ctx context.Context, body []byte, preview
 	if resp.StatusCode != http.StatusOK {
 		return nil, HandleErrorResponse(b, resp)
 	}
-	if err = json.Unmarshal(b, &res); err != nil {
+	if err = jsonv1.Unmarshal(b, &res); err != nil {
 		return nil, err
 	}
 
@@ -373,7 +373,7 @@ func (c *Client) PreviewACLForUser(ctx context.Context, acl ACL, user string) (r
 			err = fmt.Errorf("tailscale.PreviewACLForUser: %w", err)
 		}
 	}()
-	postData, err := json.Marshal(acl.ACL)
+	postData, err := jsonv1.Marshal(acl.ACL)
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +402,7 @@ func (c *Client) PreviewACLForIPPort(ctx context.Context, acl ACL, ipport netip.
 			err = fmt.Errorf("tailscale.PreviewACLForIPPort: %w", err)
 		}
 	}()
-	postData, err := json.Marshal(acl.ACL)
+	postData, err := jsonv1.Marshal(acl.ACL)
 	if err != nil {
 		return nil, err
 	}
@@ -484,7 +484,7 @@ func (c *Client) ValidateACLJSON(ctx context.Context, source, dest string) (test
 	}()
 
 	tests := []ACLTest{{User: source, Allow: []string{dest}}}
-	postData, err := json.Marshal(tests)
+	postData, err := jsonv1.Marshal(tests)
 	if err != nil {
 		return nil, err
 	}
@@ -514,7 +514,7 @@ func (c *Client) ValidateACLJSON(ctx context.Context, source, dest string) (test
 
 	var res ACLTestError
 	// The test returned errors.
-	if err = json.Unmarshal(b, &res); err != nil {
+	if err = jsonv1.Unmarshal(b, &res); err != nil {
 		// failed to unmarshal
 		return nil, err
 	}

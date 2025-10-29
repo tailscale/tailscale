@@ -11,7 +11,7 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -119,7 +119,7 @@ func runMTSServer(args []string) error {
 				if !ok {
 					return fmt.Errorf("no instance named %q", name)
 				}
-				je := json.NewEncoder(os.Stdout)
+				je := jsonv1.NewEncoder(os.Stdout)
 				je.SetIndent("", "  ")
 				if err := je.Encode(inst); err != nil {
 					return err
@@ -242,7 +242,7 @@ func getJSON[T any](res *http.Response, err error) (T, error) {
 		body, _ := io.ReadAll(res.Body)
 		return ret, fmt.Errorf("unexpected status: %v: %s", res.Status, body)
 	}
-	if err := json.NewDecoder(res.Body).Decode(&ret); err != nil {
+	if err := jsonv1.NewDecoder(res.Body).Decode(&ret); err != nil {
 		return ret, err
 	}
 	return ret, nil
@@ -484,7 +484,7 @@ type listResponseInstance struct {
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	e := json.NewEncoder(w)
+	e := jsonv1.NewEncoder(w)
 	e.SetIndent("", "  ")
 	e.Encode(v)
 }

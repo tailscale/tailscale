@@ -10,7 +10,7 @@ import (
 	crand "crypto/rand"
 	"crypto/tls"
 	"encoding/binary"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"expvar"
 	"fmt"
@@ -595,7 +595,7 @@ func (d *derpProber) updateMap(ctx context.Context) error {
 			return fmt.Errorf("fetching %s: %s", d.derpMapURL, res.Status)
 		}
 		dm = new(tailcfg.DERPMap)
-		if err := json.NewDecoder(res.Body).Decode(dm); err != nil {
+		if err := jsonv1.NewDecoder(res.Body).Decode(dm); err != nil {
 			return fmt.Errorf("decoding %s JSON: %v", d.derpMapURL, err)
 		}
 	}

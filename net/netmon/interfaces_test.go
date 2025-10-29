@@ -4,7 +4,7 @@
 package netmon
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"net"
 	"net/netip"
 	"testing"
@@ -17,7 +17,7 @@ func TestGetState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	j, err := json.MarshalIndent(st, "", "\t")
+	j, err := jsonv1.MarshalIndent(st, "", "\t")
 	if err != nil {
 		t.Errorf("JSON: %v", err)
 	}

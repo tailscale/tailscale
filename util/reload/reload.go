@@ -7,7 +7,7 @@ package reload
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -180,7 +180,7 @@ func FromJSONFile[T any](path string) ReloadOpts[T] {
 		},
 		Unmarshal: func(b []byte) (T, error) {
 			var ret, zero T
-			if err := json.Unmarshal(b, &ret); err != nil {
+			if err := jsonv1.Unmarshal(b, &ret); err != nil {
 				return zero, err
 			}
 			return ret, nil

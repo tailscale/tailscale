@@ -7,7 +7,7 @@
 package deptest
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,7 +56,7 @@ func (c DepChecker) Check(t *testing.T) {
 		Imports []string
 		Deps    []string
 	}
-	if err := json.Unmarshal(out, &res); err != nil {
+	if err := jsonv1.Unmarshal(out, &res); err != nil {
 		t.Fatal(err)
 	}
 

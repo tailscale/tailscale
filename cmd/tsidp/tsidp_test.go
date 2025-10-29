@@ -19,7 +19,7 @@ package main
 import (
 	"crypto/rand"
 	"crypto/rsa"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -79,7 +79,7 @@ func normalizeMap(t *testing.T, m map[string]any) map[string]any {
 
 func mustMarshalJSON(t *testing.T, v any) tailcfg.RawMessage {
 	t.Helper()
-	b, err := json.Marshal(v)
+	b, err := jsonv1.Marshal(v)
 	if err != nil {
 		panic(err)
 	}
@@ -461,13 +461,13 @@ func TestExtraClaims(t *testing.T) {
 			}
 
 			// Marshal to JSON then unmarshal back to map[string]any
-			gotClaims, err := json.Marshal(claims)
+			gotClaims, err := jsonv1.Marshal(claims)
 			if err != nil {
 				t.Errorf("json.Marshal(claims) error = %v", err)
 			}
 
 			var gotClaimsMap map[string]any
-			if err := json.Unmarshal(gotClaims, &gotClaimsMap); err != nil {
+			if err := jsonv1.Unmarshal(gotClaims, &gotClaimsMap); err != nil {
 				t.Fatalf("json.Unmarshal(gotClaims) error = %v", err)
 			}
 
@@ -671,7 +671,7 @@ func TestServeToken(t *testing.T) {
 			var resp struct {
 				IDToken string `json:"id_token"`
 			}
-			if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			if err := jsonv1.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 				t.Fatalf("failed to unmarshal response: %v", err)
 			}
 
@@ -861,7 +861,7 @@ func TestExtraUserInfo(t *testing.T) {
 			}
 
 			var resp map[string]any
-			if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			if err := jsonv1.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 				t.Fatalf("failed to parse JSON response: %v", err)
 			}
 
@@ -898,7 +898,7 @@ func TestFunnelClientsPersistence(t *testing.T) {
 		},
 	}
 
-	testData, err := json.Marshal(testClients)
+	testData, err := jsonv1.Marshal(testClients)
 	if err != nil {
 		t.Fatalf("failed to marshal test data: %v", err)
 	}
@@ -915,7 +915,7 @@ func TestFunnelClientsPersistence(t *testing.T) {
 		srv.funnelClients = make(map[string]*funnelClient)
 		f, err := os.Open(tmpFile)
 		if err == nil {
-			if err := json.NewDecoder(f).Decode(&srv.funnelClients); err != nil {
+			if err := jsonv1.NewDecoder(f).Decode(&srv.funnelClients); err != nil {
 				t.Fatalf("could not parse %s: %v", tmpFile, err)
 			}
 			f.Close()
@@ -950,7 +950,7 @@ func TestFunnelClientsPersistence(t *testing.T) {
 		srv.funnelClients = make(map[string]*funnelClient)
 		f, err := os.Open(nonExistentFile)
 		if err == nil {
-			if err := json.NewDecoder(f).Decode(&srv.funnelClients); err != nil {
+			if err := jsonv1.NewDecoder(f).Decode(&srv.funnelClients); err != nil {
 				t.Fatalf("could not parse %s: %v", nonExistentFile, err)
 			}
 			f.Close()
@@ -982,7 +982,7 @@ func TestFunnelClientsPersistence(t *testing.T) {
 		}
 
 		// Save clients to file (simulating saveFunnelClients)
-		data, err := json.Marshal(srv1.funnelClients)
+		data, err := jsonv1.Marshal(srv1.funnelClients)
 		if err != nil {
 			t.Fatalf("failed to marshal clients: %v", err)
 		}
@@ -995,7 +995,7 @@ func TestFunnelClientsPersistence(t *testing.T) {
 		srv2.funnelClients = make(map[string]*funnelClient)
 		f, err := os.Open(tmpFile2)
 		if err == nil {
-			if err := json.NewDecoder(f).Decode(&srv2.funnelClients); err != nil {
+			if err := jsonv1.NewDecoder(f).Decode(&srv2.funnelClients); err != nil {
 				t.Fatalf("could not parse %s: %v", tmpFile2, err)
 			}
 			f.Close()
@@ -1255,7 +1255,7 @@ func TestMigrateOAuthClients(t *testing.T) {
 
 			// Setup old file if needed
 			if tt.setupOldFile {
-				oldData, err := json.Marshal(tt.oldFileContent)
+				oldData, err := jsonv1.Marshal(tt.oldFileContent)
 				if err != nil {
 					t.Fatalf("failed to marshal old file content: %v", err)
 				}
@@ -1267,7 +1267,7 @@ func TestMigrateOAuthClients(t *testing.T) {
 
 			// Setup new file if needed
 			if tt.setupNewFile {
-				newData, err := json.Marshal(tt.newFileContent)
+				newData, err := jsonv1.Marshal(tt.newFileContent)
 				if err != nil {
 					t.Fatalf("failed to marshal new file content: %v", err)
 				}
@@ -1309,7 +1309,7 @@ func TestMigrateOAuthClients(t *testing.T) {
 				}
 
 				var clients map[string]*funnelClient
-				if err := json.Unmarshal(data, &clients); err != nil {
+				if err := jsonv1.Unmarshal(data, &clients); err != nil {
 					t.Fatalf("failed to unmarshal new file: %v", err)
 				}
 
@@ -1854,7 +1854,7 @@ func TestServeTokenWithClientValidation(t *testing.T) {
 					ExpiresIn   int    `json:"expires_in"`
 				}
 
-				if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+				if err := jsonv1.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 					t.Fatalf("failed to unmarshal response: %v", err)
 				}
 
@@ -2035,7 +2035,7 @@ func TestServeUserInfoWithClientValidation(t *testing.T) {
 				}
 
 				var resp map[string]any
-				if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+				if err := jsonv1.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 					t.Fatalf("failed to parse JSON response: %v", err)
 				}
 

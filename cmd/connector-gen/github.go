@@ -4,7 +4,7 @@
 package main
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -51,7 +51,7 @@ func github() {
 
 	var ghm GithubMeta
 
-	if err := json.NewDecoder(r.Body).Decode(&ghm); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&ghm); err != nil {
 		log.Fatal(err)
 	}
 	r.Body.Close()

@@ -4,7 +4,7 @@
 package appctype
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"net/netip"
 	"strings"
 	"testing"
@@ -46,7 +46,7 @@ func TestGolden(t *testing.T) {
 	}}
 
 	var config AppConnectorConfig
-	if err := json.NewDecoder(strings.NewReader(golden)).Decode(&config); err != nil {
+	if err := jsonv1.NewDecoder(strings.NewReader(golden)).Decode(&config); err != nil {
 		t.Fatalf("failed to decode golden config: %v", err)
 	}
 
@@ -60,10 +60,10 @@ func TestGolden(t *testing.T) {
 
 func TestRoundTrip(t *testing.T) {
 	var config AppConnectorConfig
-	must.Do(json.NewDecoder(strings.NewReader(golden)).Decode(&config))
-	b := must.Get(json.Marshal(config))
+	must.Do(jsonv1.NewDecoder(strings.NewReader(golden)).Decode(&config))
+	b := must.Get(jsonv1.Marshal(config))
 	var config2 AppConnectorConfig
-	must.Do(json.Unmarshal(b, &config2))
+	must.Do(jsonv1.Unmarshal(b, &config2))
 	assertEqual(t, "DNAT", config.DNAT, config2.DNAT)
 }
 

@@ -4,7 +4,7 @@
 package ipn
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -750,8 +750,8 @@ func TestPrefsApplyEdits(t *testing.T) {
 			got := tt.prefs.Clone()
 			got.ApplyEdits(tt.edit)
 			if !got.Equals(tt.want) {
-				gotj, _ := json.Marshal(got)
-				wantj, _ := json.Marshal(tt.want)
+				gotj, _ := jsonv1.Marshal(got)
+				wantj, _ := jsonv1.Marshal(tt.want)
 				t.Errorf("fail.\n got: %s\nwant: %s\n", gotj, wantj)
 			}
 		})
@@ -1114,13 +1114,13 @@ func TestNotifyPrefsJSONRoundtrip(t *testing.T) {
 	if n.Prefs != nil && n.Prefs.Valid() {
 		t.Fatal("Prefs should not be valid at start")
 	}
-	b, err := json.Marshal(n)
+	b, err := jsonv1.Marshal(n)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var n2 Notify
-	if err := json.Unmarshal(b, &n2); err != nil {
+	if err := jsonv1.Unmarshal(b, &n2); err != nil {
 		t.Fatal(err)
 	}
 	if n2.Prefs != nil && n2.Prefs.Valid() {
@@ -1132,7 +1132,7 @@ func TestNotifyPrefsJSONRoundtrip(t *testing.T) {
 // downgrade to older versions that require it.
 func TestPrefsDowngrade(t *testing.T) {
 	var p Prefs
-	j, err := json.Marshal(p)
+	j, err := jsonv1.Marshal(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1141,7 +1141,7 @@ func TestPrefsDowngrade(t *testing.T) {
 		AllowSingleHosts bool
 	}
 	var op oldPrefs
-	if err := json.Unmarshal(j, &op); err != nil {
+	if err := jsonv1.Unmarshal(j, &op); err != nil {
 		t.Fatal(err)
 	}
 	if !op.AllowSingleHosts {

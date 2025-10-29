@@ -8,7 +8,7 @@ package main
 import (
 	"bytes"
 	"embed"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -80,7 +80,7 @@ func generateServeIndex(distFS fs.FS) ([]byte, error) {
 		return nil, fmt.Errorf("Could not read esbuild-metadata.json: %w", err)
 	}
 	var esbuildMetadata EsbuildMetadata
-	if err := json.Unmarshal(esbuildMetadataBytes, &esbuildMetadata); err != nil {
+	if err := jsonv1.Unmarshal(esbuildMetadataBytes, &esbuildMetadata); err != nil {
 		return nil, fmt.Errorf("Could not parse esbuild-metadata.json: %w", err)
 	}
 	entryPointsToHashedDistPaths := make(map[string]string)

@@ -7,7 +7,7 @@ package acme
 import (
 	"crypto"
 	"crypto/x509"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -565,7 +565,7 @@ type Challenge struct {
 	// Payload is used only for newer challenges (such as "device-attest-01")
 	// where the client must send additional data for the server to validate
 	// the challenge.
-	Payload json.RawMessage
+	Payload jsonv1.RawMessage
 }
 
 // wireChallenge is ACME JSON challenge representation.

@@ -5,7 +5,7 @@ package ippool
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -68,7 +68,7 @@ func (ipp *ConsensusIPPool) IPForDomain(nid tailcfg.NodeID, domain string) (neti
 		ReuseDeadline: now.Add(-1 * ipp.unusedAddressLifetime),
 		UpdatedAt:     now,
 	}
-	bs, err := json.Marshal(args)
+	bs, err := jsonv1.Marshal(args)
 	if err != nil {
 		return netip.Addr{}, err
 	}
@@ -86,7 +86,7 @@ func (ipp *ConsensusIPPool) IPForDomain(nid tailcfg.NodeID, domain string) (neti
 		return netip.Addr{}, result.Err
 	}
 	var addr netip.Addr
-	err = json.Unmarshal(result.Result, &addr)
+	err = jsonv1.Unmarshal(result.Result, &addr)
 	return addr, err
 }
 
@@ -230,7 +230,7 @@ type readDomainForIPArgs struct {
 // executeReadDomainForIP parses a readDomainForIP log entry and applies it.
 func (ipp *ConsensusIPPool) executeReadDomainForIP(bs []byte) tsconsensus.CommandResult {
 	var args readDomainForIPArgs
-	err := json.Unmarshal(bs, &args)
+	err := jsonv1.Unmarshal(bs, &args)
 	if err != nil {
 		return tsconsensus.CommandResult{Err: err}
 	}
@@ -249,7 +249,7 @@ func (ipp *ConsensusIPPool) applyReadDomainForIP(from tailcfg.NodeID, addr netip
 		}
 		return ww.Domain
 	}()
-	resultBs, err := json.Marshal(domain)
+	resultBs, err := jsonv1.Marshal(domain)
 	return tsconsensus.CommandResult{Result: resultBs, Err: err}
 }
 
@@ -259,7 +259,7 @@ func (ipp *ConsensusIPPool) readDomainForIP(nid tailcfg.NodeID, addr netip.Addr)
 		NodeID: nid,
 		Addr:   addr,
 	}
-	bs, err := json.Marshal(args)
+	bs, err := jsonv1.Marshal(args)
 	if err != nil {
 		return "", err
 	}
@@ -277,7 +277,7 @@ func (ipp *ConsensusIPPool) readDomainForIP(nid tailcfg.NodeID, addr netip.Addr)
 		return "", result.Err
 	}
 	var domain string
-	err = json.Unmarshal(result.Result, &domain)
+	err = jsonv1.Unmarshal(result.Result, &domain)
 	return domain, err
 }
 
@@ -291,7 +291,7 @@ type markLastUsedArgs struct {
 // executeMarkLastUsed parses a markLastUsed log entry and applies it.
 func (ipp *ConsensusIPPool) executeMarkLastUsed(bs []byte) tsconsensus.CommandResult {
 	var args markLastUsedArgs
-	err := json.Unmarshal(bs, &args)
+	err := jsonv1.Unmarshal(bs, &args)
 	if err != nil {
 		return tsconsensus.CommandResult{Err: err}
 	}
@@ -339,7 +339,7 @@ func (ipp *ConsensusIPPool) markLastUsed(nid tailcfg.NodeID, addr netip.Addr, do
 		Domain:    domain,
 		UpdatedAt: lastUsed,
 	}
-	bs, err := json.Marshal(args)
+	bs, err := jsonv1.Marshal(args)
 	if err != nil {
 		return err
 	}
@@ -369,7 +369,7 @@ type checkoutAddrArgs struct {
 // executeCheckoutAddr parses a checkoutAddr raft log entry and applies it.
 func (ipp *ConsensusIPPool) executeCheckoutAddr(bs []byte) tsconsensus.CommandResult {
 	var args checkoutAddrArgs
-	err := json.Unmarshal(bs, &args)
+	err := jsonv1.Unmarshal(bs, &args)
 	if err != nil {
 		return tsconsensus.CommandResult{Err: err}
 	}
@@ -377,7 +377,7 @@ func (ipp *ConsensusIPPool) executeCheckoutAddr(bs []byte) tsconsensus.CommandRe
 	if err != nil {
 		return tsconsensus.CommandResult{Err: err}
 	}
-	resultBs, err := json.Marshal(addr)
+	resultBs, err := jsonv1.Marshal(addr)
 	if err != nil {
 		return tsconsensus.CommandResult{Err: err}
 	}
@@ -424,7 +424,7 @@ func (ipp *ConsensusIPPool) applyCheckoutAddr(nid tailcfg.NodeID, domain string,
 // Apply is part of the raft.FSM interface. It takes an incoming log entry and applies it to the state.
 func (ipp *ConsensusIPPool) Apply(l *raft.Log) any {
 	var c tsconsensus.Command
-	if err := json.Unmarshal(l.Data, &c); err != nil {
+	if err := jsonv1.Unmarshal(l.Data, &c); err != nil {
 		panic(fmt.Sprintf("failed to unmarshal command: %s", err.Error()))
 	}
 	switch c.Name {

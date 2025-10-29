@@ -13,7 +13,7 @@ package dnsfallback
 import (
 	"context"
 	_ "embed"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -154,7 +154,7 @@ func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netip.Addr
 	if res.StatusCode != 200 {
 		return nil, errors.New(res.Status)
 	}
-	if err := json.NewDecoder(res.Body).Decode(&dm); err != nil {
+	if err := jsonv1.NewDecoder(res.Body).Decode(&dm); err != nil {
 		return nil, err
 	}
 	return dm, nil
@@ -210,7 +210,7 @@ func GetDERPMap() *tailcfg.DERPMap {
 // getStaticDERPMap returns the DERP map that was compiled into this binary.
 func getStaticDERPMap() *tailcfg.DERPMap {
 	dm := new(tailcfg.DERPMap)
-	if err := json.Unmarshal(staticDERPMapJSON, dm); err != nil {
+	if err := jsonv1.Unmarshal(staticDERPMapJSON, dm); err != nil {
 		panic(err)
 	}
 	return dm
@@ -236,7 +236,7 @@ func UpdateCache(c *tailcfg.DERPMap, logf logger.Logf) {
 		return
 	}
 
-	d, err := json.Marshal(c)
+	d, err := jsonv1.Marshal(c)
 	if err != nil {
 		logf("[v1] dnsfallback: UpdateCache error marshaling: %v", err)
 		return
@@ -273,7 +273,7 @@ func SetCachePath(path string, logf logger.Logf) {
 	defer f.Close()
 
 	dm := new(tailcfg.DERPMap)
-	if err := json.NewDecoder(f).Decode(dm); err != nil {
+	if err := jsonv1.NewDecoder(f).Decode(dm); err != nil {
 		logf("[v1] dnsfallback: SetCachePath error decoding %q: %v", path, err)
 		return
 	}

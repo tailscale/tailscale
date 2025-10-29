@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"testing"
 
@@ -284,7 +284,7 @@ func configFromCM(t *testing.T, cm *corev1.ConfigMap, svcName string) *egressser
 		return nil
 	}
 	cfgs := &egressservices.Configs{}
-	if err := json.Unmarshal(cfgBs, cfgs); err != nil {
+	if err := jsonv1.Unmarshal(cfgBs, cfgs); err != nil {
 		t.Fatalf("error unmarshalling config: %v", err)
 	}
 	cfg, ok := (*cfgs)[svcName]

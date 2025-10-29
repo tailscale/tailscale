@@ -10,7 +10,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -219,7 +219,7 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 	}
 
 	if nlStatusArgs.json {
-		enc := json.NewEncoder(os.Stdout)
+		enc := jsonv1.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(st)
 	}
@@ -678,7 +678,7 @@ func nlDescribeUpdate(update ipnstate.NetworkLockUpdate, color bool) (string, er
 
 	default:
 		// Print a JSON encoding of the AUM as a fallback.
-		e := json.NewEncoder(&stanza)
+		e := jsonv1.NewEncoder(&stanza)
 		e.SetIndent("", "\t")
 		if err := e.Encode(aum); err != nil {
 			return "", err
@@ -703,7 +703,7 @@ func runNetworkLockLog(ctx context.Context, args []string) error {
 		return fixTailscaledConnectError(err)
 	}
 	if nlLogArgs.json {
-		enc := json.NewEncoder(Stdout)
+		enc := jsonv1.NewEncoder(Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(updates)
 	}

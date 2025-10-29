@@ -7,7 +7,7 @@ package local
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/http"
 
@@ -34,7 +34,7 @@ func (lc *Client) GetServeConfig(ctx context.Context) (*ipn.ServeConfig, error) 
 }
 
 func getServeConfigFromJSON(body []byte) (sc *ipn.ServeConfig, err error) {
-	if err := json.Unmarshal(body, &sc); err != nil {
+	if err := jsonv1.Unmarshal(body, &sc); err != nil {
 		return nil, err
 	}
 	return sc, nil

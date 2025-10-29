@@ -4,7 +4,7 @@
 package opt
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"flag"
 	"reflect"
 	"strings"
@@ -72,7 +72,7 @@ func TestBool(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			j, err := json.Marshal(tt.in)
+			j, err := jsonv1.Marshal(tt.in)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -87,7 +87,7 @@ func TestBool(t *testing.T) {
 			// And back again:
 			newVal := reflect.New(reflect.TypeOf(tt.in))
 			out := newVal.Interface()
-			if err := json.Unmarshal(j, out); err != nil {
+			if err := jsonv1.Unmarshal(j, out); err != nil {
 				t.Fatalf("Unmarshal %#q: %v", j, err)
 			}
 			got := newVal.Elem().Interface()
@@ -123,7 +123,7 @@ func TestBoolEqualBool(t *testing.T) {
 }
 
 func TestUnmarshalAlloc(t *testing.T) {
-	b := json.Unmarshaler(new(Bool))
+	b := jsonv1.Unmarshaler(new(Bool))
 	n := testing.AllocsPerRun(10, func() { b.UnmarshalJSON(trueBytes) })
 	if n > 0 {
 		t.Errorf("got %v allocs, want 0", n)

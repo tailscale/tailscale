@@ -10,7 +10,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -105,7 +105,7 @@ func verifyWebhookSignature(req *http.Request, secret string) (events []event, e
 	}
 
 	// If verified, return the events.
-	if err := json.Unmarshal(b, &events); err != nil {
+	if err := jsonv1.Unmarshal(b, &events); err != nil {
 		return nil, err
 	}
 	return events, nil

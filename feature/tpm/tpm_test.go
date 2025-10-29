@@ -6,7 +6,7 @@ package tpm
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -289,7 +289,7 @@ func TestMigrateStateToTPM(t *testing.T) {
 				t.Fatal(err)
 			}
 			var data map[string]any
-			if err := json.Unmarshal(buf, &data); err != nil {
+			if err := jsonv1.Unmarshal(buf, &data); err != nil {
 				t.Fatal(err)
 			}
 			gotKeys := slices.Collect(maps.Keys(data))
@@ -325,7 +325,7 @@ func newMockTPMSeal(logf logger.Logf, path string) (ipn.StateStore, error) {
 		Nonce string
 		Data  map[ipn.StateKey][]byte
 	}
-	if err := json.Unmarshal(buf, &data); err != nil {
+	if err := jsonv1.Unmarshal(buf, &data); err != nil {
 		return nil, err
 	}
 	if data.Key == "" || data.Nonce == "" {
@@ -354,7 +354,7 @@ func (p *mockTPMSealProvider) flushState() error {
 		"nonce": "bar",
 		"data":  p.data,
 	}
-	buf, err := json.Marshal(data)
+	buf, err := jsonv1.Marshal(data)
 	if err != nil {
 		return err
 	}

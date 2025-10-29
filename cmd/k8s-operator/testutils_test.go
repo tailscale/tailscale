@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -501,7 +501,7 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 		},
 	}
 	if opts.serveConfig != nil {
-		serveConfigBs, err := json.Marshal(opts.serveConfig)
+		serveConfigBs, err := jsonv1.Marshal(opts.serveConfig)
 		if err != nil {
 			t.Fatalf("error marshalling serve config: %v", err)
 		}
@@ -548,12 +548,12 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 		}
 	}
 	conf.AdvertiseRoutes = routes
-	bnn, err := json.Marshal(conf)
+	bnn, err := jsonv1.Marshal(conf)
 	if err != nil {
 		t.Fatalf("error marshalling tailscaled config")
 	}
 	conf.AppConnector = nil
-	bn, err := json.Marshal(conf)
+	bn, err := jsonv1.Marshal(conf)
 	if err != nil {
 		t.Fatalf("error marshalling tailscaled config")
 	}
@@ -897,11 +897,11 @@ func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {
 		t.Helper()
 		if len(secret.StringData["cap-95.hujson"]) != 0 {
 			conf := &ipn.ConfigVAlpha{}
-			if err := json.Unmarshal([]byte(secret.StringData["cap-95.hujson"]), conf); err != nil {
+			if err := jsonv1.Unmarshal([]byte(secret.StringData["cap-95.hujson"]), conf); err != nil {
 				t.Fatalf("error umarshalling 'cap-95.hujson' contents: %v", err)
 			}
 			conf.AuthKey = nil
-			b, err := json.Marshal(conf)
+			b, err := jsonv1.Marshal(conf)
 			if err != nil {
 				t.Fatalf("error marshalling 'cap-95.huson' contents: %v", err)
 			}
@@ -909,11 +909,11 @@ func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {
 		}
 		if len(secret.StringData["cap-107.hujson"]) != 0 {
 			conf := &ipn.ConfigVAlpha{}
-			if err := json.Unmarshal([]byte(secret.StringData["cap-107.hujson"]), conf); err != nil {
+			if err := jsonv1.Unmarshal([]byte(secret.StringData["cap-107.hujson"]), conf); err != nil {
 				t.Fatalf("error umarshalling 'cap-107.hujson' contents: %v", err)
 			}
 			conf.AuthKey = nil
-			b, err := json.Marshal(conf)
+			b, err := jsonv1.Marshal(conf)
 			if err != nil {
 				t.Fatalf("error marshalling 'cap-107.huson' contents: %v", err)
 			}

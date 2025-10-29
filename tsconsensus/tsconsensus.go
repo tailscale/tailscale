@@ -25,7 +25,7 @@ package tsconsensus
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -397,7 +397,7 @@ func (c *Consensus) bootstrap(ctx context.Context, auth *authorization, opts Boo
 // ExecuteCommand propagates a Command to be executed on the leader. Which
 // uses raft to Apply it to the followers.
 func (c *Consensus) ExecuteCommand(cmd Command) (CommandResult, error) {
-	b, err := json.Marshal(cmd)
+	b, err := jsonv1.Marshal(cmd)
 	if err != nil {
 		return CommandResult{}, err
 	}
@@ -435,7 +435,7 @@ type Command struct {
 	// The Name can be used to dispatch the command when received.
 	Name string
 	// The Args are serialized for transport.
-	Args json.RawMessage
+	Args jsonv1.RawMessage
 }
 
 // A CommandResult is a representation of the result of a state
@@ -445,7 +445,7 @@ type CommandResult struct {
 	// including any error from the underlying operation and deserialization problems etc.
 	Err error
 	// Result is serialized for transport.
-	Result json.RawMessage
+	Result jsonv1.RawMessage
 }
 
 type lookElsewhereError struct {
@@ -484,7 +484,7 @@ func (c *Consensus) getLeader() (string, error) {
 }
 
 func (c *Consensus) executeCommandLocally(cmd Command) (CommandResult, error) {
-	b, err := json.Marshal(cmd)
+	b, err := jsonv1.Marshal(cmd)
 	if err != nil {
 		return CommandResult{}, err
 	}

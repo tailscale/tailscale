@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -1282,7 +1282,7 @@ func TestServiceProxyClassAnnotation(t *testing.T) {
 			slist := &corev1.SecretList{}
 			fc.List(context.Background(), slist, client.InNamespace("operator-ns"))
 			for _, i := range slist.Items {
-				l, _ := json.Marshal(i.Labels)
+				l, _ := jsonv1.Marshal(i.Labels)
 				t.Logf("found secret %q with labels %q ", i.Name, string(l))
 			}
 

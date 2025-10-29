@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -574,7 +574,7 @@ func TestManualDial(t *testing.T) {
 		t.Fatalf("fetching DERPMap: %v", err)
 	}
 	defer res.Body.Close()
-	if err := json.NewDecoder(res.Body).Decode(dm); err != nil {
+	if err := jsonv1.NewDecoder(res.Body).Decode(dm); err != nil {
 		t.Fatalf("decoding DERPMap: %v", err)
 	}
 
@@ -601,7 +601,7 @@ func TestURLDial(t *testing.T) {
 		t.Fatalf("fetching DERPMap: %v", err)
 	}
 	defer res.Body.Close()
-	if err := json.NewDecoder(res.Body).Decode(dm); err != nil {
+	if err := jsonv1.NewDecoder(res.Body).Decode(dm); err != nil {
 		t.Fatalf("decoding DERPMap: %v", err)
 	}
 

@@ -7,7 +7,7 @@
 package tsrecorder
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"io"
 	"sync"
@@ -87,7 +87,7 @@ func (rec *Client) write(data any) error {
 	if rec.failedOpen {
 		return nil
 	}
-	j, err := json.Marshal(data)
+	j, err := jsonv1.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("error marshalling data as json: %v", err)
 	}

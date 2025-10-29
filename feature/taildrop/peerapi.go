@@ -4,7 +4,7 @@
 package taildrop
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -84,7 +84,7 @@ func handlePeerPutWithBackend(h ipnlocal.PeerAPIHandler, ext extensionForPut, w 
 		http.Error(w, ErrInvalidFileName.Error(), http.StatusBadRequest)
 		return
 	}
-	enc := json.NewEncoder(w)
+	enc := jsonv1.NewEncoder(w)
 	switch r.Method {
 	case "GET":
 		id := clientID(h.Peer().StableID())

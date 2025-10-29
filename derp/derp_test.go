@@ -7,7 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"expvar"
 	"fmt"
@@ -64,7 +64,7 @@ func TestClientInfoUnmarshal(t *testing.T) {
 		t.Run(i, func(t *testing.T) {
 			t.Parallel()
 			var got ClientInfo
-			err := json.Unmarshal([]byte(in.json), &got)
+			err := jsonv1.Unmarshal([]byte(in.json), &got)
 			if in.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), in.wantErr) {
 					t.Errorf("Unmarshal(%q) = %v, want error containing %q", in.json, err, in.wantErr)

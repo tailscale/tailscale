@@ -4,7 +4,7 @@
 package speedtest
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"net"
 	"time"
@@ -22,14 +22,14 @@ func RunClient(direction Direction, duration time.Duration, host string) ([]Resu
 	conf := config{TestDuration: duration, Version: version, Direction: direction}
 
 	defer conn.Close()
-	encoder := json.NewEncoder(conn)
+	encoder := jsonv1.NewEncoder(conn)
 
 	if err = encoder.Encode(conf); err != nil {
 		return nil, err
 	}
 
 	var response configResponse
-	decoder := json.NewDecoder(conn)
+	decoder := jsonv1.NewDecoder(conn)
 	if err = decoder.Decode(&response); err != nil {
 		return nil, err
 	}

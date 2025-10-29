@@ -6,7 +6,7 @@ package taildrop
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"io"
 	"maps"
@@ -201,7 +201,7 @@ func multiFilePost(h *localapi.Handler, progressUpdates chan (ipn.OutgoingFile),
 			}
 
 			var manifest []ipn.OutgoingFile
-			err := json.NewDecoder(part).Decode(&manifest)
+			err := jsonv1.NewDecoder(part).Decode(&manifest)
 			if err != nil {
 				http.Error(ww, fmt.Sprintf("invalid manifest: %s", err), http.StatusBadRequest)
 				return
@@ -318,7 +318,7 @@ func singleFilePut(
 		h.Logf("fetch remote hashes status code: %d", resp.StatusCode)
 	default:
 		resumeStart := time.Now()
-		dec := json.NewDecoder(resp.Body)
+		dec := jsonv1.NewDecoder(resp.Body)
 		offset, remainingBody, err = resumeReader(body, func() (out blockChecksum, err error) {
 			err = dec.Decode(&out)
 			return out, err
@@ -404,7 +404,7 @@ func serveFiles(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(wfs)
+		jsonv1.NewEncoder(w).Encode(wfs)
 		return
 	}
 	name, err := url.PathUnescape(suffix)
@@ -454,5 +454,5 @@ func serveFileTargets(h *localapi.Handler, w http.ResponseWriter, r *http.Reques
 	}
 	mak.NonNilSliceForJSON(&fts)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(fts)
+	jsonv1.NewEncoder(w).Encode(fts)
 }

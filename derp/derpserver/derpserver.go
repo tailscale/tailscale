@@ -16,7 +16,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/binary"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"expvar"
 	"fmt"
@@ -1396,7 +1396,7 @@ func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, inf
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		jreq, err := json.Marshal(&tailcfg.DERPAdmitClientRequest{
+		jreq, err := jsonv1.Marshal(&tailcfg.DERPAdmitClientRequest{
 			NodePublic: clientKey,
 			Source:     clientIP,
 		})
@@ -1420,7 +1420,7 @@ func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, inf
 			return fmt.Errorf("admission controller: %v", res.Status)
 		}
 		var jres tailcfg.DERPAdmitClientResponse
-		if err := json.NewDecoder(io.LimitReader(res.Body, 4<<10)).Decode(&jres); err != nil {
+		if err := jsonv1.NewDecoder(io.LimitReader(res.Body, 4<<10)).Decode(&jres); err != nil {
 			return err
 		}
 		if !jres.Allow {
@@ -1503,7 +1503,7 @@ func (s *Server) noteClientActivity(c *sclient) {
 type ServerInfo = derp.ServerInfo
 
 func (s *Server) sendServerInfo(bw *lazyBufioWriter, clientKey key.NodePublic) error {
-	msg, err := json.Marshal(ServerInfo{Version: derp.ProtocolVersion})
+	msg, err := jsonv1.Marshal(ServerInfo{Version: derp.ProtocolVersion})
 	if err != nil {
 		return err
 	}
@@ -1548,7 +1548,7 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.NodePublic, info
 		return zpub, nil, fmt.Errorf("msgbox: cannot open len=%d with client key %s", msgLen, clientKey)
 	}
 	info = new(derp.ClientInfo)
-	if err := json.Unmarshal(msg, info); err != nil {
+	if err := jsonv1.Unmarshal(msg, info); err != nil {
 		return zpub, nil, fmt.Errorf("msg: %v", err)
 	}
 	return clientKey, info, nil
@@ -2335,7 +2335,7 @@ func parseSSOutput(raw string) map[netip.AddrPort]BytesSentRecv {
 
 func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
 	prevState := map[netip.AddrPort]BytesSentRecv{}
-	enc := json.NewEncoder(w)
+	enc := jsonv1.NewEncoder(w)
 	for r.Context().Err() == nil {
 		output, err := exec.Command("ss", "-i", "-H", "-t").Output()
 		if err != nil {

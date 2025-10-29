@@ -9,7 +9,7 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -31,7 +31,7 @@ func (c *Client) DeactivateReg(ctx context.Context) error {
 	if url == "" {
 		return ErrNoAccount
 	}
-	req := json.RawMessage(`{"status": "deactivated"}`)
+	req := jsonv1.RawMessage(`{"status": "deactivated"}`)
 	res, err := c.post(ctx, nil, url, req, wantStatus(http.StatusOK))
 	if err != nil {
 		return err
@@ -121,7 +121,7 @@ func (c *Client) updateRegRFC(ctx context.Context, a *Account) (*Account, error)
 // getRegRFC is equivalent to c.GetReg but for CAs implementing RFC 8555.
 // It expects c.Discover to have already been called.
 func (c *Client) getRegRFC(ctx context.Context) (*Account, error) {
-	req := json.RawMessage(`{"onlyReturnExisting": true}`)
+	req := jsonv1.RawMessage(`{"onlyReturnExisting": true}`)
 	res, err := c.post(ctx, c.Key, c.dir.RegURL, req, wantStatus(http.StatusOK))
 	if e, ok := err.(*Error); ok && e.ProblemType == "urn:ietf:params:acme:error:accountDoesNotExist" {
 		return nil, ErrNoAccount
@@ -140,7 +140,7 @@ func responseAccount(res *http.Response) (*Account, error) {
 		Contact []string
 		Orders  string
 	}
-	if err := json.NewDecoder(res.Body).Decode(&v); err != nil {
+	if err := jsonv1.NewDecoder(res.Body).Decode(&v); err != nil {
 		return nil, fmt.Errorf("acme: invalid account response: %v", err)
 	}
 	return &Account{
@@ -167,11 +167,11 @@ func (c *Client) accountKeyRollover(ctx context.Context, newKey crypto.Signer) e
 		return err
 	}
 	payload := struct {
-		Account string          `json:"account"`
-		OldKey  json.RawMessage `json:"oldKey"`
+		Account string            `json:"account"`
+		OldKey  jsonv1.RawMessage `json:"oldKey"`
 	}{
 		Account: string(kid),
-		OldKey:  json.RawMessage(oldKey),
+		OldKey:  jsonv1.RawMessage(oldKey),
 	}
 	inner, err := jwsEncodeJSON(payload, newKey, noKeyID, noNonce, dir.KeyChangeURL)
 	if err != nil {
@@ -316,7 +316,7 @@ func responseOrder(res *http.Response) (*Order, error) {
 		Finalize       string
 		Certificate    string
 	}
-	if err := json.NewDecoder(res.Body).Decode(&v); err != nil {
+	if err := jsonv1.NewDecoder(res.Body).Decode(&v); err != nil {
 		return nil, fmt.Errorf("acme: error reading order: %v", err)
 	}
 	o := &Order{

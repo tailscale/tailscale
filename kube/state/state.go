@@ -12,7 +12,7 @@ package state
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 
 	"tailscale.com/ipn"
@@ -95,7 +95,7 @@ func KeepKeysUpdated(ctx context.Context, store ipn.StateStore, lc klc.LocalClie
 			for _, addr := range addrs.AsSlice() {
 				deviceIPs = append(deviceIPs, addr.Addr().String())
 			}
-			deviceIPsValue, err := json.Marshal(deviceIPs)
+			deviceIPsValue, err := jsonv1.Marshal(deviceIPs)
 			if err != nil {
 				return err
 			}

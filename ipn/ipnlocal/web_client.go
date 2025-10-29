@@ -7,7 +7,7 @@ package ipnlocal
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -200,7 +200,7 @@ func (b *LocalBackend) doWebClientNoiseRequest(ctx context.Context, id string, s
 		return nil, fmt.Errorf("failed request: %s", body)
 	}
 	var authResp *tailcfg.WebClientAuthResponse
-	if err := json.Unmarshal(body, &authResp); err != nil {
+	if err := jsonv1.Unmarshal(body, &authResp); err != nil {
 		return nil, err
 	}
 	return authResp, nil

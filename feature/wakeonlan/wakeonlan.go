@@ -5,7 +5,7 @@
 package wakeonlan
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"log"
 	"net"
 	"net/http"
@@ -83,7 +83,7 @@ func handleC2NWoL(b *ipnlocal.LocalBackend, w http.ResponseWriter, r *http.Reque
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	jsonv1.NewEncoder(w).Encode(v)
 }
 
 func canWakeOnLAN(h ipnlocal.PeerAPIHandler) bool {

@@ -4,7 +4,7 @@
 package main
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"os"
 )
 
@@ -38,7 +38,7 @@ func (c *Cache) Save(fname string) error {
 	}
 	defer fout.Close()
 
-	return json.NewEncoder(fout).Encode(c)
+	return jsonv1.NewEncoder(fout).Encode(c)
 }
 
 // LoadCache loads the cache from a given file.
@@ -51,7 +51,7 @@ func LoadCache(fname string) (*Cache, error) {
 	}
 	defer fin.Close()
 
-	err = json.NewDecoder(fin).Decode(&result)
+	err = jsonv1.NewDecoder(fin).Decode(&result)
 	if err != nil {
 		return nil, err
 	}

@@ -4,7 +4,7 @@
 package syncs
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"strconv"
 	"sync/atomic"
 
@@ -59,7 +59,7 @@ func (m *ShardedInt) GetDistribution() []int64 {
 
 // String implements the expvar.Var interface
 func (m *ShardedInt) String() string {
-	v, _ := json.Marshal(m.Value())
+	v, _ := jsonv1.Marshal(m.Value())
 	return string(v)
 }
 

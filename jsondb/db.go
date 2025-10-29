@@ -6,7 +6,7 @@
 package jsondb
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -36,7 +36,7 @@ func Open[T any](path string) (*DB[T], error) {
 	}
 
 	var val T
-	if err := json.Unmarshal(bs, &val); err != nil {
+	if err := jsonv1.Unmarshal(bs, &val); err != nil {
 		return nil, err
 	}
 
@@ -48,7 +48,7 @@ func Open[T any](path string) (*DB[T], error) {
 
 // Save writes db.Data back to disk.
 func (db *DB[T]) Save() error {
-	bs, err := json.Marshal(db.Data)
+	bs, err := jsonv1.Marshal(db.Data)
 	if err != nil {
 		return err
 	}

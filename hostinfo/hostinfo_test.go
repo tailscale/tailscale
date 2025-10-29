@@ -4,7 +4,7 @@
 package hostinfo
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -15,7 +15,7 @@ func TestNew(t *testing.T) {
 	if hi == nil {
 		t.Fatal("no Hostinfo")
 	}
-	j, err := json.MarshalIndent(hi, "  ", "")
+	j, err := jsonv1.MarshalIndent(hi, "  ", "")
 	if err != nil {
 		t.Fatal(err)
 	}

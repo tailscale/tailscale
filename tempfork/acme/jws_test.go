@@ -12,7 +12,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -181,7 +181,7 @@ func TestJWSEncodeJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	var jws struct{ Protected, Payload, Signature string }
-	if err := json.Unmarshal(b, &jws); err != nil {
+	if err := jsonv1.Unmarshal(b, &jws); err != nil {
 		t.Fatal(err)
 	}
 	if jws.Protected != protected {
@@ -210,7 +210,7 @@ func TestJWSEncodeNoNonce(t *testing.T) {
 		t.Fatal(err)
 	}
 	var jws struct{ Protected, Payload, Signature string }
-	if err := json.Unmarshal(b, &jws); err != nil {
+	if err := jsonv1.Unmarshal(b, &jws); err != nil {
 		t.Fatal(err)
 	}
 	if jws.Protected != protected {
@@ -250,7 +250,7 @@ func TestJWSEncodeKID(t *testing.T) {
 		t.Fatal(err)
 	}
 	var jws struct{ Protected, Payload, Signature string }
-	if err := json.Unmarshal(b, &jws); err != nil {
+	if err := jsonv1.Unmarshal(b, &jws); err != nil {
 		t.Fatal(err)
 	}
 	if jws.Protected != protected {
@@ -291,7 +291,7 @@ func TestJWSEncodeJSONEC(t *testing.T) {
 			continue
 		}
 		var jws struct{ Protected, Payload, Signature string }
-		if err := json.Unmarshal(b, &jws); err != nil {
+		if err := jsonv1.Unmarshal(b, &jws); err != nil {
 			t.Errorf("%d: %v", i, err)
 			continue
 		}
@@ -312,7 +312,7 @@ func TestJWSEncodeJSONEC(t *testing.T) {
 				Y   string
 			} `json:"jwk"`
 		}
-		if err := json.Unmarshal(b, &head); err != nil {
+		if err := jsonv1.Unmarshal(b, &head); err != nil {
 			t.Errorf("%d: jws.Protected: %v", i, err)
 		}
 		if head.Alg != test.alg {
@@ -415,7 +415,7 @@ func TestJWSEncodeJSONCustom(t *testing.T) {
 				t.Fatal(err)
 			}
 			var j jsonWebSignature
-			if err := json.Unmarshal(b, &j); err != nil {
+			if err := jsonv1.Unmarshal(b, &j); err != nil {
 				t.Fatal(err)
 			}
 			if j.Protected != tc.phead {

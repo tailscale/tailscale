@@ -5,7 +5,7 @@ package prefs
 
 import (
 	"bytes"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"net/netip"
 	"reflect"
@@ -346,8 +346,8 @@ func TestMarshalUnmarshal(t *testing.T) {
 	}{
 		{
 			name:      "json",
-			marshal:   json.Marshal,
-			unmarshal: json.Unmarshal,
+			marshal:   jsonv1.Marshal,
+			unmarshal: jsonv1.Unmarshal,
 		},
 		{
 			name:      "jsonv2",

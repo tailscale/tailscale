@@ -6,7 +6,7 @@ package ipn
 import (
 	"bytes"
 	"cmp"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -625,7 +625,7 @@ func (p PrefsView) ToBytes() []byte {
 }
 
 func (p *Prefs) ToBytes() []byte {
-	data, err := json.MarshalIndent(p, "", "\t")
+	data, err := jsonv1.MarshalIndent(p, "", "\t")
 	if err != nil {
 		log.Fatalf("Prefs marshal: %v\n", err)
 	}
@@ -957,7 +957,7 @@ func PrefsFromBytes(b []byte, base *Prefs) error {
 		return nil
 	}
 
-	return json.Unmarshal(b, base)
+	return jsonv1.Unmarshal(b, base)
 }
 
 var jsonEscapedZero = []byte(`\u0000`)

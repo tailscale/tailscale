@@ -9,7 +9,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/rand"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -331,7 +331,7 @@ func responseError(resp *http.Response) error {
 	// json.Unmarshal will fail in that case anyway
 	b, _ := io.ReadAll(resp.Body)
 	e := &wireError{Status: resp.StatusCode}
-	if err := json.Unmarshal(b, e); err != nil {
+	if err := jsonv1.Unmarshal(b, e); err != nil {
 		// this is not a regular error response:
 		// populate detail with anything we received,
 		// e.Status will already contain HTTP response code value

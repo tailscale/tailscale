@@ -5,7 +5,7 @@ package filter
 
 import (
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"flag"
 	"fmt"
 	"net/netip"
@@ -1077,7 +1077,7 @@ func benchmarkFile(b *testing.B, file string, opt benchOpt) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if err := json.Unmarshal(bts, &matches); err != nil {
+	if err := jsonv1.Unmarshal(bts, &matches); err != nil {
 		b.Fatal(err)
 	}
 

@@ -14,7 +14,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -55,14 +55,14 @@ func newTestClientWithMockDirectory() *Client {
 func decodeJWSRequest(t *testing.T, v interface{}, r io.Reader) {
 	// Decode request
 	var req struct{ Payload string }
-	if err := json.NewDecoder(r).Decode(&req); err != nil {
+	if err := jsonv1.NewDecoder(r).Decode(&req); err != nil {
 		t.Fatal(err)
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(req.Payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = json.Unmarshal(payload, v)
+	err = jsonv1.Unmarshal(payload, v)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ type jwsHead struct {
 
 func decodeJWSHead(r io.Reader) (*jwsHead, error) {
 	var req struct{ Protected string }
-	if err := json.NewDecoder(r).Decode(&req); err != nil {
+	if err := jsonv1.NewDecoder(r).Decode(&req); err != nil {
 		return nil, err
 	}
 	b, err := base64.RawURLEncoding.DecodeString(req.Protected)
@@ -86,7 +86,7 @@ func decodeJWSHead(r io.Reader) (*jwsHead, error) {
 		return nil, err
 	}
 	var head jwsHead
-	if err := json.Unmarshal(b, &head); err != nil {
+	if err := jsonv1.Unmarshal(b, &head); err != nil {
 		return nil, err
 	}
 	return &head, nil
@@ -598,7 +598,7 @@ func TestUnmarshalRenewalInfo(t *testing.T) {
 	expectedEnd := time.Date(2021, time.January, 7, 0, 0, 0, 0, time.UTC)
 
 	var info RenewalInfo
-	if err := json.Unmarshal([]byte(renewalInfoJSON), &info); err != nil {
+	if err := jsonv1.Unmarshal([]byte(renewalInfoJSON), &info); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := url.Parse(info.ExplanationURL); err != nil {

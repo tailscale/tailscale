@@ -6,7 +6,7 @@ package osrouter
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"io"
 	"net/netip"
@@ -155,7 +155,7 @@ type firewallTweaker struct {
 	fwProc *exec.Cmd
 	// stop makes fwProc exit when closed.
 	fwProcWriter  io.WriteCloser
-	fwProcEncoder *json.Encoder
+	fwProcEncoder *jsonv1.Encoder
 
 	// The path to the 'netsh.exe' binary, populated during the first call
 	// to runFirewall.
@@ -388,7 +388,7 @@ func (ft *firewallTweaker) doSet(local []string, killswitch bool, clear bool, pr
 		}
 		ft.fwProcWriter = in
 		ft.fwProc = proc
-		ft.fwProcEncoder = json.NewEncoder(in)
+		ft.fwProcEncoder = jsonv1.NewEncoder(in)
 	}
 	// Note(maisem): when local lan access toggled, we need to inform the
 	// firewall to let the local routes through. The set of routes is passed

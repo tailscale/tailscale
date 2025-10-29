@@ -12,7 +12,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -112,7 +112,7 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 	resultMap := make(map[string]map[string]*testAttempt) // pkg -> test -> testAttempt
 	for s.Scan() {
 		var goOutput goTestOutput
-		if err := json.Unmarshal(s.Bytes(), &goOutput); err != nil {
+		if err := jsonv1.Unmarshal(s.Bytes(), &goOutput); err != nil {
 			return fmt.Errorf("failed to parse go test output %q: %w", s.Bytes(), err)
 		}
 		pkg := cmp.Or(
@@ -265,7 +265,7 @@ func main() {
 			os.Exit(1)
 		}
 		if thisRun.attempt > 1 {
-			j, _ := json.Marshal(thisRun.tests)
+			j, _ := jsonv1.Marshal(thisRun.tests)
 			fmt.Printf("\n\nAttempt #%d: Retrying flaky tests:\n\nflakytest failures JSON: %s\n\n", thisRun.attempt, j)
 		}
 
@@ -326,7 +326,7 @@ func main() {
 				if len(fatalFailures) > 0 {
 					tests := slicesx.MapKeys(fatalFailures)
 					sort.Strings(tests)
-					j, _ := json.Marshal(tests)
+					j, _ := jsonv1.Marshal(tests)
 					fmt.Printf("non-flakytest failures: %s\n", j)
 				}
 				fmt.Println()

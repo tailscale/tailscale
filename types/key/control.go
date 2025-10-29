@@ -3,7 +3,7 @@
 
 package key
 
-import "encoding/json"
+import jsonv1 "encoding/json"
 
 // ControlPrivate is a Tailscale control plane private key.
 //
@@ -37,12 +37,12 @@ func (k ControlPrivate) Public() MachinePublic {
 
 // MarshalJSON implements json.Marshaler.
 func (k ControlPrivate) MarshalJSON() ([]byte, error) {
-	return json.Marshal(k.mkey.k)
+	return jsonv1.Marshal(k.mkey.k)
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (k *ControlPrivate) UnmarshalJSON(bs []byte) error {
-	return json.Unmarshal(bs, &k.mkey.k)
+	return jsonv1.Unmarshal(bs, &k.mkey.k)
 }
 
 // SealTo wraps cleartext into a NaCl box (see

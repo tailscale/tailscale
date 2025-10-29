@@ -13,7 +13,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -187,7 +187,7 @@ func TestRFC_postKID(t *testing.T) {
 			OrderURL: "/force-rfc-mode",
 		},
 	}
-	req := json.RawMessage(`{"msg":"ping"}`)
+	req := jsonv1.RawMessage(`{"msg":"ping"}`)
 	res, err := cl.post(ctx, nil /* use kid */, ts.URL+"/post", req, wantStatus(http.StatusOK))
 	if err != nil {
 		t.Fatal(err)
@@ -280,7 +280,7 @@ func (s *acmeServer) nonce() string {
 
 func (s *acmeServer) error(w http.ResponseWriter, e *wireError) {
 	w.WriteHeader(e.Status)
-	json.NewEncoder(w).Encode(e)
+	jsonv1.NewEncoder(w).Encode(e)
 }
 
 func TestRFC_Register(t *testing.T) {
@@ -388,7 +388,7 @@ func TestRFC_RegisterExternalAccountBinding(t *testing.T) {
 		}
 
 		var prot protected
-		err = json.Unmarshal(protData, &prot)
+		err = jsonv1.Unmarshal(protData, &prot)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -446,7 +446,7 @@ func TestRFC_RegisterExternalAccountBinding(t *testing.T) {
 
 		w.Header().Set("Location", s.url("/accounts/1"))
 		w.WriteHeader(http.StatusCreated)
-		b, _ := json.Marshal([]string{email})
+		b, _ := jsonv1.Marshal([]string{email})
 		fmt.Fprintf(w, `{"status":"valid","orders":"%s","contact":%s}`, s.url("/accounts/1/orders"), b)
 	})
 	s.start()
@@ -658,7 +658,7 @@ func TestRFC_DeactivateReg(t *testing.T) {
 	s.handle("/acme/new-account", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", s.url("/accounts/1"))
 		w.WriteHeader(http.StatusOK) // 200 means existing account
-		json.NewEncoder(w).Encode(account{
+		jsonv1.NewEncoder(w).Encode(account{
 			Status:    curStatus,
 			Contact:   []string{email},
 			AcceptTOS: true,
