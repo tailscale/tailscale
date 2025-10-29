@@ -80,7 +80,7 @@ var (
 // ProxyGroupReconciler ensures cluster resources for a ProxyGroup definition.
 type ProxyGroupReconciler struct {
 	client.Client
-	l        *zap.SugaredLogger
+	log      *zap.SugaredLogger
 	recorder record.EventRecorder
 	clock    tstime.Clock
 	tsClient tsClient
@@ -101,7 +101,7 @@ type ProxyGroupReconciler struct {
 }
 
 func (r *ProxyGroupReconciler) logger(name string) *zap.SugaredLogger {
-	return r.l.With("ProxyGroup", name)
+	return r.log.With("ProxyGroup", name)
 }
 
 func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, err error) {
