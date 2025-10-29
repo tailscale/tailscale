@@ -87,6 +87,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/execqueue"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/osuser"
@@ -187,6 +188,7 @@ type LocalBackend struct {
 	statsLogf logger.Logf             // for printing peers stats on change
 	sys       *tsd.System
 	eventSubs eventbus.Monitor
+	appcTask  execqueue.ExecQueue // handles updates from appc
 
 	health                   *health.Tracker     // always non-nil
 	polc                     policyclient.Client // always non-nil
@@ -642,12 +644,14 @@ func (b *LocalBackend) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus
 				// We need to find a way to ensure that changes to the backend state are applied
 				// consistently in the presnce of profile changes, which currently may not happen in
 				// a single atomic step.  See: https://github.com/tailscale/tailscale/issues/17414
-				if err := b.AdvertiseRoute(ru.Advertise...); err != nil {
-					b.logf("appc: failed to advertise routes: %v: %v", ru.Advertise, err)
-				}
-				if err := b.UnadvertiseRoute(ru.Unadvertise...); err != nil {
-					b.logf("appc: failed to unadvertise routes: %v: %v", ru.Unadvertise, err)
-				}
+				b.appcTask.Add(func() {
+					if err := b.AdvertiseRoute(ru.Advertise...); err != nil {
+						b.logf("appc: failed to advertise routes: %v: %v", ru.Advertise, err)
+					}
+					if err := b.UnadvertiseRoute(ru.Unadvertise...); err != nil {
+						b.logf("appc: failed to unadvertise routes: %v: %v", ru.Unadvertise, err)
+					}
+				})
 			case ri := <-storeRoutesSub.Events():
 				// Whether or not routes should be stored can change over time.
 				shouldStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
@@ -1113,6 +1117,7 @@ func (b *LocalBackend) Shutdown() {
 	//     they can deadlock with c.Shutdown().
 	//  2. LocalBackend.consumeEventbusTopics event handlers may not guard against
 	//     undesirable post/in-progress LocalBackend.Shutdown() behaviors.
+	b.appcTask.Shutdown()
 	b.eventSubs.Close()
 
 	b.em.close()
