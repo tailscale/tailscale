@@ -21,6 +21,7 @@ import (
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
+	"tailscale.com/net/memnet"
 )
 
 func TestConnectToRecorder(t *testing.T) {
@@ -145,7 +146,14 @@ func TestConnectToRecorder(t *testing.T) {
 		t.Run(tt.desc, func(t *testing.T) {
 			mux, uploadHash := tt.setup(t)
 
-			srv := httptest.NewUnstartedServer(mux)
+			memNet := &memnet.Network{}
+			ln := memNet.NewLocalTCPListener()
+
+			srv := &httptest.Server{
+				Config:   &http.Server{Handler: mux},
+				Listener: ln,
+			}
+
 			if tt.http2 {
 				// Wire up h2c-compatible HTTP/2 server. This is optional
 				// because the v1 recorder didn't support HTTP/2 and we try to
@@ -159,10 +167,8 @@ func TestConnectToRecorder(t *testing.T) {
 			srv.Start()
 			t.Cleanup(srv.Close)
 
-			d := new(net.Dialer)
-
 			ctx := context.Background()
-			w, _, errc, err := ConnectToRecorder(ctx, []netip.AddrPort{netip.MustParseAddrPort(srv.Listener.Addr().String())}, d.DialContext)
+			w, _, errc, err := ConnectToRecorder(ctx, []netip.AddrPort{netip.MustParseAddrPort(ln.Addr().String())}, memNet.Dial)
 			if err != nil {
 				t.Fatalf("ConnectToRecorder: %v", err)
 			}
