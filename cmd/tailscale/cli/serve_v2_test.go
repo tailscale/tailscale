@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -908,8 +909,13 @@ func TestServeDevConfigMutations(t *testing.T) {
 			name: "invalid_accept_caps_invalid_app_cap",
 			steps: []step{
 				{
-					command: cmd("serve --bg --accept-app-caps=example/cap/foo 3000"), // should be {domain.tld}/{name}
-					wantErr: anyErr(),
+					command: cmd("serve --bg --accept-app-caps=example.com/cap/fine,NOTFINE 3000"), // should be {domain.tld}/{name}
+					wantErr: func(err error) (badErrMsg string) {
+						if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%q does not match", "NOTFINE")) {
+							return fmt.Sprintf("wanted validation error that quotes the non-matching capability (and nothing more) but got %q", err.Error())
+						}
+						return ""
+					},
 				},
 			},
 		},
@@ -1231,10 +1237,11 @@ func TestSrcTypeFromFlags(t *testing.T) {
 
 func TestAcceptSetAppCapsFlag(t *testing.T) {
 	testCases := []struct {
-		name          string
-		inputs        []string
-		expectErr     bool
-		expectedValue []tailcfg.PeerCapability
+		name             string
+		inputs           []string
+		expectErr        bool
+		expectErrToMatch *regexp.Regexp
+		expectedValue    []tailcfg.PeerCapability
 	}{
 		{
 			name:          "valid_simple",
@@ -1262,7 +1269,7 @@ func TestAcceptSetAppCapsFlag(t *testing.T) {
 		},
 		{
 			name:          "valid_multiple_sets",
-			inputs:        []string{"one.com/foo", "two.com/bar"},
+			inputs:        []string{"one.com/foo,two.com/bar"},
 			expectErr:     false,
 			expectedValue: []tailcfg.PeerCapability{"one.com/foo", "two.com/bar"},
 		},
@@ -1273,10 +1280,11 @@ func TestAcceptSetAppCapsFlag(t *testing.T) {
 			expectedValue: nil, // Empty string should be a no-op and not append anything.
 		},
 		{
-			name:          "invalid_path_chars",
-			inputs:        []string{"domain.com/path_with_underscore"},
-			expectErr:     true,
-			expectedValue: nil, // Slice should remain empty.
+			name:             "invalid_path_chars",
+			inputs:           []string{"domain.com/path_with_underscore"},
+			expectErr:        true,
+			expectErrToMatch: regexp.MustCompile(`"domain.com/path_with_underscore"`),
+			expectedValue:    nil, // Slice should remain empty.
 		},
 		{
 			name:          "valid_subdomain",
@@ -1285,22 +1293,25 @@ func TestAcceptSetAppCapsFlag(t *testing.T) {
 			expectedValue: []tailcfg.PeerCapability{"sub.domain.com/name"},
 		},
 		{
-			name:          "invalid_no_path",
-			inputs:        []string{"domain.com/"},
-			expectErr:     true,
-			expectedValue: nil,
+			name:             "invalid_no_path",
+			inputs:           []string{"domain.com/"},
+			expectErr:        true,
+			expectErrToMatch: regexp.MustCompile(`"domain.com/"`),
+			expectedValue:    nil,
 		},
 		{
-			name:          "invalid_no_domain",
-			inputs:        []string{"/path/only"},
-			expectErr:     true,
-			expectedValue: nil,
+			name:             "invalid_no_domain",
+			inputs:           []string{"/path/only"},
+			expectErr:        true,
+			expectErrToMatch: regexp.MustCompile(`"/path/only"`),
+			expectedValue:    nil,
 		},
 		{
-			name:          "some_invalid_some_valid",
-			inputs:        []string{"one.com/foo", "bad/bar", "two.com/baz"},
-			expectErr:     true,
-			expectedValue: []tailcfg.PeerCapability{"one.com/foo"}, // Parsing will stop after first error
+			name:             "some_invalid_some_valid",
+			inputs:           []string{"one.com/foo,bad/bar,two.com/baz"},
+			expectErr:        true,
+			expectErrToMatch: regexp.MustCompile(`"bad/bar"`),
+			expectedValue:    []tailcfg.PeerCapability{"one.com/foo"}, // Parsing will stop after first error
 		},
 	}
 
@@ -1319,6 +1330,11 @@ func TestAcceptSetAppCapsFlag(t *testing.T) {
 
 			if tc.expectErr && err == nil {
 				t.Errorf("expected an error, but got none")
+			}
+			if tc.expectErrToMatch != nil {
+				if !tc.expectErrToMatch.MatchString(err.Error()) {
+					t.Errorf("expected error to match %q, but was %q", tc.expectErrToMatch, err)
+				}
 			}
 			if !tc.expectErr && err != nil {
 				t.Errorf("did not expect an error, but got: %v", err)

@@ -116,7 +116,7 @@ func (u *acceptAppCapsFlag) Set(s string) error {
 	for _, appCap := range appCaps {
 		appCap = strings.TrimSpace(appCap)
 		if !validAppCap.MatchString(appCap) {
-			return fmt.Errorf("%q does not match the form {domain}/{name}, where domain must be a fully qualified domain name", s)
+			return fmt.Errorf("%q does not match the form {domain}/{name}, where domain must be a fully qualified domain name", appCap)
 		}
 		*u.Value = append(*u.Value, tailcfg.PeerCapability(appCap))
 	}
