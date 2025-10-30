@@ -5,10 +5,12 @@ package eventbus
 
 import (
 	"context"
+	"log"
 	"reflect"
 	"slices"
 	"sync"
 
+	"tailscale.com/types/logger"
 	"tailscale.com/util/set"
 )
 
@@ -30,6 +32,7 @@ type Bus struct {
 	write      chan PublishedEvent
 	snapshot   chan chan []PublishedEvent
 	routeDebug hook[RoutedEvent]
+	logf       logger.Logf
 
 	topicsMu sync.Mutex
 	topics   map[reflect.Type][]*subscribeState
@@ -40,17 +43,40 @@ type Bus struct {
 	clients   set.Set[*Client]
 }
 
-// New returns a new bus. Use [Publish] to make event publishers,
-// and [Subscribe] and [SubscribeFunc] to make event subscribers.
-func New() *Bus {
+// New returns a new bus with default options. It is equivalent to
+// calling [NewWithOptions] with zero [BusOptions].
+func New() *Bus { return NewWithOptions(BusOptions{}) }
+
+// NewWithOptions returns a new [Bus] with the specified [BusOptions].
+// Use [Bus.Client] to construct clients on the bus.
+// Use [Publish] to make event publishers.
+// Use [Subscribe] and [SubscribeFunc] to make event subscribers.
+func NewWithOptions(opts BusOptions) *Bus {
 	ret := &Bus{
 		write:    make(chan PublishedEvent),
 		snapshot: make(chan chan []PublishedEvent),
 		topics:   map[reflect.Type][]*subscribeState{},
 		clients:  set.Set[*Client]{},
+		logf:     opts.logger(),
 	}
 	ret.router = runWorker(ret.pump)
 	return ret
+}
+
+// BusOptions are optional parameters for a [Bus]. A zero value is ready for
+// use and provides defaults as described.
+type BusOptions struct {
+	// Logf, if non-nil, is used for debug logs emitted by the bus and clients,
+	// publishers, and subscribers under its care. If it is nil, logs are sent
+	// to [log.Printf].
+	Logf logger.Logf
+}
+
+func (o BusOptions) logger() logger.Logf {
+	if o.Logf == nil {
+		return log.Printf
+	}
+	return o.Logf
 }
 
 // Client returns a new client with no subscriptions. Use [Subscribe]
@@ -165,6 +191,9 @@ func (b *Bus) pump(ctx context.Context) {
 		}
 	}
 }
+
+// logger returns a [logger.Logf] to which logs related to bus activity should be written.
+func (b *Bus) logger() logger.Logf { return b.logf }
 
 func (b *Bus) dest(t reflect.Type) []*subscribeState {
 	b.topicsMu.Lock()
