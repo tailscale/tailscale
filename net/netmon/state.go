@@ -149,12 +149,28 @@ type Interface struct {
 	Desc     string     // extra description (used on Windows)
 }
 
-func (i Interface) IsLoopback() bool { return isLoopback(i.Interface) }
-func (i Interface) IsUp() bool       { return isUp(i.Interface) }
+func (i Interface) IsLoopback() bool {
+	if i.Interface == nil {
+		return false
+	}
+	return isLoopback(i.Interface)
+}
+
+func (i Interface) IsUp() bool {
+	if i.Interface == nil {
+		return false
+	}
+	return isUp(i.Interface)
+}
+
 func (i Interface) Addrs() ([]net.Addr, error) {
 	if i.AltAddrs != nil {
 		return i.AltAddrs, nil
 	}
+	if i.Interface == nil {
+		return nil, nil
+	}
+
 	return i.Interface.Addrs()
 }
 
@@ -485,6 +501,12 @@ func getState(optTSInterfaceName string) (*State, error) {
 		ifUp := ni.IsUp()
 		s.Interface[ni.Name] = ni
 		s.InterfaceIPs[ni.Name] = append(s.InterfaceIPs[ni.Name], pfxs...)
+
+		// Skip uninteresting interfaces.
+		if IsInterestingInterface != nil && !IsInterestingInterface(ni, pfxs) {
+			return
+		}
+
 		if !ifUp || isTSInterfaceName || isTailscaleInterface(ni.Name, pfxs) {
 			return
 		}
