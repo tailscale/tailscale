@@ -298,7 +298,8 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		}
 		web80 := ingCfg.Web[epHTTP]
 		for mountPoint := range handlers {
-			redirectURL := "https://${HOST}${REQUEST_URI}"
+			// We send a 301 - Moved Permanently redirect from HTTP to HTTPS
+			redirectURL := "301:https://${HOST}${REQUEST_URI}"
 			logger.Debugf("Creating redirect handler: %s -> %s", mountPoint, redirectURL)
 			web80.Handlers[mountPoint] = &ipn.HTTPHandler{
 				Redirect: redirectURL,
@@ -1145,3 +1146,4 @@ func tagViolations(obj client.Object) []string {
 	}
 	return violations
 }
+

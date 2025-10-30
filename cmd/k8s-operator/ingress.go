@@ -216,7 +216,8 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		}
 		web80 := sc.Web[magic80]
 		for mountPoint := range handlers {
-			redirectURL := "https://${HOST}${REQUEST_URI}"
+			// We send a 301 - Moved Permanently redirect from HTTP to HTTPS
+			redirectURL := "301:https://${HOST}${REQUEST_URI}"
 			logger.Debugf("Creating redirect handler: %s -> %s", mountPoint, redirectURL)
 			web80.Handlers[mountPoint] = &ipn.HTTPHandler{
 				Redirect: redirectURL,
@@ -407,3 +408,4 @@ func hostnameForIngress(ing *networkingv1.Ingress) string {
 	}
 	return ing.Namespace + "-" + ing.Name + "-ingress"
 }
+
