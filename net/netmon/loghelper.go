@@ -20,7 +20,7 @@ func LinkChangeLogLimiter(ctx context.Context, logf logger.Logf, nm *Monitor) lo
 	var formatSeen sync.Map // map[string]bool
 	sub := eventbus.SubscribeFunc(nm.b, func(cd ChangeDelta) {
 		// If we're in a major change or a time jump, clear the seen map.
-		if cd.Major || cd.TimeJumped {
+		if cd.RebindLikelyRequired || cd.TimeJumped {
 			formatSeen.Clear()
 		}
 	})

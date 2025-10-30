@@ -564,7 +564,8 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.prevIfState = netMon.InterfaceState()
 	// Call our linkChange code once with the current state.
 	// Following changes are triggered via the eventbus.
-	b.linkChange(&netmon.ChangeDelta{New: netMon.InterfaceState()})
+	cd := netmon.NewChangeDelta(nil, b.prevIfState, false, netMon.TailscaleInterfaceName())
+	b.linkChange(&cd)
 
 	if buildfeatures.HasPeerAPIServer {
 		if tunWrap, ok := b.sys.Tun.GetOK(); ok {
@@ -968,13 +969,13 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	b.prevIfState = ifst
 	b.pauseOrResumeControlClientLocked()
 	prefs := b.pm.CurrentPrefs()
-	if delta.Major && prefs.AutoExitNode().IsSet() {
+	if delta.RebindLikelyRequired && prefs.AutoExitNode().IsSet() {
 		b.refreshAutoExitNode = true
 	}
 
 	var needReconfig bool
 	// If the network changed and we're using an exit node and allowing LAN access, we may need to reconfigure.
-	if delta.Major && prefs.ExitNodeID() != "" && prefs.ExitNodeAllowLANAccess() {
+	if delta.RebindLikelyRequired && prefs.ExitNodeID() != "" && prefs.ExitNodeAllowLANAccess() {
 		b.logf("linkChange: in state %v; updating LAN routes", b.state)
 		needReconfig = true
 	}
