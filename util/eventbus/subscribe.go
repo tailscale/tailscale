@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"time"
+
+	"tailscale.com/types/logger"
 )
 
 type DeliveredEvent struct {
@@ -182,12 +185,18 @@ type Subscriber[T any] struct {
 	stop       stopFlag
 	read       chan T
 	unregister func()
+	logf       logger.Logf
+	slow       *time.Timer // used to detect slow subscriber service
 }
 
-func newSubscriber[T any](r *subscribeState) *Subscriber[T] {
+func newSubscriber[T any](r *subscribeState, logf logger.Logf) *Subscriber[T] {
+	slow := time.NewTimer(0)
+	slow.Stop() // reset in dispatch
 	return &Subscriber[T]{
 		read:       make(chan T),
 		unregister: func() { r.deleteSubscriber(reflect.TypeFor[T]()) },
+		logf:       logf,
+		slow:       slow,
 	}
 }
 
@@ -212,6 +221,11 @@ func (s *Subscriber[T]) monitor(debugEvent T) {
 
 func (s *Subscriber[T]) dispatch(ctx context.Context, vals *queue[DeliveredEvent], acceptCh func() chan DeliveredEvent, snapshot chan chan []DeliveredEvent) bool {
 	t := vals.Peek().Event.(T)
+
+	start := time.Now()
+	s.slow.Reset(slowSubscriberTimeout)
+	defer s.slow.Stop()
+
 	for {
 		// Keep the cases in this select in sync with subscribeState.pump
 		// above. The only difference should be that this select
@@ -226,6 +240,9 @@ func (s *Subscriber[T]) dispatch(ctx context.Context, vals *queue[DeliveredEvent
 			return false
 		case ch := <-snapshot:
 			ch <- vals.Snapshot()
+		case <-s.slow.C:
+			s.logf("subscriber for %T is slow (%v elapsed)", t, time.Since(start))
+			s.slow.Reset(slowSubscriberTimeout)
 		}
 	}
 }
@@ -260,12 +277,18 @@ type SubscriberFunc[T any] struct {
 	stop       stopFlag
 	read       func(T)
 	unregister func()
+	logf       logger.Logf
+	slow       *time.Timer // used to detect slow subscriber service
 }
 
-func newSubscriberFunc[T any](r *subscribeState, f func(T)) *SubscriberFunc[T] {
+func newSubscriberFunc[T any](r *subscribeState, f func(T), logf logger.Logf) *SubscriberFunc[T] {
+	slow := time.NewTimer(0)
+	slow.Stop() // reset in dispatch
 	return &SubscriberFunc[T]{
 		read:       f,
 		unregister: func() { r.deleteSubscriber(reflect.TypeFor[T]()) },
+		logf:       logf,
+		slow:       slow,
 	}
 }
 
@@ -285,6 +308,11 @@ func (s *SubscriberFunc[T]) dispatch(ctx context.Context, vals *queue[DeliveredE
 	t := vals.Peek().Event.(T)
 	callDone := make(chan struct{})
 	go s.runCallback(t, callDone)
+
+	start := time.Now()
+	s.slow.Reset(slowSubscriberTimeout)
+	defer s.slow.Stop()
+
 	// Keep the cases in this select in sync with subscribeState.pump
 	// above. The only difference should be that this select
 	// delivers a value by calling s.read.
@@ -299,6 +327,9 @@ func (s *SubscriberFunc[T]) dispatch(ctx context.Context, vals *queue[DeliveredE
 			return false
 		case ch := <-snapshot:
 			ch <- vals.Snapshot()
+		case <-s.slow.C:
+			s.logf("subscriber for %T is slow (%v elapsed)", t, time.Since(start))
+			s.slow.Reset(slowSubscriberTimeout)
 		}
 	}
 }
