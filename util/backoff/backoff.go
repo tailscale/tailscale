@@ -78,3 +78,9 @@ func (b *Backoff) BackOff(ctx context.Context, err error) {
 	case <-tChannel:
 	}
 }
+
+// Reset resets the backoff schedule, equivalent to calling BackOff with a nil
+// error.
+func (b *Backoff) Reset() {
+	b.n = 0
+}
