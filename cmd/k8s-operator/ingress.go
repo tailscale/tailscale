@@ -408,4 +408,3 @@ func hostnameForIngress(ing *networkingv1.Ingress) string {
 	}
 	return ing.Namespace + "-" + ing.Name + "-ingress"
 }
-
