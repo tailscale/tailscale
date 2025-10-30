@@ -1297,20 +1297,20 @@ func (e *userspaceEngine) Done() <-chan struct{} {
 }
 
 func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
-	changed := delta.Major // TODO(bradfitz): ask more specific questions?
+
 	cur := delta.New
 	up := cur.AnyInterfaceUp()
 	if !up {
 		e.logf("LinkChange: all links down; pausing: %v", cur)
-	} else if changed {
-		e.logf("LinkChange: major, rebinding. New state: %v", cur)
+	} else if delta.RebindLikelyRequired {
+		e.logf("LinkChange: major, rebinding. New state: %v OldState: %v", cur, delta.Old)
 	} else {
 		e.logf("[v1] LinkChange: minor")
 	}
 
 	e.health.SetAnyInterfaceUp(up)
 	e.magicConn.SetNetworkUp(up)
-	if !up || changed {
+	if !up || delta.RebindLikelyRequired {
 		if err := e.dns.FlushCaches(); err != nil {
 			e.logf("wgengine: dns flush failed after major link change: %v", err)
 		}
@@ -1322,7 +1322,7 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 	// config on major link change.
 	// TODO: explain why this is ncessary not just on Linux but also android
 	// and Apple platforms.
-	if changed {
+	if delta.RebindLikelyRequired && cur.AnyInterfaceUp() {
 		switch runtime.GOOS {
 		case "linux", "android", "ios", "darwin", "openbsd":
 			e.wgLock.Lock()
@@ -1341,7 +1341,7 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 	}
 
 	why := "link-change-minor"
-	if changed {
+	if delta.RebindLikelyRequired {
 		why = "link-change-major"
 		metricNumMajorChanges.Add(1)
 		e.magicConn.Rebind()

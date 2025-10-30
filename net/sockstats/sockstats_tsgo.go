@@ -271,7 +271,7 @@ func setNetMon(netMon *netmon.Monitor) {
 	}
 
 	netMon.RegisterChangeCallback(func(delta *netmon.ChangeDelta) {
-		if !delta.Major {
+		if !delta.RebindLikelyRequired {
 			return
 		}
 		state := delta.New
