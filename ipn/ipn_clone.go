@@ -242,6 +242,7 @@ var _HTTPHandlerCloneNeedsRegeneration = HTTPHandler(struct {
 	Proxy         string
 	Text          string
 	AcceptAppCaps []tailcfg.PeerCapability
+	Redirect      string
 }{})
 
 // Clone makes a deep copy of WebServerConfig.
