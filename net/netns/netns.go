@@ -39,18 +39,33 @@ var bindToInterfaceByRoute atomic.Bool
 // setting the TS_BIND_TO_INTERFACE_BY_ROUTE.
 //
 // Currently, this only changes the behaviour on macOS and Windows.
-func SetBindToInterfaceByRoute(v bool) {
+func SetBindToInterfaceByRoute(logf logger.Logf, v bool) {
+	logf("netns: bindToInterfaceByRoute to %v", v)
 	bindToInterfaceByRoute.Store(v)
 }
 
 var disableBindConnToInterface atomic.Bool
 
 // SetDisableBindConnToInterface disables the (normal) behavior of binding
-// connections to the default network interface.
+// connections to the default network interface on Darwin nodes.
 //
-// Currently, this only has an effect on Darwin.
-func SetDisableBindConnToInterface(v bool) {
+// Unless you intended to disable this for tailscaled on macos (which is likely
+// to break things), you probably wanted to set
+// SetDisableBindConnToInterfaceAppleExt which will disable explicit interface
+// binding only when tailscaled is running inside a network extension process.
+func SetDisableBindConnToInterface(logf logger.Logf, v bool) {
+	logf("netns: disableBindConnToInterface set to %v", v)
 	disableBindConnToInterface.Store(v)
+}
+
+var disableBindConnToInterfaceAppleExt atomic.Bool
+
+// SetDisableBindConnToInterfaceAppleExt disables the (normal) behavior of binding
+// connections to the default network interface but only on Apple clients where
+// tailscaled is running inside a network extension.
+func SetDisableBindConnToInterfaceAppleExt(logf logger.Logf, v bool) {
+	logf("netns: disableBindConnToInterfaceAppleExt set to %v", v)
+	disableBindConnToInterfaceAppleExt.Store(v)
 }
 
 // Listener returns a new net.Listener with its Control hook func
