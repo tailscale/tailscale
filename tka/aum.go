@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/base32"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 
@@ -53,6 +54,41 @@ func (h AUMHash) MarshalText() ([]byte, error) {
 // IsZero returns true if the hash is the empty value.
 func (h AUMHash) IsZero() bool {
 	return h == (AUMHash{})
+}
+
+// PrevAUMHash represents the BLAKE2s digest of an Authority Update Message (AUM).
+// Unlike an AUMHash, this can be empty if there is no previous AUM hash
+// (which occurs in the genesis AUM).
+type PrevAUMHash []byte
+
+// String returns the PrevAUMHash encoded as base32.
+// This is suitable for use as a filename, and for storing in text-preferred media.
+func (h PrevAUMHash) String() string {
+	return base32StdNoPad.EncodeToString(h[:])
+}
+
+// MarshalJSON implements [jsonv1.Marshaler].
+// It returns the base32 encoding of the hash, unless it is empty, in which case
+// it returns `null`.
+func (h PrevAUMHash) MarshalJSON() ([]byte, error) {
+	if len(h) == 0 {
+		return []byte("null"), nil
+	}
+	return jsonv1.Marshal(h.String())
+}
+
+// UnmarshalText implements [encoding.TextUnmarshaler].
+func (h *PrevAUMHash) UnmarshalText(b []byte) error {
+	if bytes.Equal(b, []byte("null")) {
+		*h = []byte{}
+		return nil
+	}
+	ln := base32StdNoPad.DecodedLen(len(b))
+	*h = make([]byte, ln)
+	if _, err := base32StdNoPad.AppendDecode(*h, b); err != nil {
+		return fmt.Errorf("tka.AUMHash.UnmarshalText: %w", err)
+	}
+	return nil
 }
 
 // AUMKind describes valid AUM types.
@@ -101,6 +137,32 @@ func (k AUMKind) String() string {
 	}
 }
 
+// MarshalText implements [encoding.TextMarshaler].
+func (k AUMKind) MarshalText() ([]byte, error) {
+	return []byte(k.String()), nil
+}
+
+// UnmarshalText implements [encoding.TextUnmarshaler].
+func (k *AUMKind) UnmarshalText(b []byte) error {
+	switch string(b) {
+	case AUMInvalid.String():
+		*k = AUMInvalid
+	case AUMAddKey.String():
+		*k = AUMAddKey
+	case AUMRemoveKey.String():
+		*k = AUMRemoveKey
+	case AUMNoOp.String():
+		*k = AUMNoOp
+	case AUMCheckpoint.String():
+		*k = AUMCheckpoint
+	case AUMUpdateKey.String():
+		*k = AUMUpdateKey
+	default:
+		return fmt.Errorf("unrecognised AUM kind: %q", string(b))
+	}
+	return nil
+}
+
 // AUM describes an Authority Update Message.
 //
 // The rules for adding new types of AUMs (MessageKind):
@@ -119,8 +181,8 @@ func (k AUMKind) String() string {
 //     behavior of old clients (which will ignore the field).
 //   - No floats!
 type AUM struct {
-	MessageKind AUMKind `cbor:"1,keyasint"`
-	PrevAUMHash []byte  `cbor:"2,keyasint"`
+	MessageKind AUMKind     `cbor:"1,keyasint"`
+	PrevAUMHash PrevAUMHash `cbor:"2,keyasint"`
 
 	// Key encodes a public key to be added to the key authority.
 	// This field is used for AddKey AUMs.
@@ -287,7 +349,10 @@ func (a *AUM) Parent() (h AUMHash, ok bool) {
 }
 
 func (a *AUM) sign25519(priv ed25519.PrivateKey) error {
-	key := Key{Kind: Key25519, Public: priv.Public().(ed25519.PublicKey)}
+	key := Key{
+		Kind:   Key25519,
+		Public: priv.Public().(ed25519.PublicKey),
+	}
 	sigHash := a.SigHash()
 
 	keyID, err := key.ID()

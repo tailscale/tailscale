@@ -4,9 +4,13 @@
 package tka
 
 import (
+	"bytes"
 	"crypto/ed25519"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"tailscale.com/types/tkatype"
 )
@@ -29,6 +33,24 @@ func (k KeyKind) String() string {
 	default:
 		return fmt.Sprintf("Key?<%d>", int(k))
 	}
+}
+
+// MarshalText implements [encoding.TextMarshaler].
+func (k KeyKind) MarshalText() ([]byte, error) {
+	return []byte(k.String()), nil
+}
+
+// UnmarshalText implements [encoding.TextUnmarshaler].
+func (k *KeyKind) UnmarshalText(b []byte) error {
+	switch string(b) {
+	case KeyInvalid.String():
+		*k = KeyInvalid
+	case Key25519.String():
+		*k = Key25519
+	default:
+		return fmt.Errorf("unrecognised key kind: %q", string(b))
+	}
+	return nil
 }
 
 // Key describes the public components of a key known to network-lock.
@@ -133,5 +155,82 @@ func (k Key) StaticValidate() error {
 	default:
 		return fmt.Errorf("unrecognized key kind: %v", k.Kind)
 	}
+	return nil
+}
+
+// MarshalJSON implements [json.MarshalJSON].
+func (k Key) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Kind   KeyKind
+		Votes  uint
+		Public jsonPublicKey
+		Meta   map[string]string
+	}{
+		Kind:   k.Kind,
+		Votes:  k.Votes,
+		Public: jsonPublicKey(k.Public),
+		Meta:   k.Meta,
+	})
+}
+
+// UnmarshalJSON implements [json.UnmarshalJSON].
+func (k *Key) UnmarshalJSON(b []byte) error {
+	intermediate := struct {
+		Kind   KeyKind
+		Votes  uint
+		Public jsonPublicKey
+		Meta   map[string]string
+	}{}
+
+	if err := json.Unmarshal(b, &intermediate); err != nil {
+		return err
+	}
+
+	k.Kind = intermediate.Kind
+	k.Votes = intermediate.Votes
+	k.Public = intermediate.Public
+	k.Meta = intermediate.Meta
+
+	return nil
+}
+
+// jsonPublicKey encodes the public key of a Key as JSON.
+type jsonPublicKey []byte
+
+// MarshalJSON implements [json.MarshalJSON].
+//
+// We encode a key ID as a hex string starting `tlpub:`, unless it's empty,
+// in which case we marshal it as null.
+func (k jsonPublicKey) MarshalJSON() ([]byte, error) {
+	if len(k) == 0 {
+		return []byte("null"), nil
+	}
+	return json.Marshal(fmt.Sprintf("tlpub:%x", k))
+}
+
+// UnmarshalJSON implements [json.UnmarshalJSON].
+func (k *jsonPublicKey) UnmarshalJSON(b []byte) error {
+	if bytes.Equal(b, []byte("null")) {
+		*k = []byte{}
+		return nil
+	}
+
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return fmt.Errorf("KeyID: cannot unmarshal non-string, non-null value: %w", err)
+	}
+
+	prefix := "tlpub:"
+	if !strings.HasPrefix(s, prefix) {
+		return fmt.Errorf("KeyID: missing required prefix %q in string %q", prefix, s)
+	}
+
+	hexData := s[len(prefix):]
+	decoded, err := hex.DecodeString(hexData)
+	if err != nil {
+		return fmt.Errorf("KeyID: invalid hex encoding in string %q: %w", s, err)
+	}
+
+	*k = decoded
 	return nil
 }
