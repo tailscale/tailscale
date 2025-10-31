@@ -324,6 +324,13 @@ func (s *SubscriberFunc[T]) dispatch(ctx context.Context, vals *queue[DeliveredE
 		case val := <-acceptCh():
 			vals.Add(val)
 		case <-ctx.Done():
+			// Wait for the callback to be complete, but not forever.
+			s.slow.Reset(5 * slowSubscriberTimeout)
+			select {
+			case <-s.slow.C:
+				s.logf("giving up on subscriber for %T after %v at close", t, time.Since(start))
+			case <-callDone:
+			}
 			return false
 		case ch := <-snapshot:
 			ch <- vals.Snapshot()
