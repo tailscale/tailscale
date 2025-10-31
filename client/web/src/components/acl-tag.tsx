@@ -1,9 +1,9 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+import { Badge } from "@tailscale/tailscale-ui-components"
 import cx from "classnames"
 import React from "react"
-import Badge from "src/ui/badge"
 
 /**
  * ACLTag handles the display of an ACL tag.
