@@ -33,6 +33,7 @@ import (
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/set"
 	"tailscale.com/wgengine/router"
+	"tailscale.com/wgengine/wgcfg"
 
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
@@ -87,8 +88,6 @@ func (nl *Logger) Running() bool {
 	return nl.shutdownLocked != nil
 }
 
-var testClient *http.Client
-
 // Startup starts an asynchronous network logger that monitors
 // statistics for the provided tun and/or sock device.
 //
@@ -115,7 +114,7 @@ var testClient *http.Client
 // The sock is used to populated the PhysicalTraffic field in [netlogtype.Message].
 //
 // The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
-func (nl *Logger) Startup(logf logger.Logf, nm *netmap.NetworkMap, nodeLogID, domainLogID logid.PrivateID, tun, sock Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus, logExitFlowEnabledEnabled bool) error {
+func (nl *Logger) Startup(logf logger.Logf, conf wgcfg.NetworkLoggingConfig, nm *netmap.NetworkMap, tun, sock Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) error {
 	nl.mu.Lock()
 	defer nl.mu.Unlock()
 
@@ -128,17 +127,20 @@ func (nl *Logger) Startup(logf logger.Logf, nm *netmap.NetworkMap, nodeLogID, do
 	if logf == nil {
 		logf = log.Printf
 	}
-	httpc := &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, netMon, health, logf)}
-	if testClient != nil {
-		httpc = testClient
+	privID, copyID := conf.NodeID, conf.TailnetID
+	if conf.NodeID.IsZero() {
+		// If NodeID is zero, then only upload for the specified TailnetID.
+		privID, copyID = conf.TailnetID, logid.PrivateID{}
 	}
+	httpc := &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, netMon, health, logf)}
 	logger := logtail.NewLogger(logtail.Config{
 		Collection:    "tailtraffic.log.tailscale.io",
-		PrivateID:     nodeLogID,
-		CopyPrivateID: domainLogID,
+		PrivateID:     privID,
+		CopyPrivateID: copyID,
 		Bus:           bus,
 		Stderr:        io.Discard,
 		CompressLogs:  true,
+		HTTPAuth:      conf.HTTPAuth,
 		HTTPC:         httpc,
 		// TODO(joetsai): Set Buffer? Use an in-memory buffer for now.
 
@@ -166,7 +168,7 @@ func (nl *Logger) Startup(logf logger.Logf, nm *netmap.NetworkMap, nodeLogID, do
 	go func(recordsChan chan record) {
 		defer close(recorderDone)
 		for rec := range recordsChan {
-			msg := rec.toMessage(false, !logExitFlowEnabledEnabled)
+			msg := rec.toMessage(conf.ExcludeNodeInfo, conf.AnonymizeExitTraffic)
 			if b, err := jsonv2.Marshal(msg, jsontext.AllowInvalidUTF8(true)); err != nil {
 				if nl.logf != nil {
 					nl.logf("netlog: json.Marshal error: %v", err)
