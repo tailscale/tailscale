@@ -687,15 +687,19 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		return &dns.Config{}
 	}
 
-	dcfg := &dns.Config{
-		Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-		Hosts:  map[dnsname.FQDN][]netip.Addr{},
-	}
-
 	// selfV6Only is whether we only have IPv6 addresses ourselves.
 	selfV6Only := nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs6) &&
 		!nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs4)
-	dcfg.OnlyIPv6 = selfV6Only
+
+	selfAddrs := nm.GetAddresses()
+	srcNatPrefix := prefs.DNSUpstreamSnatNetMap()
+	dcfg := &dns.Config{
+		Routes:       map[dnsname.FQDN][]*dnstype.Resolver{},
+		Hosts:        map[dnsname.FQDN][]netip.Addr{},
+		SelfAddrs:    selfAddrs.AsSlice(),
+		SrcNatPrefix: srcNatPrefix,
+		OnlyIPv6:     selfV6Only,
+	}
 
 	wantAAAA := nm.AllCaps.Contains(tailcfg.NodeAttrMagicDNSPeerAAAA)
 

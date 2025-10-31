@@ -102,6 +102,8 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	DriveShares            []*drive.Share
 	RelayServerPort        *int
 	AllowSingleHosts       marshalAsTrueInJSON
+	DNSUpstreamResolver    netip.AddrPort
+	DNSUpstreamSnatNetMap  netip.Prefix
 	Persist                *persist.Persist
 }{})
 
