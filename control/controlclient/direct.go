@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -944,6 +946,26 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		OmitPeers:               nu == nil,
 		TKAHead:                 tkaHead,
 		ConnectionHandleForTest: connectionHandleForTest,
+	}
+
+	// If we have a hardware attestation key, sign the node key with it and send
+	// the key & signature in the map request.
+	if buildfeatures.HasTPM {
+		if k := persist.AsStruct().AttestationKey; k != nil && !k.IsZero() {
+			hwPub := key.HardwareAttestationPublicFromPlatformKey(k)
+			request.HardwareAttestationKey = hwPub
+
+			t := c.clock.Now()
+			msg := fmt.Sprintf("%d|%s", t.Unix(), nodeKey.String())
+			digest := sha256.Sum256([]byte(msg))
+			sig, err := k.Sign(nil, digest[:], crypto.SHA256)
+			if err != nil {
+				c.logf("failed to sign node key with hardware attestation key: %v", err)
+			} else {
+				request.HardwareAttestationKeySignature = sig
+				request.HardwareAttestationKeySignatureTimestamp = t
+			}
+		}
 	}
 
 	var extraDebugFlags []string
