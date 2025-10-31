@@ -325,6 +325,11 @@ main() {
 				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
 				PACKAGETYPE="tdnf"
 				;;
+			solus)
+				OS="$ID"
+				VERSION="" # rolling release
+				PACKAGETYPE="eopkg"
+				;;
 
 			# TODO: wsl?
 			# TODO: synology? qnap?
@@ -414,6 +419,9 @@ main() {
 			# Rolling release, no version checking needed.
 			;;
 		gentoo)
+			# Rolling release, no version checking needed.
+			;;
+		solus)
 			# Rolling release, no version checking needed.
 			;;
 		freebsd)
@@ -633,6 +641,12 @@ main() {
 		emerge)
 			set -x
 			$SUDO emerge --ask=n net-vpn/tailscale
+			set +x
+			;;
+		eopkg)
+			set -x
+			$SUDO eopkg install tailscale
+			$SUDO systemctl enable --now tailscaled
 			set +x
 			;;
 		appstore)
