@@ -162,8 +162,8 @@ func NewChangeDelta(old, new *State, timeJumped bool, tsIfName string) ChangeDel
 
 	// (barnstar) TODO: There are likely a number of optimizations we can do here to avoid
 	// rebinding in cases where it is not necessary but we really need to leave that to the
-	// upstream component.  If it's sockets are happy, then it probably doesn't need to rebind.
-	// unless only some of these are true.
+	// upstream component.  If it's sockets are happy, then it probably doesn't need to rebind,
+	// but it may want to if any of these fields are true.
 
 	return cd
 }
