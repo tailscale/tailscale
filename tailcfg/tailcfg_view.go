@@ -318,6 +318,8 @@ func (v NodeView) ComputedName() string { return v.ж.ComputedName }
 func (v NodeView) ComputedNameWithHost() string { return v.ж.ComputedNameWithHost }
 
 // DataPlaneAuditLogID is the per-node logtail ID used for data plane audit logging.
+// If empty, but [MapResponse.DomainDataPlaneAuditLogID] is non-empty,
+// then logs are only uploaded under the domain-specific log ID.
 func (v NodeView) DataPlaneAuditLogID() string { return v.ж.DataPlaneAuditLogID }
 
 // Expired is whether this node's key has expired. Control may send

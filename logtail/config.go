@@ -30,6 +30,7 @@ type Config struct {
 	PrivateID      logid.PrivateID // private ID for the primary log stream
 	CopyPrivateID  logid.PrivateID // private ID for a log stream that is a superset of this log stream
 	BaseURL        string          // if empty defaults to "https://log.tailscale.com"
+	HTTPAuth       string          // if set, specifies the Authorization HTTP header to send
 	HTTPC          *http.Client    // if empty defaults to http.DefaultClient
 	SkipClientTime bool            // if true, client_time is not written to logs
 	LowMemory      bool            // if true, logtail minimizes memory use

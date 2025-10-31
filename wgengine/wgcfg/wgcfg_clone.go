@@ -9,7 +9,6 @@ import (
 	"net/netip"
 
 	"tailscale.com/types/key"
-	"tailscale.com/types/logid"
 	"tailscale.com/types/ptr"
 )
 
@@ -39,11 +38,7 @@ var _ConfigCloneNeedsRegeneration = Config(struct {
 	MTU            uint16
 	DNS            []netip.Addr
 	Peers          []Peer
-	NetworkLogging struct {
-		NodeID             logid.PrivateID
-		DomainID           logid.PrivateID
-		LogExitFlowEnabled bool
-	}
+	NetworkLogging NetworkLoggingConfig
 }{})
 
 // Clone makes a deep copy of Peer.
