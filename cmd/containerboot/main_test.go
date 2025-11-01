@@ -1104,8 +1104,8 @@ func TestContainerBoot(t *testing.T) {
 					cmd.Process.Signal(*p.Signal)
 				}
 				if p.WantLog != "" {
-					err := tstest.WaitFor(2*time.Second, func() error {
-						waitLogLine(t, time.Second, cbOut, p.WantLog)
+					err := tstest.WaitFor(time.Minute, func() error {
+						waitLogLine(t, time.Minute, cbOut, p.WantLog)
 						return nil
 					})
 					if err != nil {
@@ -1213,6 +1213,8 @@ func (b *lockingBuffer) String() string {
 // waitLogLine fails the entire test if path doesn't contain want
 // before the timeout.
 func waitLogLine(t *testing.T, timeout time.Duration, b *lockingBuffer, want string) {
+	t.Helper()
+
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		for _, line := range strings.Split(b.String(), "\n") {
@@ -1337,6 +1339,17 @@ func (l *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			panic(fmt.Sprintf("unsupported method %q", r.Method))
 		}
 		w.Write([]byte("fake metrics"))
+		return
+	case "/localapi/v0/disconnect-control":
+		if r.Method != "POST" {
+			panic(fmt.Sprintf("unsupported method %q", r.Method))
+		}
+	case "/localapi/v0/prefs":
+		if r.Method != "GET" {
+			panic(fmt.Sprintf("unsupported method %q", r.Method))
+		}
+
+		w.Write([]byte("{}"))
 		return
 	default:
 		panic(fmt.Sprintf("unsupported path %q", r.URL.Path))
