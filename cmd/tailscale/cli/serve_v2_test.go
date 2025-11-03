@@ -2077,9 +2077,11 @@ func TestSetServe(t *testing.T) {
 			if err == nil && tt.expectErr {
 				t.Fatalf("got no error; expected error.")
 			}
-			if !tt.expectErr && !reflect.DeepEqual(tt.cfg, tt.expected) {
-				svcName := tailcfg.ServiceName(tt.dnsName)
-				t.Fatalf("got: %v; expected: %v", tt.cfg.Services[svcName], tt.expected.Services[svcName])
+			if !tt.expectErr {
+				if diff := cmp.Diff(tt.expected, tt.cfg); diff != "" {
+					// svcName := tailcfg.ServiceName(tt.dnsName)
+					t.Fatalf("got diff:\n%s", diff)
+				}
 			}
 		})
 	}
