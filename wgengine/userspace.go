@@ -466,6 +466,25 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		return true
 	}
 
+	e.tundev.OnTSMPDiscoKeyReceived = func(srcIP netip.Addr, update packet.TSMPDiscoKeyUpdate) {
+		e.logf("wgengine: got TSMP disco key update from %v", srcIP)
+		if e.magicConn != nil {
+			e.magicConn.HandleDiscoKeyUpdate(srcIP, update)
+		}
+	}
+
+	e.tundev.GetDiscoPublicKey = func() key.DiscoPublic {
+		if e.magicConn == nil {
+			return key.DiscoPublic{}
+		}
+		return e.magicConn.DiscoPublicKey()
+	}
+
+	// Wire up TSMP disco key request sending to magicsock
+	if e.magicConn != nil {
+		e.magicConn.SetSendTSMPDiscoKeyRequest(e.sendTSMPDiscoKeyRequest)
+	}
+
 	// wgdev takes ownership of tundev, will close it when closed.
 	e.logf("Creating WireGuard device...")
 	e.wgdev = wgcfg.NewDevice(e.tundev, e.magicConn.Bind(), e.wgLogger.DeviceLogger)
@@ -1561,6 +1580,35 @@ func (e *userspaceEngine) setTSMPPongCallback(data [8]byte, cb func(packet.TSMPP
 	} else {
 		e.pongCallback[data] = cb
 	}
+}
+
+// sendTSMPDiscoKeyRequest sends a TSMP disco key request to the given peer IP.
+func (e *userspaceEngine) sendTSMPDiscoKeyRequest(ip netip.Addr) error {
+	srcIP, err := e.mySelfIPMatchingFamily(ip)
+	if err != nil {
+		return err
+	}
+
+	var iph packet.Header
+	if srcIP.Is4() {
+		iph = packet.IP4Header{
+			IPProto: ipproto.TSMP,
+			Src:     srcIP,
+			Dst:     ip,
+		}
+	} else {
+		iph = packet.IP6Header{
+			IPProto: ipproto.TSMP,
+			Src:     srcIP,
+			Dst:     ip,
+		}
+	}
+
+	var tsmpPayload [1]byte
+	tsmpPayload[0] = byte(packet.TSMPTypeDiscoKeyRequest)
+
+	tsmpRequest := packet.Generate(iph, tsmpPayload[:])
+	return e.tundev.InjectOutbound(tsmpRequest)
 }
 
 func (e *userspaceEngine) setICMPEchoResponseCallback(idSeq uint32, cb func()) {

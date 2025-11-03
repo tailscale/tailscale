@@ -155,17 +155,18 @@ type Conn struct {
 	// This block mirrors the contents and field order of the Options
 	// struct. Initialized once at construction, then constant.
 
-	eventBus               *eventbus.Bus
-	eventClient            *eventbus.Client
-	logf                   logger.Logf
-	epFunc                 func([]tailcfg.Endpoint)
-	derpActiveFunc         func()
-	idleFunc               func() time.Duration // nil means unknown
-	testOnlyPacketListener nettype.PacketListener
-	noteRecvActivity       func(key.NodePublic) // or nil, see Options.NoteRecvActivity
-	netMon                 *netmon.Monitor      // must be non-nil
-	health                 *health.Tracker      // or nil
-	controlKnobs           *controlknobs.Knobs  // or nil
+	eventBus                *eventbus.Bus
+	eventClient             *eventbus.Client
+	logf                    logger.Logf
+	epFunc                  func([]tailcfg.Endpoint)
+	derpActiveFunc          func()
+	idleFunc                func() time.Duration // nil means unknown
+	testOnlyPacketListener  nettype.PacketListener
+	noteRecvActivity        func(key.NodePublic)   // or nil, see Options.NoteRecvActivity
+	sendTSMPDiscoKeyRequest func(netip.Addr) error // or nil, sends TSMP disco key request to peer
+	netMon                  *netmon.Monitor        // must be non-nil
+	health                  *health.Tracker        // or nil
+	controlKnobs            *controlknobs.Knobs    // or nil
 
 	// ================================================================
 	// No locking required to access these fields, either because
@@ -1800,6 +1801,15 @@ func looksLikeInitiationMsg(b []byte) bool {
 		binary.LittleEndian.Uint32(b) == device.MessageInitiationType
 }
 
+func looksLikeWireGuardHandshake(b []byte) bool {
+	if len(b) < 4 {
+		return false
+	}
+	msgType := binary.LittleEndian.Uint32(b)
+	return (len(b) == device.MessageInitiationSize && msgType == device.MessageInitiationType) ||
+		(len(b) == device.MessageResponseSize && msgType == device.MessageResponseType)
+}
+
 // receiveIP is the shared bits of ReceiveIPv4 and ReceiveIPv6.
 //
 // size is the length of 'b' to report up to wireguard-go (only relevant if
@@ -2855,6 +2865,14 @@ func (c *Conn) SetSilentDisco(v bool) {
 	c.peerMap.forEachEndpoint(func(ep *endpoint) {
 		ep.setHeartbeatDisabled(v)
 	})
+}
+
+// SetSendTSMPDiscoKeyRequest sets the callback function to send TSMP disco key requests.
+// This is provided by the engine/tundev to inject TSMP packets.
+func (c *Conn) SetSendTSMPDiscoKeyRequest(fn func(netip.Addr) error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sendTSMPDiscoKeyRequest = fn
 }
 
 // SilentDisco returns true if silent disco is enabled, otherwise false.
@@ -4104,6 +4122,13 @@ var (
 	metricUDPLifetimeCycleCompleteAt10sCliff     = newUDPLifetimeCounter("magicsock_udp_lifetime_cycle_complete_at_10s_cliff")
 	metricUDPLifetimeCycleCompleteAt30sCliff     = newUDPLifetimeCounter("magicsock_udp_lifetime_cycle_complete_at_30s_cliff")
 	metricUDPLifetimeCycleCompleteAt60sCliff     = newUDPLifetimeCounter("magicsock_udp_lifetime_cycle_complete_at_60s_cliff")
+
+	// TSMP disco key exchange
+	metricTSMPDiscoKeyRequestSent    = clientmetric.NewCounter("magicsock_tsmp_disco_key_request_sent")
+	metricTSMPDiscoKeyRequestError   = clientmetric.NewCounter("magicsock_tsmp_disco_key_request_error")
+	metricTSMPDiscoKeyUpdateReceived = clientmetric.NewCounter("magicsock_tsmp_disco_key_update_received")
+	metricTSMPDiscoKeyUpdateApplied  = clientmetric.NewCounter("magicsock_tsmp_disco_key_update_applied")
+	metricTSMPDiscoKeyUpdateUnknown  = clientmetric.NewCounter("magicsock_tsmp_disco_key_update_unknown_peer")
 )
 
 // newUDPLifetimeCounter returns a new *clientmetric.Metric with the provided
@@ -4242,6 +4267,101 @@ func (le *lazyEndpoint) FromPeer(peerPublicKey [32]byte) {
 	//  See http://go/corp/29422 & http://go/corp/30042
 	le.c.peerMap.setNodeKeyForEpAddr(le.src, pubKey)
 	le.c.logf("magicsock: lazyEndpoint.FromPeer(%v) setting epAddr(%v) in peerMap for node(%v)", pubKey.ShortString(), le.src, ep.nodeAddr)
+
+	// Request disco key from peer via TSMP if we establish a tunnel
+	// without a recent disco ping. This handles cases where WireGuard
+	// establishes a tunnel before disco succeeds (e.g., control plane
+	// unreachable or stale disco keys).
+	go le.c.requestDiscoKeyViaTSMP(pubKey, ep)
+}
+
+// requestDiscoKeyViaTSMP sends a TSMP disco key request to a peer if there
+// hasn't been a recent disco ping.
+func (c *Conn) requestDiscoKeyViaTSMP(nodeKey key.NodePublic, ep *endpoint) {
+	if c.sendTSMPDiscoKeyRequest == nil {
+		return
+	}
+	if !ep.nodeAddr.IsValid() {
+		return
+	}
+
+	epDisco := ep.disco.Load()
+	if epDisco != nil {
+		c.mu.Lock()
+		di := c.discoInfo[epDisco.key]
+		recentDiscoPing := di != nil && time.Since(di.lastPingTime) < discoPingInterval
+		c.mu.Unlock()
+
+		if recentDiscoPing {
+			return
+		}
+	}
+	// YUCK. once again goroutines fight back - we need to deterministically
+	// schedule this _after_ the wireguard handshake response or else we trigger
+	// the wireguard handshake race problem. Maybe it's ok though, as we should
+	// really be singleflighting this, and perhaps we just use a singleflight
+	// with a short cork.
+	time.Sleep(time.Millisecond)
+
+	c.logf("magicsock: sending TSMP disco key request to %v (%v)", nodeKey.ShortString(), ep.nodeAddr)
+	if err := c.sendTSMPDiscoKeyRequest(ep.nodeAddr); err != nil {
+		c.logf("magicsock: failed to send TSMP disco key request: %v", err)
+		metricTSMPDiscoKeyRequestError.Add(1)
+		return
+	}
+	metricTSMPDiscoKeyRequestSent.Add(1)
+}
+
+// HandleDiscoKeyUpdate processes a TSMP disco key update.
+// The update may be solicited (in response to a request) or unsolicited.
+// srcIP is the Tailscale IP of the peer that sent the update.
+func (c *Conn) HandleDiscoKeyUpdate(srcIP netip.Addr, update packet.TSMPDiscoKeyUpdate) {
+	discoKey := key.DiscoPublicFromRaw32(mem.B(update.DiscoKey[:]))
+	c.logf("magicsock: received disco key update %v from %v", discoKey.ShortString(), srcIP)
+	metricTSMPDiscoKeyUpdateReceived.Add(1)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var nodeKey key.NodePublic
+	var found bool
+	for _, peer := range c.peers.All() {
+		for _, addr := range peer.Addresses().All() {
+			if addr.Addr() == srcIP {
+				nodeKey = peer.Key()
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+
+	if !found {
+		c.logf("magicsock: disco key update from unknown peer %v", srcIP)
+		metricTSMPDiscoKeyUpdateUnknown.Add(1)
+		return
+	}
+
+	ep, ok := c.peerMap.endpointForNodeKey(nodeKey)
+	if !ok {
+		c.logf("magicsock: endpoint not found for node %v", nodeKey.ShortString())
+		return
+	}
+
+	oldDiscoKey := key.DiscoPublic{}
+	if epDisco := ep.disco.Load(); epDisco != nil {
+		oldDiscoKey = epDisco.key
+	}
+	c.discoInfoForKnownPeerLocked(discoKey)
+	ep.disco.Store(&endpointDisco{
+		key:   discoKey,
+		short: discoKey.ShortString(),
+	})
+	c.peerMap.upsertEndpoint(ep, oldDiscoKey)
+	c.logf("magicsock: updated disco key for peer %v to %v", nodeKey.ShortString(), discoKey.ShortString())
+	metricTSMPDiscoKeyUpdateApplied.Add(1)
 }
 
 // PeerRelays returns the current set of candidate peer relays.
