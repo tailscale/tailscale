@@ -966,28 +966,57 @@ func TestCaptureHook(t *testing.T) {
 }
 
 func TestTSMPDisco(t *testing.T) {
-	t.Run("IPv6DiscoAdvert", func(t *testing.T) {
+	t.Run("DiscoKeyRequest", func(t *testing.T) {
 		src := netip.MustParseAddr("2001:db8::1")
 		dst := netip.MustParseAddr("2001:db8::2")
-		discoKey := key.NewDisco()
-		buf, _ := (&packet.TSMPDiscoKeyAdvertisement{
-			Src: src,
-			Dst: dst,
-			Key: discoKey.Public(),
-		}).Marshal()
+
+		iph := packet.IP6Header{
+			IPProto: ipproto.TSMP,
+			Src:     src,
+			Dst:     dst,
+		}
+
+		var payload [1]byte
+		payload[0] = byte(packet.TSMPTypeDiscoKeyRequest)
+		buf := packet.Generate(iph, payload[:])
 
 		var p packet.Parsed
 		p.Decode(buf)
 
-		tda, ok := p.AsTSMPDiscoAdvertisement()
+		_, ok := p.AsTSMPDiscoKeyRequest()
 		if !ok {
-			t.Error("Unable to parse message as TSMPDiscoAdversitement")
+			t.Error("Unable to parse message as TSMPDiscoKeyRequest")
 		}
-		if tda.Src != src {
-			t.Errorf("Src address did not match, expected %v, got %v", src, tda.Src)
+	})
+
+	t.Run("DiscoKeyUpdate", func(t *testing.T) {
+		src := netip.MustParseAddr("2001:db8::1")
+		dst := netip.MustParseAddr("2001:db8::2")
+		discoKey := key.NewDisco()
+
+		update := packet.TSMPDiscoKeyUpdate{
+			IPHeader: packet.IP6Header{
+				IPProto: ipproto.TSMP,
+				Src:     src,
+				Dst:     dst,
+			},
+			DiscoKey: discoKey.Public().Raw32(),
 		}
-		if !reflect.DeepEqual(tda.Key, discoKey.Public()) {
-			t.Errorf("Key did not match, expected %q, got %q", discoKey.Public(), tda.Key)
+
+		buf := make([]byte, update.Len())
+		if err := update.Marshal(buf); err != nil {
+			t.Fatal(err)
+		}
+
+		var p packet.Parsed
+		p.Decode(buf)
+
+		parsed, ok := p.AsTSMPDiscoKeyUpdate()
+		if !ok {
+			t.Error("Unable to parse message as TSMPDiscoKeyUpdate")
+		}
+		if parsed.DiscoKey != discoKey.Public().Raw32() {
+			t.Errorf("Key did not match, expected %v, got %v", discoKey.Public().Raw32(), parsed.DiscoKey)
 		}
 	})
 }

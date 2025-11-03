@@ -325,7 +325,7 @@ func TestUserspaceEnginePeerMTUReconfig(t *testing.T) {
 	}
 }
 
-func TestTSMPKeyAdvertisement(t *testing.T) {
+func TestTSMPDiscoKeyRequest(t *testing.T) {
 	var knobs controlknobs.Knobs
 
 	bus := eventbustest.NewBus(t)
@@ -369,13 +369,12 @@ func TestTSMPKeyAdvertisement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addr := netip.MustParseAddr("100.100.99.1")
-	previousValue := metricTSMPDiscoKeyAdvertisementSent.Value()
-	ue.sendTSMPDiscoAdvertisement(addr)
-	if val := metricTSMPDiscoKeyAdvertisementSent.Value(); val <= previousValue {
-		errs := metricTSMPDiscoKeyAdvertisementError.Value()
-		t.Errorf("Expected 1 disco key advert, got %d, errors %d", val, errs)
+	peerAddr := netip.MustParseAddr("100.100.99.1")
+	err = ue.sendTSMPDiscoKeyRequest(peerAddr)
+	if err != nil {
+		t.Fatalf("sendTSMPDiscoKeyRequest failed: %v", err)
 	}
+
 	// Remove config to have the engine shut down more consistently
 	err = ue.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
 	if err != nil {

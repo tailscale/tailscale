@@ -15,12 +15,10 @@ import (
 	"fmt"
 	"net/netip"
 
-	"go4.org/mem"
 	"tailscale.com/types/ipproto"
-	"tailscale.com/types/key"
 )
 
-const minTSMPSize = 7 // the rejected body is 7 bytes
+const minTSMPSize = 1 // minimum is 1 byte for the type field (e.g., disco key request 'd')
 
 // TailscaleRejectedHeader is a TSMP message that says that one
 // Tailscale node has rejected the connection from another. Unlike a
@@ -75,8 +73,11 @@ const (
 	// TSMPTypePong is the type byte for a TailscalePongResponse.
 	TSMPTypePong TSMPType = 'o'
 
-	// TSPMTypeDiscoAdvertisement is the type byte for sending disco keys
-	TSMPTypeDiscoAdvertisement TSMPType = 'a'
+	// TSMPTypeDiscoKeyRequest is the type byte for a disco key request.
+	TSMPTypeDiscoKeyRequest TSMPType = 'd'
+
+	// TSMPTypeDiscoKeyUpdate is the type byte for a disco key update.
+	TSMPTypeDiscoKeyUpdate TSMPType = 'D'
 )
 
 type TailscaleRejectReason byte
@@ -265,52 +266,62 @@ func (h TSMPPongReply) Marshal(buf []byte) error {
 	return nil
 }
 
-// TSMPDiscoKeyAdvertisement is a TSMP message that's used for distributing Disco Keys.
+// TSMPDiscoKeyRequest is a TSMP message that requests a peer's disco key.
 //
-// On the wire, after the IP header, it's currently 33 bytes:
-//   - 'a' (TSMPTypeDiscoAdvertisement)
-//   - 32 disco key bytes
-type TSMPDiscoKeyAdvertisement struct {
-	Src, Dst netip.Addr
-	Key      key.DiscoPublic
-}
+// On the wire, after the IP header, it's currently 1 byte:
+//   - 'd' (TSMPTypeDiscoKeyRequest)
+type TSMPDiscoKeyRequest struct{}
 
-func (ka *TSMPDiscoKeyAdvertisement) Marshal() ([]byte, error) {
-	var iph Header
-	if ka.Src.Is4() {
-		iph = IP4Header{
-			IPProto: ipproto.TSMP,
-			Src:     ka.Src,
-			Dst:     ka.Dst,
-		}
-	} else {
-		iph = IP6Header{
-			IPProto: ipproto.TSMP,
-			Src:     ka.Src,
-			Dst:     ka.Dst,
-		}
-	}
-	payload := make([]byte, 0, 33)
-	payload = append(payload, byte(TSMPTypeDiscoAdvertisement))
-	payload = ka.Key.AppendTo(payload)
-	if len(payload) != 33 {
-		// Mostly to safeguard against ourselves changing this in the future.
-		return []byte{}, fmt.Errorf("expected payload length 33, got %d", len(payload))
-	}
-
-	return Generate(iph, payload), nil
-}
-
-func (pp *Parsed) AsTSMPDiscoAdvertisement() (tka TSMPDiscoKeyAdvertisement, ok bool) {
+func (pp *Parsed) AsTSMPDiscoKeyRequest() (h TSMPDiscoKeyRequest, ok bool) {
 	if pp.IPProto != ipproto.TSMP {
 		return
 	}
 	p := pp.Payload()
-	if len(p) < 33 || p[0] != byte(TSMPTypeDiscoAdvertisement) {
+	if len(p) < 1 || p[0] != byte(TSMPTypeDiscoKeyRequest) {
 		return
 	}
-	tka.Src = pp.Src.Addr()
-	tka.Key = key.DiscoPublicFromRaw32(mem.B(p[1:33]))
+	return h, true
+}
 
-	return tka, true
+// TSMPDiscoKeyUpdate is a TSMP message that contains a disco public key.
+// It may be sent in response to a request, or unsolicited when a node
+// believes its peer may have stale disco key information.
+//
+// On the wire, after the IP header, it's currently 33 bytes:
+//   - 'D' (TSMPTypeDiscoKeyUpdate)
+//   - 32 bytes disco public key
+type TSMPDiscoKeyUpdate struct {
+	IPHeader Header
+	DiscoKey [32]byte // raw disco public key bytes
+}
+
+// AsTSMPDiscoKeyUpdate returns pp as a TSMPDiscoKeyUpdate and whether it is one.
+// The update.IPHeader field is not populated.
+func (pp *Parsed) AsTSMPDiscoKeyUpdate() (update TSMPDiscoKeyUpdate, ok bool) {
+	if pp.IPProto != ipproto.TSMP {
+		return
+	}
+	p := pp.Payload()
+	if len(p) < 33 || p[0] != byte(TSMPTypeDiscoKeyUpdate) {
+		return
+	}
+	copy(update.DiscoKey[:], p[1:33])
+	return update, true
+}
+
+func (h TSMPDiscoKeyUpdate) Len() int {
+	return h.IPHeader.Len() + 33
+}
+
+func (h TSMPDiscoKeyUpdate) Marshal(buf []byte) error {
+	if len(buf) < h.Len() {
+		return errSmallBuffer
+	}
+	if err := h.IPHeader.Marshal(buf); err != nil {
+		return err
+	}
+	buf = buf[h.IPHeader.Len():]
+	buf[0] = byte(TSMPTypeDiscoKeyUpdate)
+	copy(buf[1:33], h.DiscoKey[:])
+	return nil
 }
