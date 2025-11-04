@@ -12,6 +12,7 @@ import (
 	"context"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 )
 
 // LoginFlags is a bitmask of options to change the behavior of Client.Login
@@ -81,6 +82,9 @@ type Client interface {
 	// in a separate http request. It has nothing to do with the rest of
 	// the state machine.
 	UpdateEndpoints(endpoints []tailcfg.Endpoint)
+	// SetDiscoPublicKey updates the disco public key that will be sent in
+	// future map requests. This should be called after rotating the discovery key.
+	SetDiscoPublicKey(key.DiscoPublic)
 	// ClientID returns the ClientID of a client. This ID is meant to
 	// distinguish one client from another.
 	ClientID() int64

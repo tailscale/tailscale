@@ -751,6 +751,11 @@ func (c *Auto) UpdateEndpoints(endpoints []tailcfg.Endpoint) {
 	}
 }
 
+func (c *Auto) SetDiscoPublicKey(key key.DiscoPublic) {
+	c.direct.SetDiscoPublicKey(key)
+	c.updateControl()
+}
+
 func (c *Auto) Shutdown() {
 	c.mu.Lock()
 	if c.closed {

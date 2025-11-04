@@ -183,6 +183,12 @@ func debugCmd() *ffcli.Command {
 				ShortHelp:  "Force a magicsock rebind",
 			},
 			{
+				Name:       "rotate-disco-key",
+				ShortUsage: "tailscale debug rotate-disco-key",
+				Exec:       localAPIAction("rotate-disco-key"),
+				ShortHelp:  "Rotate the discovery key",
+			},
+			{
 				Name:       "derp-set-on-demand",
 				ShortUsage: "tailscale debug derp-set-on-demand",
 				Exec:       localAPIAction("derp-set-homeless"),

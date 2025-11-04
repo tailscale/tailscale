@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/subtle"
 	"fmt"
+	"sync/atomic"
 
 	"go4.org/mem"
 	"golang.org/x/crypto/curve25519"
@@ -227,4 +228,78 @@ func (k DiscoShared) Open(ciphertext []byte) (cleartext []byte, ok bool) {
 	}
 	nonce := (*[24]byte)(ciphertext)
 	return box.OpenAfterPrecomputation(nil, ciphertext[24:], nonce, &k.k)
+}
+
+type discoKeyPair struct {
+	private DiscoPrivate
+	public  DiscoPublic
+	short   string
+}
+
+// DiscoKey is an atomic container for a disco private key, public key, and
+// the public key's ShortString. The private and public keys are always kept
+// synchronized.
+//
+// The zero value is not ready for use. Use NewDiscoKey or
+// NewDiscoKeyFromPrivate to create a DiscoKey.
+type DiscoKey struct {
+	pair atomic.Pointer[discoKeyPair]
+}
+
+// NewDiscoKey creates and returns a new DiscoKey.
+func NewDiscoKey() *DiscoKey {
+	dk := &DiscoKey{}
+	k := NewDisco()
+	p := k.Public()
+	dk.pair.Store(&discoKeyPair{
+		private: k,
+		public:  p,
+		short:   p.ShortString(),
+	})
+	return dk
+}
+
+// NewDiscoKeyFromPrivate creates and returns a new DiscoKey from k.
+func NewDiscoKeyFromPrivate(k DiscoPrivate) *DiscoKey {
+	dk := &DiscoKey{}
+	p := k.Public()
+	dk.pair.Store(&discoKeyPair{
+		private: k,
+		public:  p,
+		short:   p.ShortString(),
+	})
+	return dk
+}
+
+// Pair returns the private and public keys together atomically.
+// Code that needs both the private and public keys synchronized should
+// use Pair instead of calling Private and Public separately.
+func (dk *DiscoKey) Pair() (private DiscoPrivate, public DiscoPublic) {
+	p := dk.pair.Load()
+	return p.private, p.public
+}
+
+// Private returns the private key.
+func (dk *DiscoKey) Private() DiscoPrivate {
+	return dk.pair.Load().private
+}
+
+// Public returns the public key.
+func (dk *DiscoKey) Public() DiscoPublic {
+	return dk.pair.Load().public
+}
+
+// Short returns the short string of the public key (see DiscoPublic.ShortString).
+func (dk *DiscoKey) Short() string {
+	return dk.pair.Load().short
+}
+
+// Set updates the private key (and the cached public key and short string).
+func (dk *DiscoKey) Set(private DiscoPrivate) {
+	public := private.Public()
+	dk.pair.Store(&discoKeyPair{
+		private: private,
+		public:  public,
+		short:   public.ShortString(),
+	})
 }

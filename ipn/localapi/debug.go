@@ -31,6 +31,7 @@ import (
 func init() {
 	Register("component-debug-logging", (*Handler).serveComponentDebugLogging)
 	Register("debug", (*Handler).serveDebug)
+	Register("debug-rotate-disco-key", (*Handler).serveDebugRotateDiscoKey)
 	Register("dev-set-state-store", (*Handler).serveDevSetStateStore)
 	Register("debug-bus-events", (*Handler).serveDebugBusEvents)
 	Register("debug-bus-graph", (*Handler).serveEventBusGraph)
@@ -232,6 +233,8 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			return
 		}
+	case "rotate-disco-key":
+		err = h.b.DebugRotateDiscoKey()
 	case "":
 		err = fmt.Errorf("missing parameter 'action'")
 	default:
@@ -472,4 +475,21 @@ func (h *Handler) serveDebugOptionalFeatures(w http.ResponseWriter, r *http.Requ
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(of)
+}
+
+func (h *Handler) serveDebugRotateDiscoKey(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "debug access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != httpm.POST {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := h.b.DebugRotateDiscoKey(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	io.WriteString(w, "done\n")
 }

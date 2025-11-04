@@ -99,3 +99,79 @@ func TestSortedPairOfDiscoPublic(t *testing.T) {
 		t.Fatal("unsortedInput.Get()[1] != pubB")
 	}
 }
+
+func TestDiscoKeyType(t *testing.T) {
+	dk := NewDiscoKey()
+	if dk == nil {
+		t.Fatal("NewDiscoKey returned nil")
+	}
+
+	private := dk.Private()
+	public := dk.Public()
+	short := dk.Short()
+
+	if private.IsZero() {
+		t.Fatal("DiscoKey private key should not be zero")
+	}
+	if public.IsZero() {
+		t.Fatal("DiscoKey public key should not be zero")
+	}
+	if short == "" {
+		t.Fatal("DiscoKey short string should not be empty")
+	}
+
+	if public != private.Public() {
+		t.Fatal("DiscoKey public key doesn't match private key")
+	}
+	if short != public.ShortString() {
+		t.Fatal("DiscoKey short string doesn't match public key")
+	}
+
+	gotPrivate, gotPublic := dk.Pair()
+	if !gotPrivate.Equal(private) {
+		t.Fatal("Pair() returned different private key")
+	}
+	if gotPublic != public {
+		t.Fatal("Pair() returned different public key")
+	}
+}
+
+func TestDiscoKeyFromPrivate(t *testing.T) {
+	originalPrivate := NewDisco()
+	dk := NewDiscoKeyFromPrivate(originalPrivate)
+
+	private := dk.Private()
+	public := dk.Public()
+
+	if !private.Equal(originalPrivate) {
+		t.Fatal("DiscoKey private key doesn't match original")
+	}
+	if public != originalPrivate.Public() {
+		t.Fatal("DiscoKey public key doesn't match derived from original private")
+	}
+}
+
+func TestDiscoKeySet(t *testing.T) {
+	dk := NewDiscoKey()
+	oldPrivate := dk.Private()
+	oldPublic := dk.Public()
+
+	newPrivate := NewDisco()
+	dk.Set(newPrivate)
+
+	currentPrivate := dk.Private()
+	currentPublic := dk.Public()
+
+	if currentPrivate.Equal(oldPrivate) {
+		t.Fatal("DiscoKey private key should have changed after Set")
+	}
+	if currentPublic == oldPublic {
+		t.Fatal("DiscoKey public key should have changed after Set")
+	}
+	if !currentPrivate.Equal(newPrivate) {
+		t.Fatal("DiscoKey private key doesn't match the set key")
+	}
+	if currentPublic != newPrivate.Public() {
+		t.Fatal("DiscoKey public key doesn't match derived from set private key")
+	}
+}
