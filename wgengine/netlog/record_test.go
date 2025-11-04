@@ -190,6 +190,7 @@ func TestToNode(t *testing.T) {
 			node: &tailcfg.Node{
 				StableID:  "n123456CNTL",
 				Addresses: []netip.Prefix{prefix("100.1.2.3")},
+				Hostinfo:  (&tailcfg.Hostinfo{OS: "linux"}).View(),
 				User:      12345,
 			},
 			user: &tailcfg.UserProfile{
@@ -199,6 +200,7 @@ func TestToNode(t *testing.T) {
 			want: netlogtype.Node{
 				NodeID:    "n123456CNTL",
 				Addresses: []netip.Addr{addr("100.1.2.3")},
+				OS:        "linux",
 				User:      "user@domain",
 			},
 		},
