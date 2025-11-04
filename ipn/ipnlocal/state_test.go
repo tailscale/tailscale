@@ -316,6 +316,11 @@ func (cc *mockControl) UpdateEndpoints(endpoints []tailcfg.Endpoint) {
 	cc.called("UpdateEndpoints")
 }
 
+func (cc *mockControl) SetDiscoPublicKey(key key.DiscoPublic) {
+	cc.logf("SetDiscoPublicKey: %v", key)
+	cc.called("SetDiscoPublicKey")
+}
+
 func (cc *mockControl) ClientID() int64 {
 	return cc.controlClientID
 }

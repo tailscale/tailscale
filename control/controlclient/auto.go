@@ -767,6 +767,13 @@ func (c *Auto) UpdateEndpoints(endpoints []tailcfg.Endpoint) {
 	}
 }
 
+// SetDiscoPublicKey sets the client's Disco public to key and sends the change
+// to the control server.
+func (c *Auto) SetDiscoPublicKey(key key.DiscoPublic) {
+	c.direct.SetDiscoPublicKey(key)
+	c.updateControl()
+}
+
 func (c *Auto) Shutdown() {
 	c.mu.Lock()
 	if c.closed {

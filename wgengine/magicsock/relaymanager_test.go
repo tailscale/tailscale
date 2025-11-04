@@ -22,11 +22,15 @@ func TestRelayManagerInitAndIdle(t *testing.T) {
 	<-rm.runLoopStoppedCh
 
 	rm = relayManager{}
-	rm.handleCallMeMaybeVia(&endpoint{c: &Conn{discoPrivate: key.NewDisco()}}, addrQuality{}, false, &disco.CallMeMaybeVia{UDPRelayEndpoint: disco.UDPRelayEndpoint{ServerDisco: key.NewDisco().Public()}})
+	c1 := &Conn{}
+	c1.discoAtomic.Set(key.NewDisco())
+	rm.handleCallMeMaybeVia(&endpoint{c: c1}, addrQuality{}, false, &disco.CallMeMaybeVia{UDPRelayEndpoint: disco.UDPRelayEndpoint{ServerDisco: key.NewDisco().Public()}})
 	<-rm.runLoopStoppedCh
 
 	rm = relayManager{}
-	rm.handleRxDiscoMsg(&Conn{discoPrivate: key.NewDisco()}, &disco.BindUDPRelayEndpointChallenge{}, key.NodePublic{}, key.DiscoPublic{}, epAddr{})
+	c2 := &Conn{}
+	c2.discoAtomic.Set(key.NewDisco())
+	rm.handleRxDiscoMsg(c2, &disco.BindUDPRelayEndpointChallenge{}, key.NodePublic{}, key.DiscoPublic{}, epAddr{})
 	<-rm.runLoopStoppedCh
 
 	rm = relayManager{}

@@ -6620,6 +6620,30 @@ func (b *LocalBackend) DebugReSTUN() error {
 	return nil
 }
 
+func (b *LocalBackend) DebugRotateDiscoKey() error {
+	if !buildfeatures.HasDebug {
+		return nil
+	}
+
+	mc := b.MagicConn()
+	mc.RotateDiscoKey()
+
+	newDiscoKey := mc.DiscoPublicKey()
+
+	if tunWrap, ok := b.sys.Tun.GetOK(); ok {
+		tunWrap.SetDiscoKey(newDiscoKey)
+	}
+
+	b.mu.Lock()
+	cc := b.cc
+	b.mu.Unlock()
+	if cc != nil {
+		cc.SetDiscoPublicKey(newDiscoKey)
+	}
+
+	return nil
+}
+
 func (b *LocalBackend) DebugPeerRelayServers() set.Set[netip.Addr] {
 	return b.MagicConn().PeerRelays()
 }
