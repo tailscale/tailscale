@@ -37,6 +37,10 @@ var avoidInterfaces = envknob.RegisterString("TS_AVOID_INTERFACES")
 // consider when gathering endpoints.
 var onlyInterfaces = envknob.RegisterString("TS_ONLY_INTERFACES")
 
+// In the same vein, avoidPrefix is a debug/power-user knob to exclude any addresses within specific
+// prefixes from being used as endpoints. This is a more granular version of $TS_AVOID_INTERFACES.
+var avoidPrefix = envknob.RegisterString("TS_AVOID_PREFIX")
+
 // LoginEndpointForProxyDetermination is the URL used for testing
 // which HTTP proxy the system should use.
 var LoginEndpointForProxyDetermination = "https://controlplane.tailscale.com/"
@@ -58,6 +62,25 @@ func matchInterfaceName(name string, patterns string) bool {
 	return false
 }
 
+func matchIP(ip netip.Addr, prefixes string) bool {
+	prefixList := strings.Split(prefixes, ",")
+	for _, arg := range prefixList {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(arg)
+		if err != nil {
+			continue
+		}
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+	return false
+
+}
+
 func isProblematicInterface(nif *net.Interface) bool {
 	name := nif.Name
 	// Don't try to send disco/etc packets over zerotier; they effectively
@@ -76,6 +99,13 @@ func isAllowedInterface(nif *net.Interface) bool {
 		return false
 	}
 	if avoidInterfaces() != "" && matchInterfaceName(name, avoidInterfaces()) {
+		return false
+	}
+	return true
+}
+
+func isAllowedAddress(ip netip.Addr) bool {
+	if avoidPrefix() != "" && matchIP(ip, avoidPrefix()) {
 		return false
 	}
 	return true
@@ -119,6 +149,10 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 					continue
 				}
 				ip = ip.Unmap()
+				if !isAllowedAddress(ip) {
+					// Skip addresses that the user does not want to use with Tailscale.
+					continue
+				}
 				// TODO(apenwarr): don't special case cgNAT.
 				// In the general wireguard case, it might
 				// very well be something we can route to
