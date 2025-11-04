@@ -361,7 +361,7 @@ func (r *relayManager) ensureDiscoInfoFor(work *relayHandshakeWork) {
 		di.di = &discoInfo{
 			discoKey:   work.se.ServerDisco,
 			discoShort: work.se.ServerDisco.ShortString(),
-			sharedKey:  work.wlb.ep.c.discoPrivate.Shared(work.se.ServerDisco),
+			sharedKey:  work.wlb.ep.c.discoAtomic.Private().Shared(work.se.ServerDisco),
 		}
 	}
 }
@@ -1031,7 +1031,7 @@ func (r *relayManager) allocateAllServersRunLoop(wlb endpointWithLastBest) {
 	if remoteDisco == nil {
 		return
 	}
-	discoKeys := key.NewSortedPairOfDiscoPublic(wlb.ep.c.discoPublic, remoteDisco.key)
+	discoKeys := key.NewSortedPairOfDiscoPublic(wlb.ep.c.discoAtomic.Public(), remoteDisco.key)
 	for _, v := range r.serversByNodeKey {
 		byDiscoKeys, ok := r.allocWorkByDiscoKeysByServerNodeKey[v.nodeKey]
 		if !ok {

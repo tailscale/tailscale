@@ -697,7 +697,7 @@ func (de *endpoint) maybeProbeUDPLifetimeLocked() (afterInactivityFor time.Durat
 	// shuffling probing probability where the local node ends up with a large
 	// key value lexicographically relative to the other nodes it tends to
 	// communicate with. If de's disco key changes, the cycle will reset.
-	if de.c.discoPublic.Compare(epDisco.key) >= 0 {
+	if de.c.discoAtomic.Public().Compare(epDisco.key) >= 0 {
 		// lower disco pub key node probes higher
 		return afterInactivityFor, false
 	}
@@ -1739,7 +1739,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 	}
 
 	if sp.purpose != pingHeartbeat && sp.purpose != pingHeartbeatForUDPLifetime {
-		de.c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pktlen=%v pong.src=%v%v", de.c.discoShort, de.discoShort(), de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), pktLen, m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
+		de.c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pktlen=%v pong.src=%v%v", de.c.discoAtomic.Short(), de.discoShort(), de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), pktLen, m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
 			if sp.to != src {
 				fmt.Fprintf(bw, " ping.to=%v", sp.to)
 			}

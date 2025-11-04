@@ -4235,3 +4235,73 @@ func Test_lazyEndpoint_FromPeer(t *testing.T) {
 		})
 	}
 }
+
+func TestRotateDiscoKey(t *testing.T) {
+	c := newConn(t.Logf)
+
+	oldPrivate, oldPublic := c.discoAtomic.Pair()
+	oldShort := c.discoAtomic.Short()
+
+	if oldPublic != oldPrivate.Public() {
+		t.Fatalf("old public key doesn't match old private key")
+	}
+	if oldShort != oldPublic.ShortString() {
+		t.Fatalf("old short string doesn't match old public key")
+	}
+
+	testDiscoKey := key.NewDisco().Public()
+	c.mu.Lock()
+	c.discoInfo[testDiscoKey] = &discoInfo{
+		discoKey:   testDiscoKey,
+		discoShort: testDiscoKey.ShortString(),
+	}
+	if len(c.discoInfo) != 1 {
+		t.Fatalf("expected 1 discoInfo entry, got %d", len(c.discoInfo))
+	}
+	c.mu.Unlock()
+
+	c.RotateDiscoKey()
+
+	newPrivate, newPublic := c.discoAtomic.Pair()
+	newShort := c.discoAtomic.Short()
+
+	if newPublic.Compare(oldPublic) == 0 {
+		t.Fatalf("disco key didn't change after rotation")
+	}
+	if newShort == oldShort {
+		t.Fatalf("short string didn't change after rotation")
+	}
+
+	if newPublic != newPrivate.Public() {
+		t.Fatalf("new public key doesn't match new private key")
+	}
+	if newShort != newPublic.ShortString() {
+		t.Fatalf("new short string doesn't match new public key")
+	}
+
+	c.mu.Lock()
+	if len(c.discoInfo) != 0 {
+		t.Fatalf("expected discoInfo to be cleared, got %d entries", len(c.discoInfo))
+	}
+	c.mu.Unlock()
+}
+
+func TestRotateDiscoKeyMultipleTimes(t *testing.T) {
+	c := newConn(t.Logf)
+
+	keys := make([]key.DiscoPublic, 0, 5)
+	keys = append(keys, c.discoAtomic.Public())
+
+	for i := 0; i < 4; i++ {
+		c.RotateDiscoKey()
+		newKey := c.discoAtomic.Public()
+
+		for j, oldKey := range keys {
+			if newKey.Compare(oldKey) == 0 {
+				t.Fatalf("rotation %d produced same key as rotation %d", i+1, j)
+			}
+		}
+
+		keys = append(keys, newKey)
+	}
+}

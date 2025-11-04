@@ -74,7 +74,6 @@ type Direct struct {
 	logf                  logger.Logf
 	netMon                *netmon.Monitor // non-nil
 	health                *health.Tracker
-	discoPubKey           key.DiscoPublic
 	busClient             *eventbus.Client
 	clientVersionPub      *eventbus.Publisher[tailcfg.ClientVersion]
 	autoUpdatePub         *eventbus.Publisher[AutoUpdate]
@@ -95,6 +94,7 @@ type Direct struct {
 	mu              syncs.Mutex       // mutex guards the following fields
 	serverLegacyKey key.MachinePublic // original ("legacy") nacl crypto_box-based public key; only used for signRegisterRequest on Windows now
 	serverNoiseKey  key.MachinePublic
+	discoPubKey     key.DiscoPublic // protected by mu; can be updated via [SetDiscoPublicKey]
 
 	sfGroup     singleflight.Group[struct{}, *ts2021.Client] // protects noiseClient creation.
 	noiseClient *ts2021.Client                               // also protected by mu
@@ -316,7 +316,6 @@ func NewDirect(opts Options) (*Direct, error) {
 		logf:                  opts.Logf,
 		persist:               opts.Persist.View(),
 		authKey:               opts.AuthKey,
-		discoPubKey:           opts.DiscoPublicKey,
 		debugFlags:            opts.DebugFlags,
 		netMon:                netMon,
 		health:                opts.HealthTracker,
@@ -329,6 +328,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		dnsCache:              dnsCache,
 		dialPlan:              opts.DialPlan,
 	}
+	c.discoPubKey = opts.DiscoPublicKey
 	c.closedCtx, c.closeCtx = context.WithCancel(context.Background())
 
 	c.controlClientID = nextControlClientID.Add(1)
@@ -853,6 +853,14 @@ func (c *Direct) SendUpdate(ctx context.Context) error {
 	return c.sendMapRequest(ctx, false, nil)
 }
 
+// SetDiscoPublicKey updates the disco public key in local state.
+// It does not implicitly trigger [SendUpdate]; callers should arrange for that.
+func (c *Direct) SetDiscoPublicKey(key key.DiscoPublic) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.discoPubKey = key
+}
+
 // ClientID returns the controlClientID of the controlClient.
 func (c *Direct) ClientID() int64 {
 	return c.controlClientID
@@ -902,6 +910,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	persist := c.persist
 	serverURL := c.serverURL
 	serverNoiseKey := c.serverNoiseKey
+	discoKey := c.discoPubKey
 	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
 	connectionHandleForTest := c.connectionHandleForTest
@@ -945,11 +954,12 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	}
 
 	nodeKey := persist.PublicNodeKey()
+
 	request := &tailcfg.MapRequest{
 		Version:                 tailcfg.CurrentCapabilityVersion,
 		KeepAlive:               true,
 		NodeKey:                 nodeKey,
-		DiscoKey:                c.discoPubKey,
+		DiscoKey:                discoKey,
 		Endpoints:               eps,
 		EndpointTypes:           epTypes,
 		Stream:                  isStreaming,

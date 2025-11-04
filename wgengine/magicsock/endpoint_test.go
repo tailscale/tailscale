@@ -146,15 +146,22 @@ func TestProbeUDPLifetimeConfig_Valid(t *testing.T) {
 }
 
 func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
+	var lowerPriv, higherPriv key.DiscoPrivate
 	var lower, higher key.DiscoPublic
-	a := key.NewDisco().Public()
-	b := key.NewDisco().Public()
+	privA := key.NewDisco()
+	privB := key.NewDisco()
+	a := privA.Public()
+	b := privB.Public()
 	if a.String() < b.String() {
 		lower = a
 		higher = b
+		lowerPriv = privA
+		higherPriv = privB
 	} else {
 		lower = b
 		higher = a
+		lowerPriv = privB
+		higherPriv = privA
 	}
 	addr := addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("1.1.1.1:1")}}
 	newProbeUDPLifetime := func() *probeUDPLifetime {
@@ -281,10 +288,18 @@ func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			c := &Conn{}
+			if tt.localDisco.IsZero() {
+				c.discoAtomic.Set(key.NewDisco())
+			} else if tt.localDisco.Compare(lower) == 0 {
+				c.discoAtomic.Set(lowerPriv)
+			} else if tt.localDisco.Compare(higher) == 0 {
+				c.discoAtomic.Set(higherPriv)
+			} else {
+				t.Fatalf("unexpected localDisco value")
+			}
 			de := &endpoint{
-				c: &Conn{
-					discoPublic: tt.localDisco,
-				},
+				c:        c,
 				bestAddr: tt.bestAddr,
 			}
 			if tt.remoteDisco != nil {
