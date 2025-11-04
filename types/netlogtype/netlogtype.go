@@ -44,18 +44,6 @@ const (
 	// Each [ConnectionCounts] occupies at most [MaxConnectionCountsJSONSize].
 	MinMessageJSONSize = len(messageJSON)
 
-	nodeJSON      = `{"nodeId":` + maxJSONStableID + `,"name":"","addresses":` + maxJSONAddrs + `,"user":"","tags":[]}`
-	maxJSONAddrV4 = `"255.255.255.255"`
-	maxJSONAddrV6 = `"ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"`
-	maxJSONAddrs  = `[` + maxJSONAddrV4 + `,` + maxJSONAddrV6 + `]`
-
-	// MinNodeJSONSize is the overhead size of Node when it is
-	// serialized as JSON assuming that each field is minimally populated.
-	// It does not account for bytes occupied by
-	// [Node.Name], [Node.User], or [Node.Tags]. The [Node.Addresses]
-	// is assumed to contain a pair of IPv4 and IPv6 address.
-	MinNodeJSONSize = len(nodeJSON)
-
 	maxJSONConnCounts = `{` + maxJSONConn + `,` + maxJSONCounts + `}`
 	maxJSONConn       = `"proto":` + maxJSONProto + `,"src":` + maxJSONAddrPort + `,"dst":` + maxJSONAddrPort
 	maxJSONProto      = `255`
@@ -81,6 +69,9 @@ type Node struct {
 
 	// Addresses are the Tailscale IP addresses of the node.
 	Addresses []netip.Addr `json:"addresses,omitempty"`
+
+	// OS is the operating system of the node.
+	OS string `json:"os,omitzero"` // e.g., "linux"
 
 	// User is the user that owns the node.
 	// It is not populated if the node is tagged.
