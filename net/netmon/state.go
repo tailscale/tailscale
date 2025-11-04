@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"path"
 	"runtime"
 	"slices"
 	"sort"
@@ -28,12 +29,34 @@ import (
 // same interface and subnet.
 var forceAllIPv6Endpoints = envknob.RegisterBool("TS_DEBUG_FORCE_ALL_IPV6_ENDPOINTS")
 
+// avoidInterfaces is a debug/power-user knob to exclude specific interfaces from consideration
+// when gathering endpoints.
+var avoidInterfaces = envknob.RegisterString("TS_AVOID_INTERFACES")
+
+// Likewise, onlyInterfaces can be set to specify the _only_ interfaces Tailscale is allowed to
+// consider when gathering endpoints.
+var onlyInterfaces = envknob.RegisterString("TS_ONLY_INTERFACES")
+
 // LoginEndpointForProxyDetermination is the URL used for testing
 // which HTTP proxy the system should use.
 var LoginEndpointForProxyDetermination = "https://controlplane.tailscale.com/"
 
 func isUp(nif *net.Interface) bool       { return nif.Flags&net.FlagUp != 0 }
 func isLoopback(nif *net.Interface) bool { return nif.Flags&net.FlagLoopback != 0 }
+
+func matchInterfaceName(name string, patterns string) bool {
+	patternsList := strings.Split(patterns, ",")
+	for _, pattern := range patternsList {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		if matched, _ := path.Match(pattern, name); matched {
+			return true
+		}
+	}
+	return false
+}
 
 func isProblematicInterface(nif *net.Interface) bool {
 	name := nif.Name
@@ -45,6 +68,17 @@ func isProblematicInterface(nif *net.Interface) bool {
 		return true
 	}
 	return false
+}
+
+func isAllowedInterface(nif *net.Interface) bool {
+	name := nif.Name
+	if onlyInterfaces() != "" && !matchInterfaceName(name, onlyInterfaces()) {
+		return false
+	}
+	if avoidInterfaces() != "" && matchInterfaceName(name, avoidInterfaces()) {
+		return false
+	}
+	return true
 }
 
 // LocalAddresses returns the machine's IP addresses, separated by
@@ -64,6 +98,10 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 			// Skip down interfaces and ones that are
 			// problematic that we don't want to try to
 			// send Tailscale traffic over.
+			continue
+		}
+		if !isAllowedInterface(stdIf) {
+			// Skip interfaces that the user does not want to use with Tailscale.
 			continue
 		}
 		ifcIsLoopback := isLoopback(stdIf)
