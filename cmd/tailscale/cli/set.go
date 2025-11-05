@@ -65,6 +65,7 @@ type setArgsT struct {
 	statefulFiltering      bool
 	netfilterMode          string
 	relayServerPort        string
+	staticEndpoints        string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -86,6 +87,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.reportPosture, "report-posture", false, "allow management plane to gather device posture information")
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "expose the web interface for managing this node over Tailscale at port 5252")
 	setf.StringVar(&setArgs.relayServerPort, "relay-server-port", "", "UDP port number (0 will pick a random unused port) for the relay server to bind to, on all interfaces, or empty string to disable relay server functionality")
+	setf.StringVar(&setArgs.staticEndpoints, "endpoint", "", "static endpoint(s) to advertise (comma-separated, e.g. \"192.168.1.100:41641,203.0.113.1:41641\")")
 
 	ffcomplete.Flag(setf, "exit-node", func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
 		st, err := localClient.Status(context.Background())
@@ -183,6 +185,26 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			}
 			return err
 		}
+	}
+
+	if setArgs.staticEndpoints != "" {
+		const max = 10 // reasonable limit for static endpoints
+		remain := setArgs.staticEndpoints
+		var endpoints []netip.AddrPort
+		for remain != "" && len(endpoints) < max {
+			var s string
+			s, remain, _ = strings.Cut(remain, ",")
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			ap, err := netip.ParseAddrPort(s)
+			if err != nil {
+				return fmt.Errorf("invalid endpoint %q: %v", s, err)
+			}
+			endpoints = append(endpoints, ap)
+		}
+		maskedPrefs.Prefs.StaticEndpoints = endpoints
 	}
 
 	warnOnAdvertiseRoutes(ctx, &maskedPrefs.Prefs)

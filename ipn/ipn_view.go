@@ -442,6 +442,12 @@ func (v PrefsView) RelayServerPort() views.ValuePointer[int] {
 	return views.ValuePointerOf(v.ж.RelayServerPort)
 }
 
+// StaticEndpoints are additional, user-defined endpoints that this node
+// should advertise amongst its wireguard endpoints.
+func (v PrefsView) StaticEndpoints() views.Slice[netip.AddrPort] {
+	return views.SliceOf(v.ж.StaticEndpoints)
+}
+
 // AllowSingleHosts was a legacy field that was always true
 // for the past 4.5 years. It controlled whether Tailscale
 // peers got /32 or /127 routes for each other.
@@ -493,6 +499,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	NetfilterKind          string
 	DriveShares            []*drive.Share
 	RelayServerPort        *int
+	StaticEndpoints        []netip.AddrPort
 	AllowSingleHosts       marshalAsTrueInJSON
 	Persist                *persist.Persist
 }{})

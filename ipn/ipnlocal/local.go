@@ -4656,6 +4656,13 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 		b.resetAlwaysOnOverrideLocked()
 	}
 
+	// Update static endpoints if they've changed
+	if !oldp.Valid() || !slices.Equal(oldp.StaticEndpoints().AsSlice(), prefs.StaticEndpoints().AsSlice()) {
+		if ms, ok := b.sys.MagicSock.GetOK(); ok {
+			ms.SetStaticEndpoints(prefs.StaticEndpoints())
+		}
+	}
+
 	unlock.UnlockEarly()
 
 	if oldp.ShieldsUp() != newp.ShieldsUp || hostInfoChanged {
