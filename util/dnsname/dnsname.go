@@ -14,7 +14,7 @@ const (
 	// maxLabelLength is the maximum length of a label permitted by RFC 1035.
 	maxLabelLength = 63
 	// maxNameLength is the maximum length of a DNS name.
-	maxNameLength = 253
+	maxNameLength = 254
 )
 
 // A FQDN is a fully-qualified DNS name or name suffix.
