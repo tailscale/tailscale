@@ -154,11 +154,6 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	// needs to be explicitly enabled for a tailnet to be able to use them.
 	serviceName := tailcfg.ServiceName("svc:" + hostname)
 	existingTSSvc, err := r.tsClient.GetVIPService(ctx, serviceName)
-	if isErrorFeatureFlagNotEnabled(err) {
-		logger.Warn(msgFeatureFlagNotEnabled)
-		r.recorder.Event(ing, corev1.EventTypeWarning, warningTailscaleServiceFeatureFlagNotEnabled, msgFeatureFlagNotEnabled)
-		return false, nil
-	}
 	if err != nil && !isErrorTailscaleServiceNotFound(err) {
 		return false, fmt.Errorf("error getting Tailscale Service %q: %w", hostname, err)
 	}
@@ -453,11 +448,6 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 		if !found {
 			logger.Infof("Tailscale Service %q is not owned by any Ingress, cleaning up", tsSvcName)
 			tsService, err := r.tsClient.GetVIPService(ctx, tsSvcName)
-			if isErrorFeatureFlagNotEnabled(err) {
-				msg := fmt.Sprintf("Unable to proceed with cleanup: %s.", msgFeatureFlagNotEnabled)
-				logger.Warn(msg)
-				return false, nil
-			}
 			if isErrorTailscaleServiceNotFound(err) {
 				return false, nil
 			}
@@ -515,12 +505,6 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	serviceName := tailcfg.ServiceName("svc:" + hostname)
 	svc, err := r.tsClient.GetVIPService(ctx, serviceName)
 	if err != nil {
-		if isErrorFeatureFlagNotEnabled(err) {
-			msg := fmt.Sprintf("Unable to proceed with cleanup: %s.", msgFeatureFlagNotEnabled)
-			logger.Warn(msg)
-			r.recorder.Event(ing, corev1.EventTypeWarning, warningTailscaleServiceFeatureFlagNotEnabled, msg)
-			return false, nil
-		}
 		if isErrorTailscaleServiceNotFound(err) {
 			return false, nil
 		}
@@ -1120,14 +1104,6 @@ func hasCerts(ctx context.Context, cl client.Client, lc localClient, ns string, 
 	key := secret.Data[corev1.TLSPrivateKeyKey]
 
 	return len(cert) > 0 && len(key) > 0, nil
-}
-
-func isErrorFeatureFlagNotEnabled(err error) bool {
-	// messageFFNotEnabled is the error message returned by
-	// Tailscale control plane when a Tailscale Service API call is made for a
-	// tailnet that does not have the Tailscale Services feature flag enabled.
-	const messageFFNotEnabled = "feature unavailable for tailnet"
-	return err != nil && strings.Contains(err.Error(), messageFFNotEnabled)
 }
 
 func isErrorTailscaleServiceNotFound(err error) bool {
