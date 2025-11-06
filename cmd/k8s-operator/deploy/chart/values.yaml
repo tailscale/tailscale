@@ -40,6 +40,15 @@ operatorConfig:
   defaultTags:
     - "tag:k8s-operator"
 
+  # Manual configuration of tsnet port. If unset, a random port is selected.
+  port:
+    enabled: false
+    containerPort: 8080
+
+  # Optional host network configuration. Likely only needed for public Kubernetes nodes
+  hostNetwork:
+    enabled: false
+
   image:
     # Repository defaults to DockerHub, but images are also synced to ghcr.io/tailscale/k8s-operator.
     repository: tailscale/k8s-operator
