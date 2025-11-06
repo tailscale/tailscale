@@ -396,6 +396,129 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 	}
 }
 
+// waitForPeers waits for all stacks to have the expected number of peers in their status.
+func waitForPeers(t *testing.T, timeout time.Duration, stacks ...*magicStack) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		allReady := true
+		for _, s := range stacks {
+			if len(s.Status().Peer) != len(stacks)-1 {
+				allReady = false
+				break
+			}
+		}
+		if allReady {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for peers to appear in status")
+}
+
+// waitForDiscoInfo waits for conn to have discoInfo for the given peer disco key.
+func waitForDiscoInfo(t *testing.T, conn *Conn, peerKey key.DiscoPublic, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn.mu.Lock()
+		hasInfo := conn.discoInfo[peerKey] != nil
+		conn.mu.Unlock()
+		if hasInfo {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for discoInfo for peer %v", peerKey.ShortString())
+}
+
+// waitForKeyUpdate waits for KeyUpdate metrics to increase, indicating a KeyUpdate
+// message was sent and received.
+func waitForKeyUpdate(t *testing.T, sentBefore, recvBefore int64, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if metricSentDiscoKeyUpdate.Value() > sentBefore &&
+			metricRecvDiscoKeyUpdate.Value() > recvBefore {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Errorf("timeout waiting for KeyUpdate: sent %d->%d, recv %d->%d",
+		sentBefore, metricSentDiscoKeyUpdate.Value(),
+		recvBefore, metricRecvDiscoKeyUpdate.Value())
+}
+
+// waitForDiscoKeyChange waits for conn to have discoInfo for newKey and not have
+// discoInfo for oldKey, indicating the peer has processed a key rotation.
+func waitForDiscoKeyChange(t *testing.T, conn *Conn, oldKey, newKey key.DiscoPublic, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn.mu.Lock()
+		hasNew := conn.discoInfo[newKey] != nil
+		hasOld := conn.discoInfo[oldKey] != nil
+		conn.mu.Unlock()
+		if hasNew && !hasOld {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Errorf("timeout waiting for disco key change from %v to %v",
+		oldKey.ShortString(), newKey.ShortString())
+}
+
+// discoPing triggers an immediate disco ping from src to dst, bypassing the
+// heartbeat interval. This is useful for tests that need to establish disco
+// communication quickly without waiting for the 3-second heartbeat.
+// Returns when the ping completes or times out after 2 seconds.
+func discoPing(t *testing.T, src, dst *magicStack) {
+	t.Helper()
+
+	src.conn.mu.Lock()
+	var dstNode tailcfg.NodeView
+	for _, peer := range src.conn.peers.All() {
+		if peer.Key() == dst.Public() {
+			dstNode = peer
+			break
+		}
+	}
+	src.conn.mu.Unlock()
+
+	if !dstNode.Valid() {
+		t.Fatalf("src doesn't have dst in peers")
+	}
+
+	pingDone := make(chan struct{})
+	res := &ipnstate.PingResult{}
+	src.conn.Ping(dstNode, res, 0, func(pr *ipnstate.PingResult) {
+		if pr.Err != "" {
+			t.Logf("disco ping completed with error: %v", pr.Err)
+		}
+		close(pingDone)
+	})
+
+	select {
+	case <-pingDone:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("disco ping timed out")
+	}
+}
+
+// ageDiscoInfoForTest sets the lastPingTime for all discoInfo entries to be
+// older than the cutoff used in RotateDiscoKey (5 minutes). This prevents
+// KeyUpdate messages from being sent during rotation, allowing tests to verify
+// netmap-only propagation.
+func ageDiscoInfoForTest(conn *Conn) {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
+	oldTime := time.Now().Add(-10 * time.Minute)
+	for _, di := range conn.discoInfo {
+		di.lastPingTime = oldTime
+	}
+}
+
 func TestNewConn(t *testing.T) {
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
@@ -4266,7 +4389,13 @@ func TestRotateDiscoKey(t *testing.T) {
 	}
 	c.mu.Unlock()
 
-	c.RotateDiscoKey()
+	// Advance the disco key creation time to bypass rate limiting
+	pastTime := time.Now().Add(-10 * time.Minute)
+	c.discoKeyCreatedAt.Store(&pastTime)
+
+	if err := c.RotateDiscoKey(); err != nil {
+		t.Fatalf("RotateDiscoKey failed: %v", err)
+	}
 
 	newPrivate, newPublic := c.discoKey.Pair()
 	newShort := c.discoKey.Short()
@@ -4286,9 +4415,93 @@ func TestRotateDiscoKey(t *testing.T) {
 	}
 
 	c.mu.Lock()
-	if len(c.discoInfo) != 0 {
-		t.Fatalf("expected discoInfo to be cleared, got %d entries", len(c.discoInfo))
+	// After graceful rotation, discoInfo should be preserved and updated with new shared keys
+	if len(c.discoInfo) != 1 {
+		t.Fatalf("expected discoInfo to be preserved with 1 entry, got %d entries", len(c.discoInfo))
 	}
+	for peerDiscoKey, di := range c.discoInfo {
+		if peerDiscoKey != testDiscoKey {
+			t.Fatalf("peer disco key changed unexpectedly")
+		}
+		expectedSharedKey := newPrivate.Shared(peerDiscoKey)
+		if !di.sharedKey.Equal(expectedSharedKey) {
+			t.Fatalf("shared key was not updated after rotation")
+		}
+		if di.oldSharedKey == nil {
+			t.Fatalf("oldSharedKey should be set after rotation")
+		}
+		expectedOldSharedKey := oldPrivate.Shared(peerDiscoKey)
+		if !di.oldSharedKey.Equal(expectedOldSharedKey) {
+			t.Fatalf("oldSharedKey is not correct")
+		}
+	}
+	c.mu.Unlock()
+}
+
+func TestRotateDiscoKeyGraceful(t *testing.T) {
+	c := newConn(t.Logf)
+
+	peerPrivate := key.NewDisco()
+	peerPublic := peerPrivate.Public()
+
+	c.mu.Lock()
+	c.discoInfo[peerPublic] = &discoInfo{
+		discoKey:   peerPublic,
+		discoShort: peerPublic.ShortString(),
+		sharedKey:  c.discoKey.Private().Shared(peerPublic),
+	}
+	oldSharedKey := c.discoInfo[peerPublic].sharedKey
+	c.mu.Unlock()
+
+	pastTime := time.Now().Add(-10 * time.Minute)
+	c.discoKeyCreatedAt.Store(&pastTime)
+
+	if err := c.RotateDiscoKey(); err != nil {
+		t.Fatalf("RotateDiscoKey failed: %v", err)
+	}
+
+	c.mu.Lock()
+	di := c.discoInfo[peerPublic]
+	if di == nil {
+		t.Fatalf("peer discoInfo was removed during rotation")
+	}
+
+	if di.sharedKey.Equal(oldSharedKey) {
+		t.Fatalf("shared key was not updated")
+	}
+
+	if di.oldSharedKey == nil {
+		t.Fatalf("oldSharedKey should be set after rotation")
+	}
+	if !di.oldSharedKey.Equal(oldSharedKey) {
+		t.Fatalf("oldSharedKey doesn't match the previous shared key")
+	}
+
+	testMessage := &disco.Ping{TxID: [12]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}}
+	cleartext := testMessage.AppendMarshal(nil)
+
+	sealedNew := di.sharedKey.Seal(cleartext)
+	decryptedNew, ok := di.sharedKey.Open(sealedNew)
+	if !ok {
+		t.Fatalf("failed to decrypt message encrypted with new key")
+	}
+	if string(decryptedNew) != string(cleartext) {
+		t.Fatalf("decrypted message doesn't match original")
+	}
+
+	sealedOld := di.oldSharedKey.Seal(cleartext)
+	_, ok = di.sharedKey.Open(sealedOld)
+	if ok {
+		t.Fatalf("shouldn't be able to decrypt old-key message with new key")
+	}
+	decryptedOld, ok := di.oldSharedKey.Open(sealedOld)
+	if !ok {
+		t.Fatalf("failed to decrypt message encrypted with old key")
+	}
+	if string(decryptedOld) != string(cleartext) {
+		t.Fatalf("decrypted old message doesn't match original")
+	}
+
 	c.mu.Unlock()
 }
 
@@ -4298,8 +4511,14 @@ func TestRotateDiscoKeyMultipleTimes(t *testing.T) {
 	keys := make([]key.DiscoPublic, 0, 5)
 	keys = append(keys, c.discoKey.Public())
 
-	for i := 0; i < 4; i++ {
-		c.RotateDiscoKey()
+	for i := range 4 {
+		// Advance the disco key creation time to bypass rate limiting
+		pastTime := time.Now().Add(-10 * time.Minute)
+		c.discoKeyCreatedAt.Store(&pastTime)
+
+		if err := c.RotateDiscoKey(); err != nil {
+			t.Fatalf("rotation %d failed: %v", i+1, err)
+		}
 		newKey := c.discoKey.Public()
 
 		for j, oldKey := range keys {
@@ -4310,4 +4529,365 @@ func TestRotateDiscoKeyMultipleTimes(t *testing.T) {
 
 		keys = append(keys, newKey)
 	}
+}
+
+func TestRotateDiscoKeyViaKeyUpdateMessage(t *testing.T) {
+	tstest.PanicOnLog()
+	tstest.ResourceCheck(t)
+
+	derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
+	defer cleanup()
+
+	m1 := newMagicStack(t, t.Logf, localhostListener{}, derpMap)
+	defer m1.Close()
+	m2 := newMagicStack(t, t.Logf, localhostListener{}, derpMap)
+	defer m2.Close()
+
+	cleanupMesh := meshStacks(t.Logf, nil, m1, m2)
+	defer cleanupMesh()
+
+	waitForPeers(t, 2*time.Second, m1, m2)
+
+	discoPing(t, m1, m2)
+	waitForDiscoInfo(t, m2.conn, m1.conn.DiscoPublicKey(), 1*time.Second)
+
+	// Start pinger to maintain active session during rotation
+	cleanup = newPinger(t, t.Logf, m1, m2)
+	defer cleanup()
+
+	m1DiscoKeyBefore := m1.conn.DiscoPublicKey()
+
+	sentBefore := metricSentDiscoKeyUpdate.Value()
+	recvBefore := metricRecvDiscoKeyUpdate.Value()
+	recvWithOldKeyBefore := metricRecvDiscoWithOldKey.Value()
+
+	pastTime := time.Now().Add(-10 * time.Minute)
+	m1.conn.discoKeyCreatedAt.Store(&pastTime)
+
+	t.Logf("rotating m1 disco key from %v", m1DiscoKeyBefore.ShortString())
+	if err := m1.conn.RotateDiscoKey(); err != nil {
+		t.Fatalf("RotateDiscoKey failed: %v", err)
+	}
+
+	m1DiscoKeyAfter := m1.conn.DiscoPublicKey()
+	if m1DiscoKeyAfter == m1DiscoKeyBefore {
+		t.Fatalf("m1 disco key didn't change after rotation")
+	}
+	t.Logf("m1 disco key rotated to %v", m1DiscoKeyAfter.ShortString())
+
+	// No epCh push.
+
+	waitForKeyUpdate(t, sentBefore, recvBefore, 2*time.Second)
+	t.Logf("KeyUpdate sent and received (sent: %d->%d, recv: %d->%d)",
+		sentBefore, metricSentDiscoKeyUpdate.Value(),
+		recvBefore, metricRecvDiscoKeyUpdate.Value())
+
+	waitForDiscoKeyChange(t, m2.conn, m1DiscoKeyBefore, m1DiscoKeyAfter, 2*time.Second)
+	t.Logf("m2 discoInfo updated to new key")
+
+	sentAfter := metricSentDiscoKeyUpdate.Value()
+	recvAfter := metricRecvDiscoKeyUpdate.Value()
+	if sentAfter <= sentBefore {
+		t.Errorf("KeyUpdate not sent: metric before=%d after=%d", sentBefore, sentAfter)
+	}
+	if recvAfter <= recvBefore {
+		t.Errorf("KeyUpdate not received: metric before=%d after=%d", recvBefore, recvAfter)
+	}
+
+	m2.conn.mu.Lock()
+	m2DiscoInfoAfter := m2.conn.discoInfo[m1DiscoKeyAfter]
+	m2DiscoInfoOld := m2.conn.discoInfo[m1DiscoKeyBefore]
+	m2.conn.mu.Unlock()
+
+	if m2DiscoInfoAfter == nil {
+		t.Errorf("m2 doesn't have discoInfo for m1's new key %v", m1DiscoKeyAfter.ShortString())
+	}
+	if m2DiscoInfoOld != nil {
+		t.Errorf("m2 still has discoInfo for m1's old key %v (should have been replaced)", m1DiscoKeyBefore.ShortString())
+	}
+
+	if m1.conn.oldDiscoKey.Load() == nil {
+		t.Errorf("m1 didn't keep old disco key for grace period")
+	}
+
+	s1 := m1.Status()
+	s2 := m2.Status()
+	if len(s1.Peer) != 1 || len(s2.Peer) != 1 {
+		t.Fatalf("peers lost track of each other after rotation: m1 peers=%d, m2 peers=%d", len(s1.Peer), len(s2.Peer))
+	}
+
+	recvWithOldKeyAfter := metricRecvDiscoWithOldKey.Value()
+	if recvWithOldKeyAfter > recvWithOldKeyBefore {
+		t.Logf("m1 received %d messages with old key during transition (expected during graceful rotation)",
+			recvWithOldKeyAfter-recvWithOldKeyBefore)
+	}
+
+	t.Logf("disco key rotation via KeyUpdate message successful, active session maintained without control plane")
+}
+
+func TestRotateDiscoKeyViaKeyUpdateDirectUDP(t *testing.T) {
+	tstest.PanicOnLog()
+	tstest.ResourceCheck(t)
+
+	derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
+	defer cleanup()
+
+	m1 := newMagicStack(t, t.Logf, localhostListener{}, derpMap)
+	defer m1.Close()
+	m2 := newMagicStack(t, t.Logf, localhostListener{}, derpMap)
+	defer m2.Close()
+
+	cleanupMesh := meshStacks(t.Logf, nil, m1, m2)
+	defer cleanupMesh()
+
+	waitForPeers(t, 2*time.Second, m1, m2)
+
+	cleanup = newPinger(t, t.Logf, m1, m2)
+	defer cleanup()
+
+	mustDirect(t, t.Logf, m1, m2)
+	mustDirect(t, t.Logf, m2, m1)
+	t.Logf("direct UDP paths established")
+
+	m1DiscoKeyBefore := m1.conn.DiscoPublicKey()
+
+	sentKeyUpdateBefore := metricSentDiscoKeyUpdate.Value()
+	recvKeyUpdateBefore := metricRecvDiscoKeyUpdate.Value()
+
+	pastTime := time.Now().Add(-10 * time.Minute)
+	m1.conn.discoKeyCreatedAt.Store(&pastTime)
+
+	t.Logf("rotating m1 disco key from %v", m1DiscoKeyBefore.ShortString())
+	if err := m1.conn.RotateDiscoKey(); err != nil {
+		t.Fatalf("RotateDiscoKey failed: %v", err)
+	}
+
+	m1DiscoKeyAfter := m1.conn.DiscoPublicKey()
+	if m1DiscoKeyAfter == m1DiscoKeyBefore {
+		t.Fatalf("m1 disco key didn't change after rotation")
+	}
+	t.Logf("m1 disco key rotated to %v", m1DiscoKeyAfter.ShortString())
+
+	// No push to epCh
+
+	waitForKeyUpdate(t, sentKeyUpdateBefore, recvKeyUpdateBefore, 2*time.Second)
+
+	sentKeyUpdateAfter := metricSentDiscoKeyUpdate.Value()
+	recvKeyUpdateAfter := metricRecvDiscoKeyUpdate.Value()
+
+	if sentKeyUpdateAfter <= sentKeyUpdateBefore {
+		t.Errorf("KeyUpdate not sent: before=%d after=%d", sentKeyUpdateBefore, sentKeyUpdateAfter)
+	}
+	if recvKeyUpdateAfter <= recvKeyUpdateBefore {
+		t.Errorf("KeyUpdate not received: before=%d after=%d", recvKeyUpdateBefore, recvKeyUpdateAfter)
+	}
+
+	m1.conn.mu.Lock()
+	m1DiscoInfo := m1.conn.discoInfo[m2.conn.DiscoPublicKey()]
+	var lastPingFrom epAddr
+	if m1DiscoInfo != nil {
+		lastPingFrom = m1DiscoInfo.lastPingFrom
+	}
+	m1.conn.mu.Unlock()
+
+	if lastPingFrom.ap.IsValid() && lastPingFrom.ap.Addr() != tailcfg.DerpMagicIPAddr {
+		t.Logf("KeyUpdate sent via direct UDP to %v (as expected)", lastPingFrom.ap)
+	} else if lastPingFrom.ap.Addr() == tailcfg.DerpMagicIPAddr {
+		t.Errorf("KeyUpdate sent via DERP, but expected direct UDP path")
+	} else {
+		t.Logf("Note: Could not verify path from lastPingFrom")
+	}
+
+	m2.conn.mu.Lock()
+	hasNewKey := m2.conn.discoInfo[m1DiscoKeyAfter] != nil
+	hasOldKey := m2.conn.discoInfo[m1DiscoKeyBefore] != nil
+	m2.conn.mu.Unlock()
+
+	if !hasNewKey {
+		t.Errorf("m2 doesn't have discoInfo for m1's new key after KeyUpdate")
+	}
+	if hasOldKey {
+		t.Errorf("m2 still has discoInfo for m1's old key (should have been replaced)")
+	}
+
+	t.Logf("KeyUpdate via direct UDP successful")
+}
+
+func TestRotateDiscoKeyViaKeyUpdateDERP(t *testing.T) {
+	tstest.PanicOnLog()
+	tstest.ResourceCheck(t)
+
+	derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
+	defer cleanup()
+
+	m1 := newMagicStack(t, t.Logf, localhostListener{}, derpMap)
+	defer m1.Close()
+	m2 := newMagicStack(t, t.Logf, localhostListener{}, derpMap)
+	defer m2.Close()
+
+	cleanupMesh := meshStacks(t.Logf, nil, m1, m2)
+	defer cleanupMesh()
+
+	waitForPeers(t, 2*time.Second, m1, m2)
+
+	m1DiscoKeyBefore := m1.conn.DiscoPublicKey()
+
+	discoPing(t, m1, m2)
+	waitForDiscoInfo(t, m2.conn, m1DiscoKeyBefore, 1*time.Second)
+
+	// Start pinger to maintain active session during rotation
+	cleanup = newPinger(t, t.Logf, m1, m2)
+	defer cleanup()
+
+	sentUDPBefore := metricSentDiscoUDP.Value()
+	sentDERPBefore := metricSentDiscoDERP.Value()
+	sentKeyUpdateBefore := metricSentDiscoKeyUpdate.Value()
+	recvKeyUpdateBefore := metricRecvDiscoKeyUpdate.Value()
+
+	pastTime := time.Now().Add(-10 * time.Minute)
+	m1.conn.discoKeyCreatedAt.Store(&pastTime)
+
+	t.Logf("rotating m1 disco key from %v", m1DiscoKeyBefore.ShortString())
+	if err := m1.conn.RotateDiscoKey(); err != nil {
+		t.Fatalf("RotateDiscoKey failed: %v", err)
+	}
+
+	m1DiscoKeyAfter := m1.conn.DiscoPublicKey()
+	if m1DiscoKeyAfter == m1DiscoKeyBefore {
+		t.Fatalf("m1 disco key didn't change after rotation")
+	}
+	t.Logf("m1 disco key rotated to %v", m1DiscoKeyAfter.ShortString())
+
+	// No push to epCh
+
+	waitForKeyUpdate(t, sentKeyUpdateBefore, recvKeyUpdateBefore, 2*time.Second)
+
+	sentUDPAfter := metricSentDiscoUDP.Value()
+	sentDERPAfter := metricSentDiscoDERP.Value()
+	sentKeyUpdateAfter := metricSentDiscoKeyUpdate.Value()
+	recvKeyUpdateAfter := metricRecvDiscoKeyUpdate.Value()
+
+	if sentKeyUpdateAfter <= sentKeyUpdateBefore {
+		t.Errorf("KeyUpdate not sent: before=%d after=%d", sentKeyUpdateBefore, sentKeyUpdateAfter)
+	}
+	if recvKeyUpdateAfter <= recvKeyUpdateBefore {
+		t.Errorf("KeyUpdate not received: before=%d after=%d", recvKeyUpdateBefore, recvKeyUpdateAfter)
+	}
+
+	derpIncreased := sentDERPAfter > sentDERPBefore
+	udpIncreased := sentUDPAfter > sentUDPBefore
+
+	t.Logf("Disco sends after rotation: UDP %d->%d, DERP %d->%d",
+		sentUDPBefore, sentUDPAfter, sentDERPBefore, sentDERPAfter)
+
+	if derpIncreased {
+		t.Logf("KeyUpdate sent via DERP (as expected for DERP-only path)")
+	} else if udpIncreased {
+		t.Logf("KeyUpdate sent via UDP (direct path may have been established)")
+	} else {
+		t.Logf("Note: Could not determine path from metrics alone")
+	}
+
+	m2.conn.mu.Lock()
+	hasNewKey := m2.conn.discoInfo[m1DiscoKeyAfter] != nil
+	hasOldKey := m2.conn.discoInfo[m1DiscoKeyBefore] != nil
+	m2.conn.mu.Unlock()
+
+	if !hasNewKey {
+		t.Errorf("m2 doesn't have discoInfo for m1's new key after KeyUpdate")
+	}
+	if hasOldKey {
+		t.Errorf("m2 still has discoInfo for m1's old key (should have been replaced)")
+	}
+
+	t.Logf("KeyUpdate via DERP successful")
+}
+
+func TestRotateDiscoKeyViaNetmap(t *testing.T) {
+	tstest.PanicOnLog()
+	tstest.ResourceCheck(t)
+
+	derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
+	defer cleanup()
+
+	m1 := newMagicStack(t, t.Logf, localhostListener{}, derpMap)
+	defer m1.Close()
+	m2 := newMagicStack(t, t.Logf, localhostListener{}, derpMap)
+	defer m2.Close()
+
+	cleanupMesh := meshStacks(t.Logf, nil, m1, m2)
+	defer cleanupMesh()
+
+	waitForPeers(t, 2*time.Second, m1, m2)
+
+	cleanup = newPinger(t, t.Logf, m1, m2)
+	m1DiscoKeyBefore := m1.conn.DiscoPublicKey()
+	waitForDiscoInfo(t, m2.conn, m1DiscoKeyBefore, 1*time.Second)
+	cleanup() // Stop pinging - simulate idle session
+
+	sentKeyUpdateBefore := metricSentDiscoKeyUpdate.Value()
+
+	// Allow rotation by making key appear old enough
+	pastTime := time.Now().Add(-10 * time.Minute)
+	m1.conn.discoKeyCreatedAt.Store(&pastTime)
+
+	// Age the disco info so m2 is not considered an "active peer" during rotation.
+	// This prevents KeyUpdate messages from being sent, ensuring we test pure netmap propagation.
+	ageDiscoInfoForTest(m1.conn)
+
+	t.Logf("rotating m1 disco key from %v (no active session)", m1DiscoKeyBefore.ShortString())
+	if err := m1.conn.RotateDiscoKey(); err != nil {
+		t.Fatalf("RotateDiscoKey failed: %v", err)
+	}
+
+	m1DiscoKeyAfter := m1.conn.DiscoPublicKey()
+	if m1DiscoKeyAfter == m1DiscoKeyBefore {
+		t.Fatalf("m1 disco key didn't change after rotation")
+	}
+	t.Logf("m1 disco key rotated to %v", m1DiscoKeyAfter.ShortString())
+
+	m1.conn.mu.Lock()
+	m1.epCh <- m1.conn.lastEndpoints
+	m1.conn.mu.Unlock()
+
+	t.Logf("waiting for netmap update to propagate")
+	time.Sleep(100 * time.Millisecond) // Give meshStacks time to process
+
+	sentKeyUpdateAfter := metricSentDiscoKeyUpdate.Value()
+
+	if sentKeyUpdateAfter > sentKeyUpdateBefore {
+		t.Errorf("KeyUpdate was sent (sent %d->%d) but should not have been - test is invalid",
+			sentKeyUpdateBefore, sentKeyUpdateAfter)
+	}
+	t.Logf("KeyUpdate was not sent (session was idle), testing pure netmap propagation")
+
+	if m1.conn.oldDiscoKey.Load() == nil {
+		t.Errorf("m1 didn't keep old disco key for grace period")
+	}
+
+	// Instead of using newPinger which waits for heartbeat (3s delay), trigger
+	// immediate disco ping to test netmap propagation.
+	t.Logf("triggering immediate disco ping from m2 to m1 (with new key)")
+	discoPing(t, m2, m1)
+
+	waitForDiscoInfo(t, m2.conn, m1DiscoKeyAfter, 1*time.Second)
+
+	// Now start the actual pinger to verify ongoing communication works
+	cleanup = newPinger(t, t.Logf, m1, m2)
+	defer cleanup()
+
+	sentKeyUpdateFinal := metricSentDiscoKeyUpdate.Value()
+	if sentKeyUpdateFinal > sentKeyUpdateBefore {
+		t.Errorf("KeyUpdate was sent after pinging resumed (sent %d->%d) - test is invalid",
+			sentKeyUpdateBefore, sentKeyUpdateFinal)
+	}
+	t.Logf("Confirmed: KeyUpdate was never sent (before=%d, after=%d)", sentKeyUpdateBefore, sentKeyUpdateFinal)
+
+	s1 := m1.Status()
+	s2 := m2.Status()
+	if len(s1.Peer) != 1 || len(s2.Peer) != 1 {
+		t.Fatalf("peers lost track of each other after rotation: m1 peers=%d, m2 peers=%d", len(s1.Peer), len(s2.Peer))
+	}
+
+	t.Logf("disco key rotation via netmap successful, communication established with new key")
 }

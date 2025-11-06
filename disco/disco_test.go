@@ -38,6 +38,8 @@ func TestMarshalAndParse(t *testing.T) {
 		},
 	}
 
+	testDiscoKey := key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 2: 2, 3: 3, 30: 30, 31: 31}))
+
 	tests := []struct {
 		name string
 		want string
@@ -95,6 +97,13 @@ func TestMarshalAndParse(t *testing.T) {
 			name: "call_me_maybe",
 			m:    &CallMeMaybe{},
 			want: "03 00",
+		},
+		{
+			name: "key_update",
+			m: &KeyUpdate{
+				NewDiscoKey: testDiscoKey,
+			},
+			want: "0a 00 00 01 02 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f",
 		},
 		{
 			name: "call_me_maybe_endpoints",

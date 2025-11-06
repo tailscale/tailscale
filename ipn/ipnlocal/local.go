@@ -6691,7 +6691,9 @@ func (b *LocalBackend) DebugReSTUN() error {
 
 func (b *LocalBackend) DebugRotateDiscoKey() error {
 	mc := b.MagicConn()
-	mc.RotateDiscoKey()
+	if err := mc.RotateDiscoKey(); err != nil {
+		return err
+	}
 
 	newDiscoKey := mc.DiscoPublicKey()
 

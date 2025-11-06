@@ -276,6 +276,16 @@ type Conn struct {
 	// discoKey is the current disco private and public keypair for this conn.
 	discoKey *key.DiscoKey
 
+	// discoKeyCreatedAt is when the current disco key was created.
+	// Used for both rate limiting rotations (ensuring keys are old enough to rotate)
+	// and for tracking when to cleanup the old key after the grace period.
+	discoKeyCreatedAt atomic.Pointer[time.Time]
+
+	// oldDiscoKey is the previous disco private key, kept during the grace
+	// period after a rotation to allow peers to decrypt messages sent with
+	// the old key until they receive the new key from the control plane.
+	oldDiscoKey atomic.Pointer[key.DiscoPrivate]
+
 	// ============================================================
 	// mu guards all following fields; see userspaceEngine lock
 	// ordering rules against the engine. For derphttp, mu must
@@ -600,6 +610,8 @@ func newConn(logf logger.Logf) *Conn {
 		cloudInfo:    newCloudInfo(logf),
 	}
 	c.discoKey = key.NewDiscoKeyFromPrivate(discoPrivate)
+	now := time.Now()
+	c.discoKeyCreatedAt.Store(&now)
 	c.bind = &connBind{Conn: c, closed: true}
 	c.receiveBatchPool = sync.Pool{New: func() any {
 		msgs := make([]ipv6.Message, c.bind.BatchSize())
@@ -1237,26 +1249,71 @@ func (c *Conn) DiscoPublicKey() key.DiscoPublic {
 // RotateDiscoKey generates a new discovery key pair and updates the connection
 // to use it. This invalidates all existing disco sessions and will cause peers
 // to re-establish discovery sessions with the new key.
+// RotateDiscoKey rotates the discovery key gracefully. The old key is kept
+// for a grace period (discoKeyRotationGracePeriod) to allow peers to transition
+// to the new key. Active peers are notified directly via KeyUpdate messages.
 //
-// This is primarily for debugging and testing purposes, a future enhancement
-// should provide a mechanism for seamless rotation by supporting short term use
-// of the old key.
-func (c *Conn) RotateDiscoKey() {
+// Returns an error if the current key is too new to rotate (less than
+// minDiscoKeyAge old).
+func (c *Conn) RotateDiscoKey() error {
 	oldShort := c.discoKey.Short()
+	oldPrivate := c.discoKey.Private()
+
+	if createdAt := c.discoKeyCreatedAt.Load(); createdAt != nil {
+		keyAge := time.Since(*createdAt)
+		if keyAge < minDiscoKeyAge {
+			return fmt.Errorf("disco key is only %v old, must be at least %v old to rotate", keyAge.Round(time.Second), minDiscoKeyAge)
+		}
+	}
+
 	newPrivate := key.NewDisco()
 
 	c.mu.Lock()
+
+	c.oldDiscoKey.Store(&oldPrivate)
+	now := time.Now()
+	c.discoKeyCreatedAt.Store(&now)
+
 	c.discoKey.Set(newPrivate)
 	newShort := c.discoKey.Short()
-	c.discoInfo = make(map[key.DiscoPublic]*discoInfo)
+
+	for peerDiscoKey, di := range c.discoInfo {
+		di.sharedKey = newPrivate.Shared(peerDiscoKey)
+		oldShared := oldPrivate.Shared(peerDiscoKey)
+		di.oldSharedKey = &oldShared
+	}
+
+	cutoff := time.Now().Add(-5 * time.Minute)
+	var activePeers []key.DiscoPublic
+	for peerDiscoKey, di := range c.discoInfo {
+		if di.lastPingTime.After(cutoff) {
+			activePeers = append(activePeers, peerDiscoKey)
+		}
+	}
+
 	connCtx := c.connCtx
 	c.mu.Unlock()
 
-	c.logf("magicsock: rotated disco key from %v to %v", oldShort, newShort)
+	c.logf("magicsock: rotated disco key from %v to %v, notifying %d peers", oldShort, newShort, len(activePeers))
+
+	// KeyUpdate messages are encrypted with the OLD shared key so peers can
+	// decrypt them before learning new key from control plane
+	go c.sendKeyUpdatesToPeers(activePeers, newPrivate.Public(), oldPrivate)
+
+	// TODO(raggi): we should think carefully about and review if we even really
+	// want to do this. There may be little to no value in practice of dropping
+	// the old key - doing so increases the chances that we will fail to
+	// communicate with peers. If we were to introduce a regular disco key
+	// rotation schedule then old keys should phase out soon enough.
+	time.AfterFunc(discoKeyRotationGracePeriod, func() {
+		c.cleanupOldDiscoKey()
+	})
 
 	if connCtx != nil {
 		c.ReSTUN("disco-key-rotation")
 	}
+
+	return nil
 }
 
 // determineEndpoints returns the machine's endpoint addresses. It does a STUN
@@ -2220,6 +2277,14 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 
 	sealedBox := msg[discoHeaderLen:]
 	payload, ok := di.sharedKey.Open(sealedBox)
+	usedOldKey := false
+	if !ok && di.oldSharedKey != nil {
+		payload, ok = di.oldSharedKey.Open(sealedBox)
+		if ok {
+			usedOldKey = true
+			metricRecvDiscoWithOldKey.Add(1)
+		}
+	}
 	if !ok {
 		// This might have been intended for a previous
 		// disco key.  When we restart we get a new disco key
@@ -2236,6 +2301,9 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		}
 		metricRecvDiscoBadKey.Add(1)
 		return
+	}
+	if usedOldKey && debugDisco() {
+		c.logf("magicsock: disco: decrypted message from %v using old key", sender.ShortString())
 	}
 
 	// Emit information about the disco frame into the pcap stream
@@ -2280,9 +2348,15 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 	}
 
 	switch dm := dm.(type) {
+	case *disco.KeyUpdate:
+		metricRecvDiscoKeyUpdate.Add(1)
+		c.handleKeyUpdateLocked(dm, sender, di, src)
 	case *disco.Ping:
 		metricRecvDiscoPing.Add(1)
 		c.handlePingLocked(dm, src, di, derpNodeSrc)
+		if usedOldKey {
+			c.sendKeyUpdateToPeerLocked(sender, di)
+		}
 	case *disco.Pong:
 		metricRecvDiscoPong.Add(1)
 		// There might be multiple nodes for the sender's DiscoKey.
@@ -2667,9 +2741,178 @@ func (c *Conn) discoInfoForKnownPeerLocked(k key.DiscoPublic) *discoInfo {
 			discoShort: k.ShortString(),
 			sharedKey:  c.discoKey.Private().Shared(k),
 		}
+		if oldKey := c.oldDiscoKey.Load(); oldKey != nil {
+			oldShared := oldKey.Shared(k)
+			di.oldSharedKey = &oldShared
+		}
 		c.discoInfo[k] = di
 	}
 	return di
+}
+
+// handleKeyUpdateLocked processes a KeyUpdate message from a peer, updating
+// their disco key and recomputing the shared key.
+//
+// c.mu must be held.
+func (c *Conn) handleKeyUpdateLocked(m *disco.KeyUpdate, oldDiscoKey key.DiscoPublic, di *discoInfo, src epAddr) {
+	newDiscoKey := m.NewDiscoKey
+	if newDiscoKey.IsZero() {
+		c.logf("magicsock: disco: ignoring KeyUpdate with zero key from %v", oldDiscoKey.ShortString())
+		return
+	}
+
+	if newDiscoKey == oldDiscoKey {
+		// Same key, nothing to do
+		return
+	}
+
+	c.logf("magicsock: disco: peer %v updated disco key from %v to %v",
+		di.discoKey.ShortString(), oldDiscoKey.ShortString(), newDiscoKey.ShortString())
+
+	delete(c.discoInfo, oldDiscoKey)
+
+	newDi := &discoInfo{
+		discoKey:     newDiscoKey,
+		discoShort:   newDiscoKey.ShortString(),
+		sharedKey:    c.discoKey.Private().Shared(newDiscoKey),
+		lastPingFrom: di.lastPingFrom,
+		lastPingTime: di.lastPingTime,
+	}
+
+	if oldKey := c.oldDiscoKey.Load(); oldKey != nil {
+		oldShared := oldKey.Shared(newDiscoKey)
+		newDi.oldSharedKey = &oldShared
+	}
+
+	c.discoInfo[newDiscoKey] = newDi
+}
+
+// sendKeyUpdateToPeerLocked sends a KeyUpdate message to a single peer.
+// This is called when we receive a message from a peer using our old key,
+// to accelerate their transition to our new key.
+//
+// c.mu must be held.
+func (c *Conn) sendKeyUpdateToPeerLocked(peerDiscoKey key.DiscoPublic, di *discoInfo) {
+	if c.oldDiscoKey.Load() == nil {
+		return
+	}
+
+	if time.Since(di.lastPingTime) < 10*time.Second {
+		return
+	}
+
+	newKey := c.discoKey.Public()
+	c.mu.Unlock()
+	defer c.mu.Lock()
+
+	if di.lastPingFrom.ap.IsValid() {
+		c.sendKeyUpdateToPeer(peerDiscoKey, di.lastPingFrom, newKey)
+	}
+}
+
+// sendKeyUpdateToPeer sends a KeyUpdate message to a peer at the specified address.
+func (c *Conn) sendKeyUpdateToPeer(peerDiscoKey key.DiscoPublic, dst epAddr, newKey key.DiscoPublic) {
+	oldKey := c.oldDiscoKey.Load()
+	if oldKey == nil {
+		return
+	}
+
+	keyUpdate := &disco.KeyUpdate{NewDiscoKey: newKey}
+	cleartext := keyUpdate.AppendMarshal(nil)
+	oldShared := oldKey.Shared(peerDiscoKey)
+	sealed := oldShared.Seal(cleartext)
+
+	pkt := make([]byte, 0, 512)
+	if dst.vni.IsSet() {
+		gh := packet.GeneveHeader{
+			Version:  0,
+			Protocol: packet.GeneveProtocolDisco,
+			VNI:      dst.vni,
+			Control:  false,
+		}
+		pkt = append(pkt, make([]byte, packet.GeneveFixedHeaderLength)...)
+		if err := gh.Encode(pkt); err != nil {
+			return
+		}
+	}
+	pkt = append(pkt, disco.Magic...)
+	pkt = oldKey.Public().AppendTo(pkt)
+	pkt = append(pkt, sealed...)
+
+	const isDisco = true
+	if sent, _ := c.sendAddr(dst.ap, key.NodePublic{}, pkt, isDisco, dst.vni.IsSet()); sent {
+		metricSentDiscoKeyUpdate.Add(1)
+		if debugDisco() {
+			c.dlogf("[v1] magicsock: disco: sent key-update to %v at %v", peerDiscoKey.ShortString(), dst)
+		}
+	}
+}
+
+// sendKeyUpdatesToPeers sends KeyUpdate messages to a list of peers.
+func (c *Conn) sendKeyUpdatesToPeers(peers []key.DiscoPublic, newKey key.DiscoPublic, oldKey key.DiscoPrivate) {
+	for _, peerDiscoKey := range peers {
+		c.mu.Lock()
+		di := c.discoInfo[peerDiscoKey]
+		if di == nil || !di.lastPingFrom.ap.IsValid() {
+			c.mu.Unlock()
+			continue
+		}
+		dst := di.lastPingFrom
+		c.mu.Unlock()
+
+		keyUpdate := &disco.KeyUpdate{NewDiscoKey: newKey}
+		cleartext := keyUpdate.AppendMarshal(nil)
+		oldShared := oldKey.Shared(peerDiscoKey)
+		sealed := oldShared.Seal(cleartext)
+
+		pkt := make([]byte, 0, 512)
+		if dst.vni.IsSet() {
+			gh := packet.GeneveHeader{
+				Version:  0,
+				Protocol: packet.GeneveProtocolDisco,
+				VNI:      dst.vni,
+				Control:  false,
+			}
+			pkt = append(pkt, make([]byte, packet.GeneveFixedHeaderLength)...)
+			if err := gh.Encode(pkt); err != nil {
+				continue
+			}
+		}
+		pkt = append(pkt, disco.Magic...)
+		pkt = oldKey.Public().AppendTo(pkt)
+		pkt = append(pkt, sealed...)
+
+		const isDisco = true
+		if sent, _ := c.sendAddr(dst.ap, key.NodePublic{}, pkt, isDisco, dst.vni.IsSet()); sent {
+			metricSentDiscoKeyUpdate.Add(1)
+		}
+	}
+}
+
+// cleanupOldDiscoKey removes the old disco key after the grace period.
+// The grace period is measured from when the current (new) key was created.
+func (c *Conn) cleanupOldDiscoKey() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	createdAt := c.discoKeyCreatedAt.Load()
+	if createdAt == nil {
+		return
+	}
+
+	if time.Since(*createdAt) < discoKeyRotationGracePeriod {
+		return
+	}
+
+	c.oldDiscoKey.Store(nil)
+
+	for _, di := range c.discoInfo {
+		di.oldSharedKey = nil
+	}
+
+	if debugDisco() {
+		c.dlogf("[v1] magicsock: disco: cleaned up old key after grace period")
+	}
 }
 
 func (c *Conn) SetNetworkUp(up bool) {
@@ -3950,6 +4193,12 @@ type discoInfo struct {
 	// Not modified once initialized.
 	sharedKey key.DiscoShared
 
+	// oldSharedKey is the precomputed key using our old disco private key.
+	// This is set during rotation and allows us to decrypt messages from
+	// peers who haven't received our new key yet.
+	// Owned by [Conn.mu].
+	oldSharedKey *key.DiscoShared
+
 	// Mutable fields follow, owned by [Conn.mu]. These are irrelevant when
 	// discoInfo is a peer relay server disco key in the
 	// [relayManager.discoInfoByServerDisco] map:
@@ -3960,6 +4209,20 @@ type discoInfo struct {
 	// lastPingTime is the last time of a ping for discoKey.
 	lastPingTime time.Time
 }
+
+const (
+	// discoKeyRotationGracePeriod is the duration for which we keep the old
+	// disco key after a rotation to allow peers to transition to the new key.
+	// This very large time window aims to provide substantial grace periods for
+	// new disco key propagation which could cover recovery from a wide array of
+	// network problems, while still expiring the old key on a schedule.
+	discoKeyRotationGracePeriod = 99 * time.Minute
+
+	// minDiscoKeyAge is the minimum age a disco key must be before it can be
+	// rotated. This prevents accidentally rotating keys too frequently. It is
+	// not necessary to rotate disco keys on a high frequency schedule.
+	minDiscoKeyAge = 5 * time.Minute
+)
 
 var (
 	metricNumPeers     = clientmetric.NewGauge("magicsock_netmap_num_peers")
@@ -4029,8 +4292,9 @@ var (
 	metricSentDiscoBindUDPRelayEndpoint          = clientmetric.NewCounter("magicsock_disco_sent_bind_udp_relay_endpoint")
 	metricSentDiscoBindUDPRelayEndpointAnswer    = clientmetric.NewCounter("magicsock_disco_sent_bind_udp_relay_endpoint_answer")
 	metricSentDiscoAllocUDPRelayEndpointRequest  = clientmetric.NewCounter("magicsock_disco_sent_alloc_udp_relay_endpoint_request")
-	metricLocalDiscoAllocUDPRelayEndpointRequest = clientmetric.NewCounter("magicsock_disco_local_alloc_udp_relay_endpoint_request")
 	metricSentDiscoAllocUDPRelayEndpointResponse = clientmetric.NewCounter("magicsock_disco_sent_alloc_udp_relay_endpoint_response")
+	metricSentDiscoKeyUpdate                     = clientmetric.NewCounter("magicsock_disco_sent_key_update")
+	metricLocalDiscoAllocUDPRelayEndpointRequest = clientmetric.NewCounter("magicsock_disco_local_alloc_udp_relay_endpoint_request")
 	metricRecvDiscoBadPeer                       = clientmetric.NewCounter("magicsock_disco_recv_bad_peer")
 	metricRecvDiscoBadKey                        = clientmetric.NewCounter("magicsock_disco_recv_bad_key")
 	metricRecvDiscoBadParse                      = clientmetric.NewCounter("magicsock_disco_recv_bad_parse")
@@ -4048,8 +4312,10 @@ var (
 	metricRecvDiscoBindUDPRelayEndpointChallenge         = clientmetric.NewCounter("magicsock_disco_recv_bind_udp_relay_endpoint_challenge")
 	metricRecvDiscoAllocUDPRelayEndpointRequest          = clientmetric.NewCounter("magicsock_disco_recv_alloc_udp_relay_endpoint_request")
 	metricRecvDiscoAllocUDPRelayEndpointRequestBadDisco  = clientmetric.NewCounter("magicsock_disco_recv_alloc_udp_relay_endpoint_request_bad_disco")
-	metricRecvDiscoAllocUDPRelayEndpointResponseBadDisco = clientmetric.NewCounter("magicsock_disco_recv_alloc_udp_relay_endpoint_response_bad_disco")
 	metricRecvDiscoAllocUDPRelayEndpointResponse         = clientmetric.NewCounter("magicsock_disco_recv_alloc_udp_relay_endpoint_response")
+	metricRecvDiscoAllocUDPRelayEndpointResponseBadDisco = clientmetric.NewCounter("magicsock_disco_recv_alloc_udp_relay_endpoint_response_bad_disco")
+	metricRecvDiscoKeyUpdate                             = clientmetric.NewCounter("magicsock_disco_recv_key_update")
+	metricRecvDiscoWithOldKey                            = clientmetric.NewCounter("magicsock_disco_recv_with_old_key")
 	metricLocalDiscoAllocUDPRelayEndpointResponse        = clientmetric.NewCounter("magicsock_disco_local_alloc_udp_relay_endpoint_response")
 	metricRecvDiscoDERPPeerNotHere                       = clientmetric.NewCounter("magicsock_disco_recv_derp_peer_not_here")
 	metricRecvDiscoDERPPeerGoneUnknown                   = clientmetric.NewCounter("magicsock_disco_recv_derp_peer_gone_unknown")

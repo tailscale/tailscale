@@ -51,6 +51,7 @@ const (
 	TypeCallMeMaybeVia                   = MessageType(0x07)
 	TypeAllocateUDPRelayEndpointRequest  = MessageType(0x08)
 	TypeAllocateUDPRelayEndpointResponse = MessageType(0x09)
+	TypeKeyUpdate                        = MessageType(0x0a)
 )
 
 const v0 = byte(0)
@@ -103,6 +104,8 @@ func Parse(p []byte) (Message, error) {
 		return parseAllocateUDPRelayEndpointRequest(ver, p)
 	case TypeAllocateUDPRelayEndpointResponse:
 		return parseAllocateUDPRelayEndpointResponse(ver, p)
+	case TypeKeyUpdate:
+		return parseKeyUpdate(ver, p)
 	default:
 		return nil, fmt.Errorf("unknown message type 0x%02x", byte(t))
 	}
@@ -278,6 +281,33 @@ func parsePong(ver uint8, p []byte) (m *Pong, err error) {
 	return m, nil
 }
 
+// KeyUpdate is a message sent during disco key rotation to notify a peer
+// of our new disco public key. It is sent encrypted with the OLD shared key
+// so that the peer can decrypt it before they learn about the new key from
+// the control plane.
+type KeyUpdate struct {
+	// NewDiscoKey is the sender's new disco public key.
+	NewDiscoKey key.DiscoPublic
+}
+
+const keyUpdateLen = key.DiscoPublicRawLen
+
+func (m *KeyUpdate) AppendMarshal(b []byte) []byte {
+	ret, d := appendMsgHeader(b, TypeKeyUpdate, v0, keyUpdateLen)
+	m.NewDiscoKey.AppendTo(d[:0])
+	return ret
+}
+
+func parseKeyUpdate(ver uint8, p []byte) (*KeyUpdate, error) {
+	if len(p) < keyUpdateLen {
+		return nil, errShort
+	}
+	m := &KeyUpdate{
+		NewDiscoKey: key.DiscoPublicFromRaw32(mem.B(p[:keyUpdateLen])),
+	}
+	return m, nil
+}
+
 // MessageSummary returns a short summary of m for logging purposes.
 func MessageSummary(m Message) string {
 	switch m := m.(type) {
@@ -299,6 +329,8 @@ func MessageSummary(m Message) string {
 		return "allocate-udp-relay-endpoint-request"
 	case *AllocateUDPRelayEndpointResponse:
 		return "allocate-udp-relay-endpoint-response"
+	case *KeyUpdate:
+		return fmt.Sprintf("key-update new=%v", m.NewDiscoKey.ShortString())
 	default:
 		return fmt.Sprintf("%#v", m)
 	}
