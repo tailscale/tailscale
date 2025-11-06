@@ -679,6 +679,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.PostureChecking == p2.PostureChecking &&
 		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
 		p.NetfilterKind == p2.NetfilterKind &&
+		slices.Equal(p.StaticEndpoints, p2.StaticEndpoints) &&
 		compareIntPtrs(p.RelayServerPort, p2.RelayServerPort)
 }
 

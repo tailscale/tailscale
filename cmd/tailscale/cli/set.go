@@ -205,6 +205,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			endpoints = append(endpoints, ap)
 		}
 		maskedPrefs.Prefs.StaticEndpoints = endpoints
+		maskedPrefs.StaticEndpointsSet = true
 	}
 
 	warnOnAdvertiseRoutes(ctx, &maskedPrefs.Prefs)

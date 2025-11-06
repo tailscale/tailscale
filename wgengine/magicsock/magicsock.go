@@ -1021,6 +1021,7 @@ func (c *Conn) SetStaticEndpoints(ep views.Slice[netip.AddrPort]) {
 		c.mu.Unlock()
 		return
 	}
+	c.logf("magicsock: setting static endpoints: %v", ep.AsSlice())
 	c.staticEndpoints = ep
 	c.mu.Unlock()
 	// Technically this is not a reSTUNning, but ReSTUN does what we need at
@@ -1363,6 +1364,10 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 	// re-run.
 	eps = c.endpointTracker.update(time.Now(), eps)
 
+	staticEpsSlice := c.staticEndpoints.AsSlice()
+	if len(staticEpsSlice) > 0 {
+		c.logf("magicsock: adding %d static endpoints: %v", len(staticEpsSlice), staticEpsSlice)
+	}
 	for _, ep := range c.staticEndpoints.All() {
 		addAddr(ep, tailcfg.EndpointExplicitConf)
 	}
