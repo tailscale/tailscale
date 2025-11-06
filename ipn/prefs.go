@@ -376,10 +376,10 @@ type MaskedPrefs struct {
 	AutoUpdateSet             AutoUpdatePrefsMask `json:",omitempty"`
 	AppConnectorSet           bool                `json:",omitempty"`
 	PostureCheckingSet        bool                `json:",omitempty"`
-	NetfilterKindSet          bool                `json:",omitempty"`
-	DriveSharesSet            bool                `json:",omitempty"`
-	RelayServerPortSet        bool                `json:",omitempty"`
-	StaticEndpointsSet        bool                `json:",omitempty"`
+	NetfilterKindSet          bool                `json:",omitzero"`
+	DriveSharesSet            bool                `json:",omitzero"`
+	RelayServerPortSet        bool                `json:",omitzero"`
+	StaticEndpointsSet        bool                `json:",omitzero"`
 }
 
 // SetsInternal reports whether mp has any of the Internal*Set field bools set

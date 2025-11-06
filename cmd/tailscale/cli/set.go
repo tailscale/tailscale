@@ -87,7 +87,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.reportPosture, "report-posture", false, "allow management plane to gather device posture information")
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "expose the web interface for managing this node over Tailscale at port 5252")
 	setf.StringVar(&setArgs.relayServerPort, "relay-server-port", "", "UDP port number (0 will pick a random unused port) for the relay server to bind to, on all interfaces, or empty string to disable relay server functionality")
-	setf.StringVar(&setArgs.staticEndpoints, "endpoint", "", "static endpoint(s) to advertise (comma-separated, e.g. \"192.168.1.100:41641,203.0.113.1:41641\")")
+	setf.StringVar(&setArgs.staticEndpoints, "static-endpoint", "", "static endpoint(s) to advertise (comma-separated, e.g. \"192.168.1.100:41641,203.0.113.1:41641\")")
 
 	ffcomplete.Flag(setf, "exit-node", func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
 		st, err := localClient.Status(context.Background())
