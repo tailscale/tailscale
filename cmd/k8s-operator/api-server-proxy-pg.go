@@ -157,12 +157,6 @@ func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, s
 	// 1. Check there isn't a Tailscale Service with the same hostname
 	// already created and not owned by this ProxyGroup.
 	existingTSSvc, err := r.tsClient.GetVIPService(ctx, serviceName)
-	if isErrorFeatureFlagNotEnabled(err) {
-		logger.Warn(msgFeatureFlagNotEnabled)
-		r.recorder.Event(pg, corev1.EventTypeWarning, warningTailscaleServiceFeatureFlagNotEnabled, msgFeatureFlagNotEnabled)
-		tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionFalse, reasonKubeAPIServerProxyInvalid, msgFeatureFlagNotEnabled, pg.Generation, r.clock, logger)
-		return nil
-	}
 	if err != nil && !isErrorTailscaleServiceNotFound(err) {
 		return fmt.Errorf("error getting Tailscale Service %q: %w", serviceName, err)
 	}
