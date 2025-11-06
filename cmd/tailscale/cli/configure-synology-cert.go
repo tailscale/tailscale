@@ -194,7 +194,7 @@ type synoAPICaller interface {
 
 type apiResponse struct {
 	Success bool            `json:"success"`
-	Error   *apiError       `json:"error,omitempty"`
+	Error   *apiError       `json:"error,omitzero"`
 	Data    json.RawMessage `json:"data"`
 }
 

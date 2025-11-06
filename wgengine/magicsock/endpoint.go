@@ -428,8 +428,8 @@ type pongReply struct {
 type EndpointChange struct {
 	When time.Time // when the change occurred
 	What string    // what this change is
-	From any       `json:",omitempty"` // information about the previous state
-	To   any       `json:",omitempty"` // information about the new state
+	From any       `json:",omitzero"` // information about the previous state
+	To   any       `json:",omitzero"` // information about the new state
 }
 
 // shouldDeleteLocked reports whether we should delete this endpoint.

@@ -41,8 +41,8 @@ type Status struct {
 
 // Config is an ingress service configuration.
 type Config struct {
-	IPv4Mapping *Mapping `json:"IPv4Mapping,omitempty"`
-	IPv6Mapping *Mapping `json:"IPv6Mapping,omitempty"`
+	IPv4Mapping *Mapping `json:"IPv4Mapping,omitzero"`
+	IPv6Mapping *Mapping `json:"IPv6Mapping,omitzero"`
 }
 
 // Mapping describes a rule that forwards traffic from Tailscale Service IP to a

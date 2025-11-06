@@ -17,7 +17,7 @@ import (
 // VIPService is a Tailscale VIPService with Tailscale API JSON representation.
 type VIPService struct {
 	// Name is a VIPService name in form svc:<leftmost-label-of-service-DNS-name>.
-	Name tailcfg.ServiceName `json:"name,omitempty"`
+	Name tailcfg.ServiceName `json:"name,omitzero"`
 	// Addrs are the IP addresses of the VIP Service. There are two addresses:
 	// the first is IPv4 and the second is IPv6.
 	// When creating a new VIP Service, the IP addresses are optional: if no

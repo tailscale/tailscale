@@ -41,7 +41,7 @@ type UnhealthyState struct {
 	Args                Args                  `json:",omitempty"`
 	DependsOn           []WarnableCode        `json:",omitempty"`
 	ImpactsConnectivity bool                  `json:",omitempty"`
-	PrimaryAction       *UnhealthyStateAction `json:",omitempty"`
+	PrimaryAction       *UnhealthyStateAction `json:",omitzero"`
 
 	// ETag identifies a specific version of an UnhealthyState. If the contents
 	// of the other fields of two UnhealthyStates are the same, the ETags will

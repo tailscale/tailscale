@@ -39,8 +39,8 @@ type viewStruct struct {
 	Int        int
 	Addrs      Slice[netip.Prefix]
 	Strings    Slice[string]
-	AddrsPtr   *Slice[netip.Prefix] `json:",omitempty"`
-	StringsPtr *Slice[string]       `json:",omitempty"`
+	AddrsPtr   *Slice[netip.Prefix] `json:",omitzero"`
+	StringsPtr *Slice[string]       `json:",omitzero"`
 }
 
 type noPtrStruct struct {

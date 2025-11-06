@@ -50,7 +50,7 @@ type AccessLogRecord struct {
 	// client immediately after the error text, as well as logged here. This
 	// makes it easier to correlate support requests with server logs. If a
 	// RequestID generator is not configured, RequestID will be empty.
-	RequestID RequestID `json:"request_id,omitempty"`
+	RequestID RequestID `json:"request_id,omitzero"`
 }
 
 // String returns m as a JSON string.

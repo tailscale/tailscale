@@ -44,7 +44,7 @@ func TestBool(t *testing.T) {
 			in: struct {
 				True  Bool
 				False Bool
-				Unset Bool `json:",omitempty"`
+				Unset Bool `json:",omitzero"`
 			}{
 				True:  "true",
 				False: "false",

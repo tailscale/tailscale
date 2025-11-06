@@ -15,7 +15,7 @@ type DERPMap struct {
 	// HomeParams, if non-nil, is a change in home parameters.
 	//
 	// The rest of the DEPRMap fields, if zero, means unchanged.
-	HomeParams *DERPHomeParams `json:",omitempty"`
+	HomeParams *DERPHomeParams `json:",omitzero"`
 
 	// Regions is the set of geographic regions running DERP node(s).
 	//

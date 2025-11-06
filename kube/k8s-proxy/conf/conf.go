@@ -44,35 +44,35 @@ type VersionedConfig struct {
 
 	// Backwards compatibility version(s) of the config. Fields and sub-fields
 	// from here should only be added to, never changed in place.
-	V1Alpha1 *ConfigV1Alpha1 `json:",omitempty"`
+	V1Alpha1 *ConfigV1Alpha1 `json:",omitzero"`
 	// V1Beta1 *ConfigV1Beta1 `json:",omitempty"` // Not yet used.
 }
 
 type ConfigV1Alpha1 struct {
-	AuthKey            *string  `json:",omitempty"` // Tailscale auth key to use.
-	State              *string  `json:",omitempty"` // Path to the Tailscale state.
-	LogLevel           *string  `json:",omitempty"` // "debug", "info". Defaults to "info".
-	App                *string  `json:",omitempty"` // e.g. kubetypes.AppProxyGroupKubeAPIServer
-	ServerURL          *string  `json:",omitempty"` // URL of the Tailscale coordination server.
-	LocalAddr          *string  `json:",omitempty"` // The address to use for serving HTTP health checks and metrics (defaults to all interfaces).
-	LocalPort          *uint16  `json:",omitempty"` // The port to use for serving HTTP health checks and metrics (defaults to 9002).
-	MetricsEnabled     opt.Bool `json:",omitempty"` // Serve metrics on <LocalAddr>:<LocalPort>/metrics.
-	HealthCheckEnabled opt.Bool `json:",omitempty"` // Serve health check on <LocalAddr>:<LocalPort>/metrics.
+	AuthKey            *string  `json:",omitzero"` // Tailscale auth key to use.
+	State              *string  `json:",omitzero"` // Path to the Tailscale state.
+	LogLevel           *string  `json:",omitzero"` // "debug", "info". Defaults to "info".
+	App                *string  `json:",omitzero"` // e.g. kubetypes.AppProxyGroupKubeAPIServer
+	ServerURL          *string  `json:",omitzero"` // URL of the Tailscale coordination server.
+	LocalAddr          *string  `json:",omitzero"` // The address to use for serving HTTP health checks and metrics (defaults to all interfaces).
+	LocalPort          *uint16  `json:",omitzero"` // The port to use for serving HTTP health checks and metrics (defaults to 9002).
+	MetricsEnabled     opt.Bool `json:",omitzero"` // Serve metrics on <LocalAddr>:<LocalPort>/metrics.
+	HealthCheckEnabled opt.Bool `json:",omitzero"` // Serve health check on <LocalAddr>:<LocalPort>/metrics.
 
 	// TODO(tomhjp): The remaining fields should all be reloadable during
 	// runtime, but currently missing most of the APIServerProxy fields.
-	Hostname          *string               `json:",omitempty"` // Tailscale device hostname.
-	AcceptRoutes      opt.Bool              `json:",omitempty"` // Accepts routes advertised by other Tailscale nodes.
+	Hostname          *string               `json:",omitzero"`  // Tailscale device hostname.
+	AcceptRoutes      opt.Bool              `json:",omitzero"`  // Accepts routes advertised by other Tailscale nodes.
 	AdvertiseServices []string              `json:",omitempty"` // Tailscale Services to advertise.
-	APIServerProxy    *APIServerProxyConfig `json:",omitempty"` // Config specific to the API Server proxy.
+	APIServerProxy    *APIServerProxyConfig `json:",omitzero"`  // Config specific to the API Server proxy.
 	StaticEndpoints   []netip.AddrPort      `json:",omitempty"` // StaticEndpoints are additional, user-defined endpoints that this node should advertise amongst its wireguard endpoints.
 }
 
 type APIServerProxyConfig struct {
-	Enabled     opt.Bool                      `json:",omitempty"` // Whether to enable the API Server proxy.
-	Mode        *kubetypes.APIServerProxyMode `json:",omitempty"` // "auth" or "noauth" mode.
-	ServiceName *tailcfg.ServiceName          `json:",omitempty"` // Name of the Tailscale Service to advertise.
-	IssueCerts  opt.Bool                      `json:",omitempty"` // Whether this replica should issue TLS certs for the Tailscale Service.
+	Enabled     opt.Bool                      `json:",omitzero"` // Whether to enable the API Server proxy.
+	Mode        *kubetypes.APIServerProxyMode `json:",omitzero"` // "auth" or "noauth" mode.
+	ServiceName *tailcfg.ServiceName          `json:",omitzero"` // Name of the Tailscale Service to advertise.
+	IssueCerts  opt.Bool                      `json:",omitzero"` // Whether this replica should issue TLS certs for the Tailscale Service.
 }
 
 // Load reads and parses the config file at the provided path on disk.

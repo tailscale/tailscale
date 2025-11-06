@@ -22,7 +22,7 @@ func TestUnmarshalAPIServerProxyMode(t *testing.T) {
 
 	for _, tc := range tests {
 		var s struct {
-			Mode *APIServerProxyMode `json:",omitempty"`
+			Mode *APIServerProxyMode `json:",omitzero"`
 		}
 		err := json.Unmarshal([]byte(tc.data), &s)
 		if tc.expected == "" {

@@ -412,7 +412,7 @@ type Node struct {
 	// Online is whether the node is currently connected to the
 	// coordination server.  A value of nil means unknown, or the
 	// current node doesn't have permission to know.
-	Online *bool `json:",omitempty"`
+	Online *bool `json:",omitzero"`
 
 	MachineAuthorized bool `json:",omitempty"` // TODO(crawshaw): replace with MachineStatus
 
@@ -486,7 +486,7 @@ type Node struct {
 	// This only applies to traffic originating from the current node to the
 	// peer or any of its subnets. Traffic originating from subnet routes will
 	// not be masqueraded (e.g. in case of --snat-subnet-routes).
-	SelfNodeV4MasqAddrForThisPeer *netip.Addr `json:",omitempty"`
+	SelfNodeV4MasqAddrForThisPeer *netip.Addr `json:",omitzero"`
 
 	// SelfNodeV6MasqAddrForThisPeer is the IPv6 that this peer knows the current node as.
 	// It may be empty if the peer knows the current node by its native
@@ -501,7 +501,7 @@ type Node struct {
 	// This only applies to traffic originating from the current node to the
 	// peer or any of its subnets. Traffic originating from subnet routes will
 	// not be masqueraded (e.g. in case of --snat-subnet-routes).
-	SelfNodeV6MasqAddrForThisPeer *netip.Addr `json:",omitempty"`
+	SelfNodeV6MasqAddrForThisPeer *netip.Addr `json:",omitzero"`
 
 	// IsWireGuardOnly indicates that this is a non-Tailscale WireGuard peer, it
 	// is not expected to speak Disco or DERP, and it must have Endpoints in
@@ -844,7 +844,7 @@ type Hostinfo struct {
 	// "5.10.0-17-amd64".
 	OSVersion string `json:",omitempty"`
 
-	Container      opt.Bool `json:",omitempty"` // best-effort whether the client is running in a container
+	Container      opt.Bool `json:",omitzero"`  // best-effort whether the client is running in a container
 	Env            string   `json:",omitempty"` // a hostinfo.EnvType in string form
 	Distro         string   `json:",omitempty"` // "debian", "ubuntu", "nixos", ...
 	DistroVersion  string   `json:",omitempty"` // "20.04", ...
@@ -853,7 +853,7 @@ type Hostinfo struct {
 	// App is used to disambiguate Tailscale clients that run using tsnet.
 	App string `json:",omitempty"` // "k8s-operator", "golinks", ...
 
-	Desktop         opt.Bool `json:",omitempty"` // if a desktop was detected on Linux
+	Desktop         opt.Bool `json:",omitzero"`  // if a desktop was detected on Linux
 	Package         string   `json:",omitempty"` // Tailscale package to disambiguate ("choco", "appstore", etc; "" for unknown)
 	DeviceModel     string   `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone12,3")
 	PushDeviceToken string   `json:",omitempty"` // macOS/iOS APNs device token for notifications (and Android in the future)
@@ -879,27 +879,27 @@ type Hostinfo struct {
 	RequestTags     []string       `json:",omitempty"` // set of ACL tags this node wants to claim
 	WoLMACs         []string       `json:",omitempty"` // MAC address(es) to send Wake-on-LAN packets to wake this node (lowercase hex w/ colons)
 	Services        []Service      `json:",omitempty"` // services advertised by this machine
-	NetInfo         *NetInfo       `json:",omitempty"`
+	NetInfo         *NetInfo       `json:",omitzero"`
 	SSH_HostKeys    []string       `json:"sshHostKeys,omitempty"` // if advertised
 	Cloud           string         `json:",omitempty"`
-	Userspace       opt.Bool       `json:",omitempty"` // if the client is running in userspace (netstack) mode
-	UserspaceRouter opt.Bool       `json:",omitempty"` // if the client's subnet router is running in userspace (netstack) mode
-	AppConnector    opt.Bool       `json:",omitempty"` // if the client is running the app-connector service
+	Userspace       opt.Bool       `json:",omitzero"`  // if the client is running in userspace (netstack) mode
+	UserspaceRouter opt.Bool       `json:",omitzero"`  // if the client's subnet router is running in userspace (netstack) mode
+	AppConnector    opt.Bool       `json:",omitzero"`  // if the client is running the app-connector service
 	ServicesHash    string         `json:",omitempty"` // opaque hash of the most recent list of tailnet services, change in hash indicates config should be fetched via c2n
 	ExitNodeID      StableNodeID   `json:",omitzero"`  // the client’s selected exit node, empty when unselected.
 
 	// Location represents geographical location data about a
 	// Tailscale host. Location is optional and only set if
 	// explicitly declared by a node.
-	Location *Location `json:",omitempty"`
+	Location *Location `json:",omitzero"`
 
-	TPM *TPMInfo `json:",omitempty"` // TPM device metadata, if available
+	TPM *TPMInfo `json:",omitzero"` // TPM device metadata, if available
 	// StateEncrypted reports whether the node state is stored encrypted on
 	// disk. The actual mechanism is platform-specific:
 	//   * Apple nodes use the Keychain
 	//   * Linux and Windows nodes use the TPM
 	//   * Android apps use EncryptedSharedPreferences
-	StateEncrypted opt.Bool `json:",omitempty"`
+	StateEncrypted opt.Bool `json:",omitzero"`
 
 	// NOTE: any new fields containing pointers in this type
 	//       require changes to Hostinfo.Equal.
@@ -1234,7 +1234,7 @@ type RegisterResponseAuth struct {
 
 	// At most one of Oauth2Token or AuthKey is set.
 
-	Oauth2Token *Oauth2Token `json:",omitempty"` // used by pre-1.66 Android only
+	Oauth2Token *Oauth2Token `json:",omitzero"` // used by pre-1.66 Android only
 	AuthKey     string       `json:",omitempty"`
 }
 
@@ -1256,7 +1256,7 @@ type RegisterRequest struct {
 	NodeKey    key.NodePublic
 	OldNodeKey key.NodePublic
 	NLKey      key.NLPublic
-	Auth       *RegisterResponseAuth `json:",omitempty"`
+	Auth       *RegisterResponseAuth `json:",omitzero"`
 	// Expiry optionally specifies the requested key expiry.
 	// The server policy may override.
 	// As a special case, if Expiry is in the past and NodeKey is
@@ -1501,7 +1501,7 @@ func (pr PortRange) String() string {
 type NetPortRange struct {
 	_     structs.Incomparable
 	IP    string // IP, CIDR, Range, or "*" (same formats as FilterRule.SrcIPs)
-	Bits  *int   `json:",omitempty"` // deprecated; the 2020 way to turn IP into a CIDR. See FilterRule.SrcBits.
+	Bits  *int   `json:",omitzero"` // deprecated; the 2020 way to turn IP into a CIDR. See FilterRule.SrcBits.
 	Ports PortRange
 }
 
@@ -1978,7 +1978,7 @@ type MapResponse struct {
 	// provided URL. No auth headers are necessary.
 	// PingRequest may be sent on any MapResponse (ones with
 	// KeepAlive true or false).
-	PingRequest *PingRequest `json:",omitempty"`
+	PingRequest *PingRequest `json:",omitzero"`
 
 	// PopBrowserURL, if non-empty, is a URL for the client to
 	// open to complete an action. The client should dup suppress
@@ -1989,11 +1989,11 @@ type MapResponse struct {
 
 	// Node describes the node making the map request.
 	// Starting with MapRequest.Version 18, nil means unchanged.
-	Node *Node `json:",omitempty"`
+	Node *Node `json:",omitzero"`
 
 	// DERPMap describe the set of DERP servers available.
 	// A nil value means unchanged.
-	DERPMap *DERPMap `json:",omitempty"`
+	DERPMap *DERPMap `json:",omitzero"`
 
 	// Peers, if non-empty, is the complete list of peers.
 	// It will be set in the first MapResponse for a long-polled request/response.
@@ -2030,7 +2030,7 @@ type MapResponse struct {
 
 	// DNSConfig contains the DNS settings for the client to use.
 	// A nil value means no change from an earlier non-nil value.
-	DNSConfig *DNSConfig `json:",omitempty"`
+	DNSConfig *DNSConfig `json:",omitzero"`
 
 	// Domain is the name of the network that this node is
 	// in. It's either of the form "example.com" (for user
@@ -2045,7 +2045,7 @@ type MapResponse struct {
 	// requested that info about services be included in HostInfo.
 	// If unset, the most recent non-empty MapResponse value in
 	// the HTTP response stream is used.
-	CollectServices opt.Bool `json:",omitempty"`
+	CollectServices opt.Bool `json:",omitzero"`
 
 	// PacketFilter are the firewall rules.
 	//
@@ -2121,7 +2121,7 @@ type MapResponse struct {
 
 	// SSHPolicy, if non-nil, updates the SSH policy for how incoming
 	// SSH connections should be handled.
-	SSHPolicy *SSHPolicy `json:",omitempty"`
+	SSHPolicy *SSHPolicy `json:",omitzero"`
 
 	// ControlTime, if non-zero, is the current timestamp according to the control server.
 	ControlTime *time.Time `json:",omitempty"`
@@ -2134,7 +2134,7 @@ type MapResponse struct {
 	// indicates the control plane believes TKA should be enabled.
 	// A nil TKAInfo in a mapresponse stream (i.e. a 'delta' mapresponse)
 	// indicates no change from the value sent earlier.
-	TKAInfo *TKAInfo `json:",omitempty"`
+	TKAInfo *TKAInfo `json:",omitzero"`
 
 	// DomainDataPlaneAuditLogID, if non-empty, is the per-tailnet log ID to be
 	// used when writing data plane audit logs.
@@ -2142,24 +2142,24 @@ type MapResponse struct {
 
 	// Debug is normally nil, except for when the control server
 	// is setting debug settings on a node.
-	Debug *Debug `json:",omitempty"`
+	Debug *Debug `json:",omitzero"`
 
 	// ControlDialPlan tells the client how to connect to the control
 	// server. An initial nil is equivalent to new(ControlDialPlan).
 	// A subsequent streamed nil means no change.
-	ControlDialPlan *ControlDialPlan `json:",omitempty"`
+	ControlDialPlan *ControlDialPlan `json:",omitzero"`
 
 	// ClientVersion describes the latest client version that's available for
 	// download and whether the client is using it. A nil value means no change
 	// or nothing to report.
-	ClientVersion *ClientVersion `json:",omitempty"`
+	ClientVersion *ClientVersion `json:",omitzero"`
 
 	// DefaultAutoUpdate is the default node auto-update setting for this
 	// tailnet. The node is free to opt-in or out locally regardless of this
 	// value. This value is only used on first MapResponse from control, the
 	// auto-update setting doesn't change if the tailnet admin flips the
 	// default after the node registered.
-	DefaultAutoUpdate opt.Bool `json:",omitempty"`
+	DefaultAutoUpdate opt.Bool `json:",omitzero"`
 }
 
 // DisplayMessage represents a health state of the node from the control plane's
@@ -2197,7 +2197,7 @@ type DisplayMessage struct {
 	// take when interacting with this message. For example, if the
 	// DisplayMessage is shown via a notification, the action label might be a
 	// button on that notification and clicking the button would open the URL.
-	PrimaryAction *DisplayMessageAction `json:",omitempty"`
+	PrimaryAction *DisplayMessageAction `json:",omitzero"`
 }
 
 // DisplayMessageAction represents an action (URL and link) to be presented to
@@ -2334,7 +2334,7 @@ type Debug struct {
 	// Exit optionally specifies that the client should os.Exit
 	// with this code. This is a safety measure in case a client is crash
 	// looping or in an unsafe state and we need to remotely shut it down.
-	Exit *int `json:",omitempty"`
+	Exit *int `json:",omitzero"`
 }
 
 func (id ID) String() string      { return fmt.Sprintf("id:%d", int64(id)) }
@@ -2878,7 +2878,7 @@ type SSHPrincipal struct {
 	// Matching any one of the following four field causes a match.
 	// It must also match Certs, if non-empty.
 
-	Node      StableNodeID `json:"node,omitempty"`
+	Node      StableNodeID `json:"node,omitzero"`
 	NodeIP    string       `json:"nodeIP,omitempty"`
 	UserLogin string       `json:"userLogin,omitempty"` // email-ish: foo@example.com, bar@github
 	Any       bool         `json:"any,omitempty"`       // if true, match any connection
@@ -2951,7 +2951,7 @@ type SSHAction struct {
 
 	// OnRecorderFailure is the action to take if recording fails.
 	// If nil, the default action is to fail open.
-	OnRecordingFailure *SSHRecorderFailureAction `json:"onRecordingFailure,omitempty"`
+	OnRecordingFailure *SSHRecorderFailureAction `json:"onRecordingFailure,omitzero"`
 }
 
 // SSHRecorderFailureAction is the action to take if recording fails.
@@ -3196,7 +3196,7 @@ type PeerChange struct {
 	DiscoKey *key.DiscoPublic `json:",omitempty"`
 
 	// Online, if non-nil, means that the NodeID's online status changed.
-	Online *bool `json:",omitempty"`
+	Online *bool `json:",omitzero"`
 
 	// LastSeen, if non-nil, means that the NodeID's online status changed.
 	LastSeen *time.Time `json:",omitempty"`
@@ -3284,7 +3284,7 @@ type AuditLogRequest struct {
 	// NodeKey is the client's current node key.
 	NodeKey key.NodePublic `json:",omitzero"`
 	// Action is the action to be logged. It must correspond to a known action in the control plane.
-	Action ClientAuditAction `json:",omitempty"`
+	Action ClientAuditAction `json:",omitzero"`
 	// Details is an opaque string, specific to the action being logged.  Empty strings may not
 	// be valid depending on the action being logged.
 	Details string `json:",omitempty"`
