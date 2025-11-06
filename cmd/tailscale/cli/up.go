@@ -655,6 +655,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	go func() {
 		var printed bool // whether we've yet printed anything to stdout or stderr
 		lastURLPrinted := ""
+		_ = lastURLPrinted
 
 		// If we're doing a force-reauth, we need to get two notifications:
 		//
