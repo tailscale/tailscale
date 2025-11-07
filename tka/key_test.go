@@ -12,6 +12,7 @@ import (
 
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/must"
 )
 
 // returns a random source based on the test name + extraSeed.
@@ -32,8 +33,16 @@ func testingKey25519(t *testing.T, seed int64) (ed25519.PublicKey, ed25519.Priva
 	return pub, priv
 }
 
+// testingNLKey generates a new public-private Network Lock key pair.
+func testingNLKey(t *testing.T) (key.NLPublic, key.NLPrivate) {
+	t.Helper()
+	priv := key.NewNLPrivate()
+	pub := priv.Public()
+	return pub, priv
+}
+
 func TestVerify25519(t *testing.T) {
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	key := Key{
 		Kind:   Key25519,
 		Public: pub,
@@ -46,19 +55,14 @@ func TestVerify25519(t *testing.T) {
 		Signatures: []tkatype.Signature{{KeyID: []byte{45, 42}}},
 	}
 	sigHash := aum.SigHash()
-	aum.Signatures = []tkatype.Signature{
-		{
-			KeyID:     key.MustID(),
-			Signature: ed25519.Sign(priv, sigHash[:]),
-		},
-	}
+	aum.Signatures = must.Get(priv.SignAUM(sigHash))
 
 	if err := signatureVerify(&aum.Signatures[0], aum.SigHash(), key); err != nil {
 		t.Errorf("signature verification failed: %v", err)
 	}
 
 	// Make sure it fails with a different public key.
-	pub2, _ := testingKey25519(t, 2)
+	pub2, _ := testingNLKey(t)
 	key2 := Key{Kind: Key25519, Public: pub2}
 	if err := signatureVerify(&aum.Signatures[0], aum.SigHash(), key2); err == nil {
 		t.Error("signature verification with different key did not fail")
@@ -66,16 +70,15 @@ func TestVerify25519(t *testing.T) {
 }
 
 func TestNLPrivate(t *testing.T) {
-	p := key.NewNLPrivate()
-	pub := p.Public()
+	pub, priv := testingNLKey(t)
 
 	// Test that key.NLPrivate implements Signer by making a new
 	// authority.
-	k := Key{Kind: Key25519, Public: pub.Verifier(), Votes: 1}
+	k := Key{Kind: Key25519, Public: pub, Votes: 1}
 	_, aum, err := Create(&Mem{}, State{
 		Keys:               []Key{k},
 		DisablementSecrets: [][]byte{bytes.Repeat([]byte{1}, 32)},
-	}, p)
+	}, priv)
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -91,7 +94,7 @@ func TestNLPrivate(t *testing.T) {
 
 	// We manually compute the keyID, so make sure its consistent with
 	// tka.Key.ID().
-	if !bytes.Equal(k.MustID(), p.KeyID()) {
-		t.Errorf("private.KeyID() & tka KeyID differ: %x != %x", k.MustID(), p.KeyID())
+	if !bytes.Equal(k.MustID(), priv.KeyID()) {
+		t.Errorf("private.KeyID() & tka KeyID differ: %x != %x", k.MustID(), priv.KeyID())
 	}
 }

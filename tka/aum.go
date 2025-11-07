@@ -14,6 +14,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	"golang.org/x/crypto/blake2s"
+	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/set"
 )
@@ -286,19 +287,14 @@ func (a *AUM) Parent() (h AUMHash, ok bool) {
 	return h, false
 }
 
-func (a *AUM) sign25519(priv ed25519.PrivateKey) error {
-	key := Key{Kind: Key25519, Public: priv.Public().(ed25519.PublicKey)}
+func (a *AUM) sign25519(priv key.NLPrivate) error {
 	sigHash := a.SigHash()
-
-	keyID, err := key.ID()
+	signatures, err := priv.SignAUM(sigHash)
 	if err != nil {
 		return err
 	}
+	a.Signatures = signatures
 
-	a.Signatures = append(a.Signatures, tkatype.Signature{
-		KeyID:     keyID,
-		Signature: ed25519.Sign(priv, sigHash[:]),
-	})
 	return nil
 }
 

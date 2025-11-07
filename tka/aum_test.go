@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/crypto/blake2s"
+	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 )
 
@@ -24,23 +25,24 @@ func TestSerialization(t *testing.T) {
 		Expect []byte
 	}{
 		{
-			"AddKey",
-			AUM{MessageKind: AUMAddKey, Key: &Key{}},
-			[]byte{
-				0xa3, // major type 5 (map), 3 items
-				0x01, // |- major type 0 (int), value 1 (first key, MessageKind)
-				0x01, // |- major type 0 (int), value 1 (first value, AUMAddKey)
-				0x02, // |- major type 0 (int), value 2 (second key, PrevAUMHash)
-				0xf6, // |- major type 7 (val), value null (second value, nil)
-				0x03, // |- major type 0 (int), value 3 (third key, Key)
-				0xa3, // |- major type 5 (map), 3 items (type Key)
-				0x01, //    |- major type 0 (int), value 1 (first key, Kind)
-				0x00, //    |- major type 0 (int), value 0 (first value)
-				0x02, //    |- major type 0 (int), value 2 (second key, Votes)
-				0x00, //    |- major type 0 (int), value 0 (first value)
-				0x03, //    |- major type 0 (int), value 3 (third key, Public)
-				0xf6, //    |- major type 7 (val), value null (third value, nil)
+			Name: "AddKey",
+			AUM:  AUM{MessageKind: AUMAddKey, Key: &Key{}},
+			Expect: append([]byte{
+				0xa3,       // major type 5 (map), 3 items
+				0x01,       // |- major type 0 (int), value 1 (first key, MessageKind)
+				0x01,       // |- major type 0 (int), value 1 (first value, AUMAddKey)
+				0x02,       // |- major type 0 (int), value 2 (second key, PrevAUMHash)
+				0xf6,       // |- major type 7 (val), value null (second value, nil)
+				0x03,       // |- major type 0 (int), value 3 (third key, Key)
+				0xa3,       // |- major type 5 (map), 3 items (type Key)
+				0x01,       //    |- major type 0 (int), value 1 (first key, Kind)
+				0x00,       //    |- major type 0 (int), value 0 (first value)
+				0x02,       //    |- major type 0 (int), value 2 (second key, Votes)
+				0x00,       //    |- major type 0 (int), value 0 (first value)
+				0x03,       //    |- major type 0 (int), value 3 (third key, Public)
+				0x58, 0x20, //    |- major type 2 (byte string), 32 items (first value)
 			},
+				bytes.Repeat([]byte{0}, 32)...),
 		},
 		{
 			"RemoveKey",
@@ -85,11 +87,11 @@ func TestSerialization(t *testing.T) {
 			AUM{MessageKind: AUMCheckpoint, PrevAUMHash: []byte{1, 2}, State: &State{
 				LastAUMHash: &fakeAUMHash,
 				Keys: []Key{
-					{Kind: Key25519, Public: []byte{5, 6}},
+					{Kind: Key25519, Public: key.NLPublicFromBytes(bytes.Repeat([]byte{5, 6}, 16))},
 				},
 			}},
-			append(
-				append([]byte{
+			append(append(append(
+				[]byte{
 					0xa3,       // major type 5 (map), 3 items
 					0x01,       // |- major type 0 (int), value 1 (first key, MessageKind)
 					0x05,       // |- major type 0 (int), value 5 (first value, AUMCheckpoint)
@@ -102,22 +104,25 @@ func TestSerialization(t *testing.T) {
 					0x01,       //   |- major type 0 (int), value 1 (first key, LastAUMHash)
 					0x58, 0x20, //   |- major type 2 (byte string), 32 items (first value)
 				},
-					bytes.Repeat([]byte{0}, 32)...),
+				bytes.Repeat([]byte{0}, 32)...),
 				[]byte{
-					0x02, //     |- major type 0 (int), value 2 (second key, DisablementSecrets)
-					0xf6, //     |- major type 7 (val), value null (second value, nil)
-					0x03, //     |- major type 0 (int), value 3 (third key, Keys)
-					0x81, //     |- major type 4 (array), value 1 (one item in array)
-					0xa3, //       |- major type 5 (map), 3 items (Key type)
-					0x01, //          |- major type 0 (int), value 1 (first key, Kind)
-					0x01, //          |- major type 0 (int), value 1 (first value, Key25519)
-					0x02, //          |- major type 0 (int), value 2 (second key, Votes)
-					0x00, //          |- major type 0 (int), value 0 (second value, 0)
-					0x03, //          |- major type 0 (int), value 3 (third key, Public)
-					0x42, //          |- major type 2 (byte string), 2 items (third value)
+					0x02,       // |- major type 0 (int), value 2 (second key, DisablementSecrets)
+					0xf6,       // |- major type 7 (val), value null (second value, nil)
+					0x03,       // |- major type 0 (int), value 3 (third key, Keys)
+					0x81,       // |- major type 4 (array), value 1 (one item in array)
+					0xa3,       //    |- major type 5 (map), 3 items (Key type)
+					0x01,       //       |- major type 0 (int), value 1 (first key, Kind)
+					0x01,       //       |- major type 0 (int), value 1 (first value, Key25519)
+					0x02,       //       |- major type 0 (int), value 2 (second key, Votes)
+					0x00,       //       |- major type 0 (int), value 0 (second value, 0)
+					0x03,       //       |- major type 0 (int), value 3 (third key, Public)
+					0x58, 0x20, //       |- major type 2 (byte string), 32 items (first value)
+				}...),
+				bytes.Repeat([]byte{
 					0x05, //             |- major type 0 (int), value 5 (byte 5)
 					0x06, //             |- major type 0 (int), value 6 (byte 6)
-				}...),
+				}, 16)...,
+			),
 		},
 		{
 			"Signature",
@@ -198,12 +203,12 @@ func TestDeserializeExistingAUMs(t *testing.T) {
 						{
 							Kind:   Key25519,
 							Votes:  1,
-							Public: fromBase64("AN+0bfJqK1X9gygpIE/jnODJ6h0KW6Y31lp5CD8OYIQ="),
+							Public: key.NLPublicFromBytes(fromBase64("AN+0bfJqK1X9gygpIE/jnODJ6h0KW6Y31lp5CD8OYIQ=")),
 						},
 						{
 							Kind:   Key25519,
 							Votes:  1,
-							Public: fromBase64("USm5lkszsh12xybmJ/LO3ZjDw88ZiI4AaAPNHAWICLQ="),
+							Public: key.NLPublicFromBytes(fromBase64("USm5lkszsh12xybmJ/LO3ZjDw88ZiI4AaAPNHAWICLQ=")),
 						},
 					},
 					StateID1: 1253033988139371657,
@@ -236,10 +241,10 @@ func TestAUMWeight(t *testing.T) {
 	var fakeKeyID [blake2s.Size]byte
 	testingRand(t, 1).Read(fakeKeyID[:])
 
-	pub, _ := testingKey25519(t, 1)
-	key := Key{Kind: Key25519, Public: pub, Votes: 2}
-	pub, _ = testingKey25519(t, 2)
-	key2 := Key{Kind: Key25519, Public: pub, Votes: 2}
+	pub1, _ := testingNLKey(t)
+	key1 := Key{Kind: Key25519, Public: pub1, Votes: 2}
+	pub2, _ := testingNLKey(t)
+	key2 := Key{Kind: Key25519, Public: pub2, Votes: 2}
 
 	tcs := []struct {
 		Name  string
@@ -264,30 +269,30 @@ func TestAUMWeight(t *testing.T) {
 		{
 			"Unary key",
 			AUM{
-				Signatures: []tkatype.Signature{{KeyID: key.MustID()}},
+				Signatures: []tkatype.Signature{{KeyID: key1.MustID()}},
 			},
 			State{
-				Keys: []Key{key},
+				Keys: []Key{key1},
 			},
 			2,
 		},
 		{
 			"Multiple keys",
 			AUM{
-				Signatures: []tkatype.Signature{{KeyID: key.MustID()}, {KeyID: key2.MustID()}},
+				Signatures: []tkatype.Signature{{KeyID: key1.MustID()}, {KeyID: key2.MustID()}},
 			},
 			State{
-				Keys: []Key{key, key2},
+				Keys: []Key{key1, key2},
 			},
 			4,
 		},
 		{
 			"Double use",
 			AUM{
-				Signatures: []tkatype.Signature{{KeyID: key.MustID()}, {KeyID: key.MustID()}},
+				Signatures: []tkatype.Signature{{KeyID: key1.MustID()}, {KeyID: key1.MustID()}},
 			},
 			State{
-				Keys: []Key{key},
+				Keys: []Key{key1},
 			},
 			2,
 		},

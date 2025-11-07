@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 )
 
@@ -43,7 +44,7 @@ type Key struct {
 	// Public encodes the public key of the key. For 25519 keys,
 	// this is simply the point on the curve representing the public
 	// key.
-	Public []byte `cbor:"3,keyasint"`
+	Public key.NLPublic `cbor:"3,keyasint"`
 
 	// Meta describes arbitrary metadata about the key. This could be
 	// used to store the name of the key, for instance.
@@ -51,16 +52,9 @@ type Key struct {
 }
 
 // Clone makes an independent copy of Key.
-//
-// NOTE: There is a difference between a nil slice and an empty slice for encoding purposes,
-// so an implementation of Clone() must take care to preserve this.
 func (k Key) Clone() Key {
 	out := k
-
-	if k.Public != nil {
-		out.Public = make([]byte, len(k.Public))
-		copy(out.Public, k.Public)
-	}
+	out.Public = k.Public.Clone()
 
 	if k.Meta != nil {
 		out.Meta = make(map[string]string, len(k.Meta))
@@ -88,7 +82,7 @@ func (k Key) ID() (tkatype.KeyID, error) {
 	// Because 25519 public keys are so short, we just use the 32-byte
 	// public as their 'key ID'.
 	case Key25519:
-		return tkatype.KeyID(k.Public), nil
+		return k.Public.KeyID(), nil
 	default:
 		return nil, fmt.Errorf("unknown key kind: %v", k.Kind)
 	}
@@ -99,7 +93,7 @@ func (k Key) ID() (tkatype.KeyID, error) {
 func (k Key) Ed25519() (ed25519.PublicKey, error) {
 	switch k.Kind {
 	case Key25519:
-		return ed25519.PublicKey(k.Public), nil
+		return k.Public.Verifier(), nil
 	default:
 		return nil, fmt.Errorf("key is of type %v, not ed25519", k.Kind)
 	}

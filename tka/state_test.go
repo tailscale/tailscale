@@ -14,6 +14,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"tailscale.com/types/key"
 )
 
 func fromHex(in string) []byte {
@@ -42,7 +43,7 @@ func TestCloneState(t *testing.T) {
 		{
 			"Key",
 			State{
-				Keys: []Key{{Kind: Key25519, Votes: 2, Public: []byte{5, 6, 7, 8}, Meta: map[string]string{"a": "b"}}},
+				Keys: []Key{{Kind: Key25519, Votes: 2, Public: key.NewNLPrivate().Public(), Meta: map[string]string{"a": "b"}}},
 			},
 		},
 		{
@@ -94,6 +95,8 @@ func TestCloneState(t *testing.T) {
 }
 
 func TestApplyUpdatesChain(t *testing.T) {
+	pub1 := key.NLPublicFromBytes(bytes.Repeat([]byte{0x01}, 32))
+	pub2 := key.NLPublicFromBytes(bytes.Repeat([]byte{0x02}, 32))
 	intOne := uint(1)
 	tcs := []struct {
 		Name    string
@@ -102,63 +105,63 @@ func TestApplyUpdatesChain(t *testing.T) {
 		End     State
 	}{
 		{
-			"AddKey",
-			[]AUM{{MessageKind: AUMAddKey, Key: &Key{Kind: Key25519, Public: []byte{1, 2, 3, 4}}}},
-			State{},
-			State{
-				Keys:        []Key{{Kind: Key25519, Public: []byte{1, 2, 3, 4}}},
+			Name:    "AddKey",
+			Updates: []AUM{{MessageKind: AUMAddKey, Key: &Key{Kind: Key25519, Public: pub1}}},
+			Start:   State{},
+			End: State{
+				Keys:        []Key{{Kind: Key25519, Public: pub1}},
+				LastAUMHash: hashFromHex("7809514b61a986843879bde59d974cce140e1c93853366b6b36e3bdd74f8fe8f"),
+			},
+		},
+		{
+			Name:    "RemoveKey",
+			Updates: []AUM{{MessageKind: AUMRemoveKey, KeyID: pub1.KeyID(), PrevAUMHash: fromHex("53898e4311d0b6087fcbb871563868a16c629d9267df851fcfa7b52b31d2bd03")}},
+			Start: State{
+				Keys:        []Key{{Kind: Key25519, Public: pub1}},
 				LastAUMHash: hashFromHex("53898e4311d0b6087fcbb871563868a16c629d9267df851fcfa7b52b31d2bd03"),
 			},
+			End: State{
+				LastAUMHash: hashFromHex("f82f91bf907ad85eb33fbadfa2d65362031fea572c4535a3fd8b8fca8a352f65"),
+			},
 		},
 		{
-			"RemoveKey",
-			[]AUM{{MessageKind: AUMRemoveKey, KeyID: []byte{1, 2, 3, 4}, PrevAUMHash: fromHex("53898e4311d0b6087fcbb871563868a16c629d9267df851fcfa7b52b31d2bd03")}},
-			State{
-				Keys:        []Key{{Kind: Key25519, Public: []byte{1, 2, 3, 4}}},
+			Name:    "UpdateKey",
+			Updates: []AUM{{MessageKind: AUMUpdateKey, KeyID: pub1.KeyID(), Votes: &intOne, Meta: map[string]string{"a": "b"}, PrevAUMHash: fromHex("53898e4311d0b6087fcbb871563868a16c629d9267df851fcfa7b52b31d2bd03")}},
+			Start: State{
+				Keys:        []Key{{Kind: Key25519, Public: pub1}},
 				LastAUMHash: hashFromHex("53898e4311d0b6087fcbb871563868a16c629d9267df851fcfa7b52b31d2bd03"),
 			},
-			State{
-				LastAUMHash: hashFromHex("15d65756abfafbb592279503f40759898590c9c59056be1e2e9f02684c15ba4b"),
+			End: State{
+				LastAUMHash: hashFromHex("c37e47588843a7c6ae98e737bac40aa554b6c7467e0fb01d5d7ed5181a21597d"),
+				Keys:        []Key{{Kind: Key25519, Votes: 1, Meta: map[string]string{"a": "b"}, Public: pub1}},
 			},
 		},
 		{
-			"UpdateKey",
-			[]AUM{{MessageKind: AUMUpdateKey, KeyID: []byte{1, 2, 3, 4}, Votes: &intOne, Meta: map[string]string{"a": "b"}, PrevAUMHash: fromHex("53898e4311d0b6087fcbb871563868a16c629d9267df851fcfa7b52b31d2bd03")}},
-			State{
-				Keys:        []Key{{Kind: Key25519, Public: []byte{1, 2, 3, 4}}},
-				LastAUMHash: hashFromHex("53898e4311d0b6087fcbb871563868a16c629d9267df851fcfa7b52b31d2bd03"),
+			Name: "ChainedKeyUpdates",
+			Updates: []AUM{
+				{MessageKind: AUMAddKey, Key: &Key{Kind: Key25519, Public: pub2}},
+				{MessageKind: AUMRemoveKey, KeyID: pub1.KeyID(), PrevAUMHash: fromHex("881962b6491b58169b027b681fd76053c01b89f877749482d3ef54668f62c8bc")},
 			},
-			State{
-				LastAUMHash: hashFromHex("d55458a9c3ed6997439ba5a18b9b62d2c6e5e0c1bb4c61409e92a1281a3b458d"),
-				Keys:        []Key{{Kind: Key25519, Votes: 1, Meta: map[string]string{"a": "b"}, Public: []byte{1, 2, 3, 4}}},
+			Start: State{
+				Keys: []Key{{Kind: Key25519, Public: pub1}},
 			},
-		},
-		{
-			"ChainedKeyUpdates",
-			[]AUM{
-				{MessageKind: AUMAddKey, Key: &Key{Kind: Key25519, Public: []byte{5, 6, 7, 8}}},
-				{MessageKind: AUMRemoveKey, KeyID: []byte{1, 2, 3, 4}, PrevAUMHash: fromHex("f09bda3bb7cf6756ea9adc25770aede4b3ca8142949d6ef5ca0add29af912fd4")},
-			},
-			State{
-				Keys: []Key{{Kind: Key25519, Public: []byte{1, 2, 3, 4}}},
-			},
-			State{
-				Keys:        []Key{{Kind: Key25519, Public: []byte{5, 6, 7, 8}}},
-				LastAUMHash: hashFromHex("218165fe5f757304b9deaff4ac742890364f5f509e533c74e80e0ce35e44ee1d"),
+			End: State{
+				Keys:        []Key{{Kind: Key25519, Public: pub2}},
+				LastAUMHash: hashFromHex("f46fff97566919188d289b6b9e1c81c425aae928b677dfdc4fcd5ba2fc09e2e2"),
 			},
 		},
 		{
-			"Checkpoint",
-			[]AUM{
-				{MessageKind: AUMAddKey, Key: &Key{Kind: Key25519, Public: []byte{5, 6, 7, 8}}},
+			Name: "Checkpoint",
+			Updates: []AUM{
+				{MessageKind: AUMAddKey, Key: &Key{Kind: Key25519, Public: pub2}},
 				{MessageKind: AUMCheckpoint, State: &State{
-					Keys: []Key{{Kind: Key25519, Public: []byte{1, 2, 3, 4}}},
-				}, PrevAUMHash: fromHex("f09bda3bb7cf6756ea9adc25770aede4b3ca8142949d6ef5ca0add29af912fd4")},
+					Keys: []Key{{Kind: Key25519, Public: pub1}},
+				}, PrevAUMHash: fromHex("881962b6491b58169b027b681fd76053c01b89f877749482d3ef54668f62c8bc")},
 			},
-			State{DisablementSecrets: [][]byte{{1, 2, 3, 4}}},
-			State{
-				Keys:        []Key{{Kind: Key25519, Public: []byte{1, 2, 3, 4}}},
-				LastAUMHash: hashFromHex("57343671da5eea3cfb502954e976e8028bffd3540b50a043b2a65a8d8d8217d0"),
+			Start: State{DisablementSecrets: [][]byte{{1, 2, 3, 4}}},
+			End: State{
+				Keys:        []Key{{Kind: Key25519, Public: pub1}},
+				LastAUMHash: hashFromHex("6a66117fd82728cc36e08517df721a58beda86b81cf0c91c078402673c44fcce"),
 			},
 		},
 	}
@@ -189,6 +192,8 @@ func TestApplyUpdatesChain(t *testing.T) {
 }
 
 func TestApplyUpdateErrors(t *testing.T) {
+	pub1, _ := testingNLKey(t)
+	pub2, _ := testingNLKey(t)
 	tooLargeVotes := uint(99999)
 	tcs := []struct {
 		Name    string
@@ -198,13 +203,13 @@ func TestApplyUpdateErrors(t *testing.T) {
 	}{
 		{
 			"AddKey exists",
-			[]AUM{{MessageKind: AUMAddKey, Key: &Key{Kind: Key25519, Public: []byte{1, 2, 3, 4}}}},
-			State{Keys: []Key{{Kind: Key25519, Public: []byte{1, 2, 3, 4}}}},
+			[]AUM{{MessageKind: AUMAddKey, Key: &Key{Kind: Key25519, Public: pub1}}},
+			State{Keys: []Key{{Kind: Key25519, Public: pub1}}},
 			errors.New("key already exists"),
 		},
 		{
 			"RemoveKey notfound",
-			[]AUM{{MessageKind: AUMRemoveKey, Key: &Key{Kind: Key25519, Public: []byte{1, 2, 3, 4}}}},
+			[]AUM{{MessageKind: AUMRemoveKey, Key: &Key{Kind: Key25519, Public: pub1}}},
 			State{},
 			ErrNoSuchKey,
 		},
@@ -216,25 +221,25 @@ func TestApplyUpdateErrors(t *testing.T) {
 		},
 		{
 			"UpdateKey now fails validation",
-			[]AUM{{MessageKind: AUMUpdateKey, KeyID: []byte{1}, Votes: &tooLargeVotes}},
-			State{Keys: []Key{{Kind: Key25519, Public: []byte{1}}}},
+			[]AUM{{MessageKind: AUMUpdateKey, KeyID: pub1.KeyID(), Votes: &tooLargeVotes}},
+			State{Keys: []Key{{Kind: Key25519, Public: pub1}}},
 			errors.New("updated key fails validation: excessive key weight: 99999 > 4096"),
 		},
 		{
 			"Bad lastAUMHash",
 			[]AUM{
-				{MessageKind: AUMAddKey, Key: &Key{Kind: Key25519, Public: []byte{5, 6, 7, 8}}},
-				{MessageKind: AUMRemoveKey, KeyID: []byte{1, 2, 3, 4}, PrevAUMHash: fromHex("1234")},
+				{MessageKind: AUMAddKey, Key: &Key{Kind: Key25519, Public: pub2}},
+				{MessageKind: AUMRemoveKey, KeyID: pub1.KeyID(), PrevAUMHash: fromHex("1234")},
 			},
 			State{
-				Keys: []Key{{Kind: Key25519, Public: []byte{1, 2, 3, 4}}},
+				Keys: []Key{{Kind: Key25519, Public: pub1}},
 			},
 			errors.New("parent AUMHash mismatch"),
 		},
 		{
 			"Bad StateID",
 			[]AUM{{MessageKind: AUMCheckpoint, State: &State{StateID1: 1}}},
-			State{Keys: []Key{{Kind: Key25519, Public: []byte{1}}}, StateID1: 42},
+			State{Keys: []Key{{Kind: Key25519, Public: pub1}}, StateID1: 42},
 			errors.New("checkpointed state has an incorrect stateID"),
 		},
 	}

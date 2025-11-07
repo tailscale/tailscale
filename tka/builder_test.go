@@ -4,43 +4,29 @@
 package tka
 
 import (
-	"crypto/ed25519"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"tailscale.com/types/tkatype"
 )
 
-type signer25519 ed25519.PrivateKey
-
-func (s signer25519) SignAUM(sigHash tkatype.AUMSigHash) ([]tkatype.Signature, error) {
-	priv := ed25519.PrivateKey(s)
-	key := Key{Kind: Key25519, Public: priv.Public().(ed25519.PublicKey)}
-
-	return []tkatype.Signature{{
-		KeyID:     key.MustID(),
-		Signature: ed25519.Sign(priv, sigHash[:]),
-	}}, nil
-}
-
 func TestAuthorityBuilderAddKey(t *testing.T) {
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
 	storage := &Mem{}
 	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-	}, signer25519(priv))
+	}, priv)
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
-	pub2, _ := testingKey25519(t, 2)
+	pub2, _ := testingNLKey(t)
 	key2 := Key{Kind: Key25519, Public: pub2, Votes: 1}
 
-	b := a.NewUpdater(signer25519(priv))
+	b := a.NewUpdater(priv)
 	if err := b.AddKey(key2); err != nil {
 		t.Fatalf("AddKey(%v) failed: %v", key2, err)
 	}
@@ -59,23 +45,23 @@ func TestAuthorityBuilderAddKey(t *testing.T) {
 	}
 }
 func TestAuthorityBuilderMaxKey(t *testing.T) {
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
 	storage := &Mem{}
 	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-	}, signer25519(priv))
+	}, priv)
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
 	for i := 0; i <= maxKeys; i++ {
-		pub2, _ := testingKey25519(t, int64(2+i))
+		pub2, _ := testingNLKey(t)
 		key2 := Key{Kind: Key25519, Public: pub2, Votes: 1}
 
-		b := a.NewUpdater(signer25519(priv))
+		b := a.NewUpdater(priv)
 		err := b.AddKey(key2)
 		if i < maxKeys-1 {
 			if err != nil {
@@ -104,21 +90,21 @@ func TestAuthorityBuilderMaxKey(t *testing.T) {
 }
 
 func TestAuthorityBuilderRemoveKey(t *testing.T) {
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
-	pub2, _ := testingKey25519(t, 2)
+	pub2, _ := testingNLKey(t)
 	key2 := Key{Kind: Key25519, Public: pub2, Votes: 1}
 
 	storage := &Mem{}
 	a, _, err := Create(storage, State{
 		Keys:               []Key{key, key2},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-	}, signer25519(priv))
+	}, priv)
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
-	b := a.NewUpdater(signer25519(priv))
+	b := a.NewUpdater(priv)
 	if err := b.RemoveKey(key2.MustID()); err != nil {
 		t.Fatalf("RemoveKey(%v) failed: %v", key2, err)
 	}
@@ -137,7 +123,7 @@ func TestAuthorityBuilderRemoveKey(t *testing.T) {
 	}
 
 	// Check that removing the remaining key errors out.
-	b = a.NewUpdater(signer25519(priv))
+	b = a.NewUpdater(priv)
 	if err := b.RemoveKey(key.MustID()); err != nil {
 		t.Fatalf("RemoveKey(%v) failed: %v", key, err)
 	}
@@ -152,19 +138,19 @@ func TestAuthorityBuilderRemoveKey(t *testing.T) {
 }
 
 func TestAuthorityBuilderSetKeyVote(t *testing.T) {
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
 	storage := &Mem{}
 	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-	}, signer25519(priv))
+	}, priv)
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
-	b := a.NewUpdater(signer25519(priv))
+	b := a.NewUpdater(priv)
 	if err := b.SetKeyVote(key.MustID(), 5); err != nil {
 		t.Fatalf("SetKeyVote(%v) failed: %v", key.MustID(), err)
 	}
@@ -188,19 +174,19 @@ func TestAuthorityBuilderSetKeyVote(t *testing.T) {
 }
 
 func TestAuthorityBuilderSetKeyMeta(t *testing.T) {
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2, Meta: map[string]string{"a": "b"}}
 
 	storage := &Mem{}
 	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-	}, signer25519(priv))
+	}, priv)
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
-	b := a.NewUpdater(signer25519(priv))
+	b := a.NewUpdater(priv)
 	if err := b.SetKeyMeta(key.MustID(), map[string]string{"b": "c"}); err != nil {
 		t.Fatalf("SetKeyMeta(%v) failed: %v", key, err)
 	}
@@ -224,22 +210,22 @@ func TestAuthorityBuilderSetKeyMeta(t *testing.T) {
 }
 
 func TestAuthorityBuilderMultiple(t *testing.T) {
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
 	storage := &Mem{}
 	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-	}, signer25519(priv))
+	}, priv)
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
-	pub2, _ := testingKey25519(t, 2)
+	pub2, _ := testingNLKey(t)
 	key2 := Key{Kind: Key25519, Public: pub2, Votes: 1}
 
-	b := a.NewUpdater(signer25519(priv))
+	b := a.NewUpdater(priv)
 	if err := b.AddKey(key2); err != nil {
 		t.Fatalf("AddKey(%v) failed: %v", key2, err)
 	}
@@ -272,23 +258,23 @@ func TestAuthorityBuilderMultiple(t *testing.T) {
 }
 
 func TestAuthorityBuilderCheckpointsAfterXUpdates(t *testing.T) {
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
 	storage := &Mem{}
 	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-	}, signer25519(priv))
+	}, priv)
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
 	for i := 0; i <= checkpointEvery; i++ {
-		pub2, _ := testingKey25519(t, int64(i+2))
+		pub2, _ := testingNLKey(t)
 		key2 := Key{Kind: Key25519, Public: pub2, Votes: 1}
 
-		b := a.NewUpdater(signer25519(priv))
+		b := a.NewUpdater(priv)
 		if err := b.AddKey(key2); err != nil {
 			t.Fatalf("AddKey(%v) failed: %v", key2, err)
 		}

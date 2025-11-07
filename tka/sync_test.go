@@ -332,7 +332,7 @@ func TestMissingAUMs_Fork(t *testing.T) {
 }
 
 func TestSyncSimpleE2E(t *testing.T) {
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
 	c := newTestchain(t, `

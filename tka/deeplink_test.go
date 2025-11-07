@@ -8,7 +8,7 @@ import (
 )
 
 func TestGenerateDeeplink(t *testing.T) {
-	pub, _ := testingKey25519(t, 1)
+	pub, _ := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 	c := newTestchain(t, `
         G1 -> L1

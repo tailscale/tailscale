@@ -12,6 +12,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/must"
 )
 
 func TestSigDirect(t *testing.T) {
@@ -19,7 +20,7 @@ func TestSigDirect(t *testing.T) {
 	nodeKeyPub, _ := node.Public().MarshalBinary()
 
 	// Verification key (the key used to sign)
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	k := Key{Kind: Key25519, Public: pub, Votes: 2}
 
 	sig := NodeKeySignature{
@@ -28,7 +29,7 @@ func TestSigDirect(t *testing.T) {
 		Pubkey:  nodeKeyPub,
 	}
 	sigHash := sig.SigHash()
-	sig.Signature = ed25519.Sign(priv, sigHash[:])
+	sig.Signature = must.Get(priv.SignNKS(sigHash))
 
 	if sig.SigHash() != sigHash {
 		t.Errorf("sigHash changed after signing: %x != %x", sig.SigHash(), sigHash)
@@ -44,7 +45,7 @@ func TestSigDirect(t *testing.T) {
 	}
 
 	// Test verification fails if the wrong verification key is provided
-	copy(k.Public, []byte{1, 2, 3, 4})
+	k.Public = key.NewNLPrivate().Public()
 	if err := sig.verifySignature(node.Public(), k); err == nil {
 		t.Error("verifySignature() did not error for wrong verification key")
 	}
@@ -52,7 +53,7 @@ func TestSigDirect(t *testing.T) {
 
 func TestSigNested(t *testing.T) {
 	// Network-lock key (the key used to sign the nested sig)
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	k := Key{Kind: Key25519, Public: pub, Votes: 2}
 	// Rotation key (the key used to sign the outer sig)
 	rPub, rPriv := testingKey25519(t, 2)
@@ -72,7 +73,7 @@ func TestSigNested(t *testing.T) {
 		WrappingPubkey: rPub,
 	}
 	sigHash := nestedSig.SigHash()
-	nestedSig.Signature = ed25519.Sign(priv, sigHash[:])
+	nestedSig.Signature = must.Get(priv.SignNKS(sigHash))
 	if err := nestedSig.verifySignature(oldNode.Public(), k); err != nil {
 		t.Fatalf("verifySignature(oldNode) failed: %v", err)
 	}
@@ -98,7 +99,8 @@ func TestSigNested(t *testing.T) {
 	}
 
 	// Test verification fails if the wrong verification key is provided
-	kBad := Key{Kind: Key25519, Public: []byte{1, 2, 3, 4}, Votes: 2}
+	pubBad, _ := testingNLKey(t)
+	kBad := Key{Kind: Key25519, Public: pubBad, Votes: 2}
 	if err := sig.verifySignature(node.Public(), kBad); err == nil {
 		t.Error("verifySignature() did not error for wrong verification key")
 	}
@@ -120,7 +122,7 @@ func TestSigNested(t *testing.T) {
 
 	// Test verification fails if the outer signature is signed with a
 	// different public key to whats specified in WrappingPubkey
-	sig.Signature = ed25519.Sign(priv, sigHash[:])
+	sig.Signature = must.Get(priv.SignNKS(sigHash))
 	if err := sig.verifySignature(node.Public(), k); err == nil {
 		t.Error("verifySignature(node) succeeded with different signature")
 	}
@@ -128,7 +130,7 @@ func TestSigNested(t *testing.T) {
 
 func TestSigNested_DeepNesting(t *testing.T) {
 	// Network-lock key (the key used to sign the nested sig)
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	k := Key{Kind: Key25519, Public: pub, Votes: 2}
 	// Rotation key (the key used to sign the outer sig)
 	rPub, rPriv := testingKey25519(t, 2)
@@ -145,7 +147,7 @@ func TestSigNested_DeepNesting(t *testing.T) {
 		WrappingPubkey: rPub,
 	}
 	sigHash := nestedSig.SigHash()
-	nestedSig.Signature = ed25519.Sign(priv, sigHash[:])
+	nestedSig.Signature = must.Get(priv.SignNKS(sigHash))
 	if err := nestedSig.verifySignature(oldNode.Public(), k); err != nil {
 		t.Fatalf("verifySignature(oldNode) failed: %v", err)
 	}
@@ -200,7 +202,7 @@ func TestSigNested_DeepNesting(t *testing.T) {
 
 func TestSigCredential(t *testing.T) {
 	// Network-lock key (the key used to sign the nested sig)
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	k := Key{Kind: Key25519, Public: pub, Votes: 2}
 	// 'credential' key (the one being delegated to)
 	cPub, cPriv := testingKey25519(t, 2)
@@ -216,7 +218,7 @@ func TestSigCredential(t *testing.T) {
 		WrappingPubkey: cPub,
 	}
 	sigHash := nestedSig.SigHash()
-	nestedSig.Signature = ed25519.Sign(priv, sigHash[:])
+	nestedSig.Signature = must.Get(priv.SignNKS(sigHash))
 
 	// The signature authorizing the node key, signed by the
 	// delegated key & embedding the original signature.
@@ -232,7 +234,8 @@ func TestSigCredential(t *testing.T) {
 	}
 
 	// Test verification fails if the wrong verification key is provided
-	kBad := Key{Kind: Key25519, Public: []byte{1, 2, 3, 4}, Votes: 2}
+	pubBad, _ := testingNLKey(t)
+	kBad := Key{Kind: Key25519, Public: pubBad, Votes: 2}
 	if err := sig.verifySignature(node.Public(), kBad); err == nil {
 		t.Error("verifySignature() did not error for wrong verification key")
 	}
@@ -275,8 +278,8 @@ func TestSigCredential(t *testing.T) {
 	}
 
 	// Test verification fails if the outer signature is signed with a
-	// different public key to whats specified in WrappingPubkey
-	sig.Signature = ed25519.Sign(priv, sigHash[:])
+	// different public key to what's specified in WrappingPubkey
+	sig.Signature = must.Get(priv.SignNKS(sigHash))
 	if err := sig.verifySignature(node.Public(), k); err == nil {
 		t.Error("verifySignature(node) succeeded with different signature")
 	}
@@ -284,7 +287,7 @@ func TestSigCredential(t *testing.T) {
 
 func TestSigSerializeUnserialize(t *testing.T) {
 	nodeKeyPub := []byte{1, 2, 3, 4}
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 	sig := NodeKeySignature{
 		SigKind: SigDirect,
@@ -297,7 +300,11 @@ func TestSigSerializeUnserialize(t *testing.T) {
 		},
 	}
 	sigHash := sig.SigHash()
-	sig.Signature = ed25519.Sign(priv, sigHash[:])
+	signature, err := priv.SignNKS(sigHash)
+	if err != nil {
+		t.Fatalf("SignNKS failed: %v", err)
+	}
+	sig.Signature = signature
 
 	var decoded NodeKeySignature
 	if err := decoded.Unserialize(sig.Serialize()); err != nil {
@@ -310,7 +317,7 @@ func TestSigSerializeUnserialize(t *testing.T) {
 
 func TestNodeKeySignatureRotationDetails(t *testing.T) {
 	// Trusted network lock key
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	k := Key{Kind: Key25519, Public: pub, Votes: 2}
 
 	// 'credential' key (the one being delegated to)
@@ -333,11 +340,11 @@ func TestNodeKeySignatureRotationDetails(t *testing.T) {
 			sigFn: func() NodeKeySignature {
 				s := NodeKeySignature{
 					SigKind: SigDirect,
-					KeyID:   pub,
+					KeyID:   pub.KeyID(),
 					Pubkey:  n1pub,
 				}
 				sigHash := s.SigHash()
-				s.Signature = ed25519.Sign(priv, sigHash[:])
+				s.Signature = must.Get(priv.SignNKS(sigHash))
 				return s
 			},
 			want: nil,
@@ -348,11 +355,11 @@ func TestNodeKeySignatureRotationDetails(t *testing.T) {
 			sigFn: func() NodeKeySignature {
 				nestedSig := NodeKeySignature{
 					SigKind:        SigCredential,
-					KeyID:          pub,
+					KeyID:          pub.KeyID(),
 					WrappingPubkey: cPub,
 				}
 				sigHash := nestedSig.SigHash()
-				nestedSig.Signature = ed25519.Sign(priv, sigHash[:])
+				nestedSig.Signature = must.Get(priv.SignNKS(sigHash))
 
 				sig := NodeKeySignature{
 					SigKind: SigRotation,
@@ -366,7 +373,7 @@ func TestNodeKeySignatureRotationDetails(t *testing.T) {
 			want: &RotationDetails{
 				InitialSig: &NodeKeySignature{
 					SigKind:        SigCredential,
-					KeyID:          pub,
+					KeyID:          pub.KeyID(),
 					WrappingPubkey: cPub,
 				},
 			},
@@ -378,11 +385,11 @@ func TestNodeKeySignatureRotationDetails(t *testing.T) {
 				nestedSig := NodeKeySignature{
 					SigKind:        SigDirect,
 					Pubkey:         n1pub,
-					KeyID:          pub,
+					KeyID:          pub.KeyID(),
 					WrappingPubkey: cPub,
 				}
 				sigHash := nestedSig.SigHash()
-				nestedSig.Signature = ed25519.Sign(priv, sigHash[:])
+				nestedSig.Signature = must.Get(priv.SignNKS(sigHash))
 
 				sig := NodeKeySignature{
 					SigKind: SigRotation,
@@ -397,7 +404,7 @@ func TestNodeKeySignatureRotationDetails(t *testing.T) {
 				InitialSig: &NodeKeySignature{
 					SigKind:        SigDirect,
 					Pubkey:         n1pub,
-					KeyID:          pub,
+					KeyID:          pub.KeyID(),
 					WrappingPubkey: cPub,
 				},
 				PrevNodeKeys: []key.NodePublic{n1.Public()},
@@ -410,11 +417,11 @@ func TestNodeKeySignatureRotationDetails(t *testing.T) {
 				initialSig := NodeKeySignature{
 					SigKind:        SigDirect,
 					Pubkey:         n1pub,
-					KeyID:          pub,
+					KeyID:          pub.KeyID(),
 					WrappingPubkey: cPub,
 				}
 				sigHash := initialSig.SigHash()
-				initialSig.Signature = ed25519.Sign(priv, sigHash[:])
+				initialSig.Signature = must.Get(priv.SignNKS(sigHash))
 
 				prevRotation := NodeKeySignature{
 					SigKind: SigRotation,
@@ -438,7 +445,7 @@ func TestNodeKeySignatureRotationDetails(t *testing.T) {
 				InitialSig: &NodeKeySignature{
 					SigKind:        SigDirect,
 					Pubkey:         n1pub,
-					KeyID:          pub,
+					KeyID:          pub.KeyID(),
 					WrappingPubkey: cPub,
 				},
 				PrevNodeKeys: []key.NodePublic{n2.Public(), n1.Public()},
@@ -449,7 +456,7 @@ func TestNodeKeySignatureRotationDetails(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.want != nil {
 				initialHash := tt.want.InitialSig.SigHash()
-				tt.want.InitialSig.Signature = ed25519.Sign(priv, initialHash[:])
+				tt.want.InitialSig.Signature = must.Get(priv.SignNKS(initialHash))
 			}
 
 			sig := tt.sigFn()
@@ -508,7 +515,7 @@ func TestDecodeWrappedAuthkey(t *testing.T) {
 
 func TestResignNKS(t *testing.T) {
 	// Tailnet Lock keypair of a signing node.
-	authPub, authPriv := testingKey25519(t, 1)
+	authPub, authPriv := testingNLKey(t)
 	authKey := Key{Kind: Key25519, Public: authPub, Votes: 2}
 
 	// Node's own tailnet lock key used to sign rotation signatures.
@@ -527,7 +534,7 @@ func TestResignNKS(t *testing.T) {
 		WrappingPubkey: tlPriv.Public().Verifier(),
 	}
 	sigHash := directSig.SigHash()
-	directSig.Signature = ed25519.Sign(authPriv, sigHash[:])
+	directSig.Signature = must.Get(authPriv.SignNKS(sigHash))
 	if err := directSig.verifySignature(origNode.Public(), authKey); err != nil {
 		t.Fatalf("verifySignature(origNode) failed: %v", err)
 	}

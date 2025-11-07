@@ -582,7 +582,7 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 	outKeys := make([]ipnstate.TKAKey, len(keys))
 	for i, k := range keys {
 		outKeys[i] = ipnstate.TKAKey{
-			Key:      key.NLPublicFromEd25519Unsafe(k.Public),
+			Key:      k.Public,
 			Metadata: k.Meta,
 			Votes:    k.Votes,
 		}

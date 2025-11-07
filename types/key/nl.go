@@ -6,10 +6,12 @@ package key
 import (
 	"crypto/ed25519"
 	"crypto/subtle"
+	"fmt"
 
 	"go4.org/mem"
 	"tailscale.com/types/structs"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/testenv"
 )
 
 const (
@@ -111,6 +113,23 @@ func (k NLPrivate) SignNKS(sigHash tkatype.NKSSigHash) ([]byte, error) {
 	return ed25519.Sign(ed25519.PrivateKey(k.k[:]), sigHash[:]), nil
 }
 
+// NLPrivateFromBytes converts a slice of bytes into an NLPrivate.
+//
+// This function should only be used in tests to construct deterministic values.
+func NLPrivateFromBytes(b ed25519.PrivateKey) NLPrivate {
+	if !testenv.InTest() {
+		panic("used NLPrivateFromBytes in non-test code")
+	}
+
+	if len(b) != ed25519.PrivateKeySize {
+		panic(fmt.Sprintf("incorrect length for bytes: got %d, want %d", len(b), ed25519.PrivateKeySize))
+	}
+
+	var out NLPrivate
+	copy(out.k[:], b)
+	return out
+}
+
 // NLPublic is the public portion of a a NLPrivate.
 type NLPublic struct {
 	k [ed25519.PublicKeySize]byte
@@ -124,6 +143,23 @@ type NLPublic struct {
 func NLPublicFromEd25519Unsafe(public ed25519.PublicKey) NLPublic {
 	var out NLPublic
 	copy(out.k[:], public)
+	return out
+}
+
+// NLPublicFromBytes converts a slice of bytes into an NLPublic.
+//
+// This function should only be used in tests to construct expected values.
+func NLPublicFromBytes(b []byte) NLPublic {
+	if !testenv.InTest() {
+		panic("used NLPublicFromBytes in non-test code")
+	}
+
+	if len(b) != ed25519.PublicKeySize {
+		panic(fmt.Sprintf("incorrect length for bytes: got %d, want %d", len(b), ed25519.PublicKeySize))
+	}
+
+	var out NLPublic
+	copy(out.k[:], b)
 	return out
 }
 
@@ -175,4 +211,11 @@ func (k NLPublic) Equal(other NLPublic) bool {
 // KeyID returns a tkatype.KeyID that can be used with a tka.Authority.
 func (k NLPublic) KeyID() tkatype.KeyID {
 	return k.k[:]
+}
+
+// Clone makes an independent copy of Key.
+func (k NLPublic) Clone() NLPublic {
+	return NLPublic{
+		k: [ed25519.PublicKeySize]byte(k.k[:]),
+	}
 }

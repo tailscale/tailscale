@@ -5,7 +5,6 @@ package tka
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"fmt"
 	"strconv"
 	"strings"
@@ -14,7 +13,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"tailscale.com/types/tkatype"
+	"tailscale.com/types/key"
+	"tailscale.com/util/must"
 )
 
 // chaintest_test.go implements test helpers for concisely describing
@@ -49,7 +49,7 @@ type testChain struct {
 	// Configured by options to NewTestchain()
 	Template    map[string]AUM
 	Key         map[string]*Key
-	KeyPrivs    map[string]ed25519.PrivateKey
+	KeyPrivs    map[string]key.NLPrivate
 	SignAllKeys []string
 }
 
@@ -85,7 +85,7 @@ func newTestchain(t *testing.T, input string, options ...testchainOpt) *testChai
 			Nodes:    map[string]*testchainNode{},
 			Template: map[string]AUM{},
 			Key:      map[string]*Key{},
-			KeyPrivs: map[string]ed25519.PrivateKey{},
+			KeyPrivs: map[string]key.NLPrivate{},
 		}
 	)
 
@@ -265,19 +265,19 @@ func (c *testChain) makeAUM(v *testchainNode) AUM {
 
 	sigHash := aum.SigHash()
 	for _, key := range c.SignAllKeys {
-		aum.Signatures = append(aum.Signatures, tkatype.Signature{
-			KeyID:     c.Key[key].MustID(),
-			Signature: ed25519.Sign(c.KeyPrivs[key], sigHash[:]),
-		})
+		aum.Signatures = append(
+			aum.Signatures,
+			must.Get(c.KeyPrivs[key].SignAUM(sigHash))...,
+		)
 	}
 
 	// If the aum was specified as being signed by some key, then
 	// sign it using that key.
 	if key := v.SignedWith; key != "" {
-		aum.Signatures = append(aum.Signatures, tkatype.Signature{
-			KeyID:     c.Key[key].MustID(),
-			Signature: ed25519.Sign(c.KeyPrivs[key], sigHash[:]),
-		})
+		aum.Signatures = append(
+			aum.Signatures,
+			must.Get(c.KeyPrivs[key].SignAUM(sigHash))...,
+		)
 	}
 
 	return aum
@@ -310,7 +310,7 @@ type testchainOpt struct {
 	Name        string
 	Template    *AUM
 	Key         *Key
-	Private     ed25519.PrivateKey
+	Private     key.NLPrivate
 	SignAllWith bool
 }
 
@@ -321,7 +321,7 @@ func optTemplate(name string, template AUM) testchainOpt {
 	}
 }
 
-func optKey(name string, key Key, priv ed25519.PrivateKey) testchainOpt {
+func optKey(name string, key Key, priv key.NLPrivate) testchainOpt {
 	return testchainOpt{
 		Name:    name,
 		Key:     &key,

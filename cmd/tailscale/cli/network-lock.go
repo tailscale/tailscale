@@ -426,7 +426,7 @@ func parseNLArgs(args []string, parseKeys, parseDisablements bool) (keys []tka.K
 
 		k := tka.Key{
 			Kind:   tka.Key25519,
-			Public: nlpk.Verifier(),
+			Public: nlpk,
 			Votes:  1,
 		}
 		if len(spl) > 1 {
@@ -756,7 +756,7 @@ func wrapAuthKey(ctx context.Context, keyStr string, status *ipnstate.Status) er
 	}
 	k := tka.Key{
 		Kind:   tka.Key25519,
-		Public: priv.Public().Verifier(),
+		Public: priv.Public(),
 		Votes:  1,
 		Meta:   m,
 	}

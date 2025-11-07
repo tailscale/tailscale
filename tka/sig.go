@@ -294,10 +294,7 @@ func (s *NodeKeySignature) verifySignature(nodeKey key.NodePublic, verificationK
 		}
 		switch verificationKey.Kind {
 		case Key25519:
-			if len(verificationKey.Public) != ed25519.PublicKeySize {
-				return fmt.Errorf("ed25519 key has wrong length: %d", len(verificationKey.Public))
-			}
-			if ed25519consensus.Verify(ed25519.PublicKey(verificationKey.Public), sigHash[:], s.Signature) {
+			if ed25519consensus.Verify(verificationKey.Public.Verifier(), sigHash[:], s.Signature) {
 				return nil
 			}
 			return errors.New("invalid signature")

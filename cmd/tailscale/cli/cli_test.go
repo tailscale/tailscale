@@ -26,6 +26,7 @@ import (
 	"tailscale.com/tka"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/deptest"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
@@ -1481,13 +1482,13 @@ func TestParseNLArgs(t *testing.T) {
 			name:      "key no votes",
 			input:     []string{"nlpub:" + strings.Repeat("00", 32)},
 			parseKeys: true,
-			wantKeys:  []tka.Key{{Kind: tka.Key25519, Votes: 1, Public: bytes.Repeat([]byte{0}, 32)}},
+			wantKeys:  []tka.Key{{Kind: tka.Key25519, Votes: 1, Public: key.NLPublicFromBytes(bytes.Repeat([]byte{0}, 32))}},
 		},
 		{
 			name:      "key with votes",
 			input:     []string{"nlpub:" + strings.Repeat("01", 32) + "?5"},
 			parseKeys: true,
-			wantKeys:  []tka.Key{{Kind: tka.Key25519, Votes: 5, Public: bytes.Repeat([]byte{1}, 32)}},
+			wantKeys:  []tka.Key{{Kind: tka.Key25519, Votes: 5, Public: key.NLPublicFromBytes(bytes.Repeat([]byte{1}, 32))}},
 		},
 		{
 			name:              "disablements",

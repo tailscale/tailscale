@@ -75,7 +75,9 @@ func TestForkResolutionHash(t *testing.T) {
 
 func TestForkResolutionSigWeight(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
-	key := Key{Kind: Key25519, Public: pub, Votes: 2}
+	nlPub := key.NLPublicFromBytes(pub)
+	nlPriv := key.NLPrivateFromBytes(priv)
+	key := Key{Kind: Key25519, Public: nlPub, Votes: 2}
 
 	c := newTestchain(t, `
         G1 -> L1
@@ -86,7 +88,7 @@ func TestForkResolutionSigWeight(t *testing.T) {
         L2.signedWith = key
     `,
 		optTemplate("addKey", AUM{MessageKind: AUMAddKey, Key: &key}),
-		optKey("key", key, priv))
+		optKey("key", key, nlPriv))
 
 	l1H := c.AUMHashes["L1"]
 	l2H := c.AUMHashes["L2"]
@@ -110,7 +112,8 @@ func TestForkResolutionSigWeight(t *testing.T) {
 
 func TestForkResolutionMessageType(t *testing.T) {
 	pub, _ := testingKey25519(t, 1)
-	key := Key{Kind: Key25519, Public: pub, Votes: 2}
+	nlPub := key.NLPublicFromBytes(pub)
+	key := Key{Kind: Key25519, Public: nlPub, Votes: 2}
 
 	c := newTestchain(t, `
         G1 -> L1
@@ -150,7 +153,7 @@ func TestForkResolutionMessageType(t *testing.T) {
 }
 
 func TestComputeStateAt(t *testing.T) {
-	pub, _ := testingKey25519(t, 1)
+	pub, _ := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
 	c := newTestchain(t, `
@@ -218,7 +221,8 @@ func fakeAUM(t *testing.T, template any, parent *AUMHash) (AUM, AUMHash) {
 
 func TestOpenAuthority(t *testing.T) {
 	pub, _ := testingKey25519(t, 1)
-	key := Key{Kind: Key25519, Public: pub, Votes: 2}
+	nlPub := key.NLPublicFromBytes(pub)
+	key := Key{Kind: Key25519, Public: nlPub, Votes: 2}
 
 	//        /- L1
 	// G1 - I1 - I2 - I3 -L2
@@ -296,7 +300,7 @@ func TestAuthorityHead(t *testing.T) {
 }
 
 func TestAuthorityValidDisablement(t *testing.T) {
-	pub, _ := testingKey25519(t, 1)
+	pub, _ := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 	c := newTestchain(t, `
         G1 -> L1
@@ -316,13 +320,13 @@ func TestAuthorityValidDisablement(t *testing.T) {
 }
 
 func TestCreateBootstrapAuthority(t *testing.T) {
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
 	a1, genesisAUM, err := Create(&Mem{}, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-	}, signer25519(priv))
+	}, priv)
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -347,7 +351,9 @@ func TestCreateBootstrapAuthority(t *testing.T) {
 
 func TestAuthorityInformNonLinear(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
-	key := Key{Kind: Key25519, Public: pub, Votes: 2}
+	nlPub := key.NLPublicFromBytes(pub)
+	nlPriv := key.NLPrivateFromBytes(priv)
+	key := Key{Kind: Key25519, Public: nlPub, Votes: 2}
 
 	c := newTestchain(t, `
         G1 -> L1
@@ -363,7 +369,7 @@ func TestAuthorityInformNonLinear(t *testing.T) {
 			Keys:               []Key{key},
 			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 		}}),
-		optKey("key", key, priv),
+		optKey("key", key, nlPriv),
 		optSignAllUsing("key"))
 
 	storage := &Mem{}
@@ -396,7 +402,7 @@ func TestAuthorityInformNonLinear(t *testing.T) {
 }
 
 func TestAuthorityInformLinear(t *testing.T) {
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
 	c := newTestchain(t, `
@@ -439,22 +445,21 @@ func TestAuthorityInformLinear(t *testing.T) {
 }
 
 func TestInteropWithNLKey(t *testing.T) {
-	priv1 := key.NewNLPrivate()
-	pub1 := priv1.Public()
-	pub2 := key.NewNLPrivate().Public()
-	pub3 := key.NewNLPrivate().Public()
+	pub1, priv1 := testingNLKey(t)
+	pub2, _ := testingNLKey(t)
+	pub3, _ := testingNLKey(t)
 
 	a, _, err := Create(&Mem{}, State{
 		Keys: []Key{
 			{
 				Kind:   Key25519,
 				Votes:  1,
-				Public: pub1.KeyID(),
+				Public: pub1,
 			},
 			{
 				Kind:   Key25519,
 				Votes:  1,
-				Public: pub2.KeyID(),
+				Public: pub2,
 			},
 		},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
@@ -476,7 +481,7 @@ func TestInteropWithNLKey(t *testing.T) {
 }
 
 func TestAuthorityCompact(t *testing.T) {
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
 	c := newTestchain(t, `
@@ -526,13 +531,13 @@ func TestAuthorityCompact(t *testing.T) {
 }
 
 func TestFindParentForRewrite(t *testing.T) {
-	pub, _ := testingKey25519(t, 1)
+	pub, _ := testingNLKey(t)
 	k1 := Key{Kind: Key25519, Public: pub, Votes: 1}
 
-	pub2, _ := testingKey25519(t, 2)
+	pub2, _ := testingNLKey(t)
 	k2 := Key{Kind: Key25519, Public: pub2, Votes: 1}
 	k2ID, _ := k2.ID()
-	pub3, _ := testingKey25519(t, 3)
+	pub3, _ := testingNLKey(t)
 	k3 := Key{Kind: Key25519, Public: pub3, Votes: 1}
 
 	c := newTestchain(t, `
@@ -597,12 +602,12 @@ func TestFindParentForRewrite(t *testing.T) {
 }
 
 func TestMakeRetroactiveRevocation(t *testing.T) {
-	pub, _ := testingKey25519(t, 1)
-	k1 := Key{Kind: Key25519, Public: pub, Votes: 1}
+	pub1, _ := testingNLKey(t)
+	k1 := Key{Kind: Key25519, Public: pub1, Votes: 1}
 
-	pub2, _ := testingKey25519(t, 2)
+	pub2, _ := testingNLKey(t)
 	k2 := Key{Kind: Key25519, Public: pub2, Votes: 1}
-	pub3, _ := testingKey25519(t, 3)
+	pub3, _ := testingNLKey(t)
 	k3 := Key{Kind: Key25519, Public: pub3, Votes: 1}
 
 	c := newTestchain(t, `

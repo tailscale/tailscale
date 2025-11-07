@@ -93,7 +93,7 @@ func TestTKAEnablementFlow(t *testing.T) {
 	// Make a fake TKA authority, getting a usable genesis AUM which
 	// our mock server can communicate.
 	nlPriv := key.NewNLPrivate()
-	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public(), Votes: 2}
 	a1, genesisAUM, err := tka.Create(&tka.Mem{}, tka.State{
 		Keys:               []tka.Key{key},
 		DisablementSecrets: [][]byte{bytes.Repeat([]byte{0xa5}, 32)},
@@ -200,7 +200,7 @@ func TestTKADisablementFlow(t *testing.T) {
 	// Make a fake TKA authority, to seed local state.
 	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
 	nlPriv := key.NewNLPrivate()
-	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public(), Votes: 2}
 
 	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, health.NewTracker(eventbustest.NewBus(t))))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
@@ -317,7 +317,7 @@ func TestTKADisablementFlow(t *testing.T) {
 
 func TestTKASync(t *testing.T) {
 	someKeyPriv := key.NewNLPrivate()
-	someKey := tka.Key{Kind: tka.Key25519, Public: someKeyPriv.Public().Verifier(), Votes: 1}
+	someKey := tka.Key{Kind: tka.Key25519, Public: someKeyPriv.Public(), Votes: 1}
 
 	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
 
@@ -403,7 +403,7 @@ func TestTKASync(t *testing.T) {
 			}).View(), ipn.NetworkProfile{}))
 
 			// Setup the tka authority on the control plane.
-			key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+			key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public(), Votes: 2}
 			controlStorage := &tka.Mem{}
 			controlAuthority, bootstrap, err := tka.Create(controlStorage, tka.State{
 				Keys:               []tka.Key{key, someKey},
@@ -555,7 +555,7 @@ func TestTKASync(t *testing.T) {
 
 func TestTKAFilterNetmap(t *testing.T) {
 	nlPriv := key.NewNLPrivate()
-	nlKey := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	nlKey := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public(), Votes: 2}
 	storage := &tka.Mem{}
 	authority, _, err := tka.Create(storage, tka.State{
 		Keys:               []tka.Key{nlKey},
@@ -721,7 +721,7 @@ func TestTKADisable(t *testing.T) {
 	temp := t.TempDir()
 	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
 	os.Mkdir(tkaPath, 0755)
-	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public(), Votes: 2}
 	chonk, err := tka.ChonkDir(tkaPath)
 	if err != nil {
 		t.Fatal(err)
@@ -811,7 +811,7 @@ func TestTKASign(t *testing.T) {
 
 	// Make a fake TKA authority, to seed local state.
 	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
-	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public(), Votes: 2}
 
 	temp := t.TempDir()
 	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
@@ -888,7 +888,7 @@ func TestTKAForceDisable(t *testing.T) {
 	// Make a fake TKA authority, to seed local state.
 	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
 	nlPriv := key.NewNLPrivate()
-	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public(), Votes: 2}
 
 	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, health.NewTracker(eventbustest.NewBus(t))))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
@@ -998,7 +998,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 
 	// Make a fake TKA authority, to seed local state.
 	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
-	tkaKey := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	tkaKey := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public(), Votes: 2}
 
 	temp := t.TempDir()
 	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
@@ -1131,9 +1131,9 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 
 	// Make a fake TKA authority, to seed local state.
 	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
-	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
-	cosignKey := tka.Key{Kind: tka.Key25519, Public: cosignPriv.Public().Verifier(), Votes: 2}
-	compromisedKey := tka.Key{Kind: tka.Key25519, Public: compromisedPriv.Public().Verifier(), Votes: 1}
+	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public(), Votes: 2}
+	cosignKey := tka.Key{Kind: tka.Key25519, Public: cosignPriv.Public(), Votes: 2}
+	compromisedKey := tka.Key{Kind: tka.Key25519, Public: compromisedPriv.Public(), Votes: 1}
 
 	temp := t.TempDir()
 	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))

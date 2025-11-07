@@ -4,9 +4,10 @@
 package tka
 
 import (
-	"crypto/ed25519"
 	"sort"
 	"testing"
+
+	"tailscale.com/types/key"
 )
 
 type scenarioNode struct {
@@ -21,7 +22,7 @@ type scenarioTest struct {
 	t *testing.T
 
 	defaultKey  *Key
-	defaultPriv ed25519.PrivateKey
+	defaultPriv key.NLPrivate
 
 	initial *testChain
 
@@ -145,7 +146,7 @@ func (s *scenarioTest) checkHaveConsensus(n1, n2 *scenarioNode) {
 // AUM are created for you under the template 'genesis' and key 'key'.
 func testScenario(t *testing.T, sharedChain string, sharedOptions ...testchainOpt) *scenarioTest {
 	t.Helper()
-	pub, priv := testingKey25519(t, 1)
+	pub, priv := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 1}
 	sharedOptions = append(sharedOptions,
 		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
@@ -224,7 +225,7 @@ func TestNormalPropagation(t *testing.T) {
 }
 
 func TestForkingPropagation(t *testing.T) {
-	pub, priv := testingKey25519(t, 2)
+	pub, priv := testingNLKey(t)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
 	addKey2 := AUM{MessageKind: AUMAddKey, Key: &key}
