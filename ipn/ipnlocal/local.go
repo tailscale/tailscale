@@ -1533,8 +1533,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		return
 	}
 	if st.Err != nil {
-		// The following do not depend on any data for which we need b locked.
-		unlock.UnlockEarly()
 		if errors.Is(st.Err, io.EOF) {
 			b.logf("[v1] Received error: EOF")
 			return
@@ -1543,7 +1541,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		var uerr controlclient.UserVisibleError
 		if errors.As(st.Err, &uerr) {
 			s := uerr.UserVisibleError()
-			b.send(ipn.Notify{ErrMessage: &s})
+			b.sendToLocked(ipn.Notify{ErrMessage: &s}, allClients)
 		}
 		return
 	}
@@ -1743,6 +1741,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			b.health.SetLocalLogConfigHealth(errors.New(msg))
 			// Connecting to this tailnet without logging is forbidden; boot us outta here.
 			b.mu.Lock()
+			defer b.mu.Unlock()
 			// Get the current prefs again, since we unlocked above.
 			prefs := b.pm.CurrentPrefs().AsStruct()
 			prefs.WantRunning = false
@@ -1754,8 +1753,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			}); err != nil {
 				b.logf("Failed to save new controlclient state: %v", err)
 			}
-			b.mu.Unlock()
-			b.send(ipn.Notify{ErrMessage: &msg, Prefs: &p})
+			b.sendToLocked(ipn.Notify{ErrMessage: &msg, Prefs: &p}, allClients)
 			return
 		}
 		if oldNetMap != nil {
@@ -4795,8 +4793,8 @@ func (b *LocalBackend) setPortlistServices(sl []tailcfg.Service) {
 // TODO(danderson): we shouldn't be mangling hostinfo here after
 // painstakingly constructing it in twelvety other places.
 func (b *LocalBackend) doSetHostinfoFilterServices() {
-	unlock := b.lockAndGetUnlock()
-	defer unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	cc := b.cc
 	if cc == nil {
@@ -4820,8 +4818,6 @@ func (b *LocalBackend) doSetHostinfoFilterServices() {
 	if f, ok := b.extHost.Hooks().ShouldUploadServices.GetOk(); !ok || !f() {
 		hi.Services = []tailcfg.Service{}
 	}
-
-	unlock.UnlockEarly()
 
 	// Don't mutate hi.Service's underlying array. Append to
 	// the slice with no free capacity.
