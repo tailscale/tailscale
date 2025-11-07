@@ -393,14 +393,29 @@ func (s *Server) addrDiscoveryLoop() {
 		if err != nil {
 			return nil, err
 		}
-		if rep.GlobalV4.IsValid() {
-			addrPorts.Add(rep.GlobalV4)
+		// Add STUN-discovered endpoints with their observed ports.
+		v4Addrs, v6Addrs := rep.GetGlobalAddrs()
+		for _, addr := range v4Addrs {
+			if addr.IsValid() {
+				addrPorts.Add(addr)
+			}
 		}
-		if rep.GlobalV6.IsValid() {
-			addrPorts.Add(rep.GlobalV6)
+		for _, addr := range v6Addrs {
+			if addr.IsValid() {
+				addrPorts.Add(addr)
+			}
 		}
-		// TODO(jwhited): consider logging if rep.MappingVariesByDestIP as
-		//  that's a hint we are not well-positioned to operate as a UDP relay.
+
+		if len(v4Addrs) >= 1 && v4Addrs[0].IsValid() {
+			// If they're behind a hard NAT and are using a fixed
+			// port locally, assume they might've added a static
+			// port mapping on their router to the same explicit
+			// port that the relay is running with. Worst case
+			// it's an invalid candidate mapping.
+			if rep.MappingVariesByDestIP.EqualBool(true) && s.uc4Port != 0 {
+				addrPorts.Add(netip.AddrPortFrom(v4Addrs[0].Addr(), s.uc4Port))
+			}
+		}
 		return addrPorts.Slice(), nil
 	}
 
