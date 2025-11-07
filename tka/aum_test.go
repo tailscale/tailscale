@@ -5,6 +5,8 @@ package tka
 
 import (
 	"bytes"
+	"encoding/base64"
+	"fmt"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -151,6 +153,80 @@ func TestSerialization(t *testing.T) {
 			}
 			if diff := cmp.Diff(tc.AUM, decodedAUM); diff != "" {
 				t.Errorf("unmarshalled version differs (-want, +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func fromBase64(s string) []byte {
+	data, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		panic(fmt.Sprintf("base64 decode failed: %v", err))
+	}
+	return data
+}
+
+// This test verifies that we can read AUMs which were serialized with
+// older versions of our code.
+func TestDeserializeExistingAUMs(t *testing.T) {
+	for _, tt := range []struct {
+		Name string
+		Data []byte
+		Want AUM
+	}{
+		{
+			// This is an AUM which was created in a test tailnet, and encoded
+			// on 2025-11-07 with commit d4c5b27.
+			Name: "genesis-aum-2025-11-07",
+			Data: fromBase64("pAEFAvYFpQH2AopYII0sLaLSEZU3W5DT1dG2WYnzjCBr4tXtVbCT2LvA9LS6WCAQhwVGDiUGRiu3P63gucZ/8otjt2DXyk+OBjbh5iWx1Fgg5VU4oRQiMoq5qK00McfpwtmjcheVammLCRwzdp2Zje9YIHDoOXe4ogPSy7lfA/veyPCKM6iZe3PTgzhQZ4W5Sh7wWCBYQtiQ6NcRlyVARJxgAj1BbbvdJQ0t4m+vHqU1J02oDlgg2sksJA+COfsBkrohwHBWlbKrpS8Mvigpl+enuHw9rIJYIB/+CUBBBLUz0KeHu7NKrg5ZEhjjPUWhNcf9QTNHjuNWWCCJuxqPZ6/IASPTmAERaoKnBNH/D+zY4p4TUGHR4fACjFggMtDAipPutgcxKnU9Tg2663gP3KlTQfztV3hBwiePZdRYIGYeD2erBkRouSL20lOnWHHlRq5kmNfN6xFb2CTaPjnXA4KjAQECAQNYIADftG3yaitV/YMoKSBP45zgyeodClumN9ZaeQg/DmCEowEBAgEDWCBRKbmWSzOyHXbHJuYn8s7dmMPDzxmIjgBoA80cBYgItAQbEWOrxfqJzIkFG/5uNUp0s/ScF4GiAVggAN+0bfJqK1X9gygpIE/jnODJ6h0KW6Y31lp5CD8OYIQCWEAENvzblKV2qx6PED5YdGy8kWa7nxEnaeuMmS5Wkx0n7CXs0XxD5f2NIE+pSv9cOsNkfYNndQkYD7ne33hQOsQM"),
+			Want: AUM{
+				MessageKind: AUMCheckpoint,
+				State: &State{
+					DisablementSecrets: [][]byte{
+						fromBase64("jSwtotIRlTdbkNPV0bZZifOMIGvi1e1VsJPYu8D0tLo="),
+						fromBase64("EIcFRg4lBkYrtz+t4LnGf/KLY7dg18pPjgY24eYlsdQ="),
+						fromBase64("5VU4oRQiMoq5qK00McfpwtmjcheVammLCRwzdp2Zje8="),
+						fromBase64("cOg5d7iiA9LLuV8D+97I8IozqJl7c9ODOFBnhblKHvA="),
+						fromBase64("WELYkOjXEZclQEScYAI9QW273SUNLeJvrx6lNSdNqA4="),
+						fromBase64("2sksJA+COfsBkrohwHBWlbKrpS8Mvigpl+enuHw9rII="),
+						fromBase64("H/4JQEEEtTPQp4e7s0quDlkSGOM9RaE1x/1BM0eO41Y="),
+						fromBase64("ibsaj2evyAEj05gBEWqCpwTR/w/s2OKeE1Bh0eHwAow="),
+						fromBase64("MtDAipPutgcxKnU9Tg2663gP3KlTQfztV3hBwiePZdQ="),
+						fromBase64("Zh4PZ6sGRGi5IvbSU6dYceVGrmSY183rEVvYJNo+Odc="),
+					},
+					Keys: []Key{
+						{
+							Kind:   Key25519,
+							Votes:  1,
+							Public: fromBase64("AN+0bfJqK1X9gygpIE/jnODJ6h0KW6Y31lp5CD8OYIQ="),
+						},
+						{
+							Kind:   Key25519,
+							Votes:  1,
+							Public: fromBase64("USm5lkszsh12xybmJ/LO3ZjDw88ZiI4AaAPNHAWICLQ="),
+						},
+					},
+					StateID1: 1253033988139371657,
+					StateID2: 18333649726973670556,
+				},
+				Signatures: []tkatype.Signature{
+					{
+						KeyID:     fromBase64("AN+0bfJqK1X9gygpIE/jnODJ6h0KW6Y31lp5CD8OYIQ="),
+						Signature: fromBase64("BDb825SldqsejxA+WHRsvJFmu58RJ2nrjJkuVpMdJ+wl7NF8Q+X9jSBPqUr/XDrDZH2DZ3UJGA+53t94UDrEDA=="),
+					},
+				},
+			},
+		},
+	} {
+		t.Run(tt.Name, func(t *testing.T) {
+			var got AUM
+
+			if err := got.Unserialize(tt.Data); err != nil {
+				t.Fatalf("Unserialize: %v", err)
+			}
+
+			if diff := cmp.Diff(got, tt.Want); diff != "" {
+				t.Fatalf("wrong AUM (-got, +want):\n%s", diff)
 			}
 		})
 	}
