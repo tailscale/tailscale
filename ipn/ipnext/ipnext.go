@@ -323,7 +323,8 @@ type ProfileStateChangeCallback func(_ ipn.LoginProfileView, _ ipn.PrefsView, sa
 // [ProfileStateChangeCallback]s are called first.
 //
 // It returns a function to be called when the cc is being shut down,
-// or nil if no cleanup is needed.
+// or nil if no cleanup is needed. That cleanup function should not call
+// back into LocalBackend, which may be locked during shutdown.
 type NewControlClientCallback func(controlclient.Client, ipn.LoginProfileView) (cleanup func())
 
 // Hooks is a collection of hooks that extensions can add to (non-concurrently)

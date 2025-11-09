@@ -47,6 +47,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
+	"tailscale.com/util/backoff"
 	"tailscale.com/util/checkchange"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
@@ -922,6 +923,32 @@ func hasOverlap(aips, rips views.Slice[netip.Prefix]) bool {
 		}
 	}
 	return false
+}
+
+// ResetAndStop resets the engine to a clean state (like calling Reconfig
+// with all pointers to zero values) and waits for it to be fully stopped,
+// with no live peers or DERPs.
+//
+// Unlike Reconfig, it does not return ErrNoChanges.
+//
+// If the engine stops, returns the status. NB that this status will not be sent
+// to the registered status callback, it is on the caller to ensure this status
+// is handled appropriately.
+func (e *userspaceEngine) ResetAndStop() (*Status, error) {
+	if err := e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{}); err != nil && !errors.Is(err, ErrNoChanges) {
+		return nil, err
+	}
+	bo := backoff.NewBackoff("UserspaceEngineResetAndStop", e.logf, 1*time.Second)
+	for {
+		st, err := e.getStatus()
+		if err != nil {
+			return nil, err
+		}
+		if len(st.Peers) == 0 && st.DERPs == 0 {
+			return st, nil
+		}
+		bo.BackOff(context.Background(), fmt.Errorf("waiting for engine to stop: peers=%d derps=%d", len(st.Peers), st.DERPs))
+	}
 }
 
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config) error {

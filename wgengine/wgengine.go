@@ -69,6 +69,13 @@ type Engine interface {
 	// The returned error is ErrNoChanges if no changes were made.
 	Reconfig(*wgcfg.Config, *router.Config, *dns.Config) error
 
+	// ResetAndStop resets the engine to a clean state (like calling Reconfig
+	// with all pointers to zero values) and waits for it to be fully stopped,
+	// with no live peers or DERPs.
+	//
+	// Unlike Reconfig, it does not return ErrNoChanges.
+	ResetAndStop() (*Status, error)
+
 	// PeerForIP returns the node to which the provided IP routes,
 	// if any. If none is found, (nil, false) is returned.
 	PeerForIP(netip.Addr) (_ PeerForIP, ok bool)

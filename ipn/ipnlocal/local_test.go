@@ -1503,15 +1503,6 @@ func wantExitNodeIDNotify(want tailcfg.StableNodeID) wantedNotification {
 	}
 }
 
-func wantStateNotify(want ipn.State) wantedNotification {
-	return wantedNotification{
-		name: "State=" + want.String(),
-		cond: func(_ testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
-			return n.State != nil && *n.State == want
-		},
-	}
-}
-
 func TestInternalAndExternalInterfaces(t *testing.T) {
 	type interfacePrefix struct {
 		i   netmon.Interface
@@ -4318,9 +4309,9 @@ func (b *LocalBackend) SetPrefsForTest(newp *ipn.Prefs) {
 	if newp == nil {
 		panic("SetPrefsForTest got nil prefs")
 	}
-	unlock := b.lockAndGetUnlock()
-	defer unlock()
-	b.setPrefsLockedOnEntry(newp, unlock)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.setPrefsLocked(newp)
 }
 
 type peerOptFunc func(*tailcfg.Node)
@@ -5808,12 +5799,12 @@ func TestNotificationTargetMatch(t *testing.T) {
 
 type newTestControlFn func(tb testing.TB, opts controlclient.Options) controlclient.Client
 
-func newLocalBackendWithTestControl(t *testing.T, enableLogging bool, newControl newTestControlFn) *LocalBackend {
+func newLocalBackendWithTestControl(t testing.TB, enableLogging bool, newControl newTestControlFn) *LocalBackend {
 	bus := eventbustest.NewBus(t)
 	return newLocalBackendWithSysAndTestControl(t, enableLogging, tsd.NewSystemWithBus(bus), newControl)
 }
 
-func newLocalBackendWithSysAndTestControl(t *testing.T, enableLogging bool, sys *tsd.System, newControl newTestControlFn) *LocalBackend {
+func newLocalBackendWithSysAndTestControl(t testing.TB, enableLogging bool, sys *tsd.System, newControl newTestControlFn) *LocalBackend {
 	logf := logger.Discard
 	if enableLogging {
 		logf = tstest.WhileTestRunningLogger(t)

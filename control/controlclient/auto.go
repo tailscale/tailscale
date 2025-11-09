@@ -615,6 +615,13 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 	// does its thing, which may result in a call back into the client.
 	metricQueued.Add(1)
 	c.observerQueue.Add(func() {
+		c.mu.Lock()
+		closed := c.closed
+		c.mu.Unlock()
+		if closed {
+			return
+		}
+
 		if canSkipStatus(newSt, c.lastStatus.Load()) {
 			metricSkippable.Add(1)
 			if !c.direct.controlKnobs.DisableSkipStatusQueue.Load() {
