@@ -741,10 +741,6 @@ func (v *NetInfoView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 // vary based on the destination IP.
 func (v NetInfoView) MappingVariesByDestIP() opt.Bool { return v.ж.MappingVariesByDestIP }
 
-// HairPinning is their router does hairpinning.
-// It reports true even if there's no NAT involved.
-func (v NetInfoView) HairPinning() opt.Bool { return v.ж.HairPinning }
-
 // WorkingIPv6 is whether the host has IPv6 internet connectivity.
 func (v NetInfoView) WorkingIPv6() opt.Bool { return v.ж.WorkingIPv6 }
 
@@ -809,7 +805,6 @@ func (v NetInfoView) String() string       { return v.ж.String() }
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _NetInfoViewNeedsRegeneration = NetInfo(struct {
 	MappingVariesByDestIP opt.Bool
-	HairPinning           opt.Bool
 	WorkingIPv6           opt.Bool
 	OSHasIPv6             opt.Bool
 	WorkingUDP            opt.Bool

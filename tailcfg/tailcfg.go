@@ -1018,10 +1018,6 @@ type NetInfo struct {
 	// vary based on the destination IP.
 	MappingVariesByDestIP opt.Bool
 
-	// HairPinning is their router does hairpinning.
-	// It reports true even if there's no NAT involved.
-	HairPinning opt.Bool
-
 	// WorkingIPv6 is whether the host has IPv6 internet connectivity.
 	WorkingIPv6 opt.Bool
 
@@ -1089,8 +1085,8 @@ func (ni *NetInfo) String() string {
 	if ni == nil {
 		return "NetInfo(nil)"
 	}
-	return fmt.Sprintf("NetInfo{varies=%v hairpin=%v ipv6=%v ipv6os=%v udp=%v icmpv4=%v derp=#%v portmap=%v link=%q firewallmode=%q}",
-		ni.MappingVariesByDestIP, ni.HairPinning, ni.WorkingIPv6,
+	return fmt.Sprintf("NetInfo{varies=%v ipv6=%v ipv6os=%v udp=%v icmpv4=%v derp=#%v portmap=%v link=%q firewallmode=%q}",
+		ni.MappingVariesByDestIP, ni.WorkingIPv6,
 		ni.OSHasIPv6, ni.WorkingUDP, ni.WorkingICMPv4,
 		ni.PreferredDERP, ni.portMapSummary(), ni.LinkType, ni.FirewallMode)
 }
@@ -1133,7 +1129,6 @@ func (ni *NetInfo) BasicallyEqual(ni2 *NetInfo) bool {
 		return true
 	}
 	return ni.MappingVariesByDestIP == ni2.MappingVariesByDestIP &&
-		ni.HairPinning == ni2.HairPinning &&
 		ni.WorkingIPv6 == ni2.WorkingIPv6 &&
 		ni.OSHasIPv6 == ni2.OSHasIPv6 &&
 		ni.WorkingUDP == ni2.WorkingUDP &&

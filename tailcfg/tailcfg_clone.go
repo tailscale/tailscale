@@ -207,7 +207,6 @@ func (src *NetInfo) Clone() *NetInfo {
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _NetInfoCloneNeedsRegeneration = NetInfo(struct {
 	MappingVariesByDestIP opt.Bool
-	HairPinning           opt.Bool
 	WorkingIPv6           opt.Bool
 	OSHasIPv6             opt.Bool
 	WorkingUDP            opt.Bool

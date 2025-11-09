@@ -607,7 +607,6 @@ func TestNodeEqual(t *testing.T) {
 func TestNetInfoFields(t *testing.T) {
 	handled := []string{
 		"MappingVariesByDestIP",
-		"HairPinning",
 		"WorkingIPv6",
 		"OSHasIPv6",
 		"WorkingUDP",
