@@ -23,10 +23,17 @@ var HookSystemdStatus Hook[func(format string, args ...any)]
 // It does nothing on non-Linux systems or if the binary was built without
 // the sdnotify feature.
 func SystemdStatus(format string, args ...any) {
-	if runtime.GOOS != "linux" || !buildfeatures.HasSDNotify {
+	if !CanSystemdStatus { // mid-stack inlining DCE
 		return
 	}
 	if f, ok := HookSystemdStatus.GetOk(); ok {
 		f(format, args...)
 	}
 }
+
+// CanSystemdStatus reports whether the current build has systemd notifications
+// linked in.
+//
+// It's effectively the same as HookSystemdStatus.IsSet(), but a constant for
+// dead code elimination reasons.
+const CanSystemdStatus = runtime.GOOS == "linux" && buildfeatures.HasSDNotify

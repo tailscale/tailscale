@@ -5629,12 +5629,14 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 		// Needed so that UpdateEndpoints can run
 		b.e.RequestStatus()
 	case ipn.Running:
-		var addrStrs []string
-		addrs := netMap.GetAddresses()
-		for _, p := range addrs.All() {
-			addrStrs = append(addrStrs, p.Addr().String())
+		if feature.CanSystemdStatus {
+			var addrStrs []string
+			addrs := netMap.GetAddresses()
+			for _, p := range addrs.All() {
+				addrStrs = append(addrStrs, p.Addr().String())
+			}
+			feature.SystemdStatus("Connected; %s; %s", activeLogin, strings.Join(addrStrs, " "))
 		}
-		feature.SystemdStatus("Connected; %s; %s", activeLogin, strings.Join(addrStrs, " "))
 	default:
 		b.logf("[unexpected] unknown newState %#v", newState)
 	}
