@@ -274,33 +274,56 @@ func TestDialBlocks(t *testing.T) {
 	defer c.Close()
 }
 
+// TestConn tests basic TCP connections between two tsnet Servers, s1 and s2:
+//
+//   - s1, a subnet router, first listens on its TCP :8081.
+//   - s2 can connect to s1:8081
+//   - s2 cannot connect to s1:8082 (no listener)
+//   - s2 can dial through the subnet router functionality (getting a synthetic RST
+//     that we verify we generated & saw)
 func TestConn(t *testing.T) {
-	if runtime.GOOS == "darwin" {
-		t.Skip("slow on macOS: https://github.com/tailscale/tailscale/issues/17805")
-	}
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	controlURL, c := startControl(t)
 	s1, s1ip, s1PubKey := startServer(t, ctx, controlURL, "s1")
-	s2, _, _ := startServer(t, ctx, controlURL, "s2")
 
-	s1.lb.EditPrefs(&ipn.MaskedPrefs{
+	// Track whether we saw an attempted dial to 192.0.2.1:8081.
+	var saw192DocNetDial atomic.Bool
+	s1.RegisterFallbackTCPHandler(func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
+		t.Logf("s1: fallback TCP handler called for %v -> %v", src, dst)
+		if dst.String() == "192.0.2.1:8081" {
+			saw192DocNetDial.Store(true)
+		}
+		return nil, true // nil handler but intercept=true means to send RST
+	})
+
+	lc1 := must.Get(s1.LocalClient())
+
+	must.Get(lc1.EditPrefs(ctx, &ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			AdvertiseRoutes: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
 		},
 		AdvertiseRoutesSet: true,
-	})
+	}))
 	c.SetSubnetRoutes(s1PubKey, []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
 
-	lc2, err := s2.LocalClient()
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Start s2 after s1 is fully set up, including advertising its routes,
+	// otherwise the test is flaky if the test starts dialing through s2 before
+	// our test control server has told s2 about s1's routes.
+	s2, _, _ := startServer(t, ctx, controlURL, "s2")
+	lc2 := must.Get(s2.LocalClient())
+
+	must.Get(lc2.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			RouteAll: true,
+		},
+		RouteAllSet: true,
+	}))
 
 	// ping to make sure the connection is up.
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingTSMP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,12 +336,26 @@ func TestConn(t *testing.T) {
 	}
 	defer ln.Close()
 
-	w, err := s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip))
-	if err != nil {
-		t.Fatal(err)
-	}
+	s1Conns := make(chan net.Conn)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				t.Errorf("s1.Accept: %v", err)
+				return
+			}
+			select {
+			case s1Conns <- c:
+			case <-ctx.Done():
+				c.Close()
+			}
+		}
+	}()
 
-	r, err := ln.Accept()
+	w, err := s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,27 +365,50 @@ func TestConn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := make([]byte, len(want))
-	if _, err := io.ReadAtLeast(r, got, len(got)); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("got: %q", got)
-	if string(got) != want {
-		t.Errorf("got %q, want %q", got, want)
+	select {
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for connection")
+	case r := <-s1Conns:
+		got := make([]byte, len(want))
+		_, err := io.ReadAtLeast(r, got, len(got))
+		r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("got: %q", got)
+		if string(got) != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
 	}
 
+	// Dial a non-existent port on s1 and expect it to fail.
 	_, err = s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8082", s1ip)) // some random port
 	if err == nil {
 		t.Fatalf("unexpected success; should have seen a connection refused error")
 	}
+	t.Logf("got expected failure: %v", err)
 
-	// s1 is a subnet router for TEST-NET-1 (192.0.2.0/24). Lets dial to that
-	// subnet from s2 to ensure a listener without an IP address (i.e. ":8081")
-	// only matches destination IPs corresponding to the node's IP, and not
-	// to any random IP a subnet is routing.
-	_, err = s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", "192.0.2.1"))
+	// s1 is a subnet router for TEST-NET-1 (192.0.2.0/24). Let's dial to that
+	// subnet from s2 to ensure a listener without an IP address (i.e. our
+	// ":8081" listen above) only matches destination IPs corresponding to the
+	// s1 node's IP addresses, and not to any random IP of a subnet it's routing.
+	//
+	// The RegisterFallbackTCPHandler on s1 above handles sending a RST when the
+	// TCP SYN arrives from s2. But we bound it to 5 seconds lest a regression
+	// like tailscale/tailscale#17805 recur.
+	s2dialer := s2.Sys().Dialer.Get()
+	s2dialer.SetSystemDialerForTest(func(ctx context.Context, netw, addr string) (net.Conn, error) {
+		t.Logf("s2: unexpected system dial called for %s %s", netw, addr)
+		return nil, fmt.Errorf("system dialer called unexpectedly for %s %s", netw, addr)
+	})
+	docCtx, docCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer docCancel()
+	_, err = s2.Dial(docCtx, "tcp", "192.0.2.1:8081")
 	if err == nil {
 		t.Fatalf("unexpected success; should have seen a connection refused error")
+	}
+	if !saw192DocNetDial.Load() {
+		t.Errorf("expected s1's fallback TCP handler to have been called for 192.0.2.1:8081")
 	}
 }
 
