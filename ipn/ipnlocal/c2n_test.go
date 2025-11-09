@@ -324,7 +324,6 @@ func TestRedactNetmapPrivateKeys(t *testing.T) {
 		f(tailcfg.Location{}, "Priority"):                  false,
 		f(tailcfg.NetInfo{}, "DERPLatency"):                false,
 		f(tailcfg.NetInfo{}, "FirewallMode"):               false,
-		f(tailcfg.NetInfo{}, "HairPinning"):                false,
 		f(tailcfg.NetInfo{}, "HavePortMap"):                false,
 		f(tailcfg.NetInfo{}, "LinkType"):                   false,
 		f(tailcfg.NetInfo{}, "MappingVariesByDestIP"):      false,
