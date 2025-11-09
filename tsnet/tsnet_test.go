@@ -275,6 +275,9 @@ func TestDialBlocks(t *testing.T) {
 }
 
 func TestConn(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("slow on macOS: https://github.com/tailscale/tailscale/issues/17805")
+	}
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
