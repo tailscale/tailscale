@@ -391,6 +391,10 @@ func computeActiveChain(storage Chonk, lastKnownOldest *AUMHash, maxIter int) (c
 		return chain{}, fmt.Errorf("computing candidates: %v", err)
 	}
 
+	if len(chains) == 0 {
+		return chain{}, errors.New("no chain candidates in AUM storage")
+	}
+
 	// Find the right ancestor.
 	oldestHash, err := computeActiveAncestor(chains)
 	if err != nil {
