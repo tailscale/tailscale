@@ -7,10 +7,12 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"runtime"
 	"sync"
 	"time"
 
 	"tailscale.com/types/logger"
+	"tailscale.com/util/cibuild"
 )
 
 type DeliveredEvent struct {
@@ -329,6 +331,11 @@ func (s *SubscriberFunc[T]) dispatch(ctx context.Context, vals *queue[DeliveredE
 			select {
 			case <-s.slow.C:
 				s.logf("giving up on subscriber for %T after %v at close", t, time.Since(start))
+				if cibuild.On() {
+					all := make([]byte, 2<<20)
+					n := runtime.Stack(all, true)
+					s.logf("goroutine stacks:\n%s", all[:n])
+				}
 			case <-callDone:
 			}
 			return false
