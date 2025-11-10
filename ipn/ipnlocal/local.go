@@ -10,7 +10,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -5487,20 +5486,9 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	}
 	hi.SSH_HostKeys = sshHostKeys
 
-	hi.ServicesHash = b.vipServiceHash(b.vipServicesFromPrefsLocked(prefs))
-
-	// The Hostinfo.IngressEnabled field is used to communicate to control whether
-	// the node has funnel enabled.
-	hi.IngressEnabled = b.hasIngressEnabledLocked()
-	// The Hostinfo.WantIngress field tells control whether the user intends
-	// to use funnel with this node even though it is not currently enabled.
-	// This is an optimization to control- Funnel requires creation of DNS
-	// records and because DNS propagation can take time, we want to ensure
-	// that the records exist for any node that intends to use funnel even
-	// if it's not enabled. If hi.IngressEnabled is true, control knows that
-	// DNS records are needed, so we can save bandwidth and not send
-	// WireIngress.
-	hi.WireIngress = b.shouldWireInactiveIngressLocked()
+	for _, f := range hookMaybeMutateHostinfoLocked {
+		f(b, hi, prefs)
+	}
 
 	if buildfeatures.HasAppConnectors {
 		hi.AppConnector.Set(prefs.AppConnector().Advertise)
@@ -6284,36 +6272,34 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 	}
 
 	// Update funnel and service hash info in hostinfo and kick off control update if needed.
-	b.updateIngressAndServiceHashLocked(prefs)
+	b.maybeSentHostinfoIfChangedLocked(prefs)
 	b.setTCPPortsIntercepted(handlePorts)
 }
 
-// updateIngressAndServiceHashLocked updates the hostinfo.ServicesHash, hostinfo.WireIngress and
+// hookMaybeMutateHostinfoLocked is a hook that allows conditional features
+// to mutate the provided hostinfo before it is sent to control.
+//
+// The hook function should return true if it mutated the hostinfo.
+//
+// The LocalBackend's mutex is held while calling.
+var hookMaybeMutateHostinfoLocked feature.Hooks[func(*LocalBackend, *tailcfg.Hostinfo, ipn.PrefsView) bool]
+
+// maybeSentHostinfoIfChangedLocked updates the hostinfo.ServicesHash, hostinfo.WireIngress and
 // hostinfo.IngressEnabled fields and kicks off a Hostinfo update if the values have changed.
 //
 // b.mu must be held.
-func (b *LocalBackend) updateIngressAndServiceHashLocked(prefs ipn.PrefsView) {
+func (b *LocalBackend) maybeSentHostinfoIfChangedLocked(prefs ipn.PrefsView) {
 	if b.hostinfo == nil {
 		return
 	}
-	hostInfoChanged := false
-	if ie := b.hasIngressEnabledLocked(); b.hostinfo.IngressEnabled != ie {
-		b.logf("Hostinfo.IngressEnabled changed to %v", ie)
-		b.hostinfo.IngressEnabled = ie
-		hostInfoChanged = true
-	}
-	if wire := b.shouldWireInactiveIngressLocked(); b.hostinfo.WireIngress != wire {
-		b.logf("Hostinfo.WireIngress changed to %v", wire)
-		b.hostinfo.WireIngress = wire
-		hostInfoChanged = true
-	}
-	latestHash := b.vipServiceHash(b.vipServicesFromPrefsLocked(prefs))
-	if b.hostinfo.ServicesHash != latestHash {
-		b.hostinfo.ServicesHash = latestHash
-		hostInfoChanged = true
+	changed := false
+	for _, f := range hookMaybeMutateHostinfoLocked {
+		if f(b, b.hostinfo, prefs) {
+			changed = true
+		}
 	}
 	// Kick off a Hostinfo update to control if ingress status has changed.
-	if hostInfoChanged {
+	if changed {
 		b.goTracker.Go(b.doSetHostinfoFilterServices)
 	}
 }
@@ -7705,19 +7691,6 @@ func maybeUsernameOf(actor ipnauth.Actor) string {
 		username, _ = actor.Username()
 	}
 	return username
-}
-
-func (b *LocalBackend) vipServiceHash(services []*tailcfg.VIPService) string {
-	if len(services) == 0 {
-		return ""
-	}
-	buf, err := json.Marshal(services)
-	if err != nil {
-		b.logf("vipServiceHashLocked: %v", err)
-		return ""
-	}
-	hash := sha256.Sum256(buf)
-	return hex.EncodeToString(hash[:])
 }
 
 var (
