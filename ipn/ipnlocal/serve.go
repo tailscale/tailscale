@@ -59,6 +59,9 @@ func init() {
 		b.setVIPServicesTCPPortsInterceptedLocked(nil)
 	})
 
+	hookMaybeMutateHostinfoLocked.Add(maybeUpdateHostinfoServicesHashLocked)
+	hookMaybeMutateHostinfoLocked.Add(maybeUpdateHostinfoFunnelLocked)
+
 	RegisterC2N("GET /vip-services", handleC2NVIPServicesGet)
 }
 
@@ -1227,7 +1230,7 @@ func handleC2NVIPServicesGet(b *LocalBackend, w http.ResponseWriter, r *http.Req
 	b.logf("c2n: GET /vip-services received")
 	var res tailcfg.C2NVIPServicesResponse
 	res.VIPServices = b.VIPServices()
-	res.ServicesHash = b.vipServiceHash(res.VIPServices)
+	res.ServicesHash = vipServiceHash(b.logf, res.VIPServices)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
@@ -1442,4 +1445,52 @@ func (b *LocalBackend) setVIPServicesTCPPortsInterceptedLocked(svcPorts map[tail
 	}
 
 	b.shouldInterceptVIPServicesTCPPortAtomic.Store(generateInterceptVIPServicesTCPPortFunc(svcAddrPorts))
+}
+
+func maybeUpdateHostinfoServicesHashLocked(b *LocalBackend, hi *tailcfg.Hostinfo, prefs ipn.PrefsView) bool {
+	latestHash := vipServiceHash(b.logf, b.vipServicesFromPrefsLocked(prefs))
+	if hi.ServicesHash != latestHash {
+		hi.ServicesHash = latestHash
+		return true
+	}
+	return false
+}
+
+func maybeUpdateHostinfoFunnelLocked(b *LocalBackend, hi *tailcfg.Hostinfo, prefs ipn.PrefsView) (changed bool) {
+	// The Hostinfo.IngressEnabled field is used to communicate to control whether
+	// the node has funnel enabled.
+	if ie := b.hasIngressEnabledLocked(); hi.IngressEnabled != ie {
+		b.logf("Hostinfo.IngressEnabled changed to %v", ie)
+		hi.IngressEnabled = ie
+		changed = true
+	}
+	// The Hostinfo.WireIngress field tells control whether the user intends
+	// to use funnel with this node even though it is not currently enabled.
+	// This is an optimization to control- Funnel requires creation of DNS
+	// records and because DNS propagation can take time, we want to ensure
+	// that the records exist for any node that intends to use funnel even
+	// if it's not enabled. If hi.IngressEnabled is true, control knows that
+	// DNS records are needed, so we can save bandwidth and not send
+	// WireIngress.
+	if wire := b.shouldWireInactiveIngressLocked(); hi.WireIngress != wire {
+		b.logf("Hostinfo.WireIngress changed to %v", wire)
+		hi.WireIngress = wire
+		changed = true
+	}
+	return changed
+}
+
+func vipServiceHash(logf logger.Logf, services []*tailcfg.VIPService) string {
+	if len(services) == 0 {
+		return ""
+	}
+	h := sha256.New()
+	jh := json.NewEncoder(h)
+	if err := jh.Encode(services); err != nil {
+		logf("vipServiceHashLocked: %v", err)
+		return ""
+	}
+	var buf [sha256.Size]byte
+	h.Sum(buf[:0])
+	return hex.EncodeToString(buf[:])
 }

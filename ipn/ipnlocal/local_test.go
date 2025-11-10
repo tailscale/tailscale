@@ -6745,7 +6745,7 @@ func TestUpdateIngressAndServiceHashLocked(t *testing.T) {
 			if tt.hasPreviousSC {
 				b.mu.Lock()
 				b.serveConfig = previousSC.View()
-				b.hostinfo.ServicesHash = b.vipServiceHash(b.vipServicesFromPrefsLocked(prefs))
+				b.hostinfo.ServicesHash = vipServiceHash(b.logf, b.vipServicesFromPrefsLocked(prefs))
 				b.mu.Unlock()
 			}
 			b.serveConfig = tt.sc.View()
@@ -6763,7 +6763,7 @@ func TestUpdateIngressAndServiceHashLocked(t *testing.T) {
 			})()
 
 			was := b.goTracker.StartedGoroutines()
-			b.updateIngressAndServiceHashLocked(prefs)
+			b.maybeSentHostinfoIfChangedLocked(prefs)
 
 			if tt.hi != nil {
 				if tt.hi.IngressEnabled != tt.wantIngress {
@@ -6773,7 +6773,7 @@ func TestUpdateIngressAndServiceHashLocked(t *testing.T) {
 					t.Errorf("WireIngress = %v, want %v", tt.hi.WireIngress, tt.wantWireIngress)
 				}
 				b.mu.Lock()
-				svcHash := b.vipServiceHash(b.vipServicesFromPrefsLocked(prefs))
+				svcHash := vipServiceHash(b.logf, b.vipServicesFromPrefsLocked(prefs))
 				b.mu.Unlock()
 				if tt.hi.ServicesHash != svcHash {
 					t.Errorf("ServicesHash = %v, want %v", tt.hi.ServicesHash, svcHash)
