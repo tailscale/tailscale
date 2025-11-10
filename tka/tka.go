@@ -342,7 +342,7 @@ func computeStateAt(storage Chonk, maxIter int, wantHash AUMHash) (State, error)
 // hint to choose what to use. For that, we rely on the chainsThroughActive
 // bit, which signals to us that that ancestor was part of the
 // chain in a previous run.
-func computeActiveAncestor(storage Chonk, chains []chain) (AUMHash, error) {
+func computeActiveAncestor(chains []chain) (AUMHash, error) {
 	// Dedupe possible ancestors, tracking if they were part of
 	// the active chain on a previous run.
 	ancestors := make(map[AUMHash]bool, len(chains))
@@ -392,7 +392,7 @@ func computeActiveChain(storage Chonk, lastKnownOldest *AUMHash, maxIter int) (c
 	}
 
 	// Find the right ancestor.
-	oldestHash, err := computeActiveAncestor(storage, chains)
+	oldestHash, err := computeActiveAncestor(chains)
 	if err != nil {
 		return chain{}, fmt.Errorf("computing ancestor: %v", err)
 	}
