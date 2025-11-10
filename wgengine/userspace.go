@@ -145,7 +145,7 @@ type userspaceEngine struct {
 	netMap         *netmap.NetworkMap // or nil
 	closing        bool               // Close was called (even if we're still closing)
 	statusCallback StatusCallback
-	peerSequence   []key.NodePublic
+	peerSequence   views.Slice[key.NodePublic]
 	endpoints      []tailcfg.Endpoint
 	pendOpen       map[flowtrackTuple]*pendingOpenFlow // see pendopen.go
 
@@ -939,12 +939,15 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	e.tundev.SetWGConfig(cfg)
 
 	peerSet := make(set.Set[key.NodePublic], len(cfg.Peers))
+
 	e.mu.Lock()
-	e.peerSequence = e.peerSequence[:0]
+	seq := make([]key.NodePublic, 0, len(cfg.Peers))
 	for _, p := range cfg.Peers {
-		e.peerSequence = append(e.peerSequence, p.PublicKey)
+		seq = append(seq, p.PublicKey)
 		peerSet.Add(p.PublicKey)
 	}
+	e.peerSequence = views.SliceOf(seq)
+
 	nm := e.netMap
 	e.mu.Unlock()
 
@@ -1199,7 +1202,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 
 	e.mu.Lock()
 	closing := e.closing
-	peerKeys := slices.Clone(e.peerSequence)
+	peerKeys := e.peerSequence
 	localAddrs := slices.Clone(e.endpoints)
 	e.mu.Unlock()
 
@@ -1207,8 +1210,8 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		return nil, ErrEngineClosing
 	}
 
-	peers := make([]ipnstate.PeerStatusLite, 0, len(peerKeys))
-	for _, key := range peerKeys {
+	peers := make([]ipnstate.PeerStatusLite, 0, peerKeys.Len())
+	for _, key := range peerKeys.All() {
 		if status, ok := e.getPeerStatusLite(key); ok {
 			peers = append(peers, status)
 		}
