@@ -4,7 +4,7 @@
 package drive
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"testing"
 )
 
@@ -40,7 +40,7 @@ func TestPermissions(t *testing.T) {
 		t.Run(tt.share, func(t *testing.T) {
 			var rawPerms [][]byte
 			for _, perm := range tt.perms {
-				b, err := json.Marshal(perm)
+				b, err := jsonv1.Marshal(perm)
 				if err != nil {
 					t.Fatal(err)
 				}

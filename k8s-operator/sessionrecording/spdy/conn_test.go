@@ -7,7 +7,7 @@ package spdy
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"reflect"
 	"testing"
@@ -320,7 +320,7 @@ func Test_conn_WriteRand(t *testing.T) {
 
 func resizeMsgBytes(t *testing.T, width, height int) []byte {
 	t.Helper()
-	bs, err := json.Marshal(spdyResizeMsg{Width: width, Height: height})
+	bs, err := jsonv1.Marshal(spdyResizeMsg{Width: width, Height: height})
 	if err != nil {
 		t.Fatalf("error marshalling resizeMsg: %v", err)
 	}

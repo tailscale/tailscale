@@ -7,7 +7,7 @@ package localapi
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -66,7 +66,7 @@ func (h *Handler) serveDebugPeerEndpointChanges(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	e := json.NewEncoder(w)
+	e := jsonv1.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(chs)
 }
@@ -86,7 +86,7 @@ func (h *Handler) serveComponentDebugLogging(w http.ResponseWriter, r *http.Requ
 		res.Error = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
+	jsonv1.NewEncoder(w).Encode(res)
 }
 
 func (h *Handler) serveDebugDialTypes(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +194,7 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		err = h.b.DebugReSTUN()
 	case "notify":
 		var n ipn.Notify
-		err = json.NewDecoder(r.Body).Decode(&n)
+		err = jsonv1.NewDecoder(r.Body).Decode(&n)
 		if err != nil {
 			break
 		}
@@ -210,7 +210,7 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 	case "control-knobs":
 		k := h.b.ControlKnobs()
 		w.Header().Set("Content-Type", "application/json")
-		err = json.NewEncoder(w).Encode(k.AsDebugJSON())
+		err = jsonv1.NewEncoder(w).Encode(k.AsDebugJSON())
 		if err == nil {
 			return
 		}
@@ -218,7 +218,7 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		err = h.b.DebugPickNewDERP()
 	case "force-prefer-derp":
 		var n int
-		err = json.NewDecoder(r.Body).Decode(&n)
+		err = jsonv1.NewDecoder(r.Body).Decode(&n)
 		if err != nil {
 			break
 		}
@@ -228,7 +228,7 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		slices.SortFunc(servers, func(a, b netip.Addr) int {
 			return a.Compare(b)
 		})
-		err = json.NewEncoder(w).Encode(servers)
+		err = jsonv1.NewEncoder(w).Encode(servers)
 		if err == nil {
 			return
 		}
@@ -274,7 +274,7 @@ func (h *Handler) serveDebugPacketFilterRules(w http.ResponseWriter, r *http.Req
 	}
 	w.Header().Set("Content-Type", "application/json")
 
-	enc := json.NewEncoder(w)
+	enc := jsonv1.NewEncoder(w)
 	enc.SetIndent("", "\t")
 	enc.Encode(nm.PacketFilterRules)
 }
@@ -291,7 +291,7 @@ func (h *Handler) serveDebugPacketFilterMatches(w http.ResponseWriter, r *http.R
 	}
 	w.Header().Set("Content-Type", "application/json")
 
-	enc := json.NewEncoder(w)
+	enc := jsonv1.NewEncoder(w)
 	enc.SetIndent("", "\t")
 	enc.Encode(nm.PacketFilter)
 }
@@ -352,11 +352,11 @@ func (h *Handler) serveDebugBusEvents(w http.ResponseWriter, r *http.Request) {
 				data.To = append(data.To, client.Name())
 			}
 
-			if msg, err := json.Marshal(data); err != nil {
+			if msg, err := jsonv1.Marshal(data); err != nil {
 				data.Event = debugEventError{Error: fmt.Sprintf(
 					"failed to marshal JSON for %T", event.Event,
 				)}
-				if errMsg, err := json.Marshal(data); err != nil {
+				if errMsg, err := jsonv1.Marshal(data); err != nil {
 					fmt.Fprintf(w,
 						`{"Count": %d, "Event":"[ERROR] failed to marshal JSON for %T\n"}`,
 						i, event.Event)
@@ -418,7 +418,7 @@ func (h *Handler) serveEventBusGraph(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(topics)
+	jsonv1.NewEncoder(w).Encode(topics)
 }
 
 func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {
@@ -442,7 +442,7 @@ func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var logRequest logRequestJSON
-	if err := json.NewDecoder(r.Body).Decode(&logRequest); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&logRequest); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
@@ -471,5 +471,5 @@ func (h *Handler) serveDebugOptionalFeatures(w http.ResponseWriter, r *http.Requ
 		Features: feature.Registered(),
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(of)
+	jsonv1.NewEncoder(w).Encode(of)
 }

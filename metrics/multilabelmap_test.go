@@ -5,7 +5,7 @@ package metrics
 
 import (
 	"bytes"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"expvar"
 	"fmt"
 	"io"
@@ -142,7 +142,7 @@ func TestMultiLabelMapExpvar(t *testing.T) {
 	// Ensure that the String method is valid JSON to ensure that it can be
 	// used by expvar.
 	encoded := []byte(em.String())
-	if !json.Valid(encoded) {
+	if !jsonv1.Valid(encoded) {
 		t.Fatalf("invalid JSON: %s", encoded)
 	}
 

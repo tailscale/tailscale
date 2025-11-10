@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"strings"
 	"testing"
 
@@ -180,7 +180,7 @@ func TestRecorder(t *testing.T) {
 	})
 
 	t.Run("populate_node_info_in_state_secret_and_see_it_appear_in_status", func(t *testing.T) {
-		bytes, err := json.Marshal(map[string]any{
+		bytes, err := jsonv1.Marshal(map[string]any{
 			"Config": map[string]any{
 				"NodeID": "nodeid-123",
 				"UserProfile": map[string]any{

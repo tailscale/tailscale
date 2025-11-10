@@ -5,7 +5,7 @@ package dnsfallback
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"flag"
 	"os"
 	"path/filepath"
@@ -61,7 +61,7 @@ func TestCache(t *testing.T) {
 			},
 		},
 	}
-	d, err := json.Marshal(initialCache)
+	d, err := jsonv1.Marshal(initialCache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestCacheUnchanged(t *testing.T) {
 			},
 		},
 	}
-	d, err := json.Marshal(initialCache)
+	d, err := jsonv1.Marshal(initialCache)
 	if err != nil {
 		t.Fatal(err)
 	}

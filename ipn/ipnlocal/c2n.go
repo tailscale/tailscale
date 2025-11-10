@@ -4,7 +4,7 @@
 package ipnlocal
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -130,7 +130,7 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	jsonv1.NewEncoder(w).Encode(v)
 }
 
 func handleC2NEcho(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
@@ -170,7 +170,7 @@ func handleC2NDebugNetMap(b *LocalBackend, w http.ResponseWriter, r *http.Reques
 
 	// redactAndMarshal redacts private keys from the given netmap, clears fields
 	// that should be omitted, and marshals it to JSON.
-	redactAndMarshal := func(nm *netmap.NetworkMap, omitFields []string) (json.RawMessage, error) {
+	redactAndMarshal := func(nm *netmap.NetworkMap, omitFields []string) (jsonv1.RawMessage, error) {
 		for _, f := range omitFields {
 			field := reflect.ValueOf(nm).Elem().FieldByName(f)
 			if !field.IsValid() {
@@ -180,7 +180,7 @@ func handleC2NDebugNetMap(b *LocalBackend, w http.ResponseWriter, r *http.Reques
 			field.SetZero()
 		}
 		nm, _ = redactNetmapPrivateKeys(nm)
-		return json.Marshal(nm)
+		return jsonv1.Marshal(nm)
 	}
 
 	var omitFields []string
@@ -188,7 +188,7 @@ func handleC2NDebugNetMap(b *LocalBackend, w http.ResponseWriter, r *http.Reques
 
 	if r.Method == httpm.POST {
 		var req tailcfg.C2NDebugNetmapRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonv1.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("failed to decode request body: %v", err), http.StatusBadRequest)
 			return
 		}
@@ -298,7 +298,7 @@ func handleC2NSSHUsernames(b *LocalBackend, w http.ResponseWriter, r *http.Reque
 	}
 	var req tailcfg.C2NSSHUsernamesRequest
 	if r.Method == "POST" {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := jsonv1.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

@@ -6,7 +6,7 @@ package mem
 
 import (
 	"bytes"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"sync"
 
 	xmaps "golang.org/x/exp/maps"
@@ -71,7 +71,7 @@ func (s *Store) LoadFromMap(m map[string][]byte) {
 func (s *Store) LoadFromJSON(data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return json.Unmarshal(data, &s.cache)
+	return jsonv1.Unmarshal(data, &s.cache)
 }
 
 // ExportToJSON exports the content of the cache to
@@ -83,5 +83,5 @@ func (s *Store) ExportToJSON() ([]byte, error) {
 		// Avoid "null" serialization.
 		return []byte("{}"), nil
 	}
-	return json.MarshalIndent(s.cache, "", "  ")
+	return jsonv1.MarshalIndent(s.cache, "", "  ")
 }

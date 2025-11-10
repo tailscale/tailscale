@@ -4,7 +4,7 @@
 package tsweb
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"strings"
 	"time"
 )
@@ -59,6 +59,6 @@ func (m AccessLogRecord) String() string {
 		m.Time = time.Now()
 	}
 	var buf strings.Builder
-	json.NewEncoder(&buf).Encode(m)
+	jsonv1.NewEncoder(&buf).Encode(m)
 	return strings.TrimRight(buf.String(), "\n")
 }

@@ -6,7 +6,7 @@ package localapi
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -77,7 +77,7 @@ func TestSetPushDeviceToken(t *testing.T) {
 	c := s.Client()
 
 	want := "my-test-device-token"
-	body, err := json.Marshal(apitype.SetPushDeviceTokenRequest{PushDeviceToken: want})
+	body, err := jsonv1.Marshal(apitype.SetPushDeviceTokenRequest{PushDeviceToken: want})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestWhoIsArgTypes(t *testing.T) {
 				t.Fatalf("response code %d", rec.Code)
 			}
 			var res apitype.WhoIsResponse
-			if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+			if err := jsonv1.Unmarshal(rec.Body.Bytes(), &res); err != nil {
 				t.Fatalf("parsing response %#q: %v", rec.Body.Bytes(), err)
 			}
 			if got, want := res.Node.ID, tailcfg.NodeID(123); got != want {

@@ -9,7 +9,7 @@
 package egressservices
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"net/netip"
 )
 
@@ -62,15 +62,15 @@ type PortMaps map[PortMap]struct{}
 // with efficient lookups in code. It implements custom JSON marshalling
 // methods to convert between being a list in JSON and a set (map with empty
 // values) in code.
-var _ json.Marshaler = &PortMaps{}
-var _ json.Marshaler = PortMaps{}
-var _ json.Unmarshaler = &PortMaps{}
+var _ jsonv1.Marshaler = &PortMaps{}
+var _ jsonv1.Marshaler = PortMaps{}
+var _ jsonv1.Unmarshaler = &PortMaps{}
 
 func (p *PortMaps) UnmarshalJSON(data []byte) error {
 	*p = make(map[PortMap]struct{})
 
 	var l []PortMap
-	if err := json.Unmarshal(data, &l); err != nil {
+	if err := jsonv1.Unmarshal(data, &l); err != nil {
 		return err
 	}
 
@@ -87,7 +87,7 @@ func (p PortMaps) MarshalJSON() ([]byte, error) {
 		l = append(l, pm)
 	}
 
-	return json.Marshal(l)
+	return jsonv1.Marshal(l)
 }
 
 // Status represents the currently configured firewall rules for all egress

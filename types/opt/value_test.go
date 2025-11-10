@@ -4,7 +4,7 @@
 package opt
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"reflect"
 	"testing"
 
@@ -97,7 +97,7 @@ func TestValue(t *testing.T) {
 			want: bools.IfElse(
 				// Detect whether v1 "encoding/json" supports `omitzero` or not.
 				// TODO(Go1.24): Remove this after `omitzero` is supported.
-				string(must.Get(json.Marshal(struct {
+				string(must.Get(jsonv1.Marshal(struct {
 					X int `json:",omitzero"`
 				}{}))) == `{}`,
 				`{"True":true,"False":false}`,                                    // omitzero supported
@@ -235,7 +235,7 @@ func TestValue(t *testing.T) {
 			if tt.jsonv2 {
 				j, err = jsonv2.Marshal(tt.in)
 			} else {
-				j, err = json.Marshal(tt.in)
+				j, err = jsonv1.Marshal(tt.in)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -254,7 +254,7 @@ func TestValue(t *testing.T) {
 			if tt.jsonv2 {
 				err = jsonv2.Unmarshal(j, out)
 			} else {
-				err = json.Unmarshal(j, out)
+				err = jsonv1.Unmarshal(j, out)
 			}
 			if err != nil {
 				t.Fatalf("Unmarshal %#q: %v", j, err)

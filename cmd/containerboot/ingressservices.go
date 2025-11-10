@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"log"
 	"net/netip"
@@ -131,7 +131,7 @@ func (p *ingressProxy) getConfigs() (*ingressservices.Configs, error) {
 		return nil, nil
 	}
 	cfg := &ingressservices.Configs{}
-	if err := json.Unmarshal(j, &cfg); err != nil {
+	if err := jsonv1.Unmarshal(j, &cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
@@ -152,7 +152,7 @@ func (p *ingressProxy) getStatus(ctx context.Context) (*ingressservices.Status, 
 	if !ok {
 		return nil, nil
 	}
-	if err := json.Unmarshal([]byte(raw), status); err != nil {
+	if err := jsonv1.Unmarshal([]byte(raw), status); err != nil {
 		return nil, fmt.Errorf("error unmarshalling previous config: %w", err)
 	}
 	return status, nil
@@ -189,7 +189,7 @@ func (p *ingressProxy) recordStatus(ctx context.Context, newCfg *ingressservices
 	if err != nil {
 		return fmt.Errorf("error retrieving state Secret: %w", err)
 	}
-	bs, err := json.Marshal(status)
+	bs, err := jsonv1.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("error marshalling status: %w", err)
 	}

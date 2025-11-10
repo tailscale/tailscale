@@ -6,7 +6,7 @@ package store
 
 import (
 	"bytes"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -189,7 +189,7 @@ func NewFileStore(logf logger.Logf, path string) (ipn.StateStore, error) {
 		path:  path,
 		cache: map[ipn.StateKey][]byte{},
 	}
-	if err := json.Unmarshal(bs, &ret.cache); err != nil {
+	if err := jsonv1.Unmarshal(bs, &ret.cache); err != nil {
 		return nil, err
 	}
 
@@ -215,7 +215,7 @@ func (s *FileStore) WriteState(id ipn.StateKey, bs []byte) error {
 		return nil
 	}
 	s.cache[id] = bytes.Clone(bs)
-	bs, err := json.MarshalIndent(s.cache, "", "  ")
+	bs, err := jsonv1.MarshalIndent(s.cache, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -264,7 +264,7 @@ func maybeMigrateLocalStateFile(logf logger.Logf, path string) error {
 		return err
 	}
 	var content map[string]any
-	if err := json.Unmarshal(bs, &content); err != nil {
+	if err := jsonv1.Unmarshal(bs, &content); err != nil {
 		return fmt.Errorf("failed to unmarshal %q: %w", path, err)
 	}
 	keys := slices.Sorted(maps.Keys(content))

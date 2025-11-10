@@ -12,7 +12,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1185,7 +1185,7 @@ func signNodeKey(nodeInfo tailcfg.TKASignInfo, signer key.NLPrivate) (*tka.NodeK
 
 func (b *LocalBackend) tkaInitBegin(ourNodeKey key.NodePublic, aum tka.AUM) (*tailcfg.TKAInitBeginResponse, error) {
 	var req bytes.Buffer
-	if err := json.NewEncoder(&req).Encode(tailcfg.TKAInitBeginRequest{
+	if err := jsonv1.NewEncoder(&req).Encode(tailcfg.TKAInitBeginRequest{
 		Version:    tailcfg.CurrentCapabilityVersion,
 		NodeKey:    ourNodeKey,
 		GenesisAUM: aum.Serialize(),
@@ -1209,7 +1209,7 @@ func (b *LocalBackend) tkaInitBegin(ourNodeKey key.NodePublic, aum tka.AUM) (*ta
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKAInitBeginResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 10 * 1024 * 1024}).Decode(a)
+	err = jsonv1.NewDecoder(&io.LimitedReader{R: res.Body, N: 10 * 1024 * 1024}).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -1220,7 +1220,7 @@ func (b *LocalBackend) tkaInitBegin(ourNodeKey key.NodePublic, aum tka.AUM) (*ta
 
 func (b *LocalBackend) tkaInitFinish(ourNodeKey key.NodePublic, nks map[tailcfg.NodeID]tkatype.MarshaledSignature, supportDisablement []byte) (*tailcfg.TKAInitFinishResponse, error) {
 	var req bytes.Buffer
-	if err := json.NewEncoder(&req).Encode(tailcfg.TKAInitFinishRequest{
+	if err := jsonv1.NewEncoder(&req).Encode(tailcfg.TKAInitFinishRequest{
 		Version:            tailcfg.CurrentCapabilityVersion,
 		NodeKey:            ourNodeKey,
 		Signatures:         nks,
@@ -1246,7 +1246,7 @@ func (b *LocalBackend) tkaInitFinish(ourNodeKey key.NodePublic, nks map[tailcfg.
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKAInitFinishResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
+	err = jsonv1.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -1271,7 +1271,7 @@ func (b *LocalBackend) tkaFetchBootstrap(ourNodeKey key.NodePublic, head tka.AUM
 	}
 
 	var req bytes.Buffer
-	if err := json.NewEncoder(&req).Encode(bootstrapReq); err != nil {
+	if err := jsonv1.NewEncoder(&req).Encode(bootstrapReq); err != nil {
 		return nil, fmt.Errorf("encoding request: %v", err)
 	}
 
@@ -1294,7 +1294,7 @@ func (b *LocalBackend) tkaFetchBootstrap(ourNodeKey key.NodePublic, head tka.AUM
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKABootstrapResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
+	err = jsonv1.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -1335,7 +1335,7 @@ func (b *LocalBackend) tkaDoSyncOffer(ourNodeKey key.NodePublic, offer tka.SyncO
 	}
 
 	var req bytes.Buffer
-	if err := json.NewEncoder(&req).Encode(syncReq); err != nil {
+	if err := jsonv1.NewEncoder(&req).Encode(syncReq); err != nil {
 		return nil, fmt.Errorf("encoding request: %v", err)
 	}
 
@@ -1355,7 +1355,7 @@ func (b *LocalBackend) tkaDoSyncOffer(ourNodeKey key.NodePublic, offer tka.SyncO
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKASyncOfferResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 10 * 1024 * 1024}).Decode(a)
+	err = jsonv1.NewDecoder(&io.LimitedReader{R: res.Body, N: 10 * 1024 * 1024}).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -1384,7 +1384,7 @@ func (b *LocalBackend) tkaDoSyncSend(ourNodeKey key.NodePublic, head tka.AUMHash
 	}
 
 	var req bytes.Buffer
-	if err := json.NewEncoder(&req).Encode(sendReq); err != nil {
+	if err := jsonv1.NewEncoder(&req).Encode(sendReq); err != nil {
 		return nil, fmt.Errorf("encoding request: %v", err)
 	}
 
@@ -1404,7 +1404,7 @@ func (b *LocalBackend) tkaDoSyncSend(ourNodeKey key.NodePublic, head tka.AUMHash
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKASyncSendResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 10 * 1024 * 1024}).Decode(a)
+	err = jsonv1.NewDecoder(&io.LimitedReader{R: res.Body, N: 10 * 1024 * 1024}).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -1420,7 +1420,7 @@ func (b *LocalBackend) tkaDoDisablement(ourNodeKey key.NodePublic, head tka.AUMH
 	}
 
 	var req bytes.Buffer
-	if err := json.NewEncoder(&req).Encode(tailcfg.TKADisableRequest{
+	if err := jsonv1.NewEncoder(&req).Encode(tailcfg.TKADisableRequest{
 		Version:           tailcfg.CurrentCapabilityVersion,
 		NodeKey:           ourNodeKey,
 		Head:              string(headBytes),
@@ -1446,7 +1446,7 @@ func (b *LocalBackend) tkaDoDisablement(ourNodeKey key.NodePublic, head tka.AUMH
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKADisableResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
+	err = jsonv1.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -1457,7 +1457,7 @@ func (b *LocalBackend) tkaDoDisablement(ourNodeKey key.NodePublic, head tka.AUMH
 
 func (b *LocalBackend) tkaSubmitSignature(ourNodeKey key.NodePublic, sig tkatype.MarshaledSignature) (*tailcfg.TKASubmitSignatureResponse, error) {
 	var req bytes.Buffer
-	if err := json.NewEncoder(&req).Encode(tailcfg.TKASubmitSignatureRequest{
+	if err := jsonv1.NewEncoder(&req).Encode(tailcfg.TKASubmitSignatureRequest{
 		Version:   tailcfg.CurrentCapabilityVersion,
 		NodeKey:   ourNodeKey,
 		Signature: sig,
@@ -1482,7 +1482,7 @@ func (b *LocalBackend) tkaSubmitSignature(ourNodeKey key.NodePublic, sig tkatype
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKASubmitSignatureResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
+	err = jsonv1.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -1493,7 +1493,7 @@ func (b *LocalBackend) tkaSubmitSignature(ourNodeKey key.NodePublic, sig tkatype
 
 func (b *LocalBackend) tkaReadAffectedSigs(ourNodeKey key.NodePublic, key tkatype.KeyID) (*tailcfg.TKASignaturesUsingKeyResponse, error) {
 	var encodedReq bytes.Buffer
-	if err := json.NewEncoder(&encodedReq).Encode(tailcfg.TKASignaturesUsingKeyRequest{
+	if err := jsonv1.NewEncoder(&encodedReq).Encode(tailcfg.TKASignaturesUsingKeyRequest{
 		Version: tailcfg.CurrentCapabilityVersion,
 		NodeKey: ourNodeKey,
 		KeyID:   key,
@@ -1518,7 +1518,7 @@ func (b *LocalBackend) tkaReadAffectedSigs(ourNodeKey key.NodePublic, key tkatyp
 		return nil, fmt.Errorf("request returned (%d): %s", resp.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKASignaturesUsingKeyResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: resp.Body, N: 1024 * 1024}).Decode(a)
+	err = jsonv1.NewDecoder(&io.LimitedReader{R: resp.Body, N: 1024 * 1024}).Decode(a)
 	resp.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)

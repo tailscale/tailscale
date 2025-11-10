@@ -6,7 +6,7 @@ package tailscale
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -57,7 +57,7 @@ func (c *Client) Keys(ctx context.Context) ([]string, error) {
 	var keys struct {
 		Keys []*Key `json:"keys"`
 	}
-	if err := json.Unmarshal(b, &keys); err != nil {
+	if err := jsonv1.Unmarshal(b, &keys); err != nil {
 		return nil, err
 	}
 	ret := make([]string, 0, len(keys.Keys))
@@ -94,7 +94,7 @@ func (c *Client) CreateKeyWithExpiry(ctx context.Context, caps KeyCapabilities, 
 		Capabilities  KeyCapabilities `json:"capabilities"`
 		ExpirySeconds int64           `json:"expirySeconds,omitempty"`
 	}{caps, int64(expirySeconds)}
-	bs, err := json.Marshal(keyRequest)
+	bs, err := jsonv1.Marshal(keyRequest)
 	if err != nil {
 		return "", nil, err
 	}
@@ -117,7 +117,7 @@ func (c *Client) CreateKeyWithExpiry(ctx context.Context, caps KeyCapabilities, 
 		Key
 		Secret string `json:"key"`
 	}
-	if err := json.Unmarshal(b, &key); err != nil {
+	if err := jsonv1.Unmarshal(b, &key); err != nil {
 		return "", nil, err
 	}
 	return key.Secret, &key.Key, nil
@@ -141,7 +141,7 @@ func (c *Client) Key(ctx context.Context, id string) (*Key, error) {
 	}
 
 	var key Key
-	if err := json.Unmarshal(b, &key); err != nil {
+	if err := jsonv1.Unmarshal(b, &key); err != nil {
 		return nil, err
 	}
 	return &key, nil

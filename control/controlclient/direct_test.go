@@ -4,7 +4,7 @@
 package controlclient
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -134,7 +134,7 @@ func TestTsmpPing(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		body := new(ipnstate.PingResult)
-		if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+		if err := jsonv1.NewDecoder(r.Body).Decode(body); err != nil {
 			t.Fatal(err)
 		}
 		if pingRes.IP != body.IP {

@@ -4,7 +4,7 @@
 package endpoint
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"math"
 	"net/netip"
 	"testing"
@@ -62,7 +62,7 @@ func TestServerEndpointJSONUnmarshal(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var out ServerEndpoint
-			err := json.Unmarshal(tt.json, &out)
+			err := jsonv1.Unmarshal(tt.json, &out)
 			if tt.wantErr != (err != nil) {
 				t.Fatalf("wantErr: %v (err == nil): %v", tt.wantErr, err == nil)
 			}
@@ -93,12 +93,12 @@ func TestServerEndpointJSONMarshal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b, err := json.Marshal(&tt.serverEndpoint)
+			b, err := jsonv1.Marshal(&tt.serverEndpoint)
 			if err != nil {
 				t.Fatal(err)
 			}
 			var got ServerEndpoint
-			err = json.Unmarshal(b, &got)
+			err = jsonv1.Unmarshal(b, &got)
 			if err != nil {
 				t.Fatal(err)
 			}

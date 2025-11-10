@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"cmp"
 	"crypto/x509"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -128,7 +128,7 @@ func TestHandleC2NTLSCertStatus(t *testing.T) {
 			}
 			if wantStatus == 200 {
 				var got tailcfg.C2NTLSCertInfo
-				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				if err := jsonv1.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 					t.Fatalf("bad JSON: %v", err)
 				}
 				if !reflect.DeepEqual(&got, tt.want) {
@@ -534,7 +534,7 @@ func TestHandleC2NDebugNetmap(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest("GET", "/debug/netmap", nil)
 			if tt.req != nil {
-				b, err := json.Marshal(tt.req)
+				b, err := jsonv1.Marshal(tt.req)
 				if err != nil {
 					t.Fatalf("json.Marshal: %v", err)
 				}
@@ -547,11 +547,11 @@ func TestHandleC2NDebugNetmap(t *testing.T) {
 				t.Fatalf("status code = %v; want %v. Body: %s", res.Status, wantStatus, rec.Body.Bytes())
 			}
 			var resp tailcfg.C2NDebugNetmapResponse
-			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			if err := jsonv1.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 				t.Fatalf("bad JSON: %v", err)
 			}
 			got := &netmap.NetworkMap{}
-			if err := json.Unmarshal(resp.Current, got); err != nil {
+			if err := jsonv1.Unmarshal(resp.Current, got); err != nil {
 				t.Fatalf("bad JSON: %v", err)
 			}
 

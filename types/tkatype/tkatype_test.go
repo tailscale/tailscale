@@ -4,7 +4,7 @@
 package tkatype
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"testing"
 
 	"golang.org/x/crypto/blake2s"
@@ -24,7 +24,7 @@ func TestSigHashSize(t *testing.T) {
 
 func TestMarshaledSignatureJSON(t *testing.T) {
 	sig := MarshaledSignature("abcdef")
-	j, err := json.Marshal(sig)
+	j, err := jsonv1.Marshal(sig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestMarshaledSignatureJSON(t *testing.T) {
 	}
 
 	var back MarshaledSignature
-	if err := json.Unmarshal([]byte(encoded), &back); err != nil {
+	if err := jsonv1.Unmarshal([]byte(encoded), &back); err != nil {
 		t.Fatal(err)
 	}
 	if string(back) != string(sig) {

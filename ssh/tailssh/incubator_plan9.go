@@ -10,7 +10,7 @@
 package tailssh
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -125,7 +125,7 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		}
 
 		if len(env) > 0 {
-			encoded, err := json.Marshal(env)
+			encoded, err := jsonv1.Marshal(env)
 			if err != nil {
 				return nil, fmt.Errorf("failed to encode environment: %w", err)
 			}
@@ -203,7 +203,7 @@ func (ia incubatorArgs) forwardedEnviron() ([]string, string, error) {
 
 		var extraEnviron []string
 
-		err = json.Unmarshal([]byte(unquoted), &extraEnviron)
+		err = jsonv1.Unmarshal([]byte(unquoted), &extraEnviron)
 		if err != nil {
 			return nil, "", fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
 		}

@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -1368,8 +1368,8 @@ func TestHandleExitNodeDNSQueryWithNetPkg(t *testing.T) {
 				Port:     6,
 			},
 		}; !reflect.DeepEqual(got, want) {
-			jgot, _ := json.Marshal(got)
-			jwant, _ := json.Marshal(want)
+			jgot, _ := jsonv1.Marshal(got)
+			jwant, _ := jsonv1.Marshal(want)
 			t.Errorf("SRV = %s; want %s", jgot, jwant)
 		}
 	})
@@ -1393,8 +1393,8 @@ func TestHandleExitNodeDNSQueryWithNetPkg(t *testing.T) {
 			{Host: "ns1.foo."},
 			{Host: "ns2.bar."},
 		}; !reflect.DeepEqual(got, want) {
-			jgot, _ := json.Marshal(got)
-			jwant, _ := json.Marshal(want)
+			jgot, _ := jsonv1.Marshal(got)
+			jwant, _ := jsonv1.Marshal(want)
 			t.Errorf("NS = %s; want %s", jgot, jwant)
 		}
 	})

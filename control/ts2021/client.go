@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -291,7 +291,7 @@ func (nc *Client) Post(ctx context.Context, path string, nodeKey key.NodePublic,
 }
 
 func (nc *Client) DoWithBody(ctx context.Context, method, path string, nodeKey key.NodePublic, body any) (*http.Response, error) {
-	jbody, err := json.Marshal(body)
+	jbody, err := jsonv1.Marshal(body)
 	if err != nil {
 		return nil, err
 	}

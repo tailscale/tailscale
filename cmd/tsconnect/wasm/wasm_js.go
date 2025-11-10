@@ -13,7 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"log"
 	"math/rand/v2"
@@ -291,7 +291,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 				}),
 				LockedOut: nm.TKAEnabled && nm.SelfNode.KeySignature().Len() == 0,
 			}
-			if jsonNetMap, err := json.Marshal(jsNetMap); err == nil {
+			if jsonNetMap, err := jsonv1.Marshal(jsNetMap); err == nil {
 				jsCallbacks.Call("notifyNetMap", string(jsonNetMap))
 			} else {
 				log.Printf("Could not generate JSON netmap: %v", err)

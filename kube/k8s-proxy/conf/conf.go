@@ -8,7 +8,7 @@
 package conf
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -83,7 +83,7 @@ func Load(raw []byte) (c Config, err error) {
 		return c, fmt.Errorf("error parsing config as HuJSON/JSON: %w", err)
 	}
 	var ver VersionedConfig
-	if err := json.Unmarshal(c.Std, &ver); err != nil {
+	if err := jsonv1.Unmarshal(c.Std, &ver); err != nil {
 		return c, fmt.Errorf("error parsing config: %w", err)
 	}
 	rootV1Alpha1 := (ver.Version == v1Alpha1)

@@ -9,7 +9,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -80,7 +80,7 @@ func getDERPMap(ctx context.Context, url string) (*tailcfg.DERPMap, error) {
 		return nil, fmt.Errorf("non-200 derp map resp: %d", resp.StatusCode)
 	}
 	dm := tailcfg.DERPMap{}
-	err = json.NewDecoder(resp.Body).Decode(&dm)
+	err = jsonv1.NewDecoder(resp.Body).Decode(&dm)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode derp map resp: %v", err)
 	}

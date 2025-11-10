@@ -5,7 +5,7 @@ package ipproto
 
 import (
 	"encoding"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"testing"
 
@@ -123,14 +123,14 @@ func TestProtoUnmarshalJSON(t *testing.T) {
 
 	for i := range 256 {
 		j := []byte(fmt.Sprintf(`%d`, i))
-		must.Do(json.Unmarshal(j, &p))
+		must.Do(jsonv1.Unmarshal(j, &p))
 		if got, want := p, Proto(i); got != want {
 			t.Errorf("Proto(%d) = %v, want %v", i, got, want)
 		}
 	}
 
 	for name, wantProto := range acceptedNames {
-		must.Do(json.Unmarshal([]byte(fmt.Sprintf(`"%s"`, name)), &p))
+		must.Do(jsonv1.Unmarshal([]byte(fmt.Sprintf(`"%s"`, name)), &p))
 		if got, want := p, wantProto; got != want {
 			t.Errorf("Proto(%q) = %v, want %v", name, got, want)
 		}

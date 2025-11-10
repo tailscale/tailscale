@@ -7,7 +7,7 @@ package sessionrecording
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -295,7 +295,7 @@ func connectV2(ctx context.Context, hc *http.Client, ap netip.AddrPort) (io.Writ
 		defer close(acks)
 		defer resp.Body.Close()
 		defer pw.Close()
-		dec := json.NewDecoder(resp.Body)
+		dec := jsonv1.NewDecoder(resp.Body)
 		for {
 			var frame v2ResponseFrame
 			if err := dec.Decode(&frame); err != nil {

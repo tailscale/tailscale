@@ -14,7 +14,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -167,7 +167,7 @@ func getError(resp *http.Response) error {
 		return nil
 	}
 	st := &kubeapi.Status{}
-	if err := json.NewDecoder(resp.Body).Decode(st); err != nil {
+	if err := jsonv1.NewDecoder(resp.Body).Decode(st); err != nil {
 		return err
 	}
 	return st
@@ -209,7 +209,7 @@ func newKubeAPIRequest(c *client) kubeAPIRequestFunc {
 			return err
 		}
 		if out != nil {
-			return json.NewDecoder(resp.Body).Decode(out)
+			return jsonv1.NewDecoder(resp.Body).Decode(out)
 		}
 		return nil
 	}
@@ -228,7 +228,7 @@ func (c *client) newRequest(ctx context.Context, method, url string, in any) (*h
 			body = bytes.NewReader(in)
 		default:
 			var b bytes.Buffer
-			if err := json.NewEncoder(&b).Encode(in); err != nil {
+			if err := jsonv1.NewEncoder(&b).Encode(in); err != nil {
 				return nil, err
 			}
 			body = &b

@@ -4,7 +4,7 @@
 package ippool
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"io"
 	"log"
 	"maps"
@@ -73,7 +73,7 @@ func (mipr *persistableIPRange) toIPRange() netipx.IPRange {
 //   - the FSM must discard all previous state before restoring
 func (ipp *ConsensusIPPool) Restore(rc io.ReadCloser) error {
 	var snap fsmSnapshot
-	if err := json.NewDecoder(rc).Decode(&snap); err != nil {
+	if err := jsonv1.NewDecoder(rc).Decode(&snap); err != nil {
 		return err
 	}
 	ipset, ppm, err := snap.getData()
@@ -93,7 +93,7 @@ type fsmSnapshot struct {
 // Persist is part of the raft.FSMSnapshot interface
 // According to the docs Persist may be called concurrently with Apply
 func (f fsmSnapshot) Persist(sink raft.SnapshotSink) error {
-	if err := json.NewEncoder(sink).Encode(f); err != nil {
+	if err := jsonv1.NewEncoder(sink).Encode(f); err != nil {
 		log.Printf("Error encoding snapshot as JSON: %v", err)
 		return sink.Cancel()
 	}

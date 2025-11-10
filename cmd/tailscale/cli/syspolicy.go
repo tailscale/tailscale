@@ -7,7 +7,7 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -80,7 +80,7 @@ func runSysPolicyReload(ctx context.Context, args []string) error {
 
 func printPolicySettings(policy *setting.Snapshot) {
 	if syspolicyArgs.json {
-		json, err := json.MarshalIndent(policy, "", "\t")
+		json, err := jsonv1.MarshalIndent(policy, "", "\t")
 		if err != nil {
 			errf("syspolicy marshalling error: %v", err)
 		} else {

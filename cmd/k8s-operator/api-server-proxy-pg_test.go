@@ -4,7 +4,7 @@
 package main
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -64,7 +64,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 		},
 	}
 	expectedCfg := *initialCfg
-	initialCfgB, err := json.Marshal(initialCfg)
+	initialCfgB, err := jsonv1.Marshal(initialCfg)
 	if err != nil {
 		t.Fatalf("marshaling initial config: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 		Build()
 	expectCfg := func(c *conf.VersionedConfig) {
 		t.Helper()
-		cBytes, err := json.Marshal(c)
+		cBytes, err := jsonv1.Marshal(c)
 		if err != nil {
 			t.Fatalf("marshaling expected config: %v", err)
 		}

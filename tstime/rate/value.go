@@ -4,7 +4,7 @@
 package rate
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"math"
 	"sync"
@@ -200,12 +200,12 @@ func (r *Value) MarshalJSON() ([]byte, error) {
 	if r.HalfLife > 0 {
 		v.HalfLife = r.HalfLife.String()
 	}
-	return json.Marshal(v)
+	return jsonv1.Marshal(v)
 }
 
 func (r *Value) UnmarshalJSON(b []byte) error {
 	var v jsonValue
-	if err := json.Unmarshal(b, &v); err != nil {
+	if err := jsonv1.Unmarshal(b, &v); err != nil {
 		return err
 	}
 	halfLife, err := time.ParseDuration(v.HalfLife)

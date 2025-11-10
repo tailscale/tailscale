@@ -4,7 +4,7 @@
 package controlclient
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"reflect"
 
@@ -117,7 +117,7 @@ func (s *Status) Equal(s2 *Status) bool {
 }
 
 func (s Status) String() string {
-	b, err := json.MarshalIndent(s, "", "\t")
+	b, err := jsonv1.MarshalIndent(s, "", "\t")
 	if err != nil {
 		panic(err)
 	}

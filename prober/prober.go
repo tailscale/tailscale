@@ -11,7 +11,7 @@ import (
 	"cmp"
 	"container/ring"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"hash/fnv"
 	"log"
@@ -564,7 +564,7 @@ func (p *Prober) RunHandler(w http.ResponseWriter, r *http.Request) error {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(respStatus)
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
+		if err := jsonv1.NewEncoder(w).Encode(resp); err != nil {
 			return tsweb.Error(http.StatusInternalServerError, "error encoding JSON response", err)
 		}
 		return nil
@@ -632,7 +632,7 @@ func (p *Prober) RunAllHandler(w http.ResponseWriter, r *http.Request) error {
 		Results: results,
 	}
 	var b bytes.Buffer
-	if err := json.NewEncoder(&b).Encode(resp); err != nil {
+	if err := jsonv1.NewEncoder(&b).Encode(resp); err != nil {
 		return tsweb.Error(http.StatusInternalServerError, "error encoding JSON response", err)
 	}
 

@@ -5,7 +5,7 @@ package setting
 
 import (
 	"cmp"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"testing"
 	"time"
 
@@ -556,7 +556,7 @@ func TestMarshalUnmarshalSnapshot(t *testing.T) {
 				if useJSONv2 {
 					gotJSON, err = jsonv2.Marshal(tt.snapshot)
 				} else {
-					gotJSON, err = json.Marshal(tt.snapshot)
+					gotJSON, err = jsonv1.Marshal(tt.snapshot)
 				}
 				if err != nil {
 					t.Fatal(err)
@@ -570,7 +570,7 @@ func TestMarshalUnmarshalSnapshot(t *testing.T) {
 				if useJSONv2 {
 					err = jsonv2.Unmarshal(gotJSON, &gotBack)
 				} else {
-					err = json.Unmarshal(gotJSON, &gotBack)
+					err = jsonv1.Unmarshal(gotJSON, &gotBack)
 				}
 				if err != nil {
 					t.Fatal(err)

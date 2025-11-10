@@ -9,7 +9,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"runtime"
 	"sync"
 	"testing"
@@ -112,7 +112,7 @@ func TestAttestationKeyUnmarshal(t *testing.T) {
 		t.Fatal(err)
 	}
 	var ak2 attestationKey
-	if err := json.Unmarshal(buf, &ak2); err != nil {
+	if err := jsonv1.Unmarshal(buf, &ak2); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

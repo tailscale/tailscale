@@ -5,7 +5,7 @@
 package set
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"maps"
 )
 
@@ -81,12 +81,12 @@ func (s Set[T]) Equal(other Set[T]) bool {
 }
 
 func (s Set[T]) MarshalJSON() ([]byte, error) {
-	return json.Marshal(s.Slice())
+	return jsonv1.Marshal(s.Slice())
 }
 
 func (s *Set[T]) UnmarshalJSON(buf []byte) error {
 	var ss []T
-	if err := json.Unmarshal(buf, &ss); err != nil {
+	if err := jsonv1.Unmarshal(buf, &ss); err != nil {
 		return err
 	}
 	*s = SetOf(ss)

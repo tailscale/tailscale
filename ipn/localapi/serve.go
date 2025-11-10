@@ -8,7 +8,7 @@ package localapi
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -32,7 +32,7 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		config := h.b.ServeConfig()
-		bts, err := json.Marshal(config)
+		bts, err := jsonv1.Marshal(config)
 		if err != nil {
 			http.Error(w, "error encoding config: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -48,7 +48,7 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		configIn := new(ipn.ServeConfig)
-		if err := json.NewDecoder(r.Body).Decode(configIn); err != nil {
+		if err := jsonv1.NewDecoder(r.Body).Decode(configIn); err != nil {
 			WriteErrorJSON(w, fmt.Errorf("decoding config: %w", err))
 			return
 		}

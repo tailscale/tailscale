@@ -6,7 +6,7 @@
 package tailcfg
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"net/netip"
 )
 
@@ -141,8 +141,8 @@ type C2NDebugNetmapRequest struct {
 // netmap.NetworkMap values, they are returned as json.RawMessage.
 type C2NDebugNetmapResponse struct {
 	// Current is the current network map (netmap.NetworkMap).
-	Current json.RawMessage `json:"current"`
+	Current jsonv1.RawMessage `json:"current"`
 
 	// Candidate is a network map produced based on the candidate MapResponse.
-	Candidate json.RawMessage `json:"candidate,omitzero"`
+	Candidate jsonv1.RawMessage `json:"candidate,omitzero"`
 }

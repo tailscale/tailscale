@@ -5,7 +5,7 @@ package ipnlocal
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -307,7 +307,7 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 			t.Errorf("unexpected status code: %v", w.Code)
 		}
 		var addrs []string
-		json.NewDecoder(w.Body).Decode(&addrs)
+		jsonv1.NewDecoder(w.Body).Decode(&addrs)
 		if len(addrs) == 0 {
 			t.Fatalf("no addresses returned")
 		}

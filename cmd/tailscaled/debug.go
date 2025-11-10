@@ -8,7 +8,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -103,7 +103,7 @@ func runMonitor(ctx context.Context, loop bool) error {
 	defer b.Close()
 
 	dump := func(st *netmon.State) {
-		j, _ := json.MarshalIndent(st, "", "    ")
+		j, _ := jsonv1.MarshalIndent(st, "", "    ")
 		os.Stderr.Write(j)
 	}
 	mon, err := netmon.New(b, log.Printf)
@@ -232,7 +232,7 @@ func checkDerp(ctx context.Context, derpRegion string) (err error) {
 		return fmt.Errorf("fetch derp map: %v: %s", res.Status, b)
 	}
 	var dmap tailcfg.DERPMap
-	if err = json.Unmarshal(b, &dmap); err != nil {
+	if err = jsonv1.Unmarshal(b, &dmap); err != nil {
 		return fmt.Errorf("fetch DERP map: %w", err)
 	}
 	getRegion := func() *tailcfg.DERPRegion {

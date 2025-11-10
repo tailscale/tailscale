@@ -6,7 +6,7 @@ package ts2021
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"io"
 	"math"
 	"net/http"
@@ -323,7 +323,7 @@ func (up *Upgrader) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !up.sendEarlyPayload {
 			return nil
 		}
-		earlyJSON, err := json.Marshal(&tailcfg.EarlyNoise{
+		earlyJSON, err := jsonv1.Marshal(&tailcfg.EarlyNoise{
 			NodeKeyChallenge: up.challenge.Public(),
 		})
 		if err != nil {

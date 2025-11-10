@@ -10,7 +10,7 @@ package ws
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -198,7 +198,7 @@ func (c *conn) Read(b []byte) (int, error) {
 			// https://github.com/kubernetes/client-go/blob/v0.30.0-rc.1/tools/remotecommand/websocket.go#L218
 			if readMsg.streamID.Load() == remotecommand.StreamResize && c.hasTerm {
 				var msg tsrecorder.ResizeMsg
-				if err = json.Unmarshal(readMsg.payload, &msg); err != nil {
+				if err = jsonv1.Unmarshal(readMsg.payload, &msg); err != nil {
 					return 0, fmt.Errorf("error umarshalling resize message: %w", err)
 				}
 

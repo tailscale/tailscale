@@ -7,7 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -48,11 +48,11 @@ type fsm struct {
 }
 
 func commandWith(t *testing.T, s string) []byte {
-	jsonArgs, err := json.Marshal(s)
+	jsonArgs, err := jsonv1.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bs, err := json.Marshal(Command{
+	bs, err := jsonv1.Marshal(Command{
 		Args: jsonArgs,
 	})
 	if err != nil {
@@ -63,12 +63,12 @@ func commandWith(t *testing.T, s string) []byte {
 
 func fromCommand(bs []byte) (string, error) {
 	var cmd Command
-	err := json.Unmarshal(bs, &cmd)
+	err := jsonv1.Unmarshal(bs, &cmd)
 	if err != nil {
 		return "", err
 	}
 	var args string
-	err = json.Unmarshal(cmd.Args, &args)
+	err = jsonv1.Unmarshal(cmd.Args, &args)
 	if err != nil {
 		return "", err
 	}
@@ -85,7 +85,7 @@ func (f *fsm) Apply(l *raft.Log) any {
 		}
 	}
 	f.applyEvents = append(f.applyEvents, s)
-	result, err := json.Marshal(len(f.applyEvents))
+	result, err := jsonv1.Marshal(len(f.applyEvents))
 	if err != nil {
 		panic("should be able to Marshal that?")
 	}
@@ -403,7 +403,7 @@ func assertCommandsWorkOnAnyNode(t testing.TB, participants []*participant) {
 	for i, p := range participants {
 		si := fmt.Sprintf("%d", i)
 		want = append(want, si)
-		bs, err := json.Marshal(si)
+		bs, err := jsonv1.Marshal(si)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -415,7 +415,7 @@ func assertCommandsWorkOnAnyNode(t testing.TB, participants []*participant) {
 			t.Fatalf("%d: Result Error ExecuteCommand: %v", i, res.Err)
 		}
 		var retVal int
-		err = json.Unmarshal(res.Result, &retVal)
+		err = jsonv1.Unmarshal(res.Result, &retVal)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -722,7 +722,7 @@ func TestOnlyTaggedPeersCanJoin(t *testing.T) {
 
 	ipv4, _ := tsJoiner.TailscaleIPs()
 	url := fmt.Sprintf("http://%s/join", ps[0].c.commandAddr(ps[0].c.self.hostAddr))
-	payload, err := json.Marshal(joinRequest{
+	payload, err := jsonv1.Marshal(joinRequest{
 		RemoteHost: ipv4.String(),
 		RemoteID:   "node joiner",
 	})

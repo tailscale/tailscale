@@ -8,7 +8,7 @@ package main
 import (
 	"context"
 	_ "embed"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -417,7 +417,7 @@ func (a *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, logger *z
 		var latestConfig ipn.ConfigVAlpha
 		for key, val := range configs {
 			fn := tsoperator.TailscaledConfigFileName(key)
-			b, err := json.Marshal(val)
+			b, err := jsonv1.Marshal(val)
 			if err != nil {
 				return nil, fmt.Errorf("error marshalling tailscaled config: %w", err)
 			}
@@ -430,7 +430,7 @@ func (a *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, logger *z
 		}
 
 		if stsC.ServeConfig != nil {
-			j, err := json.Marshal(stsC.ServeConfig)
+			j, err := jsonv1.Marshal(stsC.ServeConfig)
 			if err != nil {
 				return nil, err
 			}
@@ -585,7 +585,7 @@ func deviceInfo(sec *corev1.Secret, podUID string, log *zap.SugaredLogger) (dev 
 	}
 	if rawDeviceIPs, ok := sec.Data[kubetypes.KeyDeviceIPs]; ok {
 		ips := make([]string, 0)
-		if err := json.Unmarshal(rawDeviceIPs, &ips); err != nil {
+		if err := jsonv1.Unmarshal(rawDeviceIPs, &ips); err != nil {
 			return nil, err
 		}
 		dev.ips = ips
@@ -1091,7 +1091,7 @@ func latestConfigFromSecret(s *corev1.Secret) (*ipn.ConfigVAlpha, error) {
 	var conf *ipn.ConfigVAlpha
 	if latestStr != "" {
 		conf = &ipn.ConfigVAlpha{}
-		if err := json.Unmarshal([]byte(s.Data[latestStr]), conf); err != nil {
+		if err := jsonv1.Unmarshal([]byte(s.Data[latestStr]), conf); err != nil {
 			return nil, fmt.Errorf("error unmarshaling tailscaled config from Secret %q in field %q: %w", s.Name, latestStr, err)
 		}
 	}

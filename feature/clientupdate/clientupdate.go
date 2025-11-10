@@ -7,7 +7,7 @@ package clientupdate
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -214,7 +214,7 @@ func serveUpdateProgress(h *localapi.Handler, w http.ResponseWriter, r *http.Req
 
 	ups := ext.GetSelfUpdateProgress()
 
-	json.NewEncoder(w).Encode(ups)
+	jsonv1.NewEncoder(w).Encode(ups)
 }
 
 func (e *extension) pushSelfUpdateProgress(up ipnstate.UpdateProgress) {
@@ -237,7 +237,7 @@ func handleC2NUpdateGet(b *ipnlocal.LocalBackend, w http.ResponseWriter, r *http
 	res.Started = e.c2nUpdateStarted()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
+	jsonv1.NewEncoder(w).Encode(res)
 }
 
 func handleC2NUpdatePost(b *ipnlocal.LocalBackend, w http.ResponseWriter, r *http.Request) {
@@ -253,7 +253,7 @@ func handleC2NUpdatePost(b *ipnlocal.LocalBackend, w http.ResponseWriter, r *htt
 			e.logf("c2n: POST /update failed: %s", res.Err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(res)
+		jsonv1.NewEncoder(w).Encode(res)
 	}()
 
 	if !res.Enabled {
@@ -444,7 +444,7 @@ func (e *extension) startAutoUpdate(logPrefix string) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("failed to find cmd/tailscale binary: %w", err)
 	}
-	if err := json.Unmarshal(out, &ver); err != nil {
+	if err := jsonv1.Unmarshal(out, &ver); err != nil {
 		return fmt.Errorf("invalid JSON from cmd/tailscale version --json: %w", err)
 	}
 	if ver.Long != version.Long() {

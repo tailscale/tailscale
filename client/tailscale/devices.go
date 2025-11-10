@@ -8,7 +8,7 @@ package tailscale
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -160,7 +160,7 @@ func (c *Client) Devices(ctx context.Context, fields *DeviceFieldsOpts) (deviceL
 	}
 
 	var devices GetDevicesResponse
-	err = json.Unmarshal(b, &devices)
+	err = jsonv1.Unmarshal(b, &devices)
 	return devices.Devices, err
 }
 
@@ -198,7 +198,7 @@ func (c *Client) Device(ctx context.Context, deviceID string, fields *DeviceFiel
 		return nil, HandleErrorResponse(b, resp)
 	}
 
-	err = json.Unmarshal(b, &device)
+	err = jsonv1.Unmarshal(b, &device)
 	return device, err
 }
 
@@ -243,7 +243,7 @@ func (c *Client) SetAuthorized(ctx context.Context, deviceID string, authorized 
 	params := &struct {
 		Authorized bool `json:"authorized"`
 	}{Authorized: authorized}
-	data, err := json.Marshal(params)
+	data, err := jsonv1.Marshal(params)
 	if err != nil {
 		return err
 	}
@@ -271,7 +271,7 @@ func (c *Client) SetTags(ctx context.Context, deviceID string, tags []string) er
 	params := &struct {
 		Tags []string `json:"tags"`
 	}{Tags: tags}
-	data, err := json.Marshal(params)
+	data, err := jsonv1.Marshal(params)
 	if err != nil {
 		return err
 	}

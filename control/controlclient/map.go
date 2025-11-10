@@ -8,7 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"io"
 	"maps"
 	"net"
@@ -598,7 +598,7 @@ func (ms *mapSession) patchifyPeersChanged(resp *tailcfg.MapResponse) {
 		if p, ok := ms.patchifyPeer(n); ok {
 			patchifiedPeer.Add(1)
 			if debugPatchifyPeer() {
-				patchj, _ := json.Marshal(p)
+				patchj, _ := jsonv1.Marshal(p)
 				ms.logf("debug: patchifyPeer[ID=%v]: %s", n.ID, patchj)
 			}
 			if p != nil {

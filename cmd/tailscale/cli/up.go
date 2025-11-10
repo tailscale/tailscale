@@ -6,7 +6,7 @@ package cli
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -729,7 +729,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 						}
 					}
 
-					data, err := json.MarshalIndent(js, "", "\t")
+					data, err := jsonv1.MarshalIndent(js, "", "\t")
 					if err != nil {
 						printf("upOutputJSON marshalling error: %v", err)
 					} else {
@@ -848,7 +848,7 @@ func checkUpWarnings(ctx context.Context) {
 
 func printUpDoneJSON(state ipn.State, errorString string) {
 	js := &upOutputJSON{BackendState: state.String(), Error: errorString}
-	data, err := json.MarshalIndent(js, "", "  ")
+	data, err := jsonv1.MarshalIndent(js, "", "  ")
 	if err != nil {
 		log.Printf("printUpDoneJSON marshalling error: %v", err)
 	} else {

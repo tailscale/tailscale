@@ -6,7 +6,7 @@ package key
 import (
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -26,13 +26,13 @@ type DERPMesh struct {
 
 // MarshalJSON implements the [encoding/json.Marshaler] interface.
 func (k DERPMesh) MarshalJSON() ([]byte, error) {
-	return json.Marshal(k.String())
+	return jsonv1.Marshal(k.String())
 }
 
 // UnmarshalJSON implements the [encoding/json.Unmarshaler] interface.
 func (k *DERPMesh) UnmarshalJSON(data []byte) error {
 	var s string
-	json.Unmarshal(data, &s)
+	jsonv1.Unmarshal(data, &s)
 
 	if hex.DecodedLen(len(s)) != len(k.k) {
 		return fmt.Errorf("types/key/derp: cannot unmarshal, incorrect size mesh key len: %d, must be %d, %w", hex.DecodedLen(len(s)), len(k.k), ErrInvalidMeshKey)

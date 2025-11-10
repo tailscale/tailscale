@@ -12,7 +12,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -224,7 +224,7 @@ func TestGetServeHandler(t *testing.T) {
 
 func getEtag(t *testing.T, b any) string {
 	t.Helper()
-	bts, err := json.Marshal(b)
+	bts, err := jsonv1.Marshal(b)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +364,7 @@ func TestServeConfigServices(t *testing.T) {
 			netip.MustParseAddr("fd7a:115c:a1e0:ab12:4843:cd96:626b:628b"),
 		},
 	}
-	svcIPMapJSON, err := json.Marshal(svcIPMap)
+	svcIPMapJSON, err := jsonv1.Marshal(svcIPMap)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,7 +7,7 @@
 package netmon
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"net/netip"
 	"runtime"
@@ -537,7 +537,7 @@ func prefixesMajorEqual(a, b []netip.Prefix) bool {
 }
 
 func jsonSummary(x any) any {
-	j, err := json.Marshal(x)
+	j, err := jsonv1.Marshal(x)
 	if err != nil {
 		return err
 	}

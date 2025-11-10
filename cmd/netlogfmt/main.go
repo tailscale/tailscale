@@ -27,7 +27,7 @@ package main
 import (
 	"cmp"
 	"encoding/base64"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -305,7 +305,7 @@ func mustMakeNamesByAddr() map[netip.Addr]string {
 			Addrs []netip.Addr `json:"addresses"`
 		} `json:"devices"`
 	}
-	must.Do(json.Unmarshal(b, &m))
+	must.Do(jsonv1.Unmarshal(b, &m))
 
 	// Construct a unique mapping of Tailscale IP addresses to hostnames.
 	// For brevity, we start with the first segment of the name and

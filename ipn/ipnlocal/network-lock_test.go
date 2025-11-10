@@ -8,7 +8,7 @@ package ipnlocal
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -107,7 +107,7 @@ func TestTKAEnablementFlow(t *testing.T) {
 		switch r.URL.Path {
 		case "/machine/tka/bootstrap":
 			body := new(tailcfg.TKABootstrapRequest)
-			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+			if err := jsonv1.NewDecoder(r.Body).Decode(body); err != nil {
 				t.Fatal(err)
 			}
 			if body.Version != tailcfg.CurrentCapabilityVersion {
@@ -124,7 +124,7 @@ func TestTKAEnablementFlow(t *testing.T) {
 			out := tailcfg.TKABootstrapResponse{
 				GenesisAUM: genesisAUM.Serialize(),
 			}
-			if err := json.NewEncoder(w).Encode(out); err != nil {
+			if err := jsonv1.NewEncoder(w).Encode(out); err != nil {
 				t.Fatal(err)
 			}
 
@@ -136,7 +136,7 @@ func TestTKAEnablementFlow(t *testing.T) {
 				t.Fatal(err)
 			}
 			w.WriteHeader(200)
-			if err := json.NewEncoder(w).Encode(tailcfg.TKASyncOfferResponse{
+			if err := jsonv1.NewEncoder(w).Encode(tailcfg.TKASyncOfferResponse{
 				Head: string(head),
 			}); err != nil {
 				t.Fatal(err)
@@ -147,7 +147,7 @@ func TestTKAEnablementFlow(t *testing.T) {
 				t.Fatal(err)
 			}
 			w.WriteHeader(200)
-			if err := json.NewEncoder(w).Encode(tailcfg.TKASyncSendResponse{
+			if err := jsonv1.NewEncoder(w).Encode(tailcfg.TKASyncSendResponse{
 				Head: string(head),
 			}); err != nil {
 				t.Fatal(err)
@@ -231,7 +231,7 @@ func TestTKADisablementFlow(t *testing.T) {
 		switch r.URL.Path {
 		case "/machine/tka/bootstrap":
 			body := new(tailcfg.TKABootstrapRequest)
-			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+			if err := jsonv1.NewDecoder(r.Body).Decode(body); err != nil {
 				t.Fatal(err)
 			}
 			if body.Version != tailcfg.CurrentCapabilityVersion {
@@ -259,7 +259,7 @@ func TestTKADisablementFlow(t *testing.T) {
 			out := tailcfg.TKABootstrapResponse{
 				DisablementSecret: disablement,
 			}
-			if err := json.NewEncoder(w).Encode(out); err != nil {
+			if err := jsonv1.NewEncoder(w).Encode(out); err != nil {
 				t.Fatal(err)
 			}
 
@@ -442,7 +442,7 @@ func TestTKASync(t *testing.T) {
 				switch r.URL.Path {
 				case "/machine/tka/sync/offer":
 					body := new(tailcfg.TKASyncOfferRequest)
-					if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+					if err := jsonv1.NewDecoder(r.Body).Decode(body); err != nil {
 						t.Fatal(err)
 					}
 					t.Logf("got sync offer:\n%+v", body)
@@ -474,13 +474,13 @@ func TestTKASync(t *testing.T) {
 
 					t.Logf("responding to sync offer with:\n%+v", resp)
 					w.WriteHeader(200)
-					if err := json.NewEncoder(w).Encode(resp); err != nil {
+					if err := jsonv1.NewEncoder(w).Encode(resp); err != nil {
 						t.Fatal(err)
 					}
 
 				case "/machine/tka/sync/send":
 					body := new(tailcfg.TKASyncSendRequest)
-					if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+					if err := jsonv1.NewDecoder(r.Body).Decode(body); err != nil {
 						t.Fatal(err)
 					}
 					t.Logf("got sync send:\n%+v", body)
@@ -507,7 +507,7 @@ func TestTKASync(t *testing.T) {
 					}
 
 					w.WriteHeader(200)
-					if err := json.NewEncoder(w).Encode(tailcfg.TKASyncSendResponse{
+					if err := jsonv1.NewEncoder(w).Encode(tailcfg.TKASyncSendResponse{
 						Head: string(head),
 					}); err != nil {
 						t.Fatal(err)
@@ -739,7 +739,7 @@ func TestTKADisable(t *testing.T) {
 		switch r.URL.Path {
 		case "/machine/tka/disable":
 			body := new(tailcfg.TKADisableRequest)
-			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+			if err := jsonv1.NewDecoder(r.Body).Decode(body); err != nil {
 				t.Fatal(err)
 			}
 			if body.Version != tailcfg.CurrentCapabilityVersion {
@@ -761,7 +761,7 @@ func TestTKADisable(t *testing.T) {
 			}
 
 			w.WriteHeader(200)
-			if err := json.NewEncoder(w).Encode(tailcfg.TKADisableResponse{}); err != nil {
+			if err := jsonv1.NewEncoder(w).Encode(tailcfg.TKADisableResponse{}); err != nil {
 				t.Fatal(err)
 			}
 
@@ -833,7 +833,7 @@ func TestTKASign(t *testing.T) {
 		switch r.URL.Path {
 		case "/machine/tka/sign":
 			body := new(tailcfg.TKASubmitSignatureRequest)
-			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+			if err := jsonv1.NewDecoder(r.Body).Decode(body); err != nil {
 				t.Fatal(err)
 			}
 			if body.Version != tailcfg.CurrentCapabilityVersion {
@@ -853,7 +853,7 @@ func TestTKASign(t *testing.T) {
 			}
 
 			w.WriteHeader(200)
-			if err := json.NewEncoder(w).Encode(tailcfg.TKASubmitSignatureResponse{}); err != nil {
+			if err := jsonv1.NewEncoder(w).Encode(tailcfg.TKASubmitSignatureResponse{}); err != nil {
 				t.Fatal(err)
 			}
 
@@ -918,7 +918,7 @@ func TestTKAForceDisable(t *testing.T) {
 		switch r.URL.Path {
 		case "/machine/tka/bootstrap":
 			body := new(tailcfg.TKABootstrapRequest)
-			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+			if err := jsonv1.NewDecoder(r.Body).Decode(body); err != nil {
 				t.Fatal(err)
 			}
 			if body.Version != tailcfg.CurrentCapabilityVersion {
@@ -932,7 +932,7 @@ func TestTKAForceDisable(t *testing.T) {
 			out := tailcfg.TKABootstrapResponse{
 				GenesisAUM: genesis.Serialize(),
 			}
-			if err := json.NewEncoder(w).Encode(out); err != nil {
+			if err := jsonv1.NewEncoder(w).Encode(out); err != nil {
 				t.Fatal(err)
 			}
 
@@ -1056,7 +1056,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 				switch r.URL.Path {
 				case "/machine/tka/affected-sigs":
 					body := new(tailcfg.TKASignaturesUsingKeyRequest)
-					if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+					if err := jsonv1.NewDecoder(r.Body).Decode(body); err != nil {
 						t.Fatal(err)
 					}
 					if body.Version != tailcfg.CurrentCapabilityVersion {
@@ -1067,7 +1067,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 					}
 
 					w.WriteHeader(200)
-					if err := json.NewEncoder(w).Encode(tailcfg.TKASignaturesUsingKeyResponse{
+					if err := jsonv1.NewEncoder(w).Encode(tailcfg.TKASignaturesUsingKeyResponse{
 						Signatures: []tkatype.MarshaledSignature{s.Serialize()},
 					}); err != nil {
 						t.Fatal(err)
@@ -1155,7 +1155,7 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 		switch r.URL.Path {
 		case "/machine/tka/sync/send":
 			body := new(tailcfg.TKASyncSendRequest)
-			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+			if err := jsonv1.NewDecoder(r.Body).Decode(body); err != nil {
 				t.Fatal(err)
 			}
 			t.Logf("got sync send:\n%+v", body)
@@ -1181,7 +1181,7 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 			}
 
 			w.WriteHeader(200)
-			if err := json.NewEncoder(w).Encode(tailcfg.TKASubmitSignatureResponse{}); err != nil {
+			if err := jsonv1.NewEncoder(w).Encode(tailcfg.TKASubmitSignatureResponse{}); err != nil {
 				t.Fatal(err)
 			}
 

@@ -11,7 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -146,7 +146,7 @@ func (c *conn) Read(b []byte) (int, error) {
 		case c.resizeStreamID.Load():
 
 			var msg spdyResizeMsg
-			if err = json.Unmarshal(sf.Payload, &msg); err != nil {
+			if err = jsonv1.Unmarshal(sf.Payload, &msg); err != nil {
 				return 0, fmt.Errorf("error umarshalling resize msg: %w", err)
 			}
 			c.ch.Width = msg.Width

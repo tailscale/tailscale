@@ -7,7 +7,7 @@ package tpm
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -190,7 +190,7 @@ func newStore(logf logger.Logf, path string) (ipn.StateStore, error) {
 
 	// State file exists, unseal and parse it.
 	var sealed encryptedData
-	if err := json.Unmarshal(bs, &sealed); err != nil {
+	if err := jsonv1.Unmarshal(bs, &sealed); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal state file: %w", err)
 	}
 	if len(sealed.Data) == 0 || sealed.Key == nil || len(sealed.Nonce) == 0 {
@@ -200,7 +200,7 @@ func newStore(logf logger.Logf, path string) (ipn.StateStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to unseal state file: %w", err)
 	}
-	if err := json.Unmarshal(data.Data, &parsed); err != nil {
+	if err := jsonv1.Unmarshal(data.Data, &parsed); err != nil {
 		return nil, fmt.Errorf("failed to parse state file: %w", err)
 	}
 	return &tpmStore{
@@ -246,7 +246,7 @@ func (s *tpmStore) WriteState(k ipn.StateKey, bs []byte) error {
 }
 
 func (s *tpmStore) writeSealed() error {
-	bs, err := json.Marshal(s.cache)
+	bs, err := jsonv1.Marshal(s.cache)
 	if err != nil {
 		return err
 	}
@@ -254,7 +254,7 @@ func (s *tpmStore) writeSealed() error {
 	if err != nil {
 		return fmt.Errorf("failed to seal state file: %w", err)
 	}
-	buf, err := json.Marshal(sealed)
+	buf, err := jsonv1.Marshal(sealed)
 	if err != nil {
 		return err
 	}

@@ -6,7 +6,7 @@ package netmap
 
 import (
 	"cmp"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/netip"
 	"sort"
@@ -438,7 +438,7 @@ func (b *NetworkMap) ConciseDiffFrom(a *NetworkMap) string {
 }
 
 func (nm *NetworkMap) JSON() string {
-	b, err := json.MarshalIndent(*nm, "", "  ")
+	b, err := jsonv1.MarshalIndent(*nm, "", "  ")
 	if err != nil {
 		return fmt.Sprintf("[json error: %v]", err)
 	}

@@ -7,7 +7,7 @@ package localapi
 import (
 	"bytes"
 	"cmp"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -352,7 +352,7 @@ func (h *Handler) serveIDToken(w http.ResponseWriter, r *http.Request) {
 		Audience:   aud,
 		NodeKey:    nm.NodeKey,
 	}
-	b, err := json.Marshal(req)
+	b, err := jsonv1.Marshal(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -398,7 +398,7 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	if note := r.URL.Query().Get("note"); len(note) > 0 {
 		h.logf("user bugreport note: %s", note)
 	}
-	hi, _ := json.Marshal(hostinfo.New())
+	hi, _ := jsonv1.Marshal(hostinfo.New())
 	h.logf("user bugreport hostinfo: %s", hi)
 	if err := h.b.HealthTracker().OverallError(); err != nil {
 		h.logf("user bugreport health: %s", err.Error())
@@ -514,7 +514,7 @@ func (h *Handler) serveSetDeviceAttrs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -581,7 +581,7 @@ func (h *Handler) serveWhoIsWithBackend(w http.ResponseWriter, r *http.Request, 
 	if n.Addresses().Len() > 0 {
 		res.CapMap = b.PeerCaps(n.Addresses().At(0).Addr())
 	}
-	j, err := json.MarshalIndent(res, "", "\t")
+	j, err := jsonv1.MarshalIndent(res, "", "\t")
 	if err != nil {
 		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
 		return
@@ -712,7 +712,7 @@ func (h *Handler) reloadConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(&res)
+	jsonv1.NewEncoder(w).Encode(&res)
 }
 
 func (h *Handler) serveResetAuth(w http.ResponseWriter, r *http.Request) {
@@ -742,7 +742,7 @@ func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request)
 		warning = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct {
+	jsonv1.NewEncoder(w).Encode(struct {
 		Warning string
 	}{
 		Warning: warning,
@@ -768,7 +768,7 @@ func (h *Handler) serveCheckReversePathFiltering(w http.ResponseWriter, r *http.
 		warning = msg.String()
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct {
+	jsonv1.NewEncoder(w).Encode(struct {
 		Warning string
 	}{
 		Warning: warning,
@@ -785,7 +785,7 @@ func (h *Handler) serveCheckUDPGROForwarding(w http.ResponseWriter, r *http.Requ
 		warning = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct {
+	jsonv1.NewEncoder(w).Encode(struct {
 		Warning string
 	}{
 		Warning: warning,
@@ -806,7 +806,7 @@ func (h *Handler) serveSetUDPGROForwarding(w http.ResponseWriter, r *http.Reques
 		warning = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct {
+	jsonv1.NewEncoder(w).Encode(struct {
 		Warning string
 	}{
 		Warning: warning,
@@ -825,7 +825,7 @@ func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 	} else {
 		st = h.b.StatusWithoutPeers()
 	}
-	e := json.NewEncoder(w)
+	e := jsonv1.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(st)
 }
@@ -842,7 +842,7 @@ func InUseOtherUserIPNStream(w http.ResponseWriter, r *http.Request, err error) 
 	if r.Method != httpm.GET || r.URL.Path != "/localapi/v0/watch-ipn-bus" {
 		return false
 	}
-	js, err := json.Marshal(&ipn.Notify{
+	js, err := jsonv1.Marshal(&ipn.Notify{
 		Version:    version.Long(),
 		State:      ptr.To(ipn.InUseOtherUser),
 		ErrMessage: ptr.To(err.Error()),
@@ -887,7 +887,7 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	ctx := r.Context()
-	enc := json.NewEncoder(w)
+	enc := jsonv1.NewEncoder(w)
 	h.b.WatchNotificationsAs(ctx, h.Actor, mask, f.Flush, func(roNotify *ipn.Notify) (keepGoing bool) {
 		err := enc.Encode(roNotify)
 		if err != nil {
@@ -923,7 +923,7 @@ func (h *Handler) serveStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var o ipn.Options
-	if err := json.NewDecoder(r.Body).Decode(&o); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&o); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -966,7 +966,7 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		mp := new(ipn.MaskedPrefs)
-		if err := json.NewDecoder(r.Body).Decode(mp); err != nil {
+		if err := jsonv1.NewDecoder(r.Body).Decode(mp); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -974,7 +974,7 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 			if err := h.b.MaybeClearAppConnector(mp); err != nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(resJSON{Error: err.Error()})
+				jsonv1.NewEncoder(w).Encode(resJSON{Error: err.Error()})
 				return
 			}
 		}
@@ -983,7 +983,7 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(resJSON{Error: err.Error()})
+			jsonv1.NewEncoder(w).Encode(resJSON{Error: err.Error()})
 			return
 		}
 	case httpm.GET, httpm.HEAD:
@@ -993,7 +993,7 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	e := json.NewEncoder(w)
+	e := jsonv1.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(prefs)
 }
@@ -1012,7 +1012,7 @@ func (h *Handler) serveCheckPrefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := new(ipn.Prefs)
-	if err := json.NewDecoder(r.Body).Decode(p); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(p); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
@@ -1022,7 +1022,7 @@ func (h *Handler) serveCheckPrefs(w http.ResponseWriter, r *http.Request) {
 		res.Error = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
+	jsonv1.NewEncoder(w).Encode(res)
 }
 
 // WriteErrorJSON writes a JSON object (with a single "error" string field) to w
@@ -1037,7 +1037,7 @@ func WriteErrorJSON(w http.ResponseWriter, err error) {
 	type E struct {
 		Error string `json:"error"`
 	}
-	json.NewEncoder(w).Encode(E{err.Error()})
+	jsonv1.NewEncoder(w).Encode(E{err.Error()})
 }
 
 func (h *Handler) serveSetDNS(w http.ResponseWriter, r *http.Request) {
@@ -1056,7 +1056,7 @@ func (h *Handler) serveSetDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct{}{})
+	jsonv1.NewEncoder(w).Encode(struct{}{})
 }
 
 func (h *Handler) serveDERPMap(w http.ResponseWriter, r *http.Request) {
@@ -1065,7 +1065,7 @@ func (h *Handler) serveDERPMap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	e := json.NewEncoder(w)
+	e := jsonv1.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(h.b.DERPMap())
 }
@@ -1147,7 +1147,7 @@ func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
+	jsonv1.NewEncoder(w).Encode(res)
 }
 
 func (h *Handler) serveDial(w http.ResponseWriter, r *http.Request) {
@@ -1219,7 +1219,7 @@ func (h *Handler) serveSetPushDeviceToken(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var params apitype.SetPushDeviceTokenRequest
-	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&params); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
@@ -1237,7 +1237,7 @@ func (h *Handler) serveHandlePushMessage(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var pushMessageBody map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&pushMessageBody); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&pushMessageBody); err != nil {
 		http.Error(w, "failed to decode JSON body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -1260,7 +1260,7 @@ func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Reques
 	}
 
 	var clientMetrics []clientMetricJSON
-	if err := json.NewDecoder(r.Body).Decode(&clientMetrics); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&clientMetrics); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
@@ -1292,7 +1292,7 @@ func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Reques
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct{}{})
+	jsonv1.NewEncoder(w).Encode(struct{}{})
 }
 
 func (h *Handler) serveSetGUIVisible(w http.ResponseWriter, r *http.Request) {
@@ -1306,7 +1306,7 @@ func (h *Handler) serveSetGUIVisible(w http.ResponseWriter, r *http.Request) {
 		SessionID string // the last SessionID sent to the client in ipn.Notify.SessionID
 	}
 	var req setGUIVisibleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := jsonv1.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
@@ -1341,7 +1341,7 @@ func (h *Handler) serveSetUseExitNodeEnabled(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	e := json.NewEncoder(w)
+	e := jsonv1.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(prefs)
 }
@@ -1369,7 +1369,7 @@ func (h *Handler) serveProfiles(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case httpm.GET:
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(h.b.ListProfiles())
+			jsonv1.NewEncoder(w).Encode(h.b.ListProfiles())
 		case httpm.PUT:
 			err := h.b.NewProfile()
 			if err != nil {
@@ -1391,7 +1391,7 @@ func (h *Handler) serveProfiles(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case httpm.GET:
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(h.b.CurrentProfile())
+			jsonv1.NewEncoder(w).Encode(h.b.CurrentProfile())
 		default:
 			http.Error(w, "use GET", http.StatusMethodNotAllowed)
 		}
@@ -1410,7 +1410,7 @@ func (h *Handler) serveProfiles(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(profiles[profileIndex])
+		jsonv1.NewEncoder(w).Encode(profiles[profileIndex])
 	case httpm.POST:
 		err := h.b.SwitchProfile(profileID)
 		if err != nil {
@@ -1460,7 +1460,7 @@ func (h *Handler) serveQueryFeature(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b, err := json.Marshal(&tailcfg.QueryFeatureRequest{
+	b, err := jsonv1.Marshal(&tailcfg.QueryFeatureRequest{
 		NodeKey: nm.NodeKey,
 		Feature: feature,
 	})
@@ -1521,7 +1521,7 @@ func (h *Handler) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		cv = &tailcfg.ClientVersion{RunningLatest: true}
 	}
 
-	json.NewEncoder(w).Encode(cv)
+	jsonv1.NewEncoder(w).Encode(cv)
 }
 
 // serveDNSOSConfig serves the current system DNS configuration as a JSON object, if
@@ -1563,7 +1563,7 @@ func (h *Handler) serveDNSOSConfig(w http.ResponseWriter, r *http.Request) {
 		SearchDomains: searchDomains,
 		MatchDomains:  matchDomains,
 	}
-	json.NewEncoder(w).Encode(response)
+	jsonv1.NewEncoder(w).Encode(response)
 }
 
 // serveDNSQuery provides the ability to perform DNS queries using the internal
@@ -1607,7 +1607,7 @@ func (h *Handler) serveDNSQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(&apitype.DNSQueryResponse{
+	jsonv1.NewEncoder(w).Encode(&apitype.DNSQueryResponse{
 		Bytes:     res,
 		Resolvers: rrs,
 	})
@@ -1666,7 +1666,7 @@ func (h *Handler) serveSuggestExitNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
+	jsonv1.NewEncoder(w).Encode(res)
 }
 
 // Shutdown is an eventbus value published when tailscaled shutdown
@@ -1723,5 +1723,5 @@ func (h *Handler) serveGetAppcRouteInfo(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
+	jsonv1.NewEncoder(w).Encode(res)
 }

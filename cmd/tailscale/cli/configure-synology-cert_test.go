@@ -7,18 +7,18 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"reflect"
 	"testing"
 )
 
 type fakeAPICaller struct {
-	Data  json.RawMessage
+	Data  jsonv1.RawMessage
 	Error error
 }
 
-func (c fakeAPICaller) Call(_ context.Context, _, _ string, _ map[string]string) (json.RawMessage, error) {
+func (c fakeAPICaller) Call(_ context.Context, _, _ string, _ map[string]string) (jsonv1.RawMessage, error) {
 	return c.Data, c.Error
 }
 
@@ -32,7 +32,7 @@ func Test_listCerts(t *testing.T) {
 		{
 			name: "normal response",
 			caller: fakeAPICaller{
-				Data: json.RawMessage(`{
+				Data: jsonv1.RawMessage(`{
 "certificates" : [
 	{
 		"desc" : "Tailnet Certificate",
@@ -123,7 +123,7 @@ func Test_listCerts(t *testing.T) {
 		},
 		{
 			name:    "payload decode error",
-			caller:  fakeAPICaller{json.RawMessage("This isn't JSON!"), nil},
+			caller:  fakeAPICaller{jsonv1.RawMessage("This isn't JSON!"), nil},
 			wantErr: true,
 		},
 	}

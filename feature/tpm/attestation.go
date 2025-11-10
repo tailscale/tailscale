@@ -5,7 +5,7 @@ package tpm
 
 import (
 	"crypto"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -149,7 +149,7 @@ func (ak *attestationKey) MarshalJSON() ([]byte, error) {
 	if ak == nil || len(ak.tpmPublic.Bytes()) == 0 || len(ak.tpmPrivate.Buffer) == 0 {
 		return []byte("null"), nil
 	}
-	return json.Marshal(attestationKeySerialized{
+	return jsonv1.Marshal(attestationKeySerialized{
 		TPMPublic:  ak.tpmPublic.Bytes(),
 		TPMPrivate: ak.tpmPrivate.Buffer,
 	})
@@ -158,7 +158,7 @@ func (ak *attestationKey) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON implements json.Unmarshaler.
 func (ak *attestationKey) UnmarshalJSON(data []byte) (retErr error) {
 	var aks attestationKeySerialized
-	if err := json.Unmarshal(data, &aks); err != nil {
+	if err := jsonv1.Unmarshal(data, &aks); err != nil {
 		return err
 	}
 

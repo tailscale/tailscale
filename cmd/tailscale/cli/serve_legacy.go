@@ -7,7 +7,7 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -238,7 +238,7 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 			return err
 		}
 		sc := new(ipn.ServeConfig)
-		if err := json.Unmarshal(valb, sc); err != nil {
+		if err := jsonv1.Unmarshal(valb, sc); err != nil {
 			return fmt.Errorf("invalid JSON: %w", err)
 		}
 		return e.lc.SetServeConfig(ctx, sc)
@@ -617,7 +617,7 @@ func (e *serveEnv) runServeStatus(ctx context.Context, args []string) error {
 		return err
 	}
 	if e.json {
-		j, err := json.MarshalIndent(sc, "", "  ")
+		j, err := jsonv1.MarshalIndent(sc, "", "  ")
 		if err != nil {
 			return err
 		}

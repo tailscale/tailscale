@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -298,7 +298,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	if !reflect.DeepEqual(gotCfg, ingCfg) {
 		logger.Infof("Updating serve config")
 		mak.Set(&cfg.Services, serviceName, ingCfg)
-		cfgBytes, err := json.Marshal(cfg)
+		cfgBytes, err := jsonv1.Marshal(cfg)
 		if err != nil {
 			return false, fmt.Errorf("error marshaling serve config: %w", err)
 		}
@@ -478,7 +478,7 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 	}
 
 	if serveConfigChanged {
-		cfgBytes, err := json.Marshal(cfg)
+		cfgBytes, err := jsonv1.Marshal(cfg)
 		if err != nil {
 			return false, fmt.Errorf("marshaling serve config: %w", err)
 		}
@@ -557,7 +557,7 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	// 5. Remove the Tailscale Service from the serve config for the ProxyGroup.
 	logger.Infof("Removing TailscaleService %q from serve config for ProxyGroup %q", hostname, pg)
 	delete(cfg.Services, serviceName)
-	cfgBytes, err := json.Marshal(cfg)
+	cfgBytes, err := jsonv1.Marshal(cfg)
 	if err != nil {
 		return false, fmt.Errorf("error marshaling serve config: %w", err)
 	}
@@ -606,7 +606,7 @@ func (r *HAIngressReconciler) proxyGroupServeConfig(ctx context.Context, pg stri
 	}
 	cfg = &ipn.ServeConfig{}
 	if len(cm.BinaryData[serveConfigKey]) != 0 {
-		if err := json.Unmarshal(cm.BinaryData[serveConfigKey], cfg); err != nil {
+		if err := jsonv1.Unmarshal(cm.BinaryData[serveConfigKey], cfg); err != nil {
 			return nil, nil, fmt.Errorf("error unmarshaling ingress serve config %v: %w", cm.BinaryData[serveConfigKey], err)
 		}
 	}
@@ -717,7 +717,7 @@ func (r *HAIngressReconciler) cleanupTailscaleService(ctx context.Context, svc *
 	}
 	o.OwnerRefs = slices.Delete(o.OwnerRefs, ix, ix+1)
 	logger.Infof("Deleting Tailscale Service %q", svc.Name)
-	json, err := json.Marshal(o)
+	json, err := jsonv1.Marshal(o)
 	if err != nil {
 		return false, fmt.Errorf("error marshalling updated Tailscale Service owner reference: %w", err)
 	}
@@ -768,7 +768,7 @@ func (a *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 		var updated bool
 		for fileName, confB := range secret.Data {
 			var conf ipn.ConfigVAlpha
-			if err := json.Unmarshal(confB, &conf); err != nil {
+			if err := jsonv1.Unmarshal(confB, &conf); err != nil {
 				return fmt.Errorf("error unmarshalling ProxyGroup config: %w", err)
 			}
 
@@ -788,7 +788,7 @@ func (a *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 			}
 
 			// Update the Secret.
-			confB, err := json.Marshal(conf)
+			confB, err := jsonv1.Marshal(conf)
 			if err != nil {
 				return fmt.Errorf("error marshalling ProxyGroup config: %w", err)
 			}
@@ -864,7 +864,7 @@ func ownerAnnotations(operatorID string, svc *tailscale.VIPService) (map[string]
 	}
 	if svc == nil {
 		c := ownerAnnotationValue{OwnerRefs: []OwnerRef{ref}}
-		json, err := json.Marshal(c)
+		json, err := jsonv1.Marshal(c)
 		if err != nil {
 			return nil, fmt.Errorf("[unexpected] unable to marshal Tailscale Service's owner annotation contents: %w, please report this", err)
 		}
@@ -886,7 +886,7 @@ func ownerAnnotations(operatorID string, svc *tailscale.VIPService) (map[string]
 		return nil, fmt.Errorf("Tailscale Service %s is owned by another resource: %#v; cannot be reused for an Ingress", svc.Name, o.OwnerRefs[0].Resource)
 	}
 	o.OwnerRefs = append(o.OwnerRefs, ref)
-	json, err := json.Marshal(o)
+	json, err := jsonv1.Marshal(o)
 	if err != nil {
 		return nil, fmt.Errorf("error marshalling updated owner references: %w", err)
 	}
@@ -905,7 +905,7 @@ func parseOwnerAnnotation(tsSvc *tailscale.VIPService) (*ownerAnnotationValue, e
 		return nil, nil
 	}
 	o := &ownerAnnotationValue{}
-	if err := json.Unmarshal([]byte(tsSvc.Annotations[ownerAnnotation]), o); err != nil {
+	if err := jsonv1.Unmarshal([]byte(tsSvc.Annotations[ownerAnnotation]), o); err != nil {
 		return nil, fmt.Errorf("error parsing Tailscale Service's %s annotation %q: %w", ownerAnnotation, tsSvc.Annotations[ownerAnnotation], err)
 	}
 	return o, nil

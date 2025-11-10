@@ -12,7 +12,7 @@
 package tailscale
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -198,7 +198,7 @@ func (e ErrResponse) Error() string {
 // Deprecated: use [tailscale.com/client/tailscale/v2] instead.
 func HandleErrorResponse(b []byte, resp *http.Response) error {
 	var errResp ErrResponse
-	if err := json.Unmarshal(b, &errResp); err != nil {
+	if err := jsonv1.Unmarshal(b, &errResp); err != nil {
 		return fmt.Errorf("json.Unmarshal %q: %w", b, err)
 	}
 	errResp.Status = resp.StatusCode

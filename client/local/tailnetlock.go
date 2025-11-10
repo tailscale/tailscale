@@ -8,7 +8,7 @@ package local
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/url"
 
@@ -38,7 +38,7 @@ func (lc *Client) NetworkLockInit(ctx context.Context, keys []tka.Key, disableme
 		SupportDisablement []byte
 	}
 
-	if err := json.NewEncoder(&b).Encode(initRequest{Keys: keys, DisablementValues: disablementValues, SupportDisablement: supportDisablement}); err != nil {
+	if err := jsonv1.NewEncoder(&b).Encode(initRequest{Keys: keys, DisablementValues: disablementValues, SupportDisablement: supportDisablement}); err != nil {
 		return nil, err
 	}
 
@@ -62,7 +62,7 @@ func (lc *Client) NetworkLockWrapPreauthKey(ctx context.Context, preauthKey stri
 		TSKey  string
 		TKAKey string // key.NLPrivate.MarshalText
 	}
-	if err := json.NewEncoder(&b).Encode(wrapRequest{TSKey: preauthKey, TKAKey: string(encodedPrivate)}); err != nil {
+	if err := jsonv1.NewEncoder(&b).Encode(wrapRequest{TSKey: preauthKey, TKAKey: string(encodedPrivate)}); err != nil {
 		return "", err
 	}
 
@@ -81,7 +81,7 @@ func (lc *Client) NetworkLockModify(ctx context.Context, addKeys, removeKeys []t
 		RemoveKeys []tka.Key
 	}
 
-	if err := json.NewEncoder(&b).Encode(modifyRequest{AddKeys: addKeys, RemoveKeys: removeKeys}); err != nil {
+	if err := jsonv1.NewEncoder(&b).Encode(modifyRequest{AddKeys: addKeys, RemoveKeys: removeKeys}); err != nil {
 		return err
 	}
 
@@ -100,7 +100,7 @@ func (lc *Client) NetworkLockSign(ctx context.Context, nodeKey key.NodePublic, r
 		RotationPublic []byte
 	}
 
-	if err := json.NewEncoder(&b).Encode(signRequest{NodeKey: nodeKey, RotationPublic: rotationPublic}); err != nil {
+	if err := jsonv1.NewEncoder(&b).Encode(signRequest{NodeKey: nodeKey, RotationPublic: rotationPublic}); err != nil {
 		return err
 	}
 
@@ -134,7 +134,7 @@ func (lc *Client) NetworkLockLog(ctx context.Context, maxEntries int) ([]ipnstat
 func (lc *Client) NetworkLockForceLocalDisable(ctx context.Context) error {
 	// This endpoint expects an empty JSON stanza as the payload.
 	var b bytes.Buffer
-	if err := json.NewEncoder(&b).Encode(struct{}{}); err != nil {
+	if err := jsonv1.NewEncoder(&b).Encode(struct{}{}); err != nil {
 		return err
 	}
 

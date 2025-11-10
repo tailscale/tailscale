@@ -6,7 +6,7 @@
 package main
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -25,7 +25,7 @@ func main() {
 		os.Exit(1)
 	}
 	dm := new(tailcfg.DERPMap)
-	if err := json.NewDecoder(res.Body).Decode(dm); err != nil {
+	if err := jsonv1.NewDecoder(res.Body).Decode(dm); err != nil {
 		log.Fatal(err)
 	}
 	for rid, r := range dm.Regions {
@@ -35,7 +35,7 @@ func main() {
 		r.RegionCode = fmt.Sprintf("r%d", rid)
 		r.RegionName = r.RegionCode
 	}
-	out, err := json.MarshalIndent(dm, "", "\t")
+	out, err := jsonv1.MarshalIndent(dm, "", "\t")
 	if err != nil {
 		log.Fatal(err)
 	}

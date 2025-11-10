@@ -6,7 +6,7 @@
 package netlogtype
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"math"
 	"net/netip"
 	"testing"
@@ -27,7 +27,7 @@ func TestMaxSize(t *testing.T) {
 		Counts{math.MaxUint64, math.MaxUint64, math.MaxUint64, math.MaxUint64},
 	}
 
-	outJSON := must.Get(json.Marshal(cc))
+	outJSON := must.Get(jsonv1.Marshal(cc))
 	if string(outJSON) != maxJSONConnCounts {
 		t.Errorf("JSON mismatch (-got +want):\n%s", cmp.Diff(string(outJSON), maxJSONConnCounts))
 	}

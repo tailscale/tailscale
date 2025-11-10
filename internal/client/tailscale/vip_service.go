@@ -6,7 +6,7 @@ package tailscale
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/http"
 
@@ -58,7 +58,7 @@ func (client *Client) GetVIPService(ctx context.Context, name tailcfg.ServiceNam
 		return nil, HandleErrorResponse(b, resp)
 	}
 	svc := &VIPService{}
-	if err := json.Unmarshal(b, svc); err != nil {
+	if err := jsonv1.Unmarshal(b, svc); err != nil {
 		return nil, err
 	}
 	return svc, nil
@@ -81,7 +81,7 @@ func (client *Client) ListVIPServices(ctx context.Context) (*VIPServiceList, err
 		return nil, HandleErrorResponse(b, resp)
 	}
 	result := &VIPServiceList{}
-	if err := json.Unmarshal(b, result); err != nil {
+	if err := jsonv1.Unmarshal(b, result); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -92,7 +92,7 @@ func (client *Client) ListVIPServices(ctx context.Context) (*VIPServiceList, err
 // lost during the update. If the VIPService was created without any IP addresses explicitly set (so that they were
 // auto-allocated by Tailscale) any subsequent request to this function that does not set any IP addresses will error.
 func (client *Client) CreateOrUpdateVIPService(ctx context.Context, svc *VIPService) error {
-	data, err := json.Marshal(svc)
+	data, err := jsonv1.Marshal(svc)
 	if err != nil {
 		return err
 	}

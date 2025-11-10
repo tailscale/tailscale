@@ -6,7 +6,7 @@ package key
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"strings"
 	"testing"
 )
@@ -83,7 +83,7 @@ func TestNodeSerialization(t *testing.T) {
 	}
 
 	var a keypair
-	if err := json.Unmarshal([]byte(serialized), &a); err != nil {
+	if err := jsonv1.Unmarshal([]byte(serialized), &a); err != nil {
 		t.Fatal(err)
 	}
 	if !a.Priv.Equal(priv) {
@@ -93,13 +93,13 @@ func TestNodeSerialization(t *testing.T) {
 		t.Errorf("wrong deserialization of public key, got %#v want %#v", a.Pub, pub)
 	}
 
-	bs, err := json.MarshalIndent(a, "", "  ")
+	bs, err := jsonv1.MarshalIndent(a, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var b bytes.Buffer
-	json.Indent(&b, []byte(serialized), "", "  ")
+	jsonv1.Indent(&b, []byte(serialized), "", "  ")
 	if got, want := string(bs), b.String(); got != want {
 		t.Error("json serialization doesn't roundtrip")
 	}

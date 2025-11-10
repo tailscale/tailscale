@@ -5,7 +5,7 @@ package prober
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -624,7 +624,7 @@ func TestProberRunHandler(t *testing.T) {
 						t.Fatalf("failed to read response body: %v", err)
 					}
 
-					if err := json.Unmarshal(body, &gotJSON); err != nil {
+					if err := jsonv1.Unmarshal(body, &gotJSON); err != nil {
 						t.Fatalf("failed to unmarshal JSON response: %v; body: %s", err, body)
 					}
 					if diff := cmp.Diff(tt.wantJSONResponse, gotJSON, cmpopts.IgnoreFields(ProbeInfo{}, "Start", "End", "Labels", "RecentLatencies")); diff != "" {
@@ -748,7 +748,7 @@ func TestRunAllHandler(t *testing.T) {
 				t.Fatalf("failed to read response body: %v", err)
 			}
 
-			if err := json.Unmarshal(body, &gotJSON); err != nil {
+			if err := jsonv1.Unmarshal(body, &gotJSON); err != nil {
 				t.Fatalf("failed to unmarshal JSON response: %v; body: %s", err, body)
 			}
 			if diff := cmp.Diff(tc.wantJSONResponse, gotJSON, cmpopts.IgnoreFields(ProbeInfo{}, "Start", "End", "Labels", "RecentLatencies")); diff != "" {
@@ -813,7 +813,7 @@ func TestExcludeInRunAll(t *testing.T) {
 		t.Fatalf("failed to read response body: %v", err)
 	}
 
-	if err := json.Unmarshal(body, &gotJSON); err != nil {
+	if err := jsonv1.Unmarshal(body, &gotJSON); err != nil {
 		t.Fatalf("failed to unmarshal JSON response: %v; body: %s", err, body)
 	}
 

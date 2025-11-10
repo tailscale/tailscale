@@ -6,7 +6,7 @@
 package relayserver
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -56,7 +56,7 @@ func servePeerRelayDebugSessions(h *localapi.Handler, w http.ResponseWriter, r *
 	}
 
 	st := e.serverStatus()
-	j, err := json.Marshal(st)
+	j, err := jsonv1.Marshal(st)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to marshal json: %v", err), http.StatusInternalServerError)
 		return

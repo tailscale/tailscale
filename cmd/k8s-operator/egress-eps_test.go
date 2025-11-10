@@ -6,7 +6,7 @@
 package main
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"testing"
@@ -144,7 +144,7 @@ func configMapForSvc(t *testing.T, svc *corev1.Service, p uint16) *corev1.Config
 	}
 	name := tailnetSvcName(svc)
 	cfgs := egressservices.Configs{name: cfg}
-	bs, err := json.Marshal(&cfgs)
+	bs, err := jsonv1.Marshal(&cfgs)
 	if err != nil {
 		t.Fatalf("error marshalling config: %v", err)
 	}
@@ -176,7 +176,7 @@ func serviceStatusForPodIP(t *testing.T, svc *corev1.Service, ip string, p uint1
 		PodIPv4:  ip,
 		Services: map[string]*egressservices.ServiceStatus{svcName: &svcSt},
 	}
-	bs, err := json.Marshal(st)
+	bs, err := jsonv1.Marshal(st)
 	if err != nil {
 		t.Fatalf("error marshalling service status: %v", err)
 	}
