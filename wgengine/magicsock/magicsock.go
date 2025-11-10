@@ -1243,8 +1243,8 @@ func (c *Conn) DiscoPublicKey() key.DiscoPublic {
 }
 
 // determineEndpoints returns the machine's endpoint addresses. It does a STUN
-// lookup (via netcheck) to determine its public address. Additionally any
-// static enpoints provided by user are always added to the returned endpoints
+// lookup (via netcheck) to determine its public address. Additionally, any
+// static endpoints provided by user are always added to the returned endpoints
 // without validating if the node can be reached via those endpoints.
 //
 // c.mu must NOT be held.
