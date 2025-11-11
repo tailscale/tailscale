@@ -652,7 +652,9 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 	}
 
 	// undo the state hack above.
+	b.mu.Lock()
 	b.state = ipn.Starting
+	b.mu.Unlock()
 
 	// User wants to logout.
 	store.awaitWrite()
