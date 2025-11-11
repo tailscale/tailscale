@@ -651,7 +651,9 @@ func (c *Conn) onUDPRelayAllocResp(allocResp UDPRelayAllocResp) {
 	ep.mu.Lock()
 	defer ep.mu.Unlock()
 	derpAddr := ep.derpAddr
-	go c.sendDiscoMessage(epAddr{ap: derpAddr}, ep.publicKey, disco.key, allocResp.Message, discoVerboseLog)
+	if derpAddr.IsValid() {
+		go c.sendDiscoMessage(epAddr{ap: derpAddr}, ep.publicKey, disco.key, allocResp.Message, discoVerboseLog)
+	}
 }
 
 // Synchronize waits for all [eventbus] events published
