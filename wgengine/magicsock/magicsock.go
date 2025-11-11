@@ -665,7 +665,10 @@ func (c *Conn) Synchronize() {
 	}
 	sp := syncPoint(make(chan struct{}))
 	c.syncPub.Publish(sp)
-	sp.Wait()
+	select {
+	case <-sp:
+	case <-c.donec:
+	}
 }
 
 // NewConn creates a magic Conn listening on opts.Port.
