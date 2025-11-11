@@ -581,7 +581,7 @@ func (r *linuxRouter) updateMagicsockPort(port uint16, network string) error {
 	}
 
 	if port != 0 {
-		if err := r.nfr.AddMagicsockPortRule(*magicsockPort, network); err != nil {
+		if err := r.nfr.AddMagicsockPortRule(port, network); err != nil {
 			return fmt.Errorf("add magicsock port rule: %w", err)
 		}
 	}

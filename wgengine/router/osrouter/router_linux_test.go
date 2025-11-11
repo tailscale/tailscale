@@ -1290,3 +1290,43 @@ func TestIPRulesForUBNT(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateMagicsockPortChange(t *testing.T) {
+	nfr := &fakeIPTablesRunner{
+		t:    t,
+		ipt4: make(map[string][]string),
+		ipt6: make(map[string][]string),
+	}
+	nfr.ipt4["filter/ts-input"] = []string{}
+
+	r := &linuxRouter{
+		logf:          logger.Discard,
+		health:        new(health.Tracker),
+		netfilterMode: netfilterOn,
+		nfr:           nfr,
+	}
+
+	if err := r.updateMagicsockPort(12345, "udp4"); err != nil {
+		t.Fatalf("failed to set initial port: %v", err)
+	}
+
+	if err := r.updateMagicsockPort(54321, "udp4"); err != nil {
+		t.Fatalf("failed to update port: %v", err)
+	}
+
+	newPortRule := buildMagicsockPortRule(54321)
+	hasNewRule := slices.Contains(nfr.ipt4["filter/ts-input"], newPortRule)
+
+	if !hasNewRule {
+		t.Errorf("firewall rule for NEW port 54321 not found.\nExpected: %s\nActual rules: %v",
+			newPortRule, nfr.ipt4["filter/ts-input"])
+	}
+
+	oldPortRule := buildMagicsockPortRule(12345)
+	hasOldRule := slices.Contains(nfr.ipt4["filter/ts-input"], oldPortRule)
+
+	if hasOldRule {
+		t.Errorf("firewall rule for OLD port 12345 still exists (should be deleted).\nFound: %s\nAll rules: %v",
+			oldPortRule, nfr.ipt4["filter/ts-input"])
+	}
+}
