@@ -18,7 +18,7 @@ import (
 
 // Known addresses.
 var (
-	linkLocalRange           = netip.MustParsePrefix("ff80::/10")
+	linkLocalRange           = netip.MustParsePrefix("fe80::/10")
 	linkLocalDHCPMulticast   = netip.MustParseAddr("ff02::1:2")
 	siteLocalDHCPMulticast   = netip.MustParseAddr("ff05::1:3")
 	linkLocalRouterMulticast = netip.MustParseAddr("ff02::2")
