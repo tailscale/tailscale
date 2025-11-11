@@ -235,6 +235,7 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 }
 
 func TestDialBlocks(t *testing.T) {
+	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -282,6 +283,7 @@ func TestDialBlocks(t *testing.T) {
 //   - s2 can dial through the subnet router functionality (getting a synthetic RST
 //     that we verify we generated & saw)
 func TestConn(t *testing.T) {
+	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -414,6 +416,7 @@ func TestConn(t *testing.T) {
 
 func TestLoopbackLocalAPI(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8557")
+	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -489,6 +492,7 @@ func TestLoopbackLocalAPI(t *testing.T) {
 
 func TestLoopbackSOCKS5(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8198")
+	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -539,6 +543,7 @@ func TestLoopbackSOCKS5(t *testing.T) {
 }
 
 func TestTailscaleIPs(t *testing.T) {
+	tstest.Shard(t)
 	controlURL, _ := startControl(t)
 
 	tmp := t.TempDir()
@@ -581,6 +586,7 @@ func TestTailscaleIPs(t *testing.T) {
 // TestListenerCleanup is a regression test to verify that s.Close doesn't
 // deadlock if a listener is still open.
 func TestListenerCleanup(t *testing.T) {
+	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -623,6 +629,7 @@ func (wc *closeTrackConn) Close() error {
 // tests https://github.com/tailscale/tailscale/issues/6973 -- that we can start a tsnet server,
 // stop it, and restart it, even on Windows.
 func TestStartStopStartGetsSameIP(t *testing.T) {
+	tstest.Shard(t)
 	controlURL, _ := startControl(t)
 
 	tmp := t.TempDir()
@@ -672,6 +679,7 @@ func TestStartStopStartGetsSameIP(t *testing.T) {
 }
 
 func TestFunnel(t *testing.T) {
+	tstest.Shard(t)
 	ctx, dialCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer dialCancel()
 
@@ -733,6 +741,7 @@ func TestFunnel(t *testing.T) {
 }
 
 func TestListenerClose(t *testing.T) {
+	tstest.Shard(t)
 	ctx := context.Background()
 	controlURL, _ := startControl(t)
 
@@ -812,6 +821,7 @@ func (c *bufferedConn) Read(b []byte) (int, error) {
 }
 
 func TestFallbackTCPHandler(t *testing.T) {
+	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -854,6 +864,7 @@ func TestFallbackTCPHandler(t *testing.T) {
 }
 
 func TestCapturePcap(t *testing.T) {
+	tstest.Shard(t)
 	const timeLimit = 120
 	ctx, cancel := context.WithTimeout(context.Background(), timeLimit*time.Second)
 	defer cancel()
@@ -907,6 +918,7 @@ func TestCapturePcap(t *testing.T) {
 }
 
 func TestUDPConn(t *testing.T) {
+	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1098,6 +1110,7 @@ func sendData(logf func(format string, args ...any), ctx context.Context, bytesC
 }
 
 func TestUserMetricsByteCounters(t *testing.T) {
+	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -1212,6 +1225,7 @@ func TestUserMetricsByteCounters(t *testing.T) {
 }
 
 func TestUserMetricsRouteGauges(t *testing.T) {
+	tstest.Shard(t)
 	// Windows does not seem to support or report back routes when running in
 	// userspace via tsnet. So, we skip this check on Windows.
 	// TODO(kradalby): Figure out if this is correct.
@@ -1368,6 +1382,7 @@ func mustDirect(t *testing.T, logf logger.Logf, lc1, lc2 *local.Client) {
 }
 
 func TestDeps(t *testing.T) {
+	tstest.Shard(t)
 	deptest.DepChecker{
 		GOOS:   "linux",
 		GOARCH: "amd64",
