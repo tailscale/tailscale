@@ -43,6 +43,7 @@ func (src *Config) Clone() *Config {
 			dst.Hosts[k] = append([]netip.Addr{}, src.Hosts[k]...)
 		}
 	}
+	dst.SelfAddrs = append(src.SelfAddrs[:0:0], src.SelfAddrs...)
 	return dst
 }
 
@@ -53,6 +54,8 @@ var _ConfigCloneNeedsRegeneration = Config(struct {
 	SearchDomains    []dnsname.FQDN
 	Hosts            map[dnsname.FQDN][]netip.Addr
 	OnlyIPv6         bool
+	SelfAddrs        []netip.Prefix
+	SrcNatPrefix     netip.Prefix
 }{})
 
 // Clone duplicates src into dst and reports whether it succeeded.
