@@ -192,7 +192,16 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 				writef("\t\tdst.%s[k] = append([]%s{}, src.%s[k]...)", fname, n, fname)
 				writef("\t}")
 				writef("}")
-			} else if codegen.ContainsPointers(elem) {
+			} else if codegen.IsViewType(elem) || !codegen.ContainsPointers(elem) {
+				// If the map values are view types (which are
+				// immutable and don't need cloning) or don't
+				// themselves contain pointers, we can just
+				// clone the map itself.
+				it.Import("", "maps")
+				writef("\tdst.%s = maps.Clone(src.%s)", fname, fname)
+			} else {
+				// Otherwise we need to clone each element of
+				// the map.
 				writef("if dst.%s != nil {", fname)
 				writef("\tdst.%s = map[%s]%s{}", fname, it.QualifiedName(ft.Key()), it.QualifiedName(elem))
 				writef("\tfor k, v := range src.%s {", fname)
@@ -228,9 +237,6 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 
 				writef("\t}")
 				writef("}")
-			} else {
-				it.Import("", "maps")
-				writef("\tdst.%s = maps.Clone(src.%s)", fname, fname)
 			}
 		case *types.Interface:
 			// If ft is an interface with a "Clone() ft" method, it can be used to clone the field.
