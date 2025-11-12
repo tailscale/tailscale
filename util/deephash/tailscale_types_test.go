@@ -85,7 +85,6 @@ type tailscaleTypes struct {
 func getVal() *tailscaleTypes {
 	return &tailscaleTypes{
 		&wgcfg.Config{
-			Name:      "foo",
 			Addresses: []netip.Prefix{netip.PrefixFrom(netip.AddrFrom16([16]byte{3: 3}).Unmap(), 5)},
 			Peers: []wgcfg.Peer{
 				{

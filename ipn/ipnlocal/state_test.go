@@ -1243,8 +1243,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// After the auth is completed, the configs must be updated to reflect the node's netmap.
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Name:      "tailscale",
-				NodeID:    node1.SelfNode.StableID(),
 				Peers:     []wgcfg.Peer{},
 				Addresses: node1.SelfNode.Addresses().AsSlice(),
 			},
@@ -1301,8 +1299,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// Once the auth is completed, the configs must be updated to reflect the node's netmap.
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Name:      "tailscale",
-				NodeID:    node2.SelfNode.StableID(),
 				Peers:     []wgcfg.Peer{},
 				Addresses: node2.SelfNode.Addresses().AsSlice(),
 			},
@@ -1351,8 +1347,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// must be updated to reflect the node's netmap.
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Name:      "tailscale",
-				NodeID:    node1.SelfNode.StableID(),
 				Peers:     []wgcfg.Peer{},
 				Addresses: node1.SelfNode.Addresses().AsSlice(),
 			},
@@ -1376,8 +1370,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			},
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Name:   "tailscale",
-				NodeID: node3.SelfNode.StableID(),
 				Peers: []wgcfg.Peer{
 					{
 						PublicKey: node1.SelfNode.Key(),
@@ -1449,8 +1441,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			},
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Name:      "tailscale",
-				NodeID:    node1.SelfNode.StableID(),
 				Peers:     []wgcfg.Peer{},
 				Addresses: node1.SelfNode.Addresses().AsSlice(),
 			},
@@ -1480,8 +1470,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// With seamless renewal, starting a reauth should leave everything up:
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Name:      "tailscale",
-				NodeID:    node1.SelfNode.StableID(),
 				Peers:     []wgcfg.Peer{},
 				Addresses: node1.SelfNode.Addresses().AsSlice(),
 			},
@@ -1513,8 +1501,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			},
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Name:      "tailscale",
-				NodeID:    node1.SelfNode.StableID(),
 				Peers:     []wgcfg.Peer{},
 				Addresses: node1.SelfNode.Addresses().AsSlice(),
 			},
