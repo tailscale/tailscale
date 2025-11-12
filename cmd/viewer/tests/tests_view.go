@@ -16,7 +16,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers,StructWithTypeAliasFields,GenericTypeAliasStruct
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers,StructWithTypeAliasFields,GenericTypeAliasStruct,StructWithMapOfViews
 
 // View returns a read-only view of StructWithPtrs.
 func (p *StructWithPtrs) View() StructWithPtrsView {
@@ -1053,3 +1053,79 @@ func _GenericTypeAliasStructViewNeedsRegeneration[T integer, T2 views.ViewCloner
 		Cloneable    T2
 	}{})
 }
+
+// View returns a read-only view of StructWithMapOfViews.
+func (p *StructWithMapOfViews) View() StructWithMapOfViewsView {
+	return StructWithMapOfViewsView{ж: p}
+}
+
+// StructWithMapOfViewsView provides a read-only view over StructWithMapOfViews.
+//
+// Its methods should only be called if `Valid()` returns true.
+type StructWithMapOfViewsView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *StructWithMapOfViews
+}
+
+// Valid reports whether v's underlying value is non-nil.
+func (v StructWithMapOfViewsView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v StructWithMapOfViewsView) AsStruct() *StructWithMapOfViews {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v StructWithMapOfViewsView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v StructWithMapOfViewsView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
+func (v *StructWithMapOfViewsView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x StructWithMapOfViews
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *StructWithMapOfViewsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x StructWithMapOfViews
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v StructWithMapOfViewsView) MapOfViews() views.Map[string, StructWithoutPtrsView] {
+	return views.MapOf(v.ж.MapOfViews)
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithMapOfViewsViewNeedsRegeneration = StructWithMapOfViews(struct {
+	MapOfViews map[string]StructWithoutPtrsView
+}{})

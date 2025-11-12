@@ -547,3 +547,20 @@ func _GenericTypeAliasStructCloneNeedsRegeneration[T integer, T2 views.ViewClone
 		Cloneable    T2
 	}{})
 }
+
+// Clone makes a deep copy of StructWithMapOfViews.
+// The result aliases no memory with the original.
+func (src *StructWithMapOfViews) Clone() *StructWithMapOfViews {
+	if src == nil {
+		return nil
+	}
+	dst := new(StructWithMapOfViews)
+	*dst = *src
+	dst.MapOfViews = maps.Clone(src.MapOfViews)
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithMapOfViewsCloneNeedsRegeneration = StructWithMapOfViews(struct {
+	MapOfViews map[string]StructWithoutPtrsView
+}{})
