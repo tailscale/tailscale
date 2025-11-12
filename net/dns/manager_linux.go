@@ -40,7 +40,7 @@ var publishOnce sync.Once
 // This is particularly useful because certain conditions can cause indefinite hangs
 // (such as improper dbus auth followed by contextless dbus.Object.Call).
 // Such operations should be wrapped in a timeout context.
-const reconfigTimeout = time.Second
+const reconfigTimeout = 5 * time.Second
 
 // Set unless ts_omit_networkmanager
 var (

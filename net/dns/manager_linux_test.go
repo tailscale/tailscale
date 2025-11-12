@@ -6,13 +6,26 @@ package dns
 import (
 	"errors"
 	"io/fs"
+	"net/netip"
 	"os"
 	"strings"
 	"testing"
 
 	"tailscale.com/tstest"
 	"tailscale.com/util/cmpver"
+	"tailscale.com/util/must"
 )
+
+func TestBradNetworkManager(t *testing.T) {
+	m := must.Get(newNMManager("wlp3s0"))
+	must.Do(m.SetDNS(OSConfig{
+		Nameservers: []netip.Addr{
+			netip.MustParseAddr("10.0.0.2"),
+			netip.MustParseAddr("10.0.0.3"),
+		},
+	}))
+	t.Logf("done")
+}
 
 func TestLinuxDNSMode(t *testing.T) {
 	tests := []struct {
