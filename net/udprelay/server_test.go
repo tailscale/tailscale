@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"go4.org/mem"
@@ -318,4 +319,26 @@ func TestServer(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServer_getNextVNILocked(t *testing.T) {
+	t.Parallel()
+	c := qt.New(t)
+	s := &Server{
+		nextVNI: minVNI,
+		byVNI:   make(map[uint32]*serverEndpoint),
+	}
+	for i := uint64(0); i < uint64(totalPossibleVNI); i++ {
+		vni, err := s.getNextVNILocked()
+		if err != nil { // using quicktest here triples test time
+			t.Fatal(err)
+		}
+		s.byVNI[vni] = nil
+	}
+	c.Assert(s.nextVNI, qt.Equals, minVNI)
+	_, err := s.getNextVNILocked()
+	c.Assert(err, qt.IsNotNil)
+	delete(s.byVNI, minVNI)
+	_, err = s.getNextVNILocked()
+	c.Assert(err, qt.IsNil)
 }
