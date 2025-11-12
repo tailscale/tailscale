@@ -1059,7 +1059,6 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	})
 
 	m1cfg := &wgcfg.Config{
-		Name:       "peer1",
 		PrivateKey: m1.privateKey,
 		Addresses:  []netip.Prefix{netip.MustParsePrefix("1.0.0.1/32")},
 		Peers: []wgcfg.Peer{
@@ -1071,7 +1070,6 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		},
 	}
 	m2cfg := &wgcfg.Config{
-		Name:       "peer2",
 		PrivateKey: m2.privateKey,
 		Addresses:  []netip.Prefix{netip.MustParsePrefix("1.0.0.2/32")},
 		Peers: []wgcfg.Peer{

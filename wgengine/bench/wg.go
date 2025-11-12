@@ -38,7 +38,6 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 	k1 := key.NewNode()
 
 	c1 := wgcfg.Config{
-		Name:       "e1",
 		PrivateKey: k1,
 		Addresses:  []netip.Prefix{a1},
 	}
@@ -65,7 +64,6 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 	l2 := logger.WithPrefix(logf, "e2: ")
 	k2 := key.NewNode()
 	c2 := wgcfg.Config{
-		Name:       "e2",
 		PrivateKey: k2,
 		Addresses:  []netip.Prefix{a2},
 	}
