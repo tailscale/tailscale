@@ -5952,17 +5952,14 @@ func (b *LocalBackend) Logout(ctx context.Context, actor ipnauth.Actor) error {
 	}
 	// b.mu is now unlocked, after editPrefsLockedOnEntry.
 
-	// Clear any previous dial plan(s), if set.
-	b.resetDialPlan()
-
 	if cc == nil {
-		// Double Logout can happen via repeated IPN
-		// connections to ipnserver making it repeatedly
-		// transition from 1->0 total connections, which on
-		// Windows by default ("client mode") causes a Logout
-		// on the transition to zero.
 		// Previously this crashed when we asserted that c was non-nil
 		// here.
+		// It can be nil due to atypical locking patterns in LocalBackend.
+		// For example, the old cc can be set to nil while holding b.mu,
+		// then b.mu is unlocked before calling [LocalBackend.Start],
+		// which re-acquires the lock and sets a new cc.
+		// If Logout is called in between, cc can be nil.
 		return errors.New("no controlclient")
 	}
 
@@ -5972,6 +5969,9 @@ func (b *LocalBackend) Logout(ctx context.Context, actor ipnauth.Actor) error {
 
 	unlock = b.lockAndGetUnlock()
 	defer unlock()
+
+	// Clear any previous dial plan(s), if set.
+	b.resetDialPlan()
 
 	if err := b.pm.DeleteProfile(profile.ID()); err != nil {
 		b.logf("error deleting profile: %v", err)
@@ -6940,6 +6940,9 @@ func (b *LocalBackend) DeleteProfile(p ipn.ProfileID) error {
 	if !needToRestart {
 		return nil
 	}
+	// Deleting the current profile switches to a new, empty one.
+	// Its ControlURL hasn't been set yet, so we conservatively reset the dialPlan.
+	b.resetDialPlan()
 	return b.resetForProfileChangeLockedOnEntry(unlock)
 }
 
