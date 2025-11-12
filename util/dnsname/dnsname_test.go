@@ -74,7 +74,7 @@ func TestFQDNTooLong(t *testing.T) {
 	}
 	got, err := ToFQDN(name)
 	if err != nil {
-		t.Fatalf("want: error to end with \"is too long to be a DNS name\", got: %v", err)
+		t.Fatalf("want: no error, got: %v", err)
 	}
 	if string(got) != name {
 		t.Fatalf("want: %s, got: %s", name, got)
