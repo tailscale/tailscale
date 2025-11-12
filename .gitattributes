@@ -1,2 +1,9 @@
+# If using windows and WSL git will get line endings wrong
+# force to use lf line endings throughout
+* text  eol=lf
+*.PNG   -text
+*.gif   -text
+*.gz    -text
+
 go.mod filter=go-mod
 *.go  diff=golang
