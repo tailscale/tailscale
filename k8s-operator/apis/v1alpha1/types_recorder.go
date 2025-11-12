@@ -44,6 +44,8 @@ type RecorderList struct {
 	Items []Recorder `json:"items"`
 }
 
+// RecorderSpec describes a tsrecorder instance to be deployed in the cluster
+// +kubebuilder:validation:XValidation:rule="!(self.replicas > 1 && (!has(self.storage) || !has(self.storage.s3)))",message="S3 storage must be used when deploying multiple Recorder replicas"
 type RecorderSpec struct {
 	// Configuration parameters for the Recorder's StatefulSet. The operator
 	// deploys a StatefulSet for each Recorder resource.
@@ -74,6 +76,11 @@ type RecorderSpec struct {
 	// lifetime of a specific pod.
 	// +optional
 	Storage Storage `json:"storage,omitempty"`
+
+	// Replicas specifies how many instances of tsrecorder to run. Defaults to 1.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	Replicas *int32 `json:"replicas,omitzero"`
 }
 
 type RecorderStatefulSet struct {
