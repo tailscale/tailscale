@@ -137,7 +137,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 		// Some flags are only for "up", not "login".
 		upf.BoolVar(&upArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
 		upf.BoolVar(&upArgs.reset, "reset", false, "reset unspecified settings to their default values")
-		upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication (WARNING: this will bring down the Tailscale connection and thus should not be done remotely over SSH or RDP)")
+		upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication (WARNING: this may bring down the Tailscale connection and thus should not be done remotely over SSH or RDP)")
 		registerAcceptRiskFlag(upf, &upArgs.acceptedRisks)
 	}
 
