@@ -1122,7 +1122,7 @@ func serviceHandlerForIngress(cl client.Client, logger *zap.SugaredLogger, ingre
 		reqs := make([]reconcile.Request, 0)
 		for _, ing := range ingList.Items {
 			if ing.Spec.IngressClassName == nil || *ing.Spec.IngressClassName != ingressClassName {
-				return nil
+				continue
 			}
 			if hasProxyGroupAnnotation(&ing) {
 				// We don't want to reconcile backend Services for Ingresses for ProxyGroups.

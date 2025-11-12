@@ -1698,6 +1698,42 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 	}
 }
 
+func Test_serviceHandlerForIngress_multipleIngressClasses(t *testing.T) {
+	fc := fake.NewFakeClient()
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "backend", Namespace: "default"},
+	}
+	mustCreate(t, fc, svc)
+
+	mustCreate(t, fc, &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-ing", Namespace: "default"},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("nginx"),
+			DefaultBackend:   &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "backend"}},
+		},
+	})
+
+	mustCreate(t, fc, &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: "ts-ing", Namespace: "default"},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			DefaultBackend:   &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "backend"}},
+		},
+	})
+
+	got := serviceHandlerForIngress(fc, zl.Sugar(), "tailscale")(context.Background(), svc)
+	want := []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "default", Name: "ts-ing"}}}
+
+	if diff := cmp.Diff(got, want); diff != "" {
+		t.Fatalf("unexpected reconcile requests (-got +want):\n%s", diff)
+	}
+}
+
 func Test_clusterDomainFromResolverConf(t *testing.T) {
 	zl, err := zap.NewDevelopment()
 	if err != nil {
