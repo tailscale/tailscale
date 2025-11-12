@@ -2460,6 +2460,10 @@ const (
 	// of connections to the default network interface on Darwin nodes.
 	CapabilityDebugDisableBindConnToInterface NodeCapability = "https://tailscale.com/cap/debug-disable-bind-conn-to-interface"
 
+	// CapabilityDebugDisableBindConnToInterface disables the automatic binding
+	// of connections to the default network interface on Darwin nodes using network extensions
+	CapabilityDebugDisableBindConnToInterfaceAppleExt NodeCapability = "https://tailscale.com/cap/debug-disable-bind-conn-to-interface-apple-ext"
+
 	// CapabilityTailnetLock indicates the node may initialize tailnet lock.
 	CapabilityTailnetLock NodeCapability = "https://tailscale.com/cap/tailnet-lock"
 

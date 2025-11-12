@@ -6169,9 +6169,10 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		b.setDebugLogsByCapabilityLocked(nm)
 	}
 
-	// See the netns package for documentation on what this capability does.
-	netns.SetBindToInterfaceByRoute(nm.HasCap(tailcfg.CapabilityBindToInterfaceByRoute))
-	netns.SetDisableBindConnToInterface(nm.HasCap(tailcfg.CapabilityDebugDisableBindConnToInterface))
+	// See the netns package for documentation on what these capability do.
+	netns.SetBindToInterfaceByRoute(b.logf, nm.HasCap(tailcfg.CapabilityBindToInterfaceByRoute))
+	netns.SetDisableBindConnToInterface(b.logf, nm.HasCap(tailcfg.CapabilityDebugDisableBindConnToInterface))
+	netns.SetDisableBindConnToInterfaceAppleExt(b.logf, nm.HasCap(tailcfg.CapabilityDebugDisableBindConnToInterfaceAppleExt))
 
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
 	if buildfeatures.HasServe {
