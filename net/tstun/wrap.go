@@ -55,6 +55,9 @@ const MaxPacketSize = device.MaxContentSize
 // TAPDebug is whether super verbose TAP debugging is enabled.
 const TAPDebug = false
 
+// TUNDebug is whether super verbose TUN debugging is enabled.
+const TUNDebug = false
+
 var (
 	// ErrClosed is returned when attempting an operation on a closed Wrapper.
 	ErrClosed = errors.New("device closed")
@@ -246,6 +249,16 @@ type tunVectorReadResult struct {
 	injected tunInjectedRead
 
 	dataOffset int
+}
+
+func (r *tunVectorReadResult) String() string {
+	if r.err != nil {
+		return fmt.Sprintf("err=%v", r.err)
+	}
+	if r.data == nil {
+		return fmt.Sprintf("injected packet: pk=%p, len(injected.data)=%d", r.injected.packet, len(r.injected.data))
+	}
+	return fmt.Sprintf("len(data)=%d, off=%d, data=% 02x", len(r.data), r.dataOffset, r.data)
 }
 
 // Start unblocks any Wrapper.Read calls that have already started
@@ -930,6 +943,9 @@ func (t *Wrapper) awaitStart() {
 	}
 }
 
+// Read implements the tun.Device.Read method, which sends outbound packets.
+// (mnemonic: the kernel is reading asking what to send, and we're implementing
+// that read by providing packets to send)
 func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	if !t.started.Load() {
 		t.awaitStart()
@@ -939,6 +955,10 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	if !ok {
 		return 0, io.EOF
 	}
+	if TUNDebug {
+		t.logf("tstun: Wrapper.Read got outbound: %s", &res)
+	}
+
 	if res.err != nil && len(res.data) == 0 {
 		return 0, res.err
 	}
@@ -1065,7 +1085,8 @@ func invertGSOChecksum(pkt []byte, gso netstack_GSO) {
 	pkt[at+1] = ^pkt[at+1]
 }
 
-// injectedRead handles injected reads, which bypass filters.
+// injectedRead handles injected reads (outbound packets from
+// [Wrapper.InjectOutbound] and callers), which bypass filters.
 func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []int, offset int) (n int, err error) {
 	var gso netstack_GSO
 

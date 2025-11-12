@@ -4,13 +4,13 @@
 package wgcfg
 
 import (
-	"errors"
-	"io"
-	"sort"
+	"log"
+	"net/netip"
 
 	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
 
@@ -21,26 +21,6 @@ func NewDevice(tunDev tun.Device, bind conn.Bind, logger *device.Logger) *device
 	return ret
 }
 
-func DeviceConfig(d *device.Device) (*Config, error) {
-	r, w := io.Pipe()
-	errc := make(chan error, 1)
-	go func() {
-		errc <- d.IpcGetOperation(w)
-		w.Close()
-	}()
-	cfg, fromErr := FromUAPI(r)
-	r.Close()
-	getErr := <-errc
-	err := errors.Join(getErr, fromErr)
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(cfg.Peers, func(i, j int) bool {
-		return cfg.Peers[i].PublicKey.Less(cfg.Peers[j].PublicKey)
-	})
-	return cfg, nil
-}
-
 // ReconfigDevice replaces the existing device configuration with cfg.
 func ReconfigDevice(d *device.Device, cfg *Config, logf logger.Logf) (err error) {
 	defer func() {
@@ -49,20 +29,22 @@ func ReconfigDevice(d *device.Device, cfg *Config, logf logger.Logf) (err error)
 		}
 	}()
 
-	prev, err := DeviceConfig(d)
-	if err != nil {
-		return err
+	d.SetPrivateKey(key.NodePrivateAs[device.NoisePrivateKey](cfg.PrivateKey))
+
+	peers := map[device.NoisePublicKey][]netip.Prefix{} // public key → allowed IPs
+	for _, p := range cfg.Peers {
+		peers[p.PublicKey.Raw32()] = p.AllowedIPs
 	}
+	d.RemoveMatchingPeers(func(pk device.NoisePublicKey) bool {
+		_, exists := peers[pk]
+		return !exists
+	})
 
-	r, w := io.Pipe()
-	errc := make(chan error, 1)
-	go func() {
-		errc <- d.IpcSetOperation(r)
-		r.Close()
-	}()
+	d.SetPeerLookupFunc(func(pubk device.NoisePublicKey) []netip.Prefix {
+		allowedIPs, ok := peers[pubk]
+		log.Printf("XXX wgcfg.ReconfigDevice: lookup for peer %v, found=%v => %v", pubk, ok, allowedIPs)
+		return allowedIPs
+	})
 
-	toErr := cfg.ToUAPI(logf, w, prev)
-	w.Close()
-	setErr := <-errc
-	return errors.Join(setErr, toErr)
+	return nil
 }
