@@ -4,9 +4,17 @@
 package main // import "tailscale.com/cmd/tailscaled"
 
 import (
+	"os"
+	"strings"
 	"testing"
 
+	"tailscale.com/envknob"
+	"tailscale.com/ipn"
+	"tailscale.com/net/netmon"
+	"tailscale.com/tsd"
 	"tailscale.com/tstest/deptest"
+	"tailscale.com/types/logid"
+	"tailscale.com/util/must"
 )
 
 func TestNothing(t *testing.T) {
@@ -37,4 +45,46 @@ func TestDeps(t *testing.T) {
 			"github.com/prometheus/client_golang/prometheus": "use tailscale.com/metrics in tailscaled",
 		},
 	}.Check(t)
+}
+
+func TestStateStoreError(t *testing.T) {
+	logID, err := logid.NewPrivateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Don't upload any logs from tests.
+	envknob.SetNoLogsNoSupport()
+
+	args.statedir = t.TempDir()
+	args.tunname = "userspace-networking"
+
+	t.Run("new state", func(t *testing.T) {
+		sys := tsd.NewSystem()
+		sys.NetMon.Set(must.Get(netmon.New(sys.Bus.Get(), t.Logf)))
+		lb, err := getLocalBackend(t.Context(), t.Logf, logID.Public(), sys)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lb.Shutdown()
+		if lb.HealthTracker().IsUnhealthy(ipn.StateStoreHealth) {
+			t.Errorf("StateStoreHealth is unhealthy on fresh LocalBackend:\n%s", strings.Join(lb.HealthTracker().Strings(), "\n"))
+		}
+	})
+	t.Run("corrupt state", func(t *testing.T) {
+		sys := tsd.NewSystem()
+		sys.NetMon.Set(must.Get(netmon.New(sys.Bus.Get(), t.Logf)))
+		// Populate the state file with something that will fail to parse to
+		// trigger an error from store.New.
+		if err := os.WriteFile(statePathOrDefault(), []byte("bad json"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		lb, err := getLocalBackend(t.Context(), t.Logf, logID.Public(), sys)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lb.Shutdown()
+		if !lb.HealthTracker().IsUnhealthy(ipn.StateStoreHealth) {
+			t.Errorf("StateStoreHealth is healthy when state file is corrupt")
+		}
+	})
 }
