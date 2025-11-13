@@ -174,6 +174,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 		curUser       string // os.Getenv("USER") on the client side
 		goos          string // empty means "linux"
 		distro        distro.Distro
+		backendState  string // empty means "Running"
 
 		want string
 	}{
@@ -187,6 +188,28 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				NoStatefulFiltering: opt.NewBool(true),
 			},
 			want: "",
+		},
+		{
+			name:         "bare_up_needs_login_default_prefs",
+			flags:        []string{},
+			curPrefs:     ipn.NewPrefs(),
+			backendState: ipn.NeedsLogin.String(),
+			want:         "",
+		},
+		{
+			name:  "bare_up_needs_login_losing_prefs",
+			flags: []string{},
+			curPrefs: &ipn.Prefs{
+				// defaults:
+				ControlURL:          ipn.DefaultControlURL,
+				WantRunning:         false,
+				NetfilterMode:       preftype.NetfilterOn,
+				NoStatefulFiltering: opt.NewBool(true),
+				// non-default:
+				CorpDNS: false,
+			},
+			backendState: ipn.NeedsLogin.String(),
+			want:         accidentalUpPrefix + " --accept-dns=false",
 		},
 		{
 			name:  "losing_hostname",
@@ -620,9 +643,13 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			goos := "linux"
-			if tt.goos != "" {
-				goos = tt.goos
+			goos := stdcmp.Or(tt.goos, "linux")
+			backendState := stdcmp.Or(tt.backendState, ipn.Running.String())
+			// Needs to match the other conditions in checkForAccidentalSettingReverts
+			tt.curPrefs.Persist = &persist.Persist{
+				UserProfile: tailcfg.UserProfile{
+					LoginName: "janet",
+				},
 			}
 			var upArgs upArgsT
 			flagSet := newUpFlagSet(goos, &upArgs, "up")
@@ -638,10 +665,11 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				curExitNodeIP: tt.curExitNodeIP,
 				distro:        tt.distro,
 				user:          tt.curUser,
+				backendState:  backendState,
 			}
 			applyImplicitPrefs(newPrefs, tt.curPrefs, upEnv)
 			var got string
-			if err := checkForAccidentalSettingReverts(newPrefs, tt.curPrefs, upEnv); err != nil {
+			if _, err := checkForAccidentalSettingReverts(newPrefs, tt.curPrefs, upEnv); err != nil {
 				got = err.Error()
 			}
 			if strings.TrimSpace(got) != tt.want {
@@ -1011,13 +1039,10 @@ func TestUpdatePrefs(t *testing.T) {
 		wantErrSubtr   string
 	}{
 		{
-			name:  "bare_up_means_up",
-			flags: []string{},
-			curPrefs: &ipn.Prefs{
-				ControlURL:  ipn.DefaultControlURL,
-				WantRunning: false,
-				Hostname:    "foo",
-			},
+			name:         "bare_up_means_up",
+			flags:        []string{},
+			curPrefs:     ipn.NewPrefs(),
+			wantSimpleUp: false, // user profile not set, so no simple up
 		},
 		{
 			name:  "just_up",
@@ -1030,6 +1055,32 @@ func TestUpdatePrefs(t *testing.T) {
 				backendState: "Stopped",
 			},
 			wantSimpleUp: true,
+		},
+		{
+			name:     "just_up_needs_login_default_prefs",
+			flags:    []string{},
+			curPrefs: ipn.NewPrefs(),
+			env: upCheckEnv{
+				backendState: "NeedsLogin",
+			},
+			wantSimpleUp: false,
+		},
+		{
+			name:  "just_up_needs_login_losing_prefs",
+			flags: []string{},
+			curPrefs: &ipn.Prefs{
+				// defaults:
+				ControlURL:    ipn.DefaultControlURL,
+				WantRunning:   false,
+				NetfilterMode: preftype.NetfilterOn,
+				// non-default:
+				CorpDNS: false,
+			},
+			env: upCheckEnv{
+				backendState: "NeedsLogin",
+			},
+			wantSimpleUp: false,
+			wantErrSubtr: "tailscale up --accept-dns=false",
 		},
 		{
 			name:  "just_edit",
