@@ -75,10 +75,11 @@ type nodeBackend struct {
 	filterAtomic atomic.Pointer[filter.Filter]
 
 	// initialized once and immutable
-	eventClient  *eventbus.Client
-	filterPub    *eventbus.Publisher[magicsock.FilterUpdate]
-	nodeViewsPub *eventbus.Publisher[magicsock.NodeViewsUpdate]
-	nodeMutsPub  *eventbus.Publisher[magicsock.NodeMutationsUpdate]
+	eventClient    *eventbus.Client
+	filterPub      *eventbus.Publisher[magicsock.FilterUpdate]
+	nodeViewsPub   *eventbus.Publisher[magicsock.NodeViewsUpdate]
+	nodeMutsPub    *eventbus.Publisher[magicsock.NodeMutationsUpdate]
+	derpMapViewPub *eventbus.Publisher[tailcfg.DERPMapView]
 
 	// TODO(nickkhyl): maybe use sync.RWMutex?
 	mu sync.Mutex // protects the following fields
@@ -121,6 +122,7 @@ func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *n
 	nb.filterPub = eventbus.Publish[magicsock.FilterUpdate](nb.eventClient)
 	nb.nodeViewsPub = eventbus.Publish[magicsock.NodeViewsUpdate](nb.eventClient)
 	nb.nodeMutsPub = eventbus.Publish[magicsock.NodeMutationsUpdate](nb.eventClient)
+	nb.derpMapViewPub = eventbus.Publish[tailcfg.DERPMapView](nb.eventClient)
 	nb.filterPub.Publish(magicsock.FilterUpdate{Filter: nb.filterAtomic.Load()})
 	return nb
 }
@@ -435,6 +437,9 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) {
 	if nm != nil {
 		nv.SelfNode = nm.SelfNode
 		nv.Peers = nm.Peers
+		nb.derpMapViewPub.Publish(nm.DERPMap.View())
+	} else {
+		nb.derpMapViewPub.Publish(tailcfg.DERPMapView{})
 	}
 	nb.nodeViewsPub.Publish(nv)
 }
