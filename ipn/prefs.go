@@ -282,6 +282,10 @@ type Prefs struct {
 	// non-nil/enabled.
 	RelayServerPort *int `json:",omitempty"`
 
+	// StaticEndpoints are additional, user-defined endpoints that this node
+	// should advertise amongst its wireguard endpoints.
+	StaticEndpoints []netip.AddrPort `json:",omitempty"`
+
 	// AllowSingleHosts was a legacy field that was always true
 	// for the past 4.5 years. It controlled whether Tailscale
 	// peers got /32 or /127 routes for each other.
@@ -375,6 +379,7 @@ type MaskedPrefs struct {
 	NetfilterKindSet          bool                `json:",omitempty"`
 	DriveSharesSet            bool                `json:",omitempty"`
 	RelayServerPortSet        bool                `json:",omitempty"`
+	StaticEndpointsSet        bool                `json:",omitzero"`
 }
 
 // SetsInternal reports whether mp has any of the Internal*Set field bools set
@@ -674,6 +679,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.PostureChecking == p2.PostureChecking &&
 		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
 		p.NetfilterKind == p2.NetfilterKind &&
+		slices.Equal(p.StaticEndpoints, p2.StaticEndpoints) &&
 		compareIntPtrs(p.RelayServerPort, p2.RelayServerPort)
 }
 
