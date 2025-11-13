@@ -15,7 +15,6 @@ import (
 	"net/netip"
 	"net/url"
 	"reflect"
-	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -49,7 +48,7 @@ func fieldsOf(t reflect.Type) (fields []string) {
 
 func TestStatusEqual(t *testing.T) {
 	// Verify that the Equal method stays in sync with reality
-	equalHandles := []string{"Err", "URL", "NetMap", "Persist", "state"}
+	equalHandles := []string{"Err", "URL", "LoggedIn", "InMapPoll", "NetMap", "Persist"}
 	if have := fieldsOf(reflect.TypeFor[Status]()); !reflect.DeepEqual(have, equalHandles) {
 		t.Errorf("Status.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, equalHandles)
@@ -81,7 +80,7 @@ func TestStatusEqual(t *testing.T) {
 		},
 		{
 			&Status{},
-			&Status{state: StateAuthenticated},
+			&Status{LoggedIn: true, Persist: new(persist.Persist).View()},
 			false,
 		},
 	}
@@ -135,8 +134,20 @@ func TestCanSkipStatus(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "s1-state-diff",
-			s1:   &Status{state: 123, NetMap: nm1},
+			name: "s1-login-finished-diff",
+			s1:   &Status{LoggedIn: true, Persist: new(persist.Persist).View(), NetMap: nm1},
+			s2:   &Status{NetMap: nm2},
+			want: false,
+		},
+		{
+			name: "s1-login-finished",
+			s1:   &Status{LoggedIn: true, Persist: new(persist.Persist).View(), NetMap: nm1},
+			s2:   &Status{NetMap: nm2},
+			want: false,
+		},
+		{
+			name: "s1-synced-diff",
+			s1:   &Status{InMapPoll: true, LoggedIn: true, Persist: new(persist.Persist).View(), NetMap: nm1},
 			s2:   &Status{NetMap: nm2},
 			want: false,
 		},
@@ -167,10 +178,11 @@ func TestCanSkipStatus(t *testing.T) {
 		})
 	}
 
-	want := []string{"Err", "URL", "NetMap", "Persist", "state"}
-	if f := fieldsOf(reflect.TypeFor[Status]()); !slices.Equal(f, want) {
-		t.Errorf("Status fields = %q; this code was only written to handle fields %q", f, want)
+	coveredFields := []string{"Err", "URL", "LoggedIn", "InMapPoll", "NetMap", "Persist"}
+	if have := fieldsOf(reflect.TypeFor[Status]()); !reflect.DeepEqual(have, coveredFields) {
+		t.Errorf("Status fields = %q; this code was only written to handle fields %q", have, coveredFields)
 	}
+
 }
 
 func TestRetryableErrors(t *testing.T) {

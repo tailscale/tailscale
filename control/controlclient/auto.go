@@ -138,7 +138,6 @@ type Auto struct {
 	loggedIn       bool        // true if currently logged in
 	loginGoal      *LoginGoal  // non-nil if some login activity is desired
 	inMapPoll      bool        // true once we get the first MapResponse in a stream; false when HTTP response ends
-	state          State       // TODO(bradfitz): delete this, make it computed by method from other state
 
 	authCtx    context.Context // context used for auth requests
 	mapCtx     context.Context // context used for netmap and update requests
@@ -296,10 +295,11 @@ func (c *Auto) authRoutine() {
 		c.mu.Lock()
 		goal := c.loginGoal
 		ctx := c.authCtx
+		loggedIn := c.loggedIn
 		if goal != nil {
-			c.logf("[v1] authRoutine: %s; wantLoggedIn=%v", c.state, true)
+			c.logf("[v1] authRoutine: loggedIn=%v; wantLoggedIn=%v", loggedIn, true)
 		} else {
-			c.logf("[v1] authRoutine: %s; goal=nil paused=%v", c.state, c.paused)
+			c.logf("[v1] authRoutine: loggedIn=%v; goal=nil paused=%v", loggedIn, c.paused)
 		}
 		c.mu.Unlock()
 
@@ -322,11 +322,6 @@ func (c *Auto) authRoutine() {
 
 		c.mu.Lock()
 		c.urlToVisit = goal.url
-		if goal.url != "" {
-			c.state = StateURLVisitRequired
-		} else {
-			c.state = StateAuthenticating
-		}
 		c.mu.Unlock()
 
 		var url string
@@ -360,7 +355,6 @@ func (c *Auto) authRoutine() {
 				flags: LoginDefault,
 				url:   url,
 			}
-			c.state = StateURLVisitRequired
 			c.mu.Unlock()
 
 			c.sendStatus("authRoutine-url", err, url, nil)
@@ -380,7 +374,6 @@ func (c *Auto) authRoutine() {
 		c.urlToVisit = ""
 		c.loggedIn = true
 		c.loginGoal = nil
-		c.state = StateAuthenticated
 		c.mu.Unlock()
 
 		c.sendStatus("authRoutine-success", nil, "", nil)
@@ -431,12 +424,9 @@ func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
 
 	c.mu.Lock()
 	c.inMapPoll = true
-	if c.loggedIn {
-		c.state = StateSynchronized
-	}
 	c.expiry = nm.Expiry
 	stillAuthed := c.loggedIn
-	c.logf("[v1] mapRoutine: netmap received: %s", c.state)
+	c.logf("[v1] mapRoutine: netmap received: loggedIn=%v inMapPoll=true", stillAuthed)
 	c.mu.Unlock()
 
 	if stillAuthed {
@@ -484,8 +474,8 @@ func (c *Auto) mapRoutine() {
 		}
 
 		c.mu.Lock()
-		c.logf("[v1] mapRoutine: %s", c.state)
 		loggedIn := c.loggedIn
+		c.logf("[v1] mapRoutine: loggedIn=%v", loggedIn)
 		ctx := c.mapCtx
 		c.mu.Unlock()
 
@@ -516,9 +506,6 @@ func (c *Auto) mapRoutine() {
 		c.direct.health.SetOutOfPollNetMap()
 		c.mu.Lock()
 		c.inMapPoll = false
-		if c.state == StateSynchronized {
-			c.state = StateAuthenticated
-		}
 		paused := c.paused
 		c.mu.Unlock()
 
@@ -584,12 +571,12 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		c.mu.Unlock()
 		return
 	}
-	state := c.state
 	loggedIn := c.loggedIn
 	inMapPoll := c.inMapPoll
+	loginGoal := c.loginGoal
 	c.mu.Unlock()
 
-	c.logf("[v1] sendStatus: %s: %v", who, state)
+	c.logf("[v1] sendStatus: %s: loggedIn=%v inMapPoll=%v", who, loggedIn, inMapPoll)
 
 	var p persist.PersistView
 	if nm != nil && loggedIn && inMapPoll {
@@ -600,11 +587,12 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		nm = nil
 	}
 	newSt := &Status{
-		URL:     url,
-		Persist: p,
-		NetMap:  nm,
-		Err:     err,
-		state:   state,
+		URL:       url,
+		Persist:   p,
+		NetMap:    nm,
+		Err:       err,
+		LoggedIn:  loggedIn && loginGoal == nil,
+		InMapPoll: inMapPoll,
 	}
 
 	if c.observer == nil {
@@ -667,14 +655,15 @@ func canSkipStatus(s1, s2 *Status) bool {
 		// we can't skip it.
 		return false
 	}
-	if s1.Err != nil || s1.URL != "" {
-		// If s1 has an error or a URL, we shouldn't skip it, lest the error go
-		// away in s2 or in-between. We want to make sure all the subsystems see
-		// it. Plus there aren't many of these, so not worth skipping.
+	if s1.Err != nil || s1.URL != "" || s1.LoggedIn {
+		// If s1 has an error, a URL, or LoginFinished set, we shouldn't skip it,
+		// lest the error go away in s2 or in-between. We want to make sure all
+		// the subsystems see it. Plus there aren't many of these, so not worth
+		// skipping.
 		return false
 	}
-	if !s1.Persist.Equals(s2.Persist) || s1.state != s2.state {
-		// If s1 has a different Persist or state than s2,
+	if !s1.Persist.Equals(s2.Persist) || s1.LoggedIn != s2.LoggedIn || s1.InMapPoll != s2.InMapPoll || s1.URL != s2.URL {
+		// If s1 has a different Persist, LoginFinished, Synced, or URL than s2,
 		// don't skip it. We only care about skipping the typical
 		// entries where the only difference is the NetMap.
 		return false
@@ -736,7 +725,6 @@ func (c *Auto) Logout(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	c.loggedIn = false
-	c.state = StateNotAuthenticated
 	c.cancelAuthCtxLocked()
 	c.cancelMapCtxLocked()
 	c.mu.Unlock()
