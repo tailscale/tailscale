@@ -6,6 +6,8 @@
 package clonerex
 
 import (
+	"maps"
+
 	"tailscale.com/types/ptr"
 )
 
@@ -54,9 +56,114 @@ var _InterfaceContainerCloneNeedsRegeneration = InterfaceContainer(struct {
 	Interface Cloneable
 }{})
 
+// Clone makes a deep copy of MapWithPointers.
+// The result aliases no memory with the original.
+func (src *MapWithPointers) Clone() *MapWithPointers {
+	if src == nil {
+		return nil
+	}
+	dst := new(MapWithPointers)
+	*dst = *src
+	if dst.Nested != nil {
+		dst.Nested = map[string]*int{}
+		for k, v := range src.Nested {
+			if v == nil {
+				dst.Nested[k] = nil
+			} else {
+				dst.Nested[k] = ptr.To(*v)
+			}
+		}
+	}
+	if dst.WithCloneMethod != nil {
+		dst.WithCloneMethod = map[string]*SliceContainer{}
+		for k, v := range src.WithCloneMethod {
+			if v == nil {
+				dst.WithCloneMethod[k] = nil
+			} else {
+				dst.WithCloneMethod[k] = v.Clone()
+			}
+		}
+	}
+	if dst.CloneInterface != nil {
+		dst.CloneInterface = map[string]Cloneable{}
+		for k, v := range src.CloneInterface {
+			dst.CloneInterface[k] = v.Clone()
+		}
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _MapWithPointersCloneNeedsRegeneration = MapWithPointers(struct {
+	Nested          map[string]*int
+	WithCloneMethod map[string]*SliceContainer
+	CloneInterface  map[string]Cloneable
+}{})
+
+// Clone makes a deep copy of DeeplyNestedMap.
+// The result aliases no memory with the original.
+func (src *DeeplyNestedMap) Clone() *DeeplyNestedMap {
+	if src == nil {
+		return nil
+	}
+	dst := new(DeeplyNestedMap)
+	*dst = *src
+	if dst.ThreeLevels != nil {
+		dst.ThreeLevels = map[string]map[string]map[string]int{}
+		for k, v := range src.ThreeLevels {
+			if v == nil {
+				dst.ThreeLevels[k] = nil
+				continue
+			}
+			dst.ThreeLevels[k] = map[string]map[string]int{}
+			for k2, v2 := range v {
+				dst.ThreeLevels[k][k2] = maps.Clone(v2)
+			}
+		}
+	}
+	if dst.FourLevels != nil {
+		dst.FourLevels = map[string]map[string]map[string]map[string]*SliceContainer{}
+		for k, v := range src.FourLevels {
+			if v == nil {
+				dst.FourLevels[k] = nil
+				continue
+			}
+			dst.FourLevels[k] = map[string]map[string]map[string]*SliceContainer{}
+			for k2, v2 := range v {
+				if v2 == nil {
+					dst.FourLevels[k][k2] = nil
+					continue
+				}
+				dst.FourLevels[k][k2] = map[string]map[string]*SliceContainer{}
+				for k3, v3 := range v2 {
+					if v3 == nil {
+						dst.FourLevels[k][k2][k3] = nil
+						continue
+					}
+					dst.FourLevels[k][k2][k3] = map[string]*SliceContainer{}
+					for k4, v4 := range v3 {
+						if v4 == nil {
+							dst.FourLevels[k][k2][k3][k4] = nil
+						} else {
+							dst.FourLevels[k][k2][k3][k4] = v4.Clone()
+						}
+					}
+				}
+			}
+		}
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _DeeplyNestedMapCloneNeedsRegeneration = DeeplyNestedMap(struct {
+	ThreeLevels map[string]map[string]map[string]int
+	FourLevels  map[string]map[string]map[string]map[string]*SliceContainer
+}{})
+
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of SliceContainer,InterfaceContainer.
+// where T is one of SliceContainer,InterfaceContainer,MapWithPointers,DeeplyNestedMap.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *SliceContainer:
@@ -74,6 +181,24 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **InterfaceContainer:
+			*dst = src.Clone()
+			return true
+		}
+	case *MapWithPointers:
+		switch dst := dst.(type) {
+		case *MapWithPointers:
+			*dst = *src.Clone()
+			return true
+		case **MapWithPointers:
+			*dst = src.Clone()
+			return true
+		}
+	case *DeeplyNestedMap:
+		switch dst := dst.(type) {
+		case *DeeplyNestedMap:
+			*dst = *src.Clone()
+			return true
+		case **DeeplyNestedMap:
 			*dst = src.Clone()
 			return true
 		}
