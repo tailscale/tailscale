@@ -2397,6 +2397,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	b.logf("Start")
+	logf := logger.WithPrefix(b.logf, "Start: ")
 	b.startOnce.Do(b.initOnce)
 
 	var clientToShutdown controlclient.Client
@@ -2426,7 +2427,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	if b.state != ipn.Running && b.conf == nil && opts.AuthKey == "" {
 		sysak, _ := b.polc.GetString(pkey.AuthKey, "")
 		if sysak != "" {
-			b.logf("Start: setting opts.AuthKey by syspolicy, len=%v", len(sysak))
+			logf("setting opts.AuthKey by syspolicy, len=%v", len(sysak))
 			opts.AuthKey = strings.TrimSpace(sysak)
 		}
 	}
@@ -2459,11 +2460,13 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 
 	cn := b.currentNode()
 
-	prefsChanged := false
+	var prefsChanged bool
+	var prefsChangedWhy []string
 	newPrefs := b.pm.CurrentPrefs().AsStruct()
 	if opts.UpdatePrefs != nil {
 		newPrefs = opts.UpdatePrefs.Clone()
 		prefsChanged = true
+		prefsChangedWhy = append(prefsChangedWhy, "opts.UpdatePrefs")
 	}
 	// Apply any syspolicy overrides, resolve exit node ID, etc.
 	// As of 2025-07-03, this is primarily needed in two cases:
@@ -2471,6 +2474,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	//  - when Always Mode is enabled and we need to set WantRunning to true
 	if b.reconcilePrefsLocked(newPrefs) {
 		prefsChanged = true
+		prefsChangedWhy = append(prefsChangedWhy, "reconcilePrefsLocked")
 	}
 
 	// neither UpdatePrefs or reconciliation should change Persist
@@ -2478,19 +2482,21 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 
 	if buildfeatures.HasTPM {
 		if genKey, ok := feature.HookGenerateAttestationKeyIfEmpty.GetOk(); ok {
-			newKey, err := genKey(newPrefs.Persist, b.logf)
+			newKey, err := genKey(newPrefs.Persist, logf)
 			if err != nil {
-				b.logf("failed to populate attestation key from TPM: %v", err)
+				logf("failed to populate attestation key from TPM: %v", err)
 			}
 			if newKey {
 				prefsChanged = true
+				prefsChangedWhy = append(prefsChangedWhy, "newKey")
 			}
 		}
 	}
 
 	if prefsChanged {
+		logf("updated prefs: %v, reason: %v", newPrefs.Pretty(), prefsChangedWhy)
 		if err := b.pm.SetPrefs(newPrefs.View(), cn.NetworkProfile()); err != nil {
-			b.logf("failed to save updated and reconciled prefs: %v", err)
+			logf("failed to save updated and reconciled prefs (but still using updated prefs in memory): %v", err)
 		}
 	}
 	prefs := newPrefs.View()
@@ -2510,7 +2516,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 
 	serverURL := prefs.ControlURLOrDefault(b.polc)
 	if inServerMode := prefs.ForceDaemon(); inServerMode || runtime.GOOS == "windows" {
-		b.logf("Start: serverMode=%v", inServerMode)
+		logf("serverMode=%v", inServerMode)
 	}
 	b.applyPrefsToHostinfoLocked(hostinfo, prefs)
 
@@ -2578,7 +2584,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	endpoints := b.endpoints
 
 	if err := b.initTKALocked(); err != nil {
-		b.logf("initTKALocked: %v", err)
+		logf("initTKALocked: %v", err)
 	}
 	var tkaHead string
 	if b.tka != nil {
