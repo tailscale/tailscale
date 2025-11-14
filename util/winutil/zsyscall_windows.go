@@ -62,7 +62,7 @@ var (
 )
 
 func queryServiceConfig2(hService windows.Handle, infoLevel uint32, buf *byte, bufLen uint32, bytesNeeded *uint32) (err error) {
-	r1, _, e1 := syscall.Syscall6(procQueryServiceConfig2W.Addr(), 5, uintptr(hService), uintptr(infoLevel), uintptr(unsafe.Pointer(buf)), uintptr(bufLen), uintptr(unsafe.Pointer(bytesNeeded)), 0)
+	r1, _, e1 := syscall.SyscallN(procQueryServiceConfig2W.Addr(), uintptr(hService), uintptr(infoLevel), uintptr(unsafe.Pointer(buf)), uintptr(bufLen), uintptr(unsafe.Pointer(bytesNeeded)))
 	if r1 == 0 {
 		err = errnoErr(e1)
 	}
@@ -70,19 +70,19 @@ func queryServiceConfig2(hService windows.Handle, infoLevel uint32, buf *byte, b
 }
 
 func getApplicationRestartSettings(process windows.Handle, commandLine *uint16, commandLineLen *uint32, flags *uint32) (ret wingoes.HRESULT) {
-	r0, _, _ := syscall.Syscall6(procGetApplicationRestartSettings.Addr(), 4, uintptr(process), uintptr(unsafe.Pointer(commandLine)), uintptr(unsafe.Pointer(commandLineLen)), uintptr(unsafe.Pointer(flags)), 0, 0)
+	r0, _, _ := syscall.SyscallN(procGetApplicationRestartSettings.Addr(), uintptr(process), uintptr(unsafe.Pointer(commandLine)), uintptr(unsafe.Pointer(commandLineLen)), uintptr(unsafe.Pointer(flags)))
 	ret = wingoes.HRESULT(r0)
 	return
 }
 
 func registerApplicationRestart(cmdLineExclExeName *uint16, flags uint32) (ret wingoes.HRESULT) {
-	r0, _, _ := syscall.Syscall(procRegisterApplicationRestart.Addr(), 2, uintptr(unsafe.Pointer(cmdLineExclExeName)), uintptr(flags), 0)
+	r0, _, _ := syscall.SyscallN(procRegisterApplicationRestart.Addr(), uintptr(unsafe.Pointer(cmdLineExclExeName)), uintptr(flags))
 	ret = wingoes.HRESULT(r0)
 	return
 }
 
 func dsGetDcName(computerName *uint16, domainName *uint16, domainGuid *windows.GUID, siteName *uint16, flags dsGetDcNameFlag, dcInfo **_DOMAIN_CONTROLLER_INFO) (ret error) {
-	r0, _, _ := syscall.Syscall6(procDsGetDcNameW.Addr(), 6, uintptr(unsafe.Pointer(computerName)), uintptr(unsafe.Pointer(domainName)), uintptr(unsafe.Pointer(domainGuid)), uintptr(unsafe.Pointer(siteName)), uintptr(flags), uintptr(unsafe.Pointer(dcInfo)))
+	r0, _, _ := syscall.SyscallN(procDsGetDcNameW.Addr(), uintptr(unsafe.Pointer(computerName)), uintptr(unsafe.Pointer(domainName)), uintptr(unsafe.Pointer(domainGuid)), uintptr(unsafe.Pointer(siteName)), uintptr(flags), uintptr(unsafe.Pointer(dcInfo)))
 	if r0 != 0 {
 		ret = syscall.Errno(r0)
 	}
@@ -90,7 +90,7 @@ func dsGetDcName(computerName *uint16, domainName *uint16, domainGuid *windows.G
 }
 
 func netValidateName(server *uint16, name *uint16, account *uint16, password *uint16, nameType _NETSETUP_NAME_TYPE) (ret error) {
-	r0, _, _ := syscall.Syscall6(procNetValidateName.Addr(), 5, uintptr(unsafe.Pointer(server)), uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(account)), uintptr(unsafe.Pointer(password)), uintptr(nameType), 0)
+	r0, _, _ := syscall.SyscallN(procNetValidateName.Addr(), uintptr(unsafe.Pointer(server)), uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(account)), uintptr(unsafe.Pointer(password)), uintptr(nameType))
 	if r0 != 0 {
 		ret = syscall.Errno(r0)
 	}
@@ -98,7 +98,7 @@ func netValidateName(server *uint16, name *uint16, account *uint16, password *ui
 }
 
 func rmEndSession(session _RMHANDLE) (ret error) {
-	r0, _, _ := syscall.Syscall(procRmEndSession.Addr(), 1, uintptr(session), 0, 0)
+	r0, _, _ := syscall.SyscallN(procRmEndSession.Addr(), uintptr(session))
 	if r0 != 0 {
 		ret = syscall.Errno(r0)
 	}
@@ -106,7 +106,7 @@ func rmEndSession(session _RMHANDLE) (ret error) {
 }
 
 func rmGetList(session _RMHANDLE, nProcInfoNeeded *uint32, nProcInfo *uint32, rgAffectedApps *_RM_PROCESS_INFO, pRebootReasons *uint32) (ret error) {
-	r0, _, _ := syscall.Syscall6(procRmGetList.Addr(), 5, uintptr(session), uintptr(unsafe.Pointer(nProcInfoNeeded)), uintptr(unsafe.Pointer(nProcInfo)), uintptr(unsafe.Pointer(rgAffectedApps)), uintptr(unsafe.Pointer(pRebootReasons)), 0)
+	r0, _, _ := syscall.SyscallN(procRmGetList.Addr(), uintptr(session), uintptr(unsafe.Pointer(nProcInfoNeeded)), uintptr(unsafe.Pointer(nProcInfo)), uintptr(unsafe.Pointer(rgAffectedApps)), uintptr(unsafe.Pointer(pRebootReasons)))
 	if r0 != 0 {
 		ret = syscall.Errno(r0)
 	}
@@ -114,7 +114,7 @@ func rmGetList(session _RMHANDLE, nProcInfoNeeded *uint32, nProcInfo *uint32, rg
 }
 
 func rmJoinSession(pSession *_RMHANDLE, sessionKey *uint16) (ret error) {
-	r0, _, _ := syscall.Syscall(procRmJoinSession.Addr(), 2, uintptr(unsafe.Pointer(pSession)), uintptr(unsafe.Pointer(sessionKey)), 0)
+	r0, _, _ := syscall.SyscallN(procRmJoinSession.Addr(), uintptr(unsafe.Pointer(pSession)), uintptr(unsafe.Pointer(sessionKey)))
 	if r0 != 0 {
 		ret = syscall.Errno(r0)
 	}
@@ -122,7 +122,7 @@ func rmJoinSession(pSession *_RMHANDLE, sessionKey *uint16) (ret error) {
 }
 
 func rmRegisterResources(session _RMHANDLE, nFiles uint32, rgsFileNames **uint16, nApplications uint32, rgApplications *_RM_UNIQUE_PROCESS, nServices uint32, rgsServiceNames **uint16) (ret error) {
-	r0, _, _ := syscall.Syscall9(procRmRegisterResources.Addr(), 7, uintptr(session), uintptr(nFiles), uintptr(unsafe.Pointer(rgsFileNames)), uintptr(nApplications), uintptr(unsafe.Pointer(rgApplications)), uintptr(nServices), uintptr(unsafe.Pointer(rgsServiceNames)), 0, 0)
+	r0, _, _ := syscall.SyscallN(procRmRegisterResources.Addr(), uintptr(session), uintptr(nFiles), uintptr(unsafe.Pointer(rgsFileNames)), uintptr(nApplications), uintptr(unsafe.Pointer(rgApplications)), uintptr(nServices), uintptr(unsafe.Pointer(rgsServiceNames)))
 	if r0 != 0 {
 		ret = syscall.Errno(r0)
 	}
@@ -130,7 +130,7 @@ func rmRegisterResources(session _RMHANDLE, nFiles uint32, rgsFileNames **uint16
 }
 
 func rmStartSession(pSession *_RMHANDLE, flags uint32, sessionKey *uint16) (ret error) {
-	r0, _, _ := syscall.Syscall(procRmStartSession.Addr(), 3, uintptr(unsafe.Pointer(pSession)), uintptr(flags), uintptr(unsafe.Pointer(sessionKey)))
+	r0, _, _ := syscall.SyscallN(procRmStartSession.Addr(), uintptr(unsafe.Pointer(pSession)), uintptr(flags), uintptr(unsafe.Pointer(sessionKey)))
 	if r0 != 0 {
 		ret = syscall.Errno(r0)
 	}
@@ -138,7 +138,7 @@ func rmStartSession(pSession *_RMHANDLE, flags uint32, sessionKey *uint16) (ret 
 }
 
 func expandEnvironmentStringsForUser(token windows.Token, src *uint16, dst *uint16, dstLen uint32) (err error) {
-	r1, _, e1 := syscall.Syscall6(procExpandEnvironmentStringsForUserW.Addr(), 4, uintptr(token), uintptr(unsafe.Pointer(src)), uintptr(unsafe.Pointer(dst)), uintptr(dstLen), 0, 0)
+	r1, _, e1 := syscall.SyscallN(procExpandEnvironmentStringsForUserW.Addr(), uintptr(token), uintptr(unsafe.Pointer(src)), uintptr(unsafe.Pointer(dst)), uintptr(dstLen))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
@@ -146,7 +146,7 @@ func expandEnvironmentStringsForUser(token windows.Token, src *uint16, dst *uint
 }
 
 func loadUserProfile(token windows.Token, profileInfo *_PROFILEINFO) (err error) {
-	r1, _, e1 := syscall.Syscall(procLoadUserProfileW.Addr(), 2, uintptr(token), uintptr(unsafe.Pointer(profileInfo)), 0)
+	r1, _, e1 := syscall.SyscallN(procLoadUserProfileW.Addr(), uintptr(token), uintptr(unsafe.Pointer(profileInfo)))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
@@ -154,7 +154,7 @@ func loadUserProfile(token windows.Token, profileInfo *_PROFILEINFO) (err error)
 }
 
 func unloadUserProfile(token windows.Token, profile registry.Key) (err error) {
-	r1, _, e1 := syscall.Syscall(procUnloadUserProfile.Addr(), 2, uintptr(token), uintptr(profile), 0)
+	r1, _, e1 := syscall.SyscallN(procUnloadUserProfile.Addr(), uintptr(token), uintptr(profile))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}

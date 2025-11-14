@@ -52,7 +52,7 @@ var (
 )
 
 func allocateLocallyUniqueId(luid *windows.LUID) (err error) {
-	r1, _, e1 := syscall.Syscall(procAllocateLocallyUniqueId.Addr(), 1, uintptr(unsafe.Pointer(luid)), 0, 0)
+	r1, _, e1 := syscall.SyscallN(procAllocateLocallyUniqueId.Addr(), uintptr(unsafe.Pointer(luid)))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
@@ -60,7 +60,7 @@ func allocateLocallyUniqueId(luid *windows.LUID) (err error) {
 }
 
 func impersonateLoggedOnUser(token windows.Token) (err error) {
-	r1, _, e1 := syscall.Syscall(procImpersonateLoggedOnUser.Addr(), 1, uintptr(token), 0, 0)
+	r1, _, e1 := syscall.SyscallN(procImpersonateLoggedOnUser.Addr(), uintptr(token))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
@@ -68,37 +68,37 @@ func impersonateLoggedOnUser(token windows.Token) (err error) {
 }
 
 func lsaConnectUntrusted(lsaHandle *_LSAHANDLE) (ret windows.NTStatus) {
-	r0, _, _ := syscall.Syscall(procLsaConnectUntrusted.Addr(), 1, uintptr(unsafe.Pointer(lsaHandle)), 0, 0)
+	r0, _, _ := syscall.SyscallN(procLsaConnectUntrusted.Addr(), uintptr(unsafe.Pointer(lsaHandle)))
 	ret = windows.NTStatus(r0)
 	return
 }
 
 func lsaDeregisterLogonProcess(lsaHandle _LSAHANDLE) (ret windows.NTStatus) {
-	r0, _, _ := syscall.Syscall(procLsaDeregisterLogonProcess.Addr(), 1, uintptr(lsaHandle), 0, 0)
+	r0, _, _ := syscall.SyscallN(procLsaDeregisterLogonProcess.Addr(), uintptr(lsaHandle))
 	ret = windows.NTStatus(r0)
 	return
 }
 
 func lsaFreeReturnBuffer(buffer uintptr) (ret windows.NTStatus) {
-	r0, _, _ := syscall.Syscall(procLsaFreeReturnBuffer.Addr(), 1, uintptr(buffer), 0, 0)
+	r0, _, _ := syscall.SyscallN(procLsaFreeReturnBuffer.Addr(), uintptr(buffer))
 	ret = windows.NTStatus(r0)
 	return
 }
 
 func lsaLogonUser(lsaHandle _LSAHANDLE, originName *windows.NTString, logonType _SECURITY_LOGON_TYPE, authenticationPackage uint32, authenticationInformation unsafe.Pointer, authenticationInformationLength uint32, localGroups *windows.Tokengroups, sourceContext *_TOKEN_SOURCE, profileBuffer *uintptr, profileBufferLength *uint32, logonID *windows.LUID, token *windows.Token, quotas *_QUOTA_LIMITS, subStatus *windows.NTStatus) (ret windows.NTStatus) {
-	r0, _, _ := syscall.Syscall15(procLsaLogonUser.Addr(), 14, uintptr(lsaHandle), uintptr(unsafe.Pointer(originName)), uintptr(logonType), uintptr(authenticationPackage), uintptr(authenticationInformation), uintptr(authenticationInformationLength), uintptr(unsafe.Pointer(localGroups)), uintptr(unsafe.Pointer(sourceContext)), uintptr(unsafe.Pointer(profileBuffer)), uintptr(unsafe.Pointer(profileBufferLength)), uintptr(unsafe.Pointer(logonID)), uintptr(unsafe.Pointer(token)), uintptr(unsafe.Pointer(quotas)), uintptr(unsafe.Pointer(subStatus)), 0)
+	r0, _, _ := syscall.SyscallN(procLsaLogonUser.Addr(), uintptr(lsaHandle), uintptr(unsafe.Pointer(originName)), uintptr(logonType), uintptr(authenticationPackage), uintptr(authenticationInformation), uintptr(authenticationInformationLength), uintptr(unsafe.Pointer(localGroups)), uintptr(unsafe.Pointer(sourceContext)), uintptr(unsafe.Pointer(profileBuffer)), uintptr(unsafe.Pointer(profileBufferLength)), uintptr(unsafe.Pointer(logonID)), uintptr(unsafe.Pointer(token)), uintptr(unsafe.Pointer(quotas)), uintptr(unsafe.Pointer(subStatus)))
 	ret = windows.NTStatus(r0)
 	return
 }
 
 func lsaLookupAuthenticationPackage(lsaHandle _LSAHANDLE, packageName *windows.NTString, authenticationPackage *uint32) (ret windows.NTStatus) {
-	r0, _, _ := syscall.Syscall(procLsaLookupAuthenticationPackage.Addr(), 3, uintptr(lsaHandle), uintptr(unsafe.Pointer(packageName)), uintptr(unsafe.Pointer(authenticationPackage)))
+	r0, _, _ := syscall.SyscallN(procLsaLookupAuthenticationPackage.Addr(), uintptr(lsaHandle), uintptr(unsafe.Pointer(packageName)), uintptr(unsafe.Pointer(authenticationPackage)))
 	ret = windows.NTStatus(r0)
 	return
 }
 
 func lsaRegisterLogonProcess(logonProcessName *windows.NTString, lsaHandle *_LSAHANDLE, securityMode *_LSA_OPERATIONAL_MODE) (ret windows.NTStatus) {
-	r0, _, _ := syscall.Syscall(procLsaRegisterLogonProcess.Addr(), 3, uintptr(unsafe.Pointer(logonProcessName)), uintptr(unsafe.Pointer(lsaHandle)), uintptr(unsafe.Pointer(securityMode)))
+	r0, _, _ := syscall.SyscallN(procLsaRegisterLogonProcess.Addr(), uintptr(unsafe.Pointer(logonProcessName)), uintptr(unsafe.Pointer(lsaHandle)), uintptr(unsafe.Pointer(securityMode)))
 	ret = windows.NTStatus(r0)
 	return
 }
