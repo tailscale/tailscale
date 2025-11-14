@@ -274,7 +274,7 @@ func (ak *attestationKey) Close() error {
 }
 
 func (ak *attestationKey) Clone() key.HardwareAttestationKey {
-	if ak == nil {
+	if ak.IsZero() {
 		return nil
 	}
 
