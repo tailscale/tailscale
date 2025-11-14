@@ -226,7 +226,7 @@ func (a *AUM) Serialize() tkatype.MarshaledAUM {
 	// Further, experience with other attempts (JWS/JWT,SAML,X509 etc) has
 	// taught us that even subtle behaviors such as how you handle invalid
 	// or unrecognized fields + any invariants in subsequent re-serialization
-	// can easily lead to security-relevant logic bugs. Its certainly possible
+	// can easily lead to security-relevant logic bugs. It's certainly possible
 	// to invent a workable scheme by massaging a JSON parsing library, though
 	// profoundly unwise.
 	//

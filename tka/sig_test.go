@@ -119,7 +119,7 @@ func TestSigNested(t *testing.T) {
 	}
 
 	// Test verification fails if the outer signature is signed with a
-	// different public key to whats specified in WrappingPubkey
+	// different public key to what's specified in WrappingPubkey
 	sig.Signature = ed25519.Sign(priv, sigHash[:])
 	if err := sig.verifySignature(node.Public(), k); err == nil {
 		t.Error("verifySignature(node) succeeded with different signature")
@@ -275,7 +275,7 @@ func TestSigCredential(t *testing.T) {
 	}
 
 	// Test verification fails if the outer signature is signed with a
-	// different public key to whats specified in WrappingPubkey
+	// different public key to what's specified in WrappingPubkey
 	sig.Signature = ed25519.Sign(priv, sigHash[:])
 	if err := sig.verifySignature(node.Public(), k); err == nil {
 		t.Error("verifySignature(node) succeeded with different signature")

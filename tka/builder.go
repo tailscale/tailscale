@@ -114,7 +114,7 @@ func (b *UpdateBuilder) generateCheckpoint() error {
 		}
 	}
 
-	// Checkpoints cant specify a parent AUM.
+	// Checkpoints can't specify a parent AUM.
 	state.LastAUMHash = nil
 	return b.mkUpdate(AUM{MessageKind: AUMCheckpoint, State: &state})
 }
