@@ -18,13 +18,13 @@ import (
 // done.
 func LinkChangeLogLimiter(ctx context.Context, logf logger.Logf, nm *Monitor) logger.Logf {
 	var formatSeen sync.Map // map[string]bool
-	nm.b.Monitor(nm.changeDeltaWatcher(nm.b, ctx, func(cd ChangeDelta) {
+	sub := eventbus.SubscribeFunc(nm.b, func(cd ChangeDelta) {
 		// If we're in a major change or a time jump, clear the seen map.
 		if cd.Major || cd.TimeJumped {
 			formatSeen.Clear()
 		}
-	}))
-
+	})
+	context.AfterFunc(ctx, sub.Close)
 	return func(format string, args ...any) {
 		// We only store 'true' in the map, so if it's present then it
 		// means we've already logged this format string.
@@ -40,21 +40,5 @@ func LinkChangeLogLimiter(ctx context.Context, logf logger.Logf, nm *Monitor) lo
 		}
 
 		logf(format, args...)
-	}
-}
-
-func (nm *Monitor) changeDeltaWatcher(ec *eventbus.Client, ctx context.Context, fn func(ChangeDelta)) func(*eventbus.Client) {
-	sub := eventbus.Subscribe[ChangeDelta](ec)
-	return func(ec *eventbus.Client) {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-sub.Done():
-				return
-			case change := <-sub.Events():
-				fn(change)
-			}
-		}
 	}
 }
