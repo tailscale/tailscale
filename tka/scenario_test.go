@@ -204,7 +204,7 @@ func TestNormalPropagation(t *testing.T) {
     `)
 	control := s.mkNode("control")
 
-	// Lets say theres a node with some updates!
+	// Let's say there's a node with some updates!
 	n1 := s.mkNodeWithForks("n1", true, map[string]*testChain{
 		"L2": newTestchain(t, `L3 -> L4`),
 	})

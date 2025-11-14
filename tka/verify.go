@@ -18,7 +18,7 @@ import (
 // provided AUM BLAKE2s digest, using the given key.
 func signatureVerify(s *tkatype.Signature, aumDigest tkatype.AUMSigHash, key Key) error {
 	// NOTE(tom): Even if we can compute the public from the KeyID,
-	//            its possible for the KeyID to be attacker-controlled
+	//            it's possible for the KeyID to be attacker-controlled
 	//            so we should use the public contained in the state machine.
 	switch key.Kind {
 	case Key25519:

@@ -528,7 +528,7 @@ func TestTKASync(t *testing.T) {
 				},
 			}
 
-			// Finally, lets trigger a sync.
+			// Finally, let's trigger a sync.
 			err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
 				TKAEnabled: true,
 				TKAHead:    controlAuthority.Head(),

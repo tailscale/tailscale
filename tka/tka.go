@@ -94,7 +94,7 @@ func computeChainCandidates(storage Chonk, lastKnownOldest *AUMHash, maxIter int
 
 	// candidates.Oldest needs to be computed by working backwards from
 	// head as far as we can.
-	iterAgain := true // if theres still work to be done.
+	iterAgain := true // if there's still work to be done.
 	for i := 0; iterAgain; i++ {
 		if i >= maxIter {
 			return nil, fmt.Errorf("iteration limit exceeded (%d)", maxIter)
@@ -295,7 +295,7 @@ func computeStateAt(storage Chonk, maxIter int, wantHash AUMHash) (State, error)
 		}
 
 		// If we got here, the current state is dependent on the previous.
-		// Keep iterating backwards till thats not the case.
+		// Keep iterating backwards till that's not the case.
 		if curs, err = storage.AUM(parent); err != nil {
 			return State{}, fmt.Errorf("reading parent (%v): %v", parent, err)
 		}
@@ -324,7 +324,7 @@ func computeStateAt(storage Chonk, maxIter int, wantHash AUMHash) (State, error)
 		return curs.Hash() == wantHash
 	})
 	// fastForward only terminates before the done condition if it
-	// doesnt have any later AUMs to process. This cant be the case
+	// doesn't have any later AUMs to process. This can't be the case
 	// as we've already iterated through them above so they must exist,
 	// but we check anyway to be super duper sure.
 	if err == nil && *state.LastAUMHash != wantHash {
@@ -336,7 +336,7 @@ func computeStateAt(storage Chonk, maxIter int, wantHash AUMHash) (State, error)
 // computeActiveAncestor determines which ancestor AUM to use as the
 // ancestor of the valid chain.
 //
-// If all the chains end up having the same ancestor, then thats the
+// If all the chains end up having the same ancestor, then that's the
 // only possible ancestor, ezpz. However if there are multiple distinct
 // ancestors, that means there are distinct chains, and we need some
 // hint to choose what to use. For that, we rely on the chainsThroughActive
@@ -357,7 +357,7 @@ func computeActiveAncestor(chains []chain) (AUMHash, error) {
 		}
 	}
 
-	// Theres more than one, so we need to use the ancestor that was
+	// There's more than one, so we need to use the ancestor that was
 	// part of the active chain in a previous iteration.
 	// Note that there can only be one distinct ancestor that was
 	// formerly part of the active chain, because AUMs can only have
@@ -479,7 +479,7 @@ func (a *Authority) Head() AUMHash {
 // Open initializes an existing TKA from the given tailchonk.
 //
 // Only use this if the current node has initialized an Authority before.
-// If a TKA exists on other nodes but theres nothing locally, use Bootstrap().
+// If a TKA exists on other nodes but there's nothing locally, use Bootstrap().
 // If no TKA exists anywhere and you are creating it for the first
 // time, use New().
 func Open(storage Chonk) (*Authority, error) {
@@ -592,14 +592,14 @@ func (a *Authority) InformIdempotent(storage Chonk, updates []AUM) (Authority, e
 	toCommit := make([]AUM, 0, len(updates))
 	prevHash := a.Head()
 
-	// The state at HEAD is the current state of the authority. Its likely
+	// The state at HEAD is the current state of the authority. It's likely
 	// to be needed, so we prefill it rather than computing it.
 	stateAt[prevHash] = a.state
 
 	// Optimization: If the set of updates is a chain building from
 	// the current head, EG:
 	//   <a.Head()> ==> updates[0] ==> updates[1] ...
-	// Then theres no need to recompute the resulting state from the
+	// Then there's no need to recompute the resulting state from the
 	// stored ancestor, because the last state computed during iteration
 	// is the new state. This should be the common case.
 	// isHeadChain keeps track of this.

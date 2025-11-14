@@ -54,7 +54,7 @@ const (
 // can then be applied locally with Inform().
 //
 // This SyncOffer + AUM exchange should be performed by both ends,
-// because its possible that either end has AUMs that the other needs
+// because it's possible that either end has AUMs that the other needs
 // to find out about.
 func (a *Authority) SyncOffer(storage Chonk) (SyncOffer, error) {
 	oldest := a.oldestAncestor.Hash()
@@ -123,7 +123,7 @@ func computeSyncIntersection(storage Chonk, localOffer, remoteOffer SyncOffer) (
 	}
 
 	// Case: 'head intersection'
-	// If we have the remote's head, its more likely than not that
+	// If we have the remote's head, it's more likely than not that
 	// we have updates that build on that head. To confirm this,
 	// we iterate backwards through our chain to see if the given
 	// head is an ancestor of our current chain.
@@ -165,7 +165,7 @@ func computeSyncIntersection(storage Chonk, localOffer, remoteOffer SyncOffer) (
 	// Case: 'tail intersection'
 	// So we don't have a clue what the remote's head is, but
 	// if one of the ancestors they gave us is part of our chain,
-	// then theres an intersection, which is a starting point for
+	// then there's an intersection, which is a starting point for
 	// the remote to send us AUMs from.
 	//
 	// We iterate the list of ancestors in order because the remote

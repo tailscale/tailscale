@@ -277,7 +277,7 @@ func (s *NodeKeySignature) verifySignature(nodeKey key.NodePublic, verificationK
 		// Recurse to verify the signature on the nested structure.
 		var nestedPub key.NodePublic
 		// SigCredential signatures certify an indirection key rather than a node
-		// key, so theres no need to check the node key.
+		// key, so there's no need to check the node key.
 		if s.Nested.SigKind != SigCredential {
 			if err := nestedPub.UnmarshalBinary(s.Nested.Pubkey); err != nil {
 				return fmt.Errorf("nested pubkey: %v", err)
