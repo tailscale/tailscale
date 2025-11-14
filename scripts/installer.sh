@@ -42,6 +42,8 @@ main() {
 		#  - VERSION_CODENAME: the codename of the OS release, if any (e.g. "buster")
 		#  - UBUNTU_CODENAME: if it exists, use instead of VERSION_CODENAME
 		. /etc/os-release
+		VERSION_MAJOR="${VERSION_ID:-}"
+		VERSION_MAJOR="${VERSION_MAJOR%%.*}"
 		case "$ID" in
 			ubuntu|pop|neon|zorin|tuxedo)
 				OS="ubuntu"
@@ -53,10 +55,10 @@ main() {
 				PACKAGETYPE="apt"
 				# Third-party keyrings became the preferred method of
 				# installation in Ubuntu 20.04.
-				if expr "$VERSION_ID" : "2.*" >/dev/null; then
-					APT_KEY_TYPE="keyring"
-				else
+				if [ "$VERSION_MAJOR" -lt 20 ]; then
 					APT_KEY_TYPE="legacy"
+				else
+					APT_KEY_TYPE="keyring"
 				fi
 				;;
 			debian)
@@ -76,7 +78,7 @@ main() {
 					# They don't specify the Debian version they're based off in os-release
 					# but Parrot 6 is based on Debian 12 Bookworm.
 					VERSION=bookworm
-				elif [ "$VERSION_ID" -lt 11 ]; then
+				elif [ "$VERSION_MAJOR" -lt 11 ]; then
 					APT_KEY_TYPE="legacy"
 				else
 					APT_KEY_TYPE="keyring"
@@ -94,7 +96,7 @@ main() {
 				    VERSION="$VERSION_CODENAME"
 				fi
 				PACKAGETYPE="apt"
-				if [ "$VERSION_ID" -lt 5 ]; then
+				if [ "$VERSION_MAJOR" -lt 5 ]; then
 					APT_KEY_TYPE="legacy"
 				else
 					APT_KEY_TYPE="keyring"
@@ -104,7 +106,7 @@ main() {
 				OS="ubuntu"
 				VERSION="$UBUNTU_CODENAME"
 				PACKAGETYPE="apt"
-				if [ "$VERSION_ID" -lt 6 ]; then
+				if [ "$VERSION_MAJOR" -lt 6 ]; then
 					APT_KEY_TYPE="legacy"
 				else
 					APT_KEY_TYPE="keyring"
@@ -113,7 +115,7 @@ main() {
 			industrial-os)
 				OS="debian"
 				PACKAGETYPE="apt"
-				if [ "$(printf %.1s "$VERSION_ID")" -lt 5 ]; then
+				if [ "$VERSION_MAJOR" -lt 5 ]; then
 					VERSION="buster"
 					APT_KEY_TYPE="legacy"
 				else
@@ -124,7 +126,7 @@ main() {
 			parrot|mendel)
 				OS="debian"
 				PACKAGETYPE="apt"
-				if [ "$VERSION_ID" -lt 5 ]; then
+				if [ "$VERSION_MAJOR" -lt 5 ]; then
 					VERSION="buster"
 					APT_KEY_TYPE="legacy"
 				else
@@ -150,7 +152,7 @@ main() {
 				PACKAGETYPE="apt"
 				# Third-party keyrings became the preferred method of
 				# installation in Raspbian 11 (Bullseye).
-				if [ "$VERSION_ID" -lt 11 ]; then
+				if [ "$VERSION_MAJOR" -lt 11 ]; then
 					APT_KEY_TYPE="legacy"
 				else
 					APT_KEY_TYPE="keyring"
@@ -159,12 +161,11 @@ main() {
 			kali)
 				OS="debian"
 				PACKAGETYPE="apt"
-				YEAR="$(echo "$VERSION_ID" | cut -f1 -d.)"
 				APT_SYSTEMCTL_START=true
 				# Third-party keyrings became the preferred method of
 				# installation in Debian 11 (Bullseye), which Kali switched
 				# to in roughly 2021.x releases
-				if [ "$YEAR" -lt 2021 ]; then
+				if [ "$VERSION_MAJOR" -lt 2021 ]; then
 					# Kali VERSION_ID is "kali-rolling", which isn't distinguishing
 					VERSION="buster"
 					APT_KEY_TYPE="legacy"
@@ -176,7 +177,7 @@ main() {
 			Deepin|deepin)  # https://github.com/tailscale/tailscale/issues/7862
 				OS="debian"
 				PACKAGETYPE="apt"
-				if [ "$VERSION_ID" -lt 20 ]; then
+				if [ "$VERSION_MAJOR" -lt 20 ]; then
 					APT_KEY_TYPE="legacy"
 					VERSION="buster"
 				else
@@ -189,7 +190,7 @@ main() {
 				# All versions of PikaOS are new enough to prefer keyring
 				APT_KEY_TYPE="keyring"
 				# Older versions of PikaOS are based on Ubuntu rather than Debian
-				if [ "$VERSION_ID" -lt 4 ]; then
+				if [ "$VERSION_MAJOR" -lt 4 ]; then
 					OS="ubuntu"
 					VERSION="$UBUNTU_CODENAME"
 				else
@@ -205,7 +206,7 @@ main() {
 				;;
 			centos)
 				OS="$ID"
-				VERSION="$VERSION_ID"
+				VERSION="$VERSION_MAJOR"
 				PACKAGETYPE="dnf"
 				if [ "$VERSION" = "7" ]; then
 					PACKAGETYPE="yum"
@@ -213,7 +214,7 @@ main() {
 				;;
 			ol)
 				OS="oracle"
-				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
+				VERSION="$VERSION_MAJOR"
 				PACKAGETYPE="dnf"
 				if [ "$VERSION" = "7" ]; then
 					PACKAGETYPE="yum"
@@ -224,7 +225,7 @@ main() {
 				if [ "$ID" = "miraclelinux" ]; then
 					OS="rhel"
 				fi
-				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
+				VERSION="$VERSION_MAJOR"
 				PACKAGETYPE="dnf"
 				if [ "$VERSION" = "7" ]; then
 					PACKAGETYPE="yum"
@@ -247,7 +248,7 @@ main() {
 				;;
 			xenenterprise)
 				OS="centos"
-				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
+				VERSION="$VERSION_MAJOR"
 				PACKAGETYPE="yum"
 				;;
 			opensuse-leap|sles)
@@ -311,7 +312,7 @@ main() {
 				;;
 			freebsd)
 				OS="$ID"
-				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
+				VERSION="$VERSION_MAJOR"
 				PACKAGETYPE="pkg"
 				;;
 			osmc)
@@ -322,7 +323,7 @@ main() {
 				;;
 			photon)
 				OS="photon"
-				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
+				VERSION="$VERSION_MAJOR"
 				PACKAGETYPE="tdnf"
 				;;
 
