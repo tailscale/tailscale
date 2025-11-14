@@ -58,6 +58,7 @@ import (
 	"tailscale.com/types/netlogfunc"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
+	"tailscale.com/types/topics"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
@@ -158,8 +159,6 @@ type Conn struct {
 	eventBus               *eventbus.Bus
 	eventClient            *eventbus.Client
 	logf                   logger.Logf
-	epFunc                 func([]tailcfg.Endpoint)
-	derpActiveFunc         func()
 	idleFunc               func() time.Duration // nil means unknown
 	testOnlyPacketListener nettype.PacketListener
 	noteRecvActivity       func(key.NodePublic) // or nil, see Options.NoteRecvActivity
@@ -181,6 +180,8 @@ type Conn struct {
 	syncPub               *eventbus.Publisher[syncPoint]
 	allocRelayEndpointPub *eventbus.Publisher[UDPRelayAllocReq]
 	portUpdatePub         *eventbus.Publisher[router.PortUpdate]
+	derpConnChangePub     *eventbus.Publisher[topics.DERPConnChange]
+	epChangePub           *eventbus.Publisher[topics.EndpointsChanged]
 
 	// pconn4 and pconn6 are the underlying UDP sockets used to
 	// send/receive packets for wireguard and other magicsock
@@ -446,14 +447,6 @@ type Options struct {
 	// Zero means to pick one automatically.
 	Port uint16
 
-	// EndpointsFunc optionally provides a func to be called when
-	// endpoints change. The called func does not own the slice.
-	EndpointsFunc func([]tailcfg.Endpoint)
-
-	// DERPActiveFunc optionally provides a func to be called when
-	// a connection is made to a DERP server.
-	DERPActiveFunc func()
-
 	// IdleFunc optionally provides a func to return how long
 	// it's been since a TUN packet was sent or received.
 	IdleFunc func() time.Duration
@@ -505,20 +498,6 @@ func (o *Options) logf() logger.Logf {
 		panic("must provide magicsock.Options.logf")
 	}
 	return o.Logf
-}
-
-func (o *Options) endpointsFunc() func([]tailcfg.Endpoint) {
-	if o == nil || o.EndpointsFunc == nil {
-		return func([]tailcfg.Endpoint) {}
-	}
-	return o.EndpointsFunc
-}
-
-func (o *Options) derpActiveFunc() func() {
-	if o == nil || o.DERPActiveFunc == nil {
-		return func() {}
-	}
-	return o.DERPActiveFunc
 }
 
 // NodeViewsUpdate represents an update event of [tailcfg.NodeView] for all
@@ -686,8 +665,6 @@ func NewConn(opts Options) (*Conn, error) {
 	c.eventBus = opts.EventBus
 	c.port.Store(uint32(opts.Port))
 	c.controlKnobs = opts.ControlKnobs
-	c.epFunc = opts.endpointsFunc()
-	c.derpActiveFunc = opts.derpActiveFunc()
 	c.idleFunc = opts.IdleFunc
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
@@ -699,6 +676,8 @@ func NewConn(opts Options) (*Conn, error) {
 	c.syncPub = eventbus.Publish[syncPoint](ec)
 	c.allocRelayEndpointPub = eventbus.Publish[UDPRelayAllocReq](ec)
 	c.portUpdatePub = eventbus.Publish[router.PortUpdate](ec)
+	c.derpConnChangePub = eventbus.Publish[topics.DERPConnChange](ec)
+	c.epChangePub = eventbus.Publish[topics.EndpointsChanged](ec)
 	eventbus.SubscribeFunc(ec, c.onPortMapChanged)
 	eventbus.SubscribeFunc(ec, c.onFilterUpdate)
 	eventbus.SubscribeFunc(ec, c.onNodeViewsUpdate)
@@ -973,7 +952,7 @@ func (c *Conn) updateEndpoints(why string) {
 
 	if c.setEndpoints(endpoints) {
 		c.logEndpointChange(endpoints)
-		c.epFunc(endpoints)
+		c.epChangePub.Publish(topics.EndpointsChanged(endpoints))
 	}
 }
 
