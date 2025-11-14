@@ -393,8 +393,13 @@ func tpmSeal(logf logger.Logf, data []byte) (*tpmSealedData, error) {
 	}
 	defer tpm.Close()
 
+	return tpmSealWithTPM(logf, tpm, data)
+}
+
+// tpmSealWithTPM seals the data using SRK of the provided TPM.
+func tpmSealWithTPM(logf logger.Logf, tpm transport.TPM, data []byte) (*tpmSealedData, error) {
 	var res *tpmSealedData
-	err = withSRK(logf, tpm, func(srk tpm2.AuthHandle) error {
+	err := withSRK(logf, tpm, func(srk tpm2.AuthHandle) error {
 		sealCmd := tpm2.Create{
 			ParentHandle: srk,
 			InSensitive: tpm2.TPM2BSensitiveCreate{
@@ -436,8 +441,13 @@ func tpmUnseal(logf logger.Logf, data *tpmSealedData) ([]byte, error) {
 	}
 	defer tpm.Close()
 
+	return tpmUnsealWithTPM(logf, tpm, data)
+}
+
+// tpmUnsealWithTPM unseals the data using SRK of the provided TPM.
+func tpmUnsealWithTPM(logf logger.Logf, tpm transport.TPM, data *tpmSealedData) ([]byte, error) {
 	var res []byte
-	err = withSRK(logf, tpm, func(srk tpm2.AuthHandle) error {
+	err := withSRK(logf, tpm, func(srk tpm2.AuthHandle) error {
 		// Load the sealed object into the TPM first under SRK.
 		loadCmd := tpm2.Load{
 			ParentHandle: srk,
