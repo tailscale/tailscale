@@ -5,7 +5,6 @@ package relayserver
 
 import (
 	"errors"
-	"net/netip"
 	"reflect"
 	"testing"
 
@@ -157,7 +156,7 @@ func Test_extension_profileStateChanged(t *testing.T) {
 				t.Fatal(err)
 			}
 			e := ipne.(*extension)
-			e.newServerFn = func(logf logger.Logf, port int, overrideAddrs []netip.Addr) (relayServer, error) {
+			e.newServerFn = func(logf logger.Logf, port int, onlyStaticAddrPorts bool) (relayServer, error) {
 				return &mockRelayServer{}, nil
 			}
 			e.port = tt.fields.port
@@ -289,7 +288,7 @@ func Test_extension_handleRelayServerLifetimeLocked(t *testing.T) {
 				t.Fatal(err)
 			}
 			e := ipne.(*extension)
-			e.newServerFn = func(logf logger.Logf, port int, overrideAddrs []netip.Addr) (relayServer, error) {
+			e.newServerFn = func(logf logger.Logf, port int, onlyStaticAddrPorts bool) (relayServer, error) {
 				return &mockRelayServer{}, nil
 			}
 			e.shutdown = tt.shutdown
