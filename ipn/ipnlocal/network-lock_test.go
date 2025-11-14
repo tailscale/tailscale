@@ -41,12 +41,6 @@ import (
 	"tailscale.com/util/set"
 )
 
-type observerFunc func(controlclient.Status)
-
-func (f observerFunc) SetControlClientStatus(_ controlclient.Client, s controlclient.Status) {
-	f(s)
-}
-
 func fakeControlClient(t *testing.T, c *http.Client) (*controlclient.Auto, *eventbus.Bus) {
 	hi := hostinfo.New()
 	ni := tailcfg.NetInfo{LinkType: "wired"}
@@ -64,7 +58,6 @@ func fakeControlClient(t *testing.T, c *http.Client) (*controlclient.Auto, *even
 		},
 		HTTPTestClient:  c,
 		NoiseTestClient: c,
-		Observer:        observerFunc(func(controlclient.Status) {}),
 		Dialer:          dialer,
 		Bus:             bus,
 	}

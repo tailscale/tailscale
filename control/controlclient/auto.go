@@ -117,7 +117,7 @@ type Auto struct {
 	logf          logger.Logf
 	closed        bool
 	updateCh      chan struct{} // readable when we should inform the server of a change
-	observer      Observer      // called to update Client status; always non-nil
+	observer      Observer      // if non-nil, called to update Client status
 	observerQueue execqueue.ExecQueue
 	shutdownFn    func() // to be called prior to shutdown or nil
 
@@ -170,9 +170,6 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 		}
 	}()
 
-	if opts.Observer == nil {
-		return nil, errors.New("missing required Options.Observer")
-	}
 	if opts.Logf == nil {
 		opts.Logf = func(fmt string, args ...any) {}
 	}
@@ -609,6 +606,11 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		Err:     err,
 		state:   state,
 	}
+
+	if c.observer == nil {
+		return
+	}
+
 	c.lastStatus.Store(newSt)
 
 	// Launch a new goroutine to avoid blocking the caller while the observer

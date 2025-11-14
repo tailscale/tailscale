@@ -115,6 +115,9 @@ type Direct struct {
 
 // Observer is implemented by users of the control client (such as LocalBackend)
 // to get notified of changes in the control client's status.
+//
+// If an implementation of Observer also implements [NetmapDeltaUpdater], they get
+// delta updates as well as full netmap updates.
 type Observer interface {
 	// SetControlClientStatus is called when the client has a new status to
 	// report. The Client is provided to allow the Observer to track which
@@ -145,6 +148,7 @@ type Options struct {
 
 	// Observer is called when there's a change in status to report
 	// from the control client.
+	// If nil, no status updates are reported.
 	Observer Observer
 
 	// SkipIPForwardingCheck declares that the host's IP
