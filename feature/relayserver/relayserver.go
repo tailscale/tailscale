@@ -246,10 +246,13 @@ func (e *extension) stopRelayServerLocked() {
 
 // Shutdown implements [ipnlocal.Extension].
 func (e *extension) Shutdown() error {
+	// [extension.mu] must not be held when closing the [eventbus.Client]. Close
+	// blocks until all [eventbus.SubscribeFunc]'s have returned, and the ones
+	// used in this package also acquire [extension.mu]. See #17894.
+	e.ec.Close()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.shutdown = true
-	e.ec.Close()
 	e.stopRelayServerLocked()
 	return nil
 }
