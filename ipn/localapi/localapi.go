@@ -7,6 +7,7 @@ package localapi
 import (
 	"bytes"
 	"cmp"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -257,7 +258,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "auth required", http.StatusUnauthorized)
 			return
 		}
-		if pass != h.RequiredPassword {
+		if subtle.ConstantTimeCompare([]byte(pass), []byte(h.RequiredPassword)) == 0 {
 			metricInvalidRequests.Add(1)
 			http.Error(w, "bad password", http.StatusForbidden)
 			return
