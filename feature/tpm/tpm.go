@@ -35,12 +35,15 @@ import (
 	"tailscale.com/util/testenv"
 )
 
-var infoOnce = sync.OnceValue(info)
+var (
+	infoOnce         = sync.OnceValue(info)
+	tpmSupportedOnce = sync.OnceValue(tpmSupported)
+)
 
 func init() {
 	feature.Register("tpm")
-	feature.HookTPMAvailable.Set(tpmSupported)
-	feature.HookHardwareAttestationAvailable.Set(tpmSupported)
+	feature.HookTPMAvailable.Set(tpmSupportedOnce)
+	feature.HookHardwareAttestationAvailable.Set(tpmSupportedOnce)
 
 	hostinfo.RegisterHostinfoNewHook(func(hi *tailcfg.Hostinfo) {
 		hi.TPM = infoOnce()
