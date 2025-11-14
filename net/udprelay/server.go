@@ -21,7 +21,6 @@ import (
 
 	"go4.org/mem"
 	"golang.org/x/net/ipv6"
-	"tailscale.com/client/local"
 	"tailscale.com/disco"
 	"tailscale.com/net/batching"
 	"tailscale.com/net/netaddr"
@@ -32,6 +31,7 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/net/udprelay/endpoint"
 	"tailscale.com/net/udprelay/status"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -72,7 +72,8 @@ type Server struct {
 	closeCh             chan struct{}
 	netChecker          *netcheck.Client
 
-	mu                sync.Mutex       // guards the following fields
+	mu                sync.Mutex // guards the following fields
+	derpMap           *tailcfg.DERPMap
 	addrDiscoveryOnce bool             // addrDiscovery completed once (successfully or unsuccessfully)
 	addrPorts         []netip.AddrPort // the ip:port pairs returned as candidate endpoints
 	closed            bool
@@ -374,15 +375,12 @@ func (s *Server) addrDiscoveryLoop() {
 			}
 		}
 
-		// fetch DERPMap to feed to netcheck
-		derpMapCtx, derpMapCancel := context.WithTimeout(context.Background(), time.Second)
-		defer derpMapCancel()
-		localClient := &local.Client{}
-		// TODO(jwhited): We are in-process so use eventbus or similar.
-		//  local.Client gets us going.
-		dm, err := localClient.CurrentDERPMap(derpMapCtx)
-		if err != nil {
-			return nil, err
+		dm := s.getDERPMap()
+		if dm == nil {
+			// We don't have a DERPMap which is required to dynamically
+			// discover external addresses, but we can return the endpoints we
+			// do have.
+			return addrPorts.Slice(), nil
 		}
 
 		// get addrPorts as visible from DERP
@@ -863,4 +861,22 @@ func (s *Server) GetSessions() []status.ServerSession {
 		})
 	}
 	return sessions
+}
+
+// SetDERPMapView sets the [tailcfg.DERPMapView] to use for future netcheck
+// reports.
+func (s *Server) SetDERPMapView(view tailcfg.DERPMapView) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !view.Valid() {
+		s.derpMap = nil
+		return
+	}
+	s.derpMap = view.AsStruct()
+}
+
+func (s *Server) getDERPMap() *tailcfg.DERPMap {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.derpMap
 }
