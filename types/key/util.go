@@ -10,9 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"slices"
 
 	"go4.org/mem"
+	"tailscale.com/util/set"
+	"tailscale.com/util/testenv"
 )
 
 // rand fills b with cryptographically strong random bytes. Panics if
@@ -114,4 +117,19 @@ func debug32(k [32]byte) string {
 	base64.StdEncoding.Encode(dst[1:], k[:4])
 	dst[6] = ']'
 	return string(dst[:7])
+}
+
+// PrivateTypesForTest returns the set of private key types
+// in this package, for testing purposes.
+func PrivateTypesForTest() set.Set[reflect.Type] {
+	testenv.AssertInTest()
+	return set.Of(
+		reflect.TypeFor[ChallengePrivate](),
+		reflect.TypeFor[ControlPrivate](),
+		reflect.TypeFor[DiscoPrivate](),
+		reflect.TypeFor[MachinePrivate](),
+		reflect.TypeFor[NodePrivate](),
+		reflect.TypeFor[NLPrivate](),
+		reflect.TypeFor[HardwareAttestationKey](),
+	)
 }

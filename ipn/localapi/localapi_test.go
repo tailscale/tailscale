@@ -263,13 +263,17 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 	})
 }
 
+// TestServeWatchIPNBus used to test that various WatchIPNBus mask flags
+// changed the permissions required to access the endpoint.
+// However, since the removal of the NotifyNoPrivateKeys flag requirement
+// for read-only users, this test now only verifies that the endpoint
+// behaves correctly based on the PermitRead and PermitWrite settings.
 func TestServeWatchIPNBus(t *testing.T) {
 	tstest.Replace(t, &validLocalHostForTesting, true)
 
 	tests := []struct {
 		desc                    string
 		permitRead, permitWrite bool
-		mask                    ipn.NotifyWatchOpt // extra bits in addition to ipn.NotifyInitialState
 		wantStatus              int
 	}{
 		{
@@ -279,20 +283,13 @@ func TestServeWatchIPNBus(t *testing.T) {
 			wantStatus:  http.StatusForbidden,
 		},
 		{
-			desc:        "read-initial-state",
+			desc:        "read-only",
 			permitRead:  true,
 			permitWrite: false,
-			wantStatus:  http.StatusForbidden,
-		},
-		{
-			desc:        "read-initial-state-no-private-keys",
-			permitRead:  true,
-			permitWrite: false,
-			mask:        ipn.NotifyNoPrivateKeys,
 			wantStatus:  http.StatusOK,
 		},
 		{
-			desc:        "read-initial-state-with-private-keys",
+			desc:        "read-and-write",
 			permitRead:  true,
 			permitWrite: true,
 			wantStatus:  http.StatusOK,
@@ -311,7 +308,7 @@ func TestServeWatchIPNBus(t *testing.T) {
 			c := s.Client()
 
 			ctx, cancel := context.WithCancel(context.Background())
-			req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/localapi/v0/watch-ipn-bus?mask=%d", s.URL, ipn.NotifyInitialState|tt.mask), nil)
+			req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/localapi/v0/watch-ipn-bus?mask=%d", s.URL, ipn.NotifyInitialState), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

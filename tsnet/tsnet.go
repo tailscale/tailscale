@@ -350,7 +350,7 @@ func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {
 		return nil, fmt.Errorf("tsnet.Up: %w", err)
 	}
 
-	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyNoPrivateKeys)
+	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
 	if err != nil {
 		return nil, fmt.Errorf("tsnet.Up: %w", err)
 	}

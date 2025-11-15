@@ -867,7 +867,6 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 
 	nm := &netmap.NetworkMap{
 		NodeKey:           ms.publicNodeKey,
-		PrivateKey:        ms.privateNodeKey,
 		MachineKey:        ms.machinePubKey,
 		Peers:             peerViews,
 		UserProfiles:      make(map[tailcfg.UserID]tailcfg.UserProfileView),

@@ -308,8 +308,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 	buildNetmapLocked := func(myIdx int) *netmap.NetworkMap {
 		me := ms[myIdx]
 		nm := &netmap.NetworkMap{
-			PrivateKey: me.privateKey,
-			NodeKey:    me.privateKey.Public(),
+			NodeKey: me.privateKey.Public(),
 			SelfNode: (&tailcfg.Node{
 				Addresses: []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(1, 0, 0, byte(myIdx+1)), 32)},
 			}).View(),
@@ -356,7 +355,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 				peerSet.Add(peer.Key())
 			}
 			m.conn.UpdatePeers(peerSet)
-			wg, err := nmcfg.WGCfg(nm, logf, 0, "")
+			wg, err := nmcfg.WGCfg(ms[i].privateKey, nm, logf, 0, "")
 			if err != nil {
 				// We're too far from the *testing.T to be graceful,
 				// blow up. Shouldn't happen anyway.
@@ -2201,9 +2200,8 @@ func TestIsWireGuardOnlyPeer(t *testing.T) {
 	defer m.Close()
 
 	nm := &netmap.NetworkMap{
-		Name:       "ts",
-		PrivateKey: m.privateKey,
-		NodeKey:    m.privateKey.Public(),
+		Name:    "ts",
+		NodeKey: m.privateKey.Public(),
 		SelfNode: (&tailcfg.Node{
 			Addresses: []netip.Prefix{tsaip},
 		}).View(),
@@ -2224,7 +2222,7 @@ func TestIsWireGuardOnlyPeer(t *testing.T) {
 	}
 	m.conn.onNodeViewsUpdate(nv)
 
-	cfg, err := nmcfg.WGCfg(nm, t.Logf, netmap.AllowSubnetRoutes, "")
+	cfg, err := nmcfg.WGCfg(m.privateKey, nm, t.Logf, netmap.AllowSubnetRoutes, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2266,9 +2264,8 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 	defer m.Close()
 
 	nm := &netmap.NetworkMap{
-		Name:       "ts",
-		PrivateKey: m.privateKey,
-		NodeKey:    m.privateKey.Public(),
+		Name:    "ts",
+		NodeKey: m.privateKey.Public(),
 		SelfNode: (&tailcfg.Node{
 			Addresses: []netip.Prefix{tsaip},
 		}).View(),
@@ -2290,7 +2287,7 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 	}
 	m.conn.onNodeViewsUpdate(nv)
 
-	cfg, err := nmcfg.WGCfg(nm, t.Logf, netmap.AllowSubnetRoutes, "")
+	cfg, err := nmcfg.WGCfg(m.privateKey, nm, t.Logf, netmap.AllowSubnetRoutes, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2334,7 +2331,7 @@ func applyNetworkMap(t *testing.T, m *magicStack, nm *netmap.NetworkMap) {
 	m.conn.noV6.Store(true)
 
 	// Turn the network map into a wireguard config (for the tailscale internal wireguard device).
-	cfg, err := nmcfg.WGCfg(nm, t.Logf, netmap.AllowSubnetRoutes, "")
+	cfg, err := nmcfg.WGCfg(m.privateKey, nm, t.Logf, netmap.AllowSubnetRoutes, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2403,9 +2400,8 @@ func TestIsWireGuardOnlyPickEndpointByPing(t *testing.T) {
 	wgEpV6 := netip.MustParseAddrPort(v6.LocalAddr().String())
 
 	nm := &netmap.NetworkMap{
-		Name:       "ts",
-		PrivateKey: m.privateKey,
-		NodeKey:    m.privateKey.Public(),
+		Name:    "ts",
+		NodeKey: m.privateKey.Public(),
 		SelfNode: (&tailcfg.Node{
 			Addresses: []netip.Prefix{tsaip},
 		}).View(),

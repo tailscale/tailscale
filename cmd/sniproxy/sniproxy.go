@@ -141,7 +141,7 @@ func run(ctx context.Context, ts *tsnet.Server, wgPort int, hostname string, pro
 	// in the netmap.
 	// We set the NotifyInitialNetMap flag so we will always get woken with the
 	// current netmap, before only being woken on changes.
-	bus, err := lc.WatchIPNBus(ctx, ipn.NotifyWatchEngineUpdates|ipn.NotifyInitialNetMap|ipn.NotifyNoPrivateKeys)
+	bus, err := lc.WatchIPNBus(ctx, ipn.NotifyWatchEngineUpdates|ipn.NotifyInitialNetMap)
 	if err != nil {
 		log.Fatalf("watching IPN bus: %v", err)
 	}

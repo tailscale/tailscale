@@ -102,15 +102,13 @@ func (m *monitor) handleSummaryStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *monitor) handleNetmap(w http.ResponseWriter, r *http.Request) {
-	var mask ipn.NotifyWatchOpt = ipn.NotifyInitialNetMap
-	mask |= ipn.NotifyNoPrivateKeys
 	lc, err := m.ts.LocalClient()
 	if err != nil {
 		log.Printf("monitor: error LocalClient: %v", err)
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
-	watcher, err := lc.WatchIPNBus(r.Context(), mask)
+	watcher, err := lc.WatchIPNBus(r.Context(), ipn.NotifyInitialNetMap)
 	if err != nil {
 		log.Printf("monitor: error WatchIPNBus: %v", err)
 		http.Error(w, "", http.StatusInternalServerError)
