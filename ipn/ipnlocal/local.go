@@ -263,6 +263,7 @@ type LocalBackend struct {
 	// of [LocalBackend]'s own state that is not tied to the node context.
 	currentNodeAtomic atomic.Pointer[nodeBackend]
 
+	diskCache        diskCache
 	conf             *conffile.Config // latest parsed config, or nil if not in declarative mode
 	pm               *profileManager  // mu guards access
 	lastFilterInputs *filterInputs
@@ -1550,7 +1551,13 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.setControlClientStatusLocked(c, st)
+}
 
+// setControlClientStatusLocked is the locked version of SetControlClientStatus.
+//
+// b.mu must be held.
+func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st controlclient.Status) {
 	if b.cc != c {
 		b.logf("Ignoring SetControlClientStatus from old client")
 		return
@@ -2384,6 +2391,14 @@ func (b *LocalBackend) initOnce() {
 	b.extHost.Init()
 }
 
+func (b *LocalBackend) controlDebugFlags() []string {
+	debugFlags := controlDebugFlags
+	if b.sys.IsNetstackRouter() {
+		return append([]string{"netstack"}, debugFlags...)
+	}
+	return debugFlags
+}
+
 // Start applies the configuration specified in opts, and starts the
 // state machine.
 //
@@ -2532,13 +2547,17 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		persistv = new(persist.Persist)
 	}
 
-	discoPublic := b.MagicConn().DiscoPublicKey()
-
-	isNetstack := b.sys.IsNetstackRouter()
-	debugFlags := controlDebugFlags
-	if isNetstack {
-		debugFlags = append([]string{"netstack"}, debugFlags...)
+	if envknob.Bool("TS_USE_CACHED_NETMAP") {
+		if nm, ok := b.loadDiskCache(prefs.Persist().UserProfile()); ok {
+			logf("loaded netmap from disk cache; %d peers", len(nm.Peers))
+			b.setControlClientStatusLocked(nil, controlclient.Status{
+				NetMap:   nm,
+				LoggedIn: true, // sure
+			})
+		}
 	}
+
+	discoPublic := b.MagicConn().DiscoPublicKey()
 
 	var ccShutdownCbs []func()
 	ccShutdown := func() {
@@ -2565,7 +2584,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		Hostinfo:             hostinfo,
 		HTTPTestClient:       httpTestClient,
 		DiscoPublicKey:       discoPublic,
-		DebugFlags:           debugFlags,
+		DebugFlags:           b.controlDebugFlags(),
 		HealthTracker:        b.health,
 		PolicyClient:         b.sys.PolicyClientOrDefault(),
 		Pinger:               b,
@@ -2581,7 +2600,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
-		SkipIPForwardingCheck: isNetstack,
+		SkipIPForwardingCheck: b.sys.IsNetstackRouter(),
 	})
 	if err != nil {
 		return err
@@ -6077,6 +6096,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	var login string
 	if nm != nil {
 		login = cmp.Or(profileFromView(nm.UserProfiles[nm.User()]).LoginName, "<missing-profile>")
+		b.writeNetmapToDiskLocked(nm)
 	}
 	b.currentNode().SetNetMap(nm)
 	if login != b.activeLogin {
