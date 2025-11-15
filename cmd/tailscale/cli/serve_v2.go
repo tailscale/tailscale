@@ -966,7 +966,7 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveTy
 		if e.setPath != "" {
 			return fmt.Errorf("cannot mount a path for TCP serve")
 		}
-		err := e.applyTCPServe(sc, dnsName, srvType, srvPort, target)
+		err := e.applyTCPServe(sc, dnsName, srvType, srvPort, target, mds)
 		if err != nil {
 			return fmt.Errorf("failed to apply TCP serve: %w", err)
 		}
@@ -1170,7 +1170,7 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 	return nil
 }
 
-func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType serveType, srcPort uint16, target string) error {
+func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType serveType, srcPort uint16, target string, mds string) error {
 	var terminateTLS bool
 	switch srcType {
 	case serveTypeTCP:
@@ -1192,9 +1192,11 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 	}
 
 	// TODO: needs to account for multiple configs from foreground mode
-	svcName := tailcfg.AsServiceName(dnsName)
-	if sc.IsServingWeb(srcPort, svcName) {
-		return fmt.Errorf("cannot serve TCP; already serving web on %d for %s", srcPort, dnsName)
+	if svcName := tailcfg.AsServiceName(dnsName); svcName != "" {
+		if sc.IsServingWeb(srcPort, svcName) {
+			return fmt.Errorf("cannot serve TCP; already serving web on %d for %s", srcPort, dnsName)
+		}
+		sc.SetTCPForwardingForService(srcPort, dstURL.Host, terminateTLS, svcName, mds)
 	}
 
 	sc.SetTCPForwarding(srcPort, dstURL.Host, terminateTLS, dnsName)

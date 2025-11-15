@@ -408,19 +408,30 @@ func (sc *ServeConfig) SetTCPForwarding(port uint16, fwdAddr string, terminateTL
 	if sc == nil {
 		sc = new(ServeConfig)
 	}
-	tcpPortHandler := &sc.TCP
-	if svcName := tailcfg.AsServiceName(host); svcName != "" {
-		svcConfig, ok := sc.Services[svcName]
-		if !ok {
-			svcConfig = new(ServiceConfig)
-			mak.Set(&sc.Services, svcName, svcConfig)
-		}
-		tcpPortHandler = &svcConfig.TCP
-	}
-	mak.Set(tcpPortHandler, port, &TCPPortHandler{TCPForward: fwdAddr})
+	mak.Set(&sc.TCP, port, &TCPPortHandler{TCPForward: fwdAddr})
 
 	if terminateTLS {
-		(*tcpPortHandler)[port].TerminateTLS = host
+		sc.TCP[port].TerminateTLS = host
+	}
+}
+
+// SetTCPForwardingForService is sets the fwdAddr (IP:port form) to which to
+// forward connections from the given port on the service. If terminateTLS
+// is true, TLS connections are terminated, with only the FQDN that corresponds
+// to the given service being permitted, before passing them to the fwdAddr.
+func (sc *ServeConfig) SetTCPForwardingForService(port uint16, fwdAddr string, terminateTLS bool, svcName tailcfg.ServiceName, magicDNSSuffix string) {
+	if sc == nil {
+		sc = new(ServeConfig)
+	}
+	svcConfig, ok := sc.Services[svcName]
+	if !ok {
+		svcConfig = new(ServiceConfig)
+		mak.Set(&sc.Services, svcName, svcConfig)
+	}
+	mak.Set(&svcConfig.TCP, port, &TCPPortHandler{TCPForward: fwdAddr})
+
+	if terminateTLS {
+		svcConfig.TCP[port].TerminateTLS = fmt.Sprintf("%s.%s", svcName.WithoutPrefix(), magicDNSSuffix)
 	}
 }
 
