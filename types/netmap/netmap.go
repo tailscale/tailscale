@@ -30,10 +30,6 @@ type NetworkMap struct {
 	AllCaps    set.Set[tailcfg.NodeCapability] // set version of SelfNode.Capabilities + SelfNode.CapMap
 	NodeKey    key.NodePublic
 	PrivateKey key.NodePrivate
-	Expiry     time.Time
-	// Name is the DNS name assigned to this node.
-	// It is the MapResponse.Node.Name value and ends with a period.
-	Name string
 
 	MachineKey key.MachinePublic
 
@@ -236,10 +232,25 @@ func MagicDNSSuffixOfNodeName(nodeName string) string {
 //
 // It will neither start nor end with a period.
 func (nm *NetworkMap) MagicDNSSuffix() string {
-	if nm == nil {
+	return MagicDNSSuffixOfNodeName(nm.SelfName())
+}
+
+// SelfName returns nm.SelfNode.Name, or the empty string
+// if nm is nil or nm.SelfNode is invalid.
+func (nm *NetworkMap) SelfName() string {
+	if nm == nil || !nm.SelfNode.Valid() {
 		return ""
 	}
-	return MagicDNSSuffixOfNodeName(nm.Name)
+	return nm.SelfNode.Name()
+}
+
+// SelfKeyExpiry returns nm.SelfNode.KeyExpiry, or the zero
+// value if nil or nm.SelfNode is invalid.
+func (nm *NetworkMap) SelfKeyExpiry() time.Time {
+	if nm == nil || !nm.SelfNode.Valid() {
+		return time.Time{}
+	}
+	return nm.SelfNode.KeyExpiry()
 }
 
 // DomainName returns the name of the NetworkMap's

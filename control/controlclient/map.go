@@ -892,8 +892,6 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 
 	if node := ms.lastNode; node.Valid() {
 		nm.SelfNode = node
-		nm.Expiry = node.KeyExpiry()
-		nm.Name = node.Name()
 		nm.AllCaps = ms.lastCapSet
 	}
 
