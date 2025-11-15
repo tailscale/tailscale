@@ -8,14 +8,10 @@ package relayserver
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
-	"net/netip"
-	"strings"
 	"sync"
 
 	"tailscale.com/disco"
-	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
@@ -71,8 +67,8 @@ func servePeerRelayDebugSessions(h *localapi.Handler, w http.ResponseWriter, r *
 // imported.
 func newExtension(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, error) {
 	e := &extension{
-		newServerFn: func(logf logger.Logf, port int, overrideAddrs []netip.Addr) (relayServer, error) {
-			return udprelay.NewServer(logf, port, overrideAddrs)
+		newServerFn: func(logf logger.Logf, port int, onlyStaticAddrPorts bool) (relayServer, error) {
+			return udprelay.NewServer(logf, port, onlyStaticAddrPorts)
 		},
 		logf: logger.WithPrefix(logf, featureName+": "),
 	}
@@ -94,7 +90,7 @@ type relayServer interface {
 // extension is an [ipnext.Extension] managing the relay server on platforms
 // that import this package.
 type extension struct {
-	newServerFn func(logf logger.Logf, port int, overrideAddrs []netip.Addr) (relayServer, error) // swappable for tests
+	newServerFn func(logf logger.Logf, port int, onlyStaticAddrPorts bool) (relayServer, error) // swappable for tests
 	logf        logger.Logf
 	ec          *eventbus.Client
 	respPub     *eventbus.Publisher[magicsock.UDPRelayAllocResp]
@@ -170,7 +166,7 @@ func (e *extension) onAllocReq(req magicsock.UDPRelayAllocReq) {
 }
 
 func (e *extension) tryStartRelayServerLocked() {
-	rs, err := e.newServerFn(e.logf, *e.port, overrideAddrs())
+	rs, err := e.newServerFn(e.logf, *e.port, false)
 	if err != nil {
 		e.logf("error initializing server: %v", err)
 		return
@@ -216,26 +212,6 @@ func (e *extension) profileStateChanged(_ ipn.LoginProfileView, prefs ipn.PrefsV
 	}
 	e.handleRelayServerLifetimeLocked()
 }
-
-// overrideAddrs returns TS_DEBUG_RELAY_SERVER_ADDRS as []netip.Addr, if set. It
-// can be between 0 and 3 comma-separated Addrs. TS_DEBUG_RELAY_SERVER_ADDRS is
-// not a stable interface, and is subject to change.
-var overrideAddrs = sync.OnceValue(func() (ret []netip.Addr) {
-	all := envknob.String("TS_DEBUG_RELAY_SERVER_ADDRS")
-	const max = 3
-	remain := all
-	for remain != "" && len(ret) < max {
-		var s string
-		s, remain, _ = strings.Cut(remain, ",")
-		addr, err := netip.ParseAddr(s)
-		if err != nil {
-			log.Printf("ignoring invalid Addr %q in TS_DEBUG_RELAY_SERVER_ADDRS %q: %v", s, all, err)
-			continue
-		}
-		ret = append(ret, addr)
-	}
-	return
-})
 
 func (e *extension) stopRelayServerLocked() {
 	if e.rs != nil {
