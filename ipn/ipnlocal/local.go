@@ -3052,9 +3052,6 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.Actor, mask ipn.NotifyWatchOpt, onWatchAdded func(), fn func(roNotify *ipn.Notify) (keepGoing bool)) {
 	ch := make(chan *ipn.Notify, 128)
 	sessionID := rands.HexString(16)
-	if mask&ipn.NotifyNoPrivateKeys != 0 {
-		fn = filterPrivateKeys(fn)
-	}
 	if mask&ipn.NotifyHealthActions == 0 {
 		// if UI does not support PrimaryAction in health warnings, append
 		// action URLs to the warning text instead.
@@ -3152,39 +3149,6 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	}
 
 	sender.Run(ctx, ch)
-}
-
-// filterPrivateKeys returns an IPN listener func that wraps the supplied IPN
-// listener and zeroes out the PrivateKey in the NetMap passed to the wrapped
-// listener.
-func filterPrivateKeys(fn func(roNotify *ipn.Notify) (keepGoing bool)) func(*ipn.Notify) bool {
-	return func(n *ipn.Notify) bool {
-		redacted, changed := redactNetmapPrivateKeys(n.NetMap)
-		if !changed {
-			return fn(n)
-		}
-
-		// The netmap in n is shared across all watchers, so to mutate it for a
-		// single watcher we have to clone the notify and the netmap. We can
-		// make shallow clones, at least.
-		n2 := *n
-		n2.NetMap = redacted
-		return fn(&n2)
-	}
-}
-
-// redactNetmapPrivateKeys returns a copy of nm with private keys zeroed out.
-// If no change was needed, it returns nm unmodified.
-func redactNetmapPrivateKeys(nm *netmap.NetworkMap) (redacted *netmap.NetworkMap, changed bool) {
-	if nm == nil || nm.PrivateKey.IsZero() {
-		return nm, false
-	}
-
-	// The netmap might be shared across watchers, so make at least a shallow
-	// clone before mutating it.
-	nm2 := *nm
-	nm2.PrivateKey = key.NodePrivate{}
-	return &nm2, true
 }
 
 // appendHealthActions returns an IPN listener func that wraps the supplied IPN
@@ -5087,7 +5051,12 @@ func (b *LocalBackend) authReconfigLocked() {
 		}
 	}
 
-	cfg, err := nmcfg.WGCfg(nm, b.logf, flags, prefs.ExitNodeID())
+	priv := b.pm.CurrentPrefs().Persist().PrivateNodeKey()
+	if !priv.IsZero() && priv.Public() != nm.NodeKey {
+		priv = key.NodePrivate{}
+	}
+
+	cfg, err := nmcfg.WGCfg(priv, nm, b.logf, flags, prefs.ExitNodeID())
 	if err != nil {
 		b.logf("wgcfg: %v", err)
 		return

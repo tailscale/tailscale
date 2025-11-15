@@ -179,7 +179,6 @@ func handleC2NDebugNetMap(b *LocalBackend, w http.ResponseWriter, r *http.Reques
 			}
 			field.SetZero()
 		}
-		nm, _ = redactNetmapPrivateKeys(nm)
 		return json.Marshal(nm)
 	}
 

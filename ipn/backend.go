@@ -74,7 +74,7 @@ const (
 	NotifyInitialPrefs  NotifyWatchOpt = 1 << 2 // if set, the first Notify message (sent immediately) will contain the current Prefs
 	NotifyInitialNetMap NotifyWatchOpt = 1 << 3 // if set, the first Notify message (sent immediately) will contain the current NetMap
 
-	NotifyNoPrivateKeys        NotifyWatchOpt = 1 << 4 // if set, private keys that would normally be sent in updates are zeroed out
+	NotifyNoPrivateKeys        NotifyWatchOpt = 1 << 4 // (no-op) it used to redact private keys; now they always are and this does nothing
 	NotifyInitialDriveShares   NotifyWatchOpt = 1 << 5 // if set, the first Notify message (sent immediately) will contain the current Taildrive Shares
 	NotifyInitialOutgoingFiles NotifyWatchOpt = 1 << 6 // if set, the first Notify message (sent immediately) will contain the current Taildrop OutgoingFiles
 

@@ -287,7 +287,7 @@ func serveOnLocalTailscaled(ctx context.Context, lc *local.Client, st *ipnstate.
 	// We watch the IPN bus just to get a session ID. The session expires
 	// when we stop watching the bus, and that auto-deletes the foreground
 	// serve/funnel configs we are creating below.
-	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyNoPrivateKeys)
+	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
 	if err != nil {
 		return nil, nil, fmt.Errorf("could not set up ipn bus watcher: %v", err)
 	}

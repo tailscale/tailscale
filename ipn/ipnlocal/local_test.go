@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,6 +50,7 @@ import (
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/deptest"
+	"tailscale.com/tstest/typewalk"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
@@ -57,6 +59,7 @@ import (
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
+	"tailscale.com/types/persist"
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
@@ -7110,5 +7113,106 @@ func eqUpdate(want appctype.RouteUpdate) func(appctype.RouteUpdate) error {
 			return fmt.Errorf("wrong update (-got, +want):\n%s", diff)
 		}
 		return nil
+	}
+}
+
+type fakeAttestationKey struct{ key.HardwareAttestationKey }
+
+func (f *fakeAttestationKey) Clone() key.HardwareAttestationKey {
+	return &fakeAttestationKey{}
+}
+
+// TestStripKeysFromPrefs tests that LocalBackend's [stripKeysFromPrefs] (as used
+// by sendNotify etc) correctly removes all private keys from an ipn.Notify.
+//
+// It does so by testing the the two ways that Notifys are sent: via sendNotify,
+// and via extension hooks.
+func TestStripKeysFromPrefs(t *testing.T) {
+	// genNotify generates a sample ipn.Notify with various private keys set
+	// at a certain path through the Notify data structure.
+	genNotify := map[string]func() ipn.Notify{
+		"Notify.Prefs.ж.Persist.PrivateNodeKey": func() ipn.Notify {
+			return ipn.Notify{
+				Prefs: ptr.To((&ipn.Prefs{
+					Persist: &persist.Persist{PrivateNodeKey: key.NewNode()},
+				}).View()),
+			}
+		},
+		"Notify.Prefs.ж.Persist.OldPrivateNodeKey": func() ipn.Notify {
+			return ipn.Notify{
+				Prefs: ptr.To((&ipn.Prefs{
+					Persist: &persist.Persist{OldPrivateNodeKey: key.NewNode()},
+				}).View()),
+			}
+		},
+		"Notify.Prefs.ж.Persist.NetworkLockKey": func() ipn.Notify {
+			return ipn.Notify{
+				Prefs: ptr.To((&ipn.Prefs{
+					Persist: &persist.Persist{NetworkLockKey: key.NewNLPrivate()},
+				}).View()),
+			}
+		},
+		"Notify.Prefs.ж.Persist.AttestationKey": func() ipn.Notify {
+			return ipn.Notify{
+				Prefs: ptr.To((&ipn.Prefs{
+					Persist: &persist.Persist{AttestationKey: new(fakeAttestationKey)},
+				}).View()),
+			}
+		},
+	}
+
+	private := key.PrivateTypesForTest()
+
+	for path := range typewalk.MatchingPaths(reflect.TypeFor[ipn.Notify](), private.Contains) {
+		t.Run(path.Name, func(t *testing.T) {
+			gen, ok := genNotify[path.Name]
+			if !ok {
+				t.Fatalf("no genNotify function for path %q", path.Name)
+			}
+			withKey := gen()
+
+			if path.Walk(reflect.ValueOf(withKey)).IsZero() {
+				t.Fatalf("generated notify does not have non-zero value at path %q", path.Name)
+			}
+
+			h := &ExtensionHost{}
+			ch := make(chan *ipn.Notify, 1)
+			b := &LocalBackend{
+				extHost: h,
+				notifyWatchers: map[string]*watchSession{
+					"test": {ch: ch},
+				},
+			}
+
+			var okay atomic.Int32
+			testNotify := func(via string) func(*ipn.Notify) {
+				return func(n *ipn.Notify) {
+					if n == nil {
+						t.Errorf("notify from %s is nil", via)
+						return
+					}
+					if !path.Walk(reflect.ValueOf(*n)).IsZero() {
+						t.Errorf("notify from %s has non-zero value at path %q; key not stripped", via, path.Name)
+					} else {
+						okay.Add(1)
+					}
+				}
+			}
+
+			h.Hooks().MutateNotifyLocked.Add(testNotify("MutateNotifyLocked hook"))
+
+			b.send(withKey)
+
+			select {
+			case n := <-ch:
+				testNotify("watchSession")(n)
+			default:
+				t.Errorf("no notify sent to watcher channel")
+			}
+
+			if got := okay.Load(); got != 2 {
+				t.Errorf("notify passed validation %d times; want 2", got)
+			}
+		})
 	}
 }

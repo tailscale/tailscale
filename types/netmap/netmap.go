@@ -26,11 +26,10 @@ import (
 // The fields should all be considered read-only. They might
 // alias parts of previous NetworkMap values.
 type NetworkMap struct {
-	SelfNode   tailcfg.NodeView
-	AllCaps    set.Set[tailcfg.NodeCapability] // set version of SelfNode.Capabilities + SelfNode.CapMap
-	NodeKey    key.NodePublic
-	PrivateKey key.NodePrivate
-	Expiry     time.Time
+	SelfNode tailcfg.NodeView
+	AllCaps  set.Set[tailcfg.NodeCapability] // set version of SelfNode.Capabilities + SelfNode.CapMap
+	NodeKey  key.NodePublic
+	Expiry   time.Time
 	// Name is the DNS name assigned to this node.
 	// It is the MapResponse.Node.Name value and ends with a period.
 	Name string

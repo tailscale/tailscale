@@ -2128,16 +2128,10 @@ func TestC2NDebugNetmap(t *testing.T) {
 		var current netmap.NetworkMap
 		must.Do(json.Unmarshal(resp.Current, &current))
 
-		if !current.PrivateKey.IsZero() {
-			t.Errorf("current netmap has non-zero private key: %v", current.PrivateKey)
-		}
 		// Check candidate netmap if we sent a map response.
 		if cand != nil {
 			var candidate netmap.NetworkMap
 			must.Do(json.Unmarshal(resp.Candidate, &candidate))
-			if !candidate.PrivateKey.IsZero() {
-				t.Errorf("candidate netmap has non-zero private key: %v", candidate.PrivateKey)
-			}
 			if diff := cmp.Diff(current.SelfNode, candidate.SelfNode); diff != "" {
 				t.Errorf("SelfNode differs (-current +candidate):\n%s", diff)
 			}

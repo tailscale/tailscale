@@ -258,7 +258,6 @@ func debugCmd() *ffcli.Command {
 					fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
 					fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include initial status")
 					fs.BoolVar(&watchIPNArgs.rateLimit, "rate-limit", true, "rate limit messags")
-					fs.BoolVar(&watchIPNArgs.showPrivateKey, "show-private-key", false, "include node private key in printed netmap")
 					fs.IntVar(&watchIPNArgs.count, "count", 0, "exit after printing this many statuses, or 0 to keep going forever")
 					return fs
 				})(),
@@ -270,7 +269,6 @@ func debugCmd() *ffcli.Command {
 				ShortHelp:  "Print the current network map",
 				FlagSet: (func() *flag.FlagSet {
 					fs := newFlagSet("netmap")
-					fs.BoolVar(&netmapArgs.showPrivateKey, "show-private-key", false, "include node private key in printed netmap")
 					return fs
 				})(),
 			},
@@ -614,20 +612,16 @@ func runPrefs(ctx context.Context, args []string) error {
 }
 
 var watchIPNArgs struct {
-	netmap         bool
-	initial        bool
-	showPrivateKey bool
-	rateLimit      bool
-	count          int
+	netmap    bool
+	initial   bool
+	rateLimit bool
+	count     int
 }
 
 func runWatchIPN(ctx context.Context, args []string) error {
 	var mask ipn.NotifyWatchOpt
 	if watchIPNArgs.initial {
 		mask = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap
-	}
-	if !watchIPNArgs.showPrivateKey {
-		mask |= ipn.NotifyNoPrivateKeys
 	}
 	if watchIPNArgs.rateLimit {
 		mask |= ipn.NotifyRateLimit
@@ -652,18 +646,11 @@ func runWatchIPN(ctx context.Context, args []string) error {
 	return nil
 }
 
-var netmapArgs struct {
-	showPrivateKey bool
-}
-
 func runNetmap(ctx context.Context, args []string) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	var mask ipn.NotifyWatchOpt = ipn.NotifyInitialNetMap
-	if !netmapArgs.showPrivateKey {
-		mask |= ipn.NotifyNoPrivateKeys
-	}
 	watcher, err := localClient.WatchIPNBus(ctx, mask)
 	if err != nil {
 		return err
