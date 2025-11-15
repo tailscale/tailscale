@@ -286,7 +286,7 @@ type Conn struct {
 	// mu guards all following fields; see userspaceEngine lock
 	// ordering rules against the engine. For derphttp, mu must
 	// be held before derphttp.Client.mu.
-	mu     sync.Mutex
+	mu     syncs.Mutex
 	muCond *sync.Cond
 
 	onlyTCP443 atomic.Bool

@@ -8,7 +8,7 @@ import (
 )
 
 // AssertLocked panics if m is not locked.
-func AssertLocked(m *sync.Mutex) {
+func AssertLocked(m *Mutex) {
 	if m.TryLock() {
 		m.Unlock()
 		panic("mutex is not locked")
@@ -16,7 +16,7 @@ func AssertLocked(m *sync.Mutex) {
 }
 
 // AssertRLocked panics if rw is not locked for reading or writing.
-func AssertRLocked(rw *sync.RWMutex) {
+func AssertRLocked(rw *RWMutex) {
 	if rw.TryLock() {
 		rw.Unlock()
 		panic("mutex is not locked")

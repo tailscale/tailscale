@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sync"
 
 	"tailscale.com/disco"
 	"tailscale.com/feature"
@@ -19,6 +18,7 @@ import (
 	"tailscale.com/net/udprelay"
 	"tailscale.com/net/udprelay/endpoint"
 	"tailscale.com/net/udprelay/status"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -95,7 +95,7 @@ type extension struct {
 	ec          *eventbus.Client
 	respPub     *eventbus.Publisher[magicsock.UDPRelayAllocResp]
 
-	mu                            sync.Mutex          // guards the following fields
+	mu                            syncs.Mutex         // guards the following fields
 	shutdown                      bool                // true if Shutdown() has been called
 	rs                            relayServer         // nil when disabled
 	port                          *int                // ipn.Prefs.RelayServerPort, nil if disabled

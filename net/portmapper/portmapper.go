@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/netip"
 	"slices"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -123,7 +122,7 @@ type Client struct {
 	testPxPPort  uint16 // if non-zero, pxpPort to use for tests
 	testUPnPPort uint16 // if non-zero, uPnPPort to use for tests
 
-	mu sync.Mutex // guards following, and all fields thereof
+	mu syncs.Mutex // guards following, and all fields thereof
 
 	// runningCreate is whether we're currently working on creating
 	// a port mapping (whether GetCachedMappingOrStartCreatingOne kicked

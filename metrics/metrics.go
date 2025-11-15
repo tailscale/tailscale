@@ -11,7 +11,6 @@ import (
 	"io"
 	"slices"
 	"strings"
-	"sync"
 
 	"tailscale.com/syncs"
 )
@@ -41,7 +40,7 @@ type LabelMap struct {
 	Label string
 	expvar.Map
 	// shardedIntMu orders the initialization of new shardedint keys
-	shardedIntMu sync.Mutex
+	shardedIntMu syncs.Mutex
 }
 
 // SetInt64 sets the *Int value stored under the given map key.

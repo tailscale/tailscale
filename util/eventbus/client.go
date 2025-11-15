@@ -5,8 +5,8 @@ package eventbus
 
 import (
 	"reflect"
-	"sync"
 
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/set"
 )
@@ -22,7 +22,7 @@ type Client struct {
 	bus          *Bus
 	publishDebug hook[PublishedEvent]
 
-	mu   sync.Mutex
+	mu   syncs.Mutex
 	pub  set.Set[publisher]
 	sub  *subscribeState // Lazily created on first subscribe
 	stop stopFlag        // signaled on Close

@@ -9,7 +9,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"sync"
+
+	"tailscale.com/syncs"
 )
 
 type Buffer interface {
@@ -36,7 +37,7 @@ type memBuffer struct {
 	next    []byte
 	pending chan qentry
 
-	dropMu    sync.Mutex
+	dropMu    syncs.Mutex
 	dropCount int
 }
 

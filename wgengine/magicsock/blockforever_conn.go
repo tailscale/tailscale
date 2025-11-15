@@ -10,11 +10,13 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"tailscale.com/syncs"
 )
 
 // blockForeverConn is a net.PacketConn whose reads block until it is closed.
 type blockForeverConn struct {
-	mu     sync.Mutex
+	mu     syncs.Mutex
 	cond   *sync.Cond
 	closed bool
 }

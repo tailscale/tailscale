@@ -17,7 +17,6 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -28,6 +27,7 @@ import (
 	"tailscale.com/net/packet"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/tstun"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
@@ -73,7 +73,7 @@ type endpoint struct {
 	disco atomic.Pointer[endpointDisco] // if the peer supports disco, the key and short string
 
 	// mu protects all following fields.
-	mu sync.Mutex // Lock ordering: Conn.mu, then endpoint.mu
+	mu syncs.Mutex // Lock ordering: Conn.mu, then endpoint.mu
 
 	heartBeatTimer            *time.Timer    // nil when idle
 	lastSendExt               mono.Time      // last time there were outgoing packets sent to this peer from an external trigger (e.g. wireguard-go or disco pingCLI)

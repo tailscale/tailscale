@@ -28,19 +28,19 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/syncs"
 	"tailscale.com/types/opt"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
 
 var (
-	mu sync.Mutex
+	mu syncs.Mutex
 	// +checklocks:mu
 	set = map[string]string{}
 	// +checklocks:mu

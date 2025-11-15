@@ -7,11 +7,12 @@ package execqueue
 import (
 	"context"
 	"errors"
-	"sync"
+
+	"tailscale.com/syncs"
 )
 
 type ExecQueue struct {
-	mu         sync.Mutex
+	mu         syncs.Mutex
 	ctx        context.Context    // context.Background + closed on Shutdown
 	cancel     context.CancelFunc // closes ctx
 	closed     bool

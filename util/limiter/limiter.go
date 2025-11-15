@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"sync"
 	"time"
 
+	"tailscale.com/syncs"
 	"tailscale.com/util/lru"
 )
 
@@ -75,7 +75,7 @@ type Limiter[K comparable] struct {
 	// perpetually in debt and cannot proceed at all.
 	Overdraft int64
 
-	mu    sync.Mutex
+	mu    syncs.Mutex
 	cache *lru.Cache[K, *bucket]
 }
 

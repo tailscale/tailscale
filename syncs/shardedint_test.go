@@ -1,13 +1,14 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package syncs
+package syncs_test
 
 import (
 	"expvar"
 	"sync"
 	"testing"
 
+	. "tailscale.com/syncs"
 	"tailscale.com/tstest"
 )
 

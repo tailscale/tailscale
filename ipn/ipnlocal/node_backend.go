@@ -16,6 +16,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
@@ -82,7 +83,7 @@ type nodeBackend struct {
 	derpMapViewPub *eventbus.Publisher[tailcfg.DERPMapView]
 
 	// TODO(nickkhyl): maybe use sync.RWMutex?
-	mu sync.Mutex // protects the following fields
+	mu syncs.Mutex // protects the following fields
 
 	shutdownOnce sync.Once     // guards calling [nodeBackend.shutdown]
 	readyCh      chan struct{} // closed by [nodeBackend.ready]; nil after shutdown

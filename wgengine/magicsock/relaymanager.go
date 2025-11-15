@@ -15,6 +15,7 @@ import (
 	"tailscale.com/net/packet"
 	"tailscale.com/net/stun"
 	udprelay "tailscale.com/net/udprelay/endpoint"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -58,7 +59,7 @@ type relayManager struct {
 	getServersCh        chan chan set.Set[candidatePeerRelay]
 	derpHomeChangeCh    chan derpHomeChangeEvent
 
-	discoInfoMu            sync.Mutex // guards the following field
+	discoInfoMu            syncs.Mutex // guards the following field
 	discoInfoByServerDisco map[key.DiscoPublic]*relayHandshakeDiscoInfo
 
 	// runLoopStoppedCh is written to by runLoop() upon return, enabling event

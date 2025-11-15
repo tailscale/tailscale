@@ -20,6 +20,7 @@ import (
 
 	"tailscale.com/envknob"
 	"tailscale.com/net/netx"
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/singleflight"
@@ -97,7 +98,7 @@ type Resolver struct {
 
 	sf singleflight.Group[string, ipRes]
 
-	mu      sync.Mutex
+	mu      syncs.Mutex
 	ipCache map[string]ipCacheEntry
 }
 
@@ -474,7 +475,7 @@ type dialCall struct {
 	d                            *dialer
 	network, address, host, port string
 
-	mu    sync.Mutex           // lock ordering: dialer.mu, then dialCall.mu
+	mu    syncs.Mutex          // lock ordering: dialer.mu, then dialCall.mu
 	fails map[netip.Addr]error // set of IPs that failed to dial thus far
 }
 

@@ -16,9 +16,9 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
+	"tailscale.com/syncs"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
@@ -139,7 +139,7 @@ type AppConnector struct {
 	hasStoredRoutes bool
 
 	// mu guards the fields that follow
-	mu sync.Mutex
+	mu syncs.Mutex
 
 	// domains is a map of lower case domain names with no trailing dot, to an
 	// ordered list of resolved IP addresses.

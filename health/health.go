@@ -20,6 +20,7 @@ import (
 
 	"tailscale.com/envknob"
 	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/opt"
@@ -30,7 +31,7 @@ import (
 )
 
 var (
-	mu           sync.Mutex
+	mu           syncs.Mutex
 	debugHandler map[string]http.Handler
 )
 

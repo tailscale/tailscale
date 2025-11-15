@@ -37,6 +37,7 @@ import (
 	"tailscale.com/net/netx"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/syncs"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
@@ -231,7 +232,7 @@ type forwarder struct {
 	ctx       context.Context    // good until Close
 	ctxCancel context.CancelFunc // closes ctx
 
-	mu sync.Mutex // guards following
+	mu syncs.Mutex // guards following
 
 	dohClient map[string]*http.Client // urlBase -> client
 
