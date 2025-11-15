@@ -11,9 +11,9 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
+	"tailscale.com/syncs"
 	"tailscale.com/types/lazy"
 	"tailscale.com/util/syspolicy/internal"
 	"tailscale.com/util/syspolicy/pkey"
@@ -215,7 +215,7 @@ type DefinitionMap map[pkey.Key]*Definition
 var (
 	definitions lazy.SyncValue[DefinitionMap]
 
-	definitionsMu   sync.Mutex
+	definitionsMu   syncs.Mutex
 	definitionsList []*Definition
 	definitionsUsed bool
 )

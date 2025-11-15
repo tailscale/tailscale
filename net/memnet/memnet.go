@@ -12,9 +12,9 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"sync"
 
 	"tailscale.com/net/netx"
+	"tailscale.com/syncs"
 )
 
 var _ netx.Network = (*Network)(nil)
@@ -26,7 +26,7 @@ var _ netx.Network = (*Network)(nil)
 //
 // Its zero value is a valid [netx.Network] implementation.
 type Network struct {
-	mu  sync.Mutex
+	mu  syncs.Mutex
 	lns map[string]*Listener // address -> listener
 }
 

@@ -177,7 +177,7 @@ type Server struct {
 	verifyClientsURL         string
 	verifyClientsURLFailOpen bool
 
-	mu       sync.Mutex
+	mu       syncs.Mutex
 	closed   bool
 	netConns map[derp.Conn]chan struct{} // chan is closed when conn closes
 	clients  map[key.NodePublic]*clientSet

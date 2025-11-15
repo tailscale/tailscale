@@ -4,9 +4,9 @@
 package goroutines
 
 import (
-	"sync"
 	"sync/atomic"
 
+	"tailscale.com/syncs"
 	"tailscale.com/util/set"
 )
 
@@ -15,7 +15,7 @@ type Tracker struct {
 	started atomic.Int64 // counter
 	running atomic.Int64 // gauge
 
-	mu     sync.Mutex
+	mu     syncs.Mutex
 	onDone set.HandleSet[func()]
 }
 

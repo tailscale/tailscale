@@ -8,12 +8,12 @@ import (
 	"html"
 	"net/http"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
+	"tailscale.com/syncs"
 )
 
 func init() {
@@ -39,7 +39,7 @@ func init() {
 var fwdLogAtomic atomic.Pointer[fwdLog]
 
 type fwdLog struct {
-	mu  sync.Mutex
+	mu  syncs.Mutex
 	pos int // ent[pos] is next entry
 	ent []fwdLogEntry
 }

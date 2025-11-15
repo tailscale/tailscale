@@ -214,7 +214,7 @@ type Resolver struct {
 	closed chan struct{}
 
 	// mu guards the following fields from being updated while used.
-	mu           sync.Mutex
+	mu           syncs.Mutex
 	localDomains []dnsname.FQDN
 	hostToIP     map[dnsname.FQDN][]netip.Addr
 	ipToHost     map[netip.Addr]dnsname.FQDN

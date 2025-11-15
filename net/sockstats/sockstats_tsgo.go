@@ -10,12 +10,12 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"tailscale.com/net/netmon"
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/version"
@@ -40,7 +40,7 @@ var sockStats = struct {
 	// mu protects fields in this group (but not the fields within
 	// sockStatCounters). It should not be held in the per-read/write
 	// callbacks.
-	mu              sync.Mutex
+	mu              syncs.Mutex
 	countersByLabel map[Label]*sockStatCounters
 	knownInterfaces map[int]string // interface index -> name
 	usedInterfaces  map[int]int    // set of interface indexes

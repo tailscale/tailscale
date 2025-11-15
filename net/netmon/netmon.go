@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
@@ -65,7 +66,7 @@ type Monitor struct {
 	// and not change at runtime.
 	tsIfName string // tailscale interface name, if known/set ("tailscale0", "utun3", ...)
 
-	mu         sync.Mutex // guards all following fields
+	mu         syncs.Mutex // guards all following fields
 	cbs        set.HandleSet[ChangeFunc]
 	ifState    *State
 	gwValid    bool       // whether gw and gwSelfIP are valid

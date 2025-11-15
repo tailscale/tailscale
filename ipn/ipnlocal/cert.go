@@ -30,7 +30,6 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"tailscale.com/atomicfile"
@@ -42,6 +41,7 @@ import (
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/bakedroots"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/acme"
 	"tailscale.com/types/logger"
@@ -60,9 +60,9 @@ var (
 	// acmeMu guards all ACME operations, so concurrent requests
 	// for certs don't slam ACME. The first will go through and
 	// populate the on-disk cache and the rest should use that.
-	acmeMu sync.Mutex
+	acmeMu syncs.Mutex
 
-	renewMu     sync.Mutex // lock order: acmeMu before renewMu
+	renewMu     syncs.Mutex // lock order: acmeMu before renewMu
 	renewCertAt = map[string]time.Time{}
 )
 

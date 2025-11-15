@@ -27,6 +27,7 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/net/netx"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/clientmetric"
@@ -86,7 +87,7 @@ type Dialer struct {
 
 	routes atomic.Pointer[bart.Table[bool]] // or nil if UserDial should not use routes. `true` indicates routes that point into the Tailscale interface
 
-	mu               sync.Mutex
+	mu               syncs.Mutex
 	closed           bool
 	dns              dnsMap
 	tunName          string // tun device name

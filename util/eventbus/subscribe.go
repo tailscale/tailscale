@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
-	"sync"
 	"time"
 
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cibuild"
 )
@@ -51,7 +51,7 @@ type subscribeState struct {
 	snapshot   chan chan []DeliveredEvent
 	debug      hook[DeliveredEvent]
 
-	outputsMu sync.Mutex
+	outputsMu syncs.Mutex
 	outputs   map[reflect.Type]subscriber
 }
 

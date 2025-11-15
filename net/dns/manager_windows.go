@@ -16,7 +16,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -27,6 +26,7 @@ import (
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/syspolicy/pkey"
@@ -51,7 +51,7 @@ type windowsManager struct {
 
 	unregisterPolicyChangeCb func() // called when the manager is closing
 
-	mu      sync.Mutex
+	mu      syncs.Mutex
 	closing bool
 }
 

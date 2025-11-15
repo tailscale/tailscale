@@ -23,6 +23,7 @@ import (
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 )
@@ -64,7 +65,7 @@ type Pinger struct {
 	wg      sync.WaitGroup
 
 	// Following fields protected by mu
-	mu sync.Mutex
+	mu syncs.Mutex
 	// conns is a map of "type" to net.PacketConn, type is either
 	// "ip4:icmp" or "ip6:icmp"
 	conns map[string]net.PacketConn
