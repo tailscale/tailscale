@@ -133,15 +133,18 @@ func (m *Metric) Publish() {
 	metrics[m.name] = m
 	sortedDirty = true
 
+	if m.f == nil {
+		if len(valFreeList) == 0 {
+			valFreeList = make([]int64, 256)
+		}
+		m.v = &valFreeList[0]
+		valFreeList = valFreeList[1:]
+	}
+
 	if buildfeatures.HasLogTail {
 		if m.f != nil {
 			lastLogVal = append(lastLogVal, scanEntry{f: m.f})
 		} else {
-			if len(valFreeList) == 0 {
-				valFreeList = make([]int64, 256)
-			}
-			m.v = &valFreeList[0]
-			valFreeList = valFreeList[1:]
 			lastLogVal = append(lastLogVal, scanEntry{v: m.v})
 		}
 	}
