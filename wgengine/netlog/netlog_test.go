@@ -182,6 +182,7 @@ func TestUpdateRace(t *testing.T) {
 	group.Wait()
 	logger.mu.Lock()
 	close(logger.recordsChan)
+	logger.recordsChan = nil
 	logger.mu.Unlock()
 }
 
