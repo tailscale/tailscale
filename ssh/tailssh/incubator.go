@@ -74,6 +74,9 @@ var maybeStartLoginSession = func(dlogf logger.Logf, ia incubatorArgs) (close fu
 	return nil
 }
 
+// truePaths are the common locations to find the true binary, in likelihood order.
+var truePaths = [...]string{"/usr/bin/true", "/bin/true"}
+
 // tryExecInDir tries to run a command in dir and returns nil if it succeeds.
 // Otherwise, it returns a filesystem error or a timeout error if the command
 // took too long.
@@ -93,10 +96,14 @@ func tryExecInDir(ctx context.Context, dir string) error {
 		windir := os.Getenv("windir")
 		return run(filepath.Join(windir, "system32", "doskey.exe"))
 	}
-	if err := run("/bin/true"); !errors.Is(err, exec.ErrNotFound) { // including nil
-		return err
+	// Execute the first "true" we find in the list.
+	for _, path := range truePaths {
+		// Note: LookPath does not consult $PATH when passed multi-label paths.
+		if p, err := exec.LookPath(path); err == nil {
+			return run(p)
+		}
 	}
-	return run("/usr/bin/true")
+	return exec.ErrNotFound
 }
 
 // newIncubatorCommand returns a new exec.Cmd configured with
