@@ -844,7 +844,7 @@ type ownerAnnotationValue struct {
 type OwnerRef struct {
 	// OperatorID is the stable ID of the operator's Tailscale device.
 	OperatorID string    `json:"operatorID,omitempty"`
-	Resource   *Resource `json:"resource,omitempty"` // optional, used to identify the ProxyGroup that owns this Tailscale Service.
+	Resource   *Resource `json:"resource,omitzero"` // optional, used to identify the ProxyGroup that owns this Tailscale Service.
 }
 
 type Resource struct {

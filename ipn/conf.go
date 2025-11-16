@@ -14,37 +14,37 @@ import (
 // ConfigVAlpha is the config file format for the "alpha0" version.
 type ConfigVAlpha struct {
 	Version string   // "alpha0" for now
-	Locked  opt.Bool `json:",omitempty"` // whether the config is locked from being changed by 'tailscale set'; it defaults to true
+	Locked  opt.Bool `json:",omitzero"` // whether the config is locked from being changed by 'tailscale set'; it defaults to true
 
-	ServerURL *string  `json:",omitempty"` // defaults to https://controlplane.tailscale.com
-	AuthKey   *string  `json:",omitempty"` // as needed if NeedsLogin. either key or path to a file (if prefixed with "file:")
-	Enabled   opt.Bool `json:",omitempty"` // wantRunning; empty string defaults to true
+	ServerURL *string  `json:",omitzero"` // defaults to https://controlplane.tailscale.com
+	AuthKey   *string  `json:",omitzero"` // as needed if NeedsLogin. either key or path to a file (if prefixed with "file:")
+	Enabled   opt.Bool `json:",omitzero"` // wantRunning; empty string defaults to true
 
-	OperatorUser *string `json:",omitempty"` // local user name who is allowed to operate tailscaled without being root or using sudo
-	Hostname     *string `json:",omitempty"`
+	OperatorUser *string `json:",omitzero"` // local user name who is allowed to operate tailscaled without being root or using sudo
+	Hostname     *string `json:",omitzero"`
 
-	AcceptDNS    opt.Bool `json:"acceptDNS,omitempty"`    // --accept-dns
-	AcceptRoutes opt.Bool `json:"acceptRoutes,omitempty"` // --accept-routes defaults to true
+	AcceptDNS    opt.Bool `json:"acceptDNS,omitzero"`    // --accept-dns
+	AcceptRoutes opt.Bool `json:"acceptRoutes,omitzero"` // --accept-routes defaults to true
 
-	ExitNode                   *string  `json:"exitNode,omitempty"` // IP, StableID, or MagicDNS base name
-	AllowLANWhileUsingExitNode opt.Bool `json:"allowLANWhileUsingExitNode,omitempty"`
+	ExitNode                   *string  `json:"exitNode,omitzero"` // IP, StableID, or MagicDNS base name
+	AllowLANWhileUsingExitNode opt.Bool `json:"allowLANWhileUsingExitNode,omitzero"`
 
 	AdvertiseRoutes []netip.Prefix `json:",omitempty"`
-	DisableSNAT     opt.Bool       `json:",omitempty"`
+	DisableSNAT     opt.Bool       `json:",omitzero"`
 
 	AdvertiseServices []string `json:",omitempty"`
 
-	AppConnector *AppConnectorPrefs `json:",omitempty"` // advertise app connector; defaults to false (if nil or explicitly set to false)
+	AppConnector *AppConnectorPrefs `json:",omitzero"` // advertise app connector; defaults to false (if nil or explicitly set to false)
 
-	NetfilterMode       *string  `json:",omitempty"` // "on", "off", "nodivert"
-	NoStatefulFiltering opt.Bool `json:",omitempty"`
+	NetfilterMode       *string  `json:",omitzero"` // "on", "off", "nodivert"
+	NoStatefulFiltering opt.Bool `json:",omitzero"`
 
-	PostureChecking opt.Bool         `json:",omitempty"`
-	RunSSHServer    opt.Bool         `json:",omitempty"` // Tailscale SSH
-	RunWebClient    opt.Bool         `json:",omitempty"`
-	ShieldsUp       opt.Bool         `json:",omitempty"`
-	AutoUpdate      *AutoUpdatePrefs `json:",omitempty"`
-	ServeConfigTemp *ServeConfig     `json:",omitempty"` // TODO(bradfitz,maisem): make separate stable type for this
+	PostureChecking opt.Bool         `json:",omitzero"`
+	RunSSHServer    opt.Bool         `json:",omitzero"` // Tailscale SSH
+	RunWebClient    opt.Bool         `json:",omitzero"`
+	ShieldsUp       opt.Bool         `json:",omitzero"`
+	AutoUpdate      *AutoUpdatePrefs `json:",omitzero"`
+	ServeConfigTemp *ServeConfig     `json:",omitzero"` // TODO(bradfitz,maisem): make separate stable type for this
 
 	// StaticEndpoints are additional, user-defined endpoints that this node
 	// should advertise amongst its wireguard endpoints.

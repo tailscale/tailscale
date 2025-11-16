@@ -30,7 +30,7 @@ type transaction struct {
 	Retries int `json:",omitempty"`
 
 	// Action is the action to be logged. It must correspond to a known action in the control plane.
-	Action tailcfg.ClientAuditAction `json:",omitempty"`
+	Action tailcfg.ClientAuditAction `json:",omitzero"`
 	// Details is an opaque string specific to the action being logged. Empty strings may not
 	// be valid depending on the action being logged.
 	Details string `json:",omitempty"`

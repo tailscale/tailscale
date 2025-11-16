@@ -706,7 +706,7 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 type authResponse struct {
 	ServerMode     ServerMode      `json:"serverMode"`
 	Authorized     bool            `json:"authorized"` // has an authorized management session
-	ViewerIdentity *viewerIdentity `json:"viewerIdentity,omitempty"`
+	ViewerIdentity *viewerIdentity `json:"viewerIdentity,omitzero"`
 	NeedsSynoAuth  bool            `json:"needsSynoAuth,omitempty"`
 }
 

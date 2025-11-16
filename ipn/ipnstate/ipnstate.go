@@ -51,7 +51,7 @@ type Status struct {
 
 	// ExitNodeStatus describes the current exit node.
 	// If nil, an exit node is not in use.
-	ExitNodeStatus *ExitNodeStatus `json:"ExitNodeStatus,omitempty"`
+	ExitNodeStatus *ExitNodeStatus `json:"ExitNodeStatus,omitzero"`
 
 	// Health contains health check problems.
 	// Empty means everything is good. (or at least that no known
@@ -239,16 +239,16 @@ type PeerStatus struct {
 	// TailscaleIPs are the IP addresses assigned to the node.
 	TailscaleIPs []netip.Addr
 	// AllowedIPs are IP addresses allowed to route to this node.
-	AllowedIPs *views.Slice[netip.Prefix] `json:",omitempty"`
+	AllowedIPs *views.Slice[netip.Prefix] `json:",omitzero"`
 
 	// Tags are the list of ACL tags applied to this node.
 	// See tailscale.com/tailcfg#Node.Tags for more information.
-	Tags *views.Slice[string] `json:",omitempty"`
+	Tags *views.Slice[string] `json:",omitzero"`
 
 	// PrimaryRoutes are the routes this node is currently the primary
 	// subnet router for, as determined by the control plane. It does
 	// not include the IPs in TailscaleIPs.
-	PrimaryRoutes *views.Slice[netip.Prefix] `json:",omitempty"`
+	PrimaryRoutes *views.Slice[netip.Prefix] `json:",omitzero"`
 
 	// Endpoints:
 	Addrs     []string
@@ -327,7 +327,7 @@ type PeerStatus struct {
 	// will expire.
 	KeyExpiry *time.Time `json:",omitempty"`
 
-	Location *tailcfg.Location `json:",omitempty"`
+	Location *tailcfg.Location `json:",omitzero"`
 }
 
 type TaildropTargetStatus int
@@ -796,7 +796,7 @@ const (
 )
 
 type UpdateProgress struct {
-	Status  SelfUpdateStatus `json:"status,omitempty"`
+	Status  SelfUpdateStatus `json:"status,omitzero"`
 	Message string           `json:"message,omitempty"`
 	Version string           `json:"version,omitempty"`
 }

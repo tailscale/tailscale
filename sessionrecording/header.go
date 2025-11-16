@@ -62,7 +62,7 @@ type CastHeader struct {
 	ConnectionID string `json:"connectionID"`
 
 	// Fields that are only set for Kubernetes API server proxy session recordings:
-	Kubernetes *Kubernetes `json:"kubernetes,omitempty"`
+	Kubernetes *Kubernetes `json:"kubernetes,omitzero"`
 }
 
 // Kubernetes contains 'kubectl exec/attach' session specific information for

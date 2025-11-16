@@ -14,7 +14,7 @@ import "net/netip"
 type KubernetesCapRule struct {
 	// Impersonate is a list of rules that specify how to impersonate the caller
 	// when proxying to the Kubernetes API.
-	Impersonate *ImpersonateRule `json:"impersonate,omitempty"`
+	Impersonate *ImpersonateRule `json:"impersonate,omitzero"`
 	// Recorders defines a tag of a tsrecorder instance(s) that a recording
 	// of a 'kubectl exec' session, matching `src` of this grant, to an API
 	// server proxy, matching `dst` of this grant, should be sent to.

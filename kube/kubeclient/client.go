@@ -287,7 +287,7 @@ func (c *client) UpdateSecret(ctx context.Context, s *kubeapi.Secret) error {
 type JSONPatch struct {
 	Op    string `json:"op"`
 	Path  string `json:"path"`
-	Value any    `json:"value,omitempty"`
+	Value any    `json:"value,omitzero"`
 }
 
 // JSONPatchResource updates a resource in the Kubernetes API using a JSON patch.

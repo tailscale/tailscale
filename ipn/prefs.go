@@ -114,7 +114,7 @@ type Prefs struct {
 	// As of 2025-07-02, the only supported value is [AnyExitNode].
 	// It's a string rather than a boolean to allow future extensibility
 	// (e.g., AutoExitNode = "mullvad" or AutoExitNode = "geo:us").
-	AutoExitNode ExitNodeExpression `json:",omitempty"`
+	AutoExitNode ExitNodeExpression `json:",omitzero"`
 
 	// InternalExitNodePrior is the most recently used ExitNodeID in string form. It is set by
 	// the backend on transition from exit node on to off and used by the
@@ -231,7 +231,7 @@ type Prefs struct {
 	// removed since then, but the field remains an opt.Bool.
 	//
 	// Linux-only.
-	NoStatefulFiltering opt.Bool `json:",omitempty"`
+	NoStatefulFiltering opt.Bool `json:",omitzero"`
 
 	// NetfilterMode specifies how much to manage netfilter rules for
 	// Tailscale, if at all.
@@ -280,7 +280,7 @@ type Prefs struct {
 	// should be disabled. This field is currently experimental, and therefore
 	// no guarantees are made about its current naming and functionality when
 	// non-nil/enabled.
-	RelayServerPort *int `json:",omitempty"`
+	RelayServerPort *int `json:",omitzero"`
 
 	// AllowSingleHosts was a legacy field that was always true
 	// for the past 4.5 years. It controlled whether Tailscale
