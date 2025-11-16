@@ -485,6 +485,12 @@ func getState(optTSInterfaceName string) (*State, error) {
 		ifUp := ni.IsUp()
 		s.Interface[ni.Name] = ni
 		s.InterfaceIPs[ni.Name] = append(s.InterfaceIPs[ni.Name], pfxs...)
+
+		// Skip uninteresting interfaces.
+		if IsInterestingInterface != nil && !IsInterestingInterface(ni, pfxs) {
+			return
+		}
+
 		if !ifUp || isTSInterfaceName || isTailscaleInterface(ni.Name, pfxs) {
 			return
 		}
