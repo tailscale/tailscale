@@ -59,10 +59,12 @@ func newAttestationKey() (ak *attestationKey, retErr error) {
 						SensitiveDataOrigin: true,
 						UserWithAuth:        true,
 						AdminWithPolicy:     true,
-						NoDA:                true,
-						FixedTPM:            true,
-						FixedParent:         true,
-						SignEncrypt:         true,
+						// We don't set an authorization policy on this key, so
+						// DA isn't helpful.
+						NoDA:        true,
+						FixedTPM:    true,
+						FixedParent: true,
+						SignEncrypt: true,
 					},
 					Parameters: tpm2.NewTPMUPublicParms(
 						tpm2.TPMAlgECC,
