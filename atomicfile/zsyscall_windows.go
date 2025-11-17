@@ -44,7 +44,7 @@ var (
 )
 
 func replaceFileW(replaced *uint16, replacement *uint16, backup *uint16, flags uint32, exclude unsafe.Pointer, reserved unsafe.Pointer) (err error) {
-	r1, _, e1 := syscall.Syscall6(procReplaceFileW.Addr(), 6, uintptr(unsafe.Pointer(replaced)), uintptr(unsafe.Pointer(replacement)), uintptr(unsafe.Pointer(backup)), uintptr(flags), uintptr(exclude), uintptr(reserved))
+	r1, _, e1 := syscall.SyscallN(procReplaceFileW.Addr(), uintptr(unsafe.Pointer(replaced)), uintptr(unsafe.Pointer(replacement)), uintptr(unsafe.Pointer(backup)), uintptr(flags), uintptr(exclude), uintptr(reserved))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}

@@ -48,7 +48,7 @@ var (
 )
 
 func globalFree(hglobal winHGlobal) (err error) {
-	r1, _, e1 := syscall.Syscall(procGlobalFree.Addr(), 1, uintptr(hglobal), 0, 0)
+	r1, _, e1 := syscall.SyscallN(procGlobalFree.Addr(), uintptr(hglobal))
 	if r1 == 0 {
 		err = errnoErr(e1)
 	}
@@ -56,7 +56,7 @@ func globalFree(hglobal winHGlobal) (err error) {
 }
 
 func winHTTPCloseHandle(whi winHTTPInternet) (err error) {
-	r1, _, e1 := syscall.Syscall(procWinHttpCloseHandle.Addr(), 1, uintptr(whi), 0, 0)
+	r1, _, e1 := syscall.SyscallN(procWinHttpCloseHandle.Addr(), uintptr(whi))
 	if r1 == 0 {
 		err = errnoErr(e1)
 	}
@@ -64,7 +64,7 @@ func winHTTPCloseHandle(whi winHTTPInternet) (err error) {
 }
 
 func winHTTPGetProxyForURL(whi winHTTPInternet, url *uint16, options *winHTTPAutoProxyOptions, proxyInfo *winHTTPProxyInfo) (err error) {
-	r1, _, e1 := syscall.Syscall6(procWinHttpGetProxyForUrl.Addr(), 4, uintptr(whi), uintptr(unsafe.Pointer(url)), uintptr(unsafe.Pointer(options)), uintptr(unsafe.Pointer(proxyInfo)), 0, 0)
+	r1, _, e1 := syscall.SyscallN(procWinHttpGetProxyForUrl.Addr(), uintptr(whi), uintptr(unsafe.Pointer(url)), uintptr(unsafe.Pointer(options)), uintptr(unsafe.Pointer(proxyInfo)))
 	if r1 == 0 {
 		err = errnoErr(e1)
 	}
@@ -72,7 +72,7 @@ func winHTTPGetProxyForURL(whi winHTTPInternet, url *uint16, options *winHTTPAut
 }
 
 func winHTTPOpen(agent *uint16, accessType uint32, proxy *uint16, proxyBypass *uint16, flags uint32) (whi winHTTPInternet, err error) {
-	r0, _, e1 := syscall.Syscall6(procWinHttpOpen.Addr(), 5, uintptr(unsafe.Pointer(agent)), uintptr(accessType), uintptr(unsafe.Pointer(proxy)), uintptr(unsafe.Pointer(proxyBypass)), uintptr(flags), 0)
+	r0, _, e1 := syscall.SyscallN(procWinHttpOpen.Addr(), uintptr(unsafe.Pointer(agent)), uintptr(accessType), uintptr(unsafe.Pointer(proxy)), uintptr(unsafe.Pointer(proxyBypass)), uintptr(flags))
 	whi = winHTTPInternet(r0)
 	if whi == 0 {
 		err = errnoErr(e1)

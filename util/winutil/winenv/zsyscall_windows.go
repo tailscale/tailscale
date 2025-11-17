@@ -55,7 +55,7 @@ func isDeviceRegisteredWithManagement(isMDMRegistered *bool, upnBufLen uint32, u
 	if *isMDMRegistered {
 		_p0 = 1
 	}
-	r0, _, e1 := syscall.Syscall(procIsDeviceRegisteredWithManagement.Addr(), 3, uintptr(unsafe.Pointer(&_p0)), uintptr(upnBufLen), uintptr(unsafe.Pointer(upnBuf)))
+	r0, _, e1 := syscall.SyscallN(procIsDeviceRegisteredWithManagement.Addr(), uintptr(unsafe.Pointer(&_p0)), uintptr(upnBufLen), uintptr(unsafe.Pointer(upnBuf)))
 	*isMDMRegistered = _p0 != 0
 	hr = int32(r0)
 	if hr == 0 {
@@ -65,13 +65,13 @@ func isDeviceRegisteredWithManagement(isMDMRegistered *bool, upnBufLen uint32, u
 }
 
 func verSetConditionMask(condMask verCondMask, typ verTypeMask, cond verCond) (res verCondMask) {
-	r0, _, _ := syscall.Syscall(procVerSetConditionMask.Addr(), 3, uintptr(condMask), uintptr(typ), uintptr(cond))
+	r0, _, _ := syscall.SyscallN(procVerSetConditionMask.Addr(), uintptr(condMask), uintptr(typ), uintptr(cond))
 	res = verCondMask(r0)
 	return
 }
 
 func verifyVersionInfo(verInfo *osVersionInfoEx, typ verTypeMask, cond verCondMask) (res bool) {
-	r0, _, _ := syscall.Syscall(procVerifyVersionInfoW.Addr(), 3, uintptr(unsafe.Pointer(verInfo)), uintptr(typ), uintptr(cond))
+	r0, _, _ := syscall.SyscallN(procVerifyVersionInfoW.Addr(), uintptr(unsafe.Pointer(verInfo)), uintptr(typ), uintptr(cond))
 	res = r0 != 0
 	return
 }

@@ -51,7 +51,7 @@ var (
 )
 
 func regEnumValue(key registry.Key, index uint32, valueName *uint16, valueNameLen *uint32, reserved *uint32, valueType *uint32, pData *byte, cbData *uint32) (ret error) {
-	r0, _, _ := syscall.Syscall9(procRegEnumValueW.Addr(), 8, uintptr(key), uintptr(index), uintptr(unsafe.Pointer(valueName)), uintptr(unsafe.Pointer(valueNameLen)), uintptr(unsafe.Pointer(reserved)), uintptr(unsafe.Pointer(valueType)), uintptr(unsafe.Pointer(pData)), uintptr(unsafe.Pointer(cbData)), 0)
+	r0, _, _ := syscall.SyscallN(procRegEnumValueW.Addr(), uintptr(key), uintptr(index), uintptr(unsafe.Pointer(valueName)), uintptr(unsafe.Pointer(valueNameLen)), uintptr(unsafe.Pointer(reserved)), uintptr(unsafe.Pointer(valueType)), uintptr(unsafe.Pointer(pData)), uintptr(unsafe.Pointer(cbData)))
 	if r0 != 0 {
 		ret = syscall.Errno(r0)
 	}
@@ -59,7 +59,7 @@ func regEnumValue(key registry.Key, index uint32, valueName *uint16, valueNameLe
 }
 
 func globalMemoryStatusEx(memStatus *_MEMORYSTATUSEX) (err error) {
-	r1, _, e1 := syscall.Syscall(procGlobalMemoryStatusEx.Addr(), 1, uintptr(unsafe.Pointer(memStatus)), 0, 0)
+	r1, _, e1 := syscall.SyscallN(procGlobalMemoryStatusEx.Addr(), uintptr(unsafe.Pointer(memStatus)))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
@@ -67,19 +67,19 @@ func globalMemoryStatusEx(memStatus *_MEMORYSTATUSEX) (err error) {
 }
 
 func wscEnumProtocols(iProtocols *int32, protocolBuffer *wsaProtocolInfo, bufLen *uint32, errno *int32) (ret int32) {
-	r0, _, _ := syscall.Syscall6(procWSCEnumProtocols.Addr(), 4, uintptr(unsafe.Pointer(iProtocols)), uintptr(unsafe.Pointer(protocolBuffer)), uintptr(unsafe.Pointer(bufLen)), uintptr(unsafe.Pointer(errno)), 0, 0)
+	r0, _, _ := syscall.SyscallN(procWSCEnumProtocols.Addr(), uintptr(unsafe.Pointer(iProtocols)), uintptr(unsafe.Pointer(protocolBuffer)), uintptr(unsafe.Pointer(bufLen)), uintptr(unsafe.Pointer(errno)))
 	ret = int32(r0)
 	return
 }
 
 func wscGetProviderInfo(providerId *windows.GUID, infoType _WSC_PROVIDER_INFO_TYPE, info unsafe.Pointer, infoSize *uintptr, flags uint32, errno *int32) (ret int32) {
-	r0, _, _ := syscall.Syscall6(procWSCGetProviderInfo.Addr(), 6, uintptr(unsafe.Pointer(providerId)), uintptr(infoType), uintptr(info), uintptr(unsafe.Pointer(infoSize)), uintptr(flags), uintptr(unsafe.Pointer(errno)))
+	r0, _, _ := syscall.SyscallN(procWSCGetProviderInfo.Addr(), uintptr(unsafe.Pointer(providerId)), uintptr(infoType), uintptr(info), uintptr(unsafe.Pointer(infoSize)), uintptr(flags), uintptr(unsafe.Pointer(errno)))
 	ret = int32(r0)
 	return
 }
 
 func wscGetProviderPath(providerId *windows.GUID, providerDllPath *uint16, providerDllPathLen *int32, errno *int32) (ret int32) {
-	r0, _, _ := syscall.Syscall6(procWSCGetProviderPath.Addr(), 4, uintptr(unsafe.Pointer(providerId)), uintptr(unsafe.Pointer(providerDllPath)), uintptr(unsafe.Pointer(providerDllPathLen)), uintptr(unsafe.Pointer(errno)), 0, 0)
+	r0, _, _ := syscall.SyscallN(procWSCGetProviderPath.Addr(), uintptr(unsafe.Pointer(providerId)), uintptr(unsafe.Pointer(providerDllPath)), uintptr(unsafe.Pointer(providerDllPathLen)), uintptr(unsafe.Pointer(errno)))
 	ret = int32(r0)
 	return
 }
