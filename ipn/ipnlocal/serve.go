@@ -561,8 +561,17 @@ func (b *LocalBackend) tcpHandlerForVIPService(dstAddr, srcAddr netip.AddrPort) 
 	if backDst := tcph.TCPForward(); backDst != "" {
 		return func(conn net.Conn) error {
 			defer conn.Close()
+
+			// Support optional schemes like 'unix://socket-file'.
+			// For backwards compatibility with existing serve config, this
+			// needs to support schemeless destinations and assume TCP.
+			backNet, backAddr := "tcp", backDst
+			if i := strings.Index(backDst, "://"); i >= 0 {
+				backNet, backAddr = backDst[:i], backDst[i+len("://"):]
+			}
+
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
+			backConn, err := b.dialer.SystemDial(ctx, backNet, backAddr)
 			cancel()
 			if err != nil {
 				b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
@@ -648,8 +657,17 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, 
 	if backDst := tcph.TCPForward(); backDst != "" {
 		return func(conn net.Conn) error {
 			defer conn.Close()
+
+			// Support optional schemes like 'unix://socket-file'.
+			// For backwards compatibility with existing serve config, this
+			// needs to support schemeless destinations and assume TCP.
+			backNet, backAddr := "tcp", backDst
+			if i := strings.Index(backDst, "://"); i >= 0 {
+				backNet, backAddr = backDst[:i], backDst[i+len("://"):]
+			}
+
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
+			backConn, err := b.dialer.SystemDial(ctx, backNet, backAddr)
 			cancel()
 			if err != nil {
 				b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
