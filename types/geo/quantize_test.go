@@ -32,20 +32,20 @@ func TestPointAnonymize(t *testing.T) {
 			last := geo.MakePoint(llat, 0)
 			cur := geo.MakePoint(lat, 0)
 			anon := cur.Quantize()
-			switch l, g, err := anon.LatLng(); {
+			switch latlng, g, err := anon.LatLng(); {
 			case err != nil:
 				t.Fatal(err)
 			case lat == southPole:
 				// initialize llng, to the first snapped longitude
-				llat = l
+				llat = latlng
 				goto Lng
 			case g != 0:
 				t.Fatalf("%v is west or east of %v", anon, last)
-			case l < llat:
+			case latlng < llat:
 				t.Fatalf("%v is south of %v", anon, last)
-			case l == llat:
+			case latlng == llat:
 				continue
-			case l > llat:
+			case latlng > llat:
 				switch dist, err := last.DistanceTo(anon); {
 				case err != nil:
 					t.Fatal(err)
@@ -55,7 +55,7 @@ func TestPointAnonymize(t *testing.T) {
 					t.Logf("lat=%v last=%v cur=%v anon=%v", lat, last, cur, anon)
 					t.Fatalf("%v is too close to %v", anon, last)
 				default:
-					llat = l
+					llat = latlng
 				}
 			}
 
@@ -65,14 +65,14 @@ func TestPointAnonymize(t *testing.T) {
 				last := geo.MakePoint(llat, llng)
 				cur := geo.MakePoint(lat, lng)
 				anon := cur.Quantize()
-				switch l, g, err := anon.LatLng(); {
+				switch latlng, g, err := anon.LatLng(); {
 				case err != nil:
 					t.Fatal(err)
 				case lng == dateLine:
 					// initialize llng, to the first snapped longitude
 					llng = g
 					continue
-				case l != llat:
+				case latlng != llat:
 					t.Fatalf("%v is north or south of %v", anon, last)
 				case g != llng:
 					const tolerance = geo.MinSeparation * 0x1p-9

@@ -193,8 +193,8 @@ type logWriter struct {
 	logger *log.Logger
 }
 
-func (l logWriter) Write(buf []byte) (int, error) {
-	l.logger.Printf("%s", buf)
+func (lg logWriter) Write(buf []byte) (int, error) {
+	lg.logger.Printf("%s", buf)
 	return len(buf), nil
 }
 

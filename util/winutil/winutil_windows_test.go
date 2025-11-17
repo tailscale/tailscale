@@ -68,8 +68,8 @@ func checkContiguousBuffer[T any, BU BufUnit](t *testing.T, extra []BU, pt *T, p
 	if gotLen := int(ptLen); gotLen != expectedLen {
 		t.Errorf("allocation length got %d, want %d", gotLen, expectedLen)
 	}
-	if l := len(slcs); l != 1 {
-		t.Errorf("len(slcs) got %d, want 1", l)
+	if ln := len(slcs); ln != 1 {
+		t.Errorf("len(slcs) got %d, want 1", ln)
 	}
 	if len(extra) == 0 && slcs[0] != nil {
 		t.Error("slcs[0] got non-nil, want nil")

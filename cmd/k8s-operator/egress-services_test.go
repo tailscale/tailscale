@@ -249,9 +249,9 @@ func portsForEndpointSlice(svc *corev1.Service) []discoveryv1.EndpointPort {
 	return ports
 }
 
-func mustHaveConfigForSvc(t *testing.T, cl client.Client, extNSvc, clusterIPSvc *corev1.Service, cm *corev1.ConfigMap, l *zap.Logger) {
+func mustHaveConfigForSvc(t *testing.T, cl client.Client, extNSvc, clusterIPSvc *corev1.Service, cm *corev1.ConfigMap, lg *zap.Logger) {
 	t.Helper()
-	wantsCfg := egressSvcCfg(extNSvc, clusterIPSvc, clusterIPSvc.Namespace, l.Sugar())
+	wantsCfg := egressSvcCfg(extNSvc, clusterIPSvc, clusterIPSvc.Namespace, lg.Sugar())
 	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(cm), cm); err != nil {
 		t.Fatalf("Error retrieving ConfigMap: %v", err)
 	}

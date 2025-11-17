@@ -75,10 +75,10 @@ func fromCommand(bs []byte) (string, error) {
 	return args, nil
 }
 
-func (f *fsm) Apply(l *raft.Log) any {
+func (f *fsm) Apply(lg *raft.Log) any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	s, err := fromCommand(l.Data)
+	s, err := fromCommand(lg.Data)
 	if err != nil {
 		return CommandResult{
 			Err: err,

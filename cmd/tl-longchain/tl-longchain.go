@@ -75,8 +75,8 @@ func peerInfo(peer *ipnstate.TKAPeer) string {
 
 // print prints a message about a node key signature and a re-signing command if needed.
 func print(info string, nodeKey key.NodePublic, sig tka.NodeKeySignature) {
-	if l := chainLength(sig); l > *maxRotations {
-		log.Printf("%s: chain length %d, printing command to re-sign", info, l)
+	if ln := chainLength(sig); ln > *maxRotations {
+		log.Printf("%s: chain length %d, printing command to re-sign", info, ln)
 		wrapping, _ := sig.UnverifiedWrappingPublic()
 		fmt.Printf("tailscale lock sign %s %s\n", nodeKey, key.NLPublicFromEd25519Unsafe(wrapping).CLIString())
 	} else {

@@ -47,13 +47,13 @@ type egressSvcsReadinessReconciler struct {
 // route traffic to the target. It compares proxy Pod IPs with the endpoints set on the EndpointSlice for the egress
 // service to determine how many replicas are currently able to route traffic.
 func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
-	l := esrr.logger.With("Service", req.NamespacedName)
-	l.Debugf("starting reconcile")
-	defer l.Debugf("reconcile finished")
+	lg := esrr.logger.With("Service", req.NamespacedName)
+	lg.Debugf("starting reconcile")
+	defer lg.Debugf("reconcile finished")
 
 	svc := new(corev1.Service)
 	if err = esrr.Get(ctx, req.NamespacedName, svc); apierrors.IsNotFound(err) {
-		l.Debugf("Service not found")
+		lg.Debugf("Service not found")
 		return res, nil
 	} else if err != nil {
 		return res, fmt.Errorf("failed to get Service: %w", err)
@@ -64,7 +64,7 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 	)
 	oldStatus := svc.Status.DeepCopy()
 	defer func() {
-		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcReady, st, reason, msg, esrr.clock, l)
+		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcReady, st, reason, msg, esrr.clock, lg)
 		if !apiequality.Semantic.DeepEqual(oldStatus, &svc.Status) {
 			err = errors.Join(err, esrr.Status().Update(ctx, svc))
 		}
@@ -79,7 +79,7 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 		return res, err
 	}
 	if eps == nil {
-		l.Infof("EndpointSlice for Service does not yet exist, waiting...")
+		lg.Infof("EndpointSlice for Service does not yet exist, waiting...")
 		reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
 		st = metav1.ConditionFalse
 		return res, nil
@@ -91,7 +91,7 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 	}
 	err = esrr.Get(ctx, client.ObjectKeyFromObject(pg), pg)
 	if apierrors.IsNotFound(err) {
-		l.Infof("ProxyGroup for Service does not exist, waiting...")
+		lg.Infof("ProxyGroup for Service does not exist, waiting...")
 		reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
 		st = metav1.ConditionFalse
 		return res, nil
@@ -103,7 +103,7 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 		return res, err
 	}
 	if !tsoperator.ProxyGroupAvailable(pg) {
-		l.Infof("ProxyGroup for Service is not ready, waiting...")
+		lg.Infof("ProxyGroup for Service is not ready, waiting...")
 		reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
 		st = metav1.ConditionFalse
 		return res, nil
@@ -111,7 +111,7 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 
 	replicas := pgReplicas(pg)
 	if replicas == 0 {
-		l.Infof("ProxyGroup replicas set to 0")
+		lg.Infof("ProxyGroup replicas set to 0")
 		reason, msg = reasonNoProxies, reasonNoProxies
 		st = metav1.ConditionFalse
 		return res, nil
@@ -128,16 +128,16 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 			return res, err
 		}
 		if pod == nil {
-			l.Warnf("[unexpected] ProxyGroup is ready, but replica %d was not found", i)
+			lg.Warnf("[unexpected] ProxyGroup is ready, but replica %d was not found", i)
 			reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
 			return res, nil
 		}
-		l.Debugf("looking at Pod with IPs %v", pod.Status.PodIPs)
+		lg.Debugf("looking at Pod with IPs %v", pod.Status.PodIPs)
 		ready := false
 		for _, ep := range eps.Endpoints {
-			l.Debugf("looking at endpoint with addresses %v", ep.Addresses)
-			if endpointReadyForPod(&ep, pod, l) {
-				l.Debugf("endpoint is ready for Pod")
+			lg.Debugf("looking at endpoint with addresses %v", ep.Addresses)
+			if endpointReadyForPod(&ep, pod, lg) {
+				lg.Debugf("endpoint is ready for Pod")
 				ready = true
 				break
 			}
@@ -163,10 +163,10 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 
 // endpointReadyForPod returns true if the endpoint is for the Pod's IPv4 address and is ready to serve traffic.
 // Endpoint must not be nil.
-func endpointReadyForPod(ep *discoveryv1.Endpoint, pod *corev1.Pod, l *zap.SugaredLogger) bool {
+func endpointReadyForPod(ep *discoveryv1.Endpoint, pod *corev1.Pod, lg *zap.SugaredLogger) bool {
 	podIP, err := podIPv4(pod)
 	if err != nil {
-		l.Warnf("[unexpected] error retrieving Pod's IPv4 address: %v", err)
+		lg.Warnf("[unexpected] error retrieving Pod's IPv4 address: %v", err)
 		return false
 	}
 	// Currently we only ever set a single address on and Endpoint and nothing else is meant to modify this.

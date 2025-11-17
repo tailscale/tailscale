@@ -31,8 +31,8 @@ func (h AUMHash) String() string {
 
 // UnmarshalText implements encoding.TextUnmarshaler.
 func (h *AUMHash) UnmarshalText(text []byte) error {
-	if l := base32StdNoPad.DecodedLen(len(text)); l != len(h) {
-		return fmt.Errorf("tka.AUMHash.UnmarshalText: text wrong length: %d, want %d", l, len(text))
+	if ln := base32StdNoPad.DecodedLen(len(text)); ln != len(h) {
+		return fmt.Errorf("tka.AUMHash.UnmarshalText: text wrong length: %d, want %d", ln, len(text))
 	}
 	if _, err := base32StdNoPad.Decode(h[:], text); err != nil {
 		return fmt.Errorf("tka.AUMHash.UnmarshalText: %w", err)

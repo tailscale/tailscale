@@ -98,12 +98,12 @@ type egressSvcsReconciler struct {
 // - updates the egress service config in a ConfigMap mounted to the ProxyGroup proxies with the tailnet target and the
 // portmappings.
 func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
-	l := esr.logger.With("Service", req.NamespacedName)
-	defer l.Info("reconcile finished")
+	lg := esr.logger.With("Service", req.NamespacedName)
+	defer lg.Info("reconcile finished")
 
 	svc := new(corev1.Service)
 	if err = esr.Get(ctx, req.NamespacedName, svc); apierrors.IsNotFound(err) {
-		l.Info("Service not found")
+		lg.Info("Service not found")
 		return res, nil
 	} else if err != nil {
 		return res, fmt.Errorf("failed to get Service: %w", err)
@@ -111,7 +111,7 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 
 	// Name of the 'egress service', meaning the tailnet target.
 	tailnetSvc := tailnetSvcName(svc)
-	l = l.With("tailnet-service", tailnetSvc)
+	lg = lg.With("tailnet-service", tailnetSvc)
 
 	// Note that resources for egress Services are only cleaned up when the
 	// Service is actually deleted (and not if, for example, user decides to
@@ -119,8 +119,8 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 	// assume that the egress ExternalName Services are always created for
 	// Tailscale operator specifically.
 	if !svc.DeletionTimestamp.IsZero() {
-		l.Info("Service is being deleted, ensuring resource cleanup")
-		return res, esr.maybeCleanup(ctx, svc, l)
+		lg.Info("Service is being deleted, ensuring resource cleanup")
+		return res, esr.maybeCleanup(ctx, svc, lg)
 	}
 
 	oldStatus := svc.Status.DeepCopy()
@@ -131,7 +131,7 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 	}()
 
 	// Validate the user-created ExternalName Service and the associated ProxyGroup.
-	if ok, err := esr.validateClusterResources(ctx, svc, l); err != nil {
+	if ok, err := esr.validateClusterResources(ctx, svc, lg); err != nil {
 		return res, fmt.Errorf("error validating cluster resources: %w", err)
 	} else if !ok {
 		return res, nil
@@ -141,8 +141,8 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 		svc.Finalizers = append(svc.Finalizers, FinalizerName)
 		if err := esr.updateSvcSpec(ctx, svc); err != nil {
 			err := fmt.Errorf("failed to add finalizer: %w", err)
-			r := svcConfiguredReason(svc, false, l)
-			tsoperator.SetServiceCondition(svc, tsapi.EgressSvcConfigured, metav1.ConditionFalse, r, err.Error(), esr.clock, l)
+			r := svcConfiguredReason(svc, false, lg)
+			tsoperator.SetServiceCondition(svc, tsapi.EgressSvcConfigured, metav1.ConditionFalse, r, err.Error(), esr.clock, lg)
 			return res, err
 		}
 		esr.mu.Lock()
@@ -151,16 +151,16 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 		esr.mu.Unlock()
 	}
 
-	if err := esr.maybeCleanupProxyGroupConfig(ctx, svc, l); err != nil {
+	if err := esr.maybeCleanupProxyGroupConfig(ctx, svc, lg); err != nil {
 		err = fmt.Errorf("cleaning up resources for previous ProxyGroup failed: %w", err)
-		r := svcConfiguredReason(svc, false, l)
-		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcConfigured, metav1.ConditionFalse, r, err.Error(), esr.clock, l)
+		r := svcConfiguredReason(svc, false, lg)
+		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcConfigured, metav1.ConditionFalse, r, err.Error(), esr.clock, lg)
 		return res, err
 	}
 
-	if err := esr.maybeProvision(ctx, svc, l); err != nil {
+	if err := esr.maybeProvision(ctx, svc, lg); err != nil {
 		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
-			l.Infof("optimistic lock error, retrying: %s", err)
+			lg.Infof("optimistic lock error, retrying: %s", err)
 		} else {
 			return reconcile.Result{}, err
 		}
@@ -169,15 +169,15 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 	return res, nil
 }
 
-func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1.Service, l *zap.SugaredLogger) (err error) {
-	r := svcConfiguredReason(svc, false, l)
+func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1.Service, lg *zap.SugaredLogger) (err error) {
+	r := svcConfiguredReason(svc, false, lg)
 	st := metav1.ConditionFalse
 	defer func() {
 		msg := r
 		if st != metav1.ConditionTrue && err != nil {
 			msg = err.Error()
 		}
-		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcConfigured, st, r, msg, esr.clock, l)
+		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcConfigured, st, r, msg, esr.clock, lg)
 	}()
 
 	crl := egressSvcChildResourceLabels(svc)
@@ -189,36 +189,36 @@ func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1
 	if clusterIPSvc == nil {
 		clusterIPSvc = esr.clusterIPSvcForEgress(crl)
 	}
-	upToDate := svcConfigurationUpToDate(svc, l)
+	upToDate := svcConfigurationUpToDate(svc, lg)
 	provisioned := true
 	if !upToDate {
-		if clusterIPSvc, provisioned, err = esr.provision(ctx, svc.Annotations[AnnotationProxyGroup], svc, clusterIPSvc, l); err != nil {
+		if clusterIPSvc, provisioned, err = esr.provision(ctx, svc.Annotations[AnnotationProxyGroup], svc, clusterIPSvc, lg); err != nil {
 			return err
 		}
 	}
 	if !provisioned {
-		l.Infof("unable to provision cluster resources")
+		lg.Infof("unable to provision cluster resources")
 		return nil
 	}
 
 	// Update ExternalName Service to point at the ClusterIP Service.
-	clusterDomain := retrieveClusterDomain(esr.tsNamespace, l)
+	clusterDomain := retrieveClusterDomain(esr.tsNamespace, lg)
 	clusterIPSvcFQDN := fmt.Sprintf("%s.%s.svc.%s", clusterIPSvc.Name, clusterIPSvc.Namespace, clusterDomain)
 	if svc.Spec.ExternalName != clusterIPSvcFQDN {
-		l.Infof("Configuring ExternalName Service to point to ClusterIP Service %s", clusterIPSvcFQDN)
+		lg.Infof("Configuring ExternalName Service to point to ClusterIP Service %s", clusterIPSvcFQDN)
 		svc.Spec.ExternalName = clusterIPSvcFQDN
 		if err = esr.updateSvcSpec(ctx, svc); err != nil {
 			err = fmt.Errorf("error updating ExternalName Service: %w", err)
 			return err
 		}
 	}
-	r = svcConfiguredReason(svc, true, l)
+	r = svcConfiguredReason(svc, true, lg)
 	st = metav1.ConditionTrue
 	return nil
 }
 
-func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName string, svc, clusterIPSvc *corev1.Service, l *zap.SugaredLogger) (*corev1.Service, bool, error) {
-	l.Infof("updating configuration...")
+func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName string, svc, clusterIPSvc *corev1.Service, lg *zap.SugaredLogger) (*corev1.Service, bool, error) {
+	lg.Infof("updating configuration...")
 	usedPorts, err := esr.usedPortsForPG(ctx, proxyGroupName)
 	if err != nil {
 		return nil, false, fmt.Errorf("error calculating used ports for ProxyGroup %s: %w", proxyGroupName, err)
@@ -246,7 +246,7 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 			}
 		}
 		if !found {
-			l.Debugf("portmapping %s:%d -> %s:%d is no longer required, removing", pm.Protocol, pm.TargetPort.IntVal, pm.Protocol, pm.Port)
+			lg.Debugf("portmapping %s:%d -> %s:%d is no longer required, removing", pm.Protocol, pm.TargetPort.IntVal, pm.Protocol, pm.Port)
 			clusterIPSvc.Spec.Ports = slices.Delete(clusterIPSvc.Spec.Ports, i, i+1)
 		}
 	}
@@ -277,7 +277,7 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 				return nil, false, fmt.Errorf("unable to allocate additional ports on ProxyGroup %s, %d ports already used. Create another ProxyGroup or open an issue if you believe this is unexpected.", proxyGroupName, maxPorts)
 			}
 			p := unusedPort(usedPorts)
-			l.Debugf("mapping tailnet target port %d to container port %d", wantsPM.Port, p)
+			lg.Debugf("mapping tailnet target port %d to container port %d", wantsPM.Port, p)
 			usedPorts.Insert(p)
 			clusterIPSvc.Spec.Ports = append(clusterIPSvc.Spec.Ports, corev1.ServicePort{
 				Name:       wantsPM.Name,
@@ -343,14 +343,14 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 		return nil, false, fmt.Errorf("error retrieving egress services configuration: %w", err)
 	}
 	if cm == nil {
-		l.Info("ConfigMap not yet created, waiting..")
+		lg.Info("ConfigMap not yet created, waiting..")
 		return nil, false, nil
 	}
 	tailnetSvc := tailnetSvcName(svc)
 	gotCfg := (*cfgs)[tailnetSvc]
-	wantsCfg := egressSvcCfg(svc, clusterIPSvc, esr.tsNamespace, l)
+	wantsCfg := egressSvcCfg(svc, clusterIPSvc, esr.tsNamespace, lg)
 	if !reflect.DeepEqual(gotCfg, wantsCfg) {
-		l.Debugf("updating egress services ConfigMap %s", cm.Name)
+		lg.Debugf("updating egress services ConfigMap %s", cm.Name)
 		mak.Set(cfgs, tailnetSvc, wantsCfg)
 		bs, err := json.Marshal(cfgs)
 		if err != nil {
@@ -361,7 +361,7 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 			return nil, false, fmt.Errorf("error updating egress services ConfigMap: %w", err)
 		}
 	}
-	l.Infof("egress service configuration has been updated")
+	lg.Infof("egress service configuration has been updated")
 	return clusterIPSvc, true, nil
 }
 
@@ -402,7 +402,7 @@ func (esr *egressSvcsReconciler) maybeCleanup(ctx context.Context, svc *corev1.S
 	return nil
 }
 
-func (esr *egressSvcsReconciler) maybeCleanupProxyGroupConfig(ctx context.Context, svc *corev1.Service, l *zap.SugaredLogger) error {
+func (esr *egressSvcsReconciler) maybeCleanupProxyGroupConfig(ctx context.Context, svc *corev1.Service, lg *zap.SugaredLogger) error {
 	wantsProxyGroup := svc.Annotations[AnnotationProxyGroup]
 	cond := tsoperator.GetServiceCondition(svc, tsapi.EgressSvcConfigured)
 	if cond == nil {
@@ -416,7 +416,7 @@ func (esr *egressSvcsReconciler) maybeCleanupProxyGroupConfig(ctx context.Contex
 		return nil
 	}
 	esr.logger.Infof("egress Service configured on ProxyGroup %s, wants ProxyGroup %s, cleaning up...", ss[2], wantsProxyGroup)
-	if err := esr.ensureEgressSvcCfgDeleted(ctx, svc, l); err != nil {
+	if err := esr.ensureEgressSvcCfgDeleted(ctx, svc, lg); err != nil {
 		return fmt.Errorf("error deleting egress service config: %w", err)
 	}
 	return nil
@@ -471,17 +471,17 @@ func (esr *egressSvcsReconciler) ensureEgressSvcCfgDeleted(ctx context.Context, 
 			Namespace: esr.tsNamespace,
 		},
 	}
-	l := logger.With("ConfigMap", client.ObjectKeyFromObject(cm))
-	l.Debug("ensuring that egress service configuration is removed from proxy config")
+	lggr := logger.With("ConfigMap", client.ObjectKeyFromObject(cm))
+	lggr.Debug("ensuring that egress service configuration is removed from proxy config")
 	if err := esr.Get(ctx, client.ObjectKeyFromObject(cm), cm); apierrors.IsNotFound(err) {
-		l.Debugf("ConfigMap not found")
+		lggr.Debugf("ConfigMap not found")
 		return nil
 	} else if err != nil {
 		return fmt.Errorf("error retrieving ConfigMap: %w", err)
 	}
 	bs := cm.BinaryData[egressservices.KeyEgressServices]
 	if len(bs) == 0 {
-		l.Debugf("ConfigMap does not contain egress service configs")
+		lggr.Debugf("ConfigMap does not contain egress service configs")
 		return nil
 	}
 	cfgs := &egressservices.Configs{}
@@ -491,12 +491,12 @@ func (esr *egressSvcsReconciler) ensureEgressSvcCfgDeleted(ctx context.Context, 
 	tailnetSvc := tailnetSvcName(svc)
 	_, ok := (*cfgs)[tailnetSvc]
 	if !ok {
-		l.Debugf("ConfigMap does not contain egress service config, likely because it was already deleted")
+		lggr.Debugf("ConfigMap does not contain egress service config, likely because it was already deleted")
 		return nil
 	}
-	l.Infof("before deleting config %+#v", *cfgs)
+	lggr.Infof("before deleting config %+#v", *cfgs)
 	delete(*cfgs, tailnetSvc)
-	l.Infof("after deleting config %+#v", *cfgs)
+	lggr.Infof("after deleting config %+#v", *cfgs)
 	bs, err := json.Marshal(cfgs)
 	if err != nil {
 		return fmt.Errorf("error marshalling egress services configs: %w", err)
@@ -505,7 +505,7 @@ func (esr *egressSvcsReconciler) ensureEgressSvcCfgDeleted(ctx context.Context, 
 	return esr.Update(ctx, cm)
 }
 
-func (esr *egressSvcsReconciler) validateClusterResources(ctx context.Context, svc *corev1.Service, l *zap.SugaredLogger) (bool, error) {
+func (esr *egressSvcsReconciler) validateClusterResources(ctx context.Context, svc *corev1.Service, lg *zap.SugaredLogger) (bool, error) {
 	proxyGroupName := svc.Annotations[AnnotationProxyGroup]
 	pg := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -513,36 +513,36 @@ func (esr *egressSvcsReconciler) validateClusterResources(ctx context.Context, s
 		},
 	}
 	if err := esr.Get(ctx, client.ObjectKeyFromObject(pg), pg); apierrors.IsNotFound(err) {
-		l.Infof("ProxyGroup %q not found, waiting...", proxyGroupName)
-		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionUnknown, reasonProxyGroupNotReady, reasonProxyGroupNotReady, esr.clock, l)
+		lg.Infof("ProxyGroup %q not found, waiting...", proxyGroupName)
+		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionUnknown, reasonProxyGroupNotReady, reasonProxyGroupNotReady, esr.clock, lg)
 		tsoperator.RemoveServiceCondition(svc, tsapi.EgressSvcConfigured)
 		return false, nil
 	} else if err != nil {
 		err := fmt.Errorf("unable to retrieve ProxyGroup %s: %w", proxyGroupName, err)
-		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionUnknown, reasonProxyGroupNotReady, err.Error(), esr.clock, l)
+		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionUnknown, reasonProxyGroupNotReady, err.Error(), esr.clock, lg)
 		tsoperator.RemoveServiceCondition(svc, tsapi.EgressSvcConfigured)
 		return false, err
 	}
 	if violations := validateEgressService(svc, pg); len(violations) > 0 {
 		msg := fmt.Sprintf("invalid egress Service: %s", strings.Join(violations, ", "))
 		esr.recorder.Event(svc, corev1.EventTypeWarning, "INVALIDSERVICE", msg)
-		l.Info(msg)
-		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionFalse, reasonEgressSvcInvalid, msg, esr.clock, l)
+		lg.Info(msg)
+		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionFalse, reasonEgressSvcInvalid, msg, esr.clock, lg)
 		tsoperator.RemoveServiceCondition(svc, tsapi.EgressSvcConfigured)
 		return false, nil
 	}
 	if !tsoperator.ProxyGroupAvailable(pg) {
-		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionUnknown, reasonProxyGroupNotReady, reasonProxyGroupNotReady, esr.clock, l)
+		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionUnknown, reasonProxyGroupNotReady, reasonProxyGroupNotReady, esr.clock, lg)
 		tsoperator.RemoveServiceCondition(svc, tsapi.EgressSvcConfigured)
 	}
 
-	l.Debugf("egress service is valid")
-	tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionTrue, reasonEgressSvcValid, reasonEgressSvcValid, esr.clock, l)
+	lg.Debugf("egress service is valid")
+	tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionTrue, reasonEgressSvcValid, reasonEgressSvcValid, esr.clock, lg)
 	return true, nil
 }
 
-func egressSvcCfg(externalNameSvc, clusterIPSvc *corev1.Service, ns string, l *zap.SugaredLogger) egressservices.Config {
-	d := retrieveClusterDomain(ns, l)
+func egressSvcCfg(externalNameSvc, clusterIPSvc *corev1.Service, ns string, lg *zap.SugaredLogger) egressservices.Config {
+	d := retrieveClusterDomain(ns, lg)
 	tt := tailnetTargetFromSvc(externalNameSvc)
 	hep := healthCheckForSvc(clusterIPSvc, d)
 	cfg := egressservices.Config{
@@ -691,18 +691,18 @@ func egressSvcChildResourceLabels(svc *corev1.Service) map[string]string {
 
 // egressEpsLabels returns labels to be added to an EndpointSlice created for an egress service.
 func egressSvcEpsLabels(extNSvc, clusterIPSvc *corev1.Service) map[string]string {
-	l := egressSvcChildResourceLabels(extNSvc)
+	lbels := egressSvcChildResourceLabels(extNSvc)
 	// Adding this label is what makes kube proxy set up rules to route traffic sent to the clusterIP Service to the
 	// endpoints defined on this EndpointSlice.
 	// https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#ownership
-	l[discoveryv1.LabelServiceName] = clusterIPSvc.Name
+	lbels[discoveryv1.LabelServiceName] = clusterIPSvc.Name
 	// Kubernetes recommends setting this label.
 	// https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#management
-	l[discoveryv1.LabelManagedBy] = "tailscale.com"
-	return l
+	lbels[discoveryv1.LabelManagedBy] = "tailscale.com"
+	return lbels
 }
 
-func svcConfigurationUpToDate(svc *corev1.Service, l *zap.SugaredLogger) bool {
+func svcConfigurationUpToDate(svc *corev1.Service, lg *zap.SugaredLogger) bool {
 	cond := tsoperator.GetServiceCondition(svc, tsapi.EgressSvcConfigured)
 	if cond == nil {
 		return false
@@ -710,21 +710,21 @@ func svcConfigurationUpToDate(svc *corev1.Service, l *zap.SugaredLogger) bool {
 	if cond.Status != metav1.ConditionTrue {
 		return false
 	}
-	wantsReadyReason := svcConfiguredReason(svc, true, l)
+	wantsReadyReason := svcConfiguredReason(svc, true, lg)
 	return strings.EqualFold(wantsReadyReason, cond.Reason)
 }
 
-func cfgHash(c cfg, l *zap.SugaredLogger) string {
+func cfgHash(c cfg, lg *zap.SugaredLogger) string {
 	bs, err := json.Marshal(c)
 	if err != nil {
 		// Don't use l.Error as that messes up component logs with, in this case, unnecessary stack trace.
-		l.Infof("error marhsalling Config: %v", err)
+		lg.Infof("error marhsalling Config: %v", err)
 		return ""
 	}
 	h := sha256.New()
 	if _, err := h.Write(bs); err != nil {
 		// Don't use l.Error as that messes up component logs with, in this case, unnecessary stack trace.
-		l.Infof("error producing Config hash: %v", err)
+		lg.Infof("error producing Config hash: %v", err)
 		return ""
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))
@@ -736,7 +736,7 @@ type cfg struct {
 	ProxyGroup    string                       `json:"proxyGroup"`
 }
 
-func svcConfiguredReason(svc *corev1.Service, configured bool, l *zap.SugaredLogger) string {
+func svcConfiguredReason(svc *corev1.Service, configured bool, lg *zap.SugaredLogger) string {
 	var r string
 	if configured {
 		r = "ConfiguredFor:"
@@ -750,7 +750,7 @@ func svcConfiguredReason(svc *corev1.Service, configured bool, l *zap.SugaredLog
 		TailnetTarget: tt,
 		ProxyGroup:    svc.Annotations[AnnotationProxyGroup],
 	}
-	r += fmt.Sprintf(":Config:%s", cfgHash(s, l))
+	r += fmt.Sprintf(":Config:%s", cfgHash(s, lg))
 	return r
 }
 

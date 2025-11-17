@@ -166,14 +166,14 @@ var (
 func findArchAndVersion(control []byte) (arch string, version string, err error) {
 	b := bytes.NewBuffer(control)
 	for {
-		l, err := b.ReadBytes('\n')
+		ln, err := b.ReadBytes('\n')
 		if err != nil {
 			return "", "", err
 		}
-		if bytes.HasPrefix(l, archKey) {
-			arch = string(bytes.TrimSpace(l[len(archKey):]))
-		} else if bytes.HasPrefix(l, versionKey) {
-			version = string(bytes.TrimSpace(l[len(versionKey):]))
+		if bytes.HasPrefix(ln, archKey) {
+			arch = string(bytes.TrimSpace(ln[len(archKey):]))
+		} else if bytes.HasPrefix(ln, versionKey) {
+			version = string(bytes.TrimSpace(ln[len(versionKey):]))
 		}
 		if arch != "" && version != "" {
 			return arch, version, nil

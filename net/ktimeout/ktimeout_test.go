@@ -14,11 +14,11 @@ func ExampleUserTimeout() {
 	lc := net.ListenConfig{
 		Control: UserTimeout(30 * time.Second),
 	}
-	l, err := lc.Listen(context.TODO(), "tcp", "127.0.0.1:0")
+	ln, err := lc.Listen(context.TODO(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		fmt.Printf("error: %v", err)
 		return
 	}
-	l.Close()
+	ln.Close()
 	// Output:
 }

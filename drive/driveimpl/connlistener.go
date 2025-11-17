@@ -25,12 +25,12 @@ func newConnListener() *connListener {
 	}
 }
 
-func (l *connListener) Accept() (net.Conn, error) {
+func (ln *connListener) Accept() (net.Conn, error) {
 	select {
-	case <-l.closedCh:
+	case <-ln.closedCh:
 		// TODO(oxtoacart): make this error match what a regular net.Listener does
 		return nil, syscall.EINVAL
-	case conn := <-l.ch:
+	case conn := <-ln.ch:
 		return conn, nil
 	}
 }
@@ -38,32 +38,32 @@ func (l *connListener) Accept() (net.Conn, error) {
 // Addr implements net.Listener. This always returns nil. It is assumed that
 // this method is currently unused, so it logs a warning if it ever does get
 // called.
-func (l *connListener) Addr() net.Addr {
+func (ln *connListener) Addr() net.Addr {
 	log.Println("warning: unexpected call to connListener.Addr()")
 	return nil
 }
 
-func (l *connListener) Close() error {
-	l.closeMu.Lock()
-	defer l.closeMu.Unlock()
+func (ln *connListener) Close() error {
+	ln.closeMu.Lock()
+	defer ln.closeMu.Unlock()
 
 	select {
-	case <-l.closedCh:
+	case <-ln.closedCh:
 		// Already closed.
 		return syscall.EINVAL
 	default:
 		// We don't close l.ch because someone maybe trying to send to that,
 		// which would cause a panic.
-		close(l.closedCh)
+		close(ln.closedCh)
 		return nil
 	}
 }
 
-func (l *connListener) HandleConn(c net.Conn, remoteAddr net.Addr) error {
+func (ln *connListener) HandleConn(c net.Conn, remoteAddr net.Addr) error {
 	select {
-	case <-l.closedCh:
+	case <-ln.closedCh:
 		return syscall.EINVAL
-	case l.ch <- &connWithRemoteAddr{Conn: c, remoteAddr: remoteAddr}:
+	case ln.ch <- &connWithRemoteAddr{Conn: c, remoteAddr: remoteAddr}:
 		// Connection has been accepted.
 	}
 	return nil

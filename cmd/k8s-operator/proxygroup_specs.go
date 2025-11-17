@@ -524,16 +524,16 @@ func pgSecretLabels(pgName, secretType string) map[string]string {
 }
 
 func pgLabels(pgName string, customLabels map[string]string) map[string]string {
-	l := make(map[string]string, len(customLabels)+3)
+	labels := make(map[string]string, len(customLabels)+3)
 	for k, v := range customLabels {
-		l[k] = v
+		labels[k] = v
 	}
 
-	l[kubetypes.LabelManaged] = "true"
-	l[LabelParentType] = "proxygroup"
-	l[LabelParentName] = pgName
+	labels[kubetypes.LabelManaged] = "true"
+	labels[LabelParentType] = "proxygroup"
+	labels[LabelParentName] = pgName
 
-	return l
+	return labels
 }
 
 func pgOwnerReference(owner *tsapi.ProxyGroup) []metav1.OwnerReference {

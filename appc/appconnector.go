@@ -203,12 +203,12 @@ func NewAppConnector(c Config) *AppConnector {
 		ac.wildcards = c.RouteInfo.Wildcards
 		ac.controlRoutes = c.RouteInfo.Control
 	}
-	ac.writeRateMinute = newRateLogger(time.Now, time.Minute, func(c int64, s time.Time, l int64) {
-		ac.logf("routeInfo write rate: %d in minute starting at %v (%d routes)", c, s, l)
-		metricStoreRoutes(c, l)
+	ac.writeRateMinute = newRateLogger(time.Now, time.Minute, func(c int64, s time.Time, ln int64) {
+		ac.logf("routeInfo write rate: %d in minute starting at %v (%d routes)", c, s, ln)
+		metricStoreRoutes(c, ln)
 	})
-	ac.writeRateDay = newRateLogger(time.Now, 24*time.Hour, func(c int64, s time.Time, l int64) {
-		ac.logf("routeInfo write rate: %d in 24 hours starting at %v (%d routes)", c, s, l)
+	ac.writeRateDay = newRateLogger(time.Now, 24*time.Hour, func(c int64, s time.Time, ln int64) {
+		ac.logf("routeInfo write rate: %d in 24 hours starting at %v (%d routes)", c, s, ln)
 	})
 	return ac
 }
@@ -510,8 +510,8 @@ func (e *AppConnector) addDomainAddrLocked(domain string, addr netip.Addr) {
 	slices.SortFunc(e.domains[domain], compareAddr)
 }
 
-func compareAddr(l, r netip.Addr) int {
-	return l.Compare(r)
+func compareAddr(a, b netip.Addr) int {
+	return a.Compare(b)
 }
 
 // routesWithout returns a without b where a and b

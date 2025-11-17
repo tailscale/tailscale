@@ -39,16 +39,16 @@ func Listen(addr string) *Listener {
 }
 
 // Addr implements net.Listener.Addr.
-func (l *Listener) Addr() net.Addr {
-	return l.addr
+func (ln *Listener) Addr() net.Addr {
+	return ln.addr
 }
 
 // Close closes the pipe listener.
-func (l *Listener) Close() error {
+func (ln *Listener) Close() error {
 	var cleanup func()
-	l.closeOnce.Do(func() {
-		cleanup = l.onClose
-		close(l.closed)
+	ln.closeOnce.Do(func() {
+		cleanup = ln.onClose
+		close(ln.closed)
 	})
 	if cleanup != nil {
 		cleanup()
@@ -57,11 +57,11 @@ func (l *Listener) Close() error {
 }
 
 // Accept blocks until a new connection is available or the listener is closed.
-func (l *Listener) Accept() (net.Conn, error) {
+func (ln *Listener) Accept() (net.Conn, error) {
 	select {
-	case c := <-l.ch:
+	case c := <-ln.ch:
 		return c, nil
-	case <-l.closed:
+	case <-ln.closed:
 		return nil, net.ErrClosed
 	}
 }
@@ -70,18 +70,18 @@ func (l *Listener) Accept() (net.Conn, error) {
 // The provided Context must be non-nil. If the context expires before the
 // connection is complete, an error is returned. Once successfully connected
 // any expiration of the context will not affect the connection.
-func (l *Listener) Dial(ctx context.Context, network, addr string) (_ net.Conn, err error) {
+func (ln *Listener) Dial(ctx context.Context, network, addr string) (_ net.Conn, err error) {
 	if !strings.HasSuffix(network, "tcp") {
 		return nil, net.UnknownNetworkError(network)
 	}
-	if connAddr(addr) != l.addr {
+	if connAddr(addr) != ln.addr {
 		return nil, &net.AddrError{
 			Err:  "invalid address",
 			Addr: addr,
 		}
 	}
 
-	newConn := l.NewConn
+	newConn := ln.NewConn
 	if newConn == nil {
 		newConn = func(network, addr string, maxBuf int) (Conn, Conn) {
 			return NewConn(addr, maxBuf)
@@ -98,9 +98,9 @@ func (l *Listener) Dial(ctx context.Context, network, addr string) (_ net.Conn, 
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-l.closed:
+	case <-ln.closed:
 		return nil, net.ErrClosed
-	case l.ch <- s:
+	case ln.ch <- s:
 		return c, nil
 	}
 }

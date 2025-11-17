@@ -29,8 +29,8 @@ type logOnce struct {
 	sync.Once
 }
 
-func (l *logOnce) logf(format string, args ...any) {
-	l.Once.Do(func() {
+func (lg *logOnce) logf(format string, args ...any) {
+	lg.Once.Do(func() {
 		log.Printf(format, args...)
 	})
 }

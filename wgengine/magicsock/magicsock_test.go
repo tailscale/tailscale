@@ -111,7 +111,7 @@ func (c *Conn) WaitReady(t testing.TB) {
 	}
 }
 
-func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, stunIP netip.Addr) (derpMap *tailcfg.DERPMap, cleanup func()) {
+func runDERPAndStun(t *testing.T, logf logger.Logf, ln nettype.PacketListener, stunIP netip.Addr) (derpMap *tailcfg.DERPMap, cleanup func()) {
 	d := derpserver.New(key.NewNode(), logf)
 
 	httpsrv := httptest.NewUnstartedServer(derpserver.Handler(d))
@@ -119,7 +119,7 @@ func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, st
 	httpsrv.Config.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
 	httpsrv.StartTLS()
 
-	stunAddr, stunCleanup := stuntest.ServeWithPacketListener(t, l)
+	stunAddr, stunCleanup := stuntest.ServeWithPacketListener(t, ln)
 
 	m := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{
@@ -172,12 +172,12 @@ type magicStack struct {
 // newMagicStack builds and initializes an idle magicsock and
 // friends. You need to call conn.onNodeViewsUpdate and dev.Reconfig
 // before anything interesting happens.
-func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap) *magicStack {
+func newMagicStack(t testing.TB, logf logger.Logf, ln nettype.PacketListener, derpMap *tailcfg.DERPMap) *magicStack {
 	privateKey := key.NewNode()
-	return newMagicStackWithKey(t, logf, l, derpMap, privateKey)
+	return newMagicStackWithKey(t, logf, ln, derpMap, privateKey)
 }
 
-func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap, privateKey key.NodePrivate) *magicStack {
+func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListener, derpMap *tailcfg.DERPMap, privateKey key.NodePrivate) *magicStack {
 	t.Helper()
 
 	bus := eventbustest.NewBus(t)
@@ -197,7 +197,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 		Logf:                   logf,
 		HealthTracker:          ht,
 		DisablePortMapper:      true,
-		TestOnlyPacketListener: l,
+		TestOnlyPacketListener: ln,
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {
 			epCh <- eps
 		},
@@ -687,13 +687,13 @@ func (localhostListener) ListenPacket(ctx context.Context, network, address stri
 
 func TestTwoDevicePing(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/11762")
-	l, ip := localhostListener{}, netaddr.IPv4(127, 0, 0, 1)
+	ln, ip := localhostListener{}, netaddr.IPv4(127, 0, 0, 1)
 	n := &devices{
-		m1:     l,
+		m1:     ln,
 		m1IP:   ip,
-		m2:     l,
+		m2:     ln,
 		m2IP:   ip,
-		stun:   l,
+		stun:   ln,
 		stunIP: ip,
 	}
 	testTwoDevicePing(t, n)

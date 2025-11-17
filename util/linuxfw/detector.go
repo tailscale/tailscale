@@ -85,7 +85,7 @@ type tableDetector interface {
 type linuxFWDetector struct{}
 
 // iptDetect returns the number of iptables rules in the current namespace.
-func (l linuxFWDetector) iptDetect() (int, error) {
+func (ld linuxFWDetector) iptDetect() (int, error) {
 	return detectIptables()
 }
 
@@ -96,7 +96,7 @@ var hookDetectNetfilter feature.Hook[func() (int, error)]
 var ErrUnsupported = errors.New("linuxfw:unsupported")
 
 // nftDetect returns the number of nftables rules in the current namespace.
-func (l linuxFWDetector) nftDetect() (int, error) {
+func (ld linuxFWDetector) nftDetect() (int, error) {
 	if f, ok := hookDetectNetfilter.GetOk(); ok {
 		return f()
 	}

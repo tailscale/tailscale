@@ -281,17 +281,17 @@ func env(tsr *tsapi.Recorder, loginServer string) []corev1.EnvVar {
 }
 
 func labels(app, instance string, customLabels map[string]string) map[string]string {
-	l := make(map[string]string, len(customLabels)+3)
+	labels := make(map[string]string, len(customLabels)+3)
 	for k, v := range customLabels {
-		l[k] = v
+		labels[k] = v
 	}
 
 	// ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/
-	l["app.kubernetes.io/name"] = app
-	l["app.kubernetes.io/instance"] = instance
-	l["app.kubernetes.io/managed-by"] = "tailscale-operator"
+	labels["app.kubernetes.io/name"] = app
+	labels["app.kubernetes.io/instance"] = instance
+	labels["app.kubernetes.io/managed-by"] = "tailscale-operator"
 
-	return l
+	return labels
 }
 
 func tsrOwnerReference(owner metav1.Object) []metav1.OwnerReference {

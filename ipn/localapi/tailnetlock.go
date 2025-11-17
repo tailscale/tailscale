@@ -266,12 +266,12 @@ func (h *Handler) serveTKALog(w http.ResponseWriter, r *http.Request) {
 
 	limit := 50
 	if limitStr := r.FormValue("limit"); limitStr != "" {
-		l, err := strconv.Atoi(limitStr)
+		lm, err := strconv.Atoi(limitStr)
 		if err != nil {
 			http.Error(w, "parsing 'limit' parameter: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		limit = int(l)
+		limit = int(lm)
 	}
 
 	updates, err := h.b.NetworkLockLog(limit)

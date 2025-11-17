@@ -156,13 +156,13 @@ func TestSNIProxyWithNetmapConfig(t *testing.T) {
 	client, _, _ := startNode(t, ctx, controlURL, "client")
 
 	// Make sure that the sni node has received its config.
-	l, err := sni.LocalClient()
+	lc, err := sni.LocalClient()
 	if err != nil {
 		t.Fatal(err)
 	}
 	gotConfigured := false
 	for range 100 {
-		s, err := l.StatusWithoutPeers(ctx)
+		s, err := lc.StatusWithoutPeers(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}

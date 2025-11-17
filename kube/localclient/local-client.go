@@ -40,10 +40,10 @@ type localClient struct {
 	lc *local.Client
 }
 
-func (l *localClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (IPNBusWatcher, error) {
-	return l.lc.WatchIPNBus(ctx, mask)
+func (lc *localClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (IPNBusWatcher, error) {
+	return lc.lc.WatchIPNBus(ctx, mask)
 }
 
-func (l *localClient) CertPair(ctx context.Context, domain string) ([]byte, []byte, error) {
-	return l.lc.CertPair(ctx, domain)
+func (lc *localClient) CertPair(ctx context.Context, domain string) ([]byte, []byte, error) {
+	return lc.lc.CertPair(ctx, domain)
 }

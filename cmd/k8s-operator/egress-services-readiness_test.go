@@ -49,12 +49,12 @@ func TestEgressServiceReadiness(t *testing.T) {
 		},
 	}
 	fakeClusterIPSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "operator-ns"}}
-	l := egressSvcEpsLabels(egressSvc, fakeClusterIPSvc)
+	labels := egressSvcEpsLabels(egressSvc, fakeClusterIPSvc)
 	eps := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "my-app",
 			Namespace: "operator-ns",
-			Labels:    l,
+			Labels:    labels,
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
 	}
@@ -118,26 +118,26 @@ func TestEgressServiceReadiness(t *testing.T) {
 	})
 }
 
-func setClusterNotReady(svc *corev1.Service, cl tstime.Clock, l *zap.SugaredLogger) {
-	tsoperator.SetServiceCondition(svc, tsapi.EgressSvcReady, metav1.ConditionFalse, reasonClusterResourcesNotReady, reasonClusterResourcesNotReady, cl, l)
+func setClusterNotReady(svc *corev1.Service, cl tstime.Clock, lg *zap.SugaredLogger) {
+	tsoperator.SetServiceCondition(svc, tsapi.EgressSvcReady, metav1.ConditionFalse, reasonClusterResourcesNotReady, reasonClusterResourcesNotReady, cl, lg)
 }
 
-func setNotReady(svc *corev1.Service, cl tstime.Clock, l *zap.SugaredLogger, replicas int32) {
+func setNotReady(svc *corev1.Service, cl tstime.Clock, lg *zap.SugaredLogger, replicas int32) {
 	msg := fmt.Sprintf(msgReadyToRouteTemplate, 0, replicas)
-	tsoperator.SetServiceCondition(svc, tsapi.EgressSvcReady, metav1.ConditionFalse, reasonNotReady, msg, cl, l)
+	tsoperator.SetServiceCondition(svc, tsapi.EgressSvcReady, metav1.ConditionFalse, reasonNotReady, msg, cl, lg)
 }
 
-func setReady(svc *corev1.Service, cl tstime.Clock, l *zap.SugaredLogger, replicas, readyReplicas int32) {
+func setReady(svc *corev1.Service, cl tstime.Clock, lg *zap.SugaredLogger, replicas, readyReplicas int32) {
 	reason := reasonPartiallyReady
 	if readyReplicas == replicas {
 		reason = reasonReady
 	}
 	msg := fmt.Sprintf(msgReadyToRouteTemplate, readyReplicas, replicas)
-	tsoperator.SetServiceCondition(svc, tsapi.EgressSvcReady, metav1.ConditionTrue, reason, msg, cl, l)
+	tsoperator.SetServiceCondition(svc, tsapi.EgressSvcReady, metav1.ConditionTrue, reason, msg, cl, lg)
 }
 
-func setPGReady(pg *tsapi.ProxyGroup, cl tstime.Clock, l *zap.SugaredLogger) {
-	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, "foo", "foo", pg.Generation, cl, l)
+func setPGReady(pg *tsapi.ProxyGroup, cl tstime.Clock, lg *zap.SugaredLogger) {
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, "foo", "foo", pg.Generation, cl, lg)
 }
 
 func setEndpointForReplica(pg *tsapi.ProxyGroup, ordinal int32, eps *discoveryv1.EndpointSlice) {
@@ -153,14 +153,14 @@ func setEndpointForReplica(pg *tsapi.ProxyGroup, ordinal int32, eps *discoveryv1
 }
 
 func pod(pg *tsapi.ProxyGroup, ordinal int32) *corev1.Pod {
-	l := pgLabels(pg.Name, nil)
-	l[appsv1.PodIndexLabel] = fmt.Sprintf("%d", ordinal)
+	labels := pgLabels(pg.Name, nil)
+	labels[appsv1.PodIndexLabel] = fmt.Sprintf("%d", ordinal)
 	ip := fmt.Sprintf("10.0.0.%d", ordinal)
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-%d", pg.Name, ordinal),
 			Namespace: "operator-ns",
-			Labels:    l,
+			Labels:    labels,
 		},
 		Status: corev1.PodStatus{
 			PodIPs: []corev1.PodIP{{IP: ip}},

@@ -1282,8 +1282,8 @@ func TestServiceProxyClassAnnotation(t *testing.T) {
 			slist := &corev1.SecretList{}
 			fc.List(context.Background(), slist, client.InNamespace("operator-ns"))
 			for _, i := range slist.Items {
-				l, _ := json.Marshal(i.Labels)
-				t.Logf("found secret %q with labels %q ", i.Name, string(l))
+				labels, _ := json.Marshal(i.Labels)
+				t.Logf("found secret %q with labels %q ", i.Name, string(labels))
 			}
 
 			_, shortName := findGenName(t, fc, "default", "test", "svc")

@@ -146,33 +146,33 @@ func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID, netMon *ne
 // SetLoggingEnabled enables or disables logging.
 // When disabled, socket stats are not polled and no new logs are written to disk.
 // Existing logs can still be fetched via the C2N API.
-func (l *Logger) SetLoggingEnabled(v bool) {
-	old := l.enabled.Load()
-	if old != v && l.enabled.CompareAndSwap(old, v) {
+func (lg *Logger) SetLoggingEnabled(v bool) {
+	old := lg.enabled.Load()
+	if old != v && lg.enabled.CompareAndSwap(old, v) {
 		if v {
-			if l.eventCh == nil {
+			if lg.eventCh == nil {
 				// eventCh should be large enough for the number of events that will occur within logInterval.
 				// Add an extra second's worth of events to ensure we don't drop any.
-				l.eventCh = make(chan event, (logInterval+time.Second)/pollInterval)
+				lg.eventCh = make(chan event, (logInterval+time.Second)/pollInterval)
 			}
-			l.ctx, l.cancelFn = context.WithCancel(context.Background())
-			go l.poll()
-			go l.logEvents()
+			lg.ctx, lg.cancelFn = context.WithCancel(context.Background())
+			go lg.poll()
+			go lg.logEvents()
 		} else {
-			l.cancelFn()
+			lg.cancelFn()
 		}
 	}
 }
 
-func (l *Logger) Write(p []byte) (int, error) {
-	return l.logger.Write(p)
+func (lg *Logger) Write(p []byte) (int, error) {
+	return lg.logger.Write(p)
 }
 
 // poll fetches the current socket stats at the configured time interval,
 // calculates the delta since the last poll,
 // and writes any non-zero values to the logger event channel.
 // This method does not return.
-func (l *Logger) poll() {
+func (lg *Logger) poll() {
 	// last is the last set of socket stats we saw.
 	var lastStats *sockstats.SockStats
 	var lastTime time.Time
@@ -180,7 +180,7 @@ func (l *Logger) poll() {
 	ticker := time.NewTicker(pollInterval)
 	for {
 		select {
-		case <-l.ctx.Done():
+		case <-lg.ctx.Done():
 			ticker.Stop()
 			return
 		case t := <-ticker.C:
@@ -196,7 +196,7 @@ func (l *Logger) poll() {
 					if stats.CurrentInterfaceCellular {
 						e.IsCellularInterface = 1
 					}
-					l.eventCh <- e
+					lg.eventCh <- e
 				}
 			}
 			lastTime = t
@@ -207,14 +207,14 @@ func (l *Logger) poll() {
 
 // logEvents reads events from the event channel at logInterval and logs them to disk.
 // This method does not return.
-func (l *Logger) logEvents() {
-	enc := json.NewEncoder(l)
+func (lg *Logger) logEvents() {
+	enc := json.NewEncoder(lg)
 	flush := func() {
 		for {
 			select {
-			case e := <-l.eventCh:
+			case e := <-lg.eventCh:
 				if err := enc.Encode(e); err != nil {
-					l.logf("sockstatlog: error encoding log: %v", err)
+					lg.logf("sockstatlog: error encoding log: %v", err)
 				}
 			default:
 				return
@@ -224,7 +224,7 @@ func (l *Logger) logEvents() {
 	ticker := time.NewTicker(logInterval)
 	for {
 		select {
-		case <-l.ctx.Done():
+		case <-lg.ctx.Done():
 			ticker.Stop()
 			return
 		case <-ticker.C:
@@ -233,29 +233,29 @@ func (l *Logger) logEvents() {
 	}
 }
 
-func (l *Logger) LogID() string {
-	if l.logger == nil {
+func (lg *Logger) LogID() string {
+	if lg.logger == nil {
 		return ""
 	}
-	return l.logger.PrivateID().Public().String()
+	return lg.logger.PrivateID().Public().String()
 }
 
 // Flush sends pending logs to the log server and flushes them from the local buffer.
-func (l *Logger) Flush() {
-	l.logger.StartFlush()
+func (lg *Logger) Flush() {
+	lg.logger.StartFlush()
 }
 
-func (l *Logger) Shutdown(ctx context.Context) {
-	if l.cancelFn != nil {
-		l.cancelFn()
+func (lg *Logger) Shutdown(ctx context.Context) {
+	if lg.cancelFn != nil {
+		lg.cancelFn()
 	}
-	l.filch.Close()
-	l.logger.Shutdown(ctx)
+	lg.filch.Close()
+	lg.logger.Shutdown(ctx)
 
 	type closeIdler interface {
 		CloseIdleConnections()
 	}
-	if tr, ok := l.tr.(closeIdler); ok {
+	if tr, ok := lg.tr.(closeIdler); ok {
 		tr.CloseIdleConnections()
 	}
 }
