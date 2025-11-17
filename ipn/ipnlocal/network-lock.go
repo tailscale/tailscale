@@ -360,6 +360,13 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 		if err := b.tkaSyncLocked(ourNodeKey); err != nil {
 			return fmt.Errorf("tka sync: %w", err)
 		}
+		// Try to compact the TKA state, to avoid unbounded storage on nodes.
+		//
+		// We run this on every sync so that clients compact consistently. In many
+		// cases this will be a no-op.
+		if err := b.tka.authority.Compact(b.tka.storage, tkaCompactionDefaults); err != nil {
+			return fmt.Errorf("tka compact: %w", err)
+		}
 	}
 
 	return nil
@@ -508,7 +515,7 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, per
 	if root == "" {
 		b.health.SetUnhealthy(noNetworkLockStateDirWarnable, nil)
 		b.logf("network-lock using in-memory storage; no state directory")
-		storage = &tka.Mem{}
+		storage = tka.ChonkMem()
 	} else {
 		chonkDir := b.chonkPathLocked()
 		chonk, err := tka.ChonkDir(chonkDir)
@@ -686,7 +693,7 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 	// We use an in-memory tailchonk because we don't want to commit to
 	// the filesystem until we've finished the initialization sequence,
 	// just in case something goes wrong.
-	_, genesisAUM, err := tka.Create(&tka.Mem{}, tka.State{
+	_, genesisAUM, err := tka.Create(tka.ChonkMem(), tka.State{
 		Keys: keys,
 		// TODO(tom): s/tka.State.DisablementSecrets/tka.State.DisablementValues
 		//   This will center on consistent nomenclature:

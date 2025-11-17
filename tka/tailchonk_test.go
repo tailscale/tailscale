@@ -35,7 +35,7 @@ func randHash(t *testing.T, seed int64) [blake2s.Size]byte {
 }
 
 func TestImplementsChonk(t *testing.T) {
-	impls := []Chonk{&Mem{}, &FS{}}
+	impls := []Chonk{ChonkMem(), &FS{}}
 	t.Logf("chonks: %v", impls)
 }
 
@@ -229,7 +229,7 @@ func TestMarkActiveChain(t *testing.T) {
 			verdict := make(map[AUMHash]retainState, len(tc.chain))
 
 			// Build the state of the tailchonk for tests.
-			storage := &Mem{}
+			storage := ChonkMem()
 			var prev AUMHash
 			for i := range tc.chain {
 				if !prev.IsZero() {
@@ -608,7 +608,7 @@ func TestCompactLongButYoung(t *testing.T) {
 	ourKey := Key{Kind: Key25519, Public: ourPriv.Public().Verifier(), Votes: 1}
 	someOtherKey := Key{Kind: Key25519, Public: key.NewNLPrivate().Public().Verifier(), Votes: 1}
 
-	storage := &Mem{}
+	storage := ChonkMem()
 	auth, _, err := Create(storage, State{
 		Keys:               []Key{ourKey, someOtherKey},
 		DisablementSecrets: [][]byte{DisablementKDF(bytes.Repeat([]byte{0xa5}, 32))},

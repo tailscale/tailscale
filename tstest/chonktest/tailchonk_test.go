@@ -18,7 +18,7 @@ func TestImplementsChonk(t *testing.T) {
 		{
 			name: "Mem",
 			newChonk: func(t *testing.T) tka.Chonk {
-				return &tka.Mem{}
+				return tka.ChonkMem()
 			},
 		},
 		{
@@ -42,7 +42,7 @@ func TestImplementsCompactableChonk(t *testing.T) {
 		{
 			name: "Mem",
 			newChonk: func(t *testing.T) tka.CompactableChonk {
-				return &tka.Mem{}
+				return tka.ChonkMem()
 			},
 		},
 		{

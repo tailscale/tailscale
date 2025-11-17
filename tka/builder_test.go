@@ -28,7 +28,7 @@ func TestAuthorityBuilderAddKey(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
-	storage := &Mem{}
+	storage := ChonkMem()
 	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
@@ -62,7 +62,7 @@ func TestAuthorityBuilderMaxKey(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
-	storage := &Mem{}
+	storage := ChonkMem()
 	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
@@ -109,7 +109,7 @@ func TestAuthorityBuilderRemoveKey(t *testing.T) {
 	pub2, _ := testingKey25519(t, 2)
 	key2 := Key{Kind: Key25519, Public: pub2, Votes: 1}
 
-	storage := &Mem{}
+	storage := ChonkMem()
 	a, _, err := Create(storage, State{
 		Keys:               []Key{key, key2},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
@@ -155,7 +155,7 @@ func TestAuthorityBuilderSetKeyVote(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
-	storage := &Mem{}
+	storage := ChonkMem()
 	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
@@ -191,7 +191,7 @@ func TestAuthorityBuilderSetKeyMeta(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2, Meta: map[string]string{"a": "b"}}
 
-	storage := &Mem{}
+	storage := ChonkMem()
 	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
@@ -227,7 +227,7 @@ func TestAuthorityBuilderMultiple(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
-	storage := &Mem{}
+	storage := ChonkMem()
 	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
@@ -275,7 +275,7 @@ func TestAuthorityBuilderCheckpointsAfterXUpdates(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
-	storage := &Mem{}
+	storage := ChonkMem()
 	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
