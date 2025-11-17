@@ -5,6 +5,8 @@ package tka
 
 import (
 	"bytes"
+	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +17,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"golang.org/x/crypto/blake2s"
+	"tailscale.com/types/tkatype"
 	"tailscale.com/util/must"
 )
 
@@ -562,5 +565,164 @@ func TestCompact(t *testing.T) {
 		for name, hash := range c.AUMHashes {
 			t.Logf("AUM[%q] = %v", name, hash)
 		}
+	}
+}
+
+func TestCompact2(t *testing.T) {
+	type ExampleAUM struct {
+		s          string
+		State      *State
+		Votes      *uint
+		Signatures []tkatype.Signature
+	}
+
+	votes := uint(1)
+
+	byteStrings := []ExampleAUM{
+		{
+			// a = AJM2VBKLQ4RPKJRGXOV4PCYBLKUF3NNK6NIAL7H2HONRVMVDWB3A, parent = BWILAEJTWUV4OHFSN5AUA4MOKNAJPBUOUVHBBOBB7III6S5VJAOA, kind = add-key
+			s:          "pAEBAlggDZCwETO1K8ccsm9BQHGOU0CXho6lThC4IfoQj0u1SBwDowEBAgEDWCCuNMNtsFLNS59bK51FmEk9ahXZ0HMdBgAL5MkOw79T2BeBogFYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgAlhA7sNtvO9jxUOwu11dLTx3-007RyrEA8Jjj6yQeSJkJC-6ARxLfQn0cJG57sAgALrRX1c5MnXKrQ_ttw4jE0ZOAg",
+			Votes:      &votes,
+			Signatures: []tkatype.Signature{{KeyID: fromBase64("NvT5BPh7+J5ri7eIsujVegaiESiwVbBdz8+HMPLkwyA="), Signature: fromBase64("7sNtvO9jxUOwu11dLTx3+007RyrEA8Jjj6yQeSJkJC+6ARxLfQn0cJG57sAgALrRX1c5MnXKrQ/ttw4jE0ZOAg==")}},
+		},
+		// {
+		// 	// a = K6ERNNXXB6JHT4NWS5WA6TESRUQCJPNKJAAEBSZBNGMVH36ILT4A, parent = CEUUHNL6C75JSFYACHW33DNS4ICM7ZSOCF6YA3KY6STZ4DJ64VFA, kind = add-key
+		// 	s:          "pAEBAlggESlDtX4X-pkXABHtvY2y4gTP5k4RfYBtWPSnng0-5UoDowEBAgEDWCCuNMNtsFLNS59bK51FmEk9ahXZ0HMdBgAL5MkOw79T2BeBogFYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgAlhAuDMsdGGyUZnyeGbOJDvjQ08xX-JkafyxV9J3sECrqD2g6gNNo58HM-uIpyLgWGZoMpAHsrgg6c8hpzIiUXv9AQ",
+		// 	Votes:      &votes,
+		// 	Signatures: []tkatype.Signature{{KeyID: fromBase64("NvT5BPh7+J5ri7eIsujVegaiESiwVbBdz8+HMPLkwyA="), Signature: fromBase64("uDMsdGGyUZnyeGbOJDvjQ08xX+JkafyxV9J3sECrqD2g6gNNo58HM+uIpyLgWGZoMpAHsrgg6c8hpzIiUXv9AQ==")}},
+		// },
+		{
+			// a = 2BSV5K5DGTUCVTDYFQOMBGLXVHAXOKE5V637O7DAE5L245H6ZHMA, parent = DPWD5BAPMLCCPPXT6E6GHA6MNNRMSNW7FEOQ3PUH75T7PC7OE62Q, kind = add-key
+			s:          "pAEBAlggG-w-hA9ixCe-8_E8Y4PMa2LJNt8pHQ2-h_9n94vuJ7UDowEBAgEDWCCuNMNtsFLNS59bK51FmEk9ahXZ0HMdBgAL5MkOw79T2BeBogFYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgAlhAAxSSgs8g0uvtKE7BTqQof46DPG2Cc6E8N8Xa4PJ_mQ1zmFapmbVVdTFUFjiDGdOEfDvxsVKqWA9dIhHhku_0Bg",
+			Votes:      &votes,
+			Signatures: []tkatype.Signature{{KeyID: fromBase64("NvT5BPh7+J5ri7eIsujVegaiESiwVbBdz8+HMPLkwyA="), Signature: fromBase64("AxSSgs8g0uvtKE7BTqQof46DPG2Cc6E8N8Xa4PJ/mQ1zmFapmbVVdTFUFjiDGdOEfDvxsVKqWA9dIhHhku/0Bg==")}},
+		},
+		{
+			// a = 366VMQ44HUHGKVWV3P3WZO2X3CMIR6XBX6XHHSE4YSSXSWAO6UMA, parent = TJ7OFNGUC4HUAU64KZRX3LTZTHRTG35SHWRETR5VEKTPYIJM2BWA, kind = add-key
+			s:          "pAEBAlggmn7itNQXD0BT3FZjfa55meMzb7I9oknHtSKm_CEs0GwDowEBAgEDWCCuNMNtsFLNS59bK51FmEk9ahXZ0HMdBgAL5MkOw79T2BeBogFYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgAlhA8F8MJkZNdRjUXoV-mnJ_NS5J3F8o78xFtPNRPX1pHXBmSwPMGPLBZz9vxE-SWI9igxW3KtaLicfnFYH7a8OpAw",
+			Votes:      &votes,
+			Signatures: []tkatype.Signature{{KeyID: fromBase64("NvT5BPh7+J5ri7eIsujVegaiESiwVbBdz8+HMPLkwyA="), Signature: fromBase64("8F8MJkZNdRjUXoV+mnJ/NS5J3F8o78xFtPNRPX1pHXBmSwPMGPLBZz9vxE+SWI9igxW3KtaLicfnFYH7a8OpAw==")}},
+		},
+		// {
+		// 	s:          "pAEBAlggqlfipQaNVhDLKhR5f0MGD0byH-brYVNItG0p4vhl9VEDowEBAgEDWCCuNMNtsFLNS59bK51FmEk9ahXZ0HMdBgAL5MkOw79T2BeBogFYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgAlhA4rsaPYURpW4OKxzTUqjTUT4VXMot-EvUmlN6ax7ZRbjyquUm9XgYCO-tGR0q7RwnWgBzRP2k0NW5a4TONupyCQ",
+		// 	Votes:      &votes,
+		// 	Signatures: []tkatype.Signature{{KeyID: fromBase64("NvT5BPh7+J5ri7eIsujVegaiESiwVbBdz8+HMPLkwyA="), Signature: fromBase64("4rsaPYURpW4OKxzTUqjTUT4VXMot+EvUmlN6ax7ZRbjyquUm9XgYCO+tGR0q7RwnWgBzRP2k0NW5a4TONupyCQ==")}},
+		// },
+		{
+			s:          "pAEBAlggVvpBmvdbwZb871y1y9cjf4GyL8GVltb7Kj4pyvWPAeUDowEBAgEDWCCuNMNtsFLNS59bK51FmEk9ahXZ0HMdBgAL5MkOw79T2BeBogFYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgAlhAz16ceye9YElLhG35ybaTQB6bgGPZMP2AUf02MiF9AEkT9y3ZwvBhkTD7Wp4zyQownupMalRcqBkX2_5ads5eDQ",
+			Votes:      &votes,
+			Signatures: []tkatype.Signature{{KeyID: fromBase64("NvT5BPh7+J5ri7eIsujVegaiESiwVbBdz8+HMPLkwyA="), Signature: fromBase64("z16ceye9YElLhG35ybaTQB6bgGPZMP2AUf02MiF9AEkT9y3ZwvBhkTD7Wp4zyQownupMalRcqBkX2/5ads5eDQ==")}},
+		},
+		// {
+		// 	s:          "pAECAlgg0GVeq6M06CrMeCwcwJl3qcF3KJ2vt_d8YCdXrnT-ydgEWCCuNMNtsFLNS59bK51FmEk9ahXZ0HMdBgAL5MkOw79T2BeBogFYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgAlhAmJp3en1EKjEScWvcAorgzs2hXZxR3rNgHclHdxJSyyef254ldDipOvuGCY_PNdqY0j1TFnBeTWzj7kftxEOFDg",
+		// 	Votes:      &votes,
+		// 	Signatures: []tkatype.Signature{{KeyID: fromBase64("NvT5BPh7+J5ri7eIsujVegaiESiwVbBdz8+HMPLkwyA="), Signature: fromBase64("mJp3en1EKjEScWvcAorgzs2hXZxR3rNgHclHdxJSyyef254ldDipOvuGCY/PNdqY0j1TFnBeTWzj7kftxEOFDg==")}},
+		// },
+		{
+			s:          "pAECAlgg371WQ5w9DmVW1dv3bLtX2JiI-uG_rnPInMSleVgO9RgEWCCuNMNtsFLNS59bK51FmEk9ahXZ0HMdBgAL5MkOw79T2BeBogFYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgAlhAuYwy-5Js_brF-QurmH7lYf0ukVVepbHQPSELf2UUjF6LjywY80QXuvgkrfMLBCbOxdfxIIHwZiUqW5mld8i7Bg",
+			Votes:      &votes,
+			Signatures: []tkatype.Signature{{KeyID: fromBase64("NvT5BPh7+J5ri7eIsujVegaiESiwVbBdz8+HMPLkwyA="), Signature: fromBase64("uYwy+5Js/brF+QurmH7lYf0ukVVepbHQPSELf2UUjF6LjywY80QXuvgkrfMLBCbOxdfxIIHwZiUqW5mld8i7Bg==")}},
+		}, {
+			s:          "pAECAlgg5lrco8Q-PwzPlhtGy0BYusQzF1qRkkkoOZqGD06HfkIEWCCuNMNtsFLNS59bK51FmEk9ahXZ0HMdBgAL5MkOw79T2BeBogFYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgAlhAJjOqf-ts4o0gn5gmPqVXFnAVpkEwL7DmN5qpeLvdmK9DD-3t4OmonjybmJotEcYkZ-nIumo3e7_AHtC8m92HCQ",
+			Votes:      &votes,
+			Signatures: []tkatype.Signature{{KeyID: fromBase64("NvT5BPh7+J5ri7eIsujVegaiESiwVbBdz8+HMPLkwyA="), Signature: fromBase64("JjOqf+ts4o0gn5gmPqVXFnAVpkEwL7DmN5qpeLvdmK9DD+3t4OmonjybmJotEcYkZ+nIumo3e7/AHtC8m92HCQ==")}},
+		}, {
+			s:          "pAECAlgg6YZeZDvpibc13tZAW57wOGV5OPQyZymzJ3OPG7E1JGYEWCCuNMNtsFLNS59bK51FmEk9ahXZ0HMdBgAL5MkOw79T2BeBogFYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgAlhAkz_inlAyXjXONsH1QRfxGrLmJhM4_Blw7qe_s_poxrZivgyu93ZaXKXlwjNq1q1KTgPIaW2nM5lafRMCMBo1AA",
+			Votes:      &votes,
+			Signatures: []tkatype.Signature{{KeyID: fromBase64("NvT5BPh7+J5ri7eIsujVegaiESiwVbBdz8+HMPLkwyA="), Signature: fromBase64("kz/inlAyXjXONsH1QRfxGrLmJhM4/Blw7qe/s/poxrZivgyu93ZaXKXlwjNq1q1KTgPIaW2nM5lafRMCMBo1AA==")}},
+		}, {
+			s:          "pAECAlggaHvkpYx6TAAvWehGA-NJqbWzF6z5BUovvRURq-G1DYgEWCCuNMNtsFLNS59bK51FmEk9ahXZ0HMdBgAL5MkOw79T2BeBogFYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgAlhAGOZqTwqjLmECiR9fdIcfBJkD-vuB2nluEA-P3h4GXsskNUrta-9XTCbI3le8BqpxTdzbAXOH8bQncSXFDX3UDQ",
+			Votes:      &votes,
+			Signatures: []tkatype.Signature{{KeyID: fromBase64("NvT5BPh7+J5ri7eIsujVegaiESiwVbBdz8+HMPLkwyA="), Signature: fromBase64("GOZqTwqjLmECiR9fdIcfBJkD+vuB2nluEA+P3h4GXsskNUrta+9XTCbI3le8BqpxTdzbAXOH8bQncSXFDX3UDQ==")}},
+		},
+		// {
+		// 	s:          "pAECAlggV4kWtvcPknnxtpdsD0ySjSAkvapIAEDLIWmZU-_IXPgEWCCuNMNtsFLNS59bK51FmEk9ahXZ0HMdBgAL5MkOw79T2BeBogFYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgAlhA6uY-BDFtguuz_h3unvFu0v0zpu-KH1haXsXc7Tc7R5MiGLZjtfbZyj-w1R2c4f7SrmWcgMQQOobxPTvDqCmCAQ",
+		// 	Votes:      &votes,
+		// 	Signatures: []tkatype.Signature{{KeyID: fromBase64("NvT5BPh7+J5ri7eIsujVegaiESiwVbBdz8+HMPLkwyA="), Signature: fromBase64("6uY+BDFtguuz/h3unvFu0v0zpu+KH1haXsXc7Tc7R5MiGLZjtfbZyj+w1R2c4f7SrmWcgMQQOobxPTvDqCmCAQ==")}},
+		// },
+		{
+			s:          "pAEFAlggAlmqhUuHIvUmJrurx4sBWqhdtarzUAX8-jubGrKjsHYFowH2AoFYIMP-qKDXDt4lVZkMpg1wqKA8vmJ9LJ88sOK6cJPQiE4vA4KjAQECAgNYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgowEBAgEDWCCuNMNtsFLNS59bK51FmEk9ahXZ0HMdBgAL5MkOw79T2BeBogFYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgAlhA5iM5qEH9UtmsFkW0xb8fHD5UPCWpBoZD4LFflQel7p2t1dcwHAivyIXU_Mb7QJPoduM9IIMbn3IR3rohkCV2Ag",
+			Votes:      &votes,
+			Signatures: []tkatype.Signature{{KeyID: fromBase64("NvT5BPh7+J5ri7eIsujVegaiESiwVbBdz8+HMPLkwyA="), Signature: fromBase64("5iM5qEH9UtmsFkW0xb8fHD5UPCWpBoZD4LFflQel7p2t1dcwHAivyIXU/Mb7QJPoduM9IIMbn3IR3rohkCV2Ag==")}},
+		},
+		// {
+		// 	// MIX35Z5M5Z2WKHKIIB6AA535GU24ZPL3V4LPGAHAFHL5FQZE6IOQ
+		// 	s:          "pAEFAlggwl5cn73RXdsYgEEnYhJc2U31pCoEJBi_bb-3dAHv_OQFowH2AoFYIMP-qKDXDt4lVZkMpg1wqKA8vmJ9LJ88sOK6cJPQiE4vA4KjAQECAgNYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgowEBAgEDWCCuNMNtsFLNS59bK51FmEk9ahXZ0HMdBgAL5MkOw79T2BeBogFYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgAlhA7S0o89VJ-Dy6mLIk9m9FbfejFOxndAy8L2hgKMN81f0uuI7aSntg2eEnZ2PnXLE3a4ZtCRpDxzXQp268tHBsBw",
+		// 	Votes:      &votes,
+		// 	Signatures: []tkatype.Signature{{KeyID: fromBase64("NvT5BPh7+J5ri7eIsujVegaiESiwVbBdz8+HMPLkwyA="), Signature: fromBase64("7S0o89VJ+Dy6mLIk9m9FbfejFOxndAy8L2hgKMN81f0uuI7aSntg2eEnZ2PnXLE3a4ZtCRpDxzXQp268tHBsBw==")}},
+		// },
+		{
+			// 4ZNNZI6EHY7QZT4WDNDMWQCYXLCDGF22SGJESKBZTKDA6TUHPZBA
+			s:          "pAEFAvYFowH2AoFYIMP-qKDXDt4lVZkMpg1wqKA8vmJ9LJ88sOK6cJPQiE4vA4KjAQECAgNYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgowEBAgEDWCCuNMNtsFLNS59bK51FmEk9ahXZ0HMdBgAL5MkOw79T2BeBogFYIDb0-QT4e_iea4u3iLLo1XoGohEosFWwXc_PhzDy5MMgAlhAMQwaUL_f_27LD7ee4HLYoDrvLWBSlSvJqCNn5g_ntunIogaEwb-OsdEHUZ1YDs8sG99_pLwXqi7FBZmdkT4wAQ",
+			Votes:      &votes,
+			Signatures: []tkatype.Signature{{KeyID: fromBase64("NvT5BPh7+J5ri7eIsujVegaiESiwVbBdz8+HMPLkwyA="), Signature: fromBase64("MQwaUL/f/27LD7ee4HLYoDrvLWBSlSvJqCNn5g/ntunIogaEwb+OsdEHUZ1YDs8sG99/pLwXqi7FBZmdkT4wAQ==")}},
+		},
+	}
+
+	dir := t.TempDir()
+	storage, err := ChonkDir(dir)
+	if err != nil {
+		t.Fatalf("ChonkDir: %v", err)
+	}
+
+	var aums []AUM
+
+	for _, bs := range byteStrings {
+		var aum AUM
+		aum.Unserialize(must.Get(base64.RawURLEncoding.DecodeString(bs.s)))
+		aums = append(aums, aum)
+		t.Logf("s = %s, aum = %s", bs.s, aum.Hash().String())
+		// t.Logf("%s", bs.s)
+		// t.Logf("%+v", aum)
+		// t.Logf("%+v", aum.State)
+		// if len(aum.Signatures) != 1 {
+		// 	panic("wrong # of signatures")
+		// }
+		// aum.Votes = bs.Votes
+		// aum.Signatures = bs.Signatures
+		// sig := aum.Signatures[0]
+		// fmt.Printf("{\ns: \"%s\",\n", bs.s)
+		// if aum.State != nil {
+		// 	fmt.Printf("State: &State{\n")
+		// 	fmt.Printf("DisablementSecrets: [\n")
+		// 	for _, sec := range aum.State.DisablementSecrets {
+		// 		fmt.Printf("fromBase64(\"%s\"),\n", base64.StdEncoding.EncodeToString(sec))
+		// 	}
+		// 	fmt.Printf("},\n")
+		// }
+		// fmt.Printf("Votes: &votes,\n")
+		// fmt.Printf("Signatures: []tkatype.Signature{{KeyID: fromBase64(\"%s\"), Signature: fromBase64(\"%s\")}},", base64.StdEncoding.EncodeToString(sig.KeyID), base64.StdEncoding.EncodeToString(sig.Signature))
+		// fmt.Printf("\n},\n")
+		// t.Logf("sig.KeyID = %s", base64.StdEncoding.EncodeToString(sig.KeyID))
+		// t.Logf("sig.Signature = %s", base64.StdEncoding.EncodeToString(sig.Signature))
+	}
+	fmt.Printf("\n\n")
+
+	// for _, aum := range aums {
+	// 	parent, ok := aum.Parent()
+	// 	if ok {
+	// 		t.Logf("a = %s, parent = %s, kind = %s", aum.Hash().String(), parent.String(), aum.MessageKind.String())
+	// 	} else {
+	// 		t.Logf("a = %s, parent = %s, kind = %s", aum.Hash().String(), "<none>", aum.MessageKind.String())
+	// 	}
+
+	// }
+
+	if err := storage.CommitVerifiedAUMs(aums); err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	authority, err := Open(storage)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	t.Logf("%s", authority.Head().String())
+
+	if err := authority.Compact(storage, CompactionOptions{
+		MinChain: 2,         // Keep at minimum 24 AUMs since head.
+		MinAge:   time.Hour, // Keep 2 weeks of AUMs.
+	}); err != nil {
+		t.Fatalf("%v", err)
 	}
 }
