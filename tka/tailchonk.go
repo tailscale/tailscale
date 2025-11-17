@@ -19,6 +19,8 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	"tailscale.com/atomicfile"
+	"tailscale.com/tstime"
+	"tailscale.com/util/testenv"
 )
 
 // Chonk implementations provide durable storage for AUMs and other
@@ -92,6 +94,7 @@ type Mem struct {
 	mu          sync.RWMutex
 	aums        map[AUMHash]AUM
 	commitTimes map[AUMHash]time.Time
+	clock       tstime.Clock
 
 	// parentIndex is a map of AUMs to the AUMs for which they are
 	// the parent.
@@ -101,6 +104,23 @@ type Mem struct {
 	parentIndex map[AUMHash][]AUMHash
 
 	lastActiveAncestor *AUMHash
+}
+
+// ChonkMem returns an implementation of Chonk which stores TKA state
+// in-memory.
+func ChonkMem() *Mem {
+	return &Mem{
+		clock: tstime.DefaultClock{},
+	}
+}
+
+// SetClock sets the clock used by [Mem]. This is only for use in tests,
+// and will panic if called from non-test code.
+func (c *Mem) SetClock(clock tstime.Clock) {
+	if !testenv.InTest() {
+		panic("used SetClock in non-test code")
+	}
+	c.clock = clock
 }
 
 func (c *Mem) SetLastActiveAncestor(hash AUMHash) error {
@@ -173,7 +193,7 @@ updateLoop:
 	for _, aum := range updates {
 		aumHash := aum.Hash()
 		c.aums[aumHash] = aum
-		c.commitTimes[aumHash] = time.Now()
+		c.commitTimes[aumHash] = c.clock.Now()
 
 		parent, ok := aum.Parent()
 		if ok {

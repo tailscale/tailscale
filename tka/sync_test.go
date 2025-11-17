@@ -346,7 +346,7 @@ func TestSyncSimpleE2E(t *testing.T) {
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
 
-	nodeStorage := &Mem{}
+	nodeStorage := ChonkMem()
 	node, err := Bootstrap(nodeStorage, c.AUMs["G1"])
 	if err != nil {
 		t.Fatalf("node Bootstrap() failed: %v", err)
