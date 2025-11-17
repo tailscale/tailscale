@@ -414,6 +414,9 @@ func tpmSeal(logf logger.Logf, data []byte) (*tpmSealedData, error) {
 					FixedTPM:     true,
 					FixedParent:  true,
 					UserWithAuth: true,
+					// We don't set an authorization policy on this key, so DA
+					// isn't helpful.
+					NoDA: true,
 				},
 			}),
 		}
