@@ -779,8 +779,8 @@ func (a *Authority) findParentForRewrite(storage Chonk, removeKeys []tkatype.Key
 			}
 		}
 		if !keyTrusted {
-			// Success: the revoked keys are not trusted!
-			// Lets check that our key was trusted to ensure
+			// Success: the revoked keys are not trusted.
+			// Check that our key was trusted to ensure
 			// we can sign a fork from here.
 			if _, err := state.GetKey(ourKey); err == nil {
 				break
