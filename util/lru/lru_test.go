@@ -84,8 +84,8 @@ func TestStressEvictions(t *testing.T) {
 	for range numProbes {
 		v := vals[rand.Intn(len(vals))]
 		c.Set(v, true)
-		if l := c.Len(); l > cacheSize {
-			t.Fatalf("Cache size now %d, want max %d", l, cacheSize)
+		if ln := c.Len(); ln > cacheSize {
+			t.Fatalf("Cache size now %d, want max %d", ln, cacheSize)
 		}
 	}
 }
@@ -119,8 +119,8 @@ func TestStressBatchedEvictions(t *testing.T) {
 				c.DeleteOldest()
 			}
 		}
-		if l := c.Len(); l > cacheSizeMax {
-			t.Fatalf("Cache size now %d, want max %d", l, cacheSizeMax)
+		if ln := c.Len(); ln > cacheSizeMax {
+			t.Fatalf("Cache size now %d, want max %d", ln, cacheSizeMax)
 		}
 	}
 }

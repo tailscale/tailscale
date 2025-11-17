@@ -10,20 +10,20 @@ import (
 )
 
 func TestConnListener(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:")
+	ln, err := net.Listen("tcp", "127.0.0.1:")
 	if err != nil {
 		t.Fatalf("failed to Listen: %s", err)
 	}
 
 	cl := newConnListener()
 	// Test that we can accept a connection
-	cc, err := net.Dial("tcp", l.Addr().String())
+	cc, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatalf("failed to Dial: %s", err)
 	}
 	defer cc.Close()
 
-	sc, err := l.Accept()
+	sc, err := ln.Accept()
 	if err != nil {
 		t.Fatalf("failed to Accept: %s", err)
 	}

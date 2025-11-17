@@ -71,9 +71,9 @@ type egressPodsReconciler struct {
 // If the Pod does not appear to be serving the health check endpoint (pre-v1.80 proxies), the reconciler just sets the
 // readiness condition for backwards compatibility reasons.
 func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
-	l := er.logger.With("Pod", req.NamespacedName)
-	l.Debugf("starting reconcile")
-	defer l.Debugf("reconcile finished")
+	lg := er.logger.With("Pod", req.NamespacedName)
+	lg.Debugf("starting reconcile")
+	defer lg.Debugf("reconcile finished")
 
 	pod := new(corev1.Pod)
 	err = er.Get(ctx, req.NamespacedName, pod)
@@ -84,11 +84,11 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 		return reconcile.Result{}, fmt.Errorf("failed to get Pod: %w", err)
 	}
 	if !pod.DeletionTimestamp.IsZero() {
-		l.Debugf("Pod is being deleted, do nothing")
+		lg.Debugf("Pod is being deleted, do nothing")
 		return res, nil
 	}
 	if pod.Labels[LabelParentType] != proxyTypeProxyGroup {
-		l.Infof("[unexpected] reconciler called for a Pod that is not a ProxyGroup Pod")
+		lg.Infof("[unexpected] reconciler called for a Pod that is not a ProxyGroup Pod")
 		return res, nil
 	}
 
@@ -97,7 +97,7 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 	if !slices.ContainsFunc(pod.Spec.ReadinessGates, func(r corev1.PodReadinessGate) bool {
 		return r.ConditionType == tsEgressReadinessGate
 	}) {
-		l.Debug("Pod does not have egress readiness gate set, skipping")
+		lg.Debug("Pod does not have egress readiness gate set, skipping")
 		return res, nil
 	}
 
@@ -107,7 +107,7 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 		return res, fmt.Errorf("error getting ProxyGroup %q: %w", proxyGroupName, err)
 	}
 	if pg.Spec.Type != typeEgress {
-		l.Infof("[unexpected] reconciler called for %q ProxyGroup Pod", pg.Spec.Type)
+		lg.Infof("[unexpected] reconciler called for %q ProxyGroup Pod", pg.Spec.Type)
 		return res, nil
 	}
 	// Get all ClusterIP Services for all egress targets exposed to cluster via this ProxyGroup.
@@ -125,7 +125,7 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 		return c.Type == tsEgressReadinessGate
 	})
 	if idx != -1 {
-		l.Debugf("Pod is already ready, do nothing")
+		lg.Debugf("Pod is already ready, do nothing")
 		return res, nil
 	}
 
@@ -134,7 +134,7 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 	for _, svc := range svcs.Items {
 		s := svc
 		go func() {
-			ll := l.With("service_name", s.Name)
+			ll := lg.With("service_name", s.Name)
 			d := retrieveClusterDomain(er.tsNamespace, ll)
 			healthCheckAddr := healthCheckForSvc(&s, d)
 			if healthCheckAddr == "" {
@@ -178,22 +178,22 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 		return res, fmt.Errorf("error verifying conectivity: %w", err)
 	}
 	if rm := routesMissing.Load(); rm {
-		l.Info("Pod is not yet added as an endpoint for all egress targets, waiting...")
+		lg.Info("Pod is not yet added as an endpoint for all egress targets, waiting...")
 		return reconcile.Result{RequeueAfter: shortRequeue}, nil
 	}
-	if err := er.setPodReady(ctx, pod, l); err != nil {
+	if err := er.setPodReady(ctx, pod, lg); err != nil {
 		return res, fmt.Errorf("error setting Pod as ready: %w", err)
 	}
 	return res, nil
 }
 
-func (er *egressPodsReconciler) setPodReady(ctx context.Context, pod *corev1.Pod, l *zap.SugaredLogger) error {
+func (er *egressPodsReconciler) setPodReady(ctx context.Context, pod *corev1.Pod, lg *zap.SugaredLogger) error {
 	if slices.ContainsFunc(pod.Status.Conditions, func(c corev1.PodCondition) bool {
 		return c.Type == tsEgressReadinessGate
 	}) {
 		return nil
 	}
-	l.Infof("Pod is ready to route traffic to all egress targets")
+	lg.Infof("Pod is ready to route traffic to all egress targets")
 	pod.Status.Conditions = append(pod.Status.Conditions, corev1.PodCondition{
 		Type:               tsEgressReadinessGate,
 		Status:             corev1.ConditionTrue,
@@ -216,11 +216,11 @@ const (
 )
 
 // lookupPodRouteViaSvc attempts to reach a Pod using a health check endpoint served by a Service and returns the state of the health check.
-func (er *egressPodsReconciler) lookupPodRouteViaSvc(ctx context.Context, pod *corev1.Pod, healthCheckAddr string, l *zap.SugaredLogger) (healthCheckState, error) {
+func (er *egressPodsReconciler) lookupPodRouteViaSvc(ctx context.Context, pod *corev1.Pod, healthCheckAddr string, lg *zap.SugaredLogger) (healthCheckState, error) {
 	if !slices.ContainsFunc(pod.Spec.Containers[0].Env, func(e corev1.EnvVar) bool {
 		return e.Name == "TS_ENABLE_HEALTH_CHECK" && e.Value == "true"
 	}) {
-		l.Debugf("Pod does not have health check enabled, unable to verify if it is currently routable via Service")
+		lg.Debugf("Pod does not have health check enabled, unable to verify if it is currently routable via Service")
 		return cannotVerify, nil
 	}
 	wantsIP, err := podIPv4(pod)
@@ -248,7 +248,7 @@ func (er *egressPodsReconciler) lookupPodRouteViaSvc(ctx context.Context, pod *c
 	defer resp.Body.Close()
 	gotIP := resp.Header.Get(kubetypes.PodIPv4Header)
 	if gotIP == "" {
-		l.Debugf("Health check does not return Pod's IP header, unable to verify if Pod is currently routable via Service")
+		lg.Debugf("Health check does not return Pod's IP header, unable to verify if Pod is currently routable via Service")
 		return cannotVerify, nil
 	}
 	if !strings.EqualFold(wantsIP, gotIP) {

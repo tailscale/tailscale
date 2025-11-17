@@ -19,11 +19,11 @@ func TestSetUserTimeout(t *testing.T) {
 	// set in ktimeout.UserTimeout above.
 	lc.SetMultipathTCP(false)
 
-	l := must.Get(lc.Listen(context.Background(), "tcp", "localhost:0"))
-	defer l.Close()
+	ln := must.Get(lc.Listen(context.Background(), "tcp", "localhost:0"))
+	defer ln.Close()
 
 	var err error
-	if e := must.Get(l.(*net.TCPListener).SyscallConn()).Control(func(fd uintptr) {
+	if e := must.Get(ln.(*net.TCPListener).SyscallConn()).Control(func(fd uintptr) {
 		err = SetUserTimeout(fd, 0)
 	}); e != nil {
 		t.Fatal(e)
@@ -31,12 +31,12 @@ func TestSetUserTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := must.Get(unix.GetsockoptInt(int(must.Get(l.(*net.TCPListener).File()).Fd()), unix.SOL_TCP, unix.TCP_USER_TIMEOUT))
+	v := must.Get(unix.GetsockoptInt(int(must.Get(ln.(*net.TCPListener).File()).Fd()), unix.SOL_TCP, unix.TCP_USER_TIMEOUT))
 	if v != 0 {
 		t.Errorf("TCP_USER_TIMEOUT: got %v; want 0", v)
 	}
 
-	if e := must.Get(l.(*net.TCPListener).SyscallConn()).Control(func(fd uintptr) {
+	if e := must.Get(ln.(*net.TCPListener).SyscallConn()).Control(func(fd uintptr) {
 		err = SetUserTimeout(fd, 30*time.Second)
 	}); e != nil {
 		t.Fatal(e)
@@ -44,7 +44,7 @@ func TestSetUserTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v = must.Get(unix.GetsockoptInt(int(must.Get(l.(*net.TCPListener).File()).Fd()), unix.SOL_TCP, unix.TCP_USER_TIMEOUT))
+	v = must.Get(unix.GetsockoptInt(int(must.Get(ln.(*net.TCPListener).File()).Fd()), unix.SOL_TCP, unix.TCP_USER_TIMEOUT))
 	if v != 30000 {
 		t.Errorf("TCP_USER_TIMEOUT: got %v; want 30000", v)
 	}

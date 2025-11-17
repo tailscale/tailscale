@@ -99,7 +99,7 @@ func Test_conn_Read(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := zl.Sugar()
+			log := zl.Sugar()
 			tc := &fakes.TestConn{}
 			sr := &fakes.TestSessionRecorder{}
 			rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
@@ -110,7 +110,7 @@ func Test_conn_Read(t *testing.T) {
 			c := &conn{
 				ctx:                   ctx,
 				Conn:                  tc,
-				log:                   l,
+				log:                   log,
 				hasTerm:               true,
 				initialCastHeaderSent: make(chan struct{}),
 				rec:                   rec,

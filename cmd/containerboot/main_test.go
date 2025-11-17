@@ -1287,8 +1287,8 @@ type localAPI struct {
 	notify *ipn.Notify
 }
 
-func (l *localAPI) Start() error {
-	path := filepath.Join(l.FSRoot, "tmp/tailscaled.sock.fake")
+func (lc *localAPI) Start() error {
+	path := filepath.Join(lc.FSRoot, "tmp/tailscaled.sock.fake")
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -1298,30 +1298,30 @@ func (l *localAPI) Start() error {
 		return err
 	}
 
-	l.srv = &http.Server{
-		Handler: l,
+	lc.srv = &http.Server{
+		Handler: lc,
 	}
-	l.Path = path
-	l.cond = sync.NewCond(&l.Mutex)
-	go l.srv.Serve(ln)
+	lc.Path = path
+	lc.cond = sync.NewCond(&lc.Mutex)
+	go lc.srv.Serve(ln)
 	return nil
 }
 
-func (l *localAPI) Close() {
-	l.srv.Close()
+func (lc *localAPI) Close() {
+	lc.srv.Close()
 }
 
-func (l *localAPI) Notify(n *ipn.Notify) {
+func (lc *localAPI) Notify(n *ipn.Notify) {
 	if n == nil {
 		return
 	}
-	l.Lock()
-	defer l.Unlock()
-	l.notify = n
-	l.cond.Broadcast()
+	lc.Lock()
+	defer lc.Unlock()
+	lc.notify = n
+	lc.cond.Broadcast()
 }
 
-func (l *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (lc *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/localapi/v0/serve-config":
 		if r.Method != "POST" {
@@ -1348,11 +1348,11 @@ func (l *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.Flush()
 	}
 	enc := json.NewEncoder(w)
-	l.Lock()
-	defer l.Unlock()
+	lc.Lock()
+	defer lc.Unlock()
 	for {
-		if l.notify != nil {
-			if err := enc.Encode(l.notify); err != nil {
+		if lc.notify != nil {
+			if err := enc.Encode(lc.notify); err != nil {
 				// Usually broken pipe as the test client disconnects.
 				return
 			}
@@ -1360,7 +1360,7 @@ func (l *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				f.Flush()
 			}
 		}
-		l.cond.Wait()
+		lc.cond.Wait()
 	}
 }
 

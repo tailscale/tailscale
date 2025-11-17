@@ -1021,11 +1021,11 @@ func promMetricLabelsStr(labels []*dto.LabelPair) string {
 	}
 	var b strings.Builder
 	b.WriteString("{")
-	for i, l := range labels {
+	for i, lb := range labels {
 		if i > 0 {
 			b.WriteString(",")
 		}
-		b.WriteString(fmt.Sprintf("%s=%q", l.GetName(), l.GetValue()))
+		b.WriteString(fmt.Sprintf("%s=%q", lb.GetName(), lb.GetValue()))
 	}
 	b.WriteString("}")
 	return b.String()
@@ -1033,8 +1033,8 @@ func promMetricLabelsStr(labels []*dto.LabelPair) string {
 
 // sendData sends a given amount of bytes from s1 to s2.
 func sendData(logf func(format string, args ...any), ctx context.Context, bytesCount int, s1, s2 *Server, s1ip, s2ip netip.Addr) error {
-	l := must.Get(s1.Listen("tcp", fmt.Sprintf("%s:8081", s1ip)))
-	defer l.Close()
+	lb := must.Get(s1.Listen("tcp", fmt.Sprintf("%s:8081", s1ip)))
+	defer lb.Close()
 
 	// Dial to s1 from s2
 	w, err := s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip))
@@ -1049,7 +1049,7 @@ func sendData(logf func(format string, args ...any), ctx context.Context, bytesC
 	defer close(allReceived)
 
 	go func() {
-		conn, err := l.Accept()
+		conn, err := lb.Accept()
 		if err != nil {
 			allReceived <- err
 			return

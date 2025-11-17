@@ -487,31 +487,31 @@ func TestItemView(t *testing.T) {
 }
 
 func TestListView(t *testing.T) {
-	l := ListOf([]int{4, 8, 15, 16, 23, 42}, ReadOnly)
+	ls := ListOf([]int{4, 8, 15, 16, 23, 42}, ReadOnly)
 
-	lv := l.View()
+	lv := ls.View()
 	checkIsSet(t, lv, true)
 	checkIsManaged(t, lv, false)
 	checkIsReadOnly(t, lv, true)
-	checkValue(t, lv, views.SliceOf(l.Value()))
-	checkValueOk(t, lv, views.SliceOf(l.Value()), true)
+	checkValue(t, lv, views.SliceOf(ls.Value()))
+	checkValueOk(t, lv, views.SliceOf(ls.Value()), true)
 
 	l2 := *lv.AsStruct()
-	checkEqual(t, l, l2, true)
+	checkEqual(t, ls, l2, true)
 }
 
 func TestStructListView(t *testing.T) {
-	l := StructListOf([]*TestBundle{{Name: "E1"}, {Name: "E2"}}, ReadOnly)
+	ls := StructListOf([]*TestBundle{{Name: "E1"}, {Name: "E2"}}, ReadOnly)
 
-	lv := StructListViewOf(&l)
+	lv := StructListViewOf(&ls)
 	checkIsSet(t, lv, true)
 	checkIsManaged(t, lv, false)
 	checkIsReadOnly(t, lv, true)
-	checkValue(t, lv, views.SliceOfViews(l.Value()))
-	checkValueOk(t, lv, views.SliceOfViews(l.Value()), true)
+	checkValue(t, lv, views.SliceOfViews(ls.Value()))
+	checkValueOk(t, lv, views.SliceOfViews(ls.Value()), true)
 
 	l2 := *lv.AsStruct()
-	checkEqual(t, l, l2, true)
+	checkEqual(t, ls, l2, true)
 }
 
 func TestStructMapView(t *testing.T) {

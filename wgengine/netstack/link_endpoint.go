@@ -126,24 +126,24 @@ func newLinkEndpoint(size int, mtu uint32, linkAddr tcpip.LinkAddress, supported
 	return le
 }
 
-// gro attempts to enqueue p on g if l supports a GRO kind matching the
+// gro attempts to enqueue p on g if ep supports a GRO kind matching the
 // transport protocol carried in p. gro may allocate g if it is nil. gro can
 // either return the existing g, a newly allocated one, or nil. Callers are
 // responsible for calling Flush() on the returned value if it is non-nil once
 // they have finished iterating through all GRO candidates for a given vector.
-// If gro allocates a *gro.GRO it will have l's stack.NetworkDispatcher set via
+// If gro allocates a *gro.GRO it will have ep's stack.NetworkDispatcher set via
 // SetDispatcher().
-func (l *linkEndpoint) gro(p *packet.Parsed, g *gro.GRO) *gro.GRO {
-	if !buildfeatures.HasGRO || l.supportedGRO == groNotSupported || p.IPProto != ipproto.TCP {
+func (ep *linkEndpoint) gro(p *packet.Parsed, g *gro.GRO) *gro.GRO {
+	if !buildfeatures.HasGRO || ep.supportedGRO == groNotSupported || p.IPProto != ipproto.TCP {
 		// IPv6 may have extension headers preceding a TCP header, but we trade
 		// for a fast path and assume p cannot be coalesced in such a case.
-		l.injectInbound(p)
+		ep.injectInbound(p)
 		return g
 	}
 	if g == nil {
-		l.mu.RLock()
-		d := l.dispatcher
-		l.mu.RUnlock()
+		ep.mu.RLock()
+		d := ep.dispatcher
+		ep.mu.RUnlock()
 		g = gro.NewGRO()
 		g.SetDispatcher(d)
 	}
@@ -154,39 +154,39 @@ func (l *linkEndpoint) gro(p *packet.Parsed, g *gro.GRO) *gro.GRO {
 // Close closes l. Further packet injections will return an error, and all
 // pending packets are discarded. Close may be called concurrently with
 // WritePackets.
-func (l *linkEndpoint) Close() {
-	l.mu.Lock()
-	l.dispatcher = nil
-	l.mu.Unlock()
-	l.q.Close()
-	l.Drain()
+func (ep *linkEndpoint) Close() {
+	ep.mu.Lock()
+	ep.dispatcher = nil
+	ep.mu.Unlock()
+	ep.q.Close()
+	ep.Drain()
 }
 
 // Read does non-blocking read one packet from the outbound packet queue.
-func (l *linkEndpoint) Read() *stack.PacketBuffer {
-	return l.q.Read()
+func (ep *linkEndpoint) Read() *stack.PacketBuffer {
+	return ep.q.Read()
 }
 
 // ReadContext does blocking read for one packet from the outbound packet queue.
 // It can be cancelled by ctx, and in this case, it returns nil.
-func (l *linkEndpoint) ReadContext(ctx context.Context) *stack.PacketBuffer {
-	return l.q.ReadContext(ctx)
+func (ep *linkEndpoint) ReadContext(ctx context.Context) *stack.PacketBuffer {
+	return ep.q.ReadContext(ctx)
 }
 
 // Drain removes all outbound packets from the channel and counts them.
-func (l *linkEndpoint) Drain() int {
-	return l.q.Drain()
+func (ep *linkEndpoint) Drain() int {
+	return ep.q.Drain()
 }
 
 // NumQueued returns the number of packets queued for outbound.
-func (l *linkEndpoint) NumQueued() int {
-	return l.q.Num()
+func (ep *linkEndpoint) NumQueued() int {
+	return ep.q.Num()
 }
 
-func (l *linkEndpoint) injectInbound(p *packet.Parsed) {
-	l.mu.RLock()
-	d := l.dispatcher
-	l.mu.RUnlock()
+func (ep *linkEndpoint) injectInbound(p *packet.Parsed) {
+	ep.mu.RLock()
+	d := ep.dispatcher
+	ep.mu.RUnlock()
 	if d == nil || !buildfeatures.HasNetstack {
 		return
 	}
@@ -200,35 +200,35 @@ func (l *linkEndpoint) injectInbound(p *packet.Parsed) {
 
 // Attach saves the stack network-layer dispatcher for use later when packets
 // are injected.
-func (l *linkEndpoint) Attach(dispatcher stack.NetworkDispatcher) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.dispatcher = dispatcher
+func (ep *linkEndpoint) Attach(dispatcher stack.NetworkDispatcher) {
+	ep.mu.Lock()
+	defer ep.mu.Unlock()
+	ep.dispatcher = dispatcher
 }
 
 // IsAttached implements stack.LinkEndpoint.IsAttached.
-func (l *linkEndpoint) IsAttached() bool {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return l.dispatcher != nil
+func (ep *linkEndpoint) IsAttached() bool {
+	ep.mu.RLock()
+	defer ep.mu.RUnlock()
+	return ep.dispatcher != nil
 }
 
 // MTU implements stack.LinkEndpoint.MTU.
-func (l *linkEndpoint) MTU() uint32 {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return l.mtu
+func (ep *linkEndpoint) MTU() uint32 {
+	ep.mu.RLock()
+	defer ep.mu.RUnlock()
+	return ep.mtu
 }
 
 // SetMTU implements stack.LinkEndpoint.SetMTU.
-func (l *linkEndpoint) SetMTU(mtu uint32) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.mtu = mtu
+func (ep *linkEndpoint) SetMTU(mtu uint32) {
+	ep.mu.Lock()
+	defer ep.mu.Unlock()
+	ep.mtu = mtu
 }
 
 // Capabilities implements stack.LinkEndpoint.Capabilities.
-func (l *linkEndpoint) Capabilities() stack.LinkEndpointCapabilities {
+func (ep *linkEndpoint) Capabilities() stack.LinkEndpointCapabilities {
 	// We are required to offload RX checksum validation for the purposes of
 	// GRO.
 	return stack.CapabilityRXChecksumOffload
@@ -242,8 +242,8 @@ func (*linkEndpoint) GSOMaxSize() uint32 {
 }
 
 // SupportedGSO implements stack.GSOEndpoint.
-func (l *linkEndpoint) SupportedGSO() stack.SupportedGSO {
-	return l.SupportedGSOKind
+func (ep *linkEndpoint) SupportedGSO() stack.SupportedGSO {
+	return ep.SupportedGSOKind
 }
 
 // MaxHeaderLength returns the maximum size of the link layer header. Given it
@@ -253,22 +253,22 @@ func (*linkEndpoint) MaxHeaderLength() uint16 {
 }
 
 // LinkAddress returns the link address of this endpoint.
-func (l *linkEndpoint) LinkAddress() tcpip.LinkAddress {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return l.linkAddr
+func (ep *linkEndpoint) LinkAddress() tcpip.LinkAddress {
+	ep.mu.RLock()
+	defer ep.mu.RUnlock()
+	return ep.linkAddr
 }
 
 // SetLinkAddress implements stack.LinkEndpoint.SetLinkAddress.
-func (l *linkEndpoint) SetLinkAddress(addr tcpip.LinkAddress) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.linkAddr = addr
+func (ep *linkEndpoint) SetLinkAddress(addr tcpip.LinkAddress) {
+	ep.mu.Lock()
+	defer ep.mu.Unlock()
+	ep.linkAddr = addr
 }
 
 // WritePackets stores outbound packets into the channel.
 // Multiple concurrent calls are permitted.
-func (l *linkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Error) {
+func (ep *linkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Error) {
 	n := 0
 	// TODO(jwhited): evaluate writing a stack.PacketBufferList instead of a
 	//  single packet. We can split 2 x 64K GSO across
@@ -278,7 +278,7 @@ func (l *linkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Err
 	//  control MTU (and by effect TCP MSS in gVisor) we *shouldn't* expect to
 	//  ever overflow 128 slots (see wireguard-go/tun.ErrTooManySegments usage).
 	for _, pkt := range pkts.AsSlice() {
-		if err := l.q.Write(pkt); err != nil {
+		if err := ep.q.Write(pkt); err != nil {
 			if _, ok := err.(*tcpip.ErrNoBufferSpace); !ok && n == 0 {
 				return 0, err
 			}

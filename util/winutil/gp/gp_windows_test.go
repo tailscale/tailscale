@@ -182,16 +182,16 @@ func doWithMachinePolicyLocked(t *testing.T, f func()) {
 	f()
 }
 
-func doWithCustomEnterLeaveFuncs(t *testing.T, f func(l *PolicyLock), enter func(bool) (policyLockHandle, error), leave func(policyLockHandle) error) {
+func doWithCustomEnterLeaveFuncs(t *testing.T, f func(*PolicyLock), enter func(bool) (policyLockHandle, error), leave func(policyLockHandle) error) {
 	t.Helper()
 
-	l := NewMachinePolicyLock()
-	l.enterFn, l.leaveFn = enter, leave
+	lock := NewMachinePolicyLock()
+	lock.enterFn, lock.leaveFn = enter, leave
 	t.Cleanup(func() {
-		if err := l.Close(); err != nil {
+		if err := lock.Close(); err != nil {
 			t.Fatalf("(*PolicyLock).Close failed: %v", err)
 		}
 	})
 
-	f(l)
+	f(lock)
 }

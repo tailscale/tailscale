@@ -34,7 +34,7 @@ func FromStdIPNet(std *net.IPNet) (prefix netip.Prefix, ok bool) {
 	}
 	ip = ip.Unmap()
 
-	if l := len(std.Mask); l != net.IPv4len && l != net.IPv6len {
+	if ln := len(std.Mask); ln != net.IPv4len && ln != net.IPv6len {
 		// Invalid mask.
 		return netip.Prefix{}, false
 	}

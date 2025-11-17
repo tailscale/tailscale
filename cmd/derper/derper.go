@@ -481,32 +481,32 @@ func newRateLimitedListener(ln net.Listener, limit rate.Limit, burst int) *rateL
 	return &rateLimitedListener{Listener: ln, lim: rate.NewLimiter(limit, burst)}
 }
 
-func (l *rateLimitedListener) ExpVar() expvar.Var {
+func (ln *rateLimitedListener) ExpVar() expvar.Var {
 	m := new(metrics.Set)
-	m.Set("counter_accepted_connections", &l.numAccepts)
-	m.Set("counter_rejected_connections", &l.numRejects)
+	m.Set("counter_accepted_connections", &ln.numAccepts)
+	m.Set("counter_rejected_connections", &ln.numRejects)
 	return m
 }
 
 var errLimitedConn = errors.New("cannot accept connection; rate limited")
 
-func (l *rateLimitedListener) Accept() (net.Conn, error) {
+func (ln *rateLimitedListener) Accept() (net.Conn, error) {
 	// Even under a rate limited situation, we accept the connection immediately
 	// and close it, rather than being slow at accepting new connections.
 	// This provides two benefits: 1) it signals to the client that something
 	// is going on on the server, and 2) it prevents new connections from
 	// piling up and occupying resources in the OS kernel.
 	// The client will retry as needing (with backoffs in place).
-	cn, err := l.Listener.Accept()
+	cn, err := ln.Listener.Accept()
 	if err != nil {
 		return nil, err
 	}
-	if !l.lim.Allow() {
-		l.numRejects.Add(1)
+	if !ln.lim.Allow() {
+		ln.numRejects.Add(1)
 		cn.Close()
 		return nil, errLimitedConn
 	}
-	l.numAccepts.Add(1)
+	ln.numAccepts.Add(1)
 	return cn, nil
 }
 

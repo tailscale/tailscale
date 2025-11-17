@@ -127,32 +127,32 @@ func NewUserPolicyLock(token windows.Token) (*PolicyLock, error) {
 	return lock, nil
 }
 
-// Lock locks l.
-// It returns [ErrInvalidLockState] if l has a zero value or has already been closed,
+// Lock locks lk.
+// It returns [ErrInvalidLockState] if lk has a zero value or has already been closed,
 // [ErrLockRestricted] if the lock cannot be acquired due to a restriction in place,
 // or a [syscall.Errno] if the underlying Group Policy lock cannot be acquired.
 //
 // As a special case, it fails with [windows.ERROR_ACCESS_DENIED]
-// if l is a user policy lock, and the corresponding user is not logged in
+// if lk is a user policy lock, and the corresponding user is not logged in
 // interactively at the time of the call.
-func (l *PolicyLock) Lock() error {
+func (lk *PolicyLock) Lock() error {
 	if policyLockRestricted.Load() > 0 {
 		return ErrLockRestricted
 	}
 
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.lockCnt.Add(2)&1 == 0 {
+	lk.mu.Lock()
+	defer lk.mu.Unlock()
+	if lk.lockCnt.Add(2)&1 == 0 {
 		// The lock cannot be acquired because it has either never been properly
 		// created or its Close method has already been called. However, we need
 		// to call Unlock to both decrement lockCnt and leave the underlying
 		// CriticalPolicySection if we won the race with another goroutine and
 		// now own the lock.
-		l.Unlock()
+		lk.Unlock()
 		return ErrInvalidLockState
 	}
 
-	if l.handle != 0 {
+	if lk.handle != 0 {
 		// The underlying CriticalPolicySection is already acquired.
 		// It is an R-Lock (with the W-counterpart owned by the Group Policy service),
 		// meaning that it can be acquired by multiple readers simultaneously.
@@ -160,20 +160,20 @@ func (l *PolicyLock) Lock() error {
 		return nil
 	}
 
-	return l.lockSlow()
+	return lk.lockSlow()
 }
 
 // lockSlow calls enterCriticalPolicySection to acquire the underlying GP read lock.
 // It waits for either the lock to be acquired, or for the Close method to be called.
 //
 // l.mu must be held.
-func (l *PolicyLock) lockSlow() (err error) {
+func (lk *PolicyLock) lockSlow() (err error) {
 	defer func() {
 		if err != nil {
 			// Decrement the counter if the lock cannot be acquired,
 			// and complete the pending close request if we're the last owner.
-			if l.lockCnt.Add(-2) == 0 {
-				l.closeInternal()
+			if lk.lockCnt.Add(-2) == 0 {
+				lk.closeInternal()
 			}
 		}
 	}()
@@ -190,12 +190,12 @@ func (l *PolicyLock) lockSlow() (err error) {
 	resultCh := make(chan policyLockResult)
 
 	go func() {
-		closing := l.closing
-		if l.scope == UserPolicy && l.token != 0 {
+		closing := lk.closing
+		if lk.scope == UserPolicy && lk.token != 0 {
 			// Impersonate the user whose critical policy section we want to acquire.
 			runtime.LockOSThread()
 			defer runtime.UnlockOSThread()
-			if err := impersonateLoggedOnUser(l.token); err != nil {
+			if err := impersonateLoggedOnUser(lk.token); err != nil {
 				initCh <- err
 				return
 			}
@@ -209,10 +209,10 @@ func (l *PolicyLock) lockSlow() (err error) {
 		close(initCh)
 
 		var machine bool
-		if l.scope == MachinePolicy {
+		if lk.scope == MachinePolicy {
 			machine = true
 		}
-		handle, err := l.enterFn(machine)
+		handle, err := lk.enterFn(machine)
 
 	send_result:
 		for {
@@ -226,7 +226,7 @@ func (l *PolicyLock) lockSlow() (err error) {
 					// The lock is being closed, and we lost the race to l.closing
 					// it the calling goroutine.
 					if err == nil {
-						l.leaveFn(handle)
+						lk.leaveFn(handle)
 					}
 					break send_result
 				default:
@@ -247,21 +247,21 @@ func (l *PolicyLock) lockSlow() (err error) {
 	select {
 	case result := <-resultCh:
 		if result.err == nil {
-			l.handle = result.handle
+			lk.handle = result.handle
 		}
 		return result.err
-	case <-l.closing:
+	case <-lk.closing:
 		return ErrInvalidLockState
 	}
 }
 
 // Unlock unlocks l.
 // It panics if l is not locked on entry to Unlock.
-func (l *PolicyLock) Unlock() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+func (lk *PolicyLock) Unlock() {
+	lk.mu.Lock()
+	defer lk.mu.Unlock()
 
-	lockCnt := l.lockCnt.Add(-2)
+	lockCnt := lk.lockCnt.Add(-2)
 	if lockCnt < 0 {
 		panic("negative lockCnt")
 	}
@@ -273,33 +273,33 @@ func (l *PolicyLock) Unlock() {
 		return
 	}
 
-	if l.handle != 0 {
+	if lk.handle != 0 {
 		// Impersonation is not required to unlock a critical policy section.
 		// The handle we pass determines which mutex will be unlocked.
-		leaveCriticalPolicySection(l.handle)
-		l.handle = 0
+		leaveCriticalPolicySection(lk.handle)
+		lk.handle = 0
 	}
 
 	if lockCnt == 0 {
 		// Complete the pending close request if there's no more readers.
-		l.closeInternal()
+		lk.closeInternal()
 	}
 }
 
 // Close releases resources associated with l.
 // It is a no-op for the machine policy lock.
-func (l *PolicyLock) Close() error {
-	lockCnt := l.lockCnt.Load()
+func (lk *PolicyLock) Close() error {
+	lockCnt := lk.lockCnt.Load()
 	if lockCnt&1 == 0 {
 		// The lock has never been initialized, or close has already been called.
 		return nil
 	}
 
-	close(l.closing)
+	close(lk.closing)
 
 	// Unset the LSB to indicate a pending close request.
-	for !l.lockCnt.CompareAndSwap(lockCnt, lockCnt&^int32(1)) {
-		lockCnt = l.lockCnt.Load()
+	for !lk.lockCnt.CompareAndSwap(lockCnt, lockCnt&^int32(1)) {
+		lockCnt = lk.lockCnt.Load()
 	}
 
 	if lockCnt != 0 {
@@ -307,16 +307,16 @@ func (l *PolicyLock) Close() error {
 		return nil
 	}
 
-	return l.closeInternal()
+	return lk.closeInternal()
 }
 
-func (l *PolicyLock) closeInternal() error {
-	if l.token != 0 {
-		if err := l.token.Close(); err != nil {
+func (lk *PolicyLock) closeInternal() error {
+	if lk.token != 0 {
+		if err := lk.token.Close(); err != nil {
 			return err
 		}
-		l.token = 0
+		lk.token = 0
 	}
-	l.closing = nil
+	lk.closing = nil
 	return nil
 }

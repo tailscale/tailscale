@@ -100,7 +100,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 	if !cfg.CopyPrivateID.IsZero() {
 		urlSuffix = "?copyId=" + cfg.CopyPrivateID.String()
 	}
-	l := &Logger{
+	logger := &Logger{
 		privateID:      cfg.PrivateID,
 		stderr:         cfg.Stderr,
 		stderrLevel:    int64(cfg.StderrLevel),
@@ -124,19 +124,19 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 	}
 
 	if cfg.Bus != nil {
-		l.eventClient = cfg.Bus.Client("logtail.Logger")
+		logger.eventClient = cfg.Bus.Client("logtail.Logger")
 		// Subscribe to change deltas from NetMon to detect when the network comes up.
-		eventbus.SubscribeFunc(l.eventClient, l.onChangeDelta)
+		eventbus.SubscribeFunc(logger.eventClient, logger.onChangeDelta)
 	}
-	l.SetSockstatsLabel(sockstats.LabelLogtailLogger)
-	l.compressLogs = cfg.CompressLogs
+	logger.SetSockstatsLabel(sockstats.LabelLogtailLogger)
+	logger.compressLogs = cfg.CompressLogs
 
 	ctx, cancel := context.WithCancel(context.Background())
-	l.uploadCancel = cancel
+	logger.uploadCancel = cancel
 
-	go l.uploading(ctx)
-	l.Write([]byte("logtail started"))
-	return l
+	go logger.uploading(ctx)
+	logger.Write([]byte("logtail started"))
+	return logger
 }
 
 // Logger writes logs, splitting them as configured between local
@@ -190,27 +190,27 @@ func (p *atomicSocktatsLabel) Store(label sockstats.Label) { p.p.Store(uint32(la
 // SetVerbosityLevel controls the verbosity level that should be
 // written to stderr. 0 is the default (not verbose). Levels 1 or higher
 // are increasingly verbose.
-func (l *Logger) SetVerbosityLevel(level int) {
-	atomic.StoreInt64(&l.stderrLevel, int64(level))
+func (lg *Logger) SetVerbosityLevel(level int) {
+	atomic.StoreInt64(&lg.stderrLevel, int64(level))
 }
 
 // SetNetMon sets the network monitor.
 //
 // It should not be changed concurrently with log writes and should
 // only be set once.
-func (l *Logger) SetNetMon(lm *netmon.Monitor) {
-	l.netMonitor = lm
+func (lg *Logger) SetNetMon(lm *netmon.Monitor) {
+	lg.netMonitor = lm
 }
 
 // SetSockstatsLabel sets the label used in sockstat logs to identify network traffic from this logger.
-func (l *Logger) SetSockstatsLabel(label sockstats.Label) {
-	l.sockstatsLabel.Store(label)
+func (lg *Logger) SetSockstatsLabel(label sockstats.Label) {
+	lg.sockstatsLabel.Store(label)
 }
 
 // PrivateID returns the logger's private log ID.
 //
 // It exists for internal use only.
-func (l *Logger) PrivateID() logid.PrivateID { return l.privateID }
+func (lg *Logger) PrivateID() logid.PrivateID { return lg.privateID }
 
 // Shutdown gracefully shuts down the logger while completing any
 // remaining uploads.
@@ -218,33 +218,33 @@ func (l *Logger) PrivateID() logid.PrivateID { return l.privateID }
 // It will block, continuing to try and upload unless the passed
 // context object interrupts it by being done.
 // If the shutdown is interrupted, an error is returned.
-func (l *Logger) Shutdown(ctx context.Context) error {
+func (lg *Logger) Shutdown(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
-			l.uploadCancel()
-			<-l.shutdownDone
-		case <-l.shutdownDone:
+			lg.uploadCancel()
+			<-lg.shutdownDone
+		case <-lg.shutdownDone:
 		}
 		close(done)
-		l.httpc.CloseIdleConnections()
+		lg.httpc.CloseIdleConnections()
 	}()
 
-	if l.eventClient != nil {
-		l.eventClient.Close()
+	if lg.eventClient != nil {
+		lg.eventClient.Close()
 	}
-	l.shutdownStartMu.Lock()
+	lg.shutdownStartMu.Lock()
 	select {
-	case <-l.shutdownStart:
-		l.shutdownStartMu.Unlock()
+	case <-lg.shutdownStart:
+		lg.shutdownStartMu.Unlock()
 		return nil
 	default:
 	}
-	close(l.shutdownStart)
-	l.shutdownStartMu.Unlock()
+	close(lg.shutdownStart)
+	lg.shutdownStartMu.Unlock()
 
-	io.WriteString(l, "logger closing down\n")
+	io.WriteString(lg, "logger closing down\n")
 	<-done
 
 	return nil
@@ -254,8 +254,8 @@ func (l *Logger) Shutdown(ctx context.Context) error {
 // process, and any associated goroutines.
 //
 // Deprecated: use Shutdown
-func (l *Logger) Close() {
-	l.Shutdown(context.Background())
+func (lg *Logger) Close() {
+	lg.Shutdown(context.Background())
 }
 
 // drainBlock is called by drainPending when there are no logs to drain.
@@ -265,11 +265,11 @@ func (l *Logger) Close() {
 //
 // If the caller specified FlushInterface, drainWake is only sent to
 // periodically.
-func (l *Logger) drainBlock() (shuttingDown bool) {
+func (lg *Logger) drainBlock() (shuttingDown bool) {
 	select {
-	case <-l.shutdownStart:
+	case <-lg.shutdownStart:
 		return true
-	case <-l.drainWake:
+	case <-lg.drainWake:
 	}
 	return false
 }
@@ -277,20 +277,20 @@ func (l *Logger) drainBlock() (shuttingDown bool) {
 // drainPending drains and encodes a batch of logs from the buffer for upload.
 // If no logs are available, drainPending blocks until logs are available.
 // The returned buffer is only valid until the next call to drainPending.
-func (l *Logger) drainPending() (b []byte) {
-	b = l.drainBuf[:0]
+func (lg *Logger) drainPending() (b []byte) {
+	b = lg.drainBuf[:0]
 	b = append(b, '[')
 	defer func() {
 		b = bytes.TrimRight(b, ",")
 		b = append(b, ']')
-		l.drainBuf = b
+		lg.drainBuf = b
 		if len(b) <= len("[]") {
 			b = nil
 		}
 	}()
 
-	maxLen := cmp.Or(l.maxUploadSize, maxSize)
-	if l.lowMem {
+	maxLen := cmp.Or(lg.maxUploadSize, maxSize)
+	if lg.lowMem {
 		// When operating in a low memory environment, it is better to upload
 		// in multiple operations than it is to allocate a large body and OOM.
 		// Even if maxLen is less than maxSize, we can still upload an entry
@@ -298,13 +298,13 @@ func (l *Logger) drainPending() (b []byte) {
 		maxLen /= lowMemRatio
 	}
 	for len(b) < maxLen {
-		line, err := l.buffer.TryReadLine()
+		line, err := lg.buffer.TryReadLine()
 		switch {
 		case err == io.EOF:
 			return b
 		case err != nil:
 			b = append(b, '{')
-			b = l.appendMetadata(b, false, true, 0, 0, "reading ringbuffer: "+err.Error(), nil, 0)
+			b = lg.appendMetadata(b, false, true, 0, 0, "reading ringbuffer: "+err.Error(), nil, 0)
 			b = bytes.TrimRight(b, ",")
 			b = append(b, '}')
 			return b
@@ -318,10 +318,10 @@ func (l *Logger) drainPending() (b []byte) {
 			// in our buffer from a previous large write, let it go.
 			if cap(b) > bufferSize {
 				b = bytes.Clone(b)
-				l.drainBuf = b
+				lg.drainBuf = b
 			}
 
-			if shuttingDown := l.drainBlock(); shuttingDown {
+			if shuttingDown := lg.drainBlock(); shuttingDown {
 				return b
 			}
 			continue
@@ -338,18 +338,18 @@ func (l *Logger) drainPending() (b []byte) {
 		default:
 			// This is probably a log added to stderr by filch
 			// outside of the logtail logger. Encode it.
-			if !l.explainedRaw {
-				fmt.Fprintf(l.stderr, "RAW-STDERR: ***\n")
-				fmt.Fprintf(l.stderr, "RAW-STDERR: *** Lines prefixed with RAW-STDERR below bypassed logtail and probably come from a previous run of the program\n")
-				fmt.Fprintf(l.stderr, "RAW-STDERR: ***\n")
-				fmt.Fprintf(l.stderr, "RAW-STDERR:\n")
-				l.explainedRaw = true
+			if !lg.explainedRaw {
+				fmt.Fprintf(lg.stderr, "RAW-STDERR: ***\n")
+				fmt.Fprintf(lg.stderr, "RAW-STDERR: *** Lines prefixed with RAW-STDERR below bypassed logtail and probably come from a previous run of the program\n")
+				fmt.Fprintf(lg.stderr, "RAW-STDERR: ***\n")
+				fmt.Fprintf(lg.stderr, "RAW-STDERR:\n")
+				lg.explainedRaw = true
 			}
-			fmt.Fprintf(l.stderr, "RAW-STDERR: %s", b)
+			fmt.Fprintf(lg.stderr, "RAW-STDERR: %s", b)
 			// Do not add a client time, as it could be really old.
 			// Do not include instance key or ID either,
 			// since this came from a different instance.
-			b = l.appendText(b, line, true, 0, 0, 0)
+			b = lg.appendText(b, line, true, 0, 0, 0)
 		}
 		b = append(b, ',')
 	}
@@ -357,14 +357,14 @@ func (l *Logger) drainPending() (b []byte) {
 }
 
 // This is the goroutine that repeatedly uploads logs in the background.
-func (l *Logger) uploading(ctx context.Context) {
-	defer close(l.shutdownDone)
+func (lg *Logger) uploading(ctx context.Context) {
+	defer close(lg.shutdownDone)
 
 	for {
-		body := l.drainPending()
+		body := lg.drainPending()
 		origlen := -1 // sentinel value: uncompressed
 		// Don't attempt to compress tiny bodies; not worth the CPU cycles.
-		if l.compressLogs && len(body) > 256 {
+		if lg.compressLogs && len(body) > 256 {
 			zbody := zstdframe.AppendEncode(nil, body,
 				zstdframe.FastestCompression, zstdframe.LowMemory(true))
 
@@ -381,20 +381,20 @@ func (l *Logger) uploading(ctx context.Context) {
 		var numFailures int
 		var firstFailure time.Time
 		for len(body) > 0 && ctx.Err() == nil {
-			retryAfter, err := l.upload(ctx, body, origlen)
+			retryAfter, err := lg.upload(ctx, body, origlen)
 			if err != nil {
 				numFailures++
-				firstFailure = l.clock.Now()
+				firstFailure = lg.clock.Now()
 
-				if !l.internetUp() {
-					fmt.Fprintf(l.stderr, "logtail: internet down; waiting\n")
-					l.awaitInternetUp(ctx)
+				if !lg.internetUp() {
+					fmt.Fprintf(lg.stderr, "logtail: internet down; waiting\n")
+					lg.awaitInternetUp(ctx)
 					continue
 				}
 
 				// Only print the same message once.
 				if currError := err.Error(); lastError != currError {
-					fmt.Fprintf(l.stderr, "logtail: upload: %v\n", err)
+					fmt.Fprintf(lg.stderr, "logtail: upload: %v\n", err)
 					lastError = currError
 				}
 
@@ -407,55 +407,55 @@ func (l *Logger) uploading(ctx context.Context) {
 			} else {
 				// Only print a success message after recovery.
 				if numFailures > 0 {
-					fmt.Fprintf(l.stderr, "logtail: upload succeeded after %d failures and %s\n", numFailures, l.clock.Since(firstFailure).Round(time.Second))
+					fmt.Fprintf(lg.stderr, "logtail: upload succeeded after %d failures and %s\n", numFailures, lg.clock.Since(firstFailure).Round(time.Second))
 				}
 				break
 			}
 		}
 
 		select {
-		case <-l.shutdownStart:
+		case <-lg.shutdownStart:
 			return
 		default:
 		}
 	}
 }
 
-func (l *Logger) internetUp() bool {
+func (lg *Logger) internetUp() bool {
 	select {
-	case <-l.networkIsUp.Ready():
+	case <-lg.networkIsUp.Ready():
 		return true
 	default:
-		if l.netMonitor == nil {
+		if lg.netMonitor == nil {
 			return true // No way to tell, so assume it is.
 		}
-		return l.netMonitor.InterfaceState().AnyInterfaceUp()
+		return lg.netMonitor.InterfaceState().AnyInterfaceUp()
 	}
 }
 
 // onChangeDelta is an eventbus subscriber function that handles
 // [netmon.ChangeDelta] events to detect whether the Internet is expected to be
 // reachable.
-func (l *Logger) onChangeDelta(delta *netmon.ChangeDelta) {
+func (lg *Logger) onChangeDelta(delta *netmon.ChangeDelta) {
 	if delta.New.AnyInterfaceUp() {
-		fmt.Fprintf(l.stderr, "logtail: internet back up\n")
-		l.networkIsUp.Set()
+		fmt.Fprintf(lg.stderr, "logtail: internet back up\n")
+		lg.networkIsUp.Set()
 	} else {
-		fmt.Fprintf(l.stderr, "logtail: network changed, but is not up\n")
-		l.networkIsUp.Reset()
+		fmt.Fprintf(lg.stderr, "logtail: network changed, but is not up\n")
+		lg.networkIsUp.Reset()
 	}
 }
 
-func (l *Logger) awaitInternetUp(ctx context.Context) {
-	if l.eventClient != nil {
+func (lg *Logger) awaitInternetUp(ctx context.Context) {
+	if lg.eventClient != nil {
 		select {
-		case <-l.networkIsUp.Ready():
+		case <-lg.networkIsUp.Ready():
 		case <-ctx.Done():
 		}
 		return
 	}
 	upc := make(chan bool, 1)
-	defer l.netMonitor.RegisterChangeCallback(func(delta *netmon.ChangeDelta) {
+	defer lg.netMonitor.RegisterChangeCallback(func(delta *netmon.ChangeDelta) {
 		if delta.New.AnyInterfaceUp() {
 			select {
 			case upc <- true:
@@ -463,12 +463,12 @@ func (l *Logger) awaitInternetUp(ctx context.Context) {
 			}
 		}
 	})()
-	if l.internetUp() {
+	if lg.internetUp() {
 		return
 	}
 	select {
 	case <-upc:
-		fmt.Fprintf(l.stderr, "logtail: internet back up\n")
+		fmt.Fprintf(lg.stderr, "logtail: internet back up\n")
 	case <-ctx.Done():
 	}
 }
@@ -476,13 +476,13 @@ func (l *Logger) awaitInternetUp(ctx context.Context) {
 // upload uploads body to the log server.
 // origlen indicates the pre-compression body length.
 // origlen of -1 indicates that the body is not compressed.
-func (l *Logger) upload(ctx context.Context, body []byte, origlen int) (retryAfter time.Duration, err error) {
+func (lg *Logger) upload(ctx context.Context, body []byte, origlen int) (retryAfter time.Duration, err error) {
 	const maxUploadTime = 45 * time.Second
-	ctx = sockstats.WithSockStats(ctx, l.sockstatsLabel.Load(), l.Logf)
+	ctx = sockstats.WithSockStats(ctx, lg.sockstatsLabel.Load(), lg.Logf)
 	ctx, cancel := context.WithTimeout(ctx, maxUploadTime)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", l.url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", lg.url, bytes.NewReader(body))
 	if err != nil {
 		// I know of no conditions under which this could fail.
 		// Report it very loudly.
@@ -513,8 +513,8 @@ func (l *Logger) upload(ctx context.Context, body []byte, origlen int) (retryAft
 		compressedNote = "compressed"
 	}
 
-	l.httpDoCalls.Add(1)
-	resp, err := l.httpc.Do(req)
+	lg.httpDoCalls.Add(1)
+	resp, err := lg.httpc.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("log upload of %d bytes %s failed: %v", len(body), compressedNote, err)
 	}
@@ -533,16 +533,16 @@ func (l *Logger) upload(ctx context.Context, body []byte, origlen int) (retryAft
 //
 // TODO(bradfitz): this apparently just returns nil, as of tailscale/corp@9c2ec35.
 // Finish cleaning this up.
-func (l *Logger) Flush() error {
+func (lg *Logger) Flush() error {
 	return nil
 }
 
 // StartFlush starts a log upload, if anything is pending.
 //
 // If l is nil, StartFlush is a no-op.
-func (l *Logger) StartFlush() {
-	if l != nil {
-		l.tryDrainWake()
+func (lg *Logger) StartFlush() {
+	if lg != nil {
+		lg.tryDrainWake()
 	}
 }
 
@@ -558,41 +558,41 @@ var debugWakesAndUploads = envknob.RegisterBool("TS_DEBUG_LOGTAIL_WAKES")
 
 // tryDrainWake tries to send to lg.drainWake, to cause an uploading wakeup.
 // It does not block.
-func (l *Logger) tryDrainWake() {
-	l.flushPending.Store(false)
+func (lg *Logger) tryDrainWake() {
+	lg.flushPending.Store(false)
 	if debugWakesAndUploads() {
 		// Using println instead of log.Printf here to avoid recursing back into
 		// ourselves.
-		println("logtail: try drain wake, numHTTP:", l.httpDoCalls.Load())
+		println("logtail: try drain wake, numHTTP:", lg.httpDoCalls.Load())
 	}
 	select {
-	case l.drainWake <- struct{}{}:
+	case lg.drainWake <- struct{}{}:
 	default:
 	}
 }
 
-func (l *Logger) sendLocked(jsonBlob []byte) (int, error) {
+func (lg *Logger) sendLocked(jsonBlob []byte) (int, error) {
 	tapSend(jsonBlob)
 	if logtailDisabled.Load() {
 		return len(jsonBlob), nil
 	}
 
-	n, err := l.buffer.Write(jsonBlob)
+	n, err := lg.buffer.Write(jsonBlob)
 
 	flushDelay := defaultFlushDelay
-	if l.flushDelayFn != nil {
-		flushDelay = l.flushDelayFn()
+	if lg.flushDelayFn != nil {
+		flushDelay = lg.flushDelayFn()
 	}
 	if flushDelay > 0 {
-		if l.flushPending.CompareAndSwap(false, true) {
-			if l.flushTimer == nil {
-				l.flushTimer = l.clock.AfterFunc(flushDelay, l.tryDrainWake)
+		if lg.flushPending.CompareAndSwap(false, true) {
+			if lg.flushTimer == nil {
+				lg.flushTimer = lg.clock.AfterFunc(flushDelay, lg.tryDrainWake)
 			} else {
-				l.flushTimer.Reset(flushDelay)
+				lg.flushTimer.Reset(flushDelay)
 			}
 		}
 	} else {
-		l.tryDrainWake()
+		lg.tryDrainWake()
 	}
 	return n, err
 }
@@ -600,13 +600,13 @@ func (l *Logger) sendLocked(jsonBlob []byte) (int, error) {
 // appendMetadata appends optional "logtail", "metrics", and "v" JSON members.
 // This assumes dst is already within a JSON object.
 // Each member is comma-terminated.
-func (l *Logger) appendMetadata(dst []byte, skipClientTime, skipMetrics bool, procID uint32, procSequence uint64, errDetail string, errData jsontext.Value, level int) []byte {
+func (lg *Logger) appendMetadata(dst []byte, skipClientTime, skipMetrics bool, procID uint32, procSequence uint64, errDetail string, errData jsontext.Value, level int) []byte {
 	// Append optional logtail metadata.
 	if !skipClientTime || procID != 0 || procSequence != 0 || errDetail != "" || errData != nil {
 		dst = append(dst, `"logtail":{`...)
 		if !skipClientTime {
 			dst = append(dst, `"client_time":"`...)
-			dst = l.clock.Now().UTC().AppendFormat(dst, time.RFC3339Nano)
+			dst = lg.clock.Now().UTC().AppendFormat(dst, time.RFC3339Nano)
 			dst = append(dst, '"', ',')
 		}
 		if procID != 0 {
@@ -639,8 +639,8 @@ func (l *Logger) appendMetadata(dst []byte, skipClientTime, skipMetrics bool, pr
 	}
 
 	// Append optional metrics metadata.
-	if !skipMetrics && l.metricsDelta != nil {
-		if d := l.metricsDelta(); d != "" {
+	if !skipMetrics && lg.metricsDelta != nil {
+		if d := lg.metricsDelta(); d != "" {
 			dst = append(dst, `"metrics":"`...)
 			dst = append(dst, d...)
 			dst = append(dst, '"', ',')
@@ -660,10 +660,10 @@ func (l *Logger) appendMetadata(dst []byte, skipClientTime, skipMetrics bool, pr
 }
 
 // appendText appends a raw text message in the Tailscale JSON log entry format.
-func (l *Logger) appendText(dst, src []byte, skipClientTime bool, procID uint32, procSequence uint64, level int) []byte {
+func (lg *Logger) appendText(dst, src []byte, skipClientTime bool, procID uint32, procSequence uint64, level int) []byte {
 	dst = slices.Grow(dst, len(src))
 	dst = append(dst, '{')
-	dst = l.appendMetadata(dst, skipClientTime, false, procID, procSequence, "", nil, level)
+	dst = lg.appendMetadata(dst, skipClientTime, false, procID, procSequence, "", nil, level)
 	if len(src) == 0 {
 		dst = bytes.TrimRight(dst, ",")
 		return append(dst, "}\n"...)
@@ -672,7 +672,7 @@ func (l *Logger) appendText(dst, src []byte, skipClientTime bool, procID uint32,
 	// Append the text string, which may be truncated.
 	// Invalid UTF-8 will be mangled with the Unicode replacement character.
 	max := maxTextSize
-	if l.lowMem {
+	if lg.lowMem {
 		max /= lowMemRatio
 	}
 	dst = append(dst, `"text":`...)
@@ -697,12 +697,12 @@ func appendTruncatedString(dst, src []byte, n int) []byte {
 
 // appendTextOrJSONLocked appends a raw text message or a raw JSON object
 // in the Tailscale JSON log format.
-func (l *Logger) appendTextOrJSONLocked(dst, src []byte, level int) []byte {
-	if l.includeProcSequence {
-		l.procSequence++
+func (lg *Logger) appendTextOrJSONLocked(dst, src []byte, level int) []byte {
+	if lg.includeProcSequence {
+		lg.procSequence++
 	}
 	if len(src) == 0 || src[0] != '{' {
-		return l.appendText(dst, src, l.skipClientTime, l.procID, l.procSequence, level)
+		return lg.appendText(dst, src, lg.skipClientTime, lg.procID, lg.procSequence, level)
 	}
 
 	// Check whether the input is a valid JSON object and
@@ -714,11 +714,11 @@ func (l *Logger) appendTextOrJSONLocked(dst, src []byte, level int) []byte {
 		// However, bytes.NewBuffer normally allocates unless
 		// we immediately shallow copy it into a pre-allocated Buffer struct.
 		// See https://go.dev/issue/67004.
-		l.bytesBuf = *bytes.NewBuffer(src)
-		defer func() { l.bytesBuf = bytes.Buffer{} }() // avoid pinning src
+		lg.bytesBuf = *bytes.NewBuffer(src)
+		defer func() { lg.bytesBuf = bytes.Buffer{} }() // avoid pinning src
 
-		dec := &l.jsonDec
-		dec.Reset(&l.bytesBuf)
+		dec := &lg.jsonDec
+		dec.Reset(&lg.bytesBuf)
 		if tok, err := dec.ReadToken(); tok.Kind() != '{' || err != nil {
 			return false
 		}
@@ -750,7 +750,7 @@ func (l *Logger) appendTextOrJSONLocked(dst, src []byte, level int) []byte {
 
 	// Treat invalid JSON as a raw text message.
 	if !validJSON {
-		return l.appendText(dst, src, l.skipClientTime, l.procID, l.procSequence, level)
+		return lg.appendText(dst, src, lg.skipClientTime, lg.procID, lg.procSequence, level)
 	}
 
 	// Check whether the JSON payload is too large.
@@ -758,13 +758,13 @@ func (l *Logger) appendTextOrJSONLocked(dst, src []byte, level int) []byte {
 	// That's okay as the Tailscale log service limit is actually 2*maxSize.
 	// However, so long as logging applications aim to target the maxSize limit,
 	// there should be no trouble eventually uploading logs.
-	maxLen := cmp.Or(l.maxUploadSize, maxSize)
+	maxLen := cmp.Or(lg.maxUploadSize, maxSize)
 	if len(src) > maxLen {
 		errDetail := fmt.Sprintf("entry too large: %d bytes", len(src))
 		errData := appendTruncatedString(nil, src, maxLen/len(`\uffff`)) // escaping could increase size
 
 		dst = append(dst, '{')
-		dst = l.appendMetadata(dst, l.skipClientTime, true, l.procID, l.procSequence, errDetail, errData, level)
+		dst = lg.appendMetadata(dst, lg.skipClientTime, true, lg.procID, lg.procSequence, errDetail, errData, level)
 		dst = bytes.TrimRight(dst, ",")
 		return append(dst, "}\n"...)
 	}
@@ -781,7 +781,7 @@ func (l *Logger) appendTextOrJSONLocked(dst, src []byte, level int) []byte {
 	}
 	dst = slices.Grow(dst, len(src))
 	dst = append(dst, '{')
-	dst = l.appendMetadata(dst, l.skipClientTime, true, l.procID, l.procSequence, errDetail, errData, level)
+	dst = lg.appendMetadata(dst, lg.skipClientTime, true, lg.procID, lg.procSequence, errDetail, errData, level)
 	if logtailValLength > 0 {
 		// Exclude original logtail member from the message.
 		dst = appendWithoutNewline(dst, src[len("{"):logtailKeyOffset])
@@ -808,8 +808,8 @@ func appendWithoutNewline(dst, src []byte) []byte {
 }
 
 // Logf logs to l using the provided fmt-style format and optional arguments.
-func (l *Logger) Logf(format string, args ...any) {
-	fmt.Fprintf(l, format, args...)
+func (lg *Logger) Logf(format string, args ...any) {
+	fmt.Fprintf(lg, format, args...)
 }
 
 // Write logs an encoded JSON blob.
@@ -818,29 +818,29 @@ func (l *Logger) Logf(format string, args ...any) {
 // then contents is fit into a JSON blob and written.
 //
 // This is intended as an interface for the stdlib "log" package.
-func (l *Logger) Write(buf []byte) (int, error) {
+func (lg *Logger) Write(buf []byte) (int, error) {
 	if len(buf) == 0 {
 		return 0, nil
 	}
 	inLen := len(buf) // length as provided to us, before modifications to downstream writers
 
 	level, buf := parseAndRemoveLogLevel(buf)
-	if l.stderr != nil && l.stderr != io.Discard && int64(level) <= atomic.LoadInt64(&l.stderrLevel) {
+	if lg.stderr != nil && lg.stderr != io.Discard && int64(level) <= atomic.LoadInt64(&lg.stderrLevel) {
 		if buf[len(buf)-1] == '\n' {
-			l.stderr.Write(buf)
+			lg.stderr.Write(buf)
 		} else {
 			// The log package always line-terminates logs,
 			// so this is an uncommon path.
 			withNL := append(buf[:len(buf):len(buf)], '\n')
-			l.stderr.Write(withNL)
+			lg.stderr.Write(withNL)
 		}
 	}
 
-	l.writeLock.Lock()
-	defer l.writeLock.Unlock()
+	lg.writeLock.Lock()
+	defer lg.writeLock.Unlock()
 
-	b := l.appendTextOrJSONLocked(l.writeBuf[:0], buf, level)
-	_, err := l.sendLocked(b)
+	b := lg.appendTextOrJSONLocked(lg.writeBuf[:0], buf, level)
+	_, err := lg.sendLocked(b)
 	return inLen, err
 }
 

@@ -83,8 +83,8 @@ func (sib *StartupInfoBuilder) Resolve() (startupInfo *windows.StartupInfo, inhe
 	// Always create a Unicode environment.
 	createProcessFlags = windows.CREATE_UNICODE_ENVIRONMENT
 
-	if l := uint32(len(sib.attrs)); l > 0 {
-		attrCont, err := windows.NewProcThreadAttributeList(l)
+	if ln := uint32(len(sib.attrs)); ln > 0 {
+		attrCont, err := windows.NewProcThreadAttributeList(ln)
 		if err != nil {
 			return nil, false, 0, err
 		}

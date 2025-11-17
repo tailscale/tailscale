@@ -92,8 +92,8 @@ func (m *monitor) handleSummaryStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slices.Sort(lines)
-	for _, l := range lines {
-		_, err = w.Write([]byte(fmt.Sprintf("%s\n", l)))
+	for _, ln := range lines {
+		_, err = w.Write([]byte(fmt.Sprintf("%s\n", ln)))
 		if err != nil {
 			log.Printf("monitor: error writing status: %v", err)
 			return

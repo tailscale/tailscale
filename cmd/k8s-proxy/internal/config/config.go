@@ -50,32 +50,32 @@ func NewConfigLoader(logger *zap.SugaredLogger, client clientcorev1.CoreV1Interf
 	}
 }
 
-func (l *configLoader) WatchConfig(ctx context.Context, path string) error {
+func (ld *configLoader) WatchConfig(ctx context.Context, path string) error {
 	secretNamespacedName, isKubeSecret := strings.CutPrefix(path, "kube:")
 	if isKubeSecret {
 		secretNamespace, secretName, ok := strings.Cut(secretNamespacedName, string(types.Separator))
 		if !ok {
 			return fmt.Errorf("invalid Kubernetes Secret reference %q, expected format <namespace>/<name>", path)
 		}
-		if err := l.watchConfigSecretChanges(ctx, secretNamespace, secretName); err != nil && !errors.Is(err, context.Canceled) {
+		if err := ld.watchConfigSecretChanges(ctx, secretNamespace, secretName); err != nil && !errors.Is(err, context.Canceled) {
 			return fmt.Errorf("error watching config Secret %q: %w", secretNamespacedName, err)
 		}
 
 		return nil
 	}
 
-	if err := l.watchConfigFileChanges(ctx, path); err != nil && !errors.Is(err, context.Canceled) {
+	if err := ld.watchConfigFileChanges(ctx, path); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("error watching config file %q: %w", path, err)
 	}
 
 	return nil
 }
 
-func (l *configLoader) reloadConfig(ctx context.Context, raw []byte) error {
-	if bytes.Equal(raw, l.previous) {
-		if l.cfgIgnored != nil && testenv.InTest() {
-			l.once.Do(func() {
-				close(l.cfgIgnored)
+func (ld *configLoader) reloadConfig(ctx context.Context, raw []byte) error {
+	if bytes.Equal(raw, ld.previous) {
+		if ld.cfgIgnored != nil && testenv.InTest() {
+			ld.once.Do(func() {
+				close(ld.cfgIgnored)
 			})
 		}
 		return nil
@@ -89,14 +89,14 @@ func (l *configLoader) reloadConfig(ctx context.Context, raw []byte) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case l.cfgChan <- &cfg:
+	case ld.cfgChan <- &cfg:
 	}
 
-	l.previous = raw
+	ld.previous = raw
 	return nil
 }
 
-func (l *configLoader) watchConfigFileChanges(ctx context.Context, path string) error {
+func (ld *configLoader) watchConfigFileChanges(ctx context.Context, path string) error {
 	var (
 		tickChan  <-chan time.Time
 		eventChan <-chan fsnotify.Event
@@ -106,14 +106,14 @@ func (l *configLoader) watchConfigFileChanges(ctx context.Context, path string) 
 	if w, err := fsnotify.NewWatcher(); err != nil {
 		// Creating a new fsnotify watcher would fail for example if inotify was not able to create a new file descriptor.
 		// See https://github.com/tailscale/tailscale/issues/15081
-		l.logger.Infof("Failed to create fsnotify watcher on config file %q; watching for changes on 5s timer: %v", path, err)
+		ld.logger.Infof("Failed to create fsnotify watcher on config file %q; watching for changes on 5s timer: %v", path, err)
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		tickChan = ticker.C
 	} else {
 		dir := filepath.Dir(path)
 		file := filepath.Base(path)
-		l.logger.Infof("Watching directory %q for changes to config file %q", dir, file)
+		ld.logger.Infof("Watching directory %q for changes to config file %q", dir, file)
 		defer w.Close()
 		if err := w.Add(dir); err != nil {
 			return fmt.Errorf("failed to add fsnotify watch: %w", err)
@@ -128,7 +128,7 @@ func (l *configLoader) watchConfigFileChanges(ctx context.Context, path string) 
 	if err != nil {
 		return fmt.Errorf("error reading config file %q: %w", path, err)
 	}
-	if err := l.reloadConfig(ctx, b); err != nil {
+	if err := ld.reloadConfig(ctx, b); err != nil {
 		return fmt.Errorf("error loading initial config file %q: %w", path, err)
 	}
 
@@ -163,14 +163,14 @@ func (l *configLoader) watchConfigFileChanges(ctx context.Context, path string) 
 		if len(b) == 0 {
 			continue
 		}
-		if err := l.reloadConfig(ctx, b); err != nil {
+		if err := ld.reloadConfig(ctx, b); err != nil {
 			return fmt.Errorf("error reloading config file %q: %v", path, err)
 		}
 	}
 }
 
-func (l *configLoader) watchConfigSecretChanges(ctx context.Context, secretNamespace, secretName string) error {
-	secrets := l.client.Secrets(secretNamespace)
+func (ld *configLoader) watchConfigSecretChanges(ctx context.Context, secretNamespace, secretName string) error {
+	secrets := ld.client.Secrets(secretNamespace)
 	w, err := secrets.Watch(ctx, metav1.ListOptions{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Secret",
@@ -198,11 +198,11 @@ func (l *configLoader) watchConfigSecretChanges(ctx context.Context, secretNames
 		return fmt.Errorf("failed to get config Secret %q: %w", secretName, err)
 	}
 
-	if err := l.configFromSecret(ctx, secret); err != nil {
+	if err := ld.configFromSecret(ctx, secret); err != nil {
 		return fmt.Errorf("error loading initial config: %w", err)
 	}
 
-	l.logger.Infof("Watching config Secret %q for changes", secretName)
+	ld.logger.Infof("Watching config Secret %q for changes", secretName)
 	for {
 		var secret *corev1.Secret
 		select {
@@ -237,7 +237,7 @@ func (l *configLoader) watchConfigSecretChanges(ctx context.Context, secretNames
 				if secret == nil || secret.Data == nil {
 					continue
 				}
-				if err := l.configFromSecret(ctx, secret); err != nil {
+				if err := ld.configFromSecret(ctx, secret); err != nil {
 					return fmt.Errorf("error reloading config Secret %q: %v", secret.Name, err)
 				}
 			case watch.Error:
@@ -250,13 +250,13 @@ func (l *configLoader) watchConfigSecretChanges(ctx context.Context, secretNames
 	}
 }
 
-func (l *configLoader) configFromSecret(ctx context.Context, s *corev1.Secret) error {
+func (ld *configLoader) configFromSecret(ctx context.Context, s *corev1.Secret) error {
 	b := s.Data[kubetypes.KubeAPIServerConfigFile]
 	if len(b) == 0 {
 		return fmt.Errorf("config Secret %q does not contain expected config in key %q", s.Name, kubetypes.KubeAPIServerConfigFile)
 	}
 
-	if err := l.reloadConfig(ctx, b); err != nil {
+	if err := ld.reloadConfig(ctx, b); err != nil {
 		return err
 	}
 

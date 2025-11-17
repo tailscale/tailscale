@@ -628,8 +628,8 @@ type loggingResponseWriter struct {
 // from r, or falls back to logf. If a nil logger is given, the logs are
 // discarded.
 func newLogResponseWriter(logf logger.Logf, w http.ResponseWriter, r *http.Request) *loggingResponseWriter {
-	if l, ok := logger.LogfKey.ValueOk(r.Context()); ok && l != nil {
-		logf = l
+	if lg, ok := logger.LogfKey.ValueOk(r.Context()); ok && lg != nil {
+		logf = lg
 	}
 	if logf == nil {
 		logf = logger.Discard
@@ -642,46 +642,46 @@ func newLogResponseWriter(logf logger.Logf, w http.ResponseWriter, r *http.Reque
 }
 
 // WriteHeader implements [http.ResponseWriter].
-func (l *loggingResponseWriter) WriteHeader(statusCode int) {
-	if l.code != 0 {
-		l.logf("[unexpected] HTTP handler set statusCode twice (%d and %d)", l.code, statusCode)
+func (lg *loggingResponseWriter) WriteHeader(statusCode int) {
+	if lg.code != 0 {
+		lg.logf("[unexpected] HTTP handler set statusCode twice (%d and %d)", lg.code, statusCode)
 		return
 	}
-	if l.ctx.Err() == nil {
-		l.code = statusCode
+	if lg.ctx.Err() == nil {
+		lg.code = statusCode
 	}
-	l.ResponseWriter.WriteHeader(statusCode)
+	lg.ResponseWriter.WriteHeader(statusCode)
 }
 
 // Write implements [http.ResponseWriter].
-func (l *loggingResponseWriter) Write(bs []byte) (int, error) {
-	if l.code == 0 {
-		l.code = 200
+func (lg *loggingResponseWriter) Write(bs []byte) (int, error) {
+	if lg.code == 0 {
+		lg.code = 200
 	}
-	n, err := l.ResponseWriter.Write(bs)
-	l.bytes += n
+	n, err := lg.ResponseWriter.Write(bs)
+	lg.bytes += n
 	return n, err
 }
 
 // Hijack implements http.Hijacker. Note that hijacking can still fail
 // because the wrapped ResponseWriter is not required to implement
 // Hijacker, as this breaks HTTP/2.
-func (l *loggingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	h, ok := l.ResponseWriter.(http.Hijacker)
+func (lg *loggingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := lg.ResponseWriter.(http.Hijacker)
 	if !ok {
 		return nil, nil, errors.New("ResponseWriter is not a Hijacker")
 	}
 	conn, buf, err := h.Hijack()
 	if err == nil {
-		l.hijacked = true
+		lg.hijacked = true
 	}
 	return conn, buf, err
 }
 
-func (l loggingResponseWriter) Flush() {
-	f, _ := l.ResponseWriter.(http.Flusher)
+func (lg loggingResponseWriter) Flush() {
+	f, _ := lg.ResponseWriter.(http.Flusher)
 	if f == nil {
-		l.logf("[unexpected] tried to Flush a ResponseWriter that can't flush")
+		lg.logf("[unexpected] tried to Flush a ResponseWriter that can't flush")
 		return
 	}
 	f.Flush()

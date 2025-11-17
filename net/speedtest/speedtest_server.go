@@ -17,9 +17,9 @@ import (
 // connections and handles each one in a goroutine. Because it runs in an infinite loop,
 // this function only returns if any of the speedtests return with errors, or if the
 // listener is closed.
-func Serve(l net.Listener) error {
+func Serve(ln net.Listener) error {
 	for {
-		conn, err := l.Accept()
+		conn, err := ln.Accept()
 		if errors.Is(err, net.ErrClosed) {
 			return nil
 		}

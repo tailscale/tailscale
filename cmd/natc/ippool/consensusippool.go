@@ -422,9 +422,9 @@ func (ipp *ConsensusIPPool) applyCheckoutAddr(nid tailcfg.NodeID, domain string,
 }
 
 // Apply is part of the raft.FSM interface. It takes an incoming log entry and applies it to the state.
-func (ipp *ConsensusIPPool) Apply(l *raft.Log) any {
+func (ipp *ConsensusIPPool) Apply(lg *raft.Log) any {
 	var c tsconsensus.Command
-	if err := json.Unmarshal(l.Data, &c); err != nil {
+	if err := json.Unmarshal(lg.Data, &c); err != nil {
 		panic(fmt.Sprintf("failed to unmarshal command: %s", err.Error()))
 	}
 	switch c.Name {
