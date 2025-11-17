@@ -870,6 +870,7 @@ func (b *LocalBackend) initPrefsFromConfig(conf *conffile.Config) error {
 	if err := b.pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
 		return err
 	}
+	b.updateWarnSync(p.View())
 	b.setStaticEndpointsFromConfigLocked(conf)
 	b.conf = conf
 	return nil
@@ -931,7 +932,12 @@ func (b *LocalBackend) pauseOrResumeControlClientLocked() {
 		return
 	}
 	networkUp := b.prevIfState.AnyInterfaceUp()
-	b.cc.SetPaused((b.state == ipn.Stopped && b.NetMap() != nil) || (!networkUp && !testenv.InTest() && !assumeNetworkUpdateForTest()))
+	pauseForNetwork := (b.state == ipn.Stopped && b.NetMap() != nil) || (!networkUp && !testenv.InTest() && !assumeNetworkUpdateForTest())
+
+	prefs := b.pm.CurrentPrefs()
+	pauseForSyncPref := prefs.Valid() && prefs.Sync().EqualBool(false)
+
+	b.cc.SetPaused(pauseForNetwork || pauseForSyncPref)
 }
 
 // DisconnectControl shuts down control client. This can be run before node shutdown to force control to consider this ndoe
@@ -2519,6 +2525,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		logf("serverMode=%v", inServerMode)
 	}
 	b.applyPrefsToHostinfoLocked(hostinfo, prefs)
+	b.updateWarnSync(prefs)
 
 	persistv := prefs.Persist().AsStruct()
 	if persistv == nil {
@@ -2570,6 +2577,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		ControlKnobs:         b.sys.ControlKnobs(),
 		Shutdown:             ccShutdown,
 		Bus:                  b.sys.Bus.Get(),
+		StartPaused:          prefs.Sync().EqualBool(false),
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
@@ -4658,6 +4666,9 @@ func (b *LocalBackend) setPrefsLocked(newp *ipn.Prefs) ipn.PrefsView {
 		b.resetAlwaysOnOverrideLocked()
 	}
 
+	b.pauseOrResumeControlClientLocked() // for prefs.Sync changes
+	b.updateWarnSync(prefs)
+
 	if oldp.ShieldsUp() != newp.ShieldsUp || hostInfoChanged {
 		b.doSetHostinfoFilterServicesLocked()
 	}
@@ -6665,6 +6676,13 @@ func (b *LocalBackend) sshServerOrInit() (_ SSHServer, err error) {
 	return b.sshServer, nil
 }
 
+var warnSyncDisabled = health.Register(&health.Warnable{
+	Code:     "sync-disabled",
+	Title:    "Tailscale Sync is Disabled",
+	Severity: health.SeverityHigh,
+	Text:     health.StaticMessage("Tailscale control plane syncing is disabled; run `tailscale set --sync` to restore"),
+})
+
 var warnSSHSELinuxWarnable = health.Register(&health.Warnable{
 	Code:     "ssh-unavailable-selinux-enabled",
 	Title:    "Tailscale SSH and SELinux",
@@ -6677,6 +6695,14 @@ func (b *LocalBackend) updateSELinuxHealthWarning() {
 		b.health.SetUnhealthy(warnSSHSELinuxWarnable, nil)
 	} else {
 		b.health.SetHealthy(warnSSHSELinuxWarnable)
+	}
+}
+
+func (b *LocalBackend) updateWarnSync(prefs ipn.PrefsView) {
+	if prefs.Sync().EqualBool(false) {
+		b.health.SetUnhealthy(warnSyncDisabled, nil)
+	} else {
+		b.health.SetHealthy(warnSyncDisabled)
 	}
 }
 

@@ -1129,10 +1129,12 @@ func TestProfileStateChangeCallback(t *testing.T) {
 			}
 
 			gotChanges := make([]stateChange, 0, len(tt.wantChanges))
-			pm.StateChangeHook = func(profile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
+			pm.StateChangeHook = func(profile ipn.LoginProfileView, prefView ipn.PrefsView, sameNode bool) {
+				prefs := prefView.AsStruct()
+				prefs.Sync = prefs.Sync.Normalized()
 				gotChanges = append(gotChanges, stateChange{
 					Profile:  profile.AsStruct(),
-					Prefs:    prefs.AsStruct(),
+					Prefs:    prefs,
 					SameNode: sameNode,
 				})
 			}

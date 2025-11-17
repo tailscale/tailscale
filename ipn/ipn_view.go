@@ -363,6 +363,12 @@ func (v PrefsView) AdvertiseServices() views.Slice[string] {
 	return views.SliceOf(v.ж.AdvertiseServices)
 }
 
+// Sync is whether this node should sync its configuration from
+// the control plane. If unset, this defaults to true.
+// This exists primarily for testing, to verify that netmap caching
+// and offline operation work correctly.
+func (v PrefsView) Sync() opt.Bool { return v.ж.Sync }
+
 // NoSNAT specifies whether to source NAT traffic going to
 // destinations in AdvertiseRoutes. The default is to apply source
 // NAT, which makes the traffic appear to come from the router
@@ -482,6 +488,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	Egg                    bool
 	AdvertiseRoutes        []netip.Prefix
 	AdvertiseServices      []string
+	Sync                   opt.Bool
 	NoSNAT                 bool
 	NoStatefulFiltering    opt.Bool
 	NetfilterMode          preftype.NetfilterMode
