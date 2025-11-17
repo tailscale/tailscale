@@ -63,6 +63,7 @@ type setArgsT struct {
 	reportPosture          bool
 	snat                   bool
 	statefulFiltering      bool
+	sync                   bool
 	netfilterMode          string
 	relayServerPort        string
 }
@@ -85,6 +86,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "automatically update to the latest available version")
 	setf.BoolVar(&setArgs.reportPosture, "report-posture", false, "allow management plane to gather device posture information")
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "expose the web interface for managing this node over Tailscale at port 5252")
+	setf.BoolVar(&setArgs.sync, "sync", false, hidden+"actively sync configuration from the control plane (set to false only for network failure testing)")
 	setf.StringVar(&setArgs.relayServerPort, "relay-server-port", "", "UDP port number (0 will pick a random unused port) for the relay server to bind to, on all interfaces, or empty string to disable relay server functionality")
 
 	ffcomplete.Flag(setf, "exit-node", func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
@@ -149,6 +151,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			OperatorUser:           setArgs.opUser,
 			NoSNAT:                 !setArgs.snat,
 			ForceDaemon:            setArgs.forceDaemon,
+			Sync:                   opt.NewBool(setArgs.sync),
 			AutoUpdate: ipn.AutoUpdatePrefs{
 				Check: setArgs.updateCheck,
 				Apply: opt.NewBool(setArgs.updateApply),

@@ -890,6 +890,7 @@ func init() {
 	addPrefFlagMapping("advertise-connector", "AppConnector")
 	addPrefFlagMapping("report-posture", "PostureChecking")
 	addPrefFlagMapping("relay-server-port", "RelayServerPort")
+	addPrefFlagMapping("sync", "Sync")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {
@@ -925,7 +926,7 @@ func updateMaskedPrefsFromUpOrSetFlag(mp *ipn.MaskedPrefs, flagName string) {
 	if prefs, ok := prefsOfFlag[flagName]; ok {
 		for _, pref := range prefs {
 			f := reflect.ValueOf(mp).Elem()
-			for _, name := range strings.Split(pref, ".") {
+			for name := range strings.SplitSeq(pref, ".") {
 				f = f.FieldByName(name + "Set")
 			}
 			f.SetBool(true)

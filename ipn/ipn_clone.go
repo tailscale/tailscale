@@ -90,6 +90,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	Egg                    bool
 	AdvertiseRoutes        []netip.Prefix
 	AdvertiseServices      []string
+	Sync                   opt.Bool
 	NoSNAT                 bool
 	NoStatefulFiltering    opt.Bool
 	NetfilterMode          preftype.NetfilterMode

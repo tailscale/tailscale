@@ -57,6 +57,7 @@ func TestPrefsEqual(t *testing.T) {
 		"Egg",
 		"AdvertiseRoutes",
 		"AdvertiseServices",
+		"Sync",
 		"NoSNAT",
 		"NoStatefulFiltering",
 		"NetfilterMode",
@@ -404,6 +405,7 @@ func checkPrefs(t *testing.T, p Prefs) {
 	if err != nil {
 		t.Fatalf("PrefsFromBytes(p2) failed: bytes=%q; err=%v\n", p2.ToBytes(), err)
 	}
+	p2b.normalizeOptBools()
 	p2p := p2.Pretty()
 	p2bp := p2b.Pretty()
 	t.Logf("\np2p:  %#v\np2bp: %#v\n", p2p, p2bp)
@@ -416,6 +418,42 @@ func checkPrefs(t *testing.T, p Prefs) {
 	p2c = p2.Clone()
 	if !p2b.Equals(p2c) {
 		t.Fatalf("p2b != p2c\n")
+	}
+}
+
+// PrefsFromBytes documents that it preserves fields unset in the JSON.
+// This verifies that stays true.
+func TestPrefsFromBytesPreservesOldValues(t *testing.T) {
+	tests := []struct {
+		name string
+		old  Prefs
+		json []byte
+		want Prefs
+	}{
+		{
+			name: "preserve-control-url",
+			old:  Prefs{ControlURL: "https://foo"},
+			json: []byte(`{"RouteAll": true}`),
+			want: Prefs{ControlURL: "https://foo", RouteAll: true},
+		},
+		{
+			name: "opt.Bool", // test that we don't normalize it early
+			old:  Prefs{Sync: "unset"},
+			json: []byte(`{}`),
+			want: Prefs{Sync: "unset"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			old := tt.old // shallow
+			err := PrefsFromBytes(tt.json, &old)
+			if err != nil {
+				t.Fatalf("PrefsFromBytes failed: %v", err)
+			}
+			if !old.Equals(&tt.want) {
+				t.Fatalf("got %+v; want %+v", old, tt.want)
+			}
+		})
 	}
 }
 
@@ -590,6 +628,11 @@ func TestPrefsPretty(t *testing.T) {
 			},
 			"linux",
 			`Prefs{ra=false dns=false want=false routes=[] nf=off update=off Persist=nil}`,
+		},
+		{
+			Prefs{Sync: "false"},
+			"linux",
+			"Prefs{ra=false dns=false want=false sync=false routes=[] nf=off update=off Persist=nil}",
 		},
 	}
 	for i, tt := range tests {

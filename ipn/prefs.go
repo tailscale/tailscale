@@ -207,6 +207,12 @@ type Prefs struct {
 	// control server.
 	AdvertiseServices []string
 
+	// Sync is whether this node should sync its configuration from
+	// the control plane. If unset, this defaults to true.
+	// This exists primarily for testing, to verify that netmap caching
+	// and offline operation work correctly.
+	Sync opt.Bool
+
 	// NoSNAT specifies whether to source NAT traffic going to
 	// destinations in AdvertiseRoutes. The default is to apply source
 	// NAT, which makes the traffic appear to come from the router
@@ -364,12 +370,13 @@ type MaskedPrefs struct {
 	EggSet                    bool                `json:",omitempty"`
 	AdvertiseRoutesSet        bool                `json:",omitempty"`
 	AdvertiseServicesSet      bool                `json:",omitempty"`
+	SyncSet                   bool                `json:",omitzero"`
 	NoSNATSet                 bool                `json:",omitempty"`
 	NoStatefulFilteringSet    bool                `json:",omitempty"`
 	NetfilterModeSet          bool                `json:",omitempty"`
 	OperatorUserSet           bool                `json:",omitempty"`
 	ProfileNameSet            bool                `json:",omitempty"`
-	AutoUpdateSet             AutoUpdatePrefsMask `json:",omitempty"`
+	AutoUpdateSet             AutoUpdatePrefsMask `json:",omitzero"`
 	AppConnectorSet           bool                `json:",omitempty"`
 	PostureCheckingSet        bool                `json:",omitempty"`
 	NetfilterKindSet          bool                `json:",omitempty"`
@@ -547,6 +554,9 @@ func (p *Prefs) pretty(goos string) string {
 	if p.LoggedOut {
 		sb.WriteString("loggedout=true ")
 	}
+	if p.Sync.EqualBool(false) {
+		sb.WriteString("sync=false ")
+	}
 	if p.ForceDaemon {
 		sb.WriteString("server=true ")
 	}
@@ -653,6 +663,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
 		p.CorpDNS == p2.CorpDNS &&
 		p.RunSSH == p2.RunSSH &&
+		p.Sync.Normalized() == p2.Sync.Normalized() &&
 		p.RunWebClient == p2.RunWebClient &&
 		p.WantRunning == p2.WantRunning &&
 		p.LoggedOut == p2.LoggedOut &&
@@ -956,8 +967,13 @@ func PrefsFromBytes(b []byte, base *Prefs) error {
 	if len(b) == 0 {
 		return nil
 	}
-
 	return json.Unmarshal(b, base)
+}
+
+func (p *Prefs) normalizeOptBools() {
+	if p.Sync == opt.ExplicitlyUnset {
+		p.Sync = ""
+	}
 }
 
 var jsonEscapedZero = []byte(`\u0000`)
