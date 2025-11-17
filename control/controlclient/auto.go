@@ -23,6 +23,7 @@ import (
 	"tailscale.com/util/backoff"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/execqueue"
+	"tailscale.com/util/testenv"
 )
 
 type LoginGoal struct {
@@ -123,6 +124,7 @@ type Auto struct {
 
 	mu sync.Mutex // mutex guards the following fields
 
+	started      bool   // whether [Auto.Start] has been called
 	wantLoggedIn bool   // whether the user wants to be logged in per last method call
 	urlToVisit   string // the last url we were told to visit
 	expiry       time.Time
@@ -150,15 +152,21 @@ type Auto struct {
 
 // New creates and starts a new Auto.
 func New(opts Options) (*Auto, error) {
-	c, err := NewNoStart(opts)
-	if c != nil {
-		c.Start()
+	c, err := newNoStart(opts)
+	if err != nil {
+		return nil, err
+	}
+	if opts.StartPaused {
+		c.SetPaused(true)
+	}
+	if !opts.SkipStartForTests {
+		c.start()
 	}
 	return c, err
 }
 
-// NewNoStart creates a new Auto, but without calling Start on it.
-func NewNoStart(opts Options) (_ *Auto, err error) {
+// newNoStart creates a new Auto, but without calling Start on it.
+func newNoStart(opts Options) (_ *Auto, err error) {
 	direct, err := NewDirect(opts)
 	if err != nil {
 		return nil, err
@@ -218,10 +226,21 @@ func (c *Auto) SetPaused(paused bool) {
 	c.unpauseWaiters = nil
 }
 
-// Start starts the client's goroutines.
+// StartForTest starts the client's goroutines.
 //
-// It should only be called for clients created by NewNoStart.
-func (c *Auto) Start() {
+// It should only be called for clients created with [Options.SkipStartForTests].
+func (c *Auto) StartForTest() {
+	testenv.AssertInTest()
+	c.start()
+}
+
+func (c *Auto) start() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.started {
+		return
+	}
+	c.started = true
 	go c.authRoutine()
 	go c.mapRoutine()
 	go c.updateRoutine()
