@@ -2462,7 +2462,7 @@ func TestIsWireGuardOnlyPickEndpointByPing(t *testing.T) {
 			if len(state.recentPongs) != 1 {
 				t.Errorf("IPv4 address did not have a recentPong entry: got %v, want %v", len(state.recentPongs), 1)
 			}
-			// Set the latency extremely high so we dont choose endpoint during the next
+			// Set the latency extremely high so we don't choose endpoint during the next
 			// addrForSendLocked call.
 			state.recentPongs[state.recentPong].latency = time.Second
 		}

@@ -678,7 +678,7 @@ func markAncestorIntersectionAUMs(storage Chonk, verdict map[AUMHash]retainState
 	toScan := make([]AUMHash, 0, len(verdict))
 	for h, v := range verdict {
 		if (v & retainAUMMask) == 0 {
-			continue // not marked for retention, so dont need to consider it
+			continue // not marked for retention, so don't need to consider it
 		}
 		if h == candidateAncestor {
 			continue
@@ -781,7 +781,7 @@ func markDescendantAUMs(storage Chonk, verdict map[AUMHash]retainState) error {
 	toScan := make([]AUMHash, 0, len(verdict))
 	for h, v := range verdict {
 		if v&retainAUMMask == 0 {
-			continue // not marked, so dont need to mark descendants
+			continue // not marked, so don't need to mark descendants
 		}
 		toScan = append(toScan, h)
 	}
