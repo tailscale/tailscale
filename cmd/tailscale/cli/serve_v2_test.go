@@ -449,7 +449,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 				want: &ipn.ServeConfig{
 					TCP: map[uint16]*ipn.TCPPortHandler{
 						443: {
-							TCPForward:   "127.0.0.1:5432",
+							TCPForward:   "tcp://127.0.0.1:5432",
 							TerminateTLS: "foo.test.ts.net",
 						},
 					},
@@ -464,7 +464,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					want: &ipn.ServeConfig{
 						TCP: map[uint16]*ipn.TCPPortHandler{
 							443: {
-								TCPForward:   "localhost:5432",
+								TCPForward:   "tcp://localhost:5432",
 								TerminateTLS: "foo.test.ts.net",
 							},
 						},
@@ -475,7 +475,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					want: &ipn.ServeConfig{
 						TCP: map[uint16]*ipn.TCPPortHandler{
 							443: {
-								TCPForward:   "127.0.0.1:8443",
+								TCPForward:   "tcp://127.0.0.1:8443",
 								TerminateTLS: "foo.test.ts.net",
 							},
 						},
@@ -491,7 +491,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					want: &ipn.ServeConfig{
 						TCP: map[uint16]*ipn.TCPPortHandler{
 							443: {
-								TCPForward:   "localhost:123",
+								TCPForward:   "tcp://localhost:123",
 								TerminateTLS: "foo.test.ts.net",
 							},
 						},
@@ -544,6 +544,35 @@ func TestServeDevConfigMutations(t *testing.T) {
 								"/":           {Path: filepath.Join(td, "foo")},
 								"/some/where": {Path: filepath.Join(td, "subdir/file-a")},
 							}},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "unix",
+			steps: []step{
+				{
+					command: cmd("serve --bg --tcp=80 unix://my-socket.sock"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							80: {TCPForward: "unix://my-socket.sock"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "unix over TLS",
+			steps: []step{
+				{
+					command: cmd("serve --bg --tls-terminated-tcp=443 unix://my-socket.sock"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							443: {
+								TCPForward:   "unix://my-socket.sock",
+								TerminateTLS: "foo.test.ts.net",
+							},
 						},
 					},
 				},
@@ -664,7 +693,9 @@ func TestServeDevConfigMutations(t *testing.T) {
 				{ // start a tcp forwarder on 8443
 					command: cmd("serve --bg --tcp=8443 tcp://localhost:5432"),
 					want: &ipn.ServeConfig{
-						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {TCPForward: "localhost:5432"}},
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							443:  {HTTPS: true},
+							8443: {TCPForward: "tcp://localhost:5432"}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
 								"/": {Proxy: "http://localhost:3000"},
@@ -675,7 +706,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 				{ // remove primary port http handler
 					command: cmd("serve off"),
 					want: &ipn.ServeConfig{
-						TCP: map[uint16]*ipn.TCPPortHandler{8443: {TCPForward: "localhost:5432"}},
+						TCP: map[uint16]*ipn.TCPPortHandler{8443: {TCPForward: "tcp://localhost:5432"}},
 					},
 				},
 				{ // remove tcp forwarder
@@ -745,7 +776,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					want: &ipn.ServeConfig{
 						TCP: map[uint16]*ipn.TCPPortHandler{
 							443: {
-								TCPForward:   "localhost:5432",
+								TCPForward:   "tcp://localhost:5432",
 								TerminateTLS: "foo.test.ts.net",
 							},
 						},
@@ -929,7 +960,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 				want: &ipn.ServeConfig{
 					TCP: map[uint16]*ipn.TCPPortHandler{
 						8000: {
-							TCPForward:    "localhost:5432",
+							TCPForward:    "tcp://localhost:5432",
 							ProxyProtocol: 1,
 						},
 					},
@@ -943,7 +974,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 				want: &ipn.ServeConfig{
 					TCP: map[uint16]*ipn.TCPPortHandler{
 						443: {
-							TCPForward:    "localhost:5432",
+							TCPForward:    "tcp://localhost:5432",
 							TerminateTLS:  "foo.test.ts.net",
 							ProxyProtocol: 2,
 						},
@@ -958,7 +989,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					command: cmd("serve --tcp=8000 --bg tcp://localhost:5432"),
 					want: &ipn.ServeConfig{
 						TCP: map[uint16]*ipn.TCPPortHandler{
-							8000: {TCPForward: "localhost:5432"},
+							8000: {TCPForward: "tcp://localhost:5432"},
 						},
 					},
 				},
@@ -967,7 +998,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					want: &ipn.ServeConfig{
 						TCP: map[uint16]*ipn.TCPPortHandler{
 							8000: {
-								TCPForward:    "localhost:5432",
+								TCPForward:    "tcp://localhost:5432",
 								ProxyProtocol: 1,
 							},
 						},
@@ -1446,6 +1477,30 @@ func TestMessageForPort(t *testing.T) {
 			}, "\n"),
 		},
 		{
+			name:   "serve unix",
+			subcmd: serve,
+			serveConfig: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {
+						TCPForward: "unix://my-socket.sock",
+					},
+				},
+			},
+			status:  &ipnstate.Status{CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"}},
+			dnsName: "foo.test.ts.net",
+			srvType: serveTypeTCP,
+			srvPort: 80,
+			expected: strings.Join([]string{
+				msgServeAvailable,
+				"",
+				"|-- tcp://foo.test.ts.net:80 (TLS over TCP)",
+				"|--> unix://my-socket.sock",
+				"",
+				fmt.Sprintf(msgRunningInBackground, "Serve"),
+				fmt.Sprintf(msgDisableProxy, "serve", "tcp", 80),
+			}, "\n"),
+		},
+		{
 			name:   "serve service http",
 			subcmd: serve,
 			serveConfig: &ipn.ServeConfig{
@@ -1582,7 +1637,7 @@ func TestMessageForPort(t *testing.T) {
 				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:foo": {
 						TCP: map[uint16]*ipn.TCPPortHandler{
-							2200: {TCPForward: "localhost:3000"},
+							2200: {TCPForward: "tcp://localhost:3000"},
 						},
 					},
 				},
@@ -1606,6 +1661,43 @@ func TestMessageForPort(t *testing.T) {
 				"|-- tcp://100.101.101.101:2200",
 				"|-- tcp://[fd7a:115c:a1e0:ab12:4843:cd96:6565:6565]:2200",
 				"|--> tcp://localhost:3000",
+				"",
+				fmt.Sprintf(msgRunningInBackground, "Serve"),
+				fmt.Sprintf(msgDisableServiceProxy, "svc:foo", "tcp", 2200),
+				fmt.Sprintf(msgDisableService, "svc:foo"),
+			}, "\n"),
+		},
+		{
+			name:   "serve service unix",
+			subcmd: serve,
+			serveConfig: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:foo": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							2200: {TCPForward: "unix://my-socket.sock"},
+						},
+					},
+				},
+			},
+			status: &ipnstate.Status{
+				CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
+				Self: &ipnstate.PeerStatus{
+					CapMap: tailcfg.NodeCapMap{
+						tailcfg.NodeAttrServiceHost: []tailcfg.RawMessage{svcIPMapJSONRawMSG},
+					},
+				},
+			},
+			prefs:   &ipn.Prefs{AdvertiseServices: []string{"svc:foo"}},
+			dnsName: "svc:foo",
+			srvType: serveTypeTCP,
+			srvPort: 2200,
+			expected: strings.Join([]string{
+				msgServeAvailable,
+				"",
+				"|-- tcp://foo.test.ts.net:2200 (TLS over TCP)",
+				"|-- tcp://100.101.101.101:2200",
+				"|-- tcp://[fd7a:115c:a1e0:ab12:4843:cd96:6565:6565]:2200",
+				"|--> unix://my-socket.sock",
 				"",
 				fmt.Sprintf(msgRunningInBackground, "Serve"),
 				fmt.Sprintf(msgDisableServiceProxy, "svc:foo", "tcp", 2200),
@@ -1654,7 +1746,7 @@ func TestMessageForPort(t *testing.T) {
 			}
 
 			if actual != tt.expected {
-				t.Errorf("\nGot:      %q\nExpected: %q", actual, tt.expected)
+				t.Errorf("\nGot:\n%s\n\nExpected:\n%s", actual, tt.expected)
 			}
 		})
 	}
@@ -1863,7 +1955,7 @@ func TestSetServe(t *testing.T) {
 			expected: &ipn.ServeConfig{
 				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:bar": {
-						TCP: map[uint16]*ipn.TCPPortHandler{80: {TCPForward: "127.0.0.1:3000"}},
+						TCP: map[uint16]*ipn.TCPPortHandler{80: {TCPForward: "tcp://127.0.0.1:3000"}},
 					},
 				},
 			},
@@ -1885,7 +1977,7 @@ func TestSetServe(t *testing.T) {
 			expected: &ipn.ServeConfig{
 				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:bar": {
-						TCP: map[uint16]*ipn.TCPPortHandler{80: {TCPForward: "127.0.0.1:3001"}},
+						TCP: map[uint16]*ipn.TCPPortHandler{80: {TCPForward: "tcp://127.0.0.1:3001"}},
 					},
 				},
 			},
@@ -2078,8 +2170,9 @@ func TestSetServe(t *testing.T) {
 				t.Fatalf("got no error; expected error.")
 			}
 			if !tt.expectErr && !reflect.DeepEqual(tt.cfg, tt.expected) {
-				svcName := tailcfg.ServiceName(tt.dnsName)
-				t.Fatalf("got: %v; expected: %v", tt.cfg.Services[svcName], tt.expected.Services[svcName])
+				gotbts, _ := json.MarshalIndent(tt.cfg, "", "\t")
+				wantbts, _ := json.MarshalIndent(tt.expected, "", "\t")
+				t.Fatalf("diff:\n%s", cmp.Diff(string(gotbts), string(wantbts)))
 			}
 		})
 	}

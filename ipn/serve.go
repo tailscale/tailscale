@@ -731,6 +731,10 @@ func ExpandProxyTargetValue(target string, supportedSchemes []string, defaultSch
 		return "", fmt.Errorf("must be a URL starting with one of the supported schemes: %v", supportedSchemes)
 	}
 
+	if u.Scheme == "unix" {
+		return u.String(), nil
+	}
+
 	// validate port according to host.
 	if u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1" {
 		// require port for localhost targets

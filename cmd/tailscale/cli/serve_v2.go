@@ -1048,7 +1048,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 			ipp := net.JoinHostPort(a.String(), strconv.Itoa(int(srvPort)))
 			output.WriteString(fmt.Sprintf("|-- tcp://%s\n", ipp))
 		}
-		output.WriteString(fmt.Sprintf("|--> tcp://%s\n\n", tcpHandler.TCPForward))
+		output.WriteString(fmt.Sprintf("|--> %s\n\n", tcpHandler.TCPForward))
 	}
 
 	if !forService && !e.bg.Value {
@@ -1204,7 +1204,7 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 
 	svcName := tailcfg.AsServiceName(dnsName)
 
-	targetURL, err := ipn.ExpandProxyTargetValue(target, []string{"tcp"}, "tcp")
+	targetURL, err := ipn.ExpandProxyTargetValue(target, []string{"tcp", "unix"}, "tcp")
 	if err != nil {
 		return fmt.Errorf("unable to expand target: %v", err)
 	}
@@ -1219,7 +1219,7 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 		return fmt.Errorf("cannot serve TCP; already serving web on %d for %s", srcPort, dnsName)
 	}
 
-	sc.SetTCPForwarding(srcPort, dstURL.Host, terminateTLS, proxyProtocol, dnsName)
+	sc.SetTCPForwarding(srcPort, dstURL.String(), terminateTLS, proxyProtocol, dnsName)
 	return nil
 }
 
