@@ -60,9 +60,11 @@ func fakeControlClient(t *testing.T, c *http.Client) (*controlclient.Auto, *even
 		NoiseTestClient: c,
 		Dialer:          dialer,
 		Bus:             bus,
+
+		SkipStartForTests: true,
 	}
 
-	cc, err := controlclient.NewNoStart(opts)
+	cc, err := controlclient.New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}

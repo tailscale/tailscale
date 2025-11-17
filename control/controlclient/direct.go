@@ -146,6 +146,14 @@ type Options struct {
 	ControlKnobs         *controlknobs.Knobs // or nil to ignore
 	Bus                  *eventbus.Bus       // non-nil, for setting up publishers
 
+	SkipStartForTests bool // if true, don't call [Auto.Start] to avoid any background goroutines (for tests only)
+
+	// StartPaused indicates whether the client should start in a paused state
+	// where it doesn't do network requests. This primarily exists for testing
+	// but not necessarily "go test" tests, so it isn't restricted to only
+	// being used in tests.
+	StartPaused bool
+
 	// Observer is called when there's a change in status to report
 	// from the control client.
 	// If nil, no status updates are reported.
