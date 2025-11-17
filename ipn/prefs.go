@@ -284,7 +284,7 @@ type Prefs struct {
 
 	// AllowSingleHosts was a legacy field that was always true
 	// for the past 4.5 years. It controlled whether Tailscale
-	// peers got /32 or /127 routes for each other.
+	// peers got /32 or /128 routes for each other.
 	// As of 2024-05-17 we're starting to ignore it, but to let
 	// people still downgrade Tailscale versions and not break
 	// all peer-to-peer networking we still write it to disk (as JSON)
