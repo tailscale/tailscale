@@ -1617,7 +1617,7 @@ func checkOpenWRTUsingMWAN3() (bool, error) {
 		// We want to match on a rule like this:
 		//    2001:	from all fwmark 0x100/0x3f00 lookup 1
 		//
-		// We dont match on the mask because it can vary, or the
+		// We don't match on the mask because it can vary, or the
 		// table because I'm not sure if it can vary.
 		if r.Priority >= 2001 && r.Priority <= 2004 && r.Mark != 0 {
 			return true, nil
