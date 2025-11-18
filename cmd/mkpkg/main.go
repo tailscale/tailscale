@@ -63,6 +63,7 @@ func main() {
 	replaces := flag.String("replaces", "", "package which this package replaces, if any")
 	depends := flag.String("depends", "", "comma-separated list of packages this package depends on")
 	recommends := flag.String("recommends", "", "comma-separated list of packages this package recommends")
+	changelog := flag.String("changelog", "", "path to changelog.yaml file")
 	flag.Parse()
 
 	filesList, err := parseFiles(*regularFiles, files.TypeFile)
@@ -88,6 +89,7 @@ func main() {
 		Description: *description,
 		Homepage:    "https://www.tailscale.com",
 		License:     "MIT",
+		Changelog:   *changelog,
 		Overridables: nfpm.Overridables{
 			Contents: contents,
 			Scripts: nfpm.Scripts{
