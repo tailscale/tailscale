@@ -443,7 +443,7 @@ func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
 
 	c.mu.Lock()
 	c.inMapPoll = true
-	c.expiry = nm.Expiry
+	c.expiry = nm.SelfKeyExpiry()
 	stillAuthed := c.loggedIn
 	c.logf("[v1] mapRoutine: netmap received: loggedIn=%v inMapPoll=true", stillAuthed)
 	c.mu.Unlock()

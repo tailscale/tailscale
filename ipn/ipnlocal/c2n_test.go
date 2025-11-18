@@ -142,7 +142,6 @@ func TestHandleC2NTLSCertStatus(t *testing.T) {
 
 func TestHandleC2NDebugNetmap(t *testing.T) {
 	nm := &netmap.NetworkMap{
-		Name: "myhost",
 		SelfNode: (&tailcfg.Node{
 			ID:       100,
 			Name:     "myhost",

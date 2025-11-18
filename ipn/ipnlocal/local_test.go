@@ -2712,8 +2712,8 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			exitNodeIPWant: "127.0.0.1",
 			prefsChanged:   false,
 			nm: &netmap.NetworkMap{
-				Name: "foo.tailnet",
 				SelfNode: (&tailcfg.Node{
+					Name: "foo.tailnet.",
 					Addresses: []netip.Prefix{
 						pfx("100.102.103.104/32"),
 						pfx("100::123/128"),
@@ -2749,8 +2749,8 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			exitNodeIDWant: "123",
 			prefsChanged:   true,
 			nm: &netmap.NetworkMap{
-				Name: "foo.tailnet",
 				SelfNode: (&tailcfg.Node{
+					Name: "foo.tailnet.",
 					Addresses: []netip.Prefix{
 						pfx("100.102.103.104/32"),
 						pfx("100::123/128"),
@@ -2787,8 +2787,8 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			exitNodeIDWant: "123",
 			prefsChanged:   true,
 			nm: &netmap.NetworkMap{
-				Name: "foo.tailnet",
 				SelfNode: (&tailcfg.Node{
+					Name: "foo.tailnet.",
 					Addresses: []netip.Prefix{
 						pfx("100.102.103.104/32"),
 						pfx("100::123/128"),
@@ -2827,8 +2827,8 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			exitNodeIDWant: "123",
 			prefsChanged:   true,
 			nm: &netmap.NetworkMap{
-				Name: "foo.tailnet",
 				SelfNode: (&tailcfg.Node{
+					Name: "foo.tailnet.",
 					Addresses: []netip.Prefix{
 						pfx("100.102.103.104/32"),
 						pfx("100::123/128"),
