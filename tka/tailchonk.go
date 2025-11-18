@@ -58,10 +58,6 @@ type Chonk interface {
 	// as a hint to pick the correct chain in the event that the Chonk stores
 	// multiple distinct chains.
 	LastActiveAncestor() (*AUMHash, error)
-
-	// RemoveAll permanently and completely clears the TKA state. This should
-	// be called when the user disables Tailnet Lock.
-	RemoveAll() error
 }
 
 // CompactableChonk implementation are extensions of Chonk, which are
@@ -80,6 +76,10 @@ type CompactableChonk interface {
 	// PurgeAUMs permanently and irrevocably deletes the specified
 	// AUMs from storage.
 	PurgeAUMs(hashes []AUMHash) error
+
+	// RemoveAll permanently and completely clears the TKA state. This should
+	// be called when the user disables Tailnet Lock.
+	RemoveAll() error
 }
 
 // Mem implements in-memory storage of TKA state, suitable for
