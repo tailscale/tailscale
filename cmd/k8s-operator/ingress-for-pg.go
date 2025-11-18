@@ -289,6 +289,9 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		ingCfg.Web[epHTTP] = &ipn.WebServerConfig{
 			Handlers: handlers,
 		}
+		if isHTTPRedirectEnabled(ing) {
+			logger.Warnf("Both HTTP endpoint and HTTP redirect flags are enabled: ignoring HTTP redirect.")
+		}
 	} else if isHTTPRedirectEnabled(ing) {
 		logger.Infof("HTTP redirect enabled, setting up port 80 redirect handlers")
 		epHTTP := ipn.HostPort(fmt.Sprintf("%s:80", dnsName))
