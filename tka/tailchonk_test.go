@@ -15,6 +15,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"golang.org/x/crypto/blake2s"
+	"tailscale.com/types/key"
 	"tailscale.com/util/must"
 )
 
@@ -599,5 +600,35 @@ func TestCompact(t *testing.T) {
 		for name, hash := range c.AUMHashes {
 			t.Logf("AUM[%q] = %v", name, hash)
 		}
+	}
+}
+
+func TestCompactLongButYoung(t *testing.T) {
+	ourPriv := key.NewNLPrivate()
+	ourKey := Key{Kind: Key25519, Public: ourPriv.Public().Verifier(), Votes: 1}
+	someOtherKey := Key{Kind: Key25519, Public: key.NewNLPrivate().Public().Verifier(), Votes: 1}
+
+	storage := &Mem{}
+	auth, _, err := Create(storage, State{
+		Keys:               []Key{ourKey, someOtherKey},
+		DisablementSecrets: [][]byte{DisablementKDF(bytes.Repeat([]byte{0xa5}, 32))},
+	}, ourPriv)
+	if err != nil {
+		t.Fatalf("tka.Create() failed: %v", err)
+	}
+
+	genesis := auth.Head()
+
+	for range 100 {
+		upd := auth.NewUpdater(ourPriv)
+		must.Do(upd.RemoveKey(someOtherKey.MustID()))
+		must.Do(upd.AddKey(someOtherKey))
+		aums := must.Get(upd.Finalize(storage))
+		must.Do(auth.Inform(storage, aums))
+	}
+
+	lastActiveAncestor := must.Get(Compact(storage, auth.Head(), CompactionOptions{MinChain: 5, MinAge: time.Hour}))
+	if lastActiveAncestor != genesis {
+		t.Errorf("last active ancestor = %v, want %v", lastActiveAncestor, genesis)
 	}
 }
