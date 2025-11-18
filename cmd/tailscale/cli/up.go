@@ -388,7 +388,8 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 	if !env.upArgs.reset {
 		applyImplicitPrefs(prefs, curPrefs, env)
 
-		if err := checkForAccidentalSettingReverts(prefs, curPrefs, env); err != nil {
+		simpleUp, err = checkForAccidentalSettingReverts(prefs, curPrefs, env)
+		if err != nil {
 			return false, nil, err
 		}
 	}
@@ -419,11 +420,6 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 	}
 
 	tagsChanged := !reflect.DeepEqual(curPrefs.AdvertiseTags, prefs.AdvertiseTags)
-
-	simpleUp = env.flagSet.NFlag() == 0 &&
-		curPrefs.Persist != nil &&
-		curPrefs.Persist.UserProfile.LoginName != "" &&
-		env.backendState != ipn.NeedsLogin.String()
 
 	justEdit := env.backendState == ipn.Running.String() &&
 		!env.upArgs.forceReauth &&
@@ -968,10 +964,10 @@ type upCheckEnv struct {
 //
 // mp is the mask of settings actually set, where mp.Prefs is the new
 // preferences to set, including any values set from implicit flags.
-func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheckEnv) error {
+func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, err error) {
 	if curPrefs.ControlURL == "" {
 		// Don't validate things on initial "up" before a control URL has been set.
-		return nil
+		return false, nil
 	}
 
 	flagIsSet := map[string]bool{}
@@ -979,10 +975,13 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 		flagIsSet[f.Name] = true
 	})
 
-	if len(flagIsSet) == 0 {
+	if len(flagIsSet) == 0 &&
+		curPrefs.Persist != nil &&
+		curPrefs.Persist.UserProfile.LoginName != "" &&
+		env.backendState != ipn.NeedsLogin.String() {
 		// A bare "tailscale up" is a special case to just
 		// mean bringing the network up without any changes.
-		return nil
+		return true, nil
 	}
 
 	// flagsCur is what flags we'd need to use to keep the exact
@@ -1024,7 +1023,7 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 		missing = append(missing, fmtFlagValueArg(flagName, valCur))
 	}
 	if len(missing) == 0 {
-		return nil
+		return false, nil
 	}
 
 	// Some previously provided flags are missing. This run of 'tailscale
@@ -1057,7 +1056,7 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 		fmt.Fprintf(&sb, " %s", a)
 	}
 	sb.WriteString("\n\n")
-	return errors.New(sb.String())
+	return false, errors.New(sb.String())
 }
 
 // applyImplicitPrefs mutates prefs to add implicit preferences for the user operator.
