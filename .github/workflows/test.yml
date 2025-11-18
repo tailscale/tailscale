@@ -2,6 +2,10 @@
 # both PRs and merged commits, and for the latter reports failures to slack.
 name: CI
 
+permissions:
+  id-token: write # This is required for requesting the JWT
+  contents: read # This is required for actions/checkout
+
 env:
   # Our fuzz job, powered by OSS-Fuzz, fails periodically because we upgrade to
   # new Go versions very eagerly. OSS-Fuzz is a little more conservative, and
@@ -22,9 +26,6 @@ env:
 
 on:
   push:
-    branches:
-      - "main"
-      - "release-branch/*"
   pull_request:
     # all PRs on all branches
   merge_group:
@@ -76,7 +77,7 @@ jobs:
           enableCrossOsArchive: true
 
   race-root-integration:
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     needs: gomod-cache
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
@@ -97,6 +98,12 @@ jobs:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
+    - name: Setup cigocacher
+      id: cigocacher-setup
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: src
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
     - name: build test wrapper
       working-directory: src
       run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
@@ -122,7 +129,7 @@ jobs:
             buildflags: "-race"
             shard: '3/3'
           - goarch: "386" # thanks yaml
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     needs: gomod-cache
     steps:
     - name: checkout
@@ -135,7 +142,14 @@ jobs:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
+    - name: Setup cigocacher
+      id: cigocacher-setup
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: src
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
     - name: Restore Cache
+      if: steps.cigocacher-setup.outputs.success != 'true'
       uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
@@ -288,7 +302,7 @@ jobs:
 
   privileged:
     needs: gomod-cache
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     container:
       image: golang:latest
       options: --privileged
@@ -303,6 +317,12 @@ jobs:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
+    - name: Setup cigocacher
+      id: cigocacher-setup
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: src
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
     - name: chown
       working-directory: src
       run: chown -R $(id -u):$(id -g) $PWD
@@ -370,13 +390,26 @@ jobs:
           - goos: openbsd
             goarch: amd64
 
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         path: src
+    - name: Restore Go module cache
+      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
+    - name: Setup cigocacher
+      id: cigocacher-setup
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: src
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
     - name: Restore Cache
+      if: steps.cigocacher-setup.outputs.success != 'true'
       uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
@@ -392,12 +425,6 @@ jobs:
         restore-keys: |
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-
-    - name: Restore Go module cache
-      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        path: gomodcache
-        key: ${{ needs.gomod-cache.outputs.cache-key }}
-        enableCrossOsArchive: true
     - name: build all
       working-directory: src
       run: ./tool/go build ./cmd/...
@@ -421,7 +448,7 @@ jobs:
 
   ios: # similar to cross above, but iOS can't build most of the repo. So, just
        # make it build a few smoke packages.
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     needs: gomod-cache
     steps:
     - name: checkout
@@ -434,6 +461,12 @@ jobs:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
+    - name: Setup cigocacher
+      id: cigocacher-setup
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: src
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
     - name: build some
       working-directory: src
       run: ./tool/go build ./ipn/... ./ssh/tailssh ./wgengine/ ./types/... ./control/controlclient
@@ -460,13 +493,26 @@ jobs:
           - goos: illumos
             goarch: amd64
 
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         path: src
+    - name: Restore Go module cache
+      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
+    - name: Setup cigocacher
+      id: cigocacher-setup
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: src
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
     - name: Restore Cache
+      if: steps.cigocacher-setup.outputs.success != 'true'
       uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
@@ -482,12 +528,6 @@ jobs:
         restore-keys: |
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-
-    - name: Restore Go module cache
-      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        path: gomodcache
-        key: ${{ needs.gomod-cache.outputs.cache-key }}
-        enableCrossOsArchive: true
     - name: build core
       working-directory: src
       run: ./tool/go build ./cmd/tailscale ./cmd/tailscaled
@@ -506,7 +546,7 @@ jobs:
     # similar to cross above, but android fails to build a few pieces of the
     # repo. We should fix those pieces, they're small, but as a stepping stone,
     # only test the subset of android that our past smoke test checked.
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     needs: gomod-cache
     steps:
     - name: checkout
@@ -523,6 +563,12 @@ jobs:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
+    - name: Setup cigocacher
+      id: cigocacher-setup
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: src
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
     - name: build some
       working-directory: src
       run: ./tool/go install ./net/netns ./ipn/ipnlocal ./wgengine/magicsock/ ./wgengine/ ./wgengine/router/ ./wgengine/netstack ./util/dnsname/ ./ipn/ ./net/netmon ./wgengine/router/ ./tailcfg/ ./types/logger/ ./net/dns ./hostinfo ./version ./ssh/tailssh
@@ -531,14 +577,27 @@ jobs:
         GOARCH: arm64
 
   wasm: # builds tsconnect, which is the only wasm build we support
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     needs: gomod-cache
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         path: src
+    - name: Restore Go module cache
+      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
+    - name: Setup cigocacher
+      id: cigocacher-setup
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: src
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
     - name: Restore Cache
+      if: steps.cigocacher-setup.outputs.success != 'true'
       uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
@@ -554,12 +613,6 @@ jobs:
         restore-keys: |
           ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-go-2-
-    - name: Restore Go module cache
-      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        path: gomodcache
-        key: ${{ needs.gomod-cache.outputs.cache-key }}
-        enableCrossOsArchive: true
     - name: build tsconnect client
       working-directory: src
       run: ./tool/go build ./cmd/tsconnect/wasm ./cmd/tailscale/cli
@@ -580,7 +633,7 @@ jobs:
         find $(go env GOCACHE) -type f -mmin +90 -delete
 
   tailscale_go: # Subset of tests that depend on our custom Go toolchain.
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     needs: gomod-cache
     steps:
     - name: checkout
@@ -593,6 +646,12 @@ jobs:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
+    - name: Setup cigocacher
+      id: cigocacher-setup
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: src
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
     - name: test tailscale_go
       run: ./tool/go test -tags=tailscale_go,ts_enable_sockstats ./net/sockstats/...
 
@@ -609,7 +668,7 @@ jobs:
     # explicit 'if' condition, because the default condition for steps is
     # 'success()', meaning "only run this if no previous steps failed".
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     steps:
     - name: build fuzzers
       id: build
@@ -665,7 +724,7 @@ jobs:
         path: ${{ env.artifacts_path }}/out/artifacts
 
   depaware:
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     needs: gomod-cache
     steps:
     - name: checkout
@@ -680,12 +739,18 @@ jobs:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
+    - name: Setup cigocacher
+      id: cigocacher-setup
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: src
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
     - name: check depaware
       working-directory: src
       run: make depaware
 
   go_generate:
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     needs: gomod-cache
     steps:
     - name: checkout
@@ -698,6 +763,12 @@ jobs:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
+    - name: Setup cigocacher
+      id: cigocacher-setup
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: src
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
     - name: check that 'go generate' is clean
       working-directory: src
       run: |
@@ -709,7 +780,7 @@ jobs:
         git diff --name-only --exit-code || (echo "The files above need updating. Please run 'go generate'."; exit 1)
 
   go_mod_tidy:
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     needs: gomod-cache
     steps:
     - name: checkout
@@ -722,6 +793,12 @@ jobs:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
+    - name: Setup cigocacher
+      id: cigocacher-setup
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: src
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
     - name: check that 'go mod tidy' is clean
       working-directory: src
       run: |
@@ -731,7 +808,7 @@ jobs:
         git diff --name-only --exit-code || (echo "Please run 'make tidy'"; exit 1)
 
   licenses:
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     needs: gomod-cache
     steps:
     - name: checkout
@@ -744,6 +821,12 @@ jobs:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
+    - name: Setup cigocacher
+      id: cigocacher-setup
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: src
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
     - name: check licenses
       working-directory: src
       run: |
@@ -751,7 +834,7 @@ jobs:
         ./tool/go test -v -run=TestLicenseHeaders
 
   staticcheck:
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     needs: gomod-cache
     name: staticcheck (${{ matrix.name }})
     strategy:
@@ -798,6 +881,12 @@ jobs:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
+    - name: Setup cigocacher
+      id: cigocacher-setup
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: src
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
     - name: run staticcheck (${{ matrix.name }})
       working-directory: src
       run: |
@@ -825,7 +914,7 @@ jobs:
       - go_mod_tidy
       - licenses
       - staticcheck
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     steps:
     - name: notify  
       # Only notify slack for merged commits, not PR failures.
@@ -854,7 +943,7 @@ jobs:
 
   merge_blocker:
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     needs:
       - android
       - test
@@ -882,7 +971,7 @@ jobs:
    # tests anywhere, really, but a flaky test here prevents merging.)
   check_mergeability_strict:
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     needs:
       - android
       - cross
@@ -903,7 +992,7 @@ jobs:
 
   check_mergeability:
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: gocached-test
     needs:
       - check_mergeability_strict
       - test

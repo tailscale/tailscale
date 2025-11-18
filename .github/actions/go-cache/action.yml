@@ -1,0 +1,32 @@
+name: go-cache
+description: Set up build to use cigocacher
+
+inputs:
+  cigocached-url:
+    description: URL of the cigocached server
+    required: true
+  checkout-path:
+    description: Path to cloned repository
+    required: true
+
+outputs:
+  success:
+    description: Whether cigocacher was set up successfully
+    value: ${{ steps.setup-env.outputs.success }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup env
+      id: setup-env
+      shell: bash
+      working-directory: ${{ inputs.checkout-path }}
+      run: |
+        ./tool/go build -o /tmp/cigocacher ./cmd/cigocacher
+        CIGOCACHER_TOKEN="$(/tmp/cigocacher --cigocached-url ${{ inputs.cigocached-url }} --auth)"
+        if [ -n "$CIGOCACHER_TOKEN" ]; then
+          echo "Fetched cigocacher token successfully"
+          echo "::add-mask::${CIGOCACHER_TOKEN}"
+          echo "GOCACHEPROG=/tmp/cigocacher --cigocached-url ${{ inputs.cigocached-url }} --token ${CIGOCACHER_TOKEN}" >> "$GITHUB_ENV"
+          echo "success=true" >> "$GITHUB_OUTPUT"
+        fi
