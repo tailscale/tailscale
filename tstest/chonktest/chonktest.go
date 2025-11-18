@@ -9,6 +9,7 @@ package chonktest
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"math/rand"
 	"os"
 	"testing"
@@ -251,6 +252,52 @@ func RunCompactableChonkTests(t *testing.T, newChonk func(t *testing.T) tka.Comp
 		childHashes = must.Get(chonk.ChildAUMs(parentHash))
 		if diff := cmp.Diff([]tka.AUM{child1, child2}, childHashes, cmpopts.SortSlices(aumHashesLess)); diff != "" {
 			t.Fatalf("ChildAUMs() output differs (-want, +got):\n%s", diff)
+		}
+	})
+
+	t.Run("RemoveAll", func(t *testing.T) {
+		t.Parallel()
+		chonk := newChonk(t)
+		parentHash := randHash(t, 1)
+		data := []tka.AUM{
+			{
+				MessageKind: tka.AUMRemoveKey,
+				KeyID:       []byte{1, 2},
+				PrevAUMHash: parentHash[:],
+			},
+			{
+				MessageKind: tka.AUMRemoveKey,
+				KeyID:       []byte{3, 4},
+				PrevAUMHash: parentHash[:],
+			},
+		}
+
+		if err := chonk.CommitVerifiedAUMs(data); err != nil {
+			t.Fatalf("CommitVerifiedAUMs failed: %v", err)
+		}
+
+		// Check we can retrieve the AUMs we just stored
+		for _, want := range data {
+			got, err := chonk.AUM(want.Hash())
+			if err != nil {
+				t.Fatalf("could not get %s: %v", want.Hash(), err)
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("stored AUM %s differs (-want, +got):\n%s", want.Hash(), diff)
+			}
+		}
+
+		// Call RemoveAll() to drop all the AUM state
+		if err := chonk.RemoveAll(); err != nil {
+			t.Fatalf("RemoveAll failed: %v", err)
+		}
+
+		// Check we can no longer retrieve the previously-stored AUMs
+		for _, want := range data {
+			aum, err := chonk.AUM(want.Hash())
+			if !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("expected os.ErrNotExist for %s, instead got aum=%v, err=%v", want.Hash(), aum, err)
+			}
 		}
 	})
 }
