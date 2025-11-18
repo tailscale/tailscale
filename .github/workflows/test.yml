@@ -703,6 +703,7 @@ jobs:
       run: |
         pkgs=$(./tool/go list ./... | grep -Ev 'dnsfallback|k8s-operator|xdp')
         ./tool/go generate $pkgs
+        git add -N . # ensure untracked files are noticed
         echo
         echo
         git diff --name-only --exit-code || (echo "The files above need updating. Please run 'go generate'."; exit 1)
