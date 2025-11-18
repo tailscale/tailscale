@@ -1301,7 +1301,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 			if hi := nm.SelfNode.Hostinfo(); hi.Valid() {
 				ss.HostName = hi.Hostname()
 			}
-			ss.DNSName = nm.Name
+			ss.DNSName = nm.SelfName()
 			ss.UserID = nm.User()
 			if sn := nm.SelfNode; sn.Valid() {
 				peerStatusFromNode(ss, sn)
@@ -1617,7 +1617,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	keyExpiryExtended := false
 	if st.NetMap != nil {
 		wasExpired := b.keyExpired
-		isExpired := !st.NetMap.Expiry.IsZero() && st.NetMap.Expiry.Before(b.clock.Now())
+		isExpired := !st.NetMap.SelfKeyExpiry().IsZero() && st.NetMap.SelfKeyExpiry().Before(b.clock.Now())
 		if wasExpired && !isExpired {
 			keyExpiryExtended = true
 		}

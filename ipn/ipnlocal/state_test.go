@@ -999,8 +999,10 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 	t.Logf("\n\nExpireKey")
 	notifies.expect(1)
 	cc.send(sendOpt{nm: &netmap.NetworkMap{
-		Expiry:   time.Now().Add(-time.Minute),
-		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
+		SelfNode: (&tailcfg.Node{
+			KeyExpiry:         time.Now().Add(-time.Minute),
+			MachineAuthorized: true,
+		}).View(),
 	}})
 	{
 		nn := notifies.drain(1)
@@ -1015,8 +1017,10 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 	t.Logf("\n\nExtendKey")
 	notifies.expect(1)
 	cc.send(sendOpt{nm: &netmap.NetworkMap{
-		Expiry:   time.Now().Add(time.Minute),
-		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
+		SelfNode: (&tailcfg.Node{
+			MachineAuthorized: true,
+			KeyExpiry:         time.Now().Add(time.Minute),
+		}).View(),
 	}})
 	{
 		nn := notifies.drain(1)
@@ -1427,7 +1431,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				mustDo2(t)(lb.EditPrefs(connect))
 				cc().authenticated(node1)
 				cc().send(sendOpt{nm: &netmap.NetworkMap{
-					Expiry: time.Now().Add(-time.Minute),
+					SelfNode: (&tailcfg.Node{
+						KeyExpiry: time.Now().Add(-time.Minute),
+					}).View(),
 				}})
 			},
 			wantState:     ipn.NeedsLogin,
@@ -1550,7 +1556,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				mustDo2(t)(lb.EditPrefs(connect))
 				cc().authenticated(node1)
 				cc().send(sendOpt{nm: &netmap.NetworkMap{
-					Expiry: time.Now().Add(-time.Minute),
+					SelfNode: (&tailcfg.Node{
+						KeyExpiry: time.Now().Add(-time.Minute),
+					}).View(),
 				}})
 			},
 			// Even with seamless, if the key we are using expires, we want to disconnect:
@@ -1725,7 +1733,6 @@ func buildNetmapWithPeers(self tailcfg.NodeView, peers ...tailcfg.NodeView) *net
 
 	return &netmap.NetworkMap{
 		SelfNode:     self,
-		Name:         self.Name(),
 		Domain:       domain,
 		Peers:        peers,
 		UserProfiles: users,

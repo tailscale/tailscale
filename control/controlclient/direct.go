@@ -1093,7 +1093,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			c.persist = newPersist.View()
 			persist = c.persist
 		}
-		c.expiry = nm.Expiry
+		c.expiry = nm.SelfKeyExpiry()
 	}
 
 	// gotNonKeepAliveMessage is whether we've yet received a MapResponse message without

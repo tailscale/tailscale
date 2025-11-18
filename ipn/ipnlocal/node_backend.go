@@ -748,7 +748,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		}
 		dcfg.Hosts[fqdn] = ips
 	}
-	set(nm.Name, nm.GetAddresses())
+	set(nm.SelfName(), nm.GetAddresses())
 	for _, peer := range peers {
 		set(peer.Name(), peer.Addresses())
 	}
