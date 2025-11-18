@@ -668,7 +668,7 @@ const (
 )
 
 // markActiveChain marks AUMs in the active chain.
-// All AUMs that are within minChain ancestors of head are
+// All AUMs that are within minChain ancestors of head, or are marked as young, are
 // marked retainStateActive, and all remaining ancestors are
 // marked retainStateCandidate.
 //
@@ -700,19 +700,22 @@ func markActiveChain(storage Chonk, verdict map[AUMHash]retainState, minChain in
 
 	// If we got this far, we have at least minChain AUMs stored, and minChain number
 	// of ancestors have been marked for retention. We now continue to iterate backwards
-	// till we find an AUM which we can compact to (a Checkpoint AUM).
+	// till we find an AUM which we can compact to: either a Checkpoint AUM which is old
+	// enough, or the genesis AUM.
 	for {
 		h := next.Hash()
 		verdict[h] |= retainStateActive
-		if next.MessageKind == AUMCheckpoint {
-			lastActiveAncestor = h
-			break
-		}
 
 		parent, hasParent := next.Parent()
-		if !hasParent {
-			return AUMHash{}, errors.New("reached genesis AUM without finding an appropriate lastActiveAncestor")
+		isYoung := verdict[h]&retainStateYoung != 0
+
+		if next.MessageKind == AUMCheckpoint {
+			lastActiveAncestor = h
+			if !isYoung || !hasParent {
+				break
+			}
 		}
+
 		if next, err = storage.AUM(parent); err != nil {
 			return AUMHash{}, fmt.Errorf("searching for compaction target (%v): %w", parent, err)
 		}
@@ -917,11 +920,11 @@ func Compact(storage CompactableChonk, head AUMHash, opts CompactionOptions) (la
 		verdict[h] = 0
 	}
 
-	if lastActiveAncestor, err = markActiveChain(storage, verdict, opts.MinChain, head); err != nil {
-		return AUMHash{}, fmt.Errorf("marking active chain: %w", err)
-	}
 	if err := markYoungAUMs(storage, verdict, opts.MinAge); err != nil {
 		return AUMHash{}, fmt.Errorf("marking young AUMs: %w", err)
+	}
+	if lastActiveAncestor, err = markActiveChain(storage, verdict, opts.MinChain, head); err != nil {
+		return AUMHash{}, fmt.Errorf("marking active chain: %w", err)
 	}
 	if err := markDescendantAUMs(storage, verdict); err != nil {
 		return AUMHash{}, fmt.Errorf("marking descendant AUMs: %w", err)
