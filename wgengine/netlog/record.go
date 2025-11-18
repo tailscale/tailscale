@@ -9,6 +9,7 @@ import (
 	"cmp"
 	"net/netip"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -169,7 +170,10 @@ func (nu nodeUser) toNode() netlogtype.Node {
 	if !nu.Valid() {
 		return netlogtype.Node{}
 	}
-	n := netlogtype.Node{NodeID: nu.StableID(), Name: nu.Name()}
+	n := netlogtype.Node{
+		NodeID: nu.StableID(),
+		Name:   strings.TrimSuffix(nu.Name(), "."),
+	}
 	var ipv4, ipv6 netip.Addr
 	for _, addr := range nu.Addresses().All() {
 		switch {
