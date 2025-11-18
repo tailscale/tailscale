@@ -16,6 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.17.58
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.75.3
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.44.7
+	github.com/bradfitz/go-tool-cache v0.0.0-20251113223507-0124e698e0bd
 	github.com/bramvdbogaerde/go-scp v1.4.0
 	github.com/cilium/ebpf v0.15.0
 	github.com/coder/websocket v1.8.12
@@ -60,7 +61,7 @@ require (
 	github.com/jellydator/ttlcache/v3 v3.1.0
 	github.com/jsimonetti/rtnetlink v1.4.0
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
-	github.com/klauspost/compress v1.17.11
+	github.com/klauspost/compress v1.18.0
 	github.com/kortschak/wol v0.0.0-20200729010619-da482cc4850a
 	github.com/mattn/go-colorable v0.1.13
 	github.com/mattn/go-isatty v0.0.20
@@ -74,8 +75,8 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/sftp v1.13.6
 	github.com/prometheus-community/pro-bing v0.4.0
-	github.com/prometheus/client_golang v1.20.5
-	github.com/prometheus/common v0.55.0
+	github.com/prometheus/client_golang v1.23.0
+	github.com/prometheus/common v0.65.0
 	github.com/prometheus/prometheus v0.49.2-0.20240125131847-c3b8ef1694ff
 	github.com/safchain/ethtool v0.3.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
@@ -103,7 +104,7 @@ require (
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
 	golang.org/x/crypto v0.45.0
-	golang.org/x/exp v0.0.0-20250210185358-939b2ce775ac
+	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b
 	golang.org/x/mod v0.30.0
 	golang.org/x/net v0.47.0
 	golang.org/x/oauth2 v0.30.0
@@ -355,8 +356,8 @@ require (
 	github.com/pkg/diff v0.0.0-20210226163009-20ebb0f2a09e // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/polyfloyd/go-errorlint v1.4.8 // indirect
-	github.com/prometheus/client_model v0.6.1
-	github.com/prometheus/procfs v0.15.1 // indirect
+	github.com/prometheus/client_model v0.6.2
+	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/quasilyte/go-ruleguard v0.4.2 // indirect
 	github.com/quasilyte/gogrep v0.5.0 // indirect
 	github.com/quasilyte/regex/syntax v0.0.0-20210819130434-b3f0c404a727 // indirect
@@ -414,7 +415,7 @@ require (
 	golang.org/x/image v0.27.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
-	google.golang.org/protobuf v1.36.3 // indirect
+	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
