@@ -40,6 +40,19 @@ import (
 	"tailscale.com/wgengine"
 )
 
+func handlerForTest(t testing.TB, h *Handler) *Handler {
+	if h.Actor == nil {
+		h.Actor = &ipnauth.TestActor{}
+	}
+	if h.b == nil {
+		h.b = &ipnlocal.LocalBackend{}
+	}
+	if h.logf == nil {
+		h.logf = logger.TestLogger(t)
+	}
+	return h
+}
+
 func TestValidHost(t *testing.T) {
 	tests := []struct {
 		host  string
@@ -57,7 +70,7 @@ func TestValidHost(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.host, func(t *testing.T) {
-			h := &Handler{}
+			h := handlerForTest(t, &Handler{})
 			if got := h.validHost(test.host); got != test.valid {
 				t.Errorf("validHost(%q)=%v, want %v", test.host, got, test.valid)
 			}
@@ -68,10 +81,9 @@ func TestValidHost(t *testing.T) {
 func TestSetPushDeviceToken(t *testing.T) {
 	tstest.Replace(t, &validLocalHostForTesting, true)
 
-	h := &Handler{
+	h := handlerForTest(t, &Handler{
 		PermitWrite: true,
-		b:           &ipnlocal.LocalBackend{},
-	}
+	})
 	s := httptest.NewServer(h)
 	defer s.Close()
 	c := s.Client()
@@ -125,9 +137,9 @@ func (b whoIsBackend) PeerCaps(ip netip.Addr) tailcfg.PeerCapMap {
 //
 // And https://github.com/tailscale/tailscale/issues/12465
 func TestWhoIsArgTypes(t *testing.T) {
-	h := &Handler{
+	h := handlerForTest(t, &Handler{
 		PermitRead: true,
-	}
+	})
 
 	match := func() (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
 		return (&tailcfg.Node{
@@ -190,7 +202,10 @@ func TestWhoIsArgTypes(t *testing.T) {
 
 func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 	newHandler := func(connIsLocalAdmin bool) *Handler {
-		return &Handler{Actor: &ipnauth.TestActor{LocalAdmin: connIsLocalAdmin}, b: newTestLocalBackend(t)}
+		return handlerForTest(t, &Handler{
+			Actor: &ipnauth.TestActor{LocalAdmin: connIsLocalAdmin},
+			b:     newTestLocalBackend(t),
+		})
 	}
 	tests := []struct {
 		name     string
@@ -298,11 +313,11 @@ func TestServeWatchIPNBus(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
-			h := &Handler{
+			h := handlerForTest(t, &Handler{
 				PermitRead:  tt.permitRead,
 				PermitWrite: tt.permitWrite,
 				b:           newTestLocalBackend(t),
-			}
+			})
 			s := httptest.NewServer(h)
 			defer s.Close()
 			c := s.Client()

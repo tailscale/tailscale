@@ -264,7 +264,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if fn, ok := handlerForPath(r.URL.Path); ok {
+	if fn, route, ok := handlerForPath(r.URL.Path); ok {
+		h.logRequest(r.Method, route)
 		fn(h, w, r)
 	} else {
 		http.NotFound(w, r)
@@ -300,9 +301,9 @@ func (h *Handler) validHost(hostname string) bool {
 
 // handlerForPath returns the LocalAPI handler for the provided Request.URI.Path.
 // (the path doesn't include any query parameters)
-func handlerForPath(urlPath string) (h LocalAPIHandler, ok bool) {
+func handlerForPath(urlPath string) (h LocalAPIHandler, route string, ok bool) {
 	if urlPath == "/" {
-		return (*Handler).serveLocalAPIRoot, true
+		return (*Handler).serveLocalAPIRoot, "/", true
 	}
 	suff, ok := strings.CutPrefix(urlPath, "/localapi/v0/")
 	if !ok {
@@ -310,22 +311,31 @@ func handlerForPath(urlPath string) (h LocalAPIHandler, ok bool) {
 		// to people that they're not necessarily stable APIs. In practice we'll
 		// probably need to keep them pretty stable anyway, but for now treat
 		// them as an internal implementation detail.
-		return nil, false
+		return nil, "", false
 	}
 	if fn, ok := handler[suff]; ok {
 		// Here we match exact handler suffixes like "status" or ones with a
 		// slash already in their name, like "tka/status".
-		return fn, true
+		return fn, "/localapi/v0/" + suff, true
 	}
 	// Otherwise, it might be a prefix match like "files/*" which we look up
 	// by the prefix including first trailing slash.
 	if i := strings.IndexByte(suff, '/'); i != -1 {
 		suff = suff[:i+1]
 		if fn, ok := handler[suff]; ok {
-			return fn, true
+			return fn, "/localapi/v0/" + suff, true
 		}
 	}
-	return nil, false
+	return nil, "", false
+}
+
+func (h *Handler) logRequest(method, route string) {
+	switch method {
+	case httpm.GET, httpm.HEAD, httpm.OPTIONS:
+		// don't log safe methods
+	default:
+		h.Logf("localapi: [%s] %s", method, route)
+	}
 }
 
 func (*Handler) serveLocalAPIRoot(w http.ResponseWriter, r *http.Request) {
