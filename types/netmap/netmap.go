@@ -71,6 +71,9 @@ type NetworkMap struct {
 	// If this is empty, then data-plane audit logging is disabled.
 	DomainAuditLogID string
 
+	// LogUploadAuth, if non-empty, is the HTTP Authorization used when uploading logs.
+	LogUploadAuth string
+
 	// UserProfiles contains the profile information of UserIDs referenced
 	// in SelfNode and Peers.
 	UserProfiles map[tailcfg.UserID]tailcfg.UserProfileView

@@ -167,6 +167,7 @@ func mapResponseContainsNonPatchFields(res *tailcfg.MapResponse) bool {
 		res.SSHPolicy != nil ||
 		res.TKAInfo != nil ||
 		res.DomainDataPlaneAuditLogID != "" ||
+		res.LogUploadAuth != "" ||
 		res.Debug != nil ||
 		res.ControlDialPlan != nil ||
 		res.ClientVersion != nil ||

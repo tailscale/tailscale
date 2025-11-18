@@ -177,7 +177,8 @@ type CapabilityVersion int
 //   - 128: 2025-10-02: can handle C2N /debug/health.
 //   - 129: 2025-10-04: Fixed sleep/wake deadlock in magicsock when using peer relay (PR #17449)
 //   - 130: 2025-10-06: client can send key.HardwareAttestationPublic and key.HardwareAttestationKeySignature in MapRequest
-const CurrentCapabilityVersion CapabilityVersion = 130
+//   - 131: 2025-10-28: client is able to use MapResponse.LogUploadAuth when uploading logs, allow empty Node.DataPlaneAuditLogID, and disable embedded node info
+const CurrentCapabilityVersion CapabilityVersion = 131
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -465,6 +466,8 @@ type Node struct {
 	ComputedNameWithHost    string `json:",omitempty"` // either "ComputedName" or "ComputedName (computedHostIfDifferent)", if computedHostIfDifferent is set
 
 	// DataPlaneAuditLogID is the per-node logtail ID used for data plane audit logging.
+	// If empty, but [MapResponse.DomainDataPlaneAuditLogID] is non-empty,
+	// then logs are only uploaded under the domain-specific log ID.
 	DataPlaneAuditLogID string `json:",omitempty"`
 
 	// Expired is whether this node's key has expired. Control may send
@@ -2135,6 +2138,9 @@ type MapResponse struct {
 	// used when writing data plane audit logs.
 	DomainDataPlaneAuditLogID string `json:",omitempty"`
 
+	// LogUploadAuth, if non-empty, is the HTTP Authorization used when uploading logs.
+	LogUploadAuth string `json:",omitempty"`
+
 	// Debug is normally nil, except for when the control server
 	// is setting debug settings on a node.
 	Debug *Debug `json:",omitempty"`
@@ -2597,6 +2603,9 @@ const (
 
 	// NodeAttrLogExitFlows enables exit node destinations in network flow logs.
 	NodeAttrLogExitFlows NodeCapability = "log-exit-flows"
+
+	// NodeAttrExcludeNodeInfoInFlows disables embedded node information in network flow logs.
+	NodeAttrExcludeNodeInfoInFlows NodeCapability = "exclude-node-info-in-flows"
 
 	// NodeAttrAutoExitNode permits the automatic exit nodes feature.
 	NodeAttrAutoExitNode NodeCapability = "auto-exit-node"

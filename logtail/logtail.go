@@ -104,6 +104,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		privateID:      cfg.PrivateID,
 		stderr:         cfg.Stderr,
 		stderrLevel:    int64(cfg.StderrLevel),
+		httpAuth:       cfg.HTTPAuth,
 		httpc:          cfg.HTTPC,
 		url:            cfg.BaseURL + "/c/" + cfg.Collection + "/" + cfg.PrivateID.String() + urlSuffix,
 		lowMem:         cfg.LowMemory,
@@ -144,6 +145,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 type Logger struct {
 	stderr         io.Writer
 	stderrLevel    int64 // accessed atomically
+	httpAuth       string
 	httpc          *http.Client
 	url            string
 	lowMem         bool
@@ -488,6 +490,9 @@ func (lg *Logger) upload(ctx context.Context, body []byte, origlen int) (retryAf
 		// Report it very loudly.
 		// TODO record logs to disk
 		panic("logtail: cannot build http request: " + err.Error())
+	}
+	if lg.httpAuth != "" {
+		req.Header.Add("Authorization", lg.httpAuth)
 	}
 	if origlen != -1 {
 		req.Header.Add("Content-Encoding", "zstd")

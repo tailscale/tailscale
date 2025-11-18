@@ -52,20 +52,23 @@ func WGCfg(pk key.NodePrivate, nm *netmap.NetworkMap, logf logger.Logf, flags ne
 	// Setup log IDs for data plane audit logging.
 	if nm.SelfNode.Valid() {
 		canNetworkLog := nm.SelfNode.HasCap(tailcfg.CapabilityDataPlaneAuditLogs)
-		logExitFlowEnabled := nm.SelfNode.HasCap(tailcfg.NodeAttrLogExitFlows)
-		if canNetworkLog && nm.SelfNode.DataPlaneAuditLogID() != "" && nm.DomainAuditLogID != "" {
-			nodeID, errNode := logid.ParsePrivateID(nm.SelfNode.DataPlaneAuditLogID())
-			if errNode != nil {
-				logf("[v1] wgcfg: unable to parse node audit log ID: %v", errNode)
-			}
+		if canNetworkLog && nm.DomainAuditLogID != "" {
 			domainID, errDomain := logid.ParsePrivateID(nm.DomainAuditLogID)
 			if errDomain != nil {
 				logf("[v1] wgcfg: unable to parse domain audit log ID: %v", errDomain)
 			}
+			nodeID, errNode := logid.ParsePrivateID(nm.SelfNode.DataPlaneAuditLogID())
+			if nm.SelfNode.DataPlaneAuditLogID() == "" {
+				errNode = nil // may be empty while DomainAuditLogID is non-empty
+			} else if errNode != nil {
+				logf("[v1] wgcfg: unable to parse node audit log ID: %v", errNode)
+			}
 			if errNode == nil && errDomain == nil {
+				cfg.NetworkLogging.TailnetID = domainID
 				cfg.NetworkLogging.NodeID = nodeID
-				cfg.NetworkLogging.DomainID = domainID
-				cfg.NetworkLogging.LogExitFlowEnabled = logExitFlowEnabled
+				cfg.NetworkLogging.HTTPAuth = nm.LogUploadAuth
+				cfg.NetworkLogging.AnonymizeExitTraffic = !nm.SelfNode.HasCap(tailcfg.NodeAttrLogExitFlows)     // anonymize by default
+				cfg.NetworkLogging.ExcludeNodeInfo = nm.SelfNode.HasCap(tailcfg.NodeAttrExcludeNodeInfoInFlows) // include by default
 			}
 		}
 	}

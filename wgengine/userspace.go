@@ -1006,12 +1006,12 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	if !engineChanged && !routerChanged && !dnsChanged && !listenPortChanged && !isSubnetRouterChanged && !peerMTUChanged {
 		return ErrNoChanges
 	}
-	newLogIDs := cfg.NetworkLogging
-	oldLogIDs := e.lastCfgFull.NetworkLogging
-	netLogIDsNowValid := !newLogIDs.NodeID.IsZero() && !newLogIDs.DomainID.IsZero()
-	netLogIDsWasValid := !oldLogIDs.NodeID.IsZero() && !oldLogIDs.DomainID.IsZero()
-	netLogIDsChanged := netLogIDsNowValid && netLogIDsWasValid && newLogIDs != oldLogIDs
-	netLogRunning := netLogIDsNowValid && !routerCfg.Equal(&router.Config{})
+	oldLogConf := e.lastCfgFull.NetworkLogging
+	newLogConf := cfg.NetworkLogging
+	netLogWasValid := !oldLogConf.TailnetID.IsZero()
+	netLogNowValid := !newLogConf.TailnetID.IsZero()
+	netLogChanged := netLogWasValid && netLogNowValid && newLogConf != oldLogConf
+	netLogRunning := netLogNowValid && !routerCfg.Equal(&router.Config{})
 	if !buildfeatures.HasNetLog || envknob.NoLogsNoSupport() {
 		netLogRunning = false
 	}
@@ -1069,7 +1069,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 
 	// Shutdown the network logger because the IDs changed.
 	// Let it be started back up by subsequent logic.
-	if buildfeatures.HasNetLog && netLogIDsChanged && e.networkLogger.Running() {
+	if buildfeatures.HasNetLog && netLogChanged && e.networkLogger.Running() {
 		e.logf("wgengine: Reconfig: shutting down network logger")
 		ctx, cancel := context.WithTimeout(context.Background(), networkLoggerUploadTimeout)
 		defer cancel()
@@ -1081,11 +1081,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	// Startup the network logger.
 	// Do this before configuring the router so that we capture initial packets.
 	if buildfeatures.HasNetLog && netLogRunning && !e.networkLogger.Running() {
-		nid := cfg.NetworkLogging.NodeID
-		tid := cfg.NetworkLogging.DomainID
-		logExitFlowEnabled := cfg.NetworkLogging.LogExitFlowEnabled
-		e.logf("wgengine: Reconfig: starting up network logger (node:%s tailnet:%s)", nid.Public(), tid.Public())
-		if err := e.networkLogger.Startup(e.logf, nm, nid, tid, e.tundev, e.magicConn, e.netMon, e.health, e.eventBus, logExitFlowEnabled); err != nil {
+		e.logf("wgengine: Reconfig: starting up network logger (tailnet:%s node:%s)", cfg.NetworkLogging.TailnetID.Public(), cfg.NetworkLogging.NodeID.Public())
+		if err := e.networkLogger.Startup(e.logf, cfg.NetworkLogging, nm, e.tundev, e.magicConn, e.netMon, e.health, e.eventBus); err != nil {
 			e.logf("wgengine: Reconfig: error starting up network logger: %v", err)
 		}
 		e.networkLogger.ReconfigRoutes(routerCfg)

@@ -92,6 +92,7 @@ type mapSession struct {
 	collectServices        bool
 	lastDomain             string
 	lastDomainAuditLogID   string
+	lastLogUploadAuth      string
 	lastHealth             []string
 	lastDisplayMessages    map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage
 	lastPopBrowserURL      string
@@ -412,6 +413,9 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	}
 	if resp.DomainDataPlaneAuditLogID != "" {
 		ms.lastDomainAuditLogID = resp.DomainDataPlaneAuditLogID
+	}
+	if resp.LogUploadAuth != "" {
+		ms.lastLogUploadAuth = resp.LogUploadAuth
 	}
 	if resp.Health != nil {
 		ms.lastHealth = resp.Health
@@ -872,6 +876,7 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		UserProfiles:      make(map[tailcfg.UserID]tailcfg.UserProfileView),
 		Domain:            ms.lastDomain,
 		DomainAuditLogID:  ms.lastDomainAuditLogID,
+		LogUploadAuth:     ms.lastLogUploadAuth,
 		DNS:               *ms.lastDNSConfig,
 		PacketFilter:      ms.lastParsedPacketFilter,
 		PacketFilterRules: ms.lastPacketFilterRules,
