@@ -711,7 +711,7 @@ func ExpandProxyTargetValue(target string, supportedSchemes []string, defaultSch
 	switch u.Hostname() {
 	case "localhost", "127.0.0.1":
 	default:
-		return "", errors.New("only localhost or 127.0.0.1 proxies are currently supported")
+		return "", errors.New("only localhost or 127.0.0.1 proxies are currently supported. Relative paths are not supported.")
 	}
 
 	// validate the port
