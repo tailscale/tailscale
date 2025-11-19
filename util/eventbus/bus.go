@@ -134,7 +134,7 @@ func (b *Bus) pump(ctx context.Context) {
 		// queue space for it.
 		for !vals.Empty() {
 			val := vals.Peek()
-			dests := b.dest(reflect.ValueOf(val.Event).Type())
+			dests := b.dest(reflect.TypeOf(val.Event))
 
 			if b.routeDebug.active() {
 				clients := make([]*Client, len(dests))
