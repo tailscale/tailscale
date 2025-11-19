@@ -72,6 +72,12 @@ const (
 
 	// TSMPTypePong is the type byte for a TailscalePongResponse.
 	TSMPTypePong TSMPType = 'o'
+
+	// TSPMTypeDiscoAdvertisement is the type byte for sending disco keys
+	TSMPTypeDiscoAdvertisement TSMPType = 'a'
+
+	// TSPMTypeDiscoSolicitation is the type byte for sending disco keys
+	TSMPTypeDiscoSolicitation TSMPType = 's'
 )
 
 type TailscaleRejectReason byte
@@ -258,4 +264,25 @@ func (h TSMPPongReply) Marshal(buf []byte) error {
 	copy(buf[1:], h.Data[:])
 	binary.BigEndian.PutUint16(buf[9:11], h.PeerAPIPort)
 	return nil
+}
+
+// TSMPDiscoKey is a TSMP message that's used for distributing Disco Keys.
+//
+// On the wire, after the IP header, it's currently 33 bytes:
+//   - 'a' (TSMPTypeDiscoAdvertisement)
+//   - 32 disco key bytes
+type TSMPDiscoKey struct {
+	Data [32]byte
+}
+
+func (pp *Parsed) AsTSMPDiscoAdvertisement() (src netip.AddrPort, key TSMPDiscoKey, ok bool) {
+	if pp.IPProto != ipproto.TSMP {
+		return
+	}
+	p := pp.Payload()
+	if len(p) < 33 || p[0] != byte(TSMPTypeDiscoAdvertisement) {
+		return
+	}
+	copy(key.Data[:], p[1:])
+	return pp.Src, key, true
 }
