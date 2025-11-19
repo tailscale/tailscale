@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"net"
 	"testing"
-
 	"unsafe"
 
 	"github.com/tailscale/wireguard-go/conn"
