@@ -17,6 +17,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 )
@@ -673,7 +674,8 @@ func CheckFunnelPort(wantedPort uint16, node *ipnstate.PeerStatus) error {
 
 // ExpandProxyTargetValue expands the supported target values to be proxied
 // allowing for input values to be a port number, a partial URL, or a full URL
-// including a path.
+// including a path. If it's for a service, remote addresses are allowed and
+// there doesn't have to be a port specified.
 //
 // examples:
 //   - 3000
@@ -683,17 +685,25 @@ func CheckFunnelPort(wantedPort uint16, node *ipnstate.PeerStatus) error {
 //   - https://localhost:3000
 //   - https-insecure://localhost:3000
 //   - https-insecure://localhost:3000/foo
+//   - https://tailscale.com
 func ExpandProxyTargetValue(target string, supportedSchemes []string, defaultScheme string) (string, error) {
 	const host = "127.0.0.1"
+
+	// empty target is invalid
+	if target == "" {
+		return "", fmt.Errorf("empty target")
+	}
 
 	// support target being a port number
 	if port, err := strconv.ParseUint(target, 10, 16); err == nil {
 		return fmt.Sprintf("%s://%s:%d", defaultScheme, host, port), nil
 	}
 
+	hasScheme := true
 	// prepend scheme if not present
 	if !strings.Contains(target, "://") {
 		target = defaultScheme + "://" + target
+		hasScheme = false
 	}
 
 	// make sure we can parse the target
@@ -707,16 +717,28 @@ func ExpandProxyTargetValue(target string, supportedSchemes []string, defaultSch
 		return "", fmt.Errorf("must be a URL starting with one of the supported schemes: %v", supportedSchemes)
 	}
 
-	// validate the host.
-	switch u.Hostname() {
-	case "localhost", "127.0.0.1":
-	default:
-		return "", errors.New("only localhost or 127.0.0.1 proxies are currently supported")
+	// validate port according to host.
+	if u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1" {
+		// require port for localhost targets
+		if u.Port() == "" {
+			return "", fmt.Errorf("port required for localhost target %q", target)
+		}
+	} else {
+		validHN := dnsname.ValidHostname(u.Hostname()) == nil
+		validIP := net.ParseIP(u.Hostname()) != nil
+		if !validHN && !validIP {
+			return "", fmt.Errorf("invalid hostname or IP address %q", u.Hostname())
+		}
+		// require scheme for non-localhost targets
+		if !hasScheme {
+			return "", fmt.Errorf("non-localhost target %q must include a scheme", target)
+		}
 	}
-
-	// validate the port
 	port, err := strconv.ParseUint(u.Port(), 10, 16)
 	if err != nil || port == 0 {
+		if u.Port() == "" {
+			return u.String(), nil // allow no port for remote destinations
+		}
 		return "", fmt.Errorf("invalid port %q", u.Port())
 	}
 

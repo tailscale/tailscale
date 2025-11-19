@@ -260,12 +260,16 @@ func TestExpandProxyTargetDev(t *testing.T) {
 		{name: "https+insecure-scheme", input: "https+insecure://localhost:8080", expected: "https+insecure://localhost:8080"},
 		{name: "change-default-scheme", input: "localhost:8080", defaultScheme: "https", expected: "https://localhost:8080"},
 		{name: "change-supported-schemes", input: "localhost:8080", defaultScheme: "tcp", supportedSchemes: []string{"tcp"}, expected: "tcp://localhost:8080"},
+		{name: "remote-target", input: "https://example.com:8080", expected: "https://example.com:8080"},
+		{name: "remote-IP-target", input: "http://120.133.20.2:8080", expected: "http://120.133.20.2:8080"},
+		{name: "remote-target-no-port", input: "https://example.com", expected: "https://example.com"},
 
 		// errors
 		{name: "invalid-port", input: "localhost:9999999", wantErr: true},
+		{name: "invalid-hostname", input: "192.168.1:8080", wantErr: true},
 		{name: "unsupported-scheme", input: "ftp://localhost:8080", expected: "", wantErr: true},
-		{name: "not-localhost", input: "https://tailscale.com:8080", expected: "", wantErr: true},
 		{name: "empty-input", input: "", expected: "", wantErr: true},
+		{name: "localhost-no-port", input: "localhost", expected: "", wantErr: true},
 	}
 
 	for _, tt := range tests {

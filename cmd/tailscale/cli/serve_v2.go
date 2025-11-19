@@ -21,6 +21,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -33,6 +34,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/prompt"
 	"tailscale.com/util/set"
@@ -515,6 +517,9 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			target := ""
 			if len(args) > 0 {
 				target = args[0]
+			}
+			if err := e.shouldWarnRemoteDestCompatibility(ctx, target); err != nil {
+				return err
 			}
 			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix, e.acceptAppCaps, int(e.proxyProtocol))
 			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
@@ -999,16 +1004,17 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveTy
 }
 
 var (
-	msgFunnelAvailable        = "Available on the internet:"
-	msgServeAvailable         = "Available within your tailnet:"
-	msgServiceWaitingApproval = "This machine is configured as a service proxy for %s, but approval from an admin is required. Once approved, it will be available in your Tailnet as:"
-	msgRunningInBackground    = "%s started and running in the background."
-	msgRunningTunService      = "IPv4 and IPv6 traffic to %s is being routed to your operating system."
-	msgDisableProxy           = "To disable the proxy, run: tailscale %s --%s=%d off"
-	msgDisableServiceProxy    = "To disable the proxy, run: tailscale serve --service=%s --%s=%d off"
-	msgDisableServiceTun      = "To disable the service in TUN mode, run: tailscale serve --service=%s --tun off"
-	msgDisableService         = "To remove config for the service, run: tailscale serve clear %s"
-	msgToExit                 = "Press Ctrl+C to exit."
+	msgFunnelAvailable             = "Available on the internet:"
+	msgServeAvailable              = "Available within your tailnet:"
+	msgServiceWaitingApproval      = "This machine is configured as a service proxy for %s, but approval from an admin is required. Once approved, it will be available in your Tailnet as:"
+	msgRunningInBackground         = "%s started and running in the background."
+	msgRunningTunService           = "IPv4 and IPv6 traffic to %s is being routed to your operating system."
+	msgDisableProxy                = "To disable the proxy, run: tailscale %s --%s=%d off"
+	msgDisableServiceProxy         = "To disable the proxy, run: tailscale serve --service=%s --%s=%d off"
+	msgDisableServiceTun           = "To disable the service in TUN mode, run: tailscale serve --service=%s --tun off"
+	msgDisableService              = "To remove config for the service, run: tailscale serve clear %s"
+	msgWarnRemoteDestCompatibility = "Warning: %s doesn't support connecting to remote destinations from non-default route, see tailscale.com/kb/1552/tailscale-services for detail."
+	msgToExit                      = "Press Ctrl+C to exit."
 )
 
 // messageForPort returns a message for the given port based on the
@@ -1134,6 +1140,77 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	return output.String()
 }
 
+// isRemote reports whether the given destination from serve config
+// is a remote destination.
+func isRemote(target string) bool {
+	// target being a port number means it's localhost
+	if _, err := strconv.ParseUint(target, 10, 16); err == nil {
+		return false
+	}
+
+	// prepend tmp:// if no scheme is present just to help parsing
+	if !strings.Contains(target, "://") {
+		target = "tmp://" + target
+	}
+
+	// make sure we can parse the target, wether it's a full URL or just a host:port
+	u, err := url.ParseRequestURI(target)
+	if err != nil {
+		// If we can't parse the target, it doesn't matter if it's remote or not
+		return false
+	}
+	validHN := dnsname.ValidHostname(u.Hostname()) == nil
+	validIP := net.ParseIP(u.Hostname()) != nil
+	if !validHN && !validIP {
+		return false
+	}
+	if u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1" {
+		return false
+	}
+	return true
+}
+
+// shouldWarnRemoteDestCompatibility reports whether we should warn the user
+// that their current OS/environment may not be compatible with
+// service's proxy destination.
+func (e *serveEnv) shouldWarnRemoteDestCompatibility(ctx context.Context, target string) error {
+	// no target means nothing to check
+	if target == "" {
+		return nil
+	}
+
+	if filepath.IsAbs(target) || strings.HasPrefix(target, "text:") {
+		// local path or text target, nothing to check
+		return nil
+	}
+
+	// only check for remote destinations
+	if !isRemote(target) {
+		return nil
+	}
+
+	// Check if running as Mac extension and warn
+	if version.IsMacAppStore() || version.IsMacSysExt() {
+		return fmt.Errorf(msgWarnRemoteDestCompatibility, "the MacOS extension")
+	}
+
+	// Check for linux, if it's running with TS_FORCE_LINUX_BIND_TO_DEVICE=true
+	// and tailscale bypass mark is not working. If any of these conditions are true, and the dest is
+	// a remote destination, return true.
+	if runtime.GOOS == "linux" {
+		SOMarkInUse, err := e.lc.CheckSOMarkInUse(ctx)
+		if err != nil {
+			log.Printf("error checking SO mark in use: %v", err)
+			return nil
+		}
+		if !SOMarkInUse {
+			return fmt.Errorf(msgWarnRemoteDestCompatibility, "the Linux tailscaled without SO_MARK")
+		}
+	}
+
+	return nil
+}
+
 func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target, mds string, caps []tailcfg.PeerCapability) error {
 	h := new(ipn.HTTPHandler)
 	switch {
@@ -1193,6 +1270,8 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 		return fmt.Errorf("invalid TCP target %q", target)
 	}
 
+	svcName := tailcfg.AsServiceName(dnsName)
+
 	targetURL, err := ipn.ExpandProxyTargetValue(target, []string{"tcp"}, "tcp")
 	if err != nil {
 		return fmt.Errorf("unable to expand target: %v", err)
@@ -1204,7 +1283,6 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 	}
 
 	// TODO: needs to account for multiple configs from foreground mode
-	svcName := tailcfg.AsServiceName(dnsName)
 	if sc.IsServingWeb(srcPort, svcName) {
 		return fmt.Errorf("cannot serve TCP; already serving web on %d for %s", srcPort, dnsName)
 	}

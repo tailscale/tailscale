@@ -1401,6 +1401,23 @@ func (lc *Client) SuggestExitNode(ctx context.Context) (apitype.ExitNodeSuggesti
 	return decodeJSON[apitype.ExitNodeSuggestionResponse](body)
 }
 
+// CheckSOMarkInUse reports whether the socket mark option is in use. This will only
+// be true if tailscale is running on Linux and tailscaled uses SO_MARK.
+func (lc *Client) CheckSOMarkInUse(ctx context.Context) (bool, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/check-so-mark-in-use")
+	if err != nil {
+		return false, err
+	}
+	var res struct {
+		UseSOMark bool `json:"useSoMark"`
+	}
+
+	if err := json.Unmarshal(body, &res); err != nil {
+		return false, fmt.Errorf("invalid JSON from check-so-mark-in-use: %w", err)
+	}
+	return res.UseSOMark, nil
+}
+
 // ShutdownTailscaled requests a graceful shutdown of tailscaled.
 func (lc *Client) ShutdownTailscaled(ctx context.Context) error {
 	_, err := lc.send(ctx, "POST", "/localapi/v0/shutdown", 200, nil)
