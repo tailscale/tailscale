@@ -394,7 +394,7 @@ func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl clien
 // isHTTPRedirectEnabled returns true if HTTP redirect is enabled for the Ingress.
 // The annotation is tailscale.com/http-redirect and it should be set to "true".
 func isHTTPRedirectEnabled(ing *networkingv1.Ingress) bool {
-	return opt.Bool(ing.Annotations[AnnotationHTTPRedirect]).EqualBool(true)
+	return ing.Annotations != nil && opt.Bool(ing.Annotations[AnnotationHTTPRedirect]).EqualBool(true)
 }
 
 // hostnameForIngress returns the hostname for an Ingress resource.

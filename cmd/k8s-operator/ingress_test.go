@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"go.uber.org/zap"
@@ -64,12 +65,14 @@ func TestTailscaleIngress(t *testing.T) {
 		parentType: "ingress",
 		hostname:   "default-test",
 		app:        kubetypes.AppIngressResource,
+		serveConfig: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://1.2.3.4:8080/"},
+				}}},
+		},
 	}
-	serveConfig := &ipn.ServeConfig{
-		TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-		Web: map[ipn.HostPort]*ipn.WebServerConfig{"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://1.2.3.4:8080/"}}}},
-	}
-	opts.serveConfig = serveConfig
 
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"))
@@ -156,12 +159,14 @@ func TestTailscaleIngressHostname(t *testing.T) {
 		parentType: "ingress",
 		hostname:   "default-test",
 		app:        kubetypes.AppIngressResource,
+		serveConfig: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://1.2.3.4:8080/"},
+				}}},
+		},
 	}
-	serveConfig := &ipn.ServeConfig{
-		TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-		Web: map[ipn.HostPort]*ipn.WebServerConfig{"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://1.2.3.4:8080/"}}}},
-	}
-	opts.serveConfig = serveConfig
 
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"))
@@ -276,12 +281,14 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 		parentType: "ingress",
 		hostname:   "default-test",
 		app:        kubetypes.AppIngressResource,
+		serveConfig: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://1.2.3.4:8080/"},
+				}}},
+		},
 	}
-	serveConfig := &ipn.ServeConfig{
-		TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-		Web: map[ipn.HostPort]*ipn.WebServerConfig{"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://1.2.3.4:8080/"}}}},
-	}
-	opts.serveConfig = serveConfig
 
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"))
@@ -368,10 +375,6 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 	}
 	expectReconciled(t, ingR, "default", "test")
 	fullName, shortName := findGenName(t, fc, "default", "test", "ingress")
-	serveConfig := &ipn.ServeConfig{
-		TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-		Web: map[ipn.HostPort]*ipn.WebServerConfig{"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://1.2.3.4:8080/"}}}},
-	}
 	opts := configOpts{
 		stsName:            shortName,
 		secretName:         fullName,
@@ -382,8 +385,14 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 		app:                kubetypes.AppIngressResource,
 		namespaced:         true,
 		proxyType:          proxyTypeIngressResource,
-		serveConfig:        serveConfig,
-		resourceVersion:    "1",
+		serveConfig: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://1.2.3.4:8080/"},
+				}}},
+		},
+		resourceVersion: "1",
 	}
 
 	// 1. Enable metrics- expect metrics Service to be created
@@ -717,12 +726,14 @@ func TestEmptyPath(t *testing.T) {
 				parentType: "ingress",
 				hostname:   "foo",
 				app:        kubetypes.AppIngressResource,
+				serveConfig: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://1.2.3.4:8080/"},
+						}}},
+				},
 			}
-			serveConfig := &ipn.ServeConfig{
-				TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-				Web: map[ipn.HostPort]*ipn.WebServerConfig{"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://1.2.3.4:8080/"}}}},
-			}
-			opts.serveConfig = serveConfig
 
 			expectEqual(t, fc, expectedSecret(t, fc, opts))
 			expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"))
@@ -814,5 +825,103 @@ func backend() *networkingv1.IngressBackend {
 				Number: 8080,
 			},
 		},
+	}
+}
+
+func TestTailscaleIngressWithHTTPRedirect(t *testing.T) {
+	fc := fake.NewFakeClient(ingressClass())
+	ft := &fakeTSClient{}
+	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingR := &IngressReconciler{
+		Client:           fc,
+		ingressClassName: "tailscale",
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			tsnetServer:       fakeTsnetServer,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+	}
+
+	// 1. Create Ingress with HTTP redirect annotation
+	ing := ingress()
+	mak.Set(&ing.Annotations, AnnotationHTTPRedirect, "true")
+	mustCreate(t, fc, ing)
+	mustCreate(t, fc, service())
+
+	expectReconciled(t, ingR, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test", "ingress")
+	opts := configOpts{
+		replicas:   ptr.To[int32](1),
+		stsName:    shortName,
+		secretName: fullName,
+		namespace:  "default",
+		parentType: "ingress",
+		hostname:   "default-test",
+		app:        kubetypes.AppIngressResource,
+		serveConfig: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{
+				443: {HTTPS: true},
+				80:  {HTTP: true},
+			},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://1.2.3.4:8080/"},
+				}},
+				"${TS_CERT_DOMAIN}:80": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Redirect: "301:https://${HOST}${REQUEST_URI}"},
+				}},
+			},
+		},
+	}
+
+	expectEqual(t, fc, expectedSecret(t, fc, opts))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"))
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeResourceReqs)
+
+	// 2. Update device info to get status updated
+	mustUpdate(t, fc, "operator-ns", opts.secretName, func(secret *corev1.Secret) {
+		mak.Set(&secret.Data, "device_id", []byte("1234"))
+		mak.Set(&secret.Data, "device_fqdn", []byte("foo.tailnetxyz.ts.net"))
+	})
+	expectReconciled(t, ingR, "default", "test")
+
+	// Verify Ingress status includes both ports 80 and 443
+	ing = &networkingv1.Ingress{}
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: "test", Namespace: "default"}, ing); err != nil {
+		t.Fatal(err)
+	}
+	wantPorts := []networkingv1.IngressPortStatus{
+		{Port: 443, Protocol: "TCP"},
+		{Port: 80, Protocol: "TCP"},
+	}
+	if !reflect.DeepEqual(ing.Status.LoadBalancer.Ingress[0].Ports, wantPorts) {
+		t.Errorf("incorrect status ports: got %v, want %v", ing.Status.LoadBalancer.Ingress[0].Ports, wantPorts)
+	}
+
+	// 3. Remove HTTP redirect annotation
+	mustUpdate(t, fc, "default", "test", func(ing *networkingv1.Ingress) {
+		delete(ing.Annotations, AnnotationHTTPRedirect)
+	})
+	expectReconciled(t, ingR, "default", "test")
+
+	// 4. Verify Ingress status no longer includes port 80
+	ing = &networkingv1.Ingress{}
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: "test", Namespace: "default"}, ing); err != nil {
+		t.Fatal(err)
+	}
+	wantPorts = []networkingv1.IngressPortStatus{
+		{Port: 443, Protocol: "TCP"},
+	}
+	if !reflect.DeepEqual(ing.Status.LoadBalancer.Ingress[0].Ports, wantPorts) {
+		t.Errorf("incorrect status ports after removing redirect: got %v, want %v", ing.Status.LoadBalancer.Ingress[0].Ports, wantPorts)
 	}
 }
