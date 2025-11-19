@@ -120,6 +120,21 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 	if cfg.AuthKey != "" {
 		args = append(args, "--authkey="+cfg.AuthKey)
 	}
+	if cfg.ClientID != "" {
+		args = append(args, "--client-id="+cfg.ClientID)
+	}
+	if cfg.ClientSecret != "" {
+		clientSecret := cfg.ClientSecret
+		if strings.HasPrefix(clientSecret, "file:") {
+			path := strings.TrimPrefix(clientSecret, "file:")
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return fmt.Errorf("reading client secret file: %w", err)
+			}
+			clientSecret = string(b)
+		}
+		args = append(args, "--client-secret="+clientSecret)
+	}
 	// --advertise-routes can be passed an empty string to configure a
 	// device (that might have previously advertised subnet routes) to not
 	// advertise any routes. Respect an empty string passed by a user and

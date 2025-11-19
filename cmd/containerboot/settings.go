@@ -22,9 +22,11 @@ import (
 
 // settings is all the configuration for containerboot.
 type settings struct {
-	AuthKey  string
-	Hostname string
-	Routes   *string
+	AuthKey      string
+	ClientID     string
+	ClientSecret string
+	Hostname     string
+	Routes       *string
 	// ProxyTargetIP is the destination IP to which all incoming
 	// Tailscale traffic should be proxied. If empty, no proxying
 	// is done. This is typically a locally reachable IP.
@@ -86,6 +88,8 @@ type settings struct {
 func configFromEnv() (*settings, error) {
 	cfg := &settings{
 		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
+		ClientID:                              defaultEnv("TS_CLIENT_ID", ""),
+		ClientSecret:                          defaultEnv("TS_CLIENT_SECRET", ""),
 		Hostname:                              defaultEnv("TS_HOSTNAME", ""),
 		Routes:                                defaultEnvStringPointer("TS_ROUTES"),
 		ServeConfigPath:                       defaultEnv("TS_SERVE_CONFIG", ""),
@@ -211,6 +215,17 @@ func parseAcceptDNS(extraArgs string, acceptDNS bool) (string, bool) {
 }
 
 func (s *settings) validate() error {
+	if s.ClientID == "" && s.ClientSecret != "" {
+		return errors.New("TS_CLIENT_SECRET requires TS_CLIENT_ID to be set")
+	}
+	if s.ClientID != "" && s.AuthKey != "" {
+		return errors.New("TS_CLIENT_ID and TS_CLIENT_SECRET cannot be used with TS_AUTHKEY")
+	}
+	if strings.HasPrefix(s.ClientSecret, "file:") {
+		if _, err := os.Stat(strings.TrimPrefix(s.ClientSecret, "file:")); err != nil {
+			return fmt.Errorf("invalid client secret file: %w", err)
+		}
+	}
 	if s.TailscaledConfigFilePath != "" {
 		dir, file := path.Split(s.TailscaledConfigFilePath)
 		if _, err := os.Stat(dir); err != nil {
@@ -241,8 +256,8 @@ func (s *settings) validate() error {
 	if s.TailnetTargetFQDN != "" && s.TailnetTargetIP != "" {
 		return errors.New("Both TS_TAILNET_TARGET_IP and TS_TAILNET_FQDN cannot be set")
 	}
-	if s.TailscaledConfigFilePath != "" && (s.AcceptDNS != nil || s.AuthKey != "" || s.Routes != nil || s.ExtraArgs != "" || s.Hostname != "") {
-		return errors.New("TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR cannot be set in combination with TS_HOSTNAME, TS_EXTRA_ARGS, TS_AUTHKEY, TS_ROUTES, TS_ACCEPT_DNS.")
+	if s.TailscaledConfigFilePath != "" && (s.AcceptDNS != nil || s.AuthKey != "" || s.ClientID != "" || s.Routes != nil || s.ExtraArgs != "" || s.Hostname != "") {
+		return errors.New("TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR cannot be set in combination with TS_HOSTNAME, TS_EXTRA_ARGS, TS_AUTHKEY, TS_CLIENT_ID, TS_ROUTES, TS_ACCEPT_DNS.")
 	}
 	if s.AllowProxyingClusterTrafficViaIngress && s.UserspaceMode {
 		return errors.New("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS is not supported in userspace mode")
@@ -313,7 +328,7 @@ func (cfg *settings) setupKube(ctx context.Context, kc *kubeClient) error {
 	}
 
 	// Return early if we already have an auth key.
-	if cfg.AuthKey != "" || isOneStepConfig(cfg) {
+	if cfg.AuthKey != "" || cfg.ClientID != "" || isOneStepConfig(cfg) {
 		return nil
 	}
 
@@ -349,7 +364,7 @@ func (cfg *settings) setupKube(ctx context.Context, kc *kubeClient) error {
 // A) if this is the first time starting this node run 'tailscale up --authkey <authkey> <config opts>'
 // B) if this is not the first time starting this node run 'tailscale set <config opts>'.
 func isTwoStepConfigAuthOnce(cfg *settings) bool {
-	return cfg.AuthOnce && cfg.TailscaledConfigFilePath == ""
+	return cfg.AuthOnce && cfg.TailscaledConfigFilePath == "" && cfg.ClientID == ""
 }
 
 // isTwoStepConfigAlwaysAuth returns true if the Tailscale node should be configured
@@ -357,7 +372,7 @@ func isTwoStepConfigAuthOnce(cfg *settings) bool {
 // Step 1: run 'tailscaled'
 // Step 2): run 'tailscale up --authkey <authkey> <config opts>'
 func isTwoStepConfigAlwaysAuth(cfg *settings) bool {
-	return !cfg.AuthOnce && cfg.TailscaledConfigFilePath == ""
+	return !cfg.AuthOnce && cfg.TailscaledConfigFilePath == "" && cfg.ClientID == ""
 }
 
 // isOneStepConfig returns true if the Tailscale node should always be ran and
