@@ -2253,7 +2253,7 @@ func TestC2NDebugNetmap(t *testing.T) {
 	}
 }
 
-func TestNetworkLock(t *testing.T) {
+func TestTailnetLock(t *testing.T) {
 
 	// If you run `tailscale lock log` on a node where Tailnet Lock isn't
 	// enabled, you get an error explaining that.
@@ -2289,6 +2289,79 @@ func TestNetworkLock(t *testing.T) {
 		wantErr := "Tailnet Lock is not enabled\n"
 		if errBuf.String() != wantErr {
 			t.Fatalf("stderr: want %q, got %q", wantErr, errBuf.String())
+		}
+	})
+
+	// If you create a tailnet with two signed nodes and one unsigned,
+	// the signed nodes can talk to each other but the unsigned node cannot
+	// talk to anybody.
+	t.Run("node-connectivity", func(t *testing.T) {
+		tstest.Shard(t)
+		t.Parallel()
+
+		env := NewTestEnv(t)
+		env.Control.DefaultNodeCapabilities = &tailcfg.NodeCapMap{
+			tailcfg.CapabilityTailnetLock: []tailcfg.RawMessage{},
+		}
+
+		// Start two nodes which will be our signing nodes.
+		signing1 := NewTestNode(t, env)
+		signing2 := NewTestNode(t, env)
+
+		nodes := []*TestNode{signing1, signing2}
+		for _, n := range nodes {
+			d := n.StartDaemon()
+			defer d.MustCleanShutdown(t)
+
+			n.MustUp()
+			n.AwaitRunning()
+		}
+
+		// Initiate Tailnet Lock with the two signing nodes.
+		initCmd := signing1.Tailscale("lock", "init",
+			"--gen-disablements", "10",
+			"--confirm",
+			signing1.NLPublicKey(), signing2.NLPublicKey(),
+		)
+		out, err := initCmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("init command failed: %q\noutput=%v", err, string(out))
+		}
+
+		// Check that the two signing nodes can ping each other
+		if err := signing1.Ping(signing2); err != nil {
+			t.Fatalf("ping signing1 -> signing2: %v", err)
+		}
+		if err := signing2.Ping(signing1); err != nil {
+			t.Fatalf("ping signing2 -> signing1: %v", err)
+		}
+
+		// Create and start a third node
+		node3 := NewTestNode(t, env)
+		d3 := node3.StartDaemon()
+		defer d3.MustCleanShutdown(t)
+		node3.MustUp()
+		node3.AwaitRunning()
+
+		if err := signing1.Ping(node3); err == nil {
+			t.Fatal("ping signing1 -> node3: expected err, but succeeded")
+		}
+		if err := node3.Ping(signing1); err == nil {
+			t.Fatal("ping node3 -> signing1: expected err, but succeeded")
+		}
+
+		// Sign node3, and check the nodes can now talk to each other
+		signCmd := signing1.Tailscale("lock", "sign", node3.PublicKey())
+		out, err = signCmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("sign command failed: %q\noutput = %v", err, string(out))
+		}
+
+		if err := signing1.Ping(node3); err != nil {
+			t.Fatalf("ping signing1 -> node3: expected success, got err: %v", err)
+		}
+		if err := node3.Ping(signing1); err != nil {
+			t.Fatalf("ping node3 -> signing1: expected success, got err: %v", err)
 		}
 	})
 }
