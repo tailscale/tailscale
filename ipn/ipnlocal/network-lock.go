@@ -300,10 +300,6 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 		return nil
 	}
 
-	if err := b.CanSupportNetworkLock(); err != nil {
-		return err
-	}
-
 	isEnabled := b.tka != nil
 	wantEnabled := nm.TKAEnabled
 
@@ -488,10 +484,6 @@ func (b *LocalBackend) chonkPathLocked() string {
 //
 // b.mu must be held.
 func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, persist persist.PersistView) error {
-	if err := b.CanSupportNetworkLock(); err != nil {
-		return err
-	}
-
 	var genesis tka.AUM
 	if err := genesis.Unserialize(g); err != nil {
 		return fmt.Errorf("reading genesis: %v", err)
@@ -534,20 +526,6 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, per
 		authority: authority,
 		storage:   storage,
 	}
-	return nil
-}
-
-// CanSupportNetworkLock returns nil if tailscaled is able to operate
-// a local tailnet key authority (and hence enforce network lock).
-func (b *LocalBackend) CanSupportNetworkLock() error {
-	if b.tka != nil {
-		// If the TKA is being used, it is supported.
-		return nil
-	}
-
-	// There's a var root (aka --statedir), so if network lock gets
-	// initialized we have somewhere to store our AUMs. That's all
-	// we need.
 	return nil
 }
 
@@ -664,12 +642,7 @@ func tkaStateFromPeer(p tailcfg.NodeView) ipnstate.TKAPeer {
 // needing signatures is returned as a response.
 // The Finish RPC submits signatures for all these nodes, at which point
 // Control has everything it needs to atomically enable network lock.
-// TODO(alexc): Only with persistent backend
 func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byte, supportDisablement []byte) error {
-	if err := b.CanSupportNetworkLock(); err != nil {
-		return err
-	}
-
 	var ourNodeKey key.NodePublic
 	var nlPriv key.NLPrivate
 
@@ -794,7 +767,6 @@ func (b *LocalBackend) NetworkLockForceLocalDisable() error {
 
 // NetworkLockSign signs the given node-key and submits it to the control plane.
 // rotationPublic, if specified, must be an ed25519 public key.
-// TODO(alexc): in-memory only
 func (b *LocalBackend) NetworkLockSign(nodeKey key.NodePublic, rotationPublic []byte) error {
 	ourNodeKey, sig, err := func(nodeKey key.NodePublic, rotationPublic []byte) (key.NodePublic, tka.NodeKeySignature, error) {
 		b.mu.Lock()
