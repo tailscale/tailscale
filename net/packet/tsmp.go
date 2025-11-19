@@ -15,7 +15,9 @@ import (
 	"fmt"
 	"net/netip"
 
+	"go4.org/mem"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/types/key"
 )
 
 const minTSMPSize = 7 // the rejected body is 7 bytes
@@ -72,6 +74,9 @@ const (
 
 	// TSMPTypePong is the type byte for a TailscalePongResponse.
 	TSMPTypePong TSMPType = 'o'
+
+	// TSPMTypeDiscoAdvertisement is the type byte for sending disco keys
+	TSMPTypeDiscoAdvertisement TSMPType = 'a'
 )
 
 type TailscaleRejectReason byte
@@ -258,4 +263,54 @@ func (h TSMPPongReply) Marshal(buf []byte) error {
 	copy(buf[1:], h.Data[:])
 	binary.BigEndian.PutUint16(buf[9:11], h.PeerAPIPort)
 	return nil
+}
+
+// TSMPDiscoKeyAdvertisement is a TSMP message that's used for distributing Disco Keys.
+//
+// On the wire, after the IP header, it's currently 33 bytes:
+//   - 'a' (TSMPTypeDiscoAdvertisement)
+//   - 32 disco key bytes
+type TSMPDiscoKeyAdvertisement struct {
+	Src, Dst netip.Addr
+	Key      key.DiscoPublic
+}
+
+func (ka *TSMPDiscoKeyAdvertisement) Marshal() ([]byte, error) {
+	var iph Header
+	if ka.Src.Is4() {
+		iph = IP4Header{
+			IPProto: ipproto.TSMP,
+			Src:     ka.Src,
+			Dst:     ka.Dst,
+		}
+	} else {
+		iph = IP6Header{
+			IPProto: ipproto.TSMP,
+			Src:     ka.Src,
+			Dst:     ka.Dst,
+		}
+	}
+	payload := make([]byte, 0, 33)
+	payload = append(payload, byte(TSMPTypeDiscoAdvertisement))
+	payload = ka.Key.AppendTo(payload)
+	if len(payload) != 33 {
+		// Mostly to safeguard against ourselves changing this in the future.
+		return []byte{}, fmt.Errorf("expected payload length 33, got %d", len(payload))
+	}
+
+	return Generate(iph, payload), nil
+}
+
+func (pp *Parsed) AsTSMPDiscoAdvertisement() (tka TSMPDiscoKeyAdvertisement, ok bool) {
+	if pp.IPProto != ipproto.TSMP {
+		return
+	}
+	p := pp.Payload()
+	if len(p) < 33 || p[0] != byte(TSMPTypeDiscoAdvertisement) {
+		return
+	}
+	tka.Src = pp.Src.Addr()
+	tka.Key = key.DiscoPublicFromRaw32(mem.B(p[1:33]))
+
+	return tka, true
 }

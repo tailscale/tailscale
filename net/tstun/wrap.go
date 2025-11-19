@@ -34,6 +34,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netlogfunc"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/netstack/gro"
@@ -209,6 +210,9 @@ type Wrapper struct {
 	captureHook syncs.AtomicValue[packet.CaptureCallback]
 
 	metrics *metrics
+
+	eventClient              *eventbus.Client
+	discoKeyAdvertisementPub *eventbus.Publisher[DiscoKeyAdvertisement]
 }
 
 type metrics struct {
@@ -254,15 +258,15 @@ func (w *Wrapper) Start() {
 	close(w.startCh)
 }
 
-func WrapTAP(logf logger.Logf, tdev tun.Device, m *usermetric.Registry) *Wrapper {
-	return wrap(logf, tdev, true, m)
+func WrapTAP(logf logger.Logf, tdev tun.Device, m *usermetric.Registry, bus *eventbus.Bus) *Wrapper {
+	return wrap(logf, tdev, true, m, bus)
 }
 
-func Wrap(logf logger.Logf, tdev tun.Device, m *usermetric.Registry) *Wrapper {
-	return wrap(logf, tdev, false, m)
+func Wrap(logf logger.Logf, tdev tun.Device, m *usermetric.Registry, bus *eventbus.Bus) *Wrapper {
+	return wrap(logf, tdev, false, m, bus)
 }
 
-func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry) *Wrapper {
+func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry, bus *eventbus.Bus) *Wrapper {
 	logf = logger.WithPrefix(logf, "tstun: ")
 	w := &Wrapper{
 		logf:        logf,
@@ -282,6 +286,9 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry)
 		startCh:     make(chan struct{}),
 		metrics:     registerMetrics(m),
 	}
+
+	w.eventClient = bus.Client("net.tstun")
+	w.discoKeyAdvertisementPub = eventbus.Publish[DiscoKeyAdvertisement](w.eventClient)
 
 	w.vectorBuffer = make([][]byte, tdev.BatchSize())
 	for i := range w.vectorBuffer {
@@ -357,6 +364,7 @@ func (t *Wrapper) Close() error {
 		close(t.vectorOutbound)
 		t.outboundMu.Unlock()
 		err = t.tdev.Close()
+		t.eventClient.Close()
 	})
 	return err
 }
@@ -1118,6 +1126,11 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 	return n, err
 }
 
+type DiscoKeyAdvertisement struct {
+	Src netip.Addr
+	Key key.DiscoPublic
+}
+
 func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook packet.CaptureCallback, pc *peerConfigTable, gro *gro.GRO) (filter.Response, *gro.GRO) {
 	if captHook != nil {
 		captHook(packet.FromPeer, t.now(), p.Buffer(), p.CaptureMeta)
@@ -1127,6 +1140,12 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook pa
 		if pingReq, ok := p.AsTSMPPing(); ok {
 			t.noteActivity()
 			t.injectOutboundPong(p, pingReq)
+			return filter.DropSilently, gro
+		} else if discoKeyAdvert, ok := p.AsTSMPDiscoAdvertisement(); ok {
+			t.discoKeyAdvertisementPub.Publish(DiscoKeyAdvertisement{
+				Src: discoKeyAdvert.Src,
+				Key: discoKeyAdvert.Key,
+			})
 			return filter.DropSilently, gro
 		} else if data, ok := p.AsTSMPPong(); ok {
 			if f := t.OnTSMPPongReceived; f != nil {
