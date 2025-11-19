@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/yaml"
+
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
@@ -45,10 +46,7 @@ const (
 	messageMultipleDNSConfigsPresent = "Multiple DNSConfig resources found in cluster. Please ensure no more than one is present."
 
 	defaultNameserverImageRepo = "tailscale/k8s-nameserver"
-	// TODO (irbekrm): once we start publishing nameserver images for stable
-	// track, replace 'unstable' here with the version of this operator
-	// instance.
-	defaultNameserverImageTag = "unstable"
+	defaultNameserverImageTag  = "stable"
 )
 
 // NameserverReconciler knows how to create nameserver resources in cluster in
