@@ -17,6 +17,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"runtime"
 	"sync/atomic"
 
 	"tailscale.com/net/netknob"
@@ -40,8 +41,9 @@ var bindToInterfaceByRoute atomic.Bool
 //
 // Currently, this only changes the behaviour on macOS and Windows.
 func SetBindToInterfaceByRoute(logf logger.Logf, v bool) {
-	logf("netns: bindToInterfaceByRoute to %v", v)
-	bindToInterfaceByRoute.Store(v)
+	if bindToInterfaceByRoute.Swap(v) != v {
+		logf("netns: bindToInterfaceByRoute changed to %v", v)
+	}
 }
 
 var disableBindConnToInterface atomic.Bool
@@ -54,8 +56,9 @@ var disableBindConnToInterface atomic.Bool
 // SetDisableBindConnToInterfaceAppleExt which will disable explicit interface
 // binding only when tailscaled is running inside a network extension process.
 func SetDisableBindConnToInterface(logf logger.Logf, v bool) {
-	logf("netns: disableBindConnToInterface set to %v", v)
-	disableBindConnToInterface.Store(v)
+	if disableBindConnToInterface.Swap(v) != v {
+		logf("netns: disableBindConnToInterface changed to %v", v)
+	}
 }
 
 var disableBindConnToInterfaceAppleExt atomic.Bool
@@ -64,8 +67,9 @@ var disableBindConnToInterfaceAppleExt atomic.Bool
 // connections to the default network interface but only on Apple clients where
 // tailscaled is running inside a network extension.
 func SetDisableBindConnToInterfaceAppleExt(logf logger.Logf, v bool) {
-	logf("netns: disableBindConnToInterfaceAppleExt set to %v", v)
-	disableBindConnToInterfaceAppleExt.Store(v)
+	if runtime.GOOS == "darwin" && disableBindConnToInterfaceAppleExt.Swap(v) != v {
+		logf("netns: disableBindConnToInterfaceAppleExt changed to %v", v)
+	}
 }
 
 // Listener returns a new net.Listener with its Control hook func
