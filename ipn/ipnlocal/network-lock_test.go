@@ -33,6 +33,7 @@ import (
 	"tailscale.com/tka"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
+	"tailscale.com/tstest/tkatest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
@@ -101,7 +102,8 @@ func TestTKAEnablementFlow(t *testing.T) {
 	// our mock server can communicate.
 	nlPriv := key.NewNLPrivate()
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
-	a1, genesisAUM, err := tka.Create(tka.ChonkMem(), tka.State{
+	chonk := tka.ChonkMem()
+	a1, genesisAUM, err := tka.Create(chonk, tka.State{
 		Keys:               []tka.Key{key},
 		DisablementSecrets: [][]byte{bytes.Repeat([]byte{0xa5}, 32)},
 	}, nlPriv)
@@ -113,51 +115,31 @@ func TestTKAEnablementFlow(t *testing.T) {
 		defer r.Body.Close()
 		switch r.URL.Path {
 		case "/machine/tka/bootstrap":
-			body := new(tailcfg.TKABootstrapRequest)
-			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
-				t.Fatal(err)
-			}
-			if body.Version != tailcfg.CurrentCapabilityVersion {
-				t.Errorf("bootstrap CapVer = %v, want %v", body.Version, tailcfg.CurrentCapabilityVersion)
-			}
-			if body.NodeKey != nodePriv.Public() {
-				t.Errorf("bootstrap nodeKey=%v, want %v", body.NodeKey, nodePriv.Public())
-			}
-			if body.Head != "" {
-				t.Errorf("bootstrap head=%s, want empty hash", body.Head)
-			}
-
-			w.WriteHeader(200)
-			out := tailcfg.TKABootstrapResponse{
+			resp := tailcfg.TKABootstrapResponse{
 				GenesisAUM: genesisAUM.Serialize(),
 			}
-			if err := json.NewEncoder(w).Encode(out); err != nil {
-				t.Fatal(err)
+			req, err := tkatest.HandleTKABootstrap(w, r, resp)
+			if err != nil {
+				t.Errorf("HandleTKABootstrap: %v", err)
+			}
+			if req.NodeKey != nodePriv.Public() {
+				t.Errorf("bootstrap nodeKey=%v, want %v", req.NodeKey, nodePriv.Public())
+			}
+			if req.Head != "" {
+				t.Errorf("bootstrap head=%s, want empty hash", req.Head)
 			}
 
 		// Sync offer/send endpoints are hit even though the node is up-to-date,
 		// so we implement enough of a fake that the client doesn't explode.
 		case "/machine/tka/sync/offer":
-			head, err := a1.Head().MarshalText()
+			err := tkatest.HandleTKASyncOffer(w, r, a1, chonk)
 			if err != nil {
-				t.Fatal(err)
-			}
-			w.WriteHeader(200)
-			if err := json.NewEncoder(w).Encode(tailcfg.TKASyncOfferResponse{
-				Head: string(head),
-			}); err != nil {
-				t.Fatal(err)
+				t.Errorf("HandleTKASyncOffer: %v", err)
 			}
 		case "/machine/tka/sync/send":
-			head, err := a1.Head().MarshalText()
+			err := tkatest.HandleTKASyncSend(w, r, a1, chonk)
 			if err != nil {
-				t.Fatal(err)
-			}
-			w.WriteHeader(200)
-			if err := json.NewEncoder(w).Encode(tailcfg.TKASyncSendResponse{
-				Head: string(head),
-			}); err != nil {
-				t.Fatal(err)
+				t.Errorf("HandleTKASyncOffer: %v", err)
 			}
 
 		default:
@@ -225,37 +207,28 @@ func TestTKADisablementFlow(t *testing.T) {
 		defer r.Body.Close()
 		switch r.URL.Path {
 		case "/machine/tka/bootstrap":
-			body := new(tailcfg.TKABootstrapRequest)
-			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
-				t.Fatal(err)
-			}
-			if body.Version != tailcfg.CurrentCapabilityVersion {
-				t.Errorf("bootstrap CapVer = %v, want %v", body.Version, tailcfg.CurrentCapabilityVersion)
-			}
-			if body.NodeKey != nodePriv.Public() {
-				t.Errorf("nodeKey=%v, want %v", body.NodeKey, nodePriv.Public())
-			}
-			var head tka.AUMHash
-			if err := head.UnmarshalText([]byte(body.Head)); err != nil {
-				t.Fatalf("failed unmarshal of body.Head: %v", err)
-			}
-			if head != authority.Head() {
-				t.Errorf("reported head = %x, want %x", head, authority.Head())
-			}
-
 			var disablement []byte
 			if returnWrongSecret {
 				disablement = bytes.Repeat([]byte{0x42}, 32) // wrong secret
 			} else {
 				disablement = disablementSecret
 			}
-
-			w.WriteHeader(200)
-			out := tailcfg.TKABootstrapResponse{
+			resp := tailcfg.TKABootstrapResponse{
 				DisablementSecret: disablement,
 			}
-			if err := json.NewEncoder(w).Encode(out); err != nil {
-				t.Fatal(err)
+			req, err := tkatest.HandleTKABootstrap(w, r, resp)
+			if err != nil {
+				t.Errorf("HandleTKABootstrap: %v", err)
+			}
+			if req.NodeKey != nodePriv.Public() {
+				t.Errorf("nodeKey=%v, want %v", req.NodeKey, nodePriv.Public())
+			}
+			var head tka.AUMHash
+			if err := head.UnmarshalText([]byte(req.Head)); err != nil {
+				t.Fatalf("failed unmarshal of body.Head: %v", err)
+			}
+			if head != authority.Head() {
+				t.Errorf("reported head = %x, want %x", head, authority.Head())
 			}
 
 		default:
@@ -430,76 +403,15 @@ func TestTKASync(t *testing.T) {
 				defer r.Body.Close()
 				switch r.URL.Path {
 				case "/machine/tka/sync/offer":
-					body := new(tailcfg.TKASyncOfferRequest)
-					if err := json.NewDecoder(r.Body).Decode(body); err != nil {
-						t.Fatal(err)
-					}
-					t.Logf("got sync offer:\n%+v", body)
-					nodeOffer, err := toSyncOffer(body.Head, body.Ancestors)
+					err := tkatest.HandleTKASyncOffer(w, r, controlAuthority, controlStorage)
 					if err != nil {
-						t.Fatal(err)
-					}
-					controlOffer, err := controlAuthority.SyncOffer(controlStorage)
-					if err != nil {
-						t.Fatal(err)
-					}
-					sendAUMs, err := controlAuthority.MissingAUMs(controlStorage, nodeOffer)
-					if err != nil {
-						t.Fatal(err)
-					}
-
-					head, ancestors, err := fromSyncOffer(controlOffer)
-					if err != nil {
-						t.Fatal(err)
-					}
-					resp := tailcfg.TKASyncOfferResponse{
-						Head:        head,
-						Ancestors:   ancestors,
-						MissingAUMs: make([]tkatype.MarshaledAUM, len(sendAUMs)),
-					}
-					for i, a := range sendAUMs {
-						resp.MissingAUMs[i] = a.Serialize()
-					}
-
-					t.Logf("responding to sync offer with:\n%+v", resp)
-					w.WriteHeader(200)
-					if err := json.NewEncoder(w).Encode(resp); err != nil {
-						t.Fatal(err)
+						t.Errorf("HandleTKASyncOffer: %v", err)
 					}
 
 				case "/machine/tka/sync/send":
-					body := new(tailcfg.TKASyncSendRequest)
-					if err := json.NewDecoder(r.Body).Decode(body); err != nil {
-						t.Fatal(err)
-					}
-					t.Logf("got sync send:\n%+v", body)
-
-					var remoteHead tka.AUMHash
-					if err := remoteHead.UnmarshalText([]byte(body.Head)); err != nil {
-						t.Fatalf("head unmarshal: %v", err)
-					}
-					toApply := make([]tka.AUM, len(body.MissingAUMs))
-					for i, a := range body.MissingAUMs {
-						if err := toApply[i].Unserialize(a); err != nil {
-							t.Fatalf("decoding missingAUM[%d]: %v", i, err)
-						}
-					}
-
-					if len(toApply) > 0 {
-						if err := controlAuthority.Inform(controlStorage, toApply); err != nil {
-							t.Fatalf("control.Inform(%+v) failed: %v", toApply, err)
-						}
-					}
-					head, err := controlAuthority.Head().MarshalText()
+					err := tkatest.HandleTKASyncSend(w, r, controlAuthority, controlStorage)
 					if err != nil {
-						t.Fatal(err)
-					}
-
-					w.WriteHeader(200)
-					if err := json.NewEncoder(w).Encode(tailcfg.TKASyncSendResponse{
-						Head: string(head),
-					}); err != nil {
-						t.Fatal(err)
+						t.Errorf("HandleTKASyncSend: %v", err)
 					}
 
 				default:
@@ -608,76 +520,15 @@ func TestTKASyncTriggersCompact(t *testing.T) {
 		defer r.Body.Close()
 		switch r.URL.Path {
 		case "/machine/tka/sync/offer":
-			body := new(tailcfg.TKASyncOfferRequest)
-			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
-				t.Fatal(err)
-			}
-			t.Logf("got sync offer:\n%+v", body)
-			nodeOffer, err := toSyncOffer(body.Head, body.Ancestors)
+			err := tkatest.HandleTKASyncOffer(w, r, controlAuthority, controlStorage)
 			if err != nil {
-				t.Fatal(err)
-			}
-			controlOffer, err := controlAuthority.SyncOffer(controlStorage)
-			if err != nil {
-				t.Fatal(err)
-			}
-			sendAUMs, err := controlAuthority.MissingAUMs(controlStorage, nodeOffer)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			head, ancestors, err := fromSyncOffer(controlOffer)
-			if err != nil {
-				t.Fatal(err)
-			}
-			resp := tailcfg.TKASyncOfferResponse{
-				Head:        head,
-				Ancestors:   ancestors,
-				MissingAUMs: make([]tkatype.MarshaledAUM, len(sendAUMs)),
-			}
-			for i, a := range sendAUMs {
-				resp.MissingAUMs[i] = a.Serialize()
-			}
-
-			t.Logf("responding to sync offer with:\n%+v", resp)
-			w.WriteHeader(200)
-			if err := json.NewEncoder(w).Encode(resp); err != nil {
-				t.Fatal(err)
+				t.Errorf("HandleTKASyncOffer: %v", err)
 			}
 
 		case "/machine/tka/sync/send":
-			body := new(tailcfg.TKASyncSendRequest)
-			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
-				t.Fatal(err)
-			}
-			t.Logf("got sync send:\n%+v", body)
-
-			var remoteHead tka.AUMHash
-			if err := remoteHead.UnmarshalText([]byte(body.Head)); err != nil {
-				t.Fatalf("head unmarshal: %v", err)
-			}
-			toApply := make([]tka.AUM, len(body.MissingAUMs))
-			for i, a := range body.MissingAUMs {
-				if err := toApply[i].Unserialize(a); err != nil {
-					t.Fatalf("decoding missingAUM[%d]: %v", i, err)
-				}
-			}
-
-			if len(toApply) > 0 {
-				if err := controlAuthority.Inform(controlStorage, toApply); err != nil {
-					t.Fatalf("control.Inform(%+v) failed: %v", toApply, err)
-				}
-			}
-			head, err := controlAuthority.Head().MarshalText()
+			err := tkatest.HandleTKASyncSend(w, r, controlAuthority, controlStorage)
 			if err != nil {
-				t.Fatal(err)
-			}
-
-			w.WriteHeader(200)
-			if err := json.NewEncoder(w).Encode(tailcfg.TKASyncSendResponse{
-				Head: string(head),
-			}); err != nil {
-				t.Fatal(err)
+				t.Errorf("HandleTKASyncSend: %v", err)
 			}
 
 		default:
@@ -1019,29 +870,9 @@ func TestTKASign(t *testing.T) {
 		defer r.Body.Close()
 		switch r.URL.Path {
 		case "/machine/tka/sign":
-			body := new(tailcfg.TKASubmitSignatureRequest)
-			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
-				t.Fatal(err)
-			}
-			if body.Version != tailcfg.CurrentCapabilityVersion {
-				t.Errorf("sign CapVer = %v, want %v", body.Version, tailcfg.CurrentCapabilityVersion)
-			}
-			if body.NodeKey != nodePriv.Public() {
-				t.Errorf("nodeKey = %v, want %v", body.NodeKey, nodePriv.Public())
-			}
-
-			var sig tka.NodeKeySignature
-			if err := sig.Unserialize(body.Signature); err != nil {
-				t.Fatalf("malformed signature: %v", err)
-			}
-
-			if err := authority.NodeKeyAuthorized(toSign.Public(), body.Signature); err != nil {
-				t.Errorf("signature does not verify: %v", err)
-			}
-
-			w.WriteHeader(200)
-			if err := json.NewEncoder(w).Encode(tailcfg.TKASubmitSignatureResponse{}); err != nil {
-				t.Fatal(err)
+			_, _, err := tkatest.HandleTKASign(w, r, authority)
+			if err != nil {
+				t.Errorf("HandleTKASign: %v", err)
 			}
 
 		default:
@@ -1098,23 +929,15 @@ func TestTKAForceDisable(t *testing.T) {
 		defer r.Body.Close()
 		switch r.URL.Path {
 		case "/machine/tka/bootstrap":
-			body := new(tailcfg.TKABootstrapRequest)
-			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
-				t.Fatal(err)
-			}
-			if body.Version != tailcfg.CurrentCapabilityVersion {
-				t.Errorf("bootstrap CapVer = %v, want %v", body.Version, tailcfg.CurrentCapabilityVersion)
-			}
-			if body.NodeKey != nodePriv.Public() {
-				t.Errorf("nodeKey=%v, want %v", body.NodeKey, nodePriv.Public())
-			}
-
-			w.WriteHeader(200)
-			out := tailcfg.TKABootstrapResponse{
+			resp := tailcfg.TKABootstrapResponse{
 				GenesisAUM: genesis.Serialize(),
 			}
-			if err := json.NewEncoder(w).Encode(out); err != nil {
-				t.Fatal(err)
+			req, err := tkatest.HandleTKABootstrap(w, r, resp)
+			if err != nil {
+				t.Errorf("HandleTKABootstrap: %v", err)
+			}
+			if req.NodeKey != nodePriv.Public() {
+				t.Errorf("nodeKey=%v, want %v", req.NodeKey, nodePriv.Public())
 			}
 
 		default:
@@ -1323,35 +1146,14 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 		defer r.Body.Close()
 		switch r.URL.Path {
 		case "/machine/tka/sync/send":
-			body := new(tailcfg.TKASyncSendRequest)
-			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
-				t.Fatal(err)
-			}
-			t.Logf("got sync send:\n%+v", body)
-
-			var remoteHead tka.AUMHash
-			if err := remoteHead.UnmarshalText([]byte(body.Head)); err != nil {
-				t.Fatalf("head unmarshal: %v", err)
-			}
-			toApply := make([]tka.AUM, len(body.MissingAUMs))
-			for i, a := range body.MissingAUMs {
-				if err := toApply[i].Unserialize(a); err != nil {
-					t.Fatalf("decoding missingAUM[%d]: %v", i, err)
-				}
+			err := tkatest.HandleTKASyncSend(w, r, authority, chonk)
+			if err != nil {
+				t.Errorf("HandleTKASyncSend: %v", err)
 			}
 
-			// Apply the recovery AUM to an authority to make sure it works.
-			if err := authority.Inform(chonk, toApply); err != nil {
-				t.Errorf("recovery AUM could not be applied: %v", err)
-			}
 			// Make sure the key we removed isn't trusted.
 			if authority.KeyTrusted(compromisedPriv.KeyID()) {
 				t.Error("compromised key was not removed from tka")
-			}
-
-			w.WriteHeader(200)
-			if err := json.NewEncoder(w).Encode(tailcfg.TKASubmitSignatureResponse{}); err != nil {
-				t.Fatal(err)
 			}
 
 		default:
