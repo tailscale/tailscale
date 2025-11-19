@@ -123,6 +123,10 @@ var Features = map[FeatureTag]FeatureMeta{
 		Desc:                 "Control-to-node (C2N) support",
 		ImplementationDetail: true,
 	},
+	"cachenetmap": {
+		Sym:  "CacheNetMap",
+		Desc: "Cache the netmap on disk between runs",
+	},
 	"captiveportal": {Sym: "CaptivePortal", Desc: "Captive portal detection"},
 	"capture":       {Sym: "Capture", Desc: "Packet capture"},
 	"cli":           {Sym: "CLI", Desc: "embed the CLI into the tailscaled binary"},
