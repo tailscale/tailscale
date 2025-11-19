@@ -368,20 +368,6 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 	return nil
 }
 
-func toSyncOffer(head string, ancestors []string) (tka.SyncOffer, error) {
-	var out tka.SyncOffer
-	if err := out.Head.UnmarshalText([]byte(head)); err != nil {
-		return tka.SyncOffer{}, fmt.Errorf("head.UnmarshalText: %v", err)
-	}
-	out.Ancestors = make([]tka.AUMHash, len(ancestors))
-	for i, a := range ancestors {
-		if err := out.Ancestors[i].UnmarshalText([]byte(a)); err != nil {
-			return tka.SyncOffer{}, fmt.Errorf("ancestor[%d].UnmarshalText: %v", i, err)
-		}
-	}
-	return out, nil
-}
-
 // tkaSyncLocked synchronizes TKA state with control. b.mu must be held
 // and tka must be initialized. b.mu will be stepped out of (and back into)
 // during network RPCs.
@@ -399,7 +385,7 @@ func (b *LocalBackend) tkaSyncLocked(ourNodeKey key.NodePublic) error {
 	if err != nil {
 		return fmt.Errorf("offer RPC: %w", err)
 	}
-	controlOffer, err := toSyncOffer(offerResp.Head, offerResp.Ancestors)
+	controlOffer, err := tka.ToSyncOffer(offerResp.Head, offerResp.Ancestors)
 	if err != nil {
 		return fmt.Errorf("control offer: %v", err)
 	}
@@ -694,7 +680,7 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 
 	// Our genesis AUM was accepted but before Control turns on enforcement of
 	// node-key signatures, we need to sign keys for all the existing nodes.
-	// If we don't get these signatures ahead of time, everyone will loose
+	// If we don't get these signatures ahead of time, everyone will lose
 	// connectivity because control won't have any signatures to send which
 	// satisfy network-lock checks.
 	sigs := make(map[tailcfg.NodeID]tkatype.MarshaledSignature, len(initResp.NeedSignatures))
@@ -1294,27 +1280,10 @@ func (b *LocalBackend) tkaFetchBootstrap(ourNodeKey key.NodePublic, head tka.AUM
 	return a, nil
 }
 
-func fromSyncOffer(offer tka.SyncOffer) (head string, ancestors []string, err error) {
-	headBytes, err := offer.Head.MarshalText()
-	if err != nil {
-		return "", nil, fmt.Errorf("head.MarshalText: %v", err)
-	}
-
-	ancestors = make([]string, len(offer.Ancestors))
-	for i, ancestor := range offer.Ancestors {
-		hash, err := ancestor.MarshalText()
-		if err != nil {
-			return "", nil, fmt.Errorf("ancestor[%d].MarshalText: %v", i, err)
-		}
-		ancestors[i] = string(hash)
-	}
-	return string(headBytes), ancestors, nil
-}
-
 // tkaDoSyncOffer sends a /machine/tka/sync/offer RPC to the control plane
 // over noise. This is the first of two RPCs implementing tka synchronization.
 func (b *LocalBackend) tkaDoSyncOffer(ourNodeKey key.NodePublic, offer tka.SyncOffer) (*tailcfg.TKASyncOfferResponse, error) {
-	head, ancestors, err := fromSyncOffer(offer)
+	head, ancestors, err := tka.FromSyncOffer(offer)
 	if err != nil {
 		return nil, fmt.Errorf("encoding offer: %v", err)
 	}

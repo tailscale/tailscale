@@ -32,6 +32,41 @@ type SyncOffer struct {
 	Ancestors []AUMHash
 }
 
+// ToSyncOffer creates a SyncOffer from the fields received in
+// a [tailcfg.TKASyncOfferRequest].
+func ToSyncOffer(head string, ancestors []string) (SyncOffer, error) {
+	var out SyncOffer
+	if err := out.Head.UnmarshalText([]byte(head)); err != nil {
+		return SyncOffer{}, fmt.Errorf("head.UnmarshalText: %v", err)
+	}
+	out.Ancestors = make([]AUMHash, len(ancestors))
+	for i, a := range ancestors {
+		if err := out.Ancestors[i].UnmarshalText([]byte(a)); err != nil {
+			return SyncOffer{}, fmt.Errorf("ancestor[%d].UnmarshalText: %v", i, err)
+		}
+	}
+	return out, nil
+}
+
+// FromSyncOffer marshals the fields of a SyncOffer so they can be
+// sent in a [tailcfg.TKASyncOfferRequest].
+func FromSyncOffer(offer SyncOffer) (head string, ancestors []string, err error) {
+	headBytes, err := offer.Head.MarshalText()
+	if err != nil {
+		return "", nil, fmt.Errorf("head.MarshalText: %v", err)
+	}
+
+	ancestors = make([]string, len(offer.Ancestors))
+	for i, ancestor := range offer.Ancestors {
+		hash, err := ancestor.MarshalText()
+		if err != nil {
+			return "", nil, fmt.Errorf("ancestor[%d].MarshalText: %v", i, err)
+		}
+		ancestors[i] = string(hash)
+	}
+	return string(headBytes), ancestors, nil
+}
+
 const (
 	// The starting number of AUMs to skip when listing
 	// ancestors in a SyncOffer.
