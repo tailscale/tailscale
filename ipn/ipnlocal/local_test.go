@@ -5174,6 +5174,26 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 			wantName: "peer3",
 		},
 		{
+			name: "exit-nodes-without-priority-for-suggestions",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest()),
+					makePeer(2,
+						withExitRoutes(),
+						withSuggest()),
+					makePeer(3,
+						withExitRoutes(),
+						withLocationPriority(1)),
+				},
+			},
+			wantID:   "stable1",
+			wantName: "peer1",
+			wantPri:  0,
+		},
+		{
 			name: "exit-nodes-with-and-without-priority",
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
