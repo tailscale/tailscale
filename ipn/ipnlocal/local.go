@@ -2180,6 +2180,8 @@ func mutationsAreWorthyOfTellingIPNBus(muts []netmap.NodeMutation) bool {
 //
 // b.mu must be held.
 func (b *LocalBackend) resolveAutoExitNodeLocked(prefs *ipn.Prefs) (prefsChanged bool) {
+	syncs.RequiresMutex(&b.mu)
+
 	if !buildfeatures.HasUseExitNode {
 		return false
 	}
@@ -2296,6 +2298,8 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 //
 // b.mu must be held.
 func (b *LocalBackend) setWgengineStatusLocked(s *wgengine.Status) {
+	syncs.RequiresMutex(&b.mu)
+
 	es := b.parseWgStatusLocked(s)
 	cc := b.cc
 
@@ -5677,6 +5681,8 @@ func (b *LocalBackend) NodeKey() key.NodePublic {
 //
 // b.mu must be held
 func (b *LocalBackend) nextStateLocked() ipn.State {
+	syncs.RequiresMutex(&b.mu)
+
 	var (
 		cc         = b.cc
 		cn         = b.currentNode()
@@ -5752,6 +5758,8 @@ func (b *LocalBackend) nextStateLocked() ipn.State {
 //
 // requires b.mu to be held.
 func (b *LocalBackend) stateMachineLocked() {
+	syncs.RequiresMutex(&b.mu)
+
 	b.enterStateLocked(b.nextStateLocked())
 }
 
@@ -5848,6 +5856,8 @@ func (b *LocalBackend) setWebClientAtomicBoolLocked(nm *netmap.NetworkMap) {
 //
 // b.mu must be held.
 func (b *LocalBackend) setExposeRemoteWebClientAtomicBoolLocked(prefs ipn.PrefsView) {
+	syncs.RequiresMutex(&b.mu)
+
 	if !buildfeatures.HasWebClient {
 		return
 	}
@@ -5976,6 +5986,8 @@ func (b *LocalBackend) RefreshExitNode() {
 
 // refreshExitNodeLocked is like RefreshExitNode but requires b.mu be held.
 func (b *LocalBackend) refreshExitNodeLocked() {
+	syncs.RequiresMutex(&b.mu)
+
 	if b.resolveExitNodeLocked() {
 		b.authReconfigLocked()
 	}
@@ -5991,6 +6003,8 @@ func (b *LocalBackend) refreshExitNodeLocked() {
 //
 // b.mu must be held.
 func (b *LocalBackend) resolveExitNodeLocked() (changed bool) {
+	syncs.RequiresMutex(&b.mu)
+
 	if !buildfeatures.HasUseExitNode {
 		return false
 	}
@@ -6052,6 +6066,7 @@ func (b *LocalBackend) reconcilePrefsLocked(prefs *ipn.Prefs) (changed bool) {
 //
 // b.mu must be held.
 func (b *LocalBackend) resolveExitNodeInPrefsLocked(prefs *ipn.Prefs) (changed bool) {
+	syncs.RequiresMutex(&b.mu)
 	if !buildfeatures.HasUseExitNode {
 		return false
 	}
