@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_tailnetlock
+
 package jsonoutput
 
 import (
@@ -14,7 +16,7 @@ import (
 	"tailscale.com/tka"
 )
 
-// PrintNetworkLockJSONV1 prints the stored TKA state as a JSON object to the CLI,
+// PrintNetworkLockLogJSONV1 prints the stored TKA state as a JSON object to the CLI,
 // in a stable "v1" format.
 //
 // This format includes:
@@ -22,7 +24,7 @@ import (
 //   - the AUM hash as a base32-encoded string
 //   - the raw AUM as base64-encoded bytes
 //   - the expanded AUM, which prints named fields for consumption by other tools
-func PrintNetworkLockJSONV1(out io.Writer, updates []ipnstate.NetworkLockUpdate) error {
+func PrintNetworkLockLogJSONV1(out io.Writer, updates []ipnstate.NetworkLockUpdate) error {
 	messages := make([]logMessageV1, len(updates))
 
 	for i, update := range updates {
@@ -64,7 +66,7 @@ func toLogMessageV1(aum tka.AUM, update ipnstate.NetworkLockUpdate) logMessageV1
 		expandedAUM.PrevAUMHash = aum.PrevAUMHash.String()
 	}
 	if key := aum.Key; key != nil {
-		expandedAUM.Key = toExpandedKeyV1(key)
+		expandedAUM.Key = toTKAKeyV1(key)
 	}
 	if keyID := aum.KeyID; keyID != nil {
 		expandedAUM.KeyID = fmt.Sprintf("tlpub:%x", keyID)
@@ -78,7 +80,7 @@ func toLogMessageV1(aum tka.AUM, update ipnstate.NetworkLockUpdate) logMessageV1
 			expandedState.DisablementSecrets = append(expandedState.DisablementSecrets, fmt.Sprintf("%x", secret))
 		}
 		for _, key := range state.Keys {
-			expandedState.Keys = append(expandedState.Keys, toExpandedKeyV1(&key))
+			expandedState.Keys = append(expandedState.Keys, toTKAKeyV1(&key))
 		}
 		expandedState.StateID1 = state.StateID1
 		expandedState.StateID2 = state.StateID2
@@ -102,10 +104,10 @@ func toLogMessageV1(aum tka.AUM, update ipnstate.NetworkLockUpdate) logMessageV1
 	}
 }
 
-// toExpandedKeyV1 converts a [tka.Key] to the JSON output returned
+// toTKAKeyV1 converts a [tka.Key] to the JSON output returned
 // by the CLI.
-func toExpandedKeyV1(key *tka.Key) expandedKeyV1 {
-	return expandedKeyV1{
+func toTKAKeyV1(key *tka.Key) tkaKeyV1 {
+	return tkaKeyV1{
 		Kind:   key.Kind.String(),
 		Votes:  key.Votes,
 		Public: fmt.Sprintf("tlpub:%x", key.Public),
@@ -137,7 +139,7 @@ type expandedAUMV1 struct {
 
 	// Key encodes a public key to be added to the key authority.
 	// This field is used for AddKey AUMs.
-	Key expandedKeyV1 `json:"Key,omitzero"`
+	Key tkaKeyV1 `json:"Key,omitzero"`
 
 	// KeyID references a public key which is part of the key authority.
 	// This field is used for RemoveKey and UpdateKey AUMs.
@@ -156,10 +158,10 @@ type expandedAUMV1 struct {
 	Signatures []expandedSignatureV1 `json:"Signatures,omitzero"`
 }
 
-// expandedAUMV1 is the expanded version of a [tka.Key], which describes
+// tkaKeyV1 is the expanded version of a [tka.Key], which describes
 // the public components of a key known to network-lock.
-type expandedKeyV1 struct {
-	Kind string
+type tkaKeyV1 struct {
+	Kind string `json:"Kind,omitzero"`
 
 	// Votes describes the weight applied to signatures using this key.
 	Votes uint
@@ -186,7 +188,7 @@ type expandedStateV1 struct {
 	//
 	//   1. The signing nodes currently trusted by the TKA.
 	//   2. Ephemeral keys that were used to generate pre-signed auth keys.
-	Keys []expandedKeyV1
+	Keys []tkaKeyV1
 
 	// StateID's are nonce's, generated on enablement and fixed for
 	// the lifetime of the Tailnet Key Authority.
