@@ -77,7 +77,7 @@ jobs:
           enableCrossOsArchive: true
 
   race-root-integration:
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     needs: gomod-cache
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
@@ -129,7 +129,7 @@ jobs:
             buildflags: "-race"
             shard: '3/3'
           - goarch: "386" # thanks yaml
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     needs: gomod-cache
     steps:
     - name: checkout
@@ -302,7 +302,7 @@ jobs:
 
   privileged:
     needs: gomod-cache
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     container:
       image: golang:latest
       options: --privileged
@@ -390,7 +390,7 @@ jobs:
           - goos: openbsd
             goarch: amd64
 
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -448,7 +448,7 @@ jobs:
 
   ios: # similar to cross above, but iOS can't build most of the repo. So, just
        # make it build a few smoke packages.
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     needs: gomod-cache
     steps:
     - name: checkout
@@ -493,7 +493,7 @@ jobs:
           - goos: illumos
             goarch: amd64
 
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -546,7 +546,7 @@ jobs:
     # similar to cross above, but android fails to build a few pieces of the
     # repo. We should fix those pieces, they're small, but as a stepping stone,
     # only test the subset of android that our past smoke test checked.
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     needs: gomod-cache
     steps:
     - name: checkout
@@ -577,7 +577,7 @@ jobs:
         GOARCH: arm64
 
   wasm: # builds tsconnect, which is the only wasm build we support
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     needs: gomod-cache
     steps:
     - name: checkout
@@ -633,7 +633,7 @@ jobs:
         find $(go env GOCACHE) -type f -mmin +90 -delete
 
   tailscale_go: # Subset of tests that depend on our custom Go toolchain.
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     needs: gomod-cache
     steps:
     - name: checkout
@@ -668,7 +668,7 @@ jobs:
     # explicit 'if' condition, because the default condition for steps is
     # 'success()', meaning "only run this if no previous steps failed".
     if: github.event_name == 'pull_request'
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     steps:
     - name: build fuzzers
       id: build
@@ -724,7 +724,7 @@ jobs:
         path: ${{ env.artifacts_path }}/out/artifacts
 
   depaware:
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     needs: gomod-cache
     steps:
     - name: checkout
@@ -750,7 +750,7 @@ jobs:
       run: make depaware
 
   go_generate:
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     needs: gomod-cache
     steps:
     - name: checkout
@@ -780,7 +780,7 @@ jobs:
         git diff --name-only --exit-code || (echo "The files above need updating. Please run 'go generate'."; exit 1)
 
   go_mod_tidy:
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     needs: gomod-cache
     steps:
     - name: checkout
@@ -808,7 +808,7 @@ jobs:
         git diff --name-only --exit-code || (echo "Please run 'make tidy'"; exit 1)
 
   licenses:
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     needs: gomod-cache
     steps:
     - name: checkout
@@ -834,7 +834,7 @@ jobs:
         ./tool/go test -v -run=TestLicenseHeaders
 
   staticcheck:
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     needs: gomod-cache
     name: staticcheck (${{ matrix.name }})
     strategy:
@@ -914,7 +914,7 @@ jobs:
       - go_mod_tidy
       - licenses
       - staticcheck
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     steps:
     - name: notify  
       # Only notify slack for merged commits, not PR failures.
@@ -943,7 +943,7 @@ jobs:
 
   merge_blocker:
     if: always()
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     needs:
       - android
       - test
@@ -971,7 +971,7 @@ jobs:
    # tests anywhere, really, but a flaky test here prevents merging.)
   check_mergeability_strict:
     if: always()
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     needs:
       - android
       - cross
@@ -992,7 +992,7 @@ jobs:
 
   check_mergeability:
     if: always()
-    runs-on: gocached-test
+    runs-on: ci-linux-github-1
     needs:
       - check_mergeability_strict
       - test
