@@ -87,13 +87,6 @@ type Status struct {
 	ClientVersion *tailcfg.ClientVersion
 }
 
-// TKAKey describes a key trusted by network lock.
-type TKAKey struct {
-	Key      key.NLPublic
-	Metadata map[string]string
-	Votes    uint
-}
-
 // TKAPeer describes a peer and its network lock details.
 type TKAPeer struct {
 	Name             string // DNS
@@ -113,7 +106,7 @@ type NetworkLockStatus struct {
 
 	// Head describes the AUM hash of the leaf AUM. Head is nil
 	// if network lock is not enabled.
-	Head *[32]byte
+	Head *tka.AUMHash
 
 	// PublicKey describes the node's network-lock public key.
 	// It may be zero if the node has not logged in.
@@ -131,7 +124,7 @@ type NetworkLockStatus struct {
 
 	// TrustedKeys describes the keys currently trusted to make changes
 	// to network-lock.
-	TrustedKeys []TKAKey
+	TrustedKeys []tka.Key
 
 	// VisiblePeers describes peers which are visible in the netmap that
 	// have valid Tailnet Lock signatures signatures.
