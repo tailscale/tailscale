@@ -7,7 +7,6 @@ package wgengine
 import (
 	"errors"
 	"net/netip"
-	"time"
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
@@ -24,18 +23,11 @@ import (
 // Status is the Engine status.
 //
 // TODO(bradfitz): remove this, subset of ipnstate? Need to migrate users.
+// TODO(bradfitz): at least view-ify this?
 type Status struct {
-	AsOf       time.Time // the time at which the status was calculated
-	Peers      []ipnstate.PeerStatusLite
-	LocalAddrs []tailcfg.Endpoint // the set of possible endpoints for the magic conn
-	DERPs      int                // number of active DERP connections
+	Peers []ipnstate.PeerStatusLite
+	DERPs int // number of active DERP connections
 }
-
-// StatusCallback is the type of status callbacks used by
-// Engine.SetStatusCallback.
-//
-// Exactly one of Status or error is non-nil.
-type StatusCallback func(*Status, error)
 
 // NetworkMapCallback is the type used by callbacks that hook
 // into network map updates.
@@ -93,13 +85,12 @@ type Engine interface {
 	// SetJailedFilter updates the packet filter for jailed nodes.
 	SetJailedFilter(*filter.Filter)
 
-	// SetStatusCallback sets the function to call when the
-	// WireGuard status changes.
-	SetStatusCallback(StatusCallback)
+	// GetStatus returns the current Engine status.
+	GetStatus() *Status
 
-	// RequestStatus requests a WireGuard status update right
-	// away, sent to the callback registered via SetStatusCallback.
-	RequestStatus()
+	// NumConfiguredPeers returns the number of currently configured peers,
+	// regardless of activity.
+	NumConfiguredPeers() int
 
 	// PeerByKey returns the WireGuard status of the provided peer.
 	// If the peer is not found, ok is false.

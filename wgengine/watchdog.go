@@ -142,14 +142,16 @@ func (e *watchdogEngine) GetJailedFilter() *filter.Filter {
 func (e *watchdogEngine) SetJailedFilter(filt *filter.Filter) {
 	e.watchdog("SetJailedFilter", func() { e.wrap.SetJailedFilter(filt) })
 }
-func (e *watchdogEngine) SetStatusCallback(cb StatusCallback) {
-	e.watchdog("SetStatusCallback", func() { e.wrap.SetStatusCallback(cb) })
-}
 func (e *watchdogEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	e.watchdog("UpdateStatus", func() { e.wrap.UpdateStatus(sb) })
 }
-func (e *watchdogEngine) RequestStatus() {
-	e.watchdog("RequestStatus", func() { e.wrap.RequestStatus() })
+func (e *watchdogEngine) GetStatus() (st *Status) {
+	e.watchdog("GetStatus", func() { st = e.wrap.GetStatus() })
+	return st
+}
+func (e *watchdogEngine) NumConfiguredPeers() (n int) {
+	e.watchdog("NumConfiguredPeers", func() { n = e.wrap.NumConfiguredPeers() })
+	return n
 }
 func (e *watchdogEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.watchdog("SetNetworkMap", func() { e.wrap.SetNetworkMap(nm) })

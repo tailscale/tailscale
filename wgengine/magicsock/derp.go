@@ -27,6 +27,7 @@ import (
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/topics"
 	"tailscale.com/util/backoff"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/rands"
@@ -396,6 +397,11 @@ func (c *Conn) derpWriteChanForRegion(regionID int, peer key.NodePublic) chan de
 	*ad.lastWrite = time.Now()
 	ad.createTime = time.Now()
 	c.activeDerp[regionID] = ad
+	c.derpConnChangePub.Publish(topics.DERPConnChange{
+		RegionID:  regionID,
+		Connected: true,
+		LiveDERPs: len(c.activeDerp),
+	})
 	metricNumDERPConns.Set(int64(len(c.activeDerp)))
 	c.logActiveDerpLocked()
 	c.setPeerLastDerpLocked(peer, regionID, regionID)
@@ -424,8 +430,6 @@ func (c *Conn) derpWriteChanForRegion(regionID int, peer key.NodePublic) chan de
 
 	go c.runDerpReader(ctx, regionID, dc, wg, startGate)
 	go c.runDerpWriter(ctx, dc, ch, wg, startGate)
-	go c.derpActiveFunc()
-
 	return ad.writeCh
 }
 
@@ -874,6 +878,11 @@ func (c *Conn) closeDerpLocked(regionID int, why string) {
 		go ad.c.Close()
 		ad.cancel()
 		delete(c.activeDerp, regionID)
+		c.derpConnChangePub.Publish(topics.DERPConnChange{
+			RegionID:  regionID,
+			Connected: false,
+			LiveDERPs: len(c.activeDerp),
+		})
 		metricNumDERPConns.Set(int64(len(c.activeDerp)))
 	}
 }

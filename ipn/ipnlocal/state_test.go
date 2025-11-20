@@ -39,6 +39,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
+	"tailscale.com/types/topics"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/mak"
@@ -1039,7 +1040,7 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 	}
 	notifies.expect(1)
 	// Fake a DERP connection.
-	b.setWgengineStatus(&wgengine.Status{DERPs: 1, AsOf: time.Now()}, nil)
+	b.onDERPConnChange(topics.DERPConnChange{RegionID: 1, Connected: true, LiveDERPs: 1})
 	{
 		nn := notifies.drain(1)
 		cc.assertCalls()
@@ -1180,11 +1181,11 @@ func TestWGEngineStatusRace(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			n := 0
 			if i == 0 {
-				n = 1
+				b.onDERPConnChange(topics.DERPConnChange{RegionID: 1, Connected: true, LiveDERPs: 1})
+			} else {
+				b.onDERPConnChange(topics.DERPConnChange{RegionID: 1, Connected: false, LiveDERPs: 0})
 			}
-			b.setWgengineStatus(&wgengine.Status{AsOf: time.Now(), DERPs: n}, nil)
 		}(i)
 	}
 	wg.Wait()
@@ -1655,7 +1656,7 @@ func runTestSendPreservesAuthURL(t *testing.T, seamless bool) {
 	}})
 
 	t.Logf("Running")
-	b.setWgengineStatus(&wgengine.Status{AsOf: time.Now(), DERPs: 1}, nil)
+	b.onDERPConnChange(topics.DERPConnChange{RegionID: 1, Connected: true, LiveDERPs: 1})
 
 	t.Logf("Re-auth (StartLoginInteractive)")
 	b.StartLoginInteractive(t.Context())
@@ -1820,10 +1821,9 @@ type mockEngine struct {
 	cfg       *wgcfg.Config
 	routerCfg *router.Config
 	dnsCfg    *dns.Config
+	status    *wgengine.Status
 
 	filter, jailedFilter *filter.Filter
-
-	statusCb wgengine.StatusCallback
 }
 
 func newMockEngine() *mockEngine {
@@ -1842,6 +1842,24 @@ func (e *mockEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCf
 	e.routerCfg = routerCfg
 	e.dnsCfg = dnsCfg
 	return nil
+}
+
+func (e *mockEngine) GetStatus() *wgengine.Status {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.status == nil {
+		return &wgengine.Status{}
+	}
+	return e.status
+}
+
+func (e *mockEngine) NumConfiguredPeers() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.status == nil {
+		return 0
+	}
+	return len(e.status.Peers)
 }
 
 func (e *mockEngine) Config() *wgcfg.Config {
@@ -1890,27 +1908,12 @@ func (e *mockEngine) SetJailedFilter(f *filter.Filter) {
 	e.mu.Unlock()
 }
 
-func (e *mockEngine) SetStatusCallback(cb wgengine.StatusCallback) {
-	e.mu.Lock()
-	e.statusCb = cb
-	e.mu.Unlock()
-}
-
-func (e *mockEngine) RequestStatus() {
-	e.mu.Lock()
-	cb := e.statusCb
-	e.mu.Unlock()
-	if cb != nil {
-		cb(&wgengine.Status{AsOf: time.Now()}, nil)
-	}
-}
-
 func (e *mockEngine) ResetAndStop() (*wgengine.Status, error) {
 	err := e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
 	if err != nil {
 		return nil, err
 	}
-	return &wgengine.Status{AsOf: time.Now()}, nil
+	return &wgengine.Status{}, nil
 }
 
 func (e *mockEngine) PeerByKey(key.NodePublic) (_ wgint.Peer, ok bool) {
