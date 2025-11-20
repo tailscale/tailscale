@@ -54,24 +54,29 @@ func (s Summary) String() string {
 	return s.data.Scope.String()
 }
 
-// MarshalJSONV2 implements [jsonv2.MarshalerV2].
-func (s Summary) MarshalJSONV2(out *jsontext.Encoder, opts jsonv2.Options) error {
-	return jsonv2.MarshalEncode(out, &s.data, opts)
+var (
+	_ jsonv2.MarshalerTo     = (*Summary)(nil)
+	_ jsonv2.UnmarshalerFrom = (*Summary)(nil)
+)
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (s Summary) MarshalJSONTo(out *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(out, &s.data)
 }
 
-// UnmarshalJSONV2 implements [jsonv2.UnmarshalerV2].
-func (s *Summary) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) error {
-	return jsonv2.UnmarshalDecode(in, &s.data, opts)
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (s *Summary) UnmarshalJSONFrom(in *jsontext.Decoder) error {
+	return jsonv2.UnmarshalDecode(in, &s.data)
 }
 
 // MarshalJSON implements [json.Marshaler].
 func (s Summary) MarshalJSON() ([]byte, error) {
-	return jsonv2.Marshal(s) // uses MarshalJSONV2
+	return jsonv2.Marshal(s) // uses MarshalJSONTo
 }
 
 // UnmarshalJSON implements [json.Unmarshaler].
 func (s *Summary) UnmarshalJSON(b []byte) error {
-	return jsonv2.Unmarshal(b, s) // uses UnmarshalJSONV2
+	return jsonv2.Unmarshal(b, s) // uses UnmarshalJSONFrom
 }
 
 // SummaryOption is an option that configures [Summary]

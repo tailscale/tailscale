@@ -7,22 +7,14 @@ package tailscaleroot
 
 import (
 	"os"
-	"runtime/debug"
 	"strings"
 	"testing"
 )
 
 func TestToolchainMatches(t *testing.T) {
-	bi, ok := debug.ReadBuildInfo()
+	tsRev, ok := tailscaleToolchainRev()
 	if !ok {
 		t.Fatal("failed to read build info")
-	}
-	var tsRev string
-	for _, s := range bi.Settings {
-		if s.Key == "tailscale.toolchain.rev" {
-			tsRev = s.Value
-			break
-		}
 	}
 	want := strings.TrimSpace(GoToolchainRev)
 	if tsRev != want {

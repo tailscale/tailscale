@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_usermetrics
+
 // Package usermetric provides a container and handler
 // for user-facing metrics.
 package usermetric
@@ -14,12 +16,20 @@ import (
 
 	"tailscale.com/metrics"
 	"tailscale.com/tsweb/varz"
+	"tailscale.com/util/set"
 )
 
 // Registry tracks user-facing metrics of various Tailscale subsystems.
 type Registry struct {
 	vars expvar.Map
+
+	// m contains common metrics owned by the registry.
+	m Metrics
 }
+
+// MultiLabelMap is an alias for metrics.MultiLabelMap in the common case,
+// or an alias to a lighter type when usermetrics are omitted from the build.
+type MultiLabelMap[T comparable] = metrics.MultiLabelMap[T]
 
 // NewMultiLabelMapWithRegistry creates and register a new
 // MultiLabelMap[T] variable with the given name and returns it.
@@ -102,4 +112,14 @@ func (r *Registry) String() string {
 	})
 
 	return sb.String()
+}
+
+// Metrics returns the name of all the metrics in the registry.
+func (r *Registry) MetricNames() []string {
+	ret := make(set.Set[string])
+	r.vars.Do(func(kv expvar.KeyValue) {
+		ret.Add(kv.Key)
+	})
+
+	return ret.Slice()
 }

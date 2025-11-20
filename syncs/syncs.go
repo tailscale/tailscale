@@ -6,6 +6,7 @@ package syncs
 
 import (
 	"context"
+	"iter"
 	"sync"
 	"sync/atomic"
 
@@ -24,6 +25,7 @@ func initClosedChan() <-chan struct{} {
 }
 
 // AtomicValue is the generic version of [atomic.Value].
+// See [MutexValue] for guidance on whether to use this type.
 type AtomicValue[T any] struct {
 	v atomic.Value
 }
@@ -65,12 +67,79 @@ func (v *AtomicValue[T]) Swap(x T) (old T) {
 	if oldV != nil {
 		return oldV.(wrappedValue[T]).v
 	}
-	return old
+	return old // zero value of T
 }
 
 // CompareAndSwap executes the compare-and-swap operation for the Value.
+// It panics if T is not comparable.
 func (v *AtomicValue[T]) CompareAndSwap(oldV, newV T) (swapped bool) {
-	return v.v.CompareAndSwap(wrappedValue[T]{oldV}, wrappedValue[T]{newV})
+	var zero T
+	return v.v.CompareAndSwap(wrappedValue[T]{oldV}, wrappedValue[T]{newV}) ||
+		// In the edge-case where [atomic.Value.Store] is uninitialized
+		// and trying to compare with the zero value of T,
+		// then compare-and-swap with the nil any value.
+		(any(oldV) == any(zero) && v.v.CompareAndSwap(any(nil), wrappedValue[T]{newV}))
+}
+
+// MutexValue is a value protected by a mutex.
+//
+// AtomicValue, [MutexValue], [atomic.Pointer] are similar and
+// overlap in their use cases.
+//
+//   - Use [atomic.Pointer] if the value being stored is a pointer and
+//     you only ever need load and store operations.
+//     An atomic pointer only occupies 1 word of memory.
+//
+//   - Use [MutexValue] if the value being stored is not a pointer or
+//     you need the ability for a mutex to protect a set of operations
+//     performed on the value.
+//     A mutex-guarded value occupies 1 word of memory plus
+//     the memory representation of T.
+//
+//   - AtomicValue is useful for non-pointer types that happen to
+//     have the memory layout of a single pointer.
+//     Examples include a map, channel, func, or a single field struct
+//     that contains any prior types.
+//     An atomic value occupies 2 words of memory.
+//     Consequently, Storing of non-pointer types always allocates.
+//
+// Note that [AtomicValue] has the ability to report whether it was set
+// while [MutexValue] lacks the ability to detect if the value was set
+// and it happens to be the zero value of T. If such a use case is
+// necessary, then you could consider wrapping T in [opt.Value].
+type MutexValue[T any] struct {
+	mu sync.Mutex
+	v  T
+}
+
+// WithLock calls f with a pointer to the value while holding the lock.
+// The provided pointer must not leak beyond the scope of the call.
+func (m *MutexValue[T]) WithLock(f func(p *T)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	f(&m.v)
+}
+
+// Load returns a shallow copy of the underlying value.
+func (m *MutexValue[T]) Load() T {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.v
+}
+
+// Store stores a shallow copy of the provided value.
+func (m *MutexValue[T]) Store(v T) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.v = v
+}
+
+// Swap stores new into m and returns the previous value.
+func (m *MutexValue[T]) Swap(new T) (old T) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	old, m.v = m.v, new
+	return old
 }
 
 // WaitGroupChan is like a sync.WaitGroup, but has a chan that closes
@@ -130,6 +199,13 @@ type Semaphore struct {
 // NewSemaphore returns a semaphore with resource count n.
 func NewSemaphore(n int) Semaphore {
 	return Semaphore{c: make(chan struct{}, n)}
+}
+
+// Len reports the number of in-flight acquisitions.
+// It is incremented whenever the semaphore is acquired.
+// It is decremented whenever the semaphore is released.
+func (s Semaphore) Len() int {
+	return len(s.c)
 }
 
 // Acquire blocks until a resource is acquired.
@@ -252,16 +328,47 @@ func (m *Map[K, V]) Delete(key K) {
 	delete(m.m, key)
 }
 
-// Range iterates over the map in an undefined order calling f for each entry.
-// Iteration stops if f returns false. Map changes are blocked during iteration.
+// Keys iterates over all keys in the map in an undefined order.
 // A read lock is held for the entire duration of the iteration.
 // Use the [WithLock] method instead to mutate the map during iteration.
-func (m *Map[K, V]) Range(f func(key K, value V) bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for k, v := range m.m {
-		if !f(k, v) {
-			return
+func (m *Map[K, V]) Keys() iter.Seq[K] {
+	return func(yield func(K) bool) {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		for k := range m.m {
+			if !yield(k) {
+				return
+			}
+		}
+	}
+}
+
+// Values iterates over all values in the map in an undefined order.
+// A read lock is held for the entire duration of the iteration.
+// Use the [WithLock] method instead to mutate the map during iteration.
+func (m *Map[K, V]) Values() iter.Seq[V] {
+	return func(yield func(V) bool) {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		for _, v := range m.m {
+			if !yield(v) {
+				return
+			}
+		}
+	}
+}
+
+// All iterates over all entries in the map in an undefined order.
+// A read lock is held for the entire duration of the iteration.
+// Use the [WithLock] method instead to mutate the map during iteration.
+func (m *Map[K, V]) All() iter.Seq2[K, V] {
+	return func(yield func(K, V) bool) {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		for k, v := range m.m {
+			if !yield(k, v) {
+				return
+			}
 		}
 	}
 }
@@ -272,6 +379,9 @@ func (m *Map[K, V]) Range(f func(key K, value V) bool) {
 func (m *Map[K, V]) WithLock(f func(m2 map[K]V)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.m == nil {
+		m.m = make(map[K]V)
+	}
 	f(m.m)
 }
 
@@ -298,20 +408,4 @@ func (m *Map[K, V]) Swap(key K, value V) (oldValue V) {
 	oldValue = m.m[key]
 	mak.Set(&m.m, key, value)
 	return oldValue
-}
-
-// WaitGroup is identical to [sync.WaitGroup],
-// but provides a Go method to start a goroutine.
-type WaitGroup struct{ sync.WaitGroup }
-
-// Go calls the given function in a new goroutine.
-// It automatically increments the counter before execution and
-// automatically decrements the counter after execution.
-// It must not be called concurrently with Wait.
-func (wg *WaitGroup) Go(f func()) {
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		f()
-	}()
 }

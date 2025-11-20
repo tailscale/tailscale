@@ -3,7 +3,10 @@
 
 package vnet
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestConfig(t *testing.T) {
 	tests := []struct {
@@ -15,6 +18,16 @@ func TestConfig(t *testing.T) {
 			name: "simple",
 			setup: func(c *Config) {
 				c.AddNode(c.AddNetwork("2.1.1.1", "192.168.1.1/24", EasyNAT, NATPMP))
+				c.AddNode(c.AddNetwork("2.2.2.2", "10.2.0.1/16", HardNAT))
+			},
+		},
+		{
+			name: "latency-and-loss",
+			setup: func(c *Config) {
+				n1 := c.AddNetwork("2.1.1.1", "192.168.1.1/24", EasyNAT, NATPMP)
+				n1.SetLatency(time.Second)
+				n1.SetPacketLoss(0.1)
+				c.AddNode(n1)
 				c.AddNode(c.AddNetwork("2.2.2.2", "10.2.0.1/16", HardNAT))
 			},
 		},

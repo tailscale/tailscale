@@ -196,7 +196,6 @@ func TestComplete(t *testing.T) {
 
 	// Run the tests.
 	for _, test := range tests {
-		test := test
 		name := strings.Join(test.args, "␣")
 		if test.showFlags {
 			name += "+flags"

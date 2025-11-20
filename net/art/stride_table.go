@@ -303,21 +303,21 @@ func formatPrefixTable(addr uint8, len int) string {
 //
 // For example, childPrefixOf("192.168.0.0/16", 8) == "192.168.8.0/24".
 func childPrefixOf(parent netip.Prefix, stride uint8) netip.Prefix {
-	l := parent.Bits()
-	if l%8 != 0 {
+	ln := parent.Bits()
+	if ln%8 != 0 {
 		panic("parent prefix is not 8-bit aligned")
 	}
-	if l >= parent.Addr().BitLen() {
+	if ln >= parent.Addr().BitLen() {
 		panic("parent prefix cannot be extended further")
 	}
-	off := l / 8
+	off := ln / 8
 	if parent.Addr().Is4() {
 		bs := parent.Addr().As4()
 		bs[off] = stride
-		return netip.PrefixFrom(netip.AddrFrom4(bs), l+8)
+		return netip.PrefixFrom(netip.AddrFrom4(bs), ln+8)
 	} else {
 		bs := parent.Addr().As16()
 		bs[off] = stride
-		return netip.PrefixFrom(netip.AddrFrom16(bs), l+8)
+		return netip.PrefixFrom(netip.AddrFrom16(bs), ln+8)
 	}
 }

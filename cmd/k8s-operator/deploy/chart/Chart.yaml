@@ -26,4 +26,4 @@ maintainers:
 version: 0.1.0
 
 # appVersion will be set to Tailscale repo tag at release time.
-appVersion: "unstable"
+appVersion: "stable"

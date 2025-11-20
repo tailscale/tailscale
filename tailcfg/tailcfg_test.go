@@ -10,7 +10,6 @@ import (
 	"reflect"
 	"regexp"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +50,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"ShareeNode",
 		"NoLogsNoSupport",
 		"WireIngress",
+		"IngressEnabled",
 		"AllowsUpdate",
 		"Machine",
 		"GoArch",
@@ -66,7 +66,11 @@ func TestHostinfoEqual(t *testing.T) {
 		"Userspace",
 		"UserspaceRouter",
 		"AppConnector",
+		"ServicesHash",
+		"ExitNodeID",
 		"Location",
+		"TPM",
+		"StateEncrypted",
 	}
 	if have := fieldsOf(reflect.TypeFor[Hostinfo]()); !reflect.DeepEqual(have, hiHandles) {
 		t.Errorf("Hostinfo.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
@@ -240,87 +244,56 @@ func TestHostinfoEqual(t *testing.T) {
 			&Hostinfo{AppConnector: opt.Bool("false")},
 			false,
 		},
+		{
+			&Hostinfo{ServicesHash: "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049"},
+			&Hostinfo{ServicesHash: "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049"},
+			true,
+		},
+		{
+			&Hostinfo{ServicesHash: "084c799cd551dd1d8d5c5f9a5d593b2e931f5e36122ee5c793c1d08a19839cc0"},
+			&Hostinfo{},
+			false,
+		},
+		{
+			&Hostinfo{IngressEnabled: true},
+			&Hostinfo{},
+			false,
+		},
+		{
+			&Hostinfo{IngressEnabled: true},
+			&Hostinfo{IngressEnabled: true},
+			true,
+		},
+		{
+			&Hostinfo{IngressEnabled: false},
+			&Hostinfo{},
+			true,
+		},
+		{
+			&Hostinfo{IngressEnabled: false},
+			&Hostinfo{IngressEnabled: true},
+			false,
+		},
+		{
+			&Hostinfo{ExitNodeID: "stable-exit"},
+			&Hostinfo{ExitNodeID: "stable-exit"},
+			true,
+		},
+		{
+			&Hostinfo{ExitNodeID: ""},
+			&Hostinfo{},
+			true,
+		},
+		{
+			&Hostinfo{ExitNodeID: ""},
+			&Hostinfo{ExitNodeID: "stable-exit"},
+			false,
+		},
 	}
 	for i, tt := range tests {
 		got := tt.a.Equal(tt.b)
 		if got != tt.want {
 			t.Errorf("%d. Equal = %v; want %v", i, got, tt.want)
-		}
-	}
-}
-
-func TestHostinfoHowEqual(t *testing.T) {
-	tests := []struct {
-		a, b *Hostinfo
-		want []string
-	}{
-		{
-			a:    nil,
-			b:    nil,
-			want: nil,
-		},
-		{
-			a:    new(Hostinfo),
-			b:    nil,
-			want: []string{"nil"},
-		},
-		{
-			a:    nil,
-			b:    new(Hostinfo),
-			want: []string{"nil"},
-		},
-		{
-			a:    new(Hostinfo),
-			b:    new(Hostinfo),
-			want: nil,
-		},
-		{
-			a: &Hostinfo{
-				IPNVersion:  "1",
-				ShieldsUp:   false,
-				RoutableIPs: []netip.Prefix{netip.MustParsePrefix("1.2.3.0/24")},
-			},
-			b: &Hostinfo{
-				IPNVersion:  "2",
-				ShieldsUp:   true,
-				RoutableIPs: []netip.Prefix{netip.MustParsePrefix("1.2.3.0/25")},
-			},
-			want: []string{"IPNVersion", "ShieldsUp", "RoutableIPs"},
-		},
-		{
-			a: &Hostinfo{
-				IPNVersion: "1",
-			},
-			b: &Hostinfo{
-				IPNVersion: "2",
-				NetInfo:    new(NetInfo),
-			},
-			want: []string{"IPNVersion", "NetInfo.nil"},
-		},
-		{
-			a: &Hostinfo{
-				IPNVersion: "1",
-				NetInfo: &NetInfo{
-					WorkingIPv6:   "true",
-					HavePortMap:   true,
-					LinkType:      "foo",
-					PreferredDERP: 123,
-					DERPLatency: map[string]float64{
-						"foo": 1.0,
-					},
-				},
-			},
-			b: &Hostinfo{
-				IPNVersion: "2",
-				NetInfo:    &NetInfo{},
-			},
-			want: []string{"IPNVersion", "NetInfo.WorkingIPv6", "NetInfo.HavePortMap", "NetInfo.PreferredDERP", "NetInfo.LinkType", "NetInfo.DERPLatency"},
-		},
-	}
-	for i, tt := range tests {
-		got := tt.a.HowUnequal(tt.b)
-		if !reflect.DeepEqual(got, tt.want) {
-			t.Errorf("%d. got %q; want %q", i, got, tt.want)
 		}
 	}
 }
@@ -356,7 +329,7 @@ func TestNodeEqual(t *testing.T) {
 	nodeHandles := []string{
 		"ID", "StableID", "Name", "User", "Sharer",
 		"Key", "KeyExpiry", "KeySignature", "Machine", "DiscoKey",
-		"Addresses", "AllowedIPs", "Endpoints", "DERP", "Hostinfo",
+		"Addresses", "AllowedIPs", "Endpoints", "LegacyDERPString", "HomeDERP", "Hostinfo",
 		"Created", "Cap", "Tags", "PrimaryRoutes",
 		"LastSeen", "Online", "MachineAuthorized",
 		"Capabilities", "CapMap",
@@ -519,8 +492,13 @@ func TestNodeEqual(t *testing.T) {
 			true,
 		},
 		{
-			&Node{DERP: "foo"},
-			&Node{DERP: "bar"},
+			&Node{LegacyDERPString: "foo"},
+			&Node{LegacyDERPString: "bar"},
+			false,
+		},
+		{
+			&Node{HomeDERP: 1},
+			&Node{HomeDERP: 2},
 			false,
 		},
 		{
@@ -629,7 +607,6 @@ func TestNodeEqual(t *testing.T) {
 func TestNetInfoFields(t *testing.T) {
 	handled := []string{
 		"MappingVariesByDestIP",
-		"HairPinning",
 		"WorkingIPv6",
 		"OSHasIPv6",
 		"WorkingUDP",
@@ -655,7 +632,6 @@ func TestCloneUser(t *testing.T) {
 		u    *User
 	}{
 		{"nil_logins", &User{}},
-		{"zero_logins", &User{Logins: make([]LoginID, 0)}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -686,28 +662,6 @@ func TestCloneNode(t *testing.T) {
 				t.Errorf("not equal")
 			}
 		})
-	}
-}
-
-func TestUserProfileJSONMarshalForMac(t *testing.T) {
-	// Old macOS clients had a bug where they required
-	// UserProfile.Roles to be non-null. Lock that in
-	// 1.0.x/1.2.x clients are gone in the wild.
-	// See mac commit 0242c08a2ca496958027db1208f44251bff8488b (Sep 30).
-	// It was fixed in at least 1.4.x, and perhaps 1.2.x.
-	j, err := json.Marshal(UserProfile{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	const wantSub = `"Roles":[]`
-	if !strings.Contains(string(j), wantSub) {
-		t.Fatalf("didn't contain %#q; got: %s", wantSub, j)
-	}
-
-	// And back:
-	var up UserProfile
-	if err := json.Unmarshal(j, &up); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
 	}
 }
 
@@ -936,6 +890,135 @@ func TestCheckTag(t *testing.T) {
 				t.Errorf("got nil; want error")
 			} else if err != nil && tt.want {
 				t.Errorf("got %v; want nil", err)
+			}
+		})
+	}
+}
+
+func TestDisplayMessageEqual(t *testing.T) {
+	type test struct {
+		name      string
+		value1    DisplayMessage
+		value2    DisplayMessage
+		wantEqual bool
+	}
+
+	for _, test := range []test{
+		{
+			name: "same",
+			value1: DisplayMessage{
+				Title:               "title",
+				Text:                "text",
+				Severity:            SeverityHigh,
+				ImpactsConnectivity: false,
+				PrimaryAction: &DisplayMessageAction{
+					URL:   "https://example.com",
+					Label: "Open",
+				},
+			},
+			value2: DisplayMessage{
+				Title:               "title",
+				Text:                "text",
+				Severity:            SeverityHigh,
+				ImpactsConnectivity: false,
+				PrimaryAction: &DisplayMessageAction{
+					URL:   "https://example.com",
+					Label: "Open",
+				},
+			},
+			wantEqual: true,
+		},
+		{
+			name: "different-title",
+			value1: DisplayMessage{
+				Title: "title",
+			},
+			value2: DisplayMessage{
+				Title: "different title",
+			},
+			wantEqual: false,
+		},
+		{
+			name: "different-text",
+			value1: DisplayMessage{
+				Text: "some text",
+			},
+			value2: DisplayMessage{
+				Text: "different text",
+			},
+			wantEqual: false,
+		},
+		{
+			name: "different-severity",
+			value1: DisplayMessage{
+				Severity: SeverityHigh,
+			},
+			value2: DisplayMessage{
+				Severity: SeverityMedium,
+			},
+			wantEqual: false,
+		},
+		{
+			name: "different-impactsConnectivity",
+			value1: DisplayMessage{
+				ImpactsConnectivity: true,
+			},
+			value2: DisplayMessage{
+				ImpactsConnectivity: false,
+			},
+			wantEqual: false,
+		},
+		{
+			name:   "different-primaryAction-nil-non-nil",
+			value1: DisplayMessage{},
+			value2: DisplayMessage{
+				PrimaryAction: &DisplayMessageAction{
+					URL:   "https://example.com",
+					Label: "Open",
+				},
+			},
+			wantEqual: false,
+		},
+		{
+			name: "different-primaryAction-url",
+			value1: DisplayMessage{
+				PrimaryAction: &DisplayMessageAction{
+					URL:   "https://example.com",
+					Label: "Open",
+				},
+			},
+			value2: DisplayMessage{
+				PrimaryAction: &DisplayMessageAction{
+					URL:   "https://zombo.com",
+					Label: "Open",
+				},
+			},
+			wantEqual: false,
+		},
+		{
+			name: "different-primaryAction-label",
+			value1: DisplayMessage{
+				PrimaryAction: &DisplayMessageAction{
+					URL:   "https://example.com",
+					Label: "Open",
+				},
+			},
+			value2: DisplayMessage{
+				PrimaryAction: &DisplayMessageAction{
+					URL:   "https://example.com",
+					Label: "Learn more",
+				},
+			},
+			wantEqual: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := test.value1.Equal(test.value2)
+
+			if got != test.wantEqual {
+				value1 := must.Get(json.MarshalIndent(test.value1, "", "  "))
+				value2 := must.Get(json.MarshalIndent(test.value2, "", "  "))
+				t.Errorf("value1.Equal(value2): got %t, want %t\nvalue1:\n%s\nvalue2:\n%s", got, test.wantEqual, value1, value2)
 			}
 		})
 	}

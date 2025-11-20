@@ -1,21 +1,28 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_debug
+
 package wgengine
 
 import (
 	"fmt"
+	"net/netip"
 	"runtime"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/gaissmai/bart"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
-	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/util/mak"
 	"tailscale.com/wgengine/filter"
 )
+
+type flowtrackTuple = flowtrack.Tuple
 
 const tcpTimeoutBeforeDebug = 5 * time.Second
 
@@ -53,6 +60,10 @@ func (e *userspaceEngine) noteFlowProblemFromPeer(f flowtrack.Tuple, problem pac
 	of.problem = problem
 }
 
+func tsRejectFlow(rh packet.TailscaleRejectedHeader) flowtrack.Tuple {
+	return flowtrack.MakeTuple(rh.Proto, rh.Src, rh.Dst)
+}
+
 func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapper) (res filter.Response) {
 	res = filter.Accept // always
 
@@ -63,8 +74,8 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapp
 			return
 		}
 		if rh.MaybeBroken {
-			e.noteFlowProblemFromPeer(rh.Flow(), rh.Reason)
-		} else if f := rh.Flow(); e.removeFlow(f) {
+			e.noteFlowProblemFromPeer(tsRejectFlow(rh), rh.Reason)
+		} else if f := tsRejectFlow(rh); e.removeFlow(f) {
 			e.logf("open-conn-track: flow %v %v > %v rejected due to %v", rh.Proto, rh.Src, rh.Dst, rh.Reason)
 		}
 		return
@@ -86,6 +97,57 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapp
 	return
 }
 
+var (
+	appleIPRange = netip.MustParsePrefix("17.0.0.0/8")
+	canonicalIPs = sync.OnceValue(func() (checkIPFunc func(netip.Addr) bool) {
+		// https://bgp.he.net/AS41231#_prefixes
+		t := &bart.Table[bool]{}
+		for _, s := range strings.Fields(`
+			91.189.89.0/24
+			91.189.91.0/24
+			91.189.92.0/24
+			91.189.93.0/24
+			91.189.94.0/24
+			91.189.95.0/24
+			162.213.32.0/24
+			162.213.34.0/24
+			162.213.35.0/24
+			185.125.188.0/23
+			185.125.190.0/24
+			194.169.254.0/24`) {
+			t.Insert(netip.MustParsePrefix(s), true)
+		}
+		return func(ip netip.Addr) bool {
+			v, _ := t.Lookup(ip)
+			return v
+		}
+	})
+)
+
+// isOSNetworkProbe reports whether the target is likely a network
+// connectivity probe target from e.g. iOS or Ubuntu network-manager.
+//
+// iOS likes to probe Apple IPs on all interfaces to check for connectivity.
+// Don't start timers tracking those. They won't succeed anyway. Avoids log
+// spam like:
+func (e *userspaceEngine) isOSNetworkProbe(dst netip.AddrPort) bool {
+	// iOS had log spam like:
+	// open-conn-track: timeout opening (100.115.73.60:52501 => 17.125.252.5:443); no associated peer node
+	if runtime.GOOS == "ios" && dst.Port() == 443 && appleIPRange.Contains(dst.Addr()) {
+		if _, ok := e.PeerForIP(dst.Addr()); !ok {
+			return true
+		}
+	}
+	// NetworkManager; https://github.com/tailscale/tailscale/issues/13687
+	// open-conn-track: timeout opening (TCP 100.96.229.119:42798 => 185.125.190.49:80); no associated peer node
+	if runtime.GOOS == "linux" && dst.Port() == 80 && canonicalIPs()(dst.Addr()) {
+		if _, ok := e.PeerForIP(dst.Addr()); !ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.Wrapper) (res filter.Response) {
 	res = filter.Accept // always
 
@@ -95,18 +157,11 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.Wra
 		pp.TCPFlags&packet.TCPSyn == 0 {
 		return
 	}
+	if e.isOSNetworkProbe(pp.Dst) {
+		return
+	}
 
 	flow := flowtrack.MakeTuple(pp.IPProto, pp.Src, pp.Dst)
-
-	// iOS likes to probe Apple IPs on all interfaces to check for connectivity.
-	// Don't start timers tracking those. They won't succeed anyway. Avoids log spam
-	// like:
-	//    open-conn-track: timeout opening (100.115.73.60:52501 => 17.125.252.5:443); no associated peer node
-	if runtime.GOOS == "ios" && flow.DstPort() == 443 && !tsaddr.IsTailscaleIP(flow.DstAddr()) {
-		if _, ok := e.PeerForIP(flow.DstAddr()); !ok {
-			return
-		}
-	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -151,7 +206,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 			e.logf("open-conn-track: timeout opening %v; peer node %v running pre-0.100", flow, n.Key().ShortString())
 			return
 		}
-		if n.DERP() == "" {
+		if n.HomeDERP() == 0 {
 			e.logf("open-conn-track: timeout opening %v; peer node %v not connected to any DERP relay", flow, n.Key().ShortString())
 			return
 		}
@@ -160,8 +215,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	ps, found := e.getPeerStatusLite(n.Key())
 	if !found {
 		onlyZeroRoute := true // whether peerForIP returned n only because its /0 route matched
-		for i := range n.AllowedIPs().Len() {
-			r := n.AllowedIPs().At(i)
+		for _, r := range n.AllowedIPs().All() {
 			if r.Bits() != 0 && r.Contains(flow.DstAddr()) {
 				onlyZeroRoute = false
 				break
@@ -193,15 +247,15 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	if n.IsWireGuardOnly() {
 		online = "wg"
 	} else {
-		if v := n.Online(); v != nil {
-			if *v {
+		if v, ok := n.Online().GetOk(); ok {
+			if v {
 				online = "yes"
 			} else {
 				online = "no"
 			}
 		}
-		if n.LastSeen() != nil && online != "yes" {
-			online += fmt.Sprintf(", lastseen=%v", durFmt(*n.LastSeen()))
+		if lastSeen, ok := n.LastSeen().GetOk(); ok && online != "yes" {
+			online += fmt.Sprintf(", lastseen=%v", durFmt(lastSeen))
 		}
 	}
 	e.logf("open-conn-track: timeout opening %v to node %v; online=%v, lastRecv=%v",

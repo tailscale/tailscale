@@ -9,6 +9,8 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"go/ast"
+	"go/token"
 	"go/types"
 	"html/template"
 	"log"
@@ -17,11 +19,12 @@ import (
 	"strings"
 
 	"tailscale.com/util/codegen"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 )
 
 const viewTemplateStr = `{{define "common"}}
-// View returns a readonly view of {{.StructName}}.
+// View returns a read-only view of {{.StructName}}.
 func (p *{{.StructName}}{{.TypeParamNames}}) View() {{.ViewName}}{{.TypeParamNames}} {
 	return {{.ViewName}}{{.TypeParamNames}}{ж: p}
 }
@@ -37,7 +40,7 @@ type {{.ViewName}}{{.TypeParams}} struct {
 	ж *{{.StructName}}{{.TypeParamNames}}
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v {{.ViewName}}{{.TypeParamNames}}) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -49,8 +52,17 @@ func (v {{.ViewName}}{{.TypeParamNames}}) AsStruct() *{{.StructName}}{{.TypePara
 	return v.ж.Clone()
 }
 
-func (v {{.ViewName}}{{.TypeParamNames}}) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v {{.ViewName}}{{.TypeParamNames}}) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v {{.ViewName}}{{.TypeParamNames}}) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *{{.ViewName}}{{.TypeParamNames}}) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -59,10 +71,23 @@ func (v *{{.ViewName}}{{.TypeParamNames}}) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x {{.StructName}}{{.TypeParamNames}}
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
 		return err
 	}
-	v.ж=&x
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *{{.ViewName}}{{.TypeParamNames}}) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x {{.StructName}}{{.TypeParamNames}}
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
 	return nil
 }
 
@@ -79,25 +104,16 @@ func (v *{{.ViewName}}{{.TypeParamNames}}) UnmarshalJSON(b []byte) error {
 {{end}}
 {{define "makeViewField"}}func (v {{.ViewName}}{{.TypeParamNames}}) {{.FieldName}}() {{.FieldViewName}} { return {{.MakeViewFnName}}(&v.ж.{{.FieldName}}) }
 {{end}}
-{{define "valuePointerField"}}func (v {{.ViewName}}{{.TypeParamNames}}) {{.FieldName}}() {{.FieldType}} {
-	if v.ж.{{.FieldName}} == nil {
-		return nil
-	}
-	x := *v.ж.{{.FieldName}}
-	return &x
-}
+{{define "valuePointerField"}}func (v {{.ViewName}}{{.TypeParamNames}}) {{.FieldName}}() views.ValuePointer[{{.FieldType}}] { return views.ValuePointerOf(v.ж.{{.FieldName}}) }
 
 {{end}}
-{{define "mapField"}}
-func(v {{.ViewName}}{{.TypeParamNames}}) {{.FieldName}}() views.Map[{{.MapKeyType}},{{.MapValueType}}] { return views.MapOf(v.ж.{{.FieldName}})}
+{{define "mapField"}}func(v {{.ViewName}}{{.TypeParamNames}}) {{.FieldName}}() views.Map[{{.MapKeyType}},{{.MapValueType}}] { return views.MapOf(v.ж.{{.FieldName}})}
 {{end}}
-{{define "mapFnField"}}
-func(v {{.ViewName}}{{.TypeParamNames}}) {{.FieldName}}() views.MapFn[{{.MapKeyType}},{{.MapValueType}},{{.MapValueView}}] { return views.MapFnOf(v.ж.{{.FieldName}}, func (t {{.MapValueType}}) {{.MapValueView}} {
+{{define "mapFnField"}}func(v {{.ViewName}}{{.TypeParamNames}}) {{.FieldName}}() views.MapFn[{{.MapKeyType}},{{.MapValueType}},{{.MapValueView}}] { return views.MapFnOf(v.ж.{{.FieldName}}, func (t {{.MapValueType}}) {{.MapValueView}} {
 	return {{.MapFn}}
 })}
 {{end}}
-{{define "mapSliceField"}}
-func(v {{.ViewName}}{{.TypeParamNames}}) {{.FieldName}}() views.MapSlice[{{.MapKeyType}},{{.MapValueType}}] { return views.MapSliceOf(v.ж.{{.FieldName}}) }
+{{define "mapSliceField"}}func(v {{.ViewName}}{{.TypeParamNames}}) {{.FieldName}}() views.MapSlice[{{.MapKeyType}},{{.MapValueType}}] { return views.MapSliceOf(v.ж.{{.FieldName}}) }
 {{end}}
 {{define "unsupportedField"}}func(v {{.ViewName}}{{.TypeParamNames}}) {{.FieldName}}() {{.FieldType}} {panic("unsupported")}
 {{end}}
@@ -126,13 +142,89 @@ func requiresCloning(t types.Type) (shallow, deep bool, base types.Type) {
 	return p, p, t
 }
 
-func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thisPkg *types.Package) {
+type fieldNameKey struct {
+	typeName  string
+	fieldName string
+}
+
+// getFieldComments extracts field comments from the AST for a given struct type.
+func getFieldComments(syntax []*ast.File) map[fieldNameKey]string {
+	if len(syntax) == 0 {
+		return nil
+	}
+	var fieldComments map[fieldNameKey]string
+
+	// Search through all AST files in the package
+	for _, file := range syntax {
+		// Look for the type declaration
+		for _, decl := range file.Decls {
+			genDecl, ok := decl.(*ast.GenDecl)
+			if !ok || genDecl.Tok != token.TYPE {
+				continue
+			}
+
+			for _, spec := range genDecl.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				typeName := typeSpec.Name.Name
+
+				// Check if it's a struct type
+				structType, ok := typeSpec.Type.(*ast.StructType)
+				if !ok {
+					continue
+				}
+
+				// Extract field comments
+				for _, field := range structType.Fields.List {
+					if len(field.Names) == 0 {
+						// Anonymous field or no names
+						continue
+					}
+
+					// Get the field name
+					fieldName := field.Names[0].Name
+					key := fieldNameKey{typeName, fieldName}
+
+					// Get the comment
+					var comment string
+					if field.Doc != nil && field.Doc.Text() != "" {
+						// Format the comment for Go code generation
+						comment = strings.TrimSpace(field.Doc.Text())
+						// Convert multi-line comments to proper Go comment format
+						var sb strings.Builder
+						for line := range strings.Lines(comment) {
+							sb.WriteString("// ")
+							sb.WriteString(line)
+						}
+						if sb.Len() > 0 {
+							comment = sb.String()
+						}
+					} else if field.Comment != nil && field.Comment.Text() != "" {
+						// Handle inline comments
+						comment = "// " + strings.TrimSpace(field.Comment.Text())
+					}
+					if comment != "" {
+						mak.Set(&fieldComments, key, comment)
+					}
+				}
+			}
+		}
+	}
+
+	return fieldComments
+}
+
+func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, fieldComments map[fieldNameKey]string) {
 	t, ok := typ.Underlying().(*types.Struct)
 	if !ok || codegen.IsViewType(t) {
 		return
 	}
-	it.Import("encoding/json")
-	it.Import("errors")
+	it.Import("jsonv1", "encoding/json")
+	it.Import("jsonv2", "github.com/go-json-experiment/json")
+	it.Import("", "github.com/go-json-experiment/json/jsontext")
+	it.Import("", "errors")
 
 	args := struct {
 		StructName     string
@@ -149,7 +241,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 		MapValueView string
 		MapFn        string
 
-		// MakeViewFnName is the name of the function that accepts a value and returns a readonly view of it.
+		// MakeViewFnName is the name of the function that accepts a value and returns a read-only view of it.
 		MakeViewFnName string
 	}{
 		StructName: typ.Obj().Name(),
@@ -164,6 +256,15 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 			log.Fatal(err)
 		}
 	}
+	writeTemplateWithComment := func(name, fieldName string) {
+		// Write the field comment if it exists
+		key := fieldNameKey{args.StructName, fieldName}
+		if comment, ok := fieldComments[key]; ok && comment != "" {
+			fmt.Fprintln(buf, comment)
+		}
+		writeTemplate(name)
+	}
+
 	writeTemplate("common")
 	for i := range t.NumFields() {
 		f := t.Field(i)
@@ -178,7 +279,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 		}
 		if !codegen.ContainsPointers(fieldType) || codegen.IsViewType(fieldType) || codegen.HasNoClone(t.Tag(i)) {
 			args.FieldType = it.QualifiedName(fieldType)
-			writeTemplate("valueField")
+			writeTemplateWithComment("valueField", fname)
 			continue
 		}
 		switch underlying := fieldType.Underlying().(type) {
@@ -188,46 +289,46 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 			switch elem.String() {
 			case "byte":
 				args.FieldType = it.QualifiedName(fieldType)
-				it.Import("tailscale.com/types/views")
-				writeTemplate("byteSliceField")
+				it.Import("", "tailscale.com/types/views")
+				writeTemplateWithComment("byteSliceField", fname)
 			default:
 				args.FieldType = it.QualifiedName(elem)
-				it.Import("tailscale.com/types/views")
+				it.Import("", "tailscale.com/types/views")
 				shallow, deep, base := requiresCloning(elem)
 				if deep {
 					switch elem.Underlying().(type) {
 					case *types.Pointer:
 						if _, isIface := base.Underlying().(*types.Interface); !isIface {
 							args.FieldViewName = appendNameSuffix(it.QualifiedName(base), "View")
-							writeTemplate("viewSliceField")
+							writeTemplateWithComment("viewSliceField", fname)
 						} else {
-							writeTemplate("unsupportedField")
+							writeTemplateWithComment("unsupportedField", fname)
 						}
 						continue
 					case *types.Interface:
 						if viewType := viewTypeForValueType(elem); viewType != nil {
 							args.FieldViewName = it.QualifiedName(viewType)
-							writeTemplate("viewSliceField")
+							writeTemplateWithComment("viewSliceField", fname)
 							continue
 						}
 					}
-					writeTemplate("unsupportedField")
+					writeTemplateWithComment("unsupportedField", fname)
 					continue
 				} else if shallow {
 					switch base.Underlying().(type) {
 					case *types.Basic, *types.Interface:
-						writeTemplate("unsupportedField")
+						writeTemplateWithComment("unsupportedField", fname)
 					default:
 						if _, isIface := base.Underlying().(*types.Interface); !isIface {
 							args.FieldViewName = appendNameSuffix(it.QualifiedName(base), "View")
-							writeTemplate("viewSliceField")
+							writeTemplateWithComment("viewSliceField", fname)
 						} else {
-							writeTemplate("unsupportedField")
+							writeTemplateWithComment("unsupportedField", fname)
 						}
 					}
 					continue
 				}
-				writeTemplate("sliceField")
+				writeTemplateWithComment("sliceField", fname)
 			}
 			continue
 		case *types.Struct:
@@ -236,28 +337,29 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 			if codegen.ContainsPointers(strucT) {
 				if viewType := viewTypeForValueType(fieldType); viewType != nil {
 					args.FieldViewName = it.QualifiedName(viewType)
-					writeTemplate("viewField")
+					writeTemplateWithComment("viewField", fname)
 					continue
 				}
 				if viewType, makeViewFn := viewTypeForContainerType(fieldType); viewType != nil {
 					args.FieldViewName = it.QualifiedName(viewType)
 					args.MakeViewFnName = it.PackagePrefix(makeViewFn.Pkg()) + makeViewFn.Name()
-					writeTemplate("makeViewField")
+					writeTemplateWithComment("makeViewField", fname)
 					continue
 				}
-				writeTemplate("unsupportedField")
+				writeTemplateWithComment("unsupportedField", fname)
 				continue
 			}
-			writeTemplate("valueField")
+			writeTemplateWithComment("valueField", fname)
 			continue
 		case *types.Map:
 			m := underlying
 			args.FieldType = it.QualifiedName(fieldType)
 			shallow, deep, key := requiresCloning(m.Key())
 			if shallow || deep {
-				writeTemplate("unsupportedField")
+				writeTemplateWithComment("unsupportedField", fname)
 				continue
 			}
+			it.Import("", "tailscale.com/types/views")
 			args.MapKeyType = it.QualifiedName(key)
 			mElem := m.Elem()
 			var template string
@@ -265,14 +367,21 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 			case *types.Struct, *types.Named, *types.Alias:
 				strucT := u
 				args.FieldType = it.QualifiedName(fieldType)
-				if codegen.ContainsPointers(strucT) {
+
+				// We need to call View() unless the type is
+				// either a View itself or does not contain
+				// pointers (and can thus be shallow-copied).
+				//
+				// Otherwise, we need to create a View of the
+				// map value.
+				if codegen.IsViewType(strucT) || !codegen.ContainsPointers(strucT) {
+					template = "mapField"
+					args.MapValueType = it.QualifiedName(mElem)
+				} else {
 					args.MapFn = "t.View()"
 					template = "mapFnField"
 					args.MapValueType = it.QualifiedName(mElem)
 					args.MapValueView = appendNameSuffix(args.MapValueType, "View")
-				} else {
-					template = "mapField"
-					args.MapValueType = it.QualifiedName(mElem)
 				}
 			case *types.Basic:
 				template = "mapField"
@@ -339,7 +448,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 			default:
 				template = "unsupportedField"
 			}
-			writeTemplate(template)
+			writeTemplateWithComment(template, fname)
 			continue
 		case *types.Pointer:
 			ptr := underlying
@@ -349,25 +458,47 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 				if _, isIface := base.Underlying().(*types.Interface); !isIface {
 					args.FieldType = it.QualifiedName(base)
 					args.FieldViewName = appendNameSuffix(args.FieldType, "View")
-					writeTemplate("viewField")
+					writeTemplateWithComment("viewField", fname)
 				} else {
-					writeTemplate("unsupportedField")
+					writeTemplateWithComment("unsupportedField", fname)
 				}
-			} else {
-				args.FieldType = it.QualifiedName(ptr)
-				writeTemplate("valuePointerField")
+				continue
 			}
+
+			// If a view type is already defined for the base type, use it as the field's view type.
+			if viewType := viewTypeForValueType(base); viewType != nil {
+				args.FieldType = it.QualifiedName(base)
+				args.FieldViewName = it.QualifiedName(viewType)
+				writeTemplateWithComment("viewField", fname)
+				continue
+			}
+
+			// Otherwise, if the unaliased base type is a named type whose view type will be generated by this viewer invocation,
+			// append the "View" suffix to the unaliased base type name and use it as the field's view type.
+			if base, ok := types.Unalias(base).(*types.Named); ok && slices.Contains(typeNames, it.QualifiedName(base)) {
+				baseTypeName := it.QualifiedName(base)
+				args.FieldType = baseTypeName
+				args.FieldViewName = appendNameSuffix(args.FieldType, "View")
+				writeTemplateWithComment("viewField", fname)
+				continue
+			}
+
+			// Otherwise, if the base type does not require deep cloning, has no existing view type,
+			// and will not have a generated view type, use views.ValuePointer[T] as the field's view type.
+			// Its Get/GetOk methods return stack-allocated shallow copies of the field's value.
+			args.FieldType = it.QualifiedName(base)
+			writeTemplateWithComment("valuePointerField", fname)
 			continue
 		case *types.Interface:
 			// If fieldType is an interface with a "View() {ViewType}" method, it can be used to clone the field.
 			// This includes scenarios where fieldType is a constrained type parameter.
 			if viewType := viewTypeForValueType(underlying); viewType != nil {
 				args.FieldViewName = it.QualifiedName(viewType)
-				writeTemplate("viewField")
+				writeTemplateWithComment("viewField", fname)
 				continue
 			}
 		}
-		writeTemplate("unsupportedField")
+		writeTemplateWithComment("unsupportedField", fname)
 	}
 	for i := range typ.NumMethods() {
 		f := typ.Method(i)
@@ -404,6 +535,33 @@ func appendNameSuffix(name, suffix string) string {
 	return name + suffix
 }
 
+func typeNameOf(typ types.Type) (name *types.TypeName, ok bool) {
+	switch t := typ.(type) {
+	case *types.Alias:
+		return t.Obj(), true
+	case *types.Named:
+		return t.Obj(), true
+	default:
+		return nil, false
+	}
+}
+
+func lookupViewType(typ types.Type) types.Type {
+	for {
+		if typeName, ok := typeNameOf(typ); ok && typeName.Pkg() != nil {
+			if viewTypeObj := typeName.Pkg().Scope().Lookup(typeName.Name() + "View"); viewTypeObj != nil {
+				return viewTypeObj.Type()
+			}
+		}
+		switch alias := typ.(type) {
+		case *types.Alias:
+			typ = alias.Rhs()
+		default:
+			return nil
+		}
+	}
+}
+
 func viewTypeForValueType(typ types.Type) types.Type {
 	if ptr, ok := typ.(*types.Pointer); ok {
 		return viewTypeForValueType(ptr.Elem())
@@ -416,7 +574,12 @@ func viewTypeForValueType(typ types.Type) types.Type {
 	if !ok || sig.Results().Len() != 1 {
 		return nil
 	}
-	return sig.Results().At(0).Type()
+	viewType := sig.Results().At(0).Type()
+	// Check if the typ's package defines an alias for the view type, and use it if so.
+	if viewTypeAlias, ok := lookupViewType(typ).(*types.Alias); ok && types.AssignableTo(viewType, viewTypeAlias) {
+		viewType = viewTypeAlias
+	}
+	return viewType
 }
 
 func viewTypeForContainerType(typ types.Type) (*types.Named, *types.Func) {
@@ -554,6 +717,7 @@ func main() {
 		log.Fatal(err)
 	}
 	it := codegen.NewImportTracker(pkg.Types)
+	fieldComments := getFieldComments(pkg.Syntax)
 
 	cloneOnlyType := map[string]bool{}
 	for _, t := range strings.Split(*flagCloneOnlyTypes, ",") {
@@ -581,7 +745,7 @@ func main() {
 		if !hasClone {
 			runCloner = true
 		}
-		genView(buf, it, typ, pkg.Types)
+		genView(buf, it, typ, fieldComments)
 	}
 	out := pkg.Name + "_view"
 	if *flagBuildTags == "test" {

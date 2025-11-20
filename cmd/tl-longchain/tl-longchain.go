@@ -22,7 +22,7 @@ import (
 	"log"
 	"time"
 
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
@@ -37,7 +37,7 @@ var (
 func main() {
 	flag.Parse()
 
-	lc := tailscale.LocalClient{Socket: *flagSocket}
+	lc := local.Client{Socket: *flagSocket}
 	if lc.Socket != "" {
 		lc.UseSocketOnly = true
 	}
@@ -75,8 +75,8 @@ func peerInfo(peer *ipnstate.TKAPeer) string {
 
 // print prints a message about a node key signature and a re-signing command if needed.
 func print(info string, nodeKey key.NodePublic, sig tka.NodeKeySignature) {
-	if l := chainLength(sig); l > *maxRotations {
-		log.Printf("%s: chain length %d, printing command to re-sign", info, l)
+	if ln := chainLength(sig); ln > *maxRotations {
+		log.Printf("%s: chain length %d, printing command to re-sign", info, ln)
 		wrapping, _ := sig.UnverifiedWrappingPublic()
 		fmt.Printf("tailscale lock sign %s %s\n", nodeKey, key.NLPublicFromEd25519Unsafe(wrapping).CLIString())
 	} else {

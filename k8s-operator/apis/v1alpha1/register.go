@@ -10,6 +10,7 @@ import (
 
 	"tailscale.com/k8s-operator/apis"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -39,11 +40,17 @@ func init() {
 	localSchemeBuilder.Register(addKnownTypes)
 
 	GlobalScheme = runtime.NewScheme()
+	// Add core types
 	if err := scheme.AddToScheme(GlobalScheme); err != nil {
 		panic(fmt.Sprintf("failed to add k8s.io scheme: %s", err))
 	}
+	// Add tailscale.com types
 	if err := AddToScheme(GlobalScheme); err != nil {
 		panic(fmt.Sprintf("failed to add tailscale.com scheme: %s", err))
+	}
+	// Add apiextensions types (CustomResourceDefinitions/CustomResourceDefinitionLists)
+	if err := apiextensionsv1.AddToScheme(GlobalScheme); err != nil {
+		panic(fmt.Sprintf("failed to add apiextensions.k8s.io scheme: %s", err))
 	}
 }
 

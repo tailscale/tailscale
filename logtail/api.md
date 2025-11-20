@@ -6,14 +6,14 @@ retrieving, and processing log entries.
 # Overview
 
 HTTP requests are received at the service **base URL**
-[https://log.tailscale.io](https://log.tailscale.io), and return JSON-encoded
+[https://log.tailscale.com](https://log.tailscale.com), and return JSON-encoded
 responses using standard HTTP response codes.
 
 Authorization for the configuration and retrieval APIs is done with a secret
 API key passed as the HTTP basic auth username. Secret keys are generated via
 the web UI at base URL. An example of using basic auth with curl:
 
-    curl -u <log_api_key>: https://log.tailscale.io/collections
+    curl -u <log_api_key>: https://log.tailscale.com/collections
 
 In the future, an HTTP header will allow using MessagePack instead of JSON.
 

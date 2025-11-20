@@ -11,7 +11,8 @@ metadata:
 spec:
   tags:
   - "tag:prod"
-  hostname: ts-prod
+  hostnamePrefix: ts-prod
+  replicas: 2
   subnetRouter:
     advertiseRoutes:
     - "10.40.0.0/14"

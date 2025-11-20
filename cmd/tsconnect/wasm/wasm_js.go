@@ -27,6 +27,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store/mem"
@@ -100,21 +101,24 @@ func newIPN(jsConfig js.Value) map[string]any {
 	logtail := logtail.NewLogger(c, log.Printf)
 	logf := logtail.Logf
 
-	sys := new(tsd.System)
+	sys := tsd.NewSystem()
 	sys.Set(store)
 	dialer := &tsdial.Dialer{Logf: logf}
+	dialer.SetBus(sys.Bus.Get())
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		Dialer:        dialer,
 		SetSubsystem:  sys.Set,
 		ControlKnobs:  sys.ControlKnobs(),
-		HealthTracker: sys.HealthTracker(),
+		HealthTracker: sys.HealthTracker.Get(),
+		Metrics:       sys.UserMetricsRegistry(),
+		EventBus:      sys.Bus.Get(),
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 	sys.Set(eng)
 
-	ns, err := netstack.Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper(), nil)
+	ns, err := netstack.Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper())
 	if err != nil {
 		log.Fatalf("netstack.Create: %v", err)
 	}
@@ -128,11 +132,14 @@ func newIPN(jsConfig js.Value) map[string]any {
 	dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
 		return ns.DialContextTCP(ctx, dst)
 	}
+	dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
+		return ns.DialContextUDP(ctx, dst)
+	}
 	sys.NetstackRouter.Set(true)
 	sys.Tun.Get().Start()
 
 	logid := lpc.PublicID
-	srv := ipnserver.New(logf, logid, sys.NetMon.Get())
+	srv := ipnserver.New(logf, logid, sys.Bus.Get(), sys.NetMon.Get())
 	lb, err := ipnlocal.NewLocalBackend(logf, logid, sys, controlclient.LoginEphemeral)
 	if err != nil {
 		log.Fatalf("ipnlocal.NewLocalBackend: %v", err)
@@ -254,7 +261,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 			jsNetMap := jsNetMap{
 				Self: jsNetMapSelfNode{
 					jsNetMapNode: jsNetMapNode{
-						Name:       nm.Name,
+						Name:       nm.SelfName(),
 						Addresses:  mapSliceView(nm.GetAddresses(), func(a netip.Prefix) string { return a.Addr().String() }),
 						NodeKey:    nm.NodeKey.String(),
 						MachineKey: nm.MachineKey.String(),
@@ -268,8 +275,8 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 						name = p.Hostinfo().Hostname()
 					}
 					addrs := make([]string, p.Addresses().Len())
-					for i := range p.Addresses().Len() {
-						addrs[i] = p.Addresses().At(i).Addr().String()
+					for i, ap := range p.Addresses().All() {
+						addrs[i] = ap.Addr().String()
 					}
 					return jsNetMapPeerNode{
 						jsNetMapNode: jsNetMapNode{
@@ -278,7 +285,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 							MachineKey: p.Machine().String(),
 							NodeKey:    p.Key().String(),
 						},
-						Online:              p.Online(),
+						Online:              p.Online().Clone(),
 						TailscaleSSHEnabled: p.Hostinfo().TailscaleSSHEnabled(),
 					}
 				}),
@@ -332,7 +339,7 @@ func (i *jsIPN) logout() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		i.lb.Logout(ctx)
+		i.lb.Logout(ctx, ipnauth.Self)
 	}()
 }
 
@@ -457,7 +464,6 @@ func (s *jsSSHSession) Run() {
 		cols = s.pendingResizeCols
 	}
 	err = session.RequestPty("xterm", rows, cols, ssh.TerminalModes{})
-
 	if err != nil {
 		writeError("Pseudo Terminal", err)
 		return
@@ -585,8 +591,8 @@ func mapSlice[T any, M any](a []T, f func(T) M) []M {
 
 func mapSliceView[T any, M any](a views.Slice[T], f func(T) M) []M {
 	n := make([]M, a.Len())
-	for i := range a.Len() {
-		n[i] = f(a.At(i))
+	for i, v := range a.All() {
+		n[i] = f(v)
 	}
 	return n
 }

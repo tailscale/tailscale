@@ -73,8 +73,9 @@
             <th>Name</th>
             <th>Probe Class & Labels</th>
             <th>Interval</th>
-            <th>Last Attempt</th>
-            <th>Success</th>
+            <th>Last Finished</th>
+            <th>Last Started</th>
+            <th>Status</th>
             <th>Latency</th>
             <th>Last Error</th>
         </tr></thead>
@@ -85,9 +86,11 @@
                 {{$name}}
                 {{range $text, $url := $probeInfo.Links}}
                 <br/>
-                <button onclick="location.href='{{$url}}';" type="button">
-                    {{$text}}
-                </button>
+                {{if not $probeInfo.Continuous}}
+                    <button onclick="location.href='{{$url}}';" type="button">
+                        {{$text}}
+                    </button>
+                {{end}}
                 {{end}}
             </td>
             <td>{{$probeInfo.Class}}<br/>
@@ -97,28 +100,48 @@
                 {{end}}
                 </div>
             </td>
-            <td>{{$probeInfo.Interval}}</td>
-            <td data-sort="{{$probeInfo.TimeSinceLast.Milliseconds}}">
-                {{if $probeInfo.TimeSinceLast}}
-                    {{$probeInfo.TimeSinceLast.String}} ago<br/>
+            <td>
+                {{if $probeInfo.Continuous}}
+                    Continuous
+                {{else}}
+                    {{$probeInfo.Interval}}
+                {{end}}
+            </td>
+            <td data-sort="{{$probeInfo.TimeSinceLastEnd.Milliseconds}}">
+                {{if $probeInfo.TimeSinceLastEnd}}
+                    {{$probeInfo.TimeSinceLastEnd.String}} ago<br/>
                     <span class="small">{{$probeInfo.End.Format "2006-01-02T15:04:05Z07:00"}}</span>
                 {{else}}
                     Never
                 {{end}}
             </td>
-            <td>
-                {{if $probeInfo.Result}}
-                    {{$probeInfo.Result}}
+            <td data-sort="{{$probeInfo.TimeSinceLastStart.Milliseconds}}">
+                {{if $probeInfo.TimeSinceLastStart}}
+                    {{$probeInfo.TimeSinceLastStart.String}} ago<br/>
+                    <span class="small">{{$probeInfo.Start.Format "2006-01-02T15:04:05Z07:00"}}</span>
                 {{else}}
-                    <span class="error">{{$probeInfo.Result}}</span>
+                    Never
+                {{end}}
+            </td>
+            <td>
+                {{if $probeInfo.Error}}
+                    <span class="error">{{$probeInfo.Status}}</span>
+                {{else}}
+                    {{$probeInfo.Status}}
                 {{end}}<br/>
-                <div class="small">Recent: {{$probeInfo.RecentResults}}</div>
-                <div class="small">Mean: {{$probeInfo.RecentSuccessRatio}}</div>
+                {{if not $probeInfo.Continuous}}
+                    <div class="small">Recent: {{$probeInfo.RecentResults}}</div>
+                    <div class="small">Mean: {{$probeInfo.RecentSuccessRatio}}</div>
+                {{end}}
             </td>
             <td data-sort="{{$probeInfo.Latency.Milliseconds}}">
-                {{$probeInfo.Latency.String}}
-                <div class="small">Recent: {{$probeInfo.RecentLatencies}}</div>
-                <div class="small">Median: {{$probeInfo.RecentMedianLatency}}</div>
+                {{if $probeInfo.Continuous}}
+                    n/a
+                {{else}}
+                    {{$probeInfo.Latency.String}}
+                    <div class="small">Recent: {{$probeInfo.RecentLatencies}}</div>
+                    <div class="small">Median: {{$probeInfo.RecentMedianLatency}}</div>
+                {{end}}
             </td>
             <td class="small">{{$probeInfo.Error}}</td>
         </tr>

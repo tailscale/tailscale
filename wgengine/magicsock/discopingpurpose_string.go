@@ -22,8 +22,9 @@ const _discoPingPurpose_name = "DiscoveryHeartbeatCLIHeartbeatForUDPLifetime"
 var _discoPingPurpose_index = [...]uint8{0, 9, 18, 21, 44}
 
 func (i discoPingPurpose) String() string {
-	if i < 0 || i >= discoPingPurpose(len(_discoPingPurpose_index)-1) {
+	idx := int(i) - 0
+	if i < 0 || idx >= len(_discoPingPurpose_index)-1 {
 		return "discoPingPurpose(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
-	return _discoPingPurpose_name[_discoPingPurpose_index[i]:_discoPingPurpose_index[i+1]]
+	return _discoPingPurpose_name[_discoPingPurpose_index[idx]:_discoPingPurpose_index[idx+1]]
 }

@@ -41,7 +41,7 @@ func TestSynologyProxyFromConfigCached(t *testing.T) {
 			t.Fatalf("got %s, %v; want nil, nil", val, err)
 		}
 
-		if got, want := cache.updated, time.Unix(0, 0); got != want {
+		if got, want := cache.updated.UTC(), time.Unix(0, 0).UTC(); !got.Equal(want) {
 			t.Fatalf("got %s, want %s", got, want)
 		}
 		if cache.httpProxy != nil {

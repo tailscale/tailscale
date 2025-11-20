@@ -14,8 +14,8 @@ import (
 	"runtime"
 	"strconv"
 
-	"github.com/tailscale/peercred"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/safesocket"
 	"tailscale.com/types/logger"
@@ -63,8 +63,8 @@ type ConnIdentity struct {
 	notWindows bool // runtime.GOOS != "windows"
 
 	// Fields used when NotWindows:
-	isUnixSock bool            // Conn is a *net.UnixConn
-	creds      *peercred.Creds // or nil
+	isUnixSock bool      // Conn is a *net.UnixConn
+	creds      PeerCreds // or nil if peercred.Get was not implemented on this OS
 
 	// Used on Windows:
 	// TODO(bradfitz): merge these into the peercreds package and
@@ -78,6 +78,13 @@ type ConnIdentity struct {
 // It's suitable for passing to LookupUserFromID (os/user.LookupId) on any
 // operating system.
 func (ci *ConnIdentity) WindowsUserID() ipn.WindowsUserID {
+	if !buildfeatures.HasDebug && runtime.GOOS != "windows" {
+		// This function is only implemented on non-Windows for simulating
+		// Windows in tests. But that test (per comments below) is broken
+		// anyway. So disable this testing path in non-debug builds
+		// and just do the thing that optimizes away.
+		return ""
+	}
 	if envknob.GOOS() != "windows" {
 		return ""
 	}
@@ -97,9 +104,18 @@ func (ci *ConnIdentity) WindowsUserID() ipn.WindowsUserID {
 	return ""
 }
 
-func (ci *ConnIdentity) Pid() int               { return ci.pid }
-func (ci *ConnIdentity) IsUnixSock() bool       { return ci.isUnixSock }
-func (ci *ConnIdentity) Creds() *peercred.Creds { return ci.creds }
+func (ci *ConnIdentity) Pid() int         { return ci.pid }
+func (ci *ConnIdentity) IsUnixSock() bool { return ci.isUnixSock }
+func (ci *ConnIdentity) Creds() PeerCreds { return ci.creds }
+
+// PeerCreds is the interface for a github.com/tailscale/peercred.Creds,
+// if linked into the binary.
+//
+// (It's not used on some platforms, or if ts_omit_unixsocketidentity is set.)
+type PeerCreds interface {
+	UserID() (uid string, ok bool)
+	PID() (pid int, ok bool)
+}
 
 var metricIssue869Workaround = clientmetric.NewCounter("issue_869_workaround")
 

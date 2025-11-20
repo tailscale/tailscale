@@ -53,12 +53,12 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `
+	fmt.Fprint(os.Stderr, `
 usage: tsconnect {dev|build|serve}
 `[1:])
 
 	flag.PrintDefaults()
-	fmt.Fprintf(os.Stderr, `
+	fmt.Fprint(os.Stderr, `
 
 tsconnect implements development/build/serving workflows for Tailscale Connect.
 It can be invoked with one of three subcommands:

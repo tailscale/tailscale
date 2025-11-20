@@ -28,8 +28,9 @@ const _Label_name = "ControlClientAutoControlClientDialerDERPHTTPClientLogtailLo
 var _Label_index = [...]uint8{0, 17, 36, 50, 63, 78, 93, 107, 123, 140, 157, 169, 186, 201}
 
 func (i Label) String() string {
-	if i >= Label(len(_Label_index)-1) {
+	idx := int(i) - 0
+	if i < 0 || idx >= len(_Label_index)-1 {
 		return "Label(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
-	return _Label_name[_Label_index[i]:_Label_index[i+1]]
+	return _Label_name[_Label_index[idx]:_Label_index[idx+1]]
 }

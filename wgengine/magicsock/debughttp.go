@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
@@ -24,6 +26,11 @@ import (
 // /debug/magicsock) or via peerapi to a peer that's owned by the same
 // user (so they can e.g. inspect their phones).
 func (c *Conn) ServeHTTPDebug(w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDebug {
+		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
+		return
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -72,18 +79,18 @@ func (c *Conn) ServeHTTPDebug(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "<h2 id=ipport><a href=#ipport>#</a> ip:port to endpoint</h2><ul>")
 	{
 		type kv struct {
-			ipp netip.AddrPort
-			pi  *peerInfo
+			addr epAddr
+			pi   *peerInfo
 		}
-		ent := make([]kv, 0, len(c.peerMap.byIPPort))
-		for k, v := range c.peerMap.byIPPort {
+		ent := make([]kv, 0, len(c.peerMap.byEpAddr))
+		for k, v := range c.peerMap.byEpAddr {
 			ent = append(ent, kv{k, v})
 		}
-		sort.Slice(ent, func(i, j int) bool { return ipPortLess(ent[i].ipp, ent[j].ipp) })
+		sort.Slice(ent, func(i, j int) bool { return epAddrLess(ent[i].addr, ent[j].addr) })
 		for _, e := range ent {
 			ep := e.pi.ep
 			shortStr := ep.publicKey.ShortString()
-			fmt.Fprintf(w, "<li>%v: <a href='#%v'>%v</a></li>\n", e.ipp, strings.Trim(shortStr, "[]"), shortStr)
+			fmt.Fprintf(w, "<li>%v: <a href='#%v'>%v</a></li>\n", e.addr, strings.Trim(shortStr, "[]"), shortStr)
 		}
 
 	}
@@ -102,8 +109,7 @@ func (c *Conn) ServeHTTPDebug(w http.ResponseWriter, r *http.Request) {
 		sort.Slice(ent, func(i, j int) bool { return ent[i].pub.Less(ent[j].pub) })
 
 		peers := map[key.NodePublic]tailcfg.NodeView{}
-		for i := range c.peers.Len() {
-			p := c.peers.At(i)
+		for _, p := range c.peers.All() {
 			peers[p.Key()] = p
 		}
 
@@ -149,11 +155,11 @@ func printEndpointHTML(w io.Writer, ep *endpoint) {
 	for ipp := range ep.endpointState {
 		eps = append(eps, ipp)
 	}
-	sort.Slice(eps, func(i, j int) bool { return ipPortLess(eps[i], eps[j]) })
+	sort.Slice(eps, func(i, j int) bool { return addrPortLess(eps[i], eps[j]) })
 	io.WriteString(w, "<p>Endpoints:</p><ul>")
 	for _, ipp := range eps {
 		s := ep.endpointState[ipp]
-		if ipp == ep.bestAddr.AddrPort {
+		if ipp == ep.bestAddr.ap && !ep.bestAddr.vni.IsSet() {
 			fmt.Fprintf(w, "<li><b>%s</b>: (best)<ul>", ipp)
 		} else {
 			fmt.Fprintf(w, "<li>%s: ...<ul>", ipp)
@@ -197,9 +203,19 @@ func peerDebugName(p tailcfg.NodeView) string {
 	return p.Hostinfo().Hostname()
 }
 
-func ipPortLess(a, b netip.AddrPort) bool {
+func addrPortLess(a, b netip.AddrPort) bool {
 	if v := a.Addr().Compare(b.Addr()); v != 0 {
 		return v < 0
 	}
 	return a.Port() < b.Port()
+}
+
+func epAddrLess(a, b epAddr) bool {
+	if v := a.ap.Addr().Compare(b.ap.Addr()); v != 0 {
+		return v < 0
+	}
+	if a.ap.Port() == b.ap.Port() {
+		return a.vni.Get() < b.vni.Get()
+	}
+	return a.ap.Port() < b.ap.Port()
 }

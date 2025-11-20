@@ -17,7 +17,7 @@ import (
 	"tailscale.com/version"
 )
 
-func tsrStatefulSet(tsr *tsapi.Recorder, namespace string) *appsv1.StatefulSet {
+func tsrStatefulSet(tsr *tsapi.Recorder, namespace string, loginServer string) *appsv1.StatefulSet {
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            tsr.Name,
@@ -39,7 +39,7 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string) *appsv1.StatefulSet {
 					Annotations: tsr.Spec.StatefulSet.Pod.Annotations,
 				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName: tsr.Name,
+					ServiceAccountName: tsrServiceAccountName(tsr),
 					Affinity:           tsr.Spec.StatefulSet.Pod.Affinity,
 					SecurityContext:    tsr.Spec.StatefulSet.Pod.SecurityContext,
 					ImagePullSecrets:   tsr.Spec.StatefulSet.Pod.ImagePullSecrets,
@@ -59,7 +59,7 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string) *appsv1.StatefulSet {
 							ImagePullPolicy: tsr.Spec.StatefulSet.Pod.Container.ImagePullPolicy,
 							Resources:       tsr.Spec.StatefulSet.Pod.Container.Resources,
 							SecurityContext: tsr.Spec.StatefulSet.Pod.Container.SecurityContext,
-							Env:             env(tsr),
+							Env:             env(tsr, loginServer),
 							EnvFrom: func() []corev1.EnvFromSource {
 								if tsr.Spec.Storage.S3 == nil || tsr.Spec.Storage.S3.Credentials.Secret.Name == "" {
 									return nil
@@ -100,12 +100,23 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string) *appsv1.StatefulSet {
 func tsrServiceAccount(tsr *tsapi.Recorder, namespace string) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            tsr.Name,
+			Name:            tsrServiceAccountName(tsr),
 			Namespace:       namespace,
 			Labels:          labels("recorder", tsr.Name, nil),
 			OwnerReferences: tsrOwnerReference(tsr),
+			Annotations:     tsr.Spec.StatefulSet.Pod.ServiceAccount.Annotations,
 		},
 	}
+}
+
+func tsrServiceAccountName(tsr *tsapi.Recorder) string {
+	sa := tsr.Spec.StatefulSet.Pod.ServiceAccount
+	name := tsr.Name
+	if sa.Name != "" {
+		name = sa.Name
+	}
+
+	return name
 }
 
 func tsrRole(tsr *tsapi.Recorder, namespace string) *rbacv1.Role {
@@ -130,6 +141,15 @@ func tsrRole(tsr *tsapi.Recorder, namespace string) *rbacv1.Role {
 					fmt.Sprintf("%s-0", tsr.Name), // Contains the node state.
 				},
 			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"events"},
+				Verbs: []string{
+					"get",
+					"create",
+					"patch",
+				},
+			},
 		},
 	}
 }
@@ -145,7 +165,7 @@ func tsrRoleBinding(tsr *tsapi.Recorder, namespace string) *rbacv1.RoleBinding {
 		Subjects: []rbacv1.Subject{
 			{
 				Kind:      "ServiceAccount",
-				Name:      tsr.Name,
+				Name:      tsrServiceAccountName(tsr),
 				Namespace: namespace,
 			},
 		},
@@ -181,7 +201,7 @@ func tsrStateSecret(tsr *tsapi.Recorder, namespace string) *corev1.Secret {
 	}
 }
 
-func env(tsr *tsapi.Recorder) []corev1.EnvVar {
+func env(tsr *tsapi.Recorder, loginServer string) []corev1.EnvVar {
 	envs := []corev1.EnvVar{
 		{
 			Name: "TS_AUTHKEY",
@@ -204,12 +224,24 @@ func env(tsr *tsapi.Recorder) []corev1.EnvVar {
 			},
 		},
 		{
+			Name: "POD_UID",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "metadata.uid",
+				},
+			},
+		},
+		{
 			Name:  "TS_STATE",
 			Value: "kube:$(POD_NAME)",
 		},
 		{
 			Name:  "TSRECORDER_HOSTNAME",
 			Value: "$(POD_NAME)",
+		},
+		{
+			Name:  "TSRECORDER_LOGIN_SERVER",
+			Value: loginServer,
 		},
 	}
 
@@ -249,17 +281,17 @@ func env(tsr *tsapi.Recorder) []corev1.EnvVar {
 }
 
 func labels(app, instance string, customLabels map[string]string) map[string]string {
-	l := make(map[string]string, len(customLabels)+3)
+	labels := make(map[string]string, len(customLabels)+3)
 	for k, v := range customLabels {
-		l[k] = v
+		labels[k] = v
 	}
 
 	// ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/
-	l["app.kubernetes.io/name"] = app
-	l["app.kubernetes.io/instance"] = instance
-	l["app.kubernetes.io/managed-by"] = "tailscale-operator"
+	labels["app.kubernetes.io/name"] = app
+	labels["app.kubernetes.io/instance"] = instance
+	labels["app.kubernetes.io/managed-by"] = "tailscale-operator"
 
-	return l
+	return labels
 }
 
 func tsrOwnerReference(owner metav1.Object) []metav1.OwnerReference {

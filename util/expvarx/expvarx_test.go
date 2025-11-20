@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -52,18 +53,21 @@ func ExampleNewSafeFunc() {
 }
 
 func TestSafeFuncHappyPath(t *testing.T) {
-	var count int
-	f := NewSafeFunc(expvar.Func(func() any {
-		count++
-		return count
-	}), time.Millisecond, nil)
+	synctest.Test(t, func(t *testing.T) {
+		var count int
+		f := NewSafeFunc(expvar.Func(func() any {
+			count++
+			return count
+		}), time.Second, nil)
 
-	if got, want := f.Value(), 1; got != want {
-		t.Errorf("got %v, want %v", got, want)
-	}
-	if got, want := f.Value(), 2; got != want {
-		t.Errorf("got %v, want %v", got, want)
-	}
+		if got, want := f.Value(), 1; got != want {
+			t.Errorf("got %v, want %v", got, want)
+		}
+		time.Sleep(5 * time.Second) // (fake time in synctest)
+		if got, want := f.Value(), 2; got != want {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
 }
 
 func TestSafeFuncSlow(t *testing.T) {

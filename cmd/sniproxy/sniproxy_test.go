@@ -152,17 +152,17 @@ func TestSNIProxyWithNetmapConfig(t *testing.T) {
 		configCapKey: []tailcfg.RawMessage{tailcfg.RawMessage(b)},
 	})
 
-	// Lets spin up a second node (to represent the client).
+	// Let's spin up a second node (to represent the client).
 	client, _, _ := startNode(t, ctx, controlURL, "client")
 
 	// Make sure that the sni node has received its config.
-	l, err := sni.LocalClient()
+	lc, err := sni.LocalClient()
 	if err != nil {
 		t.Fatal(err)
 	}
 	gotConfigured := false
 	for range 100 {
-		s, err := l.StatusWithoutPeers(ctx)
+		s, err := lc.StatusWithoutPeers(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -176,7 +176,7 @@ func TestSNIProxyWithNetmapConfig(t *testing.T) {
 		t.Error("sni node never received its configuration from the coordination server!")
 	}
 
-	// Lets make the client open a connection to the sniproxy node, and
+	// Let's make the client open a connection to the sniproxy node, and
 	// make sure it results in a connection to our test listener.
 	w, err := client.Dial(ctx, "tcp", fmt.Sprintf("%s:%d", ip, ln.Addr().(*net.TCPAddr).Port))
 	if err != nil {
@@ -208,10 +208,10 @@ func TestSNIProxyWithFlagConfig(t *testing.T) {
 	sni, _, ip := startNode(t, ctx, controlURL, "snitest")
 	go run(ctx, sni, 0, sni.Hostname, false, 0, "", fmt.Sprintf("tcp/%d/localhost", ln.Addr().(*net.TCPAddr).Port))
 
-	// Lets spin up a second node (to represent the client).
+	// Let's spin up a second node (to represent the client).
 	client, _, _ := startNode(t, ctx, controlURL, "client")
 
-	// Lets make the client open a connection to the sniproxy node, and
+	// Let's make the client open a connection to the sniproxy node, and
 	// make sure it results in a connection to our test listener.
 	w, err := client.Dial(ctx, "tcp", fmt.Sprintf("%s:%d", ip, ln.Addr().(*net.TCPAddr).Port))
 	if err != nil {

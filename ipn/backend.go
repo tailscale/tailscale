@@ -58,21 +58,33 @@ type EngineStatus struct {
 // to subscribe to.
 type NotifyWatchOpt uint64
 
+// NotifyWatchOpt values.
+//
+// These aren't declared using Go's iota because they're not purely internal to
+// the process and iota should not be used for values that are serialized to
+// disk or network. In this case, these values come over the network via the
+// LocalAPI, a mostly stable API.
 const (
 	// NotifyWatchEngineUpdates, if set, causes Engine updates to be sent to the
 	// client either regularly or when they change, without having to ask for
 	// each one via Engine.RequestStatus.
-	NotifyWatchEngineUpdates NotifyWatchOpt = 1 << iota
+	NotifyWatchEngineUpdates NotifyWatchOpt = 1 << 0
 
-	NotifyInitialState  // if set, the first Notify message (sent immediately) will contain the current State + BrowseToURL + SessionID
-	NotifyInitialPrefs  // if set, the first Notify message (sent immediately) will contain the current Prefs
-	NotifyInitialNetMap // if set, the first Notify message (sent immediately) will contain the current NetMap
+	NotifyInitialState  NotifyWatchOpt = 1 << 1 // if set, the first Notify message (sent immediately) will contain the current State + BrowseToURL + SessionID
+	NotifyInitialPrefs  NotifyWatchOpt = 1 << 2 // if set, the first Notify message (sent immediately) will contain the current Prefs
+	NotifyInitialNetMap NotifyWatchOpt = 1 << 3 // if set, the first Notify message (sent immediately) will contain the current NetMap
 
-	NotifyNoPrivateKeys        // if set, private keys that would normally be sent in updates are zeroed out
-	NotifyInitialDriveShares   // if set, the first Notify message (sent immediately) will contain the current Taildrive Shares
-	NotifyInitialOutgoingFiles // if set, the first Notify message (sent immediately) will contain the current Taildrop OutgoingFiles
+	NotifyNoPrivateKeys        NotifyWatchOpt = 1 << 4 // (no-op) it used to redact private keys; now they always are and this does nothing
+	NotifyInitialDriveShares   NotifyWatchOpt = 1 << 5 // if set, the first Notify message (sent immediately) will contain the current Taildrive Shares
+	NotifyInitialOutgoingFiles NotifyWatchOpt = 1 << 6 // if set, the first Notify message (sent immediately) will contain the current Taildrop OutgoingFiles
 
-	NotifyInitialHealthState // if set, the first Notify message (sent immediately) will contain the current health.State of the client
+	NotifyInitialHealthState NotifyWatchOpt = 1 << 7 // if set, the first Notify message (sent immediately) will contain the current health.State of the client
+
+	NotifyRateLimit NotifyWatchOpt = 1 << 8 // if set, rate limit spammy netmap updates to every few seconds
+
+	NotifyHealthActions NotifyWatchOpt = 1 << 9 // if set, include PrimaryActions in health.State. Otherwise append the action URL to the text
+
+	NotifyInitialSuggestedExitNode NotifyWatchOpt = 1 << 10 // if set, the first Notify message (sent immediately) will contain the current SuggestedExitNode if available
 )
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
@@ -88,7 +100,7 @@ type Notify struct {
 	// This field is only set in the first message when requesting
 	// NotifyInitialState. Clients must store it on their side as
 	// following notifications will not include this field.
-	SessionID string `json:",omitempty"`
+	SessionID string `json:",omitzero"`
 
 	// ErrMessage, if non-nil, contains a critical error message.
 	// For State InUseOtherUser, ErrMessage is not critical and just contains the details.
@@ -100,14 +112,13 @@ type Notify struct {
 	NetMap        *netmap.NetworkMap // if non-nil, the new or current netmap
 	Engine        *EngineStatus      // if non-nil, the new or current wireguard stats
 	BrowseToURL   *string            // if non-nil, UI should open a browser right now
-	BackendLogID  *string            // if non-nil, the public logtail ID used by backend
 
 	// FilesWaiting if non-nil means that files are buffered in
 	// the Tailscale daemon and ready for local transfer to the
 	// user's preferred storage location.
 	//
 	// Deprecated: use LocalClient.AwaitWaitingFiles instead.
-	FilesWaiting *empty.Message `json:",omitempty"`
+	FilesWaiting *empty.Message `json:",omitzero"`
 
 	// IncomingFiles, if non-nil, specifies which files are in the
 	// process of being received. A nil IncomingFiles means this
@@ -116,22 +127,22 @@ type Notify struct {
 	// of being transferred.
 	//
 	// Deprecated: use LocalClient.AwaitWaitingFiles instead.
-	IncomingFiles []PartialFile `json:",omitempty"`
+	IncomingFiles []PartialFile `json:",omitzero"`
 
 	// OutgoingFiles, if non-nil, tracks which files are in the process of
 	// being sent via TailDrop, including files that finished, whether
 	// successful or failed. This slice is sorted by Started time, then Name.
-	OutgoingFiles []*OutgoingFile `json:",omitempty"`
+	OutgoingFiles []*OutgoingFile `json:",omitzero"`
 
 	// LocalTCPPort, if non-nil, informs the UI frontend which
 	// (non-zero) localhost TCP port it's listening on.
 	// This is currently only used by Tailscale when run in the
 	// macOS Network Extension.
-	LocalTCPPort *uint16 `json:",omitempty"`
+	LocalTCPPort *uint16 `json:",omitzero"`
 
 	// ClientVersion, if non-nil, describes whether a client version update
 	// is available.
-	ClientVersion *tailcfg.ClientVersion `json:",omitempty"`
+	ClientVersion *tailcfg.ClientVersion `json:",omitzero"`
 
 	// DriveShares tracks the full set of current DriveShares that we're
 	// publishing. Some client applications, like the MacOS and Windows clients,
@@ -144,9 +155,13 @@ type Notify struct {
 	// Health is the last-known health state of the backend. When this field is
 	// non-nil, a change in health verified, and the API client should surface
 	// any changes to the user in the UI.
-	Health *health.State `json:",omitempty"`
+	Health *health.State `json:",omitzero"`
 
-	// type is mirrored in xcode/Shared/IPN.swift
+	// SuggestedExitNode, if non-nil, is the node that the backend has determined to
+	// be the best exit node for the current network conditions.
+	SuggestedExitNode *tailcfg.StableNodeID `json:",omitzero"`
+
+	// type is mirrored in xcode/IPN/Core/LocalAPI/Model/LocalAPIModel.swift
 }
 
 func (n Notify) String() string {
@@ -173,9 +188,6 @@ func (n Notify) String() string {
 	if n.BrowseToURL != nil {
 		sb.WriteString("URL=<...> ")
 	}
-	if n.BackendLogID != nil {
-		sb.WriteString("BackendLogID ")
-	}
 	if n.FilesWaiting != nil {
 		sb.WriteString("FilesWaiting ")
 	}
@@ -188,8 +200,16 @@ func (n Notify) String() string {
 	if n.Health != nil {
 		sb.WriteString("Health{...} ")
 	}
+	if n.SuggestedExitNode != nil {
+		fmt.Fprintf(&sb, "SuggestedExitNode=%v ", *n.SuggestedExitNode)
+	}
+
 	s := sb.String()
-	return s[0:len(s)-1] + "}"
+	if s == "Notify{" {
+		return "Notify{}"
+	} else {
+		return s[0:len(s)-1] + "}"
+	}
 }
 
 // PartialFile represents an in-progress incoming file transfer.
@@ -238,6 +258,7 @@ type StateKey string
 var DebuggableComponents = []string{
 	"magicsock",
 	"sockstats",
+	"syspolicy",
 }
 
 type Options struct {

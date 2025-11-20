@@ -95,12 +95,16 @@ extension Tailmac {
 extension Tailmac {
     struct Run: ParsableCommand {
         @Option(help: "The vm identifier") var id: String
+        @Option(help: "Optional share directory") var share: String?
         @Flag(help: "Tail the TailMac log output instead of returning immediatly") var tail
 
         mutating func run() {
             let process = Process()
             let stdOutPipe = Pipe()
-            let appPath = "./Host.app/Contents/MacOS/Host"
+
+            let executablePath = CommandLine.arguments[0]
+            let executableDirectory = (executablePath as NSString).deletingLastPathComponent
+            let appPath = executableDirectory + "/Host.app/Contents/MacOS/Host"
 
             process.executableURL = URL(
                 fileURLWithPath: appPath,
@@ -109,10 +113,15 @@ extension Tailmac {
             )
 
             if !FileManager.default.fileExists(atPath: appPath) {
-                fatalError("Could not find Host.app.  This must be co-located with the tailmac utility")
+                fatalError("Could not find Host.app at \(appPath).  This must be co-located with the tailmac utility")
             }
 
-            process.arguments = ["run", "--id", id]
+            var args = ["run", "--id", id]
+            if let share {
+                args.append("--share")
+                args.append(share)
+            }
+            process.arguments = args
 
             do {
                 process.standardOutput = stdOutPipe
@@ -121,26 +130,18 @@ extension Tailmac {
                 fatalError("Unable to launch the vm process")
             }
 
-            // This doesn't print until we exit which is not ideal, but at least we
-            // get the output
             if tail != 0 {
+                // (jonathan)TODO: How do we get the process output in real time?
+                //                  The child process only seems to flush to stdout on completion
                 let outHandle = stdOutPipe.fileHandleForReading
-
-                let queue =  OperationQueue()
-                NotificationCenter.default.addObserver(
-                    forName: NSNotification.Name.NSFileHandleDataAvailable,
-                    object: outHandle, queue: queue)
-                {
-                    notification -> Void in
-                    let data = outHandle.availableData
+                outHandle.readabilityHandler = { handle in
+                    let data = handle.availableData
                     if data.count > 0 {
                         if let str = String(data: data, encoding: String.Encoding.utf8) {
                             print(str)
                         }
                     }
-                    outHandle.waitForDataInBackgroundAndNotify()
                 }
-                outHandle.waitForDataInBackgroundAndNotify()
                 process.waitUntilExit()
             }
         }

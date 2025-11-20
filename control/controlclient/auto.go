@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
@@ -21,7 +20,10 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/structs"
+	"tailscale.com/util/backoff"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/execqueue"
+	"tailscale.com/util/testenv"
 )
 
 type LoginGoal struct {
@@ -116,13 +118,13 @@ type Auto struct {
 	logf          logger.Logf
 	closed        bool
 	updateCh      chan struct{} // readable when we should inform the server of a change
-	observer      Observer      // called to update Client status; always non-nil
+	observer      Observer      // if non-nil, called to update Client status
 	observerQueue execqueue.ExecQueue
-
-	unregisterHealthWatch func()
+	shutdownFn    func() // to be called prior to shutdown or nil
 
 	mu sync.Mutex // mutex guards the following fields
 
+	started      bool   // whether [Auto.Start] has been called
 	wantLoggedIn bool   // whether the user wants to be logged in per last method call
 	urlToVisit   string // the last url we were told to visit
 	expiry       time.Time
@@ -131,12 +133,13 @@ type Auto struct {
 	// the server.
 	lastUpdateGen updateGen
 
+	lastStatus atomic.Pointer[Status]
+
 	paused         bool        // whether we should stop making HTTP requests
 	unpauseWaiters []chan bool // chans that gets sent true (once) on wake, or false on Shutdown
 	loggedIn       bool        // true if currently logged in
 	loginGoal      *LoginGoal  // non-nil if some login activity is desired
 	inMapPoll      bool        // true once we get the first MapResponse in a stream; false when HTTP response ends
-	state          State       // TODO(bradfitz): delete this, make it computed by method from other state
 
 	authCtx    context.Context // context used for auth requests
 	mapCtx     context.Context // context used for netmap and update requests
@@ -149,15 +152,21 @@ type Auto struct {
 
 // New creates and starts a new Auto.
 func New(opts Options) (*Auto, error) {
-	c, err := NewNoStart(opts)
-	if c != nil {
-		c.Start()
+	c, err := newNoStart(opts)
+	if err != nil {
+		return nil, err
+	}
+	if opts.StartPaused {
+		c.SetPaused(true)
+	}
+	if !opts.SkipStartForTests {
+		c.start()
 	}
 	return c, err
 }
 
-// NewNoStart creates a new Auto, but without calling Start on it.
-func NewNoStart(opts Options) (_ *Auto, err error) {
+// newNoStart creates a new Auto, but without calling Start on it.
+func newNoStart(opts Options) (_ *Auto, err error) {
 	direct, err := NewDirect(opts)
 	if err != nil {
 		return nil, err
@@ -168,9 +177,6 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 		}
 	}()
 
-	if opts.Observer == nil {
-		return nil, errors.New("missing required Options.Observer")
-	}
 	if opts.Logf == nil {
 		opts.Logf = func(fmt string, args ...any) {}
 	}
@@ -186,16 +192,16 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 		mapDone:    make(chan struct{}),
 		updateDone: make(chan struct{}),
 		observer:   opts.Observer,
+		shutdownFn: opts.Shutdown,
 	}
+
 	c.authCtx, c.authCancel = context.WithCancel(context.Background())
 	c.authCtx = sockstats.WithSockStats(c.authCtx, sockstats.LabelControlClientAuto, opts.Logf)
 
 	c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
 	c.mapCtx = sockstats.WithSockStats(c.mapCtx, sockstats.LabelControlClientAuto, opts.Logf)
 
-	c.unregisterHealthWatch = opts.HealthTracker.RegisterWatcher(direct.ReportHealthChange)
 	return c, nil
-
 }
 
 // SetPaused controls whether HTTP activity should be paused.
@@ -220,10 +226,21 @@ func (c *Auto) SetPaused(paused bool) {
 	c.unpauseWaiters = nil
 }
 
-// Start starts the client's goroutines.
+// StartForTest starts the client's goroutines.
 //
-// It should only be called for clients created by NewNoStart.
-func (c *Auto) Start() {
+// It should only be called for clients created with [Options.SkipStartForTests].
+func (c *Auto) StartForTest() {
+	testenv.AssertInTest()
+	c.start()
+}
+
+func (c *Auto) start() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.started {
+		return
+	}
+	c.started = true
 	go c.authRoutine()
 	go c.mapRoutine()
 	go c.updateRoutine()
@@ -297,10 +314,11 @@ func (c *Auto) authRoutine() {
 		c.mu.Lock()
 		goal := c.loginGoal
 		ctx := c.authCtx
+		loggedIn := c.loggedIn
 		if goal != nil {
-			c.logf("[v1] authRoutine: %s; wantLoggedIn=%v", c.state, true)
+			c.logf("[v1] authRoutine: loggedIn=%v; wantLoggedIn=%v", loggedIn, true)
 		} else {
-			c.logf("[v1] authRoutine: %s; goal=nil paused=%v", c.state, c.paused)
+			c.logf("[v1] authRoutine: loggedIn=%v; goal=nil paused=%v", loggedIn, c.paused)
 		}
 		c.mu.Unlock()
 
@@ -323,11 +341,6 @@ func (c *Auto) authRoutine() {
 
 		c.mu.Lock()
 		c.urlToVisit = goal.url
-		if goal.url != "" {
-			c.state = StateURLVisitRequired
-		} else {
-			c.state = StateAuthenticating
-		}
 		c.mu.Unlock()
 
 		var url string
@@ -361,7 +374,6 @@ func (c *Auto) authRoutine() {
 				flags: LoginDefault,
 				url:   url,
 			}
-			c.state = StateURLVisitRequired
 			c.mu.Unlock()
 
 			c.sendStatus("authRoutine-url", err, url, nil)
@@ -381,7 +393,6 @@ func (c *Auto) authRoutine() {
 		c.urlToVisit = ""
 		c.loggedIn = true
 		c.loginGoal = nil
-		c.state = StateAuthenticated
 		c.mu.Unlock()
 
 		c.sendStatus("authRoutine-success", nil, "", nil)
@@ -414,6 +425,11 @@ func (c *Auto) unpausedChanLocked() <-chan bool {
 	return unpaused
 }
 
+// ClientID returns the ClientID of the direct controlClient
+func (c *Auto) ClientID() int64 {
+	return c.direct.ClientID()
+}
+
 // mapRoutineState is the state of Auto.mapRoutine while it's running.
 type mapRoutineState struct {
 	c  *Auto
@@ -426,21 +442,17 @@ func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	c := mrs.c
 
 	c.mu.Lock()
-	ctx := c.mapCtx
 	c.inMapPoll = true
-	if c.loggedIn {
-		c.state = StateSynchronized
-	}
-	c.expiry = nm.Expiry
+	c.expiry = nm.SelfKeyExpiry()
 	stillAuthed := c.loggedIn
-	c.logf("[v1] mapRoutine: netmap received: %s", c.state)
+	c.logf("[v1] mapRoutine: netmap received: loggedIn=%v inMapPoll=true", stillAuthed)
 	c.mu.Unlock()
 
 	if stillAuthed {
 		c.sendStatus("mapRoutine-got-netmap", nil, "", nm)
 	}
 	// Reset the backoff timer if we got a netmap.
-	mrs.bo.BackOff(ctx, nil)
+	mrs.bo.Reset()
 }
 
 func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
@@ -481,8 +493,8 @@ func (c *Auto) mapRoutine() {
 		}
 
 		c.mu.Lock()
-		c.logf("[v1] mapRoutine: %s", c.state)
 		loggedIn := c.loggedIn
+		c.logf("[v1] mapRoutine: loggedIn=%v", loggedIn)
 		ctx := c.mapCtx
 		c.mu.Unlock()
 
@@ -513,9 +525,6 @@ func (c *Auto) mapRoutine() {
 		c.direct.health.SetOutOfPollNetMap()
 		c.mu.Lock()
 		c.inMapPoll = false
-		if c.state == StateSynchronized {
-			c.state = StateAuthenticated
-		}
 		paused := c.paused
 		c.mu.Unlock()
 
@@ -581,12 +590,12 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		c.mu.Unlock()
 		return
 	}
-	state := c.state
 	loggedIn := c.loggedIn
 	inMapPoll := c.inMapPoll
+	loginGoal := c.loginGoal
 	c.mu.Unlock()
 
-	c.logf("[v1] sendStatus: %s: %v", who, state)
+	c.logf("[v1] sendStatus: %s: loggedIn=%v inMapPoll=%v", who, loggedIn, inMapPoll)
 
 	var p persist.PersistView
 	if nm != nil && loggedIn && inMapPoll {
@@ -596,19 +605,102 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		// not logged in.
 		nm = nil
 	}
-	new := Status{
-		URL:     url,
-		Persist: p,
-		NetMap:  nm,
-		Err:     err,
-		state:   state,
+	newSt := &Status{
+		URL:       url,
+		Persist:   p,
+		NetMap:    nm,
+		Err:       err,
+		LoggedIn:  loggedIn && loginGoal == nil,
+		InMapPoll: inMapPoll,
 	}
+
+	if c.observer == nil {
+		return
+	}
+
+	c.lastStatus.Store(newSt)
 
 	// Launch a new goroutine to avoid blocking the caller while the observer
 	// does its thing, which may result in a call back into the client.
+	metricQueued.Add(1)
 	c.observerQueue.Add(func() {
-		c.observer.SetControlClientStatus(c, new)
+		c.mu.Lock()
+		closed := c.closed
+		c.mu.Unlock()
+		if closed {
+			return
+		}
+
+		if canSkipStatus(newSt, c.lastStatus.Load()) {
+			metricSkippable.Add(1)
+			if !c.direct.controlKnobs.DisableSkipStatusQueue.Load() {
+				metricSkipped.Add(1)
+				return
+			}
+		}
+		c.observer.SetControlClientStatus(c, *newSt)
+
+		// Best effort stop retaining the memory now that we've sent it to the
+		// observer (LocalBackend). We CAS here because the caller goroutine is
+		// doing a Store which we want to win a race. This is only a memory
+		// optimization and is not for correctness.
+		//
+		// If the CAS fails, that means somebody else's Store replaced our
+		// pointer (so mission accomplished: our netmap is no longer retained in
+		// any case) and that Store caller will be responsible for removing
+		// their own netmap (or losing their race too, down the chain).
+		// Eventually the last caller will win this CAS and zero lastStatus.
+		c.lastStatus.CompareAndSwap(newSt, nil)
 	})
+}
+
+var (
+	metricQueued    = clientmetric.NewCounter("controlclient_auto_status_queued")
+	metricSkippable = clientmetric.NewCounter("controlclient_auto_status_queue_skippable")
+	metricSkipped   = clientmetric.NewCounter("controlclient_auto_status_queue_skipped")
+)
+
+// canSkipStatus reports whether we can skip sending s1, knowing
+// that s2 is enqueued sometime in the future after s1.
+//
+// s1 must be non-nil. s2 may be nil.
+func canSkipStatus(s1, s2 *Status) bool {
+	if s2 == nil {
+		// Nothing in the future.
+		return false
+	}
+	if s1 == s2 {
+		// If the last item in the queue is the same as s1,
+		// we can't skip it.
+		return false
+	}
+	if s1.Err != nil || s1.URL != "" || s1.LoggedIn {
+		// If s1 has an error, a URL, or LoginFinished set, we shouldn't skip it,
+		// lest the error go away in s2 or in-between. We want to make sure all
+		// the subsystems see it. Plus there aren't many of these, so not worth
+		// skipping.
+		return false
+	}
+	if !s1.Persist.Equals(s2.Persist) || s1.LoggedIn != s2.LoggedIn || s1.InMapPoll != s2.InMapPoll || s1.URL != s2.URL {
+		// If s1 has a different Persist, LoginFinished, Synced, or URL than s2,
+		// don't skip it. We only care about skipping the typical
+		// entries where the only difference is the NetMap.
+		return false
+	}
+	// If nothing above precludes it, and both s1 and s2 have NetMaps, then
+	// we can skip it, because s2's NetMap is a newer version and we can
+	// jump straight from whatever state we had before to s2's state,
+	// without passing through s1's state first. A NetMap is regrettably a
+	// full snapshot of the state, not an incremental delta. We're slowly
+	// moving towards passing around only deltas around internally at all
+	// layers, but this is explicitly the case where we didn't have a delta
+	// path for the message we received over the wire and had to resort
+	// to the legacy full NetMap path. And then we can get behind processing
+	// these full NetMap snapshots in LocalBackend/wgengine/magicsock/netstack
+	// and this path (when it returns true) lets us skip over useless work
+	// and not get behind in the queue. This matters in particular for tailnets
+	// that are both very large + very churny.
+	return s1.NetMap != nil && s2.NetMap != nil
 }
 
 func (c *Auto) Login(flags LoginFlags) {
@@ -652,7 +744,6 @@ func (c *Auto) Logout(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	c.loggedIn = false
-	c.state = StateNotAuthenticated
 	c.cancelAuthCtxLocked()
 	c.cancelMapCtxLocked()
 	c.mu.Unlock()
@@ -676,6 +767,13 @@ func (c *Auto) UpdateEndpoints(endpoints []tailcfg.Endpoint) {
 	}
 }
 
+// SetDiscoPublicKey sets the client's Disco public to key and sends the change
+// to the control server.
+func (c *Auto) SetDiscoPublicKey(key key.DiscoPublic) {
+	c.direct.SetDiscoPublicKey(key)
+	c.updateControl()
+}
+
 func (c *Auto) Shutdown() {
 	c.mu.Lock()
 	if c.closed {
@@ -683,6 +781,7 @@ func (c *Auto) Shutdown() {
 		return
 	}
 	c.logf("client.Shutdown ...")
+	shutdownFn := c.shutdownFn
 
 	direct := c.direct
 	c.closed = true
@@ -695,7 +794,10 @@ func (c *Auto) Shutdown() {
 	c.unpauseWaiters = nil
 	c.mu.Unlock()
 
-	c.unregisterHealthWatch()
+	if shutdownFn != nil {
+		shutdownFn()
+	}
+
 	<-c.authDone
 	<-c.mapDone
 	<-c.updateDone
@@ -733,14 +835,4 @@ func (c *Auto) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) error {
 
 func (c *Auto) DoNoiseRequest(req *http.Request) (*http.Response, error) {
 	return c.direct.DoNoiseRequest(req)
-}
-
-// GetSingleUseNoiseRoundTripper returns a RoundTripper that can be only be used
-// once (and must be used once) to make a single HTTP request over the noise
-// channel to the coordination server.
-//
-// In addition to the RoundTripper, it returns the HTTP/2 channel's early noise
-// payload, if any.
-func (c *Auto) GetSingleUseNoiseRoundTripper(ctx context.Context) (http.RoundTripper, *tailcfg.EarlyNoise, error) {
-	return c.direct.GetSingleUseNoiseRoundTripper(ctx)
 }

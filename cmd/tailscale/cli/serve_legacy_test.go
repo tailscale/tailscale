@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -850,7 +850,7 @@ func TestVerifyFunnelEnabled(t *testing.T) {
 	}
 }
 
-// fakeLocalServeClient is a fake tailscale.LocalClient for tests.
+// fakeLocalServeClient is a fake local.Client for tests.
 // It's not a full implementation, just enough to test the serve command.
 //
 // The fake client is stateful, and is used to test manipulating
@@ -859,6 +859,9 @@ type fakeLocalServeClient struct {
 	config               *ipn.ServeConfig
 	setCount             int                       // counts calls to SetServeConfig
 	queryFeatureResponse *mockQueryFeatureResponse // mock response to QueryFeature calls
+	prefs                *ipn.Prefs                // fake preferences, used to test GetPrefs and SetPrefs
+	SOMarkInUse          bool                      // fake SO mark in use status
+	statusWithoutPeers   *ipnstate.Status          // nil for fakeStatus
 }
 
 // fakeStatus is a fake ipnstate.Status value for tests.
@@ -875,10 +878,14 @@ var fakeStatus = &ipnstate.Status{
 			tailcfg.CapabilityFunnelPorts + "?ports=443,8443": nil,
 		},
 	},
+	CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
 }
 
 func (lc *fakeLocalServeClient) StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
-	return fakeStatus, nil
+	if lc.statusWithoutPeers == nil {
+		return fakeStatus, nil
+	}
+	return lc.statusWithoutPeers, nil
 }
 
 func (lc *fakeLocalServeClient) GetServeConfig(ctx context.Context) (*ipn.ServeConfig, error) {
@@ -889,6 +896,21 @@ func (lc *fakeLocalServeClient) SetServeConfig(ctx context.Context, config *ipn.
 	lc.setCount += 1
 	lc.config = config.Clone()
 	return nil
+}
+
+func (lc *fakeLocalServeClient) GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
+	if lc.prefs == nil {
+		lc.prefs = ipn.NewPrefs()
+	}
+	return lc.prefs, nil
+}
+
+func (lc *fakeLocalServeClient) EditPrefs(ctx context.Context, prefs *ipn.MaskedPrefs) (*ipn.Prefs, error) {
+	if lc.prefs == nil {
+		lc.prefs = ipn.NewPrefs()
+	}
+	lc.prefs.ApplyEdits(prefs)
+	return lc.prefs, nil
 }
 
 type mockQueryFeatureResponse struct {
@@ -908,12 +930,16 @@ func (lc *fakeLocalServeClient) QueryFeature(ctx context.Context, feature string
 	return &tailcfg.QueryFeatureResponse{Complete: true}, nil // fallback to already enabled
 }
 
-func (lc *fakeLocalServeClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*tailscale.IPNBusWatcher, error) {
+func (lc *fakeLocalServeClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*local.IPNBusWatcher, error) {
 	return nil, nil // unused in tests
 }
 
 func (lc *fakeLocalServeClient) IncrementCounter(ctx context.Context, name string, delta int) error {
 	return nil // unused in tests
+}
+
+func (lc *fakeLocalServeClient) CheckSOMarkInUse(ctx context.Context) (bool, error) {
+	return lc.SOMarkInUse, nil
 }
 
 // exactError returns an error checker that wants exactly the provided want error.

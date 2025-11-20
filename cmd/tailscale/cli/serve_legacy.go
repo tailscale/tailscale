@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_serve
+
 package cli
 
 import (
@@ -23,12 +25,17 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/slicesx"
 	"tailscale.com/version"
 )
+
+func init() {
+	maybeServeCmd = serveCmd
+}
 
 var serveCmd = func() *ffcli.Command {
 	se := &serveEnv{lc: &localClient}
@@ -129,7 +136,7 @@ func (e *serveEnv) newFlags(name string, setup func(fs *flag.FlagSet)) *flag.Fla
 }
 
 // localServeClient is an interface conforming to the subset of
-// tailscale.LocalClient. It includes only the methods used by the
+// local.Client. It includes only the methods used by the
 // serve command.
 //
 // The purpose of this interface is to allow tests to provide a mock.
@@ -138,8 +145,11 @@ type localServeClient interface {
 	GetServeConfig(context.Context) (*ipn.ServeConfig, error)
 	SetServeConfig(context.Context, *ipn.ServeConfig) error
 	QueryFeature(ctx context.Context, feature string) (*tailcfg.QueryFeatureResponse, error)
-	WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*tailscale.IPNBusWatcher, error)
+	WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*local.IPNBusWatcher, error)
 	IncrementCounter(ctx context.Context, name string, delta int) error
+	GetPrefs(ctx context.Context) (*ipn.Prefs, error)
+	EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error)
+	CheckSOMarkInUse(ctx context.Context) (bool, error)
 }
 
 // serveEnv is the environment the serve command runs within. All I/O should be
@@ -153,17 +163,21 @@ type serveEnv struct {
 	json bool // output JSON (status only for now)
 
 	// v2 specific flags
-	bg               bool      // background mode
-	setPath          string    // serve path
-	https            uint      // HTTP port
-	http             uint      // HTTP port
-	tcp              uint      // TCP port
-	tlsTerminatedTCP uint      // a TLS terminated TCP port
-	subcmd           serveMode // subcommand
-	yes              bool      // update without prompt
+	bg               bgBoolFlag               // background mode
+	setPath          string                   // serve path
+	https            uint                     // HTTP port
+	http             uint                     // HTTP port
+	tcp              uint                     // TCP port
+	tlsTerminatedTCP uint                     // a TLS terminated TCP port
+	proxyProtocol    uint                     // PROXY protocol version (1 or 2)
+	subcmd           serveMode                // subcommand
+	yes              bool                     // update without prompt
+	service          tailcfg.ServiceName      // service name
+	tun              bool                     // redirect traffic to OS for service
+	allServices      bool                     // apply config file to all services
+	acceptAppCaps    []tailcfg.PeerCapability // app capabilities to forward
 
 	lc localServeClient // localClient interface, specific to serve
-
 	// optional stuff for tests:
 	testFlagOut io.Writer
 	testStdout  io.Writer
@@ -353,12 +367,12 @@ func (e *serveEnv) handleWebServe(ctx context.Context, srvPort uint16, useTLS bo
 	if err != nil {
 		return err
 	}
-	if sc.IsTCPForwardingOnPort(srvPort) {
+	if sc.IsTCPForwardingOnPort(srvPort, noService) {
 		fmt.Fprintf(Stderr, "error: cannot serve web; already serving TCP\n")
 		return errHelp
 	}
 
-	sc.SetWebHandler(h, dnsName, srvPort, mount, useTLS)
+	sc.SetWebHandler(h, dnsName, srvPort, mount, useTLS, noService.String())
 
 	if !reflect.DeepEqual(cursc, sc) {
 		if err := e.lc.SetServeConfig(ctx, sc); err != nil {
@@ -410,11 +424,11 @@ func (e *serveEnv) handleWebServeRemove(ctx context.Context, srvPort uint16, mou
 	if err != nil {
 		return err
 	}
-	if sc.IsTCPForwardingOnPort(srvPort) {
+	if sc.IsTCPForwardingOnPort(srvPort, noService) {
 		return errors.New("cannot remove web handler; currently serving TCP")
 	}
 	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(srvPort))))
-	if !sc.WebHandlerExists(hp, mount) {
+	if !sc.WebHandlerExists(noService, hp, mount) {
 		return errors.New("error: handler does not exist")
 	}
 	sc.RemoveWebHandler(dnsName, srvPort, []string{mount}, false)
@@ -549,16 +563,16 @@ func (e *serveEnv) handleTCPServe(ctx context.Context, srcType string, srcPort u
 
 	fwdAddr := "127.0.0.1:" + dstPortStr
 
-	if sc.IsServingWeb(srcPort) {
-		return fmt.Errorf("cannot serve TCP; already serving web on %d", srcPort)
-	}
-
 	dnsName, err := e.getSelfDNSName(ctx)
 	if err != nil {
 		return err
 	}
 
-	sc.SetTCPForwarding(srcPort, fwdAddr, terminateTLS, dnsName)
+	if sc.IsServingWeb(srcPort, noService) {
+		return fmt.Errorf("cannot serve TCP; already serving web on %d", srcPort)
+	}
+
+	sc.SetTCPForwarding(srcPort, fwdAddr, terminateTLS, 0 /* proxy proto */, dnsName)
 
 	if !reflect.DeepEqual(cursc, sc) {
 		if err := e.lc.SetServeConfig(ctx, sc); err != nil {
@@ -580,11 +594,11 @@ func (e *serveEnv) handleTCPServeRemove(ctx context.Context, src uint16) error {
 	if sc == nil {
 		sc = new(ipn.ServeConfig)
 	}
-	if sc.IsServingWeb(src) {
+	if sc.IsServingWeb(src, noService) {
 		return fmt.Errorf("unable to remove; serving web, not TCP forwarding on serve port %d", src)
 	}
-	if ph := sc.GetTCPPortHandler(src); ph != nil {
-		sc.RemoveTCPForwarding(src)
+	if ph := sc.GetTCPPortHandler(src, noService); ph != nil {
+		sc.RemoveTCPForwarding(noService, src)
 		return e.lc.SetServeConfig(ctx, sc)
 	}
 	return errors.New("error: serve config does not exist")
@@ -681,7 +695,7 @@ func (e *serveEnv) printWebStatusTree(sc *ipn.ServeConfig, hp ipn.HostPort) erro
 	}
 
 	scheme := "https"
-	if sc.IsServingHTTP(port) {
+	if sc.IsServingHTTP(port, noService) {
 		scheme = "http"
 	}
 
@@ -707,10 +721,7 @@ func (e *serveEnv) printWebStatusTree(sc *ipn.ServeConfig, hp ipn.HostPort) erro
 		return "", ""
 	}
 
-	var mounts []string
-	for k := range sc.Web[hp].Handlers {
-		mounts = append(mounts, k)
-	}
+	mounts := slicesx.MapKeys(sc.Web[hp].Handlers)
 	sort.Slice(mounts, func(i, j int) bool {
 		return len(mounts[i]) < len(mounts[j])
 	})

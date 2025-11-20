@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build linux && !ts_omit_listenrawdisco
+
 package magicsock
 
 import (
@@ -13,7 +15,6 @@ import (
 	"net"
 	"net/netip"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/mdlayher/socket"
@@ -28,7 +29,6 @@ import (
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/nettype"
 )
 
 const (
@@ -66,10 +66,10 @@ var (
 		// fragmented, and we don't want to handle reassembly.
 		bpf.LoadAbsolute{Off: 6, Size: 2},
 		// More Fragments bit set means this is part of a fragmented packet.
-		bpf.JumpIf{Cond: bpf.JumpBitsSet, Val: 0x2000, SkipTrue: 7, SkipFalse: 0},
+		bpf.JumpIf{Cond: bpf.JumpBitsSet, Val: 0x2000, SkipTrue: 8, SkipFalse: 0},
 		// Non-zero fragment offset with MF=0 means this is the last
 		// fragment of packet.
-		bpf.JumpIf{Cond: bpf.JumpBitsSet, Val: 0x1fff, SkipTrue: 6, SkipFalse: 0},
+		bpf.JumpIf{Cond: bpf.JumpBitsSet, Val: 0x1fff, SkipTrue: 7, SkipFalse: 0},
 
 		// Load IP header length into X register.
 		bpf.LoadMemShift{Off: 0},
@@ -453,7 +453,13 @@ func (c *Conn) receiveDisco(pc *socket.Conn, isIPV6 bool) {
 			metricRecvDiscoPacketIPv4.Add(1)
 		}
 
-		c.handleDiscoMessage(payload, srcAddr, key.NodePublic{}, discoRXPathRawSocket)
+		pt, isGeneveEncap := packetLooksLike(payload)
+		if pt == packetLooksLikeDisco && !isGeneveEncap {
+			// The BPF program matching on disco does not currently support
+			// Geneve encapsulation. isGeneveEncap should not return true if
+			// payload is disco.
+			c.handleDiscoMessage(payload, epAddr{ap: srcAddr}, false, key.NodePublic{}, discoRXPathRawSocket)
+		}
 	}
 }
 
@@ -482,39 +488,4 @@ func printSockaddr(sa unix.Sockaddr) string {
 	default:
 		return fmt.Sprintf("unknown(%T)", sa)
 	}
-}
-
-// trySetSocketBuffer attempts to set SO_SNDBUFFORCE and SO_RECVBUFFORCE which
-// can overcome the limit of net.core.{r,w}mem_max, but require CAP_NET_ADMIN.
-// It falls back to the portable implementation if that fails, which may be
-// silently capped to net.core.{r,w}mem_max.
-func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
-	if c, ok := pconn.(*net.UDPConn); ok {
-		var errRcv, errSnd error
-		rc, err := c.SyscallConn()
-		if err == nil {
-			rc.Control(func(fd uintptr) {
-				errRcv = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUFFORCE, socketBufferSize)
-				if errRcv != nil {
-					logf("magicsock: [warning] failed to force-set UDP read buffer size to %d: %v; using kernel default values (impacts throughput only)", socketBufferSize, errRcv)
-				}
-				errSnd = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_SNDBUFFORCE, socketBufferSize)
-				if errSnd != nil {
-					logf("magicsock: [warning] failed to force-set UDP write buffer size to %d: %v; using kernel default values (impacts throughput only)", socketBufferSize, errSnd)
-				}
-			})
-		}
-
-		if err != nil || errRcv != nil || errSnd != nil {
-			portableTrySetSocketBuffer(pconn, logf)
-		}
-	}
-}
-
-var controlMessageSize = -1 // bomb if used for allocation before init
-
-func init() {
-	// controlMessageSize is set to hold a UDP_GRO or UDP_SEGMENT control
-	// message. These contain a single uint16 of data.
-	controlMessageSize = unix.CmsgSpace(2)
 }

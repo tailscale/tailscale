@@ -42,6 +42,8 @@ main() {
 		#  - VERSION_CODENAME: the codename of the OS release, if any (e.g. "buster")
 		#  - UBUNTU_CODENAME: if it exists, use instead of VERSION_CODENAME
 		. /etc/os-release
+		VERSION_MAJOR="${VERSION_ID:-}"
+		VERSION_MAJOR="${VERSION_MAJOR%%.*}"
 		case "$ID" in
 			ubuntu|pop|neon|zorin|tuxedo)
 				OS="ubuntu"
@@ -53,10 +55,10 @@ main() {
 				PACKAGETYPE="apt"
 				# Third-party keyrings became the preferred method of
 				# installation in Ubuntu 20.04.
-				if expr "$VERSION_ID" : "2.*" >/dev/null; then
-					APT_KEY_TYPE="keyring"
-				else
+				if [ "$VERSION_MAJOR" -lt 20 ]; then
 					APT_KEY_TYPE="legacy"
+				else
+					APT_KEY_TYPE="keyring"
 				fi
 				;;
 			debian)
@@ -68,7 +70,15 @@ main() {
 				if [ -z "${VERSION_ID:-}" ]; then
 					# rolling release. If you haven't kept current, that's on you.
 					APT_KEY_TYPE="keyring"
-				elif [ "$VERSION_ID" -lt 11 ]; then
+				# Parrot Security is a special case that uses ID=debian
+				elif [ "$NAME" = "Parrot Security" ]; then
+					# All versions new enough to have this behaviour prefer keyring
+					# and their VERSION_ID is not consistent with Debian.
+					APT_KEY_TYPE="keyring"
+					# They don't specify the Debian version they're based off in os-release
+					# but Parrot 6 is based on Debian 12 Bookworm.
+					VERSION=bookworm
+				elif [ "$VERSION_MAJOR" -lt 11 ]; then
 					APT_KEY_TYPE="legacy"
 				else
 					APT_KEY_TYPE="keyring"
@@ -86,7 +96,7 @@ main() {
 				    VERSION="$VERSION_CODENAME"
 				fi
 				PACKAGETYPE="apt"
-				if [ "$VERSION_ID" -lt 5 ]; then
+				if [ "$VERSION_MAJOR" -lt 5 ]; then
 					APT_KEY_TYPE="legacy"
 				else
 					APT_KEY_TYPE="keyring"
@@ -96,16 +106,27 @@ main() {
 				OS="ubuntu"
 				VERSION="$UBUNTU_CODENAME"
 				PACKAGETYPE="apt"
-				if [ "$VERSION_ID" -lt 6 ]; then
+				if [ "$VERSION_MAJOR" -lt 6 ]; then
 					APT_KEY_TYPE="legacy"
 				else
+					APT_KEY_TYPE="keyring"
+				fi
+				;;
+			industrial-os)
+				OS="debian"
+				PACKAGETYPE="apt"
+				if [ "$VERSION_MAJOR" -lt 5 ]; then
+					VERSION="buster"
+					APT_KEY_TYPE="legacy"
+				else
+					VERSION="bullseye"
 					APT_KEY_TYPE="keyring"
 				fi
 				;;
 			parrot|mendel)
 				OS="debian"
 				PACKAGETYPE="apt"
-				if [ "$VERSION_ID" -lt 5 ]; then
+				if [ "$VERSION_MAJOR" -lt 5 ]; then
 					VERSION="buster"
 					APT_KEY_TYPE="legacy"
 				else
@@ -131,7 +152,7 @@ main() {
 				PACKAGETYPE="apt"
 				# Third-party keyrings became the preferred method of
 				# installation in Raspbian 11 (Bullseye).
-				if [ "$VERSION_ID" -lt 11 ]; then
+				if [ "$VERSION_MAJOR" -lt 11 ]; then
 					APT_KEY_TYPE="legacy"
 				else
 					APT_KEY_TYPE="keyring"
@@ -140,12 +161,11 @@ main() {
 			kali)
 				OS="debian"
 				PACKAGETYPE="apt"
-				YEAR="$(echo "$VERSION_ID" | cut -f1 -d.)"
 				APT_SYSTEMCTL_START=true
 				# Third-party keyrings became the preferred method of
 				# installation in Debian 11 (Bullseye), which Kali switched
 				# to in roughly 2021.x releases
-				if [ "$YEAR" -lt 2021 ]; then
+				if [ "$VERSION_MAJOR" -lt 2021 ]; then
 					# Kali VERSION_ID is "kali-rolling", which isn't distinguishing
 					VERSION="buster"
 					APT_KEY_TYPE="legacy"
@@ -154,10 +174,10 @@ main() {
 					APT_KEY_TYPE="keyring"
 				fi
 				;;
-			Deepin)  # https://github.com/tailscale/tailscale/issues/7862
+			Deepin|deepin)  # https://github.com/tailscale/tailscale/issues/7862
 				OS="debian"
 				PACKAGETYPE="apt"
-				if [ "$VERSION_ID" -lt 20 ]; then
+				if [ "$VERSION_MAJOR" -lt 20 ]; then
 					APT_KEY_TYPE="legacy"
 					VERSION="buster"
 				else
@@ -165,9 +185,28 @@ main() {
 					VERSION="bullseye"
 				fi
 				;;
+			pika)
+				PACKAGETYPE="apt"
+				# All versions of PikaOS are new enough to prefer keyring
+				APT_KEY_TYPE="keyring"
+				# Older versions of PikaOS are based on Ubuntu rather than Debian
+				if [ "$VERSION_MAJOR" -lt 4 ]; then
+					OS="ubuntu"
+					VERSION="$UBUNTU_CODENAME"
+				else
+					OS="debian"
+					VERSION="$DEBIAN_CODENAME"
+				fi
+				;;
+			sparky)
+				OS="debian"
+				PACKAGETYPE="apt"
+				VERSION="$DEBIAN_CODENAME"
+				APT_KEY_TYPE="keyring"
+				;;
 			centos)
 				OS="$ID"
-				VERSION="$VERSION_ID"
+				VERSION="$VERSION_MAJOR"
 				PACKAGETYPE="dnf"
 				if [ "$VERSION" = "7" ]; then
 					PACKAGETYPE="yum"
@@ -175,15 +214,18 @@ main() {
 				;;
 			ol)
 				OS="oracle"
-				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
+				VERSION="$VERSION_MAJOR"
 				PACKAGETYPE="dnf"
 				if [ "$VERSION" = "7" ]; then
 					PACKAGETYPE="yum"
 				fi
 				;;
-			rhel)
+			rhel|miraclelinux)
 				OS="$ID"
-				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
+				if [ "$ID" = "miraclelinux" ]; then
+					OS="rhel"
+				fi
+				VERSION="$VERSION_MAJOR"
 				PACKAGETYPE="dnf"
 				if [ "$VERSION" = "7" ]; then
 					PACKAGETYPE="yum"
@@ -206,7 +248,7 @@ main() {
 				;;
 			xenenterprise)
 				OS="centos"
-				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
+				VERSION="$VERSION_MAJOR"
 				PACKAGETYPE="yum"
 				;;
 			opensuse-leap|sles)
@@ -224,12 +266,12 @@ main() {
 				VERSION="leap/15.4"
 				PACKAGETYPE="zypper"
 				;;
-			arch|archarm|endeavouros|blendos|garuda)
+			arch|archarm|endeavouros|blendos|garuda|archcraft|cachyos)
 				OS="arch"
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"
 				;;
-			manjaro|manjaro-arm)
+			manjaro|manjaro-arm|biglinux)
 				OS="manjaro"
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"
@@ -250,6 +292,14 @@ main() {
 				echo "services.tailscale.enable = true;"
 				exit 1
 				;;
+			bazzite)
+				echo "Bazzite comes with Tailscale installed by default."
+				echo "Please enable Tailscale by running the following commands as root:"
+				echo
+				echo "ujust enable-tailscale"
+				echo "tailscale up"
+				exit 1
+				;;
 			void)
 				OS="$ID"
 				VERSION="" # rolling release
@@ -262,7 +312,7 @@ main() {
 				;;
 			freebsd)
 				OS="$ID"
-				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
+				VERSION="$VERSION_MAJOR"
 				PACKAGETYPE="pkg"
 				;;
 			osmc)
@@ -273,7 +323,7 @@ main() {
 				;;
 			photon)
 				OS="photon"
-				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
+				VERSION="$VERSION_MAJOR"
 				PACKAGETYPE="tdnf"
 				;;
 
@@ -369,7 +419,9 @@ main() {
 			;;
 		freebsd)
 			if [ "$VERSION" != "12" ] && \
-			   [ "$VERSION" != "13" ]
+			   [ "$VERSION" != "13" ] && \
+			   [ "$VERSION" != "14" ] && \
+			   [ "$VERSION" != "15" ]
 			then
 				OS_UNSUPPORTED=1
 			fi
@@ -465,10 +517,13 @@ main() {
 				legacy)
 					$CURL "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION.asc" | $SUDO apt-key add -
 					$CURL "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION.list" | $SUDO tee /etc/apt/sources.list.d/tailscale.list
+					$SUDO chmod 0644 /etc/apt/sources.list.d/tailscale.list
 				;;
 				keyring)
 					$CURL "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION.noarmor.gpg" | $SUDO tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+					$SUDO chmod 0644 /usr/share/keyrings/tailscale-archive-keyring.gpg
 					$CURL "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION.tailscale-keyring.list" | $SUDO tee /etc/apt/sources.list.d/tailscale.list
+					$SUDO chmod 0644 /etc/apt/sources.list.d/tailscale.list
 				;;
 			esac
 			$SUDO apt-get update
@@ -488,9 +543,41 @@ main() {
 			set +x
 		;;
 		dnf)
+			# DNF 5 has a different argument format; determine which one we have.
+			DNF_VERSION="3"
+			if LANG=C.UTF-8 dnf --version | grep -q '^dnf5 version'; then
+				DNF_VERSION="5"
+			fi
+
+			# The 'config-manager' plugin wasn't implemented when
+			# DNF5 was released; detect that and use the old
+			# version if necessary.
+			if [ "$DNF_VERSION" = "5" ]; then
+				set -x
+				$SUDO dnf install -y 'dnf-command(config-manager)' && DNF_HAVE_CONFIG_MANAGER=1 || DNF_HAVE_CONFIG_MANAGER=0
+				set +x
+
+				if [ "$DNF_HAVE_CONFIG_MANAGER" != "1" ]; then
+					if type dnf-3 >/dev/null; then
+						DNF_VERSION="3"
+					else
+						echo "dnf 5 detected, but 'dnf-command(config-manager)' not available and dnf-3 not found"
+						exit 1
+					fi
+				fi
+			fi
+
 			set -x
-			$SUDO dnf install -y 'dnf-command(config-manager)'
-			$SUDO dnf config-manager --add-repo "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
+			if [ "$DNF_VERSION" = "3" ]; then
+				$SUDO dnf install -y 'dnf-command(config-manager)'
+				$SUDO dnf config-manager --add-repo "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
+			elif [ "$DNF_VERSION" = "5" ]; then
+				# Already installed config-manager, above.
+				$SUDO dnf config-manager addrepo --from-repofile="https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
+			else
+				echo "unexpected: unknown dnf version $DNF_VERSION"
+				exit 1
+			fi
 			$SUDO dnf install -y tailscale
 			$SUDO systemctl enable --now tailscaled
 			set +x
@@ -519,7 +606,7 @@ main() {
 			;;
 		pkg)
 			set -x
-			$SUDO pkg install tailscale
+			$SUDO pkg install --yes tailscale
 			$SUDO service tailscaled enable
 			$SUDO service tailscaled start
 			set +x

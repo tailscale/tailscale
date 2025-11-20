@@ -1,0 +1,38 @@
+name: tailscale.com/cmd/vet
+
+env:
+  HOME: ${{ github.workspace }}
+  # GOMODCACHE is the same definition on all OSes. Within the workspace, we use
+  # toplevel directories "src" (for the checked out source code), and "gomodcache"
+  # and other caches as siblings to follow.
+  GOMODCACHE: ${{ github.workspace }}/gomodcache
+
+on:
+  push:
+    branches:
+      - main
+      - "release-branch/*"
+    paths:
+      - "**.go"
+  pull_request:
+    paths:
+      - "**.go"
+
+jobs:
+  vet:
+    runs-on: [ self-hosted, linux ]
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: src
+
+      - name: Build 'go vet' tool
+        working-directory: src
+        run: ./tool/go build -o /tmp/vettool tailscale.com/cmd/vet
+
+      - name: Run 'go vet'
+        working-directory: src
+        run: ./tool/go vet -vettool=/tmp/vettool tailscale.com/...

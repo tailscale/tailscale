@@ -4,13 +4,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"tailscale.com/derp/derphttp"
+	"tailscale.com/derp/derpserver"
 	"tailscale.com/tstest/deptest"
 )
 
@@ -77,20 +78,20 @@ func TestNoContent(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req, _ := http.NewRequest("GET", "https://localhost/generate_204", nil)
 			if tt.input != "" {
-				req.Header.Set(derphttp.NoContentChallengeHeader, tt.input)
+				req.Header.Set(derpserver.NoContentChallengeHeader, tt.input)
 			}
 			w := httptest.NewRecorder()
-			derphttp.ServeNoContent(w, req)
+			derpserver.ServeNoContent(w, req)
 			resp := w.Result()
 
 			if tt.want == "" {
-				if h, found := resp.Header[derphttp.NoContentResponseHeader]; found {
+				if h, found := resp.Header[derpserver.NoContentResponseHeader]; found {
 					t.Errorf("got %+v; expected no response header", h)
 				}
 				return
 			}
 
-			if got := resp.Header.Get(derphttp.NoContentResponseHeader); got != tt.want {
+			if got := resp.Header.Get(derpserver.NoContentResponseHeader); got != tt.want {
 				t.Errorf("got %q; want %q", got, tt.want)
 			}
 		})
@@ -107,6 +108,33 @@ func TestDeps(t *testing.T) {
 			"gvisor.dev/gvisor/pkg/tcpip/header": "https://github.com/tailscale/tailscale/issues/9756",
 			"tailscale.com/net/packet":           "not needed in derper",
 			"github.com/gaissmai/bart":           "not needed in derper",
+			"database/sql/driver":                "not needed in derper", // previously came in via github.com/google/uuid
 		},
 	}.Check(t)
+}
+
+func TestTemplate(t *testing.T) {
+	buf := &bytes.Buffer{}
+	err := homePageTemplate.Execute(buf, templateData{
+		ShowAbuseInfo: true,
+		Disabled:      true,
+		AllowDebug:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	str := buf.String()
+	if !strings.Contains(str, "If you suspect abuse") {
+		t.Error("Output is missing abuse mailto")
+	}
+	if !strings.Contains(str, "Tailscale Security Policies") {
+		t.Error("Output is missing Tailscale Security Policies link")
+	}
+	if !strings.Contains(str, "Status:") {
+		t.Error("Output is missing disabled status")
+	}
+	if !strings.Contains(str, "Debug info") {
+		t.Error("Output is missing debug info")
+	}
 }

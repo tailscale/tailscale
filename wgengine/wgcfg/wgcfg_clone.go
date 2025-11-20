@@ -8,7 +8,6 @@ package wgcfg
 import (
 	"net/netip"
 
-	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/ptr"
@@ -35,8 +34,6 @@ func (src *Config) Clone() *Config {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ConfigCloneNeedsRegeneration = Config(struct {
-	Name           string
-	NodeID         tailcfg.StableNodeID
 	PrivateKey     key.NodePrivate
 	Addresses      []netip.Prefix
 	MTU            uint16

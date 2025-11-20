@@ -15,10 +15,10 @@ import (
 
 	"github.com/kballard/go-shellquote"
 	"github.com/peterbourgon/ff/v3/ffcli"
-	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/slicesx"
 )
 
 func exitNodeCmd() *ffcli.Command {
@@ -41,7 +41,7 @@ func exitNodeCmd() *ffcli.Command {
 			{
 				Name:       "suggest",
 				ShortUsage: "tailscale exit-node suggest",
-				ShortHelp:  "Suggests the best available exit node",
+				ShortHelp:  "Suggest the best available exit node",
 				Exec:       runExitNodeSuggest,
 			}},
 			(func() []*ffcli.Command {
@@ -131,7 +131,7 @@ func runExitNodeList(ctx context.Context, args []string) error {
 	for _, country := range filteredPeers.Countries {
 		for _, city := range country.Cities {
 			for _, peer := range city.Peers {
-				fmt.Fprintf(w, "\n %s\t%s\t%s\t%s\t%s\t", peer.TailscaleIPs[0], strings.Trim(peer.DNSName, "."), country.Name, city.Name, peerStatus(peer))
+				fmt.Fprintf(w, "\n %s\t%s\t%s\t%s\t%s\t", peer.TailscaleIPs[0], strings.Trim(peer.DNSName, "."), cmp.Or(country.Name, "-"), cmp.Or(city.Name, "-"), peerStatus(peer))
 			}
 		}
 	}
@@ -173,11 +173,13 @@ func hasAnyExitNodeSuggestions(peers []*ipnstate.PeerStatus) bool {
 // a peer. If there is no notable state, a - is returned.
 func peerStatus(peer *ipnstate.PeerStatus) string {
 	if !peer.Active {
+		lastseen := lastSeenFmt(peer.LastSeen)
+
 		if peer.ExitNode {
-			return "selected but offline"
+			return "selected but offline" + lastseen
 		}
 		if !peer.Online {
-			return "offline"
+			return "offline" + lastseen
 		}
 	}
 
@@ -202,23 +204,16 @@ type filteredCity struct {
 	Peers []*ipnstate.PeerStatus
 }
 
-const noLocationData = "-"
-
-var noLocation = &tailcfg.Location{
-	Country:     noLocationData,
-	CountryCode: noLocationData,
-	City:        noLocationData,
-	CityCode:    noLocationData,
-}
-
 // filterFormatAndSortExitNodes filters and sorts exit nodes into
 // alphabetical order, by country, city and then by priority if
 // present.
+//
 // If an exit node has location data, and the country has more than
 // one city, an `Any` city is added to the country that contains the
 // highest priority exit node within that country.
+//
 // For exit nodes without location data, their country fields are
-// defined as '-' to indicate that the data is not available.
+// defined as the empty string to indicate that the data is not available.
 func filterFormatAndSortExitNodes(peers []*ipnstate.PeerStatus, filterBy string) filteredExitNodes {
 	// first get peers into some fixed order, as code below doesn't break ties
 	// and our input comes from a random range-over-map.
@@ -229,7 +224,10 @@ func filterFormatAndSortExitNodes(peers []*ipnstate.PeerStatus, filterBy string)
 	countries := make(map[string]*filteredCountry)
 	cities := make(map[string]*filteredCity)
 	for _, ps := range peers {
-		loc := cmp.Or(ps.Location, noLocation)
+		loc := ps.Location
+		if loc == nil {
+			loc = &tailcfg.Location{}
+		}
 
 		if filterBy != "" && !strings.EqualFold(loc.Country, filterBy) {
 			continue
@@ -255,11 +253,11 @@ func filterFormatAndSortExitNodes(peers []*ipnstate.PeerStatus, filterBy string)
 	}
 
 	filteredExitNodes := filteredExitNodes{
-		Countries: xmaps.Values(countries),
+		Countries: slicesx.MapValues(countries),
 	}
 
 	for _, country := range filteredExitNodes.Countries {
-		if country.Name == noLocationData {
+		if country.Name == "" {
 			// Countries without location data should not
 			// be filtered further.
 			continue

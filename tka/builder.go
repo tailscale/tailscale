@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_tailnetlock
+
 package tka
 
 import (
@@ -67,6 +69,11 @@ func (b *UpdateBuilder) AddKey(key Key) error {
 	if _, err := b.state.GetKey(keyID); err == nil {
 		return fmt.Errorf("cannot add key %v: already exists", key)
 	}
+
+	if len(b.state.Keys) >= maxKeys {
+		return fmt.Errorf("cannot add key %v: maximum number of keys reached", key)
+	}
+
 	return b.mkUpdate(AUM{MessageKind: AUMAddKey, Key: &key})
 }
 
@@ -107,7 +114,7 @@ func (b *UpdateBuilder) generateCheckpoint() error {
 		}
 	}
 
-	// Checkpoints cant specify a parent AUM.
+	// Checkpoints can't specify a parent AUM.
 	state.LastAUMHash = nil
 	return b.mkUpdate(AUM{MessageKind: AUMCheckpoint, State: &state})
 }
@@ -129,7 +136,7 @@ func (b *UpdateBuilder) Finalize(storage Chonk) ([]AUM, error) {
 				needCheckpoint = false
 				break
 			}
-			return nil, fmt.Errorf("reading AUM: %v", err)
+			return nil, fmt.Errorf("reading AUM (%v): %v", cursor, err)
 		}
 
 		if aum.MessageKind == AUMCheckpoint {

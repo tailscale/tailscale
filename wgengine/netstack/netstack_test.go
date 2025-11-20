@@ -22,6 +22,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/metrics"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
@@ -44,13 +45,14 @@ func TestInjectInboundLeak(t *testing.T) {
 			t.Logf(format, args...)
 		}
 	}
-	sys := new(tsd.System)
+	sys := tsd.NewSystem()
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		Tun:           tunDev,
 		Dialer:        dialer,
 		SetSubsystem:  sys.Set,
-		HealthTracker: sys.HealthTracker(),
+		HealthTracker: sys.HealthTracker.Get(),
 		Metrics:       sys.UserMetricsRegistry(),
+		EventBus:      sys.Bus.Get(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -64,8 +66,9 @@ func TestInjectInboundLeak(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(lb.Shutdown)
 
-	ns, err := Create(logf, tunWrap, eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper(), nil)
+	ns, err := Create(logf, tunWrap, eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +102,7 @@ func getMemStats() (ms runtime.MemStats) {
 
 func makeNetstack(tb testing.TB, config func(*Impl)) *Impl {
 	tunDev := tstun.NewFake()
-	sys := &tsd.System{}
+	sys := tsd.NewSystem()
 	sys.Set(new(mem.Store))
 	dialer := new(tsdial.Dialer)
 	logf := tstest.WhileTestRunningLogger(tb)
@@ -107,8 +110,9 @@ func makeNetstack(tb testing.TB, config func(*Impl)) *Impl {
 		Tun:           tunDev,
 		Dialer:        dialer,
 		SetSubsystem:  sys.Set,
-		HealthTracker: sys.HealthTracker(),
+		HealthTracker: sys.HealthTracker.Get(),
 		Metrics:       sys.UserMetricsRegistry(),
+		EventBus:      sys.Bus.Get(),
 	})
 	if err != nil {
 		tb.Fatal(err)
@@ -116,7 +120,7 @@ func makeNetstack(tb testing.TB, config func(*Impl)) *Impl {
 	tb.Cleanup(func() { eng.Close() })
 	sys.Set(eng)
 
-	ns, err := Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper(), nil)
+	ns, err := Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper())
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -126,6 +130,7 @@ func makeNetstack(tb testing.TB, config func(*Impl)) *Impl {
 	if err != nil {
 		tb.Fatalf("NewLocalBackend: %v", err)
 	}
+	tb.Cleanup(lb.Shutdown)
 
 	ns.atomicIsLocalIPFunc.Store(func(netip.Addr) bool { return true })
 	if config != nil {
@@ -510,7 +515,7 @@ func tcp4syn(tb testing.TB, src, dst netip.Addr, sport, dport uint16) []byte {
 
 // makeHangDialer returns a dialer that notifies the returned channel when a
 // connection is dialed and then hangs until the test finishes.
-func makeHangDialer(tb testing.TB) (func(context.Context, string, string) (net.Conn, error), chan struct{}) {
+func makeHangDialer(tb testing.TB) (netx.DialFunc, chan struct{}) {
 	done := make(chan struct{})
 	tb.Cleanup(func() {
 		close(done)

@@ -56,7 +56,7 @@ var (
 )
 
 func cryptMsgClose(cryptMsg windows.Handle) (err error) {
-	r1, _, e1 := syscall.Syscall(procCryptMsgClose.Addr(), 1, uintptr(cryptMsg), 0, 0)
+	r1, _, e1 := syscall.SyscallN(procCryptMsgClose.Addr(), uintptr(cryptMsg))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
@@ -64,7 +64,7 @@ func cryptMsgClose(cryptMsg windows.Handle) (err error) {
 }
 
 func cryptMsgGetParam(cryptMsg windows.Handle, paramType uint32, index uint32, data unsafe.Pointer, dataLen *uint32) (err error) {
-	r1, _, e1 := syscall.Syscall6(procCryptMsgGetParam.Addr(), 5, uintptr(cryptMsg), uintptr(paramType), uintptr(index), uintptr(data), uintptr(unsafe.Pointer(dataLen)), 0)
+	r1, _, e1 := syscall.SyscallN(procCryptMsgGetParam.Addr(), uintptr(cryptMsg), uintptr(paramType), uintptr(index), uintptr(data), uintptr(unsafe.Pointer(dataLen)))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
@@ -72,7 +72,7 @@ func cryptMsgGetParam(cryptMsg windows.Handle, paramType uint32, index uint32, d
 }
 
 func cryptVerifyMessageSignature(pVerifyPara *_CRYPT_VERIFY_MESSAGE_PARA, signerIndex uint32, pbSignedBlob *byte, cbSignedBlob uint32, pbDecoded *byte, pdbDecoded *uint32, ppSignerCert **windows.CertContext) (err error) {
-	r1, _, e1 := syscall.Syscall9(procCryptVerifyMessageSignature.Addr(), 7, uintptr(unsafe.Pointer(pVerifyPara)), uintptr(signerIndex), uintptr(unsafe.Pointer(pbSignedBlob)), uintptr(cbSignedBlob), uintptr(unsafe.Pointer(pbDecoded)), uintptr(unsafe.Pointer(pdbDecoded)), uintptr(unsafe.Pointer(ppSignerCert)), 0, 0)
+	r1, _, e1 := syscall.SyscallN(procCryptVerifyMessageSignature.Addr(), uintptr(unsafe.Pointer(pVerifyPara)), uintptr(signerIndex), uintptr(unsafe.Pointer(pbSignedBlob)), uintptr(cbSignedBlob), uintptr(unsafe.Pointer(pbDecoded)), uintptr(unsafe.Pointer(pdbDecoded)), uintptr(unsafe.Pointer(ppSignerCert)))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
@@ -80,13 +80,13 @@ func cryptVerifyMessageSignature(pVerifyPara *_CRYPT_VERIFY_MESSAGE_PARA, signer
 }
 
 func msiGetFileSignatureInformation(signedObjectPath *uint16, flags uint32, certCtx **windows.CertContext, pbHashData *byte, cbHashData *uint32) (ret wingoes.HRESULT) {
-	r0, _, _ := syscall.Syscall6(procMsiGetFileSignatureInformationW.Addr(), 5, uintptr(unsafe.Pointer(signedObjectPath)), uintptr(flags), uintptr(unsafe.Pointer(certCtx)), uintptr(unsafe.Pointer(pbHashData)), uintptr(unsafe.Pointer(cbHashData)), 0)
+	r0, _, _ := syscall.SyscallN(procMsiGetFileSignatureInformationW.Addr(), uintptr(unsafe.Pointer(signedObjectPath)), uintptr(flags), uintptr(unsafe.Pointer(certCtx)), uintptr(unsafe.Pointer(pbHashData)), uintptr(unsafe.Pointer(cbHashData)))
 	ret = wingoes.HRESULT(r0)
 	return
 }
 
 func cryptCATAdminAcquireContext2(hCatAdmin *_HCATADMIN, pgSubsystem *windows.GUID, hashAlgorithm *uint16, strongHashPolicy *windows.CertStrongSignPara, flags uint32) (err error) {
-	r1, _, e1 := syscall.Syscall6(procCryptCATAdminAcquireContext2.Addr(), 5, uintptr(unsafe.Pointer(hCatAdmin)), uintptr(unsafe.Pointer(pgSubsystem)), uintptr(unsafe.Pointer(hashAlgorithm)), uintptr(unsafe.Pointer(strongHashPolicy)), uintptr(flags), 0)
+	r1, _, e1 := syscall.SyscallN(procCryptCATAdminAcquireContext2.Addr(), uintptr(unsafe.Pointer(hCatAdmin)), uintptr(unsafe.Pointer(pgSubsystem)), uintptr(unsafe.Pointer(hashAlgorithm)), uintptr(unsafe.Pointer(strongHashPolicy)), uintptr(flags))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
@@ -94,7 +94,7 @@ func cryptCATAdminAcquireContext2(hCatAdmin *_HCATADMIN, pgSubsystem *windows.GU
 }
 
 func cryptCATAdminCalcHashFromFileHandle2(hCatAdmin _HCATADMIN, file windows.Handle, pcbHash *uint32, pbHash *byte, flags uint32) (err error) {
-	r1, _, e1 := syscall.Syscall6(procCryptCATAdminCalcHashFromFileHandle2.Addr(), 5, uintptr(hCatAdmin), uintptr(file), uintptr(unsafe.Pointer(pcbHash)), uintptr(unsafe.Pointer(pbHash)), uintptr(flags), 0)
+	r1, _, e1 := syscall.SyscallN(procCryptCATAdminCalcHashFromFileHandle2.Addr(), uintptr(hCatAdmin), uintptr(file), uintptr(unsafe.Pointer(pcbHash)), uintptr(unsafe.Pointer(pbHash)), uintptr(flags))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
@@ -102,7 +102,7 @@ func cryptCATAdminCalcHashFromFileHandle2(hCatAdmin _HCATADMIN, file windows.Han
 }
 
 func cryptCATAdminEnumCatalogFromHash(hCatAdmin _HCATADMIN, pbHash *byte, cbHash uint32, flags uint32, prevCatInfo *_HCATINFO) (ret _HCATINFO, err error) {
-	r0, _, e1 := syscall.Syscall6(procCryptCATAdminEnumCatalogFromHash.Addr(), 5, uintptr(hCatAdmin), uintptr(unsafe.Pointer(pbHash)), uintptr(cbHash), uintptr(flags), uintptr(unsafe.Pointer(prevCatInfo)), 0)
+	r0, _, e1 := syscall.SyscallN(procCryptCATAdminEnumCatalogFromHash.Addr(), uintptr(hCatAdmin), uintptr(unsafe.Pointer(pbHash)), uintptr(cbHash), uintptr(flags), uintptr(unsafe.Pointer(prevCatInfo)))
 	ret = _HCATINFO(r0)
 	if ret == 0 {
 		err = errnoErr(e1)
@@ -111,7 +111,7 @@ func cryptCATAdminEnumCatalogFromHash(hCatAdmin _HCATADMIN, pbHash *byte, cbHash
 }
 
 func cryptCATAdminReleaseCatalogContext(hCatAdmin _HCATADMIN, hCatInfo _HCATINFO, flags uint32) (err error) {
-	r1, _, e1 := syscall.Syscall(procCryptCATAdminReleaseCatalogContext.Addr(), 3, uintptr(hCatAdmin), uintptr(hCatInfo), uintptr(flags))
+	r1, _, e1 := syscall.SyscallN(procCryptCATAdminReleaseCatalogContext.Addr(), uintptr(hCatAdmin), uintptr(hCatInfo), uintptr(flags))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
@@ -119,7 +119,7 @@ func cryptCATAdminReleaseCatalogContext(hCatAdmin _HCATADMIN, hCatInfo _HCATINFO
 }
 
 func cryptCATAdminReleaseContext(hCatAdmin _HCATADMIN, flags uint32) (err error) {
-	r1, _, e1 := syscall.Syscall(procCryptCATAdminReleaseContext.Addr(), 2, uintptr(hCatAdmin), uintptr(flags), 0)
+	r1, _, e1 := syscall.SyscallN(procCryptCATAdminReleaseContext.Addr(), uintptr(hCatAdmin), uintptr(flags))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
@@ -127,7 +127,7 @@ func cryptCATAdminReleaseContext(hCatAdmin _HCATADMIN, flags uint32) (err error)
 }
 
 func cryptCATAdminCatalogInfoFromContext(hCatInfo _HCATINFO, catInfo *_CATALOG_INFO, flags uint32) (err error) {
-	r1, _, e1 := syscall.Syscall(procCryptCATCatalogInfoFromContext.Addr(), 3, uintptr(hCatInfo), uintptr(unsafe.Pointer(catInfo)), uintptr(flags))
+	r1, _, e1 := syscall.SyscallN(procCryptCATCatalogInfoFromContext.Addr(), uintptr(hCatInfo), uintptr(unsafe.Pointer(catInfo)), uintptr(flags))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}

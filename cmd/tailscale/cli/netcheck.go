@@ -17,13 +17,23 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
-	"tailscale.com/net/portmapper"
+	"tailscale.com/net/portmapper/portmappertype"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
+
+	// The "netcheck" command also wants the portmapper linked.
+	//
+	// TODO: make that subcommand either hit LocalAPI for that info, or use a
+	// tailscaled subcommand, to avoid making the CLI also link in the portmapper.
+	// For now (2025-09-15), keep doing what we've done for the past five years and
+	// keep linking it here.
+	_ "tailscale.com/feature/condregister/portmapper"
 )
 
 var netcheckCmd = &ffcli.Command{
@@ -48,15 +58,20 @@ var netcheckArgs struct {
 
 func runNetcheck(ctx context.Context, args []string) error {
 	logf := logger.WithPrefix(log.Printf, "portmap: ")
-	netMon, err := netmon.New(logf)
+	bus := eventbus.New()
+	defer bus.Close()
+	netMon, err := netmon.New(bus, logf)
 	if err != nil {
 		return err
 	}
 
-	// Ensure that we close the portmapper after running a netcheck; this
-	// will release any port mappings created.
-	pm := portmapper.NewClient(logf, netMon, nil, nil, nil)
-	defer pm.Close()
+	var pm portmappertype.Client
+	if buildfeatures.HasPortMapper {
+		// Ensure that we close the portmapper after running a netcheck; this
+		// will release any port mappings created.
+		pm = portmappertype.HookNewPortMapper.Get()(logf, bus, netMon, nil, nil)
+		defer pm.Close()
+	}
 
 	c := &netcheck.Client{
 		NetMon:      netMon,
@@ -136,6 +151,7 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 	}
 
 	printf("\nReport:\n")
+	printf("\t* Time: %v\n", report.Now.Format(time.RFC3339Nano))
 	printf("\t* UDP: %v\n", report.UDP)
 	if report.GlobalV4.IsValid() {
 		printf("\t* IPv4: yes, %s\n", report.GlobalV4)
@@ -164,7 +180,11 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 		printf("\t* Nearest DERP: unknown (no response to latency probes)\n")
 	} else {
 		if report.PreferredDERP != 0 {
-			printf("\t* Nearest DERP: %v\n", dm.Regions[report.PreferredDERP].RegionName)
+			if region, ok := dm.Regions[report.PreferredDERP]; ok {
+				printf("\t* Nearest DERP: %v\n", region.RegionName)
+			} else {
+				printf("\t* Nearest DERP: %v (region not found in map)\n", report.PreferredDERP)
+			}
 		} else {
 			printf("\t* Nearest DERP: [none]\n")
 		}
@@ -202,6 +222,9 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 }
 
 func portMapping(r *netcheck.Report) string {
+	if !buildfeatures.HasPortMapper {
+		return "binary built without portmapper support"
+	}
 	if !r.AnyPortMappingChecked() {
 		return "not checked"
 	}

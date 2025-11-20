@@ -17,6 +17,7 @@ import (
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/syspolicy/internal"
 	"tailscale.com/util/syspolicy/internal/loggerx"
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/testenv"
 )
@@ -209,7 +210,7 @@ func scopeMetrics(origin *setting.Origin) *policyScopeMetrics {
 
 var (
 	settingMetricsMu  sync.RWMutex
-	settingMetricsMap map[setting.Key]*settingMetrics
+	settingMetricsMap map[pkey.Key]*settingMetrics
 )
 
 func settingMetricsFor(setting *setting.Definition) *settingMetrics {
@@ -259,7 +260,7 @@ var addMetricTestHook, setMetricTestHook syncs.AtomicValue[metricFn]
 
 // SetHooksForTest sets the specified addMetric and setMetric functions
 // as the metric functions for the duration of tb and all its subtests.
-func SetHooksForTest(tb internal.TB, addMetric, setMetric metricFn) {
+func SetHooksForTest(tb testenv.TB, addMetric, setMetric metricFn) {
 	oldAddMetric := addMetricTestHook.Swap(addMetric)
 	oldSetMetric := setMetricTestHook.Swap(setMetric)
 	tb.Cleanup(func() {
@@ -283,13 +284,14 @@ func SetHooksForTest(tb internal.TB, addMetric, setMetric metricFn) {
 	lazyUserMetrics.SetForTest(tb, newScopeMetrics(setting.UserSetting), nil)
 }
 
-func newSettingMetric(key setting.Key, scope setting.Scope, suffix string, typ clientmetric.Type) metric {
-	name := strings.ReplaceAll(string(key), setting.KeyPathSeparator, "_")
+func newSettingMetric(key pkey.Key, scope setting.Scope, suffix string, typ clientmetric.Type) metric {
+	name := strings.ReplaceAll(string(key), string(pkey.KeyPathSeparator), "_")
+	name = strings.ReplaceAll(name, ".", "_") // dots are not allowed in metric names
 	return newMetric([]string{name, metricScopeName(scope), suffix}, typ)
 }
 
 func newMetric(nameParts []string, typ clientmetric.Type) metric {
-	name := strings.Join(slicesx.Filter([]string{internal.OS(), "syspolicy"}, nameParts, isNonEmpty), "_")
+	name := strings.Join(slicesx.AppendNonzero([]string{internal.OS(), "syspolicy"}, nameParts), "_")
 	switch {
 	case !ShouldReport():
 		return &funcMetric{name: name, typ: typ}
@@ -303,8 +305,6 @@ func newMetric(nameParts []string, typ clientmetric.Type) metric {
 		panic("unreachable")
 	}
 }
-
-func isNonEmpty(s string) bool { return s != "" }
 
 func metricScopeName(scope setting.Scope) string {
 	switch scope {

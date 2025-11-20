@@ -33,20 +33,20 @@ func StructListWithOpts[T views.Cloner[T]](opts ...Options) StructList[T] {
 // SetValue configures the preference with the specified value.
 // It fails and returns [ErrManaged] if p is a managed preference,
 // and [ErrReadOnly] if p is a read-only preference.
-func (l *StructList[T]) SetValue(val []T) error {
-	return l.preference.SetValue(deepCloneSlice(val))
+func (ls *StructList[T]) SetValue(val []T) error {
+	return ls.preference.SetValue(deepCloneSlice(val))
 }
 
 // SetManagedValue configures the preference with the specified value
 // and marks the preference as managed.
-func (l *StructList[T]) SetManagedValue(val []T) {
-	l.preference.SetManagedValue(deepCloneSlice(val))
+func (ls *StructList[T]) SetManagedValue(val []T) {
+	ls.preference.SetManagedValue(deepCloneSlice(val))
 }
 
 // Clone returns a copy of l that aliases no memory with l.
-func (l StructList[T]) Clone() *StructList[T] {
-	res := ptr.To(l)
-	if v, ok := l.s.Value.GetOk(); ok {
+func (ls StructList[T]) Clone() *StructList[T] {
+	res := ptr.To(ls)
+	if v, ok := ls.s.Value.GetOk(); ok {
 		res.s.Value.Set(deepCloneSlice(v))
 	}
 	return res
@@ -56,11 +56,11 @@ func (l StructList[T]) Clone() *StructList[T] {
 // If the template type T implements an Equal(T) bool method, it will be used
 // instead of the == operator for value comparison.
 // It panics if T is not comparable.
-func (l StructList[T]) Equal(l2 StructList[T]) bool {
-	if l.s.Metadata != l2.s.Metadata {
+func (ls StructList[T]) Equal(l2 StructList[T]) bool {
+	if ls.s.Metadata != l2.s.Metadata {
 		return false
 	}
-	v1, ok1 := l.s.Value.GetOk()
+	v1, ok1 := ls.s.Value.GetOk()
 	v2, ok2 := l2.s.Value.GetOk()
 	if ok1 != ok2 {
 		return false
@@ -105,8 +105,8 @@ type StructListView[T views.ViewCloner[T, V], V views.StructView[T]] struct {
 
 // StructListViewOf returns a read-only view of l.
 // It is used by [tailscale.com/cmd/viewer].
-func StructListViewOf[T views.ViewCloner[T, V], V views.StructView[T]](l *StructList[T]) StructListView[T, V] {
-	return StructListView[T, V]{l}
+func StructListViewOf[T views.ViewCloner[T, V], V views.StructView[T]](ls *StructList[T]) StructListView[T, V] {
+	return StructListView[T, V]{ls}
 }
 
 // Valid reports whether the underlying [StructList] is non-nil.
@@ -169,15 +169,15 @@ func (lv StructListView[T, V]) Equal(lv2 StructListView[T, V]) bool {
 	return lv.ж.Equal(*lv2.ж)
 }
 
-// MarshalJSONV2 implements [jsonv2.MarshalerV2].
-func (lv StructListView[T, V]) MarshalJSONV2(out *jsontext.Encoder, opts jsonv2.Options) error {
-	return lv.ж.MarshalJSONV2(out, opts)
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (lv StructListView[T, V]) MarshalJSONTo(out *jsontext.Encoder) error {
+	return lv.ж.MarshalJSONTo(out)
 }
 
-// UnmarshalJSONV2 implements [jsonv2.UnmarshalerV2].
-func (lv *StructListView[T, V]) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) error {
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (lv *StructListView[T, V]) UnmarshalJSONFrom(in *jsontext.Decoder) error {
 	var x StructList[T]
-	if err := x.UnmarshalJSONV2(in, opts); err != nil {
+	if err := x.UnmarshalJSONFrom(in); err != nil {
 		return err
 	}
 	lv.ж = &x
@@ -186,10 +186,10 @@ func (lv *StructListView[T, V]) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv
 
 // MarshalJSON implements [json.Marshaler].
 func (lv StructListView[T, V]) MarshalJSON() ([]byte, error) {
-	return jsonv2.Marshal(lv) // uses MarshalJSONV2
+	return jsonv2.Marshal(lv) // uses MarshalJSONTo
 }
 
 // UnmarshalJSON implements [json.Unmarshaler].
 func (lv *StructListView[T, V]) UnmarshalJSON(b []byte) error {
-	return jsonv2.Unmarshal(b, lv) // uses UnmarshalJSONV2
+	return jsonv2.Unmarshal(b, lv) // uses UnmarshalJSONFrom
 }

@@ -7,15 +7,21 @@ import (
 	"flag"
 	"net"
 	"net/netip"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"tailscale.com/util/eventbus"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/mak"
 )
 
 func TestMonitorStartClose(t *testing.T) {
-	mon, err := New(t.Logf)
+	bus := eventbus.New()
+	defer bus.Close()
+
+	mon, err := New(bus, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +32,10 @@ func TestMonitorStartClose(t *testing.T) {
 }
 
 func TestMonitorJustClose(t *testing.T) {
-	mon, err := New(t.Logf)
+	bus := eventbus.New()
+	defer bus.Close()
+
+	mon, err := New(bus, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +45,10 @@ func TestMonitorJustClose(t *testing.T) {
 }
 
 func TestMonitorInjectEvent(t *testing.T) {
-	mon, err := New(t.Logf)
+	bus := eventbus.New()
+	defer bus.Close()
+
+	mon, err := New(bus, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +70,23 @@ func TestMonitorInjectEvent(t *testing.T) {
 	}
 }
 
+func TestMonitorInjectEventOnBus(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+
+	mon, err := New(bus, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mon.Close()
+	tw := eventbustest.NewWatcher(t, bus)
+
+	mon.Start()
+	mon.InjectEvent()
+	if err := eventbustest.Expect(tw, eventbustest.Type[ChangeDelta]()); err != nil {
+		t.Error(err)
+	}
+}
+
 var (
 	monitor         = flag.String("monitor", "", `go into monitor mode like 'route monitor'; test never terminates. Value can be either "raw" or "callback"`)
 	monitorDuration = flag.Duration("monitor-duration", 0, "if non-zero, how long to run TestMonitorMode. Zero means forever.")
@@ -67,11 +96,15 @@ func TestMonitorMode(t *testing.T) {
 	switch *monitor {
 	case "":
 		t.Skip("skipping non-test without --monitor")
-	case "raw", "callback":
+	case "raw", "callback", "eventbus":
 	default:
-		t.Skipf(`invalid --monitor value: must be "raw" or "callback"`)
+		t.Skipf(`invalid --monitor value: must be "raw", "callback" or "eventbus"`)
 	}
-	mon, err := New(t.Logf)
+
+	bus := eventbustest.NewBus(t)
+	tw := eventbustest.NewWatcher(t, bus)
+
+	mon, err := New(bus, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +143,16 @@ func TestMonitorMode(t *testing.T) {
 		mon.Start()
 		<-done
 		t.Logf("%v callbacks", n)
+	case "eventbus":
+		time.AfterFunc(*monitorDuration, bus.Close)
+		n := 0
+		mon.Start()
+		eventbustest.Expect(tw, func(event *ChangeDelta) (bool, error) {
+			n++
+			t.Logf("cb: changed=%v, ifSt=%v", event.Major, event.New)
+			return false, nil // Return false, indicating we wanna look for more events
+		})
+		t.Logf("%v events", n)
 	}
 }
 
@@ -221,6 +264,45 @@ func TestIsMajorChangeFrom(t *testing.T) {
 			}
 			if got := m.IsMajorChangeFrom(tt.s1, tt.s2); got != tt.want {
 				t.Errorf("IsMajorChange = %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+func TestForeachInterface(t *testing.T) {
+	tests := []struct {
+		name  string
+		addrs []net.Addr
+		want  []string
+	}{
+		{
+			name: "Mixed_IPv4_and_IPv6",
+			addrs: []net.Addr{
+				&net.IPNet{IP: net.IPv4(1, 2, 3, 4), Mask: net.CIDRMask(24, 32)},
+				&net.IPAddr{IP: net.IP{5, 6, 7, 8}, Zone: ""},
+				&net.IPNet{IP: net.ParseIP("2001:db8::1"), Mask: net.CIDRMask(64, 128)},
+				&net.IPAddr{IP: net.ParseIP("2001:db8::2"), Zone: ""},
+			},
+			want: []string{"1.2.3.4", "5.6.7.8", "2001:db8::1", "2001:db8::2"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []string
+			ifaces := InterfaceList{
+				{
+					Interface: &net.Interface{Name: "eth0"},
+					AltAddrs:  tt.addrs,
+				},
+			}
+			ifaces.ForeachInterface(func(iface Interface, prefixes []netip.Prefix) {
+				for _, prefix := range prefixes {
+					ip := prefix.Addr()
+					got = append(got, ip.String())
+				}
+			})
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
 	}

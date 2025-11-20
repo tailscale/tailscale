@@ -13,6 +13,7 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
 )
 
 var (
@@ -45,7 +46,7 @@ type winMon struct {
 	noDeadlockTicker *time.Ticker
 }
 
-func newOSMon(logf logger.Logf, pm *Monitor) (osMon, error) {
+func newOSMon(_ *eventbus.Bus, logf logger.Logf, pm *Monitor) (osMon, error) {
 	m := &winMon{
 		logf:             logf,
 		isActive:         pm.isActive,

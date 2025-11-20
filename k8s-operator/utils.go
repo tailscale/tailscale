@@ -27,14 +27,16 @@ type Records struct {
 	Version string `json:"version"`
 	// IP4 contains a mapping of DNS names to IPv4 address(es).
 	IP4 map[string][]string `json:"ip4"`
+	// IP6 contains a mapping of DNS names to IPv6 address(es).
+	// This field is optional and will be omitted from JSON if empty.
+	// It enables dual-stack DNS support in Kubernetes clusters.
+	// +optional
+	IP6 map[string][]string `json:"ip6,omitempty"`
 }
 
-// TailscaledConfigFileNameForCap returns a tailscaled config file name in
+// TailscaledConfigFileName returns a tailscaled config file name in
 // format expected by containerboot for the given CapVer.
-func TailscaledConfigFileNameForCap(cap tailcfg.CapabilityVersion) string {
-	if cap < 95 {
-		return "tailscaled"
-	}
+func TailscaledConfigFileName(cap tailcfg.CapabilityVersion) string {
 	return fmt.Sprintf("cap-%v.hujson", cap)
 }
 

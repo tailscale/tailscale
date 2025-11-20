@@ -1,6 +1,10 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_serve
+
+// TODO: move this whole file to its own package, out of ipnlocal.
+
 package ipnlocal
 
 import (
@@ -12,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"mime"
 	"net"
 	"net/http"
@@ -28,18 +33,38 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"golang.org/x/net/http2"
+	"github.com/pires/go-proxyproto"
+	"go4.org/mem"
 	"tailscale.com/ipn"
-	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netutil"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
+	"tailscale.com/util/backoff"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/ctxkey"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/slicesx"
 	"tailscale.com/version"
 )
+
+func init() {
+	hookServeTCPHandlerForVIPService.Set((*LocalBackend).tcpHandlerForVIPService)
+	hookTCPHandlerForServe.Set((*LocalBackend).tcpHandlerForServe)
+	hookServeUpdateServeTCPPortNetMapAddrListenersLocked.Set((*LocalBackend).updateServeTCPPortNetMapAddrListenersLocked)
+
+	hookServeSetTCPPortsInterceptedFromNetmapAndPrefsLocked.Set(serveSetTCPPortsInterceptedFromNetmapAndPrefsLocked)
+	hookServeClearVIPServicesTCPPortsInterceptedLocked.Set(func(b *LocalBackend) {
+		b.setVIPServicesTCPPortsInterceptedLocked(nil)
+	})
+
+	hookMaybeMutateHostinfoLocked.Add(maybeUpdateHostinfoServicesHashLocked)
+	hookMaybeMutateHostinfoLocked.Add(maybeUpdateHostinfoFunnelLocked)
+
+	RegisterC2N("GET /vip-services", handleC2NVIPServicesGet)
+}
 
 const (
 	contentTypeHeader   = "Content-Type"
@@ -54,11 +79,14 @@ var ErrETagMismatch = errors.New("etag mismatch")
 var serveHTTPContextKey ctxkey.Key[*serveHTTPContext]
 
 type serveHTTPContext struct {
-	SrcAddr  netip.AddrPort
-	DestPort uint16
+	SrcAddr       netip.AddrPort
+	ForVIPService tailcfg.ServiceName // "" means local
+	DestPort      uint16
 
 	// provides funnel-specific context, nil if not funneled
 	Funnel *funnelFlow
+	// AppCapabilities lists all PeerCapabilities that should be forwarded by serve
+	AppCapabilities views.Slice[tailcfg.PeerCapability]
 }
 
 // funnelFlow represents a funneled connection initiated via IngressPeer
@@ -221,6 +249,10 @@ func (s *localListener) handleListenersAccept(ln net.Listener) error {
 //
 // b.mu must be held.
 func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint16) {
+	if b.sys.IsNetstack() {
+		// don't listen on netmap addresses if we're in userspace mode
+		return
+	}
 	// close existing listeners where port
 	// is no longer in incoming ports list
 	for ap, sl := range b.serveListeners {
@@ -231,7 +263,7 @@ func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint1
 		}
 	}
 
-	nm := b.netMap
+	nm := b.NetMap()
 	if nm == nil {
 		b.logf("netMap is nil")
 		return
@@ -242,8 +274,7 @@ func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint1
 	}
 
 	addrs := nm.GetAddresses()
-	for i := range addrs.Len() {
-		a := addrs.At(i)
+	for _, a := range addrs.All() {
 		for _, p := range ports {
 			addrPort := netip.AddrPortFrom(a.Addr(), p)
 			if _, ok := b.serveListeners[addrPort]; ok {
@@ -276,7 +307,13 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 		return errors.New("can't reconfigure tailscaled when using a config file; config file is locked")
 	}
 
-	nm := b.netMap
+	if config != nil {
+		if err := config.CheckValidServicesConfig(); err != nil {
+			return err
+		}
+	}
+
+	nm := b.NetMap()
 	if nm == nil {
 		return errors.New("netMap is nil")
 	}
@@ -312,7 +349,7 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 		bs = j
 	}
 
-	profileID := b.pm.CurrentProfile().ID
+	profileID := b.pm.CurrentProfile().ID()
 	confKey := ipn.ServeConfigKey(profileID)
 	if err := b.store.WriteState(confKey, bs); err != nil {
 		return fmt.Errorf("writing ServeConfig to StateStore: %w", err)
@@ -327,7 +364,7 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 		if b.serveConfig.Valid() {
 			has = b.serveConfig.Foreground().Contains
 		}
-		prevConfig.Foreground().Range(func(k string, v ipn.ServeConfigView) (cont bool) {
+		for k := range prevConfig.Foreground().All() {
 			if !has(k) {
 				for _, sess := range b.notifyWatchers {
 					if sess.sessionID == k {
@@ -335,8 +372,7 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 					}
 				}
 			}
-			return true
-		})
+		}
 	}
 
 	return nil
@@ -434,20 +470,61 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target
 	handler(c)
 }
 
-// tcpHandlerForServe returns a handler for a TCP connection to be served via
-// the ipn.ServeConfig. The funnelFlow can be nil if this is not a funneled
-// connection.
-func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, f *funnelFlow) (handler func(net.Conn) error) {
+func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcfg.VIPService {
+	// keyed by service name
+	var services map[tailcfg.ServiceName]*tailcfg.VIPService
+	if b.serveConfig.Valid() {
+		for svc, config := range b.serveConfig.Services().All() {
+			mak.Set(&services, svc, &tailcfg.VIPService{
+				Name:  svc,
+				Ports: config.ServicePortRange(),
+			})
+		}
+	}
+
+	for _, s := range prefs.AdvertiseServices().All() {
+		sn := tailcfg.ServiceName(s)
+		if services == nil || services[sn] == nil {
+			mak.Set(&services, sn, &tailcfg.VIPService{
+				Name: sn,
+			})
+		}
+		services[sn].Active = true
+	}
+
+	servicesList := slicesx.MapValues(services)
+	// [slicesx.MapValues] provides the values in an indeterminate order, but since we'll
+	// be hashing a representation of this list later we want it to be in a consistent
+	// order.
+	slices.SortFunc(servicesList, func(a, b *tailcfg.VIPService) int {
+		return strings.Compare(a.Name.String(), b.Name.String())
+	})
+	return servicesList
+}
+
+// tcpHandlerForVIPService returns a handler for a TCP connection to a VIP service
+// that is being served via the ipn.ServeConfig. It returns nil if the destination
+// address is not a VIP service or if the VIP service does not have a TCP handler set.
+func (b *LocalBackend) tcpHandlerForVIPService(dstAddr, srcAddr netip.AddrPort) (handler func(net.Conn) error) {
 	b.mu.Lock()
 	sc := b.serveConfig
+	ipVIPServiceMap := b.ipVIPServiceMap
 	b.mu.Unlock()
 
 	if !sc.Valid() {
 		return nil
 	}
 
-	tcph, ok := sc.FindTCP(dport)
+	dport := dstAddr.Port()
+
+	dstSvc, ok := ipVIPServiceMap[dstAddr.Addr()]
 	if !ok {
+		return nil
+	}
+
+	tcph, ok := sc.FindServiceTCP(dstSvc, dstAddr.Port())
+	if !ok {
+		b.logf("The destination service doesn't have a TCP handler set.")
 		return nil
 	}
 
@@ -456,15 +533,18 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, 
 			Handler: http.HandlerFunc(b.serveWebHandler),
 			BaseContext: func(_ net.Listener) context.Context {
 				return serveHTTPContextKey.WithValue(context.Background(), &serveHTTPContext{
-					Funnel:   f,
-					SrcAddr:  srcAddr,
-					DestPort: dport,
+					SrcAddr:       srcAddr,
+					ForVIPService: dstSvc,
+					DestPort:      dport,
 				})
 			},
 		}
 		if tcph.HTTPS() {
+			// TODO(kevinliang10): just leaving this TLS cert creation as if we don't have other
+			// hostnames, but for services this getTLSServeCetForPort will need a version that also take
+			// in the hostname. How to store the TLS cert is still being discussed.
 			hs.TLSConfig = &tls.Config{
-				GetCertificate: b.getTLSServeCertForPort(dport),
+				GetCertificate: b.getTLSServeCertForPort(dport, dstSvc),
 			}
 			return func(c net.Conn) error {
 				return hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
@@ -505,10 +585,168 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, 
 				})
 			}
 
+			errc := make(chan error, 1)
+			go func() {
+				_, err := io.Copy(backConn, conn)
+				errc <- err
+			}()
+			go func() {
+				_, err := io.Copy(conn, backConn)
+				errc <- err
+			}()
+			return <-errc
+		}
+	}
+
+	return nil
+}
+
+// tcpHandlerForServe returns a handler for a TCP connection to be served via
+// the ipn.ServeConfig. The funnelFlow can be nil if this is not a funneled
+// connection.
+func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, f *funnelFlow) (handler func(net.Conn) error) {
+	b.mu.Lock()
+	sc := b.serveConfig
+	b.mu.Unlock()
+
+	if !sc.Valid() {
+		return nil
+	}
+
+	tcph, ok := sc.FindTCP(dport)
+	if !ok {
+		return nil
+	}
+
+	if tcph.HTTPS() || tcph.HTTP() {
+		hs := &http.Server{
+			Handler: http.HandlerFunc(b.serveWebHandler),
+			BaseContext: func(_ net.Listener) context.Context {
+				return serveHTTPContextKey.WithValue(context.Background(), &serveHTTPContext{
+					Funnel:   f,
+					SrcAddr:  srcAddr,
+					DestPort: dport,
+				})
+			},
+		}
+		if tcph.HTTPS() {
+			hs.TLSConfig = &tls.Config{
+				GetCertificate: b.getTLSServeCertForPort(dport, ""),
+			}
+			return func(c net.Conn) error {
+				return hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
+			}
+		}
+
+		return func(c net.Conn) error {
+			return hs.Serve(netutil.NewOneConnListener(c, nil))
+		}
+	}
+
+	if backDst := tcph.TCPForward(); backDst != "" {
+		return func(conn net.Conn) error {
+			defer conn.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
+			cancel()
+			if err != nil {
+				b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
+				return nil
+			}
+			defer backConn.Close()
+			if sni := tcph.TerminateTLS(); sni != "" {
+				conn = tls.Server(conn, &tls.Config{
+					GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+						ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+						defer cancel()
+						pair, err := b.GetCertPEM(ctx, sni)
+						if err != nil {
+							return nil, err
+						}
+						cert, err := tls.X509KeyPair(pair.CertPEM, pair.KeyPEM)
+						if err != nil {
+							return nil, err
+						}
+						return &cert, nil
+					},
+				})
+			}
+
+			var proxyHeader []byte
+			if ver := tcph.ProxyProtocol(); ver > 0 {
+				// backAddr is the final "destination" of the connection,
+				// which is the connection to the proxied-to backend.
+				backAddr := backConn.RemoteAddr().(*net.TCPAddr)
+
+				// We always want to format the PROXY protocol
+				// header based on the IPv4 or IPv6-ness of
+				// the client. The SourceAddr and
+				// DestinationAddr need to match in type, so we
+				// need to be careful to not e.g. set a
+				// SourceAddr of type IPv6 and DestinationAddr
+				// of type IPv4.
+				//
+				// If this is an IPv6-mapped IPv4 address,
+				// though, unmap it.
+				proxySrcAddr := srcAddr
+				if proxySrcAddr.Addr().Is4In6() {
+					proxySrcAddr = netip.AddrPortFrom(
+						proxySrcAddr.Addr().Unmap(),
+						proxySrcAddr.Port(),
+					)
+				}
+
+				is4 := proxySrcAddr.Addr().Is4()
+
+				var destAddr netip.Addr
+				if self := b.currentNode().Self(); self.Valid() {
+					if is4 {
+						destAddr = nodeIP(self, netip.Addr.Is4)
+					} else {
+						destAddr = nodeIP(self, netip.Addr.Is6)
+					}
+				}
+				if !destAddr.IsValid() {
+					// Pick a best-effort destination address of localhost.
+					if is4 {
+						destAddr = netip.AddrFrom4([4]byte{127, 0, 0, 1})
+					} else {
+						destAddr = netip.IPv6Loopback()
+					}
+				}
+
+				header := &proxyproto.Header{
+					Version:    byte(ver),
+					Command:    proxyproto.PROXY,
+					SourceAddr: net.TCPAddrFromAddrPort(proxySrcAddr),
+					DestinationAddr: &net.TCPAddr{
+						IP:   destAddr.AsSlice(),
+						Port: backAddr.Port,
+					},
+				}
+				if is4 {
+					header.TransportProtocol = proxyproto.TCPv4
+				} else {
+					header.TransportProtocol = proxyproto.TCPv6
+				}
+				var err error
+				proxyHeader, err = header.Format()
+				if err != nil {
+					b.logf("localbackend: failed to format proxy protocol header for port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
+				}
+			}
+
 			// TODO(bradfitz): do the RegisterIPPortIdentity and
 			// UnregisterIPPortIdentity stuff that netstack does
 			errc := make(chan error, 1)
 			go func() {
+				if len(proxyHeader) > 0 {
+					if _, err := backConn.Write(proxyHeader); err != nil {
+						errc <- err
+						backConn.Close() // to ensure that the other side gets EOF
+						return
+					}
+				}
 				_, err := io.Copy(backConn, conn)
 				errc <- err
 			}()
@@ -528,7 +766,7 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 
 	hostname := r.Host
 	if r.TLS == nil {
-		tcd := "." + b.Status().CurrentTailnet.MagicDNSSuffix
+		tcd := "." + b.CurrentProfile().NetworkProfile().MagicDNSName
 		if host, _, err := net.SplitHostPort(hostname); err == nil {
 			hostname = host
 		}
@@ -544,7 +782,7 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 		b.logf("[unexpected] localbackend: no serveHTTPContext in request")
 		return z, "", false
 	}
-	wsc, ok := b.webServerConfig(hostname, sctx.DestPort)
+	wsc, ok := b.webServerConfig(hostname, sctx.ForVIPService, sctx.DestPort)
 	if !ok {
 		return z, "", false
 	}
@@ -600,8 +838,8 @@ type reverseProxy struct {
 	insecure      bool
 	backend       string
 	lb            *LocalBackend
-	httpTransport lazy.SyncValue[*http.Transport]  // transport for non-h2c backends
-	h2cTransport  lazy.SyncValue[*http2.Transport] // transport for h2c backends
+	httpTransport lazy.SyncValue[*http.Transport] // transport for non-h2c backends
+	h2cTransport  lazy.SyncValue[*http.Transport] // transport for h2c backends
 	// closed tracks whether proxy is closed/currently closing.
 	closed atomic.Bool
 }
@@ -609,9 +847,7 @@ type reverseProxy struct {
 // close ensures that any open backend connections get closed.
 func (rp *reverseProxy) close() {
 	rp.closed.Store(true)
-	if h2cT := rp.h2cTransport.Get(func() *http2.Transport {
-		return nil
-	}); h2cT != nil {
+	if h2cT := rp.h2cTransport.Get(func() *http.Transport { return nil }); h2cT != nil {
 		h2cT.CloseIdleConnections()
 	}
 	if httpTransport := rp.httpTransport.Get(func() *http.Transport {
@@ -645,9 +881,11 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Out.Host = r.In.Host
 		addProxyForwardedHeaders(r)
 		rp.lb.addTailscaleIdentityHeaders(r)
-	}}
-
-	// There is no way to autodetect h2c as per RFC 9113
+		if err := rp.lb.addAppCapabilitiesHeader(r); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}} // There is no way to autodetect h2c as per RFC 9113
 	// https://datatracker.ietf.org/doc/html/rfc9113#name-starting-http-2.
 	// However, we assume that http:// proxy prefix in combination with the
 	// protoccol being HTTP/2 is sufficient to detect h2c for our needs. Only use this for
@@ -682,14 +920,17 @@ func (rp *reverseProxy) getTransport() *http.Transport {
 
 // getH2CTransport returns the Transport used for GRPC requests to the backend.
 // The Transport gets created lazily, at most once.
-func (rp *reverseProxy) getH2CTransport() *http2.Transport {
-	return rp.h2cTransport.Get(func() *http2.Transport {
-		return &http2.Transport{
-			AllowHTTP: true,
-			DialTLSContext: func(ctx context.Context, network string, addr string, _ *tls.Config) (net.Conn, error) {
+func (rp *reverseProxy) getH2CTransport() http.RoundTripper {
+	return rp.h2cTransport.Get(func() *http.Transport {
+		var p http.Protocols
+		p.SetUnencryptedHTTP2(true)
+		tr := &http.Transport{
+			Protocols: &p,
+			DialTLSContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
 				return rp.lb.dialer.SystemDial(ctx, "tcp", rp.url.Host)
 			},
 		}
+		return tr
 	})
 }
 
@@ -766,6 +1007,53 @@ func encTailscaleHeaderValue(v string) string {
 	return mime.QEncoding.Encode("utf-8", v)
 }
 
+func (b *LocalBackend) addAppCapabilitiesHeader(r *httputil.ProxyRequest) error {
+	const appCapabilitiesHeaderName = "Tailscale-App-Capabilities"
+	r.Out.Header.Del(appCapabilitiesHeaderName)
+
+	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
+	if !ok || c.Funnel != nil {
+		return nil
+	}
+	acceptCaps := c.AppCapabilities
+	if acceptCaps.IsNil() {
+		return nil
+	}
+	peerCaps := b.PeerCaps(c.SrcAddr.Addr())
+	if peerCaps == nil {
+		return nil
+	}
+
+	peerCapsFiltered := make(map[tailcfg.PeerCapability][]tailcfg.RawMessage, acceptCaps.Len())
+	for _, cap := range acceptCaps.AsSlice() {
+		if peerCaps.HasCapability(cap) {
+			peerCapsFiltered[cap] = peerCaps[cap]
+		}
+	}
+
+	peerCapsSerialized, err := json.Marshal(peerCapsFiltered)
+	if err != nil {
+		b.logf("serve: failed to serialize filtered PeerCapMap: %v", err)
+		return fmt.Errorf("unable to process app capabilities")
+	}
+
+	r.Out.Header.Set(appCapabilitiesHeaderName, encTailscaleHeaderValue(string(peerCapsSerialized)))
+	return nil
+}
+
+// parseRedirectWithCode parses a redirect string that may optionally start with
+// a HTTP redirect status code ("3xx:").
+// Returns the status code and the final redirect URL.
+// If no code prefix is found, returns http.StatusFound (302).
+func parseRedirectWithCode(redirect string) (code int, url string) {
+	if len(redirect) >= 4 && redirect[3] == ':' {
+		if statusCode, err := strconv.Atoi(redirect[:3]); err == nil && statusCode >= 300 && statusCode <= 399 {
+			return statusCode, redirect[4:]
+		}
+	}
+	return http.StatusFound, redirect
+}
+
 // serveWebHandler is an http.HandlerFunc that maps incoming requests to the
 // correct *http.
 func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
@@ -779,6 +1067,13 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, s)
 		return
 	}
+	if v := h.Redirect(); v != "" {
+		code, v := parseRedirectWithCode(v)
+		v = strings.ReplaceAll(v, "${HOST}", r.Host)
+		v = strings.ReplaceAll(v, "${REQUEST_URI}", r.RequestURI)
+		http.Redirect(w, r, v, code)
+		return
+	}
 	if v := h.Path(); v != "" {
 		b.serveFileOrDirectory(w, r, v, mountPoint)
 		return
@@ -789,6 +1084,12 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown proxy destination", http.StatusInternalServerError)
 			return
 		}
+		// Inject app capabilities to forward into the request context
+		c, ok := serveHTTPContextKey.ValueOk(r.Context())
+		if !ok {
+			return
+		}
+		c.AppCapabilities = h.AcceptAppCaps()
 		h := p.(http.Handler)
 		// Trim the mount point from the URL path before proxying. (#6571)
 		if r.URL.Path != "/" {
@@ -902,24 +1203,29 @@ func allNumeric(s string) bool {
 	return s != ""
 }
 
-func (b *LocalBackend) webServerConfig(hostname string, port uint16) (c ipn.WebServerConfigView, ok bool) {
-	key := ipn.HostPort(fmt.Sprintf("%s:%v", hostname, port))
-
+func (b *LocalBackend) webServerConfig(hostname string, forVIPService tailcfg.ServiceName, port uint16) (c ipn.WebServerConfigView, ok bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	if !b.serveConfig.Valid() {
 		return c, false
 	}
+	if forVIPService != "" {
+		magicDNSSuffix := b.currentNode().NetMap().MagicDNSSuffix()
+		fqdn := strings.Join([]string{forVIPService.WithoutPrefix(), magicDNSSuffix}, ".")
+		key := ipn.HostPort(net.JoinHostPort(fqdn, fmt.Sprintf("%d", port)))
+		return b.serveConfig.FindServiceWeb(forVIPService, key)
+	}
+	key := ipn.HostPort(net.JoinHostPort(hostname, fmt.Sprintf("%d", port)))
 	return b.serveConfig.FindWeb(key)
 }
 
-func (b *LocalBackend) getTLSServeCertForPort(port uint16) func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+func (b *LocalBackend) getTLSServeCertForPort(port uint16, forVIPService tailcfg.ServiceName) func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		if hi == nil || hi.ServerName == "" {
 			return nil, errors.New("no SNI ServerName")
 		}
-		_, ok := b.webServerConfig(hi.ServerName, port)
+		_, ok := b.webServerConfig(hi.ServerName, forVIPService, port)
 		if !ok {
 			return nil, errors.New("no webserver configured for name/port")
 		}
@@ -936,4 +1242,327 @@ func (b *LocalBackend) getTLSServeCertForPort(port uint16) func(hi *tls.ClientHe
 		}
 		return &cert, nil
 	}
+}
+
+// setServeProxyHandlersLocked ensures there is an http proxy handler for each
+// backend specified in serveConfig. It expects serveConfig to be valid and
+// up-to-date, so should be called after reloadServeConfigLocked.
+func (b *LocalBackend) setServeProxyHandlersLocked() {
+	if !b.serveConfig.Valid() {
+		return
+	}
+	var backends map[string]bool
+	for _, conf := range b.serveConfig.Webs() {
+		for _, h := range conf.Handlers().All() {
+			backend := h.Proxy()
+			if backend == "" {
+				// Only create proxy handlers for servers with a proxy backend.
+				continue
+			}
+			mak.Set(&backends, backend, true)
+			if _, ok := b.serveProxyHandlers.Load(backend); ok {
+				continue
+			}
+
+			b.logf("serve: creating a new proxy handler for %s", backend)
+			p, err := b.proxyHandlerForBackend(backend)
+			if err != nil {
+				// The backend endpoint (h.Proxy) should have been validated by expandProxyTarget
+				// in the CLI, so just log the error here.
+				b.logf("[unexpected] could not create proxy for %v: %s", backend, err)
+				continue
+			}
+			b.serveProxyHandlers.Store(backend, p)
+		}
+	}
+
+	// Clean up handlers for proxy backends that are no longer present
+	// in configuration.
+	b.serveProxyHandlers.Range(func(key, value any) bool {
+		backend := key.(string)
+		if !backends[backend] {
+			b.logf("serve: closing idle connections to %s", backend)
+			b.serveProxyHandlers.Delete(backend)
+			value.(*reverseProxy).close()
+		}
+		return true
+	})
+}
+
+// VIPServices returns the list of tailnet services that this node
+// is serving as a destination for.
+// The returned memory is owned by the caller.
+func (b *LocalBackend) VIPServices() []*tailcfg.VIPService {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.vipServicesFromPrefsLocked(b.pm.CurrentPrefs())
+}
+
+func handleC2NVIPServicesGet(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
+	b.logf("c2n: GET /vip-services received")
+	var res tailcfg.C2NVIPServicesResponse
+	res.VIPServices = b.VIPServices()
+	res.ServicesHash = vipServiceHash(b.logf, res.VIPServices)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
+}
+
+var metricIngressCalls = clientmetric.NewCounter("peerapi_ingress")
+
+func init() {
+	RegisterPeerAPIHandler("/v0/ingress", handleServeIngress)
+
+}
+
+func handleServeIngress(ph PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
+	h := ph.(*peerAPIHandler)
+	metricIngressCalls.Add(1)
+
+	// http.Errors only useful if hitting endpoint manually
+	// otherwise rely on log lines when debugging ingress connections
+	// as connection is hijacked for bidi and is encrypted tls
+	if !h.canIngress() {
+		h.logf("ingress: denied; no ingress cap from %v", h.remoteAddr)
+		http.Error(w, "denied; no ingress cap", http.StatusForbidden)
+		return
+	}
+	logAndError := func(code int, publicMsg string) {
+		h.logf("ingress: bad request from %v: %s", h.remoteAddr, publicMsg)
+		http.Error(w, publicMsg, code)
+	}
+	bad := func(publicMsg string) {
+		logAndError(http.StatusBadRequest, publicMsg)
+	}
+	if r.Method != "POST" {
+		logAndError(http.StatusMethodNotAllowed, "only POST allowed")
+		return
+	}
+	srcAddrStr := r.Header.Get("Tailscale-Ingress-Src")
+	if srcAddrStr == "" {
+		bad("Tailscale-Ingress-Src header not set")
+		return
+	}
+	srcAddr, err := netip.ParseAddrPort(srcAddrStr)
+	if err != nil {
+		bad("Tailscale-Ingress-Src header invalid; want ip:port")
+		return
+	}
+	target := ipn.HostPort(r.Header.Get("Tailscale-Ingress-Target"))
+	if target == "" {
+		bad("Tailscale-Ingress-Target header not set")
+		return
+	}
+	if _, _, err := net.SplitHostPort(string(target)); err != nil {
+		bad("Tailscale-Ingress-Target header invalid; want host:port")
+		return
+	}
+
+	getConnOrReset := func() (net.Conn, bool) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			h.logf("ingress: failed hijacking conn")
+			http.Error(w, "failed hijacking conn", http.StatusInternalServerError)
+			return nil, false
+		}
+		io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\n\r\n")
+		return &ipn.FunnelConn{
+			Conn:   conn,
+			Src:    srcAddr,
+			Target: target,
+		}, true
+	}
+	sendRST := func() {
+		http.Error(w, "denied", http.StatusForbidden)
+	}
+
+	h.ps.b.HandleIngressTCPConn(h.peerNode, target, srcAddr, getConnOrReset, sendRST)
+}
+
+// wantIngressLocked reports whether this node has ingress configured. This bool
+// is sent to the coordination server (in Hostinfo.WireIngress) as an
+// optimization hint to know primarily which nodes are NOT using ingress, to
+// avoid doing work for regular nodes.
+//
+// Even if the user's ServeConfig.AllowFunnel map was manually edited in raw
+// mode and contains map entries with false values, sending true (from Len > 0)
+// is still fine. This is only an optimization hint for the control plane and
+// doesn't affect security or correctness. And we also don't expect people to
+// modify their ServeConfig in raw mode.
+func (b *LocalBackend) wantIngressLocked() bool {
+	return b.serveConfig.Valid() && b.serveConfig.HasAllowFunnel()
+}
+
+// hasIngressEnabledLocked reports whether the node has any funnel endpoint enabled. This bool is sent to control (in
+// Hostinfo.IngressEnabled) to determine whether 'Funnel' badge should be displayed on this node in the admin panel.
+func (b *LocalBackend) hasIngressEnabledLocked() bool {
+	return b.serveConfig.Valid() && b.serveConfig.IsFunnelOn()
+}
+
+// shouldWireInactiveIngressLocked reports whether the node is in a state where funnel is not actively enabled, but it
+// seems that it is intended to be used with funnel.
+func (b *LocalBackend) shouldWireInactiveIngressLocked() bool {
+	return b.serveConfig.Valid() && !b.hasIngressEnabledLocked() && b.wantIngressLocked()
+}
+
+func serveSetTCPPortsInterceptedFromNetmapAndPrefsLocked(b *LocalBackend, prefs ipn.PrefsView) (handlePorts []uint16) {
+	var vipServicesPorts map[tailcfg.ServiceName][]uint16
+
+	b.reloadServeConfigLocked(prefs)
+	if b.serveConfig.Valid() {
+		servePorts := make([]uint16, 0, 3)
+		for port := range b.serveConfig.TCPs() {
+			if port > 0 {
+				servePorts = append(servePorts, uint16(port))
+			}
+		}
+		handlePorts = append(handlePorts, servePorts...)
+
+		for svc, cfg := range b.serveConfig.Services().All() {
+			servicePorts := make([]uint16, 0, 3)
+			for port := range cfg.TCP().All() {
+				if port > 0 {
+					servicePorts = append(servicePorts, uint16(port))
+				}
+			}
+			if _, ok := vipServicesPorts[svc]; !ok {
+				mak.Set(&vipServicesPorts, svc, servicePorts)
+			} else {
+				mak.Set(&vipServicesPorts, svc, append(vipServicesPorts[svc], servicePorts...))
+			}
+		}
+
+		b.setServeProxyHandlersLocked()
+
+		// don't listen on netmap addresses if we're in userspace mode
+		if !b.sys.IsNetstack() {
+			b.updateServeTCPPortNetMapAddrListenersLocked(servePorts)
+		}
+	}
+
+	b.setVIPServicesTCPPortsInterceptedLocked(vipServicesPorts)
+
+	return handlePorts
+}
+
+// reloadServeConfigLocked reloads the serve config from the store or resets the
+// serve config to nil if not logged in. The "changed" parameter, when false, instructs
+// the method to only run the reset-logic and not reload the store from memory to ensure
+// foreground sessions are not removed if they are not saved on disk.
+func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
+	if !b.currentNode().Self().Valid() || !prefs.Valid() || b.pm.CurrentProfile().ID() == "" {
+		// We're not logged in, so we don't have a profile.
+		// Don't try to load the serve config.
+		b.lastServeConfJSON = mem.B(nil)
+		b.serveConfig = ipn.ServeConfigView{}
+		return
+	}
+
+	confKey := ipn.ServeConfigKey(b.pm.CurrentProfile().ID())
+	// TODO(maisem,bradfitz): prevent reading the config from disk
+	// if the profile has not changed.
+	confj, err := b.store.ReadState(confKey)
+	if err != nil {
+		b.lastServeConfJSON = mem.B(nil)
+		b.serveConfig = ipn.ServeConfigView{}
+		return
+	}
+	if b.lastServeConfJSON.Equal(mem.B(confj)) {
+		return
+	}
+	b.lastServeConfJSON = mem.B(confj)
+	var conf ipn.ServeConfig
+	if err := json.Unmarshal(confj, &conf); err != nil {
+		b.logf("invalid ServeConfig %q in StateStore: %v", confKey, err)
+		b.serveConfig = ipn.ServeConfigView{}
+		return
+	}
+
+	// remove inactive sessions
+	maps.DeleteFunc(conf.Foreground, func(sessionID string, sc *ipn.ServeConfig) bool {
+		_, ok := b.notifyWatchers[sessionID]
+		return !ok
+	})
+
+	b.serveConfig = conf.View()
+}
+
+func (b *LocalBackend) setVIPServicesTCPPortsInterceptedLocked(svcPorts map[tailcfg.ServiceName][]uint16) {
+	if len(svcPorts) == 0 {
+		b.shouldInterceptVIPServicesTCPPortAtomic.Store(func(netip.AddrPort) bool { return false })
+		return
+	}
+	nm := b.currentNode().NetMap()
+	if nm == nil {
+		b.logf("can't set intercept function for Service TCP Ports, netMap is nil")
+		return
+	}
+	vipServiceIPMap := nm.GetVIPServiceIPMap()
+	if len(vipServiceIPMap) == 0 {
+		// No approved VIP Services
+		return
+	}
+
+	svcAddrPorts := make(map[netip.Addr]func(uint16) bool)
+	// Only set the intercept function if the service has been assigned a VIP.
+	for svcName, ports := range svcPorts {
+		addrs, ok := vipServiceIPMap[svcName]
+		if !ok {
+			continue
+		}
+		interceptFn := generateInterceptTCPPortFunc(ports)
+		for _, addr := range addrs {
+			svcAddrPorts[addr] = interceptFn
+		}
+	}
+
+	b.shouldInterceptVIPServicesTCPPortAtomic.Store(generateInterceptVIPServicesTCPPortFunc(svcAddrPorts))
+}
+
+func maybeUpdateHostinfoServicesHashLocked(b *LocalBackend, hi *tailcfg.Hostinfo, prefs ipn.PrefsView) bool {
+	latestHash := vipServiceHash(b.logf, b.vipServicesFromPrefsLocked(prefs))
+	if hi.ServicesHash != latestHash {
+		hi.ServicesHash = latestHash
+		return true
+	}
+	return false
+}
+
+func maybeUpdateHostinfoFunnelLocked(b *LocalBackend, hi *tailcfg.Hostinfo, prefs ipn.PrefsView) (changed bool) {
+	// The Hostinfo.IngressEnabled field is used to communicate to control whether
+	// the node has funnel enabled.
+	if ie := b.hasIngressEnabledLocked(); hi.IngressEnabled != ie {
+		b.logf("Hostinfo.IngressEnabled changed to %v", ie)
+		hi.IngressEnabled = ie
+		changed = true
+	}
+	// The Hostinfo.WireIngress field tells control whether the user intends
+	// to use funnel with this node even though it is not currently enabled.
+	// This is an optimization to control- Funnel requires creation of DNS
+	// records and because DNS propagation can take time, we want to ensure
+	// that the records exist for any node that intends to use funnel even
+	// if it's not enabled. If hi.IngressEnabled is true, control knows that
+	// DNS records are needed, so we can save bandwidth and not send
+	// WireIngress.
+	if wire := b.shouldWireInactiveIngressLocked(); hi.WireIngress != wire {
+		b.logf("Hostinfo.WireIngress changed to %v", wire)
+		hi.WireIngress = wire
+		changed = true
+	}
+	return changed
+}
+
+func vipServiceHash(logf logger.Logf, services []*tailcfg.VIPService) string {
+	if len(services) == 0 {
+		return ""
+	}
+	h := sha256.New()
+	jh := json.NewEncoder(h)
+	if err := jh.Encode(services); err != nil {
+		logf("vipServiceHashLocked: %v", err)
+		return ""
+	}
+	var buf [sha256.Size]byte
+	h.Sum(buf[:0])
+	return hex.EncodeToString(buf[:])
 }

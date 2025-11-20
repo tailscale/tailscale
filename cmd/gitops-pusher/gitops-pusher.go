@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -58,8 +59,8 @@ func apply(cache *Cache, client *http.Client, tailnet, apiKey string) func(conte
 		}
 
 		if cache.PrevETag == "" {
-			log.Println("no previous etag found, assuming local file is correct and recording that")
-			cache.PrevETag = localEtag
+			log.Println("no previous etag found, assuming the latest control etag")
+			cache.PrevETag = controlEtag
 		}
 
 		log.Printf("control: %s", controlEtag)
@@ -105,8 +106,8 @@ func test(cache *Cache, client *http.Client, tailnet, apiKey string) func(contex
 		}
 
 		if cache.PrevETag == "" {
-			log.Println("no previous etag found, assuming local file is correct and recording that")
-			cache.PrevETag = localEtag
+			log.Println("no previous etag found, assuming the latest control etag")
+			cache.PrevETag = controlEtag
 		}
 
 		log.Printf("control: %s", controlEtag)
@@ -148,8 +149,8 @@ func getChecksums(cache *Cache, client *http.Client, tailnet, apiKey string) fun
 		}
 
 		if cache.PrevETag == "" {
-			log.Println("no previous etag found, assuming local file is correct and recording that")
-			cache.PrevETag = Shuck(localEtag)
+			log.Println("no previous etag found, assuming control etag")
+			cache.PrevETag = Shuck(controlEtag)
 		}
 
 		log.Printf("control: %s", controlEtag)
@@ -405,7 +406,8 @@ func getACLETag(ctx context.Context, client *http.Client, tailnet, apiKey string
 	got := resp.StatusCode
 	want := http.StatusOK
 	if got != want {
-		return "", fmt.Errorf("wanted HTTP status code %d but got %d", want, got)
+		errorDetails, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("wanted HTTP status code %d but got %d: %#q", want, got, string(errorDetails))
 	}
 
 	return Shuck(resp.Header.Get("ETag")), nil

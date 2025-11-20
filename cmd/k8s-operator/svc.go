@@ -41,6 +41,8 @@ const (
 	reasonProxyInvalid = "ProxyInvalid"
 	reasonProxyFailed  = "ProxyFailed"
 	reasonProxyPending = "ProxyPending"
+
+	indexServiceProxyClass = ".metadata.annotations.service-proxy-class"
 )
 
 type ServiceReconciler struct {
@@ -64,7 +66,7 @@ type ServiceReconciler struct {
 
 	clock tstime.Clock
 
-	proxyDefaultClass string
+	defaultProxyClass string
 }
 
 var (
@@ -84,10 +86,10 @@ func childResourceLabels(name, ns, typ string) map[string]string {
 	// proxying. Instead, we have to do our own filtering and tracking with
 	// labels.
 	return map[string]string{
-		LabelManaged:         "true",
-		LabelParentName:      name,
-		LabelParentNamespace: ns,
-		LabelParentType:      typ,
+		kubetypes.LabelManaged: "true",
+		LabelParentName:        name,
+		LabelParentNamespace:   ns,
+		LabelParentType:        typ,
 	}
 }
 
@@ -112,12 +114,24 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		return reconcile.Result{}, fmt.Errorf("failed to get svc: %w", err)
 	}
 
+	if _, ok := svc.Annotations[AnnotationProxyGroup]; ok {
+		return reconcile.Result{}, nil // this reconciler should not look at Services for ProxyGroup
+	}
+
 	if !svc.DeletionTimestamp.IsZero() || !a.isTailscaleService(svc) {
 		logger.Debugf("service is being deleted or is (no longer) referring to Tailscale ingress/egress, ensuring any created resources are cleaned up")
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, svc)
 	}
 
-	return reconcile.Result{}, a.maybeProvision(ctx, logger, svc)
+	if err := a.maybeProvision(ctx, logger, svc); err != nil {
+		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			logger.Infof("optimistic lock error, retrying: %s", err)
+		} else {
+			return reconcile.Result{}, err
+		}
+	}
+
+	return reconcile.Result{}, nil
 }
 
 // maybeCleanup removes any existing resources related to serving svc over tailscale.
@@ -127,7 +141,7 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) (err error) {
 	oldSvcStatus := svc.Status.DeepCopy()
 	defer func() {
-		if !apiequality.Semantic.DeepEqual(oldSvcStatus, svc.Status) {
+		if !apiequality.Semantic.DeepEqual(oldSvcStatus, &svc.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			err = errors.Join(err, a.Client.Status().Update(ctx, svc))
 		}
@@ -148,7 +162,12 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 		return nil
 	}
 
-	if done, err := a.ssr.Cleanup(ctx, logger, childResourceLabels(svc.Name, svc.Namespace, "svc")); err != nil {
+	proxyTyp := proxyTypeEgress
+	if a.shouldExpose(svc) {
+		proxyTyp = proxyTypeIngressService
+	}
+
+	if done, err := a.ssr.Cleanup(ctx, logger, childResourceLabels(svc.Name, svc.Namespace, "svc"), proxyTyp); err != nil {
 		return fmt.Errorf("failed to cleanup: %w", err)
 	} else if !done {
 		logger.Debugf("cleanup not done yet, waiting for next reconcile")
@@ -187,7 +206,7 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) (err error) {
 	oldSvcStatus := svc.Status.DeepCopy()
 	defer func() {
-		if !apiequality.Semantic.DeepEqual(oldSvcStatus, svc.Status) {
+		if !apiequality.Semantic.DeepEqual(oldSvcStatus, &svc.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			err = errors.Join(err, a.Client.Status().Update(ctx, svc))
 		}
@@ -211,7 +230,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
-	proxyClass := proxyClassForObject(svc, a.proxyDefaultClass)
+	proxyClass := proxyClassForObject(svc, a.defaultProxyClass)
 	if proxyClass != "" {
 		if ready, err := proxyClassIsReady(ctx, proxyClass, a.Client); err != nil {
 			errMsg := fmt.Errorf("error verifying ProxyClass for Service: %w", err)
@@ -245,12 +264,18 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 
 	sts := &tailscaleSTSConfig{
+		Replicas:            1,
 		ParentResourceName:  svc.Name,
 		ParentResourceUID:   string(svc.UID),
 		Hostname:            nameForService(svc),
 		Tags:                tags,
 		ChildResourceLabels: crl,
 		ProxyClassName:      proxyClass,
+		LoginServer:         a.ssr.loginServer,
+	}
+	sts.proxyType = proxyTypeEgress
+	if a.shouldExpose(svc) {
+		sts.proxyType = proxyTypeIngressService
 	}
 
 	a.mu.Lock()
@@ -307,11 +332,12 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
-	_, tsHost, tsIPs, err := a.ssr.DeviceInfo(ctx, crl)
+	devices, err := a.ssr.DeviceInfo(ctx, crl, logger)
 	if err != nil {
 		return fmt.Errorf("failed to get device ID: %w", err)
 	}
-	if tsHost == "" {
+
+	if len(devices) == 0 || devices[0].hostname == "" {
 		msg := "no Tailscale hostname known yet, waiting for proxy pod to finish auth"
 		logger.Debug(msg)
 		// No hostname yet. Wait for the proxy pod to auth.
@@ -320,17 +346,21 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
-	logger.Debugf("setting Service LoadBalancer status to %q, %s", tsHost, strings.Join(tsIPs, ", "))
+	dev := devices[0]
+	logger.Debugf("setting Service LoadBalancer status to %q, %s", dev.hostname, strings.Join(dev.ips, ", "))
+
 	ingress := []corev1.LoadBalancerIngress{
-		{Hostname: tsHost},
+		{Hostname: dev.hostname},
 	}
+
 	clusterIPAddr, err := netip.ParseAddr(svc.Spec.ClusterIP)
 	if err != nil {
 		msg := fmt.Sprintf("failed to parse cluster IP: %v", err)
 		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, msg, a.clock, logger)
 		return errors.New(msg)
 	}
-	for _, ip := range tsIPs {
+
+	for _, ip := range dev.ips {
 		addr, err := netip.ParseAddr(ip)
 		if err != nil {
 			continue
@@ -339,6 +369,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 			ingress = append(ingress, corev1.LoadBalancerIngress{IP: ip})
 		}
 	}
+
 	svc.Status.LoadBalancer.Ingress = ingress
 	tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
 	return nil
@@ -354,9 +385,14 @@ func validateService(svc *corev1.Service) []string {
 			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q does not appear to be a valid MagicDNS name", AnnotationTailnetTargetFQDN, fqdn))
 		}
 	}
-
-	// TODO(irbekrm): validate that tailscale.com/tailnet-ip annotation is a
-	// valid IP address (tailscale/tailscale#13671).
+	if ipStr := svc.Annotations[AnnotationTailnetTargetIP]; ipStr != "" {
+		ip, err := netip.ParseAddr(ipStr)
+		if err != nil {
+			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q could not be parsed as a valid IP Address, error: %s", AnnotationTailnetTargetIP, ipStr, err))
+		} else if !ip.IsValid() {
+			violations = append(violations, fmt.Sprintf("parsed IP address in annotation %s: %q is not valid", AnnotationTailnetTargetIP, ipStr))
+		}
+	}
 
 	svcName := nameForService(svc)
 	if err := dnsname.ValidLabel(svcName); err != nil {
@@ -366,6 +402,7 @@ func validateService(svc *corev1.Service) []string {
 			violations = append(violations, fmt.Sprintf("invalid Tailscale hostname %q, use %q annotation to override: %s", svcName, AnnotationHostname, err))
 		}
 	}
+	violations = append(violations, tagViolations(svc)...)
 	return violations
 }
 
@@ -409,16 +446,6 @@ func tailnetTargetAnnotation(svc *corev1.Service) string {
 		return ip
 	}
 	return svc.Annotations[annotationTailnetTargetIPOld]
-}
-
-// proxyClassForObject returns the proxy class for the given object. If the
-// object does not have a proxy class label, it returns the default proxy class
-func proxyClassForObject(o client.Object, proxyDefaultClass string) string {
-	proxyClass, exists := o.GetLabels()[LabelProxyClass]
-	if !exists {
-		proxyClass = proxyDefaultClass
-	}
-	return proxyClass
 }
 
 func proxyClassIsReady(ctx context.Context, name string, cl client.Client) (bool, error) {

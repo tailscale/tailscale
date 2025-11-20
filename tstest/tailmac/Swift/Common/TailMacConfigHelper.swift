@@ -141,5 +141,18 @@ struct TailMacConfigHelper {
     func createKeyboardConfiguration() -> VZKeyboardConfiguration {
         return VZMacKeyboardConfiguration()
     }
+
+    func createDirectoryShareConfiguration(tag: String) -> VZDirectorySharingDeviceConfiguration? {
+        guard let dir = config.sharedDir else { return nil }
+
+        let sharedDir = VZSharedDirectory(url: URL(fileURLWithPath: dir), readOnly: false)
+        let share = VZSingleDirectoryShare(directory: sharedDir)
+
+        // Create the VZVirtioFileSystemDeviceConfiguration and assign it a unique tag.
+        let sharingConfiguration = VZVirtioFileSystemDeviceConfiguration(tag: tag)
+        sharingConfiguration.share = share
+
+        return sharingConfiguration
+    }
 }
 

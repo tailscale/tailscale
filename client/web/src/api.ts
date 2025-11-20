@@ -249,7 +249,6 @@ export function useAPI() {
   return api
 }
 
-let csrfToken: string
 let synoToken: string | undefined // required for synology API requests
 let unraidCsrfToken: string | undefined // required for unraid POST requests (#8062)
 
@@ -298,12 +297,10 @@ export function apiFetch<T>(
     headers: {
       Accept: "application/json",
       "Content-Type": contentType,
-      "X-CSRF-Token": csrfToken,
     },
     body: body,
   })
     .then((r) => {
-      updateCsrfToken(r)
       if (!r.ok) {
         return r.text().then((err) => {
           throw new Error(err)
@@ -320,13 +317,6 @@ export function apiFetch<T>(
       r?.UnraidToken && setUnraidCsrfToken(r.UnraidToken)
       return r
     })
-}
-
-function updateCsrfToken(r: Response) {
-  const tok = r.headers.get("X-CSRF-Token")
-  if (tok) {
-    csrfToken = tok
-  }
 }
 
 export function setSynoToken(token?: string) {

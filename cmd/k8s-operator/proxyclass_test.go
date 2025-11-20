@@ -8,10 +8,12 @@
 package main
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -34,10 +36,10 @@ func TestProxyClass(t *testing.T) {
 		},
 		Spec: tsapi.ProxyClassSpec{
 			StatefulSet: &tsapi.StatefulSet{
-				Labels:      map[string]string{"foo": "bar", "xyz1234": "abc567"},
+				Labels:      tsapi.Labels{"foo": "bar", "xyz1234": "abc567"},
 				Annotations: map[string]string{"foo.io/bar": "{'key': 'val1232'}"},
 				Pod: &tsapi.Pod{
-					Labels:      map[string]string{"foo": "bar", "xyz1234": "abc567"},
+					Labels:      tsapi.Labels{"foo": "bar", "xyz1234": "abc567"},
 					Annotations: map[string]string{"foo.io/bar": "{'key': 'val1232'}"},
 					TailscaleContainer: &tsapi.Container{
 						Env:             []tsapi.Env{{Name: "FOO", Value: "BAR"}},
@@ -69,14 +71,14 @@ func TestProxyClass(t *testing.T) {
 	// 1. A valid ProxyClass resource gets its status updated to Ready.
 	expectReconciled(t, pcr, "", "test")
 	pc.Status.Conditions = append(pc.Status.Conditions, metav1.Condition{
-		Type:               string(tsapi.ProxyClassready),
+		Type:               string(tsapi.ProxyClassReady),
 		Status:             metav1.ConditionTrue,
 		Reason:             reasonProxyClassValid,
 		Message:            reasonProxyClassValid,
 		LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
 	})
 
-	expectEqual(t, fc, pc, nil)
+	expectEqual(t, fc, pc)
 
 	// 2. A ProxyClass resource with invalid labels gets its status updated to Invalid with an error message.
 	pc.Spec.StatefulSet.Labels["foo"] = "?!someVal"
@@ -85,8 +87,8 @@ func TestProxyClass(t *testing.T) {
 	})
 	expectReconciled(t, pcr, "", "test")
 	msg := `ProxyClass is not valid: .spec.statefulSet.labels: Invalid value: "?!someVal": a valid label must be an empty string or consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyValue',  or 'my_value',  or '12345', regex used for validation is '(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?')`
-	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassready, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
-	expectEqual(t, fc, pc, nil)
+	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
+	expectEqual(t, fc, pc)
 	expectedEvent := "Warning ProxyClassInvalid ProxyClass is not valid: .spec.statefulSet.labels: Invalid value: \"?!someVal\": a valid label must be an empty string or consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyValue',  or 'my_value',  or '12345', regex used for validation is '(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?')"
 	expectEvents(t, fr, []string{expectedEvent})
 
@@ -99,8 +101,8 @@ func TestProxyClass(t *testing.T) {
 	})
 	expectReconciled(t, pcr, "", "test")
 	msg = `ProxyClass is not valid: spec.statefulSet.pod.tailscaleContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase`
-	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassready, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
-	expectEqual(t, fc, pc, nil)
+	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
+	expectEqual(t, fc, pc)
 	expectedEvent = `Warning ProxyClassInvalid ProxyClass is not valid: spec.statefulSet.pod.tailscaleContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase`
 	expectEvents(t, fr, []string{expectedEvent})
 
@@ -118,8 +120,8 @@ func TestProxyClass(t *testing.T) {
 	})
 	expectReconciled(t, pcr, "", "test")
 	msg = `ProxyClass is not valid: spec.statefulSet.pod.tailscaleInitContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase`
-	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassready, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
-	expectEqual(t, fc, pc, nil)
+	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
+	expectEqual(t, fc, pc)
 	expectedEvent = `Warning ProxyClassInvalid ProxyClass is not valid: spec.statefulSet.pod.tailscaleInitContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase`
 	expectEvents(t, fr, []string{expectedEvent})
 
@@ -129,9 +131,210 @@ func TestProxyClass(t *testing.T) {
 		proxyClass.Spec.StatefulSet.Pod.TailscaleInitContainer.Image = pc.Spec.StatefulSet.Pod.TailscaleInitContainer.Image
 		proxyClass.Spec.StatefulSet.Pod.TailscaleContainer.Env = []tsapi.Env{{Name: "TS_USERSPACE", Value: "true"}, {Name: "EXPERIMENTAL_TS_CONFIGFILE_PATH"}, {Name: "EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS"}}
 	})
-	expectedEvents := []string{"Warning CustomTSEnvVar ProxyClass overrides the default value for TS_USERSPACE env var for tailscale container. Running with custom values for Tailscale env vars is not recommended and might break in the future.",
+	expectedEvents := []string{
+		"Warning CustomTSEnvVar ProxyClass overrides the default value for TS_USERSPACE env var for tailscale container. Running with custom values for Tailscale env vars is not recommended and might break in the future.",
 		"Warning CustomTSEnvVar ProxyClass overrides the default value for EXPERIMENTAL_TS_CONFIGFILE_PATH env var for tailscale container. Running with custom values for Tailscale env vars is not recommended and might break in the future.",
-		"Warning CustomTSEnvVar ProxyClass overrides the default value for EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS env var for tailscale container. Running with custom values for Tailscale env vars is not recommended and might break in the future."}
+		"Warning CustomTSEnvVar ProxyClass overrides the default value for EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS env var for tailscale container. Running with custom values for Tailscale env vars is not recommended and might break in the future.",
+	}
 	expectReconciled(t, pcr, "", "test")
 	expectEvents(t, fr, expectedEvents)
+
+	// 6. A ProxyClass with ServiceMonitor enabled and in a cluster that has not ServiceMonitor CRD is invalid
+	pc.Spec.Metrics = &tsapi.Metrics{Enable: true, ServiceMonitor: &tsapi.ServiceMonitor{Enable: true}}
+	mustUpdate(t, fc, "", "test", func(proxyClass *tsapi.ProxyClass) {
+		proxyClass.Spec = pc.Spec
+	})
+	expectReconciled(t, pcr, "", "test")
+	msg = `ProxyClass is not valid: spec.metrics.serviceMonitor: Invalid value: "enable": ProxyClass defines that a ServiceMonitor custom resource should be created, but "servicemonitors.monitoring.coreos.com" CRD was not found`
+	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
+	expectEqual(t, fc, pc)
+	expectedEvent = "Warning ProxyClassInvalid " + msg
+	expectEvents(t, fr, []string{expectedEvent})
+
+	// 7. A ProxyClass with ServiceMonitor enabled and in a cluster that does have the ServiceMonitor CRD is valid
+	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
+	mustCreate(t, fc, crd)
+	expectReconciled(t, pcr, "", "test")
+	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionTrue, reasonProxyClassValid, reasonProxyClassValid, 0, cl, zl.Sugar())
+	expectEqual(t, fc, pc)
+
+	// 7. A ProxyClass with invalid ServiceMonitor labels gets its status updated to Invalid with an error message.
+	pc.Spec.Metrics.ServiceMonitor.Labels = tsapi.Labels{"foo": "bar!"}
+	mustUpdate(t, fc, "", "test", func(proxyClass *tsapi.ProxyClass) {
+		proxyClass.Spec.Metrics.ServiceMonitor.Labels = pc.Spec.Metrics.ServiceMonitor.Labels
+	})
+	expectReconciled(t, pcr, "", "test")
+	msg = `ProxyClass is not valid: .spec.metrics.serviceMonitor.labels: Invalid value: "bar!": a valid label must be an empty string or consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyValue',  or 'my_value',  or '12345', regex used for validation is '(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?')`
+	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
+	expectEqual(t, fc, pc)
+
+	// 8. A ProxyClass with valid ServiceMonitor labels gets its status updated to Valid.
+	pc.Spec.Metrics.ServiceMonitor.Labels = tsapi.Labels{"foo": "bar", "xyz1234": "abc567", "empty": "", "onechar": "a"}
+	mustUpdate(t, fc, "", "test", func(proxyClass *tsapi.ProxyClass) {
+		proxyClass.Spec.Metrics.ServiceMonitor.Labels = pc.Spec.Metrics.ServiceMonitor.Labels
+	})
+	expectReconciled(t, pcr, "", "test")
+	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionTrue, reasonProxyClassValid, reasonProxyClassValid, 0, cl, zl.Sugar())
+	expectEqual(t, fc, pc)
+}
+
+func TestValidateProxyClassStaticEndpoints(t *testing.T) {
+	for name, tc := range map[string]struct {
+		staticEndpointConfig *tsapi.StaticEndpointsConfig
+		valid                bool
+	}{
+		"no_static_endpoints": {
+			staticEndpointConfig: nil,
+			valid:                true,
+		},
+		"valid_specific_ports": {
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 3001},
+						{Port: 3005},
+					},
+					Selector: map[string]string{"kubernetes.io/hostname": "foobar"},
+				},
+			},
+			valid: true,
+		},
+		"valid_port_ranges": {
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 3000, EndPort: 3002},
+						{Port: 3005, EndPort: 3007},
+					},
+					Selector: map[string]string{"kubernetes.io/hostname": "foobar"},
+				},
+			},
+			valid: true,
+		},
+		"overlapping_port_ranges": {
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 1000, EndPort: 2000},
+						{Port: 1500, EndPort: 1800},
+					},
+					Selector: map[string]string{"kubernetes.io/hostname": "foobar"},
+				},
+			},
+			valid: false,
+		},
+		"clashing_port_and_range": {
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 3005},
+						{Port: 3001, EndPort: 3010},
+					},
+					Selector: map[string]string{"kubernetes.io/hostname": "foobar"},
+				},
+			},
+			valid: false,
+		},
+		"malformed_port_range": {
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 3001, EndPort: 3000},
+					},
+					Selector: map[string]string{"kubernetes.io/hostname": "foobar"},
+				},
+			},
+			valid: false,
+		},
+		"empty_selector": {
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports:    []tsapi.PortRange{{Port: 3000}},
+					Selector: map[string]string{},
+				},
+			},
+			valid: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fc := fake.NewClientBuilder().
+				WithScheme(tsapi.GlobalScheme).
+				Build()
+			zl, _ := zap.NewDevelopment()
+			pcr := &ProxyClassReconciler{
+				logger: zl.Sugar(),
+				Client: fc,
+			}
+
+			pc := &tsapi.ProxyClass{
+				Spec: tsapi.ProxyClassSpec{
+					StaticEndpoints: tc.staticEndpointConfig,
+				},
+			}
+
+			logger := pcr.logger.With("ProxyClass", pc)
+			err := pcr.validate(context.Background(), pc, logger)
+			valid := err == nil
+			if valid != tc.valid {
+				t.Errorf("expected valid=%v, got valid=%v, err=%v", tc.valid, valid, err)
+			}
+		})
+	}
+}
+
+func TestValidateProxyClass(t *testing.T) {
+	for name, tc := range map[string]struct {
+		pc    *tsapi.ProxyClass
+		valid bool
+	}{
+		"empty": {
+			valid: true,
+			pc:    &tsapi.ProxyClass{},
+		},
+		"debug_enabled_for_main_container": {
+			valid: true,
+			pc: &tsapi.ProxyClass{
+				Spec: tsapi.ProxyClassSpec{
+					StatefulSet: &tsapi.StatefulSet{
+						Pod: &tsapi.Pod{
+							TailscaleContainer: &tsapi.Container{
+								Debug: &tsapi.Debug{
+									Enable: true,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		"debug_enabled_for_init_container": {
+			valid: false,
+			pc: &tsapi.ProxyClass{
+				Spec: tsapi.ProxyClassSpec{
+					StatefulSet: &tsapi.StatefulSet{
+						Pod: &tsapi.Pod{
+							TailscaleInitContainer: &tsapi.Container{
+								Debug: &tsapi.Debug{
+									Enable: true,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			zl, _ := zap.NewDevelopment()
+			pcr := &ProxyClassReconciler{
+				logger: zl.Sugar(),
+			}
+			logger := pcr.logger.With("ProxyClass", tc.pc)
+			err := pcr.validate(context.Background(), tc.pc, logger)
+			valid := err == nil
+			if valid != tc.valid {
+				t.Errorf("expected valid=%v, got valid=%v, err=%v", tc.valid, valid, err)
+			}
+		})
+	}
 }

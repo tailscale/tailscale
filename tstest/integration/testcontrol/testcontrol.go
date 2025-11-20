@@ -5,7 +5,9 @@
 package testcontrol
 
 import (
+	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -26,13 +28,16 @@ import (
 	"time"
 
 	"golang.org/x/net/http2"
-	"tailscale.com/control/controlhttp"
+	"tailscale.com/control/controlhttp/controlhttpserver"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/util/rands"
@@ -45,14 +50,30 @@ const msgLimit = 1 << 20 // encrypted message length limit
 // Server is a control plane server. Its zero value is ready for use.
 // Everything is stored in-memory in one tailnet.
 type Server struct {
-	Logf           logger.Logf      // nil means to use the log package
-	DERPMap        *tailcfg.DERPMap // nil means to use prod DERP map
-	RequireAuth    bool
-	RequireAuthKey string // required authkey for all nodes
-	Verbose        bool
-	DNSConfig      *tailcfg.DNSConfig // nil means no DNS config
-	MagicDNSDomain string
-	HandleC2N      http.Handler // if non-nil, used for /some-c2n-path/ in tests
+	Logf               logger.Logf      // nil means to use the log package
+	DERPMap            *tailcfg.DERPMap // nil means to use prod DERP map
+	RequireAuth        bool
+	RequireAuthKey     string // required authkey for all nodes
+	RequireMachineAuth bool
+	Verbose            bool
+	DNSConfig          *tailcfg.DNSConfig // nil means no DNS config
+	MagicDNSDomain     string
+	C2NResponses       syncs.Map[string, func(*http.Response)] // token => onResponse func
+
+	// PeerRelayGrants, if true, inserts relay capabilities into the wildcard
+	// grants rules.
+	PeerRelayGrants bool
+
+	// AllNodesSameUser, if true, makes all created nodes
+	// belong to the same user.
+	AllNodesSameUser bool
+
+	// DefaultNodeCapabilities overrides the capability map sent to each client.
+	DefaultNodeCapabilities *tailcfg.NodeCapMap
+
+	// CollectServices, if non-empty, sets whether the control server asks
+	// for service updates. If empty, the default is "true".
+	CollectServices opt.Bool
 
 	// ExplicitBaseURL or HTTPTestServer must be set.
 	ExplicitBaseURL string           // e.g. "http://127.0.0.1:1234" with no trailing URL
@@ -95,9 +116,9 @@ type Server struct {
 	logins        map[key.NodePublic]*tailcfg.Login
 	updates       map[tailcfg.NodeID]chan updateType
 	authPath      map[string]*AuthPath
-	nodeKeyAuthed map[key.NodePublic]bool // key => true once authenticated
-	msgToSend     map[key.NodePublic]any  // value is *tailcfg.PingRequest or entire *tailcfg.MapResponse
-	allExpired    bool                    // All nodes will be told their node key is expired.
+	nodeKeyAuthed set.Set[key.NodePublic]
+	msgToSend     map[key.NodePublic]any // value is *tailcfg.PingRequest or entire *tailcfg.MapResponse
+	allExpired    bool                   // All nodes will be told their node key is expired.
 }
 
 // BaseURL returns the server's base URL, without trailing slash.
@@ -172,6 +193,52 @@ func (s *Server) AwaitNodeInMapRequest(ctx context.Context, k key.NodePublic) er
 // nodeKeyDst was connected.
 func (s *Server) AddPingRequest(nodeKeyDst key.NodePublic, pr *tailcfg.PingRequest) bool {
 	return s.addDebugMessage(nodeKeyDst, pr)
+}
+
+// c2nRoundTripper is an http.RoundTripper that sends requests to a node via C2N.
+type c2nRoundTripper struct {
+	s *Server
+	n key.NodePublic
+}
+
+func (s *Server) NodeRoundTripper(n key.NodePublic) http.RoundTripper {
+	return c2nRoundTripper{s, n}
+}
+
+func (rt c2nRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	ctx := req.Context()
+	resc := make(chan *http.Response, 1)
+	if err := rt.s.SendC2N(rt.n, req, func(r *http.Response) { resc <- r }); err != nil {
+		return nil, err
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case r := <-resc:
+		return r, nil
+	}
+}
+
+// SendC2N sends req to node. When the response is received, onRes is called.
+func (s *Server) SendC2N(node key.NodePublic, req *http.Request, onRes func(*http.Response)) error {
+	var buf bytes.Buffer
+	if err := req.Write(&buf); err != nil {
+		return err
+	}
+
+	token := rands.HexString(10)
+	pr := &tailcfg.PingRequest{
+		URL:     "https://unused/c2n/" + token,
+		Log:     true,
+		Types:   "c2n",
+		Payload: buf.Bytes(),
+	}
+	s.C2NResponses.Store(token, onRes)
+	if !s.AddPingRequest(node, pr) {
+		s.C2NResponses.Delete(token)
+		return fmt.Errorf("node %v not connected", node)
+	}
+	return nil
 }
 
 // AddRawMapResponse delivers the raw MapResponse mr to nodeKeyDst. It's meant
@@ -260,9 +327,7 @@ func (s *Server) initMux() {
 	s.mux.HandleFunc("/key", s.serveKey)
 	s.mux.HandleFunc("/machine/", s.serveMachine)
 	s.mux.HandleFunc("/ts2021", s.serveNoiseUpgrade)
-	if s.HandleC2N != nil {
-		s.mux.Handle("/some-c2n-path/", s.HandleC2N)
-	}
+	s.mux.HandleFunc("/c2n/", s.serveC2N)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -274,6 +339,37 @@ func (s *Server) serveUnhandled(w http.ResponseWriter, r *http.Request) {
 	var got bytes.Buffer
 	r.Write(&got)
 	go panic(fmt.Sprintf("testcontrol.Server received unhandled request: %s", got.Bytes()))
+}
+
+// serveC2N handles a POST from a node containing a c2n response.
+func (s *Server) serveC2N(w http.ResponseWriter, r *http.Request) {
+	if err := func() error {
+		if r.Method != httpm.POST {
+			return errors.New("POST required")
+		}
+		token, ok := strings.CutPrefix(r.URL.Path, "/c2n/")
+		if !ok {
+			return fmt.Errorf("invalid path %q", r.URL.Path)
+		}
+
+		onRes, ok := s.C2NResponses.Load(token)
+		if !ok {
+			return fmt.Errorf("unknown c2n token %q", token)
+		}
+		s.C2NResponses.Delete(token)
+
+		res, err := http.ReadResponse(bufio.NewReader(r.Body), nil)
+		if err != nil {
+			return fmt.Errorf("error reading c2n response: %w", err)
+		}
+		onRes(res)
+		return nil
+	}(); err != nil {
+		s.logf("testcontrol: %s", err)
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type peerMachinePublicContextKey struct{}
@@ -288,7 +384,7 @@ func (s *Server) serveNoiseUpgrade(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	noisePrivate := s.noisePrivKey
 	s.mu.Unlock()
-	cc, err := controlhttp.AcceptHTTP(ctx, w, r, noisePrivate, nil)
+	cc, err := controlhttpserver.AcceptHTTP(ctx, w, r, noisePrivate, nil)
 	if err != nil {
 		log.Printf("AcceptHTTP: %v", err)
 		return
@@ -476,13 +572,22 @@ func (s *Server) AddFakeNode() {
 	// TODO: send updates to other (non-fake?) nodes
 }
 
-func (s *Server) AllUsers() (users []*tailcfg.User) {
+func (s *Server) allUserProfiles() (res []tailcfg.UserProfile) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, u := range s.users {
-		users = append(users, u.Clone())
+	for k, u := range s.users {
+		up := tailcfg.UserProfile{
+			ID:          u.ID,
+			DisplayName: u.DisplayName,
+		}
+		if login, ok := s.logins[k]; ok {
+			up.LoginName = login.LoginName
+			up.ProfilePicURL = cmp.Or(up.ProfilePicURL, login.ProfilePicURL)
+			up.DisplayName = cmp.Or(up.DisplayName, login.DisplayName)
+		}
+		res = append(res, up)
 	}
-	return users
+	return res
 }
 
 func (s *Server) AllNodes() (nodes []*tailcfg.Node) {
@@ -512,6 +617,10 @@ func (s *Server) getUser(nodeKey key.NodePublic) (*tailcfg.User, *tailcfg.Login)
 		return u, s.logins[nodeKey]
 	}
 	id := tailcfg.UserID(len(s.users) + 1)
+	if s.AllNodesSameUser {
+		id = 123
+	}
+	s.logf("Created user %v for node %s", id, nodeKey)
 	loginName := fmt.Sprintf("user-%d@%s", id, domain)
 	displayName := fmt.Sprintf("User %d", id)
 	login := &tailcfg.Login{
@@ -523,9 +632,7 @@ func (s *Server) getUser(nodeKey key.NodePublic) (*tailcfg.User, *tailcfg.Login)
 	}
 	user := &tailcfg.User{
 		ID:          id,
-		LoginName:   loginName,
 		DisplayName: displayName,
-		Logins:      []tailcfg.LoginID{login.ID},
 	}
 	s.users[nodeKey] = user
 	s.logins[nodeKey] = login
@@ -574,11 +681,32 @@ func (s *Server) CompleteAuth(authPathOrURL string) bool {
 	if ap.nodeKey.IsZero() {
 		panic("zero AuthPath.NodeKey")
 	}
-	if s.nodeKeyAuthed == nil {
-		s.nodeKeyAuthed = map[key.NodePublic]bool{}
-	}
-	s.nodeKeyAuthed[ap.nodeKey] = true
+	s.nodeKeyAuthed.Make()
+	s.nodeKeyAuthed.Add(ap.nodeKey)
 	ap.CompleteSuccessfully()
+	return true
+}
+
+// Complete the device approval for this node.
+//
+// This function returns false if the node does not exist, or you try to
+// approve a device against a different control server.
+func (s *Server) CompleteDeviceApproval(controlUrl string, urlStr string, nodeKey *key.NodePublic) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	node, ok := s.nodes[*nodeKey]
+	if !ok {
+		return false
+	}
+
+	if urlStr != controlUrl+"/admin" {
+		return false
+	}
+
+	sendUpdate(s.updates[node.ID], updateSelfChanged)
+
+	node.MachineAuthorized = true
 	return true
 }
 
@@ -630,6 +758,25 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		// some follow-ups? For now all are successes.
 	}
 
+	// The in-memory list of nodes, users, and logins is keyed by
+	// the node key.  If the node key changes, update all the data stores
+	// to use the new node key.
+	s.mu.Lock()
+	if _, oldNodeKeyOk := s.nodes[req.OldNodeKey]; oldNodeKeyOk {
+		if _, newNodeKeyOk := s.nodes[req.NodeKey]; !newNodeKeyOk {
+			s.nodes[req.OldNodeKey].Key = req.NodeKey
+			s.nodes[req.NodeKey] = s.nodes[req.OldNodeKey]
+
+			s.users[req.NodeKey] = s.users[req.OldNodeKey]
+			s.logins[req.NodeKey] = s.logins[req.OldNodeKey]
+
+			delete(s.nodes, req.OldNodeKey)
+			delete(s.users, req.OldNodeKey)
+			delete(s.logins, req.OldNodeKey)
+		}
+	}
+	s.mu.Unlock()
+
 	nk := req.NodeKey
 
 	user, login := s.getUser(nk)
@@ -637,36 +784,50 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 	if s.nodes == nil {
 		s.nodes = map[key.NodePublic]*tailcfg.Node{}
 	}
+	_, ok := s.nodes[nk]
+	machineAuthorized := !s.RequireMachineAuth
+	if !ok {
 
-	machineAuthorized := true // TODO: add Server.RequireMachineAuth
+		nodeID := len(s.nodes) + 1
+		v4Prefix := netip.PrefixFrom(netaddr.IPv4(100, 64, uint8(nodeID>>8), uint8(nodeID)), 32)
+		v6Prefix := netip.PrefixFrom(tsaddr.Tailscale4To6(v4Prefix.Addr()), 128)
 
-	v4Prefix := netip.PrefixFrom(netaddr.IPv4(100, 64, uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID))), 32)
-	v6Prefix := netip.PrefixFrom(tsaddr.Tailscale4To6(v4Prefix.Addr()), 128)
+		allowedIPs := []netip.Prefix{
+			v4Prefix,
+			v6Prefix,
+		}
 
-	allowedIPs := []netip.Prefix{
-		v4Prefix,
-		v6Prefix,
-	}
+		var capMap tailcfg.NodeCapMap
+		if s.DefaultNodeCapabilities != nil {
+			capMap = *s.DefaultNodeCapabilities
+		} else {
+			capMap = tailcfg.NodeCapMap{
+				tailcfg.CapabilityHTTPS:                           []tailcfg.RawMessage{},
+				tailcfg.NodeAttrFunnel:                            []tailcfg.RawMessage{},
+				tailcfg.CapabilityFileSharing:                     []tailcfg.RawMessage{},
+				tailcfg.CapabilityFunnelPorts + "?ports=8080,443": []tailcfg.RawMessage{},
+			}
+		}
 
-	s.nodes[nk] = &tailcfg.Node{
-		ID:                tailcfg.NodeID(user.ID),
-		StableID:          tailcfg.StableNodeID(fmt.Sprintf("TESTCTRL%08x", int(user.ID))),
-		User:              user.ID,
-		Machine:           mkey,
-		Key:               req.NodeKey,
-		MachineAuthorized: machineAuthorized,
-		Addresses:         allowedIPs,
-		AllowedIPs:        allowedIPs,
-		Hostinfo:          req.Hostinfo.View(),
-		Name:              req.Hostinfo.Hostname,
-		Capabilities: []tailcfg.NodeCapability{
-			tailcfg.CapabilityHTTPS,
-			tailcfg.NodeAttrFunnel,
-			tailcfg.CapabilityFunnelPorts + "?ports=8080,443",
-		},
+		node := &tailcfg.Node{
+			ID:                tailcfg.NodeID(nodeID),
+			StableID:          tailcfg.StableNodeID(fmt.Sprintf("TESTCTRL%08x", int(nodeID))),
+			User:              user.ID,
+			Machine:           mkey,
+			Key:               req.NodeKey,
+			MachineAuthorized: machineAuthorized,
+			Addresses:         allowedIPs,
+			AllowedIPs:        allowedIPs,
+			Hostinfo:          req.Hostinfo.View(),
+			Name:              req.Hostinfo.Hostname,
+			Cap:               req.Version,
+			CapMap:            capMap,
+			Capabilities:      slices.Collect(maps.Keys(capMap)),
+		}
+		s.nodes[nk] = node
 	}
 	requireAuth := s.RequireAuth
-	if requireAuth && s.nodeKeyAuthed[nk] {
+	if requireAuth && s.nodeKeyAuthed.Contains(nk) {
 		requireAuth = false
 	}
 	allExpired := s.allExpired
@@ -793,11 +954,12 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 		endpoints := filterInvalidIPv6Endpoints(req.Endpoints)
 		node.Endpoints = endpoints
 		node.DiscoKey = req.DiscoKey
+		node.Cap = req.Version
 		if req.Hostinfo != nil {
 			node.Hostinfo = req.Hostinfo.View()
 			if ni := node.Hostinfo.NetInfo(); ni.Valid() {
 				if ni.PreferredDERP() != 0 {
-					node.DERP = fmt.Sprintf("127.3.3.40:%d", ni.PreferredDERP())
+					node.HomeDERP = ni.PreferredDERP()
 				}
 			}
 		}
@@ -831,15 +993,17 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 
 	w.WriteHeader(200)
 	for {
-		if resBytes, ok := s.takeRawMapMessage(req.NodeKey); ok {
-			if err := s.sendMapMsg(w, mkey, compress, resBytes); err != nil {
-				s.logf("sendMapMsg of raw message: %v", err)
-				return
-			}
-			if streaming {
+		// Only send raw map responses to the streaming poll, to avoid a
+		// non-streaming map request beating the streaming poll in a race and
+		// potentially dropping the map response.
+		if streaming {
+			if resBytes, ok := s.takeRawMapMessage(req.NodeKey); ok {
+				if err := s.sendMapMsg(w, compress, resBytes); err != nil {
+					s.logf("sendMapMsg of raw message: %v", err)
+					return
+				}
 				continue
 			}
-			return
 		}
 
 		if s.canGenerateAutomaticMapResponseFor(req.NodeKey) {
@@ -864,7 +1028,7 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 				s.logf("json.Marshal: %v", err)
 				return
 			}
-			if err := s.sendMapMsg(w, mkey, compress, resBytes); err != nil {
+			if err := s.sendMapMsg(w, compress, resBytes); err != nil {
 				return
 			}
 		}
@@ -895,7 +1059,7 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 				}
 				break keepAliveLoop
 			case <-keepAliveTimerCh:
-				if err := s.sendMapMsg(w, mkey, compress, keepAliveMsg); err != nil {
+				if err := s.sendMapMsg(w, compress, keepAliveMsg); err != nil {
 					return
 				}
 			}
@@ -909,14 +1073,21 @@ var keepAliveMsg = &struct {
 	KeepAlive: true,
 }
 
-func packetFilterWithIngressCaps() []tailcfg.FilterRule {
+func packetFilterWithIngress(addRelayCaps bool) []tailcfg.FilterRule {
 	out := slices.Clone(tailcfg.FilterAllowAll)
+	caps := []tailcfg.PeerCapability{
+		tailcfg.PeerCapabilityIngress,
+	}
+	if addRelayCaps {
+		caps = append(caps, tailcfg.PeerCapabilityRelay)
+		caps = append(caps, tailcfg.PeerCapabilityRelayTarget)
+	}
 	out = append(out, tailcfg.FilterRule{
 		SrcIPs: []string{"*"},
 		CapGrant: []tailcfg.CapGrant{
 			{
 				Dsts: []netip.Prefix{tsaddr.AllIPv4(), tsaddr.AllIPv6()},
-				Caps: []tailcfg.PeerCapability{tailcfg.PeerCapabilityIngress},
+				Caps: caps,
 			},
 		},
 	})
@@ -941,13 +1112,12 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	node.CapMap = nodeCapMap
 	node.Capabilities = append(node.Capabilities, tailcfg.NodeAttrDisableUPnP)
 
-	user, _ := s.getUser(nk)
 	t := time.Date(2020, 8, 3, 0, 0, 0, 1, time.UTC)
 	dns := s.DNSConfig
 	if dns != nil && s.MagicDNSDomain != "" {
 		dns = dns.Clone()
 		dns.CertDomains = []string{
-			fmt.Sprintf(node.Hostinfo.Hostname() + "." + s.MagicDNSDomain),
+			node.Hostinfo.Hostname() + "." + s.MagicDNSDomain,
 		}
 	}
 
@@ -955,8 +1125,8 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		Node:            node,
 		DERPMap:         s.DERPMap,
 		Domain:          domain,
-		CollectServices: "true",
-		PacketFilter:    packetFilterWithIngressCaps(),
+		CollectServices: cmp.Or(s.CollectServices, opt.True),
+		PacketFilter:    packetFilterWithIngress(s.PeerRelayGrants),
 		DNSConfig:       dns,
 		ControlTime:     &t,
 	}
@@ -981,7 +1151,11 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		s.mu.Lock()
 		peerAddress := s.masquerades[p.Key][node.Key]
 		routes := s.nodeSubnetRoutes[p.Key]
+		peerCapMap := maps.Clone(s.nodeCapMaps[p.Key])
 		s.mu.Unlock()
+		if peerCapMap != nil {
+			p.CapMap = peerCapMap
+		}
 		if peerAddress.IsValid() {
 			if peerAddress.Is6() {
 				p.Addresses[1] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
@@ -1001,15 +1175,9 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	sort.Slice(res.Peers, func(i, j int) bool {
 		return res.Peers[i].ID < res.Peers[j].ID
 	})
-	for _, u := range s.AllUsers() {
-		res.UserProfiles = append(res.UserProfiles, tailcfg.UserProfile{
-			ID:          u.ID,
-			LoginName:   u.LoginName,
-			DisplayName: u.DisplayName,
-		})
-	}
+	res.UserProfiles = s.allUserProfiles()
 
-	v4Prefix := netip.PrefixFrom(netaddr.IPv4(100, 64, uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID))), 32)
+	v4Prefix := netip.PrefixFrom(netaddr.IPv4(100, 64, uint8(node.ID>>8), uint8(node.ID)), 32)
 	v6Prefix := netip.PrefixFrom(tsaddr.Tailscale4To6(v4Prefix.Addr()), 128)
 
 	res.Node.Addresses = []netip.Prefix{
@@ -1040,18 +1208,25 @@ func (s *Server) canGenerateAutomaticMapResponseFor(nk key.NodePublic) bool {
 func (s *Server) hasPendingRawMapMessage(nk key.NodePublic) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.msgToSend[nk].(*tailcfg.MapResponse)
+	_, ok := s.msgToSend[nk]
 	return ok
 }
 
 func (s *Server) takeRawMapMessage(nk key.NodePublic) (mapResJSON []byte, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	mr, ok := s.msgToSend[nk].(*tailcfg.MapResponse)
+	mr, ok := s.msgToSend[nk]
 	if !ok {
 		return nil, false
 	}
 	delete(s.msgToSend, nk)
+
+	// If it's a bare PingRequest, wrap it in a MapResponse.
+	switch pr := mr.(type) {
+	case *tailcfg.PingRequest:
+		mr = &tailcfg.MapResponse{PingRequest: pr}
+	}
+
 	var err error
 	mapResJSON, err = json.Marshal(mr)
 	if err != nil {
@@ -1060,7 +1235,7 @@ func (s *Server) takeRawMapMessage(nk key.NodePublic) (mapResJSON []byte, ok boo
 	return mapResJSON, true
 }
 
-func (s *Server) sendMapMsg(w http.ResponseWriter, mkey key.MachinePublic, compress bool, msg any) error {
+func (s *Server) sendMapMsg(w http.ResponseWriter, compress bool, msg any) error {
 	resBytes, err := s.encode(compress, msg)
 	if err != nil {
 		return err

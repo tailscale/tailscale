@@ -10,8 +10,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 
-	"github.com/tailscale/hujson"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 )
 
@@ -39,8 +40,17 @@ func (c *Config) WantRunning() bool {
 // from the VM's metadata service's user-data field.
 const VMUserDataPath = "vm:user-data"
 
+// hujsonStandardize is set to hujson.Standardize by conffile_hujson.go on
+// platforms that support config files.
+var hujsonStandardize func([]byte) ([]byte, error)
+
 // Load reads and parses the config file at the provided path on disk.
 func Load(path string) (*Config, error) {
+	switch runtime.GOOS {
+	case "ios", "android":
+		// compile-time for deadcode elimination
+		return nil, fmt.Errorf("config file loading not supported on %q", runtime.GOOS)
+	}
 	var c Config
 	c.Path = path
 	var err error
@@ -54,14 +64,21 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.Std, err = hujson.Standardize(c.Raw)
-	if err != nil {
-		return nil, fmt.Errorf("error parsing config file %s HuJSON/JSON: %w", path, err)
+	if buildfeatures.HasHuJSONConf && hujsonStandardize != nil {
+		c.Std, err = hujsonStandardize(c.Raw)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing config file %s HuJSON/JSON: %w", path, err)
+		}
+	} else {
+		c.Std = c.Raw // config file must be valid JSON with ts_omit_hujsonconf
 	}
 	var ver struct {
 		Version string `json:"version"`
 	}
 	if err := json.Unmarshal(c.Std, &ver); err != nil {
+		if !buildfeatures.HasHuJSONConf {
+			return nil, fmt.Errorf("error parsing config file %s, which must be valid standard JSON: %w", path, err)
+		}
 		return nil, fmt.Errorf("error parsing config file %s: %w", path, err)
 	}
 	switch ver.Version {

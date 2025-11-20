@@ -15,7 +15,9 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
+	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/winutil"
 	"tailscale.com/util/winutil/gp"
 )
@@ -24,9 +26,56 @@ const testGPRuleID = "{7B1B6151-84E6-41A3-8967-62F7F7B45687}"
 
 func TestHostFileNewLines(t *testing.T) {
 	in := []byte("#foo\r\n#bar\n#baz\n")
-	want := []byte("#foo\r\n#bar\r\n#baz\r\n")
+	want := []byte("#foo\r\n#bar\r\n#baz\r\n# TailscaleHostsSectionStart\r\n# This section contains MagicDNS entries for Tailscale.\r\n# Do not edit this section manually.\r\n\r\n192.168.1.1 aaron\r\n\r\n# TailscaleHostsSectionEnd\r\n")
 
-	got, err := setTailscaleHosts(in, nil)
+	he := []*HostEntry{
+		&HostEntry{
+			Addr:  netip.MustParseAddr("192.168.1.1"),
+			Hosts: []string{"aaron"},
+		},
+	}
+	got, err := setTailscaleHosts(logger.Discard, in, he)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q\n", got, want)
+	}
+}
+
+func TestHostFileUnchanged(t *testing.T) {
+	in := []byte("#foo\r\n#bar\r\n#baz\r\n# TailscaleHostsSectionStart\r\n# This section contains MagicDNS entries for Tailscale.\r\n# Do not edit this section manually.\r\n\r\n192.168.1.1 aaron\r\n\r\n# TailscaleHostsSectionEnd\r\n")
+
+	he := []*HostEntry{
+		&HostEntry{
+			Addr:  netip.MustParseAddr("192.168.1.1"),
+			Hosts: []string{"aaron"},
+		},
+	}
+	got, err := setTailscaleHosts(logger.Discard, in, he)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Errorf("got %q, want nil\n", got)
+	}
+}
+
+func TestHostFileChanged(t *testing.T) {
+	in := []byte("#foo\r\n#bar\r\n#baz\r\n# TailscaleHostsSectionStart\r\n# This section contains MagicDNS entries for Tailscale.\r\n# Do not edit this section manually.\r\n\r\n192.168.1.1 aaron1\r\n\r\n# TailscaleHostsSectionEnd\r\n")
+	want := []byte("#foo\r\n#bar\r\n#baz\r\n# TailscaleHostsSectionStart\r\n# This section contains MagicDNS entries for Tailscale.\r\n# Do not edit this section manually.\r\n\r\n192.168.1.1 aaron1\r\n192.168.1.2 aaron2\r\n\r\n# TailscaleHostsSectionEnd\r\n")
+
+	he := []*HostEntry{
+		&HostEntry{
+			Addr:  netip.MustParseAddr("192.168.1.1"),
+			Hosts: []string{"aaron1"},
+		},
+		&HostEntry{
+			Addr:  netip.MustParseAddr("192.168.1.2"),
+			Hosts: []string{"aaron2"},
+		},
+	}
+	got, err := setTailscaleHosts(logger.Discard, in, he)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +134,7 @@ func TestManagerWindowsGPCopy(t *testing.T) {
 	}
 	defer delIfKey()
 
-	cfg, err := NewOSConfigurator(logf, nil, nil, fakeInterface.String())
+	cfg, err := NewOSConfigurator(logf, nil, policyclient.NoPolicyClient{}, nil, fakeInterface.String())
 	if err != nil {
 		t.Fatalf("NewOSConfigurator: %v\n", err)
 	}
@@ -214,7 +263,7 @@ func runTest(t *testing.T, isLocal bool) {
 	}
 	defer delIfKey()
 
-	cfg, err := NewOSConfigurator(logf, nil, nil, fakeInterface.String())
+	cfg, err := NewOSConfigurator(logf, nil, policyclient.NoPolicyClient{}, nil, fakeInterface.String())
 	if err != nil {
 		t.Fatalf("NewOSConfigurator: %v\n", err)
 	}
@@ -501,8 +550,8 @@ func genRandomSubdomains(t *testing.T, n int) []dnsname.FQDN {
 	const charset = "abcdefghijklmnopqrstuvwxyz"
 
 	for len(domains) < cap(domains) {
-		l := r.Intn(19) + 1
-		b := make([]byte, l)
+		ln := r.Intn(19) + 1
+		b := make([]byte, ln)
 		for i := range b {
 			b[i] = charset[r.Intn(len(charset))]
 		}

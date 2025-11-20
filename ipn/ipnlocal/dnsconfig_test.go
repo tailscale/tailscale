@@ -70,8 +70,8 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		{
 			name: "self_name_and_peers",
 			nm: &netmap.NetworkMap{
-				Name: "myname.net",
 				SelfNode: (&tailcfg.Node{
+					Name:      "myname.net.",
 					Addresses: ipps("100.101.101.101"),
 				}).View(),
 			},
@@ -109,15 +109,15 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			// even if they have IPv4.
 			name: "v6_only_self",
 			nm: &netmap.NetworkMap{
-				Name: "myname.net",
 				SelfNode: (&tailcfg.Node{
+					Name:      "myname.net.",
 					Addresses: ipps("fe75::1"),
 				}).View(),
 			},
 			peers: nodeViews([]*tailcfg.Node{
 				{
 					ID:        1,
-					Name:      "peera.net",
+					Name:      "peera.net.",
 					Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::1001"),
 				},
 				{
@@ -146,8 +146,8 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		{
 			name: "extra_records",
 			nm: &netmap.NetworkMap{
-				Name: "myname.net",
 				SelfNode: (&tailcfg.Node{
+					Name:      "myname.net.",
 					Addresses: ipps("100.101.101.101"),
 				}).View(),
 				DNS: tailcfg.DNSConfig{
@@ -171,7 +171,9 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		{
 			name: "corp_dns_misc",
 			nm: &netmap.NetworkMap{
-				Name: "host.some.domain.net.",
+				SelfNode: (&tailcfg.Node{
+					Name: "host.some.domain.net.",
+				}).View(),
 				DNS: tailcfg.DNSConfig{
 					Proxied: true,
 					Domains: []string{"foo.com", "bar.com"},
@@ -331,8 +333,8 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		{
 			name: "self_expired",
 			nm: &netmap.NetworkMap{
-				Name: "myname.net",
 				SelfNode: (&tailcfg.Node{
+					Name:      "myname.net.",
 					Addresses: ipps("100.101.101.101"),
 				}).View(),
 			},
@@ -377,19 +379,19 @@ func peersMap(s []tailcfg.NodeView) map[tailcfg.NodeID]tailcfg.NodeView {
 }
 
 func TestAllowExitNodeDNSProxyToServeName(t *testing.T) {
-	b := &LocalBackend{}
+	b := newTestLocalBackend(t)
 	if b.allowExitNodeDNSProxyToServeName("google.com") {
 		t.Fatal("unexpected true on backend with nil NetMap")
 	}
 
-	b.netMap = &netmap.NetworkMap{
+	b.currentNode().SetNetMap(&netmap.NetworkMap{
 		DNS: tailcfg.DNSConfig{
 			ExitNodeFilteredSet: []string{
 				".ts.net",
 				"some.exact.bad",
 			},
 		},
-	}
+	})
 	tests := []struct {
 		name string
 		want bool

@@ -17,6 +17,14 @@ import (
 
 func init() {
 	tunDiagnoseFailure = diagnoseLinuxTUNFailure
+	modprobeTunHook.Set(func() error {
+		_, err := modprobeTun()
+		return err
+	})
+}
+
+func modprobeTun() ([]byte, error) {
+	return exec.Command("/sbin/modprobe", "tun").CombinedOutput()
 }
 
 func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf, createErr error) {
@@ -36,7 +44,7 @@ func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf, createErr error) 
 	kernel := utsReleaseField(&un)
 	logf("Linux kernel version: %s", kernel)
 
-	modprobeOut, err := exec.Command("/sbin/modprobe", "tun").CombinedOutput()
+	modprobeOut, err := modprobeTun()
 	if err == nil {
 		logf("'modprobe tun' successful")
 		// Either tun is currently loaded, or it's statically

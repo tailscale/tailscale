@@ -1,0 +1,10 @@
+[Unit]
+Description=Tailscale System Tray
+After=systemd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/tailscale systray
+
+[Install]
+WantedBy=default.target

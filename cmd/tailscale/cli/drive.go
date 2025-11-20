@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_drive && !ts_mac_gui
+
 package cli
 
 import (
@@ -20,43 +22,49 @@ const (
 	driveListUsage    = "tailscale drive list"
 )
 
-var driveCmd = &ffcli.Command{
-	Name:      "drive",
-	ShortHelp: "Share a directory with your tailnet",
-	ShortUsage: strings.Join([]string{
-		driveShareUsage,
-		driveRenameUsage,
-		driveUnshareUsage,
-		driveListUsage,
-	}, "\n"),
-	LongHelp:  buildShareLongHelp(),
-	UsageFunc: usageFuncNoDefaultValues,
-	Subcommands: []*ffcli.Command{
-		{
-			Name:       "share",
-			ShortUsage: driveShareUsage,
-			Exec:       runDriveShare,
-			ShortHelp:  "[ALPHA] Create or modify a share",
+func init() {
+	maybeDriveCmd = driveCmd
+}
+
+func driveCmd() *ffcli.Command {
+	return &ffcli.Command{
+		Name:      "drive",
+		ShortHelp: "Share a directory with your tailnet",
+		ShortUsage: strings.Join([]string{
+			driveShareUsage,
+			driveRenameUsage,
+			driveUnshareUsage,
+			driveListUsage,
+		}, "\n"),
+		LongHelp:  buildShareLongHelp(),
+		UsageFunc: usageFuncNoDefaultValues,
+		Subcommands: []*ffcli.Command{
+			{
+				Name:       "share",
+				ShortUsage: driveShareUsage,
+				Exec:       runDriveShare,
+				ShortHelp:  "[ALPHA] Create or modify a share",
+			},
+			{
+				Name:       "rename",
+				ShortUsage: driveRenameUsage,
+				ShortHelp:  "[ALPHA] Rename a share",
+				Exec:       runDriveRename,
+			},
+			{
+				Name:       "unshare",
+				ShortUsage: driveUnshareUsage,
+				ShortHelp:  "[ALPHA] Remove a share",
+				Exec:       runDriveUnshare,
+			},
+			{
+				Name:       "list",
+				ShortUsage: driveListUsage,
+				ShortHelp:  "[ALPHA] List current shares",
+				Exec:       runDriveList,
+			},
 		},
-		{
-			Name:       "rename",
-			ShortUsage: driveRenameUsage,
-			ShortHelp:  "[ALPHA] Rename a share",
-			Exec:       runDriveRename,
-		},
-		{
-			Name:       "unshare",
-			ShortUsage: driveUnshareUsage,
-			ShortHelp:  "[ALPHA] Remove a share",
-			Exec:       runDriveUnshare,
-		},
-		{
-			Name:       "list",
-			ShortUsage: driveListUsage,
-			ShortHelp:  "[ALPHA] List current shares",
-			Exec:       runDriveList,
-		},
-	},
+	}
 }
 
 // runDriveShare is the entry point for the "tailscale drive share" command.

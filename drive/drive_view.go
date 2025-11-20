@@ -6,15 +6,17 @@
 package drive
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 
+	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/types/views"
 )
 
 //go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=Share
 
-// View returns a readonly view of Share.
+// View returns a read-only view of Share.
 func (p *Share) View() ShareView {
 	return ShareView{ж: p}
 }
@@ -30,7 +32,7 @@ type ShareView struct {
 	ж *Share
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v ShareView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -42,8 +44,17 @@ func (v ShareView) AsStruct() *Share {
 	return v.ж.Clone()
 }
 
-func (v ShareView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v ShareView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v ShareView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *ShareView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -52,16 +63,44 @@ func (v *ShareView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x Share
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
 		return err
 	}
 	v.ж = &x
 	return nil
 }
 
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *ShareView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x Share
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// Name is how this share appears on remote nodes.
 func (v ShareView) Name() string { return v.ж.Name }
+
+// Path is the path to the directory on this machine that's being shared.
 func (v ShareView) Path() string { return v.ж.Path }
-func (v ShareView) As() string   { return v.ж.As }
+
+// As is the UNIX or Windows username of the local account used for this
+// share. File read/write permissions are enforced based on this username.
+// Can be left blank to use the default value of "whoever is running the
+// Tailscale GUI".
+func (v ShareView) As() string { return v.ж.As }
+
+// BookmarkData contains security-scoped bookmark data for the Sandboxed
+// Mac application. The Sandboxed Mac application gains permission to
+// access the Share's folder as a result of a user selecting it in a file
+// picker. In order to retain access to it across restarts, it needs to
+// hold on to a security-scoped bookmark. That bookmark is stored here. See
+// https://developer.apple.com/documentation/security/app_sandbox/accessing_files_from_the_macos_app_sandbox#4144043
 func (v ShareView) BookmarkData() views.ByteSlice[[]byte] {
 	return views.ByteSliceOf(v.ж.BookmarkData)
 }

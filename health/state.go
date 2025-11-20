@@ -4,11 +4,20 @@
 package health
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"time"
+
+	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/tailcfg"
 )
 
 // State contains the health status of the backend, and is
 // provided to the client UI via LocalAPI through ipn.Notify.
+//
+// It is also exposed via c2n for debugging purposes, so try
+// not to change its structure too gratuitously.
 type State struct {
 	// Each key-value pair in Warnings represents a Warnable that is currently
 	// unhealthy. If a Warnable is healthy, it will not be present in this map.
@@ -21,16 +30,56 @@ type State struct {
 }
 
 // UnhealthyState contains information to be shown to the user to inform them
-// that a Warnable is currently unhealthy.
+// that a [Warnable] is currently unhealthy or [tailcfg.DisplayMessage] is being
+// sent from the control-plane.
 type UnhealthyState struct {
 	WarnableCode        WarnableCode
 	Severity            Severity
 	Title               string
 	Text                string
-	BrokenSince         *time.Time     `json:",omitempty"`
-	Args                Args           `json:",omitempty"`
-	DependsOn           []WarnableCode `json:",omitempty"`
-	ImpactsConnectivity bool           `json:",omitempty"`
+	BrokenSince         *time.Time            `json:",omitempty"`
+	Args                Args                  `json:",omitempty"`
+	DependsOn           []WarnableCode        `json:",omitempty"`
+	ImpactsConnectivity bool                  `json:",omitempty"`
+	PrimaryAction       *UnhealthyStateAction `json:",omitempty"`
+
+	// ETag identifies a specific version of an UnhealthyState. If the contents
+	// of the other fields of two UnhealthyStates are the same, the ETags will
+	// be the same. If the contents differ, the ETags will also differ. The
+	// implementation is not defined and the value is opaque: it might be a
+	// hash, it might be a simple counter. Implementations should not rely on
+	// any specific implementation detail or format of the ETag string other
+	// than string (in)equality.
+	ETag string `json:",omitzero"`
+}
+
+// hash computes a deep hash of UnhealthyState which will be stable across
+// different runs of the same binary.
+func (u UnhealthyState) hash() []byte {
+	hasher := sha256.New()
+	enc := json.NewEncoder(hasher)
+
+	// hash.Hash.Write never returns an error, so this will only fail if u is
+	// not marshalable, in which case we have much bigger problems.
+	_ = enc.Encode(u)
+	return hasher.Sum(nil)
+}
+
+// withETag returns a copy of UnhealthyState with an ETag set. The ETag will be
+// the same for all UnhealthyState instances that are equal. If calculating the
+// ETag errors, it returns a copy of the UnhealthyState with an empty ETag.
+func (u UnhealthyState) withETag() UnhealthyState {
+	u.ETag = ""
+	u.ETag = hex.EncodeToString(u.hash())
+	return u
+}
+
+// UnhealthyStateAction represents an action (URL and link) to be presented to
+// the user associated with an [UnhealthyState]. Analogous to
+// [tailcfg.DisplayMessageAction].
+type UnhealthyStateAction struct {
+	URL   string
+	Label string
 }
 
 // unhealthyState returns a unhealthyState of the Warnable given its current warningState.
@@ -72,7 +121,7 @@ func (w *Warnable) unhealthyState(ws *warningState) *UnhealthyState {
 // The returned State is a snapshot of shared memory, and the caller should not
 // mutate the returned value.
 func (t *Tracker) CurrentState() *State {
-	if t.nil() {
+	if !buildfeatures.HasHealth || t.nil() {
 		return &State{}
 	}
 
@@ -86,14 +135,71 @@ func (t *Tracker) CurrentState() *State {
 	wm := map[WarnableCode]UnhealthyState{}
 
 	for w, ws := range t.warnableVal {
-		if !w.IsVisible(ws) {
+		if !w.IsVisible(ws, t.now) {
 			// Skip invisible Warnables.
 			continue
 		}
-		wm[w.Code] = *w.unhealthyState(ws)
+		if t.isEffectivelyHealthyLocked(w) {
+			// Skip Warnables that are unhealthy if they have dependencies
+			// that are unhealthy.
+			continue
+		}
+		state := w.unhealthyState(ws)
+		wm[w.Code] = state.withETag()
+	}
+
+	for id, msg := range t.lastNotifiedControlMessages {
+		state := UnhealthyState{
+			WarnableCode:        WarnableCode("control-health." + id),
+			Severity:            severityFromTailcfg(msg.Severity),
+			Title:               msg.Title,
+			Text:                msg.Text,
+			ImpactsConnectivity: msg.ImpactsConnectivity,
+			// TODO(tailscale/corp#27759): DependsOn?
+		}
+
+		if msg.PrimaryAction != nil {
+			state.PrimaryAction = &UnhealthyStateAction{
+				URL:   msg.PrimaryAction.URL,
+				Label: msg.PrimaryAction.Label,
+			}
+		}
+
+		wm[state.WarnableCode] = state.withETag()
 	}
 
 	return &State{
 		Warnings: wm,
 	}
+}
+
+func severityFromTailcfg(s tailcfg.DisplayMessageSeverity) Severity {
+	switch s {
+	case tailcfg.SeverityHigh:
+		return SeverityHigh
+	case tailcfg.SeverityLow:
+		return SeverityLow
+	default:
+		return SeverityMedium
+	}
+}
+
+// isEffectivelyHealthyLocked reports whether w is effectively healthy.
+// That means it's either actually healthy or it has a dependency that
+// that's unhealthy, so we should treat w as healthy to not spam users
+// with multiple warnings when only the root cause is relevant.
+func (t *Tracker) isEffectivelyHealthyLocked(w *Warnable) bool {
+	if _, ok := t.warnableVal[w]; !ok {
+		// Warnable not found in the tracker. So healthy.
+		return true
+	}
+	for _, d := range w.DependsOn {
+		if !t.isEffectivelyHealthyLocked(d) {
+			// If one of our deps is unhealthy, we're healthy.
+			return true
+		}
+	}
+	// If we have no unhealthy deps and had warnableVal set,
+	// we're unhealthy.
+	return false
 }

@@ -5,7 +5,6 @@ package tstun
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"expvar"
@@ -27,7 +26,6 @@ import (
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
-	"tailscale.com/net/connstats"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/tstest"
@@ -40,7 +38,6 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/must"
 	"tailscale.com/util/usermetric"
-	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -371,9 +368,8 @@ func TestFilter(t *testing.T) {
 	}()
 
 	var buf [MaxPacketSize]byte
-	stats := connstats.NewStatistics(0, 0, nil)
-	defer stats.Shutdown(context.Background())
-	tun.SetStatistics(stats)
+	var stats netlogtype.CountsByConnection
+	tun.SetConnectionCounter(stats.Add)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var n int
@@ -381,9 +377,10 @@ func TestFilter(t *testing.T) {
 			var filtered bool
 			sizes := make([]int, 1)
 
-			tunStats, _ := stats.TestExtract()
+			tunStats := stats.Clone()
+			stats.Reset()
 			if len(tunStats) > 0 {
-				t.Errorf("connstats.Statistics.Extract = %v, want {}", stats)
+				t.Errorf("netlogtype.CountsByConnection = %v, want {}", tunStats)
 			}
 
 			if tt.dir == in {
@@ -416,7 +413,8 @@ func TestFilter(t *testing.T) {
 				}
 			}
 
-			got, _ := stats.TestExtract()
+			got := stats.Clone()
+			stats.Reset()
 			want := map[netlogtype.Connection]netlogtype.Counts{}
 			var wasUDP bool
 			if !tt.drop {
@@ -441,19 +439,19 @@ func TestFilter(t *testing.T) {
 	}
 
 	var metricInboundDroppedPacketsACL, metricInboundDroppedPacketsErr, metricOutboundDroppedPacketsACL int64
-	if m, ok := tun.metrics.inboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonACL}).(*expvar.Int); ok {
+	if m, ok := tun.metrics.inboundDroppedPacketsTotal.Get(usermetric.DropLabels{Reason: usermetric.ReasonACL}).(*expvar.Int); ok {
 		metricInboundDroppedPacketsACL = m.Value()
 	}
-	if m, ok := tun.metrics.inboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonError}).(*expvar.Int); ok {
+	if m, ok := tun.metrics.inboundDroppedPacketsTotal.Get(usermetric.DropLabels{Reason: usermetric.ReasonError}).(*expvar.Int); ok {
 		metricInboundDroppedPacketsErr = m.Value()
 	}
-	if m, ok := tun.metrics.outboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonACL}).(*expvar.Int); ok {
+	if m, ok := tun.metrics.outboundDroppedPacketsTotal.Get(usermetric.DropLabels{Reason: usermetric.ReasonACL}).(*expvar.Int); ok {
 		metricOutboundDroppedPacketsACL = m.Value()
 	}
 
 	assertMetricPackets(t, "inACL", 3, metricInboundDroppedPacketsACL)
 	assertMetricPackets(t, "inError", 0, metricInboundDroppedPacketsErr)
-	assertMetricPackets(t, "outACL", 1, metricOutboundDroppedPacketsACL)
+	assertMetricPackets(t, "outACL", 0, metricOutboundDroppedPacketsACL)
 }
 
 func assertMetricPackets(t *testing.T, metricName string, want, got int64) {
@@ -871,14 +869,14 @@ func TestPeerCfg_NAT(t *testing.T) {
 // with the correct parameters when various packet operations are performed.
 func TestCaptureHook(t *testing.T) {
 	type captureRecord struct {
-		path capture.Path
+		path packet.CapturePath
 		now  time.Time
 		pkt  []byte
 		meta packet.CaptureMeta
 	}
 
 	var captured []captureRecord
-	hook := func(path capture.Path, now time.Time, pkt []byte, meta packet.CaptureMeta) {
+	hook := func(path packet.CapturePath, now time.Time, pkt []byte, meta packet.CaptureMeta) {
 		captured = append(captured, captureRecord{
 			path: path,
 			now:  now,
@@ -935,19 +933,19 @@ func TestCaptureHook(t *testing.T) {
 	// Assert that the right packets are captured.
 	want := []captureRecord{
 		{
-			path: capture.FromPeer,
+			path: packet.FromPeer,
 			pkt:  []byte("Write1"),
 		},
 		{
-			path: capture.FromPeer,
+			path: packet.FromPeer,
 			pkt:  []byte("Write2"),
 		},
 		{
-			path: capture.SynthesizedToLocal,
+			path: packet.SynthesizedToLocal,
 			pkt:  []byte("InjectInboundPacketBuffer"),
 		},
 		{
-			path: capture.SynthesizedToPeer,
+			path: packet.SynthesizedToPeer,
 			pkt:  []byte("InjectOutboundPacketBuffer"),
 		},
 	}

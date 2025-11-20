@@ -15,14 +15,24 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
-	"tailscale.com/logtail/backoff"
+	"tailscale.com/cmd/tailscaled/tailscaledhooks"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/osshare"
+	"tailscale.com/util/backoff"
 )
 
 func init() {
 	installSystemDaemon = installSystemDaemonWindows
 	uninstallSystemDaemon = uninstallSystemDaemonWindows
+}
+
+// serviceDependencies lists all system services that tailscaled depends on.
+// This list must be kept in sync with the TailscaledDependencies preprocessor
+// variable in the installer.
+var serviceDependencies = []string{
+	"Dnscache",
+	"iphlpsvc",
+	"netprofm",
+	"WinHttpAutoProxySvc",
 }
 
 func installSystemDaemonWindows(args []string) (err error) {
@@ -48,6 +58,7 @@ func installSystemDaemonWindows(args []string) (err error) {
 		ServiceType:  windows.SERVICE_WIN32_OWN_PROCESS,
 		StartType:    mgr.StartAutomatic,
 		ErrorControl: mgr.ErrorNormal,
+		Dependencies: serviceDependencies,
 		DisplayName:  serviceName,
 		Description:  "Connects this computer to others on the Tailscale network.",
 	}
@@ -81,8 +92,9 @@ func installSystemDaemonWindows(args []string) (err error) {
 }
 
 func uninstallSystemDaemonWindows(args []string) (ret error) {
-	// Remove file sharing from Windows shell (noop in non-windows)
-	osshare.SetFileSharingEnabled(false, logger.Discard)
+	for _, f := range tailscaledhooks.UninstallSystemDaemonWindows {
+		f()
+	}
 
 	m, err := mgr.Connect()
 	if err != nil {

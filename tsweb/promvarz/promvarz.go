@@ -11,12 +11,21 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/expfmt"
+	"tailscale.com/tsweb"
 	"tailscale.com/tsweb/varz"
 )
 
-// Handler returns Prometheus metrics exported by our expvar converter
+func init() {
+	tsweb.PrometheusHandler.Set(registerVarz)
+}
+
+func registerVarz(debug *tsweb.DebugHandler) {
+	debug.Handle("varz", "Metrics (Prometheus)", http.HandlerFunc(handler))
+}
+
+// handler returns Prometheus metrics exported by our expvar converter
 // and the official Prometheus client.
-func Handler(w http.ResponseWriter, r *http.Request) {
+func handler(w http.ResponseWriter, r *http.Request) {
 	if err := gatherNativePrometheusMetrics(w); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))

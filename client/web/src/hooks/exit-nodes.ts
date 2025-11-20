@@ -66,7 +66,7 @@ export default function useExitNodes(node: NodeData, filter?: string) {
     // match from a list of exit node `options` to `nodes`.
     const addBestMatchNode = (
       options: ExitNode[],
-      name: (l: ExitNodeLocation) => string
+      name: (loc: ExitNodeLocation) => string
     ) => {
       const bestNode = highestPriorityNode(options)
       if (!bestNode || !bestNode.Location) {
@@ -86,7 +86,7 @@ export default function useExitNodes(node: NodeData, filter?: string) {
       locationNodesMap.forEach(
         // add one node per country
         (countryNodes) =>
-          addBestMatchNode(flattenMap(countryNodes), (l) => l.Country)
+          addBestMatchNode(flattenMap(countryNodes), (loc) => loc.Country)
       )
     } else {
       // Otherwise, show the best match on a city-level,
@@ -97,12 +97,12 @@ export default function useExitNodes(node: NodeData, filter?: string) {
         countryNodes.forEach(
           // add one node per city
           (cityNodes) =>
-            addBestMatchNode(cityNodes, (l) => `${l.Country}: ${l.City}`)
+            addBestMatchNode(cityNodes, (loc) => `${loc.Country}: ${loc.City}`)
         )
         // add the "Country: Best Match" node
         addBestMatchNode(
           flattenMap(countryNodes),
-          (l) => `${l.Country}: Best Match`
+          (loc) => `${loc.Country}: Best Match`
         )
       })
     }

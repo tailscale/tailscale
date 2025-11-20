@@ -7,6 +7,7 @@ package ipnserver
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,22 +15,27 @@ import (
 	"net"
 	"net/http"
 	"os/user"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"unicode"
 
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
-	"tailscale.com/ipn"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
-	"tailscale.com/util/systemd"
+	"tailscale.com/util/testenv"
 )
 
 // Server is an IPN backend and its set of 0 or more active localhost
@@ -37,20 +43,14 @@ import (
 type Server struct {
 	lb           atomic.Pointer[ipnlocal.LocalBackend]
 	logf         logger.Logf
+	bus          *eventbus.Bus
 	netMon       *netmon.Monitor // must be non-nil
 	backendLogID logid.PublicID
-	// resetOnZero is whether to call bs.Reset on transition from
-	// 1->0 active HTTP requests. That is, this is whether the backend is
-	// being run in "client mode" that requires an active GUI
-	// connection (such as on Windows by default). Even if this
-	// is true, the ForceDaemon pref can override this.
-	resetOnZero bool
 
 	// mu guards the fields that follow.
 	// lock order: mu, then LocalBackend.mu
 	mu            sync.Mutex
-	lastUserID    ipn.WindowsUserID // tracks last userid; on change, Reset state for paranoia
-	activeReqs    map[*http.Request]*actor
+	activeReqs    map[*http.Request]ipnauth.Actor
 	backendWaiter waiterSet // of LocalBackend waiters
 	zeroReqWaiter waiterSet // of blockUntilZeroConnections waiters
 }
@@ -122,6 +122,10 @@ func (s *Server) awaitBackend(ctx context.Context) (_ *ipnlocal.LocalBackend, ok
 // This is primarily for the Windows GUI, because wintun can take awhile to
 // come up. See https://github.com/tailscale/tailscale/issues/6522.
 func (s *Server) serveServerStatus(w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDebug && runtime.GOOS != "windows" {
+		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotFound)
+		return
+	}
 	ctx := r.Context()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -194,10 +198,28 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	defer onDone()
 
 	if strings.HasPrefix(r.URL.Path, "/localapi/") {
-		lah := localapi.NewHandler(lb, s.logf, s.backendLogID)
-		lah.PermitRead, lah.PermitWrite = ci.Permissions(lb.OperatorUserID())
-		lah.PermitCert = ci.CanFetchCerts()
-		lah.Actor = ci
+		if actor, ok := ci.(*actor); ok {
+			reason, err := base64.StdEncoding.DecodeString(r.Header.Get(apitype.RequestReasonHeader))
+			if err != nil {
+				http.Error(w, "invalid reason header", http.StatusBadRequest)
+				return
+			}
+			ci = actorWithAccessOverride(actor, string(reason))
+		}
+
+		lah := localapi.NewHandler(localapi.HandlerConfig{
+			Actor:    ci,
+			Backend:  lb,
+			Logf:     s.logf,
+			LogID:    s.backendLogID,
+			EventBus: lb.Sys().Bus.Get(),
+		})
+		if actor, ok := ci.(*actor); ok {
+			lah.PermitRead, lah.PermitWrite = actor.Permissions(lb.OperatorUserID())
+			lah.PermitCert = actor.CanFetchCerts()
+		} else if testenv.InTest() {
+			lah.PermitRead, lah.PermitWrite = true, true
+		}
 		lah.ServeHTTP(w, r)
 		return
 	}
@@ -230,11 +252,11 @@ func (e inUseOtherUserError) Unwrap() error { return e.error }
 // The returned error, when non-nil, will be of type inUseOtherUserError.
 //
 // s.mu must be held.
-func (s *Server) checkConnIdentityLocked(ci *actor) error {
+func (s *Server) checkConnIdentityLocked(ci ipnauth.Actor) error {
 	// If clients are already connected, verify they're the same user.
 	// This mostly matters on Windows at the moment.
 	if len(s.activeReqs) > 0 {
-		var active *actor
+		var active ipnauth.Actor
 		for _, active = range s.activeReqs {
 			break
 		}
@@ -251,7 +273,9 @@ func (s *Server) checkConnIdentityLocked(ci *actor) error {
 				if username, err := active.Username(); err == nil {
 					fmt.Fprintf(&b, " by %s", username)
 				}
-				fmt.Fprintf(&b, ", pid %d", active.pid())
+				if active, ok := active.(*actor); ok {
+					fmt.Fprintf(&b, ", pid %d", active.pid())
+				}
 				return inUseOtherUserError{errors.New(b.String())}
 			}
 		}
@@ -267,7 +291,7 @@ func (s *Server) checkConnIdentityLocked(ci *actor) error {
 //
 // This is primarily used for the Windows GUI, to block until one user's done
 // controlling the tailscaled process.
-func (s *Server) blockWhileIdentityInUse(ctx context.Context, actor *actor) error {
+func (s *Server) blockWhileIdentityInUse(ctx context.Context, actor ipnauth.Actor) error {
 	inUse := func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -277,7 +301,18 @@ func (s *Server) blockWhileIdentityInUse(ctx context.Context, actor *actor) erro
 	for inUse() {
 		// Check whenever the connection count drops down to zero.
 		ready, cleanup := s.zeroReqWaiter.add(&s.mu, ctx)
-		<-ready
+		if inUse() {
+			// If the server was in use at the time of the initial check,
+			// but disconnected and was removed from the activeReqs map
+			// by the time we registered a waiter, the ready channel
+			// will never be closed, resulting in a deadlock. To avoid
+			// this, we can check again after registering the waiter.
+			//
+			// This method is planned for complete removal as part of the
+			// multi-user improvements in tailscale/corp#18342,
+			// and this approach should be fine as a temporary solution.
+			<-ready
+		}
 		cleanup()
 		if err := ctx.Err(); err != nil {
 			return err
@@ -291,6 +326,13 @@ func (s *Server) blockWhileIdentityInUse(ctx context.Context, actor *actor) erro
 // Unix-like platforms and specifies the ID of a local user
 // (in the os/user.User.Uid string form) who is allowed
 // to operate tailscaled without being root or using sudo.
+//
+// Sandboxed macos clients must directly supply, or be able to read,
+// an explicit token. Permission is inferred by validating that
+// token. Sandboxed macos clients also don't use ipnserver.actor at all
+// (and prior to that, they didn't use ipnauth.ConnIdentity)
+//
+// See safesocket and safesocket_darwin.
 func (a *actor) Permissions(operatorUID string) (read, write bool) {
 	switch envknob.GOOS() {
 	case "windows":
@@ -303,7 +345,7 @@ func (a *actor) Permissions(operatorUID string) (read, write bool) {
 		// checks here. Note that this permission model is being changed in
 		// tailscale/corp#18342.
 		return true, true
-	case "js":
+	case "js", "plan9":
 		return true, true
 	}
 	if a.ci.IsUnixSock() {
@@ -346,6 +388,9 @@ func isAllDigit(s string) bool {
 // connection. It's intended to give your non-root webserver access
 // (www-data, caddy, nginx, etc) to certs.
 func (a *actor) CanFetchCerts() bool {
+	if !buildfeatures.HasACME {
+		return false
+	}
 	if a.ci.IsUnixSock() && a.ci.Creds() != nil {
 		connUID, ok := a.ci.Creds().UserID()
 		if ok && connUID == userIDFromString(envknob.String("TS_PERMIT_CERT_UID")) {
@@ -361,22 +406,16 @@ func (a *actor) CanFetchCerts() bool {
 // The returned error may be of type [inUseOtherUserError].
 //
 // onDone must be called when the HTTP request is done.
-func (s *Server) addActiveHTTPRequest(req *http.Request, actor *actor) (onDone func(), err error) {
+func (s *Server) addActiveHTTPRequest(req *http.Request, actor ipnauth.Actor) (onDone func(), err error) {
+	if runtime.GOOS != "windows" && !buildfeatures.HasUnixSocketIdentity {
+		return func() {}, nil
+	}
+
 	if actor == nil {
 		return nil, errors.New("internal error: nil actor")
 	}
 
 	lb := s.mustBackend()
-
-	// If the connected user changes, reset the backend server state to make
-	// sure node keys don't leak between users.
-	var doReset bool
-	defer func() {
-		if doReset {
-			s.logf("identity changed; resetting server")
-			lb.ResetForClientDisconnect()
-		}
-	}()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -392,40 +431,25 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, actor *actor) (onDone f
 			// Tell the LocalBackend about the identity we're now running as,
 			// unless its the SYSTEM user. That user is not a real account and
 			// doesn't have a home directory.
-			uid, err := lb.SetCurrentUser(actor)
-			if err != nil {
-				return nil, err
-			}
-			if s.lastUserID != uid {
-				if s.lastUserID != "" {
-					doReset = true
-				}
-				s.lastUserID = uid
-			}
+			lb.SetCurrentUser(actor)
 		}
 	}
 
 	onDone = func() {
 		s.mu.Lock()
+		defer s.mu.Unlock()
 		delete(s.activeReqs, req)
-		remain := len(s.activeReqs)
-		s.mu.Unlock()
+		if len(s.activeReqs) != 0 {
+			// The server is not idle yet.
+			return
+		}
 
-		if remain == 0 && s.resetOnZero {
-			if lb.InServerMode() {
-				s.logf("client disconnected; staying alive in server mode")
-			} else {
-				s.logf("client disconnected; stopping server")
-				lb.ResetForClientDisconnect()
-			}
+		if envknob.GOOS() == "windows" && !actor.IsLocalSystem() {
+			lb.SetCurrentUser(nil)
 		}
 
 		// Wake up callers waiting for the server to be idle:
-		if remain == 0 {
-			s.mu.Lock()
-			s.zeroReqWaiter.wakeAll()
-			s.mu.Unlock()
-		}
+		s.zeroReqWaiter.wakeAll()
 	}
 
 	return onDone, nil
@@ -437,15 +461,15 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, actor *actor) (onDone f
 //
 // At some point, either before or after Run, the Server's SetLocalBackend
 // method must also be called before Server can do anything useful.
-func New(logf logger.Logf, logID logid.PublicID, netMon *netmon.Monitor) *Server {
+func New(logf logger.Logf, logID logid.PublicID, bus *eventbus.Bus, netMon *netmon.Monitor) *Server {
 	if netMon == nil {
 		panic("nil netMon")
 	}
 	return &Server{
 		backendLogID: logID,
 		logf:         logf,
+		bus:          bus,
 		netMon:       netMon,
-		resetOnZero:  envknob.GOOS() == "windows",
 	}
 }
 
@@ -486,17 +510,25 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 	runDone := make(chan struct{})
 	defer close(runDone)
 
-	// When the context is closed or when we return, whichever is first, close our listener
+	ec := s.bus.Client("ipnserver.Server")
+	defer ec.Close()
+	shutdownSub := eventbus.Subscribe[localapi.Shutdown](ec)
+
+	// When the context is closed, a [localapi.Shutdown] event is received,
+	// or when we return, whichever is first, close our listener
 	// and all open connections.
 	go func() {
 		select {
+		case <-shutdownSub.Events():
 		case <-ctx.Done():
 		case <-runDone:
 		}
 		ln.Close()
 	}()
 
-	systemd.Ready()
+	if ready, ok := feature.HookSystemdReady.GetOk(); ok {
+		ready()
+	}
 
 	hs := &http.Server{
 		Handler:     http.HandlerFunc(s.serveHTTP),
@@ -519,6 +551,10 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 // Windows and via $DEBUG_LISTENER/debug/ipn when tailscaled's --debug flag
 // is used to run a debug server.
 func (s *Server) ServeHTMLStatus(w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDebug {
+		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotFound)
+		return
+	}
 	lb := s.lb.Load()
 	if lb == nil {
 		http.Error(w, "no LocalBackend", http.StatusServiceUnavailable)

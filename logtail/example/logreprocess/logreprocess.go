@@ -37,7 +37,7 @@ func main() {
 		}()
 	}
 
-	req, err := http.NewRequest("GET", "https://log.tailscale.io/c/"+*collection+"?stream=true", nil)
+	req, err := http.NewRequest("GET", "https://log.tailscale.com/c/"+*collection+"?stream=true", nil)
 	if err != nil {
 		log.Fatal(err)
 	}

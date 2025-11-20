@@ -7,16 +7,18 @@
 // and groups to the specified `--uid`, `--gid` and `--groups`, and
 // then launches the requested `--cmd`.
 
-//go:build linux || (darwin && !ios) || freebsd || openbsd
+//go:build (linux && !android) || (darwin && !ios) || freebsd || openbsd
 
 package tailssh
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"log/syslog"
 	"os"
@@ -29,6 +31,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/pkg/sftp"
@@ -41,6 +44,14 @@ import (
 	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/logger"
 	"tailscale.com/version/distro"
+)
+
+const (
+	linux   = "linux"
+	darwin  = "darwin"
+	freebsd = "freebsd"
+	openbsd = "openbsd"
+	windows = "windows"
 )
 
 func init() {
@@ -63,16 +74,50 @@ var maybeStartLoginSession = func(dlogf logger.Logf, ia incubatorArgs) (close fu
 	return nil
 }
 
+// truePaths are the common locations to find the true binary, in likelihood order.
+var truePaths = [...]string{"/usr/bin/true", "/bin/true"}
+
+// tryExecInDir tries to run a command in dir and returns nil if it succeeds.
+// Otherwise, it returns a filesystem error or a timeout error if the command
+// took too long.
+func tryExecInDir(ctx context.Context, dir string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	run := func(path string) error {
+		cmd := exec.CommandContext(ctx, path)
+		cmd.Dir = dir
+		return cmd.Run()
+	}
+
+	// Assume that the following executables exist, are executable, and
+	// immediately return.
+	if runtime.GOOS == windows {
+		windir := os.Getenv("windir")
+		return run(filepath.Join(windir, "system32", "doskey.exe"))
+	}
+	// Execute the first "true" we find in the list.
+	for _, path := range truePaths {
+		// Note: LookPath does not consult $PATH when passed multi-label paths.
+		if p, err := exec.LookPath(path); err == nil {
+			return run(p)
+		}
+	}
+	return exec.ErrNotFound
+}
+
 // newIncubatorCommand returns a new exec.Cmd configured with
 // `tailscaled be-child ssh` as the entrypoint.
 //
-// If ss.srv.tailscaledPath is empty, this method is equivalent to
-// exec.CommandContext.
+// If ss.srv.tailscaledPath is empty, this method is almost equivalent to
+// exec.CommandContext. It will refuse to run in SFTP-mode. It will simulate the
+// behavior of SSHD when by falling back to the root directory if it cannot run
+// a command in the user’s home directory.
 //
 // The returned Cmd.Env is guaranteed to be nil; the caller populates it.
 func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err error) {
 	defer func() {
-		if cmd.Env != nil {
+		if cmd != nil && cmd.Env != nil {
 			panic("internal error")
 		}
 	}()
@@ -97,7 +142,35 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		loginShell := ss.conn.localUser.LoginShell()
 		args := shellArgs(isShell, ss.RawCommand())
 		logf("directly running %s %q", loginShell, args)
-		return exec.CommandContext(ss.ctx, loginShell, args...), nil
+		cmd = exec.CommandContext(ss.ctx, loginShell, args...)
+
+		// While running directly instead of using `tailscaled be-child`,
+		// do what sshd does by running inside the home directory,
+		// falling back to the root directory it doesn't have permissions.
+		// This can happen if the system has networked home directories,
+		// i.e. NFS or SMB, which enable root-squashing by default.
+		cmd.Dir = ss.conn.localUser.HomeDir
+		err := tryExecInDir(ss.ctx, cmd.Dir)
+		switch {
+		case errors.Is(err, exec.ErrNotFound):
+			// /bin/true might not be installed on a barebones system,
+			// so we assume that the home directory does not exist.
+			cmd.Dir = "/"
+		case errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist):
+			// Ensure that cmd.Dir is the source of the error.
+			var pathErr *fs.PathError
+			if errors.As(err, &pathErr) && pathErr.Path == cmd.Dir {
+				// If we cannot run loginShell in localUser.HomeDir,
+				// we will try to run this command in the root directory.
+				cmd.Dir = "/"
+			} else {
+				return nil, err
+			}
+		case err != nil:
+			return nil, err
+		}
+
+		return cmd, nil
 	}
 
 	lu := ss.conn.localUser
@@ -126,7 +199,7 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 	// We have to check the below outside of the incubator process, because it
 	// relies on the "getenforce" command being on the PATH, which it is not
 	// when in the incubator.
-	if runtime.GOOS == "linux" && hostinfo.IsSELinuxEnforcing() {
+	if runtime.GOOS == linux && hostinfo.IsSELinuxEnforcing() {
 		incubatorArgs = append(incubatorArgs, "--is-selinux-enforcing")
 	}
 
@@ -171,7 +244,10 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		}
 	}
 
-	return exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...), nil
+	cmd = exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...)
+	// The incubator will chdir into the home directory after it drops privileges.
+	cmd.Dir = "/"
+	return cmd, nil
 }
 
 var debugIncubator bool
@@ -210,8 +286,6 @@ type incubatorArgs struct {
 	debugTest          bool
 	isSELinuxEnforcing bool
 	encodedEnv         string
-	allowListEnvKeys   string
-	forwardedEnviron   []string
 }
 
 func parseIncubatorArgs(args []string) (incubatorArgs, error) {
@@ -246,31 +320,47 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 		ia.gids = append(ia.gids, gid)
 	}
 
-	ia.forwardedEnviron = os.Environ()
+	return ia, nil
+}
+
+// forwardedEnviron returns the concatenation of the current environment with
+// any environment variables specified in ia.encodedEnv.
+//
+// It also returns allowedExtraKeys, containing the env keys that were passed in
+// to ia.encodedEnv.
+func (ia incubatorArgs) forwardedEnviron() (env, allowedExtraKeys []string, err error) {
+	environ := os.Environ()
+
 	// pass through SSH_AUTH_SOCK environment variable to support ssh agent forwarding
-	ia.allowListEnvKeys = "SSH_AUTH_SOCK"
+	// TODO(bradfitz,percy): why is this listed specially? If the parent wanted to included
+	// it, couldn't it have just passed it to the incubator in encodedEnv?
+	// If it didn't, no reason for us to pass it to "su -w ..." if it's not in our env
+	// anyway? (Surely we don't want to inherit the tailscaled parent SSH_AUTH_SOCK, if any)
+	allowedExtraKeys = []string{"SSH_AUTH_SOCK"}
 
 	if ia.encodedEnv != "" {
 		unquoted, err := strconv.Unquote(ia.encodedEnv)
 		if err != nil {
-			return ia, fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
+			return nil, nil, fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
 		}
 
 		var extraEnviron []string
 
 		err = json.Unmarshal([]byte(unquoted), &extraEnviron)
 		if err != nil {
-			return ia, fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
+			return nil, nil, fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
 		}
 
-		ia.forwardedEnviron = append(ia.forwardedEnviron, extraEnviron...)
+		environ = append(environ, extraEnviron...)
 
-		for _, v := range extraEnviron {
-			ia.allowListEnvKeys = fmt.Sprintf("%s,%s", ia.allowListEnvKeys, strings.Split(v, "=")[0])
+		for _, kv := range extraEnviron {
+			if k, _, ok := strings.Cut(kv, "="); ok {
+				allowedExtraKeys = append(allowedExtraKeys, k)
+			}
 		}
 	}
 
-	return ia, nil
+	return environ, allowedExtraKeys, nil
 }
 
 // beIncubator is the entrypoint to the `tailscaled be-child ssh` subcommand.
@@ -426,13 +516,13 @@ func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 	// Only the macOS version of the login command supports executing a
 	// command, all other versions only support launching a shell without
 	// taking any arguments.
-	if !ia.isShell && runtime.GOOS != "darwin" {
+	if !ia.isShell && runtime.GOOS != darwin {
 		dlogf("won't use login because we're not in a shell or on macOS")
 		return nil
 	}
 
 	switch runtime.GOOS {
-	case "linux", "freebsd", "openbsd":
+	case linux, freebsd, openbsd:
 		if !ia.hasTTY {
 			dlogf("can't use login because of missing TTY")
 			// We can only use the login command if a shell was requested with
@@ -450,8 +540,13 @@ func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 	loginArgs := ia.loginArgs(loginCmdPath)
 	dlogf("logging in with %+v", loginArgs)
 
+	environ, _, err := ia.forwardedEnviron()
+	if err != nil {
+		return err
+	}
+
 	// If Exec works, the Go code will not proceed past this:
-	err = unix.Exec(loginCmdPath, loginArgs, ia.forwardedEnviron)
+	err = unix.Exec(loginCmdPath, loginArgs, environ)
 
 	// If we made it here, Exec failed.
 	return err
@@ -484,9 +579,14 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 		defer sessionCloser()
 	}
 
+	environ, allowListEnvKeys, err := ia.forwardedEnviron()
+	if err != nil {
+		return false, err
+	}
+
 	loginArgs := []string{
 		su,
-		"-w", ia.allowListEnvKeys,
+		"-w", strings.Join(allowListEnvKeys, ","),
 		"-l",
 		ia.localUser,
 	}
@@ -498,7 +598,7 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 	dlogf("logging in with %+v", loginArgs)
 
 	// If Exec works, the Go code will not proceed past this:
-	err = unix.Exec(su, loginArgs, ia.forwardedEnviron)
+	err = unix.Exec(su, loginArgs, environ)
 
 	// If we made it here, Exec failed.
 	return true, err
@@ -511,7 +611,7 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 func findSU(dlogf logger.Logf, ia incubatorArgs) string {
 	// Currently, we only support falling back to su on Linux. This
 	// potentially could work on BSDs as well, but requires testing.
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != linux {
 		return ""
 	}
 
@@ -527,11 +627,16 @@ func findSU(dlogf logger.Logf, ia incubatorArgs) string {
 		return ""
 	}
 
+	_, allowListEnvKeys, err := ia.forwardedEnviron()
+	if err != nil {
+		return ""
+	}
+
 	// First try to execute su -w <allow listed env> -l <user> -c true
 	// to make sure su supports the necessary arguments.
 	err = exec.Command(
 		su,
-		"-w", ia.allowListEnvKeys,
+		"-w", strings.Join(allowListEnvKeys, ","),
 		"-l",
 		ia.localUser,
 		"-c", "true",
@@ -558,10 +663,15 @@ func handleSSHInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 		return err
 	}
 
+	environ, _, err := ia.forwardedEnviron()
+	if err != nil {
+		return err
+	}
+
 	args := shellArgs(ia.isShell, ia.cmd)
 	dlogf("running %s %q", ia.loginShell, args)
-	cmd := newCommand(ia.hasTTY, ia.loginShell, ia.forwardedEnviron, args)
-	err := cmd.Run()
+	cmd := newCommand(ia.hasTTY, ia.loginShell, environ, args)
+	err = cmd.Run()
 	if ee, ok := err.(*exec.ExitError); ok {
 		ps := ee.ProcessState
 		code := ps.ExitCode()
@@ -637,7 +747,7 @@ func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGrou
 	euid := os.Geteuid()
 	egid := os.Getegid()
 
-	if runtime.GOOS == "darwin" || runtime.GOOS == "freebsd" {
+	if runtime.GOOS == darwin || runtime.GOOS == freebsd {
 		// On FreeBSD and Darwin, the first entry returned from the
 		// getgroups(2) syscall is the egid, and changing it with
 		// setgroups(2) changes the egid of the process. This is
@@ -736,7 +846,6 @@ func (ss *sshSession) launchProcess() error {
 	}
 
 	cmd := ss.cmd
-	cmd.Dir = "/"
 	cmd.Env = envForUser(ss.conn.localUser)
 	for _, kv := range ss.Environ() {
 		if acceptEnvPair(kv) {
@@ -992,10 +1101,10 @@ func (ss *sshSession) startWithStdPipes() (err error) {
 
 func envForUser(u *userMeta) []string {
 	return []string{
-		fmt.Sprintf("SHELL=" + u.LoginShell()),
-		fmt.Sprintf("USER=" + u.Username),
-		fmt.Sprintf("HOME=" + u.HomeDir),
-		fmt.Sprintf("PATH=" + defaultPathForUser(&u.User)),
+		fmt.Sprintf("SHELL=%s", u.LoginShell()),
+		fmt.Sprintf("USER=%s", u.Username),
+		fmt.Sprintf("HOME=%s", u.HomeDir),
+		fmt.Sprintf("PATH=%s", defaultPathForUser(&u.User)),
 	}
 }
 
@@ -1029,7 +1138,7 @@ func fileExists(path string) bool {
 // loginArgs returns the arguments to use to exec the login binary.
 func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 	switch runtime.GOOS {
-	case "darwin":
+	case darwin:
 		args := []string{
 			loginCmdPath,
 			"-f", // already authenticated
@@ -1049,7 +1158,7 @@ func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 		}
 
 		return args
-	case "linux":
+	case linux:
 		if distro.Get() == distro.Arch && !fileExists("/etc/pam.d/remote") {
 			// See https://github.com/tailscale/tailscale/issues/4924
 			//
@@ -1059,7 +1168,7 @@ func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 			return []string{loginCmdPath, "-f", ia.localUser, "-p"}
 		}
 		return []string{loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}
-	case "freebsd", "openbsd":
+	case freebsd, openbsd:
 		return []string{loginCmdPath, "-fp", "-h", ia.remoteIP, ia.localUser}
 	}
 	panic("unimplemented")
@@ -1067,6 +1176,10 @@ func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 
 func shellArgs(isShell bool, cmd string) []string {
 	if isShell {
+		if runtime.GOOS == freebsd || runtime.GOOS == openbsd {
+			// bsd shells don't support the "-l" option, so we can't run as a login shell
+			return []string{}
+		}
 		return []string{"-l"}
 	} else {
 		return []string{"-c", cmd}
@@ -1074,7 +1187,7 @@ func shellArgs(isShell bool, cmd string) []string {
 }
 
 func setGroups(groupIDs []int) error {
-	if runtime.GOOS == "darwin" && len(groupIDs) > 16 {
+	if runtime.GOOS == darwin && len(groupIDs) > 16 {
 		// darwin returns "invalid argument" if more than 16 groups are passed to syscall.Setgroups
 		// some info can be found here:
 		// https://opensource.apple.com/source/samba/samba-187.8/patches/support-darwin-initgroups-syscall.auto.html

@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/cmd/tailscale/cli/ffcomplete"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -128,7 +128,7 @@ func runPing(ctx context.Context, args []string) error {
 	for {
 		n++
 		ctx, cancel := context.WithTimeout(ctx, pingArgs.timeout)
-		pr, err := localClient.PingWithOpts(ctx, netip.MustParseAddr(ip), pingType(), tailscale.PingOpts{Size: pingArgs.size})
+		pr, err := localClient.PingWithOpts(ctx, netip.MustParseAddr(ip), pingType(), local.PingOpts{Size: pingArgs.size})
 		cancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
@@ -152,7 +152,9 @@ func runPing(ctx context.Context, args []string) error {
 		}
 		latency := time.Duration(pr.LatencySeconds * float64(time.Second)).Round(time.Millisecond)
 		via := pr.Endpoint
-		if pr.DERPRegionID != 0 {
+		if pr.PeerRelay != "" {
+			via = fmt.Sprintf("peer-relay(%s)", pr.PeerRelay)
+		} else if pr.DERPRegionID != 0 {
 			via = fmt.Sprintf("DERP(%s)", pr.DERPRegionCode)
 		}
 		if via == "" {

@@ -1,5 +1,6 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
+
 package promvarz
 
 import (
@@ -23,7 +24,7 @@ func TestHandler(t *testing.T) {
 	testVar1.Set(42)
 	testVar2.Set(4242)
 
-	svr := httptest.NewServer(http.HandlerFunc(Handler))
+	svr := httptest.NewServer(http.HandlerFunc(handler))
 	defer svr.Close()
 
 	want := `

@@ -150,6 +150,7 @@ func runEsbuildServe(buildOptions esbuild.BuildOptions) {
 		log.Fatalf("Cannot start esbuild server: %v", err)
 	}
 	log.Printf("Listening on http://%s:%d\n", result.Host, result.Port)
+	select {}
 }
 
 func runEsbuild(buildOptions esbuild.BuildOptions) esbuild.BuildResult {
@@ -175,6 +176,10 @@ func runEsbuild(buildOptions esbuild.BuildOptions) esbuild.BuildResult {
 // wasm_exec.js runtime helper library from the Go toolchain.
 func setupEsbuildWasmExecJS(build esbuild.PluginBuild) {
 	wasmExecSrcPath := filepath.Join(runtime.GOROOT(), "misc", "wasm", "wasm_exec.js")
+	if _, err := os.Stat(wasmExecSrcPath); os.IsNotExist(err) {
+		// Go 1.24+ location:
+		wasmExecSrcPath = filepath.Join(runtime.GOROOT(), "lib", "wasm", "wasm_exec.js")
+	}
 	build.OnResolve(esbuild.OnResolveOptions{
 		Filter: "./wasm_exec$",
 	}, func(args esbuild.OnResolveArgs) (esbuild.OnResolveResult, error) {

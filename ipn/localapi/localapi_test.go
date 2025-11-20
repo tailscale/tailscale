@@ -35,26 +35,23 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/wgengine"
 )
 
-var _ ipnauth.Actor = (*testActor)(nil)
-
-type testActor struct {
-	uid           ipn.WindowsUserID
-	name          string
-	isLocalSystem bool
-	isLocalAdmin  bool
+func handlerForTest(t testing.TB, h *Handler) *Handler {
+	if h.Actor == nil {
+		h.Actor = &ipnauth.TestActor{}
+	}
+	if h.b == nil {
+		h.b = &ipnlocal.LocalBackend{}
+	}
+	if h.logf == nil {
+		h.logf = logger.TestLogger(t)
+	}
+	return h
 }
-
-func (u *testActor) UserID() ipn.WindowsUserID { return u.uid }
-
-func (u *testActor) Username() (string, error) { return u.name, nil }
-
-func (u *testActor) IsLocalSystem() bool { return u.isLocalSystem }
-
-func (u *testActor) IsLocalAdmin(operatorUID string) bool { return u.isLocalAdmin }
 
 func TestValidHost(t *testing.T) {
 	tests := []struct {
@@ -73,7 +70,7 @@ func TestValidHost(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.host, func(t *testing.T) {
-			h := &Handler{}
+			h := handlerForTest(t, &Handler{})
 			if got := h.validHost(test.host); got != test.valid {
 				t.Errorf("validHost(%q)=%v, want %v", test.host, got, test.valid)
 			}
@@ -84,10 +81,9 @@ func TestValidHost(t *testing.T) {
 func TestSetPushDeviceToken(t *testing.T) {
 	tstest.Replace(t, &validLocalHostForTesting, true)
 
-	h := &Handler{
+	h := handlerForTest(t, &Handler{
 		PermitWrite: true,
-		b:           &ipnlocal.LocalBackend{},
-	}
+	})
 	s := httptest.NewServer(h)
 	defer s.Close()
 	c := s.Client()
@@ -141,9 +137,9 @@ func (b whoIsBackend) PeerCaps(ip netip.Addr) tailcfg.PeerCapMap {
 //
 // And https://github.com/tailscale/tailscale/issues/12465
 func TestWhoIsArgTypes(t *testing.T) {
-	h := &Handler{
+	h := handlerForTest(t, &Handler{
 		PermitRead: true,
-	}
+	})
 
 	match := func() (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
 		return (&tailcfg.Node{
@@ -175,7 +171,6 @@ func TestWhoIsArgTypes(t *testing.T) {
 						t.Fatalf("backend called with %v; want %v", k, keyStr)
 					}
 					return match()
-
 				},
 				peerCaps: map[netip.Addr]tailcfg.PeerCapMap{
 					netip.MustParseAddr("100.101.102.103"): map[tailcfg.PeerCapability][]tailcfg.RawMessage{
@@ -207,7 +202,10 @@ func TestWhoIsArgTypes(t *testing.T) {
 
 func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 	newHandler := func(connIsLocalAdmin bool) *Handler {
-		return &Handler{Actor: &testActor{isLocalAdmin: connIsLocalAdmin}, b: newTestLocalBackend(t)}
+		return handlerForTest(t, &Handler{
+			Actor: &ipnauth.TestActor{LocalAdmin: connIsLocalAdmin},
+			b:     newTestLocalBackend(t),
+		})
 	}
 	tests := []struct {
 		name     string
@@ -254,7 +252,7 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		for _, goos := range []string{"linux", "windows", "darwin"} {
+		for _, goos := range []string{"linux", "windows", "darwin", "illumos", "solaris"} {
 			t.Run(goos+"-"+tt.name, func(t *testing.T) {
 				err := authorizeServeConfigForGOOSAndUserContext(goos, tt.configIn, tt.h)
 				gotErr := err != nil
@@ -280,13 +278,17 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 	})
 }
 
+// TestServeWatchIPNBus used to test that various WatchIPNBus mask flags
+// changed the permissions required to access the endpoint.
+// However, since the removal of the NotifyNoPrivateKeys flag requirement
+// for read-only users, this test now only verifies that the endpoint
+// behaves correctly based on the PermitRead and PermitWrite settings.
 func TestServeWatchIPNBus(t *testing.T) {
 	tstest.Replace(t, &validLocalHostForTesting, true)
 
 	tests := []struct {
 		desc                    string
 		permitRead, permitWrite bool
-		mask                    ipn.NotifyWatchOpt // extra bits in addition to ipn.NotifyInitialState
 		wantStatus              int
 	}{
 		{
@@ -296,20 +298,13 @@ func TestServeWatchIPNBus(t *testing.T) {
 			wantStatus:  http.StatusForbidden,
 		},
 		{
-			desc:        "read-initial-state",
+			desc:        "read-only",
 			permitRead:  true,
 			permitWrite: false,
-			wantStatus:  http.StatusForbidden,
-		},
-		{
-			desc:        "read-initial-state-no-private-keys",
-			permitRead:  true,
-			permitWrite: false,
-			mask:        ipn.NotifyNoPrivateKeys,
 			wantStatus:  http.StatusOK,
 		},
 		{
-			desc:        "read-initial-state-with-private-keys",
+			desc:        "read-and-write",
 			permitRead:  true,
 			permitWrite: true,
 			wantStatus:  http.StatusOK,
@@ -318,17 +313,17 @@ func TestServeWatchIPNBus(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
-			h := &Handler{
+			h := handlerForTest(t, &Handler{
 				PermitRead:  tt.permitRead,
 				PermitWrite: tt.permitWrite,
 				b:           newTestLocalBackend(t),
-			}
+			})
 			s := httptest.NewServer(h)
 			defer s.Close()
 			c := s.Client()
 
 			ctx, cancel := context.WithCancel(context.Background())
-			req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/localapi/v0/watch-ipn-bus?mask=%d", s.URL, ipn.NotifyInitialState|tt.mask), nil)
+			req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/localapi/v0/watch-ipn-bus?mask=%d", s.URL, ipn.NotifyInitialState), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -353,10 +348,10 @@ func TestServeWatchIPNBus(t *testing.T) {
 
 func newTestLocalBackend(t testing.TB) *ipnlocal.LocalBackend {
 	var logf logger.Logf = logger.Discard
-	sys := new(tsd.System)
+	sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
 	store := new(mem.Store)
 	sys.Set(store)
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker.Get(), sys.UserMetricsRegistry(), sys.Bus.Get())
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}
@@ -366,6 +361,7 @@ func newTestLocalBackend(t testing.TB) *ipnlocal.LocalBackend {
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
+	t.Cleanup(lb.Shutdown)
 	return lb
 }
 

@@ -8,6 +8,7 @@ import (
 	"encoding/xml"
 	"log"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -165,7 +166,12 @@ func (c *StatCache) set(name string, depth int, ce *cacheEntry) {
 			children = make(map[string]*cacheEntry, len(ms.Responses)-1)
 			for i := 0; i < len(ms.Responses); i++ {
 				response := ms.Responses[i]
-				name := shared.Normalize(response.Href)
+				name, err := url.PathUnescape(response.Href)
+				if err != nil {
+					log.Printf("statcache.set child parse error: %s", err)
+					return
+				}
+				name = shared.Normalize(name)
 				raw := marshalMultiStatus(response)
 				entry := newCacheEntry(ce.Status, raw)
 				if i == 0 {

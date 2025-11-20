@@ -5,14 +5,76 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"maps"
 	"slices"
 	"strings"
 
+	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
 	"tailscale.com/types/netmap"
 )
+
+var dnsStatusCmd = &ffcli.Command{
+	Name:       "status",
+	ShortUsage: "tailscale dns status [--all]",
+	Exec:       runDNSStatus,
+	ShortHelp:  "Print the current DNS status and configuration",
+	LongHelp: strings.TrimSpace(`
+The 'tailscale dns status' subcommand prints the current DNS status and
+configuration, including:
+
+- Whether the built-in DNS forwarder is enabled.
+
+- The MagicDNS configuration provided by the coordination server.
+
+- Details on which resolver(s) Tailscale believes the system is using by
+  default.
+
+The --all flag can be used to output advanced debugging information, including
+fallback resolvers, nameservers, certificate domains, extra records, and the
+exit node filtered set.
+
+=== Contents of the MagicDNS configuration ===
+
+The MagicDNS configuration is provided by the coordination server to the client
+and includes the following components:
+
+- MagicDNS enablement status: Indicates whether MagicDNS is enabled across the
+  entire tailnet.
+
+- MagicDNS Suffix: The DNS suffix used for devices within your tailnet.
+
+- DNS Name: The DNS name that other devices in the tailnet can use to reach this
+  device.
+
+- Resolvers: The preferred DNS resolver(s) to be used for resolving queries, in
+  order of preference. If no resolvers are listed here, the system defaults are
+  used.
+
+- Split DNS Routes: Custom DNS resolvers may be used to resolve hostnames in
+  specific domains, this is also known as a 'Split DNS' configuration. The
+  mapping of domains to their respective resolvers is provided here.
+
+- Certificate Domains: The DNS names for which the coordination server will
+  assist in provisioning TLS certificates.
+
+- Extra Records: Additional DNS records that the coordination server might
+  provide to the internal DNS resolver.
+
+- Exit Node Filtered Set: DNS suffixes that the node, when acting as an exit
+  node DNS proxy, will not answer.
+
+For more information about the DNS functionality built into Tailscale, refer to
+https://tailscale.com/kb/1054/dns.
+`),
+	FlagSet: (func() *flag.FlagSet {
+		fs := newFlagSet("status")
+		fs.BoolVar(&dnsStatusArgs.all, "all", false, "outputs advanced debugging information")
+		return fs
+	})(),
+}
 
 // dnsStatusArgs are the arguments for the "dns status" subcommand.
 var dnsStatusArgs struct {
@@ -207,36 +269,4 @@ func fetchNetMap() (netMap *netmap.NetworkMap, err error) {
 		return nil, fmt.Errorf("no network map yet available, please try again later")
 	}
 	return notify.NetMap, nil
-}
-
-func dnsStatusLongHelp() string {
-	return `The 'tailscale dns status' subcommand prints the current DNS status and configuration, including:
-	
-- Whether the built-in DNS forwarder is enabled.
-- The MagicDNS configuration provided by the coordination server.
-- Details on which resolver(s) Tailscale believes the system is using by default.
-
-The --all flag can be used to output advanced debugging information, including fallback resolvers, nameservers, certificate domains, extra records, and the exit node filtered set.
-
-=== Contents of the MagicDNS configuration ===
-
-The MagicDNS configuration is provided by the coordination server to the client and includes the following components:
-
-- MagicDNS enablement status: Indicates whether MagicDNS is enabled across the entire tailnet.
-
-- MagicDNS Suffix: The DNS suffix used for devices within your tailnet.
-
-- DNS Name: The DNS name that other devices in the tailnet can use to reach this device.
-
-- Resolvers: The preferred DNS resolver(s) to be used for resolving queries, in order of preference. If no resolvers are listed here, the system defaults are used.
-
-- Split DNS Routes: Custom DNS resolvers may be used to resolve hostnames in specific domains, this is also known as a 'Split DNS' configuration. The mapping of domains to their respective resolvers is provided here.
-
-- Certificate Domains: The DNS names for which the coordination server will assist in provisioning TLS certificates.
-
-- Extra Records: Additional DNS records that the coordination server might provide to the internal DNS resolver.
-
-- Exit Node Filtered Set: DNS suffixes that the node, when acting as an exit node DNS proxy, will not answer.
-
-For more information about the DNS functionality built into Tailscale, refer to https://tailscale.com/kb/1054/dns.`
 }

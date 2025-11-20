@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -22,9 +23,9 @@ import (
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/multierr"
 )
 
 const (
@@ -64,7 +65,7 @@ type Pinger struct {
 	wg      sync.WaitGroup
 
 	// Following fields protected by mu
-	mu sync.Mutex
+	mu syncs.Mutex
 	// conns is a map of "type" to net.PacketConn, type is either
 	// "ip4:icmp" or "ip6:icmp"
 	conns map[string]net.PacketConn
@@ -157,17 +158,17 @@ func (p *Pinger) Close() error {
 	p.conns = nil
 	p.mu.Unlock()
 
-	var errors []error
+	var errs []error
 	for _, c := range conns {
 		if err := c.Close(); err != nil {
-			errors = append(errors, err)
+			errs = append(errs, err)
 		}
 	}
 
 	p.wg.Wait()
 	p.cleanupOutstanding()
 
-	return multierr.New(errors...)
+	return errors.Join(errs...)
 }
 
 func (p *Pinger) run(ctx context.Context, conn net.PacketConn, typ string) {

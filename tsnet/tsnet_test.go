@@ -36,13 +36,14 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"golang.org/x/net/proxy"
+	"tailscale.com/client/local"
 	"tailscale.com/cmd/testwrapper/flakytest"
-	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netns"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/tstest/deptest"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/key"
@@ -120,6 +121,7 @@ func startControl(t *testing.T) (controlURL string, control *testcontrol.Server)
 			Proxied: true,
 		},
 		MagicDNSDomain: "tail-scale.ts.net",
+		Logf:           t.Logf,
 	}
 	control.HTTPTestServer = httptest.NewUnstartedServer(control)
 	control.HTTPTestServer.Start()
@@ -221,7 +223,7 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 		getCertForTesting: testCertRoot.getCert,
 	}
 	if *verboseNodes {
-		s.Logf = log.Printf
+		s.Logf = t.Logf
 	}
 	t.Cleanup(func() { s.Close() })
 
@@ -232,30 +234,98 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 	return s, status.TailscaleIPs[0], status.Self.PublicKey
 }
 
+func TestDialBlocks(t *testing.T) {
+	tstest.Shard(t)
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	controlURL, _ := startControl(t)
+
+	// Make one tsnet that blocks until it's up.
+	s1, _, _ := startServer(t, ctx, controlURL, "s1")
+
+	ln, err := s1.Listen("tcp", ":8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	// Then make another tsnet node that will only be woken up
+	// upon the first dial.
+	tmp := filepath.Join(t.TempDir(), "s2")
+	os.MkdirAll(tmp, 0755)
+	s2 := &Server{
+		Dir:               tmp,
+		ControlURL:        controlURL,
+		Hostname:          "s2",
+		Store:             new(mem.Store),
+		Ephemeral:         true,
+		getCertForTesting: testCertRoot.getCert,
+	}
+	if *verboseNodes {
+		s2.Logf = log.Printf
+	}
+	t.Cleanup(func() { s2.Close() })
+
+	c, err := s2.Dial(ctx, "tcp", "s1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+}
+
+// TestConn tests basic TCP connections between two tsnet Servers, s1 and s2:
+//
+//   - s1, a subnet router, first listens on its TCP :8081.
+//   - s2 can connect to s1:8081
+//   - s2 cannot connect to s1:8082 (no listener)
+//   - s2 can dial through the subnet router functionality (getting a synthetic RST
+//     that we verify we generated & saw)
 func TestConn(t *testing.T) {
+	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	controlURL, c := startControl(t)
 	s1, s1ip, s1PubKey := startServer(t, ctx, controlURL, "s1")
-	s2, _, _ := startServer(t, ctx, controlURL, "s2")
 
-	s1.lb.EditPrefs(&ipn.MaskedPrefs{
+	// Track whether we saw an attempted dial to 192.0.2.1:8081.
+	var saw192DocNetDial atomic.Bool
+	s1.RegisterFallbackTCPHandler(func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
+		t.Logf("s1: fallback TCP handler called for %v -> %v", src, dst)
+		if dst.String() == "192.0.2.1:8081" {
+			saw192DocNetDial.Store(true)
+		}
+		return nil, true // nil handler but intercept=true means to send RST
+	})
+
+	lc1 := must.Get(s1.LocalClient())
+
+	must.Get(lc1.EditPrefs(ctx, &ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			AdvertiseRoutes: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
 		},
 		AdvertiseRoutesSet: true,
-	})
+	}))
 	c.SetSubnetRoutes(s1PubKey, []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
 
-	lc2, err := s2.LocalClient()
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Start s2 after s1 is fully set up, including advertising its routes,
+	// otherwise the test is flaky if the test starts dialing through s2 before
+	// our test control server has told s2 about s1's routes.
+	s2, _, _ := startServer(t, ctx, controlURL, "s2")
+	lc2 := must.Get(s2.LocalClient())
+
+	must.Get(lc2.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			RouteAll: true,
+		},
+		RouteAllSet: true,
+	}))
 
 	// ping to make sure the connection is up.
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingTSMP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,12 +338,26 @@ func TestConn(t *testing.T) {
 	}
 	defer ln.Close()
 
-	w, err := s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip))
-	if err != nil {
-		t.Fatal(err)
-	}
+	s1Conns := make(chan net.Conn)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				t.Errorf("s1.Accept: %v", err)
+				return
+			}
+			select {
+			case s1Conns <- c:
+			case <-ctx.Done():
+				c.Close()
+			}
+		}
+	}()
 
-	r, err := ln.Accept()
+	w, err := s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,32 +367,56 @@ func TestConn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := make([]byte, len(want))
-	if _, err := io.ReadAtLeast(r, got, len(got)); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("got: %q", got)
-	if string(got) != want {
-		t.Errorf("got %q, want %q", got, want)
+	select {
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for connection")
+	case r := <-s1Conns:
+		got := make([]byte, len(want))
+		_, err := io.ReadAtLeast(r, got, len(got))
+		r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("got: %q", got)
+		if string(got) != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
 	}
 
+	// Dial a non-existent port on s1 and expect it to fail.
 	_, err = s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8082", s1ip)) // some random port
 	if err == nil {
 		t.Fatalf("unexpected success; should have seen a connection refused error")
 	}
+	t.Logf("got expected failure: %v", err)
 
-	// s1 is a subnet router for TEST-NET-1 (192.0.2.0/24). Lets dial to that
-	// subnet from s2 to ensure a listener without an IP address (i.e. ":8081")
-	// only matches destination IPs corresponding to the node's IP, and not
-	// to any random IP a subnet is routing.
-	_, err = s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", "192.0.2.1"))
+	// s1 is a subnet router for TEST-NET-1 (192.0.2.0/24). Let's dial to that
+	// subnet from s2 to ensure a listener without an IP address (i.e. our
+	// ":8081" listen above) only matches destination IPs corresponding to the
+	// s1 node's IP addresses, and not to any random IP of a subnet it's routing.
+	//
+	// The RegisterFallbackTCPHandler on s1 above handles sending a RST when the
+	// TCP SYN arrives from s2. But we bound it to 5 seconds lest a regression
+	// like tailscale/tailscale#17805 recur.
+	s2dialer := s2.Sys().Dialer.Get()
+	s2dialer.SetSystemDialerForTest(func(ctx context.Context, netw, addr string) (net.Conn, error) {
+		t.Logf("s2: unexpected system dial called for %s %s", netw, addr)
+		return nil, fmt.Errorf("system dialer called unexpectedly for %s %s", netw, addr)
+	})
+	docCtx, docCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer docCancel()
+	_, err = s2.Dial(docCtx, "tcp", "192.0.2.1:8081")
 	if err == nil {
 		t.Fatalf("unexpected success; should have seen a connection refused error")
+	}
+	if !saw192DocNetDial.Load() {
+		t.Errorf("expected s1's fallback TCP handler to have been called for 192.0.2.1:8081")
 	}
 }
 
 func TestLoopbackLocalAPI(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8557")
+	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -384,6 +492,7 @@ func TestLoopbackLocalAPI(t *testing.T) {
 
 func TestLoopbackSOCKS5(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8198")
+	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -434,6 +543,7 @@ func TestLoopbackSOCKS5(t *testing.T) {
 }
 
 func TestTailscaleIPs(t *testing.T) {
+	tstest.Shard(t)
 	controlURL, _ := startControl(t)
 
 	tmp := t.TempDir()
@@ -476,6 +586,7 @@ func TestTailscaleIPs(t *testing.T) {
 // TestListenerCleanup is a regression test to verify that s.Close doesn't
 // deadlock if a listener is still open.
 func TestListenerCleanup(t *testing.T) {
+	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -494,11 +605,31 @@ func TestListenerCleanup(t *testing.T) {
 	if err := ln.Close(); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("second ln.Close error: %v, want net.ErrClosed", err)
 	}
+
+	// Verify that handling a connection from gVisor (from a packet arriving)
+	// after a listener closed doesn't panic (previously: sending on a closed
+	// channel) or hang.
+	c := &closeTrackConn{}
+	ln.(*listener).handle(c)
+	if !c.closed {
+		t.Errorf("c.closed = false, want true")
+	}
+}
+
+type closeTrackConn struct {
+	net.Conn
+	closed bool
+}
+
+func (wc *closeTrackConn) Close() error {
+	wc.closed = true
+	return nil
 }
 
 // tests https://github.com/tailscale/tailscale/issues/6973 -- that we can start a tsnet server,
 // stop it, and restart it, even on Windows.
 func TestStartStopStartGetsSameIP(t *testing.T) {
+	tstest.Shard(t)
 	controlURL, _ := startControl(t)
 
 	tmp := t.TempDir()
@@ -510,7 +641,7 @@ func TestStartStopStartGetsSameIP(t *testing.T) {
 			Dir:        tmps1,
 			ControlURL: controlURL,
 			Hostname:   "s1",
-			Logf:       logger.TestLogger(t),
+			Logf:       tstest.WhileTestRunningLogger(t),
 		}
 	}
 	s1 := newServer()
@@ -548,6 +679,7 @@ func TestStartStopStartGetsSameIP(t *testing.T) {
 }
 
 func TestFunnel(t *testing.T) {
+	tstest.Shard(t)
 	ctx, dialCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer dialCancel()
 
@@ -608,6 +740,38 @@ func TestFunnel(t *testing.T) {
 	}
 }
 
+func TestListenerClose(t *testing.T) {
+	tstest.Shard(t)
+	ctx := context.Background()
+	controlURL, _ := startControl(t)
+
+	s1, _, _ := startServer(t, ctx, controlURL, "s1")
+
+	ln, err := s1.Listen("tcp", ":8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		c, err := ln.Accept()
+		if c != nil {
+			c.Close()
+		}
+		errc <- err
+	}()
+
+	ln.Close()
+	select {
+	case err := <-errc:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Errorf("unexpected error: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for Accept to return")
+	}
+}
+
 func dialIngressConn(from, to *Server, target string) (net.Conn, error) {
 	toLC := must.Get(to.LocalClient())
 	toStatus := must.Get(toLC.StatusWithoutPeers(context.Background()))
@@ -657,6 +821,7 @@ func (c *bufferedConn) Read(b []byte) (int, error) {
 }
 
 func TestFallbackTCPHandler(t *testing.T) {
+	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -699,6 +864,7 @@ func TestFallbackTCPHandler(t *testing.T) {
 }
 
 func TestCapturePcap(t *testing.T) {
+	tstest.Shard(t)
 	const timeLimit = 120
 	ctx, cancel := context.WithTimeout(context.Background(), timeLimit*time.Second)
 	defer cancel()
@@ -752,6 +918,7 @@ func TestCapturePcap(t *testing.T) {
 }
 
 func TestUDPConn(t *testing.T) {
+	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -821,16 +988,6 @@ func TestUDPConn(t *testing.T) {
 	}
 }
 
-// testWarnable is a Warnable that is used within this package for testing purposes only.
-var testWarnable = health.Register(&health.Warnable{
-	Code:     "test-warnable-tsnet",
-	Title:    "Test warnable",
-	Severity: health.SeverityLow,
-	Text: func(args health.Args) string {
-		return args[health.ArgError]
-	},
-})
-
 func parseMetrics(m []byte) (map[string]float64, error) {
 	metrics := make(map[string]float64)
 
@@ -864,25 +1021,225 @@ func promMetricLabelsStr(labels []*dto.LabelPair) string {
 	}
 	var b strings.Builder
 	b.WriteString("{")
-	for i, l := range labels {
+	for i, lb := range labels {
 		if i > 0 {
 			b.WriteString(",")
 		}
-		b.WriteString(fmt.Sprintf("%s=%q", l.GetName(), l.GetValue()))
+		b.WriteString(fmt.Sprintf("%s=%q", lb.GetName(), lb.GetValue()))
 	}
 	b.WriteString("}")
 	return b.String()
 }
 
-func TestUserMetrics(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/13420")
-	tstest.ResourceCheck(t)
+// sendData sends a given amount of bytes from s1 to s2.
+func sendData(logf func(format string, args ...any), ctx context.Context, bytesCount int, s1, s2 *Server, s1ip, s2ip netip.Addr) error {
+	lb := must.Get(s1.Listen("tcp", fmt.Sprintf("%s:8081", s1ip)))
+	defer lb.Close()
+
+	// Dial to s1 from s2
+	w, err := s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip))
+	if err != nil {
+		return err
+	}
+	defer w.Close()
+
+	stopReceive := make(chan struct{})
+	defer close(stopReceive)
+	allReceived := make(chan error)
+	defer close(allReceived)
+
+	go func() {
+		conn, err := lb.Accept()
+		if err != nil {
+			allReceived <- err
+			return
+		}
+		conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+
+		total := 0
+		recvStart := time.Now()
+		for {
+			got := make([]byte, bytesCount)
+			n, err := conn.Read(got)
+			if err != nil {
+				allReceived <- fmt.Errorf("failed reading packet, %s", err)
+				return
+			}
+			got = got[:n]
+
+			select {
+			case <-stopReceive:
+				return
+			default:
+			}
+
+			total += n
+			logf("received %d/%d bytes, %.2f %%", total, bytesCount, (float64(total) / (float64(bytesCount)) * 100))
+
+			// Validate the received bytes to be the same as the sent bytes.
+			for _, b := range string(got) {
+				if b != 'A' {
+					allReceived <- fmt.Errorf("received unexpected byte: %c", b)
+					return
+				}
+			}
+
+			if total == bytesCount {
+				break
+			}
+		}
+
+		logf("all received, took: %s", time.Since(recvStart).String())
+		allReceived <- nil
+	}()
+
+	sendStart := time.Now()
+	w.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	if _, err := w.Write(bytes.Repeat([]byte("A"), bytesCount)); err != nil {
+		stopReceive <- struct{}{}
+		return err
+	}
+
+	logf("all sent (%s), waiting for all packets (%d) to be received", time.Since(sendStart).String(), bytesCount)
+	err, _ = <-allReceived
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func TestUserMetricsByteCounters(t *testing.T) {
+	tstest.Shard(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	controlURL, _ := startControl(t)
+	s1, s1ip, _ := startServer(t, ctx, controlURL, "s1")
+	defer s1.Close()
+	s2, s2ip, _ := startServer(t, ctx, controlURL, "s2")
+	defer s2.Close()
+
+	lc1, err := s1.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lc2, err := s2.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Force an update to the netmap to ensure that the metrics are up-to-date.
+	s1.lb.DebugForceNetmapUpdate()
+	s2.lb.DebugForceNetmapUpdate()
+
+	// Wait for both nodes to have a peer in their netmap.
+	waitForCondition(t, "waiting for netmaps to contain peer", 90*time.Second, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		status1, err := lc1.Status(ctx)
+		if err != nil {
+			t.Logf("getting status: %s", err)
+			return false
+		}
+		status2, err := lc2.Status(ctx)
+		if err != nil {
+			t.Logf("getting status: %s", err)
+			return false
+		}
+		return len(status1.Peers()) > 0 && len(status2.Peers()) > 0
+	})
+
+	// ping to make sure the connection is up.
+	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	if err != nil {
+		t.Fatalf("pinging: %s", err)
+	}
+	t.Logf("ping success: %#+v", res)
+
+	mustDirect(t, t.Logf, lc1, lc2)
+
+	// 1 megabytes
+	bytesToSend := 1 * 1024 * 1024
+
+	// This asserts generates some traffic, it is factored out
+	// of TestUDPConn.
+	start := time.Now()
+	err = sendData(t.Logf, ctx, bytesToSend, s1, s2, s1ip, s2ip)
+	if err != nil {
+		t.Fatalf("Failed to send packets: %v", err)
+	}
+	t.Logf("Sent %d bytes from s1 to s2 in %s", bytesToSend, time.Since(start).String())
+
+	ctxLc, cancelLc := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelLc()
+	metrics1, err := lc1.UserMetrics(ctxLc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsedMetrics1, err := parseMetrics(metrics1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Allow the metrics for the bytes sent to be off by 15%.
+	bytesSentTolerance := 1.15
+
+	t.Logf("Metrics1:\n%s\n", metrics1)
+
+	// Verify that the amount of data recorded in bytes is higher or equal to the data sent
+	inboundBytes1 := parsedMetrics1[`tailscaled_inbound_bytes_total{path="direct_ipv4"}`]
+	if inboundBytes1 < float64(bytesToSend) {
+		t.Errorf(`metrics1, tailscaled_inbound_bytes_total{path="direct_ipv4"}: expected higher (or equal) than %d, got: %f`, bytesToSend, inboundBytes1)
+	}
+
+	// But ensure that it is not too much higher than the data sent.
+	if inboundBytes1 > float64(bytesToSend)*bytesSentTolerance {
+		t.Errorf(`metrics1, tailscaled_inbound_bytes_total{path="direct_ipv4"}: expected lower than %f, got: %f`, float64(bytesToSend)*bytesSentTolerance, inboundBytes1)
+	}
+
+	metrics2, err := lc2.UserMetrics(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsedMetrics2, err := parseMetrics(metrics2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("Metrics2:\n%s\n", metrics2)
+
+	// Verify that the amount of data recorded in bytes is higher or equal than the data sent.
+	outboundBytes2 := parsedMetrics2[`tailscaled_outbound_bytes_total{path="direct_ipv4"}`]
+	if outboundBytes2 < float64(bytesToSend) {
+		t.Errorf(`metrics2, tailscaled_outbound_bytes_total{path="direct_ipv4"}: expected higher (or equal) than %d, got: %f`, bytesToSend, outboundBytes2)
+	}
+
+	// But ensure that it is not too much higher than the data sent.
+	if outboundBytes2 > float64(bytesToSend)*bytesSentTolerance {
+		t.Errorf(`metrics2, tailscaled_outbound_bytes_total{path="direct_ipv4"}: expected lower than %f, got: %f`, float64(bytesToSend)*bytesSentTolerance, outboundBytes2)
+	}
+}
+
+func TestUserMetricsRouteGauges(t *testing.T) {
+	tstest.Shard(t)
+	// Windows does not seem to support or report back routes when running in
+	// userspace via tsnet. So, we skip this check on Windows.
+	// TODO(kradalby): Figure out if this is correct.
+	if runtime.GOOS == "windows" {
+		t.Skipf("skipping on windows")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	controlURL, c := startControl(t)
-	s1, s1ip, s1PubKey := startServer(t, ctx, controlURL, "s1")
+	s1, _, s1PubKey := startServer(t, ctx, controlURL, "s1")
+	defer s1.Close()
 	s2, _, _ := startServer(t, ctx, controlURL, "s2")
+	defer s2.Close()
 
 	s1.lb.EditPrefs(&ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
@@ -911,24 +1268,11 @@ func TestUserMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// ping to make sure the connection is up.
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
-	if err != nil {
-		t.Fatalf("pinging: %s", err)
-	}
-	t.Logf("ping success: %#+v", res)
-
-	ht := s1.lb.HealthTracker()
-	ht.SetUnhealthy(testWarnable, health.Args{"Text": "Hello world 1"})
-
 	// Force an update to the netmap to ensure that the metrics are up-to-date.
 	s1.lb.DebugForceNetmapUpdate()
 	s2.lb.DebugForceNetmapUpdate()
 
 	wantRoutes := float64(2)
-	if runtime.GOOS == "windows" {
-		wantRoutes = 0
-	}
 
 	// Wait for the routes to be propagated to node 1 to ensure
 	// that the metrics are up-to-date.
@@ -940,12 +1284,6 @@ func TestUserMetrics(t *testing.T) {
 			t.Logf("getting status: %s", err)
 			return false
 		}
-		if runtime.GOOS == "windows" {
-			// Windows does not seem to support or report back routes when running in
-			// userspace via tsnet. So, we skip this check on Windows.
-			// TODO(kradalby): Figure out if this is correct.
-			return true
-		}
 		// Wait for the primary routes to reach our desired routes, which is wantRoutes + 1, because
 		// the PrimaryRoutes list will contain a exit node route, which the metric does not count.
 		return status1.Self.PrimaryRoutes != nil && status1.Self.PrimaryRoutes.Len() == int(wantRoutes)+1
@@ -954,11 +1292,6 @@ func TestUserMetrics(t *testing.T) {
 	ctxLc, cancelLc := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelLc()
 	metrics1, err := lc1.UserMetrics(ctxLc)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	status1, err := lc1.Status(ctxLc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -985,24 +1318,7 @@ func TestUserMetrics(t *testing.T) {
 		t.Errorf("metrics1, tailscaled_approved_routes: got %v, want %v", got, want)
 	}
 
-	// Validate the health counter metric against the status of the node
-	if got, want := parsedMetrics1[`tailscaled_health_messages{type="warning"}`], float64(len(status1.Health)); got != want {
-		t.Errorf("metrics1, tailscaled_health_messages: got %v, want %v", got, want)
-	}
-
-	// The node is the primary subnet router for 2 routes:
-	// - 192.0.2.0/24
-	// - 192.0.5.1/32
-	if got, want := parsedMetrics1["tailscaled_primary_routes"], wantRoutes; got != want {
-		t.Errorf("metrics1, tailscaled_primary_routes: got %v, want %v", got, want)
-	}
-
 	metrics2, err := lc2.UserMetrics(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	status2, err := lc2.Status(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1023,16 +1339,6 @@ func TestUserMetrics(t *testing.T) {
 	if got, want := parsedMetrics2["tailscaled_approved_routes"], 0.0; got != want {
 		t.Errorf("metrics2, tailscaled_approved_routes: got %v, want %v", got, want)
 	}
-
-	// Validate the health counter metric against the status of the node
-	if got, want := parsedMetrics2[`tailscaled_health_messages{type="warning"}`], float64(len(status2.Health)); got != want {
-		t.Errorf("metrics2, tailscaled_health_messages: got %v, want %v", got, want)
-	}
-
-	// The node is the primary subnet router for 0 routes
-	if got, want := parsedMetrics2["tailscaled_primary_routes"], 0.0; got != want {
-		t.Errorf("metrics2, tailscaled_primary_routes: got %v, want %v", got, want)
-	}
 }
 
 func waitForCondition(t *testing.T, msg string, waitTime time.Duration, f func() bool) {
@@ -1043,4 +1349,47 @@ func waitForCondition(t *testing.T, msg string, waitTime time.Duration, f func()
 		}
 	}
 	t.Fatalf("waiting for condition: %s", msg)
+}
+
+// mustDirect ensures there is a direct connection between LocalClient 1 and 2
+func mustDirect(t *testing.T, logf logger.Logf, lc1, lc2 *local.Client) {
+	t.Helper()
+	lastLog := time.Now().Add(-time.Minute)
+	// See https://github.com/tailscale/tailscale/issues/654
+	// and https://github.com/tailscale/tailscale/issues/3247 for discussions of this deadline.
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		status1, err := lc1.Status(ctx)
+		if err != nil {
+			continue
+		}
+		status2, err := lc2.Status(ctx)
+		if err != nil {
+			continue
+		}
+		pst := status1.Peer[status2.Self.PublicKey]
+		if pst.CurAddr != "" {
+			logf("direct link %s->%s found with addr %s", status1.Self.HostName, status2.Self.HostName, pst.CurAddr)
+			return
+		}
+		if now := time.Now(); now.Sub(lastLog) > time.Second {
+			logf("no direct path %s->%s yet, addrs %v", status1.Self.HostName, status2.Self.HostName, pst.Addrs)
+			lastLog = now
+		}
+	}
+	t.Error("magicsock did not find a direct path from lc1 to lc2")
+}
+
+func TestDeps(t *testing.T) {
+	tstest.Shard(t)
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		OnDep: func(dep string) {
+			if strings.Contains(dep, "portlist") {
+				t.Errorf("unexpected dep: %q", dep)
+			}
+		},
+	}.Check(t)
 }

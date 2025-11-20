@@ -52,11 +52,17 @@
 //     ${TS_CERT_DOMAIN}, it will be replaced with the value of the available FQDN.
 //     It cannot be used in conjunction with TS_DEST_IP. The file is watched for changes,
 //     and will be re-applied when it changes.
-//   - TS_HEALTHCHECK_ADDR_PORT: if specified, an HTTP health endpoint will be
-//     served at /healthz at the provided address, which should be in form [<address>]:<port>.
-//     If not set, no health check will be run. If set to :<port>, addr will default to 0.0.0.0
-//     The health endpoint will return 200 OK if this node has at least one tailnet IP address,
-//     otherwise returns 503.
+//   - TS_HEALTHCHECK_ADDR_PORT: deprecated, use TS_ENABLE_HEALTH_CHECK instead and optionally
+//     set TS_LOCAL_ADDR_PORT. Will be removed in 1.82.0.
+//   - TS_LOCAL_ADDR_PORT: the address and port to serve local metrics and health
+//     check endpoints if enabled via TS_ENABLE_METRICS and/or TS_ENABLE_HEALTH_CHECK.
+//     Defaults to [::]:9002, serving on all available interfaces.
+//   - TS_ENABLE_METRICS: if true, a metrics endpoint will be served at /metrics on
+//     the address specified by TS_LOCAL_ADDR_PORT. See https://tailscale.com/kb/1482/client-metrics
+//     for more information on the metrics exposed.
+//   - TS_ENABLE_HEALTH_CHECK: if true, a health check endpoint will be served at /healthz on
+//     the address specified by TS_LOCAL_ADDR_PORT. The health endpoint will return 200
+//     OK if this node has at least one tailnet IP address, otherwise returns 503.
 //     NB: the health criteria might change in the future.
 //   - TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR: if specified, a path to a
 //     directory that containers tailscaled config in file. The config file needs to be
@@ -99,10 +105,10 @@ import (
 	"log"
 	"math"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -115,6 +121,10 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	kubeutils "tailscale.com/k8s-operator"
+	healthz "tailscale.com/kube/health"
+	"tailscale.com/kube/kubetypes"
+	"tailscale.com/kube/metrics"
+	"tailscale.com/kube/services"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
@@ -130,81 +140,133 @@ func newNetfilterRunner(logf logger.Logf) (linuxfw.NetfilterRunner, error) {
 }
 
 func main() {
+	if err := run(); err != nil && !errors.Is(err, context.Canceled) {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	log.SetPrefix("boot: ")
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
-	cfg := &settings{
-		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
-		Hostname:                              defaultEnv("TS_HOSTNAME", ""),
-		Routes:                                defaultEnvStringPointer("TS_ROUTES"),
-		ServeConfigPath:                       defaultEnv("TS_SERVE_CONFIG", ""),
-		ProxyTargetIP:                         defaultEnv("TS_DEST_IP", ""),
-		ProxyTargetDNSName:                    defaultEnv("TS_EXPERIMENTAL_DEST_DNS_NAME", ""),
-		TailnetTargetIP:                       defaultEnv("TS_TAILNET_TARGET_IP", ""),
-		TailnetTargetFQDN:                     defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
-		DaemonExtraArgs:                       defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
-		ExtraArgs:                             defaultEnv("TS_EXTRA_ARGS", ""),
-		InKubernetes:                          os.Getenv("KUBERNETES_SERVICE_HOST") != "",
-		UserspaceMode:                         defaultBool("TS_USERSPACE", true),
-		StateDir:                              defaultEnv("TS_STATE_DIR", ""),
-		AcceptDNS:                             defaultEnvBoolPointer("TS_ACCEPT_DNS"),
-		KubeSecret:                            defaultEnv("TS_KUBE_SECRET", "tailscale"),
-		SOCKSProxyAddr:                        defaultEnv("TS_SOCKS5_SERVER", ""),
-		HTTPProxyAddr:                         defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
-		Socket:                                defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
-		AuthOnce:                              defaultBool("TS_AUTH_ONCE", false),
-		Root:                                  defaultEnv("TS_TEST_ONLY_ROOT", "/"),
-		TailscaledConfigFilePath:              tailscaledConfigFilePath(),
-		AllowProxyingClusterTrafficViaIngress: defaultBool("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS", false),
-		PodIP:                                 defaultEnv("POD_IP", ""),
-		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
-		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
-		EgressSvcsCfgPath:                     defaultEnv("TS_EGRESS_SERVICES_CONFIG_PATH", ""),
-	}
 
-	if err := cfg.validate(); err != nil {
-		log.Fatalf("invalid configuration: %v", err)
+	cfg, err := configFromEnv()
+	if err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
 	if !cfg.UserspaceMode {
 		if err := ensureTunFile(cfg.Root); err != nil {
-			log.Fatalf("Unable to create tuntap device file: %v", err)
+			return fmt.Errorf("unable to create tuntap device file: %w", err)
 		}
 		if cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.Routes != nil || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" {
 			if err := ensureIPForwarding(cfg.Root, cfg.ProxyTargetIP, cfg.TailnetTargetIP, cfg.TailnetTargetFQDN, cfg.Routes); err != nil {
 				log.Printf("Failed to enable IP forwarding: %v", err)
 				log.Printf("To run tailscale as a proxy or router container, IP forwarding must be enabled.")
 				if cfg.InKubernetes {
-					log.Fatalf("You can either set the sysctls as a privileged initContainer, or run the tailscale container with privileged=true.")
+					return fmt.Errorf("you can either set the sysctls as a privileged initContainer, or run the tailscale container with privileged=true.")
 				} else {
-					log.Fatalf("You can fix this by running the container with privileged=true, or the equivalent in your container runtime that permits access to sysctls.")
+					return fmt.Errorf("you can fix this by running the container with privileged=true, or the equivalent in your container runtime that permits access to sysctls.")
 				}
 			}
 		}
 	}
 
-	// Context is used for all setup stuff until we're in steady
-	// state, so that if something is hanging we eventually time out
-	// and crashloop the container.
-	bootCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// Root context for the whole containerboot process, used to make sure
+	// shutdown signals are promptly and cleanly handled.
+	ctx, cancel := contextWithExitSignalWatch()
 	defer cancel()
 
+	// bootCtx is used for all setup stuff until we're in steady
+	// state, so that if something is hanging we eventually time out
+	// and crashloop the container.
+	bootCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	var kc *kubeClient
 	if cfg.InKubernetes {
-		initKubeClient(cfg.Root)
-		if err := cfg.setupKube(bootCtx); err != nil {
-			log.Fatalf("error setting up for running on Kubernetes: %v", err)
+		kc, err = newKubeClient(cfg.Root, cfg.KubeSecret)
+		if err != nil {
+			return fmt.Errorf("error initializing kube client: %w", err)
+		}
+		if err := cfg.setupKube(bootCtx, kc); err != nil {
+			return fmt.Errorf("error setting up for running on Kubernetes: %w", err)
+		}
+		// Clear out any state from previous runs of containerboot. Check
+		// hasKubeStateStore because although we know we're in kube, that
+		// doesn't guarantee the state store is properly configured.
+		if hasKubeStateStore(cfg) {
+			if err := kc.resetContainerbootState(bootCtx, cfg.PodUID); err != nil {
+				return fmt.Errorf("error clearing previous state from Secret: %w", err)
+			}
 		}
 	}
 
 	client, daemonProcess, err := startTailscaled(bootCtx, cfg)
 	if err != nil {
-		log.Fatalf("failed to bring up tailscale: %v", err)
+		return fmt.Errorf("failed to bring up tailscale: %w", err)
 	}
 	killTailscaled := func() {
+		// The default termination grace period for a Pod is 30s. We wait 25s at
+		// most so that we still reserve some of that budget for tailscaled
+		// to receive and react to a SIGTERM before the SIGKILL that k8s
+		// will send at the end of the grace period.
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+
+		if err := services.EnsureServicesNotAdvertised(ctx, client, log.Printf); err != nil {
+			log.Printf("Error ensuring services are not advertised: %v", err)
+		}
+
+		if hasKubeStateStore(cfg) {
+			// Check we're not shutting tailscaled down while it's still writing
+			// state. If we authenticate and fail to write all the state, we'll
+			// never recover automatically.
+			log.Printf("Checking for consistent state")
+			err := kc.waitForConsistentState(ctx)
+			if err != nil {
+				log.Printf("Error waiting for consistent state on shutdown: %v", err)
+			}
+		}
+		log.Printf("Sending SIGTERM to tailscaled")
 		if err := daemonProcess.Signal(unix.SIGTERM); err != nil {
 			log.Fatalf("error shutting tailscaled down: %v", err)
 		}
 	}
 	defer killTailscaled()
+
+	var healthCheck *healthz.Healthz
+	ep := &egressProxy{}
+	if cfg.HealthCheckAddrPort != "" {
+		mux := http.NewServeMux()
+
+		log.Printf("Running healthcheck endpoint at %s/healthz", cfg.HealthCheckAddrPort)
+		healthCheck = healthz.RegisterHealthHandlers(mux, cfg.PodIPv4, log.Printf)
+
+		close := runHTTPServer(mux, cfg.HealthCheckAddrPort)
+		defer close()
+	}
+
+	if cfg.localMetricsEnabled() || cfg.localHealthEnabled() || cfg.egressSvcsTerminateEPEnabled() {
+		mux := http.NewServeMux()
+
+		if cfg.localMetricsEnabled() {
+			log.Printf("Running metrics endpoint at %s/metrics", cfg.LocalAddrPort)
+			metrics.RegisterMetricsHandlers(mux, client, cfg.DebugAddrPort)
+		}
+
+		if cfg.localHealthEnabled() {
+			log.Printf("Running healthcheck endpoint at %s/healthz", cfg.LocalAddrPort)
+			healthCheck = healthz.RegisterHealthHandlers(mux, cfg.PodIPv4, log.Printf)
+		}
+
+		if cfg.egressSvcsTerminateEPEnabled() {
+			log.Printf("Running egress preshutdown hook at %s%s", cfg.LocalAddrPort, kubetypes.EgessServicesPreshutdownEP)
+			ep.registerHandlers(mux)
+		}
+
+		close := runHTTPServer(mux, cfg.LocalAddrPort)
+		defer close()
+	}
 
 	if cfg.EnableForwardingOptimizations {
 		if err := client.SetUDPGROForwarding(bootCtx); err != nil {
@@ -214,7 +276,7 @@ func main() {
 
 	w, err := client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialPrefs|ipn.NotifyInitialState)
 	if err != nil {
-		log.Fatalf("failed to watch tailscaled for updates: %v", err)
+		return fmt.Errorf("failed to watch tailscaled for updates: %w", err)
 	}
 
 	// Now that we've started tailscaled, we can symlink the socket to the
@@ -250,18 +312,18 @@ func main() {
 		didLogin = true
 		w.Close()
 		if err := tailscaleUp(bootCtx, cfg); err != nil {
-			return fmt.Errorf("failed to auth tailscale: %v", err)
+			return fmt.Errorf("failed to auth tailscale: %w", err)
 		}
 		w, err = client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
 		if err != nil {
-			return fmt.Errorf("rewatching tailscaled for updates after auth: %v", err)
+			return fmt.Errorf("rewatching tailscaled for updates after auth: %w", err)
 		}
 		return nil
 	}
 
 	if isTwoStepConfigAlwaysAuth(cfg) {
 		if err := authTailscale(); err != nil {
-			log.Fatalf("failed to auth tailscale: %v", err)
+			return fmt.Errorf("failed to auth tailscale: %w", err)
 		}
 	}
 
@@ -269,7 +331,7 @@ authLoop:
 	for {
 		n, err := w.Next()
 		if err != nil {
-			log.Fatalf("failed to read from tailscaled: %v", err)
+			return fmt.Errorf("failed to read from tailscaled: %w", err)
 		}
 
 		if n.State != nil {
@@ -278,10 +340,10 @@ authLoop:
 				if isOneStepConfig(cfg) {
 					// This could happen if this is the first time tailscaled was run for this
 					// device and the auth key was not passed via the configfile.
-					log.Fatalf("invalid state: tailscaled daemon started with a config file, but tailscale is not logged in: ensure you pass a valid auth key in the config file.")
+					return fmt.Errorf("invalid state: tailscaled daemon started with a config file, but tailscale is not logged in: ensure you pass a valid auth key in the config file.")
 				}
 				if err := authTailscale(); err != nil {
-					log.Fatalf("failed to auth tailscale: %v", err)
+					return fmt.Errorf("failed to auth tailscale: %w", err)
 				}
 			case ipn.NeedsMachineAuth:
 				log.Printf("machine authorization required, please visit the admin panel")
@@ -301,22 +363,20 @@ authLoop:
 
 	w.Close()
 
-	ctx, cancel := contextWithExitSignalWatch()
-	defer cancel()
-
 	if isTwoStepConfigAuthOnce(cfg) {
 		// Now that we are authenticated, we can set/reset any of the
 		// settings that we need to.
 		if err := tailscaleSet(ctx, cfg); err != nil {
-			log.Fatalf("failed to auth tailscale: %v", err)
+			return fmt.Errorf("failed to auth tailscale: %w", err)
 		}
 	}
 
+	// Remove any serve config and advertised HTTPS endpoint that may have been set by a previous run of
+	// containerboot, but only if we're providing a new one.
 	if cfg.ServeConfigPath != "" {
-		// Remove any serve config that may have been set by a previous run of
-		// containerboot, but only if we're providing a new one.
+		log.Printf("serve proxy: unsetting previous config")
 		if err := client.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
-			log.Fatalf("failed to unset serve config: %v", err)
+			return fmt.Errorf("failed to unset serve config: %w", err)
 		}
 	}
 
@@ -325,14 +385,20 @@ authLoop:
 		// authkey is no longer needed. We don't strictly need to
 		// wipe it, but it's good hygiene.
 		log.Printf("Deleting authkey from kube secret")
-		if err := deleteAuthKey(ctx, cfg.KubeSecret); err != nil {
-			log.Fatalf("deleting authkey from kube secret: %v", err)
+		if err := kc.deleteAuthKey(ctx); err != nil {
+			return fmt.Errorf("deleting authkey from kube secret: %w", err)
 		}
 	}
 
 	w, err = client.WatchIPNBus(ctx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
 	if err != nil {
-		log.Fatalf("rewatching tailscaled for updates after auth: %v", err)
+		return fmt.Errorf("rewatching tailscaled for updates after auth: %w", err)
+	}
+
+	// If tailscaled config was read from a mounted file, watch the file for updates and reload.
+	cfgWatchErrChan := make(chan error)
+	if cfg.TailscaledConfigFilePath != "" {
+		go watchTailscaledConfigChanges(ctx, cfg.TailscaledConfigFilePath, client, cfgWatchErrChan)
 	}
 
 	var (
@@ -349,17 +415,14 @@ authLoop:
 		certDomain        = new(atomic.Pointer[string])
 		certDomainChanged = make(chan bool, 1)
 
-		h             = &healthz{} // http server for the healthz endpoint
-		healthzRunner = sync.OnceFunc(func() { runHealthz(cfg.HealthCheckAddrPort, h) })
+		triggerWatchServeConfigChanges sync.Once
 	)
-	if cfg.ServeConfigPath != "" {
-		go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client)
-	}
+
 	var nfr linuxfw.NetfilterRunner
 	if isL3Proxy(cfg) {
 		nfr, err = newNetfilterRunner(log.Printf)
 		if err != nil {
-			log.Fatalf("error creating new netfilter runner: %v", err)
+			return fmt.Errorf("error creating new netfilter runner: %w", err)
 		}
 	}
 
@@ -377,7 +440,8 @@ authLoop:
 	)
 	// egressSvcsErrorChan will get an error sent to it if this containerboot instance is configured to expose 1+
 	// egress services in HA mode and errored.
-	var egressSvcsErrorChan = make(chan error)
+	egressSvcsErrorChan := make(chan error)
+	ingressSvcsErrorChan := make(chan error)
 	defer t.Stop()
 	// resetTimer resets timer for when to next attempt to resolve the DNS
 	// name for the proxy configured with TS_EXPERIMENTAL_DEST_DNS_NAME. The
@@ -430,7 +494,9 @@ runLoop:
 			killTailscaled()
 			break runLoop
 		case err := <-errChan:
-			log.Fatalf("failed to read from tailscaled: %v", err)
+			return fmt.Errorf("failed to read from tailscaled: %w", err)
+		case err := <-cfgWatchErrChan:
+			return fmt.Errorf("failed to watch tailscaled config: %w", err)
 		case n := <-notifyChan:
 			if n.State != nil && *n.State != ipn.Running {
 				// Something's gone wrong and we've left the authenticated state.
@@ -438,7 +504,7 @@ runLoop:
 				// control flow required to make it work now is hard. So, just crash
 				// the container and rely on the container runtime to restart us,
 				// whereupon we'll go through initial auth again.
-				log.Fatalf("tailscaled left running state (now in state %q), exiting", *n.State)
+				return fmt.Errorf("tailscaled left running state (now in state %q), exiting", *n.State)
 			}
 			if n.NetMap != nil {
 				addrs = n.NetMap.SelfNode.Addresses().AsSlice()
@@ -455,8 +521,8 @@ runLoop:
 				// fails.
 				deviceID := n.NetMap.SelfNode.StableID()
 				if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceID, &deviceID) {
-					if err := storeDeviceID(ctx, cfg.KubeSecret, n.NetMap.SelfNode.StableID()); err != nil {
-						log.Fatalf("storing device ID in Kubernetes Secret: %v", err)
+					if err := kc.storeDeviceID(ctx, n.NetMap.SelfNode.StableID()); err != nil {
+						return fmt.Errorf("storing device ID in Kubernetes Secret: %w", err)
 					}
 				}
 				if cfg.TailnetTargetFQDN != "" {
@@ -493,12 +559,12 @@ runLoop:
 								rulesInstalled = true
 								log.Printf("Installing forwarding rules for destination %v", ea.String())
 								if err := installEgressForwardingRule(ctx, ea.String(), addrs, nfr); err != nil {
-									log.Fatalf("installing egress proxy rules for destination %s: %v", ea.String(), err)
+									return fmt.Errorf("installing egress proxy rules for destination %s: %v", ea.String(), err)
 								}
 							}
 						}
 						if !rulesInstalled {
-							log.Fatalf("no forwarding rules for egress addresses %v, host supports IPv6: %v", egressAddrs, nfr.HasIPV6NAT())
+							return fmt.Errorf("no forwarding rules for egress addresses %v, host supports IPv6: %v", egressAddrs, nfr.HasIPV6NAT())
 						}
 					}
 					currentEgressIPs = newCurentEgressIPs
@@ -506,7 +572,7 @@ runLoop:
 				if cfg.ProxyTargetIP != "" && len(addrs) != 0 && ipsHaveChanged {
 					log.Printf("Installing proxy rules")
 					if err := installIngressForwardingRule(ctx, cfg.ProxyTargetIP, addrs, nfr); err != nil {
-						log.Fatalf("installing ingress proxy rules: %v", err)
+						return fmt.Errorf("installing ingress proxy rules: %w", err)
 					}
 				}
 				if cfg.ProxyTargetDNSName != "" && len(addrs) != 0 && ipsHaveChanged {
@@ -522,14 +588,17 @@ runLoop:
 					if backendsHaveChanged {
 						log.Printf("installing ingress proxy rules for backends %v", newBackendAddrs)
 						if err := installIngressForwardingRuleForDNSTarget(ctx, newBackendAddrs, addrs, nfr); err != nil {
-							log.Fatalf("error installing ingress proxy rules: %v", err)
+							return fmt.Errorf("error installing ingress proxy rules: %w", err)
 						}
 					}
 					resetTimer(false)
 					backendAddrs = newBackendAddrs
 				}
-				if cfg.ServeConfigPath != "" && len(n.NetMap.DNS.CertDomains) != 0 {
-					cd := n.NetMap.DNS.CertDomains[0]
+				if cfg.ServeConfigPath != "" {
+					cd := certDomainFromNetmap(n.NetMap)
+					if cd == "" {
+						cd = kubetypes.ValueNoHTTPS
+					}
 					prev := certDomain.Swap(ptr.To(cd))
 					if prev == nil || *prev != cd {
 						select {
@@ -541,7 +610,7 @@ runLoop:
 				if cfg.TailnetTargetIP != "" && ipsHaveChanged && len(addrs) != 0 {
 					log.Printf("Installing forwarding rules for destination %v", cfg.TailnetTargetIP)
 					if err := installEgressForwardingRule(ctx, cfg.TailnetTargetIP, addrs, nfr); err != nil {
-						log.Fatalf("installing egress proxy rules: %v", err)
+						return fmt.Errorf("installing egress proxy rules: %w", err)
 					}
 				}
 				// If this is a L7 cluster ingress proxy (set up
@@ -553,7 +622,7 @@ runLoop:
 				if cfg.AllowProxyingClusterTrafficViaIngress && cfg.ServeConfigPath != "" && ipsHaveChanged && len(addrs) != 0 {
 					log.Printf("installing rules to forward traffic for %s to node's tailnet IP", cfg.PodIP)
 					if err := installTSForwardingRuleForDestination(ctx, cfg.PodIP, addrs, nfr); err != nil {
-						log.Fatalf("installing rules to forward traffic to node's tailnet IP: %v", err)
+						return fmt.Errorf("installing rules to forward traffic to node's tailnet IP: %w", err)
 					}
 				}
 				currentIPs = newCurrentIPs
@@ -571,17 +640,21 @@ runLoop:
 				// TODO (irbekrm): instead of using the IP and FQDN, have some other mechanism for the proxy signal that it is 'Ready'.
 				deviceEndpoints := []any{n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses()}
 				if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceEndpoints, &deviceEndpoints) {
-					if err := storeDeviceEndpoints(ctx, cfg.KubeSecret, n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
-						log.Fatalf("storing device IPs and FQDN in Kubernetes Secret: %v", err)
+					if err := kc.storeDeviceEndpoints(ctx, n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
+						return fmt.Errorf("storing device IPs and FQDN in Kubernetes Secret: %w", err)
 					}
 				}
 
-				if cfg.HealthCheckAddrPort != "" {
-					h.Lock()
-					h.hasAddrs = len(addrs) != 0
-					h.Unlock()
-					healthzRunner()
+				if healthCheck != nil {
+					healthCheck.Update(len(addrs) != 0)
 				}
+
+				if cfg.ServeConfigPath != "" {
+					triggerWatchServeConfigChanges.Do(func() {
+						go watchServeConfigChanges(ctx, certDomainChanged, certDomain, client, kc, cfg)
+					})
+				}
+
 				if egressSvcsNotify != nil {
 					egressSvcsNotify <- n
 				}
@@ -603,21 +676,39 @@ runLoop:
 					// will then continuously monitor the config file and netmap updates and
 					// reconfigure the firewall rules as needed. If any of its operations fail, it
 					// will crash this node.
-					if cfg.EgressSvcsCfgPath != "" {
-						log.Printf("configuring egress proxy using configuration file at %s", cfg.EgressSvcsCfgPath)
+					if cfg.EgressProxiesCfgPath != "" {
+						log.Printf("configuring egress proxy using configuration file at %s", cfg.EgressProxiesCfgPath)
 						egressSvcsNotify = make(chan ipn.Notify)
-						ep := egressProxy{
-							cfgPath:      cfg.EgressSvcsCfgPath,
+						opts := egressProxyRunOpts{
+							cfgPath:      cfg.EgressProxiesCfgPath,
 							nfr:          nfr,
 							kc:           kc,
+							tsClient:     client,
 							stateSecret:  cfg.KubeSecret,
 							netmapChan:   egressSvcsNotify,
-							podIP:        cfg.PodIP,
+							podIPv4:      cfg.PodIPv4,
 							tailnetAddrs: addrs,
 						}
 						go func() {
-							if err := ep.run(ctx, n); err != nil {
+							if err := ep.run(ctx, n, opts); err != nil {
 								egressSvcsErrorChan <- err
+							}
+						}()
+					}
+					ip := ingressProxy{}
+					if cfg.IngressProxiesCfgPath != "" {
+						log.Printf("configuring ingress proxy using configuration file at %s", cfg.IngressProxiesCfgPath)
+						opts := ingressProxyOpts{
+							cfgPath:     cfg.IngressProxiesCfgPath,
+							nfr:         nfr,
+							kc:          kc,
+							stateSecret: cfg.KubeSecret,
+							podIPv4:     cfg.PodIPv4,
+							podIPv6:     cfg.PodIPv6,
+						}
+						go func() {
+							if err := ip.run(ctx, opts); err != nil {
+								ingressSvcsErrorChan <- err
 							}
 						}()
 					}
@@ -658,16 +749,20 @@ runLoop:
 			if backendsHaveChanged && len(addrs) != 0 {
 				log.Printf("Backend address change detected, installing proxy rules for backends %v", newBackendAddrs)
 				if err := installIngressForwardingRuleForDNSTarget(ctx, newBackendAddrs, addrs, nfr); err != nil {
-					log.Fatalf("installing ingress proxy rules for DNS target %s: %v", cfg.ProxyTargetDNSName, err)
+					return fmt.Errorf("installing ingress proxy rules for DNS target %s: %v", cfg.ProxyTargetDNSName, err)
 				}
 			}
 			backendAddrs = newBackendAddrs
 			resetTimer(false)
 		case e := <-egressSvcsErrorChan:
-			log.Fatalf("egress proxy failed: %v", e)
+			return fmt.Errorf("egress proxy failed: %v", e)
+		case e := <-ingressSvcsErrorChan:
+			return fmt.Errorf("ingress proxy failed: %v", e)
 		}
 	}
 	wg.Wait()
+
+	return nil
 }
 
 // ensureTunFile checks that /dev/net/tun exists, creating it if
@@ -696,13 +791,13 @@ func resolveDNS(ctx context.Context, name string) ([]net.IP, error) {
 	ip4s, err := net.DefaultResolver.LookupIP(ctx, "ip4", name)
 	if err != nil {
 		if e, ok := err.(*net.DNSError); !(ok && e.IsNotFound) {
-			return nil, fmt.Errorf("error looking up IPv4 addresses: %v", err)
+			return nil, fmt.Errorf("error looking up IPv4 addresses: %w", err)
 		}
 	}
 	ip6s, err := net.DefaultResolver.LookupIP(ctx, "ip6", name)
 	if err != nil {
 		if e, ok := err.(*net.DNSError); !(ok && e.IsNotFound) {
-			return nil, fmt.Errorf("error looking up IPv6 addresses: %v", err)
+			return nil, fmt.Errorf("error looking up IPv6 addresses: %w", err)
 		}
 	}
 	if len(ip4s) == 0 && len(ip6s) == 0 {
@@ -715,7 +810,7 @@ func resolveDNS(ctx context.Context, name string) ([]net.IP, error) {
 // context that gets cancelled when a signal is received and a cancel function
 // that can be called to free the resources when the watch should be stopped.
 func contextWithExitSignalWatch() (context.Context, func()) {
-	closeChan := make(chan string)
+	closeChan := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
@@ -727,8 +822,11 @@ func contextWithExitSignalWatch() (context.Context, func()) {
 			return
 		}
 	}()
+	closeOnce := sync.Once{}
 	f := func() {
-		closeChan <- "goodbye"
+		closeOnce.Do(func() {
+			close(closeChan)
+		})
 	}
 	return ctx, f
 }
@@ -758,7 +856,6 @@ func tailscaledConfigFilePath() string {
 		}
 		cv, err := kubeutils.CapVerFromFileName(e.Name())
 		if err != nil {
-			log.Printf("skipping file %q in tailscaled config directory %q: %v", e.Name(), dir, err)
 			continue
 		}
 		if cv > maxCompatVer && cv <= tailcfg.CurrentCapabilityVersion {
@@ -766,8 +863,32 @@ func tailscaledConfigFilePath() string {
 		}
 	}
 	if maxCompatVer == -1 {
-		log.Fatalf("no tailscaled config file found in %q for current capability version %q", dir, tailcfg.CurrentCapabilityVersion)
+		log.Fatalf("no tailscaled config file found in %q for current capability version %d", dir, tailcfg.CurrentCapabilityVersion)
 	}
-	log.Printf("Using tailscaled config file %q for capability version %q", maxCompatVer, tailcfg.CurrentCapabilityVersion)
-	return path.Join(dir, kubeutils.TailscaledConfigFileNameForCap(maxCompatVer))
+	filePath := filepath.Join(dir, kubeutils.TailscaledConfigFileName(maxCompatVer))
+	log.Printf("Using tailscaled config file %q to match current capability version %d", filePath, tailcfg.CurrentCapabilityVersion)
+	return filePath
+}
+
+func runHTTPServer(mux *http.ServeMux, addr string) (close func() error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("failed to listen on addr %q: %v", addr, err)
+	}
+	srv := &http.Server{Handler: mux}
+
+	go func() {
+		if err := srv.Serve(ln); err != nil {
+			if err != http.ErrServerClosed {
+				log.Fatalf("failed running server: %v", err)
+			} else {
+				log.Printf("HTTP server at %s closed", addr)
+			}
+		}
+	}()
+
+	return func() error {
+		err := srv.Shutdown(context.Background())
+		return errors.Join(err, ln.Close())
+	}
 }

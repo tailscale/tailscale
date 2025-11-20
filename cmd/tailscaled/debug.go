@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build go1.19
+//go:build !ts_omit_debug
 
 package main
 
@@ -16,17 +16,22 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptrace"
+	"net/http/pprof"
 	"net/url"
 	"os"
 	"time"
 
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netmon"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/key"
+	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/eventbus"
 )
 
 var debugArgs struct {
@@ -37,7 +42,29 @@ var debugArgs struct {
 	portmap   bool
 }
 
-var debugModeFunc = debugMode // so it can be addressable
+func init() {
+	debugModeFunc := debugMode // to be addressable
+	subCommands["debug"] = &debugModeFunc
+
+	hookNewDebugMux.Set(newDebugMux)
+}
+
+func newDebugMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/metrics", servePrometheusMetrics)
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	return mux
+}
+
+func servePrometheusMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	varz.Handler(w, r)
+	clientmetric.WritePrometheusExpositionFormat(w)
+}
 
 func debugMode(args []string) error {
 	fs := flag.NewFlagSet("debug", flag.ExitOnError)
@@ -72,24 +99,23 @@ func debugMode(args []string) error {
 }
 
 func runMonitor(ctx context.Context, loop bool) error {
+	b := eventbus.New()
+	defer b.Close()
+
 	dump := func(st *netmon.State) {
 		j, _ := json.MarshalIndent(st, "", "    ")
 		os.Stderr.Write(j)
 	}
-	mon, err := netmon.New(log.Printf)
+	mon, err := netmon.New(b, log.Printf)
 	if err != nil {
 		return err
 	}
 	defer mon.Close()
 
-	mon.RegisterChangeCallback(func(delta *netmon.ChangeDelta) {
-		if !delta.Major {
-			log.Printf("Network monitor fired; not a major change")
-			return
-		}
-		log.Printf("Network monitor fired. New state:")
-		dump(delta.New)
-	})
+	eventClient := b.Client("debug.runMonitor")
+	m := eventClient.Monitor(changeDeltaWatcher(eventClient, ctx, dump))
+	defer m.Close()
+
 	if loop {
 		log.Printf("Starting link change monitor; initial state:")
 	}
@@ -100,6 +126,27 @@ func runMonitor(ctx context.Context, loop bool) error {
 	mon.Start()
 	log.Printf("Started link change monitor; waiting...")
 	select {}
+}
+
+func changeDeltaWatcher(ec *eventbus.Client, ctx context.Context, dump func(st *netmon.State)) func(*eventbus.Client) {
+	changeSub := eventbus.Subscribe[netmon.ChangeDelta](ec)
+	return func(ec *eventbus.Client) {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ec.Done():
+				return
+			case delta := <-changeSub.Events():
+				if !delta.Major {
+					log.Printf("Network monitor fired; not a major change")
+					return
+				}
+				log.Printf("Network monitor fired. New state:")
+				dump(delta.New)
+			}
+		}
+	}
 }
 
 func getURL(ctx context.Context, urlStr string) error {
@@ -120,9 +167,14 @@ func getURL(ctx context.Context, urlStr string) error {
 	if err != nil {
 		return fmt.Errorf("http.NewRequestWithContext: %v", err)
 	}
-	proxyURL, err := tshttpproxy.ProxyFromEnvironment(req)
-	if err != nil {
-		return fmt.Errorf("tshttpproxy.ProxyFromEnvironment: %v", err)
+	var proxyURL *url.URL
+	if buildfeatures.HasUseProxy {
+		if proxyFromEnv, ok := feature.HookProxyFromEnvironment.GetOk(); ok {
+			proxyURL, err = proxyFromEnv(req)
+			if err != nil {
+				return fmt.Errorf("tshttpproxy.ProxyFromEnvironment: %v", err)
+			}
+		}
 	}
 	log.Printf("proxy: %v", proxyURL)
 	tr := &http.Transport{
@@ -131,7 +183,10 @@ func getURL(ctx context.Context, urlStr string) error {
 		DisableKeepAlives:  true,
 	}
 	if proxyURL != nil {
-		auth, err := tshttpproxy.GetAuthHeader(proxyURL)
+		var auth string
+		if f, ok := feature.HookProxyGetAuthHeader.GetOk(); ok {
+			auth, err = f(proxyURL)
+		}
 		if err == nil && auth != "" {
 			tr.ProxyConnectHeader.Set("Proxy-Authorization", auth)
 		}
@@ -157,7 +212,9 @@ func getURL(ctx context.Context, urlStr string) error {
 }
 
 func checkDerp(ctx context.Context, derpRegion string) (err error) {
-	ht := new(health.Tracker)
+	bus := eventbus.New()
+	defer bus.Close()
+	ht := health.NewTracker(bus)
 	req, err := http.NewRequestWithContext(ctx, "GET", ipn.DefaultControlURL+"/derpmap/default", nil)
 	if err != nil {
 		return fmt.Errorf("create derp map request: %w", err)

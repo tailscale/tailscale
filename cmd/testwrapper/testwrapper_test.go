@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -76,7 +78,10 @@ func TestFlakeRun(t *testing.T) {
 		t.Fatalf("go run . %s: %s with output:\n%s", testfile, err, out)
 	}
 
-	want := []byte("ok\t" + testfile + " [attempt=2]")
+	// Replace the unpredictable timestamp with "0.00s".
+	out = regexp.MustCompile(`\t\d+\.\d\d\ds\t`).ReplaceAll(out, []byte("\t0.00s\t"))
+
+	want := []byte("ok\t" + testfile + "\t0.00s\t[attempt=2]")
 	if !bytes.Contains(out, want) {
 		t.Fatalf("wanted output containing %q but got:\n%s", want, out)
 	}
@@ -150,24 +155,24 @@ func TestBuildError(t *testing.T) {
 		t.Fatalf("writing package: %s", err)
 	}
 
-	buildErr := []byte("builderror_test.go:3:1: expected declaration, found derp\nFAIL	command-line-arguments [setup failed]")
+	wantErr := "builderror_test.go:3:1: expected declaration, found derp\nFAIL"
 
 	// Confirm `go test` exits with code 1.
 	goOut, err := exec.Command("go", "test", testfile).CombinedOutput()
 	if code, ok := errExitCode(err); !ok || code != 1 {
-		t.Fatalf("go test %s: expected error with exit code 0 but got: %v", testfile, err)
+		t.Fatalf("go test %s: got exit code %d, want 1 (err: %v)", testfile, code, err)
 	}
-	if !bytes.Contains(goOut, buildErr) {
-		t.Fatalf("go test %s: expected build error containing %q but got:\n%s", testfile, buildErr, goOut)
+	if !strings.Contains(string(goOut), wantErr) {
+		t.Fatalf("go test %s: got output %q, want output containing %q", testfile, goOut, wantErr)
 	}
 
 	// Confirm `testwrapper` exits with code 1.
 	twOut, err := cmdTestwrapper(t, testfile).CombinedOutput()
 	if code, ok := errExitCode(err); !ok || code != 1 {
-		t.Fatalf("testwrapper %s: expected error with exit code 0 but got: %v", testfile, err)
+		t.Fatalf("testwrapper %s: got exit code %d, want 1 (err: %v)", testfile, code, err)
 	}
-	if !bytes.Contains(twOut, buildErr) {
-		t.Fatalf("testwrapper %s: expected build error containing %q but got:\n%s", testfile, buildErr, twOut)
+	if !strings.Contains(string(twOut), wantErr) {
+		t.Fatalf("testwrapper %s: got output %q, want output containing %q", testfile, twOut, wantErr)
 	}
 
 	if testing.Verbose() {

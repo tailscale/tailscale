@@ -11,8 +11,10 @@ import (
 	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
-	"tailscale.com/util/syspolicy/internal"
+	"tailscale.com/util/slicesx"
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/setting"
+	"tailscale.com/util/testenv"
 )
 
 var (
@@ -30,7 +32,7 @@ type TestValueType interface {
 // TestSetting is a policy setting in a [TestStore].
 type TestSetting[T TestValueType] struct {
 	// Key is the setting's unique identifier.
-	Key setting.Key
+	Key pkey.Key
 	// Error is the error to be returned by the [TestStore] when reading
 	// a policy setting with the specified key.
 	Error error
@@ -42,20 +44,20 @@ type TestSetting[T TestValueType] struct {
 
 // TestSettingOf returns a [TestSetting] representing a policy setting
 // configured with the specified key and value.
-func TestSettingOf[T TestValueType](key setting.Key, value T) TestSetting[T] {
+func TestSettingOf[T TestValueType](key pkey.Key, value T) TestSetting[T] {
 	return TestSetting[T]{Key: key, Value: value}
 }
 
 // TestSettingWithError returns a [TestSetting] representing a policy setting
 // with the specified key and error.
-func TestSettingWithError[T TestValueType](key setting.Key, err error) TestSetting[T] {
+func TestSettingWithError[T TestValueType](key pkey.Key, err error) TestSetting[T] {
 	return TestSetting[T]{Key: key, Error: err}
 }
 
 // testReadOperation describes a single policy setting read operation.
 type testReadOperation struct {
 	// Key is the setting's unique identifier.
-	Key setting.Key
+	Key pkey.Key
 	// Type is a value type of a read operation.
 	// [setting.BooleanValue], [setting.IntegerValue], [setting.StringValue] or [setting.StringListValue]
 	Type setting.Type
@@ -64,7 +66,7 @@ type testReadOperation struct {
 // TestExpectedReads is the number of read operations with the specified details.
 type TestExpectedReads struct {
 	// Key is the setting's unique identifier.
-	Key setting.Key
+	Key pkey.Key
 	// Type is a value type of a read operation.
 	// [setting.BooleanValue], [setting.IntegerValue], [setting.StringValue] or [setting.StringListValue]
 	Type setting.Type
@@ -78,7 +80,7 @@ func (r TestExpectedReads) operation() testReadOperation {
 
 // TestStore is a [Store] that can be used in tests.
 type TestStore struct {
-	tb internal.TB
+	tb testenv.TB
 
 	done chan struct{}
 
@@ -86,9 +88,10 @@ type TestStore struct {
 	storeLockCount atomic.Int32
 
 	mu           sync.RWMutex
-	suspendCount int                 // change callback are suspended if > 0
-	mr, mw       map[setting.Key]any // maps for reading and writing; they're the same unless the store is suspended.
+	suspendCount int              // change callback are suspended if > 0
+	mr, mw       map[pkey.Key]any // maps for reading and writing; they're the same unless the store is suspended.
 	cbs          set.HandleSet[func()]
+	closed       bool
 
 	readsMu sync.Mutex
 	reads   map[testReadOperation]int // how many times a policy setting was read
@@ -96,26 +99,22 @@ type TestStore struct {
 
 // NewTestStore returns a new [TestStore].
 // The tb will be used to report coding errors detected by the [TestStore].
-func NewTestStore(tb internal.TB) *TestStore {
-	m := make(map[setting.Key]any)
-	return &TestStore{
-		tb:   tb,
-		done: make(chan struct{}),
-		mr:   m,
-		mw:   m,
-	}
-}
-
-// NewTestStoreOf is a shorthand for [NewTestStore] followed by [TestStore.SetBooleans],
-// [TestStore.SetUInt64s], [TestStore.SetStrings] or [TestStore.SetStringLists].
-func NewTestStoreOf[T TestValueType](tb internal.TB, settings ...TestSetting[T]) *TestStore {
-	m := make(map[setting.Key]any)
+func NewTestStore(tb testenv.TB) *TestStore {
+	m := make(map[pkey.Key]any)
 	store := &TestStore{
 		tb:   tb,
 		done: make(chan struct{}),
 		mr:   m,
 		mw:   m,
 	}
+	tb.Cleanup(store.Close)
+	return store
+}
+
+// NewTestStoreOf is a shorthand for [NewTestStore] followed by [TestStore.SetBooleans],
+// [TestStore.SetUInt64s], [TestStore.SetStrings] or [TestStore.SetStringLists].
+func NewTestStoreOf[T TestValueType](tb testenv.TB, settings ...TestSetting[T]) *TestStore {
+	store := NewTestStore(tb)
 	switch settings := any(settings).(type) {
 	case []TestSetting[bool]:
 		store.SetBooleans(settings...)
@@ -156,8 +155,15 @@ func (s *TestStore) RegisterChangeCallback(callback func()) (unregister func(), 
 	}, nil
 }
 
+// IsEmpty reports whether the store does not contain any settings.
+func (s *TestStore) IsEmpty() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.mr) == 0
+}
+
 // ReadString implements [Store].
-func (s *TestStore) ReadString(key setting.Key) (string, error) {
+func (s *TestStore) ReadString(key pkey.Key) (string, error) {
 	defer s.recordRead(key, setting.StringValue)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -176,7 +182,7 @@ func (s *TestStore) ReadString(key setting.Key) (string, error) {
 }
 
 // ReadUInt64 implements [Store].
-func (s *TestStore) ReadUInt64(key setting.Key) (uint64, error) {
+func (s *TestStore) ReadUInt64(key pkey.Key) (uint64, error) {
 	defer s.recordRead(key, setting.IntegerValue)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -195,7 +201,7 @@ func (s *TestStore) ReadUInt64(key setting.Key) (uint64, error) {
 }
 
 // ReadBoolean implements [Store].
-func (s *TestStore) ReadBoolean(key setting.Key) (bool, error) {
+func (s *TestStore) ReadBoolean(key pkey.Key) (bool, error) {
 	defer s.recordRead(key, setting.BooleanValue)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -214,7 +220,7 @@ func (s *TestStore) ReadBoolean(key setting.Key) (bool, error) {
 }
 
 // ReadStringArray implements [Store].
-func (s *TestStore) ReadStringArray(key setting.Key) ([]string, error) {
+func (s *TestStore) ReadStringArray(key pkey.Key) ([]string, error) {
 	defer s.recordRead(key, setting.StringListValue)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -232,7 +238,7 @@ func (s *TestStore) ReadStringArray(key setting.Key) ([]string, error) {
 	return slice, nil
 }
 
-func (s *TestStore) recordRead(key setting.Key, typ setting.Type) {
+func (s *TestStore) recordRead(key pkey.Key, typ setting.Type) {
 	s.readsMu.Lock()
 	op := testReadOperation{key, typ}
 	num := s.reads[op]
@@ -308,7 +314,7 @@ func (s *TestStore) Resume() {
 		s.mr = s.mw
 		s.mu.Unlock()
 		s.storeLock.Unlock()
-		s.notifyPolicyChanged()
+		s.NotifyPolicyChanged()
 	case s.suspendCount < 0:
 		s.tb.Fatal("negative suspendCount")
 	default:
@@ -333,7 +339,7 @@ func (s *TestStore) SetBooleans(settings ...TestSetting[bool]) {
 		s.mu.Unlock()
 	}
 	s.storeLock.Unlock()
-	s.notifyPolicyChanged()
+	s.NotifyPolicyChanged()
 }
 
 // SetUInt64s sets the specified integer settings in s.
@@ -352,7 +358,7 @@ func (s *TestStore) SetUInt64s(settings ...TestSetting[uint64]) {
 		s.mu.Unlock()
 	}
 	s.storeLock.Unlock()
-	s.notifyPolicyChanged()
+	s.NotifyPolicyChanged()
 }
 
 // SetStrings sets the specified string settings in s.
@@ -371,7 +377,7 @@ func (s *TestStore) SetStrings(settings ...TestSetting[string]) {
 		s.mu.Unlock()
 	}
 	s.storeLock.Unlock()
-	s.notifyPolicyChanged()
+	s.NotifyPolicyChanged()
 }
 
 // SetStrings sets the specified string list settings in s.
@@ -390,11 +396,11 @@ func (s *TestStore) SetStringLists(settings ...TestSetting[[]string]) {
 		s.mu.Unlock()
 	}
 	s.storeLock.Unlock()
-	s.notifyPolicyChanged()
+	s.NotifyPolicyChanged()
 }
 
 // Delete deletes the specified settings from s.
-func (s *TestStore) Delete(keys ...setting.Key) {
+func (s *TestStore) Delete(keys ...pkey.Key) {
 	s.storeLock.Lock()
 	for _, key := range keys {
 		s.mu.Lock()
@@ -402,7 +408,7 @@ func (s *TestStore) Delete(keys ...setting.Key) {
 		s.mu.Unlock()
 	}
 	s.storeLock.Unlock()
-	s.notifyPolicyChanged()
+	s.NotifyPolicyChanged()
 }
 
 // Clear deletes all settings from s.
@@ -412,16 +418,16 @@ func (s *TestStore) Clear() {
 	clear(s.mw)
 	s.mu.Unlock()
 	s.storeLock.Unlock()
-	s.notifyPolicyChanged()
+	s.NotifyPolicyChanged()
 }
 
-func (s *TestStore) notifyPolicyChanged() {
+func (s *TestStore) NotifyPolicyChanged() {
 	s.mu.RLock()
 	if s.suspendCount != 0 {
 		s.mu.RUnlock()
 		return
 	}
-	cbs := xmaps.Values(s.cbs)
+	cbs := slicesx.MapValues(s.cbs)
 	s.mu.RUnlock()
 
 	var wg sync.WaitGroup
@@ -439,9 +445,9 @@ func (s *TestStore) notifyPolicyChanged() {
 func (s *TestStore) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.done != nil {
+	if !s.closed {
 		close(s.done)
-		s.done = nil
+		s.closed = true
 	}
 }
 

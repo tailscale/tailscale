@@ -13,7 +13,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers,StructWithTypeAliasFields,GenericTypeAliasStruct --clone-only-type=OnlyGetClone
+//go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers,StructWithTypeAliasFields,GenericTypeAliasStruct,StructWithMapOfViews --clone-only-type=OnlyGetClone
 
 type StructWithoutPtrs struct {
 	Int int
@@ -37,9 +37,14 @@ type Map struct {
 	StructWithPtrKey map[StructWithPtrs]int `json:"-"`
 }
 
+type StructWithNoView struct {
+	Value int
+}
+
 type StructWithPtrs struct {
-	Value *StructWithoutPtrs
-	Int   *int
+	Value  *StructWithoutPtrs
+	Int    *int
+	NoView *StructWithNoView
 
 	NoCloneValue *StructWithoutPtrs `codegen:"noclone"`
 }
@@ -135,7 +140,7 @@ func (c *Container[T]) Clone() *Container[T] {
 	panic(fmt.Errorf("%T contains pointers, but is not cloneable", c.Item))
 }
 
-// ContainerView is a pre-defined readonly view of a Container[T].
+// ContainerView is a pre-defined read-only view of a Container[T].
 type ContainerView[T views.ViewCloner[T, V], V views.StructView[T]] struct {
 	// ж is the underlying mutable value, named with a hard-to-type
 	// character that looks pointy like a pointer.
@@ -173,7 +178,7 @@ func (c *MapContainer[K, V]) Clone() *MapContainer[K, V] {
 	return &MapContainer[K, V]{m}
 }
 
-// MapContainerView is a pre-defined readonly view of a [MapContainer][K, T].
+// MapContainerView is a pre-defined read-only view of a [MapContainer][K, T].
 type MapContainerView[K comparable, T views.ViewCloner[T, V], V views.StructView[T]] struct {
 	// ж is the underlying mutable value, named with a hard-to-type
 	// character that looks pointy like a pointer.
@@ -232,4 +237,8 @@ type integer = constraints.Integer
 type GenericTypeAliasStruct[T integer, T2 views.ViewCloner[T2, V2], V2 views.StructView[T2]] struct {
 	NonCloneable T
 	Cloneable    T2
+}
+
+type StructWithMapOfViews struct {
+	MapOfViews map[string]StructWithoutPtrsView
 }

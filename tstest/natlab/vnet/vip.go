@@ -17,7 +17,7 @@ var (
 	fakeControl           = newVIP("control.tailscale", 3)
 	fakeDERP1             = newVIP("derp1.tailscale", "33.4.0.1") // 3340=DERP; 1=derp 1
 	fakeDERP2             = newVIP("derp2.tailscale", "33.4.0.2") // 3340=DERP; 2=derp 2
-	fakeLogCatcher        = newVIP("log.tailscale.io", 4)
+	fakeLogCatcher        = newVIP("log.tailscale.com", 4)
 	fakeSyslog            = newVIP("syslog.tailscale", 9)
 )
 

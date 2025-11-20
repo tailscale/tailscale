@@ -18,7 +18,7 @@ fi
 
 eval `CGO_ENABLED=0 GOOS=$($go env GOHOSTOS) GOARCH=$($go env GOHOSTARCH) $go run ./cmd/mkversion`
 
-if [ "$1" = "shellvars" ]; then
+if [ "$#" -ge 1 ] && [ "$1" = "shellvars" ]; then
 	cat <<EOF
 VERSION_MINOR="$VERSION_MINOR"
 VERSION_SHORT="$VERSION_SHORT"
@@ -28,18 +28,34 @@ EOF
 	exit 0
 fi
 
-tags=""
+tags="${TAGS:-}"
 ldflags="-X tailscale.com/version.longStamp=${VERSION_LONG} -X tailscale.com/version.shortStamp=${VERSION_SHORT}"
 
 # build_dist.sh arguments must precede go build arguments.
 while [ "$#" -gt 1 ]; do
 	case "$1" in
 	--extra-small)
+		if [ ! -z "${TAGS:-}" ]; then
+			echo "set either --extra-small or \$TAGS, but not both"
+			exit 1
+		fi
 		shift
 		ldflags="$ldflags -w -s"
-		tags="${tags:+$tags,}ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completion"
+		tags="${tags:+$tags,},$(GOOS= GOARCH= $go run ./cmd/featuretags --min --add=osrouter)"
+		;;
+	--min)
+	    # --min is like --extra-small but even smaller, removing all features,
+		# even if it results in a useless binary (e.g. removing both netstack +
+		# osrouter). It exists for benchmarking purposes only.
+		shift
+		ldflags="$ldflags -w -s"
+		tags="${tags:+$tags,},$(GOOS= GOARCH= $go run ./cmd/featuretags --min)"
 		;;
 	--box)
+		if [ ! -z "${TAGS:-}" ]; then
+			echo "set either --box or \$TAGS, but not both"
+			exit 1
+		fi
 		shift
 		tags="${tags:+$tags,}ts_include_cli"
 		;;
@@ -49,4 +65,4 @@ while [ "$#" -gt 1 ]; do
 	esac
 done
 
-exec $go build ${tags:+-tags=$tags} -ldflags "$ldflags" "$@"
+exec $go build ${tags:+-tags=$tags} -trimpath -ldflags "$ldflags" "$@"

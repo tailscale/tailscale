@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"time"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/types/logger"
@@ -31,7 +32,13 @@ type actor struct {
 	logf logger.Logf
 	ci   *ipnauth.ConnIdentity
 
-	isLocalSystem bool // whether the actor is the Windows' Local System identity.
+	clientID ipnauth.ClientID
+	userID   ipn.WindowsUserID // cached Windows user ID of the connected client process.
+	// accessOverrideReason specifies the reason for overriding certain access restrictions,
+	// such as permitting a user to disconnect when the always-on mode is enabled,
+	// provided that such justification is allowed by the policy.
+	accessOverrideReason string
+	isLocalSystem        bool // whether the actor is the Windows' Local System identity.
 }
 
 func newActor(logf logger.Logf, c net.Conn) (*actor, error) {
@@ -39,7 +46,62 @@ func newActor(logf logger.Logf, c net.Conn) (*actor, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &actor{logf: logf, ci: ci, isLocalSystem: connIsLocalSystem(ci)}, nil
+	var clientID ipnauth.ClientID
+	if pid := ci.Pid(); pid != 0 {
+		// Derive [ipnauth.ClientID] from the PID of the connected client process.
+		// TODO(nickkhyl): This is transient and will be re-worked as we
+		// progress on tailscale/corp#18342. At minimum, we should use a 2-tuple
+		// (PID + StartTime) or a 3-tuple (PID + StartTime + UID) to identify
+		// the client process. This helps prevent security issues where a
+		// terminated client process's PID could be reused by a different
+		// process. This is not currently an issue as we allow only one user to
+		// connect anyway.
+		// Additionally, we should consider caching authentication results since
+		// operations like retrieving a username by SID might require network
+		// connectivity on domain-joined devices and/or be slow.
+		clientID = ipnauth.ClientIDFrom(pid)
+	}
+	return &actor{
+			logf:          logf,
+			ci:            ci,
+			clientID:      clientID,
+			userID:        ci.WindowsUserID(),
+			isLocalSystem: connIsLocalSystem(ci),
+		},
+		nil
+}
+
+// actorWithAccessOverride returns a new actor that carries the specified
+// reason for overriding certain access restrictions, if permitted by the
+// policy. If the reason is "", it returns the base actor.
+func actorWithAccessOverride(baseActor *actor, reason string) *actor {
+	if reason == "" {
+		return baseActor
+	}
+	return &actor{
+		logf:                 baseActor.logf,
+		ci:                   baseActor.ci,
+		clientID:             baseActor.clientID,
+		userID:               baseActor.userID,
+		accessOverrideReason: reason,
+		isLocalSystem:        baseActor.isLocalSystem,
+	}
+}
+
+// CheckProfileAccess implements [ipnauth.Actor].
+func (a *actor) CheckProfileAccess(profile ipn.LoginProfileView, requestedAccess ipnauth.ProfileAccess, auditLogger ipnauth.AuditLogFunc) error {
+	// TODO(nickkhyl): return errors of more specific types and have them
+	// translated to the appropriate HTTP status codes in the API handler.
+	if profile.LocalUserID() != a.UserID() {
+		return errors.New("the target profile does not belong to the user")
+	}
+	switch requestedAccess {
+	case ipnauth.Disconnect:
+		// Disconnect is allowed if a user owns the profile and the policy permits it.
+		return ipnauth.CheckDisconnectPolicy(a, profile, a.accessOverrideReason, auditLogger)
+	default:
+		return errors.New("the requested operation is not allowed")
+	}
 }
 
 // IsLocalSystem implements [ipnauth.Actor].
@@ -54,12 +116,20 @@ func (a *actor) IsLocalAdmin(operatorUID string) bool {
 
 // UserID implements [ipnauth.Actor].
 func (a *actor) UserID() ipn.WindowsUserID {
-	return a.ci.WindowsUserID()
+	return a.userID
 }
 
 func (a *actor) pid() int {
 	return a.ci.Pid()
 }
+
+// ClientID implements [ipnauth.Actor].
+func (a *actor) ClientID() (_ ipnauth.ClientID, ok bool) {
+	return a.clientID, a.clientID != ipnauth.NoClientID
+}
+
+// Context implements [ipnauth.Actor].
+func (a *actor) Context() context.Context { return context.Background() }
 
 // Username implements [ipnauth.Actor].
 func (a *actor) Username() (string, error) {
@@ -75,8 +145,12 @@ func (a *actor) Username() (string, error) {
 		}
 		defer tok.Close()
 		return tok.Username()
-	case "darwin", "linux":
-		uid, ok := a.ci.Creds().UserID()
+	case "darwin", "linux", "illumos", "solaris", "openbsd":
+		creds := a.ci.Creds()
+		if creds == nil {
+			return "", errors.New("peer credentials not implemented on this OS")
+		}
+		uid, ok := creds.UserID()
 		if !ok {
 			return "", errors.New("missing user ID")
 		}
@@ -91,11 +165,11 @@ func (a *actor) Username() (string, error) {
 }
 
 type actorOrError struct {
-	actor *actor
+	actor ipnauth.Actor
 	err   error
 }
 
-func (a actorOrError) unwrap() (*actor, error) {
+func (a actorOrError) unwrap() (ipnauth.Actor, error) {
 	return a.actor, a.err
 }
 
@@ -110,9 +184,15 @@ func contextWithActor(ctx context.Context, logf logger.Logf, c net.Conn) context
 	return actorKey.WithValue(ctx, actorOrError{actor: actor, err: err})
 }
 
-// actorFromContext returns an [actor] associated with ctx,
+// NewContextWithActorForTest returns a new context that carries the identity
+// of the specified actor. It is used in tests only.
+func NewContextWithActorForTest(ctx context.Context, actor ipnauth.Actor) context.Context {
+	return actorKey.WithValue(ctx, actorOrError{actor: actor})
+}
+
+// actorFromContext returns an [ipnauth.Actor] associated with ctx,
 // or an error if the context does not carry an actor's identity.
-func actorFromContext(ctx context.Context) (*actor, error) {
+func actorFromContext(ctx context.Context) (ipnauth.Actor, error) {
 	return actorKey.Value(ctx).unwrap()
 }
 
@@ -158,6 +238,11 @@ func connIsLocalAdmin(logf logger.Logf, ci *ipnauth.ConnIdentity, operatorUID st
 		// Linux.
 		fallthrough
 	case "linux":
+		if !buildfeatures.HasUnixSocketIdentity {
+			// Everybody is an admin if support for unix socket identities
+			// is omitted for the build.
+			return true
+		}
 		uid, ok := ci.Creds().UserID()
 		if !ok {
 			return false

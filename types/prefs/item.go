@@ -152,15 +152,15 @@ func (iv ItemView[T, V]) Equal(iv2 ItemView[T, V]) bool {
 	return iv.ж.Equal(*iv2.ж)
 }
 
-// MarshalJSONV2 implements [jsonv2.MarshalerV2].
-func (iv ItemView[T, V]) MarshalJSONV2(out *jsontext.Encoder, opts jsonv2.Options) error {
-	return iv.ж.MarshalJSONV2(out, opts)
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (iv ItemView[T, V]) MarshalJSONTo(out *jsontext.Encoder) error {
+	return iv.ж.MarshalJSONTo(out)
 }
 
-// UnmarshalJSONV2 implements [jsonv2.UnmarshalerV2].
-func (iv *ItemView[T, V]) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) error {
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (iv *ItemView[T, V]) UnmarshalJSONFrom(in *jsontext.Decoder) error {
 	var x Item[T]
-	if err := x.UnmarshalJSONV2(in, opts); err != nil {
+	if err := x.UnmarshalJSONFrom(in); err != nil {
 		return err
 	}
 	iv.ж = &x
@@ -169,10 +169,10 @@ func (iv *ItemView[T, V]) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Opti
 
 // MarshalJSON implements [json.Marshaler].
 func (iv ItemView[T, V]) MarshalJSON() ([]byte, error) {
-	return jsonv2.Marshal(iv) // uses MarshalJSONV2
+	return jsonv2.Marshal(iv) // uses MarshalJSONTo
 }
 
 // UnmarshalJSON implements [json.Unmarshaler].
 func (iv *ItemView[T, V]) UnmarshalJSON(b []byte) error {
-	return jsonv2.Unmarshal(b, iv) // uses UnmarshalJSONV2
+	return jsonv2.Unmarshal(b, iv) // uses UnmarshalJSONFrom
 }

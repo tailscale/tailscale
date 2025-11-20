@@ -9,7 +9,7 @@ import (
 	"net"
 	"testing"
 
-	gossh "github.com/tailscale/golang-x-crypto/ssh"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 func (srv *Server) serveOnce(l net.Listener) error {

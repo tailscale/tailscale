@@ -377,8 +377,8 @@ func pfxMask(pfxLen int) uint8 {
 func allPrefixes() []slowEntry[int] {
 	ret := make([]slowEntry[int], 0, lastHostIndex)
 	for i := 1; i < lastHostIndex+1; i++ {
-		a, l := inversePrefixIndex(i)
-		ret = append(ret, slowEntry[int]{a, l, i})
+		a, ln := inversePrefixIndex(i)
+		ret = append(ret, slowEntry[int]{a, ln, i})
 	}
 	return ret
 }

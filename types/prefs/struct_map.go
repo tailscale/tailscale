@@ -31,14 +31,14 @@ func StructMapWithOpts[K MapKeyType, V views.Cloner[V]](opts ...Options) StructM
 // SetValue configures the preference with the specified value.
 // It fails and returns [ErrManaged] if p is a managed preference,
 // and [ErrReadOnly] if p is a read-only preference.
-func (l *StructMap[K, V]) SetValue(val map[K]V) error {
-	return l.preference.SetValue(deepCloneMap(val))
+func (m *StructMap[K, V]) SetValue(val map[K]V) error {
+	return m.preference.SetValue(deepCloneMap(val))
 }
 
 // SetManagedValue configures the preference with the specified value
 // and marks the preference as managed.
-func (l *StructMap[K, V]) SetManagedValue(val map[K]V) {
-	l.preference.SetManagedValue(deepCloneMap(val))
+func (m *StructMap[K, V]) SetManagedValue(val map[K]V) {
+	m.preference.SetManagedValue(deepCloneMap(val))
 }
 
 // Clone returns a copy of m that aliases no memory with m.
@@ -83,7 +83,7 @@ type StructMapView[K MapKeyType, T views.ViewCloner[T, V], V views.StructView[T]
 	ж *StructMap[K, T]
 }
 
-// StructMapViewOf returns a readonly view of m.
+// StructMapViewOf returns a read-only view of m.
 // It is used by [tailscale.com/cmd/viewer].
 func StructMapViewOf[K MapKeyType, T views.ViewCloner[T, V], V views.StructView[T]](m *StructMap[K, T]) StructMapView[K, T, V] {
 	return StructMapView[K, T, V]{m}
@@ -149,15 +149,15 @@ func (mv StructMapView[K, T, V]) Equal(mv2 StructMapView[K, T, V]) bool {
 	return mv.ж.Equal(*mv2.ж)
 }
 
-// MarshalJSONV2 implements [jsonv2.MarshalerV2].
-func (mv StructMapView[K, T, V]) MarshalJSONV2(out *jsontext.Encoder, opts jsonv2.Options) error {
-	return mv.ж.MarshalJSONV2(out, opts)
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (mv StructMapView[K, T, V]) MarshalJSONTo(out *jsontext.Encoder) error {
+	return mv.ж.MarshalJSONTo(out)
 }
 
-// UnmarshalJSONV2 implements [jsonv2.UnmarshalerV2].
-func (mv *StructMapView[K, T, V]) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) error {
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (mv *StructMapView[K, T, V]) UnmarshalJSONFrom(in *jsontext.Decoder) error {
 	var x StructMap[K, T]
-	if err := x.UnmarshalJSONV2(in, opts); err != nil {
+	if err := x.UnmarshalJSONFrom(in); err != nil {
 		return err
 	}
 	mv.ж = &x
@@ -166,10 +166,10 @@ func (mv *StructMapView[K, T, V]) UnmarshalJSONV2(in *jsontext.Decoder, opts jso
 
 // MarshalJSON implements [json.Marshaler].
 func (mv StructMapView[K, T, V]) MarshalJSON() ([]byte, error) {
-	return jsonv2.Marshal(mv) // uses MarshalJSONV2
+	return jsonv2.Marshal(mv) // uses MarshalJSONTo
 }
 
 // UnmarshalJSON implements [json.Unmarshaler].
 func (mv *StructMapView[K, T, V]) UnmarshalJSON(b []byte) error {
-	return jsonv2.Unmarshal(b, mv) // uses UnmarshalJSONV2
+	return jsonv2.Unmarshal(b, mv) // uses UnmarshalJSONFrom
 }

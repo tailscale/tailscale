@@ -3,9 +3,12 @@ FROM ${BASE}
 
 ARG BASE
 
-RUN echo "Install openssh, needed for scp."
-RUN if echo "$BASE" | grep "ubuntu:"; then apt-get update -y && apt-get install -y openssh-client; fi
-RUN if echo "$BASE" | grep "alpine:"; then apk add openssh; fi
+RUN echo "Install openssh, needed for scp. Also install python3"
+RUN if echo "$BASE" | grep "ubuntu:"; then apt-get update -y && apt-get install -y openssh-client python3 python3-pip; fi
+RUN if echo "$BASE" | grep "alpine:"; then apk add openssh python3 py3-pip; fi
+
+RUN echo "Install paramiko"
+RUN pip3 install paramiko==3.5.1 || pip3 install --break-system-packages paramiko==3.5.1
 
 # Note - on Ubuntu, we do not create the user's home directory, pam_mkhomedir will do that
 # for us, and we want to test that PAM gets triggered by Tailscale SSH.
@@ -33,6 +36,8 @@ RUN if echo "$BASE" | grep "ubuntu:"; then rm -Rf /home/testuser; fi
 RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegrationSCP
 RUN if echo "$BASE" | grep "ubuntu:"; then rm -Rf /home/testuser; fi
 RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegrationSSH
+RUN if echo "$BASE" | grep "ubuntu:"; then rm -Rf /home/testuser; fi
+RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegrationParamiko
 
 RUN echo "Then run tests as non-root user testuser and make sure tests still pass."
 RUN touch /tmp/tailscalessh.log

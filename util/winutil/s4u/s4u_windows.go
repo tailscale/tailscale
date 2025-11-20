@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -128,9 +129,10 @@ func Login(logf logger.Logf, srcName string, u *user.User, capLevel CapabilityLe
 	if err != nil {
 		return nil, err
 	}
+	tokenCloseOnce := sync.OnceFunc(func() { token.Close() })
 	defer func() {
 		if err != nil {
-			token.Close()
+			tokenCloseOnce()
 		}
 	}()
 
@@ -162,6 +164,7 @@ func Login(logf logger.Logf, srcName string, u *user.User, capLevel CapabilityLe
 				sessToken.Close()
 			}
 		}()
+		tokenCloseOnce()
 	}
 
 	userProfile, err := winutil.LoadUserProfile(sessToken, u)
@@ -935,10 +938,10 @@ func mergeEnv(existingEnv []string, extraEnv map[string]string) []string {
 		result = append(result, strings.Join([]string{k, v}, "="))
 	}
 
-	slices.SortFunc(result, func(l, r string) int {
-		kl, _, _ := strings.Cut(l, "=")
-		kr, _, _ := strings.Cut(r, "=")
-		return strings.Compare(kl, kr)
+	slices.SortFunc(result, func(a, b string) int {
+		ka, _, _ := strings.Cut(a, "=")
+		kb, _, _ := strings.Cut(b, "=")
+		return strings.Compare(ka, kb)
 	})
 	return result
 }

@@ -73,6 +73,44 @@ func (k DiscoPrivate) Shared(p DiscoPublic) DiscoShared {
 	return ret
 }
 
+// SortedPairOfDiscoPublic is a lexicographically sorted container of two
+// [DiscoPublic] keys.
+type SortedPairOfDiscoPublic struct {
+	k [2]DiscoPublic
+}
+
+// Get returns the underlying keys.
+func (s SortedPairOfDiscoPublic) Get() [2]DiscoPublic {
+	return s.k
+}
+
+// NewSortedPairOfDiscoPublic returns a SortedPairOfDiscoPublic from a and b.
+func NewSortedPairOfDiscoPublic(a, b DiscoPublic) SortedPairOfDiscoPublic {
+	s := SortedPairOfDiscoPublic{}
+	if a.Compare(b) < 0 {
+		s.k[0] = a
+		s.k[1] = b
+	} else {
+		s.k[0] = b
+		s.k[1] = a
+	}
+	return s
+}
+
+func (s SortedPairOfDiscoPublic) String() string {
+	return fmt.Sprintf("%s <=> %s", s.k[0].ShortString(), s.k[1].ShortString())
+}
+
+// Equal returns true if s and b are equal, otherwise it returns false.
+func (s SortedPairOfDiscoPublic) Equal(b SortedPairOfDiscoPublic) bool {
+	for i := range s.k {
+		if s.k[i].Compare(b.k[i]) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // DiscoPublic is the public portion of a DiscoPrivate.
 type DiscoPublic struct {
 	k [32]byte
@@ -129,11 +167,11 @@ func (k DiscoPublic) String() string {
 }
 
 // Compare returns an integer comparing DiscoPublic k and l lexicographically.
-// The result will be 0 if k == l, -1 if k < l, and +1 if k > l. This is useful
-// for situations requiring only one node in a pair to perform some operation,
-// e.g. probing UDP path lifetime.
-func (k DiscoPublic) Compare(l DiscoPublic) int {
-	return bytes.Compare(k.k[:], l.k[:])
+// The result will be 0 if k == other, -1 if k < other, and +1 if k > other.
+// This is useful for situations requiring only one node in a pair to perform
+// some operation, e.g. probing UDP path lifetime.
+func (k DiscoPublic) Compare(other DiscoPublic) int {
+	return bytes.Compare(k.k[:], other.k[:])
 }
 
 // AppendText implements encoding.TextAppender.

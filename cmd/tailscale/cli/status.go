@@ -4,7 +4,6 @@
 package cli
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -15,12 +14,13 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
-	"strconv"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"github.com/toqueteos/webbrowser"
 	"golang.org/x/net/idna"
+	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netmon"
@@ -56,6 +56,7 @@ https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go
 		fs.BoolVar(&statusArgs.peers, "peers", true, "show status of peers")
 		fs.StringVar(&statusArgs.listen, "listen", "127.0.0.1:8384", "listen address for web mode; use port 0 for automatic")
 		fs.BoolVar(&statusArgs.browser, "browser", true, "Open a browser in web mode")
+		fs.BoolVar(&statusArgs.header, "header", false, "show column headers in table format")
 		return fs
 	})(),
 }
@@ -68,7 +69,10 @@ var statusArgs struct {
 	active  bool   // in CLI mode, filter output to only peers with active sessions
 	self    bool   // in CLI mode, show status of local machine
 	peers   bool   // in CLI mode, show status of peer machines
+	header  bool   // in CLI mode, show column headers in table format
 }
+
+const mullvadTCD = "mullvad.ts.net."
 
 func runStatus(ctx context.Context, args []string) error {
 	if len(args) > 0 {
@@ -149,10 +153,15 @@ func runStatus(ctx context.Context, args []string) error {
 		os.Exit(1)
 	}
 
-	var buf bytes.Buffer
-	f := func(format string, a ...any) { fmt.Fprintf(&buf, format, a...) }
+	w := tabwriter.NewWriter(Stdout, 0, 0, 2, ' ', 0)
+	f := func(format string, a ...any) { fmt.Fprintf(w, format, a...) }
+	if statusArgs.header {
+		fmt.Fprintln(w, "IP\tHostname\tOwner\tOS\tStatus\t")
+		fmt.Fprintln(w, "--\t--------\t-----\t--\t------\t")
+	}
+
 	printPS := func(ps *ipnstate.PeerStatus) {
-		f("%-15s %-20s %-12s %-7s ",
+		f("%s\t%s\t%s\t%s\t",
 			firstIPString(ps.TailscaleIPs),
 			dnsOrQuoteHostname(st, ps),
 			ownerLogin(st, ps),
@@ -162,7 +171,7 @@ func runStatus(ctx context.Context, args []string) error {
 		anyTraffic := ps.TxBytes != 0 || ps.RxBytes != 0
 		var offline string
 		if !ps.Online {
-			offline = "; offline"
+			offline = "; offline" + lastSeenFmt(ps.LastSeen)
 		}
 		if !ps.Active {
 			if ps.ExitNode {
@@ -172,7 +181,7 @@ func runStatus(ctx context.Context, args []string) error {
 			} else if anyTraffic {
 				f("idle" + offline)
 			} else if !ps.Online {
-				f("offline")
+				f("offline" + lastSeenFmt(ps.LastSeen))
 			} else {
 				f("-")
 			}
@@ -183,19 +192,21 @@ func runStatus(ctx context.Context, args []string) error {
 			} else if ps.ExitNodeOption {
 				f("offers exit node; ")
 			}
-			if relay != "" && ps.CurAddr == "" {
+			if relay != "" && ps.CurAddr == "" && ps.PeerRelay == "" {
 				f("relay %q", relay)
 			} else if ps.CurAddr != "" {
 				f("direct %s", ps.CurAddr)
+			} else if ps.PeerRelay != "" {
+				f("peer-relay %s", ps.PeerRelay)
 			}
 			if !ps.Online {
-				f("; offline")
+				f(offline)
 			}
 		}
 		if anyTraffic {
 			f(", tx %d rx %d", ps.TxBytes, ps.RxBytes)
 		}
-		f("\n")
+		f("\t\n")
 	}
 
 	if statusArgs.self && st.Self != nil {
@@ -210,9 +221,8 @@ func runStatus(ctx context.Context, args []string) error {
 			if ps.ShareeNode {
 				continue
 			}
-			if ps.Location != nil && ps.ExitNodeOption && !ps.ExitNode {
-				// Location based exit nodes are only shown with the
-				// `exit-node list` command.
+			if ps.ExitNodeOption && !ps.ExitNode && strings.HasSuffix(ps.DNSName, mullvadTCD) {
+				// Mullvad exit nodes are only shown with the `exit-node list` command.
 				locBasedExitNode = true
 				continue
 			}
@@ -226,7 +236,8 @@ func runStatus(ctx context.Context, args []string) error {
 			printPS(ps)
 		}
 	}
-	Stdout.Write(buf.Bytes())
+	w.Flush()
+
 	if locBasedExitNode {
 		outln()
 		printf("# To see the full list of exit nodes, including location-based exit nodes, run `tailscale exit-node list`  \n")
@@ -235,44 +246,13 @@ func runStatus(ctx context.Context, args []string) error {
 		outln()
 		printHealth()
 	}
-	printFunnelStatus(ctx)
+	if f, ok := hookPrintFunnelStatus.GetOk(); ok {
+		f(ctx)
+	}
 	return nil
 }
 
-// printFunnelStatus prints the status of the funnel, if it's running.
-// It prints nothing if the funnel is not running.
-func printFunnelStatus(ctx context.Context) {
-	sc, err := localClient.GetServeConfig(ctx)
-	if err != nil {
-		outln()
-		printf("# Funnel:\n")
-		printf("#     - Unable to get Funnel status: %v\n", err)
-		return
-	}
-	if !sc.IsFunnelOn() {
-		return
-	}
-	outln()
-	printf("# Funnel on:\n")
-	for hp, on := range sc.AllowFunnel {
-		if !on { // if present, should be on
-			continue
-		}
-		sni, portStr, _ := net.SplitHostPort(string(hp))
-		p, _ := strconv.ParseUint(portStr, 10, 16)
-		isTCP := sc.IsTCPForwardingOnPort(uint16(p))
-		url := "https://"
-		if isTCP {
-			url = "tcp://"
-		}
-		url += sni
-		if isTCP || p != 443 {
-			url += ":" + portStr
-		}
-		printf("#     - %s\n", url)
-	}
-	outln()
-}
+var hookPrintFunnelStatus feature.Hook[func(context.Context)]
 
 // isRunningOrStarting reports whether st is in state Running or Starting.
 // It also returns a description of the status suitable to display to a user.

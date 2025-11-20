@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"github.com/tailscale/netlink"
+	"tailscale.com/feature"
+	"tailscale.com/tsconst"
 	"tailscale.com/types/logger"
 )
 
@@ -69,23 +71,12 @@ const (
 // matching and setting the bits, so they can be directly embedded in
 // commands.
 const (
-	// The mask for reading/writing the 'firewall mask' bits on a packet.
-	// See the comment on the const block on why we only use the third byte.
-	//
-	// We claim bits 16:23 entirely. For now we only use the lower four
-	// bits, leaving the higher 4 bits for future use.
-	TailscaleFwmarkMask    = "0xff0000"
-	TailscaleFwmarkMaskNum = 0xff0000
-
-	// Packet is from Tailscale and to a subnet route destination, so
-	// is allowed to be routed through this machine.
-	TailscaleSubnetRouteMark    = "0x40000"
-	TailscaleSubnetRouteMarkNum = 0x40000
-
-	// Packet was originated by tailscaled itself, and must not be
-	// routed over the Tailscale network.
-	TailscaleBypassMark    = "0x80000"
-	TailscaleBypassMarkNum = 0x80000
+	fwmarkMask         = tsconst.LinuxFwmarkMask
+	fwmarkMaskNum      = tsconst.LinuxFwmarkMaskNum
+	subnetRouteMark    = tsconst.LinuxSubnetRouteMark
+	subnetRouteMarkNum = tsconst.LinuxSubnetRouteMarkNum
+	bypassMark         = tsconst.LinuxBypassMark
+	bypassMarkNum      = tsconst.LinuxBypassMarkNum
 )
 
 // getTailscaleFwmarkMaskNeg returns the negation of TailscaleFwmarkMask in bytes.
@@ -169,7 +160,7 @@ func CheckIPRuleSupportsV6(logf logger.Logf) error {
 	// Try to actually create & delete one as a test.
 	rule := netlink.NewRule()
 	rule.Priority = 1234
-	rule.Mark = TailscaleBypassMarkNum
+	rule.Mark = bypassMarkNum
 	rule.Table = 52
 	rule.Family = netlink.FAMILY_V6
 	// First delete the rule unconditionally, and don't check for
@@ -179,4 +170,14 @@ func CheckIPRuleSupportsV6(logf logger.Logf) error {
 	// And clean up on exit.
 	defer netlink.RuleDel(rule)
 	return netlink.RuleAdd(rule)
+}
+
+var hookIPTablesCleanup feature.Hook[func(logger.Logf)]
+
+// IPTablesCleanUp removes all Tailscale added iptables rules.
+// Any errors that occur are logged to the provided logf.
+func IPTablesCleanUp(logf logger.Logf) {
+	if f, ok := hookIPTablesCleanup.GetOk(); ok {
+		f(logf)
+	}
 }

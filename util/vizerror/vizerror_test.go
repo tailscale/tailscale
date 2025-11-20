@@ -42,3 +42,25 @@ func TestAs(t *testing.T) {
 		t.Errorf("As() returned error %v, want %v", got, verr)
 	}
 }
+
+func TestWrap(t *testing.T) {
+	wrapped := errors.New("wrapped")
+	err := Wrap(wrapped)
+	if err.Error() != "wrapped" {
+		t.Errorf(`Wrap(wrapped).Error() = %q, want %q`, err.Error(), "wrapped")
+	}
+	if errors.Unwrap(err) != wrapped {
+		t.Errorf("Unwrap = %q, want %q", errors.Unwrap(err), wrapped)
+	}
+}
+
+func TestWrapWithMessage(t *testing.T) {
+	wrapped := errors.New("wrapped")
+	err := WrapWithMessage(wrapped, "safe")
+	if err.Error() != "safe" {
+		t.Errorf(`WrapWithMessage(wrapped, "safe").Error() = %q, want %q`, err.Error(), "safe")
+	}
+	if errors.Unwrap(err) != wrapped {
+		t.Errorf("Unwrap = %q, want %q", errors.Unwrap(err), wrapped)
+	}
+}

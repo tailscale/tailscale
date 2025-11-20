@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -20,6 +19,7 @@ import (
 	"go.uber.org/zap"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/k8s-operator/sessionrecording/fakes"
+	"tailscale.com/net/netx"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstest"
@@ -80,7 +80,7 @@ func Test_Hijacker(t *testing.T) {
 			h := &Hijacker{
 				connectToRecorder: func(context.Context,
 					[]netip.AddrPort,
-					func(context.Context, string, string) (net.Conn, error),
+					netx.DialFunc,
 				) (wc io.WriteCloser, rec []*tailcfg.SSHRecordingAttempt, _ <-chan error, err error) {
 					if tt.failRecorderConnect {
 						err = errors.New("test")
@@ -91,11 +91,11 @@ func Test_Hijacker(t *testing.T) {
 				who:      &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{}},
 				log:      zl.Sugar(),
 				ts:       &tsnet.Server{},
-				req:      &http.Request{URL: &url.URL{}},
+				req:      &http.Request{URL: &url.URL{RawQuery: "tty=true"}},
 				proto:    tt.proto,
 			}
 			ctx := context.Background()
-			_, err := h.setUpRecording(ctx, tc)
+			_, err := h.setUpRecording(tc)
 			if (err != nil) != tt.wantsSetupErr {
 				t.Errorf("spdyHijacker.setupRecording() error = %v, wantErr %v", err, tt.wantsSetupErr)
 				return

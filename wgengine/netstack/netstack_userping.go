@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"time"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/version/distro"
 )
 
@@ -20,7 +21,7 @@ import (
 // CAP_NET_RAW from tailscaled's binary.
 var setAmbientCapsRaw func(*exec.Cmd)
 
-var isSynology = runtime.GOOS == "linux" && distro.Get() == distro.Synology
+var isSynology = runtime.GOOS == "linux" && buildfeatures.HasSynology && distro.Get() == distro.Synology
 
 // sendOutboundUserPing sends a non-privileged ICMP (or ICMPv6) ping to dstIP with the given timeout.
 func (ns *Impl) sendOutboundUserPing(dstIP netip.Addr, timeout time.Duration) error {
@@ -61,7 +62,7 @@ func (ns *Impl) sendOutboundUserPing(dstIP netip.Addr, timeout time.Duration) er
 			ping = "/bin/ping"
 		}
 		cmd := exec.Command(ping, "-c", "1", "-W", "3", dstIP.String())
-		if isSynology && os.Getuid() != 0 {
+		if buildfeatures.HasSynology && isSynology && os.Getuid() != 0 {
 			// On DSM7 we run as non-root and need to pass
 			// CAP_NET_RAW if our binary has it.
 			setAmbientCapsRaw(cmd)

@@ -6,7 +6,7 @@ import (
 	"net"
 	"sync"
 
-	gossh "github.com/tailscale/golang-x-crypto/ssh"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // contextKey is a value for use with context.WithValue. It's used as
@@ -55,8 +55,6 @@ var (
 	// ContextKeyPublicKey is a context key for use with Contexts in this package.
 	// The associated value will be of type PublicKey.
 	ContextKeyPublicKey = &contextKey{"public-key"}
-
-	ContextKeySendAuthBanner = &contextKey{"send-auth-banner"}
 )
 
 // Context is a package specific context interface. It exposes connection
@@ -91,8 +89,6 @@ type Context interface {
 
 	// SetValue allows you to easily write new values into the underlying context.
 	SetValue(key, value interface{})
-
-	SendAuthBanner(banner string) error
 }
 
 type sshContext struct {
@@ -121,7 +117,6 @@ func applyConnMetadata(ctx Context, conn gossh.ConnMetadata) {
 	ctx.SetValue(ContextKeyUser, conn.User())
 	ctx.SetValue(ContextKeyLocalAddr, conn.LocalAddr())
 	ctx.SetValue(ContextKeyRemoteAddr, conn.RemoteAddr())
-	ctx.SetValue(ContextKeySendAuthBanner, conn.SendAuthBanner)
 }
 
 func (ctx *sshContext) SetValue(key, value interface{}) {
@@ -157,8 +152,4 @@ func (ctx *sshContext) LocalAddr() net.Addr {
 
 func (ctx *sshContext) Permissions() *Permissions {
 	return ctx.Value(ContextKeyPermissions).(*Permissions)
-}
-
-func (ctx *sshContext) SendAuthBanner(msg string) error {
-	return ctx.Value(ContextKeySendAuthBanner).(func(string) error)(msg)
 }

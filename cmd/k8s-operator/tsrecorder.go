@@ -8,12 +8,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	xslices "golang.org/x/exp/slices"
 	appsv1 "k8s.io/api/apps/v1"
@@ -21,8 +22,10 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -38,6 +41,7 @@ import (
 
 const (
 	reasonRecorderCreationFailed = "RecorderCreationFailed"
+	reasonRecorderCreating       = "RecorderCreating"
 	reasonRecorderCreated        = "RecorderCreated"
 	reasonRecorderInvalid        = "RecorderInvalid"
 
@@ -50,18 +54,19 @@ var gaugeRecorderResources = clientmetric.NewGauge(kubetypes.MetricRecorderCount
 // Recorder CRs.
 type RecorderReconciler struct {
 	client.Client
-	l           *zap.SugaredLogger
+	log         *zap.SugaredLogger
 	recorder    record.EventRecorder
 	clock       tstime.Clock
 	tsNamespace string
 	tsClient    tsClient
+	loginServer string
 
 	mu        sync.Mutex           // protects following
 	recorders set.Slice[types.UID] // for recorders gauge
 }
 
 func (r *RecorderReconciler) logger(name string) *zap.SugaredLogger {
-	return r.l.With("Recorder", name)
+	return r.log.With("Recorder", name)
 }
 
 func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, err error) {
@@ -102,10 +107,10 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 	oldTSRStatus := tsr.Status.DeepCopy()
 	setStatusReady := func(tsr *tsapi.Recorder, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
 		tsoperator.SetRecorderCondition(tsr, tsapi.RecorderReady, status, reason, message, tsr.Generation, r.clock, logger)
-		if !apiequality.Semantic.DeepEqual(oldTSRStatus, tsr.Status) {
+		if !apiequality.Semantic.DeepEqual(oldTSRStatus, &tsr.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			if updateErr := r.Client.Status().Update(ctx, tsr); updateErr != nil {
-				err = errors.Wrap(err, updateErr.Error())
+				err = errors.Join(err, updateErr)
 			}
 		}
 		return reconcile.Result{}, err
@@ -119,23 +124,28 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 		logger.Infof("ensuring Recorder is set up")
 		tsr.Finalizers = append(tsr.Finalizers, FinalizerName)
 		if err := r.Update(ctx, tsr); err != nil {
-			logger.Errorf("error adding finalizer: %w", err)
 			return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderCreationFailed, reasonRecorderCreationFailed)
 		}
 	}
 
-	if err := r.validate(tsr); err != nil {
-		logger.Errorf("error validating Recorder spec: %w", err)
+	if err := r.validate(ctx, tsr); err != nil {
 		message := fmt.Sprintf("Recorder is invalid: %s", err)
 		r.recorder.Eventf(tsr, corev1.EventTypeWarning, reasonRecorderInvalid, message)
 		return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderInvalid, message)
 	}
 
 	if err = r.maybeProvision(ctx, tsr); err != nil {
-		logger.Errorf("error creating Recorder resources: %w", err)
+		reason := reasonRecorderCreationFailed
 		message := fmt.Sprintf("failed creating Recorder: %s", err)
-		r.recorder.Eventf(tsr, corev1.EventTypeWarning, reasonRecorderCreationFailed, message)
-		return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderCreationFailed, message)
+		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			reason = reasonRecorderCreating
+			message = fmt.Sprintf("optimistic lock error, retrying: %s", err)
+			err = nil
+			logger.Info(message)
+		} else {
+			r.recorder.Eventf(tsr, corev1.EventTypeWarning, reasonRecorderCreationFailed, message)
+		}
+		return setStatusReady(tsr, metav1.ConditionFalse, reason, message)
 	}
 
 	logger.Info("Recorder resources synced")
@@ -153,20 +163,26 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 	if err := r.ensureAuthSecretCreated(ctx, tsr); err != nil {
 		return fmt.Errorf("error creating secrets: %w", err)
 	}
-	// State secret is precreated so we can use the Recorder CR as its owner ref.
+	// State Secret is precreated so we can use the Recorder CR as its owner ref.
 	sec := tsrStateSecret(tsr, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sec, func(s *corev1.Secret) {
 		s.ObjectMeta.Labels = sec.ObjectMeta.Labels
 		s.ObjectMeta.Annotations = sec.ObjectMeta.Annotations
-		s.ObjectMeta.OwnerReferences = sec.ObjectMeta.OwnerReferences
 	}); err != nil {
 		return fmt.Errorf("error creating state Secret: %w", err)
 	}
 	sa := tsrServiceAccount(tsr, r.tsNamespace)
-	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sa, func(s *corev1.ServiceAccount) {
+	if _, err := createOrMaybeUpdate(ctx, r.Client, r.tsNamespace, sa, func(s *corev1.ServiceAccount) error {
+		// Perform this check within the update function to make sure we don't
+		// have a race condition between the previous check and the update.
+		if err := saOwnedByRecorder(s, tsr); err != nil {
+			return err
+		}
+
 		s.ObjectMeta.Labels = sa.ObjectMeta.Labels
 		s.ObjectMeta.Annotations = sa.ObjectMeta.Annotations
-		s.ObjectMeta.OwnerReferences = sa.ObjectMeta.OwnerReferences
+
+		return nil
 	}); err != nil {
 		return fmt.Errorf("error creating ServiceAccount: %w", err)
 	}
@@ -174,7 +190,6 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, role, func(r *rbacv1.Role) {
 		r.ObjectMeta.Labels = role.ObjectMeta.Labels
 		r.ObjectMeta.Annotations = role.ObjectMeta.Annotations
-		r.ObjectMeta.OwnerReferences = role.ObjectMeta.OwnerReferences
 		r.Rules = role.Rules
 	}); err != nil {
 		return fmt.Errorf("error creating Role: %w", err)
@@ -183,20 +198,25 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, roleBinding, func(r *rbacv1.RoleBinding) {
 		r.ObjectMeta.Labels = roleBinding.ObjectMeta.Labels
 		r.ObjectMeta.Annotations = roleBinding.ObjectMeta.Annotations
-		r.ObjectMeta.OwnerReferences = roleBinding.ObjectMeta.OwnerReferences
 		r.RoleRef = roleBinding.RoleRef
 		r.Subjects = roleBinding.Subjects
 	}); err != nil {
 		return fmt.Errorf("error creating RoleBinding: %w", err)
 	}
-	ss := tsrStatefulSet(tsr, r.tsNamespace)
+	ss := tsrStatefulSet(tsr, r.tsNamespace, r.loginServer)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, ss, func(s *appsv1.StatefulSet) {
 		s.ObjectMeta.Labels = ss.ObjectMeta.Labels
 		s.ObjectMeta.Annotations = ss.ObjectMeta.Annotations
-		s.ObjectMeta.OwnerReferences = ss.ObjectMeta.OwnerReferences
 		s.Spec = ss.Spec
 	}); err != nil {
 		return fmt.Errorf("error creating StatefulSet: %w", err)
+	}
+
+	// ServiceAccount name may have changed, in which case we need to clean up
+	// the previous ServiceAccount. RoleBinding will already be updated to point
+	// to the new ServiceAccount.
+	if err := r.maybeCleanupServiceAccounts(ctx, tsr, sa.Name); err != nil {
+		return fmt.Errorf("error cleaning up ServiceAccounts: %w", err)
 	}
 
 	var devices []tsapi.RecorderTailnetDevice
@@ -217,13 +237,54 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 	return nil
 }
 
+func saOwnedByRecorder(sa *corev1.ServiceAccount, tsr *tsapi.Recorder) error {
+	// If ServiceAccount name has been configured, check that we don't clobber
+	// a pre-existing SA not owned by this Recorder.
+	if sa.Name != tsr.Name && !apiequality.Semantic.DeepEqual(sa.OwnerReferences, tsrOwnerReference(tsr)) {
+		return fmt.Errorf("custom ServiceAccount name %q specified but conflicts with a pre-existing ServiceAccount in the %s namespace", sa.Name, sa.Namespace)
+	}
+
+	return nil
+}
+
+// maybeCleanupServiceAccounts deletes any dangling ServiceAccounts
+// owned by the Recorder if the ServiceAccount name has been changed.
+// They would eventually be cleaned up by owner reference deletion, but
+// this avoids a long-lived Recorder with many ServiceAccount name changes
+// accumulating a large amount of garbage.
+//
+// This is a no-op if the ServiceAccount name has not changed.
+func (r *RecorderReconciler) maybeCleanupServiceAccounts(ctx context.Context, tsr *tsapi.Recorder, currentName string) error {
+	logger := r.logger(tsr.Name)
+
+	// List all ServiceAccounts owned by this Recorder.
+	sas := &corev1.ServiceAccountList{}
+	if err := r.List(ctx, sas, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels("recorder", tsr.Name, nil))); err != nil {
+		return fmt.Errorf("error listing ServiceAccounts for cleanup: %w", err)
+	}
+	for _, sa := range sas.Items {
+		if sa.Name == currentName {
+			continue
+		}
+		if err := r.Delete(ctx, &sa); err != nil {
+			if apierrors.IsNotFound(err) {
+				logger.Debugf("ServiceAccount %s not found, likely already deleted", sa.Name)
+			} else {
+				return fmt.Errorf("error deleting ServiceAccount %s: %w", sa.Name, err)
+			}
+		}
+	}
+
+	return nil
+}
+
 // maybeCleanup just deletes the device from the tailnet. All the kubernetes
 // resources linked to a Recorder will get cleaned up via owner references
 // (which we can use because they are all in the same namespace).
 func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Recorder) (bool, error) {
 	logger := r.logger(tsr.Name)
 
-	id, _, ok, err := r.getNodeMetadata(ctx, tsr.Name)
+	prefs, ok, err := r.getDevicePrefs(ctx, tsr.Name)
 	if err != nil {
 		return false, err
 	}
@@ -236,6 +297,7 @@ func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Record
 		return true, nil
 	}
 
+	id := string(prefs.Config.NodeID)
 	logger.Debugf("deleting device %s from control", string(id))
 	if err := r.tsClient.DeleteDevice(ctx, string(id)); err != nil {
 		errResp := &tailscale.ErrResponse{}
@@ -294,17 +356,45 @@ func (r *RecorderReconciler) ensureAuthSecretCreated(ctx context.Context, tsr *t
 	return nil
 }
 
-func (r *RecorderReconciler) validate(tsr *tsapi.Recorder) error {
+func (r *RecorderReconciler) validate(ctx context.Context, tsr *tsapi.Recorder) error {
 	if !tsr.Spec.EnableUI && tsr.Spec.Storage.S3 == nil {
 		return errors.New("must either enable UI or use S3 storage to ensure recordings are accessible")
+	}
+
+	// Check any custom ServiceAccount config doesn't conflict with pre-existing
+	// ServiceAccounts. This check is performed once during validation to ensure
+	// errors are raised early, but also again during any Updates to prevent a race.
+	specSA := tsr.Spec.StatefulSet.Pod.ServiceAccount
+	if specSA.Name != "" && specSA.Name != tsr.Name {
+		sa := &corev1.ServiceAccount{}
+		key := client.ObjectKey{
+			Name:      specSA.Name,
+			Namespace: r.tsNamespace,
+		}
+
+		err := r.Get(ctx, key, sa)
+		switch {
+		case apierrors.IsNotFound(err):
+			// ServiceAccount doesn't exist, so no conflict.
+		case err != nil:
+			return fmt.Errorf("error getting ServiceAccount %q for validation: %w", tsr.Spec.StatefulSet.Pod.ServiceAccount.Name, err)
+		default:
+			// ServiceAccount exists, check if it's owned by the Recorder.
+			if err := saOwnedByRecorder(sa, tsr); err != nil {
+				return err
+			}
+		}
+	}
+	if len(specSA.Annotations) > 0 {
+		if violations := apivalidation.ValidateAnnotations(specSA.Annotations, field.NewPath(".spec.statefulSet.pod.serviceAccount.annotations")); len(violations) > 0 {
+			return violations.ToAggregate()
+		}
 	}
 
 	return nil
 }
 
-// getNodeMetadata returns 'ok == true' iff the node ID is found. The dnsName
-// is expected to always be non-empty if the node ID is, but not required.
-func (r *RecorderReconciler) getNodeMetadata(ctx context.Context, tsrName string) (id tailcfg.StableNodeID, dnsName string, ok bool, err error) {
+func (r *RecorderReconciler) getStateSecret(ctx context.Context, tsrName string) (*corev1.Secret, error) {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: r.tsNamespace,
@@ -313,39 +403,59 @@ func (r *RecorderReconciler) getNodeMetadata(ctx context.Context, tsrName string
 	}
 	if err := r.Get(ctx, client.ObjectKeyFromObject(secret), secret); err != nil {
 		if apierrors.IsNotFound(err) {
-			return "", "", false, nil
+			return nil, nil
 		}
 
-		return "", "", false, err
+		return nil, fmt.Errorf("error getting state Secret: %w", err)
 	}
 
+	return secret, nil
+}
+
+func (r *RecorderReconciler) getDevicePrefs(ctx context.Context, tsrName string) (prefs prefs, ok bool, err error) {
+	secret, err := r.getStateSecret(ctx, tsrName)
+	if err != nil || secret == nil {
+		return prefs, false, err
+	}
+
+	return getDevicePrefs(secret)
+}
+
+// getDevicePrefs returns 'ok == true' iff the node ID is found. The dnsName
+// is expected to always be non-empty if the node ID is, but not required.
+func getDevicePrefs(secret *corev1.Secret) (prefs prefs, ok bool, err error) {
 	// TODO(tomhjp): Should maybe use ipn to parse the following info instead.
 	currentProfile, ok := secret.Data[currentProfileKey]
 	if !ok {
-		return "", "", false, nil
+		return prefs, false, nil
 	}
 	profileBytes, ok := secret.Data[string(currentProfile)]
 	if !ok {
-		return "", "", false, nil
+		return prefs, false, nil
 	}
-	var profile profile
-	if err := json.Unmarshal(profileBytes, &profile); err != nil {
-		return "", "", false, fmt.Errorf("failed to extract node profile info from state Secret %s: %w", secret.Name, err)
+	if err := json.Unmarshal(profileBytes, &prefs); err != nil {
+		return prefs, false, fmt.Errorf("failed to extract node profile info from state Secret %s: %w", secret.Name, err)
 	}
 
-	ok = profile.Config.NodeID != ""
-	return tailcfg.StableNodeID(profile.Config.NodeID), profile.Config.UserProfile.LoginName, ok, nil
+	ok = prefs.Config.NodeID != ""
+	return prefs, ok, nil
 }
 
 func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) (d tsapi.RecorderTailnetDevice, ok bool, err error) {
-	nodeID, dnsName, ok, err := r.getNodeMetadata(ctx, tsrName)
+	secret, err := r.getStateSecret(ctx, tsrName)
+	if err != nil || secret == nil {
+		return tsapi.RecorderTailnetDevice{}, false, err
+	}
+
+	prefs, ok, err := getDevicePrefs(secret)
 	if !ok || err != nil {
 		return tsapi.RecorderTailnetDevice{}, false, err
 	}
 
 	// TODO(tomhjp): The profile info doesn't include addresses, which is why we
-	// need the API. Should we instead update the profile to include addresses?
-	device, err := r.tsClient.Device(ctx, string(nodeID), nil)
+	// need the API. Should maybe update tsrecorder to write IPs to the state
+	// Secret like containerboot does.
+	device, err := r.tsClient.Device(ctx, string(prefs.Config.NodeID), nil)
 	if err != nil {
 		return tsapi.RecorderTailnetDevice{}, false, fmt.Errorf("failed to get device info from API: %w", err)
 	}
@@ -354,22 +464,27 @@ func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) 
 		Hostname:   device.Hostname,
 		TailnetIPs: device.Addresses,
 	}
-	if dnsName != "" {
+	if dnsName := prefs.Config.UserProfile.LoginName; dnsName != "" {
 		d.URL = fmt.Sprintf("https://%s", dnsName)
 	}
 
 	return d, true, nil
 }
 
-type profile struct {
+// [prefs] is a subset of the ipn.Prefs struct used for extracting information
+// from the state Secret of Tailscale devices.
+type prefs struct {
 	Config struct {
-		NodeID      string `json:"NodeID"`
+		NodeID      tailcfg.StableNodeID `json:"NodeID"`
 		UserProfile struct {
+			// LoginName is the MagicDNS name of the device, e.g. foo.tail-scale.ts.net.
 			LoginName string `json:"LoginName"`
 		} `json:"UserProfile"`
 	} `json:"Config"`
+
+	AdvertiseServices []string `json:"AdvertiseServices"`
 }
 
-func markedForDeletion(tsr *tsapi.Recorder) bool {
-	return !tsr.DeletionTimestamp.IsZero()
+func markedForDeletion(obj metav1.Object) bool {
+	return !obj.GetDeletionTimestamp().IsZero()
 }

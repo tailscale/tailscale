@@ -133,6 +133,71 @@ func TestPermissions(t *testing.T) {
 	}
 }
 
+// TestMissingPaths verifies that the fileserver running at localhost
+// correctly handles paths with missing required components.
+//
+// Expected path format:
+// http://localhost:[PORT]/<secretToken>/<share>[/<subSharePath...>]
+func TestMissingPaths(t *testing.T) {
+	s := newSystem(t)
+
+	fileserverAddr := s.addRemote(remote1)
+	s.addShare(remote1, share11, drive.PermissionReadWrite)
+
+	client := &http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
+	addr := strings.Split(fileserverAddr, "|")[1]
+	secretToken := strings.Split(fileserverAddr, "|")[0]
+
+	testCases := []struct {
+		name       string
+		path       string
+		wantStatus int
+	}{
+		{
+			name:       "empty path",
+			path:       "",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "single slash",
+			path:       "/",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "only token",
+			path:       "/" + secretToken,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "token with trailing slash",
+			path:       "/" + secretToken + "/",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "token and invalid share",
+			path:       "/" + secretToken + "/nonexistentshare",
+			wantStatus: http.StatusNotFound,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			u := fmt.Sprintf("http://%s%s", addr, tc.path)
+			resp, err := client.Get(u)
+			if err != nil {
+				t.Fatalf("unexpected error making request: %v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != tc.wantStatus {
+				t.Errorf("got status code %d, want %d", resp.StatusCode, tc.wantStatus)
+			}
+		})
+	}
+}
+
 // TestSecretTokenAuth verifies that the fileserver running at localhost cannot
 // be accessed directly without the correct secret token. This matters because
 // if a victim can be induced to visit the localhost URL and access a malicious
@@ -402,14 +467,14 @@ func newSystem(t *testing.T) *system {
 	tstest.ResourceCheck(t)
 
 	fs := newFileSystemForLocal(log.Printf, nil)
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to Listen: %s", err)
 	}
-	t.Logf("FileSystemForLocal listening at %s", l.Addr())
+	t.Logf("FileSystemForLocal listening at %s", ln.Addr())
 	go func() {
 		for {
-			conn, err := l.Accept()
+			conn, err := ln.Accept()
 			if err != nil {
 				t.Logf("Accept: %v", err)
 				return
@@ -418,11 +483,11 @@ func newSystem(t *testing.T) *system {
 		}
 	}()
 
-	client := gowebdav.NewAuthClient(fmt.Sprintf("http://%s", l.Addr()), &noopAuthorizer{})
+	client := gowebdav.NewAuthClient(fmt.Sprintf("http://%s", ln.Addr()), &noopAuthorizer{})
 	client.SetTransport(&http.Transport{DisableKeepAlives: true})
 	s := &system{
 		t:       t,
-		local:   &local{l: l, fs: fs},
+		local:   &local{l: ln, fs: fs},
 		client:  client,
 		remotes: make(map[string]*remote),
 	}
@@ -431,11 +496,11 @@ func newSystem(t *testing.T) *system {
 }
 
 func (s *system) addRemote(name string) string {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		s.t.Fatalf("failed to Listen: %s", err)
 	}
-	s.t.Logf("Remote for %v listening at %s", name, l.Addr())
+	s.t.Logf("Remote for %v listening at %s", name, ln.Addr())
 
 	fileServer, err := NewFileServer()
 	if err != nil {
@@ -445,21 +510,21 @@ func (s *system) addRemote(name string) string {
 	s.t.Logf("FileServer for %v listening at %s", name, fileServer.Addr())
 
 	r := &remote{
-		l:           l,
+		l:           ln,
 		fileServer:  fileServer,
 		fs:          NewFileSystemForRemote(log.Printf),
 		shares:      make(map[string]string),
 		permissions: make(map[string]drive.Permission),
 	}
 	r.fs.SetFileServerAddr(fileServer.Addr())
-	go http.Serve(l, r)
+	go http.Serve(ln, r)
 	s.remotes[name] = r
 
 	remotes := make([]*drive.Remote, 0, len(s.remotes))
 	for name, r := range s.remotes {
 		remotes = append(remotes, &drive.Remote{
 			Name: name,
-			URL:  fmt.Sprintf("http://%s", r.l.Addr()),
+			URL:  func() string { return fmt.Sprintf("http://%s", r.l.Addr()) },
 		})
 	}
 	s.local.fs.SetRemotes(
@@ -704,8 +769,8 @@ func (a *noopAuthenticator) Close() error {
 	return nil
 }
 
-const lockBody = `<?xml version="1.0" encoding="utf-8" ?> 
-<D:lockinfo xmlns:D='DAV:'> 
-  <D:lockscope><D:exclusive/></D:lockscope> 
-  <D:locktype><D:write/></D:locktype> 
+const lockBody = `<?xml version="1.0" encoding="utf-8" ?>
+<D:lockinfo xmlns:D='DAV:'>
+  <D:lockscope><D:exclusive/></D:lockscope>
+  <D:locktype><D:write/></D:locktype>
 </D:lockinfo>`

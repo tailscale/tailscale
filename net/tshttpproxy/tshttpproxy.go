@@ -7,6 +7,7 @@ package tshttpproxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -37,6 +38,23 @@ var (
 	config       *httpproxy.Config // used to create proxyFunc
 	proxyFunc    func(*url.URL) (*url.URL, error)
 )
+
+// SetProxyFunc can be used by clients to set a platform-specific function for proxy resolution.
+// If config is set when this function is called, an error will be returned.
+// The provided function should return a proxy URL for the given request URL,
+// nil if no proxy is enabled for the request URL, or an error if proxy settings cannot be resolved.
+func SetProxyFunc(fn func(*url.URL) (*url.URL, error)) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Allow override only if config is not set
+	if config != nil {
+		return errors.New("tshttpproxy: SetProxyFunc can only be called when config is not set")
+	}
+
+	proxyFunc = fn
+	return nil
+}
 
 func getProxyFunc() func(*url.URL) (*url.URL, error) {
 	// Create config/proxyFunc if it's not created

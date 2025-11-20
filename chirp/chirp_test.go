@@ -1,5 +1,6 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
+
 package chirp
 
 import (
@@ -23,7 +24,7 @@ type fakeBIRD struct {
 
 func newFakeBIRD(t *testing.T, protocols ...string) *fakeBIRD {
 	sock := filepath.Join(t.TempDir(), "sock")
-	l, err := net.Listen("unix", sock)
+	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +33,7 @@ func newFakeBIRD(t *testing.T, protocols ...string) *fakeBIRD {
 		pe[p] = false
 	}
 	return &fakeBIRD{
-		Listener:         l,
+		Listener:         ln,
 		protocolsEnabled: pe,
 		sock:             sock,
 	}
@@ -122,12 +123,12 @@ type hangingListener struct {
 
 func newHangingListener(t *testing.T) *hangingListener {
 	sock := filepath.Join(t.TempDir(), "sock")
-	l, err := net.Listen("unix", sock)
+	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &hangingListener{
-		Listener: l,
+		Listener: ln,
 		t:        t,
 		done:     make(chan struct{}),
 		sock:     sock,

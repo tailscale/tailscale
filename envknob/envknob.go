@@ -17,6 +17,7 @@ package envknob
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -27,18 +28,19 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/syncs"
 	"tailscale.com/types/opt"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
 
 var (
-	mu sync.Mutex
+	mu syncs.Mutex
 	// +checklocks:mu
 	set = map[string]string{}
 	// +checklocks:mu
@@ -410,10 +412,33 @@ func TKASkipSignatureCheck() bool { return Bool("TS_UNSAFE_SKIP_NKS_VERIFICATION
 // Kubernetes Operator components.
 func App() string {
 	a := os.Getenv("TS_INTERNAL_APP")
-	if a == kubetypes.AppConnector || a == kubetypes.AppEgressProxy || a == kubetypes.AppIngressProxy || a == kubetypes.AppIngressResource {
+	if a == kubetypes.AppConnector || a == kubetypes.AppEgressProxy || a == kubetypes.AppIngressProxy || a == kubetypes.AppIngressResource || a == kubetypes.AppProxyGroupEgress || a == kubetypes.AppProxyGroupIngress {
 		return a
 	}
 	return ""
+}
+
+// IsCertShareReadOnlyMode returns true if this replica should never attempt to
+// issue or renew TLS credentials for any of the HTTPS endpoints that it is
+// serving. It should only return certs found in its cert store.  Currently,
+// this is used by the Kubernetes Operator's HA Ingress via VIPServices, where
+// multiple Ingress proxy instances serve the same HTTPS endpoint with a shared
+// TLS credentials. The TLS credentials should only be issued by one of the
+// replicas.
+// For HTTPS Ingress the operator and containerboot ensure
+// that read-only replicas will not be serving the HTTPS endpoints before there
+// is a shared cert available.
+func IsCertShareReadOnlyMode() bool {
+	m := String("TS_CERT_SHARE_MODE")
+	return m == "ro"
+}
+
+// IsCertShareReadWriteMode returns true if this instance is the replica
+// responsible for issuing and renewing TLS certs in an HA setup with certs
+// shared between multiple replicas.
+func IsCertShareReadWriteMode() bool {
+	m := String("TS_CERT_SHARE_MODE")
+	return m == "rw"
 }
 
 // CrashOnUnexpected reports whether the Tailscale client should panic
@@ -439,7 +464,12 @@ var allowRemoteUpdate = RegisterBool("TS_ALLOW_ADMIN_CONSOLE_REMOTE_UPDATE")
 // AllowsRemoteUpdate reports whether this node has opted-in to letting the
 // Tailscale control plane initiate a Tailscale update (e.g. on behalf of an
 // admin on the admin console).
-func AllowsRemoteUpdate() bool { return allowRemoteUpdate() }
+func AllowsRemoteUpdate() bool {
+	if !buildfeatures.HasClientUpdate {
+		return false
+	}
+	return allowRemoteUpdate()
+}
 
 // SetNoLogsNoSupport enables no-logs-no-support mode.
 func SetNoLogsNoSupport() {
@@ -450,6 +480,9 @@ func SetNoLogsNoSupport() {
 var notInInit atomic.Bool
 
 func assertNotInInit() {
+	if !buildfeatures.HasDebug {
+		return
+	}
 	if notInInit.Load() {
 		return
 	}
@@ -503,12 +536,17 @@ func ApplyDiskConfigError() error { return applyDiskConfigErr }
 //
 // On macOS, use one of:
 //
-//   - ~/Library/Containers/io.tailscale.ipn.macsys/Data/tailscaled-env.txt
+//   - /private/var/root/Library/Containers/io.tailscale.ipn.macsys.network-extension/Data/tailscaled-env.txt
 //     for standalone macOS GUI builds
 //   - ~/Library/Containers/io.tailscale.ipn.macos.network-extension/Data/tailscaled-env.txt
 //     for App Store builds
 //   - /etc/tailscale/tailscaled-env.txt for tailscaled-on-macOS (homebrew, etc)
 func ApplyDiskConfig() (err error) {
+	if runtime.GOOS == "linux" && !(buildfeatures.HasDebug || buildfeatures.HasSynology) {
+		// This function does nothing on Linux, unless you're
+		// using TS_DEBUG_ENV_FILE or are on Synology.
+		return nil
+	}
 	var f *os.File
 	defer func() {
 		if err != nil {
@@ -533,44 +571,73 @@ func ApplyDiskConfig() (err error) {
 		return applyKeyValueEnv(f)
 	}
 
-	name := getPlatformEnvFile()
-	if name == "" {
+	names := getPlatformEnvFiles()
+	if len(names) == 0 {
 		return nil
 	}
-	f, err = os.Open(name)
-	if os.IsNotExist(err) {
-		return nil
+
+	var errs []error
+	for _, name := range names {
+		f, err = os.Open(name)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		defer f.Close()
+
+		return applyKeyValueEnv(f)
 	}
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return applyKeyValueEnv(f)
+
+	// If we have any errors, return them; if all errors are such that
+	// os.IsNotExist(err) returns true, then errs is empty and we will
+	// return nil.
+	return errors.Join(errs...)
 }
 
-// getPlatformEnvFile returns the current platform's path to an optional
-// tailscaled-env.txt file. It returns an empty string if none is defined
-// for the platform.
-func getPlatformEnvFile() string {
+// getPlatformEnvFiles returns a list of paths to the current platform's
+// optional tailscaled-env.txt file. It returns an empty list if none is
+// defined for the platform.
+func getPlatformEnvFiles() []string {
 	switch runtime.GOOS {
 	case "windows":
-		return filepath.Join(os.Getenv("ProgramData"), "Tailscale", "tailscaled-env.txt")
+		return []string{
+			filepath.Join(os.Getenv("ProgramData"), "Tailscale", "tailscaled-env.txt"),
+		}
 	case "linux":
-		if distro.Get() == distro.Synology {
-			return "/etc/tailscale/tailscaled-env.txt"
+		if buildfeatures.HasSynology && distro.Get() == distro.Synology {
+			return []string{"/etc/tailscale/tailscaled-env.txt"}
 		}
 	case "darwin":
 		if version.IsSandboxedMacOS() { // the two GUI variants (App Store or separate download)
-			// This will be user-visible as ~/Library/Containers/$VARIANT/Data/tailscaled-env.txt
-			// where $VARIANT is "io.tailscale.ipn.macsys" for macsys (downloadable mac GUI builds)
-			// or "io.tailscale.ipn.macos.network-extension" for App Store builds.
-			return filepath.Join(os.Getenv("HOME"), "tailscaled-env.txt")
+			// On the App Store variant, the home directory is set
+			// to something like:
+			//	~/Library/Containers/io.tailscale.ipn.macos.network-extension/Data
+			//
+			// On the macsys (downloadable Mac GUI) variant, the
+			// home directory can be unset, but we have a working
+			// directory that looks like:
+			//	/private/var/root/Library/Containers/io.tailscale.ipn.macsys.network-extension/Data
+			//
+			// Try both and see if we can find the file in either
+			// location.
+			var candidates []string
+			if home := os.Getenv("HOME"); home != "" {
+				candidates = append(candidates, filepath.Join(home, "tailscaled-env.txt"))
+			}
+			if wd, err := os.Getwd(); err == nil {
+				candidates = append(candidates, filepath.Join(wd, "tailscaled-env.txt"))
+			}
+
+			return candidates
 		} else {
 			// Open source / homebrew variable, running tailscaled-on-macOS.
-			return "/etc/tailscale/tailscaled-env.txt"
+			return []string{"/etc/tailscale/tailscaled-env.txt"}
 		}
 	}
-	return ""
+	return nil
 }
 
 // applyKeyValueEnv reads key=value lines r and calls Setenv for each.

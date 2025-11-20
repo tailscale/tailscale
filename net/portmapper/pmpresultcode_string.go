@@ -24,8 +24,9 @@ const _pmpResultCode_name = "OKUnsupportedVersionNotAuthorizedNetworkFailureOutO
 var _pmpResultCode_index = [...]uint8{0, 2, 20, 33, 47, 61, 78}
 
 func (i pmpResultCode) String() string {
-	if i >= pmpResultCode(len(_pmpResultCode_index)-1) {
+	idx := int(i) - 0
+	if i < 0 || idx >= len(_pmpResultCode_index)-1 {
 		return "pmpResultCode(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
-	return _pmpResultCode_name[_pmpResultCode_index[i]:_pmpResultCode_index[i+1]]
+	return _pmpResultCode_name[_pmpResultCode_index[idx]:_pmpResultCode_index[idx+1]]
 }

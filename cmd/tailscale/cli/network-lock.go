@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_tailnetlock
+
 package cli
 
 import (
@@ -8,22 +10,30 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/mattn/go-isatty"
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/cmd/tailscale/cli/jsonoutput"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
 	"tailscale.com/tsconst"
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/prompt"
 )
+
+func init() {
+	maybeNetlockCmd = func() *ffcli.Command { return netlockCmd }
+}
 
 var netlockCmd = &ffcli.Command{
 	Name:       "lock",
@@ -191,8 +201,7 @@ var nlStatusArgs struct {
 var nlStatusCmd = &ffcli.Command{
 	Name:       "status",
 	ShortUsage: "tailscale lock status",
-	ShortHelp:  "Outputs the state of tailnet lock",
-	LongHelp:   "Outputs the state of tailnet lock",
+	ShortHelp:  "Output the state of tailnet lock",
 	Exec:       runNetworkLockStatus,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("lock status")
@@ -212,24 +221,24 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 	}
 
 	if nlStatusArgs.json {
-		enc := json.NewEncoder(os.Stdout)
+		enc := jsonv1.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(st)
 	}
 
 	if st.Enabled {
-		fmt.Println("Tailnet lock is ENABLED.")
+		fmt.Println("Tailnet Lock is ENABLED.")
 	} else {
-		fmt.Println("Tailnet lock is NOT enabled.")
+		fmt.Println("Tailnet Lock is NOT enabled.")
 	}
 	fmt.Println()
 
 	if st.Enabled && st.NodeKey != nil && !st.PublicKey.IsZero() {
 		if st.NodeKeySigned {
-			fmt.Println("This node is accessible under tailnet lock. Node signature:")
+			fmt.Println("This node is accessible under Tailnet Lock. Node signature:")
 			fmt.Println(st.NodeKeySignature.String())
 		} else {
-			fmt.Println("This node is LOCKED OUT by tailnet-lock, and action is required to establish connectivity.")
+			fmt.Println("This node is LOCKED OUT by Tailnet Lock, and action is required to establish connectivity.")
 			fmt.Printf("Run the following command on a node with a trusted key:\n\ttailscale lock sign %v %s\n", st.NodeKey, st.PublicKey.CLIString())
 		}
 		fmt.Println()
@@ -293,8 +302,7 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 var nlAddCmd = &ffcli.Command{
 	Name:       "add",
 	ShortUsage: "tailscale lock add <public-key>...",
-	ShortHelp:  "Adds one or more trusted signing keys to tailnet lock",
-	LongHelp:   "Adds one or more trusted signing keys to tailnet lock",
+	ShortHelp:  "Add one or more trusted signing keys to tailnet lock",
 	Exec: func(ctx context.Context, args []string) error {
 		return runNetworkLockModify(ctx, args, nil)
 	},
@@ -307,8 +315,7 @@ var nlRemoveArgs struct {
 var nlRemoveCmd = &ffcli.Command{
 	Name:       "remove",
 	ShortUsage: "tailscale lock remove [--re-sign=false] <public-key>...",
-	ShortHelp:  "Removes one or more trusted signing keys from tailnet lock",
-	LongHelp:   "Removes one or more trusted signing keys from tailnet lock",
+	ShortHelp:  "Remove one or more trusted signing keys from tailnet lock",
 	Exec:       runNetworkLockRemove,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("lock remove")
@@ -328,6 +335,9 @@ func runNetworkLockRemove(ctx context.Context, args []string) error {
 	}
 	if !st.Enabled {
 		return errors.New("tailnet lock is not enabled")
+	}
+	if len(st.TrustedKeys) == 1 {
+		return errors.New("cannot remove the last trusted signing key; use 'tailscale lock disable' to disable tailnet lock instead, or add another signing key before removing one")
 	}
 
 	if nlRemoveArgs.resign {
@@ -367,6 +377,18 @@ func runNetworkLockRemove(ctx context.Context, args []string) error {
 				if err := localClient.NetworkLockSign(ctx, nodeKey, []byte(rotationKey)); err != nil {
 					return fmt.Errorf("failed to sign %v: %w", nodeKey, err)
 				}
+			}
+		}
+	} else {
+		if isatty.IsTerminal(os.Stdout.Fd()) {
+			fmt.Printf(`Warning
+Removal of a signing key(s) without resigning nodes (--re-sign=false)
+will cause any nodes signed by the the given key(s) to be locked out
+of the Tailscale network. Proceed with caution.
+`)
+			if !prompt.YesNo("Are you sure you want to remove the signing key(s)?", true) {
+				fmt.Printf("aborting removal of signing key(s)\n")
+				os.Exit(0)
 			}
 		}
 	}
@@ -448,7 +470,7 @@ func runNetworkLockModify(ctx context.Context, addArgs, removeArgs []string) err
 var nlSignCmd = &ffcli.Command{
 	Name:       "sign",
 	ShortUsage: "tailscale lock sign <node-key> [<rotation-key>]\ntailscale lock sign <auth-key>",
-	ShortHelp:  "Signs a node or pre-approved auth key",
+	ShortHelp:  "Sign a node or pre-approved auth key",
 	LongHelp: `Either:
   - signs a node key and transmits the signature to the coordination
     server, or
@@ -510,7 +532,7 @@ func runNetworkLockSign(ctx context.Context, args []string) error {
 var nlDisableCmd = &ffcli.Command{
 	Name:       "disable",
 	ShortUsage: "tailscale lock disable <disablement-secret>",
-	ShortHelp:  "Consumes a disablement secret to shut down tailnet lock for the tailnet",
+	ShortHelp:  "Consume a disablement secret to shut down tailnet lock for the tailnet",
 	LongHelp: strings.TrimSpace(`
 
 The 'tailscale lock disable' command uses the specified disablement
@@ -539,7 +561,7 @@ func runNetworkLockDisable(ctx context.Context, args []string) error {
 var nlLocalDisableCmd = &ffcli.Command{
 	Name:       "local-disable",
 	ShortUsage: "tailscale lock local-disable",
-	ShortHelp:  "Disables tailnet lock for this node only",
+	ShortHelp:  "Disable tailnet lock for this node only",
 	LongHelp: strings.TrimSpace(`
 
 The 'tailscale lock local-disable' command disables tailnet lock for only
@@ -561,8 +583,8 @@ func runNetworkLockLocalDisable(ctx context.Context, args []string) error {
 var nlDisablementKDFCmd = &ffcli.Command{
 	Name:       "disablement-kdf",
 	ShortUsage: "tailscale lock disablement-kdf <hex-encoded-disablement-secret>",
-	ShortHelp:  "Computes a disablement value from a disablement secret (advanced users only)",
-	LongHelp:   "Computes a disablement value from a disablement secret (advanced users only)",
+	ShortHelp:  "Compute a disablement value from a disablement secret (advanced users only)",
+	LongHelp:   "Compute a disablement value from a disablement secret (advanced users only)",
 	Exec:       runNetworkLockDisablementKDF,
 }
 
@@ -580,7 +602,7 @@ func runNetworkLockDisablementKDF(ctx context.Context, args []string) error {
 
 var nlLogArgs struct {
 	limit int
-	json  bool
+	json  jsonoutput.JSONSchemaVersion
 }
 
 var nlLogCmd = &ffcli.Command{
@@ -592,7 +614,7 @@ var nlLogCmd = &ffcli.Command{
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("lock log")
 		fs.IntVar(&nlLogArgs.limit, "limit", 50, "max number of updates to list")
-		fs.BoolVar(&nlLogArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
+		fs.Var(&nlLogArgs.json, "json", "output in JSON format")
 		return fs
 	})(),
 }
@@ -609,7 +631,7 @@ func nlDescribeUpdate(update ipnstate.NetworkLockUpdate, color bool) (string, er
 	printKey := func(key *tka.Key, prefix string) {
 		fmt.Fprintf(&stanza, "%sType: %s\n", prefix, key.Kind.String())
 		if keyID, err := key.ID(); err == nil {
-			fmt.Fprintf(&stanza, "%sKeyID: %x\n", prefix, keyID)
+			fmt.Fprintf(&stanza, "%sKeyID: tlpub:%x\n", prefix, keyID)
 		} else {
 			// Older versions of the client shouldn't explode when they encounter an
 			// unknown key type.
@@ -625,16 +647,20 @@ func nlDescribeUpdate(update ipnstate.NetworkLockUpdate, color bool) (string, er
 		return "", fmt.Errorf("decoding: %w", err)
 	}
 
-	fmt.Fprintf(&stanza, "%supdate %x (%s)%s\n", terminalYellow, update.Hash, update.Change, terminalClear)
+	tkaHead, err := aum.Hash().MarshalText()
+	if err != nil {
+		return "", fmt.Errorf("decoding AUM hash: %w", err)
+	}
+	fmt.Fprintf(&stanza, "%supdate %s (%s)%s\n", terminalYellow, string(tkaHead), update.Change, terminalClear)
 
 	switch update.Change {
 	case tka.AUMAddKey.String():
 		printKey(aum.Key, "")
 	case tka.AUMRemoveKey.String():
-		fmt.Fprintf(&stanza, "KeyID: %x\n", aum.KeyID)
+		fmt.Fprintf(&stanza, "KeyID: tlpub:%x\n", aum.KeyID)
 
 	case tka.AUMUpdateKey.String():
-		fmt.Fprintf(&stanza, "KeyID: %x\n", aum.KeyID)
+		fmt.Fprintf(&stanza, "KeyID: tlpub:%x\n", aum.KeyID)
 		if aum.Votes != nil {
 			fmt.Fprintf(&stanza, "Votes: %d\n", aum.Votes)
 		}
@@ -654,7 +680,7 @@ func nlDescribeUpdate(update ipnstate.NetworkLockUpdate, color bool) (string, er
 
 	default:
 		// Print a JSON encoding of the AUM as a fallback.
-		e := json.NewEncoder(&stanza)
+		e := jsonv1.NewEncoder(&stanza)
 		e.SetIndent("", "\t")
 		if err := e.Encode(aum); err != nil {
 			return "", err
@@ -666,17 +692,32 @@ func nlDescribeUpdate(update ipnstate.NetworkLockUpdate, color bool) (string, er
 }
 
 func runNetworkLockLog(ctx context.Context, args []string) error {
+	st, err := localClient.NetworkLockStatus(ctx)
+	if err != nil {
+		return fixTailscaledConnectError(err)
+	}
+	if !st.Enabled {
+		return errors.New("Tailnet Lock is not enabled")
+	}
+
 	updates, err := localClient.NetworkLockLog(ctx, nlLogArgs.limit)
 	if err != nil {
 		return fixTailscaledConnectError(err)
 	}
-	if nlLogArgs.json {
-		enc := json.NewEncoder(Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(updates)
-	}
 
 	out, useColor := colorableOutput()
+
+	return printNetworkLockLog(updates, out, nlLogArgs.json, useColor)
+}
+
+func printNetworkLockLog(updates []ipnstate.NetworkLockUpdate, out io.Writer, jsonSchema jsonoutput.JSONSchemaVersion, useColor bool) error {
+	if jsonSchema.IsSet {
+		if jsonSchema.Value == 1 {
+			return jsonoutput.PrintNetworkLockJSONV1(out, updates)
+		} else {
+			return fmt.Errorf("unrecognised version: %q", jsonSchema.Value)
+		}
+	}
 
 	for _, update := range updates {
 		stanza, err := nlDescribeUpdate(update, useColor)

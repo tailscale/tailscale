@@ -18,12 +18,12 @@ var (
 )
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `
+	fmt.Fprint(os.Stderr, `
 usage: addlicense -file FILE <subcommand args...>
 `[1:])
 
 	flag.PrintDefaults()
-	fmt.Fprintf(os.Stderr, `
+	fmt.Fprint(os.Stderr, `
 addlicense adds a Tailscale license to the beginning of file.
 
 It is intended for use with 'go generate', so it also runs a subcommand,

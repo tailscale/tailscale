@@ -106,6 +106,8 @@ func TestBoolEqualBool(t *testing.T) {
 	}{
 		{"", true, false},
 		{"", false, false},
+		{"unset", true, false},
+		{"unset", false, false},
 		{"sdflk;", true, false},
 		{"sldkf;", false, false},
 		{"true", true, true},
@@ -118,6 +120,24 @@ func TestBoolEqualBool(t *testing.T) {
 	for _, tt := range tests {
 		if got := tt.b.EqualBool(tt.v); got != tt.want {
 			t.Errorf("(%q).EqualBool(%v) = %v; want %v", string(tt.b), tt.v, got, tt.want)
+		}
+	}
+}
+
+func TestBoolNormalized(t *testing.T) {
+	tests := []struct {
+		in   Bool
+		want Bool
+	}{
+		{"", ""},
+		{"true", "true"},
+		{"false", "false"},
+		{"unset", ""},
+		{"foo", "foo"},
+	}
+	for _, tt := range tests {
+		if got := tt.in.Normalized(); got != tt.want {
+			t.Errorf("(%q).Normalized() = %q; want %q", string(tt.in), string(got), string(tt.want))
 		}
 	}
 }

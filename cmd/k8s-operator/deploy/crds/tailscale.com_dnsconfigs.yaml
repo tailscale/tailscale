@@ -2,7 +2,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.1-0.20240618033008-7824932b0cab
+    controller-gen.kubebuilder.io/version: v0.17.0
   name: dnsconfigs.tailscale.com
 spec:
   group: tailscale.com
@@ -20,6 +20,9 @@ spec:
           jsonPath: .status.nameserver.ip
           name: NameserverIP
           type: string
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
       name: v1alpha1
       schema:
         openAPIV3Schema:
@@ -49,7 +52,6 @@ spec:
             using its MagicDNS name, you must also annotate the Ingress resource with
             tailscale.com/experimental-forward-cluster-traffic-via-ingress annotation to
             ensure that the proxy created for the Ingress listens on its Pod IP address.
-            NB: Clusters where Pods get assigned IPv6 addresses only are currently not supported.
           type: object
           required:
             - spec
@@ -97,6 +99,61 @@ spec:
                           type: string
                         tag:
                           description: Tag defaults to unstable.
+                          type: string
+                    pod:
+                      description: Pod configuration.
+                      type: object
+                      properties:
+                        tolerations:
+                          description: If specified, applies tolerations to the pods deployed by the DNSConfig resource.
+                          type: array
+                          items:
+                            description: |-
+                              The pod this Toleration is attached to tolerates any taint that matches
+                              the triple <key,value,effect> using the matching operator <operator>.
+                            type: object
+                            properties:
+                              effect:
+                                description: |-
+                                  Effect indicates the taint effect to match. Empty means match all taint effects.
+                                  When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                                type: string
+                              key:
+                                description: |-
+                                  Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                                  If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                                type: string
+                              operator:
+                                description: |-
+                                  Operator represents a key's relationship to the value.
+                                  Valid operators are Exists and Equal. Defaults to Equal.
+                                  Exists is equivalent to wildcard for value, so that a pod can
+                                  tolerate all taints of a particular category.
+                                type: string
+                              tolerationSeconds:
+                                description: |-
+                                  TolerationSeconds represents the period of time the toleration (which must be
+                                  of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                                  it is not set, which means tolerate the taint forever (do not evict). Zero and
+                                  negative values will be treated as 0 (evict immediately) by the system.
+                                type: integer
+                                format: int64
+                              value:
+                                description: |-
+                                  Value is the taint value the toleration matches to.
+                                  If the operator is Exists, the value should be empty, otherwise just a regular string.
+                                type: string
+                    replicas:
+                      description: Replicas specifies how many Pods to create. Defaults to 1.
+                      type: integer
+                      format: int32
+                      minimum: 0
+                    service:
+                      description: Service configuration.
+                      type: object
+                      properties:
+                        clusterIP:
+                          description: ClusterIP sets the static IP of the service used by the nameserver.
                           type: string
             status:
               description: |-
@@ -169,7 +226,7 @@ spec:
                     ip:
                       description: |-
                         IP is the ClusterIP of the Service fronting the deployed ts.net nameserver.
-                        Currently you must manually update your cluster DNS config to add
+                        Currently, you must manually update your cluster DNS config to add
                         this address as a stub nameserver for ts.net for cluster workloads to be
                         able to resolve MagicDNS names associated with egress or Ingress
                         proxies.

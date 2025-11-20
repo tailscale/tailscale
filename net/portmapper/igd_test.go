@@ -14,11 +14,13 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"tailscale.com/control/controlknobs"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netmon"
 	"tailscale.com/syncs"
+	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
+	"tailscale.com/util/testenv"
 )
 
 // TestIGD is an IGD (Internet Gateway Device) for testing. It supports fake
@@ -63,7 +65,8 @@ type igdCounters struct {
 	invalidPCPMapPkt int32
 }
 
-func NewTestIGD(logf logger.Logf, t TestIGDOptions) (*TestIGD, error) {
+func NewTestIGD(tb testenv.TB, t TestIGDOptions) (*TestIGD, error) {
+	logf := tstest.WhileTestRunningLogger(tb)
 	d := &TestIGD{
 		doPMP:  t.PMP,
 		doPCP:  t.PCP,
@@ -258,15 +261,29 @@ func (d *TestIGD) handlePCPQuery(pkt []byte, src netip.AddrPort) {
 	}
 }
 
-func newTestClient(t *testing.T, igd *TestIGD) *Client {
+// newTestClient configures a new test client connected to igd for mapping updates.
+// If bus == nil, a new empty event bus is constructed that is cleaned up when t exits.
+// A cleanup for the resulting client is also added to t.
+func newTestClient(t *testing.T, igd *TestIGD, bus *eventbus.Bus) *Client {
+	if bus == nil {
+		bus = eventbus.New()
+		t.Log("Created empty event bus for test client")
+		t.Cleanup(bus.Close)
+	}
 	var c *Client
-	c = NewClient(t.Logf, netmon.NewStatic(), nil, new(controlknobs.Knobs), func() {
-		t.Logf("port map changed")
-		t.Logf("have mapping: %v", c.HaveMapping())
+	c = NewClient(Config{
+		Logf:     tstest.WhileTestRunningLogger(t),
+		NetMon:   netmon.NewStatic(),
+		EventBus: bus,
+		OnChange: func() { // TODO(creachadair): Remove.
+			t.Logf("port map changed")
+			t.Logf("have mapping: %v", c.HaveMapping())
+		},
 	})
 	c.testPxPPort = igd.TestPxPPort()
 	c.testUPnPPort = igd.TestUPnPPort()
 	c.netMon = netmon.NewStatic()
 	c.SetGatewayLookupFunc(testIPAndGateway)
+	t.Cleanup(func() { c.Close() })
 	return c
 }

@@ -10,7 +10,7 @@ on:
       - '.github/workflows/checklocks.yml'
 
 concurrency:
-  group: ${{ github.workflow }}-$${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -18,7 +18,7 @@ jobs:
     runs-on: [ ubuntu-latest ]
     steps:
       - name: Check out code
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Build checklocks
         run: ./tool/go build -o /tmp/checklocks gvisor.dev/gvisor/tools/checklocks/cmd/checklocks

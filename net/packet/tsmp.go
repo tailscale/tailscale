@@ -15,9 +15,10 @@ import (
 	"fmt"
 	"net/netip"
 
-	"tailscale.com/net/flowtrack"
 	"tailscale.com/types/ipproto"
 )
+
+const minTSMPSize = 7 // the rejected body is 7 bytes
 
 // TailscaleRejectedHeader is a TSMP message that says that one
 // Tailscale node has rejected the connection from another. Unlike a
@@ -55,10 +56,6 @@ type TailscaleRejectedHeader struct {
 }
 
 const rejectFlagBitMaybeBroken = 0x1
-
-func (rh TailscaleRejectedHeader) Flow() flowtrack.Tuple {
-	return flowtrack.MakeTuple(rh.Proto, rh.Src, rh.Dst)
-}
 
 func (rh TailscaleRejectedHeader) String() string {
 	return fmt.Sprintf("TSMP-reject-flow{%s %s > %s}: %s", rh.Proto, rh.Src, rh.Dst, rh.Reason)

@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"os/user"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"tailscale.com/clientupdate"
+	_ "tailscale.com/clientupdate" // for feature registration side effects
+	"tailscale.com/feature"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
@@ -19,13 +21,14 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/persist"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
 )
 
 func TestProfileCurrentUserSwitch(t *testing.T) {
 	store := new(mem.Store)
 
-	pm, err := newProfileManagerWithGOOS(store, logger.Discard, new(health.Tracker), "linux")
+	pm, err := newProfileManagerWithGOOS(store, logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +36,7 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 	newProfile := func(t *testing.T, loginName string) ipn.PrefsView {
 		id++
 		t.Helper()
-		pm.NewProfile()
+		pm.SwitchToNewProfile()
 		p := pm.CurrentPrefs().AsStruct()
 		p.Persist = &persist.Persist{
 			NodeID:         tailcfg.StableNodeID(fmt.Sprint(id)),
@@ -52,25 +55,25 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 	pm.SetCurrentUserID("user1")
 	newProfile(t, "user1")
 	cp := pm.currentProfile
-	pm.DeleteProfile(cp.ID)
-	if pm.currentProfile == nil {
+	pm.DeleteProfile(cp.ID())
+	if !pm.currentProfile.Valid() {
 		t.Fatal("currentProfile is nil")
-	} else if pm.currentProfile.ID != "" {
-		t.Fatalf("currentProfile.ID = %q, want empty", pm.currentProfile.ID)
+	} else if pm.currentProfile.ID() != "" {
+		t.Fatalf("currentProfile.ID = %q, want empty", pm.currentProfile.ID())
 	}
 	if !pm.CurrentPrefs().Equals(defaultPrefs) {
 		t.Fatalf("CurrentPrefs() = %v, want emptyPrefs", pm.CurrentPrefs().Pretty())
 	}
 
-	pm, err = newProfileManagerWithGOOS(store, logger.Discard, new(health.Tracker), "linux")
+	pm, err = newProfileManagerWithGOOS(store, logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
 	pm.SetCurrentUserID("user1")
-	if pm.currentProfile == nil {
+	if !pm.currentProfile.Valid() {
 		t.Fatal("currentProfile is nil")
-	} else if pm.currentProfile.ID != "" {
-		t.Fatalf("currentProfile.ID = %q, want empty", pm.currentProfile.ID)
+	} else if pm.currentProfile.ID() != "" {
+		t.Fatalf("currentProfile.ID = %q, want empty", pm.currentProfile.ID())
 	}
 	if !pm.CurrentPrefs().Equals(defaultPrefs) {
 		t.Fatalf("CurrentPrefs() = %v, want emptyPrefs", pm.CurrentPrefs().Pretty())
@@ -80,7 +83,7 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 func TestProfileList(t *testing.T) {
 	store := new(mem.Store)
 
-	pm, err := newProfileManagerWithGOOS(store, logger.Discard, new(health.Tracker), "linux")
+	pm, err := newProfileManagerWithGOOS(store, logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +91,7 @@ func TestProfileList(t *testing.T) {
 	newProfile := func(t *testing.T, loginName string) ipn.PrefsView {
 		id++
 		t.Helper()
-		pm.NewProfile()
+		pm.SwitchToNewProfile()
 		p := pm.CurrentPrefs().AsStruct()
 		p.Persist = &persist.Persist{
 			NodeID:         tailcfg.StableNodeID(fmt.Sprint(id)),
@@ -110,8 +113,8 @@ func TestProfileList(t *testing.T) {
 			t.Fatalf("got %d profiles, want %d", len(got), len(want))
 		}
 		for i, w := range want {
-			if got[i].Name != w {
-				t.Errorf("got profile %d name %q, want %q", i, got[i].Name, w)
+			if got[i].Name() != w {
+				t.Errorf("got profile %d name %q, want %q", i, got[i].Name(), w)
 			}
 		}
 	}
@@ -129,10 +132,10 @@ func TestProfileList(t *testing.T) {
 
 	pm.SetCurrentUserID("user1")
 	checkProfiles(t, "alice", "bob")
-	if lp := pm.findProfileByKey(carol.Key); lp != nil {
+	if lp := pm.findProfileByKey("user1", carol.Key()); lp.Valid() {
 		t.Fatalf("found profile for user2 in user1's profile list")
 	}
-	if lp := pm.findProfileByName(carol.Name); lp != nil {
+	if lp := pm.findProfileByName("user1", carol.Name()); lp.Valid() {
 		t.Fatalf("found profile for user2 in user1's profile list")
 	}
 
@@ -148,6 +151,7 @@ func TestProfileDupe(t *testing.T) {
 				ID:        tailcfg.UserID(user),
 				LoginName: fmt.Sprintf("user%d@example.com", user),
 			},
+			AttestationKey: nil,
 		}
 	}
 	user1Node1 := newPersist(1, 1)
@@ -162,7 +166,7 @@ func TestProfileDupe(t *testing.T) {
 		must.Do(pm.SetPrefs(prefs.View(), ipn.NetworkProfile{}))
 	}
 	login := func(pm *profileManager, p *persist.Persist) {
-		pm.NewProfile()
+		pm.SwitchToNewProfile()
 		reauth(pm, p)
 	}
 
@@ -284,7 +288,7 @@ func TestProfileDupe(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := new(mem.Store)
-			pm, err := newProfileManagerWithGOOS(store, logger.Discard, new(health.Tracker), "linux")
+			pm, err := newProfileManagerWithGOOS(store, logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "linux")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -294,7 +298,7 @@ func TestProfileDupe(t *testing.T) {
 			profs := pm.Profiles()
 			var got []*persist.Persist
 			for _, p := range profs {
-				prefs, err := pm.loadSavedPrefs(p.Key)
+				prefs, err := pm.loadSavedPrefs(p.Key())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -317,7 +321,7 @@ func TestProfileDupe(t *testing.T) {
 func TestProfileManagement(t *testing.T) {
 	store := new(mem.Store)
 
-	pm, err := newProfileManagerWithGOOS(store, logger.Discard, new(health.Tracker), "linux")
+	pm, err := newProfileManagerWithGOOS(store, logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,9 +332,9 @@ func TestProfileManagement(t *testing.T) {
 	checkProfiles := func(t *testing.T) {
 		t.Helper()
 		prof := pm.CurrentProfile()
-		t.Logf("\tCurrentProfile = %q", prof)
-		if prof.Name != wantCurProfile {
-			t.Fatalf("CurrentProfile = %q; want %q", prof, wantCurProfile)
+		t.Logf("\tCurrentProfile = %q", prof.Name())
+		if prof.Name() != wantCurProfile {
+			t.Fatalf("CurrentProfile = %q; want %q", prof.Name(), wantCurProfile)
 		}
 		profiles := pm.Profiles()
 		wantLen := len(wantProfiles)
@@ -349,13 +353,13 @@ func TestProfileManagement(t *testing.T) {
 			t.Fatalf("CurrentPrefs = %v; want %v", p.Pretty(), wantProfiles[wantCurProfile].Pretty())
 		}
 		for _, p := range profiles {
-			got, err := pm.loadSavedPrefs(p.Key)
+			got, err := pm.loadSavedPrefs(p.Key())
 			if err != nil {
 				t.Fatal(err)
 			}
 			// Use Hostname as a proxy for all prefs.
-			if !got.Equals(wantProfiles[p.Name]) {
-				t.Fatalf("Prefs for profile %q =\n got=%+v\nwant=%v", p, got.Pretty(), wantProfiles[p.Name].Pretty())
+			if !got.Equals(wantProfiles[p.Name()]) {
+				t.Fatalf("Prefs for profile %q =\n got=%+v\nwant=%v", p.Name(), got.Pretty(), wantProfiles[p.Name()].Pretty())
 			}
 		}
 	}
@@ -399,7 +403,7 @@ func TestProfileManagement(t *testing.T) {
 	checkProfiles(t)
 
 	t.Logf("Create new profile")
-	pm.NewProfile()
+	pm.SwitchToNewProfile()
 	wantCurProfile = ""
 	wantProfiles[""] = defaultPrefs
 	checkProfiles(t)
@@ -415,14 +419,14 @@ func TestProfileManagement(t *testing.T) {
 	t.Logf("Recreate profile manager from store")
 	// Recreate the profile manager to ensure that it can load the profiles
 	// from the store at startup.
-	pm, err = newProfileManagerWithGOOS(store, logger.Discard, new(health.Tracker), "linux")
+	pm, err = newProfileManagerWithGOOS(store, logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
 	checkProfiles(t)
 
 	t.Logf("Delete default profile")
-	if err := pm.DeleteProfile(pm.findProfileByName("user@1.example.com").ID); err != nil {
+	if err := pm.DeleteProfile(pm.ProfileIDForName("user@1.example.com")); err != nil {
 		t.Fatal(err)
 	}
 	delete(wantProfiles, "user@1.example.com")
@@ -431,14 +435,14 @@ func TestProfileManagement(t *testing.T) {
 	t.Logf("Recreate profile manager from store after deleting default profile")
 	// Recreate the profile manager to ensure that it can load the profiles
 	// from the store at startup.
-	pm, err = newProfileManagerWithGOOS(store, logger.Discard, new(health.Tracker), "linux")
+	pm, err = newProfileManagerWithGOOS(store, logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
 	checkProfiles(t)
 
 	t.Logf("Create new profile - 2")
-	pm.NewProfile()
+	pm.SwitchToNewProfile()
 	wantCurProfile = ""
 	wantProfiles[""] = defaultPrefs
 	checkProfiles(t)
@@ -462,7 +466,7 @@ func TestProfileManagement(t *testing.T) {
 	wantCurProfile = "user@2.example.com"
 	checkProfiles(t)
 
-	if !clientupdate.CanAutoUpdate() {
+	if !feature.CanAutoUpdate() {
 		t.Logf("Save an invalid AutoUpdate pref value")
 		prefs := pm.CurrentPrefs().AsStruct()
 		prefs.AutoUpdate.Apply.Set(true)
@@ -473,7 +477,7 @@ func TestProfileManagement(t *testing.T) {
 			t.Fatal("SetPrefs failed to save auto-update setting")
 		}
 		// Re-load profiles to trigger migration for invalid auto-update value.
-		pm, err = newProfileManagerWithGOOS(store, logger.Discard, new(health.Tracker), "linux")
+		pm, err = newProfileManagerWithGOOS(store, logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "linux")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -495,7 +499,7 @@ func TestProfileManagementWindows(t *testing.T) {
 
 	store := new(mem.Store)
 
-	pm, err := newProfileManagerWithGOOS(store, logger.Discard, new(health.Tracker), "windows")
+	pm, err := newProfileManagerWithGOOS(store, logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "windows")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,9 +510,9 @@ func TestProfileManagementWindows(t *testing.T) {
 	checkProfiles := func(t *testing.T) {
 		t.Helper()
 		prof := pm.CurrentProfile()
-		t.Logf("\tCurrentProfile = %q", prof)
-		if prof.Name != wantCurProfile {
-			t.Fatalf("CurrentProfile = %q; want %q", prof, wantCurProfile)
+		t.Logf("\tCurrentProfile = %q", prof.Name())
+		if prof.Name() != wantCurProfile {
+			t.Fatalf("CurrentProfile = %q; want %q", prof.Name(), wantCurProfile)
 		}
 		if p := pm.CurrentPrefs(); !p.Equals(wantProfiles[wantCurProfile]) {
 			t.Fatalf("CurrentPrefs = %+v; want %+v", p.Pretty(), wantProfiles[wantCurProfile].Pretty())
@@ -550,7 +554,7 @@ func TestProfileManagementWindows(t *testing.T) {
 
 	{
 		t.Logf("Create new profile")
-		pm.NewProfile()
+		pm.SwitchToNewProfile()
 		wantCurProfile = ""
 		wantProfiles[""] = defaultPrefs
 		checkProfiles(t)
@@ -564,7 +568,7 @@ func TestProfileManagementWindows(t *testing.T) {
 	t.Logf("Recreate profile manager from store, should reset prefs")
 	// Recreate the profile manager to ensure that it can load the profiles
 	// from the store at startup.
-	pm, err = newProfileManagerWithGOOS(store, logger.Discard, new(health.Tracker), "windows")
+	pm, err = newProfileManagerWithGOOS(store, logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "windows")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -587,7 +591,7 @@ func TestProfileManagementWindows(t *testing.T) {
 	}
 
 	// Recreate the profile manager to ensure that it starts with test profile.
-	pm, err = newProfileManagerWithGOOS(store, logger.Discard, new(health.Tracker), "windows")
+	pm, err = newProfileManagerWithGOOS(store, logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "windows")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -607,5 +611,539 @@ func TestDefaultPrefs(t *testing.T) {
 	p2 := defaultPrefs
 	if !p1.View().Equals(p2) {
 		t.Errorf("defaultPrefs is %s, want %s; defaultPrefs should only modify WantRunning and LoggedOut, all other defaults should be in ipn.NewPrefs.", p2.Pretty(), p1.Pretty())
+	}
+}
+
+// mutPrefsFn is a function that mutates the prefs.
+// Deserialization pre‑populates prefs with default (non‑zero) values.
+// After saving prefs and reading them back, we may not get exactly what we set.
+// For this reason, tests apply changes through a helper that mutates
+// [ipn.NewPrefs] instead of hard‑coding expected values in each case.
+type mutPrefsFn func(*ipn.Prefs)
+
+type profileState struct {
+	*ipn.LoginProfile
+	mutPrefs mutPrefsFn
+}
+
+func (s *profileState) prefs() ipn.PrefsView {
+	prefs := ipn.NewPrefs() // apply changes to the default prefs
+	s.mutPrefs(prefs)
+	return prefs.View()
+}
+
+type profileStateChange struct {
+	*ipn.LoginProfile
+	mutPrefs mutPrefsFn
+	sameNode bool
+}
+
+func wantProfileChange(state profileState) profileStateChange {
+	return profileStateChange{
+		LoginProfile: state.LoginProfile,
+		mutPrefs:     state.mutPrefs,
+		sameNode:     false,
+	}
+}
+
+func wantPrefsChange(state profileState) profileStateChange {
+	return profileStateChange{
+		LoginProfile: state.LoginProfile,
+		mutPrefs:     state.mutPrefs,
+		sameNode:     true,
+	}
+}
+
+func makeDefaultPrefs(p *ipn.Prefs) { *p = *defaultPrefs.AsStruct() }
+
+func makeKnownProfileState(id int, nameSuffix string, uid ipn.WindowsUserID, mutPrefs mutPrefsFn) profileState {
+	lowerNameSuffix := strings.ToLower(nameSuffix)
+	nid := "node-" + tailcfg.StableNodeID(lowerNameSuffix)
+	up := tailcfg.UserProfile{
+		ID:          tailcfg.UserID(id),
+		LoginName:   fmt.Sprintf("user-%s@example.com", lowerNameSuffix),
+		DisplayName: "User " + nameSuffix,
+	}
+	return profileState{
+		LoginProfile: &ipn.LoginProfile{
+			LocalUserID: uid,
+			Name:        up.LoginName,
+			ID:          ipn.ProfileID(fmt.Sprintf("%04X", id)),
+			Key:         "profile-" + ipn.StateKey(nameSuffix),
+			NodeID:      nid,
+			UserProfile: up,
+		},
+		mutPrefs: func(p *ipn.Prefs) {
+			p.Hostname = "Hostname-" + nameSuffix
+			if mutPrefs != nil {
+				mutPrefs(p) // apply any additional changes
+			}
+			p.Persist = &persist.Persist{NodeID: nid, UserProfile: up}
+		},
+	}
+}
+
+func TestProfileStateChangeCallback(t *testing.T) {
+	t.Parallel()
+
+	// A few well-known profiles to use in tests.
+	emptyProfile := profileState{
+		LoginProfile: &ipn.LoginProfile{},
+		mutPrefs:     makeDefaultPrefs,
+	}
+	profile0000 := profileState{
+		LoginProfile: &ipn.LoginProfile{ID: "0000", Key: "profile-0000"},
+		mutPrefs:     makeDefaultPrefs,
+	}
+	profileA := makeKnownProfileState(0xA, "A", "", nil)
+	profileB := makeKnownProfileState(0xB, "B", "", nil)
+	profileC := makeKnownProfileState(0xC, "C", "", nil)
+
+	aliceUserID := ipn.WindowsUserID("S-1-5-21-1-2-3-4")
+	aliceEmptyProfile := profileState{
+		LoginProfile: &ipn.LoginProfile{LocalUserID: aliceUserID},
+		mutPrefs:     makeDefaultPrefs,
+	}
+	bobUserID := ipn.WindowsUserID("S-1-5-21-3-4-5-6")
+	bobEmptyProfile := profileState{
+		LoginProfile: &ipn.LoginProfile{LocalUserID: bobUserID},
+		mutPrefs:     makeDefaultPrefs,
+	}
+	bobKnownProfile := makeKnownProfileState(0xB0B, "Bob", bobUserID, nil)
+
+	tests := []struct {
+		name          string
+		initial       *profileState         // if non-nil, this is the initial profile and prefs to start wit
+		knownProfiles []profileState        // known profiles we can switch to
+		action        func(*profileManager) // action to take on the profile manager
+		wantChanges   []profileStateChange  // expected state changes
+	}{
+		{
+			name: "no-changes",
+			action: func(*profileManager) {
+				// do nothing
+			},
+			wantChanges: nil,
+		},
+		{
+			name: "no-initial/new-profile",
+			action: func(pm *profileManager) {
+				// The profile manager is new and started with a new empty profile.
+				// This should not trigger a state change callback.
+				pm.SwitchToNewProfile()
+			},
+			wantChanges: nil,
+		},
+		{
+			name: "no-initial/new-profile-for-user",
+			action: func(pm *profileManager) {
+				// But switching to a new profile for a specific user should trigger
+				// a state change callback.
+				pm.SwitchToNewProfileForUser(aliceUserID)
+			},
+			wantChanges: []profileStateChange{
+				// We want a new empty profile (owned by the specified user)
+				// and the default prefs.
+				wantProfileChange(aliceEmptyProfile),
+			},
+		},
+		{
+			name:    "with-initial/new-profile",
+			initial: &profile0000,
+			action: func(pm *profileManager) {
+				// And so does switching to a new profile when the initial profile
+				// is non-empty.
+				pm.SwitchToNewProfile()
+			},
+			wantChanges: []profileStateChange{
+				// We want a new empty profile and the default prefs.
+				wantProfileChange(emptyProfile),
+			},
+		},
+		{
+			name:    "with-initial/new-profile/twice",
+			initial: &profile0000,
+			action: func(pm *profileManager) {
+				// If we switch to a new profile twice, we should only get one state change.
+				pm.SwitchToNewProfile()
+				pm.SwitchToNewProfile()
+			},
+			wantChanges: []profileStateChange{
+				// We want a new empty profile and the default prefs.
+				wantProfileChange(emptyProfile),
+			},
+		},
+		{
+			name:    "with-initial/new-profile-for-user/twice",
+			initial: &profile0000,
+			action: func(pm *profileManager) {
+				// Unless we switch to a new profile for a specific user,
+				// in which case we should get a state change twice.
+				pm.SwitchToNewProfileForUser(aliceUserID)
+				pm.SwitchToNewProfileForUser(aliceUserID) // no change here
+				pm.SwitchToNewProfileForUser(bobUserID)
+			},
+			wantChanges: []profileStateChange{
+				// Both profiles are empty, but they are owned by different users.
+				wantProfileChange(aliceEmptyProfile),
+				wantProfileChange(bobEmptyProfile),
+			},
+		},
+		{
+			name:    "with-initial/new-profile/twice/with-prefs-change",
+			initial: &profile0000,
+			action: func(pm *profileManager) {
+				// Or unless we switch to a new profile, change the prefs,
+				// then switch to a new profile again. Since the current
+				// profile is not empty after the prefs change, we should
+				// get state changes for all three actions.
+				pm.SwitchToNewProfile()
+				p := pm.CurrentPrefs().AsStruct()
+				p.WantRunning = true
+				pm.SetPrefs(p.View(), ipn.NetworkProfile{})
+				pm.SwitchToNewProfile()
+			},
+			wantChanges: []profileStateChange{
+				wantProfileChange(emptyProfile), // new empty profile
+				wantPrefsChange(profileState{ // prefs change, same profile
+					LoginProfile: &ipn.LoginProfile{},
+					mutPrefs: func(p *ipn.Prefs) {
+						*p = *defaultPrefs.AsStruct()
+						p.WantRunning = true
+					},
+				}),
+				wantProfileChange(emptyProfile), // new empty profile again
+			},
+		},
+		{
+			name:          "switch-to-profile/by-id",
+			knownProfiles: []profileState{profileA, profileB, profileC},
+			action: func(pm *profileManager) {
+				// Switching to a known profile by ID should trigger a state change callback.
+				pm.SwitchToProfileByID(profileB.ID)
+			},
+			wantChanges: []profileStateChange{
+				wantProfileChange(profileB),
+			},
+		},
+		{
+			name:          "switch-to-profile/by-id/non-existent",
+			knownProfiles: []profileState{profileA, profileC}, // no profileB
+			action: func(pm *profileManager) {
+				// Switching to a non-existent profile should fail and not trigger a state change callback.
+				pm.SwitchToProfileByID(profileB.ID)
+			},
+			wantChanges: []profileStateChange{},
+		},
+		{
+			name:          "switch-to-profile/by-id/twice-same",
+			knownProfiles: []profileState{profileA, profileB, profileC},
+			action: func(pm *profileManager) {
+				// But only for the first switch.
+				// The second switch to the same profile should not trigger a state change callback.
+				pm.SwitchToProfileByID(profileB.ID)
+				pm.SwitchToProfileByID(profileB.ID)
+			},
+			wantChanges: []profileStateChange{
+				wantProfileChange(profileB),
+			},
+		},
+		{
+			name:          "switch-to-profile/by-id/many",
+			knownProfiles: []profileState{profileA, profileB, profileC},
+			action: func(pm *profileManager) {
+				// Same idea, but with multiple switches.
+				pm.SwitchToProfileByID(profileB.ID) // switch to Profile-B
+				pm.SwitchToProfileByID(profileB.ID) // then to Profile-B again (no change)
+				pm.SwitchToProfileByID(profileC.ID) // then to Profile-C (change)
+				pm.SwitchToProfileByID(profileA.ID) // then to Profile-A (change)
+				pm.SwitchToProfileByID(profileB.ID) // then to Profile-B (change)
+			},
+			wantChanges: []profileStateChange{
+				wantProfileChange(profileB),
+				wantProfileChange(profileC),
+				wantProfileChange(profileA),
+				wantProfileChange(profileB),
+			},
+		},
+		{
+			name:          "switch-to-profile/by-view",
+			knownProfiles: []profileState{profileA, profileB, profileC},
+			action: func(pm *profileManager) {
+				// Switching to a known profile by an [ipn.LoginProfileView]
+				// should also trigger a state change callback.
+				pm.SwitchToProfile(profileB.View())
+			},
+			wantChanges: []profileStateChange{
+				wantProfileChange(profileB),
+			},
+		},
+		{
+			name:    "switch-to-profile/by-view/empty",
+			initial: &profile0000,
+			action: func(pm *profileManager) {
+				// SwitchToProfile supports switching to an empty profile.
+				emptyProfile := &ipn.LoginProfile{}
+				pm.SwitchToProfile(emptyProfile.View())
+			},
+			wantChanges: []profileStateChange{
+				wantProfileChange(emptyProfile),
+			},
+		},
+		{
+			name:          "switch-to-profile/by-view/non-existent",
+			knownProfiles: []profileState{profileA, profileC},
+			action: func(pm *profileManager) {
+				// Switching to a an unknown profile by an [ipn.LoginProfileView]
+				// should fail and not trigger a state change callback.
+				pm.SwitchToProfile(profileB.View())
+			},
+			wantChanges: []profileStateChange{},
+		},
+		{
+			name:    "switch-to-profile/by-view/empty-for-user",
+			initial: &profile0000,
+			action: func(pm *profileManager) {
+				// And switching to an empty profile for a specific user also works.
+				pm.SwitchToProfile(bobEmptyProfile.View())
+			},
+			wantChanges: []profileStateChange{
+				wantProfileChange(bobEmptyProfile),
+			},
+		},
+		{
+			name:    "switch-to-profile/by-view/invalid",
+			initial: &profile0000,
+			action: func(pm *profileManager) {
+				// Switching to an invalid profile should create and switch
+				// to a new empty profile.
+				pm.SwitchToProfile(ipn.LoginProfileView{})
+			},
+			wantChanges: []profileStateChange{
+				wantProfileChange(emptyProfile),
+			},
+		},
+		{
+			name:          "delete-profile/current",
+			initial:       &profileA, // profileA is the current profile
+			knownProfiles: []profileState{profileA, profileB, profileC},
+			action: func(pm *profileManager) {
+				// Deleting the current profile should switch to a new empty profile.
+				pm.DeleteProfile(profileA.ID)
+			},
+			wantChanges: []profileStateChange{
+				wantProfileChange(emptyProfile),
+			},
+		},
+		{
+			name:          "delete-profile/current-with-user",
+			initial:       &bobKnownProfile,
+			knownProfiles: []profileState{profileA, profileB, profileC, bobKnownProfile},
+			action: func(pm *profileManager) {
+				// Similarly, deleting the current profile for a specific user should switch
+				// to a new empty profile for that user (at least while the "current user"
+				// is still a thing on Windows).
+				pm.DeleteProfile(bobKnownProfile.ID)
+			},
+			wantChanges: []profileStateChange{
+				wantProfileChange(bobEmptyProfile),
+			},
+		},
+		{
+			name:          "delete-profile/non-current",
+			initial:       &profileA, // profileA is the current profile
+			knownProfiles: []profileState{profileA, profileB, profileC},
+			action: func(pm *profileManager) {
+				// But deleting a non-current profile should not trigger a state change callback.
+				pm.DeleteProfile(profileB.ID)
+			},
+			wantChanges: []profileStateChange{},
+		},
+		{
+			name:    "set-prefs/new-profile",
+			initial: &emptyProfile, // the current profile is empty
+			action: func(pm *profileManager) {
+				// The current profile is new and empty, but we can still set p.
+				// This should trigger a state change callback.
+				p := pm.CurrentPrefs().AsStruct()
+				p.WantRunning = true
+				p.Hostname = "New-Hostname"
+				pm.SetPrefs(p.View(), ipn.NetworkProfile{})
+			},
+			wantChanges: []profileStateChange{
+				// Still an empty profile, but with new prefs.
+				wantPrefsChange(profileState{
+					LoginProfile: emptyProfile.LoginProfile,
+					mutPrefs: func(p *ipn.Prefs) {
+						*p = *emptyProfile.prefs().AsStruct()
+						p.WantRunning = true
+						p.Hostname = "New-Hostname"
+					},
+				}),
+			},
+		},
+		{
+			name:          "set-prefs/current-profile",
+			initial:       &profileA, // profileA is the current profile
+			knownProfiles: []profileState{profileA, profileB, profileC},
+			action: func(pm *profileManager) {
+				p := pm.CurrentPrefs().AsStruct()
+				p.WantRunning = true
+				p.Hostname = "New-Hostname"
+				pm.SetPrefs(p.View(), ipn.NetworkProfile{})
+			},
+			wantChanges: []profileStateChange{
+				wantPrefsChange(profileState{
+					LoginProfile: profileA.LoginProfile, // same profile
+					mutPrefs: func(p *ipn.Prefs) { // but with new prefs
+						*p = *profileA.prefs().AsStruct()
+						p.WantRunning = true
+						p.Hostname = "New-Hostname"
+					},
+				}),
+			},
+		},
+		{
+			name:          "set-prefs/current-profile/profile-name",
+			initial:       &profileA, // profileA is the current profile
+			knownProfiles: []profileState{profileA, profileB, profileC},
+			action: func(pm *profileManager) {
+				p := pm.CurrentPrefs().AsStruct()
+				p.ProfileName = "This is User A"
+				pm.SetPrefs(p.View(), ipn.NetworkProfile{})
+			},
+			wantChanges: []profileStateChange{
+				// Still the same profile, but with a new profile name
+				// populated from the prefs. The prefs are also updated.
+				wantPrefsChange(profileState{
+					LoginProfile: func() *ipn.LoginProfile {
+						p := profileA.Clone()
+						p.Name = "This is User A"
+						return p
+					}(),
+					mutPrefs: func(p *ipn.Prefs) {
+						*p = *profileA.prefs().AsStruct()
+						p.ProfileName = "This is User A"
+					},
+				}),
+			},
+		},
+		{
+			name:          "set-prefs/implicit-switch/from-new",
+			initial:       &emptyProfile, // a new, empty profile
+			knownProfiles: []profileState{profileA, profileB, profileC},
+			action: func(pm *profileManager) {
+				// The user attempted to add a new profile but actually logged in as the same
+				// node/user as profileB. When [LocalBackend.SetControlClientStatus] calls
+				// [profileManager.SetPrefs] with the [persist.Persist] for profileB, we
+				// implicitly switch to that profile instead of creating a duplicate for the
+				// same node/user.
+				//
+				// TODO(nickkhyl): currently, [LocalBackend.SetControlClientStatus] uses the p
+				// of the current profile, not those of the profile we switch to. This is all wrong
+				// and should be fixed. But for now, we just test that the state change callback
+				// is called with the new profile and p.
+				p := pm.CurrentPrefs().AsStruct()
+				p.Persist = profileB.prefs().Persist().AsStruct()
+				p.WantRunning = true
+				p.LoggedOut = false
+				pm.SetPrefs(p.View(), ipn.NetworkProfile{})
+			},
+			wantChanges: []profileStateChange{
+				// Calling [profileManager.SetPrefs] like this is effectively a profile switch
+				// rather than a prefs change.
+				wantProfileChange(profileState{
+					LoginProfile: profileB.LoginProfile,
+					mutPrefs: func(p *ipn.Prefs) {
+						*p = *emptyProfile.prefs().AsStruct()
+						p.Persist = profileB.prefs().Persist().AsStruct()
+						p.WantRunning = true
+						p.LoggedOut = false
+					},
+				}),
+			},
+		},
+		{
+			name:          "set-prefs/implicit-switch/from-other",
+			initial:       &profileA, // profileA is the current profile
+			knownProfiles: []profileState{profileA, profileB, profileC},
+			action: func(pm *profileManager) {
+				// Same idea, but the current profile is profileA rather than a new empty profile.
+				// Note: this is all wrong. See the comment above and [profileManager.SetPrefs].
+				p := pm.CurrentPrefs().AsStruct()
+				p.Persist = profileB.prefs().Persist().AsStruct()
+				p.WantRunning = true
+				p.LoggedOut = false
+				pm.SetPrefs(p.View(), ipn.NetworkProfile{})
+			},
+			wantChanges: []profileStateChange{
+				wantProfileChange(profileState{
+					LoginProfile: profileB.LoginProfile,
+					mutPrefs: func(p *ipn.Prefs) {
+						*p = *profileA.prefs().AsStruct()
+						p.Persist = profileB.prefs().Persist().AsStruct()
+						p.WantRunning = true
+						p.LoggedOut = false
+					},
+				}),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := new(mem.Store)
+			pm, err := newProfileManagerWithGOOS(store, logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "linux")
+			if err != nil {
+				t.Fatalf("newProfileManagerWithGOOS: %v", err)
+			}
+			for _, p := range tt.knownProfiles {
+				pm.writePrefsToStore(p.Key, p.prefs())
+				pm.knownProfiles[p.ID] = p.View()
+			}
+			if err := pm.writeKnownProfiles(); err != nil {
+				t.Fatalf("writeKnownProfiles: %v", err)
+			}
+
+			if tt.initial != nil {
+				pm.currentUserID = tt.initial.LocalUserID
+				pm.currentProfile = tt.initial.View()
+				pm.prefs = tt.initial.prefs()
+			}
+
+			type stateChange struct {
+				Profile  *ipn.LoginProfile
+				Prefs    *ipn.Prefs
+				SameNode bool
+			}
+			wantChanges := make([]stateChange, 0, len(tt.wantChanges))
+			for _, w := range tt.wantChanges {
+				wantPrefs := ipn.NewPrefs()
+				w.mutPrefs(wantPrefs) // apply changes to the default prefs
+				wantChanges = append(wantChanges, stateChange{
+					Profile:  w.LoginProfile,
+					Prefs:    wantPrefs,
+					SameNode: w.sameNode,
+				})
+			}
+
+			gotChanges := make([]stateChange, 0, len(tt.wantChanges))
+			pm.StateChangeHook = func(profile ipn.LoginProfileView, prefView ipn.PrefsView, sameNode bool) {
+				prefs := prefView.AsStruct()
+				prefs.Sync = prefs.Sync.Normalized()
+				gotChanges = append(gotChanges, stateChange{
+					Profile:  profile.AsStruct(),
+					Prefs:    prefs,
+					SameNode: sameNode,
+				})
+			}
+
+			tt.action(pm)
+
+			if diff := cmp.Diff(wantChanges, gotChanges, defaultCmpOpts...); diff != "" {
+				t.Errorf("StateChange callbacks: (-want +got): %v", diff)
+			}
+		})
 	}
 }

@@ -31,6 +31,9 @@ var testHookWatchLookConnectResult func(connectError error, wasSelfConnect bool)
 // This behavior will likely change. Callers should do their own accounting
 // and dup suppression as needed.
 //
+// If set the notifyError func is called with any error that occurs within the ctx
+// main loop connection setup, or the inner loop receiving messages via RecvDetail.
+//
 // infoLogf, if non-nil, is the logger to write periodic status updates about
 // how many peers are on the server. Error log output is set to the c's logger,
 // regardless of infoLogf's value.
@@ -42,10 +45,11 @@ var testHookWatchLookConnectResult func(connectError error, wasSelfConnect bool)
 // initialized Client.WatchConnectionChanges to true.
 //
 // If the DERP connection breaks and reconnects, remove will be called for all
-// previously seen peers, with Reason type PeerGoneReasonSynthetic. Those
+// previously seen peers, with Reason type PeerGoneReasonMeshConnBroke. Those
 // clients are likely still connected and their add message will appear after
 // reconnect.
-func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key.NodePublic, infoLogf logger.Logf, add func(derp.PeerPresentMessage), remove func(derp.PeerGoneMessage)) {
+func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key.NodePublic, infoLogf logger.Logf,
+	add func(derp.PeerPresentMessage), remove func(derp.PeerGoneMessage), notifyError func(error)) {
 	if !c.WatchConnectionChanges {
 		if c.isStarted() {
 			panic("invalid use of RunWatchConnectionLoop on already-started Client without setting Client.RunWatchConnectionLoop")
@@ -121,6 +125,10 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 		// Make sure we're connected before calling s.ServerPublicKey.
 		_, _, err := c.connect(ctx, "RunWatchConnectionLoop")
 		if err != nil {
+			logf("mesh connect: %v", err)
+			if notifyError != nil {
+				notifyError(err)
+			}
 			if f := testHookWatchLookConnectResult; f != nil && !f(err, false) {
 				return
 			}
@@ -141,6 +149,9 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 			if err != nil {
 				clear()
 				logf("Recv: %v", err)
+				if notifyError != nil {
+					notifyError(err)
+				}
 				sleep(retryInterval)
 				break
 			}

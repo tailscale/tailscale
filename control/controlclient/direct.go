@@ -4,9 +4,11 @@
 package controlclient
 
 import (
-	"bufio"
 	"bytes"
+	"cmp"
 	"context"
+	"crypto"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -15,21 +17,21 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/netip"
-	"net/url"
 	"os"
 	"reflect"
 	"runtime"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
 	"tailscale.com/control/controlknobs"
+	"tailscale.com/control/ts2021"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
@@ -38,9 +40,10 @@ import (
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
-	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
@@ -51,62 +54,70 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/multierr"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/singleflight"
-	"tailscale.com/util/syspolicy"
-	"tailscale.com/util/systemd"
+	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/zstdframe"
 )
 
 // Direct is the client that connects to a tailcontrol server for a node.
 type Direct struct {
-	httpc                      *http.Client // HTTP client used to talk to tailcontrol
-	interceptedDial            *atomic.Bool // if non-nil, pointer to bool whether ScreenTime intercepted our dial
-	dialer                     *tsdial.Dialer
-	dnsCache                   *dnscache.Resolver
-	controlKnobs               *controlknobs.Knobs // always non-nil
-	serverURL                  string              // URL of the tailcontrol server
-	clock                      tstime.Clock
-	logf                       logger.Logf
-	netMon                     *netmon.Monitor // non-nil
-	health                     *health.Tracker
-	discoPubKey                key.DiscoPublic
-	getMachinePrivKey          func() (key.MachinePrivate, error)
-	debugFlags                 []string
-	skipIPForwardingCheck      bool
-	pinger                     Pinger
-	popBrowser                 func(url string)             // or nil
-	c2nHandler                 http.Handler                 // or nil
-	onClientVersion            func(*tailcfg.ClientVersion) // or nil
-	onControlTime              func(time.Time)              // or nil
-	onTailnetDefaultAutoUpdate func(bool)                   // or nil
-	panicOnUse                 bool                         // if true, panic if client is used (for testing)
-	closedCtx                  context.Context              // alive until Direct.Close is called
-	closeCtx                   context.CancelFunc           // cancels closedCtx
+	httpc                 *http.Client // HTTP client used to do TLS requests to control (just https://controlplane.tailscale.com/key?v=123)
+	interceptedDial       *atomic.Bool // if non-nil, pointer to bool whether ScreenTime intercepted our dial
+	dialer                *tsdial.Dialer
+	dnsCache              *dnscache.Resolver
+	controlKnobs          *controlknobs.Knobs // always non-nil
+	serverURL             string              // URL of the tailcontrol server
+	clock                 tstime.Clock
+	logf                  logger.Logf
+	netMon                *netmon.Monitor // non-nil
+	health                *health.Tracker
+	busClient             *eventbus.Client
+	clientVersionPub      *eventbus.Publisher[tailcfg.ClientVersion]
+	autoUpdatePub         *eventbus.Publisher[AutoUpdate]
+	controlTimePub        *eventbus.Publisher[ControlTime]
+	getMachinePrivKey     func() (key.MachinePrivate, error)
+	debugFlags            []string
+	skipIPForwardingCheck bool
+	pinger                Pinger
+	popBrowser            func(url string)    // or nil
+	polc                  policyclient.Client // always non-nil
+	c2nHandler            http.Handler        // or nil
+	panicOnUse            bool                // if true, panic if client is used (for testing)
+	closedCtx             context.Context     // alive until Direct.Close is called
+	closeCtx              context.CancelFunc  // cancels closedCtx
 
 	dialPlan ControlDialPlanner // can be nil
 
-	mu              sync.Mutex        // mutex guards the following fields
+	mu              syncs.Mutex       // mutex guards the following fields
 	serverLegacyKey key.MachinePublic // original ("legacy") nacl crypto_box-based public key; only used for signRegisterRequest on Windows now
 	serverNoiseKey  key.MachinePublic
+	discoPubKey     key.DiscoPublic // protected by mu; can be updated via [SetDiscoPublicKey]
 
-	sfGroup     singleflight.Group[struct{}, *NoiseClient] // protects noiseClient creation.
-	noiseClient *NoiseClient
+	sfGroup     singleflight.Group[struct{}, *ts2021.Client] // protects noiseClient creation.
+	noiseClient *ts2021.Client                               // also protected by mu
 
-	persist      persist.PersistView
-	authKey      string
-	tryingNewKey key.NodePrivate
-	expiry       time.Time         // or zero value if none/unknown
-	hostinfo     *tailcfg.Hostinfo // always non-nil
-	netinfo      *tailcfg.NetInfo
-	endpoints    []tailcfg.Endpoint
-	tkaHead      string
-	lastPingURL  string // last PingRequest.URL received, for dup suppression
+	persist                 persist.PersistView
+	authKey                 string
+	tryingNewKey            key.NodePrivate
+	expiry                  time.Time         // or zero value if none/unknown
+	hostinfo                *tailcfg.Hostinfo // always non-nil
+	netinfo                 *tailcfg.NetInfo
+	endpoints               []tailcfg.Endpoint
+	tkaHead                 string
+	lastPingURL             string // last PingRequest.URL received, for dup suppression
+	connectionHandleForTest string // sent in MapRequest.ConnectionHandleForTest
+
+	controlClientID int64 // Random ID used to differentiate clients for consumers of messages.
 }
 
 // Observer is implemented by users of the control client (such as LocalBackend)
 // to get notified of changes in the control client's status.
+//
+// If an implementation of Observer also implements [NetmapDeltaUpdater], they get
+// delta updates as well as full netmap updates.
 type Observer interface {
 	// SetControlClientStatus is called when the client has a new status to
 	// report. The Client is provided to allow the Observer to track which
@@ -116,28 +127,36 @@ type Observer interface {
 }
 
 type Options struct {
-	Persist                    persist.Persist                    // initial persistent data
-	GetMachinePrivateKey       func() (key.MachinePrivate, error) // returns the machine key to use
-	ServerURL                  string                             // URL of the tailcontrol server
-	AuthKey                    string                             // optional node auth key for auto registration
-	Clock                      tstime.Clock
-	Hostinfo                   *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
-	DiscoPublicKey             key.DiscoPublic
-	Logf                       logger.Logf
-	HTTPTestClient             *http.Client // optional HTTP client to use (for tests only)
-	NoiseTestClient            *http.Client // optional HTTP client to use for noise RPCs (tests only)
-	DebugFlags                 []string     // debug settings to send to control
-	HealthTracker              *health.Tracker
-	PopBrowserURL              func(url string)             // optional func to open browser
-	OnClientVersion            func(*tailcfg.ClientVersion) // optional func to inform GUI of client version status
-	OnControlTime              func(time.Time)              // optional func to notify callers of new time from control
-	OnTailnetDefaultAutoUpdate func(bool)                   // optional func to inform GUI of default auto-update setting for the tailnet
-	Dialer                     *tsdial.Dialer               // non-nil
-	C2NHandler                 http.Handler                 // or nil
-	ControlKnobs               *controlknobs.Knobs          // or nil to ignore
+	Persist              persist.Persist                    // initial persistent data
+	GetMachinePrivateKey func() (key.MachinePrivate, error) // returns the machine key to use
+	ServerURL            string                             // URL of the tailcontrol server
+	AuthKey              string                             // optional node auth key for auto registration
+	Clock                tstime.Clock
+	Hostinfo             *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
+	DiscoPublicKey       key.DiscoPublic
+	PolicyClient         policyclient.Client // or nil for none
+	Logf                 logger.Logf
+	HTTPTestClient       *http.Client // optional HTTP client to use (for tests only)
+	NoiseTestClient      *http.Client // optional HTTP client to use for noise RPCs (tests only)
+	DebugFlags           []string     // debug settings to send to control
+	HealthTracker        *health.Tracker
+	PopBrowserURL        func(url string)    // optional func to open browser
+	Dialer               *tsdial.Dialer      // non-nil
+	C2NHandler           http.Handler        // or nil
+	ControlKnobs         *controlknobs.Knobs // or nil to ignore
+	Bus                  *eventbus.Bus       // non-nil, for setting up publishers
+
+	SkipStartForTests bool // if true, don't call [Auto.Start] to avoid any background goroutines (for tests only)
+
+	// StartPaused indicates whether the client should start in a paused state
+	// where it doesn't do network requests. This primarily exists for testing
+	// but not necessarily "go test" tests, so it isn't restricted to only
+	// being used in tests.
+	StartPaused bool
 
 	// Observer is called when there's a change in status to report
 	// from the control client.
+	// If nil, no status updates are reported.
 	Observer Observer
 
 	// SkipIPForwardingCheck declares that the host's IP
@@ -156,6 +175,11 @@ type Options struct {
 	// If we receive a new DialPlan from the server, this value will be
 	// updated.
 	DialPlan ControlDialPlanner
+
+	// Shutdown is an optional function that will be called before client shutdown is
+	// attempted. It is used to allow the client to clean up any resources or complete any
+	// tasks that are dependent on a live client.
+	Shutdown func()
 }
 
 // ControlDialPlanner is the interface optionally supplied when creating a
@@ -208,6 +232,8 @@ type NetmapDeltaUpdater interface {
 	UpdateNetmapDelta([]netmap.NodeMutation) (ok bool)
 }
 
+var nextControlClientID atomic.Int64
+
 // NewDirect returns a new Direct client.
 func NewDirect(opts Options) (*Direct, error) {
 	if opts.ServerURL == "" {
@@ -233,10 +259,6 @@ func NewDirect(opts Options) (*Direct, error) {
 		opts.ControlKnobs = &controlknobs.Knobs{}
 	}
 	opts.ServerURL = strings.TrimRight(opts.ServerURL, "/")
-	serverURL, err := url.Parse(opts.ServerURL)
-	if err != nil {
-		return nil, err
-	}
 	if opts.Clock == nil {
 		opts.Clock = tstime.StdClock{}
 	}
@@ -264,10 +286,14 @@ func NewDirect(opts Options) (*Direct, error) {
 	var interceptedDial *atomic.Bool
 	if httpc == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
-		tr.Proxy = tshttpproxy.ProxyFromEnvironment
-		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
-		tr.TLSClientConfig = tlsdial.Config(serverURL.Hostname(), opts.HealthTracker, tr.TLSClientConfig)
-		var dialFunc dialFunc
+		if buildfeatures.HasUseProxy {
+			tr.Proxy = feature.HookProxyFromEnvironment.GetOrNil()
+			if f, ok := feature.HookProxySetTransportGetProxyConnectHeader.GetOk(); ok {
+				f(tr)
+			}
+		}
+		tr.TLSClientConfig = tlsdial.Config(opts.HealthTracker, tr.TLSClientConfig)
+		var dialFunc netx.DialFunc
 		dialFunc, interceptedDial = makeScreenTimeDetectingDialFunc(opts.Dialer.SystemDial)
 		tr.DialContext = dnscache.Dialer(dialFunc, dnsCache)
 		tr.DialTLSContext = dnscache.TLSDialer(dialFunc, dnsCache, tr.TLSClientConfig)
@@ -281,31 +307,31 @@ func NewDirect(opts Options) (*Direct, error) {
 	}
 
 	c := &Direct{
-		httpc:                      httpc,
-		interceptedDial:            interceptedDial,
-		controlKnobs:               opts.ControlKnobs,
-		getMachinePrivKey:          opts.GetMachinePrivateKey,
-		serverURL:                  opts.ServerURL,
-		clock:                      opts.Clock,
-		logf:                       opts.Logf,
-		persist:                    opts.Persist.View(),
-		authKey:                    opts.AuthKey,
-		discoPubKey:                opts.DiscoPublicKey,
-		debugFlags:                 opts.DebugFlags,
-		netMon:                     netMon,
-		health:                     opts.HealthTracker,
-		skipIPForwardingCheck:      opts.SkipIPForwardingCheck,
-		pinger:                     opts.Pinger,
-		popBrowser:                 opts.PopBrowserURL,
-		onClientVersion:            opts.OnClientVersion,
-		onTailnetDefaultAutoUpdate: opts.OnTailnetDefaultAutoUpdate,
-		onControlTime:              opts.OnControlTime,
-		c2nHandler:                 opts.C2NHandler,
-		dialer:                     opts.Dialer,
-		dnsCache:                   dnsCache,
-		dialPlan:                   opts.DialPlan,
+		httpc:                 httpc,
+		interceptedDial:       interceptedDial,
+		controlKnobs:          opts.ControlKnobs,
+		getMachinePrivKey:     opts.GetMachinePrivateKey,
+		serverURL:             opts.ServerURL,
+		clock:                 opts.Clock,
+		logf:                  opts.Logf,
+		persist:               opts.Persist.View(),
+		authKey:               opts.AuthKey,
+		debugFlags:            opts.DebugFlags,
+		netMon:                netMon,
+		health:                opts.HealthTracker,
+		skipIPForwardingCheck: opts.SkipIPForwardingCheck,
+		pinger:                opts.Pinger,
+		polc:                  cmp.Or(opts.PolicyClient, policyclient.Client(policyclient.NoPolicyClient{})),
+		popBrowser:            opts.PopBrowserURL,
+		c2nHandler:            opts.C2NHandler,
+		dialer:                opts.Dialer,
+		dnsCache:              dnsCache,
+		dialPlan:              opts.DialPlan,
 	}
+	c.discoPubKey = opts.DiscoPublicKey
 	c.closedCtx, c.closeCtx = context.WithCancel(context.Background())
+
+	c.controlClientID = nextControlClientID.Add(1)
 
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(hostinfo.New())
@@ -316,7 +342,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		}
 	}
 	if opts.NoiseTestClient != nil {
-		c.noiseClient = &NoiseClient{
+		c.noiseClient = &ts2021.Client{
 			Client: opts.NoiseTestClient,
 		}
 		c.serverNoiseKey = key.NewMachine().Public() // prevent early error before hitting test client
@@ -324,6 +350,12 @@ func NewDirect(opts Options) (*Direct, error) {
 	if strings.Contains(opts.ServerURL, "controlplane.tailscale.com") && envknob.Bool("TS_PANIC_IF_HIT_MAIN_CONTROL") {
 		c.panicOnUse = true
 	}
+
+	c.busClient = opts.Bus.Client("controlClient.direct")
+	c.clientVersionPub = eventbus.Publish[tailcfg.ClientVersion](c.busClient)
+	c.autoUpdatePub = eventbus.Publish[AutoUpdate](c.busClient)
+	c.controlTimePub = eventbus.Publish[ControlTime](c.busClient)
+
 	return c, nil
 }
 
@@ -333,15 +365,14 @@ func (c *Direct) Close() error {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.busClient.Close()
 	if c.noiseClient != nil {
 		if err := c.noiseClient.Close(); err != nil {
 			return err
 		}
 	}
 	c.noiseClient = nil
-	if tr, ok := c.httpc.Transport.(*http.Transport); ok {
-		tr.CloseIdleConnections()
-	}
+	c.httpc.CloseIdleConnections()
 	return nil
 }
 
@@ -382,7 +413,7 @@ func (c *Direct) SetNetInfo(ni *tailcfg.NetInfo) bool {
 	return true
 }
 
-// SetNetInfo stores a new TKA head value for next update.
+// SetTKAHead stores a new TKA head value for next update.
 // It reports whether the TKA head changed.
 func (c *Direct) SetTKAHead(tkaHead string) bool {
 	c.mu.Lock()
@@ -395,6 +426,14 @@ func (c *Direct) SetTKAHead(tkaHead string) bool {
 	c.tkaHead = tkaHead
 	c.logf("tkaHead: %v", tkaHead)
 	return true
+}
+
+// SetConnectionHandleForTest stores a new MapRequest.ConnectionHandleForTest
+// value for the next update.
+func (c *Direct) SetConnectionHandleForTest(handle string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.connectionHandleForTest = handle
 }
 
 func (c *Direct) GetPersist() persist.PersistView {
@@ -518,7 +557,9 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	} else {
 		if expired {
 			c.logf("Old key expired -> regen=true")
-			systemd.Status("key expired; run 'tailscale up' to authenticate")
+			if f, ok := feature.HookSystemdStatus.GetOk(); ok {
+				f("key expired; run 'tailscale up' to authenticate")
+			}
 			regen = true
 		}
 		if (opt.Flags & LoginInteractive) != 0 {
@@ -577,6 +618,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	if persist.NetworkLockKey.IsZero() {
 		persist.NetworkLockKey = key.NewNLPrivate()
 	}
+
 	nlPub := persist.NetworkLockKey.Public()
 
 	if tryingNewKey.IsZero() {
@@ -606,7 +648,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		return regen, opt.URL, nil, err
 	}
 
-	tailnet, err := syspolicy.GetString(syspolicy.Tailnet, "")
+	tailnet, err := c.polc.GetString(pkey.Tailnet, "")
 	if err != nil {
 		c.logf("unable to provide Tailnet field in register request. err: %v", err)
 	}
@@ -636,7 +678,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 			AuthKey: authKey,
 		}
 	}
-	err = signRegisterRequest(&request, c.serverURL, c.serverLegacyKey, machinePrivKey.Public())
+	err = signRegisterRequest(c.polc, &request, c.serverURL, c.serverLegacyKey, machinePrivKey.Public())
 	if err != nil {
 		// If signing failed, clear all related fields
 		request.SignatureType = tailcfg.SignatureNone
@@ -650,7 +692,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 			c.logf("RegisterReq sign error: %v", err)
 		}
 	}
-	if debugRegister() {
+	if DevKnob.DumpRegister() {
 		j, _ := json.MarshalIndent(request, "", "\t")
 		c.logf("RegisterRequest: %s", j)
 	}
@@ -673,8 +715,8 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	if err != nil {
 		return regen, opt.URL, nil, err
 	}
-	addLBHeader(req, request.OldNodeKey)
-	addLBHeader(req, request.NodeKey)
+	ts2021.AddLBHeader(req, request.OldNodeKey)
+	ts2021.AddLBHeader(req, request.NodeKey)
 
 	res, err := httpc.Do(req)
 	if err != nil {
@@ -691,7 +733,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		c.logf("error decoding RegisterResponse with server key %s and machine key %s: %v", serverKey, machinePrivKey.Public(), err)
 		return regen, opt.URL, nil, fmt.Errorf("register request: %v", err)
 	}
-	if debugRegister() {
+	if DevKnob.DumpRegister() {
 		j, _ := json.MarshalIndent(resp, "", "\t")
 		c.logf("RegisterResponse: %s", j)
 	}
@@ -811,6 +853,31 @@ func (c *Direct) SendUpdate(ctx context.Context) error {
 	return c.sendMapRequest(ctx, false, nil)
 }
 
+// SetDiscoPublicKey updates the disco public key in local state.
+// It does not implicitly trigger [SendUpdate]; callers should arrange for that.
+func (c *Direct) SetDiscoPublicKey(key key.DiscoPublic) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.discoPubKey = key
+}
+
+// ClientID returns the controlClientID of the controlClient.
+func (c *Direct) ClientID() int64 {
+	return c.controlClientID
+}
+
+// AutoUpdate is an eventbus value, reporting the value of tailcfg.MapResponse.DefaultAutoUpdate.
+type AutoUpdate struct {
+	ClientID int64 // The ID field is used for consumers to differentiate instances of Direct.
+	Value    bool  // The Value represents DefaultAutoUpdate from [tailcfg.MapResponse].
+}
+
+// ControlTime is an eventbus value, reporting the value of tailcfg.MapResponse.ControlTime.
+type ControlTime struct {
+	ClientID int64     // The ID field is used for consumers to differentiate instances of Direct.
+	Value    time.Time // The Value represents ControlTime from [tailcfg.MapResponse].
+}
+
 // If we go more than watchdogTimeout without hearing from the server,
 // end the long poll. We should be receiving a keep alive ping
 // every minute.
@@ -843,8 +910,11 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	persist := c.persist
 	serverURL := c.serverURL
 	serverNoiseKey := c.serverNoiseKey
+	discoKey := c.discoPubKey
 	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
+	connectionHandleForTest := c.connectionHandleForTest
+	tkaHead := c.tkaHead
 	var epStrs []string
 	var eps []netip.AddrPort
 	var epTypes []tailcfg.EndpointType
@@ -877,28 +947,51 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	c.logf("[v1] PollNetMap: stream=%v ep=%v", isStreaming, epStrs)
 
 	vlogf := logger.Discard
-	if DevKnob.DumpNetMaps() {
+	if DevKnob.DumpNetMapsVerbose() {
 		// TODO(bradfitz): update this to use "[v2]" prefix perhaps? but we don't
 		// want to upload it always.
 		vlogf = c.logf
 	}
 
 	nodeKey := persist.PublicNodeKey()
+
 	request := &tailcfg.MapRequest{
-		Version:       tailcfg.CurrentCapabilityVersion,
-		KeepAlive:     true,
-		NodeKey:       nodeKey,
-		DiscoKey:      c.discoPubKey,
-		Endpoints:     eps,
-		EndpointTypes: epTypes,
-		Stream:        isStreaming,
-		Hostinfo:      hi,
-		DebugFlags:    c.debugFlags,
-		OmitPeers:     nu == nil,
-		TKAHead:       c.tkaHead,
+		Version:                 tailcfg.CurrentCapabilityVersion,
+		KeepAlive:               true,
+		NodeKey:                 nodeKey,
+		DiscoKey:                discoKey,
+		Endpoints:               eps,
+		EndpointTypes:           epTypes,
+		Stream:                  isStreaming,
+		Hostinfo:                hi,
+		DebugFlags:              c.debugFlags,
+		OmitPeers:               nu == nil,
+		TKAHead:                 tkaHead,
+		ConnectionHandleForTest: connectionHandleForTest,
 	}
+
+	// If we have a hardware attestation key, sign the node key with it and send
+	// the key & signature in the map request.
+	if buildfeatures.HasTPM {
+		if k := persist.AsStruct().AttestationKey; k != nil && !k.IsZero() {
+			hwPub := key.HardwareAttestationPublicFromPlatformKey(k)
+			request.HardwareAttestationKey = hwPub
+
+			t := c.clock.Now()
+			msg := fmt.Sprintf("%d|%s", t.Unix(), nodeKey.String())
+			digest := sha256.Sum256([]byte(msg))
+			sig, err := k.Sign(nil, digest[:], crypto.SHA256)
+			if err != nil {
+				c.logf("failed to sign node key with hardware attestation key: %v", err)
+			} else {
+				request.HardwareAttestationKeySignature = sig
+				request.HardwareAttestationKeySignatureTimestamp = t
+			}
+		}
+	}
+
 	var extraDebugFlags []string
-	if hi != nil && c.netMon != nil && !c.skipIPForwardingCheck &&
+	if buildfeatures.HasAdvertiseRoutes && hi != nil && c.netMon != nil && !c.skipIPForwardingCheck &&
 		ipForwardingBroken(hi.RoutableIPs, c.netMon.InterfaceState()) {
 		extraDebugFlags = append(extraDebugFlags, "warn-ip-forwarding-off")
 	}
@@ -962,7 +1055,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	if err != nil {
 		return err
 	}
-	addLBHeader(req, nodeKey)
+	ts2021.AddLBHeader(req, nodeKey)
 
 	res, err := httpc.Do(req)
 	if err != nil {
@@ -1003,12 +1096,14 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		if persist == c.persist {
 			newPersist := persist.AsStruct()
 			newPersist.NodeID = nm.SelfNode.StableID()
-			newPersist.UserProfile = nm.UserProfiles[nm.User()]
+			if up, ok := nm.UserProfiles[nm.User()]; ok {
+				newPersist.UserProfile = *up.AsStruct()
+			}
 
 			c.persist = newPersist.View()
 			persist = c.persist
 		}
-		c.expiry = nm.Expiry
+		c.expiry = nm.SelfKeyExpiry()
 	}
 
 	// gotNonKeepAliveMessage is whether we've yet received a MapResponse message without
@@ -1040,7 +1135,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		vlogf("netmap: read body after %v", time.Since(t0).Round(time.Millisecond))
 
 		var resp tailcfg.MapResponse
-		if err := c.decodeMsg(msg, &resp); err != nil {
+		if err := sess.decodeMsg(msg, &resp); err != nil {
 			vlogf("netmap: decode error: %v", err)
 			return err
 		}
@@ -1065,21 +1160,19 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 				c.logf("netmap: control says to open URL %v; no popBrowser func", u)
 			}
 		}
-		if resp.ClientVersion != nil && c.onClientVersion != nil {
-			c.onClientVersion(resp.ClientVersion)
+		if resp.ClientVersion != nil {
+			c.clientVersionPub.Publish(*resp.ClientVersion)
 		}
 		if resp.ControlTime != nil && !resp.ControlTime.IsZero() {
 			c.logf.JSON(1, "controltime", resp.ControlTime.UTC())
-			if c.onControlTime != nil {
-				c.onControlTime(*resp.ControlTime)
-			}
+			c.controlTimePub.Publish(ControlTime{c.controlClientID, *resp.ControlTime})
 		}
 		if resp.KeepAlive {
 			vlogf("netmap: got keep-alive")
 		} else {
 			vlogf("netmap: got new map")
 		}
-		if resp.ControlDialPlan != nil {
+		if resp.ControlDialPlan != nil && !ignoreDialPlan() {
 			if c.dialPlan != nil {
 				c.logf("netmap: got new dial plan from control")
 				c.dialPlan.Store(resp.ControlDialPlan)
@@ -1092,9 +1185,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			continue
 		}
 		if au, ok := resp.DefaultAutoUpdate.Get(); ok {
-			if c.onTailnetDefaultAutoUpdate != nil {
-				c.onTailnetDefaultAutoUpdate(au)
-			}
+			c.autoUpdatePub.Publish(AutoUpdate{c.controlClientID, au})
 		}
 
 		metricMapResponseMap.Add(1)
@@ -1118,12 +1209,33 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	return nil
 }
 
+// NetmapFromMapResponseForDebug returns a NetworkMap from the given MapResponse.
+// It is intended for debugging only.
+func NetmapFromMapResponseForDebug(ctx context.Context, pr persist.PersistView, resp *tailcfg.MapResponse) (*netmap.NetworkMap, error) {
+	if resp == nil {
+		return nil, errors.New("nil MapResponse")
+	}
+	if resp.Node == nil {
+		return nil, errors.New("MapResponse lacks Node")
+	}
+
+	nu := &rememberLastNetmapUpdater{}
+	sess := newMapSession(pr.PrivateNodeKey(), nu, nil)
+	defer sess.Close()
+
+	if err := sess.HandleNonKeepAliveMapResponse(ctx, resp); err != nil {
+		return nil, fmt.Errorf("HandleNonKeepAliveMapResponse: %w", err)
+	}
+
+	return sess.netmap(), nil
+}
+
 func (c *Direct) handleDebugMessage(ctx context.Context, debug *tailcfg.Debug) error {
 	if code := debug.Exit; code != nil {
 		c.logf("exiting process with status %v per controlplane", *code)
 		os.Exit(*code)
 	}
-	if debug.DisableLogTail {
+	if buildfeatures.HasLogTail && debug.DisableLogTail {
 		logtail.Disable()
 		envknob.SetNoLogsNoSupport()
 	}
@@ -1170,20 +1282,26 @@ func decode(res *http.Response, v any) error {
 	return json.Unmarshal(msg, v)
 }
 
-var (
-	debugMap      = envknob.RegisterBool("TS_DEBUG_MAP")
-	debugRegister = envknob.RegisterBool("TS_DEBUG_REGISTER")
-)
-
 var jsonEscapedZero = []byte(`\u0000`)
 
+const justKeepAliveStr = `{"KeepAlive":true}`
+
 // decodeMsg is responsible for uncompressing msg and unmarshaling into v.
-func (c *Direct) decodeMsg(compressedMsg []byte, v any) error {
+func (sess *mapSession) decodeMsg(compressedMsg []byte, v *tailcfg.MapResponse) error {
+	// Fast path for common case of keep-alive message.
+	// See tailscale/tailscale#17343.
+	if sess.keepAliveZ != nil && bytes.Equal(compressedMsg, sess.keepAliveZ) {
+		v.KeepAlive = true
+		return nil
+	}
+
 	b, err := zstdframe.AppendDecode(nil, compressedMsg)
 	if err != nil {
 		return err
 	}
-	if debugMap() {
+	sess.ztdDecodesForTest++
+
+	if DevKnob.DumpNetMaps() {
 		var buf bytes.Buffer
 		json.Indent(&buf, b, "", "    ")
 		log.Printf("MapResponse: %s", buf.Bytes())
@@ -1195,6 +1313,9 @@ func (c *Direct) decodeMsg(compressedMsg []byte, v any) error {
 	if err := json.Unmarshal(b, v); err != nil {
 		return fmt.Errorf("response: %v", err)
 	}
+	if v.KeepAlive && string(b) == justKeepAliveStr {
+		sess.keepAliveZ = compressedMsg
+	}
 	return nil
 }
 
@@ -1205,7 +1326,7 @@ func encode(v any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if debugMap() {
+	if DevKnob.DumpNetMaps() {
 		if _, ok := v.(*tailcfg.MapRequest); ok {
 			log.Printf("MapRequest: %s", b)
 		}
@@ -1242,7 +1363,7 @@ func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string
 	out = tailcfg.OverTLSPublicKeyResponse{}
 	k, err := key.ParseMachinePublicUntyped(mem.B(b))
 	if err != nil {
-		return nil, multierr.New(jsonErr, err)
+		return nil, errors.Join(jsonErr, err)
 	}
 	out.LegacyPublicKey = k
 	return &out, nil
@@ -1253,18 +1374,25 @@ func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string
 var DevKnob = initDevKnob()
 
 type devKnobs struct {
-	DumpNetMaps    func() bool
-	ForceProxyDNS  func() bool
-	StripEndpoints func() bool // strip endpoints from control (only use disco messages)
-	StripCaps      func() bool // strip all local node's control-provided capabilities
+	DumpRegister       func() bool
+	DumpNetMaps        func() bool
+	DumpNetMapsVerbose func() bool
+	ForceProxyDNS      func() bool
+	StripEndpoints     func() bool // strip endpoints from control (only use disco messages)
+	StripHomeDERP      func() bool // strip Home DERP from control
+	StripCaps          func() bool // strip all local node's control-provided capabilities
 }
 
 func initDevKnob() devKnobs {
+	nm := envknob.RegisterInt("TS_DEBUG_MAP")
 	return devKnobs{
-		DumpNetMaps:    envknob.RegisterBool("TS_DEBUG_NETMAP"),
-		ForceProxyDNS:  envknob.RegisterBool("TS_DEBUG_PROXY_DNS"),
-		StripEndpoints: envknob.RegisterBool("TS_DEBUG_STRIP_ENDPOINTS"),
-		StripCaps:      envknob.RegisterBool("TS_DEBUG_STRIP_CAPS"),
+		DumpNetMaps:        func() bool { return nm() > 0 },
+		DumpNetMapsVerbose: func() bool { return nm() > 1 },
+		DumpRegister:       envknob.RegisterBool("TS_DEBUG_REGISTER"),
+		ForceProxyDNS:      envknob.RegisterBool("TS_DEBUG_PROXY_DNS"),
+		StripEndpoints:     envknob.RegisterBool("TS_DEBUG_STRIP_ENDPOINTS"),
+		StripHomeDERP:      envknob.RegisterBool("TS_DEBUG_STRIP_HOME_DERP"),
+		StripCaps:          envknob.RegisterBool("TS_DEBUG_STRIP_CAPS"),
 	}
 }
 
@@ -1305,6 +1433,10 @@ func (c *Direct) isUniquePingRequest(pr *tailcfg.PingRequest) bool {
 	return true
 }
 
+// HookAnswerC2NPing is where feature/c2n conditionally registers support
+// for handling C2N (control-to-node) HTTP requests.
+var HookAnswerC2NPing feature.Hook[func(logger.Logf, http.Handler, *http.Client, *tailcfg.PingRequest)]
+
 func (c *Direct) answerPing(pr *tailcfg.PingRequest) {
 	httpc := c.httpc
 	useNoise := pr.URLIsNoise || pr.Types == "c2n"
@@ -1325,11 +1457,16 @@ func (c *Direct) answerPing(pr *tailcfg.PingRequest) {
 		answerHeadPing(c.logf, httpc, pr)
 		return
 	case "c2n":
+		if !buildfeatures.HasC2N {
+			return
+		}
 		if !useNoise && !envknob.Bool("TS_DEBUG_PERMIT_HTTP_C2N") {
 			c.logf("refusing to answer c2n ping without noise")
 			return
 		}
-		answerC2NPing(c.logf, c.c2nHandler, httpc, pr)
+		if f, ok := HookAnswerC2NPing.GetOk(); ok {
+			f(c.logf, c.c2nHandler, httpc, pr)
+		}
 		return
 	}
 	for _, t := range strings.Split(pr.Types, ",") {
@@ -1364,54 +1501,6 @@ func answerHeadPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest) {
 	}
 }
 
-func answerC2NPing(logf logger.Logf, c2nHandler http.Handler, c *http.Client, pr *tailcfg.PingRequest) {
-	if c2nHandler == nil {
-		logf("answerC2NPing: c2nHandler not defined")
-		return
-	}
-	hreq, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(pr.Payload)))
-	if err != nil {
-		logf("answerC2NPing: ReadRequest: %v", err)
-		return
-	}
-	if pr.Log {
-		logf("answerC2NPing: got c2n request for %v ...", hreq.RequestURI)
-	}
-	handlerTimeout := time.Minute
-	if v := hreq.Header.Get("C2n-Handler-Timeout"); v != "" {
-		handlerTimeout, _ = time.ParseDuration(v)
-	}
-	handlerCtx, cancel := context.WithTimeout(context.Background(), handlerTimeout)
-	defer cancel()
-	hreq = hreq.WithContext(handlerCtx)
-	rec := httptest.NewRecorder()
-	c2nHandler.ServeHTTP(rec, hreq)
-	cancel()
-
-	c2nResBuf := new(bytes.Buffer)
-	rec.Result().Write(c2nResBuf)
-
-	replyCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(replyCtx, "POST", pr.URL, c2nResBuf)
-	if err != nil {
-		logf("answerC2NPing: NewRequestWithContext: %v", err)
-		return
-	}
-	if pr.Log {
-		logf("answerC2NPing: sending POST ping to %v ...", pr.URL)
-	}
-	t0 := clock.Now()
-	_, err = c.Do(req)
-	d := time.Since(t0).Round(time.Millisecond)
-	if err != nil {
-		logf("answerC2NPing error: %v to %v (after %v)", err, pr.URL, d)
-	} else if pr.Log {
-		logf("answerC2NPing complete to %v (after %v)", pr.URL, d)
-	}
-}
-
 // sleepAsRequest implements the sleep for a tailcfg.Debug message requesting
 // that the client sleep. The complication is that while we're sleeping (if for
 // a long time), we need to periodically reset the watchdog timer before it
@@ -1436,7 +1525,7 @@ func sleepAsRequested(ctx context.Context, logf logger.Logf, d time.Duration, cl
 }
 
 // getNoiseClient returns the noise client, creating one if one doesn't exist.
-func (c *Direct) getNoiseClient() (*NoiseClient, error) {
+func (c *Direct) getNoiseClient() (*ts2021.Client, error) {
 	c.mu.Lock()
 	serverNoiseKey := c.serverNoiseKey
 	nc := c.noiseClient
@@ -1451,13 +1540,13 @@ func (c *Direct) getNoiseClient() (*NoiseClient, error) {
 	if c.dialPlan != nil {
 		dp = c.dialPlan.Load
 	}
-	nc, err, _ := c.sfGroup.Do(struct{}{}, func() (*NoiseClient, error) {
+	nc, err, _ := c.sfGroup.Do(struct{}{}, func() (*ts2021.Client, error) {
 		k, err := c.getMachinePrivKey()
 		if err != nil {
 			return nil, err
 		}
 		c.logf("[v1] creating new noise client")
-		nc, err := NewNoiseClient(NoiseOpts{
+		nc, err := ts2021.NewClient(ts2021.ClientOpts{
 			PrivKey:       k,
 			ServerPubKey:  serverNoiseKey,
 			ServerURL:     c.serverURL,
@@ -1491,7 +1580,7 @@ func (c *Direct) setDNSNoise(ctx context.Context, req *tailcfg.SetDNSRequest) er
 	if err != nil {
 		return err
 	}
-	res, err := nc.post(ctx, "/machine/set-dns", newReq.NodeKey, &newReq)
+	res, err := nc.Post(ctx, "/machine/set-dns", newReq.NodeKey, &newReq)
 	if err != nil {
 		return err
 	}
@@ -1512,6 +1601,9 @@ func (c *Direct) setDNSNoise(ctx context.Context, req *tailcfg.SetDNSRequest) er
 // SetDNS sends the SetDNSRequest request to the control plane server,
 // requesting a DNS record be created or updated.
 func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) (err error) {
+	if !buildfeatures.HasACME {
+		return feature.ErrUnavailable
+	}
 	metricSetDNS.Add(1)
 	defer func() {
 		if err != nil {
@@ -1530,20 +1622,6 @@ func (c *Direct) DoNoiseRequest(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	return nc.Do(req)
-}
-
-// GetSingleUseNoiseRoundTripper returns a RoundTripper that can be only be used
-// once (and must be used once) to make a single HTTP request over the noise
-// channel to the coordination server.
-//
-// In addition to the RoundTripper, it returns the HTTP/2 channel's early noise
-// payload, if any.
-func (c *Direct) GetSingleUseNoiseRoundTripper(ctx context.Context) (http.RoundTripper, *tailcfg.EarlyNoise, error) {
-	nc, err := c.getNoiseClient()
-	if err != nil {
-		return nil, nil, err
-	}
-	return nc.GetSingleUseRoundTripper(ctx)
 }
 
 // doPingerPing sends a Ping to pr.IP using pinger, and sends an http request back to
@@ -1602,61 +1680,103 @@ func postPingResult(start time.Time, logf logger.Logf, c *http.Client, pr *tailc
 	return nil
 }
 
-// ReportHealthChange reports to the control plane a change to this node's
-// health. w must be non-nil. us can be nil to indicate a healthy state for w.
-func (c *Direct) ReportHealthChange(w *health.Warnable, us *health.UnhealthyState) {
-	if w == health.NetworkStatusWarnable || w == health.IPNStateWarnable || w == health.LoginStateWarnable {
-		// We don't report these. These include things like the network is down
-		// (in which case we can't report anyway) or the user wanted things
-		// stopped, as opposed to the more unexpected failure types in the other
-		// subsystems.
-		return
-	}
-	np, err := c.getNoiseClient()
+// SetDeviceAttrs does a synchronous call to the control plane to update
+// the node's attributes.
+//
+// See docs on [tailcfg.SetDeviceAttributesRequest] for background.
+func (c *Auto) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) error {
+	return c.direct.SetDeviceAttrs(ctx, attrs)
+}
+
+// SetDeviceAttrs does a synchronous call to the control plane to update
+// the node's attributes.
+//
+// See docs on [tailcfg.SetDeviceAttributesRequest] for background.
+func (c *Direct) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) error {
+	nc, err := c.getNoiseClient()
 	if err != nil {
-		// Don't report errors to control if the server doesn't support noise.
-		return
+		return fmt.Errorf("%w: %w", errNoNoiseClient, err)
 	}
 	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
 	if !ok {
-		return
+		return errNoNodeKey
 	}
 	if c.panicOnUse {
 		panic("tainted client")
 	}
-	// TODO(angott): at some point, update `Subsys` in the request to be `Warnable`
-	req := &tailcfg.HealthChangeRequest{
-		Subsys:  string(w.Code),
+	req := &tailcfg.SetDeviceAttributesRequest{
 		NodeKey: nodeKey,
-	}
-	if us != nil {
-		req.Error = us.Text
+		Version: tailcfg.CurrentCapabilityVersion,
+		Update:  attrs,
 	}
 
-	// Best effort, no logging:
-	ctx, cancel := context.WithTimeout(c.closedCtx, 5*time.Second)
+	// TODO(bradfitz): unify the callers using doWithBody vs those using
+	// DoNoiseRequest. There seems to be a ~50/50 split and they're very close,
+	// but doWithBody sets the load balancing header and auto-JSON-encodes the
+	// body, but DoNoiseRequest is exported. Clean it up so they're consistent
+	// one way or another.
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	res, err := np.post(ctx, "/machine/update-health", nodeKey, req)
+	res, err := nc.DoWithBody(ctx, "PATCH", "/machine/set-device-attr", nodeKey, req)
 	if err != nil {
-		return
+		return err
 	}
-	res.Body.Close()
+	defer res.Body.Close()
+	all, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 {
+		return fmt.Errorf("HTTP error from control plane: %v: %s", res.Status, all)
+	}
+	return nil
 }
 
-func addLBHeader(req *http.Request, nodeKey key.NodePublic) {
-	if !nodeKey.IsZero() {
-		req.Header.Add(tailcfg.LBHeader, nodeKey.String())
-	}
+// SendAuditLog implements [auditlog.Transport] by sending an audit log synchronously to the control plane.
+//
+// See docs on [tailcfg.AuditLogRequest] and [auditlog.Logger] for background.
+func (c *Auto) SendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error) {
+	return c.direct.sendAuditLog(ctx, auditLog)
 }
 
-type dialFunc = func(ctx context.Context, network, addr string) (net.Conn, error)
+func (c *Direct) sendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error) {
+	nc, err := c.getNoiseClient()
+	if err != nil {
+		return fmt.Errorf("%w: %w", errNoNoiseClient, err)
+	}
+
+	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
+	if !ok {
+		return errNoNodeKey
+	}
+
+	req := &tailcfg.AuditLogRequest{
+		Version: tailcfg.CurrentCapabilityVersion,
+		NodeKey: nodeKey,
+		Action:  auditLog.Action,
+		Details: auditLog.Details,
+	}
+
+	if c.panicOnUse {
+		panic("tainted client")
+	}
+
+	res, err := nc.Post(ctx, "/machine/audit-log", nodeKey, req)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errHTTPPostFailure, err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		all, _ := io.ReadAll(res.Body)
+		return errBadHTTPResponse(res.StatusCode, string(all))
+	}
+	return nil
+}
 
 // makeScreenTimeDetectingDialFunc returns dialFunc, optionally wrapped (on
 // Apple systems) with a func that sets the returned atomic.Bool for whether
 // Screen Time seemed to intercept the connection.
 //
 // The returned *atomic.Bool is nil on non-Apple systems.
-func makeScreenTimeDetectingDialFunc(dial dialFunc) (dialFunc, *atomic.Bool) {
+func makeScreenTimeDetectingDialFunc(dial netx.DialFunc) (netx.DialFunc, *atomic.Bool) {
 	switch runtime.GOOS {
 	case "darwin", "ios":
 		// Continue below.
@@ -1672,6 +1792,13 @@ func makeScreenTimeDetectingDialFunc(dial dialFunc) (dialFunc, *atomic.Bool) {
 		ab.Store(isTCPLoopback(c.LocalAddr()) && isTCPLoopback(c.RemoteAddr()))
 		return c, nil
 	}, ab
+}
+
+func ignoreDialPlan() bool {
+	// If we're running in v86 (a JavaScript-based emulation of a 32-bit x86)
+	// our networking is very limited. Let's ignore the dial plan since it's too
+	// complicated to race that many IPs anyway.
+	return hostinfo.IsInVM86()
 }
 
 func isTCPLoopback(a net.Addr) bool {

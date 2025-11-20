@@ -209,7 +209,7 @@ func addAnyPortMapping(
 // The meta is the most recently parsed UDP discovery packet response
 // from the Internet Gateway Device.
 func getUPnPRootDevice(ctx context.Context, logf logger.Logf, debug DebugKnobs, gw netip.Addr, meta uPnPDiscoResponse) (rootDev *goupnp.RootDevice, loc *url.URL, err error) {
-	if debug.DisableUPnP {
+	if debug.DisableUPnP() {
 		return nil, nil, nil
 	}
 
@@ -434,7 +434,7 @@ func (c *Client) getUPnPPortMapping(
 	internal netip.AddrPort,
 	prevPort uint16,
 ) (external netip.AddrPort, ok bool) {
-	if disableUPnpEnv() || c.debug.DisableUPnP || (c.controlKnobs != nil && c.controlKnobs.DisableUPnP.Load()) {
+	if disableUPnpEnv() || c.debug.DisableUPnP() {
 		return netip.AddrPort{}, false
 	}
 
@@ -610,8 +610,9 @@ func (c *Client) tryUPnPPortmapWithDevice(
 		}
 
 		// From the UPnP spec: http://upnp.org/specs/gw/UPnP-gw-WANIPConnection-v2-Service.pdf
+		//     402: Invalid Args (see: https://github.com/tailscale/tailscale/issues/15223)
 		//     725: OnlyPermanentLeasesSupported
-		if ok && code == 725 {
+		if ok && (code == 402 || code == 725) {
 			newPort, err = addAnyPortMapping(
 				ctx,
 				client,
@@ -620,7 +621,7 @@ func (c *Client) tryUPnPPortmapWithDevice(
 				internal.Addr().String(),
 				0, // permanent
 			)
-			c.vlogf("addAnyPortMapping: 725 retry %v, err=%q", newPort, err)
+			c.vlogf("addAnyPortMapping: errcode=%d retried: port=%v err=%v", code, newPort, err)
 		}
 	}
 	if err != nil {

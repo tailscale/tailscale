@@ -18,8 +18,9 @@ import (
 	"strings"
 	"time"
 
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/tailcfg"
 )
 
 var (
@@ -31,7 +32,7 @@ var (
 //go:embed hello.tmpl.html
 var embeddedTemplate string
 
-var localClient tailscale.LocalClient
+var localClient local.Client
 
 func main() {
 	flag.Parse()
@@ -133,6 +134,10 @@ type tmplData struct {
 func tailscaleIP(who *apitype.WhoIsResponse) string {
 	if who == nil {
 		return ""
+	}
+	vals, err := tailcfg.UnmarshalNodeCapJSON[string](who.Node.CapMap, tailcfg.NodeAttrNativeIPV4)
+	if err == nil && len(vals) > 0 {
+		return vals[0]
 	}
 	for _, nodeIP := range who.Node.Addresses {
 		if nodeIP.Addr().Is4() && nodeIP.IsSingleIP() {

@@ -5,28 +5,41 @@
 package varz
 
 import (
+	"bufio"
 	"cmp"
 	"expvar"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"golang.org/x/exp/constraints"
 	"tailscale.com/metrics"
+	"tailscale.com/syncs"
+	"tailscale.com/types/logger"
 	"tailscale.com/version"
 )
 
+// StaticStringVar returns a new expvar.Var that always returns s.
+func StaticStringVar(s string) expvar.Var {
+	var v any = s // box s into an interface just once
+	return expvar.Func(func() any { return v })
+}
+
 func init() {
 	expvar.Publish("process_start_unix_time", expvar.Func(func() any { return timeStart.Unix() }))
-	expvar.Publish("version", expvar.Func(func() any { return version.Long() }))
-	expvar.Publish("go_version", expvar.Func(func() any { return runtime.Version() }))
+	expvar.Publish("version", StaticStringVar(version.Long()))
+	expvar.Publish("go_version", StaticStringVar(runtime.Version()))
 	expvar.Publish("counter_uptime_sec", expvar.Func(func() any { return int64(Uptime().Seconds()) }))
 	expvar.Publish("gauge_goroutines", expvar.Func(func() any { return runtime.NumGoroutine() }))
 }
@@ -124,6 +137,9 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 	case *expvar.Int:
 		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, cmp.Or(typ, "counter"), name, v.Value())
 		return
+	case *syncs.ShardedInt:
+		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, cmp.Or(typ, "counter"), name, v.Value())
+		return
 	case *expvar.Float:
 		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, cmp.Or(typ, "gauge"), name, v.Value())
 		return
@@ -179,7 +195,11 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 				return
 			}
 			if vs, ok := v.(string); ok && strings.HasSuffix(name, "version") {
-				fmt.Fprintf(w, "%s{version=%q} 1\n", name, vs)
+				if name == "version" {
+					fmt.Fprintf(w, "%s{version=%q,binary=%q} 1\n", name, vs, binaryName())
+				} else {
+					fmt.Fprintf(w, "%s{version=%q} 1\n", name, vs)
+				}
 				return
 			}
 			switch v := v.(type) {
@@ -298,6 +318,18 @@ func ExpvarDoHandler(expvarDoFunc func(f func(expvar.KeyValue))) func(http.Respo
 	}
 }
 
+var binaryName = sync.OnceValue(func() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	exe2, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return filepath.Base(exe)
+	}
+	return filepath.Base(exe2)
+})
+
 // PrometheusMetricsReflectRooter is an optional interface that expvar.Var implementations
 // can implement to indicate that they should be walked recursively with reflect to find
 // sets of fields to export.
@@ -310,21 +342,52 @@ type PrometheusMetricsReflectRooter interface {
 
 var expvarDo = expvar.Do // pulled out for tests
 
-func writeMemstats(w io.Writer, ms *runtime.MemStats) {
-	out := func(name, typ string, v uint64, help string) {
-		if help != "" {
-			fmt.Fprintf(w, "# HELP memstats_%s %s\n", name, help)
-		}
-		fmt.Fprintf(w, "# TYPE memstats_%s %s\nmemstats_%s %v\n", name, typ, name, v)
+func writeMemstat[V constraints.Integer | constraints.Float](bw *bufio.Writer, typ, name string, v V, help string) {
+	if help != "" {
+		bw.WriteString("# HELP memstats_")
+		bw.WriteString(name)
+		bw.WriteString(" ")
+		bw.WriteString(help)
+		bw.WriteByte('\n')
 	}
-	g := func(name string, v uint64, help string) { out(name, "gauge", v, help) }
-	c := func(name string, v uint64, help string) { out(name, "counter", v, help) }
-	g("heap_alloc", ms.HeapAlloc, "current bytes of allocated heap objects (up/down smoothly)")
-	c("total_alloc", ms.TotalAlloc, "cumulative bytes allocated for heap objects")
-	g("sys", ms.Sys, "total bytes of memory obtained from the OS")
-	c("mallocs", ms.Mallocs, "cumulative count of heap objects allocated")
-	c("frees", ms.Frees, "cumulative count of heap objects freed")
-	c("num_gc", uint64(ms.NumGC), "number of completed GC cycles")
+	bw.WriteString("# TYPE memstats_")
+	bw.WriteString(name)
+	bw.WriteString(" ")
+	bw.WriteString(typ)
+	bw.WriteByte('\n')
+	bw.WriteString("memstats_")
+	bw.WriteString(name)
+	bw.WriteByte(' ')
+	rt := reflect.TypeOf(v)
+	switch {
+	case rt == reflect.TypeFor[int]() ||
+		rt == reflect.TypeFor[uint]() ||
+		rt == reflect.TypeFor[int8]() ||
+		rt == reflect.TypeFor[uint8]() ||
+		rt == reflect.TypeFor[int16]() ||
+		rt == reflect.TypeFor[uint16]() ||
+		rt == reflect.TypeFor[int32]() ||
+		rt == reflect.TypeFor[uint32]() ||
+		rt == reflect.TypeFor[int64]() ||
+		rt == reflect.TypeFor[uint64]() ||
+		rt == reflect.TypeFor[uintptr]():
+		bw.Write(strconv.AppendInt(bw.AvailableBuffer(), int64(v), 10))
+	case rt == reflect.TypeFor[float32]() || rt == reflect.TypeFor[float64]():
+		bw.Write(strconv.AppendFloat(bw.AvailableBuffer(), float64(v), 'f', -1, 64))
+	}
+	bw.WriteByte('\n')
+}
+
+func writeMemstats(w io.Writer, ms *runtime.MemStats) {
+	fmt.Fprintf(w, "%v", logger.ArgWriter(func(bw *bufio.Writer) {
+		writeMemstat(bw, "gauge", "heap_alloc", ms.HeapAlloc, "current bytes of allocated heap objects (up/down smoothly)")
+		writeMemstat(bw, "counter", "total_alloc", ms.TotalAlloc, "cumulative bytes allocated for heap objects")
+		writeMemstat(bw, "gauge", "sys", ms.Sys, "total bytes of memory obtained from the OS")
+		writeMemstat(bw, "counter", "mallocs", ms.Mallocs, "cumulative count of heap objects allocated")
+		writeMemstat(bw, "counter", "frees", ms.Frees, "cumulative count of heap objects freed")
+		writeMemstat(bw, "counter", "num_gc", ms.NumGC, "number of completed GC cycles")
+		writeMemstat(bw, "gauge", "gc_cpu_fraction", ms.GCCPUFraction, "fraction of CPU time used by GC")
+	}))
 }
 
 // sortedStructField is metadata about a struct field used both for sorting once

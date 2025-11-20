@@ -285,25 +285,25 @@ func (c *testChain) makeAUM(v *testchainNode) AUM {
 
 // Chonk returns a tailchonk containing all AUMs.
 func (c *testChain) Chonk() Chonk {
-	var out Mem
+	out := ChonkMem()
 	for _, update := range c.AUMs {
 		if err := out.CommitVerifiedAUMs([]AUM{update}); err != nil {
 			panic(err)
 		}
 	}
-	return &out
+	return out
 }
 
 // ChonkWith returns a tailchonk containing the named AUMs.
 func (c *testChain) ChonkWith(names ...string) Chonk {
-	var out Mem
+	out := ChonkMem()
 	for _, name := range names {
 		update := c.AUMs[name]
 		if err := out.CommitVerifiedAUMs([]AUM{update}); err != nil {
 			panic(err)
 		}
 	}
-	return &out
+	return out
 }
 
 type testchainOpt struct {

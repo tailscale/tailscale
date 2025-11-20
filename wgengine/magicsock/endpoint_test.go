@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dsnet/try"
+	"tailscale.com/net/packet"
+	"tailscale.com/tailcfg"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 )
 
@@ -144,17 +146,24 @@ func TestProbeUDPLifetimeConfig_Valid(t *testing.T) {
 }
 
 func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
+	var lowerPriv, higherPriv key.DiscoPrivate
 	var lower, higher key.DiscoPublic
-	a := key.NewDisco().Public()
-	b := key.NewDisco().Public()
+	privA := key.NewDisco()
+	privB := key.NewDisco()
+	a := privA.Public()
+	b := privB.Public()
 	if a.String() < b.String() {
 		lower = a
 		higher = b
+		lowerPriv = privA
+		higherPriv = privB
 	} else {
 		lower = b
 		higher = a
+		lowerPriv = privB
+		higherPriv = privA
 	}
-	addr := addrQuality{AddrPort: try.E1[netip.AddrPort](netip.ParseAddrPort("1.1.1.1:1"))}
+	addr := addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("1.1.1.1:1")}}
 	newProbeUDPLifetime := func() *probeUDPLifetime {
 		return &probeUDPLifetime{
 			config: *defaultProbeUDPLifetimeConfig,
@@ -171,138 +180,126 @@ func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
 		wantMaybe                bool
 	}{
 		{
-			"nil probeUDPLifetime",
-			higher,
-			&lower,
-			func() *probeUDPLifetime {
+			name:        "nil probeUDPLifetime",
+			localDisco:  higher,
+			remoteDisco: &lower,
+			probeUDPLifetimeFn: func() *probeUDPLifetime {
 				return nil
 			},
-			addr,
-			func(lifetime *probeUDPLifetime) time.Duration {
-				return 0
-			},
-			false,
+			bestAddr: addr,
 		},
 		{
-			"local higher disco key",
-			higher,
-			&lower,
-			newProbeUDPLifetime,
-			addr,
-			func(lifetime *probeUDPLifetime) time.Duration {
-				return 0
-			},
-			false,
+			name:               "local higher disco key",
+			localDisco:         higher,
+			remoteDisco:        &lower,
+			probeUDPLifetimeFn: newProbeUDPLifetime,
+			bestAddr:           addr,
 		},
 		{
-			"remote no disco key",
-			higher,
-			nil,
-			newProbeUDPLifetime,
-			addr,
-			func(lifetime *probeUDPLifetime) time.Duration {
-				return 0
-			},
-			false,
+			name:               "remote no disco key",
+			localDisco:         higher,
+			remoteDisco:        nil,
+			probeUDPLifetimeFn: newProbeUDPLifetime,
+			bestAddr:           addr,
 		},
 		{
-			"invalid bestAddr",
-			lower,
-			&higher,
-			newProbeUDPLifetime,
-			addrQuality{},
-			func(lifetime *probeUDPLifetime) time.Duration {
-				return 0
-			},
-			false,
+			name:               "invalid bestAddr",
+			localDisco:         lower,
+			remoteDisco:        &higher,
+			probeUDPLifetimeFn: newProbeUDPLifetime,
+			bestAddr:           addrQuality{},
 		},
 		{
-			"cycle started too recently",
-			lower,
-			&higher,
-			func() *probeUDPLifetime {
-				l := newProbeUDPLifetime()
-				l.cycleActive = false
-				l.cycleStartedAt = time.Now()
-				return l
+			name:        "cycle started too recently",
+			localDisco:  lower,
+			remoteDisco: &higher,
+			probeUDPLifetimeFn: func() *probeUDPLifetime {
+				lt := newProbeUDPLifetime()
+				lt.cycleActive = false
+				lt.cycleStartedAt = time.Now()
+				return lt
 			},
-			addr,
-			func(lifetime *probeUDPLifetime) time.Duration {
-				return 0
-			},
-			false,
+			bestAddr: addr,
 		},
 		{
-			"maybe cliff 0 cycle not active",
-			lower,
-			&higher,
-			func() *probeUDPLifetime {
-				l := newProbeUDPLifetime()
-				l.cycleActive = false
-				l.cycleStartedAt = time.Now().Add(-l.config.CycleCanStartEvery).Add(-time.Second)
-				return l
+			name:        "maybe cliff 0 cycle not active",
+			localDisco:  lower,
+			remoteDisco: &higher,
+			probeUDPLifetimeFn: func() *probeUDPLifetime {
+				lt := newProbeUDPLifetime()
+				lt.cycleActive = false
+				lt.cycleStartedAt = time.Now().Add(-lt.config.CycleCanStartEvery).Add(-time.Second)
+				return lt
 			},
-			addr,
-			func(lifetime *probeUDPLifetime) time.Duration {
+			bestAddr: addr,
+			wantAfterInactivityForFn: func(lifetime *probeUDPLifetime) time.Duration {
 				return lifetime.config.Cliffs[0] - udpLifetimeProbeCliffSlack
 			},
-			true,
+			wantMaybe: true,
 		},
 		{
-			"maybe cliff 0",
-			lower,
-			&higher,
-			func() *probeUDPLifetime {
-				l := newProbeUDPLifetime()
-				l.cycleActive = true
-				l.currentCliff = 0
-				return l
+			name:        "maybe cliff 0",
+			localDisco:  lower,
+			remoteDisco: &higher,
+			probeUDPLifetimeFn: func() *probeUDPLifetime {
+				lt := newProbeUDPLifetime()
+				lt.cycleActive = true
+				lt.currentCliff = 0
+				return lt
 			},
-			addr,
-			func(lifetime *probeUDPLifetime) time.Duration {
+			bestAddr: addr,
+			wantAfterInactivityForFn: func(lifetime *probeUDPLifetime) time.Duration {
 				return lifetime.config.Cliffs[0] - udpLifetimeProbeCliffSlack
 			},
-			true,
+			wantMaybe: true,
 		},
 		{
-			"maybe cliff 1",
-			lower,
-			&higher,
-			func() *probeUDPLifetime {
-				l := newProbeUDPLifetime()
-				l.cycleActive = true
-				l.currentCliff = 1
-				return l
+			name:        "maybe cliff 1",
+			localDisco:  lower,
+			remoteDisco: &higher,
+			probeUDPLifetimeFn: func() *probeUDPLifetime {
+				lt := newProbeUDPLifetime()
+				lt.cycleActive = true
+				lt.currentCliff = 1
+				return lt
 			},
-			addr,
-			func(lifetime *probeUDPLifetime) time.Duration {
+			bestAddr: addr,
+			wantAfterInactivityForFn: func(lifetime *probeUDPLifetime) time.Duration {
 				return lifetime.config.Cliffs[1] - udpLifetimeProbeCliffSlack
 			},
-			true,
+			wantMaybe: true,
 		},
 		{
-			"maybe cliff 2",
-			lower,
-			&higher,
-			func() *probeUDPLifetime {
-				l := newProbeUDPLifetime()
-				l.cycleActive = true
-				l.currentCliff = 2
-				return l
+			name:        "maybe cliff 2",
+			localDisco:  lower,
+			remoteDisco: &higher,
+			probeUDPLifetimeFn: func() *probeUDPLifetime {
+				lt := newProbeUDPLifetime()
+				lt.cycleActive = true
+				lt.currentCliff = 2
+				return lt
 			},
-			addr,
-			func(lifetime *probeUDPLifetime) time.Duration {
+			bestAddr: addr,
+			wantAfterInactivityForFn: func(lifetime *probeUDPLifetime) time.Duration {
 				return lifetime.config.Cliffs[2] - udpLifetimeProbeCliffSlack
 			},
-			true,
+			wantMaybe: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			c := &Conn{}
+			if tt.localDisco.IsZero() {
+				c.discoAtomic.Set(key.NewDisco())
+			} else if tt.localDisco.Compare(lower) == 0 {
+				c.discoAtomic.Set(lowerPriv)
+			} else if tt.localDisco.Compare(higher) == 0 {
+				c.discoAtomic.Set(higherPriv)
+			} else {
+				t.Fatalf("unexpected localDisco value")
+			}
 			de := &endpoint{
-				c: &Conn{
-					discoPublic: tt.localDisco,
-				},
+				c:        c,
 				bestAddr: tt.bestAddr,
 			}
 			if tt.remoteDisco != nil {
@@ -314,12 +311,144 @@ func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
 			p := tt.probeUDPLifetimeFn()
 			de.probeUDPLifetime = p
 			gotAfterInactivityFor, gotMaybe := de.maybeProbeUDPLifetimeLocked()
-			wantAfterInactivityFor := tt.wantAfterInactivityForFn(p)
+			var wantAfterInactivityFor time.Duration
+			if tt.wantAfterInactivityForFn != nil {
+				wantAfterInactivityFor = tt.wantAfterInactivityForFn(p)
+			}
 			if gotAfterInactivityFor != wantAfterInactivityFor {
 				t.Errorf("maybeProbeUDPLifetimeLocked() gotAfterInactivityFor = %v, want %v", gotAfterInactivityFor, wantAfterInactivityFor)
 			}
 			if gotMaybe != tt.wantMaybe {
 				t.Errorf("maybeProbeUDPLifetimeLocked() gotMaybe = %v, want %v", gotMaybe, tt.wantMaybe)
+			}
+		})
+	}
+}
+
+func Test_epAddr_isDirectUDP(t *testing.T) {
+	vni := packet.VirtualNetworkID{}
+	vni.Set(7)
+	tests := []struct {
+		name string
+		ap   netip.AddrPort
+		vni  packet.VirtualNetworkID
+		want bool
+	}{
+		{
+			name: "true",
+			ap:   netip.MustParseAddrPort("192.0.2.1:7"),
+			vni:  packet.VirtualNetworkID{},
+			want: true,
+		},
+		{
+			name: "false derp magic addr",
+			ap:   netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, 0),
+			vni:  packet.VirtualNetworkID{},
+			want: false,
+		},
+		{
+			name: "false vni set",
+			ap:   netip.MustParseAddrPort("192.0.2.1:7"),
+			vni:  vni,
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := epAddr{
+				ap:  tt.ap,
+				vni: tt.vni,
+			}
+			if got := e.isDirect(); got != tt.want {
+				t.Errorf("isDirect() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_endpoint_udpRelayEndpointReady(t *testing.T) {
+	directAddrQuality := addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.1:7")}}
+	peerRelayAddrQuality := addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.2:77")}, latency: time.Second}
+	peerRelayAddrQuality.vni.Set(1)
+	peerRelayAddrQualityHigherLatencySameServer := addrQuality{
+		epAddr:  epAddr{ap: netip.MustParseAddrPort("192.0.2.3:77"), vni: peerRelayAddrQuality.vni},
+		latency: peerRelayAddrQuality.latency * 10,
+	}
+	peerRelayAddrQualityHigherLatencyDiffServer := addrQuality{
+		epAddr:           epAddr{ap: netip.MustParseAddrPort("192.0.2.3:77"), vni: peerRelayAddrQuality.vni},
+		latency:          peerRelayAddrQuality.latency * 10,
+		relayServerDisco: key.NewDisco().Public(),
+	}
+	peerRelayAddrQualityLowerLatencyDiffServer := addrQuality{
+		epAddr:           epAddr{ap: netip.MustParseAddrPort("192.0.2.4:77"), vni: peerRelayAddrQuality.vni},
+		latency:          peerRelayAddrQuality.latency / 10,
+		relayServerDisco: key.NewDisco().Public(),
+	}
+	peerRelayAddrQualityEqualLatencyDiffServer := addrQuality{
+		epAddr:           epAddr{ap: netip.MustParseAddrPort("192.0.2.4:77"), vni: peerRelayAddrQuality.vni},
+		latency:          peerRelayAddrQuality.latency,
+		relayServerDisco: key.NewDisco().Public(),
+	}
+	tests := []struct {
+		name               string
+		curBestAddr        addrQuality
+		trustBestAddrUntil mono.Time
+		maybeBest          addrQuality
+		wantBestAddr       addrQuality
+	}{
+		{
+			name:               "bestAddr trusted direct",
+			curBestAddr:        directAddrQuality,
+			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
+			maybeBest:          peerRelayAddrQuality,
+			wantBestAddr:       directAddrQuality,
+		},
+		{
+			name:               "bestAddr untrusted direct",
+			curBestAddr:        directAddrQuality,
+			trustBestAddrUntil: mono.Now().Add(-1 * time.Hour),
+			maybeBest:          peerRelayAddrQuality,
+			wantBestAddr:       peerRelayAddrQuality,
+		},
+		{
+			name:               "maybeBest same relay server higher latency bestAddr trusted",
+			curBestAddr:        peerRelayAddrQuality,
+			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
+			maybeBest:          peerRelayAddrQualityHigherLatencySameServer,
+			wantBestAddr:       peerRelayAddrQualityHigherLatencySameServer,
+		},
+		{
+			name:               "maybeBest diff relay server higher latency bestAddr trusted",
+			curBestAddr:        peerRelayAddrQuality,
+			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
+			maybeBest:          peerRelayAddrQualityHigherLatencyDiffServer,
+			wantBestAddr:       peerRelayAddrQuality,
+		},
+		{
+			name:               "maybeBest diff relay server lower latency bestAddr trusted",
+			curBestAddr:        peerRelayAddrQuality,
+			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
+			maybeBest:          peerRelayAddrQualityLowerLatencyDiffServer,
+			wantBestAddr:       peerRelayAddrQualityLowerLatencyDiffServer,
+		},
+		{
+			name:               "maybeBest diff relay server equal latency bestAddr trusted",
+			curBestAddr:        peerRelayAddrQuality,
+			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
+			maybeBest:          peerRelayAddrQualityEqualLatencyDiffServer,
+			wantBestAddr:       peerRelayAddrQuality,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			de := &endpoint{
+				c:                  &Conn{logf: func(msg string, args ...any) { return }},
+				bestAddr:           tt.curBestAddr,
+				trustBestAddrUntil: tt.trustBestAddrUntil,
+			}
+			de.udpRelayEndpointReady(tt.maybeBest)
+			if de.bestAddr != tt.wantBestAddr {
+				t.Errorf("de.bestAddr = %v, want %v", de.bestAddr, tt.wantBestAddr)
 			}
 		})
 	}

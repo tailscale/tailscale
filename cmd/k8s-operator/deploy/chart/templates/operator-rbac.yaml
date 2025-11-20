@@ -6,12 +6,19 @@ kind: ServiceAccount
 metadata:
   name: operator
   namespace: {{ .Release.Namespace }}
+  {{- with .Values.operatorConfig.serviceAccountAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: tailscale-operator
 rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
 - apiGroups: [""]
   resources: ["events", "services", "services/status"]
   verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
@@ -20,6 +27,9 @@ rules:
   verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
 - apiGroups: ["networking.k8s.io"]
   resources: ["ingressclasses"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["tailscale.com"]
   resources: ["connectors", "connectors/status", "proxyclasses", "proxyclasses/status", "proxygroups", "proxygroups/status"]
@@ -30,6 +40,10 @@ rules:
 - apiGroups: ["tailscale.com"]
   resources: ["recorders", "recorders/status"]
   verbs: ["get", "list", "watch", "update"]
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: ["customresourcedefinitions"]
+  verbs: ["get", "list", "watch"]
+  resourceNames: ["servicemonitors.monitoring.coreos.com"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -55,7 +69,10 @@ rules:
   verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
 - apiGroups: [""]
   resources: ["pods"]
-  verbs: ["get","list","watch"]
+  verbs: ["get","list","watch", "update"]
+- apiGroups: [""]
+  resources: ["pods/status"]
+  verbs: ["update"]
 - apiGroups: ["apps"]
   resources: ["statefulsets", "deployments"]
   verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
@@ -64,7 +81,10 @@ rules:
   verbs: ["get", "list", "watch", "create", "update", "deletecollection"]
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources: ["roles", "rolebindings"]
-  verbs: ["get", "create", "patch", "update", "list", "watch"]
+  verbs: ["get", "create", "patch", "update", "list", "watch", "deletecollection"]
+- apiGroups: ["monitoring.coreos.com"]
+  resources: ["servicemonitors"]
+  verbs: ["get", "list", "update", "create", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

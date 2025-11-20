@@ -22,17 +22,19 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	"tailscale.com/ipn"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 )
 
 const (
-	tailscaleIngressClassName      = "tailscale"                                   // ingressClass.metadata.name for tailscale IngressClass resource
 	tailscaleIngressControllerName = "tailscale.com/ts-ingress"                    // ingressClass.spec.controllerName for tailscale IngressClass resource
 	ingressClassDefaultAnnotation  = "ingressclass.kubernetes.io/is-default-class" // we do not support this https://kubernetes.io/docs/concepts/services-networking/ingress/#default-ingress-class
+	indexIngressProxyClass         = ".metadata.annotations.ingress-proxy-class"
 )
 
 type IngressReconciler struct {
@@ -48,7 +50,8 @@ type IngressReconciler struct {
 	// managing. This is only used for metrics.
 	managedIngresses set.Slice[types.UID]
 
-	proxyDefaultClass string
+	defaultProxyClass string
+	ingressClassName  string
 }
 
 var (
@@ -58,7 +61,7 @@ var (
 )
 
 func (a *IngressReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, err error) {
-	logger := a.logger.With("ingress-ns", req.Namespace, "ingress-name", req.Name)
+	logger := a.logger.With("Ingress", req.NamespacedName)
 	logger.Debugf("starting reconcile")
 	defer logger.Debugf("reconcile finished")
 
@@ -72,11 +75,20 @@ func (a *IngressReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		return reconcile.Result{}, fmt.Errorf("failed to get ing: %w", err)
 	}
 	if !ing.DeletionTimestamp.IsZero() || !a.shouldExpose(ing) {
+		// TODO(irbekrm): this message is confusing if the Ingress is an HA Ingress
 		logger.Debugf("ingress is being deleted or should not be exposed, cleaning up")
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, ing)
 	}
 
-	return reconcile.Result{}, a.maybeProvision(ctx, logger, ing)
+	if err := a.maybeProvision(ctx, logger, ing); err != nil {
+		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			logger.Infof("optimistic lock error, retrying: %s", err)
+		} else {
+			return reconcile.Result{}, err
+		}
+	}
+
+	return reconcile.Result{}, nil
 }
 
 func (a *IngressReconciler) maybeCleanup(ctx context.Context, logger *zap.SugaredLogger, ing *networkingv1.Ingress) error {
@@ -90,7 +102,7 @@ func (a *IngressReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 		return nil
 	}
 
-	if done, err := a.ssr.Cleanup(ctx, logger, childResourceLabels(ing.Name, ing.Namespace, "ingress")); err != nil {
+	if done, err := a.ssr.Cleanup(ctx, logger, childResourceLabels(ing.Name, ing.Namespace, "ingress"), proxyTypeIngressResource); err != nil {
 		return fmt.Errorf("failed to cleanup: %w", err)
 	} else if !done {
 		logger.Debugf("cleanup not done yet, waiting for next reconcile")
@@ -120,9 +132,8 @@ func (a *IngressReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 // This function adds a finalizer to ing, ensuring that we can handle orderly
 // deprovisioning later.
 func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.SugaredLogger, ing *networkingv1.Ingress) error {
-	if err := a.validateIngressClass(ctx); err != nil {
+	if err := validateIngressClass(ctx, a.Client, a.ingressClassName); err != nil {
 		logger.Warnf("error validating tailscale IngressClass: %v. In future this might be a terminal error.", err)
-
 	}
 	if !slices.Contains(ing.Finalizers, FinalizerName) {
 		// This log line is printed exactly once during initial provisioning,
@@ -136,7 +147,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		}
 	}
 
-	proxyClass := proxyClassForObject(ing, a.proxyDefaultClass)
+	proxyClass := proxyClassForObject(ing, a.defaultProxyClass)
 	if proxyClass != "" {
 		if ready, err := proxyClassIsReady(ctx, proxyClass, a.Client); err != nil {
 			return fmt.Errorf("error verifying ProxyClass for Ingress: %w", err)
@@ -151,7 +162,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	gaugeIngressResources.Set(int64(a.managedIngresses.Len()))
 	a.mu.Unlock()
 
-	if !a.ssr.IsHTTPSEnabledOnTailnet() {
+	if !IsHTTPSEnabledOnTailnet(a.ssr.tsnetServer) {
 		a.recorder.Event(ing, corev1.EventTypeWarning, "HTTPSNotEnabled", "HTTPS is not enabled on the tailnet; ingress may not work")
 	}
 
@@ -177,21 +188,132 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 
 	web := sc.Web[magic443]
+
+	var tlsHost string // hostname or FQDN or empty
+	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 && len(ing.Spec.TLS[0].Hosts) > 0 {
+		tlsHost = ing.Spec.TLS[0].Hosts[0]
+	}
+	handlers, err := handlersForIngress(ctx, ing, a.Client, a.recorder, tlsHost, logger)
+	if err != nil {
+		return fmt.Errorf("failed to get handlers for ingress: %w", err)
+	}
+	web.Handlers = handlers
+	if len(web.Handlers) == 0 {
+		logger.Warn("Ingress contains no valid backends")
+		a.recorder.Eventf(ing, corev1.EventTypeWarning, "NoValidBackends", "no valid backends")
+		return nil
+	}
+
+	crl := childResourceLabels(ing.Name, ing.Namespace, "ingress")
+	var tags []string
+	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
+		tags = strings.Split(tstr, ",")
+	}
+	hostname := hostnameForIngress(ing)
+
+	sts := &tailscaleSTSConfig{
+		Replicas:            1,
+		Hostname:            hostname,
+		ParentResourceName:  ing.Name,
+		ParentResourceUID:   string(ing.UID),
+		ServeConfig:         sc,
+		Tags:                tags,
+		ChildResourceLabels: crl,
+		ProxyClassName:      proxyClass,
+		proxyType:           proxyTypeIngressResource,
+		LoginServer:         a.ssr.loginServer,
+	}
+
+	if val := ing.GetAnnotations()[AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy]; val == "true" {
+		sts.ForwardClusterTrafficViaL7IngressProxy = true
+	}
+
+	if _, err = a.ssr.Provision(ctx, logger, sts); err != nil {
+		return fmt.Errorf("failed to provision: %w", err)
+	}
+
+	devices, err := a.ssr.DeviceInfo(ctx, crl, logger)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve Ingress HTTPS endpoint status: %w", err)
+	}
+
+	ing.Status.LoadBalancer.Ingress = nil
+	for _, dev := range devices {
+		if dev.ingressDNSName == "" {
+			continue
+		}
+
+		logger.Debugf("setting Ingress hostname to %q", dev.ingressDNSName)
+		ing.Status.LoadBalancer.Ingress = append(ing.Status.LoadBalancer.Ingress, networkingv1.IngressLoadBalancerIngress{
+			Hostname: dev.ingressDNSName,
+			Ports: []networkingv1.IngressPortStatus{
+				{
+					Protocol: "TCP",
+					Port:     443,
+				},
+			},
+		})
+	}
+
+	if err = a.Status().Update(ctx, ing); err != nil {
+		return fmt.Errorf("failed to update ingress status: %w", err)
+	}
+
+	return nil
+}
+
+func (a *IngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
+	return ing != nil &&
+		ing.Spec.IngressClassName != nil &&
+		*ing.Spec.IngressClassName == a.ingressClassName &&
+		ing.Annotations[AnnotationProxyGroup] == ""
+}
+
+// validateIngressClass attempts to validate that 'tailscale' IngressClass
+// included in Tailscale installation manifests exists and has not been modified
+// to attempt to enable features that we do not support.
+func validateIngressClass(ctx context.Context, cl client.Client, ingressClassName string) error {
+	ic := &networkingv1.IngressClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ingressClassName,
+		},
+	}
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(ic), ic); apierrors.IsNotFound(err) {
+		return errors.New("'tailscale' IngressClass not found in cluster.")
+	} else if err != nil {
+		return fmt.Errorf("error retrieving 'tailscale' IngressClass: %w", err)
+	}
+	if ic.Spec.Controller != tailscaleIngressControllerName {
+		return fmt.Errorf("'tailscale' Ingress class controller name %s does not match tailscale Ingress controller name %s. Ensure that you are using 'tailscale' IngressClass from latest Tailscale installation manifests", ic.Spec.Controller, tailscaleIngressControllerName)
+	}
+	if ic.GetAnnotations()[ingressClassDefaultAnnotation] != "" {
+		return fmt.Errorf("%s annotation is set on 'tailscale' IngressClass, but Tailscale Ingress controller does not support default Ingress class. Ensure that you are using 'tailscale' IngressClass from latest Tailscale installation manifests", ingressClassDefaultAnnotation)
+	}
+	return nil
+}
+
+func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl client.Client, rec record.EventRecorder, tlsHost string, logger *zap.SugaredLogger) (handlers map[string]*ipn.HTTPHandler, err error) {
 	addIngressBackend := func(b *networkingv1.IngressBackend, path string) {
+		if path == "" {
+			path = "/"
+			rec.Eventf(ing, corev1.EventTypeNormal, "PathUndefined", "configured backend is missing a path, defaulting to '/'")
+		}
+
 		if b == nil {
 			return
 		}
+
 		if b.Service == nil {
-			a.recorder.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "backend for path %q is missing service", path)
+			rec.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "backend for path %q is missing service", path)
 			return
 		}
 		var svc corev1.Service
-		if err := a.Get(ctx, types.NamespacedName{Namespace: ing.Namespace, Name: b.Service.Name}, &svc); err != nil {
-			a.recorder.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "failed to get service %q for path %q: %v", b.Service.Name, path, err)
+		if err := cl.Get(ctx, types.NamespacedName{Namespace: ing.Namespace, Name: b.Service.Name}, &svc); err != nil {
+			rec.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "failed to get service %q for path %q: %v", b.Service.Name, path, err)
 			return
 		}
 		if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
-			a.recorder.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "backend for path %q has invalid ClusterIP", path)
+			rec.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "backend for path %q has invalid ClusterIP", path)
 			return
 		}
 		var port int32
@@ -206,28 +328,23 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 			port = b.Service.Port.Number
 		}
 		if port == 0 {
-			a.recorder.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "backend for path %q has invalid port", path)
+			rec.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "backend for path %q has invalid port", path)
 			return
 		}
 		proto := "http://"
 		if port == 443 || b.Service.Port.Name == "https" {
 			proto = "https+insecure://"
 		}
-		web.Handlers[path] = &ipn.HTTPHandler{
+		mak.Set(&handlers, path, &ipn.HTTPHandler{
 			Proxy: proto + svc.Spec.ClusterIP + ":" + fmt.Sprint(port) + path,
-		}
+		})
 	}
 	addIngressBackend(ing.Spec.DefaultBackend, "/")
-
-	var tlsHost string // hostname or FQDN or empty
-	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 && len(ing.Spec.TLS[0].Hosts) > 0 {
-		tlsHost = ing.Spec.TLS[0].Hosts[0]
-	}
 	for _, rule := range ing.Spec.Rules {
 		// Host is optional, but if it's present it must match the TLS host
 		// otherwise we ignore the rule.
 		if rule.Host != "" && rule.Host != tlsHost {
-			a.recorder.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "rule with host %q ignored, unsupported", rule.Host)
+			rec.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "rule with host %q ignored, unsupported", rule.Host)
 			continue
 		}
 		for _, p := range rule.HTTP.Paths {
@@ -238,103 +355,22 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 			if *p.PathType == networkingv1.PathTypeExact {
 				msg := "Exact path type strict matching is currently not supported and requests will be routed as for Prefix path type. This behaviour might change in the future."
 				logger.Warnf(fmt.Sprintf("Unsupported Path type exact for path %s. %s", p.Path, msg))
-				a.recorder.Eventf(ing, corev1.EventTypeWarning, "UnsupportedPathTypeExact", msg)
+				rec.Eventf(ing, corev1.EventTypeWarning, "UnsupportedPathTypeExact", msg)
 			}
 			addIngressBackend(&p.Backend, p.Path)
 		}
 	}
-
-	if len(web.Handlers) == 0 {
-		logger.Warn("Ingress contains no valid backends")
-		a.recorder.Eventf(ing, corev1.EventTypeWarning, "NoValidBackends", "no valid backends")
-		return nil
-	}
-
-	crl := childResourceLabels(ing.Name, ing.Namespace, "ingress")
-	var tags []string
-	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
-		tags = strings.Split(tstr, ",")
-	}
-	hostname := ing.Namespace + "-" + ing.Name + "-ingress"
-	if tlsHost != "" {
-		hostname, _, _ = strings.Cut(tlsHost, ".")
-	}
-
-	sts := &tailscaleSTSConfig{
-		Hostname:            hostname,
-		ParentResourceName:  ing.Name,
-		ParentResourceUID:   string(ing.UID),
-		ServeConfig:         sc,
-		Tags:                tags,
-		ChildResourceLabels: crl,
-		ProxyClassName:      proxyClass,
-	}
-
-	if val := ing.GetAnnotations()[AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy]; val == "true" {
-		sts.ForwardClusterTrafficViaL7IngressProxy = true
-	}
-
-	if _, err := a.ssr.Provision(ctx, logger, sts); err != nil {
-		return fmt.Errorf("failed to provision: %w", err)
-	}
-
-	_, tsHost, _, err := a.ssr.DeviceInfo(ctx, crl)
-	if err != nil {
-		return fmt.Errorf("failed to get device ID: %w", err)
-	}
-	if tsHost == "" {
-		logger.Debugf("no Tailscale hostname known yet, waiting for proxy pod to finish auth")
-		// No hostname yet. Wait for the proxy pod to auth.
-		ing.Status.LoadBalancer.Ingress = nil
-		if err := a.Status().Update(ctx, ing); err != nil {
-			return fmt.Errorf("failed to update ingress status: %w", err)
-		}
-		return nil
-	}
-
-	logger.Debugf("setting ingress hostname to %q", tsHost)
-	ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{
-		{
-			Hostname: tsHost,
-			Ports: []networkingv1.IngressPortStatus{
-				{
-					Protocol: "TCP",
-					Port:     443,
-				},
-			},
-		},
-	}
-	if err := a.Status().Update(ctx, ing); err != nil {
-		return fmt.Errorf("failed to update ingress status: %w", err)
-	}
-	return nil
+	return handlers, nil
 }
 
-func (a *IngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
-	return ing != nil &&
-		ing.Spec.IngressClassName != nil &&
-		*ing.Spec.IngressClassName == tailscaleIngressClassName
-}
-
-// validateIngressClass attempts to validate that 'tailscale' IngressClass
-// included in Tailscale installation manifests exists and has not been modified
-// to attempt to enable features that we do not support.
-func (a *IngressReconciler) validateIngressClass(ctx context.Context) error {
-	ic := &networkingv1.IngressClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: tailscaleIngressClassName,
-		},
+// hostnameForIngress returns the hostname for an Ingress resource.
+// If the Ingress has TLS configured with a host, it returns the first component of that host.
+// Otherwise, it returns a hostname derived from the Ingress name and namespace.
+func hostnameForIngress(ing *networkingv1.Ingress) string {
+	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 && len(ing.Spec.TLS[0].Hosts) > 0 {
+		h := ing.Spec.TLS[0].Hosts[0]
+		hostname, _, _ := strings.Cut(h, ".")
+		return hostname
 	}
-	if err := a.Get(ctx, client.ObjectKeyFromObject(ic), ic); apierrors.IsNotFound(err) {
-		return errors.New("Tailscale IngressClass not found in cluster. Latest installation manifests include a tailscale IngressClass - please update")
-	} else if err != nil {
-		return fmt.Errorf("error retrieving 'tailscale' IngressClass: %w", err)
-	}
-	if ic.Spec.Controller != tailscaleIngressControllerName {
-		return fmt.Errorf("Tailscale Ingress class controller name %s does not match tailscale Ingress controller name %s. Ensure that you are using 'tailscale' IngressClass from latest Tailscale installation manifests", ic.Spec.Controller, tailscaleIngressControllerName)
-	}
-	if ic.GetAnnotations()[ingressClassDefaultAnnotation] != "" {
-		return fmt.Errorf("%s annotation is set on 'tailscale' IngressClass, but Tailscale Ingress controller does not support default Ingress class. Ensure that you are using 'tailscale' IngressClass from latest Tailscale installation manifests", ingressClassDefaultAnnotation)
-	}
-	return nil
+	return ing.Namespace + "-" + ing.Name + "-ingress"
 }

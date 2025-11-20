@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_tailnetlock
+
 package netlogtype
 
 import (
@@ -9,7 +11,6 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/fxamacker/cbor/v2"
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/util/must"
 )
@@ -29,11 +30,5 @@ func TestMaxSize(t *testing.T) {
 	outJSON := must.Get(json.Marshal(cc))
 	if string(outJSON) != maxJSONConnCounts {
 		t.Errorf("JSON mismatch (-got +want):\n%s", cmp.Diff(string(outJSON), maxJSONConnCounts))
-	}
-
-	outCBOR := must.Get(cbor.Marshal(cc))
-	maxCBORConnCountsAlt := "\xa7" + maxCBORConnCounts[1:len(maxCBORConnCounts)-1] // may use a definite encoding of map
-	if string(outCBOR) != maxCBORConnCounts && string(outCBOR) != maxCBORConnCountsAlt {
-		t.Errorf("CBOR mismatch (-got +want):\n%s", cmp.Diff(string(outCBOR), maxCBORConnCounts))
 	}
 }

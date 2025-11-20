@@ -6,12 +6,14 @@ package ipnlocal
 import (
 	"time"
 
+	"tailscale.com/control/controlclient"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/eventbus"
 )
 
 // For extra defense-in-depth, when we're testing expired nodes we check
@@ -40,14 +42,22 @@ type expiryManager struct {
 
 	logf  logger.Logf
 	clock tstime.Clock
+
+	eventClient *eventbus.Client
 }
 
-func newExpiryManager(logf logger.Logf) *expiryManager {
-	return &expiryManager{
+func newExpiryManager(logf logger.Logf, bus *eventbus.Bus) *expiryManager {
+	em := &expiryManager{
 		previouslyExpired: map[tailcfg.StableNodeID]bool{},
 		logf:              logf,
 		clock:             tstime.StdClock{},
 	}
+
+	em.eventClient = bus.Client("ipnlocal.expiryManager")
+	eventbus.SubscribeFunc(em.eventClient, func(ct controlclient.ControlTime) {
+		em.onControlTime(ct.Value)
+	})
+	return em
 }
 
 // onControlTime is called whenever we receive a new timestamp from the control
@@ -116,7 +126,7 @@ func (em *expiryManager) flagExpiredPeers(netmap *netmap.NetworkMap, localNow ti
 		// since we discover endpoints via DERP, and due to DERP return
 		// path optimization.
 		mut.Endpoints = nil
-		mut.DERP = ""
+		mut.HomeDERP = 0
 
 		// Defense-in-depth: break the node's public key as well, in
 		// case something tries to communicate.
@@ -217,6 +227,8 @@ func (em *expiryManager) nextPeerExpiry(nm *netmap.NetworkMap, localNow time.Tim
 
 	return nextExpiry
 }
+
+func (em *expiryManager) close() { em.eventClient.Close() }
 
 // ControlNow estimates the current time on the control server, calculated as
 // localNow + the delta between local and control server clocks as recorded

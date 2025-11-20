@@ -6,13 +6,13 @@ package distro
 
 import (
 	"bytes"
-	"io"
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"tailscale.com/types/lazy"
-	"tailscale.com/util/lineread"
+	"tailscale.com/util/lineiter"
 )
 
 type Distro string
@@ -31,6 +31,8 @@ const (
 	WDMyCloud = Distro("wdmycloud")
 	Unraid    = Distro("unraid")
 	Alpine    = Distro("alpine")
+	UBNT      = Distro("ubnt") // Ubiquiti Networks
+	JetKVM    = Distro("jetkvm")
 )
 
 var distro lazy.SyncValue[Distro]
@@ -76,6 +78,12 @@ func linuxDistro() Distro {
 	case have("/usr/local/bin/freenas-debug"):
 		// TrueNAS Scale runs on debian
 		return TrueNAS
+	case have("/usr/bin/ubnt-device-info"):
+		// UBNT runs on Debian-based systems. This MUST be checked before Debian.
+		//
+		// Currently supported product families:
+		// - UDM (UniFi Dream Machine, UDM-Pro)
+		return UBNT
 	case have("/etc/debian_version"):
 		return Debian
 	case have("/etc/arch-release"):
@@ -96,8 +104,18 @@ func linuxDistro() Distro {
 		return Unraid
 	case have("/etc/alpine-release"):
 		return Alpine
+	case runtime.GOARCH == "arm" && isDeviceModel("JetKVM"):
+		return JetKVM
 	}
 	return ""
+}
+
+func isDeviceModel(want string) bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	v, _ := os.ReadFile("/sys/firmware/devicetree/base/model")
+	return want == strings.Trim(string(v), "\x00\r\n\t ")
 }
 
 func freebsdDistro() Distro {
@@ -132,18 +150,19 @@ func DSMVersion() int {
 			return v
 		}
 		// But when run from the command line, we have to read it from the file:
-		lineread.File("/etc/VERSION", func(line []byte) error {
+		for lr := range lineiter.File("/etc/VERSION") {
+			line, err := lr.Value()
+			if err != nil {
+				break // but otherwise ignore
+			}
 			line = bytes.TrimSpace(line)
 			if string(line) == `majorversion="7"` {
-				v = 7
-				return io.EOF
+				return 7
 			}
 			if string(line) == `majorversion="6"` {
-				v = 6
-				return io.EOF
+				return 6
 			}
-			return nil
-		})
-		return v
+		}
+		return 0
 	})
 }

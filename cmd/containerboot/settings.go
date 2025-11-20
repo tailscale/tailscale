@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"strings"
 
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/kube/kubeclient"
@@ -62,9 +63,151 @@ type settings struct {
 	// PodIP is the IP of the Pod if running in Kubernetes. This is used
 	// when setting up rules to proxy cluster traffic to cluster ingress
 	// target.
-	PodIP               string
-	HealthCheckAddrPort string
-	EgressSvcsCfgPath   string
+	// Deprecated: use PodIPv4, PodIPv6 instead to support dual stack clusters
+	PodIP                 string
+	PodIPv4               string
+	PodIPv6               string
+	PodUID                string
+	HealthCheckAddrPort   string
+	LocalAddrPort         string
+	MetricsEnabled        bool
+	HealthCheckEnabled    bool
+	DebugAddrPort         string
+	EgressProxiesCfgPath  string
+	IngressProxiesCfgPath string
+	// CertShareMode is set for Kubernetes Pods running cert share mode.
+	// Possible values are empty (containerboot doesn't run any certs
+	// logic),  'ro' (for Pods that shold never attempt to issue/renew
+	// certs) and 'rw' for Pods that should manage the TLS certs shared
+	// amongst the replicas.
+	CertShareMode string
+}
+
+func configFromEnv() (*settings, error) {
+	cfg := &settings{
+		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
+		Hostname:                              defaultEnv("TS_HOSTNAME", ""),
+		Routes:                                defaultEnvStringPointer("TS_ROUTES"),
+		ServeConfigPath:                       defaultEnv("TS_SERVE_CONFIG", ""),
+		ProxyTargetIP:                         defaultEnv("TS_DEST_IP", ""),
+		ProxyTargetDNSName:                    defaultEnv("TS_EXPERIMENTAL_DEST_DNS_NAME", ""),
+		TailnetTargetIP:                       defaultEnv("TS_TAILNET_TARGET_IP", ""),
+		TailnetTargetFQDN:                     defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
+		DaemonExtraArgs:                       defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
+		ExtraArgs:                             defaultEnv("TS_EXTRA_ARGS", ""),
+		InKubernetes:                          os.Getenv("KUBERNETES_SERVICE_HOST") != "",
+		UserspaceMode:                         defaultBool("TS_USERSPACE", true),
+		StateDir:                              defaultEnv("TS_STATE_DIR", ""),
+		AcceptDNS:                             defaultEnvBoolPointer("TS_ACCEPT_DNS"),
+		KubeSecret:                            defaultEnv("TS_KUBE_SECRET", "tailscale"),
+		SOCKSProxyAddr:                        defaultEnv("TS_SOCKS5_SERVER", ""),
+		HTTPProxyAddr:                         defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
+		Socket:                                defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
+		AuthOnce:                              defaultBool("TS_AUTH_ONCE", false),
+		Root:                                  defaultEnv("TS_TEST_ONLY_ROOT", "/"),
+		TailscaledConfigFilePath:              tailscaledConfigFilePath(),
+		AllowProxyingClusterTrafficViaIngress: defaultBool("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS", false),
+		PodIP:                                 defaultEnv("POD_IP", ""),
+		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
+		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
+		LocalAddrPort:                         defaultEnv("TS_LOCAL_ADDR_PORT", "[::]:9002"),
+		MetricsEnabled:                        defaultBool("TS_ENABLE_METRICS", false),
+		HealthCheckEnabled:                    defaultBool("TS_ENABLE_HEALTH_CHECK", false),
+		DebugAddrPort:                         defaultEnv("TS_DEBUG_ADDR_PORT", ""),
+		EgressProxiesCfgPath:                  defaultEnv("TS_EGRESS_PROXIES_CONFIG_PATH", ""),
+		IngressProxiesCfgPath:                 defaultEnv("TS_INGRESS_PROXIES_CONFIG_PATH", ""),
+		PodUID:                                defaultEnv("POD_UID", ""),
+	}
+	podIPs, ok := os.LookupEnv("POD_IPS")
+	if ok {
+		ips := strings.Split(podIPs, ",")
+		if len(ips) > 2 {
+			return nil, fmt.Errorf("POD_IPs can contain at most 2 IPs, got %d (%v)", len(ips), ips)
+		}
+		for _, ip := range ips {
+			parsed, err := netip.ParseAddr(ip)
+			if err != nil {
+				return nil, fmt.Errorf("error parsing IP address %s: %w", ip, err)
+			}
+			if parsed.Is4() {
+				cfg.PodIPv4 = parsed.String()
+				continue
+			}
+			cfg.PodIPv6 = parsed.String()
+		}
+	}
+	// If cert share is enabled, set the replica as read or write. Only 0th
+	// replica should be able to write.
+	isInCertShareMode := defaultBool("TS_EXPERIMENTAL_CERT_SHARE", false)
+	if isInCertShareMode {
+		cfg.CertShareMode = "ro"
+		podName := os.Getenv("POD_NAME")
+		if strings.HasSuffix(podName, "-0") {
+			cfg.CertShareMode = "rw"
+		}
+	}
+
+	// See https://github.com/tailscale/tailscale/issues/16108 for context- we
+	// do this to preserve the previous behaviour where --accept-dns could be
+	// set either via TS_ACCEPT_DNS or TS_EXTRA_ARGS.
+	acceptDNS := cfg.AcceptDNS != nil && *cfg.AcceptDNS
+	tsExtraArgs, acceptDNSNew := parseAcceptDNS(cfg.ExtraArgs, acceptDNS)
+	cfg.ExtraArgs = tsExtraArgs
+	if acceptDNS != acceptDNSNew {
+		cfg.AcceptDNS = &acceptDNSNew
+	}
+
+	if err := cfg.validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %v", err)
+	}
+	return cfg, nil
+}
+
+// parseAcceptDNS parses any values for Tailscale --accept-dns flag set via
+// TS_ACCEPT_DNS and TS_EXTRA_ARGS env vars. If TS_EXTRA_ARGS contains
+// --accept-dns flag, override the acceptDNS value with the one from
+// TS_EXTRA_ARGS.
+// The value of extraArgs can be empty string or one or more whitespace-separate
+// key value pairs for 'tailscale up' command. The value for boolean flags can
+// be omitted (default to true).
+func parseAcceptDNS(extraArgs string, acceptDNS bool) (string, bool) {
+	if !strings.Contains(extraArgs, "--accept-dns") {
+		return extraArgs, acceptDNS
+	}
+	// TODO(irbekrm): we should validate that TS_EXTRA_ARGS contains legit
+	// 'tailscale up' flag values separated by whitespace.
+	argsArr := strings.Fields(extraArgs)
+	i := -1
+	for key, val := range argsArr {
+		if strings.HasPrefix(val, "--accept-dns") {
+			i = key
+			break
+		}
+	}
+	if i == -1 {
+		return extraArgs, acceptDNS
+	}
+	a := strings.TrimSpace(argsArr[i])
+	var acceptDNSFromExtraArgsS string
+	keyval := strings.Split(a, "=")
+	if len(keyval) == 2 {
+		acceptDNSFromExtraArgsS = keyval[1]
+	} else if len(keyval) == 1 && keyval[0] == "--accept-dns" {
+		// If the arg is just --accept-dns, we assume it means true.
+		acceptDNSFromExtraArgsS = "true"
+	} else {
+		log.Printf("TS_EXTRA_ARGS contains --accept-dns, but it is not in the expected format --accept-dns=<true|false>, ignoring it")
+		return extraArgs, acceptDNS
+	}
+	acceptDNSFromExtraArgs, err := strconv.ParseBool(acceptDNSFromExtraArgsS)
+	if err != nil {
+		log.Printf("TS_EXTRA_ARGS contains --accept-dns=%q, which is not a valid boolean value, ignoring it", acceptDNSFromExtraArgsS)
+		return extraArgs, acceptDNS
+	}
+	if acceptDNSFromExtraArgs != acceptDNS {
+		log.Printf("TS_EXTRA_ARGS contains --accept-dns=%v, which overrides TS_ACCEPT_DNS=%v", acceptDNSFromExtraArgs, acceptDNS)
+	}
+	return strings.Join(append(argsArr[:i], argsArr[i+1:]...), " "), acceptDNSFromExtraArgs
 }
 
 func (s *settings) validate() error {
@@ -114,9 +257,29 @@ func (s *settings) validate() error {
 		return errors.New("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS is not supported in userspace mode")
 	}
 	if s.HealthCheckAddrPort != "" {
+		log.Printf("[warning] TS_HEALTHCHECK_ADDR_PORT is deprecated and will be removed in 1.82.0. Please use TS_ENABLE_HEALTH_CHECK and optionally TS_LOCAL_ADDR_PORT instead.")
 		if _, err := netip.ParseAddrPort(s.HealthCheckAddrPort); err != nil {
-			return fmt.Errorf("error parsing TS_HEALTH_CHECK_ADDR_PORT value %q: %w", s.HealthCheckAddrPort, err)
+			return fmt.Errorf("error parsing TS_HEALTHCHECK_ADDR_PORT value %q: %w", s.HealthCheckAddrPort, err)
 		}
+	}
+	if s.localMetricsEnabled() || s.localHealthEnabled() || s.EgressProxiesCfgPath != "" {
+		if _, err := netip.ParseAddrPort(s.LocalAddrPort); err != nil {
+			return fmt.Errorf("error parsing TS_LOCAL_ADDR_PORT value %q: %w", s.LocalAddrPort, err)
+		}
+	}
+	if s.DebugAddrPort != "" {
+		if _, err := netip.ParseAddrPort(s.DebugAddrPort); err != nil {
+			return fmt.Errorf("error parsing TS_DEBUG_ADDR_PORT value %q: %w", s.DebugAddrPort, err)
+		}
+	}
+	if s.HealthCheckEnabled && s.HealthCheckAddrPort != "" {
+		return errors.New("TS_HEALTHCHECK_ADDR_PORT is deprecated and will be removed in 1.82.0, use TS_ENABLE_HEALTH_CHECK and optionally TS_LOCAL_ADDR_PORT")
+	}
+	if s.EgressProxiesCfgPath != "" && !(s.InKubernetes && s.KubeSecret != "") {
+		return errors.New("TS_EGRESS_PROXIES_CONFIG_PATH is only supported for Tailscale running on Kubernetes")
+	}
+	if s.IngressProxiesCfgPath != "" && !(s.InKubernetes && s.KubeSecret != "") {
+		return errors.New("TS_INGRESS_PROXIES_CONFIG_PATH is only supported for Tailscale running on Kubernetes")
 	}
 	return nil
 }
@@ -124,50 +287,58 @@ func (s *settings) validate() error {
 // setupKube is responsible for doing any necessary configuration and checks to
 // ensure that tailscale state storage and authentication mechanism will work on
 // Kubernetes.
-func (cfg *settings) setupKube(ctx context.Context) error {
+func (cfg *settings) setupKube(ctx context.Context, kc *kubeClient) error {
 	if cfg.KubeSecret == "" {
 		return nil
 	}
 	canPatch, canCreate, err := kc.CheckSecretPermissions(ctx, cfg.KubeSecret)
 	if err != nil {
-		return fmt.Errorf("Some Kubernetes permissions are missing, please check your RBAC configuration: %v", err)
+		return fmt.Errorf("some Kubernetes permissions are missing, please check your RBAC configuration: %v", err)
 	}
 	cfg.KubernetesCanPatch = canPatch
+	kc.canPatch = canPatch
 
 	s, err := kc.GetSecret(ctx, cfg.KubeSecret)
-	if err != nil && kubeclient.IsNotFoundErr(err) && !canCreate {
-		return fmt.Errorf("Tailscale state Secret %s does not exist and we don't have permissions to create it. "+
-			"If you intend to store tailscale state elsewhere than a Kubernetes Secret, "+
-			"you can explicitly set TS_KUBE_SECRET env var to an empty string. "+
-			"Else ensure that RBAC is set up that allows the service account associated with this installation to create Secrets.", cfg.KubeSecret)
-	} else if err != nil && !kubeclient.IsNotFoundErr(err) {
-		return fmt.Errorf("Getting Tailscale state Secret %s: %v", cfg.KubeSecret, err)
-	}
-
-	if cfg.AuthKey == "" && !isOneStepConfig(cfg) {
-		if s == nil {
-			log.Print("TS_AUTHKEY not provided and kube secret does not exist, login will be interactive if needed.")
-			return nil
+	if err != nil {
+		if !kubeclient.IsNotFoundErr(err) {
+			return fmt.Errorf("getting Tailscale state Secret %s: %v", cfg.KubeSecret, err)
 		}
-		keyBytes, _ := s.Data["authkey"]
-		key := string(keyBytes)
 
-		if key != "" {
-			// This behavior of pulling authkeys from kube secrets was added
-			// at the same time as the patch permission, so we can enforce
-			// that we must be able to patch out the authkey after
-			// authenticating if you want to use this feature. This avoids
-			// us having to deal with the case where we might leave behind
-			// an unnecessary reusable authkey in a secret, like a rake in
-			// the grass.
-			if !cfg.KubernetesCanPatch {
-				return errors.New("authkey found in TS_KUBE_SECRET, but the pod doesn't have patch permissions on the secret to manage the authkey.")
-			}
-			cfg.AuthKey = key
-		} else {
-			log.Print("No authkey found in kube secret and TS_AUTHKEY not provided, login will be interactive if needed.")
+		if !canCreate {
+			return fmt.Errorf("tailscale state Secret %s does not exist and we don't have permissions to create it. "+
+				"If you intend to store tailscale state elsewhere than a Kubernetes Secret, "+
+				"you can explicitly set TS_KUBE_SECRET env var to an empty string. "+
+				"Else ensure that RBAC is set up that allows the service account associated with this installation to create Secrets.", cfg.KubeSecret)
 		}
 	}
+
+	// Return early if we already have an auth key.
+	if cfg.AuthKey != "" || isOneStepConfig(cfg) {
+		return nil
+	}
+
+	if s == nil {
+		log.Print("TS_AUTHKEY not provided and state Secret does not exist, login will be interactive if needed.")
+		return nil
+	}
+
+	keyBytes, _ := s.Data["authkey"]
+	key := string(keyBytes)
+
+	if key != "" {
+		// Enforce that we must be able to patch out the authkey after
+		// authenticating if you want to use this feature. This avoids
+		// us having to deal with the case where we might leave behind
+		// an unnecessary reusable authkey in a secret, like a rake in
+		// the grass.
+		if !cfg.KubernetesCanPatch {
+			return errors.New("authkey found in TS_KUBE_SECRET, but the pod doesn't have patch permissions on the Secret to manage the authkey.")
+		}
+		cfg.AuthKey = key
+	}
+
+	log.Print("No authkey found in state Secret and TS_AUTHKEY not provided, login will be interactive if needed.")
+
 	return nil
 }
 
@@ -199,13 +370,25 @@ func isOneStepConfig(cfg *settings) bool {
 // as an L3 proxy, proxying to an endpoint provided via one of the config env
 // vars.
 func isL3Proxy(cfg *settings) bool {
-	return cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress || cfg.EgressSvcsCfgPath != ""
+	return cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress || cfg.EgressProxiesCfgPath != "" || cfg.IngressProxiesCfgPath != ""
 }
 
 // hasKubeStateStore returns true if the state must be stored in a Kubernetes
 // Secret.
 func hasKubeStateStore(cfg *settings) bool {
 	return cfg.InKubernetes && cfg.KubernetesCanPatch && cfg.KubeSecret != ""
+}
+
+func (cfg *settings) localMetricsEnabled() bool {
+	return cfg.LocalAddrPort != "" && cfg.MetricsEnabled
+}
+
+func (cfg *settings) localHealthEnabled() bool {
+	return cfg.LocalAddrPort != "" && cfg.HealthCheckEnabled
+}
+
+func (cfg *settings) egressSvcsTerminateEPEnabled() bool {
+	return cfg.LocalAddrPort != "" && cfg.EgressProxiesCfgPath != ""
 }
 
 // defaultEnv returns the value of the given envvar name, or defVal if

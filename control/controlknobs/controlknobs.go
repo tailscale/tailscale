@@ -6,6 +6,8 @@
 package controlknobs
 
 import (
+	"fmt"
+	"reflect"
 	"sync/atomic"
 
 	"tailscale.com/syncs"
@@ -60,8 +62,9 @@ type Knobs struct {
 	// netfiltering, unless overridden by the user.
 	LinuxForceNfTables atomic.Bool
 
-	// SeamlessKeyRenewal is whether to enable the alpha functionality of
-	// renewing node keys without breaking connections.
+	// SeamlessKeyRenewal is whether to renew node keys without breaking connections.
+	// This is enabled by default in 1.90 and later, but we but we can remotely disable
+	// it from the control plane if there's a problem.
 	// http://go/seamless-key-renewal
 	SeamlessKeyRenewal atomic.Bool
 
@@ -96,13 +99,14 @@ type Knobs struct {
 	// allows us to disable the new behavior remotely if needed.
 	DisableLocalDNSOverrideViaNRPT atomic.Bool
 
-	// DisableCryptorouting indicates that the node should not use the
-	// magicsock crypto routing feature.
-	DisableCryptorouting atomic.Bool
-
 	// DisableCaptivePortalDetection is whether the node should not perform captive portal detection
 	// automatically when the network state changes.
 	DisableCaptivePortalDetection atomic.Bool
+
+	// DisableSkipStatusQueue is whether the node should disable skipping
+	// of queued netmap.NetworkMap between the controlclient and LocalBackend.
+	// See tailscale/tailscale#14768.
+	DisableSkipStatusQueue atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -125,13 +129,14 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		forceIPTables                        = has(tailcfg.NodeAttrLinuxMustUseIPTables)
 		forceNfTables                        = has(tailcfg.NodeAttrLinuxMustUseNfTables)
 		seamlessKeyRenewal                   = has(tailcfg.NodeAttrSeamlessKeyRenewal)
+		disableSeamlessKeyRenewal            = has(tailcfg.NodeAttrDisableSeamlessKeyRenewal)
 		probeUDPLifetime                     = has(tailcfg.NodeAttrProbeUDPLifetime)
 		appCStoreRoutes                      = has(tailcfg.NodeAttrStoreAppCRoutes)
 		userDialUseRoutes                    = has(tailcfg.NodeAttrUserDialUseRoutes)
 		disableSplitDNSWhenNoCustomResolvers = has(tailcfg.NodeAttrDisableSplitDNSWhenNoCustomResolvers)
 		disableLocalDNSOverrideViaNRPT       = has(tailcfg.NodeAttrDisableLocalDNSOverrideViaNRPT)
-		disableCryptorouting                 = has(tailcfg.NodeAttrDisableMagicSockCryptoRouting)
 		disableCaptivePortalDetection        = has(tailcfg.NodeAttrDisableCaptivePortalDetection)
+		disableSkipStatusQueue               = has(tailcfg.NodeAttrDisableSkipStatusQueue)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -151,14 +156,28 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.SilentDisco.Store(silentDisco)
 	k.LinuxForceIPTables.Store(forceIPTables)
 	k.LinuxForceNfTables.Store(forceNfTables)
-	k.SeamlessKeyRenewal.Store(seamlessKeyRenewal)
 	k.ProbeUDPLifetime.Store(probeUDPLifetime)
 	k.AppCStoreRoutes.Store(appCStoreRoutes)
 	k.UserDialUseRoutes.Store(userDialUseRoutes)
 	k.DisableSplitDNSWhenNoCustomResolvers.Store(disableSplitDNSWhenNoCustomResolvers)
 	k.DisableLocalDNSOverrideViaNRPT.Store(disableLocalDNSOverrideViaNRPT)
-	k.DisableCryptorouting.Store(disableCryptorouting)
 	k.DisableCaptivePortalDetection.Store(disableCaptivePortalDetection)
+	k.DisableSkipStatusQueue.Store(disableSkipStatusQueue)
+
+	// If both attributes are present, then "enable" should win.  This reflects
+	// the history of seamless key renewal.
+	//
+	// Before 1.90, seamless was a private alpha, opt-in feature.  Devices would
+	// only seamless do if customers opted in using the seamless renewal attr.
+	//
+	// In 1.90 and later, seamless is the default behaviour, and devices will use
+	// seamless unless explicitly told not to by control (e.g. if we discover
+	// a bug and want clients to use the prior behaviour).
+	//
+	// If a customer has opted in to the pre-1.90 seamless implementation, we
+	// don't want to switch it off for them -- we only want to switch it off for
+	// devices that haven't opted in.
+	k.SeamlessKeyRenewal.Store(seamlessKeyRenewal || !disableSeamlessKeyRenewal)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
@@ -167,25 +186,19 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 	if k == nil {
 		return nil
 	}
-	return map[string]any{
-		"DisableUPnP":                          k.DisableUPnP.Load(),
-		"KeepFullWGConfig":                     k.KeepFullWGConfig.Load(),
-		"RandomizeClientPort":                  k.RandomizeClientPort.Load(),
-		"OneCGNAT":                             k.OneCGNAT.Load(),
-		"ForceBackgroundSTUN":                  k.ForceBackgroundSTUN.Load(),
-		"DisableDeltaUpdates":                  k.DisableDeltaUpdates.Load(),
-		"PeerMTUEnable":                        k.PeerMTUEnable.Load(),
-		"DisableDNSForwarderTCPRetries":        k.DisableDNSForwarderTCPRetries.Load(),
-		"SilentDisco":                          k.SilentDisco.Load(),
-		"LinuxForceIPTables":                   k.LinuxForceIPTables.Load(),
-		"LinuxForceNfTables":                   k.LinuxForceNfTables.Load(),
-		"SeamlessKeyRenewal":                   k.SeamlessKeyRenewal.Load(),
-		"ProbeUDPLifetime":                     k.ProbeUDPLifetime.Load(),
-		"AppCStoreRoutes":                      k.AppCStoreRoutes.Load(),
-		"UserDialUseRoutes":                    k.UserDialUseRoutes.Load(),
-		"DisableSplitDNSWhenNoCustomResolvers": k.DisableSplitDNSWhenNoCustomResolvers.Load(),
-		"DisableLocalDNSOverrideViaNRPT":       k.DisableLocalDNSOverrideViaNRPT.Load(),
-		"DisableCryptorouting":                 k.DisableCryptorouting.Load(),
-		"DisableCaptivePortalDetection":        k.DisableCaptivePortalDetection.Load(),
+	ret := map[string]any{}
+	rt := reflect.TypeFor[Knobs]()
+	rv := reflect.ValueOf(k).Elem() // of *k
+	for i := 0; i < rt.NumField(); i++ {
+		name := rt.Field(i).Name
+		switch v := rv.Field(i).Addr().Interface().(type) {
+		case *atomic.Bool:
+			ret[name] = v.Load()
+		case *syncs.AtomicValue[opt.Bool]:
+			ret[name] = v.Load()
+		default:
+			panic(fmt.Sprintf("unknown field type %T for %v", v, name))
+		}
 	}
+	return ret
 }

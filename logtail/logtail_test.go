@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/go-json-experiment/json/jsontext"
-	"tailscale.com/envknob"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
 )
 
@@ -29,10 +29,11 @@ func TestFastShutdown(t *testing.T) {
 		func(w http.ResponseWriter, r *http.Request) {}))
 	defer testServ.Close()
 
-	l := NewLogger(Config{
+	logger := NewLogger(Config{
 		BaseURL: testServ.URL,
+		Bus:     eventbustest.NewBus(t),
 	}, t.Logf)
-	err := l.Shutdown(ctx)
+	err := logger.Shutdown(ctx)
 	if err != nil {
 		t.Error(err)
 	}
@@ -63,7 +64,10 @@ func NewLogtailTestHarness(t *testing.T) (*LogtailTestServer, *Logger) {
 
 	t.Cleanup(ts.srv.Close)
 
-	l := NewLogger(Config{BaseURL: ts.srv.URL}, t.Logf)
+	logger := NewLogger(Config{
+		BaseURL: ts.srv.URL,
+		Bus:     eventbustest.NewBus(t),
+	}, t.Logf)
 
 	// There is always an initial "logtail started" message
 	body := <-ts.uploaded
@@ -71,14 +75,14 @@ func NewLogtailTestHarness(t *testing.T) (*LogtailTestServer, *Logger) {
 		t.Errorf("unknown start logging statement: %q", string(body))
 	}
 
-	return &ts, l
+	return &ts, logger
 }
 
 func TestDrainPendingMessages(t *testing.T) {
-	ts, l := NewLogtailTestHarness(t)
+	ts, logger := NewLogtailTestHarness(t)
 
 	for range logLines {
-		l.Write([]byte("log line"))
+		logger.Write([]byte("log line"))
 	}
 
 	// all of the "log line" messages usually arrive at once, but poll if needed.
@@ -92,14 +96,14 @@ func TestDrainPendingMessages(t *testing.T) {
 		// if we never find count == logLines, the test will eventually time out.
 	}
 
-	err := l.Shutdown(context.Background())
+	err := logger.Shutdown(context.Background())
 	if err != nil {
 		t.Error(err)
 	}
 }
 
 func TestEncodeAndUploadMessages(t *testing.T) {
-	ts, l := NewLogtailTestHarness(t)
+	ts, logger := NewLogtailTestHarness(t)
 
 	tests := []struct {
 		name string
@@ -119,7 +123,7 @@ func TestEncodeAndUploadMessages(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		io.WriteString(l, tt.log)
+		io.WriteString(logger, tt.log)
 		body := <-ts.uploaded
 
 		data := unmarshalOne(t, body)
@@ -140,7 +144,7 @@ func TestEncodeAndUploadMessages(t *testing.T) {
 		}
 	}
 
-	err := l.Shutdown(context.Background())
+	err := logger.Shutdown(context.Background())
 	if err != nil {
 		t.Error(err)
 	}
@@ -316,90 +320,11 @@ func TestLoggerWriteResult(t *testing.T) {
 		t.Errorf("mismatch.\n got: %#q\nwant: %#q", back, want)
 	}
 }
-func TestRedact(t *testing.T) {
-	envknob.Setenv("TS_OBSCURE_LOGGED_IPS", "true")
-	tests := []struct {
-		in   string
-		want string
-	}{
-		// tests for ipv4 addresses
-		{
-			"120.100.30.47",
-			"120.100.x.x",
-		},
-		{
-			"192.167.0.1/65",
-			"192.167.x.x/65",
-		},
-		{
-			"node [5Btdd] d:e89a3384f526d251 now using 10.0.0.222:41641 mtu=1360 tx=d81a8a35a0ce",
-			"node [5Btdd] d:e89a3384f526d251 now using 10.0.x.x:41641 mtu=1360 tx=d81a8a35a0ce",
-		},
-		//tests for ipv6 addresses
-		{
-			"2001:0db8:85a3:0000:0000:8a2e:0370:7334",
-			"2001:0db8:x",
-		},
-		{
-			"2345:0425:2CA1:0000:0000:0567:5673:23b5",
-			"2345:0425:x",
-		},
-		{
-			"2601:645:8200:edf0::c9de/64",
-			"2601:645:x/64",
-		},
-		{
-			"node [5Btdd] d:e89a3384f526d251 now using 2051:0000:140F::875B:131C mtu=1360 tx=d81a8a35a0ce",
-			"node [5Btdd] d:e89a3384f526d251 now using 2051:0000:x mtu=1360 tx=d81a8a35a0ce",
-		},
-		{
-			"2601:645:8200:edf0::c9de/64 2601:645:8200:edf0:1ce9:b17d:71f5:f6a3/64",
-			"2601:645:x/64 2601:645:x/64",
-		},
-		//tests for tailscale ip addresses
-		{
-			"100.64.5.6",
-			"100.64.5.6",
-		},
-		{
-			"fd7a:115c:a1e0::/96",
-			"fd7a:115c:a1e0::/96",
-		},
-		//tests for ipv6 and ipv4 together
-		{
-			"192.167.0.1 2001:0db8:85a3:0000:0000:8a2e:0370:7334",
-			"192.167.x.x 2001:0db8:x",
-		},
-		{
-			"node [5Btdd] d:e89a3384f526d251 now using 10.0.0.222:41641 mtu=1360 tx=d81a8a35a0ce 2345:0425:2CA1::0567:5673:23b5",
-			"node [5Btdd] d:e89a3384f526d251 now using 10.0.x.x:41641 mtu=1360 tx=d81a8a35a0ce 2345:0425:x",
-		},
-		{
-			"100.64.5.6 2091:0db8:85a3:0000:0000:8a2e:0370:7334",
-			"100.64.5.6 2091:0db8:x",
-		},
-		{
-			"192.167.0.1 120.100.30.47 2041:0000:140F::875B:131B",
-			"192.167.x.x 120.100.x.x 2041:0000:x",
-		},
-		{
-			"fd7a:115c:a1e0::/96 192.167.0.1 2001:0db8:85a3:0000:0000:8a2e:0370:7334",
-			"fd7a:115c:a1e0::/96 192.167.x.x 2001:0db8:x",
-		},
-	}
-
-	for _, tt := range tests {
-		gotBuf := redactIPs([]byte(tt.in))
-		if string(gotBuf) != tt.want {
-			t.Errorf("for %q,\n got: %#q\nwant: %#q\n", tt.in, gotBuf, tt.want)
-		}
-	}
-}
 
 func TestAppendMetadata(t *testing.T) {
-	var l Logger
-	l.clock = tstest.NewClock(tstest.ClockOpts{Start: time.Date(2000, 01, 01, 0, 0, 0, 0, time.UTC)})
-	l.metricsDelta = func() string { return "metrics" }
+	var lg Logger
+	lg.clock = tstest.NewClock(tstest.ClockOpts{Start: time.Date(2000, 01, 01, 0, 0, 0, 0, time.UTC)})
+	lg.metricsDelta = func() string { return "metrics" }
 
 	for _, tt := range []struct {
 		skipClientTime bool
@@ -425,7 +350,7 @@ func TestAppendMetadata(t *testing.T) {
 		{procID: 1, procSeq: 2, errDetail: "error", errData: jsontext.Value(`["something","bad","happened"]`), level: 2,
 			want: `"logtail":{"client_time":"2000-01-01T00:00:00Z","proc_id":1,"proc_seq":2,"error":{"detail":"error","bad_data":["something","bad","happened"]}},"metrics":"metrics","v":2,`},
 	} {
-		got := string(l.appendMetadata(nil, tt.skipClientTime, tt.skipMetrics, tt.procID, tt.procSeq, tt.errDetail, tt.errData, tt.level))
+		got := string(lg.appendMetadata(nil, tt.skipClientTime, tt.skipMetrics, tt.procID, tt.procSeq, tt.errDetail, tt.errData, tt.level))
 		if got != tt.want {
 			t.Errorf("appendMetadata(%v, %v, %v, %v, %v, %v, %v):\n\tgot  %s\n\twant %s", tt.skipClientTime, tt.skipMetrics, tt.procID, tt.procSeq, tt.errDetail, tt.errData, tt.level, got, tt.want)
 		}
@@ -437,10 +362,10 @@ func TestAppendMetadata(t *testing.T) {
 }
 
 func TestAppendText(t *testing.T) {
-	var l Logger
-	l.clock = tstest.NewClock(tstest.ClockOpts{Start: time.Date(2000, 01, 01, 0, 0, 0, 0, time.UTC)})
-	l.metricsDelta = func() string { return "metrics" }
-	l.lowMem = true
+	var lg Logger
+	lg.clock = tstest.NewClock(tstest.ClockOpts{Start: time.Date(2000, 01, 01, 0, 0, 0, 0, time.UTC)})
+	lg.metricsDelta = func() string { return "metrics" }
+	lg.lowMem = true
 
 	for _, tt := range []struct {
 		text           string
@@ -457,7 +382,7 @@ func TestAppendText(t *testing.T) {
 		{text: "\b\f\n\r\t\"\\", want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"},"metrics":"metrics","text":"\b\f\n\r\t\"\\"}`},
 		{text: "x" + strings.Repeat("😐", maxSize), want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"},"metrics":"metrics","text":"x` + strings.Repeat("😐", 1023) + `…+1044484"}`},
 	} {
-		got := string(l.appendText(nil, []byte(tt.text), tt.skipClientTime, tt.procID, tt.procSeq, tt.level))
+		got := string(lg.appendText(nil, []byte(tt.text), tt.skipClientTime, tt.procID, tt.procSeq, tt.level))
 		if !strings.HasSuffix(got, "\n") {
 			t.Errorf("`%s` does not end with a newline", got)
 		}
@@ -472,10 +397,10 @@ func TestAppendText(t *testing.T) {
 }
 
 func TestAppendTextOrJSON(t *testing.T) {
-	var l Logger
-	l.clock = tstest.NewClock(tstest.ClockOpts{Start: time.Date(2000, 01, 01, 0, 0, 0, 0, time.UTC)})
-	l.metricsDelta = func() string { return "metrics" }
-	l.lowMem = true
+	var lg Logger
+	lg.clock = tstest.NewClock(tstest.ClockOpts{Start: time.Date(2000, 01, 01, 0, 0, 0, 0, time.UTC)})
+	lg.metricsDelta = func() string { return "metrics" }
+	lg.lowMem = true
 
 	for _, tt := range []struct {
 		in    string
@@ -494,7 +419,7 @@ func TestAppendTextOrJSON(t *testing.T) {
 		{in: `{ "fizz" : "buzz" , "logtail" : "duplicate" , "wizz" : "wuzz" }`, want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z","error":{"detail":"duplicate logtail member","bad_data":"duplicate"}}, "fizz" : "buzz" , "wizz" : "wuzz"}`},
 		{in: `{"long":"` + strings.Repeat("a", maxSize) + `"}`, want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z","error":{"detail":"entry too large: 262155 bytes","bad_data":"{\"long\":\"` + strings.Repeat("a", 43681) + `…+218465"}}}`},
 	} {
-		got := string(l.appendTextOrJSONLocked(nil, []byte(tt.in), tt.level))
+		got := string(lg.appendTextOrJSONLocked(nil, []byte(tt.in), tt.level))
 		if !strings.HasSuffix(got, "\n") {
 			t.Errorf("`%s` does not end with a newline", got)
 		}
@@ -536,21 +461,21 @@ var testdataTextLog = []byte(`netcheck: report: udp=true v6=false v6os=true mapv
 var testdataJSONLog = []byte(`{"end":"2024-04-08T21:39:15.715291586Z","nodeId":"nQRJBE7CNTRL","physicalTraffic":[{"dst":"127.x.x.x:2","src":"100.x.x.x:0","txBytes":148,"txPkts":1},{"dst":"127.x.x.x:2","src":"100.x.x.x:0","txBytes":148,"txPkts":1},{"dst":"98.x.x.x:1025","rxBytes":640,"rxPkts":5,"src":"100.x.x.x:0","txBytes":640,"txPkts":5},{"dst":"24.x.x.x:49973","rxBytes":640,"rxPkts":5,"src":"100.x.x.x:0","txBytes":640,"txPkts":5},{"dst":"73.x.x.x:41641","rxBytes":732,"rxPkts":6,"src":"100.x.x.x:0","txBytes":820,"txPkts":7},{"dst":"75.x.x.x:1025","rxBytes":640,"rxPkts":5,"src":"100.x.x.x:0","txBytes":640,"txPkts":5},{"dst":"75.x.x.x:41641","rxBytes":640,"rxPkts":5,"src":"100.x.x.x:0","txBytes":640,"txPkts":5},{"dst":"174.x.x.x:35497","rxBytes":13008,"rxPkts":98,"src":"100.x.x.x:0","txBytes":26688,"txPkts":150},{"dst":"47.x.x.x:41641","rxBytes":640,"rxPkts":5,"src":"100.x.x.x:0","txBytes":640,"txPkts":5},{"dst":"64.x.x.x:41641","rxBytes":640,"rxPkts":5,"src":"100.x.x.x:0","txBytes":640,"txPkts":5}],"start":"2024-04-08T21:39:11.099495616Z","virtualTraffic":[{"dst":"100.x.x.x:33008","proto":6,"src":"100.x.x.x:22","txBytes":1260,"txPkts":10},{"dst":"100.x.x.x:0","proto":1,"rxBytes":420,"rxPkts":5,"src":"100.x.x.x:0","txBytes":420,"txPkts":5},{"dst":"100.x.x.x:32984","proto":6,"src":"100.x.x.x:22","txBytes":1340,"txPkts":10},{"dst":"100.x.x.x:32998","proto":6,"src":"100.x.x.x:22","txBytes":1020,"txPkts":10},{"dst":"100.x.x.x:32994","proto":6,"src":"100.x.x.x:22","txBytes":1260,"txPkts":10},{"dst":"100.x.x.x:32980","proto":6,"src":"100.x.x.x:22","txBytes":1260,"txPkts":10},{"dst":"100.x.x.x:0","proto":1,"rxBytes":420,"rxPkts":5,"src":"100.x.x.x:0","txBytes":420,"txPkts":5},{"dst":"100.x.x.x:0","proto":1,"rxBytes":420,"rxPkts":5,"src":"100.x.x.x:0","txBytes":420,"txPkts":5},{"dst":"100.x.x.x:32950","proto":6,"src":"100.x.x.x:22","txBytes":1340,"txPkts":10},{"dst":"100.x.x.x:22","proto":6,"src":"100.x.x.x:53332","txBytes":60,"txPkts":1},{"dst":"100.x.x.x:0","proto":1,"src":"100.x.x.x:0","txBytes":420,"txPkts":5},{"dst":"100.x.x.x:0","proto":1,"rxBytes":420,"rxPkts":5,"src":"100.x.x.x:0","txBytes":420,"txPkts":5},{"dst":"100.x.x.x:32966","proto":6,"src":"100.x.x.x:22","txBytes":1260,"txPkts":10},{"dst":"100.x.x.x:22","proto":6,"src":"100.x.x.x:57882","txBytes":60,"txPkts":1},{"dst":"100.x.x.x:22","proto":6,"src":"100.x.x.x:53326","txBytes":60,"txPkts":1},{"dst":"100.x.x.x:22","proto":6,"src":"100.x.x.x:57892","txBytes":60,"txPkts":1},{"dst":"100.x.x.x:32934","proto":6,"src":"100.x.x.x:22","txBytes":8712,"txPkts":55},{"dst":"100.x.x.x:0","proto":1,"rxBytes":420,"rxPkts":5,"src":"100.x.x.x:0","txBytes":420,"txPkts":5},{"dst":"100.x.x.x:32942","proto":6,"src":"100.x.x.x:22","txBytes":1260,"txPkts":10},{"dst":"100.x.x.x:0","proto":1,"rxBytes":420,"rxPkts":5,"src":"100.x.x.x:0","txBytes":420,"txPkts":5},{"dst":"100.x.x.x:32964","proto":6,"src":"100.x.x.x:22","txBytes":1260,"txPkts":10},{"dst":"100.x.x.x:0","proto":1,"rxBytes":420,"rxPkts":5,"src":"100.x.x.x:0","txBytes":420,"txPkts":5},{"dst":"100.x.x.x:0","proto":1,"rxBytes":420,"rxPkts":5,"src":"100.x.x.x:0","txBytes":420,"txPkts":5},{"dst":"100.x.x.x:22","proto":6,"src":"100.x.x.x:37238","txBytes":60,"txPkts":1},{"dst":"100.x.x.x:22","proto":6,"src":"100.x.x.x:37252","txBytes":60,"txPkts":1}]}`)
 
 func BenchmarkWriteText(b *testing.B) {
-	var l Logger
-	l.clock = tstime.StdClock{}
-	l.buffer = discardBuffer{}
+	var lg Logger
+	lg.clock = tstime.StdClock{}
+	lg.buffer = discardBuffer{}
 	b.ReportAllocs()
 	for range b.N {
-		must.Get(l.Write(testdataTextLog))
+		must.Get(lg.Write(testdataTextLog))
 	}
 }
 
 func BenchmarkWriteJSON(b *testing.B) {
-	var l Logger
-	l.clock = tstime.StdClock{}
-	l.buffer = discardBuffer{}
+	var lg Logger
+	lg.clock = tstime.StdClock{}
+	lg.buffer = discardBuffer{}
 	b.ReportAllocs()
 	for range b.N {
-		must.Get(l.Write(testdataJSONLog))
+		must.Get(lg.Write(testdataJSONLog))
 	}
 }

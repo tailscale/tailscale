@@ -280,7 +280,7 @@ func TestConnMemoryOverhead(t *testing.T) {
 	growthTotal := int64(ms.HeapAlloc) - int64(ms0.HeapAlloc)
 	growthEach := float64(growthTotal) / float64(num)
 	t.Logf("Alloced %v bytes, %.2f B/each", growthTotal, growthEach)
-	const max = 2000
+	const max = 2048
 	if growthEach > max {
 		t.Errorf("allocated more than expected; want max %v bytes/each", max)
 	}

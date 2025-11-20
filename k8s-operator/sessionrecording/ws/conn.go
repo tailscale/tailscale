@@ -3,12 +3,13 @@
 
 //go:build !plan9
 
-// package ws has functionality to parse 'kubectl exec' sessions streamed using
+// package ws has functionality to parse 'kubectl exec/attach' sessions streamed using
 // WebSocket protocol.
 package ws
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,35 +21,56 @@ import (
 	"k8s.io/apimachinery/pkg/util/remotecommand"
 	"tailscale.com/k8s-operator/sessionrecording/tsrecorder"
 	"tailscale.com/sessionrecording"
-	"tailscale.com/util/multierr"
 )
 
 // New wraps the provided network connection and returns a connection whose reads and writes will get triggered as data is received on the hijacked connection.
-// The connection must be a hijacked connection for a 'kubectl exec' session using WebSocket protocol and a *.channel.k8s.io subprotocol.
+// The connection must be a hijacked connection for a 'kubectl exec/attach' session using WebSocket protocol and a *.channel.k8s.io subprotocol.
 // The hijacked connection is used to transmit *.channel.k8s.io streams between Kubernetes client ('kubectl') and the destination proxy controlled by Kubernetes.
 // Data read from the underlying network connection is data sent via one of the streams from the client to the container.
 // Data written to the underlying connection is data sent from the container to the client.
 // We parse the data and send everything for the stdout/stderr streams to the configured tsrecorder as an asciinema recording with the provided header.
 // https://github.com/kubernetes/enhancements/tree/master/keps/sig-api-machinery/4006-transition-spdy-to-websockets#proposal-new-remotecommand-sub-protocol-version---v5channelk8sio
-func New(c net.Conn, rec *tsrecorder.Client, ch sessionrecording.CastHeader, hasTerm bool, log *zap.SugaredLogger) net.Conn {
-	return &conn{
-		Conn:               c,
-		rec:                rec,
-		ch:                 ch,
-		hasTerm:            hasTerm,
-		log:                log,
-		initialTermSizeSet: make(chan struct{}, 1),
+func New(ctx context.Context, c net.Conn, rec *tsrecorder.Client, ch sessionrecording.CastHeader, hasTerm bool, log *zap.SugaredLogger) (net.Conn, error) {
+	lc := &conn{
+		Conn:                  c,
+		ctx:                   ctx,
+		rec:                   rec,
+		ch:                    ch,
+		hasTerm:               hasTerm,
+		log:                   log,
+		initialCastHeaderSent: make(chan struct{}, 1),
 	}
+
+	// if there is no term, we don't need to wait for a resize message
+	if !hasTerm {
+		var err error
+		lc.writeCastHeaderOnce.Do(func() {
+			// If this is a session with a terminal attached,
+			// we must wait for the terminal width and
+			// height to be parsed from a resize message
+			// before sending CastHeader, else tsrecorder
+			// will not be able to play this recording.
+			err = lc.rec.WriteCastHeader(ch)
+			close(lc.initialCastHeaderSent)
+		})
+		if err != nil {
+			return nil, fmt.Errorf("error writing CastHeader: %w", err)
+		}
+	}
+
+	return lc, nil
 }
 
 // conn is a wrapper around net.Conn. It reads the bytestream
-// for a 'kubectl exec' session, sends session recording data to the configured
+// for a 'kubectl exec/attach' session, sends session recording data to the configured
 // recorder and forwards the raw bytes to the original destination.
 // A new conn is created per session.
-// conn only knows to how to read a 'kubectl exec' session that is streamed using WebSocket protocol.
+// conn only knows to how to read a 'kubectl exec/attach' session that is streamed using WebSocket protocol.
 // https://www.rfc-editor.org/rfc/rfc6455
 type conn struct {
 	net.Conn
+
+	ctx context.Context
 	// rec knows how to send data to a tsrecorder instance.
 	rec *tsrecorder.Client
 
@@ -56,7 +78,7 @@ type conn struct {
 	// CastHeader must be sent before any payload. If the session has a
 	// terminal attached, the CastHeader must have '.Width' and '.Height'
 	// fields set for the tsrecorder UI to be able to play the recording.
-	// For 'kubectl exec' sessions, terminal width and height are sent as a
+	// For 'kubectl exec/attach' sessions, terminal width and height are sent as a
 	// resize message on resize stream from the client when the session
 	// starts as well as at any time the client detects a terminal change.
 	// We can intercept the resize message on Read calls. As there is no
@@ -72,15 +94,10 @@ type conn struct {
 	// writeCastHeaderOnce is used to ensure CastHeader gets sent to tsrecorder once.
 	writeCastHeaderOnce sync.Once
 	hasTerm             bool // whether the session has TTY attached
-	// initialTermSizeSet channel gets sent a value once, when the Read has
-	// received a resize message and set the initial terminal size. It must
-	// be set to a buffered channel to prevent Reads being blocked on the
-	// first stdout/stderr write reading from the channel.
-	initialTermSizeSet chan struct{}
-	// sendInitialTermSizeSetOnce is used to ensure that a value is sent to
-	// initialTermSizeSet channel only once, when the initial resize message
-	// is received.
-	sendInitialTermSizeSetOnce sync.Once
+	// initialCastHeaderSent is a boolean that is set to ensure that the cast
+	// header is the first thing that is streamed to the session recorder.
+	// Otherwise the stream will fail.
+	initialCastHeaderSent chan struct{}
 
 	log *zap.SugaredLogger
 
@@ -130,6 +147,8 @@ func (c *conn) Read(b []byte) (int, error) {
 		return 0, nil
 	}
 
+	// TODO(tomhjp): If we get multiple frames in a single Read with different
+	// types, we may parse the second frame with the wrong type.
 	typ := messageType(opcode(b))
 	if (typ == noOpcode && c.readMsgIsIncomplete()) || c.readBufHasIncompleteFragment() { // subsequent fragment
 		if typ, err = c.curReadMsgType(); err != nil {
@@ -139,6 +158,8 @@ func (c *conn) Read(b []byte) (int, error) {
 
 	// A control message can not be fragmented and we are not interested in
 	// these messages. Just return.
+	// TODO(tomhjp): If we get multiple frames in a single Read, we may skip
+	// some non-control messages.
 	if isControlMessage(typ) {
 		return n, nil
 	}
@@ -151,54 +172,65 @@ func (c *conn) Read(b []byte) (int, error) {
 		return n, nil
 	}
 
-	readMsg := &message{typ: typ} // start a new message...
-	// ... or pick up an already started one if the previous fragment was not final.
-	if c.readMsgIsIncomplete() || c.readBufHasIncompleteFragment() {
-		readMsg = c.currentReadMsg
-	}
-
 	if _, err := c.readBuf.Write(b[:n]); err != nil {
 		return 0, fmt.Errorf("[unexpected] error writing message contents to read buffer: %w", err)
 	}
 
-	ok, err := readMsg.Parse(c.readBuf.Bytes(), c.log)
-	if err != nil {
-		return 0, fmt.Errorf("error parsing message: %v", err)
-	}
-	if !ok { // incomplete fragment
-		return n, nil
-	}
-	c.readBuf.Next(len(readMsg.raw))
+	for c.readBuf.Len() != 0 {
+		readMsg := &message{typ: typ} // start a new message...
+		// ... or pick up an already started one if the previous fragment was not final.
+		if c.readMsgIsIncomplete() {
+			readMsg = c.currentReadMsg
+		}
 
-	if readMsg.isFinalized && !c.readMsgIsIncomplete() {
-		// Stream IDs for websocket streams are static.
-		// https://github.com/kubernetes/client-go/blob/v0.30.0-rc.1/tools/remotecommand/websocket.go#L218
-		if readMsg.streamID.Load() == remotecommand.StreamResize {
-			var msg tsrecorder.ResizeMsg
-			if err = json.Unmarshal(readMsg.payload, &msg); err != nil {
-				return 0, fmt.Errorf("error umarshalling resize message: %w", err)
-			}
+		ok, err := readMsg.Parse(c.readBuf.Bytes(), c.log)
+		if err != nil {
+			return 0, fmt.Errorf("error parsing message: %v", err)
+		}
+		if !ok { // incomplete fragment
+			return n, nil
+		}
+		c.readBuf.Next(len(readMsg.raw))
 
-			c.ch.Width = msg.Width
-			c.ch.Height = msg.Height
+		if readMsg.isFinalized && !c.readMsgIsIncomplete() {
+			// we want to send stream resize messages for terminal sessions
+			// Stream IDs for websocket streams are static.
+			// https://github.com/kubernetes/client-go/blob/v0.30.0-rc.1/tools/remotecommand/websocket.go#L218
+			if readMsg.streamID.Load() == remotecommand.StreamResize && c.hasTerm {
+				var msg tsrecorder.ResizeMsg
+				if err = json.Unmarshal(readMsg.payload, &msg); err != nil {
+					return 0, fmt.Errorf("error umarshalling resize message: %w", err)
+				}
 
-			// If this is initial resize message, the width and
-			// height will be sent in the CastHeader. If this is a
-			// subsequent resize message, we need to send asciinema
-			// resize message.
-			var isInitialResize bool
-			c.sendInitialTermSizeSetOnce.Do(func() {
-				isInitialResize = true
-				close(c.initialTermSizeSet) // unblock sending of CastHeader
-			})
-			if !isInitialResize {
-				if err := c.rec.WriteResize(c.ch.Height, c.ch.Width); err != nil {
-					return 0, fmt.Errorf("error writing resize message: %w", err)
+				c.ch.Width = msg.Width
+				c.ch.Height = msg.Height
+
+				var isInitialResize bool
+				c.writeCastHeaderOnce.Do(func() {
+					isInitialResize = true
+					// If this is a session with a terminal attached,
+					// we must wait for the terminal width and
+					// height to be parsed from a resize message
+					// before sending CastHeader, else tsrecorder
+					// will not be able to play this recording.
+					err = c.rec.WriteCastHeader(c.ch)
+					close(c.initialCastHeaderSent)
+				})
+				if err != nil {
+					return 0, fmt.Errorf("error writing CastHeader: %w", err)
+				}
+
+				if !isInitialResize {
+					if err := c.rec.WriteResize(msg.Height, msg.Width); err != nil {
+						return 0, fmt.Errorf("error writing resize message: %w", err)
+					}
 				}
 			}
 		}
+
+		c.currentReadMsg = readMsg
 	}
-	c.currentReadMsg = readMsg
+
 	return n, nil
 }
 
@@ -244,39 +276,33 @@ func (c *conn) Write(b []byte) (int, error) {
 		c.log.Errorf("write: parsing a message errored: %v", err)
 		return 0, fmt.Errorf("write: error parsing message: %v", err)
 	}
+
 	c.currentWriteMsg = writeMsg
 	if !ok { // incomplete fragment
 		return len(b), nil
 	}
+
 	c.writeBuf.Next(len(writeMsg.raw)) // advance frame
 
 	if len(writeMsg.payload) != 0 && writeMsg.isFinalized {
 		if writeMsg.streamID.Load() == remotecommand.StreamStdOut || writeMsg.streamID.Load() == remotecommand.StreamStdErr {
-			var err error
-			c.writeCastHeaderOnce.Do(func() {
-				// If this is a session with a terminal attached,
-				// we must wait for the terminal width and
-				// height to be parsed from a resize message
-				// before sending CastHeader, else tsrecorder
-				// will not be able to play this recording.
-				if c.hasTerm {
-					c.log.Debug("waiting for terminal size to be set before starting to send recorded data")
-					<-c.initialTermSizeSet
+			// we must wait for confirmation that the initial cast header was sent before proceeding with any more writes
+			select {
+			case <-c.ctx.Done():
+				return 0, c.ctx.Err()
+			case <-c.initialCastHeaderSent:
+				if err := c.rec.WriteOutput(writeMsg.payload); err != nil {
+					return 0, fmt.Errorf("error writing message to recorder: %w", err)
 				}
-				err = c.rec.WriteCastHeader(c.ch)
-			})
-			if err != nil {
-				return 0, fmt.Errorf("error writing CastHeader: %w", err)
-			}
-			if err := c.rec.WriteOutput(writeMsg.payload); err != nil {
-				return 0, fmt.Errorf("error writing message to recorder: %v", err)
 			}
 		}
 	}
+
 	_, err = c.Conn.Write(c.currentWriteMsg.raw)
 	if err != nil {
 		c.log.Errorf("write: error writing to conn: %v", err)
 	}
+
 	return len(b), nil
 }
 
@@ -289,7 +315,7 @@ func (c *conn) Close() error {
 	c.closed = true
 	connCloseErr := c.Conn.Close()
 	recCloseErr := c.rec.Close()
-	return multierr.New(connCloseErr, recCloseErr)
+	return errors.Join(connCloseErr, recCloseErr)
 }
 
 // writeBufHasIncompleteFragment returns true if the latest data message
@@ -321,6 +347,7 @@ func (c *conn) writeMsgIsIncomplete() bool {
 func (c *conn) readMsgIsIncomplete() bool {
 	return c.currentReadMsg != nil && !c.currentReadMsg.isFinalized
 }
+
 func (c *conn) curReadMsgType() (messageType, error) {
 	if c.currentReadMsg != nil {
 		return c.currentReadMsg.typ, nil

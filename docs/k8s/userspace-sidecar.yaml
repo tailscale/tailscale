@@ -27,3 +27,11 @@ spec:
           name: tailscale-auth
           key: TS_AUTHKEY
           optional: true
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.name
+    - name: POD_UID
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.uid

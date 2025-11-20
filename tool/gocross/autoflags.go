@@ -35,7 +35,7 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 		cc          = "cc"
 		targetOS    = cmp.Or(env.Get("GOOS", ""), nativeGOOS)
 		targetArch  = cmp.Or(env.Get("GOARCH", ""), nativeGOARCH)
-		buildFlags  = []string{"-trimpath"}
+		buildFlags  = []string{}
 		cgoCflags   = []string{"-O3", "-std=gnu11", "-g"}
 		cgoLdflags  []string
 		ldflags     []string
@@ -45,6 +45,10 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 	)
 	if len(argv) > 1 {
 		subcommand = argv[1]
+	}
+
+	if subcommand != "test" {
+		buildFlags = append(buildFlags, "-trimpath")
 	}
 
 	switch subcommand {
@@ -146,7 +150,11 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 			case env.IsSet("MACOSX_DEPLOYMENT_TARGET"):
 				xcodeFlags = append(xcodeFlags, "-mmacosx-version-min="+env.Get("MACOSX_DEPLOYMENT_TARGET", ""))
 			case env.IsSet("TVOS_DEPLOYMENT_TARGET"):
-				xcodeFlags = append(xcodeFlags, "-mtvos-version-min="+env.Get("TVOS_DEPLOYMENT_TARGET", ""))
+				if env.Get("TARGET_DEVICE_PLATFORM_NAME", "") == "appletvsimulator" {
+					xcodeFlags = append(xcodeFlags, "-mtvos-simulator-version-min="+env.Get("TVOS_DEPLOYMENT_TARGET", ""))
+				} else {
+					xcodeFlags = append(xcodeFlags, "-mtvos-version-min="+env.Get("TVOS_DEPLOYMENT_TARGET", ""))
+				}
 			default:
 				return nil, nil, fmt.Errorf("invoked by Xcode but couldn't figure out deployment target. Did Xcode change its envvars again?")
 			}

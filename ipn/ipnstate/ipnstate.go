@@ -216,6 +216,11 @@ type PeerStatusLite struct {
 }
 
 // PeerStatus describes a peer node and its current state.
+// WARNING: The fields in PeerStatus are merged by the AddPeer method in the StatusBuilder.
+// When adding a new field to PeerStatus, you must update AddPeer to handle merging
+// the new field. The AddPeer function is responsible for combining multiple updates
+// to the same peer, and any new field that is not merged properly may lead to
+// inconsistencies or lost data in the peer status.
 type PeerStatus struct {
 	ID        tailcfg.StableNodeID
 	PublicKey key.NodePublic
@@ -246,9 +251,10 @@ type PeerStatus struct {
 	PrimaryRoutes *views.Slice[netip.Prefix] `json:",omitempty"`
 
 	// Endpoints:
-	Addrs   []string
-	CurAddr string // one of Addrs, or unique if roaming
-	Relay   string // DERP region
+	Addrs     []string
+	CurAddr   string // one of Addrs, or unique if roaming
+	Relay     string // DERP region
+	PeerRelay string // peer relay address (ip:port:vni)
 
 	RxBytes        int64
 	TxBytes        int64
@@ -269,6 +275,12 @@ type PeerStatus struct {
 
 	// PeerAPIURL are the URLs of the node's PeerAPI servers.
 	PeerAPIURL []string
+
+	// TaildropTargetStatus represents the node's eligibility to have files shared to it.
+	TaildropTarget TaildropTargetStatus
+
+	// Reason why this peer cannot receive files. Empty if CanReceiveFiles=true
+	NoFileSharingReason string
 
 	// Capabilities are capabilities that the node has.
 	// They're free-form strings, but should be in the form of URLs/URIs
@@ -317,6 +329,21 @@ type PeerStatus struct {
 
 	Location *tailcfg.Location `json:",omitempty"`
 }
+
+type TaildropTargetStatus int
+
+const (
+	TaildropTargetUnknown TaildropTargetStatus = iota
+	TaildropTargetAvailable
+	TaildropTargetNoNetmapAvailable
+	TaildropTargetIpnStateNotRunning
+	TaildropTargetMissingCap
+	TaildropTargetOffline
+	TaildropTargetNoPeerInfo
+	TaildropTargetUnsupportedOS
+	TaildropTargetNoPeerAPI
+	TaildropTargetOwnedByOtherUser
+)
 
 // HasCap reports whether ps has the given capability.
 func (ps *PeerStatus) HasCap(cap tailcfg.NodeCapability) bool {
@@ -367,7 +394,7 @@ func (sb *StatusBuilder) MutateSelfStatus(f func(*PeerStatus)) {
 }
 
 // AddUser adds a user profile to the status.
-func (sb *StatusBuilder) AddUser(id tailcfg.UserID, up tailcfg.UserProfile) {
+func (sb *StatusBuilder) AddUser(id tailcfg.UserID, up tailcfg.UserProfileView) {
 	if sb.locked {
 		log.Printf("[unexpected] ipnstate: AddUser after Locked")
 		return
@@ -377,7 +404,7 @@ func (sb *StatusBuilder) AddUser(id tailcfg.UserID, up tailcfg.UserProfile) {
 		sb.st.User = make(map[tailcfg.UserID]tailcfg.UserProfile)
 	}
 
-	sb.st.User[id] = up
+	sb.st.User[id] = *up.AsStruct()
 }
 
 // AddIP adds a Tailscale IP address to the status.
@@ -424,6 +451,9 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	}
 	if v := st.Relay; v != "" {
 		e.Relay = v
+	}
+	if v := st.PeerRelay; v != "" {
+		e.PeerRelay = v
 	}
 	if v := st.UserID; v != 0 {
 		e.UserID = v
@@ -511,6 +541,9 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	}
 	if v := st.Capabilities; v != nil {
 		e.Capabilities = v
+	}
+	if v := st.TaildropTarget; v != TaildropTargetUnknown {
+		e.TaildropTarget = v
 	}
 	e.Location = st.Location
 }
@@ -650,6 +683,8 @@ func osEmoji(os string) string {
 		return "🐡"
 	case "illumos":
 		return "☀️"
+	case "solaris":
+		return "🌤️"
 	}
 	return "👽"
 }
@@ -666,9 +701,16 @@ type PingResult struct {
 	Err            string
 	LatencySeconds float64
 
-	// Endpoint is the ip:port if direct UDP was used.
-	// It is not currently set for TSMP pings.
+	// Endpoint is a string of the form "{ip}:{port}" if direct UDP was used. It
+	// is not currently set for TSMP.
 	Endpoint string
+
+	// PeerRelay is a string of the form "{ip}:{port}:vni:{vni}" if a peer
+	// relay was used. It is not currently set for TSMP. Note that this field
+	// is not omitted during JSON encoding if it contains a zero value. This is
+	// done for consistency with the Endpoint field; this structure is exposed
+	// externally via localAPI, so we want to maintain the existing convention.
+	PeerRelay string
 
 	// DERPRegionID is non-zero DERP region ID if DERP was used.
 	// It is not currently set for TSMP pings.
@@ -704,6 +746,7 @@ func (pr *PingResult) ToPingResponse(pingType tailcfg.PingType) *tailcfg.PingRes
 		Err:            pr.Err,
 		LatencySeconds: pr.LatencySeconds,
 		Endpoint:       pr.Endpoint,
+		PeerRelay:      pr.PeerRelay,
 		DERPRegionID:   pr.DERPRegionID,
 		DERPRegionCode: pr.DERPRegionCode,
 		PeerAPIPort:    pr.PeerAPIPort,

@@ -6,10 +6,9 @@
 package cstruct
 
 import (
+	"encoding/binary"
 	"errors"
 	"io"
-
-	"github.com/josharian/native"
 )
 
 // Size of a pointer-typed value, in bits
@@ -120,7 +119,7 @@ func (d *Decoder) Uint16() uint16 {
 		d.err = err
 		return 0
 	}
-	return native.Endian.Uint16(d.dbuf[0:2])
+	return binary.NativeEndian.Uint16(d.dbuf[0:2])
 }
 
 // Uint32 returns a uint32 decoded from the buffer.
@@ -133,7 +132,7 @@ func (d *Decoder) Uint32() uint32 {
 		d.err = err
 		return 0
 	}
-	return native.Endian.Uint32(d.dbuf[0:4])
+	return binary.NativeEndian.Uint32(d.dbuf[0:4])
 }
 
 // Uint64 returns a uint64 decoded from the buffer.
@@ -146,7 +145,7 @@ func (d *Decoder) Uint64() uint64 {
 		d.err = err
 		return 0
 	}
-	return native.Endian.Uint64(d.dbuf[0:8])
+	return binary.NativeEndian.Uint64(d.dbuf[0:8])
 }
 
 // Uintptr returns a uintptr decoded from the buffer.

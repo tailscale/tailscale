@@ -19,18 +19,21 @@ func (src *Persist) Clone() *Persist {
 	}
 	dst := new(Persist)
 	*dst = *src
+	if src.AttestationKey != nil {
+		dst.AttestationKey = src.AttestationKey.Clone()
+	}
 	dst.DisallowedTKAStateIDs = append(src.DisallowedTKAStateIDs[:0:0], src.DisallowedTKAStateIDs...)
 	return dst
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PersistCloneNeedsRegeneration = Persist(struct {
-	_                               structs.Incomparable
-	LegacyFrontendPrivateMachineKey key.MachinePrivate
-	PrivateNodeKey                  key.NodePrivate
-	OldPrivateNodeKey               key.NodePrivate
-	UserProfile                     tailcfg.UserProfile
-	NetworkLockKey                  key.NLPrivate
-	NodeID                          tailcfg.StableNodeID
-	DisallowedTKAStateIDs           []string
+	_                     structs.Incomparable
+	PrivateNodeKey        key.NodePrivate
+	OldPrivateNodeKey     key.NodePrivate
+	UserProfile           tailcfg.UserProfile
+	NetworkLockKey        key.NLPrivate
+	NodeID                tailcfg.StableNodeID
+	AttestationKey        key.HardwareAttestationKey
+	DisallowedTKAStateIDs []string
 }{})

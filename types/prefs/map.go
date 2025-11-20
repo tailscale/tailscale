@@ -133,15 +133,15 @@ func (mv MapView[K, V]) Equal(mv2 MapView[K, V]) bool {
 	return mv.ж.Equal(*mv2.ж)
 }
 
-// MarshalJSONV2 implements [jsonv2.MarshalerV2].
-func (mv MapView[K, V]) MarshalJSONV2(out *jsontext.Encoder, opts jsonv2.Options) error {
-	return mv.ж.MarshalJSONV2(out, opts)
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (mv MapView[K, V]) MarshalJSONTo(out *jsontext.Encoder) error {
+	return mv.ж.MarshalJSONTo(out)
 }
 
-// UnmarshalJSONV2 implements [jsonv2.UnmarshalerV2].
-func (mv *MapView[K, V]) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) error {
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (mv *MapView[K, V]) UnmarshalJSONFrom(in *jsontext.Decoder) error {
 	var x Map[K, V]
-	if err := x.UnmarshalJSONV2(in, opts); err != nil {
+	if err := x.UnmarshalJSONFrom(in); err != nil {
 		return err
 	}
 	mv.ж = &x
@@ -150,10 +150,10 @@ func (mv *MapView[K, V]) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Optio
 
 // MarshalJSON implements [json.Marshaler].
 func (mv MapView[K, V]) MarshalJSON() ([]byte, error) {
-	return jsonv2.Marshal(mv) // uses MarshalJSONV2
+	return jsonv2.Marshal(mv) // uses MarshalJSONTo
 }
 
 // UnmarshalJSON implements [json.Unmarshaler].
 func (mv *MapView[K, V]) UnmarshalJSON(b []byte) error {
-	return jsonv2.Unmarshal(b, mv) // uses UnmarshalJSONV2
+	return jsonv2.Unmarshal(b, mv) // uses UnmarshalJSONFrom
 }

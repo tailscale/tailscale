@@ -1,13 +1,16 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_logtail
+
 package logtail
 
 import (
 	"bytes"
 	"errors"
 	"fmt"
-	"sync"
+
+	"tailscale.com/syncs"
 )
 
 type Buffer interface {
@@ -34,7 +37,7 @@ type memBuffer struct {
 	next    []byte
 	pending chan qentry
 
-	dropMu    sync.Mutex
+	dropMu    syncs.Mutex
 	dropCount int
 }
 

@@ -35,6 +35,12 @@ type Resolver struct {
 	//
 	// As of 2022-09-08, BootstrapResolution is not yet used.
 	BootstrapResolution []netip.Addr `json:",omitempty"`
+
+	// UseWithExitNode designates that this resolver should continue to be used when an
+	// exit node is in use. Normally, DNS resolution is delegated to the exit node but
+	// there are situations where it is preferable to still use a Split DNS server and/or
+	// global DNS server instead of the exit node.
+	UseWithExitNode bool `json:",omitempty"`
 }
 
 // IPPort returns r.Addr as an IP address and port if either
@@ -64,5 +70,7 @@ func (r *Resolver) Equal(other *Resolver) bool {
 		return true
 	}
 
-	return r.Addr == other.Addr && slices.Equal(r.BootstrapResolution, other.BootstrapResolution)
+	return r.Addr == other.Addr &&
+		slices.Equal(r.BootstrapResolution, other.BootstrapResolution) &&
+		r.UseWithExitNode == other.UseWithExitNode
 }

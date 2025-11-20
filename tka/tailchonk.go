@@ -1,19 +1,26 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_tailnetlock
+
 package tka
 
 import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
 	"tailscale.com/atomicfile"
+	"tailscale.com/tstime"
+	"tailscale.com/util/testenv"
 )
 
 // Chonk implementations provide durable storage for AUMs and other
@@ -71,38 +78,69 @@ type CompactableChonk interface {
 	// PurgeAUMs permanently and irrevocably deletes the specified
 	// AUMs from storage.
 	PurgeAUMs(hashes []AUMHash) error
+
+	// RemoveAll permanently and completely clears the TKA state. This should
+	// be called when the user disables Tailnet Lock.
+	RemoveAll() error
 }
 
 // Mem implements in-memory storage of TKA state, suitable for
-// tests.
+// tests or cases where filesystem storage is unavailable.
 //
 // Mem implements the Chonk interface.
+//
+// Mem is thread-safe.
 type Mem struct {
-	l           sync.RWMutex
+	mu          sync.RWMutex
 	aums        map[AUMHash]AUM
+	commitTimes map[AUMHash]time.Time
+	clock       tstime.Clock
+
+	// parentIndex is a map of AUMs to the AUMs for which they are
+	// the parent.
+	//
+	// For example, if parent index is {1 -> {2, 3, 4}}, that means
+	// that AUMs 2, 3, 4 all have aum.PrevAUMHash = 1.
 	parentIndex map[AUMHash][]AUMHash
 
 	lastActiveAncestor *AUMHash
 }
 
+// ChonkMem returns an implementation of Chonk which stores TKA state
+// in-memory.
+func ChonkMem() *Mem {
+	return &Mem{
+		clock: tstime.DefaultClock{},
+	}
+}
+
+// SetClock sets the clock used by [Mem]. This is only for use in tests,
+// and will panic if called from non-test code.
+func (c *Mem) SetClock(clock tstime.Clock) {
+	if !testenv.InTest() {
+		panic("used SetClock in non-test code")
+	}
+	c.clock = clock
+}
+
 func (c *Mem) SetLastActiveAncestor(hash AUMHash) error {
-	c.l.Lock()
-	defer c.l.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.lastActiveAncestor = &hash
 	return nil
 }
 
 func (c *Mem) LastActiveAncestor() (*AUMHash, error) {
-	c.l.RLock()
-	defer c.l.RUnlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.lastActiveAncestor, nil
 }
 
 // Heads returns AUMs for which there are no children. In other
 // words, the latest AUM in all chains (the 'leaf').
 func (c *Mem) Heads() ([]AUM, error) {
-	c.l.RLock()
-	defer c.l.RUnlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	out := make([]AUM, 0, 6)
 
 	// An AUM is a 'head' if there are no nodes for which it is the parent.
@@ -116,8 +154,8 @@ func (c *Mem) Heads() ([]AUM, error) {
 
 // AUM returns the AUM with the specified digest.
 func (c *Mem) AUM(hash AUMHash) (AUM, error) {
-	c.l.RLock()
-	defer c.l.RUnlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	aum, ok := c.aums[hash]
 	if !ok {
 		return AUM{}, os.ErrNotExist
@@ -125,24 +163,11 @@ func (c *Mem) AUM(hash AUMHash) (AUM, error) {
 	return aum, nil
 }
 
-// Orphans returns all AUMs which do not have a parent.
-func (c *Mem) Orphans() ([]AUM, error) {
-	c.l.RLock()
-	defer c.l.RUnlock()
-	out := make([]AUM, 0, 6)
-	for _, a := range c.aums {
-		if _, ok := a.Parent(); !ok {
-			out = append(out, a)
-		}
-	}
-	return out, nil
-}
-
 // ChildAUMs returns all AUMs with a specified previous
 // AUM hash.
 func (c *Mem) ChildAUMs(prevAUMHash AUMHash) ([]AUM, error) {
-	c.l.RLock()
-	defer c.l.RUnlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	out := make([]AUM, 0, 6)
 	for _, entry := range c.parentIndex[prevAUMHash] {
 		out = append(out, c.aums[entry])
@@ -156,17 +181,19 @@ func (c *Mem) ChildAUMs(prevAUMHash AUMHash) ([]AUM, error) {
 // as the rest of the TKA implementation assumes that only
 // verified AUMs are stored.
 func (c *Mem) CommitVerifiedAUMs(updates []AUM) error {
-	c.l.Lock()
-	defer c.l.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.aums == nil {
 		c.parentIndex = make(map[AUMHash][]AUMHash, 64)
 		c.aums = make(map[AUMHash]AUM, 64)
+		c.commitTimes = make(map[AUMHash]time.Time, 64)
 	}
 
 updateLoop:
 	for _, aum := range updates {
 		aumHash := aum.Hash()
 		c.aums[aumHash] = aum
+		c.commitTimes[aumHash] = c.clock.Now()
 
 		parent, ok := aum.Parent()
 		if ok {
@@ -177,6 +204,71 @@ updateLoop:
 			}
 			c.parentIndex[parent] = append(c.parentIndex[parent], aumHash)
 		}
+	}
+
+	return nil
+}
+
+// RemoveAll permanently and completely clears the TKA state.
+func (c *Mem) RemoveAll() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.aums = nil
+	c.commitTimes = nil
+	c.parentIndex = nil
+	c.lastActiveAncestor = nil
+	return nil
+}
+
+// AllAUMs returns all AUMs stored in the chonk.
+func (c *Mem) AllAUMs() ([]AUMHash, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return slices.Collect(maps.Keys(c.aums)), nil
+}
+
+// CommitTime returns the time at which the AUM was committed.
+//
+// If the AUM does not exist, then os.ErrNotExist is returned.
+func (c *Mem) CommitTime(h AUMHash) (time.Time, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	t, ok := c.commitTimes[h]
+	if ok {
+		return t, nil
+	} else {
+		return time.Time{}, os.ErrNotExist
+	}
+}
+
+// PurgeAUMs marks the specified AUMs for deletion from storage.
+func (c *Mem) PurgeAUMs(hashes []AUMHash) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, h := range hashes {
+		// Remove the deleted AUM from the list of its parents' children.
+		//
+		// However, we leave the list of this AUM's children in parentIndex,
+		// so we can find them later in ChildAUMs().
+		if aum, ok := c.aums[h]; ok {
+			parent, hasParent := aum.Parent()
+			if hasParent {
+				c.parentIndex[parent] = slices.DeleteFunc(
+					c.parentIndex[parent],
+					func(other AUMHash) bool { return bytes.Equal(h[:], other[:]) },
+				)
+				if len(c.parentIndex[parent]) == 0 {
+					delete(c.parentIndex, parent)
+				}
+			}
+		}
+
+		// Delete this AUM from the list of AUMs and commit times.
+		delete(c.aums, h)
+		delete(c.commitTimes, h)
 	}
 
 	return nil
@@ -193,6 +285,10 @@ type FS struct {
 // ChonkDir returns an implementation of Chonk which uses the
 // given directory to store TKA state.
 func ChonkDir(dir string) (*FS, error) {
+	if err := os.MkdirAll(dir, 0755); err != nil && !os.IsExist(err) {
+		return nil, fmt.Errorf("creating chonk root dir: %v", err)
+	}
+
 	stat, err := os.Stat(dir)
 	if err != nil {
 		return nil, err
@@ -217,10 +313,14 @@ func ChonkDir(dir string) (*FS, error) {
 // CBOR was chosen because we are already using it and it serializes
 // much smaller than JSON for AUMs. The 'keyasint' thing isn't essential
 // but again it saves a bunch of bytes.
+//
+// We have removed the following fields from fsHashInfo, but they may be
+// present in data stored in existing deployments. Do not reuse these values,
+// to avoid getting unexpected values from legacy data:
+//   - cbor:1, Children
 type fsHashInfo struct {
-	Children    []AUMHash `cbor:"1,keyasint"`
-	AUM         *AUM      `cbor:"2,keyasint"`
-	CreatedUnix int64     `cbor:"3,keyasint,omitempty"`
+	AUM         *AUM  `cbor:"2,keyasint"`
+	CreatedUnix int64 `cbor:"3,keyasint,omitempty"`
 
 	// PurgedUnix is set when the AUM is deleted. The value is
 	// the unix epoch at the time it was deleted.
@@ -296,32 +396,15 @@ func (c *FS) ChildAUMs(prevAUMHash AUMHash) ([]AUM, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	info, err := c.get(prevAUMHash)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// not knowing about this hash is not an error
-			return nil, nil
-		}
-		return nil, err
-	}
-	// NOTE(tom): We don't check PurgedUnix here because 'purged'
-	// only applies to that specific AUM (i.e. info.AUM) and not to
-	// any information about children stored against that hash.
+	var out []AUM
 
-	out := make([]AUM, len(info.Children))
-	for i, h := range info.Children {
-		c, err := c.get(h)
-		if err != nil {
-			// We expect any AUM recorded as a child on its parent to exist.
-			return nil, fmt.Errorf("reading child %d of %x: %v", i, h, err)
+	err := c.scanHashes(func(info *fsHashInfo) {
+		if info.AUM != nil && bytes.Equal(info.AUM.PrevAUMHash, prevAUMHash[:]) {
+			out = append(out, *info.AUM)
 		}
-		if c.AUM == nil || c.PurgedUnix > 0 {
-			return nil, fmt.Errorf("child %d of %x: AUM not stored", i, h)
-		}
-		out[i] = *c.AUM
-	}
+	})
 
-	return out, nil
+	return out, err
 }
 
 func (c *FS) get(h AUMHash) (*fsHashInfo, error) {
@@ -357,13 +440,50 @@ func (c *FS) Heads() ([]AUM, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	out := make([]AUM, 0, 6) // 6 is arbitrary.
-	err := c.scanHashes(func(info *fsHashInfo) {
-		if len(info.Children) == 0 && info.AUM != nil && info.PurgedUnix == 0 {
-			out = append(out, *info.AUM)
+	// Scan the complete list of AUMs, and build a list of all parent hashes.
+	// This tells us which AUMs have children.
+	var parentHashes []AUMHash
+
+	allAUMs, err := c.AllAUMs()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, h := range allAUMs {
+		aum, err := c.AUM(h)
+		if err != nil {
+			return nil, err
 		}
-	})
-	return out, err
+		parent, hasParent := aum.Parent()
+		if !hasParent {
+			continue
+		}
+		if !slices.Contains(parentHashes, parent) {
+			parentHashes = append(parentHashes, parent)
+		}
+	}
+
+	// Now scan a second time, and only include AUMs which weren't marked as
+	// the parent of any other AUM.
+	out := make([]AUM, 0, 6) // 6 is arbitrary.
+
+	for _, h := range allAUMs {
+		if slices.Contains(parentHashes, h) {
+			continue
+		}
+		aum, err := c.AUM(h)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, aum)
+	}
+
+	return out, nil
+}
+
+// RemoveAll permanently and completely clears the TKA state.
+func (c *FS) RemoveAll() error {
+	return os.RemoveAll(c.base)
 }
 
 // AllAUMs returns all AUMs stored in the chonk.
@@ -373,7 +493,7 @@ func (c *FS) AllAUMs() ([]AUMHash, error) {
 
 	out := make([]AUMHash, 0, 6) // 6 is arbitrary.
 	err := c.scanHashes(func(info *fsHashInfo) {
-		if info.AUM != nil && info.PurgedUnix == 0 {
+		if info.AUM != nil {
 			out = append(out, info.AUM.Hash())
 		}
 	})
@@ -394,13 +514,23 @@ func (c *FS) scanHashes(eachHashInfo func(*fsHashInfo)) error {
 			return fmt.Errorf("reading prefix dir: %v", err)
 		}
 		for _, file := range files {
+			// Ignore files whose names aren't valid AUM hashes, which may be
+			// temporary files which are partway through being written, or other
+			// files added by the OS (like .DS_Store) which we can ignore.
+			// TODO(alexc): it might be useful to append a suffix like `.aum` to
+			// filenames, so we can more easily distinguish between AUMs and
+			// arbitrary other files.
 			var h AUMHash
 			if err := h.UnmarshalText([]byte(file.Name())); err != nil {
-				return fmt.Errorf("invalid aum file: %s: %w", file.Name(), err)
+				log.Printf("ignoring unexpected non-AUM: %s: %v", file.Name(), err)
+				continue
 			}
 			info, err := c.get(h)
 			if err != nil {
 				return fmt.Errorf("reading %x: %v", h, err)
+			}
+			if info.PurgedUnix > 0 {
+				continue
 			}
 
 			eachHashInfo(info)
@@ -456,24 +586,6 @@ func (c *FS) CommitVerifiedAUMs(updates []AUM) error {
 
 	for i, aum := range updates {
 		h := aum.Hash()
-		// We keep track of children against their parent so that
-		// ChildAUMs() do not need to scan all AUMs.
-		parent, hasParent := aum.Parent()
-		if hasParent {
-			err := c.commit(parent, func(info *fsHashInfo) {
-				// Only add it if its not already there.
-				for i := range info.Children {
-					if info.Children[i] == h {
-						return
-					}
-				}
-				info.Children = append(info.Children, h)
-			})
-			if err != nil {
-				return fmt.Errorf("committing update[%d] to parent %x: %v", i, parent, err)
-			}
-		}
-
 		err := c.commit(h, func(info *fsHashInfo) {
 			info.PurgedUnix = 0 // just in-case it was set for some reason
 			info.AUM = &aum
@@ -576,7 +688,7 @@ const (
 )
 
 // markActiveChain marks AUMs in the active chain.
-// All AUMs that are within minChain ancestors of head are
+// All AUMs that are within minChain ancestors of head, or are marked as young, are
 // marked retainStateActive, and all remaining ancestors are
 // marked retainStateCandidate.
 //
@@ -602,27 +714,30 @@ func markActiveChain(storage Chonk, verdict map[AUMHash]retainState, minChain in
 				// We've reached the end of the chain we have stored.
 				return h, nil
 			}
-			return AUMHash{}, fmt.Errorf("reading active chain (retainStateActive) (%d): %w", i, err)
+			return AUMHash{}, fmt.Errorf("reading active chain (retainStateActive) (%d, %v): %w", i, parent, err)
 		}
 	}
 
 	// If we got this far, we have at least minChain AUMs stored, and minChain number
 	// of ancestors have been marked for retention. We now continue to iterate backwards
-	// till we find an AUM which we can compact to (a Checkpoint AUM).
+	// till we find an AUM which we can compact to: either a Checkpoint AUM which is old
+	// enough, or the genesis AUM.
 	for {
 		h := next.Hash()
 		verdict[h] |= retainStateActive
-		if next.MessageKind == AUMCheckpoint {
-			lastActiveAncestor = h
-			break
-		}
 
 		parent, hasParent := next.Parent()
-		if !hasParent {
-			return AUMHash{}, errors.New("reached genesis AUM without finding an appropriate lastActiveAncestor")
+		isYoung := verdict[h]&retainStateYoung != 0
+
+		if next.MessageKind == AUMCheckpoint {
+			lastActiveAncestor = h
+			if !isYoung || !hasParent {
+				break
+			}
 		}
+
 		if next, err = storage.AUM(parent); err != nil {
-			return AUMHash{}, fmt.Errorf("searching for compaction target: %w", err)
+			return AUMHash{}, fmt.Errorf("searching for compaction target (%v): %w", parent, err)
 		}
 	}
 
@@ -638,7 +753,7 @@ func markActiveChain(storage Chonk, verdict map[AUMHash]retainState, minChain in
 				// We've reached the end of the chain we have stored.
 				break
 			}
-			return AUMHash{}, fmt.Errorf("reading active chain (retainStateCandidate): %w", err)
+			return AUMHash{}, fmt.Errorf("reading active chain (retainStateCandidate, %v): %w", parent, err)
 		}
 	}
 
@@ -676,7 +791,7 @@ func markAncestorIntersectionAUMs(storage Chonk, verdict map[AUMHash]retainState
 	toScan := make([]AUMHash, 0, len(verdict))
 	for h, v := range verdict {
 		if (v & retainAUMMask) == 0 {
-			continue // not marked for retention, so dont need to consider it
+			continue // not marked for retention, so don't need to consider it
 		}
 		if h == candidateAncestor {
 			continue
@@ -750,7 +865,7 @@ func markAncestorIntersectionAUMs(storage Chonk, verdict map[AUMHash]retainState
 	if didAdjustCandidateAncestor {
 		var next AUM
 		if next, err = storage.AUM(candidateAncestor); err != nil {
-			return AUMHash{}, fmt.Errorf("searching for compaction target: %w", err)
+			return AUMHash{}, fmt.Errorf("searching for compaction target (%v): %w", candidateAncestor, err)
 		}
 
 		for {
@@ -766,7 +881,7 @@ func markAncestorIntersectionAUMs(storage Chonk, verdict map[AUMHash]retainState
 				return AUMHash{}, errors.New("reached genesis AUM without finding an appropriate candidateAncestor")
 			}
 			if next, err = storage.AUM(parent); err != nil {
-				return AUMHash{}, fmt.Errorf("searching for compaction target: %w", err)
+				return AUMHash{}, fmt.Errorf("searching for compaction target (%v): %w", parent, err)
 			}
 		}
 	}
@@ -779,7 +894,7 @@ func markDescendantAUMs(storage Chonk, verdict map[AUMHash]retainState) error {
 	toScan := make([]AUMHash, 0, len(verdict))
 	for h, v := range verdict {
 		if v&retainAUMMask == 0 {
-			continue // not marked, so dont need to mark descendants
+			continue // not marked, so don't need to mark descendants
 		}
 		toScan = append(toScan, h)
 	}
@@ -825,11 +940,11 @@ func Compact(storage CompactableChonk, head AUMHash, opts CompactionOptions) (la
 		verdict[h] = 0
 	}
 
-	if lastActiveAncestor, err = markActiveChain(storage, verdict, opts.MinChain, head); err != nil {
-		return AUMHash{}, fmt.Errorf("marking active chain: %w", err)
-	}
 	if err := markYoungAUMs(storage, verdict, opts.MinAge); err != nil {
 		return AUMHash{}, fmt.Errorf("marking young AUMs: %w", err)
+	}
+	if lastActiveAncestor, err = markActiveChain(storage, verdict, opts.MinChain, head); err != nil {
+		return AUMHash{}, fmt.Errorf("marking active chain: %w", err)
 	}
 	if err := markDescendantAUMs(storage, verdict); err != nil {
 		return AUMHash{}, fmt.Errorf("marking descendant AUMs: %w", err)

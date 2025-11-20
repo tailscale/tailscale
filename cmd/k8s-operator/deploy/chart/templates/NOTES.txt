@@ -1,0 +1,27 @@
+You have successfully installed the Tailscale Kubernetes Operator!
+
+Once connected, the operator should appear as a device within the Tailscale admin console:
+https://login.tailscale.com/admin/machines
+
+If you have not used the Tailscale operator before, here are some examples to try out:
+
+* Private Kubernetes API access and authorization using the API server proxy
+  https://tailscale.com/kb/1437/kubernetes-operator-api-server-proxy
+
+* Private access to cluster Services using an ingress proxy
+  https://tailscale.com/kb/1439/kubernetes-operator-cluster-ingress
+
+* Private access to the cluster's available subnets using a subnet router
+  https://tailscale.com/kb/1441/kubernetes-operator-connector
+
+You can also explore the CRDs, operator, and associated resources within the {{ .Release.Namespace }} namespace:
+
+$ kubectl explain connector
+$ kubectl explain proxygroup
+$ kubectl explain proxyclass
+$ kubectl explain recorder
+$ kubectl explain dnsconfig
+
+If you're interested to explore what resources were created:
+
+$ kubectl --namespace={{ .Release.Namespace }} get all -l app.kubernetes.io/managed-by=Helm

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/lazy"
@@ -61,26 +62,21 @@ func IsSandboxedMacOS() bool {
 // Tailscale for macOS, either the main GUI process (non-sandboxed) or the
 // system extension (sandboxed).
 func IsMacSys() bool {
-	return IsMacSysExt() || IsMacSysApp()
+	return IsMacSysExt() || IsMacSysGUI()
 }
 
 var isMacSysApp lazy.SyncValue[bool]
 
-// IsMacSysApp reports whether this process is the main, non-sandboxed GUI process
+// IsMacSysGUI reports whether this process is the main, non-sandboxed GUI process
 // that ships with the Standalone variant of Tailscale for macOS.
-func IsMacSysApp() bool {
+func IsMacSysGUI() bool {
 	if runtime.GOOS != "darwin" {
 		return false
 	}
 
 	return isMacSysApp.Get(func() bool {
-		exe, err := os.Executable()
-		if err != nil {
-			return false
-		}
-		// Check that this is the GUI binary, and it is not sandboxed. The GUI binary
-		// shipped in the App Store will always have the App Sandbox enabled.
-		return strings.HasSuffix(exe, "/Contents/MacOS/Tailscale") && !IsMacAppStore()
+		return strings.Contains(os.Getenv("HOME"), "/Containers/io.tailscale.ipn.macsys/") ||
+			strings.Contains(os.Getenv("XPC_SERVICE_NAME"), "io.tailscale.ipn.macsys")
 	})
 }
 
@@ -94,10 +90,6 @@ func IsMacSysExt() bool {
 		return false
 	}
 	return isMacSysExt.Get(func() bool {
-		if strings.Contains(os.Getenv("HOME"), "/Containers/io.tailscale.ipn.macsys/") ||
-			strings.Contains(os.Getenv("XPC_SERVICE_NAME"), "io.tailscale.ipn.macsys") {
-			return true
-		}
 		exe, err := os.Executable()
 		if err != nil {
 			return false
@@ -108,8 +100,8 @@ func IsMacSysExt() bool {
 
 var isMacAppStore lazy.SyncValue[bool]
 
-// IsMacAppStore whether this binary is from the App Store version of Tailscale
-// for macOS.
+// IsMacAppStore returns whether this binary is from the App Store version of Tailscale
+// for macOS.  Returns true for both the network extension and the GUI app.
 func IsMacAppStore() bool {
 	if runtime.GOOS != "darwin" {
 		return false
@@ -120,6 +112,25 @@ func IsMacAppStore() bool {
 		// as macsys.
 		return strings.Contains(os.Getenv("HOME"), "/Containers/io.tailscale.ipn.macos/") ||
 			strings.Contains(os.Getenv("XPC_SERVICE_NAME"), "io.tailscale.ipn.macos")
+	})
+}
+
+var isMacAppStoreGUI lazy.SyncValue[bool]
+
+// IsMacAppStoreGUI reports whether this binary is the GUI app from the App Store
+// version of Tailscale for macOS.
+func IsMacAppStoreGUI() bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	return isMacAppStoreGUI.Get(func() bool {
+		exe, err := os.Executable()
+		if err != nil {
+			return false
+		}
+		// Check that this is the GUI binary, and it is not sandboxed. The GUI binary
+		// shipped in the App Store will always have the App Sandbox enabled.
+		return strings.Contains(exe, "/Tailscale") && !IsMacSysGUI()
 	})
 }
 
@@ -148,7 +159,9 @@ func IsWindowsGUI() bool {
 		if err != nil {
 			return false
 		}
-		return strings.EqualFold(exe, "tailscale-ipn.exe") || strings.EqualFold(exe, "tailscale-ipn")
+		// It is okay to use GOARCH here because we're checking whether our
+		// _own_ process is the GUI.
+		return isGUIExeName(exe, runtime.GOARCH)
 	})
 }
 
@@ -174,7 +187,7 @@ func IsUnstableBuild() bool {
 	})
 }
 
-var isDev = lazy.SyncFunc(func() bool {
+var isDev = sync.OnceValue(func() bool {
 	return strings.Contains(Short(), "-dev")
 })
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"tailscale.com/health"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/usermetric"
 )
 
@@ -24,9 +25,10 @@ func TestWatchdog(t *testing.T) {
 
 	t.Run("default watchdog does not fire", func(t *testing.T) {
 		t.Parallel()
-		ht := new(health.Tracker)
+		bus := eventbustest.NewBus(t)
+		ht := health.NewTracker(bus)
 		reg := new(usermetric.Registry)
-		e, err := NewFakeUserspaceEngine(t.Logf, 0, ht, reg)
+		e, err := NewFakeUserspaceEngine(t.Logf, 0, ht, reg, bus)
 		if err != nil {
 			t.Fatal(err)
 		}

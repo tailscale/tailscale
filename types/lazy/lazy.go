@@ -23,6 +23,9 @@ var nilErrPtr = ptr.To[error](nil)
 // Recursive use of a SyncValue from its own fill function will deadlock.
 //
 // SyncValue is safe for concurrent use.
+//
+// Unlike [sync.OnceValue], the linker can do better dead code elimination
+// with SyncValue. See https://github.com/golang/go/issues/62202.
 type SyncValue[T any] struct {
 	once sync.Once
 	v    T
@@ -120,44 +123,9 @@ func (z *SyncValue[T]) PeekErr() (v T, err error, ok bool) {
 	return zero, nil, false
 }
 
-// SyncFunc wraps a function to make it lazy.
-//
-// The returned function calls fill the first time it's called, and returns
-// fill's result on every subsequent call.
-//
-// The returned function is safe for concurrent use.
-func SyncFunc[T any](fill func() T) func() T {
-	var (
-		once sync.Once
-		v    T
-	)
-	return func() T {
-		once.Do(func() { v = fill() })
-		return v
-	}
-}
-
-// SyncFuncErr wraps a function to make it lazy.
-//
-// The returned function calls fill the first time it's called, and returns
-// fill's results on every subsequent call.
-//
-// The returned function is safe for concurrent use.
-func SyncFuncErr[T any](fill func() (T, error)) func() (T, error) {
-	var (
-		once sync.Once
-		v    T
-		err  error
-	)
-	return func() (T, error) {
-		once.Do(func() { v, err = fill() })
-		return v, err
-	}
-}
-
-// TB is a subset of testing.TB that we use to set up test helpers.
+// testing_TB is a subset of testing.TB that we use to set up test helpers.
 // It's defined here to avoid pulling in the testing package.
-type TB interface {
+type testing_TB interface {
 	Helper()
 	Cleanup(func())
 }
@@ -167,7 +135,9 @@ type TB interface {
 // subtests complete.
 // It is not safe for concurrent use and must not be called concurrently with
 // any SyncValue methods, including another call to itself.
-func (z *SyncValue[T]) SetForTest(tb TB, val T, err error) {
+//
+// The provided tb should be a [*testing.T] or [*testing.B].
+func (z *SyncValue[T]) SetForTest(tb testing_TB, val T, err error) {
 	tb.Helper()
 
 	oldErr, oldVal := z.err.Load(), z.v

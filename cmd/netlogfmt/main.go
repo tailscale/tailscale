@@ -44,24 +44,50 @@ import (
 	"github.com/dsnet/try"
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/bools"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netlogtype"
 	"tailscale.com/util/must"
 )
 
 var (
-	resolveNames = flag.Bool("resolve-names", false, "convert tailscale IP addresses to hostnames; must also specify --api-key and --tailnet-id")
-	apiKey       = flag.String("api-key", "", "API key to query the Tailscale API with; see https://login.tailscale.com/admin/settings/keys")
-	tailnetName  = flag.String("tailnet-name", "", "tailnet domain name to lookup devices in; see https://login.tailscale.com/admin/settings/general")
+	resolveNames = flag.Bool("resolve-names", false, "This is equivalent to specifying \"--resolve-addrs=name\".")
+	resolveAddrs = flag.String("resolve-addrs", "", "Resolve each tailscale IP address as a node ID, name, or user.\n"+
+		"If network flow logs do not support embedded node information,\n"+
+		"then --api-key and --tailnet-name must also be provided.\n"+
+		"Valid values include \"nodeId\", \"name\", or \"user\".")
+	apiKey      = flag.String("api-key", "", "The API key to query the Tailscale API with.\nSee https://login.tailscale.com/admin/settings/keys")
+	tailnetName = flag.String("tailnet-name", "", "The Tailnet name to lookup nodes within.\nSee https://login.tailscale.com/admin/settings/general")
 )
 
-var namesByAddr map[netip.Addr]string
+var (
+	tailnetNodesByAddr map[netip.Addr]netlogtype.Node
+	tailnetNodesByID   map[tailcfg.StableNodeID]netlogtype.Node
+)
 
 func main() {
 	flag.Parse()
 	if *resolveNames {
-		namesByAddr = mustMakeNamesByAddr()
+		*resolveAddrs = "name"
 	}
+	*resolveAddrs = strings.ToLower(*resolveAddrs)             // make case-insensitive
+	*resolveAddrs = strings.TrimSuffix(*resolveAddrs, "s")     // allow plural form
+	*resolveAddrs = strings.ReplaceAll(*resolveAddrs, " ", "") // ignore spaces
+	*resolveAddrs = strings.ReplaceAll(*resolveAddrs, "-", "") // ignore dashes
+	*resolveAddrs = strings.ReplaceAll(*resolveAddrs, "_", "") // ignore underscores
+	switch *resolveAddrs {
+	case "id", "nodeid":
+		*resolveAddrs = "nodeid"
+	case "name", "hostname":
+		*resolveAddrs = "name"
+	case "user", "tag", "usertag", "taguser":
+		*resolveAddrs = "user" // tag resolution is implied
+	default:
+		log.Fatalf("--resolve-addrs must be \"nodeId\", \"name\", or \"user\"")
+	}
+
+	mustLoadTailnetNodes()
 
 	// The logic handles a stream of arbitrary JSON.
 	// So long as a JSON object seems like a network log message,
@@ -103,7 +129,7 @@ func processArray(dec *jsontext.Decoder) {
 
 func processObject(dec *jsontext.Decoder) {
 	var hasTraffic bool
-	var rawMsg []byte
+	var rawMsg jsontext.Value
 	try.E1(dec.ReadToken()) // parse '{'
 	for dec.PeekKind() != '}' {
 		// Capture any members that could belong to a network log message.
@@ -111,13 +137,13 @@ func processObject(dec *jsontext.Decoder) {
 		case "virtualTraffic", "subnetTraffic", "exitTraffic", "physicalTraffic":
 			hasTraffic = true
 			fallthrough
-		case "logtail", "nodeId", "logged", "start", "end":
+		case "logtail", "nodeId", "logged", "srcNode", "dstNodes", "start", "end":
 			if len(rawMsg) == 0 {
 				rawMsg = append(rawMsg, '{')
 			} else {
 				rawMsg = append(rawMsg[:len(rawMsg)-1], ',')
 			}
-			rawMsg = append(append(append(rawMsg, '"'), name.String()...), '"')
+			rawMsg, _ = jsontext.AppendQuote(rawMsg, name.String())
 			rawMsg = append(rawMsg, ':')
 			rawMsg = append(rawMsg, try.E1(dec.ReadValue())...)
 			rawMsg = append(rawMsg, '}')
@@ -145,6 +171,32 @@ type message struct {
 }
 
 func printMessage(msg message) {
+	var nodesByAddr map[netip.Addr]netlogtype.Node
+	var tailnetDNS string // e.g., ".acme-corp.ts.net"
+	if *resolveAddrs != "" {
+		nodesByAddr = make(map[netip.Addr]netlogtype.Node)
+		insertNode := func(node netlogtype.Node) {
+			for _, addr := range node.Addresses {
+				nodesByAddr[addr] = node
+			}
+		}
+		for _, node := range msg.DstNodes {
+			insertNode(node)
+		}
+		insertNode(msg.SrcNode)
+
+		// Derive the Tailnet DNS of the self node.
+		detectTailnetDNS := func(nodeName string) {
+			if prefix, ok := strings.CutSuffix(nodeName, ".ts.net"); ok {
+				if i := strings.LastIndexByte(prefix, '.'); i > 0 {
+					tailnetDNS = nodeName[i:]
+				}
+			}
+		}
+		detectTailnetDNS(msg.SrcNode.Name)
+		detectTailnetDNS(tailnetNodesByID[msg.NodeID].Name)
+	}
+
 	// Construct a table of network traffic per connection.
 	rows := [][7]string{{3: "Tx[P/s]", 4: "Tx[B/s]", 5: "Rx[P/s]", 6: "Rx[B/s]"}}
 	duration := msg.End.Sub(msg.Start)
@@ -175,16 +227,25 @@ func printMessage(msg message) {
 			if !a.IsValid() {
 				return ""
 			}
-			if name, ok := namesByAddr[a.Addr()]; ok {
-				if a.Port() == 0 {
-					return name
+			name := a.Addr().String()
+			node, ok := tailnetNodesByAddr[a.Addr()]
+			if !ok {
+				node, ok = nodesByAddr[a.Addr()]
+			}
+			if ok {
+				switch *resolveAddrs {
+				case "nodeid":
+					name = cmp.Or(string(node.NodeID), name)
+				case "name":
+					name = cmp.Or(strings.TrimSuffix(string(node.Name), tailnetDNS), name)
+				case "user":
+					name = cmp.Or(bools.IfElse(len(node.Tags) > 0, fmt.Sprint(node.Tags), node.User), name)
 				}
+			}
+			if a.Port() != 0 {
 				return name + ":" + strconv.Itoa(int(a.Port()))
 			}
-			if a.Port() == 0 {
-				return a.Addr().String()
-			}
-			return a.String()
+			return name
 		}
 		for _, cc := range traffic {
 			row := [7]string{
@@ -279,8 +340,10 @@ func printMessage(msg message) {
 	}
 }
 
-func mustMakeNamesByAddr() map[netip.Addr]string {
+func mustLoadTailnetNodes() {
 	switch {
+	case *apiKey == "" && *tailnetName == "":
+		return // rely on embedded node information in the logs themselves
 	case *apiKey == "":
 		log.Fatalf("--api-key must be specified with --resolve-names")
 	case *tailnetName == "":
@@ -300,57 +363,19 @@ func mustMakeNamesByAddr() map[netip.Addr]string {
 
 	// Unmarshal the API response.
 	var m struct {
-		Devices []struct {
-			Name  string       `json:"name"`
-			Addrs []netip.Addr `json:"addresses"`
-		} `json:"devices"`
+		Devices []netlogtype.Node `json:"devices"`
 	}
 	must.Do(json.Unmarshal(b, &m))
 
-	// Construct a unique mapping of Tailscale IP addresses to hostnames.
-	// For brevity, we start with the first segment of the name and
-	// use more segments until we find the shortest prefix that is unique
-	// for all names in the tailnet.
-	seen := make(map[string]bool)
-	namesByAddr := make(map[netip.Addr]string)
-retry:
-	for i := range 10 {
-		clear(seen)
-		clear(namesByAddr)
-		for _, d := range m.Devices {
-			name := fieldPrefix(d.Name, i)
-			if seen[name] {
-				continue retry
-			}
-			seen[name] = true
-			for _, a := range d.Addrs {
-				namesByAddr[a] = name
-			}
+	// Construct a mapping of Tailscale IP addresses to node information.
+	tailnetNodesByAddr = make(map[netip.Addr]netlogtype.Node)
+	tailnetNodesByID = make(map[tailcfg.StableNodeID]netlogtype.Node)
+	for _, node := range m.Devices {
+		for _, addr := range node.Addresses {
+			tailnetNodesByAddr[addr] = node
 		}
-		return namesByAddr
+		tailnetNodesByID[node.NodeID] = node
 	}
-	panic("unable to produce unique mapping of address to names")
-}
-
-// fieldPrefix returns the first n number of dot-separated segments.
-//
-// Example:
-//
-//	fieldPrefix("foo.bar.baz", 0) returns ""
-//	fieldPrefix("foo.bar.baz", 1) returns "foo"
-//	fieldPrefix("foo.bar.baz", 2) returns "foo.bar"
-//	fieldPrefix("foo.bar.baz", 3) returns "foo.bar.baz"
-//	fieldPrefix("foo.bar.baz", 4) returns "foo.bar.baz"
-func fieldPrefix(s string, n int) string {
-	s0 := s
-	for i := 0; i < n && len(s) > 0; i++ {
-		if j := strings.IndexByte(s, '.'); j >= 0 {
-			s = s[j+1:]
-		} else {
-			s = ""
-		}
-	}
-	return strings.TrimSuffix(s0[:len(s0)-len(s)], ".")
 }
 
 func appendRepeatByte(b []byte, c byte, n int) []byte {

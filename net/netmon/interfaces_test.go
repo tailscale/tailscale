@@ -13,7 +13,7 @@ import (
 )
 
 func TestGetState(t *testing.T) {
-	st, err := GetState()
+	st, err := getState("")
 	if err != nil {
 		t.Fatal(err)
 	}

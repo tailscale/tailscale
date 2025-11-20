@@ -7,11 +7,10 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
-
-	"tailscale.com/types/lazy"
+	"sync"
 )
 
-var stringLazy = lazy.SyncFunc(func() string {
+var stringLazy = sync.OnceValue(func() string {
 	var ret strings.Builder
 	ret.WriteString(Short())
 	ret.WriteByte('\n')
@@ -21,6 +20,7 @@ var stringLazy = lazy.SyncFunc(func() string {
 	if gitCommit() != "" {
 		fmt.Fprintf(&ret, "  tailscale commit: %s%s\n", gitCommit(), dirtyString())
 	}
+	fmt.Fprintf(&ret, "  long version: %s\n", Long())
 	if extraGitCommitStamp != "" {
 		fmt.Fprintf(&ret, "  other commit: %s\n", extraGitCommitStamp)
 	}

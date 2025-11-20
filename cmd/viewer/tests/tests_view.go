@@ -6,17 +6,19 @@
 package tests
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"net/netip"
 
+	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"golang.org/x/exp/constraints"
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers,StructWithTypeAliasFields,GenericTypeAliasStruct
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers,StructWithTypeAliasFields,GenericTypeAliasStruct,StructWithMapOfViews
 
-// View returns a readonly view of StructWithPtrs.
+// View returns a read-only view of StructWithPtrs.
 func (p *StructWithPtrs) View() StructWithPtrsView {
 	return StructWithPtrsView{ж: p}
 }
@@ -32,7 +34,7 @@ type StructWithPtrsView struct {
 	ж *StructWithPtrs
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v StructWithPtrsView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -44,8 +46,17 @@ func (v StructWithPtrsView) AsStruct() *StructWithPtrs {
 	return v.ж.Clone()
 }
 
-func (v StructWithPtrsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v StructWithPtrsView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v StructWithPtrsView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *StructWithPtrsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -54,27 +65,31 @@ func (v *StructWithPtrsView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x StructWithPtrs
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
 		return err
 	}
 	v.ж = &x
 	return nil
 }
 
-func (v StructWithPtrsView) Value() *StructWithoutPtrs {
-	if v.ж.Value == nil {
-		return nil
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *StructWithPtrsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
 	}
-	x := *v.ж.Value
-	return &x
+	var x StructWithPtrs
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
 }
 
-func (v StructWithPtrsView) Int() *int {
-	if v.ж.Int == nil {
-		return nil
-	}
-	x := *v.ж.Int
-	return &x
+func (v StructWithPtrsView) Value() StructWithoutPtrsView { return v.ж.Value.View() }
+func (v StructWithPtrsView) Int() views.ValuePointer[int] { return views.ValuePointerOf(v.ж.Int) }
+
+func (v StructWithPtrsView) NoView() views.ValuePointer[StructWithNoView] {
+	return views.ValuePointerOf(v.ж.NoView)
 }
 
 func (v StructWithPtrsView) NoCloneValue() *StructWithoutPtrs { return v.ж.NoCloneValue }
@@ -85,10 +100,11 @@ func (v StructWithPtrsView) Equal(v2 StructWithPtrsView) bool { return v.ж.Equa
 var _StructWithPtrsViewNeedsRegeneration = StructWithPtrs(struct {
 	Value        *StructWithoutPtrs
 	Int          *int
+	NoView       *StructWithNoView
 	NoCloneValue *StructWithoutPtrs
 }{})
 
-// View returns a readonly view of StructWithoutPtrs.
+// View returns a read-only view of StructWithoutPtrs.
 func (p *StructWithoutPtrs) View() StructWithoutPtrsView {
 	return StructWithoutPtrsView{ж: p}
 }
@@ -104,7 +120,7 @@ type StructWithoutPtrsView struct {
 	ж *StructWithoutPtrs
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v StructWithoutPtrsView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -116,8 +132,17 @@ func (v StructWithoutPtrsView) AsStruct() *StructWithoutPtrs {
 	return v.ж.Clone()
 }
 
-func (v StructWithoutPtrsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v StructWithoutPtrsView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v StructWithoutPtrsView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *StructWithoutPtrsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -126,7 +151,20 @@ func (v *StructWithoutPtrsView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x StructWithoutPtrs
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *StructWithoutPtrsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x StructWithoutPtrs
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -142,7 +180,7 @@ var _StructWithoutPtrsViewNeedsRegeneration = StructWithoutPtrs(struct {
 	Pfx netip.Prefix
 }{})
 
-// View returns a readonly view of Map.
+// View returns a read-only view of Map.
 func (p *Map) View() MapView {
 	return MapView{ж: p}
 }
@@ -158,7 +196,7 @@ type MapView struct {
 	ж *Map
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v MapView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -170,8 +208,17 @@ func (v MapView) AsStruct() *Map {
 	return v.ж.Clone()
 }
 
-func (v MapView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v MapView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v MapView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *MapView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -180,54 +227,61 @@ func (v *MapView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x Map
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
 		return err
 	}
 	v.ж = &x
 	return nil
 }
 
-func (v MapView) Int() views.Map[string, int] { return views.MapOf(v.ж.Int) }
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *MapView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x Map
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
 
+func (v MapView) Int() views.Map[string, int]           { return views.MapOf(v.ж.Int) }
 func (v MapView) SliceInt() views.MapSlice[string, int] { return views.MapSliceOf(v.ж.SliceInt) }
-
 func (v MapView) StructPtrWithPtr() views.MapFn[string, *StructWithPtrs, StructWithPtrsView] {
 	return views.MapFnOf(v.ж.StructPtrWithPtr, func(t *StructWithPtrs) StructWithPtrsView {
 		return t.View()
 	})
 }
-
 func (v MapView) StructPtrWithoutPtr() views.MapFn[string, *StructWithoutPtrs, StructWithoutPtrsView] {
 	return views.MapFnOf(v.ж.StructPtrWithoutPtr, func(t *StructWithoutPtrs) StructWithoutPtrsView {
 		return t.View()
 	})
 }
-
 func (v MapView) StructWithoutPtr() views.Map[string, StructWithoutPtrs] {
 	return views.MapOf(v.ж.StructWithoutPtr)
 }
-
 func (v MapView) SlicesWithPtrs() views.MapFn[string, []*StructWithPtrs, views.SliceView[*StructWithPtrs, StructWithPtrsView]] {
 	return views.MapFnOf(v.ж.SlicesWithPtrs, func(t []*StructWithPtrs) views.SliceView[*StructWithPtrs, StructWithPtrsView] {
 		return views.SliceOfViews[*StructWithPtrs, StructWithPtrsView](t)
 	})
 }
-
 func (v MapView) SlicesWithoutPtrs() views.MapFn[string, []*StructWithoutPtrs, views.SliceView[*StructWithoutPtrs, StructWithoutPtrsView]] {
 	return views.MapFnOf(v.ж.SlicesWithoutPtrs, func(t []*StructWithoutPtrs) views.SliceView[*StructWithoutPtrs, StructWithoutPtrsView] {
 		return views.SliceOfViews[*StructWithoutPtrs, StructWithoutPtrsView](t)
 	})
 }
-
 func (v MapView) StructWithoutPtrKey() views.Map[StructWithoutPtrs, int] {
 	return views.MapOf(v.ж.StructWithoutPtrKey)
 }
-
 func (v MapView) StructWithPtr() views.MapFn[string, StructWithPtrs, StructWithPtrsView] {
 	return views.MapFnOf(v.ж.StructWithPtr, func(t StructWithPtrs) StructWithPtrsView {
 		return t.View()
 	})
 }
+
+// Unsupported views.
 func (v MapView) SliceIntPtr() map[string][]*int           { panic("unsupported") }
 func (v MapView) PointerKey() map[*string]int              { panic("unsupported") }
 func (v MapView) StructWithPtrKey() map[StructWithPtrs]int { panic("unsupported") }
@@ -248,7 +302,7 @@ var _MapViewNeedsRegeneration = Map(struct {
 	StructWithPtrKey    map[StructWithPtrs]int
 }{})
 
-// View returns a readonly view of StructWithSlices.
+// View returns a read-only view of StructWithSlices.
 func (p *StructWithSlices) View() StructWithSlicesView {
 	return StructWithSlicesView{ж: p}
 }
@@ -264,7 +318,7 @@ type StructWithSlicesView struct {
 	ж *StructWithSlices
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v StructWithSlicesView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -276,8 +330,17 @@ func (v StructWithSlicesView) AsStruct() *StructWithSlices {
 	return v.ж.Clone()
 }
 
-func (v StructWithSlicesView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v StructWithSlicesView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v StructWithSlicesView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *StructWithSlicesView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -286,7 +349,20 @@ func (v *StructWithSlicesView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x StructWithSlices
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *StructWithSlicesView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x StructWithSlices
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -307,8 +383,10 @@ func (v StructWithSlicesView) Prefixes() views.Slice[netip.Prefix] {
 	return views.SliceOf(v.ж.Prefixes)
 }
 func (v StructWithSlicesView) Data() views.ByteSlice[[]byte] { return views.ByteSliceOf(v.ж.Data) }
-func (v StructWithSlicesView) Structs() StructWithPtrs       { panic("unsupported") }
-func (v StructWithSlicesView) Ints() *int                    { panic("unsupported") }
+
+// Unsupported views.
+func (v StructWithSlicesView) Structs() StructWithPtrs { panic("unsupported") }
+func (v StructWithSlicesView) Ints() *int              { panic("unsupported") }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _StructWithSlicesViewNeedsRegeneration = StructWithSlices(struct {
@@ -322,7 +400,7 @@ var _StructWithSlicesViewNeedsRegeneration = StructWithSlices(struct {
 	Ints           []*int
 }{})
 
-// View returns a readonly view of StructWithEmbedded.
+// View returns a read-only view of StructWithEmbedded.
 func (p *StructWithEmbedded) View() StructWithEmbeddedView {
 	return StructWithEmbeddedView{ж: p}
 }
@@ -338,7 +416,7 @@ type StructWithEmbeddedView struct {
 	ж *StructWithEmbedded
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v StructWithEmbeddedView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -350,8 +428,17 @@ func (v StructWithEmbeddedView) AsStruct() *StructWithEmbedded {
 	return v.ж.Clone()
 }
 
-func (v StructWithEmbeddedView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v StructWithEmbeddedView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v StructWithEmbeddedView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *StructWithEmbeddedView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -360,7 +447,20 @@ func (v *StructWithEmbeddedView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x StructWithEmbedded
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *StructWithEmbeddedView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x StructWithEmbedded
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -378,7 +478,7 @@ var _StructWithEmbeddedViewNeedsRegeneration = StructWithEmbedded(struct {
 	StructWithSlices
 }{})
 
-// View returns a readonly view of GenericIntStruct.
+// View returns a read-only view of GenericIntStruct.
 func (p *GenericIntStruct[T]) View() GenericIntStructView[T] {
 	return GenericIntStructView[T]{ж: p}
 }
@@ -394,7 +494,7 @@ type GenericIntStructView[T constraints.Integer] struct {
 	ж *GenericIntStruct[T]
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v GenericIntStructView[T]) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -406,8 +506,17 @@ func (v GenericIntStructView[T]) AsStruct() *GenericIntStruct[T] {
 	return v.ж.Clone()
 }
 
-func (v GenericIntStructView[T]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v GenericIntStructView[T]) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v GenericIntStructView[T]) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *GenericIntStructView[T]) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -416,7 +525,20 @@ func (v *GenericIntStructView[T]) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x GenericIntStruct[T]
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *GenericIntStructView[T]) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x GenericIntStruct[T]
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -424,17 +546,14 @@ func (v *GenericIntStructView[T]) UnmarshalJSON(b []byte) error {
 }
 
 func (v GenericIntStructView[T]) Value() T { return v.ж.Value }
-func (v GenericIntStructView[T]) Pointer() *T {
-	if v.ж.Pointer == nil {
-		return nil
-	}
-	x := *v.ж.Pointer
-	return &x
+func (v GenericIntStructView[T]) Pointer() views.ValuePointer[T] {
+	return views.ValuePointerOf(v.ж.Pointer)
 }
 
-func (v GenericIntStructView[T]) Slice() views.Slice[T] { return views.SliceOf(v.ж.Slice) }
+func (v GenericIntStructView[T]) Slice() views.Slice[T]     { return views.SliceOf(v.ж.Slice) }
+func (v GenericIntStructView[T]) Map() views.Map[string, T] { return views.MapOf(v.ж.Map) }
 
-func (v GenericIntStructView[T]) Map() views.Map[string, T]  { return views.MapOf(v.ж.Map) }
+// Unsupported views.
 func (v GenericIntStructView[T]) PtrSlice() *T               { panic("unsupported") }
 func (v GenericIntStructView[T]) PtrKeyMap() map[*T]string   { panic("unsupported") }
 func (v GenericIntStructView[T]) PtrValueMap() map[string]*T { panic("unsupported") }
@@ -454,7 +573,7 @@ func _GenericIntStructViewNeedsRegeneration[T constraints.Integer](GenericIntStr
 	}{})
 }
 
-// View returns a readonly view of GenericNoPtrsStruct.
+// View returns a read-only view of GenericNoPtrsStruct.
 func (p *GenericNoPtrsStruct[T]) View() GenericNoPtrsStructView[T] {
 	return GenericNoPtrsStructView[T]{ж: p}
 }
@@ -470,7 +589,7 @@ type GenericNoPtrsStructView[T StructWithoutPtrs | netip.Prefix | BasicType] str
 	ж *GenericNoPtrsStruct[T]
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v GenericNoPtrsStructView[T]) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -482,8 +601,17 @@ func (v GenericNoPtrsStructView[T]) AsStruct() *GenericNoPtrsStruct[T] {
 	return v.ж.Clone()
 }
 
-func (v GenericNoPtrsStructView[T]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v GenericNoPtrsStructView[T]) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v GenericNoPtrsStructView[T]) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *GenericNoPtrsStructView[T]) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -492,7 +620,20 @@ func (v *GenericNoPtrsStructView[T]) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x GenericNoPtrsStruct[T]
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *GenericNoPtrsStructView[T]) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x GenericNoPtrsStruct[T]
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -500,17 +641,14 @@ func (v *GenericNoPtrsStructView[T]) UnmarshalJSON(b []byte) error {
 }
 
 func (v GenericNoPtrsStructView[T]) Value() T { return v.ж.Value }
-func (v GenericNoPtrsStructView[T]) Pointer() *T {
-	if v.ж.Pointer == nil {
-		return nil
-	}
-	x := *v.ж.Pointer
-	return &x
+func (v GenericNoPtrsStructView[T]) Pointer() views.ValuePointer[T] {
+	return views.ValuePointerOf(v.ж.Pointer)
 }
 
-func (v GenericNoPtrsStructView[T]) Slice() views.Slice[T] { return views.SliceOf(v.ж.Slice) }
+func (v GenericNoPtrsStructView[T]) Slice() views.Slice[T]     { return views.SliceOf(v.ж.Slice) }
+func (v GenericNoPtrsStructView[T]) Map() views.Map[string, T] { return views.MapOf(v.ж.Map) }
 
-func (v GenericNoPtrsStructView[T]) Map() views.Map[string, T]  { return views.MapOf(v.ж.Map) }
+// Unsupported views.
 func (v GenericNoPtrsStructView[T]) PtrSlice() *T               { panic("unsupported") }
 func (v GenericNoPtrsStructView[T]) PtrKeyMap() map[*T]string   { panic("unsupported") }
 func (v GenericNoPtrsStructView[T]) PtrValueMap() map[string]*T { panic("unsupported") }
@@ -530,7 +668,7 @@ func _GenericNoPtrsStructViewNeedsRegeneration[T StructWithoutPtrs | netip.Prefi
 	}{})
 }
 
-// View returns a readonly view of GenericCloneableStruct.
+// View returns a read-only view of GenericCloneableStruct.
 func (p *GenericCloneableStruct[T, V]) View() GenericCloneableStructView[T, V] {
 	return GenericCloneableStructView[T, V]{ж: p}
 }
@@ -546,7 +684,7 @@ type GenericCloneableStructView[T views.ViewCloner[T, V], V views.StructView[T]]
 	ж *GenericCloneableStruct[T, V]
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v GenericCloneableStructView[T, V]) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -558,8 +696,17 @@ func (v GenericCloneableStructView[T, V]) AsStruct() *GenericCloneableStruct[T, 
 	return v.ж.Clone()
 }
 
-func (v GenericCloneableStructView[T, V]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v GenericCloneableStructView[T, V]) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v GenericCloneableStructView[T, V]) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *GenericCloneableStructView[T, V]) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -568,7 +715,20 @@ func (v *GenericCloneableStructView[T, V]) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x GenericCloneableStruct[T, V]
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *GenericCloneableStructView[T, V]) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x GenericCloneableStruct[T, V]
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -579,12 +739,13 @@ func (v GenericCloneableStructView[T, V]) Value() V { return v.ж.Value.View() }
 func (v GenericCloneableStructView[T, V]) Slice() views.SliceView[T, V] {
 	return views.SliceOfViews[T, V](v.ж.Slice)
 }
-
 func (v GenericCloneableStructView[T, V]) Map() views.MapFn[string, T, V] {
 	return views.MapFnOf(v.ж.Map, func(t T) V {
 		return t.View()
 	})
 }
+
+// Unsupported views.
 func (v GenericCloneableStructView[T, V]) Pointer() map[string]T      { panic("unsupported") }
 func (v GenericCloneableStructView[T, V]) PtrSlice() *T               { panic("unsupported") }
 func (v GenericCloneableStructView[T, V]) PtrKeyMap() map[*T]string   { panic("unsupported") }
@@ -605,7 +766,7 @@ func _GenericCloneableStructViewNeedsRegeneration[T views.ViewCloner[T, V], V vi
 	}{})
 }
 
-// View returns a readonly view of StructWithContainers.
+// View returns a read-only view of StructWithContainers.
 func (p *StructWithContainers) View() StructWithContainersView {
 	return StructWithContainersView{ж: p}
 }
@@ -621,7 +782,7 @@ type StructWithContainersView struct {
 	ж *StructWithContainers
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v StructWithContainersView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -633,8 +794,17 @@ func (v StructWithContainersView) AsStruct() *StructWithContainers {
 	return v.ж.Clone()
 }
 
-func (v StructWithContainersView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v StructWithContainersView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v StructWithContainersView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *StructWithContainersView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -643,7 +813,20 @@ func (v *StructWithContainersView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x StructWithContainers
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *StructWithContainersView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x StructWithContainers
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -677,7 +860,7 @@ var _StructWithContainersViewNeedsRegeneration = StructWithContainers(struct {
 	CloneableGenericMap       MapContainer[int, *GenericNoPtrsStruct[int]]
 }{})
 
-// View returns a readonly view of StructWithTypeAliasFields.
+// View returns a read-only view of StructWithTypeAliasFields.
 func (p *StructWithTypeAliasFields) View() StructWithTypeAliasFieldsView {
 	return StructWithTypeAliasFieldsView{ж: p}
 }
@@ -693,7 +876,7 @@ type StructWithTypeAliasFieldsView struct {
 	ж *StructWithTypeAliasFields
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v StructWithTypeAliasFieldsView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -705,8 +888,17 @@ func (v StructWithTypeAliasFieldsView) AsStruct() *StructWithTypeAliasFields {
 	return v.ж.Clone()
 }
 
-func (v StructWithTypeAliasFieldsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v StructWithTypeAliasFieldsView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v StructWithTypeAliasFieldsView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *StructWithTypeAliasFieldsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -715,51 +907,55 @@ func (v *StructWithTypeAliasFieldsView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x StructWithTypeAliasFields
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
 		return err
 	}
 	v.ж = &x
 	return nil
 }
 
-func (v StructWithTypeAliasFieldsView) WithPtr() StructWithPtrsView        { return v.ж.WithPtr.View() }
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *StructWithTypeAliasFieldsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x StructWithTypeAliasFields
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v StructWithTypeAliasFieldsView) WithPtr() StructWithPtrsAliasView   { return v.ж.WithPtr.View() }
 func (v StructWithTypeAliasFieldsView) WithoutPtr() StructWithoutPtrsAlias { return v.ж.WithoutPtr }
 func (v StructWithTypeAliasFieldsView) WithPtrByPtr() StructWithPtrsAliasView {
 	return v.ж.WithPtrByPtr.View()
 }
-func (v StructWithTypeAliasFieldsView) WithoutPtrByPtr() *StructWithoutPtrsAlias {
-	if v.ж.WithoutPtrByPtr == nil {
-		return nil
-	}
-	x := *v.ж.WithoutPtrByPtr
-	return &x
+func (v StructWithTypeAliasFieldsView) WithoutPtrByPtr() StructWithoutPtrsAliasView {
+	return v.ж.WithoutPtrByPtr.View()
 }
-
 func (v StructWithTypeAliasFieldsView) SliceWithPtrs() views.SliceView[*StructWithPtrsAlias, StructWithPtrsAliasView] {
 	return views.SliceOfViews[*StructWithPtrsAlias, StructWithPtrsAliasView](v.ж.SliceWithPtrs)
 }
 func (v StructWithTypeAliasFieldsView) SliceWithoutPtrs() views.SliceView[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView] {
 	return views.SliceOfViews[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView](v.ж.SliceWithoutPtrs)
 }
-
 func (v StructWithTypeAliasFieldsView) MapWithPtrs() views.MapFn[string, *StructWithPtrsAlias, StructWithPtrsAliasView] {
 	return views.MapFnOf(v.ж.MapWithPtrs, func(t *StructWithPtrsAlias) StructWithPtrsAliasView {
 		return t.View()
 	})
 }
-
 func (v StructWithTypeAliasFieldsView) MapWithoutPtrs() views.MapFn[string, *StructWithoutPtrsAlias, StructWithoutPtrsAliasView] {
 	return views.MapFnOf(v.ж.MapWithoutPtrs, func(t *StructWithoutPtrsAlias) StructWithoutPtrsAliasView {
 		return t.View()
 	})
 }
-
 func (v StructWithTypeAliasFieldsView) MapOfSlicesWithPtrs() views.MapFn[string, []*StructWithPtrsAlias, views.SliceView[*StructWithPtrsAlias, StructWithPtrsAliasView]] {
 	return views.MapFnOf(v.ж.MapOfSlicesWithPtrs, func(t []*StructWithPtrsAlias) views.SliceView[*StructWithPtrsAlias, StructWithPtrsAliasView] {
 		return views.SliceOfViews[*StructWithPtrsAlias, StructWithPtrsAliasView](t)
 	})
 }
-
 func (v StructWithTypeAliasFieldsView) MapOfSlicesWithoutPtrs() views.MapFn[string, []*StructWithoutPtrsAlias, views.SliceView[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView]] {
 	return views.MapFnOf(v.ж.MapOfSlicesWithoutPtrs, func(t []*StructWithoutPtrsAlias) views.SliceView[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView] {
 		return views.SliceOfViews[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView](t)
@@ -780,7 +976,7 @@ var _StructWithTypeAliasFieldsViewNeedsRegeneration = StructWithTypeAliasFields(
 	MapOfSlicesWithoutPtrs map[string][]*StructWithoutPtrsAlias
 }{})
 
-// View returns a readonly view of GenericTypeAliasStruct.
+// View returns a read-only view of GenericTypeAliasStruct.
 func (p *GenericTypeAliasStruct[T, T2, V2]) View() GenericTypeAliasStructView[T, T2, V2] {
 	return GenericTypeAliasStructView[T, T2, V2]{ж: p}
 }
@@ -796,7 +992,7 @@ type GenericTypeAliasStructView[T integer, T2 views.ViewCloner[T2, V2], V2 views
 	ж *GenericTypeAliasStruct[T, T2, V2]
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v GenericTypeAliasStructView[T, T2, V2]) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -808,10 +1004,17 @@ func (v GenericTypeAliasStructView[T, T2, V2]) AsStruct() *GenericTypeAliasStruc
 	return v.ж.Clone()
 }
 
+// MarshalJSON implements [jsonv1.Marshaler].
 func (v GenericTypeAliasStructView[T, T2, V2]) MarshalJSON() ([]byte, error) {
-	return json.Marshal(v.ж)
+	return jsonv1.Marshal(v.ж)
 }
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v GenericTypeAliasStructView[T, T2, V2]) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *GenericTypeAliasStructView[T, T2, V2]) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -820,7 +1023,20 @@ func (v *GenericTypeAliasStructView[T, T2, V2]) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x GenericTypeAliasStruct[T, T2, V2]
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *GenericTypeAliasStructView[T, T2, V2]) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x GenericTypeAliasStruct[T, T2, V2]
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -837,3 +1053,79 @@ func _GenericTypeAliasStructViewNeedsRegeneration[T integer, T2 views.ViewCloner
 		Cloneable    T2
 	}{})
 }
+
+// View returns a read-only view of StructWithMapOfViews.
+func (p *StructWithMapOfViews) View() StructWithMapOfViewsView {
+	return StructWithMapOfViewsView{ж: p}
+}
+
+// StructWithMapOfViewsView provides a read-only view over StructWithMapOfViews.
+//
+// Its methods should only be called if `Valid()` returns true.
+type StructWithMapOfViewsView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *StructWithMapOfViews
+}
+
+// Valid reports whether v's underlying value is non-nil.
+func (v StructWithMapOfViewsView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v StructWithMapOfViewsView) AsStruct() *StructWithMapOfViews {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v StructWithMapOfViewsView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v StructWithMapOfViewsView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
+func (v *StructWithMapOfViewsView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x StructWithMapOfViews
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *StructWithMapOfViewsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x StructWithMapOfViews
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v StructWithMapOfViewsView) MapOfViews() views.Map[string, StructWithoutPtrsView] {
+	return views.MapOf(v.ж.MapOfViews)
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithMapOfViewsViewNeedsRegeneration = StructWithMapOfViews(struct {
+	MapOfViews map[string]StructWithoutPtrsView
+}{})

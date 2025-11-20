@@ -6,9 +6,12 @@
 package ws
 
 import (
+	"context"
 	"fmt"
 	"reflect"
+	"runtime/debug"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/util/remotecommand"
@@ -26,46 +29,93 @@ func Test_conn_Read(t *testing.T) {
 	// Resize stream ID + {"width": 10, "height": 20}
 	testResizeMsg := []byte{byte(remotecommand.StreamResize), 0x7b, 0x22, 0x77, 0x69, 0x64, 0x74, 0x68, 0x22, 0x3a, 0x31, 0x30, 0x2c, 0x22, 0x68, 0x65, 0x69, 0x67, 0x68, 0x74, 0x22, 0x3a, 0x32, 0x30, 0x7d}
 	lenResizeMsgPayload := byte(len(testResizeMsg))
-
+	cl := tstest.NewClock(tstest.ClockOpts{})
 	tests := []struct {
-		name       string
-		inputs     [][]byte
-		wantWidth  int
-		wantHeight int
+		name                 string
+		inputs               [][]byte
+		wantCastHeaderWidth  int
+		wantCastHeaderHeight int
+		wantRecorded         []byte
 	}{
 		{
 			name:   "single_read_control_message",
 			inputs: [][]byte{{0x88, 0x0}},
 		},
 		{
-			name:       "single_read_resize_message",
-			inputs:     [][]byte{append([]byte{0x82, lenResizeMsgPayload}, testResizeMsg...)},
-			wantWidth:  10,
-			wantHeight: 20,
+			name:                 "single_read_resize_message",
+			inputs:               [][]byte{append([]byte{0x82, lenResizeMsgPayload}, testResizeMsg...)},
+			wantCastHeaderWidth:  10,
+			wantCastHeaderHeight: 20,
+			wantRecorded:         fakes.AsciinemaCastHeaderMsg(t, 10, 20),
 		},
 		{
-			name:       "two_reads_resize_message",
-			inputs:     [][]byte{{0x2, 0x9, 0x4, 0x7b, 0x22, 0x77, 0x69, 0x64, 0x74, 0x68, 0x22}, {0x80, 0x11, 0x4, 0x3a, 0x31, 0x30, 0x2c, 0x22, 0x68, 0x65, 0x69, 0x67, 0x68, 0x74, 0x22, 0x3a, 0x32, 0x30, 0x7d}},
-			wantWidth:  10,
-			wantHeight: 20,
+			name: "resize_data_frame_many",
+			inputs: [][]byte{
+				append([]byte{0x82, lenResizeMsgPayload}, testResizeMsg...),
+				append([]byte{0x82, lenResizeMsgPayload}, testResizeMsg...),
+			},
+			wantRecorded:         append(fakes.AsciinemaCastHeaderMsg(t, 10, 20), fakes.AsciinemaCastResizeMsg(t, 10, 20)...),
+			wantCastHeaderWidth:  10,
+			wantCastHeaderHeight: 20,
 		},
 		{
-			name:       "three_reads_resize_message_with_split_fragment",
-			inputs:     [][]byte{{0x2, 0x9, 0x4, 0x7b, 0x22, 0x77, 0x69, 0x64, 0x74, 0x68, 0x22}, {0x80, 0x11, 0x4, 0x3a, 0x31, 0x30, 0x2c, 0x22, 0x68, 0x65, 0x69, 0x67, 0x68, 0x74}, {0x22, 0x3a, 0x32, 0x30, 0x7d}},
-			wantWidth:  10,
-			wantHeight: 20,
+			name: "resize_data_frame_two_in_one_read",
+			inputs: [][]byte{
+				fmt.Appendf(nil, "%s%s",
+					append([]byte{0x82, lenResizeMsgPayload}, testResizeMsg...),
+					append([]byte{0x82, lenResizeMsgPayload}, testResizeMsg...),
+				),
+			},
+			wantRecorded:         append(fakes.AsciinemaCastHeaderMsg(t, 10, 20), fakes.AsciinemaCastResizeMsg(t, 10, 20)...),
+			wantCastHeaderWidth:  10,
+			wantCastHeaderHeight: 20,
+		},
+		{
+			name: "two_reads_resize_message",
+			inputs: [][]byte{
+				// op, len, stream ID, `{"width`
+				{0x2, 0x9, 0x4, 0x7b, 0x22, 0x77, 0x69, 0x64, 0x74, 0x68, 0x22},
+				// op, len, stream ID, `:10,"height":20}`
+				{0x80, 0x11, 0x4, 0x3a, 0x31, 0x30, 0x2c, 0x22, 0x68, 0x65, 0x69, 0x67, 0x68, 0x74, 0x22, 0x3a, 0x32, 0x30, 0x7d},
+			},
+			wantCastHeaderWidth:  10,
+			wantCastHeaderHeight: 20,
+			wantRecorded:         fakes.AsciinemaCastHeaderMsg(t, 10, 20),
+		},
+		{
+			name: "three_reads_resize_message_with_split_fragment",
+			inputs: [][]byte{
+				// op, len, stream ID, `{"width"`
+				{0x2, 0x9, 0x4, 0x7b, 0x22, 0x77, 0x69, 0x64, 0x74, 0x68, 0x22},
+				// op, len, stream ID, `:10,"height`
+				{0x00, 0x0c, 0x4, 0x3a, 0x31, 0x30, 0x2c, 0x22, 0x68, 0x65, 0x69, 0x67, 0x68, 0x74},
+				// op, len, stream ID, `":20}`
+				{0x80, 0x06, 0x4, 0x22, 0x3a, 0x32, 0x30, 0x7d},
+			},
+			wantCastHeaderWidth:  10,
+			wantCastHeaderHeight: 20,
+			wantRecorded:         fakes.AsciinemaCastHeaderMsg(t, 10, 20),
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			log := zl.Sugar()
 			tc := &fakes.TestConn{}
+			sr := &fakes.TestSessionRecorder{}
+			rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
 			tc.ResetReadBuf()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
 			c := &conn{
-				Conn: tc,
-				log:  zl.Sugar(),
+				ctx:                   ctx,
+				Conn:                  tc,
+				log:                   log,
+				hasTerm:               true,
+				initialCastHeaderSent: make(chan struct{}),
+				rec:                   rec,
 			}
 			for i, input := range tt.inputs {
-				c.initialTermSizeSet = make(chan struct{})
 				if err := tc.WriteReadBufBytes(input); err != nil {
 					t.Fatalf("writing bytes to test conn: %v", err)
 				}
@@ -75,13 +125,19 @@ func Test_conn_Read(t *testing.T) {
 					return
 				}
 			}
-			if tt.wantHeight != 0 || tt.wantWidth != 0 {
-				if tt.wantWidth != c.ch.Width {
-					t.Errorf("wants width: %v, got %v", tt.wantWidth, c.ch.Width)
+
+			if tt.wantCastHeaderHeight != 0 || tt.wantCastHeaderWidth != 0 {
+				if tt.wantCastHeaderWidth != c.ch.Width {
+					t.Errorf("wants width: %v, got %v", tt.wantCastHeaderWidth, c.ch.Width)
 				}
-				if tt.wantHeight != c.ch.Height {
-					t.Errorf("want height: %v, got %v", tt.wantHeight, c.ch.Height)
+				if tt.wantCastHeaderHeight != c.ch.Height {
+					t.Errorf("want height: %v, got %v", tt.wantCastHeaderHeight, c.ch.Height)
 				}
+			}
+
+			gotRecorded := sr.Bytes()
+			if !reflect.DeepEqual(gotRecorded, tt.wantRecorded) {
+				t.Errorf("expected bytes not recorded, wants\n%v\ngot\n%v", string(tt.wantRecorded), string(gotRecorded))
 			}
 		})
 	}
@@ -94,15 +150,11 @@ func Test_conn_Write(t *testing.T) {
 	}
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	tests := []struct {
-		name              string
-		inputs            [][]byte
-		wantForwarded     []byte
-		wantRecorded      []byte
-		firstWrite        bool
-		width             int
-		height            int
-		hasTerm           bool
-		sendInitialResize bool
+		name          string
+		inputs        [][]byte
+		wantForwarded []byte
+		wantRecorded  []byte
+		hasTerm       bool
 	}{
 		{
 			name:          "single_write_control_frame",
@@ -130,10 +182,7 @@ func Test_conn_Write(t *testing.T) {
 			name:          "single_write_stdout_data_message_with_cast_header",
 			inputs:        [][]byte{{0x82, 0x3, 0x1, 0x7, 0x8}},
 			wantForwarded: []byte{0x82, 0x3, 0x1, 0x7, 0x8},
-			wantRecorded:  append(fakes.AsciinemaResizeMsg(t, 10, 20), fakes.CastLine(t, []byte{0x7, 0x8}, cl)...),
-			width:         10,
-			height:        20,
-			firstWrite:    true,
+			wantRecorded:  fakes.CastLine(t, []byte{0x7, 0x8}, cl),
 		},
 		{
 			name:          "two_writes_stdout_data_message",
@@ -148,15 +197,11 @@ func Test_conn_Write(t *testing.T) {
 			wantRecorded:  fakes.CastLine(t, []byte{0x7, 0x8, 0x1, 0x2, 0x3, 0x4, 0x5}, cl),
 		},
 		{
-			name:              "three_writes_stdout_data_message_with_split_fragment_cast_header_with_terminal",
-			inputs:            [][]byte{{0x2, 0x3, 0x1, 0x7, 0x8}, {0x80, 0x6, 0x1, 0x1, 0x2, 0x3}, {0x4, 0x5}},
-			wantForwarded:     []byte{0x2, 0x3, 0x1, 0x7, 0x8, 0x80, 0x6, 0x1, 0x1, 0x2, 0x3, 0x4, 0x5},
-			wantRecorded:      append(fakes.AsciinemaResizeMsg(t, 10, 20), fakes.CastLine(t, []byte{0x7, 0x8, 0x1, 0x2, 0x3, 0x4, 0x5}, cl)...),
-			height:            20,
-			width:             10,
-			hasTerm:           true,
-			firstWrite:        true,
-			sendInitialResize: true,
+			name:          "three_writes_stdout_data_message_with_split_fragment_cast_header_with_terminal",
+			inputs:        [][]byte{{0x2, 0x3, 0x1, 0x7, 0x8}, {0x80, 0x6, 0x1, 0x1, 0x2, 0x3}, {0x4, 0x5}},
+			wantForwarded: []byte{0x2, 0x3, 0x1, 0x7, 0x8, 0x80, 0x6, 0x1, 0x1, 0x2, 0x3, 0x4, 0x5},
+			wantRecorded:  fakes.CastLine(t, []byte{0x7, 0x8, 0x1, 0x2, 0x3, 0x4, 0x5}, cl),
+			hasTerm:       true,
 		},
 	}
 	for _, tt := range tests {
@@ -164,24 +209,22 @@ func Test_conn_Write(t *testing.T) {
 			tc := &fakes.TestConn{}
 			sr := &fakes.TestSessionRecorder{}
 			rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
 			c := &conn{
-				Conn: tc,
-				log:  zl.Sugar(),
-				ch: sessionrecording.CastHeader{
-					Width:  tt.width,
-					Height: tt.height,
-				},
-				rec:                rec,
-				initialTermSizeSet: make(chan struct{}),
-				hasTerm:            tt.hasTerm,
+				Conn:                  tc,
+				ctx:                   ctx,
+				log:                   zl.Sugar(),
+				ch:                    sessionrecording.CastHeader{},
+				rec:                   rec,
+				initialCastHeaderSent: make(chan struct{}),
+				hasTerm:               tt.hasTerm,
 			}
-			if !tt.firstWrite {
-				// This test case does not intend to test that cast header gets written once.
-				c.writeCastHeaderOnce.Do(func() {})
-			}
-			if tt.sendInitialResize {
-				close(c.initialTermSizeSet)
-			}
+
+			c.writeCastHeaderOnce.Do(func() {
+				close(c.initialCastHeaderSent)
+			})
+
 			for i, input := range tt.inputs {
 				_, err := c.Write(input)
 				if err != nil {
@@ -242,19 +285,28 @@ func Test_conn_WriteRand(t *testing.T) {
 	sr := &fakes.TestSessionRecorder{}
 	rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
 	for i := range 100 {
-		tc := &fakes.TestConn{}
-		c := &conn{
-			Conn: tc,
-			log:  zl.Sugar(),
-			rec:  rec,
-		}
-		bb := fakes.RandomBytes(t)
-		for j, input := range bb {
-			f := func() {
-				c.Write(input)
+		t.Run(fmt.Sprintf("test_%d", i), func(t *testing.T) {
+			tc := &fakes.TestConn{}
+			c := &conn{
+				Conn: tc,
+				log:  zl.Sugar(),
+				rec:  rec,
+
+				ctx:                   context.Background(), // ctx must be non-nil.
+				initialCastHeaderSent: make(chan struct{}),
 			}
-			testPanic(t, f, fmt.Sprintf("[%d %d] Write: panic parsing input of length %d first bytes %b current write message %+#v", i, j, len(input), firstBytes(input), c.currentWriteMsg))
-		}
+			// Never block for random data.
+			c.writeCastHeaderOnce.Do(func() {
+				close(c.initialCastHeaderSent)
+			})
+			bb := fakes.RandomBytes(t)
+			for j, input := range bb {
+				f := func() {
+					c.Write(input)
+				}
+				testPanic(t, f, fmt.Sprintf("[%d %d] Write: panic parsing input of length %d first bytes %b current write message %+#v", i, j, len(input), firstBytes(input), c.currentWriteMsg))
+			}
+		})
 	}
 }
 
@@ -262,7 +314,7 @@ func testPanic(t *testing.T, f func(), msg string) {
 	t.Helper()
 	defer func() {
 		if r := recover(); r != nil {
-			t.Fatal(msg, r)
+			t.Fatal(msg, r, string(debug.Stack()))
 		}
 	}()
 	f()

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"tailscale.com/types/lazy"
+	"tailscale.com/util/syspolicy/internal"
 )
 
 var (
@@ -35,6 +36,8 @@ type PolicyScope struct {
 // when querying policy settings.
 // It returns [DeviceScope], unless explicitly changed with [SetDefaultScope].
 func DefaultScope() PolicyScope {
+	// Allow deferred package init functions to override the default scope.
+	internal.Init.Do()
 	return lazyDefaultScope.Get(func() PolicyScope { return DeviceScope })
 }
 

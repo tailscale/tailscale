@@ -16,6 +16,8 @@ import (
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy/internal/loggerx"
 	"tailscale.com/util/syspolicy/internal/metrics"
+	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/ptype"
 	"tailscale.com/util/syspolicy/setting"
 )
 
@@ -138,9 +140,9 @@ func (r *Reader) reload(force bool) (*setting.Snapshot, error) {
 
 	metrics.Reset(r.origin)
 
-	var m map[setting.Key]setting.RawItem
+	var m map[pkey.Key]setting.RawItem
 	if lastPolicyCount := r.lastPolicy.Len(); lastPolicyCount > 0 {
-		m = make(map[setting.Key]setting.RawItem, lastPolicyCount)
+		m = make(map[pkey.Key]setting.RawItem, lastPolicyCount)
 	}
 	for _, s := range r.settings {
 		if !r.origin.Scope().IsConfigurableSetting(s) {
@@ -364,21 +366,21 @@ func readPolicySettingValue(store Store, s *setting.Definition) (value any, err 
 	case setting.PreferenceOptionValue:
 		s, err := store.ReadString(key)
 		if err == nil {
-			var value setting.PreferenceOption
+			var value ptype.PreferenceOption
 			if err = value.UnmarshalText([]byte(s)); err == nil {
 				return value, nil
 			}
 		}
-		return setting.ShowChoiceByPolicy, err
+		return ptype.ShowChoiceByPolicy, err
 	case setting.VisibilityValue:
 		s, err := store.ReadString(key)
 		if err == nil {
-			var value setting.Visibility
+			var value ptype.Visibility
 			if err = value.UnmarshalText([]byte(s)); err == nil {
 				return value, nil
 			}
 		}
-		return setting.VisibleByPolicy, err
+		return ptype.VisibleByPolicy, err
 	case setting.DurationValue:
 		s, err := store.ReadString(key)
 		if err == nil {

@@ -107,6 +107,12 @@ func (n *nftablesRunner) AddDNATRule(origDst netip.Addr, dst netip.Addr) error {
 	if err != nil {
 		return err
 	}
+	rule := dnatRuleForChain(nat, preroutingCh, origDst, dst, nil)
+	n.conn.InsertRule(rule)
+	return n.conn.Flush()
+}
+
+func dnatRuleForChain(t *nftables.Table, ch *nftables.Chain, origDst, dst netip.Addr, meta []byte) *nftables.Rule {
 	var daddrOffset, fam, dadderLen uint32
 	if origDst.Is4() {
 		daddrOffset = 16
@@ -117,9 +123,9 @@ func (n *nftablesRunner) AddDNATRule(origDst netip.Addr, dst netip.Addr) error {
 		dadderLen = 16
 		fam = unix.NFPROTO_IPV6
 	}
-	dnatRule := &nftables.Rule{
-		Table: nat,
-		Chain: preroutingCh,
+	rule := &nftables.Rule{
+		Table: t,
+		Chain: ch,
 		Exprs: []expr.Any{
 			&expr.Payload{
 				DestRegister: 1,
@@ -143,8 +149,10 @@ func (n *nftablesRunner) AddDNATRule(origDst netip.Addr, dst netip.Addr) error {
 			},
 		},
 	}
-	n.conn.InsertRule(dnatRule)
-	return n.conn.Flush()
+	if len(meta) > 0 {
+		rule.UserData = meta
+	}
+	return rule
 }
 
 // DNATWithLoadBalancer currently just forwards all traffic destined for origDst
@@ -555,6 +563,8 @@ type NetfilterRunner interface {
 	EnsurePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error
 
 	DeletePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error
+	EnsureDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error
+	DeleteDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error
 
 	DeleteSvc(svc, tun string, targetIPs []netip.Addr, pm []PortMap) error
 
@@ -1710,55 +1720,43 @@ func (n *nftablesRunner) AddSNATRule() error {
 	return nil
 }
 
+func delMatchSubnetRouteMarkMasqRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain) error {
+
+	rule, err := createMatchSubnetRouteMarkRule(table, chain, Masq)
+	if err != nil {
+		return fmt.Errorf("create match subnet route mark rule: %w", err)
+	}
+
+	SNATRule, err := findRule(conn, rule)
+	if err != nil {
+		return fmt.Errorf("find SNAT rule v4: %w", err)
+	}
+
+	if SNATRule != nil {
+		_ = conn.DelRule(SNATRule)
+	}
+
+	if err := conn.Flush(); err != nil {
+		return fmt.Errorf("flush del SNAT rule: %w", err)
+	}
+
+	return nil
+}
+
 // DelSNATRule removes the netfilter rule to SNAT traffic destined for
 // local subnets. An error is returned if the rule does not exist.
 func (n *nftablesRunner) DelSNATRule() error {
 	conn := n.conn
 
-	hexTSFwmarkMask := getTailscaleFwmarkMask()
-	hexTSSubnetRouteMark := getTailscaleSubnetRouteMark()
-
-	exprs := []expr.Any{
-		&expr.Meta{Key: expr.MetaKeyMARK, Register: 1},
-		&expr.Bitwise{
-			SourceRegister: 1,
-			DestRegister:   1,
-			Len:            4,
-			Mask:           hexTSFwmarkMask,
-		},
-		&expr.Cmp{
-			Op:       expr.CmpOpEq,
-			Register: 1,
-			Data:     hexTSSubnetRouteMark,
-		},
-		&expr.Counter{},
-		&expr.Masq{},
-	}
-
 	for _, table := range n.getTables() {
 		chain, err := getChainFromTable(conn, table.Nat, chainNamePostrouting)
 		if err != nil {
-			return fmt.Errorf("get postrouting chain v4: %w", err)
+			return fmt.Errorf("get postrouting chain: %w", err)
 		}
-
-		rule := &nftables.Rule{
-			Table: table.Nat,
-			Chain: chain,
-			Exprs: exprs,
-		}
-
-		SNATRule, err := findRule(conn, rule)
+		err = delMatchSubnetRouteMarkMasqRule(conn, table.Nat, chain)
 		if err != nil {
-			return fmt.Errorf("find SNAT rule v4: %w", err)
+			return err
 		}
-
-		if SNATRule != nil {
-			_ = conn.DelRule(SNATRule)
-		}
-	}
-
-	if err := conn.Flush(); err != nil {
-		return fmt.Errorf("flush del SNAT rule: %w", err)
 	}
 
 	return nil

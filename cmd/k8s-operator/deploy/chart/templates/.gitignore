@@ -1,0 +1,10 @@
+# Don't add helm chart CRDs to git. Canonical CRD files live in
+# cmd/k8s-operator/deploy/crds.
+#
+# Generate for local usage with:
+# go run tailscale.com/cmd/k8s-operator/generate helmcrd
+/connector.yaml
+/dnsconfig.yaml
+/proxyclass.yaml
+/proxygroup.yaml
+/recorder.yaml

@@ -8,8 +8,9 @@ package main
 
 import (
 	"context"
-	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"expvar"
 	"flag"
 	"fmt"
 	"log"
@@ -18,25 +19,28 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gaissmai/bart"
+	"github.com/hashicorp/raft"
 	"github.com/inetaf/tcpproxy"
 	"github.com/peterbourgon/ff/v3"
+	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
+	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/cmd/natc/ippool"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netutil"
-	"tailscale.com/syncs"
-	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/tsweb"
-	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/must"
+	"tailscale.com/wgengine/netstack"
 )
 
 func main() {
@@ -48,14 +52,20 @@ func main() {
 	// Parse flags
 	fs := flag.NewFlagSet("natc", flag.ExitOnError)
 	var (
-		debugPort       = fs.Int("debug-port", 8893, "Listening port for debug/metrics endpoint")
-		hostname        = fs.String("hostname", "", "Hostname to register the service under")
-		siteID          = fs.Uint("site-id", 1, "an integer site ID to use for the ULA prefix which allows for multiple proxies to act in a HA configuration")
-		v4PfxStr        = fs.String("v4-pfx", "100.64.1.0/24", "comma-separated list of IPv4 prefixes to advertise")
-		verboseTSNet    = fs.Bool("verbose-tsnet", false, "enable verbose logging in tsnet")
-		printULA        = fs.Bool("print-ula", false, "print the ULA prefix and exit")
-		ignoreDstPfxStr = fs.String("ignore-destinations", "", "comma-separated list of prefixes to ignore")
-		wgPort          = fs.Uint("wg-port", 0, "udp port for wireguard and peer to peer traffic")
+		debugPort         = fs.Int("debug-port", 8893, "Listening port for debug/metrics endpoint")
+		hostname          = fs.String("hostname", "", "Hostname to register the service under")
+		siteID            = fs.Uint("site-id", 1, "an integer site ID to use for the ULA prefix which allows for multiple proxies to act in a HA configuration")
+		v4PfxStr          = fs.String("v4-pfx", "100.64.1.0/24", "comma-separated list of IPv4 prefixes to advertise")
+		dnsServers        = fs.String("dns-servers", "", "comma separated list of upstream DNS to use, including host and port (use system if empty)")
+		verboseTSNet      = fs.Bool("verbose-tsnet", false, "enable verbose logging in tsnet")
+		printULA          = fs.Bool("print-ula", false, "print the ULA prefix and exit")
+		ignoreDstPfxStr   = fs.String("ignore-destinations", "", "comma-separated list of prefixes to ignore")
+		wgPort            = fs.Uint("wg-port", 0, "udp port for wireguard and peer to peer traffic")
+		clusterTag        = fs.String("cluster-tag", "", "optionally run in a consensus cluster with other nodes with this tag")
+		server            = fs.String("login-server", ipn.DefaultControlURL, "the base URL of control server")
+		stateDir          = fs.String("state-dir", "", "path to directory in which to store app state")
+		clusterFollowOnly = fs.Bool("follow-only", false, "Try to find a leader with the cluster tag or exit.")
+		clusterAdminPort  = fs.Int("cluster-admin-port", 8081, "Port on localhost for the cluster admin HTTP API")
 	)
 	ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("TS_NATC"))
 
@@ -73,7 +83,7 @@ func main() {
 	}
 
 	var ignoreDstTable *bart.Table[bool]
-	for _, s := range strings.Split(*ignoreDstPfxStr, ",") {
+	for s := range strings.SplitSeq(*ignoreDstPfxStr, ",") {
 		s := strings.TrimSpace(s)
 		if s == "" {
 			continue
@@ -90,21 +100,11 @@ func main() {
 		}
 		ignoreDstTable.Insert(pfx, true)
 	}
-	var v4Prefixes []netip.Prefix
-	for _, s := range strings.Split(*v4PfxStr, ",") {
-		p := netip.MustParsePrefix(strings.TrimSpace(s))
-		if p.Masked() != p {
-			log.Fatalf("v4 prefix %v is not a masked prefix", p)
-		}
-		v4Prefixes = append(v4Prefixes, p)
-	}
-	if len(v4Prefixes) == 0 {
-		log.Fatalf("no v4 prefixes specified")
-	}
-	dnsAddr := v4Prefixes[0].Addr()
 	ts := &tsnet.Server{
 		Hostname: *hostname,
+		Dir:      *stateDir,
 	}
+	ts.ControlURL = *server
 	if *wgPort != 0 {
 		if *wgPort >= 1<<16 {
 			log.Fatalf("wg-port must be in the range [0, 65535]")
@@ -112,6 +112,7 @@ func main() {
 		ts.Port = uint16(*wgPort)
 	}
 	defer ts.Close()
+
 	if *verboseTSNet {
 		ts.Logf = log.Printf
 	}
@@ -129,6 +130,16 @@ func main() {
 			log.Fatalf("debug serve: %v", http.Serve(dln, mux))
 		}()
 	}
+
+	if err := ts.Start(); err != nil {
+		log.Fatalf("ts.Start: %v", err)
+	}
+	// TODO(raggi): this is not a public interface or guarantee.
+	ns := ts.Sys().Netstack.Get().(*netstack.Impl)
+	if *debugPort != 0 {
+		expvar.Publish("netstack", ns.ExpVar())
+	}
+
 	lc, err := ts.LocalClient()
 	if err != nil {
 		log.Fatalf("LocalClient() failed: %v", err)
@@ -137,35 +148,126 @@ func main() {
 		log.Fatalf("ts.Up: %v", err)
 	}
 
+	var prefixes []netip.Prefix
+	for _, s := range strings.Split(*v4PfxStr, ",") {
+		p := netip.MustParsePrefix(strings.TrimSpace(s))
+		if p.Masked() != p {
+			log.Fatalf("v4 prefix %v is not a masked prefix", p)
+		}
+		prefixes = append(prefixes, p)
+	}
+	routes, dnsAddr, addrPool := calculateAddresses(prefixes)
+
+	v6ULA := ula(uint16(*siteID))
+
+	var ipp ippool.IPPool
+	if *clusterTag != "" {
+		cipp := ippool.NewConsensusIPPool(addrPool)
+		clusterStateDir, err := getClusterStatePath(*stateDir)
+		if err != nil {
+			log.Fatalf("Creating cluster state dir failed: %v", err)
+		}
+		err = cipp.StartConsensus(ctx, ts, ippool.ClusterOpts{
+			Tag:        *clusterTag,
+			StateDir:   clusterStateDir,
+			FollowOnly: *clusterFollowOnly,
+		})
+		if err != nil {
+			log.Fatalf("StartConsensus: %v", err)
+		}
+		defer func() {
+			err := cipp.StopConsensus(ctx)
+			if err != nil {
+				log.Printf("Error stopping consensus: %v", err)
+			}
+		}()
+		ipp = cipp
+
+		go func() {
+			// This listens on localhost only, so that only those with access to the host machine
+			// can remove servers from the cluster config.
+			log.Print(http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", *clusterAdminPort), httpClusterAdmin(cipp)))
+		}()
+	} else {
+		ipp = &ippool.SingleMachineIPPool{IPSet: addrPool}
+	}
+
 	c := &connector{
 		ts:         ts,
-		lc:         lc,
-		dnsAddr:    dnsAddr,
-		v4Ranges:   v4Prefixes,
-		v6ULA:      ula(uint16(*siteID)),
+		whois:      lc,
+		v6ULA:      v6ULA,
 		ignoreDsts: ignoreDstTable,
+		ipPool:     ipp,
+		routes:     routes,
+		dnsAddr:    dnsAddr,
+		resolver:   getResolver(*dnsServers),
 	}
-	c.run(ctx)
+	c.run(ctx, lc)
+}
+
+// getResolver parses serverFlag and returns either the default resolver, or a
+// resolver that uses the provided comma-separated DNS server AddrPort's, or
+// panics.
+func getResolver(serverFlag string) lookupNetIPer {
+	if serverFlag == "" {
+		return net.DefaultResolver
+	}
+	var addrs []string
+	for s := range strings.SplitSeq(serverFlag, ",") {
+		s = strings.TrimSpace(s)
+		addr, err := netip.ParseAddrPort(s)
+		if err != nil {
+			log.Fatalf("dns server provided: %q does not parse: %v", s, err)
+		}
+		addrs = append(addrs, addr.String())
+	}
+	return &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network string, address string) (net.Conn, error) {
+			var dialer net.Dialer
+			// TODO(raggi): perhaps something other than random?
+			return dialer.DialContext(ctx, network, addrs[rand.N(len(addrs))])
+		},
+	}
+}
+
+func calculateAddresses(prefixes []netip.Prefix) (*netipx.IPSet, netip.Addr, *netipx.IPSet) {
+	var ipsb netipx.IPSetBuilder
+	for _, p := range prefixes {
+		ipsb.AddPrefix(p)
+	}
+	routesToAdvertise := must.Get(ipsb.IPSet())
+	dnsAddr := routesToAdvertise.Ranges()[0].From()
+	ipsb.Remove(dnsAddr)
+	addrPool := must.Get(ipsb.IPSet())
+	return routesToAdvertise, dnsAddr, addrPool
+}
+
+type lookupNetIPer interface {
+	LookupNetIP(ctx context.Context, net, host string) ([]netip.Addr, error)
+}
+
+type whoiser interface {
+	WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error)
 }
 
 type connector struct {
 	// ts is the tsnet.Server used to host the connector.
 	ts *tsnet.Server
-	// lc is the LocalClient used to interact with the tsnet.Server hosting this
+	// whois is the local.Client used to interact with the tsnet.Server hosting this
 	// connector.
-	lc *tailscale.LocalClient
+	whois whoiser
 
 	// dnsAddr is the IPv4 address to listen on for DNS requests. It is used to
 	// prevent the app connector from assigning it to a domain.
 	dnsAddr netip.Addr
 
-	// v4Ranges is the list of IPv4 ranges to advertise and assign addresses from.
-	// These are masked prefixes.
-	v4Ranges []netip.Prefix
+	// routes is the set of IPv4 ranges advertised to the tailnet, or ipset with
+	// the dnsAddr removed.
+	routes *netipx.IPSet
+
 	// v6ULA is the ULA prefix used by the app connector to assign IPv6 addresses.
 	v6ULA netip.Prefix
-
-	perPeerMap syncs.Map[tailcfg.NodeID, *perPeerState]
 
 	// ignoreDsts is initialized at start up with the contents of --ignore-destinations (if none it is nil)
 	// It is never mutated, only used for lookups.
@@ -175,6 +277,12 @@ type connector struct {
 	// return a dns response that contains the ip addresses we discovered with the lookup (ie not the
 	// natc behavior, which would return a dummy ip address pointing at natc).
 	ignoreDsts *bart.Table[bool]
+
+	// ipPool contains the per-peer IPv4 address assignments.
+	ipPool ippool.IPPool
+
+	// resolver is used to lookup IP addresses for DNS queries.
+	resolver lookupNetIPer
 }
 
 // v6ULA is the ULA prefix used by the app connector to assign IPv6 addresses.
@@ -194,11 +302,11 @@ func ula(siteID uint16) netip.Prefix {
 //
 // The passed in context is only used for the initial setup. The connector runs
 // forever.
-func (c *connector) run(ctx context.Context) {
-	if _, err := c.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+func (c *connector) run(ctx context.Context, lc *local.Client) {
+	if _, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 		AdvertiseRoutesSet: true,
 		Prefs: ipn.Prefs{
-			AdvertiseRoutes: append(c.v4Ranges, c.v6ULA),
+			AdvertiseRoutes: append(c.routes.Prefixes(), c.v6ULA),
 		},
 	}); err != nil {
 		log.Fatalf("failed to advertise routes: %v", err)
@@ -228,26 +336,6 @@ func (c *connector) serveDNS() {
 	}
 }
 
-func lookupDestinationIP(domain string) ([]netip.Addr, error) {
-	netIPs, err := net.LookupIP(domain)
-	if err != nil {
-		var dnsError *net.DNSError
-		if errors.As(err, &dnsError) && dnsError.IsNotFound {
-			return nil, nil
-		} else {
-			return nil, err
-		}
-	}
-	var addrs []netip.Addr
-	for _, ip := range netIPs {
-		a, ok := netip.AddrFromSlice(ip)
-		if ok {
-			addrs = append(addrs, a)
-		}
-	}
-	return addrs, nil
-}
-
 // handleDNS handles a DNS request to the app connector.
 // It generates a response based on the request and the node that sent it.
 //
@@ -262,65 +350,153 @@ func lookupDestinationIP(domain string) ([]netip.Addr, error) {
 func (c *connector) handleDNS(pc net.PacketConn, buf []byte, remoteAddr *net.UDPAddr) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	who, err := c.lc.WhoIs(ctx, remoteAddr.String())
+	who, err := c.whois.WhoIs(ctx, remoteAddr.String())
 	if err != nil {
-		log.Printf("HandleDNS: WhoIs failed: %v\n", err)
+		log.Printf("HandleDNS(remote=%s): WhoIs failed: %v\n", remoteAddr.String(), err)
 		return
 	}
 
 	var msg dnsmessage.Message
 	err = msg.Unpack(buf)
 	if err != nil {
-		log.Printf("HandleDNS: dnsmessage unpack failed: %v\n ", err)
+		log.Printf("HandleDNS(remote=%s): dnsmessage unpack failed: %v\n", remoteAddr.String(), err)
 		return
 	}
 
-	// If there are destination ips that we don't want to route, we
-	// have to do a dns lookup here to find the destination ip.
-	if c.ignoreDsts != nil {
-		if len(msg.Questions) > 0 {
-			q := msg.Questions[0]
-			switch q.Type {
-			case dnsmessage.TypeAAAA, dnsmessage.TypeA:
-				dstAddrs, err := lookupDestinationIP(q.Name.String())
+	var resolves map[string][]netip.Addr
+	var addrQCount int
+	for _, q := range msg.Questions {
+		if q.Type != dnsmessage.TypeA && q.Type != dnsmessage.TypeAAAA {
+			continue
+		}
+		addrQCount++
+		if _, ok := resolves[q.Name.String()]; !ok {
+			addrs, err := c.resolver.LookupNetIP(ctx, "ip", q.Name.String())
+			var dnsErr *net.DNSError
+			if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+				continue
+			}
+			if err != nil {
+				log.Printf("HandleDNS(remote=%s): lookup destination failed: %v\n", remoteAddr.String(), err)
+				return
+			}
+			// Note: If _any_ destination is ignored, pass through all of the resolved
+			// addresses as-is.
+			//
+			// This could result in some odd split-routing if there was a mix of
+			// ignored and non-ignored addresses, but it's currently the user
+			// preferred behavior.
+			if !c.ignoreDestination(addrs) {
+				addr, err := c.ipPool.IPForDomain(who.Node.ID, q.Name.String())
 				if err != nil {
-					log.Printf("HandleDNS: lookup destination failed: %v\n ", err)
+					log.Printf("HandleDNS(remote=%s): lookup destination failed: %v\n", remoteAddr.String(), err)
 					return
 				}
-				if c.ignoreDestination(dstAddrs) {
-					bs, err := dnsResponse(&msg, dstAddrs)
-					// TODO (fran): treat as SERVFAIL
-					if err != nil {
-						log.Printf("HandleDNS: generate ignore response failed: %v\n", err)
-						return
-					}
-					_, err = pc.WriteTo(bs, remoteAddr)
-					if err != nil {
-						log.Printf("HandleDNS: write failed: %v\n", err)
-					}
+				addrs = []netip.Addr{addr, v6ForV4(c.v6ULA.Addr(), addr)}
+			}
+			mak.Set(&resolves, q.Name.String(), addrs)
+		}
+	}
+
+	rcode := dnsmessage.RCodeSuccess
+	if addrQCount > 0 && len(resolves) == 0 {
+		rcode = dnsmessage.RCodeNameError
+	}
+
+	b := dnsmessage.NewBuilder(nil,
+		dnsmessage.Header{
+			ID:            msg.Header.ID,
+			Response:      true,
+			Authoritative: true,
+			RCode:         rcode,
+		})
+	b.EnableCompression()
+
+	if err := b.StartQuestions(); err != nil {
+		log.Printf("HandleDNS(remote=%s): dnsmessage start questions failed: %v\n", remoteAddr.String(), err)
+		return
+	}
+
+	for _, q := range msg.Questions {
+		b.Question(q)
+	}
+
+	if err := b.StartAnswers(); err != nil {
+		log.Printf("HandleDNS(remote=%s): dnsmessage start answers failed: %v\n", remoteAddr.String(), err)
+		return
+	}
+
+	for _, q := range msg.Questions {
+		switch q.Type {
+		case dnsmessage.TypeSOA:
+			if err := b.SOAResource(
+				dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
+				dnsmessage.SOAResource{NS: q.Name, MBox: tsMBox, Serial: 2023030600,
+					Refresh: 120, Retry: 120, Expire: 120, MinTTL: 60},
+			); err != nil {
+				log.Printf("HandleDNS(remote=%s): dnsmessage SOA resource failed: %v\n", remoteAddr.String(), err)
+				return
+			}
+		case dnsmessage.TypeNS:
+			if err := b.NSResource(
+				dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
+				dnsmessage.NSResource{NS: tsMBox},
+			); err != nil {
+				log.Printf("HandleDNS(remote=%s): dnsmessage NS resource failed: %v\n", remoteAddr.String(), err)
+				return
+			}
+		case dnsmessage.TypeAAAA:
+			for _, addr := range resolves[q.Name.String()] {
+				if !addr.Is6() {
+					continue
+				}
+				if err := b.AAAAResource(
+					dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
+					dnsmessage.AAAAResource{AAAA: addr.As16()},
+				); err != nil {
+					log.Printf("HandleDNS(remote=%s): dnsmessage AAAA resource failed: %v\n", remoteAddr.String(), err)
+					return
+				}
+			}
+		case dnsmessage.TypeA:
+			for _, addr := range resolves[q.Name.String()] {
+				if !addr.Is4() {
+					continue
+				}
+				if err := b.AResource(
+					dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
+					dnsmessage.AResource{A: addr.As4()},
+				); err != nil {
+					log.Printf("HandleDNS(remote=%s): dnsmessage A resource failed: %v\n", remoteAddr.String(), err)
 					return
 				}
 			}
 		}
 	}
-	// None of the destination IP addresses match an ignore destination prefix, do
-	// the natc thing.
 
-	resp, err := c.generateDNSResponse(&msg, who.Node.ID)
-	// TODO (fran): treat as SERVFAIL
+	out, err := b.Finish()
 	if err != nil {
-		log.Printf("HandleDNS: connector handling failed: %v\n", err)
+		log.Printf("HandleDNS(remote=%s): dnsmessage finish failed: %v\n", remoteAddr.String(), err)
 		return
 	}
-	// TODO (fran): treat as NXDOMAIN
-	if len(resp) == 0 {
-		return
-	}
-	// This connector handled the DNS request
-	_, err = pc.WriteTo(resp, remoteAddr)
+	_, err = pc.WriteTo(out, remoteAddr)
 	if err != nil {
-		log.Printf("HandleDNS: write failed: %v\n", err)
+		log.Printf("HandleDNS(remote=%s): write failed: %v\n", remoteAddr.String(), err)
 	}
+}
+
+func v6ForV4(ula netip.Addr, v4 netip.Addr) netip.Addr {
+	as16 := ula.As16()
+	as4 := v4.As4()
+	copy(as16[12:], as4[:])
+	return netip.AddrFrom16(as16)
+}
+
+func v4ForV6(v6 netip.Addr) netip.Addr {
+	as16 := v6.As16()
+	var as4 [4]byte
+	copy(as4[:], as16[12:])
+	return netip.AddrFrom4(as4)
 }
 
 // tsMBox is the mailbox used in SOA records.
@@ -328,90 +504,6 @@ func (c *connector) handleDNS(pc net.PacketConn, buf []byte, remoteAddr *net.UDP
 // So in this case, the mailbox is support.tailscale.com. with the trailing dot
 // to indicate that it is a fully qualified domain name.
 var tsMBox = dnsmessage.MustNewName("support.tailscale.com.")
-
-// generateDNSResponse generates a DNS response for the given request. The from
-// argument is the NodeID of the node that sent the request.
-func (c *connector) generateDNSResponse(req *dnsmessage.Message, from tailcfg.NodeID) ([]byte, error) {
-	pm, _ := c.perPeerMap.LoadOrStore(from, &perPeerState{c: c})
-	var addrs []netip.Addr
-	if len(req.Questions) > 0 {
-		switch req.Questions[0].Type {
-		case dnsmessage.TypeAAAA, dnsmessage.TypeA:
-			var err error
-			addrs, err = pm.ipForDomain(req.Questions[0].Name.String())
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	return dnsResponse(req, addrs)
-}
-
-// dnsResponse makes a DNS response for the natc. If the dnsmessage is requesting TypeAAAA
-// or TypeA the provided addrs of the requested type will be used.
-func dnsResponse(req *dnsmessage.Message, addrs []netip.Addr) ([]byte, error) {
-	b := dnsmessage.NewBuilder(nil,
-		dnsmessage.Header{
-			ID:            req.Header.ID,
-			Response:      true,
-			Authoritative: true,
-		})
-	b.EnableCompression()
-
-	if len(req.Questions) == 0 {
-		return b.Finish()
-	}
-	q := req.Questions[0]
-	if err := b.StartQuestions(); err != nil {
-		return nil, err
-	}
-	if err := b.Question(q); err != nil {
-		return nil, err
-	}
-	if err := b.StartAnswers(); err != nil {
-		return nil, err
-	}
-	switch q.Type {
-	case dnsmessage.TypeAAAA, dnsmessage.TypeA:
-		want6 := q.Type == dnsmessage.TypeAAAA
-		for _, ip := range addrs {
-			if want6 != ip.Is6() {
-				continue
-			}
-			if want6 {
-				if err := b.AAAAResource(
-					dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 5},
-					dnsmessage.AAAAResource{AAAA: ip.As16()},
-				); err != nil {
-					return nil, err
-				}
-			} else {
-				if err := b.AResource(
-					dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 5},
-					dnsmessage.AResource{A: ip.As4()},
-				); err != nil {
-					return nil, err
-				}
-			}
-		}
-	case dnsmessage.TypeSOA:
-		if err := b.SOAResource(
-			dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
-			dnsmessage.SOAResource{NS: q.Name, MBox: tsMBox, Serial: 2023030600,
-				Refresh: 120, Retry: 120, Expire: 120, MinTTL: 60},
-		); err != nil {
-			return nil, err
-		}
-	case dnsmessage.TypeNS:
-		if err := b.NSResource(
-			dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
-			dnsmessage.NSResource{NS: tsMBox},
-		); err != nil {
-			return nil, err
-		}
-	}
-	return b.Finish()
-}
 
 // handleTCPFlow handles a TCP flow from the given source to the given
 // destination. It uses the source address to determine the node that sent the
@@ -421,32 +513,31 @@ func dnsResponse(req *dnsmessage.Message, addrs []netip.Addr) ([]byte, error) {
 func (c *connector) handleTCPFlow(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	who, err := c.lc.WhoIs(ctx, src.Addr().String())
+	who, err := c.whois.WhoIs(ctx, src.Addr().String())
 	cancel()
 	if err != nil {
 		log.Printf("HandleTCPFlow: WhoIs failed: %v\n", err)
 		return nil, false
 	}
-
-	from := who.Node.ID
-	ps, ok := c.perPeerMap.Load(from)
-	if !ok {
-		log.Printf("handleTCPFlow: no perPeerState for %v", from)
-		return nil, false
+	dstAddr := dst.Addr()
+	if dstAddr.Is6() {
+		dstAddr = v4ForV6(dstAddr)
 	}
-	domain, ok := ps.domainForIP(dst.Addr())
+	domain, ok := c.ipPool.DomainForIP(who.Node.ID, dstAddr, time.Now())
 	if !ok {
-		log.Printf("handleTCPFlow: no domain for IP %v\n", dst.Addr())
 		return nil, false
 	}
 	return func(conn net.Conn) {
-		proxyTCPConn(conn, domain)
+		proxyTCPConn(conn, domain, c)
 	}, true
 }
 
 // ignoreDestination reports whether any of the provided dstAddrs match the prefixes configured
 // in --ignore-destinations
 func (c *connector) ignoreDestination(dstAddrs []netip.Addr) bool {
+	if c.ignoreDsts == nil {
+		return false
+	}
 	for _, a := range dstAddrs {
 		if _, ok := c.ignoreDsts.Lookup(a); ok {
 			return true
@@ -455,16 +546,34 @@ func (c *connector) ignoreDestination(dstAddrs []netip.Addr) bool {
 	return false
 }
 
-func proxyTCPConn(c net.Conn, dest string) {
+func proxyTCPConn(c net.Conn, dest string, ctor *connector) {
 	if c.RemoteAddr() == nil {
 		log.Printf("proxyTCPConn: nil RemoteAddr")
 		c.Close()
 		return
 	}
-	addrPortStr := c.LocalAddr().String()
-	_, port, err := net.SplitHostPort(addrPortStr)
+	laddr, err := netip.ParseAddrPort(c.LocalAddr().String())
 	if err != nil {
-		log.Printf("tcpRoundRobinHandler.Handle: bogus addrPort %q", addrPortStr)
+		log.Printf("proxyTCPConn: ParseAddrPort failed: %v", err)
+		c.Close()
+		return
+	}
+
+	daddrs, err := ctor.resolver.LookupNetIP(context.TODO(), "ip", dest)
+	if err != nil {
+		log.Printf("proxyTCPConn: LookupNetIP failed: %v", err)
+		c.Close()
+		return
+	}
+
+	if len(daddrs) == 0 {
+		log.Printf("proxyTCPConn: no IP addresses found for %s", dest)
+		c.Close()
+		return
+	}
+
+	if ctor.ignoreDestination(daddrs) {
+		log.Printf("proxyTCPConn: closing connection to ignored destination %s (%v)", dest, daddrs)
 		c.Close()
 		return
 	}
@@ -474,102 +583,91 @@ func proxyTCPConn(c net.Conn, dest string) {
 			return netutil.NewOneConnListener(c, nil), nil
 		},
 	}
-	p.AddRoute(addrPortStr, &tcpproxy.DialProxy{
-		Addr: fmt.Sprintf("%s:%s", dest, port),
+
+	// TODO(raggi): more code could avoid this shuffle, but avoiding allocations
+	// for now most of the time daddrs will be short.
+	rand.Shuffle(len(daddrs), func(i, j int) {
+		daddrs[i], daddrs[j] = daddrs[j], daddrs[i]
 	})
+	daddr := daddrs[0]
+
+	// Try to match the upstream and downstream protocols (v4/v6)
+	if laddr.Addr().Is6() {
+		for _, addr := range daddrs {
+			if addr.Is6() {
+				daddr = addr
+				break
+			}
+		}
+	} else {
+		for _, addr := range daddrs {
+			if addr.Is4() {
+				daddr = addr
+				break
+			}
+		}
+	}
+
+	// TODO(raggi): drop this library, it ends up being allocation and
+	// indirection heavy and really doesn't help us here.
+	dsockaddrs := netip.AddrPortFrom(daddr, laddr.Port()).String()
+	p.AddRoute(dsockaddrs, &tcpproxy.DialProxy{
+		Addr: dsockaddrs,
+	})
+
 	p.Start()
 }
 
-// perPeerState holds the state for a single peer.
-type perPeerState struct {
-	c *connector
-
-	mu           sync.Mutex
-	domainToAddr map[string][]netip.Addr
-	addrToDomain *bart.Table[string]
-}
-
-// domainForIP returns the domain name assigned to the given IP address and
-// whether it was found.
-func (ps *perPeerState) domainForIP(ip netip.Addr) (_ string, ok bool) {
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	if ps.addrToDomain == nil {
-		return "", false
-	}
-	return ps.addrToDomain.Lookup(ip)
-}
-
-// ipForDomain assigns a pair of unique IP addresses for the given domain and
-// returns them. The first address is an IPv4 address and the second is an IPv6
-// address. If the domain already has assigned addresses, it returns them.
-func (ps *perPeerState) ipForDomain(domain string) ([]netip.Addr, error) {
-	fqdn, err := dnsname.ToFQDN(domain)
-	if err != nil {
-		return nil, err
-	}
-	domain = fqdn.WithoutTrailingDot()
-
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	if addrs, ok := ps.domainToAddr[domain]; ok {
-		return addrs, nil
-	}
-	addrs := ps.assignAddrsLocked(domain)
-	return addrs, nil
-}
-
-// isIPUsedLocked reports whether the given IP address is already assigned to a
-// domain.
-// ps.mu must be held.
-func (ps *perPeerState) isIPUsedLocked(ip netip.Addr) bool {
-	_, ok := ps.addrToDomain.Lookup(ip)
-	return ok
-}
-
-// unusedIPv4Locked returns an unused IPv4 address from the available ranges.
-func (ps *perPeerState) unusedIPv4Locked() netip.Addr {
-	// TODO: skip ranges that have been exhausted
-	for _, r := range ps.c.v4Ranges {
-		ip := randV4(r)
-		for r.Contains(ip) {
-			if !ps.isIPUsedLocked(ip) && ip != ps.c.dnsAddr {
-				return ip
-			}
-			ip = ip.Next()
+func getClusterStatePath(stateDirFlag string) (string, error) {
+	var dirPath string
+	if stateDirFlag != "" {
+		dirPath = stateDirFlag
+	} else {
+		confDir, err := os.UserConfigDir()
+		if err != nil {
+			return "", err
 		}
+		dirPath = filepath.Join(confDir, "nat-connector-state")
 	}
-	return netip.Addr{}
+	dirPath = filepath.Join(dirPath, "cluster")
+
+	if err := os.MkdirAll(dirPath, 0700); err != nil {
+		return "", err
+	}
+	if fi, err := os.Stat(dirPath); err != nil {
+		return "", err
+	} else if !fi.IsDir() {
+		return "", fmt.Errorf("%v is not a directory", dirPath)
+	}
+
+	return dirPath, nil
 }
 
-// randV4 returns a random IPv4 address within the given prefix.
-func randV4(maskedPfx netip.Prefix) netip.Addr {
-	bits := 32 - maskedPfx.Bits()
-	randBits := rand.Uint32N(1 << uint(bits))
-
-	ip4 := maskedPfx.Addr().As4()
-	pn := binary.BigEndian.Uint32(ip4[:])
-	binary.BigEndian.PutUint32(ip4[:], randBits|pn)
-	return netip.AddrFrom4(ip4)
-}
-
-// assignAddrsLocked assigns a pair of unique IP addresses for the given domain
-// and returns them. The first address is an IPv4 address and the second is an
-// IPv6 address. It does not check if the domain already has assigned addresses.
-// ps.mu must be held.
-func (ps *perPeerState) assignAddrsLocked(domain string) []netip.Addr {
-	if ps.addrToDomain == nil {
-		ps.addrToDomain = &bart.Table[string]{}
-	}
-	v4 := ps.unusedIPv4Locked()
-	as16 := ps.c.v6ULA.Addr().As16()
-	as4 := v4.As4()
-	copy(as16[12:], as4[:])
-	v6 := netip.AddrFrom16(as16)
-	addrs := []netip.Addr{v4, v6}
-	mak.Set(&ps.domainToAddr, domain, addrs)
-	for _, a := range addrs {
-		ps.addrToDomain.Insert(netip.PrefixFrom(a, a.BitLen()), domain)
-	}
-	return addrs
+func httpClusterAdmin(ipp *ippool.ConsensusIPPool) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		c, err := ipp.GetClusterConfiguration()
+		if err != nil {
+			log.Printf("cluster admin http: error getClusterConfig: %v", err)
+			http.Error(w, "", http.StatusInternalServerError)
+			return
+		}
+		if err := json.NewEncoder(w).Encode(c); err != nil {
+			log.Printf("cluster admin http: error encoding raft configuration: %v", err)
+		}
+	})
+	mux.HandleFunc("DELETE /{id}", func(w http.ResponseWriter, r *http.Request) {
+		idString := r.PathValue("id")
+		id := raft.ServerID(idString)
+		idx, err := ipp.DeleteClusterServer(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := json.NewEncoder(w).Encode(idx); err != nil {
+			log.Printf("cluster admin http: error encoding delete index: %v", err)
+			return
+		}
+	})
+	return mux
 }

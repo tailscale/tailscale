@@ -242,9 +242,9 @@ type noopBind struct{}
 func (noopBind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uint16, err error) {
 	return nil, 1, nil
 }
-func (noopBind) Close() error                            { return nil }
-func (noopBind) SetMark(mark uint32) error               { return nil }
-func (noopBind) Send(b [][]byte, ep conn.Endpoint) error { return nil }
+func (noopBind) Close() error                                        { return nil }
+func (noopBind) SetMark(mark uint32) error                           { return nil }
+func (noopBind) Send(b [][]byte, ep conn.Endpoint, offset int) error { return nil }
 func (noopBind) ParseEndpoint(s string) (conn.Endpoint, error) {
 	return dummyEndpoint(s), nil
 }

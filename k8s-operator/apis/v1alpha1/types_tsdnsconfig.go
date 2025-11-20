@@ -6,6 +6,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -18,6 +19,7 @@ var DNSConfigKind = "DNSConfig"
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=dc
 // +kubebuilder:printcolumn:name="NameserverIP",type="string",JSONPath=`.status.nameserver.ip`,description="Service IP address of the nameserver"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // DNSConfig can be deployed to cluster to make a subset of Tailscale MagicDNS
 // names resolvable by cluster workloads. Use this if: A) you need to refer to
@@ -44,7 +46,6 @@ var DNSConfigKind = "DNSConfig"
 // using its MagicDNS name, you must also annotate the Ingress resource with
 // tailscale.com/experimental-forward-cluster-traffic-via-ingress annotation to
 // ensure that the proxy created for the Ingress listens on its Pod IP address.
-// NB: Clusters where Pods get assigned IPv6 addresses only are currently not supported.
 type DNSConfig struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -81,6 +82,16 @@ type Nameserver struct {
 	// Nameserver image. Defaults to tailscale/k8s-nameserver:unstable.
 	// +optional
 	Image *NameserverImage `json:"image,omitempty"`
+	// Service configuration.
+	// +optional
+	Service *NameserverService `json:"service,omitempty"`
+	// Pod configuration.
+	// +optional
+	Pod *NameserverPod `json:"pod,omitempty"`
+	// Replicas specifies how many Pods to create. Defaults to 1.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	Replicas *int32 `json:"replicas,omitempty"`
 }
 
 type NameserverImage struct {
@@ -90,6 +101,18 @@ type NameserverImage struct {
 	// Tag defaults to unstable.
 	// +optional
 	Tag string `json:"tag,omitempty"`
+}
+
+type NameserverService struct {
+	// ClusterIP sets the static IP of the service used by the nameserver.
+	// +optional
+	ClusterIP string `json:"clusterIP,omitempty"`
+}
+
+type NameserverPod struct {
+	// If specified, applies tolerations to the pods deployed by the DNSConfig resource.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 }
 
 type DNSConfigStatus struct {
@@ -104,7 +127,7 @@ type DNSConfigStatus struct {
 
 type NameserverStatus struct {
 	// IP is the ClusterIP of the Service fronting the deployed ts.net nameserver.
-	// Currently you must manually update your cluster DNS config to add
+	// Currently, you must manually update your cluster DNS config to add
 	// this address as a stub nameserver for ts.net for cluster workloads to be
 	// able to resolve MagicDNS names associated with egress or Ingress
 	// proxies.

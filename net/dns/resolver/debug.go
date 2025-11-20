@@ -8,14 +8,18 @@ import (
 	"html"
 	"net/http"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
+	"tailscale.com/syncs"
 )
 
 func init() {
+	if !buildfeatures.HasDNS {
+		return
+	}
 	health.RegisterDebugHandler("dnsfwd", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n, _ := strconv.Atoi(r.FormValue("n"))
 		if n <= 0 {
@@ -35,7 +39,7 @@ func init() {
 var fwdLogAtomic atomic.Pointer[fwdLog]
 
 type fwdLog struct {
-	mu  sync.Mutex
+	mu  syncs.Mutex
 	pos int // ent[pos] is next entry
 	ent []fwdLogEntry
 }

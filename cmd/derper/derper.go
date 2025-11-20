@@ -19,6 +19,7 @@ import (
 	"expvar"
 	"flag"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"math"
@@ -26,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -35,10 +37,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tailscale/setec/client/setec"
 	"golang.org/x/time/rate"
 	"tailscale.com/atomicfile"
-	"tailscale.com/derp"
-	"tailscale.com/derp/derphttp"
+	"tailscale.com/derp/derpserver"
 	"tailscale.com/metrics"
 	"tailscale.com/net/ktimeout"
 	"tailscale.com/net/stunserver"
@@ -46,6 +48,9 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
+
+	// Support for prometheus varz in tsweb
+	_ "tailscale.com/tsweb/promvarz"
 )
 
 var (
@@ -57,17 +62,24 @@ var (
 	configPath  = flag.String("c", "", "config file path")
 	certMode    = flag.String("certmode", "letsencrypt", "mode for getting a cert. possible options: manual, letsencrypt")
 	certDir     = flag.String("certdir", tsweb.DefaultCertDir("derper-certs"), "directory to store LetsEncrypt certs, if addr's port is :443")
-	hostname    = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
+	hostname    = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443. When --certmode=manual, this can be an IP address to avoid SNI checks")
 	runSTUN     = flag.Bool("stun", true, "whether to run a STUN server. It will bind to the same IP (if any) as the --addr flag value.")
 	runDERP     = flag.Bool("derp", true, "whether to run a DERP server. The only reason to set this false is if you're decommissioning a server but want to keep its bootstrap DNS functionality still running.")
+	flagHome    = flag.String("home", "", "what to serve at the root path. It may be left empty (the default, for a default homepage), \"blank\" for a blank page, or a URL to redirect to")
 
-	meshPSKFile     = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It should contain some hex string; whitespace is trimmed.")
-	meshWith        = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list")
+	meshPSKFile     = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It must be 64 lowercase hexadecimal characters; whitespace is trimmed.")
+	meshWith        = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list. If an entry contains a slash, the second part names a hostname to be used when dialing the target.")
+	secretsURL      = flag.String("secrets-url", "", "SETEC server URL for secrets retrieval of mesh key")
+	secretPrefix    = flag.String("secrets-path-prefix", "prod/derp", "setec path prefix for \""+setecMeshKeyName+"\" secret for DERP mesh key")
+	secretsCacheDir = flag.String("secrets-cache-dir", defaultSetecCacheDir(), "directory to cache setec secrets in (required if --secrets-url is set)")
 	bootstrapDNS    = flag.String("bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns")
 	unpublishedDNS  = flag.String("unpublished-bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns and not publish in the list. If an entry contains a slash, the second part names a DNS record to poll for its TXT record with a `0` to `100` value for rollout percentage.")
+
 	verifyClients   = flag.Bool("verify-clients", false, "verify clients to this DERP server through a local tailscaled instance.")
 	verifyClientURL = flag.String("verify-client-url", "", "if non-empty, an admission controller URL for permitting client connections; see tailcfg.DERPAdmitClientRequest")
 	verifyFailOpen  = flag.Bool("verify-client-url-fail-open", true, "whether we fail open if --verify-client-url is unreachable")
+
+	socket = flag.String("socket", "", "optional alternate path to tailscaled socket (only relevant when using --verify-clients)")
 
 	acceptConnLimit = flag.Float64("accept-connection-limit", math.Inf(+1), "rate limit for accepting new connection")
 	acceptConnBurst = flag.Int("accept-connection-burst", math.MaxInt, "burst limit for accepting new connection")
@@ -76,12 +88,20 @@ var (
 	tcpKeepAlive = flag.Duration("tcp-keepalive-time", 10*time.Minute, "TCP keepalive time")
 	// tcpUserTimeout is intentionally short, so that hung connections are cleaned up promptly. DERPs should be nearby users.
 	tcpUserTimeout = flag.Duration("tcp-user-timeout", 15*time.Second, "TCP user timeout")
+	// tcpWriteTimeout is the timeout for writing to client TCP connections. It does not apply to mesh connections.
+	tcpWriteTimeout = flag.Duration("tcp-write-timeout", derpserver.DefaultTCPWiteTimeout, "TCP write timeout; 0 results in no timeout being set on writes")
+
+	// ACE
+	flagACEEnabled = flag.Bool("ace", false, "whether to enable embedded ACE server [experimental + in-development as of 2025-09-12; not yet documented]")
 )
 
 var (
 	tlsRequestVersion = &metrics.LabelMap{Label: "version"}
 	tlsActiveVersion  = &metrics.LabelMap{Label: "version"}
 )
+
+const setecMeshKeyName = "meshkey"
+const meshKeyEnvVar = "TAILSCALE_DERPER_MESH_KEY"
 
 func init() {
 	expvar.Publish("derper_tls_request_version", tlsRequestVersion)
@@ -168,31 +188,74 @@ func main() {
 
 	serveTLS := tsweb.IsProd443(*addr) || *certMode == "manual"
 
-	s := derp.NewServer(cfg.PrivateKey, log.Printf)
+	s := derpserver.New(cfg.PrivateKey, log.Printf)
 	s.SetVerifyClient(*verifyClients)
+	s.SetTailscaledSocketPath(*socket)
 	s.SetVerifyClientURL(*verifyClientURL)
 	s.SetVerifyClientURLFailOpen(*verifyFailOpen)
+	s.SetTCPWriteTimeout(*tcpWriteTimeout)
 
-	if *meshPSKFile != "" {
-		b, err := os.ReadFile(*meshPSKFile)
+	var meshKey string
+	if *dev {
+		meshKey = os.Getenv(meshKeyEnvVar)
+		if meshKey == "" {
+			log.Printf("No mesh key specified for dev via %s\n", meshKeyEnvVar)
+		} else {
+			log.Printf("Set mesh key from %s\n", meshKeyEnvVar)
+		}
+	} else if *secretsURL != "" {
+		meshKeySecret := path.Join(*secretPrefix, setecMeshKeyName)
+		fc, err := setec.NewFileCache(*secretsCacheDir)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf("NewFileCache: %v", err)
 		}
-		key := strings.TrimSpace(string(b))
-		if matched, _ := regexp.MatchString(`(?i)^[0-9a-f]{64,}$`, key); !matched {
-			log.Fatalf("key in %s must contain 64+ hex digits", *meshPSKFile)
+		log.Printf("Setting up setec store from %q", *secretsURL)
+		st, err := setec.NewStore(ctx,
+			setec.StoreConfig{
+				Client: setec.Client{Server: *secretsURL},
+				Secrets: []string{
+					meshKeySecret,
+				},
+				Cache: fc,
+			})
+		if err != nil {
+			log.Fatalf("NewStore: %v", err)
 		}
-		s.SetMeshKey(key)
-		log.Printf("DERP mesh key configured")
+		meshKey = st.Secret(meshKeySecret).GetString()
+		log.Println("Got mesh key from setec store")
+		st.Close()
+	} else if *meshPSKFile != "" {
+		b, err := setec.StaticFile(*meshPSKFile)
+		if err != nil {
+			log.Fatalf("StaticFile failed to get key: %v", err)
+		}
+		log.Println("Got mesh key from static file")
+		meshKey = b.GetString()
 	}
+
+	if meshKey == "" && *dev {
+		log.Printf("No mesh key configured for --dev mode")
+	} else if meshKey == "" {
+		log.Printf("No mesh key configured")
+	} else if err := s.SetMeshKey(meshKey); err != nil {
+		log.Fatalf("invalid mesh key: %v", err)
+	} else {
+		log.Println("DERP mesh key configured")
+	}
+
 	if err := startMesh(s); err != nil {
 		log.Fatalf("startMesh: %v", err)
 	}
 	expvar.Publish("derp", s.ExpVar())
 
+	handleHome, ok := getHomeHandler(*flagHome)
+	if !ok {
+		log.Fatalf("unknown --home value %q", *flagHome)
+	}
+
 	mux := http.NewServeMux()
 	if *runDERP {
-		derpHandler := derphttp.Handler(s)
+		derpHandler := derpserver.Handler(s)
 		derpHandler = addWebSocketSupport(s, derpHandler)
 		mux.Handle("/derp", derpHandler)
 	} else {
@@ -203,41 +266,20 @@ func main() {
 
 	// These two endpoints are the same. Different versions of the clients
 	// have assumes different paths over time so we support both.
-	mux.HandleFunc("/derp/probe", derphttp.ProbeHandler)
-	mux.HandleFunc("/derp/latency-check", derphttp.ProbeHandler)
+	mux.HandleFunc("/derp/probe", derpserver.ProbeHandler)
+	mux.HandleFunc("/derp/latency-check", derpserver.ProbeHandler)
 
 	go refreshBootstrapDNSLoop()
 	mux.HandleFunc("/bootstrap-dns", tsweb.BrowserHeaderHandlerFunc(handleBootstrapDNS))
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tsweb.AddBrowserHeaders(w)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(200)
-		io.WriteString(w, `<html><body>
-<h1>DERP</h1>
-<p>
-  This is a <a href="https://tailscale.com/">Tailscale</a> DERP server.
-</p>
-<p>
-  Documentation:
-</p>
-<ul>
-  <li><a href="https://tailscale.com/kb/1232/derp-servers">About DERP</a></li>
-  <li><a href="https://pkg.go.dev/tailscale.com/derp">Protocol & Go docs</a></li>
-  <li><a href="https://github.com/tailscale/tailscale/tree/main/cmd/derper#derp">How to run a DERP server</a></li>
-</ul>
-`)
-		if !*runDERP {
-			io.WriteString(w, `<p>Status: <b>disabled</b></p>`)
-		}
-		if tsweb.AllowDebugAccess(r) {
-			io.WriteString(w, "<p>Debug info at <a href='/debug/'>/debug/</a>.</p>\n")
-		}
+		handleHome.ServeHTTP(w, r)
 	}))
 	mux.Handle("/robots.txt", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tsweb.AddBrowserHeaders(w)
 		io.WriteString(w, "User-agent: *\nDisallow: /\n")
 	}))
-	mux.Handle("/generate_204", http.HandlerFunc(derphttp.ServeNoContent))
+	mux.Handle("/generate_204", http.HandlerFunc(derpserver.ServeNoContent))
 	debug := tsweb.Debugger(mux)
 	debug.KV("TLS hostname", *hostname)
 	debug.KV("Mesh key", s.HasMeshKey())
@@ -273,6 +315,9 @@ func main() {
 		Control:   ktimeout.UserTimeout(*tcpUserTimeout),
 		KeepAlive: *tcpKeepAlive,
 	}
+	// As of 2025-02-19, MPTCP does not support TCP_USER_TIMEOUT socket option
+	// set in ktimeout.UserTimeout above.
+	lc.SetMultipathTCP(false)
 
 	quietLogger := log.New(logger.HTTPServerLogFilter{Inner: log.Printf}, "", 0)
 	httpsrv := &http.Server{
@@ -330,6 +375,11 @@ func main() {
 				tlsRequestVersion.Add(label, 1)
 				tlsActiveVersion.Add(label, 1)
 				defer tlsActiveVersion.Add(label, -1)
+
+				if r.Method == "CONNECT" {
+					serveConnect(s, w, r)
+					return
+				}
 			}
 
 			mux.ServeHTTP(w, r)
@@ -337,7 +387,7 @@ func main() {
 		if *httpPort > -1 {
 			go func() {
 				port80mux := http.NewServeMux()
-				port80mux.HandleFunc("/generate_204", derphttp.ServeNoContent)
+				port80mux.HandleFunc("/generate_204", derpserver.ServeNoContent)
 				port80mux.Handle("/", certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}))
 				port80srv := &http.Server{
 					Addr:        net.JoinHostPort(listenHost, fmt.Sprintf("%d", *httpPort)),
@@ -387,6 +437,10 @@ func prodAutocertHostPolicy(_ context.Context, host string) error {
 	return errors.New("invalid hostname")
 }
 
+func defaultSetecCacheDir() string {
+	return filepath.Join(os.Getenv("HOME"), ".cache", "derper-secrets")
+}
+
 func defaultMeshPSKFile() string {
 	try := []string{
 		"/home/derp/keys/derp-mesh.key",
@@ -427,32 +481,32 @@ func newRateLimitedListener(ln net.Listener, limit rate.Limit, burst int) *rateL
 	return &rateLimitedListener{Listener: ln, lim: rate.NewLimiter(limit, burst)}
 }
 
-func (l *rateLimitedListener) ExpVar() expvar.Var {
+func (ln *rateLimitedListener) ExpVar() expvar.Var {
 	m := new(metrics.Set)
-	m.Set("counter_accepted_connections", &l.numAccepts)
-	m.Set("counter_rejected_connections", &l.numRejects)
+	m.Set("counter_accepted_connections", &ln.numAccepts)
+	m.Set("counter_rejected_connections", &ln.numRejects)
 	return m
 }
 
 var errLimitedConn = errors.New("cannot accept connection; rate limited")
 
-func (l *rateLimitedListener) Accept() (net.Conn, error) {
+func (ln *rateLimitedListener) Accept() (net.Conn, error) {
 	// Even under a rate limited situation, we accept the connection immediately
 	// and close it, rather than being slow at accepting new connections.
 	// This provides two benefits: 1) it signals to the client that something
 	// is going on on the server, and 2) it prevents new connections from
 	// piling up and occupying resources in the OS kernel.
 	// The client will retry as needing (with backoffs in place).
-	cn, err := l.Listener.Accept()
+	cn, err := ln.Listener.Accept()
 	if err != nil {
 		return nil, err
 	}
-	if !l.lim.Allow() {
-		l.numRejects.Add(1)
+	if !ln.lim.Allow() {
+		ln.numRejects.Add(1)
 		cn.Close()
 		return nil, errLimitedConn
 	}
-	l.numAccepts.Add(1)
+	ln.numAccepts.Add(1)
 	return cn, nil
 }
 
@@ -467,4 +521,85 @@ func init() {
 		}
 		return 0
 	}))
+}
+
+type templateData struct {
+	ShowAbuseInfo bool
+	Disabled      bool
+	AllowDebug    bool
+}
+
+// homePageTemplate renders the home page using [templateData].
+var homePageTemplate = template.Must(template.New("home").Parse(`<html><body>
+<h1>DERP</h1>
+<p>
+  This is a <a href="https://tailscale.com/">Tailscale</a> DERP server.
+</p>
+
+<p>
+  It provides STUN, interactive connectivity establishment, and relaying of end-to-end encrypted traffic
+  for Tailscale clients.
+</p>
+
+{{if .ShowAbuseInfo }}
+<p>
+  If you suspect abuse, please contact <a href="mailto:security@tailscale.com">security@tailscale.com</a>.
+</p>
+{{end}}
+
+<p>
+  Documentation:
+</p>
+
+<ul>
+{{if .ShowAbuseInfo }}
+  <li><a href="https://tailscale.com/security-policies">Tailscale Security Policies</a></li>
+  <li><a href="https://tailscale.com/tailscale-aup">Tailscale Acceptable Use Policies</a></li>
+{{end}}
+  <li><a href="https://tailscale.com/kb/1232/derp-servers">About DERP</a></li>
+  <li><a href="https://pkg.go.dev/tailscale.com/derp">Protocol & Go docs</a></li>
+  <li><a href="https://github.com/tailscale/tailscale/tree/main/cmd/derper#derp">How to run a DERP server</a></li>
+</ul>
+
+{{if .Disabled}}
+<p>Status: <b>disabled</b></p>
+{{end}}
+
+{{if .AllowDebug}}
+<p>Debug info at <a href='/debug/'>/debug/</a>.</p>
+{{end}}
+</body>
+</html>
+`))
+
+// getHomeHandler returns a handler for the home page based on a flag string
+// as documented on the --home flag.
+func getHomeHandler(val string) (_ http.Handler, ok bool) {
+	if val == "" {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(200)
+			err := homePageTemplate.Execute(w, templateData{
+				ShowAbuseInfo: validProdHostname.MatchString(*hostname),
+				Disabled:      !*runDERP,
+				AllowDebug:    tsweb.AllowDebugAccess(r),
+			})
+			if err != nil {
+				if r.Context().Err() == nil {
+					log.Printf("homePageTemplate.Execute: %v", err)
+				}
+				return
+			}
+		}), true
+	}
+	if val == "blank" {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(200)
+		}), true
+	}
+	if strings.HasPrefix(val, "http://") || strings.HasPrefix(val, "https://") {
+		return http.RedirectHandler(val, http.StatusFound), true
+	}
+	return nil, false
 }

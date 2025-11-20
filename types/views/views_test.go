@@ -4,8 +4,7 @@
 package views
 
 import (
-	"bytes"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/netip"
 	"reflect"
@@ -15,7 +14,26 @@ import (
 	"unsafe"
 
 	qt "github.com/frankban/quicktest"
+	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"tailscale.com/types/structs"
 )
+
+// Statically verify that each type implements the following interfaces.
+var _ = []interface {
+	jsonv1.Marshaler
+	jsonv1.Unmarshaler
+	jsonv2.MarshalerTo
+	jsonv2.UnmarshalerFrom
+}{
+	(*ByteSlice[[]byte])(nil),
+	(*SliceView[*testStruct, testStructView])(nil),
+	(*Slice[testStruct])(nil),
+	(*MapSlice[*testStruct, testStructView])(nil),
+	(*Map[*testStruct, testStructView])(nil),
+	(*ValuePointer[testStruct])(nil),
+}
 
 type viewStruct struct {
 	Int        int
@@ -82,14 +100,16 @@ func TestViewsJSON(t *testing.T) {
 	ipp := SliceOf(mustCIDR("192.168.0.0/24"))
 	ss := SliceOf([]string{"bar"})
 	tests := []struct {
-		name     string
-		in       viewStruct
-		wantJSON string
+		name       string
+		in         viewStruct
+		wantJSONv1 string
+		wantJSONv2 string
 	}{
 		{
-			name:     "empty",
-			in:       viewStruct{},
-			wantJSON: `{"Int":0,"Addrs":null,"Strings":null}`,
+			name:       "empty",
+			in:         viewStruct{},
+			wantJSONv1: `{"Int":0,"Addrs":null,"Strings":null}`,
+			wantJSONv2: `{"Int":0,"Addrs":[],"Strings":[]}`,
 		},
 		{
 			name: "everything",
@@ -100,30 +120,49 @@ func TestViewsJSON(t *testing.T) {
 				StringsPtr: &ss,
 				Strings:    ss,
 			},
-			wantJSON: `{"Int":1234,"Addrs":["192.168.0.0/24"],"Strings":["bar"],"AddrsPtr":["192.168.0.0/24"],"StringsPtr":["bar"]}`,
+			wantJSONv1: `{"Int":1234,"Addrs":["192.168.0.0/24"],"Strings":["bar"],"AddrsPtr":["192.168.0.0/24"],"StringsPtr":["bar"]}`,
+			wantJSONv2: `{"Int":1234,"Addrs":["192.168.0.0/24"],"Strings":["bar"],"AddrsPtr":["192.168.0.0/24"],"StringsPtr":["bar"]}`,
 		},
 	}
 
-	var buf bytes.Buffer
-	encoder := json.NewEncoder(&buf)
-	encoder.SetIndent("", "")
 	for _, tc := range tests {
-		buf.Reset()
-		if err := encoder.Encode(&tc.in); err != nil {
-			t.Fatal(err)
+		cmpOpts := cmp.Options{
+			cmp.AllowUnexported(Slice[string]{}),
+			cmp.AllowUnexported(Slice[netip.Prefix]{}),
+			cmpopts.EquateComparable(netip.Prefix{}),
 		}
-		b := buf.Bytes()
-		gotJSON := strings.TrimSpace(string(b))
-		if tc.wantJSON != gotJSON {
-			t.Fatalf("JSON: %v; want: %v", gotJSON, tc.wantJSON)
-		}
-		var got viewStruct
-		if err := json.Unmarshal(b, &got); err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(got, tc.in) {
-			t.Fatalf("unmarshal resulted in different output: %+v; want %+v", got, tc.in)
-		}
+		t.Run("JSONv1", func(t *testing.T) {
+			gotJSON, err := jsonv1.Marshal(tc.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(gotJSON) != tc.wantJSONv1 {
+				t.Fatalf("JSON: %s; want: %s", gotJSON, tc.wantJSONv1)
+			}
+			var got viewStruct
+			if err := jsonv1.Unmarshal(gotJSON, &got); err != nil {
+				t.Fatal(err)
+			}
+			if d := cmp.Diff(got, tc.in, cmpOpts); d != "" {
+				t.Fatalf("unmarshal mismatch (-got +want):\n%s", d)
+			}
+		})
+		t.Run("JSONv2", func(t *testing.T) {
+			gotJSON, err := jsonv2.Marshal(tc.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(gotJSON) != tc.wantJSONv2 {
+				t.Fatalf("JSON: %s; want: %s", gotJSON, tc.wantJSONv2)
+			}
+			var got viewStruct
+			if err := jsonv2.Unmarshal(gotJSON, &got); err != nil {
+				t.Fatal(err)
+			}
+			if d := cmp.Diff(got, tc.in, cmpOpts, cmpopts.EquateEmpty()); d != "" {
+				t.Fatalf("unmarshal mismatch (-got +want):\n%s", d)
+			}
+		})
 	}
 }
 
@@ -150,6 +189,161 @@ func TestViewUtils(t *testing.T) {
 		SliceOf([]string{"a", "b", "c"}).Slice(1, 2),
 		SliceOf([]string{"b", "c"}).SliceTo(1)),
 		qt.Equals, true)
+}
+
+func TestSliceEqualAnyOrderFunc(t *testing.T) {
+	type nc struct {
+		_ structs.Incomparable
+		v string
+	}
+
+	// ncFrom returns a Slice[nc] from a slice of []string
+	ncFrom := func(s ...string) Slice[nc] {
+		var out []nc
+		for _, v := range s {
+			out = append(out, nc{v: v})
+		}
+		return SliceOf(out)
+	}
+
+	// cmp returns a comparable value for a nc
+	cmp := func(a nc) string { return a.v }
+
+	v := ncFrom("foo", "bar")
+	c := qt.New(t)
+
+	// Simple case of slice equal to itself.
+	c.Check(SliceEqualAnyOrderFunc(v, v, cmp), qt.Equals, true)
+
+	// Different order.
+	c.Check(SliceEqualAnyOrderFunc(v, ncFrom("bar", "foo"), cmp), qt.Equals, true)
+
+	// Different values, same length
+	c.Check(SliceEqualAnyOrderFunc(v, ncFrom("foo", "baz"), cmp), qt.Equals, false)
+
+	// Different values, different length
+	c.Check(SliceEqualAnyOrderFunc(v, ncFrom("foo"), cmp), qt.Equals, false)
+
+	// Nothing shared
+	c.Check(SliceEqualAnyOrderFunc(v, ncFrom("baz", "qux"), cmp), qt.Equals, false)
+
+	// Long slice that matches
+	longSlice := ncFrom("a", "b", "c", "d", "e", "f", "g", "h", "i", "j")
+	longSame := ncFrom("b", "a", "c", "d", "e", "f", "g", "h", "i", "j") // first 2 elems swapped
+	c.Check(SliceEqualAnyOrderFunc(longSlice, longSame, cmp), qt.Equals, true)
+
+	// Long difference; past the quadratic limit
+	longDiff := ncFrom("b", "a", "c", "d", "e", "f", "g", "h", "i", "k") // differs at end
+	c.Check(SliceEqualAnyOrderFunc(longSlice, longDiff, cmp), qt.Equals, false)
+
+	// The short slice optimization had a bug where it wouldn't handle
+	// duplicate elements; test various cases here driven by code coverage.
+	shortTestCases := []struct {
+		name   string
+		s1, s2 Slice[nc]
+		want   bool
+	}{
+		{
+			name: "duplicates_same_length",
+			s1:   ncFrom("a", "a", "b"),
+			s2:   ncFrom("a", "b", "b"),
+			want: false,
+		},
+		{
+			name: "duplicates_different_matched",
+			s1:   ncFrom("x", "y", "a", "a", "b"),
+			s2:   ncFrom("x", "y", "b", "a", "a"),
+			want: true,
+		},
+		{
+			name: "item_in_a_not_b",
+			s1:   ncFrom("x", "y", "a", "b", "c"),
+			s2:   ncFrom("x", "y", "b", "c", "q"),
+			want: false,
+		},
+	}
+	for _, tc := range shortTestCases {
+		t.Run("short_"+tc.name, func(t *testing.T) {
+			c.Check(SliceEqualAnyOrderFunc(tc.s1, tc.s2, cmp), qt.Equals, tc.want)
+		})
+	}
+}
+
+func TestSliceEqualAnyOrderAllocs(t *testing.T) {
+	ss := func(s ...string) Slice[string] { return SliceOf(s) }
+	cmp := func(s string) string { return s }
+
+	t.Run("no-allocs-short-unordered", func(t *testing.T) {
+		// No allocations for short comparisons
+		short1 := ss("a", "b", "c")
+		short2 := ss("c", "b", "a")
+		if n := testing.AllocsPerRun(1000, func() {
+			if !SliceEqualAnyOrder(short1, short2) {
+				t.Fatal("not equal")
+			}
+			if !SliceEqualAnyOrderFunc(short1, short2, cmp) {
+				t.Fatal("not equal")
+			}
+		}); n > 0 {
+			t.Fatalf("allocs = %v; want 0", n)
+		}
+	})
+
+	t.Run("no-allocs-long-match", func(t *testing.T) {
+		long1 := ss("a", "b", "c", "d", "e", "f", "g", "h", "i", "j")
+		long2 := ss("a", "b", "c", "d", "e", "f", "g", "h", "i", "j")
+
+		if n := testing.AllocsPerRun(1000, func() {
+			if !SliceEqualAnyOrder(long1, long2) {
+				t.Fatal("not equal")
+			}
+			if !SliceEqualAnyOrderFunc(long1, long2, cmp) {
+				t.Fatal("not equal")
+			}
+		}); n > 0 {
+			t.Fatalf("allocs = %v; want 0", n)
+		}
+	})
+
+	t.Run("allocs-long-unordered", func(t *testing.T) {
+		// We do unfortunately allocate for long comparisons.
+		long1 := ss("a", "b", "c", "d", "e", "f", "g", "h", "i", "j")
+		long2 := ss("c", "b", "a", "e", "d", "f", "g", "h", "i", "j")
+
+		if n := testing.AllocsPerRun(1000, func() {
+			if !SliceEqualAnyOrder(long1, long2) {
+				t.Fatal("not equal")
+			}
+			if !SliceEqualAnyOrderFunc(long1, long2, cmp) {
+				t.Fatal("not equal")
+			}
+		}); n == 0 {
+			t.Fatalf("unexpectedly didn't allocate")
+		}
+	})
+}
+
+func BenchmarkSliceEqualAnyOrder(b *testing.B) {
+	b.Run("short", func(b *testing.B) {
+		b.ReportAllocs()
+		s1 := SliceOf([]string{"foo", "bar"})
+		s2 := SliceOf([]string{"bar", "foo"})
+		for range b.N {
+			if !SliceEqualAnyOrder(s1, s2) {
+				b.Fatal()
+			}
+		}
+	})
+	b.Run("long", func(b *testing.B) {
+		b.ReportAllocs()
+		s1 := SliceOf([]string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"})
+		s2 := SliceOf([]string{"c", "b", "a", "e", "d", "f", "g", "h", "i", "j"})
+		for range b.N {
+			if !SliceEqualAnyOrder(s1, s2) {
+				b.Fatal()
+			}
+		}
+	})
 }
 
 func TestSliceEqual(t *testing.T) {
@@ -446,6 +640,7 @@ func (v testStructView) AsStruct() *testStruct {
 	}
 	return v.p.Clone()
 }
+func (v testStructView) ValueForTest() string { return v.p.value }
 
 func TestSliceViewRange(t *testing.T) {
 	vs := SliceOfViews([]*testStruct{{value: "foo"}, {value: "bar"}})
@@ -456,5 +651,131 @@ func TestSliceViewRange(t *testing.T) {
 	want := []string{"0-foo", "1-bar"}
 	if !slices.Equal(got, want) {
 		t.Errorf("got %q; want %q", got, want)
+	}
+}
+
+func TestMapIter(t *testing.T) {
+	m := MapOf(map[string]int{"foo": 1, "bar": 2})
+	var got []string
+	for k, v := range m.All() {
+		got = append(got, fmt.Sprintf("%s-%d", k, v))
+	}
+	slices.Sort(got)
+	want := []string{"bar-2", "foo-1"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q; want %q", got, want)
+	}
+}
+
+func TestMapSliceIter(t *testing.T) {
+	m := MapSliceOf(map[string][]int{"foo": {3, 4}, "bar": {1, 2}})
+	var got []string
+	for k, v := range m.All() {
+		got = append(got, fmt.Sprintf("%s-%d", k, v))
+	}
+	slices.Sort(got)
+	want := []string{"bar-{[1 2]}", "foo-{[3 4]}"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q; want %q", got, want)
+	}
+}
+
+func TestMapFnIter(t *testing.T) {
+	m := MapFnOf[string, *testStruct, testStructView](map[string]*testStruct{
+		"foo": {value: "fooVal"},
+		"bar": {value: "barVal"},
+	}, func(p *testStruct) testStructView { return testStructView{p} })
+	var got []string
+	for k, v := range m.All() {
+		got = append(got, fmt.Sprintf("%v-%v", k, v.ValueForTest()))
+	}
+	slices.Sort(got)
+	want := []string{"bar-barVal", "foo-fooVal"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q; want %q", got, want)
+	}
+}
+
+func TestMapViewsEqual(t *testing.T) {
+	testCases := []struct {
+		name string
+		a, b map[string]string
+		want bool
+	}{
+		{
+			name: "both_nil",
+			a:    nil,
+			b:    nil,
+			want: true,
+		},
+		{
+			name: "both_empty",
+			a:    map[string]string{},
+			b:    map[string]string{},
+			want: true,
+		},
+		{
+			name: "one_nil",
+			a:    nil,
+			b:    map[string]string{"a": "1"},
+			want: false,
+		},
+		{
+			name: "different_length",
+			a:    map[string]string{"a": "1"},
+			b:    map[string]string{"a": "1", "b": "2"},
+			want: false,
+		},
+		{
+			name: "different_values",
+			a:    map[string]string{"a": "1"},
+			b:    map[string]string{"a": "2"},
+			want: false,
+		},
+		{
+			name: "different_keys",
+			a:    map[string]string{"a": "1"},
+			b:    map[string]string{"b": "1"},
+			want: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := MapViewsEqual(MapOf(tc.a), MapOf(tc.b))
+			if got != tc.want {
+				t.Errorf("MapViewsEqual: got=%v, want %v", got, tc.want)
+			}
+
+			got = MapViewsEqualFunc(MapOf(tc.a), MapOf(tc.b), func(a, b string) bool {
+				return a == b
+			})
+			if got != tc.want {
+				t.Errorf("MapViewsEqualFunc: got=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMapViewsEqualFunc(t *testing.T) {
+	// Test that we can compare maps with two different non-comparable
+	// values using a custom comparison function.
+	type customStruct1 struct {
+		_      structs.Incomparable
+		Field1 string
+	}
+	type customStruct2 struct {
+		_      structs.Incomparable
+		Field2 string
+	}
+
+	a := map[string]customStruct1{"a": {Field1: "1"}}
+	b := map[string]customStruct2{"a": {Field2: "1"}}
+
+	got := MapViewsEqualFunc(MapOf(a), MapOf(b), func(a customStruct1, b customStruct2) bool {
+		return a.Field1 == b.Field2
+	})
+	if !got {
+		t.Errorf("MapViewsEqualFunc: got=%v, want true", got)
 	}
 }

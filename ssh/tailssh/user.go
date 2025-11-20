@@ -1,12 +1,11 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux || (darwin && !ios) || freebsd || openbsd
+//go:build (linux && !android) || (darwin && !ios) || freebsd || openbsd || plan9
 
 package tailssh
 
 import (
-	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -18,7 +17,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
-	"tailscale.com/util/lineread"
+	"tailscale.com/util/lineiter"
 	"tailscale.com/util/osuser"
 	"tailscale.com/version/distro"
 )
@@ -49,6 +48,9 @@ func userLookup(username string) (*userMeta, error) {
 }
 
 func (u *userMeta) LoginShell() string {
+	if runtime.GOOS == "plan9" {
+		return "/bin/rc"
+	}
 	if u.loginShellCached != "" {
 		// This field should be populated on Linux, at least, because
 		// func userLookup on Linux uses "getent" to look up the user
@@ -86,6 +88,9 @@ func defaultPathForUser(u *user.User) string {
 	if s := defaultPathTmpl(); s != "" {
 		return expandDefaultPathTmpl(s, u)
 	}
+	if runtime.GOOS == "plan9" {
+		return "/bin"
+	}
 	isRoot := u.Uid == "0"
 	switch distro.Get() {
 	case distro.Debian:
@@ -110,15 +115,16 @@ func defaultPathForUser(u *user.User) string {
 }
 
 func defaultPathForUserOnNixOS(u *user.User) string {
-	var path string
-	lineread.File("/etc/pam/environment", func(lineb []byte) error {
-		if v := pathFromPAMEnvLine(lineb, u); v != "" {
-			path = v
-			return io.EOF // stop iteration
+	for lr := range lineiter.File("/etc/pam/environment") {
+		lineb, err := lr.Value()
+		if err != nil {
+			return ""
 		}
-		return nil
-	})
-	return path
+		if v := pathFromPAMEnvLine(lineb, u); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func pathFromPAMEnvLine(line []byte, u *user.User) (path string) {

@@ -26,17 +26,14 @@ func (src *User) Clone() *User {
 	}
 	dst := new(User)
 	*dst = *src
-	dst.Logins = append(src.Logins[:0:0], src.Logins...)
 	return dst
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _UserCloneNeedsRegeneration = User(struct {
 	ID            UserID
-	LoginName     string
 	DisplayName   string
 	ProfilePicURL string
-	Logins        []LoginID
 	Created       time.Time
 }{})
 
@@ -102,7 +99,8 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	Addresses                     []netip.Prefix
 	AllowedIPs                    []netip.Prefix
 	Endpoints                     []netip.AddrPort
-	DERP                          string
+	LegacyDERPString              string
+	HomeDERP                      int
 	Hostinfo                      HostinfoView
 	Created                       time.Time
 	Cap                           CapabilityVersion
@@ -143,6 +141,9 @@ func (src *Hostinfo) Clone() *Hostinfo {
 	if dst.Location != nil {
 		dst.Location = ptr.To(*src.Location)
 	}
+	if dst.TPM != nil {
+		dst.TPM = ptr.To(*src.TPM)
+	}
 	return dst
 }
 
@@ -168,6 +169,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	ShareeNode      bool
 	NoLogsNoSupport bool
 	WireIngress     bool
+	IngressEnabled  bool
 	AllowsUpdate    bool
 	Machine         string
 	GoArch          string
@@ -183,7 +185,11 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	Userspace       opt.Bool
 	UserspaceRouter opt.Bool
 	AppConnector    opt.Bool
+	ServicesHash    string
+	ExitNodeID      StableNodeID
 	Location        *Location
+	TPM             *TPMInfo
+	StateEncrypted  opt.Bool
 }{})
 
 // Clone makes a deep copy of NetInfo.
@@ -201,7 +207,6 @@ func (src *NetInfo) Clone() *NetInfo {
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _NetInfoCloneNeedsRegeneration = NetInfo(struct {
 	MappingVariesByDestIP opt.Bool
-	HairPinning           opt.Bool
 	WorkingIPv6           opt.Bool
 	OSHasIPv6             opt.Bool
 	WorkingUDP            opt.Bool
@@ -301,7 +306,6 @@ func (src *RegisterResponse) Clone() *RegisterResponse {
 	}
 	dst := new(RegisterResponse)
 	*dst = *src
-	dst.User = *src.User.Clone()
 	dst.NodeKeySignature = append(src.NodeKeySignature[:0:0], src.NodeKeySignature...)
 	return dst
 }
@@ -417,13 +421,14 @@ func (src *DERPRegion) Clone() *DERPRegion {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DERPRegionCloneNeedsRegeneration = DERPRegion(struct {
-	RegionID   int
-	RegionCode string
-	RegionName string
-	Latitude   float64
-	Longitude  float64
-	Avoid      bool
-	Nodes      []*DERPNode
+	RegionID        int
+	RegionCode      string
+	RegionName      string
+	Latitude        float64
+	Longitude       float64
+	Avoid           bool
+	NoMeasureNoHome bool
+	Nodes           []*DERPNode
 }{})
 
 // Clone makes a deep copy of DERPMap.
@@ -555,17 +560,17 @@ func (src *SSHPrincipal) Clone() *SSHPrincipal {
 	}
 	dst := new(SSHPrincipal)
 	*dst = *src
-	dst.PubKeys = append(src.PubKeys[:0:0], src.PubKeys...)
+	dst.UnusedPubKeys = append(src.UnusedPubKeys[:0:0], src.UnusedPubKeys...)
 	return dst
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _SSHPrincipalCloneNeedsRegeneration = SSHPrincipal(struct {
-	Node      StableNodeID
-	NodeIP    string
-	UserLogin string
-	Any       bool
-	PubKeys   []string
+	Node          StableNodeID
+	NodeIP        string
+	UserLogin     string
+	Any           bool
+	UnusedPubKeys []string
 }{})
 
 // Clone makes a deep copy of ControlDialPlan.
@@ -624,12 +629,56 @@ var _UserProfileCloneNeedsRegeneration = UserProfile(struct {
 	LoginName     string
 	DisplayName   string
 	ProfilePicURL string
-	Roles         emptyStructJSONSlice
+}{})
+
+// Clone makes a deep copy of VIPService.
+// The result aliases no memory with the original.
+func (src *VIPService) Clone() *VIPService {
+	if src == nil {
+		return nil
+	}
+	dst := new(VIPService)
+	*dst = *src
+	dst.Ports = append(src.Ports[:0:0], src.Ports...)
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _VIPServiceCloneNeedsRegeneration = VIPService(struct {
+	Name   ServiceName
+	Ports  []ProtoPortRange
+	Active bool
+}{})
+
+// Clone makes a deep copy of SSHPolicy.
+// The result aliases no memory with the original.
+func (src *SSHPolicy) Clone() *SSHPolicy {
+	if src == nil {
+		return nil
+	}
+	dst := new(SSHPolicy)
+	*dst = *src
+	if src.Rules != nil {
+		dst.Rules = make([]*SSHRule, len(src.Rules))
+		for i := range dst.Rules {
+			if src.Rules[i] == nil {
+				dst.Rules[i] = nil
+			} else {
+				dst.Rules[i] = src.Rules[i].Clone()
+			}
+		}
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _SSHPolicyCloneNeedsRegeneration = SSHPolicy(struct {
+	Rules []*SSHRule
 }{})
 
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile.
+// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService,SSHPolicy.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *User:
@@ -800,6 +849,24 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **UserProfile:
+			*dst = src.Clone()
+			return true
+		}
+	case *VIPService:
+		switch dst := dst.(type) {
+		case *VIPService:
+			*dst = *src.Clone()
+			return true
+		case **VIPService:
+			*dst = src.Clone()
+			return true
+		}
+	case *SSHPolicy:
+		switch dst := dst.(type) {
+		case *SSHPolicy:
+			*dst = *src.Clone()
+			return true
+		case **SSHPolicy:
 			*dst = src.Clone()
 			return true
 		}

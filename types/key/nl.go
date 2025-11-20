@@ -131,10 +131,10 @@ func NLPublicFromEd25519Unsafe(public ed25519.PublicKey) NLPublic {
 // is able to decode both the CLI form (tlpub:<hex>) & the
 // regular form (nlpub:<hex>).
 func (k *NLPublic) UnmarshalText(b []byte) error {
-	if mem.HasPrefix(mem.B(b), mem.S(nlPublicHexPrefixCLI)) {
-		return parseHex(k.k[:], mem.B(b), mem.S(nlPublicHexPrefixCLI))
+	if mem.HasPrefix(mem.B(b), mem.S(nlPublicHexPrefix)) {
+		return parseHex(k.k[:], mem.B(b), mem.S(nlPublicHexPrefix))
 	}
-	return parseHex(k.k[:], mem.B(b), mem.S(nlPublicHexPrefix))
+	return parseHex(k.k[:], mem.B(b), mem.S(nlPublicHexPrefixCLI))
 }
 
 // AppendText implements encoding.TextAppender.

@@ -4,7 +4,6 @@
 package router
 
 import (
-	"log"
 	"net/netip"
 	"testing"
 
@@ -56,7 +55,7 @@ func TestConsolidateRoutes(t *testing.T) {
 		},
 	}
 
-	cr := &consolidatingRouter{logf: log.Printf}
+	cr := &consolidatingRouter{logf: t.Logf}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := cr.consolidateRoutes(test.cfg)

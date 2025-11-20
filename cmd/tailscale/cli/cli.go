@@ -7,6 +7,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,14 +18,17 @@ import (
 	"strings"
 	"sync"
 	"text/tabwriter"
+	"time"
 
 	"github.com/mattn/go-colorable"
 	"github.com/mattn/go-isatty"
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/cmd/tailscale/cli/ffcomplete"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/paths"
+	"tailscale.com/util/slicesx"
 	"tailscale.com/version/distro"
 )
 
@@ -63,42 +67,54 @@ func newFlagSet(name string) *flag.FlagSet {
 func CleanUpArgs(args []string) []string {
 	out := make([]string, 0, len(args))
 	for _, arg := range args {
+		switch {
 		// Rewrite --authkey to --auth-key, and --authkey=x to --auth-key=x,
 		// and the same for the -authkey variant.
-		switch {
 		case arg == "--authkey", arg == "-authkey":
 			arg = "--auth-key"
 		case strings.HasPrefix(arg, "--authkey="), strings.HasPrefix(arg, "-authkey="):
-			arg = strings.TrimLeft(arg, "-")
-			arg = strings.TrimPrefix(arg, "authkey=")
-			arg = "--auth-key=" + arg
+			_, val, _ := strings.Cut(arg, "=")
+			arg = "--auth-key=" + val
+
+		// And the same, for posture-checking => report-posture
+		case arg == "--posture-checking", arg == "-posture-checking":
+			arg = "--report-posture"
+		case strings.HasPrefix(arg, "--posture-checking="), strings.HasPrefix(arg, "-posture-checking="):
+			_, val, _ := strings.Cut(arg, "=")
+			arg = "--report-posture=" + val
+
 		}
 		out = append(out, arg)
 	}
 	return out
 }
 
-var localClient = tailscale.LocalClient{
+var localClient = local.Client{
 	Socket: paths.DefaultTailscaledSocket(),
 }
 
 // Run runs the CLI. The args do not include the binary name.
 func Run(args []string) (err error) {
-	if runtime.GOOS == "linux" && os.Getenv("GOKRAZY_FIRST_START") == "1" && distro.Get() == distro.Gokrazy && os.Getppid() == 1 {
-		// We're running on gokrazy and it's the first start.
-		// Don't run the tailscale CLI as a service; just exit.
+	if runtime.GOOS == "linux" && os.Getenv("GOKRAZY_FIRST_START") == "1" && distro.Get() == distro.Gokrazy && os.Getppid() == 1 && len(args) == 0 {
+		// We're running on gokrazy and the user did not specify 'up'.
+		// Don't run the tailscale CLI and spam logs with usage; just exit.
 		// See https://gokrazy.org/development/process-interface/
 		os.Exit(0)
 	}
 
 	args = CleanUpArgs(args)
 
-	if len(args) == 1 && (args[0] == "-V" || args[0] == "--version") {
-		args = []string{"version"}
+	if len(args) == 1 {
+		switch args[0] {
+		case "-V", "--version":
+			args = []string{"version"}
+		case "help":
+			args = []string{"--help"}
+		}
 	}
 
 	var warnOnce sync.Once
-	tailscale.SetVersionMismatchHandler(func(clientVer, serverVer string) {
+	local.SetVersionMismatchHandler(func(clientVer, serverVer string) {
 		warnOnce.Do(func() {
 			fmt.Fprintf(Stderr, "Warning: client version %q != tailscaled server version %q\n", clientVer, serverVer)
 		})
@@ -149,14 +165,61 @@ func Run(args []string) (err error) {
 	}
 
 	err = rootCmd.Run(context.Background())
-	if tailscale.IsAccessDeniedError(err) && os.Getuid() != 0 && runtime.GOOS != "windows" {
-		return fmt.Errorf("%v\n\nUse 'sudo tailscale %s' or 'tailscale up --operator=$USER' to not require root.", err, strings.Join(args, " "))
+	if local.IsAccessDeniedError(err) && os.Getuid() != 0 && runtime.GOOS != "windows" {
+		return fmt.Errorf("%v\n\nUse 'sudo tailscale %s'.\nTo not require root, use 'sudo tailscale set --operator=$USER' once.", err, strings.Join(args, " "))
 	}
 	if errors.Is(err, flag.ErrHelp) {
 		return nil
 	}
 	return err
 }
+
+type onceFlagValue struct {
+	flag.Value
+	set bool
+}
+
+func (v *onceFlagValue) Set(s string) error {
+	if v.set {
+		return fmt.Errorf("flag provided multiple times")
+	}
+	v.set = true
+	return v.Value.Set(s)
+}
+
+func (v *onceFlagValue) IsBoolFlag() bool {
+	type boolFlag interface {
+		IsBoolFlag() bool
+	}
+	bf, ok := v.Value.(boolFlag)
+	return ok && bf.IsBoolFlag()
+}
+
+// noDupFlagify modifies c recursively to make all the
+// flag values be wrappers that permit setting the value
+// at most once.
+func noDupFlagify(c *ffcli.Command) {
+	if c.FlagSet != nil {
+		c.FlagSet.VisitAll(func(f *flag.Flag) {
+			f.Value = &onceFlagValue{Value: f.Value}
+		})
+	}
+	for _, sub := range c.Subcommands {
+		noDupFlagify(sub)
+	}
+}
+
+var (
+	fileCmd,
+	sysPolicyCmd,
+	maybeWebCmd,
+	maybeDriveCmd,
+	maybeNetlockCmd,
+	maybeFunnelCmd,
+	maybeServeCmd,
+	maybeCertCmd,
+	_ func() *ffcli.Command
+)
 
 func newRootCmd() *ffcli.Command {
 	rootfs := newFlagSet("tailscale")
@@ -166,8 +229,10 @@ func newRootCmd() *ffcli.Command {
 		return nil
 	})
 	rootfs.Lookup("socket").DefValue = localClient.Socket
+	jsonDocs := rootfs.Bool("json-docs", false, hidden+"print JSON-encoded docs for all subcommands and flags")
 
-	rootCmd := &ffcli.Command{
+	var rootCmd *ffcli.Command
+	rootCmd = &ffcli.Command{
 		Name:       "tailscale",
 		ShortUsage: "tailscale [flags] <subcommand> [command flags]",
 		ShortHelp:  "The easiest, most secure way to use WireGuard.",
@@ -177,48 +242,52 @@ For help on subcommands, add --help after: "tailscale status --help".
 This CLI is still under active development. Commands and flags will
 change in the future.
 `),
-		Subcommands: []*ffcli.Command{
+		Subcommands: nonNilCmds(
 			upCmd,
 			downCmd,
 			setCmd,
 			loginCmd,
 			logoutCmd,
 			switchCmd,
-			configureCmd,
+			configureCmd(),
+			nilOrCall(sysPolicyCmd),
 			netcheckCmd,
 			ipCmd,
 			dnsCmd,
 			statusCmd,
+			metricsCmd,
 			pingCmd,
 			ncCmd,
 			sshCmd,
-			funnelCmd(),
-			serveCmd(),
+			nilOrCall(maybeFunnelCmd),
+			nilOrCall(maybeServeCmd),
 			versionCmd,
-			webCmd,
-			fileCmd,
+			nilOrCall(maybeWebCmd),
+			nilOrCall(fileCmd),
 			bugReportCmd,
-			certCmd,
-			netlockCmd,
+			nilOrCall(maybeCertCmd),
+			nilOrCall(maybeNetlockCmd),
 			licensesCmd,
 			exitNodeCmd(),
 			updateCmd,
 			whoisCmd,
-			debugCmd,
-			driveCmd,
+			debugCmd(),
+			nilOrCall(maybeDriveCmd),
 			idTokenCmd,
-		},
+			configureHostCmd(),
+			systrayCmd,
+			appcRoutesCmd,
+		),
 		FlagSet: rootfs,
 		Exec: func(ctx context.Context, args []string) error {
+			if *jsonDocs {
+				return printJSONDocs(rootCmd)
+			}
 			if len(args) > 0 {
 				return fmt.Errorf("tailscale: unknown subcommand: %s", args[0])
 			}
 			return flag.ErrHelp
 		},
-	}
-
-	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
-		rootCmd.Subcommands = append(rootCmd.Subcommands, configureHostCmd)
 	}
 
 	walkCommands(rootCmd, func(w cmdWalk) bool {
@@ -229,7 +298,19 @@ change in the future.
 	})
 
 	ffcomplete.Inject(rootCmd, func(c *ffcli.Command) { c.LongHelp = hidden + c.LongHelp }, usageFunc)
+	noDupFlagify(rootCmd)
 	return rootCmd
+}
+
+func nonNilCmds(cmds ...*ffcli.Command) []*ffcli.Command {
+	return slicesx.AppendNonzero(cmds[:0], cmds)
+}
+
+func nilOrCall(f func() *ffcli.Command) *ffcli.Command {
+	if f == nil {
+		return nil
+	}
+	return f()
 }
 
 func fatalf(format string, a ...any) {
@@ -408,4 +489,80 @@ func colorableOutput() (w io.Writer, ok bool) {
 		return Stdout, false
 	}
 	return colorable.NewColorableStdout(), true
+}
+
+type commandDoc struct {
+	Name        string
+	Desc        string
+	Subcommands []commandDoc `json:",omitempty"`
+	Flags       []flagDoc    `json:",omitempty"`
+}
+
+type flagDoc struct {
+	Name string
+	Desc string
+}
+
+func printJSONDocs(root *ffcli.Command) error {
+	docs := jsonDocsWalk(root)
+	return json.NewEncoder(os.Stdout).Encode(docs)
+}
+
+func jsonDocsWalk(cmd *ffcli.Command) *commandDoc {
+	res := &commandDoc{
+		Name: cmd.Name,
+	}
+	if cmd.LongHelp != "" {
+		res.Desc = cmd.LongHelp
+	} else if cmd.ShortHelp != "" {
+		res.Desc = cmd.ShortHelp
+	} else {
+		res.Desc = cmd.ShortUsage
+	}
+	if strings.HasPrefix(res.Desc, hidden) {
+		return nil
+	}
+	if cmd.FlagSet != nil {
+		cmd.FlagSet.VisitAll(func(f *flag.Flag) {
+			if strings.HasPrefix(f.Usage, hidden) {
+				return
+			}
+			res.Flags = append(res.Flags, flagDoc{
+				Name: f.Name,
+				Desc: f.Usage,
+			})
+		})
+	}
+	for _, sub := range cmd.Subcommands {
+		subj := jsonDocsWalk(sub)
+		if subj != nil {
+			res.Subcommands = append(res.Subcommands, *subj)
+		}
+	}
+	return res
+}
+
+func lastSeenFmt(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := max(time.Since(t), time.Minute) // at least 1 minute
+
+	switch {
+	case d < time.Hour:
+		return fmt.Sprintf(", last seen %dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf(", last seen %dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf(", last seen %dd ago", int(d.Hours()/24))
+	}
+}
+
+var hookFixTailscaledConnectError feature.Hook[func(error) error] // for cliconndiag
+
+func fixTailscaledConnectError(origErr error) error {
+	if f, ok := hookFixTailscaledConnectError.GetOk(); ok {
+		return f(origErr)
+	}
+	return origErr
 }

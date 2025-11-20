@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -32,6 +34,10 @@ var ErrNoShell = errors.New("no Shell process is present")
 
 // ErrNoValue is returned when the value doesn't exist in the registry.
 var ErrNoValue = registry.ErrNotExist
+
+// ErrBadRegValueFormat is returned when a string value does not match the
+// expected format.
+var ErrBadRegValueFormat = errors.New("registry value formatted incorrectly")
 
 // GetDesktopPID searches the PID of the process that's running the
 // currently active desktop. Returns ErrNoShell if the shell is not present.
@@ -946,4 +952,23 @@ func IsDomainName(name string) (bool, error) {
 	}
 
 	return isDomainName(name16)
+}
+
+// GUIPathFromReg obtains the path to the client GUI executable from the
+// registry value that was written during installation.
+func GUIPathFromReg() (string, error) {
+	regPath, err := GetRegString("GUIPath")
+	if err != nil {
+		return "", err
+	}
+
+	if !filepath.IsAbs(regPath) {
+		return "", ErrBadRegValueFormat
+	}
+
+	if _, err := os.Stat(regPath); err != nil {
+		return "", err
+	}
+
+	return regPath, nil
 }

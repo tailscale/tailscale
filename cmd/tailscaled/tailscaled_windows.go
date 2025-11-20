@@ -44,17 +44,21 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
+	_ "tailscale.com/ipn/auditlog"
+	_ "tailscale.com/ipn/desktop"
 	"tailscale.com/logpolicy"
-	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
+	"tailscale.com/util/backoff"
 	"tailscale.com/util/osdiag"
-	"tailscale.com/util/syspolicy"
+	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/winutil"
+	"tailscale.com/util/winutil/gp"
 	"tailscale.com/version"
 	"tailscale.com/wf"
 )
@@ -67,6 +71,22 @@ func init() {
 	}
 	if err := com.StartRuntime(comProcessType); err != nil {
 		log.Printf("wingoes.com.StartRuntime(%d) failed: %v", comProcessType, err)
+	}
+}
+
+// permitPolicyLocks is a function to be called to lift the restriction on acquiring
+// [gp.PolicyLock]s once the service is running.
+// It is safe to be called multiple times.
+var permitPolicyLocks = func() {}
+
+func init() {
+	if isWindowsService() {
+		// We prevent [gp.PolicyLock]s from being acquired until the service enters the running state.
+		// Otherwise, if tailscaled starts due to a GPSI policy installing Tailscale, it may deadlock
+		// while waiting for the write counterpart of the GP lock to be released by Group Policy,
+		// which is itself waiting for the installation to complete and tailscaled to start.
+		// See tailscale/tailscale#14416 for more information.
+		permitPolicyLocks = gp.RestrictPolicyLocks()
 	}
 }
 
@@ -109,13 +129,13 @@ func tstunNewWithWindowsRetries(logf logger.Logf, tunName string) (_ tun.Device,
 	}
 }
 
-func isWindowsService() bool {
+var isWindowsService = sync.OnceValue(func() bool {
 	v, err := svc.IsWindowsService()
 	if err != nil {
 		log.Fatalf("svc.IsWindowsService failed: %v", err)
 	}
 	return v
-}
+})
 
 // syslogf is a logger function that writes to the Windows event log (ie, the
 // one that you see in the Windows Event Viewer). tailscaled may optionally
@@ -129,19 +149,20 @@ var syslogf logger.Logf = logger.Discard
 //
 // At this point we're still the parent process that
 // Windows started.
+//
+// pol may be nil.
 func runWindowsService(pol *logpolicy.Policy) error {
 	go func() {
 		logger.Logf(log.Printf).JSON(1, "SupportInfo", osdiag.SupportInfo(osdiag.LogSupportInfoReasonStartup))
 	}()
 
-	if logSCMInteractions, _ := syspolicy.GetBoolean(syspolicy.LogSCMInteractions, false); logSCMInteractions {
-		syslog, err := eventlog.Open(serviceName)
-		if err == nil {
-			syslogf = func(format string, args ...any) {
+	if syslog, err := eventlog.Open(serviceName); err == nil {
+		syslogf = func(format string, args ...any) {
+			if logSCMInteractions, _ := policyclient.Get().GetBoolean(pkey.LogSCMInteractions, false); logSCMInteractions {
 				syslog.Info(0, fmt.Sprintf(format, args...))
 			}
-			defer syslog.Close()
 		}
+		defer syslog.Close()
 	}
 
 	syslogf("Service entering svc.Run")
@@ -150,7 +171,7 @@ func runWindowsService(pol *logpolicy.Policy) error {
 }
 
 type ipnService struct {
-	Policy *logpolicy.Policy
+	Policy *logpolicy.Policy // or nil if logging not in use
 }
 
 // Called by Windows to execute the windows service.
@@ -160,17 +181,18 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 	changes <- svc.Status{State: svc.StartPending}
 	syslogf("Service start pending")
 
-	svcAccepts := svc.AcceptStop
-	if flushDNSOnSessionUnlock, _ := syspolicy.GetBoolean(syspolicy.FlushDNSOnSessionUnlock, false); flushDNSOnSessionUnlock {
-		svcAccepts |= svc.AcceptSessionChange
-	}
+	svcAccepts := svc.AcceptStop | svc.AcceptSessionChange
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	doneCh := make(chan struct{})
 	go func() {
 		defer close(doneCh)
-		args := []string{"/subproc", service.Policy.PublicID.String()}
+		publicID := "none"
+		if service.Policy != nil {
+			publicID = service.Policy.PublicID.String()
+		}
+		args := []string{"/subproc", publicID}
 		// Make a logger without a date prefix, as filelogger
 		// and logtail both already add their own. All we really want
 		// from the log package is the automatic newline.
@@ -183,6 +205,10 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 
 	changes <- svc.Status{State: svc.Running, Accepts: svcAccepts}
 	syslogf("Service running")
+
+	// It is safe to allow GP locks to be acquired now that the service
+	// is running.
+	permitPolicyLocks()
 
 	for {
 		select {
@@ -309,8 +335,8 @@ func beWindowsSubprocess() bool {
 		log.Printf("Error pre-loading \"%s\": %v", fqWintunPath, err)
 	}
 
-	sys := new(tsd.System)
-	netMon, err := netmon.New(log.Printf)
+	sys := tsd.NewSystem()
+	netMon, err := netmon.New(sys.Bus.Get(), log.Printf)
 	if err != nil {
 		log.Fatalf("Could not create netMon: %v", err)
 	}
@@ -370,14 +396,15 @@ func handleSessionChange(chgRequest svc.ChangeRequest) {
 	if chgRequest.Cmd != svc.SessionChange || chgRequest.EventType != windows.WTS_SESSION_UNLOCK {
 		return
 	}
-
-	log.Printf("Received WTS_SESSION_UNLOCK event, initiating DNS flush.")
-	go func() {
-		err := dns.Flush()
-		if err != nil {
-			log.Printf("Error flushing DNS on session unlock: %v", err)
-		}
-	}()
+	if flushDNSOnSessionUnlock, _ := policyclient.Get().GetBoolean(pkey.FlushDNSOnSessionUnlock, false); flushDNSOnSessionUnlock {
+		log.Printf("Received WTS_SESSION_UNLOCK event, initiating DNS flush.")
+		go func() {
+			err := dns.Flush()
+			if err != nil {
+				log.Printf("Error flushing DNS on session unlock: %v", err)
+			}
+		}()
+	}
 }
 
 var (

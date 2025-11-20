@@ -11,10 +11,10 @@ import (
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
-	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
@@ -68,6 +68,13 @@ type Engine interface {
 	//
 	// The returned error is ErrNoChanges if no changes were made.
 	Reconfig(*wgcfg.Config, *router.Config, *dns.Config) error
+
+	// ResetAndStop resets the engine to a clean state (like calling Reconfig
+	// with all pointers to zero values) and waits for it to be fully stopped,
+	// with no live peers or DERPs.
+	//
+	// Unlike Reconfig, it does not return ErrNoChanges.
+	ResetAndStop() (*Status, error)
 
 	// PeerForIP returns the node to which the provided IP routes,
 	// if any. If none is found, (nil, false) is returned.
@@ -129,5 +136,5 @@ type Engine interface {
 	// InstallCaptureHook registers a function to be called to capture
 	// packets traversing the data path. The hook can be uninstalled by
 	// calling this function with a nil value.
-	InstallCaptureHook(capture.Callback)
+	InstallCaptureHook(packet.CaptureCallback)
 }

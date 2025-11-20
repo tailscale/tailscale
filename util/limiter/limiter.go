@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"sync"
 	"time"
 
+	"tailscale.com/syncs"
 	"tailscale.com/util/lru"
 )
 
@@ -75,7 +75,7 @@ type Limiter[K comparable] struct {
 	// perpetually in debt and cannot proceed at all.
 	Overdraft int64
 
-	mu    sync.Mutex
+	mu    syncs.Mutex
 	cache *lru.Cache[K, *bucket]
 }
 
@@ -94,59 +94,59 @@ type bucket struct {
 
 // Allow charges the key one token (up to the overdraft limit), and
 // reports whether the key can perform an action.
-func (l *Limiter[K]) Allow(key K) bool {
-	return l.allow(key, time.Now())
+func (lm *Limiter[K]) Allow(key K) bool {
+	return lm.allow(key, time.Now())
 }
 
-func (l *Limiter[K]) allow(key K, now time.Time) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.allowBucketLocked(l.getBucketLocked(key, now), now)
+func (lm *Limiter[K]) allow(key K, now time.Time) bool {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+	return lm.allowBucketLocked(lm.getBucketLocked(key, now), now)
 }
 
-func (l *Limiter[K]) getBucketLocked(key K, now time.Time) *bucket {
-	if l.cache == nil {
-		l.cache = &lru.Cache[K, *bucket]{MaxEntries: l.Size}
-	} else if b := l.cache.Get(key); b != nil {
+func (lm *Limiter[K]) getBucketLocked(key K, now time.Time) *bucket {
+	if lm.cache == nil {
+		lm.cache = &lru.Cache[K, *bucket]{MaxEntries: lm.Size}
+	} else if b := lm.cache.Get(key); b != nil {
 		return b
 	}
 	b := &bucket{
-		cur:        l.Max,
-		lastUpdate: now.Truncate(l.RefillInterval),
+		cur:        lm.Max,
+		lastUpdate: now.Truncate(lm.RefillInterval),
 	}
-	l.cache.Set(key, b)
+	lm.cache.Set(key, b)
 	return b
 }
 
-func (l *Limiter[K]) allowBucketLocked(b *bucket, now time.Time) bool {
+func (lm *Limiter[K]) allowBucketLocked(b *bucket, now time.Time) bool {
 	// Only update the bucket quota if needed to process request.
 	if b.cur <= 0 {
-		l.updateBucketLocked(b, now)
+		lm.updateBucketLocked(b, now)
 	}
 	ret := b.cur > 0
-	if b.cur > -l.Overdraft {
+	if b.cur > -lm.Overdraft {
 		b.cur--
 	}
 	return ret
 }
 
-func (l *Limiter[K]) updateBucketLocked(b *bucket, now time.Time) {
-	now = now.Truncate(l.RefillInterval)
+func (lm *Limiter[K]) updateBucketLocked(b *bucket, now time.Time) {
+	now = now.Truncate(lm.RefillInterval)
 	if now.Before(b.lastUpdate) {
 		return
 	}
 	timeDelta := max(now.Sub(b.lastUpdate), 0)
-	tokenDelta := int64(timeDelta / l.RefillInterval)
-	b.cur = min(b.cur+tokenDelta, l.Max)
+	tokenDelta := int64(timeDelta / lm.RefillInterval)
+	b.cur = min(b.cur+tokenDelta, lm.Max)
 	b.lastUpdate = now
 }
 
 // peekForTest returns the number of tokens for key, also reporting
 // whether key was present.
-func (l *Limiter[K]) tokensForTest(key K) (int64, bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if b, ok := l.cache.PeekOk(key); ok {
+func (lm *Limiter[K]) tokensForTest(key K) (int64, bool) {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+	if b, ok := lm.cache.PeekOk(key); ok {
 		return b.cur, true
 	}
 	return 0, false
@@ -159,12 +159,12 @@ func (l *Limiter[K]) tokensForTest(key K) (int64, bool) {
 // DumpHTML blocks other callers of the limiter while it collects the
 // state for dumping. It should not be called on large limiters
 // involved in hot codepaths.
-func (l *Limiter[K]) DumpHTML(w io.Writer, onlyLimited bool) {
-	l.dumpHTML(w, onlyLimited, time.Now())
+func (lm *Limiter[K]) DumpHTML(w io.Writer, onlyLimited bool) {
+	lm.dumpHTML(w, onlyLimited, time.Now())
 }
 
-func (l *Limiter[K]) dumpHTML(w io.Writer, onlyLimited bool, now time.Time) {
-	dump := l.collectDump(now)
+func (lm *Limiter[K]) dumpHTML(w io.Writer, onlyLimited bool, now time.Time) {
+	dump := lm.collectDump(now)
 	io.WriteString(w, "<table><tr><th>Key</th><th>Tokens</th></tr>")
 	for _, line := range dump {
 		if onlyLimited && line.Tokens > 0 {
@@ -183,13 +183,13 @@ func (l *Limiter[K]) dumpHTML(w io.Writer, onlyLimited bool, now time.Time) {
 }
 
 // collectDump grabs a copy of the limiter state needed by DumpHTML.
-func (l *Limiter[K]) collectDump(now time.Time) []dumpEntry[K] {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+func (lm *Limiter[K]) collectDump(now time.Time) []dumpEntry[K] {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
 
-	ret := make([]dumpEntry[K], 0, l.cache.Len())
-	l.cache.ForEach(func(k K, v *bucket) {
-		l.updateBucketLocked(v, now) // so stats are accurate
+	ret := make([]dumpEntry[K], 0, lm.cache.Len())
+	lm.cache.ForEach(func(k K, v *bucket) {
+		lm.updateBucketLocked(v, now) // so stats are accurate
 		ret = append(ret, dumpEntry[K]{k, v.cur})
 	})
 	return ret

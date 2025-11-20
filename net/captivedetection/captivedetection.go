@@ -11,18 +11,21 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"tailscale.com/net/netmon"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 )
 
 // Detector checks whether the system is behind a captive portal.
 type Detector struct {
+	clock func() time.Time
 
 	// httpClient is the HTTP client that is used for captive portal detection. It is configured
 	// to not follow redirects, have a short timeout and no keep-alive.
@@ -30,7 +33,7 @@ type Detector struct {
 	// currIfIndex is the index of the interface that is currently being used by the httpClient.
 	currIfIndex int
 	// mu guards currIfIndex.
-	mu sync.Mutex
+	mu syncs.Mutex
 	// logf is the logger used for logging messages. If it is nil, log.Printf is used.
 	logf logger.Logf
 }
@@ -50,6 +53,13 @@ func NewDetector(logf logger.Logf) *Detector {
 		Timeout: Timeout,
 	}
 	return d
+}
+
+func (d *Detector) Now() time.Time {
+	if d.clock != nil {
+		return d.clock()
+	}
+	return time.Now()
 }
 
 // Timeout is the timeout for captive portal detection requests. Because the captive portal intercepting our requests
@@ -136,26 +146,31 @@ func interfaceNameDoesNotNeedCaptiveDetection(ifName string, goos string) bool {
 func (d *Detector) detectOnInterface(ctx context.Context, ifIndex int, endpoints []Endpoint) bool {
 	defer d.httpClient.CloseIdleConnections()
 
-	d.logf("[v2] %d available captive portal detection endpoints: %v", len(endpoints), endpoints)
+	use := min(len(endpoints), 5)
+	endpoints = endpoints[:use]
+	d.logf("[v2] %d available captive portal detection endpoints; trying %v", len(endpoints), use)
 
 	// We try to detect the captive portal more quickly by making requests to multiple endpoints concurrently.
 	var wg sync.WaitGroup
 	resultCh := make(chan bool, len(endpoints))
 
-	for i, e := range endpoints {
-		if i >= 5 {
-			// Try a maximum of 5 endpoints, break out (returning false) if we run of attempts.
-			break
-		}
+	// Once any goroutine detects a captive portal, we shut down the others.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	for _, e := range endpoints {
 		wg.Add(1)
 		go func(endpoint Endpoint) {
 			defer wg.Done()
 			found, err := d.verifyCaptivePortalEndpoint(ctx, endpoint, ifIndex)
 			if err != nil {
-				d.logf("[v1] checkCaptivePortalEndpoint failed with endpoint %v: %v", endpoint, err)
+				if ctx.Err() == nil {
+					d.logf("[v1] checkCaptivePortalEndpoint failed with endpoint %v: %v", endpoint, err)
+				}
 				return
 			}
 			if found {
+				cancel() // one match is good enough
 				resultCh <- true
 			}
 		}(e)
@@ -182,10 +197,16 @@ func (d *Detector) verifyCaptivePortalEndpoint(ctx context.Context, e Endpoint, 
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", e.URL.String(), nil)
+	u := *e.URL
+	v := u.Query()
+	v.Add("t", strconv.Itoa(int(d.Now().Unix())))
+	u.RawQuery = v.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 	if err != nil {
 		return false, err
 	}
+	req.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate, no-transform, max-age=0")
 
 	// Attach the Tailscale challenge header if the endpoint supports it. Not all captive portal detection endpoints
 	// support this, so we only attach it if the endpoint does.

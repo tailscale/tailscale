@@ -6,10 +6,12 @@
 package prefs_example
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"net/netip"
 
+	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/drive"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
@@ -20,7 +22,7 @@ import (
 
 //go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=Prefs,AutoUpdatePrefs,AppConnectorPrefs
 
-// View returns a readonly view of Prefs.
+// View returns a read-only view of Prefs.
 func (p *Prefs) View() PrefsView {
 	return PrefsView{ж: p}
 }
@@ -36,7 +38,7 @@ type PrefsView struct {
 	ж *Prefs
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v PrefsView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -48,8 +50,17 @@ func (v PrefsView) AsStruct() *Prefs {
 	return v.ж.Clone()
 }
 
-func (v PrefsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v PrefsView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v PrefsView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *PrefsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -58,45 +69,88 @@ func (v *PrefsView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x Prefs
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
 		return err
 	}
 	v.ж = &x
 	return nil
 }
 
-func (v PrefsView) ControlURL() prefs.Item[string]                    { return v.ж.ControlURL }
-func (v PrefsView) RouteAll() prefs.Item[bool]                        { return v.ж.RouteAll }
-func (v PrefsView) ExitNodeID() prefs.Item[tailcfg.StableNodeID]      { return v.ж.ExitNodeID }
-func (v PrefsView) ExitNodeIP() prefs.Item[netip.Addr]                { return v.ж.ExitNodeIP }
-func (v PrefsView) ExitNodePrior() tailcfg.StableNodeID               { return v.ж.ExitNodePrior }
-func (v PrefsView) ExitNodeAllowLANAccess() prefs.Item[bool]          { return v.ж.ExitNodeAllowLANAccess }
-func (v PrefsView) CorpDNS() prefs.Item[bool]                         { return v.ж.CorpDNS }
-func (v PrefsView) RunSSH() prefs.Item[bool]                          { return v.ж.RunSSH }
-func (v PrefsView) RunWebClient() prefs.Item[bool]                    { return v.ж.RunWebClient }
-func (v PrefsView) WantRunning() prefs.Item[bool]                     { return v.ж.WantRunning }
-func (v PrefsView) LoggedOut() prefs.Item[bool]                       { return v.ж.LoggedOut }
-func (v PrefsView) ShieldsUp() prefs.Item[bool]                       { return v.ж.ShieldsUp }
-func (v PrefsView) AdvertiseTags() prefs.ListView[string]             { return v.ж.AdvertiseTags.View() }
-func (v PrefsView) Hostname() prefs.Item[string]                      { return v.ж.Hostname }
-func (v PrefsView) NotepadURLs() prefs.Item[bool]                     { return v.ж.NotepadURLs }
-func (v PrefsView) ForceDaemon() prefs.Item[bool]                     { return v.ж.ForceDaemon }
-func (v PrefsView) Egg() prefs.Item[bool]                             { return v.ж.Egg }
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *PrefsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x Prefs
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v PrefsView) ControlURL() prefs.Item[string]               { return v.ж.ControlURL }
+func (v PrefsView) RouteAll() prefs.Item[bool]                   { return v.ж.RouteAll }
+func (v PrefsView) ExitNodeID() prefs.Item[tailcfg.StableNodeID] { return v.ж.ExitNodeID }
+func (v PrefsView) ExitNodeIP() prefs.Item[netip.Addr]           { return v.ж.ExitNodeIP }
+
+// ExitNodePrior is an internal state rather than a preference.
+// It can be kept in the Prefs structure but should not be wrapped
+// and is ignored by the [prefs] package.
+func (v PrefsView) ExitNodePrior() tailcfg.StableNodeID      { return v.ж.ExitNodePrior }
+func (v PrefsView) ExitNodeAllowLANAccess() prefs.Item[bool] { return v.ж.ExitNodeAllowLANAccess }
+func (v PrefsView) CorpDNS() prefs.Item[bool]                { return v.ж.CorpDNS }
+func (v PrefsView) RunSSH() prefs.Item[bool]                 { return v.ж.RunSSH }
+func (v PrefsView) RunWebClient() prefs.Item[bool]           { return v.ж.RunWebClient }
+func (v PrefsView) WantRunning() prefs.Item[bool]            { return v.ж.WantRunning }
+func (v PrefsView) LoggedOut() prefs.Item[bool]              { return v.ж.LoggedOut }
+func (v PrefsView) ShieldsUp() prefs.Item[bool]              { return v.ж.ShieldsUp }
+
+// AdvertiseTags is a preference whose value is a slice of strings.
+// The value is atomic, and individual items in the slice should
+// not be modified after the preference is set.
+// Since the item type (string) is immutable, we can use [prefs.List].
+func (v PrefsView) AdvertiseTags() prefs.ListView[string] { return v.ж.AdvertiseTags.View() }
+func (v PrefsView) Hostname() prefs.Item[string]          { return v.ж.Hostname }
+func (v PrefsView) NotepadURLs() prefs.Item[bool]         { return v.ж.NotepadURLs }
+func (v PrefsView) ForceDaemon() prefs.Item[bool]         { return v.ж.ForceDaemon }
+func (v PrefsView) Egg() prefs.Item[bool]                 { return v.ж.Egg }
+
+// AdvertiseRoutes is a preference whose value is a slice of netip.Prefix.
+// The value is atomic, and individual items in the slice should
+// not be modified after the preference is set.
+// Since the item type (netip.Prefix) is immutable, we can use [prefs.List].
 func (v PrefsView) AdvertiseRoutes() prefs.ListView[netip.Prefix]     { return v.ж.AdvertiseRoutes.View() }
 func (v PrefsView) NoSNAT() prefs.Item[bool]                          { return v.ж.NoSNAT }
 func (v PrefsView) NoStatefulFiltering() prefs.Item[opt.Bool]         { return v.ж.NoStatefulFiltering }
 func (v PrefsView) NetfilterMode() prefs.Item[preftype.NetfilterMode] { return v.ж.NetfilterMode }
 func (v PrefsView) OperatorUser() prefs.Item[string]                  { return v.ж.OperatorUser }
 func (v PrefsView) ProfileName() prefs.Item[string]                   { return v.ж.ProfileName }
-func (v PrefsView) AutoUpdate() AutoUpdatePrefs                       { return v.ж.AutoUpdate }
-func (v PrefsView) AppConnector() AppConnectorPrefs                   { return v.ж.AppConnector }
-func (v PrefsView) PostureChecking() prefs.Item[bool]                 { return v.ж.PostureChecking }
-func (v PrefsView) NetfilterKind() prefs.Item[string]                 { return v.ж.NetfilterKind }
+
+// AutoUpdate contains auto-update preferences.
+// Each preference in the group can be configured and managed individually.
+func (v PrefsView) AutoUpdate() AutoUpdatePrefs { return v.ж.AutoUpdate }
+
+// AppConnector contains app connector-related preferences.
+// Each preference in the group can be configured and managed individually.
+func (v PrefsView) AppConnector() AppConnectorPrefs   { return v.ж.AppConnector }
+func (v PrefsView) PostureChecking() prefs.Item[bool] { return v.ж.PostureChecking }
+func (v PrefsView) NetfilterKind() prefs.Item[string] { return v.ж.NetfilterKind }
+
+// DriveShares is a preference whose value is a slice of *[drive.Share].
+// The value is atomic, and individual items in the slice should
+// not be modified after the preference is set.
+// Since the item type (*drive.Share) is mutable and implements [views.ViewCloner],
+// we need to use [prefs.StructList] instead of [prefs.List].
 func (v PrefsView) DriveShares() prefs.StructListView[*drive.Share, drive.ShareView] {
 	return prefs.StructListViewOf(&v.ж.DriveShares)
 }
 func (v PrefsView) AllowSingleHosts() prefs.Item[marshalAsTrueInJSON] { return v.ж.AllowSingleHosts }
-func (v PrefsView) Persist() persist.PersistView                      { return v.ж.Persist.View() }
+
+// Persist is an internal state rather than a preference.
+// It can be kept in the Prefs structure but should not be wrapped
+// and is ignored by the [prefs] package.
+func (v PrefsView) Persist() persist.PersistView { return v.ж.Persist.View() }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PrefsViewNeedsRegeneration = Prefs(struct {
@@ -132,7 +186,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	Persist                *persist.Persist
 }{})
 
-// View returns a readonly view of AutoUpdatePrefs.
+// View returns a read-only view of AutoUpdatePrefs.
 func (p *AutoUpdatePrefs) View() AutoUpdatePrefsView {
 	return AutoUpdatePrefsView{ж: p}
 }
@@ -148,7 +202,7 @@ type AutoUpdatePrefsView struct {
 	ж *AutoUpdatePrefs
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v AutoUpdatePrefsView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -160,8 +214,17 @@ func (v AutoUpdatePrefsView) AsStruct() *AutoUpdatePrefs {
 	return v.ж.Clone()
 }
 
-func (v AutoUpdatePrefsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v AutoUpdatePrefsView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v AutoUpdatePrefsView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *AutoUpdatePrefsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -170,7 +233,20 @@ func (v *AutoUpdatePrefsView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x AutoUpdatePrefs
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *AutoUpdatePrefsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x AutoUpdatePrefs
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -186,7 +262,7 @@ var _AutoUpdatePrefsViewNeedsRegeneration = AutoUpdatePrefs(struct {
 	Apply prefs.Item[opt.Bool]
 }{})
 
-// View returns a readonly view of AppConnectorPrefs.
+// View returns a read-only view of AppConnectorPrefs.
 func (p *AppConnectorPrefs) View() AppConnectorPrefsView {
 	return AppConnectorPrefsView{ж: p}
 }
@@ -202,7 +278,7 @@ type AppConnectorPrefsView struct {
 	ж *AppConnectorPrefs
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v AppConnectorPrefsView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -214,8 +290,17 @@ func (v AppConnectorPrefsView) AsStruct() *AppConnectorPrefs {
 	return v.ж.Clone()
 }
 
-func (v AppConnectorPrefsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v AppConnectorPrefsView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v AppConnectorPrefsView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *AppConnectorPrefsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -224,7 +309,20 @@ func (v *AppConnectorPrefsView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x AppConnectorPrefs
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *AppConnectorPrefsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x AppConnectorPrefs
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 	v.ж = &x

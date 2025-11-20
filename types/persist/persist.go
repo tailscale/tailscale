@@ -21,22 +21,12 @@ import (
 type Persist struct {
 	_ structs.Incomparable
 
-	// LegacyFrontendPrivateMachineKey is here temporarily
-	// (starting 2020-09-28) during migration of Windows users'
-	// machine keys from frontend storage to the backend. On the
-	// first LocalBackend.Start call, the backend will initialize
-	// the real (backend-owned) machine key from the frontend's
-	// provided value (if non-zero), picking a new random one if
-	// needed. This field should be considered read-only from GUI
-	// frontends. The real value should not be written back in
-	// this field, lest the frontend persist it to disk.
-	LegacyFrontendPrivateMachineKey key.MachinePrivate `json:"PrivateMachineKey"`
-
 	PrivateNodeKey    key.NodePrivate
 	OldPrivateNodeKey key.NodePrivate // needed to request key rotation
 	UserProfile       tailcfg.UserProfile
 	NetworkLockKey    key.NLPrivate
 	NodeID            tailcfg.StableNodeID
+	AttestationKey    key.HardwareAttestationKey `json:",omitempty"`
 
 	// DisallowedTKAStateIDs stores the tka.State.StateID values which
 	// this node will not operate network lock on. This is used to
@@ -95,29 +85,37 @@ func (p *Persist) Equals(p2 *Persist) bool {
 		return false
 	}
 
-	return p.LegacyFrontendPrivateMachineKey.Equal(p2.LegacyFrontendPrivateMachineKey) &&
-		p.PrivateNodeKey.Equal(p2.PrivateNodeKey) &&
+	var pub, p2Pub key.HardwareAttestationPublic
+	if p.AttestationKey != nil && !p.AttestationKey.IsZero() {
+		pub = key.HardwareAttestationPublicFromPlatformKey(p.AttestationKey)
+	}
+	if p2.AttestationKey != nil && !p2.AttestationKey.IsZero() {
+		p2Pub = key.HardwareAttestationPublicFromPlatformKey(p2.AttestationKey)
+	}
+
+	return p.PrivateNodeKey.Equal(p2.PrivateNodeKey) &&
 		p.OldPrivateNodeKey.Equal(p2.OldPrivateNodeKey) &&
 		p.UserProfile.Equal(&p2.UserProfile) &&
 		p.NetworkLockKey.Equal(p2.NetworkLockKey) &&
 		p.NodeID == p2.NodeID &&
+		pub.Equal(p2Pub) &&
 		reflect.DeepEqual(nilIfEmpty(p.DisallowedTKAStateIDs), nilIfEmpty(p2.DisallowedTKAStateIDs))
 }
 
 func (p *Persist) Pretty() string {
 	var (
-		mk     key.MachinePublic
 		ok, nk key.NodePublic
 	)
-	if !p.LegacyFrontendPrivateMachineKey.IsZero() {
-		mk = p.LegacyFrontendPrivateMachineKey.Public()
-	}
+	akString := "-"
 	if !p.OldPrivateNodeKey.IsZero() {
 		ok = p.OldPrivateNodeKey.Public()
 	}
 	if !p.PrivateNodeKey.IsZero() {
 		nk = p.PublicNodeKey()
 	}
-	return fmt.Sprintf("Persist{lm=%v, o=%v, n=%v u=%#v}",
-		mk.ShortString(), ok.ShortString(), nk.ShortString(), p.UserProfile.LoginName)
+	if p.AttestationKey != nil && !p.AttestationKey.IsZero() {
+		akString = fmt.Sprintf("%v", p.AttestationKey.Public())
+	}
+	return fmt.Sprintf("Persist{o=%v, n=%v u=%#v ak=%s}",
+		ok.ShortString(), nk.ShortString(), p.UserProfile.LoginName, akString)
 }

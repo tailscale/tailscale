@@ -6,16 +6,18 @@
 package dnstype
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"net/netip"
 
+	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/types/views"
 )
 
 //go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=Resolver
 
-// View returns a readonly view of Resolver.
+// View returns a read-only view of Resolver.
 func (p *Resolver) View() ResolverView {
 	return ResolverView{ж: p}
 }
@@ -31,7 +33,7 @@ type ResolverView struct {
 	ж *Resolver
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v ResolverView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -43,8 +45,17 @@ func (v ResolverView) AsStruct() *Resolver {
 	return v.ж.Clone()
 }
 
-func (v ResolverView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v ResolverView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v ResolverView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *ResolverView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -53,21 +64,61 @@ func (v *ResolverView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x Resolver
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
 		return err
 	}
 	v.ж = &x
 	return nil
 }
 
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *ResolverView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x Resolver
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// Addr is the address of the DNS resolver, one of:
+//   - A plain IP address for a "classic" UDP+TCP DNS resolver.
+//     This is the common format as sent by the control plane.
+//   - An IP:port, for tests.
+//   - "https://resolver.com/path" for DNS over HTTPS; currently
+//     as of 2022-09-08 only used for certain well-known resolvers
+//     (see the publicdns package) for which the IP addresses to dial DoH are
+//     known ahead of time, so bootstrap DNS resolution is not required.
+//   - "http://node-address:port/path" for DNS over HTTP over WireGuard. This
+//     is implemented in the PeerAPI for exit nodes and app connectors.
+//   - [TODO] "tls://resolver.com" for DNS over TCP+TLS
 func (v ResolverView) Addr() string { return v.ж.Addr }
+
+// BootstrapResolution is an optional suggested resolution for the
+// DoT/DoH resolver, if the resolver URL does not reference an IP
+// address directly.
+// BootstrapResolution may be empty, in which case clients should
+// look up the DoT/DoH server using their local "classic" DNS
+// resolver.
+//
+// As of 2022-09-08, BootstrapResolution is not yet used.
 func (v ResolverView) BootstrapResolution() views.Slice[netip.Addr] {
 	return views.SliceOf(v.ж.BootstrapResolution)
 }
+
+// UseWithExitNode designates that this resolver should continue to be used when an
+// exit node is in use. Normally, DNS resolution is delegated to the exit node but
+// there are situations where it is preferable to still use a Split DNS server and/or
+// global DNS server instead of the exit node.
+func (v ResolverView) UseWithExitNode() bool      { return v.ж.UseWithExitNode }
 func (v ResolverView) Equal(v2 ResolverView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ResolverViewNeedsRegeneration = Resolver(struct {
 	Addr                string
 	BootstrapResolution []netip.Addr
+	UseWithExitNode     bool
 }{})

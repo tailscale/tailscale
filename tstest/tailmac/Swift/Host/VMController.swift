@@ -95,6 +95,13 @@ class VMController: NSObject, VZVirtualMachineDelegate {
         virtualMachineConfiguration.keyboards = [helper.createKeyboardConfiguration()]
         virtualMachineConfiguration.socketDevices = [helper.createSocketDeviceConfiguration()]
 
+        if let dir = config.sharedDir, let shareConfig = helper.createDirectoryShareConfiguration(tag: "vmshare") {
+            print("Sharing \(dir) as vmshare.  Use: mount_virtiofs vmshare <path> in the guest to mount.")
+            virtualMachineConfiguration.directorySharingDevices = [shareConfig]
+        } else {
+            print("No shared directory created.  \(config.sharedDir ?? "none") was requested.")
+        }
+
         try! virtualMachineConfiguration.validate()
         try! virtualMachineConfiguration.validateSaveRestoreSupport()
 

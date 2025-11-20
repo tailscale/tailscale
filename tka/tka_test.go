@@ -253,7 +253,7 @@ func TestOpenAuthority(t *testing.T) {
 	}
 
 	// Construct the state of durable storage.
-	chonk := &Mem{}
+	chonk := ChonkMem()
 	err := chonk.CommitVerifiedAUMs([]AUM{g1, i1, l1, i2, i3, l2, l3, g2, l4})
 	if err != nil {
 		t.Fatal(err)
@@ -275,7 +275,7 @@ func TestOpenAuthority(t *testing.T) {
 }
 
 func TestOpenAuthority_EmptyErrors(t *testing.T) {
-	_, err := Open(&Mem{})
+	_, err := Open(ChonkMem())
 	if err == nil {
 		t.Error("Expected an error initializing an empty authority, got nil")
 	}
@@ -319,7 +319,7 @@ func TestCreateBootstrapAuthority(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
-	a1, genesisAUM, err := Create(&Mem{}, State{
+	a1, genesisAUM, err := Create(ChonkMem(), State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 	}, signer25519(priv))
@@ -327,7 +327,7 @@ func TestCreateBootstrapAuthority(t *testing.T) {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
-	a2, err := Bootstrap(&Mem{}, genesisAUM)
+	a2, err := Bootstrap(ChonkMem(), genesisAUM)
 	if err != nil {
 		t.Fatalf("Bootstrap() failed: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestAuthorityInformNonLinear(t *testing.T) {
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
 
-	storage := &Mem{}
+	storage := ChonkMem()
 	a, err := Bootstrap(storage, c.AUMs["G1"])
 	if err != nil {
 		t.Fatalf("Bootstrap() failed: %v", err)
@@ -411,7 +411,7 @@ func TestAuthorityInformLinear(t *testing.T) {
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
 
-	storage := &Mem{}
+	storage := ChonkMem()
 	a, err := Bootstrap(storage, c.AUMs["G1"])
 	if err != nil {
 		t.Fatalf("Bootstrap() failed: %v", err)
@@ -444,7 +444,7 @@ func TestInteropWithNLKey(t *testing.T) {
 	pub2 := key.NewNLPrivate().Public()
 	pub3 := key.NewNLPrivate().Public()
 
-	a, _, err := Create(&Mem{}, State{
+	a, _, err := Create(ChonkMem(), State{
 		Keys: []Key{
 			{
 				Kind:   Key25519,

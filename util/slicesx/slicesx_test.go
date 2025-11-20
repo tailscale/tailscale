@@ -137,6 +137,19 @@ func TestFilterNoAllocations(t *testing.T) {
 	}
 }
 
+func TestAppendNonzero(t *testing.T) {
+	v := []string{"one", "two", "", "four"}
+	got := AppendNonzero(nil, v)
+	want := []string{"one", "two", "four"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v; want %v", got, want)
+	}
+	got = AppendNonzero(v[:0], v)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v; want %v", got, want)
+	}
+}
+
 func TestAppendMatching(t *testing.T) {
 	v := []string{"one", "two", "three", "four"}
 	got := AppendMatching(v[:0], v, func(s string) bool { return len(s) > 3 })

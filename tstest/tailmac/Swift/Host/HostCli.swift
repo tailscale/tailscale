@@ -19,10 +19,12 @@ var config: Config = Config()
 extension HostCli {
     struct Run: ParsableCommand {
         @Option var id: String
+        @Option var share: String?
 
         mutating func run() {
-            print("Running vm with identifier \(id)")
             config = Config(id)
+            config.sharedDir = share
+            print("Running vm with identifier \(id) and sharedDir \(share ?? "<none>")")
             _ = NSApplicationMain(CommandLine.argc, CommandLine.unsafeArgv)
         }
     }

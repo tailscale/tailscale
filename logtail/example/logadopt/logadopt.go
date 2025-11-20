@@ -25,7 +25,7 @@ func main() {
 	}
 	log.SetFlags(0)
 
-	req, err := http.NewRequest("POST", "https://log.tailscale.io/instances", strings.NewReader(url.Values{
+	req, err := http.NewRequest("POST", "https://log.tailscale.com/instances", strings.NewReader(url.Values{
 		"collection": []string{*collection},
 		"instances":  []string{*publicID},
 		"adopt":      []string{"true"},

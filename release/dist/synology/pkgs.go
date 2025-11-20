@@ -155,8 +155,22 @@ func (t *target) mkInfo(b *dist.Build, uncompressedSz int64) []byte {
 		f("os_min_ver", "6.0.1-7445")
 		f("os_max_ver", "7.0-40000")
 	case 7:
-		f("os_min_ver", "7.0-40000")
-		f("os_max_ver", "")
+		if t.packageCenter {
+			switch t.dsmMinorVersion {
+			case 0:
+				f("os_min_ver", "7.0-40000")
+				f("os_max_ver", "7.2-60000")
+			case 2:
+				f("os_min_ver", "7.2-60000")
+			default:
+				panic(fmt.Sprintf("unsupported DSM major.minor version %s", t.dsmVersionString()))
+			}
+		} else {
+			// We do not clamp the os_max_ver currently for non-package center builds as
+			// the binaries for 7.0 and 7.2 are identical.
+			f("os_min_ver", "7.0-40000")
+			f("os_max_ver", "")
+		}
 	default:
 		panic(fmt.Sprintf("unsupported DSM major version %d", t.dsmMajorVersion))
 	}

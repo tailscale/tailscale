@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !js
+//go:build !js && !ts_omit_debug
 
 package wgengine
 
@@ -15,12 +15,13 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
-	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
@@ -123,6 +124,12 @@ func (e *watchdogEngine) watchdog(name string, fn func()) {
 func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config) error {
 	return e.watchdogErr("Reconfig", func() error { return e.wrap.Reconfig(cfg, routerCfg, dnsCfg) })
 }
+func (e *watchdogEngine) ResetAndStop() (st *Status, err error) {
+	e.watchdog("ResetAndStop", func() {
+		st, err = e.wrap.ResetAndStop()
+	})
+	return st, err
+}
 func (e *watchdogEngine) GetFilter() *filter.Filter {
 	return e.wrap.GetFilter()
 }
@@ -162,7 +169,10 @@ func (e *watchdogEngine) Done() <-chan struct{} {
 	return e.wrap.Done()
 }
 
-func (e *watchdogEngine) InstallCaptureHook(cb capture.Callback) {
+func (e *watchdogEngine) InstallCaptureHook(cb packet.CaptureCallback) {
+	if !buildfeatures.HasCapture {
+		return
+	}
 	e.wrap.InstallCaptureHook(cb)
 }
 

@@ -17,21 +17,52 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/util/eventbus/eventbustest"
 )
+
+func TestSetDiscoPublicKey(t *testing.T) {
+	initialKey := key.NewDisco().Public()
+
+	c := &Direct{
+		discoPubKey: initialKey,
+	}
+
+	c.mu.Lock()
+	if c.discoPubKey != initialKey {
+		t.Fatalf("initial disco key mismatch: got %v, want %v", c.discoPubKey, initialKey)
+	}
+	c.mu.Unlock()
+
+	newKey := key.NewDisco().Public()
+	c.SetDiscoPublicKey(newKey)
+
+	c.mu.Lock()
+	if c.discoPubKey != newKey {
+		t.Fatalf("disco key not updated: got %v, want %v", c.discoPubKey, newKey)
+	}
+	if c.discoPubKey == initialKey {
+		t.Fatal("disco key should have changed")
+	}
+	c.mu.Unlock()
+}
 
 func TestNewDirect(t *testing.T) {
 	hi := hostinfo.New()
 	ni := tailcfg.NetInfo{LinkType: "wired"}
 	hi.NetInfo = &ni
+	bus := eventbustest.NewBus(t)
 
 	k := key.NewMachine()
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	dialer.SetBus(bus)
 	opts := Options{
 		ServerURL: "https://example.com",
 		Hostinfo:  hi,
 		GetMachinePrivateKey: func() (key.MachinePrivate, error) {
 			return k, nil
 		},
-		Dialer: tsdial.NewDialer(netmon.NewStatic()),
+		Dialer: dialer,
+		Bus:    bus,
 	}
 	c, err := NewDirect(opts)
 	if err != nil {
@@ -99,15 +130,19 @@ func TestTsmpPing(t *testing.T) {
 	hi := hostinfo.New()
 	ni := tailcfg.NetInfo{LinkType: "wired"}
 	hi.NetInfo = &ni
+	bus := eventbustest.NewBus(t)
 
 	k := key.NewMachine()
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	dialer.SetBus(bus)
 	opts := Options{
 		ServerURL: "https://example.com",
 		Hostinfo:  hi,
 		GetMachinePrivateKey: func() (key.MachinePrivate, error) {
 			return k, nil
 		},
-		Dialer: tsdial.NewDialer(netmon.NewStatic()),
+		Dialer: dialer,
+		Bus:    bus,
 	}
 
 	c, err := NewDirect(opts)

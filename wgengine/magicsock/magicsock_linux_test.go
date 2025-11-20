@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"testing"
 
+	"golang.org/x/net/bpf"
 	"golang.org/x/sys/cpu"
 	"golang.org/x/sys/unix"
 	"tailscale.com/disco"
@@ -144,5 +145,80 @@ func TestEthernetProto(t *testing.T) {
 		} else {
 			t.Logf("ethernetProtoIPv4 = 0x%04x, correctly different from 0x%04x", v4, unix.ETH_P_IP)
 		}
+	}
+}
+
+func TestBpfDiscardV4(t *testing.T) {
+	// Good packet as a reference for what should not be rejected
+	udp4Packet := []byte{
+		// IPv4 header
+		0x45, 0x00, 0x00, 0x26, 0x00, 0x00, 0x00, 0x00,
+		0x40, 0x11, 0x00, 0x00,
+		0x7f, 0x00, 0x00, 0x01, // source ip
+		0x7f, 0x00, 0x00, 0x02, // dest ip
+
+		// UDP header
+		0x30, 0x39, // src port
+		0xd4, 0x31, // dest port
+		0x00, 0x12, // length; 8 bytes header + 10 bytes payload = 18 bytes
+		0x00, 0x00, // checksum; unused
+
+		// Payload: disco magic plus 32 bytes for key and 24 bytes for nonce
+		0x54, 0x53, 0xf0, 0x9f, 0x92, 0xac, 0x00, 0x01, 0x02, 0x03,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00,
+	}
+
+	vm, err := bpf.NewVM(magicsockFilterV4)
+	if err != nil {
+		t.Fatalf("failed creating BPF VM: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		replace map[int]byte
+		accept  bool
+	}{
+		{
+			name:    "base accepted datagram",
+			replace: map[int]byte{},
+			accept:  true,
+		},
+		{
+			name: "more fragments",
+			replace: map[int]byte{
+				6: 0x20,
+			},
+			accept: false,
+		},
+		{
+			name: "some fragment",
+			replace: map[int]byte{
+				7: 0x01,
+			},
+			accept: false,
+		},
+	}
+
+	udp4PacketChanged := make([]byte, len(udp4Packet))
+	copy(udp4PacketChanged, udp4Packet)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range tt.replace {
+				udp4PacketChanged[k] = v
+			}
+			ret, err := vm.Run(udp4PacketChanged)
+			if err != nil {
+				t.Fatalf("BPF VM error: %v", err)
+			}
+
+			if (ret != 0) != tt.accept {
+				t.Errorf("expected accept=%v, got ret=%v", tt.accept, ret)
+			}
+		})
 	}
 }

@@ -50,10 +50,10 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/waiter"
-	"tailscale.com/client/tailscale"
-	"tailscale.com/derp"
-	"tailscale.com/derp/derphttp"
+	"tailscale.com/client/local"
+	"tailscale.com/derp/derpserver"
 	"tailscale.com/net/netutil"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -87,6 +87,9 @@ func (s *Server) PopulateDERPMapIPs() error {
 		for _, n := range r.Nodes {
 			if n.IPv4 != "" {
 				s.derpIPs.Add(netip.MustParseAddr(n.IPv4))
+			}
+			if n.IPv6 != "" {
+				s.derpIPs.Add(netip.MustParseAddr(n.IPv6))
 			}
 		}
 	}
@@ -394,7 +397,7 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 }
 
-// serveLogCatchConn serves a TCP connection to "log.tailscale.io", speaking the
+// serveLogCatchConn serves a TCP connection to "log.tailscale.com", speaking the
 // logtail/logcatcher protocol.
 //
 // We terminate TLS with an arbitrary cert; the client is configured to not
@@ -515,6 +518,8 @@ type network struct {
 	wanIP4         netip.Addr           // router's LAN IPv4, if any
 	lanIP4         netip.Prefix         // router's LAN IP + CIDR (e.g. 192.168.2.1/24)
 	breakWAN4      bool                 // break WAN IPv4 connectivity
+	latency        time.Duration        // latency applied to interface writes
+	lossRate       float64              // probability of dropping a packet (0.0 to 1.0)
 	nodesByIP4     map[netip.Addr]*node // by LAN IPv4
 	nodesByMAC     map[MAC]*node
 	logf           func(format string, args ...any)
@@ -595,7 +600,7 @@ func (n *node) String() string {
 }
 
 type derpServer struct {
-	srv       *derp.Server
+	srv       *derpserver.Server
 	handler   http.Handler
 	tlsConfig *tls.Config
 }
@@ -606,12 +611,12 @@ func newDERPServer() *derpServer {
 	ts.Close()
 
 	ds := &derpServer{
-		srv:       derp.NewServer(key.NewNode(), logger.Discard),
+		srv:       derpserver.New(key.NewNode(), logger.Discard),
 		tlsConfig: ts.TLS, // self-signed; test client configure to not check
 	}
 	var mux http.ServeMux
-	mux.Handle("/derp", derphttp.Handler(ds.srv))
-	mux.HandleFunc("/generate_204", derphttp.ServeNoContent)
+	mux.Handle("/derp", derpserver.Handler(ds.srv))
+	mux.HandleFunc("/generate_204", derpserver.ServeNoContent)
 
 	ds.handler = &mux
 	return ds
@@ -644,7 +649,7 @@ type Server struct {
 	mu              sync.Mutex
 	agentConnWaiter map[*node]chan<- struct{} // signaled after added to set
 	agentConns      set.Set[*agentConn]       //  not keyed by node; should be small/cheap enough to scan all
-	agentDialer     map[*node]DialFunc
+	agentDialer     map[*node]netx.DialFunc
 }
 
 func (s *Server) logf(format string, args ...any) {
@@ -658,8 +663,6 @@ func (s *Server) logf(format string, args ...any) {
 func (s *Server) SetLoggerForTest(logf func(format string, args ...any)) {
 	s.optLogf = logf
 }
-
-type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
 
 var derpMap = &tailcfg.DERPMap{
 	Regions: map[int]*tailcfg.DERPRegion{
@@ -974,13 +977,12 @@ func (n *network) writeEth(res []byte) bool {
 
 	if dstMAC.IsBroadcast() || (n.v6 && etherType == layers.EthernetTypeIPv6 && dstMAC == macAllNodes) {
 		num := 0
-		n.writers.Range(func(mac MAC, nw networkWriter) bool {
+		for mac, nw := range n.writers.All() {
 			if mac != srcMAC {
 				num++
-				nw.write(res)
+				n.conditionedWrite(nw, res)
 			}
-			return true
-		})
+		}
 		return num > 0
 	}
 	if srcMAC == dstMAC {
@@ -988,7 +990,7 @@ func (n *network) writeEth(res []byte) bool {
 		return false
 	}
 	if nw, ok := n.writers.Load(dstMAC); ok {
-		nw.write(res)
+		n.conditionedWrite(nw, res)
 		return true
 	}
 
@@ -999,6 +1001,23 @@ func (n *network) writeEth(res []byte) bool {
 	}
 
 	return false
+}
+
+func (n *network) conditionedWrite(nw networkWriter, packet []byte) {
+	if n.lossRate > 0 && rand.Float64() < n.lossRate {
+		// packet lost
+		return
+	}
+	if n.latency > 0 {
+		// copy the packet as there's no guarantee packet is owned long enough.
+		// TODO(raggi): this could be optimized substantially if necessary,
+		// a pool of buffers and a cheaper delay mechanism are both obvious improvements.
+		var pkt = make([]byte, len(packet))
+		copy(pkt, packet)
+		time.AfterFunc(n.latency, func() { nw.write(pkt) })
+	} else {
+		nw.write(packet)
+	}
 }
 
 var (
@@ -2105,11 +2124,11 @@ func (s *Server) takeAgentConnOne(n *node) (_ *agentConn, ok bool) {
 }
 
 type NodeAgentClient struct {
-	*tailscale.LocalClient
+	*local.Client
 	HTTPClient *http.Client
 }
 
-func (s *Server) NodeAgentDialer(n *Node) DialFunc {
+func (s *Server) NodeAgentDialer(n *Node) netx.DialFunc {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -2130,7 +2149,7 @@ func (s *Server) NodeAgentDialer(n *Node) DialFunc {
 func (s *Server) NodeAgentClient(n *Node) *NodeAgentClient {
 	d := s.NodeAgentDialer(n)
 	return &NodeAgentClient{
-		LocalClient: &tailscale.LocalClient{
+		Client: &local.Client{
 			UseSocketOnly: true,
 			OmitAuth:      true,
 			Dial:          d,

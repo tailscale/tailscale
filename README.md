@@ -37,7 +37,7 @@ not open source.
 
 ## Building
 
-We always require the latest Go release, currently Go 1.23. (While we build
+We always require the latest Go release, currently Go 1.25. (While we build
 releases with our [Go fork](https://github.com/tailscale/go/), its use is not
 required.)
 
@@ -71,8 +71,7 @@ We require [Developer Certificate of
 Origin](https://en.wikipedia.org/wiki/Developer_Certificate_of_Origin)
 `Signed-off-by` lines in commits.
 
-See `git log` for our commit message style. It's basically the same as
-[Go's style](https://github.com/golang/go/wiki/CommitMessage).
+See [commit-messages.md](docs/commit-messages.md) (or skim `git log`) for our commit message style.
 
 ## About Us
 

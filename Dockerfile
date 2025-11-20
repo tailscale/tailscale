@@ -7,6 +7,15 @@
 # Tailscale images are currently built using https://github.com/tailscale/mkctr,
 # and the build script can be found in ./build_docker.sh.
 #
+# If you want to build local images for testing, you can use make.
+#
+# To build a Tailscale image and push to the local docker registry:
+#
+#   $ REPO=local/tailscale TAGS=v0.0.1 PLATFORM=local  make publishdevimage
+#
+# To build a Tailscale image and push to a remote docker registry:
+#
+#   $ REPO=<your-registry>/<your-repo>/tailscale TAGS=v0.0.1  make publishdevimage
 #
 # This Dockerfile includes all the tailscale binaries.
 #
@@ -27,7 +36,7 @@
 #     $ docker exec tailscaled tailscale status
 
 
-FROM golang:1.23-alpine AS build-env
+FROM golang:1.25-alpine AS build-env
 
 WORKDIR /go/src/tailscale
 
@@ -62,8 +71,10 @@ RUN GOARCH=$TARGETARCH go install -ldflags="\
       -X tailscale.com/version.gitCommitStamp=$VERSION_GIT_HASH" \
       -v ./cmd/tailscale ./cmd/tailscaled ./cmd/containerboot
 
-FROM alpine:3.18
+FROM alpine:3.22
 RUN apk add --no-cache ca-certificates iptables iproute2 ip6tables
+RUN ln -s /sbin/iptables-legacy /sbin/iptables
+RUN ln -s /sbin/ip6tables-legacy /sbin/ip6tables
 
 COPY --from=build-env /go/bin/* /usr/local/bin/
 # For compat with the previous run.sh, although ideally you should be

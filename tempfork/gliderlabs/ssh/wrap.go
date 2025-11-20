@@ -1,6 +1,6 @@
 package ssh
 
-import gossh "github.com/tailscale/golang-x-crypto/ssh"
+import gossh "golang.org/x/crypto/ssh"
 
 // PublicKey is an abstraction of different types of public keys.
 type PublicKey interface {

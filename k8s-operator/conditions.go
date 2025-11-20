@@ -75,22 +75,20 @@ func RemoveServiceCondition(svc *corev1.Service, conditionType tsapi.ConditionTy
 	})
 }
 
-func EgressServiceIsValidAndConfigured(svc *corev1.Service) bool {
-	for _, typ := range []tsapi.ConditionType{tsapi.EgressSvcValid, tsapi.EgressSvcConfigured} {
-		cond := GetServiceCondition(svc, typ)
-		if cond == nil || cond.Status != metav1.ConditionTrue {
-			return false
-		}
-	}
-	return true
-}
-
 // SetRecorderCondition ensures that Recorder status has a condition with the
 // given attributes. LastTransitionTime gets set every time condition's status
 // changes.
 func SetRecorderCondition(tsr *tsapi.Recorder, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) {
 	conds := updateCondition(tsr.Status.Conditions, conditionType, status, reason, message, gen, clock, logger)
 	tsr.Status.Conditions = conds
+}
+
+// SetProxyGroupCondition ensures that ProxyGroup status has a condition with the
+// given attributes. LastTransitionTime gets set every time condition's status
+// changes.
+func SetProxyGroupCondition(pg *tsapi.ProxyGroup, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) {
+	conds := updateCondition(pg.Status.Conditions, conditionType, status, reason, message, gen, clock, logger)
+	pg.Status.Conditions = conds
 }
 
 func updateCondition(conds []metav1.Condition, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) []metav1.Condition {
@@ -129,7 +127,7 @@ func updateCondition(conds []metav1.Condition, conditionType tsapi.ConditionType
 
 func ProxyClassIsReady(pc *tsapi.ProxyClass) bool {
 	idx := xslices.IndexFunc(pc.Status.Conditions, func(cond metav1.Condition) bool {
-		return cond.Type == string(tsapi.ProxyClassready)
+		return cond.Type == string(tsapi.ProxyClassReady)
 	})
 	if idx == -1 {
 		return false
@@ -139,14 +137,33 @@ func ProxyClassIsReady(pc *tsapi.ProxyClass) bool {
 }
 
 func ProxyGroupIsReady(pg *tsapi.ProxyGroup) bool {
+	cond := proxyGroupCondition(pg, tsapi.ProxyGroupReady)
+	return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == pg.Generation
+}
+
+func ProxyGroupAvailable(pg *tsapi.ProxyGroup) bool {
+	cond := proxyGroupCondition(pg, tsapi.ProxyGroupAvailable)
+	return cond != nil && cond.Status == metav1.ConditionTrue
+}
+
+func KubeAPIServerProxyValid(pg *tsapi.ProxyGroup) (valid bool, set bool) {
+	cond := proxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid)
+	return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == pg.Generation, cond != nil
+}
+
+func KubeAPIServerProxyConfigured(pg *tsapi.ProxyGroup) bool {
+	cond := proxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured)
+	return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == pg.Generation
+}
+
+func proxyGroupCondition(pg *tsapi.ProxyGroup, condType tsapi.ConditionType) *metav1.Condition {
 	idx := xslices.IndexFunc(pg.Status.Conditions, func(cond metav1.Condition) bool {
-		return cond.Type == string(tsapi.ProxyGroupReady)
+		return cond.Type == string(condType)
 	})
 	if idx == -1 {
-		return false
+		return nil
 	}
-	cond := pg.Status.Conditions[idx]
-	return cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == pg.Generation
+	return &pg.Status.Conditions[idx]
 }
 
 func DNSCfgIsReady(cfg *tsapi.DNSConfig) bool {
@@ -158,4 +175,15 @@ func DNSCfgIsReady(cfg *tsapi.DNSConfig) bool {
 	}
 	cond := cfg.Status.Conditions[idx]
 	return cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == cfg.Generation
+}
+
+func SvcIsReady(svc *corev1.Service) bool {
+	idx := xslices.IndexFunc(svc.Status.Conditions, func(cond metav1.Condition) bool {
+		return cond.Type == string(tsapi.ProxyReady)
+	})
+	if idx == -1 {
+		return false
+	}
+	cond := svc.Status.Conditions[idx]
+	return cond.Status == metav1.ConditionTrue
 }
