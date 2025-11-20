@@ -58,6 +58,12 @@ func controlC(logf logger.Logf, network, address string, c syscall.RawConn) (err
 		return nil
 	}
 
+	// Unix sockets cannot be bound to an interface.
+	// TODO: is this Unix socket exception necessary on Windows? presumably...
+	if network == "unix" {
+		return nil
+	}
+
 	canV4, canV6 := false, false
 	switch network {
 	case "tcp", "udp":
