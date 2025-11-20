@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -32,6 +33,8 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/net/netmon"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
@@ -104,6 +107,104 @@ func TestParseRedirectWithRedirectCode(t *testing.T) {
 			t.Errorf("parseRedirectWithCode(%q) = (%d, %q), want (%d, %q)",
 				tt.in, gotCode, gotURL, tt.wantCode, tt.wantURL)
 		}
+	}
+}
+
+// Tests LocalBackend.tcpHandlerForServe, but only the TCP forwarding part, not
+// any of the web handling code (ipn.TCPPortHandler.HTTP/S).
+func TestTCPHandlerForServeTCPForward(t *testing.T) {
+	tests := []struct {
+		name string
+		// Starts the back listener (the one connections are forwarded to), and
+		// also computes the TCPForward value for this listener.
+		listen func() (l net.Listener, tcpFwd string, err error)
+	}{
+		{
+			name: "tcp",
+			listen: func() (net.Listener, string, error) {
+				l, err := net.Listen("tcp", "localhost:0")
+				if err != nil {
+					return nil, "", err
+				}
+				return l, "tcp://" + l.Addr().String(), nil
+			},
+		},
+		{
+			name: "unix",
+			listen: func() (net.Listener, string, error) {
+				// n.b. The socket file is removed by l.Close.
+				sockFile := filepath.Join(os.TempDir(), "tailscale-ipnlocal-testtcphandlerforserve.sock")
+				os.Remove(sockFile)
+				l, err := net.Listen("unix", sockFile)
+				if err != nil {
+					return nil, "", err
+				}
+				return l, "unix://" + sockFile, nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const dstPort uint16 = 1234 // not actually dialed
+			const msg = "hello from the peer"
+
+			l, tcpFwd, err := tt.listen()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer l.Close()
+
+			// Avoid using tsdial.Dialer.sysDialForTest as we specifically want
+			// to test the way targets would be dialed in production.
+			logf := tstest.WhileTestRunningLogger(t)
+			d := &tsdial.Dialer{Logf: logf}
+			d.SetNetMon(netmon.NewStatic())
+			b := &LocalBackend{
+				dialer: d,
+				logf:   logf,
+				serveConfig: (&ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{
+						dstPort: {TCPForward: tcpFwd},
+					},
+				}).View(),
+			}
+			h := b.tcpHandlerForServe(dstPort, netip.AddrPort{}, nil)
+
+			// We use net.Pipe and h (the TCP handler we are testing), to test
+			// that a connecting peer will be able to talk to the target (l in
+			// our case). The topology looks like:
+			//   peer <-net.Pipe-> fromPeer <-h-> result of l.Accept
+			peer, fromPeer := net.Pipe()
+			defer peer.Close()
+			defer fromPeer.Close()
+
+			go func() {
+				c, err := l.Accept()
+				if err != nil {
+					t.Log("accept error:", err)
+					t.Fail()
+					return
+				}
+				defer c.Close()
+
+				// Echo back until the peer closes the connection.
+				io.Copy(c, c)
+			}()
+
+			go h(fromPeer)
+			if _, err := peer.Write([]byte(msg)); err != nil {
+				t.Fatal(err)
+			}
+			buf := make([]byte, 1024)
+			n, err := peer.Read(buf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(buf[:n]) != msg {
+				t.Fatalf("expected '%s', got '%s'", msg, string(buf[:n]))
+			}
+		})
 	}
 }
 

@@ -45,6 +45,11 @@ func controlLogf(logf logger.Logf, netMon *netmon.Monitor, network, address stri
 		return nil
 	}
 
+	// Unix sockets cannot be bound to an interface.
+	if network == "unix" {
+		return nil
+	}
+
 	idx, err := getInterfaceIndex(logf, netMon, address)
 	if err != nil {
 		// callee logged
