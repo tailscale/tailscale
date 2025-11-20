@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -36,6 +37,7 @@ import (
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/feature"
 	_ "tailscale.com/feature/clientupdate"
+	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/net/tsaddr"
@@ -2245,4 +2247,39 @@ func TestNetworkLock(t *testing.T) {
 			t.Fatalf("stderr: want %q, got %q", wantErr, errBuf.String())
 		}
 	})
+}
+
+func TestNodeWithBadStateFile(t *testing.T) {
+	tstest.Shard(t)
+	tstest.Parallel(t)
+	env := NewTestEnv(t)
+	n1 := NewTestNode(t, env)
+	if err := os.WriteFile(n1.stateFile, []byte("bad json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	d1 := n1.StartDaemon()
+	n1.AwaitResponding()
+
+	// Make sure the health message shows up in status output.
+	n1.AwaitBackendState("NoState")
+	st := n1.MustStatus()
+	wantHealth := ipn.StateStoreHealth.Text(health.Args{health.ArgError: ""})
+	if !slices.ContainsFunc(st.Health, func(m string) bool { return strings.HasPrefix(m, wantHealth) }) {
+		t.Errorf("Status does not contain expected health message %q\ngot health messages: %q", wantHealth, st.Health)
+	}
+
+	// Make sure login attempts are rejected.
+	cmd := n1.Tailscale("up", "--login-server="+n1.env.ControlURL())
+	t.Logf("Running %v ...", cmd)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("up succeeded with output %q", out)
+	}
+	wantOut := "cannot start backend when state store is unhealthy"
+	if !strings.Contains(string(out), wantOut) {
+		t.Fatalf("got up output:\n%s\nwant:\n%s", string(out), wantOut)
+	}
+
+	d1.MustCleanShutdown(t)
 }

@@ -33,12 +33,14 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	_ "tailscale.com/feature/condregister"
+	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
@@ -644,7 +646,16 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 
 	store, err := store.New(logf, statePathOrDefault())
 	if err != nil {
-		return nil, fmt.Errorf("store.New: %w", err)
+		// If we can't create the store (for example if it's TPM-sealed and the
+		// TPM is reset), create a dummy in-memory store to propagate the error
+		// to the user.
+		ht, ok := sys.HealthTracker.GetOK()
+		if !ok {
+			return nil, fmt.Errorf("store.New: %w", err)
+		}
+		logf("store.New failed: %v; starting with in-memory store with a health warning", err)
+		store = new(mem.Store)
+		ht.SetUnhealthy(ipn.StateStoreHealth, health.Args{health.ArgError: err.Error()})
 	}
 	sys.Set(store)
 

@@ -930,7 +930,10 @@ func (h *Handler) serveLoginInteractive(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "want POST", http.StatusBadRequest)
 		return
 	}
-	h.b.StartLoginInteractiveAs(r.Context(), h.Actor)
+	if err := h.b.StartLoginInteractiveAs(r.Context(), h.Actor); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 	return
 }
@@ -947,6 +950,11 @@ func (h *Handler) serveStart(w http.ResponseWriter, r *http.Request) {
 	var o ipn.Options
 	if err := json.NewDecoder(r.Body).Decode(&o); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if h.b.HealthTracker().IsUnhealthy(ipn.StateStoreHealth) {
+		http.Error(w, "cannot start backend when state store is unhealthy", http.StatusInternalServerError)
 		return
 	}
 	err := h.b.Start(o)

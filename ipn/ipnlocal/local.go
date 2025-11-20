@@ -3747,6 +3747,9 @@ func (b *LocalBackend) StartLoginInteractive(ctx context.Context) error {
 // the control plane sends us one. Otherwise, the notification will be delivered to all
 // active [watchSession]s.
 func (b *LocalBackend) StartLoginInteractiveAs(ctx context.Context, user ipnauth.Actor) error {
+	if b.health.IsUnhealthy(ipn.StateStoreHealth) {
+		return errors.New("cannot log in when state store is unhealthy")
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.cc == nil {
@@ -5677,6 +5680,9 @@ func (b *LocalBackend) NodeKey() key.NodePublic {
 //
 // b.mu must be held
 func (b *LocalBackend) nextStateLocked() ipn.State {
+	if b.health.IsUnhealthy(ipn.StateStoreHealth) {
+		return ipn.NoState
+	}
 	var (
 		cc         = b.cc
 		cn         = b.currentNode()
@@ -6936,6 +6942,9 @@ func (b *LocalBackend) CurrentProfile() ipn.LoginProfileView {
 
 // NewProfile creates and switches to the new profile.
 func (b *LocalBackend) NewProfile() error {
+	if b.health.IsUnhealthy(ipn.StateStoreHealth) {
+		return errors.New("cannot log in when state store is unhealthy")
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 

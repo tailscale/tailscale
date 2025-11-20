@@ -25,9 +25,11 @@ import (
 	"testing"
 
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
@@ -426,5 +428,75 @@ func TestKeepItSorted(t *testing.T) {
 		if !slices.Equal(gotKeys, want) {
 			t.Errorf("items with trailing slashes should precede those without")
 		}
+	}
+}
+
+func TestServeWithUnhealthyState(t *testing.T) {
+	tstest.Replace(t, &validLocalHostForTesting, true)
+	h := &Handler{
+		PermitRead:  true,
+		PermitWrite: true,
+		b:           newTestLocalBackend(t),
+		logf:        t.Logf,
+	}
+	h.b.HealthTracker().SetUnhealthy(ipn.StateStoreHealth, health.Args{health.ArgError: "testing"})
+	if err := h.b.Start(ipn.Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	check500Body := func(wantResp string) func(t *testing.T, code int, resp []byte) {
+		return func(t *testing.T, code int, resp []byte) {
+			if code != http.StatusInternalServerError {
+				t.Errorf("got code: %v, want %v\nresponse: %q", code, http.StatusInternalServerError, resp)
+			}
+			if got := strings.TrimSpace(string(resp)); got != wantResp {
+				t.Errorf("got response: %q, want %q", got, wantResp)
+			}
+		}
+	}
+	tests := []struct {
+		desc  string
+		req   *http.Request
+		check func(t *testing.T, code int, resp []byte)
+	}{
+		{
+			desc: "status",
+			req:  httptest.NewRequest("GET", "http://localhost:1234/localapi/v0/status", nil),
+			check: func(t *testing.T, code int, resp []byte) {
+				if code != http.StatusOK {
+					t.Errorf("got code: %v, want %v\nresponse: %q", code, http.StatusOK, resp)
+				}
+				var status ipnstate.Status
+				if err := json.Unmarshal(resp, &status); err != nil {
+					t.Fatal(err)
+				}
+				if status.BackendState != "NoState" {
+					t.Errorf("got backend state: %q, want %q", status.BackendState, "NoState")
+				}
+			},
+		},
+		{
+			desc:  "login-interactive",
+			req:   httptest.NewRequest("POST", "http://localhost:1234/localapi/v0/login-interactive", nil),
+			check: check500Body("cannot log in when state store is unhealthy"),
+		},
+		{
+			desc:  "start",
+			req:   httptest.NewRequest("POST", "http://localhost:1234/localapi/v0/start", strings.NewReader("{}")),
+			check: check500Body("cannot start backend when state store is unhealthy"),
+		},
+		{
+			desc:  "new-profile",
+			req:   httptest.NewRequest("PUT", "http://localhost:1234/localapi/v0/profiles/", nil),
+			check: check500Body("cannot log in when state store is unhealthy"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, tt.req)
+			tt.check(t, resp.Code, resp.Body.Bytes())
+		})
 	}
 }
