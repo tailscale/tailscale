@@ -683,6 +683,7 @@ func CheckFunnelPort(wantedPort uint16, node *ipnstate.PeerStatus) error {
 //   - https://localhost:3000
 //   - https-insecure://localhost:3000
 //   - https-insecure://localhost:3000/foo
+//   - unix://my-socket.sock
 func ExpandProxyTargetValue(target string, supportedSchemes []string, defaultScheme string) (string, error) {
 	const host = "127.0.0.1"
 
