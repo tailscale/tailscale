@@ -388,7 +388,7 @@ func TestServeConfigServices(t *testing.T) {
 	tests := []struct {
 		name              string
 		conf              *ipn.ServeConfig
-		expectedErr       error
+		errExpected       bool
 		packetDstAddrPort []netip.AddrPort
 		intercepted       bool
 	}{
@@ -412,7 +412,7 @@ func TestServeConfigServices(t *testing.T) {
 					},
 				},
 			},
-			expectedErr: ipn.ErrServiceConfigHasBothTCPAndTun,
+			errExpected: true,
 		},
 		{
 			// one correctly configured service with packet should be intercepted
@@ -519,13 +519,13 @@ func TestServeConfigServices(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := b.SetServeConfig(tt.conf, "")
-			if err != nil && tt.expectedErr != nil {
-				if !errors.Is(err, tt.expectedErr) {
-					t.Fatalf("expected error %v,\n got %v", tt.expectedErr, err)
-				}
-				return
+			if err == nil && tt.errExpected {
+				t.Fatal("expected error")
 			}
 			if err != nil {
+				if tt.errExpected {
+					return
+				}
 				t.Fatal(err)
 			}
 			for _, addrPort := range tt.packetDstAddrPort {
@@ -1450,6 +1450,318 @@ func TestServeHTTPRedirect(t *testing.T) {
 			}
 			if got := w.Header().Get("Location"); got != tt.wantLoc {
 				t.Errorf("got Location %q, want %q", got, tt.wantLoc)
+			}
+		})
+	}
+}
+
+func TestValidateServeConfigUpdate(t *testing.T) {
+	tests := []struct {
+		name, description  string
+		existing, incoming *ipn.ServeConfig
+		wantError          bool
+	}{
+		{
+			name:        "empty existing config",
+			description: "should be able to update with empty existing config",
+			existing:    &ipn.ServeConfig{},
+			incoming: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					8080: {},
+				},
+			},
+			wantError: false,
+		},
+		{
+			name:        "no existing config",
+			description: "should be able to update with no existing config",
+			existing:    nil,
+			incoming: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					8080: {},
+				},
+			},
+			wantError: false,
+		},
+		{
+			name:        "empty incoming config",
+			description: "wiping config should work",
+			existing: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {},
+				},
+			},
+			incoming:  &ipn.ServeConfig{},
+			wantError: false,
+		},
+		{
+			name:        "no incoming config",
+			description: "missing incoming config should not result in an error",
+			existing: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {},
+				},
+			},
+			incoming:  nil,
+			wantError: false,
+		},
+		{
+			name:        "non-overlapping update",
+			description: "non-overlapping update should work",
+			existing: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {},
+				},
+			},
+			incoming: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					8080: {},
+				},
+			},
+			wantError: false,
+		},
+		{
+			name:        "overwriting background port",
+			description: "should be able to overwrite a background port",
+			existing: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {
+						TCPForward: "localhost:8080",
+					},
+				},
+			},
+			incoming: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {
+						TCPForward: "localhost:9999",
+					},
+				},
+			},
+			wantError: false,
+		},
+		{
+			name:        "broken existing config",
+			description: "broken existing config should not prevent new config updates",
+			existing: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					// Broken because HTTPS and TCPForward are mutually exclusive.
+					9000: {
+						HTTPS:      true,
+						TCPForward: "127.0.0.1:9000",
+					},
+					// Broken because foreground and background handlers cannot coexist.
+					443: {},
+				},
+				Foreground: map[string]*ipn.ServeConfig{
+					"12345": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							// Broken because foreground and background handlers cannot coexist.
+							443: {},
+						},
+					},
+				},
+				// Broken because Services cannot specify TUN mode and a TCP handler.
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:foo": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							6060: {},
+						},
+						Tun: true,
+					},
+				},
+			},
+			incoming: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {},
+				},
+			},
+			wantError: false,
+		},
+		{
+			name:        "services same port as background",
+			description: "services should be able to use the same port as background listeners",
+			existing: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {},
+				},
+			},
+			incoming: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:foo": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							80: {},
+						},
+					},
+				},
+			},
+			wantError: false,
+		},
+		{
+			name:        "services tun mode",
+			description: "TUN mode should be mutually exclusive with TCP or web handlers for new Services",
+			existing:    &ipn.ServeConfig{},
+			incoming: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:foo": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							6060: {},
+						},
+						Tun: true,
+					},
+				},
+			},
+			wantError: true,
+		},
+		{
+			name:        "new foreground listener",
+			description: "new foreground listeners must be on open ports",
+			existing: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {},
+				},
+			},
+			incoming: &ipn.ServeConfig{
+				Foreground: map[string]*ipn.ServeConfig{
+					"12345": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							80: {},
+						},
+					},
+				},
+			},
+			wantError: true,
+		},
+		{
+			name:        "new background listener",
+			description: "new background listers cannot overwrite foreground listeners",
+			existing: &ipn.ServeConfig{
+				Foreground: map[string]*ipn.ServeConfig{
+					"12345": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							80: {},
+						},
+					},
+				},
+			},
+			incoming: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {},
+				},
+			},
+			wantError: true,
+		},
+		{
+			name:        "serve type overwrite",
+			description: "incoming configuration cannot change the serve type in use by a port",
+			existing: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {
+						HTTP: true,
+					},
+				},
+			},
+			incoming: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {
+						TCPForward: "localhost:8080",
+					},
+				},
+			},
+			wantError: true,
+		},
+		{
+			name:        "serve type overwrite services",
+			description: "incoming Services configuration cannot change the serve type in use by a port",
+			existing: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:foo": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							80: {
+								HTTP: true,
+							},
+						},
+					},
+				},
+			},
+			incoming: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:foo": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							80: {
+								TCPForward: "localhost:8080",
+							},
+						},
+					},
+				},
+			},
+			wantError: true,
+		},
+		{
+			name:        "tun mode with handlers",
+			description: "Services cannot enable TUN mode if L4 or L7 handlers already exist",
+			existing: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:foo": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							443: {
+								HTTPS: true,
+							},
+						},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"127.0.0.1:443": {
+								Handlers: map[string]*ipn.HTTPHandler{},
+							},
+						},
+					},
+				},
+			},
+			incoming: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:foo": {
+						Tun: true,
+					},
+				},
+			},
+			wantError: true,
+		},
+		{
+			name:        "handlers with tun mode",
+			description: "Services cannot add L4 or L7 handlers if TUN mode is already enabled",
+			existing: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:foo": {
+						Tun: true,
+					},
+				},
+			},
+			incoming: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:foo": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							443: {
+								HTTPS: true,
+							},
+						},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"127.0.0.1:443": {
+								Handlers: map[string]*ipn.HTTPHandler{},
+							},
+						},
+					},
+				},
+			},
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateServeConfigUpdate(tt.existing.View(), tt.incoming.View())
+			if err != nil && !tt.wantError {
+				t.Error("unexpected error:", err)
+			}
+			if err == nil && tt.wantError {
+				t.Error("expected error, got nil;", tt.description)
 			}
 		})
 	}

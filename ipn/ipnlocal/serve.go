@@ -292,6 +292,10 @@ func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint1
 // SetServeConfig establishes or replaces the current serve config.
 // ETag is an optional parameter to enforce Optimistic Concurrency Control.
 // If it is an empty string, then the config will be overwritten.
+//
+// New foreground config cannot override existing listeners--neither existing
+// foreground listeners nor existing background listeners. Background config can
+// change as long as the serve type (e.g. HTTP, TCP, etc.) remains the same.
 func (b *LocalBackend) SetServeConfig(config *ipn.ServeConfig, etag string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -305,12 +309,6 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 	}
 	if b.isConfigLocked_Locked() {
 		return errors.New("can't reconfigure tailscaled when using a config file; config file is locked")
-	}
-
-	if config != nil {
-		if err := config.CheckValidServicesConfig(); err != nil {
-			return err
-		}
 	}
 
 	nm := b.NetMap()
@@ -338,6 +336,10 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 		if etag != previousEtag {
 			return ErrETagMismatch
 		}
+	}
+
+	if err := validateServeConfigUpdate(prevConfig, config.View()); err != nil {
+		return err
 	}
 
 	var bs []byte
@@ -1565,4 +1567,145 @@ func vipServiceHash(logf logger.Logf, services []*tailcfg.VIPService) string {
 	var buf [sha256.Size]byte
 	h.Sum(buf[:0])
 	return hex.EncodeToString(buf[:])
+}
+
+// validateServeConfigUpdate validates changes proposed by incoming serve
+// configuration.
+func validateServeConfigUpdate(existing, incoming ipn.ServeConfigView) error {
+	// Error messages returned by this function may be presented to end-users by
+	// frontends like the CLI. Thus these error messages should provide enough
+	// information for end-users to diagnose and resolve conflicts.
+
+	if !incoming.Valid() {
+		return nil
+	}
+
+	// For Services, TUN mode is mutually exclusive with L4 or L7 handlers.
+	for svcName, svcCfg := range incoming.Services().All() {
+		hasTCP := svcCfg.TCP().Len() > 0
+		hasWeb := svcCfg.Web().Len() > 0
+		if svcCfg.Tun() && (hasTCP || hasWeb) {
+			return fmt.Errorf("cannot configure TUN mode in combination with TCP or web handlers for %s", svcName)
+		}
+	}
+
+	if !existing.Valid() {
+		return nil
+	}
+
+	// New foreground listeners must be on open ports.
+	for sessionID, incomingFg := range incoming.Foreground().All() {
+		if !existing.Foreground().Has(sessionID) {
+			// This is a new session.
+			for port := range incomingFg.TCPs() {
+				if _, exists := existing.FindTCP(port); exists {
+					return fmt.Errorf("listener already exists for port %d", port)
+				}
+			}
+		}
+	}
+
+	// New background listeners cannot overwrite existing foreground listeners.
+	for port := range incoming.TCP().All() {
+		if _, exists := existing.FindForegroundTCP(port); exists {
+			return fmt.Errorf("foreground listener already exists for port %d", port)
+		}
+	}
+
+	// Incoming configuration cannot change the serve type in use by a port.
+	for port, incomingHandler := range incoming.TCP().All() {
+		existingHandler, exists := existing.FindTCP(port)
+		if !exists {
+			continue
+		}
+
+		existingServeType := serveTypeFromPortHandler(existingHandler)
+		incomingServeType := serveTypeFromPortHandler(incomingHandler)
+		if incomingServeType != existingServeType {
+			return fmt.Errorf("want to serve %q, but port %d is already serving %q", incomingServeType, port, existingServeType)
+		}
+	}
+
+	// Validations for Tailscale Services.
+	for svcName, incomingSvcCfg := range incoming.Services().All() {
+		existingSvcCfg, exists := existing.Services().GetOk(svcName)
+		if !exists {
+			continue
+		}
+
+		// Incoming configuration cannot change the serve type in use by a port.
+		for port, incomingHandler := range incomingSvcCfg.TCP().All() {
+			existingHandler, exists := existingSvcCfg.TCP().GetOk(port)
+			if !exists {
+				continue
+			}
+
+			existingServeType := serveTypeFromPortHandler(existingHandler)
+			incomingServeType := serveTypeFromPortHandler(incomingHandler)
+			if incomingServeType != existingServeType {
+				return fmt.Errorf("want to serve %q, but port %d is already serving %q for %s", incomingServeType, port, existingServeType, svcName)
+			}
+		}
+
+		existingHasTCP := existingSvcCfg.TCP().Len() > 0
+		existingHasWeb := existingSvcCfg.Web().Len() > 0
+
+		// A Service cannot turn on TUN mode if TCP or web handlers exist.
+		if incomingSvcCfg.Tun() && (existingHasTCP || existingHasWeb) {
+			return fmt.Errorf("cannot turn on TUN mode with existing TCP or web handlers for %s", svcName)
+		}
+
+		incomingHasTCP := incomingSvcCfg.TCP().Len() > 0
+		incomingHasWeb := incomingSvcCfg.Web().Len() > 0
+
+		// A Service cannot add TCP or web handlers if TUN mode is enabled.
+		if (incomingHasTCP || incomingHasWeb) && existingSvcCfg.Tun() {
+			return fmt.Errorf("cannot add TCP or web handlers as TUN mode is enabled for %s", svcName)
+		}
+	}
+
+	return nil
+}
+
+// serveType is a high-level descriptor of the kind of serve performed by a TCP
+// port handler.
+type serveType int
+
+const (
+	serveTypeHTTPS serveType = iota
+	serveTypeHTTP
+	serveTypeTCP
+	serveTypeTLSTerminatedTCP
+)
+
+func (s serveType) String() string {
+	switch s {
+	case serveTypeHTTP:
+		return "http"
+	case serveTypeHTTPS:
+		return "https"
+	case serveTypeTCP:
+		return "tcp"
+	case serveTypeTLSTerminatedTCP:
+		return "tls-terminated-tcp"
+	default:
+		return "unknownServeType"
+	}
+}
+
+// serveTypeFromPortHandler is used to get a high-level descriptor of the kind
+// of serve being performed by a port handler.
+func serveTypeFromPortHandler(ph ipn.TCPPortHandlerView) serveType {
+	switch {
+	case ph.HTTP():
+		return serveTypeHTTP
+	case ph.HTTPS():
+		return serveTypeHTTPS
+	case ph.TerminateTLS() != "":
+		return serveTypeTLSTerminatedTCP
+	case ph.TCPForward() != "":
+		return serveTypeTCP
+	default:
+		return -1
+	}
 }
