@@ -195,7 +195,7 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 }
 
 var nlStatusArgs struct {
-	json bool
+	json jsonoutput.JSONSchemaVersion
 }
 
 var nlStatusCmd = &ffcli.Command{
@@ -205,7 +205,7 @@ var nlStatusCmd = &ffcli.Command{
 	Exec:       runNetworkLockStatus,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("lock status")
-		fs.BoolVar(&nlStatusArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
+		fs.Var(&nlStatusArgs.json, "json", "output in JSON format")
 		return fs
 	})(),
 }
@@ -220,10 +220,12 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 		return fixTailscaledConnectError(err)
 	}
 
-	if nlStatusArgs.json {
-		enc := jsonv1.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(st)
+	if nlStatusArgs.json.IsSet {
+		if nlStatusArgs.json.Value == 1 {
+			return jsonoutput.PrintNetworkLockStatusJSONV1(os.Stdout, st)
+		} else {
+			return fmt.Errorf("unrecognised version: %q", nlStatusArgs.json.Value)
+		}
 	}
 
 	if st.Enabled {
@@ -713,7 +715,7 @@ func runNetworkLockLog(ctx context.Context, args []string) error {
 func printNetworkLockLog(updates []ipnstate.NetworkLockUpdate, out io.Writer, jsonSchema jsonoutput.JSONSchemaVersion, useColor bool) error {
 	if jsonSchema.IsSet {
 		if jsonSchema.Value == 1 {
-			return jsonoutput.PrintNetworkLockJSONV1(out, updates)
+			return jsonoutput.PrintNetworkLockLogJSONV1(out, updates)
 		} else {
 			return fmt.Errorf("unrecognised version: %q", jsonSchema.Value)
 		}

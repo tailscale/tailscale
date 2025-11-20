@@ -89,6 +89,7 @@ type Status struct {
 
 // TKAKey describes a key trusted by network lock.
 type TKAKey struct {
+	Kind     string
 	Key      key.NLPublic
 	Metadata map[string]string
 	Votes    uint

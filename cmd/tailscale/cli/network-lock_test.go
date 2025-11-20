@@ -5,12 +5,16 @@ package cli
 
 import (
 	"bytes"
+	"net/netip"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"go4.org/mem"
 	"tailscale.com/cmd/tailscale/cli/jsonoutput"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
+	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 )
 
@@ -183,7 +187,6 @@ KeyID: tlpub:0202
 
 	t.Run("json-1", func(t *testing.T) {
 		t.Parallel()
-		t.Logf("BOOM")
 
 		var outBuf bytes.Buffer
 		json := jsonoutput.JSONSchemaVersion{
@@ -195,10 +198,172 @@ KeyID: tlpub:0202
 		printNetworkLockLog(updates, &outBuf, json, useColor)
 
 		want := jsonV1
-		t.Logf("%s", outBuf.String())
 
 		if diff := cmp.Diff(outBuf.String(), want); diff != "" {
 			t.Fatalf("wrong output (-got, +want):\n%s", diff)
+		}
+	})
+}
+
+func TestNetworkLockStatusOutput(t *testing.T) {
+	aum := tka.AUM{
+		MessageKind: tka.AUMNoOp,
+	}
+	h := aum.Hash()
+	head := [32]byte(h[:])
+
+	nodeKey1 := key.NodePublicFromRaw32(mem.B(bytes.Repeat([]byte{1}, 32)))
+	nodeKey2 := key.NodePublicFromRaw32(mem.B(bytes.Repeat([]byte{2}, 32)))
+	nodeKey3 := key.NodePublicFromRaw32(mem.B(bytes.Repeat([]byte{3}, 32)))
+
+	nlPub := key.NLPublicFromEd25519Unsafe(bytes.Repeat([]byte{4}, 32))
+
+	trustedNlPub := key.NLPublicFromEd25519Unsafe(bytes.Repeat([]byte{5}, 32))
+
+	tailnetIPv4_A, tailnetIPv6_A := netip.MustParseAddr("100.99.99.99"), netip.MustParseAddr("fd7a:115c:a1e0::701:b62a")
+	tailnetIPv4_B, tailnetIPv6_B := netip.MustParseAddr("100.88.88.88"), netip.MustParseAddr("fd7a:115c:a1e0::4101:512f")
+
+	t.Run("json-1", func(t *testing.T) {
+		for _, tt := range []struct {
+			Name   string
+			Status ipnstate.NetworkLockStatus
+			Want   string
+		}{
+			{
+				Name:   "tailnet-lock-disabled",
+				Status: ipnstate.NetworkLockStatus{Enabled: false},
+				Want: `{
+  "SchemaVersion": "1",
+  "Enabled": false
+}
+`,
+			},
+			{
+				Name: "tailnet-lock-disabled-with-keys",
+				Status: ipnstate.NetworkLockStatus{
+					Enabled:   false,
+					NodeKey:   &nodeKey1,
+					PublicKey: trustedNlPub,
+				},
+				Want: `{
+  "SchemaVersion": "1",
+  "Enabled": false,
+  "PublicKey": "tlpub:0505050505050505050505050505050505050505050505050505050505050505",
+  "NodeKey": "nodekey:0101010101010101010101010101010101010101010101010101010101010101"
+}
+`,
+			},
+			{
+				Name: "tailnet-lock-enabled",
+				Status: ipnstate.NetworkLockStatus{
+					Enabled:          true,
+					Head:             &head,
+					PublicKey:        nlPub,
+					NodeKey:          &nodeKey1,
+					NodeKeySigned:    false,
+					NodeKeySignature: nil,
+					TrustedKeys: []ipnstate.TKAKey{
+						{
+							Kind:     tka.Key25519.String(),
+							Votes:    1,
+							Key:      trustedNlPub,
+							Metadata: map[string]string{"en": "one", "de": "eins", "es": "uno"},
+						},
+					},
+					VisiblePeers: []*ipnstate.TKAPeer{
+						{
+							Name:         "authentic-associate",
+							ID:           tailcfg.NodeID(1234),
+							StableID:     tailcfg.StableNodeID("1234_AAAA_TEST"),
+							TailscaleIPs: []netip.Addr{tailnetIPv4_A, tailnetIPv6_A},
+							NodeKey:      nodeKey2,
+							NodeKeySignature: tka.NodeKeySignature{
+								SigKind:        tka.SigDirect,
+								Pubkey:         []byte("22222222222222222222222222222222"),
+								KeyID:          []byte("44444444444444444444444444444444"),
+								Signature:      []byte("1234567890"),
+								WrappingPubkey: []byte("0987654321"),
+							},
+						},
+					},
+					FilteredPeers: []*ipnstate.TKAPeer{
+						{
+							Name:         "bogus-bandit",
+							ID:           tailcfg.NodeID(5678),
+							StableID:     tailcfg.StableNodeID("5678_BBBB_TEST"),
+							TailscaleIPs: []netip.Addr{tailnetIPv4_B, tailnetIPv6_B},
+							NodeKey:      nodeKey3,
+						},
+					},
+					StateID: 98989898,
+				},
+				Want: `{
+  "SchemaVersion": "1",
+  "Enabled": true,
+  "PublicKey": "tlpub:0404040404040404040404040404040404040404040404040404040404040404",
+  "NodeKey": "nodekey:0101010101010101010101010101010101010101010101010101010101010101",
+  "Head": "WYIVHDR7JUIXBWAJT5UPSCAILEXB7OMINDFEFEPOPNTUCNXMY2KA",
+  "NodeKeySigned": false,
+  "NodeKeySignature": null,
+  "TrustedKeys": [
+    {
+      "Kind": "25519",
+      "Votes": 1,
+      "Public": "tlpub:0505050505050505050505050505050505050505050505050505050505050505",
+      "Meta": {
+        "de": "eins",
+        "en": "one",
+        "es": "uno"
+      }
+    }
+  ],
+  "VisiblePeers": [
+    {
+      "ID": "1234_AAAA_TEST",
+      "DNSName": "authentic-associate",
+      "TailscaleIPs": [
+        "100.99.99.99",
+        "fd7a:115c:a1e0::701:b62a"
+      ],
+      "NodeKey": "nodekey:0202020202020202020202020202020202020202020202020202020202020202",
+      "NodeKeySignature": {
+        "SigKind": "direct",
+        "PublicKey": "tlpub:3232323232323232323232323232323232323232323232323232323232323232",
+        "KeyID": "tlpub:3434343434343434343434343434343434343434343434343434343434343434",
+        "Signature": "MTIzNDU2Nzg5MA==",
+        "WrappingPublicKey": "tlpub:30393837363534333231"
+      }
+    }
+  ],
+  "FilteredPeers": [
+    {
+      "ID": "5678_BBBB_TEST",
+      "DNSName": "bogus-bandit",
+      "TailscaleIPs": [
+        "100.88.88.88",
+        "fd7a:115c:a1e0::4101:512f"
+      ],
+      "NodeKey": "nodekey:0303030303030303030303030303030303030303030303030303030303030303"
+    }
+  ],
+  "State": 98989898
+}
+`,
+			},
+		} {
+			t.Run(tt.Name, func(t *testing.T) {
+				t.Parallel()
+
+				var outBuf bytes.Buffer
+				err := jsonoutput.PrintNetworkLockStatusJSONV1(&outBuf, &tt.Status)
+				if err != nil {
+					t.Fatalf("PrintNetworkLockStatusJSONV1: %v", err)
+				}
+
+				if diff := cmp.Diff(outBuf.String(), tt.Want); diff != "" {
+					t.Fatalf("wrong output (-got, +want):\n%s", diff)
+				}
+			})
 		}
 	})
 }
