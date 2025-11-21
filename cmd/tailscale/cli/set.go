@@ -66,6 +66,7 @@ type setArgsT struct {
 	sync                   bool
 	netfilterMode          string
 	relayServerPort        string
+	deviceAttrs            string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -88,6 +89,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "expose the web interface for managing this node over Tailscale at port 5252")
 	setf.BoolVar(&setArgs.sync, "sync", false, hidden+"actively sync configuration from the control plane (set to false only for network failure testing)")
 	setf.StringVar(&setArgs.relayServerPort, "relay-server-port", "", "UDP port number (0 will pick a random unused port) for the relay server to bind to, on all interfaces, or empty string to disable relay server functionality")
+	setf.StringVar(&setArgs.deviceAttrs, "device-attrs", "", hidden+"comma-separated device attributes to set (key=val,...) ? val can be a bool, number, string; use key= to delete")
 
 	ffcomplete.Flag(setf, "exit-node", func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
 		st, err := localClient.Status(context.Background())
@@ -188,6 +190,22 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		}
 	}
 
+	// If device attributes were provided, apply them first. This is independent
+	// of preference edits, and we shouldn't require other flags to be set.
+	if setArgs.deviceAttrs != "" {
+		attrs, err := parseDeviceAttrs(setArgs.deviceAttrs)
+		if err != nil {
+			return fmt.Errorf("invalid --device-attrs: %w", err)
+		}
+		if len(attrs) == 0 {
+			// No-op if it parses to empty (e.g., just commas)
+		} else {
+			if err := localClient.SetDeviceAttrs(ctx, attrs); err != nil {
+				return fmt.Errorf("setting device attributes: %w", err)
+			}
+		}
+	}
+
 	warnOnAdvertiseRoutes(ctx, &maskedPrefs.Prefs)
 	if err := checkExitNodeRisk(ctx, &maskedPrefs.Prefs, setArgs.acceptedRisks); err != nil {
 		return err
@@ -203,6 +221,10 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		}
 	})
 	if maskedPrefs.IsEmpty() {
+		// If no prefs were changed but device attributes were provided, we are done.
+		if setArgs.deviceAttrs != "" {
+			return nil
+		}
 		return flag.ErrHelp
 	}
 
@@ -265,6 +287,8 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 
 	return nil
 }
+
+// parseDeviceAttrs is defined in attrs.go for reuse by up.go and set.go
 
 // calcAdvertiseRoutesForSet returns the new value for Prefs.AdvertiseRoutes based on the
 // current value, the flags passed to "tailscale set".

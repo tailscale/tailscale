@@ -848,6 +848,18 @@ func (lc *Client) SetUDPGROForwarding(ctx context.Context) error {
 	return nil
 }
 
+// SetDeviceAttrs updates device posture attributes for the current node via the LocalAPI.
+//
+// This calls the experimental endpoint /localapi/v0/alpha-set-device-attrs with a PATCH
+// request body of type tailcfg.AttrUpdate (map[string]any). Attributes set to nil are
+// deleted server-side. Numeric values are interpreted as float64 by the server.
+func (lc *Client) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) error {
+	// Endpoint is currently gated behind buildfeatures.HasDebug on the daemon.
+	// If unavailable, this will likely return 404.
+	_, err := lc.send(ctx, "PATCH", "/localapi/v0/alpha-set-device-attrs", 200, jsonBody(attrs))
+	return err
+}
+
 // CheckPrefs validates the provided preferences, without making any changes.
 //
 // The CLI uses this before a Start call to fail fast if the preferences won't
