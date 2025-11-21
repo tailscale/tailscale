@@ -193,7 +193,7 @@ updateLoop:
 	for _, aum := range updates {
 		aumHash := aum.Hash()
 		c.aums[aumHash] = aum
-		c.commitTimes[aumHash] = c.clock.Now()
+		c.commitTimes[aumHash] = c.now()
 
 		parent, ok := aum.Parent()
 		if ok {
@@ -207,6 +207,16 @@ updateLoop:
 	}
 
 	return nil
+}
+
+// now returns the current time, optionally using the overridden
+// clock if set.
+func (c *Mem) now() time.Time {
+	if c.clock == nil {
+		return time.Now()
+	} else {
+		return c.clock.Now()
+	}
 }
 
 // RemoveAll permanently and completely clears the TKA state.
