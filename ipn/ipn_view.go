@@ -448,6 +448,13 @@ func (v PrefsView) RelayServerPort() views.ValuePointer[int] {
 	return views.ValuePointerOf(v.ж.RelayServerPort)
 }
 
+// RelayServerEndpoints are static IP:port endpoints to advertise as
+// candidates for relay connections. Only relevant when RelayServerPort is
+// non-nil.
+func (v PrefsView) RelayServerEndpoints() views.Slice[netip.AddrPort] {
+	return views.SliceOf(v.ж.RelayServerEndpoints)
+}
+
 // AllowSingleHosts was a legacy field that was always true
 // for the past 4.5 years. It controlled whether Tailscale
 // peers got /32 or /128 routes for each other.
@@ -500,6 +507,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	NetfilterKind          string
 	DriveShares            []*drive.Share
 	RelayServerPort        *int
+	RelayServerEndpoints   []netip.AddrPort
 	AllowSingleHosts       marshalAsTrueInJSON
 	Persist                *persist.Persist
 }{})

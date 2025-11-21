@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -66,6 +67,7 @@ type setArgsT struct {
 	sync                   bool
 	netfilterMode          string
 	relayServerPort        string
+	relayServerEndpoints   string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -88,6 +90,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "expose the web interface for managing this node over Tailscale at port 5252")
 	setf.BoolVar(&setArgs.sync, "sync", false, hidden+"actively sync configuration from the control plane (set to false only for network failure testing)")
 	setf.StringVar(&setArgs.relayServerPort, "relay-server-port", "", "UDP port number (0 will pick a random unused port) for the relay server to bind to, on all interfaces, or empty string to disable relay server functionality")
+	setf.StringVar(&setArgs.relayServerEndpoints, "relay-server-endpoints", "", "static IP:port endpoints to advertise as candidates for relay connections (comma-separated, e.g. \"[2001:db8::1]:40000,192.0.2.1:40000\") or empty string to not advertise any static endpoints")
 
 	ffcomplete.Flag(setf, "exit-node", func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
 		st, err := localClient.Status(context.Background())
@@ -246,6 +249,26 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			return fmt.Errorf("failed to set relay server port: %v", err)
 		}
 		maskedPrefs.Prefs.RelayServerPort = ptr.To(int(uport))
+	}
+
+	if setArgs.relayServerEndpoints != "" {
+		endpointsMap := map[netip.AddrPort]bool{}
+		endpointsSplit := strings.Split(setArgs.relayServerEndpoints, ",")
+		for _, s := range endpointsSplit {
+			ap, err := netip.ParseAddrPort(s)
+			if err != nil {
+				return fmt.Errorf("%q is not a valid IP:port", s)
+			}
+			endpointsMap[ap] = true
+		}
+		endpoints := make([]netip.AddrPort, 0, len(endpointsMap))
+		for ap := range endpointsMap {
+			endpoints = append(endpoints, ap)
+		}
+		slices.SortFunc(endpoints, func(a, b netip.AddrPort) int {
+			return a.Compare(b)
+		})
+		maskedPrefs.Prefs.RelayServerEndpoints = endpoints
 	}
 
 	checkPrefs := curPrefs.Clone()

@@ -288,6 +288,11 @@ type Prefs struct {
 	// non-nil/enabled.
 	RelayServerPort *int `json:",omitempty"`
 
+	// RelayServerEndpoints are static IP:port endpoints to advertise as
+	// candidates for relay connections. Only relevant when RelayServerPort is
+	// non-nil.
+	RelayServerEndpoints []netip.AddrPort `json:",omitempty"`
+
 	// AllowSingleHosts was a legacy field that was always true
 	// for the past 4.5 years. It controlled whether Tailscale
 	// peers got /32 or /128 routes for each other.
@@ -621,6 +626,9 @@ func (p *Prefs) pretty(goos string) string {
 	if buildfeatures.HasRelayServer && p.RelayServerPort != nil {
 		fmt.Fprintf(&sb, "relayServerPort=%d ", *p.RelayServerPort)
 	}
+	if buildfeatures.HasRelayServer && len(p.RelayServerEndpoints) > 0 {
+		fmt.Fprintf(&sb, "relayServerEndpoints=%v ", p.RelayServerEndpoints)
+	}
 	if p.Persist != nil {
 		sb.WriteString(p.Persist.Pretty())
 	} else {
@@ -685,7 +693,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.PostureChecking == p2.PostureChecking &&
 		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
 		p.NetfilterKind == p2.NetfilterKind &&
-		compareIntPtrs(p.RelayServerPort, p2.RelayServerPort)
+		compareIntPtrs(p.RelayServerPort, p2.RelayServerPort) &&
+		slices.Equal(p.RelayServerEndpoints, p2.RelayServerEndpoints)
 }
 
 func (au AutoUpdatePrefs) Pretty() string {
