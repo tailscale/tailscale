@@ -594,23 +594,8 @@ func TestRegression(t *testing.T) {
 	})
 }
 
-const (
-	maxQueuedItems      = 16                 // same as in queue.go
-	totalMaxQueuedItems = maxQueuedItems * 2 // both publisher and subscriber sides
-)
-
 func TestPublishWithMutex(t *testing.T) {
-	t.Run("FewEvents", func(t *testing.T) {
-		// As of 2025-11-20, publishing up to [totalMaxQueuedItems] is fine.
-		testPublishWithMutex(t, totalMaxQueuedItems)
-	})
-	t.Run("ManyEvents", func(t *testing.T) {
-		// As of 2025-11-20, publishing more than [totalMaxQueuedItems] may deadlock.
-		t.Skip("TODO: fix deadlock in https://github.com/tailscale/tailscale/issues/17973")
-
-		const N = 3 // N larger than one increases the chance of deadlock.
-		testPublishWithMutex(t, totalMaxQueuedItems+N)
-	})
+	testPublishWithMutex(t, 1024) // arbitrary large number of events
 }
 
 // testPublishWithMutex publishes the specified number of events,
@@ -637,13 +622,10 @@ func testPublishWithMutex(t *testing.T, n int) {
 		var mu sync.Mutex
 		eventbus.SubscribeFunc[EventA](c, func(e EventA) {
 			// Acquire the same mutex as the publisher.
-			// As of 2025-11-20, this can deadlock if n is large enough
-			// and event queues fill up.
 			mu.Lock()
 			mu.Unlock()
 
 			// Mark event as received, so we can check for lost events.
-			// Not required for the deadlock to occur.
 			exp.Got(e)
 		})
 
@@ -666,17 +648,7 @@ func testPublishWithMutex(t *testing.T, n int) {
 }
 
 func TestPublishFromSubscriber(t *testing.T) {
-	t.Run("FewEvents", func(t *testing.T) {
-		// Publishing up to [totalMaxQueuedItems]-1 is fine.
-		testPublishFromSubscriber(t, totalMaxQueuedItems-1)
-	})
-	t.Run("ManyEvents", func(t *testing.T) {
-		// As of 2025-11-20, publishing more than [totalMaxQueuedItems] may deadlock.
-		t.Skip("TODO: fix deadlock in https://github.com/tailscale/tailscale/issues/18012")
-
-		// Using 2x to increase chance of deadlock.
-		testPublishFromSubscriber(t, totalMaxQueuedItems*2)
-	})
+	testPublishFromSubscriber(t, 1024) // arbitrary large number of events
 }
 
 // testPublishFromSubscriber publishes the specified number of EventA events.
@@ -702,8 +674,6 @@ func testPublishFromSubscriber(t *testing.T, n int) {
 
 		eventbus.SubscribeFunc[EventA](c, func(e EventA) {
 			// Upon receiving EventA, publish EventB.
-			// As of 2025-11-20, this can deadlock if n is large enough
-			// and event queues fill up.
 			pubB.Publish(EventB{Counter: e.Counter})
 		})
 		eventbus.SubscribeFunc[EventB](c, func(e EventB) {

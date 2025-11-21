@@ -120,7 +120,14 @@ func (b *Bus) Close() {
 }
 
 func (b *Bus) pump(ctx context.Context) {
-	var vals queue[PublishedEvent]
+	// Limit how many published events we can buffer in the PublishedEvent queue.
+	//
+	// Subscribers have unbounded DeliveredEvent queues (see tailscale/tailscale#18020),
+	// so this queue doesn't need to be unbounded. Keeping it bounded may also help
+	// catch cases where subscribers stop pumping events completely, such as due to a bug
+	// in [subscribeState.pump], [Subscriber.dispatch], or [SubscriberFunc.dispatch]).
+	const maxPublishedEvents = 16
+	vals := queue[PublishedEvent]{capacity: maxPublishedEvents}
 	acceptCh := func() chan PublishedEvent {
 		if vals.Full() {
 			return nil
