@@ -147,7 +147,12 @@ func (e *extension) onAllocReq(req magicsock.UDPRelayAllocReq) {
 		e.logf("error allocating endpoint: %v", err)
 		return
 	}
-	e.respPub.Publish(magicsock.UDPRelayAllocResp{
+	// Take a defensive stance around publishing from within an
+	// [*eventbus.SubscribeFunc] by publishing from a separate goroutine. At the
+	// time of writing (2025-11-21), publishing from within the
+	// [*eventbus.SubscribeFunc] goroutine is potentially unsafe if publisher
+	// and subscriber share a lock.
+	go e.respPub.Publish(magicsock.UDPRelayAllocResp{
 		ReqRxFromNodeKey:  req.RxFromNodeKey,
 		ReqRxFromDiscoKey: req.RxFromDiscoKey,
 		Message: &disco.AllocateUDPRelayEndpointResponse{
