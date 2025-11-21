@@ -50,6 +50,7 @@ import (
 	"tailscale.com/util/checkchange"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/execqueue"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
@@ -96,6 +97,8 @@ type userspaceEngine struct {
 	// eventBus will eventually become required, but for now may be nil.
 	eventBus    *eventbus.Bus
 	eventClient *eventbus.Client
+
+	linkChangeQueue execqueue.ExecQueue
 
 	logf           logger.Logf
 	wgLogger       *wglog.Logger // a wireguard-go logging wrapper
@@ -543,7 +546,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		if f, ok := feature.HookProxyInvalidateCache.GetOk(); ok {
 			f()
 		}
-		e.linkChange(&cd)
+		e.linkChangeQueue.Add(func() { e.linkChange(&cd) })
 	})
 	e.eventClient = ec
 	e.logf("Engine created.")
@@ -1258,6 +1261,9 @@ func (e *userspaceEngine) RequestStatus() {
 
 func (e *userspaceEngine) Close() {
 	e.eventClient.Close()
+	// TODO(cmol): Should we wait for it too?
+	// Same question raised in appconnector.go.
+	e.linkChangeQueue.Shutdown()
 	e.mu.Lock()
 	if e.closing {
 		e.mu.Unlock()
