@@ -887,6 +887,7 @@ func init() {
 	addPrefFlagMapping("report-posture", "PostureChecking")
 	addPrefFlagMapping("relay-server-port", "RelayServerPort")
 	addPrefFlagMapping("sync", "Sync")
+	addPrefFlagMapping("relay-server-static-endpoints", "RelayServerStaticEndpoints")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {

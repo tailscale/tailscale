@@ -288,6 +288,11 @@ type Prefs struct {
 	// non-nil/enabled.
 	RelayServerPort *int `json:",omitempty"`
 
+	// RelayServerStaticEndpoints are static IP:port endpoints to advertise as
+	// candidates for relay connections. Only relevant when RelayServerPort is
+	// non-nil.
+	RelayServerStaticEndpoints []netip.AddrPort `json:",omitempty"`
+
 	// AllowSingleHosts was a legacy field that was always true
 	// for the past 4.5 years. It controlled whether Tailscale
 	// peers got /32 or /128 routes for each other.
@@ -350,38 +355,39 @@ type AppConnectorPrefs struct {
 type MaskedPrefs struct {
 	Prefs
 
-	ControlURLSet             bool                `json:",omitempty"`
-	RouteAllSet               bool                `json:",omitempty"`
-	ExitNodeIDSet             bool                `json:",omitempty"`
-	ExitNodeIPSet             bool                `json:",omitempty"`
-	AutoExitNodeSet           bool                `json:",omitempty"`
-	InternalExitNodePriorSet  bool                `json:",omitempty"` // Internal; can't be set by LocalAPI clients
-	ExitNodeAllowLANAccessSet bool                `json:",omitempty"`
-	CorpDNSSet                bool                `json:",omitempty"`
-	RunSSHSet                 bool                `json:",omitempty"`
-	RunWebClientSet           bool                `json:",omitempty"`
-	WantRunningSet            bool                `json:",omitempty"`
-	LoggedOutSet              bool                `json:",omitempty"`
-	ShieldsUpSet              bool                `json:",omitempty"`
-	AdvertiseTagsSet          bool                `json:",omitempty"`
-	HostnameSet               bool                `json:",omitempty"`
-	NotepadURLsSet            bool                `json:",omitempty"`
-	ForceDaemonSet            bool                `json:",omitempty"`
-	EggSet                    bool                `json:",omitempty"`
-	AdvertiseRoutesSet        bool                `json:",omitempty"`
-	AdvertiseServicesSet      bool                `json:",omitempty"`
-	SyncSet                   bool                `json:",omitzero"`
-	NoSNATSet                 bool                `json:",omitempty"`
-	NoStatefulFilteringSet    bool                `json:",omitempty"`
-	NetfilterModeSet          bool                `json:",omitempty"`
-	OperatorUserSet           bool                `json:",omitempty"`
-	ProfileNameSet            bool                `json:",omitempty"`
-	AutoUpdateSet             AutoUpdatePrefsMask `json:",omitzero"`
-	AppConnectorSet           bool                `json:",omitempty"`
-	PostureCheckingSet        bool                `json:",omitempty"`
-	NetfilterKindSet          bool                `json:",omitempty"`
-	DriveSharesSet            bool                `json:",omitempty"`
-	RelayServerPortSet        bool                `json:",omitempty"`
+	ControlURLSet                 bool                `json:",omitempty"`
+	RouteAllSet                   bool                `json:",omitempty"`
+	ExitNodeIDSet                 bool                `json:",omitempty"`
+	ExitNodeIPSet                 bool                `json:",omitempty"`
+	AutoExitNodeSet               bool                `json:",omitempty"`
+	InternalExitNodePriorSet      bool                `json:",omitempty"` // Internal; can't be set by LocalAPI clients
+	ExitNodeAllowLANAccessSet     bool                `json:",omitempty"`
+	CorpDNSSet                    bool                `json:",omitempty"`
+	RunSSHSet                     bool                `json:",omitempty"`
+	RunWebClientSet               bool                `json:",omitempty"`
+	WantRunningSet                bool                `json:",omitempty"`
+	LoggedOutSet                  bool                `json:",omitempty"`
+	ShieldsUpSet                  bool                `json:",omitempty"`
+	AdvertiseTagsSet              bool                `json:",omitempty"`
+	HostnameSet                   bool                `json:",omitempty"`
+	NotepadURLsSet                bool                `json:",omitempty"`
+	ForceDaemonSet                bool                `json:",omitempty"`
+	EggSet                        bool                `json:",omitempty"`
+	AdvertiseRoutesSet            bool                `json:",omitempty"`
+	AdvertiseServicesSet          bool                `json:",omitempty"`
+	SyncSet                       bool                `json:",omitzero"`
+	NoSNATSet                     bool                `json:",omitempty"`
+	NoStatefulFilteringSet        bool                `json:",omitempty"`
+	NetfilterModeSet              bool                `json:",omitempty"`
+	OperatorUserSet               bool                `json:",omitempty"`
+	ProfileNameSet                bool                `json:",omitempty"`
+	AutoUpdateSet                 AutoUpdatePrefsMask `json:",omitzero"`
+	AppConnectorSet               bool                `json:",omitempty"`
+	PostureCheckingSet            bool                `json:",omitempty"`
+	NetfilterKindSet              bool                `json:",omitempty"`
+	DriveSharesSet                bool                `json:",omitempty"`
+	RelayServerPortSet            bool                `json:",omitempty"`
+	RelayServerStaticEndpointsSet bool                `json:",omitzero"`
 }
 
 // SetsInternal reports whether mp has any of the Internal*Set field bools set
@@ -621,6 +627,9 @@ func (p *Prefs) pretty(goos string) string {
 	if buildfeatures.HasRelayServer && p.RelayServerPort != nil {
 		fmt.Fprintf(&sb, "relayServerPort=%d ", *p.RelayServerPort)
 	}
+	if buildfeatures.HasRelayServer && len(p.RelayServerStaticEndpoints) > 0 {
+		fmt.Fprintf(&sb, "relayServerStaticEndpoints=%v ", p.RelayServerStaticEndpoints)
+	}
 	if p.Persist != nil {
 		sb.WriteString(p.Persist.Pretty())
 	} else {
@@ -685,7 +694,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.PostureChecking == p2.PostureChecking &&
 		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
 		p.NetfilterKind == p2.NetfilterKind &&
-		compareIntPtrs(p.RelayServerPort, p2.RelayServerPort)
+		compareIntPtrs(p.RelayServerPort, p2.RelayServerPort) &&
+		slices.Equal(p.RelayServerStaticEndpoints, p2.RelayServerStaticEndpoints)
 }
 
 func (au AutoUpdatePrefs) Pretty() string {

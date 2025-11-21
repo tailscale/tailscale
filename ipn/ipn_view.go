@@ -448,6 +448,13 @@ func (v PrefsView) RelayServerPort() views.ValuePointer[int] {
 	return views.ValuePointerOf(v.ж.RelayServerPort)
 }
 
+// RelayServerStaticEndpoints are static IP:port endpoints to advertise as
+// candidates for relay connections. Only relevant when RelayServerPort is
+// non-nil.
+func (v PrefsView) RelayServerStaticEndpoints() views.Slice[netip.AddrPort] {
+	return views.SliceOf(v.ж.RelayServerStaticEndpoints)
+}
+
 // AllowSingleHosts was a legacy field that was always true
 // for the past 4.5 years. It controlled whether Tailscale
 // peers got /32 or /128 routes for each other.
@@ -468,40 +475,41 @@ func (v PrefsView) Persist() persist.PersistView { return v.ж.Persist.View() }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PrefsViewNeedsRegeneration = Prefs(struct {
-	ControlURL             string
-	RouteAll               bool
-	ExitNodeID             tailcfg.StableNodeID
-	ExitNodeIP             netip.Addr
-	AutoExitNode           ExitNodeExpression
-	InternalExitNodePrior  tailcfg.StableNodeID
-	ExitNodeAllowLANAccess bool
-	CorpDNS                bool
-	RunSSH                 bool
-	RunWebClient           bool
-	WantRunning            bool
-	LoggedOut              bool
-	ShieldsUp              bool
-	AdvertiseTags          []string
-	Hostname               string
-	NotepadURLs            bool
-	ForceDaemon            bool
-	Egg                    bool
-	AdvertiseRoutes        []netip.Prefix
-	AdvertiseServices      []string
-	Sync                   opt.Bool
-	NoSNAT                 bool
-	NoStatefulFiltering    opt.Bool
-	NetfilterMode          preftype.NetfilterMode
-	OperatorUser           string
-	ProfileName            string
-	AutoUpdate             AutoUpdatePrefs
-	AppConnector           AppConnectorPrefs
-	PostureChecking        bool
-	NetfilterKind          string
-	DriveShares            []*drive.Share
-	RelayServerPort        *int
-	AllowSingleHosts       marshalAsTrueInJSON
-	Persist                *persist.Persist
+	ControlURL                 string
+	RouteAll                   bool
+	ExitNodeID                 tailcfg.StableNodeID
+	ExitNodeIP                 netip.Addr
+	AutoExitNode               ExitNodeExpression
+	InternalExitNodePrior      tailcfg.StableNodeID
+	ExitNodeAllowLANAccess     bool
+	CorpDNS                    bool
+	RunSSH                     bool
+	RunWebClient               bool
+	WantRunning                bool
+	LoggedOut                  bool
+	ShieldsUp                  bool
+	AdvertiseTags              []string
+	Hostname                   string
+	NotepadURLs                bool
+	ForceDaemon                bool
+	Egg                        bool
+	AdvertiseRoutes            []netip.Prefix
+	AdvertiseServices          []string
+	Sync                       opt.Bool
+	NoSNAT                     bool
+	NoStatefulFiltering        opt.Bool
+	NetfilterMode              preftype.NetfilterMode
+	OperatorUser               string
+	ProfileName                string
+	AutoUpdate                 AutoUpdatePrefs
+	AppConnector               AppConnectorPrefs
+	PostureChecking            bool
+	NetfilterKind              string
+	DriveShares                []*drive.Share
+	RelayServerPort            *int
+	RelayServerStaticEndpoints []netip.AddrPort
+	AllowSingleHosts           marshalAsTrueInJSON
+	Persist                    *persist.Persist
 }{})
 
 // View returns a read-only view of ServeConfig.
