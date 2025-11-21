@@ -20,6 +20,7 @@ import (
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -48,7 +49,10 @@ const (
 	// FinalizerNamePG is the finalizer used by the IngressPGReconciler
 	FinalizerNamePG = "tailscale.com/ingress-pg-finalizer"
 
-	indexIngressProxyGroup = ".metadata.annotations.ingress-proxy-group"
+	indexIngressProxyGroup        = ".metadata.annotations.ingress-proxy-group"
+	indexIngressAnnotationPresent = "ingressAnnotationPresent"
+	presentSentinelValue          = "true"
+
 	// annotationHTTPEndpoint can be used to configure the Ingress to expose an HTTP endpoint to tailnet (as
 	// well as the default HTTPS endpoint).
 	annotationHTTPEndpoint = "tailscale.com/http-endpoint"
@@ -348,7 +352,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	if isHTTPEndpointEnabled(ing) {
 		mode = serviceAdvertisementHTTPAndHTTPS
 	}
-	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pg.Name, serviceName, mode, logger); err != nil {
+	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, ing, pg.Name, serviceName, mode, logger); err != nil {
 		return false, fmt.Errorf("failed to update tailscaled config: %w", err)
 	}
 
@@ -462,7 +466,7 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 			}
 
 			// Make sure the Tailscale Service is not advertised in tailscaled or serve config.
-			if err = r.maybeUpdateAdvertiseServicesConfig(ctx, proxyGroupName, tsSvcName, serviceAdvertisementOff, logger); err != nil {
+			if err = r.maybeUpdateAdvertiseServicesConfig(ctx, nil, proxyGroupName, tsSvcName, serviceAdvertisementOff, logger); err != nil {
 				return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
 			}
 			_, ok := cfg.Services[tsSvcName]
@@ -550,7 +554,7 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	}
 
 	// 4. Unadvertise the Tailscale Service in tailscaled config.
-	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pg, serviceName, serviceAdvertisementOff, logger); err != nil {
+	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, ing, pg, serviceName, serviceAdvertisementOff, logger); err != nil {
 		return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
 	}
 
@@ -633,6 +637,76 @@ func (r *HAIngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
 		*ing.Spec.IngressClassName == r.ingressClassName
 	pgAnnot := ing.Annotations[AnnotationProxyGroup]
 	return isTSIngress && pgAnnot != ""
+}
+
+// checkEndpointsReady (for now) checks to see if there is one ready endpoint for one of the Services defined in the Ingress spec.
+func (r *HAIngressReconciler) checkEndpointsReady(ctx context.Context, ing *networkingv1.Ingress, logger *zap.SugaredLogger) (bool, error) {
+	epssMap, err := r.getEndpointSlicesForIngress(ctx, ing, logger)
+	if err != nil {
+		return false, fmt.Errorf("failed to list EndpointSlices for Ingress %q: %w", ing.Name, err)
+	}
+
+	for _, epss := range epssMap {
+		for _, eps := range epss {
+			for _, ep := range eps.Endpoints {
+				if *ep.Conditions.Ready {
+					return true, nil
+				}
+			}
+		}
+	}
+
+	logger.Debugf("could not find any ready Endpoints in EndpointSlice")
+	return false, nil
+}
+
+func (r *HAIngressReconciler) getEndpointSlicesForIngress(ctx context.Context, ing *networkingv1.Ingress, logger *zap.SugaredLogger) (map[string][]discoveryv1.EndpointSlice, error) {
+	svcs := []*corev1.Service{}
+	if s := ing.Spec.DefaultBackend.Service; s != nil {
+		svc := new(corev1.Service)
+		err := r.Client.Get(ctx, types.NamespacedName{Name: s.Name, Namespace: ing.Namespace}, svc)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get Service resource %q: %w", s.Name, err)
+		}
+
+		svcs = append(svcs, svc)
+	}
+
+	for _, ru := range ing.Spec.Rules {
+		for _, p := range ru.HTTP.Paths {
+			if s := p.Backend.Service; s != nil {
+				svc := new(corev1.Service)
+				err := r.Client.Get(ctx, types.NamespacedName{Name: s.Name, Namespace: ing.Namespace}, svc)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get Service resource %q for Ingress %q: %w", s.Name, ing.Name, err)
+				}
+				svcs = append(svcs, svc)
+			}
+		}
+	}
+
+	epssMap := map[string][]discoveryv1.EndpointSlice{}
+
+	for _, svc := range svcs {
+		epssMap[svc.Name] = []discoveryv1.EndpointSlice{}
+
+		logger.Debugf("looking for endpoint slices for svc with name '%s' in namespace '%s' matching label '%s=%s'", svc.Name, svc.Namespace, discoveryv1.LabelServiceName, svc.Name)
+		// https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#ownership
+		labels := map[string]string{discoveryv1.LabelServiceName: svc.Name}
+		eps := new(discoveryv1.EndpointSliceList)
+		if err := r.List(ctx, eps, client.InNamespace(svc.Namespace), client.MatchingLabels(labels)); err != nil {
+			return nil, fmt.Errorf("error listing EndpointSlices: %w", err)
+		}
+
+		if len(eps.Items) == 0 {
+			logger.Debugf("Service '%s' EndpointSlice does not yet exist. We will reconcile again once it's created", svc.Name)
+			continue
+		}
+
+		epssMap[svc.Name] = eps.Items
+	}
+
+	return epssMap, nil
 }
 
 // validateIngress validates that the Ingress is properly configured.
@@ -742,7 +816,7 @@ const (
 	serviceAdvertisementHTTPAndHTTPS                                 // Both ports 80 and 443 should be advertised
 )
 
-func (a *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, pgName string, serviceName tailcfg.ServiceName, mode serviceAdvertisementMode, logger *zap.SugaredLogger) (err error) {
+func (a *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, ing *networkingv1.Ingress, pgName string, serviceName tailcfg.ServiceName, mode serviceAdvertisementMode, logger *zap.SugaredLogger) (err error) {
 	// Get all config Secrets for this ProxyGroup.
 	secrets := &corev1.SecretList{}
 	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, kubetypes.LabelSecretTypeConfig))); err != nil {
@@ -763,6 +837,13 @@ func (a *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 	}
 	shouldBeAdvertised := (mode == serviceAdvertisementHTTPAndHTTPS) ||
 		(mode == serviceAdvertisementHTTPS && hasCert) // if we only expose port 443 and don't have certs (yet), do not advertise
+
+	if ing != nil && shouldBeAdvertised {
+		shouldBeAdvertised, err = a.checkEndpointsReady(ctx, ing, logger)
+		if err != nil {
+			return fmt.Errorf("failed to check readiness of Ingress '%s' backend endpoints: %w", ing.Name, err)
+		}
+	}
 
 	for _, secret := range secrets.Items {
 		var updated bool

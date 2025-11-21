@@ -405,6 +405,7 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("error determining stable ID of the operator's Tailscale device: %v", err)
 	}
 	ingressProxyGroupFilter := handler.EnqueueRequestsFromMapFunc(ingressesFromIngressProxyGroup(mgr.GetClient(), opts.log))
+	ingressIngFromEpsFilter := handler.EnqueueRequestsFromMapFunc(ingressesFromEndpointSlice(mgr.GetClient(), opts.log))
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&networkingv1.Ingress{}).
@@ -412,6 +413,7 @@ func runReconcilers(opts reconcilerOpts) {
 		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngressPG(mgr.GetClient(), startlog, opts.ingressClassName))).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(HAIngressesFromSecret(mgr.GetClient(), startlog))).
 		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
+		Watches(&discoveryv1.EndpointSlice{}, ingressIngFromEpsFilter).
 		Complete(&HAIngressReconciler{
 			recorder:         eventRecorder,
 			tsClient:         opts.tsClient,
@@ -429,6 +431,10 @@ func runReconcilers(opts reconcilerOpts) {
 	}
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), new(networkingv1.Ingress), indexIngressProxyGroup, indexPGIngresses); err != nil {
 		startlog.Fatalf("failed setting up indexer for HA Ingresses: %v", err)
+	}
+
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &networkingv1.Ingress{}, indexIngressAnnotationPresent, indexIngressPresence); err != nil {
+		startlog.Fatalf("failed setting up indexer for Ingress presence: %v", err)
 	}
 
 	ingressSvcFromEpsFilter := handler.EnqueueRequestsFromMapFunc(ingressSvcFromEps(mgr.GetClient(), opts.log.Named("service-pg-reconciler")))
@@ -1466,7 +1472,6 @@ func kubeAPIServerPGsFromSecret(cl client.Client, logger *zap.SugaredLogger) han
 				},
 			},
 		}
-
 	}
 }
 
@@ -1497,6 +1502,67 @@ func egressSvcsFromEgressProxyGroup(cl client.Client, logger *zap.SugaredLogger)
 			})
 		}
 		return reqs
+	}
+}
+
+// ingressesFromEndpointSlice enqueues reconcile requests for Ingresses that
+// target the Service associated with the given EndpointSlice.
+func ingressesFromEndpointSlice(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		eps, ok := o.(*discoveryv1.EndpointSlice)
+		if !ok {
+			logger.Infof("[unexpected] ProxyGroup handler triggered for an object that is not a ProxyGroup")
+			return nil
+		}
+
+		if svcName, ok := eps.Labels["kubernetes.io/service-name"]; ok {
+			ns := eps.Namespace
+			reqs := make([]reconcile.Request, 0)
+
+			ingList := &networkingv1.IngressList{}
+			if err := cl.List(ctx, ingList, client.MatchingFields{indexIngressAnnotationPresent: presentSentinelValue}); err != nil {
+				logger.Infof("error listing Ingresses: %v, skipping a reconcile for event on EndpointSlice %s", err, eps.Name)
+				return nil
+			}
+
+			for _, ing := range ingList.Items {
+				if ing.Namespace != ns {
+					continue
+				}
+
+				if s := ing.Spec.DefaultBackend.Service; s != nil {
+					if s.Name == svcName {
+						reqs = append(reqs, reconcile.Request{
+							NamespacedName: types.NamespacedName{
+								Namespace: ing.Namespace,
+								Name:      ing.Name,
+							},
+						})
+						continue
+					}
+				}
+
+				for _, rule := range ing.Spec.Rules {
+					for _, p := range rule.HTTP.Paths {
+						if s := p.Backend.Service; s != nil {
+							if s.Name == svcName {
+								reqs = append(reqs, reconcile.Request{
+									NamespacedName: types.NamespacedName{
+										Namespace: ing.Namespace,
+										Name:      ing.Name,
+									},
+								})
+								continue
+							}
+						}
+					}
+				}
+			}
+
+			return reqs
+		}
+
+		return nil
 	}
 }
 
@@ -1657,6 +1723,18 @@ func indexPGIngresses(o client.Object) []string {
 		return nil
 	}
 	return []string{o.GetAnnotations()[AnnotationProxyGroup]}
+}
+
+func indexIngressPresence(obj client.Object) []string {
+	ingress, ok := obj.(*networkingv1.Ingress)
+	if !ok {
+		return nil
+	}
+
+	if _, ok := ingress.Annotations[AnnotationProxyGroup]; ok {
+		return []string{presentSentinelValue}
+	}
+	return nil
 }
 
 // serviceHandlerForIngressPG returns a handler for Service events that ensures that if the Service
