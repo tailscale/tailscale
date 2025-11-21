@@ -433,7 +433,7 @@ func (rbw *responseBodyWrapper) Close() error {
 // b.Dialer().PeerAPITransport() with metrics tracking.
 type driveTransport struct {
 	b  *LocalBackend
-	tr *http.Transport
+	tr http.RoundTripper
 }
 
 func (b *LocalBackend) newDriveTransport() *driveTransport {
@@ -443,7 +443,7 @@ func (b *LocalBackend) newDriveTransport() *driveTransport {
 	}
 }
 
-func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
+func (dt *driveTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Some WebDAV clients include origin and refer headers, which peerapi does
 	// not like. Remove them.
 	req.Header.Del("origin")
@@ -455,42 +455,45 @@ func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err
 		req.Body = bw
 	}
 
-	defer func() {
-		contentType := "unknown"
-		if ct := req.Header.Get("Content-Type"); ct != "" {
-			contentType = ct
-		}
+	resp, err := dt.tr.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
 
-		dt.b.mu.Lock()
-		selfNodeKey := dt.b.currentNode().Self().Key().ShortString()
-		dt.b.mu.Unlock()
-		n, _, ok := dt.b.WhoIs("tcp", netip.MustParseAddrPort(req.URL.Host))
-		shareNodeKey := "unknown"
-		if ok {
-			shareNodeKey = string(n.Key().ShortString())
-		}
+	contentType := "unknown"
+	if ct := req.Header.Get("Content-Type"); ct != "" {
+		contentType = ct
+	}
 
-		rbw := responseBodyWrapper{
-			log:           dt.b.logf,
-			logVerbose:    req.Method != httpm.GET && req.Method != httpm.PUT, // other requests like PROPFIND are quite chatty, so we log those at verbose level
-			method:        req.Method,
-			bytesTx:       int64(bw.bytesRead),
-			selfNodeKey:   selfNodeKey,
-			shareNodeKey:  shareNodeKey,
-			contentType:   contentType,
-			contentLength: resp.ContentLength,
-			fileExtension: parseDriveFileExtensionForLog(req.URL.Path),
-			statusCode:    resp.StatusCode,
-			ReadCloser:    resp.Body,
-		}
+	dt.b.mu.Lock()
+	selfNodeKey := dt.b.currentNode().Self().Key().ShortString()
+	dt.b.mu.Unlock()
+	n, _, ok := dt.b.WhoIs("tcp", netip.MustParseAddrPort(req.URL.Host))
+	shareNodeKey := "unknown"
+	if ok {
+		shareNodeKey = string(n.Key().ShortString())
+	}
 
-		if resp.StatusCode >= 400 {
-			// in case of error response, just log immediately
-			rbw.logAccess("")
-		} else {
-			resp.Body = &rbw
-		}
-	}()
+	rbw := responseBodyWrapper{
+		log:           dt.b.logf,
+		logVerbose:    req.Method != httpm.GET && req.Method != httpm.PUT, // other requests like PROPFIND are quite chatty, so we log those at verbose level
+		method:        req.Method,
+		bytesTx:       int64(bw.bytesRead),
+		selfNodeKey:   selfNodeKey,
+		shareNodeKey:  shareNodeKey,
+		contentType:   contentType,
+		contentLength: resp.ContentLength,
+		fileExtension: parseDriveFileExtensionForLog(req.URL.Path),
+		statusCode:    resp.StatusCode,
+		ReadCloser:    resp.Body,
+	}
 
-	return dt.tr.RoundTrip(req)
+	if resp.StatusCode >= 400 {
+		// in case of error response, just log immediately
+		rbw.logAccess("")
+	} else {
+		resp.Body = &rbw
+	}
+
+	return resp, nil
 }
