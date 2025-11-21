@@ -433,7 +433,7 @@ func (rbw *responseBodyWrapper) Close() error {
 // b.Dialer().PeerAPITransport() with metrics tracking.
 type driveTransport struct {
 	b  *LocalBackend
-	tr *http.Transport
+	tr http.RoundTripper
 }
 
 func (b *LocalBackend) newDriveTransport() *driveTransport {
@@ -456,6 +456,10 @@ func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err
 	}
 
 	defer func() {
+		if resp == nil {
+			return
+		}
+
 		contentType := "unknown"
 		if ct := req.Header.Get("Content-Type"); ct != "" {
 			contentType = ct
