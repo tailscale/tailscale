@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -25,6 +26,7 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
+	"tailscale.com/util/set"
 	"tailscale.com/version"
 )
 
@@ -43,29 +45,30 @@ Only settings explicitly mentioned will be set. There are no default values.`,
 }
 
 type setArgsT struct {
-	acceptRoutes           bool
-	acceptDNS              bool
-	exitNodeIP             string
-	exitNodeAllowLANAccess bool
-	shieldsUp              bool
-	runSSH                 bool
-	runWebClient           bool
-	hostname               string
-	advertiseRoutes        string
-	advertiseDefaultRoute  bool
-	advertiseConnector     bool
-	opUser                 string
-	acceptedRisks          string
-	profileName            string
-	forceDaemon            bool
-	updateCheck            bool
-	updateApply            bool
-	reportPosture          bool
-	snat                   bool
-	statefulFiltering      bool
-	sync                   bool
-	netfilterMode          string
-	relayServerPort        string
+	acceptRoutes               bool
+	acceptDNS                  bool
+	exitNodeIP                 string
+	exitNodeAllowLANAccess     bool
+	shieldsUp                  bool
+	runSSH                     bool
+	runWebClient               bool
+	hostname                   string
+	advertiseRoutes            string
+	advertiseDefaultRoute      bool
+	advertiseConnector         bool
+	opUser                     string
+	acceptedRisks              string
+	profileName                string
+	forceDaemon                bool
+	updateCheck                bool
+	updateApply                bool
+	reportPosture              bool
+	snat                       bool
+	statefulFiltering          bool
+	sync                       bool
+	netfilterMode              string
+	relayServerPort            string
+	relayServerStaticEndpoints string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -88,6 +91,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "expose the web interface for managing this node over Tailscale at port 5252")
 	setf.BoolVar(&setArgs.sync, "sync", false, hidden+"actively sync configuration from the control plane (set to false only for network failure testing)")
 	setf.StringVar(&setArgs.relayServerPort, "relay-server-port", "", "UDP port number (0 will pick a random unused port) for the relay server to bind to, on all interfaces, or empty string to disable relay server functionality")
+	setf.StringVar(&setArgs.relayServerStaticEndpoints, "relay-server-static-endpoints", "", "static IP:port endpoints to advertise as candidates for relay connections (comma-separated, e.g. \"[2001:db8::1]:40000,192.0.2.1:40000\") or empty string to not advertise any static endpoints")
 
 	ffcomplete.Flag(setf, "exit-node", func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
 		st, err := localClient.Status(context.Background())
@@ -246,6 +250,21 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			return fmt.Errorf("failed to set relay server port: %v", err)
 		}
 		maskedPrefs.Prefs.RelayServerPort = ptr.To(int(uport))
+	}
+
+	if setArgs.relayServerStaticEndpoints != "" {
+		endpointsSet := make(set.Set[netip.AddrPort])
+		endpointsSplit := strings.Split(setArgs.relayServerStaticEndpoints, ",")
+		for _, s := range endpointsSplit {
+			ap, err := netip.ParseAddrPort(s)
+			if err != nil {
+				return fmt.Errorf("failed to set relay server static endpoints: %q is not a valid IP:port", s)
+			}
+			endpointsSet.Add(ap)
+		}
+		endpoints := endpointsSet.Slice()
+		slices.SortFunc(endpoints, netip.AddrPort.Compare)
+		maskedPrefs.Prefs.RelayServerStaticEndpoints = endpoints
 	}
 
 	checkPrefs := curPrefs.Clone()

@@ -69,6 +69,7 @@ func TestPrefsEqual(t *testing.T) {
 		"NetfilterKind",
 		"DriveShares",
 		"RelayServerPort",
+		"RelayServerStaticEndpoints",
 		"AllowSingleHosts",
 		"Persist",
 	}
@@ -89,6 +90,16 @@ func TestPrefsEqual(t *testing.T) {
 			ns = append(ns, n)
 		}
 		return ns
+	}
+	aps := func(strs ...string) (ret []netip.AddrPort) {
+		for _, s := range strs {
+			n, err := netip.ParseAddrPort(s)
+			if err != nil {
+				panic(err)
+			}
+			ret = append(ret, n)
+		}
+		return ret
 	}
 	tests := []struct {
 		a, b *Prefs
@@ -367,6 +378,16 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{RelayServerPort: relayServerPort(0)},
 			&Prefs{RelayServerPort: relayServerPort(1)},
+			false,
+		},
+		{
+			&Prefs{RelayServerStaticEndpoints: aps("[2001:db8::1]:40000", "192.0.2.1:40000")},
+			&Prefs{RelayServerStaticEndpoints: aps("[2001:db8::1]:40000", "192.0.2.1:40000")},
+			true,
+		},
+		{
+			&Prefs{RelayServerStaticEndpoints: aps("[2001:db8::1]:40000", "192.0.2.2:40000")},
+			&Prefs{RelayServerStaticEndpoints: aps("[2001:db8::1]:40000", "192.0.2.1:40000")},
 			false,
 		},
 	}
