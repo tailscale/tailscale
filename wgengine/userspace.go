@@ -323,9 +323,9 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	var tsTUNDev *tstun.Wrapper
 	if conf.IsTAP {
-		tsTUNDev = tstun.WrapTAP(logf, conf.Tun, conf.Metrics)
+		tsTUNDev = tstun.WrapTAP(logf, conf.Tun, conf.Metrics, conf.EventBus)
 	} else {
-		tsTUNDev = tstun.Wrap(logf, conf.Tun, conf.Metrics)
+		tsTUNDev = tstun.Wrap(logf, conf.Tun, conf.Metrics, conf.EventBus)
 	}
 	closePool.add(tsTUNDev)
 
@@ -1436,6 +1436,7 @@ func (e *userspaceEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, size in
 		e.magicConn.Ping(peer, res, size, cb)
 	case "TSMP":
 		e.sendTSMPPing(ip, peer, res, cb)
+		e.sendTSMPDiscoAdvertisement(ip)
 	case "ICMP":
 		e.sendICMPEchoRequest(ip, peer, res, cb)
 	}
@@ -1554,6 +1555,36 @@ func (e *userspaceEngine) sendTSMPPing(ip netip.Addr, peer tailcfg.NodeView, res
 
 	tsmpPing := packet.Generate(iph, tsmpPayload[:])
 	e.tundev.InjectOutbound(tsmpPing)
+}
+
+func (e *userspaceEngine) sendTSMPDiscoAdvertisement(ip netip.Addr) {
+	srcIP, err := e.mySelfIPMatchingFamily(ip)
+	if err != nil {
+		return
+	}
+	var iph packet.Header
+	if srcIP.Is4() {
+		iph = packet.IP4Header{
+			IPProto: ipproto.TSMP,
+			Src:     srcIP,
+			Dst:     ip,
+		}
+	} else {
+		iph = packet.IP6Header{
+			IPProto: ipproto.TSMP,
+			Src:     srcIP,
+			Dst:     ip,
+		}
+	}
+	var tsmpPayload [33]byte
+	var key []byte
+	tsmpPayload[0] = byte(packet.TSMPTypeDiscoAdvertisement)
+	discoKey := e.magicConn.DiscoPublicKey()
+	key = discoKey.AppendTo(key)
+	copy(tsmpPayload[1:], key)
+
+	tsmpDiscoAdvert := packet.Generate(iph, tsmpPayload[:])
+	e.tundev.InjectOutbound(tsmpDiscoAdvert)
 }
 
 func (e *userspaceEngine) setTSMPPongCallback(data [8]byte, cb func(packet.TSMPPongReply)) {
