@@ -10,10 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"math"
 	"net/netip"
-	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -132,10 +130,8 @@ type userspaceEngine struct {
 
 	wgLock              sync.Mutex // serializes all wgdev operations; see lock order comment below
 	lastCfgFull         wgcfg.Config
-	lastNMinPeers       int
 	lastRouter          *router.Config
-	lastEngineFull      *wgcfg.Config // of full wireguard config, not trimmed
-	lastEngineInputs    *maybeReconfigInputs
+	lastEngineFull      *wgcfg.Config  // of full wireguard config, not trimmed
 	lastDNSConfig       dns.ConfigView // or invalid if none
 	lastIsSubnetRouter  bool           // was the node a primary subnet router in the last run.
 	recvActivityAt      map[key.NodePublic]mono.Time
@@ -687,7 +683,7 @@ func (e *userspaceEngine) noteRecvActivity(nk key.NodePublic) {
 	// couple minutes (just not on every packet).
 	if e.trimmedNodes[nk] {
 		e.logf("wgengine: idle peer %v now active, reconfiguring WireGuard", nk.ShortString())
-		e.maybeReconfigWireguardLocked(nil)
+		e.maybeReconfigWireguardLocked(false)
 	}
 }
 
@@ -706,36 +702,13 @@ func (e *userspaceEngine) isActiveSinceLocked(nk key.NodePublic, ip netip.Addr, 
 	return timePtr.LoadAtomic().After(t)
 }
 
-// maybeReconfigInputs holds the inputs to the maybeReconfigWireguardLocked
-// function. If these things don't change between calls, there's nothing to do.
-type maybeReconfigInputs struct {
-	WGConfig     *wgcfg.Config
-	TrimmedNodes map[key.NodePublic]bool
-	TrackNodes   views.Slice[key.NodePublic]
-	TrackIPs     views.Slice[netip.Addr]
-}
-
-func (i *maybeReconfigInputs) Equal(o *maybeReconfigInputs) bool {
-	return reflect.DeepEqual(i, o)
-}
-
-func (i *maybeReconfigInputs) Clone() *maybeReconfigInputs {
-	if i == nil {
-		return nil
-	}
-	v := *i
-	v.WGConfig = i.WGConfig.Clone()
-	v.TrimmedNodes = maps.Clone(i.TrimmedNodes)
-	return &v
-}
-
 // discoChanged are the set of peers whose disco keys have changed, implying they've restarted.
 // If a peer is in this set and was previously in the live wireguard config,
 // it needs to be first removed and then re-added to flush out its wireguard session key.
 // If discoChanged is nil or empty, this extra removal step isn't done.
 //
 // e.wgLock must be held.
-func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.NodePublic]bool) error {
+func (e *userspaceEngine) maybeReconfigWireguardLocked(forceReconfig bool) error {
 	if hook := e.testMaybeReconfigHook; hook != nil {
 		hook()
 		return nil
@@ -744,104 +717,8 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 	full := e.lastCfgFull
 	e.wgLogger.SetPeers(full.Peers)
 
-	// Compute a minimal config to pass to wireguard-go
-	// based on the full config. Prune off all the peers
-	// and only add the active ones back.
-	min := full
-	min.Peers = make([]wgcfg.Peer, 0, e.lastNMinPeers)
-
-	// We'll only keep a peer around if it's been active in
-	// the past 5 minutes. That's more than WireGuard's key
-	// rotation time anyway so it's no harm if we remove it
-	// later if it's been inactive.
-	var activeCutoff mono.Time
-	if buildfeatures.HasLazyWG {
-		activeCutoff = e.timeNow().Add(-lazyPeerIdleThreshold)
-	}
-
-	// Not all peers can be trimmed from the network map (see
-	// isTrimmablePeer). For those that are trimmable, keep track of
-	// their NodeKey and Tailscale IPs. These are the ones we'll need
-	// to install tracking hooks for to watch their send/receive
-	// activity.
-	var trackNodes []key.NodePublic
-	var trackIPs []netip.Addr
-	if buildfeatures.HasLazyWG {
-		trackNodes = make([]key.NodePublic, 0, len(full.Peers))
-		trackIPs = make([]netip.Addr, 0, len(full.Peers))
-	}
-
-	// Don't re-alloc the map; the Go compiler optimizes map clears as of
-	// Go 1.11, so we can re-use the existing + allocated map.
-	if e.trimmedNodes != nil {
-		clear(e.trimmedNodes)
-	} else {
-		e.trimmedNodes = make(map[key.NodePublic]bool)
-	}
-
-	needRemoveStep := false
-	for i := range full.Peers {
-		p := &full.Peers[i]
-		nk := p.PublicKey
-		if !buildfeatures.HasLazyWG || !e.isTrimmablePeer(p, len(full.Peers)) {
-			min.Peers = append(min.Peers, *p)
-			if discoChanged[nk] {
-				needRemoveStep = true
-			}
-			continue
-		}
-		trackNodes = append(trackNodes, nk)
-		recentlyActive := false
-		for _, cidr := range p.AllowedIPs {
-			trackIPs = append(trackIPs, cidr.Addr())
-			recentlyActive = recentlyActive || e.isActiveSinceLocked(nk, cidr.Addr(), activeCutoff)
-		}
-		if recentlyActive {
-			min.Peers = append(min.Peers, *p)
-			if discoChanged[nk] {
-				needRemoveStep = true
-			}
-		} else {
-			e.trimmedNodes[nk] = true
-		}
-	}
-	e.lastNMinPeers = len(min.Peers)
-
-	if changed := checkchange.Update(&e.lastEngineInputs, &maybeReconfigInputs{
-		WGConfig:     &min,
-		TrimmedNodes: e.trimmedNodes,
-		TrackNodes:   views.SliceOf(trackNodes),
-		TrackIPs:     views.SliceOf(trackIPs),
-	}); !changed {
-		return nil
-	}
-
-	if buildfeatures.HasLazyWG {
-		e.updateActivityMapsLocked(trackNodes, trackIPs)
-	}
-
-	if needRemoveStep {
-		minner := min
-		minner.Peers = nil
-		numRemove := 0
-		for _, p := range min.Peers {
-			if discoChanged[p.PublicKey] {
-				numRemove++
-				continue
-			}
-			minner.Peers = append(minner.Peers, p)
-		}
-		if numRemove > 0 {
-			e.logf("wgengine: Reconfig: removing session keys for %d peers", numRemove)
-			if err := wgcfg.ReconfigDevice(e.wgdev, &minner, e.logf); err != nil {
-				e.logf("wgdev.Reconfig: %v", err)
-				return err
-			}
-		}
-	}
-
-	e.logf("wgengine: Reconfig: configuring userspace WireGuard config (with %d/%d peers)", len(min.Peers), len(full.Peers))
-	if err := wgcfg.ReconfigDevice(e.wgdev, &min, e.logf); err != nil {
+	e.logf("wgengine: Reconfig: configuring userspace WireGuard config (with %d peers)", len(full.Peers))
+	if err := wgcfg.ReconfigDevice(e.wgdev, &full, e.logf); err != nil {
 		e.logf("wgdev.Reconfig: %v", err)
 		return err
 	}
@@ -896,7 +773,7 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackNodes []key.NodePublic, 
 			if elapsed >= packetSendRecheckWireguardThreshold {
 				e.wgLock.Lock()
 				defer e.wgLock.Unlock()
-				e.maybeReconfigWireguardLocked(nil)
+				e.maybeReconfigWireguardLocked(false)
 			}
 		}
 	}
@@ -1029,10 +906,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	}
 
 	// See if any peers have changed disco keys, which means they've restarted.
-	// If so, we need to update the wireguard-go/device.Device in two phases:
-	// once without the node which has restarted, to clear its wireguard session key,
-	// and a second time with it.
-	discoChanged := make(map[key.NodePublic]bool)
+	// If we see that, we clear our wireguard-go session state for that peer.
+	forceReconfig := false
 	{
 		prevEP := make(map[key.NodePublic]key.DiscoPublic)
 		for i := range e.lastCfgFull.Peers {
@@ -1047,7 +922,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 			}
 			pub := p.PublicKey
 			if old, ok := prevEP[pub]; ok && old != p.DiscoKey {
-				discoChanged[pub] = true
+				e.wgdev.RemovePeer(pub.Raw32())
+				forceReconfig = true // to make sure we add it back
 				e.logf("wgengine: Reconfig: %s changed from %q to %q", pub.ShortString(), old, p.DiscoKey)
 			}
 		}
@@ -1066,7 +942,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	e.magicConn.SetPreferredPort(listenPort)
 	e.magicConn.UpdatePMTUD()
 
-	if err := e.maybeReconfigWireguardLocked(discoChanged); err != nil {
+	if err := e.maybeReconfigWireguardLocked(forceReconfig); err != nil {
 		return err
 	}
 
