@@ -117,6 +117,36 @@ func TestHasPathHandler(t *testing.T) {
 			},
 			want: false,
 		},
+		{
+			name: "with-service-path-handler",
+			cfg: ServeConfig{
+				Services: map[tailcfg.ServiceName]*ServiceConfig{
+					"svc:foo": {
+						Web: map[HostPort]*WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*HTTPHandler{
+								"/": {Path: "/tmp"},
+							}},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "with-service-proxy-handler",
+			cfg: ServeConfig{
+				Services: map[tailcfg.ServiceName]*ServiceConfig{
+					"svc:foo": {
+						Web: map[HostPort]*WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
+			},
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

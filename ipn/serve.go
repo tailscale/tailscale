@@ -238,6 +238,20 @@ func (sc *ServeConfig) HasPathHandler() bool {
 		}
 	}
 
+	if sc.Services != nil {
+		for _, serviceConfig := range sc.Services {
+			if serviceConfig.Web != nil {
+				for _, webServerConfig := range serviceConfig.Web {
+					for _, httpHandler := range webServerConfig.Handlers {
+						if httpHandler.Path != "" {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+
 	if sc.Foreground != nil {
 		for _, fgConfig := range sc.Foreground {
 			if fgConfig.HasPathHandler() {
