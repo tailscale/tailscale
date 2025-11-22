@@ -204,6 +204,27 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
+	if isHTTPRedirectEnabled(ing) {
+		logger.Infof("HTTP redirect enabled, setting up port 80 redirect handlers")
+		const magic80 = "${TS_CERT_DOMAIN}:80"
+		sc.TCP[80] = &ipn.TCPPortHandler{HTTP: true}
+		sc.Web[magic80] = &ipn.WebServerConfig{
+			Handlers: map[string]*ipn.HTTPHandler{},
+		}
+		if sc.AllowFunnel != nil && sc.AllowFunnel[magic443] {
+			sc.AllowFunnel[magic80] = true
+		}
+		web80 := sc.Web[magic80]
+		for mountPoint := range handlers {
+			// We send a 301 - Moved Permanently redirect from HTTP to HTTPS
+			redirectURL := "301:https://${HOST}${REQUEST_URI}"
+			logger.Debugf("Creating redirect handler: %s -> %s", mountPoint, redirectURL)
+			web80.Handlers[mountPoint] = &ipn.HTTPHandler{
+				Redirect: redirectURL,
+			}
+		}
+	}
+
 	crl := childResourceLabels(ing.Name, ing.Namespace, "ingress")
 	var tags []string
 	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
@@ -244,14 +265,21 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		}
 
 		logger.Debugf("setting Ingress hostname to %q", dev.ingressDNSName)
+		ports := []networkingv1.IngressPortStatus{
+			{
+				Protocol: "TCP",
+				Port:     443,
+			},
+		}
+		if isHTTPRedirectEnabled(ing) {
+			ports = append(ports, networkingv1.IngressPortStatus{
+				Protocol: "TCP",
+				Port:     80,
+			})
+		}
 		ing.Status.LoadBalancer.Ingress = append(ing.Status.LoadBalancer.Ingress, networkingv1.IngressLoadBalancerIngress{
 			Hostname: dev.ingressDNSName,
-			Ports: []networkingv1.IngressPortStatus{
-				{
-					Protocol: "TCP",
-					Port:     443,
-				},
-			},
+			Ports:    ports,
 		})
 	}
 
@@ -361,6 +389,12 @@ func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl clien
 		}
 	}
 	return handlers, nil
+}
+
+// isHTTPRedirectEnabled returns true if HTTP redirect is enabled for the Ingress.
+// The annotation is tailscale.com/http-redirect and it should be set to "true".
+func isHTTPRedirectEnabled(ing *networkingv1.Ingress) bool {
+	return ing.Annotations != nil && opt.Bool(ing.Annotations[AnnotationHTTPRedirect]).EqualBool(true)
 }
 
 // hostnameForIngress returns the hostname for an Ingress resource.
