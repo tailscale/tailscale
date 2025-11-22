@@ -464,6 +464,9 @@ func (s *Server) SetSubnetRoutes(nodeKey key.NodePublic, routes []netip.Prefix) 
 	defer s.mu.Unlock()
 	s.logf("Setting subnet routes for %s: %v", nodeKey.ShortString(), routes)
 	mak.Set(&s.nodeSubnetRoutes, nodeKey, routes)
+	if node, ok := s.nodes[nodeKey]; ok {
+		sendUpdate(s.updates[node.ID], updateSelfChanged)
+	}
 }
 
 // MasqueradePair is a pair of nodes and the IP address that the
