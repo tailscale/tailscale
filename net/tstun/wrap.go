@@ -188,10 +188,18 @@ type Wrapper struct {
 	// OnTSMPPongReceived, if non-nil, is called whenever a TSMP pong arrives.
 	OnTSMPPongReceived func(packet.TSMPPongReply)
 
+	// OnTSMPDiscoKeyReceived, if non-nil, is called whenever a TSMP disco key update arrives.
+	// The srcIP parameter identifies the peer that sent the update.
+	OnTSMPDiscoKeyReceived func(srcIP netip.Addr, update packet.TSMPDiscoKeyUpdate)
+
 	// OnICMPEchoResponseReceived, if non-nil, is called whenever a ICMP echo response
 	// arrives. If the packet is to be handled internally this returns true,
 	// false otherwise.
 	OnICMPEchoResponseReceived func(*packet.Parsed) bool
+
+	// GetDiscoPublicKey, if non-nil, returns the local node's disco public key.
+	// This is called when responding to TSMP disco key requests.
+	GetDiscoPublicKey func() key.DiscoPublic
 
 	// PeerAPIPort, if non-nil, returns the peerapi port that's
 	// running for the given IP address.
@@ -1132,6 +1140,15 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook pa
 			if f := t.OnTSMPPongReceived; f != nil {
 				f(data)
 			}
+		} else if _, ok := p.AsTSMPDiscoKeyRequest(); ok {
+			t.noteActivity()
+			t.injectOutboundDiscoKeyUpdate(p)
+			return filter.DropSilently, gro
+		} else if discoKeyUpdate, ok := p.AsTSMPDiscoKeyUpdate(); ok {
+			if f := t.OnTSMPDiscoKeyReceived; f != nil {
+				f(p.Src.Addr(), discoKeyUpdate)
+			}
+			return filter.DropSilently, gro
 		}
 	}
 
@@ -1438,6 +1455,36 @@ func (t *Wrapper) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingReque
 	}
 
 	t.InjectOutbound(packet.Generate(pong, nil))
+}
+
+func (t *Wrapper) injectOutboundDiscoKeyUpdate(pp *packet.Parsed) {
+	if t.GetDiscoPublicKey == nil {
+		return
+	}
+
+	discoKey := t.GetDiscoPublicKey()
+	if discoKey.IsZero() {
+		return
+	}
+
+	update := packet.TSMPDiscoKeyUpdate{
+		DiscoKey: discoKey.Raw32(),
+	}
+
+	switch pp.IPVersion {
+	case 4:
+		h4 := pp.IP4Header()
+		h4.ToResponse()
+		update.IPHeader = h4
+	case 6:
+		h6 := pp.IP6Header()
+		h6.ToResponse()
+		update.IPHeader = h6
+	default:
+		return
+	}
+
+	t.InjectOutbound(packet.Generate(update, nil))
 }
 
 // InjectOutbound makes the Wrapper device behave as if a packet

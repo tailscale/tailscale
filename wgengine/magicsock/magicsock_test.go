@@ -64,6 +64,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/ptr"
+	"tailscale.com/types/views"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
@@ -4303,5 +4304,60 @@ func TestRotateDiscoKeyMultipleTimes(t *testing.T) {
 		}
 
 		keys = append(keys, newKey)
+	}
+}
+
+func TestSendTSMPDiscoKeyRequest(t *testing.T) {
+	ep := &endpoint{
+		nodeID:    1,
+		publicKey: key.NewNode().Public(),
+		nodeAddr:  netip.MustParseAddr("100.64.0.1"),
+	}
+	discoKey := key.NewDisco().Public()
+	ep.disco.Store(&endpointDisco{
+		key:   discoKey,
+		short: discoKey.ShortString(),
+	})
+	conn := newConn(t.Logf)
+	ep.c = conn
+
+	tsmpRequestCalled := make(chan struct{}, 1)
+	var capturedIP netip.Addr
+	conn.sendTSMPDiscoKeyRequest = func(ip netip.Addr) error {
+		capturedIP = ip
+		tsmpRequestCalled <- struct{}{}
+		return nil
+	}
+
+	conn.mu.Lock()
+	conn.peers = views.SliceOf([]tailcfg.NodeView{
+		(&tailcfg.Node{
+			Key: ep.publicKey,
+			Addresses: []netip.Prefix{
+				netip.MustParsePrefix("100.64.0.1/32"),
+			},
+		}).View(),
+	})
+	conn.mu.Unlock()
+
+	var pubKey [32]byte
+	copy(pubKey[:], ep.publicKey.AppendTo(nil))
+	conn.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
+
+	le := &lazyEndpoint{
+		c:   conn,
+		src: epAddr{ap: netip.MustParseAddrPort("127.0.0.1:7777")},
+	}
+
+	le.FromPeer(pubKey)
+
+	select {
+	case <-tsmpRequestCalled:
+		if !capturedIP.IsValid() {
+			t.Error("TSMP request sent with invalid IP")
+		}
+		t.Logf("TSMP disco key request sent to %v", capturedIP)
+	case <-time.After(time.Second):
+		t.Error("TSMP disco key request was not sent")
 	}
 }
