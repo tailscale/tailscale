@@ -7289,11 +7289,24 @@ func fillAllowedSuggestions(polc policyclient.Client) set.Set[tailcfg.StableNode
 
 // suggestExitNode returns a suggestion for reasonably good exit node based on
 // the current netmap and the previous suggestion.
-func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
+func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (apitype.ExitNodeSuggestionResponse, error) {
 	switch {
 	case nb.SelfHasCap(tailcfg.NodeAttrTrafficSteering):
-		// The traffic-steering feature flag is enabled on this tailnet.
-		return suggestExitNodeUsingTrafficSteering(nb, allowList)
+		res, err := suggestExitNodeUsingTrafficSteering(nb, allowList)
+		if err != nil {
+			return apitype.ExitNodeSuggestionResponse{}, err
+		}
+		if res.ID.IsZero() {
+			return res, nil
+		}
+		if res.Location.Valid() && res.Location.Priority() != 0 {
+			return res, nil
+		}
+		// If Traffic Steering were enabled for this tailnet, the
+		// control plane should have assigned a Priority to all exit
+		// nodes, so this self-cap must have been set as a nodeAttr.
+		log.Printf("suggestExitNode: traffic-steering not enabled for this tailnet")
+		fallthrough
 	default:
 		return suggestExitNodeUsingDERP(report, nb, prevSuggestion, selectRegion, selectNode, allowList)
 	}
