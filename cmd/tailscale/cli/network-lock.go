@@ -195,7 +195,7 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 }
 
 var nlStatusArgs struct {
-	json bool
+	json jsonoutput.JSONSchemaVersion
 }
 
 var nlStatusCmd = &ffcli.Command{
@@ -205,7 +205,7 @@ var nlStatusCmd = &ffcli.Command{
 	Exec:       runNetworkLockStatus,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("lock status")
-		fs.BoolVar(&nlStatusArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
+		fs.Var(&nlStatusArgs.json, "json", "output in JSON format")
 		return fs
 	})(),
 }
@@ -220,10 +220,14 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 		return fixTailscaledConnectError(err)
 	}
 
-	if nlStatusArgs.json {
-		enc := jsonv1.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(st)
+	fmt.Println(nlStatusArgs)
+
+	if nlStatusArgs.json.IsSet {
+		if nlStatusArgs.json.Value == 1 {
+			return jsonoutput.PrintNetworkLockStatusJSONV1(os.Stdout, st)
+		} else {
+			return fmt.Errorf("unrecognised version: %q", nlStatusArgs.json.Value)
+		}
 	}
 
 	if st.Enabled {
@@ -254,15 +258,15 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 		for _, k := range st.TrustedKeys {
 			var line strings.Builder
 			line.WriteString("\t")
-			line.WriteString(k.Key.CLIString())
+			line.WriteString(fmt.Sprintf("tlpub:%x", k.Public))
 			line.WriteString("\t")
 			line.WriteString(fmt.Sprint(k.Votes))
 			line.WriteString("\t")
-			if k.Key == st.PublicKey {
+			if key.NLPublicFromEd25519Unsafe(k.Public) == st.PublicKey {
 				line.WriteString("(self)")
 			}
-			if k.Metadata["purpose"] == "pre-auth key" {
-				if preauthKeyID := k.Metadata["authkey_stableid"]; preauthKeyID != "" {
+			if k.Meta["purpose"] == "pre-auth key" {
+				if preauthKeyID := k.Meta["authkey_stableid"]; preauthKeyID != "" {
 					line.WriteString("(pre-auth key ")
 					line.WriteString(preauthKeyID)
 					line.WriteString(")")
@@ -713,7 +717,7 @@ func runNetworkLockLog(ctx context.Context, args []string) error {
 func printNetworkLockLog(updates []ipnstate.NetworkLockUpdate, out io.Writer, jsonSchema jsonoutput.JSONSchemaVersion, useColor bool) error {
 	if jsonSchema.IsSet {
 		if jsonSchema.Value == 1 {
-			return jsonoutput.PrintNetworkLockJSONV1(out, updates)
+			return jsonoutput.PrintNetworkLockLogJSONV1(out, updates)
 		} else {
 			return fmt.Errorf("unrecognised version: %q", jsonSchema.Value)
 		}

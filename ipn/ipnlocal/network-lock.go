@@ -559,9 +559,7 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 		}
 	}
 
-	var head [32]byte
-	h := b.tka.authority.Head()
-	copy(head[:], h[:])
+	head := b.tka.authority.Head()
 
 	var selfAuthorized bool
 	nodeKeySignature := &tka.NodeKeySignature{}
@@ -574,14 +572,6 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 	}
 
 	keys := b.tka.authority.Keys()
-	outKeys := make([]ipnstate.TKAKey, len(keys))
-	for i, k := range keys {
-		outKeys[i] = ipnstate.TKAKey{
-			Key:      key.NLPublicFromEd25519Unsafe(k.Public),
-			Metadata: k.Meta,
-			Votes:    k.Votes,
-		}
-	}
 
 	filtered := make([]*ipnstate.TKAPeer, len(b.tka.filtered))
 	for i := range len(filtered) {
@@ -606,7 +596,7 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 		NodeKey:          nodeKey,
 		NodeKeySigned:    selfAuthorized,
 		NodeKeySignature: nodeKeySignature,
-		TrustedKeys:      outKeys,
+		TrustedKeys:      keys,
 		FilteredPeers:    filtered,
 		VisiblePeers:     visible,
 		StateID:          stateID1,
