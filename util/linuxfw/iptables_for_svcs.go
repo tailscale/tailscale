@@ -18,8 +18,8 @@ import (
 // EnsurePortMapRuleForSvc adds a prerouting rule that forwards traffic received
 // on match port and NOT on the provided interface to target IP and target port.
 // Rule will only be added if it does not already exists.
-func (i *iptablesRunner) EnsurePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error {
-	table := i.getIPTByAddr(targetIP)
+func (r *iptablesRunner) EnsurePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error {
+	table := r.getIPTByAddr(targetIP)
 	args := argsForPortMapRule(svc, tun, targetIP, pm)
 	exists, err := table.Exists("nat", "PREROUTING", args...)
 	if err != nil {
@@ -34,8 +34,8 @@ func (i *iptablesRunner) EnsurePortMapRuleForSvc(svc, tun string, targetIP netip
 // DeleteMapRuleForSvc constructs a prerouting rule as would be created by
 // EnsurePortMapRuleForSvc with the provided args and, if such a rule exists,
 // deletes it.
-func (i *iptablesRunner) DeletePortMapRuleForSvc(svc, excludeI string, targetIP netip.Addr, pm PortMap) error {
-	table := i.getIPTByAddr(targetIP)
+func (r *iptablesRunner) DeletePortMapRuleForSvc(svc, excludeI string, targetIP netip.Addr, pm PortMap) error {
+	table := r.getIPTByAddr(targetIP)
 	args := argsForPortMapRule(svc, excludeI, targetIP, pm)
 	exists, err := table.Exists("nat", "PREROUTING", args...)
 	if err != nil {
@@ -51,8 +51,8 @@ func (i *iptablesRunner) DeletePortMapRuleForSvc(svc, excludeI string, targetIP 
 // VIPService IP address to a local address. This is used by the Kubernetes
 // operator's network layer proxies to forward tailnet traffic for VIPServices
 // to Kubernetes Services.
-func (i *iptablesRunner) EnsureDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error {
-	table := i.getIPTByAddr(dst)
+func (r *iptablesRunner) EnsureDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error {
+	table := r.getIPTByAddr(dst)
 	args := argsForIngressRule(svcName, origDst, dst)
 	exists, err := table.Exists("nat", "PREROUTING", args...)
 	if err != nil {
@@ -65,8 +65,8 @@ func (i *iptablesRunner) EnsureDNATRuleForSvc(svcName string, origDst, dst netip
 }
 
 // DeleteDNATRuleForSvc deletes a DNAT rule created by EnsureDNATRuleForSvc.
-func (i *iptablesRunner) DeleteDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error {
-	table := i.getIPTByAddr(dst)
+func (r *iptablesRunner) DeleteDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error {
+	table := r.getIPTByAddr(dst)
 	args := argsForIngressRule(svcName, origDst, dst)
 	exists, err := table.Exists("nat", "PREROUTING", args...)
 	if err != nil {
@@ -81,10 +81,10 @@ func (i *iptablesRunner) DeleteDNATRuleForSvc(svcName string, origDst, dst netip
 // DeleteSvc constructs all possible rules that would have been created by
 // EnsurePortMapRuleForSvc from the provided args and ensures that each one that
 // exists is deleted.
-func (i *iptablesRunner) DeleteSvc(svc, tun string, targetIPs []netip.Addr, pms []PortMap) error {
+func (r *iptablesRunner) DeleteSvc(svc, tun string, targetIPs []netip.Addr, pms []PortMap) error {
 	for _, tip := range targetIPs {
 		for _, pm := range pms {
-			if err := i.DeletePortMapRuleForSvc(svc, tun, tip, pm); err != nil {
+			if err := r.DeletePortMapRuleForSvc(svc, tun, tip, pm); err != nil {
 				return fmt.Errorf("error deleting rule: %w", err)
 			}
 		}
