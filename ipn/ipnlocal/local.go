@@ -2524,7 +2524,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	if inServerMode := prefs.ForceDaemon(); inServerMode || runtime.GOOS == "windows" {
 		logf("serverMode=%v", inServerMode)
 	}
-	b.applyPrefsToHostinfoLocked(hostinfo, prefs)
+	b.applyPrefsToHostinfoLocked(b.hostinfo, prefs)
 	b.updateWarnSync(prefs)
 
 	persistv := prefs.Persist().AsStruct()
@@ -2562,7 +2562,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		Persist:              *persistv,
 		ServerURL:            serverURL,
 		AuthKey:              opts.AuthKey,
-		Hostinfo:             hostinfo,
+		Hostinfo:             b.hostInfoWithServicesLocked(),
 		HTTPTestClient:       httpTestClient,
 		DiscoPublicKey:       discoPublic,
 		DebugFlags:           debugFlags,
@@ -4825,6 +4825,17 @@ func (b *LocalBackend) doSetHostinfoFilterServicesLocked() {
 		b.logf("[unexpected] doSetHostinfoFilterServices with nil hostinfo")
 		return
 	}
+
+	hi := b.hostInfoWithServicesLocked()
+
+	cc.SetHostinfo(hi)
+}
+
+// hostInfoWithServicesLocked returns a shallow clone of b.hostinfo with
+// services added.
+//
+// b.mu must be held.
+func (b *LocalBackend) hostInfoWithServicesLocked() *tailcfg.Hostinfo {
 	peerAPIServices := b.peerAPIServicesLocked()
 	if b.egg {
 		peerAPIServices = append(peerAPIServices, tailcfg.Service{Proto: "egg", Port: 1})
@@ -4852,7 +4863,7 @@ func (b *LocalBackend) doSetHostinfoFilterServicesLocked() {
 		b.logf("Hostinfo peerAPI ports changed: expected %v, got %v", expectedPorts, actualPorts)
 	}
 
-	cc.SetHostinfo(&hi)
+	return &hi
 }
 
 type portPair struct {
@@ -5251,6 +5262,9 @@ func (b *LocalBackend) initPeerAPIListenerLocked() {
 		if allSame {
 			// Nothing to do.
 			b.logf("[v1] initPeerAPIListener: %d netmap addresses match existing listeners", addrs.Len())
+			// TODO(zofrex): This is fragile. It doesn't check what's actually in hostinfo, and if
+			// peerAPIListeners gets out of sync with hostinfo.Services, we won't get back into a good
+			// state. E.G. see tailscale/corp#27173.
 			return
 		}
 	}
