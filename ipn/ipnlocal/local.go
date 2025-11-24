@@ -937,6 +937,8 @@ func (b *LocalBackend) pauseOrResumeControlClientLocked() {
 	prefs := b.pm.CurrentPrefs()
 	pauseForSyncPref := prefs.Valid() && prefs.Sync().EqualBool(false)
 
+	b.logf("pauseForNetwork = %t, pauseForSyncPref = %t", pauseForNetwork, pauseForSyncPref)
+
 	b.cc.SetPaused(pauseForNetwork || pauseForSyncPref)
 }
 
