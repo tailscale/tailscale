@@ -179,3 +179,7 @@ func (e *watchdogEngine) InstallCaptureHook(cb packet.CaptureCallback) {
 func (e *watchdogEngine) PeerByKey(pubKey key.NodePublic) (_ wgint.Peer, ok bool) {
 	return e.wrap.PeerByKey(pubKey)
 }
+
+func (e *watchdogEngine) SetPeerByIPLookupFunc(fn func(netip.Addr) (key.NodePublic, bool)) {
+	e.wrap.SetPeerByIPLookupFunc(fn)
+}
