@@ -296,7 +296,7 @@ type LocalBackend struct {
 	authURLTime       time.Time     // when the authURL was received from the control server; TODO(nickkhyl): move to nodeBackend
 	authActor         ipnauth.Actor // an actor who called [LocalBackend.StartLoginInteractive] last, or nil; TODO(nickkhyl): move to nodeBackend
 	egg               bool
-	prevIfState       *netmon.State
+	interfaceState    *netmon.State      // latest network interface state or nil
 	peerAPIServer     *peerAPIServer     // or nil
 	peerAPIListeners  []*peerAPIListener // TODO(nickkhyl): move to nodeBackend
 	loginFlags        controlclient.LoginFlags
@@ -561,10 +561,10 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 
 	b.e.SetStatusCallback(b.setWgengineStatus)
 
-	b.prevIfState = netMon.InterfaceState()
+	b.interfaceState = netMon.InterfaceState()
 	// Call our linkChange code once with the current state.
 	// Following changes are triggered via the eventbus.
-	cd := netmon.NewChangeDelta(nil, b.prevIfState, false, netMon.TailscaleInterfaceName())
+	cd := netmon.NewChangeDelta(nil, b.interfaceState, false, netMon.TailscaleInterfaceName(), false)
 	b.linkChange(&cd)
 
 	if buildfeatures.HasPeerAPIServer {
@@ -937,7 +937,7 @@ func (b *LocalBackend) pauseOrResumeControlClientLocked() {
 	if b.cc == nil {
 		return
 	}
-	networkUp := b.prevIfState.AnyInterfaceUp()
+	networkUp := b.interfaceState.AnyInterfaceUp()
 	pauseForNetwork := (b.state == ipn.Stopped && b.NetMap() != nil) || (!networkUp && !testenv.InTest() && !assumeNetworkUpdateForTest())
 
 	prefs := b.pm.CurrentPrefs()
@@ -964,9 +964,8 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	ifst := delta.New
-	hadPAC := b.prevIfState.HasPAC()
-	b.prevIfState = ifst
+	b.interfaceState = delta.New
+
 	b.pauseOrResumeControlClientLocked()
 	prefs := b.pm.CurrentPrefs()
 	if delta.RebindLikelyRequired && prefs.AutoExitNode().IsSet() {
@@ -980,8 +979,8 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 		needReconfig = true
 	}
 	// If the PAC-ness of the network changed, reconfig wireguard+route to add/remove subnets.
-	if hadPAC != ifst.HasPAC() {
-		b.logf("linkChange: in state %v; PAC changed from %v->%v", b.state, hadPAC, ifst.HasPAC())
+	if delta.HasPACOrProxyConfigChanged {
+		b.logf("linkChange: in state %v; PAC or proxyConfig changed; updating routes", b.state)
 		needReconfig = true
 	}
 	if needReconfig {
@@ -5060,7 +5059,7 @@ func (b *LocalBackend) authReconfigLocked() {
 	}
 
 	prefs := b.pm.CurrentPrefs()
-	hasPAC := b.prevIfState.HasPAC()
+	hasPAC := b.interfaceState.HasPAC()
 	disableSubnetsIfPAC := cn.SelfHasCap(tailcfg.NodeAttrDisableSubnetsIfPAC)
 	dohURL, dohURLOK := cn.exitNodeCanProxyDNS(prefs.ExitNodeID())
 	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, version.OS())
@@ -5311,7 +5310,7 @@ func (b *LocalBackend) initPeerAPIListenerLocked() {
 		var err error
 		skipListen := i > 0 && isNetstack
 		if !skipListen {
-			ln, err = ps.listen(a.Addr(), b.prevIfState)
+			ln, err = ps.listen(a.Addr(), b.interfaceState.TailscaleInterfaceIndex)
 			if err != nil {
 				if peerAPIListenAsync {
 					b.logf("[v1] possibly transient peerapi listen(%q) error, will try again on linkChange: %v", a.Addr(), err)

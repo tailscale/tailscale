@@ -287,6 +287,9 @@ type State struct {
 
 	// PAC is the URL to the Proxy Autoconfig URL, if applicable.
 	PAC string
+
+	// TailscaleInterfaceIndex is the index of the Tailscale interface
+	TailscaleInterfaceIndex int
 }
 
 func (s *State) String() string {
@@ -505,6 +508,10 @@ func getState(optTSInterfaceName string) (*State, error) {
 		// Skip uninteresting interfaces.
 		if IsInterestingInterface != nil && !IsInterestingInterface(ni, pfxs) {
 			return
+		}
+
+		if isTailscaleInterface(ni.Name, pfxs) {
+			s.TailscaleInterfaceIndex = ni.Index
 		}
 
 		if !ifUp || isTSInterfaceName || isTailscaleInterface(ni.Name, pfxs) {

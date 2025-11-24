@@ -171,7 +171,7 @@ func (s *localListener) Run() {
 			// required by the network sandbox to allow binding to
 			// a specific interface. Without this hook, the system
 			// chooses a default interface to bind to.
-			if err := initListenConfig(&lc, ip, s.b.prevIfState, s.b.dialer.TUNName()); err != nil {
+			if err := initListenConfig(&lc, ip, s.b.interfaceState.TailscaleInterfaceIndex); err != nil {
 				s.logf("localListener failed to init listen config %v, backing off: %v", s.ap, err)
 				s.bo.BackOff(s.ctx, err)
 				continue

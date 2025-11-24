@@ -1350,12 +1350,11 @@ func (e *userspaceEngine) Done() <-chan struct{} {
 
 func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 
-	cur := delta.New
-	up := cur.AnyInterfaceUp()
+	up := delta.AnyInterfaceUp()
 	if !up {
-		e.logf("LinkChange: all links down; pausing: %v", cur)
+		e.logf("LinkChange: all links down; pausing: %v", delta.StateDesc())
 	} else if delta.RebindLikelyRequired {
-		e.logf("LinkChange: major, rebinding. New state: %v OldState: %v", cur, delta.Old)
+		e.logf("LinkChange: major, rebinding: %v", delta.StateDesc())
 	} else {
 		e.logf("[v1] LinkChange: minor")
 	}

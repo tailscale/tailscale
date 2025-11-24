@@ -64,7 +64,7 @@ func syncTestLinkChangeLogLimiter(t *testing.T) {
 	// InjectEvent doesn't work because it's not a major event, so we
 	// instead inject the event ourselves.
 	injector := eventbustest.NewInjector(t, bus)
-	eventbustest.Inject(injector, NewChangeDelta(nil, nil, true, ""))
+	eventbustest.Inject(injector, NewChangeDelta(nil, nil, true, "", false))
 	synctest.Wait()
 
 	logf("hello %s", "world")
