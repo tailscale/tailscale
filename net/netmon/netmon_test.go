@@ -498,7 +498,7 @@ func TestRebindRequired(t *testing.T) {
 				}
 			}
 
-			cd := NewChangeDelta(tt.s1, tt.s2, false, tt.tsIfName)
+			cd := NewChangeDelta(tt.s1, tt.s2, false, tt.tsIfName, true)
 			_ = cd // in case we need it later
 			if got := cd.RebindLikelyRequired; got != tt.want {
 				t.Errorf("RebindRequired = %v; want %v", got, tt.want)
@@ -515,30 +515,27 @@ func withIsInterestingInterface(t *testing.T, fn func(Interface, []netip.Prefix)
 }
 
 func TestIncludesRoutableIP(t *testing.T) {
-	addrs := []netip.Prefix{
-		netip.MustParsePrefix("1.2.3.4/32"),
-		netip.MustParsePrefix("10.0.0.1/24"),          // RFC1918 IPv4 (private)
-		netip.MustParsePrefix("172.16.0.1/12"),        // RFC1918 IPv4 (private)
-		netip.MustParsePrefix("192.168.1.1/24"),       // RFC1918 IPv4 (private)
-		netip.MustParsePrefix("fd15:dead:beef::1/64"), // IPv6 ULA (should be filtered)
-		netip.MustParsePrefix("2001:db8::1/64"),       // global IPv6 (documentation block)
-		netip.MustParsePrefix("fe80::1/64"),           // link-local IPv6
-		netip.MustParsePrefix("::1/128"),              // loopback IPv6
-		netip.MustParsePrefix("::/128"),               // unspecified IPv6
-		netip.MustParsePrefix("224.0.0.1/32"),         // multicast IPv4
-		netip.MustParsePrefix("127.0.0.1/32"),         // loopback IPv4
-	}
-
-	got := filterRoutableIPs(addrs)
-
-	want := []netip.Prefix{
+	routable := []netip.Prefix{
 		netip.MustParsePrefix("1.2.3.4/32"),
 		netip.MustParsePrefix("10.0.0.1/24"),          // RFC1918 IPv4 (private)
 		netip.MustParsePrefix("172.16.0.1/12"),        // RFC1918 IPv4 (private)
 		netip.MustParsePrefix("192.168.1.1/24"),       // RFC1918 IPv4 (private)
 		netip.MustParsePrefix("fd15:dead:beef::1/64"), // IPv6 ULA
-		netip.MustParsePrefix("2001:db8::1/64"),
+		netip.MustParsePrefix("2001:db8::1/64"),       // global IPv6
 	}
+
+	nonRoutable := []netip.Prefix{
+		netip.MustParsePrefix("ff00::/8"),     // multicast IPv6 (should be filtered)
+		netip.MustParsePrefix("fe80::1/64"),   // link-local IPv6
+		netip.MustParsePrefix("::1/128"),      // loopback IPv6
+		netip.MustParsePrefix("::/128"),       // unspecified IPv6
+		netip.MustParsePrefix("224.0.0.1/32"), // multicast IPv4
+		netip.MustParsePrefix("127.0.0.1/32"), // loopback IPv4
+	}
+
+	got, want := filterRoutableIPs(
+		append(nonRoutable, routable...),
+	), routable
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("filterRoutableIPs returned %v; want %v", got, want)
@@ -641,9 +638,4 @@ func TestForeachInterface(t *testing.T) {
 			}
 		})
 	}
-}
-
-type testOSMon struct {
-	osMon
-	Interesting func(name string) bool
 }

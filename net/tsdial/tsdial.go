@@ -264,7 +264,7 @@ var (
 
 func (d *Dialer) linkChanged(delta *netmon.ChangeDelta) {
 	// Track how often we see ChangeDeltas with no DefaultRouteInterface.
-	if delta.New.DefaultRouteInterface == "" {
+	if delta.DefaultRouteInterface == "" {
 		metricChangeDeltaNoDefaultRoute.Add(1)
 	}
 
@@ -294,22 +294,23 @@ func changeAffectsConn(delta *netmon.ChangeDelta, conn net.Conn) bool {
 	}
 	lip, rip := la.AddrPort().Addr(), ra.AddrPort().Addr()
 
-	if delta.Old == nil {
+	if delta.IsInitialState {
 		return false
 	}
-	if delta.Old.DefaultRouteInterface != delta.New.DefaultRouteInterface ||
-		delta.Old.HTTPProxy != delta.New.HTTPProxy {
+
+	if delta.DefaultInterfaceChanged ||
+		delta.HasPACOrProxyConfigChanged {
 		return true
 	}
 
 	// In a few cases, we don't have a new DefaultRouteInterface (e.g. on
-	// Android; see tailscale/corp#19124); if so, pessimistically assume
+	// Android and macOS/iOS; see tailscale/corp#19124); if so, pessimistically assume
 	// that all connections are affected.
-	if delta.New.DefaultRouteInterface == "" && runtime.GOOS != "plan9" {
+	if delta.DefaultRouteInterface == "" && runtime.GOOS != "plan9" {
 		return true
 	}
 
-	if !delta.New.HasIP(lip) && delta.Old.HasIP(lip) {
+	if delta.InterfaceIPDisappeared(lip) {
 		// Our interface with this source IP went away.
 		return true
 	}
