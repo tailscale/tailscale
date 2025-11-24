@@ -4,8 +4,12 @@
 package wgcfg
 
 import (
+	"fmt"
 	"log"
 	"net/netip"
+	"runtime"
+	"sync/atomic"
+	"time"
 
 	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
@@ -40,10 +44,32 @@ func ReconfigDevice(d *device.Device, cfg *Config, logf logger.Logf) (err error)
 		return !exists
 	})
 
-	d.SetPeerLookupFunc(func(pubk device.NoisePublicKey) []netip.Prefix {
+	var lastStack atomic.Int64
+
+	d.SetPeerLookupFunc(func(pubk device.NoisePublicKey) (_ *device.NewPeerConfig, ok bool) {
 		allowedIPs, ok := peers[pubk]
-		log.Printf("XXX wgcfg.ReconfigDevice: lookup for peer %v, found=%v => %v", pubk, ok, allowedIPs)
-		return allowedIPs
+		if !ok {
+			return nil, false
+		}
+
+		var buf []byte
+		now := time.Now().Unix()
+		if lastStack.Swap(now) != now {
+			buf = make([]byte, 4<<10)
+			buf = buf[:runtime.Stack(buf, false)]
+		}
+
+		log.Printf("XXX wgcfg.ReconfigDevice: lookup for peer %v, found=%v => %v, stack: %s", pubk, ok, allowedIPs, buf)
+		bind := d.Bind()
+		ep, err := bind.ParseEndpoint(fmt.Sprintf("%02x", pubk[:]))
+		if err != nil {
+			logf("wgcfg: failed to parse endpoint for peer %v: %v", pubk, err)
+			return nil, false
+		}
+		return &device.NewPeerConfig{
+			AllowedIPs: allowedIPs,
+			Endpoint:   ep,
+		}, ok
 	})
 
 	return nil

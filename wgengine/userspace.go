@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/netip"
 	"runtime"
@@ -1081,8 +1082,8 @@ func (e *userspaceEngine) PeerByKey(pubKey key.NodePublic) (_ wgint.Peer, ok boo
 	if dev == nil {
 		return wgint.Peer{}, false
 	}
-	peer := dev.LookupPeer(pubKey.Raw32())
-	if peer == nil {
+	peer, ok := dev.LookupActivePeer(pubKey.Raw32())
+	if !ok || peer == nil {
 		return wgint.Peer{}, false
 	}
 	return wgint.PeerOf(peer), true
@@ -1613,4 +1614,31 @@ func (e *userspaceEngine) reconfigureVPNIfNecessary() error {
 		return nil
 	}
 	return e.reconfigureVPN()
+}
+
+func (e *userspaceEngine) SetPeerByIPLookupFunc(fn func(netip.Addr) (key.NodePublic, bool)) {
+	e.wgdev.SetPeerByIPLookupFunc(func(addr netip.Addr) (_ *device.Peer, ok bool) {
+		pk, ok := fn(addr)
+		if !ok {
+			return nil, false
+		}
+		// TODO(bradfitz): optimize this LookupPeer map lookup on each packet;
+		// store it in the leaf of the bart lookup.
+		if peer, ok := e.wgdev.LookupActivePeer(pk.Raw32()); ok {
+			log.Printf("XXX active peer for %v found in LookupActivePeer", pk.ShortString())
+			return peer, true
+		}
+
+		peer := e.wgdev.LookupPeer(pk.Raw32())
+		if peer == nil {
+			return nil, false
+		}
+		log.Printf("XXX making new peer for %v", pk.ShortString())
+		ep, err := e.magicConn.ParseEndpoint(fmt.Sprintf("%02x", pk.Raw32()))
+		if err != nil {
+			return nil, false
+		}
+		peer.SetEndpointFromPacket(ep)
+		return peer, peer != nil
+	})
 }
