@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"math/rand/v2"
 	"net"
@@ -544,7 +543,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	netMon := sys.NetMon.Get()
 	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID, netMon, sys.HealthTracker.Get(), sys.Bus.Get())
 	if err != nil {
-		log.Printf("error setting up sockstat logger: %v", err)
+		logf("error setting up sockstat logger: %v", err)
 	}
 	// Enable sockstats logs only on non-mobile unstable builds
 	if version.IsUnstableBuild() && !version.IsMobile() && b.sockstatLogger != nil {
@@ -7259,7 +7258,12 @@ func (b *LocalBackend) refreshAllowedSuggestions() {
 	}
 	b.allowedSuggestedExitNodesMu.Lock()
 	defer b.allowedSuggestedExitNodesMu.Unlock()
-	b.allowedSuggestedExitNodes = fillAllowedSuggestions(b.polc)
+
+	var err error
+	b.allowedSuggestedExitNodes, err = fillAllowedSuggestions(b.polc)
+	if err != nil {
+		b.logf("error refreshing allowed suggestions: %v", err)
+	}
 }
 
 // selectRegionFunc returns a DERP region from the slice of candidate regions.
@@ -7271,20 +7275,19 @@ type selectRegionFunc func(views.Slice[int]) int
 // choice.
 type selectNodeFunc func(nodes views.Slice[tailcfg.NodeView], last tailcfg.StableNodeID) tailcfg.NodeView
 
-func fillAllowedSuggestions(polc policyclient.Client) set.Set[tailcfg.StableNodeID] {
+func fillAllowedSuggestions(polc policyclient.Client) (set.Set[tailcfg.StableNodeID], error) {
 	nodes, err := polc.GetStringArray(pkey.AllowedSuggestedExitNodes, nil)
 	if err != nil {
-		log.Printf("fillAllowedSuggestions: unable to look up %q policy: %v", pkey.AllowedSuggestedExitNodes, err)
-		return nil
+		return nil, fmt.Errorf("fillAllowedSuggestions: unable to look up %q policy: %w", pkey.AllowedSuggestedExitNodes, err)
 	}
 	if nodes == nil {
-		return nil
+		return nil, nil
 	}
 	s := make(set.Set[tailcfg.StableNodeID], len(nodes))
 	for _, n := range nodes {
 		s.Add(tailcfg.StableNodeID(n))
 	}
-	return s
+	return s, nil
 }
 
 // suggestExitNode returns a suggestion for reasonably good exit node based on

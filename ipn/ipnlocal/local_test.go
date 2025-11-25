@@ -5590,7 +5590,10 @@ func TestFillAllowedSuggestions(t *testing.T) {
 			var pol policytest.Config
 			pol.Set(pkey.AllowedSuggestedExitNodes, tt.allowPolicy)
 
-			got := fillAllowedSuggestions(pol)
+			got, err := fillAllowedSuggestions(pol)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if got == nil {
 				if tt.want == nil {
 					return
