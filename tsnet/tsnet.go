@@ -804,6 +804,22 @@ func (s *Server) logf(format string, a ...any) {
 // printAuthURLLoop loops once every few seconds while the server is still running and
 // is in NeedsLogin state, printing out the auth URL.
 func (s *Server) printAuthURLLoop() {
+	ctx, cancel := context.WithCancel(s.shutdownCtx)
+	defer cancel()
+	stateCh := make(chan struct{}, 1)
+	go s.lb.WatchNotifications(ctx, ipn.NotifyInitialState, nil, func(n *ipn.Notify) (keepGoing bool) {
+		if n.State == nil {
+			return true
+		}
+
+		// No need to block, we only want to make sure the loop below is not
+		// blocking on time.After if there's a new state available.
+		select {
+		case stateCh <- struct{}{}:
+		default:
+		}
+		return true
+	})
 	for {
 		if s.shutdownCtx.Err() != nil {
 			return
@@ -818,6 +834,7 @@ func (s *Server) printAuthURLLoop() {
 		}
 		select {
 		case <-time.After(5 * time.Second):
+		case <-stateCh:
 		case <-s.shutdownCtx.Done():
 			return
 		}
