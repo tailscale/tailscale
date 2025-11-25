@@ -37,6 +37,7 @@ func main() {
 		auth          = flag.Bool("auth", false, "auth with cigocached and exit, printing the access token as output")
 		token         = flag.String("token", "", "the cigocached access token to use, as created using --auth")
 		cigocachedURL = flag.String("cigocached-url", "", "optional cigocached URL (scheme, host, and port). empty means to not use one.")
+		dir           = flag.String("cache-dir", "", "cache directory; empty means automatic")
 		verbose       = flag.Bool("verbose", false, "enable verbose logging")
 	)
 	flag.Parse()
@@ -55,22 +56,29 @@ func main() {
 		return
 	}
 
-	d, err := os.UserCacheDir()
-	if err != nil {
-		log.Fatal(err)
+	if *dir == "" {
+		d, err := os.UserCacheDir()
+		if err != nil {
+			log.Fatal(err)
+		}
+		*dir = filepath.Join(d, "go-cacher")
+		log.Printf("Defaulting to cache dir %v ...", *dir)
 	}
-	d = filepath.Join(d, "go-cacher")
-	log.Printf("Defaulting to cache dir %v ...", d)
-	if err := os.MkdirAll(d, 0750); err != nil {
+	if err := os.MkdirAll(*dir, 0750); err != nil {
 		log.Fatal(err)
 	}
 
 	c := &cigocacher{
-		disk:    &cachers.DiskCache{Dir: d},
+		disk: &cachers.DiskCache{
+			Dir:     *dir,
+			Verbose: *verbose,
+		},
 		verbose: *verbose,
 	}
 	if *cigocachedURL != "" {
-		log.Printf("Using cigocached at %s", *cigocachedURL)
+		if *verbose {
+			log.Printf("Using cigocached at %s", *cigocachedURL)
+		}
 		c.gocached = &gocachedClient{
 			baseURL:     *cigocachedURL,
 			cl:          httpClient(),
@@ -81,8 +89,10 @@ func main() {
 	var p *cacheproc.Process
 	p = &cacheproc.Process{
 		Close: func() error {
-			log.Printf("gocacheprog: closing; %d gets (%d hits, %d misses, %d errors); %d puts (%d errors)",
-				p.Gets.Load(), p.GetHits.Load(), p.GetMisses.Load(), p.GetErrors.Load(), p.Puts.Load(), p.PutErrors.Load())
+			if c.verbose {
+				log.Printf("gocacheprog: closing; %d gets (%d hits, %d misses, %d errors); %d puts (%d errors)",
+					p.Gets.Load(), p.GetHits.Load(), p.GetMisses.Load(), p.GetErrors.Load(), p.Puts.Load(), p.PutErrors.Load())
+			}
 			return c.close()
 		},
 		Get: c.get,
@@ -164,11 +174,7 @@ func (c *cigocacher) get(ctx context.Context, actionID string) (outputID, diskPa
 
 	defer res.Body.Close()
 
-	// TODO(tomhjp): make sure we timeout if cigocached disappears, but for some
-	// reason, this seemed to tank network performance.
-	// ctx, cancel := context.WithTimeout(ctx, httpTimeout(res.ContentLength))
-	// defer cancel()
-	diskPath, err = c.disk.Put(ctx, actionID, outputID, res.ContentLength, res.Body)
+	diskPath, err = put(c.disk, actionID, outputID, res.ContentLength, res.Body)
 	if err != nil {
 		return "", "", fmt.Errorf("error filling disk cache from HTTP: %w", err)
 	}
@@ -184,7 +190,7 @@ func (c *cigocacher) put(ctx context.Context, actionID, outputID string, size in
 		c.putNanos.Add(time.Since(t0).Nanoseconds())
 	}()
 	if c.gocached == nil {
-		return c.disk.Put(ctx, actionID, outputID, size, r)
+		return put(c.disk, actionID, outputID, size, r)
 	}
 
 	c.putHTTP.Add(1)
@@ -206,10 +212,6 @@ func (c *cigocacher) put(ctx context.Context, actionID, outputID string, size in
 	}
 	httpErrCh := make(chan error)
 	go func() {
-		// TODO(tomhjp): make sure we timeout if cigocached disappears, but for some
-		// reason, this seemed to tank network performance.
-		// ctx, cancel := context.WithTimeout(ctx, httpTimeout(size))
-		// defer cancel()
 		t0HTTP := time.Now()
 		defer func() {
 			c.putHTTPNanos.Add(time.Since(t0HTTP).Nanoseconds())
@@ -217,7 +219,7 @@ func (c *cigocacher) put(ctx context.Context, actionID, outputID string, size in
 		httpErrCh <- c.gocached.put(ctx, actionID, outputID, size, httpReader)
 	}()
 
-	diskPath, err = c.disk.Put(ctx, actionID, outputID, size, diskReader)
+	diskPath, err = put(c.disk, actionID, outputID, size, diskReader)
 	if err != nil {
 		return "", fmt.Errorf("error writing to disk cache: %w", errors.Join(err, tee.err))
 	}
@@ -236,12 +238,13 @@ func (c *cigocacher) put(ctx context.Context, actionID, outputID string, size in
 }
 
 func (c *cigocacher) close() error {
-	log.Printf("cigocacher HTTP stats: %d gets (%.1fMiB, %.2fs, %d hits, %d misses, %d errors ignored); %d puts (%.1fMiB, %.2fs, %d errors ignored)",
-		c.getHTTP.Load(), float64(c.getHTTPBytes.Load())/float64(1<<20), float64(c.getHTTPNanos.Load())/float64(time.Second), c.getHTTPHits.Load(), c.getHTTPMisses.Load(), c.getHTTPErrors.Load(),
-		c.putHTTP.Load(), float64(c.putHTTPBytes.Load())/float64(1<<20), float64(c.putHTTPNanos.Load())/float64(time.Second), c.putHTTPErrors.Load())
 	if !c.verbose || c.gocached == nil {
 		return nil
 	}
+
+	log.Printf("cigocacher HTTP stats: %d gets (%.1fMiB, %.2fs, %d hits, %d misses, %d errors ignored); %d puts (%.1fMiB, %.2fs, %d errors ignored)",
+		c.getHTTP.Load(), float64(c.getHTTPBytes.Load())/float64(1<<20), float64(c.getHTTPNanos.Load())/float64(time.Second), c.getHTTPHits.Load(), c.getHTTPMisses.Load(), c.getHTTPErrors.Load(),
+		c.putHTTP.Load(), float64(c.putHTTPBytes.Load())/float64(1<<20), float64(c.putHTTPNanos.Load())/float64(time.Second), c.putHTTPErrors.Load())
 
 	stats, err := c.gocached.fetchStats()
 	if err != nil {
