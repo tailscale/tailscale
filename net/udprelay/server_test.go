@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/blake2s"
 	"tailscale.com/disco"
 	"tailscale.com/net/packet"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/views"
 )
@@ -452,7 +453,7 @@ func Benchmark_blakeMACFromBindMsg(b *testing.B) {
 
 func TestServer_maybeRotateMACSecretLocked(t *testing.T) {
 	s := &Server{}
-	start := time.Now()
+	start := mono.Now()
 	s.maybeRotateMACSecretLocked(start)
 	qt.Assert(t, len(s.macSecrets), qt.Equals, 1)
 	macSecret := s.macSecrets[0]
