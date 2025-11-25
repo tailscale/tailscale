@@ -80,6 +80,7 @@ import (
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/ptr"
+	"tailscale.com/types/topics"
 	"tailscale.com/types/views"
 	"tailscale.com/util/checkchange"
 	"tailscale.com/util/clientmetric"
@@ -286,7 +287,6 @@ type LocalBackend struct {
 	hostinfo          *tailcfg.Hostinfo      // TODO(nickkhyl): move to nodeBackend
 	nmExpiryTimer     tstime.TimerController // for updating netMap on node expiry; can be nil; TODO(nickkhyl): move to nodeBackend
 	activeLogin       string                 // last logged LoginName from netMap; TODO(nickkhyl): move to nodeBackend (or remove? it's in [ipn.LoginProfile]).
-	engineStatus      ipn.EngineStatus
 	endpoints         []tailcfg.Endpoint
 	blocked           bool
 	keyExpired        bool          // TODO(nickkhyl): move to nodeBackend
@@ -299,9 +299,10 @@ type LocalBackend struct {
 	peerAPIListeners  []*peerAPIListener
 	loginFlags        controlclient.LoginFlags
 	notifyWatchers    map[string]*watchSession // by session ID
-	lastStatusTime    time.Time                // status.AsOf value of the last processed status update
 	componentLogUntil map[string]componentLogState
 	currentUser       ipnauth.Actor
+
+	liveDERPs int // number of live DERP connections, per eventbus notification
 
 	// capForcedNetfilter is the netfilter that control instructs Linux clients
 	// to use, unless overridden locally.
@@ -557,8 +558,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 
 	b.setTCPPortsIntercepted(nil)
 
-	b.e.SetStatusCallback(b.setWgengineStatus)
-
 	b.prevIfState = netMon.InterfaceState()
 	// Call our linkChange code once with the current state.
 	// Following changes are triggered via the eventbus.
@@ -589,6 +588,8 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	ec := b.Sys().Bus.Get().Client("ipnlocal.LocalBackend")
 	b.eventClient = ec
 	eventbus.SubscribeFunc(ec, b.onClientVersion)
+	eventbus.SubscribeFunc(ec, b.onEndpointsChange)
+	eventbus.SubscribeFunc(ec, b.onDERPConnChange)
 	eventbus.SubscribeFunc(ec, func(au controlclient.AutoUpdate) {
 		b.onTailnetDefaultAutoUpdate(au.Value)
 	})
@@ -2256,65 +2257,25 @@ func (b *LocalBackend) resolveExitNodeIPLocked(prefs *ipn.Prefs) (prefsChanged b
 	return prefsChanged
 }
 
-// setWgengineStatus is the callback by the wireguard engine whenever it posts a new status.
-// This updates the endpoints both in the backend and in the control client.
-func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
-	if err != nil {
-		b.logf("wgengine status error: %v", err)
-		return
-	}
-	if s == nil {
-		b.logf("[unexpected] non-error wgengine update with status=nil: %v", s)
-		return
-	}
-
+func (b *LocalBackend) onEndpointsChange(eps topics.EndpointsChanged) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// For now, only check this in the callback, but don't check it in setWgengineStatusLocked
-	if s.AsOf.Before(b.lastStatusTime) {
-		// Don't process a status update that is older than the one we have
-		// already processed. (corp#2579)
-		return
+	cc := b.cc
+	if cc != nil {
+		cc.UpdateEndpoints(eps)
+		b.stateMachineLocked()
+		b.endpoints = append([]tailcfg.Endpoint{}, eps...)
 	}
-	b.lastStatusTime = s.AsOf
-
-	b.setWgengineStatusLocked(s)
 }
 
-// setWgengineStatusLocked updates LocalBackend's view of the engine status and
-// updates the endpoints both in the backend and in the control client.
-//
-// Unlike setWgengineStatus it does not discard out-of-order updates, so
-// statuses sent here are always processed. This is useful for ensuring we don't
-// miss a "we shut down" status during backend shutdown even if other statuses
-// arrive out of order.
-//
-// TODO(zofrex): we should ensure updates actually do arrive in order and move
-// the out-of-order check into this function.
-//
-// b.mu must be held.
-func (b *LocalBackend) setWgengineStatusLocked(s *wgengine.Status) {
-	es := b.parseWgStatusLocked(s)
-	cc := b.cc
-
-	// TODO(zofrex): the only reason we even write this is to transition from
-	// "Starting" to "Running" in the call to state machine a few lines below
-	// this. Maybe we don't even need to store it at all.
-	b.engineStatus = es
-
-	needUpdateEndpoints := !slices.Equal(s.LocalAddrs, b.endpoints)
-	if needUpdateEndpoints {
-		b.endpoints = append([]tailcfg.Endpoint{}, s.LocalAddrs...)
-	}
-
-	if cc != nil {
-		if needUpdateEndpoints {
-			cc.UpdateEndpoints(s.LocalAddrs)
-		}
+func (b *LocalBackend) onDERPConnChange(c topics.DERPConnChange) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.liveDERPs = c.LiveDERPs
+	if b.state == ipn.Starting {
 		b.stateMachineLocked()
 	}
-	b.sendLocked(ipn.Notify{Engine: &es})
 }
 
 // SetNotifyCallback sets the function to call when the backend has something to
@@ -3186,15 +3147,27 @@ func appendHealthActions(fn func(roNotify *ipn.Notify) (keepGoing bool)) func(*i
 	}
 }
 
-// pollRequestEngineStatus calls b.e.RequestStatus every 2 seconds until ctx
-// is done.
+// pollRequestEngineStatus calls b.e.RequestStatus every 2 seconds until ctx is
+// done.
+//
+// TODO(bradfitz): this is all too heavy and doesn't scale with large numbers of
+// clients. See tailscale/tailscale#1909, tailscale/tailscale#13392,
+// tailscale/tailscale#13392.
 func (b *LocalBackend) pollRequestEngineStatus(ctx context.Context) {
 	ticker, tickerChannel := b.clock.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	var last *wgengine.Status
 	for {
 		select {
 		case <-tickerChannel:
-			b.e.RequestStatus()
+			st := b.e.GetStatus()
+			if reflect.DeepEqual(last, st) {
+				continue
+			}
+			b.mu.Lock()
+			stBusForm := b.parseWgStatusLocked(st)
+			b.mu.Unlock()
+			b.send(ipn.Notify{Engine: &stBusForm})
 		case <-ctx.Done():
 			return
 		}
@@ -5643,8 +5616,6 @@ func (b *LocalBackend) enterStateLocked(newState ipn.State) {
 		}
 	case ipn.Starting, ipn.NeedsMachineAuth:
 		b.authReconfigLocked()
-		// Needed so that UpdateEndpoints can run
-		b.goTracker.Go(b.e.RequestStatus)
 	case ipn.Running:
 		if feature.CanSystemdStatus {
 			var addrStrs []string
@@ -5689,7 +5660,6 @@ func (b *LocalBackend) nextStateLocked() ipn.State {
 		netMap     = cn.NetMap()
 		state      = b.state
 		blocked    = b.blocked
-		st         = b.engineStatus
 		keyExpired = b.keyExpired
 
 		wantRunning = false
@@ -5740,7 +5710,7 @@ func (b *LocalBackend) nextStateLocked() ipn.State {
 		// (if we get here, we know MachineAuthorized == true)
 		return ipn.Starting
 	case state == ipn.Starting:
-		if st.NumLive > 0 || st.LiveDERPs > 0 {
+		if b.e.NumConfiguredPeers() > 0 || b.liveDERPs > 0 {
 			return ipn.Running
 		} else {
 			return state
@@ -5768,8 +5738,7 @@ func (b *LocalBackend) stateMachineLocked() {
 // b.mu must be held.
 func (b *LocalBackend) stopEngineAndWaitLocked() {
 	b.logf("stopEngineAndWait...")
-	st, _ := b.e.ResetAndStop() // TODO: what should we do if this returns an error?
-	b.setWgengineStatusLocked(st)
+	b.e.ResetAndStop()
 	b.logf("stopEngineAndWait: done.")
 }
 
