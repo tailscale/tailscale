@@ -78,7 +78,7 @@ func TestPrefsEqual(t *testing.T) {
 			have, prefsHandles)
 	}
 
-	relayServerPort := func(port int) *int {
+	relayServerPort := func(port uint16) *uint16 {
 		return &port
 	}
 	nets := func(strs ...string) (ns []netip.Prefix) {

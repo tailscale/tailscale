@@ -283,10 +283,8 @@ type Prefs struct {
 	// RelayServerPort is the UDP port number for the relay server to bind to,
 	// on all interfaces. A non-nil zero value signifies a random unused port
 	// should be used. A nil value signifies relay server functionality
-	// should be disabled. This field is currently experimental, and therefore
-	// no guarantees are made about its current naming and functionality when
-	// non-nil/enabled.
-	RelayServerPort *int `json:",omitempty"`
+	// should be disabled.
+	RelayServerPort *uint16 `json:",omitempty"`
 
 	// RelayServerStaticEndpoints are static IP:port endpoints to advertise as
 	// candidates for relay connections. Only relevant when RelayServerPort is
@@ -694,7 +692,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.PostureChecking == p2.PostureChecking &&
 		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
 		p.NetfilterKind == p2.NetfilterKind &&
-		compareIntPtrs(p.RelayServerPort, p2.RelayServerPort) &&
+		compareUint16Ptrs(p.RelayServerPort, p2.RelayServerPort) &&
 		slices.Equal(p.RelayServerStaticEndpoints, p2.RelayServerStaticEndpoints)
 }
 
@@ -715,7 +713,7 @@ func (ap AppConnectorPrefs) Pretty() string {
 	return ""
 }
 
-func compareIntPtrs(a, b *int) bool {
+func compareUint16Ptrs(a, b *uint16) bool {
 	if (a == nil) != (b == nil) {
 		return false
 	}

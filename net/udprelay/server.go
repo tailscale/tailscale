@@ -309,7 +309,7 @@ func (e *serverEndpoint) isBound() bool {
 // onlyStaticAddrPorts is true, then dynamic addr:port discovery will be
 // disabled, and only addr:port's set via [Server.SetStaticAddrPorts] will be
 // used.
-func NewServer(logf logger.Logf, port int, onlyStaticAddrPorts bool) (s *Server, err error) {
+func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool) (s *Server, err error) {
 	s = &Server{
 		logf:                logf,
 		disco:               key.NewDisco(),
@@ -526,9 +526,9 @@ func trySetUDPSocketOptions(pconn nettype.PacketConn, logf logger.Logf) {
 // [magicsock.RebindingConn], which would also remove the need for
 // [singlePacketConn], as [magicsock.RebindingConn] also handles fallback to
 // single packet syscall operations.
-func (s *Server) listenOn(port int) error {
+func (s *Server) listenOn(port uint16) error {
 	for _, network := range []string{"udp4", "udp6"} {
-		uc, err := net.ListenUDP(network, &net.UDPAddr{Port: port})
+		uc, err := net.ListenUDP(network, &net.UDPAddr{Port: int(port)})
 		if err != nil {
 			if network == "udp4" {
 				return err

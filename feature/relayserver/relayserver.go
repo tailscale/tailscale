@@ -69,7 +69,7 @@ func servePeerRelayDebugSessions(h *localapi.Handler, w http.ResponseWriter, r *
 // imported.
 func newExtension(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, error) {
 	e := &extension{
-		newServerFn: func(logf logger.Logf, port int, onlyStaticAddrPorts bool) (relayServer, error) {
+		newServerFn: func(logf logger.Logf, port uint16, onlyStaticAddrPorts bool) (relayServer, error) {
 			return udprelay.NewServer(logf, port, onlyStaticAddrPorts)
 		},
 		logf: logger.WithPrefix(logf, featureName+": "),
@@ -93,7 +93,7 @@ type relayServer interface {
 // extension is an [ipnext.Extension] managing the relay server on platforms
 // that import this package.
 type extension struct {
-	newServerFn func(logf logger.Logf, port int, onlyStaticAddrPorts bool) (relayServer, error) // swappable for tests
+	newServerFn func(logf logger.Logf, port uint16, onlyStaticAddrPorts bool) (relayServer, error) // swappable for tests
 	logf        logger.Logf
 	ec          *eventbus.Client
 	respPub     *eventbus.Publisher[magicsock.UDPRelayAllocResp]
@@ -101,7 +101,7 @@ type extension struct {
 	mu                            syncs.Mutex                 // guards the following fields
 	shutdown                      bool                        // true if Shutdown() has been called
 	rs                            relayServer                 // nil when disabled
-	port                          *int                        // ipn.Prefs.RelayServerPort, nil if disabled
+	port                          *uint16                     // ipn.Prefs.RelayServerPort, nil if disabled
 	staticEndpoints               views.Slice[netip.AddrPort] // ipn.Prefs.RelayServerStaticEndpoints
 	derpMapView                   tailcfg.DERPMapView         // latest seen over the eventbus
 	hasNodeAttrDisableRelayServer bool                        // [tailcfg.NodeAttrDisableRelayServer]

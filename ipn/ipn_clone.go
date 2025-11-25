@@ -102,7 +102,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	PostureChecking            bool
 	NetfilterKind              string
 	DriveShares                []*drive.Share
-	RelayServerPort            *int
+	RelayServerPort            *uint16
 	RelayServerStaticEndpoints []netip.AddrPort
 	AllowSingleHosts           marshalAsTrueInJSON
 	Persist                    *persist.Persist

@@ -441,10 +441,8 @@ func (v PrefsView) DriveShares() views.SliceView[*drive.Share, drive.ShareView] 
 // RelayServerPort is the UDP port number for the relay server to bind to,
 // on all interfaces. A non-nil zero value signifies a random unused port
 // should be used. A nil value signifies relay server functionality
-// should be disabled. This field is currently experimental, and therefore
-// no guarantees are made about its current naming and functionality when
-// non-nil/enabled.
-func (v PrefsView) RelayServerPort() views.ValuePointer[int] {
+// should be disabled.
+func (v PrefsView) RelayServerPort() views.ValuePointer[uint16] {
 	return views.ValuePointerOf(v.ж.RelayServerPort)
 }
 
@@ -506,7 +504,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	PostureChecking            bool
 	NetfilterKind              string
 	DriveShares                []*drive.Share
-	RelayServerPort            *int
+	RelayServerPort            *uint16
 	RelayServerStaticEndpoints []netip.AddrPort
 	AllowSingleHosts           marshalAsTrueInJSON
 	Persist                    *persist.Persist
