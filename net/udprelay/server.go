@@ -35,6 +35,7 @@ import (
 	"tailscale.com/net/udprelay/status"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
@@ -77,7 +78,7 @@ type Server struct {
 
 	mu                  sync.Mutex           // guards the following fields
 	macSecrets          [][blake2s.Size]byte // [0] is most recent, max 2 elements
-	macSecretRotatedAt  time.Time
+	macSecretRotatedAt  mono.Time
 	derpMap             *tailcfg.DERPMap
 	onlyStaticAddrPorts bool                        // no dynamic addr port discovery when set
 	staticAddrPorts     views.Slice[netip.AddrPort] // static ip:port pairs set with [Server.SetStaticAddrPorts]
@@ -108,13 +109,13 @@ type serverEndpoint struct {
 	discoSharedSecrets   [2]key.DiscoShared
 	inProgressGeneration [2]uint32         // or zero if a handshake has never started, or has just completed
 	boundAddrPorts       [2]netip.AddrPort // or zero value if a handshake has never completed for that relay leg
-	lastSeen             [2]time.Time      // TODO(jwhited): consider using mono.Time
-	packetsRx            [2]uint64         // num packets received from/sent by each client after they are bound
-	bytesRx              [2]uint64         // num bytes received from/sent by each client after they are bound
+	lastSeen             [2]mono.Time
+	packetsRx            [2]uint64 // num packets received from/sent by each client after they are bound
+	bytesRx              [2]uint64 // num bytes received from/sent by each client after they are bound
 
 	lamportID   uint64
 	vni         uint32
-	allocatedAt time.Time
+	allocatedAt mono.Time
 }
 
 func blakeMACFromBindMsg(blakeKey [blake2s.Size]byte, src netip.AddrPort, msg disco.BindUDPRelayEndpointCommon) ([blake2s.Size]byte, error) {
@@ -215,7 +216,7 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 			if bytes.Equal(mac[:], discoMsg.Challenge[:]) {
 				// Handshake complete. Update the binding for this sender.
 				e.boundAddrPorts[senderIndex] = from
-				e.lastSeen[senderIndex] = time.Now()    // record last seen as bound time
+				e.lastSeen[senderIndex] = mono.Now()    // record last seen as bound time
 				e.inProgressGeneration[senderIndex] = 0 // reset to zero, which indicates there is no in-progress handshake
 				return nil, netip.AddrPort{}
 			}
@@ -262,7 +263,7 @@ func (e *serverEndpoint) handleSealedDiscoControlMsg(from netip.AddrPort, b []by
 	return e.handleDiscoControlMsg(from, senderIndex, discoMsg, serverDisco, macSecrets)
 }
 
-func (e *serverEndpoint) handleDataPacket(from netip.AddrPort, b []byte, now time.Time) (write []byte, to netip.AddrPort) {
+func (e *serverEndpoint) handleDataPacket(from netip.AddrPort, b []byte, now mono.Time) (write []byte, to netip.AddrPort) {
 	if !e.isBound() {
 		// not a control packet, but serverEndpoint isn't bound
 		return nil, netip.AddrPort{}
@@ -284,7 +285,7 @@ func (e *serverEndpoint) handleDataPacket(from netip.AddrPort, b []byte, now tim
 	}
 }
 
-func (e *serverEndpoint) isExpired(now time.Time, bindLifetime, steadyStateLifetime time.Duration) bool {
+func (e *serverEndpoint) isExpired(now mono.Time, bindLifetime, steadyStateLifetime time.Duration) bool {
 	if !e.isBound() {
 		if now.Sub(e.allocatedAt) > bindLifetime {
 			return true
@@ -600,7 +601,7 @@ func (s *Server) endpointGCLoop() {
 	defer ticker.Stop()
 
 	gc := func() {
-		now := time.Now()
+		now := mono.Now()
 		// TODO: consider performance implications of scanning all endpoints and
 		// holding s.mu for the duration. Keep it simple (and slow) for now.
 		s.mu.Lock()
@@ -647,7 +648,7 @@ func (s *Server) handlePacket(from netip.AddrPort, b []byte) (write []byte, to n
 		return nil, netip.AddrPort{}
 	}
 
-	now := time.Now()
+	now := mono.Now()
 	if gh.Control {
 		if gh.Protocol != packet.GeneveProtocolDisco {
 			// control packet, but not Disco
@@ -660,7 +661,7 @@ func (s *Server) handlePacket(from netip.AddrPort, b []byte) (write []byte, to n
 	return e.handleDataPacket(from, b, now)
 }
 
-func (s *Server) maybeRotateMACSecretLocked(now time.Time) {
+func (s *Server) maybeRotateMACSecretLocked(now mono.Time) {
 	if !s.macSecretRotatedAt.IsZero() && now.Sub(s.macSecretRotatedAt) < macSecretRotationInterval {
 		return
 	}
@@ -855,7 +856,7 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 	e = &serverEndpoint{
 		discoPubKeys: pair,
 		lamportID:    s.lamportID,
-		allocatedAt:  time.Now(),
+		allocatedAt:  mono.Now(),
 		vni:          vni,
 	}
 	e.discoSharedSecrets[0] = s.disco.Shared(e.discoPubKeys.Get()[0])
