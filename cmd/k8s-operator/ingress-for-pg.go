@@ -29,6 +29,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -504,10 +505,7 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	logger.Infof("Ensuring that Tailscale Service %q configuration is cleaned up", hostname)
 	serviceName := tailcfg.ServiceName("svc:" + hostname)
 	svc, err := r.tsClient.GetVIPService(ctx, serviceName)
-	if err != nil {
-		if isErrorTailscaleServiceNotFound(err) {
-			return false, nil
-		}
+	if err != nil && !isErrorTailscaleServiceNotFound(err) {
 		return false, fmt.Errorf("error getting Tailscale Service: %w", err)
 	}
 
@@ -713,10 +711,15 @@ func (r *HAIngressReconciler) cleanupTailscaleService(ctx context.Context, svc *
 	}
 	if len(o.OwnerRefs) == 1 {
 		logger.Infof("Deleting Tailscale Service %q", svc.Name)
-		return false, r.tsClient.DeleteVIPService(ctx, svc.Name)
+		if err = r.tsClient.DeleteVIPService(ctx, svc.Name); err != nil && !isErrorTailscaleServiceNotFound(err) {
+			return false, err
+		}
+
+		return false, nil
 	}
+
 	o.OwnerRefs = slices.Delete(o.OwnerRefs, ix, ix+1)
-	logger.Infof("Deleting Tailscale Service %q", svc.Name)
+	logger.Infof("Creating/Updating Tailscale Service %q", svc.Name)
 	json, err := json.Marshal(o)
 	if err != nil {
 		return false, fmt.Errorf("error marshalling updated Tailscale Service owner reference: %w", err)
