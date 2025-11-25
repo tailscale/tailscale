@@ -249,7 +249,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		if err != nil {
 			return fmt.Errorf("failed to set relay server port: %v", err)
 		}
-		maskedPrefs.Prefs.RelayServerPort = ptr.To(int(uport))
+		maskedPrefs.Prefs.RelayServerPort = ptr.To(uint16(uport))
 	}
 
 	if setArgs.relayServerStaticEndpoints != "" {
