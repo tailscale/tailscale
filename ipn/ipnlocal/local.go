@@ -944,12 +944,12 @@ func (b *LocalBackend) pauseOrResumeControlClientLocked() {
 // down, clients switch over to other replicas whilst the existing connections are kept alive for some period of time.
 func (b *LocalBackend) DisconnectControl() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	cc := b.resetControlClientLocked()
-	if cc == nil {
-		return
+	b.mu.Unlock()
+
+	if cc != nil {
+		cc.Shutdown()
 	}
-	cc.Shutdown()
 }
 
 // linkChange is our network monitor callback, called whenever the network changes.
@@ -2408,7 +2408,8 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	var clientToShutdown controlclient.Client
 	defer func() {
 		if clientToShutdown != nil {
-			clientToShutdown.Shutdown()
+			// Shutdown outside of b.mu to avoid deadlocks.
+			b.goTracker.Go(clientToShutdown.Shutdown)
 		}
 	}()
 
@@ -6891,7 +6892,8 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 	// Reset the NetworkMap in the engine
 	b.e.SetNetworkMap(new(netmap.NetworkMap))
 	if prevCC := b.resetControlClientLocked(); prevCC != nil {
-		defer prevCC.Shutdown()
+		// Shutdown outside of b.mu to avoid deadlocks.
+		b.goTracker.Go(prevCC.Shutdown)
 	}
 	// TKA errors should not prevent resetting the backend state.
 	// However, we should still return the error to the caller.
@@ -6972,7 +6974,8 @@ func (b *LocalBackend) ResetAuth() error {
 	defer b.mu.Unlock()
 
 	if prevCC := b.resetControlClientLocked(); prevCC != nil {
-		defer prevCC.Shutdown()
+		// Shutdown outside of b.mu to avoid deadlocks.
+		b.goTracker.Go(prevCC.Shutdown)
 	}
 	if err := b.clearMachineKeyLocked(); err != nil {
 		return err
