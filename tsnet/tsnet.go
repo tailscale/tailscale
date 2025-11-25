@@ -30,6 +30,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	_ "tailscale.com/feature/c2n"
+	_ "tailscale.com/feature/condregister/identityfederation"
 	_ "tailscale.com/feature/condregister/oauthkey"
 	_ "tailscale.com/feature/condregister/portmapper"
 	_ "tailscale.com/feature/condregister/useproxy"
@@ -114,6 +115,29 @@ type Server struct {
 	// previously stored in Store), then this field is not
 	// used.
 	AuthKey string
+
+	// ClientSecret, if non-empty, is the OAuth client secret
+	// that will be used to generate authkeys via OAuth. It
+	// will be preferred over the TS_CLIENT_SECRET environment
+	// variable. If the node is already created (from state
+	// previously stored in Store), then this field is not
+	// used.
+	ClientSecret string
+
+	// ClientID, if non-empty, is the client ID used to generate
+	// authkeys via workload identity federation. It will be
+	// preferred over the TS_CLIENT_ID environment variable.
+	// If the node is already created (from state previously
+	// stored in Store), then this field is not used.
+	ClientID string
+
+	// IDToken, if non-empty, is the ID token from the identity
+	// provider to exchange with the control server for workload
+	// identity federation. It will be preferred over the
+	// TS_ID_TOKEN environment variable. If the node is already
+	// created (from state previously stored in Store), then this
+	// field is not used.
+	IDToken string
 
 	// ControlURL optionally specifies the coordination server URL.
 	// If empty, the Tailscale default is used.
@@ -517,6 +541,27 @@ func (s *Server) getAuthKey() string {
 	return os.Getenv("TS_AUTH_KEY")
 }
 
+func (s *Server) getClientSecret() string {
+	if v := s.ClientSecret; v != "" {
+		return v
+	}
+	return os.Getenv("TS_CLIENT_SECRET")
+}
+
+func (s *Server) getClientID() string {
+	if v := s.ClientID; v != "" {
+		return v
+	}
+	return os.Getenv("TS_CLIENT_ID")
+}
+
+func (s *Server) getIDToken() string {
+	if v := s.IDToken; v != "" {
+		return v
+	}
+	return os.Getenv("TS_ID_TOKEN")
+}
+
 func (s *Server) start() (reterr error) {
 	var closePool closeOnErrorPool
 	defer closePool.closeAllIfError(&reterr)
@@ -684,14 +729,9 @@ func (s *Server) start() (reterr error) {
 	prefs.ControlURL = s.ControlURL
 	prefs.RunWebClient = s.RunWebClient
 	prefs.AdvertiseTags = s.AdvertiseTags
-	authKey := s.getAuthKey()
-	// Try to use an OAuth secret to generate an auth key if that functionality
-	// is available.
-	if f, ok := tailscale.HookResolveAuthKey.GetOk(); ok {
-		authKey, err = f(s.shutdownCtx, s.getAuthKey(), prefs.AdvertiseTags)
-		if err != nil {
-			return fmt.Errorf("resolving auth key: %w", err)
-		}
+	authKey, err := s.resolveAuthKey()
+	if err != nil {
+		return fmt.Errorf("error resolving auth key: %w", err)
 	}
 	err = lb.Start(ipn.Options{
 		UpdatePrefs: prefs,
@@ -736,6 +776,42 @@ func (s *Server) start() (reterr error) {
 	}()
 	closePool.add(s.localAPIListener)
 	return nil
+}
+
+func (s *Server) resolveAuthKey() (string, error) {
+	authKey := s.getAuthKey()
+	var err error
+	// Try to use an OAuth secret to generate an auth key if that functionality
+	// is available.
+	resolveViaOAuth, oauthOk := tailscale.HookResolveAuthKey.GetOk()
+	if oauthOk {
+		clientSecret := authKey
+		if authKey == "" {
+			clientSecret = s.getClientSecret()
+		}
+		authKey, err = resolveViaOAuth(s.shutdownCtx, clientSecret, s.AdvertiseTags)
+		if err != nil {
+			return "", err
+		}
+	}
+	// Try to resolve the auth key via workload identity federation if that functionality
+	// is available and no auth key is yet determined.
+	resolveViaWIF, wifOk := tailscale.HookResolveAuthKeyViaWIF.GetOk()
+	if wifOk && authKey == "" {
+		clientID := s.getClientID()
+		idToken := s.getIDToken()
+		if clientID != "" && idToken == "" {
+			return "", fmt.Errorf("client ID for workload identity federation found, but ID token is empty")
+		}
+		if clientID == "" && idToken != "" {
+			return "", fmt.Errorf("ID token for workload identity federation found, but client ID is empty")
+		}
+		authKey, err = resolveViaWIF(s.shutdownCtx, s.ControlURL, clientID, idToken, s.AdvertiseTags)
+		if err != nil {
+			return "", err
+		}
+	}
+	return authKey, nil
 }
 
 func (s *Server) startLogger(closePool *closeOnErrorPool, health *health.Tracker, tsLogf logger.Logf) error {
