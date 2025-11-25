@@ -211,7 +211,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListe
 	}
 
 	tun := tuntest.NewChannelTUN()
-	tsTun := tstun.Wrap(logf, tun.TUN(), &reg)
+	tsTun := tstun.Wrap(logf, tun.TUN(), &reg, bus)
 	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
 	tsTun.Start()
 
@@ -1771,7 +1771,6 @@ func TestEndpointSetsEqual(t *testing.T) {
 			t.Errorf("%q vs %q = %v; want %v", tt.a, tt.b, got, tt.want)
 		}
 	}
-
 }
 
 func TestBetterAddr(t *testing.T) {
@@ -1915,7 +1914,6 @@ func TestBetterAddr(t *testing.T) {
 			t.Errorf("[%d] betterAddr(%+v, %+v) and betterAddr(%+v, %+v) both unexpectedly true", i, tt.a, tt.b, tt.b, tt.a)
 		}
 	}
-
 }
 
 func epFromTyped(eps []tailcfg.Endpoint) (ret []netip.AddrPort) {
@@ -3138,7 +3136,6 @@ func TestMaybeRebindOnError(t *testing.T) {
 					t.Errorf("expected at least 5 seconds between %s and %s", lastRebindTime, newTime)
 				}
 			}
-
 		})
 	})
 }
