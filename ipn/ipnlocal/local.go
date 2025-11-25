@@ -7301,6 +7301,9 @@ func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion ta
 		// The traffic-steering feature flag is enabled on this tailnet.
 		return suggestExitNodeUsingTrafficSteering(nb, allowList)
 	default:
+		// The control plane will always strip the `traffic-steering`
+		// node attribute if it isn’t enabled for this tailnet, even if
+		// it is set in the policy file: tailscale/corp#34401
 		return suggestExitNodeUsingDERP(report, nb, prevSuggestion, selectRegion, selectNode, allowList)
 	}
 }
