@@ -25,6 +25,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -67,7 +68,7 @@ func TestIngressPGReconciler(t *testing.T) {
 
 	// Verify initial reconciliation
 	expectReconciled(t, ingPGR, "default", "test-ingress")
-	populateTLSSecret(context.Background(), fc, "test-pg", "my-svc.ts.net")
+	populateTLSSecret(t, fc, "test-pg", "my-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyServeConfig(t, fc, "svc:my-svc", false)
 	verifyTailscaleService(t, ft, "svc:my-svc", []string{"tcp:443"})
@@ -89,7 +90,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 
 	// Verify Tailscale Service uses custom tags
-	tsSvc, err := ft.GetVIPService(context.Background(), "svc:my-svc")
+	tsSvc, err := ft.GetVIPService(t.Context(), "svc:my-svc")
 	if err != nil {
 		t.Fatalf("getting Tailscale Service: %v", err)
 	}
@@ -134,7 +135,7 @@ func TestIngressPGReconciler(t *testing.T) {
 
 	// Verify second Ingress reconciliation
 	expectReconciled(t, ingPGR, "default", "my-other-ingress")
-	populateTLSSecret(context.Background(), fc, "test-pg", "my-other-svc.ts.net")
+	populateTLSSecret(t, fc, "test-pg", "my-other-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "my-other-ingress")
 	verifyServeConfig(t, fc, "svc:my-other-svc", false)
 	verifyTailscaleService(t, ft, "svc:my-other-svc", []string{"tcp:443"})
@@ -151,14 +152,14 @@ func TestIngressPGReconciler(t *testing.T) {
 	verifyTailscaledConfig(t, fc, "test-pg", []string{"svc:my-svc", "svc:my-other-svc"})
 
 	// Delete second Ingress
-	if err := fc.Delete(context.Background(), ing2); err != nil {
+	if err := fc.Delete(t.Context(), ing2); err != nil {
 		t.Fatalf("deleting second Ingress: %v", err)
 	}
 	expectReconciled(t, ingPGR, "default", "my-other-ingress")
 
 	// Verify second Ingress cleanup
 	cm := &corev1.ConfigMap{}
-	if err := fc.Get(context.Background(), types.NamespacedName{
+	if err := fc.Get(t.Context(), types.NamespacedName{
 		Name:      "test-pg-ingress-config",
 		Namespace: "operator-ns",
 	}, cm); err != nil {
@@ -199,7 +200,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectEqual(t, fc, certSecretRoleBinding(pg, "operator-ns", "my-svc.ts.net"))
 
 	// Delete the first Ingress and verify cleanup
-	if err := fc.Delete(context.Background(), ing); err != nil {
+	if err := fc.Delete(t.Context(), ing); err != nil {
 		t.Fatalf("deleting Ingress: %v", err)
 	}
 
@@ -207,7 +208,7 @@ func TestIngressPGReconciler(t *testing.T) {
 
 	// Verify the ConfigMap was cleaned up
 	cm = &corev1.ConfigMap{}
-	if err := fc.Get(context.Background(), types.NamespacedName{
+	if err := fc.Get(t.Context(), types.NamespacedName{
 		Name:      "test-pg-second-ingress-config",
 		Namespace: "operator-ns",
 	}, cm); err != nil {
@@ -228,6 +229,47 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectMissing[corev1.Secret](t, fc, "operator-ns", "my-svc.ts.net")
 	expectMissing[rbacv1.Role](t, fc, "operator-ns", "my-svc.ts.net")
 	expectMissing[rbacv1.RoleBinding](t, fc, "operator-ns", "my-svc.ts.net")
+
+	// Create a third ingress
+	ing3 := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-other-ingress",
+			Namespace: "default",
+			UID:       types.UID("5678-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group": "test-pg",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "test",
+					Port: networkingv1.ServiceBackendPort{
+						Number: 8080,
+					},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"my-other-svc.tailnetxyz.ts.net"}},
+			},
+		},
+	}
+
+	mustCreate(t, fc, ing3)
+	expectReconciled(t, ingPGR, ing3.Namespace, ing3.Name)
+
+	// Delete the service from "control"
+	ft.vipServices = make(map[tailcfg.ServiceName]*tailscale.VIPService)
+
+	// Delete the ingress and confirm we don't get stuck due to the VIP service not existing.
+	if err = fc.Delete(t.Context(), ing3); err != nil {
+		t.Fatalf("deleting Ingress: %v", err)
+	}
+
+	expectReconciled(t, ingPGR, ing3.Namespace, ing3.Name)
+	expectMissing[networkingv1.Ingress](t, fc, ing3.Namespace, ing3.Name)
 }
 
 func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
@@ -262,7 +304,7 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 
 	// Verify initial reconciliation
 	expectReconciled(t, ingPGR, "default", "test-ingress")
-	populateTLSSecret(context.Background(), fc, "test-pg", "my-svc.ts.net")
+	populateTLSSecret(t, fc, "test-pg", "my-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyServeConfig(t, fc, "svc:my-svc", false)
 	verifyTailscaleService(t, ft, "svc:my-svc", []string{"tcp:443"})
@@ -273,13 +315,13 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 		ing.Spec.TLS[0].Hosts[0] = "updated-svc"
 	})
 	expectReconciled(t, ingPGR, "default", "test-ingress")
-	populateTLSSecret(context.Background(), fc, "test-pg", "updated-svc.ts.net")
+	populateTLSSecret(t, fc, "test-pg", "updated-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyServeConfig(t, fc, "svc:updated-svc", false)
 	verifyTailscaleService(t, ft, "svc:updated-svc", []string{"tcp:443"})
 	verifyTailscaledConfig(t, fc, "test-pg", []string{"svc:updated-svc"})
 
-	_, err := ft.GetVIPService(context.Background(), tailcfg.ServiceName("svc:my-svc"))
+	_, err := ft.GetVIPService(context.Background(), "svc:my-svc")
 	if err == nil {
 		t.Fatalf("svc:my-svc not cleaned up")
 	}
@@ -500,7 +542,7 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 
 	// Verify initial reconciliation with HTTP enabled
 	expectReconciled(t, ingPGR, "default", "test-ingress")
-	populateTLSSecret(context.Background(), fc, "test-pg", "my-svc.ts.net")
+	populateTLSSecret(t, fc, "test-pg", "my-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyTailscaleService(t, ft, "svc:my-svc", []string{"tcp:80", "tcp:443"})
 	verifyServeConfig(t, fc, "svc:my-svc", true)
@@ -717,7 +759,9 @@ func TestOwnerAnnotations(t *testing.T) {
 	}
 }
 
-func populateTLSSecret(ctx context.Context, c client.Client, pgName, domain string) error {
+func populateTLSSecret(t *testing.T, c client.Client, pgName, domain string) {
+	t.Helper()
+
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      domain,
@@ -736,10 +780,12 @@ func populateTLSSecret(ctx context.Context, c client.Client, pgName, domain stri
 		},
 	}
 
-	_, err := createOrUpdate(ctx, c, "operator-ns", secret, func(s *corev1.Secret) {
+	_, err := createOrUpdate(t.Context(), c, "operator-ns", secret, func(s *corev1.Secret) {
 		s.Data = secret.Data
 	})
-	return err
+	if err != nil {
+		t.Fatalf("failed to populate TLS secret: %v", err)
+	}
 }
 
 func verifyTailscaleService(t *testing.T, ft *fakeTSClient, serviceName string, wantPorts []string) {

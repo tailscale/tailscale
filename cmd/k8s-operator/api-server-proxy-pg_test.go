@@ -182,9 +182,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	expectEqual(t, fc, certSecretRoleBinding(pg, ns, defaultDomain))
 
 	// Simulate certs being issued; should observe AdvertiseServices config change.
-	if err := populateTLSSecret(t.Context(), fc, pgName, defaultDomain); err != nil {
-		t.Fatalf("populating TLS Secret: %v", err)
-	}
+	populateTLSSecret(t, fc, pgName, defaultDomain)
 	expectReconciled(t, r, "", pgName)
 
 	expectedCfg.AdvertiseServices = []string{"svc:" + pgName}
@@ -247,9 +245,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	expectMissing[rbacv1.RoleBinding](t, fc, ns, defaultDomain)
 
 	// Check we get the new hostname in the status once ready.
-	if err := populateTLSSecret(t.Context(), fc, pgName, updatedDomain); err != nil {
-		t.Fatalf("populating TLS Secret: %v", err)
-	}
+	populateTLSSecret(t, fc, pgName, updatedDomain)
 	mustUpdate(t, fc, "operator-ns", "test-pg-0", func(s *corev1.Secret) {
 		s.Data["profile-foo"] = []byte(`{"AdvertiseServices":["svc:test-pg"],"Config":{"NodeID":"node-foo"}}`)
 	})
