@@ -4436,6 +4436,14 @@ func deterministicRegionForTest(t testing.TB, want views.Slice[int], use int) se
 	}
 }
 
+// deterministicNodeForTest returns a deterministic selectNodeFunc, which
+// allows us to make stable assertions about which exit node will be chosen
+// from a list of possible candidates.
+//
+// When given a list of candidates, it checks that `use` is in the list and
+// returns that.
+//
+// It verifies that `wantLast` was passed to `selectNode(…, want)`.
 func deterministicNodeForTest(t testing.TB, want views.Slice[tailcfg.StableNodeID], wantLast tailcfg.StableNodeID, use tailcfg.StableNodeID) selectNodeFunc {
 	t.Helper()
 
@@ -4444,6 +4452,16 @@ func deterministicNodeForTest(t testing.TB, want views.Slice[tailcfg.StableNodeI
 	}
 
 	return func(got views.Slice[tailcfg.NodeView], last tailcfg.StableNodeID) tailcfg.NodeView {
+		// In the tests, we choose nodes deterministically so we can get
+		// stable results, but in the real code, we choose nodes randomly.
+		//
+		// Call the randomNode function anyway, and ensure it returns
+		// a sensible result.
+		view := randomNode(got, last)
+		if !views.SliceContains(got, view) {
+			t.Fatalf("randomNode returns an unexpected node")
+		}
+
 		var ret tailcfg.NodeView
 
 		gotIDs := make([]tailcfg.StableNodeID, got.Len())
@@ -4529,6 +4547,7 @@ func TestSuggestExitNode(t *testing.T) {
 		Longitude: -97.3325,
 		Priority:  100,
 	}
+	var emptyLocation *tailcfg.Location
 
 	peer1 := makePeer(1,
 		withExitRoutes(),
@@ -4568,6 +4587,18 @@ func TestSuggestExitNode(t *testing.T) {
 		withExitRoutes(),
 		withSuggest(),
 		withLocation(fortWorthLowPriority.View()))
+	emptyLocationPeer9 := makePeer(9,
+		withoutDERP(),
+		withExitRoutes(),
+		withSuggest(),
+		withLocation(emptyLocation.View()),
+	)
+	emptyLocationPeer10 := makePeer(10,
+		withoutDERP(),
+		withExitRoutes(),
+		withSuggest(),
+		withLocation(emptyLocation.View()),
+	)
 
 	selfNode := tailcfg.Node{
 		Addresses: []netip.Prefix{
@@ -4897,6 +4928,31 @@ func TestSuggestExitNode(t *testing.T) {
 			wantID:       "stable6",
 			wantName:     "San Jose",
 			wantLocation: sanJose.View(),
+		},
+		{
+			// Regression test for https://github.com/tailscale/tailscale/issues/17661
+			name: "exit nodes with no home DERP, randomly selected",
+			lastReport: &netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 10,
+					2: 20,
+					3: 10,
+				},
+				PreferredDERP: 1,
+			},
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				DERPMap:  defaultDERPMap,
+				Peers: []tailcfg.NodeView{
+					emptyLocationPeer9,
+					emptyLocationPeer10,
+				},
+			},
+			wantRegions: []int{1, 2},
+			wantName:    "peer9",
+			wantNodes:   []tailcfg.StableNodeID{"stable9", "stable10"},
+			wantID:      "stable9",
+			useRegion:   1,
 		},
 	}
 

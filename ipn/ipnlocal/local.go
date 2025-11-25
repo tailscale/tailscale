@@ -7432,6 +7432,16 @@ func suggestExitNodeUsingDERP(report *netcheck.Report, nb *nodeBackend, prevSugg
 		}
 	}
 	bestCandidates := pickWeighted(pickFrom)
+
+	// We may have an empty list of candidates here, if none of the candidates
+	// have home DERP info.
+	//
+	// We know that candidates is non-empty or we'd already have returned, so if
+	// we've filtered everything out of bestCandidates, just use candidates.
+	if len(bestCandidates) == 0 {
+		bestCandidates = candidates
+	}
+
 	chosen := selectNode(views.SliceOf(bestCandidates), prevSuggestion)
 	if !chosen.Valid() {
 		return res, errors.New("chosen candidate invalid: this is a bug")
