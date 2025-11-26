@@ -20,6 +20,7 @@ import (
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"golang.org/x/sys/unix"
+	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/packet"
@@ -328,10 +329,15 @@ func tryEnableUDPOffload(pconn nettype.PacketConn) (hasTX bool, hasRX bool) {
 			return
 		}
 		err = rc.Control(func(fd uintptr) {
-			_, errSyscall := syscall.GetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_SEGMENT)
-			hasTX = errSyscall == nil
-			errSyscall = syscall.SetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_GRO, 1)
-			hasRX = errSyscall == nil
+			var errSyscall error
+			if !envknob.Bool("TS_DEBUG_DISABLE_UDP_GSO") {
+				_, errSyscall = syscall.GetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_SEGMENT)
+				hasTX = errSyscall == nil
+			}
+			if !envknob.Bool("TS_DEBUG_DISABLE_UDP_GRO") {
+				errSyscall = syscall.SetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_GRO, 1)
+				hasRX = errSyscall == nil
+			}
 		})
 		if err != nil {
 			return false, false
