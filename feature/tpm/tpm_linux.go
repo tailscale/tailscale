@@ -4,6 +4,8 @@
 package tpm
 
 import (
+	"errors"
+
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/google/go-tpm/tpm2/transport/linuxtpm"
 )
@@ -13,5 +15,10 @@ func open() (transport.TPMCloser, error) {
 	if err == nil {
 		return tpm, nil
 	}
-	return linuxtpm.Open("/dev/tpm0")
+	errs := []error{err}
+	tpm, err = linuxtpm.Open("/dev/tpm0")
+	if err == nil {
+		return tpm, nil
+	}
+	return nil, errors.Join(errs...)
 }
