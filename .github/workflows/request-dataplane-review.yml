@@ -2,6 +2,7 @@ name: request-dataplane-review
 
 on:
   pull_request:
+    types: [ opened, synchronize, reopened, ready_for_review ]
     paths:
       - ".github/workflows/request-dataplane-review.yml"
       - "**/*derp*"
@@ -10,6 +11,7 @@ on:
 
 jobs:
   request-dataplane-review:
+    if: github.event.pull_request.draft == false
     name: Request Dataplane Review
     runs-on: ubuntu-latest
     steps:
