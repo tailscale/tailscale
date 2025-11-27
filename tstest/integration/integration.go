@@ -576,6 +576,7 @@ type TestNode struct {
 	stateFile    string
 	upFlagGOOS   string // if non-empty, sets TS_DEBUG_UP_FLAG_GOOS for cmd/tailscale CLI
 	encryptState bool
+	allowUpdates bool
 
 	mu        sync.Mutex
 	onLogLine []func([]byte)
@@ -840,6 +841,9 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		"TS_DISABLE_PORTMAPPER=1", // shouldn't be needed; test is all localhost
 		"TS_DEBUG_LOG_RATE=all",
 	)
+	if n.allowUpdates {
+		cmd.Env = append(cmd.Env, "TS_TEST_ALLOW_AUTO_UPDATE=1")
+	}
 	if n.env.loopbackPort != nil {
 		cmd.Env = append(cmd.Env, "TS_DEBUG_NETSTACK_LOOPBACK_PORT="+strconv.Itoa(*n.env.loopbackPort))
 	}
@@ -914,7 +918,7 @@ func (n *TestNode) Ping(otherNode *TestNode) error {
 	t := n.env.t
 	ip := otherNode.AwaitIP4().String()
 	t.Logf("Running ping %v (from %v)...", ip, n.AwaitIP4())
-	return n.Tailscale("ping", ip).Run()
+	return n.Tailscale("ping", "--timeout=1s", ip).Run()
 }
 
 // AwaitListening waits for the tailscaled to be serving local clients
@@ -1071,6 +1075,46 @@ func (n *TestNode) MustStatus() *ipnstate.Status {
 		tb.Fatal(err)
 	}
 	return st
+}
+
+// PublicKey returns the hex-encoded public key of this node,
+// e.g. `nodekey:123456abc`
+func (n *TestNode) PublicKey() string {
+	tb := n.env.t
+	tb.Helper()
+	cmd := n.Tailscale("status", "--json")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		tb.Fatalf("running `tailscale status`: %v, %s", err, out)
+	}
+
+	type Self struct{ PublicKey string }
+	type StatusOutput struct{ Self Self }
+
+	var st StatusOutput
+	if err := json.Unmarshal(out, &st); err != nil {
+		tb.Fatalf("decoding `tailscale status` JSON: %v\njson:\n%s", err, out)
+	}
+	return st.Self.PublicKey
+}
+
+// NLPublicKey returns the hex-encoded network lock public key of
+// this node, e.g. `tlpub:123456abc`
+func (n *TestNode) NLPublicKey() string {
+	tb := n.env.t
+	tb.Helper()
+	cmd := n.Tailscale("lock", "status", "--json")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		tb.Fatalf("running `tailscale lock status`: %v, %s", err, out)
+	}
+	st := struct {
+		PublicKey string `json:"PublicKey"`
+	}{}
+	if err := json.Unmarshal(out, &st); err != nil {
+		tb.Fatalf("decoding `tailscale lock status` JSON: %v\njson:\n%s", err, out)
+	}
+	return st.PublicKey
 }
 
 // trafficTrap is an HTTP proxy handler to note whether any

@@ -6,6 +6,7 @@ package tstest
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -91,5 +92,22 @@ var serializeParallel = envknob.RegisterBool("TS_SERIAL_TESTS")
 func Parallel(t *testing.T) {
 	if !serializeParallel() {
 		t.Parallel()
+	}
+}
+
+// SkipOnKernelVersions skips the test if the current
+// kernel version is in the specified list.
+func SkipOnKernelVersions(t testing.TB, issue string, versions ...string) {
+	major, minor, patch := KernelVersion()
+	if major == 0 && minor == 0 && patch == 0 {
+		t.Logf("could not determine kernel version")
+		return
+	}
+
+	current := fmt.Sprintf("%d.%d.%d", major, minor, patch)
+	for _, v := range versions {
+		if v == current {
+			t.Skipf("skipping on kernel version %q - see issue %s", current, issue)
+		}
 	}
 }

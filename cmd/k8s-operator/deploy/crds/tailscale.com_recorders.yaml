@@ -68,6 +68,11 @@ spec:
                     Corresponds to --ui tsrecorder flag https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.
                     Required if S3 storage is not set up, to ensure that recordings are accessible.
                   type: boolean
+                replicas:
+                  description: Replicas specifies how many instances of tsrecorder to run. Defaults to 1.
+                  type: integer
+                  format: int32
+                  minimum: 0
                 statefulSet:
                   description: |-
                     Configuration parameters for the Recorder's StatefulSet. The operator
@@ -1683,6 +1688,9 @@ spec:
                   items:
                     type: string
                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
+              x-kubernetes-validations:
+                - rule: '!(self.replicas > 1 && (!has(self.storage) || !has(self.storage.s3)))'
+                  message: S3 storage must be used when deploying multiple Recorder replicas
             status:
               description: |-
                 RecorderStatus describes the status of the recorder. This is set

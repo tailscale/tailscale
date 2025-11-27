@@ -177,7 +177,8 @@ type CapabilityVersion int
 //   - 128: 2025-10-02: can handle C2N /debug/health.
 //   - 129: 2025-10-04: Fixed sleep/wake deadlock in magicsock when using peer relay (PR #17449)
 //   - 130: 2025-10-06: client can send key.HardwareAttestationPublic and key.HardwareAttestationKeySignature in MapRequest
-const CurrentCapabilityVersion CapabilityVersion = 130
+//   - 131: 2025-11-25: client respects [NodeAttrDefaultAutoUpdate]
+const CurrentCapabilityVersion CapabilityVersion = 131
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2149,12 +2150,14 @@ type MapResponse struct {
 	// or nothing to report.
 	ClientVersion *ClientVersion `json:",omitempty"`
 
-	// DefaultAutoUpdate is the default node auto-update setting for this
+	// DeprecatedDefaultAutoUpdate is the default node auto-update setting for this
 	// tailnet. The node is free to opt-in or out locally regardless of this
-	// value. This value is only used on first MapResponse from control, the
-	// auto-update setting doesn't change if the tailnet admin flips the
-	// default after the node registered.
-	DefaultAutoUpdate opt.Bool `json:",omitempty"`
+	// value. Once this value has been set and stored in the client, future
+	// changes from the control plane are ignored.
+	//
+	// Deprecated: use NodeAttrDefaultAutoUpdate instead. See
+	// https://github.com/tailscale/tailscale/issues/11502.
+	DeprecatedDefaultAutoUpdate opt.Bool `json:"DefaultAutoUpdate,omitempty"`
 }
 
 // DisplayMessage represents a health state of the node from the control plane's
@@ -2721,6 +2724,14 @@ const (
 	// default behavior is to trust the control plane when it claims that a
 	// node is no longer online, but that is not a reliable signal.
 	NodeAttrClientSideReachability = "client-side-reachability"
+
+	// NodeAttrDefaultAutoUpdate advertises the default node auto-update setting
+	// for this tailnet. The node is free to opt-in or out locally regardless of
+	// this value. Once this has been set and stored in the client, future
+	// changes from the control plane are ignored.
+	//
+	// The value of the key in [NodeCapMap] is a JSON boolean.
+	NodeAttrDefaultAutoUpdate NodeCapability = "default-auto-update"
 )
 
 // SetDNSRequest is a request to add a DNS record.

@@ -325,6 +325,64 @@ func TestUserspaceEnginePeerMTUReconfig(t *testing.T) {
 	}
 }
 
+func TestTSMPKeyAdvertisement(t *testing.T) {
+	var knobs controlknobs.Knobs
+
+	bus := eventbustest.NewBus(t)
+	ht := health.NewTracker(bus)
+	reg := new(usermetric.Registry)
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, &knobs, ht, reg, bus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+	ue := e.(*userspaceEngine)
+	routerCfg := &router.Config{}
+	nodeKey := nkFromHex("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	nm := &netmap.NetworkMap{
+		Peers: nodeViews([]*tailcfg.Node{
+			{
+				ID:  1,
+				Key: nodeKey,
+			},
+		}),
+		SelfNode: (&tailcfg.Node{
+			StableID:  "TESTCTRL00000001",
+			Name:      "test-node.test.ts.net",
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32"), netip.MustParsePrefix("fd7a:115c:a1e0:ab12:4843:cd96:0:1/128")},
+		}).View(),
+	}
+	cfg := &wgcfg.Config{
+		Peers: []wgcfg.Peer{
+			{
+				PublicKey: nodeKey,
+				AllowedIPs: []netip.Prefix{
+					netip.PrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
+				},
+			},
+		},
+	}
+
+	ue.SetNetworkMap(nm)
+	err = ue.Reconfig(cfg, routerCfg, &dns.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addr := netip.MustParseAddr("100.100.99.1")
+	previousValue := metricTSMPDiscoKeyAdvertisementSent.Value()
+	ue.sendTSMPDiscoAdvertisement(addr)
+	if val := metricTSMPDiscoKeyAdvertisementSent.Value(); val <= previousValue {
+		errs := metricTSMPDiscoKeyAdvertisementError.Value()
+		t.Errorf("Expected 1 disco key advert, got %d, errors %d", val, errs)
+	}
+	// Remove config to have the engine shut down more consistently
+	err = ue.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func nkFromHex(hex string) key.NodePublic {
 	if len(hex) != 64 {
 		panic(fmt.Sprintf("%q is len %d; want 64", hex, len(hex)))

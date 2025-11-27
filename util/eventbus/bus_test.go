@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -589,6 +590,105 @@ func TestRegression(t *testing.T) {
 			t.Fatal("expected a panic from Publish on a closed client")
 		} else {
 			t.Logf("Got expected panic: %v", v)
+		}
+	})
+}
+
+func TestPublishWithMutex(t *testing.T) {
+	testPublishWithMutex(t, 1024) // arbitrary large number of events
+}
+
+// testPublishWithMutex publishes the specified number of events,
+// acquiring and releasing a mutex around each publish and each
+// subscriber event receive.
+//
+// The test fails if it loses any events or times out due to a deadlock.
+// Unfortunately, a goroutine waiting on a mutex held by a durably blocked
+// goroutine is not itself considered durably blocked, so [synctest] cannot
+// detect this deadlock on its own.
+func testPublishWithMutex(t *testing.T, n int) {
+	synctest.Test(t, func(t *testing.T) {
+		b := eventbus.New()
+		defer b.Close()
+
+		c := b.Client("TestClient")
+
+		evts := make([]any, n)
+		for i := range evts {
+			evts[i] = EventA{Counter: i}
+		}
+		exp := expectEvents(t, evts...)
+
+		var mu sync.Mutex
+		eventbus.SubscribeFunc[EventA](c, func(e EventA) {
+			// Acquire the same mutex as the publisher.
+			mu.Lock()
+			mu.Unlock()
+
+			// Mark event as received, so we can check for lost events.
+			exp.Got(e)
+		})
+
+		p := eventbus.Publish[EventA](c)
+		go func() {
+			// Publish events, acquiring the mutex around each publish.
+			for i := range n {
+				mu.Lock()
+				p.Publish(EventA{Counter: i})
+				mu.Unlock()
+			}
+		}()
+
+		synctest.Wait()
+
+		if !exp.Empty() {
+			t.Errorf("unexpected extra events: %+v", exp.want)
+		}
+	})
+}
+
+func TestPublishFromSubscriber(t *testing.T) {
+	testPublishFromSubscriber(t, 1024) // arbitrary large number of events
+}
+
+// testPublishFromSubscriber publishes the specified number of EventA events.
+// Each EventA causes the subscriber to publish an EventB.
+// The test fails if it loses any events or if a deadlock occurs.
+func testPublishFromSubscriber(t *testing.T, n int) {
+	synctest.Test(t, func(t *testing.T) {
+		b := eventbus.New()
+		defer b.Close()
+
+		c := b.Client("TestClient")
+
+		// Ultimately we expect to receive n EventB events
+		// published as a result of receiving n EventA events.
+		evts := make([]any, n)
+		for i := range evts {
+			evts[i] = EventB{Counter: i}
+		}
+		exp := expectEvents(t, evts...)
+
+		pubA := eventbus.Publish[EventA](c)
+		pubB := eventbus.Publish[EventB](c)
+
+		eventbus.SubscribeFunc[EventA](c, func(e EventA) {
+			// Upon receiving EventA, publish EventB.
+			pubB.Publish(EventB{Counter: e.Counter})
+		})
+		eventbus.SubscribeFunc[EventB](c, func(e EventB) {
+			// Mark EventB as received.
+			exp.Got(e)
+		})
+
+		for i := range n {
+			pubA.Publish(EventA{Counter: i})
+		}
+
+		synctest.Wait()
+
+		if !exp.Empty() {
+			t.Errorf("unexpected extra events: %+v", exp.want)
 		}
 	})
 }

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/netip"
 
 	"tailscale.com/disco"
 	"tailscale.com/feature"
@@ -23,6 +24,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
+	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/wgengine/magicsock"
 )
@@ -67,7 +69,7 @@ func servePeerRelayDebugSessions(h *localapi.Handler, w http.ResponseWriter, r *
 // imported.
 func newExtension(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, error) {
 	e := &extension{
-		newServerFn: func(logf logger.Logf, port int, onlyStaticAddrPorts bool) (relayServer, error) {
+		newServerFn: func(logf logger.Logf, port uint16, onlyStaticAddrPorts bool) (relayServer, error) {
 			return udprelay.NewServer(logf, port, onlyStaticAddrPorts)
 		},
 		logf: logger.WithPrefix(logf, featureName+": "),
@@ -85,22 +87,24 @@ type relayServer interface {
 	AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.ServerEndpoint, error)
 	GetSessions() []status.ServerSession
 	SetDERPMapView(tailcfg.DERPMapView)
+	SetStaticAddrPorts(addrPorts views.Slice[netip.AddrPort])
 }
 
 // extension is an [ipnext.Extension] managing the relay server on platforms
 // that import this package.
 type extension struct {
-	newServerFn func(logf logger.Logf, port int, onlyStaticAddrPorts bool) (relayServer, error) // swappable for tests
+	newServerFn func(logf logger.Logf, port uint16, onlyStaticAddrPorts bool) (relayServer, error) // swappable for tests
 	logf        logger.Logf
 	ec          *eventbus.Client
 	respPub     *eventbus.Publisher[magicsock.UDPRelayAllocResp]
 
-	mu                            syncs.Mutex         // guards the following fields
-	shutdown                      bool                // true if Shutdown() has been called
-	rs                            relayServer         // nil when disabled
-	port                          *int                // ipn.Prefs.RelayServerPort, nil if disabled
-	derpMapView                   tailcfg.DERPMapView // latest seen over the eventbus
-	hasNodeAttrDisableRelayServer bool                // [tailcfg.NodeAttrDisableRelayServer]
+	mu                            syncs.Mutex                 // guards the following fields
+	shutdown                      bool                        // true if Shutdown() has been called
+	rs                            relayServer                 // nil when disabled
+	port                          *uint16                     // ipn.Prefs.RelayServerPort, nil if disabled
+	staticEndpoints               views.Slice[netip.AddrPort] // ipn.Prefs.RelayServerStaticEndpoints
+	derpMapView                   tailcfg.DERPMapView         // latest seen over the eventbus
+	hasNodeAttrDisableRelayServer bool                        // [tailcfg.NodeAttrDisableRelayServer]
 }
 
 // Name implements [ipnext.Extension].
@@ -147,7 +151,12 @@ func (e *extension) onAllocReq(req magicsock.UDPRelayAllocReq) {
 		e.logf("error allocating endpoint: %v", err)
 		return
 	}
-	e.respPub.Publish(magicsock.UDPRelayAllocResp{
+	// Take a defensive stance around publishing from within an
+	// [*eventbus.SubscribeFunc] by publishing from a separate goroutine. At the
+	// time of writing (2025-11-21), publishing from within the
+	// [*eventbus.SubscribeFunc] goroutine is potentially unsafe if publisher
+	// and subscriber share a lock.
+	go e.respPub.Publish(magicsock.UDPRelayAllocResp{
 		ReqRxFromNodeKey:  req.RxFromNodeKey,
 		ReqRxFromDiscoKey: req.RxFromDiscoKey,
 		Message: &disco.AllocateUDPRelayEndpointResponse{
@@ -181,6 +190,7 @@ func (e *extension) relayServerShouldBeRunningLocked() bool {
 
 // handleRelayServerLifetimeLocked handles the lifetime of [e.rs].
 func (e *extension) handleRelayServerLifetimeLocked() {
+	defer e.handleRelayServerStaticAddrPortsLocked()
 	if !e.relayServerShouldBeRunningLocked() {
 		e.stopRelayServerLocked()
 		return
@@ -188,6 +198,13 @@ func (e *extension) handleRelayServerLifetimeLocked() {
 		return // already running
 	}
 	e.tryStartRelayServerLocked()
+}
+
+func (e *extension) handleRelayServerStaticAddrPortsLocked() {
+	if e.rs != nil {
+		// TODO(jwhited): env var support
+		e.rs.SetStaticAddrPorts(e.staticEndpoints)
+	}
 }
 
 func (e *extension) selfNodeViewChanged(nodeView tailcfg.NodeView) {
@@ -200,6 +217,7 @@ func (e *extension) selfNodeViewChanged(nodeView tailcfg.NodeView) {
 func (e *extension) profileStateChanged(_ ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.staticEndpoints = prefs.RelayServerStaticEndpoints()
 	newPort, ok := prefs.RelayServerPort().GetOk()
 	enableOrDisableServer := ok != (e.port != nil)
 	portChanged := ok && e.port != nil && newPort != *e.port

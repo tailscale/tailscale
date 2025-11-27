@@ -3,7 +3,10 @@
 
 package tstest
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 func TestReplace(t *testing.T) {
 	before := "before"
@@ -21,4 +24,18 @@ func TestReplace(t *testing.T) {
 	if before != "before" {
 		t.Errorf("before = %q; want %q", before, "before")
 	}
+}
+
+func TestKernelVersion(t *testing.T) {
+	switch runtime.GOOS {
+	case "linux":
+	default:
+		t.Skipf("skipping test on %s", runtime.GOOS)
+	}
+
+	major, minor, patch := KernelVersion()
+	if major == 0 && minor == 0 && patch == 0 {
+		t.Fatal("KernelVersion returned (0, 0, 0); expected valid version")
+	}
+	t.Logf("Kernel version: %d.%d.%d", major, minor, patch)
 }

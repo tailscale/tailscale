@@ -37,6 +37,7 @@ import (
 	_ "tailscale.com/ipn/ipnlocal"
 	_ "tailscale.com/ipn/ipnserver"
 	_ "tailscale.com/ipn/store"
+	_ "tailscale.com/ipn/store/mem"
 	_ "tailscale.com/logpolicy"
 	_ "tailscale.com/logtail"
 	_ "tailscale.com/net/dns"

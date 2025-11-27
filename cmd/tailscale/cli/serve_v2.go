@@ -478,11 +478,6 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 		wantFg := !e.bg.Value && !turnOff
 		if wantFg {
-			// validate the config before creating a WatchIPNBus session
-			if err := e.validateConfig(parentSC, srvPort, srvType, svcName); err != nil {
-				return err
-			}
-
 			// if foreground mode, create a WatchIPNBus session
 			// and use the nested config for all following operations
 			// TODO(marwan-at-work): nested-config validations should happen here or previous to this point.
@@ -508,9 +503,6 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			// only unset serve when trying to unset with type and port flags.
 			err = e.unsetServe(sc, dnsName, srvType, srvPort, mount, magicDNSSuffix)
 		} else {
-			if err := e.validateConfig(parentSC, srvPort, srvType, svcName); err != nil {
-				return err
-			}
 			if forService {
 				e.addServiceToPrefs(ctx, svcName)
 			}
@@ -905,66 +897,6 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	}
 
 	return e.lc.SetServeConfig(ctx, sc)
-}
-
-const backgroundExistsMsg = "background configuration already exists, use `tailscale %s --%s=%d off` to remove the existing configuration"
-
-// validateConfig checks if the serve config is valid to serve the type wanted on the port.
-// dnsName is a FQDN or a serviceName (with `svc:` prefix).
-func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe serveType, svcName tailcfg.ServiceName) error {
-	var tcpHandlerForPort *ipn.TCPPortHandler
-	if svcName != noService {
-		svc := sc.Services[svcName]
-		if svc == nil {
-			return nil
-		}
-		if wantServe == serveTypeTUN && (svc.TCP != nil || svc.Web != nil) {
-			return errors.New("service already has a TCP or Web handler, cannot serve in TUN mode")
-		}
-		if svc.Tun && wantServe != serveTypeTUN {
-			return errors.New("service is already being served in TUN mode")
-		}
-		if svc.TCP[port] == nil {
-			return nil
-		}
-		tcpHandlerForPort = svc.TCP[port]
-	} else {
-		sc, isFg := sc.FindConfig(port)
-		if sc == nil {
-			return nil
-		}
-		if isFg {
-			return errors.New("foreground already exists under this port")
-		}
-		if !e.bg.Value {
-			return fmt.Errorf(backgroundExistsMsg, infoMap[e.subcmd].Name, wantServe.String(), port)
-		}
-		tcpHandlerForPort = sc.TCP[port]
-	}
-	existingServe := serveFromPortHandler(tcpHandlerForPort)
-	if wantServe != existingServe {
-		target := svcName
-		if target == noService {
-			target = "machine"
-		}
-		return fmt.Errorf("want to serve %q but port is already serving %q for %q", wantServe, existingServe, target)
-	}
-	return nil
-}
-
-func serveFromPortHandler(tcp *ipn.TCPPortHandler) serveType {
-	switch {
-	case tcp.HTTP:
-		return serveTypeHTTP
-	case tcp.HTTPS:
-		return serveTypeHTTPS
-	case tcp.TerminateTLS != "":
-		return serveTypeTLSTerminatedTCP
-	case tcp.TCPForward != "":
-		return serveTypeTCP
-	default:
-		return -1
-	}
 }
 
 func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []tailcfg.PeerCapability, proxyProtocol int) error {

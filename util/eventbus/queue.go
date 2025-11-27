@@ -7,18 +7,18 @@ import (
 	"slices"
 )
 
-const maxQueuedItems = 16
-
-// queue is an ordered queue of length up to maxQueuedItems.
+// queue is an ordered queue of length up to capacity,
+// if capacity is non-zero. Otherwise it is unbounded.
 type queue[T any] struct {
-	vals  []T
-	start int
+	vals     []T
+	start    int
+	capacity int // zero means unbounded
 }
 
 // canAppend reports whether a value can be appended to q.vals without
 // shifting values around.
 func (q *queue[T]) canAppend() bool {
-	return cap(q.vals) < maxQueuedItems || len(q.vals) < cap(q.vals)
+	return q.capacity == 0 || cap(q.vals) < q.capacity || len(q.vals) < cap(q.vals)
 }
 
 func (q *queue[T]) Full() bool {
