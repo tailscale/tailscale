@@ -52,7 +52,7 @@ func handleC2NPostureIdentityGet(b *ipnlocal.LocalBackend, w http.ResponseWriter
 		http.Error(w, "posture extension not available", http.StatusInternalServerError)
 		return
 	}
-	e.logf("c2n: GET /posture/identity received")
+	e.logf("c2n: %s %s received", r.Method, r.URL.String())
 
 	res := tailcfg.C2NPostureIdentityResponse{}
 
