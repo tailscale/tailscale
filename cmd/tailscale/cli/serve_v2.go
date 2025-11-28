@@ -138,6 +138,7 @@ var serveHelpCommon = strings.TrimSpace(`
 <target> can be a file, directory, text, or most commonly the location to a service running on the
 local machine. The location to the location service can be expressed as a port number (e.g., 3000),
 a partial URL (e.g., localhost:3000), or a full URL including a path (e.g., http://localhost:3000/foo).
+On Unix-like systems, you can also specify a Unix domain socket (e.g., unix:/tmp/myservice.sock).
 
 EXAMPLES
   - Expose an HTTP server running at 127.0.0.1:3000 in the foreground:
@@ -148,6 +149,9 @@ EXAMPLES
 
   - Expose an HTTPS server with invalid or self-signed certificates at https://localhost:8443
     $ tailscale %[1]s https+insecure://localhost:8443
+
+  - Expose a service listening on a Unix socket (Linux/macOS/BSD only):
+    $ tailscale %[1]s unix:/var/run/myservice.sock
 
 For more examples and use cases visit our docs site https://tailscale.com/kb/1247/funnel-serve-use-cases
 `)
@@ -1172,7 +1176,8 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 		}
 		h.Path = target
 	default:
-		t, err := ipn.ExpandProxyTargetValue(target, []string{"http", "https", "https+insecure"}, "http")
+		// Include unix in supported schemes for HTTP(S) serve
+		t, err := ipn.ExpandProxyTargetValue(target, []string{"http", "https", "https+insecure", "unix"}, "http")
 		if err != nil {
 			return err
 		}
