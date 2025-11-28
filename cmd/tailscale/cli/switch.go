@@ -22,7 +22,7 @@ var switchCmd = &ffcli.Command{
 	ShortUsage: "tailscale switch <id>",
 	ShortHelp:  "Switch to a different Tailscale account",
 	LongHelp: `"tailscale switch" switches between logged in accounts. You can
-use the ID that's returned from 'tailnet switch -list'
+use the ID that's returned from 'tailscale switch -list'
 to pick which profile you want to switch to. Alternatively, you
 can use the Tailnet, account names, or display names to switch as well.
 
