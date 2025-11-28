@@ -68,6 +68,10 @@ type System struct {
 	// LocalBackend tracks the current config after any reloads.
 	InitialConfig *conffile.Config
 
+	// SocketPath is the path to the tailscaled Unix socket.
+	// It is used to prevent serve from proxying to our own socket.
+	SocketPath string
+
 	// onlyNetstack is whether the Tun value is a fake TUN device
 	// and we're using netstack for everything.
 	onlyNetstack bool
