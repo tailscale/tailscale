@@ -671,7 +671,7 @@ func TestIngressPGReconciler_HTTPRedirect(t *testing.T) {
 
 	// Verify initial reconciliation with HTTP redirect enabled
 	expectReconciled(t, ingPGR, "default", "test-ingress")
-	populateTLSSecret(context.Background(), fc, "test-pg", "my-svc.ts.net")
+	populateTLSSecret(t, fc, "test-pg", "my-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 
 	// Verify Tailscale Service includes both tcp:80 and tcp:443
@@ -795,7 +795,7 @@ func TestIngressPGReconciler_HTTPEndpointAndRedirectConflict(t *testing.T) {
 
 	// Verify initial reconciliation - HTTP endpoint should take precedence
 	expectReconciled(t, ingPGR, "default", "test-ingress")
-	populateTLSSecret(context.Background(), fc, "test-pg", "my-svc.ts.net")
+	populateTLSSecret(t, fc, "test-pg", "my-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 
 	// Verify Tailscale Service includes both tcp:80 and tcp:443
