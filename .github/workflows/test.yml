@@ -136,21 +136,20 @@ jobs:
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
     - name: Restore Cache
-      uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      id: restore-cache
+      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
       with:
-        # Note: unlike the other setups, this is only grabbing the mod download
-        # cache, rather than the whole mod directory, as the download cache
-        # contains zips that can be unpacked in parallel faster than they can be
-        # fetched and extracted by tar
+        # Note: this is only restoring the build cache. Mod cache is shared amongst
+        # all jobs in the workflow.
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        # The -2- here should be incremented when the scheme of data to be
-        # cached changes (e.g. path above changes).
-        key: ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
+        key: ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
         restore-keys: |
-          ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-${{ hashFiles('**/go.sum') }}
-          ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-
+          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
+          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-
+          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-
+          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-
     - name: build all
       if: matrix.buildflags == '' # skip on race builder
       working-directory: src
@@ -206,6 +205,17 @@ jobs:
       shell: bash
       run: |
         find $(go env GOCACHE) -type f -mmin +90 -delete
+    - name: Save Cache
+      # Save cache even on failure, but only on cache miss and main branch to avoid thrashing.
+      if: always() && steps.restore-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        # Note: this is only saving the build cache. Mod cache is shared amongst
+        # all jobs in the workflow.
+        path: |
+          ~/.cache/go-build
+          ~\AppData\Local\go-build
+        key: ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   windows:
     # windows-8vpu is a 2022 GitHub-managed runner in our
@@ -376,28 +386,26 @@ jobs:
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         path: src
-    - name: Restore Cache
-      uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        # Note: unlike the other setups, this is only grabbing the mod download
-        # cache, rather than the whole mod directory, as the download cache
-        # contains zips that can be unpacked in parallel faster than they can be
-        # fetched and extracted by tar
-        path: |
-          ~/.cache/go-build
-          ~\AppData\Local\go-build
-        # The -2- here should be incremented when the scheme of data to be
-        # cached changes (e.g. path above changes).
-        key: ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
-        restore-keys: |
-          ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}
-          ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-
     - name: Restore Go module cache
       uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
       with:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
+    - name: Restore Cache
+      id: restore-cache
+      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        # Note: this is only restoring the build cache. Mod cache is shared amongst
+        # all jobs in the workflow.
+        path: |
+          ~/.cache/go-build
+          ~\AppData\Local\go-build
+        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        restore-keys: |
+          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
+          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-
+          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-
     - name: build all
       working-directory: src
       run: ./tool/go build ./cmd/...
@@ -418,6 +426,17 @@ jobs:
       shell: bash
       run: |
         find $(go env GOCACHE) -type f -mmin +90 -delete
+    - name: Save Cache
+      # Save cache even on failure, but only on cache miss and main branch to avoid thrashing.
+      if: always() && steps.restore-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        # Note: this is only saving the build cache. Mod cache is shared amongst
+        # all jobs in the workflow.
+        path: |
+          ~/.cache/go-build
+          ~\AppData\Local\go-build
+        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   ios: # similar to cross above, but iOS can't build most of the repo. So, just
        # make it build a few smoke packages.
@@ -466,28 +485,26 @@ jobs:
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         path: src
-    - name: Restore Cache
-      uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        # Note: unlike the other setups, this is only grabbing the mod download
-        # cache, rather than the whole mod directory, as the download cache
-        # contains zips that can be unpacked in parallel faster than they can be
-        # fetched and extracted by tar
-        path: |
-          ~/.cache/go-build
-          ~\AppData\Local\go-build
-        # The -2- here should be incremented when the scheme of data to be
-        # cached changes (e.g. path above changes).
-        key: ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
-        restore-keys: |
-          ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}
-          ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-
     - name: Restore Go module cache
       uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
       with:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
+    - name: Restore Cache
+      id: restore-cache
+      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        # Note: this is only restoring the build cache. Mod cache is shared amongst
+        # all jobs in the workflow.
+        path: |
+          ~/.cache/go-build
+          ~\AppData\Local\go-build
+        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        restore-keys: |
+          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
+          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-
+          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-
     - name: build core
       working-directory: src
       run: ./tool/go build ./cmd/tailscale ./cmd/tailscaled
@@ -501,6 +518,17 @@ jobs:
       shell: bash
       run: |
         find $(go env GOCACHE) -type f -mmin +90 -delete
+    - name: Save Cache
+      # Save cache even on failure, but only on cache miss and main branch to avoid thrashing.
+      if: always() && steps.restore-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        # Note: this is only saving the build cache. Mod cache is shared amongst
+        # all jobs in the workflow.
+        path: |
+          ~/.cache/go-build
+          ~\AppData\Local\go-build
+        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   android:
     # similar to cross above, but android fails to build a few pieces of the
@@ -538,28 +566,26 @@ jobs:
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         path: src
-    - name: Restore Cache
-      uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        # Note: unlike the other setups, this is only grabbing the mod download
-        # cache, rather than the whole mod directory, as the download cache
-        # contains zips that can be unpacked in parallel faster than they can be
-        # fetched and extracted by tar
-        path: |
-          ~/.cache/go-build
-          ~\AppData\Local\go-build
-        # The -2- here should be incremented when the scheme of data to be
-        # cached changes (e.g. path above changes).
-        key: ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
-        restore-keys: |
-          ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
-          ${{ github.job }}-${{ runner.os }}-go-2-
     - name: Restore Go module cache
       uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
       with:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
+    - name: Restore Cache
+      id: restore-cache
+      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        # Note: this is only restoring the build cache. Mod cache is shared amongst
+        # all jobs in the workflow.
+        path: |
+          ~/.cache/go-build
+          ~\AppData\Local\go-build
+        key: ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        restore-keys: |
+          ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
+          ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-
+          ${{ runner.os }}-js-wasm-go-
     - name: build tsconnect client
       working-directory: src
       run: ./tool/go build ./cmd/tsconnect/wasm ./cmd/tailscale/cli
@@ -578,6 +604,17 @@ jobs:
       shell: bash
       run: |
         find $(go env GOCACHE) -type f -mmin +90 -delete
+    - name: Save Cache
+      # Save cache even on failure, but only on cache miss and main branch to avoid thrashing.
+      if: always() && steps.restore-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        # Note: this is only saving the build cache. Mod cache is shared amongst
+        # all jobs in the workflow.
+        path: |
+          ~/.cache/go-build
+          ~\AppData\Local\go-build
+        key: ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   tailscale_go: # Subset of tests that depend on our custom Go toolchain.
     runs-on: ubuntu-24.04
