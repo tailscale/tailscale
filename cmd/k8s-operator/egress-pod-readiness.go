@@ -175,7 +175,7 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 		err = errors.Join(err, e)
 	}
 	if err != nil {
-		return res, fmt.Errorf("error verifying conectivity: %w", err)
+		return res, fmt.Errorf("error verifying connectivity: %w", err)
 	}
 	if rm := routesMissing.Load(); rm {
 		lg.Info("Pod is not yet added as an endpoint for all egress targets, waiting...")
@@ -241,7 +241,7 @@ func (er *egressPodsReconciler) lookupPodRouteViaSvc(ctx context.Context, pod *c
 	req.Close = true
 	resp, err := er.httpClient.Do(req)
 	if err != nil {
-		// This is most likely because this is the first Pod and is not yet added to Service endoints. Other
+		// This is most likely because this is the first Pod and is not yet added to service endpints. Other
 		// error types are possible, but checking for those would likely make the system too fragile.
 		return unreachable, nil
 	}
