@@ -77,6 +77,7 @@ func main() {
 	*resolveAddrs = strings.ReplaceAll(*resolveAddrs, "-", "") // ignore dashes
 	*resolveAddrs = strings.ReplaceAll(*resolveAddrs, "_", "") // ignore underscores
 	switch *resolveAddrs {
+	case "":
 	case "id", "nodeid":
 		*resolveAddrs = "nodeid"
 	case "name", "hostname":
