@@ -562,10 +562,15 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.e.SetStatusCallback(b.setWgengineStatus)
 
 	b.interfaceState = netMon.InterfaceState()
+
 	// Call our linkChange code once with the current state.
 	// Following changes are triggered via the eventbus.
-	cd := netmon.NewChangeDelta(nil, b.interfaceState, false, netMon.TailscaleInterfaceName(), false)
-	b.linkChange(&cd)
+	cd, err := netmon.NewChangeDelta(nil, b.interfaceState, false, netMon.TailscaleInterfaceName(), false)
+	if err != nil {
+		b.logf("[unexpected] setting initial netmon state failed: %v", err)
+	} else {
+		b.linkChange(cd)
+	}
 
 	if buildfeatures.HasPeerAPIServer {
 		if tunWrap, ok := b.sys.Tun.GetOK(); ok {
@@ -960,7 +965,7 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.interfaceState = delta.New
+	b.interfaceState = delta.CurrentState()
 
 	b.pauseOrResumeControlClientLocked()
 	prefs := b.pm.CurrentPrefs()
@@ -994,7 +999,7 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	// If the local network configuration has changed, our filter may
 	// need updating to tweak default routes.
 	b.updateFilterLocked(prefs)
-	updateExitNodeUsageWarning(prefs, delta.New, b.health)
+	updateExitNodeUsageWarning(prefs, delta.CurrentState(), b.health)
 
 	if buildfeatures.HasPeerAPIServer {
 		cn := b.currentNode()

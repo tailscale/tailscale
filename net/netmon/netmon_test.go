@@ -139,7 +139,7 @@ func TestMonitorMode(t *testing.T) {
 		n := 0
 		mon.RegisterChangeCallback(func(d *ChangeDelta) {
 			n++
-			t.Logf("cb: changed=%v, ifSt=%v", d.RebindLikelyRequired, d.New)
+			t.Logf("cb: changed=%v, ifSt=%v", d.RebindLikelyRequired, d.CurrentState())
 		})
 		mon.Start()
 		<-done
@@ -150,7 +150,7 @@ func TestMonitorMode(t *testing.T) {
 		mon.Start()
 		eventbustest.Expect(tw, func(event *ChangeDelta) (bool, error) {
 			n++
-			t.Logf("cb: changed=%v, ifSt=%v", event.RebindLikelyRequired, event.New)
+			t.Logf("cb: changed=%v, ifSt=%v", event.RebindLikelyRequired, event.CurrentState())
 			return false, nil // Return false, indicating we wanna look for more events
 		})
 		t.Logf("%v events", n)
@@ -159,16 +159,13 @@ func TestMonitorMode(t *testing.T) {
 
 // tests (*ChangeDelta).RebindRequired
 func TestRebindRequired(t *testing.T) {
+	// s1 cannot be nil by definition
 	tests := []struct {
 		name     string
 		s1, s2   *State
 		tsIfName string
 		want     bool
 	}{
-		{
-			name: "eq_nil",
-			want: false,
-		},
 		{
 			name: "nil_mix",
 			s2:   new(State),
@@ -498,7 +495,10 @@ func TestRebindRequired(t *testing.T) {
 				}
 			}
 
-			cd := NewChangeDelta(tt.s1, tt.s2, false, tt.tsIfName, true)
+			cd, err := NewChangeDelta(tt.s1, tt.s2, false, tt.tsIfName, true)
+			if err != nil {
+				t.Fatalf("NewChangeDelta error: %v", err)
+			}
 			_ = cd // in case we need it later
 			if got := cd.RebindLikelyRequired; got != tt.want {
 				t.Errorf("RebindRequired = %v; want %v", got, tt.want)

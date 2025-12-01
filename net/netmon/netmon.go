@@ -9,6 +9,7 @@ package netmon
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/netip"
 	"runtime"
 	"slices"
@@ -88,19 +89,14 @@ type ChangeFunc func(*ChangeDelta)
 // ChangeDelta describes the difference between two network states.
 //
 // Use NewChangeDelta to construct a delta and compute the cached fields.
-//
-// TODO (barnstar): make new and old (and netmon.State) private once all consumers are updated
-// to use the accessor methods.
 type ChangeDelta struct {
-	// Old is the old interface state, if known.
+	// old is the old interface state, if known.
 	// It's nil if the old state is unknown.
-	// Do not mutate it.
-	Old *State
+	old *State
 
 	// New is the new network state.
 	// It is always non-nil.
-	// Do not mutate it.
-	New *State
+	new *State
 
 	// TimeJumped is whether there was a big jump in wall time since the last
 	// time we checked. This is a hint that a sleeping device might have
@@ -130,30 +126,36 @@ type ChangeDelta struct {
 	RebindLikelyRequired bool
 }
 
+// CurrentState returns the current (new) state after the change.
+func (cd *ChangeDelta) CurrentState() *State {
+	return cd.new
+}
+
 // NewChangeDelta builds a ChangeDelta and eagerly computes the cached fields.
 // forceViability, if true, forces DefaultInterfaceMaybeViable to be true regardless of the
 // actual state of the default interface.  This is useful in testing.
-func NewChangeDelta(old, new *State, timeJumped bool, tsIfName string, forceViability bool) ChangeDelta {
+func NewChangeDelta(old, new *State, timeJumped bool, tsIfName string, forceViability bool) (*ChangeDelta, error) {
 	cd := ChangeDelta{
-		Old:                old,
-		New:                new,
+		old:                old,
+		new:                new,
 		TimeJumped:         timeJumped,
 		TailscaleIfaceName: tsIfName,
 	}
 
-	if cd.New == nil {
-		return cd
-	} else if cd.Old == nil {
-		cd.DefaultInterfaceChanged = cd.New.DefaultRouteInterface != ""
+	if cd.new == nil {
+		log.Printf("[unexpected] NewChangeDelta called with nil new state")
+		return nil, errors.New("new state cannot be nil")
+	} else if cd.old == nil && cd.new != nil {
+		cd.DefaultInterfaceChanged = cd.new.DefaultRouteInterface != ""
 		cd.IsLessExpensive = false
 		cd.HasPACOrProxyConfigChanged = true
 		cd.InterfaceIPsChanged = true
 		cd.IsInitialState = true
 	} else {
-		cd.AvailableProtocolsChanged = (cd.Old.HaveV4 != cd.New.HaveV4) || (cd.Old.HaveV6 != cd.New.HaveV6)
-		cd.DefaultInterfaceChanged = cd.Old.DefaultRouteInterface != cd.New.DefaultRouteInterface
-		cd.IsLessExpensive = cd.Old.IsExpensive && !cd.New.IsExpensive
-		cd.HasPACOrProxyConfigChanged = (cd.Old.PAC != cd.New.PAC) || (cd.Old.HTTPProxy != cd.New.HTTPProxy)
+		cd.AvailableProtocolsChanged = (cd.old.HaveV4 != cd.new.HaveV4) || (cd.old.HaveV6 != cd.new.HaveV6)
+		cd.DefaultInterfaceChanged = cd.old.DefaultRouteInterface != cd.new.DefaultRouteInterface
+		cd.IsLessExpensive = cd.old.IsExpensive && !cd.new.IsExpensive
+		cd.HasPACOrProxyConfigChanged = (cd.old.PAC != cd.new.PAC) || (cd.old.HTTPProxy != cd.new.HTTPProxy)
 		cd.InterfaceIPsChanged = cd.isInterestingIntefaceChange()
 	}
 
@@ -171,7 +173,7 @@ func NewChangeDelta(old, new *State, timeJumped bool, tsIfName string, forceViab
 
 	// Compute rebind requirement.   The default interface needs to be viable and
 	// one of the other conditions needs to be true.
-	cd.RebindLikelyRequired = (cd.Old == nil ||
+	cd.RebindLikelyRequired = (cd.old == nil ||
 		cd.TimeJumped ||
 		cd.DefaultInterfaceChanged ||
 		cd.InterfaceIPsChanged ||
@@ -180,38 +182,38 @@ func NewChangeDelta(old, new *State, timeJumped bool, tsIfName string, forceViab
 		cd.AvailableProtocolsChanged) &&
 		cd.DefaultInterfaceMaybeViable
 
-	return cd
+	return &cd, nil
 }
 
 // StateDesc returns a description of the old and new states for logging
 func (cd *ChangeDelta) StateDesc() string {
-	return fmt.Sprintf("old: %v new: %v", cd.Old, cd.New)
+	return fmt.Sprintf("old: %v new: %v", cd.old, cd.new)
 }
 
 // InterfaceIPAppeared reports whether the given IP address exists on any interface
 // in the old state, but not in the new state.
 func (cd *ChangeDelta) InterfaceIPDisppeared(ip netip.Addr) bool {
-	if cd.Old == nil {
+	if cd.old == nil {
 		return false
 	}
-	if cd.New == nil && cd.Old.HasIP(ip) {
+	if cd.new == nil && cd.old.HasIP(ip) {
 		return true
 	}
-	return cd.New.HasIP(ip) && !cd.Old.HasIP(ip)
+	return cd.new.HasIP(ip) && !cd.old.HasIP(ip)
 }
 
 // InterfaceIPDisappeared reports whether the given IP address existed on any interface
 // in the old state, but not in the new state.
 func (cd *ChangeDelta) InterfaceIPDisappeared(ip netip.Addr) bool {
-	return !cd.New.HasIP(ip) && cd.Old.HasIP(ip)
+	return !cd.new.HasIP(ip) && cd.old.HasIP(ip)
 }
 
 // AnyInterfaceUp reports whether any interfaces are up in the new state.
 func (cd *ChangeDelta) AnyInterfaceUp() bool {
-	if cd.New == nil {
+	if cd.new == nil {
 		return false
 	}
-	for _, ifi := range cd.New.Interface {
+	for _, ifi := range cd.new.Interface {
 		if ifi.IsUp() {
 			return true
 		}
@@ -223,23 +225,23 @@ func (cd *ChangeDelta) AnyInterfaceUp() bool {
 // This excludes interfaces that are not interesting per IsInterestingInterface and
 // filters out changes to interface IPs that that are uninteresting (e.g. link-local addresses).
 func (cd *ChangeDelta) isInterestingIntefaceChange() bool {
-	if cd.Old == nil && cd.New == nil {
+	if cd.old == nil && cd.new == nil {
 		return false
 	}
 
 	// If either side is nil treat as changed.
-	if cd.Old == nil || cd.New == nil {
+	if cd.old == nil || cd.new == nil {
 		return true
 	}
 
 	// Compare interfaces in both directions.  Old to new and new to old.
 
-	for iname, oldInterface := range cd.Old.Interface {
+	for iname, oldInterface := range cd.old.Interface {
 		if iname == cd.TailscaleIfaceName {
 			// Ignore changes in the Tailscale interface itself.
 			continue
 		}
-		oldIps := filterRoutableIPs(cd.Old.InterfaceIPs[iname])
+		oldIps := filterRoutableIPs(cd.old.InterfaceIPs[iname])
 		if IsInterestingInterface != nil && !IsInterestingInterface(oldInterface, oldIps) {
 			continue
 		}
@@ -253,11 +255,11 @@ func (cd *ChangeDelta) isInterestingIntefaceChange() bool {
 		// a global unicast IP.  That's considered a change from the perspective
 		// of anything that may have been bound to it.  If it didn't have a global
 		// unicast IP, it's not interesting.
-		newInterface, ok := cd.New.Interface[iname]
+		newInterface, ok := cd.new.Interface[iname]
 		if !ok {
 			return true
 		}
-		newIps, ok := cd.New.InterfaceIPs[iname]
+		newIps, ok := cd.new.InterfaceIPs[iname]
 		if !ok {
 			return true
 		}
@@ -268,11 +270,11 @@ func (cd *ChangeDelta) isInterestingIntefaceChange() bool {
 		}
 	}
 
-	for iname, newInterface := range cd.New.Interface {
+	for iname, newInterface := range cd.new.Interface {
 		if iname == cd.TailscaleIfaceName {
 			continue
 		}
-		newIps := filterRoutableIPs(cd.New.InterfaceIPs[iname])
+		newIps := filterRoutableIPs(cd.new.InterfaceIPs[iname])
 		if IsInterestingInterface != nil && !IsInterestingInterface(newInterface, newIps) {
 			continue
 		}
@@ -282,12 +284,12 @@ func (cd *ChangeDelta) isInterestingIntefaceChange() bool {
 			continue
 		}
 
-		oldInterface, ok := cd.Old.Interface[iname]
+		oldInterface, ok := cd.old.Interface[iname]
 		if !ok {
 			return true
 		}
 
-		oldIps, ok := cd.Old.InterfaceIPs[iname]
+		oldIps, ok := cd.old.InterfaceIPs[iname]
 		if !ok {
 			// Redundant but we can't dig up the "old" IPs for this interface.
 			return true
@@ -315,7 +317,6 @@ func filterRoutableIPs(addrs []netip.Prefix) []netip.Prefix {
 			filtered = append(filtered, pfx)
 		}
 	}
-	fmt.Printf("Filtered: %v\n", filtered)
 	return filtered
 }
 
@@ -609,7 +610,11 @@ func (m *Monitor) handlePotentialChange(newState *State, forceCallbacks bool) {
 		return
 	}
 
-	delta := NewChangeDelta(oldState, newState, timeJumped, m.tsIfName, false)
+	delta, err := NewChangeDelta(oldState, newState, timeJumped, m.tsIfName, false)
+	if err != nil {
+		m.logf("[unexpected] error creating ChangeDelta: %v", err)
+		return
+	}
 
 	if delta.RebindLikelyRequired {
 		m.gwValid = false
@@ -626,9 +631,9 @@ func (m *Monitor) handlePotentialChange(newState *State, forceCallbacks bool) {
 	if delta.TimeJumped {
 		metricChangeTimeJump.Add(1)
 	}
-	m.changed.Publish(delta)
+	m.changed.Publish(*delta)
 	for _, cb := range m.cbs {
-		go cb(&delta)
+		go cb(delta)
 	}
 }
 

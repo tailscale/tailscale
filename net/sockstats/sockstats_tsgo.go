@@ -274,7 +274,7 @@ func setNetMon(netMon *netmon.Monitor) {
 		if !delta.RebindLikelyRequired {
 			return
 		}
-		state := delta.New
+		state := delta.CurrentState()
 		ifName := state.DefaultRouteInterface
 		if ifName == "" {
 			return
