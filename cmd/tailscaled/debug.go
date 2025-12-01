@@ -143,7 +143,7 @@ func changeDeltaWatcher(ec *eventbus.Client, ctx context.Context, dump func(st *
 					return
 				}
 				log.Printf("Network monitor fired. New state:")
-				dump(delta.New)
+				dump(delta.CurrentState())
 			}
 		}
 	}
