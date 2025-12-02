@@ -92,6 +92,9 @@ func TestContainerBoot(t *testing.T) {
 		// The signal to send to containerboot at the start of the phase.
 		Signal *syscall.Signal
 
+		// If set, send this signal to the fake tailscaled process.
+		SignalTailscaled *syscall.Signal
+
 		EndpointStatuses map[string]int
 	}
 	runningNotify := &ipn.Notify{
@@ -993,6 +996,29 @@ func TestContainerBoot(t *testing.T) {
 				},
 			}
 		},
+		"tailscaled_unexpected_exit": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_AUTHKEY": "tskey-key",
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						},
+					},
+					{
+						Notify: runningNotify,
+					},
+					{
+						SignalTailscaled: ptr.To(unix.SIGKILL),
+						WantLog:          "tailscaled exited unexpectedly with code 137",
+						WantExitCode:     ptr.To(1),
+					},
+				},
+			}
+		},
 		"kube_shutdown_during_state_write": func(env *testEnv) testCase {
 			return testCase{
 				Env: map[string]string{
@@ -1102,6 +1128,9 @@ func TestContainerBoot(t *testing.T) {
 				env.lapi.Notify(p.Notify)
 				if p.Signal != nil {
 					cmd.Process.Signal(*p.Signal)
+				}
+				if p.SignalTailscaled != nil {
+					signalTailscaled(t, env.d, *p.SignalTailscaled)
 				}
 				if p.WantLog != "" {
 					err := tstest.WaitFor(2*time.Second, func() error {
@@ -1583,6 +1612,44 @@ func egressSvcConfig(name, fqdn string) egressservices.Configs {
 				FQDN: fqdn,
 			},
 		},
+	}
+}
+
+// signalTailscaled reads the PID of the fake tailscaled process and sends it a signal.
+func signalTailscaled(t *testing.T, rootDir string, sig syscall.Signal) {
+	t.Helper()
+	pidFile := filepath.Join(rootDir, "tmp/tailscaled.pid")
+
+	// Wait for PID file to exist (tailscaled may not have written it yet).
+	var pidBytes []byte
+	var err error
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		pidBytes, err = os.ReadFile(pidFile)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("reading tailscaled PID: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("tailscaled PID file never appeared: %v", err)
+	}
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if err != nil {
+		t.Fatalf("parsing tailscaled PID %q: %v", string(pidBytes), err)
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		t.Fatalf("finding tailscaled process %d: %v", pid, err)
+	}
+
+	if err := proc.Signal(sig); err != nil {
+		t.Fatalf("signaling tailscaled with %v: %v", sig, err)
 	}
 }
 

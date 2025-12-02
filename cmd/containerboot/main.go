@@ -229,7 +229,10 @@ func run() error {
 		}
 		log.Printf("Sending SIGTERM to tailscaled")
 		if err := daemonProcess.Signal(unix.SIGTERM); err != nil {
-			log.Fatalf("error shutting tailscaled down: %v", err)
+			// Process may have already exited, which is fine.
+			if !errors.Is(err, unix.ESRCH) {
+				log.Printf("error shutting tailscaled down: %v", err)
+			}
 		}
 	}
 	defer killTailscaled()
@@ -442,6 +445,8 @@ authLoop:
 	// egress services in HA mode and errored.
 	egressSvcsErrorChan := make(chan error)
 	ingressSvcsErrorChan := make(chan error)
+	// reaperExitChan receives the exit code when tailscaled exits.
+	reaperExitChan := make(chan int, 1)
 	defer t.Stop()
 	// resetTimer resets timer for when to next attempt to resolve the DNS
 	// name for the proxy configured with TS_EXPERIMENTAL_DEST_DNS_NAME. The
@@ -728,8 +733,31 @@ runLoop:
 							if err != nil {
 								log.Fatalf("Waiting for tailscaled to exit: %v", err)
 							}
-							log.Print("tailscaled exited")
-							os.Exit(0)
+
+							// Signal exit code: 0 for graceful shutdown, non-zero for crash.
+							if ctx.Err() != nil {
+								// Graceful shutdown, we told tailscaled to exit.
+								log.Print("tailscaled exited after graceful shutdown")
+								reaperExitChan <- 0
+								return
+							}
+
+							// Unexpected exit, propagate the error.
+							exitCode := 1
+							switch {
+							case status.Exited():
+								exitCode = status.ExitStatus()
+							case status.Signaled():
+								log.Printf("tailscaled terminated by signal: %v", status.Signal())
+								exitCode = 128 + int(status.Signal())
+							}
+							log.Printf("tailscaled exited unexpectedly with code %d", exitCode)
+							if exitCode == 0 {
+								// Tailscaled exited cleanly on its own, still unexpected.
+								exitCode = 1
+							}
+							reaperExitChan <- exitCode
+							return
 						}
 					}
 					wg.Add(1)
@@ -758,6 +786,11 @@ runLoop:
 			return fmt.Errorf("egress proxy failed: %v", e)
 		case e := <-ingressSvcsErrorChan:
 			return fmt.Errorf("ingress proxy failed: %v", e)
+		case exitCode := <-reaperExitChan:
+			if exitCode == 0 {
+				return nil
+			}
+			return fmt.Errorf("tailscaled exited unexpectedly")
 		}
 	}
 	wg.Wait()
