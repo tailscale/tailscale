@@ -17,23 +17,52 @@ if [ -z "${GITHUB_ACTIONS:-}" ]; then
     exit 1
 fi
 
-if [ -z "$URL" ]; then
+if [ -z "${URL:-}" ]; then
     echo "No cigocached URL is set, skipping cigocacher setup"
     exit 0
 fi
 
-JWT="$(curl -sSL -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=gocached" | jq -r .value)"
+curl_and_parse() {
+    local jq_filter="$1"
+    local step="$2"
+    shift 2
+    
+    local response
+    local curl_exit
+    response="$(curl -sSL "$@" 2>&1)" || curl_exit="$?"
+    if [ "${curl_exit:-0}" -ne "0" ]; then
+        echo "${step}: ${response}" >&2
+        return 1
+    fi
+    
+    local parsed
+    local jq_exit
+    parsed=$(echo "${response}" | jq -e -r "${jq_filter}" 2>&1) || jq_exit=$?
+    if [ "${jq_exit:-0}" -ne "0" ]; then
+        echo "${step}: Failed to parse JSON response:" >&2
+        echo "${response}" >&2
+        return 1
+    fi
+    
+    echo "${parsed}"
+    return 0
+}
+
+JWT="$(curl_and_parse ".value" "Fetching GitHub identity JWT" \
+    -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+    "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=gocached")" || exit 0
+
 # cigocached serves a TLS cert with an FQDN, but DNS is based on VM name.
 HOST_AND_PORT="${URL#http*://}"
 FIRST_LABEL="${HOST_AND_PORT/.*/}"
 # Save CONNECT_TO for later steps to use.
 echo "CONNECT_TO=${HOST_AND_PORT}:${FIRST_LABEL}:" >> "${GITHUB_ENV}"
 BODY="$(jq -n --arg jwt "$JWT" '{"jwt": $jwt}')"
-CIGOCACHER_TOKEN="$(curl -sSL --connect-to "$HOST_AND_PORT:$FIRST_LABEL:" -H "Content-Type: application/json" "$URL/auth/exchange-token" -d "$BODY" | jq -r .access_token || true)"
-if [ -z "$CIGOCACHER_TOKEN" ]; then
-    echo "Failed token exchange with cigocached, skipping cigocacher setup"
-    exit 0
-fi
+CIGOCACHER_TOKEN="$(curl_and_parse ".access_token" "Exchanging token with cigocached" \
+    --connect-to "${HOST_AND_PORT}:${FIRST_LABEL}:" \
+    -H "Content-Type: application/json" \
+    "$URL/auth/exchange-token" \
+    -d "$BODY")" || exit 0
 
 # Wait until we successfully auth before building cigocacher to ensure we know
 # it's worth building.
