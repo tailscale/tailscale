@@ -117,6 +117,8 @@ func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *n
 		eventClient: bus.Client("ipnlocal.nodeBackend"),
 		readyCh:     make(chan struct{}),
 	}
+	syncs.RegisterMutex(&nb.mu, "ipnlocal.nodeBackend.mu")
+
 	// Default filter blocks everything and logs nothing.
 	noneFilter := filter.NewAllowNone(logger.Discard, &netipx.IPSet{})
 	nb.filterAtomic.Store(noneFilter)

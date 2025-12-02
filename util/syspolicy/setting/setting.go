@@ -220,6 +220,11 @@ var (
 	definitionsUsed bool
 )
 
+var _ = func() bool {
+	syncs.RegisterMutex(&definitionsMu, "syspolicy/setting.definitionsMu")
+	return true
+}()
+
 // Register registers a policy setting with the specified key, scope, value type,
 // and an optional list of supported platforms. All policy settings must be
 // registered before any of them can be used. Register panics if called after

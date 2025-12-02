@@ -235,6 +235,8 @@ type Client struct {
 	testEnoughRegions      int
 	testCaptivePortalDelay time.Duration
 
+	registerMutexOnce sync.Once
+
 	mu       syncs.Mutex           // guards following
 	nextFull bool                  // do a full region scan, even if last != nil
 	prev     map[time.Time]*Report // some previous reports
@@ -242,6 +244,10 @@ type Client struct {
 	lastFull time.Time             // time of last full (non-incremental) report
 	curState *reportState          // non-nil if we're in a call to GetReport
 	resolver *dnscache.Resolver    // only set if UseDNSCache is true
+}
+
+func (c *Client) registerMutex() {
+	syncs.RegisterMutex(&c.mu, "netcheck.Client.mu")
 }
 
 func (c *Client) enoughRegions() int {
@@ -281,6 +287,7 @@ func (c *Client) vlogf(format string, a ...any) {
 // MakeNextReportFull forces the next GetReport call to be a full
 // (non-incremental) probe of all DERP regions.
 func (c *Client) MakeNextReportFull() {
+	c.registerMutexOnce.Do(c.registerMutex)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.nextFull = true
@@ -291,6 +298,8 @@ func (c *Client) MakeNextReportFull() {
 // the loop started by Standalone, in normal operation in tailscaled incoming
 // STUN replies are routed to this method.
 func (c *Client) ReceiveSTUNPacket(pkt []byte, src netip.AddrPort) {
+	c.registerMutexOnce.Do(c.registerMutex)
+
 	c.vlogf("received STUN packet from %s", src)
 
 	if src.Addr().Is4() {
@@ -782,6 +791,7 @@ func (o *GetReportOpts) getLastDERPActivity(region int) time.Time {
 }
 
 func (c *Client) SetForcePreferredDERP(region int) {
+	c.registerMutexOnce.Do(c.registerMutex)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.ForcePreferredDERP = region
@@ -797,6 +807,7 @@ var hookStartCaptivePortalDetection feature.Hook[func(ctx context.Context, rs *r
 //
 // It may not be called concurrently with itself.
 func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetReportOpts) (_ *Report, reterr error) {
+	c.registerMutexOnce.Do(c.registerMutex)
 	onlySTUN := false
 	if opts != nil && opts.OnlySTUN {
 		if opts.OnlyTCP443 {
@@ -839,6 +850,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 		inFlight:    map[stun.TxID]func(netip.AddrPort){},
 		stopProbeCh: make(chan struct{}, 1),
 	}
+	syncs.RegisterMutex(&rs.mu, "netcheck.reportState.mu")
 	c.curState = rs
 	last := c.last
 

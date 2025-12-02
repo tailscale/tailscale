@@ -515,6 +515,9 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
 		needsCaptiveDetection: make(chan bool),
 	}
+	syncs.RegisterMutex(&b.mu, "ipnlocal.LocalBackend.mu")
+	syncs.RegisterMutex(&b.tkaSyncLock, "ipnlocal.LocalBackend.tkaSyncLock")
+	syncs.RegisterMutex(&b.lastNotifiedDriveSharesMu, "ipnlocal.LocalBackend.lastNotifiedDriveSharesMu")
 
 	nb := newNodeBackend(ctx, b.logf, b.sys.Bus.Get())
 	b.currentNodeAtomic.Store(nb)

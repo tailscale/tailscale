@@ -8,9 +8,11 @@ import "tailscale.com/syncs"
 
 // New creates a new [RingLog] containing at most max items.
 func New[T any](max int) *RingLog[T] {
-	return &RingLog[T]{
+	rl := &RingLog[T]{
 		max: max,
 	}
+	syncs.RegisterMutex(&rl.mu, "ringlog.RingLog.mu")
+	return rl
 }
 
 // RingLog is a concurrency-safe fixed size log window containing entries of [T].
