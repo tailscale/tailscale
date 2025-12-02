@@ -241,7 +241,7 @@ func (er *egressPodsReconciler) lookupPodRouteViaSvc(ctx context.Context, pod *c
 	req.Close = true
 	resp, err := er.httpClient.Do(req)
 	if err != nil {
-		// This is most likely because this is the first Pod and is not yet added to service endpints. Other
+		// This is most likely because this is the first Pod and is not yet added to service endpoints. Other
 		// error types are possible, but checking for those would likely make the system too fragile.
 		return unreachable, nil
 	}

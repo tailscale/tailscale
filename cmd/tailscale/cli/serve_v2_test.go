@@ -1765,7 +1765,7 @@ func TestIsLegacyInvocation(t *testing.T) {
 			}
 
 			if gotTranslation != tt.translation {
-				t.Fatalf("expected translaction to be %q but got %q", tt.translation, gotTranslation)
+				t.Fatalf("expected translation to be %q but got %q", tt.translation, gotTranslation)
 			}
 		})
 	}
