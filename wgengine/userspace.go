@@ -451,6 +451,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		cb := e.pongCallback[pong.Data]
 		e.logf("wgengine: got TSMP pong %02x, peerAPIPort=%v; cb=%v", pong.Data, pong.PeerAPIPort, cb != nil)
 		if cb != nil {
+			delete(e.pongCallback, pong.Data)
 			go cb(pong)
 		}
 	}
@@ -464,6 +465,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 			// We didn't swallow it, so let it flow to the host.
 			return false
 		}
+		delete(e.icmpEchoResponseCallback, idSeq)
 		e.logf("wgengine: got diagnostic ICMP response %02x", idSeq)
 		go cb()
 		return true
