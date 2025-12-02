@@ -4,6 +4,15 @@
 #
 # This script detects the current operating system, and installs
 # Tailscale according to that OS's conventions.
+#
+# Environment variables:
+#   TRACK: Set to "stable" or "unstable" (default: stable)
+#   TAILSCALE_VERSION: Pin to a specific version (e.g., "1.88.4")
+#
+# Examples:
+#   curl -fsSL https://tailscale.com/install.sh | sh
+#   curl -fsSL https://tailscale.com/install.sh | TAILSCALE_VERSION=1.88.4 sh
+#   curl -fsSL https://tailscale.com/install.sh | TRACK=unstable sh
 
 set -eu
 
@@ -25,6 +34,7 @@ main() {
 	APT_KEY_TYPE="" # Only for apt-based distros
 	APT_SYSTEMCTL_START=false # Only needs to be true for Kali
 	TRACK="${TRACK:-stable}"
+	TAILSCALE_VERSION="${TAILSCALE_VERSION:-}"
 
 	case "$TRACK" in
 		stable|unstable)
@@ -502,7 +512,14 @@ main() {
 	# Step 4: run the installation.
 	OSVERSION="$OS"
 	[ "$VERSION" != "" ] && OSVERSION="$OSVERSION $VERSION"
-	echo "Installing Tailscale for $OSVERSION, using method $PACKAGETYPE"
+
+	# Prepare package name with optional version
+	PACKAGE_NAME="tailscale"
+	if [ -n "$TAILSCALE_VERSION" ]; then
+		echo "Installing Tailscale $TAILSCALE_VERSION for $OSVERSION, using method $PACKAGETYPE"
+	else
+		echo "Installing Tailscale for $OSVERSION, using method $PACKAGETYPE"
+	fi
 	case "$PACKAGETYPE" in
 		apt)
 			export DEBIAN_FRONTEND=noninteractive
@@ -527,7 +544,11 @@ main() {
 				;;
 			esac
 			$SUDO apt-get update
-			$SUDO apt-get install -y tailscale tailscale-archive-keyring
+			if [ -n "$TAILSCALE_VERSION" ]; then
+				$SUDO apt-get install -y "tailscale=$TAILSCALE_VERSION" tailscale-archive-keyring
+			else
+				$SUDO apt-get install -y tailscale tailscale-archive-keyring
+			fi
 			if [ "$APT_SYSTEMCTL_START" = "true" ]; then
 				$SUDO systemctl enable --now tailscaled
 				$SUDO systemctl start tailscaled
@@ -538,7 +559,11 @@ main() {
 			set -x
 			$SUDO yum install yum-utils -y
 			$SUDO yum-config-manager -y --add-repo "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
-			$SUDO yum install tailscale -y
+			if [ -n "$TAILSCALE_VERSION" ]; then
+				$SUDO yum install "tailscale-$TAILSCALE_VERSION" -y
+			else
+				$SUDO yum install tailscale -y
+			fi
 			$SUDO systemctl enable --now tailscaled
 			set +x
 		;;
@@ -578,14 +603,22 @@ main() {
 				echo "unexpected: unknown dnf version $DNF_VERSION"
 				exit 1
 			fi
-			$SUDO dnf install -y tailscale
+			if [ -n "$TAILSCALE_VERSION" ]; then
+				$SUDO dnf install -y "tailscale-$TAILSCALE_VERSION"
+			else
+				$SUDO dnf install -y tailscale
+			fi
 			$SUDO systemctl enable --now tailscaled
 			set +x
 		;;
 		tdnf)
 			set -x
 			curl -fsSL "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo" > /etc/yum.repos.d/tailscale.repo
-			$SUDO tdnf install -y tailscale
+			if [ -n "$TAILSCALE_VERSION" ]; then
+				$SUDO tdnf install -y "tailscale-$TAILSCALE_VERSION"
+			else
+				$SUDO tdnf install -y tailscale
+			fi
 			$SUDO systemctl enable --now tailscaled
 			set +x
 		;;
@@ -594,19 +627,33 @@ main() {
 			$SUDO rpm --import "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/repo.gpg"
 			$SUDO zypper --non-interactive ar -g -r "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
 			$SUDO zypper --non-interactive --gpg-auto-import-keys refresh
-			$SUDO zypper --non-interactive install tailscale
+			if [ -n "$TAILSCALE_VERSION" ]; then
+				$SUDO zypper --non-interactive install "tailscale=$TAILSCALE_VERSION"
+			else
+				$SUDO zypper --non-interactive install tailscale
+			fi
 			$SUDO systemctl enable --now tailscaled
 			set +x
 			;;
 		pacman)
 			set -x
-			$SUDO pacman -S tailscale --noconfirm
+			if [ -n "$TAILSCALE_VERSION" ]; then
+				echo "Warning: Arch Linux maintains their own Tailscale package. Version pinning may not work as expected, as the target version may no longer be available."
+				$SUDO pacman -S "tailscale=$TAILSCALE_VERSION" --noconfirm
+			else
+				$SUDO pacman -S tailscale --noconfirm
+			fi
 			$SUDO systemctl enable --now tailscaled
 			set +x
 			;;
 		pkg)
 			set -x
-			$SUDO pkg install --yes tailscale
+			if [ -n "$TAILSCALE_VERSION" ]; then
+				echo "Warning: FreeBSD maintains their own Tailscale package. Version pinning may not work as expected, as the target version may no longer be available."
+				$SUDO pkg install --yes "tailscale-$TAILSCALE_VERSION"
+			else
+				$SUDO pkg install --yes tailscale
+			fi
 			$SUDO service tailscaled enable
 			$SUDO service tailscaled start
 			set +x
@@ -621,19 +668,34 @@ main() {
 					exit 1
 				fi
 			fi
-			$SUDO apk add tailscale
+			if [ -n "$TAILSCALE_VERSION" ]; then
+				echo "Warning: Alpine Linux maintains their own Tailscale package. Version pinning may not work as expected, as the target version may no longer be available."
+				$SUDO apk add "tailscale=$TAILSCALE_VERSION"
+			else
+				$SUDO apk add tailscale
+			fi
 			$SUDO rc-update add tailscale
 			$SUDO rc-service tailscale start
 			set +x
 			;;
 		xbps)
 			set -x
-			$SUDO xbps-install tailscale -y
+			if [ -n "$TAILSCALE_VERSION" ]; then
+				echo "Warning: Void Linux maintains their own Tailscale package. Version pinning may not work as expected, as the target version may no longer be available."
+				$SUDO xbps-install "tailscale-$TAILSCALE_VERSION" -y
+			else
+				$SUDO xbps-install tailscale -y
+			fi
 			set +x
 			;;
 		emerge)
 			set -x
-			$SUDO emerge --ask=n net-vpn/tailscale
+			if [ -n "$TAILSCALE_VERSION" ]; then
+				echo "Warning: Gentoo maintains their own Tailscale package. Version pinning may not work as expected, as the target version may no longer be available."
+				$SUDO emerge --ask=n "=net-vpn/tailscale-$TAILSCALE_VERSION"
+			else
+				$SUDO emerge --ask=n net-vpn/tailscale
+			fi
 			set +x
 			;;
 		appstore)
