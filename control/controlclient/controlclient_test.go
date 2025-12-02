@@ -196,7 +196,7 @@ func TestRetryableErrors(t *testing.T) {
 		{fmt.Errorf("%w: %w", errHTTPPostFailure, errors.New("bad post")), true},
 		{fmt.Errorf("%w: %w", errNoNodeKey, errors.New("not node key")), true},
 		{errBadHTTPResponse(429, "too may requests"), true},
-		{errBadHTTPResponse(500, "internal server eror"), true},
+		{errBadHTTPResponse(500, "internal server error"), true},
 		{errBadHTTPResponse(502, "bad gateway"), true},
 		{errBadHTTPResponse(503, "service unavailable"), true},
 		{errBadHTTPResponse(504, "gateway timeout"), true},

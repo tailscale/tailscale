@@ -263,7 +263,7 @@ func debugCmd() *ffcli.Command {
 					fs := newFlagSet("watch-ipn")
 					fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
 					fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include initial status")
-					fs.BoolVar(&watchIPNArgs.rateLimit, "rate-limit", true, "rate limit messags")
+					fs.BoolVar(&watchIPNArgs.rateLimit, "rate-limit", true, "rate limit messages")
 					fs.IntVar(&watchIPNArgs.count, "count", 0, "exit after printing this many statuses, or 0 to keep going forever")
 					return fs
 				})(),
