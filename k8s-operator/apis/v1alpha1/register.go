@@ -67,6 +67,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&RecorderList{},
 		&ProxyGroup{},
 		&ProxyGroupList{},
+		&Tailnet{},
+		&TailnetList{},
 	)
 
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
