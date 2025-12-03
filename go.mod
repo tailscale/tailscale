@@ -91,7 +91,7 @@ require (
 	github.com/tailscale/mkctr v0.0.0-20250228050937-c75ea1476830
 	github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc
-	github.com/tailscale/setec v0.0.0-20250205144240-8898a29c3fbb
+	github.com/tailscale/setec v0.0.0-20251203133219-2ab774e4129a
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
 	github.com/tailscale/wireguard-go v0.0.0-20250716170648-1d0488a3d7da
@@ -191,7 +191,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.33.0 // indirect
 	go.uber.org/automaxprocs v1.5.3 // indirect
 	golang.org/x/telemetry v0.0.0-20251111182119-bc8e575c7b54 // indirect
-	golang.org/x/tools/go/expect v0.1.1-deprecated // indirect
 	golang.org/x/tools/go/packages/packagestest v0.1.1-deprecated // indirect
 	golang.org/x/xerrors v0.0.0-20240716161551-93cc26a95ae9 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
@@ -417,7 +416,7 @@ require (
 	golang.org/x/image v0.27.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
-	google.golang.org/protobuf v1.36.6 // indirect
+	google.golang.org/protobuf v1.36.8 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
