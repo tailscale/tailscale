@@ -18,6 +18,8 @@
 - [ProxyGroupList](#proxygrouplist)
 - [Recorder](#recorder)
 - [RecorderList](#recorderlist)
+- [Tailnet](#tailnet)
+- [TailnetList](#tailnetlist)
 
 
 
@@ -1154,6 +1156,44 @@ _Appears in:_
 
 
 
+#### Tailnet
+
+
+
+
+
+
+
+_Appears in:_
+- [TailnetList](#tailnetlist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `Tailnet` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[TailnetSpec](#tailnetspec)_ | Spec describes the desired state of the Tailnet.<br />More info:<br />https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status |  |  |
+| `status` _[TailnetStatus](#tailnetstatus)_ | Status describes the status of the Tailnet. This is set<br />and managed by the Tailscale operator. |  |  |
+
+
+#### TailnetCredentials
+
+
+
+
+
+
+
+_Appears in:_
+- [TailnetSpec](#tailnetspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `secretName` _string_ | The name of the secret containing the OAuth credentials. This secret must contain two fields "client_id" and<br />"client_secret". |  |  |
+
+
 #### TailnetDevice
 
 
@@ -1170,6 +1210,59 @@ _Appears in:_
 | `hostname` _string_ | Hostname is the fully qualified domain name of the device.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
 | `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the device. |  |  |
 | `staticEndpoints` _string array_ | StaticEndpoints are user configured, 'static' endpoints by which tailnet peers can reach this device. |  |  |
+
+
+#### TailnetList
+
+
+
+
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `TailnetList` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[Tailnet](#tailnet) array_ |  |  |  |
+
+
+#### TailnetSpec
+
+
+
+
+
+
+
+_Appears in:_
+- [Tailnet](#tailnet)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `loginUrl` _string_ | URL of the control plane to be used by all resources managed by the operator using this Tailnet. |  |  |
+| `credentials` _[TailnetCredentials](#tailnetcredentials)_ | Denotes the location of the OAuth credentials to use for authenticating with this Tailnet. |  |  |
+
+
+#### TailnetStatus
+
+
+
+
+
+
+
+_Appears in:_
+- [Tailnet](#tailnet)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ |  |  |  |
 
 
 #### TailscaleConfig
