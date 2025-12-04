@@ -11,6 +11,7 @@ import (
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/syspolicy/policyclient"
 )
 
@@ -25,8 +26,8 @@ func (kv kv) String() string {
 // NewOSConfigurator created a new OS configurator.
 //
 // The health tracker may be nil; the knobs may be nil and are ignored on this platform.
-func NewOSConfigurator(logf logger.Logf, health *health.Tracker, _ policyclient.Client, _ *controlknobs.Knobs, interfaceName string) (OSConfigurator, error) {
-	return newOSConfigurator(logf, health, interfaceName,
+func NewOSConfigurator(logf logger.Logf, health *health.Tracker, bus *eventbus.Bus, _ policyclient.Client, _ *controlknobs.Knobs, interfaceName string) (OSConfigurator, error) {
+	return newOSConfigurator(logf, health, bus, interfaceName,
 		newOSConfigEnv{
 			rcIsResolvd: rcIsResolvd,
 			fs:          directFS{},
@@ -39,7 +40,7 @@ type newOSConfigEnv struct {
 	rcIsResolvd func(resolvConfContents []byte) bool
 }
 
-func newOSConfigurator(logf logger.Logf, health *health.Tracker, interfaceName string, env newOSConfigEnv) (ret OSConfigurator, err error) {
+func newOSConfigurator(logf logger.Logf, health *health.Tracker, bus *eventbus.Bus, interfaceName string, env newOSConfigEnv) (ret OSConfigurator, err error) {
 	var debug []kv
 	dbg := func(k, v string) {
 		debug = append(debug, kv{k, v})
@@ -54,7 +55,7 @@ func newOSConfigurator(logf logger.Logf, health *health.Tracker, interfaceName s
 	bs, err := env.fs.ReadFile(resolvConf)
 	if os.IsNotExist(err) {
 		dbg("rc", "missing")
-		return newDirectManager(logf, health), nil
+		return newDirectManager(logf, health, bus), nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading /etc/resolv.conf: %w", err)
@@ -66,7 +67,7 @@ func newOSConfigurator(logf logger.Logf, health *health.Tracker, interfaceName s
 	}
 
 	dbg("resolvd", "missing")
-	return newDirectManager(logf, health), nil
+	return newDirectManager(logf, health, bus), nil
 }
 
 func rcIsResolvd(resolvConfContents []byte) bool {

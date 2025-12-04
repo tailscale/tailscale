@@ -134,7 +134,7 @@ func TestManagerWindowsGPCopy(t *testing.T) {
 	}
 	defer delIfKey()
 
-	cfg, err := NewOSConfigurator(logf, nil, policyclient.NoPolicyClient{}, nil, fakeInterface.String())
+	cfg, err := NewOSConfigurator(logf, nil, nil, policyclient.NoPolicyClient{}, nil, fakeInterface.String())
 	if err != nil {
 		t.Fatalf("NewOSConfigurator: %v\n", err)
 	}
@@ -263,7 +263,7 @@ func runTest(t *testing.T, isLocal bool) {
 	}
 	defer delIfKey()
 
-	cfg, err := NewOSConfigurator(logf, nil, policyclient.NoPolicyClient{}, nil, fakeInterface.String())
+	cfg, err := NewOSConfigurator(logf, nil, nil, policyclient.NoPolicyClient{}, nil, fakeInterface.String())
 	if err != nil {
 		t.Fatalf("NewOSConfigurator: %v\n", err)
 	}

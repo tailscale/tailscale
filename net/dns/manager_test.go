@@ -6,9 +6,11 @@ package dns
 import (
 	"errors"
 	"net/netip"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -936,7 +938,7 @@ func TestManager(t *testing.T) {
 			bus := eventbustest.NewBus(t)
 			dialer := tsdial.NewDialer(netmon.NewStatic())
 			dialer.SetBus(bus)
-			m := NewManager(t.Logf, &f, health.NewTracker(bus), dialer, nil, knobs, goos)
+			m := NewManager(t.Logf, &f, health.NewTracker(bus), dialer, nil, knobs, goos, bus)
 			m.resolver.TestOnlySetHook(f.SetResolver)
 
 			if err := m.Set(test.in); err != nil {
@@ -1045,7 +1047,7 @@ func TestConfigRecompilation(t *testing.T) {
 	bus := eventbustest.NewBus(t)
 	dialer := tsdial.NewDialer(netmon.NewStatic())
 	dialer.SetBus(bus)
-	m := NewManager(t.Logf, f, health.NewTracker(bus), dialer, nil, nil, "darwin")
+	m := NewManager(t.Logf, f, health.NewTracker(bus), dialer, nil, nil, "darwin", bus)
 
 	var managerConfig *resolver.Config
 	m.resolver.TestOnlySetHook(func(cfg resolver.Config) {
@@ -1077,4 +1079,40 @@ func TestConfigRecompilation(t *testing.T) {
 	if managerConfig == nil {
 		t.Fatalf("Want non nil managerConfig.  Got nil")
 	}
+}
+
+func TestTrampleRetrample(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeOSConfigurator{}
+		f.BaseConfig = OSConfig{
+			Nameservers: mustIPs("1.1.1.1"),
+		}
+
+		config := Config{
+			Routes:        upstreams("ts.net", "69.4.2.0", "foo.ts.net", ""),
+			SearchDomains: fqdns("foo.ts.net"),
+		}
+
+		bus := eventbustest.NewBus(t)
+		dialer := tsdial.NewDialer(netmon.NewStatic())
+		dialer.SetBus(bus)
+		m := NewManager(t.Logf, f, health.NewTracker(bus), dialer, nil, nil, "linux", bus)
+
+		// Initial set should error out and store the config
+		if err := m.Set(config); err != nil {
+			t.Fatalf("Want nil error. Got non-nil")
+		}
+
+		// Set no config
+		f.OSConfig = OSConfig{}
+
+		inj := eventbustest.NewInjector(t, bus)
+		eventbustest.Inject(inj, TrampleDNS{})
+		synctest.Wait()
+
+		t.Logf("OSConfig: %+v", f.OSConfig)
+		if reflect.DeepEqual(f.OSConfig, OSConfig{}) {
+			t.Errorf("Expected config to be set, got empty config")
+		}
+	})
 }
