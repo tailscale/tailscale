@@ -5300,6 +5300,16 @@ rules:
     - apiGroups:
         - tailscale.com
       resources:
+        - tailnets
+        - tailnets/status
+      verbs:
+        - get
+        - list
+        - watch
+        - update
+    - apiGroups:
+        - tailscale.com
+      resources:
         - recorders
         - recorders/status
       verbs:
