@@ -245,6 +245,8 @@ type LocalBackend struct {
 	// to prevent state changes while invoking callbacks.
 	extHost *ExtensionHost
 
+	peerAPIPorts syncs.AtomicValue[map[netip.Addr]int] // can be read without b.mu held; TODO(nickkhyl): remove or move to nodeBackend?
+
 	// The mutex protects the following elements.
 	mu syncs.Mutex
 
@@ -295,8 +297,8 @@ type LocalBackend struct {
 	authActor         ipnauth.Actor // an actor who called [LocalBackend.StartLoginInteractive] last, or nil; TODO(nickkhyl): move to nodeBackend
 	egg               bool
 	prevIfState       *netmon.State
-	peerAPIServer     *peerAPIServer // or nil
-	peerAPIListeners  []*peerAPIListener
+	peerAPIServer     *peerAPIServer     // or nil
+	peerAPIListeners  []*peerAPIListener // TODO(nickkhyl): move to nodeBackend
 	loginFlags        controlclient.LoginFlags
 	notifyWatchers    map[string]*watchSession // by session ID
 	lastStatusTime    time.Time                // status.AsOf value of the last processed status update
@@ -4710,14 +4712,8 @@ func (b *LocalBackend) GetPeerAPIPort(ip netip.Addr) (port uint16, ok bool) {
 	if !buildfeatures.HasPeerAPIServer {
 		return 0, false
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for _, pln := range b.peerAPIListeners {
-		if pln.ip == ip {
-			return uint16(pln.port), true
-		}
-	}
-	return 0, false
+	portInt, ok := b.peerAPIPorts.Load()[ip]
+	return uint16(portInt), ok
 }
 
 // handlePeerAPIConn serves an already-accepted connection c.
@@ -5209,6 +5205,7 @@ func (b *LocalBackend) closePeerAPIListenersLocked() {
 		pln.Close()
 	}
 	b.peerAPIListeners = nil
+	b.peerAPIPorts.Store(nil)
 }
 
 // peerAPIListenAsync is whether the operating system requires that we
@@ -5281,6 +5278,7 @@ func (b *LocalBackend) initPeerAPIListenerLocked() {
 	b.peerAPIServer = ps
 
 	isNetstack := b.sys.IsNetstack()
+	peerAPIPorts := make(map[netip.Addr]int)
 	for i, a := range addrs.All() {
 		var ln net.Listener
 		var err error
@@ -5313,7 +5311,9 @@ func (b *LocalBackend) initPeerAPIListenerLocked() {
 		b.logf("peerapi: serving on %s", pln.urlStr)
 		go pln.serve()
 		b.peerAPIListeners = append(b.peerAPIListeners, pln)
+		peerAPIPorts[a.Addr()] = pln.port
 	}
+	b.peerAPIPorts.Store(peerAPIPorts)
 
 	b.goTracker.Go(b.doSetHostinfoFilterServices)
 }
