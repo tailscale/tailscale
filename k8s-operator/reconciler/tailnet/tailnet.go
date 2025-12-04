@@ -1,0 +1,271 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
+// Package tailnet provides reconciliation logic for the Tailnet custom resource definition. It is responsible for
+// ensuring the referenced OAuth credentials are valid and have the required scopes to be able to generate authentication
+// keys, manage devices & manage VIP services.
+package tailnet
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"path"
+
+	"go.uber.org/zap"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/clientcredentials"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	"tailscale.com/internal/client/tailscale"
+	"tailscale.com/ipn"
+	operatorutils "tailscale.com/k8s-operator"
+	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/tstime"
+)
+
+type (
+	// The Reconciler type is a reconcile.TypedReconciler implementation used to manage the reconciliation of
+	// Tailnet custom resources.
+	Reconciler struct {
+		client.Client
+
+		tailscaleNamespace string
+		clock              tstime.Clock
+		logger             *zap.SugaredLogger
+	}
+
+	// The ReconcilerOptions type contains configuration values for the Reconciler.
+	ReconcilerOptions struct {
+		// The namespace the operator is installed in. This reconciler expects Tailnet OAuth credentials to be stored
+		// in Secret resources within this namespace.
+		TailscaleNamespace string
+		// Controls which clock to use for performing time-based functions. This is typically modified for use
+		// in tests.
+		Clock tstime.Clock
+		// The logger to use for this Reconciler.
+		Logger *zap.SugaredLogger
+	}
+)
+
+// RegisterReconciler registers a new Reconciler instance for Tailnet custom resources onto the manager.Manager
+// implementation. It watches specifically for changes to Tailnet custom resources. The ReconcilerOptions can be
+// used to modify the behaviour of the Reconciler.
+func RegisterReconciler(mgr manager.Manager, options ReconcilerOptions) error {
+	const name = "tailnet-reconciler"
+
+	reconciler := &Reconciler{
+		Client:             mgr.GetClient(),
+		tailscaleNamespace: options.TailscaleNamespace,
+		clock:              options.Clock,
+		logger:             options.Logger.Named(name),
+	}
+
+	return builder.
+		ControllerManagedBy(mgr).
+		For(&tsapi.Tailnet{}).
+		Named(name).
+		Complete(reconciler)
+}
+
+// Reconcile is invoked when a change occurs to Tailnet resources within the cluster. On create/update, the Tailnet
+// resource is validated ensuring that the specified Secret exists and contains valid OAuth credentials that have
+// required permissions to perform all necessary functions by the operator.
+func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	var tailnet tsapi.Tailnet
+	err := r.Get(ctx, req.NamespacedName, &tailnet)
+	switch {
+	case apierrors.IsNotFound(err):
+		return reconcile.Result{}, nil
+	case err != nil:
+		return reconcile.Result{}, fmt.Errorf("failed to get Tailnet %q: %v", req.NamespacedName, err)
+	}
+
+	if !tailnet.DeletionTimestamp.IsZero() {
+		return r.delete(ctx, &tailnet)
+	}
+
+	return r.createOrUpdate(ctx, &tailnet)
+}
+
+func (r *Reconciler) delete(ctx context.Context, tailnet *tsapi.Tailnet) (reconcile.Result, error) {
+	// TODO(davidsbond): what exactly do we want to do here? Should we delete the secret outright? What happens if
+	// someone tries to delete the default tailnet?
+	return reconcile.Result{}, nil
+}
+
+// Constants for condition reasons.
+const (
+	ReasonInvalidOAuth  = "InvalidOAuth"
+	ReasonInvalidSecret = "InvalidSecret"
+	ReasonValid         = "TailnetValid"
+)
+
+func (r *Reconciler) createOrUpdate(ctx context.Context, tailnet *tsapi.Tailnet) (reconcile.Result, error) {
+	name := types.NamespacedName{Name: tailnet.Spec.Credentials.SecretName, Namespace: r.tailscaleNamespace}
+
+	var secret corev1.Secret
+	err := r.Get(ctx, name, &secret)
+
+	// The referenced Secret does not exist within the tailscale namespace, so we'll mark the Tailnet as not ready
+	// for use.
+	if apierrors.IsNotFound(err) {
+		operatorutils.SetTailnetCondition(
+			tailnet,
+			tsapi.TailnetReady,
+			metav1.ConditionFalse,
+			ReasonInvalidSecret,
+			"referenced secret does not exist",
+			r.clock,
+			r.logger,
+		)
+
+		if err = r.Status().Update(ctx, tailnet); err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to update Tailnet status for %q: %w", tailnet.Name, err)
+		}
+
+		return reconcile.Result{}, nil
+	}
+
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to get secret %q: %w", name, err)
+	}
+
+	// We first ensure that the referenced secret contains the required fields. Otherwise, we set the Tailnet as
+	// invalid. The operator will not allow the use of this Tailnet while it is in an invalid state.
+	if ok := r.ensureSecret(tailnet, &secret); !ok {
+		if err = r.Status().Update(ctx, tailnet); err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to update Tailnet status for %q: %w", tailnet.Name, err)
+		}
+
+		return reconcile.Result{}, nil
+	}
+
+	tsClient := r.createClient(ctx, tailnet, &secret)
+
+	// Second, we ensure the OAuth credentials supplied in the secret are valid and have the required scopes to access
+	// the various API endpoints required by the operator.
+	if ok := r.ensurePermissions(ctx, tsClient, tailnet); !ok {
+		if err = r.Status().Update(ctx, tailnet); err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to update Tailnet status for %q: %w", tailnet.Name, err)
+		}
+
+		return reconcile.Result{}, nil
+	}
+
+	operatorutils.SetTailnetCondition(
+		tailnet,
+		tsapi.TailnetReady,
+		metav1.ConditionTrue,
+		ReasonValid,
+		ReasonValid,
+		r.clock,
+		r.logger,
+	)
+
+	if err = r.Status().Update(ctx, tailnet); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to update Tailnet status for %q: %w", tailnet.Name, err)
+	}
+
+	return reconcile.Result{}, nil
+}
+
+// Constants for OAuth credential fields within the Secret referenced by the Tailnet.
+const (
+	clientIDKey     = "client_id"
+	clientSecretKey = "client_secret"
+)
+
+func (r *Reconciler) createClient(ctx context.Context, tailnet *tsapi.Tailnet, secret *corev1.Secret) *tailscale.Client {
+	baseURL := ipn.DefaultControlURL
+	if tailnet.Spec.LoginURL != "" {
+		baseURL = tailnet.Spec.LoginURL
+	}
+
+	credentials := clientcredentials.Config{
+		ClientID:     string(secret.Data[clientIDKey]),
+		ClientSecret: string(secret.Data[clientSecretKey]),
+		TokenURL:     path.Join(baseURL, "/api/v2/oauth/token"),
+	}
+
+	source := credentials.TokenSource(ctx)
+	httpClient := oauth2.NewClient(ctx, source)
+
+	tsClient := tailscale.NewClient("-", nil)
+	tsClient.UserAgent = "tailscale-k8s-operator"
+	tsClient.HTTPClient = httpClient
+	tsClient.BaseURL = baseURL
+
+	return tsClient
+}
+
+func (r *Reconciler) ensurePermissions(ctx context.Context, tsClient *tailscale.Client, tailnet *tsapi.Tailnet) bool {
+	// Perform basic list requests here to confirm that the OAuth credentials referenced on the Tailnet resource
+	// can perform the basic operations required for the operator to function. This has a caveat of only performing
+	// read actions, as we don't want to create arbitrary keys and VIP services. However, it will catch when a user
+	// has completely forgotten an entire scope that's required.
+	var errs error
+	if _, err := tsClient.Devices(ctx, nil); err != nil {
+		errs = errors.Join(errs, fmt.Errorf("failed to list devices: %w", err))
+	}
+
+	if _, err := tsClient.Keys(ctx); err != nil {
+		errs = errors.Join(errs, fmt.Errorf("failed to list auth keys: %w", err))
+	}
+
+	if _, err := tsClient.ListVIPServices(ctx); err != nil {
+		errs = errors.Join(errs, fmt.Errorf("failed to list VIP services: %w", err))
+	}
+
+	if errs != nil {
+		operatorutils.SetTailnetCondition(
+			tailnet,
+			tsapi.TailnetReady,
+			metav1.ConditionFalse,
+			ReasonInvalidOAuth,
+			errs.Error(),
+			r.clock,
+			r.logger,
+		)
+
+		return false
+	}
+
+	return true
+}
+
+func (r *Reconciler) ensureSecret(tailnet *tsapi.Tailnet, secret *corev1.Secret) bool {
+	var message string
+
+	switch {
+	case len(secret.Data) == 0:
+		message = fmt.Sprintf("Secret %q is empty", secret.Name)
+	case len(secret.Data[clientIDKey]) == 0:
+		message = fmt.Sprintf("Secret %q is missing the client_id field", secret.Name)
+	case len(secret.Data[clientSecretKey]) == 0:
+		message = fmt.Sprintf("Secret %q is missing the client_secret field", secret.Name)
+	}
+
+	if message == "" {
+		return true
+	}
+
+	operatorutils.SetTailnetCondition(
+		tailnet,
+		tsapi.TailnetReady,
+		metav1.ConditionFalse,
+		ReasonInvalidSecret,
+		message,
+		r.clock,
+		r.logger,
+	)
+
+	return false
+}
