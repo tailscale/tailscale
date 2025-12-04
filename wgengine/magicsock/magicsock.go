@@ -599,6 +599,11 @@ func newConn(logf logger.Logf) *Conn {
 		discoInfo:    make(map[key.DiscoPublic]*discoInfo),
 		cloudInfo:    newCloudInfo(logf),
 	}
+	syncs.RegisterMutex(&c.mu, "magicsock.Conn.mu")
+	syncs.RegisterMutex(&c.pconn4.mu, "magicsock.Conn.pconn4.mu")
+	syncs.RegisterMutex(&c.pconn6.mu, "magicsock.Conn.pconn6.mu")
+	syncs.RegisterMutex(&c.endpointTracker.mu, "magicsock.Conn.endpointTracker.mu")
+
 	c.discoAtomic.Set(discoPrivate)
 	c.bind = &connBind{Conn: c, closed: true}
 	c.receiveBatchPool = sync.Pool{New: func() any {
@@ -3145,6 +3150,7 @@ func (c *Conn) updateNodes(update NodeViewsUpdate) (peersChanged bool) {
 			heartbeatDisabled: flags.heartbeatDisabled,
 			isWireguardOnly:   n.IsWireGuardOnly(),
 		}
+		syncs.RegisterMutex(&ep.mu, "magicsock.endpoint.mu")
 		switch runtime.GOOS {
 		case "ios", "android":
 			// Omit, to save memory. Prior to 2024-03-20 we used to limit it to

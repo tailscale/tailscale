@@ -80,6 +80,10 @@ type Logger struct {
 	routePrefixes []netip.Prefix
 }
 
+func (nl *Logger) RegisterMutex() {
+	syncs.RegisterMutex(&nl.mu, "netlog.Logger.mu")
+}
+
 // Running reports whether the logger is running.
 func (nl *Logger) Running() bool {
 	nl.mu.Lock()
