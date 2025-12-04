@@ -948,12 +948,8 @@ func (b *LocalBackend) pauseOrResumeControlClientLocked() {
 // down, clients switch over to other replicas whilst the existing connections are kept alive for some period of time.
 func (b *LocalBackend) DisconnectControl() {
 	b.mu.Lock()
-	cc := b.resetControlClientLocked()
-	b.mu.Unlock()
-
-	if cc != nil {
-		cc.Shutdown()
-	}
+	defer b.mu.Unlock()
+	b.resetControlClientLocked()
 }
 
 // linkChange is our network monitor callback, called whenever the network changes.
@@ -2419,14 +2415,6 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	logf := logger.WithPrefix(b.logf, "Start: ")
 	b.startOnce.Do(b.initOnce)
 
-	var clientToShutdown controlclient.Client
-	defer func() {
-		if clientToShutdown != nil {
-			// Shutdown outside of b.mu to avoid deadlocks.
-			b.goTracker.Go(clientToShutdown.Shutdown)
-		}
-	}()
-
 	if opts.UpdatePrefs != nil {
 		if err := b.checkPrefsLocked(opts.UpdatePrefs); err != nil {
 			return err
@@ -2469,7 +2457,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	// into sync with the minimal changes. But that's not how it
 	// is right now, which is a sign that the code is still too
 	// complicated.
-	clientToShutdown = b.resetControlClientLocked()
+	b.resetControlClientLocked()
 	httpTestClient := b.httpTestClient
 
 	if b.hostinfo != nil {
@@ -5810,13 +5798,12 @@ func (b *LocalBackend) setControlClientLocked(cc controlclient.Client) {
 	b.ignoreControlClientUpdates.Store(cc == nil)
 }
 
-// resetControlClientLocked sets b.cc to nil and returns the old value. If the
-// returned value is non-nil, the caller must call Shutdown on it after
-// releasing b.mu.
-func (b *LocalBackend) resetControlClientLocked() controlclient.Client {
+// resetControlClientLocked sets b.cc to nil and shuts down the previous
+// control client, if any.
+func (b *LocalBackend) resetControlClientLocked() {
 	syncs.RequiresMutex(&b.mu)
 	if b.cc == nil {
-		return nil
+		return
 	}
 
 	b.resetAuthURLLocked()
@@ -5836,7 +5823,7 @@ func (b *LocalBackend) resetControlClientLocked() controlclient.Client {
 	}
 	prev := b.cc
 	b.setControlClientLocked(nil)
-	return prev
+	prev.Shutdown()
 }
 
 // resetAuthURLLocked resets authURL, canceling any pending interactive login.
@@ -6930,10 +6917,7 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 	b.updateFilterLocked(ipn.PrefsView{})
 	// Reset the NetworkMap in the engine
 	b.e.SetNetworkMap(new(netmap.NetworkMap))
-	if prevCC := b.resetControlClientLocked(); prevCC != nil {
-		// Shutdown outside of b.mu to avoid deadlocks.
-		b.goTracker.Go(prevCC.Shutdown)
-	}
+	b.resetControlClientLocked()
 	// TKA errors should not prevent resetting the backend state.
 	// However, we should still return the error to the caller.
 	tkaErr := b.initTKALocked()
@@ -7012,10 +6996,7 @@ func (b *LocalBackend) ResetAuth() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if prevCC := b.resetControlClientLocked(); prevCC != nil {
-		// Shutdown outside of b.mu to avoid deadlocks.
-		b.goTracker.Go(prevCC.Shutdown)
-	}
+	b.resetControlClientLocked()
 	if err := b.clearMachineKeyLocked(); err != nil {
 		return err
 	}
