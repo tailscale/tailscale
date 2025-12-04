@@ -761,6 +761,16 @@ func (t *Tracker) SetMagicSockDERPHome(region int, homeless bool) {
 	t.selfCheckLocked()
 }
 
+// DERPHomeRegion returns the current home DERP region ID, or 0 if unknown.
+func (t *Tracker) DERPHomeRegion() int {
+	if t.nil() {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.derpHomeRegion
+}
+
 // NoteMapRequestHeard notes whenever we successfully sent a map request
 // to control for which we received a 200 response.
 func (t *Tracker) NoteMapRequestHeard(mr *tailcfg.MapRequest) {
