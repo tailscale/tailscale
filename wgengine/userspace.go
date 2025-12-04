@@ -569,16 +569,49 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	var tsmpRequestGroup singleflight.Group[netip.Addr, struct{}]
 	eventbus.SubscribeFunc(ec, func(req magicsock.TSMPDiscoKeyRequest) {
 		go tsmpRequestGroup.Do(req.DstIP, func() (struct{}, error) {
-			// DiscoKeyRequests are triggered by an incoming WireGuard handshake
-			// initiation arriving before a disco ping, which is a likely
-			// indicator that disco pings failed due to a lack of key
-			// synchronization. If the requests are sent immediately, before the
-			// handshake state is accepted in the WireGuard client state
-			// machine, this starts a new session, and the two peer state
-			// machines conflict, causing loss and additional delays. Delaying
-			// the send avoids this, so coalesce duplicate sends, and delay them
-			// by a short time to avoid the state machine conflict.
-			time.Sleep(time.Millisecond)
+			nodePeer, ok := e.PeerForIP(req.DstIP)
+			if !ok {
+				return struct{}{}, fmt.Errorf("did not find peer by IP %q", req.DstIP)
+			}
+			peer, ok := e.PeerByKey(nodePeer.Node.Key())
+			if !ok {
+				return struct{}{}, fmt.Errorf("did not find peer by key %q", nodePeer.Node.Key())
+			}
+			peer.IsValid()
+
+			// Poll for handshake completion with a timeout.
+			const pollInterval = 10 * time.Millisecond
+			const maxWaitStart = 100 * time.Microsecond
+			ctxStart, cancelStart := context.WithTimeout(context.Background(), maxWaitStart)
+			defer cancelStart()
+
+			sawHandshake := true
+			// Wait for the handshake to be in-progress.
+			e.logf("Looking for magicsock handshake")
+			for peer.HandshakeAttempts() == 0 {
+				if ctxStart.Err() != nil {
+					// Timeout waiting for handshake to start, send TSMP package.
+					sawHandshake = false
+					break
+				}
+				time.Sleep(pollInterval)
+			}
+			e.logf("Found magicsock handshake: %t", sawHandshake)
+
+			const maxWaitComplete = 2 * time.Second
+			ctx, cancel := context.WithTimeout(context.Background(), maxWaitComplete)
+			defer cancel()
+			// Wait for the in-progress handshake to complete.
+			e.logf("Waiting for magicsock handshake to complete")
+			for sawHandshake && peer.HandshakeAttempts() > 0 {
+				if ctx.Err() != nil {
+					// Timeout waiting for completion. The handshake is stuck. Abort.
+					e.logf("Timed out waiting for magicsock handshake to complete")
+					return struct{}{}, errors.New("timeout waiting for handshake to complete")
+				}
+				time.Sleep(pollInterval)
+			}
+
 			if err := e.sendTSMPDiscoKeyRequest(req.DstIP); err != nil {
 				e.logf("wgengine: failed to send TSMP disco key request: %v", err)
 			}
