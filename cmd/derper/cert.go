@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"time"
 
+	upstreamacme "golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 	"tailscale.com/tailcfg"
 )
@@ -47,11 +48,16 @@ func certProviderByCertMode(mode, dir, hostname string) (certProvider, error) {
 		return nil, errors.New("missing required --certdir flag")
 	}
 	switch mode {
-	case "letsencrypt":
+	case "letsencrypt", "gcp":
 		certManager := &autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
 			HostPolicy: autocert.HostWhitelist(hostname),
 			Cache:      autocert.DirCache(dir),
+		}
+		if mode == "gcp" {
+			certManager.Client = &upstreamacme.Client{
+				DirectoryURL: "https://dv.acme-v02.api.pki.goog/directory",
+			}
 		}
 		if hostname == "derp.tailscale.com" {
 			certManager.HostPolicy = prodAutocertHostPolicy
