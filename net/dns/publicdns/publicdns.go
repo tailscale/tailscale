@@ -277,6 +277,13 @@ func populate() {
 	addDoH("2606:1a40:1::4", "https://freedns.controld.com/family")
 }
 
+// Control D -big.oisd.nl
+	addDoH("76.76.2.32", "https://freedns.controld.com/x-oisd")
+	addDoH("76.76.10.32", "https://freedns.controld.com/x-oisd")
+	addDoH("2606:1a40::32", "https://freedns.controld.com/x-oisd")
+	addDoH("2606:1a40:1::32", "https://freedns.controld.com/x-oisd")
+}
+
 var (
 	// The NextDNS IPv6 ranges (primary and secondary). The customer ID is
 	// encoded in the lower bytes and is used (in hex form) as the DoH query
