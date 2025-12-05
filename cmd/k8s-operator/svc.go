@@ -377,6 +377,9 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 
 func validateService(svc *corev1.Service) []string {
 	violations := make([]string, 0)
+	if svc.Spec.ClusterIP == "None" {
+		violations = append(violations, "headless Services are not supported.")
+	}
 	if svc.Annotations[AnnotationTailnetTargetFQDN] != "" && svc.Annotations[AnnotationTailnetTargetIP] != "" {
 		violations = append(violations, fmt.Sprintf("only one of annotations %s and %s can be set", AnnotationTailnetTargetIP, AnnotationTailnetTargetFQDN))
 	}
@@ -415,7 +418,7 @@ func (a *ServiceReconciler) shouldExposeDNSName(svc *corev1.Service) bool {
 }
 
 func (a *ServiceReconciler) shouldExposeClusterIP(svc *corev1.Service) bool {
-	if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
+	if svc.Spec.ClusterIP == "" {
 		return false
 	}
 	return isTailscaleLoadBalancerService(svc, a.isDefaultLoadBalancer) || hasExposeAnnotation(svc)
