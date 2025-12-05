@@ -687,6 +687,10 @@ func (lg loggingResponseWriter) Flush() {
 	f.Flush()
 }
 
+func (lg *loggingResponseWriter) Unwrap() http.ResponseWriter {
+	return lg.ResponseWriter
+}
+
 // errorHandler is an http.Handler that wraps a ReturnHandler to render the
 // returned errors to the client and pass them back to any logHandlers.
 type errorHandler struct {
