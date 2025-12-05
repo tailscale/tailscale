@@ -1,27 +1,67 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build windows
-
 // Package winnet contains Windows-specific networking code.
 package winnet
 
 import (
 	"fmt"
+	"sync"
 	"syscall"
 	"unsafe"
 
 	"github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
+	"golang.org/x/sys/windows"
 )
 
-const CLSID_NetworkListManager = "{DCB00C01-570F-4A9B-8D69-199FDBA5723B}"
+type NLM_CONNECTIVITY int32
 
+const (
+	NLM_CONNECTIVITY_DISCONNECTED NLM_CONNECTIVITY = 0
+	NLM_CONNECTIVITY_IPV4_NOTRAFFIC NLM_CONNECTIVITY = 0x1
+	NLM_CONNECTIVITY_IPV6_NOTRAFFIC NLM_CONNECTIVITY = 0x2
+	NLM_CONNECTIVITY_IPV4_SUBNET NLM_CONNECTIVITY = 0x10
+	NLM_CONNECTIVITY_IPV4_LOCALNETWORK NLM_CONNECTIVITY = 0x20
+	NLM_CONNECTIVITY_IPV4_INTERNET NLM_CONNECTIVITY = 0x40
+	NLM_CONNECTIVITY_IPV6_SUBNET NLM_CONNECTIVITY = 0x100
+	NLM_CONNECTIVITY_IPV6_LOCALNETWORK NLM_CONNECTIVITY = 0x200
+	NLM_CONNECTIVITY_IPV6_INTERNET NLM_CONNECTIVITY = 0x400
+)
+
+var CLSID_NetworkListManager = ole.NewGUID("{DCB00C01-570F-4A9B-8D69-199FDBA5723B}")
+
+var IID_INetworkListManager = ole.NewGUID("{DCB00000-570F-4A9B-8D69-199FDBA5723B}")
 var IID_INetwork = ole.NewGUID("{8A40A45D-055C-4B62-ABD7-6D613E2CEAEC}")
 var IID_INetworkConnection = ole.NewGUID("{DCB00005-570F-4A9B-8D69-199FDBA5723B}")
 
 type NetworkListManager struct {
-	d *ole.Dispatch
+	i *INetworkListManager
+}
+
+func (m *NetworkListManager) GetNetwork(networkID windows.GUID) (*INetwork, error) {
+	return m.i.GetNetwork(networkID)
+}
+
+type INetworkListManager struct {
+	ole.IUnknown
+}
+
+func (i *INetworkListManager) VTable() *INetworkListManagerVtbl {
+	return (*INetworkListManagerVtbl)(unsafe.Pointer(i.RawVTable))
+}
+
+type INetworkListManagerVtbl struct {
+	ole.IDispatchVtbl
+	GetNetworks uintptr
+	GetNetwork uintptr
+	GetNetworkConnections uintptr
+	GetNetworkConnection uintptr
+	Get_IsConnectedToInternet uintptr
+	Get_IsConnected uintptr
+	GetConnectivity uintptr
+	SetSimulatedProfileInfo uintptr
+	ClearSimulatedProfileInfo uintptr
 }
 
 type INetworkConnection struct {
@@ -62,25 +102,29 @@ type INetworkVtbl struct {
 	SetCategory                uintptr
 }
 
-func NewNetworkListManager(c *ole.Connection) (*NetworkListManager, error) {
-	err := c.Create(CLSID_NetworkListManager)
-	if err != nil {
-		return nil, err
-	}
-	defer c.Release()
-
-	d, err := c.Dispatch()
+func newNetworkListManager() (*NetworkListManager, error) {
+	unk, err := ole.CreateInstance(CLSID_NetworkListManager, IID_INetworkListManager)
 	if err != nil {
 		return nil, err
 	}
 
+	nlm := (*INetworkListManager)(unsafe.Pointer(unk))
 	return &NetworkListManager{
-		d: d,
+		i: nlm,
 	}, nil
 }
 
-func (m *NetworkListManager) Release() {
-	m.d.Release()
+var (
+	once sync.Once
+	nlm *NetworkListManager
+	nlmErr error
+)
+
+func GetNetworkListManager() (*NetworkListManager, error) {
+	once.Do(func() {
+		nlm, nlmErr = newNetworkListManager()
+	})
+	return nlm, nlmErr
 }
 
 func (cl ConnectionList) Release() {
@@ -103,7 +147,10 @@ func asIID(u ole.UnknownLike, iid *ole.GUID) (*ole.IDispatch, error) {
 }
 
 func (m *NetworkListManager) GetNetworkConnections() (ConnectionList, error) {
-	ncraw, err := m.d.Call("GetNetworkConnections")
+	d := ole.Dispatch{
+		Object: (*ole.IDispatch)(unsafe.Pointer(m.i)),
+	}
+	ncraw, err := d.Call("GetNetworkConnections")
 	if err != nil {
 		return nil, err
 	}
@@ -168,6 +215,20 @@ func (n *INetwork) SetCategory(v int32) error {
 	return nil
 }
 
+func (n *INetwork) GetConnectivity() (c NLM_CONNECTIVITY, _ error) {
+	r, _, _ := syscall.SyscallN(
+		n.VTable().GetConnectivity,
+		uintptr(unsafe.Pointer(n)),
+		uintptr(unsafe.Pointer(&c)),
+	)
+
+	if int32(r) < 0 {
+		return 0, ole.NewError(r)
+	}
+
+	return c, nil
+}
+
 func (n *INetwork) VTable() *INetworkVtbl {
 	return (*INetworkVtbl)(unsafe.Pointer(n.RawVTable))
 }
@@ -189,4 +250,18 @@ func (v *INetworkConnection) GetNetwork() (*INetwork, error) {
 	}
 
 	return result, nil
+}
+
+func (v *INetworkConnection) GetAdapterId() (string, error) {
+	buf := ole.GUID{}
+	hr, _, _ := syscall.Syscall(
+		v.VTable().GetAdapterId,
+		2,
+		uintptr(unsafe.Pointer(v)),
+		uintptr(unsafe.Pointer(&buf)),
+		0)
+	if hr != 0 {
+		return "", fmt.Errorf("GetAdapterId failed: %08x", hr)
+	}
+	return buf.String(), nil
 }
