@@ -6,6 +6,7 @@
 package ipnlocal
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -5028,7 +5029,6 @@ func (b *LocalBackend) authReconfig() {
 //
 // b.mu must be held.
 func (b *LocalBackend) authReconfigLocked() {
-
 	if b.shutdownCalled {
 		b.logf("[v1] authReconfig: skipping because in shutdown")
 		return
@@ -5053,7 +5053,6 @@ func (b *LocalBackend) authReconfigLocked() {
 	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, version.OS())
 	// If the current node is an app connector, ensure the app connector machine is started
 	b.reconfigAppConnectorLocked(nm, prefs)
-
 	if !prefs.WantRunning() {
 		b.logf("[v1] authReconfig: skipping because !WantRunning.")
 		return
@@ -5573,6 +5572,47 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	}
 }
 
+func doDebugThing(b *LocalBackend) {
+	client := &http.Client{
+		Transport: b.Dialer().PeerAPITransport(),
+		Timeout:   10 * time.Second,
+	}
+	peers := b.NodeBackend().AppendMatchingPeers(nil, func(nv tailcfg.NodeView) bool {
+		return nv.Name() == "8feb8d2ec80f.taile25f.ts.net."
+	})
+	dstURL := b.NodeBackend().PeerAPIBase(peers[0])
+	ctx := context.Background()
+	r := appc.ConnectorTransitIPRequest{
+		TransitIPs: []appc.TransitIPRequest{
+			{TransitIP: netip.MustParseAddr("1.1.1.1"), DestinationIP: netip.MustParseAddr("2.1.1.1")},
+			{TransitIP: netip.MustParseAddr("1.1.1.2"), DestinationIP: netip.MustParseAddr("2.1.1.2")},
+		},
+	}
+	rbs, err := json.Marshal(r)
+	if err != nil {
+		fmt.Println(err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", dstURL+"/v0/connector/transit-ip/", bytes.NewBuffer(rbs))
+	if err != nil {
+		panic(err)
+	}
+	resp, err := client.Do(req)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil {
+		panic(err)
+	}
+	if resp != nil {
+		fmt.Println("doDebugThing resp.Status:", resp.Status)
+		bs, err := io.ReadAll(resp.Body)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println("doDebugThning resp.body:", string(bs))
+	}
+}
+
 // enterStateLocked transitions the backend into newState, updating internal
 // state and propagating events out as needed.
 //
@@ -5676,6 +5716,9 @@ func (b *LocalBackend) enterStateLocked(newState ipn.State) {
 				addrStrs = append(addrStrs, p.Addr().String())
 			}
 			feature.SystemdStatus("Connected; %s; %s", activeLogin, strings.Join(addrStrs, " "))
+		}
+		if b.currentNode().Self().Name() == "d783302cc665.taile25f.ts.net." {
+			doDebugThing(b)
 		}
 	default:
 		b.logf("[unexpected] unknown newState %#v", newState)
