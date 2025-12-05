@@ -334,10 +334,10 @@ func (nt *natTest) runTest(addNode ...addNodeFunc) pingRoute {
 
 		cmd := exec.Command("qemu-system-x86_64",
 			"-M", "microvm,isa-serial=off",
-			"-m", "384M",
-			"-nodefaults", "-no-user-config", "-nographic",
+			"-m", "1024M",
+			"-nodefaults", "-no-user-config", "-nographic", "-enable-kvm",
 			"-kernel", nt.kernel,
-			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-76baa2d60001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet gokrazy.remote_syslog.target="+sysLogAddr+" tailscale-tta=1"+envStr,
+			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-76baa2d60001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=kvm-clock gokrazy.remote_syslog.target="+sysLogAddr+" tailscale-tta=1"+envStr,
 			"-drive", "id=blk0,file="+disk+",format=qcow2",
 			"-device", "virtio-blk-device,drive=blk0",
 			"-netdev", "stream,id=net0,addr.type=unix,addr.path="+sockAddr,
@@ -347,6 +347,7 @@ func (nt *natTest) runTest(addNode ...addNodeFunc) pingRoute {
 			"-chardev", "stdio,id=virtiocon0,mux=on",
 			"-device", "virtconsole,chardev=virtiocon0",
 			"-mon", "chardev=virtiocon0,mode=readline",
+			"-cpu", "host",
 		)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
