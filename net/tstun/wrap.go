@@ -194,6 +194,10 @@ type Wrapper struct {
 	// false otherwise.
 	OnICMPEchoResponseReceived func(*packet.Parsed) bool
 
+	// GetDiscoPublicKey, if non-nil, returns the local node's disco public key.
+	// This is called when responding to TSMP disco key requests.
+	GetDiscoPublicKey func() key.DiscoPublic
+
 	// PeerAPIPort, if non-nil, returns the peerapi port that's
 	// running for the given IP address.
 	PeerAPIPort func(netip.Addr) (port uint16, ok bool)
@@ -211,8 +215,8 @@ type Wrapper struct {
 
 	metrics *metrics
 
-	eventClient              *eventbus.Client
-	discoKeyAdvertisementPub *eventbus.Publisher[DiscoKeyAdvertisement]
+	eventClient       *eventbus.Client
+	discoKeyUpdatePub *eventbus.Publisher[DiscoKeyUpdate]
 }
 
 type metrics struct {
@@ -225,6 +229,12 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 		inboundDroppedPacketsTotal:  reg.DroppedPacketsInbound(),
 		outboundDroppedPacketsTotal: reg.DroppedPacketsOutbound(),
 	}
+}
+
+// DiscoKeyUpdate is published on the event bus when a TSMP disco key update is received.
+type DiscoKeyUpdate struct {
+	SrcIP netip.Addr
+	Key   [32]byte
 }
 
 // tunInjectedRead is an injected packet pretending to be a tun.Read().
@@ -288,7 +298,7 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry,
 	}
 
 	w.eventClient = bus.Client("net.tstun")
-	w.discoKeyAdvertisementPub = eventbus.Publish[DiscoKeyAdvertisement](w.eventClient)
+	w.discoKeyUpdatePub = eventbus.Publish[DiscoKeyUpdate](w.eventClient)
 
 	w.vectorBuffer = make([][]byte, tdev.BatchSize())
 	for i := range w.vectorBuffer {
@@ -1126,11 +1136,6 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 	return n, err
 }
 
-type DiscoKeyAdvertisement struct {
-	Src netip.Addr
-	Key key.DiscoPublic
-}
-
 func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook packet.CaptureCallback, pc *peerConfigTable, gro *gro.GRO) (filter.Response, *gro.GRO) {
 	if captHook != nil {
 		captHook(packet.FromPeer, t.now(), p.Buffer(), p.CaptureMeta)
@@ -1141,16 +1146,21 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook pa
 			t.noteActivity()
 			t.injectOutboundPong(p, pingReq)
 			return filter.DropSilently, gro
-		} else if discoKeyAdvert, ok := p.AsTSMPDiscoAdvertisement(); ok {
-			t.discoKeyAdvertisementPub.Publish(DiscoKeyAdvertisement{
-				Src: discoKeyAdvert.Src,
-				Key: discoKeyAdvert.Key,
-			})
-			return filter.DropSilently, gro
 		} else if data, ok := p.AsTSMPPong(); ok {
 			if f := t.OnTSMPPongReceived; f != nil {
 				f(data)
 			}
+		} else if _, ok := p.AsTSMPDiscoKeyRequest(); ok {
+			t.noteActivity()
+			t.injectOutboundDiscoKeyUpdate(p)
+			return filter.DropSilently, gro
+		} else if discoKeyUpdate, ok := p.AsTSMPDiscoKeyUpdate(); ok {
+			// Publish to eventbus for subscribers
+			t.discoKeyUpdatePub.Publish(DiscoKeyUpdate{
+				SrcIP: p.Src.Addr(),
+				Key:   discoKeyUpdate.DiscoKey,
+			})
+			return filter.DropSilently, gro
 		}
 	}
 
@@ -1457,6 +1467,36 @@ func (t *Wrapper) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingReque
 	}
 
 	t.InjectOutbound(packet.Generate(pong, nil))
+}
+
+func (t *Wrapper) injectOutboundDiscoKeyUpdate(pp *packet.Parsed) {
+	if t.GetDiscoPublicKey == nil {
+		return
+	}
+
+	discoKey := t.GetDiscoPublicKey()
+	if discoKey.IsZero() {
+		return
+	}
+
+	update := packet.TSMPDiscoKeyUpdate{
+		DiscoKey: discoKey.Raw32(),
+	}
+
+	switch pp.IPVersion {
+	case 4:
+		h4 := pp.IP4Header()
+		h4.ToResponse()
+		update.IPHeader = h4
+	case 6:
+		h6 := pp.IP6Header()
+		h6.ToResponse()
+		update.IPHeader = h6
+	default:
+		return
+	}
+
+	t.InjectOutbound(packet.Generate(update, nil))
 }
 
 // InjectOutbound makes the Wrapper device behave as if a packet

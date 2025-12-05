@@ -4,14 +4,8 @@
 package packet
 
 import (
-	"bytes"
-	"encoding/hex"
 	"net/netip"
-	"slices"
 	"testing"
-
-	"go4.org/mem"
-	"tailscale.com/types/key"
 )
 
 func TestTailscaleRejectedHeader(t *testing.T) {
@@ -78,61 +72,168 @@ func TestTailscaleRejectedHeader(t *testing.T) {
 	}
 }
 
-func TestTSMPDiscoKeyAdvertisementMarshal(t *testing.T) {
-	var (
-		// IPv4: Ver(4)Len(5), TOS, Len(53), ID, Flags, TTL(64), Proto(99), Cksum
-		headerV4, _ = hex.DecodeString("45000035000000004063705d")
-		// IPv6: Ver(6)TCFlow, Len(33), NextHdr(99), HopLim(64)
-		headerV6, _ = hex.DecodeString("6000000000216340")
+func TestTSMPDiscoKeyRequest(t *testing.T) {
+	t.Run("Manual", func(t *testing.T) {
+		var payload [1]byte
+		payload[0] = byte(TSMPTypeDiscoKeyRequest)
 
-		packetType = []byte{'a'}
-		testKey    = bytes.Repeat([]byte{'a'}, 32)
+		var p Parsed
+		p.IPProto = TSMP
+		p.dataofs = 40 // simulate after IP header
+		buf := make([]byte, 40+1)
+		copy(buf[40:], payload[:])
+		p.b = buf
+		p.length = len(buf)
 
-		// IPs
-		srcV4 = netip.MustParseAddr("1.2.3.4")
-		dstV4 = netip.MustParseAddr("4.3.2.1")
-		srcV6 = netip.MustParseAddr("2001:db8::1")
-		dstV6 = netip.MustParseAddr("2001:db8::2")
-	)
+		_, ok := p.AsTSMPDiscoKeyRequest()
+		if !ok {
+			t.Fatal("failed to parse TSMP disco key request")
+		}
+	})
 
-	join := func(parts ...[]byte) []byte {
-		return bytes.Join(parts, nil)
+	t.Run("RoundTripIPv4", func(t *testing.T) {
+		src := netip.MustParseAddr("100.64.0.1")
+		dst := netip.MustParseAddr("100.64.0.2")
+
+		iph := IP4Header{
+			IPProto: TSMP,
+			Src:     src,
+			Dst:     dst,
+		}
+
+		var payload [1]byte
+		payload[0] = byte(TSMPTypeDiscoKeyRequest)
+
+		pkt := Generate(iph, payload[:])
+		t.Logf("Generated packet: %d bytes, hex: %x", len(pkt), pkt)
+
+		// Manually check what decode4 would see
+		if len(pkt) >= 4 {
+			declaredLen := int(uint16(pkt[2])<<8 | uint16(pkt[3]))
+			t.Logf("Packet buffer length: %d, IP header declares length: %d", len(pkt), declaredLen)
+			t.Logf("Protocol byte at [9]: 0x%02x = %d", pkt[9], pkt[9])
+		}
+
+		var p Parsed
+		p.Decode(pkt)
+		t.Logf("Decoded: IPVersion=%d IPProto=%v Src=%v Dst=%v length=%d dataofs=%d",
+			p.IPVersion, p.IPProto, p.Src, p.Dst, p.length, p.dataofs)
+
+		if p.IPVersion != 4 {
+			t.Errorf("IPVersion = %d, want 4", p.IPVersion)
+		}
+		if p.IPProto != TSMP {
+			t.Errorf("IPProto = %v, want TSMP", p.IPProto)
+		}
+		if p.Src.Addr() != src {
+			t.Errorf("Src = %v, want %v", p.Src.Addr(), src)
+		}
+		if p.Dst.Addr() != dst {
+			t.Errorf("Dst = %v, want %v", p.Dst.Addr(), dst)
+		}
+
+		_, ok := p.AsTSMPDiscoKeyRequest()
+		if !ok {
+			t.Fatal("failed to parse TSMP disco key request from generated packet")
+		}
+	})
+
+	t.Run("RoundTripIPv6", func(t *testing.T) {
+		src := netip.MustParseAddr("2001:db8::1")
+		dst := netip.MustParseAddr("2001:db8::2")
+
+		iph := IP6Header{
+			IPProto: TSMP,
+			Src:     src,
+			Dst:     dst,
+		}
+
+		var payload [1]byte
+		payload[0] = byte(TSMPTypeDiscoKeyRequest)
+
+		pkt := Generate(iph, payload[:])
+		t.Logf("Generated packet: %d bytes", len(pkt))
+
+		var p Parsed
+		p.Decode(pkt)
+
+		if p.IPVersion != 6 {
+			t.Errorf("IPVersion = %d, want 6", p.IPVersion)
+		}
+		if p.IPProto != TSMP {
+			t.Errorf("IPProto = %v, want TSMP", p.IPProto)
+		}
+		if p.Src.Addr() != src {
+			t.Errorf("Src = %v, want %v", p.Src.Addr(), src)
+		}
+		if p.Dst.Addr() != dst {
+			t.Errorf("Dst = %v, want %v", p.Dst.Addr(), dst)
+		}
+
+		_, ok := p.AsTSMPDiscoKeyRequest()
+		if !ok {
+			t.Fatal("failed to parse TSMP disco key request from generated packet")
+		}
+	})
+}
+
+func TestTSMPDiscoKeyUpdate(t *testing.T) {
+	var discoKey [32]byte
+	for i := range discoKey {
+		discoKey[i] = byte(i + 10)
 	}
 
-	tests := []struct {
-		name string
-		tka  TSMPDiscoKeyAdvertisement
-		want []byte
-	}{
-		{
-			name: "v4Header",
-			tka: TSMPDiscoKeyAdvertisement{
-				Src: srcV4,
-				Dst: dstV4,
-				Key: key.DiscoPublicFromRaw32(mem.B(testKey)),
+	t.Run("IPv4", func(t *testing.T) {
+		update := TSMPDiscoKeyUpdate{
+			IPHeader: IP4Header{
+				IPProto: TSMP,
+				Src:     netip.MustParseAddr("1.2.3.4"),
+				Dst:     netip.MustParseAddr("5.6.7.8"),
 			},
-			want: join(headerV4, srcV4.AsSlice(), dstV4.AsSlice(), packetType, testKey),
-		},
-		{
-			name: "v6Header",
-			tka: TSMPDiscoKeyAdvertisement{
-				Src: srcV6,
-				Dst: dstV6,
-				Key: key.DiscoPublicFromRaw32(mem.B(testKey)),
-			},
-			want: join(headerV6, srcV6.AsSlice(), dstV6.AsSlice(), packetType, testKey),
-		},
-	}
+			DiscoKey: discoKey,
+		}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := tt.tka.Marshal()
-			if err != nil {
-				t.Errorf("error mashalling TSMPDiscoAdvertisement: %s", err)
-			}
-			if !slices.Equal(got, tt.want) {
-				t.Errorf("error mashalling TSMPDiscoAdvertisement, expected: \n%x, \ngot:\n%x", tt.want, got)
-			}
-		})
-	}
+		pkt := make([]byte, update.Len())
+		if err := update.Marshal(pkt); err != nil {
+			t.Fatal(err)
+		}
+
+		var p Parsed
+		p.Decode(pkt)
+
+		parsed, ok := p.AsTSMPDiscoKeyUpdate()
+		if !ok {
+			t.Fatal("failed to parse TSMP disco key update")
+		}
+		if parsed.DiscoKey != discoKey {
+			t.Errorf("disco key mismatch: got %v, want %v", parsed.DiscoKey, discoKey)
+		}
+	})
+
+	t.Run("IPv6", func(t *testing.T) {
+		update := TSMPDiscoKeyUpdate{
+			IPHeader: IP6Header{
+				IPProto: TSMP,
+				Src:     netip.MustParseAddr("2001:db8::1"),
+				Dst:     netip.MustParseAddr("2001:db8::2"),
+			},
+			DiscoKey: discoKey,
+		}
+
+		pkt := make([]byte, update.Len())
+		if err := update.Marshal(pkt); err != nil {
+			t.Fatal(err)
+		}
+
+		var p Parsed
+		p.Decode(pkt)
+
+		parsed, ok := p.AsTSMPDiscoKeyUpdate()
+		if !ok {
+			t.Fatal("failed to parse TSMP disco key update")
+		}
+		if parsed.DiscoKey != discoKey {
+			t.Errorf("disco key mismatch: got %v, want %v", parsed.DiscoKey, discoKey)
+		}
+	})
 }

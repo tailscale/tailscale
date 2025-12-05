@@ -54,6 +54,7 @@ import (
 	"tailscale.com/util/execqueue"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
+	"tailscale.com/util/singleflight"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
@@ -471,6 +472,13 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		return true
 	}
 
+	e.tundev.GetDiscoPublicKey = func() key.DiscoPublic {
+		if e.magicConn == nil {
+			return key.DiscoPublic{}
+		}
+		return e.magicConn.DiscoPublicKey()
+	}
+
 	// wgdev takes ownership of tundev, will close it when closed.
 	e.logf("Creating WireGuard device...")
 	e.wgdev = wgcfg.NewDevice(e.tundev, e.magicConn.Bind(), e.wgLogger.DeviceLogger)
@@ -550,6 +558,36 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 			f()
 		}
 		e.linkChangeQueue.Add(func() { e.linkChange(&cd) })
+	})
+	eventbus.SubscribeFunc(ec, func(update tstun.DiscoKeyUpdate) {
+		e.logf("wgengine: got TSMP disco key update from %v via eventbus", update.SrcIP)
+		if e.magicConn != nil {
+			pkt := packet.TSMPDiscoKeyUpdate{
+				DiscoKey: update.Key,
+			}
+			e.magicConn.HandleDiscoKeyUpdate(update.SrcIP, pkt)
+		}
+	})
+	var tsmpRequestGroup singleflight.Group[netip.Addr, struct{}]
+	eventbus.SubscribeFunc(ec, func(req magicsock.TSMPDiscoKeyRequest) {
+		go tsmpRequestGroup.Do(req.DstIP, func() (struct{}, error) {
+			// DiscoKeyRequests are triggered by an incoming WireGuard handshake
+			// initiation arriving before a disco ping, which is a likely
+			// indicator that disco pings failed due to a lack of key
+			// synchronization. If the requests are sent immediately, before the
+			// handshake state is accepted in the WireGuard client state
+			// machine, this starts a new session, and the two peer state
+			// machines conflict, causing loss and additional delays. Delaying
+			// the send avoids this, so coalesce duplicate sends, and delay them
+			// by a short time to avoid the state machine conflict.
+			time.Sleep(time.Millisecond)
+			if err := e.sendTSMPDiscoKeyRequest(req.DstIP); err != nil {
+				e.logf("wgengine: failed to send TSMP disco key request: %v", err)
+			}
+			e.logf("wgengine: sending TSMP disco key request to %v", req.DstIP)
+			req.MetricSent.Add(1)
+			return struct{}{}, nil
+		})
 	})
 	e.eventClient = ec
 	e.logf("Engine created.")
@@ -1438,7 +1476,6 @@ func (e *userspaceEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, size in
 		e.magicConn.Ping(peer, res, size, cb)
 	case "TSMP":
 		e.sendTSMPPing(ip, peer, res, cb)
-		e.sendTSMPDiscoAdvertisement(ip)
 	case "ICMP":
 		e.sendICMPEchoRequest(ip, peer, res, cb)
 	}
@@ -1559,29 +1596,6 @@ func (e *userspaceEngine) sendTSMPPing(ip netip.Addr, peer tailcfg.NodeView, res
 	e.tundev.InjectOutbound(tsmpPing)
 }
 
-func (e *userspaceEngine) sendTSMPDiscoAdvertisement(ip netip.Addr) {
-	srcIP, err := e.mySelfIPMatchingFamily(ip)
-	if err != nil {
-		e.logf("getting matching node: %s", err)
-		return
-	}
-	tdka := packet.TSMPDiscoKeyAdvertisement{
-		Src: srcIP,
-		Dst: ip,
-		Key: e.magicConn.DiscoPublicKey(),
-	}
-	payload, err := tdka.Marshal()
-	if err != nil {
-		e.logf("error generating TSMP Advertisement: %s", err)
-		metricTSMPDiscoKeyAdvertisementError.Add(1)
-	} else if err := e.tundev.InjectOutbound(payload); err != nil {
-		e.logf("error sending TSMP Advertisement: %s", err)
-		metricTSMPDiscoKeyAdvertisementError.Add(1)
-	} else {
-		metricTSMPDiscoKeyAdvertisementSent.Add(1)
-	}
-}
-
 func (e *userspaceEngine) setTSMPPongCallback(data [8]byte, cb func(packet.TSMPPongReply)) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1593,6 +1607,35 @@ func (e *userspaceEngine) setTSMPPongCallback(data [8]byte, cb func(packet.TSMPP
 	} else {
 		e.pongCallback[data] = cb
 	}
+}
+
+// sendTSMPDiscoKeyRequest sends a TSMP disco key request to the given peer IP.
+func (e *userspaceEngine) sendTSMPDiscoKeyRequest(ip netip.Addr) error {
+	srcIP, err := e.mySelfIPMatchingFamily(ip)
+	if err != nil {
+		return err
+	}
+
+	var iph packet.Header
+	if srcIP.Is4() {
+		iph = packet.IP4Header{
+			IPProto: ipproto.TSMP,
+			Src:     srcIP,
+			Dst:     ip,
+		}
+	} else {
+		iph = packet.IP6Header{
+			IPProto: ipproto.TSMP,
+			Src:     srcIP,
+			Dst:     ip,
+		}
+	}
+
+	var tsmpPayload [1]byte
+	tsmpPayload[0] = byte(packet.TSMPTypeDiscoKeyRequest)
+
+	tsmpRequest := packet.Generate(iph, tsmpPayload[:])
+	return e.tundev.InjectOutbound(tsmpRequest)
 }
 
 func (e *userspaceEngine) setICMPEchoResponseCallback(idSeq uint32, cb func()) {
@@ -1748,9 +1791,6 @@ var (
 
 	metricNumMajorChanges = clientmetric.NewCounter("wgengine_major_changes")
 	metricNumMinorChanges = clientmetric.NewCounter("wgengine_minor_changes")
-
-	metricTSMPDiscoKeyAdvertisementSent  = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_sent")
-	metricTSMPDiscoKeyAdvertisementError = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_error")
 )
 
 func (e *userspaceEngine) InstallCaptureHook(cb packet.CaptureCallback) {

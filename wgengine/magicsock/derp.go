@@ -721,6 +721,16 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 		update(0, netip.AddrPortFrom(ep.nodeAddr, 0), srcAddr.ap, 1, dm.n, true)
 	}
 
+	// Request disco key from peer via TSMP if we receive a WireGuard handshake
+	// over DERP without recent disco success. This handles the "WireGuard-first"
+	// case where WireGuard establishes a tunnel via DERP before disco succeeds
+	// (e.g., control plane unreachable or stale disco keys).
+	if looksLikeWireGuardHandshake(b[:n]) && n > 0 {
+		c.mu.Lock()
+		c.requestDiscoKeyViaTSMPLocked(dm.src, ep)
+		c.mu.Unlock()
+	}
+
 	c.metrics.inboundPacketsDERPTotal.Add(1)
 	c.metrics.inboundBytesDERPTotal.Add(int64(n))
 	return n, ep
