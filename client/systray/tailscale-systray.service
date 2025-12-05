@@ -1,6 +1,6 @@
 [Unit]
 Description=Tailscale System Tray
-After=systemd.service
+After=graphical.target
 
 [Service]
 Type=simple
