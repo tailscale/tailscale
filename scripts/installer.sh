@@ -8,10 +8,12 @@
 # Environment variables:
 #   TRACK: Set to "stable" or "unstable" (default: stable)
 #   TAILSCALE_VERSION: Pin to a specific version (e.g., "1.88.4")
+#   TAILSCALE_NO_AUTOUPDATE: Set to "true" to prevent auto-updates when pinning a version (default: false)
 #
 # Examples:
 #   curl -fsSL https://tailscale.com/install.sh | sh
 #   curl -fsSL https://tailscale.com/install.sh | TAILSCALE_VERSION=1.88.4 sh
+#   curl -fsSL https://tailscale.com/install.sh | TAILSCALE_VERSION=1.88.4 TAILSCALE_NO_AUTOUPDATE=true sh
 #   curl -fsSL https://tailscale.com/install.sh | TRACK=unstable sh
 
 set -eu
@@ -35,6 +37,7 @@ main() {
 	APT_SYSTEMCTL_START=false # Only needs to be true for Kali
 	TRACK="${TRACK:-stable}"
 	TAILSCALE_VERSION="${TAILSCALE_VERSION:-}"
+	TAILSCALE_NO_AUTOUPDATE="${TAILSCALE_NO_AUTOUPDATE:-false}"
 
 	case "$TRACK" in
 		stable|unstable)
@@ -44,6 +47,25 @@ main() {
 			exit 1
 			;;
 	esac
+
+	# Validate TAILSCALE_NO_AUTOUPDATE requires TAILSCALE_VERSION
+	if [ "$TAILSCALE_NO_AUTOUPDATE" = "true" ] && [ -z "$TAILSCALE_VERSION" ]; then
+		echo "Warning: TAILSCALE_NO_AUTOUPDATE=true requires TAILSCALE_VERSION to be set."
+		echo "Auto-update prevention will be skipped. Proceeding with standard installation."
+		TAILSCALE_NO_AUTOUPDATE=false
+	fi
+
+	# Validate TAILSCALE_VERSION format if provided
+	if [ -n "$TAILSCALE_VERSION" ]; then
+		# Remove 'v' prefix if present
+		TAILSCALE_VERSION="${TAILSCALE_VERSION#v}"
+		# Check format: X.Y.Z or X.Y.Z-suffix
+		if ! echo "$TAILSCALE_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+)?$'; then
+			echo "Error: Invalid TAILSCALE_VERSION format: $TAILSCALE_VERSION"
+			echo "Expected format: X.Y.Z (e.g., 1.88.4)"
+			exit 1
+		fi
+	fi
 
 	if [ -f /etc/os-release ]; then
 		# /etc/os-release populates a number of shell variables. We care about the following:
@@ -545,7 +567,17 @@ main() {
 			esac
 			$SUDO apt-get update
 			if [ -n "$TAILSCALE_VERSION" ]; then
-				$SUDO apt-get install -y "tailscale=$TAILSCALE_VERSION" tailscale-archive-keyring
+				$SUDO apt-get install -y --allow-downgrades "tailscale=$TAILSCALE_VERSION" tailscale-archive-keyring
+				if [ "$TAILSCALE_NO_AUTOUPDATE" = "true" ]; then
+					# Clear any existing hold first
+					$SUDO apt-mark unhold tailscale 2>/dev/null || true
+					if $SUDO apt-mark hold tailscale; then
+						echo "Package locked to $TAILSCALE_VERSION. After login, also run: tailscale set --auto-update=false"
+						echo "To unlock: sudo apt-mark unhold tailscale"
+					else
+						echo "Warning: Failed to hold Tailscale version. Auto-updates may still occur."
+					fi
+				fi
 			else
 				$SUDO apt-get install -y tailscale tailscale-archive-keyring
 			fi
@@ -560,7 +592,26 @@ main() {
 			$SUDO yum install yum-utils -y
 			$SUDO yum-config-manager -y --add-repo "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
 			if [ -n "$TAILSCALE_VERSION" ]; then
-				$SUDO yum install "tailscale-$TAILSCALE_VERSION" -y
+				# Check if a different version is installed and downgrade if needed
+				if rpm -q tailscale >/dev/null 2>&1; then
+					$SUDO yum downgrade "tailscale-$TAILSCALE_VERSION" -y || $SUDO yum install "tailscale-$TAILSCALE_VERSION" -y
+				else
+					$SUDO yum install "tailscale-$TAILSCALE_VERSION" -y
+				fi
+				if [ "$TAILSCALE_NO_AUTOUPDATE" = "true" ]; then
+					if $SUDO yum install yum-plugin-versionlock -y 2>/dev/null; then
+						# Clear any existing locks for tailscale first
+						$SUDO yum versionlock delete tailscale 2>/dev/null || true
+						if $SUDO yum versionlock tailscale; then
+							echo "Package locked to $TAILSCALE_VERSION. After login, also run: tailscale set --auto-update=false"
+							echo "To unlock: sudo yum versionlock delete tailscale"
+						else
+							echo "Warning: Failed to lock Tailscale version. Auto-updates may still occur."
+						fi
+					else
+						echo "Warning: yum-plugin-versionlock not available. Auto-updates cannot be prevented."
+					fi
+				fi
 			else
 				$SUDO yum install tailscale -y
 			fi
@@ -604,7 +655,26 @@ main() {
 				exit 1
 			fi
 			if [ -n "$TAILSCALE_VERSION" ]; then
-				$SUDO dnf install -y "tailscale-$TAILSCALE_VERSION"
+				# Check if a different version is installed and downgrade if needed
+				if rpm -q tailscale >/dev/null 2>&1; then
+					$SUDO dnf downgrade -y "tailscale-$TAILSCALE_VERSION" || $SUDO dnf install -y "tailscale-$TAILSCALE_VERSION"
+				else
+					$SUDO dnf install -y "tailscale-$TAILSCALE_VERSION"
+				fi
+				if [ "$TAILSCALE_NO_AUTOUPDATE" = "true" ]; then
+					if $SUDO dnf install -y python3-dnf-plugin-versionlock 2>/dev/null; then
+						# Clear any existing locks for tailscale first
+						$SUDO dnf versionlock delete tailscale 2>/dev/null || true
+						if $SUDO dnf versionlock tailscale; then
+							echo "Package locked to $TAILSCALE_VERSION. After login, also run: tailscale set --auto-update=false"
+							echo "To unlock: sudo dnf versionlock delete tailscale"
+						else
+							echo "Warning: Failed to lock Tailscale version. Auto-updates may still occur."
+						fi
+					else
+						echo "Warning: python3-dnf-plugin-versionlock not available. Auto-updates cannot be prevented."
+					fi
+				fi
 			else
 				$SUDO dnf install -y tailscale
 			fi
@@ -615,7 +685,15 @@ main() {
 			set -x
 			curl -fsSL "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo" > /etc/yum.repos.d/tailscale.repo
 			if [ -n "$TAILSCALE_VERSION" ]; then
-				$SUDO tdnf install -y "tailscale-$TAILSCALE_VERSION"
+				# Check if a different version is installed and downgrade if needed
+				if rpm -q tailscale >/dev/null 2>&1; then
+					$SUDO tdnf downgrade -y "tailscale-$TAILSCALE_VERSION" || $SUDO tdnf install -y "tailscale-$TAILSCALE_VERSION"
+				else
+					$SUDO tdnf install -y "tailscale-$TAILSCALE_VERSION"
+				fi
+				if [ "$TAILSCALE_NO_AUTOUPDATE" = "true" ]; then
+					echo "Note: tdnf does not support version locking. Manual updates will be required."
+				fi
 			else
 				$SUDO tdnf install -y tailscale
 			fi
@@ -628,7 +706,17 @@ main() {
 			$SUDO zypper --non-interactive ar -g -r "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
 			$SUDO zypper --non-interactive --gpg-auto-import-keys refresh
 			if [ -n "$TAILSCALE_VERSION" ]; then
-				$SUDO zypper --non-interactive install "tailscale=$TAILSCALE_VERSION"
+				$SUDO zypper --non-interactive install --oldpackage "tailscale=$TAILSCALE_VERSION"
+				if [ "$TAILSCALE_NO_AUTOUPDATE" = "true" ]; then
+					# Clear any existing locks first
+					$SUDO zypper removelock tailscale 2>/dev/null || true
+					if $SUDO zypper addlock tailscale; then
+						echo "Package locked to $TAILSCALE_VERSION. After login, also run: tailscale set --auto-update=false"
+						echo "To unlock: sudo zypper removelock tailscale"
+					else
+						echo "Warning: Failed to lock Tailscale version. Auto-updates may still occur."
+					fi
+				fi
 			else
 				$SUDO zypper --non-interactive install tailscale
 			fi
@@ -643,6 +731,10 @@ main() {
 			else
 				$SUDO pacman -S tailscale --noconfirm
 			fi
+			if [ "$TAILSCALE_NO_AUTOUPDATE" = "true" ]; then
+				echo "Warning: Arch Linux pacman does not support package locking via this installer."
+				echo "To prevent updates, add 'IgnorePkg = tailscale' to /etc/pacman.conf"
+			fi
 			$SUDO systemctl enable --now tailscaled
 			set +x
 			;;
@@ -653,6 +745,10 @@ main() {
 				$SUDO pkg install --yes "tailscale-$TAILSCALE_VERSION"
 			else
 				$SUDO pkg install --yes tailscale
+			fi
+			if [ "$TAILSCALE_NO_AUTOUPDATE" = "true" ]; then
+				echo "Warning: FreeBSD pkg does not support package locking via this installer."
+				echo "To prevent updates, add 'tailscale' to /usr/local/etc/pkg.conf IGNORE_OSVERSION"
 			fi
 			$SUDO service tailscaled enable
 			$SUDO service tailscaled start
@@ -674,6 +770,10 @@ main() {
 			else
 				$SUDO apk add tailscale
 			fi
+			if [ "$TAILSCALE_NO_AUTOUPDATE" = "true" ]; then
+				echo "Warning: Alpine Linux apk does not support package locking via this installer."
+				echo "To prevent updates, pin the package: apk add 'tailscale=$TAILSCALE_VERSION'"
+			fi
 			$SUDO rc-update add tailscale
 			$SUDO rc-service tailscale start
 			set +x
@@ -686,6 +786,10 @@ main() {
 			else
 				$SUDO xbps-install tailscale -y
 			fi
+			if [ "$TAILSCALE_NO_AUTOUPDATE" = "true" ]; then
+				echo "Warning: Void Linux xbps does not support package locking via this installer."
+				echo "To prevent updates, add 'ignorepkg=tailscale' to /etc/xbps.d/10-ignore.conf"
+			fi
 			set +x
 			;;
 		emerge)
@@ -695,6 +799,10 @@ main() {
 				$SUDO emerge --ask=n "=net-vpn/tailscale-$TAILSCALE_VERSION"
 			else
 				$SUDO emerge --ask=n net-vpn/tailscale
+			fi
+			if [ "$TAILSCALE_NO_AUTOUPDATE" = "true" ]; then
+				echo "Warning: Gentoo emerge does not support package locking via this installer."
+				echo "To prevent updates, mask the package: echo '>=net-vpn/tailscale-$TAILSCALE_VERSION' >> /etc/portage/package.mask"
 			fi
 			set +x
 			;;

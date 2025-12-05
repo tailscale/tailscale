@@ -66,6 +66,11 @@ jobs:
           - { image: "debian:stable-slim", deps: "curl", version: "1.80.0" }
           - { image: "ubuntu:24.04", deps: "curl", version: "1.80.0" }
           - { image: "fedora:latest", deps: "curl", version: "1.80.0" }
+          # Test TAILSCALE_NO_AUTOUPDATE with version pinning
+          - { image: "ubuntu:24.04", deps: "curl", version: "1.80.0", no_autoupdate: "true" }
+          - { image: "debian:stable-slim", deps: "curl", version: "1.80.0", no_autoupdate: "true" }
+          - { image: "fedora:latest", deps: "curl", version: "1.80.0", no_autoupdate: "true" }
+          - { image: "rockylinux:9", deps: "curl", version: "1.80.0", no_autoupdate: "true" }
     runs-on: ubuntu-latest
     container:
       image: ${{ matrix.image }}
@@ -104,6 +109,7 @@ jobs:
       run: scripts/installer.sh
       env:
         TAILSCALE_VERSION: ${{ matrix.version }}
+        TAILSCALE_NO_AUTOUPDATE: ${{ matrix.no_autoupdate }}
       # Package installation can fail in docker because systemd is not running
       # as PID 1, so ignore errors at this step. The real check is the
       # `tailscale --version` command below.
@@ -113,6 +119,24 @@ jobs:
         tailscale --version
         if [ -n "${{ matrix.version }}" ]; then
           tailscale --version | grep -q "^${{ matrix.version }}" || { echo "Version mismatch!"; exit 1; }
+        fi
+    - name: verify version lock
+      if: matrix.no_autoupdate == 'true'
+      run: |
+        if [[ "${{ matrix.image }}" == *"ubuntu"* ]] || [[ "${{ matrix.image }}" == *"debian"* ]]; then
+          apt-mark showhold | grep -q tailscale || { echo "Package not held!"; exit 1; }
+          echo "✓ Package is held (apt-mark)"
+        elif [[ "${{ matrix.image }}" == *"fedora"* ]]; then
+          dnf versionlock list 2>/dev/null | grep -q tailscale || { echo "Package not locked!"; exit 1; }
+          echo "✓ Package is locked (dnf versionlock)"
+        elif [[ "${{ matrix.image }}" == *"rocky"* ]] || [[ "${{ matrix.image }}" == *"alma"* ]]; then
+          dnf versionlock list 2>/dev/null | grep -q tailscale || { echo "Package not locked!"; exit 1; }
+          echo "✓ Package is locked (dnf versionlock)"
+        elif [[ "${{ matrix.image }}" == *"opensuse"* ]]; then
+          zypper locks 2>/dev/null | grep -q tailscale || { echo "Package not locked!"; exit 1; }
+          echo "✓ Package is locked (zypper locks)"
+        else
+          echo "⚠ Lock verification not implemented for this distro"
         fi
   notify-slack:
     needs: test
