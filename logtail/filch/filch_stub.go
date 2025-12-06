@@ -1,13 +1,13 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build wasm || plan9 || tamago
+//go:build !ts_omit_logtail && (wasm || plan9 || tamago)
 
 package filch
 
-import (
-	"os"
-)
+import "os"
+
+const replaceStderrSupportedForTest = false
 
 func saveStderr() (*os.File, error) {
 	return os.Stderr, nil
