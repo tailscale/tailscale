@@ -328,7 +328,12 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 		return (<-responses).bs, nil
 	}
 
-	return out, err
+	if err != nil {
+		return out, err
+	}
+
+	out = checkResponseSizeAndSetTC(out, bs, family, r.logf)
+	return out, nil
 }
 
 // GetUpstreamResolvers returns the resolvers that would be used to resolve
