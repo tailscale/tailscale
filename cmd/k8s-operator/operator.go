@@ -27,6 +27,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	klabels "k8s.io/apimachinery/pkg/labels"
@@ -1018,7 +1019,9 @@ func nodeHandlerForProxyGroup(cl client.Client, defaultProxyClass string, logger
 
 			proxyClass := &tsapi.ProxyClass{}
 			if err := cl.Get(ctx, types.NamespacedName{Name: pc}, proxyClass); err != nil {
-				logger.Debugf("error getting ProxyClass %q: %v", pg.Spec.ProxyClass, err)
+				if !apierrors.IsNotFound(err) {
+					logger.Debugf("error getting ProxyClass %q: %v", pg.Spec.ProxyClass, err)
+				}
 				return nil
 			}
 
@@ -1275,7 +1278,9 @@ func ingressSvcFromEps(cl client.Client, logger *zap.SugaredLogger) handler.MapF
 		svc := &corev1.Service{}
 		ns := o.GetNamespace()
 		if err := cl.Get(ctx, types.NamespacedName{Name: svcName, Namespace: ns}, svc); err != nil {
-			logger.Errorf("failed to get service: %v", err)
+			if !apierrors.IsNotFound(err) {
+				logger.Debugf("failed to get service: %v", err)
+			}
 			return nil
 		}
 
@@ -1450,7 +1455,9 @@ func kubeAPIServerPGsFromSecret(cl client.Client, logger *zap.SugaredLogger) han
 
 		var pg tsapi.ProxyGroup
 		if err := cl.Get(ctx, types.NamespacedName{Name: secret.ObjectMeta.Labels[LabelParentName]}, &pg); err != nil {
-			logger.Infof("error getting ProxyGroup %s: %v", secret.ObjectMeta.Labels[LabelParentName], err)
+			if !apierrors.IsNotFound(err) {
+				logger.Debugf("error getting ProxyGroup %s: %v", secret.ObjectMeta.Labels[LabelParentName], err)
+			}
 			return nil
 		}
 
