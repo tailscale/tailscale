@@ -25,6 +25,7 @@ import (
 	"golang.org/x/crypto/blake2s"
 	"golang.org/x/net/ipv6"
 	"tailscale.com/disco"
+	"tailscale.com/envknob"
 	"tailscale.com/net/batching"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netcheck"
@@ -34,6 +35,7 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/net/udprelay/endpoint"
 	"tailscale.com/net/udprelay/status"
+	"tailscale.com/net/udprelay/xdp"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -75,6 +77,7 @@ type Server struct {
 	wg                  sync.WaitGroup
 	closeCh             chan struct{}
 	netChecker          *netcheck.Client
+	fib                 xdp.FIB
 
 	mu                  sync.Mutex           // guards the following fields
 	macSecrets          [][blake2s.Size]byte // [0] is most recent, max 2 elements
@@ -140,7 +143,7 @@ func blakeMACFromBindMsg(blakeKey [blake2s.Size]byte, src netip.AddrPort, msg di
 	return out, nil
 }
 
-func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex int, discoMsg disco.Message, serverDisco key.DiscoPublic, macSecrets [][blake2s.Size]byte) (write []byte, to netip.AddrPort) {
+func (e *serverEndpoint) handleDiscoControlMsg(logf logger.Logf, fib xdp.FIB, from netip.AddrPort, senderIndex int, discoMsg disco.Message, serverDisco key.DiscoPublic, macSecrets [][blake2s.Size]byte) (write []byte, to netip.AddrPort) {
 	if senderIndex != 0 && senderIndex != 1 {
 		return nil, netip.AddrPort{}
 	}
@@ -218,6 +221,12 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 				e.boundAddrPorts[senderIndex] = from
 				e.lastSeen[senderIndex] = time.Now()    // record last seen as bound time
 				e.inProgressGeneration[senderIndex] = 0 // reset to zero, which indicates there is no in-progress handshake
+				if fib != nil && e.boundAddrPorts[0].IsValid() && e.boundAddrPorts[1].IsValid() {
+					err = fib.Upsert(e.vni, e.boundAddrPorts)
+					if err != nil {
+						logf("error upserting fib: %v", err)
+					}
+				}
 				return nil, netip.AddrPort{}
 			}
 		}
@@ -229,7 +238,7 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 	}
 }
 
-func (e *serverEndpoint) handleSealedDiscoControlMsg(from netip.AddrPort, b []byte, serverDisco key.DiscoPublic, macSecrets [][blake2s.Size]byte) (write []byte, to netip.AddrPort) {
+func (e *serverEndpoint) handleSealedDiscoControlMsg(logf logger.Logf, fib xdp.FIB, from netip.AddrPort, b []byte, serverDisco key.DiscoPublic, macSecrets [][blake2s.Size]byte) (write []byte, to netip.AddrPort) {
 	senderRaw, isDiscoMsg := disco.Source(b)
 	if !isDiscoMsg {
 		// Not a Disco message
@@ -260,7 +269,7 @@ func (e *serverEndpoint) handleSealedDiscoControlMsg(from netip.AddrPort, b []by
 		return nil, netip.AddrPort{}
 	}
 
-	return e.handleDiscoControlMsg(from, senderIndex, discoMsg, serverDisco, macSecrets)
+	return e.handleDiscoControlMsg(logf, fib, from, senderIndex, discoMsg, serverDisco, macSecrets)
 }
 
 func (e *serverEndpoint) handleDataPacket(from netip.AddrPort, b []byte, now time.Time) (write []byte, to netip.AddrPort) {
@@ -323,6 +332,17 @@ func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool) (s *Serv
 		byVNI:               make(map[uint32]*serverEndpoint),
 	}
 	s.discoPublic = s.disco.Public()
+	xdpDev := envknob.String("TS_PEER_RELAY_XDP_DEVICE")
+	if xdpDev != "" {
+		s.fib, err = xdp.NewFIB(&xdp.FIBConfig{
+			DstPort:    port,
+			DeviceName: xdpDev,
+		})
+	}
+
+	if err != nil {
+		return nil, err
+	}
 
 	// TODO(creachadair): Find a way to plumb this in during initialization.
 	// As-written, messages published here will not be seen by other components
@@ -547,11 +567,11 @@ func trySetUDPSocketOptions(pconn nettype.PacketConn, logf logger.Logf) {
 func (s *Server) bindSockets(desiredPort uint16) error {
 	// maxSocketsPerAF is a conservative starting point, but is somewhat
 	// arbitrary.
-	maxSocketsPerAF := min(16, runtime.NumCPU())
+	maxSocketsPerAF := min(128, runtime.NumCPU())
 	listenConfig := &net.ListenConfig{
 		Control: listenControl,
 	}
-	for _, network := range []string{"udp4", "udp6"} {
+	for _, network := range []string{"udp4"} { //, "udp6"} {
 	SocketsLoop:
 		for i := range maxSocketsPerAF {
 			if i > 0 {
@@ -626,6 +646,9 @@ func (s *Server) bindSocketTo(listenConfig *net.ListenConfig, network string, po
 // Close closes the server.
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
+		if s.fib != nil {
+			s.fib.Close()
+		}
 		for _, uc4 := range s.uc4 {
 			uc4.Close()
 		}
@@ -662,6 +685,15 @@ func (s *Server) endpointGCLoop() {
 			if v.isExpired(now, s.bindLifetime, s.steadyStateLifetime) {
 				delete(s.byDisco, k)
 				delete(s.byVNI, v.vni)
+				// TODO: isExpired only considers userspace counters/liveliness
+				// TODO: this is a syscall per VNI to delete while holding s.mu,
+				//  consider batch delete
+				if s.fib != nil {
+					err := s.fib.Delete(v.vni)
+					if err != nil {
+						s.logf("failed to delete fib entry: %v", err)
+					}
+				}
 			}
 		}
 	}
@@ -708,7 +740,7 @@ func (s *Server) handlePacket(from netip.AddrPort, b []byte) (write []byte, to n
 		}
 		msg := b[packet.GeneveFixedHeaderLength:]
 		s.maybeRotateMACSecretLocked(now)
-		return e.handleSealedDiscoControlMsg(from, msg, s.discoPublic, s.macSecrets)
+		return e.handleSealedDiscoControlMsg(s.logf, s.fib, from, msg, s.discoPublic, s.macSecrets)
 	}
 	return e.handleDataPacket(from, b, now)
 }
