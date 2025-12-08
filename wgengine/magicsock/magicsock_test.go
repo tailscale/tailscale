@@ -64,6 +64,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/ptr"
+	"tailscale.com/types/views"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
@@ -4300,5 +4301,49 @@ func TestRotateDiscoKeyMultipleTimes(t *testing.T) {
 		}
 
 		keys = append(keys, newKey)
+	}
+}
+
+func TestReceiveTSMPDiscoKeyAdvertisement(t *testing.T) {
+	conn := newTestConn(t)
+	t.Cleanup(func() { conn.Close() })
+
+	peerKey := key.NewNode().Public()
+	ep := &endpoint{
+		nodeID:    1,
+		publicKey: peerKey,
+		nodeAddr:  netip.MustParseAddr("100.64.0.1"),
+	}
+	discoKey := key.NewDisco().Public()
+	ep.disco.Store(&endpointDisco{
+		key:   discoKey,
+		short: discoKey.ShortString(),
+	})
+	ep.c = conn
+	conn.mu.Lock()
+	nodeView := (&tailcfg.Node{
+		Key: ep.publicKey,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.1/32"),
+		},
+	}).View()
+	conn.peers = views.SliceOf([]tailcfg.NodeView{nodeView})
+	conn.mu.Unlock()
+
+	conn.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
+
+	if ep.discoShort() != discoKey.ShortString() {
+		t.Errorf("Original disco key %s, does not match %s", discoKey.ShortString(), ep.discoShort())
+	}
+
+	newDiscoKey := key.NewDisco().Public()
+	tka := packet.TSMPDiscoKeyAdvertisement{
+		Src: netip.MustParseAddr("100.64.0.1"),
+		Key: newDiscoKey,
+	}
+	conn.HandleDiscoKeyAdvertisement(nodeView, tka)
+
+	if ep.disco.Load().short != newDiscoKey.ShortString() {
+		t.Errorf("New disco key %s, does not match %s", newDiscoKey.ShortString(), ep.disco.Load().short)
 	}
 }

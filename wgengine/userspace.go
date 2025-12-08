@@ -551,6 +551,23 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		}
 		e.linkChangeQueue.Add(func() { e.linkChange(&cd) })
 	})
+	eventbus.SubscribeFunc(ec, func(update tstun.DiscoKeyAdvertisement) {
+		e.logf("wgengine: got TSMP disco key advertisement from %v via eventbus", update.Src)
+		if e.magicConn == nil {
+			e.logf("wgengine: no magicConn")
+			return
+		}
+
+		pkt := packet.TSMPDiscoKeyAdvertisement{
+			Key: update.Key,
+		}
+		peer, ok := e.PeerForIP(update.Src)
+		if !ok {
+			e.logf("wgengine: no peer found for %v", update.Src)
+			return
+		}
+		e.magicConn.HandleDiscoKeyAdvertisement(peer.Node, pkt)
+	})
 	e.eventClient = ec
 	e.logf("Engine created.")
 	return e, nil
