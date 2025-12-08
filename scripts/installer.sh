@@ -336,6 +336,11 @@ main() {
 				VERSION="$VERSION_MAJOR"
 				PACKAGETYPE="tdnf"
 				;;
+			steamos)
+				echo "To install Tailscale on SteamOS, please follow the instructions here:"
+				echo "https://github.com/tailscale-dev/deck-tailscale"
+				exit 1
+				;;
 
 			# TODO: wsl?
 			# TODO: synology? qnap?
