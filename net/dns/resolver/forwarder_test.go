@@ -549,6 +549,174 @@ func beVerbose(f *forwarder) {
 	f.verboseFwd = true
 }
 
+// makeTestRequestWithEDNS returns a new TypeTXT request for the given domain with EDNS buffer size.
+func makeTestRequestWithEDNS(tb testing.TB, domain string, ednsSize uint16) []byte {
+	tb.Helper()
+	name := dns.MustNewName(domain)
+	builder := dns.NewBuilder(nil, dns.Header{})
+	builder.StartQuestions()
+	builder.Question(dns.Question{
+		Name:  name,
+		Type:  dns.TypeTXT,
+		Class: dns.ClassINET,
+	})
+	if ednsSize > 0 {
+		builder.StartAdditionals()
+		builder.OPTResource(dns.ResourceHeader{
+			Name:  dns.MustNewName("."),
+			Type:  dns.TypeOPT,
+			Class: dns.Class(ednsSize),
+		}, dns.OPTResource{})
+	}
+	request, err := builder.Finish()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return request
+}
+
+// makeEDNSResponse creates a DNS response of approximately the specified size
+// with TXT records. The response will NOT have the TC flag set (simulating
+// a non-compliant server that doesn't set TC when response exceeds EDNS buffer).
+func makeEDNSResponse(tb testing.TB, domain string, targetSize int) []byte {
+	tb.Helper()
+	name := dns.MustNewName(domain)
+
+	// Build response iteratively to hit target size
+	// Start with a small number of records and add more until we're close
+	txtLen := 200
+	var response []byte
+	var prevResponse []byte
+	var err error
+
+	// Build with increasing number of records until we hit target
+	for numRecords := 1; numRecords <= 20; numRecords++ {
+		testBuilder := dns.NewBuilder(nil, dns.Header{
+			Response:      true,
+			Authoritative: true,
+			RCode:         dns.RCodeSuccess,
+		})
+		testBuilder.StartQuestions()
+		testBuilder.Question(dns.Question{
+			Name:  name,
+			Type:  dns.TypeTXT,
+			Class: dns.ClassINET,
+		})
+		testBuilder.StartAnswers()
+
+		for i := 0; i < numRecords; i++ {
+			txtValue := strings.Repeat("x", txtLen)
+			testBuilder.TXTResource(dns.ResourceHeader{
+				Name:  name,
+				Type:  dns.TypeTXT,
+				Class: dns.ClassINET,
+				TTL:   300,
+			}, dns.TXTResource{
+				TXT: []string{txtValue},
+			})
+		}
+
+		testBuilder.StartAdditionals()
+		testBuilder.OPTResource(dns.ResourceHeader{
+			Name:  dns.MustNewName("."),
+			Type:  dns.TypeOPT,
+			Class: dns.Class(4096),
+		}, dns.OPTResource{})
+
+		response, err = testBuilder.Finish()
+		if err != nil {
+			tb.Fatal(err)
+		}
+
+		actualSize := len(response)
+		// Stop when we're close to target (within 100 bytes)
+		if actualSize >= targetSize-100 && actualSize <= targetSize+100 {
+			break
+		}
+		// If we've exceeded target significantly, use previous iteration
+		if actualSize > targetSize+100 && prevResponse != nil {
+			response = prevResponse
+			break
+		}
+
+		// Store current response as previous for next iteration
+		prevResponse = response
+	}
+
+	// Ensure TC flag is NOT set (simulating non-compliant server)
+	flags := binary.BigEndian.Uint16(response[2:4])
+	flags &^= dnsFlagTruncated
+	binary.BigEndian.PutUint16(response[2:4], flags)
+
+	actualSize := len(response)
+	// Verify size is approximately correct (allow some variance)
+	if actualSize < targetSize-100 || actualSize > targetSize+100 {
+		tb.Fatalf("response size = %d, want approximately %d (variance: %d)", actualSize, targetSize, actualSize-targetSize)
+	}
+
+	return response
+}
+
+func TestEDNSBufferSizeTruncation(t *testing.T) {
+	const domain = "edns-test.example.com."
+	const ednsBufferSize = 500 // Small EDNS buffer
+	const responseSize = 800   // Response exceeds EDNS but < maxResponseBytes
+
+	// Create a response that exceeds EDNS buffer size but doesn't have TC flag set
+	response := makeEDNSResponse(t, domain, responseSize)
+
+	// Create a request with EDNS buffer size
+	request := makeTestRequestWithEDNS(t, domain, ednsBufferSize)
+
+	// Verify request has correct EDNS buffer size
+	ednsSize, hasEDNS := getEDNSBufferSize(request)
+	if !hasEDNS {
+		t.Fatal("request should have EDNS OPT record")
+	}
+	if ednsSize != ednsBufferSize {
+		t.Fatalf("request EDNS size = %d, want %d", ednsSize, ednsBufferSize)
+	}
+
+	// Verify response doesn't have TC flag set initially
+	if truncatedFlagSet(response) {
+		t.Fatal("test response should not have TC flag set initially")
+	}
+
+	// Set up test DNS server
+	port := runDNSServer(t, nil, response, func(isTCP bool, gotRequest []byte) {
+		// Verify request has correct EDNS buffer size
+		ednsSize, hasEDNS := getEDNSBufferSize(gotRequest)
+		if !hasEDNS {
+			t.Error("request should have EDNS OPT record")
+			return
+		}
+		if ednsSize != ednsBufferSize {
+			t.Errorf("request EDNS size = %d, want %d", ednsSize, ednsBufferSize)
+		}
+	})
+
+	// Disable TCP retries to ensure we test UDP path
+	resp := mustRunTestQuery(t, request, func(fwd *forwarder) {
+		fwd.controlKnobs = &controlknobs.Knobs{}
+		fwd.controlKnobs.DisableDNSForwarderTCPRetries.Store(true)
+	}, port)
+
+	// Verify the response has TC flag set by forwarder
+	if !truncatedFlagSet(resp) {
+		t.Errorf("TC flag not set in response (response size=%d, EDNS=%d)", len(resp), ednsBufferSize)
+	}
+
+	// Verify response size is preserved (not truncated by buffer)
+	if len(resp) != len(response) {
+		t.Errorf("response size = %d, want %d (response should not be truncated by buffer)", len(resp), len(response))
+	}
+
+	// Verify response size exceeds EDNS buffer
+	if len(resp) <= int(ednsBufferSize) {
+		t.Errorf("response size = %d, should exceed EDNS buffer size %d", len(resp), ednsBufferSize)
+	}
+}
+
 func TestForwarderTCPFallback(t *testing.T) {
 	const domain = "large-dns-response.tailscale.com."
 
