@@ -38,10 +38,7 @@ import (
 func TestLoadBalancerClass(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	sr := &ServiceReconciler{
 		Client: fc,
@@ -220,10 +217,7 @@ func TestLoadBalancerClass(t *testing.T) {
 func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	tailnetTargetFQDN := "foo.bar.ts.net."
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	sr := &ServiceReconciler{
@@ -333,10 +327,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 func TestTailnetTargetIPAnnotation(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	tailnetTargetIP := "100.66.66.66"
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	sr := &ServiceReconciler{
@@ -431,12 +422,12 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 	})
 	expectReconciled(t, sr, "default", "test")
 
-	// // synchronous StatefulSet deletion triggers a requeue. But, the StatefulSet
-	// // didn't create any child resources since this is all faked, so the
-	// // deletion goes through immediately.
+	// synchronous StatefulSet deletion triggers a requeue. But, the StatefulSet
+	// didn't create any child resources since this is all faked, so the
+	// deletion goes through immediately.
 	expectReconciled(t, sr, "default", "test")
 	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
-	// // The deletion triggers another reconcile, to finish the cleanup.
+	// The deletion triggers another reconcile, to finish the cleanup.
 	expectReconciled(t, sr, "default", "test")
 	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
 	expectMissing[corev1.Service](t, fc, "operator-ns", shortName)
@@ -446,10 +437,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 func TestTailnetTargetIPAnnotation_IPCouldNotBeParsed(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	sr := &ServiceReconciler{
 		Client: fc,
@@ -517,10 +505,7 @@ func TestTailnetTargetIPAnnotation_IPCouldNotBeParsed(t *testing.T) {
 func TestTailnetTargetIPAnnotation_InvalidIP(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	sr := &ServiceReconciler{
 		Client: fc,
@@ -588,10 +573,7 @@ func TestTailnetTargetIPAnnotation_InvalidIP(t *testing.T) {
 func TestAnnotations(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	sr := &ServiceReconciler{
 		Client: fc,
@@ -695,10 +677,7 @@ func TestAnnotations(t *testing.T) {
 func TestAnnotationIntoLB(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	sr := &ServiceReconciler{
 		Client: fc,
@@ -828,10 +807,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 func TestLBIntoAnnotation(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	sr := &ServiceReconciler{
 		Client: fc,
@@ -966,10 +942,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 func TestCustomHostname(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	sr := &ServiceReconciler{
 		Client: fc,
@@ -1078,10 +1051,7 @@ func TestCustomHostname(t *testing.T) {
 func TestCustomPriorityClassName(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	sr := &ServiceReconciler{
 		Client: fc,
@@ -1333,10 +1303,7 @@ func TestProxyClassForService(t *testing.T) {
 		WithStatusSubresource(pc).
 		Build()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	sr := &ServiceReconciler{
 		Client: fc,
@@ -1425,10 +1392,7 @@ func TestProxyClassForService(t *testing.T) {
 func TestDefaultLoadBalancer(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	sr := &ServiceReconciler{
 		Client: fc,
@@ -1482,10 +1446,7 @@ func TestDefaultLoadBalancer(t *testing.T) {
 func TestProxyFirewallMode(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	sr := &ServiceReconciler{
 		Client: fc,
@@ -1563,14 +1524,70 @@ func Test_isMagicDNSName(t *testing.T) {
 	}
 }
 
+func Test_HeadlessService(t *testing.T) {
+	fc := fake.NewFakeClient()
+	zl := zap.Must(zap.NewDevelopment())
+	clock := tstest.NewClock(tstest.ClockOpts{})
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client: fc,
+		},
+		logger:   zl.Sugar(),
+		clock:    clock,
+		recorder: record.NewFakeRecorder(100),
+	}
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+
+			UID: types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationExpose: "true",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "None",
+			Type:      corev1.ServiceTypeClusterIP,
+		},
+	})
+
+	expectReconciled(t, sr, "default", "test")
+
+	t0 := conditionTime(clock)
+
+	want := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationExpose: "true",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "None",
+			Type:      corev1.ServiceTypeClusterIP,
+		},
+		Status: corev1.ServiceStatus{
+			Conditions: []metav1.Condition{{
+				Type:               string(tsapi.ProxyReady),
+				Status:             metav1.ConditionFalse,
+				LastTransitionTime: t0,
+				Reason:             reasonProxyInvalid,
+				Message:            `unable to provision proxy resources: invalid Service: headless Services are not supported.`,
+			}},
+		},
+	}
+
+	expectEqual(t, fc, want)
+}
+
 func Test_serviceHandlerForIngress(t *testing.T) {
 	const tailscaleIngressClassName = "tailscale"
-
 	fc := fake.NewFakeClient()
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 
 	// 1. An event on a headless Service for a tailscale Ingress results in
 	// the Ingress being reconciled.
@@ -1700,10 +1717,7 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 
 func Test_serviceHandlerForIngress_multipleIngressClasses(t *testing.T) {
 	fc := fake.NewFakeClient()
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "backend", Namespace: "default"},
@@ -1735,10 +1749,7 @@ func Test_serviceHandlerForIngress_multipleIngressClasses(t *testing.T) {
 }
 
 func Test_clusterDomainFromResolverConf(t *testing.T) {
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	tests := []struct {
 		name      string
 		conf      *resolvconffile.Config
@@ -1806,10 +1817,7 @@ func Test_clusterDomainFromResolverConf(t *testing.T) {
 func Test_authKeyRemoval(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 
 	// 1. A new Service that should be exposed via Tailscale gets created, a Secret with a config that contains auth
 	// key is generated.
@@ -1874,10 +1882,7 @@ func Test_authKeyRemoval(t *testing.T) {
 func Test_externalNameService(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 
 	// 1. A External name Service that should be exposed via Tailscale gets
 	// created.
@@ -1974,10 +1979,7 @@ func Test_metricsResourceCreation(t *testing.T) {
 		WithStatusSubresource(pc).
 		Build()
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	sr := &ServiceReconciler{
 		Client: fc,
@@ -2048,10 +2050,7 @@ func TestIgnorePGService(t *testing.T) {
 	_, _, fc, _, _ := setupServiceTest(t)
 
 	ft := &fakeTSClient{}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
+	zl := zap.Must(zap.NewDevelopment())
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	sr := &ServiceReconciler{
 		Client: fc,
