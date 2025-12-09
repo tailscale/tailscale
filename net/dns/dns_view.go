@@ -123,6 +123,15 @@ func (v ConfigView) Hosts() views.MapSlice[dnsname.FQDN, netip.Addr] {
 	return views.MapSliceOf(v.ж.Hosts)
 }
 
+// CnameHosts maps DNS FQDNs to their CNAME targets.
+// Targets must be domains that can be resolved via Hosts.
+// Queries matching entries return a CNAME chain followed by the
+// resolved A/AAAA record.
+// Wildcard CNAMEs are supported using "*.domain." as the key.
+func (v ConfigView) CnameHosts() views.Map[dnsname.FQDN, dnsname.FQDN] {
+	return views.MapOf(v.ж.CnameHosts)
+}
+
 // OnlyIPv6, if true, uses the IPv6 service IP (for MagicDNS)
 // instead of the IPv4 version (100.100.100.100).
 func (v ConfigView) OnlyIPv6() bool           { return v.ж.OnlyIPv6 }
@@ -134,5 +143,6 @@ var _ConfigViewNeedsRegeneration = Config(struct {
 	Routes           map[dnsname.FQDN][]*dnstype.Resolver
 	SearchDomains    []dnsname.FQDN
 	Hosts            map[dnsname.FQDN][]netip.Addr
+	CnameHosts       map[dnsname.FQDN]dnsname.FQDN
 	OnlyIPv6         bool
 }{})
