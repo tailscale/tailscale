@@ -141,7 +141,7 @@ func blakeMACFromBindMsg(blakeKey [blake2s.Size]byte, src netip.AddrPort, msg di
 	return out, nil
 }
 
-func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex int, discoMsg disco.Message, serverDisco key.DiscoPublic, macSecrets [][blake2s.Size]byte) (write []byte, to netip.AddrPort) {
+func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex int, discoMsg disco.Message, serverDisco key.DiscoPublic, macSecrets [][blake2s.Size]byte, now mono.Time) (write []byte, to netip.AddrPort) {
 	if senderIndex != 0 && senderIndex != 1 {
 		return nil, netip.AddrPort{}
 	}
@@ -217,7 +217,7 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 			if bytes.Equal(mac[:], discoMsg.Challenge[:]) {
 				// Handshake complete. Update the binding for this sender.
 				e.boundAddrPorts[senderIndex] = from
-				e.lastSeen[senderIndex] = mono.Now()    // record last seen as bound time
+				e.lastSeen[senderIndex] = now           // record last seen as bound time
 				e.inProgressGeneration[senderIndex] = 0 // reset to zero, which indicates there is no in-progress handshake
 				return nil, netip.AddrPort{}
 			}
@@ -230,7 +230,7 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 	}
 }
 
-func (e *serverEndpoint) handleSealedDiscoControlMsg(from netip.AddrPort, b []byte, serverDisco key.DiscoPublic, macSecrets [][blake2s.Size]byte) (write []byte, to netip.AddrPort) {
+func (e *serverEndpoint) handleSealedDiscoControlMsg(from netip.AddrPort, b []byte, serverDisco key.DiscoPublic, macSecrets [][blake2s.Size]byte, now mono.Time) (write []byte, to netip.AddrPort) {
 	senderRaw, isDiscoMsg := disco.Source(b)
 	if !isDiscoMsg {
 		// Not a Disco message
@@ -261,7 +261,7 @@ func (e *serverEndpoint) handleSealedDiscoControlMsg(from netip.AddrPort, b []by
 		return nil, netip.AddrPort{}
 	}
 
-	return e.handleDiscoControlMsg(from, senderIndex, discoMsg, serverDisco, macSecrets)
+	return e.handleDiscoControlMsg(from, senderIndex, discoMsg, serverDisco, macSecrets, now)
 }
 
 func (e *serverEndpoint) handleDataPacket(from netip.AddrPort, b []byte, now mono.Time) (write []byte, to netip.AddrPort) {
@@ -709,7 +709,7 @@ func (s *Server) handlePacket(from netip.AddrPort, b []byte) (write []byte, to n
 		}
 		msg := b[packet.GeneveFixedHeaderLength:]
 		s.maybeRotateMACSecretLocked(now)
-		return e.handleSealedDiscoControlMsg(from, msg, s.discoPublic, s.macSecrets)
+		return e.handleSealedDiscoControlMsg(from, msg, s.discoPublic, s.macSecrets, now)
 	}
 	return e.handleDataPacket(from, b, now)
 }
