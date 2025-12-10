@@ -14,6 +14,7 @@ import (
 	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/stretchr/testify/assert"
 	"go4.org/mem"
 	"golang.org/x/crypto/blake2s"
 	"tailscale.com/disco"
@@ -468,4 +469,41 @@ func TestServer_maybeRotateMACSecretLocked(t *testing.T) {
 	qt.Assert(t, macSecret, qt.Not(qt.Equals), s.macSecrets[0])
 	qt.Assert(t, macSecret, qt.Not(qt.Equals), s.macSecrets[1])
 	qt.Assert(t, s.macSecrets[0], qt.Not(qt.Equals), s.macSecrets[1])
+}
+
+func Test_ServerDynamicAddresses(t *testing.T) {
+	tests := []struct {
+		name     string
+		ipaddrs  []netip.Addr
+		expected []netip.AddrPort
+	}{
+		{
+			name:     "ipv4 only",
+			ipaddrs:  []netip.Addr{netip.MustParseAddr("1.2.3.4")},
+			expected: []netip.AddrPort{netip.MustParseAddrPort("1.2.3.4:0")},
+		},
+	}
+
+	for _, tc := range tests {
+		s := &Server{}
+		err := s.initialize(t.Logf, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		s.wg.Add(1)
+		go s.addrDiscoveryLoop(func() ([]netip.Addr, []netip.Addr, error) {
+			time.Sleep(1 * time.Second)
+			return tc.ipaddrs, nil, nil
+		})
+		err = s.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		s.wg.Wait()
+
+		assert.ElementsMatch(t, tc.expected, s.dynamicAddrPorts, tc.name)
+	}
+
 }
