@@ -48,6 +48,12 @@ type Config struct {
 	// it to resolve, you also need to add appropriate routes to
 	// Routes.
 	Hosts map[dnsname.FQDN][]netip.Addr
+	// CnameHosts maps DNS FQDNs to their CNAME targets.
+	// Targets must be domains that can be resolved via Hosts.
+	// Queries matching entries return a CNAME chain followed by the
+	// resolved A/AAAA record.
+	// Wildcard CNAMEs are supported using "*.domain." as the key.
+	CnameHosts map[dnsname.FQDN]dnsname.FQDN
 	// OnlyIPv6, if true, uses the IPv6 service IP (for MagicDNS)
 	// instead of the IPv4 version (100.100.100.100).
 	OnlyIPv6 bool
