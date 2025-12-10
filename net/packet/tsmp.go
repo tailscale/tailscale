@@ -271,7 +271,7 @@ func (h TSMPPongReply) Marshal(buf []byte) error {
 //   - 'a' (TSMPTypeDiscoAdvertisement)
 //   - 32 disco key bytes
 type TSMPDiscoKeyAdvertisement struct {
-	Src, Dst netip.Addr
+	Src, Dst netip.Addr // Src and Dst are set from the parent IP Header when parsing.
 	Key      key.DiscoPublic
 }
 
@@ -298,7 +298,7 @@ func (ka *TSMPDiscoKeyAdvertisement) Marshal() ([]byte, error) {
 		return []byte{}, fmt.Errorf("expected payload length 33, got %d", len(payload))
 	}
 
-	return Generate(iph, payload), nil
+	return Generate(iph, payload[:]), nil
 }
 
 func (pp *Parsed) AsTSMPDiscoAdvertisement() (tka TSMPDiscoKeyAdvertisement, ok bool) {
@@ -310,6 +310,7 @@ func (pp *Parsed) AsTSMPDiscoAdvertisement() (tka TSMPDiscoKeyAdvertisement, ok 
 		return
 	}
 	tka.Src = pp.Src.Addr()
+	tka.Dst = pp.Dst.Addr()
 	tka.Key = key.DiscoPublicFromRaw32(mem.B(p[1:33]))
 
 	return tka, true

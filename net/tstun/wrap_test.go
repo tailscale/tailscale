@@ -986,7 +986,7 @@ func TestTSMPDisco(t *testing.T) {
 		if tda.Src != src {
 			t.Errorf("Src address did not match, expected %v, got %v", src, tda.Src)
 		}
-		if !reflect.DeepEqual(tda.Key, discoKey.Public()) {
+		if tda.Key.Compare(discoKey.Public()) != 0 {
 			t.Errorf("Key did not match, expected %q, got %q", discoKey.Public(), tda.Key)
 		}
 	})

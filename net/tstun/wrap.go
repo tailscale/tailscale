@@ -1126,8 +1126,10 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 	return n, err
 }
 
+// DiscoKeyAdvertisement is a TSMP message used for distributing disco keys.
+// This struct is used an an event on the [eventbus.Bus].
 type DiscoKeyAdvertisement struct {
-	Src netip.Addr
+	Src netip.Addr // Src field is populated by the IP header of the packet, not from the payload itself.
 	Key key.DiscoPublic
 }
 
