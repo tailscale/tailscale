@@ -73,8 +73,8 @@ RUN GOARCH=$TARGETARCH go install -ldflags="\
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates iptables iproute2 ip6tables
-RUN ln -s /sbin/iptables-legacy /sbin/iptables
-RUN ln -s /sbin/ip6tables-legacy /sbin/ip6tables
+RUN rm /usr/sbin/iptables && ln -s /usr/sbin/iptables-legacy /usr/sbin/iptables
+RUN rm /usr/sbin/ip6tables && ln -s /usr/sbin/ip6tables-legacy /usr/sbin/ip6tables
 
 COPY --from=build-env /go/bin/* /usr/local/bin/
 # For compat with the previous run.sh, although ideally you should be
