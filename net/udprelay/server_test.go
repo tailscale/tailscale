@@ -482,28 +482,40 @@ func Test_ServerDynamicAddresses(t *testing.T) {
 			ipaddrs:  []netip.Addr{netip.MustParseAddr("1.2.3.4")},
 			expected: []netip.AddrPort{netip.MustParseAddrPort("1.2.3.4:0")},
 		},
+		{
+			name:     "ipv6 only",
+			ipaddrs:  []netip.Addr{netip.MustParseAddr("2001:db8::1")},
+			expected: []netip.AddrPort{netip.MustParseAddrPort("[2001:db8::1]:0")},
+		},
+		{
+			name:     "mixed classes",
+			ipaddrs:  []netip.Addr{netip.MustParseAddr("1.2.3.4"), netip.MustParseAddr("2001:db8::1")},
+			expected: []netip.AddrPort{netip.MustParseAddrPort("1.2.3.4:0"), netip.MustParseAddrPort("[2001:db8::1]:0")},
+		},
 	}
 
 	for _, tc := range tests {
-		s := &Server{}
-		err := s.initialize(t.Logf, false)
-		if err != nil {
-			t.Fatal(err)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{}
+			err := s.initialize(t.Logf, false)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-		s.wg.Add(1)
-		go s.addrDiscoveryLoop(func() ([]netip.Addr, []netip.Addr, error) {
-			time.Sleep(1 * time.Second)
-			return tc.ipaddrs, nil, nil
+			s.wg.Add(1)
+			go s.addrDiscoveryLoop(func() ([]netip.Addr, []netip.Addr, error) {
+				return tc.ipaddrs, nil, nil
+			})
+
+			time.Sleep(1 * time.Millisecond) // wait for things to initialize
+			err = s.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.wg.Wait()
+
+			assert.ElementsMatch(t, tc.expected, s.dynamicAddrPorts, tc.name)
 		})
-		err = s.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		s.wg.Wait()
-
-		assert.ElementsMatch(t, tc.expected, s.dynamicAddrPorts, tc.name)
 	}
 
 }
