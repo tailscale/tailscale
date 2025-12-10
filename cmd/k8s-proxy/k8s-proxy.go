@@ -441,24 +441,15 @@ func setServeConfig(ctx context.Context, lc *local.Client, cm *certs.CertManager
 	if err != nil {
 		return fmt.Errorf("error getting local client status: %w", err)
 	}
-	serviceHostPort := ipn.HostPort(fmt.Sprintf("%s.%s:443", name.WithoutPrefix(), status.CurrentTailnet.MagicDNSSuffix))
-
+	serviceSNI := fmt.Sprintf("%s.%s", name.WithoutPrefix(), status.CurrentTailnet.MagicDNSSuffix)
 	serveConfig := ipn.ServeConfig{
-		// Configure for the Service hostname.
 		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 			name: {
 				TCP: map[uint16]*ipn.TCPPortHandler{
 					443: {
-						HTTPS: true,
-					},
-				},
-				Web: map[ipn.HostPort]*ipn.WebServerConfig{
-					serviceHostPort: {
-						Handlers: map[string]*ipn.HTTPHandler{
-							"/": {
-								Proxy: "http://localhost:80",
-							},
-						},
+						TCPForward:    "localhost:443",
+						TerminateTLS:  serviceSNI,
+						ProxyProtocol: 2,
 					},
 				},
 			},
