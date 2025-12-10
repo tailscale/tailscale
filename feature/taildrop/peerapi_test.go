@@ -501,7 +501,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			ext := &fakeExtension{
 				logf:           e.logBuf.Logf,
 				capFileSharing: tt.capSharing,
-				clock:          &tstest.Clock{},
+				clock:          tstime.StdClock{},
 				taildrop:       e.taildrop,
 			}
 			e.ph = &peerAPIHandler{
@@ -557,7 +557,7 @@ func TestFileDeleteRace(t *testing.T) {
 	fakeLB := &fakeExtension{
 		logf:           t.Logf,
 		capFileSharing: true,
-		clock:          &tstest.Clock{},
+		clock:          tstime.StdClock{},
 		taildrop:       taildropMgr,
 	}
 	buf := make([]byte, 2<<20)

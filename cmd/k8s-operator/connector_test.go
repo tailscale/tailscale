@@ -21,7 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 )
@@ -57,7 +57,7 @@ func TestConnector(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cl := tstest.NewClock(tstest.ClockOpts{})
+	cl := tstime.StdClock{}
 	cr := &ConnectorReconciler{
 		Client:   fc,
 		recorder: record.NewFakeRecorder(10),
@@ -247,7 +247,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cl := tstest.NewClock(tstest.ClockOpts{})
+	cl := tstime.StdClock{}
 	cr := &ConnectorReconciler{
 		Client: fc,
 		clock:  cl,
@@ -340,7 +340,7 @@ func TestConnectorWithAppConnector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cl := tstest.NewClock(tstest.ClockOpts{})
+	cl := tstime.StdClock{}
 	fr := record.NewFakeRecorder(1)
 	cr := &ConnectorReconciler{
 		Client: fc,
@@ -440,7 +440,7 @@ func TestConnectorWithMultipleReplicas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cl := tstest.NewClock(tstest.ClockOpts{})
+	cl := tstime.StdClock{}
 	fr := record.NewFakeRecorder(1)
 	cr := &ConnectorReconciler{
 		Client: fc,

@@ -23,7 +23,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
-	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 )
 
@@ -54,7 +53,7 @@ func TestTailscaleEgressServices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock := tstest.NewClock(tstest.ClockOpts{})
+	clock := tstime.StdClock{}
 
 	esr := &egressSvcsReconciler{
 		Client:      fc,
@@ -130,7 +129,7 @@ func TestTailscaleEgressServices(t *testing.T) {
 	})
 }
 
-func validateReadyService(t *testing.T, fc client.WithWatch, esr *egressSvcsReconciler, svc *corev1.Service, clock *tstest.Clock, zl *zap.Logger, cm *corev1.ConfigMap) {
+func validateReadyService(t *testing.T, fc client.WithWatch, esr *egressSvcsReconciler, svc *corev1.Service, clock tstime.Clock, zl *zap.Logger, cm *corev1.ConfigMap) {
 	expectReconciled(t, esr, "default", "test")
 	// Verify that a ClusterIP Service has been created.
 	name := findGenNameForEgressSvcResources(t, fc, svc)

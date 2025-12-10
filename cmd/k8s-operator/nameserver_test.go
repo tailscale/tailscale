@@ -22,7 +22,7 @@ import (
 
 	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 )
@@ -68,7 +68,7 @@ func TestNameserverReconciler(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	clock := tstest.NewClock(tstest.ClockOpts{})
+	clock := tstime.StdClock{}
 	reconciler := &NameserverReconciler{
 		Client:      fc,
 		clock:       clock,

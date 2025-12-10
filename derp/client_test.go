@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 )
 
@@ -79,7 +79,7 @@ func TestClientRecv(t *testing.T) {
 				nc:    dummyNetConn{},
 				br:    bufio.NewReader(bytes.NewReader(tt.input)),
 				logf:  t.Logf,
-				clock: &tstest.Clock{},
+				clock: tstime.StdClock{},
 			}
 			got, err := c.Recv()
 			if err != nil {
@@ -186,7 +186,7 @@ func TestClientSendRateLimiting(t *testing.T) {
 	cw := new(countWriter)
 	c := &Client{
 		bw:    bufio.NewWriter(cw),
-		clock: &tstest.Clock{},
+		clock: tstime.StdClock{},
 	}
 	c.setSendRateLimiter(ServerInfoMessage{})
 

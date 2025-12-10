@@ -20,7 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 )
 
 func TestProxyClass(t *testing.T) {
@@ -60,7 +60,7 @@ func TestProxyClass(t *testing.T) {
 		t.Fatal(err)
 	}
 	fr := record.NewFakeRecorder(3) // bump this if you expect a test case to throw more events
-	cl := tstest.NewClock(tstest.ClockOpts{})
+	cl := tstime.StdClock{}
 	pcr := &ProxyClassReconciler{
 		Client:   fc,
 		logger:   zl.Sugar(),

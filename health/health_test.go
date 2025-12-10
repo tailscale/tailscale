@@ -984,7 +984,7 @@ func TestCurrentStateETagWarnable(t *testing.T) {
 	})
 
 	t.Run("no_change", func(t *testing.T) {
-		clock := tstest.NewClock(tstest.ClockOpts{})
+		clock := tstime.StdClock{}
 		ht1 := newTracker(clock)
 
 		ht1.SetUnhealthy(testWarnable, Args{})

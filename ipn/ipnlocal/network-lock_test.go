@@ -32,8 +32,8 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tsd"
-	"tailscale.com/tstest"
 	"tailscale.com/tstest/tkatest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
@@ -470,7 +470,7 @@ func TestTKASyncTriggersCompact(t *testing.T) {
 	//
 	// Our compaction algorithm preserves AUMs received in the last 14 days, so
 	// we need to backdate the commit times to make the AUMs eligible for compaction.
-	clock := tstest.NewClock(tstest.ClockOpts{})
+	clock := tstime.StdClock{}
 	clock.Advance(-30 * 24 * time.Hour)
 
 	// Set up the TKA authority on the control plane.

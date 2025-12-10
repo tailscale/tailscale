@@ -23,7 +23,7 @@ import (
 	"tailscale.com/ipn"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 )
@@ -439,7 +439,7 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 }
 
 func TestIngressProxyClassAnnotation(t *testing.T) {
-	cl := tstest.NewClock(tstest.ClockOpts{})
+	cl := tstime.StdClock{}
 	zl := zap.Must(zap.NewDevelopment())
 
 	pcLEStaging, pcLEStagingFalse, _ := proxyClassesForLEStagingTest()
@@ -547,7 +547,7 @@ func TestIngressProxyClassAnnotation(t *testing.T) {
 }
 
 func TestIngressLetsEncryptStaging(t *testing.T) {
-	cl := tstest.NewClock(tstest.ClockOpts{})
+	cl := tstime.StdClock{}
 	zl := zap.Must(zap.NewDevelopment())
 
 	pcLEStaging, pcLEStagingFalse, pcOther := proxyClassesForLEStagingTest()

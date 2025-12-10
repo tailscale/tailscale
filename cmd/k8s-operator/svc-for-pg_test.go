@@ -27,7 +27,7 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/ingressservices"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 
@@ -112,7 +112,7 @@ func TestServicePGReconciler_UpdateHostname(t *testing.T) {
 	}
 }
 
-func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, client.Client, *fakeTSClient, *tstest.Clock) {
+func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, client.Client, *fakeTSClient, tstime.Clock) {
 	// Pre-create the ProxyGroup
 	pg := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -203,7 +203,7 @@ func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, clien
 		},
 	}
 
-	cl := tstest.NewClock(tstest.ClockOpts{})
+	cl := tstime.StdClock{}
 	svcPGR := &HAServiceReconciler{
 		Client:      fc,
 		tsClient:    ft,

@@ -24,7 +24,7 @@ import (
 	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/ptr"
 )
 
@@ -65,7 +65,7 @@ func TestDNSRecordsReconciler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cl := tstest.NewClock(tstest.ClockOpts{})
+	cl := tstime.StdClock{}
 	// Set the ready condition of the DNSConfig
 	mustUpdateStatus(t, fc, "", "test", func(c *tsapi.DNSConfig) {
 		operatorutils.SetDNSConfigCondition(c, tsapi.NameserverReady, metav1.ConditionTrue, reasonNameserverCreated, reasonNameserverCreated, 0, cl, zl.Sugar())

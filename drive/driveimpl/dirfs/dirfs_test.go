@@ -16,7 +16,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/tailscale/xnet/webdav"
 	"tailscale.com/drive/driveimpl/shared"
-	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 )
 
 func TestStat(t *testing.T) {
@@ -276,7 +276,7 @@ func TestRename(t *testing.T) {
 	}
 }
 
-func createFileSystem(t *testing.T) (webdav.FileSystem, string, string, *tstest.Clock) {
+func createFileSystem(t *testing.T) (webdav.FileSystem, string, string, tstime.Clock) {
 	s1, dir1 := startRemote(t)
 	s2, dir2 := startRemote(t)
 
@@ -301,7 +301,7 @@ func createFileSystem(t *testing.T) (webdav.FileSystem, string, string, *tstest.
 		t.Fatal(err)
 	}
 
-	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
+	clock := tstime.StdClock{}
 	fs := &FS{
 		Clock:      clock,
 		StaticRoot: "domain",

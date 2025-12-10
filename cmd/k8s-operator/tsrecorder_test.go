@@ -24,7 +24,7 @@ import (
 
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/ptr"
 )
 
@@ -52,7 +52,7 @@ func TestRecorder(t *testing.T) {
 	tsClient := &fakeTSClient{}
 	zl, _ := zap.NewDevelopment()
 	fr := record.NewFakeRecorder(2)
-	cl := tstest.NewClock(tstest.ClockOpts{})
+	cl := tstime.StdClock{}
 	reconciler := &RecorderReconciler{
 		tsNamespace: tsNamespace,
 		Client:      fc,

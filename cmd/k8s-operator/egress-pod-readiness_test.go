@@ -23,7 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/ptr"
 )
 
@@ -35,7 +35,7 @@ func TestEgressPodReadiness(t *testing.T) {
 		WithStatusSubresource(&corev1.Pod{}).
 		Build()
 	zl, _ := zap.NewDevelopment()
-	cl := tstest.NewClock(tstest.ClockOpts{})
+	cl := tstime.StdClock{}
 	rec := &egressPodsReconciler{
 		tsNamespace: "operator-ns",
 		Client:      fc,
@@ -470,7 +470,7 @@ func newSvc(name string, port int32) (*corev1.Service, string) {
 	return svc, fmt.Sprintf("http://%s.operator-ns.svc.cluster.local:%d/healthz", name, port)
 }
 
-func podSetReady(pod *corev1.Pod, cl *tstest.Clock) {
+func podSetReady(pod *corev1.Pod, cl tstime.Clock) {
 	pod.Status.Conditions = append(pod.Status.Conditions, corev1.PodCondition{
 		Type:               tsEgressReadinessGate,
 		Status:             corev1.ConditionTrue,

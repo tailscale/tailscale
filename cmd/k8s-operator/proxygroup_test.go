@@ -34,7 +34,7 @@ import (
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 )
@@ -592,7 +592,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 			tsClient := &fakeTSClient{}
 			zl, _ := zap.NewDevelopment()
 			fr := record.NewFakeRecorder(10)
-			cl := tstest.NewClock(tstest.ClockOpts{})
+			cl := tstime.StdClock{}
 
 			pc := &tsapi.ProxyClass{
 				ObjectMeta: metav1.ObjectMeta{
@@ -834,7 +834,7 @@ func TestProxyGroup(t *testing.T) {
 	tsClient := &fakeTSClient{}
 	zl, _ := zap.NewDevelopment()
 	fr := record.NewFakeRecorder(1)
-	cl := tstest.NewClock(tstest.ClockOpts{})
+	cl := tstime.StdClock{}
 	reconciler := &ProxyGroupReconciler{
 		tsNamespace:       tsNamespace,
 		tsProxyImage:      testProxyImage,
@@ -1051,7 +1051,7 @@ func TestProxyGroupTypes(t *testing.T) {
 		Client:       fc,
 		log:          zl.Sugar(),
 		tsClient:     &fakeTSClient{},
-		clock:        tstest.NewClock(tstest.ClockOpts{}),
+		clock:        tstime.StdClock{},
 	}
 
 	t.Run("egress_type", func(t *testing.T) {
@@ -1291,7 +1291,7 @@ func TestKubeAPIServerStatusConditionFlow(t *testing.T) {
 		Client:       fc,
 		log:          zap.Must(zap.NewDevelopment()).Sugar(),
 		tsClient:     &fakeTSClient{},
-		clock:        tstest.NewClock(tstest.ClockOpts{}),
+		clock:        tstime.StdClock{},
 	}
 
 	expectReconciled(t, r, "", pg.Name)
@@ -1344,7 +1344,7 @@ func TestKubeAPIServerType_DoesNotOverwriteServicesConfig(t *testing.T) {
 		Client:       fc,
 		log:          zap.Must(zap.NewDevelopment()).Sugar(),
 		tsClient:     &fakeTSClient{},
-		clock:        tstest.NewClock(tstest.ClockOpts{}),
+		clock:        tstime.StdClock{},
 	}
 
 	pg := &tsapi.ProxyGroup{
@@ -1429,7 +1429,7 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 		Client:       fc,
 		log:          zap.Must(zap.NewDevelopment()).Sugar(),
 		tsClient:     &fakeTSClient{},
-		clock:        tstest.NewClock(tstest.ClockOpts{}),
+		clock:        tstime.StdClock{},
 	}
 
 	existingServices := []string{"svc1", "svc2"}
@@ -1686,7 +1686,7 @@ func proxyClassesForLEStagingTest() (*tsapi.ProxyClass, *tsapi.ProxyClass, *tsap
 	return pcLEStaging, pcLEStagingFalse, pcOther
 }
 
-func setProxyClassReady(t *testing.T, fc client.Client, cl *tstest.Clock, name string) *tsapi.ProxyClass {
+func setProxyClassReady(t *testing.T, fc client.Client, cl tstime.Clock, name string) *tsapi.ProxyClass {
 	t.Helper()
 	pc := &tsapi.ProxyClass{}
 	if err := fc.Get(t.Context(), client.ObjectKey{Name: name}, pc); err != nil {
@@ -1838,7 +1838,7 @@ func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyG
 }
 
 func TestProxyGroupLetsEncryptStaging(t *testing.T) {
-	cl := tstest.NewClock(tstest.ClockOpts{})
+	cl := tstime.StdClock{}
 	zl := zap.Must(zap.NewDevelopment())
 
 	// Set up test cases- most are shared with non-HA Ingress.

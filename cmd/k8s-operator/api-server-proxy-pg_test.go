@@ -23,7 +23,7 @@ import (
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 )
@@ -124,7 +124,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 		logger:      zap.Must(zap.NewDevelopment()).Sugar(),
 		recorder:    record.NewFakeRecorder(10),
 		lc:          lc,
-		clock:       tstest.NewClock(tstest.ClockOpts{}),
+		clock:       tstime.StdClock{},
 		operatorID:  "self-id",
 	}
 

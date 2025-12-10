@@ -21,12 +21,12 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/util/mak"
 )
 
 func TestTailscaleEgressEndpointSlices(t *testing.T) {
-	clock := tstest.NewClock(tstest.ClockOpts{})
+	clock := tstime.StdClock{}
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test",

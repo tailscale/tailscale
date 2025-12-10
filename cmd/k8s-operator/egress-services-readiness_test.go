@@ -18,7 +18,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 )
 
@@ -30,7 +29,7 @@ func TestEgressServiceReadiness(t *testing.T) {
 		WithStatusSubresource(&tsapi.ProxyGroup{}).
 		Build()
 	zl, _ := zap.NewDevelopment()
-	cl := tstest.NewClock(tstest.ClockOpts{})
+	cl := tstime.StdClock{}
 	rec := &egressSvcsReadinessReconciler{
 		tsNamespace: "operator-ns",
 		Client:      fc,

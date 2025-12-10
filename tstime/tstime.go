@@ -108,6 +108,8 @@ func (c DefaultClock) Since(t time.Time) time.Duration {
 // time precisely, something required for certain types of tests to be possible
 // at all, speeds up execution by not needing to sleep, and can dramatically
 // reduce the risk of flakes due to tests executing too slowly or quickly.
+//
+// DEPRECATED: now that testing/synctest is available, use that for testing.
 type Clock interface {
 	// Now returns the current time, as in time.Now.
 	Now() time.Time

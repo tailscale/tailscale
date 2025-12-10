@@ -13,7 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 )
 
 func TestGetServicesNodePortRangeFromErr(t *testing.T) {
@@ -193,7 +193,7 @@ func TestValidateNodePortRanges(t *testing.T) {
 
 	// as part of this test, we want to create an adjacent ProxyClass in order to ensure that if it clashes with the one created in this test
 	// that we get an error
-	cl := tstest.NewClock(tstest.ClockOpts{})
+	cl := tstime.StdClock{}
 	opc := &tsapi.ProxyClass{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "other-pc",

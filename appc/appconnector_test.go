@@ -11,13 +11,13 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc/appctest"
-	"tailscale.com/tstest"
 	"tailscale.com/types/appctype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus/eventbustest"
@@ -689,50 +689,51 @@ func TestRoutesWithout(t *testing.T) {
 }
 
 func TestRateLogger(t *testing.T) {
-	clock := tstest.Clock{}
-	wasCalled := false
-	rl := newRateLogger(func() time.Time { return clock.Now() }, 1*time.Second, func(count int64, _ time.Time, _ int64) {
-		if count != 3 {
-			t.Fatalf("count for prev period: got %d, want 3", count)
-		}
-		wasCalled = true
-	})
+	synctest.Test(t, func(t *testing.T) {
+		wasCalled := false
+		rl := newRateLogger(time.Now, 1*time.Second, func(count int64, _ time.Time, _ int64) {
+			if count != 3 {
+				t.Fatalf("count for prev period: got %d, want 3", count)
+			}
+			wasCalled = true
+		})
 
-	for i := 0; i < 3; i++ {
-		clock.Advance(1 * time.Millisecond)
+		for i := 0; i < 3; i++ {
+			time.Sleep(1 * time.Millisecond)
+			rl.update(0)
+			if wasCalled {
+				t.Fatalf("wasCalled: got true, want false")
+			}
+		}
+
+		time.Sleep(1 * time.Second)
 		rl.update(0)
-		if wasCalled {
-			t.Fatalf("wasCalled: got true, want false")
+		if !wasCalled {
+			t.Fatalf("wasCalled: got false, want true")
 		}
-	}
 
-	clock.Advance(1 * time.Second)
-	rl.update(0)
-	if !wasCalled {
-		t.Fatalf("wasCalled: got false, want true")
-	}
+		wasCalled = false
+		rl = newRateLogger(time.Now, 1*time.Hour, func(count int64, _ time.Time, _ int64) {
+			if count != 3 {
+				t.Fatalf("count for prev period: got %d, want 3", count)
+			}
+			wasCalled = true
+		})
 
-	wasCalled = false
-	rl = newRateLogger(func() time.Time { return clock.Now() }, 1*time.Hour, func(count int64, _ time.Time, _ int64) {
-		if count != 3 {
-			t.Fatalf("count for prev period: got %d, want 3", count)
+		for i := 0; i < 3; i++ {
+			time.Sleep(1 * time.Minute)
+			rl.update(0)
+			if wasCalled {
+				t.Fatalf("wasCalled: got true, want false")
+			}
 		}
-		wasCalled = true
-	})
 
-	for i := 0; i < 3; i++ {
-		clock.Advance(1 * time.Minute)
+		time.Sleep(1 * time.Hour)
 		rl.update(0)
-		if wasCalled {
-			t.Fatalf("wasCalled: got true, want false")
+		if !wasCalled {
+			t.Fatalf("wasCalled: got false, want true")
 		}
-	}
-
-	clock.Advance(1 * time.Hour)
-	rl.update(0)
-	if !wasCalled {
-		t.Fatalf("wasCalled: got false, want true")
-	}
+	})
 }
 
 func TestRouteStoreMetrics(t *testing.T) {

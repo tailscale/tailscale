@@ -8,11 +8,11 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"tailscale.com/drive"
 	"tailscale.com/ipn"
-	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -78,21 +78,17 @@ func TestIsNotableNotify(t *testing.T) {
 }
 
 type rateLimitingBusSenderTester struct {
-	tb    testing.TB
-	got   []*ipn.Notify
-	clock *tstest.Clock
-	s     *rateLimitingBusSender
+	tb  testing.TB
+	got []*ipn.Notify
+	s   *rateLimitingBusSender
 }
 
 func (st *rateLimitingBusSenderTester) init() {
 	if st.s != nil {
 		return
 	}
-	st.clock = tstest.NewClock(tstest.ClockOpts{
-		Start: time.Unix(1731777537, 0), // time I wrote this test :)
-	})
 	st.s = &rateLimitingBusSender{
-		clock: tstime.DefaultClock{Clock: st.clock},
+		clock: tstime.DefaultClock{},
 		fn: func(n *ipn.Notify) bool {
 			st.got = append(st.got, n)
 			return true
@@ -110,7 +106,7 @@ func (st *rateLimitingBusSenderTester) send(n *ipn.Notify) {
 
 func (st *rateLimitingBusSenderTester) advance(d time.Duration) {
 	st.tb.Helper()
-	st.clock.Advance(d)
+	time.Sleep(d)
 	select {
 	case <-st.s.flushChan():
 		if !st.s.flush() {
@@ -138,83 +134,87 @@ func TestRateLimitingBusSender(t *testing.T) {
 	})
 
 	t.Run("buffered", func(t *testing.T) {
-		st := &rateLimitingBusSenderTester{tb: t}
-		st.init()
-		st.s.interval = 1 * time.Second
-		st.send(&ipn.Notify{Version: "initial"})
-		if len(st.got) != 1 {
-			t.Fatalf("got %d items; expected 1 (first to flush immediately)", len(st.got))
-		}
-		st.send(nm1)
-		st.send(nm2)
-		st.send(eng1)
-		st.send(eng2)
-		if len(st.got) != 1 {
+		synctest.Test(t, func(t *testing.T) {
+			st := &rateLimitingBusSenderTester{tb: t}
+			st.init()
+			st.s.interval = 1 * time.Second
+			st.send(&ipn.Notify{Version: "initial"})
 			if len(st.got) != 1 {
-				t.Fatalf("got %d items; expected still just that first 1", len(st.got))
+				t.Fatalf("got %d items; expected 1 (first to flush immediately)", len(st.got))
 			}
-		}
+			st.send(nm1)
+			st.send(nm2)
+			st.send(eng1)
+			st.send(eng2)
+			if len(st.got) != 1 {
+				if len(st.got) != 1 {
+					t.Fatalf("got %d items; expected still just that first 1", len(st.got))
+				}
+			}
 
-		// But moving the clock should flush the rest, collasced into one new one.
-		st.advance(5 * time.Second)
-		if len(st.got) != 2 {
-			t.Fatalf("got %d items; want 2", len(st.got))
-		}
-		gotn := st.got[1]
-		if gotn.NetMap != nm2.NetMap {
-			t.Errorf("got wrong NetMap; got %p", gotn.NetMap)
-		}
-		if gotn.Engine != eng2.Engine {
-			t.Errorf("got wrong Engine; got %p", gotn.Engine)
-		}
-		if t.Failed() {
-			t.Logf("failed Notify was: %v", logger.AsJSON(gotn))
-		}
+			// But moving the clock should flush the rest, collasced into one new one.
+			st.advance(5 * time.Second)
+			if len(st.got) != 2 {
+				t.Fatalf("got %d items; want 2", len(st.got))
+			}
+			gotn := st.got[1]
+			if gotn.NetMap != nm2.NetMap {
+				t.Errorf("got wrong NetMap; got %p", gotn.NetMap)
+			}
+			if gotn.Engine != eng2.Engine {
+				t.Errorf("got wrong Engine; got %p", gotn.Engine)
+			}
+			if t.Failed() {
+				t.Logf("failed Notify was: %v", logger.AsJSON(gotn))
+			}
+		})
 	})
 
 	// Test the Run method
 	t.Run("run", func(t *testing.T) {
-		st := &rateLimitingBusSenderTester{tb: t}
-		st.init()
-		st.s.interval = 1 * time.Second
-		st.s.lastFlush = st.clock.Now() // pretend we just flushed
+		synctest.Test(t, func(t *testing.T) {
+			st := &rateLimitingBusSenderTester{tb: t}
+			st.init()
+			st.s.interval = 1 * time.Second
+			st.s.lastFlush = time.Now() // pretend we just flushed
 
-		flushc := make(chan *ipn.Notify, 1)
-		st.s.fn = func(n *ipn.Notify) bool {
-			flushc <- n
-			return true
-		}
-		didSend := make(chan bool, 2)
-		st.s.didSendTestHook = func() { didSend <- true }
-		waitSend := func() {
-			select {
-			case <-didSend:
-			case <-time.After(5 * time.Second):
-				t.Error("timeout waiting for call to send")
+			flushc := make(chan *ipn.Notify, 1)
+			st.s.fn = func(n *ipn.Notify) bool {
+				flushc <- n
+				return true
 			}
-		}
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		incoming := make(chan *ipn.Notify, 2)
-		go func() {
-			incoming <- nm1
-			waitSend()
-			incoming <- nm2
-			waitSend()
-			st.advance(5 * time.Second)
-			select {
-			case n := <-flushc:
-				if n.NetMap != nm2.NetMap {
-					t.Errorf("got wrong NetMap; got %p", n.NetMap)
+			didSend := make(chan bool, 2)
+			st.s.didSendTestHook = func() { didSend <- true }
+			waitSend := func() {
+				select {
+				case <-didSend:
+				case <-time.After(5 * time.Second):
+					t.Error("timeout waiting for call to send")
 				}
-			case <-time.After(10 * time.Second):
-				t.Error("timeout")
 			}
-			cancel()
-		}()
 
-		st.s.Run(ctx, incoming)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			incoming := make(chan *ipn.Notify, 2)
+			go func() {
+				incoming <- nm1
+				waitSend()
+				incoming <- nm2
+				waitSend()
+				st.advance(5 * time.Second)
+				select {
+				case n := <-flushc:
+					if n.NetMap != nm2.NetMap {
+						t.Errorf("got wrong NetMap; got %p", n.NetMap)
+					}
+				case <-time.After(10 * time.Second):
+					t.Error("timeout")
+				}
+				cancel()
+			}()
+
+			st.s.Run(ctx, incoming)
+		})
 	})
 }
