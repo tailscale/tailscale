@@ -441,6 +441,8 @@ type metrics struct {
 	// approvedRoutes is a metric that reports the number of network routes served by the local node and approved
 	// by the control server.
 	approvedRoutes *usermetric.Gauge
+
+	homeDERP *usermetric.Gauge
 }
 
 // clientGen is a func that creates a control plane client.
@@ -492,6 +494,8 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 			"tailscaled_advertised_routes", "Number of advertised network routes (e.g. by a subnet router)"),
 		approvedRoutes: sys.UserMetricsRegistry().NewGauge(
 			"tailscaled_approved_routes", "Number of approved network routes (e.g. by a subnet router)"),
+		homeDERP: sys.UserMetricsRegistry().NewGauge(
+			"tailscaled_home_derp_region_id", "DERP region ID of this node's home relay server"),
 	}
 
 	b := &LocalBackend{
@@ -6205,6 +6209,8 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 			b.metrics.approvedRoutes.Set(approved)
 		}
 	}
+
+	b.metrics.homeDERP.Set(float64(b.MagicConn().DERPHome()))
 
 	if buildfeatures.HasDrive && nm != nil {
 		if f, ok := hookSetNetMapLockedDrive.GetOk(); ok {
