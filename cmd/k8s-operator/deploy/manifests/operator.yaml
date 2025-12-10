@@ -206,6 +206,11 @@ spec:
                                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
                                     type: string
                                 type: array
+                            tailnet:
+                                description: |-
+                                    Tailnet specifies the tailnet this Connector should join. If blank, the default tailnet is used. When set, this
+                                    name must match that of a valid Tailnet resource.
+                                type: string
                         type: object
                         x-kubernetes-validations:
                             - message: A Connector needs to have at least one of exit node, subnet router or app connector configured.
@@ -319,6 +324,9 @@ spec:
                                 description: |-
                                     SubnetRoutes are the routes currently exposed to tailnet via this
                                     Connector instance.
+                                type: string
+                            tailnet:
+                                description: Tailnet specifies the name of the Tailnet resource the Connector is currently referring to.
                                 type: string
                             tailnetIPs:
                                 description: |-
@@ -3145,6 +3153,11 @@ spec:
                                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
                                     type: string
                                 type: array
+                            tailnet:
+                                description: |-
+                                    Tailnet specifies the tailnet this ProxyGroup should join. If blank, the default tailnet is used. When set, this
+                                    name must match that of a valid Tailnet resource.
+                                type: string
                             type:
                                 description: |-
                                     Type of the ProxyGroup proxies. Supported types are egress, ingress, and kube-apiserver.
@@ -3268,6 +3281,9 @@ spec:
                                 x-kubernetes-list-map-keys:
                                     - hostname
                                 x-kubernetes-list-type: map
+                            tailnet:
+                                description: Tailnet specifies the name of the Tailnet resource the ProxyGroup is currently referring to.
+                                type: string
                             url:
                                 description: |-
                                     URL of the kube-apiserver proxy advertised by the ProxyGroup devices, if
@@ -4968,6 +4984,11 @@ spec:
                                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
                                     type: string
                                 type: array
+                            tailnet:
+                                description: |-
+                                    Tailnet specifies the tailnet this Recorder should join. If blank, the default tailnet is used. When set, this
+                                    name must match that of a valid Tailnet resource.
+                                type: string
                         type: object
                         x-kubernetes-validations:
                             - message: S3 storage must be used when deploying multiple Recorder replicas
@@ -5068,6 +5089,9 @@ spec:
                                 x-kubernetes-list-map-keys:
                                     - hostname
                                 x-kubernetes-list-type: map
+                            tailnet:
+                                description: Tailnet specifies the name of the Tailnet resource the Recorder is currently referring to.
+                                type: string
                         type: object
                 required:
                     - spec

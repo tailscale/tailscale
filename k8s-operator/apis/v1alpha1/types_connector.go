@@ -133,6 +133,11 @@ type ConnectorSpec struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	Replicas *int32 `json:"replicas,omitempty"`
+
+	// Tailnet specifies the tailnet this Connector should join. If blank, the default tailnet is used. When set, this
+	// name must match that of a valid Tailnet resource.
+	// +optional
+	Tailnet string `json:"tailnet,omitempty"`
 }
 
 // SubnetRouter defines subnet routes that should be exposed to tailnet via a
@@ -225,6 +230,9 @@ type ConnectorStatus struct {
 	// Devices contains information on each device managed by the Connector resource.
 	// +optional
 	Devices []ConnectorDevice `json:"devices"`
+	// Tailnet specifies the name of the Tailnet resource the Connector is currently referring to.
+	// +optional
+	Tailnet string `json:"tailnet,omitempty"`
 }
 
 type ConnectorDevice struct {

@@ -141,6 +141,7 @@ _Appears in:_
 | `appConnector` _[AppConnector](#appconnector)_ | AppConnector defines whether the Connector device should act as a Tailscale app connector. A Connector that is<br />configured as an app connector cannot be a subnet router or an exit node. If this field is unset, the<br />Connector does not act as an app connector.<br />Note that you will need to manually configure the permissions and the domains for the app connector via the<br />Admin panel.<br />Note also that the main tested and supported use case of this config option is to deploy an app connector on<br />Kubernetes to access SaaS applications available on the public internet. Using the app connector to expose<br />cluster workloads or other internal workloads to tailnet might work, but this is not a use case that we have<br />tested or optimised for.<br />If you are using the app connector to access SaaS applications because you need a predictable egress IP that<br />can be whitelisted, it is also your responsibility to ensure that cluster traffic from the connector flows<br />via that predictable IP, for example by enforcing that cluster egress traffic is routed via an egress NAT<br />device with a static IP address.<br />https://tailscale.com/kb/1281/app-connectors |  |  |
 | `exitNode` _boolean_ | ExitNode defines whether the Connector device should act as a Tailscale exit node. Defaults to false.<br />This field is mutually exclusive with the appConnector field.<br />https://tailscale.com/kb/1103/exit-nodes |  |  |
 | `replicas` _integer_ | Replicas specifies how many devices to create. Set this to enable<br />high availability for app connectors, subnet routers, or exit nodes.<br />https://tailscale.com/kb/1115/high-availability. Defaults to 1. |  | Minimum: 0 <br /> |
+| `tailnet` _string_ | Tailnet specifies the tailnet this Connector should join. If blank, the default tailnet is used. When set, this<br />name must match that of a valid Tailnet resource. |  |  |
 
 
 #### ConnectorStatus
@@ -163,6 +164,7 @@ _Appears in:_
 | `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the Connector node. |  |  |
 | `hostname` _string_ | Hostname is the fully qualified domain name of the Connector node.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. When using multiple replicas, this field will be populated with the<br />first replica's hostname. Use the Hostnames field for the full list<br />of hostnames. |  |  |
 | `devices` _[ConnectorDevice](#connectordevice) array_ | Devices contains information on each device managed by the Connector resource. |  |  |
+| `tailnet` _string_ | Tailnet specifies the name of the Tailnet resource the Connector is currently referring to. |  |  |
 
 
 #### Container
@@ -743,6 +745,7 @@ _Appears in:_
 | `hostnamePrefix` _[HostnamePrefix](#hostnameprefix)_ | HostnamePrefix is the hostname prefix to use for tailnet devices created<br />by the ProxyGroup. Each device will have the integer number from its<br />StatefulSet pod appended to this prefix to form the full hostname.<br />HostnamePrefix can contain lower case letters, numbers and dashes, it<br />must not start with a dash and must be between 1 and 62 characters long. |  | Pattern: `^[a-z0-9][a-z0-9-]{0,61}$` <br />Type: string <br /> |
 | `proxyClass` _string_ | ProxyClass is the name of the ProxyClass custom resource that contains<br />configuration options that should be applied to the resources created<br />for this ProxyGroup. If unset, and there is no default ProxyClass<br />configured, the operator will create resources with the default<br />configuration. |  |  |
 | `kubeAPIServer` _[KubeAPIServerConfig](#kubeapiserverconfig)_ | KubeAPIServer contains configuration specific to the kube-apiserver<br />ProxyGroup type. This field is only used when Type is set to "kube-apiserver". |  |  |
+| `tailnet` _string_ | Tailnet specifies the tailnet this ProxyGroup should join. If blank, the default tailnet is used. When set, this<br />name must match that of a valid Tailnet resource. |  |  |
 
 
 #### ProxyGroupStatus
@@ -761,6 +764,7 @@ _Appears in:_
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the ProxyGroup<br />resources. Known condition types include `ProxyGroupReady` and<br />`ProxyGroupAvailable`.<br />* `ProxyGroupReady` indicates all ProxyGroup resources are reconciled and<br />  all expected conditions are true.<br />* `ProxyGroupAvailable` indicates that at least one proxy is ready to<br />  serve traffic.<br />For ProxyGroups of type kube-apiserver, there are two additional conditions:<br />* `KubeAPIServerProxyConfigured` indicates that at least one API server<br />  proxy is configured and ready to serve traffic.<br />* `KubeAPIServerProxyValid` indicates that spec.kubeAPIServer config is<br />  valid. |  |  |
 | `devices` _[TailnetDevice](#tailnetdevice) array_ | List of tailnet devices associated with the ProxyGroup StatefulSet. |  |  |
 | `url` _string_ | URL of the kube-apiserver proxy advertised by the ProxyGroup devices, if<br />any. Only applies to ProxyGroups of type kube-apiserver. |  |  |
+| `tailnet` _string_ | Tailnet specifies the name of the Tailnet resource the ProxyGroup is currently referring to. |  |  |
 
 
 #### ProxyGroupType
@@ -903,6 +907,7 @@ _Appears in:_
 | `enableUI` _boolean_ | Set to true to enable the Recorder UI. The UI lists and plays recorded sessions.<br />The UI will be served at <MagicDNS name of the recorder>:443. Defaults to false.<br />Corresponds to --ui tsrecorder flag https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.<br />Required if S3 storage is not set up, to ensure that recordings are accessible. |  |  |
 | `storage` _[Storage](#storage)_ | Configure where to store session recordings. By default, recordings will<br />be stored in a local ephemeral volume, and will not be persisted past the<br />lifetime of a specific pod. |  |  |
 | `replicas` _integer_ | Replicas specifies how many instances of tsrecorder to run. Defaults to 1. |  | Minimum: 0 <br /> |
+| `tailnet` _string_ | Tailnet specifies the tailnet this Recorder should join. If blank, the default tailnet is used. When set, this<br />name must match that of a valid Tailnet resource. |  |  |
 
 
 #### RecorderStatefulSet
@@ -938,6 +943,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the Recorder.<br />Known condition types are `RecorderReady`. |  |  |
 | `devices` _[RecorderTailnetDevice](#recordertailnetdevice) array_ | List of tailnet devices associated with the Recorder StatefulSet. |  |  |
+| `tailnet` _string_ | Tailnet specifies the name of the Tailnet resource the Recorder is currently referring to. |  |  |
 
 
 #### RecorderTailnetDevice

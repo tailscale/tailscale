@@ -181,6 +181,11 @@ spec:
                   items:
                     type: string
                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
+                tailnet:
+                  description: |-
+                    Tailnet specifies the tailnet this Connector should join. If blank, the default tailnet is used. When set, this
+                    name must match that of a valid Tailnet resource.
+                  type: string
               x-kubernetes-validations:
                 - rule: has(self.subnetRouter) || (has(self.exitNode) && self.exitNode == true) || has(self.appConnector)
                   message: A Connector needs to have at least one of exit node, subnet router or app connector configured.
@@ -294,6 +299,9 @@ spec:
                   description: |-
                     SubnetRoutes are the routes currently exposed to tailnet via this
                     Connector instance.
+                  type: string
+                tailnet:
+                  description: Tailnet specifies the name of the Tailnet resource the Connector is currently referring to.
                   type: string
                 tailnetIPs:
                   description: |-
