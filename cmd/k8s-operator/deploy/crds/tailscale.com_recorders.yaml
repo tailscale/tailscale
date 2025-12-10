@@ -1688,6 +1688,14 @@ spec:
                   items:
                     type: string
                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
+                tailnet:
+                  description: |-
+                    Tailnet specifies the tailnet this Recorder should join. If blank, the default tailnet is used. When set, this
+                    name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set.
+                  type: string
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: Recorder tailnet is immutable
               x-kubernetes-validations:
                 - rule: '!(self.replicas > 1 && (!has(self.storage) || !has(self.storage.s3)))'
                   message: S3 storage must be used when deploying multiple Recorder replicas
