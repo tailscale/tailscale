@@ -142,20 +142,42 @@ func sortIPs(s []netip.Addr) {
 	sort.Slice(s, func(i, j int) bool { return s[i].Less(s[j]) })
 }
 
+type PlatFlags uint
+
+const (
+	PlatFlagNoIPv4InternetConnectivity PlatFlags = 1 << iota
+	PlatFlagNoIPv6InternetConnectivity
+)
+
 // Interface is a wrapper around Go's net.Interface with some extra methods.
 type Interface struct {
 	*net.Interface
-	AltAddrs []net.Addr // if non-nil, returned by Addrs
-	Desc     string     // extra description (used on Windows)
+	AltAddrs  []net.Addr // if non-nil, returned by Addrs
+	Desc      string     // extra description (used on Windows)
+	PlatFlags PlatFlags  // flags with additional connectivity information
 }
 
-func (i Interface) IsLoopback() bool { return isLoopback(i.Interface) }
-func (i Interface) IsUp() bool       { return isUp(i.Interface) }
+func (i Interface) IsLoopback() bool {
+	return isLoopback(i.Interface)
+}
+
+func (i Interface) IsUp() bool {
+	return isUp(i.Interface)
+}
+
 func (i Interface) Addrs() ([]net.Addr, error) {
 	if i.AltAddrs != nil {
 		return i.AltAddrs, nil
 	}
 	return i.Interface.Addrs()
+}
+
+func (i Interface) isNoIPv6InternetConnectivity() bool {
+	return i.PlatFlags&PlatFlagNoIPv6InternetConnectivity != 0
+}
+
+func (i Interface) isNoIPv4InternetConnectivity() bool {
+	return i.PlatFlags&PlatFlagNoIPv6InternetConnectivity != 0
 }
 
 // ForeachInterfaceAddress is a wrapper for GetList, then
@@ -492,8 +514,8 @@ func getState(optTSInterfaceName string) (*State, error) {
 			if pfx.Addr().IsLoopback() {
 				continue
 			}
-			s.HaveV6 = s.HaveV6 || isUsableV6(pfx.Addr())
-			s.HaveV4 = s.HaveV4 || isUsableV4(pfx.Addr())
+			s.HaveV6 = s.HaveV6 || (isUsableV6(pfx.Addr()) && !ni.isNoIPv6InternetConnectivity())
+			s.HaveV4 = s.HaveV4 || (isUsableV4(pfx.Addr()) && !ni.isNoIPv4InternetConnectivity())
 		}
 	}); err != nil {
 		return nil, err

@@ -18,10 +18,9 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
+	"tailscale.com/util/winutil/winnet"
 	"tailscale.com/wgengine/router"
-	"tailscale.com/wgengine/winnet"
 
-	ole "github.com/go-ole/go-ole"
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/netipx"
 	"golang.org/x/sys/windows"
@@ -175,15 +174,10 @@ func setPrivateNetwork(ifcLUID winipcfg.LUID) (bool, error) {
 		return false, fmt.Errorf("ifcLUID.GUID: %v", err)
 	}
 
-	// aaron: DO NOT call Initialize() or Uninitialize() on c!
-	// We've already handled that process-wide.
-	var c ole.Connection
-
-	m, err := winnet.NewNetworkListManager(&c)
+	m, err := winnet.GetNetworkListManager()
 	if err != nil {
 		return false, fmt.Errorf("winnet.NewNetworkListManager: %v", err)
 	}
-	defer m.Release()
 
 	cl, err := m.GetNetworkConnections()
 	if err != nil {
