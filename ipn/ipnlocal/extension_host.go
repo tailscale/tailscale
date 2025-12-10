@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -570,6 +572,9 @@ func (h *ExtensionHost) shutdownWorkQueue() {
 	// for in-flight callbacks associated with those operations to finish.
 	if err := h.workQueue.Wait(ctx); err != nil {
 		h.logf("work queue shutdown failed: %v", err)
+		b := make([]byte, 2<<20)
+		n := runtime.Stack(b, true)
+		os.WriteFile("/tmp/shutdown-hang-stacks.txt", b[:n], 0644)
 	}
 }
 
