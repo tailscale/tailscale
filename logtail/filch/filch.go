@@ -18,6 +18,7 @@ import (
 	"slices"
 	"sync"
 
+	"tailscale.com/metrics"
 	"tailscale.com/util/must"
 )
 
@@ -88,7 +89,7 @@ type Filch struct {
 	storedBytes  expvar.Int
 }
 
-// ExpVar report metrics about the buffer.
+// ExpVar returns a [metrics.Set] with metrics about the buffer.
 //
 //   - counter_write_calls: Total number of calls to [Filch.Write]
 //     (excludes calls when file is closed).
@@ -114,7 +115,7 @@ type Filch struct {
 //
 //   - gauge_stored_bytes: Current number of bytes stored on disk.
 func (f *Filch) ExpVar() expvar.Var {
-	m := new(expvar.Map)
+	m := new(metrics.Set)
 	m.Set("counter_write_calls", &f.writeCalls)
 	m.Set("counter_read_calls", &f.readCalls)
 	m.Set("counter_rotate_calls", &f.rotateCalls)
