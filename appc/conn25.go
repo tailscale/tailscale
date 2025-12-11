@@ -7,7 +7,10 @@ import (
 	"net/netip"
 	"sync"
 
+	"tailscale.com/net/packet"
+	"tailscale.com/net/packet/checksum"
 	"tailscale.com/tailcfg"
+	"tailscale.com/wgengine/filter"
 )
 
 // Conn25 holds the developing state for the as yet nascent next generation app connector.
@@ -107,4 +110,128 @@ type ConnectorTransitIPResponse struct {
 	// TransitIPs is the list of outcomes for each requested mapping. Elements
 	// correspond to the order of [ConnectorTransitIPRequest.TransitIPs].
 	TransitIPs []TransitIPResponse `json:"transitIPs,omitempty"`
+}
+
+// DatapathHandler provides methods to intercept, mangle, and filter packets
+// in the datapath for app connector purposes.
+type DatapathHandler interface {
+	// HandleLocalTraffic intercepts traffic from the local network stack, e.g. the tun device, and
+	// determines if the traffic is app connector traffic that should be forwarded to a connector,
+	// or is return traffic that should be forwarded back to the originating client. Valid packets may
+	// be altered, e.g. NAT, and invalid packets may be dropped.
+	HandleLocalTraffic(*packet.Parsed) filter.Response
+
+	// HandleTunnelTraffic intercepts traffic from the wireguard tunnel and determines if the traffic
+	// is app connector traffic that should be forwarded to an application destination or back to the
+	// local network stack. Valid packets may be altered, e.g. NAT, and invalid packets may be dropped.
+	HandleTunnelTraffic(*packet.Parsed) filter.Response
+}
+
+// datapathHandler is the main implementation of DatapathHandler.
+type datapathHandler struct {
+	// conn25 *Conn25 perhaps
+	// flowTable Flowtable perhaps
+}
+
+func NewDatpathHandler() DatapathHandler {
+	return &datapathHandler{}
+}
+
+func (dh *datapathHandler) HandleLocalTraffic(p *packet.Parsed) filter.Response {
+	// Connector-bound traffic.
+	if dh.dstIPIsMagicIP(p) {
+		return dh.processClientToConnector(p)
+	}
+
+	// Return traffic from external application.
+	if dh.selfIsConnector() && dh.isConnectorReturnTraffic(p) {
+		return dh.processConnectorToClient(p)
+	}
+	// if controller client with flow in flow table, find address for source nat. If not, forward along.
+
+	return filter.Accept
+}
+
+func (dh *datapathHandler) HandleTunnelTraffic(p *packet.Parsed) filter.Response {
+	// Return traffic from connector, source is a Transit IP.
+	if dh.srcIsTransitIP(p) {
+		return dh.processClientFromConnector(p)
+	}
+
+	// Outgoing traffic for an external application. Destination is Transit IP.
+	if dh.selfIsConnector() && dh.dstIPIsTransitIP(p) {
+		return dh.processConnectorFromClient(p)
+	}
+	return filter.Accept
+}
+
+// processClientToConnector consults the flow table to determine which connector to send the packet to,
+// and if this is a new flow, runs the connector selection algorithm, and installs a new flow.
+// If the packet is valid, we DNAT from the Magic IP to the Transit IP.
+// If there is no flow or the packet is otherwise invalid, we drop the packet.
+func (dh *datapathHandler) processClientToConnector(p *packet.Parsed) filter.Response {
+	// TODO: implement
+	// TODO: we could do magic IP validation here as well
+
+	// This is just an example of how to do the NAT, when we need it.
+	transitIP := netip.AddrFrom4([4]byte{169, 254, 100, 1})
+	checksum.UpdateDstAddr(p, transitIP)
+
+	return filter.Drop
+}
+
+// processConnectorToClient consults the flow table on a connector to determine which client
+// to send the return traffic to.
+// If the packet is valid, we SNAT the external application IP to the Transit IP.
+// If there is no flow or the packet is otherwise invalid, we drop the packet.
+func (dh *datapathHandler) processConnectorToClient(p *packet.Parsed) filter.Response {
+	// TODO: implement
+	return filter.Drop
+}
+
+// processClientFromConnector consults the flow table to validate that the packet should
+// be forwarded back to the local network stack.
+// We SNAT the Transit IP back to the Magic IP.
+// If there is no flow or the packet is otherwise invalid, we drop the packet.
+func (dh *datapathHandler) processClientFromConnector(p *packet.Parsed) filter.Response {
+	// TODO: implement
+	return filter.Drop
+}
+
+// processConnectorFromClient consults the flow table to see if this packet is part of
+// an existing outbound flow to an application, or a new flow should be installed.
+// If the packet is valid, we DNAT from the Transit IP to the external application IP.
+// If there is no flow or the packet is otherwise invalid, we drop the packet.
+func (dh *datapathHandler) processConnectorFromClient(p *packet.Parsed) filter.Response {
+	// TODO: implement
+	return filter.Drop
+}
+
+// dstIPIsMagicIP returns whether the destination IP address in p is Magic IP,
+// which could indicate interesting traffic for outbound traffic from a client to a connector.
+func (dh *datapathHandler) dstIPIsMagicIP(p *packet.Parsed) bool {
+	// TODO: implement
+	// TODO: we could do magic IP validation here as well
+	return false
+}
+
+func (dh *datapathHandler) srcIsTransitIP(p *packet.Parsed) bool {
+	// TODO: implement
+	return false
+}
+
+func (dh *datapathHandler) dstIPIsTransitIP(p *packet.Parsed) bool {
+	// TODO: implement
+	return false
+}
+
+// selfIsConnector returns whether this client is running on an app connector.
+func (dh *datapathHandler) selfIsConnector() bool {
+	// TODO: implement
+	return false
+}
+
+func (dh *datapathHandler) isConnectorReturnTraffic(p *packet.Parsed) bool {
+	// TODO: implement
+	return false
 }

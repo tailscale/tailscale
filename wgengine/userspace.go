@@ -22,6 +22,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
+	"tailscale.com/appc"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
@@ -163,6 +164,10 @@ type userspaceEngine struct {
 
 	// networkLogger logs statistics about network connections.
 	networkLogger netlog.Logger
+
+	// appcDatapathHander intercepts, and possibly mangles and filters packets
+	// for app connector operation.
+	appcDatapathHandler appc.DatapathHandler
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
@@ -430,6 +435,8 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	if conf.RespondToPing {
 		e.tundev.PostFilterPacketInboundFromWireGuard = echoRespondToAll
+	} else {
+		e.tundev.PostFilterPacketInboundFromWireGuard = e.handleTunnelPackets
 	}
 	e.tundev.PreFilterPacketOutboundToWireGuardEngineIntercept = e.handleLocalPackets
 
@@ -623,7 +630,20 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 		}
 	}
 
+	if e.appcDatapathHandler != nil {
+		return e.appcDatapathHandler.HandleLocalTraffic(p)
+	}
+
 	return filter.Accept
+}
+
+// handleTunnelPackets inspects packets coming from the wireguard tunnel stack and have passed through
+// the main filter. It intercepts and filters packets before delivering tun device wrapper..
+func (e *userspaceEngine) handleTunnelPackets(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) (filter.Response, *gro.GRO) {
+	if e.appcDatapathHandler != nil {
+		return e.appcDatapathHandler.HandleTunnelTraffic(p), gro
+	}
+	return filter.Accept, gro
 }
 
 var debugTrimWireguard = envknob.RegisterOptBool("TS_DEBUG_TRIM_WIREGUARD")
