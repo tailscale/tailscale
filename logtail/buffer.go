@@ -28,9 +28,11 @@ type Buffer interface {
 }
 
 func NewMemoryBuffer(numEntries int) Buffer {
-	return &memBuffer{
+	mb := &memBuffer{
 		pending: make(chan qentry, numEntries),
 	}
+	syncs.RegisterMutex(&mb.dropMu, "logtail.memBuffer.dropMu")
+	return mb
 }
 
 type memBuffer struct {

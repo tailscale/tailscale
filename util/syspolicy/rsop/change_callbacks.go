@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"tailscale.com/syncs"
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy/internal/loggerx"
 	"tailscale.com/util/syspolicy/pkey"
@@ -71,7 +70,7 @@ func (c PolicyChange) HasChangedAnyOf(keys ...pkey.Key) bool {
 // policyChangeCallbacks are the callbacks to invoke when the effective policy changes.
 // It is safe for concurrent use.
 type policyChangeCallbacks struct {
-	mu  syncs.Mutex
+	mu  sync.Mutex
 	cbs set.HandleSet[PolicyChangeCallback]
 }
 
