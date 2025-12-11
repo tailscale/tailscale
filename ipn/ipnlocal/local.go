@@ -5809,7 +5809,14 @@ func (b *LocalBackend) stateMachineLocked() {
 func (b *LocalBackend) stopEngineAndWaitLocked() {
 	syncs.RequiresMutex(&b.mu)
 	b.logf("stopEngineAndWait...")
-	st, _ := b.e.ResetAndStop() // TODO: what should we do if this returns an error?
+	st, err := b.e.ResetAndStop()
+	if err != nil {
+		// TODO(braditz): our caller, popBrowserAuthNowLocked, probably
+		// should handle this somehow. For now, just log it.
+		// See tailscale/tailscale#18187
+		b.logf("stopEngineAndWait: ResetAndStop error: %v", err)
+		return
+	}
 	b.setWgengineStatusLocked(st)
 	b.logf("stopEngineAndWait: done.")
 }
