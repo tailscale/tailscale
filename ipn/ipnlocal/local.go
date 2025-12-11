@@ -408,6 +408,8 @@ type LocalBackend struct {
 	// getCertForTest is used to retrieve TLS certificates in tests.
 	// See [LocalBackend.ConfigureCertsForTest].
 	getCertForTest func(hostname string) (*TLSCertKeyPair, error)
+
+	conn25 *appc.Conn25
 }
 
 // SetHardwareAttested enables hardware attestation key signatures in map
@@ -525,6 +527,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		captiveCtx:            captiveCtx,
 		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
 		needsCaptiveDetection: make(chan bool),
+		conn25:                &appc.Conn25{},
 	}
 
 	nb := newNodeBackend(ctx, b.logf, b.sys.Bus.Get())
@@ -2876,10 +2879,10 @@ func (b *LocalBackend) updateFilterLocked(prefs ipn.PrefsView) {
 	oldFilter := b.e.GetFilter()
 	if shieldsUp {
 		b.logf("[v1] netmap packet filter: (shields up)")
-		b.setFilter(filter.NewShieldsUpFilter(localNets, logNets, oldFilter, b.logf))
+		b.setFilter(filter.NewShieldsUpFilter(localNets, logNets, oldFilter, b.logf, filter.WithLinkLocalDestinationAllower(b.conn25)))
 	} else {
 		b.logf("[v1] netmap packet filter: %v filters", len(packetFilter))
-		b.setFilter(filter.New(packetFilter, b.srcIPHasCapForFilter, localNets, logNets, oldFilter, b.logf))
+		b.setFilter(filter.New(packetFilter, b.srcIPHasCapForFilter, localNets, logNets, oldFilter, b.logf, filter.WithLinkLocalDestinationAllower(b.conn25)))
 	}
 	// The filter for a jailed node is the exact same as a ShieldsUp filter.
 	oldJailedFilter := b.e.GetJailedFilter()
@@ -5140,7 +5143,12 @@ func (b *LocalBackend) authReconfigLocked() {
 		priv = key.NodePrivate{}
 	}
 
-	cfg, err := nmcfg.WGCfg(priv, nm, b.logf, flags, prefs.ExitNodeID())
+	var appConnectorTransitIPFn func(peer tailcfg.NodeView) []netip.Prefix
+	if b.conn25 != nil {
+		appConnectorTransitIPFn = b.conn25.AllTransitIPsForPeer
+	}
+
+	cfg, err := nmcfg.WGCfg(priv, nm, b.logf, flags, prefs.ExitNodeID(), appConnectorTransitIPFn)
 	if err != nil {
 		b.logf("wgcfg: %v", err)
 		return

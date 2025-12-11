@@ -45,7 +45,8 @@ type CaptureSink interface {
 	RegisterOutput(w io.Writer) (unregister func())
 }
 
-// CaptureMeta contains metadata that is used when debugging.
+// CaptureMeta contains metadata that is used when debugging, and
+// for some filtering decisions.
 type CaptureMeta struct {
 	DidSNAT     bool           // SNAT was performed & the address was updated.
 	OriginalSrc netip.AddrPort // The source address before SNAT was performed.
