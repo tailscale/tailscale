@@ -97,6 +97,11 @@ type ProxyGroupSpec struct {
 	// ProxyGroup type. This field is only used when Type is set to "kube-apiserver".
 	// +optional
 	KubeAPIServer *KubeAPIServerConfig `json:"kubeAPIServer,omitempty"`
+
+	// Tailnet specifies the tailnet this ProxyGroup should join. If blank, the default tailnet is used. When set, this
+	// name must match that of a valid Tailnet resource.
+	// +optional
+	Tailnet string `json:"tailnet,omitempty"`
 }
 
 type ProxyGroupStatus struct {
@@ -131,6 +136,10 @@ type ProxyGroupStatus struct {
 	// any. Only applies to ProxyGroups of type kube-apiserver.
 	// +optional
 	URL string `json:"url,omitempty"`
+
+	// Tailnet specifies the name of the Tailnet resource the ProxyGroup is currently referring to.
+	// +optional
+	Tailnet string `json:"tailnet,omitempty"`
 }
 
 type TailnetDevice struct {

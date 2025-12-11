@@ -81,6 +81,11 @@ type RecorderSpec struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	Replicas *int32 `json:"replicas,omitzero"`
+
+	// Tailnet specifies the tailnet this Recorder should join. If blank, the default tailnet is used. When set, this
+	// name must match that of a valid Tailnet resource.
+	// +optional
+	Tailnet string `json:"tailnet,omitempty"`
 }
 
 type RecorderStatefulSet struct {
@@ -271,6 +276,10 @@ type RecorderStatus struct {
 	// +listMapKey=hostname
 	// +optional
 	Devices []RecorderTailnetDevice `json:"devices,omitempty"`
+
+	// Tailnet specifies the name of the Tailnet resource the Recorder is currently referring to.
+	// +optional
+	Tailnet string `json:"tailnet,omitempty"`
 }
 
 type RecorderTailnetDevice struct {
