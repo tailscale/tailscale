@@ -17,6 +17,7 @@ func maybeSkip(t *testing.T) {
 			"https://github.com/tailscale/tailscale/issues/16966",
 			"6.6.102", "6.6.103", "6.6.104",
 			"6.12.42", "6.12.43", "6.12.44", "6.12.45",
+			"6.14.0",
 		)
 	}
 }
