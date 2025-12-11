@@ -311,18 +311,40 @@ func (e *serverEndpoint) isBound() bool {
 // onlyStaticAddrPorts is true, then dynamic addr:port discovery will be
 // disabled, and only addr:port's set via [Server.SetStaticAddrPorts] will be
 // used.
-func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool) (s *Server, err error) {
-	s = &Server{
-		logf:                logf,
-		disco:               key.NewDisco(),
-		bindLifetime:        defaultBindLifetime,
-		steadyStateLifetime: defaultSteadyStateLifetime,
-		closeCh:             make(chan struct{}),
-		onlyStaticAddrPorts: onlyStaticAddrPorts,
-		byDisco:             make(map[key.SortedPairOfDiscoPublic]*serverEndpoint),
-		nextVNI:             minVNI,
-		byVNI:               make(map[uint32]*serverEndpoint),
+func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool) (*Server, error) {
+	s := &Server{}
+	err := s.initialize(logf, onlyStaticAddrPorts)
+	if err != nil {
+		return nil, err
 	}
+
+	err = s.bindSockets(port)
+	if err != nil {
+		return nil, err
+	}
+	s.startPacketReaders()
+
+	if !s.onlyStaticAddrPorts {
+		s.wg.Add(1)
+		go s.addrDiscoveryLoop(netmon.LocalAddresses)
+	}
+
+	s.wg.Add(1)
+	go s.endpointGCLoop()
+
+	return s, nil
+}
+
+func (s *Server) initialize(logf logger.Logf, onlyStaticAddrPorts bool) error {
+	s.logf = logf
+	s.disco = key.NewDisco()
+	s.bindLifetime = defaultBindLifetime
+	s.steadyStateLifetime = defaultSteadyStateLifetime
+	s.closeCh = make(chan struct{})
+	s.onlyStaticAddrPorts = onlyStaticAddrPorts
+	s.byDisco = make(map[key.SortedPairOfDiscoPublic]*serverEndpoint)
+	s.nextVNI = minVNI
+	s.byVNI = make(map[uint32]*serverEndpoint)
 	s.discoPublic = s.disco.Public()
 
 	// TODO(creachadair): Find a way to plumb this in during initialization.
@@ -332,7 +354,7 @@ func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool) (s *Serv
 	s.bus = bus
 	netMon, err := netmon.New(s.bus, logf)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	s.netChecker = &netcheck.Client{
 		NetMon: netMon,
@@ -347,22 +369,7 @@ func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool) (s *Serv
 			}
 		},
 	}
-
-	err = s.bindSockets(port)
-	if err != nil {
-		return nil, err
-	}
-	s.startPacketReaders()
-
-	if !s.onlyStaticAddrPorts {
-		s.wg.Add(1)
-		go s.addrDiscoveryLoop()
-	}
-
-	s.wg.Add(1)
-	go s.endpointGCLoop()
-
-	return s, nil
+	return nil
 }
 
 func (s *Server) startPacketReaders() {
@@ -384,7 +391,7 @@ func (s *Server) startPacketReaders() {
 	}
 }
 
-func (s *Server) addrDiscoveryLoop() {
+func (s *Server) addrDiscoveryLoop(localAddresses func() ([]netip.Addr, []netip.Addr, error)) {
 	defer s.wg.Done()
 
 	timer := time.NewTimer(0) // fire immediately
@@ -395,7 +402,7 @@ func (s *Server) addrDiscoveryLoop() {
 		addrPorts.Make()
 
 		// get local addresses
-		ips, _, err := netmon.LocalAddresses()
+		ips, _, err := localAddresses()
 		if err != nil {
 			return nil, err
 		}
