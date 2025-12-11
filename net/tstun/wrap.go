@@ -171,6 +171,9 @@ type Wrapper struct {
 	// PreFilterPacketInboundFromWireGuard is the inbound filter function that runs before the main filter
 	// and therefore sees the packets that may be later dropped by it.
 	PreFilterPacketInboundFromWireGuard FilterFunc
+	// PostFilterPacketInboundFromWireGuardAppConnector runs after the filter, but before PostFilterPacketInboundFromWireGuard.
+	// Non-app connector traffic is passed along. Invalid app connector traffic is dropped.
+	PostFilterPacketInboundFromWireGuardAppConnector FilterFunc
 	// PostFilterPacketInboundFromWireGuard is the inbound filter function that runs after the main filter.
 	PostFilterPacketInboundFromWireGuard GROFilterFunc
 	// PreFilterPacketOutboundToWireGuardNetstackIntercept is a filter function that runs before the main filter
@@ -183,6 +186,10 @@ type Wrapper struct {
 	// packets which it handles internally. If both this and PreFilterFromTunToNetstack
 	// filter functions are non-nil, this filter runs second.
 	PreFilterPacketOutboundToWireGuardEngineIntercept FilterFunc
+	// PreFilterPacketOutboundToWireGuardAppConnectorIntercept runs after PreFilterPacketOutboundToWireGuardEngineIntercept
+	// for app connector specific traffic. Non-app connector traffic is passed along. Invalid app connector traffic is
+	// dropped.
+	PreFilterPacketOutboundToWireGuardAppConnectorIntercept FilterFunc
 	// PostFilterPacketOutboundToWireGuard is the outbound filter function that runs after the main filter.
 	PostFilterPacketOutboundToWireGuard FilterFunc
 
@@ -872,6 +879,12 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 			return res, gro
 		}
 	}
+	if t.PreFilterPacketOutboundToWireGuardAppConnectorIntercept != nil {
+		if res := t.PreFilterPacketOutboundToWireGuardAppConnectorIntercept(p, t); res.IsDrop() {
+			// Handled by userspaceEngine's configured hook for Connectors 2025 app connectors.
+			return res, gro
+		}
+	}
 
 	// If the outbound packet is to a jailed peer, use our jailed peer
 	// packet filter.
@@ -1232,6 +1245,13 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook pa
 		}
 
 		return filter.Drop, gro
+	}
+
+	if t.PostFilterPacketInboundFromWireGuardAppConnector != nil {
+		if res := t.PostFilterPacketInboundFromWireGuardAppConnector(p, t); res.IsDrop() {
+			// Handled by userspaceEngine's configured hook for Connectors 2025 app connectors.
+			return res, gro
+		}
 	}
 
 	if t.PostFilterPacketInboundFromWireGuard != nil {
