@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"expvar"
 	"fmt"
 	"io"
 	"log"
@@ -28,6 +29,7 @@ import (
 	"github.com/creachadair/msync/trigger"
 	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/envknob"
+	"tailscale.com/metrics"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tstime"
@@ -180,6 +182,12 @@ type Logger struct {
 	shutdownStartMu sync.Mutex    // guards the closing of shutdownStart
 	shutdownStart   chan struct{} // closed when shutdown begins
 	shutdownDone    chan struct{} // closed when shutdown complete
+
+	// Metrics (see [Logger.ExpVar] for details).
+	uploadCalls   expvar.Int
+	failedCalls   expvar.Int
+	uploadedBytes expvar.Int
+	uploadingTime expvar.Int
 }
 
 type atomicSocktatsLabel struct{ p atomic.Uint32 }
@@ -477,6 +485,9 @@ func (lg *Logger) awaitInternetUp(ctx context.Context) {
 // origlen indicates the pre-compression body length.
 // origlen of -1 indicates that the body is not compressed.
 func (lg *Logger) upload(ctx context.Context, body []byte, origlen int) (retryAfter time.Duration, err error) {
+	lg.uploadCalls.Add(1)
+	startUpload := time.Now()
+
 	const maxUploadTime = 45 * time.Second
 	ctx = sockstats.WithSockStats(ctx, lg.sockstatsLabel.Load(), lg.Logf)
 	ctx, cancel := context.WithTimeout(ctx, maxUploadTime)
@@ -516,15 +527,20 @@ func (lg *Logger) upload(ctx context.Context, body []byte, origlen int) (retryAf
 	lg.httpDoCalls.Add(1)
 	resp, err := lg.httpc.Do(req)
 	if err != nil {
+		lg.failedCalls.Add(1)
 		return 0, fmt.Errorf("log upload of %d bytes %s failed: %v", len(body), compressedNote, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		lg.failedCalls.Add(1)
 		n, _ := strconv.Atoi(resp.Header.Get("Retry-After"))
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
 		return time.Duration(n) * time.Second, fmt.Errorf("log upload of %d bytes %s failed %d: %s", len(body), compressedNote, resp.StatusCode, bytes.TrimSpace(b))
 	}
+
+	lg.uploadedBytes.Add(int64(len(body)))
+	lg.uploadingTime.Add(int64(time.Since(startUpload)))
 	return 0, nil
 }
 
@@ -544,6 +560,30 @@ func (lg *Logger) StartFlush() {
 	if lg != nil {
 		lg.tryDrainWake()
 	}
+}
+
+// ExpVar report metrics about the logger.
+//
+//   - counter_upload_calls: Total number of upload attempts.
+//
+//   - counter_upload_errors: Total number of upload attempts that failed.
+//
+//   - counter_uploaded_bytes: Total number of bytes successfully uploaded
+//     (which is calculated after compression is applied).
+//
+//   - counter_uploading_nsecs: Total number of nanoseconds spent uploading.
+//
+//   - buffer: An optional [metrics.Set] with metrics for the [Buffer].
+func (lg *Logger) ExpVar() expvar.Var {
+	m := new(metrics.Set)
+	m.Set("counter_upload_calls", &lg.uploadCalls)
+	m.Set("counter_upload_errors", &lg.failedCalls)
+	m.Set("counter_uploaded_bytes", &lg.uploadedBytes)
+	m.Set("counter_uploading_nsecs", &lg.uploadingTime)
+	if v, ok := lg.buffer.(interface{ ExpVar() expvar.Var }); ok {
+		m.Set("buffer", v.ExpVar())
+	}
+	return m
 }
 
 // logtailDisabled is whether logtail uploads to logcatcher are disabled.
