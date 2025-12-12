@@ -32,12 +32,6 @@ func tryReadErrorMessage(res *http.Response) []byte {
 }
 
 func (c *gocachedClient) get(ctx context.Context, actionID string) (outputID string, resp *http.Response, err error) {
-	// TODO(tomhjp): make sure we timeout if cigocached disappears, but for some
-	// reason, this seemed to tank network performance.
-	// // Set a generous upper limit on the time we'll wait for a response. We'll
-	// // shorten this deadline later once we know the content length.
-	// ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	// defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/action/"+actionID, nil)
 	req.Header.Set("Want-Object", "1") // opt in to single roundtrip protocol
 	if c.accessToken != "" {
