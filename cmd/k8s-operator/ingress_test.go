@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -70,7 +71,8 @@ func TestTailscaleIngress(t *testing.T) {
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
 				"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{
 					"/": {Proxy: "http://1.2.3.4:8080/"},
-				}}},
+				}},
+			},
 		},
 	}
 
@@ -164,7 +166,8 @@ func TestTailscaleIngressHostname(t *testing.T) {
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
 				"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{
 					"/": {Proxy: "http://1.2.3.4:8080/"},
-				}}},
+				}},
+			},
 		},
 	}
 
@@ -238,7 +241,17 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 		Spec: tsapi.ProxyClassSpec{StatefulSet: &tsapi.StatefulSet{
 			Labels:      tsapi.Labels{"foo": "bar"},
 			Annotations: map[string]string{"bar.io/foo": "some-val"},
-			Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}},
+			Pod: &tsapi.Pod{
+				Annotations: map[string]string{"foo.io/bar": "some-val"},
+				TailscaleContainer: &tsapi.Container{
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse("500m"),
+							corev1.ResourceMemory: resource.MustParse("28Mi"),
+						},
+					},
+				},
+			},
 		}},
 	}
 	fc := fake.NewClientBuilder().
@@ -286,13 +299,14 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
 				"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{
 					"/": {Proxy: "http://1.2.3.4:8080/"},
-				}}},
+				}},
+			},
 		},
 	}
 
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"))
-	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeResourceReqs)
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts))
 
 	// 2. Ingress is updated to specify a ProxyClass, ProxyClass is not yet
 	// ready, so proxy resource configuration does not change.
@@ -300,7 +314,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 		mak.Set(&ing.ObjectMeta.Labels, LabelAnnotationProxyClass, "custom-metadata")
 	})
 	expectReconciled(t, ingR, "default", "test")
-	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeResourceReqs)
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts))
 
 	// 3. ProxyClass is set to Ready by proxy-class reconciler. Ingress get
 	// reconciled and configuration from the ProxyClass is applied to the
@@ -316,7 +330,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	})
 	expectReconciled(t, ingR, "default", "test")
 	opts.proxyClass = pc.Name
-	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeResourceReqs)
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts))
 
 	// 4. tailscale.com/proxy-class label is removed from the Ingress, the
 	// Ingress gets reconciled and the custom ProxyClass configuration is
@@ -390,7 +404,8 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
 				"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{
 					"/": {Proxy: "http://1.2.3.4:8080/"},
-				}}},
+				}},
+			},
 		},
 		resourceVersion: "1",
 	}
@@ -731,7 +746,8 @@ func TestEmptyPath(t *testing.T) {
 					Web: map[ipn.HostPort]*ipn.WebServerConfig{
 						"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{
 							"/": {Proxy: "http://1.2.3.4:8080/"},
-						}}},
+						}},
+					},
 				},
 			}
 
@@ -764,9 +780,11 @@ func service() *corev1.Service {
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "1.2.3.4",
-			Ports: []corev1.ServicePort{{
-				Port: 8080,
-				Name: "http"},
+			Ports: []corev1.ServicePort{
+				{
+					Port: 8080,
+					Name: "http",
+				},
 			},
 		},
 	}

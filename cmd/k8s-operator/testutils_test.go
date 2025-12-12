@@ -23,6 +23,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -94,6 +95,12 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 		},
 		SecurityContext: &corev1.SecurityContext{
 			Privileged: ptr.To(true),
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1m"),
+				corev1.ResourceMemory: resource.MustParse("1Mi"),
+			},
 		},
 		ImagePullPolicy: "Always",
 	}
@@ -287,6 +294,12 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "tailscaledconfig-0", ReadOnly: true, MountPath: path.Join("/etc/tsconfig", opts.secretName)},
 			{Name: "serve-config-0", ReadOnly: true, MountPath: path.Join("/etc/tailscaled", opts.secretName)},
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1m"),
+				corev1.ResourceMemory: resource.MustParse("1Mi"),
+			},
 		},
 	}
 	if opts.enableMetrics {
