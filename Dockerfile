@@ -73,6 +73,11 @@ RUN GOARCH=$TARGETARCH go install -ldflags="\
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates iptables iproute2 ip6tables
+# Alpine 3.19 replaced legacy iptables with nftables based implementation.
+# Tailscale is used on some hosts that don't support nftables, such as Synology
+# NAS, so link iptables back to legacy version. Hosts that don't require legacy
+# iptables should be able to use Tailscale in nftables mode.  See
+# https://github.com/tailscale/tailscale/issues/17854
 RUN rm /usr/sbin/iptables && ln -s /usr/sbin/iptables-legacy /usr/sbin/iptables
 RUN rm /usr/sbin/ip6tables && ln -s /usr/sbin/ip6tables-legacy /usr/sbin/ip6tables
 

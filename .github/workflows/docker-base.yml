@@ -1,0 +1,29 @@
+name: "Validate Docker base image"
+on: 
+  workflow_dispatch:
+  pull_request:
+    paths:
+    - "Dockerfile.base"
+    - ".github/workflows/docker-base.yml"
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+    - name: "build and test"
+      run: |
+        set -e
+        IMG="test-base:$(head -c 8 /dev/urandom | xxd -p)"
+        docker build -t "$IMG" -f Dockerfile.base .
+
+        iptables_version=$(docker run --rm "$IMG" iptables --version)
+        if [[ "$iptables_version" != *"(legacy)"* ]]; then
+            echo "ERROR: Docker base image should contain legacy iptables; found ${iptables_version}"
+            exit 1
+        fi
+
+        ip6tables_version=$(docker run --rm "$IMG" ip6tables --version)
+        if [[ "$ip6tables_version" != *"(legacy)"* ]]; then
+            echo "ERROR: Docker base image should contain legacy ip6tables; found ${ip6tables_version}"
+            exit 1
+        fi
