@@ -22,8 +22,11 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -34,25 +37,83 @@ import (
 
 func main() {
 	var (
-		auth          = flag.Bool("auth", false, "auth with cigocached and exit, printing the access token as output")
-		token         = flag.String("token", "", "the cigocached access token to use, as created using --auth")
-		cigocachedURL = flag.String("cigocached-url", "", "optional cigocached URL (scheme, host, and port). empty means to not use one.")
-		dir           = flag.String("cache-dir", "", "cache directory; empty means automatic")
-		verbose       = flag.Bool("verbose", false, "enable verbose logging")
+		version     = flag.Bool("version", false, "print version and exit")
+		auth        = flag.Bool("auth", false, "auth with cigocached and exit, printing the access token as output")
+		stats       = flag.Bool("stats", false, "fetch and print cigocached stats and exit")
+		token       = flag.String("token", "", "the cigocached access token to use, as created using --auth")
+		srvURL      = flag.String("cigocached-url", "", "optional cigocached URL (scheme, host, and port). Empty means to not use one.")
+		srvHostDial = flag.String("cigocached-host", "", "optional cigocached host to dial instead of the host in the provided --cigocached-url. Useful for public TLS certs on private addresses.")
+		dir         = flag.String("cache-dir", "", "cache directory; empty means automatic")
+		verbose     = flag.Bool("verbose", false, "enable verbose logging")
 	)
 	flag.Parse()
 
+	if *version {
+		info, ok := debug.ReadBuildInfo()
+		if !ok {
+			log.Fatal("no build info")
+		}
+		var (
+			rev   string
+			dirty bool
+		)
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				rev = s.Value
+			case "vcs.modified":
+				dirty, _ = strconv.ParseBool(s.Value)
+			}
+		}
+		if dirty {
+			rev += "-dirty"
+		}
+		fmt.Println(rev)
+		return
+	}
+
+	var srvHost string
+	if *srvHostDial != "" && *srvURL != "" {
+		u, err := url.Parse(*srvURL)
+		if err != nil {
+			log.Fatal(err)
+		}
+		srvHost = u.Hostname()
+	}
+
 	if *auth {
-		if *cigocachedURL == "" {
+		if *srvURL == "" {
 			log.Print("--cigocached-url is empty, skipping auth")
 			return
 		}
-		tk, err := fetchAccessToken(httpClient(), os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL"), os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN"), *cigocachedURL)
+		tk, err := fetchAccessToken(httpClient(srvHost, *srvHostDial), os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL"), os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN"), *srvURL)
 		if err != nil {
 			log.Printf("error fetching access token, skipping auth: %v", err)
 			return
 		}
 		fmt.Println(tk)
+		return
+	}
+
+	if *stats {
+		if *srvURL == "" {
+			log.Fatal("--cigocached-url is empty; cannot fetch stats")
+		}
+		tk := *token
+		if tk == "" {
+			log.Fatal("--token is empty; cannot fetch stats")
+		}
+		c := &gocachedClient{
+			baseURL:     *srvURL,
+			cl:          httpClient(srvHost, *srvHostDial),
+			accessToken: tk,
+			verbose:     *verbose,
+		}
+		stats, err := c.fetchStats()
+		if err != nil {
+			log.Fatalf("error fetching gocached stats: %v", err)
+		}
+		fmt.Println(stats)
 		return
 	}
 
@@ -75,13 +136,13 @@ func main() {
 		},
 		verbose: *verbose,
 	}
-	if *cigocachedURL != "" {
+	if *srvURL != "" {
 		if *verbose {
-			log.Printf("Using cigocached at %s", *cigocachedURL)
+			log.Printf("Using cigocached at %s", *srvURL)
 		}
 		c.gocached = &gocachedClient{
-			baseURL:     *cigocachedURL,
-			cl:          httpClient(),
+			baseURL:     *srvURL,
+			cl:          httpClient(srvHost, *srvHostDial),
 			accessToken: *token,
 			verbose:     *verbose,
 		}
@@ -104,18 +165,18 @@ func main() {
 	}
 }
 
-func httpClient() *http.Client {
+func httpClient(srvHost, srvHostDial string) *http.Client {
+	if srvHost == "" || srvHostDial == "" {
+		return http.DefaultClient
+	}
 	return &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				host, port, err := net.SplitHostPort(addr)
-				if err == nil {
-					// This does not run in a tailnet. We serve corp.ts.net
-					// TLS certs, and override DNS resolution to lookup the
-					// private IP for the VM by its hostname.
-					if vm, ok := strings.CutSuffix(host, ".corp.ts.net"); ok {
-						addr = net.JoinHostPort(vm, port)
-					}
+				if host, port, err := net.SplitHostPort(addr); err == nil && host == srvHost {
+					// This allows us to serve a publicly trusted TLS cert
+					// while also minimising latency by explicitly using a
+					// private network address.
+					addr = net.JoinHostPort(srvHostDial, port)
 				}
 				var d net.Dialer
 				return d.DialContext(ctx, network, addr)
