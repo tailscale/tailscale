@@ -263,6 +263,7 @@ jobs:
         checkout-path: ${{ github.workspace }}/src
         cache-dir: ${{ github.workspace }}/cigocacher
         cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
+        cigocached-host: ${{ vars.CIGOCACHED_AZURE_HOST }}
 
     - name: test
       if: matrix.key != 'win-bench' # skip on bench builder
@@ -278,10 +279,12 @@ jobs:
       run: go test ./... -bench . -benchtime 1x -run "^$"
 
     - name: Print stats
-      shell: bash
+      shell: pwsh
       if: steps.cigocacher-setup.outputs.success == 'true'
+      env:
+        GOCACHEPROG: ${{ env.GOCACHEPROG }}
       run: |
-        curl -sSL --connect-to "${CONNECT_TO}" -H "Authorization: Bearer ${CIGOCACHER_TOKEN}" "${{ vars.CIGOCACHED_AZURE_URL }}/session/stats" | jq .
+        Invoke-Expression "$env:GOCACHEPROG --stats" | jq .
 
   win-tool-go:
     runs-on: windows-latest
