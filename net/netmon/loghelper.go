@@ -27,7 +27,7 @@ func LinkChangeLogLimiter(ctx context.Context, logf logger.Logf, nm *Monitor) lo
 		// Any link changes that are flagged as likely require a rebind are
 		// interesting enough that we should log them.
 		if cd.RebindLikelyRequired {
-			formatLastSeen = sync.Map{}
+			formatLastSeen.Clear()
 		}
 	})
 	context.AfterFunc(ctx, sub.Close)
@@ -36,7 +36,7 @@ func LinkChangeLogLimiter(ctx context.Context, logf logger.Logf, nm *Monitor) lo
 		now := time.Now().Unix()
 		lastSeen, ok := formatLastSeen.Load(format)
 		if ok {
-			// if we've seen this format string within the last hour, skip logging
+			// if we've seen this format string within the last cooldownSeconds, skip logging
 			if now-lastSeen.(int64) < cooldownSeconds {
 				return
 			}

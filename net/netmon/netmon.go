@@ -156,15 +156,13 @@ func NewChangeDelta(old, new *State, timeJumped bool, tsIfName string, forceViab
 		cd.DefaultInterfaceChanged = cd.old.DefaultRouteInterface != cd.new.DefaultRouteInterface
 		cd.IsLessExpensive = cd.old.IsExpensive && !cd.new.IsExpensive
 		cd.HasPACOrProxyConfigChanged = (cd.old.PAC != cd.new.PAC) || (cd.old.HTTPProxy != cd.new.HTTPProxy)
-		cd.InterfaceIPsChanged = cd.isInterestingIntefaceChange()
+		cd.InterfaceIPsChanged = cd.isInterestingInterfaceChange()
 	}
 
-	// If the default route interface is populated, but it's not up this event signifies that we're in
-	// the process of tearing it down.  Rebinds are going to fail so it's flappy to try.
 	cd.DefaultRouteInterface = new.DefaultRouteInterface
 	defIf := new.Interface[cd.DefaultRouteInterface]
 
-	// The default interface is not viable if is down or is the Tailscale interface itself.
+	// The default interface is not viable if it is down or it is the Tailscale interface itself.
 	if !forceViability && (!defIf.IsUp() || cd.DefaultRouteInterface == tsIfName) {
 		cd.DefaultInterfaceMaybeViable = false
 	} else {
@@ -185,14 +183,14 @@ func NewChangeDelta(old, new *State, timeJumped bool, tsIfName string, forceViab
 	return &cd, nil
 }
 
-// StateDesc returns a description of the old and new states for logging
+// StateDesc returns a description of the old and new states for logging.
 func (cd *ChangeDelta) StateDesc() string {
 	return fmt.Sprintf("old: %v new: %v", cd.old, cd.new)
 }
 
-// InterfaceIPAppeared reports whether the given IP address exists on any interface
+// InterfaceIPDisappeared reports whether the given IP address exists on any interface
 // in the old state, but not in the new state.
-func (cd *ChangeDelta) InterfaceIPDisppeared(ip netip.Addr) bool {
+func (cd *ChangeDelta) InterfaceIPDisappeared(ip netip.Addr) bool {
 	if cd.old == nil {
 		return false
 	}
@@ -200,12 +198,6 @@ func (cd *ChangeDelta) InterfaceIPDisppeared(ip netip.Addr) bool {
 		return true
 	}
 	return cd.new.HasIP(ip) && !cd.old.HasIP(ip)
-}
-
-// InterfaceIPDisappeared reports whether the given IP address existed on any interface
-// in the old state, but not in the new state.
-func (cd *ChangeDelta) InterfaceIPDisappeared(ip netip.Addr) bool {
-	return !cd.new.HasIP(ip) && cd.old.HasIP(ip)
 }
 
 // AnyInterfaceUp reports whether any interfaces are up in the new state.
@@ -221,16 +213,12 @@ func (cd *ChangeDelta) AnyInterfaceUp() bool {
 	return false
 }
 
-// isInterestingIntefaceChange reports whether any interfaces have changed in a meaninful way.
+// isInterestingInterfaceChange reports whether any interfaces have changed in a meaningful way.
 // This excludes interfaces that are not interesting per IsInterestingInterface and
 // filters out changes to interface IPs that that are uninteresting (e.g. link-local addresses).
-func (cd *ChangeDelta) isInterestingIntefaceChange() bool {
-	if cd.old == nil && cd.new == nil {
-		return false
-	}
-
-	// If either side is nil treat as changed.
-	if cd.old == nil || cd.new == nil {
+func (cd *ChangeDelta) isInterestingInterfaceChange() bool {
+	// If there is no old state, everything is considered changed.
+	if cd.old == nil {
 		return true
 	}
 
@@ -253,7 +241,7 @@ func (cd *ChangeDelta) isInterestingIntefaceChange() bool {
 
 		// The old interface doesn't exist in the new interface set and it has
 		// a global unicast IP.  That's considered a change from the perspective
-		// of anything that may have been bound to it.  If it didn't have a global
+		// of anything that may have been bound to it. If it didn't have a global
 		// unicast IP, it's not interesting.
 		newInterface, ok := cd.new.Interface[iname]
 		if !ok {
@@ -559,7 +547,7 @@ func (m *Monitor) pump() {
 	}
 }
 
-// / debounce calls the callback function with a delay between events
+// debounce calls the callback function with a delay between events
 // and exits when a stop is issued.
 func (m *Monitor) debounce() {
 	defer m.goroutines.Done()
