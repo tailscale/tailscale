@@ -41,7 +41,7 @@ import (
 	"tailscale.com/wgengine/filter"
 )
 
-var initListenConfig func(*net.ListenConfig, netip.Addr, *netmon.State, string) error
+var initListenConfig func(config *net.ListenConfig, addr netip.Addr, tunIfIndex int) error
 
 // peerDNSQueryHandler is implemented by tsdns.Resolver.
 type peerDNSQueryHandler interface {
@@ -53,7 +53,7 @@ type peerAPIServer struct {
 	resolver peerDNSQueryHandler
 }
 
-func (s *peerAPIServer) listen(ip netip.Addr, ifState *netmon.State) (ln net.Listener, err error) {
+func (s *peerAPIServer) listen(ip netip.Addr, tunIfIndex int) (ln net.Listener, err error) {
 	// Android for whatever reason often has problems creating the peerapi listener.
 	// But since we started intercepting it with netstack, it's not even important that
 	// we have a real kernel-level listener. So just create a dummy listener on Android
@@ -69,7 +69,7 @@ func (s *peerAPIServer) listen(ip netip.Addr, ifState *netmon.State) (ln net.Lis
 		// On iOS/macOS, this sets the lc.Control hook to
 		// setsockopt the interface index to bind to, to get
 		// out of the network sandbox.
-		if err := initListenConfig(&lc, ip, ifState, s.b.dialer.TUNName()); err != nil {
+		if err := initListenConfig(&lc, ip, tunIfIndex); err != nil {
 			return nil, err
 		}
 		if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {

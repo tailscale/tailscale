@@ -35,10 +35,6 @@ type pollingMon struct {
 	stop      chan struct{}
 }
 
-func (pm *pollingMon) IsInterestingInterface(iface string) bool {
-	return true
-}
-
 func (pm *pollingMon) Close() error {
 	pm.closeOnce.Do(func() {
 		close(pm.stop)

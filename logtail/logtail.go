@@ -445,7 +445,7 @@ func (lg *Logger) internetUp() bool {
 // [netmon.ChangeDelta] events to detect whether the Internet is expected to be
 // reachable.
 func (lg *Logger) onChangeDelta(delta *netmon.ChangeDelta) {
-	if delta.New.AnyInterfaceUp() {
+	if delta.AnyInterfaceUp() {
 		fmt.Fprintf(lg.stderr, "logtail: internet back up\n")
 		lg.networkIsUp.Set()
 	} else {
@@ -464,7 +464,7 @@ func (lg *Logger) awaitInternetUp(ctx context.Context) {
 	}
 	upc := make(chan bool, 1)
 	defer lg.netMonitor.RegisterChangeCallback(func(delta *netmon.ChangeDelta) {
-		if delta.New.AnyInterfaceUp() {
+		if delta.AnyInterfaceUp() {
 			select {
 			case upc <- true:
 			default:
