@@ -144,10 +144,10 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        key: ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('*/go.sum') }}-${{ github.job }}-${{ github.run_id }}
         restore-keys: |
-          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
-          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-
+          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('*/go.sum') }}-${{ github.job }}-
+          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('*/go.sum') }}-
           ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-
           ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-
     - name: build all
@@ -215,7 +215,7 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        key: ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('*/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   windows:
     permissions:
@@ -256,6 +256,20 @@ jobs:
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
 
+    - name: Restore bootstrap cache
+      id: restore-cache
+      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        # Note: this is only restoring the build cache. Mod cache is shared amongst
+        # all jobs in the workflow.
+        path: |
+          ~/.cache/go-build
+          ~\AppData\Local\go-build
+        key: cigocacher-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('*/go.sum', '*/cmd/cigocacher/**') }}
+        restore-keys: |
+          cigocacher-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('*/go.sum', '*/cmd/cigocacher/**') }}
+          cigocacher-${{ runner.os }}-${{ runner.arch }}-
+
     - name: Set up cigocacher
       id: cigocacher-setup
       uses: ./src/.github/actions/go-cache
@@ -263,6 +277,16 @@ jobs:
         checkout-path: ${{ github.workspace }}/src
         cache-dir: ${{ github.workspace }}/cigocacher
         cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
+
+    - name: Save bootstrap cache
+      # Only save on cache miss and main branch to avoid thrashing.
+      if: steps.restore-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~\AppData\Local\go-build
+        key: cigocacher-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('*/go.sum', '*/cmd/cigocacher/**') }}
 
     - name: test
       if: matrix.key != 'win-bench' # skip on bench builder
@@ -401,10 +425,10 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('*/go.sum') }}-${{ github.job }}-${{ github.run_id }}
         restore-keys: |
-          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
-          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-
+          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('*/go.sum') }}-${{ github.job }}-
+          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('*/go.sum') }}-
           ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-
     - name: build all
       working-directory: src
@@ -436,7 +460,7 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('*/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   ios: # similar to cross above, but iOS can't build most of the repo. So, just
        # make it build a few smoke packages.
@@ -500,10 +524,10 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('*/go.sum') }}-${{ github.job }}-${{ github.run_id }}
         restore-keys: |
-          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
-          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-
+          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('*/go.sum') }}-${{ github.job }}-
+          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('*/go.sum') }}-
           ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-
     - name: build core
       working-directory: src
@@ -528,7 +552,7 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('*/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   android:
     # similar to cross above, but android fails to build a few pieces of the
@@ -581,10 +605,10 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        key: ${{ runner.os }}-js-wasm-go-${{ hashFiles('*/go.sum') }}-${{ github.job }}-${{ github.run_id }}
         restore-keys: |
-          ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
-          ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-
+          ${{ runner.os }}-js-wasm-go-${{ hashFiles('*/go.sum') }}-${{ github.job }}-
+          ${{ runner.os }}-js-wasm-go-${{ hashFiles('*/go.sum') }}-
           ${{ runner.os }}-js-wasm-go-
     - name: build tsconnect client
       working-directory: src
@@ -614,7 +638,7 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        key: ${{ runner.os }}-js-wasm-go-${{ hashFiles('*/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   tailscale_go: # Subset of tests that depend on our custom Go toolchain.
     runs-on: ubuntu-24.04
