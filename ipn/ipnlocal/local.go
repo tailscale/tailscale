@@ -5040,7 +5040,6 @@ func (b *LocalBackend) authReconfig() {
 //
 // b.mu must be held.
 func (b *LocalBackend) authReconfigLocked() {
-
 	if b.shutdownCalled {
 		b.logf("[v1] authReconfig: skipping because in shutdown")
 		return
@@ -5072,9 +5071,9 @@ func (b *LocalBackend) authReconfigLocked() {
 	}
 
 	var flags netmap.WGConfigFlags
-	if prefs.RouteAll() {
-		flags |= netmap.AllowSubnetRoutes
-	}
+	// NOTE: we want to always allow subnet routes for the sake of enabling services
+	flags |= netmap.AllowSubnetRoutes
+
 	if hasPAC && disableSubnetsIfPAC {
 		if flags&netmap.AllowSubnetRoutes != 0 {
 			b.logf("authReconfig: have PAC; disabling subnet routes")
@@ -5418,6 +5417,34 @@ func peerRoutes(logf logger.Logf, peers []wgcfg.Peer, cgnatThreshold int) (route
 	return routes
 }
 
+func (b *LocalBackend) servicesRoutes(routes []netip.Prefix) []netip.Prefix {
+	var servicesRangeBuilder netipx.IPSetBuilder
+	servicesRangeBuilder.AddPrefix(tsaddr.CGNATRange())
+	servicesRangeBuilder.AddPrefix(tsaddr.TailscaleULARange())
+
+	services, err := servicesRangeBuilder.IPSet()
+	if err != nil {
+		b.logf("accept routes filter: failed to build filtered set, all routes will be accepted: %v (check accept-routes flag)", err)
+		return routes
+	}
+
+	var builder netipx.IPSetBuilder
+	for _, r := range routes {
+		builder.AddPrefix(r)
+	}
+
+	builder.Intersect(services)
+
+	set, err := builder.IPSet()
+	if err != nil {
+		b.logf("accept routes filter: failed to build filtered set, all routes will be accepted: %v (check accept-routes flag)", err)
+		return routes
+	}
+
+	b.logf("accept routes filter: accepting routes: %v", set.Ranges())
+	return set.Prefixes()
+}
+
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
 //
 // b.mu must be held.
@@ -5444,13 +5471,20 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 		doStatefulFiltering = true
 	}
 
+	var routes []netip.Prefix
+	if prefs.RouteAll() {
+		routes = peerRoutes(b.logf, cfg.Peers, singleRouteThreshold)
+	} else {
+		routes = b.servicesRoutes(peerRoutes(b.logf, cfg.Peers, singleRouteThreshold))
+	}
+
 	rs := &router.Config{
 		LocalAddrs:        unmapIPPrefixes(cfg.Addresses),
 		SubnetRoutes:      unmapIPPrefixes(prefs.AdvertiseRoutes().AsSlice()),
 		SNATSubnetRoutes:  !prefs.NoSNAT(),
 		StatefulFiltering: doStatefulFiltering,
 		NetfilterMode:     prefs.NetfilterMode(),
-		Routes:            peerRoutes(b.logf, cfg.Peers, singleRouteThreshold),
+		Routes:            routes,
 		NetfilterKind:     netfilterKind,
 	}
 
@@ -7763,9 +7797,7 @@ func maybeUsernameOf(actor ipnauth.Actor) string {
 	return username
 }
 
-var (
-	metricCurrentWatchIPNBus = clientmetric.NewGauge("localbackend_current_watch_ipn_bus")
-)
+var metricCurrentWatchIPNBus = clientmetric.NewGauge("localbackend_current_watch_ipn_bus")
 
 func (b *LocalBackend) stateEncrypted() opt.Bool {
 	switch runtime.GOOS {
