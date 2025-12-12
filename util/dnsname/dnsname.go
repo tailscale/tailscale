@@ -65,6 +65,24 @@ func ToFQDN(s string) (FQDN, error) {
 	return FQDN(raw), nil
 }
 
+// ToFQDNAllowWildcard converts s to an FQDN, allowing a leading "*." for
+// wildcard DNS records. For example, "*.example.com" is valid and returns
+// "*.example.com.".
+func ToFQDNAllowWildcard(s string) (FQDN, error) {
+	if strings.HasPrefix(s, "*.") {
+		rest := s[2:]
+		if rest == "" || rest == "." {
+			return "", vizerror.New("wildcard must have a parent domain")
+		}
+		parent, err := ToFQDN(rest)
+		if err != nil {
+			return "", err
+		}
+		return FQDN("*." + string(parent)), nil
+	}
+	return ToFQDN(s)
+}
+
 // WithTrailingDot returns f as a string, with a trailing dot.
 func (f FQDN) WithTrailingDot() string {
 	return string(f)
@@ -92,6 +110,35 @@ func (f FQDN) Contains(other FQDN) bool {
 		cmp = "." + cmp
 	}
 	return strings.HasSuffix(other.WithTrailingDot(), cmp)
+}
+
+// Parent returns the parent domain of f by removing the first label.
+// For example, Parent of "www.example.com." returns "example.com.".
+// For single-label domains like "com." or the root ".", it returns "".
+func (f FQDN) Parent() FQDN {
+	s := f.WithTrailingDot()
+	if s == "." {
+		return ""
+	}
+	idx := strings.Index(s, ".")
+	if idx == -1 || idx == len(s)-1 {
+		return ""
+	}
+	parent := s[idx+1:]
+	if parent == "." {
+		return ""
+	}
+	return FQDN(parent)
+}
+
+// ValidWildcardLabel reports whether label is a valid DNS label, allowing
+// a leading "*." for wildcard records. For example, "*.foo" is valid.
+// All errors are [vizerror.Error].
+func ValidWildcardLabel(label string) error {
+	if strings.HasPrefix(label, "*.") {
+		return ValidLabel(label[2:])
+	}
+	return ValidLabel(label)
 }
 
 // ValidLabel reports whether label is a valid DNS label. All errors are

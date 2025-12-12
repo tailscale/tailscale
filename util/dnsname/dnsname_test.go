@@ -123,6 +123,100 @@ func TestFQDNContains(t *testing.T) {
 	}
 }
 
+func TestFQDNParent(t *testing.T) {
+	tests := []struct {
+		in         string
+		wantParent string
+	}{
+		{"www.example.com", "example.com."},
+		{"foo.bar.baz.com", "bar.baz.com."},
+		{"example.com", "com."},
+		{"com", ""},                       // single label, parent would be root
+		{".", ""},                         // root has no parent
+		{"", ""},                          // empty -> root, no parent
+		{"*.example.com", "example.com."}, // wildcard label
+	}
+
+	for _, test := range tests {
+		t.Run(test.in, func(t *testing.T) {
+			fqdn, err := ToFQDN(test.in)
+			if err != nil {
+				t.Fatalf("ToFQDN(%q): %v", test.in, err)
+			}
+
+			gotParent := fqdn.Parent()
+			if string(gotParent) != test.wantParent {
+				t.Errorf("FQDN(%q).Parent() = %q, want %q", fqdn, gotParent, test.wantParent)
+			}
+		})
+	}
+}
+
+func TestValidWildcardLabel(t *testing.T) {
+	tests := []struct {
+		label string
+		valid bool
+	}{
+		// Valid regular labels
+		{"foo", true},
+		{"foo-bar", true},
+		{"a", true},
+		{"123", true},
+
+		// Valid wildcard labels
+		{"*.foo", true},
+		{"*.foo-bar", true},
+
+		// Invalid labels
+		{"", false},
+		{"*", false},
+		{"-foo", false},
+		{"foo-", false},
+		{"foo..bar", false},
+		{"*.foo-", false},
+		{"*.", false},
+		{"**", false},
+		{"*.*.foo", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			err := ValidWildcardLabel(tt.label)
+			if (err == nil) != tt.valid {
+				t.Errorf("ValidWildcardLabel(%q) = %v, want valid=%v", tt.label, err, tt.valid)
+			}
+		})
+	}
+}
+
+func TestToFQDNAllowWildcard(t *testing.T) {
+	tests := []struct {
+		in    string
+		want  string
+		valid bool
+	}{
+		{"example.com", "example.com.", true},
+		{"foo.bar.baz", "foo.bar.baz.", true},
+		{"*.example.com", "*.example.com.", true},
+		{"*.foo.bar.com", "*.foo.bar.com.", true},
+		{"*.example.com.", "*.example.com.", true},
+		{"*.", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got, err := ToFQDNAllowWildcard(tt.in)
+			if (err == nil) != tt.valid {
+				t.Errorf("ToFQDNAllowWildcard(%q) error = %v, want valid=%v", tt.in, err, tt.valid)
+				return
+			}
+			if tt.valid && string(got) != tt.want {
+				t.Errorf("ToFQDNAllowWildcard(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSanitizeLabel(t *testing.T) {
 	tests := []struct {
 		name string
