@@ -23,7 +23,6 @@ import (
 
 	shellquote "github.com/kballard/go-shellquote"
 	"github.com/peterbourgon/ff/v3/ffcli"
-	qrcode "github.com/skip2/go-qrcode"
 	"tailscale.com/feature/buildfeatures"
 	_ "tailscale.com/feature/condregister/identityfederation"
 	_ "tailscale.com/feature/condregister/oauthkey"
@@ -39,6 +38,7 @@ import (
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/qrcodes"
 	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/version/distro"
 )
@@ -95,7 +95,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	// When adding new flags, prefer to put them under "tailscale set" instead
 	// of here. Setting preferences via "tailscale up" is deprecated.
 	upf.BoolVar(&upArgs.qr, "qr", false, "show QR code for login URLs")
-	upf.StringVar(&upArgs.qrFormat, "qr-format", "small", "QR code formatting (small or large)")
+	upf.StringVar(&upArgs.qrFormat, "qr-format", string(qrcodes.FormatAuto), "QR code formatting (auto, ascii, large, small)")
 	upf.StringVar(&upArgs.authKeyOrFile, "auth-key", "", `node authorization key; if it begins with "file:", then it's a path to a file containing the authkey`)
 	upf.StringVar(&upArgs.clientID, "client-id", "", "Client ID used to generate authkeys via workload identity federation")
 	upf.StringVar(&upArgs.clientSecretOrFile, "client-secret", "", `Client Secret used to generate authkeys via OAuth; if it begins with "file:", then it's a path to a file containing the secret`)
@@ -717,12 +717,9 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 				if upArgs.json {
 					js := &upOutputJSON{AuthURL: authURL, BackendState: st.BackendState}
 
-					q, err := qrcode.New(authURL, qrcode.Medium)
+					png, err := qrcodes.EncodePNG(authURL, 128)
 					if err == nil {
-						png, err := q.PNG(128)
-						if err == nil {
-							js.QR = "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
-						}
+						js.QR = "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 					}
 
 					data, err := json.MarshalIndent(js, "", "\t")
@@ -734,18 +731,9 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 				} else {
 					fmt.Fprintf(Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", authURL)
 					if upArgs.qr {
-						q, err := qrcode.New(authURL, qrcode.Medium)
+						_, err := qrcodes.Fprintln(Stderr, qrcodes.Format(upArgs.qrFormat), authURL)
 						if err != nil {
-							log.Printf("QR code error: %v", err)
-						} else {
-							switch upArgs.qrFormat {
-							case "large":
-								fmt.Fprintf(Stderr, "%s\n", q.ToString(false))
-							case "small":
-								fmt.Fprintf(Stderr, "%s\n", q.ToSmallString(false))
-							default:
-								log.Printf("unknown QR code format: %q", upArgs.qrFormat)
-							}
+							log.Print(err)
 						}
 					}
 				}
