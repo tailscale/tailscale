@@ -66,8 +66,9 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			nm:    &netmap.NetworkMap{},
 			prefs: &ipn.Prefs{},
 			want: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  map[dnsname.FQDN][]netip.Addr{},
+				Routes:         map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:          map[dnsname.FQDN][]netip.Addr{},
+				SubdomainHosts: map[dnsname.FQDN]bool{},
 			},
 		},
 		{
@@ -103,6 +104,43 @@ func TestDNSConfigForNetmap(t *testing.T) {
 					"myname.net.":  ips("100.101.101.101"),
 					"peera.net.":   ips("100.102.0.1", "100.102.0.2"),
 					"v6-only.net.": ips("fe75::3"),
+				},
+				SubdomainHosts: map[dnsname.FQDN]bool{},
+			},
+		},
+		{
+			name: "subdomain_resolve_capability",
+			nm: &netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Name:      "myname.net.",
+					Addresses: ipps("100.101.101.101"),
+				}).View(),
+				AllCaps: set.SetOf([]tailcfg.NodeCapability{tailcfg.NodeAttrDNSSubdomainResolve}),
+			},
+			peers: nodeViews([]*tailcfg.Node{
+				{
+					ID:        1,
+					Name:      "peer-with-cap.net.",
+					Addresses: ipps("100.102.0.1"),
+					CapMap:    tailcfg.NodeCapMap{tailcfg.NodeAttrDNSSubdomainResolve: nil},
+				},
+				{
+					ID:        2,
+					Name:      "peer-without-cap.net.",
+					Addresses: ipps("100.102.0.2"),
+				},
+			}),
+			prefs: &ipn.Prefs{},
+			want: &dns.Config{
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"myname.net.":           ips("100.101.101.101"),
+					"peer-with-cap.net.":    ips("100.102.0.1"),
+					"peer-without-cap.net.": ips("100.102.0.2"),
+				},
+				SubdomainHosts: map[dnsname.FQDN]bool{
+					"myname.net.":        true,
+					"peer-with-cap.net.": true,
 				},
 			},
 		},
@@ -144,6 +182,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 					"peera.net.":   ips("fe75::1001"),
 					"v6-only.net.": ips("fe75::3"),
 				},
+				SubdomainHosts: map[dnsname.FQDN]bool{},
 			},
 		},
 		{
@@ -169,6 +208,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 					"foo.com.":    ips("1.2.3.4"),
 					"bar.com.":    ips("1::6"),
 				},
+				SubdomainHosts: map[dnsname.FQDN]bool{},
 			},
 		},
 		{
@@ -259,6 +299,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 					"foo.com.",
 					"bar.com.",
 				},
+				SubdomainHosts: map[dnsname.FQDN]bool{},
 			},
 		},
 		{
@@ -293,6 +334,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{
 					"foo.com.": {{Addr: "1.2.3.4"}},
 				},
+				SubdomainHosts: map[dnsname.FQDN]bool{},
 			},
 		},
 		{
@@ -314,6 +356,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				DefaultResolvers: []*dnstype.Resolver{
 					{Addr: "8.8.4.4"},
 				},
+				SubdomainHosts: map[dnsname.FQDN]bool{},
 			},
 		},
 		{
@@ -329,8 +372,9 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				CorpDNS: true,
 			},
 			want: &dns.Config{
-				Hosts:  map[dnsname.FQDN][]netip.Addr{},
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:          map[dnsname.FQDN][]netip.Addr{},
+				Routes:         map[dnsname.FQDN][]*dnstype.Resolver{},
+				SubdomainHosts: map[dnsname.FQDN]bool{},
 			},
 		},
 		{
