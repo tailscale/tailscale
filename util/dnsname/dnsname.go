@@ -94,6 +94,22 @@ func (f FQDN) Contains(other FQDN) bool {
 	return strings.HasSuffix(other.WithTrailingDot(), cmp)
 }
 
+// Parent returns the parent domain by stripping the first label.
+// For "foo.bar.baz.", it returns "bar.baz."
+// Returns empty FQDN for root or single-label domains.
+func (f FQDN) Parent() FQDN {
+	s := f.WithTrailingDot()
+	idx := strings.Index(s, ".")
+	if idx < 0 || idx+1 >= len(s) {
+		return ""
+	}
+	rest := s[idx+1:]
+	if rest == "." || rest == "" {
+		return ""
+	}
+	return FQDN(rest)
+}
+
 // ValidLabel reports whether label is a valid DNS label. All errors are
 // [vizerror.Error].
 func ValidLabel(label string) error {

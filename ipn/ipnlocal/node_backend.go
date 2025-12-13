@@ -694,8 +694,9 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	}
 
 	dcfg := &dns.Config{
-		Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-		Hosts:  map[dnsname.FQDN][]netip.Addr{},
+		Routes:         map[dnsname.FQDN][]*dnstype.Resolver{},
+		Hosts:          map[dnsname.FQDN][]netip.Addr{},
+		SubdomainHosts: map[dnsname.FQDN]bool{},
 	}
 
 	// selfV6Only is whether we only have IPv6 addresses ourselves.
@@ -749,8 +750,18 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		dcfg.Hosts[fqdn] = ips
 	}
 	set(nm.SelfName(), nm.GetAddresses())
+	if nm.AllCaps.Contains(tailcfg.NodeAttrDNSSubdomainResolve) {
+		if fqdn, err := dnsname.ToFQDN(nm.SelfName()); err == nil {
+			dcfg.SubdomainHosts[fqdn] = true
+		}
+	}
 	for _, peer := range peers {
 		set(peer.Name(), peer.Addresses())
+		if peer.CapMap().Contains(tailcfg.NodeAttrDNSSubdomainResolve) {
+			if fqdn, err := dnsname.ToFQDN(peer.Name()); err == nil {
+				dcfg.SubdomainHosts[fqdn] = true
+			}
+		}
 	}
 	for _, rec := range nm.DNS.ExtraRecords {
 		switch rec.Type {
