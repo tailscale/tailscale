@@ -48,6 +48,11 @@ type Config struct {
 	// it to resolve, you also need to add appropriate routes to
 	// Routes.
 	Hosts map[dnsname.FQDN][]netip.Addr
+	// SubdomainHosts is a set of FQDNs from Hosts that should also
+	// resolve subdomain queries to the same IPs. For example, if
+	// "node.tailnet.ts.net" is in SubdomainHosts, then queries for
+	// "anything.node.tailnet.ts.net" will resolve to node's IPs.
+	SubdomainHosts map[dnsname.FQDN]bool
 	// OnlyIPv6, if true, uses the IPv6 service IP (for MagicDNS)
 	// instead of the IPv4 version (100.100.100.100).
 	OnlyIPv6 bool

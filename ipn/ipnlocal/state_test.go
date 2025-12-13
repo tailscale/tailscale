@@ -1300,8 +1300,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node1),
+				Routes:         map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:          hostsFor(node1),
+				SubdomainHosts: map[dnsname.FQDN]bool{},
 			},
 		},
 		{
@@ -1356,8 +1357,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node2),
+				Routes:         map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:          hostsFor(node2),
+				SubdomainHosts: map[dnsname.FQDN]bool{},
 			},
 		},
 		{
@@ -1404,8 +1406,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node1),
+				Routes:         map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:          hostsFor(node1),
+				SubdomainHosts: map[dnsname.FQDN]bool{},
 			},
 		},
 		{
@@ -1436,8 +1439,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node3),
+				Routes:         map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:          hostsFor(node3),
+				SubdomainHosts: map[dnsname.FQDN]bool{},
 			},
 		},
 		{
@@ -1500,8 +1504,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node1),
+				Routes:         map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:          hostsFor(node1),
+				SubdomainHosts: map[dnsname.FQDN]bool{},
 			},
 		},
 		{
@@ -1529,8 +1534,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node1),
+				Routes:         map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:          hostsFor(node1),
+				SubdomainHosts: map[dnsname.FQDN]bool{},
 			},
 		},
 		{
@@ -1560,8 +1566,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node1),
+				Routes:         map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:          hostsFor(node1),
+				SubdomainHosts: map[dnsname.FQDN]bool{},
 			},
 		},
 		{
