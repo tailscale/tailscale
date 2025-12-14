@@ -22,6 +22,7 @@ import (
 	"time"
 
 	miekdns "github.com/miekg/dns"
+	"github.com/stretchr/testify/assert"
 	dns "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/health"
 	"tailscale.com/net/netaddr"
@@ -35,8 +36,12 @@ import (
 )
 
 var (
-	testipv4 = netip.MustParseAddr("1.2.3.4")
-	testipv6 = netip.MustParseAddr("0001:0203:0405:0607:0809:0a0b:0c0d:0e0f")
+	testipv4       = netip.MustParseAddr("1.2.3.4")
+	testipv4Second = netip.MustParseAddr("5.6.7.8")
+	testipv4Third  = netip.MustParseAddr("9.10.11.12")
+	testipv6       = netip.MustParseAddr("0001:0203:0405:0607:0809:0a0b:0c0d:0e0f")
+	testipv6Second = netip.MustParseAddr("1011:1213:1415:1617:1819:1a1b:1c1d:1e1f")
+	testipv6Third  = netip.MustParseAddr("2021:2223:2425:2627:2829:2a2b:2c2d:2e2f")
 
 	testipv4Arpa = dnsname.FQDN("4.3.2.1.in-addr.arpa.")
 	testipv6Arpa = dnsname.FQDN("f.0.e.0.d.0.c.0.b.0.a.0.9.0.8.0.7.0.6.0.5.0.4.0.3.0.2.0.1.0.0.0.ip6.arpa.")
@@ -46,6 +51,8 @@ var dnsCfg = Config{
 	Hosts: map[dnsname.FQDN][]netip.Addr{
 		"test1.ipn.dev.": {testipv4},
 		"test2.ipn.dev.": {testipv6},
+		"test3.ipn.dev.": {testipv4Second, testipv6Second},
+		"test4.ipn.dev.": {testipv4Second, testipv4Third, testipv6Second, testipv6Third},
 	},
 	LocalDomains: []dnsname.FQDN{"ipn.dev.", "3.2.1.in-addr.arpa.", "1.0.0.0.ip6.arpa."},
 }
@@ -245,6 +252,24 @@ func mustIP(str string) netip.Addr {
 	return ip
 }
 
+func parseResponseIPs(t *testing.T, response []byte) (rcode int, a []netip.Addr, aaaa []netip.Addr) {
+	t.Helper()
+	var msg miekdns.Msg
+	if err := msg.Unpack(response); err != nil {
+		t.Fatalf("failed to unpack response: %v", err)
+	}
+	rcode = msg.Rcode
+	for _, ans := range msg.Answer {
+		switch rr := ans.(type) {
+		case *miekdns.A:
+			a = append(a, netip.AddrFrom4([4]byte(rr.A.To4())))
+		case *miekdns.AAAA:
+			aaaa = append(aaaa, netip.AddrFrom16([16]byte(rr.AAAA)))
+		}
+	}
+	return rcode, a, aaaa
+}
+
 func TestRoutesRequireNoCustomResolvers(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -374,57 +399,63 @@ func TestResolveLocal(t *testing.T) {
 		name  string
 		qname dnsname.FQDN
 		qtype dns.Type
-		ip    netip.Addr
+		ips   []netip.Addr
 		code  dns.RCode
 	}{
-		{"ipv4", "test1.ipn.dev.", dns.TypeA, testipv4, dns.RCodeSuccess},
-		{"ipv6", "test2.ipn.dev.", dns.TypeAAAA, testipv6, dns.RCodeSuccess},
-		{"no-ipv6", "test1.ipn.dev.", dns.TypeAAAA, netip.Addr{}, dns.RCodeSuccess},
-		{"nxdomain", "test3.ipn.dev.", dns.TypeA, netip.Addr{}, dns.RCodeNameError},
-		{"foreign domain", "google.com.", dns.TypeA, netip.Addr{}, dns.RCodeRefused},
-		{"all", "test1.ipn.dev.", dns.TypeA, testipv4, dns.RCodeSuccess},
-		{"mx-ipv4", "test1.ipn.dev.", dns.TypeMX, netip.Addr{}, dns.RCodeSuccess},
-		{"mx-ipv6", "test2.ipn.dev.", dns.TypeMX, netip.Addr{}, dns.RCodeSuccess},
-		{"mx-nxdomain", "test3.ipn.dev.", dns.TypeMX, netip.Addr{}, dns.RCodeNameError},
-		{"ns-nxdomain", "test3.ipn.dev.", dns.TypeNS, netip.Addr{}, dns.RCodeNameError},
-		{"onion-domain", "footest.onion.", dns.TypeA, netip.Addr{}, dns.RCodeNameError},
-		{"magicdns", dnsSymbolicFQDN, dns.TypeA, netip.MustParseAddr("100.100.100.100"), dns.RCodeSuccess},
-		{"via_hex", dnsname.FQDN("via-0xff.1.2.3.4."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:ff:1.2.3.4"), dns.RCodeSuccess},
-		{"via_dec", dnsname.FQDN("via-1.10.0.0.1."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:10.0.0.1"), dns.RCodeSuccess},
-		{"x_via_hex", dnsname.FQDN("4.3.2.1.via-0xff."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:ff:4.3.2.1"), dns.RCodeSuccess},
-		{"x_via_dec", dnsname.FQDN("1.0.0.10.via-1."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.0.0.10"), dns.RCodeSuccess},
-		{"via_invalid", dnsname.FQDN("via-."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
-		{"via_invalid_2", dnsname.FQDN("2.3.4.5.via-."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
+		{"a-ipv4", "test1.ipn.dev.", dns.TypeA, []netip.Addr{testipv4}, dns.RCodeSuccess},
+		{"aaaa-ipv4", "test1.ipn.dev.", dns.TypeAAAA, nil, dns.RCodeSuccess},
+		{"all-ipv4", "test1.ipn.dev.", dns.TypeALL, []netip.Addr{testipv4}, dns.RCodeSuccess},
+		{"a-ipv6", "test2.ipn.dev.", dns.TypeA, nil, dns.RCodeSuccess},
+		{"aaaa-ipv6", "test2.ipn.dev.", dns.TypeAAAA, []netip.Addr{testipv6}, dns.RCodeSuccess},
+		{"all-ipv6", "test2.ipn.dev.", dns.TypeAAAA, []netip.Addr{testipv6}, dns.RCodeSuccess},
+		{"a-both", "test3.ipn.dev.", dns.TypeA, []netip.Addr{testipv4Second}, dns.RCodeSuccess},
+		{"aaaa-both", "test3.ipn.dev.", dns.TypeAAAA, []netip.Addr{testipv6Second}, dns.RCodeSuccess},
+		{"all-both", "test3.ipn.dev.", dns.TypeALL, []netip.Addr{testipv4Second, testipv6Second}, dns.RCodeSuccess},
+		{"a-multi", "test4.ipn.dev.", dns.TypeA, []netip.Addr{testipv4Second, testipv4Third}, dns.RCodeSuccess},
+		{"aaaa-multi", "test4.ipn.dev.", dns.TypeAAAA, []netip.Addr{testipv6Second, testipv6Third}, dns.RCodeSuccess},
+		{"all-multi", "test4.ipn.dev.", dns.TypeALL, []netip.Addr{testipv4Second, testipv4Third, testipv6Second, testipv6Third}, dns.RCodeSuccess},
+		{"nxdomain", "footest.ipn.dev.", dns.TypeA, nil, dns.RCodeNameError},
+		{"foreign domain", "google.com.", dns.TypeA, nil, dns.RCodeRefused},
+		{"mx-ipv4", "test1.ipn.dev.", dns.TypeMX, nil, dns.RCodeSuccess},
+		{"mx-ipv6", "test2.ipn.dev.", dns.TypeMX, nil, dns.RCodeSuccess},
+		{"mx-nxdomain", "footest.ipn.dev.", dns.TypeMX, nil, dns.RCodeNameError},
+		{"ns-nxdomain", "footest.ipn.dev.", dns.TypeNS, nil, dns.RCodeNameError},
+		{"onion-domain", "footest.onion.", dns.TypeA, nil, dns.RCodeNameError},
+		{"magicdns", dnsSymbolicFQDN, dns.TypeA, []netip.Addr{netip.MustParseAddr("100.100.100.100")}, dns.RCodeSuccess},
+		{"via_hex", dnsname.FQDN("via-0xff.1.2.3.4."), dns.TypeAAAA, []netip.Addr{netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:ff:1.2.3.4")}, dns.RCodeSuccess},
+		{"via_dec", dnsname.FQDN("via-1.10.0.0.1."), dns.TypeAAAA, []netip.Addr{netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:10.0.0.1")}, dns.RCodeSuccess},
+		{"x_via_hex", dnsname.FQDN("4.3.2.1.via-0xff."), dns.TypeAAAA, []netip.Addr{netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:ff:4.3.2.1")}, dns.RCodeSuccess},
+		{"x_via_dec", dnsname.FQDN("1.0.0.10.via-1."), dns.TypeAAAA, []netip.Addr{netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.0.0.10")}, dns.RCodeSuccess},
+		{"via_invalid", dnsname.FQDN("via-."), dns.TypeAAAA, nil, dns.RCodeRefused},
+		{"via_invalid_2", dnsname.FQDN("2.3.4.5.via-."), dns.TypeAAAA, nil, dns.RCodeRefused},
 
 		// Hyphenated 4via6 format.
 		// Without any suffix domain:
-		{"via_form3_hex_bare", dnsname.FQDN("1-2-3-4-via-0xff."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:ff:1.2.3.4"), dns.RCodeSuccess},
-		{"via_form3_dec_bare", dnsname.FQDN("1-2-3-4-via-1."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.2.3.4"), dns.RCodeSuccess},
+		{"via_form3_hex_bare", dnsname.FQDN("1-2-3-4-via-0xff."), dns.TypeAAAA, []netip.Addr{netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:ff:1.2.3.4")}, dns.RCodeSuccess},
+		{"via_form3_dec_bare", dnsname.FQDN("1-2-3-4-via-1."), dns.TypeAAAA, []netip.Addr{netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.2.3.4")}, dns.RCodeSuccess},
 		// With a Tailscale domain:
-		{"via_form3_dec_ts.net", dnsname.FQDN("1-2-3-4-via-1.foo.ts.net."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.2.3.4"), dns.RCodeSuccess},
-		{"via_form3_dec_tailscale.net", dnsname.FQDN("1-2-3-4-via-1.foo.tailscale.net."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.2.3.4"), dns.RCodeSuccess},
+		{"via_form3_dec_ts.net", dnsname.FQDN("1-2-3-4-via-1.foo.ts.net."), dns.TypeAAAA, []netip.Addr{netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.2.3.4")}, dns.RCodeSuccess},
+		{"via_form3_dec_tailscale.net", dnsname.FQDN("1-2-3-4-via-1.foo.tailscale.net."), dns.TypeAAAA, []netip.Addr{netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.2.3.4")}, dns.RCodeSuccess},
 		// Non-Tailscale domain suffixes aren't allowed for now: (the allowed
 		// suffixes are currently hard-coded and not plumbed via the netmap)
-		{"via_form3_dec_example.com", dnsname.FQDN("1-2-3-4-via-1.example.com."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
-		{"via_form3_dec_examplets.net", dnsname.FQDN("1-2-3-4-via-1.examplets.net."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
+		{"via_form3_dec_example.com", dnsname.FQDN("1-2-3-4-via-1.example.com."), dns.TypeAAAA, nil, dns.RCodeRefused},
+		{"via_form3_dec_examplets.net", dnsname.FQDN("1-2-3-4-via-1.examplets.net."), dns.TypeAAAA, nil, dns.RCodeRefused},
 
 		// Resolve A and ALL types of resource records.
-		{"via_type_a", dnsname.FQDN("1-2-3-4-via-1."), dns.TypeA, netip.Addr{}, dns.RCodeSuccess},
-		{"via_invalid_type_a", dnsname.FQDN("1-2-3-4-via-."), dns.TypeA, netip.Addr{}, dns.RCodeRefused},
-		{"via_type_all", dnsname.FQDN("1-2-3-4-via-1."), dns.TypeALL, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.2.3.4"), dns.RCodeSuccess},
-		{"via_invalid_type_all", dnsname.FQDN("1-2-3-4-via-."), dns.TypeALL, netip.Addr{}, dns.RCodeRefused},
+		{"via_type_a", dnsname.FQDN("1-2-3-4-via-1."), dns.TypeA, nil, dns.RCodeSuccess},
+		{"via_invalid_type_a", dnsname.FQDN("1-2-3-4-via-."), dns.TypeA, nil, dns.RCodeRefused},
+		{"via_type_all", dnsname.FQDN("1-2-3-4-via-1."), dns.TypeALL, []netip.Addr{netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.2.3.4")}, dns.RCodeSuccess},
+		{"via_invalid_type_all", dnsname.FQDN("1-2-3-4-via-."), dns.TypeALL, nil, dns.RCodeRefused},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ip, code := r.resolveLocal(tt.qname, tt.qtype)
+			ips, code := r.resolveLocal(tt.qname, tt.qtype)
 			if code != tt.code {
 				t.Errorf("code = %v; want %v", code, tt.code)
 			}
-			// Only check ip for non-err
-			if ip != tt.ip {
-				t.Errorf("ip = %v; want %v", ip, tt.ip)
-			}
+			// Only check ips for non-err
+			assert.ElementsMatch(t, tt.ips, ips)
 		})
 	}
 }
@@ -902,7 +933,7 @@ var nxdomainResponse = []byte{
 	0x00, 0x00, // no answers
 	0x00, 0x00, 0x00, 0x00, // no authority or additional RRs
 	// Question:
-	0x05, 0x74, 0x65, 0x73, 0x74, 0x33, 0x03, 0x69, 0x70, 0x6e, 0x03, 0x64, 0x65, 0x76, 0x00, // name
+	0x07, 0x66, 0x6f, 0x6f, 0x74, 0x65, 0x73, 0x74, 0x03, 0x69, 0x70, 0x6e, 0x03, 0x64, 0x65, 0x76, 0x00, // name: footest.ipn.dev.
 	0x00, 0x01, 0x00, 0x01, // type A, class IN
 }
 
@@ -937,7 +968,7 @@ func TestFull(t *testing.T) {
 		{"ptr4", dnspacket("4.3.2.1.in-addr.arpa.", dns.TypePTR, noEdns), ptrResponse},
 		{"ptr6", dnspacket("f.0.e.0.d.0.c.0.b.0.a.0.9.0.8.0.7.0.6.0.5.0.4.0.3.0.2.0.1.0.0.0.ip6.arpa.",
 			dns.TypePTR, noEdns), ptrResponse6},
-		{"nxdomain", dnspacket("test3.ipn.dev.", dns.TypeA, noEdns), nxdomainResponse},
+		{"nxdomain", dnspacket("footest.ipn.dev.", dns.TypeA, noEdns), nxdomainResponse},
 	}
 
 	for _, tt := range tests {
@@ -949,6 +980,43 @@ func TestFull(t *testing.T) {
 			if !bytes.Equal(response, tt.response) {
 				t.Errorf("response = %x; want %x", response, tt.response)
 			}
+		})
+	}
+}
+
+// Test addresses parsed from the response, to tolerate different record ordering
+func TestFullParsed(t *testing.T) {
+	r := newResolver(t)
+	defer r.Close()
+
+	r.SetConfig(dnsCfg)
+
+	tests := []struct {
+		name     string
+		qname    dnsname.FQDN
+		qtype    dns.Type
+		wantA    []netip.Addr
+		wantAAAA []netip.Addr
+	}{
+		{"single-a", "test1.ipn.dev.", dns.TypeA, []netip.Addr{testipv4}, nil},
+		{"single-aaaa", "test2.ipn.dev.", dns.TypeAAAA, nil, []netip.Addr{testipv6}},
+		{"multi-a", "test4.ipn.dev.", dns.TypeA, []netip.Addr{testipv4Second, testipv4Third}, nil},
+		{"multi-aaaa", "test4.ipn.dev.", dns.TypeAAAA, nil, []netip.Addr{testipv6Second, testipv6Third}},
+		{"multi-all", "test4.ipn.dev.", dns.TypeALL, []netip.Addr{testipv4Second, testipv4Third}, []netip.Addr{testipv6Second, testipv6Third}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response, err := syncRespond(r, dnspacket(tt.qname, tt.qtype, noEdns))
+			if err != nil {
+				t.Fatalf("err = %v; want nil", err)
+			}
+			rcode, a, aaaa := parseResponseIPs(t, response)
+			if rcode != int(dns.RCodeSuccess) {
+				t.Errorf("rcode = %v; want %v", rcode, dns.RCodeSuccess)
+			}
+			assert.ElementsMatch(t, tt.wantA, a, "A records mismatch")
+			assert.ElementsMatch(t, tt.wantAAAA, aaaa, "AAAA records mismatch")
 		})
 	}
 }

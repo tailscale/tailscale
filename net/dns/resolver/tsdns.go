@@ -39,6 +39,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/rands"
 )
 
 const dnsSymbolicFQDN = "magicdns.localhost-tailscale-daemon."
@@ -610,17 +611,17 @@ func stubResolverForOS() (ip netip.Addr, err error) {
 	return ip, nil
 }
 
-// resolveLocal returns an IP for the given domain, if domain is in
-// the local hosts map and has an IP corresponding to the requested
+// resolveLocal returns all IPs for the given domain, if domain is in
+// the local hosts map and has IPs corresponding to the requested
 // typ (A, AAAA, ALL).
 // Returns dns.RCodeRefused to indicate that the local map is not
 // authoritative for domain.
-func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, dns.RCode) {
+func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) ([]netip.Addr, dns.RCode) {
 	metricDNSResolveLocal.Add(1)
 	// Reject .onion domains per RFC 7686.
 	if dnsname.HasSuffix(domain.WithoutTrailingDot(), ".onion") {
 		metricDNSResolveLocalErrorOnion.Add(1)
-		return netip.Addr{}, dns.RCodeNameError
+		return nil, dns.RCodeNameError
 	}
 
 	// We return a symbolic domain if someone does a reverse lookup on the
@@ -629,14 +630,16 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 	if domain == dnsSymbolicFQDN {
 		switch typ {
 		case dns.TypeA:
-			return tsaddr.TailscaleServiceIP(), dns.RCodeSuccess
+			return []netip.Addr{tsaddr.TailscaleServiceIP()}, dns.RCodeSuccess
 		case dns.TypeAAAA:
-			return tsaddr.TailscaleServiceIPv6(), dns.RCodeSuccess
+			return []netip.Addr{tsaddr.TailscaleServiceIPv6()}, dns.RCodeSuccess
+		case dns.TypeALL:
+			return []netip.Addr{tsaddr.TailscaleServiceIP(), tsaddr.TailscaleServiceIPv6()}, dns.RCodeSuccess
 		}
 	}
 	// Special-case: 4via6 DNS names.
-	if ip, ok := r.resolveViaDomain(domain, typ); ok {
-		return ip, dns.RCodeSuccess
+	if ips, ok := r.resolveViaDomain(domain, typ); ok {
+		return ips, dns.RCodeSuccess
 	}
 
 	r.mu.Lock()
@@ -650,12 +653,12 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 			if suffix.Contains(domain) {
 				// We are authoritative for the queried domain.
 				metricDNSResolveLocalErrorMissing.Add(1)
-				return netip.Addr{}, dns.RCodeNameError
+				return nil, dns.RCodeNameError
 			}
 		}
 		// Not authoritative, signal that forwarding is advisable.
 		metricDNSResolveLocalErrorRefused.Add(1)
-		return netip.Addr{}, dns.RCodeRefused
+		return nil, dns.RCodeRefused
 	}
 
 	// Refactoring note: this must happen after we check suffixes,
@@ -664,42 +667,49 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 	// DNS semantics subtlety: when a DNS name exists, but no records
 	// are available for the requested record type, we must return
 	// RCodeSuccess with no data, not NXDOMAIN.
+	var result []netip.Addr
 	switch typ {
 	case dns.TypeA:
 		for _, ip := range addrs {
 			if ip.Is4() {
-				metricDNSResolveLocalOKA.Add(1)
-				return ip, dns.RCodeSuccess
+				result = append(result, ip)
 			}
 		}
-		metricDNSResolveLocalNoA.Add(1)
-		return netip.Addr{}, dns.RCodeSuccess
+		if len(result) > 0 {
+			metricDNSResolveLocalOKA.Add(1)
+		} else {
+			metricDNSResolveLocalNoA.Add(1)
+		}
+		return result, dns.RCodeSuccess
 	case dns.TypeAAAA:
 		for _, ip := range addrs {
 			if ip.Is6() {
-				metricDNSResolveLocalOKAAAA.Add(1)
-				return ip, dns.RCodeSuccess
+				result = append(result, ip)
 			}
 		}
-		metricDNSResolveLocalNoAAAA.Add(1)
-		return netip.Addr{}, dns.RCodeSuccess
-	case dns.TypeALL:
-		// Answer with whatever we've got.
-		// It could be IPv4, IPv6, or a zero addr.
-		// TODO: Return all available resolutions (A and AAAA, if we have them).
-		if len(addrs) == 0 {
-			metricDNSResolveLocalNoAll.Add(1)
-			return netip.Addr{}, dns.RCodeSuccess
+		if len(result) > 0 {
+			metricDNSResolveLocalOKAAAA.Add(1)
+		} else {
+			metricDNSResolveLocalNoAAAA.Add(1)
 		}
-		metricDNSResolveLocalOKAll.Add(1)
-		return addrs[0], dns.RCodeSuccess
+		return result, dns.RCodeSuccess
+	case dns.TypeALL:
+		// Answer with all available resolutions (A and AAAA).
+		result = make([]netip.Addr, len(addrs))
+		copy(result, addrs)
+		if len(result) > 0 {
+			metricDNSResolveLocalOKAll.Add(1)
+		} else {
+			metricDNSResolveLocalNoAll.Add(1)
+		}
+		return result, dns.RCodeSuccess
 
 	// Leave some record types explicitly unimplemented.
 	// These types relate to recursive resolution or special
 	// DNS semantics and might be implemented in the future.
 	case dns.TypeNS, dns.TypeSOA, dns.TypeAXFR, dns.TypeHINFO:
 		metricDNSResolveNotImplType.Add(1)
-		return netip.Addr{}, dns.RCodeNotImplemented
+		return nil, dns.RCodeNotImplemented
 
 	// For everything except for the few types above that are explicitly not implemented, return no records.
 	// This is what other DNS systems do: always return NOERROR
@@ -710,7 +720,7 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 	default:
 		metricDNSResolveNoRecordType.Add(1)
 		// The name exists, but no records exist of the requested type.
-		return netip.Addr{}, dns.RCodeSuccess
+		return nil, dns.RCodeSuccess
 	}
 }
 
@@ -722,7 +732,7 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 //
 // This exists as a convenient mapping into Tailscales 'Via Range'.
 //
-// It returns a zero netip.Addr and true to indicate a successful response with
+// It returns no IPs and true to indicate a successful response with
 // an empty answers section if the specified domain is a valid Tailscale 4via6
 // domain, but the request type is neither quad-A nor ALL.
 //
@@ -730,7 +740,7 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 // (2022-06-02) to work around an issue in Chrome where it would treat
 // "http://via-1.1.2.3.4" as a search string instead of a URL. We should rip out
 // the old format in early 2023.
-func (r *Resolver) resolveViaDomain(domain dnsname.FQDN, typ dns.Type) (netip.Addr, bool) {
+func (r *Resolver) resolveViaDomain(domain dnsname.FQDN, typ dns.Type) ([]netip.Addr, bool) {
 	fqdn := string(domain.WithoutTrailingDot())
 	switch typ {
 	case dns.TypeA, dns.TypeAAAA, dns.TypeALL:
@@ -743,10 +753,10 @@ func (r *Resolver) resolveViaDomain(domain dnsname.FQDN, typ dns.Type) (netip.Ad
 		// a zero (invalid) netip.Addr and true to indicate a successful empty response,
 		// or a zero netip.Addr and false to indicate that it is not a Tailscale 4via6 domain.
 	default:
-		return netip.Addr{}, false
+		return nil, false
 	}
 	if len(fqdn) < len("via-X.0.0.0.0") {
-		return netip.Addr{}, false // too short to be valid
+		return nil, false // too short to be valid
 	}
 
 	var siteID string
@@ -757,29 +767,29 @@ func (r *Resolver) resolveViaDomain(domain dnsname.FQDN, typ dns.Type) (netip.Ad
 		// Third time's a charm. The earlier two formats follow after this block.
 		firstLabel, domain, _ := strings.Cut(fqdn, ".") // "192-168-1-2-via-7"
 		if !(domain == "" || dnsname.HasSuffix(domain, "ts.net") || dnsname.HasSuffix(domain, "tailscale.net")) {
-			return netip.Addr{}, false
+			return nil, false
 		}
 		v4hyphens, suffix, ok := strings.Cut(firstLabel, "-via-")
 		if !ok {
-			return netip.Addr{}, false
+			return nil, false
 		}
 		siteID = suffix
 		ip4Str = strings.ReplaceAll(v4hyphens, "-", ".")
 	case strings.HasPrefix(fqdn, "via-"):
 		firstDot := strings.Index(fqdn, ".")
 		if firstDot < 0 {
-			return netip.Addr{}, false // missing dot delimiters
+			return nil, false // missing dot delimiters
 		}
 		siteID = fqdn[len("via-"):firstDot]
 		ip4Str = fqdn[firstDot+1:]
 	default:
 		lastDot := strings.LastIndex(fqdn, ".")
 		if lastDot < 0 {
-			return netip.Addr{}, false // missing dot delimiters
+			return nil, false // missing dot delimiters
 		}
 		suffix := fqdn[lastDot+1:]
 		if !strings.HasPrefix(suffix, "via-") {
-			return netip.Addr{}, false
+			return nil, false
 		}
 		siteID = suffix[len("via-"):]
 		ip4Str = fqdn[:lastDot]
@@ -787,21 +797,21 @@ func (r *Resolver) resolveViaDomain(domain dnsname.FQDN, typ dns.Type) (netip.Ad
 
 	ip4, err := netip.ParseAddr(ip4Str)
 	if err != nil {
-		return netip.Addr{}, false // badly formed, don't respond
+		return nil, false // badly formed, don't respond
 	}
 
 	prefix, err := strconv.ParseUint(siteID, 0, 32)
 	if err != nil {
-		return netip.Addr{}, false // badly formed, don't respond
+		return nil, false // badly formed, don't respond
 	}
 
 	if typ == dns.TypeA {
-		return netip.Addr{}, true // the name exists, but cannot be resolved to an IPv4 address
+		return nil, true // the name exists, but cannot be resolved to an IPv4 address
 	}
 
 	// MapVia will never error when given an IPv4 netip.Prefix.
 	out, _ := tsaddr.MapVia(uint32(prefix), netip.PrefixFrom(ip4, ip4.BitLen()))
-	return out.Addr(), true
+	return []netip.Addr{out.Addr()}, true
 }
 
 // resolveReverse returns the unique domain name that maps to the given address.
@@ -1307,14 +1317,17 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 		return r.respondReverse(query, name, parser.response())
 	}
 
-	ip, rcode := r.resolveLocal(name, parser.Question.Type)
+	ips, rcode := r.resolveLocal(name, parser.Question.Type)
 	if rcode == dns.RCodeRefused {
 		return nil, errNotOurName // sentinel error return value: it requests forwarding
+	}
+	if len(ips) > 1 {
+		rands.Shuffle(uint64(time.Now().UnixNano()), ips)
 	}
 
 	resp := parser.response()
 	resp.Header.RCode = rcode
-	resp.IP = ip
+	resp.IPs = ips
 	metricDNSMagicDNSSuccessName.Add(1)
 	return marshalResponse(resp)
 }
