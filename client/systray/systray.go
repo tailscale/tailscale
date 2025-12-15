@@ -372,6 +372,7 @@ func setRemoteIcon(menu *systray.MenuItem, urlStr string) {
 	}
 
 	cacheMu.Lock()
+	defer cacheMu.Unlock()
 	b, ok := httpCache[urlStr]
 	if !ok {
 		resp, err := http.Get(urlStr)
@@ -395,7 +396,6 @@ func setRemoteIcon(menu *systray.MenuItem, urlStr string) {
 			resp.Body.Close()
 		}
 	}
-	cacheMu.Unlock()
 
 	if len(b) > 0 {
 		menu.SetIcon(b)
