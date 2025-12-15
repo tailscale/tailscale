@@ -10,12 +10,12 @@ spec:
       deletionGracePeriodSeconds: 10
     spec:
       serviceAccountName: proxies
-      resources:
-        requests:
-          cpu: 1m
-          memory: 1Mi
       containers:
         - name: tailscale
+          resources:
+            requests:
+              cpu: 1m
+              memory: 1Mi
           imagePullPolicy: Always
           env:
             - name: TS_USERSPACE
