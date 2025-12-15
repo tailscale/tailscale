@@ -1243,7 +1243,8 @@ func (c *Conn) DiscoPublicKey() key.DiscoPublic {
 
 // RotateDiscoKey generates a new discovery key pair and updates the connection
 // to use it. This invalidates all existing disco sessions and will cause peers
-// to re-establish discovery sessions with the new key.
+// to re-establish discovery sessions with the new key. Addtionally, the
+// lastTSMPDiscoAdvertisement on all endpoints is reset to 0.
 //
 // This is primarily for debugging and testing purposes, a future enhancement
 // should provide a mechanism for seamless rotation by supporting short term use
@@ -1263,6 +1264,9 @@ func (c *Conn) RotateDiscoKey() {
 
 	if connCtx != nil {
 		c.ReSTUN("disco-key-rotation")
+	}
+	for _, endpoint := range c.peerMap.byEpAddr {
+		endpoint.ep.lastTSMPDiscoAdvertisement = 0
 	}
 }
 
