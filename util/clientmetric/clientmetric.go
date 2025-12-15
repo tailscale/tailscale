@@ -58,6 +58,20 @@ const (
 	TypeCounter
 )
 
+// MetricUpdate requests that a client metric value be updated.
+//
+// This is the request body sent to /localapi/v0/upload-client-metrics.
+type MetricUpdate struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`  // one of "counter" or "gauge"
+	Value int    `json:"value"` // amount to increment by or set
+
+	// Op indicates if Value is added to the existing metric value,
+	// or if the metric is set to Value.
+	// One of "add" or "set". If empty, defaults to "add".
+	Op string `json:"op"`
+}
+
 // Metric is an integer metric value that's tracked over time.
 //
 // It's safe for concurrent use.
