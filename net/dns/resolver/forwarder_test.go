@@ -864,3 +864,49 @@ func TestNXDOMAINIncludesQuestion(t *testing.T) {
 		t.Errorf("invalid response\ngot: %+v\nwant: %+v", res, response)
 	}
 }
+
+func TestForwarderVerboseLogs(t *testing.T) {
+	const domain = "test.tailscale.com."
+	response := makeTestResponse(t, domain, dns.RCodeServerFailure)
+	request := makeTestRequest(t, domain)
+
+	port := runDNSServer(t, nil, response, func(isTCP bool, gotRequest []byte) {
+		if !bytes.Equal(request, gotRequest) {
+			t.Errorf("invalid request\ngot: %+v\nwant: %+v", gotRequest, request)
+		}
+	})
+
+	var (
+		mu     sync.Mutex // protects following
+		done   bool
+		logBuf bytes.Buffer
+	)
+	fwdLogf := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		if done {
+			return // no logging after test is done
+		}
+
+		t.Logf("[forwarder] "+format, args...)
+		fmt.Fprintf(&logBuf, format+"\n", args...)
+	}
+	t.Cleanup(func() {
+		mu.Lock()
+		done = true
+		mu.Unlock()
+	})
+
+	_, err := runTestQuery(t, request, func(f *forwarder) {
+		f.logf = fwdLogf
+		f.verboseFwd = true
+	}, port)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logStr := logBuf.String()
+	if !strings.Contains(logStr, "forwarder.send(") {
+		t.Errorf("expected forwarding log, got:\n%s", logStr)
+	}
+}
