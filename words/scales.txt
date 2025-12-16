@@ -471,7 +471,6 @@ reedfish
 tarpon
 pomfret
 haddock
-cisco
 smelt
 rattlesnake
 armadillo

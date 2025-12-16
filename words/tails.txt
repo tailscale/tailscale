@@ -232,7 +232,7 @@ exocomet
 hartley
 borrelly
 wild
-bison
+ison
 encke
 atlas
 hyakutake
@@ -798,7 +798,6 @@ gannet
 basa
 cobbler
 haddock
-cisco
 smelt
 komodo
 rattlesnake
