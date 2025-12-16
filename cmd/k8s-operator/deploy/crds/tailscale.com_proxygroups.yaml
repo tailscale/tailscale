@@ -139,6 +139,14 @@ spec:
                   items:
                     type: string
                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
+                tailnet:
+                  description: |-
+                    Tailnet specifies the tailnet this ProxyGroup should join. If blank, the default tailnet is used. When set, this
+                    name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set.
+                  type: string
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: ProxyGroup tailnet is immutable
                 type:
                   description: |-
                     Type of the ProxyGroup proxies. Supported types are egress, ingress, and kube-apiserver.
