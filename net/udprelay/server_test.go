@@ -21,6 +21,7 @@ import (
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/views"
+	"tailscale.com/util/usermetric"
 )
 
 type testClient struct {
@@ -209,7 +210,9 @@ func TestServer(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			server, err := NewServer(t.Logf, 0, true)
+			reg := new(usermetric.Registry)
+			deregisterMetrics()
+			server, err := NewServer(t.Logf, 0, true, reg)
 			if err != nil {
 				t.Fatal(err)
 			}
