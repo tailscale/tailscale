@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !plan9
+
 // Package reconciler provides utilities for working with Kubernetes resources within controller reconciliation
 // loops.
 package reconciler
