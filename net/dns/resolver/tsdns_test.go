@@ -92,15 +92,16 @@ func dnspacket(domain dnsname.FQDN, tp dns.Type, ednsSize uint16) []byte {
 }
 
 type dnsResponse struct {
-	ip               netip.Addr
-	txt              []string
-	name             dnsname.FQDN
-	rcode            dns.RCode
-	truncated        bool
-	requestEdns      bool
-	requestEdnsSize  uint16
-	responseEdns     bool
-	responseEdnsSize uint16
+	ip                   netip.Addr
+	txt                  []string
+	name                 dnsname.FQDN
+	rcode                dns.RCode
+	truncated            bool
+	retryTCPonTruncation bool
+	requestEdns          bool
+	requestEdnsSize      uint16
+	responseEdns         bool
+	responseEdnsSize     uint16
 }
 
 func unpackResponse(payload []byte) (dnsResponse, error) {
@@ -233,8 +234,13 @@ func unpackResponse(payload []byte) (dnsResponse, error) {
 	return response, nil
 }
 
-func syncRespond(r *Resolver, query []byte) ([]byte, error) {
-	return r.Query(context.Background(), query, "udp", netip.AddrPort{})
+func syncRespond(r *Resolver, family string, query []byte) ([]byte, error) {
+	switch family {
+	case "udp", "tcp":
+	default:
+		return nil, fmt.Errorf("Invalid family %q", family)
+	}
+	return r.Query(context.Background(), query, family, netip.AddrPort{})
 }
 
 func mustIP(str string) netip.Addr {
@@ -538,22 +544,37 @@ func TestDelegate(t *testing.T) {
 		"xlarge.txt.", resolveToTXT(xlargeTXT, 8000),
 		"huge.txt.", resolveToTXT(hugeTXT, 65527),
 	}
-	v4server := serveDNS(t, "127.0.0.1:0", records...)
-	defer v4server.Shutdown()
-	v6server := serveDNS(t, "[::1]:0", records...)
-	defer v6server.Shutdown()
+	v4UDPServer := serveDNS(t, "127.0.0.1:0", "udp", records...)
+	defer v4UDPServer.Shutdown()
+	v6UDPServer := serveDNS(t, "[::1]:0", "udp", records...)
+	defer v6UDPServer.Shutdown()
+	v4TCPServer := serveDNS(t, "127.0.0.1:0", "udp", records...)
+	defer v4TCPServer.Shutdown()
+	v6TCPServer := serveDNS(t, "[::1]:0", "udp", records...)
+	defer v6TCPServer.Shutdown()
 
-	r := newResolver(t)
-	defer r.Close()
+	udpResolver := newResolver(t)
+	defer udpResolver.Close()
+	tcpResolver := newResolver(t)
+	defer tcpResolver.Close()
 
-	cfg := dnsCfg
-	cfg.Routes = map[dnsname.FQDN][]*dnstype.Resolver{
+	udpcfg := dnsCfg
+	udpcfg.Routes = map[dnsname.FQDN][]*dnstype.Resolver{
 		".": {
-			&dnstype.Resolver{Addr: v4server.PacketConn.LocalAddr().String()},
-			&dnstype.Resolver{Addr: v6server.PacketConn.LocalAddr().String()},
+			&dnstype.Resolver{Addr: v4UDPServer.PacketConn.LocalAddr().String()},
+			&dnstype.Resolver{Addr: v6UDPServer.PacketConn.LocalAddr().String()},
 		},
 	}
-	r.SetConfig(cfg)
+	udpResolver.SetConfig(udpcfg)
+
+	tcpcfg := dnsCfg
+	tcpcfg.Routes = map[dnsname.FQDN][]*dnstype.Resolver{
+		".": {
+			&dnstype.Resolver{Addr: v4TCPServer.PacketConn.LocalAddr().String()},
+			&dnstype.Resolver{Addr: v6TCPServer.PacketConn.LocalAddr().String()},
+		},
+	}
+	tcpResolver.SetConfig(tcpcfg)
 
 	tests := []struct {
 		title    string
@@ -616,44 +637,44 @@ func TestDelegate(t *testing.T) {
 			"medtxt",
 			dnspacket("med.txt.", dns.TypeTXT, 2000),
 			dnsResponse{
-				txt:              medTXT,
-				rcode:            dns.RCodeSuccess,
-				requestEdns:      true,
-				requestEdnsSize:  2000,
-				responseEdns:     true,
-				responseEdnsSize: 1500,
+				txt:                  medTXT,
+				rcode:                dns.RCodeSuccess,
+				retryTCPonTruncation: true,
+				requestEdns:          true,
+				requestEdnsSize:      2000,
+				responseEdns:         true,
+				responseEdnsSize:     1500,
 			},
 		},
 		{
 			"largetxt",
 			dnspacket("large.txt.", dns.TypeTXT, maxResponseBytes),
 			dnsResponse{
-				txt:              largeTXT,
-				rcode:            dns.RCodeSuccess,
-				requestEdns:      true,
-				requestEdnsSize:  maxResponseBytes,
-				responseEdns:     true,
-				responseEdnsSize: maxResponseBytes,
+				txt:                  largeTXT,
+				rcode:                dns.RCodeSuccess,
+				retryTCPonTruncation: true,
+				requestEdns:          true,
+				requestEdnsSize:      maxResponseBytes,
+				responseEdns:         true,
+				responseEdnsSize:     maxResponseBytes,
 			},
 		},
 		{
 			"xlargetxt",
 			dnspacket("xlarge.txt.", dns.TypeTXT, 8000),
 			dnsResponse{
-				rcode:     dns.RCodeSuccess,
-				truncated: true,
-				// request/response EDNS fields will be unset because of
-				// they were truncated away
+				rcode:                dns.RCodeSuccess,
+				truncated:            true,
+				retryTCPonTruncation: true,
 			},
 		},
 		{
 			"hugetxt",
 			dnspacket("huge.txt.", dns.TypeTXT, 8000),
 			dnsResponse{
-				rcode:     dns.RCodeSuccess,
-				truncated: true,
-				// request/response EDNS fields will be unset because of
-				// they were truncated away
+				rcode:                dns.RCodeSuccess,
+				truncated:            true,
+				retryTCPonTruncation: true,
 			},
 		},
 	}
@@ -663,7 +684,9 @@ func TestDelegate(t *testing.T) {
 			if tt.title == "hugetxt" && runtime.GOOS == "darwin" {
 				t.Skip("known to not work on macOS: https://github.com/tailscale/tailscale/issues/2229")
 			}
-			payload, err := syncRespond(r, tt.query)
+
+			runEDNSSizeChecks := true
+			payload, err := syncRespond(udpResolver, "udp", tt.query)
 			if err != nil {
 				t.Errorf("err = %v; want nil", err)
 				return
@@ -672,6 +695,27 @@ func TestDelegate(t *testing.T) {
 			if err != nil {
 				t.Errorf("extract: err = %v; want nil (in %x)", err, payload)
 				return
+			}
+			// If truncated and the test is configured to do so, retry over TCP.
+			// Additionally, some of the tests may result in a SERVFAIL response
+			// when queried over UDP because the total response is larger than
+			// the maximum supported buffer size. This results in a byte sequence
+			// that fails to parse correctly. In that case, we also retry over TCP.
+			if (response.truncated || response.rcode == dns.RCodeServerFailure) && tt.response.retryTCPonTruncation {
+				// Retry over TCP.
+				t.Logf("Retrying over TCP for %q", tt.title)
+				payload, err = syncRespond(tcpResolver, "tcp", tt.query)
+				if err != nil {
+					t.Errorf("TCP retry: err = %v; want nil", err)
+					return
+				}
+				response, err = unpackResponse(payload)
+				if err != nil {
+					t.Errorf("extract: err = %v; want nil (in %x)", err, payload)
+					return
+				}
+				// On TCP, EDNS size is not applicable.
+				runEDNSSizeChecks = false
 			}
 			if response.rcode != tt.response.rcode {
 				t.Errorf("rcode = %v; want %v", response.rcode, tt.response.rcode)
@@ -691,17 +735,19 @@ func TestDelegate(t *testing.T) {
 					}
 				}
 			}
-			if response.requestEdns != tt.response.requestEdns {
-				t.Errorf("requestEdns = %v; want %v", response.requestEdns, tt.response.requestEdns)
-			}
-			if response.requestEdnsSize != tt.response.requestEdnsSize {
-				t.Errorf("requestEdnsSize = %v; want %v", response.requestEdnsSize, tt.response.requestEdnsSize)
-			}
-			if response.responseEdns != tt.response.responseEdns {
-				t.Errorf("responseEdns = %v; want %v", response.requestEdns, tt.response.requestEdns)
-			}
-			if response.responseEdnsSize != tt.response.responseEdnsSize {
-				t.Errorf("responseEdnsSize = %v; want %v", response.responseEdnsSize, tt.response.responseEdnsSize)
+			if runEDNSSizeChecks {
+				if response.requestEdns != tt.response.requestEdns {
+					t.Errorf("requestEdns = %v; want %v", response.requestEdns, tt.response.requestEdns)
+				}
+				if response.requestEdnsSize != tt.response.requestEdnsSize {
+					t.Errorf("requestEdnsSize = %v; want %v", response.requestEdnsSize, tt.response.requestEdnsSize)
+				}
+				if response.responseEdns != tt.response.responseEdns {
+					t.Errorf("responseEdns = %v; want %v", response.requestEdns, tt.response.requestEdns)
+				}
+				if response.responseEdnsSize != tt.response.responseEdnsSize {
+					t.Errorf("responseEdnsSize = %v; want %v", response.responseEdnsSize, tt.response.responseEdnsSize)
+				}
 			}
 		})
 	}
@@ -711,10 +757,10 @@ func TestDelegateSplitRoute(t *testing.T) {
 	test4 := netip.MustParseAddr("2.3.4.5")
 	test6 := netip.MustParseAddr("ff::1")
 
-	server1 := serveDNS(t, "127.0.0.1:0",
+	server1 := serveDNS(t, "127.0.0.1:0", "udp",
 		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
 	defer server1.Shutdown()
-	server2 := serveDNS(t, "127.0.0.1:0",
+	server2 := serveDNS(t, "127.0.0.1:0", "udp",
 		"test.other.", resolveToIP(test4, test6, "dns.other."))
 	defer server2.Shutdown()
 
@@ -747,7 +793,7 @@ func TestDelegateSplitRoute(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.title, func(t *testing.T) {
-			payload, err := syncRespond(r, tt.query)
+			payload, err := syncRespond(r, "udp", tt.query)
 			if err != nil {
 				t.Errorf("err = %v; want nil", err)
 				return
@@ -942,7 +988,7 @@ func TestFull(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			response, err := syncRespond(r, tt.request)
+			response, err := syncRespond(r, "udp", tt.request)
 			if err != nil {
 				t.Errorf("err = %v; want nil", err)
 			}
@@ -974,7 +1020,7 @@ func TestAllocs(t *testing.T) {
 
 	for _, tt := range tests {
 		err := tstest.MinAllocsPerRun(t, tt.want, func() {
-			syncRespond(r, tt.query)
+			syncRespond(r, "udp", tt.query)
 		})
 		if err != nil {
 			t.Errorf("%s: %v", tt.name, err)
@@ -1006,7 +1052,7 @@ func TestTrimRDNSBonjourPrefix(t *testing.T) {
 }
 
 func BenchmarkFull(b *testing.B) {
-	server := serveDNS(b, "127.0.0.1:0",
+	server := serveDNS(b, "127.0.0.1:0", "udp",
 		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
 	defer server.Shutdown()
 
@@ -1031,7 +1077,7 @@ func BenchmarkFull(b *testing.B) {
 		b.Run(tt.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for range b.N {
-				syncRespond(r, tt.request)
+				syncRespond(r, "udp", tt.request)
 			}
 		})
 	}
@@ -1159,7 +1205,7 @@ func TestHandleExitNodeDNSQueryWithNetPkg(t *testing.T) {
 		"ns.test.",
 		dnsHandler(miekdns.NS{Ns: "ns1.foo."}, miekdns.NS{Ns: "ns2.bar."}),
 	}
-	v4server := serveDNS(t, "127.0.0.1:0", records...)
+	v4server := serveDNS(t, "127.0.0.1:0", "udp", records...)
 	defer v4server.Shutdown()
 
 	// backendResolver is the resolver between
@@ -1485,7 +1531,7 @@ func TestUnARPA(t *testing.T) {
 //
 // See: https://github.com/tailscale/tailscale/issues/4722
 func TestServfail(t *testing.T) {
-	server := serveDNS(t, "127.0.0.1:0", "test.site.", miekdns.HandlerFunc(func(w miekdns.ResponseWriter, req *miekdns.Msg) {
+	server := serveDNS(t, "127.0.0.1:0", "udp", "test.site.", miekdns.HandlerFunc(func(w miekdns.ResponseWriter, req *miekdns.Msg) {
 		m := new(miekdns.Msg)
 		m.Rcode = miekdns.RcodeServerFailure
 		w.WriteMsg(m)
@@ -1501,14 +1547,14 @@ func TestServfail(t *testing.T) {
 	}
 	r.SetConfig(cfg)
 
-	pkt, err := syncRespond(r, dnspacket("test.site.", dns.TypeA, noEdns))
+	pkt, err := syncRespond(r, "udp", dnspacket("test.site.", dns.TypeA, noEdns))
 	if err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
 
 	wantPkt := []byte{
 		0x00, 0x00, // transaction id: 0
-		0x84, 0x02, // flags: response, authoritative, error: servfail
+		0x80, 0x02, // flags: response,  error: servfail
 		0x00, 0x01, // one question
 		0x00, 0x00, // no answers
 		0x00, 0x00, 0x00, 0x00, // no authority or additional RRs

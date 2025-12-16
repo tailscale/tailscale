@@ -315,17 +315,40 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 	default:
 	}
 
+	reqPacket := packet{bs: bs, family: family, addr: from}
 	out, err := r.respond(bs)
 	if err == errNotOurName {
 		responses := make(chan packet, 1)
 		ctx, cancel := context.WithTimeout(ctx, dnsQueryTimeout)
 		defer close(responses)
 		defer cancel()
-		err = r.forwarder.forwardWithDestChan(ctx, packet{bs, family, from}, responses)
+		err = r.forwarder.forwardWithDestChan(ctx, reqPacket, responses)
 		if err != nil {
 			return nil, err
 		}
-		return (<-responses).bs, nil
+		out = (<-responses).bs
+		err = nil
+	}
+
+	// Only perform truncation/EDNS0 processing for UDP queries.
+	if err == nil && family == "udp" && out != nil {
+		// Determine client's advertised UDP size via EDNS0, default to 512
+		maxResponseSize := uint16(512)
+		if edns := extractEDNS0UDPSize(bs); edns > 0 {
+			maxResponseSize = edns
+		}
+		if len(out) > int(maxResponseSize) {
+			tr, terr := truncateDNSResponse(out, maxResponseSize)
+			if terr != nil {
+				// Can't safely truncate; return SERVFAIL
+				serv, berr := servfailResponse(reqPacket)
+				if berr != nil {
+					return nil, terr
+				}
+				return serv.bs, nil
+			}
+			out = tr
+		}
 	}
 
 	return out, err
