@@ -206,6 +206,14 @@ spec:
                                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
                                     type: string
                                 type: array
+                            tailnet:
+                                description: |-
+                                    Tailnet specifies the tailnet this Connector should join. If blank, the default tailnet is used. When set, this
+                                    name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set.
+                                type: string
+                                x-kubernetes-validations:
+                                    - message: Connector tailnet is immutable
+                                      rule: self == oldSelf
                         type: object
                         x-kubernetes-validations:
                             - message: A Connector needs to have at least one of exit node, subnet router or app connector configured.
@@ -3145,6 +3153,14 @@ spec:
                                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
                                     type: string
                                 type: array
+                            tailnet:
+                                description: |-
+                                    Tailnet specifies the tailnet this ProxyGroup should join. If blank, the default tailnet is used. When set, this
+                                    name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set.
+                                type: string
+                                x-kubernetes-validations:
+                                    - message: ProxyGroup tailnet is immutable
+                                      rule: self == oldSelf
                             type:
                                 description: |-
                                     Type of the ProxyGroup proxies. Supported types are egress, ingress, and kube-apiserver.
@@ -4968,6 +4984,14 @@ spec:
                                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
                                     type: string
                                 type: array
+                            tailnet:
+                                description: |-
+                                    Tailnet specifies the tailnet this Recorder should join. If blank, the default tailnet is used. When set, this
+                                    name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set.
+                                type: string
+                                x-kubernetes-validations:
+                                    - message: Recorder tailnet is immutable
+                                      rule: self == oldSelf
                         type: object
                         x-kubernetes-validations:
                             - message: S3 storage must be used when deploying multiple Recorder replicas
