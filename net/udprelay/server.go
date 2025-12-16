@@ -43,6 +43,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/set"
+	"tailscale.com/util/usermetric"
 )
 
 const (
@@ -76,6 +77,7 @@ type Server struct {
 	wg                  sync.WaitGroup
 	closeCh             chan struct{}
 	netChecker          *netcheck.Client
+	metrics             *metrics
 
 	mu                  sync.Mutex                      // guards the following fields
 	macSecrets          views.Slice[[blake2s.Size]byte] // [0] is most recent, max 2 elements
@@ -321,7 +323,7 @@ func (e *serverEndpoint) isBoundLocked() bool {
 // onlyStaticAddrPorts is true, then dynamic addr:port discovery will be
 // disabled, and only addr:port's set via [Server.SetStaticAddrPorts] will be
 // used.
-func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool) (s *Server, err error) {
+func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool, metrics *usermetric.Registry) (s *Server, err error) {
 	s = &Server{
 		logf:                  logf,
 		disco:                 key.NewDisco(),
@@ -333,6 +335,7 @@ func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool) (s *Serv
 		nextVNI:               minVNI,
 	}
 	s.discoPublic = s.disco.Public()
+	s.metrics = registerMetrics(metrics)
 
 	// TODO(creachadair): Find a way to plumb this in during initialization.
 	// As-written, messages published here will not be seen by other components
@@ -670,6 +673,7 @@ func (s *Server) endpointGCLoop() {
 		defer s.mu.Unlock()
 		for k, v := range s.serverEndpointByDisco {
 			if v.isExpired(now, s.bindLifetime, s.steadyStateLifetime) {
+				s.metrics.addEndpoints(-1)
 				delete(s.serverEndpointByDisco, k)
 				s.serverEndpointByVNI.Delete(v.vni)
 			}
@@ -715,7 +719,11 @@ func (s *Server) handlePacket(from netip.AddrPort, b []byte) (write []byte, to n
 		secrets := s.getMACSecrets(now)
 		return e.(*serverEndpoint).handleSealedDiscoControlMsg(from, msg, s.discoPublic, secrets, now)
 	}
-	return e.(*serverEndpoint).handleDataPacket(from, b, now)
+	write, to = e.(*serverEndpoint).handleDataPacket(from, b, now)
+	if write != nil {
+		s.metrics.countForwarded(from.Addr(), to.Addr(), write)
+	}
+	return
 }
 
 func (s *Server) getMACSecrets(now mono.Time) views.Slice[[blake2s.Size]byte] {
@@ -932,6 +940,7 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 	s.serverEndpointByVNI.Store(e.vni, e)
 
 	s.logf("allocated endpoint vni=%d lamportID=%d disco[0]=%v disco[1]=%v", e.vni, e.lamportID, pair.Get()[0].ShortString(), pair.Get()[1].ShortString())
+	s.metrics.addEndpoints(1)
 	return endpoint.ServerEndpoint{
 		ServerDisco:         s.discoPublic,
 		ClientDisco:         pair.Get(),

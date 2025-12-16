@@ -21,6 +21,7 @@ import (
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/views"
+	"tailscale.com/util/usermetric"
 )
 
 type testClient struct {
@@ -209,7 +210,9 @@ func TestServer(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			server, err := NewServer(t.Logf, 0, true)
+			reg := new(usermetric.Registry)
+			resetClientMetrics()
+			server, err := NewServer(t.Logf, 0, true, reg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -234,6 +237,7 @@ func TestServer(t *testing.T) {
 			}
 
 			// We expect the same endpoint details pre-handshake.
+			assertMetricsMatch(t, server)
 			if diff := cmp.Diff(dupEndpoint, endpoint, cmpopts.EquateComparable(netip.AddrPort{}, key.DiscoPublic{})); diff != "" {
 				t.Fatalf("wrong dupEndpoint (-got +want)\n%s", diff)
 			}
@@ -285,6 +289,7 @@ func TestServer(t *testing.T) {
 				t.Fatal(err)
 			}
 			// We expect the same endpoint details post-handshake.
+			assertMetricsMatch(t, server)
 			if diff := cmp.Diff(dupEndpoint, endpoint, cmpopts.EquateComparable(netip.AddrPort{}, key.DiscoPublic{})); diff != "" {
 				t.Fatalf("wrong dupEndpoint (-got +want)\n%s", diff)
 			}
@@ -308,6 +313,7 @@ func TestServer(t *testing.T) {
 			defer tcAOnNewPort.close()
 
 			// Handshake client A on a new source IP:port, verify we can send packets on the new binding
+			assertMetricsMatch(t, server)
 			tcAOnNewPort.handshake(t)
 
 			fromAOnNewPort := []byte{7, 8, 9}
@@ -330,6 +336,8 @@ func TestServer(t *testing.T) {
 			if !bytes.Equal(fromBOnNewPort, rxFromB) {
 				t.Fatal("unexpected msg B->A")
 			}
+
+			assertMetricsMatch(t, server)
 		})
 	}
 }
