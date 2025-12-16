@@ -454,9 +454,7 @@ wyrm
 tilapia
 leaffish
 gourami
-betta
 artichoke
-goby
 fir
 larch
 lydian
@@ -475,4 +473,3 @@ smelt
 rattlesnake
 armadillo
 bonytongue
-arowana

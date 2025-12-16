@@ -774,14 +774,11 @@ lemming
 worm
 hornbill
 crane
-saola
 mudskipper
 leaffish
 bagrid
 gourami
-betta
 stomatopod
-goby
 piranha
 seagull
 dinosaur
@@ -790,7 +787,6 @@ bichir
 reedfish
 tarpon
 egret
-stork
 pomfret
 snakebird
 anhinga
@@ -803,4 +799,3 @@ komodo
 rattlesnake
 softshell
 bonytongue
-arowana
