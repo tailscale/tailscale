@@ -138,12 +138,12 @@ func changeDeltaWatcher(ec *eventbus.Client, ctx context.Context, dump func(st *
 			case <-ec.Done():
 				return
 			case delta := <-changeSub.Events():
-				if !delta.Major {
-					log.Printf("Network monitor fired; not a major change")
+				if !delta.RebindLikelyRequired {
+					log.Printf("Network monitor fired; not a significant change")
 					return
 				}
 				log.Printf("Network monitor fired. New state:")
-				dump(delta.New)
+				dump(delta.CurrentState())
 			}
 		}
 	}
