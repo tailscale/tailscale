@@ -5,7 +5,6 @@ package udprelay
 
 import (
 	"expvar"
-	"net/netip"
 
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/usermetric"
@@ -103,28 +102,26 @@ func (m *metrics) addEndpoints(value int) {
 	metricEndpoints.Add(int64(value))
 }
 
-func (m *metrics) countForwarded(from, to netip.Addr, b []byte) {
-	in4, out4 := from.Is4(), to.Is4()
-	bytes := int64(len(b))
+func (m *metrics) countForwarded(in4, out4 bool, bytes, packets int64) {
 	if in4 && out4 {
-		m.forwarded44Packets.Add(1)
+		m.forwarded44Packets.Add(packets)
 		m.forwarded44Bytes.Add(bytes)
-		metricForwarded44Packets.Add(1)
+		metricForwarded44Packets.Add(packets)
 		metricForwarded44Bytes.Add(bytes)
 	} else if in4 && !out4 {
-		m.forwarded46Packets.Add(1)
+		m.forwarded46Packets.Add(packets)
 		m.forwarded46Bytes.Add(bytes)
-		metricForwarded46Packets.Add(1)
+		metricForwarded46Packets.Add(packets)
 		metricForwarded46Bytes.Add(bytes)
 	} else if !in4 && out4 {
-		m.forwarded64Packets.Add(1)
+		m.forwarded64Packets.Add(packets)
 		m.forwarded64Bytes.Add(bytes)
-		metricForwarded64Packets.Add(1)
+		metricForwarded64Packets.Add(packets)
 		metricForwarded64Bytes.Add(bytes)
 	} else {
-		m.forwarded66Packets.Add(1)
+		m.forwarded66Packets.Add(packets)
 		m.forwarded66Bytes.Add(bytes)
-		metricForwarded66Packets.Add(1)
+		metricForwarded66Packets.Add(packets)
 		metricForwarded66Bytes.Add(bytes)
 	}
 }

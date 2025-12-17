@@ -690,39 +690,39 @@ func (s *Server) endpointGCLoop() {
 	}
 }
 
-func (s *Server) handlePacket(from netip.AddrPort, b []byte) (write []byte, to netip.AddrPort) {
+func (s *Server) handlePacket(from netip.AddrPort, b []byte) (write []byte, to netip.AddrPort, isDataPacket bool) {
 	if stun.Is(b) && b[1] == 0x01 {
 		// A b[1] value of 0x01 (STUN method binding) is sufficiently
 		// non-overlapping with the Geneve header where the LSB is always 0
 		// (part of 6 "reserved" bits).
 		s.netChecker.ReceiveSTUNPacket(b, from)
-		return nil, netip.AddrPort{}
+		return nil, netip.AddrPort{}, false
 	}
 	gh := packet.GeneveHeader{}
 	err := gh.Decode(b)
 	if err != nil {
-		return nil, netip.AddrPort{}
+		return nil, netip.AddrPort{}, false
 	}
 	e, ok := s.serverEndpointByVNI.Load(gh.VNI.Get())
 	if !ok {
 		// unknown VNI
-		return nil, netip.AddrPort{}
+		return nil, netip.AddrPort{}, false
 	}
 
 	now := mono.Now()
 	if gh.Control {
 		if gh.Protocol != packet.GeneveProtocolDisco {
 			// control packet, but not Disco
-			return nil, netip.AddrPort{}
+			return nil, netip.AddrPort{}, false
 		}
 		msg := b[packet.GeneveFixedHeaderLength:]
 		secrets := s.getMACSecrets(now)
-		return e.(*serverEndpoint).handleSealedDiscoControlMsg(from, msg, s.discoPublic, secrets, now)
+		write, to = e.(*serverEndpoint).handleSealedDiscoControlMsg(from, msg, s.discoPublic, secrets, now)
+		isDataPacket = false
+		return
 	}
 	write, to = e.(*serverEndpoint).handleDataPacket(from, b, now)
-	if write != nil {
-		s.metrics.countForwarded(from.Addr(), to.Addr(), write)
-	}
+	isDataPacket = true
 	return
 }
 
@@ -791,15 +791,29 @@ func (s *Server) packetReadLoop(readFromSocket, otherSocket batching.Conn, readF
 			return
 		}
 
+		type forwardedDataMetrics struct {
+			bytes   int64
+			packets int64
+		}
+		dataMetricsByOutAF := [2]forwardedDataMetrics{} // 0 = ipv4; 1 = ipv6
 		for _, msg := range msgs[:n] {
 			if msg.N == 0 {
 				continue
 			}
 			buf := msg.Buffers[0][:msg.N]
 			from := msg.Addr.(*net.UDPAddr).AddrPort()
-			write, to := s.handlePacket(from, buf)
+			write, to, isDataPacket := s.handlePacket(from, buf)
 			if !to.IsValid() {
 				continue
+			}
+			if isDataPacket {
+				if to.Addr().Is4() {
+					dataMetricsByOutAF[0].bytes += int64(len(write))
+					dataMetricsByOutAF[0].packets++
+				} else {
+					dataMetricsByOutAF[1].bytes += int64(len(write))
+					dataMetricsByOutAF[1].packets++
+				}
 			}
 			if from.Addr().Is4() == to.Addr().Is4() || otherSocket != nil {
 				buffs, ok := writeBuffsByDest[to]
@@ -831,6 +845,9 @@ func (s *Server) packetReadLoop(readFromSocket, otherSocket batching.Conn, readF
 			}
 			delete(writeBuffsByDest, dest)
 		}
+
+		s.metrics.countForwarded(readFromSocketIsIPv4, false, dataMetricsByOutAF[0].bytes, dataMetricsByOutAF[0].packets)
+		s.metrics.countForwarded(readFromSocketIsIPv4, true, dataMetricsByOutAF[1].bytes, dataMetricsByOutAF[1].packets)
 	}
 }
 
