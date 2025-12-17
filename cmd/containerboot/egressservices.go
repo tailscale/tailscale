@@ -202,7 +202,6 @@ func (ep *egressProxy) syncEgressConfigs(cfgs *egressservices.Configs, status *e
 	// Delete unnecessary services.
 	if err := ep.deleteUnnecessaryServices(cfgs, status); err != nil {
 		return nil, fmt.Errorf("error deleting services: %w", err)
-
 	}
 	newStatus := &egressservices.Status{}
 	if !wantsServicesConfigured(cfgs) {
@@ -476,7 +475,7 @@ func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, n ipn.N
 		log.Printf("netmap is not available, unable to determine backend addresses for %s", svc.TailnetTarget.FQDN)
 		return addrs, nil
 	}
-	egressAddrs, err := resolveTailnetFQDN(n.NetMap, svc.TailnetTarget.FQDN)
+	egressAddrs, err := resolveTailnetFQDN(context.Background(), ep.tsClient, svc.TailnetTarget.FQDN)
 	if err != nil || len(egressAddrs) == 0 {
 		log.Printf("tailnet target %q does not have any backend addresses, skipping", svc.TailnetTarget.FQDN)
 		return addrs, nil
@@ -529,7 +528,6 @@ func (ep *egressProxy) shouldResync(n ipn.Notify) bool {
 // ensureServiceDeleted ensures that any rules for an egress service are removed
 // from the firewall configuration.
 func ensureServiceDeleted(svcName string, svc *egressservices.ServiceStatus, nfr linuxfw.NetfilterRunner) error {
-
 	// Note that the portmap is needed for iptables based firewall only.
 	// Nftables group rules for a service in a chain, so there is no need to
 	// specify individual portmapping based rules.
