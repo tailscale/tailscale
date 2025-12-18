@@ -26,7 +26,7 @@ type Persist struct {
 	UserProfile       tailcfg.UserProfile
 	NetworkLockKey    key.NLPrivate
 	NodeID            tailcfg.StableNodeID
-	AttestationKey    key.HardwareAttestationKey `json:",omitempty"`
+	AttestationKey    key.HardwareAttestationKey `json:",omitzero"`
 
 	// DisallowedTKAStateIDs stores the tka.State.StateID values which
 	// this node will not operate network lock on. This is used to
