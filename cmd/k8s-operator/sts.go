@@ -671,6 +671,14 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
 			Value: "/etc/tsconfig/$(POD_NAME)",
 		},
+		corev1.EnvVar{
+			// This ensures that cert renewals can succeed if ACME account
+			// keys have changed since issuance. We cannot guarantee or
+			// validate that the account key has not changed, see
+			// https://github.com/tailscale/tailscale/issues/18251
+			Name:  "TS_DEBUG_ACME_FORCE_RENEWAL",
+			Value: "true",
+		},
 	)
 
 	if sts.ForwardClusterTrafficViaL7IngressProxy {
