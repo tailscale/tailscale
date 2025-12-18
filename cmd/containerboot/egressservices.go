@@ -173,7 +173,7 @@ func (ep *egressProxy) sync(ctx context.Context, n ipn.Notify) error {
 	if err != nil {
 		return fmt.Errorf("error retrieving current egress proxy status: %w", err)
 	}
-	newStatus, err := ep.syncEgressConfigs(cfgs, status, n)
+	newStatus, err := ep.syncEgressConfigs(ctx, cfgs, status, n)
 	if err != nil {
 		return fmt.Errorf("error syncing egress service configs: %w", err)
 	}
@@ -194,7 +194,7 @@ func (ep *egressProxy) addrsHaveChanged(n ipn.Notify) bool {
 // syncEgressConfigs adds and deletes firewall rules to match the desired
 // configuration. It uses the provided status to determine what is currently
 // applied and updates the status after a successful sync.
-func (ep *egressProxy) syncEgressConfigs(cfgs *egressservices.Configs, status *egressservices.Status, n ipn.Notify) (*egressservices.Status, error) {
+func (ep *egressProxy) syncEgressConfigs(ctx context.Context, cfgs *egressservices.Configs, status *egressservices.Status, n ipn.Notify) (*egressservices.Status, error) {
 	if !(wantsServicesConfigured(cfgs) || hasServicesConfigured(status)) {
 		return nil, nil
 	}
@@ -212,7 +212,7 @@ func (ep *egressProxy) syncEgressConfigs(cfgs *egressservices.Configs, status *e
 	rulesPerSvcToAdd := make(map[string][]rule, 0)
 	rulesPerSvcToDelete := make(map[string][]rule, 0)
 	for svcName, cfg := range *cfgs {
-		tailnetTargetIPs, err := ep.tailnetTargetIPsForSvc(cfg, n)
+		tailnetTargetIPs, err := ep.tailnetTargetIPsForSvc(ctx, cfg, n)
 		if err != nil {
 			return nil, fmt.Errorf("error determining tailnet target IPs: %w", err)
 		}
@@ -241,9 +241,6 @@ func (ep *egressProxy) syncEgressConfigs(cfgs *egressservices.Configs, status *e
 					}
 					local = pfx.Addr()
 					break
-				}
-				if !local.IsValid() {
-					return nil, fmt.Errorf("no valid local IP: %v", local)
 				}
 				if err := ep.nfr.EnsureSNATForDst(local, t); err != nil {
 					return nil, fmt.Errorf("error setting up SNAT rule: %w", err)
@@ -455,7 +452,7 @@ func (ep *egressProxy) setStatus(ctx context.Context, status *egressservices.Sta
 // FQDN, resolve the FQDN and return the resolved IPs. It checks if the
 // netfilter runner supports IPv6 NAT and skips any IPv6 addresses if it
 // doesn't.
-func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, n ipn.Notify) (addrs []netip.Addr, err error) {
+func (ep *egressProxy) tailnetTargetIPsForSvc(ctx context.Context, svc egressservices.Config, n ipn.Notify) (addrs []netip.Addr, err error) {
 	if svc.TailnetTarget.IP != "" {
 		addr, err := netip.ParseAddr(svc.TailnetTarget.IP)
 		if err != nil {
@@ -475,7 +472,7 @@ func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, n ipn.N
 		log.Printf("netmap is not available, unable to determine backend addresses for %s", svc.TailnetTarget.FQDN)
 		return addrs, nil
 	}
-	egressAddrs, err := resolveTailnetFQDN(context.Background(), ep.tsClient, svc.TailnetTarget.FQDN)
+	egressAddrs, err := resolveTailnetFQDN(ctx, ep.tsClient, svc.TailnetTarget.FQDN)
 	if err != nil || len(egressAddrs) == 0 {
 		log.Printf("tailnet target %q does not have any backend addresses, skipping", svc.TailnetTarget.FQDN)
 		return addrs, nil

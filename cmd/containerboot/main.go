@@ -912,7 +912,7 @@ func resolveTailnetFQDN(ctx context.Context, c *local.Client, fqdn string) ([]ne
 		return nil, fmt.Errorf("failed to parse DNS answers: %w", err)
 	}
 
-	addrs := make([]netip.Prefix, len(answers))
+	addrs := []netip.Prefix{}
 	for _, a := range answers {
 		if a.Header.Type == dnsmessage.TypeA {
 			ar, ok := a.Body.(*dnsmessage.AResource)
@@ -922,9 +922,16 @@ func resolveTailnetFQDN(ctx context.Context, c *local.Client, fqdn string) ([]ne
 			}
 
 			addr := netip.AddrFrom4(ar.A)
-			prefix := netip.PrefixFrom(addr, 32)
+			if !addr.IsValid() {
+				log.Printf("record %q is not a valid address", addr.String())
+				continue
+			}
 
-			log.Printf("adding prefix %q\n", prefix.String())
+			prefix := netip.PrefixFrom(addr, 32)
+			if !prefix.IsValid() {
+				log.Printf("address %q is not a valid prefix", prefix.String())
+				continue
+			}
 			addrs = append(addrs, prefix)
 		}
 	}
