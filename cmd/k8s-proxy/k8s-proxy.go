@@ -318,9 +318,9 @@ func run(logger *zap.SugaredLogger) error {
 			// Context cancelled, exit.
 			logger.Info("Context cancelled, exiting")
 			shutdownCtx, shutdownCancel := context.WithTimeout(serveCtx, 20*time.Second)
+			defer shutdownCancel()
 			unadvertiseErr := services.EnsureServicesNotAdvertised(shutdownCtx, lc, logger.Infof)
-			shutdownCancel()
-			serveCancel()
+			<-shutdownCtx.Done()
 			return errors.Join(unadvertiseErr, group.Wait())
 		case cfg = <-cfgChan:
 			// Handle config reload.
