@@ -144,7 +144,11 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 		if minValidity == 0 {
 			logf("starting async renewal")
 			// Start renewal in the background, return current valid cert.
-			b.goTracker.Go(func() { getCertPEM(context.Background(), b, cs, logf, traceACME, domain, now, minValidity) })
+			b.goTracker.Go(func() {
+				if _, err := getCertPEM(context.Background(), b, cs, logf, traceACME, domain, now, minValidity); err != nil {
+					logf("async renewal failed: getCertPem: %v", err)
+				}
+			})
 			return pair, nil
 		}
 		// If the caller requested a specific validity duration, fall through
