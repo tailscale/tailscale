@@ -24,8 +24,10 @@ var (
 	cMetricForwarded66Bytes = clientmetric.NewAggregateCounter("udprelay_forwarded_bytes_udp6_udp6")
 
 	// [clientmetric.Gauge] does not let us embed existing counters,
-	// [metrics.addEndpoints] records data into client and user gauges independently.
-	cMetricEndpoints = clientmetric.NewGauge("udprelay_endpoints")
+	// [metrics.updateEndpoint] records data into client and user gauges independently.
+	cMetricEndpointsBound     = clientmetric.NewGauge("udprelay_endpoints_bound")
+	cMetricEndpointsSemiBound = clientmetric.NewGauge("udprelay_endpoints_semi_bound")
+	cMetricEndpointsOpen      = clientmetric.NewGauge("udprelay_endpoints_open")
 )
 
 type transport string
@@ -35,12 +37,15 @@ const (
 	transportUDP6 transport = "udp6"
 )
 
+type endpointTransition [2]endpointState
+
 type forwardedLabel struct {
 	transportIn  transport `prom:"transport_in"`
 	transportOut transport `prom:"transport_out"`
 }
 
 type endpointLabel struct {
+	state endpointState `prom:"state"`
 }
 
 type metrics struct {
@@ -54,7 +59,9 @@ type metrics struct {
 	forwarded64Bytes expvar.Int
 	forwarded66Bytes expvar.Int
 
-	endpoints expvar.Int
+	endpointsOpen      expvar.Int
+	endpointsSemiBound expvar.Int
+	endpointsBound     expvar.Int
 }
 
 // registerMetrics publishes user and client metric counters for peer relay server.
@@ -76,7 +83,7 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 		)
 		uMetricEndpoints = usermetric.NewMultiLabelMapWithRegistry[endpointLabel](
 			reg,
-			"tailscaled_peer_relay_endpoints_total",
+			"tailscaled_peer_relay_endpoints",
 			"gauge",
 			"Number of allocated Peer Relay endpoints",
 		)
@@ -98,7 +105,9 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 	uMetricForwardedBytes.Set(forwarded64, &m.forwarded64Bytes)
 	uMetricForwardedBytes.Set(forwarded66, &m.forwarded66Bytes)
 
-	uMetricEndpoints.Set(endpointLabel{}, &m.endpoints)
+	uMetricEndpoints.Set(endpointLabel{endpointBound}, &m.endpointsBound)
+	uMetricEndpoints.Set(endpointLabel{endpointSemiBound}, &m.endpointsSemiBound)
+	uMetricEndpoints.Set(endpointLabel{endpointOpen}, &m.endpointsOpen)
 
 	// Publish client metrics.
 	cMetricForwarded44Packets.Register(&m.forwarded44Packets)
@@ -113,11 +122,42 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 	return m
 }
 
-// addEndpoints updates the total endpoints gauge. Value can be negative.
+// updateEndpoint updates the total endpoints gauge. Value can be negative.
 // It records two gauges independently, see [cMetricEndpoints] doc.
-func (m *metrics) addEndpoints(value int64) {
-	m.endpoints.Add(value)
-	cMetricEndpoints.Add(value)
+func (m *metrics) updateEndpoint(tx endpointTransition) {
+	switch tx {
+	case endpointTransition{endpointClosed, endpointOpen}:
+		m.endpointsOpen.Add(1)
+		cMetricEndpointsOpen.Add(1)
+	case endpointTransition{endpointOpen, endpointSemiBound}:
+		m.endpointsOpen.Add(-1)
+		cMetricEndpointsOpen.Add(-1)
+		m.endpointsSemiBound.Add(1)
+		cMetricEndpointsSemiBound.Add(1)
+	case endpointTransition{endpointSemiBound, endpointBound}:
+		m.endpointsSemiBound.Add(-1)
+		cMetricEndpointsSemiBound.Add(-1)
+		m.endpointsBound.Add(1)
+		cMetricEndpointsBound.Add(1)
+	case endpointTransition{endpointOpen, endpointClosed}:
+		m.endpointsOpen.Add(-1)
+		cMetricEndpointsOpen.Add(-1)
+	case endpointTransition{endpointSemiBound, endpointClosed}:
+		m.endpointsSemiBound.Add(-1)
+		cMetricEndpointsSemiBound.Add(-1)
+	case endpointTransition{endpointBound, endpointClosed}:
+		m.endpointsBound.Add(-1)
+		cMetricEndpointsBound.Add(-1)
+	}
+}
+
+func (m *metrics) resetEndpoints() {
+	m.endpointsBound.Set(0)
+	cMetricEndpointsBound.Set(0)
+	m.endpointsSemiBound.Set(0)
+	cMetricEndpointsSemiBound.Set(0)
+	m.endpointsOpen.Set(0)
+	cMetricEndpointsOpen.Set(0)
 }
 
 // countForwarded records user and client metrics according to the
@@ -149,5 +189,7 @@ func deregisterMetrics() {
 	cMetricForwarded46Bytes.UnregisterAll()
 	cMetricForwarded64Bytes.UnregisterAll()
 	cMetricForwarded66Bytes.UnregisterAll()
-	cMetricEndpoints.Set(0)
+	cMetricEndpointsOpen.Set(0)
+	cMetricEndpointsSemiBound.Set(0)
+	cMetricEndpointsBound.Set(0)
 }

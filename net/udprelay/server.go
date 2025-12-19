@@ -115,6 +115,7 @@ type serverEndpoint struct {
 	lamportID          uint64
 	vni                uint32
 	allocatedAt        mono.Time
+	metrics            *metrics
 
 	mu                   sync.Mutex        // guards the following fields
 	inProgressGeneration [2]uint32         // or zero if a handshake has never started, or has just completed
@@ -144,6 +145,28 @@ func blakeMACFromBindMsg(blakeKey [blake2s.Size]byte, src netip.AddrPort, msg di
 	var out [blake2s.Size]byte
 	h.Sum(out[:0])
 	return out, nil
+}
+
+type endpointState string
+
+const (
+	endpointClosed    endpointState = "closed"
+	endpointOpen      endpointState = "open"
+	endpointSemiBound endpointState = "semi_bound"
+	endpointBound     endpointState = "bound"
+)
+
+func (e *serverEndpoint) stateLocked() endpointState {
+	switch {
+	case e == nil:
+		return endpointClosed
+	case e.isSemiBoundLocked():
+		return endpointSemiBound
+	case e.isBoundLocked():
+		return endpointBound
+	default:
+		return endpointOpen
+	}
 }
 
 func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex int, discoMsg disco.Message, serverDisco key.DiscoPublic, macSecrets views.Slice[[blake2s.Size]byte], now mono.Time) (write []byte, to netip.AddrPort) {
@@ -224,9 +247,11 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 			// already authenticated via disco.
 			if bytes.Equal(mac[:], discoMsg.Challenge[:]) {
 				// Handshake complete. Update the binding for this sender.
+				oldState := e.stateLocked()
 				e.boundAddrPorts[senderIndex] = from
 				e.lastSeen[senderIndex] = now           // record last seen as bound time
 				e.inProgressGeneration[senderIndex] = 0 // reset to zero, which indicates there is no in-progress handshake
+				e.metrics.updateEndpoint(endpointTransition{oldState, e.stateLocked()})
 				return nil, netip.AddrPort{}
 			}
 		}
@@ -316,6 +341,14 @@ func (e *serverEndpoint) isExpired(now mono.Time, bindLifetime, steadyStateLifet
 func (e *serverEndpoint) isBoundLocked() bool {
 	return e.boundAddrPorts[0].IsValid() &&
 		e.boundAddrPorts[1].IsValid()
+}
+
+// isSemiBoundLocked returns true if either client has completed a 3-way handshake,
+// otherwise false.
+func (e *serverEndpoint) isSemiBoundLocked() bool {
+	a, b := e.boundAddrPorts[0], e.boundAddrPorts[1]
+	return a.IsValid() && !b.IsValid() ||
+		!a.IsValid() && b.IsValid()
 }
 
 // NewServer constructs a [Server] listening on port. If port is zero, then
@@ -653,6 +686,7 @@ func (s *Server) Close() error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.serverEndpointByVNI.Clear()
+		s.metrics.resetEndpoints()
 		clear(s.serverEndpointByDisco)
 		s.closed = true
 		s.bus.Close()
@@ -673,7 +707,7 @@ func (s *Server) endpointGCLoop() {
 		defer s.mu.Unlock()
 		for k, v := range s.serverEndpointByDisco {
 			if v.isExpired(now, s.bindLifetime, s.steadyStateLifetime) {
-				s.metrics.addEndpoints(-1)
+				s.metrics.updateEndpoint(endpointTransition{v.stateLocked(), endpointOpen})
 				delete(s.serverEndpointByDisco, k)
 				s.serverEndpointByVNI.Delete(v.vni)
 			}
@@ -961,6 +995,7 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 		lamportID:    s.lamportID,
 		allocatedAt:  mono.Now(),
 		vni:          vni,
+		metrics:      s.metrics,
 	}
 	e.discoSharedSecrets[0] = s.disco.Shared(e.discoPubKeys.Get()[0])
 	e.discoSharedSecrets[1] = s.disco.Shared(e.discoPubKeys.Get()[1])
@@ -969,7 +1004,7 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 	s.serverEndpointByVNI.Store(e.vni, e)
 
 	s.logf("allocated endpoint vni=%d lamportID=%d disco[0]=%v disco[1]=%v", e.vni, e.lamportID, pair.Get()[0].ShortString(), pair.Get()[1].ShortString())
-	s.metrics.addEndpoints(1)
+	s.metrics.updateEndpoint(endpointTransition{endpointClosed, endpointOpen})
 	return endpoint.ServerEndpoint{
 		ServerDisco:         s.discoPublic,
 		ClientDisco:         pair.Get(),
