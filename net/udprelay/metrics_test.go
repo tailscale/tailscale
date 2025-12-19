@@ -11,7 +11,7 @@ import (
 	"tailscale.com/util/usermetric"
 )
 
-func TestMetrics(t *testing.T) {
+func TestMetricsLifecycle(t *testing.T) {
 	c := qt.New(t)
 	deregisterMetrics()
 	r := &usermetric.Registry{}
@@ -22,6 +22,7 @@ func TestMetrics(t *testing.T) {
 	want := []string{
 		"tailscaled_peer_relay_forwarded_packets_total",
 		"tailscaled_peer_relay_forwarded_bytes_total",
+		"tailscaled_peer_relay_endpoints",
 	}
 	slices.Sort(have)
 	slices.Sort(want)
@@ -51,4 +52,51 @@ func TestMetrics(t *testing.T) {
 	c.Assert(m.forwarded66Packets.Value(), qt.Equals, int64(4))
 	c.Assert(cMetricForwarded66Bytes.Value(), qt.Equals, int64(4))
 	c.Assert(cMetricForwarded66Packets.Value(), qt.Equals, int64(4))
+
+	// Validate client metrics deregistration.
+	m.updateEndpoint(endpointClosed, endpointOpen)
+	deregisterMetrics()
+	c.Check(cMetricForwarded44Bytes.Value(), qt.Equals, int64(0))
+	c.Check(cMetricForwarded44Packets.Value(), qt.Equals, int64(0))
+	c.Check(cMetricForwarded46Bytes.Value(), qt.Equals, int64(0))
+	c.Check(cMetricForwarded46Packets.Value(), qt.Equals, int64(0))
+	c.Check(cMetricForwarded64Bytes.Value(), qt.Equals, int64(0))
+	c.Check(cMetricForwarded64Packets.Value(), qt.Equals, int64(0))
+	c.Check(cMetricForwarded66Bytes.Value(), qt.Equals, int64(0))
+	c.Check(cMetricForwarded66Packets.Value(), qt.Equals, int64(0))
+	c.Check(cMetricEndpoints[endpointOpen].Value(), qt.Equals, int64(0))
+}
+
+func TestMetricsEndpointTransitions(t *testing.T) {
+	c := qt.New(t)
+	for _, tc := range []struct {
+		name              string
+		leaving, entering endpointState
+		wantOpen          int64
+		wantSemi          int64
+		wantBound         int64
+	}{
+		{"closed-open", endpointClosed, endpointOpen, 1, 0, 0},
+		{"open-semi_bound", endpointOpen, endpointSemiBound, -1, 1, 0},
+		{"semi_bound-bound", endpointSemiBound, endpointBound, 0, -1, 1},
+		{"open-closed", endpointOpen, endpointClosed, -1, 0, 0},
+		{"semi_bound-closed", endpointSemiBound, endpointClosed, 0, -1, 0},
+		{"bound-closed", endpointBound, endpointClosed, 0, 0, -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deregisterMetrics()
+			r := &usermetric.Registry{}
+			m := registerMetrics(r)
+
+			m.updateEndpoint(tc.leaving, tc.entering)
+			c.Check(m.endpoints[endpointOpen].Value(), qt.Equals, tc.wantOpen)
+			c.Check(m.endpoints[endpointSemiBound].Value(), qt.Equals, tc.wantSemi)
+			c.Check(m.endpoints[endpointBound].Value(), qt.Equals, tc.wantBound)
+
+			// Verify client metrics match
+			c.Check(cMetricEndpoints[endpointOpen].Value(), qt.Equals, tc.wantOpen)
+			c.Check(cMetricEndpoints[endpointSemiBound].Value(), qt.Equals, tc.wantSemi)
+			c.Check(cMetricEndpoints[endpointBound].Value(), qt.Equals, tc.wantBound)
+		})
+	}
 }
