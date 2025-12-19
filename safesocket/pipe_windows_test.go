@@ -58,9 +58,14 @@ func TestExpectedWindowsTypes(t *testing.T) {
 		if wcc.winioPipeConn.Fd() == 0 {
 			t.Error("accepted conn had unexpected zero fd")
 		}
-		if wcc.token == 0 {
+		tok, err := wcc.Token()
+		if err != nil {
+			t.Errorf("failed to retrieve client token: %v", err)
+		}
+		if tok == 0 {
 			t.Error("accepted conn had unexpected zero token")
 		}
+		tok.Close()
 
 		s.Write([]byte("hello"))
 

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/tailscale/go-winio"
@@ -49,7 +50,9 @@ func listen(path string) (net.Listener, error) {
 // embedded net.Conn must be a go-winio PipeConn.
 type WindowsClientConn struct {
 	winioPipeConn
-	token windows.Token
+	tokenOnce sync.Once
+	token     windows.Token // or zero, if we couldn't obtain the client's token
+	tokenErr  error
 }
 
 // winioPipeConn is a subset of the interface implemented by the go-winio's
@@ -79,12 +82,63 @@ func (conn *WindowsClientConn) ClientPID() (int, error) {
 	return int(pid), nil
 }
 
-// Token returns the Windows access token of the client user.
-func (conn *WindowsClientConn) Token() windows.Token {
-	return conn.token
+// CheckToken returns an error if the client user's access token could not be retrieved,
+// for example when the client opens the pipe with an anonymous impersonation level.
+//
+// Deprecated: use [WindowsClientConn.Token] instead.
+func (conn *WindowsClientConn) CheckToken() error {
+	_, err := conn.getToken()
+	return err
+}
+
+// getToken returns the Windows access token of the client user,
+// or an error if the token could not be retrieved, for example
+// when the client opens the pipe with an anonymous impersonation level.
+//
+// The connection retains ownership of the returned token handle;
+// the caller must not close it.
+//
+// TODO(nickkhyl): Remove this, along with [WindowsClientConn.CheckToken],
+// once [ipnauth.ConnIdentity] is removed in favor of [ipnauth.Actor].
+func (conn *WindowsClientConn) getToken() (windows.Token, error) {
+	conn.tokenOnce.Do(func() {
+		conn.token, conn.tokenErr = clientUserAccessToken(conn.winioPipeConn)
+	})
+	return conn.token, conn.tokenErr
+}
+
+// Token returns the Windows access token of the client user,
+// or an error if the token could not be retrieved, for example
+// when the client opens the pipe with an anonymous impersonation level.
+//
+// The caller is responsible for closing the returned token handle.
+func (conn *WindowsClientConn) Token() (windows.Token, error) {
+	token, err := conn.getToken()
+	if err != nil {
+		return 0, err
+	}
+
+	var dupToken windows.Handle
+	if err := windows.DuplicateHandle(
+		windows.CurrentProcess(),
+		windows.Handle(token),
+		windows.CurrentProcess(),
+		&dupToken,
+		0,
+		false,
+		windows.DUPLICATE_SAME_ACCESS,
+	); err != nil {
+		return 0, err
+	}
+	return windows.Token(dupToken), nil
 }
 
 func (conn *WindowsClientConn) Close() error {
+	// Either wait for any pending [WindowsClientConn.Token] calls to complete,
+	// or ensure that the token will never be opened.
+	conn.tokenOnce.Do(func() {
+		conn.tokenErr = net.ErrClosed
+	})
 	if conn.token != 0 {
 		conn.token.Close()
 		conn.token = 0
@@ -110,17 +164,7 @@ func (lw *winIOPipeListener) Accept() (net.Conn, error) {
 		conn.Close()
 		return nil, fmt.Errorf("unexpected type %T from winio.ListenPipe listener (itself a %T)", conn, lw.Listener)
 	}
-
-	token, err := clientUserAccessToken(pipeConn)
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
-
-	return &WindowsClientConn{
-		winioPipeConn: pipeConn,
-		token:         token,
-	}, nil
+	return &WindowsClientConn{winioPipeConn: pipeConn}, nil
 }
 
 func clientUserAccessToken(pc winioPipeConn) (windows.Token, error) {

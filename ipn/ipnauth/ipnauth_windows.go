@@ -25,6 +25,12 @@ func GetConnIdentity(logf logger.Logf, c net.Conn) (ci *ConnIdentity, err error)
 	if !ok {
 		return nil, fmt.Errorf("not a WindowsClientConn: %T", c)
 	}
+	if err := wcc.CheckToken(); err != nil {
+		// Failure to obtain a token means the client cannot be authenticated.
+		// We don't care about the exact error, but it typically means the client
+		// attempted to connect at the Anonymous impersonation level.
+		return nil, fmt.Errorf("authentication failed: %w", err)
+	}
 	ci.pid, err = wcc.ClientPID()
 	if err != nil {
 		return nil, err
@@ -169,26 +175,13 @@ func (t *token) IsUID(uid ipn.WindowsUserID) bool {
 // WindowsToken returns the WindowsToken representing the security context
 // of the connection's client.
 func (ci *ConnIdentity) WindowsToken() (WindowsToken, error) {
-	var wcc *safesocket.WindowsClientConn
-	var ok bool
-	if wcc, ok = ci.conn.(*safesocket.WindowsClientConn); !ok {
+	wcc, ok := ci.conn.(*safesocket.WindowsClientConn)
+	if !ok {
 		return nil, fmt.Errorf("not a WindowsClientConn: %T", ci.conn)
 	}
-
-	// We duplicate the token's handle so that the WindowsToken we return may have
-	// a lifetime independent from the original connection.
-	var h windows.Handle
-	if err := windows.DuplicateHandle(
-		windows.CurrentProcess(),
-		windows.Handle(wcc.Token()),
-		windows.CurrentProcess(),
-		&h,
-		0,
-		false,
-		windows.DUPLICATE_SAME_ACCESS,
-	); err != nil {
+	token, err := wcc.Token()
+	if err != nil {
 		return nil, err
 	}
-
-	return newToken(windows.Token(h)), nil
+	return newToken(token), nil
 }
