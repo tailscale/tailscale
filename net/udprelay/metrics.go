@@ -22,10 +22,6 @@ var (
 	cMetricForwarded46Bytes = clientmetric.NewAggregateCounter("udprelay_forwarded_bytes_udp4_udp6")
 	cMetricForwarded64Bytes = clientmetric.NewAggregateCounter("udprelay_forwarded_bytes_udp6_udp4")
 	cMetricForwarded66Bytes = clientmetric.NewAggregateCounter("udprelay_forwarded_bytes_udp6_udp6")
-
-	// [clientmetric.Gauge] does not let us embed existing counters,
-	// [metrics.addEndpoints] records data into client and user gauges independently.
-	cMetricEndpoints = clientmetric.NewGauge("udprelay_endpoints")
 )
 
 type transport string
@@ -40,9 +36,6 @@ type forwardedLabel struct {
 	transportOut transport `prom:"transport_out"`
 }
 
-type endpointLabel struct {
-}
-
 type metrics struct {
 	forwarded44Packets expvar.Int
 	forwarded46Packets expvar.Int
@@ -53,8 +46,6 @@ type metrics struct {
 	forwarded46Bytes expvar.Int
 	forwarded64Bytes expvar.Int
 	forwarded66Bytes expvar.Int
-
-	endpoints expvar.Int
 }
 
 // registerMetrics publishes user and client metric counters for peer relay server.
@@ -74,12 +65,6 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 			"counter",
 			"Number of bytes forwarded via Peer Relay",
 		)
-		uMetricEndpoints = usermetric.NewMultiLabelMapWithRegistry[endpointLabel](
-			reg,
-			"tailscaled_peer_relay_endpoints_total",
-			"gauge",
-			"Number of allocated Peer Relay endpoints",
-		)
 		forwarded44 = forwardedLabel{transportIn: transportUDP4, transportOut: transportUDP4}
 		forwarded46 = forwardedLabel{transportIn: transportUDP4, transportOut: transportUDP6}
 		forwarded64 = forwardedLabel{transportIn: transportUDP6, transportOut: transportUDP4}
@@ -98,8 +83,6 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 	uMetricForwardedBytes.Set(forwarded64, &m.forwarded64Bytes)
 	uMetricForwardedBytes.Set(forwarded66, &m.forwarded66Bytes)
 
-	uMetricEndpoints.Set(endpointLabel{}, &m.endpoints)
-
 	// Publish client metrics.
 	cMetricForwarded44Packets.Register(&m.forwarded44Packets)
 	cMetricForwarded46Packets.Register(&m.forwarded46Packets)
@@ -111,13 +94,6 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 	cMetricForwarded66Bytes.Register(&m.forwarded66Bytes)
 
 	return m
-}
-
-// addEndpoints updates the total endpoints gauge. Value can be negative.
-// It records two gauges independently, see [cMetricEndpoints] doc.
-func (m *metrics) addEndpoints(value int64) {
-	m.endpoints.Add(value)
-	cMetricEndpoints.Add(value)
 }
 
 // countForwarded records user and client metrics according to the
@@ -149,5 +125,4 @@ func deregisterMetrics() {
 	cMetricForwarded46Bytes.UnregisterAll()
 	cMetricForwarded64Bytes.UnregisterAll()
 	cMetricForwarded66Bytes.UnregisterAll()
-	cMetricEndpoints.Set(0)
 }
