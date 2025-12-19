@@ -551,8 +551,11 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 	// If we have a previous cert, include it in the order. Assuming we're
 	// within the ARI renewal window this should exclude us from LE rate
 	// limits.
+	// Note that this order extension will fail renewals if the ACME account key has changed
+	// since the last issuance, see
+	// https://github.com/tailscale/tailscale/issues/18251
 	var opts []acme.OrderOption
-	if previous != nil {
+	if previous != nil && !envknob.Bool("TS_DEBUG_ACME_FORCE_RENEWAL") {
 		prevCrt, err := previous.parseCertificate()
 		if err == nil {
 			opts = append(opts, acme.WithOrderReplacesCert(prevCrt))
