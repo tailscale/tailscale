@@ -518,6 +518,7 @@ type network struct {
 	wanIP4         netip.Addr           // router's LAN IPv4, if any
 	lanIP4         netip.Prefix         // router's LAN IP + CIDR (e.g. 192.168.2.1/24)
 	breakWAN4      bool                 // break WAN IPv4 connectivity
+	breakControl   bool                 // break control connectivity
 	latency        time.Duration        // latency applied to interface writes
 	lossRate       float64              // probability of dropping a packet (0.0 to 1.0)
 	nodesByIP4     map[netip.Addr]*node // by LAN IPv4
@@ -576,6 +577,10 @@ func (n *network) MACOfIP(ip netip.Addr) (_ MAC, ok bool) {
 		return n.mac, true
 	}
 	return MAC{}, false
+}
+
+func (n *network) BreakControl(v bool) {
+	n.breakControl = v
 }
 
 type node struct {
@@ -1263,7 +1268,8 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 	}
 
 	if toForward && n.s.shouldInterceptTCP(packet) {
-		if flow.dst.Is4() && n.breakWAN4 {
+		if (flow.dst.Is4() && n.breakWAN4) ||
+			(fakeControl.Match(flow.dst) && n.breakControl) {
 			// Blackhole the packet.
 			return
 		}

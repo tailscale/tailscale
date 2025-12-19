@@ -133,6 +133,17 @@ func easyAnd6(c *vnet.Config) *vnet.Node {
 		vnet.EasyNAT))
 }
 
+func easyNoControlDiscoRotate(c *vnet.Config) *vnet.Node {
+	n := c.NumNodes() + 1
+	nw := c.AddNetwork(
+		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
+		fmt.Sprintf("192.168.%d.1/24", n),
+		v6cidr(n),
+		vnet.EasyNAT)
+	nw.SetPostConnectControlBlackhole(true)
+	return c.AddNode(vnet.RotateDisco, nw)
+}
+
 func v6AndBlackholedIPv4(c *vnet.Config) *vnet.Node {
 	n := c.NumNodes() + 1
 	nw := c.AddNetwork(
@@ -364,7 +375,9 @@ func (nt *natTest) runTest(addNode ...addNodeFunc) pingRoute {
 
 	var clients []*vnet.NodeAgentClient
 	for _, n := range nodes {
-		clients = append(clients, nt.vnet.NodeAgentClient(n))
+		client := nt.vnet.NodeAgentClient(n)
+		n.SetClient(client)
+		clients = append(clients, client)
 	}
 	sts := make([]*ipnstate.Status, len(nodes))
 
@@ -413,6 +426,13 @@ func (nt *natTest) runTest(addNode ...addNodeFunc) pingRoute {
 
 	if len(nodes) < 2 {
 		return ""
+	}
+
+	for _, node := range c.Nodes() {
+		node.Network().PostConnectedToControl()
+		if err := node.PostConnectedToControl(ctx); err != nil {
+			t.Fatalf("post control error: %s", err)
+		}
 	}
 
 	pingRes, err := ping(ctx, clients[0], sts[1].Self.TailscaleIPs[0])
@@ -523,6 +543,12 @@ func (nt *natTest) want(r pingRoute) {
 func TestEasyEasy(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(easy, easy)
+	nt.want(routeDirect)
+}
+
+func TestEasyEasyNoControlDiscoRotate(t *testing.T) {
+	nt := newNatTest(t)
+	nt.runTest(easy, easyNoControlDiscoRotate)
 	nt.want(routeDirect)
 }
 

@@ -5,6 +5,7 @@ package vnet
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"iter"
 	"net/netip"
@@ -114,6 +115,8 @@ func (c *Config) AddNode(opts ...any) *Node {
 			switch o {
 			case HostFirewall:
 				n.hostFW = true
+			case RotateDisco:
+				n.rotateDisco = true
 			case VerboseSyslog:
 				n.verboseSyslog = true
 			default:
@@ -137,6 +140,7 @@ type NodeOption string
 
 const (
 	HostFirewall  NodeOption = "HostFirewall"
+	RotateDisco   NodeOption = "RotateDisco"
 	VerboseSyslog NodeOption = "VerboseSyslog"
 )
 
@@ -197,12 +201,14 @@ func (c *Config) AddNetwork(opts ...any) *Network {
 
 // Node is the configuration of a node in the virtual network.
 type Node struct {
-	err error
-	num int   // 1-based node number
-	n   *node // nil until NewServer called
+	err    error
+	num    int   // 1-based node number
+	n      *node // nil until NewServer called
+	client *NodeAgentClient
 
 	env           []TailscaledEnv
 	hostFW        bool
+	rotateDisco   bool
 	verboseSyslog bool
 
 	// TODO(bradfitz): this is halfway converted to supporting multiple NICs
@@ -243,6 +249,19 @@ func (n *Node) SetVerboseSyslog(v bool) {
 	n.verboseSyslog = v
 }
 
+func (n *Node) SetClient(c *NodeAgentClient) {
+	n.client = c
+}
+
+func (n *Node) PostConnectedToControl(ctx context.Context) error {
+	if n.rotateDisco {
+		if err := n.client.DebugAction(ctx, "rotate-disco-key"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // IsV6Only reports whether this node is only connected to IPv6 networks.
 func (n *Node) IsV6Only() bool {
 	for _, net := range n.nets {
@@ -275,10 +294,12 @@ type Network struct {
 
 	wanIP6 netip.Prefix // global unicast router in host bits; CIDR is /64 delegated to LAN
 
-	wanIP4    netip.Addr // IPv4 WAN IP, if any
-	lanIP4    netip.Prefix
-	nodes     []*Node
-	breakWAN4 bool // whether to break WAN IPv4 connectivity
+	wanIP4                  netip.Addr // IPv4 WAN IP, if any
+	lanIP4                  netip.Prefix
+	nodes                   []*Node
+	breakWAN4               bool // whether to break WAN IPv4 connectivity
+	postConnectBreakControl bool // whether to break control connectivity after noces have connected
+	network                 *network
 
 	svcs set.Set[NetworkService]
 
@@ -310,6 +331,10 @@ func (n *Network) SetBlackholedIPv4(v bool) {
 	n.breakWAN4 = v
 }
 
+func (n *Network) SetPostConnectControlBlackhole(v bool) {
+	n.postConnectBreakControl = v
+}
+
 func (n *Network) CanV4() bool {
 	return n.lanIP4.IsValid() || n.wanIP4.IsValid()
 }
@@ -323,6 +348,10 @@ func (n *Network) CanTakeMoreNodes() bool {
 		return len(n.nodes) == 0
 	}
 	return len(n.nodes) < 150
+}
+
+func (n *Network) PostConnectedToControl() {
+	n.network.BreakControl(n.postConnectBreakControl)
 }
 
 // NetworkService is a service that can be added to a network.
@@ -390,6 +419,8 @@ func (s *Server) initFromConfig(c *Config) error {
 		}
 		netOfConf[conf] = n
 		s.networks.Add(n)
+
+		conf.network = n
 		if conf.wanIP4.IsValid() {
 			if conf.wanIP4.Is6() {
 				return fmt.Errorf("invalid IPv6 address in wanIP")
