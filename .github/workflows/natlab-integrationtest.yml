@@ -18,7 +18,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install qemu
         run: |
-          sudo rm /var/lib/man-db/auto-update
+          sudo rm -f /var/lib/man-db/auto-update
           sudo apt-get -y update
           sudo apt-get -y remove man-db
           sudo apt-get install -y qemu-system-x86 qemu-utils
