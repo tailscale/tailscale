@@ -44,6 +44,8 @@ PubkeyAuthentication yes
 AuthorizedKeysFile ` + keysFilePath
 )
 
+var privateKeyPath = filepath.Join(tmp, "id_ed25519")
+
 func connectClusterToDevcontrol(ctx context.Context, logger *zap.SugaredLogger, cl client.WithWatch, restConfig *rest.Config, privKey ed25519.PrivateKey, pubKey []byte) (clusterIP string, _ error) {
 	logger.Info("Setting up SSH reverse tunnel from cluster to devcontrol...")
 	var err error
@@ -143,7 +145,6 @@ func handleConnection(ctx context.Context, logger *zap.SugaredLogger, remoteConn
 
 func readOrGenerateSSHKey(tmp string) (ed25519.PrivateKey, []byte, error) {
 	var privateKey ed25519.PrivateKey
-	privateKeyPath := filepath.Join(tmp, "id_ed25519")
 	b, err := os.ReadFile(privateKeyPath)
 	switch {
 	case os.IsNotExist(err):

@@ -105,9 +105,6 @@ func runTests(m *testing.M) (int, error) {
 	if err := os.MkdirAll(tmp, 0755); err != nil {
 		return 0, fmt.Errorf("failed to create temp dir: %w", err)
 	}
-	if !*fSkipCleanup {
-		defer os.RemoveAll(tmp)
-	}
 
 	logger.Infof("temp dir: %q", tmp)
 	logger.Infof("oss dir: %q", ossDir)
@@ -137,6 +134,7 @@ func runTests(m *testing.M) (int, error) {
 
 		if !*fSkipCleanup {
 			defer kindProvider.Delete(kindClusterName, kubeconfig)
+			defer os.Remove(kubeconfig)
 		}
 	}
 
@@ -196,6 +194,9 @@ func runTests(m *testing.M) (int, error) {
 			return 0, fmt.Errorf("failed to write pebble minica: %w", err)
 		}
 		caPaths = []string{pebbleCAChainPath, pebbleMiniCACertPath}
+		if !*fSkipCleanup {
+			defer os.RemoveAll(certsDir)
+		}
 
 		// Set up network connectivity between cluster and devcontrol.
 		//
@@ -212,6 +213,10 @@ func runTests(m *testing.M) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("failed to read or generate SSH key: %w", err)
 		}
+		if !*fSkipCleanup {
+			defer os.Remove(privateKeyPath)
+		}
+
 		sshServiceIP, err := connectClusterToDevcontrol(ctx, logger, kubeClient, restCfg, privateKey, publicKey)
 		if err != nil {
 			return 0, fmt.Errorf("failed to set up cluster->devcontrol connection: %w", err)
