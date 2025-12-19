@@ -182,6 +182,14 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 				Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
 				Value: "/etc/tsconfig/$(POD_NAME)",
 			},
+			{
+				// This ensures that cert renewals can succeed if ACME account
+				// keys have changed since issuance. We cannot guarantee or
+				// validate that the account key has not changed, see
+				// https://github.com/tailscale/tailscale/issues/18251
+				Name:  "TS_DEBUG_ACME_FORCE_RENEWAL",
+				Value: "true",
+			},
 		}
 
 		if port != nil {
@@ -346,6 +354,14 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string, por
 											Namespace: namespace,
 											Name:      "$(POD_NAME)-config",
 										}.String(),
+									},
+									{
+										// This ensures that cert renewals can succeed if ACME account
+										// keys have changed since issuance. We cannot guarantee or
+										// validate that the account key has not changed, see
+										// https://github.com/tailscale/tailscale/issues/18251
+										Name:  "TS_DEBUG_ACME_FORCE_RENEWAL",
+										Value: "true",
 									},
 								}
 
