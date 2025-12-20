@@ -673,7 +673,6 @@ func (s *Server) endpointGCLoop() {
 		defer s.mu.Unlock()
 		for k, v := range s.serverEndpointByDisco {
 			if v.isExpired(now, s.bindLifetime, s.steadyStateLifetime) {
-				s.metrics.addEndpoints(-1)
 				delete(s.serverEndpointByDisco, k)
 				s.serverEndpointByVNI.Delete(v.vni)
 			}
@@ -969,7 +968,6 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 	s.serverEndpointByVNI.Store(e.vni, e)
 
 	s.logf("allocated endpoint vni=%d lamportID=%d disco[0]=%v disco[1]=%v", e.vni, e.lamportID, pair.Get()[0].ShortString(), pair.Get()[1].ShortString())
-	s.metrics.addEndpoints(1)
 	return endpoint.ServerEndpoint{
 		ServerDisco:         s.discoPublic,
 		ClientDisco:         pair.Get(),

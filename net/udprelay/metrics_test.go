@@ -22,19 +22,10 @@ func TestMetrics(t *testing.T) {
 	want := []string{
 		"tailscaled_peer_relay_forwarded_packets_total",
 		"tailscaled_peer_relay_forwarded_bytes_total",
-		"tailscaled_peer_relay_endpoints_total",
 	}
 	slices.Sort(have)
 	slices.Sort(want)
 	c.Assert(have, qt.CmpEquals(), want)
-
-	// Validate addEndpoints.
-	m.addEndpoints(1)
-	c.Assert(m.endpoints.Value(), qt.Equals, int64(1))
-	c.Assert(cMetricEndpoints.Value(), qt.Equals, int64(1))
-	m.addEndpoints(-1)
-	c.Assert(m.endpoints.Value(), qt.Equals, int64(0))
-	c.Assert(cMetricEndpoints.Value(), qt.Equals, int64(0))
 
 	// Validate countForwarded.
 	m.countForwarded(true, true, 1, 1)
