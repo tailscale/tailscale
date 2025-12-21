@@ -74,6 +74,11 @@ func NodePrivateFromRaw32(raw mem.RO) NodePrivate {
 	return ret
 }
 
+// NodePrivateAs returns a NodePrivate as a named fixed-size array of bytes.
+//
+// It's intended for interoperability with wireguard-go's device.NoisePrivateKey type.
+func NodePrivateAs[T ~[32]byte](k NodePrivate) T { return k.k }
+
 func ParseNodePrivateUntyped(raw mem.RO) (NodePrivate, error) {
 	var ret NodePrivate
 	if err := parseHex(ret.k[:], raw, mem.B(nil)); err != nil {
