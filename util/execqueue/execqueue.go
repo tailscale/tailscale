@@ -7,11 +7,14 @@ package execqueue
 import (
 	"context"
 	"errors"
-	"sync"
+
+	"tailscale.com/syncs"
 )
 
 type ExecQueue struct {
-	mu         sync.Mutex
+	mu         syncs.Mutex
+	ctx        context.Context    // context.Background + closed on Shutdown
+	cancel     context.CancelFunc // closes ctx
 	closed     bool
 	inFlight   bool          // whether a goroutine is running q.run
 	doneWaiter chan struct{} // non-nil if waiter is waiting, then closed
@@ -24,6 +27,7 @@ func (q *ExecQueue) Add(f func()) {
 	if q.closed {
 		return
 	}
+	q.initCtxLocked()
 	if q.inFlight {
 		q.queue = append(q.queue, f)
 	} else {
@@ -35,21 +39,21 @@ func (q *ExecQueue) Add(f func()) {
 // RunSync waits for the queue to be drained and then synchronously runs f.
 // It returns an error if the queue is closed before f is run or ctx expires.
 func (q *ExecQueue) RunSync(ctx context.Context, f func()) error {
-	for {
-		if err := q.Wait(ctx); err != nil {
-			return err
-		}
-		q.mu.Lock()
-		if q.inFlight {
-			q.mu.Unlock()
-			continue
-		}
-		defer q.mu.Unlock()
-		if q.closed {
-			return errors.New("closed")
-		}
-		f()
+	q.mu.Lock()
+	q.initCtxLocked()
+	shutdownCtx := q.ctx
+	q.mu.Unlock()
+
+	ch := make(chan struct{})
+	q.Add(f)
+	q.Add(func() { close(ch) })
+	select {
+	case <-ch:
 		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-shutdownCtx.Done():
+		return errExecQueueShutdown
 	}
 }
 
@@ -79,18 +83,35 @@ func (q *ExecQueue) Shutdown() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.closed = true
+	if q.cancel != nil {
+		q.cancel()
+	}
 }
 
-// Wait waits for the queue to be empty.
+func (q *ExecQueue) initCtxLocked() {
+	if q.ctx == nil {
+		q.ctx, q.cancel = context.WithCancel(context.Background())
+	}
+}
+
+var errExecQueueShutdown = errors.New("execqueue shut down")
+
+// Wait waits for the queue to be empty or shut down.
 func (q *ExecQueue) Wait(ctx context.Context) error {
 	q.mu.Lock()
+	q.initCtxLocked()
 	waitCh := q.doneWaiter
 	if q.inFlight && waitCh == nil {
 		waitCh = make(chan struct{})
 		q.doneWaiter = waitCh
 	}
+	closed := q.closed
+	shutdownCtx := q.ctx
 	q.mu.Unlock()
 
+	if closed {
+		return errExecQueueShutdown
+	}
 	if waitCh == nil {
 		return nil
 	}
@@ -98,6 +119,8 @@ func (q *ExecQueue) Wait(ctx context.Context) error {
 	select {
 	case <-waitCh:
 		return nil
+	case <-shutdownCtx.Done():
+		return errExecQueueShutdown
 	case <-ctx.Done():
 		return ctx.Err()
 	}

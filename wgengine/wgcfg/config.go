@@ -8,7 +8,6 @@ import (
 	"net/netip"
 	"slices"
 
-	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logid"
 )
@@ -18,8 +17,6 @@ import (
 // Config is a WireGuard configuration.
 // It only supports the set of things Tailscale uses.
 type Config struct {
-	Name       string
-	NodeID     tailcfg.StableNodeID
 	PrivateKey key.NodePrivate
 	Addresses  []netip.Prefix
 	MTU        uint16
@@ -40,9 +37,7 @@ func (c *Config) Equal(o *Config) bool {
 	if c == nil || o == nil {
 		return c == o
 	}
-	return c.Name == o.Name &&
-		c.NodeID == o.NodeID &&
-		c.PrivateKey.Equal(o.PrivateKey) &&
+	return c.PrivateKey.Equal(o.PrivateKey) &&
 		c.MTU == o.MTU &&
 		c.NetworkLogging == o.NetworkLogging &&
 		slices.Equal(c.Addresses, o.Addresses) &&

@@ -151,6 +151,7 @@ func TestProfileDupe(t *testing.T) {
 				ID:        tailcfg.UserID(user),
 				LoginName: fmt.Sprintf("user%d@example.com", user),
 			},
+			AttestationKey: nil,
 		}
 	}
 	user1Node1 := newPersist(1, 1)
@@ -1128,10 +1129,12 @@ func TestProfileStateChangeCallback(t *testing.T) {
 			}
 
 			gotChanges := make([]stateChange, 0, len(tt.wantChanges))
-			pm.StateChangeHook = func(profile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
+			pm.StateChangeHook = func(profile ipn.LoginProfileView, prefView ipn.PrefsView, sameNode bool) {
+				prefs := prefView.AsStruct()
+				prefs.Sync = prefs.Sync.Normalized()
 				gotChanges = append(gotChanges, stateChange{
 					Profile:  profile.AsStruct(),
-					Prefs:    prefs.AsStruct(),
+					Prefs:    prefs,
 					SameNode: sameNode,
 				})
 			}

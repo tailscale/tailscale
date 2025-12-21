@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !windows && !wasm && !plan9 && !tamago
+//go:build !ts_omit_logtail && !windows && !wasm && !plan9 && !tamago
 
 package filch
 
@@ -10,6 +10,8 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+const replaceStderrSupportedForTest = true
 
 func saveStderr() (*os.File, error) {
 	fd, err := unix.Dup(stderrFD)

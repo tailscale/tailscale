@@ -346,7 +346,7 @@ func TestSyncSimpleE2E(t *testing.T) {
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
 
-	nodeStorage := &Mem{}
+	nodeStorage := ChonkMem()
 	node, err := Bootstrap(nodeStorage, c.AUMs["G1"])
 	if err != nil {
 		t.Fatalf("node Bootstrap() failed: %v", err)
@@ -357,7 +357,7 @@ func TestSyncSimpleE2E(t *testing.T) {
 		t.Fatalf("control Open() failed: %v", err)
 	}
 
-	// Control knows the full chain, node only knows the genesis. Lets see
+	// Control knows the full chain, node only knows the genesis. Let's see
 	// if they can sync.
 	nodeOffer, err := node.SyncOffer(nodeStorage)
 	if err != nil {

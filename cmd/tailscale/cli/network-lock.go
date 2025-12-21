@@ -10,10 +10,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/mattn/go-isatty"
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/cmd/tailscale/cli/jsonoutput"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
 	"tailscale.com/tsconst"
@@ -193,7 +195,7 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 }
 
 var nlStatusArgs struct {
-	json bool
+	json jsonoutput.JSONSchemaVersion
 }
 
 var nlStatusCmd = &ffcli.Command{
@@ -203,7 +205,7 @@ var nlStatusCmd = &ffcli.Command{
 	Exec:       runNetworkLockStatus,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("lock status")
-		fs.BoolVar(&nlStatusArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
+		fs.Var(&nlStatusArgs.json, "json", "output in JSON format")
 		return fs
 	})(),
 }
@@ -218,10 +220,12 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 		return fixTailscaledConnectError(err)
 	}
 
-	if nlStatusArgs.json {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(st)
+	if nlStatusArgs.json.IsSet {
+		if nlStatusArgs.json.Value == 1 {
+			return jsonoutput.PrintNetworkLockStatusJSONV1(os.Stdout, st)
+		} else {
+			return fmt.Errorf("unrecognised version: %q", nlStatusArgs.json.Value)
+		}
 	}
 
 	if st.Enabled {
@@ -600,7 +604,7 @@ func runNetworkLockDisablementKDF(ctx context.Context, args []string) error {
 
 var nlLogArgs struct {
 	limit int
-	json  bool
+	json  jsonoutput.JSONSchemaVersion
 }
 
 var nlLogCmd = &ffcli.Command{
@@ -612,7 +616,7 @@ var nlLogCmd = &ffcli.Command{
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("lock log")
 		fs.IntVar(&nlLogArgs.limit, "limit", 50, "max number of updates to list")
-		fs.BoolVar(&nlLogArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
+		fs.Var(&nlLogArgs.json, "json", "output in JSON format")
 		return fs
 	})(),
 }
@@ -678,7 +682,7 @@ func nlDescribeUpdate(update ipnstate.NetworkLockUpdate, color bool) (string, er
 
 	default:
 		// Print a JSON encoding of the AUM as a fallback.
-		e := json.NewEncoder(&stanza)
+		e := jsonv1.NewEncoder(&stanza)
 		e.SetIndent("", "\t")
 		if err := e.Encode(aum); err != nil {
 			return "", err
@@ -702,13 +706,20 @@ func runNetworkLockLog(ctx context.Context, args []string) error {
 	if err != nil {
 		return fixTailscaledConnectError(err)
 	}
-	if nlLogArgs.json {
-		enc := json.NewEncoder(Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(updates)
-	}
 
 	out, useColor := colorableOutput()
+
+	return printNetworkLockLog(updates, out, nlLogArgs.json, useColor)
+}
+
+func printNetworkLockLog(updates []ipnstate.NetworkLockUpdate, out io.Writer, jsonSchema jsonoutput.JSONSchemaVersion, useColor bool) error {
+	if jsonSchema.IsSet {
+		if jsonSchema.Value == 1 {
+			return jsonoutput.PrintNetworkLockLogJSONV1(out, updates)
+		} else {
+			return fmt.Errorf("unrecognised version: %q", jsonSchema.Value)
+		}
+	}
 
 	for _, update := range updates {
 		stanza, err := nlDescribeUpdate(update, useColor)

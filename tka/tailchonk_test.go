@@ -15,6 +15,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"golang.org/x/crypto/blake2s"
+	"tailscale.com/types/key"
 	"tailscale.com/util/must"
 )
 
@@ -34,7 +35,7 @@ func randHash(t *testing.T, seed int64) [blake2s.Size]byte {
 }
 
 func TestImplementsChonk(t *testing.T) {
-	impls := []Chonk{&Mem{}, &FS{}}
+	impls := []Chonk{ChonkMem(), &FS{}}
 	t.Logf("chonks: %v", impls)
 }
 
@@ -127,6 +128,43 @@ func TestTailchonkFS_IgnoreTempFile(t *testing.T) {
 	}
 }
 
+// If we use a non-existent directory with filesystem Chonk storage,
+// it's automatically created.
+func TestTailchonkFS_CreateChonkDir(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "a", "b", "c")
+
+	chonk, err := ChonkDir(base)
+	if err != nil {
+		t.Fatalf("ChonkDir: %v", err)
+	}
+
+	aum := AUM{MessageKind: AUMNoOp}
+	must.Do(chonk.CommitVerifiedAUMs([]AUM{aum}))
+
+	got, err := chonk.AUM(aum.Hash())
+	if err != nil {
+		t.Errorf("Chonk.AUM: %v", err)
+	}
+	if diff := cmp.Diff(got, aum); diff != "" {
+		t.Errorf("wrong AUM; (-got+want):%v", diff)
+	}
+
+	if _, err := os.Stat(base); err != nil {
+		t.Errorf("os.Stat: %v", err)
+	}
+}
+
+// You can't use a file as the root of your filesystem Chonk storage.
+func TestTailchonkFS_CannotUseFile(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "tka_storage.txt")
+	must.Do(os.WriteFile(base, []byte("this won't work"), 0644))
+
+	_, err := ChonkDir(base)
+	if err == nil {
+		t.Fatal("ChonkDir succeeded; expected an error")
+	}
+}
+
 func TestMarkActiveChain(t *testing.T) {
 	type aumTemplate struct {
 		AUM AUM
@@ -191,7 +229,7 @@ func TestMarkActiveChain(t *testing.T) {
 			verdict := make(map[AUMHash]retainState, len(tc.chain))
 
 			// Build the state of the tailchonk for tests.
-			storage := &Mem{}
+			storage := ChonkMem()
 			var prev AUMHash
 			for i := range tc.chain {
 				if !prev.IsZero() {
@@ -562,5 +600,35 @@ func TestCompact(t *testing.T) {
 		for name, hash := range c.AUMHashes {
 			t.Logf("AUM[%q] = %v", name, hash)
 		}
+	}
+}
+
+func TestCompactLongButYoung(t *testing.T) {
+	ourPriv := key.NewNLPrivate()
+	ourKey := Key{Kind: Key25519, Public: ourPriv.Public().Verifier(), Votes: 1}
+	someOtherKey := Key{Kind: Key25519, Public: key.NewNLPrivate().Public().Verifier(), Votes: 1}
+
+	storage := ChonkMem()
+	auth, _, err := Create(storage, State{
+		Keys:               []Key{ourKey, someOtherKey},
+		DisablementSecrets: [][]byte{DisablementKDF(bytes.Repeat([]byte{0xa5}, 32))},
+	}, ourPriv)
+	if err != nil {
+		t.Fatalf("tka.Create() failed: %v", err)
+	}
+
+	genesis := auth.Head()
+
+	for range 100 {
+		upd := auth.NewUpdater(ourPriv)
+		must.Do(upd.RemoveKey(someOtherKey.MustID()))
+		must.Do(upd.AddKey(someOtherKey))
+		aums := must.Get(upd.Finalize(storage))
+		must.Do(auth.Inform(storage, aums))
+	}
+
+	lastActiveAncestor := must.Get(Compact(storage, auth.Head(), CompactionOptions{MinChain: 5, MinAge: time.Hour}))
+	if lastActiveAncestor != genesis {
+		t.Errorf("last active ancestor = %v, want %v", lastActiveAncestor, genesis)
 	}
 }

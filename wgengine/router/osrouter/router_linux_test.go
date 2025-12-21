@@ -870,7 +870,7 @@ func (o *fakeOS) run(args ...string) error {
 		rest = family + " " + strings.Join(args[3:], " ")
 	}
 
-	var l *[]string
+	var ls *[]string
 	switch args[1] {
 	case "link":
 		got := strings.Join(args[2:], " ")
@@ -884,31 +884,31 @@ func (o *fakeOS) run(args ...string) error {
 		}
 		return nil
 	case "addr":
-		l = &o.ips
+		ls = &o.ips
 	case "route":
-		l = &o.routes
+		ls = &o.routes
 	case "rule":
-		l = &o.rules
+		ls = &o.rules
 	default:
 		return unexpected()
 	}
 
 	switch args[2] {
 	case "add":
-		for _, el := range *l {
+		for _, el := range *ls {
 			if el == rest {
 				o.t.Errorf("can't add %q, already present", rest)
 				return errors.New("already exists")
 			}
 		}
-		*l = append(*l, rest)
-		sort.Strings(*l)
+		*ls = append(*ls, rest)
+		sort.Strings(*ls)
 	case "del":
 		found := false
-		for i, el := range *l {
+		for i, el := range *ls {
 			if el == rest {
 				found = true
-				*l = append((*l)[:i], (*l)[i+1:]...)
+				*ls = append((*ls)[:i], (*ls)[i+1:]...)
 				break
 			}
 		}
@@ -1288,5 +1288,45 @@ func TestIPRulesForUBNT(t *testing.T) {
 		if rule != actual[i] {
 			t.Errorf("Rule mismatch at index %d: expected %+v, got %+v", i, rule, actual[i])
 		}
+	}
+}
+
+func TestUpdateMagicsockPortChange(t *testing.T) {
+	nfr := &fakeIPTablesRunner{
+		t:    t,
+		ipt4: make(map[string][]string),
+		ipt6: make(map[string][]string),
+	}
+	nfr.ipt4["filter/ts-input"] = []string{}
+
+	r := &linuxRouter{
+		logf:          logger.Discard,
+		health:        new(health.Tracker),
+		netfilterMode: netfilterOn,
+		nfr:           nfr,
+	}
+
+	if err := r.updateMagicsockPort(12345, "udp4"); err != nil {
+		t.Fatalf("failed to set initial port: %v", err)
+	}
+
+	if err := r.updateMagicsockPort(54321, "udp4"); err != nil {
+		t.Fatalf("failed to update port: %v", err)
+	}
+
+	newPortRule := buildMagicsockPortRule(54321)
+	hasNewRule := slices.Contains(nfr.ipt4["filter/ts-input"], newPortRule)
+
+	if !hasNewRule {
+		t.Errorf("firewall rule for NEW port 54321 not found.\nExpected: %s\nActual rules: %v",
+			newPortRule, nfr.ipt4["filter/ts-input"])
+	}
+
+	oldPortRule := buildMagicsockPortRule(12345)
+	hasOldRule := slices.Contains(nfr.ipt4["filter/ts-input"], oldPortRule)
+
+	if hasOldRule {
+		t.Errorf("firewall rule for OLD port 12345 still exists (should be deleted).\nFound: %s\nAll rules: %v",
+			oldPortRule, nfr.ipt4["filter/ts-input"])
 	}
 }

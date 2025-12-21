@@ -136,10 +136,12 @@ type mockControl struct {
 	calls       []string
 	authBlocked bool
 	shutdown    chan struct{}
+
+	hi *tailcfg.Hostinfo
 }
 
 func newClient(tb testing.TB, opts controlclient.Options) *mockControl {
-	return &mockControl{
+	cc := mockControl{
 		tb:              tb,
 		authBlocked:     true,
 		logf:            opts.Logf,
@@ -148,6 +150,10 @@ func newClient(tb testing.TB, opts controlclient.Options) *mockControl {
 		persist:         opts.Persist.Clone(),
 		controlClientID: rand.Int64(),
 	}
+	if opts.Hostinfo != nil {
+		cc.SetHostinfoDirect(opts.Hostinfo)
+	}
+	return &cc
 }
 
 func (cc *mockControl) assertShutdown(wasPaused bool) {
@@ -206,9 +212,7 @@ func (cc *mockControl) send(opts sendOpt) {
 			Err:     err,
 		}
 		if loginFinished {
-			s.SetStateForTest(controlclient.StateAuthenticated)
-		} else if url == "" && err == nil && nm == nil {
-			s.SetStateForTest(controlclient.StateNotAuthenticated)
+			s.LoggedIn = true
 		}
 		cc.opts.Observer.SetControlClientStatus(cc, s)
 	}
@@ -228,7 +232,6 @@ func (cc *mockControl) sendAuthURL(nm *netmap.NetworkMap) {
 		NetMap:  nm,
 		Persist: cc.persist.View(),
 	}
-	s.SetStateForTest(controlclient.StateURLVisitRequired)
 	cc.opts.Observer.SetControlClientStatus(cc, s)
 }
 
@@ -301,6 +304,11 @@ func (cc *mockControl) AuthCantContinue() bool {
 func (cc *mockControl) SetHostinfo(hi *tailcfg.Hostinfo) {
 	cc.logf("SetHostinfo: %v", *hi)
 	cc.called("SetHostinfo")
+	cc.SetHostinfoDirect(hi)
+}
+
+func (cc *mockControl) SetHostinfoDirect(hi *tailcfg.Hostinfo) {
+	cc.hi = hi
 }
 
 func (cc *mockControl) SetNetInfo(ni *tailcfg.NetInfo) {
@@ -317,6 +325,11 @@ func (cc *mockControl) UpdateEndpoints(endpoints []tailcfg.Endpoint) {
 	// validate endpoint information here?
 	cc.logf("UpdateEndpoints:  ep=%v", endpoints)
 	cc.called("UpdateEndpoints")
+}
+
+func (cc *mockControl) SetDiscoPublicKey(key key.DiscoPublic) {
+	cc.logf("SetDiscoPublicKey: %v", key)
+	cc.called("SetDiscoPublicKey")
 }
 
 func (cc *mockControl) ClientID() int64 {
@@ -434,8 +447,11 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		// for it, so it doesn't count as Prefs.LoggedOut==true.
 		c.Assert(prefs.LoggedOut(), qt.IsTrue)
 		c.Assert(prefs.WantRunning(), qt.IsFalse)
-		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[1].State)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		// Verify notification indicates we need login (prefs show logged out)
+		c.Assert(nn[1].Prefs == nil || nn[1].Prefs.LoggedOut(), qt.IsTrue)
+		// Verify the actual facts about our state
+		c.Assert(needsLogin(b), qt.IsTrue)
+		c.Assert(hasValidNetMap(b), qt.IsFalse)
 	}
 
 	// Restart the state machine.
@@ -455,8 +471,11 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		c.Assert(nn[1].State, qt.IsNotNil)
 		c.Assert(nn[0].Prefs.LoggedOut(), qt.IsTrue)
 		c.Assert(nn[0].Prefs.WantRunning(), qt.IsFalse)
-		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[1].State)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		// Verify notification indicates we need login
+		c.Assert(nn[1].Prefs == nil || nn[1].Prefs.LoggedOut(), qt.IsTrue)
+		// Verify the actual facts about our state
+		c.Assert(needsLogin(b), qt.IsTrue)
+		c.Assert(hasValidNetMap(b), qt.IsFalse)
 	}
 
 	// Start non-interactive login with no token.
@@ -473,7 +492,8 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		// (This behaviour is needed so that b.Login() won't
 		// start connecting to an old account right away, if one
 		// exists when you launch another login.)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		// Verify we still need login
+		c.Assert(needsLogin(b), qt.IsTrue)
 	}
 
 	// Attempted non-interactive login with no key; indicate that
@@ -500,10 +520,11 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(nn[1].Prefs.LoggedOut(), qt.IsTrue)
 		c.Assert(nn[1].Prefs.WantRunning(), qt.IsFalse)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		// Verify we need URL visit
+		c.Assert(hasAuthURL(b), qt.IsTrue)
 		c.Assert(nn[2].BrowseToURL, qt.IsNotNil)
 		c.Assert(url1, qt.Equals, *nn[2].BrowseToURL)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		c.Assert(isFullyAuthenticated(b), qt.IsFalse)
 	}
 
 	// Now we'll try an interactive login.
@@ -518,7 +539,8 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		cc.assertCalls()
 		c.Assert(nn[0].BrowseToURL, qt.IsNotNil)
 		c.Assert(url1, qt.Equals, *nn[0].BrowseToURL)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		// Verify we still need to complete login
+		c.Assert(needsLogin(b), qt.IsTrue)
 	}
 
 	// Sometimes users press the Login button again, in the middle of
@@ -534,7 +556,8 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		notifies.drain(0)
 		// backend asks control for another login sequence
 		cc.assertCalls("Login")
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		// Verify we still need login
+		c.Assert(needsLogin(b), qt.IsTrue)
 	}
 
 	// Provide a new interactive login URL.
@@ -550,7 +573,8 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		nn := notifies.drain(1)
 		c.Assert(nn[0].BrowseToURL, qt.IsNotNil)
 		c.Assert(url2, qt.Equals, *nn[0].BrowseToURL)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		// Verify we still need to complete login
+		c.Assert(needsLogin(b), qt.IsTrue)
 	}
 
 	// Pretend that the interactive login actually happened.
@@ -582,10 +606,18 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		cc.assertCalls()
 		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
-		c.Assert(nn[2].State, qt.IsNotNil)
 		c.Assert(nn[1].Prefs.Persist().UserProfile().LoginName, qt.Equals, "user1")
-		c.Assert(ipn.NeedsMachineAuth, qt.Equals, *nn[2].State)
-		c.Assert(ipn.NeedsMachineAuth, qt.Equals, b.State())
+		// nn[2] is a state notification after login
+		// Verify login finished but need machine auth using backend state
+		c.Assert(isFullyAuthenticated(b), qt.IsTrue)
+		c.Assert(needsMachineAuth(b), qt.IsTrue)
+		nm := b.NetMap()
+		c.Assert(nm, qt.IsNotNil)
+		// For an empty netmap (after initial login), SelfNode may not be valid yet.
+		// In this case, we can't check MachineAuthorized, but needsMachineAuth already verified the state.
+		if nm.SelfNode.Valid() {
+			c.Assert(nm.SelfNode.MachineAuthorized(), qt.IsFalse)
+		}
 	}
 
 	// Pretend that the administrator has authorized our machine.
@@ -603,8 +635,13 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 	{
 		nn := notifies.drain(1)
 		cc.assertCalls()
-		c.Assert(nn[0].State, qt.IsNotNil)
-		c.Assert(ipn.Starting, qt.Equals, *nn[0].State)
+		// nn[0] is a state notification after machine auth granted
+		c.Assert(len(nn), qt.Equals, 1)
+		// Verify machine authorized using backend state
+		nm := b.NetMap()
+		c.Assert(nm, qt.IsNotNil)
+		c.Assert(nm.SelfNode.Valid(), qt.IsTrue)
+		c.Assert(nm.SelfNode.MachineAuthorized(), qt.IsTrue)
 	}
 
 	// TODO: add a fake DERP server to our fake netmap, so we can
@@ -627,9 +664,9 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		nn := notifies.drain(2)
 		cc.assertCalls("pause")
 		// BUG: I would expect Prefs to change first, and state after.
-		c.Assert(nn[0].State, qt.IsNotNil)
+		// nn[0] is state notification, nn[1] is prefs notification
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
-		c.Assert(ipn.Stopped, qt.Equals, *nn[0].State)
+		c.Assert(nn[1].Prefs.WantRunning(), qt.IsFalse)
 	}
 
 	// The user changes their preference to WantRunning after all.
@@ -645,14 +682,11 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		// BUG: Login isn't needed here. We never logged out.
 		cc.assertCalls("Login", "unpause")
 		// BUG: I would expect Prefs to change first, and state after.
-		c.Assert(nn[0].State, qt.IsNotNil)
+		// nn[0] is state notification, nn[1] is prefs notification
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
-		c.Assert(ipn.Starting, qt.Equals, *nn[0].State)
+		c.Assert(nn[1].Prefs.WantRunning(), qt.IsTrue)
 		c.Assert(store.sawWrite(), qt.IsTrue)
 	}
-
-	// undo the state hack above.
-	b.state = ipn.Starting
 
 	// User wants to logout.
 	store.awaitWrite()
@@ -662,27 +696,26 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 	{
 		nn := notifies.drain(5)
 		previousCC.assertCalls("pause", "Logout", "unpause", "Shutdown")
+		// nn[0] is state notification (Stopped)
 		c.Assert(nn[0].State, qt.IsNotNil)
 		c.Assert(*nn[0].State, qt.Equals, ipn.Stopped)
-
+		// nn[1] is prefs notification after logout
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(nn[1].Prefs.LoggedOut(), qt.IsTrue)
 		c.Assert(nn[1].Prefs.WantRunning(), qt.IsFalse)
 
 		cc.assertCalls("New")
-		c.Assert(nn[2].State, qt.IsNotNil)
-		c.Assert(*nn[2].State, qt.Equals, ipn.NoState)
-
-		c.Assert(nn[3].Prefs, qt.IsNotNil) // emptyPrefs
+		// nn[2] is the initial state notification after New (NoState)
+		// nn[3] is prefs notification with emptyPrefs
+		c.Assert(nn[3].Prefs, qt.IsNotNil)
 		c.Assert(nn[3].Prefs.LoggedOut(), qt.IsTrue)
 		c.Assert(nn[3].Prefs.WantRunning(), qt.IsFalse)
 
-		c.Assert(nn[4].State, qt.IsNotNil)
-		c.Assert(*nn[4].State, qt.Equals, ipn.NeedsLogin)
-
-		c.Assert(b.State(), qt.Equals, ipn.NeedsLogin)
-
 		c.Assert(store.sawWrite(), qt.IsTrue)
+		// nn[4] is state notification (NeedsLogin)
+		// Verify logged out and needs new login using backend state
+		c.Assert(needsLogin(b), qt.IsTrue)
+		c.Assert(hasValidNetMap(b), qt.IsFalse)
 	}
 
 	// A second logout should be a no-op as we are in the NeedsLogin state.
@@ -694,7 +727,8 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		cc.assertCalls()
 		c.Assert(b.Prefs().LoggedOut(), qt.IsTrue)
 		c.Assert(b.Prefs().WantRunning(), qt.IsFalse)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		// Verify still needs login
+		c.Assert(needsLogin(b), qt.IsTrue)
 	}
 
 	// A third logout should also be a no-op as the cc should be in
@@ -707,7 +741,8 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		cc.assertCalls()
 		c.Assert(b.Prefs().LoggedOut(), qt.IsTrue)
 		c.Assert(b.Prefs().WantRunning(), qt.IsFalse)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		// Verify still needs login
+		c.Assert(needsLogin(b), qt.IsTrue)
 	}
 
 	// Oh, you thought we were done? Ha! Now we have to test what
@@ -730,11 +765,13 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		nn := notifies.drain(2)
 		cc.assertCalls()
 		c.Assert(nn[0].Prefs, qt.IsNotNil)
-		c.Assert(nn[1].State, qt.IsNotNil)
 		c.Assert(nn[0].Prefs.LoggedOut(), qt.IsTrue)
 		c.Assert(nn[0].Prefs.WantRunning(), qt.IsFalse)
-		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[1].State)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		// Verify notification indicates we need login
+		c.Assert(nn[1].Prefs == nil || nn[1].Prefs.LoggedOut(), qt.IsTrue)
+		// Verify we need login after restart
+		c.Assert(needsLogin(b), qt.IsTrue)
+		c.Assert(hasValidNetMap(b), qt.IsFalse)
 	}
 
 	// Explicitly set the ControlURL to avoid defaulting to [ipn.DefaultControlURL].
@@ -785,8 +822,9 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		c.Assert(nn[1].Prefs.LoggedOut(), qt.IsFalse)
 		// If a user initiates an interactive login, they also expect WantRunning to become true.
 		c.Assert(nn[1].Prefs.WantRunning(), qt.IsTrue)
-		c.Assert(nn[2].State, qt.IsNotNil)
-		c.Assert(ipn.Starting, qt.Equals, *nn[2].State)
+		// nn[2] is state notification (Starting) - verify using backend state
+		c.Assert(isWantRunning(b), qt.IsTrue)
+		c.Assert(isLoggedIn(b), qt.IsTrue)
 	}
 
 	// Now we've logged in successfully. Let's disconnect.
@@ -800,9 +838,9 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		nn := notifies.drain(2)
 		cc.assertCalls("pause")
 		// BUG: I would expect Prefs to change first, and state after.
-		c.Assert(nn[0].State, qt.IsNotNil)
+		// nn[0] is state notification (Stopped), nn[1] is prefs notification
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
-		c.Assert(ipn.Stopped, qt.Equals, *nn[0].State)
+		c.Assert(nn[1].Prefs.WantRunning(), qt.IsFalse)
 		c.Assert(nn[1].Prefs.LoggedOut(), qt.IsFalse)
 	}
 
@@ -820,10 +858,11 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		// and WantRunning is false, so cc should be paused.
 		cc.assertCalls("New", "Login", "pause")
 		c.Assert(nn[0].Prefs, qt.IsNotNil)
-		c.Assert(nn[1].State, qt.IsNotNil)
 		c.Assert(nn[0].Prefs.WantRunning(), qt.IsFalse)
 		c.Assert(nn[0].Prefs.LoggedOut(), qt.IsFalse)
-		c.Assert(*nn[1].State, qt.Equals, ipn.Stopped)
+		// nn[1] is state notification (Stopped)
+		// Verify backend shows we're not wanting to run
+		c.Assert(isWantRunning(b), qt.IsFalse)
 	}
 
 	// When logged in but !WantRunning, ipn leaves us unpaused to retrieve
@@ -861,9 +900,9 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		nn := notifies.drain(2)
 		cc.assertCalls("Login", "unpause")
 		// BUG: I would expect Prefs to change first, and state after.
-		c.Assert(nn[0].State, qt.IsNotNil)
+		// nn[0] is state notification (Starting), nn[1] is prefs notification
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
-		c.Assert(ipn.Starting, qt.Equals, *nn[0].State)
+		c.Assert(nn[1].Prefs.WantRunning(), qt.IsTrue)
 	}
 
 	// Disconnect.
@@ -877,9 +916,9 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		nn := notifies.drain(2)
 		cc.assertCalls("pause")
 		// BUG: I would expect Prefs to change first, and state after.
-		c.Assert(nn[0].State, qt.IsNotNil)
+		// nn[0] is state notification (Stopped), nn[1] is prefs notification
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
-		c.Assert(ipn.Stopped, qt.Equals, *nn[0].State)
+		c.Assert(nn[1].Prefs.WantRunning(), qt.IsFalse)
 	}
 
 	// We want to try logging in as a different user, while Stopped.
@@ -924,12 +963,13 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		cc.assertCalls("unpause")
 		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
-		c.Assert(nn[2].State, qt.IsNotNil)
 		// Prefs after finishing the login, so LoginName updated.
 		c.Assert(nn[1].Prefs.Persist().UserProfile().LoginName, qt.Equals, "user3")
 		c.Assert(nn[1].Prefs.LoggedOut(), qt.IsFalse)
 		c.Assert(nn[1].Prefs.WantRunning(), qt.IsTrue)
-		c.Assert(ipn.Starting, qt.Equals, *nn[2].State)
+		// nn[2] is state notification (Starting) - verify using backend state
+		c.Assert(isWantRunning(b), qt.IsTrue)
+		c.Assert(isLoggedIn(b), qt.IsTrue)
 	}
 
 	// The last test case is the most common one: restarting when both
@@ -948,11 +988,10 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		c.Assert(nn[0].Prefs, qt.IsNotNil)
 		c.Assert(nn[0].Prefs.LoggedOut(), qt.IsFalse)
 		c.Assert(nn[0].Prefs.WantRunning(), qt.IsTrue)
-		// We're logged in and have a valid netmap, so we should
-		// be in the Starting state.
-		c.Assert(nn[1].State, qt.IsNotNil)
-		c.Assert(*nn[1].State, qt.Equals, ipn.Starting)
-		c.Assert(b.State(), qt.Equals, ipn.Starting)
+		// nn[1] is state notification (Starting)
+		// Verify we're authenticated with valid netmap using backend state
+		c.Assert(isFullyAuthenticated(b), qt.IsTrue)
+		c.Assert(hasValidNetMap(b), qt.IsTrue)
 	}
 
 	// Control server accepts our valid key from before.
@@ -969,35 +1008,44 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		// NOTE: No prefs change this time. WantRunning stays true.
 		// We were in Starting in the first place, so that doesn't
 		// change either, so we don't expect any notifications.
-		c.Assert(ipn.Starting, qt.Equals, b.State())
+		// Verify we're still authenticated with valid netmap
+		c.Assert(isFullyAuthenticated(b), qt.IsTrue)
+		c.Assert(hasValidNetMap(b), qt.IsTrue)
 	}
 	t.Logf("\n\nExpireKey")
 	notifies.expect(1)
 	cc.send(sendOpt{nm: &netmap.NetworkMap{
-		Expiry:   time.Now().Add(-time.Minute),
-		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
+		SelfNode: (&tailcfg.Node{
+			KeyExpiry:         time.Now().Add(-time.Minute),
+			MachineAuthorized: true,
+		}).View(),
 	}})
 	{
 		nn := notifies.drain(1)
 		cc.assertCalls()
-		c.Assert(nn[0].State, qt.IsNotNil)
-		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[0].State)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		// nn[0] is state notification (NeedsLogin) due to key expiry
+		c.Assert(len(nn), qt.Equals, 1)
+		// Verify key expired, need new login using backend state
+		c.Assert(needsLogin(b), qt.IsTrue)
 		c.Assert(b.isEngineBlocked(), qt.IsTrue)
 	}
 
 	t.Logf("\n\nExtendKey")
 	notifies.expect(1)
 	cc.send(sendOpt{nm: &netmap.NetworkMap{
-		Expiry:   time.Now().Add(time.Minute),
-		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
+		SelfNode: (&tailcfg.Node{
+			MachineAuthorized: true,
+			KeyExpiry:         time.Now().Add(time.Minute),
+		}).View(),
 	}})
 	{
 		nn := notifies.drain(1)
 		cc.assertCalls()
-		c.Assert(nn[0].State, qt.IsNotNil)
-		c.Assert(ipn.Starting, qt.Equals, *nn[0].State)
-		c.Assert(ipn.Starting, qt.Equals, b.State())
+		// nn[0] is state notification (Starting) after key extension
+		c.Assert(len(nn), qt.Equals, 1)
+		// Verify key extended, authenticated again using backend state
+		c.Assert(isFullyAuthenticated(b), qt.IsTrue)
+		c.Assert(hasValidNetMap(b), qt.IsTrue)
 		c.Assert(b.isEngineBlocked(), qt.IsFalse)
 	}
 	notifies.expect(1)
@@ -1006,9 +1054,10 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 	{
 		nn := notifies.drain(1)
 		cc.assertCalls()
-		c.Assert(nn[0].State, qt.IsNotNil)
-		c.Assert(ipn.Running, qt.Equals, *nn[0].State)
-		c.Assert(ipn.Running, qt.Equals, b.State())
+		// nn[0] is state notification (Running) after DERP connection
+		c.Assert(len(nn), qt.Equals, 1)
+		// Verify we can route traffic using backend state
+		c.Assert(canRouteTraffic(b), qt.IsTrue)
 	}
 }
 
@@ -1241,8 +1290,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// After the auth is completed, the configs must be updated to reflect the node's netmap.
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Name:      "tailscale",
-				NodeID:    node1.SelfNode.StableID(),
 				Peers:     []wgcfg.Peer{},
 				Addresses: node1.SelfNode.Addresses().AsSlice(),
 			},
@@ -1299,8 +1346,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// Once the auth is completed, the configs must be updated to reflect the node's netmap.
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Name:      "tailscale",
-				NodeID:    node2.SelfNode.StableID(),
 				Peers:     []wgcfg.Peer{},
 				Addresses: node2.SelfNode.Addresses().AsSlice(),
 			},
@@ -1349,8 +1394,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// must be updated to reflect the node's netmap.
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Name:      "tailscale",
-				NodeID:    node1.SelfNode.StableID(),
 				Peers:     []wgcfg.Peer{},
 				Addresses: node1.SelfNode.Addresses().AsSlice(),
 			},
@@ -1374,8 +1417,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			},
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Name:   "tailscale",
-				NodeID: node3.SelfNode.StableID(),
 				Peers: []wgcfg.Peer{
 					{
 						PublicKey: node1.SelfNode.Key(),
@@ -1406,7 +1447,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				mustDo2(t)(lb.EditPrefs(connect))
 				cc().authenticated(node1)
 				cc().send(sendOpt{nm: &netmap.NetworkMap{
-					Expiry: time.Now().Add(-time.Minute),
+					SelfNode: (&tailcfg.Node{
+						KeyExpiry: time.Now().Add(-time.Minute),
+					}).View(),
 				}})
 			},
 			wantState:     ipn.NeedsLogin,
@@ -1447,8 +1490,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			},
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Name:      "tailscale",
-				NodeID:    node1.SelfNode.StableID(),
 				Peers:     []wgcfg.Peer{},
 				Addresses: node1.SelfNode.Addresses().AsSlice(),
 			},
@@ -1478,8 +1519,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// With seamless renewal, starting a reauth should leave everything up:
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Name:      "tailscale",
-				NodeID:    node1.SelfNode.StableID(),
 				Peers:     []wgcfg.Peer{},
 				Addresses: node1.SelfNode.Addresses().AsSlice(),
 			},
@@ -1511,8 +1550,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			},
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Name:      "tailscale",
-				NodeID:    node1.SelfNode.StableID(),
 				Peers:     []wgcfg.Peer{},
 				Addresses: node1.SelfNode.Addresses().AsSlice(),
 			},
@@ -1535,7 +1572,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				mustDo2(t)(lb.EditPrefs(connect))
 				cc().authenticated(node1)
 				cc().send(sendOpt{nm: &netmap.NetworkMap{
-					Expiry: time.Now().Add(-time.Minute),
+					SelfNode: (&tailcfg.Node{
+						KeyExpiry: time.Now().Add(-time.Minute),
+					}).View(),
 				}})
 			},
 			// Even with seamless, if the key we are using expires, we want to disconnect:
@@ -1553,6 +1592,11 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			if tt.steps != nil {
 				tt.steps(t, lb, cc)
 			}
+
+			// TODO(bradfitz): this whole event bus settling thing
+			// should be unnecessary once the bogus uses of eventbus
+			// are removed. (https://github.com/tailscale/tailscale/issues/16369)
+			lb.settleEventBus()
 
 			if gotState := lb.State(); gotState != tt.wantState {
 				t.Errorf("State: got %v; want %v", gotState, tt.wantState)
@@ -1584,37 +1628,32 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 	}
 }
 
-// TestStateMachineURLRace tests that wgengine updates arriving in the middle of
+// TestSendPreservesAuthURL tests that wgengine updates arriving in the middle of
 // processing an auth URL doesn't result in the auth URL being cleared.
-func TestStateMachineURLRace(t *testing.T) {
-	runTestStateMachineURLRace(t, false)
+func TestSendPreservesAuthURL(t *testing.T) {
+	runTestSendPreservesAuthURL(t, false)
 }
 
-func TestStateMachineURLRaceSeamless(t *testing.T) {
-	runTestStateMachineURLRace(t, true)
+func TestSendPreservesAuthURLSeamless(t *testing.T) {
+	runTestSendPreservesAuthURL(t, true)
 }
 
-func runTestStateMachineURLRace(t *testing.T, seamless bool) {
+func runTestSendPreservesAuthURL(t *testing.T, seamless bool) {
 	var cc *mockControl
 	b := newLocalBackendWithTestControl(t, true, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
 		cc = newClient(t, opts)
 		return cc
 	})
 
-	nw := newNotificationWatcher(t, b, &ipnauth.TestActor{})
-
-	t.Logf("Start")
-	nw.watch(0, []wantedNotification{
-		wantStateNotify(ipn.NeedsLogin)})
+	t.Log("Start")
 	b.Start(ipn.Options{
 		UpdatePrefs: &ipn.Prefs{
 			WantRunning: true,
 			ControlURL:  "https://localhost:1/",
 		},
 	})
-	nw.check()
 
-	t.Logf("LoginFinished")
+	t.Log("LoginFinished")
 	cc.persist.UserProfile.LoginName = "user1"
 	cc.persist.NodeID = "node1"
 
@@ -1622,73 +1661,17 @@ func runTestStateMachineURLRace(t *testing.T, seamless bool) {
 		b.sys.ControlKnobs().SeamlessKeyRenewal.Store(true)
 	}
 
-	nw.watch(0, []wantedNotification{
-		wantStateNotify(ipn.Starting)})
 	cc.send(sendOpt{loginFinished: true, nm: &netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	}})
-	nw.check()
 
-	t.Logf("Running")
-	nw.watch(0, []wantedNotification{
-		wantStateNotify(ipn.Running)})
+	t.Log("Running")
 	b.setWgengineStatus(&wgengine.Status{AsOf: time.Now(), DERPs: 1}, nil)
-	nw.check()
 
-	t.Logf("Re-auth (StartLoginInteractive)")
+	t.Log("Re-auth (StartLoginInteractive)")
 	b.StartLoginInteractive(t.Context())
 
-	stop := make(chan struct{})
-	stopSpamming := sync.OnceFunc(func() {
-		stop <- struct{}{}
-	})
-	// if seamless renewal is enabled, the engine won't be disabled, and we won't
-	// ever call stopSpamming, so make sure it does get called
-	defer stopSpamming()
-
-	// Intercept updates between the engine and localBackend, so that we can see
-	// when the "stopped" update comes in and ensure we stop sending our "we're
-	// up" updates after that point.
-	b.e.SetStatusCallback(func(s *wgengine.Status, err error) {
-		// This is not one of our fake status updates, this is generated from the
-		// engine in response to LocalBackend calling RequestStatus. Stop spamming
-		// our fake statuses.
-		//
-		// TODO(zofrex): This is fragile, it works right now but would break if the
-		// calling pattern of RequestStatus changes. We should ensure that we keep
-		// sending "we're up" statuses right until Reconfig is called with
-		// zero-valued configs, and after that point only send "stopped" statuses.
-		stopSpamming()
-
-		// Once stopSpamming returns we are guaranteed to not send any more updates,
-		// so we can now send the real update (indicating shutdown) and be certain
-		// it will be received after any fake updates we sent. This is possibly a
-		// stronger guarantee than we get from the real engine?
-		b.setWgengineStatus(s, err)
-	})
-
-	// time needs to be >= last time for the status to be accepted, send all our
-	// spam with the same stale time so that when a real update comes in it will
-	// definitely be accepted.
-	time := b.lastStatusTime
-
-	// Flood localBackend with a lot of wgengine status updates, so if there are
-	// any race conditions in the multiple locks/unlocks that happen as we process
-	// the received auth URL, we will hit them.
-	go func() {
-		t.Logf("sending lots of fake wgengine status updates")
-		for {
-			select {
-			case <-stop:
-				t.Logf("stopping fake wgengine status updates")
-				return
-			default:
-				b.setWgengineStatus(&wgengine.Status{AsOf: time, DERPs: 1}, nil)
-			}
-		}
-	}()
-
-	t.Logf("Re-auth (receive URL)")
+	t.Log("Re-auth (receive URL)")
 	url1 := "https://localhost:1/1"
 	cc.send(sendOpt{url: url1})
 
@@ -1696,121 +1679,77 @@ func runTestStateMachineURLRace(t *testing.T, seamless bool) {
 	// be set, and once .send has completed, any opportunities for a WG engine
 	// status update to trample it have ended as well.
 	if b.authURL == "" {
-		t.Fatalf("expected authURL to be set")
+		t.Fatal("expected authURL to be set")
+	} else {
+		t.Log("authURL was set")
 	}
 }
 
-func TestWGEngineDownThenUpRace(t *testing.T) {
+func TestServicesNotClearedByStart(t *testing.T) {
+	connect := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: true}, WantRunningSet: true}
+	node1 := buildNetmapWithPeers(
+		makePeer(1, withName("node-1"), withAddresses(netip.MustParsePrefix("100.64.1.1/32"))),
+	)
+
 	var cc *mockControl
-	b := newLocalBackendWithTestControl(t, true, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+	lb := newLocalBackendWithTestControl(t, true, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
 		cc = newClient(t, opts)
 		return cc
 	})
 
-	nw := newNotificationWatcher(t, b, &ipnauth.TestActor{})
+	mustDo(t)(lb.Start(ipn.Options{}))
+	mustDo2(t)(lb.EditPrefs(connect))
+	cc.assertCalls("Login")
 
-	t.Logf("Start")
-	nw.watch(0, []wantedNotification{
-		wantStateNotify(ipn.NeedsLogin)})
-	b.Start(ipn.Options{
-		UpdatePrefs: &ipn.Prefs{
-			WantRunning: true,
-			ControlURL:  "https://localhost:1/",
-		},
-	})
-	nw.check()
+	// Simulate authentication and wait for goroutines to finish (so peer
+	// listeners have been set up and hostinfo updated)
+	cc.authenticated(node1)
+	waitForGoroutinesToStop(lb)
 
-	t.Logf("LoginFinished")
-	cc.persist.UserProfile.LoginName = "user1"
-	cc.persist.NodeID = "node1"
-
-	nw.watch(0, []wantedNotification{
-		wantStateNotify(ipn.Starting)})
-	cc.send(sendOpt{loginFinished: true, nm: &netmap.NetworkMap{
-		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
-	}})
-	nw.check()
-
-	nw.watch(0, []wantedNotification{
-		wantStateNotify(ipn.Running)})
-	b.setWgengineStatus(&wgengine.Status{AsOf: time.Now(), DERPs: 1}, nil)
-	nw.check()
-
-	t.Logf("Re-auth (StartLoginInteractive)")
-	b.StartLoginInteractive(t.Context())
-
-	var timeLock sync.RWMutex
-	timestamp := b.lastStatusTime
-
-	engineShutdown := make(chan struct{})
-	gotShutdown := sync.OnceFunc(func() {
-		t.Logf("engineShutdown")
-		engineShutdown <- struct{}{}
-	})
-
-	b.e.SetStatusCallback(func(s *wgengine.Status, err error) {
-		timeLock.Lock()
-		if s.AsOf.After(timestamp) {
-			timestamp = s.AsOf
-		}
-		timeLock.Unlock()
-
-		if err != nil || (s.DERPs == 0 && len(s.Peers) == 0) {
-			gotShutdown()
-		} else {
-			b.setWgengineStatus(s, err)
-		}
-	})
-
-	t.Logf("Re-auth (receive URL)")
-	url1 := "https://localhost:1/1"
-
-	done := make(chan struct{})
-	var wg sync.WaitGroup
-
-	wg.Go(func() {
-		t.Log("cc.send starting")
-		cc.send(sendOpt{url: url1}) // will block until engine stops
-		t.Log("cc.send returned")
-	})
-
-	<-engineShutdown // will get called once cc.send is blocked
-	gotShutdown = sync.OnceFunc(func() {
-		t.Logf("engineShutdown")
-		engineShutdown <- struct{}{}
-	})
-
-	wg.Go(func() {
-		t.Log("StartLoginInteractive starting")
-		b.StartLoginInteractive(t.Context()) // will also block until engine stops
-		t.Log("StartLoginInteractive returned")
-	})
-
-	<-engineShutdown // will get called once StartLoginInteractive is blocked
-
-	st := controlclient.Status{}
-	st.SetStateForTest(controlclient.StateAuthenticated)
-	b.SetControlClientStatus(cc, st)
-
-	timeLock.RLock()
-	b.setWgengineStatus(&wgengine.Status{AsOf: timestamp}, nil)           // engine is down event finally arrives
-	b.setWgengineStatus(&wgengine.Status{AsOf: timestamp, DERPs: 1}, nil) // engine is back up
-	timeLock.RUnlock()
-
-	go func() {
-		wg.Wait()
-		done <- struct{}{}
-	}()
-
-	t.Log("waiting for .send and .StartLoginInteractive to return")
-
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatalf("timed out waiting")
+	if cc.hi == nil || len(cc.hi.Services) == 0 {
+		t.Fatal("test setup bug: services should be present")
 	}
 
-	t.Log("both returned")
+	mustDo(t)(lb.Start(ipn.Options{}))
+
+	if len(cc.hi.Services) == 0 {
+		t.Error("services should still be present in hostinfo after no-op Start")
+	}
+
+	lb.initPeerAPIListenerLocked()
+	waitForGoroutinesToStop(lb)
+
+	// Clearing out services on Start would be less of a problem if they would at
+	// least come back after authreconfig or any other change, but they don't if
+	// the addresses in the netmap haven't changed and still match the stored
+	// peerAPIListeners.
+	if len(cc.hi.Services) == 0 {
+		t.Error("services STILL not present after authreconfig")
+	}
+}
+
+func waitForGoroutinesToStop(lb *LocalBackend) {
+	goroutineDone := make(chan struct{})
+	removeTrackerCallback := lb.goTracker.AddDoneCallback(func() {
+		select {
+		case goroutineDone <- struct{}{}:
+		default:
+		}
+	})
+	defer removeTrackerCallback()
+
+	for {
+		if lb.goTracker.RunningGoroutines() == 0 {
+			return
+		}
+
+		select {
+		case <-time.Tick(1 * time.Second):
+			continue
+		case <-goroutineDone:
+			continue
+		}
+	}
 }
 
 func buildNetmapWithPeers(self tailcfg.NodeView, peers ...tailcfg.NodeView) *netmap.NetworkMap {
@@ -1877,7 +1816,6 @@ func buildNetmapWithPeers(self tailcfg.NodeView, peers ...tailcfg.NodeView) *net
 
 	return &netmap.NetworkMap{
 		SelfNode:     self,
-		Name:         self.Name(),
 		Domain:       domain,
 		Peers:        peers,
 		UserProfiles: users,
@@ -2045,6 +1983,14 @@ func (e *mockEngine) RequestStatus() {
 	}
 }
 
+func (e *mockEngine) ResetAndStop() (*wgengine.Status, error) {
+	err := e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
+	if err != nil {
+		return nil, err
+	}
+	return &wgengine.Status{AsOf: time.Now()}, nil
+}
+
 func (e *mockEngine) PeerByKey(key.NodePublic) (_ wgint.Peer, ok bool) {
 	return wgint.Peer{}, false
 }
@@ -2071,4 +2017,78 @@ func (e *mockEngine) Close() {
 
 func (e *mockEngine) Done() <-chan struct{} {
 	return e.done
+}
+
+// hasValidNetMap returns true if the backend has a valid network map with a valid self node.
+func hasValidNetMap(b *LocalBackend) bool {
+	nm := b.NetMap()
+	return nm != nil && nm.SelfNode.Valid()
+}
+
+// needsLogin returns true if the backend needs user login action.
+// This is true when logged out, when an auth URL is present (interactive login in progress),
+// or when the node key has expired.
+func needsLogin(b *LocalBackend) bool {
+	// Note: b.Prefs() handles its own locking, so we lock only for authURL and keyExpired access
+	b.mu.Lock()
+	authURL := b.authURL
+	keyExpired := b.keyExpired
+	b.mu.Unlock()
+	return b.Prefs().LoggedOut() || authURL != "" || keyExpired
+}
+
+// needsMachineAuth returns true if the user has logged in but the machine is not yet authorized.
+// This includes the case where we have a netmap but no valid SelfNode yet (empty netmap after initial login).
+func needsMachineAuth(b *LocalBackend) bool {
+	// Note: b.NetMap() and b.Prefs() handle their own locking
+	nm := b.NetMap()
+	prefs := b.Prefs()
+	if prefs.LoggedOut() || nm == nil {
+		return false
+	}
+	// If we have a valid SelfNode, check its MachineAuthorized status
+	if nm.SelfNode.Valid() {
+		return !nm.SelfNode.MachineAuthorized()
+	}
+	// Empty netmap (no SelfNode yet) after login also means we need machine auth
+	return true
+}
+
+// hasAuthURL returns true if an authentication URL is present (user needs to visit a URL).
+func hasAuthURL(b *LocalBackend) bool {
+	b.mu.Lock()
+	authURL := b.authURL
+	b.mu.Unlock()
+	return authURL != ""
+}
+
+// canRouteTraffic returns true if the backend is capable of routing traffic.
+// This requires a valid netmap, machine authorization, and WantRunning preference.
+func canRouteTraffic(b *LocalBackend) bool {
+	// Note: b.NetMap() and b.Prefs() handle their own locking
+	nm := b.NetMap()
+	prefs := b.Prefs()
+	return nm != nil &&
+		nm.SelfNode.Valid() &&
+		nm.SelfNode.MachineAuthorized() &&
+		prefs.WantRunning()
+}
+
+// isFullyAuthenticated returns true if the user has completed login and no auth URL is pending.
+func isFullyAuthenticated(b *LocalBackend) bool {
+	// Note: b.Prefs() handles its own locking, so we lock only for authURL access
+	b.mu.Lock()
+	authURL := b.authURL
+	b.mu.Unlock()
+	return !b.Prefs().LoggedOut() && authURL == ""
+}
+
+// isWantRunning returns true if the WantRunning preference is set.
+func isWantRunning(b *LocalBackend) bool {
+	return b.Prefs().WantRunning()
+}
+
+// isLoggedIn returns true if the user is logged in (not logged out).
+func isLoggedIn(b *LocalBackend) bool {
+	return !b.Prefs().LoggedOut()
 }

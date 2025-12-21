@@ -45,36 +45,36 @@ func ListWithOpts[T ImmutableType](opts ...Options) List[T] {
 // SetValue configures the preference with the specified value.
 // It fails and returns [ErrManaged] if p is a managed preference,
 // and [ErrReadOnly] if p is a read-only preference.
-func (l *List[T]) SetValue(val []T) error {
-	return l.preference.SetValue(cloneSlice(val))
+func (ls *List[T]) SetValue(val []T) error {
+	return ls.preference.SetValue(cloneSlice(val))
 }
 
 // SetManagedValue configures the preference with the specified value
 // and marks the preference as managed.
-func (l *List[T]) SetManagedValue(val []T) {
-	l.preference.SetManagedValue(cloneSlice(val))
+func (ls *List[T]) SetManagedValue(val []T) {
+	ls.preference.SetManagedValue(cloneSlice(val))
 }
 
 // View returns a read-only view of l.
-func (l *List[T]) View() ListView[T] {
-	return ListView[T]{l}
+func (ls *List[T]) View() ListView[T] {
+	return ListView[T]{ls}
 }
 
 // Clone returns a copy of l that aliases no memory with l.
-func (l List[T]) Clone() *List[T] {
-	res := ptr.To(l)
-	if v, ok := l.s.Value.GetOk(); ok {
+func (ls List[T]) Clone() *List[T] {
+	res := ptr.To(ls)
+	if v, ok := ls.s.Value.GetOk(); ok {
 		res.s.Value.Set(append(v[:0:0], v...))
 	}
 	return res
 }
 
 // Equal reports whether l and l2 are equal.
-func (l List[T]) Equal(l2 List[T]) bool {
-	if l.s.Metadata != l2.s.Metadata {
+func (ls List[T]) Equal(l2 List[T]) bool {
+	if ls.s.Metadata != l2.s.Metadata {
 		return false
 	}
-	v1, ok1 := l.s.Value.GetOk()
+	v1, ok1 := ls.s.Value.GetOk()
 	v2, ok2 := l2.s.Value.GetOk()
 	if ok1 != ok2 {
 		return false

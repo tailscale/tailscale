@@ -4,8 +4,12 @@
 package eventbus_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"log"
+	"regexp"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -84,6 +88,61 @@ func TestSubscriberFunc(t *testing.T) {
 		if !exp.Empty() {
 			t.Errorf("unexpected extra events: %+v", exp.want)
 		}
+	})
+
+	t.Run("CloseWait", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			b := eventbus.New()
+			defer b.Close()
+
+			c := b.Client(t.Name())
+
+			eventbus.SubscribeFunc[EventA](c, func(e EventA) {
+				time.Sleep(2 * time.Second)
+			})
+
+			p := eventbus.Publish[EventA](c)
+			p.Publish(EventA{12345})
+
+			synctest.Wait() // subscriber has the event
+			c.Close()
+
+			// If close does not wait for the subscriber, the test will fail
+			// because an active goroutine remains in the bubble.
+		})
+	})
+
+	t.Run("CloseWait/Belated", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			buf := swapLogBuf(t)
+
+			b := eventbus.New()
+			defer b.Close()
+
+			c := b.Client(t.Name())
+
+			// This subscriber stalls for a long time, so that when we try to
+			// close the client it gives up and returns in the timeout condition.
+			eventbus.SubscribeFunc[EventA](c, func(e EventA) {
+				time.Sleep(time.Minute) // notably, longer than the wait period
+			})
+
+			p := eventbus.Publish[EventA](c)
+			p.Publish(EventA{12345})
+
+			synctest.Wait() // subscriber has the event
+			c.Close()
+
+			// Verify that the logger recorded that Close gave up on the slowpoke.
+			want := regexp.MustCompile(`^.* tailscale.com/util/eventbus_test bus_test.go:\d+: ` +
+				`giving up on subscriber for eventbus_test.EventA after \d+s at close.*`)
+			if got := buf.String(); !want.MatchString(got) {
+				t.Errorf("Wrong log output\ngot:  %q\nwant %s", got, want)
+			}
+
+			// Wait for the subscriber to actually finish to clean up the goroutine.
+			time.Sleep(2 * time.Minute)
+		})
 	})
 
 	t.Run("SubscriberPublishes", func(t *testing.T) {
@@ -436,6 +495,68 @@ func TestMonitor(t *testing.T) {
 	t.Run("Wait", testMon(t, func(c *eventbus.Client, m eventbus.Monitor) { c.Close(); m.Wait() }))
 }
 
+func TestSlowSubs(t *testing.T) {
+	t.Run("Subscriber", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			buf := swapLogBuf(t)
+
+			b := eventbus.New()
+			defer b.Close()
+
+			pc := b.Client("pub")
+			p := eventbus.Publish[EventA](pc)
+
+			sc := b.Client("sub")
+			s := eventbus.Subscribe[EventA](sc)
+
+			go func() {
+				time.Sleep(6 * time.Second) // trigger the slow check at 5s.
+				t.Logf("Subscriber accepted %v", <-s.Events())
+			}()
+
+			p.Publish(EventA{12345})
+
+			time.Sleep(7 * time.Second) // advance time...
+			synctest.Wait()             // subscriber is done
+
+			want := regexp.MustCompile(`^.* tailscale.com/util/eventbus_test bus_test.go:\d+: ` +
+				`subscriber for eventbus_test.EventA is slow.*`)
+			if got := buf.String(); !want.MatchString(got) {
+				t.Errorf("Wrong log output\ngot:  %q\nwant: %s", got, want)
+			}
+		})
+	})
+
+	t.Run("SubscriberFunc", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			buf := swapLogBuf(t)
+
+			b := eventbus.New()
+			defer b.Close()
+
+			pc := b.Client("pub")
+			p := eventbus.Publish[EventB](pc)
+
+			sc := b.Client("sub")
+			eventbus.SubscribeFunc[EventB](sc, func(e EventB) {
+				time.Sleep(6 * time.Second) // trigger the slow check at 5s.
+				t.Logf("SubscriberFunc processed %v", e)
+			})
+
+			p.Publish(EventB{67890})
+
+			time.Sleep(7 * time.Second) // advance time...
+			synctest.Wait()             // subscriber is done
+
+			want := regexp.MustCompile(`^.* tailscale.com/util/eventbus_test bus_test.go:\d+: ` +
+				`subscriber for eventbus_test.EventB is slow.*`)
+			if got := buf.String(); !want.MatchString(got) {
+				t.Errorf("Wrong log output\ngot:  %q\nwant: %s", got, want)
+			}
+		})
+	})
+}
+
 func TestRegression(t *testing.T) {
 	bus := eventbus.New()
 	t.Cleanup(bus.Close)
@@ -473,6 +594,105 @@ func TestRegression(t *testing.T) {
 	})
 }
 
+func TestPublishWithMutex(t *testing.T) {
+	testPublishWithMutex(t, 1024) // arbitrary large number of events
+}
+
+// testPublishWithMutex publishes the specified number of events,
+// acquiring and releasing a mutex around each publish and each
+// subscriber event receive.
+//
+// The test fails if it loses any events or times out due to a deadlock.
+// Unfortunately, a goroutine waiting on a mutex held by a durably blocked
+// goroutine is not itself considered durably blocked, so [synctest] cannot
+// detect this deadlock on its own.
+func testPublishWithMutex(t *testing.T, n int) {
+	synctest.Test(t, func(t *testing.T) {
+		b := eventbus.New()
+		defer b.Close()
+
+		c := b.Client("TestClient")
+
+		evts := make([]any, n)
+		for i := range evts {
+			evts[i] = EventA{Counter: i}
+		}
+		exp := expectEvents(t, evts...)
+
+		var mu sync.Mutex
+		eventbus.SubscribeFunc[EventA](c, func(e EventA) {
+			// Acquire the same mutex as the publisher.
+			mu.Lock()
+			mu.Unlock()
+
+			// Mark event as received, so we can check for lost events.
+			exp.Got(e)
+		})
+
+		p := eventbus.Publish[EventA](c)
+		go func() {
+			// Publish events, acquiring the mutex around each publish.
+			for i := range n {
+				mu.Lock()
+				p.Publish(EventA{Counter: i})
+				mu.Unlock()
+			}
+		}()
+
+		synctest.Wait()
+
+		if !exp.Empty() {
+			t.Errorf("unexpected extra events: %+v", exp.want)
+		}
+	})
+}
+
+func TestPublishFromSubscriber(t *testing.T) {
+	testPublishFromSubscriber(t, 1024) // arbitrary large number of events
+}
+
+// testPublishFromSubscriber publishes the specified number of EventA events.
+// Each EventA causes the subscriber to publish an EventB.
+// The test fails if it loses any events or if a deadlock occurs.
+func testPublishFromSubscriber(t *testing.T, n int) {
+	synctest.Test(t, func(t *testing.T) {
+		b := eventbus.New()
+		defer b.Close()
+
+		c := b.Client("TestClient")
+
+		// Ultimately we expect to receive n EventB events
+		// published as a result of receiving n EventA events.
+		evts := make([]any, n)
+		for i := range evts {
+			evts[i] = EventB{Counter: i}
+		}
+		exp := expectEvents(t, evts...)
+
+		pubA := eventbus.Publish[EventA](c)
+		pubB := eventbus.Publish[EventB](c)
+
+		eventbus.SubscribeFunc[EventA](c, func(e EventA) {
+			// Upon receiving EventA, publish EventB.
+			pubB.Publish(EventB{Counter: e.Counter})
+		})
+		eventbus.SubscribeFunc[EventB](c, func(e EventB) {
+			// Mark EventB as received.
+			exp.Got(e)
+		})
+
+		for i := range n {
+			pubA.Publish(EventA{Counter: i})
+		}
+
+		synctest.Wait()
+
+		if !exp.Empty() {
+			t.Errorf("unexpected extra events: %+v", exp.want)
+		}
+	})
+}
+
 type queueChecker struct {
 	t    *testing.T
 	want []any
@@ -497,4 +717,12 @@ func (q *queueChecker) Got(v any) {
 
 func (q *queueChecker) Empty() bool {
 	return len(q.want) == 0
+}
+
+func swapLogBuf(t *testing.T) *bytes.Buffer {
+	logBuf := new(bytes.Buffer)
+	save := log.Writer()
+	log.SetOutput(logBuf)
+	t.Cleanup(func() { log.SetOutput(save) })
+	return logBuf
 }

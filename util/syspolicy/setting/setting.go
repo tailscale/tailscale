@@ -11,9 +11,9 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
+	"tailscale.com/syncs"
 	"tailscale.com/types/lazy"
 	"tailscale.com/util/syspolicy/internal"
 	"tailscale.com/util/syspolicy/pkey"
@@ -215,7 +215,7 @@ type DefinitionMap map[pkey.Key]*Definition
 var (
 	definitions lazy.SyncValue[DefinitionMap]
 
-	definitionsMu   sync.Mutex
+	definitionsMu   syncs.Mutex
 	definitionsList []*Definition
 	definitionsUsed bool
 )
@@ -322,33 +322,33 @@ func Definitions() ([]*Definition, error) {
 type PlatformList []string
 
 // Has reports whether l contains the target platform.
-func (l PlatformList) Has(target string) bool {
-	if len(l) == 0 {
+func (ls PlatformList) Has(target string) bool {
+	if len(ls) == 0 {
 		return true
 	}
-	return slices.ContainsFunc(l, func(os string) bool {
+	return slices.ContainsFunc(ls, func(os string) bool {
 		return strings.EqualFold(os, target)
 	})
 }
 
 // HasCurrent is like Has, but for the current platform.
-func (l PlatformList) HasCurrent() bool {
-	return l.Has(internal.OS())
+func (ls PlatformList) HasCurrent() bool {
+	return ls.Has(internal.OS())
 }
 
 // mergeFrom merges l2 into l. Since an empty list indicates no platform restrictions,
 // if either l or l2 is empty, the merged result in l will also be empty.
-func (l *PlatformList) mergeFrom(l2 PlatformList) {
+func (ls *PlatformList) mergeFrom(l2 PlatformList) {
 	switch {
-	case len(*l) == 0:
+	case len(*ls) == 0:
 		// No-op. An empty list indicates no platform restrictions.
 	case len(l2) == 0:
 		// Merging with an empty list results in an empty list.
-		*l = l2
+		*ls = l2
 	default:
 		// Append, sort and dedup.
-		*l = append(*l, l2...)
-		slices.Sort(*l)
-		*l = slices.Compact(*l)
+		*ls = append(*ls, l2...)
+		slices.Sort(*ls)
+		*ls = slices.Compact(*ls)
 	}
 }

@@ -122,7 +122,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	switch goos {
 	case "linux":
 		upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
-		upf.BoolVar(&upArgs.statefulFiltering, "stateful-filtering", false, "apply stateful filtering to forwarded packets (subnet routers, exit nodes, etc.)")
+		upf.BoolVar(&upArgs.statefulFiltering, "stateful-filtering", false, "apply stateful filtering to forwarded packets (subnet routers, exit nodes, and so on)")
 		upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
 	case "windows":
 		upf.BoolVar(&upArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
@@ -137,7 +137,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 		// Some flags are only for "up", not "login".
 		upf.BoolVar(&upArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
 		upf.BoolVar(&upArgs.reset, "reset", false, "reset unspecified settings to their default values")
-		upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication (WARNING: this will bring down the Tailscale connection and thus should not be done remotely over SSH or RDP)")
+		upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication (WARNING: this may bring down the Tailscale connection and thus should not be done remotely over SSH or RDP)")
 		registerAcceptRiskFlag(upf, &upArgs.acceptedRisks)
 	}
 
@@ -388,7 +388,8 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 	if !env.upArgs.reset {
 		applyImplicitPrefs(prefs, curPrefs, env)
 
-		if err := checkForAccidentalSettingReverts(prefs, curPrefs, env); err != nil {
+		simpleUp, err = checkForAccidentalSettingReverts(prefs, curPrefs, env)
+		if err != nil {
 			return false, nil, err
 		}
 	}
@@ -419,11 +420,6 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 	}
 
 	tagsChanged := !reflect.DeepEqual(curPrefs.AdvertiseTags, prefs.AdvertiseTags)
-
-	simpleUp = env.flagSet.NFlag() == 0 &&
-		curPrefs.Persist != nil &&
-		curPrefs.Persist.UserProfile.LoginName != "" &&
-		env.backendState != ipn.NeedsLogin.String()
 
 	justEdit := env.backendState == ipn.Running.String() &&
 		!env.upArgs.forceReauth &&
@@ -818,6 +814,7 @@ func upWorthyWarning(s string) bool {
 		strings.Contains(s, healthmsg.WarnAcceptRoutesOff) ||
 		strings.Contains(s, healthmsg.LockedOut) ||
 		strings.Contains(s, healthmsg.WarnExitNodeUsage) ||
+		strings.Contains(s, healthmsg.InMemoryTailnetLockState) ||
 		strings.Contains(strings.ToLower(s), "update available: ")
 }
 
@@ -889,6 +886,8 @@ func init() {
 	addPrefFlagMapping("advertise-connector", "AppConnector")
 	addPrefFlagMapping("report-posture", "PostureChecking")
 	addPrefFlagMapping("relay-server-port", "RelayServerPort")
+	addPrefFlagMapping("sync", "Sync")
+	addPrefFlagMapping("relay-server-static-endpoints", "RelayServerStaticEndpoints")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {
@@ -924,7 +923,7 @@ func updateMaskedPrefsFromUpOrSetFlag(mp *ipn.MaskedPrefs, flagName string) {
 	if prefs, ok := prefsOfFlag[flagName]; ok {
 		for _, pref := range prefs {
 			f := reflect.ValueOf(mp).Elem()
-			for _, name := range strings.Split(pref, ".") {
+			for name := range strings.SplitSeq(pref, ".") {
 				f = f.FieldByName(name + "Set")
 			}
 			f.SetBool(true)
@@ -966,10 +965,10 @@ type upCheckEnv struct {
 //
 // mp is the mask of settings actually set, where mp.Prefs is the new
 // preferences to set, including any values set from implicit flags.
-func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheckEnv) error {
+func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, err error) {
 	if curPrefs.ControlURL == "" {
 		// Don't validate things on initial "up" before a control URL has been set.
-		return nil
+		return false, nil
 	}
 
 	flagIsSet := map[string]bool{}
@@ -977,10 +976,13 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 		flagIsSet[f.Name] = true
 	})
 
-	if len(flagIsSet) == 0 {
+	if len(flagIsSet) == 0 &&
+		curPrefs.Persist != nil &&
+		curPrefs.Persist.UserProfile.LoginName != "" &&
+		env.backendState != ipn.NeedsLogin.String() {
 		// A bare "tailscale up" is a special case to just
 		// mean bringing the network up without any changes.
-		return nil
+		return true, nil
 	}
 
 	// flagsCur is what flags we'd need to use to keep the exact
@@ -1022,7 +1024,7 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 		missing = append(missing, fmtFlagValueArg(flagName, valCur))
 	}
 	if len(missing) == 0 {
-		return nil
+		return false, nil
 	}
 
 	// Some previously provided flags are missing. This run of 'tailscale
@@ -1055,7 +1057,7 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 		fmt.Fprintf(&sb, " %s", a)
 	}
 	sb.WriteString("\n\n")
-	return errors.New(sb.String())
+	return false, errors.New(sb.String())
 }
 
 // applyImplicitPrefs mutates prefs to add implicit preferences for the user operator.

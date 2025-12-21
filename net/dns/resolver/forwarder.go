@@ -37,6 +37,7 @@ import (
 	"tailscale.com/net/netx"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/syncs"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
@@ -231,7 +232,7 @@ type forwarder struct {
 	ctx       context.Context    // good until Close
 	ctxCancel context.CancelFunc // closes ctx
 
-	mu sync.Mutex // guards following
+	mu syncs.Mutex // guards following
 
 	dohClient map[string]*http.Client // urlBase -> client
 
@@ -525,9 +526,9 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	if f.verboseFwd {
 		id := forwarderCount.Add(1)
 		domain, typ, _ := nameFromQuery(fq.packet)
-		f.logf("forwarder.send(%q, %d, %v, %d) [%d] ...", rr.name.Addr, fq.txid, typ, len(domain), id)
+		f.logf("forwarder.send(%q, %d, %v, %d) from %v [%d] ...", rr.name.Addr, fq.txid, typ, len(domain), fq.src, id)
 		defer func() {
-			f.logf("forwarder.send(%q, %d, %v, %d) [%d] = %v, %v", rr.name.Addr, fq.txid, typ, len(domain), id, len(ret), err)
+			f.logf("forwarder.send(%q, %d, %v, %d) from %v [%d] = %v, %v", rr.name.Addr, fq.txid, typ, len(domain), fq.src, id, len(ret), err)
 		}()
 	}
 	if strings.HasPrefix(rr.name.Addr, "http://") {
@@ -903,6 +904,7 @@ type forwardQuery struct {
 	txid   txid
 	packet []byte
 	family string // "tcp" or "udp"
+	src    netip.AddrPort
 
 	// closeOnCtxDone lets send register values to Close if the
 	// caller's ctx expires. This avoids send from allocating its
@@ -987,6 +989,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		txid:           getTxID(query.bs),
 		packet:         query.bs,
 		family:         query.family,
+		src:            query.addr,
 		closeOnCtxDone: new(closePool),
 	}
 	defer fq.closeOnCtxDone.Close()

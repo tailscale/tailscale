@@ -19,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/yaml"
+
 	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tstest"
@@ -182,7 +183,7 @@ func TestNameserverReconciler(t *testing.T) {
 			dnsCfg.Spec.Nameserver.Image = nil
 		})
 		expectReconciled(t, reconciler, "", "test")
-		wantsDeploy.Spec.Template.Spec.Containers[0].Image = "tailscale/k8s-nameserver:unstable"
+		wantsDeploy.Spec.Template.Spec.Containers[0].Image = "tailscale/k8s-nameserver:stable"
 		expectEqual(t, fc, wantsDeploy)
 	})
 }

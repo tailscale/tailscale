@@ -76,8 +76,8 @@ func TestSigNested(t *testing.T) {
 	if err := nestedSig.verifySignature(oldNode.Public(), k); err != nil {
 		t.Fatalf("verifySignature(oldNode) failed: %v", err)
 	}
-	if l := sigChainLength(nestedSig); l != 1 {
-		t.Errorf("nestedSig chain length = %v, want 1", l)
+	if ln := sigChainLength(nestedSig); ln != 1 {
+		t.Errorf("nestedSig chain length = %v, want 1", ln)
 	}
 
 	// The signature authorizing the rotation, signed by the
@@ -93,8 +93,8 @@ func TestSigNested(t *testing.T) {
 	if err := sig.verifySignature(node.Public(), k); err != nil {
 		t.Fatalf("verifySignature(node) failed: %v", err)
 	}
-	if l := sigChainLength(sig); l != 2 {
-		t.Errorf("sig chain length = %v, want 2", l)
+	if ln := sigChainLength(sig); ln != 2 {
+		t.Errorf("sig chain length = %v, want 2", ln)
 	}
 
 	// Test verification fails if the wrong verification key is provided
@@ -119,7 +119,7 @@ func TestSigNested(t *testing.T) {
 	}
 
 	// Test verification fails if the outer signature is signed with a
-	// different public key to whats specified in WrappingPubkey
+	// different public key to what's specified in WrappingPubkey
 	sig.Signature = ed25519.Sign(priv, sigHash[:])
 	if err := sig.verifySignature(node.Public(), k); err == nil {
 		t.Error("verifySignature(node) succeeded with different signature")
@@ -275,7 +275,7 @@ func TestSigCredential(t *testing.T) {
 	}
 
 	// Test verification fails if the outer signature is signed with a
-	// different public key to whats specified in WrappingPubkey
+	// different public key to what's specified in WrappingPubkey
 	sig.Signature = ed25519.Sign(priv, sigHash[:])
 	if err := sig.verifySignature(node.Public(), k); err == nil {
 		t.Error("verifySignature(node) succeeded with different signature")

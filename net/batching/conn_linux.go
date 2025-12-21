@@ -353,7 +353,7 @@ func getGSOSizeFromControl(control []byte) (int, error) {
 	)
 
 	for len(rem) > unix.SizeofCmsghdr {
-		hdr, data, rem, err = unix.ParseOneSocketControlMessage(control)
+		hdr, data, rem, err = unix.ParseOneSocketControlMessage(rem)
 		if err != nil {
 			return 0, fmt.Errorf("error parsing socket control message: %w", err)
 		}

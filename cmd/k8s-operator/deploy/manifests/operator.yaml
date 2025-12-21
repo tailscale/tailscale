@@ -3348,6 +3348,11 @@ spec:
                                     Corresponds to --ui tsrecorder flag https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.
                                     Required if S3 storage is not set up, to ensure that recordings are accessible.
                                 type: boolean
+                            replicas:
+                                description: Replicas specifies how many instances of tsrecorder to run. Defaults to 1.
+                                format: int32
+                                minimum: 0
+                                type: integer
                             statefulSet:
                                 description: |-
                                     Configuration parameters for the Recorder's StatefulSet. The operator
@@ -4964,6 +4969,9 @@ spec:
                                     type: string
                                 type: array
                         type: object
+                        x-kubernetes-validations:
+                            - message: S3 storage must be used when deploying multiple Recorder replicas
+                              rule: '!(self.replicas > 1 && (!has(self.storage) || !has(self.storage.s3)))'
                     status:
                         description: |-
                             RecorderStatus describes the status of the recorder. This is set
@@ -5366,7 +5374,7 @@ spec:
                     - name: CLIENT_SECRET_FILE
                       value: /oauth/client_secret
                     - name: PROXY_IMAGE
-                      value: tailscale/tailscale:unstable
+                      value: tailscale/tailscale:stable
                     - name: PROXY_TAGS
                       value: tag:k8s
                     - name: APISERVER_PROXY
@@ -5381,7 +5389,7 @@ spec:
                       valueFrom:
                         fieldRef:
                             fieldPath: metadata.uid
-                  image: tailscale/k8s-operator:unstable
+                  image: tailscale/k8s-operator:stable
                   imagePullPolicy: Always
                   name: operator
                   volumeMounts:

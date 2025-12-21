@@ -31,11 +31,11 @@ func TestDoesNotOverwriteIrregularFiles(t *testing.T) {
 
 	// The least troublesome thing to make that is not a file is a unix socket.
 	// Making a null device sadly requires root.
-	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	defer ln.Close()
 
 	err = WriteFile(path, []byte("hello"), 0644)
 	if err == nil {

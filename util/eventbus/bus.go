@@ -5,10 +5,12 @@ package eventbus
 
 import (
 	"context"
+	"log"
 	"reflect"
 	"slices"
-	"sync"
 
+	"tailscale.com/syncs"
+	"tailscale.com/types/logger"
 	"tailscale.com/util/set"
 )
 
@@ -30,27 +32,51 @@ type Bus struct {
 	write      chan PublishedEvent
 	snapshot   chan chan []PublishedEvent
 	routeDebug hook[RoutedEvent]
+	logf       logger.Logf
 
-	topicsMu sync.Mutex
+	topicsMu syncs.Mutex
 	topics   map[reflect.Type][]*subscribeState
 
 	// Used for introspection/debugging only, not in the normal event
 	// publishing path.
-	clientsMu sync.Mutex
+	clientsMu syncs.Mutex
 	clients   set.Set[*Client]
 }
 
-// New returns a new bus. Use [Publish] to make event publishers,
-// and [Subscribe] and [SubscribeFunc] to make event subscribers.
-func New() *Bus {
+// New returns a new bus with default options. It is equivalent to
+// calling [NewWithOptions] with zero [BusOptions].
+func New() *Bus { return NewWithOptions(BusOptions{}) }
+
+// NewWithOptions returns a new [Bus] with the specified [BusOptions].
+// Use [Bus.Client] to construct clients on the bus.
+// Use [Publish] to make event publishers.
+// Use [Subscribe] and [SubscribeFunc] to make event subscribers.
+func NewWithOptions(opts BusOptions) *Bus {
 	ret := &Bus{
 		write:    make(chan PublishedEvent),
 		snapshot: make(chan chan []PublishedEvent),
 		topics:   map[reflect.Type][]*subscribeState{},
 		clients:  set.Set[*Client]{},
+		logf:     opts.logger(),
 	}
 	ret.router = runWorker(ret.pump)
 	return ret
+}
+
+// BusOptions are optional parameters for a [Bus]. A zero value is ready for
+// use and provides defaults as described.
+type BusOptions struct {
+	// Logf, if non-nil, is used for debug logs emitted by the bus and clients,
+	// publishers, and subscribers under its care. If it is nil, logs are sent
+	// to [log.Printf].
+	Logf logger.Logf
+}
+
+func (o BusOptions) logger() logger.Logf {
+	if o.Logf == nil {
+		return log.Printf
+	}
+	return o.Logf
 }
 
 // Client returns a new client with no subscriptions. Use [Subscribe]
@@ -94,7 +120,14 @@ func (b *Bus) Close() {
 }
 
 func (b *Bus) pump(ctx context.Context) {
-	var vals queue[PublishedEvent]
+	// Limit how many published events we can buffer in the PublishedEvent queue.
+	//
+	// Subscribers have unbounded DeliveredEvent queues (see tailscale/tailscale#18020),
+	// so this queue doesn't need to be unbounded. Keeping it bounded may also help
+	// catch cases where subscribers stop pumping events completely, such as due to a bug
+	// in [subscribeState.pump], [Subscriber.dispatch], or [SubscriberFunc.dispatch]).
+	const maxPublishedEvents = 16
+	vals := queue[PublishedEvent]{capacity: maxPublishedEvents}
 	acceptCh := func() chan PublishedEvent {
 		if vals.Full() {
 			return nil
@@ -108,7 +141,7 @@ func (b *Bus) pump(ctx context.Context) {
 		// queue space for it.
 		for !vals.Empty() {
 			val := vals.Peek()
-			dests := b.dest(reflect.ValueOf(val.Event).Type())
+			dests := b.dest(reflect.TypeOf(val.Event))
 
 			if b.routeDebug.active() {
 				clients := make([]*Client, len(dests))
@@ -165,6 +198,9 @@ func (b *Bus) pump(ctx context.Context) {
 		}
 	}
 }
+
+// logger returns a [logger.Logf] to which logs related to bus activity should be written.
+func (b *Bus) logger() logger.Logf { return b.logf }
 
 func (b *Bus) dest(t reflect.Type) []*subscribeState {
 	b.topicsMu.Lock()
@@ -277,7 +313,7 @@ func (w *worker) StopAndWait() {
 type stopFlag struct {
 	// guards the lazy construction of stopped, and the value of
 	// alreadyStopped.
-	mu             sync.Mutex
+	mu             syncs.Mutex
 	stopped        chan struct{}
 	alreadyStopped bool
 }

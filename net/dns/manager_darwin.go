@@ -13,14 +13,15 @@ import (
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/syspolicy/policyclient"
 )
 
 // NewOSConfigurator creates a new OS configurator.
 //
-// The health tracker and the knobs may be nil and are ignored on this platform.
-func NewOSConfigurator(logf logger.Logf, _ *health.Tracker, _ policyclient.Client, _ *controlknobs.Knobs, ifName string) (OSConfigurator, error) {
+// The health tracker, bus and the knobs may be nil and are ignored on this platform.
+func NewOSConfigurator(logf logger.Logf, _ *health.Tracker, _ *eventbus.Bus, _ policyclient.Client, _ *controlknobs.Knobs, ifName string) (OSConfigurator, error) {
 	return &darwinConfigurator{logf: logf, ifName: ifName}, nil
 }
 

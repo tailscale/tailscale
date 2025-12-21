@@ -887,7 +887,7 @@ _Appears in:_
 
 
 
-
+RecorderSpec describes a tsrecorder instance to be deployed in the cluster
 
 
 
@@ -900,6 +900,7 @@ _Appears in:_
 | `tags` _[Tags](#tags)_ | Tags that the Tailscale device will be tagged with. Defaults to [tag:k8s].<br />If you specify custom tags here, make sure you also make the operator<br />an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a Recorder node has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
 | `enableUI` _boolean_ | Set to true to enable the Recorder UI. The UI lists and plays recorded sessions.<br />The UI will be served at <MagicDNS name of the recorder>:443. Defaults to false.<br />Corresponds to --ui tsrecorder flag https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.<br />Required if S3 storage is not set up, to ensure that recordings are accessible. |  |  |
 | `storage` _[Storage](#storage)_ | Configure where to store session recordings. By default, recordings will<br />be stored in a local ephemeral volume, and will not be persisted past the<br />lifetime of a specific pod. |  |  |
+| `replicas` _integer_ | Replicas specifies how many instances of tsrecorder to run. Defaults to 1. |  | Minimum: 0 <br /> |
 
 
 #### RecorderStatefulSet

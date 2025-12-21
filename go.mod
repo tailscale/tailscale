@@ -1,6 +1,6 @@
 module tailscale.com
 
-go 1.25.3
+go 1.25.5
 
 require (
 	filippo.io/mkcert v1.4.4
@@ -16,11 +16,14 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.17.58
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.75.3
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.44.7
+	github.com/axiomhq/hyperloglog v0.0.0-20240319100328-84253e514e02
+	github.com/bradfitz/go-tool-cache v0.0.0-20251113223507-0124e698e0bd
 	github.com/bramvdbogaerde/go-scp v1.4.0
 	github.com/cilium/ebpf v0.15.0
 	github.com/coder/websocket v1.8.12
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
+	github.com/creachadair/msync v0.7.1
 	github.com/creachadair/taskgroup v0.13.2
 	github.com/creack/pty v1.1.23
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa
@@ -42,7 +45,7 @@ require (
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
 	github.com/golang/snappy v0.0.4
 	github.com/golangci/golangci-lint v1.57.1
-	github.com/google/go-cmp v0.6.0
+	github.com/google/go-cmp v0.7.0
 	github.com/google/go-containerregistry v0.20.3
 	github.com/google/go-tpm v0.9.4
 	github.com/google/gopacket v1.1.19
@@ -59,7 +62,7 @@ require (
 	github.com/jellydator/ttlcache/v3 v3.1.0
 	github.com/jsimonetti/rtnetlink v1.4.0
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
-	github.com/klauspost/compress v1.17.11
+	github.com/klauspost/compress v1.18.0
 	github.com/kortschak/wol v0.0.0-20200729010619-da482cc4850a
 	github.com/mattn/go-colorable v0.1.13
 	github.com/mattn/go-isatty v0.0.20
@@ -69,11 +72,12 @@ require (
 	github.com/miekg/dns v1.1.58
 	github.com/mitchellh/go-ps v1.0.0
 	github.com/peterbourgon/ff/v3 v3.4.0
+	github.com/pires/go-proxyproto v0.8.1
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/sftp v1.13.6
 	github.com/prometheus-community/pro-bing v0.4.0
-	github.com/prometheus/client_golang v1.20.5
-	github.com/prometheus/common v0.55.0
+	github.com/prometheus/client_golang v1.23.0
+	github.com/prometheus/common v0.65.0
 	github.com/prometheus/prometheus v0.49.2-0.20240125131847-c3b8ef1694ff
 	github.com/safchain/ethtool v0.3.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
@@ -87,7 +91,7 @@ require (
 	github.com/tailscale/mkctr v0.0.0-20250228050937-c75ea1476830
 	github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc
-	github.com/tailscale/setec v0.0.0-20250205144240-8898a29c3fbb
+	github.com/tailscale/setec v0.0.0-20251203133219-2ab774e4129a
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
 	github.com/tailscale/wireguard-go v0.0.0-20250716170648-1d0488a3d7da
@@ -100,21 +104,21 @@ require (
 	go.uber.org/zap v1.27.0
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
-	golang.org/x/crypto v0.38.0
-	golang.org/x/exp v0.0.0-20250210185358-939b2ce775ac
-	golang.org/x/mod v0.24.0
-	golang.org/x/net v0.40.0
+	golang.org/x/crypto v0.45.0
+	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b
+	golang.org/x/mod v0.30.0
+	golang.org/x/net v0.47.0
 	golang.org/x/oauth2 v0.30.0
-	golang.org/x/sync v0.14.0
-	golang.org/x/sys v0.33.0
-	golang.org/x/term v0.32.0
+	golang.org/x/sync v0.18.0
+	golang.org/x/sys v0.38.0
+	golang.org/x/term v0.37.0
 	golang.org/x/time v0.11.0
-	golang.org/x/tools v0.33.0
+	golang.org/x/tools v0.39.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
 	gopkg.in/square/go-jose.v2 v2.6.0
 	gvisor.dev/gvisor v0.0.0-20250205023644-9414b50a5633
-	honnef.co/go/tools v0.5.1
+	honnef.co/go/tools v0.7.0-0.dev.0.20251022135355-8273271481d0
 	k8s.io/api v0.32.0
 	k8s.io/apimachinery v0.32.0
 	k8s.io/apiserver v0.32.0
@@ -146,6 +150,7 @@ require (
 	github.com/containerd/typeurl/v2 v2.2.3 // indirect
 	github.com/cyphar/filepath-securejoin v0.3.6 // indirect
 	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
+	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
 	github.com/docker/go-connections v0.5.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
@@ -185,6 +190,8 @@ require (
 	go.opentelemetry.io/otel/metric v1.33.0 // indirect
 	go.opentelemetry.io/otel/trace v1.33.0 // indirect
 	go.uber.org/automaxprocs v1.5.3 // indirect
+	golang.org/x/telemetry v0.0.0-20251111182119-bc8e575c7b54 // indirect
+	golang.org/x/tools/go/packages/packagestest v0.1.1-deprecated // indirect
 	golang.org/x/xerrors v0.0.0-20240716161551-93cc26a95ae9 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
 	k8s.io/component-base v0.32.0 // indirect
@@ -350,8 +357,8 @@ require (
 	github.com/pkg/diff v0.0.0-20210226163009-20ebb0f2a09e // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/polyfloyd/go-errorlint v1.4.8 // indirect
-	github.com/prometheus/client_model v0.6.1
-	github.com/prometheus/procfs v0.15.1 // indirect
+	github.com/prometheus/client_model v0.6.2
+	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/quasilyte/go-ruleguard v0.4.2 // indirect
 	github.com/quasilyte/gogrep v0.5.0 // indirect
 	github.com/quasilyte/regex/syntax v0.0.0-20210819130434-b3f0c404a727 // indirect
@@ -407,9 +414,9 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20240314144324-c7f7c6466f7f // indirect
 	golang.org/x/image v0.27.0 // indirect
-	golang.org/x/text v0.25.0 // indirect
+	golang.org/x/text v0.31.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
-	google.golang.org/protobuf v1.36.3 // indirect
+	google.golang.org/protobuf v1.36.8 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect

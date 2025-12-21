@@ -30,7 +30,6 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"tailscale.com/atomicfile"
@@ -42,6 +41,7 @@ import (
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/bakedroots"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/acme"
 	"tailscale.com/types/logger"
@@ -60,9 +60,9 @@ var (
 	// acmeMu guards all ACME operations, so concurrent requests
 	// for certs don't slam ACME. The first will go through and
 	// populate the on-disk cache and the rest should use that.
-	acmeMu sync.Mutex
+	acmeMu syncs.Mutex
 
-	renewMu     sync.Mutex // lock order: acmeMu before renewMu
+	renewMu     syncs.Mutex // lock order: acmeMu before renewMu
 	renewCertAt = map[string]time.Time{}
 )
 
@@ -144,7 +144,11 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 		if minValidity == 0 {
 			logf("starting async renewal")
 			// Start renewal in the background, return current valid cert.
-			b.goTracker.Go(func() { getCertPEM(context.Background(), b, cs, logf, traceACME, domain, now, minValidity) })
+			b.goTracker.Go(func() {
+				if _, err := getCertPEM(context.Background(), b, cs, logf, traceACME, domain, now, minValidity); err != nil {
+					logf("async renewal failed: getCertPem: %v", err)
+				}
+			})
 			return pair, nil
 		}
 		// If the caller requested a specific validity duration, fall through
@@ -547,8 +551,11 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 	// If we have a previous cert, include it in the order. Assuming we're
 	// within the ARI renewal window this should exclude us from LE rate
 	// limits.
+	// Note that this order extension will fail renewals if the ACME account key has changed
+	// since the last issuance, see
+	// https://github.com/tailscale/tailscale/issues/18251
 	var opts []acme.OrderOption
-	if previous != nil {
+	if previous != nil && !envknob.Bool("TS_DEBUG_ACME_FORCE_RENEWAL") {
 		prevCrt, err := previous.parseCertificate()
 		if err == nil {
 			opts = append(opts, acme.WithOrderReplacesCert(prevCrt))

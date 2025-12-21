@@ -118,25 +118,25 @@ func (p *Prober) Run(name string, interval time.Duration, labels Labels, pc Prob
 		panic(fmt.Sprintf("probe named %q already registered", name))
 	}
 
-	l := prometheus.Labels{
+	lb := prometheus.Labels{
 		"name":  name,
 		"class": pc.Class,
 	}
 	for k, v := range pc.Labels {
-		l[k] = v
+		lb[k] = v
 	}
 	for k, v := range labels {
-		l[k] = v
+		lb[k] = v
 	}
 
-	probe := newProbe(p, name, interval, l, pc)
+	probe := newProbe(p, name, interval, lb, pc)
 	p.probes[name] = probe
 	go probe.loop()
 	return probe
 }
 
 // newProbe creates a new Probe with the given parameters, but does not start it.
-func newProbe(p *Prober, name string, interval time.Duration, l prometheus.Labels, pc ProbeClass) *Probe {
+func newProbe(p *Prober, name string, interval time.Duration, lg prometheus.Labels, pc ProbeClass) *Probe {
 	ctx, cancel := context.WithCancel(context.Background())
 	probe := &Probe{
 		prober:  p,
@@ -155,17 +155,17 @@ func newProbe(p *Prober, name string, interval time.Duration, l prometheus.Label
 		latencyHist:  ring.New(recentHistSize),
 
 		metrics:      prometheus.NewRegistry(),
-		metricLabels: l,
-		mInterval:    prometheus.NewDesc("interval_secs", "Probe interval in seconds", nil, l),
-		mStartTime:   prometheus.NewDesc("start_secs", "Latest probe start time (seconds since epoch)", nil, l),
-		mEndTime:     prometheus.NewDesc("end_secs", "Latest probe end time (seconds since epoch)", nil, l),
-		mLatency:     prometheus.NewDesc("latency_millis", "Latest probe latency (ms)", nil, l),
-		mResult:      prometheus.NewDesc("result", "Latest probe result (1 = success, 0 = failure)", nil, l),
+		metricLabels: lg,
+		mInterval:    prometheus.NewDesc("interval_secs", "Probe interval in seconds", nil, lg),
+		mStartTime:   prometheus.NewDesc("start_secs", "Latest probe start time (seconds since epoch)", nil, lg),
+		mEndTime:     prometheus.NewDesc("end_secs", "Latest probe end time (seconds since epoch)", nil, lg),
+		mLatency:     prometheus.NewDesc("latency_millis", "Latest probe latency (ms)", nil, lg),
+		mResult:      prometheus.NewDesc("result", "Latest probe result (1 = success, 0 = failure)", nil, lg),
 		mAttempts: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "attempts_total", Help: "Total number of probing attempts", ConstLabels: l,
+			Name: "attempts_total", Help: "Total number of probing attempts", ConstLabels: lg,
 		}, []string{"status"}),
 		mSeconds: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "seconds_total", Help: "Total amount of time spent executing the probe", ConstLabels: l,
+			Name: "seconds_total", Help: "Total amount of time spent executing the probe", ConstLabels: lg,
 		}, []string{"status"}),
 	}
 	if p.metrics != nil {
@@ -512,8 +512,8 @@ func (probe *Probe) probeInfoLocked() ProbeInfo {
 		inf.Latency = probe.latency
 	}
 	probe.latencyHist.Do(func(v any) {
-		if l, ok := v.(time.Duration); ok {
-			inf.RecentLatencies = append(inf.RecentLatencies, l)
+		if latency, ok := v.(time.Duration); ok {
+			inf.RecentLatencies = append(inf.RecentLatencies, latency)
 		}
 	})
 	probe.successHist.Do(func(v any) {
@@ -719,8 +719,8 @@ func initialDelay(seed string, interval time.Duration) time.Duration {
 // Labels is a set of metric labels used by a prober.
 type Labels map[string]string
 
-func (l Labels) With(k, v string) Labels {
-	new := maps.Clone(l)
+func (lb Labels) With(k, v string) Labels {
+	new := maps.Clone(lb)
 	new[k] = v
 	return new
 }

@@ -15,6 +15,7 @@ import (
 	"tailscale.com/net/packet"
 	"tailscale.com/net/stun"
 	udprelay "tailscale.com/net/udprelay/endpoint"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -58,7 +59,7 @@ type relayManager struct {
 	getServersCh        chan chan set.Set[candidatePeerRelay]
 	derpHomeChangeCh    chan derpHomeChangeEvent
 
-	discoInfoMu            sync.Mutex // guards the following field
+	discoInfoMu            syncs.Mutex // guards the following field
 	discoInfoByServerDisco map[key.DiscoPublic]*relayHandshakeDiscoInfo
 
 	// runLoopStoppedCh is written to by runLoop() upon return, enabling event
@@ -360,7 +361,7 @@ func (r *relayManager) ensureDiscoInfoFor(work *relayHandshakeWork) {
 		di.di = &discoInfo{
 			discoKey:   work.se.ServerDisco,
 			discoShort: work.se.ServerDisco.ShortString(),
-			sharedKey:  work.wlb.ep.c.discoPrivate.Shared(work.se.ServerDisco),
+			sharedKey:  work.wlb.ep.c.discoAtomic.Private().Shared(work.se.ServerDisco),
 		}
 	}
 }
@@ -1030,7 +1031,7 @@ func (r *relayManager) allocateAllServersRunLoop(wlb endpointWithLastBest) {
 	if remoteDisco == nil {
 		return
 	}
-	discoKeys := key.NewSortedPairOfDiscoPublic(wlb.ep.c.discoPublic, remoteDisco.key)
+	discoKeys := key.NewSortedPairOfDiscoPublic(wlb.ep.c.discoAtomic.Public(), remoteDisco.key)
 	for _, v := range r.serversByNodeKey {
 		byDiscoKeys, ok := r.allocWorkByDiscoKeysByServerNodeKey[v.nodeKey]
 		if !ok {

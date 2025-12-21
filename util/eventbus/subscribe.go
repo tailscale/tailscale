@@ -7,7 +7,12 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"sync"
+	"runtime"
+	"time"
+
+	"tailscale.com/syncs"
+	"tailscale.com/types/logger"
+	"tailscale.com/util/cibuild"
 )
 
 type DeliveredEvent struct {
@@ -46,7 +51,7 @@ type subscribeState struct {
 	snapshot   chan chan []DeliveredEvent
 	debug      hook[DeliveredEvent]
 
-	outputsMu sync.Mutex
+	outputsMu syncs.Mutex
 	outputs   map[reflect.Type]subscriber
 }
 
@@ -182,12 +187,18 @@ type Subscriber[T any] struct {
 	stop       stopFlag
 	read       chan T
 	unregister func()
+	logf       logger.Logf
+	slow       *time.Timer // used to detect slow subscriber service
 }
 
-func newSubscriber[T any](r *subscribeState) *Subscriber[T] {
+func newSubscriber[T any](r *subscribeState, logf logger.Logf) *Subscriber[T] {
+	slow := time.NewTimer(0)
+	slow.Stop() // reset in dispatch
 	return &Subscriber[T]{
 		read:       make(chan T),
 		unregister: func() { r.deleteSubscriber(reflect.TypeFor[T]()) },
+		logf:       logf,
+		slow:       slow,
 	}
 }
 
@@ -212,6 +223,11 @@ func (s *Subscriber[T]) monitor(debugEvent T) {
 
 func (s *Subscriber[T]) dispatch(ctx context.Context, vals *queue[DeliveredEvent], acceptCh func() chan DeliveredEvent, snapshot chan chan []DeliveredEvent) bool {
 	t := vals.Peek().Event.(T)
+
+	start := time.Now()
+	s.slow.Reset(slowSubscriberTimeout)
+	defer s.slow.Stop()
+
 	for {
 		// Keep the cases in this select in sync with subscribeState.pump
 		// above. The only difference should be that this select
@@ -226,6 +242,9 @@ func (s *Subscriber[T]) dispatch(ctx context.Context, vals *queue[DeliveredEvent
 			return false
 		case ch := <-snapshot:
 			ch <- vals.Snapshot()
+		case <-s.slow.C:
+			s.logf("subscriber for %T is slow (%v elapsed)", t, time.Since(start))
+			s.slow.Reset(slowSubscriberTimeout)
 		}
 	}
 }
@@ -260,12 +279,18 @@ type SubscriberFunc[T any] struct {
 	stop       stopFlag
 	read       func(T)
 	unregister func()
+	logf       logger.Logf
+	slow       *time.Timer // used to detect slow subscriber service
 }
 
-func newSubscriberFunc[T any](r *subscribeState, f func(T)) *SubscriberFunc[T] {
+func newSubscriberFunc[T any](r *subscribeState, f func(T), logf logger.Logf) *SubscriberFunc[T] {
+	slow := time.NewTimer(0)
+	slow.Stop() // reset in dispatch
 	return &SubscriberFunc[T]{
 		read:       f,
 		unregister: func() { r.deleteSubscriber(reflect.TypeFor[T]()) },
+		logf:       logf,
+		slow:       slow,
 	}
 }
 
@@ -285,6 +310,11 @@ func (s *SubscriberFunc[T]) dispatch(ctx context.Context, vals *queue[DeliveredE
 	t := vals.Peek().Event.(T)
 	callDone := make(chan struct{})
 	go s.runCallback(t, callDone)
+
+	start := time.Now()
+	s.slow.Reset(slowSubscriberTimeout)
+	defer s.slow.Stop()
+
 	// Keep the cases in this select in sync with subscribeState.pump
 	// above. The only difference should be that this select
 	// delivers a value by calling s.read.
@@ -296,9 +326,24 @@ func (s *SubscriberFunc[T]) dispatch(ctx context.Context, vals *queue[DeliveredE
 		case val := <-acceptCh():
 			vals.Add(val)
 		case <-ctx.Done():
+			// Wait for the callback to be complete, but not forever.
+			s.slow.Reset(5 * slowSubscriberTimeout)
+			select {
+			case <-s.slow.C:
+				s.logf("giving up on subscriber for %T after %v at close", t, time.Since(start))
+				if cibuild.On() {
+					all := make([]byte, 2<<20)
+					n := runtime.Stack(all, true)
+					s.logf("goroutine stacks:\n%s", all[:n])
+				}
+			case <-callDone:
+			}
 			return false
 		case ch := <-snapshot:
 			ch <- vals.Snapshot()
+		case <-s.slow.C:
+			s.logf("subscriber for %T is slow (%v elapsed)", t, time.Since(start))
+			s.slow.Reset(slowSubscriberTimeout)
 		}
 	}
 }

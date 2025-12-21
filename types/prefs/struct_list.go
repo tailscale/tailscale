@@ -33,20 +33,20 @@ func StructListWithOpts[T views.Cloner[T]](opts ...Options) StructList[T] {
 // SetValue configures the preference with the specified value.
 // It fails and returns [ErrManaged] if p is a managed preference,
 // and [ErrReadOnly] if p is a read-only preference.
-func (l *StructList[T]) SetValue(val []T) error {
-	return l.preference.SetValue(deepCloneSlice(val))
+func (ls *StructList[T]) SetValue(val []T) error {
+	return ls.preference.SetValue(deepCloneSlice(val))
 }
 
 // SetManagedValue configures the preference with the specified value
 // and marks the preference as managed.
-func (l *StructList[T]) SetManagedValue(val []T) {
-	l.preference.SetManagedValue(deepCloneSlice(val))
+func (ls *StructList[T]) SetManagedValue(val []T) {
+	ls.preference.SetManagedValue(deepCloneSlice(val))
 }
 
 // Clone returns a copy of l that aliases no memory with l.
-func (l StructList[T]) Clone() *StructList[T] {
-	res := ptr.To(l)
-	if v, ok := l.s.Value.GetOk(); ok {
+func (ls StructList[T]) Clone() *StructList[T] {
+	res := ptr.To(ls)
+	if v, ok := ls.s.Value.GetOk(); ok {
 		res.s.Value.Set(deepCloneSlice(v))
 	}
 	return res
@@ -56,11 +56,11 @@ func (l StructList[T]) Clone() *StructList[T] {
 // If the template type T implements an Equal(T) bool method, it will be used
 // instead of the == operator for value comparison.
 // It panics if T is not comparable.
-func (l StructList[T]) Equal(l2 StructList[T]) bool {
-	if l.s.Metadata != l2.s.Metadata {
+func (ls StructList[T]) Equal(l2 StructList[T]) bool {
+	if ls.s.Metadata != l2.s.Metadata {
 		return false
 	}
-	v1, ok1 := l.s.Value.GetOk()
+	v1, ok1 := ls.s.Value.GetOk()
 	v2, ok2 := l2.s.Value.GetOk()
 	if ok1 != ok2 {
 		return false
@@ -105,8 +105,8 @@ type StructListView[T views.ViewCloner[T, V], V views.StructView[T]] struct {
 
 // StructListViewOf returns a read-only view of l.
 // It is used by [tailscale.com/cmd/viewer].
-func StructListViewOf[T views.ViewCloner[T, V], V views.StructView[T]](l *StructList[T]) StructListView[T, V] {
-	return StructListView[T, V]{l}
+func StructListViewOf[T views.ViewCloner[T, V], V views.StructView[T]](ls *StructList[T]) StructListView[T, V] {
+	return StructListView[T, V]{ls}
 }
 
 // Valid reports whether the underlying [StructList] is non-nil.

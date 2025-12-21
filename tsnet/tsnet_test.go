@@ -38,6 +38,7 @@ import (
 	"golang.org/x/net/proxy"
 	"tailscale.com/client/local"
 	"tailscale.com/cmd/testwrapper/flakytest"
+	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netns"
@@ -235,6 +236,7 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 }
 
 func TestDialBlocks(t *testing.T) {
+	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -274,30 +276,57 @@ func TestDialBlocks(t *testing.T) {
 	defer c.Close()
 }
 
+// TestConn tests basic TCP connections between two tsnet Servers, s1 and s2:
+//
+//   - s1, a subnet router, first listens on its TCP :8081.
+//   - s2 can connect to s1:8081
+//   - s2 cannot connect to s1:8082 (no listener)
+//   - s2 can dial through the subnet router functionality (getting a synthetic RST
+//     that we verify we generated & saw)
 func TestConn(t *testing.T) {
+	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	controlURL, c := startControl(t)
 	s1, s1ip, s1PubKey := startServer(t, ctx, controlURL, "s1")
-	s2, _, _ := startServer(t, ctx, controlURL, "s2")
 
-	s1.lb.EditPrefs(&ipn.MaskedPrefs{
+	// Track whether we saw an attempted dial to 192.0.2.1:8081.
+	var saw192DocNetDial atomic.Bool
+	s1.RegisterFallbackTCPHandler(func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
+		t.Logf("s1: fallback TCP handler called for %v -> %v", src, dst)
+		if dst.String() == "192.0.2.1:8081" {
+			saw192DocNetDial.Store(true)
+		}
+		return nil, true // nil handler but intercept=true means to send RST
+	})
+
+	lc1 := must.Get(s1.LocalClient())
+
+	must.Get(lc1.EditPrefs(ctx, &ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			AdvertiseRoutes: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
 		},
 		AdvertiseRoutesSet: true,
-	})
+	}))
 	c.SetSubnetRoutes(s1PubKey, []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
 
-	lc2, err := s2.LocalClient()
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Start s2 after s1 is fully set up, including advertising its routes,
+	// otherwise the test is flaky if the test starts dialing through s2 before
+	// our test control server has told s2 about s1's routes.
+	s2, _, _ := startServer(t, ctx, controlURL, "s2")
+	lc2 := must.Get(s2.LocalClient())
+
+	must.Get(lc2.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			RouteAll: true,
+		},
+		RouteAllSet: true,
+	}))
 
 	// ping to make sure the connection is up.
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingTSMP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,12 +339,26 @@ func TestConn(t *testing.T) {
 	}
 	defer ln.Close()
 
-	w, err := s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip))
-	if err != nil {
-		t.Fatal(err)
-	}
+	s1Conns := make(chan net.Conn)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				t.Errorf("s1.Accept: %v", err)
+				return
+			}
+			select {
+			case s1Conns <- c:
+			case <-ctx.Done():
+				c.Close()
+			}
+		}
+	}()
 
-	r, err := ln.Accept()
+	w, err := s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,32 +368,56 @@ func TestConn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := make([]byte, len(want))
-	if _, err := io.ReadAtLeast(r, got, len(got)); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("got: %q", got)
-	if string(got) != want {
-		t.Errorf("got %q, want %q", got, want)
+	select {
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for connection")
+	case r := <-s1Conns:
+		got := make([]byte, len(want))
+		_, err := io.ReadAtLeast(r, got, len(got))
+		r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("got: %q", got)
+		if string(got) != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
 	}
 
+	// Dial a non-existent port on s1 and expect it to fail.
 	_, err = s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8082", s1ip)) // some random port
 	if err == nil {
 		t.Fatalf("unexpected success; should have seen a connection refused error")
 	}
+	t.Logf("got expected failure: %v", err)
 
-	// s1 is a subnet router for TEST-NET-1 (192.0.2.0/24). Lets dial to that
-	// subnet from s2 to ensure a listener without an IP address (i.e. ":8081")
-	// only matches destination IPs corresponding to the node's IP, and not
-	// to any random IP a subnet is routing.
-	_, err = s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", "192.0.2.1"))
+	// s1 is a subnet router for TEST-NET-1 (192.0.2.0/24). Let's dial to that
+	// subnet from s2 to ensure a listener without an IP address (i.e. our
+	// ":8081" listen above) only matches destination IPs corresponding to the
+	// s1 node's IP addresses, and not to any random IP of a subnet it's routing.
+	//
+	// The RegisterFallbackTCPHandler on s1 above handles sending a RST when the
+	// TCP SYN arrives from s2. But we bound it to 5 seconds lest a regression
+	// like tailscale/tailscale#17805 recur.
+	s2dialer := s2.Sys().Dialer.Get()
+	s2dialer.SetSystemDialerForTest(func(ctx context.Context, netw, addr string) (net.Conn, error) {
+		t.Logf("s2: unexpected system dial called for %s %s", netw, addr)
+		return nil, fmt.Errorf("system dialer called unexpectedly for %s %s", netw, addr)
+	})
+	docCtx, docCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer docCancel()
+	_, err = s2.Dial(docCtx, "tcp", "192.0.2.1:8081")
 	if err == nil {
 		t.Fatalf("unexpected success; should have seen a connection refused error")
+	}
+	if !saw192DocNetDial.Load() {
+		t.Errorf("expected s1's fallback TCP handler to have been called for 192.0.2.1:8081")
 	}
 }
 
 func TestLoopbackLocalAPI(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8557")
+	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -426,6 +493,7 @@ func TestLoopbackLocalAPI(t *testing.T) {
 
 func TestLoopbackSOCKS5(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8198")
+	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -476,6 +544,7 @@ func TestLoopbackSOCKS5(t *testing.T) {
 }
 
 func TestTailscaleIPs(t *testing.T) {
+	tstest.Shard(t)
 	controlURL, _ := startControl(t)
 
 	tmp := t.TempDir()
@@ -518,6 +587,7 @@ func TestTailscaleIPs(t *testing.T) {
 // TestListenerCleanup is a regression test to verify that s.Close doesn't
 // deadlock if a listener is still open.
 func TestListenerCleanup(t *testing.T) {
+	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -560,6 +630,7 @@ func (wc *closeTrackConn) Close() error {
 // tests https://github.com/tailscale/tailscale/issues/6973 -- that we can start a tsnet server,
 // stop it, and restart it, even on Windows.
 func TestStartStopStartGetsSameIP(t *testing.T) {
+	tstest.Shard(t)
 	controlURL, _ := startControl(t)
 
 	tmp := t.TempDir()
@@ -609,6 +680,7 @@ func TestStartStopStartGetsSameIP(t *testing.T) {
 }
 
 func TestFunnel(t *testing.T) {
+	tstest.Shard(t)
 	ctx, dialCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer dialCancel()
 
@@ -670,6 +742,7 @@ func TestFunnel(t *testing.T) {
 }
 
 func TestListenerClose(t *testing.T) {
+	tstest.Shard(t)
 	ctx := context.Background()
 	controlURL, _ := startControl(t)
 
@@ -749,6 +822,7 @@ func (c *bufferedConn) Read(b []byte) (int, error) {
 }
 
 func TestFallbackTCPHandler(t *testing.T) {
+	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -791,6 +865,7 @@ func TestFallbackTCPHandler(t *testing.T) {
 }
 
 func TestCapturePcap(t *testing.T) {
+	tstest.Shard(t)
 	const timeLimit = 120
 	ctx, cancel := context.WithTimeout(context.Background(), timeLimit*time.Second)
 	defer cancel()
@@ -844,6 +919,7 @@ func TestCapturePcap(t *testing.T) {
 }
 
 func TestUDPConn(t *testing.T) {
+	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -946,11 +1022,11 @@ func promMetricLabelsStr(labels []*dto.LabelPair) string {
 	}
 	var b strings.Builder
 	b.WriteString("{")
-	for i, l := range labels {
+	for i, lb := range labels {
 		if i > 0 {
 			b.WriteString(",")
 		}
-		b.WriteString(fmt.Sprintf("%s=%q", l.GetName(), l.GetValue()))
+		b.WriteString(fmt.Sprintf("%s=%q", lb.GetName(), lb.GetValue()))
 	}
 	b.WriteString("}")
 	return b.String()
@@ -958,8 +1034,8 @@ func promMetricLabelsStr(labels []*dto.LabelPair) string {
 
 // sendData sends a given amount of bytes from s1 to s2.
 func sendData(logf func(format string, args ...any), ctx context.Context, bytesCount int, s1, s2 *Server, s1ip, s2ip netip.Addr) error {
-	l := must.Get(s1.Listen("tcp", fmt.Sprintf("%s:8081", s1ip)))
-	defer l.Close()
+	lb := must.Get(s1.Listen("tcp", fmt.Sprintf("%s:8081", s1ip)))
+	defer lb.Close()
 
 	// Dial to s1 from s2
 	w, err := s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip))
@@ -974,7 +1050,7 @@ func sendData(logf func(format string, args ...any), ctx context.Context, bytesC
 	defer close(allReceived)
 
 	go func() {
-		conn, err := l.Accept()
+		conn, err := lb.Accept()
 		if err != nil {
 			allReceived <- err
 			return
@@ -1035,6 +1111,7 @@ func sendData(logf func(format string, args ...any), ctx context.Context, bytesC
 }
 
 func TestUserMetricsByteCounters(t *testing.T) {
+	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -1149,6 +1226,7 @@ func TestUserMetricsByteCounters(t *testing.T) {
 }
 
 func TestUserMetricsRouteGauges(t *testing.T) {
+	tstest.Shard(t)
 	// Windows does not seem to support or report back routes when running in
 	// userspace via tsnet. So, we skip this check on Windows.
 	// TODO(kradalby): Figure out if this is correct.
@@ -1305,6 +1383,7 @@ func mustDirect(t *testing.T, logf logger.Logf, lc1, lc2 *local.Client) {
 }
 
 func TestDeps(t *testing.T) {
+	tstest.Shard(t)
 	deptest.DepChecker{
 		GOOS:   "linux",
 		GOARCH: "amd64",
@@ -1314,4 +1393,202 @@ func TestDeps(t *testing.T) {
 			}
 		},
 	}.Check(t)
+}
+
+func TestResolveAuthKey(t *testing.T) {
+	tests := []struct {
+		name            string
+		authKey         string
+		clientSecret    string
+		clientID        string
+		idToken         string
+		oauthAvailable  bool
+		wifAvailable    bool
+		resolveViaOAuth func(ctx context.Context, clientSecret string, tags []string) (string, error)
+		resolveViaWIF   func(ctx context.Context, baseURL, clientID, idToken string, tags []string) (string, error)
+		wantAuthKey     string
+		wantErr         bool
+		wantErrContains string
+	}{
+		{
+			name:           "successful resolution via OAuth client secret",
+			clientSecret:   "tskey-client-secret-123",
+			oauthAvailable: true,
+			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
+				if clientSecret != "tskey-client-secret-123" {
+					return "", fmt.Errorf("unexpected client secret: %s", clientSecret)
+				}
+				return "tskey-auth-via-oauth", nil
+			},
+			wantAuthKey:     "tskey-auth-via-oauth",
+			wantErrContains: "",
+		},
+		{
+			name:           "failing resolution via OAuth client secret",
+			clientSecret:   "tskey-client-secret-123",
+			oauthAvailable: true,
+			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
+				return "", fmt.Errorf("resolution failed")
+			},
+			wantErrContains: "resolution failed",
+		},
+		{
+			name:         "successful resolution via federated ID token",
+			clientID:     "client-id-123",
+			idToken:      "id-token-456",
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken string, tags []string) (string, error) {
+				if clientID != "client-id-123" {
+					return "", fmt.Errorf("unexpected client ID: %s", clientID)
+				}
+				if idToken != "id-token-456" {
+					return "", fmt.Errorf("unexpected ID token: %s", idToken)
+				}
+				return "tskey-auth-via-wif", nil
+			},
+			wantAuthKey:     "tskey-auth-via-wif",
+			wantErrContains: "",
+		},
+		{
+			name:         "failing resolution via federated ID token",
+			clientID:     "client-id-123",
+			idToken:      "id-token-456",
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken string, tags []string) (string, error) {
+				return "", fmt.Errorf("resolution failed")
+			},
+			wantErrContains: "resolution failed",
+		},
+		{
+			name:         "empty client ID",
+			clientID:     "",
+			idToken:      "id-token-456",
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken string, tags []string) (string, error) {
+				return "", fmt.Errorf("should not be called")
+			},
+			wantErrContains: "empty",
+		},
+		{
+			name:         "empty ID token",
+			clientID:     "client-id-123",
+			idToken:      "",
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken string, tags []string) (string, error) {
+				return "", fmt.Errorf("should not be called")
+			},
+			wantErrContains: "empty",
+		},
+		{
+			name:           "workload identity resolution skipped if resolution via OAuth token succeeds",
+			clientSecret:   "tskey-client-secret-123",
+			oauthAvailable: true,
+			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
+				if clientSecret != "tskey-client-secret-123" {
+					return "", fmt.Errorf("unexpected client secret: %s", clientSecret)
+				}
+				return "tskey-auth-via-oauth", nil
+			},
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken string, tags []string) (string, error) {
+				return "", fmt.Errorf("should not be called")
+			},
+			wantAuthKey:     "tskey-auth-via-oauth",
+			wantErrContains: "",
+		},
+		{
+			name:           "workload identity resolution skipped if resolution via OAuth token fails",
+			clientID:       "tskey-client-id-123",
+			idToken:        "",
+			oauthAvailable: true,
+			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
+				return "", fmt.Errorf("resolution failed")
+			},
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken string, tags []string) (string, error) {
+				return "", fmt.Errorf("should not be called")
+			},
+			wantErrContains: "failed",
+		},
+		{
+			name:            "authkey set and no resolution available",
+			authKey:         "tskey-auth-123",
+			oauthAvailable:  false,
+			wifAvailable:    false,
+			wantAuthKey:     "tskey-auth-123",
+			wantErrContains: "",
+		},
+		{
+			name:            "no authkey set and no resolution available",
+			oauthAvailable:  false,
+			wifAvailable:    false,
+			wantAuthKey:     "",
+			wantErrContains: "",
+		},
+		{
+			name:           "authkey is client secret and resolution via OAuth client secret succeeds",
+			authKey:        "tskey-client-secret-123",
+			oauthAvailable: true,
+			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
+				if clientSecret != "tskey-client-secret-123" {
+					return "", fmt.Errorf("unexpected client secret: %s", clientSecret)
+				}
+				return "tskey-auth-via-oauth", nil
+			},
+			wantAuthKey:     "tskey-auth-via-oauth",
+			wantErrContains: "",
+		},
+		{
+			name:           "authkey is client secret but resolution via OAuth client secret fails",
+			authKey:        "tskey-client-secret-123",
+			oauthAvailable: true,
+			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
+				return "", fmt.Errorf("resolution failed")
+			},
+			wantErrContains: "resolution failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.oauthAvailable {
+				t.Cleanup(tailscale.HookResolveAuthKey.SetForTest(tt.resolveViaOAuth))
+			}
+
+			if tt.wifAvailable {
+				t.Cleanup(tailscale.HookResolveAuthKeyViaWIF.SetForTest(tt.resolveViaWIF))
+			}
+
+			s := &Server{
+				AuthKey:      tt.authKey,
+				ClientSecret: tt.clientSecret,
+				ClientID:     tt.clientID,
+				IDToken:      tt.idToken,
+				ControlURL:   "https://control.example.com",
+			}
+			s.shutdownCtx = context.Background()
+
+			gotAuthKey, err := s.resolveAuthKey()
+
+			if tt.wantErrContains != "" {
+				if err == nil {
+					t.Errorf("expected error but got none")
+					return
+				}
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Errorf("expected error containing %q but got error: %v", tt.wantErrContains, err)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("resolveAuthKey expected no error but got error: %v", err)
+				return
+			}
+
+			if gotAuthKey != tt.wantAuthKey {
+				t.Errorf("resolveAuthKey() = %q, want %q", gotAuthKey, tt.wantAuthKey)
+			}
+		})
+	}
 }

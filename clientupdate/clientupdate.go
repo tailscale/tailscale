@@ -418,13 +418,13 @@ func parseSynoinfo(path string) (string, error) {
 	// Extract the CPU in the middle (88f6282 in the above example).
 	s := bufio.NewScanner(f)
 	for s.Scan() {
-		l := s.Text()
-		if !strings.HasPrefix(l, "unique=") {
+		line := s.Text()
+		if !strings.HasPrefix(line, "unique=") {
 			continue
 		}
-		parts := strings.SplitN(l, "_", 3)
+		parts := strings.SplitN(line, "_", 3)
 		if len(parts) != 3 {
-			return "", fmt.Errorf(`malformed %q: found %q, expected format like 'unique="synology_$cpu_$model'`, path, l)
+			return "", fmt.Errorf(`malformed %q: found %q, expected format like 'unique="synology_$cpu_$model'`, path, line)
 		}
 		return parts[1], nil
 	}

@@ -23,6 +23,7 @@ import (
 	"slices"
 	"time"
 
+	"tailscale.com/health"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -54,7 +55,7 @@ var (
 type tkaState struct {
 	profile   ipn.ProfileID
 	authority *tka.Authority
-	storage   *tka.FS
+	storage   tka.CompactableChonk
 	filtered  []ipnstate.TKAPeer
 }
 
@@ -75,7 +76,7 @@ func (b *LocalBackend) initTKALocked() error {
 	root := b.TailscaleVarRoot()
 	if root == "" {
 		b.tka = nil
-		b.logf("network-lock unavailable; no state directory")
+		b.logf("cannot fetch existing TKA state; no state directory for network-lock")
 		return nil
 	}
 
@@ -90,6 +91,7 @@ func (b *LocalBackend) initTKALocked() error {
 		if err != nil {
 			return fmt.Errorf("initializing tka: %v", err)
 		}
+
 		if err := authority.Compact(storage, tkaCompactionDefaults); err != nil {
 			b.logf("tka compaction failed: %v", err)
 		}
@@ -104,6 +106,16 @@ func (b *LocalBackend) initTKALocked() error {
 
 	return nil
 }
+
+// noNetworkLockStateDirWarnable is a Warnable to warn the user that Tailnet Lock data
+// (in particular, the list of AUMs in the TKA state) is being stored in memory and will
+// be lost when tailscaled restarts.
+var noNetworkLockStateDirWarnable = health.Register(&health.Warnable{
+	Code:     "no-tailnet-lock-state-dir",
+	Title:    "No statedir for Tailnet Lock",
+	Severity: health.SeverityMedium,
+	Text:     health.StaticMessage(healthmsg.InMemoryTailnetLockState),
+})
 
 // tkaFilterNetmapLocked checks the signatures on each node key, dropping
 // nodes from the netmap whose signature does not verify.
@@ -288,10 +300,6 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 		return nil
 	}
 
-	if err := b.CanSupportNetworkLock(); err != nil {
-		return err
-	}
-
 	isEnabled := b.tka != nil
 	wantEnabled := nm.TKAEnabled
 
@@ -348,23 +356,16 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 		if err := b.tkaSyncLocked(ourNodeKey); err != nil {
 			return fmt.Errorf("tka sync: %w", err)
 		}
+		// Try to compact the TKA state, to avoid unbounded storage on nodes.
+		//
+		// We run this on every sync so that clients compact consistently. In many
+		// cases this will be a no-op.
+		if err := b.tka.authority.Compact(b.tka.storage, tkaCompactionDefaults); err != nil {
+			return fmt.Errorf("tka compact: %w", err)
+		}
 	}
 
 	return nil
-}
-
-func toSyncOffer(head string, ancestors []string) (tka.SyncOffer, error) {
-	var out tka.SyncOffer
-	if err := out.Head.UnmarshalText([]byte(head)); err != nil {
-		return tka.SyncOffer{}, fmt.Errorf("head.UnmarshalText: %v", err)
-	}
-	out.Ancestors = make([]tka.AUMHash, len(ancestors))
-	for i, a := range ancestors {
-		if err := out.Ancestors[i].UnmarshalText([]byte(a)); err != nil {
-			return tka.SyncOffer{}, fmt.Errorf("ancestor[%d].UnmarshalText: %v", i, err)
-		}
-	}
-	return out, nil
 }
 
 // tkaSyncLocked synchronizes TKA state with control. b.mu must be held
@@ -384,7 +385,7 @@ func (b *LocalBackend) tkaSyncLocked(ourNodeKey key.NodePublic) error {
 	if err != nil {
 		return fmt.Errorf("offer RPC: %w", err)
 	}
-	controlOffer, err := toSyncOffer(offerResp.Head, offerResp.Ancestors)
+	controlOffer, err := tka.ToSyncOffer(offerResp.Head, offerResp.Ancestors)
 	if err != nil {
 		return fmt.Errorf("control offer: %v", err)
 	}
@@ -447,7 +448,7 @@ func (b *LocalBackend) tkaSyncLocked(ourNodeKey key.NodePublic) error {
 // b.mu must be held & TKA must be initialized.
 func (b *LocalBackend) tkaApplyDisablementLocked(secret []byte) error {
 	if b.tka.authority.ValidDisablement(secret) {
-		if err := os.RemoveAll(b.chonkPathLocked()); err != nil {
+		if err := b.tka.storage.RemoveAll(); err != nil {
 			return err
 		}
 		b.tka = nil
@@ -469,10 +470,6 @@ func (b *LocalBackend) chonkPathLocked() string {
 //
 // b.mu must be held.
 func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, persist persist.PersistView) error {
-	if err := b.CanSupportNetworkLock(); err != nil {
-		return err
-	}
-
 	var genesis tka.AUM
 	if err := genesis.Unserialize(g); err != nil {
 		return fmt.Errorf("reading genesis: %v", err)
@@ -491,19 +488,21 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, per
 		}
 	}
 
-	chonkDir := b.chonkPathLocked()
-	if err := os.Mkdir(filepath.Dir(chonkDir), 0755); err != nil && !os.IsExist(err) {
-		return fmt.Errorf("creating chonk root dir: %v", err)
+	root := b.TailscaleVarRoot()
+	var storage tka.CompactableChonk
+	if root == "" {
+		b.health.SetUnhealthy(noNetworkLockStateDirWarnable, nil)
+		b.logf("network-lock using in-memory storage; no state directory")
+		storage = tka.ChonkMem()
+	} else {
+		chonkDir := b.chonkPathLocked()
+		chonk, err := tka.ChonkDir(chonkDir)
+		if err != nil {
+			return fmt.Errorf("chonk: %v", err)
+		}
+		storage = chonk
 	}
-	if err := os.Mkdir(chonkDir, 0755); err != nil && !os.IsExist(err) {
-		return fmt.Errorf("mkdir: %v", err)
-	}
-
-	chonk, err := tka.ChonkDir(chonkDir)
-	if err != nil {
-		return fmt.Errorf("chonk: %v", err)
-	}
-	authority, err := tka.Bootstrap(chonk, genesis)
+	authority, err := tka.Bootstrap(storage, genesis)
 	if err != nil {
 		return fmt.Errorf("tka bootstrap: %v", err)
 	}
@@ -511,26 +510,8 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, per
 	b.tka = &tkaState{
 		profile:   b.pm.CurrentProfile().ID(),
 		authority: authority,
-		storage:   chonk,
+		storage:   storage,
 	}
-	return nil
-}
-
-// CanSupportNetworkLock returns nil if tailscaled is able to operate
-// a local tailnet key authority (and hence enforce network lock).
-func (b *LocalBackend) CanSupportNetworkLock() error {
-	if b.tka != nil {
-		// If the TKA is being used, it is supported.
-		return nil
-	}
-
-	if b.TailscaleVarRoot() == "" {
-		return errors.New("network-lock is not supported in this configuration, try setting --statedir")
-	}
-
-	// There's a var root (aka --statedir), so if network lock gets
-	// initialized we have somewhere to store our AUMs. That's all
-	// we need.
 	return nil
 }
 
@@ -582,6 +563,7 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 	outKeys := make([]ipnstate.TKAKey, len(keys))
 	for i, k := range keys {
 		outKeys[i] = ipnstate.TKAKey{
+			Kind:     k.Kind.String(),
 			Key:      key.NLPublicFromEd25519Unsafe(k.Public),
 			Metadata: k.Meta,
 			Votes:    k.Votes,
@@ -648,10 +630,6 @@ func tkaStateFromPeer(p tailcfg.NodeView) ipnstate.TKAPeer {
 // The Finish RPC submits signatures for all these nodes, at which point
 // Control has everything it needs to atomically enable network lock.
 func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byte, supportDisablement []byte) error {
-	if err := b.CanSupportNetworkLock(); err != nil {
-		return err
-	}
-
 	var ourNodeKey key.NodePublic
 	var nlPriv key.NLPrivate
 
@@ -675,7 +653,7 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 	// We use an in-memory tailchonk because we don't want to commit to
 	// the filesystem until we've finished the initialization sequence,
 	// just in case something goes wrong.
-	_, genesisAUM, err := tka.Create(&tka.Mem{}, tka.State{
+	_, genesisAUM, err := tka.Create(tka.ChonkMem(), tka.State{
 		Keys: keys,
 		// TODO(tom): s/tka.State.DisablementSecrets/tka.State.DisablementValues
 		//   This will center on consistent nomenclature:
@@ -703,7 +681,7 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 
 	// Our genesis AUM was accepted but before Control turns on enforcement of
 	// node-key signatures, we need to sign keys for all the existing nodes.
-	// If we don't get these signatures ahead of time, everyone will loose
+	// If we don't get these signatures ahead of time, everyone will lose
 	// connectivity because control won't have any signatures to send which
 	// satisfy network-lock checks.
 	sigs := make(map[tailcfg.NodeID]tkatype.MarshaledSignature, len(initResp.NeedSignatures))
@@ -767,7 +745,7 @@ func (b *LocalBackend) NetworkLockForceLocalDisable() error {
 		return fmt.Errorf("saving prefs: %w", err)
 	}
 
-	if err := os.RemoveAll(b.chonkPathLocked()); err != nil {
+	if err := b.tka.storage.RemoveAll(); err != nil {
 		return fmt.Errorf("deleting TKA state: %w", err)
 	}
 	b.tka = nil
@@ -1303,27 +1281,10 @@ func (b *LocalBackend) tkaFetchBootstrap(ourNodeKey key.NodePublic, head tka.AUM
 	return a, nil
 }
 
-func fromSyncOffer(offer tka.SyncOffer) (head string, ancestors []string, err error) {
-	headBytes, err := offer.Head.MarshalText()
-	if err != nil {
-		return "", nil, fmt.Errorf("head.MarshalText: %v", err)
-	}
-
-	ancestors = make([]string, len(offer.Ancestors))
-	for i, ancestor := range offer.Ancestors {
-		hash, err := ancestor.MarshalText()
-		if err != nil {
-			return "", nil, fmt.Errorf("ancestor[%d].MarshalText: %v", i, err)
-		}
-		ancestors[i] = string(hash)
-	}
-	return string(headBytes), ancestors, nil
-}
-
 // tkaDoSyncOffer sends a /machine/tka/sync/offer RPC to the control plane
 // over noise. This is the first of two RPCs implementing tka synchronization.
 func (b *LocalBackend) tkaDoSyncOffer(ourNodeKey key.NodePublic, offer tka.SyncOffer) (*tailcfg.TKASyncOfferResponse, error) {
-	head, ancestors, err := fromSyncOffer(offer)
+	head, ancestors, err := tka.FromSyncOffer(offer)
 	if err != nil {
 		return nil, fmt.Errorf("encoding offer: %v", err)
 	}

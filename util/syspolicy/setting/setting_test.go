@@ -311,8 +311,8 @@ func TestListSettingDefinitions(t *testing.T) {
 		t.Fatalf("SetDefinitionsForTest failed: %v", err)
 	}
 
-	cmp := func(l, r *Definition) int {
-		return strings.Compare(string(l.Key()), string(r.Key()))
+	cmp := func(a, b *Definition) int {
+		return strings.Compare(string(a.Key()), string(b.Key()))
 	}
 	want := append([]*Definition{}, definitions...)
 	slices.SortFunc(want, cmp)

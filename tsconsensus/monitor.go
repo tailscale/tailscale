@@ -92,8 +92,8 @@ func (m *monitor) handleSummaryStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slices.Sort(lines)
-	for _, l := range lines {
-		_, err = w.Write([]byte(fmt.Sprintf("%s\n", l)))
+	for _, ln := range lines {
+		_, err = w.Write([]byte(fmt.Sprintf("%s\n", ln)))
 		if err != nil {
 			log.Printf("monitor: error writing status: %v", err)
 			return
@@ -102,15 +102,13 @@ func (m *monitor) handleSummaryStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *monitor) handleNetmap(w http.ResponseWriter, r *http.Request) {
-	var mask ipn.NotifyWatchOpt = ipn.NotifyInitialNetMap
-	mask |= ipn.NotifyNoPrivateKeys
 	lc, err := m.ts.LocalClient()
 	if err != nil {
 		log.Printf("monitor: error LocalClient: %v", err)
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
-	watcher, err := lc.WatchIPNBus(r.Context(), mask)
+	watcher, err := lc.WatchIPNBus(r.Context(), ipn.NotifyInitialNetMap)
 	if err != nil {
 		log.Printf("monitor: error WatchIPNBus: %v", err)
 		http.Error(w, "", http.StatusInternalServerError)

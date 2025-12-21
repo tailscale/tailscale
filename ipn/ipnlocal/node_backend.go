@@ -16,6 +16,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
@@ -75,13 +76,14 @@ type nodeBackend struct {
 	filterAtomic atomic.Pointer[filter.Filter]
 
 	// initialized once and immutable
-	eventClient  *eventbus.Client
-	filterPub    *eventbus.Publisher[magicsock.FilterUpdate]
-	nodeViewsPub *eventbus.Publisher[magicsock.NodeViewsUpdate]
-	nodeMutsPub  *eventbus.Publisher[magicsock.NodeMutationsUpdate]
+	eventClient    *eventbus.Client
+	filterPub      *eventbus.Publisher[magicsock.FilterUpdate]
+	nodeViewsPub   *eventbus.Publisher[magicsock.NodeViewsUpdate]
+	nodeMutsPub    *eventbus.Publisher[magicsock.NodeMutationsUpdate]
+	derpMapViewPub *eventbus.Publisher[tailcfg.DERPMapView]
 
 	// TODO(nickkhyl): maybe use sync.RWMutex?
-	mu sync.Mutex // protects the following fields
+	mu syncs.Mutex // protects the following fields
 
 	shutdownOnce sync.Once     // guards calling [nodeBackend.shutdown]
 	readyCh      chan struct{} // closed by [nodeBackend.ready]; nil after shutdown
@@ -121,6 +123,7 @@ func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *n
 	nb.filterPub = eventbus.Publish[magicsock.FilterUpdate](nb.eventClient)
 	nb.nodeViewsPub = eventbus.Publish[magicsock.NodeViewsUpdate](nb.eventClient)
 	nb.nodeMutsPub = eventbus.Publish[magicsock.NodeMutationsUpdate](nb.eventClient)
+	nb.derpMapViewPub = eventbus.Publish[tailcfg.DERPMapView](nb.eventClient)
 	nb.filterPub.Publish(magicsock.FilterUpdate{Filter: nb.filterAtomic.Load()})
 	return nb
 }
@@ -435,6 +438,9 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) {
 	if nm != nil {
 		nv.SelfNode = nm.SelfNode
 		nv.Peers = nm.Peers
+		nb.derpMapViewPub.Publish(nm.DERPMap.View())
+	} else {
+		nb.derpMapViewPub.Publish(tailcfg.DERPMapView{})
 	}
 	nb.nodeViewsPub.Publish(nv)
 }
@@ -742,7 +748,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		}
 		dcfg.Hosts[fqdn] = ips
 	}
-	set(nm.Name, nm.GetAddresses())
+	set(nm.SelfName(), nm.GetAddresses())
 	for _, peer := range peers {
 		set(peer.Name(), peer.Addresses())
 	}

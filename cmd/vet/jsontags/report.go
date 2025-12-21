@@ -28,9 +28,9 @@ var jsontagsAllowlist map[ReportKind]set.Set[string]
 //
 // The struct type name may be "*" for anonymous struct types such
 // as those declared within a function or as a type literal in a variable.
-func ParseAllowlist(b []byte) map[ReportKind]set.Set[string] {
+func ParseAllowlist(s string) map[ReportKind]set.Set[string] {
 	var allowlist map[ReportKind]set.Set[string]
-	for line := range strings.SplitSeq(string(b), "\n") {
+	for line := range strings.SplitSeq(s, "\n") {
 		kind, field, _ := strings.Cut(strings.TrimSpace(line), "\t")
 		if allowlist == nil {
 			allowlist = make(map[ReportKind]set.Set[string])
@@ -80,9 +80,9 @@ const (
 func (k ReportKind) message() string {
 	switch k {
 	case OmitEmptyUnsupportedInV1:
-		return "uses `omitempty` on an unspported type in json/v1; should probably use `omitzero` instead"
+		return "uses `omitempty` on an unsupported type in json/v1; should probably use `omitzero` instead"
 	case OmitEmptyUnsupportedInV2:
-		return "uses `omitempty` on an unspported type in json/v2; should probably use `omitzero` instead"
+		return "uses `omitempty` on an unsupported type in json/v2; should probably use `omitzero` instead"
 	case OmitEmptyShouldBeOmitZero:
 		return "should use `omitzero` instead of `omitempty`"
 	case OmitEmptyShouldBeOmitZeroButHasIsZero:

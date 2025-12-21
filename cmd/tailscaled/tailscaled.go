@@ -33,12 +33,14 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	_ "tailscale.com/feature/condregister"
+	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
@@ -399,6 +401,7 @@ func run() (err error) {
 	// Install an event bus as early as possible, so that it's
 	// available universally when setting up everything else.
 	sys := tsd.NewSystem()
+	sys.SocketPath = args.socketpath
 
 	// Parse config, if specified, to fail early if it's invalid.
 	var conf *conffile.Config
@@ -644,7 +647,16 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 
 	store, err := store.New(logf, statePathOrDefault())
 	if err != nil {
-		return nil, fmt.Errorf("store.New: %w", err)
+		// If we can't create the store (for example if it's TPM-sealed and the
+		// TPM is reset), create a dummy in-memory store to propagate the error
+		// to the user.
+		ht, ok := sys.HealthTracker.GetOK()
+		if !ok {
+			return nil, fmt.Errorf("store.New: %w", err)
+		}
+		logf("store.New failed: %v; starting with in-memory store with a health warning", err)
+		store = new(mem.Store)
+		ht.SetUnhealthy(ipn.StateStoreHealth, health.Args{health.ArgError: err.Error()})
 	}
 	sys.Set(store)
 
@@ -760,7 +772,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			// configuration being unavailable (from the noop
 			// manager). More in Issue 4017.
 			// TODO(bradfitz): add a Synology-specific DNS manager.
-			conf.DNS, err = dns.NewOSConfigurator(logf, sys.HealthTracker.Get(), sys.PolicyClientOrDefault(), sys.ControlKnobs(), "") // empty interface name
+			conf.DNS, err = dns.NewOSConfigurator(logf, sys.HealthTracker.Get(), sys.Bus.Get(), sys.PolicyClientOrDefault(), sys.ControlKnobs(), "") // empty interface name
 			if err != nil {
 				return false, fmt.Errorf("dns.NewOSConfigurator: %w", err)
 			}
@@ -794,7 +806,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			return false, fmt.Errorf("creating router: %w", err)
 		}
 
-		d, err := dns.NewOSConfigurator(logf, sys.HealthTracker.Get(), sys.PolicyClientOrDefault(), sys.ControlKnobs(), devName)
+		d, err := dns.NewOSConfigurator(logf, sys.HealthTracker.Get(), sys.Bus.Get(), sys.PolicyClientOrDefault(), sys.ControlKnobs(), devName)
 		if err != nil {
 			dev.Close()
 			r.Close()

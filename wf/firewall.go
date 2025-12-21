@@ -18,7 +18,7 @@ import (
 
 // Known addresses.
 var (
-	linkLocalRange           = netip.MustParsePrefix("ff80::/10")
+	linkLocalRange           = netip.MustParsePrefix("fe80::/10")
 	linkLocalDHCPMulticast   = netip.MustParseAddr("ff02::1:2")
 	siteLocalDHCPMulticast   = netip.MustParseAddr("ff05::1:3")
 	linkLocalRouterMulticast = netip.MustParseAddr("ff02::2")
@@ -66,8 +66,8 @@ func (p protocol) getLayers(d direction) []wf.LayerID {
 	return layers
 }
 
-func ruleName(action wf.Action, l wf.LayerID, name string) string {
-	switch l {
+func ruleName(action wf.Action, layerID wf.LayerID, name string) string {
+	switch layerID {
 	case wf.LayerALEAuthConnectV4:
 		return fmt.Sprintf("%s outbound %s (IPv4)", action, name)
 	case wf.LayerALEAuthConnectV6:
@@ -307,8 +307,8 @@ func (f *Firewall) newRule(name string, w weight, layer wf.LayerID, conditions [
 
 func (f *Firewall) addRules(name string, w weight, conditions []*wf.Match, action wf.Action, p protocol, d direction) ([]*wf.Rule, error) {
 	var rules []*wf.Rule
-	for _, l := range p.getLayers(d) {
-		r, err := f.newRule(name, w, l, conditions, action)
+	for _, layer := range p.getLayers(d) {
+		r, err := f.newRule(name, w, layer, conditions, action)
 		if err != nil {
 			return nil, err
 		}

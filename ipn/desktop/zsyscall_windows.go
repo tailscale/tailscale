@@ -57,12 +57,12 @@ var (
 )
 
 func setLastError(dwErrorCode uint32) {
-	syscall.Syscall(procSetLastError.Addr(), 1, uintptr(dwErrorCode), 0, 0)
+	syscall.SyscallN(procSetLastError.Addr(), uintptr(dwErrorCode))
 	return
 }
 
 func createWindowEx(dwExStyle uint32, lpClassName *uint16, lpWindowName *uint16, dwStyle uint32, x int32, y int32, nWidth int32, nHeight int32, hWndParent windows.HWND, hMenu windows.Handle, hInstance windows.Handle, lpParam unsafe.Pointer) (hWnd windows.HWND, err error) {
-	r0, _, e1 := syscall.Syscall12(procCreateWindowExW.Addr(), 12, uintptr(dwExStyle), uintptr(unsafe.Pointer(lpClassName)), uintptr(unsafe.Pointer(lpWindowName)), uintptr(dwStyle), uintptr(x), uintptr(y), uintptr(nWidth), uintptr(nHeight), uintptr(hWndParent), uintptr(hMenu), uintptr(hInstance), uintptr(lpParam))
+	r0, _, e1 := syscall.SyscallN(procCreateWindowExW.Addr(), uintptr(dwExStyle), uintptr(unsafe.Pointer(lpClassName)), uintptr(unsafe.Pointer(lpWindowName)), uintptr(dwStyle), uintptr(x), uintptr(y), uintptr(nWidth), uintptr(nHeight), uintptr(hWndParent), uintptr(hMenu), uintptr(hInstance), uintptr(lpParam))
 	hWnd = windows.HWND(r0)
 	if hWnd == 0 {
 		err = errnoErr(e1)
@@ -71,13 +71,13 @@ func createWindowEx(dwExStyle uint32, lpClassName *uint16, lpWindowName *uint16,
 }
 
 func defWindowProc(hwnd windows.HWND, msg uint32, wparam uintptr, lparam uintptr) (res uintptr) {
-	r0, _, _ := syscall.Syscall6(procDefWindowProcW.Addr(), 4, uintptr(hwnd), uintptr(msg), uintptr(wparam), uintptr(lparam), 0, 0)
+	r0, _, _ := syscall.SyscallN(procDefWindowProcW.Addr(), uintptr(hwnd), uintptr(msg), uintptr(wparam), uintptr(lparam))
 	res = uintptr(r0)
 	return
 }
 
 func destroyWindow(hwnd windows.HWND) (err error) {
-	r1, _, e1 := syscall.Syscall(procDestroyWindow.Addr(), 1, uintptr(hwnd), 0, 0)
+	r1, _, e1 := syscall.SyscallN(procDestroyWindow.Addr(), uintptr(hwnd))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
@@ -85,24 +85,24 @@ func destroyWindow(hwnd windows.HWND) (err error) {
 }
 
 func dispatchMessage(lpMsg *_MSG) (res uintptr) {
-	r0, _, _ := syscall.Syscall(procDispatchMessageW.Addr(), 1, uintptr(unsafe.Pointer(lpMsg)), 0, 0)
+	r0, _, _ := syscall.SyscallN(procDispatchMessageW.Addr(), uintptr(unsafe.Pointer(lpMsg)))
 	res = uintptr(r0)
 	return
 }
 
 func getMessage(lpMsg *_MSG, hwnd windows.HWND, msgMin uint32, msgMax uint32) (ret int32) {
-	r0, _, _ := syscall.Syscall6(procGetMessageW.Addr(), 4, uintptr(unsafe.Pointer(lpMsg)), uintptr(hwnd), uintptr(msgMin), uintptr(msgMax), 0, 0)
+	r0, _, _ := syscall.SyscallN(procGetMessageW.Addr(), uintptr(unsafe.Pointer(lpMsg)), uintptr(hwnd), uintptr(msgMin), uintptr(msgMax))
 	ret = int32(r0)
 	return
 }
 
 func postQuitMessage(exitCode int32) {
-	syscall.Syscall(procPostQuitMessage.Addr(), 1, uintptr(exitCode), 0, 0)
+	syscall.SyscallN(procPostQuitMessage.Addr(), uintptr(exitCode))
 	return
 }
 
 func registerClassEx(windowClass *_WNDCLASSEX) (atom uint16, err error) {
-	r0, _, e1 := syscall.Syscall(procRegisterClassExW.Addr(), 1, uintptr(unsafe.Pointer(windowClass)), 0, 0)
+	r0, _, e1 := syscall.SyscallN(procRegisterClassExW.Addr(), uintptr(unsafe.Pointer(windowClass)))
 	atom = uint16(r0)
 	if atom == 0 {
 		err = errnoErr(e1)
@@ -111,19 +111,19 @@ func registerClassEx(windowClass *_WNDCLASSEX) (atom uint16, err error) {
 }
 
 func sendMessage(hwnd windows.HWND, msg uint32, wparam uintptr, lparam uintptr) (res uintptr) {
-	r0, _, _ := syscall.Syscall6(procSendMessageW.Addr(), 4, uintptr(hwnd), uintptr(msg), uintptr(wparam), uintptr(lparam), 0, 0)
+	r0, _, _ := syscall.SyscallN(procSendMessageW.Addr(), uintptr(hwnd), uintptr(msg), uintptr(wparam), uintptr(lparam))
 	res = uintptr(r0)
 	return
 }
 
 func translateMessage(lpMsg *_MSG) (res bool) {
-	r0, _, _ := syscall.Syscall(procTranslateMessage.Addr(), 1, uintptr(unsafe.Pointer(lpMsg)), 0, 0)
+	r0, _, _ := syscall.SyscallN(procTranslateMessage.Addr(), uintptr(unsafe.Pointer(lpMsg)))
 	res = r0 != 0
 	return
 }
 
 func registerSessionNotification(hServer windows.Handle, hwnd windows.HWND, flags uint32) (err error) {
-	r1, _, e1 := syscall.Syscall(procWTSRegisterSessionNotificationEx.Addr(), 3, uintptr(hServer), uintptr(hwnd), uintptr(flags))
+	r1, _, e1 := syscall.SyscallN(procWTSRegisterSessionNotificationEx.Addr(), uintptr(hServer), uintptr(hwnd), uintptr(flags))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
@@ -131,7 +131,7 @@ func registerSessionNotification(hServer windows.Handle, hwnd windows.HWND, flag
 }
 
 func unregisterSessionNotification(hServer windows.Handle, hwnd windows.HWND) (err error) {
-	r1, _, e1 := syscall.Syscall(procWTSUnRegisterSessionNotificationEx.Addr(), 2, uintptr(hServer), uintptr(hwnd), 0)
+	r1, _, e1 := syscall.SyscallN(procWTSUnRegisterSessionNotificationEx.Addr(), uintptr(hServer), uintptr(hwnd))
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}

@@ -83,6 +83,17 @@ func (b *Bool) Scan(src any) error {
 	}
 }
 
+// Normalized returns the normalized form of b, mapping "unset" to ""
+// and leaving other values unchanged.
+func (b Bool) Normalized() Bool {
+	switch b {
+	case ExplicitlyUnset:
+		return Empty
+	default:
+		return b
+	}
+}
+
 // EqualBool reports whether b is equal to v.
 // If b is empty or not a valid bool, it reports false.
 func (b Bool) EqualBool(v bool) bool {

@@ -23,6 +23,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -91,9 +92,16 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 			{Name: "POD_UID", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "metadata.uid"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "TS_KUBE_SECRET", Value: "$(POD_NAME)"},
 			{Name: "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR", Value: "/etc/tsconfig/$(POD_NAME)"},
+			{Name: "TS_DEBUG_ACME_FORCE_RENEWAL", Value: "true"},
 		},
 		SecurityContext: &corev1.SecurityContext{
 			Privileged: ptr.To(true),
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1m"),
+				corev1.ResourceMemory: resource.MustParse("1Mi"),
+			},
 		},
 		ImagePullPolicy: "Always",
 	}
@@ -280,6 +288,7 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 			{Name: "POD_UID", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "metadata.uid"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "TS_KUBE_SECRET", Value: "$(POD_NAME)"},
 			{Name: "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR", Value: "/etc/tsconfig/$(POD_NAME)"},
+			{Name: "TS_DEBUG_ACME_FORCE_RENEWAL", Value: "true"},
 			{Name: "TS_SERVE_CONFIG", Value: "/etc/tailscaled/$(POD_NAME)/serve-config"},
 			{Name: "TS_INTERNAL_APP", Value: opts.app},
 		},
@@ -287,6 +296,12 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "tailscaledconfig-0", ReadOnly: true, MountPath: path.Join("/etc/tsconfig", opts.secretName)},
 			{Name: "serve-config-0", ReadOnly: true, MountPath: path.Join("/etc/tailscaled", opts.secretName)},
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1m"),
+				corev1.ResourceMemory: resource.MustParse("1Mi"),
+			},
 		},
 	}
 	if opts.enableMetrics {

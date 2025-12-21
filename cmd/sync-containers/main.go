@@ -65,9 +65,9 @@ func main() {
 	}
 
 	add, remove := diffTags(stags, dtags)
-	if l := len(add); l > 0 {
+	if ln := len(add); ln > 0 {
 		log.Printf("%d tags to push: %s", len(add), strings.Join(add, ", "))
-		if *max > 0 && l > *max {
+		if *max > 0 && ln > *max {
 			log.Printf("Limiting sync to %d tags", *max)
 			add = add[:*max]
 		}

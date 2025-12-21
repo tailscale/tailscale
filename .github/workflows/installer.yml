@@ -58,6 +58,14 @@ jobs:
           # Check a few images with wget rather than curl.
           - { image: "debian:oldstable-slim", deps: "wget" }
           - { image: "debian:sid-slim", deps: "wget" }
+          - { image: "debian:stable-slim", deps: "curl" }
+          - { image: "ubuntu:24.04", deps: "curl" }
+          - { image: "fedora:latest", deps: "curl" }
+          # Test TAILSCALE_VERSION pinning on a subset of distros.
+          # Skip Alpine as community repos don't reliably keep old versions.
+          - { image: "debian:stable-slim", deps: "curl", version: "1.80.0" }
+          - { image: "ubuntu:24.04", deps: "curl", version: "1.80.0" }
+          - { image: "fedora:latest", deps: "curl", version: "1.80.0" }
     runs-on: ubuntu-latest
     container:
       image: ${{ matrix.image }}
@@ -94,12 +102,18 @@ jobs:
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
     - name: run installer
       run: scripts/installer.sh
+      env:
+        TAILSCALE_VERSION: ${{ matrix.version }}
       # Package installation can fail in docker because systemd is not running
       # as PID 1, so ignore errors at this step. The real check is the
       # `tailscale --version` command below.
       continue-on-error: true
     - name: check tailscale version
-      run: tailscale --version
+      run: |
+        tailscale --version
+        if [ -n "${{ matrix.version }}" ]; then
+          tailscale --version | grep -q "^${{ matrix.version }}" || { echo "Version mismatch!"; exit 1; }
+        fi
   notify-slack:
     needs: test
     runs-on: ubuntu-latest

@@ -21,6 +21,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -33,6 +34,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/prompt"
 	"tailscale.com/util/set"
@@ -116,7 +118,7 @@ func (u *acceptAppCapsFlag) Set(s string) error {
 	for _, appCap := range appCaps {
 		appCap = strings.TrimSpace(appCap)
 		if !validAppCap.MatchString(appCap) {
-			return fmt.Errorf("%q does not match the form {domain}/{name}, where domain must be a fully qualified domain name", s)
+			return fmt.Errorf("%q does not match the form {domain}/{name}, where domain must be a fully qualified domain name", appCap)
 		}
 		*u.Value = append(*u.Value, tailcfg.PeerCapability(appCap))
 	}
@@ -136,6 +138,7 @@ var serveHelpCommon = strings.TrimSpace(`
 <target> can be a file, directory, text, or most commonly the location to a service running on the
 local machine. The location to the location service can be expressed as a port number (e.g., 3000),
 a partial URL (e.g., localhost:3000), or a full URL including a path (e.g., http://localhost:3000/foo).
+On Unix-like systems, you can also specify a Unix domain socket (e.g., unix:/tmp/myservice.sock).
 
 EXAMPLES
   - Expose an HTTP server running at 127.0.0.1:3000 in the foreground:
@@ -146,6 +149,9 @@ EXAMPLES
 
   - Expose an HTTPS server with invalid or self-signed certificates at https://localhost:8443
     $ tailscale %[1]s https+insecure://localhost:8443
+
+  - Expose a service listening on a Unix socket (Linux/macOS/BSD only):
+    $ tailscale %[1]s unix:/var/run/myservice.sock
 
 For more examples and use cases visit our docs site https://tailscale.com/kb/1247/funnel-serve-use-cases
 `)
@@ -236,10 +242,11 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			if subcmd == serve {
 				fs.UintVar(&e.http, "http", 0, "Expose an HTTP server at the specified port")
 				fs.Var(&acceptAppCapsFlag{Value: &e.acceptAppCaps}, "accept-app-caps", "App capabilities to forward to the server (specify multiple capabilities with a comma-separated list)")
+				fs.Var(&serviceNameFlag{Value: &e.service}, "service", "Serve for a service with distinct virtual IP instead on node itself.")
 			}
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
-			fs.Var(&serviceNameFlag{Value: &e.service}, "service", "Serve for a service with distinct virtual IP instead on node itself.")
+			fs.UintVar(&e.proxyProtocol, "proxy-protocol", 0, "PROXY protocol version (1 or 2) for TCP forwarding")
 			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
 			fs.BoolVar(&e.tun, "tun", false, "Forward all traffic to the local machine (default false), only supported for services. Refer to docs for more information.")
 		}),
@@ -292,7 +299,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 				Name:       "get-config",
 				ShortUsage: fmt.Sprintf("tailscale %s get-config <file> [--service=<service>] [--all]", info.Name),
 				ShortHelp:  "Get service configuration to save to a file",
-				LongHelp: hidden + "Get the configuration for services that this node is currently hosting in a\n" +
+				LongHelp: "Get the configuration for services that this node is currently hosting in a\n" +
 					"format that can later be provided to set-config. This can be used to declaratively set\n" +
 					"configuration for a service host.",
 				Exec: e.runServeGetConfig,
@@ -305,10 +312,11 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 				Name:       "set-config",
 				ShortUsage: fmt.Sprintf("tailscale %s set-config <file> [--service=<service>] [--all]", info.Name),
 				ShortHelp:  "Define service configuration from a file",
-				LongHelp: hidden + "Read the provided configuration file and use it to declaratively set the configuration\n" +
+				LongHelp: "Read the provided configuration file and use it to declaratively set the configuration\n" +
 					"for either a single service, or for all services that this node is hosting. If --service is specified,\n" +
 					"all endpoint handlers for that service are overwritten. If --all is specified, all endpoint handlers for\n" +
-					"all services are overwritten.",
+					"all services are overwritten.\n\n" +
+					"For information on the file format, see tailscale.com/kb/1589/tailscale-services-configuration-file",
 				Exec: e.runServeSetConfig,
 				FlagSet: e.newFlags("serve-set-config", func(fs *flag.FlagSet) {
 					fs.BoolVar(&e.allServices, "all", false, "apply config to all services")
@@ -412,6 +420,14 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			return errHelpFunc(subcmd)
 		}
 
+		if (srvType == serveTypeHTTP || srvType == serveTypeHTTPS) && e.proxyProtocol != 0 {
+			return fmt.Errorf("PROXY protocol is only supported for TCP forwarding, not HTTP/HTTPS")
+		}
+		// Validate PROXY protocol version
+		if e.proxyProtocol != 0 && e.proxyProtocol != 1 && e.proxyProtocol != 2 {
+			return fmt.Errorf("invalid PROXY protocol version %d; must be 1 or 2", e.proxyProtocol)
+		}
+
 		sc, err := e.lc.GetServeConfig(ctx)
 		if err != nil {
 			return fmt.Errorf("error getting serve config: %w", err)
@@ -466,15 +482,10 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 		wantFg := !e.bg.Value && !turnOff
 		if wantFg {
-			// validate the config before creating a WatchIPNBus session
-			if err := e.validateConfig(parentSC, srvPort, srvType, svcName); err != nil {
-				return err
-			}
-
 			// if foreground mode, create a WatchIPNBus session
 			// and use the nested config for all following operations
 			// TODO(marwan-at-work): nested-config validations should happen here or previous to this point.
-			watcher, err = e.lc.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyNoPrivateKeys)
+			watcher, err = e.lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
 			if err != nil {
 				return err
 			}
@@ -496,9 +507,6 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			// only unset serve when trying to unset with type and port flags.
 			err = e.unsetServe(sc, dnsName, srvType, srvPort, mount, magicDNSSuffix)
 		} else {
-			if err := e.validateConfig(parentSC, srvPort, srvType, svcName); err != nil {
-				return err
-			}
 			if forService {
 				e.addServiceToPrefs(ctx, svcName)
 			}
@@ -506,7 +514,10 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			if len(args) > 0 {
 				target = args[0]
 			}
-			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix, e.acceptAppCaps)
+			if err := e.shouldWarnRemoteDestCompatibility(ctx, target); err != nil {
+				return err
+			}
+			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix, e.acceptAppCaps, int(e.proxyProtocol))
 			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
 		}
 		if err != nil {
@@ -827,7 +838,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	for name, details := range scf.Services {
 		for ppr, ep := range details.Endpoints {
 			if ep.Protocol == conffile.ProtoTUN {
-				err := e.setServe(sc, name.String(), serveTypeTUN, 0, "", "", false, magicDNSSuffix, nil)
+				err := e.setServe(sc, name.String(), serveTypeTUN, 0, "", "", false, magicDNSSuffix, nil, 0 /* proxy protocol */)
 				if err != nil {
 					return err
 				}
@@ -849,7 +860,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 					portStr := fmt.Sprint(destPort)
 					target = fmt.Sprintf("%s://%s", ep.Protocol, net.JoinHostPort(ep.Destination, portStr))
 				}
-				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix, nil)
+				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix, nil, 0 /* proxy protocol */)
 				if err != nil {
 					return fmt.Errorf("service %q: %w", name, err)
 				}
@@ -892,67 +903,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	return e.lc.SetServeConfig(ctx, sc)
 }
 
-const backgroundExistsMsg = "background configuration already exists, use `tailscale %s --%s=%d off` to remove the existing configuration"
-
-// validateConfig checks if the serve config is valid to serve the type wanted on the port.
-// dnsName is a FQDN or a serviceName (with `svc:` prefix).
-func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe serveType, svcName tailcfg.ServiceName) error {
-	var tcpHandlerForPort *ipn.TCPPortHandler
-	if svcName != noService {
-		svc := sc.Services[svcName]
-		if svc == nil {
-			return nil
-		}
-		if wantServe == serveTypeTUN && (svc.TCP != nil || svc.Web != nil) {
-			return errors.New("service already has a TCP or Web handler, cannot serve in TUN mode")
-		}
-		if svc.Tun && wantServe != serveTypeTUN {
-			return errors.New("service is already being served in TUN mode")
-		}
-		if svc.TCP[port] == nil {
-			return nil
-		}
-		tcpHandlerForPort = svc.TCP[port]
-	} else {
-		sc, isFg := sc.FindConfig(port)
-		if sc == nil {
-			return nil
-		}
-		if isFg {
-			return errors.New("foreground already exists under this port")
-		}
-		if !e.bg.Value {
-			return fmt.Errorf(backgroundExistsMsg, infoMap[e.subcmd].Name, wantServe.String(), port)
-		}
-		tcpHandlerForPort = sc.TCP[port]
-	}
-	existingServe := serveFromPortHandler(tcpHandlerForPort)
-	if wantServe != existingServe {
-		target := svcName
-		if target == noService {
-			target = "machine"
-		}
-		return fmt.Errorf("want to serve %q but port is already serving %q for %q", wantServe, existingServe, target)
-	}
-	return nil
-}
-
-func serveFromPortHandler(tcp *ipn.TCPPortHandler) serveType {
-	switch {
-	case tcp.HTTP:
-		return serveTypeHTTP
-	case tcp.HTTPS:
-		return serveTypeHTTPS
-	case tcp.TerminateTLS != "":
-		return serveTypeTLSTerminatedTCP
-	case tcp.TCPForward != "":
-		return serveTypeTCP
-	default:
-		return -1
-	}
-}
-
-func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []tailcfg.PeerCapability) error {
+func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []tailcfg.PeerCapability, proxyProtocol int) error {
 	// update serve config based on the type
 	switch srvType {
 	case serveTypeHTTPS, serveTypeHTTP:
@@ -965,7 +916,7 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveTy
 		if e.setPath != "" {
 			return fmt.Errorf("cannot mount a path for TCP serve")
 		}
-		err := e.applyTCPServe(sc, dnsName, srvType, srvPort, target)
+		err := e.applyTCPServe(sc, dnsName, srvType, srvPort, target, proxyProtocol)
 		if err != nil {
 			return fmt.Errorf("failed to apply TCP serve: %w", err)
 		}
@@ -989,16 +940,17 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveTy
 }
 
 var (
-	msgFunnelAvailable        = "Available on the internet:"
-	msgServeAvailable         = "Available within your tailnet:"
-	msgServiceWaitingApproval = "This machine is configured as a service proxy for %s, but approval from an admin is required. Once approved, it will be available in your Tailnet as:"
-	msgRunningInBackground    = "%s started and running in the background."
-	msgRunningTunService      = "IPv4 and IPv6 traffic to %s is being routed to your operating system."
-	msgDisableProxy           = "To disable the proxy, run: tailscale %s --%s=%d off"
-	msgDisableServiceProxy    = "To disable the proxy, run: tailscale serve --service=%s --%s=%d off"
-	msgDisableServiceTun      = "To disable the service in TUN mode, run: tailscale serve --service=%s --tun off"
-	msgDisableService         = "To remove config for the service, run: tailscale serve clear %s"
-	msgToExit                 = "Press Ctrl+C to exit."
+	msgFunnelAvailable             = "Available on the internet:"
+	msgServeAvailable              = "Available within your tailnet:"
+	msgServiceWaitingApproval      = "This machine is configured as a service proxy for %s, but approval from an admin is required. Once approved, it will be available in your Tailnet as:"
+	msgRunningInBackground         = "%s started and running in the background."
+	msgRunningTunService           = "IPv4 and IPv6 traffic to %s is being routed to your operating system."
+	msgDisableProxy                = "To disable the proxy, run: tailscale %s --%s=%d off"
+	msgDisableServiceProxy         = "To disable the proxy, run: tailscale serve --service=%s --%s=%d off"
+	msgDisableServiceTun           = "To disable the service in TUN mode, run: tailscale serve --service=%s --tun off"
+	msgDisableService              = "To remove config for the service, run: tailscale serve clear %s"
+	msgWarnRemoteDestCompatibility = "Warning: %s doesn't support connecting to remote destinations from non-default route, see tailscale.com/kb/1552/tailscale-services for detail."
+	msgToExit                      = "Press Ctrl+C to exit."
 )
 
 // messageForPort returns a message for the given port based on the
@@ -1091,6 +1043,9 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		if tcpHandler.TerminateTLS != "" {
 			tlsStatus = "TLS terminated"
 		}
+		if ver := tcpHandler.ProxyProtocol; ver != 0 {
+			tlsStatus = fmt.Sprintf("%s, PROXY protocol v%d", tlsStatus, ver)
+		}
 
 		output.WriteString(fmt.Sprintf("|-- tcp://%s:%d (%s)\n", host, srvPort, tlsStatus))
 		for _, a := range ips {
@@ -1119,6 +1074,77 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	}
 
 	return output.String()
+}
+
+// isRemote reports whether the given destination from serve config
+// is a remote destination.
+func isRemote(target string) bool {
+	// target being a port number means it's localhost
+	if _, err := strconv.ParseUint(target, 10, 16); err == nil {
+		return false
+	}
+
+	// prepend tmp:// if no scheme is present just to help parsing
+	if !strings.Contains(target, "://") {
+		target = "tmp://" + target
+	}
+
+	// make sure we can parse the target, wether it's a full URL or just a host:port
+	u, err := url.ParseRequestURI(target)
+	if err != nil {
+		// If we can't parse the target, it doesn't matter if it's remote or not
+		return false
+	}
+	validHN := dnsname.ValidHostname(u.Hostname()) == nil
+	validIP := net.ParseIP(u.Hostname()) != nil
+	if !validHN && !validIP {
+		return false
+	}
+	if u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1" {
+		return false
+	}
+	return true
+}
+
+// shouldWarnRemoteDestCompatibility reports whether we should warn the user
+// that their current OS/environment may not be compatible with
+// service's proxy destination.
+func (e *serveEnv) shouldWarnRemoteDestCompatibility(ctx context.Context, target string) error {
+	// no target means nothing to check
+	if target == "" {
+		return nil
+	}
+
+	if filepath.IsAbs(target) || strings.HasPrefix(target, "text:") {
+		// local path or text target, nothing to check
+		return nil
+	}
+
+	// only check for remote destinations
+	if !isRemote(target) {
+		return nil
+	}
+
+	// Check if running as Mac extension and warn
+	if version.IsMacAppStore() || version.IsMacSysExt() {
+		return fmt.Errorf(msgWarnRemoteDestCompatibility, "the MacOS extension")
+	}
+
+	// Check for linux, if it's running with TS_FORCE_LINUX_BIND_TO_DEVICE=true
+	// and tailscale bypass mark is not working. If any of these conditions are true, and the dest is
+	// a remote destination, return true.
+	if runtime.GOOS == "linux" {
+		SOMarkInUse, err := e.lc.CheckSOMarkInUse(ctx)
+		if err != nil {
+			log.Printf("error checking SO mark in use: %v", err)
+			return nil
+		}
+		if !SOMarkInUse {
+			return fmt.Errorf(msgWarnRemoteDestCompatibility, "the Linux tailscaled without SO_MARK")
+		}
+	}
+
+	return nil
 }
 
 func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target, mds string, caps []tailcfg.PeerCapability) error {
@@ -1150,7 +1176,8 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 		}
 		h.Path = target
 	default:
-		t, err := ipn.ExpandProxyTargetValue(target, []string{"http", "https", "https+insecure"}, "http")
+		// Include unix in supported schemes for HTTP(S) serve
+		t, err := ipn.ExpandProxyTargetValue(target, []string{"http", "https", "https+insecure", "unix"}, "http")
 		if err != nil {
 			return err
 		}
@@ -1169,7 +1196,7 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 	return nil
 }
 
-func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType serveType, srcPort uint16, target string) error {
+func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType serveType, srcPort uint16, target string, proxyProtocol int) error {
 	var terminateTLS bool
 	switch srcType {
 	case serveTypeTCP:
@@ -1179,6 +1206,8 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 	default:
 		return fmt.Errorf("invalid TCP target %q", target)
 	}
+
+	svcName := tailcfg.AsServiceName(dnsName)
 
 	targetURL, err := ipn.ExpandProxyTargetValue(target, []string{"tcp"}, "tcp")
 	if err != nil {
@@ -1191,13 +1220,11 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 	}
 
 	// TODO: needs to account for multiple configs from foreground mode
-	svcName := tailcfg.AsServiceName(dnsName)
 	if sc.IsServingWeb(srcPort, svcName) {
 		return fmt.Errorf("cannot serve TCP; already serving web on %d for %s", srcPort, dnsName)
 	}
 
-	sc.SetTCPForwarding(srcPort, dstURL.Host, terminateTLS, dnsName)
-
+	sc.SetTCPForwarding(srcPort, dstURL.Host, terminateTLS, proxyProtocol, dnsName)
 	return nil
 }
 

@@ -9,10 +9,10 @@ import (
 )
 
 func TestListener(t *testing.T) {
-	l := Listen("srv.local")
-	defer l.Close()
+	ln := Listen("srv.local")
+	defer ln.Close()
 	go func() {
-		c, err := l.Accept()
+		c, err := ln.Accept()
 		if err != nil {
 			t.Error(err)
 			return
@@ -20,11 +20,11 @@ func TestListener(t *testing.T) {
 		defer c.Close()
 	}()
 
-	if c, err := l.Dial(context.Background(), "tcp", "invalid"); err == nil {
+	if c, err := ln.Dial(context.Background(), "tcp", "invalid"); err == nil {
 		c.Close()
 		t.Fatalf("dial to invalid address succeeded")
 	}
-	c, err := l.Dial(context.Background(), "tcp", "srv.local")
+	c, err := ln.Dial(context.Background(), "tcp", "srv.local")
 	if err != nil {
 		t.Fatalf("dial failed: %v", err)
 		return

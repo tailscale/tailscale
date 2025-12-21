@@ -7,6 +7,7 @@ package localapi
 import (
 	"bytes"
 	"cmp"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +35,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
@@ -71,20 +73,21 @@ var handler = map[string]LocalAPIHandler{
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
-	"check-prefs":       (*Handler).serveCheckPrefs,
-	"derpmap":           (*Handler).serveDERPMap,
-	"goroutines":        (*Handler).serveGoroutines,
-	"login-interactive": (*Handler).serveLoginInteractive,
-	"logout":            (*Handler).serveLogout,
-	"ping":              (*Handler).servePing,
-	"prefs":             (*Handler).servePrefs,
-	"reload-config":     (*Handler).reloadConfig,
-	"reset-auth":        (*Handler).serveResetAuth,
-	"set-expiry-sooner": (*Handler).serveSetExpirySooner,
-	"shutdown":          (*Handler).serveShutdown,
-	"start":             (*Handler).serveStart,
-	"status":            (*Handler).serveStatus,
-	"whois":             (*Handler).serveWhoIs,
+	"check-prefs":          (*Handler).serveCheckPrefs,
+	"check-so-mark-in-use": (*Handler).serveCheckSOMarkInUse,
+	"derpmap":              (*Handler).serveDERPMap,
+	"goroutines":           (*Handler).serveGoroutines,
+	"login-interactive":    (*Handler).serveLoginInteractive,
+	"logout":               (*Handler).serveLogout,
+	"ping":                 (*Handler).servePing,
+	"prefs":                (*Handler).servePrefs,
+	"reload-config":        (*Handler).reloadConfig,
+	"reset-auth":           (*Handler).serveResetAuth,
+	"set-expiry-sooner":    (*Handler).serveSetExpirySooner,
+	"shutdown":             (*Handler).serveShutdown,
+	"start":                (*Handler).serveStart,
+	"status":               (*Handler).serveStatus,
+	"whois":                (*Handler).serveWhoIs,
 }
 
 func init() {
@@ -257,13 +260,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "auth required", http.StatusUnauthorized)
 			return
 		}
-		if pass != h.RequiredPassword {
+		if subtle.ConstantTimeCompare([]byte(pass), []byte(h.RequiredPassword)) == 0 {
 			metricInvalidRequests.Add(1)
 			http.Error(w, "bad password", http.StatusForbidden)
 			return
 		}
 	}
-	if fn, ok := handlerForPath(r.URL.Path); ok {
+	if fn, route, ok := handlerForPath(r.URL.Path); ok {
+		h.logRequest(r.Method, route)
 		fn(h, w, r)
 	} else {
 		http.NotFound(w, r)
@@ -299,9 +303,9 @@ func (h *Handler) validHost(hostname string) bool {
 
 // handlerForPath returns the LocalAPI handler for the provided Request.URI.Path.
 // (the path doesn't include any query parameters)
-func handlerForPath(urlPath string) (h LocalAPIHandler, ok bool) {
+func handlerForPath(urlPath string) (h LocalAPIHandler, route string, ok bool) {
 	if urlPath == "/" {
-		return (*Handler).serveLocalAPIRoot, true
+		return (*Handler).serveLocalAPIRoot, "/", true
 	}
 	suff, ok := strings.CutPrefix(urlPath, "/localapi/v0/")
 	if !ok {
@@ -309,22 +313,31 @@ func handlerForPath(urlPath string) (h LocalAPIHandler, ok bool) {
 		// to people that they're not necessarily stable APIs. In practice we'll
 		// probably need to keep them pretty stable anyway, but for now treat
 		// them as an internal implementation detail.
-		return nil, false
+		return nil, "", false
 	}
 	if fn, ok := handler[suff]; ok {
 		// Here we match exact handler suffixes like "status" or ones with a
 		// slash already in their name, like "tka/status".
-		return fn, true
+		return fn, "/localapi/v0/" + suff, true
 	}
 	// Otherwise, it might be a prefix match like "files/*" which we look up
 	// by the prefix including first trailing slash.
 	if i := strings.IndexByte(suff, '/'); i != -1 {
 		suff = suff[:i+1]
 		if fn, ok := handler[suff]; ok {
-			return fn, true
+			return fn, "/localapi/v0/" + suff, true
 		}
 	}
-	return nil, false
+	return nil, "", false
+}
+
+func (h *Handler) logRequest(method, route string) {
+	switch method {
+	case httpm.GET, httpm.HEAD, httpm.OPTIONS:
+		// don't log safe methods
+	default:
+		h.Logf("localapi: [%s] %s", method, route)
+	}
 }
 
 func (*Handler) serveLocalAPIRoot(w http.ResponseWriter, r *http.Request) {
@@ -749,6 +762,23 @@ func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// serveCheckSOMarkInUse reports whether SO_MARK is in use on the linux while
+// running without TUN. For any other OS, it reports false.
+func (h *Handler) serveCheckSOMarkInUse(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "SO_MARK check access denied", http.StatusForbidden)
+		return
+	}
+	usingSOMark := netns.UseSocketMark()
+	usingUserspaceNetworking := h.b.Sys().IsNetstack()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		UseSOMark bool
+	}{
+		UseSOMark: usingSOMark || usingUserspaceNetworking,
+	})
+}
+
 func (h *Handler) serveCheckReversePathFiltering(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitRead {
 		http.Error(w, "reverse path filtering check access denied", http.StatusForbidden)
@@ -876,14 +906,6 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 		}
 		mask = ipn.NotifyWatchOpt(v)
 	}
-	// Users with only read access must request private key filtering. If they
-	// don't filter out private keys, require write access.
-	if (mask & ipn.NotifyNoPrivateKeys) == 0 {
-		if !h.PermitWrite {
-			http.Error(w, "watch IPN bus access denied, must set ipn.NotifyNoPrivateKeys when not running as admin/root or operator", http.StatusForbidden)
-			return
-		}
-	}
 
 	w.Header().Set("Content-Type", "application/json")
 	ctx := r.Context()
@@ -908,7 +930,10 @@ func (h *Handler) serveLoginInteractive(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "want POST", http.StatusBadRequest)
 		return
 	}
-	h.b.StartLoginInteractiveAs(r.Context(), h.Actor)
+	if err := h.b.StartLoginInteractiveAs(r.Context(), h.Actor); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 	return
 }
@@ -925,6 +950,11 @@ func (h *Handler) serveStart(w http.ResponseWriter, r *http.Request) {
 	var o ipn.Options
 	if err := json.NewDecoder(r.Body).Decode(&o); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if h.b.HealthTracker().IsUnhealthy(ipn.StateStoreHealth) {
+		http.Error(w, "cannot start backend when state store is unhealthy", http.StatusInternalServerError)
 		return
 	}
 	err := h.b.Start(o)
@@ -1253,13 +1283,8 @@ func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
 		return
 	}
-	type clientMetricJSON struct {
-		Name  string `json:"name"`
-		Type  string `json:"type"`  // one of "counter" or "gauge"
-		Value int    `json:"value"` // amount to increment metric by
-	}
 
-	var clientMetrics []clientMetricJSON
+	var clientMetrics []clientmetric.MetricUpdate
 	if err := json.NewDecoder(r.Body).Decode(&clientMetrics); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
@@ -1269,14 +1294,12 @@ func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Reques
 	defer metricsMu.Unlock()
 
 	for _, m := range clientMetrics {
-		if metric, ok := metrics[m.Name]; ok {
-			metric.Add(int64(m.Value))
-		} else {
+		metric, ok := metrics[m.Name]
+		if !ok {
 			if clientmetric.HasPublished(m.Name) {
 				http.Error(w, "Already have a metric named "+m.Name, http.StatusBadRequest)
 				return
 			}
-			var metric *clientmetric.Metric
 			switch m.Type {
 			case "counter":
 				metric = clientmetric.NewCounter(m.Name)
@@ -1287,7 +1310,15 @@ func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Reques
 				return
 			}
 			metrics[m.Name] = metric
+		}
+		switch m.Op {
+		case "add", "":
 			metric.Add(int64(m.Value))
+		case "set":
+			metric.Set(int64(m.Value))
+		default:
+			http.Error(w, "Unknown metric op "+m.Op, http.StatusBadRequest)
+			return
 		}
 	}
 

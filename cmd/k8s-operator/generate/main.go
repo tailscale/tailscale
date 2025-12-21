@@ -69,7 +69,7 @@ func main() {
 	}()
 	log.Print("Templating Helm chart contents")
 	helmTmplCmd := exec.Command("./tool/helm", "template", "operator", "./cmd/k8s-operator/deploy/chart",
-		"--namespace=tailscale")
+		"--namespace=tailscale", "--set=oauth.clientSecret=''")
 	helmTmplCmd.Dir = repoRoot
 	var out bytes.Buffer
 	helmTmplCmd.Stdout = &out
@@ -144,7 +144,7 @@ func generate(baseDir string) error {
 		if _, err := file.Write([]byte(helmConditionalEnd)); err != nil {
 			return fmt.Errorf("error writing helm if-statement end: %w", err)
 		}
-		return nil
+		return file.Close()
 	}
 	for _, crd := range []struct {
 		crdPath, templatePath string

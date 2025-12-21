@@ -69,7 +69,8 @@ const (
 	AnnotationProxyGroup = "tailscale.com/proxy-group"
 
 	// Annotations settable by users on ingresses.
-	AnnotationFunnel = "tailscale.com/funnel"
+	AnnotationFunnel       = "tailscale.com/funnel"
+	AnnotationHTTPRedirect = "tailscale.com/http-redirect"
 
 	// If set to true, set up iptables/nftables rules in the proxy forward
 	// cluster traffic to the tailnet IP of that proxy. This can only be set
@@ -670,6 +671,14 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
 			Value: "/etc/tsconfig/$(POD_NAME)",
 		},
+		corev1.EnvVar{
+			// This ensures that cert renewals can succeed if ACME account
+			// keys have changed since issuance. We cannot guarantee or
+			// validate that the account key has not changed, see
+			// https://github.com/tailscale/tailscale/issues/18251
+			Name:  "TS_DEBUG_ACME_FORCE_RENEWAL",
+			Value: "true",
+		},
 	)
 
 	if sts.ForwardClusterTrafficViaL7IngressProxy {
@@ -921,7 +930,17 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 		if overlay.SecurityContext != nil {
 			base.SecurityContext = overlay.SecurityContext
 		}
-		base.Resources = overlay.Resources
+
+		if len(overlay.Resources.Requests) > 0 {
+			base.Resources.Requests = overlay.Resources.Requests
+		}
+		if len(overlay.Resources.Limits) > 0 {
+			base.Resources.Limits = overlay.Resources.Limits
+		}
+		if len(overlay.Resources.Claims) > 0 {
+			base.Resources.Limits = overlay.Resources.Limits
+		}
+
 		for _, e := range overlay.Env {
 			// Env vars configured via ProxyClass might override env
 			// vars that have been specified by the operator, i.e

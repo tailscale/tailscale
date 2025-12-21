@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -20,9 +21,11 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tstest"
+	"tailscale.com/types/ptr"
 )
 
 const (
@@ -35,6 +38,9 @@ func TestRecorder(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
 			Finalizers: []string{"tailscale.com/finalizer"},
+		},
+		Spec: tsapi.RecorderSpec{
+			Replicas: ptr.To[int32](3),
 		},
 	}
 
@@ -52,7 +58,7 @@ func TestRecorder(t *testing.T) {
 		Client:      fc,
 		tsClient:    tsClient,
 		recorder:    fr,
-		l:           zl.Sugar(),
+		log:         zl.Sugar(),
 		clock:       cl,
 		loginServer: tsLoginServer,
 	}
@@ -75,6 +81,15 @@ func TestRecorder(t *testing.T) {
 		tsr.Spec.StatefulSet.Pod.ServiceAccount.Annotations = map[string]string{
 			"invalid space characters": "test",
 		}
+		mustUpdate(t, fc, "", "test", func(t *tsapi.Recorder) {
+			t.Spec = tsr.Spec
+		})
+		expectReconciled(t, reconciler, "", tsr.Name)
+
+		expectedEvent = "Warning RecorderInvalid Recorder is invalid: must use S3 storage when using multiple replicas to ensure recordings are accessible"
+		expectEvents(t, fr, []string{expectedEvent})
+
+		tsr.Spec.Storage.S3 = &tsapi.S3{}
 		mustUpdate(t, fc, "", "test", func(t *tsapi.Recorder) {
 			t.Spec = tsr.Spec
 		})
@@ -180,32 +195,46 @@ func TestRecorder(t *testing.T) {
 	})
 
 	t.Run("populate_node_info_in_state_secret_and_see_it_appear_in_status", func(t *testing.T) {
-		bytes, err := json.Marshal(map[string]any{
-			"Config": map[string]any{
-				"NodeID": "nodeid-123",
-				"UserProfile": map[string]any{
-					"LoginName": "test-0.example.ts.net",
-				},
-			},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		const key = "profile-abc"
-		mustUpdate(t, fc, tsNamespace, "test-0", func(s *corev1.Secret) {
-			s.Data = map[string][]byte{
-				currentProfileKey: []byte(key),
-				key:               bytes,
+		for replica := range *tsr.Spec.Replicas {
+			bytes, err := json.Marshal(map[string]any{
+				"Config": map[string]any{
+					"NodeID": fmt.Sprintf("node-%d", replica),
+					"UserProfile": map[string]any{
+						"LoginName": fmt.Sprintf("test-%d.example.ts.net", replica),
+					},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
 			}
-		})
+
+			name := fmt.Sprintf("%s-%d", "test", replica)
+			mustUpdate(t, fc, tsNamespace, name, func(s *corev1.Secret) {
+				s.Data = map[string][]byte{
+					currentProfileKey: []byte(key),
+					key:               bytes,
+				}
+			})
+		}
 
 		expectReconciled(t, reconciler, "", tsr.Name)
 		tsr.Status.Devices = []tsapi.RecorderTailnetDevice{
 			{
-				Hostname:   "hostname-nodeid-123",
+				Hostname:   "hostname-node-0",
 				TailnetIPs: []string{"1.2.3.4", "::1"},
 				URL:        "https://test-0.example.ts.net",
+			},
+			{
+				Hostname:   "hostname-node-1",
+				TailnetIPs: []string{"1.2.3.4", "::1"},
+				URL:        "https://test-1.example.ts.net",
+			},
+			{
+				Hostname:   "hostname-node-2",
+				TailnetIPs: []string{"1.2.3.4", "::1"},
+				URL:        "https://test-2.example.ts.net",
 			},
 		}
 		expectEqual(t, fc, tsr)
@@ -222,7 +251,7 @@ func TestRecorder(t *testing.T) {
 		if expected := 0; reconciler.recorders.Len() != expected {
 			t.Fatalf("expected %d recorders, got %d", expected, reconciler.recorders.Len())
 		}
-		if diff := cmp.Diff(tsClient.deleted, []string{"nodeid-123"}); diff != "" {
+		if diff := cmp.Diff(tsClient.deleted, []string{"node-0", "node-1", "node-2"}); diff != "" {
 			t.Fatalf("unexpected deleted devices (-got +want):\n%s", diff)
 		}
 		// The fake client does not clean up objects whose owner has been
@@ -233,26 +262,38 @@ func TestRecorder(t *testing.T) {
 func expectRecorderResources(t *testing.T, fc client.WithWatch, tsr *tsapi.Recorder, shouldExist bool) {
 	t.Helper()
 
-	auth := tsrAuthSecret(tsr, tsNamespace, "secret-authkey")
-	state := tsrStateSecret(tsr, tsNamespace)
+	var replicas int32 = 1
+	if tsr.Spec.Replicas != nil {
+		replicas = *tsr.Spec.Replicas
+	}
+
 	role := tsrRole(tsr, tsNamespace)
 	roleBinding := tsrRoleBinding(tsr, tsNamespace)
 	serviceAccount := tsrServiceAccount(tsr, tsNamespace)
 	statefulSet := tsrStatefulSet(tsr, tsNamespace, tsLoginServer)
 
 	if shouldExist {
-		expectEqual(t, fc, auth)
-		expectEqual(t, fc, state)
 		expectEqual(t, fc, role)
 		expectEqual(t, fc, roleBinding)
 		expectEqual(t, fc, serviceAccount)
 		expectEqual(t, fc, statefulSet, removeResourceReqs)
 	} else {
-		expectMissing[corev1.Secret](t, fc, auth.Namespace, auth.Name)
-		expectMissing[corev1.Secret](t, fc, state.Namespace, state.Name)
 		expectMissing[rbacv1.Role](t, fc, role.Namespace, role.Name)
 		expectMissing[rbacv1.RoleBinding](t, fc, roleBinding.Namespace, roleBinding.Name)
 		expectMissing[corev1.ServiceAccount](t, fc, serviceAccount.Namespace, serviceAccount.Name)
 		expectMissing[appsv1.StatefulSet](t, fc, statefulSet.Namespace, statefulSet.Name)
+	}
+
+	for replica := range replicas {
+		auth := tsrAuthSecret(tsr, tsNamespace, "secret-authkey", replica)
+		state := tsrStateSecret(tsr, tsNamespace, replica)
+
+		if shouldExist {
+			expectEqual(t, fc, auth)
+			expectEqual(t, fc, state)
+		} else {
+			expectMissing[corev1.Secret](t, fc, auth.Namespace, auth.Name)
+			expectMissing[corev1.Secret](t, fc, state.Namespace, state.Name)
+		}
 	}
 }

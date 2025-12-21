@@ -40,7 +40,7 @@ func init() {
 var serveCmd = func() *ffcli.Command {
 	se := &serveEnv{lc: &localClient}
 	// previously used to serve legacy newFunnelCommand unless useWIPCode is true
-	// change is limited to make a revert easier and full cleanup to come after the relase.
+	// change is limited to make a revert easier and full cleanup to come after the release.
 	// TODO(tylersmalley): cleanup and removal of newServeLegacyCommand as of 2023-10-16
 	return newServeV2Command(se, serve)
 }
@@ -149,6 +149,7 @@ type localServeClient interface {
 	IncrementCounter(ctx context.Context, name string, delta int) error
 	GetPrefs(ctx context.Context) (*ipn.Prefs, error)
 	EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error)
+	CheckSOMarkInUse(ctx context.Context) (bool, error)
 }
 
 // serveEnv is the environment the serve command runs within. All I/O should be
@@ -168,6 +169,7 @@ type serveEnv struct {
 	http             uint                     // HTTP port
 	tcp              uint                     // TCP port
 	tlsTerminatedTCP uint                     // a TLS terminated TCP port
+	proxyProtocol    uint                     // PROXY protocol version (1 or 2)
 	subcmd           serveMode                // subcommand
 	yes              bool                     // update without prompt
 	service          tailcfg.ServiceName      // service name
@@ -570,7 +572,7 @@ func (e *serveEnv) handleTCPServe(ctx context.Context, srcType string, srcPort u
 		return fmt.Errorf("cannot serve TCP; already serving web on %d", srcPort)
 	}
 
-	sc.SetTCPForwarding(srcPort, fwdAddr, terminateTLS, dnsName)
+	sc.SetTCPForwarding(srcPort, fwdAddr, terminateTLS, 0 /* proxy proto */, dnsName)
 
 	if !reflect.DeepEqual(cursc, sc) {
 		if err := e.lc.SetServeConfig(ctx, sc); err != nil {

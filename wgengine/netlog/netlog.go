@@ -15,7 +15,6 @@ import (
 	"log"
 	"net/http"
 	"net/netip"
-	"sync"
 	"time"
 
 	"tailscale.com/health"
@@ -24,6 +23,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/syncs"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -57,7 +57,7 @@ func (noopDevice) SetConnectionCounter(netlogfunc.ConnectionCounter) {}
 // unless the Tailnet administrator opts-into explicit logging.
 // The zero value is ready for use.
 type Logger struct {
-	mu   sync.Mutex // protects all fields below
+	mu   syncs.Mutex // protects all fields below
 	logf logger.Logf
 
 	// shutdownLocked shuts down the logger.

@@ -163,6 +163,10 @@ When you use `git revert` to revert a commit, the default commit message will id
 Don't revert reverts. That gets ugly. Send the change anew but reference
 the original & earlier revert.
 
+# Cherry picks
+
+Use `git cherry-pick -x` to include git's standard "cherry picked from..." line in the commit message. Typically you'll only need this for cherry-picking onto release branches.
+
 # Other repos
 
 To reference an issue in one repo from a commit in another (for example, fixing an issue in corp with a commit in `tailscale/tailscale`), you need to fully-qualify the issue number with the GitHub org/repo syntax:

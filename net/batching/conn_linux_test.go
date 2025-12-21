@@ -7,9 +7,11 @@ import (
 	"encoding/binary"
 	"net"
 	"testing"
+	"unsafe"
 
 	"github.com/tailscale/wireguard-go/conn"
 	"golang.org/x/net/ipv6"
+	"golang.org/x/sys/unix"
 	"tailscale.com/net/packet"
 )
 
@@ -312,5 +314,38 @@ func TestMinReadBatchMsgsLen(t *testing.T) {
 	// aligned.
 	if IdealBatchSize != conn.IdealBatchSize {
 		t.Fatalf("IdealBatchSize: %d != conn.IdealBatchSize(): %d", IdealBatchSize, conn.IdealBatchSize)
+	}
+}
+
+func Test_getGSOSizeFromControl_MultipleMessages(t *testing.T) {
+	// Test that getGSOSizeFromControl correctly parses UDP_GRO when it's not the first control message.
+	const expectedGSOSize = 1420
+
+	// First message: IP_TOS
+	firstMsgLen := unix.CmsgSpace(1)
+	firstMsg := make([]byte, firstMsgLen)
+	hdr1 := (*unix.Cmsghdr)(unsafe.Pointer(&firstMsg[0]))
+	hdr1.Level = unix.SOL_IP
+	hdr1.Type = unix.IP_TOS
+	hdr1.SetLen(unix.CmsgLen(1))
+	firstMsg[unix.SizeofCmsghdr] = 0
+
+	// Second message: UDP_GRO
+	secondMsgLen := unix.CmsgSpace(2)
+	secondMsg := make([]byte, secondMsgLen)
+	hdr2 := (*unix.Cmsghdr)(unsafe.Pointer(&secondMsg[0]))
+	hdr2.Level = unix.SOL_UDP
+	hdr2.Type = unix.UDP_GRO
+	hdr2.SetLen(unix.CmsgLen(2))
+	binary.NativeEndian.PutUint16(secondMsg[unix.SizeofCmsghdr:], expectedGSOSize)
+
+	control := append(firstMsg, secondMsg...)
+
+	gsoSize, err := getGSOSizeFromControl(control)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gsoSize != expectedGSOSize {
+		t.Errorf("got GSO size %d, want %d", gsoSize, expectedGSOSize)
 	}
 }

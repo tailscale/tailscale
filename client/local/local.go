@@ -38,10 +38,12 @@ import (
 	"tailscale.com/net/udprelay/status"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
 )
 
@@ -384,18 +386,14 @@ func (lc *Client) IncrementCounter(ctx context.Context, name string, delta int) 
 	if !buildfeatures.HasClientMetrics {
 		return nil
 	}
-	type metricUpdate struct {
-		Name  string `json:"name"`
-		Type  string `json:"type"`
-		Value int    `json:"value"` // amount to increment by
-	}
 	if delta < 0 {
 		return errors.New("negative delta not allowed")
 	}
-	_, err := lc.send(ctx, "POST", "/localapi/v0/upload-client-metrics", 200, jsonBody([]metricUpdate{{
+	_, err := lc.send(ctx, "POST", "/localapi/v0/upload-client-metrics", 200, jsonBody([]clientmetric.MetricUpdate{{
 		Name:  name,
 		Type:  "counter",
 		Value: delta,
+		Op:    "add",
 	}}))
 	return err
 }
@@ -404,15 +402,23 @@ func (lc *Client) IncrementCounter(ctx context.Context, name string, delta int) 
 // metric by the given delta. If the metric has yet to exist, a new gauge
 // metric is created and initialized to delta. The delta value can be negative.
 func (lc *Client) IncrementGauge(ctx context.Context, name string, delta int) error {
-	type metricUpdate struct {
-		Name  string `json:"name"`
-		Type  string `json:"type"`
-		Value int    `json:"value"` // amount to increment by
-	}
-	_, err := lc.send(ctx, "POST", "/localapi/v0/upload-client-metrics", 200, jsonBody([]metricUpdate{{
+	_, err := lc.send(ctx, "POST", "/localapi/v0/upload-client-metrics", 200, jsonBody([]clientmetric.MetricUpdate{{
 		Name:  name,
 		Type:  "gauge",
 		Value: delta,
+		Op:    "add",
+	}}))
+	return err
+}
+
+// SetGauge sets the value of a Tailscale daemon's gauge metric to the given value.
+// If the metric has yet to exist, a new gauge metric is created and initialized to value.
+func (lc *Client) SetGauge(ctx context.Context, name string, value int) error {
+	_, err := lc.send(ctx, "POST", "/localapi/v0/upload-client-metrics", 200, jsonBody([]clientmetric.MetricUpdate{{
+		Name:  name,
+		Type:  "gauge",
+		Value: value,
+		Op:    "set",
 	}}))
 	return err
 }
@@ -1363,7 +1369,7 @@ type IPNBusWatcher struct {
 	httpRes *http.Response
 	dec     *json.Decoder
 
-	mu     sync.Mutex
+	mu     syncs.Mutex
 	closed bool
 }
 
@@ -1398,6 +1404,23 @@ func (lc *Client) SuggestExitNode(ctx context.Context) (apitype.ExitNodeSuggesti
 		return apitype.ExitNodeSuggestionResponse{}, err
 	}
 	return decodeJSON[apitype.ExitNodeSuggestionResponse](body)
+}
+
+// CheckSOMarkInUse reports whether the socket mark option is in use. This will only
+// be true if tailscale is running on Linux and tailscaled uses SO_MARK.
+func (lc *Client) CheckSOMarkInUse(ctx context.Context) (bool, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/check-so-mark-in-use")
+	if err != nil {
+		return false, err
+	}
+	var res struct {
+		UseSOMark bool `json:"useSoMark"`
+	}
+
+	if err := json.Unmarshal(body, &res); err != nil {
+		return false, fmt.Errorf("invalid JSON from check-so-mark-in-use: %w", err)
+	}
+	return res.UseSOMark, nil
 }
 
 // ShutdownTailscaled requests a graceful shutdown of tailscaled.

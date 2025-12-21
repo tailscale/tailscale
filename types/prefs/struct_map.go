@@ -31,14 +31,14 @@ func StructMapWithOpts[K MapKeyType, V views.Cloner[V]](opts ...Options) StructM
 // SetValue configures the preference with the specified value.
 // It fails and returns [ErrManaged] if p is a managed preference,
 // and [ErrReadOnly] if p is a read-only preference.
-func (l *StructMap[K, V]) SetValue(val map[K]V) error {
-	return l.preference.SetValue(deepCloneMap(val))
+func (m *StructMap[K, V]) SetValue(val map[K]V) error {
+	return m.preference.SetValue(deepCloneMap(val))
 }
 
 // SetManagedValue configures the preference with the specified value
 // and marks the preference as managed.
-func (l *StructMap[K, V]) SetManagedValue(val map[K]V) {
-	l.preference.SetManagedValue(deepCloneMap(val))
+func (m *StructMap[K, V]) SetManagedValue(val map[K]V) {
+	m.preference.SetManagedValue(deepCloneMap(val))
 }
 
 // Clone returns a copy of m that aliases no memory with m.

@@ -9,10 +9,12 @@ import (
 	"cmp"
 	"net/netip"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/bools"
 	"tailscale.com/types/netlogtype"
 	"tailscale.com/util/set"
 )
@@ -134,17 +136,31 @@ func compareConnCnts(x, y netlogtype.ConnectionCounts) int {
 }
 
 // jsonLen computes an upper-bound on the size of the JSON representation.
-func (nu nodeUser) jsonLen() int {
+func (nu nodeUser) jsonLen() (n int) {
 	if !nu.Valid() {
 		return len(`{"nodeId":""}`)
 	}
-	n := netlogtype.MinNodeJSONSize + jsonQuotedLen(nu.Name())
+	n += len(`{}`)
+	n += len(`"nodeId":`) + jsonQuotedLen(string(nu.StableID())) + len(`,`)
+	if len(nu.Name()) > 0 {
+		n += len(`"name":`) + jsonQuotedLen(nu.Name()) + len(`,`)
+	}
+	if nu.Addresses().Len() > 0 {
+		n += len(`"addresses":[]`)
+		for _, addr := range nu.Addresses().All() {
+			n += bools.IfElse(addr.Addr().Is4(), len(`"255.255.255.255"`), len(`"ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"`)) + len(",")
+		}
+	}
+	if nu.Hostinfo().Valid() && len(nu.Hostinfo().OS()) > 0 {
+		n += len(`"os":`) + jsonQuotedLen(nu.Hostinfo().OS()) + len(`,`)
+	}
 	if nu.Tags().Len() > 0 {
+		n += len(`"tags":[]`)
 		for _, tag := range nu.Tags().All() {
 			n += jsonQuotedLen(tag) + len(",")
 		}
-	} else if nu.user.Valid() && nu.user.ID() == nu.User() {
-		n += jsonQuotedLen(nu.user.LoginName())
+	} else if nu.user.Valid() && nu.user.ID() == nu.User() && len(nu.user.LoginName()) > 0 {
+		n += len(`"user":`) + jsonQuotedLen(nu.user.LoginName()) + len(",")
 	}
 	return n
 }
@@ -154,7 +170,10 @@ func (nu nodeUser) toNode() netlogtype.Node {
 	if !nu.Valid() {
 		return netlogtype.Node{}
 	}
-	n := netlogtype.Node{NodeID: nu.StableID(), Name: nu.Name()}
+	n := netlogtype.Node{
+		NodeID: nu.StableID(),
+		Name:   strings.TrimSuffix(nu.Name(), "."),
+	}
 	var ipv4, ipv6 netip.Addr
 	for _, addr := range nu.Addresses().All() {
 		switch {
@@ -166,6 +185,9 @@ func (nu nodeUser) toNode() netlogtype.Node {
 	}
 	n.Addresses = []netip.Addr{ipv4, ipv6}
 	n.Addresses = slices.DeleteFunc(n.Addresses, func(a netip.Addr) bool { return !a.IsValid() })
+	if nu.Hostinfo().Valid() {
+		n.OS = nu.Hostinfo().OS()
+	}
 	if nu.Tags().Len() > 0 {
 		n.Tags = nu.Tags().AsSlice()
 		slices.Sort(n.Tags)

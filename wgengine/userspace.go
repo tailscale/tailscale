@@ -47,9 +47,11 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
+	"tailscale.com/util/backoff"
 	"tailscale.com/util/checkchange"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/execqueue"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
@@ -96,6 +98,8 @@ type userspaceEngine struct {
 	// eventBus will eventually become required, but for now may be nil.
 	eventBus    *eventbus.Bus
 	eventClient *eventbus.Client
+
+	linkChangeQueue execqueue.ExecQueue
 
 	logf           logger.Logf
 	wgLogger       *wglog.Logger // a wireguard-go logging wrapper
@@ -145,7 +149,7 @@ type userspaceEngine struct {
 	netMap         *netmap.NetworkMap // or nil
 	closing        bool               // Close was called (even if we're still closing)
 	statusCallback StatusCallback
-	peerSequence   []key.NodePublic
+	peerSequence   views.Slice[key.NodePublic]
 	endpoints      []tailcfg.Endpoint
 	pendOpen       map[flowtrackTuple]*pendingOpenFlow // see pendopen.go
 
@@ -319,9 +323,9 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	var tsTUNDev *tstun.Wrapper
 	if conf.IsTAP {
-		tsTUNDev = tstun.WrapTAP(logf, conf.Tun, conf.Metrics)
+		tsTUNDev = tstun.WrapTAP(logf, conf.Tun, conf.Metrics, conf.EventBus)
 	} else {
-		tsTUNDev = tstun.Wrap(logf, conf.Tun, conf.Metrics)
+		tsTUNDev = tstun.Wrap(logf, conf.Tun, conf.Metrics, conf.EventBus)
 	}
 	closePool.add(tsTUNDev)
 
@@ -383,7 +387,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	conf.Dialer.SetTUNName(tunName)
 	conf.Dialer.SetNetMon(e.netMon)
 	conf.Dialer.SetBus(e.eventBus)
-	e.dns = dns.NewManager(logf, conf.DNS, e.health, conf.Dialer, fwdDNSLinkSelector{e, tunName}, conf.ControlKnobs, runtime.GOOS)
+	e.dns = dns.NewManager(logf, conf.DNS, e.health, conf.Dialer, fwdDNSLinkSelector{e, tunName}, conf.ControlKnobs, runtime.GOOS, e.eventBus)
 
 	// TODO: there's probably a better place for this
 	sockstats.SetNetMon(e.netMon)
@@ -447,6 +451,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		cb := e.pongCallback[pong.Data]
 		e.logf("wgengine: got TSMP pong %02x, peerAPIPort=%v; cb=%v", pong.Data, pong.PeerAPIPort, cb != nil)
 		if cb != nil {
+			delete(e.pongCallback, pong.Data)
 			go cb(pong)
 		}
 	}
@@ -460,6 +465,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 			// We didn't swallow it, so let it flow to the host.
 			return false
 		}
+		delete(e.icmpEchoResponseCallback, idSeq)
 		e.logf("wgengine: got diagnostic ICMP response %02x", idSeq)
 		go cb()
 		return true
@@ -543,7 +549,24 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		if f, ok := feature.HookProxyInvalidateCache.GetOk(); ok {
 			f()
 		}
-		e.linkChange(&cd)
+		e.linkChangeQueue.Add(func() { e.linkChange(&cd) })
+	})
+	eventbus.SubscribeFunc(ec, func(update tstun.DiscoKeyAdvertisement) {
+		e.logf("wgengine: got TSMP disco key advertisement from %v via eventbus", update.Src)
+		if e.magicConn == nil {
+			e.logf("wgengine: no magicConn")
+			return
+		}
+
+		pkt := packet.TSMPDiscoKeyAdvertisement{
+			Key: update.Key,
+		}
+		peer, ok := e.PeerForIP(update.Src)
+		if !ok {
+			e.logf("wgengine: no peer found for %v", update.Src)
+			return
+		}
+		e.magicConn.HandleDiscoKeyAdvertisement(peer.Node, pkt)
 	})
 	e.eventClient = ec
 	e.logf("Engine created.")
@@ -924,6 +947,32 @@ func hasOverlap(aips, rips views.Slice[netip.Prefix]) bool {
 	return false
 }
 
+// ResetAndStop resets the engine to a clean state (like calling Reconfig
+// with all pointers to zero values) and waits for it to be fully stopped,
+// with no live peers or DERPs.
+//
+// Unlike Reconfig, it does not return ErrNoChanges.
+//
+// If the engine stops, returns the status. NB that this status will not be sent
+// to the registered status callback, it is on the caller to ensure this status
+// is handled appropriately.
+func (e *userspaceEngine) ResetAndStop() (*Status, error) {
+	if err := e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{}); err != nil && !errors.Is(err, ErrNoChanges) {
+		return nil, err
+	}
+	bo := backoff.NewBackoff("UserspaceEngineResetAndStop", e.logf, 1*time.Second)
+	for {
+		st, err := e.getStatus()
+		if err != nil {
+			return nil, err
+		}
+		if len(st.Peers) == 0 && st.DERPs == 0 {
+			return st, nil
+		}
+		bo.BackOff(context.Background(), fmt.Errorf("waiting for engine to stop: peers=%d derps=%d", len(st.Peers), st.DERPs))
+	}
+}
+
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config) error {
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
@@ -939,12 +988,15 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	e.tundev.SetWGConfig(cfg)
 
 	peerSet := make(set.Set[key.NodePublic], len(cfg.Peers))
+
 	e.mu.Lock()
-	e.peerSequence = e.peerSequence[:0]
+	seq := make([]key.NodePublic, 0, len(cfg.Peers))
 	for _, p := range cfg.Peers {
-		e.peerSequence = append(e.peerSequence, p.PublicKey)
+		seq = append(seq, p.PublicKey)
 		peerSet.Add(p.PublicKey)
 	}
+	e.peerSequence = views.SliceOf(seq)
+
 	nm := e.netMap
 	e.mu.Unlock()
 
@@ -1199,7 +1251,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 
 	e.mu.Lock()
 	closing := e.closing
-	peerKeys := slices.Clone(e.peerSequence)
+	peerKeys := e.peerSequence
 	localAddrs := slices.Clone(e.endpoints)
 	e.mu.Unlock()
 
@@ -1207,8 +1259,8 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		return nil, ErrEngineClosing
 	}
 
-	peers := make([]ipnstate.PeerStatusLite, 0, len(peerKeys))
-	for _, key := range peerKeys {
+	peers := make([]ipnstate.PeerStatusLite, 0, peerKeys.Len())
+	for _, key := range peerKeys.All() {
 		if status, ok := e.getPeerStatusLite(key); ok {
 			peers = append(peers, status)
 		}
@@ -1258,6 +1310,9 @@ func (e *userspaceEngine) RequestStatus() {
 
 func (e *userspaceEngine) Close() {
 	e.eventClient.Close()
+	// TODO(cmol): Should we wait for it too?
+	// Same question raised in appconnector.go.
+	e.linkChangeQueue.Shutdown()
 	e.mu.Lock()
 	if e.closing {
 		e.mu.Unlock()
@@ -1294,20 +1349,18 @@ func (e *userspaceEngine) Done() <-chan struct{} {
 }
 
 func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
-	changed := delta.Major // TODO(bradfitz): ask more specific questions?
-	cur := delta.New
-	up := cur.AnyInterfaceUp()
+
+	up := delta.AnyInterfaceUp()
 	if !up {
-		e.logf("LinkChange: all links down; pausing: %v", cur)
-	} else if changed {
-		e.logf("LinkChange: major, rebinding. New state: %v", cur)
+		e.logf("LinkChange: all links down; pausing: %v", delta.StateDesc())
+	} else if delta.RebindLikelyRequired {
+		e.logf("LinkChange: major, rebinding: %v", delta.StateDesc())
 	} else {
 		e.logf("[v1] LinkChange: minor")
 	}
 
 	e.health.SetAnyInterfaceUp(up)
-	e.magicConn.SetNetworkUp(up)
-	if !up || changed {
+	if !up || delta.RebindLikelyRequired {
 		if err := e.dns.FlushCaches(); err != nil {
 			e.logf("wgengine: dns flush failed after major link change: %v", err)
 		}
@@ -1317,9 +1370,20 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 	// suspend/resume or whenever NetworkManager is started, it
 	// nukes all systemd-resolved configs. So reapply our DNS
 	// config on major link change.
-	// TODO: explain why this is ncessary not just on Linux but also android
-	// and Apple platforms.
-	if changed {
+	//
+	// On Darwin (netext), we reapply the DNS config when the interface flaps
+	// because the change in interface can potentially change the nameservers
+	// for the forwarder.  On Darwin netext clients, magicDNS is ~always the default
+	// resolver so having no nameserver to forward queries to (or one on a network we
+	// are not currently on) breaks DNS resolution system-wide.  There are notable
+	// timing issues here with Darwin's network stack.  It is not guaranteed that
+	// the forward resolver will be available immediately after the interface
+	// comes up.  We leave it to the network extension to also poke magicDNS directly
+	// via [dns.Manager.RecompileDNSConfig] when it detects any change in the
+	// nameservers.
+	//
+	// TODO: On Android, Darwin-tailscaled, and openbsd, why do we need this?
+	if delta.RebindLikelyRequired && up {
 		switch runtime.GOOS {
 		case "linux", "android", "ios", "darwin", "openbsd":
 			e.wgLock.Lock()
@@ -1337,15 +1401,23 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 		}
 	}
 
+	e.magicConn.SetNetworkUp(up)
+
 	why := "link-change-minor"
-	if changed {
+	if delta.RebindLikelyRequired {
 		why = "link-change-major"
 		metricNumMajorChanges.Add(1)
-		e.magicConn.Rebind()
 	} else {
 		metricNumMinorChanges.Add(1)
 	}
-	e.magicConn.ReSTUN(why)
+
+	// If we're up and it's a minor change, just send a STUN ping
+	if up {
+		if delta.RebindLikelyRequired {
+			e.magicConn.Rebind()
+		}
+		e.magicConn.ReSTUN(why)
+	}
 }
 
 func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
@@ -1400,6 +1472,7 @@ func (e *userspaceEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, size in
 		e.magicConn.Ping(peer, res, size, cb)
 	case "TSMP":
 		e.sendTSMPPing(ip, peer, res, cb)
+		e.sendTSMPDiscoAdvertisement(ip)
 	case "ICMP":
 		e.sendICMPEchoRequest(ip, peer, res, cb)
 	}
@@ -1518,6 +1591,29 @@ func (e *userspaceEngine) sendTSMPPing(ip netip.Addr, peer tailcfg.NodeView, res
 
 	tsmpPing := packet.Generate(iph, tsmpPayload[:])
 	e.tundev.InjectOutbound(tsmpPing)
+}
+
+func (e *userspaceEngine) sendTSMPDiscoAdvertisement(ip netip.Addr) {
+	srcIP, err := e.mySelfIPMatchingFamily(ip)
+	if err != nil {
+		e.logf("getting matching node: %s", err)
+		return
+	}
+	tdka := packet.TSMPDiscoKeyAdvertisement{
+		Src: srcIP,
+		Dst: ip,
+		Key: e.magicConn.DiscoPublicKey(),
+	}
+	payload, err := tdka.Marshal()
+	if err != nil {
+		e.logf("error generating TSMP Advertisement: %s", err)
+		metricTSMPDiscoKeyAdvertisementError.Add(1)
+	} else if err := e.tundev.InjectOutbound(payload); err != nil {
+		e.logf("error sending TSMP Advertisement: %s", err)
+		metricTSMPDiscoKeyAdvertisementError.Add(1)
+	} else {
+		metricTSMPDiscoKeyAdvertisementSent.Add(1)
+	}
 }
 
 func (e *userspaceEngine) setTSMPPongCallback(data [8]byte, cb func(packet.TSMPPongReply)) {
@@ -1686,6 +1782,9 @@ var (
 
 	metricNumMajorChanges = clientmetric.NewCounter("wgengine_major_changes")
 	metricNumMinorChanges = clientmetric.NewCounter("wgengine_minor_changes")
+
+	metricTSMPDiscoKeyAdvertisementSent  = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_sent")
+	metricTSMPDiscoKeyAdvertisementError = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_error")
 )
 
 func (e *userspaceEngine) InstallCaptureHook(cb packet.CaptureCallback) {

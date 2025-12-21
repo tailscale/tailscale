@@ -8,7 +8,8 @@ import (
 	"bufio"
 	"io"
 	"net"
-	"sync"
+
+	"tailscale.com/syncs"
 )
 
 // NewOneConnListener returns a net.Listener that returns c on its
@@ -29,7 +30,7 @@ func NewOneConnListener(c net.Conn, addr net.Addr) net.Listener {
 type oneConnListener struct {
 	addr net.Addr
 
-	mu   sync.Mutex
+	mu   syncs.Mutex
 	conn net.Conn
 }
 

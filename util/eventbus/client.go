@@ -5,8 +5,9 @@ package eventbus
 
 import (
 	"reflect"
-	"sync"
 
+	"tailscale.com/syncs"
+	"tailscale.com/types/logger"
 	"tailscale.com/util/set"
 )
 
@@ -21,13 +22,15 @@ type Client struct {
 	bus          *Bus
 	publishDebug hook[PublishedEvent]
 
-	mu   sync.Mutex
+	mu   syncs.Mutex
 	pub  set.Set[publisher]
 	sub  *subscribeState // Lazily created on first subscribe
 	stop stopFlag        // signaled on Close
 }
 
 func (c *Client) Name() string { return c.name }
+
+func (c *Client) logger() logger.Logf { return c.bus.logger() }
 
 // Close closes the client. It implicitly closes all publishers and
 // subscribers obtained from this client.
@@ -142,7 +145,7 @@ func Subscribe[T any](c *Client) *Subscriber[T] {
 	}
 
 	r := c.subscribeStateLocked()
-	s := newSubscriber[T](r)
+	s := newSubscriber[T](r, logfForCaller(c.logger()))
 	r.addSubscriber(s)
 	return s
 }
@@ -165,7 +168,7 @@ func SubscribeFunc[T any](c *Client, f func(T)) *SubscriberFunc[T] {
 	}
 
 	r := c.subscribeStateLocked()
-	s := newSubscriberFunc[T](r, f)
+	s := newSubscriberFunc[T](r, f, logfForCaller(c.logger()))
 	r.addSubscriber(s)
 	return s
 }

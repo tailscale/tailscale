@@ -135,18 +135,18 @@ type lportsPool struct {
 	ports []int
 }
 
-func (l *lportsPool) get() int {
-	l.Lock()
-	defer l.Unlock()
-	ret := l.ports[0]
-	l.ports = append(l.ports[:0], l.ports[1:]...)
+func (pl *lportsPool) get() int {
+	pl.Lock()
+	defer pl.Unlock()
+	ret := pl.ports[0]
+	pl.ports = append(pl.ports[:0], pl.ports[1:]...)
 	return ret
 }
 
-func (l *lportsPool) put(i int) {
-	l.Lock()
-	defer l.Unlock()
-	l.ports = append(l.ports, int(i))
+func (pl *lportsPool) put(i int) {
+	pl.Lock()
+	defer pl.Unlock()
+	pl.ports = append(pl.ports, int(i))
 }
 
 var (
@@ -173,19 +173,19 @@ func init() {
 // measure dial time.
 type lportForTCPConn int
 
-func (l *lportForTCPConn) Close() error {
-	if *l == 0 {
+func (lp *lportForTCPConn) Close() error {
+	if *lp == 0 {
 		return nil
 	}
-	lports.put(int(*l))
+	lports.put(int(*lp))
 	return nil
 }
 
-func (l *lportForTCPConn) Write([]byte) (int, error) {
+func (lp *lportForTCPConn) Write([]byte) (int, error) {
 	return 0, errors.New("unimplemented")
 }
 
-func (l *lportForTCPConn) Read([]byte) (int, error) {
+func (lp *lportForTCPConn) Read([]byte) (int, error) {
 	return 0, errors.New("unimplemented")
 }
 

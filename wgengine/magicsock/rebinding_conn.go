@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"sync"
 	"sync/atomic"
 	"syscall"
 
@@ -16,6 +15,7 @@ import (
 	"tailscale.com/net/batching"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/syncs"
 	"tailscale.com/types/nettype"
 )
 
@@ -31,7 +31,7 @@ type RebindingUDPConn struct {
 	// Neither is expected to be nil, sockets are bound on creation.
 	pconnAtomic atomic.Pointer[nettype.PacketConn]
 
-	mu    sync.Mutex // held while changing pconn (and pconnAtomic)
+	mu    syncs.Mutex // held while changing pconn (and pconnAtomic)
 	pconn nettype.PacketConn
 	port  uint16
 }

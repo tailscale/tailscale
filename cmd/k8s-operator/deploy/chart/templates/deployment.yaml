@@ -35,13 +35,23 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       volumes:
+        {{- if .Values.oauthSecretVolume }}
         - name: oauth
-          {{- with .Values.oauthSecretVolume }}
-          {{- toYaml . | nindent 10 }}
-          {{- else }}
+          {{- toYaml .Values.oauthSecretVolume | nindent 10 }}
+        {{- else if .Values.oauth.audience }}
+        - name: oidc-jwt
+          projected:
+            defaultMode: 420
+            sources:
+            - serviceAccountToken:
+                audience: {{ .Values.oauth.audience }}
+                expirationSeconds: 3600
+                path: token
+        {{- else }}
+        - name: oauth
           secret:
             secretName: operator-oauth
-          {{- end }}
+        {{- end }}
       containers:
         - name: operator
           {{- with .Values.operatorConfig.securityContext }}
@@ -72,10 +82,20 @@ spec:
               value: {{ .Values.loginServer }}
             - name: OPERATOR_INGRESS_CLASS_NAME
               value: {{ .Values.ingressClass.name }}
+            {{- if .Values.oauthSecretVolume }}
             - name: CLIENT_ID_FILE
               value: /oauth/client_id
             - name: CLIENT_SECRET_FILE
               value: /oauth/client_secret
+            {{- else if .Values.oauth.audience }}
+            - name: CLIENT_ID
+              value: {{ .Values.oauth.clientId }}
+            {{- else }}
+            - name: CLIENT_ID_FILE
+              value: /oauth/client_id
+            - name: CLIENT_SECRET_FILE
+              value: /oauth/client_secret
+            {{- end }}
             {{- $proxyTag := printf ":%s" ( .Values.proxyConfig.image.tag | default .Chart.AppVersion )}}
             - name: PROXY_IMAGE
               value: {{ coalesce .Values.proxyConfig.image.repo .Values.proxyConfig.image.repository }}{{- if .Values.proxyConfig.image.digest -}}{{ printf "@%s" .Values.proxyConfig.image.digest}}{{- else -}}{{ printf "%s" $proxyTag }}{{- end }}
@@ -101,9 +121,19 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           volumeMounts:
-          - name: oauth
-            mountPath: /oauth
-            readOnly: true
+            {{- if .Values.oauthSecretVolume }}
+            - name: oauth
+              mountPath: /oauth
+              readOnly: true
+            {{- else if .Values.oauth.audience }}
+            - name: oidc-jwt
+              mountPath: /var/run/secrets/tailscale/serviceaccount
+              readOnly: true
+            {{- else }}
+            - name: oauth
+              mountPath: /oauth
+              readOnly: true
+            {{- end }}
       {{- with .Values.operatorConfig.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

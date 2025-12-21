@@ -12,30 +12,36 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/types/ptr"
 	"tailscale.com/version"
 )
 
 func tsrStatefulSet(tsr *tsapi.Recorder, namespace string, loginServer string) *appsv1.StatefulSet {
-	return &appsv1.StatefulSet{
+	var replicas int32 = 1
+	if tsr.Spec.Replicas != nil {
+		replicas = *tsr.Spec.Replicas
+	}
+
+	ss := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            tsr.Name,
 			Namespace:       namespace,
-			Labels:          labels("recorder", tsr.Name, tsr.Spec.StatefulSet.Labels),
+			Labels:          tsrLabels("recorder", tsr.Name, tsr.Spec.StatefulSet.Labels),
 			OwnerReferences: tsrOwnerReference(tsr),
 			Annotations:     tsr.Spec.StatefulSet.Annotations,
 		},
 		Spec: appsv1.StatefulSetSpec{
-			Replicas: ptr.To[int32](1),
+			Replicas: ptr.To(replicas),
 			Selector: &metav1.LabelSelector{
-				MatchLabels: labels("recorder", tsr.Name, tsr.Spec.StatefulSet.Pod.Labels),
+				MatchLabels: tsrLabels("recorder", tsr.Name, tsr.Spec.StatefulSet.Pod.Labels),
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:        tsr.Name,
 					Namespace:   namespace,
-					Labels:      labels("recorder", tsr.Name, tsr.Spec.StatefulSet.Pod.Labels),
+					Labels:      tsrLabels("recorder", tsr.Name, tsr.Spec.StatefulSet.Pod.Labels),
 					Annotations: tsr.Spec.StatefulSet.Pod.Annotations,
 				},
 				Spec: corev1.PodSpec{
@@ -59,7 +65,7 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string, loginServer string) *
 							ImagePullPolicy: tsr.Spec.StatefulSet.Pod.Container.ImagePullPolicy,
 							Resources:       tsr.Spec.StatefulSet.Pod.Container.Resources,
 							SecurityContext: tsr.Spec.StatefulSet.Pod.Container.SecurityContext,
-							Env:             env(tsr, loginServer),
+							Env:             tsrEnv(tsr, loginServer),
 							EnvFrom: func() []corev1.EnvFromSource {
 								if tsr.Spec.Storage.S3 == nil || tsr.Spec.Storage.S3.Credentials.Secret.Name == "" {
 									return nil
@@ -95,6 +101,28 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string, loginServer string) *
 			},
 		},
 	}
+
+	for replica := range replicas {
+		volumeName := fmt.Sprintf("authkey-%d", replica)
+
+		ss.Spec.Template.Spec.Containers[0].VolumeMounts = append(ss.Spec.Template.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{
+			Name:      volumeName,
+			ReadOnly:  true,
+			MountPath: fmt.Sprintf("/etc/tailscaled/%s-%d", ss.Name, replica),
+		})
+
+		ss.Spec.Template.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
+			Name: volumeName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: fmt.Sprintf("%s-auth-%d", tsr.Name, replica),
+					Items:      []corev1.KeyToPath{{Key: "authkey", Path: "authkey"}},
+				},
+			},
+		})
+	}
+
+	return ss
 }
 
 func tsrServiceAccount(tsr *tsapi.Recorder, namespace string) *corev1.ServiceAccount {
@@ -102,7 +130,7 @@ func tsrServiceAccount(tsr *tsapi.Recorder, namespace string) *corev1.ServiceAcc
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            tsrServiceAccountName(tsr),
 			Namespace:       namespace,
-			Labels:          labels("recorder", tsr.Name, nil),
+			Labels:          tsrLabels("recorder", tsr.Name, nil),
 			OwnerReferences: tsrOwnerReference(tsr),
 			Annotations:     tsr.Spec.StatefulSet.Pod.ServiceAccount.Annotations,
 		},
@@ -120,11 +148,24 @@ func tsrServiceAccountName(tsr *tsapi.Recorder) string {
 }
 
 func tsrRole(tsr *tsapi.Recorder, namespace string) *rbacv1.Role {
+	var replicas int32 = 1
+	if tsr.Spec.Replicas != nil {
+		replicas = *tsr.Spec.Replicas
+	}
+
+	resourceNames := make([]string, 0)
+	for replica := range replicas {
+		resourceNames = append(resourceNames,
+			fmt.Sprintf("%s-%d", tsr.Name, replica),      // State secret.
+			fmt.Sprintf("%s-auth-%d", tsr.Name, replica), // Auth key secret.
+		)
+	}
+
 	return &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            tsr.Name,
 			Namespace:       namespace,
-			Labels:          labels("recorder", tsr.Name, nil),
+			Labels:          tsrLabels("recorder", tsr.Name, nil),
 			OwnerReferences: tsrOwnerReference(tsr),
 		},
 		Rules: []rbacv1.PolicyRule{
@@ -136,10 +177,7 @@ func tsrRole(tsr *tsapi.Recorder, namespace string) *rbacv1.Role {
 					"patch",
 					"update",
 				},
-				ResourceNames: []string{
-					tsr.Name,                      // Contains the auth key.
-					fmt.Sprintf("%s-0", tsr.Name), // Contains the node state.
-				},
+				ResourceNames: resourceNames,
 			},
 			{
 				APIGroups: []string{""},
@@ -159,7 +197,7 @@ func tsrRoleBinding(tsr *tsapi.Recorder, namespace string) *rbacv1.RoleBinding {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            tsr.Name,
 			Namespace:       namespace,
-			Labels:          labels("recorder", tsr.Name, nil),
+			Labels:          tsrLabels("recorder", tsr.Name, nil),
 			OwnerReferences: tsrOwnerReference(tsr),
 		},
 		Subjects: []rbacv1.Subject{
@@ -176,12 +214,12 @@ func tsrRoleBinding(tsr *tsapi.Recorder, namespace string) *rbacv1.RoleBinding {
 	}
 }
 
-func tsrAuthSecret(tsr *tsapi.Recorder, namespace string, authKey string) *corev1.Secret {
+func tsrAuthSecret(tsr *tsapi.Recorder, namespace string, authKey string, replica int32) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:       namespace,
-			Name:            tsr.Name,
-			Labels:          labels("recorder", tsr.Name, nil),
+			Name:            fmt.Sprintf("%s-auth-%d", tsr.Name, replica),
+			Labels:          tsrLabels("recorder", tsr.Name, nil),
 			OwnerReferences: tsrOwnerReference(tsr),
 		},
 		StringData: map[string]string{
@@ -190,30 +228,19 @@ func tsrAuthSecret(tsr *tsapi.Recorder, namespace string, authKey string) *corev
 	}
 }
 
-func tsrStateSecret(tsr *tsapi.Recorder, namespace string) *corev1.Secret {
+func tsrStateSecret(tsr *tsapi.Recorder, namespace string, replica int32) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            fmt.Sprintf("%s-0", tsr.Name),
+			Name:            fmt.Sprintf("%s-%d", tsr.Name, replica),
 			Namespace:       namespace,
-			Labels:          labels("recorder", tsr.Name, nil),
+			Labels:          tsrLabels("recorder", tsr.Name, nil),
 			OwnerReferences: tsrOwnerReference(tsr),
 		},
 	}
 }
 
-func env(tsr *tsapi.Recorder, loginServer string) []corev1.EnvVar {
+func tsrEnv(tsr *tsapi.Recorder, loginServer string) []corev1.EnvVar {
 	envs := []corev1.EnvVar{
-		{
-			Name: "TS_AUTHKEY",
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: tsr.Name,
-					},
-					Key: "authkey",
-				},
-			},
-		},
 		{
 			Name: "POD_NAME",
 			ValueFrom: &corev1.EnvVarSource{
@@ -230,6 +257,10 @@ func env(tsr *tsapi.Recorder, loginServer string) []corev1.EnvVar {
 					FieldPath: "metadata.uid",
 				},
 			},
+		},
+		{
+			Name:  "TS_AUTHKEY_FILE",
+			Value: "/etc/tailscaled/$(POD_NAME)/authkey",
 		},
 		{
 			Name:  "TS_STATE",
@@ -280,18 +311,18 @@ func env(tsr *tsapi.Recorder, loginServer string) []corev1.EnvVar {
 	return envs
 }
 
-func labels(app, instance string, customLabels map[string]string) map[string]string {
-	l := make(map[string]string, len(customLabels)+3)
+func tsrLabels(app, instance string, customLabels map[string]string) map[string]string {
+	labels := make(map[string]string, len(customLabels)+3)
 	for k, v := range customLabels {
-		l[k] = v
+		labels[k] = v
 	}
 
 	// ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/
-	l["app.kubernetes.io/name"] = app
-	l["app.kubernetes.io/instance"] = instance
-	l["app.kubernetes.io/managed-by"] = "tailscale-operator"
+	labels["app.kubernetes.io/name"] = app
+	labels["app.kubernetes.io/instance"] = instance
+	labels["app.kubernetes.io/managed-by"] = "tailscale-operator"
 
-	return l
+	return labels
 }
 
 func tsrOwnerReference(owner metav1.Object) []metav1.OwnerReference {

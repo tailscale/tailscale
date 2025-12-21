@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sync"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -19,7 +20,8 @@ import (
 )
 
 type attestationKey struct {
-	tpm transport.TPMCloser
+	tpmMu sync.Mutex
+	tpm   transport.TPMCloser
 	// private and public parts of the TPM key as returned from tpm2.Create.
 	// These are used for serialization.
 	tpmPrivate tpm2.TPM2BPrivate
@@ -57,10 +59,12 @@ func newAttestationKey() (ak *attestationKey, retErr error) {
 						SensitiveDataOrigin: true,
 						UserWithAuth:        true,
 						AdminWithPolicy:     true,
-						NoDA:                true,
-						FixedTPM:            true,
-						FixedParent:         true,
-						SignEncrypt:         true,
+						// We don't set an authorization policy on this key, so
+						// DA isn't helpful.
+						NoDA:        true,
+						FixedTPM:    true,
+						FixedParent: true,
+						SignEncrypt: true,
 					},
 					Parameters: tpm2.NewTPMUPublicParms(
 						tpm2.TPMAlgECC,
@@ -144,7 +148,7 @@ type attestationKeySerialized struct {
 
 // MarshalJSON implements json.Marshaler.
 func (ak *attestationKey) MarshalJSON() ([]byte, error) {
-	if ak == nil || ak.IsZero() {
+	if ak == nil || len(ak.tpmPublic.Bytes()) == 0 || len(ak.tpmPrivate.Buffer) == 0 {
 		return []byte("null"), nil
 	}
 	return json.Marshal(attestationKeySerialized{
@@ -162,6 +166,13 @@ func (ak *attestationKey) UnmarshalJSON(data []byte) (retErr error) {
 
 	ak.tpmPrivate = tpm2.TPM2BPrivate{Buffer: aks.TPMPrivate}
 	ak.tpmPublic = tpm2.BytesAs2B[tpm2.TPMTPublic, *tpm2.TPMTPublic](aks.TPMPublic)
+
+	ak.tpmMu.Lock()
+	defer ak.tpmMu.Unlock()
+	if ak.tpm != nil {
+		ak.tpm.Close()
+		ak.tpm = nil
+	}
 
 	tpm, err := open()
 	if err != nil {
@@ -182,6 +193,9 @@ func (ak *attestationKey) Public() crypto.PublicKey {
 }
 
 func (ak *attestationKey) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) (signature []byte, err error) {
+	ak.tpmMu.Lock()
+	defer ak.tpmMu.Unlock()
+
 	if !ak.loaded() {
 		return nil, errors.New("tpm2 attestation key is not loaded during Sign")
 	}
@@ -247,6 +261,9 @@ func addASN1IntBytes(b *cryptobyte.Builder, bytes []byte) {
 }
 
 func (ak *attestationKey) Close() error {
+	ak.tpmMu.Lock()
+	defer ak.tpmMu.Unlock()
+
 	var errs []error
 	if ak.handle != nil && ak.tpm != nil {
 		_, err := tpm2.FlushContext{FlushHandle: ak.handle.Handle}.Execute(ak.tpm)
@@ -259,21 +276,34 @@ func (ak *attestationKey) Close() error {
 }
 
 func (ak *attestationKey) Clone() key.HardwareAttestationKey {
-	if ak == nil {
+	if ak.IsZero() {
 		return nil
 	}
-	return &attestationKey{
-		tpm:        ak.tpm,
+
+	tpm, err := open()
+	if err != nil {
+		log.Printf("[unexpected] failed to open a TPM connection in feature/tpm.attestationKey.Clone: %v", err)
+		return nil
+	}
+	akc := &attestationKey{
+		tpm:        tpm,
 		tpmPrivate: ak.tpmPrivate,
 		tpmPublic:  ak.tpmPublic,
-		handle:     ak.handle,
-		pub:        ak.pub,
 	}
+	if err := akc.load(); err != nil {
+		log.Printf("[unexpected] failed to load TPM key in feature/tpm.attestationKey.Clone: %v", err)
+		tpm.Close()
+		return nil
+	}
+	return akc
 }
 
 func (ak *attestationKey) IsZero() bool {
 	if ak == nil {
 		return true
 	}
+
+	ak.tpmMu.Lock()
+	defer ak.tpmMu.Unlock()
 	return !ak.loaded()
 }

@@ -31,8 +31,8 @@ func (h AUMHash) String() string {
 
 // UnmarshalText implements encoding.TextUnmarshaler.
 func (h *AUMHash) UnmarshalText(text []byte) error {
-	if l := base32StdNoPad.DecodedLen(len(text)); l != len(h) {
-		return fmt.Errorf("tka.AUMHash.UnmarshalText: text wrong length: %d, want %d", l, len(text))
+	if ln := base32StdNoPad.DecodedLen(len(text)); ln != len(h) {
+		return fmt.Errorf("tka.AUMHash.UnmarshalText: text wrong length: %d, want %d", ln, len(text))
 	}
 	if _, err := base32StdNoPad.Decode(h[:], text); err != nil {
 		return fmt.Errorf("tka.AUMHash.UnmarshalText: %w", err)
@@ -53,6 +53,17 @@ func (h AUMHash) MarshalText() ([]byte, error) {
 // IsZero returns true if the hash is the empty value.
 func (h AUMHash) IsZero() bool {
 	return h == (AUMHash{})
+}
+
+// PrevAUMHash represents the BLAKE2s digest of an Authority Update Message (AUM).
+// Unlike an AUMHash, this can be empty if there is no previous AUM hash
+// (which occurs in the genesis AUM).
+type PrevAUMHash []byte
+
+// String returns the PrevAUMHash encoded as base32.
+// This is suitable for use as a filename, and for storing in text-preferred media.
+func (h PrevAUMHash) String() string {
+	return base32StdNoPad.EncodeToString(h[:])
 }
 
 // AUMKind describes valid AUM types.
@@ -119,8 +130,8 @@ func (k AUMKind) String() string {
 //     behavior of old clients (which will ignore the field).
 //   - No floats!
 type AUM struct {
-	MessageKind AUMKind `cbor:"1,keyasint"`
-	PrevAUMHash []byte  `cbor:"2,keyasint"`
+	MessageKind AUMKind     `cbor:"1,keyasint"`
+	PrevAUMHash PrevAUMHash `cbor:"2,keyasint"`
 
 	// Key encodes a public key to be added to the key authority.
 	// This field is used for AddKey AUMs.
@@ -226,7 +237,7 @@ func (a *AUM) Serialize() tkatype.MarshaledAUM {
 	// Further, experience with other attempts (JWS/JWT,SAML,X509 etc) has
 	// taught us that even subtle behaviors such as how you handle invalid
 	// or unrecognized fields + any invariants in subsequent re-serialization
-	// can easily lead to security-relevant logic bugs. Its certainly possible
+	// can easily lead to security-relevant logic bugs. It's certainly possible
 	// to invent a workable scheme by massaging a JSON parsing library, though
 	// profoundly unwise.
 	//

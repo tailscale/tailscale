@@ -192,45 +192,34 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 				writef("\t\tdst.%s[k] = append([]%s{}, src.%s[k]...)", fname, n, fname)
 				writef("\t}")
 				writef("}")
-			} else if codegen.ContainsPointers(elem) {
+			} else if codegen.IsViewType(elem) || !codegen.ContainsPointers(elem) {
+				// If the map values are view types (which are
+				// immutable and don't need cloning) or don't
+				// themselves contain pointers, we can just
+				// clone the map itself.
+				it.Import("", "maps")
+				writef("\tdst.%s = maps.Clone(src.%s)", fname, fname)
+			} else {
+				// Otherwise we need to clone each element of
+				// the map using our recursive helper.
 				writef("if dst.%s != nil {", fname)
 				writef("\tdst.%s = map[%s]%s{}", fname, it.QualifiedName(ft.Key()), it.QualifiedName(elem))
 				writef("\tfor k, v := range src.%s {", fname)
 
-				switch elem := elem.Underlying().(type) {
-				case *types.Pointer:
-					writef("\t\tif v == nil { dst.%s[k] = nil } else {", fname)
-					if base := elem.Elem().Underlying(); codegen.ContainsPointers(base) {
-						if _, isIface := base.(*types.Interface); isIface {
-							it.Import("", "tailscale.com/types/ptr")
-							writef("\t\t\tdst.%s[k] = ptr.To((*v).Clone())", fname)
-						} else {
-							writef("\t\t\tdst.%s[k] = v.Clone()", fname)
-						}
-					} else {
-						it.Import("", "tailscale.com/types/ptr")
-						writef("\t\t\tdst.%s[k] = ptr.To(*v)", fname)
-					}
-					writef("}")
-				case *types.Interface:
-					if cloneResultType := methodResultType(elem, "Clone"); cloneResultType != nil {
-						if _, isPtr := cloneResultType.(*types.Pointer); isPtr {
-							writef("\t\tdst.%s[k] = *(v.Clone())", fname)
-						} else {
-							writef("\t\tdst.%s[k] = v.Clone()", fname)
-						}
-					} else {
-						writef(`panic("%s (%v) does not have a Clone method")`, fname, elem)
-					}
-				default:
-					writef("\t\tdst.%s[k] = *(v.Clone())", fname)
-				}
-
+				// Use a recursive helper here; this handles
+				// arbitrarily nested maps in addition to
+				// simpler types.
+				writeMapValueClone(mapValueCloneParams{
+					Buf:        buf,
+					It:         it,
+					Elem:       elem,
+					SrcExpr:    "v",
+					DstExpr:    fmt.Sprintf("dst.%s[k]", fname),
+					BaseIndent: "\t",
+					Depth:      1,
+				})
 				writef("\t}")
 				writef("}")
-			} else {
-				it.Import("", "maps")
-				writef("\tdst.%s = maps.Clone(src.%s)", fname, fname)
 			}
 		case *types.Interface:
 			// If ft is an interface with a "Clone() ft" method, it can be used to clone the field.
@@ -270,4 +259,100 @@ func methodResultType(typ types.Type, method string) types.Type {
 		return nil
 	}
 	return sig.Results().At(0).Type()
+}
+
+type mapValueCloneParams struct {
+	// Buf is the buffer to write generated code to
+	Buf *bytes.Buffer
+	// It is the import tracker for managing imports.
+	It *codegen.ImportTracker
+	// Elem is the type of the map value to clone
+	Elem types.Type
+	// SrcExpr is the expression for the source value (e.g., "v", "v2", "v3")
+	SrcExpr string
+	// DstExpr is the expression for the destination (e.g., "dst.Field[k]", "dst.Field[k][k2]")
+	DstExpr string
+	// BaseIndent is the "base" indentation string for the generated code
+	// (i.e. 1 or more tabs). Additional indentation will be added based on
+	// the Depth parameter.
+	BaseIndent string
+	// Depth is the current nesting depth (1 for first level, 2 for second, etc.)
+	Depth int
+}
+
+// writeMapValueClone generates code to clone a map value recursively.
+// It handles arbitrary nesting of maps, pointers, and interfaces.
+func writeMapValueClone(params mapValueCloneParams) {
+	indent := params.BaseIndent + strings.Repeat("\t", params.Depth)
+	writef := func(format string, args ...any) {
+		fmt.Fprintf(params.Buf, indent+format+"\n", args...)
+	}
+
+	switch elem := params.Elem.Underlying().(type) {
+	case *types.Pointer:
+		writef("if %s == nil { %s = nil } else {", params.SrcExpr, params.DstExpr)
+		if base := elem.Elem().Underlying(); codegen.ContainsPointers(base) {
+			if _, isIface := base.(*types.Interface); isIface {
+				params.It.Import("", "tailscale.com/types/ptr")
+				writef("\t%s = ptr.To((*%s).Clone())", params.DstExpr, params.SrcExpr)
+			} else {
+				writef("\t%s = %s.Clone()", params.DstExpr, params.SrcExpr)
+			}
+		} else {
+			params.It.Import("", "tailscale.com/types/ptr")
+			writef("\t%s = ptr.To(*%s)", params.DstExpr, params.SrcExpr)
+		}
+		writef("}")
+
+	case *types.Map:
+		// Recursively handle nested maps
+		innerElem := elem.Elem()
+		if codegen.IsViewType(innerElem) || !codegen.ContainsPointers(innerElem) {
+			// Inner map values don't need deep cloning
+			params.It.Import("", "maps")
+			writef("%s = maps.Clone(%s)", params.DstExpr, params.SrcExpr)
+		} else {
+			// Inner map values need cloning
+			keyType := params.It.QualifiedName(elem.Key())
+			valueType := params.It.QualifiedName(innerElem)
+			// Generate unique variable names for nested loops based on depth
+			keyVar := fmt.Sprintf("k%d", params.Depth+1)
+			valVar := fmt.Sprintf("v%d", params.Depth+1)
+
+			writef("if %s == nil {", params.SrcExpr)
+			writef("\t%s = nil", params.DstExpr)
+			writef("\tcontinue")
+			writef("}")
+			writef("%s = map[%s]%s{}", params.DstExpr, keyType, valueType)
+			writef("for %s, %s := range %s {", keyVar, valVar, params.SrcExpr)
+
+			// Recursively generate cloning code for the nested map value
+			nestedDstExpr := fmt.Sprintf("%s[%s]", params.DstExpr, keyVar)
+			writeMapValueClone(mapValueCloneParams{
+				Buf:        params.Buf,
+				It:         params.It,
+				Elem:       innerElem,
+				SrcExpr:    valVar,
+				DstExpr:    nestedDstExpr,
+				BaseIndent: params.BaseIndent,
+				Depth:      params.Depth + 1,
+			})
+
+			writef("}")
+		}
+
+	case *types.Interface:
+		if cloneResultType := methodResultType(elem, "Clone"); cloneResultType != nil {
+			if _, isPtr := cloneResultType.(*types.Pointer); isPtr {
+				writef("%s = *(%s.Clone())", params.DstExpr, params.SrcExpr)
+			} else {
+				writef("%s = %s.Clone()", params.DstExpr, params.SrcExpr)
+			}
+		} else {
+			writef(`panic("map value (%%v) does not have a Clone method")`, elem)
+		}
+
+	default:
+		writef("%s = *(%s.Clone())", params.DstExpr, params.SrcExpr)
+	}
 }

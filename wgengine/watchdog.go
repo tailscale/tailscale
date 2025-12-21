@@ -124,6 +124,12 @@ func (e *watchdogEngine) watchdog(name string, fn func()) {
 func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config) error {
 	return e.watchdogErr("Reconfig", func() error { return e.wrap.Reconfig(cfg, routerCfg, dnsCfg) })
 }
+func (e *watchdogEngine) ResetAndStop() (st *Status, err error) {
+	e.watchdog("ResetAndStop", func() {
+		st, err = e.wrap.ResetAndStop()
+	})
+	return st, err
+}
 func (e *watchdogEngine) GetFilter() *filter.Filter {
 	return e.wrap.GetFilter()
 }

@@ -22,8 +22,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,6 +38,7 @@ import (
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/feature"
 	_ "tailscale.com/feature/clientupdate"
+	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/net/tsaddr"
@@ -1410,13 +1413,26 @@ func TestLogoutRemovesAllPeers(t *testing.T) {
 	wantNode0PeerCount(expectedPeers) // all existing peers and the new node
 }
 
-func TestAutoUpdateDefaults(t *testing.T) {
-	if !feature.CanAutoUpdate() {
-		t.Skip("auto-updates not supported on this platform")
-	}
+func TestAutoUpdateDefaults(t *testing.T)     { testAutoUpdateDefaults(t, false) }
+func TestAutoUpdateDefaults_cap(t *testing.T) { testAutoUpdateDefaults(t, true) }
+
+// useCap is whether to use NodeAttrDefaultAutoUpdate (as opposed to the old
+// DeprecatedDefaultAutoUpdate top-level MapResponse field).
+func testAutoUpdateDefaults(t *testing.T, useCap bool) {
+	t.Cleanup(feature.HookCanAutoUpdate.SetForTest(func() bool { return true }))
+
 	tstest.Shard(t)
-	tstest.Parallel(t)
 	env := NewTestEnv(t)
+
+	var (
+		modifyMu               sync.Mutex
+		modifyFirstMapResponse = func(*tailcfg.MapResponse, *tailcfg.MapRequest) {}
+	)
+	env.Control.ModifyFirstMapResponse = func(mr *tailcfg.MapResponse, req *tailcfg.MapRequest) {
+		modifyMu.Lock()
+		defer modifyMu.Unlock()
+		modifyFirstMapResponse(mr, req)
+	}
 
 	checkDefault := func(n *TestNode, want bool) error {
 		enabled, ok := n.diskPrefs().AutoUpdate.Apply.Get()
@@ -1429,17 +1445,23 @@ func TestAutoUpdateDefaults(t *testing.T) {
 		return nil
 	}
 
-	sendAndCheckDefault := func(t *testing.T, n *TestNode, send, want bool) {
-		t.Helper()
-		if !env.Control.AddRawMapResponse(n.MustStatus().Self.PublicKey, &tailcfg.MapResponse{
-			DefaultAutoUpdate: opt.NewBool(send),
-		}) {
-			t.Fatal("failed to send MapResponse to node")
-		}
-		if err := tstest.WaitFor(2*time.Second, func() error {
-			return checkDefault(n, want)
-		}); err != nil {
-			t.Fatal(err)
+	setDefaultAutoUpdate := func(send bool) {
+		modifyMu.Lock()
+		defer modifyMu.Unlock()
+		modifyFirstMapResponse = func(mr *tailcfg.MapResponse, req *tailcfg.MapRequest) {
+			if mr.Node == nil {
+				mr.Node = &tailcfg.Node{}
+			}
+			if useCap {
+				if mr.Node.CapMap == nil {
+					mr.Node.CapMap = make(tailcfg.NodeCapMap)
+				}
+				mr.Node.CapMap[tailcfg.NodeAttrDefaultAutoUpdate] = []tailcfg.RawMessage{
+					tailcfg.RawMessage(fmt.Sprintf("%t", send)),
+				}
+			} else {
+				mr.DeprecatedDefaultAutoUpdate = opt.NewBool(send)
+			}
 		}
 	}
 
@@ -1450,29 +1472,54 @@ func TestAutoUpdateDefaults(t *testing.T) {
 		{
 			desc: "tailnet-default-false",
 			run: func(t *testing.T, n *TestNode) {
-				// First received default "false".
-				sendAndCheckDefault(t, n, false, false)
-				// Should not be changed even if sent "true" later.
-				sendAndCheckDefault(t, n, true, false)
+
+				// First the server sends "false", and client should remember that.
+				setDefaultAutoUpdate(false)
+				n.MustUp()
+				n.AwaitRunning()
+				checkDefault(n, false)
+
+				// Now we disconnect and change the server to send "true", which
+				// the client should ignore, having previously remembered
+				// "false".
+				n.MustDown()
+				setDefaultAutoUpdate(true) // control sends default "true"
+				n.MustUp()
+				n.AwaitRunning()
+				checkDefault(n, false) // still false
+
 				// But can be changed explicitly by the user.
 				if out, err := n.TailscaleForOutput("set", "--auto-update").CombinedOutput(); err != nil {
 					t.Fatalf("failed to enable auto-update on node: %v\noutput: %s", err, out)
 				}
-				sendAndCheckDefault(t, n, false, true)
+				checkDefault(n, true)
 			},
 		},
 		{
 			desc: "tailnet-default-true",
 			run: func(t *testing.T, n *TestNode) {
-				// First received default "true".
-				sendAndCheckDefault(t, n, true, true)
-				// Should not be changed even if sent "false" later.
-				sendAndCheckDefault(t, n, false, true)
+				// Same as above but starting with default "true".
+
+				// First the server sends "true", and client should remember that.
+				setDefaultAutoUpdate(true)
+				n.MustUp()
+				n.AwaitRunning()
+				checkDefault(n, true)
+
+				// Now we disconnect and change the server to send "false", which
+				// the client should ignore, having previously remembered
+				// "true".
+				n.MustDown()
+				setDefaultAutoUpdate(false) // control sends default "false"
+				n.MustUp()
+				n.AwaitRunning()
+				checkDefault(n, true) // still true
+
 				// But can be changed explicitly by the user.
 				if out, err := n.TailscaleForOutput("set", "--auto-update=false").CombinedOutput(); err != nil {
-					t.Fatalf("failed to disable auto-update on node: %v\noutput: %s", err, out)
+					t.Fatalf("failed to enable auto-update on node: %v\noutput: %s", err, out)
 				}
-				sendAndCheckDefault(t, n, true, false)
+				checkDefault(n, false)
 			},
 		},
 		{
@@ -1482,22 +1529,21 @@ func TestAutoUpdateDefaults(t *testing.T) {
 				if out, err := n.TailscaleForOutput("set", "--auto-update=false").CombinedOutput(); err != nil {
 					t.Fatalf("failed to disable auto-update on node: %v\noutput: %s", err, out)
 				}
-				// Defaults sent from control should be ignored.
-				sendAndCheckDefault(t, n, true, false)
-				sendAndCheckDefault(t, n, false, false)
+
+				setDefaultAutoUpdate(true)
+				n.MustUp()
+				n.AwaitRunning()
+				checkDefault(n, false)
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
 			n := NewTestNode(t, env)
+			n.allowUpdates = true
 			d := n.StartDaemon()
 			defer d.MustCleanShutdown(t)
-
 			n.AwaitResponding()
-			n.MustUp()
-			n.AwaitRunning()
-
 			tt.run(t, n)
 		})
 	}
@@ -2128,16 +2174,10 @@ func TestC2NDebugNetmap(t *testing.T) {
 		var current netmap.NetworkMap
 		must.Do(json.Unmarshal(resp.Current, &current))
 
-		if !current.PrivateKey.IsZero() {
-			t.Errorf("current netmap has non-zero private key: %v", current.PrivateKey)
-		}
 		// Check candidate netmap if we sent a map response.
 		if cand != nil {
 			var candidate netmap.NetworkMap
 			must.Do(json.Unmarshal(resp.Candidate, &candidate))
-			if !candidate.PrivateKey.IsZero() {
-				t.Errorf("candidate netmap has non-zero private key: %v", candidate.PrivateKey)
-			}
 			if diff := cmp.Diff(current.SelfNode, candidate.SelfNode); diff != "" {
 				t.Errorf("SelfNode differs (-current +candidate):\n%s", diff)
 			}
@@ -2213,7 +2253,7 @@ func TestC2NDebugNetmap(t *testing.T) {
 	}
 }
 
-func TestNetworkLock(t *testing.T) {
+func TestTailnetLock(t *testing.T) {
 
 	// If you run `tailscale lock log` on a node where Tailnet Lock isn't
 	// enabled, you get an error explaining that.
@@ -2251,4 +2291,112 @@ func TestNetworkLock(t *testing.T) {
 			t.Fatalf("stderr: want %q, got %q", wantErr, errBuf.String())
 		}
 	})
+
+	// If you create a tailnet with two signed nodes and one unsigned,
+	// the signed nodes can talk to each other but the unsigned node cannot
+	// talk to anybody.
+	t.Run("node-connectivity", func(t *testing.T) {
+		tstest.Shard(t)
+		t.Parallel()
+
+		env := NewTestEnv(t)
+		env.Control.DefaultNodeCapabilities = &tailcfg.NodeCapMap{
+			tailcfg.CapabilityTailnetLock: []tailcfg.RawMessage{},
+		}
+
+		// Start two nodes which will be our signing nodes.
+		signing1 := NewTestNode(t, env)
+		signing2 := NewTestNode(t, env)
+
+		nodes := []*TestNode{signing1, signing2}
+		for _, n := range nodes {
+			d := n.StartDaemon()
+			defer d.MustCleanShutdown(t)
+
+			n.MustUp()
+			n.AwaitRunning()
+		}
+
+		// Initiate Tailnet Lock with the two signing nodes.
+		initCmd := signing1.Tailscale("lock", "init",
+			"--gen-disablements", "10",
+			"--confirm",
+			signing1.NLPublicKey(), signing2.NLPublicKey(),
+		)
+		out, err := initCmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("init command failed: %q\noutput=%v", err, string(out))
+		}
+
+		// Check that the two signing nodes can ping each other
+		if err := signing1.Ping(signing2); err != nil {
+			t.Fatalf("ping signing1 -> signing2: %v", err)
+		}
+		if err := signing2.Ping(signing1); err != nil {
+			t.Fatalf("ping signing2 -> signing1: %v", err)
+		}
+
+		// Create and start a third node
+		node3 := NewTestNode(t, env)
+		d3 := node3.StartDaemon()
+		defer d3.MustCleanShutdown(t)
+		node3.MustUp()
+		node3.AwaitRunning()
+
+		if err := signing1.Ping(node3); err == nil {
+			t.Fatal("ping signing1 -> node3: expected err, but succeeded")
+		}
+		if err := node3.Ping(signing1); err == nil {
+			t.Fatal("ping node3 -> signing1: expected err, but succeeded")
+		}
+
+		// Sign node3, and check the nodes can now talk to each other
+		signCmd := signing1.Tailscale("lock", "sign", node3.PublicKey())
+		out, err = signCmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("sign command failed: %q\noutput = %v", err, string(out))
+		}
+
+		if err := signing1.Ping(node3); err != nil {
+			t.Fatalf("ping signing1 -> node3: expected success, got err: %v", err)
+		}
+		if err := node3.Ping(signing1); err != nil {
+			t.Fatalf("ping node3 -> signing1: expected success, got err: %v", err)
+		}
+	})
+}
+
+func TestNodeWithBadStateFile(t *testing.T) {
+	tstest.Shard(t)
+	tstest.Parallel(t)
+	env := NewTestEnv(t)
+	n1 := NewTestNode(t, env)
+	if err := os.WriteFile(n1.stateFile, []byte("bad json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	d1 := n1.StartDaemon()
+	n1.AwaitResponding()
+
+	// Make sure the health message shows up in status output.
+	n1.AwaitBackendState("NoState")
+	st := n1.MustStatus()
+	wantHealth := ipn.StateStoreHealth.Text(health.Args{health.ArgError: ""})
+	if !slices.ContainsFunc(st.Health, func(m string) bool { return strings.HasPrefix(m, wantHealth) }) {
+		t.Errorf("Status does not contain expected health message %q\ngot health messages: %q", wantHealth, st.Health)
+	}
+
+	// Make sure login attempts are rejected.
+	cmd := n1.Tailscale("up", "--login-server="+n1.env.ControlURL())
+	t.Logf("Running %v ...", cmd)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("up succeeded with output %q", out)
+	}
+	wantOut := "cannot start backend when state store is unhealthy"
+	if !strings.Contains(string(out), wantOut) {
+		t.Fatalf("got up output:\n%s\nwant:\n%s", string(out), wantOut)
+	}
+
+	d1.MustCleanShutdown(t)
 }

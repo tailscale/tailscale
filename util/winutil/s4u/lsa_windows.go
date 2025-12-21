@@ -256,8 +256,8 @@ func checkDomainAccount(username string) (sanitizedUserName string, isDomainAcco
 // errors.Is to check for it. When capLevel == CapCreateProcess, the logon
 // enforces the user's logon hours policy (when present).
 func (ls *lsaSession) logonAs(srcName string, u *user.User, capLevel CapabilityLevel) (token windows.Token, err error) {
-	if l := len(srcName); l == 0 || l > _TOKEN_SOURCE_LENGTH {
-		return 0, fmt.Errorf("%w, actual length is %d", ErrBadSrcName, l)
+	if ln := len(srcName); ln == 0 || ln > _TOKEN_SOURCE_LENGTH {
+		return 0, fmt.Errorf("%w, actual length is %d", ErrBadSrcName, ln)
 	}
 	if err := checkASCII(srcName); err != nil {
 		return 0, fmt.Errorf("%w: %v", ErrBadSrcName, err)

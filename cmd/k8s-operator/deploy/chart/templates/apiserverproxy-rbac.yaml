@@ -3,8 +3,8 @@
 
 # If old setting used, enable both old (operator) and new (ProxyGroup) workflows.
 # If new setting used, enable only new workflow.
-{{ if or (eq .Values.apiServerProxyConfig.mode "true")
-  (eq .Values.apiServerProxyConfig.allowImpersonation "true") }}
+{{ if or (eq (toString .Values.apiServerProxyConfig.mode) "true")
+  (eq (toString .Values.apiServerProxyConfig.allowImpersonation) "true") }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -25,7 +25,7 @@ kind: ClusterRoleBinding
 metadata:
   name: tailscale-auth-proxy
 subjects:
-{{- if eq .Values.apiServerProxyConfig.mode "true" }}
+{{- if eq (toString .Values.apiServerProxyConfig.mode) "true" }}
 - kind: ServiceAccount
   name: operator
   namespace: {{ .Release.Namespace }}

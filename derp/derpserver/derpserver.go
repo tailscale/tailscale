@@ -36,6 +36,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/axiomhq/hyperloglog"
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/local"
@@ -177,7 +178,7 @@ type Server struct {
 	verifyClientsURL         string
 	verifyClientsURLFailOpen bool
 
-	mu       sync.Mutex
+	mu       syncs.Mutex
 	closed   bool
 	netConns map[derp.Conn]chan struct{} // chan is closed when conn closes
 	clients  map[key.NodePublic]*clientSet
@@ -1643,6 +1644,12 @@ type sclient struct {
 	sawSrc map[key.NodePublic]set.Handle
 	bw     *lazyBufioWriter
 
+	// senderCardinality estimates the number of unique peers that have
+	// sent packets to this client. Owned by sendLoop, protected by
+	// senderCardinalityMu for reads from other goroutines.
+	senderCardinalityMu sync.Mutex
+	senderCardinality   *hyperloglog.Sketch
+
 	// Guarded by s.mu
 	//
 	// peerStateChange is used by mesh peers (a set of regional
@@ -1777,6 +1784,8 @@ func (c *sclient) onSendLoopDone() {
 
 func (c *sclient) sendLoop(ctx context.Context) error {
 	defer c.onSendLoopDone()
+
+	c.senderCardinality = hyperloglog.New()
 
 	jitter := rand.N(5 * time.Second)
 	keepAliveTick, keepAliveTickChannel := c.s.clock.NewTicker(derp.KeepAlive + jitter)
@@ -2000,6 +2009,11 @@ func (c *sclient) sendPacket(srcKey key.NodePublic, contents []byte) (err error)
 	if withKey {
 		pktLen += key.NodePublicRawLen
 		c.noteSendFromSrc(srcKey)
+		if c.senderCardinality != nil {
+			c.senderCardinalityMu.Lock()
+			c.senderCardinality.Insert(srcKey.AppendTo(nil))
+			c.senderCardinalityMu.Unlock()
+		}
 	}
 	if err = derp.WriteFrameHeader(c.bw.bw(), derp.FrameRecvPacket, uint32(pktLen)); err != nil {
 		return err
@@ -2011,6 +2025,17 @@ func (c *sclient) sendPacket(srcKey key.NodePublic, contents []byte) (err error)
 	}
 	_, err = c.bw.Write(contents)
 	return err
+}
+
+// EstimatedUniqueSenders returns an estimate of the number of unique peers
+// that have sent packets to this client.
+func (c *sclient) EstimatedUniqueSenders() uint64 {
+	c.senderCardinalityMu.Lock()
+	defer c.senderCardinalityMu.Unlock()
+	if c.senderCardinality == nil {
+		return 0
+	}
+	return c.senderCardinality.Estimate()
 }
 
 // noteSendFromSrc notes that we are about to write a packet
@@ -2295,7 +2320,8 @@ type BytesSentRecv struct {
 	Sent uint64
 	Recv uint64
 	// Key is the public key of the client which sent/received these bytes.
-	Key key.NodePublic
+	Key           key.NodePublic
+	UniqueSenders uint64 `json:",omitzero"`
 }
 
 // parseSSOutput parses the output from the specific call to ss in ServeDebugTraffic.
@@ -2349,6 +2375,11 @@ func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
 			if prev.Sent < next.Sent || prev.Recv < next.Recv {
 				if pkey, ok := s.keyOfAddr[k]; ok {
 					next.Key = pkey
+					if cs, ok := s.clients[pkey]; ok {
+						if c := cs.activeClient.Load(); c != nil {
+							next.UniqueSenders = c.EstimatedUniqueSenders()
+						}
+					}
 					if err := enc.Encode(next); err != nil {
 						s.mu.Unlock()
 						return

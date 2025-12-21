@@ -59,6 +59,38 @@ func TestFQDN(t *testing.T) {
 	}
 }
 
+func TestFQDNTooLong(t *testing.T) {
+	// RFC 1035 says a dns name has a max size of 255 octets, and is represented as labels of len+ASCII chars so
+	//   example.com
+	// is represented as
+	//   7example3com0
+	// which is to say that if we have a trailing dot then the dots cancel out all the len bytes except the first and
+	// we can accept 254 chars.
+
+	// This name is max length
+	name := "aaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaa.example.com."
+	if len(name) != 254 {
+		t.Fatalf("name should be 254 chars including trailing . (len is %d)", len(name))
+	}
+	got, err := ToFQDN(name)
+	if err != nil {
+		t.Fatalf("want: no error, got: %v", err)
+	}
+	if string(got) != name {
+		t.Fatalf("want: %s, got: %s", name, got)
+	}
+
+	// This name is too long
+	name = "x" + name
+	got, err = ToFQDN(name)
+	if got != "" {
+		t.Fatalf("want: \"\", got: %s", got)
+	}
+	if err == nil || !strings.HasSuffix(err.Error(), "is too long to be a DNS name") {
+		t.Fatalf("want: error to end with \"is too long to be a DNS name\", got: %v", err)
+	}
+}
+
 func TestFQDNContains(t *testing.T) {
 	tests := []struct {
 		a, b string

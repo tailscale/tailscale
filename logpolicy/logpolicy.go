@@ -193,8 +193,8 @@ type logWriter struct {
 	logger *log.Logger
 }
 
-func (l logWriter) Write(buf []byte) (int, error) {
-	l.logger.Printf("%s", buf)
+func (lg logWriter) Write(buf []byte) (int, error) {
+	lg.logger.Printf("%s", buf)
 	return len(buf), nil
 }
 
@@ -640,10 +640,16 @@ func (opts Options) init(disableLogging bool) (*logtail.Config, *Policy) {
 
 		logHost := logtail.DefaultHost
 		if val := getLogTarget(); val != "" {
-			opts.Logf("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
-			conf.BaseURL = val
-			u, _ := url.Parse(val)
-			logHost = u.Host
+			u, err := url.Parse(val)
+			if err != nil {
+				opts.Logf("logpolicy: invalid TS_LOG_TARGET %q: %v; using default log host", val, err)
+			} else if u.Host == "" {
+				opts.Logf("logpolicy: invalid TS_LOG_TARGET %q: missing host; using default log host", val)
+			} else {
+				opts.Logf("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
+				conf.BaseURL = val
+				logHost = u.Host
+			}
 		}
 
 		if conf.HTTPC == nil {

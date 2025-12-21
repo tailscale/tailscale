@@ -5,12 +5,14 @@
 package nmcfg
 
 import (
-	"bytes"
+	"bufio"
+	"cmp"
 	"fmt"
 	"net/netip"
 	"strings"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
@@ -18,16 +20,7 @@ import (
 )
 
 func nodeDebugName(n tailcfg.NodeView) string {
-	name := n.Name()
-	if name == "" {
-		name = n.Hostinfo().Hostname()
-	}
-	if i := strings.Index(name, "."); i != -1 {
-		name = name[:i]
-	}
-	if name == "" && n.Addresses().Len() != 0 {
-		return n.Addresses().At(0).String()
-	}
+	name, _, _ := strings.Cut(cmp.Or(n.Name(), n.Hostinfo().Hostname()), ".")
 	return name
 }
 
@@ -49,17 +42,15 @@ func cidrIsSubnet(node tailcfg.NodeView, cidr netip.Prefix) bool {
 }
 
 // WGCfg returns the NetworkMaps's WireGuard configuration.
-func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, exitNode tailcfg.StableNodeID) (*wgcfg.Config, error) {
+func WGCfg(pk key.NodePrivate, nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, exitNode tailcfg.StableNodeID) (*wgcfg.Config, error) {
 	cfg := &wgcfg.Config{
-		Name:       "tailscale",
-		PrivateKey: nm.PrivateKey,
+		PrivateKey: pk,
 		Addresses:  nm.GetAddresses().AsSlice(),
 		Peers:      make([]wgcfg.Peer, 0, len(nm.Peers)),
 	}
 
 	// Setup log IDs for data plane audit logging.
 	if nm.SelfNode.Valid() {
-		cfg.NodeID = nm.SelfNode.StableID()
 		canNetworkLog := nm.SelfNode.HasCap(tailcfg.CapabilityDataPlaneAuditLogs)
 		logExitFlowEnabled := nm.SelfNode.HasCap(tailcfg.NodeAttrLogExitFlows)
 		if canNetworkLog && nm.SelfNode.DataPlaneAuditLogID() != "" && nm.DomainAuditLogID != "" {
@@ -79,10 +70,7 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		}
 	}
 
-	// Logging buffers
-	skippedUnselected := new(bytes.Buffer)
-	skippedSubnets := new(bytes.Buffer)
-	skippedExpired := new(bytes.Buffer)
+	var skippedExitNode, skippedSubnetRouter, skippedExpired []tailcfg.NodeView
 
 	for _, peer := range nm.Peers {
 		if peer.DiscoKey().IsZero() && peer.HomeDERP() == 0 && !peer.IsWireGuardOnly() {
@@ -95,16 +83,7 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		// anyway, since control intentionally breaks node keys for
 		// expired peers so that we can't discover endpoints via DERP.
 		if peer.Expired() {
-			if skippedExpired.Len() >= 1<<10 {
-				if !bytes.HasSuffix(skippedExpired.Bytes(), []byte("...")) {
-					skippedExpired.WriteString("...")
-				}
-			} else {
-				if skippedExpired.Len() > 0 {
-					skippedExpired.WriteString(", ")
-				}
-				fmt.Fprintf(skippedExpired, "%s/%v", peer.StableID(), peer.Key().ShortString())
-			}
+			skippedExpired = append(skippedExpired, peer)
 			continue
 		}
 
@@ -114,28 +93,22 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		})
 		cpeer := &cfg.Peers[len(cfg.Peers)-1]
 
-		didExitNodeWarn := false
+		didExitNodeLog := false
 		cpeer.V4MasqAddr = peer.SelfNodeV4MasqAddrForThisPeer().Clone()
 		cpeer.V6MasqAddr = peer.SelfNodeV6MasqAddrForThisPeer().Clone()
 		cpeer.IsJailed = peer.IsJailed()
 		for _, allowedIP := range peer.AllowedIPs().All() {
 			if allowedIP.Bits() == 0 && peer.StableID() != exitNode {
-				if didExitNodeWarn {
+				if didExitNodeLog {
 					// Don't log about both the IPv4 /0 and IPv6 /0.
 					continue
 				}
-				didExitNodeWarn = true
-				if skippedUnselected.Len() > 0 {
-					skippedUnselected.WriteString(", ")
-				}
-				fmt.Fprintf(skippedUnselected, "%q (%v)", nodeDebugName(peer), peer.Key().ShortString())
+				didExitNodeLog = true
+				skippedExitNode = append(skippedExitNode, peer)
 				continue
 			} else if cidrIsSubnet(peer, allowedIP) {
 				if (flags & netmap.AllowSubnetRoutes) == 0 {
-					if skippedSubnets.Len() > 0 {
-						skippedSubnets.WriteString(", ")
-					}
-					fmt.Fprintf(skippedSubnets, "%v from %q (%v)", allowedIP, nodeDebugName(peer), peer.Key().ShortString())
+					skippedSubnetRouter = append(skippedSubnetRouter, peer)
 					continue
 				}
 			}
@@ -143,14 +116,27 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		}
 	}
 
-	if skippedUnselected.Len() > 0 {
-		logf("[v1] wgcfg: skipped unselected default routes from: %s", skippedUnselected.Bytes())
+	logList := func(title string, nodes []tailcfg.NodeView) {
+		if len(nodes) == 0 {
+			return
+		}
+		logf("[v1] wgcfg: %s from %d nodes: %s", title, len(nodes), logger.ArgWriter(func(bw *bufio.Writer) {
+			const max = 5
+			for i, n := range nodes {
+				if i == max {
+					fmt.Fprintf(bw, "... +%d", len(nodes)-max)
+					return
+				}
+				if i > 0 {
+					bw.WriteString(", ")
+				}
+				fmt.Fprintf(bw, "%s (%s)", nodeDebugName(n), n.StableID())
+			}
+		}))
 	}
-	if skippedSubnets.Len() > 0 {
-		logf("[v1] wgcfg: did not accept subnet routes: %s", skippedSubnets)
-	}
-	if skippedExpired.Len() > 0 {
-		logf("[v1] wgcfg: skipped expired peer: %s", skippedExpired)
-	}
+	logList("skipped unselected exit nodes", skippedExitNode)
+	logList("did not accept subnet routes", skippedSubnetRouter)
+	logList("skipped expired peers", skippedExpired)
+
 	return cfg, nil
 }

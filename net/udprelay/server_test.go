@@ -5,17 +5,23 @@ package udprelay
 
 import (
 	"bytes"
+	"crypto/rand"
 	"net"
 	"net/netip"
 	"testing"
 	"time"
 
+	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"go4.org/mem"
+	"golang.org/x/crypto/blake2s"
 	"tailscale.com/disco"
 	"tailscale.com/net/packet"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
+	"tailscale.com/types/views"
+	"tailscale.com/util/usermetric"
 )
 
 type testClient struct {
@@ -184,31 +190,42 @@ func TestServer(t *testing.T) {
 
 	cases := []struct {
 		name                string
-		overrideAddrs       []netip.Addr
+		staticAddrs         []netip.Addr
 		forceClientsMixedAF bool
 	}{
 		{
-			name:          "over ipv4",
-			overrideAddrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")},
+			name:        "over ipv4",
+			staticAddrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")},
 		},
 		{
-			name:          "over ipv6",
-			overrideAddrs: []netip.Addr{netip.MustParseAddr("::1")},
+			name:        "over ipv6",
+			staticAddrs: []netip.Addr{netip.MustParseAddr("::1")},
 		},
 		{
 			name:                "mixed address families",
-			overrideAddrs:       []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1")},
+			staticAddrs:         []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1")},
 			forceClientsMixedAF: true,
 		},
 	}
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			server, err := NewServer(t.Logf, 0, tt.overrideAddrs)
+			reg := new(usermetric.Registry)
+			deregisterMetrics()
+			server, err := NewServer(t.Logf, 0, true, reg)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer server.Close()
+			addrPorts := make([]netip.AddrPort, 0, len(tt.staticAddrs))
+			for _, addr := range tt.staticAddrs {
+				if addr.Is4() {
+					addrPorts = append(addrPorts, netip.AddrPortFrom(addr, server.uc4Port))
+				} else if server.uc6Port != 0 {
+					addrPorts = append(addrPorts, netip.AddrPortFrom(addr, server.uc6Port))
+				}
+			}
+			server.SetStaticAddrPorts(views.SliceOf(addrPorts))
 
 			endpoint, err := server.AllocateEndpoint(discoA.Public(), discoB.Public())
 			if err != nil {
@@ -318,4 +335,139 @@ func TestServer(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServer_getNextVNILocked(t *testing.T) {
+	t.Parallel()
+	c := qt.New(t)
+	s := &Server{
+		nextVNI: minVNI,
+	}
+	for i := uint64(0); i < uint64(totalPossibleVNI); i++ {
+		vni, err := s.getNextVNILocked()
+		if err != nil { // using quicktest here triples test time
+			t.Fatal(err)
+		}
+		s.serverEndpointByVNI.Store(vni, nil)
+	}
+	c.Assert(s.nextVNI, qt.Equals, minVNI)
+	_, err := s.getNextVNILocked()
+	c.Assert(err, qt.IsNotNil)
+	s.serverEndpointByVNI.Delete(minVNI)
+	_, err = s.getNextVNILocked()
+	c.Assert(err, qt.IsNil)
+}
+
+func Test_blakeMACFromBindMsg(t *testing.T) {
+	var macSecret [blake2s.Size]byte
+	rand.Read(macSecret[:])
+	src := netip.MustParseAddrPort("[2001:db8::1]:7")
+
+	msgA := disco.BindUDPRelayEndpointCommon{
+		VNI:        1,
+		Generation: 1,
+		RemoteKey:  key.NewDisco().Public(),
+		Challenge:  [32]byte{},
+	}
+	macA, err := blakeMACFromBindMsg(macSecret, src, msgA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgB := msgA
+	msgB.VNI++
+	macB, err := blakeMACFromBindMsg(macSecret, src, msgB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if macA == macB {
+		t.Fatalf("varying VNI input produced identical mac: %v", macA)
+	}
+
+	msgC := msgA
+	msgC.Generation++
+	macC, err := blakeMACFromBindMsg(macSecret, src, msgC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if macA == macC {
+		t.Fatalf("varying Generation input produced identical mac: %v", macA)
+	}
+
+	msgD := msgA
+	msgD.RemoteKey = key.NewDisco().Public()
+	macD, err := blakeMACFromBindMsg(macSecret, src, msgD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if macA == macD {
+		t.Fatalf("varying RemoteKey input produced identical mac: %v", macA)
+	}
+
+	msgE := msgA
+	msgE.Challenge = [32]byte{0x01} // challenge is not part of the MAC and should be ignored
+	macE, err := blakeMACFromBindMsg(macSecret, src, msgE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if macA != macE {
+		t.Fatalf("varying Challenge input produced varying mac: %v", macA)
+	}
+
+	macSecretB := macSecret
+	macSecretB[0] ^= 0xFF
+	macF, err := blakeMACFromBindMsg(macSecretB, src, msgA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if macA == macF {
+		t.Fatalf("varying macSecret input produced identical mac: %v", macA)
+	}
+
+	srcB := netip.AddrPortFrom(src.Addr(), src.Port()+1)
+	macG, err := blakeMACFromBindMsg(macSecret, srcB, msgA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if macA == macG {
+		t.Fatalf("varying src input produced identical mac: %v", macA)
+	}
+}
+
+func Benchmark_blakeMACFromBindMsg(b *testing.B) {
+	var macSecret [blake2s.Size]byte
+	rand.Read(macSecret[:])
+	src := netip.MustParseAddrPort("[2001:db8::1]:7")
+	msg := disco.BindUDPRelayEndpointCommon{
+		VNI:        1,
+		Generation: 1,
+		RemoteKey:  key.NewDisco().Public(),
+		Challenge:  [32]byte{},
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		_, err := blakeMACFromBindMsg(macSecret, src, msg)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestServer_maybeRotateMACSecretLocked(t *testing.T) {
+	s := &Server{}
+	start := mono.Now()
+	s.maybeRotateMACSecretLocked(start)
+	qt.Assert(t, s.macSecrets.Len(), qt.Equals, 1)
+	macSecret := s.macSecrets.At(0)
+	s.maybeRotateMACSecretLocked(start.Add(macSecretRotationInterval - time.Nanosecond))
+	qt.Assert(t, s.macSecrets.Len(), qt.Equals, 1)
+	qt.Assert(t, s.macSecrets.At(0), qt.Equals, macSecret)
+	s.maybeRotateMACSecretLocked(start.Add(macSecretRotationInterval))
+	qt.Assert(t, s.macSecrets.Len(), qt.Equals, 2)
+	qt.Assert(t, s.macSecrets.At(1), qt.Equals, macSecret)
+	qt.Assert(t, s.macSecrets.At(0), qt.Not(qt.Equals), s.macSecrets.At(1))
+	s.maybeRotateMACSecretLocked(s.macSecretRotatedAt.Add(macSecretRotationInterval))
+	qt.Assert(t, macSecret, qt.Not(qt.Equals), s.macSecrets.At(0))
+	qt.Assert(t, macSecret, qt.Not(qt.Equals), s.macSecrets.At(1))
+	qt.Assert(t, s.macSecrets.At(0), qt.Not(qt.Equals), s.macSecrets.At(1))
 }
