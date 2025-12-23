@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -81,6 +82,17 @@ var ErrETagMismatch = errors.New("etag mismatch")
 var ErrProxyToTailscaledSocket = errors.New("cannot proxy to tailscaled socket")
 
 var serveHTTPContextKey ctxkey.Key[*serveHTTPContext]
+
+// handleInvalidCharsRe matches any character that is not a word character, hyphen, underscore, or dot.
+var handleInvalidCharsRe = regexp.MustCompile(`[^\w\-_.]+`)
+
+// handelizeLogin converts a login name (e.g. "John.Doe@example.com") into a
+// lowercase handle with only word characters, hyphens, underscores, and dots.
+// It takes the local part before '@' and replaces invalid characters with '-'.
+func handelizeLogin(login string) string {
+	localPart := strings.Split(login, "@")[0]
+	return handleInvalidCharsRe.ReplaceAllString(strings.ToLower(localPart), "-")
+}
 
 type serveHTTPContext struct {
 	SrcAddr       netip.AddrPort
@@ -1021,6 +1033,7 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	// Clear any incoming values squatting in the headers.
 	r.Out.Header.Del("Tailscale-User-Login")
 	r.Out.Header.Del("Tailscale-User-Name")
+	r.Out.Header.Del("Tailscale-User-Handle")
 	r.Out.Header.Del("Tailscale-User-Profile-Pic")
 	r.Out.Header.Del("Tailscale-Funnel-Request")
 	r.Out.Header.Del("Tailscale-Headers-Info")
@@ -1044,6 +1057,7 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	}
 	r.Out.Header.Set("Tailscale-User-Login", encTailscaleHeaderValue(user.LoginName))
 	r.Out.Header.Set("Tailscale-User-Name", encTailscaleHeaderValue(user.DisplayName))
+	r.Out.Header.Set("Tailscale-User-Handle", encTailscaleHeaderValue(handelizeLogin(user.LoginName)))
 	r.Out.Header.Set("Tailscale-User-Profile-Pic", user.ProfilePicURL)
 	r.Out.Header.Set("Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers")
 }
