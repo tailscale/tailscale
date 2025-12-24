@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tailscale/goupnp"
-	"github.com/tailscale/goupnp/dcps/internetgateway2"
+	"github.com/huin/goupnp"
+	"github.com/huin/goupnp/dcps/internetgateway2"
 )
 
 // NOTE: this is in a distinct file because the various string constants are
@@ -168,7 +168,7 @@ func TestSelectBestService(t *testing.T) {
 
 			// Ensure that we're using the HTTP client that talks to our test IGD server
 			ctx := context.Background()
-			ctx = goupnp.WithHTTPClient(ctx, c.upnpHTTPClientLocked())
+			ctx = upnpHTTPClientKey.WithValue(ctx, c.upnpHTTPClientLocked())
 
 			loc := mustParseURL(igd.ts.URL)
 			rootDev := mustParseRootDev(t, rootDesc, loc)
