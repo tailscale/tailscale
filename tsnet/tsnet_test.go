@@ -802,7 +802,7 @@ func TestListenService(t *testing.T) {
 			}
 		}))
 	}
-	assertEchoHTTP := func(t *testing.T, hostname string, dial dialFn) {
+	assertEchoHTTP := func(t *testing.T, hostname, path string, dial dialFn) {
 		t.Helper()
 		c := http.Client{
 			Transport: &http.Transport{
@@ -810,7 +810,7 @@ func TestListenService(t *testing.T) {
 			},
 		}
 		msg := "echo"
-		resp, err := c.Post("http://"+hostname, "text/plain", strings.NewReader(msg))
+		resp, err := c.Post("http://"+hostname+path, "text/plain", strings.NewReader(msg))
 		if err != nil {
 			t.Fatal("posting request:", err)
 		}
@@ -877,20 +877,26 @@ func TestListenService(t *testing.T) {
 						t.Error("did not see expected header:", expectHeader)
 					}
 				})
-				assertEchoHTTP(t, serviceFQDN, peer.Dial)
+				assertEchoHTTP(t, serviceFQDN, "", peer.Dial)
 			},
 		},
 		{
 			name: "app_capabilities",
-			opts: []ServiceOption{ServiceOptionAppCapabilities("example.com/cap/want")},
+			opts: []ServiceOption{
+				ServiceOptionAppCapabilities("example.com/cap/all-paths"),
+				ServiceOptionAppCapabilitiesForPath("/foo", "example.com/cap/all-paths", "example.com/cap/foo"),
+			},
 			port: 80,
 			extraSetup: func(t *testing.T, serviceHost, peer *Server, control *testcontrol.Server) {
 				control.SetGlobalAppCaps(tailcfg.PeerCapMap{
-					"example.com/cap/want": []tailcfg.RawMessage{`true`},
+					"example.com/cap/all-paths": []tailcfg.RawMessage{`true`},
+					"example.com/cap/foo":       []tailcfg.RawMessage{`true`},
 				})
 			},
 			run: func(t *testing.T, serviceListener net.Listener, peer *Server, serviceFQDN string) {
-				go checkAndEcho(t, serviceListener, func(r *http.Request) {
+				allPathsCap := "example.com/cap/all-paths"
+				fooCap := "example.com/cap/foo"
+				checkCaps := func(r *http.Request) {
 					rawCaps, ok := r.Header["Tailscale-App-Capabilities"]
 					if !ok {
 						t.Error("no app capabilities header")
@@ -905,11 +911,24 @@ func TestListenService(t *testing.T) {
 						t.Error("error unmarshaling app caps:", err)
 						return
 					}
-					if _, ok := caps["example.com/cap/want"]; !ok {
-						t.Errorf("got app caps, but expected cap is not present; saw:\n%v", caps)
+					if _, ok := caps[allPathsCap]; !ok {
+						t.Errorf("got app caps, but %v is not present; saw:\n%v", allPathsCap, caps)
 					}
-				})
-				assertEchoHTTP(t, serviceFQDN, peer.Dial)
+					if strings.HasPrefix(r.URL.Path, "/foo") {
+						if _, ok := caps[fooCap]; !ok {
+							t.Errorf("%v should be present for /foo request; saw:\n%v", fooCap, caps)
+						}
+					} else {
+						if _, ok := caps[fooCap]; ok {
+							t.Errorf("%v should not be present for non-/foo request; saw:\n%v", fooCap, caps)
+						}
+					}
+				}
+
+				go checkAndEcho(t, serviceListener, checkCaps)
+				assertEchoHTTP(t, serviceFQDN, "", peer.Dial)
+				assertEchoHTTP(t, serviceFQDN, "/foo", peer.Dial)
+				assertEchoHTTP(t, serviceFQDN, "/foo/bar", peer.Dial)
 			},
 		},
 		// TODO:

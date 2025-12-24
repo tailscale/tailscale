@@ -1272,7 +1272,7 @@ func ServiceOptionAppCapabilities(capabilities ...string) ServiceOption {
 	return ServiceOptionAppCapabilitiesForPath("/", capabilities...)
 }
 
-// TODO: doc
+// TODO: doc; include info on this overriding handlers at earlier paths
 func ServiceOptionAppCapabilitiesForPath(path string, capabilities ...string) ServiceOption {
 	return serviceOptionAppCapabilities{path, capabilities}
 }
@@ -1384,8 +1384,10 @@ func (s *Server) ListenService(name string, port uint16, opts ...ServiceOption) 
 		useTLS := false // TODO: set correctly
 		mds := st.CurrentTailnet.MagicDNSSuffix
 		setHandler := func(h ipn.HTTPHandler, path string) {
-			// TODO: do we need to add the path to the end of the proxy value?
 			h.Proxy = ln.Addr().String()
+			if path != "/" {
+				h.Proxy += path
+			}
 			srvConfig.SetWebHandler(&h, svcName, port, path, useTLS, mds)
 		}
 		// Set a web handler for every mount point in the caps map. If we don't
