@@ -44,7 +44,7 @@ type certProvider interface {
 	HTTPHandler(fallback http.Handler) http.Handler
 }
 
-func certProviderByCertMode(mode, dir, hostname, eabKID, eabKey string) (certProvider, error) {
+func certProviderByCertMode(mode, dir, hostname, eabKID, eabKey, email string) (certProvider, error) {
 	if dir == "" {
 		return nil, errors.New("missing required --certdir flag")
 	}
@@ -58,6 +58,9 @@ func certProviderByCertMode(mode, dir, hostname, eabKID, eabKey string) (certPro
 		if mode == "gcp" {
 			if eabKID == "" || eabKey == "" {
 				return nil, errors.New("--certmode=gcp requires --acme-eab-kid and --acme-eab-key flags")
+			}
+			if email == "" {
+				return nil, errors.New("--certmode=gcp requires --acme-email flag")
 			}
 			keyBytes, err := decodeEABKey(eabKey)
 			if err != nil {
@@ -73,6 +76,10 @@ func certProviderByCertMode(mode, dir, hostname, eabKID, eabKey string) (certPro
 		}
 		if hostname == "derp.tailscale.com" {
 			certManager.HostPolicy = prodAutocertHostPolicy
+		}
+		if email != "" {
+			certManager.Email = email
+		} else if hostname == "derp.tailscale.com" {
 			certManager.Email = "security@tailscale.com"
 		}
 		return certManager, nil

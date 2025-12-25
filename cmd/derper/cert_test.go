@@ -91,7 +91,7 @@ func TestCertIP(t *testing.T) {
 		t.Fatalf("Error closing key.pem: %v", err)
 	}
 
-	cp, err := certProviderByCertMode("manual", dir, hostname, "", "")
+	cp, err := certProviderByCertMode("manual", dir, hostname, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,19 +174,25 @@ func TestGCPCertMode(t *testing.T) {
 	dir := t.TempDir()
 
 	// Missing EAB credentials
-	_, err := certProviderByCertMode("gcp", dir, "test.example.com", "", "")
+	_, err := certProviderByCertMode("gcp", dir, "test.example.com", "", "", "test@example.com")
 	if err == nil {
 		t.Fatal("expected error when EAB credentials are missing")
 	}
 
+	// Missing email
+	_, err = certProviderByCertMode("gcp", dir, "test.example.com", "kid", "dGVzdC1rZXk", "")
+	if err == nil {
+		t.Fatal("expected error when email is missing")
+	}
+
 	// Invalid base64
-	_, err = certProviderByCertMode("gcp", dir, "test.example.com", "kid", "not-valid!")
+	_, err = certProviderByCertMode("gcp", dir, "test.example.com", "kid", "not-valid!", "test@example.com")
 	if err == nil {
 		t.Fatal("expected error for invalid base64")
 	}
 
 	// Valid base64url (no padding)
-	cp, err := certProviderByCertMode("gcp", dir, "test.example.com", "kid", "dGVzdC1rZXk")
+	cp, err := certProviderByCertMode("gcp", dir, "test.example.com", "kid", "dGVzdC1rZXk", "test@example.com")
 	if err != nil {
 		t.Fatalf("base64url: %v", err)
 	}
@@ -195,7 +201,7 @@ func TestGCPCertMode(t *testing.T) {
 	}
 
 	// Valid standard base64 (with padding, gcloud format)
-	cp, err = certProviderByCertMode("gcp", dir, "test.example.com", "kid", "dGVzdC1rZXk=")
+	cp, err = certProviderByCertMode("gcp", dir, "test.example.com", "kid", "dGVzdC1rZXk=", "test@example.com")
 	if err != nil {
 		t.Fatalf("base64: %v", err)
 	}
