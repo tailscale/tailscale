@@ -505,10 +505,13 @@ main() {
 	elif type doas >/dev/null; then
 		CAN_ROOT=1
 		SUDO="doas"
+	elif type run0 >/dev/null; then
+		CAN_ROOT=1
+		SUDO="run0"	
 	fi
 	if [ "$CAN_ROOT" != "1" ]; then
 		echo "This installer needs to run commands as root."
-		echo "We tried looking for 'sudo' and 'doas', but couldn't find them."
+		echo "We tried looking for 'sudo', 'doas' and 'run0', but couldn't find them."
 		echo "Either re-run this script as root, or set up sudo/doas."
 		exit 1
 	fi
