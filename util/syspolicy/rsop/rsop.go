@@ -32,6 +32,11 @@ var (
 	effectivePolicyLRU [setting.NumScopes]syncs.AtomicValue[*Policy]
 )
 
+var _ = func() bool {
+	syncs.RegisterMutex(&policyMu, "syspolicy/rsop.policyMu")
+	return true
+}()
+
 // PolicyFor returns the [Policy] for the specified scope,
 // creating it from the registered [source.Store]s if it doesn't already exist.
 func PolicyFor(scope setting.PolicyScope) (*Policy, error) {

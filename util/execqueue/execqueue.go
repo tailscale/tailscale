@@ -7,11 +7,14 @@ package execqueue
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"tailscale.com/syncs"
 )
 
 type ExecQueue struct {
+	regMutexOnce sync.Once
+
 	mu         syncs.Mutex
 	ctx        context.Context    // context.Background + closed on Shutdown
 	cancel     context.CancelFunc // closes ctx
@@ -21,7 +24,13 @@ type ExecQueue struct {
 	queue      []func()
 }
 
+func (q *ExecQueue) registerMutex() {
+	syncs.RegisterMutex(&q.mu, "execqueue.ExecQueue.mu")
+}
+
 func (q *ExecQueue) Add(f func()) {
+	q.regMutexOnce.Do(q.registerMutex)
+
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.closed {
@@ -39,6 +48,8 @@ func (q *ExecQueue) Add(f func()) {
 // RunSync waits for the queue to be drained and then synchronously runs f.
 // It returns an error if the queue is closed before f is run or ctx expires.
 func (q *ExecQueue) RunSync(ctx context.Context, f func()) error {
+	q.regMutexOnce.Do(q.registerMutex)
+
 	q.mu.Lock()
 	q.initCtxLocked()
 	shutdownCtx := q.ctx
@@ -80,6 +91,8 @@ func (q *ExecQueue) run(f func()) {
 
 // Shutdown asynchronously signals the queue to stop.
 func (q *ExecQueue) Shutdown() {
+	q.regMutexOnce.Do(q.registerMutex)
+
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.closed = true
@@ -98,6 +111,8 @@ var errExecQueueShutdown = errors.New("execqueue shut down")
 
 // Wait waits for the queue to be empty or shut down.
 func (q *ExecQueue) Wait(ctx context.Context) error {
+	q.regMutexOnce.Do(q.registerMutex)
+
 	q.mu.Lock()
 	q.initCtxLocked()
 	waitCh := q.doneWaiter

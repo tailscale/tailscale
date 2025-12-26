@@ -81,13 +81,15 @@ func New(ctx context.Context, logf logger.Logf, lp ListenPacketer) *Pinger {
 		panic("net/ping: New:" + err.Error())
 	}
 
-	return &Pinger{
+	p := &Pinger{
 		lp:      lp,
 		Logf:    logf,
 		timeNow: time.Now,
 		id:      binary.LittleEndian.Uint16(id[:]),
 		pings:   make(map[uint16]outstanding),
 	}
+	syncs.RegisterMutex(&p.mu, "ping.Pinger.mu")
+	return p
 }
 
 func (p *Pinger) mkconn(ctx context.Context, typ, addr string) (net.PacketConn, error) {
