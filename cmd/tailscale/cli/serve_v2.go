@@ -243,87 +243,94 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 				fs.UintVar(&e.http, "http", 0, "Expose an HTTP server at the specified port")
 				fs.Var(&acceptAppCapsFlag{Value: &e.acceptAppCaps}, "accept-app-caps", "App capabilities to forward to the server (specify multiple capabilities with a comma-separated list)")
 				fs.Var(&serviceNameFlag{Value: &e.service}, "service", "Serve for a service with distinct virtual IP instead on node itself.")
+				fs.BoolVar(&e.tun, "tun", false, "Forward all traffic to the local machine (default false), only supported for services. Refer to docs for more information.")
 			}
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
 			fs.UintVar(&e.proxyProtocol, "proxy-protocol", 0, "PROXY protocol version (1 or 2) for TCP forwarding")
 			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
-			fs.BoolVar(&e.tun, "tun", false, "Forward all traffic to the local machine (default false), only supported for services. Refer to docs for more information.")
 		}),
 		UsageFunc: usageFuncNoDefaultValues,
-		Subcommands: []*ffcli.Command{
-			{
-				Name:       "status",
-				ShortUsage: "tailscale " + info.Name + " status [--json]",
-				Exec:       e.runServeStatus,
-				ShortHelp:  "View current " + info.Name + " configuration",
-				FlagSet: e.newFlags("serve-status", func(fs *flag.FlagSet) {
-					fs.BoolVar(&e.json, "json", false, "output JSON")
-				}),
-			},
-			{
-				Name:       "reset",
-				ShortUsage: "tailscale " + info.Name + " reset",
-				ShortHelp:  "Reset current " + info.Name + " config",
-				Exec:       e.runServeReset,
-				FlagSet:    e.newFlags("serve-reset", nil),
-			},
-			{
-				Name:       "drain",
-				ShortUsage: fmt.Sprintf("tailscale %s drain <service>", info.Name),
-				ShortHelp:  "Drain a service from the current node",
-				LongHelp: "Make the current node no longer accept new connections for the specified service.\n" +
-					"Existing connections will continue to work until they are closed, but no new connections will be accepted.\n" +
-					"Use this command to gracefully remove a service from the current node without disrupting existing connections.\n" +
-					"<service> should be a service name (e.g., svc:my-service).",
-				Exec: e.runServeDrain,
-			},
-			{
-				Name:       "clear",
-				ShortUsage: fmt.Sprintf("tailscale %s clear <service>", info.Name),
-				ShortHelp:  "Remove all config for a service",
-				LongHelp:   "Remove all handlers configured for the specified service.",
-				Exec:       e.runServeClear,
-			},
-			{
-				Name:       "advertise",
-				ShortUsage: fmt.Sprintf("tailscale %s advertise <service>", info.Name),
-				ShortHelp:  "Advertise this node as a service proxy to the tailnet",
-				LongHelp: "Advertise this node as a service proxy to the tailnet. This command is used\n" +
-					"to make the current node be considered as a service host for a service. This is\n" +
-					"useful to bring a service back after it has been drained. (i.e. after running \n" +
-					"`tailscale serve drain <service>`). This is not needed if you are using `tailscale serve` to initialize a service.",
-				Exec: e.runServeAdvertise,
-			},
-			{
-				Name:       "get-config",
-				ShortUsage: fmt.Sprintf("tailscale %s get-config <file> [--service=<service>] [--all]", info.Name),
-				ShortHelp:  "Get service configuration to save to a file",
-				LongHelp: "Get the configuration for services that this node is currently hosting in a\n" +
-					"format that can later be provided to set-config. This can be used to declaratively set\n" +
-					"configuration for a service host.",
-				Exec: e.runServeGetConfig,
-				FlagSet: e.newFlags("serve-get-config", func(fs *flag.FlagSet) {
-					fs.BoolVar(&e.allServices, "all", false, "read config from all services")
-					fs.Var(&serviceNameFlag{Value: &e.service}, "service", "read config from a particular service")
-				}),
-			},
-			{
-				Name:       "set-config",
-				ShortUsage: fmt.Sprintf("tailscale %s set-config <file> [--service=<service>] [--all]", info.Name),
-				ShortHelp:  "Define service configuration from a file",
-				LongHelp: "Read the provided configuration file and use it to declaratively set the configuration\n" +
-					"for either a single service, or for all services that this node is hosting. If --service is specified,\n" +
-					"all endpoint handlers for that service are overwritten. If --all is specified, all endpoint handlers for\n" +
-					"all services are overwritten.\n\n" +
-					"For information on the file format, see tailscale.com/kb/1589/tailscale-services-configuration-file",
-				Exec: e.runServeSetConfig,
-				FlagSet: e.newFlags("serve-set-config", func(fs *flag.FlagSet) {
-					fs.BoolVar(&e.allServices, "all", false, "apply config to all services")
-					fs.Var(&serviceNameFlag{Value: &e.service}, "service", "apply config to a particular service")
-				}),
-			},
-		},
+		Subcommands: func() []*ffcli.Command {
+			subcmds := []*ffcli.Command{
+				{
+					Name:       "status",
+					ShortUsage: "tailscale " + info.Name + " status [--json]",
+					Exec:       e.runServeStatus,
+					ShortHelp:  "View current " + info.Name + " configuration",
+					FlagSet: e.newFlags("serve-status", func(fs *flag.FlagSet) {
+						fs.BoolVar(&e.json, "json", false, "output JSON")
+					}),
+				},
+				{
+					Name:       "reset",
+					ShortUsage: "tailscale " + info.Name + " reset",
+					ShortHelp:  "Reset current " + info.Name + " config",
+					Exec:       e.runServeReset,
+					FlagSet:    e.newFlags("serve-reset", nil),
+				},
+			}
+			if subcmd == funnel {
+				return subcmds
+			}
+			return append(subcmds, []*ffcli.Command{
+				{
+					Name:       "drain",
+					ShortUsage: fmt.Sprintf("tailscale %s drain <service>", info.Name),
+					ShortHelp:  "Drain a service from the current node",
+					LongHelp: "Make the current node no longer accept new connections for the specified service.\n" +
+						"Existing connections will continue to work until they are closed, but no new connections will be accepted.\n" +
+						"Use this command to gracefully remove a service from the current node without disrupting existing connections.\n" +
+						"<service> should be a service name (e.g., svc:my-service).",
+					Exec: e.runServeDrain,
+				},
+				{
+					Name:       "clear",
+					ShortUsage: fmt.Sprintf("tailscale %s clear <service>", info.Name),
+					ShortHelp:  "Remove all config for a service",
+					LongHelp:   "Remove all handlers configured for the specified service.",
+					Exec:       e.runServeClear,
+				},
+				{
+					Name:       "advertise",
+					ShortUsage: fmt.Sprintf("tailscale %s advertise <service>", info.Name),
+					ShortHelp:  "Advertise this node as a service proxy to the tailnet",
+					LongHelp: "Advertise this node as a service proxy to the tailnet. This command is used\n" +
+						"to make the current node be considered as a service host for a service. This is\n" +
+						"useful to bring a service back after it has been drained. (i.e. after running \n" +
+						"`tailscale serve drain <service>`). This is not needed if you are using `tailscale serve` to initialize a service.",
+					Exec: e.runServeAdvertise,
+				},
+				{
+					Name:       "get-config",
+					ShortUsage: fmt.Sprintf("tailscale %s get-config <file> [--service=<service>] [--all]", info.Name),
+					ShortHelp:  "Get service configuration to save to a file",
+					LongHelp: "Get the configuration for services that this node is currently hosting in a\n" +
+						"format that can later be provided to set-config. This can be used to declaratively set\n" +
+						"configuration for a service host.",
+					Exec: e.runServeGetConfig,
+					FlagSet: e.newFlags("serve-get-config", func(fs *flag.FlagSet) {
+						fs.BoolVar(&e.allServices, "all", false, "read config from all services")
+						fs.Var(&serviceNameFlag{Value: &e.service}, "service", "read config from a particular service")
+					}),
+				},
+				{
+					Name:       "set-config",
+					ShortUsage: fmt.Sprintf("tailscale %s set-config <file> [--service=<service>] [--all]", info.Name),
+					ShortHelp:  "Define service configuration from a file",
+					LongHelp: "Read the provided configuration file and use it to declaratively set the configuration\n" +
+						"for either a single service, or for all services that this node is hosting. If --service is specified,\n" +
+						"all endpoint handlers for that service are overwritten. If --all is specified, all endpoint handlers for\n" +
+						"all services are overwritten.\n\n" +
+						"For information on the file format, see tailscale.com/kb/1589/tailscale-services-configuration-file",
+					Exec: e.runServeSetConfig,
+					FlagSet: e.newFlags("serve-set-config", func(fs *flag.FlagSet) {
+						fs.BoolVar(&e.allServices, "all", false, "apply config to all services")
+						fs.Var(&serviceNameFlag{Value: &e.service}, "service", "apply config to a particular service")
+					}),
+				},
+			}...)
+		}(),
 	}
 }
 
