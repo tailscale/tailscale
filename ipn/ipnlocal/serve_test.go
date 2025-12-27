@@ -751,6 +751,7 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 				{"X-Forwarded-For", "100.150.151.152"},
 				{"Tailscale-User-Login", "someone@example.com"},
 				{"Tailscale-User-Name", "Some One"},
+				{"Tailscale-User-Handle", "someone"},
 				{"Tailscale-User-Profile-Pic", "https://example.com/photo.jpg"},
 				{"Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers"},
 			},
@@ -763,6 +764,7 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 				{"X-Forwarded-For", "100.150.151.153"},
 				{"Tailscale-User-Login", ""},
 				{"Tailscale-User-Name", ""},
+				{"Tailscale-User-Handle", ""},
 				{"Tailscale-User-Profile-Pic", ""},
 				{"Tailscale-Headers-Info", ""},
 			},
@@ -775,6 +777,7 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 				{"X-Forwarded-For", "100.160.161.162"},
 				{"Tailscale-User-Login", ""},
 				{"Tailscale-User-Name", ""},
+				{"Tailscale-User-Handle", ""},
 				{"Tailscale-User-Profile-Pic", ""},
 				{"Tailscale-Headers-Info", ""},
 			},
@@ -803,6 +806,33 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHandelizeLogin(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"someone@example.com", "someone"},
+		{"john.doe@example.com", "john.doe"},
+		{"John.Doe@example.com", "john.doe"},
+		{"john-doe@example.com", "john-doe"},
+		{"john_doe@example.com", "john_doe"},
+		{"john123@example.com", "john123"},
+		{"john+doe@example.com", "john-doe"},
+		{"john!#$doe@example.com", "john-doe"},
+		{"john doe@example.com", "john-doe"},
+		{"jöhn@example.com", "j-hn"},
+		{"someone", "someone"},
+		{"@example.com", ""},
+		{"John.Doe-Test_123@example.com", "john.doe-test_123"},
+	}
+	for _, tt := range tests {
+		got := handelizeLogin(tt.in)
+		if got != tt.want {
+			t.Errorf("handelizeLogin(%q) = %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }
 
@@ -891,6 +921,7 @@ func TestServeHTTPProxyGrantHeader(t *testing.T) {
 				{"X-Forwarded-For", "100.150.151.152"},
 				{"Tailscale-User-Login", "someone@example.com"},
 				{"Tailscale-User-Name", "Some One"},
+				{"Tailscale-User-Handle", "someone"},
 				{"Tailscale-User-Profile-Pic", "https://example.com/photo.jpg"},
 				{"Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers"},
 				{"Tailscale-App-Capabilities", `{"example.com/cap/interesting":[{"role":"🐿"}]}`},
@@ -904,6 +935,7 @@ func TestServeHTTPProxyGrantHeader(t *testing.T) {
 				{"X-Forwarded-For", "100.150.151.153"},
 				{"Tailscale-User-Login", ""},
 				{"Tailscale-User-Name", ""},
+				{"Tailscale-User-Handle", ""},
 				{"Tailscale-User-Profile-Pic", ""},
 				{"Tailscale-Headers-Info", ""},
 				{"Tailscale-App-Capabilities", `{"example.com/cap/boring":[{"role":"Viewer"}]}`},
@@ -917,6 +949,7 @@ func TestServeHTTPProxyGrantHeader(t *testing.T) {
 				{"X-Forwarded-For", "100.160.161.162"},
 				{"Tailscale-User-Login", ""},
 				{"Tailscale-User-Name", ""},
+				{"Tailscale-User-Handle", ""},
 				{"Tailscale-User-Profile-Pic", ""},
 				{"Tailscale-Headers-Info", ""},
 				{"Tailscale-App-Capabilities", ""},
