@@ -24,6 +24,7 @@ import (
 func init() {
 	feature.Register("identityfederation")
 	tailscale.HookResolveAuthKeyViaWIF.Set(resolveAuthKey)
+	tailscale.HookExchangeJWTForTokenViaWIF.Set(exchangeJWTForToken)
 }
 
 // resolveAuthKey uses OIDC identity federation to exchange the provided ID token and client ID for an authkey.
