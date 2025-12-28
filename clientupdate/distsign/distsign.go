@@ -332,7 +332,13 @@ func (c *Client) download(ctx context.Context, url, dst string, limit int64) ([]
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.Proxy = feature.HookProxyFromEnvironment.GetOrNil()
 	defer tr.CloseIdleConnections()
-	hc := &http.Client{Transport: tr}
+	hc := &http.Client{
+		Transport: tr,
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			c.logf("Download redirected to %q", r.URL)
+			return nil
+		},
+	}
 
 	quickCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
