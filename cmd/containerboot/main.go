@@ -117,7 +117,9 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/sys/unix"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	kubeutils "tailscale.com/k8s-operator"
@@ -528,7 +530,7 @@ runLoop:
 					}
 				}
 				if cfg.TailnetTargetFQDN != "" {
-					egressAddrs, err := resolveTailnetFQDN(n.NetMap, cfg.TailnetTargetFQDN)
+					egressAddrs, err := resolveTailnetFQDN(ctx, client, cfg.TailnetTargetFQDN)
 					if err != nil {
 						log.Print(err.Error())
 						break
@@ -884,22 +886,58 @@ func runHTTPServer(mux *http.ServeMux, addr string) (close func() error) {
 
 // resolveTailnetFQDN resolves a tailnet FQDN to a list of IP prefixes, which
 // can be either a peer device or a Tailscale Service.
-func resolveTailnetFQDN(nm *netmap.NetworkMap, fqdn string) ([]netip.Prefix, error) {
+func resolveTailnetFQDN(ctx context.Context, c *local.Client, fqdn string) ([]netip.Prefix, error) {
 	dnsFQDN, err := dnsname.ToFQDN(fqdn)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing %q as FQDN: %w", fqdn, err)
 	}
 
-	// Check all peer devices first.
-	for _, p := range nm.Peers {
-		if strings.EqualFold(p.Name(), dnsFQDN.WithTrailingDot()) {
-			return p.Addresses().AsSlice(), nil
+	bytes, _, err := c.QueryDNS(ctx, dnsFQDN.WithTrailingDot(), "A")
+	if err != nil {
+		return nil, fmt.Errorf("error querying tailscale DNS: %w", err)
+	}
+
+	var p dnsmessage.Parser
+	header, err := p.Start(bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse DNS response: %w", err)
+	}
+	p.SkipAllQuestions()
+	if header.RCode != dnsmessage.RCodeSuccess {
+		return nil, fmt.Errorf("no answers in DNS query response for FQDN %q", dnsFQDN.WithTrailingDot())
+	}
+
+	answers, err := p.AllAnswers()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse DNS answers: %w", err)
+	}
+
+	addrs := []netip.Prefix{}
+	for _, a := range answers {
+		if a.Header.Type == dnsmessage.TypeA {
+			ar, ok := a.Body.(*dnsmessage.AResource)
+			if !ok {
+				log.Printf("error: failed to cast body to *dnsmessage.AResource")
+				continue
+			}
+
+			addr := netip.AddrFrom4(ar.A)
+			if !addr.IsValid() {
+				log.Printf("record %q is not a valid address", addr.String())
+				continue
+			}
+
+			prefix := netip.PrefixFrom(addr, 32)
+			if !prefix.IsValid() {
+				log.Printf("address %q is not a valid prefix", prefix.String())
+				continue
+			}
+			addrs = append(addrs, prefix)
 		}
 	}
 
-	// If not found yet, check for a matching Tailscale Service.
-	if svcIPs := serviceIPsFromNetMap(nm, dnsFQDN); len(svcIPs) != 0 {
-		return svcIPs, nil
+	if len(addrs) > 0 {
+		return addrs, nil
 	}
 
 	return nil, fmt.Errorf("could not find Tailscale node or service %q; it either does not exist, or not reachable because of ACLs", fqdn)
