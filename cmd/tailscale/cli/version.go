@@ -30,9 +30,10 @@ var versionCmd = &ffcli.Command{
 }
 
 var versionArgs struct {
-	daemon   bool // also check local node's daemon version
-	json     bool
-	upstream bool
+	daemon                  bool // also check local node's daemon version
+	json                    bool
+	upstream                bool
+	acceptReleaseCandidates bool
 }
 
 func runVersion(ctx context.Context, args []string) error {
@@ -49,9 +50,15 @@ func runVersion(ctx context.Context, args []string) error {
 		}
 	}
 
+	var acceptReleaseCandidates bool = false
+
+	if versionArgs.acceptReleaseCandidates {
+		acceptReleaseCandidates = true
+	}
+
 	var upstreamVer string
 	if versionArgs.upstream {
-		upstreamVer, err = clientupdate.LatestTailscaleVersion(clientupdate.CurrentTrack)
+		upstreamVer, _, err = clientupdate.LatestTailscaleVersion(clientupdate.CurrentTrack, acceptReleaseCandidates)
 		if err != nil {
 			return err
 		}
