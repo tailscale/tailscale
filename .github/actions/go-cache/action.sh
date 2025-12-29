@@ -23,10 +23,11 @@ if [ -z "${URL:-}" ]; then
     exit 0
 fi
 
-BIN_PATH="${RUNNER_TEMP:-/tmp}/cigocacher$(go env GOEXE)"
-go build -o "${BIN_PATH}" ./cmd/cigocacher
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+BASE_CMD="${REPO_ROOT}/tool/cigocacher --cache-dir ${CACHE_DIR} --cigocached-url ${URL} --cigocached-host ${HOST}"
 
-CIGOCACHER_TOKEN="$("${BIN_PATH}" --auth --cigocached-url "${URL}" --cigocached-host "${HOST}" )"
+CIGOCACHER_TOKEN="$("${BASE_CMD}" --auth)"
 if [ -z "${CIGOCACHER_TOKEN:-}" ]; then
     echo "Failed to fetch cigocacher token, skipping cigocacher setup"
     exit 0
@@ -35,5 +36,5 @@ fi
 echo "Fetched cigocacher token successfully"
 echo "::add-mask::${CIGOCACHER_TOKEN}"
 
-echo "GOCACHEPROG=${BIN_PATH} --cache-dir ${CACHE_DIR} --cigocached-url ${URL} --cigocached-host ${HOST} --token ${CIGOCACHER_TOKEN}" >> "${GITHUB_ENV}"
+echo "GOCACHEPROG=${BASE_CMD} --token ${CIGOCACHER_TOKEN}" >> "${GITHUB_ENV}"
 echo "success=true" >> "${GITHUB_OUTPUT}"
