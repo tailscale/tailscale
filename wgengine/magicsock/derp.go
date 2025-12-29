@@ -959,6 +959,14 @@ func (c *Conn) DERPs() int {
 	return len(c.activeDerp)
 }
 
+// DERPHome returns the region ID of the current home DERP server,
+// or 0 if none is selected.
+func (c *Conn) DERPHome() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.myDerp
+}
+
 func (c *Conn) derpRegionCodeOfIDLocked(regionID int) string {
 	if c.derpMap == nil {
 		return ""
