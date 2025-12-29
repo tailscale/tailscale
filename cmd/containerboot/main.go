@@ -12,6 +12,7 @@
 // variables. All configuration is optional.
 //
 //   - TS_AUTHKEY: the authkey to use for login.
+//   - TS_AUTHKEY_FILE: the path to a file containing the authkey to use for login.
 //   - TS_HOSTNAME: the hostname to request for the node.
 //   - TS_ROUTES: subnet routes to advertise. Explicitly setting it to an empty
 //     value will cause containerboot to stop acting as a subnet router for any
