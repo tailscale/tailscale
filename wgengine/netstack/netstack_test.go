@@ -847,13 +847,13 @@ func TestShouldSendToHost(t *testing.T) {
 		// not over WireGuard.
 		{
 			name: "from_service_ip_to_localhost",
-			src:  netip.AddrPortFrom(serviceIP, 53),
+			src:  netip.AddrPortFrom(tsServiceIP, 53),
 			dst:  netip.MustParseAddrPort("127.0.0.1:9999"),
 			want: true,
 		},
 		{
 			name: "from_service_ip_to_localhost_v6",
-			src:  netip.AddrPortFrom(serviceIPv6, 53),
+			src:  netip.AddrPortFrom(tsServiceIPv6, 53),
 			dst:  netip.MustParseAddrPort("[::1]:9999"),
 			want: true,
 		},
@@ -1018,4 +1018,280 @@ func makeUDP6PacketBuffer(src, dst netip.AddrPort) *stack.PacketBuffer {
 	udp.SetChecksum(^udp.CalculateChecksum(xsum))
 
 	return pkt
+}
+
+func TestHandleIPPacket(t *testing.T) {
+	impl := makeNetstack(t, func(ns *Impl) {})
+
+	client := netip.MustParseAddr("100.64.1.2")
+	destAddr := netip.MustParseAddr("100.64.1.1")
+	pkt := tcp4syn(t, client, destAddr, 1234, 5678)
+
+	var handlerCalled bool
+	var receivedPacket []byte
+	impl.HandleIPPacket = func(p []byte) bool {
+		handlerCalled = true
+		receivedPacket = append([]byte(nil), p...)
+		return true
+	}
+
+	var parsed packet.Parsed
+	parsed.Decode(pkt)
+
+	resp, _ := impl.injectInbound(&parsed, impl.tundev, nil)
+
+	if !handlerCalled {
+		t.Error("HandleIPPacket was not called")
+	}
+	if resp != filter.DropSilently {
+		t.Errorf("Expected DropSilently response when handler returns true, got %v", resp)
+	}
+	if len(receivedPacket) == 0 {
+		t.Error("Handler received empty packet")
+	}
+	if len(receivedPacket) < 20 {
+		t.Errorf("Packet too short: %d bytes", len(receivedPacket))
+	}
+	ipVer := receivedPacket[0] >> 4
+	if ipVer != 4 {
+		t.Errorf("Expected IPv4 packet (version 4), got version %d", ipVer)
+	}
+
+	handlerCalled = false
+	receivedPacket = nil
+	impl.HandleIPPacket = func(p []byte) bool {
+		handlerCalled = true
+		receivedPacket = append([]byte(nil), p...)
+		return false
+	}
+
+	var parsed2 packet.Parsed
+	parsed2.Decode(pkt)
+	resp2, _ := impl.injectInbound(&parsed2, impl.tundev, nil)
+
+	if !handlerCalled {
+		t.Error("HandleIPPacket was not called on second test")
+	}
+	if resp2 != filter.Accept {
+		t.Errorf("Expected Accept when handler declines, got %v", resp2)
+	}
+	if len(receivedPacket) == 0 {
+		t.Error("Handler received empty packet on second test")
+	}
+
+	impl.HandleIPPacket = nil
+	var parsed3 packet.Parsed
+	parsed3.Decode(pkt)
+	resp3, _ := impl.injectInbound(&parsed3, impl.tundev, nil)
+
+	if resp3 != filter.Accept {
+		t.Errorf("Expected Accept with no handler, got %v", resp3)
+	}
+}
+
+func TestHandleIPPacketIPv6(t *testing.T) {
+	impl := makeNetstack(t, func(ns *Impl) {})
+
+	src := netip.MustParseAddr("fd7a:115c:a1e0::2")
+	dst := netip.MustParseAddr("fd7a:115c:a1e0::1")
+	const tcpLen = header.TCPMinimumSize
+	ip := header.IPv6(make([]byte, header.IPv6MinimumSize+tcpLen))
+	ip.Encode(&header.IPv6Fields{
+		TransportProtocol: header.TCPProtocolNumber,
+		PayloadLength:     tcpLen,
+		HopLimit:          64,
+		SrcAddr:           tcpip.AddrFrom16(src.As16()),
+		DstAddr:           tcpip.AddrFrom16(dst.As16()),
+	})
+
+	tcp := header.TCP(ip[header.IPv6MinimumSize:])
+	tcp.Encode(&header.TCPFields{
+		SrcPort:    1234,
+		DstPort:    5678,
+		SeqNum:     0,
+		DataOffset: header.TCPMinimumSize,
+		Flags:      header.TCPFlagSyn,
+		WindowSize: 65535,
+	})
+
+	pkt := []byte(ip)
+
+	var receivedPacket []byte
+	impl.HandleIPPacket = func(p []byte) bool {
+		receivedPacket = append([]byte(nil), p...)
+		return true
+	}
+
+	var parsed packet.Parsed
+	parsed.Decode(pkt)
+
+	resp, _ := impl.injectInbound(&parsed, impl.tundev, nil)
+
+	if resp != filter.DropSilently {
+		t.Errorf("Expected DropSilently, got %v", resp)
+	}
+	if len(receivedPacket) < 40 {
+		t.Errorf("Packet too short for IPv6: %d bytes", len(receivedPacket))
+	}
+	ipVer := receivedPacket[0] >> 4
+	if ipVer != 6 {
+		t.Errorf("Expected IPv6 packet (version 6), got version %d", ipVer)
+	}
+}
+
+func TestHandleIPPacketNotProcessed(t *testing.T) {
+	impl := makeNetstack(t, func(ns *Impl) {
+		ns.ProcessLocalIPs = false
+		ns.ProcessSubnets = false
+	})
+
+	var handlerCalled bool
+	impl.HandleIPPacket = func(p []byte) bool {
+		handlerCalled = true
+		return true
+	}
+
+	client := netip.MustParseAddr("100.64.1.2")
+	destAddr := netip.MustParseAddr("100.64.1.1")
+	pkt := tcp4syn(t, client, destAddr, 1234, 5678)
+
+	var parsed packet.Parsed
+	parsed.Decode(pkt)
+
+	resp, _ := impl.injectInbound(&parsed, impl.tundev, nil)
+
+	if !handlerCalled {
+		t.Error("HandleIPPacket should be called when shouldProcessInbound returns false")
+	}
+	if resp != filter.DropSilently {
+		t.Errorf("Expected DropSilently when handler consumes packet, got %v", resp)
+	}
+}
+
+func TestHandleIPPacketRealPacket(t *testing.T) {
+	impl := makeNetstack(t, func(ns *Impl) {})
+
+	client := netip.MustParseAddr("100.64.1.2")
+	destAddr := netip.MustParseAddr("100.64.1.1")
+	pkt := tcp4syn(t, client, destAddr, 1234, 5678)
+
+	var parsed packet.Parsed
+	parsed.Decode(pkt)
+	if parsed.IPVersion != 4 {
+		t.Fatalf("Expected IPv4, got version %d", parsed.IPVersion)
+	}
+	if parsed.Src.Addr() != client {
+		t.Errorf("Expected src %v, got %v", client, parsed.Src.Addr())
+	}
+	if parsed.Dst.Addr() != destAddr {
+		t.Errorf("Expected dst %v, got %v", destAddr, parsed.Dst.Addr())
+	}
+
+	var receivedPacket []byte
+	impl.HandleIPPacket = func(p []byte) bool {
+		receivedPacket = append([]byte(nil), p...)
+		return true
+	}
+
+	resp, _ := impl.injectInbound(&parsed, impl.tundev, nil)
+
+	if resp != filter.DropSilently {
+		t.Errorf("Expected DropSilently, got %v", resp)
+	}
+
+	if len(receivedPacket) != len(pkt) {
+		t.Errorf("Packet length mismatch: got %d, want %d", len(receivedPacket), len(pkt))
+	}
+
+	var parsedFromHandler packet.Parsed
+	parsedFromHandler.Decode(receivedPacket)
+	if parsedFromHandler.IPVersion != 4 {
+		t.Errorf("Handler received non-IPv4 packet: version %d", parsedFromHandler.IPVersion)
+	}
+	if parsedFromHandler.Src.Addr() != client {
+		t.Errorf("Handler packet src mismatch: got %v, want %v", parsedFromHandler.Src.Addr(), client)
+	}
+}
+
+// TestHandleIPPacketWithServices verifies that PeerAPI and Service IP packets
+// don't reach the handler (they're handled by shouldProcessInbound).
+func TestHandleIPPacketWithServices(t *testing.T) {
+	var handlerCalledFor []string
+	var handlerFunc = func(p []byte) bool {
+		var parsed packet.Parsed
+		parsed.Decode(p)
+		handlerCalledFor = append(handlerCalledFor, fmt.Sprintf("%v->%v", parsed.Src, parsed.Dst))
+		return true
+	}
+
+	client := netip.MustParseAddr("100.64.1.2")
+	selfIP := netip.MustParseAddr("100.64.1.1")
+
+	tests := []struct {
+		name         string
+		setupImpl    func(*Impl)
+		dstAddr      netip.Addr
+		dstPort      uint16
+		shouldReach  bool
+		expectedResp filter.Response
+		description  string
+	}{
+		{
+			name: "peerapi_packet",
+			setupImpl: func(ns *Impl) {
+				ns.ProcessLocalIPs = true
+				ns.peerapiPort4Atomic.Store(5555)
+			},
+			dstAddr:      selfIP,
+			dstPort:      5555,
+			shouldReach:  false,
+			expectedResp: filter.DropSilently,
+			description:  "PeerAPI packets should NOT reach handler (handled by netstack)",
+		},
+		{
+			name:         "service_ip_dns",
+			setupImpl:    func(ns *Impl) {},
+			dstAddr:      netip.MustParseAddr("100.100.100.100"),
+			dstPort:      53,
+			shouldReach:  false,
+			expectedResp: filter.DropSilently,
+			description:  "Service IP (DNS) packets should NOT reach handler",
+		},
+		{
+			name:         "normal_packet",
+			setupImpl:    func(ns *Impl) {},
+			dstAddr:      selfIP,
+			dstPort:      8080,
+			shouldReach:  true,
+			expectedResp: filter.DropSilently,
+			description:  "Normal packets (not processed by netstack) should reach handler",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			impl := makeNetstack(t, tt.setupImpl)
+			impl.HandleIPPacket = handlerFunc
+			handlerCalledFor = nil
+
+			pkt := tcp4syn(t, client, tt.dstAddr, 1234, tt.dstPort)
+			var parsed packet.Parsed
+			parsed.Decode(pkt)
+
+			resp, _ := impl.injectInbound(&parsed, impl.tundev, nil)
+
+			handlerCalled := len(handlerCalledFor) > 0
+
+			if tt.shouldReach && !handlerCalled {
+				t.Errorf("%s: handler was not called, but should have been", tt.description)
+			}
+			if !tt.shouldReach && handlerCalled {
+				t.Errorf("%s: handler was called for %v, but should NOT have been", tt.description, handlerCalledFor)
+			}
+
+			if resp != tt.expectedResp {
+				t.Errorf("Expected %v, got %v", tt.expectedResp, resp)
+			}
+		})
+	}
 }

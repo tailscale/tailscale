@@ -158,6 +158,23 @@ type Server struct {
 	// that the control server will allow the node to adopt that tag.
 	AdvertiseTags []string
 
+	// IPPacketHandler, if non-nil, specifies a handler that will be called for
+	// incoming TCP/UDP packets that netstack will not process.
+	//
+	// The packet slice contains a complete IP packet starting with the IP header.
+	// The handler should not retain the packet slice after returning.
+	//
+	// Return true if the packet was handled, false to pass it to the host network stack.
+	//
+	// The handler will NOT see packets processed by netstack, including packets to
+	// local Tailscale IPs, subnet IPs, PeerAPI, SSH, or service IPs (100.100.100.100).
+	//
+	// The handler is called from the packet receive path and should not block.
+	//
+	// This must be set before calling Start, Listen, Dial, or Up.
+	// To send packets, call [IPPacketWriter()] to get an [IPPacketWriter].
+	IPPacketHandler func(packet []byte) bool
+
 	getCertForTesting func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 
 	initOnce         sync.Once
@@ -200,9 +217,25 @@ type Server struct {
 // over the TCP conn.
 type FallbackTCPHandler func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool)
 
+// IPPacketWriter is a function that sends an IP packet into the Tailscale network.
+// The packet must be a complete IP packet starting with the IP header.
+// It will be routed through the Tailscale network to the appropriate peer
+// based on the destination IP address.
+type IPPacketWriter func(pkt []byte) error
+
+// ErrIPPacketHandlerSet is returned by Listen, ListenPacket, ListenTLS,
+// ListenFunnel, and Dial when IPPacketHandler is set. These APIs rely on
+// netstack to process packets, which is bypassed when IPPacketHandler is set.
+var ErrIPPacketHandlerSet = errors.New("tsnet: cannot use socket APIs when IPPacketHandler is set")
+
 // Dial connects to the address on the tailnet.
 // It will start the server if it has not been started yet.
+//
+// If IPPacketHandler is set, Dial returns ErrIPPacketHandlerSet.
 func (s *Server) Dial(ctx context.Context, network, address string) (net.Conn, error) {
+	if s.IPPacketHandler != nil {
+		return nil, ErrIPPacketHandlerSet
+	}
 	if err := s.Start(); err != nil {
 		return nil, err
 	}
@@ -667,6 +700,7 @@ func (s *Server) start() (reterr error) {
 	ns.ProcessSubnets = true
 	ns.GetTCPHandlerForFlow = s.getTCPHandlerForFlow
 	ns.GetUDPHandlerForFlow = s.getUDPHandlerForFlow
+	ns.HandleIPPacket = s.IPPacketHandler
 	s.netstack = ns
 	s.dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 		_, ok := eng.PeerForIP(ip)
@@ -1018,7 +1052,12 @@ func (s *Server) getUDPHandlerForFlow(src, dst netip.AddrPort) (handler func(net
 // IPv6 address of this node) only. To listen for traffic on other addresses
 // such as those routed inbound via subnet routes, explicitly specify
 // the listening address or use RegisterFallbackTCPHandler.
+//
+// If IPPacketHandler is set, Listen returns ErrIPPacketHandlerSet.
 func (s *Server) Listen(network, addr string) (net.Listener, error) {
+	if s.IPPacketHandler != nil {
+		return nil, ErrIPPacketHandlerSet
+	}
 	return s.listen(network, addr, listenOnTailnet)
 }
 
@@ -1029,7 +1068,12 @@ func (s *Server) Listen(network, addr string) (net.Listener, error) {
 // corresponding to "udp4" or "udp6" respectively. IP must be specified.
 //
 // If s has not been started yet, it will be started.
+//
+// If IPPacketHandler is set, ListenPacket returns ErrIPPacketHandlerSet.
 func (s *Server) ListenPacket(network, addr string) (net.PacketConn, error) {
+	if s.IPPacketHandler != nil {
+		return nil, ErrIPPacketHandlerSet
+	}
 	ap, err := resolveListenAddr(network, addr)
 	if err != nil {
 		return nil, err
@@ -1050,10 +1094,24 @@ func (s *Server) ListenPacket(network, addr string) (net.PacketConn, error) {
 	return s.netstack.ListenPacket(network, ap.String())
 }
 
+// IPPacketWriter returns a function to send IP packets into the Tailscale network.
+func (s *Server) IPPacketWriter() (IPPacketWriter, error) {
+	if err := s.Start(); err != nil {
+		return nil, err
+	}
+
+	return s.netstack.InjectOutbound, nil
+}
+
 // ListenTLS announces only on the Tailscale network.
 // It returns a TLS listener wrapping the tsnet listener.
 // It will start the server if it has not been started yet.
+//
+// If IPPacketHandler is set, ListenTLS returns ErrIPPacketHandlerSet.
 func (s *Server) ListenTLS(network, addr string) (net.Listener, error) {
+	if s.IPPacketHandler != nil {
+		return nil, ErrIPPacketHandlerSet
+	}
 	if network != "tcp" {
 		return nil, fmt.Errorf("ListenTLS(%q, %q): only tcp is supported", network, addr)
 	}
@@ -1159,7 +1217,12 @@ func FunnelTLSConfig(conf *tls.Config) FunnelOption {
 // and the only other supported addrs currently are ":8443" and ":10000".
 //
 // It will start the server if it has not been started yet.
+//
+// If IPPacketHandler is set, ListenFunnel returns ErrIPPacketHandlerSet.
 func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.Listener, error) {
+	if s.IPPacketHandler != nil {
+		return nil, ErrIPPacketHandlerSet
+	}
 	if network != "tcp" {
 		return nil, fmt.Errorf("ListenFunnel(%q, %q): only tcp is supported", network, addr)
 	}

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/conn"
+	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/refs"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -119,8 +120,8 @@ func maxInFlightConnectionAttemptsPerClient() int {
 var debugNetstack = envknob.RegisterBool("TS_DEBUG_NETSTACK")
 
 var (
-	serviceIP   = tsaddr.TailscaleServiceIP()
-	serviceIPv6 = tsaddr.TailscaleServiceIPv6()
+	tsServiceIP   = tsaddr.TailscaleServiceIP()
+	tsServiceIPv6 = tsaddr.TailscaleServiceIPv6()
 )
 
 func init() {
@@ -175,6 +176,22 @@ type Impl struct {
 	// be a subnet router).
 	// It can only be set before calling Start.
 	ProcessSubnets bool
+
+	// HandleIPPacket, if non-nil, is called for incoming TCP/UDP packets that
+	// netstack will not process.
+	//
+	// The packet slice contains a complete IP packet starting with the IP header.
+	// The packet slice is only valid for the duration of the call and must not
+	// be retained.
+	//
+	// If HandleIPPacket returns true, the packet is consumed. If false, the packet
+	// is passed to the host network stack (if available).
+	//
+	// The handler will NOT see packets processed by netstack (local IPs, subnet IPs,
+	// PeerAPI, SSH, service IPs, or flows handled by GetTCPHandlerForFlow/GetUDPHandlerForFlow).
+	//
+	// The handler is called from the packet receive path and must not block.
+	HandleIPPacket func(packet []byte) bool
 
 	ipstack   *stack.Stack
 	linkEP    *linkEndpoint
@@ -413,6 +430,16 @@ func (ns *Impl) Close() error {
 	ns.ipstack.Close()
 	ns.ipstack.Wait()
 	return nil
+}
+
+// InjectOutbound sends an IP packet through the Tailscale network.
+// The packet must be a complete IP packet starting with the IP header.
+func (ns *Impl) InjectOutbound(pkt []byte) error {
+	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
+		Payload: buffer.MakeWithData(pkt),
+	})
+	// InjectOutboundPacketBuffer decrements the buffer reference count.
+	return ns.tundev.InjectOutboundPacketBuffer(packetBuf)
 }
 
 // SetTransportProtocolOption forwards to the underlying
@@ -772,7 +799,7 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper, gro *gro.
 	// Determine if we care about this local packet.
 	dst := p.Dst.Addr()
 	switch {
-	case dst == serviceIP || dst == serviceIPv6:
+	case dst == tsServiceIP || dst == tsServiceIPv6:
 		// We want to intercept some traffic to the "service IP" (e.g.
 		// 100.100.100.100 for IPv4). However, of traffic to the
 		// service IP, we only care about UDP 53, and TCP on port 53,
@@ -994,13 +1021,13 @@ func (ns *Impl) shouldSendToHost(pkt *stack.PacketBuffer) bool {
 	switch v := hdr.(type) {
 	case header.IPv4:
 		srcIP := netip.AddrFrom4(v.SourceAddress().As4())
-		if serviceIP == srcIP {
+		if tsServiceIP == srcIP {
 			return true
 		}
 
 	case header.IPv6:
 		srcIP := netip.AddrFrom16(v.SourceAddress().As16())
-		if srcIP == serviceIPv6 {
+		if srcIP == tsServiceIPv6 {
 			return true
 		}
 
@@ -1064,7 +1091,7 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 	// Handle incoming peerapi connections in netstack.
 	dstIP := p.Dst.Addr()
 	isLocal := ns.isLocalIP(dstIP)
-	isService := ns.isVIPServiceIP(dstIP)
+	isVIPService := ns.isVIPServiceIP(dstIP)
 
 	// Handle TCP connection to the Tailscale IP(s) in some cases:
 	if ns.lb != nil && p.IPProto == ipproto.TCP && isLocal {
@@ -1087,7 +1114,20 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 			return true
 		}
 	}
-	if buildfeatures.HasServe && isService {
+	hittingServiceIP := dstIP == tsServiceIP || dstIP == tsServiceIPv6
+	if hittingServiceIP {
+		if p.IsEchoRequest() {
+			return true
+		}
+		if p.Dst.Port() == 53 {
+			return true
+		}
+		if ns.isLoopbackPort(p.Dst.Port()) {
+			return true
+		}
+		return false
+	}
+	if buildfeatures.HasServe && isVIPService {
 		if p.IsEchoRequest() {
 			return true
 		}
@@ -1102,6 +1142,13 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 	}
 	if p.IPVersion == 6 && !isLocal && viaRange.Contains(dstIP) {
 		return ns.lb != nil && ns.lb.ShouldHandleViaIP(dstIP)
+	}
+	// If HandleIPPacket is set, don't process normal traffic in netstack.
+	// This allows the handler to receive all non-special packets.
+	// Special traffic (PeerAPI, SSH, service IP, VIP services) is still
+	// handled by netstack via the checks above.
+	if ns.HandleIPPacket != nil {
+		return false
 	}
 	if ns.ProcessLocalIPs && isLocal {
 		return true
@@ -1189,7 +1236,11 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) 
 	}
 
 	if !ns.shouldProcessInbound(p, t) {
-		// Let the host network stack (if any) deal with it.
+		if ns.HandleIPPacket != nil {
+			if ns.HandleIPPacket(p.Buffer()) {
+				return filter.DropSilently, gro
+			}
+		}
 		return filter.Accept, gro
 	}
 
@@ -1392,7 +1443,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 
 	// Local Services (DNS and WebDAV)
-	hittingServiceIP := dialIP == serviceIP || dialIP == serviceIPv6
+	hittingServiceIP := dialIP == tsServiceIP || dialIP == tsServiceIPv6
 	hittingDNS := hittingServiceIP && reqDetails.LocalPort == 53
 	if hittingDNS {
 		c := getConnOrReset()
@@ -1433,7 +1484,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 	switch {
 	case hittingServiceIP && ns.isLoopbackPort(reqDetails.LocalPort):
-		if dialIP == serviceIPv6 {
+		if dialIP == tsServiceIPv6 {
 			dialIP = ipv6Loopback
 		} else {
 			dialIP = ipv4Loopback
@@ -1635,14 +1686,14 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 	}
 
 	// Handle magicDNS and loopback traffic (via UDP) here.
-	if dst := dstAddr.Addr(); dst == serviceIP || dst == serviceIPv6 {
+	if dst := dstAddr.Addr(); dst == tsServiceIP || dst == tsServiceIPv6 {
 		switch {
 		case dstAddr.Port() == 53:
 			c := gonet.NewUDPConn(&wq, ep)
 			go ns.handleMagicDNSUDP(srcAddr, c)
 			return
 		case ns.isLoopbackPort(dstAddr.Port()):
-			if dst == serviceIPv6 {
+			if dst == tsServiceIPv6 {
 				dstAddr = netip.AddrPortFrom(ipv6Loopback, dstAddr.Port())
 			} else {
 				dstAddr = netip.AddrPortFrom(ipv4Loopback, dstAddr.Port())

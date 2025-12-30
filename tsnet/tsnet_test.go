@@ -13,6 +13,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
@@ -42,11 +43,13 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/deptest"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/tstest/integration/testcontrol"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/must"
@@ -1590,5 +1593,281 @@ func TestResolveAuthKey(t *testing.T) {
 				t.Errorf("resolveAuthKey() = %q, want %q", gotAuthKey, tt.wantAuthKey)
 			}
 		})
+	}
+}
+
+// TestIPPacketHandler tests the IPPacketHandler functionality end-to-end.
+// It sets up two tsnet instances:
+//   - s1: a "regular" tsnet using the high-level socket API (ListenPacket)
+//   - s2: a "raw packet" tsnet using IPPacketHandler/IPPacketWriter
+//
+// The test verifies:
+//  1. s2 can send a UDP packet to s1 using raw IP packets via IPPacketWriter
+//  2. s2 receives the UDP echo reply from s1 via IPPacketHandler
+//  3. PeerAPI still works on s2 (raw packet handling doesn't break internal services)
+func TestIPPacketHandler(t *testing.T) {
+	tstest.Shard(t)
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	controlURL, _ := startControl(t)
+
+	// Start s1 - a regular tsnet server that will echo UDP packets
+	s1, s1ip, _ := startServer(t, ctx, controlURL, "s1")
+	pc := must.Get(s1.ListenPacket("udp", fmt.Sprintf("%s:9999", s1ip)))
+	defer pc.Close()
+
+	echoServerDone := make(chan struct{})
+	t.Logf("s1: starting UDP echo server on %v:9999", s1ip)
+	go func() {
+		defer close(echoServerDone)
+		defer t.Log("s1: echo server goroutine exiting")
+		buf := make([]byte, 1500)
+		for {
+			t.Log("s1: echo server waiting for packet...")
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				t.Logf("s1: echo server ReadFrom error: %v", err)
+				return
+			}
+			t.Logf("s1: received UDP packet from %v: %q", addr, buf[:n])
+			// Echo back the payload
+			if _, err := pc.WriteTo(buf[:n], addr); err != nil {
+				t.Logf("s1: error writing response: %v", err)
+			}
+		}
+	}()
+	defer func() {
+		pc.Close()
+		<-echoServerDone
+	}()
+
+	// Set up s2 with IPPacketHandler - the raw packet server
+	receivedPackets := make(chan []byte, 10)
+	tmp := filepath.Join(t.TempDir(), "s2")
+	os.MkdirAll(tmp, 0755)
+	s2 := &Server{
+		Dir:               tmp,
+		ControlURL:        controlURL,
+		Hostname:          "s2",
+		Store:             new(mem.Store),
+		Ephemeral:         true,
+		getCertForTesting: testCertRoot.getCert,
+		IPPacketHandler: func(pkt []byte) bool {
+			// Make a copy since we can't retain the slice
+			cpy := make([]byte, len(pkt))
+			copy(cpy, pkt)
+
+			var parsed packet.Parsed
+			parsed.Decode(cpy)
+			t.Logf("s2 IPPacketHandler: received %s packet %v -> %v", parsed.IPProto, parsed.Src, parsed.Dst)
+
+			select {
+			case receivedPackets <- cpy:
+			default:
+				t.Logf("s2: dropped packet, channel full")
+			}
+			return true // consume the packet
+		},
+	}
+	if *verboseNodes {
+		s2.Logf = log.Printf
+	}
+	t.Cleanup(func() { s2.Close() })
+
+	status, err := s2.Up(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2ip := status.TailscaleIPs[0]
+	t.Logf("s2 IP: %v", s2ip)
+
+	writer, err := s2.IPPacketWriter()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lc2 := must.Get(s2.LocalClient())
+	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	if err != nil {
+		t.Fatalf("ping failed: %v", err)
+	}
+	t.Logf("ping success: latency=%v", res.LatencySeconds)
+
+	const srcPort = 12345
+	const dstPort = 9999
+	payload := []byte("hello from raw packet")
+
+	udpPkt := buildUDPPacket(t, s2ip, s1ip, srcPort, dstPort, payload)
+	t.Logf("s2: sending raw UDP packet (%d bytes) to %v:%d", len(udpPkt), s1ip, dstPort)
+
+	if err := writer(udpPkt); err != nil {
+		t.Fatalf("IPPacketWriter failed: %v", err)
+	}
+	t.Log("s2: packet injected successfully")
+
+	t.Log("s2: waiting for UDP echo reply")
+	select {
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for UDP echo reply")
+	case pkt := <-receivedPackets:
+		t.Logf("s2: received raw packet (%d bytes)", len(pkt))
+
+		var parsed packet.Parsed
+		parsed.Decode(pkt)
+		if parsed.IPVersion != 4 {
+			t.Errorf("expected IPv4, got version %d", parsed.IPVersion)
+		}
+		if parsed.IPProto != ipproto.UDP {
+			t.Errorf("expected UDP, got protocol %d", parsed.IPProto)
+		}
+		if parsed.Src.Addr() != s1ip {
+			t.Errorf("expected src %v, got %v", s1ip, parsed.Src.Addr())
+		}
+		if parsed.Dst.Addr() != s2ip {
+			t.Errorf("expected dst %v, got %v", s2ip, parsed.Dst.Addr())
+		}
+		if parsed.Src.Port() != dstPort {
+			t.Errorf("expected src port %d, got %d", dstPort, parsed.Src.Port())
+		}
+		if parsed.Dst.Port() != srcPort {
+			t.Errorf("expected dst port %d, got %d", srcPort, parsed.Dst.Port())
+		}
+		if !bytes.Equal(parsed.Payload(), payload) {
+			t.Errorf("payload mismatch: got %q, want %q", parsed.Payload(), payload)
+		}
+	}
+
+	t.Log("Testing PeerAPI access to raw packet server...")
+	s2Status := must.Get(lc2.StatusWithoutPeers(ctx))
+	if len(s2Status.Self.PeerAPIURL) == 0 {
+		t.Fatal("s2 has no PeerAPI URLs")
+	}
+	peerAPIURL := s2Status.Self.PeerAPIURL[0]
+	t.Logf("s2 PeerAPI URL: %s", peerAPIURL)
+
+	resp, err := s1.HTTPClient().Get(peerAPIURL)
+	if err != nil {
+		t.Fatalf("failed to GET s2 PeerAPI from s1: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("PeerAPI request returned status %d, want 200", resp.StatusCode)
+	}
+	t.Log("PeerAPI access to raw packet server succeeded")
+}
+
+// buildUDPPacket constructs a complete IPv4 UDP packet with valid checksums.
+func buildUDPPacket(t *testing.T, src, dst netip.Addr, srcPort, dstPort uint16, payload []byte) []byte {
+	t.Helper()
+
+	if !src.Is4() || !dst.Is4() {
+		t.Fatal("buildUDPPacket only supports IPv4")
+	}
+
+	const ipHeaderLen = 20
+	const udpHeaderLen = 8
+	totalLen := ipHeaderLen + udpHeaderLen + len(payload)
+	udpLen := udpHeaderLen + len(payload)
+
+	pkt := make([]byte, totalLen)
+
+	// IPv4 header
+	pkt[0] = 0x45                                          // Version (4) + IHL (5 = 20 bytes)
+	pkt[1] = 0                                             // DSCP + ECN
+	binary.BigEndian.PutUint16(pkt[2:4], uint16(totalLen)) // Total length
+	binary.BigEndian.PutUint16(pkt[4:6], 0)                // Identification
+	binary.BigEndian.PutUint16(pkt[6:8], 0)                // Flags + Fragment offset
+	pkt[8] = 64                                            // TTL
+	pkt[9] = uint8(ipproto.UDP)                            // Protocol
+	// pkt[10:12] = checksum (computed below)
+	copy(pkt[12:16], src.AsSlice())
+	copy(pkt[16:20], dst.AsSlice())
+
+	// Compute IP header checksum
+	var sum uint32
+	for i := 0; i < ipHeaderLen; i += 2 {
+		sum += uint32(binary.BigEndian.Uint16(pkt[i : i+2]))
+	}
+	for sum > 0xffff {
+		sum = (sum & 0xffff) + (sum >> 16)
+	}
+	binary.BigEndian.PutUint16(pkt[10:12], ^uint16(sum))
+
+	// UDP header
+	udp := pkt[ipHeaderLen:]
+	binary.BigEndian.PutUint16(udp[0:2], srcPort)
+	binary.BigEndian.PutUint16(udp[2:4], dstPort)
+	binary.BigEndian.PutUint16(udp[4:6], uint16(udpLen))
+	// udp[6:8] = checksum (computed below with pseudo-header)
+
+	// Payload
+	copy(udp[udpHeaderLen:], payload)
+
+	// Compute UDP checksum with pseudo-header
+	// Pseudo-header: src IP (4) + dst IP (4) + zero (1) + protocol (1) + UDP length (2) = 12 bytes
+	var udpSum uint32
+	// Add source IP
+	udpSum += uint32(binary.BigEndian.Uint16(src.AsSlice()[0:2]))
+	udpSum += uint32(binary.BigEndian.Uint16(src.AsSlice()[2:4]))
+	// Add dest IP
+	udpSum += uint32(binary.BigEndian.Uint16(dst.AsSlice()[0:2]))
+	udpSum += uint32(binary.BigEndian.Uint16(dst.AsSlice()[2:4]))
+	// Add protocol (UDP = 17)
+	udpSum += uint32(ipproto.UDP)
+	// Add UDP length
+	udpSum += uint32(udpLen)
+	// Add UDP header and payload
+	for i := 0; i < len(udp); i += 2 {
+		if i+1 < len(udp) {
+			udpSum += uint32(binary.BigEndian.Uint16(udp[i : i+2]))
+		} else {
+			udpSum += uint32(udp[i]) << 8 // odd byte
+		}
+	}
+	// Fold 32-bit sum to 16 bits
+	for udpSum > 0xffff {
+		udpSum = (udpSum & 0xffff) + (udpSum >> 16)
+	}
+	checksum := ^uint16(udpSum)
+	if checksum == 0 {
+		checksum = 0xffff // UDP checksum of 0 is transmitted as 0xffff
+	}
+	binary.BigEndian.PutUint16(udp[6:8], checksum)
+	return pkt
+}
+
+// TestIPPacketHandlerSocketAPIGuards verifies that Listen, ListenPacket,
+// ListenTLS, ListenFunnel, and Dial return ErrIPPacketHandlerSet when
+// IPPacketHandler is set.
+func TestIPPacketHandlerSocketAPIGuards(t *testing.T) {
+	s := &Server{
+		IPPacketHandler: func([]byte) bool { return true },
+	}
+
+	_, err := s.Listen("tcp", ":0")
+	if !errors.Is(err, ErrIPPacketHandlerSet) {
+		t.Errorf("Listen: got %v, want ErrIPPacketHandlerSet", err)
+	}
+
+	_, err = s.ListenPacket("udp", "127.0.0.1:0")
+	if !errors.Is(err, ErrIPPacketHandlerSet) {
+		t.Errorf("ListenPacket: got %v, want ErrIPPacketHandlerSet", err)
+	}
+
+	_, err = s.ListenTLS("tcp", ":0")
+	if !errors.Is(err, ErrIPPacketHandlerSet) {
+		t.Errorf("ListenTLS: got %v, want ErrIPPacketHandlerSet", err)
+	}
+
+	_, err = s.ListenFunnel("tcp", ":443")
+	if !errors.Is(err, ErrIPPacketHandlerSet) {
+		t.Errorf("ListenFunnel: got %v, want ErrIPPacketHandlerSet", err)
+	}
+
+	_, err = s.Dial(context.Background(), "tcp", "127.0.0.1:80")
+	if !errors.Is(err, ErrIPPacketHandlerSet) {
+		t.Errorf("Dial: got %v, want ErrIPPacketHandlerSet", err)
 	}
 }
