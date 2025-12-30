@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/conn"
+	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/refs"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -175,6 +176,22 @@ type Impl struct {
 	// be a subnet router).
 	// It can only be set before calling Start.
 	ProcessSubnets bool
+
+	// HandleIPPacket, if non-nil, is called for incoming TCP/UDP packets that
+	// netstack will not process.
+	//
+	// The packet slice contains a complete IP packet starting with the IP header.
+	// The packet slice is only valid for the duration of the call and must not
+	// be retained.
+	//
+	// If HandleIPPacket returns true, the packet is consumed. If false, the packet
+	// is passed to the host network stack (if available).
+	//
+	// The handler will NOT see packets processed by netstack (local IPs, subnet IPs,
+	// PeerAPI, SSH, service IPs, or flows handled by GetTCPHandlerForFlow/GetUDPHandlerForFlow).
+	//
+	// The handler is called from the packet receive path and must not block.
+	HandleIPPacket func(packet []byte) bool
 
 	ipstack   *stack.Stack
 	linkEP    *linkEndpoint
@@ -413,6 +430,15 @@ func (ns *Impl) Close() error {
 	ns.ipstack.Close()
 	ns.ipstack.Wait()
 	return nil
+}
+
+// InjectOutbound sends an IP packet through the Tailscale network.
+// The pkt should be a complete IP packet starting with the IP header.
+func (ns *Impl) InjectOutbound(pkt []byte) error {
+	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
+		Payload: buffer.MakeWithData(pkt),
+	})
+	return ns.tundev.InjectOutboundPacketBuffer(packetBuf)
 }
 
 // SetTransportProtocolOption forwards to the underlying
@@ -1087,6 +1113,19 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 			return true
 		}
 	}
+	hittingServiceIP := dstIP == serviceIP || dstIP == serviceIPv6
+	if hittingServiceIP {
+		if p.IsEchoRequest() {
+			return true
+		}
+		if p.Dst.Port() == 53 {
+			return true
+		}
+		if ns.isLoopbackPort(p.Dst.Port()) {
+			return true
+		}
+		return false
+	}
 	if buildfeatures.HasServe && isService {
 		if p.IsEchoRequest() {
 			return true
@@ -1189,7 +1228,11 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) 
 	}
 
 	if !ns.shouldProcessInbound(p, t) {
-		// Let the host network stack (if any) deal with it.
+		if ns.HandleIPPacket != nil && (p.IPProto == ipproto.TCP || p.IPProto == ipproto.UDP) {
+			if ns.HandleIPPacket(p.Buffer()) {
+				return filter.DropSilently, gro
+			}
+		}
 		return filter.Accept, gro
 	}
 

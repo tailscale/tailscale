@@ -158,6 +158,23 @@ type Server struct {
 	// that the control server will allow the node to adopt that tag.
 	AdvertiseTags []string
 
+	// IPPacketHandler, if non-nil, specifies a handler that will be called for
+	// incoming TCP/UDP packets that netstack will not process.
+	//
+	// The packet slice contains a complete IP packet starting with the IP header.
+	// The handler should not retain the packet slice after returning.
+	//
+	// Return true if the packet was handled, false to pass it to the host network stack.
+	//
+	// The handler will NOT see packets processed by netstack, including packets to
+	// local Tailscale IPs, subnet IPs, PeerAPI, SSH, or service IPs (100.100.100.100).
+	//
+	// The handler is called from the packet receive path and should not block.
+	//
+	// This must be set before calling Start, Listen, Dial, or Up.
+	// To send packets, call IPPacketWriter to get an IPPacketWriter.
+	IPPacketHandler func(packet []byte) bool
+
 	getCertForTesting func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 
 	initOnce         sync.Once
@@ -199,6 +216,12 @@ type Server struct {
 // is non-nil: if nil, the connection is rejected. If non-nil, handler takes
 // over the TCP conn.
 type FallbackTCPHandler func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool)
+
+// IPPacketWriter is a function that sends an IP packet into the Tailscale network.
+// The pkt should be a complete IP packet starting with the IP header (version field).
+// The packet will be routed through the Tailscale network to the appropriate peer
+// based on the destination IP address.
+type IPPacketWriter func(pkt []byte) error
 
 // Dial connects to the address on the tailnet.
 // It will start the server if it has not been started yet.
@@ -667,6 +690,7 @@ func (s *Server) start() (reterr error) {
 	ns.ProcessSubnets = true
 	ns.GetTCPHandlerForFlow = s.getTCPHandlerForFlow
 	ns.GetUDPHandlerForFlow = s.getUDPHandlerForFlow
+	ns.HandleIPPacket = s.IPPacketHandler
 	s.netstack = ns
 	s.dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 		_, ok := eng.PeerForIP(ip)
@@ -1048,6 +1072,24 @@ func (s *Server) ListenPacket(network, addr string) (net.PacketConn, error) {
 		return nil, err
 	}
 	return s.netstack.ListenPacket(network, ap.String())
+}
+
+// IPPacketWriter returns a function to send IP packets into the Tailscale network.
+// IPPacketHandler must be set before calling this method.
+func (s *Server) IPPacketWriter() (IPPacketWriter, error) {
+	if s.IPPacketHandler == nil {
+		return nil, errors.New("IPPacketHandler must be set on Server before calling IPPacketWriter")
+	}
+
+	if err := s.Start(); err != nil {
+		return nil, err
+	}
+
+	if s.netstack == nil {
+		return nil, errors.New("netstack not initialized")
+	}
+
+	return s.netstack.InjectOutbound, nil
 }
 
 // ListenTLS announces only on the Tailscale network.
