@@ -50,6 +50,15 @@ type ConfigVAlpha struct {
 	// should advertise amongst its wireguard endpoints.
 	StaticEndpoints []netip.AddrPort `json:",omitempty"`
 
+	// RelayServerPort is the UDP port for the relay server to bind to.
+	// A value of 0 will pick a random unused port. Nil disables relay server.
+	RelayServerPort *uint16 `json:",omitzero"`
+
+	// RelayServerStaticEndpoints are static IP:port endpoints to advertise
+	// as candidates for relay connections. Only relevant when RelayServerPort
+	// is non-nil.
+	RelayServerStaticEndpoints []netip.AddrPort `json:",omitempty"`
+
 	// TODO(bradfitz,maisem): future something like:
 	// Profile map[string]*Config // keyed by alice@gmail.com, corp.com (TailnetSID)
 }
@@ -154,6 +163,14 @@ func (c *ConfigVAlpha) ToPrefs() (MaskedPrefs, error) {
 	mp.AdvertiseServicesSet = true
 	if c.AdvertiseServices != nil {
 		mp.AdvertiseServices = c.AdvertiseServices
+	}
+	mp.RelayServerPortSet = true
+	mp.RelayServerStaticEndpointsSet = true
+	if c.RelayServerPort != nil {
+		mp.RelayServerPort = c.RelayServerPort
+	}
+	if c.RelayServerStaticEndpoints != nil {
+		mp.RelayServerStaticEndpoints = c.RelayServerStaticEndpoints
 	}
 	return mp, nil
 }
