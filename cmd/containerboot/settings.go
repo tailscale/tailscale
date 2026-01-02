@@ -22,9 +22,12 @@ import (
 
 // settings is all the configuration for containerboot.
 type settings struct {
-	AuthKey  string
-	Hostname string
-	Routes   *string
+	AuthKey      string
+	ClientID     string
+	ClientSecret string
+	IDToken      string
+	Hostname     string
+	Routes       *string
 	// ProxyTargetIP is the destination IP to which all incoming
 	// Tailscale traffic should be proxied. If empty, no proxying
 	// is done. This is typically a locally reachable IP.
@@ -86,6 +89,9 @@ type settings struct {
 func configFromEnv() (*settings, error) {
 	cfg := &settings{
 		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
+		ClientID:                              defaultEnv("TS_CLIENT_ID", ""),
+		ClientSecret:                          defaultEnv("TS_CLIENT_SECRET", ""),
+		IDToken:                               defaultEnv("TS_ID_TOKEN", ""),
 		Hostname:                              defaultEnv("TS_HOSTNAME", ""),
 		Routes:                                defaultEnvStringPointer("TS_ROUTES"),
 		ServeConfigPath:                       defaultEnv("TS_SERVE_CONFIG", ""),
@@ -241,8 +247,20 @@ func (s *settings) validate() error {
 	if s.TailnetTargetFQDN != "" && s.TailnetTargetIP != "" {
 		return errors.New("Both TS_TAILNET_TARGET_IP and TS_TAILNET_FQDN cannot be set")
 	}
-	if s.TailscaledConfigFilePath != "" && (s.AcceptDNS != nil || s.AuthKey != "" || s.Routes != nil || s.ExtraArgs != "" || s.Hostname != "") {
-		return errors.New("TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR cannot be set in combination with TS_HOSTNAME, TS_EXTRA_ARGS, TS_AUTHKEY, TS_ROUTES, TS_ACCEPT_DNS.")
+	if s.TailscaledConfigFilePath != "" && (s.AcceptDNS != nil || s.AuthKey != "" || s.Routes != nil || s.ExtraArgs != "" || s.Hostname != "" || s.ClientID != "" || s.ClientSecret != "" || s.IDToken != "") {
+		return errors.New("TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR cannot be set in combination with TS_HOSTNAME, TS_EXTRA_ARGS, TS_AUTHKEY, TS_ROUTES, TS_ACCEPT_DNS, TS_CLIENT_ID, TS_CLIENT_SECRET, TS_ID_TOKEN.")
+	}
+	if s.IDToken != "" && s.ClientID == "" {
+		return errors.New("TS_ID_TOKEN is set but TS_CLIENT_ID is not set")
+	}
+	if s.ClientID != "" && s.ClientSecret == "" && s.IDToken == "" {
+		return errors.New("TS_CLIENT_ID requires either TS_CLIENT_SECRET (OAuth) or TS_ID_TOKEN (WIF)")
+	}
+	if s.IDToken != "" && s.ClientSecret != "" {
+		return errors.New("TS_ID_TOKEN and TS_CLIENT_SECRET cannot both be set")
+	}
+	if s.AuthKey != "" && (s.ClientID != "" || s.ClientSecret != "" || s.IDToken != "") {
+		return errors.New("TS_AUTHKEY cannot be used with TS_CLIENT_ID, TS_CLIENT_SECRET, or TS_ID_TOKEN")
 	}
 	if s.AllowProxyingClusterTrafficViaIngress && s.UserspaceMode {
 		return errors.New("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS is not supported in userspace mode")
@@ -312,8 +330,8 @@ func (cfg *settings) setupKube(ctx context.Context, kc *kubeClient) error {
 		}
 	}
 
-	// Return early if we already have an auth key.
-	if cfg.AuthKey != "" || isOneStepConfig(cfg) {
+	// Return early if we already have an auth key or are using OAuth/WIF.
+	if cfg.AuthKey != "" || cfg.ClientID != "" || cfg.ClientSecret != "" || isOneStepConfig(cfg) {
 		return nil
 	}
 

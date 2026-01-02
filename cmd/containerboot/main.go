@@ -11,7 +11,17 @@
 // As with most container things, configuration is passed through environment
 // variables. All configuration is optional.
 //
-//   - TS_AUTHKEY: the authkey to use for login.
+//   - TS_AUTHKEY: the authkey to use for login. Also accepts TS_AUTH_KEY.
+//     If the value begins with "file:", it is treated as a path to a file containing the key.
+//   - TS_CLIENT_ID: the OAuth client ID. Used with TS_CLIENT_SECRET for OAuth, or with
+//     TS_ID_TOKEN for workload identity federation (WIF).
+//   - TS_CLIENT_SECRET: the OAuth client secret for generating authkeys.
+//     If the value begins with "file:", it is treated as a path to a file containing the secret.
+//   - TS_ID_TOKEN: the ID token from the identity provider for workload identity federation.
+//     Must be used together with TS_CLIENT_ID. If the value begins with "file:", it is
+//     treated as a path to a file containing the token.
+//   - Note: TS_AUTHKEY is mutually exclusive with OAuth/WIF. TS_CLIENT_SECRET and TS_ID_TOKEN
+//     cannot be used together.
 //   - TS_HOSTNAME: the hostname to request for the node.
 //   - TS_ROUTES: subnet routes to advertise. Explicitly setting it to an empty
 //     value will cause containerboot to stop acting as a subnet router for any
@@ -67,7 +77,7 @@
 //   - TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR: if specified, a path to a
 //     directory that containers tailscaled config in file. The config file needs to be
 //     named cap-<current-tailscaled-cap>.hujson. If this is set, TS_HOSTNAME,
-//     TS_EXTRA_ARGS, TS_AUTHKEY,
+//     TS_EXTRA_ARGS, TS_AUTHKEY, TS_CLIENT_ID, TS_CLIENT_SECRET, TS_ID_TOKEN,
 //     TS_ROUTES, TS_ACCEPT_DNS env vars must not be set. If this is set,
 //     containerboot only runs `tailscaled --config <path-to-this-configfile>`
 //     and not `tailscale up` or `tailscale set`.

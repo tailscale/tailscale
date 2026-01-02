@@ -5,7 +5,10 @@
 
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func Test_parseAcceptDNS(t *testing.T) {
 	tests := []struct {
@@ -102,6 +105,104 @@ func Test_parseAcceptDNS(t *testing.T) {
 			}
 			if gotAcceptDNS != tt.wantAcceptDNS {
 				t.Errorf("parseAcceptDNS() gotAcceptDNS = %v, want %v", gotAcceptDNS, tt.wantAcceptDNS)
+			}
+		})
+	}
+}
+
+func TestValidateAuthMethods(t *testing.T) {
+	tests := []struct {
+		name         string
+		authKey      string
+		clientID     string
+		idToken      string
+		clientSecret string
+		wantErr      bool
+		errContains  string
+	}{
+		{
+			name:    "no_auth_method",
+			wantErr: false,
+		},
+		{
+			name:    "authkey_only",
+			authKey: "tskey-auth-xxx",
+			wantErr: false,
+		},
+		{
+			name:         "client_secret_only",
+			clientSecret: "tskey-client-xxx",
+			wantErr:      false,
+		},
+		{
+			name:     "wif_complete",
+			clientID: "client-id",
+			idToken:  "id-token",
+			wantErr:  false,
+		},
+		{
+			name:         "oauth_with_client_id_and_secret",
+			clientID:     "client-id",
+			clientSecret: "tskey-client-xxx",
+			wantErr:      false,
+		},
+		{
+			name:        "client_id_alone",
+			clientID:    "client-id",
+			wantErr:     true,
+			errContains: "TS_CLIENT_ID requires either TS_CLIENT_SECRET (OAuth) or TS_ID_TOKEN (WIF)",
+		},
+		{
+			name:        "id_token_without_client_id",
+			idToken:     "id-token",
+			wantErr:     true,
+			errContains: "TS_ID_TOKEN is set but TS_CLIENT_ID is not set",
+		},
+		{
+			name:         "authkey_with_client_secret",
+			authKey:      "tskey-auth-xxx",
+			clientSecret: "tskey-client-xxx",
+			wantErr:      true,
+			errContains:  "TS_AUTHKEY cannot be used with",
+		},
+		{
+			name:        "authkey_with_wif",
+			authKey:     "tskey-auth-xxx",
+			clientID:    "client-id",
+			idToken:     "id-token",
+			wantErr:     true,
+			errContains: "TS_AUTHKEY cannot be used with",
+		},
+		{
+			name:         "id_token_with_client_secret",
+			clientSecret: "tskey-client-xxx",
+			clientID:     "client-id",
+			idToken:      "id-token",
+			wantErr:      true,
+			errContains:  "TS_ID_TOKEN and TS_CLIENT_SECRET cannot both be set",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &settings{
+				AuthKey:      tt.authKey,
+				ClientID:     tt.clientID,
+				ClientSecret: tt.clientSecret,
+				IDToken:      tt.idToken,
+			}
+			err := s.validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("error %q does not contain %q", err.Error(), tt.errContains)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
 			}
 		})
 	}

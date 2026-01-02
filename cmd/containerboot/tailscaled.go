@@ -120,6 +120,15 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 	if cfg.AuthKey != "" {
 		args = append(args, "--authkey="+cfg.AuthKey)
 	}
+	if cfg.ClientID != "" {
+		args = append(args, "--client-id="+cfg.ClientID)
+	}
+	if cfg.ClientSecret != "" {
+		args = append(args, "--client-secret="+cfg.ClientSecret)
+	}
+	if cfg.IDToken != "" {
+		args = append(args, "--id-token="+cfg.IDToken)
+	}
 	// --advertise-routes can be passed an empty string to configure a
 	// device (that might have previously advertised subnet routes) to not
 	// advertise any routes. Respect an empty string passed by a user and
