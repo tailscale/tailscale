@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package magicsock
+package cloudinfo
 
 import (
 	"context"
@@ -44,7 +44,7 @@ func TestCloudInfo_AWS(t *testing.T) {
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
 
-	ci := newCloudInfo(t.Logf)
+	ci := New(t.Logf)
 	ci.cloud = cloudenv.AWS
 	ci.endpoint = srv.URL
 
@@ -76,7 +76,7 @@ func TestCloudInfo_AWSNotPublic(t *testing.T) {
 	srv := httptest.NewServer(returns404)
 	defer srv.Close()
 
-	ci := newCloudInfo(t.Logf)
+	ci := New(t.Logf)
 	ci.cloud = cloudenv.AWS
 	ci.endpoint = srv.URL
 

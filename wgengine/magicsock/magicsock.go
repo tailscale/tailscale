@@ -60,6 +60,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/cloudinfo"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/ringlog"
@@ -213,7 +214,7 @@ type Conn struct {
 	bind *connBind
 
 	// cloudInfo is used to query cloud metadata services.
-	cloudInfo *cloudInfo
+	cloudInfo *cloudinfo.CloudInfo
 
 	// ============================================================
 	// Fields that must be accessed via atomic load/stores.
@@ -597,7 +598,7 @@ func newConn(logf logger.Logf) *Conn {
 		peerLastDerp: make(map[key.NodePublic]int),
 		peerMap:      newPeerMap(),
 		discoInfo:    make(map[key.DiscoPublic]*discoInfo),
-		cloudInfo:    newCloudInfo(logf),
+		cloudInfo:    cloudinfo.New(logf),
 	}
 	c.discoAtomic.Set(discoPrivate)
 	c.bind = &connBind{Conn: c, closed: true}

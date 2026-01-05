@@ -3,7 +3,8 @@
 
 //go:build !(ios || android || js)
 
-package magicsock
+// Package cloudinfo provides cloud metadata utilities.
+package cloudinfo
 
 import (
 	"context"
@@ -24,7 +25,8 @@ import (
 
 const maxCloudInfoWait = 2 * time.Second
 
-type cloudInfo struct {
+// CloudInfo holds state used in querying instance metadata (IMDS) endpoints.
+type CloudInfo struct {
 	client http.Client
 	logf   logger.Logf
 
@@ -34,7 +36,8 @@ type cloudInfo struct {
 	endpoint string
 }
 
-func newCloudInfo(logf logger.Logf) *cloudInfo {
+// New constructs a new [*CloudInfo] that will log to the provided logger instance.
+func New(logf logger.Logf) *CloudInfo {
 	if !buildfeatures.HasCloud {
 		return nil
 	}
@@ -45,7 +48,7 @@ func newCloudInfo(logf logger.Logf) *cloudInfo {
 		}).Dial,
 	}
 
-	return &cloudInfo{
+	return &CloudInfo{
 		client:   http.Client{Transport: tr},
 		logf:     logf,
 		cloud:    cloudenv.Get(),
@@ -56,7 +59,9 @@ func newCloudInfo(logf logger.Logf) *cloudInfo {
 // GetPublicIPs returns any public IPs attached to the current cloud instance,
 // if the tailscaled process is running in a known cloud and there are any such
 // IPs present.
-func (ci *cloudInfo) GetPublicIPs(ctx context.Context) ([]netip.Addr, error) {
+//
+// Currently supports only AWS.
+func (ci *CloudInfo) GetPublicIPs(ctx context.Context) ([]netip.Addr, error) {
 	if !buildfeatures.HasCloud {
 		return nil, nil
 	}
@@ -73,7 +78,7 @@ func (ci *cloudInfo) GetPublicIPs(ctx context.Context) ([]netip.Addr, error) {
 // getAWSMetadata makes a request to the AWS metadata service at the given
 // path, authenticating with the provided IMDSv2 token. The returned metadata
 // is split by newline and returned as a slice.
-func (ci *cloudInfo) getAWSMetadata(ctx context.Context, token, path string) ([]string, error) {
+func (ci *CloudInfo) getAWSMetadata(ctx context.Context, token, path string) ([]string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", ci.endpoint+path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request to %q: %w", path, err)
@@ -105,7 +110,7 @@ func (ci *cloudInfo) getAWSMetadata(ctx context.Context, token, path string) ([]
 }
 
 // getAWS returns all public IPv4 and IPv6 addresses present in the AWS instance metadata.
-func (ci *cloudInfo) getAWS(ctx context.Context) ([]netip.Addr, error) {
+func (ci *CloudInfo) getAWS(ctx context.Context) ([]netip.Addr, error) {
 	ctx, cancel := context.WithTimeout(ctx, maxCloudInfoWait)
 	defer cancel()
 
