@@ -13,19 +13,7 @@ import (
 	"tailscale.com/util/mak"
 )
 
-// ObserveDNSResponse is a callback invoked by the DNS resolver when a DNS
-// response is being returned over the PeerAPI. The response is parsed and
-// matched against the configured domains, if matched the routeAdvertiser is
-// advised to advertise the discovered route.
-func (e *AppConnector) ObserveDNSResponse(res []byte) error {
-	var p dnsmessage.Parser
-	if _, err := p.Start(res); err != nil {
-		return err
-	}
-	if err := p.SkipAllQuestions(); err != nil {
-		return err
-	}
-
+func getCNAMEsAndARecordsFromDNSResponse(res []byte) (map[string]string, map[string][]netip.Addr, error) {
 	// cnameChain tracks a chain of CNAMEs for a given query in order to reverse
 	// a CNAME chain back to the original query for flattening. The keys are
 	// CNAME record targets, and the value is the name the record answers, so
@@ -36,18 +24,26 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) error {
 	// addressRecords is a list of address records found in the response.
 	var addressRecords map[string][]netip.Addr
 
+	var p dnsmessage.Parser
+	if _, err := p.Start(res); err != nil {
+		return cnameChain, addressRecords, err
+	}
+	if err := p.SkipAllQuestions(); err != nil {
+		return cnameChain, addressRecords, err
+	}
+
 	for {
 		h, err := p.AnswerHeader()
 		if err == dnsmessage.ErrSectionDone {
 			break
 		}
 		if err != nil {
-			return err
+			return cnameChain, addressRecords, err
 		}
 
 		if h.Class != dnsmessage.ClassINET {
 			if err := p.SkipAnswer(); err != nil {
-				return err
+				return cnameChain, addressRecords, err
 			}
 			continue
 		}
@@ -56,7 +52,7 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) error {
 		case dnsmessage.TypeCNAME, dnsmessage.TypeA, dnsmessage.TypeAAAA:
 		default:
 			if err := p.SkipAnswer(); err != nil {
-				return err
+				return cnameChain, addressRecords, err
 			}
 			continue
 
@@ -70,7 +66,7 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) error {
 		if h.Type == dnsmessage.TypeCNAME {
 			res, err := p.CNAMEResource()
 			if err != nil {
-				return err
+				return cnameChain, addressRecords, err
 			}
 			cname := strings.TrimSuffix(strings.ToLower(res.CNAME.String()), ".")
 			if len(cname) == 0 {
@@ -84,23 +80,35 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) error {
 		case dnsmessage.TypeA:
 			r, err := p.AResource()
 			if err != nil {
-				return err
+				return cnameChain, addressRecords, err
 			}
 			addr := netip.AddrFrom4(r.A)
 			mak.Set(&addressRecords, domain, append(addressRecords[domain], addr))
 		case dnsmessage.TypeAAAA:
 			r, err := p.AAAAResource()
 			if err != nil {
-				return err
+				return cnameChain, addressRecords, err
 			}
 			addr := netip.AddrFrom16(r.AAAA)
 			mak.Set(&addressRecords, domain, append(addressRecords[domain], addr))
 		default:
 			if err := p.SkipAnswer(); err != nil {
-				return err
+				return cnameChain, addressRecords, err
 			}
 			continue
 		}
+	}
+	return cnameChain, addressRecords, nil
+}
+
+// ObserveDNSResponse is a callback invoked by the DNS resolver when a DNS
+// response is being returned over the PeerAPI. The response is parsed and
+// matched against the configured domains, if matched the routeAdvertiser is
+// advised to advertise the discovered route.
+func (e *AppConnector) ObserveDNSResponse(res []byte) error {
+	cnameChain, addressRecords, err := getCNAMEsAndARecordsFromDNSResponse(res)
+	if err != nil {
+		return err
 	}
 
 	e.mu.Lock()

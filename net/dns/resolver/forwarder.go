@@ -1000,8 +1000,10 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 
 	resc := make(chan []byte, 1) // it's fine buffered or not
 	errc := make(chan error, 1)  // it's fine buffered or not too
+	fmt.Println("FRAN*********** there are n resolvers", len(resolvers))
 	for i := range resolvers {
 		go func(rr *resolverAndDelay) {
+			fmt.Println("FRAN***********", rr.name.Addr)
 			if rr.startDelay > 0 {
 				timer := time.NewTimer(rr.startDelay)
 				select {

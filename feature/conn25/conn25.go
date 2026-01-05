@@ -23,6 +23,7 @@ func init() {
 	feature.Register(featureName)
 	newExtension := func(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, error) {
 		e := &extension{
+			// TODO(fran) 2025-12-18 we need to unify this with the conn25 in [ipnlocal.LocalBackend]
 			conn: &appc.Conn25{},
 		}
 		return e, nil
