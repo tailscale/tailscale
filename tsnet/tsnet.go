@@ -1236,54 +1236,37 @@ func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.L
 }
 
 // TODO: doc
-type ServiceOption interface {
-	serviceOption()
+type ServiceTransportOptions interface {
+	serviceTransportOptions()
 }
-
-type serviceOptionTerminateTLS struct{}
-
-func (serviceOptionTerminateTLS) serviceOption() {}
 
 // TODO: doc
-func ServiceOptionTerminateTLS() ServiceOption {
-	return serviceOptionTerminateTLS{}
+type ServiceTCPOptions struct {
+	TerminateTLS  bool
+	PROXYProtocol int
 }
 
-type serviceOptionPROXYProtocol struct {
-	version int
-}
-
-func (serviceOptionPROXYProtocol) serviceOption() {}
+func (ServiceTCPOptions) serviceTransportOptions() {}
 
 // TODO: doc
-func ServiceOptionPROXYProtocol(version int) ServiceOption {
-	return serviceOptionPROXYProtocol{version}
+// TODO: it's not super intutive that an empty struct here sends identity headers
+type ServiceHTTPOptions struct {
+	HTTPS         bool
+	AcceptAppCaps map[string][]string
 }
 
-type serviceOptionAppCapabilities struct {
-	path string
-	caps []string
-}
+func (ServiceHTTPOptions) serviceTransportOptions() {}
 
-func (serviceOptionAppCapabilities) serviceOption() {}
-
-// TODO: doc
-func ServiceOptionAppCapabilities(capabilities ...string) ServiceOption {
-	return ServiceOptionAppCapabilitiesForPath("/", capabilities...)
-}
-
-// TODO: doc; include info on this overriding handlers at earlier paths
-func ServiceOptionAppCapabilitiesForPath(path string, capabilities ...string) ServiceOption {
-	return serviceOptionAppCapabilities{path, capabilities}
-}
-
-type serviceOptionWithHeaders struct{}
-
-func (serviceOptionWithHeaders) serviceOption() {}
-
-// TODO: doc
-func ServiceOptionWithHeaders() ServiceOption {
-	return serviceOptionWithHeaders{}
+func (opts ServiceHTTPOptions) capsMap() map[string][]tailcfg.PeerCapability {
+	capsMap := map[string][]tailcfg.PeerCapability{}
+	for path, capNames := range opts.AcceptAppCaps {
+		caps := make([]tailcfg.PeerCapability, 0, len(capNames))
+		for _, c := range capNames {
+			caps = append(caps, tailcfg.PeerCapability(c))
+		}
+		capsMap[path] = caps
+	}
+	return capsMap
 }
 
 // ErrUntaggedServiceHost is returned by ListenService when run on a node
@@ -1294,7 +1277,8 @@ var ErrUntaggedServiceHost = errors.New("service hosts must be tagged nodes")
 
 // TODO: doc
 // TODO: tailcfg.ServiceName?
-func (s *Server) ListenService(name string, port uint16, opts ...ServiceOption) (net.Listener, error) {
+// TODO: does this API allow room for growth? Can everything fit into opts?
+func (s *Server) ListenService(name string, port uint16, opts ServiceTransportOptions) (net.Listener, error) {
 	if err := tailcfg.ServiceName(name).Validate(); err != nil {
 		return nil, err
 	}
@@ -1307,31 +1291,6 @@ func (s *Server) ListenService(name string, port uint16, opts ...ServiceOption) 
 	//   - everything else could serve directly or use http.ReverseProxy, right?
 	//     - maybe worth an http.ReverseProxy example?
 	// - support TUN mode
-
-	// Process options.
-	terminateTLS := false
-	proxyProtocol := 0
-	capsMap := map[string][]tailcfg.PeerCapability{} // mount point => caps
-	isHTTP := false
-	for _, o := range opts {
-		switch opt := o.(type) {
-		case serviceOptionTerminateTLS:
-			terminateTLS = true
-		case serviceOptionPROXYProtocol:
-			proxyProtocol = opt.version
-		case serviceOptionWithHeaders:
-			isHTTP = true
-		case serviceOptionAppCapabilities:
-			isHTTP = true
-			caps := make([]tailcfg.PeerCapability, 0, len(opt.caps))
-			for _, c := range opt.caps {
-				caps = append(caps, tailcfg.PeerCapability(c))
-			}
-			capsMap[opt.path] = append(capsMap[opt.path], caps...)
-		default:
-			return nil, fmt.Errorf("unknown opts FunnelOption type %T", o)
-		}
-	}
 
 	ctx := context.Background()
 	_, err := s.Up(ctx)
@@ -1380,33 +1339,42 @@ func (s *Server) ListenService(name string, port uint16, opts ...ServiceOption) 
 		return nil, fmt.Errorf("starting local listener: %w", err)
 	}
 
-	if isHTTP {
-		useTLS := false // TODO: set correctly
-		mds := st.CurrentTailnet.MagicDNSSuffix
-		setHandler := func(h ipn.HTTPHandler, path string) {
-			h.Proxy = ln.Addr().String()
-			if path != "/" {
-				h.Proxy += path
-			}
-			srvConfig.SetWebHandler(&h, svcName, port, path, useTLS, mds)
-		}
-		// Set a web handler for every mount point in the caps map. If we don't
-		// end up with a root handler after that, we need to set one.
-		haveRootHandler := false
-		for path, caps := range capsMap {
-			if path == "/" {
-				haveRootHandler = true
-			}
-			setHandler(ipn.HTTPHandler{AcceptAppCaps: caps}, path)
-		}
-		if !haveRootHandler {
-			setHandler(ipn.HTTPHandler{}, "/")
-		}
-	} else {
+	if opts == nil {
+		opts = ServiceTCPOptions{}
+	}
+	switch o := opts.(type) {
+	case ServiceTCPOptions:
 		// Forward all connections from service-hostname:port to our socket.
 		srvConfig.SetTCPForwardingForService(
 			port, ln.Addr().String(), tailcfg.ServiceName(svcName),
-			terminateTLS, proxyProtocol, st.CurrentTailnet.MagicDNSSuffix)
+			o.TerminateTLS, o.PROXYProtocol, st.CurrentTailnet.MagicDNSSuffix)
+
+	case ServiceHTTPOptions:
+		mds := st.CurrentTailnet.MagicDNSSuffix
+		haveRootHandler := false
+		for path, caps := range o.capsMap() {
+			if !strings.HasPrefix(path, "/") {
+				path = "/" + path
+			}
+			h := ipn.HTTPHandler{
+				AcceptAppCaps: caps,
+				Proxy:         ln.Addr().String(),
+			}
+			if path == "/" {
+				haveRootHandler = true
+			} else {
+				h.Proxy += path
+			}
+			srvConfig.SetWebHandler(&h, svcName, port, path, o.HTTPS, mds)
+		}
+		if !haveRootHandler {
+			h := ipn.HTTPHandler{Proxy: ln.Addr().String()}
+			srvConfig.SetWebHandler(&h, svcName, port, "/", o.HTTPS, mds)
+		}
+
+	default:
+		ln.Close()
+		return nil, fmt.Errorf("unknown ServiceTransportOptions type %T", opts)
 	}
 
 	if err := lc.SetServeConfig(ctx, srvConfig); err != nil {

@@ -44,7 +44,8 @@ func main() {
 	}
 	defer s.Close()
 
-	ln, err := s.ListenService(*svcName, port, tsnet.ServiceOptionTerminateTLS())
+	// TODO: use HTTPS instead
+	ln, err := s.ListenService(*svcName, port, tsnet.ServiceTCPOptions{TerminateTLS: true})
 	if err != nil {
 		log.Fatal(err)
 	}

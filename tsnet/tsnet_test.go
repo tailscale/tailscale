@@ -828,7 +828,7 @@ func TestListenService(t *testing.T) {
 	tests := []struct {
 		name string
 		port uint16
-		opts []ServiceOption
+		opts ServiceTransportOptions
 
 		extraSetup func(t *testing.T, serviceHost, peer *Server, control *testcontrol.Server)
 
@@ -851,7 +851,7 @@ func TestListenService(t *testing.T) {
 		},
 		{
 			name: "TLS_terminated_TCP",
-			opts: []ServiceOption{ServiceOptionTerminateTLS()},
+			opts: ServiceTCPOptions{TerminateTLS: true},
 			port: 443,
 			run: func(t *testing.T, serviceListener net.Listener, peer *Server, serviceFQDN string) {
 				go acceptAndEcho(t, serviceListener)
@@ -868,7 +868,7 @@ func TestListenService(t *testing.T) {
 		},
 		{
 			name: "identity_headers",
-			opts: []ServiceOption{ServiceOptionWithHeaders()},
+			opts: ServiceHTTPOptions{},
 			port: 80,
 			run: func(t *testing.T, serviceListener net.Listener, peer *Server, serviceFQDN string) {
 				expectHeader := "Tailscale-User-Name"
@@ -881,10 +881,38 @@ func TestListenService(t *testing.T) {
 			},
 		},
 		{
+			name: "identity_headers_TLS",
+			opts: ServiceHTTPOptions{HTTPS: true},
+			port: 80,
+			run: func(t *testing.T, serviceListener net.Listener, peer *Server, serviceFQDN string) {
+				expectHeader := "Tailscale-User-Name"
+				go checkAndEcho(t, serviceListener, func(r *http.Request) {
+					if _, ok := r.Header[expectHeader]; !ok {
+						t.Error("did not see expected header:", expectHeader)
+					}
+				})
+
+				dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+					tcpConn, err := peer.Dial(ctx, network, addr)
+					if err != nil {
+						return nil, err
+					}
+					return tls.Client(tcpConn, &tls.Config{
+						ServerName: serviceFQDN,
+						RootCAs:    testCertRoot.Pool(),
+					}), nil
+				}
+
+				assertEchoHTTP(t, serviceFQDN, "", dial)
+			},
+		},
+		{
 			name: "app_capabilities",
-			opts: []ServiceOption{
-				ServiceOptionAppCapabilities("example.com/cap/all-paths"),
-				ServiceOptionAppCapabilitiesForPath("/foo", "example.com/cap/all-paths", "example.com/cap/foo"),
+			opts: ServiceHTTPOptions{
+				AcceptAppCaps: map[string][]string{
+					"/":    {"example.com/cap/all-paths"},
+					"/foo": {"example.com/cap/all-paths", "example.com/cap/foo"},
+				},
 			},
 			port: 80,
 			extraSetup: func(t *testing.T, serviceHost, peer *Server, control *testcontrol.Server) {
@@ -936,7 +964,6 @@ func TestListenService(t *testing.T) {
 		// - TLS-terminated-TCP
 		// - Service with multiple ports
 		// - TUN Service
-		// - web handlers
 		// Error cases:
 		// - Untagged node
 	}
@@ -1013,7 +1040,7 @@ func TestListenService(t *testing.T) {
 			// == Done setting up mock state ==
 
 			// Start a Service listener.
-			ln := must.Get(serviceHost.ListenService(serviceName.String(), tt.port, tt.opts...))
+			ln := must.Get(serviceHost.ListenService(serviceName.String(), tt.port, tt.opts))
 			defer ln.Close()
 
 			tt.run(t, ln, serviceClient, serviceFQDN)
