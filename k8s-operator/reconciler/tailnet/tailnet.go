@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !plan9
+
 // Package tailnet provides reconciliation logic for the Tailnet custom resource definition. It is responsible for
 // ensuring the referenced OAuth credentials are valid and have the required scopes to be able to generate authentication
 // keys, manage devices & manage VIP services.
