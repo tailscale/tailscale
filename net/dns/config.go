@@ -21,6 +21,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/set"
 )
 
 // Config is a DNS configuration.
@@ -52,7 +53,7 @@ type Config struct {
 	// resolve subdomain queries to the same IPs. For example, if
 	// "node.tailnet.ts.net" is in SubdomainHosts, then queries for
 	// "anything.node.tailnet.ts.net" will resolve to node's IPs.
-	SubdomainHosts map[dnsname.FQDN]bool
+	SubdomainHosts set.Set[dnsname.FQDN]
 	// OnlyIPv6, if true, uses the IPv6 service IP (for MagicDNS)
 	// instead of the IPv4 version (100.100.100.100).
 	OnlyIPv6 bool

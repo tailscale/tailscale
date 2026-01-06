@@ -32,6 +32,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus/eventbustest"
+	"tailscale.com/util/set"
 )
 
 var (
@@ -439,11 +440,8 @@ func TestResolveLocalSubdomain(t *testing.T) {
 			"test1.ipn.dev.": {testipv4},
 			"test2.ipn.dev.": {testipv6},
 		},
-		LocalDomains: []dnsname.FQDN{"ipn.dev."},
-		SubdomainHosts: map[dnsname.FQDN]bool{
-			"test1.ipn.dev.": true, // test1 allows subdomain resolution
-			// test2 does NOT allow subdomain resolution
-		},
+		LocalDomains:   []dnsname.FQDN{"ipn.dev."},
+		SubdomainHosts: set.Of[dnsname.FQDN]("test1.ipn.dev."),
 	}
 	r.SetConfig(cfg)
 

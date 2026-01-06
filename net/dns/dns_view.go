@@ -15,6 +15,7 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/set"
 )
 
 //go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=Config
@@ -127,7 +128,7 @@ func (v ConfigView) Hosts() views.MapSlice[dnsname.FQDN, netip.Addr] {
 // resolve subdomain queries to the same IPs. For example, if
 // "node.tailnet.ts.net" is in SubdomainHosts, then queries for
 // "anything.node.tailnet.ts.net" will resolve to node's IPs.
-func (v ConfigView) SubdomainHosts() views.Map[dnsname.FQDN, bool] {
+func (v ConfigView) SubdomainHosts() views.Map[dnsname.FQDN, struct{}] {
 	return views.MapOf(v.ж.SubdomainHosts)
 }
 
@@ -142,6 +143,6 @@ var _ConfigViewNeedsRegeneration = Config(struct {
 	Routes           map[dnsname.FQDN][]*dnstype.Resolver
 	SearchDomains    []dnsname.FQDN
 	Hosts            map[dnsname.FQDN][]netip.Addr
-	SubdomainHosts   map[dnsname.FQDN]bool
+	SubdomainHosts   set.Set[dnsname.FQDN]
 	OnlyIPv6         bool
 }{})
