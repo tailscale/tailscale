@@ -2488,7 +2488,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	// neither UpdatePrefs or reconciliation should change Persist
 	newPrefs.Persist = b.pm.CurrentPrefs().Persist().AsStruct()
 
-	if buildfeatures.HasTPM {
+	if buildfeatures.HasTPM && b.HardwareAttested() {
 		if genKey, ok := feature.HookGenerateAttestationKeyIfEmpty.GetOk(); ok {
 			newKey, err := genKey(newPrefs.Persist, logf)
 			if err != nil {
@@ -2499,6 +2499,12 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 				prefsChangedWhy = append(prefsChangedWhy, "newKey")
 			}
 		}
+	}
+	// Remove any existing attestation key if HardwareAttested is false.
+	if !b.HardwareAttested() && newPrefs.Persist != nil && newPrefs.Persist.AttestationKey != nil && !newPrefs.Persist.AttestationKey.IsZero() {
+		newPrefs.Persist.AttestationKey = nil
+		prefsChanged = true
+		prefsChangedWhy = append(prefsChangedWhy, "removeAttestationKey")
 	}
 
 	if prefsChanged {
