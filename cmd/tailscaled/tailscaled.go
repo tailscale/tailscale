@@ -209,7 +209,10 @@ func main() {
 	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
 	flag.StringVar(&args.confFile, "config", "", "path to config file, or 'vm:user-data' to use the VM's user-data (EC2)")
 	if buildfeatures.HasTPM {
-		flag.Var(&args.hardwareAttestation, "hardware-attestation", "use hardware-backed keys to bind node identity to this device when supported by the OS and hardware. Uses TPM 2.0 on Linux and Windows; SecureEnclave on macOS and iOS; and Keystore on Android")
+		flag.Var(&args.hardwareAttestation, "hardware-attestation", `use hardware-backed keys to bind node identity to this device when supported
+by the OS and hardware. Uses TPM 2.0 on Linux and Windows; SecureEnclave on
+macOS and iOS; and Keystore on Android. Only supported for Tailscale nodes that
+store state on filesystem.`)
 	}
 	if f, ok := hookRegisterOutboundProxyFlags.GetOk(); ok {
 		f()
@@ -905,13 +908,18 @@ func applyIntegrationTestEnvKnob() {
 func handleTPMFlags() {
 	switch {
 	case args.hardwareAttestation.v:
-		if _, err := key.NewEmptyHardwareAttestationKey(); err == key.ErrUnsupported {
+		if err := canUseHardwareAttestation(); err != nil {
 			log.SetFlags(0)
-			log.Fatalf("--hardware-attestation is not supported on this platform or in this build of tailscaled")
+			log.Fatal(err)
 		}
 	case !args.hardwareAttestation.set:
 		policyHWAttestation, _ := policyclient.Get().GetBoolean(pkey.HardwareAttestation, false)
-		args.hardwareAttestation.v = policyHWAttestation
+		if err := canUseHardwareAttestation(); err != nil {
+			log.Printf("[unexpected] policy requires hardware attestation, but device does not support it: %v", err)
+			args.hardwareAttestation.v = false
+		} else {
+			args.hardwareAttestation.v = policyHWAttestation
+		}
 	}
 
 	switch {
@@ -927,6 +935,39 @@ func handleTPMFlags() {
 			args.encryptState.v = true
 		}
 	}
+}
+
+// canUseHardwareAttestation returns an error if hardware attestation can't be
+// enabled, either due to availability or compatibility with other settings.
+func canUseHardwareAttestation() error {
+	if _, err := key.NewEmptyHardwareAttestationKey(); err == key.ErrUnsupported {
+		return errors.New("--hardware-attestation is not supported on this platform or in this build of tailscaled")
+	}
+	// Hardware attestation keys are TPM-bound and cannot be migrated between
+	// machines. Disable when using portable state stores like kube: or arn:
+	// where state may be loaded on a different machine.
+	if args.statepath != "" && isPortableStore(args.statepath) {
+		return errors.New("--hardware-attestation cannot be used with portable state stores (kube:, arn:) because TPM-bound keys cannot be migrated between machines")
+	}
+	return nil
+}
+
+// isPortableStore reports whether the given state path refers to a portable
+// state store where state may be loaded on different machines.
+// All stores apart from file store and TPM store are portable.
+func isPortableStore(path string) bool {
+	if store.HasKnownProviderPrefix(path) && !strings.HasPrefix(path, store.TPMPrefix) {
+		return true
+	}
+	// In most cases Kubernetes Secret and AWS SSM stores would have been caught
+	// by the earlier check - but that check relies on those stores having been
+	// registered. This additional check is here to ensure that if we ever
+	// produce a faulty build that failed to register some store, users who
+	// upgraded to that don't get hardware keys generated.
+	if strings.HasPrefix(path, "kube:") || strings.HasPrefix(path, "arn:") {
+		return true
+	}
+	return false
 }
 
 // canEncryptState returns an error if state encryption can't be enabled,
