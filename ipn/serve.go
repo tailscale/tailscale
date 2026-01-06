@@ -443,7 +443,7 @@ func (sc *ServeConfig) SetTCPForwarding(port uint16, fwdAddr string, terminateTL
 	}
 }
 
-// SetTCPForwardingForService is sets the fwdAddr (IP:port form) to which to
+// SetTCPForwardingForService sets the fwdAddr (IP:port form) to which to
 // forward connections from the given port on the service. If terminateTLS
 // is true, TLS connections are terminated, with only the FQDN that corresponds
 // to the given service being permitted, before passing them to the fwdAddr.
