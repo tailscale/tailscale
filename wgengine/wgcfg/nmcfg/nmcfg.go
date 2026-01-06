@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"strings"
 
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -28,6 +29,9 @@ func nodeDebugName(n tailcfg.NodeView) string {
 // exported by node that is not one of its own self addresses.
 func cidrIsSubnet(node tailcfg.NodeView, cidr netip.Prefix) bool {
 	if cidr.Bits() == 0 {
+		return false
+	}
+	if tsaddr.IsTailscaleIP(cidr.Addr()) {
 		return false
 	}
 	if !cidr.IsSingleIP() {

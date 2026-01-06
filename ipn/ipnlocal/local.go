@@ -5082,8 +5082,9 @@ func (b *LocalBackend) authReconfigLocked() {
 	}
 
 	var flags netmap.WGConfigFlags
-	// NOTE: we want to always allow subnet routes for the sake of enabling services
-	flags |= netmap.AllowSubnetRoutes
+	if prefs.RouteAll() {
+		flags |= netmap.AllowSubnetRoutes
+	}
 
 	if hasPAC && disableSubnetsIfPAC {
 		if flags&netmap.AllowSubnetRoutes != 0 {
@@ -5382,7 +5383,7 @@ func magicDNSRootDomains(nm *netmap.NetworkMap) []dnsname.FQDN {
 // peerRoutes returns the routerConfig.Routes to access peers.
 // If there are over cgnatThreshold CGNAT routes, one big CGNAT route
 // is used instead.
-func peerRoutes(logf logger.Logf, peers []wgcfg.Peer, cgnatThreshold int) (routes []netip.Prefix) {
+func peerRoutes(logf logger.Logf, peers []wgcfg.Peer, cgnatThreshold int, routeAll bool) (routes []netip.Prefix) {
 	tsULA := tsaddr.TailscaleULARange()
 	cgNAT := tsaddr.CGNATRange()
 	var didULA bool
@@ -5412,7 +5413,7 @@ func peerRoutes(logf logger.Logf, peers []wgcfg.Peer, cgnatThreshold int) (route
 			}
 			if aip.IsSingleIP() && cgNAT.Contains(aip.Addr()) {
 				cgNATIPs = append(cgNATIPs, aip)
-			} else {
+			} else if routeAll {
 				routes = append(routes, aip)
 			}
 		}
@@ -5426,34 +5427,6 @@ func peerRoutes(logf logger.Logf, peers []wgcfg.Peer, cgnatThreshold int) (route
 
 	tsaddr.SortPrefixes(routes)
 	return routes
-}
-
-func (b *LocalBackend) servicesRoutes(routes []netip.Prefix) []netip.Prefix {
-	var servicesRangeBuilder netipx.IPSetBuilder
-	servicesRangeBuilder.AddPrefix(tsaddr.CGNATRange())
-	servicesRangeBuilder.AddPrefix(tsaddr.TailscaleULARange())
-
-	services, err := servicesRangeBuilder.IPSet()
-	if err != nil {
-		b.logf("accept routes filter: failed to build filtered set, all routes will be accepted: %v (check accept-routes flag)", err)
-		return routes
-	}
-
-	var builder netipx.IPSetBuilder
-	for _, r := range routes {
-		builder.AddPrefix(r)
-	}
-
-	builder.Intersect(services)
-
-	set, err := builder.IPSet()
-	if err != nil {
-		b.logf("accept routes filter: failed to build filtered set, all routes will be accepted: %v (check accept-routes flag)", err)
-		return routes
-	}
-
-	b.logf("accept routes filter: accepting routes: %v", set.Ranges())
-	return set.Prefixes()
 }
 
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
@@ -5482,20 +5455,13 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 		doStatefulFiltering = true
 	}
 
-	var routes []netip.Prefix
-	if prefs.RouteAll() {
-		routes = peerRoutes(b.logf, cfg.Peers, singleRouteThreshold)
-	} else {
-		routes = b.servicesRoutes(peerRoutes(b.logf, cfg.Peers, singleRouteThreshold))
-	}
-
 	rs := &router.Config{
 		LocalAddrs:        unmapIPPrefixes(cfg.Addresses),
 		SubnetRoutes:      unmapIPPrefixes(prefs.AdvertiseRoutes().AsSlice()),
 		SNATSubnetRoutes:  !prefs.NoSNAT(),
 		StatefulFiltering: doStatefulFiltering,
 		NetfilterMode:     prefs.NetfilterMode(),
-		Routes:            routes,
+		Routes:            peerRoutes(b.logf, cfg.Peers, singleRouteThreshold, prefs.RouteAll()),
 		NetfilterKind:     netfilterKind,
 	}
 
@@ -7808,7 +7774,9 @@ func maybeUsernameOf(actor ipnauth.Actor) string {
 	return username
 }
 
-var metricCurrentWatchIPNBus = clientmetric.NewGauge("localbackend_current_watch_ipn_bus")
+var (
+	metricCurrentWatchIPNBus = clientmetric.NewGauge("localbackend_current_watch_ipn_bus")
+)
 
 func (b *LocalBackend) stateEncrypted() opt.Bool {
 	switch runtime.GOOS {

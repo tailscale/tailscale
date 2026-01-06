@@ -156,8 +156,8 @@ func (nm *NetworkMap) SelfNodeOrZero() tailcfg.NodeView {
 func (nm *NetworkMap) AnyPeersAdvertiseRoutes() bool {
 	for _, p := range nm.Peers {
 		// NOTE: (ChaosInTheCRD) if the peer being advertised is a tailscale ip, we ignore it in this check
-		for _, r := range p.PrimaryRoutes().AsSlice() {
-			if !tsaddr.IsTailscaleIP(r.Addr()) {
+		for _, r := range p.PrimaryRoutes().All() {
+			if !tsaddr.IsTailscaleIP(r.Addr()) && r.IsSingleIP() {
 				return true
 			}
 		}
