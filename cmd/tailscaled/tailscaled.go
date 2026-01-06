@@ -910,13 +910,8 @@ func handleTPMFlags() {
 			log.Fatalf("--hardware-attestation is not supported on this platform or in this build of tailscaled")
 		}
 	case !args.hardwareAttestation.set:
-		policyHWAttestation, _ := policyclient.Get().GetBoolean(pkey.HardwareAttestation, feature.HardwareAttestationAvailable())
-		if !policyHWAttestation {
-			break
-		}
-		if feature.TPMAvailable() {
-			args.hardwareAttestation.v = true
-		}
+		policyHWAttestation, _ := policyclient.Get().GetBoolean(pkey.HardwareAttestation, false)
+		args.hardwareAttestation.v = policyHWAttestation
 	}
 
 	switch {
@@ -927,13 +922,8 @@ func handleTPMFlags() {
 			log.Fatal(err)
 		}
 	case !args.encryptState.set:
-		policyEncrypt, _ := policyclient.Get().GetBoolean(pkey.EncryptState, feature.TPMAvailable())
-		if !policyEncrypt {
-			// Default disabled, no need to validate.
-			return
-		}
-		// Default enabled if available.
-		if err := canEncryptState(); err == nil {
+		policyEncrypt, _ := policyclient.Get().GetBoolean(pkey.EncryptState, false)
+		if err := canEncryptState(); policyEncrypt && err == nil {
 			args.encryptState.v = true
 		}
 	}
