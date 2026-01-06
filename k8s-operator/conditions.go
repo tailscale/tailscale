@@ -196,3 +196,14 @@ func SvcIsReady(svc *corev1.Service) bool {
 	cond := svc.Status.Conditions[idx]
 	return cond.Status == metav1.ConditionTrue
 }
+
+func TailnetIsReady(tn *tsapi.Tailnet) bool {
+	idx := xslices.IndexFunc(tn.Status.Conditions, func(cond metav1.Condition) bool {
+		return cond.Type == string(tsapi.TailnetReady)
+	})
+	if idx == -1 {
+		return false
+	}
+	cond := tn.Status.Conditions[idx]
+	return cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == tn.Generation
+}
