@@ -540,7 +540,6 @@ func (c *Client) getUPnPPortMapping(
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		c.mapping = upnp
-		c.localPort = externalAddrPort.Port()
 		return upnp.external, true
 	}
 
