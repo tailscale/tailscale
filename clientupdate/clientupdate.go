@@ -37,8 +37,9 @@ import (
 )
 
 const (
-	StableTrack   = "stable"
-	UnstableTrack = "unstable"
+	StableTrack           = "stable"
+	UnstableTrack         = "unstable"
+	ReleaseCandidateTrack = "release-candidate"
 )
 
 var CurrentTrack = func() string {
@@ -79,6 +80,8 @@ type Arguments struct {
 	//     running binary
 	//   - StableTrack and UnstableTrack will use the latest versions of the
 	//     corresponding tracks
+	//   - ReleaseCandidateTrack will use the newest version from StableTrack
+	// 	   and ReleaseCandidateTrack.
 	//
 	// Leaving this empty will use Version or fall back to CurrentTrack if both
 	// Track and Version are empty.
@@ -113,7 +116,7 @@ func (args Arguments) validate() error {
 		return fmt.Errorf("only one of Version(%q) or Track(%q) can be set", args.Version, args.Track)
 	}
 	switch args.Track {
-	case StableTrack, UnstableTrack, "":
+	case StableTrack, UnstableTrack, ReleaseCandidateTrack, "":
 		// All valid values.
 	default:
 		return fmt.Errorf("unsupported track %q", args.Track)
@@ -131,6 +134,10 @@ type Updater struct {
 	// returned by version.Short(), typically "x.y.z". Used for tests to
 	// override the actual current version.
 	currentVersion string
+
+	// acceptReleaseCandidates is true when the provided track is ReleaseCandidateTrack.
+	// This allows the installation of the newer of: the latest stable and the latest RC.
+	acceptReleaseCandidates bool
 }
 
 func NewUpdater(args Arguments) (*Updater, error) {
@@ -162,6 +169,10 @@ func NewUpdater(args Arguments) (*Updater, error) {
 		} else {
 			up.Track = CurrentTrack
 		}
+	}
+	if up.Track == ReleaseCandidateTrack {
+		up.acceptReleaseCandidates = true
+		up.Track = StableTrack
 	}
 	if up.Arguments.PkgsAddr == "" {
 		up.Arguments.PkgsAddr = "https://pkgs.tailscale.com"
@@ -326,6 +337,19 @@ func (up *Updater) updateSynology() error {
 	if err != nil {
 		return err
 	}
+
+	track := up.Track
+
+	// If we're accepting release candidates, check both tracks and choose the newer of the two.
+	if up.acceptReleaseCandidates {
+		latestRC, err := latestPackages("release-candidate")
+		// If an RC is found and its newer than the last up.Track version, use the RC.
+		if err == nil && cmpver.Compare(latestRC.SPKsVersion, latest.SPKsVersion) > 0 {
+			latest = latestRC
+			track = "release-candidate"
+		}
+	}
+
 	spkName := latest.SPKs[osName][arch]
 	if spkName == "" {
 		return fmt.Errorf("cannot find Synology package for os=%s arch=%s, please report a bug with your device model", osName, arch)
@@ -341,7 +365,7 @@ func (up *Updater) updateSynology() error {
 	if err != nil {
 		return err
 	}
-	pkgsPath := fmt.Sprintf("%s/%s", up.Track, spkName)
+	pkgsPath := fmt.Sprintf("%s/%s", track, spkName)
 	spkPath := filepath.Join(spkDir, path.Base(pkgsPath))
 	if err := up.downloadURLToFile(pkgsPath, spkPath); err != nil {
 		return err
@@ -440,7 +464,7 @@ func (up *Updater) updateDebLike() error {
 		// instead.
 		return up.updateLinuxBinary()
 	}
-	ver, err := requestedTailscaleVersion(up.Version, up.Track)
+	ver, isRC, err := requestedTailscaleVersion(up.Version, up.Track, up.acceptReleaseCandidates)
 	if err != nil {
 		return err
 	}
@@ -448,10 +472,18 @@ func (up *Updater) updateDebLike() error {
 		return nil
 	}
 
-	if updated, err := updateDebianAptSourcesList(up.Track); err != nil {
+	track := up.Track
+
+	// If the update was found in the RC track, temporarily update the config file to point
+	// to the RC track.
+	if isRC {
+		track = "release-candidate"
+	}
+
+	if updated, err := updateDebianAptSourcesList(track); err != nil {
 		return err
 	} else if updated {
-		up.Logf("Updated %s to use the %s track", aptSourcesFile, up.Track)
+		up.Logf("Updated %s to use the %s track", aptSourcesFile, track)
 	}
 
 	cmd := exec.Command("apt-get", "update",
@@ -465,6 +497,7 @@ func (up *Updater) updateDebLike() error {
 		"-o", "APT::Get::List-Cleanup=0",
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
+		revertDebianAptSourcesList(isRC, up.Track)
 		return fmt.Errorf("apt-get update failed: %w; output:\n%s", err, out)
 	}
 
@@ -472,12 +505,14 @@ func (up *Updater) updateDebLike() error {
 		out, err := exec.Command("apt-get", "install", "--yes", "--allow-downgrades", "tailscale="+ver).CombinedOutput()
 		if err != nil {
 			if !bytes.Contains(out, []byte(`dpkg was interrupted`)) {
+				revertDebianAptSourcesList(isRC, up.Track)
 				return fmt.Errorf("apt-get install failed: %w; output:\n%s", err, out)
 			}
 			up.Logf("apt-get install failed: %s; output:\n%s", err, out)
 			up.Logf("running dpkg --configure tailscale")
 			out, err = exec.Command("dpkg", "--force-confdef,downgrade", "--configure", "tailscale").CombinedOutput()
 			if err != nil {
+				revertDebianAptSourcesList(isRC, up.Track)
 				return fmt.Errorf("dpkg --configure tailscale failed: %w; output:\n%s", err, out)
 			}
 			continue
@@ -485,10 +520,21 @@ func (up *Updater) updateDebLike() error {
 		break
 	}
 
+	revertDebianAptSourcesList(isRC, up.Track)
+
 	return nil
 }
 
 const aptSourcesFile = "/etc/apt/sources.list.d/tailscale.list"
+
+// If attemptedRC is true, the config file was temporarily updated to point
+// to the RC track. If so, this function reverts it back to the original track.
+func revertDebianAptSourcesList(attemptedRC bool, originalTrack string) (bool, error) {
+	if !attemptedRC {
+		return false, nil
+	}
+	return updateDebianAptSourcesList(originalTrack)
+}
 
 // updateDebianAptSourcesList updates the /etc/apt/sources.list.d/tailscale.list
 // file to make sure it has the provided track (stable or unstable) in it.
@@ -517,7 +563,7 @@ func updateDebianAptSourcesListBytes(was []byte, dstTrack string) (newContent []
 	bs := bufio.NewScanner(bytes.NewReader(was))
 	hadCorrect := false
 	commentLine := regexp.MustCompile(`^\s*\#`)
-	pkgsURL := regexp.MustCompile(`\bhttps://pkgs\.tailscale\.com/((un)?stable)/`)
+	pkgsURL := regexp.MustCompile(`\bhttps://pkgs\.tailscale\.com/` + dstTrack + `/`)
 	for bs.Scan() {
 		line := bs.Bytes()
 		if !commentLine.Match(line) {
@@ -586,7 +632,7 @@ func (up *Updater) updateFedoraLike(packageManager string) func() error {
 			}
 		}()
 
-		ver, err := requestedTailscaleVersion(up.Version, up.Track)
+		ver, isRC, err := requestedTailscaleVersion(up.Version, up.Track, up.acceptReleaseCandidates)
 		if err != nil {
 			return err
 		}
@@ -594,15 +640,34 @@ func (up *Updater) updateFedoraLike(packageManager string) func() error {
 			return nil
 		}
 
-		if updated, err := updateYUMRepoTrack(yumRepoConfigFile, up.Track); err != nil {
+		track := up.Track
+
+		// If the update was found in the RC track, temporarily update the config file to point
+		// to the RC track.
+		if isRC {
+			track = "release-candidate"
+		}
+
+		if updated, err := updateYUMRepoTrack(yumRepoConfigFile, track); err != nil {
 			return err
 		} else if updated {
-			up.Logf("Updated %s to use the %s track", yumRepoConfigFile, up.Track)
+			up.Logf("Updated %s to use the %s track", yumRepoConfigFile, track)
 		}
 
 		cmd := exec.Command(packageManager, "install", "--assumeyes", fmt.Sprintf("tailscale-%s-1", ver))
 		cmd.Stdout = up.Stdout
 		cmd.Stderr = up.Stderr
+
+		// If the update was found in the RC track, revert the package manager's config file to
+		// the original up.Track to avoid missing subsequent patch versions as they are released.
+		if isRC {
+			if updated, err := updateYUMRepoTrack(yumRepoConfigFile, up.Track); err != nil {
+				up.Logf("failed to revert %s to use the %s track: %v", yumRepoConfigFile, up.Track, err)
+			} else if updated {
+				up.Logf("Reverted %s to use the %s track", yumRepoConfigFile, up.Track)
+			}
+		}
+
 		if err := cmd.Run(); err != nil {
 			return err
 		}
@@ -618,7 +683,7 @@ func updateYUMRepoTrack(repoFile, dstTrack string) (rewrote bool, err error) {
 		return false, err
 	}
 
-	urlRe := regexp.MustCompile(`^(baseurl|gpgkey)=https://pkgs\.tailscale\.com/(un)?stable/`)
+	urlRe := regexp.MustCompile(`^(baseurl|gpgkey)=https://pkgs\.tailscale\.com/` + dstTrack + `/`)
 	urlReplacement := fmt.Sprintf("$1=https://pkgs.tailscale.com/%s/", dstTrack)
 
 	s := bufio.NewScanner(bytes.NewReader(was))
@@ -726,7 +791,7 @@ func parseAlpinePackageVersion(out []byte) (string, error) {
 var apkRepoVersionRE = regexp.MustCompile(`v[0-9]+\.[0-9]+`)
 
 func checkOutdatedAlpineRepo(logf logger.Logf, apkVer, track string) error {
-	latest, err := LatestTailscaleVersion(track)
+	latest, _, err := LatestTailscaleVersion(track, false)
 	if err != nil {
 		return err
 	}
@@ -846,7 +911,7 @@ func (up *Updater) updateLinuxBinary() error {
 	if err := requireRoot(); err != nil {
 		return err
 	}
-	ver, err := requestedTailscaleVersion(up.Version, up.Track)
+	ver, isRC, err := requestedTailscaleVersion(up.Version, up.Track, up.acceptReleaseCandidates)
 	if err != nil {
 		return err
 	}
@@ -854,12 +919,20 @@ func (up *Updater) updateLinuxBinary() error {
 		return nil
 	}
 
+	originalTrack := up.Track
+	// If an RC was found, temporarily update the working track to the RC track.
+	if isRC {
+		up.Track = "release-candidate"
+	}
+
 	dlPath, err := up.downloadLinuxTarball(ver)
 	if err != nil {
+		up.Track = originalTrack
 		return err
 	}
 	up.Logf("Extracting %q", dlPath)
 	if err := up.unpackLinuxTarball(dlPath); err != nil {
+		up.Track = originalTrack
 		return err
 	}
 	if err := os.Remove(dlPath); err != nil {
@@ -875,6 +948,7 @@ func (up *Updater) updateLinuxBinary() error {
 		up.Logf("Success")
 	}
 
+	up.Track = originalTrack
 	return nil
 }
 
@@ -1148,24 +1222,56 @@ func haveExecutable(name string) bool {
 	return err == nil && path != ""
 }
 
-func requestedTailscaleVersion(ver, track string) (string, error) {
+func requestedTailscaleVersion(ver, track string, acceptReleaseCandidates bool) (string, bool, error) {
 	if ver != "" {
-		return ver, nil
+		return ver, false, nil
 	}
-	return LatestTailscaleVersion(track)
+	return LatestTailscaleVersion(track, acceptReleaseCandidates)
 }
 
 // LatestTailscaleVersion returns the latest released version for the given
-// track from pkgs.tailscale.com.
-func LatestTailscaleVersion(track string) (string, error) {
+// track from pkgs.tailscale.com. If track is empty, CurrentTrack is used. Returns
+// the version found, whether or not it is an RC version, and any error.
+func LatestTailscaleVersion(track string, acceptReleaseCandidates bool) (string, bool, error) {
 	if track == "" {
 		track = CurrentTrack
 	}
 
-	latest, err := latestPackages(track)
-	if err != nil {
-		return "", err
+	testTrack := track
+
+	// For ReleaseCandidateTrack, take the newer of StableTrack and ReleaseCandidateTrack.
+	// This avoids trapping users on an older RC after a patch stable release is made.
+	if track == ReleaseCandidateTrack {
+		testTrack = StableTrack
 	}
+	latest, err := latestPackages(testTrack)
+	if err != nil {
+		return "", false, err
+	}
+
+	// First, find the latest version on the requested track.
+	ver := latestPlatformVersion(latest)
+
+	if !acceptReleaseCandidates && ver == "" {
+		return "", false, fmt.Errorf("no latest version found for OS %q on %q track", runtime.GOOS, track)
+	} else if !acceptReleaseCandidates && ver != "" {
+		return ver, false, nil
+	}
+
+	// Consider the latest RC version if it's newer than the stable version just found.
+	if latestRC, err := latestPackages(ReleaseCandidateTrack); err == nil && cmpver.Compare(latestRC.Version, ver) > 0 {
+		ver = latestPlatformVersion(latestRC)
+		return ver, true, nil
+	}
+
+	if ver == "" {
+		return "", false, fmt.Errorf("no latest version or RC found for OS %q on %q track", runtime.GOOS, track)
+	}
+
+	return ver, false, nil
+}
+
+func latestPlatformVersion(latest *trackPackages) string {
 	ver := latest.Version
 	switch runtime.GOOS {
 	case "windows":
@@ -1178,11 +1284,7 @@ func LatestTailscaleVersion(track string) (string, error) {
 			ver = latest.SPKsVersion
 		}
 	}
-
-	if ver == "" {
-		return "", fmt.Errorf("no latest version found for OS %q on %q track", runtime.GOOS, track)
-	}
-	return ver, nil
+	return ver
 }
 
 type trackPackages struct {
