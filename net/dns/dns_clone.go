@@ -11,6 +11,7 @@ import (
 
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/set"
 )
 
 // Clone makes a deep copy of Config.
@@ -54,7 +55,7 @@ var _ConfigCloneNeedsRegeneration = Config(struct {
 	Routes           map[dnsname.FQDN][]*dnstype.Resolver
 	SearchDomains    []dnsname.FQDN
 	Hosts            map[dnsname.FQDN][]netip.Addr
-	SubdomainHosts   map[dnsname.FQDN]bool
+	SubdomainHosts   set.Set[dnsname.FQDN]
 	OnlyIPv6         bool
 }{})
 

@@ -39,6 +39,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/set"
 )
 
 const dnsSymbolicFQDN = "magicdns.localhost-tailscale-daemon."
@@ -84,7 +85,7 @@ type Config struct {
 	// "sub.node.tailnet.ts.net" doesn't match Hosts directly, and
 	// "node.tailnet.ts.net" is in SubdomainHosts, the query resolves
 	// to the IPs for "node.tailnet.ts.net".
-	SubdomainHosts map[dnsname.FQDN]bool
+	SubdomainHosts set.Set[dnsname.FQDN]
 }
 
 // WriteToBufioWriter write a debug version of c for logs to w, omitting
@@ -224,7 +225,7 @@ type Resolver struct {
 	localDomains   []dnsname.FQDN
 	hostToIP       map[dnsname.FQDN][]netip.Addr
 	ipToHost       map[netip.Addr]dnsname.FQDN
-	subdomainHosts map[dnsname.FQDN]bool
+	subdomainHosts set.Set[dnsname.FQDN]
 }
 
 type ForwardLinkSelector interface {
@@ -656,7 +657,7 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 	addrs, found := hosts[domain]
 	if !found {
 		for parent := domain.Parent(); parent != ""; parent = parent.Parent() {
-			if subdomainHosts[parent] {
+			if subdomainHosts.Contains(parent) {
 				addrs, found = hosts[parent]
 				break
 			}
