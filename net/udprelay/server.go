@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"go4.org/mem"
@@ -29,6 +30,7 @@ import (
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/sockopts"
 	"tailscale.com/net/stun"
@@ -78,6 +80,7 @@ type Server struct {
 	closeCh             chan struct{}
 	netChecker          *netcheck.Client
 	metrics             *metrics
+	netMon              *netmon.Monitor
 
 	mu                  sync.Mutex                      // guards the following fields
 	macSecrets          views.Slice[[blake2s.Size]byte] // [0] is most recent, max 2 elements
@@ -346,6 +349,7 @@ func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool, metrics 
 	if err != nil {
 		return nil, err
 	}
+	s.netMon = netMon
 	s.netChecker = &netcheck.Client{
 		NetMon: netMon,
 		Logf:   logger.WithPrefix(logf, "netcheck: "),
@@ -542,6 +546,25 @@ func trySetUDPSocketOptions(pconn nettype.PacketConn, logf logger.Logf) {
 	}
 }
 
+func trySetSOMark(logf logger.Logf, netMon *netmon.Monitor, network, address string, c syscall.RawConn) {
+	if netns.UseSocketMark() {
+		// Leverage SO_MARK where available to prevent packets from routing
+		// *over* Tailscale. Where SO_MARK is unavailable we choose to not set
+		// SO_BINDTODEVICE as that could prevent handshakes from completing
+		// where multiple interfaces are in play.
+		//
+		// SO_MARK is only used on Linux at the time of writing (2026-01-08),
+		// and Linux is the popular/common choice for peer relay. If we are
+		// running on Linux and SO_MARK is unavailable (EPERM), chances are
+		// there is no TUN device, so routing over Tailscale is impossible
+		// anyway. Both TUN creation and SO_MARK require CAP_NET_ADMIN.
+		lis := netns.Listener(logf, netMon)
+		if lis.Control != nil {
+			lis.Control(network, address, c)
+		}
+	}
+}
+
 // bindSockets binds udp4 and udp6 sockets to desiredPort. We consider it
 // successful if we manage to bind at least one udp4 socket. Multiple sockets
 // may be bound per address family, e.g. SO_REUSEPORT, depending on platform.
@@ -562,7 +585,11 @@ func (s *Server) bindSockets(desiredPort uint16) error {
 	// arbitrary.
 	maxSocketsPerAF := min(16, runtime.NumCPU())
 	listenConfig := &net.ListenConfig{
-		Control: listenControl,
+		Control: func(network, address string, c syscall.RawConn) error {
+			trySetReusePort(network, address, c)
+			trySetSOMark(s.logf, s.netMon, network, address, c)
+			return nil
+		},
 	}
 	for _, network := range []string{"udp4", "udp6"} {
 	SocketsLoop:

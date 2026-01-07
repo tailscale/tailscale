@@ -10,9 +10,7 @@ import (
 	"syscall"
 )
 
-func listenControl(_ string, _ string, _ syscall.RawConn) error {
-	return nil
-}
+func trySetReusePort(_ string, _ string, _ syscall.RawConn) {}
 
 func isReusableSocket(*net.UDPConn) bool {
 	return false
