@@ -17,16 +17,204 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/util/must"
+	"tailscale.com/util/set"
 )
+
+func TestCertRequest(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+
+	tests := []struct {
+		domain   string
+		wantSANs []string
+	}{
+		{
+			domain:   "example.com",
+			wantSANs: []string{"example.com"},
+		},
+		{
+			domain:   "*.example.com",
+			wantSANs: []string{"*.example.com", "example.com"},
+		},
+		{
+			domain:   "*.foo.bar.com",
+			wantSANs: []string{"*.foo.bar.com", "foo.bar.com"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.domain, func(t *testing.T) {
+			csrDER, err := certRequest(key, tt.domain, nil)
+			if err != nil {
+				t.Fatalf("certRequest: %v", err)
+			}
+			csr, err := x509.ParseCertificateRequest(csrDER)
+			if err != nil {
+				t.Fatalf("ParseCertificateRequest: %v", err)
+			}
+			if csr.Subject.CommonName != tt.domain {
+				t.Errorf("CommonName = %q, want %q", csr.Subject.CommonName, tt.domain)
+			}
+			if !slices.Equal(csr.DNSNames, tt.wantSANs) {
+				t.Errorf("DNSNames = %v, want %v", csr.DNSNames, tt.wantSANs)
+			}
+		})
+	}
+}
+
+func TestResolveCertDomain(t *testing.T) {
+	tests := []struct {
+		name        string
+		domain      string
+		certDomains []string
+		hasCap      bool
+		skipNetmap  bool
+		want        string
+		wantErr     string
+	}{
+		{
+			name:        "exact_match",
+			domain:      "node.ts.net",
+			certDomains: []string{"node.ts.net"},
+			want:        "node.ts.net",
+		},
+		{
+			name:        "exact_match_with_cap",
+			domain:      "node.ts.net",
+			certDomains: []string{"node.ts.net"},
+			hasCap:      true,
+			want:        "node.ts.net",
+		},
+		{
+			name:        "wildcard_with_cap",
+			domain:      "*.node.ts.net",
+			certDomains: []string{"node.ts.net"},
+			hasCap:      true,
+			want:        "*.node.ts.net",
+		},
+		{
+			name:        "wildcard_without_cap",
+			domain:      "*.node.ts.net",
+			certDomains: []string{"node.ts.net"},
+			hasCap:      false,
+			wantErr:     "wildcard certificates are not enabled for this node",
+		},
+		{
+			name:        "subdomain_with_cap_rejected",
+			domain:      "app.node.ts.net",
+			certDomains: []string{"node.ts.net"},
+			hasCap:      true,
+			wantErr:     `invalid domain "app.node.ts.net"; must be one of ["node.ts.net"]`,
+		},
+		{
+			name:        "subdomain_without_cap_rejected",
+			domain:      "app.node.ts.net",
+			certDomains: []string{"node.ts.net"},
+			hasCap:      false,
+			wantErr:     `invalid domain "app.node.ts.net"; must be one of ["node.ts.net"]`,
+		},
+		{
+			name:        "multi_level_subdomain_rejected",
+			domain:      "a.b.node.ts.net",
+			certDomains: []string{"node.ts.net"},
+			hasCap:      true,
+			wantErr:     `invalid domain "a.b.node.ts.net"; must be one of ["node.ts.net"]`,
+		},
+		{
+			name:        "wildcard_no_matching_parent",
+			domain:      "*.unrelated.ts.net",
+			certDomains: []string{"node.ts.net"},
+			hasCap:      true,
+			wantErr:     `invalid domain "*.unrelated.ts.net"; parent domain must be one of ["node.ts.net"]`,
+		},
+		{
+			name:        "subdomain_unrelated_rejected",
+			domain:      "app.unrelated.ts.net",
+			certDomains: []string{"node.ts.net"},
+			hasCap:      true,
+			wantErr:     `invalid domain "app.unrelated.ts.net"; must be one of ["node.ts.net"]`,
+		},
+		{
+			name:        "no_cert_domains",
+			domain:      "node.ts.net",
+			certDomains: nil,
+			wantErr:     "your Tailscale account does not support getting TLS certs",
+		},
+		{
+			name:        "wildcard_no_cert_domains",
+			domain:      "*.foo.ts.net",
+			certDomains: nil,
+			hasCap:      true,
+			wantErr:     "your Tailscale account does not support getting TLS certs",
+		},
+		{
+			name:        "empty_domain",
+			domain:      "",
+			certDomains: []string{"node.ts.net"},
+			wantErr:     "missing domain name",
+		},
+		{
+			name:       "nil_netmap",
+			domain:     "node.ts.net",
+			skipNetmap: true,
+			wantErr:    "no netmap available",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestLocalBackend(t)
+
+			if !tt.skipNetmap {
+				// Set up netmap with CertDomains and capability
+				var allCaps set.Set[tailcfg.NodeCapability]
+				if tt.hasCap {
+					allCaps = set.Of(tailcfg.NodeAttrDNSSubdomainResolve)
+				}
+				b.mu.Lock()
+				b.currentNode().SetNetMap(&netmap.NetworkMap{
+					SelfNode: (&tailcfg.Node{}).View(),
+					DNS: tailcfg.DNSConfig{
+						CertDomains: tt.certDomains,
+					},
+					AllCaps: allCaps,
+				})
+				b.mu.Unlock()
+			}
+
+			got, err := b.resolveCertDomain(tt.domain)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Errorf("resolveCertDomain(%q) = %q, want error %q", tt.domain, got, tt.wantErr)
+				} else if err.Error() != tt.wantErr {
+					t.Errorf("resolveCertDomain(%q) error = %q, want %q", tt.domain, err.Error(), tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("resolveCertDomain(%q) error = %v, want nil", tt.domain, err)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("resolveCertDomain(%q) = %q, want %q", tt.domain, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestValidLookingCertDomain(t *testing.T) {
 	tests := []struct {
@@ -40,6 +228,16 @@ func TestValidLookingCertDomain(t *testing.T) {
 		{"", false},
 		{"foo\\bar.com", false},
 		{"foo\x00bar.com", false},
+		// Wildcard tests
+		{"*.foo.com", true},
+		{"*.foo.bar.com", true},
+		{"*foo.com", false},      // must be *.
+		{"*.com", false},         // must have domain after *.
+		{"*.", false},            // must have domain after *.
+		{"*.*.foo.com", false},   // no nested wildcards
+		{"foo.*.bar.com", false}, // no wildcard mid-string
+		{"app.foo.com", true},    // regular subdomain
+		{"*", false},             // bare asterisk
 	}
 	for _, tt := range tests {
 		if got := validLookingCertDomain(tt.in); got != tt.want {
@@ -231,12 +429,19 @@ func TestDebugACMEDirectoryURL(t *testing.T) {
 
 func TestGetCertPEMWithValidity(t *testing.T) {
 	const testDomain = "example.com"
-	b := &LocalBackend{
-		store:   &mem.Store{},
-		varRoot: t.TempDir(),
-		ctx:     context.Background(),
-		logf:    t.Logf,
-	}
+	b := newTestLocalBackend(t)
+	b.varRoot = t.TempDir()
+
+	// Set up netmap with CertDomains so resolveCertDomain works
+	b.mu.Lock()
+	b.currentNode().SetNetMap(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{}).View(),
+		DNS: tailcfg.DNSConfig{
+			CertDomains: []string{testDomain},
+		},
+	})
+	b.mu.Unlock()
+
 	certDir, err := b.certDir()
 	if err != nil {
 		t.Fatalf("certDir error: %v", err)
