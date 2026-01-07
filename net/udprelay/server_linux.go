@@ -12,11 +12,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func listenControl(_ string, _ string, c syscall.RawConn) error {
+func trySetReusePort(_ string, _ string, c syscall.RawConn) {
 	c.Control(func(fd uintptr) {
 		unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
 	})
-	return nil
 }
 
 func isReusableSocket(uc *net.UDPConn) bool {
