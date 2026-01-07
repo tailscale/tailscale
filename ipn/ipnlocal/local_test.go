@@ -7319,6 +7319,9 @@ func TestRouteAllDisabled(t *testing.T) {
 						pp("100.94.122.93/32"),
 						pp("100.79.141.115/32"),
 
+						// a /28 range will not be added, since this is not a Service IP range (which is always /32, a single IP)
+						pp("100.64.0.0/28"),
+
 						// ips outside the tailscale cgnat/ula range are not added to the router config
 						pp("192.168.0.45/32"),
 						pp("fd7a:115c:b1e0::2501:9b83/128"),
