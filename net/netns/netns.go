@@ -22,8 +22,59 @@ import (
 
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
 )
+
+type Opts struct {
+	rc      *routeCache
+	e       *eventbus.Bus
+	tunName string
+	logf    logger.Logf
+}
+
+func NewOpts(rc *routeCache, e *eventbus.Bus, tunName string, logf logger.Logf) Opts {
+	return Opts{
+		rc:      rc,
+		e:       e,
+		tunName: tunName,
+		logf:    logf,
+	}
+}
+
+var netns struct {
+	mu      syncs.Mutex
+	rc      *routeCache
+	tunName string
+	logf    logger.Logf
+}
+
+func cache() *routeCache {
+	netns.mu.Lock()
+	defer netns.mu.Unlock()
+	return netns.rc
+}
+
+// SetGlobalRouteCache sets the global route cache used by netns.
+// It also subscribes the route cache to network change events from
+// the provided event bus.
+func Configure(opts Opts) {
+	netns.mu.Lock()
+	defer netns.mu.Unlock()
+	netns.rc = opts.rc
+	netns.rc.subscribeToNetworkChanges(opts.e, opts.logf)
+	netns.tunName = opts.tunName
+	netns.logf = opts.logf
+
+	opts.logf("netns: configured with tun as %q", opts.tunName)
+}
+
+func tunName() string {
+	netns.mu.Lock()
+	defer netns.mu.Unlock()
+	return netns.tunName
+}
 
 var disabled atomic.Bool
 

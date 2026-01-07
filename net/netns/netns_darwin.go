@@ -52,7 +52,7 @@ func controlLogf(logf logger.Logf, netMon *netmon.Monitor, network, address stri
 			hpn:     HostPortNetwork{Network: network, Host: host, Port: port},
 			filterf: filterInvalidIntefaces,
 			race:    true,
-			cache:   globalRouteCache,
+			cache:   cache(),
 		}
 
 		// No netmon and no routing table.

@@ -39,11 +39,17 @@ import (
 // this is more portable.  It's still wildly different than the Windows method which
 // checks the description strings.
 func tailscaleInterface() (*net.Interface, error) {
+	tunName := tunName()
+
 	ifs, err := net.Interfaces()
 	if err != nil {
 		return nil, err
 	}
 	for _, iface := range ifs {
+		if tunName == iface.Name {
+			return &iface, nil
+		}
+
 		addrs, err := iface.Addrs()
 		if err != nil {
 			continue
@@ -166,19 +172,21 @@ func probeInterfacesReachability(opts probeOpts) ([]inetReachability, error) {
 		return nil, errors.New("no candidate interfaces")
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Close this channel to abort ongoing probes if we're racing and are only interested
+	// in the first result.
+	done := make(chan struct{})
 
 	for _, iface := range candidates {
 		go func() {
-			// Per-probe timeout.
-
-			err := reachabilityHook(&iface, opts.hpn)
-
 			select {
-			case results <- inetReachability{iface: iface, reachable: err == nil, err: err}:
-			case <-ctx.Done():
+			case <-done:
+				return
+			default:
 			}
+
+			// Per-probe timeout.
+			err := reachabilityHook(&iface, opts.hpn)
+			results <- inetReachability{iface: iface, reachable: err == nil, err: err}
 		}()
 	}
 
@@ -193,6 +201,7 @@ func probeInterfacesReachability(opts probeOpts) ([]inetReachability, error) {
 			// TODO (barnstar): We should cache all reachable results so we can try alteratives if we
 			// can't get the conn up and running later but signal early if we're racing.
 			if opts.race && r.reachable {
+				close(done)
 				return []inetReachability{r}, nil
 			}
 			// .. otherwise, collect all results including the unreachable ones.
@@ -284,7 +293,8 @@ func findInterfaceThatCanReach(opts probeOpts) (iface *net.Interface, err error)
 	if err == nil && addr.IsValid() {
 		// Check cache first
 		if cached := opts.cache.lookupCachedRoute(addr); cached != nil {
-			opts.logf("netns: using cached interface %v for %v", cached.Name, opts.hpn)
+			hits, misses, total := opts.cache.stats()
+			opts.logf("netns: cachHit for %v cache stats: hits=%d misses=%d total=%d", addr, hits, misses, total)
 			return cached, nil
 		}
 	}
@@ -305,7 +315,6 @@ func findInterfaceThatCanReach(opts probeOpts) (iface *net.Interface, err error)
 	for _, r := range res {
 		candidatesNames = append(candidatesNames, r.iface.Name)
 	}
-	opts.logf("netns: found candidate interfaces that can reach %v:%v on %v:  %v", opts.hpn.Host, opts.hpn.Port, opts.hpn.Network, candidatesNames)
 	iface = &res[0].iface
 
 	if defaultIfaceHintFn != nil {
@@ -318,8 +327,6 @@ func findInterfaceThatCanReach(opts probeOpts) (iface *net.Interface, err error)
 			}
 		}
 	}
-
-	opts.logf("netns: returning interface %v at %v for %v:%v", iface.Name, iface.Index, opts.hpn.Host, opts.hpn.Port)
 
 	// Cache the result if we have a valid IP address
 	if addr.IsValid() {
@@ -354,43 +361,40 @@ func ifaceHasV4OrGlobalV6(iface *net.Interface) bool {
 	return false
 }
 
-var globalRouteCache *routeCache
-
-// SetGlobalRouteCache sets the global route cache used by netns.
-// It also subscribes the route cache to network change events from
-// the provided event bus.
-func SetGlobalRouteCache(rc *routeCache, e *eventbus.Bus, logf logger.Logf) {
-	globalRouteCache = rc
-	globalRouteCache.subscribeToNetworkChanges(e, logf)
-}
-
 func NewRouteCache() *routeCache {
 	return &routeCache{
-		v4: new(bart.Table[*net.Interface]),
-		v6: new(bart.Table[*net.Interface]),
+		table: new(bart.Table[*net.Interface]),
 	}
 }
 
 type routeCache struct {
-	mu syncs.Mutex
-	v4 *bart.Table[*net.Interface] // IPv4 routing table
-	v6 *bart.Table[*net.Interface] // IPv6 routing table
-	ec *eventbus.Client
+	mu    syncs.Mutex
+	table *bart.Table[*net.Interface] // IPv4 routing table
+	ec    *eventbus.Client
+
+	hits   int
+	misses int
+}
+
+func (rc *routeCache) stats() (hits, misses, total int) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	return rc.hits, rc.misses, rc.table.Size()
 }
 
 func (rc *routeCache) subscribeToNetworkChanges(eventBus *eventbus.Bus, logf logger.Logf) {
 	rc.mu.Lock()
-	defer rc.mu.Unlock()
-
 	if rc.ec != nil {
 		rc.ec.Close()
 	}
 
 	rc.ec = eventBus.Client("routeCache")
+	rc.mu.Unlock()
+
 	eventbus.SubscribeFunc(rc.ec, func(cd netmon.ChangeDelta) {
 		if cd.RebindLikelyRequired {
 			logf("netns: routeCache: major clearing all cached routes due to network change: %v", cd)
-			rc.ClearAllCachedRoutes()
+			rc.Reset()
 		}
 	})
 	logf("netns: routeCache: subscribed to network change events")
@@ -400,10 +404,12 @@ func (rc *routeCache) lookupCachedRoute(addr netip.Addr) *net.Interface {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 
-	iface, ok := rc.tableForAddr(addr).Lookup(addr)
+	iface, ok := rc.table.Lookup(addr)
 	if !ok {
+		rc.misses++
 		return nil
 	}
+	rc.hits++
 	return iface
 }
 
@@ -415,15 +421,13 @@ func (rc *routeCache) setCachedRoute(addr netip.Addr, iface *net.Interface) {
 func (rc *routeCache) setCachedRoutePrefix(prefix netip.Prefix, iface *net.Interface) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	addr := prefix.Addr()
-	rc.tableForAddr(addr).Insert(prefix, iface)
+	rc.table.Insert(prefix, iface)
 }
 
 func (rc *routeCache) clearCachedRoutePrefix(prefix netip.Prefix) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	addr := prefix.Addr()
-	rc.tableForAddr(addr).Delete(prefix)
+	rc.table.Delete(prefix)
 }
 
 func (rc *routeCache) ClearCachedRoute(addr netip.Addr) {
@@ -431,12 +435,14 @@ func (rc *routeCache) ClearCachedRoute(addr netip.Addr) {
 	rc.clearCachedRoutePrefix(prefix)
 }
 
-func (rc *routeCache) ClearAllCachedRoutes() {
+func (rc *routeCache) Reset() {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 
-	rc.v4 = new(bart.Table[*net.Interface])
-	rc.v6 = new(bart.Table[*net.Interface])
+	rc.hits = 0
+	rc.misses = 0
+
+	rc.table = new(bart.Table[*net.Interface])
 }
 
 func addrBits(addr netip.Addr) int {
@@ -444,11 +450,4 @@ func addrBits(addr netip.Addr) int {
 		return 128
 	}
 	return 32
-}
-
-func (rc *routeCache) tableForAddr(addr netip.Addr) *bart.Table[*net.Interface] {
-	if addr.Is6() {
-		return rc.v6
-	}
-	return rc.v4
 }

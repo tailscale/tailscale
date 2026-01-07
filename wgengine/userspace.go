@@ -392,7 +392,8 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	// TODO: there's probably a better place for this
 	sockstats.SetNetMon(e.netMon)
-	netns.SetGlobalRouteCache(netns.NewRouteCache(), e.eventBus, logf)
+	rc := netns.NewRouteCache()
+	netns.Configure(netns.NewOpts(rc, e.eventBus, tunName, logf))
 
 	logf("link state: %+v", e.netMon.InterfaceState())
 

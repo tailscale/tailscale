@@ -262,7 +262,7 @@ func TestGlobalRouteCache(t *testing.T) {
 		routeCache.setCachedRoute(addr3, iface3)
 
 		// Clear all
-		routeCache.ClearAllCachedRoutes()
+		routeCache.Reset()
 
 		// Verify all are gone
 		if got := routeCache.lookupCachedRoute(addr1); got != nil {
@@ -295,33 +295,6 @@ func TestGlobalRouteCache(t *testing.T) {
 			t.Errorf("after overwrite: lookupCachedRoute(%v) = %v, want %v", addr, got, iface2)
 		}
 	})
-
-	t.Run("IPv4 and IPv6 are separate", func(t *testing.T) {
-		routeCache := NewRouteCache()
-
-		addr4 := netip.MustParseAddr("10.0.1.5")
-		addr6 := netip.MustParseAddr("2001:db8::1")
-
-		routeCache.setCachedRoute(addr4, iface1)
-		routeCache.setCachedRoute(addr6, iface2)
-
-		// Verify both are stored independently
-		if got := routeCache.lookupCachedRoute(addr4); got != iface1 {
-			t.Errorf("lookupCachedRoute(%v) = %v, want %v", addr4, got, iface1)
-		}
-		if got := routeCache.lookupCachedRoute(addr6); got != iface2 {
-			t.Errorf("lookupCachedRoute(%v) = %v, want %v", addr6, got, iface2)
-		}
-
-		// Clear IPv4, verify IPv6 remains
-		routeCache.ClearCachedRoute(addr4)
-		if got := routeCache.lookupCachedRoute(addr4); got != nil {
-			t.Errorf("after clear v4: lookupCachedRoute(%v) = %v, want nil", addr4, got)
-		}
-		if got := routeCache.lookupCachedRoute(addr6); got != iface2 {
-			t.Errorf("after clear v4: lookupCachedRoute(%v) = %v, want %v", addr6, got, iface2)
-		}
-	})
 }
 
 func hookInterfaces(t *testing.T, ifaces []net.Interface) {
@@ -338,28 +311,28 @@ func hookDefaultInterfaces(t *testing.T) {
 }
 
 var (
-	iface1 net.Interface = net.Interface{
+	interfaceEth0 net.Interface = net.Interface{
 		Index:        1,
 		MTU:          1500,
 		Name:         "eth0",
 		HardwareAddr: net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x55},
 		Flags:        net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning,
 	}
-	iface2 net.Interface = net.Interface{
+	interfaceWlan0 net.Interface = net.Interface{
 		Index:        2,
 		MTU:          1500,
 		Name:         "wlan0",
 		HardwareAddr: net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x66},
 		Flags:        net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning,
 	}
-	iface3 net.Interface = net.Interface{
+	interfaceEth1 net.Interface = net.Interface{
 		Index:        3,
 		MTU:          1500,
 		Name:         "eth1",
 		HardwareAddr: net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x77},
 		Flags:        net.FlagBroadcast | net.FlagMulticast,
 	}
-	allTestIfs = []net.Interface{iface1, iface2, iface3}
+	allTestIfs = []net.Interface{interfaceEth0, interfaceWlan0, interfaceEth1}
 )
 
 func TestFindInterfaceThatCanReach(t *testing.T) {
@@ -379,7 +352,7 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 
 		// Pre-populate cache
 		addr := netip.MustParseAddr("8.8.8.8")
-		cache.setCachedRoute(addr, &iface2)
+		cache.setCachedRoute(addr, &interfaceWlan0)
 
 		// Hook should never be called when cache hits
 		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
@@ -472,11 +445,11 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 
 		// Cache 10.0.0.0/8 -> eth0
 		prefix1 := netip.MustParsePrefix("10.0.0.0/8")
-		cache.setCachedRoutePrefix(prefix1, &iface1)
+		cache.setCachedRoutePrefix(prefix1, &interfaceEth0)
 
 		// Cache 10.0.1.0/24 -> wlan0
 		prefix2 := netip.MustParsePrefix("10.0.1.0/24")
-		cache.setCachedRoutePrefix(prefix2, &iface2)
+		cache.setCachedRoutePrefix(prefix2, &interfaceWlan0)
 
 		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
 			t.Error("should use cache, not probe")
@@ -521,19 +494,18 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 
 		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
 			switch iface.Index {
-			case iface1.Index: // eth0 - returns immediately
+			case interfaceEth0.Index: // eth0 - returns immediately
 				return nil
-			case iface2.Index: // wlan0 - waits for signal
+			case interfaceWlan0.Index: // wlan0 - waits for signal
 				<-wlan0Done
 				return nil
-			case iface3.Index: // eth1 - waits for signal
+			case interfaceEth1.Index: // eth1 - waits for signal
 				<-eth1Done
 				return nil
 			}
 			return errors.New("unknown interface")
 		}
 		defer func() {
-			// Now signal the slower interfaces to complete
 			close(wlan0Done)
 			close(eth1Done)
 		}()
@@ -667,7 +639,7 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 
 		// Pre-populate IPv6 cache
 		addr6 := netip.MustParseAddr("2001:4860:4860::8888")
-		cache.setCachedRoute(addr6, &iface3)
+		cache.setCachedRoute(addr6, &interfaceEth1)
 
 		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
 			t.Error("should use cache for IPv6")
@@ -697,8 +669,8 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		addr4 := netip.MustParseAddr("8.8.8.8")
 		addr6 := netip.MustParseAddr("2001:4860:4860::8888")
 
-		cache.setCachedRoute(addr4, &iface1)
-		cache.setCachedRoute(addr6, &iface2)
+		cache.setCachedRoute(addr4, &interfaceEth0)
+		cache.setCachedRoute(addr6, &interfaceWlan0)
 
 		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
 			t.Error("should use cache")
@@ -756,7 +728,7 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 
 		// Manually cache a /16 subnet
 		prefix := netip.MustParsePrefix("192.168.0.0/16")
-		cache.setCachedRoutePrefix(prefix, &iface1)
+		cache.setCachedRoutePrefix(prefix, &interfaceEth0)
 
 		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
 			t.Error("should use cached subnet")
