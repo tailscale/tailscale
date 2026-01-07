@@ -222,6 +222,7 @@ var Features = map[FeatureTag]FeatureMeta{
 		Desc: "Linux NetworkManager integration",
 		Deps: []FeatureTag{"dbus"},
 	},
+	"qrcodes":     {Sym: "QRCodes", Desc: "QR codes in tailscale CLI"},
 	"relayserver": {Sym: "RelayServer", Desc: "Relay server"},
 	"resolved": {
 		Sym:  "Resolved",

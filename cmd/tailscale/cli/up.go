@@ -94,8 +94,10 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 
 	// When adding new flags, prefer to put them under "tailscale set" instead
 	// of here. Setting preferences via "tailscale up" is deprecated.
-	upf.BoolVar(&upArgs.qr, "qr", false, "show QR code for login URLs")
-	upf.StringVar(&upArgs.qrFormat, "qr-format", string(qrcodes.FormatAuto), fmt.Sprintf("QR code formatting (%s, %s, %s, %s)", qrcodes.FormatAuto, qrcodes.FormatASCII, qrcodes.FormatLarge, qrcodes.FormatSmall))
+	if buildfeatures.HasQRCodes {
+		upf.BoolVar(&upArgs.qr, "qr", false, "show QR code for login URLs")
+		upf.StringVar(&upArgs.qrFormat, "qr-format", string(qrcodes.FormatAuto), fmt.Sprintf("QR code formatting (%s, %s, %s, %s)", qrcodes.FormatAuto, qrcodes.FormatASCII, qrcodes.FormatLarge, qrcodes.FormatSmall))
+	}
 	upf.StringVar(&upArgs.authKeyOrFile, "auth-key", "", `node authorization key; if it begins with "file:", then it's a path to a file containing the authkey`)
 	upf.StringVar(&upArgs.clientID, "client-id", "", "Client ID used to generate authkeys via workload identity federation")
 	upf.StringVar(&upArgs.clientSecretOrFile, "client-secret", "", `Client Secret used to generate authkeys via OAuth; if it begins with "file:", then it's a path to a file containing the secret`)
@@ -720,9 +722,11 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 				if upArgs.json {
 					js := &upOutputJSON{AuthURL: authURL, BackendState: st.BackendState}
 
-					png, err := qrcodes.EncodePNG(authURL, 128)
-					if err == nil {
-						js.QR = "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+					if buildfeatures.HasQRCodes {
+						png, err := qrcodes.EncodePNG(authURL, 128)
+						if err == nil {
+							js.QR = "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+						}
 					}
 
 					data, err := json.MarshalIndent(js, "", "\t")
@@ -733,7 +737,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 					}
 				} else {
 					fmt.Fprintf(Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", authURL)
-					if upArgs.qr {
+					if upArgs.qr && buildfeatures.HasQRCodes {
 						_, err := qrcodes.Fprintln(Stderr, qrcodes.Format(upArgs.qrFormat), authURL)
 						if err != nil {
 							log.Print(err)
