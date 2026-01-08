@@ -59,7 +59,6 @@ func controlLogf(logf logger.Logf, netMon *netmon.Monitor, network, address stri
 		opts := probeOpts{
 			logf:      logf,
 			pt:        hpn,
-			filterf:   nil,
 			race:      true,
 			cache:     cache(),
 			debugLogs: VERBOSE_LOGS,
