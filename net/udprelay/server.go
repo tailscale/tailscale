@@ -43,6 +43,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/views"
+	"tailscale.com/util/cloudinfo"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/set"
 	"tailscale.com/util/usermetric"
@@ -81,6 +82,7 @@ type Server struct {
 	netChecker          *netcheck.Client
 	metrics             *metrics
 	netMon              *netmon.Monitor
+	cloudInfo           *cloudinfo.CloudInfo // used to query cloud metadata services
 
 	mu                  sync.Mutex                      // guards the following fields
 	macSecrets          views.Slice[[blake2s.Size]byte] // [0] is most recent, max 2 elements
@@ -336,6 +338,7 @@ func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool, metrics 
 		onlyStaticAddrPorts:   onlyStaticAddrPorts,
 		serverEndpointByDisco: make(map[key.SortedPairOfDiscoPublic]*serverEndpoint),
 		nextVNI:               minVNI,
+		cloudInfo:             cloudinfo.New(logf),
 	}
 	s.discoPublic = s.disco.Public()
 	s.metrics = registerMetrics(metrics)
@@ -402,11 +405,13 @@ func (s *Server) startPacketReaders() {
 
 func (s *Server) addrDiscoveryLoop() {
 	defer s.wg.Done()
-
 	timer := time.NewTimer(0) // fire immediately
 	defer timer.Stop()
 
 	getAddrPorts := func() ([]netip.AddrPort, error) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
 		var addrPorts set.Set[netip.AddrPort]
 		addrPorts.Make()
 
@@ -425,6 +430,21 @@ func (s *Server) addrDiscoveryLoop() {
 			}
 		}
 
+		// Get cloud metadata service addresses.
+		// TODO(illotum) Same is done within magicsock, consider caching within cloudInfo
+		cloudIPs, err := s.cloudInfo.GetPublicIPs(ctx)
+		if err == nil { // Not handling the err, GetPublicIPs already printed to log.
+			for _, ip := range cloudIPs {
+				if ip.IsValid() {
+					if ip.Is4() {
+						addrPorts.Add(netip.AddrPortFrom(ip, s.uc4Port))
+					} else {
+						addrPorts.Add(netip.AddrPortFrom(ip, s.uc6Port))
+					}
+				}
+			}
+		}
+
 		dm := s.getDERPMap()
 		if dm == nil {
 			// We don't have a DERPMap which is required to dynamically
@@ -434,9 +454,7 @@ func (s *Server) addrDiscoveryLoop() {
 		}
 
 		// get addrPorts as visible from DERP
-		netCheckerCtx, netCheckerCancel := context.WithTimeout(context.Background(), netcheck.ReportTimeout)
-		defer netCheckerCancel()
-		rep, err := s.netChecker.GetReport(netCheckerCtx, dm, &netcheck.GetReportOpts{
+		rep, err := s.netChecker.GetReport(ctx, dm, &netcheck.GetReportOpts{
 			OnlySTUN: true,
 		})
 		if err != nil {
@@ -474,6 +492,8 @@ func (s *Server) addrDiscoveryLoop() {
 			// Mirror magicsock behavior for duration between STUN. We consider
 			// 30s a min bound for NAT timeout.
 			timer.Reset(tstime.RandomDurationBetween(20*time.Second, 26*time.Second))
+			// TODO(illotum) Pass in context bound to the [s.closeCh] lifetime,
+			// and do not block on getAddrPorts IO.
 			addrPorts, err := getAddrPorts()
 			if err != nil {
 				s.logf("error discovering IP:port candidates: %v", err)
