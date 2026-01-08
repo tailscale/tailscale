@@ -299,6 +299,40 @@ func (s *Server) addDebugMessage(nodeKeyDst key.NodePublic, msg any) bool {
 	return sendUpdate(oldUpdatesCh, updateDebugInjection)
 }
 
+// ForceNetmapUpdates issues updated netmaps to all connected nodes. It is an
+// error for a node to disconnect while this function runs. The intended use
+// case is ensuring that state changes propagate before running a test. This
+// function cannot guarantee that nodes have processed the issued updates, so
+// tests should confirm processing by querying the nodes. By example:
+//
+//	if err := s.ForceNetmapUpdates(); err != nil {
+//	     // handle error
+//	}
+//	for !expectedChangesPresent(node.NetMap()) {
+//	  time.Sleep(10 * time.Millisecond)
+//	}
+func (s *Server) ForceNetmapUpdates() error {
+	s.mu.Lock()
+	connectedNodes := map[key.NodePublic]*tailcfg.Node{}
+	for k, n := range s.nodes {
+		if _, ok := s.updates[n.ID]; ok {
+			connectedNodes[k] = n
+		}
+	}
+	s.mu.Unlock()
+
+	for k, n := range connectedNodes {
+		mr, err := s.MapResponse(&tailcfg.MapRequest{NodeKey: k})
+		if err != nil {
+			return fmt.Errorf("generating map response for %v (%v): %w", n.ID, n.Hostinfo.Hostname(), err)
+		}
+		if !s.addDebugMessage(k, mr) {
+			return fmt.Errorf("sending map response to %v (%v): update channel full or missing for node", n.ID, n.Hostinfo.Hostname())
+		}
+	}
+	return nil
+}
+
 // Mark the Node key of every node as expired
 func (s *Server) SetExpireAllNodes(expired bool) {
 	s.mu.Lock()

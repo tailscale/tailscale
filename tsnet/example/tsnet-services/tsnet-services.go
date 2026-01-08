@@ -20,7 +20,6 @@ import (
 	"log"
 	"net/http"
 
-	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 )
 
@@ -51,8 +50,7 @@ func main() {
 	}
 	defer ln.Close()
 
-	// TODO: provide access to FQDN from listener and use that instead
-	fmt.Printf("Listening on https://%v\n", tailcfg.AsServiceName(*svcName).WithoutPrefix())
+	fmt.Printf("Listening on https://%v\n", ln.FQDN)
 
 	err = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "<html><body><h1>Hello, tailnet!</h1>")

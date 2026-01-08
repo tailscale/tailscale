@@ -1276,9 +1276,17 @@ func (opts ServiceHTTPOptions) capsMap() map[string][]tailcfg.PeerCapability {
 var ErrUntaggedServiceHost = errors.New("service hosts must be tagged nodes")
 
 // TODO: doc
+type ServiceListener struct {
+	net.Listener
+
+	// FQDN is the fully-qualifed domain name of this Service.
+	FQDN string
+}
+
+// TODO: doc
 // TODO: tailcfg.ServiceName?
 // TODO: does this API allow room for growth? Can everything fit into opts?
-func (s *Server) ListenService(name string, port uint16, opts ServiceTransportOptions) (net.Listener, error) {
+func (s *Server) ListenService(name string, port uint16, opts ServiceTransportOptions) (*ServiceListener, error) {
 	if err := tailcfg.ServiceName(name).Validate(); err != nil {
 		return nil, err
 	}
@@ -1385,7 +1393,10 @@ func (s *Server) ListenService(name string, port uint16, opts ServiceTransportOp
 	// TODO: wrap returned listener such that Close stops advertising the
 	// Service (should update prefs, serve config, etc.)
 
-	return ln, nil
+	return &ServiceListener{
+		Listener: ln,
+		FQDN:     tailcfg.ServiceName(svcName).WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix,
+	}, nil
 }
 
 type listenOn string

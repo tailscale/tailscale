@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -793,6 +794,9 @@ func TestListenService(t *testing.T) {
 	// HTTP helpers
 	checkAndEcho := func(t *testing.T, ln net.Listener, check func(r *http.Request)) {
 		t.Helper()
+		if check == nil {
+			check = func(*http.Request) {}
+		}
 		http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer r.Body.Close()
 			check(r)
@@ -825,24 +829,36 @@ func TestListenService(t *testing.T) {
 		}
 	}
 
-	tests := []struct {
-		name string
+	type input struct {
 		port uint16
 		opts ServiceTransportOptions
+	}
 
-		extraSetup func(t *testing.T, serviceHost, peer *Server, control *testcontrol.Server)
+	tests := []struct {
+		name string
 
-		// run the test. This function does not need to close any of the input
-		// resources, but it should close any new resources it opens.
-		run func(t *testing.T, serviceListener net.Listener, peer *Server, serviceFQDN string)
+		// inputs is the set of parameters provided to [Server.ListenService].
+		// If this slice has multiple inputs, then ListenService will be invoked
+		// multiple times. The number of listeners provided to the run function
+		// (below) will always match the number of elements in this slice.
+		inputs []input
+
+		extraSetup func(t *testing.T, control *testcontrol.Server)
+
+		// run executes the test. This function does not need to close any of
+		// the input resources, but it should close any new resources it opens.
+		// listeners[i] corresponds to inputs[i].
+		run func(t *testing.T, listeners []*ServiceListener, peer *Server)
 	}{
 		{
 			name: "basic_TCP",
-			port: 99,
-			run: func(t *testing.T, serviceListener net.Listener, peer *Server, serviceFQDN string) {
-				go acceptAndEcho(t, serviceListener)
+			inputs: []input{
+				{port: 99},
+			},
+			run: func(t *testing.T, listeners []*ServiceListener, peer *Server) {
+				go acceptAndEcho(t, listeners[0])
 
-				target := fmt.Sprintf("%s:%d", serviceFQDN, 99)
+				target := fmt.Sprintf("%s:%d", listeners[0].FQDN, 99)
 				conn := must.Get(peer.Dial(t.Context(), "tcp", target))
 				defer conn.Close()
 
@@ -851,42 +867,54 @@ func TestListenService(t *testing.T) {
 		},
 		{
 			name: "TLS_terminated_TCP",
-			opts: ServiceTCPOptions{TerminateTLS: true},
-			port: 443,
-			run: func(t *testing.T, serviceListener net.Listener, peer *Server, serviceFQDN string) {
-				go acceptAndEcho(t, serviceListener)
+			inputs: []input{
+				{
+					opts: ServiceTCPOptions{TerminateTLS: true},
+					port: 443,
+				},
+			},
+			run: func(t *testing.T, listeners []*ServiceListener, peer *Server) {
+				go acceptAndEcho(t, listeners[0])
 
-				target := fmt.Sprintf("%s:%d", serviceFQDN, 443)
+				target := fmt.Sprintf("%s:%d", listeners[0].FQDN, 443)
 				conn := must.Get(peer.Dial(t.Context(), "tcp", target))
 				defer conn.Close()
 
 				assertEcho(t, tls.Client(conn, &tls.Config{
-					ServerName: serviceFQDN,
+					ServerName: listeners[0].FQDN,
 					RootCAs:    testCertRoot.Pool(),
 				}))
 			},
 		},
 		{
 			name: "identity_headers",
-			opts: ServiceHTTPOptions{},
-			port: 80,
-			run: func(t *testing.T, serviceListener net.Listener, peer *Server, serviceFQDN string) {
+			inputs: []input{
+				{
+					opts: ServiceHTTPOptions{},
+					port: 80,
+				},
+			},
+			run: func(t *testing.T, listeners []*ServiceListener, peer *Server) {
 				expectHeader := "Tailscale-User-Name"
-				go checkAndEcho(t, serviceListener, func(r *http.Request) {
+				go checkAndEcho(t, listeners[0], func(r *http.Request) {
 					if _, ok := r.Header[expectHeader]; !ok {
 						t.Error("did not see expected header:", expectHeader)
 					}
 				})
-				assertEchoHTTP(t, serviceFQDN, "", peer.Dial)
+				assertEchoHTTP(t, listeners[0].FQDN, "", peer.Dial)
 			},
 		},
 		{
 			name: "identity_headers_TLS",
-			opts: ServiceHTTPOptions{HTTPS: true},
-			port: 80,
-			run: func(t *testing.T, serviceListener net.Listener, peer *Server, serviceFQDN string) {
+			inputs: []input{
+				{
+					opts: ServiceHTTPOptions{HTTPS: true},
+					port: 80,
+				},
+			},
+			run: func(t *testing.T, listeners []*ServiceListener, peer *Server) {
 				expectHeader := "Tailscale-User-Name"
-				go checkAndEcho(t, serviceListener, func(r *http.Request) {
+				go checkAndEcho(t, listeners[0], func(r *http.Request) {
 					if _, ok := r.Header[expectHeader]; !ok {
 						t.Error("did not see expected header:", expectHeader)
 					}
@@ -898,30 +926,34 @@ func TestListenService(t *testing.T) {
 						return nil, err
 					}
 					return tls.Client(tcpConn, &tls.Config{
-						ServerName: serviceFQDN,
+						ServerName: listeners[0].FQDN,
 						RootCAs:    testCertRoot.Pool(),
 					}), nil
 				}
 
-				assertEchoHTTP(t, serviceFQDN, "", dial)
+				assertEchoHTTP(t, listeners[0].FQDN, "", dial)
 			},
 		},
 		{
 			name: "app_capabilities",
-			opts: ServiceHTTPOptions{
-				AcceptAppCaps: map[string][]string{
-					"/":    {"example.com/cap/all-paths"},
-					"/foo": {"example.com/cap/all-paths", "example.com/cap/foo"},
+			inputs: []input{
+				{
+					opts: ServiceHTTPOptions{
+						AcceptAppCaps: map[string][]string{
+							"/":    {"example.com/cap/all-paths"},
+							"/foo": {"example.com/cap/all-paths", "example.com/cap/foo"},
+						},
+					},
+					port: 80,
 				},
 			},
-			port: 80,
-			extraSetup: func(t *testing.T, serviceHost, peer *Server, control *testcontrol.Server) {
+			extraSetup: func(t *testing.T, control *testcontrol.Server) {
 				control.SetGlobalAppCaps(tailcfg.PeerCapMap{
 					"example.com/cap/all-paths": []tailcfg.RawMessage{`true`},
 					"example.com/cap/foo":       []tailcfg.RawMessage{`true`},
 				})
 			},
-			run: func(t *testing.T, serviceListener net.Listener, peer *Server, serviceFQDN string) {
+			run: func(t *testing.T, listeners []*ServiceListener, peer *Server) {
 				allPathsCap := "example.com/cap/all-paths"
 				fooCap := "example.com/cap/foo"
 				checkCaps := func(r *http.Request) {
@@ -953,10 +985,10 @@ func TestListenService(t *testing.T) {
 					}
 				}
 
-				go checkAndEcho(t, serviceListener, checkCaps)
-				assertEchoHTTP(t, serviceFQDN, "", peer.Dial)
-				assertEchoHTTP(t, serviceFQDN, "/foo", peer.Dial)
-				assertEchoHTTP(t, serviceFQDN, "/foo/bar", peer.Dial)
+				go checkAndEcho(t, listeners[0], checkCaps)
+				assertEchoHTTP(t, listeners[0].FQDN, "", peer.Dial)
+				assertEchoHTTP(t, listeners[0].FQDN, "/foo", peer.Dial)
+				assertEchoHTTP(t, listeners[0].FQDN, "/foo/bar", peer.Dial)
 			},
 		},
 		// TODO:
@@ -990,8 +1022,6 @@ func TestListenService(t *testing.T) {
 			const serviceName = tailcfg.ServiceName("svc:foo")
 			const serviceVIP = "100.11.22.33"
 
-			serviceFQDN := serviceName.WithoutPrefix() + "." + control.MagicDNSDomain
-
 			// == Set up necessary state in our mock ==
 
 			// The Service host must have the 'service-host' capability, which
@@ -1024,26 +1054,41 @@ func TestListenService(t *testing.T) {
 
 			// Set up DNS for our Service.
 			control.DNSConfig.ExtraRecords = append(control.DNSConfig.ExtraRecords, tailcfg.DNSRecord{
-				Name:  serviceFQDN,
+				Name:  serviceName.WithoutPrefix() + "." + control.MagicDNSDomain,
 				Value: serviceVIP,
 			})
 
 			if tt.extraSetup != nil {
-				tt.extraSetup(t, serviceHost, serviceClient, control)
+				tt.extraSetup(t, control)
 			}
 
 			// Force netmap updates to avoid race conditions. The nodes need to
 			// see our control updates before we can start the test.
-			serviceClient.lb.DebugForceNetmapUpdate()
-			serviceHost.lb.DebugForceNetmapUpdate()
+			must.Do(control.ForceNetmapUpdates())
+			netmapUpToDate := func(s *Server) bool {
+				nm := s.lb.NetMap()
+				return slices.ContainsFunc(nm.DNS.ExtraRecords, func(r tailcfg.DNSRecord) bool {
+					return r.Value == serviceVIP
+				})
+			}
+			for !netmapUpToDate(serviceClient) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			for !netmapUpToDate(serviceHost) {
+				time.Sleep(10 * time.Millisecond)
+			}
 
 			// == Done setting up mock state ==
 
-			// Start a Service listener.
-			ln := must.Get(serviceHost.ListenService(serviceName.String(), tt.port, tt.opts))
-			defer ln.Close()
+			// Start the Service listeners.
+			listeners := make([]*ServiceListener, 0, len(tt.inputs))
+			for _, input := range tt.inputs {
+				ln := must.Get(serviceHost.ListenService(serviceName.String(), input.port, input.opts))
+				defer ln.Close()
+				listeners = append(listeners, ln)
+			}
 
-			tt.run(t, ln, serviceClient, serviceFQDN)
+			tt.run(t, listeners, serviceClient)
 		})
 	}
 }
