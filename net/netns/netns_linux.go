@@ -6,6 +6,7 @@
 package netns
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -130,4 +131,13 @@ func bindToDevice(fd uintptr) error {
 		return fmt.Errorf("setting SO_BINDTODEVICE: %w", err)
 	}
 	return nil
+}
+
+func bindSocket6(c syscall.RawConn, idx uint32) error {
+	return errors.New("bindSocket6 not implemented on Linux.  Use BindToDevice or SocketMark instead")
+}
+
+func bindSocket4(c syscall.RawConn, idx uint32) error {
+	return errors.New("bindSocket4 not implemented on Linux.  Use BindToDevice or SocketMark instead")
+
 }

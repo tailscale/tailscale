@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -66,9 +67,9 @@ func tailscaleInterface() (*net.Interface, error) {
 	return nil, nil
 }
 
-// inetReachability describes an interface and whether it was able to reach
+// probeResult describes an interface and whether it was able to reach
 // the provided address.
-type inetReachability struct {
+type probeResult struct {
 	iface net.Interface
 	// TODO (barnstar): These are invariant.  reachable should be true if err==nil.
 	reachable bool
@@ -77,35 +78,49 @@ type inetReachability struct {
 
 // Tuple of the destination host, port, and network.
 // ie: "tcp4", "example.com", "80"
-type HostPortNetwork struct {
+type ProbeTarget struct {
 	Host    string
 	Port    string
 	Network string
 }
 
-func (hpn HostPortNetwork) String() string {
+func NewProbeTarget(network, host, port string) ProbeTarget {
+	// Probe scans require the explicit zero host not an empty string
+	if host == "" {
+		isV6 := strings.Contains(network, "6")
+		if !isV6 {
+			host = "0.0.0.0"
+		} else {
+			host = "::"
+		}
+	}
+
+	return ProbeTarget{
+		Host:    host,
+		Port:    port,
+		Network: network,
+	}
+}
+
+func (hpn ProbeTarget) String() string {
 	return fmt.Sprintf("%s/%s:%s", hpn.Network, hpn.Host, hpn.Port)
 }
 
 type probeOpts struct {
-	logf    logger.Logf
-	hpn     HostPortNetwork
-	race    bool            // if true, we'll pick the first interface that responds.  sortf is ignored.
-	filterf interfaceFilter // optional pre-filter for interfaces
-	cache   *routeCache     // must be non-nil
+	logf      logger.Logf
+	pt        ProbeTarget
+	race      bool            // if true, we'll pick the first interface that responds.  sortf is ignored.
+	filterf   interfaceFilter // optional pre-filter for interfaces
+	cache     *routeCache     // must be non-nil
+	debugLogs bool            // if true, log verbose output
 }
 
-type DefaultIfaceHintFn func() int
-
-var defaultIfaceHintFn DefaultIfaceHintFn
-
-// Platforms may set defaultIFQueryFn to a function that returns the platforms's high
-// level view of the default interface index.
-func SetDefaultIFQueryFn(fn DefaultIfaceHintFn) {
-	defaultIfaceHintFn = fn
+func (p *probeOpts) logDebug(format string, args ...any) {
+	if p.debugLogs && p.logf != nil {
+		p.logf(format, args...)
+	}
 }
 
-// uint
 type bindFn func(c syscall.RawConn, ifidx uint32) error
 
 // Returns the proper bind function for the given network and address.
@@ -118,59 +133,77 @@ func bindFnByAddrType(network, address string) bindFn {
 	return bindSocket4
 }
 
-type bindFunctionHook func(network, address string) bindFn
-
-var getBindFn bindFunctionHook = bindFnByAddrType
-
+// For testing
 var interfacesHookFn func() ([]net.Interface, error)
 
-var interfacesHook = net.Interfaces
+type probeHookFn func(iface *net.Interface, pt ProbeTarget) error
+
+var (
+	interfacesHook atomic.Value // of interfacesHookFn
+	probeHook      atomic.Value // of probeHookFn
+)
+
+func init() {
+	// Set default hooks
+	probeHook.Store(probe)
+	interfacesHook.Store(net.Interfaces)
+}
+
+func ifaceListDesc(ifaces []net.Interface) string {
+	names := ""
+	for i, iface := range ifaces {
+		if i > 0 {
+			names += ", "
+		}
+		names += iface.Name
+	}
+
+	return names
+}
 
 // ProbeInterfacesReachability probes all non-loopback, up interfaces
 // concurrently to determine which can reach the given address. It returns
 // a slice with one entry per probed interface in the same order as
 // net.Interfaces() filtered by the probe criteria.
-func probeInterfacesReachability(opts probeOpts) ([]inetReachability, error) {
-	ifaces, err := interfacesHook()
+func probeInterfacesReachability(opts probeOpts) ([]probeResult, error) {
+	ifaces, err := interfacesHook.Load().(func() ([]net.Interface, error))()
 	if err != nil {
-		opts.logf("netns: ProbeInterfacesReachability: net.Interfaces: %v", err)
+		opts.logf("netns: probe failed to find net.Interfaces: %v", err)
 		return nil, err
 	}
 
-	results := make(chan inetReachability, len(ifaces))
+	results := make(chan probeResult, len(ifaces))
 
 	tsiface, _ := tailscaleInterface()
 
 	var candidates []net.Interface
+
 	for _, iface := range ifaces {
 		// Individual platforms can exclude potential intefaces based on platorm-specific logic.
 		// For example, on Darwin, we skip "utun" interfaces.
 		if opts.filterf != nil && !opts.filterf(iface) {
 			continue
 		}
-
 		// Only consider up, non-loopback interfaces.
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagRunning == 0 {
 			continue
 		}
-
 		// Skip the Tailscale interface.
 		if tsiface != nil && iface.Index == tsiface.Index {
 			continue
 		}
-
 		// require an IPv4 or IPv6 global unicast address
 		if !ifaceHasV4OrGlobalV6(&iface) {
 			continue
 		}
-
 		candidates = append(candidates, iface)
 	}
 
 	if len(candidates) == 0 {
-		opts.logf("netns: ProbeInterfacesReachability: no candidate interfaces found")
+		opts.logDebug("netns: ProbeInterfacesReachability: no candidate interfaces found")
 		return nil, errors.New("no candidate interfaces")
 	}
+	opts.logDebug("netns: using candidate interfaces: %s", ifaceListDesc(candidates))
 
 	// Close this channel to abort ongoing probes if we're racing and are only interested
 	// in the first result.
@@ -184,13 +217,15 @@ func probeInterfacesReachability(opts probeOpts) ([]inetReachability, error) {
 			default:
 			}
 
-			// Per-probe timeout.
-			err := reachabilityHook(&iface, opts.hpn)
-			results <- inetReachability{iface: iface, reachable: err == nil, err: err}
+			opts.logDebug("netns: probing %s for reachability to %s via %s", iface.Name, opts.pt.Host, opts.pt.Network)
+			probeFn := probeHook.Load().(func(*net.Interface, ProbeTarget) error)
+
+			err := probeFn(&iface, opts.pt)
+			results <- probeResult{iface: iface, reachable: err == nil, err: err}
 		}()
 	}
 
-	out := make([]inetReachability, 0, len(candidates))
+	out := make([]probeResult, 0, len(candidates))
 	timeout := time.After(600 * time.Millisecond)
 	received := 0
 
@@ -202,7 +237,7 @@ func probeInterfacesReachability(opts probeOpts) ([]inetReachability, error) {
 			// can't get the conn up and running later but signal early if we're racing.
 			if opts.race && r.reachable {
 				close(done)
-				return []inetReachability{r}, nil
+				return []probeResult{r}, nil
 			}
 			// .. otherwise, collect all results including the unreachable ones.
 			out = append(out, r)
@@ -215,12 +250,15 @@ func probeInterfacesReachability(opts probeOpts) ([]inetReachability, error) {
 	return out, nil
 }
 
-// For testing
-type reachabilityHookFn func(iface *net.Interface, hpn HostPortNetwork) error
+func probe(iface *net.Interface, pt ProbeTarget) error {
+	// For unspecified hosts, we need to listen rather than dial.
+	if pt.Host == "0.0.0.0" || pt.Host == "::" {
+		return probeBindListen(iface, pt)
+	}
+	return probeBindDial(iface, pt)
+}
 
-var reachabilityHook reachabilityHookFn = reachabilityCheck
-
-func reachabilityCheck(iface *net.Interface, hpn HostPortNetwork) error {
+func probeBindDial(iface *net.Interface, pt ProbeTarget) error {
 	// Per-probe timeout.
 	dialCtx, dialCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer dialCancel()
@@ -228,17 +266,35 @@ func reachabilityCheck(iface *net.Interface, hpn HostPortNetwork) error {
 	d := net.Dialer{
 		Control: func(network, address string, c syscall.RawConn) error {
 			// (barnstar) TODO: The bind step here is still platform specific
-			bindFn := getBindFn(network, address)
+			bindFn := bindFnByAddrType(network, address)
 			return bindFn(c, uint32(iface.Index))
 		},
 	}
 
-	dst := net.JoinHostPort(hpn.Host, hpn.Port)
-	conn, err := d.DialContext(dialCtx, hpn.Network, dst)
+	dst := net.JoinHostPort(pt.Host, pt.Port)
+	conn, err := d.DialContext(dialCtx, pt.Network, dst)
 	if err == nil {
 		defer conn.Close()
 	}
 	return err
+}
+
+func probeBindListen(iface *net.Interface, pt ProbeTarget) error {
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			bindFn := bindFnByAddrType(network, address)
+			return bindFn(c, uint32(iface.Index))
+		},
+	}
+
+	dst := net.JoinHostPort(pt.Host, pt.Port)
+	// Bind to this interface on any available port
+	listener, err := lc.ListenPacket(context.Background(), pt.Network, dst)
+	if err != nil {
+		return err
+	}
+	listener.Close()
+	return nil
 }
 
 // Pre-filter for interfaces.  Platform-specific code can provide a filter
@@ -259,6 +315,7 @@ func filterInPlace[T any](s []T, keep func(T) bool) []T {
 }
 
 var errUnspecifiedHost = errors.New("unspecified host")
+var errNoAvailableInterface = errors.New("no available interface")
 
 func parseAddress(address string) (addr netip.Addr, err error) {
 	host, _, err := net.SplitHostPort(address)
@@ -289,12 +346,12 @@ func parseAddress(address string) (addr netip.Addr, err error) {
 // nil is returned if no interface can reach the destination.
 func findInterfaceThatCanReach(opts probeOpts) (iface *net.Interface, err error) {
 	// Try to parse the host as an IP address for cache lookup
-	addr, err := parseAddress(opts.hpn.Host)
-	if err == nil && addr.IsValid() {
+	addr, err := parseAddress(opts.pt.Host)
+	if opts.cache != nil && err == nil && addr.IsValid() {
 		// Check cache first
 		if cached := opts.cache.lookupCachedRoute(addr); cached != nil {
 			hits, misses, total := opts.cache.stats()
-			opts.logf("netns: cachHit for %v cache stats: hits=%d misses=%d total=%d", addr, hits, misses, total)
+			opts.logDebug("netns: cachHit for %v cache stats: hits=%d misses=%d total=%d", addr, hits, misses, total)
 			return cached, nil
 		}
 	}
@@ -305,10 +362,10 @@ func findInterfaceThatCanReach(opts probeOpts) (iface *net.Interface, err error)
 		return nil, err
 	}
 
-	res = filterInPlace(res, func(r inetReachability) bool { return r.reachable })
+	res = filterInPlace(res, func(r probeResult) bool { return r.reachable })
 	if len(res) == 0 {
-		opts.logf("netns: could not find interface on network %v to reach %q:%q on %q: %v", opts.hpn.Network, opts.hpn.Host, opts.hpn.Port, opts.hpn.Network, err)
-		return nil, nil
+		opts.logf("netns: could not find interface on network %v to reach %s:%s on %s: %v", opts.pt.Network, opts.pt.Host, opts.pt.Port, opts.pt.Network, err)
+		return nil, errNoAvailableInterface
 	}
 
 	candidatesNames := make([]string, 0, len(res))
@@ -317,19 +374,8 @@ func findInterfaceThatCanReach(opts probeOpts) (iface *net.Interface, err error)
 	}
 	iface = &res[0].iface
 
-	if defaultIfaceHintFn != nil {
-		defIdx := defaultIfaceHintFn()
-		for _, r := range res {
-			if r.iface.Index == defIdx {
-				opts.logf("netns: using default iface hint")
-				iface = &r.iface
-				break
-			}
-		}
-	}
-
 	// Cache the result if we have a valid IP address
-	if addr.IsValid() {
+	if opts.cache != nil && addr.IsValid() {
 		opts.cache.setCachedRoute(addr, iface)
 	}
 

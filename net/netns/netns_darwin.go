@@ -22,6 +22,9 @@ import (
 	"tailscale.com/version"
 )
 
+const VERBOSE_LOGS = true
+const CHECK_PROBE_RESULTS_WITH_RIB = true
+
 func control(logf logger.Logf, netMon *netmon.Monitor) func(network, address string, c syscall.RawConn) error {
 	return func(network, address string, c syscall.RawConn) error {
 		return controlLogf(logf, netMon, network, address, c)
@@ -47,23 +50,42 @@ func controlLogf(logf logger.Logf, netMon *netmon.Monitor, network, address stri
 			return fmt.Errorf("netns: control: SplitHostPort %q: %w", address, err)
 		}
 
+		hpn := NewProbeTarget(network, host, port)
+		logf("netns: probing for interface to reach %s/%s:%s", network, hpn.Host, hpn.Port)
+
 		opts := probeOpts{
-			logf:    logf,
-			hpn:     HostPortNetwork{Network: network, Host: host, Port: port},
-			filterf: filterInvalidIntefaces,
-			race:    true,
-			cache:   cache(),
+			logf:      logf,
+			pt:        hpn,
+			filterf:   nil,
+			race:      true,
+			cache:     cache(),
+			debugLogs: VERBOSE_LOGS,
 		}
 
 		// No netmon and no routing table.
 		iface, err := findInterfaceThatCanReach(opts)
 
-		if err != nil || iface == nil {
+		if CHECK_PROBE_RESULTS_WITH_RIB {
+			ribIdx, berr := getInterfaceIndex(logf, netMon, address)
+			probeIdx := 0
+			if iface != nil {
+				probeIdx = iface.Index
+			}
+			if berr == nil && iface != nil && iface.Index != ribIdx {
+				logf("netns: [unexpected] probe chose ifindex %d but routing table chose ifindex %d", probeIdx, ribIdx)
+			}
+			if berr != nil && iface != nil {
+				logf("netns: [unexpected] probe chose ifindex %d but routing table lookup failed: %v", probeIdx, berr)
+			}
+		}
+
+		if err != nil {
+			logf("netns: probe found no interface to reach %s/%s", network, address)
 			return err
 		}
 
-		bindFn := getBindFn(network, address)
 		logf("netns: post-probe binding to interface %q (index %d) for %s/%s", iface.Name, iface.Index, network, address)
+		bindFn := bindFnByAddrType(network, address)
 		return bindFn(c, uint32(iface.Index))
 	}
 
@@ -73,8 +95,11 @@ func controlLogf(logf logger.Logf, netMon *netmon.Monitor, network, address stri
 	}
 
 	// Bind using the legacy RIB / netmon method.
-	idx, _ := getInterfaceIndex(logf, netMon, address)
-	bindFn := getBindFn(network, address)
+	idx, err := getInterfaceIndex(logf, netMon, address)
+	if err != nil {
+		return err
+	}
+	bindFn := bindFnByAddrType(network, address)
 	return bindFn(c, uint32(idx))
 }
 
@@ -99,7 +124,7 @@ func SetListenConfigInterfaceIndex(lc *net.ListenConfig, ifIndex int) error {
 		return errors.New("ListenConfig.Control already set")
 	}
 	lc.Control = func(network, address string, c syscall.RawConn) error {
-		bindFn := getBindFn(network, address)
+		bindFn := bindFnByAddrType(network, address)
 		return bindFn(c, uint32(ifIndex))
 	}
 	return nil

@@ -298,11 +298,11 @@ func TestGlobalRouteCache(t *testing.T) {
 }
 
 func hookInterfaces(t *testing.T, ifaces []net.Interface) {
-	interfacesHook = func() ([]net.Interface, error) {
+	interfacesHook.Store(func() ([]net.Interface, error) {
 		return ifaces, nil
-	}
+	})
 	t.Cleanup(func() {
-		interfacesHook = net.Interfaces
+		interfacesHook.Store(net.Interfaces)
 	})
 }
 
@@ -336,10 +336,10 @@ var (
 )
 
 func TestFindInterfaceThatCanReach(t *testing.T) {
-	origReachabilityHook := reachabilityHook
+	origProbeHook := probeHook.Load().(func(*net.Interface, ProbeTarget) error)
 	t.Cleanup(func() {
 		ifaceHasV4AndGlobalV6Hook = nil
-		reachabilityHook = origReachabilityHook
+		probeHook.Store(origProbeHook)
 	})
 
 	ifaceHasV4AndGlobalV6Hook = func(iface *net.Interface) bool {
@@ -355,14 +355,14 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		cache.setCachedRoute(addr, &interfaceWlan0)
 
 		// Hook should never be called when cache hits
-		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
+		probeHook.Store(func(iface *net.Interface, hpn ProbeTarget) error {
 			t.Error("reachabilityHookFn should not be called when cache hits")
 			return nil
-		}
+		})
 
 		opts := probeOpts{
 			logf:  t.Logf,
-			hpn:   HostPortNetwork{Host: "8.8.8.8", Port: "53", Network: "udp"},
+			pt:    ProbeTarget{Host: "8.8.8.8", Port: "53", Network: "udp"},
 			cache: cache,
 		}
 
@@ -385,13 +385,13 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		hookDefaultInterfaces(t)
 
 		// All interfaces succeed
-		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
+		probeHook.Store(func(iface *net.Interface, hpn ProbeTarget) error {
 			return nil
-		}
+		})
 
 		opts := probeOpts{
 			logf:  t.Logf,
-			hpn:   HostPortNetwork{Host: "1.1.1.1", Port: "53", Network: "udp"},
+			pt:    ProbeTarget{Host: "1.1.1.1", Port: "53", Network: "udp"},
 			cache: cache,
 		}
 
@@ -419,13 +419,13 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		hookDefaultInterfaces(t)
 
 		// All interfaces fail
-		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
+		probeHook.Store(func(iface *net.Interface, hpn ProbeTarget) error {
 			return errors.New("unreachable")
-		}
+		})
 
 		opts := probeOpts{
 			logf:  t.Logf,
-			hpn:   HostPortNetwork{Host: "192.0.2.1", Port: "53", Network: "udp"},
+			pt:    ProbeTarget{Host: "192.0.2.1", Port: "53", Network: "udp"},
 			cache: cache,
 		}
 
@@ -451,15 +451,15 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		prefix2 := netip.MustParsePrefix("10.0.1.0/24")
 		cache.setCachedRoutePrefix(prefix2, &interfaceWlan0)
 
-		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
+		probeHook.Store(func(iface *net.Interface, hpn ProbeTarget) error {
 			t.Error("should use cache, not probe")
 			return nil
-		}
+		})
 
 		// Test 10.0.1.5 -> should match more specific /24
 		opts1 := probeOpts{
 			logf:  t.Logf,
-			hpn:   HostPortNetwork{Host: "10.0.1.5", Port: "53", Network: "udp"},
+			pt:    ProbeTarget{Host: "10.0.1.5", Port: "53", Network: "udp"},
 			cache: cache,
 		}
 
@@ -471,7 +471,7 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		// Test 10.0.2.5 -> should match broader /8
 		opts2 := probeOpts{
 			logf:  t.Logf,
-			hpn:   HostPortNetwork{Host: "10.0.2.5", Port: "53", Network: "udp"},
+			pt:    ProbeTarget{Host: "10.0.2.5", Port: "53", Network: "udp"},
 			cache: cache,
 		}
 
@@ -492,7 +492,7 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		wlan0Done := make(chan struct{})
 		eth1Done := make(chan struct{})
 
-		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
+		probeHook.Store(func(iface *net.Interface, hpn ProbeTarget) error {
 			switch iface.Index {
 			case interfaceEth0.Index: // eth0 - returns immediately
 				return nil
@@ -504,7 +504,7 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 				return nil
 			}
 			return errors.New("unknown interface")
-		}
+		})
 		defer func() {
 			close(wlan0Done)
 			close(eth1Done)
@@ -512,7 +512,7 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 
 		opts := probeOpts{
 			logf:  t.Logf,
-			hpn:   HostPortNetwork{Host: "8.8.8.8", Port: "53", Network: "udp"},
+			pt:    ProbeTarget{Host: "8.8.8.8", Port: "53", Network: "udp"},
 			race:  true,
 			cache: cache,
 		}
@@ -535,14 +535,14 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		hookDefaultInterfaces(t)
 
 		probeCount := atomic.Int32{}
-		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
+		probeHook.Store(func(iface *net.Interface, hpn ProbeTarget) error {
 			probeCount.Add(1)
 			return nil
-		}
+		})
 
 		opts := probeOpts{
 			logf:  t.Logf,
-			hpn:   HostPortNetwork{Host: "8.8.8.8", Port: "53", Network: "udp"},
+			pt:    ProbeTarget{Host: "8.8.8.8", Port: "53", Network: "udp"},
 			cache: cache,
 			filterf: func(iface net.Interface) bool {
 				// Exclude wlan0 and eth1
@@ -569,14 +569,14 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		cache := NewRouteCache()
 		hookDefaultInterfaces(t)
 
-		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
+		probeHook.Store(func(iface *net.Interface, hpn ProbeTarget) error {
 			return nil
-		}
+		})
 
 		// Use a hostname that can't be parsed as an IP
 		opts := probeOpts{
 			logf:  t.Logf,
-			hpn:   HostPortNetwork{Host: "example.com", Port: "443", Network: "tcp"},
+			pt:    ProbeTarget{Host: "example.com", Port: "443", Network: "tcp"},
 			cache: cache,
 		}
 
@@ -596,43 +596,6 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		}
 	})
 
-	t.Run("default interface hint is respected", func(t *testing.T) {
-		cache := NewRouteCache()
-		hookDefaultInterfaces(t)
-
-		// All interfaces are reachable
-		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
-			return nil
-		}
-
-		// Set hint to prefer iface2 (index 2)
-		origHintFn := defaultIfaceHintFn
-		defer func() { defaultIfaceHintFn = origHintFn }()
-
-		defaultIfaceHintFn = func() int {
-			return 2 // iface2 / wlan0
-		}
-
-		opts := probeOpts{
-			logf:  t.Logf,
-			hpn:   HostPortNetwork{Host: "1.1.1.1", Port: "53", Network: "udp"},
-			cache: cache,
-		}
-
-		result, err := findInterfaceThatCanReach(opts)
-		if err != nil {
-			t.Fatalf("findInterfaceThatCanReach failed: %v", err)
-		}
-
-		if result == nil {
-			t.Fatal("expected non-nil result")
-		}
-
-		if result.Index != 2 {
-			t.Errorf("expected default hint interface (index 2), got index %d (%s)", result.Index, result.Name)
-		}
-	})
-
 	t.Run("IPv6 address uses IPv6 cache table", func(t *testing.T) {
 		cache := NewRouteCache()
 		hookDefaultInterfaces(t)
@@ -641,14 +604,14 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		addr6 := netip.MustParseAddr("2001:4860:4860::8888")
 		cache.setCachedRoute(addr6, &interfaceEth1)
 
-		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
+		probeHook.Store(func(iface *net.Interface, hpn ProbeTarget) error {
 			t.Error("should use cache for IPv6")
 			return nil
-		}
+		})
 
 		opts := probeOpts{
 			logf:  t.Logf,
-			hpn:   HostPortNetwork{Host: "2001:4860:4860::8888", Port: "53", Network: "udp6"},
+			pt:    ProbeTarget{Host: "2001:4860:4860::8888", Port: "53", Network: "udp6"},
 			cache: cache,
 		}
 
@@ -672,15 +635,15 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		cache.setCachedRoute(addr4, &interfaceEth0)
 		cache.setCachedRoute(addr6, &interfaceWlan0)
 
-		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
+		probeHook.Store(func(iface *net.Interface, hpn ProbeTarget) error {
 			t.Error("should use cache")
 			return nil
-		}
+		})
 
 		// Test IPv4
 		opts4 := probeOpts{
 			logf:  t.Logf,
-			hpn:   HostPortNetwork{Host: "8.8.8.8", Port: "53", Network: "udp"},
+			pt:    ProbeTarget{Host: "8.8.8.8", Port: "53", Network: "udp"},
 			cache: cache,
 		}
 		result4, _ := findInterfaceThatCanReach(opts4)
@@ -691,7 +654,7 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		// Test IPv6
 		opts6 := probeOpts{
 			logf:  t.Logf,
-			hpn:   HostPortNetwork{Host: "2001:4860:4860::8888", Port: "53", Network: "udp6"},
+			pt:    ProbeTarget{Host: "2001:4860:4860::8888", Port: "53", Network: "udp6"},
 			cache: cache,
 		}
 		result6, _ := findInterfaceThatCanReach(opts6)
@@ -704,13 +667,13 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		cache := NewRouteCache()
 		hookDefaultInterfaces(t)
 
-		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
+		probeHook.Store(func(iface *net.Interface, hpn ProbeTarget) error {
 			return nil
-		}
+		})
 
 		opts := probeOpts{
 			logf:  t.Logf,
-			hpn:   HostPortNetwork{Host: "", Port: "53", Network: "udp"},
+			pt:    ProbeTarget{Host: "", Port: "53", Network: "udp"},
 			cache: cache,
 		}
 
@@ -730,10 +693,10 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		prefix := netip.MustParsePrefix("192.168.0.0/16")
 		cache.setCachedRoutePrefix(prefix, &interfaceEth0)
 
-		reachabilityHook = func(iface *net.Interface, hpn HostPortNetwork) error {
+		probeHook.Store(func(iface *net.Interface, hpn ProbeTarget) error {
 			t.Error("should use cached subnet")
 			return nil
-		}
+		})
 
 		// Test various IPs in the subnet
 		testIPs := []string{
@@ -745,7 +708,7 @@ func TestFindInterfaceThatCanReach(t *testing.T) {
 		for _, ip := range testIPs {
 			opts := probeOpts{
 				logf:  t.Logf,
-				hpn:   HostPortNetwork{Host: ip, Port: "53", Network: "udp"},
+				pt:    ProbeTarget{Host: ip, Port: "53", Network: "udp"},
 				cache: cache,
 			}
 
