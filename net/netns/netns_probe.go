@@ -25,7 +25,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gaissmai/bart"
+	"tailscale.com/net/art"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
@@ -357,8 +357,8 @@ func findInterfaceThatCanReach(opts probeOpts) (iface *net.Interface, err error)
 	if opts.cache != nil && err == nil && addr.IsValid() {
 		// Check cache first
 		if cached := opts.cache.lookupCachedRoute(addr); cached != nil {
-			hits, misses, total := opts.cache.stats()
-			opts.logDebug("netns: cachHit for %v cache stats: hits=%d misses=%d total=%d", addr, hits, misses, total)
+			stats := opts.cache.stats()
+			opts.logDebug("netns: cachHit for %v cache stats: hits=%d misses=%d total=%d", addr, stats.hits, stats.misses, stats.size)
 			return cached, nil
 		}
 	}
@@ -416,23 +416,28 @@ func ifaceHasV4OrGlobalV6(iface *net.Interface) bool {
 
 func NewRouteCache() *routeCache {
 	return &routeCache{
-		table: new(bart.Table[*net.Interface]),
+		table: new(art.Table[*net.Interface]),
 	}
+}
+
+type cacheStats struct {
+	hits   int
+	misses int
+	size   int
 }
 
 type routeCache struct {
 	mu    syncs.Mutex
-	table *bart.Table[*net.Interface] // IPv4 routing table
+	table *art.Table[*net.Interface]
 	ec    *eventbus.Client
 
-	hits   int
-	misses int
+	cs cacheStats
 }
 
-func (rc *routeCache) stats() (hits, misses, total int) {
+func (rc *routeCache) stats() cacheStats {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	return rc.hits, rc.misses, rc.table.Size()
+	return rc.cs
 }
 
 func (rc *routeCache) subscribeToNetworkChanges(eventBus *eventbus.Bus, logf logger.Logf) {
@@ -457,12 +462,12 @@ func (rc *routeCache) lookupCachedRoute(addr netip.Addr) *net.Interface {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 
-	iface, ok := rc.table.Lookup(addr)
+	iface, ok := rc.table.Get(addr)
 	if !ok {
-		rc.misses++
+		rc.cs.misses++
 		return nil
 	}
-	rc.hits++
+	rc.cs.hits++
 	return iface
 }
 
@@ -475,12 +480,14 @@ func (rc *routeCache) setCachedRoutePrefix(prefix netip.Prefix, iface *net.Inter
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.table.Insert(prefix, iface)
+	rc.cs.size += 1
 }
 
 func (rc *routeCache) clearCachedRoutePrefix(prefix netip.Prefix) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.table.Delete(prefix)
+	rc.cs.size -= 1
 }
 
 func (rc *routeCache) ClearCachedRoute(addr netip.Addr) {
@@ -492,10 +499,9 @@ func (rc *routeCache) Reset() {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 
-	rc.hits = 0
-	rc.misses = 0
+	rc.cs = cacheStats{}
 
-	rc.table = new(bart.Table[*net.Interface])
+	rc.table = new(art.Table[*net.Interface])
 }
 
 func addrBits(addr netip.Addr) int {
