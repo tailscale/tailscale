@@ -22,8 +22,12 @@ import (
 	"tailscale.com/version"
 )
 
-const VERBOSE_LOGS = true
-const CHECK_PROBE_RESULTS_WITH_RIB = true
+// TODO (barnstar): Caps?  Environment variables?  Configuration?
+const (
+	VERBOSE_LOGS                 = true
+	CHECK_PROBE_RESULTS_WITH_RIB = true
+	USE_PROBE                    = true
+)
 
 func control(logf logger.Logf, netMon *netmon.Monitor) func(network, address string, c syscall.RawConn) error {
 	return func(network, address string, c syscall.RawConn) error {
@@ -43,8 +47,7 @@ func controlLogf(logf logger.Logf, netMon *netmon.Monitor, network, address stri
 	}
 
 	/// FIXME: (barnstar) Temporary probeInterfaces logic.  Maybe set via a cap?  By platform?  So may caps.
-	probeInterfaces.Store(true)
-	if probeInterfaces.Load() {
+	if USE_PROBE {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
 			return fmt.Errorf("netns: control: SplitHostPort %q: %w", address, err)

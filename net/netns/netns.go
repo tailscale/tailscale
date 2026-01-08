@@ -123,8 +123,6 @@ func SetDisableBindConnToInterfaceAppleExt(logf logger.Logf, v bool) {
 	}
 }
 
-var probeInterfaces atomic.Bool
-
 // Listener returns a new net.Listener with its Control hook func
 // initialized as necessary to run in logical network namespace that
 // doesn't route back into Tailscale.
