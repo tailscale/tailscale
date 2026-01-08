@@ -88,7 +88,7 @@ require (
 	github.com/tailscale/golang-x-crypto v0.0.0-20250404221719-a5573b049869
 	github.com/tailscale/goupnp v1.0.1-0.20210804011211-c64d0f06ea05
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
-	github.com/tailscale/mkctr v0.0.0-20250228050937-c75ea1476830
+	github.com/tailscale/mkctr v0.0.0-20260107121656-ea857e3e500b
 	github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc
 	github.com/tailscale/setec v0.0.0-20251203133219-2ab774e4129a

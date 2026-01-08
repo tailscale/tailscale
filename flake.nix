@@ -151,4 +151,8 @@
     });
   };
 }
-# nix-direnv cache busting line: sha256-kXdjsA1QIXS13vMBTMbxBJK4tewd6rVz0Csod+HtN10=
+<<<<<<< HEAD
+# nix-direnv cache busting line: sha256-PVE4oEwcoTbXbPJnBcVgBeXITWlnkhBf+UT5nqSeANM=
+=======
+# nix-direnv cache busting line: sha256-PVE4oEwcoTbXbPJnBcVgBeXITWlnkhBf+UT5nqSeANM=
+>>>>>>> 4a5884f4b (go.mod: update mkctr)
