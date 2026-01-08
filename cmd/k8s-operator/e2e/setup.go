@@ -4,12 +4,13 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	_ "embed"
-	jsonv1 "encoding/json"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -51,7 +52,7 @@ import (
 	"sigs.k8s.io/kind/pkg/cluster"
 	"sigs.k8s.io/kind/pkg/cluster/nodeutils"
 	"sigs.k8s.io/kind/pkg/cmd"
-	"tailscale.com/client/tailscale/v2"
+	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
@@ -66,9 +67,9 @@ const (
 )
 
 var (
-	tsClient   = &tailscale.Client{Tailnet: "-"} // For API calls to control.
-	tnClient   *tsnet.Server                     // For testing real tailnet traffic.
-	kubeClient client.WithWatch                  // For k8s API calls.
+	tsClient   *tailscale.Client // For API calls to control.
+	tnClient   *tsnet.Server     // For testing real tailnet traffic.
+	kubeClient client.WithWatch  // For k8s API calls.
 
 	//go:embed certs/pebble.minica.crt
 	pebbleMiniCACert []byte
@@ -241,7 +242,7 @@ func runTests(m *testing.M) (int, error) {
 		var apiKeyData struct {
 			APIKey string `json:"apiKey"`
 		}
-		if err := jsonv1.Unmarshal(b, &apiKeyData); err != nil {
+		if err := json.Unmarshal(b, &apiKeyData); err != nil {
 			return 0, fmt.Errorf("failed to parse api-key.json: %w", err)
 		}
 		if apiKeyData.APIKey == "" {
@@ -249,27 +250,47 @@ func runTests(m *testing.M) (int, error) {
 		}
 
 		// Finish setting up tsClient.
-		baseURL, err := url.Parse("http://localhost:31544")
-		if err != nil {
-			return 0, fmt.Errorf("parse url: %w", err)
-		}
-		tsClient.BaseURL = baseURL
-		tsClient.APIKey = apiKeyData.APIKey
-		tsClient.HTTP = &http.Client{}
+		tsClient = tailscale.NewClient("-", tailscale.APIKey(apiKeyData.APIKey))
+		tsClient.BaseURL = "http://localhost:31544"
 
 		// Set ACLs and create OAuth client.
-		if err := tsClient.PolicyFile().Set(ctx, string(requiredACLs), ""); err != nil {
+		req, _ := http.NewRequest("POST", tsClient.BuildTailnetURL("acl"), bytes.NewReader(requiredACLs))
+		resp, err := tsClient.Do(req)
+		if err != nil {
 			return 0, fmt.Errorf("failed to set ACLs: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(resp.Body)
+			return 0, fmt.Errorf("HTTP %d setting ACLs: %s", resp.StatusCode, string(b))
 		}
 		logger.Infof("ACLs configured")
 
-		key, err := tsClient.Keys().CreateOAuthClient(ctx, tailscale.CreateOAuthClientRequest{
-			Scopes:      []string{"auth_keys", "devices:core", "services"},
-			Tags:        []string{"tag:k8s-operator"},
-			Description: "k8s-operator client for e2e tests",
+		reqBody, err := json.Marshal(map[string]any{
+			"keyType":     "client",
+			"scopes":      []string{"auth_keys", "devices:core", "services"},
+			"tags":        []string{"tag:k8s-operator"},
+			"description": "k8s-operator client for e2e tests",
 		})
 		if err != nil {
+			return 0, fmt.Errorf("failed to marshal OAuth client creation request: %w", err)
+		}
+		req, _ = http.NewRequest("POST", tsClient.BuildTailnetURL("keys"), bytes.NewReader(reqBody))
+		resp, err = tsClient.Do(req)
+		if err != nil {
 			return 0, fmt.Errorf("failed to create OAuth client: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(resp.Body)
+			return 0, fmt.Errorf("HTTP %d creating OAuth client: %s", resp.StatusCode, string(b))
+		}
+		var key struct {
+			ID  string `json:"id"`
+			Key string `json:"key"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&key); err != nil {
+			return 0, fmt.Errorf("failed to decode OAuth client creation response: %w", err)
 		}
 		clientID = key.ID
 		clientSecret = key.Key
@@ -290,12 +311,14 @@ func runTests(m *testing.M) (int, error) {
 			TokenURL:     fmt.Sprintf("%s/api/v2/oauth/token", ipn.DefaultControlURL),
 			Scopes:       []string{"auth_keys"},
 		}
-		baseURL, _ := url.Parse(ipn.DefaultControlURL)
-		tsClient = &tailscale.Client{
-			Tailnet: "-",
-			HTTP:    credentials.Client(ctx),
-			BaseURL: baseURL,
+		tk, err := credentials.Token(ctx)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get OAuth token: %w", err)
 		}
+		// An access token will last for an hour which is plenty of time for
+		// the tests to run. No need for token refresh logic.
+		tsClient = tailscale.NewClient("-", tailscale.APIKey(tk.AccessToken))
+		tsClient.BaseURL = "http://localhost:31544"
 	}
 
 	var ossTag string
@@ -422,22 +445,18 @@ func runTests(m *testing.M) (int, error) {
 	caps.Devices.Create.Ephemeral = true
 	caps.Devices.Create.Tags = []string{"tag:k8s"}
 
-	authKey, err := tsClient.Keys().CreateAuthKey(ctx, tailscale.CreateKeyRequest{
-		Capabilities:  caps,
-		ExpirySeconds: 600,
-		Description:   "e2e test authkey",
-	})
+	authKey, authKeyMeta, err := tsClient.CreateKey(ctx, caps)
 	if err != nil {
 		return 0, err
 	}
-	defer tsClient.Keys().Delete(context.Background(), authKey.ID)
+	defer tsClient.DeleteKey(context.Background(), authKeyMeta.ID)
 
 	tnClient = &tsnet.Server{
-		ControlURL: tsClient.BaseURL.String(),
+		ControlURL: tsClient.BaseURL,
 		Hostname:   "test-proxy",
 		Ephemeral:  true,
 		Store:      &mem.Store{},
-		AuthKey:    authKey.Key,
+		AuthKey:    authKey,
 	}
 	_, err = tnClient.Up(ctx)
 	if err != nil {
