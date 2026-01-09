@@ -1091,10 +1091,31 @@ func TestListenService(t *testing.T) {
 				assertEchoHTTP(t, listeners[0].FQDN, "/foo/bar", peer.Dial)
 			},
 		},
+		{
+			name: "multiple_ports",
+			inputs: []input{
+				{
+					port: 99,
+				},
+				{
+					opts: ServiceHTTPOptions{},
+					port: 80,
+				},
+			},
+			run: func(t *testing.T, listeners []*ServiceListener, peer *Server) {
+				go acceptAndEcho(t, listeners[0])
+
+				target := fmt.Sprintf("%s:%d", listeners[0].FQDN, 99)
+				conn := must.Get(peer.Dial(t.Context(), "tcp", target))
+				defer conn.Close()
+				assertEcho(t, conn)
+
+				go checkAndEcho(t, listeners[1], nil)
+				assertEchoHTTP(t, listeners[1].FQDN, "", peer.Dial)
+			},
+		},
 		// TODO:
 		// Success cases:
-		// - TLS-terminated-TCP
-		// - Service with multiple ports
 		// - TUN Service
 		// Error cases:
 		// - Untagged node

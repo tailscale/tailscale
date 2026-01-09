@@ -7,8 +7,10 @@ package tsnet
 import (
 	"context"
 	crand "crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1263,7 +1265,7 @@ type ServiceTransportOptions interface {
 // TODO: doc
 type ServiceTCPOptions struct {
 	TerminateTLS  bool
-	PROXYProtocol int
+	PROXYProtocol int // TODO: does this have meaning for HTTP Services?
 }
 
 func (ServiceTCPOptions) serviceTransportOptions() {}
@@ -1326,26 +1328,18 @@ func (s *Server) ListenService(name string, port uint16, opts ServiceTransportOp
 		return nil, err
 	}
 
-	lc := s.localClient
-
-	st, err := lc.StatusWithoutPeers(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetching ACL tags: %w", err)
-	}
+	st := s.lb.StatusWithoutPeers()
 	if st.Self.Tags == nil || st.Self.Tags.Len() == 0 {
 		return nil, ErrUntaggedServiceHost
 	}
 
-	prefs, err := lc.GetPrefs(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetching node preferences: %w", err)
-	}
-	if !slices.Contains(prefs.AdvertiseServices, svcName) {
+	advertisedServices := s.lb.Prefs().AdvertiseServices().AsSlice()
+	if !slices.Contains(advertisedServices, svcName) {
 		// TODO: do we need to undo this edit on error?
-		_, err = lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+		_, err = s.lb.EditPrefs(&ipn.MaskedPrefs{
 			AdvertiseServicesSet: true,
 			Prefs: ipn.Prefs{
-				AdvertiseServices: append(prefs.AdvertiseServices, svcName),
+				AdvertiseServices: append(advertisedServices, svcName),
 			},
 		})
 		if err != nil {
@@ -1353,12 +1347,18 @@ func (s *Server) ListenService(name string, port uint16, opts ServiceTransportOp
 		}
 	}
 
-	srvConfig, err := lc.GetServeConfig(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetching node serve config: %w", err)
-	}
-	if srvConfig == nil {
-		srvConfig = new(ipn.ServeConfig)
+	srvConfig := new(ipn.ServeConfig)
+	etag := "empty"
+	if sc := s.lb.ServeConfig(); sc.Valid() {
+		srvConfig = sc.AsStruct()
+		// TODO: it's weird that we have to calculate the ETag ourselves.
+		// Shouldn't the backend do this for us?
+		b, err := json.Marshal(srvConfig)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling serve config: %w", err)
+		}
+		sum := sha256.Sum256(b)
+		etag = hex.EncodeToString(sum[:])
 	}
 
 	// Start listening on a TCP socket.
@@ -1405,7 +1405,7 @@ func (s *Server) ListenService(name string, port uint16, opts ServiceTransportOp
 		return nil, fmt.Errorf("unknown ServiceTransportOptions type %T", opts)
 	}
 
-	if err := lc.SetServeConfig(ctx, srvConfig); err != nil {
+	if err := s.lb.SetServeConfig(srvConfig, etag); err != nil {
 		ln.Close()
 		return nil, err
 	}
