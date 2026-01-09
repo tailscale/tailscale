@@ -16,6 +16,7 @@ func TestResolveAuthKey(t *testing.T) {
 		name        string
 		clientID    string
 		idToken     string
+		audience    string
 		tags        []string
 		wantAuthKey string
 		wantErr     string
@@ -64,7 +65,7 @@ func TestResolveAuthKey(t *testing.T) {
 			srv := mockedControlServer(t)
 			defer srv.Close()
 
-			authKey, err := resolveAuthKey(context.Background(), srv.URL, tt.clientID, tt.idToken, tt.tags)
+			authKey, err := resolveAuthKey(context.Background(), srv.URL, tt.clientID, tt.idToken, tt.audience, tt.tags)
 			if tt.wantErr != "" {
 				if err == nil {
 					t.Errorf("resolveAuthKey() error = nil, want %q", tt.wantErr)

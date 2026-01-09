@@ -19,6 +19,7 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/wif"
 )
 
 func init() {
@@ -28,14 +29,21 @@ func init() {
 }
 
 // resolveAuthKey uses OIDC identity federation to exchange the provided ID token and client ID for an authkey.
-func resolveAuthKey(ctx context.Context, baseURL, clientID, idToken string, tags []string) (string, error) {
+func resolveAuthKey(ctx context.Context, baseURL, clientID, idToken string, audience string, tags []string) (string, error) {
 	if clientID == "" {
 		return "", nil // Short-circuit, no client ID means not using identity federation
 	}
 
 	if idToken == "" {
-		return "", errors.New("federated identity authkeys require --id-token")
+		providerIdToken, err := wif.ObtainProviderToken(ctx, audience)
+		if err != nil {
+			fmt.Println(err)
+			return "", errors.New("federated identity authkeys require --id-token")
+		}
+		idToken = providerIdToken
+		fmt.Println(providerIdToken)
 	}
+
 	if len(tags) == 0 {
 		return "", errors.New("federated identity authkeys require --advertise-tags")
 	}
@@ -50,6 +58,7 @@ func resolveAuthKey(ctx context.Context, baseURL, clientID, idToken string, tags
 
 	accessToken, err := exchangeJWTForToken(ctx, baseURL, strippedID, idToken)
 	if err != nil {
+		fmt.Println(err)
 		return "", fmt.Errorf("failed to exchange JWT for access token: %w", err)
 	}
 	if accessToken == "" {
@@ -77,6 +86,7 @@ func resolveAuthKey(ctx context.Context, baseURL, clientID, idToken string, tags
 		return "", errors.New("received empty authkey from control server")
 	}
 
+	fmt.Println(authkey)
 	return authkey, nil
 }
 
