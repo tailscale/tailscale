@@ -16,6 +16,7 @@ func TestResolveAuthKey(t *testing.T) {
 		name        string
 		clientID    string
 		idToken     string
+		audience    string
 		tags        []string
 		wantAuthKey string
 		wantErr     string
@@ -24,6 +25,7 @@ func TestResolveAuthKey(t *testing.T) {
 			name:        "success",
 			clientID:    "client-123",
 			idToken:     "token",
+			audience:    "api://tailscale-wif",
 			tags:        []string{"tag:test"},
 			wantAuthKey: "tskey-auth-xyz",
 			wantErr:     "",
@@ -32,21 +34,24 @@ func TestResolveAuthKey(t *testing.T) {
 			name:        "missing client id short-circuits without error",
 			clientID:    "",
 			idToken:     "token",
+			audience:    "api://tailscale-wif",
 			tags:        []string{"tag:test"},
 			wantAuthKey: "",
 			wantErr:     "",
 		},
 		{
-			name:     "missing id token",
+			name:     "missing id token and audience",
 			clientID: "client-123",
 			idToken:  "",
+			audience: "",
 			tags:     []string{"tag:test"},
-			wantErr:  "federated identity authkeys require --id-token",
+			wantErr:  "federated identity requires either an ID token or an audience",
 		},
 		{
 			name:     "missing tags",
 			clientID: "client-123",
 			idToken:  "token",
+			audience: "api://tailscale-wif",
 			tags:     []string{},
 			wantErr:  "federated identity authkeys require --advertise-tags",
 		},
@@ -54,6 +59,7 @@ func TestResolveAuthKey(t *testing.T) {
 			name:     "invalid client id attributes",
 			clientID: "client-123?invalid=value",
 			idToken:  "token",
+			audience: "api://tailscale-wif",
 			tags:     []string{"tag:test"},
 			wantErr:  `failed to parse optional config attributes: unknown optional config attribute "invalid"`,
 		},
@@ -64,7 +70,7 @@ func TestResolveAuthKey(t *testing.T) {
 			srv := mockedControlServer(t)
 			defer srv.Close()
 
-			authKey, err := resolveAuthKey(context.Background(), srv.URL, tt.clientID, tt.idToken, tt.tags)
+			authKey, err := resolveAuthKey(context.Background(), srv.URL, tt.clientID, tt.idToken, tt.audience, tt.tags)
 			if tt.wantErr != "" {
 				if err == nil {
 					t.Errorf("resolveAuthKey() error = nil, want %q", tt.wantErr)
