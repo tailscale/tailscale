@@ -306,7 +306,7 @@ func TestPeerRoutes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := peerRoutes(t.Logf, tt.peers, 2)
+			got := peerRoutes(t.Logf, tt.peers, 2, true)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("got = %v; want %v", got, tt.want)
 			}
@@ -7291,6 +7291,108 @@ func TestStripKeysFromPrefs(t *testing.T) {
 
 			if got := okay.Load(); got != 2 {
 				t.Errorf("notify passed validation %d times; want 2", got)
+			}
+		})
+	}
+}
+
+func TestRouteAllDisabled(t *testing.T) {
+	pp := netip.MustParsePrefix
+
+	tests := []struct {
+		name          string
+		peers         []wgcfg.Peer
+		wantEndpoints []netip.Prefix
+		routeAll      bool
+	}{
+		{
+			name:     "route_all_disabled",
+			routeAll: false,
+			peers: []wgcfg.Peer{
+				{
+					AllowedIPs: []netip.Prefix{
+						// if one ip in the Tailscale ULA range is added, the entire range is added to the router config
+						pp("fd7a:115c:a1e0::2501:9b83/128"),
+						pp("100.80.207.38/32"),
+						pp("100.80.207.56/32"),
+						pp("100.80.207.40/32"),
+						pp("100.94.122.93/32"),
+						pp("100.79.141.115/32"),
+
+						// a /28 range will not be added, since this is not a Service IP range (which is always /32, a single IP)
+						pp("100.64.0.0/28"),
+
+						// ips outside the tailscale cgnat/ula range are not added to the router config
+						pp("192.168.0.45/32"),
+						pp("fd7a:115c:b1e0::2501:9b83/128"),
+						pp("fdf8:f966:e27c:0:5:0:0:10/128"),
+					},
+				},
+			},
+			wantEndpoints: []netip.Prefix{
+				pp("100.80.207.38/32"),
+				pp("100.80.207.56/32"),
+				pp("100.80.207.40/32"),
+				pp("100.94.122.93/32"),
+				pp("100.79.141.115/32"),
+				pp("fd7a:115c:a1e0::/48"),
+			},
+		},
+		{
+			name:     "route_all_enabled",
+			routeAll: true,
+			peers: []wgcfg.Peer{
+				{
+					AllowedIPs: []netip.Prefix{
+						// if one ip in the Tailscale ULA range is added, the entire range is added to the router config
+						pp("fd7a:115c:a1e0::2501:9b83/128"),
+						pp("100.80.207.38/32"),
+						pp("100.80.207.56/32"),
+						pp("100.80.207.40/32"),
+						pp("100.94.122.93/32"),
+						pp("100.79.141.115/32"),
+
+						// ips outside the tailscale cgnat/ula range are not added to the router config
+						pp("192.168.0.45/32"),
+						pp("fd7a:115c:b1e0::2501:9b83/128"),
+						pp("fdf8:f966:e27c:0:5:0:0:10/128"),
+					},
+				},
+			},
+			wantEndpoints: []netip.Prefix{
+				pp("100.80.207.38/32"),
+				pp("100.80.207.56/32"),
+				pp("100.80.207.40/32"),
+				pp("100.94.122.93/32"),
+				pp("100.79.141.115/32"),
+				pp("192.168.0.45/32"),
+				pp("fd7a:115c:a1e0::/48"),
+				pp("fd7a:115c:b1e0::2501:9b83/128"),
+				pp("fdf8:f966:e27c:0:5:0:0:10/128"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefs := ipn.Prefs{RouteAll: tt.routeAll}
+			lb := newTestLocalBackend(t)
+			cfg := &wgcfg.Config{
+				Peers: tt.peers,
+			}
+
+			rcfg := lb.routerConfigLocked(cfg, prefs.View(), false)
+			for _, p := range rcfg.Routes {
+				found := false
+				for _, r := range tt.wantEndpoints {
+					if p.Addr() == r.Addr() {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("unexpected prefix %q in router config", p.String())
+				}
 			}
 		})
 	}
