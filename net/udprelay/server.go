@@ -41,6 +41,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/views"
+	"tailscale.com/util/cloudinfo"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/set"
 	"tailscale.com/util/usermetric"
@@ -78,6 +79,7 @@ type Server struct {
 	closeCh             chan struct{}
 	netChecker          *netcheck.Client
 	metrics             *metrics
+	cloudInfo           *cloudinfo.CloudInfo // used to query cloud metadata services
 
 	mu                  sync.Mutex                      // guards the following fields
 	macSecrets          views.Slice[[blake2s.Size]byte] // [0] is most recent, max 2 elements
@@ -333,6 +335,7 @@ func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool, metrics 
 		onlyStaticAddrPorts:   onlyStaticAddrPorts,
 		serverEndpointByDisco: make(map[key.SortedPairOfDiscoPublic]*serverEndpoint),
 		nextVNI:               minVNI,
+		cloudInfo:             cloudinfo.New(logf),
 	}
 	s.discoPublic = s.disco.Public()
 	s.metrics = registerMetrics(metrics)
@@ -398,6 +401,8 @@ func (s *Server) startPacketReaders() {
 
 func (s *Server) addrDiscoveryLoop() {
 	defer s.wg.Done()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // propagate [s.closeCh] to ctx
 
 	timer := time.NewTimer(0) // fire immediately
 	defer timer.Stop()
@@ -417,6 +422,22 @@ func (s *Server) addrDiscoveryLoop() {
 					addrPorts.Add(netip.AddrPortFrom(ip, s.uc4Port))
 				} else {
 					addrPorts.Add(netip.AddrPortFrom(ip, s.uc6Port))
+				}
+			}
+		}
+
+		// get cloud metadata service addresses
+		cloudIPs, err := s.cloudInfo.GetPublicIPs(ctx)
+		if err != nil {
+			s.logf("error querying cloud metadata service IPs: %v", err)
+		} else {
+			for _, ip := range cloudIPs {
+				if ip.IsValid() {
+					if ip.Is4() {
+						addrPorts.Add(netip.AddrPortFrom(ip, s.uc4Port))
+					} else {
+						addrPorts.Add(netip.AddrPortFrom(ip, s.uc6Port))
+					}
 				}
 			}
 		}
