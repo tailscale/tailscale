@@ -406,6 +406,10 @@ type Conn struct {
 
 	// metrics contains the metrics for the magicsock instance.
 	metrics *metrics
+
+	// homeDERPGauge is the usermetric gauge for the home DERP region ID.
+	// This can be nil when [Options.Metrics] are not enabled.
+	homeDERPGauge *usermetric.Gauge
 }
 
 // SetDebugLoggingEnabled controls whether spammy debug logging is enabled.
@@ -744,6 +748,9 @@ func NewConn(opts Options) (*Conn, error) {
 	}
 
 	c.metrics = registerMetrics(opts.Metrics)
+	if opts.Metrics != nil {
+		c.homeDERPGauge = opts.Metrics.NewGauge("tailscaled_home_derp_region_id", "DERP region ID of this node's home relay server")
+	}
 
 	if d4, err := c.listenRawDisco("ip4"); err == nil {
 		c.logf("[v1] using BPF disco receiver for IPv4")

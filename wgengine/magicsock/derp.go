@@ -216,17 +216,28 @@ func (c *Conn) derpRegionCodeLocked(regionID int) string {
 	return ""
 }
 
+// setHomeDERPGaugeLocked updates the home DERP gauge metric.
+//
+// c.mu must be held.
+func (c *Conn) setHomeDERPGaugeLocked(derpNum int) {
+	if c.homeDERPGauge != nil {
+		c.homeDERPGauge.Set(float64(derpNum))
+	}
+}
+
 // c.mu must NOT be held.
 func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.wantDerpLocked() {
 		c.myDerp = 0
+		c.setHomeDERPGaugeLocked(0)
 		c.health.SetMagicSockDERPHome(0, c.homeless)
 		return false
 	}
 	if c.homeless {
 		c.myDerp = 0
+		c.setHomeDERPGaugeLocked(0)
 		c.health.SetMagicSockDERPHome(0, c.homeless)
 		return false
 	}
@@ -238,6 +249,7 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 		metricDERPHomeChange.Add(1)
 	}
 	c.myDerp = derpNum
+	c.setHomeDERPGaugeLocked(derpNum)
 	c.health.SetMagicSockDERPHome(derpNum, c.homeless)
 
 	if c.privateKey.IsZero() {
