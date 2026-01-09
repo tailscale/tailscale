@@ -118,6 +118,7 @@ type serverEndpoint struct {
 	lamportID          uint64
 	vni                uint32
 	allocatedAt        mono.Time
+	metrics            *metrics
 
 	mu                   sync.Mutex        // guards the following fields
 	inProgressGeneration [2]uint32         // or zero if a handshake has never started, or has just completed
@@ -227,9 +228,11 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 			// already authenticated via disco.
 			if bytes.Equal(mac[:], discoMsg.Challenge[:]) {
 				// Handshake complete. Update the binding for this sender.
+				oldState := e.stateLocked()
 				e.boundAddrPorts[senderIndex] = from
 				e.lastSeen[senderIndex] = now           // record last seen as bound time
 				e.inProgressGeneration[senderIndex] = 0 // reset to zero, which indicates there is no in-progress handshake
+				e.metrics.updateEndpoint(oldState, e.stateLocked())
 				return nil, netip.AddrPort{}
 			}
 		}
@@ -320,6 +323,36 @@ func (e *serverEndpoint) isBoundLocked() bool {
 	return e.boundAddrPorts[0].IsValid() &&
 		e.boundAddrPorts[1].IsValid()
 }
+
+// stateLocked returns current endpointState according to the
+// peers handshake status.
+func (e *serverEndpoint) stateLocked() endpointState {
+	if e == nil {
+		return endpointClosed
+	}
+	a, b := e.boundAddrPorts[0].IsValid(), e.boundAddrPorts[1].IsValid()
+	switch {
+	case a && b:
+		return endpointBound
+	case a || b:
+		return endpointSemiBound
+	default:
+		return endpointOpen
+	}
+}
+
+// endpointState canonicalizes endpoint state names,
+// see [serverEndpoint.stateLocked].
+//
+// Usermetrics can't handle Stringer, must be a string enum.
+type endpointState string
+
+const (
+	endpointClosed    endpointState = "closed"
+	endpointOpen      endpointState = "open"
+	endpointSemiBound endpointState = "semi_bound"
+	endpointBound     endpointState = "bound"
+)
 
 // NewServer constructs a [Server] listening on port. If port is zero, then
 // port selection is left up to the host networking stack. If
@@ -700,6 +733,7 @@ func (s *Server) endpointGCLoop() {
 		defer s.mu.Unlock()
 		for k, v := range s.serverEndpointByDisco {
 			if v.isExpired(now, s.bindLifetime, s.steadyStateLifetime) {
+				s.metrics.updateEndpoint(v.stateLocked(), endpointClosed)
 				delete(s.serverEndpointByDisco, k)
 				s.serverEndpointByVNI.Delete(v.vni)
 			}
@@ -987,6 +1021,7 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 		lamportID:    s.lamportID,
 		allocatedAt:  mono.Now(),
 		vni:          vni,
+		metrics:      s.metrics,
 	}
 	e.discoSharedSecrets[0] = s.disco.Shared(e.discoPubKeys.Get()[0])
 	e.discoSharedSecrets[1] = s.disco.Shared(e.discoPubKeys.Get()[1])
@@ -995,6 +1030,7 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 	s.serverEndpointByVNI.Store(e.vni, e)
 
 	s.logf("allocated endpoint vni=%d lamportID=%d disco[0]=%v disco[1]=%v", e.vni, e.lamportID, pair.Get()[0].ShortString(), pair.Get()[1].ShortString())
+	s.metrics.updateEndpoint(endpointClosed, endpointOpen)
 	return endpoint.ServerEndpoint{
 		ServerDisco:         s.discoPublic,
 		ClientDisco:         pair.Get(),
