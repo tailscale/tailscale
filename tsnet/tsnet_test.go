@@ -1506,7 +1506,7 @@ func TestResolveAuthKey(t *testing.T) {
 		oauthAvailable  bool
 		wifAvailable    bool
 		resolveViaOAuth func(ctx context.Context, clientSecret string, tags []string) (string, error)
-		resolveViaWIF   func(ctx context.Context, baseURL, clientID, idToken string, tags []string) (string, error)
+		resolveViaWIF   func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error)
 		wantAuthKey     string
 		wantErr         bool
 		wantErrContains string
@@ -1538,7 +1538,7 @@ func TestResolveAuthKey(t *testing.T) {
 			clientID:     "client-id-123",
 			idToken:      "id-token-456",
 			wifAvailable: true,
-			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken string, tags []string) (string, error) {
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
 				if clientID != "client-id-123" {
 					return "", fmt.Errorf("unexpected client ID: %s", clientID)
 				}
@@ -1555,7 +1555,7 @@ func TestResolveAuthKey(t *testing.T) {
 			clientID:     "client-id-123",
 			idToken:      "id-token-456",
 			wifAvailable: true,
-			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken string, tags []string) (string, error) {
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
 				return "", fmt.Errorf("resolution failed")
 			},
 			wantErrContains: "resolution failed",
@@ -1565,7 +1565,7 @@ func TestResolveAuthKey(t *testing.T) {
 			clientID:     "",
 			idToken:      "id-token-456",
 			wifAvailable: true,
-			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken string, tags []string) (string, error) {
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
 				return "", fmt.Errorf("should not be called")
 			},
 			wantErrContains: "empty",
@@ -1575,7 +1575,7 @@ func TestResolveAuthKey(t *testing.T) {
 			clientID:     "client-id-123",
 			idToken:      "",
 			wifAvailable: true,
-			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken string, tags []string) (string, error) {
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
 				return "", fmt.Errorf("should not be called")
 			},
 			wantErrContains: "empty",
@@ -1591,7 +1591,7 @@ func TestResolveAuthKey(t *testing.T) {
 				return "tskey-auth-via-oauth", nil
 			},
 			wifAvailable: true,
-			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken string, tags []string) (string, error) {
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
 				return "", fmt.Errorf("should not be called")
 			},
 			wantAuthKey:     "tskey-auth-via-oauth",
@@ -1606,7 +1606,7 @@ func TestResolveAuthKey(t *testing.T) {
 				return "", fmt.Errorf("resolution failed")
 			},
 			wifAvailable: true,
-			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken string, tags []string) (string, error) {
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
 				return "", fmt.Errorf("should not be called")
 			},
 			wantErrContains: "failed",
