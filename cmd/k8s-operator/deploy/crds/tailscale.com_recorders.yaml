@@ -72,6 +72,7 @@ spec:
                   description: Replicas specifies how many instances of tsrecorder to run. Defaults to 1.
                   type: integer
                   format: int32
+                  default: 1
                   minimum: 0
                 statefulSet:
                   description: |-
