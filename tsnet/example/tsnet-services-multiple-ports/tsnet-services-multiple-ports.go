@@ -62,7 +62,6 @@ func main() {
 	const pprofPort uint16 = 6060
 
 	s := &tsnet.Server{
-		Dir:      "./services-demo-config",
 		Hostname: "tsnet-services-demo",
 	}
 	defer s.Close()

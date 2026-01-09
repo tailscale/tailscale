@@ -1,7 +1,9 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// The tsnet-services example demonstrates how to use tsnet with Services.
+// The tsnet-services example demonstrates how to use tsnet with Services and a
+// reverse proxy. This is useful when the backing server is external to the
+// tsnet application.
 //
 // To run this example yourself:
 //
@@ -40,7 +42,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 
 	"tailscale.com/tsnet"
 )
@@ -57,6 +62,19 @@ func main() {
 
 	const port uint16 = 443
 
+	// We will start an HTTP server on a local socket. This server will simulate
+	// a server which may be running in another process or even another machine.
+	backingListener, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer backingListener.Close()
+	go func() {
+		log.Fatal(http.Serve(backingListener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprintln(w, "<html><body><h1>Hello, tailnet!</h1>")
+		})))
+	}()
+
 	s := &tsnet.Server{
 		Hostname: "tsnet-services-demo",
 	}
@@ -68,10 +86,14 @@ func main() {
 	}
 	defer ln.Close()
 
+	// Use a reverse proxy to direct traffic to the backing server
+	rp := httputil.NewSingleHostReverseProxy(&url.URL{
+		Scheme: "http",
+		Host:   backingListener.Addr().String(),
+	})
+
 	log.Printf("Listening on https://%v\n", ln.FQDN)
 
-	err = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "<html><body><h1>Hello, tailnet!</h1>")
-	}))
+	err = http.Serve(ln, rp)
 	log.Fatal(err)
 }
