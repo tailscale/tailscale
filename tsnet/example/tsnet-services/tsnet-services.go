@@ -11,7 +11,7 @@
 // To use it, generate an auth key from the Tailscale admin panel and
 // run the demo with the key:
 //
-//	TS_AUTHKEY=<yourkey> go run tsnet-services.go
+//	TS_AUTHKEY=<yourkey> go run tsnet-services.go -service <service-name>
 package main
 
 import (
@@ -43,14 +43,13 @@ func main() {
 	}
 	defer s.Close()
 
-	// TODO: use HTTPS instead
-	ln, err := s.ListenService(*svcName, port, tsnet.ServiceTCPOptions{TerminateTLS: true})
+	ln, err := s.ListenService(*svcName, port, tsnet.ServiceHTTPOptions{HTTPS: true})
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer ln.Close()
 
-	fmt.Printf("Listening on https://%v\n", ln.FQDN)
+	log.Printf("Listening on https://%v\n", ln.FQDN)
 
 	err = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "<html><body><h1>Hello, tailnet!</h1>")
