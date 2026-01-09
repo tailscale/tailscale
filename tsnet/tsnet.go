@@ -1300,9 +1300,19 @@ var ErrUntaggedServiceHost = errors.New("service hosts must be tagged nodes")
 // TODO: doc
 type ServiceListener struct {
 	net.Listener
+	addr addr
 
 	// FQDN is the fully-qualifed domain name of this Service.
 	FQDN string
+}
+
+// Addr returns the listener's network address. This will be the Service's
+// fully-qualified domain name (FQDN) and the port.
+//
+// A hostname is not truly a network address, but Services listen on multiple
+// addresses (the IPv4 and IPv6 virtual IPs).
+func (sl ServiceListener) Addr() net.Addr {
+	return sl.addr
 }
 
 // TODO: doc
@@ -1335,7 +1345,8 @@ func (s *Server) ListenService(name string, port uint16, opts ServiceTransportOp
 
 	advertisedServices := s.lb.Prefs().AdvertiseServices().AsSlice()
 	if !slices.Contains(advertisedServices, svcName) {
-		// TODO: do we need to undo this edit on error?
+		// TODO: do we need to undo this edit on error? Maybe use a closePool
+		// for this and for closing the listener on error below
 		_, err = s.lb.EditPrefs(&ipn.MaskedPrefs{
 			AdvertiseServicesSet: true,
 			Prefs: ipn.Prefs{
@@ -1413,9 +1424,17 @@ func (s *Server) ListenService(name string, port uint16, opts ServiceTransportOp
 	// TODO: wrap returned listener such that Close stops advertising the
 	// Service (should update prefs, serve config, etc.)
 
+	fqdn := tailcfg.ServiceName(svcName).WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
 	return &ServiceListener{
 		Listener: ln,
-		FQDN:     tailcfg.ServiceName(svcName).WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix,
+		FQDN:     fqdn,
+		addr: addr{
+			network: "tcp",
+			// A hostname is not a network address, but Services listen on
+			// multiple addresses (the IPv4 and IPv6 virtual IPs), and there's
+			// no clear winner here between the two. Therefore prefer the FQDN.
+			addr: fqdn + ":" + strconv.Itoa(int(port)),
+		},
 	}, nil
 }
 
@@ -1580,7 +1599,12 @@ func (ln *listener) Accept() (net.Conn, error) {
 	}
 }
 
-func (ln *listener) Addr() net.Addr { return addr{ln} }
+func (ln *listener) Addr() net.Addr {
+	return addr{
+		network: ln.keys[0].network,
+		addr:    ln.addr,
+	}
+}
 
 func (ln *listener) Close() error {
 	ln.s.mu.Lock()
@@ -1620,10 +1644,12 @@ func (ln *listener) handle(c net.Conn) {
 // Server returns the tsnet Server associated with the listener.
 func (ln *listener) Server() *Server { return ln.s }
 
-type addr struct{ ln *listener }
+type addr struct {
+	network, addr string
+}
 
-func (a addr) Network() string { return a.ln.keys[0].network }
-func (a addr) String() string  { return a.ln.addr }
+func (a addr) Network() string { return a.network }
+func (a addr) String() string  { return a.addr }
 
 // cleanupListener wraps a net.Listener with a function to be run on Close.
 type cleanupListener struct {
