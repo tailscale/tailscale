@@ -46,6 +46,7 @@ var validUpFlags = set.Of(
 	"client-id",
 	"client-secret",
 	"id-token",
+	"audience",
 )
 
 // TestUpFlagSetIsFrozen complains when new flags are added to tailscale up.
