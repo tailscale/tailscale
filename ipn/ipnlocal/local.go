@@ -913,6 +913,12 @@ func (b *LocalBackend) setStateLocked(state ipn.State) {
 	}
 }
 
+func (b *LocalBackend) IPServiceMappings() netmap.IPServiceMappings {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.ipVIPServiceMap
+}
+
 // setConfigLocked uses the provided config to update the backend's prefs
 // and other state.
 func (b *LocalBackend) setConfigLocked(conf *conffile.Config) error {
@@ -5110,7 +5116,7 @@ func (b *LocalBackend) authReconfigLocked() {
 	}
 
 	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.NetMon.Get(), b.sys.ControlKnobs(), version.OS())
-	rcfg := b.routerConfigLocked(cfg, prefs, oneCGNATRoute)
+	rcfg := b.routerConfigLocked(cfg, prefs, nm, oneCGNATRoute)
 
 	err = b.e.Reconfig(cfg, rcfg, dcfg)
 	if err == wgengine.ErrNoChanges {
@@ -5426,7 +5432,7 @@ func peerRoutes(logf logger.Logf, peers []wgcfg.Peer, cgnatThreshold int) (route
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
 //
 // b.mu must be held.
-func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView, oneCGNATRoute bool) *router.Config {
+func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView, nm *netmap.NetworkMap, oneCGNATRoute bool) *router.Config {
 	singleRouteThreshold := 10_000
 	if oneCGNATRoute {
 		singleRouteThreshold = 1
@@ -5511,12 +5517,30 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 		}
 	}
 
+	// Get the VIPs for VIP services this node hosts. We will add all locally served VIPs to routes then
+	// we terminate these connection locally in netstack instead of routing to peer.
+	VIPServiceIPs := nm.GetIPVIPServiceMap()
+
 	if slices.ContainsFunc(rs.LocalAddrs, tsaddr.PrefixIs4) {
 		rs.Routes = append(rs.Routes, netip.PrefixFrom(tsaddr.TailscaleServiceIP(), 32))
+		for vip := range VIPServiceIPs {
+			if vip.Is4() {
+				rs.Routes = append(rs.Routes, netip.PrefixFrom(vip, 32))
+			}
+		}
 	}
 	if slices.ContainsFunc(rs.LocalAddrs, tsaddr.PrefixIs6) {
 		rs.Routes = append(rs.Routes, netip.PrefixFrom(tsaddr.TailscaleServiceIPv6(), 128))
+		for vip := range VIPServiceIPs {
+			if vip.Is6() {
+				rs.Routes = append(rs.Routes, netip.PrefixFrom(vip, 128))
+			}
+		}
 	}
+
+	fmt.Println("LocalAddrs are: ", rs.LocalAddrs)
+	fmt.Println("SubnetRoutes are: ", rs.SubnetRoutes)
+	fmt.Println("Routes are: ", rs.Routes)
 
 	return rs
 }
