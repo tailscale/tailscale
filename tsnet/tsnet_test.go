@@ -13,6 +13,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -33,6 +34,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"golang.org/x/net/proxy"
@@ -739,6 +741,105 @@ func TestFunnel(t *testing.T) {
 	if string(body) != "hello" {
 		t.Errorf("unexpected body: %q", body)
 	}
+}
+
+// TestFunnelClose ensures that the listener returned by ListenFunnel cleans up
+// after itself when closed. Specifically, changes made to the serve config
+// should be cleared.
+func TestFunnelClose(t *testing.T) {
+	marshalServeConfig := func(t *testing.T, sc ipn.ServeConfigView) string {
+		t.Helper()
+		return string(must.Get(json.MarshalIndent(sc, "", "\t")))
+	}
+
+	t.Run("simple", func(t *testing.T) {
+		controlURL, _ := startControl(t)
+		s, _, _ := startServer(t, t.Context(), controlURL, "s")
+
+		before := s.lb.ServeConfig()
+
+		ln := must.Get(s.ListenFunnel("tcp", ":443"))
+		ln.Close()
+
+		after := s.lb.ServeConfig()
+		if diff := cmp.Diff(marshalServeConfig(t, after), marshalServeConfig(t, before)); diff != "" {
+			t.Fatalf("expected serve config to be unchanged after close (-got, +want):\n%s", diff)
+		}
+	})
+
+	// Closing the listener shouldn't clear out config that predates it.
+	t.Run("no_clobbering", func(t *testing.T) {
+		controlURL, _ := startControl(t)
+		s, _, _ := startServer(t, t.Context(), controlURL, "s")
+
+		// To obtain config the listener might want to clobber, we:
+		//  - run a listener
+		//  - grab the config
+		//  - close the listener (clearing config)
+		ln := must.Get(s.ListenFunnel("tcp", ":443"))
+		before := s.lb.ServeConfig()
+		ln.Close()
+
+		// Now we manually write the config to the local backend (it should have
+		// been cleared), run the listener again, and close it again.
+		must.Do(s.lb.SetServeConfig(before.AsStruct(), ""))
+		ln = must.Get(s.ListenFunnel("tcp", ":443"))
+		ln.Close()
+
+		// The config should not have been cleared this time since it predated
+		// the most recent run.
+		after := s.lb.ServeConfig()
+		if diff := cmp.Diff(marshalServeConfig(t, after), marshalServeConfig(t, before)); diff != "" {
+			t.Fatalf("expected existing config to remain intact (-got, +want):\n%s", diff)
+		}
+	})
+
+	// Closing one listener shouldn't affect config for another listener.
+	t.Run("two_listeners", func(t *testing.T) {
+		controlURL, _ := startControl(t)
+		s, _, _ := startServer(t, t.Context(), controlURL, "s1")
+
+		// Start a listener on 443.
+		ln1 := must.Get(s.ListenFunnel("tcp", ":443"))
+		defer ln1.Close()
+
+		// Save the serve config for this original listener.
+		before := s.lb.ServeConfig()
+
+		// Now start and close a new listener on a different port.
+		ln2 := must.Get(s.ListenFunnel("tcp", ":8080"))
+		ln2.Close()
+
+		// The serve config for the original listener should be intact.
+		after := s.lb.ServeConfig()
+		if diff := cmp.Diff(marshalServeConfig(t, after), marshalServeConfig(t, before)); diff != "" {
+			t.Fatalf("expected existing config to remain intact (-got, +want):\n%s", diff)
+		}
+	})
+
+	// It should be possible to close a listener and free system resources even
+	// when the Server has been closed (or the listener should be automatically
+	// closed).
+	t.Run("after_server_close", func(t *testing.T) {
+		controlURL, _ := startControl(t)
+		s, _, _ := startServer(t, t.Context(), controlURL, "s")
+
+		ln := must.Get(s.ListenFunnel("tcp", ":443"))
+
+		// Close the server, then close the listener.
+		must.Do(s.Close())
+		// We don't care whether we get an error from the listener closing.
+		ln.Close()
+
+		// The listener should immediately return an error indicating closure.
+		_, err := ln.Accept()
+		// Looking for a string in the error sucks, but it's supposed to stay
+		// consistent:
+		// https://github.com/golang/go/blob/108b333d510c1f60877ac917375d7931791acfe6/src/internal/poll/fd.go#L20-L24
+		if err == nil || !strings.Contains(err.Error(), "use of closed network connection") {
+			t.Fatal("expected listener to be closed, got:", err)
+		}
+	})
 }
 
 func TestListenerClose(t *testing.T) {

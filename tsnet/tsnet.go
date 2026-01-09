@@ -1228,11 +1228,25 @@ func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.L
 	}
 	domain := st.CertDomains[0]
 	hp := ipn.HostPort(domain + ":" + portStr)
+	var cleanupOnClose func() error
 	if !srvConfig.AllowFunnel[hp] {
 		mak.Set(&srvConfig.AllowFunnel, hp, true)
 		srvConfig.AllowFunnel[hp] = true
 		if err := lc.SetServeConfig(ctx, srvConfig); err != nil {
 			return nil, err
+		}
+		cleanupOnClose = func() error {
+			sc, err := lc.GetServeConfig(ctx)
+			if err != nil {
+				return fmt.Errorf("cleaning config changes: %w", err)
+			}
+			if sc.AllowFunnel != nil {
+				delete(sc.AllowFunnel, hp)
+			}
+			if err := lc.SetServeConfig(ctx, sc); err != nil {
+				return fmt.Errorf("cleaning config changes: %w", err)
+			}
+			return nil
 		}
 	}
 
@@ -1241,6 +1255,7 @@ func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.L
 	if err != nil {
 		return nil, err
 	}
+	ln = &cleanupListener{Listener: ln, cleanup: cleanupOnClose}
 	return tls.NewListener(ln, tlsConfig), nil
 }
 
@@ -1449,3 +1464,30 @@ type addr struct{ ln *listener }
 
 func (a addr) Network() string { return a.ln.keys[0].network }
 func (a addr) String() string  { return a.ln.addr }
+
+// cleanupListener wraps a net.Listener with a function to be run on Close.
+type cleanupListener struct {
+	net.Listener
+	cleanup     func() error
+	cleanupOnce sync.Once
+}
+
+func (cl *cleanupListener) Close() error {
+	var cleanupErr error
+	cl.cleanupOnce.Do(func() {
+		if cl.cleanup != nil {
+			cleanupErr = cl.cleanup()
+		}
+	})
+	closeErr := cl.Listener.Close()
+	switch {
+	case closeErr != nil && cleanupErr != nil:
+		return fmt.Errorf("%w; also: %w", closeErr, cleanupErr)
+	case closeErr != nil:
+		return closeErr
+	case cleanupErr != nil:
+		return cleanupErr
+	default:
+		return nil
+	}
+}
