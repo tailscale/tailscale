@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -17,6 +18,7 @@ import (
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -104,6 +106,11 @@ type nodeBackend struct {
 	// nodeByAddr maps nodes' own addresses (excluding subnet routes) to node IDs.
 	// It is mutated in place (with mu held) and must not escape the [nodeBackend].
 	nodeByAddr map[netip.Addr]tailcfg.NodeID
+
+	// customPeers holds externally-injected peers (e.g., custom Mullvad exit nodes)
+	// that should be included alongside control-plane peers for lookups and WireGuard config.
+	// It is mutated in place (with mu held) and must not escape the [nodeBackend].
+	customPeers map[tailcfg.NodeID]tailcfg.NodeView
 }
 
 func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *nodeBackend {
@@ -216,14 +223,26 @@ func (nb *nodeBackend) NodeByID(id tailcfg.NodeID) (_ tailcfg.NodeView, ok bool)
 			return self, true
 		}
 	}
-	n, ok := nb.peers[id]
-	return n, ok
+	if n, ok := nb.peers[id]; ok {
+		return n, true
+	}
+	// Also check custom peers (e.g., custom Mullvad)
+	if n, ok := nb.customPeers[id]; ok {
+		return n, true
+	}
+	return tailcfg.NodeView{}, false
 }
 
 func (nb *nodeBackend) PeerByStableID(id tailcfg.StableNodeID) (_ tailcfg.NodeView, ok bool) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	for _, n := range nb.peers {
+		if n.StableID() == id {
+			return n, true
+		}
+	}
+	// Also check custom peers (e.g., custom Mullvad)
+	for _, n := range nb.customPeers {
 		if n.StableID() == id {
 			return n, true
 		}
@@ -246,7 +265,21 @@ func (nb *nodeBackend) UserByID(id tailcfg.UserID) (_ tailcfg.UserProfileView, o
 func (nb *nodeBackend) Peers() []tailcfg.NodeView {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	return slicesx.MapValues(nb.peers)
+
+	total := len(nb.peers) + len(nb.customPeers)
+	if total == 0 {
+		return nil
+	}
+
+	// Combine control-plane peers with custom peers
+	result := make([]tailcfg.NodeView, 0, total)
+	for _, p := range nb.peers {
+		result = append(result, p)
+	}
+	for _, p := range nb.customPeers {
+		result = append(result, p)
+	}
+	return result
 }
 
 func (nb *nodeBackend) PeersForTest() []tailcfg.NodeView {
@@ -415,7 +448,17 @@ func (nb *nodeBackend) netMapWithPeers() *netmap.NetworkMap {
 		return nil
 	}
 	nm := ptr.To(*nb.netMap) // shallow clone
-	nm.Peers = slicesx.MapValues(nb.peers)
+
+	// Combine control-plane peers with custom peers (e.g., custom Mullvad)
+	totalPeers := len(nb.peers) + len(nb.customPeers)
+	nm.Peers = make([]tailcfg.NodeView, 0, totalPeers)
+	for _, p := range nb.peers {
+		nm.Peers = append(nm.Peers, p)
+	}
+	for _, p := range nb.customPeers {
+		nm.Peers = append(nm.Peers, p)
+	}
+
 	slices.SortFunc(nm.Peers, func(a, b tailcfg.NodeView) int {
 		return cmp.Compare(a.ID(), b.ID())
 	})
@@ -433,11 +476,59 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) {
 	} else {
 		nb.derpMapViewPub.Publish(tailcfg.DERPMapView{})
 	}
+	// Publish combined peers (control + custom) to magicsock
+	nb.publishNodeViewsUpdateLocked()
+}
+
+// SetCustomPeers sets externally-injected peers (e.g., custom Mullvad exit nodes)
+// that should be included in peer lookups and WireGuard configuration alongside
+// control-plane peers. Call with nil to clear custom peers.
+func (nb *nodeBackend) SetCustomPeers(peers []tailcfg.NodeView) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+
+	if len(peers) == 0 {
+		nb.customPeers = nil
+	} else {
+		nb.customPeers = make(map[tailcfg.NodeID]tailcfg.NodeView, len(peers))
+		for _, p := range peers {
+			nb.customPeers[p.ID()] = p
+		}
+	}
+
+	// Rebuild address index to include custom peers
+	nb.updateNodeByAddrLocked()
+
+	// Notify magicsock about the updated peer set (combined control + custom peers).
+	// This is critical for WireGuard-only peers like custom Mullvad exit nodes,
+	// as magicsock needs to know about them to handle ParseEndpoint correctly.
+	nb.publishNodeViewsUpdateLocked()
+}
+
+// publishNodeViewsUpdateLocked publishes a NodeViewsUpdate with the combined set
+// of control-plane peers and custom peers. Must be called with nb.mu held.
+func (nb *nodeBackend) publishNodeViewsUpdateLocked() {
+	nv := magicsock.NodeViewsUpdate{}
+	if nb.netMap != nil {
+		nv.SelfNode = nb.netMap.SelfNode
+
+		// Combine control-plane peers with custom peers
+		totalPeers := len(nb.netMap.Peers) + len(nb.customPeers)
+		if totalPeers > 0 {
+			combinedPeers := make([]tailcfg.NodeView, 0, totalPeers)
+			combinedPeers = append(combinedPeers, nb.netMap.Peers...)
+			for _, p := range nb.customPeers {
+				combinedPeers = append(combinedPeers, p)
+			}
+			nv.Peers = combinedPeers
+		}
+	}
+	nb.nodeViewsPub.Publish(nv)
 }
 
 func (nb *nodeBackend) updateNodeByAddrLocked() {
 	nm := nb.netMap
-	if nm == nil {
+	if nm == nil && len(nb.customPeers) == 0 {
 		nb.nodeByAddr = nil
 		return
 	}
@@ -457,10 +548,17 @@ func (nb *nodeBackend) updateNodeByAddrLocked() {
 			}
 		}
 	}
-	if nm.SelfNode.Valid() {
-		addNode(nm.SelfNode)
+	// Add self node and control-plane peers
+	if nm != nil {
+		if nm.SelfNode.Valid() {
+			addNode(nm.SelfNode)
+		}
+		for _, p := range nm.Peers {
+			addNode(p)
+		}
 	}
-	for _, p := range nm.Peers {
+	// Add custom peers (e.g., custom Mullvad exit nodes)
+	for _, p := range nb.customPeers {
 		addNode(p)
 	}
 	// Third pass, actually delete the unwanted items.
@@ -550,7 +648,29 @@ func (nb *nodeBackend) setFilter(f *filter.Filter) {
 func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, versionOS string) *dns.Config {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	return dnsConfigForNetmap(nb.netMap, nb.peers, prefs, selfExpired, nb.logf, versionOS)
+
+	// Check if we should skip exit node DNS for custom Mullvad.
+	// If exit node is custom-mullvad-* but customPeers is empty,
+	// the Mullvad init hasn't completed yet - use fallback DNS instead
+	// of unreachable Mullvad DNS.
+	exitNodeID := prefs.ExitNodeID()
+	skipExitNodeDNS := strings.HasPrefix(string(exitNodeID), "custom-mullvad-") && len(nb.customPeers) == 0
+
+	// Combine control-plane peers with custom peers for DNS config.
+	// This is necessary for WireGuard-only exit nodes (like custom Mullvad)
+	// so that wireguardExitNodeDNSResolvers can find the exit node.
+	allPeers := nb.peers
+	if len(nb.customPeers) > 0 {
+		allPeers = make(map[tailcfg.NodeID]tailcfg.NodeView, len(nb.peers)+len(nb.customPeers))
+		for id, p := range nb.peers {
+			allPeers[id] = p
+		}
+		for id, p := range nb.customPeers {
+			allPeers[id] = p
+		}
+	}
+
+	return dnsConfigForNetmap(nb.netMap, allPeers, prefs, selfExpired, nb.logf, versionOS, skipExitNodeDNS)
 }
 
 func (nb *nodeBackend) exitNodeCanProxyDNS(exitNodeID tailcfg.StableNodeID) (dohURL string, ok bool) {
@@ -559,7 +679,20 @@ func (nb *nodeBackend) exitNodeCanProxyDNS(exitNodeID tailcfg.StableNodeID) (doh
 	}
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	return exitNodeCanProxyDNS(nb.netMap, nb.peers, exitNodeID)
+
+	// Combine control-plane peers with custom peers.
+	allPeers := nb.peers
+	if len(nb.customPeers) > 0 {
+		allPeers = make(map[tailcfg.NodeID]tailcfg.NodeView, len(nb.peers)+len(nb.customPeers))
+		for id, p := range nb.peers {
+			allPeers[id] = p
+		}
+		for id, p := range nb.customPeers {
+			allPeers[id] = p
+		}
+	}
+
+	return exitNodeCanProxyDNS(nb.netMap, allPeers, exitNodeID)
 }
 
 // ready signals that [LocalBackend] has completed the switch to this [nodeBackend]
@@ -657,7 +790,12 @@ func useWithExitNodeRoutes(routes map[string][]*dnstype.Resolver) map[string][]*
 //
 // The versionOS is a Tailscale-style version ("iOS", "macOS") and not
 // a runtime.GOOS.
-func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
+//
+// If skipExitNodeDNS is true, the function will not use the exit node's
+// DNS resolvers. This is used when the exit node is a custom Mullvad node
+// that hasn't been initialized yet - using its DNS would fail because
+// the Mullvad tunnel isn't established.
+func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string, skipExitNodeDNS bool) *dns.Config {
 	if nm == nil {
 		return nil
 	}
@@ -810,7 +948,8 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// to run a DoH DNS proxy, then send all our DNS traffic through it,
 	// unless we find resolvers with UseWithExitNode set, in which case we use that.
 	if buildfeatures.HasUseExitNode {
-		if dohURL, ok := exitNodeCanProxyDNS(nm, peers, prefs.ExitNodeID()); ok {
+		dohURL, canProxy := exitNodeCanProxyDNS(nm, peers, prefs.ExitNodeID())
+		if canProxy {
 			filtered := useWithExitNodeResolvers(nm.DNS.Resolvers)
 			if len(filtered) > 0 {
 				addDefault(filtered)
@@ -830,10 +969,23 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// node resolvers, use those as the default.
 	if len(nm.DNS.Resolvers) > 0 {
 		addDefault(nm.DNS.Resolvers)
-	} else if buildfeatures.HasUseExitNode {
+	} else if buildfeatures.HasUseExitNode && !skipExitNodeDNS {
 		if resolvers, ok := wireguardExitNodeDNSResolvers(nm, peers, prefs.ExitNodeID()); ok {
 			addDefault(resolvers)
 		}
+	} else if skipExitNodeDNS {
+		// Custom Mullvad exit node is not initialized yet. Use public DNS
+		// as a temporary fallback to avoid using stale/invalid DNS from
+		// the base system config (e.g., OrbStack's 0.250.250.200).
+		var fallback []*dnstype.Resolver
+		for _, ip := range publicdns.DoHIPsOfBase("https://dns.google/dns-query") {
+			fallback = append(fallback, &dnstype.Resolver{Addr: ip.String()})
+		}
+		if len(fallback) == 0 {
+			// Hardcode fallback if publicdns returns empty
+			fallback = []*dnstype.Resolver{{Addr: "8.8.8.8"}, {Addr: "8.8.4.4"}}
+		}
+		addDefault(fallback)
 	}
 
 	// Add split DNS routes, with no regard to exit node configuration.

@@ -36,4 +36,10 @@ const (
 	// ArgServerName provides a Warnable with comma delimited list of the hostname of the servers involved in the unhealthy state.
 	// If no nameservers were available to query, this will be an empty string.
 	ArgDNSServers Arg = "dns-servers"
+
+	// ArgDaysRemaining provides a Warnable with the number of days remaining before an account or subscription expires.
+	ArgDaysRemaining Arg = "days-remaining"
+
+	// ArgExpiryDate provides a Warnable with the expiry date of an account or subscription.
+	ArgExpiryDate Arg = "expiry-date"
 )
