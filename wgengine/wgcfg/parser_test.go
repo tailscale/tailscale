@@ -4,15 +4,9 @@
 package wgcfg
 
 import (
-	"bufio"
-	"bytes"
-	"io"
-	"net/netip"
 	"reflect"
 	"runtime"
 	"testing"
-
-	"tailscale.com/types/key"
 )
 
 func noError(t *testing.T, err error) bool {
@@ -56,40 +50,5 @@ func TestParseEndpoint(t *testing.T) {
 	_, _, err = parseEndpoint("[::::::invalid:18981")
 	if err == nil {
 		t.Error("Error was expected")
-	}
-}
-
-func BenchmarkFromUAPI(b *testing.B) {
-	newK := func() (key.NodePublic, key.NodePrivate) {
-		b.Helper()
-		k := key.NewNode()
-		return k.Public(), k
-	}
-	k1, pk1 := newK()
-	ip1 := netip.MustParsePrefix("10.0.0.1/32")
-
-	peer := Peer{
-		PublicKey:  k1,
-		AllowedIPs: []netip.Prefix{ip1},
-	}
-	cfg1 := &Config{
-		PrivateKey: pk1,
-		Peers:      []Peer{peer, peer, peer, peer},
-	}
-
-	buf := new(bytes.Buffer)
-	w := bufio.NewWriter(buf)
-	if err := cfg1.ToUAPI(b.Logf, w, &Config{}); err != nil {
-		b.Fatal(err)
-	}
-	w.Flush()
-	r := bytes.NewReader(buf.Bytes())
-	b.ReportAllocs()
-	for range b.N {
-		r.Seek(0, io.SeekStart)
-		_, err := FromUAPI(r)
-		if err != nil {
-			b.Errorf("failed from UAPI: %v", err)
-		}
 	}
 }

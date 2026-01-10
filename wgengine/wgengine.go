@@ -97,6 +97,8 @@ type Engine interface {
 	// WireGuard status changes.
 	SetStatusCallback(StatusCallback)
 
+	SetPeerByIPLookupFunc(func(netip.Addr) (key.NodePublic, bool))
+
 	// RequestStatus requests a WireGuard status update right
 	// away, sent to the callback registered via SetStatusCallback.
 	RequestStatus()
