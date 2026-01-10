@@ -23,4 +23,7 @@ const (
 	HealthWarnableTestWarnable              = "test-warnable"
 	HealthWarnableApplyDiskConfig           = "apply-disk-config"
 	HealthWarnableWarmingUp                 = "warming-up"
+	HealthWarnableCustomMullvadExpiring     = "custom-mullvad-expiring"
+	HealthWarnableCustomMullvadExpired      = "custom-mullvad-expired"
+	HealthWarnableCustomMullvadAuthFailed   = "custom-mullvad-auth-failed"
 )
