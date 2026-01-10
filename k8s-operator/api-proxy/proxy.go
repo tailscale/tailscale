@@ -434,6 +434,11 @@ func (ap *APIServerProxy) addImpersonationHeadersAsRequired(r *http.Request) {
 	// the caller using the Kubernetes User Impersonation feature:
 	// https://kubernetes.io/docs/reference/access-authn-authz/authentication/#user-impersonation
 
+	// Capture requested groups before stripping headers.
+	// If the client explicitly requested groups and they are all allowed,
+	// we'll use only those groups instead of all allowed groups.
+	requestedGroups := r.Header.Values("Impersonate-Group")
+
 	// Out of paranoia, remove all authentication headers that might
 	// have been set by the client.
 	r.Header.Del("Authorization")
@@ -447,7 +452,7 @@ func (ap *APIServerProxy) addImpersonationHeadersAsRequired(r *http.Request) {
 	}
 
 	// Now add the impersonation headers that we want.
-	if err := addImpersonationHeaders(r, ap.log); err != nil {
+	if err := addImpersonationHeaders(r, ap.log, requestedGroups); err != nil {
 		ap.log.Errorf("failed to add impersonation headers: %v", err)
 	}
 }
@@ -489,7 +494,7 @@ const (
 // addImpersonationHeaders adds the appropriate headers to r to impersonate the
 // caller when proxying to the Kubernetes API. It uses the WhoIsResponse stashed
 // in the context by the apiserverProxy.
-func addImpersonationHeaders(r *http.Request, log *zap.SugaredLogger) error {
+func addImpersonationHeaders(r *http.Request, log *zap.SugaredLogger, requestedGroups []string) error {
 	log = log.With("remote", r.RemoteAddr)
 	who := whoIsKey.Value(r.Context())
 	rules, err := tailcfg.UnmarshalCapJSON[kubetypes.KubernetesCapRule](who.CapMap, tailcfg.PeerCapabilityKubernetes)
@@ -501,19 +506,30 @@ func addImpersonationHeaders(r *http.Request, log *zap.SugaredLogger) error {
 		return fmt.Errorf("failed to unmarshal capability: %v", err)
 	}
 
-	var groupsAdded set.Slice[string]
+	var allowedGroups set.Slice[string]
 	for _, rule := range rules {
 		if rule.Impersonate == nil {
 			continue
 		}
 		for _, group := range rule.Impersonate.Groups {
-			if groupsAdded.Contains(group) {
-				continue
-			}
-			r.Header.Add("Impersonate-Group", group)
-			groupsAdded.Add(group)
-			log.Debugf("adding group impersonation header for user group %s", group)
+			allowedGroups.Add(group)
 		}
+	}
+
+	var groupsAdded set.Slice[string]
+	if len(requestedGroups) > 0 {
+		for _, group := range requestedGroups {
+			if allowedGroups.Contains(group) {
+				groupsAdded.Add(group)
+			}
+		}
+	} else {
+		groupsAdded = allowedGroups
+	}
+
+	for _, group := range groupsAdded.Slice().All() {
+		r.Header.Add("Impersonate-Group", group)
+		log.Debugf("adding group impersonation header for user group %s", group)
 	}
 
 	if !who.Node.IsTagged() {
