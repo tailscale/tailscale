@@ -386,8 +386,6 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		}
 	}()
 
-	var node *tailcfg.DERPNode // nil when using c.url to dial
-	var idealNodeInRegion bool
 	switch {
 	case canWebsockets && useWebsockets():
 		var urlStr string
@@ -425,15 +423,45 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	case c.url != nil:
 		c.logf("%s: connecting to %v", caller, c.url)
 		tcpConn, err = c.dialURL(ctx)
+		return c.connectWithConn(ctx, reg, nil, tcpConn)
 	default:
 		c.logf("%s: connecting to derp-%d (%v)", caller, reg.RegionID, reg.RegionCode)
-		tcpConn, node, err = c.dialRegion(ctx, reg)
-		idealNodeInRegion = err == nil && reg.Nodes[0] == node
+		if len(reg.Nodes) == 0 {
+			return nil, 0, fmt.Errorf("no nodes for %s", c.targetString(reg))
+		}
+		var firstErr error
+		var derpClient *derp.Client
+		for _, n := range reg.Nodes {
+			if n.STUNOnly {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("no non-STUNOnly nodes for %s", c.targetString(reg))
+				}
+				continue
+			}
+			tcpConn, err = c.dialNode(ctx, n)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			derpClient, connGen, err = c.connectWithConn(ctx, reg, n, tcpConn)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				if tcpConn != nil {
+					go tcpConn.Close()
+				}
+				continue
+			}
+			return derpClient, connGen, nil
+		}
+		return nil, 0, firstErr
 	}
-	if err != nil {
-		return nil, 0, err
-	}
+}
 
+func (c *Client) connectWithConn(ctx context.Context, reg *tailcfg.DERPRegion, node *tailcfg.DERPNode, tcpConn net.Conn) (client *derp.Client, connGen int, err error) {
 	// Now that we have a TCP connection, force close it if the
 	// TLS handshake + DERP setup takes too long.
 	done := make(chan struct{})
@@ -502,7 +530,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	}
 	req.Header.Set("Upgrade", "DERP")
 	req.Header.Set("Connection", "Upgrade")
-	if !idealNodeInRegion && reg != nil {
+	if reg != nil && reg.Nodes[0] != node {
 		// This is purely informative for now (2024-07-06) for stats:
 		req.Header.Set(derp.IdealNodeHeader, reg.Nodes[0].Name)
 		// TODO(bradfitz,raggi): start a time.AfterFunc for 30m-1h or so to
