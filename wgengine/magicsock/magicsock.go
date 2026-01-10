@@ -179,9 +179,10 @@ type Conn struct {
 
 	// A publisher for synchronization points to ensure correct ordering of
 	// config changes between magicsock and wireguard.
-	syncPub               *eventbus.Publisher[syncPoint]
-	allocRelayEndpointPub *eventbus.Publisher[UDPRelayAllocReq]
-	portUpdatePub         *eventbus.Publisher[router.PortUpdate]
+	syncPub                  *eventbus.Publisher[syncPoint]
+	allocRelayEndpointPub    *eventbus.Publisher[UDPRelayAllocReq]
+	portUpdatePub            *eventbus.Publisher[router.PortUpdate]
+	tsmpDiscoKeyAvailablePub *eventbus.Publisher[NewDiscoKeyAvailable]
 
 	// pconn4 and pconn6 are the underlying UDP sockets used to
 	// send/receive packets for wireguard and other magicsock
@@ -696,6 +697,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.syncPub = eventbus.Publish[syncPoint](ec)
 	c.allocRelayEndpointPub = eventbus.Publish[UDPRelayAllocReq](ec)
 	c.portUpdatePub = eventbus.Publish[router.PortUpdate](ec)
+	c.tsmpDiscoKeyAvailablePub = eventbus.Publish[NewDiscoKeyAvailable](ec)
 	eventbus.SubscribeFunc(ec, c.onPortMapChanged)
 	eventbus.SubscribeFunc(ec, c.onFilterUpdate)
 	eventbus.SubscribeFunc(ec, c.onNodeViewsUpdate)
@@ -1249,7 +1251,8 @@ func (c *Conn) DiscoPublicKey() key.DiscoPublic {
 
 // RotateDiscoKey generates a new discovery key pair and updates the connection
 // to use it. This invalidates all existing disco sessions and will cause peers
-// to re-establish discovery sessions with the new key.
+// to re-establish discovery sessions with the new key. Addtionally, the
+// lastTSMPDiscoAdvertisement on all endpoints is reset to 0.
 //
 // This is primarily for debugging and testing purposes, a future enhancement
 // should provide a mechanism for seamless rotation by supporting short term use
@@ -1269,6 +1272,9 @@ func (c *Conn) RotateDiscoKey() {
 
 	if connCtx != nil {
 		c.ReSTUN("disco-key-rotation")
+	}
+	for _, endpoint := range c.peerMap.byEpAddr {
+		endpoint.ep.lastTSMPDiscoAdvertisement = 0
 	}
 }
 
@@ -2247,6 +2253,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		if debugDisco() {
 			c.logf("magicsock: disco: failed to open naclbox from %v (wrong rcpt?) via %s", sender, via)
 		}
+
 		metricRecvDiscoBadKey.Add(1)
 		return
 	}
@@ -2653,6 +2660,8 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 		go c.ReSTUN("refresh-for-peering")
 		return
 	}
+
+	c.maybeSendTSMPDiscoAdvert(de)
 
 	eps := make([]netip.AddrPort, 0, len(c.lastEndpoints))
 	for _, ep := range c.lastEndpoints {
@@ -4313,4 +4322,17 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 	c.peerMap.upsertEndpoint(ep, oldDiscoKey)
 	c.logf("magicsock: updated disco key for peer %v to %v", nodeKey.ShortString(), discoKey.ShortString())
 	metricTSMPDiscoKeyAdvertisementApplied.Add(1)
+}
+
+type NewDiscoKeyAvailable struct {
+	EpAddr netip.Addr
+}
+
+func (c *Conn) maybeSendTSMPDiscoAdvert(de *endpoint) {
+	if de.lastTSMPDiscoAdvertisement == 0 {
+		de.lastTSMPDiscoAdvertisement = mono.Now()
+		c.tsmpDiscoKeyAvailablePub.Publish(NewDiscoKeyAvailable{
+			EpAddr: de.nodeAddr,
+		})
+	}
 }
