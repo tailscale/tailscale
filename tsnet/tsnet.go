@@ -1468,8 +1468,8 @@ func (a addr) String() string  { return a.ln.addr }
 // cleanupListener wraps a net.Listener with a function to be run on Close.
 type cleanupListener struct {
 	net.Listener
-	cleanup     func() error
 	cleanupOnce sync.Once
+	cleanup     func() error // nil if unused
 }
 
 func (cl *cleanupListener) Close() error {
@@ -1479,15 +1479,5 @@ func (cl *cleanupListener) Close() error {
 			cleanupErr = cl.cleanup()
 		}
 	})
-	closeErr := cl.Listener.Close()
-	switch {
-	case closeErr != nil && cleanupErr != nil:
-		return fmt.Errorf("%w; also: %w", closeErr, cleanupErr)
-	case closeErr != nil:
-		return closeErr
-	case cleanupErr != nil:
-		return cleanupErr
-	default:
-		return nil
-	}
+	return errors.Join(cl.Listener.Close(), cleanupErr)
 }
