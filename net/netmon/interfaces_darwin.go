@@ -30,6 +30,11 @@ var ifNames struct {
 	m map[int]string // ifindex => name
 }
 
+var _ = func() bool {
+	syncs.RegisterMutex(&ifNames.Mutex, "netmon.ifNames.Mutex")
+	return true
+}()
+
 func init() {
 	interfaceDebugExtras = interfaceDebugExtrasDarwin
 }
