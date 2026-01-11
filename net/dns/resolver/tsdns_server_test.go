@@ -302,9 +302,14 @@ func dnsHandler(answers ...any) dns.HandlerFunc {
 	}
 }
 
-func serveDNS(tb testing.TB, addr string, records ...any) *dns.Server {
+func serveDNS(tb testing.TB, addr string, family string, records ...any) *dns.Server {
 	if len(records)%2 != 0 {
 		panic("must have an even number of record values")
+	}
+	switch family {
+	case "udp", "tcp":
+	default:
+		panic("family must be udp or tcp")
 	}
 	mux := dns.NewServeMux()
 	for i := 0; i < len(records); i += 2 {
@@ -315,7 +320,7 @@ func serveDNS(tb testing.TB, addr string, records ...any) *dns.Server {
 	waitch := make(chan struct{})
 	server := &dns.Server{
 		Addr:              addr,
-		Net:               "udp",
+		Net:               family,
 		Handler:           mux,
 		NotifyStartedFunc: func() { close(waitch) },
 		ReusePort:         true,
