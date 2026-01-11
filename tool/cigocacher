@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+#
+# Run cmd/cigocacher based on the revision pinned in tool/cigocacher.rev
+
+set -euo pipefail
+
+goos() {
+    case "$(uname -s)" in
+        Linux*)
+            echo "linux"
+            ;;
+        Darwin*)
+            echo "darwin"
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            echo "windows"
+            ;;
+        *)
+            echo "unknown"
+            ;;
+    esac
+}
+
+goarch() {
+    local machine="$(uname -m)"
+    case "$machine" in
+        x86_64|amd64)
+            echo "amd64"
+            ;;
+        aarch64|arm64)
+            echo "arm64"
+            ;;
+        armv7l|armv6l)
+            echo "arm"
+            ;;
+        i386|i686)
+            echo "386"
+            ;;
+        *)
+            echo "$machine"
+            ;;
+    esac
+}
+
+if [[ "${CI:-}" == "true" ]]; then
+    set -x
+fi
+
+cachedir="${HOME}/.cache/tailscale-cigocacher"
+
+(
+    if [[ "${CI:-}" == "true" ]]; then
+        set -x
+    fi
+
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    repo_root="${SCRIPT_DIR}/../"
+    cd "$repo_root"
+
+    tarball="${cachedir}.tar.gz"
+
+    want_rev="$(cat ./tool/cigocacher.rev)"
+    got_rev=""
+    if [[ -x "${cachedir}/cigocacher" ]]; then
+        got_rev=$("${cachedir}/cigocacher" --version)
+    fi
+
+    if [[ "$want_rev" != "$got_rev" ]]; then
+        rm -rf "$cachedir" "$tarball"
+        mkdir -p "$cachedir"
+        curl -w "%{size_download} bytes | %{time_total}s | %{speed_download} bytes/sec\n" -fsSL -o "$tarball" \
+            "https://github.com/tailscale/tailscale/releases/download/cmd%2Fcigocacher%2F${want_rev}/cigocacher-$(goos)-$(goarch).tar.gz"
+        (cd "$cachedir" && tar -xf "$tarball")
+        rm -f "$tarball"
+    fi
+)
+
+exec "${cachedir}/cigocacher" "$@"
