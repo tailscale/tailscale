@@ -72,7 +72,7 @@ For the body (the rest of the description):
 
 - blank line after the subject (first) line
 - the text should be wrapped to ~76 characters (to appease git viewing tools, mainly), unless you really need longer lines (e.g. for ASCII art, tables, or long links)
-- there must be a `Fixes` or `Updates` line for all non-cleanup commits linking to a tracking bug. This goes after the body with a blank newline separating the two. [Cleanup commits](#is-it-a-cleanup) can use `Updates #cleanup` instead of an issue.
+- there must be a `Fixes` or `Updates` line for all non-cleanup commits linking to a tracking bug. This goes after the body with a blank newline separating the two. A pull request may be referenced rather than a tracking bug (using the same format, e.g. `Updates #12345`), though a bug is generally preferred. [Cleanup commits](#is-it-a-cleanup) can use `Updates #cleanup` instead of an issue.
 - `Change-Id` lines should ideally be included in commits in the `corp` repo and are more optional in `tailscale/tailscale`. You can configure Git to do this for you by running `./tool/go run misc/install-git-hooks.go` from the root of the corp repo. This was originally a Gerrit thing and we don't use Gerrit, but it lets us tooling track commits as they're cherry-picked between branches. Also, tools like [git-cleanup](https://github.com/bradfitz/gitutil) use it to clean up your old local branches once they're merged upstream.
 - we don't use Markdown in commit messages. (Accidental Markdown like bulleted lists or even headings is fine, but not links)
 - we require `Signed-off-by` lines in public repos (such as `tailscale/tailscale`). Add them using `git commit --signoff` or `git commit -s` for short. You can use them in private repos but do not have to.
