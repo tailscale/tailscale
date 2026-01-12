@@ -43,6 +43,14 @@ type LabelMap struct {
 	shardedIntMu syncs.Mutex
 }
 
+// NewLabelMap creates and publishes a new LabelMap metric with the given
+// metric name and label name.
+func NewLabelMap(metric, label string) *LabelMap {
+	m := &LabelMap{Label: label}
+	expvar.Publish(metric, m)
+	return m
+}
+
 // SetInt64 sets the *Int value stored under the given map key.
 func (m *LabelMap) SetInt64(key string, v int64) {
 	m.Get(key).Set(v)
