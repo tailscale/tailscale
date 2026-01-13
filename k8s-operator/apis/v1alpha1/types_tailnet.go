@@ -18,6 +18,7 @@ var TailnetKind = "Tailnet"
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=tn
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "TailnetReady")].reason`,description="Status of the deployed Tailnet resources."
 
 type Tailnet struct {
 	metav1.TypeMeta   `json:",inline"`
