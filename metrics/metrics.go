@@ -29,6 +29,21 @@ type Set struct {
 	expvar.Map
 }
 
+// NewSet creates and publishes a new Set with the given name.
+func NewSet(name string) *Set {
+	s := &Set{}
+	expvar.Publish(name, s)
+	return s
+}
+
+// NewLabelMap creates a new LabelMap metric with the given
+// metric name and label name, and adds it to the Set.
+func (s *Set) NewLabelMap(metric, label string) *LabelMap {
+	m := &LabelMap{Label: label}
+	s.Set(metric, m)
+	return m
+}
+
 // LabelMap is a string-to-Var map variable that satisfies the
 // expvar.Var interface.
 //
