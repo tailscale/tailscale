@@ -52,6 +52,7 @@ import (
 	"tailscale.com/net/proxymux"
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/types/bools"
 	"tailscale.com/types/logger"
@@ -165,8 +166,6 @@ type Server struct {
 	// document. Note that advertising a tag on the client doesn't guarantee
 	// that the control server will allow the node to adopt that tag.
 	AdvertiseTags []string
-
-	getCertForTesting func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 
 	initOnce             sync.Once
 	initErr              error
@@ -1130,9 +1129,6 @@ func (s *Server) RegisterFallbackTCPHandler(cb FallbackTCPHandler) func() {
 // It calls GetCertificate on the localClient, passing in the ClientHelloInfo.
 // For testing, if s.getCertForTesting is set, it will call that instead.
 func (s *Server) getCert(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	if s.getCertForTesting != nil {
-		return s.getCertForTesting(hi)
-	}
 	lc, err := s.LocalClient()
 	if err != nil {
 		return nil, err
@@ -1281,6 +1277,259 @@ func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.L
 	}
 	ln = &cleanupListener{Listener: ln, cleanup: cleanupOnClose}
 	return tls.NewListener(ln, tlsConfig), nil
+}
+
+// ServiceMode defines how a Service is run. Currently supported modes are:
+//   - [ServiceModeTCP]
+//   - [ServiceModeHTTP]
+//
+// For more information, see [Server.ListenService].
+type ServiceMode interface {
+	// network is the network this Service will advertise on. Per Go convention,
+	// this should be lowercase, e.g. 'tcp'.
+	network() string
+}
+
+// serviceModeWithPort is a convenience type to extract the port from
+// ServiceMode types which have one.
+type serviceModeWithPort interface {
+	ServiceMode
+	port() uint16
+}
+
+// ServiceModeTCP is used to configure a TCP Service via [Server.ListenService].
+type ServiceModeTCP struct {
+	// Port is the TCP port to advertise. If this Service needs to advertise
+	// multiple ports, call ListenService multiple times.
+	Port uint16
+
+	// TerminateTLS means that TLS connections will be terminated before being
+	// forwarded to the listener. In this case, the only server name indicator
+	// (SNI) permitted is the Service's fully-qualified domain name.
+	TerminateTLS bool
+
+	// PROXYProtocolVersion indicates whether to send a PROXY protocol header
+	// before forwarding the connection to the listener and which version of the
+	// protocol to use.
+	//
+	// For more information, see
+	// https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt
+	PROXYProtocolVersion int
+}
+
+func (ServiceModeTCP) network() string { return "tcp" }
+
+func (m ServiceModeTCP) port() uint16 { return m.Port }
+
+// ServiceModeHTTP is used to configure an HTTP Service via
+// [Server.ListenService].
+type ServiceModeHTTP struct {
+	// Port is the TCP port to advertise. If this Service needs to advertise
+	// multiple ports, call ListenService multiple times.
+	Port uint16
+
+	// HTTPS, if true, means that the listener should handle connections as
+	// HTTPS connections. In this case, the only server name indicator (SNI)
+	// permitted is the Service's fully-qualified domain name.
+	HTTPS bool
+
+	// AcceptAppCaps defines the app capabilities to forward to the server. The
+	// keys in this map are the mount points for each set of capabilities.
+	//
+	// By example,
+	//
+	//  AcceptAppCaps: map[string][]string{
+	// 	  "/":    {"example.com/cap/all-paths"},
+	// 	  "/foo": {"example.com/cap/all-paths", "example.com/cap/foo"},
+	//  }
+	//
+	// would forward example.com/cap/all-paths to all paths on the server and
+	// example.com/cap/foo only to paths beginning with /foo.
+	//
+	// For more information on app capabilities, see
+	// https://tailscale.com/kb/1537/grants-app-capabilities
+	AcceptAppCaps map[string][]string
+
+	// PROXYProtocolVersion indicates whether to send a PROXY protocol header
+	// before forwarding the connection to the listener and which version of the
+	// protocol to use.
+	//
+	// For more information, see
+	// https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt
+	PROXYProtocol int
+}
+
+func (ServiceModeHTTP) network() string { return "tcp" }
+
+func (m ServiceModeHTTP) port() uint16 { return m.Port }
+
+func (m ServiceModeHTTP) capsMap() map[string][]tailcfg.PeerCapability {
+	capsMap := map[string][]tailcfg.PeerCapability{}
+	for path, capNames := range m.AcceptAppCaps {
+		caps := make([]tailcfg.PeerCapability, 0, len(capNames))
+		for _, c := range capNames {
+			caps = append(caps, tailcfg.PeerCapability(c))
+		}
+		capsMap[path] = caps
+	}
+	return capsMap
+}
+
+// A ServiceListener is a network listener for a Tailscale Service. For more
+// information about Services, see
+// https://tailscale.com/kb/1552/tailscale-services
+type ServiceListener struct {
+	net.Listener
+	addr addr
+
+	// FQDN is the fully-qualifed domain name of this Service.
+	FQDN string
+}
+
+// Addr returns the listener's network address. This will be the Service's
+// fully-qualified domain name (FQDN) and the port.
+//
+// A hostname is not truly a network address, but Services listen on multiple
+// addresses (the IPv4 and IPv6 virtual IPs).
+func (sl ServiceListener) Addr() net.Addr {
+	return sl.addr
+}
+
+// ErrUntaggedServiceHost is returned by ListenService when run on a node
+// without any ACL tags. A node must use a tag-based identity to act as a
+// Service host. For more information, see:
+// https://tailscale.com/kb/1552/tailscale-services#prerequisites
+var ErrUntaggedServiceHost = errors.New("service hosts must be tagged nodes")
+
+// ListenService creates a network listener for a Tailscale Service. This will
+// advertise this node as hosting the Service. Note that:
+//   - Approval must still be granted by an admin or by ACL auto-approval rules.
+//   - Service hosts must be tagged nodes.
+//   - A valid Service host must advertise all ports defined for the Service.
+//
+// To advertise a Service with multiple ports, run ListenService multiple times.
+// For more information about Services, see
+// https://tailscale.com/kb/1552/tailscale-services
+func (s *Server) ListenService(name string, mode ServiceMode) (*ServiceListener, error) {
+	if err := tailcfg.ServiceName(name).Validate(); err != nil {
+		return nil, err
+	}
+	if mode == nil {
+		return nil, errors.New("mode may not be nil")
+	}
+	svcName := name
+
+	// TODO(hwh33,tailscale/corp#35859): support TUN mode
+
+	ctx := context.Background()
+	_, err := s.Up(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	st := s.lb.StatusWithoutPeers()
+	if st.Self.Tags == nil || st.Self.Tags.Len() == 0 {
+		return nil, ErrUntaggedServiceHost
+	}
+
+	advertisedServices := s.lb.Prefs().AdvertiseServices().AsSlice()
+	if !slices.Contains(advertisedServices, svcName) {
+		// TODO(hwh33,tailscale/corp#35860): clean these prefs up when (a) we
+		// exit early due to error or (b) when the returned listener is closed.
+		_, err = s.lb.EditPrefs(&ipn.MaskedPrefs{
+			AdvertiseServicesSet: true,
+			Prefs: ipn.Prefs{
+				AdvertiseServices: append(advertisedServices, svcName),
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("updating advertised Services: %w", err)
+		}
+	}
+
+	srvConfig := new(ipn.ServeConfig)
+	sc, srvConfigETag, err := s.lb.ServeConfigETag()
+	if err != nil {
+		return nil, fmt.Errorf("fetching current serve config: %w", err)
+	}
+	if sc.Valid() {
+		srvConfig = sc.AsStruct()
+	}
+
+	fqdn := tailcfg.ServiceName(svcName).WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
+
+	// svcAddr is used to implement Addr() on the returned listener.
+	svcAddr := addr{
+		network: mode.network(),
+		// A hostname is not a network address, but Services listen on
+		// multiple addresses (the IPv4 and IPv6 virtual IPs), and there's
+		// no clear winner here between the two. Therefore prefer the FQDN.
+		//
+		// In the case of TCP or HTTP Services, the port will be added below.
+		addr: fqdn,
+	}
+	if m, ok := mode.(serviceModeWithPort); ok {
+		if m.port() == 0 {
+			return nil, errors.New("must specify a port to advertise")
+		}
+		svcAddr.addr += ":" + strconv.Itoa(int(m.port()))
+	}
+
+	// Start listening on a local TCP socket.
+	ln, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		return nil, fmt.Errorf("starting local listener: %w", err)
+	}
+
+	switch m := mode.(type) {
+	case ServiceModeTCP:
+		// Forward all connections from service-hostname:port to our socket.
+		srvConfig.SetTCPForwardingForService(
+			m.Port, ln.Addr().String(), m.TerminateTLS,
+			tailcfg.ServiceName(svcName), m.PROXYProtocolVersion, st.CurrentTailnet.MagicDNSSuffix)
+	case ServiceModeHTTP:
+		// For HTTP Services, proxy all connections to our socket.
+		mds := st.CurrentTailnet.MagicDNSSuffix
+		haveRootHandler := false
+		// We need to add a separate proxy for each mount point in the caps map.
+		for path, caps := range m.capsMap() {
+			if !strings.HasPrefix(path, "/") {
+				path = "/" + path
+			}
+			h := ipn.HTTPHandler{
+				AcceptAppCaps: caps,
+				Proxy:         ln.Addr().String(),
+			}
+			if path == "/" {
+				haveRootHandler = true
+			} else {
+				h.Proxy += path
+			}
+			srvConfig.SetWebHandler(&h, svcName, m.Port, path, m.HTTPS, mds)
+		}
+		// We always need a root handler.
+		if !haveRootHandler {
+			h := ipn.HTTPHandler{Proxy: ln.Addr().String()}
+			srvConfig.SetWebHandler(&h, svcName, m.Port, "/", m.HTTPS, mds)
+		}
+	default:
+		ln.Close()
+		return nil, fmt.Errorf("unknown ServiceMode type %T", m)
+	}
+
+	if err := s.lb.SetServeConfig(srvConfig, srvConfigETag); err != nil {
+		ln.Close()
+		return nil, err
+	}
+
+	// TODO(hwh33,tailscale/corp#35860): clean up state (advertising prefs,
+	// serve config changes) when the returned listener is closed.
+
+	return &ServiceListener{
+		Listener: ln,
+		FQDN:     fqdn,
+		addr:     svcAddr,
+	}, nil
 }
 
 type listenOn string
@@ -1444,7 +1693,12 @@ func (ln *listener) Accept() (net.Conn, error) {
 	}
 }
 
-func (ln *listener) Addr() net.Addr { return addr{ln} }
+func (ln *listener) Addr() net.Addr {
+	return addr{
+		network: ln.keys[0].network,
+		addr:    ln.addr,
+	}
+}
 
 func (ln *listener) Close() error {
 	ln.s.mu.Lock()
@@ -1484,10 +1738,12 @@ func (ln *listener) handle(c net.Conn) {
 // Server returns the tsnet Server associated with the listener.
 func (ln *listener) Server() *Server { return ln.s }
 
-type addr struct{ ln *listener }
+type addr struct {
+	network, addr string
+}
 
-func (a addr) Network() string { return a.ln.keys[0].network }
-func (a addr) String() string  { return a.ln.addr }
+func (a addr) Network() string { return a.network }
+func (a addr) String() string  { return a.addr }
 
 // cleanupListener wraps a net.Listener with a function to be run on Close.
 type cleanupListener struct {
