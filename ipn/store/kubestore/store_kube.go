@@ -110,8 +110,12 @@ func newWithClient(logf logger.Logf, c kubeclient.Client, secretName string) (*S
 	if err := s.loadState(); err != nil && err != ipn.ErrStateNotExist {
 		return nil, fmt.Errorf("error loading state from kube Secret: %w", err)
 	}
-	// If we are in cert share mode, pre-load existing shared certs.
-	if s.certShareMode == "rw" || s.certShareMode == "ro" {
+	// If we are in read-only cert share mode, pre-load existing shared certs.
+	// Write replicas never load certs in-memory to avoid a situation where,
+	// after Ingress recreation (and the associated cert Secret recreation), new
+	// TLS certs don't get issued because the write replica still has certs
+	// in-memory. Instead, write replicas fetch certs from Secret on each request.
+	if s.certShareMode == "ro" {
 		sel := s.certSecretSelector()
 		if err := s.loadCerts(context.Background(), sel); err != nil {
 			// We will attempt to again retrieve the certs from Secrets when a request for an HTTPS endpoint
@@ -176,7 +180,7 @@ func (s *Store) WriteTLSCertAndKey(domain string, cert, key []byte) (err error) 
 	// written to memory to avoid out of sync memory state after
 	// Ingress resources have been recreated.  This means that TLS
 	// certs for write replicas are retrieved from the Secret on
-	// each HTTPS request.  This is a temporary solution till we
+	// each HTTPS request. This is a temporary solution till we
 	// implement a Secret watch.
 	if s.certShareMode != "rw" {
 		s.memory.WriteState(ipn.StateKey(domain+".crt"), cert)

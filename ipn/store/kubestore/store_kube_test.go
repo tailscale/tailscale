@@ -688,7 +688,7 @@ func TestNewWithClient(t *testing.T) {
 			},
 		},
 		{
-			name:     "load_select_certs_in_read_write_mode",
+			name:     "do_not_load_certs_in_read_write_mode",
 			certMode: "rw",
 			stateSecretContents: map[string][]byte{
 				"foo": []byte("bar"),
@@ -704,11 +704,7 @@ func TestNewWithClient(t *testing.T) {
 				}, "4"),
 			},
 			wantMemoryStoreContents: map[ipn.StateKey][]byte{
-				"foo":                        []byte("bar"),
-				"app1.tailnetxyz.ts.net.crt": []byte(testCert + "1"),
-				"app1.tailnetxyz.ts.net.key": []byte(testKey + "1"),
-				"app2.tailnetxyz.ts.net.crt": []byte(testCert + "2"),
-				"app2.tailnetxyz.ts.net.key": []byte(testKey + "2"),
+				"foo": []byte("bar"),
 			},
 		},
 		{
