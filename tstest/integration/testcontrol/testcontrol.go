@@ -110,6 +110,16 @@ type Server struct {
 	// nodeCapMaps overrides the capability map sent down to a client.
 	nodeCapMaps map[key.NodePublic]tailcfg.NodeCapMap
 
+	// globalAppCaps configures global app capabilities, equivalent to:
+	//	"grants": [
+	//	   {
+	//	     "src": ["*"],
+	//	     "dst": ["*"],
+	//	     "app": <contents of the input map>
+	//	   }
+	//	]
+	globalAppCaps tailcfg.PeerCapMap
+
 	// suppressAutoMapResponses is the set of nodes that should not be sent
 	// automatic map responses from serveMap. (They should only get manually sent ones)
 	suppressAutoMapResponses set.Set[key.NodePublic]
@@ -287,6 +297,43 @@ func (s *Server) addDebugMessage(nodeKeyDst key.NodePublic, msg any) bool {
 	nodeID := node.ID
 	oldUpdatesCh := s.updates[nodeID]
 	return sendUpdate(oldUpdatesCh, updateDebugInjection)
+}
+
+// ForceNetmapUpdate waits for the node to get stuck in a map poll and then
+// sends the current netmap (which may result in a redundant netmap). The
+// intended use case is ensuring state changes propagate before running tests.
+//
+// This should only be called for nodes connected as streaming clients. Calling
+// this with a non-streaming node will result in non-deterministic behavior.
+//
+// This function cannot guarantee that the node has processed the issued update,
+// so tests should confirm processing by querying the node. By example:
+//
+//	if err := s.ForceNetmapUpdate(node.Key()); err != nil {
+//	// handle error
+//	}
+//	for !updatesPresent(node.NetMap()) {
+//	time.Sleep(10 * time.Millisecond)
+//	}
+func (s *Server) ForceNetmapUpdate(ctx context.Context, nodeKey key.NodePublic) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if err := s.AwaitNodeInMapRequest(ctx, nodeKey); err != nil {
+			return fmt.Errorf("waiting for node to poll: %w", err)
+		}
+		mr, err := s.MapResponse(&tailcfg.MapRequest{NodeKey: nodeKey})
+		if err != nil {
+			return fmt.Errorf("generating map response: %w", err)
+		}
+		if s.addDebugMessage(nodeKey, mr) {
+			return nil
+		}
+		// If we failed to send the map response, loop around and try again.
+	}
 }
 
 // Mark the Node key of every node as expired
@@ -529,6 +576,31 @@ func (s *Server) SetNodeCapMap(nodeKey key.NodePublic, capMap tailcfg.NodeCapMap
 	defer s.mu.Unlock()
 	mak.Set(&s.nodeCapMaps, nodeKey, capMap)
 	s.updateLocked("SetNodeCapMap", s.nodeIDsLocked(0))
+}
+
+// SetGlobalAppCaps configures global app capabilities. This is equivalent to
+//
+//	"grants": [
+//	   {
+//	     "src": ["*"],
+//	     "dst": ["*"],
+//	     "app": <contents of the input map>
+//	   }
+//	]
+func (s *Server) SetGlobalAppCaps(appCaps tailcfg.PeerCapMap) {
+	s.mu.Lock()
+	s.globalAppCaps = appCaps
+	s.mu.Unlock()
+}
+
+// AddDNSRecords adds records to the server's DNS config.
+func (s *Server) AddDNSRecords(records ...tailcfg.DNSRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.DNSConfig == nil {
+		s.DNSConfig = new(tailcfg.DNSConfig)
+	}
+	s.DNSConfig.ExtraRecords = append(s.DNSConfig.ExtraRecords, records...)
 }
 
 // nodeIDsLocked returns the node IDs of all nodes in the server, except
@@ -837,6 +909,9 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 			Cap:               req.Version,
 			CapMap:            capMap,
 			Capabilities:      slices.Collect(maps.Keys(capMap)),
+		}
+		if s.MagicDNSDomain != "" {
+			node.Name = node.Name + "." + s.MagicDNSDomain + "."
 		}
 		s.nodes[nk] = node
 	}
@@ -1261,9 +1336,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	dns := s.DNSConfig
 	if dns != nil && s.MagicDNSDomain != "" {
 		dns = dns.Clone()
-		dns.CertDomains = []string{
-			node.Hostinfo.Hostname() + "." + s.MagicDNSDomain,
-		}
+		dns.CertDomains = append(dns.CertDomains, node.Hostinfo.Hostname()+"."+s.MagicDNSDomain)
 	}
 
 	res = &tailcfg.MapResponse{
@@ -1279,6 +1352,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	s.mu.Lock()
 	nodeMasqs := s.masquerades[node.Key]
 	jailed := maps.Clone(s.peerIsJailed[node.Key])
+	globalAppCaps := s.globalAppCaps
 	s.mu.Unlock()
 	for _, p := range s.AllNodes() {
 		if p.StableID == node.StableID {
@@ -1328,6 +1402,18 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	res.Node.Addresses = []netip.Prefix{
 		v4Prefix,
 		v6Prefix,
+	}
+
+	if globalAppCaps != nil {
+		res.PacketFilter = append(res.PacketFilter, tailcfg.FilterRule{
+			SrcIPs: []string{"*"},
+			CapGrant: []tailcfg.CapGrant{
+				{
+					Dsts:   []netip.Prefix{tsaddr.AllIPv4(), tsaddr.AllIPv6()},
+					CapMap: globalAppCaps,
+				},
+			},
+		})
 	}
 
 	// If the server is tracking TKA state, and there's a single TKA head,
