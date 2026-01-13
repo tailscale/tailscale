@@ -6,8 +6,6 @@
 package localapi
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,14 +29,16 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "serve config denied", http.StatusForbidden)
 			return
 		}
-		config := h.b.ServeConfig()
+		config, etag, err := h.b.ServeConfigETag()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		bts, err := json.Marshal(config)
 		if err != nil {
 			http.Error(w, "error encoding config: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		sum := sha256.Sum256(bts)
-		etag := hex.EncodeToString(sum[:])
 		w.Header().Set("Etag", etag)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(bts)
