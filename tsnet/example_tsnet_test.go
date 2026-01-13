@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -199,4 +201,57 @@ func ExampleServer_ListenFunnel_funnelOnly() {
 	log.Fatal(http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "Hi there! Welcome to the tailnet!")
 	})))
+}
+
+// ExampleServer_ListenService demonstrates how to advertise an HTTPS Service.
+func ExampleServer_ListenService() {
+	s := &tsnet.Server{
+		Hostname: "tsnet-services-demo",
+	}
+	defer s.Close()
+
+	ln, err := s.ListenService("svc:my-service", tsnet.ServiceModeHTTP{
+		HTTPS: true,
+		Port:  443,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer ln.Close()
+
+	log.Printf("Listening on https://%v\n", ln.FQDN)
+	log.Fatal(http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "<html><body><h1>Hello, tailnet!</h1>")
+	})))
+}
+
+// ExampleServer_ListenService_reverseProxy demonstrates how to advertise a
+// Service targeting a reverse proxy. This is useful when the backing server is
+// external to the tsnet application.
+func ExampleServer_ListenService_reverseProxy() {
+	// targetAddress represents the address of the backing server.
+	const targetAddress = "1.2.3.4:80"
+
+	// We will use a reverse proxy to direct traffic to the backing server.
+	reverseProxy := httputil.NewSingleHostReverseProxy(&url.URL{
+		Scheme: "http",
+		Host:   targetAddress,
+	})
+
+	s := &tsnet.Server{
+		Hostname: "tsnet-services-demo",
+	}
+	defer s.Close()
+
+	ln, err := s.ListenService("svc:my-service", tsnet.ServiceModeHTTP{
+		HTTPS: true,
+		Port:  443,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer ln.Close()
+
+	log.Printf("Listening on https://%v\n", ln.FQDN)
+	log.Fatal(http.Serve(ln, reverseProxy))
 }
