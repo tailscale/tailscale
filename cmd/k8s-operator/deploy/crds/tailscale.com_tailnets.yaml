@@ -19,6 +19,10 @@ spec:
         - jsonPath: .metadata.creationTimestamp
           name: Age
           type: date
+        - description: Status of the deployed Tailnet resources.
+          jsonPath: .status.conditions[?(@.type == "TailnetReady")].reason
+          name: Status
+          type: string
       name: v1alpha1
       schema:
         openAPIV3Schema:
