@@ -8,7 +8,6 @@ package stunserver
 import (
 	"context"
 	"errors"
-	"expvar"
 	"io"
 	"log"
 	"net"
@@ -20,9 +19,9 @@ import (
 )
 
 var (
-	stats           = new(metrics.Set)
-	stunDisposition = &metrics.LabelMap{Label: "disposition"}
-	stunAddrFamily  = &metrics.LabelMap{Label: "family"}
+	stats           = metrics.NewSet("stun")
+	stunDisposition = stats.NewLabelMap("counter_requests", "disposition")
+	stunAddrFamily  = stats.NewLabelMap("counter_addrfamily", "family")
 	stunReadError   = stunDisposition.Get("read_error")
 	stunNotSTUN     = stunDisposition.Get("not_stun")
 	stunWriteError  = stunDisposition.Get("write_error")
@@ -31,12 +30,6 @@ var (
 	stunIPv4 = stunAddrFamily.Get("ipv4")
 	stunIPv6 = stunAddrFamily.Get("ipv6")
 )
-
-func init() {
-	stats.Set("counter_requests", stunDisposition)
-	stats.Set("counter_addrfamily", stunAddrFamily)
-	expvar.Publish("stun", stats)
-}
 
 type STUNServer struct {
 	ctx context.Context // ctx signals service shutdown
