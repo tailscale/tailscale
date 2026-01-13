@@ -597,6 +597,7 @@ type wholeFileFS interface {
 	ReadFile(name string) ([]byte, error)
 	Remove(name string) error
 	Rename(oldName, newName string) error
+	Readlink(name string) (string, error)
 	Stat(name string) (isRegular bool, err error)
 	Truncate(name string) error
 	WriteFile(name string, contents []byte, perm os.FileMode) error
@@ -619,6 +620,10 @@ func (fs directFS) Stat(name string) (isRegular bool, err error) {
 		return false, err
 	}
 	return fi.Mode().IsRegular(), nil
+}
+
+func (fs directFS) Readlink(name string) (string, error) {
+	return os.Readlink(fs.path(name))
 }
 
 func (fs directFS) Chmod(name string, mode os.FileMode) error {
