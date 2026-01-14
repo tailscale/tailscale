@@ -23,8 +23,23 @@ if [ -z "${URL:-}" ]; then
     exit 0
 fi
 
-BIN_PATH="${RUNNER_TEMP:-/tmp}/cigocacher$(go env GOEXE)"
-go build -o "${BIN_PATH}" ./cmd/cigocacher
+GOPATH=$(command -v go || true)
+if [ -z "${GOPATH}" ]; then
+  if [ ! -f "tool/go" ]; then
+    echo "Go not available, unable to proceed"
+    exit 1
+  fi
+  GOPATH="./tool/go"
+fi
+
+BIN_PATH="${RUNNER_TEMP:-/tmp}/cigocacher$(${GOPATH} env GOEXE)"
+if [ -d "cmd/cigocacher" ]; then
+  echo "cmd/cigocacher found locally, building from local source"
+  "${GOPATH}" build -o "${BIN_PATH}" ./cmd/cigocacher
+else
+  echo "cmd/cigocacher not found locally, fetching from tailscale.com/cmd/cigocacher"
+  "${GOPATH}" build -o "${BIN_PATH}" tailscale.com/cmd/cigocacher
+fi
 
 CIGOCACHER_TOKEN="$("${BIN_PATH}" --auth --cigocached-url "${URL}" --cigocached-host "${HOST}" )"
 if [ -z "${CIGOCACHER_TOKEN:-}" ]; then
