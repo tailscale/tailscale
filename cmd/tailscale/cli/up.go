@@ -24,6 +24,7 @@ import (
 	shellquote "github.com/kballard/go-shellquote"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/feature/buildfeatures"
+	_ "tailscale.com/feature/condregister/awsparamstore"
 	_ "tailscale.com/feature/condregister/identityfederation"
 	_ "tailscale.com/feature/condregister/oauthkey"
 	"tailscale.com/health/healthmsg"
@@ -220,16 +221,39 @@ func resolveValueFromFile(v string) (string, error) {
 	return v, nil
 }
 
-func (a upArgsT) getAuthKey() (string, error) {
-	return resolveValueFromFile(a.authKeyOrFile)
+// resolveValueFromParameterStore resolves a value from AWS Parameter Store if
+// the value looks like an SSM ARN. If the hook is not available or the value
+// is not an SSM ARN, it returns the value unchanged.
+func resolveValueFromParameterStore(ctx context.Context, v string) (string, error) {
+	if f, ok := tailscale.HookResolveValueFromParameterStore.GetOk(); ok {
+		return f(ctx, v)
+	}
+	return v, nil
 }
 
-func (a upArgsT) getClientSecret() (string, error) {
-	return resolveValueFromFile(a.clientSecretOrFile)
+// resolveValue will take the given value (e.g. as passed to --auth-key), and
+// depending on the prefix, resolve the value from either a file or AWS
+// Parameter Store. Values with an unknown prefix are returned as-is.
+func resolveValue(ctx context.Context, v string) (string, error) {
+	switch {
+	case strings.HasPrefix(v, "file:"):
+		return resolveValueFromFile(v)
+	case strings.HasPrefix(v, tailscale.ResolvePrefixAWSParameterStore):
+		return resolveValueFromParameterStore(ctx, v)
+	}
+	return v, nil
 }
 
-func (a upArgsT) getIDToken() (string, error) {
-	return resolveValueFromFile(a.idTokenOrFile)
+func (a upArgsT) getAuthKey(ctx context.Context) (string, error) {
+	return resolveValue(ctx, a.authKeyOrFile)
+}
+
+func (a upArgsT) getClientSecret(ctx context.Context) (string, error) {
+	return resolveValue(ctx, a.clientSecretOrFile)
+}
+
+func (a upArgsT) getIDToken(ctx context.Context) (string, error) {
+	return resolveValue(ctx, a.idTokenOrFile)
 }
 
 var upArgsGlobal upArgsT
@@ -602,7 +626,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 			return err
 		}
 
-		authKey, err := upArgs.getAuthKey()
+		authKey, err := upArgs.getAuthKey(ctx)
 		if err != nil {
 			return err
 		}
@@ -611,7 +635,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		if f, ok := tailscale.HookResolveAuthKey.GetOk(); ok {
 			clientSecret := authKey // the authkey argument accepts client secrets, if both arguments are provided authkey has precedence
 			if clientSecret == "" {
-				clientSecret, err = upArgs.getClientSecret()
+				clientSecret, err = upArgs.getClientSecret(ctx)
 				if err != nil {
 					return err
 				}
@@ -625,7 +649,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		// Try to resolve the auth key via workload identity federation if that functionality
 		// is available and no auth key is yet determined.
 		if f, ok := tailscale.HookResolveAuthKeyViaWIF.GetOk(); ok && authKey == "" {
-			idToken, err := upArgs.getIDToken()
+			idToken, err := upArgs.getIDToken(ctx)
 			if err != nil {
 				return err
 			}
