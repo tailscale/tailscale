@@ -129,6 +129,9 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 	if cfg.IDToken != "" {
 		args = append(args, "--id-token="+cfg.IDToken)
 	}
+	if cfg.Audience != "" {
+		args = append(args, "--audience="+cfg.Audience)
+	}
 	// --advertise-routes can be passed an empty string to configure a
 	// device (that might have previously advertised subnet routes) to not
 	// advertise any routes. Respect an empty string passed by a user and
