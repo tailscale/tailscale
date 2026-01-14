@@ -811,7 +811,7 @@ func (s *Server) resolveAuthKey() (string, error) {
 		if clientID == "" && idToken != "" {
 			return "", fmt.Errorf("ID token for workload identity federation found, but client ID is empty")
 		}
-		authKey, err = resolveViaWIF(s.shutdownCtx, s.ControlURL, clientID, idToken, s.AdvertiseTags)
+		authKey, err = resolveViaWIF(s.shutdownCtx, s.ControlURL, clientID, idToken, "", s.AdvertiseTags)
 		if err != nil {
 			return "", err
 		}
