@@ -31,4 +31,5 @@ runs:
         HOST: ${{ inputs.cigocached-host }}
         CACHE_DIR: ${{ inputs.cache-dir }}
       working-directory: ${{ inputs.checkout-path }}
-      run: .github/actions/go-cache/action.sh
+      # https://github.com/orgs/community/discussions/25910
+      run: $GITHUB_ACTION_PATH/action.sh
