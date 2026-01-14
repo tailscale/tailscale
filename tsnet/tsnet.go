@@ -139,6 +139,14 @@ type Server struct {
 	// field is not used.
 	IDToken string
 
+	// Audience, if non-empty, is the audience to use when requesting
+	// an ID token from a well-known identity provider to exchange
+	// with the control server for workload identity federation. It
+	// will be preferred over the TS_AUDIENCE environment variable. If
+	// the node is already created (from state previously stored in Store),
+	// then this field is not used.
+	Audience string
+
 	// ControlURL optionally specifies the coordination server URL.
 	// If empty, the Tailscale default is used.
 	ControlURL string
@@ -567,6 +575,13 @@ func (s *Server) getIDToken() string {
 	return os.Getenv("TS_ID_TOKEN")
 }
 
+func (s *Server) getAudience() string {
+	if v := s.Audience; v != "" {
+		return v
+	}
+	return os.Getenv("TS_AUDIENCE")
+}
+
 func (s *Server) start() (reterr error) {
 	var closePool closeOnErrorPool
 	defer closePool.closeAllIfError(&reterr)
@@ -805,13 +820,22 @@ func (s *Server) resolveAuthKey() (string, error) {
 	if wifOk && authKey == "" {
 		clientID := s.getClientID()
 		idToken := s.getIDToken()
-		if clientID != "" && idToken == "" {
-			return "", fmt.Errorf("client ID for workload identity federation found, but ID token is empty")
+		audience := s.getAudience()
+		if clientID != "" && idToken == "" && audience == "" {
+			return "", fmt.Errorf("client ID for workload identity federation found, but ID token and audience are empty")
 		}
-		if clientID == "" && idToken != "" {
-			return "", fmt.Errorf("ID token for workload identity federation found, but client ID is empty")
+		if idToken != "" && audience != "" {
+			return "", fmt.Errorf("only one of ID token and audience should be for workload identity federation")
 		}
-		authKey, err = resolveViaWIF(s.shutdownCtx, s.ControlURL, clientID, idToken, "", s.AdvertiseTags)
+		if clientID == "" {
+			if idToken != "" {
+				return "", fmt.Errorf("ID token for workload identity federation found, but client ID is empty")
+			}
+			if audience != "" {
+				return "", fmt.Errorf("audience for workload identity federation found, but client ID is empty")
+			}
+		}
+		authKey, err = resolveViaWIF(s.shutdownCtx, s.ControlURL, clientID, idToken, audience, s.AdvertiseTags)
 		if err != nil {
 			return "", err
 		}
