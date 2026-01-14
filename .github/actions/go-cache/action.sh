@@ -32,7 +32,7 @@ if [ -z "${GOPATH}" ]; then
   GOPATH="./tool/go"
 fi
 
-BIN_PATH="${RUNNER_TEMP:-/tmp}/cigocacher$(${GOPATH} env GOEXE)"
+BIN_PATH="/tmp/cigocacher$(${GOPATH} env GOEXE)"
 if [ -d "cmd/cigocacher" ]; then
   echo "cmd/cigocacher found locally, building from local source"
   "${GOPATH}" build -o "${BIN_PATH}" ./cmd/cigocacher
