@@ -1503,6 +1503,7 @@ func TestResolveAuthKey(t *testing.T) {
 		clientSecret    string
 		clientID        string
 		idToken         string
+		audience        string
 		oauthAvailable  bool
 		wifAvailable    bool
 		resolveViaOAuth func(ctx context.Context, clientSecret string, tags []string) (string, error)
@@ -1551,6 +1552,23 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "",
 		},
 		{
+			name:         "successful resolution via federated audience",
+			clientID:     "client-id-123",
+			audience:     "api.tailscale.com",
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+				if clientID != "client-id-123" {
+					return "", fmt.Errorf("unexpected client ID: %s", clientID)
+				}
+				if audience != "api.tailscale.com" {
+					return "", fmt.Errorf("unexpected ID token: %s", idToken)
+				}
+				return "tskey-auth-via-wif", nil
+			},
+			wantAuthKey:     "tskey-auth-via-wif",
+			wantErrContains: "",
+		},
+		{
 			name:         "failing resolution via federated ID token",
 			clientID:     "client-id-123",
 			idToken:      "id-token-456",
@@ -1561,9 +1579,19 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "resolution failed",
 		},
 		{
-			name:         "empty client ID",
+			name:         "empty client ID with ID token",
 			clientID:     "",
 			idToken:      "id-token-456",
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+				return "", fmt.Errorf("should not be called")
+			},
+			wantErrContains: "empty",
+		},
+		{
+			name:         "empty client ID with audience",
+			clientID:     "",
+			audience:     "api.tailscale.com",
 			wifAvailable: true,
 			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
 				return "", fmt.Errorf("should not be called")
@@ -1579,6 +1607,17 @@ func TestResolveAuthKey(t *testing.T) {
 				return "", fmt.Errorf("should not be called")
 			},
 			wantErrContains: "empty",
+		},
+		{
+			name:         "audience with ID token",
+			clientID:     "client-id-123",
+			idToken:      "id-token-456",
+			audience:     "api.tailscale.com",
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+				return "", fmt.Errorf("should not be called")
+			},
+			wantErrContains: "only one of ID token and audience",
 		},
 		{
 			name:           "workload identity resolution skipped if resolution via OAuth token succeeds",
@@ -1665,6 +1704,7 @@ func TestResolveAuthKey(t *testing.T) {
 				ClientSecret: tt.clientSecret,
 				ClientID:     tt.clientID,
 				IDToken:      tt.idToken,
+				Audience:     tt.audience,
 				ControlURL:   "https://control.example.com",
 			}
 			s.shutdownCtx = context.Background()
