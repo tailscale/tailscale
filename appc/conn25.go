@@ -4,10 +4,14 @@
 package appc
 
 import (
+	"cmp"
 	"net/netip"
+	"slices"
 	"sync"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/appctype"
+	"tailscale.com/util/mak"
 )
 
 // Conn25 holds the developing state for the as yet nascent next generation app connector.
@@ -107,4 +111,39 @@ type ConnectorTransitIPResponse struct {
 	// TransitIPs is the list of outcomes for each requested mapping. Elements
 	// correspond to the order of [ConnectorTransitIPRequest.TransitIPs].
 	TransitIPs []TransitIPResponse `json:"transitIPs,omitempty"`
+}
+
+const conn25CapName = tailcfg.NodeCapability("tailscale.com/conn25")
+
+// PickSplitDNSPeers looks at the netmap peers capabilities and finds which peers
+// want to be connectors for which domains.
+func PickSplitDNSPeers(hasCap func(c tailcfg.NodeCapability) bool, peers map[tailcfg.NodeID]tailcfg.NodeView) map[string][]tailcfg.NodeView {
+	var m map[string][]tailcfg.NodeView
+	if !hasCap(conn25CapName) {
+		return m
+	}
+
+	for _, peer := range peers {
+		if !peer.Valid() {
+			continue
+		}
+		peerConfig, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.Conn25Attr](peer.CapMap(), conn25CapName)
+		if err != nil {
+			continue // one bad config shouldn't stop other peers from being connectors
+		}
+		for _, peerApp := range peerConfig {
+			for _, domain := range peerApp.Domains {
+				mak.Set(&m, domain, append(m[domain], peer))
+			}
+		}
+	}
+	for _, val := range m {
+		// The ordering of the nodes in the map vals is semantic (dnsConfigForNetmap uses the first node it can
+		// get a peer api url for as its split dns target). We can think of it as a preference order, except that
+		// we don't (currently 2026-01-14) have any preference over which node is chosen.
+		slices.SortFunc(val, func(a, b tailcfg.NodeView) int {
+			return cmp.Compare(a.ID(), b.ID())
+		})
+	}
+	return m
 }

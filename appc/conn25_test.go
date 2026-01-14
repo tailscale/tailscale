@@ -4,10 +4,13 @@
 package appc
 
 import (
+	"encoding/json"
 	"net/netip"
+	"reflect"
 	"testing"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/appctype"
 )
 
 // TestHandleConnectorTransitIPRequestZeroLength tests that if sent a
@@ -184,5 +187,108 @@ func TestTransitIPTargetUnknownTIP(t *testing.T) {
 	want := netip.Addr{}
 	if got != want {
 		t.Fatalf("Unknown transit addr, want: %v, got %v", want, got)
+	}
+}
+
+func TestPickSplitDNSPeers(t *testing.T) {
+	getBytesForAttr := func(name string, domains []string) []byte {
+		attr := appctype.Conn25Attr{
+			Name:    name,
+			Domains: domains,
+		}
+		bs, err := json.Marshal(attr)
+		if err != nil {
+			t.Fatalf("test setup: %v", err)
+		}
+		return bs
+	}
+	appOneBytes := getBytesForAttr("app1", []string{"example.com"})
+	appTwoBytes := getBytesForAttr("app2", []string{"a.example.com"})
+	appThreeBytes := getBytesForAttr("app3", []string{"woo.b.example.com", "hoo.b.example.com"})
+	appFourBytes := getBytesForAttr("app4", []string{"woo.b.example.com", "c.example.com"})
+	appFourDifferentDomainsBytes := getBytesForAttr("app4", []string{"example.com"})
+
+	makeNodeView := func(id tailcfg.NodeID, name string, conn25Config []tailcfg.RawMessage) tailcfg.NodeView {
+		return (&tailcfg.Node{
+			ID:   id,
+			Name: name,
+			CapMap: tailcfg.NodeCapMap{
+				tailcfg.NodeCapability("tailscale.com/conn25"): conn25Config,
+			},
+		}).View()
+	}
+	nvp1 := makeNodeView(1, "p1", []tailcfg.RawMessage{tailcfg.RawMessage(appOneBytes)})
+	nvp2 := makeNodeView(2, "p2", []tailcfg.RawMessage{tailcfg.RawMessage(appFourBytes)})
+	nvp3 := makeNodeView(3, "p3", []tailcfg.RawMessage{tailcfg.RawMessage(appTwoBytes), tailcfg.RawMessage(appThreeBytes)})
+	nvp4 := makeNodeView(4, "p4", []tailcfg.RawMessage{tailcfg.RawMessage(appTwoBytes), tailcfg.RawMessage(appThreeBytes)})
+	nvp6 := makeNodeView(6, "p6", []tailcfg.RawMessage{tailcfg.RawMessage(appFourDifferentDomainsBytes)})
+
+	for _, tst := range []struct {
+		name  string
+		want  map[string][]tailcfg.NodeView
+		peers []tailcfg.NodeView
+	}{
+		{
+			name: "empty",
+		},
+		{
+			name: "bad-peer",
+			peers: []tailcfg.NodeView{
+				(&tailcfg.Node{
+					Name: "p1",
+					CapMap: tailcfg.NodeCapMap{
+						tailcfg.NodeCapability("tailscale.com/conn25"): []tailcfg.RawMessage{tailcfg.RawMessage(`hey`)},
+					},
+				}).View(),
+			},
+		},
+		{
+			name: "peers-with-config",
+			peers: []tailcfg.NodeView{
+				nvp1,
+				nvp2,
+				nvp3,
+				nvp4,
+				(&tailcfg.Node{
+					ID:   5,
+					Name: "p5",
+				}).View(),
+			},
+			want: map[string][]tailcfg.NodeView{
+				// p5 has no config and so doesn't appear
+				"example.com":       {nvp1},
+				"a.example.com":     {nvp3, nvp4},
+				"woo.b.example.com": {nvp2, nvp3, nvp4},
+				"hoo.b.example.com": {nvp3, nvp4},
+				"c.example.com":     {nvp2},
+			},
+		},
+		{
+			name: "peers-disagree-over-which-domains-an-app-has",
+			peers: []tailcfg.NodeView{
+				nvp2,
+				nvp6,
+			},
+			want: map[string][]tailcfg.NodeView{
+				// p2 and p6 have ended up with different ideas of which domains app4 is handling.
+				// We are ignoring app names and so it doesn't matter to us.
+				"example.com":       {nvp6},
+				"woo.b.example.com": {nvp2},
+				"c.example.com":     {nvp2},
+			},
+		},
+	} {
+		t.Run(tst.name, func(t *testing.T) {
+			m := map[tailcfg.NodeID]tailcfg.NodeView{}
+			for i, p := range tst.peers {
+				m[tailcfg.NodeID(i)] = p
+			}
+			got := PickSplitDNSPeers(func(_ tailcfg.NodeCapability) bool {
+				return true
+			}, m)
+			if !reflect.DeepEqual(got, tst.want) {
+				t.Fatalf("got %v, want %v", got, tst.want)
+			}
+		})
 	}
 }

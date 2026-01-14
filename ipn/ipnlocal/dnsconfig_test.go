@@ -18,6 +18,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/set"
 )
 
 func ipps(ippStrs ...string) (ipps []netip.Prefix) {
@@ -348,6 +349,48 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			}),
 			prefs: &ipn.Prefs{},
 			want:  &dns.Config{},
+		},
+		{
+			name: "conn25-split-dns",
+			nm: &netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Name:      "a",
+					Addresses: ipps("100.101.101.101"),
+				}).View(),
+				AllCaps: set.Of(tailcfg.NodeCapability("tailscale.com/conn25")),
+			},
+			peers: nodeViews([]*tailcfg.Node{
+				{
+					ID:   1,
+					Name: "p1",
+					CapMap: tailcfg.NodeCapMap{
+						tailcfg.NodeCapability("tailscale.com/conn25"): []tailcfg.RawMessage{tailcfg.RawMessage(`{"name":"app1","domains":["example.com"]}`)},
+					},
+					Addresses: ipps("100.102.0.1"),
+					Hostinfo: (&tailcfg.Hostinfo{
+						Services: []tailcfg.Service{
+							{
+								Proto: tailcfg.PeerAPI4,
+								Port:  1234,
+							},
+						},
+					}).View(),
+				},
+			}),
+			prefs: &ipn.Prefs{
+				CorpDNS: true,
+			},
+			want: &dns.Config{
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"a.":  ips("100.101.101.101"),
+					"p1.": ips("100.102.0.1"),
+				},
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{
+					dnsname.FQDN("example.com."): {
+						{Addr: "http://100.102.0.1:1234/dns-query"},
+					},
+				},
+			},
 		},
 	}
 	for _, tt := range tests {
