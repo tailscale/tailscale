@@ -5383,7 +5383,7 @@ func magicDNSRootDomains(nm *netmap.NetworkMap) []dnsname.FQDN {
 // peerRoutes returns the routerConfig.Routes to access peers.
 // If there are over cgnatThreshold CGNAT routes, one big CGNAT route
 // is used instead.
-func peerRoutes(logf logger.Logf, peers []wgcfg.Peer, cgnatThreshold int) (routes []netip.Prefix) {
+func peerRoutes(logf logger.Logf, peers []wgcfg.Peer, cgnatThreshold int, routeAll bool) (routes []netip.Prefix) {
 	tsULA := tsaddr.TailscaleULARange()
 	cgNAT := tsaddr.CGNATRange()
 	var didULA bool
@@ -5413,7 +5413,7 @@ func peerRoutes(logf logger.Logf, peers []wgcfg.Peer, cgnatThreshold int) (route
 			}
 			if aip.IsSingleIP() && cgNAT.Contains(aip.Addr()) {
 				cgNATIPs = append(cgNATIPs, aip)
-			} else {
+			} else if routeAll {
 				routes = append(routes, aip)
 			}
 		}
@@ -5461,7 +5461,7 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 		SNATSubnetRoutes:  !prefs.NoSNAT(),
 		StatefulFiltering: doStatefulFiltering,
 		NetfilterMode:     prefs.NetfilterMode(),
-		Routes:            peerRoutes(b.logf, cfg.Peers, singleRouteThreshold),
+		Routes:            peerRoutes(b.logf, cfg.Peers, singleRouteThreshold, prefs.RouteAll()),
 		NetfilterKind:     netfilterKind,
 	}
 
