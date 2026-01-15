@@ -40,13 +40,17 @@ func main() {
 		version     = flag.Bool("version", false, "print version and exit")
 		auth        = flag.Bool("auth", false, "auth with cigocached and exit, printing the access token as output")
 		stats       = flag.Bool("stats", false, "fetch and print cigocached stats and exit")
-		token       = flag.String("token", "", "the cigocached access token to use, as created using --auth")
+		token       = flag.String("token", "", "the cigocached access token to use, as created using --auth; defaults to CIGOCACHER_TOKEN env var if set")
 		srvURL      = flag.String("cigocached-url", "", "optional cigocached URL (scheme, host, and port). Empty means to not use one.")
 		srvHostDial = flag.String("cigocached-host", "", "optional cigocached host to dial instead of the host in the provided --cigocached-url. Useful for public TLS certs on private addresses.")
 		dir         = flag.String("cache-dir", "", "cache directory; empty means automatic")
 		verbose     = flag.Bool("verbose", false, "enable verbose logging")
 	)
 	flag.Parse()
+	// Default --token _after_ parsing flags so we don't print it in --help output.
+	if *token == "" {
+		*token = os.Getenv("CIGOCACHER_TOKEN")
+	}
 
 	if *version {
 		info, ok := debug.ReadBuildInfo()
