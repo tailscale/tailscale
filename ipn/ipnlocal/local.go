@@ -565,7 +565,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 
 	// Call our linkChange code once with the current state.
 	// Following changes are triggered via the eventbus.
-	cd, err := netmon.NewChangeDelta(nil, b.interfaceState, false, netMon.TailscaleInterfaceName(), false)
+	cd, err := netmon.NewChangeDelta(nil, b.interfaceState, false, false)
 	if err != nil {
 		b.logf("[unexpected] setting initial netmon state failed: %v", err)
 	} else {
@@ -5321,12 +5321,21 @@ func (b *LocalBackend) initPeerAPIListenerLocked() {
 		var err error
 		skipListen := i > 0 && isNetstack
 		if !skipListen {
-			ln, err = ps.listen(a.Addr(), b.interfaceState.TailscaleInterfaceIndex)
+			// We don't care about the error here.  Not all platforms set this.
+			// If ps.listen needs it, it will check for zero values and error out.
+			tsIfIndex, _ := netmon.TailscaleInterfaceIndex()
+
+			ln, err = ps.listen(a.Addr(), tsIfIndex)
 			if err != nil {
 				if peerAPIListenAsync {
 					b.logf("[v1] possibly transient peerapi listen(%q) error, will try again on linkChange: %v", a.Addr(), err)
 					// Expected. But we fix it later in linkChange
 					// ("peerAPIListeners too low").
+					continue
+				}
+				// Sandboxed macOS specifically requires the interface index to be non-zero.
+				if version.IsSandboxedMacOS() && tsIfIndex == 0 {
+					b.logf("[v1] peerapi listen(%q) error: interface index is 0 on darwin; try restarting tailscaled", a.Addr())
 					continue
 				}
 				b.logf("[unexpected] peerapi listen(%q) error: %v", a.Addr(), err)
