@@ -771,6 +771,11 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper, gro *gro.
 
 	// Determine if we care about this local packet.
 	dst := p.Dst.Addr()
+	var IPServiceMappings netmap.IPServiceMappings
+	if ns.lb != nil {
+		IPServiceMappings = ns.lb.IPServiceMappings()
+	}
+	serviceName, hasIP := IPServiceMappings[dst]
 	switch {
 	case dst == serviceIP || dst == serviceIPv6:
 		// We want to intercept some traffic to the "service IP" (e.g.
@@ -786,6 +791,30 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper, gro *gro.
 			if port := p.Dst.Port(); port != 53 && !ns.isLoopbackPort(port) {
 				return filter.Accept, gro
 			}
+		}
+	case hasIP:
+		if p.IPProto != ipproto.TCP {
+			return filter.Accept, gro
+		}
+		// returns all configured VIP services, since the IPServiceMappings contains
+		// inactive service IPs when node hosts the service, we need to check the
+		// service is active or not before dropping the packet.
+		VIPServices := ns.lb.VIPServices()
+		serviceActive := false
+		for _, svc := range VIPServices {
+			// Even though control only send service IP down when there is a config
+			// for the service, we want to still check that the config still exists
+			// before passing the packet to netstack.
+			if svc.Name == serviceName {
+				serviceActive = svc.Active
+			}
+		}
+		if !serviceActive {
+			return filter.Accept, gro
+		}
+		if debugNetstack() {
+			ns.logf("Kevin_check: netstack: intercepting local VIP service packet: proto=%v dst=%v src=%v",
+				p.IPProto, p.Dst, p.Src)
 		}
 	case viaRange.Contains(dst):
 		// We need to handle 4via6 packets leaving the host if the via
@@ -946,6 +975,55 @@ func (ns *Impl) inject() {
 	inboundBuffs, inboundBuffsSizes := ns.getInjectInboundBuffsSizes()
 	for {
 		pkt := ns.linkEP.ReadContext(ns.ctx)
+		nh := pkt.NetworkHeader().Slice()
+		th := pkt.TransportHeader().Slice()
+
+		var src, dst netip.Addr
+		var sp, dp uint16
+		var syn, ack, rst bool
+
+		if len(nh) > 0 {
+			switch pkt.NetworkProtocolNumber {
+			case header.IPv4ProtocolNumber:
+				ip := header.IPv4(nh)
+
+				sa := ip.SourceAddress()
+				da := ip.DestinationAddress()
+
+				if s, ok := netip.AddrFromSlice(sa.AsSlice()); ok {
+					src = s.Unmap()
+				}
+				if d, ok := netip.AddrFromSlice(da.AsSlice()); ok {
+					dst = d.Unmap()
+				}
+
+			case header.IPv6ProtocolNumber:
+				ip := header.IPv6(nh)
+
+				sa := ip.SourceAddress()
+				da := ip.DestinationAddress()
+
+				if s, ok := netip.AddrFromSlice(sa.AsSlice()); ok {
+					src = s.Unmap()
+				}
+				if d, ok := netip.AddrFromSlice(da.AsSlice()); ok {
+					dst = d.Unmap()
+				}
+			}
+		}
+
+		if pkt.TransportProtocolNumber == header.TCPProtocolNumber && len(th) >= header.TCPMinimumSize {
+			tcp := header.TCP(th)
+			sp = tcp.SourcePort()
+			dp = tcp.DestinationPort()
+			f := tcp.Flags()
+			syn = f&header.TCPFlagSyn != 0
+			ack = f&header.TCPFlagAck != 0
+			rst = f&header.TCPFlagRst != 0
+		}
+
+		ns.logf("Kevin_check: inject: dequeued TCP syn=%v ack=%v rst=%v %v:%d -> %v:%d",
+			syn, ack, rst, src, sp, dst, dp)
 		if pkt == nil {
 			if ns.ctx.Err() != nil {
 				// Return without logging.
@@ -965,15 +1043,18 @@ func (ns *Impl) inject() {
 		// send traffic destined for the local device, hence must
 		// be injected 'inbound'.
 		sendToHost := ns.shouldSendToHost(pkt)
+		ns.logf("Kevin_check: inject: shouldSendToHost=%v", sendToHost)
 
 		// pkt has a non-zero refcount, so injection methods takes
 		// ownership of one count and will decrement on completion.
 		if sendToHost {
+			ns.logf("Kevin_check: inject: InjectInboundPacketBuffer")
 			if err := ns.tundev.InjectInboundPacketBuffer(pkt, inboundBuffs, inboundBuffsSizes); err != nil {
 				ns.logf("netstack inject inbound: %v", err)
 				return
 			}
 		} else {
+			ns.logf("Kevin_check: inject: InjectOutboundPacketBuffer")
 			if err := ns.tundev.InjectOutboundPacketBuffer(pkt); err != nil {
 				ns.logf("netstack inject outbound: %v", err)
 				return
@@ -998,10 +1079,26 @@ func (ns *Impl) shouldSendToHost(pkt *stack.PacketBuffer) bool {
 			return true
 		}
 
+		if ns.isVIPServiceIP(srcIP) {
+			dstIP := netip.AddrFrom4(v.DestinationAddress().As4())
+			if ns.isLocalIP(dstIP) {
+				ns.logf("Kevin_check: netstack: sending VIP service packet to host: src=%v dst=%v", srcIP, dstIP)
+				return true
+			}
+		}
+
 	case header.IPv6:
 		srcIP := netip.AddrFrom16(v.SourceAddress().As16())
 		if srcIP == serviceIPv6 {
 			return true
+		}
+
+		if ns.isVIPServiceIP(srcIP) {
+			dstIP := netip.AddrFrom16(v.DestinationAddress().As16())
+			if ns.isLocalIP(dstIP) {
+				ns.logf("Kevin_check: netstack: sending VIP service packet to host: src=%v dst=%v", srcIP, dstIP)
+				return true
+			}
 		}
 
 		if viaRange.Contains(srcIP) {
@@ -1349,7 +1446,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	getConnOrReset := func(opts ...tcpip.SettableSocketOption) *gonet.TCPConn {
 		ep, err := r.CreateEndpoint(&wq)
 		if err != nil {
-			ns.logf("CreateEndpoint error for %s: %v", stringifyTEI(reqDetails), err)
+			ns.logf("CreateEndpoint error for %s: (%T) %v", stringifyTEI(reqDetails), err, err)
 			r.Complete(true) // sends a RST
 			return nil
 		}

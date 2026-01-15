@@ -5,6 +5,8 @@ package netstack
 
 import (
 	"context"
+	"log"
+	"net/netip"
 	"sync"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -278,6 +280,7 @@ func (ep *linkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Er
 	//  control MTU (and by effect TCP MSS in gVisor) we *shouldn't* expect to
 	//  ever overflow 128 slots (see wireguard-go/tun.ErrTooManySegments usage).
 	for _, pkt := range pkts.AsSlice() {
+		logLinkEPOut(pkt)
 		if err := ep.q.Write(pkt); err != nil {
 			if _, ok := err.(*tcpip.ErrNoBufferSpace); !ok && n == 0 {
 				return 0, err
@@ -288,6 +291,68 @@ func (ep *linkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Er
 	}
 
 	return n, nil
+}
+
+func logLinkEPOut(pkt *stack.PacketBuffer) {
+	nh := pkt.NetworkHeader().Slice()
+	th := pkt.TransportHeader().Slice()
+	if len(nh) == 0 || len(th) == 0 {
+		return
+	}
+	if pkt.TransportProtocolNumber != header.TCPProtocolNumber || len(th) < header.TCPMinimumSize {
+		return
+	}
+
+	tcp := header.TCP(th)
+	flags := tcp.Flags()
+
+	// Only log SYN/SYN-ACK/RST (SYN=0x02, ACK=0x10, RST=0x04)
+	syn := flags&header.TCPFlagSyn != 0
+	rst := flags&header.TCPFlagRst != 0
+	if !syn && !rst {
+		return
+	}
+
+	sp := tcp.SourcePort()
+	dp := tcp.DestinationPort()
+
+	var srcIP, dstIP netip.Addr
+	switch pkt.NetworkProtocolNumber {
+	case header.IPv4ProtocolNumber:
+		if len(nh) < header.IPv4MinimumSize {
+			return
+		}
+		ip := header.IPv4(nh)
+		srcIP = addrToNetip(ip.SourceAddress())
+		dstIP = addrToNetip(ip.DestinationAddress())
+
+	case header.IPv6ProtocolNumber:
+		if len(nh) < header.IPv6MinimumSize {
+			return
+		}
+		ip := header.IPv6(nh)
+		srcIP = addrToNetip(ip.SourceAddress())
+		dstIP = addrToNetip(ip.DestinationAddress())
+
+	default:
+		return
+	}
+
+	// If parsing failed, don't log noisy junk.
+	if !srcIP.IsValid() || !dstIP.IsValid() {
+		return
+	}
+
+	log.Printf("linkEP out TCP flags=%#x %s:%d -> %s:%d seq=%d ack=%d",
+		flags, srcIP, sp, dstIP, dp, tcp.SequenceNumber(), tcp.AckNumber())
+}
+
+func addrToNetip(a tcpip.Address) netip.Addr {
+	ip, ok := netip.AddrFromSlice(a.AsSlice())
+	if !ok {
+		return netip.Addr{}
+	}
+	return ip.Unmap()
 }
 
 // Wait implements stack.LinkEndpoint.Wait.

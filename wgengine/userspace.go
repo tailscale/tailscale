@@ -596,6 +596,7 @@ func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) (filter.
 // tailscaled directly. Other packets are allowed to proceed into the
 // main ACL filter.
 func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
+	isTCPSYN := p.IPProto == ipproto.TCP && (p.TCPFlags&packet.TCPSyn) != 0
 	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
 		isLocalAddr, ok := e.isLocalAddr.LoadOk()
 		if !ok {
@@ -606,6 +607,9 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 			// looping back within the kernel network stack. We have to
 			// notice that an outbound packet is actually destined for
 			// ourselves, and loop it back into macOS.
+			if isTCPSYN {
+				e.logf("Kevin_check: e.handleLocalPackets: reflecting TCP SYN to local Tailscale IP %v back to OS", p.Dst.Addr())
+			}
 			t.InjectInboundCopy(p.Buffer())
 			metricReflectToOS.Add(1)
 			return filter.Drop
@@ -622,7 +626,9 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 			}
 		}
 	}
-
+	if isTCPSYN {
+		e.logf("Kevin_check: e.handleLocalPackets: outbound TCP SYN to %v", p.Dst)
+	}
 	return filter.Accept
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/mem"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"tailscale.com/disco"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/packet"
@@ -828,6 +829,13 @@ var (
 )
 
 func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConfigTable, gro *gro.GRO) (filter.Response, *gro.GRO) {
+	if p.IPProto == ipproto.TCP {
+		if p.TCPFlags&packet.TCPSyn != 0 {
+			t.logf("Kevin_check: out->wg enter: SYN %v:%d -> %v:%d",
+				p.Src.Addr(), p.Src.Port(),
+				p.Dst.Addr(), p.Dst.Port())
+		}
+	}
 	// Fake ICMP echo responses to MagicDNS (100.100.100.100).
 	if p.IsEchoRequest() {
 		switch p.Dst {
@@ -862,11 +870,25 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 		res, gro = t.PreFilterPacketOutboundToWireGuardNetstackIntercept(p, t, gro)
 		if res.IsDrop() {
 			// Handled by netstack.Impl.handleLocalPackets (quad-100 DNS primarily)
+			if p.IPProto == ipproto.TCP {
+				if p.TCPFlags&packet.TCPSyn != 0 {
+					t.logf("Kevin_check: out->wg: SYN intercepted by netstack %v:%d -> %v:%d",
+						p.Src.Addr(), p.Src.Port(),
+						p.Dst.Addr(), p.Dst.Port())
+				}
+			}
 			return res, gro
 		}
 	}
 	if t.PreFilterPacketOutboundToWireGuardEngineIntercept != nil {
 		if res := t.PreFilterPacketOutboundToWireGuardEngineIntercept(p, t); res.IsDrop() {
+			if p.IPProto == ipproto.TCP {
+				if p.TCPFlags&packet.TCPSyn != 0 {
+					t.logf("Kevin_check: out->wg: SYN intercepted by engine %v:%d -> %v:%d",
+						p.Src.Addr(), p.Src.Port(),
+						p.Dst.Addr(), p.Dst.Port())
+				}
+			}
 			// Handled by userspaceEngine.handleLocalPackets (primarily handles
 			// quad-100 if netstack is not installed).
 			return res, gro
@@ -891,6 +913,13 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 			t.metrics.outboundDroppedPacketsTotal.Add(usermetric.DropLabels{
 				Reason: reason,
 			}, 1)
+		}
+		if p.IPProto == ipproto.TCP {
+			if p.TCPFlags&packet.TCPSyn != 0 {
+				t.logf("Kevin_check: out->wg: SYN dropped by filter %v:%d -> %v:%d reason=%q",
+					p.Src.Addr(), p.Src.Port(),
+					p.Dst.Addr(), p.Dst.Port())
+			}
 		}
 		return filter.Drop, gro
 	}
@@ -942,7 +971,12 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	if res.err != nil && len(res.data) == 0 {
 		return 0, res.err
 	}
+
 	if res.data == nil {
+		// Kevin_check: confirm injected packets get dequeued by Read().
+		if tlog := t.logf; tlog != nil {
+			logInjectedSYN(tlog, res.injected) // helper below
+		}
 		return t.injectedRead(res.injected, buffs, sizes, offset)
 	}
 
@@ -956,7 +990,13 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	var buffsGRO *gro.GRO
 	for _, data := range res.data {
 		p.Decode(data[res.dataOffset:])
-
+		if p.IPProto == ipproto.TCP {
+			if p.TCPFlags&packet.TCPSyn != 0 {
+				t.logf("Kevin_check: tun->ts: SYN %v:%d -> %v:%d",
+					p.Src.Addr(), p.Src.Port(),
+					p.Dst.Addr(), p.Dst.Port())
+			}
+		}
 		if buildfeatures.HasLazyWG {
 			if m := t.destIPActivity.Load(); m != nil {
 				if fn := m[p.Dst.Addr()]; fn != nil {
@@ -1005,6 +1045,60 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 
 	t.noteActivity()
 	return buffsPos, res.err
+}
+
+func logInjectedSYN(logf func(string, ...any), inj tunInjectedRead) {
+	// Prefer PacketBuffer if present (netstack-generated).
+	if inj.packet != nil {
+		// Assumption: PacketBuffer has NetworkHeader/TransportHeader accessors similar to gVisor stack.PacketBuffer.
+		// If your netstack_PacketBuffer wrapper differs, paste its methods and I’ll adjust.
+		nh := inj.packet.NetworkHeader().Slice()
+		th := inj.packet.TransportHeader().Slice()
+
+		var src, dst netip.Addr
+		var sp, dp uint16
+		var syn bool
+
+		if len(nh) > 0 {
+			switch inj.packet.NetworkProtocolNumber {
+			case header.IPv4ProtocolNumber:
+				ip := header.IPv4(nh)
+				src = netip.AddrFrom4(ip.SourceAddress().As4())
+				dst = netip.AddrFrom4(ip.DestinationAddress().As4())
+			case header.IPv6ProtocolNumber:
+				ip := header.IPv6(nh)
+				src = netip.AddrFrom16(ip.SourceAddress().As16())
+				dst = netip.AddrFrom16(ip.DestinationAddress().As16())
+			}
+		}
+
+		if inj.packet.TransportProtocolNumber == header.TCPProtocolNumber && len(th) >= header.TCPMinimumSize {
+			tcp := header.TCP(th)
+			sp = tcp.SourcePort()
+			dp = tcp.DestinationPort()
+			f := tcp.Flags()
+			syn = f&header.TCPFlagSyn != 0
+		}
+
+		if syn {
+			logf("Kevin_check: Read(): dequeued injected(PacketBuffer) SYN %v:%d -> %v:%d", src, sp, dst, dp)
+		}
+		return
+	}
+
+	// Else parse raw bytes if present.
+	if len(inj.data) > 0 {
+		p := parsedPacketPool.Get().(*packet.Parsed)
+		defer parsedPacketPool.Put(p)
+
+		p.Decode(inj.data)
+
+		if p.IPProto == ipproto.TCP && (p.TCPFlags&packet.TCPSyn) != 0 {
+			logf("Kevin_check: Read(): dequeued injected(bytes) SYN %v:%d -> %v:%d",
+				p.Src.Addr(), p.Src.Port(), p.Dst.Addr(), p.Dst.Port())
+		}
+		return
+	}
 }
 
 const (
