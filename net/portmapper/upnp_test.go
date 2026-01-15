@@ -17,9 +17,11 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"tailscale.com/net/portmapper/portmappertype"
 	"tailscale.com/tstest"
+	"tailscale.com/util/eventbus/eventbustest"
 )
 
 // Google Wifi
@@ -628,6 +630,201 @@ func TestGetUPnPPortMapping(t *testing.T) {
 	}
 }
 
+func TestReleaseUPnPPortMapping(t *testing.T) {
+	t.Run("GoodRouterReponse", func(t *testing.T) {
+		igd, err := NewTestIGD(t, TestIGDOptions{UPnP: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer igd.Close()
+
+		// This is a very basic fake UPnP server handler.
+		var sawRequestWithLease atomic.Bool
+		handlers := map[string]any{
+			"AddPortMapping": func(body []byte) (int, string) {
+				// Decode a minimal body to determine whether we skip the request or not.
+				var req struct {
+					Protocol       string `xml:"NewProtocol"`
+					InternalPort   string `xml:"NewInternalPort"`
+					ExternalPort   string `xml:"NewExternalPort"`
+					InternalClient string `xml:"NewInternalClient"`
+					LeaseDuration  string `xml:"NewLeaseDuration"`
+				}
+				if err := xml.Unmarshal(body, &req); err != nil {
+					t.Errorf("bad request: %v", err)
+					return http.StatusBadRequest, "bad request"
+				}
+
+				if req.Protocol != "UDP" {
+					t.Errorf(`got Protocol=%q, want "UDP"`, req.Protocol)
+				}
+				if req.LeaseDuration != "0" {
+					// Return a fake error to ensure that we fall back to a permanent lease.
+					sawRequestWithLease.Store(true)
+					return http.StatusOK, testAddPortMappingPermanentLease
+				}
+
+				// Success!
+				return http.StatusOK, testAddPortMappingResponse
+			},
+			"GetExternalIPAddress": testGetExternalIPAddressResponse,
+			"GetStatusInfo":        testGetStatusInfoResponse,
+			"DeletePortMapping":    testDeletePortMappingResponse,
+		}
+
+		ctx := t.Context()
+
+		rootDesc := testRootDesc
+		igd.SetUPnPHandler(&upnpServer{
+			t:    t,
+			Desc: rootDesc,
+			Control: map[string]map[string]any{
+				"/ctl/IPConn":                          handlers,
+				"/upnp/control/yomkmsnooi/wanipconn-1": handlers,
+			},
+		})
+
+		bus := eventbustest.NewBus(t)
+		c := newTestClient(t, igd, bus)
+		t.Logf("Listening on upnp=%v", c.testUPnPPort)
+
+		c.debug.VerboseLogs = true
+
+		var port uint16
+		sawRequestWithLease.Store(false)
+		mustProbeUPnP(t, ctx, c)
+
+		gw, myIP, ok := c.gatewayAndSelfIP()
+		if !ok {
+			t.Fatalf("could not get gateway and self IP")
+		}
+		t.Logf("gw=%v myIP=%v", gw, myIP)
+
+		ext, ok := c.getUPnPPortMapping(ctx, gw, netip.AddrPortFrom(myIP, 12345), port)
+		if !ok {
+			t.Fatal("could not get UPnP port mapping")
+		}
+		if got, want := ext.Addr(), netip.MustParseAddr("123.123.123.123"); got != want {
+			t.Errorf("bad external address; got %v want %v", got, want)
+		}
+		if !sawRequestWithLease.Load() {
+			t.Errorf("wanted request with lease, but didn't see one")
+		}
+		port = ext.Port()
+		t.Logf("external IP:port : %v:%v", ext, port)
+
+		tw := eventbustest.NewWatcher(t, bus)
+		c.mu.Lock()
+		c.invalidateMappingsLocked(true)
+		c.mu.Unlock()
+
+		err = eventbustest.Expect(tw, eventbustest.Type[portmappertype.Mapping]())
+		if err != nil {
+			t.Errorf("failed to release UPnP mapping: %v", err)
+		}
+	})
+
+	t.Run("NoRouterReponse", func(t *testing.T) {
+		igd, err := NewTestIGD(t, TestIGDOptions{UPnP: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer igd.Close()
+		deleteWaitDoneCh := make(chan any)
+
+		// This is a very basic fake UPnP server handler.
+		var sawRequestWithLease atomic.Bool
+		handlers := map[string]any{
+			"AddPortMapping": func(body []byte) (int, string) {
+				// Decode a minimal body to determine whether we skip the request or not.
+				var req struct {
+					Protocol       string `xml:"NewProtocol"`
+					InternalPort   string `xml:"NewInternalPort"`
+					ExternalPort   string `xml:"NewExternalPort"`
+					InternalClient string `xml:"NewInternalClient"`
+					LeaseDuration  string `xml:"NewLeaseDuration"`
+				}
+				if err := xml.Unmarshal(body, &req); err != nil {
+					t.Errorf("bad request: %v", err)
+					return http.StatusBadRequest, "bad request"
+				}
+
+				if req.Protocol != "UDP" {
+					t.Errorf(`got Protocol=%q, want "UDP"`, req.Protocol)
+				}
+				if req.LeaseDuration != "0" {
+					// Return a fake error to ensure that we fall back to a permanent lease.
+					sawRequestWithLease.Store(true)
+					return http.StatusOK, testAddPortMappingPermanentLease
+				}
+
+				// Success!
+				return http.StatusOK, testAddPortMappingResponse
+			},
+			"GetExternalIPAddress": testGetExternalIPAddressResponse,
+			"GetStatusInfo":        testGetStatusInfoResponse,
+			"DeletePortMapping": func(body []byte) (int, string) {
+				<-deleteWaitDoneCh
+				// return will happen after the end of the test, so just return OK
+				return http.StatusOK, ""
+			},
+		}
+
+		ctx := t.Context()
+
+		rootDesc := testRootDesc
+		igd.SetUPnPHandler(&upnpServer{
+			t:    t,
+			Desc: rootDesc,
+			Control: map[string]map[string]any{
+				"/ctl/IPConn":                          handlers,
+				"/upnp/control/yomkmsnooi/wanipconn-1": handlers,
+			},
+		})
+
+		bus := eventbustest.NewBus(t)
+		c := newTestClient(t, igd, bus)
+		releaseTimeout = 10 * time.Millisecond
+		t.Logf("Listening on upnp=%v", c.testUPnPPort)
+
+		c.debug.VerboseLogs = true
+
+		var port uint16
+		sawRequestWithLease.Store(false)
+		mustProbeUPnP(t, ctx, c)
+
+		gw, myIP, ok := c.gatewayAndSelfIP()
+		if !ok {
+			t.Fatalf("could not get gateway and self IP")
+		}
+		t.Logf("gw=%v myIP=%v", gw, myIP)
+
+		ext, ok := c.getUPnPPortMapping(ctx, gw, netip.AddrPortFrom(myIP, 12345), port)
+		if !ok {
+			t.Fatal("could not get UPnP port mapping")
+		}
+		if got, want := ext.Addr(), netip.MustParseAddr("123.123.123.123"); got != want {
+			t.Errorf("bad external address; got %v want %v", got, want)
+		}
+		if !sawRequestWithLease.Load() {
+			t.Errorf("wanted request with lease, but didn't see one")
+		}
+		port = ext.Port()
+		t.Logf("external IP:port : %v:%v", ext, port)
+
+		tw := eventbustest.NewWatcher(t, bus)
+		c.mu.Lock()
+		c.invalidateMappingsLocked(true)
+		c.mu.Unlock()
+
+		err = eventbustest.Expect(tw, eventbustest.Type[portmappertype.Mapping]())
+		deleteWaitDoneCh <- nil
+		if err != nil {
+			t.Errorf("failed to release UPnP mapping: %v", err)
+		}
+	})
+}
+
 func TestGetUPnPPortMapping_LeaseDuration(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -639,7 +836,6 @@ func TestGetUPnPPortMapping_LeaseDuration(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-
 			// This is a very basic fake UPnP server handler.
 			var sawRequestWithLease atomic.Bool
 			handlers := map[string]any{
@@ -1173,6 +1369,14 @@ const testGetStatusInfoResponse = `<?xml version="1.0"?>
       <NewLastConnectionError>ERROR_NONE</NewLastConnectionError>
       <NewUptime>9999</NewUptime>
     </u:GetStatusInfoResponse>
+  </s:Body>
+</s:Envelope>
+`
+
+const testDeletePortMappingResponse = `<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body><m:DeletePortMappingResponse xmlns:m="urn:schemas-upnp-org:service:WANIPConnection:1">
+    </m:DeletePortMappingResponse>
   </s:Body>
 </s:Envelope>
 `

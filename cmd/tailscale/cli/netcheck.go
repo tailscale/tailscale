@@ -69,7 +69,7 @@ func runNetcheck(ctx context.Context, args []string) error {
 	if buildfeatures.HasPortMapper {
 		// Ensure that we close the portmapper after running a netcheck; this
 		// will release any port mappings created.
-		pm = portmappertype.HookNewPortMapper.Get()(logf, bus, netMon, nil, nil)
+		pm = portmappertype.HookNewPortMapper.Get()(ctx, logf, bus, netMon, nil, nil)
 		defer pm.Close()
 	}
 
