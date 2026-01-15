@@ -425,3 +425,99 @@ func setupTestService(t *testing.T, svcName string, hostname string, clusterIP s
 
 	return svc, eps
 }
+
+func TestServicePGReconciler_ExternalName(t *testing.T) {
+	svcPGR, stateSecret, fc, ft, _ := setupServiceTest(t)
+
+	externalName := "external.example.com"
+	svc := setupExternalNameService(t, "test-external", externalName, fc, stateSecret)
+
+	expectReconciled(t, svcPGR, "default", svc.Name)
+
+	// Verify the Tailscale Service was created.
+	// "do-not-validate" is a placeholder that skips tag validation in the test helper.
+	verifyTailscaleService(t, ft, fmt.Sprintf("svc:default-%s", svc.Name), []string{"do-not-validate"})
+	verifyTailscaledConfig(t, fc, "test-pg", []string{fmt.Sprintf("svc:default-%s", svc.Name)})
+
+	// Verify the ingress config contains the ExternalName
+	cm := &corev1.ConfigMap{}
+	if err := fc.Get(context.Background(), types.NamespacedName{
+		Name:      "test-pg-ingress-config",
+		Namespace: "operator-ns",
+	}, cm); err != nil {
+		t.Fatalf("getting ConfigMap: %v", err)
+	}
+
+	cfgs := ingressservices.Configs{}
+	if err := json.Unmarshal(cm.BinaryData[ingressservices.IngressConfigKey], &cfgs); err != nil {
+		t.Fatalf("unmarshaling ingress config: %v", err)
+	}
+
+	svcKey := fmt.Sprintf("svc:default-%s", svc.Name)
+	cfg, ok := cfgs[svcKey]
+	if !ok {
+		t.Fatalf("expected config for %s", svcKey)
+	}
+
+	if cfg.ExternalName != externalName {
+		t.Errorf("expected ExternalName %q, got %q", externalName, cfg.ExternalName)
+	}
+	if !cfg.TailscaleServiceIPv4.IsValid() {
+		t.Error("expected TailscaleServiceIPv4 to be set")
+	}
+
+	// Cleanup - delete the service
+	if err := fc.Delete(context.Background(), svc); err != nil {
+		t.Fatalf("deleting Service: %v", err)
+	}
+	expectReconciled(t, svcPGR, "default", svc.Name)
+	verifyTailscaledConfig(t, fc, "test-pg", []string{})
+}
+
+func setupExternalNameService(t *testing.T, svcName string, externalName string, fc client.Client, stateSecret *corev1.Secret) *corev1.Service {
+	uid := rand.IntN(100)
+	svc := &corev1.Service{
+		TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: "v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      svcName,
+			Namespace: "default",
+			UID:       types.UID(fmt.Sprintf("%d-UID", uid)),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group": "test-pg",
+				"tailscale.com/expose":      "true",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:         corev1.ServiceTypeExternalName,
+			ExternalName: externalName,
+		},
+	}
+
+	updateExternalNameIngressConfigSecret(t, fc, stateSecret, fmt.Sprintf("default-%s", svcName), externalName)
+
+	mustCreate(t, fc, svc)
+	return svc
+}
+
+func updateExternalNameIngressConfigSecret(t *testing.T, fc client.Client, stateSecret *corev1.Secret, serviceName string, externalName string) {
+	ingressConfig := ingressservices.Configs{
+		fmt.Sprintf("svc:%s", serviceName): ingressservices.Config{
+			ExternalName:         externalName,
+			TailscaleServiceIPv4: netip.MustParseAddr(vipTestIP),
+		},
+	}
+
+	ingressStatus := ingressservices.Status{
+		Configs: ingressConfig,
+		PodIPv4: "4.3.2.1",
+	}
+
+	icJson, err := json.Marshal(ingressStatus)
+	if err != nil {
+		t.Fatalf("failed to json marshal ingress config: %s", err.Error())
+	}
+
+	mustUpdate(t, fc, stateSecret.Namespace, stateSecret.Name, func(sec *corev1.Secret) {
+		mak.Set(&sec.Data, ingressservices.IngressConfigKey, icJson)
+	})
+}

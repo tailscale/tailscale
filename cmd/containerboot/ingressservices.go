@@ -8,12 +8,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
-	"reflect"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -161,6 +162,10 @@ func (p *ingressProxy) getStatus(ctx context.Context) (*ingressservices.Status, 
 // syncIngressConfigs takes the desired firewall configuration and the recorded
 // status and ensures that any missing rules are added and no longer needed
 // rules are deleted.
+//
+// Important: For ExternalName services, cfgs is mutated in-place to include the
+// resolved IPs from DNS lookups. These resolved IPs are then persisted to the
+// status so that rules can be deleted correctly even if DNS changes later.
 func (p *ingressProxy) syncIngressConfigs(cfgs *ingressservices.Configs, status *ingressservices.Status) error {
 	rulesToAdd := p.getRulesToAdd(cfgs, status)
 	rulesToDelete := p.getRulesToDelete(cfgs, status)
@@ -170,6 +175,17 @@ func (p *ingressProxy) syncIngressConfigs(cfgs *ingressservices.Configs, status 
 	}
 	if err := ensureIngressRulesAdded(rulesToAdd, p.nfr); err != nil {
 		return fmt.Errorf("error adding ingress rules: %w", err)
+	}
+
+	// Merge resolved IPs from rulesToAdd back into cfgs so they get recorded
+	// in the status. This is needed for ExternalName services so we know what
+	// rules to delete even if DNS changes.
+	if cfgs != nil {
+		for svcName, cfg := range rulesToAdd {
+			if cfg.IsExternalName() && len(cfg.ResolvedIPs) > 0 {
+				(*cfgs)[svcName] = cfg
+			}
+		}
 	}
 	return nil
 }
@@ -207,10 +223,12 @@ func (p *ingressProxy) recordStatus(ctx context.Context, newCfg *ingressservices
 
 // getRulesToAdd takes the desired firewall configuration and the recorded
 // firewall status and returns a map of missing Tailscale Services and rules.
+// For ExternalName services, rules are also re-added when DNS refresh is needed.
 func (p *ingressProxy) getRulesToAdd(cfgs *ingressservices.Configs, status *ingressservices.Status) map[string]ingressservices.Config {
 	if cfgs == nil {
 		return nil
 	}
+	now := time.Now()
 	var rulesToAdd map[string]ingressservices.Config
 	for tsSvc, wantsCfg := range *cfgs {
 		if status == nil || !p.isCurrentStatus(status) {
@@ -218,7 +236,14 @@ func (p *ingressProxy) getRulesToAdd(cfgs *ingressservices.Configs, status *ingr
 			continue
 		}
 		gotCfg := status.Configs.GetConfig(tsSvc)
-		if gotCfg == nil || !reflect.DeepEqual(wantsCfg, *gotCfg) {
+		if gotCfg == nil || !wantsCfg.EqualIgnoringResolved(gotCfg) {
+			mak.Set(&rulesToAdd, tsSvc, wantsCfg)
+			continue
+		}
+		// For ExternalName services, check if DNS refresh is needed
+		if gotCfg.DNSRefreshNeeded(now) {
+			log.Printf("DNS refresh needed for ExternalName service %s (last refresh: %v)",
+				tsSvc, time.Unix(gotCfg.LastDNSRefresh, 0))
 			mak.Set(&rulesToAdd, tsSvc, wantsCfg)
 		}
 	}
@@ -227,10 +252,13 @@ func (p *ingressProxy) getRulesToAdd(cfgs *ingressservices.Configs, status *ingr
 
 // getRulesToDelete takes the desired firewall configuration and the recorded
 // status and returns a map of Tailscale Services and rules that need to be deleted.
+// For ExternalName services, rules are also deleted when DNS refresh is needed
+// (so they can be re-created with potentially new IPs).
 func (p *ingressProxy) getRulesToDelete(cfgs *ingressservices.Configs, status *ingressservices.Status) map[string]ingressservices.Config {
 	if status == nil || !p.isCurrentStatus(status) {
 		return nil
 	}
+	now := time.Now()
 	var rulesToDelete map[string]ingressservices.Config
 	for tsSvc, gotCfg := range status.Configs {
 		if cfgs == nil {
@@ -238,17 +266,34 @@ func (p *ingressProxy) getRulesToDelete(cfgs *ingressservices.Configs, status *i
 			continue
 		}
 		wantsCfg := cfgs.GetConfig(tsSvc)
-		if wantsCfg != nil && reflect.DeepEqual(*wantsCfg, gotCfg) {
+		if wantsCfg == nil {
+			mak.Set(&rulesToDelete, tsSvc, gotCfg)
 			continue
 		}
-		mak.Set(&rulesToDelete, tsSvc, gotCfg)
+		if !wantsCfg.EqualIgnoringResolved(&gotCfg) {
+			mak.Set(&rulesToDelete, tsSvc, gotCfg)
+			continue
+		}
+		// For ExternalName services, delete old rules when DNS refresh is needed
+		if gotCfg.DNSRefreshNeeded(now) {
+			mak.Set(&rulesToDelete, tsSvc, gotCfg)
+		}
 	}
 	return rulesToDelete
 }
 
 // ensureIngressRulesAdded takes a map of Tailscale Services and rules and ensures that the firewall rules are added.
+// For ExternalName services, it also updates the config in the map with the resolved IPs.
 func ensureIngressRulesAdded(cfgs map[string]ingressservices.Config, nfr linuxfw.NetfilterRunner) error {
 	for serviceName, cfg := range cfgs {
+		if cfg.IsExternalName() {
+			if err := addDNATRulesForExternalName(nfr, serviceName, &cfg); err != nil {
+				return fmt.Errorf("error adding ingress rules for ExternalName service %s: %w", serviceName, err)
+			}
+			// Store the updated config with resolved IPs back into the map
+			cfgs[serviceName] = cfg
+			continue
+		}
 		if cfg.IPv4Mapping != nil {
 			if err := addDNATRuleForSvc(nfr, serviceName, cfg.IPv4Mapping.TailscaleServiceIP, cfg.IPv4Mapping.ClusterIP); err != nil {
 				return fmt.Errorf("error adding ingress rule for %s: %w", serviceName, err)
@@ -263,6 +308,66 @@ func ensureIngressRulesAdded(cfgs map[string]ingressservices.Config, nfr linuxfw
 	return nil
 }
 
+// addDNATRulesForExternalName resolves the ExternalName DNS and creates DNAT rules
+// for each resolved IP address. It also stores the resolved IPs and refresh timestamp
+// in the config so they can be used for deletion and periodic re-resolution.
+func addDNATRulesForExternalName(nfr linuxfw.NetfilterRunner, serviceName string, cfg *ingressservices.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	ips, err := net.LookupIP(cfg.ExternalName)
+	if err != nil {
+		return fmt.Errorf("error resolving ExternalName %q: %w", cfg.ExternalName, err)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("ExternalName %q resolved to no IP addresses", cfg.ExternalName)
+	}
+
+	log.Printf("resolved ExternalName %q to %d IP(s)", cfg.ExternalName, len(ips))
+	cfg.LastDNSRefresh = time.Now().Unix()
+
+	// Clear any previously resolved IPs and store new ones
+	cfg.ResolvedIPs = nil
+
+	var errs []error
+	for _, ip := range ips {
+		destIP, ok := netip.AddrFromSlice(ip)
+		if !ok {
+			log.Printf("warning: could not parse resolved IP %v for %s", ip, cfg.ExternalName)
+			continue
+		}
+		destIP = destIP.Unmap()
+
+		var tsIP netip.Addr
+		if destIP.Is4() && cfg.TailscaleServiceIPv4.IsValid() {
+			tsIP = cfg.TailscaleServiceIPv4
+		} else if destIP.Is6() && cfg.TailscaleServiceIPv6.IsValid() {
+			tsIP = cfg.TailscaleServiceIPv6
+		} else {
+			log.Printf("warning: no matching Tailscale service IP for resolved IP %v (hasIPv4VIP=%v, hasIPv6VIP=%v)",
+				destIP, cfg.TailscaleServiceIPv4.IsValid(), cfg.TailscaleServiceIPv6.IsValid())
+			continue
+		}
+
+		if err := addDNATRuleForSvc(nfr, serviceName, tsIP, destIP); err != nil {
+			errs = append(errs, fmt.Errorf("resolved IP %v: %w", destIP, err))
+			continue
+		}
+		cfg.ResolvedIPs = append(cfg.ResolvedIPs, destIP)
+	}
+
+	if len(cfg.ResolvedIPs) == 0 {
+		if len(errs) > 0 {
+			return fmt.Errorf("ExternalName %q: all DNAT rules failed: %w", cfg.ExternalName, errors.Join(errs...))
+		}
+		return fmt.Errorf("ExternalName %q resolved but no usable IPs (check IPv4/IPv6 VIP configuration)", cfg.ExternalName)
+	}
+	if len(errs) > 0 {
+		log.Printf("warning: some DNAT rules failed for ExternalName %q: %v", cfg.ExternalName, errors.Join(errs...))
+	}
+	return nil
+}
+
 func addDNATRuleForSvc(nfr linuxfw.NetfilterRunner, serviceName string, tsIP, clusterIP netip.Addr) error {
 	log.Printf("adding DNAT rule for Tailscale Service %s with IP %s to Kubernetes Service IP %s", serviceName, tsIP, clusterIP)
 	return nfr.EnsureDNATRuleForSvc(serviceName, tsIP, clusterIP)
@@ -271,6 +376,12 @@ func addDNATRuleForSvc(nfr linuxfw.NetfilterRunner, serviceName string, tsIP, cl
 // ensureIngressRulesDeleted takes a map of Tailscale Services and rules and ensures that the firewall rules are deleted.
 func ensureIngressRulesDeleted(cfgs map[string]ingressservices.Config, nfr linuxfw.NetfilterRunner) error {
 	for serviceName, cfg := range cfgs {
+		if cfg.IsExternalName() {
+			if err := deleteDNATRulesForExternalName(nfr, serviceName, &cfg); err != nil {
+				return fmt.Errorf("error deleting ingress rules for ExternalName service %s: %w", serviceName, err)
+			}
+			continue
+		}
 		if cfg.IPv4Mapping != nil {
 			if err := deleteDNATRuleForSvc(nfr, serviceName, cfg.IPv4Mapping.TailscaleServiceIP, cfg.IPv4Mapping.ClusterIP); err != nil {
 				return fmt.Errorf("error deleting ingress rule for %s: %w", serviceName, err)
@@ -281,6 +392,50 @@ func ensureIngressRulesDeleted(cfgs map[string]ingressservices.Config, nfr linux
 				return fmt.Errorf("error deleting ingress rule for %s: %w", serviceName, err)
 			}
 		}
+	}
+	return nil
+}
+
+// deleteDNATRulesForExternalName deletes DNAT rules using the stored resolved IPs
+// from when the rules were created. This ensures we delete the correct rules even
+// if DNS has changed since creation.
+func deleteDNATRulesForExternalName(nfr linuxfw.NetfilterRunner, serviceName string, cfg *ingressservices.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if len(cfg.ResolvedIPs) == 0 {
+		// This can happen if the service was never successfully configured
+		// (e.g., DNS lookup failed on initial setup). Not an error, but worth noting.
+		log.Printf("info: no resolved IPs stored for ExternalName service %s (ExternalName=%q), no rules to delete",
+			serviceName, cfg.ExternalName)
+		return nil
+	}
+
+	var errs []error
+	var deleted int
+	for _, destIP := range cfg.ResolvedIPs {
+		var tsIP netip.Addr
+		if destIP.Is4() && cfg.TailscaleServiceIPv4.IsValid() {
+			tsIP = cfg.TailscaleServiceIPv4
+		} else if destIP.Is6() && cfg.TailscaleServiceIPv6.IsValid() {
+			tsIP = cfg.TailscaleServiceIPv6
+		} else {
+			continue
+		}
+
+		if err := deleteDNATRuleForSvc(nfr, serviceName, tsIP, destIP); err != nil {
+			errs = append(errs, fmt.Errorf("resolved IP %v: %w", destIP, err))
+			continue
+		}
+		deleted++
+	}
+
+	if len(errs) > 0 {
+		if deleted == 0 {
+			return fmt.Errorf("ExternalName %q: all DNAT rule deletions failed: %w", cfg.ExternalName, errors.Join(errs...))
+		}
+		log.Printf("warning: some DNAT rule deletions failed for ExternalName %q (deleted %d/%d): %v",
+			cfg.ExternalName, deleted, len(cfg.ResolvedIPs), errors.Join(errs...))
 	}
 	return nil
 }
@@ -327,5 +482,17 @@ func ingressServicesStatusIsEqual(st, st1 *ingressservices.Configs) bool {
 	if st == nil || st1 == nil {
 		return false
 	}
-	return reflect.DeepEqual(*st, *st1)
+	if len(*st) != len(*st1) {
+		return false
+	}
+	for name, cfg := range *st {
+		cfg1, ok := (*st1)[name]
+		if !ok {
+			return false
+		}
+		if !cfg.EqualIgnoringResolved(&cfg1) {
+			return false
+		}
+	}
+	return true
 }

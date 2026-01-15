@@ -290,21 +290,29 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 	}
 
 	cfg := ingressservices.Config{}
-	for _, cip := range svc.Spec.ClusterIPs {
-		ip, err := netip.ParseAddr(cip)
-		if err != nil {
-			return false, fmt.Errorf("error parsing Kubernetes Service address: %w", err)
-		}
-
-		if ip.Is4() {
-			cfg.IPv4Mapping = &ingressservices.Mapping{
-				ClusterIP:          ip,
-				TailscaleServiceIP: tsSvcIPv4,
+	if svc.Spec.Type == corev1.ServiceTypeExternalName {
+		// ExternalName service - use DNS-based forwarding
+		cfg.ExternalName = svc.Spec.ExternalName
+		cfg.TailscaleServiceIPv4 = tsSvcIPv4
+		cfg.TailscaleServiceIPv6 = tsSvcIPv6
+	} else {
+		// ClusterIP-based service
+		for _, cip := range svc.Spec.ClusterIPs {
+			ip, err := netip.ParseAddr(cip)
+			if err != nil {
+				return false, fmt.Errorf("error parsing Kubernetes Service address: %w", err)
 			}
-		} else if ip.Is6() {
-			cfg.IPv6Mapping = &ingressservices.Mapping{
-				ClusterIP:          ip,
-				TailscaleServiceIP: tsSvcIPv6,
+
+			if ip.Is4() {
+				cfg.IPv4Mapping = &ingressservices.Mapping{
+					ClusterIP:          ip,
+					TailscaleServiceIP: tsSvcIPv4,
+				}
+			} else if ip.Is6() {
+				cfg.IPv6Mapping = &ingressservices.Mapping{
+					ClusterIP:          ip,
+					TailscaleServiceIP: tsSvcIPv6,
+				}
 			}
 		}
 	}
@@ -500,7 +508,7 @@ func (r *HAServiceReconciler) isTailscaleService(svc *corev1.Service) bool {
 }
 
 func (r *HAServiceReconciler) shouldExpose(svc *corev1.Service) bool {
-	return r.shouldExposeClusterIP(svc)
+	return r.shouldExposeClusterIP(svc) || r.shouldExposeDNSName(svc)
 }
 
 func (r *HAServiceReconciler) shouldExposeClusterIP(svc *corev1.Service) bool {
@@ -508,6 +516,10 @@ func (r *HAServiceReconciler) shouldExposeClusterIP(svc *corev1.Service) bool {
 		return false
 	}
 	return isTailscaleLoadBalancerService(svc, r.isDefaultLoadBalancer) || hasExposeAnnotation(svc)
+}
+
+func (r *HAServiceReconciler) shouldExposeDNSName(svc *corev1.Service) bool {
+	return hasExposeAnnotation(svc) && svc.Spec.Type == corev1.ServiceTypeExternalName && svc.Spec.ExternalName != ""
 }
 
 // tailnetCertDomain returns the base domain (TCD) of the current tailnet.
@@ -603,11 +615,23 @@ func (a *HAServiceReconciler) backendRoutesSetup(ctx context.Context, serviceNam
 	if err != nil {
 		return false, fmt.Errorf("error checking ingress config status: %w", err)
 	}
-	if !statusUpToDate || !reflect.DeepEqual(gotCfgs.Configs.GetConfig(serviceName), wantsCfg) {
+	if !statusUpToDate || !configsEqual(gotCfgs.Configs.GetConfig(serviceName), wantsCfg) {
 		logger.Debugf("Pod %q is not ready to advertise Tailscale Service", pod.Name)
 		return false, nil
 	}
 	return true, nil
+}
+
+// configsEqual compares two ingress configs, ignoring runtime-populated fields
+// like ResolvedIPs which are set by containerboot after DNS resolution.
+func configsEqual(got, want *ingressservices.Config) bool {
+	if got == nil && want == nil {
+		return true
+	}
+	if got == nil || want == nil {
+		return false
+	}
+	return want.EqualIgnoringResolved(got)
 }
 
 func isCurrentStatus(gotCfgs ingressservices.Status, pod *corev1.Pod, logger *zap.SugaredLogger) (bool, error) {
@@ -785,6 +809,13 @@ func (r *HAServiceReconciler) getEndpointSlicesForService(ctx context.Context, s
 }
 
 func (r *HAServiceReconciler) checkEndpointsReady(ctx context.Context, svc *corev1.Service, logger *zap.SugaredLogger) (bool, error) {
+	// ExternalName services don't have Kubernetes endpoints - their availability
+	// depends on the external DNS target which we can't check from here.
+	// Consider them always ready.
+	if svc.Spec.Type == corev1.ServiceTypeExternalName {
+		return true, nil
+	}
+
 	epss, err := r.getEndpointSlicesForService(ctx, svc, logger)
 	if err != nil {
 		return false, fmt.Errorf("failed to list EndpointSlices for Service %q: %w", svc.Name, err)
