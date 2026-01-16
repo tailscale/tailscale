@@ -9,9 +9,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -220,16 +218,6 @@ func TestGetServeHandler(t *testing.T) {
 			}
 		})
 	}
-}
-
-func getEtag(t *testing.T, b any) string {
-	t.Helper()
-	bts, err := json.Marshal(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(bts)
-	return hex.EncodeToString(sum[:])
 }
 
 // TestServeConfigForeground tests the inter-dependency
@@ -544,8 +532,14 @@ func TestServeConfigServices(t *testing.T) {
 func TestServeConfigETag(t *testing.T) {
 	b := newTestBackend(t)
 
-	// a nil config with initial etag should succeed
-	err := b.SetServeConfig(nil, getEtag(t, nil))
+	// the etag should be valid even when there is no config
+	_, emptyStateETag, err := b.ServeConfigETag()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// a nil config with the empty-state etag should succeed
+	err = b.SetServeConfig(nil, emptyStateETag)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -556,7 +550,7 @@ func TestServeConfigETag(t *testing.T) {
 		t.Fatal("expected an error but got nil")
 	}
 
-	// a new config with no etag should succeed
+	// a new config with the empty-state etag should succeed
 	conf := &ipn.ServeConfig{
 		Web: map[ipn.HostPort]*ipn.WebServerConfig{
 			"example.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
@@ -564,15 +558,14 @@ func TestServeConfigETag(t *testing.T) {
 			}},
 		},
 	}
-	err = b.SetServeConfig(conf, getEtag(t, nil))
+	err = b.SetServeConfig(conf, emptyStateETag)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	confView := b.ServeConfig()
-	etag := getEtag(t, confView)
-	if etag == "" {
-		t.Fatal("expected to get an etag but got an empty string")
+	confView, etag, err := b.ServeConfigETag()
+	if err != nil {
+		t.Fatal(err)
 	}
 	conf = confView.AsStruct()
 	mak.Set(&conf.AllowFunnel, "example.ts.net:443", true)
@@ -596,8 +589,10 @@ func TestServeConfigETag(t *testing.T) {
 	}
 
 	// replacing an existing config with the new etag should succeed
-	newCfg := b.ServeConfig()
-	etag = getEtag(t, newCfg)
+	_, etag, err = b.ServeConfigETag()
+	if err != nil {
+		t.Fatal(err)
+	}
 	err = b.SetServeConfig(nil, etag)
 	if err != nil {
 		t.Fatal(err)

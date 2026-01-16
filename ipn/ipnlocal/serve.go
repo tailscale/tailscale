@@ -302,6 +302,15 @@ func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint1
 	}
 }
 
+func generateServeConfigETag(sc ipn.ServeConfigView) (string, error) {
+	j, err := json.Marshal(sc)
+	if err != nil {
+		return "", fmt.Errorf("encoding config: %w", err)
+	}
+	sum := sha256.Sum256(j)
+	return hex.EncodeToString(sum[:]), nil
+}
+
 // SetServeConfig establishes or replaces the current serve config.
 // ETag is an optional parameter to enforce Optimistic Concurrency Control.
 // If it is an empty string, then the config will be overwritten.
@@ -336,17 +345,11 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 	// not changed from the last config.
 	prevConfig := b.serveConfig
 	if etag != "" {
-		// Note that we marshal b.serveConfig
-		// and not use b.lastServeConfJSON as that might
-		// be a Go nil value, which produces a different
-		// checksum from a JSON "null" value.
-		prevBytes, err := json.Marshal(prevConfig)
+		prevETag, err := generateServeConfigETag(prevConfig)
 		if err != nil {
-			return fmt.Errorf("error encoding previous config: %w", err)
+			return fmt.Errorf("generating ETag for previous config: %w", err)
 		}
-		sum := sha256.Sum256(prevBytes)
-		previousEtag := hex.EncodeToString(sum[:])
-		if etag != previousEtag {
+		if etag != prevETag {
 			return ErrETagMismatch
 		}
 	}
@@ -399,6 +402,20 @@ func (b *LocalBackend) ServeConfig() ipn.ServeConfigView {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.serveConfig
+}
+
+// ServeConfigETag provides a view of the current serve mappings and an ETag,
+// which can later be provided to [LocalBackend.SetServeConfig] to implement
+// Optimistic Concurrency Control.
+//
+// If serving is not configured, the returned view is not Valid.
+func (b *LocalBackend) ServeConfigETag() (scv ipn.ServeConfigView, etag string, err error) {
+	sc := b.ServeConfig()
+	etag, err = generateServeConfigETag(sc)
+	if err != nil {
+		return ipn.ServeConfigView{}, "", fmt.Errorf("generating ETag: %w", err)
+	}
+	return sc, etag, nil
 }
 
 // DeleteForegroundSession deletes a ServeConfig's foreground session

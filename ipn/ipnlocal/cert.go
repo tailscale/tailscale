@@ -107,6 +107,15 @@ func (b *LocalBackend) GetCertPEM(ctx context.Context, domain string) (*TLSCertK
 // If a cert is expired, or expires sooner than minValidity, it will be renewed
 // synchronously. Otherwise it will be renewed asynchronously.
 func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string, minValidity time.Duration) (*TLSCertKeyPair, error) {
+	b.mu.Lock()
+	getCertForTest := b.getCertForTest
+	b.mu.Unlock()
+
+	if getCertForTest != nil {
+		testenv.AssertInTest()
+		return getCertForTest(domain)
+	}
+
 	if !validLookingCertDomain(domain) {
 		return nil, errors.New("invalid domain")
 	}
@@ -301,6 +310,16 @@ func (b *LocalBackend) getCertStore() (certStore, error) {
 		panic("use of test hook outside of tests")
 	}
 	return certFileStore{dir: dir, testRoots: testX509Roots}, nil
+}
+
+// ConfigureCertsForTest sets a certificate retrieval function to be used by
+// this local backend, skipping the usual ACME certificate registration. Should
+// only be used in tests.
+func (b *LocalBackend) ConfigureCertsForTest(getCert func(hostname string) (*TLSCertKeyPair, error)) {
+	testenv.AssertInTest()
+	b.mu.Lock()
+	b.getCertForTest = getCert
+	b.mu.Unlock()
 }
 
 // certFileStore implements certStore by storing the cert & key files in the named directory.
