@@ -23,7 +23,7 @@ import (
 func clientForTailnet(ctx context.Context, cl client.Client, namespace, name string) (tsClient, error) {
 	var tn tsapi.Tailnet
 	if err := cl.Get(ctx, client.ObjectKey{Name: name}, &tn); err != nil {
-		return nil, fmt.Errorf("failed to get Tailnet %q: %w", name, err)
+		return nil, fmt.Errorf("failed to get tailnet %q: %w", name, err)
 	}
 
 	if !operatorutils.TailnetIsReady(&tn) {

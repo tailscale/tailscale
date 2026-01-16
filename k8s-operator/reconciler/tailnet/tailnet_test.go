@@ -248,7 +248,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 					Type:    string(tsapi.TailnetReady),
 					Status:  metav1.ConditionFalse,
 					Reason:  tailnet.ReasonInvalidOAuth,
-					Message: `failed to list VIP services: EOF`,
+					Message: `failed to list tailscale services: EOF`,
 				},
 			},
 		},
