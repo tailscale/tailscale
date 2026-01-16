@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/client/local"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -166,6 +167,11 @@ type Server struct {
 	// document. Note that advertising a tag on the client doesn't guarantee
 	// that the control server will allow the node to adopt that tag.
 	AdvertiseTags []string
+
+	// Tun, if non-nil, specifies a custom tun.Device to use for packet I/O.
+	//
+	// This field must be set before calling Start.
+	Tun tun.Device
 
 	initOnce             sync.Once
 	initErr              error
@@ -659,6 +665,7 @@ func (s *Server) start() (reterr error) {
 	s.dialer = &tsdial.Dialer{Logf: tsLogf} // mutated below (before used)
 	s.dialer.SetBus(sys.Bus.Get())
 	eng, err := wgengine.NewUserspaceEngine(tsLogf, wgengine.Config{
+		Tun:           s.Tun,
 		EventBus:      sys.Bus.Get(),
 		ListenPort:    s.Port,
 		NetMon:        s.netMon,
@@ -682,8 +689,16 @@ func (s *Server) start() (reterr error) {
 	}
 	sys.Tun.Get().Start()
 	sys.Set(ns)
-	ns.ProcessLocalIPs = true
-	ns.ProcessSubnets = true
+	if s.Tun == nil {
+		// Only process packets in netstack when using the default fake TUN.
+		// When a TUN is provided, let packets flow through it instead.
+		ns.ProcessLocalIPs = true
+		ns.ProcessSubnets = true
+	} else {
+		// When using a TUN, check gVisor for registered endpoints to handle
+		// packets for tsnet listeners and outbound connection replies.
+		ns.CheckLocalTransportEndpoints = true
+	}
 	ns.GetTCPHandlerForFlow = s.getTCPHandlerForFlow
 	ns.GetUDPHandlerForFlow = s.getUDPHandlerForFlow
 	s.netstack = ns
@@ -1072,10 +1087,34 @@ func (s *Server) ListenPacket(network, addr string) (net.PacketConn, error) {
 			network = "udp6"
 		}
 	}
-	if err := s.Start(); err != nil {
+
+	netLn, err := s.listen(network, addr, listenOnTailnet)
+	if err != nil {
 		return nil, err
 	}
-	return s.netstack.ListenPacket(network, ap.String())
+	ln := netLn.(*listener)
+
+	pc, err := s.netstack.ListenPacket(network, ap.String())
+	if err != nil {
+		ln.Close()
+		return nil, err
+	}
+
+	return &udpPacketConn{
+		PacketConn: pc,
+		ln:         ln,
+	}, nil
+}
+
+// udpPacketConn wraps a net.PacketConn to unregister from s.listeners on Close.
+type udpPacketConn struct {
+	net.PacketConn
+	ln *listener
+}
+
+func (c *udpPacketConn) Close() error {
+	c.ln.Close()
+	return c.PacketConn.Close()
 }
 
 // ListenTLS announces only on the Tailscale network.
@@ -1609,10 +1648,37 @@ func (s *Server) listen(network, addr string, lnOn listenOn) (net.Listener, erro
 		closedc: make(chan struct{}),
 		conn:    make(chan net.Conn),
 	}
+
+	// When using a TUN with TCP, create a gVisor TCP listener.
+	if s.Tun != nil && (network == "" || network == "tcp" || network == "tcp4" || network == "tcp6") {
+		var nsNetwork string
+		nsAddr := host
+		switch {
+		case network == "tcp4" || network == "tcp6":
+			nsNetwork = network
+		case host.Addr().Is4():
+			nsNetwork = "tcp4"
+		case host.Addr().Is6():
+			nsNetwork = "tcp6"
+		default:
+			// Wildcard address: use tcp6 for dual-stack (accepts both v4 and v6).
+			nsNetwork = "tcp6"
+			nsAddr = netip.AddrPortFrom(netip.IPv6Unspecified(), host.Port())
+		}
+		gonetLn, err := s.netstack.ListenTCP(nsNetwork, nsAddr.String())
+		if err != nil {
+			return nil, fmt.Errorf("tsnet: %w", err)
+		}
+		ln.gonetLn = gonetLn
+	}
+
 	s.mu.Lock()
 	for _, key := range keys {
 		if _, ok := s.listeners[key]; ok {
 			s.mu.Unlock()
+			if ln.gonetLn != nil {
+				ln.gonetLn.Close()
+			}
 			return nil, fmt.Errorf("tsnet: listener already open for %s, %s", network, addr)
 		}
 	}
@@ -1682,9 +1748,17 @@ type listener struct {
 	conn    chan net.Conn // unbuffered, never closed
 	closedc chan struct{} // closed on [listener.Close]
 	closed  bool          // guarded by s.mu
+
+	// gonetLn, if set, is the gonet.Listener that handles new connections.
+	// gonetLn is set by [listen] when a TUN is in use and terminates the listener.
+	// gonetLn is nil when TUN is nil.
+	gonetLn net.Listener
 }
 
 func (ln *listener) Accept() (net.Conn, error) {
+	if ln.gonetLn != nil {
+		return ln.gonetLn.Accept()
+	}
 	select {
 	case c := <-ln.conn:
 		return c, nil
@@ -1694,6 +1768,9 @@ func (ln *listener) Accept() (net.Conn, error) {
 }
 
 func (ln *listener) Addr() net.Addr {
+	if ln.gonetLn != nil {
+		return ln.gonetLn.Addr()
+	}
 	return addr{
 		network: ln.keys[0].network,
 		addr:    ln.addr,
@@ -1719,6 +1796,9 @@ func (ln *listener) closeLocked() error {
 	}
 	close(ln.closedc)
 	ln.closed = true
+	if ln.gonetLn != nil {
+		ln.gonetLn.Close()
+	}
 	return nil
 }
 
