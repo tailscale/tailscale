@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -31,7 +32,10 @@ import (
 	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
+	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/set"
 )
 
 type (
@@ -44,6 +48,10 @@ type (
 		clock              tstime.Clock
 		logger             *zap.SugaredLogger
 		clientFunc         func(*tsapi.Tailnet, *corev1.Secret) TailscaleClient
+
+		// Metrics related fields
+		mu       sync.Mutex
+		tailnets set.Slice[types.UID]
 	}
 
 	// The ReconcilerOptions type contains configuration values for the Reconciler.
@@ -94,6 +102,11 @@ func (r *Reconciler) Register(mgr manager.Manager) error {
 		Complete(r)
 }
 
+var (
+	// gaugeTailnetResources tracks the overall number of Tailnet resources currently managed by this operator instance.
+	gaugeTailnetResources = clientmetric.NewGauge(kubetypes.MetricTailnetCount)
+)
+
 // Reconcile is invoked when a change occurs to Tailnet resources within the cluster. On create/update, the Tailnet
 // resource is validated ensuring that the specified Secret exists and contains valid OAuth credentials that have
 // required permissions to perform all necessary functions by the operator.
@@ -120,6 +133,11 @@ func (r *Reconciler) delete(ctx context.Context, tailnet *tsapi.Tailnet) (reconc
 		return reconcile.Result{}, fmt.Errorf("failed to remove finalizer from Tailnet %q: %w", tailnet.Name, err)
 	}
 
+	r.mu.Lock()
+	r.tailnets.Remove(tailnet.UID)
+	r.mu.Unlock()
+	gaugeTailnetResources.Set(int64(r.tailnets.Len()))
+
 	return reconcile.Result{}, nil
 }
 
@@ -131,6 +149,11 @@ const (
 )
 
 func (r *Reconciler) createOrUpdate(ctx context.Context, tailnet *tsapi.Tailnet) (reconcile.Result, error) {
+	r.mu.Lock()
+	r.tailnets.Add(tailnet.UID)
+	r.mu.Unlock()
+	gaugeTailnetResources.Set(int64(r.tailnets.Len()))
+
 	name := types.NamespacedName{Name: tailnet.Spec.Credentials.SecretName, Namespace: r.tailscaleNamespace}
 
 	var secret corev1.Secret
