@@ -2098,6 +2098,10 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	defer b.mu.Unlock()
 
 	cn := b.currentNode()
+
+	// Check for peer online status changes BEFORE applying mutations
+	onlineChanges := cn.peerOnlineStatusChanges(muts)
+
 	cn.UpdateNetmapDelta(muts)
 
 	// If auto exit nodes are enabled and our exit node went offline,
@@ -2125,9 +2129,15 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	}
 
 	if cn.NetMap() != nil && mutationsAreWorthyOfTellingIPNBus(muts) {
-
 		nm := cn.netMapWithPeers()
 		notify = &ipn.Notify{NetMap: nm}
+		// Include peer online status changes if any
+		if len(onlineChanges) > 0 {
+			notify.PeerOnlineStatusChanges = onlineChanges
+		}
+	} else if len(onlineChanges) > 0 {
+		// Even if we're not sending a full netmap, send peer online status changes
+		notify = &ipn.Notify{PeerOnlineStatusChanges: onlineChanges}
 	} else if testenv.InTest() {
 		// In tests, send an empty Notify as a wake-up so end-to-end
 		// integration tests in another repo can check on the status of

@@ -41,6 +41,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
@@ -1945,6 +1946,126 @@ func TestUpdateNetmapDelta(t *testing.T) {
 			t.Errorf("netmap.Peer %v wrong.\n got: %v\nwant: %v", want.ID, logger.AsJSON(got), logger.AsJSON(want))
 		}
 	}
+}
+
+// TestPeerOnlineStatusChanges tests that peer online status changes are correctly detected.
+func TestPeerOnlineStatusChanges(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	// Set up initial netmap with some peers
+	someTime := time.Unix(123, 0)
+	nm := &netmap.NetworkMap{}
+	for i := range 3 {
+		id := tailcfg.NodeID(i + 1)
+		// Start with online = false for all peers
+		nm.Peers = append(nm.Peers, (&tailcfg.Node{
+			ID:      id,
+			Key:     makeNodeKeyFromID(id),
+			Online:  ptr.To(false),
+		}).View())
+	}
+	b.currentNode().SetNetMap(nm)
+
+	// First set of mutations: peer 1 goes online
+	muts1, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+		PeersChangedPatch: []*tailcfg.PeerChange{
+			{
+				NodeID:  1,
+				Online: ptr.To(true),
+			},
+		},
+	}, someTime)
+	if !ok {
+		t.Fatal("netmap.MutationsFromMapResponse failed")
+	}
+
+	// Get changes (peer 1 was offline, now going online - this IS a change)
+	changes1 := b.currentNode().peerOnlineStatusChanges(muts1)
+	if len(changes1) != 1 {
+		t.Errorf("expected 1 change (peer 1 going online), got %d", len(changes1))
+	}
+
+	// Apply the mutations
+	b.currentNode().UpdateNetmapDelta(muts1)
+
+	// Now peer 1 goes offline - this should be detected as a change
+	muts2, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+		PeersChangedPatch: []*tailcfg.PeerChange{
+			{
+				NodeID:  1,
+				Online: ptr.To(false),
+			},
+		},
+	}, someTime)
+	if !ok {
+		t.Fatal("netmap.MutationsFromMapResponse failed")
+	}
+
+	// Get changes BEFORE applying mutations
+	changes2 := b.currentNode().peerOnlineStatusChanges(muts2)
+	if len(changes2) != 1 {
+		t.Fatalf("expected 1 change (peer 1 offline), got %d", len(changes2))
+	}
+
+	// Find the change for peer 1
+	var change2 *ipnstate.PeerOnlineStatusChange
+	for _, c := range changes2 {
+		if c.NodeKey == makeNodeKeyFromID(1) {
+			change2 = c
+			break
+		}
+	}
+	if change2 == nil {
+		t.Fatal("expected change for peer 1 not found")
+	}
+	if change2.Online {
+		t.Errorf("expected peer 1 to be offline, got online")
+	}
+	if change2.LastSeen == nil {
+		t.Error("expected LastSeen to be set for offline peer")
+	}
+
+	// Apply the mutations
+	b.currentNode().UpdateNetmapDelta(muts2)
+
+	// Now peer 2 goes online
+	muts3, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+		PeersChangedPatch: []*tailcfg.PeerChange{
+			{
+				NodeID:  2,
+				Online: ptr.To(true),
+			},
+		},
+	}, someTime)
+	if !ok {
+		t.Fatal("netmap.MutationsFromMapResponse failed")
+	}
+
+	// Get changes BEFORE applying mutations
+	changes3 := b.currentNode().peerOnlineStatusChanges(muts3)
+	if len(changes3) != 1 {
+		t.Fatalf("expected 1 change (peer 2 online), got %d", len(changes3))
+	}
+
+	var change3 *ipnstate.PeerOnlineStatusChange
+	for _, c := range changes3 {
+		if c.NodeKey == makeNodeKeyFromID(2) {
+			change3 = c
+			break
+		}
+	}
+	if change3 == nil {
+		t.Fatal("expected change for peer 2 not found")
+	}
+	if !change3.Online {
+		t.Errorf("expected peer 2 to be online, got offline")
+	}
+	if change3.LastSeen != nil {
+		t.Error("expected LastSeen to be nil for online peer")
+	}
+
+	// Apply the mutations
+	b.currentNode().UpdateNetmapDelta(muts3)
 }
 
 // tests WhoIs and indirectly that setNetMapLocked updates b.nodeByAddr correctly.

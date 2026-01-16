@@ -10,10 +10,12 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go4.org/netipx"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
@@ -103,6 +105,14 @@ type nodeBackend struct {
 	// and must not escape the [nodeBackend].
 	peers map[tailcfg.NodeID]tailcfg.NodeView
 
+	// peerOnlineStatus tracks the previous online status of each peer to detect changes.
+	// The map is keyed by NodeID. It is initialized when peers are added to the netmap.
+	peerOnlineStatus map[tailcfg.NodeID]bool
+
+	// peerMutationCount tracks how many mutations have been processed for each peer.
+	// The first mutation does not trigger a change notification.
+	peerMutationCount map[tailcfg.NodeID]int
+
 	// nodeByAddr maps nodes' own addresses (excluding subnet routes) to node IDs.
 	// It is mutated in place (with mu held) and must not escape the [nodeBackend].
 	nodeByAddr map[netip.Addr]tailcfg.NodeID
@@ -125,6 +135,9 @@ func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *n
 	nb.nodeMutsPub = eventbus.Publish[magicsock.NodeMutationsUpdate](nb.eventClient)
 	nb.derpMapViewPub = eventbus.Publish[tailcfg.DERPMapView](nb.eventClient)
 	nb.filterPub.Publish(magicsock.FilterUpdate{Filter: nb.filterAtomic.Load()})
+	nb.peers = make(map[tailcfg.NodeID]tailcfg.NodeView)
+	nb.peerOnlineStatus = make(map[tailcfg.NodeID]bool)
+	nb.peerMutationCount = make(map[tailcfg.NodeID]int)
 	return nb
 }
 
@@ -496,14 +509,69 @@ func (nb *nodeBackend) updatePeersLocked() {
 	// Second pass, add everything wanted.
 	for _, p := range nm.Peers {
 		mak.Set(&nb.peers, p.ID(), p)
+		// Initialize peerOnlineStatus from the node's current online status
+		if _, ok := nb.peerOnlineStatus[p.ID()]; !ok {
+			nb.peerOnlineStatus[p.ID()] = p.Online().Get()
+		}
 	}
 
 	// Third pass, remove deleted things.
 	for k, v := range nb.peers {
 		if !v.Valid() {
 			delete(nb.peers, k)
+			delete(nb.peerOnlineStatus, k)
 		}
 	}
+}
+
+// peerOnlineStatusChanges processes the given mutations and returns any peer online status changes.
+// It also updates the internal tracking of peer online status.
+// The returned map is keyed by node public key.
+func (nb *nodeBackend) peerOnlineStatusChanges(muts []netmap.NodeMutation) map[key.NodePublic]*ipnstate.PeerOnlineStatusChange {
+	changes := make(map[key.NodePublic]*ipnstate.PeerOnlineStatusChange)
+	for _, m := range muts {
+		mo, ok := m.(netmap.NodeMutationOnline)
+		if !ok {
+			continue
+		}
+		nid := mo.NodeIDBeingMutated()
+
+		prevOnline, hadPrev := nb.peerOnlineStatus[nid]
+		// Increment mutation count
+		nb.peerMutationCount[nid]++
+		mutationNum := nb.peerMutationCount[nid]
+
+		// Report changes if:
+		// - We have a previous status AND
+		// - Either this is not the first mutation (mutationNum > 1) OR the status differs from initial
+		shouldReport := hadPrev
+		if mutationNum == 1 {
+			// First mutation: only report if status differs from initial
+			shouldReport = shouldReport && (prevOnline != mo.Online)
+		}
+		if shouldReport {
+			// Get the peer's node key
+			peer, ok := nb.peers[nid]
+			if !ok || !peer.Valid() {
+				continue
+			}
+			nodeKey := peer.Key()
+			// Get the last seen time for offline peers
+			var lastSeen *time.Time
+			if !mo.Online {
+				ls := peer.LastSeen().Get()
+				lastSeen = &ls
+			}
+			changes[nodeKey] = &ipnstate.PeerOnlineStatusChange{
+				NodeKey:  nodeKey,
+				Online:   mo.Online,
+				LastSeen: lastSeen,
+			}
+		}
+		// Update the tracked status
+		nb.peerOnlineStatus[nid] = mo.Online
+	}
+	return changes
 }
 
 func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
