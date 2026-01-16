@@ -36,6 +36,7 @@ import (
 	"github.com/pires/go-proxyproto"
 	"go4.org/mem"
 	"tailscale.com/ipn"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -166,16 +167,24 @@ func (s *localListener) Run() {
 
 		var lc net.ListenConfig
 		if initListenConfig != nil {
+			ifIndex, err := netmon.TailscaleInterfaceIndex()
+			if err != nil {
+				s.logf("localListener failed to get Tailscale interface index %v, backing off: %v", s.ap, err)
+				s.bo.BackOff(s.ctx, err)
+				continue
+			}
+
 			// On macOS, this sets the lc.Control hook to
 			// setsockopt the interface index to bind to. This is
-			// required by the network sandbox to allow binding to
-			// a specific interface. Without this hook, the system
-			// chooses a default interface to bind to.
-			if err := initListenConfig(&lc, ip, s.b.interfaceState.TailscaleInterfaceIndex); err != nil {
+			// required by the network sandbox which will not automatically
+			// bind to the tailscale interface to prevent routing loops.
+			// Explicit binding allows us to bypass that restriction.
+			if err := initListenConfig(&lc, ip, ifIndex); err != nil {
 				s.logf("localListener failed to init listen config %v, backing off: %v", s.ap, err)
 				s.bo.BackOff(s.ctx, err)
 				continue
 			}
+
 			// On macOS (AppStore or macsys) and if we're binding to a privileged port,
 			if version.IsSandboxedMacOS() && s.ap.Port() < 1024 {
 				// On macOS, we need to bind to ""/all-interfaces due to
