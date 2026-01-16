@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/miekg/dns"
 	"tailscale.com/kube/ingressservices"
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/util/linuxfw"
@@ -308,29 +309,124 @@ func ensureIngressRulesAdded(cfgs map[string]ingressservices.Config, nfr linuxfw
 	return nil
 }
 
+// dnsResult holds the result of a DNS lookup including TTL information.
+type dnsResult struct {
+	IPs []net.IP
+	TTL uint32 // minimum TTL from all returned records, 0 if unknown
+}
+
+// lookupIPWithTTL resolves a hostname and returns the IP addresses along with the
+// minimum TTL from the DNS response. It tries to use the system resolver via miekg/dns
+// to get TTL information. If that fails, it falls back to net.LookupIP without TTL.
+func lookupIPWithTTL(hostname string) (dnsResult, error) {
+	// Try to get TTL using miekg/dns by querying the system resolver
+	result, err := lookupWithMiekgDNS(hostname)
+	if err == nil && len(result.IPs) > 0 {
+		return result, nil
+	}
+
+	// Fallback to standard library (no TTL information available)
+	ips, err := net.LookupIP(hostname)
+	if err != nil {
+		return dnsResult{}, err
+	}
+	return dnsResult{IPs: ips, TTL: 0}, nil
+}
+
+// lookupWithMiekgDNS uses miekg/dns to query the system resolver for A and AAAA records.
+// This allows us to get TTL information from the DNS response.
+func lookupWithMiekgDNS(hostname string) (dnsResult, error) {
+	// Ensure hostname is FQDN
+	if !dns.IsFqdn(hostname) {
+		hostname = dns.Fqdn(hostname)
+	}
+
+	// Get system resolver address
+	config, err := dns.ClientConfigFromFile("/etc/resolv.conf")
+	if err != nil {
+		return dnsResult{}, fmt.Errorf("failed to read resolv.conf: %w", err)
+	}
+	if len(config.Servers) == 0 {
+		return dnsResult{}, fmt.Errorf("no DNS servers in resolv.conf")
+	}
+
+	client := &dns.Client{Timeout: 5 * time.Second}
+	server := net.JoinHostPort(config.Servers[0], config.Port)
+
+	var ips []net.IP
+	var minTTL uint32 = 0
+	var firstErr error
+
+	// Query for A records (IPv4)
+	msgA := &dns.Msg{}
+	msgA.SetQuestion(hostname, dns.TypeA)
+	respA, _, err := client.Exchange(msgA, server)
+	if err != nil {
+		firstErr = err
+	} else if respA != nil && respA.Rcode == dns.RcodeSuccess {
+		for _, ans := range respA.Answer {
+			if a, ok := ans.(*dns.A); ok {
+				ips = append(ips, a.A)
+				ttl := ans.Header().Ttl
+				if minTTL == 0 || ttl < minTTL {
+					minTTL = ttl
+				}
+			}
+		}
+	}
+
+	// Query for AAAA records (IPv6)
+	msgAAAA := &dns.Msg{}
+	msgAAAA.SetQuestion(hostname, dns.TypeAAAA)
+	respAAAA, _, err := client.Exchange(msgAAAA, server)
+	if err != nil && firstErr == nil {
+		firstErr = err
+	} else if respAAAA != nil && respAAAA.Rcode == dns.RcodeSuccess {
+		for _, ans := range respAAAA.Answer {
+			if aaaa, ok := ans.(*dns.AAAA); ok {
+				ips = append(ips, aaaa.AAAA)
+				ttl := ans.Header().Ttl
+				if minTTL == 0 || ttl < minTTL {
+					minTTL = ttl
+				}
+			}
+		}
+	}
+
+	if len(ips) == 0 {
+		if firstErr != nil {
+			return dnsResult{}, firstErr
+		}
+		return dnsResult{}, fmt.Errorf("no A or AAAA records found for %s", hostname)
+	}
+
+	return dnsResult{IPs: ips, TTL: minTTL}, nil
+}
+
 // addDNATRulesForExternalName resolves the ExternalName DNS and creates DNAT rules
-// for each resolved IP address. It also stores the resolved IPs and refresh timestamp
-// in the config so they can be used for deletion and periodic re-resolution.
+// for each resolved IP address. It also stores the resolved IPs, TTL, and refresh
+// timestamp in the config so they can be used for deletion and periodic re-resolution.
 func addDNATRulesForExternalName(nfr linuxfw.NetfilterRunner, serviceName string, cfg *ingressservices.Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
 	}
-	ips, err := net.LookupIP(cfg.ExternalName)
+	result, err := lookupIPWithTTL(cfg.ExternalName)
 	if err != nil {
 		return fmt.Errorf("error resolving ExternalName %q: %w", cfg.ExternalName, err)
 	}
-	if len(ips) == 0 {
+	if len(result.IPs) == 0 {
 		return fmt.Errorf("ExternalName %q resolved to no IP addresses", cfg.ExternalName)
 	}
 
-	log.Printf("resolved ExternalName %q to %d IP(s)", cfg.ExternalName, len(ips))
+	log.Printf("resolved ExternalName %q to %d IP(s), TTL=%ds", cfg.ExternalName, len(result.IPs), result.TTL)
 	cfg.LastDNSRefresh = time.Now().Unix()
+	cfg.DNSTTL = result.TTL
 
 	// Clear any previously resolved IPs and store new ones
 	cfg.ResolvedIPs = nil
 
 	var errs []error
-	for _, ip := range ips {
+	for _, ip := range result.IPs {
 		destIP, ok := netip.AddrFromSlice(ip)
 		if !ok {
 			log.Printf("warning: could not parse resolved IP %v for %s", ip, cfg.ExternalName)

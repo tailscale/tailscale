@@ -283,6 +283,52 @@ func TestConfigDNSRefreshNeeded(t *testing.T) {
 			},
 			expected: false,
 		},
+		// TTL-aware refresh tests
+		{
+			name: "TTL shorter than default interval - needs refresh",
+			cfg: &Config{
+				ExternalName:   "example.com",
+				LastDNSRefresh: now.Add(-60 * time.Second).Unix(),
+				DNSTTL:         30, // 30 seconds TTL
+			},
+			expected: true, // 60s elapsed > 30s TTL
+		},
+		{
+			name: "TTL shorter than default interval - no refresh needed",
+			cfg: &Config{
+				ExternalName:   "example.com",
+				LastDNSRefresh: now.Add(-20 * time.Second).Unix(),
+				DNSTTL:         30, // 30 seconds TTL
+			},
+			expected: false, // 20s elapsed < 30s TTL
+		},
+		{
+			name: "TTL longer than max interval - uses max",
+			cfg: &Config{
+				ExternalName:   "example.com",
+				LastDNSRefresh: now.Add(-11 * time.Minute).Unix(),
+				DNSTTL:         3600, // 1 hour TTL (longer than 10 min max)
+			},
+			expected: true, // 11 min elapsed > 10 min max
+		},
+		{
+			name: "TTL longer than max interval - no refresh needed",
+			cfg: &Config{
+				ExternalName:   "example.com",
+				LastDNSRefresh: now.Add(-5 * time.Minute).Unix(),
+				DNSTTL:         3600, // 1 hour TTL (longer than 10 min max)
+			},
+			expected: false, // 5 min elapsed < 10 min max (TTL capped)
+		},
+		{
+			name: "zero TTL uses default interval",
+			cfg: &Config{
+				ExternalName:   "example.com",
+				LastDNSRefresh: now.Add(-5 * time.Minute).Unix(),
+				DNSTTL:         0, // zero TTL, should use default
+			},
+			expected: false, // 5 min < 10 min default
+		},
 	}
 
 	for _, tt := range tests {

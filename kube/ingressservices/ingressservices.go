@@ -68,6 +68,9 @@ type Config struct {
 	// updated via DNS lookup. Used to determine when to re-resolve DNS for
 	// ExternalName services.
 	LastDNSRefresh int64 `json:"LastDNSRefresh,omitempty"`
+	// DNSTTL is the TTL (in seconds) from the DNS response. Used to determine
+	// when to re-resolve DNS. If zero, DNSRefreshInterval is used as fallback.
+	DNSTTL uint32 `json:"DNSTTL,omitempty"`
 }
 
 // IsExternalName returns true if this config is for an ExternalName service.
@@ -111,7 +114,8 @@ func (c *Config) EqualIgnoringResolved(other *Config) bool {
 }
 
 // DNSRefreshNeeded returns true if this ExternalName config needs DNS re-resolution.
-// Returns false for non-ExternalName configs.
+// Returns false for non-ExternalName configs. Uses the DNS TTL if available,
+// capped at DNSRefreshInterval.
 func (c *Config) DNSRefreshNeeded(now time.Time) bool {
 	if c == nil || !c.IsExternalName() {
 		return false
@@ -119,8 +123,15 @@ func (c *Config) DNSRefreshNeeded(now time.Time) bool {
 	if c.LastDNSRefresh == 0 {
 		return true
 	}
+	interval := DNSRefreshInterval
+	if c.DNSTTL > 0 {
+		ttl := time.Duration(c.DNSTTL) * time.Second
+		if ttl < interval {
+			interval = ttl
+		}
+	}
 	lastRefresh := time.Unix(c.LastDNSRefresh, 0)
-	return now.Sub(lastRefresh) >= DNSRefreshInterval
+	return now.Sub(lastRefresh) >= interval
 }
 
 // Mapping describes a rule that forwards traffic from Tailscale Service IP to a
