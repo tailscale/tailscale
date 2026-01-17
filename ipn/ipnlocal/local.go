@@ -526,6 +526,8 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
 
+	sys.Engine.Get().SetPeerByIPLookupFunc(b.lookupPeerByIP)
+
 	if sys.InitialConfig != nil {
 		if err := b.initPrefsFromConfig(sys.InitialConfig); err != nil {
 			return nil, err
@@ -661,6 +663,25 @@ func (b *LocalBackend) currentNode() *nodeBackend {
 		v.ready()
 	}
 	return b.currentNodeAtomic.Load()
+}
+
+func (b *LocalBackend) lookupPeerByIP(ip netip.Addr) (peerKey key.NodePublic, ok bool) {
+	nb := b.currentNode()
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+
+	nid, ok := nb.nodeByAddr[ip]
+	if !ok {
+		log.Printf("lookupPeerByIP: %v -> no node ID", ip)
+		return key.NodePublic{}, false
+	}
+	peer, ok := nb.peers[nid]
+	if !ok {
+		log.Printf("lookupPeerByIP: no node ID %v", nid)
+		return key.NodePublic{}, false
+	}
+	log.Printf("lookupPeerByIP: %v -> %v (%v)", ip, peer.Name(), peer.Key())
+	return peer.Key(), true
 }
 
 // FindExtensionByName returns an active extension with the given name,
