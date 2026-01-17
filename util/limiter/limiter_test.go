@@ -5,6 +5,7 @@ package limiter
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -173,6 +174,10 @@ func TestDumpHTML(t *testing.T) {
 	if diff := cmp.Diff(out.String(), want); diff != "" {
 		t.Fatalf("wrong DumpHTML output (-got+want):\n%s", diff)
 	}
+}
+
+func TestDumpHTMLEmpty(t *testing.T) {
+	new(Limiter[string]).DumpHTML(io.Discard, false) // should not panic
 }
 
 func allowed(t *testing.T, limiter *Limiter[string], key string, count int, now time.Time) {
