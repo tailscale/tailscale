@@ -54,6 +54,10 @@ func TestIsNotableNotify(t *testing.T) {
 				rf.SetString("foo")
 			case reflect.Slice:
 				rf.Set(reflect.MakeSlice(rf.Type(), 1, 1))
+			case reflect.Map:
+				m := reflect.MakeMap(rf.Type())
+				m.SetMapIndex(reflect.Zero(rf.Type().Key()), reflect.Zero(rf.Type().Elem()))
+				rf.Set(m)
 			default:
 				t.Errorf("unhandled field kind %v for %q", rf.Kind(), sf.Name)
 			}

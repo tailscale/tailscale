@@ -70,6 +70,7 @@ func TestPrefsEqual(t *testing.T) {
 		"DriveShares",
 		"RelayServerPort",
 		"RelayServerStaticEndpoints",
+		"NotifyPeerStatus",
 		"AllowSingleHosts",
 		"Persist",
 	}
@@ -389,6 +390,16 @@ func TestPrefsEqual(t *testing.T) {
 			&Prefs{RelayServerStaticEndpoints: aps("[2001:db8::1]:40000", "192.0.2.2:40000")},
 			&Prefs{RelayServerStaticEndpoints: aps("[2001:db8::1]:40000", "192.0.2.1:40000")},
 			false,
+		},
+		{
+			&Prefs{NotifyPeerStatus: true},
+			&Prefs{NotifyPeerStatus: false},
+			false,
+		},
+		{
+			&Prefs{NotifyPeerStatus: true},
+			&Prefs{NotifyPeerStatus: true},
+			true,
 		},
 	}
 	for i, tt := range tests {

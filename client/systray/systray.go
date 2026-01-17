@@ -78,6 +78,7 @@ type Menu struct {
 
 	lc          *local.Client
 	status      *ipnstate.Status
+	prefs       *ipn.Prefs
 	curProfile  ipn.LoginProfile
 	allProfiles []ipn.LoginProfile
 
@@ -94,6 +95,7 @@ type Menu struct {
 	disconnect  *systray.MenuItem
 	self        *systray.MenuItem
 	exitNodes   *systray.MenuItem
+	notifyPeer  *systray.MenuItem
 	more        *systray.MenuItem
 	rebuildMenu *systray.MenuItem
 	quit        *systray.MenuItem
@@ -203,6 +205,11 @@ func (menu *Menu) updateState() {
 		if local.IsAccessDeniedError(err) {
 			menu.readonly = true
 		}
+		log.Print(err)
+	}
+
+	menu.prefs, err = menu.lc.GetPrefs(menu.bgCtx)
+	if err != nil {
 		log.Print(err)
 	}
 }
@@ -316,6 +323,23 @@ func (menu *Menu) rebuild() {
 
 	if !menu.readonly {
 		menu.rebuildExitNodeMenu(ctx)
+	}
+
+	if menu.prefs != nil {
+		title := "Notify on device status"
+		menu.notifyPeer = systray.AddMenuItemCheckbox(title, "", menu.prefs.NotifyPeerStatus)
+		targetState := !menu.prefs.NotifyPeerStatus
+		onClick(ctx, menu.notifyPeer, func(ctx context.Context) {
+			_, err := menu.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					NotifyPeerStatus: targetState,
+				},
+				NotifyPeerStatusSet: true,
+			})
+			if err != nil {
+				log.Printf("error setting notify peer status: %v", err)
+			}
+		})
 	}
 
 	menu.more = systray.AddMenuItem("More settings", "")
@@ -512,7 +536,7 @@ func (menu *Menu) watchIPNBus() {
 }
 
 func (menu *Menu) watchIPNBusInner() error {
-	watcher, err := menu.lc.WatchIPNBus(menu.bgCtx, 0)
+	watcher, err := menu.lc.WatchIPNBus(menu.bgCtx, ipn.NotifyPeerOnlineStatusChanges)
 	if err != nil {
 		return fmt.Errorf("watching ipn bus: %w", err)
 	}
@@ -533,6 +557,38 @@ func (menu *Menu) watchIPNBusInner() error {
 			}
 			if n.Prefs != nil {
 				rebuild = true
+				if p := n.Prefs.AsStruct(); p != nil {
+					menu.mu.Lock()
+					menu.prefs = p
+					menu.mu.Unlock()
+				}
+			}
+			if len(n.PeerOnlineStatusChanges) > 0 {
+				menu.mu.Lock()
+				notify := menu.prefs != nil && menu.prefs.NotifyPeerStatus
+				menu.mu.Unlock()
+
+				if notify {
+					for _, change := range n.PeerOnlineStatusChanges {
+						name := "Peer"
+						menu.mu.Lock()
+						if menu.status != nil {
+							if peer, ok := menu.status.Peer[change.NodeKey]; ok {
+								name = strings.Split(peer.DNSName, ".")[0]
+								if name == "" {
+									name = peer.HostName
+								}
+							}
+						}
+						menu.mu.Unlock()
+
+						statusStr := "Offline"
+						if change.Online {
+							statusStr = "Online"
+						}
+						menu.sendNotification(fmt.Sprintf("%s is %s", name, statusStr), "")
+					}
+				}
 			}
 			if rebuild {
 				menu.rebuildCh <- struct{}{}
