@@ -117,6 +117,26 @@ func TestLimiterOverdraft(t *testing.T) {
 	hasTokens(t, limiter, "foo", -1)
 }
 
+func TestDumpHTMLEmpty(t *testing.T) {
+	// DumpHTML should not panic on an uninitialized limiter (nil cache).
+	limiter := &Limiter[string]{
+		Size:           3,
+		Max:            10,
+		RefillInterval: testRefillInterval,
+	}
+
+	var out bytes.Buffer
+	limiter.DumpHTML(&out, false)
+	want := strings.Join([]string{
+		"<table>",
+		"<tr><th>Key</th><th>Tokens</th></tr>",
+		"</table>",
+	}, "")
+	if diff := cmp.Diff(out.String(), want); diff != "" {
+		t.Fatalf("wrong DumpHTML output (-got+want):\n%s", diff)
+	}
+}
+
 func TestDumpHTML(t *testing.T) {
 	limiter := &Limiter[string]{
 		Size:           3,
