@@ -275,6 +275,113 @@ func populate() {
 	addDoH("76.76.10.4", "https://freedns.controld.com/family")
 	addDoH("2606:1a40::4", "https://freedns.controld.com/family")
 	addDoH("2606:1a40:1::4", "https://freedns.controld.com/family")
+
+	// Control D
+	// See https://controld.com/free-dns
+	// Control D -OISD - Full
+	// https://oisd.nl/downloads
+	addDoH("76.76.2.32", "https://freedns.controld.com/x-oisd")
+	addDoH("76.76.10.32", "https://freedns.controld.com/x-oisd")
+	addDoH("2606:1a40::32", "https://freedns.controld.com/x-oisd")
+	addDoH("2606:1a40:1::32", "https://freedns.controld.com/x-oisd")
+
+	// Control D -OISD - Basic
+	// https://oisd.nl/downloads
+	addDoH("76.76.2.33", "https://freedns.controld.com/x-oisd-basic")
+	addDoH("76.76.10.33", "https://freedns.controld.com/x-oisd-basic")
+	addDoH("2606:1a40::33", "https://freedns.controld.com/x-oisd-basic")
+	addDoH("2606:1a40:1::33", "https://freedns.controld.com/x-oisd-basic")
+
+	// Control D -StevenBlack Unified
+	// https://github.com/StevenBlack/hosts
+	addDoH("76.76.2.35", "https://freedns.controld.com/x-stevenblack")
+	addDoH("76.76.10.35", "https://freedns.controld.com/x-stevenblack")
+	addDoH("2606:1a40::35", "https://freedns.controld.com/x-stevenblack")
+	addDoH("2606:1a40:1::35", "https://freedns.controld.com/x-stevenblack")
+
+	// Control D -1Hosts - Lite
+	// https://github.com/badmojr/1Hosts
+	addDoH("76.76.2.38", "https://freedns.controld.com/x-1hosts-lite")
+	addDoH("76.76.10.38", "https://freedns.controld.com/x-1hosts-lite")
+	addDoH("2606:1a40::38", "https://freedns.controld.com/x-1hosts-lite")
+	addDoH("2606:1a40:1::38", "https://freedns.controld.com/x-1hosts-lite")
+
+	// Control D -1Hosts - Pro
+	// https://github.com/badmojr/1Hosts
+	addDoH("76.76.2.39", "https://freedns.controld.com/x-1hosts-pro")
+	addDoH("76.76.10.39", "https://freedns.controld.com/x-1hosts-pro")
+	addDoH("2606:1a40::39", "https://freedns.controld.com/x-1hosts-pro")
+	addDoH("2606:1a40:1::39", "https://freedns.controld.com/x-1hosts-pro")
+
+	// Control D -1Hosts - Xtra
+	// https://github.com/badmojr/1Hosts
+	addDoH("76.76.2.48", "https://freedns.controld.com/x-1hosts-xtra")
+	addDoH("76.76.10.48", "https://freedns.controld.com/x-1hosts-xtra")
+	addDoH("2606:1a40::48", "https://freedns.controld.com/x-1hosts-xtra")
+	addDoH("2606:1a40:1::48", "https://freedns.controld.com/x-1hosts-xtra")
+
+	// Control D -Hagezi's DNS - Light
+	// https://github.com/hagezi/dns-blocklists
+	addDoH("76.76.2.37", "https://freedns.controld.com/x-hagezi-light")
+	addDoH("76.76.10.37", "https://freedns.controld.com/x-hagezi-light")
+	addDoH("2606:1a40::37", "https://freedns.controld.com/x-hagezi-light")
+	addDoH("2606:1a40:1::37", "https://freedns.controld.com/x-hagezi-light")
+
+	// Control D -Hagezi's DNS - Normal
+	// https://github.com/hagezi/dns-blocklists
+	addDoH("76.76.2.40", "https://freedns.controld.com/x-hagezi-normal")
+	addDoH("76.76.10.40", "https://freedns.controld.com/x-hagezi-normal")
+	addDoH("2606:1a40::40", "https://freedns.controld.com/x-hagezi-normal")
+	addDoH("2606:1a40:1::40", "https://freedns.controld.com/x-hagezi-normal")
+
+	// Control D -Hagezi's DNS - Pro
+	// https://github.com/hagezi/dns-blocklists
+	addDoH("76.76.2.41", "https://freedns.controld.com/x-hagezi-pro")
+	addDoH("76.76.10.41", "https://freedns.controld.com/x-hagezi-pro")
+	addDoH("2606:1a40::41", "https://freedns.controld.com/x-hagezi-pro")
+	addDoH("2606:1a40:1::41", "https://freedns.controld.com/x-hagezi-pro")
+
+	// Control D -Hagezi's DNS - Pro Plus
+	// https://github.com/hagezi/dns-blocklists
+	addDoH("76.76.2.42", "https://freedns.controld.com/x-hagezi-proplus")
+	addDoH("76.76.10.42", "https://freedns.controld.com/x-hagezi-proplus")
+	addDoH("2606:1a40::42", "https://freedns.controld.com/x-hagezi-proplus")
+	addDoH("2606:1a40:1::42", "https://freedns.controld.com/x-hagezi-proplus")
+
+	// Control D -Hagezi's DNS - Ultimate
+	// https://github.com/hagezi/dns-blocklists
+	addDoH("76.76.2.45", "https://freedns.controld.com/x-hagezi-ultimate")
+	addDoH("76.76.10.45", "https://freedns.controld.com/x-hagezi-ultimate")
+	addDoH("2606:1a40::45", "https://freedns.controld.com/x-hagezi-ultimate")
+	addDoH("2606:1a40:1::45", "https://freedns.controld.com/x-hagezi-ultimate")
+
+	// Control D -Hagezi's DNS - TIF
+	// https://github.com/hagezi/dns-blocklists
+	addDoH("76.76.2.46", "https://freedns.controld.com/x-hagezi-tif")
+	addDoH("76.76.10.46", "https://freedns.controld.com/x-hagezi-tif")
+	addDoH("2606:1a40::46", "https://freedns.controld.com/x-hagezi-tif")
+	addDoH("2606:1a40:1::46", "https://freedns.controld.com/x-hagezi-tif")
+
+	// Control D -GoodbyeAds
+	// https://github.com/jerryn70/GoodbyeAds
+	addDoH("76.76.2.43", "https://freedns.controld.com/x-goodbyeads")
+	addDoH("76.76.10.43", "https://freedns.controld.com/x-goodbyeads")
+	addDoH("2606:1a40::43", "https://freedns.controld.com/x-goodbyeads")
+	addDoH("2606:1a40:1::43", "https://freedns.controld.com/x-goodbyeads")
+
+	// Control D -AdGuard Filter
+	// https://github.com/AdguardTeam/AdGuardSDNSFilter
+	addDoH("76.76.2.44", "https://freedns.controld.com/x-adguard")
+	addDoH("76.76.10.44", "https://freedns.controld.com/x-adguard")
+	addDoH("2606:1a40::44", "https://freedns.controld.com/x-adguard")
+	addDoH("2606:1a40:1::44", "https://freedns.controld.com/x-adguard")
+
+	// Control D -hBlock
+	// https://github.com/hectorm/hblock
+	addDoH("76.76.2.47", "https://freedns.controld.com/x-hblock")
+	addDoH("76.76.10.47", "https://freedns.controld.com/x-hblock")
+	addDoH("2606:1a40::47", "https://freedns.controld.com/x-hblock")
+	addDoH("2606:1a40:1::47", "https://freedns.controld.com/x-hblock")
 }
 
 var (
