@@ -4,11 +4,40 @@
 package appc
 
 import (
+	"errors"
 	"net/netip"
+	"os"
 	"sync"
 
 	"tailscale.com/tailcfg"
 )
+
+// // mzbs fake functions ////
+func (c *Conn25) ClientTransitIPForMagicIP(magic netip.Addr) (netip.Addr, error) {
+	if !magic.Is4() {
+		return netip.Addr{}, errors.New("bootleg transit ip for magic ip only deals with ip4 for now")
+	}
+	mb := magic.As4()
+	mb[0], mb[1] = 169, 254
+
+	return netip.AddrFrom4(mb), nil
+}
+
+func (c *Conn25) ConnectorRealIPForTransitIPConnection(clientSrc, transitIP netip.Addr) (netip.Addr, error) {
+	// The transitIP may have overlap on this connector, right?
+	// In order to disambiguate we also need to know what client this came from.
+	// And all we have in the packet is the client src IP address.
+	return netip.MustParseAddr("104.16.184.241"), nil // icanhazip.com
+}
+
+func (c *Conn25) SelfIsConnector() bool {
+	// We need this so that if this is a connector, the datapath can quickly look in the
+	// connector flow tracking table to fast path trafffic.
+	v, _ := os.LookupEnv("MZB_SELF_IS_CONNECTOR")
+	return v == "true"
+}
+
+//// end mzbs fake functions ////
 
 // Conn25 holds the developing state for the as yet nascent next generation app connector.
 // There is currently (2025-12-08) no actual app connecting functionality.
