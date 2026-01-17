@@ -70,6 +70,7 @@ func TestPrefsEqual(t *testing.T) {
 		"DriveShares",
 		"RelayServerPort",
 		"RelayServerStaticEndpoints",
+		"CustomMullvadAccount",
 		"AllowSingleHosts",
 		"Persist",
 	}
@@ -388,6 +389,16 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{RelayServerStaticEndpoints: aps("[2001:db8::1]:40000", "192.0.2.2:40000")},
 			&Prefs{RelayServerStaticEndpoints: aps("[2001:db8::1]:40000", "192.0.2.1:40000")},
+			false,
+		},
+		{
+			&Prefs{CustomMullvadAccount: "1234567890123456"},
+			&Prefs{CustomMullvadAccount: "1234567890123456"},
+			true,
+		},
+		{
+			&Prefs{CustomMullvadAccount: "1234567890123456"},
+			&Prefs{CustomMullvadAccount: "6543210987654321"},
 			false,
 		},
 	}
