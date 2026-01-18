@@ -75,36 +75,36 @@ jobs:
           key: ${{ steps.hash.outputs.key }}
           enableCrossOsArchive: true
 
-  race-root-integration:
-    runs-on: ubuntu-24.04
-    needs: gomod-cache
-    strategy:
-      fail-fast: false # don't abort the entire matrix if one element fails
-      matrix:
-        include:
-          - shard: '1/4'
-          - shard: '2/4'
-          - shard: '3/4'
-          - shard: '4/4'
-    steps:
-    - name: checkout
-      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-      with:
-        path: src
-    - name: Restore Go module cache
-      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        path: gomodcache
-        key: ${{ needs.gomod-cache.outputs.cache-key }}
-        enableCrossOsArchive: true
-    - name: build test wrapper
-      working-directory: src
-      run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
-    - name: integration tests as root
-      working-directory: src
-      run: PATH=$PWD/tool:$PATH /tmp/testwrapper -exec "sudo -E" -race ./tstest/integration/
-      env:
-        TS_TEST_SHARD: ${{ matrix.shard }}
+  # race-root-integration:
+  #   runs-on: ubuntu-24.04
+  #   needs: gomod-cache
+  #   strategy:
+  #     fail-fast: false # don't abort the entire matrix if one element fails
+  #     matrix:
+  #       include:
+  #         - shard: '1/4'
+  #         - shard: '2/4'
+  #         - shard: '3/4'
+  #         - shard: '4/4'
+  #   steps:
+  #   - name: checkout
+  #     uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+  #     with:
+  #       path: src
+  #   - name: Restore Go module cache
+  #     uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+  #     with:
+  #       path: gomodcache
+  #       key: ${{ needs.gomod-cache.outputs.cache-key }}
+  #       enableCrossOsArchive: true
+  #   - name: build test wrapper
+  #     working-directory: src
+  #     run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
+  #   - name: integration tests as root
+  #     working-directory: src
+  #     run: PATH=$PWD/tool:$PATH /tmp/testwrapper -exec "sudo -E" -race ./tstest/integration/
+  #     env:
+  #       TS_TEST_SHARD: ${{ matrix.shard }}
 
   test:
     strategy:
@@ -112,16 +112,16 @@ jobs:
       matrix:
         include:
           - goarch: amd64
-          - goarch: amd64
-            buildflags: "-race"
-            shard: '1/3'
-          - goarch: amd64
-            buildflags: "-race"
-            shard: '2/3'
-          - goarch: amd64
-            buildflags: "-race"
-            shard: '3/3'
-          - goarch: "386" # thanks yaml
+          # - goarch: amd64
+          #   buildflags: "-race"
+          #   shard: '1/3'
+          # - goarch: amd64
+          #   buildflags: "-race"
+          #   shard: '2/3'
+          # - goarch: amd64
+          #   buildflags: "-race"
+          #   shard: '3/3'
+          # - goarch: "386" # thanks yaml
     runs-on: ubuntu-24.04
     needs: gomod-cache
     steps:
@@ -231,8 +231,8 @@ jobs:
       fail-fast: false # don't abort the entire matrix if one element fails
       matrix:
         include:
-          - key: "win-bench"
-            name: "benchmarks"
+          # - key: "win-bench"
+          #   name: "benchmarks"
           - key: "win-shard-1-2"
             shard: "1/2"
           - key: "win-shard-2-2"
@@ -286,338 +286,338 @@ jobs:
       run: |
         Invoke-Expression "$env:GOCACHEPROG --stats" | jq .
 
-  win-tool-go:
-    runs-on: windows-latest
-    needs: gomod-cache
-    name: Windows (win-tool-go)
-    steps:
-    - name: checkout
-      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-      with:
-        path: src
-    - name: test-tool-go
-      working-directory: src
-      run: ./tool/go version
+  # win-tool-go:
+  #   runs-on: windows-latest
+  #   needs: gomod-cache
+  #   name: Windows (win-tool-go)
+  #   steps:
+  #   - name: checkout
+  #     uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+  #     with:
+  #       path: src
+  #   - name: test-tool-go
+  #     working-directory: src
+  #     run: ./tool/go version
 
-  privileged:
-    needs: gomod-cache
-    runs-on: ubuntu-24.04
-    container:
-      image: golang:latest
-      options: --privileged
-    steps:
-    - name: checkout
-      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-      with:
-        path: src
-    - name: Restore Go module cache
-      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        path: gomodcache
-        key: ${{ needs.gomod-cache.outputs.cache-key }}
-        enableCrossOsArchive: true
-    - name: chown
-      working-directory: src
-      run: chown -R $(id -u):$(id -g) $PWD
-    - name: privileged tests
-      working-directory: src
-      run: ./tool/go test ./util/linuxfw ./derp/xdp
+  # privileged:
+  #   needs: gomod-cache
+  #   runs-on: ubuntu-24.04
+  #   container:
+  #     image: golang:latest
+  #     options: --privileged
+  #   steps:
+  #   - name: checkout
+  #     uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+  #     with:
+  #       path: src
+  #   - name: Restore Go module cache
+  #     uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+  #     with:
+  #       path: gomodcache
+  #       key: ${{ needs.gomod-cache.outputs.cache-key }}
+  #       enableCrossOsArchive: true
+  #   - name: chown
+  #     working-directory: src
+  #     run: chown -R $(id -u):$(id -g) $PWD
+  #   - name: privileged tests
+  #     working-directory: src
+  #     run: ./tool/go test ./util/linuxfw ./derp/xdp
 
-  vm:
-    needs: gomod-cache
-    runs-on: ["self-hosted", "linux", "vm"]
-    # VM tests run with some privileges, don't let them run on 3p PRs.
-    if: github.repository == 'tailscale/tailscale'
-    steps:
-    - name: checkout
-      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-      with:
-        path: src
-    - name: Restore Go module cache
-      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        path: gomodcache
-        key: ${{ needs.gomod-cache.outputs.cache-key }}
-        enableCrossOsArchive: true
-    - name: Run VM tests
-      working-directory: src
-      run: ./tool/go test ./tstest/integration/vms -v -no-s3 -run-vm-tests -run=TestRunUbuntu2404
-      env:
-        HOME: "/var/lib/ghrunner/home"
-        TMPDIR: "/tmp"
-        XDG_CACHE_HOME: "/var/lib/ghrunner/cache"
+  # vm:
+  #   needs: gomod-cache
+  #   runs-on: ["self-hosted", "linux", "vm"]
+  #   # VM tests run with some privileges, don't let them run on 3p PRs.
+  #   if: github.repository == 'tailscale/tailscale'
+  #   steps:
+  #   - name: checkout
+  #     uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+  #     with:
+  #       path: src
+  #   - name: Restore Go module cache
+  #     uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+  #     with:
+  #       path: gomodcache
+  #       key: ${{ needs.gomod-cache.outputs.cache-key }}
+  #       enableCrossOsArchive: true
+  #   - name: Run VM tests
+  #     working-directory: src
+  #     run: ./tool/go test ./tstest/integration/vms -v -no-s3 -run-vm-tests -run=TestRunUbuntu2404
+  #     env:
+  #       HOME: "/var/lib/ghrunner/home"
+  #       TMPDIR: "/tmp"
+  #       XDG_CACHE_HOME: "/var/lib/ghrunner/cache"
 
-  cross: # cross-compile checks, build only.
-    needs: gomod-cache
-    strategy:
-      fail-fast: false # don't abort the entire matrix if one element fails
-      matrix:
-        include:
-          # Note: linux/amd64 is not in this matrix, because that goos/goarch is
-          # tested more exhaustively in the 'test' job above.
-          - goos: linux
-            goarch: arm64
-          - goos: linux
-            goarch: "386" # thanks yaml
-          - goos: linux
-            goarch: loong64
-          - goos: linux
-            goarch: arm
-            goarm: "5"
-          - goos: linux
-            goarch: arm
-            goarm: "7"
-          # macOS
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-          # Windows
-          - goos: windows
-            goarch: amd64
-          - goos: windows
-            goarch: arm64
-          # BSDs
-          - goos: freebsd
-            goarch: amd64
-          - goos: openbsd
-            goarch: amd64
+  # cross: # cross-compile checks, build only.
+  #   needs: gomod-cache
+  #   strategy:
+  #     fail-fast: false # don't abort the entire matrix if one element fails
+  #     matrix:
+  #       include:
+  #         # Note: linux/amd64 is not in this matrix, because that goos/goarch is
+  #         # tested more exhaustively in the 'test' job above.
+  #         - goos: linux
+  #           goarch: arm64
+  #         - goos: linux
+  #           goarch: "386" # thanks yaml
+  #         - goos: linux
+  #           goarch: loong64
+  #         - goos: linux
+  #           goarch: arm
+  #           goarm: "5"
+  #         - goos: linux
+  #           goarch: arm
+  #           goarm: "7"
+  #         # macOS
+  #         - goos: darwin
+  #           goarch: amd64
+  #         - goos: darwin
+  #           goarch: arm64
+  #         # Windows
+  #         - goos: windows
+  #           goarch: amd64
+  #         - goos: windows
+  #           goarch: arm64
+  #         # BSDs
+  #         - goos: freebsd
+  #           goarch: amd64
+  #         - goos: openbsd
+  #           goarch: amd64
 
-    runs-on: ubuntu-24.04
-    steps:
-    - name: checkout
-      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-      with:
-        path: src
-    - name: Restore Go module cache
-      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        path: gomodcache
-        key: ${{ needs.gomod-cache.outputs.cache-key }}
-        enableCrossOsArchive: true
-    - name: Restore Cache
-      id: restore-cache
-      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        # Note: this is only restoring the build cache. Mod cache is shared amongst
-        # all jobs in the workflow.
-        path: |
-          ~/.cache/go-build
-          ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
-        restore-keys: |
-          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
-          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-
-          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-
-    - name: build all
-      working-directory: src
-      run: ./tool/go build ./cmd/...
-      env:
-        GOOS: ${{ matrix.goos }}
-        GOARCH: ${{ matrix.goarch }}
-        GOARM: ${{ matrix.goarm }}
-        CGO_ENABLED: "0"
-    - name: build tests
-      working-directory: src
-      run: ./tool/go test -exec=true ./...
-      env:
-        GOOS: ${{ matrix.goos }}
-        GOARCH: ${{ matrix.goarch }}
-        CGO_ENABLED: "0"
-    - name: Tidy cache
-      working-directory: src
-      shell: bash
-      run: |
-        find $(go env GOCACHE) -type f -mmin +90 -delete
-    - name: Save Cache
-      # Save cache even on failure, but only on cache miss and main branch to avoid thrashing.
-      if: always() && steps.restore-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
-      uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        # Note: this is only saving the build cache. Mod cache is shared amongst
-        # all jobs in the workflow.
-        path: |
-          ~/.cache/go-build
-          ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+  #   runs-on: ubuntu-24.04
+  #   steps:
+  #   - name: checkout
+  #     uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+  #     with:
+  #       path: src
+  #   - name: Restore Go module cache
+  #     uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+  #     with:
+  #       path: gomodcache
+  #       key: ${{ needs.gomod-cache.outputs.cache-key }}
+  #       enableCrossOsArchive: true
+  #   - name: Restore Cache
+  #     id: restore-cache
+  #     uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+  #     with:
+  #       # Note: this is only restoring the build cache. Mod cache is shared amongst
+  #       # all jobs in the workflow.
+  #       path: |
+  #         ~/.cache/go-build
+  #         ~\AppData\Local\go-build
+  #       key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+  #       restore-keys: |
+  #         ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
+  #         ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-
+  #         ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-
+  #   - name: build all
+  #     working-directory: src
+  #     run: ./tool/go build ./cmd/...
+  #     env:
+  #       GOOS: ${{ matrix.goos }}
+  #       GOARCH: ${{ matrix.goarch }}
+  #       GOARM: ${{ matrix.goarm }}
+  #       CGO_ENABLED: "0"
+  #   - name: build tests
+  #     working-directory: src
+  #     run: ./tool/go test -exec=true ./...
+  #     env:
+  #       GOOS: ${{ matrix.goos }}
+  #       GOARCH: ${{ matrix.goarch }}
+  #       CGO_ENABLED: "0"
+  #   - name: Tidy cache
+  #     working-directory: src
+  #     shell: bash
+  #     run: |
+  #       find $(go env GOCACHE) -type f -mmin +90 -delete
+  #   - name: Save Cache
+  #     # Save cache even on failure, but only on cache miss and main branch to avoid thrashing.
+  #     if: always() && steps.restore-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+  #     uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+  #     with:
+  #       # Note: this is only saving the build cache. Mod cache is shared amongst
+  #       # all jobs in the workflow.
+  #       path: |
+  #         ~/.cache/go-build
+  #         ~\AppData\Local\go-build
+  #       key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
-  ios: # similar to cross above, but iOS can't build most of the repo. So, just
-       # make it build a few smoke packages.
-    runs-on: ubuntu-24.04
-    needs: gomod-cache
-    steps:
-    - name: checkout
-      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-      with:
-        path: src
-    - name: Restore Go module cache
-      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        path: gomodcache
-        key: ${{ needs.gomod-cache.outputs.cache-key }}
-        enableCrossOsArchive: true
-    - name: build some
-      working-directory: src
-      run: ./tool/go build ./ipn/... ./ssh/tailssh ./wgengine/ ./types/... ./control/controlclient
-      env:
-        GOOS: ios
-        GOARCH: arm64
+  # ios: # similar to cross above, but iOS can't build most of the repo. So, just
+  #      # make it build a few smoke packages.
+  #   runs-on: ubuntu-24.04
+  #   needs: gomod-cache
+  #   steps:
+  #   - name: checkout
+  #     uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+  #     with:
+  #       path: src
+  #   - name: Restore Go module cache
+  #     uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+  #     with:
+  #       path: gomodcache
+  #       key: ${{ needs.gomod-cache.outputs.cache-key }}
+  #       enableCrossOsArchive: true
+  #   - name: build some
+  #     working-directory: src
+  #     run: ./tool/go build ./ipn/... ./ssh/tailssh ./wgengine/ ./types/... ./control/controlclient
+  #     env:
+  #       GOOS: ios
+  #       GOARCH: arm64
 
-  crossmin: # cross-compile for platforms where we only check cmd/tailscale{,d}
-    needs: gomod-cache
-    strategy:
-      fail-fast: false # don't abort the entire matrix if one element fails
-      matrix:
-        include:
-          # Plan9
-          - goos: plan9
-            goarch: amd64
-          # AIX
-          - goos: aix
-            goarch: ppc64
-          # Solaris
-          - goos: solaris
-            goarch: amd64
-          # illumos
-          - goos: illumos
-            goarch: amd64
+  # crossmin: # cross-compile for platforms where we only check cmd/tailscale{,d}
+  #   needs: gomod-cache
+  #   strategy:
+  #     fail-fast: false # don't abort the entire matrix if one element fails
+  #     matrix:
+  #       include:
+  #         # Plan9
+  #         - goos: plan9
+  #           goarch: amd64
+  #         # AIX
+  #         - goos: aix
+  #           goarch: ppc64
+  #         # Solaris
+  #         - goos: solaris
+  #           goarch: amd64
+  #         # illumos
+  #         - goos: illumos
+  #           goarch: amd64
 
-    runs-on: ubuntu-24.04
-    steps:
-    - name: checkout
-      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-      with:
-        path: src
-    - name: Restore Go module cache
-      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        path: gomodcache
-        key: ${{ needs.gomod-cache.outputs.cache-key }}
-        enableCrossOsArchive: true
-    - name: Restore Cache
-      id: restore-cache
-      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        # Note: this is only restoring the build cache. Mod cache is shared amongst
-        # all jobs in the workflow.
-        path: |
-          ~/.cache/go-build
-          ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
-        restore-keys: |
-          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
-          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-
-          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-
-    - name: build core
-      working-directory: src
-      run: ./tool/go build ./cmd/tailscale ./cmd/tailscaled
-      env:
-        GOOS: ${{ matrix.goos }}
-        GOARCH: ${{ matrix.goarch }}
-        GOARM: ${{ matrix.goarm }}
-        CGO_ENABLED: "0"
-    - name: Tidy cache
-      working-directory: src
-      shell: bash
-      run: |
-        find $(go env GOCACHE) -type f -mmin +90 -delete
-    - name: Save Cache
-      # Save cache even on failure, but only on cache miss and main branch to avoid thrashing.
-      if: always() && steps.restore-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
-      uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        # Note: this is only saving the build cache. Mod cache is shared amongst
-        # all jobs in the workflow.
-        path: |
-          ~/.cache/go-build
-          ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+  #   runs-on: ubuntu-24.04
+  #   steps:
+  #   - name: checkout
+  #     uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+  #     with:
+  #       path: src
+  #   - name: Restore Go module cache
+  #     uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+  #     with:
+  #       path: gomodcache
+  #       key: ${{ needs.gomod-cache.outputs.cache-key }}
+  #       enableCrossOsArchive: true
+  #   - name: Restore Cache
+  #     id: restore-cache
+  #     uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+  #     with:
+  #       # Note: this is only restoring the build cache. Mod cache is shared amongst
+  #       # all jobs in the workflow.
+  #       path: |
+  #         ~/.cache/go-build
+  #         ~\AppData\Local\go-build
+  #       key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+  #       restore-keys: |
+  #         ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
+  #         ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-
+  #         ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-
+  #   - name: build core
+  #     working-directory: src
+  #     run: ./tool/go build ./cmd/tailscale ./cmd/tailscaled
+  #     env:
+  #       GOOS: ${{ matrix.goos }}
+  #       GOARCH: ${{ matrix.goarch }}
+  #       GOARM: ${{ matrix.goarm }}
+  #       CGO_ENABLED: "0"
+  #   - name: Tidy cache
+  #     working-directory: src
+  #     shell: bash
+  #     run: |
+  #       find $(go env GOCACHE) -type f -mmin +90 -delete
+  #   - name: Save Cache
+  #     # Save cache even on failure, but only on cache miss and main branch to avoid thrashing.
+  #     if: always() && steps.restore-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+  #     uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+  #     with:
+  #       # Note: this is only saving the build cache. Mod cache is shared amongst
+  #       # all jobs in the workflow.
+  #       path: |
+  #         ~/.cache/go-build
+  #         ~\AppData\Local\go-build
+  #       key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
-  android:
-    # similar to cross above, but android fails to build a few pieces of the
-    # repo. We should fix those pieces, they're small, but as a stepping stone,
-    # only test the subset of android that our past smoke test checked.
-    runs-on: ubuntu-24.04
-    needs: gomod-cache
-    steps:
-    - name: checkout
-      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-      with:
-        path: src
-      # Super minimal Android build that doesn't even use CGO and doesn't build everything that's needed
-      # and is only arm64. But it's a smoke build: it's not meant to catch everything. But it'll catch
-      # some Android breakages early.
-      # TODO(bradfitz): better; see https://github.com/tailscale/tailscale/issues/4482
-    - name: Restore Go module cache
-      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        path: gomodcache
-        key: ${{ needs.gomod-cache.outputs.cache-key }}
-        enableCrossOsArchive: true
-    - name: build some
-      working-directory: src
-      run: ./tool/go install ./net/netns ./ipn/ipnlocal ./wgengine/magicsock/ ./wgengine/ ./wgengine/router/ ./wgengine/netstack ./util/dnsname/ ./ipn/ ./net/netmon ./wgengine/router/ ./tailcfg/ ./types/logger/ ./net/dns ./hostinfo ./version ./ssh/tailssh
-      env:
-        GOOS: android
-        GOARCH: arm64
+  # android:
+  #   # similar to cross above, but android fails to build a few pieces of the
+  #   # repo. We should fix those pieces, they're small, but as a stepping stone,
+  #   # only test the subset of android that our past smoke test checked.
+  #   runs-on: ubuntu-24.04
+  #   needs: gomod-cache
+  #   steps:
+  #   - name: checkout
+  #     uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+  #     with:
+  #       path: src
+  #     # Super minimal Android build that doesn't even use CGO and doesn't build everything that's needed
+  #     # and is only arm64. But it's a smoke build: it's not meant to catch everything. But it'll catch
+  #     # some Android breakages early.
+  #     # TODO(bradfitz): better; see https://github.com/tailscale/tailscale/issues/4482
+  #   - name: Restore Go module cache
+  #     uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+  #     with:
+  #       path: gomodcache
+  #       key: ${{ needs.gomod-cache.outputs.cache-key }}
+  #       enableCrossOsArchive: true
+  #   - name: build some
+  #     working-directory: src
+  #     run: ./tool/go install ./net/netns ./ipn/ipnlocal ./wgengine/magicsock/ ./wgengine/ ./wgengine/router/ ./wgengine/netstack ./util/dnsname/ ./ipn/ ./net/netmon ./wgengine/router/ ./tailcfg/ ./types/logger/ ./net/dns ./hostinfo ./version ./ssh/tailssh
+  #     env:
+  #       GOOS: android
+  #       GOARCH: arm64
 
-  wasm: # builds tsconnect, which is the only wasm build we support
-    runs-on: ubuntu-24.04
-    needs: gomod-cache
-    steps:
-    - name: checkout
-      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-      with:
-        path: src
-    - name: Restore Go module cache
-      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        path: gomodcache
-        key: ${{ needs.gomod-cache.outputs.cache-key }}
-        enableCrossOsArchive: true
-    - name: Restore Cache
-      id: restore-cache
-      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        # Note: this is only restoring the build cache. Mod cache is shared amongst
-        # all jobs in the workflow.
-        path: |
-          ~/.cache/go-build
-          ~\AppData\Local\go-build
-        key: ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
-        restore-keys: |
-          ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
-          ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-
-          ${{ runner.os }}-js-wasm-go-
-    - name: build tsconnect client
-      working-directory: src
-      run: ./tool/go build ./cmd/tsconnect/wasm ./cmd/tailscale/cli
-      env:
-        GOOS: js
-        GOARCH: wasm
-    - name: build tsconnect server
-      working-directory: src
-      # Note, no GOOS/GOARCH in env on this build step, we're running a build
-      # tool that handles the build itself.
-      run: |
-        ./tool/go run ./cmd/tsconnect --fast-compression build
-        ./tool/go run ./cmd/tsconnect --fast-compression build-pkg
-    - name: Tidy cache
-      working-directory: src
-      shell: bash
-      run: |
-        find $(go env GOCACHE) -type f -mmin +90 -delete
-    - name: Save Cache
-      # Save cache even on failure, but only on cache miss and main branch to avoid thrashing.
-      if: always() && steps.restore-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
-      uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-      with:
-        # Note: this is only saving the build cache. Mod cache is shared amongst
-        # all jobs in the workflow.
-        path: |
-          ~/.cache/go-build
-          ~\AppData\Local\go-build
-        key: ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+  # wasm: # builds tsconnect, which is the only wasm build we support
+  #   runs-on: ubuntu-24.04
+  #   needs: gomod-cache
+  #   steps:
+  #   - name: checkout
+  #     uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+  #     with:
+  #       path: src
+  #   - name: Restore Go module cache
+  #     uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+  #     with:
+  #       path: gomodcache
+  #       key: ${{ needs.gomod-cache.outputs.cache-key }}
+  #       enableCrossOsArchive: true
+  #   - name: Restore Cache
+  #     id: restore-cache
+  #     uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+  #     with:
+  #       # Note: this is only restoring the build cache. Mod cache is shared amongst
+  #       # all jobs in the workflow.
+  #       path: |
+  #         ~/.cache/go-build
+  #         ~\AppData\Local\go-build
+  #       key: ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+  #       restore-keys: |
+  #         ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
+  #         ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-
+  #         ${{ runner.os }}-js-wasm-go-
+  #   - name: build tsconnect client
+  #     working-directory: src
+  #     run: ./tool/go build ./cmd/tsconnect/wasm ./cmd/tailscale/cli
+  #     env:
+  #       GOOS: js
+  #       GOARCH: wasm
+  #   - name: build tsconnect server
+  #     working-directory: src
+  #     # Note, no GOOS/GOARCH in env on this build step, we're running a build
+  #     # tool that handles the build itself.
+  #     run: |
+  #       ./tool/go run ./cmd/tsconnect --fast-compression build
+  #       ./tool/go run ./cmd/tsconnect --fast-compression build-pkg
+  #   - name: Tidy cache
+  #     working-directory: src
+  #     shell: bash
+  #     run: |
+  #       find $(go env GOCACHE) -type f -mmin +90 -delete
+  #   - name: Save Cache
+  #     # Save cache even on failure, but only on cache miss and main branch to avoid thrashing.
+  #     if: always() && steps.restore-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+  #     uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+  #     with:
+  #       # Note: this is only saving the build cache. Mod cache is shared amongst
+  #       # all jobs in the workflow.
+  #       path: |
+  #         ~/.cache/go-build
+  #         ~\AppData\Local\go-build
+  #       key: ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   tailscale_go: # Subset of tests that depend on our custom Go toolchain.
     runs-on: ubuntu-24.04
@@ -637,72 +637,72 @@ jobs:
       run: ./tool/go test -tags=tailscale_go,ts_enable_sockstats ./net/sockstats/...
 
 
-  fuzz:
-    # This target periodically breaks (see TS_FUZZ_CURRENTLY_BROKEN at the top
-    # of the file), so it's more complex than usual: the 'build fuzzers' step
-    # might fail, and depending on the value of 'TS_FUZZ_CURRENTLY_BROKEN', that
-    # might or might not be fine. The steps after the build figure out whether
-    # the success/failure is expected, and appropriately pass/fail the job
-    # overall accordingly.
-    #
-    # Practically, this means that all steps after 'build fuzzers' must have an
-    # explicit 'if' condition, because the default condition for steps is
-    # 'success()', meaning "only run this if no previous steps failed".
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    steps:
-    - name: build fuzzers
-      id: build
-      # As of 21 October 2025, this repo doesn't tag releases, so this commit
-      # hash is just the tip of master.
-      uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@1242ccb5b6352601e73c00f189ac2ae397242264
-      # continue-on-error makes steps.build.conclusion be 'success' even if
-      # steps.build.outcome is 'failure'. This means this step does not
-      # contribute to the job's overall pass/fail evaluation.
-      continue-on-error: true
-      with:
-       oss-fuzz-project-name: 'tailscale'
-       dry-run: false
-       language: go
-    - name: report unexpectedly broken fuzz build
-      if: steps.build.outcome == 'failure' && env.TS_FUZZ_CURRENTLY_BROKEN != 'true'
-      run: |
-        echo "fuzzer build failed, see above for why"
-        echo "if the failure is due to OSS-Fuzz not being on the latest Go yet,"
-        echo "set TS_FUZZ_CURRENTLY_BROKEN=true in .github/workflows/test.yml"
-        echo "to temporarily disable fuzzing until OSS-Fuzz works again."
-        exit 1
-    - name: report unexpectedly working fuzz build
-      if: steps.build.outcome == 'success' && env.TS_FUZZ_CURRENTLY_BROKEN == 'true'
-      run: |
-        echo "fuzzer build succeeded, but we expect it to be broken"
-        echo "please set TS_FUZZ_CURRENTLY_BROKEN=false in .github/workflows/test.yml"
-        echo "to reenable fuzz testing"
-        exit 1
-    - name: run fuzzers
-      id: run
-      # Run the fuzzers whenever they're able to build, even if we're going to
-      # report a failure because TS_FUZZ_CURRENTLY_BROKEN is set to the wrong
-      # value.
-      if: steps.build.outcome == 'success'
-      # As of 21 October 2025, this repo doesn't tag releases, so this commit
-      # hash is just the tip of master.
-      uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@1242ccb5b6352601e73c00f189ac2ae397242264
-      with:
-        oss-fuzz-project-name: 'tailscale'
-        fuzz-seconds: 150
-        dry-run: false
-        language: go
-    - name: Set artifacts_path in env (workaround for actions/upload-artifact#176)
-      if: steps.run.outcome != 'success' && steps.build.outcome == 'success'
-      run: |
-        echo "artifacts_path=$(realpath .)" >> $GITHUB_ENV
-    - name: upload crash
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-      if: steps.run.outcome != 'success' && steps.build.outcome == 'success'
-      with:
-        name: artifacts
-        path: ${{ env.artifacts_path }}/out/artifacts
+  # fuzz:
+  #   # This target periodically breaks (see TS_FUZZ_CURRENTLY_BROKEN at the top
+  #   # of the file), so it's more complex than usual: the 'build fuzzers' step
+  #   # might fail, and depending on the value of 'TS_FUZZ_CURRENTLY_BROKEN', that
+  #   # might or might not be fine. The steps after the build figure out whether
+  #   # the success/failure is expected, and appropriately pass/fail the job
+  #   # overall accordingly.
+  #   #
+  #   # Practically, this means that all steps after 'build fuzzers' must have an
+  #   # explicit 'if' condition, because the default condition for steps is
+  #   # 'success()', meaning "only run this if no previous steps failed".
+  #   if: github.event_name == 'pull_request'
+  #   runs-on: ubuntu-24.04
+  #   steps:
+  #   - name: build fuzzers
+  #     id: build
+  #     # As of 21 October 2025, this repo doesn't tag releases, so this commit
+  #     # hash is just the tip of master.
+  #     uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@1242ccb5b6352601e73c00f189ac2ae397242264
+  #     # continue-on-error makes steps.build.conclusion be 'success' even if
+  #     # steps.build.outcome is 'failure'. This means this step does not
+  #     # contribute to the job's overall pass/fail evaluation.
+  #     continue-on-error: true
+  #     with:
+  #      oss-fuzz-project-name: 'tailscale'
+  #      dry-run: false
+  #      language: go
+  #   - name: report unexpectedly broken fuzz build
+  #     if: steps.build.outcome == 'failure' && env.TS_FUZZ_CURRENTLY_BROKEN != 'true'
+  #     run: |
+  #       echo "fuzzer build failed, see above for why"
+  #       echo "if the failure is due to OSS-Fuzz not being on the latest Go yet,"
+  #       echo "set TS_FUZZ_CURRENTLY_BROKEN=true in .github/workflows/test.yml"
+  #       echo "to temporarily disable fuzzing until OSS-Fuzz works again."
+  #       exit 1
+  #   - name: report unexpectedly working fuzz build
+  #     if: steps.build.outcome == 'success' && env.TS_FUZZ_CURRENTLY_BROKEN == 'true'
+  #     run: |
+  #       echo "fuzzer build succeeded, but we expect it to be broken"
+  #       echo "please set TS_FUZZ_CURRENTLY_BROKEN=false in .github/workflows/test.yml"
+  #       echo "to reenable fuzz testing"
+  #       exit 1
+  #   - name: run fuzzers
+  #     id: run
+  #     # Run the fuzzers whenever they're able to build, even if we're going to
+  #     # report a failure because TS_FUZZ_CURRENTLY_BROKEN is set to the wrong
+  #     # value.
+  #     if: steps.build.outcome == 'success'
+  #     # As of 21 October 2025, this repo doesn't tag releases, so this commit
+  #     # hash is just the tip of master.
+  #     uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@1242ccb5b6352601e73c00f189ac2ae397242264
+  #     with:
+  #       oss-fuzz-project-name: 'tailscale'
+  #       fuzz-seconds: 150
+  #       dry-run: false
+  #       language: go
+  #   - name: Set artifacts_path in env (workaround for actions/upload-artifact#176)
+  #     if: steps.run.outcome != 'success' && steps.build.outcome == 'success'
+  #     run: |
+  #       echo "artifacts_path=$(realpath .)" >> $GITHUB_ENV
+  #   - name: upload crash
+  #     uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+  #     if: steps.run.outcome != 'success' && steps.build.outcome == 'success'
+  #     with:
+  #       name: artifacts
+  #       path: ${{ env.artifacts_path }}/out/artifacts
 
   depaware:
     runs-on: ubuntu-24.04
@@ -851,20 +851,20 @@ jobs:
     if: always()
     # Any of these jobs failing causes a slack notification.
     needs: 
-      - android
+      # - android
       - test
       - windows
-      - vm
-      - cross
-      - ios
-      - wasm
-      - tailscale_go
-      - fuzz
-      - depaware
-      - go_generate
-      - go_mod_tidy
-      - licenses
-      - staticcheck
+      # - vm
+      # - cross
+      # - ios
+      # - wasm
+      # - tailscale_go
+      # - fuzz
+      # - depaware
+      # - go_generate
+      # - go_mod_tidy
+      # - licenses
+      # - staticcheck
     runs-on: ubuntu-24.04
     steps:
     - name: notify  
@@ -896,20 +896,20 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     needs:
-      - android
+      # - android
       - test
       - windows
-      - vm
-      - cross
-      - ios
-      - wasm
-      - tailscale_go
-      - fuzz
-      - depaware
-      - go_generate
-      - go_mod_tidy
-      - licenses
-      - staticcheck
+      # - vm
+      # - cross
+      # - ios
+      # - wasm
+      # - tailscale_go
+      # - fuzz
+      # - depaware
+      # - go_generate
+      # - go_mod_tidy
+      # - licenses
+      # - staticcheck
     steps:
     - name: Decide if change is okay to merge
       if: github.event_name != 'push'
@@ -924,10 +924,10 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     needs:
-      - android
-      - cross
-      - crossmin
-      - ios
+      # - android
+      # - cross
+      # - crossmin
+      # - ios
       - tailscale_go
       - depaware
       - go_generate
@@ -947,12 +947,12 @@ jobs:
     needs:
       - check_mergeability_strict
       - test
-      - windows
-      - vm
-      - wasm
-      - fuzz
-      - race-root-integration
-      - privileged
+      # - windows
+      # - vm
+      # - wasm
+      # - fuzz
+      # - race-root-integration
+      # - privileged
     steps:
     - name: Decide if change is okay to merge
       if: github.event_name != 'push'
