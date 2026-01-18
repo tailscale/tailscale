@@ -75,12 +75,13 @@ type endpoint struct {
 	// mu protects all following fields.
 	mu syncs.Mutex // Lock ordering: Conn.mu, then endpoint.mu
 
-	heartBeatTimer            *time.Timer    // nil when idle
-	lastSendExt               mono.Time      // last time there were outgoing packets sent to this peer from an external trigger (e.g. wireguard-go or disco pingCLI)
-	lastSendAny               mono.Time      // last time there were outgoing packets sent this peer from any trigger, internal or external to magicsock
-	lastFullPing              mono.Time      // last time we pinged all disco or wireguard only endpoints
-	lastUDPRelayPathDiscovery mono.Time      // last time we ran UDP relay path discovery
-	derpAddr                  netip.AddrPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
+	heartBeatTimer             *time.Timer // nil when idle
+	lastSendExt                mono.Time   // last time there were outgoing packets sent to this peer from an external trigger (e.g. wireguard-go or disco pingCLI)
+	lastSendAny                mono.Time   // last time there were outgoing packets sent this peer from any trigger, internal or external to magicsock
+	lastFullPing               mono.Time   // last time we pinged all disco or wireguard only endpoints
+	lastUDPRelayPathDiscovery  mono.Time   // last time we ran UDP relay path discovery
+	lastTSMPDiscoAdvertisement mono.Time
+	derpAddr                   netip.AddrPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
 
 	bestAddr           addrQuality // best non-DERP path; zero if none; mutate via setBestAddrLocked()
 	bestAddrAt         mono.Time   // time best address re-confirmed
