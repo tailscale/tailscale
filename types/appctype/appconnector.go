@@ -93,3 +93,10 @@ type RouteUpdate struct {
 	Advertise   []netip.Prefix
 	Unadvertise []netip.Prefix
 }
+
+// Conn25Attr describes a set of domains
+// serviced by specified conn25 connectors.
+type Conn25Attr struct {
+	Name    string   `json:"name,omitempty"`
+	Domains []string `json:"domains,omitempty"`
+}
