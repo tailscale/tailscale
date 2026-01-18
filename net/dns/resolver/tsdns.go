@@ -249,6 +249,7 @@ func New(logf logger.Logf, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, h
 		dialer:   dialer,
 		health:   health,
 	}
+	syncs.RegisterMutex(&r.mu, "resolver.Resolver.mu")
 	r.forwarder = newForwarder(r.logf, netMon, linkSel, dialer, health, knobs)
 	return r
 }

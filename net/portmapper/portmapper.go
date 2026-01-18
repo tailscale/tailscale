@@ -266,6 +266,7 @@ func NewClient(c Config) *Client {
 		netMon:   c.NetMon,
 		onChange: c.OnChange,
 	}
+	syncs.RegisterMutex(&ret.mu, "portmapper.Client.mu")
 	if buildfeatures.HasPortMapper {
 		// TODO(bradfitz): move this to method on netMon
 		ret.ipAndGateway = netmon.LikelyHomeRouterIP

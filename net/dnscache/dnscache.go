@@ -98,8 +98,14 @@ type Resolver struct {
 
 	sf singleflight.Group[string, ipRes]
 
+	registerMutexOnce sync.Once
+
 	mu      syncs.Mutex
 	ipCache map[string]ipCacheEntry
+}
+
+func (r *Resolver) registerMutex() {
+	syncs.RegisterMutex(&r.mu, "dnscache.Resolver.mu")
 }
 
 // ipRes is the type used by the Resolver.sf singleflight group.
@@ -193,6 +199,8 @@ func SetDebugLoggingEnabled(v bool) {
 // If err is nil, ip will be non-nil. The v6 address may be nil even
 // with a nil error.
 func (r *Resolver) LookupIP(ctx context.Context, host string) (ip, v6 netip.Addr, allIPs []netip.Addr, err error) {
+	r.registerMutexOnce.Do(r.registerMutex)
+
 	if r.SingleHostStaticResult != nil {
 		if r.SingleHost != host {
 			return zaddr, zaddr, nil, fmt.Errorf("dnscache: unexpected hostname %q doesn't match expected %q", host, r.SingleHost)
@@ -373,11 +381,13 @@ func (r *Resolver) addIPCache(host string, ip, ip6 netip.Addr, allIPs []netip.Ad
 
 // Dialer returns a wrapped DialContext func that uses the provided dnsCache.
 func Dialer(fwd netx.DialFunc, dnsCache *Resolver) netx.DialFunc {
+	dnsCache.registerMutexOnce.Do(dnsCache.registerMutex)
 	d := &dialer{
 		fwd:         fwd,
 		dnsCache:    dnsCache,
 		pastConnect: map[netip.Addr]time.Time{},
 	}
+	syncs.RegisterMutex(&d.mu, "dnscache.dialer.mu")
 	return d.DialContext
 }
 
@@ -386,11 +396,12 @@ type dialer struct {
 	fwd      netx.DialFunc
 	dnsCache *Resolver
 
-	mu          sync.Mutex
+	mu          syncs.Mutex
 	pastConnect map[netip.Addr]time.Time
 }
 
 func (d *dialer) DialContext(ctx context.Context, network, address string) (retConn net.Conn, ret error) {
+
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		// Bogus. But just let the real dialer return an error rather than
@@ -404,6 +415,7 @@ func (d *dialer) DialContext(ctx context.Context, network, address string) (retC
 		host:    host,
 		port:    port,
 	}
+	syncs.RegisterMutex(&dc.mu, "dnscache.dialCall.mu")
 	defer func() {
 		// On failure, consider that our DNS might be wrong and ask the DNS fallback mechanism for
 		// some other IPs to try.
