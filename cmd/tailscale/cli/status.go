@@ -57,6 +57,8 @@ https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go
 		fs.StringVar(&statusArgs.listen, "listen", "127.0.0.1:8384", "listen address for web mode; use port 0 for automatic")
 		fs.BoolVar(&statusArgs.browser, "browser", true, "Open a browser in web mode")
 		fs.BoolVar(&statusArgs.header, "header", false, "show column headers in table format")
+		fs.BoolVar(&statusArgs.want4, "4", false, "only show IPv4 addresses")
+		fs.BoolVar(&statusArgs.want6, "6", false, "only show IPv6 addresses")
 		return fs
 	})(),
 }
@@ -70,6 +72,8 @@ var statusArgs struct {
 	self    bool   // in CLI mode, show status of local machine
 	peers   bool   // in CLI mode, show status of peer machines
 	header  bool   // in CLI mode, show column headers in table format
+	want4   bool   // in CLI mode, only show IPv4 addresses
+	want6   bool   // in CLI mode, only show IPv6 addresses
 }
 
 const mullvadTCD = "mullvad.ts.net."
@@ -77,6 +81,9 @@ const mullvadTCD = "mullvad.ts.net."
 func runStatus(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("unexpected non-flag arguments to 'tailscale status'")
+	}
+	if statusArgs.want4 && statusArgs.want6 {
+		return errors.New("tailscale status -4 and -6 are mutually exclusive")
 	}
 	getStatus := localClient.Status
 	if !statusArgs.peers {
@@ -162,7 +169,7 @@ func runStatus(ctx context.Context, args []string) error {
 
 	printPS := func(ps *ipnstate.PeerStatus) {
 		f("%s\t%s\t%s\t%s\t",
-			firstIPString(ps.TailscaleIPs),
+			firstIPString(ps.TailscaleIPs, statusArgs.want4, statusArgs.want6),
 			dnsOrQuoteHostname(st, ps),
 			ownerLogin(st, ps),
 			ps.OS,
@@ -310,9 +317,20 @@ func ownerLogin(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
 	return u.LoginName
 }
 
-func firstIPString(v []netip.Addr) string {
+func firstIPString(v []netip.Addr, want4, want6 bool) string {
 	if len(v) == 0 {
 		return ""
 	}
-	return v[0].String()
+	if !want4 && !want6 {
+		return v[0].String()
+	}
+	for _, ip := range v {
+		if want4 && ip.Is4() {
+			return ip.String()
+		}
+		if want6 && ip.Is6() {
+			return ip.String()
+		}
+	}
+	return "" // IP version not found for this peer
 }
