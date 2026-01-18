@@ -3339,6 +3339,7 @@ spec:
                                     Required if S3 storage is not set up, to ensure that recordings are accessible.
                                 type: boolean
                             replicas:
+                                default: 1
                                 description: Replicas specifies how many instances of tsrecorder to run. Defaults to 1.
                                 format: int32
                                 minimum: 0
