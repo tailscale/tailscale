@@ -771,6 +771,11 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper, gro *gro.
 
 	// Determine if we care about this local packet.
 	dst := p.Dst.Addr()
+	var IPServiceMappings netmap.IPServiceMappings
+	if ns.lb != nil {
+		IPServiceMappings = ns.lb.IPServiceMappings()
+	}
+	serviceName, isVIPServiceIP := IPServiceMappings[dst]
 	switch {
 	case dst == serviceIP || dst == serviceIPv6:
 		// We want to intercept some traffic to the "service IP" (e.g.
@@ -786,6 +791,30 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper, gro *gro.
 			if port := p.Dst.Port(); port != 53 && !ns.isLoopbackPort(port) {
 				return filter.Accept, gro
 			}
+		}
+	case isVIPServiceIP:
+		if p.IPProto != ipproto.TCP {
+			return filter.Accept, gro
+		}
+		// returns all configured VIP services, since the IPServiceMappings contains
+		// inactive service IPs when node hosts the service, we need to check the
+		// service is active or not before dropping the packet.
+		VIPServices := ns.lb.VIPServices()
+		serviceActive := false
+		for _, svc := range VIPServices {
+			// Even though control only send service IP down when there is a config
+			// for the service, we want to still check that the config still exists
+			// before passing the packet to netstack.
+			if svc.Name == serviceName {
+				serviceActive = svc.Active
+			}
+		}
+		if !serviceActive {
+			return filter.Accept, gro
+		}
+		if debugNetstack() {
+			ns.logf("netstack: intercepting local VIP service packet: proto=%v dst=%v src=%v",
+				p.IPProto, p.Dst, p.Src)
 		}
 	case viaRange.Contains(dst):
 		// We need to handle 4via6 packets leaving the host if the via
@@ -998,10 +1027,30 @@ func (ns *Impl) shouldSendToHost(pkt *stack.PacketBuffer) bool {
 			return true
 		}
 
+		if ns.isVIPServiceIP(srcIP) {
+			dstIP := netip.AddrFrom4(v.DestinationAddress().As4())
+			if ns.isLocalIP(dstIP) {
+				if debugNetstack() {
+					ns.logf("netstack: sending VIP service packet to host: src=%v dst=%v", srcIP, dstIP)
+				}
+				return true
+			}
+		}
+
 	case header.IPv6:
 		srcIP := netip.AddrFrom16(v.SourceAddress().As16())
 		if srcIP == serviceIPv6 {
 			return true
+		}
+
+		if ns.isVIPServiceIP(srcIP) {
+			dstIP := netip.AddrFrom16(v.DestinationAddress().As16())
+			if ns.isLocalIP(dstIP) {
+				if debugNetstack() {
+					ns.logf("netstack: sending VIP service packet to host: src=%v dst=%v", srcIP, dstIP)
+				}
+				return true
+			}
 		}
 
 		if viaRange.Contains(srcIP) {
