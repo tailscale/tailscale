@@ -270,7 +270,7 @@ jobs:
       env:
         GODEBUG: gocachehash=1
       working-directory: src
-      run: go run ./cmd/testwrapper tailscale.com/cmd/cigocacher/testpkg
+      run: go test tailscale.com/cmd/cigocacher/testpkg
 
     - name: bench all
       if: matrix.key == 'win-bench'
