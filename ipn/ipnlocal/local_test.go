@@ -7380,8 +7380,31 @@ func TestRouteAllDisabled(t *testing.T) {
 			cfg := &wgcfg.Config{
 				Peers: tt.peers,
 			}
+			ServiceIPMappings := tailcfg.ServiceIPMappings{
+				"svc:test-service": []netip.Addr{
+					netip.MustParseAddr("100.64.1.2"),
+					netip.MustParseAddr("fd7a:abcd:1234::1"),
+				},
+			}
+			svcIPMapJSON, err := json.Marshal(ServiceIPMappings)
+			if err != nil {
+				t.Fatalf("failed to marshal ServiceIPMappings: %v", err)
+			}
+			nm := &netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Name: "test-node",
+					Addresses: []netip.Prefix{
+						pp("100.64.1.1/32"),
+					},
+					CapMap: tailcfg.NodeCapMap{
+						tailcfg.NodeAttrServiceHost: []tailcfg.RawMessage{
+							tailcfg.RawMessage(svcIPMapJSON),
+						},
+					},
+				}).View(),
+			}
 
-			rcfg := lb.routerConfigLocked(cfg, prefs.View(), false)
+			rcfg := lb.routerConfigLocked(cfg, prefs.View(), nm, false)
 			for _, p := range rcfg.Routes {
 				found := false
 				for _, r := range tt.wantEndpoints {
