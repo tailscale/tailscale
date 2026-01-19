@@ -43,7 +43,9 @@ import (
 var (
 	// counterNumRequestsproxies counts the number of API server requests proxied via this proxy.
 	counterNumRequestsProxied = clientmetric.NewCounter("k8s_auth_proxy_requests_proxied")
-	whoIsKey                  = ctxkey.New("", (*apitype.WhoIsResponse)(nil))
+	// NOTE: adding this metric so we can keep track of users during deprecation
+	counterExperimentalEventsVarUsed = clientmetric.NewCounter("ts_experimental_kube_api_events_var_used")
+	whoIsKey                         = ctxkey.New("", (*apitype.WhoIsResponse)(nil))
 )
 
 const (
@@ -133,6 +135,7 @@ func (ap *APIServerProxy) Run(ctx context.Context) error {
 	}
 
 	if ap.eventsEnabled {
+		counterExperimentalEventsVarUsed.Add(1)
 		ap.log.Warnf("DEPRECATED: %q environment variable is deprecated, and will be removed in v1.96. See documentation for more detail.", eventsEnabledVar)
 	}
 
