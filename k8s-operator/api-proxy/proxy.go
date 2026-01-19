@@ -315,10 +315,6 @@ func (ap *APIServerProxy) sessionForProto(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	if !c.enableRecordings {
-		ap.rp.ServeHTTP(w, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
-		return
-	}
 	ksr.CounterSessionRecordingsAttempted.Add(1) // at this point we know that users intended for this session to be recorded
 
 	wantsHeader := upgradeHeaderForProto[proto]
@@ -568,7 +564,6 @@ func addImpersonationHeaders(r *http.Request, log *zap.SugaredLogger) error {
 type recorderConfig struct {
 	failOpen          bool
 	enableEvents      bool
-	enableRecordings  bool
 	recorderAddresses []netip.AddrPort
 }
 
@@ -582,7 +577,6 @@ func determineRecorderConfig(who *apitype.WhoIsResponse) (c recorderConfig, _ er
 
 	c.failOpen = true
 	c.enableEvents = false
-	c.enableRecordings = true
 	rules, err := tailcfg.UnmarshalCapJSON[kubetypes.KubernetesCapRule](who.CapMap, tailcfg.PeerCapabilityKubernetes)
 	if err != nil {
 		return c, fmt.Errorf("failed to unmarshal Kubernetes capability: %w", err)
@@ -604,9 +598,6 @@ func determineRecorderConfig(who *apitype.WhoIsResponse) (c recorderConfig, _ er
 		}
 		if rule.EnableEvents {
 			c.enableEvents = true
-		}
-		if rule.EnableSessionRecordings {
-			c.enableRecordings = true
 		}
 	}
 	return c, nil
