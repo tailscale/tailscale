@@ -273,6 +273,7 @@ jobs:
       if: matrix.key != 'win-bench' # skip on bench builder
       env:
         GODEBUG: gocachehash=1,gocachetest=1
+        TS_TESTWRAPPER_DEBUG: "1"
       working-directory: src
       run: ${{ github.workspace }}/testwrapper.exe tailscale.com/cmd/cigocacher/testpkg
 
