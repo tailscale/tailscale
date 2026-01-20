@@ -4,6 +4,7 @@
 package appc
 
 import (
+	"fmt"
 	"net/netip"
 	"testing"
 
@@ -185,4 +186,11 @@ func TestTransitIPTargetUnknownTIP(t *testing.T) {
 	if got != want {
 		t.Fatalf("Unknown transit addr, want: %v, got %v", want, got)
 	}
+}
+
+func TestFran(t *testing.T) {
+	respbs := []byte{170, 165, 129, 128, 0, 1, 0, 1, 0, 0, 0, 0, 6, 103, 111, 111, 103, 108, 101, 3, 99, 111, 109, 0, 0, 1, 0, 1, 192, 12, 0, 1, 0, 1, 0, 0, 0, 15, 0, 4, 142, 250, 188, 238}
+	c := &Conn25{}
+	mappedBytes := c.MapDNSResponse(respbs)
+	fmt.Println(mappedBytes)
 }

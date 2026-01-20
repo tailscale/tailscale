@@ -67,6 +67,8 @@ type Manager struct {
 	knobs    *controlknobs.Knobs // or nil
 	goos     string              // if empty, gets set to runtime.GOOS
 
+	QueryResponseMapper func(bs []byte) []byte
+
 	mu     sync.Mutex // guards following
 	config *Config    // Tracks the last viable DNS configuration set by Set.  nil on failures other than compilation failures or if set has never been called.
 }
@@ -465,7 +467,15 @@ func (m *Manager) Query(ctx context.Context, bs []byte, family string, from neti
 		return nil, errFullQueue
 	}
 	defer atomic.AddInt32(&m.activeQueriesAtomic, -1)
-	return m.resolver.Query(ctx, bs, family, from)
+	outbs, err := m.resolver.Query(ctx, bs, family, from)
+	if err == nil && m.QueryResponseMapper != nil {
+		outbs = m.QueryResponseMapper(outbs)
+	}
+	return outbs, err
+}
+
+func (m *Manager) fran() {
+
 }
 
 const (

@@ -88,6 +88,7 @@ import (
 	"tailscale.com/util/execqueue"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/must"
 	"tailscale.com/util/osuser"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
@@ -271,6 +272,7 @@ type LocalBackend struct {
 	ccGen            clientGen          // function for producing controlclient; lazily populated
 	sshServer        SSHServer          // or nil, initialized lazily.
 	appConnector     *appc.AppConnector // or nil, initialized when configured.
+	conn25           *appc.Conn25       // or nil, initialized when configured.
 	// notifyCancel cancels notifications to the current SetNotifyCallback.
 	notifyCancel context.CancelFunc
 	cc           controlclient.Client // TODO(nickkhyl): move to nodeBackend
@@ -4923,6 +4925,27 @@ func (b *LocalBackend) blockEngineUpdatesLocked(block bool) {
 	b.blocked = block
 }
 
+func (b *LocalBackend) reconfigConn25(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
+	// TODO(fran) figure out if there's conn25ing happening, presumably if there's connectors in capmap and not like --accept-routes=false???? something?
+	// nb in contrast to appc, conn25 needs to keep state on the client too.
+	// TODO(fran) what happens when the profile changes? that's why we get called from authReconfig right?
+	// TODO(fran) this conn25 needs to be the same one in the extension in /feature/conn25
+	if b.conn25 == nil {
+		// TODO debug code
+		mpoolbuilder := &netipx.IPSetBuilder{}
+		mpoolbuilder.AddPrefix(netip.MustParsePrefix("1.0.0.0/16"))
+		tpoolbuilder := &netipx.IPSetBuilder{}
+		tpoolbuilder.AddPrefix(netip.MustParsePrefix("2.0.0.0/16"))
+		b.conn25 = appc.NewConn25(must.Get(mpoolbuilder.IPSet()), must.Get(tpoolbuilder.IPSet()))
+		dnsManager, ok := b.sys.DNSManager.GetOK()
+		if ok { // TODO
+			dnsManager.QueryResponseMapper = func(inbs []byte) []byte {
+				return b.conn25.MapDNSResponse(inbs)
+			}
+		}
+	}
+}
+
 // reconfigAppConnectorLocked updates the app connector state based on the
 // current network map and preferences.
 // b.mu must be held.
@@ -5065,6 +5088,7 @@ func (b *LocalBackend) authReconfigLocked() {
 	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, version.OS())
 	// If the current node is an app connector, ensure the app connector machine is started
 	b.reconfigAppConnectorLocked(nm, prefs)
+	b.reconfigConn25(nm, prefs)
 
 	if !prefs.WantRunning() {
 		b.logf("[v1] authReconfig: skipping because !WantRunning.")

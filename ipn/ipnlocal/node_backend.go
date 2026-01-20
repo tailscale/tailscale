@@ -841,6 +841,12 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 
 	// Add split DNS routes, with no regard to exit node configuration.
 	addSplitDNSRoutes(nm.DNS.Routes)
+	// TODO(fran) here's where we look for the capmap for conn25
+	if nm.SelfName() == "d783302cc665.taile25f.ts.net." {
+		addSplitDNSRoutes(map[string][]*dnstype.Resolver{
+			"google.com": {&dnstype.Resolver{Addr: "http://100.105.210.108:41811/dns-query"}},
+		})
+	}
 
 	// Set FallbackResolvers as the default resolvers in the
 	// scenarios that can't handle a purely split-DNS config. See
