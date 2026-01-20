@@ -265,12 +265,16 @@ jobs:
         cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
         cigocached-host: ${{ vars.CIGOCACHED_AZURE_HOST }}
 
+    - name: build test wrapper
+      working-directory: ${{ github.workspace }}/src
+      run: go build -o ${{ github.workspace }}/testwrapper.exe ./cmd/testwrapper
+
     - name: test
       if: matrix.key != 'win-bench' # skip on bench builder
       env:
         GODEBUG: gocachehash=1,gocachetest=1
       working-directory: src
-      run: go run ./cmd/testwrapper tailscale.com/cmd/cigocacher/testpkg
+      run: ${{ github.workspace }}/testwrapper.exe tailscale.com/cmd/cigocacher/testpkg
 
     - name: bench all
       if: matrix.key == 'win-bench'
