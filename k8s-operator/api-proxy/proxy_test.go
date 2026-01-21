@@ -166,15 +166,15 @@ func Test_determineRecorderConfig(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotFailOpen, gotRecorderAddresses, err := determineRecorderConfig(tt.who)
+			c, err := determineRecorderConfig(tt.who)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if gotFailOpen != tt.wantFailOpen {
-				t.Errorf("determineRecorderConfig() gotFailOpen = %v, want %v", gotFailOpen, tt.wantFailOpen)
+			if c.failOpen != tt.wantFailOpen {
+				t.Errorf("determineRecorderConfig() gotFailOpen = %v, want %v", c.failOpen, tt.wantFailOpen)
 			}
-			if !reflect.DeepEqual(gotRecorderAddresses, tt.wantRecorderAddresses) {
-				t.Errorf("determineRecorderConfig() gotRecorderAddresses = %v, want %v", gotRecorderAddresses, tt.wantRecorderAddresses)
+			if !reflect.DeepEqual(c.recorderAddresses, tt.wantRecorderAddresses) {
+				t.Errorf("determineRecorderConfig() gotRecorderAddresses = %v, want %v", c.recorderAddresses, tt.wantRecorderAddresses)
 			}
 		})
 	}
