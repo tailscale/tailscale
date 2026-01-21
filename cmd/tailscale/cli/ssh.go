@@ -63,6 +63,12 @@ func runSSH(ctx context.Context, args []string) error {
 			return nil
 		}
 		username = lu.Username
+		if runtime.GOOS == "windows" {
+			_, unqualifiedUsername, qualified := strings.Cut(username, "\\")
+			if qualified {
+				username = unqualifiedUsername
+			}
+		}
 	}
 
 	st, err := localClient.Status(ctx)
