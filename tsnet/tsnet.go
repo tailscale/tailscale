@@ -1410,6 +1410,8 @@ var ErrUntaggedServiceHost = errors.New("service hosts must be tagged nodes")
 // To advertise a Service with multiple ports, run ListenService multiple times.
 // For more information about Services, see
 // https://tailscale.com/kb/1552/tailscale-services
+//
+// This function will start the server if it is not already started.
 func (s *Server) ListenService(name string, mode ServiceMode) (*ServiceListener, error) {
 	if err := tailcfg.ServiceName(name).Validate(); err != nil {
 		return nil, err
