@@ -766,6 +766,8 @@ func TestFunnel(t *testing.T) {
 // after itself when closed. Specifically, changes made to the serve config
 // should be cleared.
 func TestFunnelClose(t *testing.T) {
+	tstest.Shard(t)
+
 	marshalServeConfig := func(t *testing.T, sc ipn.ServeConfigView) string {
 		t.Helper()
 		return string(must.Get(json.MarshalIndent(sc, "", "\t")))
@@ -862,6 +864,8 @@ func TestFunnelClose(t *testing.T) {
 }
 
 func TestListenService(t *testing.T) {
+	tstest.Shard(t)
+
 	// First test an error case which doesn't require all of the fancy setup.
 	t.Run("untagged_node_error", func(t *testing.T) {
 		ctx := t.Context()
