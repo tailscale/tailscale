@@ -688,7 +688,8 @@ func TestContainerBoot(t *testing.T) {
 					{
 						WantCmds: []string{
 							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking --experiments=widgets",
-							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --widget=rotated",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --widget=rotated",
 						},
 					}, {
 						Notify: runningNotify,
@@ -705,7 +706,8 @@ func TestContainerBoot(t *testing.T) {
 					{
 						WantCmds: []string{
 							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
-							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --accept-routes",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-routes",
 						},
 					}, {
 						Notify: runningNotify,
