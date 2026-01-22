@@ -120,6 +120,9 @@ spec:
             {{- with .Values.operatorConfig.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          ports:
+          - containerPort: 8080
+            name: metrics
           volumeMounts:
             {{- if .Values.oauthSecretVolume }}
             - name: oauth
