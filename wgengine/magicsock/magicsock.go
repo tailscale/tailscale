@@ -179,9 +179,10 @@ type Conn struct {
 
 	// A publisher for synchronization points to ensure correct ordering of
 	// config changes between magicsock and wireguard.
-	syncPub               *eventbus.Publisher[syncPoint]
-	allocRelayEndpointPub *eventbus.Publisher[UDPRelayAllocReq]
-	portUpdatePub         *eventbus.Publisher[router.PortUpdate]
+	syncPub                  *eventbus.Publisher[syncPoint]
+	allocRelayEndpointPub    *eventbus.Publisher[UDPRelayAllocReq]
+	portUpdatePub            *eventbus.Publisher[router.PortUpdate]
+	tsmpDiscoKeyAvailablePub *eventbus.Publisher[NewDiscoKeyAvailable]
 
 	// pconn4 and pconn6 are the underlying UDP sockets used to
 	// send/receive packets for wireguard and other magicsock
@@ -696,6 +697,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.syncPub = eventbus.Publish[syncPoint](ec)
 	c.allocRelayEndpointPub = eventbus.Publish[UDPRelayAllocReq](ec)
 	c.portUpdatePub = eventbus.Publish[router.PortUpdate](ec)
+	c.tsmpDiscoKeyAvailablePub = eventbus.Publish[NewDiscoKeyAvailable](ec)
 	eventbus.SubscribeFunc(ec, c.onPortMapChanged)
 	eventbus.SubscribeFunc(ec, c.onFilterUpdate)
 	eventbus.SubscribeFunc(ec, c.onNodeViewsUpdate)
@@ -1249,7 +1251,8 @@ func (c *Conn) DiscoPublicKey() key.DiscoPublic {
 
 // RotateDiscoKey generates a new discovery key pair and updates the connection
 // to use it. This invalidates all existing disco sessions and will cause peers
-// to re-establish discovery sessions with the new key.
+// to re-establish discovery sessions with the new key. Addtionally, the
+// lastTSMPDiscoAdvertisement on all endpoints is reset to 0.
 //
 // This is primarily for debugging and testing purposes, a future enhancement
 // should provide a mechanism for seamless rotation by supporting short term use
@@ -1263,6 +1266,11 @@ func (c *Conn) RotateDiscoKey() {
 	newShort := c.discoAtomic.Short()
 	c.discoInfo = make(map[key.DiscoPublic]*discoInfo)
 	connCtx := c.connCtx
+	for _, endpoint := range c.peerMap.byEpAddr {
+		endpoint.ep.mu.Lock()
+		endpoint.ep.sentDiscoKeyAdvertisement = false
+		endpoint.ep.mu.Unlock()
+	}
 	c.mu.Unlock()
 
 	c.logf("magicsock: rotated disco key from %v to %v", oldShort, newShort)
@@ -2247,6 +2255,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		if debugDisco() {
 			c.logf("magicsock: disco: failed to open naclbox from %v (wrong rcpt?) via %s", sender, via)
 		}
+
 		metricRecvDiscoBadKey.Add(1)
 		return
 	}
@@ -2653,6 +2662,8 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 		go c.ReSTUN("refresh-for-peering")
 		return
 	}
+
+	c.maybeSendTSMPDiscoAdvert(de)
 
 	eps := make([]netip.AddrPort, 0, len(c.lastEndpoints))
 	for _, ep := range c.lastEndpoints {
@@ -4313,4 +4324,46 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 	c.peerMap.upsertEndpoint(ep, oldDiscoKey)
 	c.logf("magicsock: updated disco key for peer %v to %v", nodeKey.ShortString(), discoKey.ShortString())
 	metricTSMPDiscoKeyAdvertisementApplied.Add(1)
+}
+
+// NewDiscoKeyAvailable is an eventbus topic that is emitted when we're sending
+// a packet to a node and observe we haven't told it our current DiscoKey before.
+//
+// The publisher is magicsock, when we're sending a packet.
+// The subscriber is userspaceEngine, which sends a TSMP packet, also via
+// magicsock. This doesn't recurse infinitely because we only publish it once per
+// DiscoKey.
+// In the common case, a DiscoKey is not rotated within a process generation
+// (as of 2026-01-21), except with debug commands to simulate process restarts.
+//
+// The address is the first node address (tailscale address) of the node. It
+// does not matter if the address is v4/v6, the receiver should handle either.
+//
+// Since we have not yet communicated with the node at the time we are
+// sending this event, the resulting TSMPDiscoKeyAdvertisement will with all
+// likelihood be transmitted via DERP.
+type NewDiscoKeyAvailable struct {
+	NodeFirstAddr netip.Addr
+	NodeID        tailcfg.NodeID
+}
+
+// maybeSendTSMPDiscoAdvert conditionally emits an event indicating that we
+// should send our DiscoKey to the first node address of the magicksock endpoint.
+// The event is only emitted if we have not yet contacted that endpoint since
+// the DiscoKey changed.
+//
+// This condition is most likely met only once per endpoint, after the start of
+// tailscaled, but not until we contact the endpoint for the first time.
+//
+// We do not need the Conn to be locked, but the endpoint should be.
+func (c *Conn) maybeSendTSMPDiscoAdvert(de *endpoint) {
+	de.mu.Lock()
+	defer de.mu.Unlock()
+	if !de.sentDiscoKeyAdvertisement {
+		de.sentDiscoKeyAdvertisement = true
+		c.tsmpDiscoKeyAvailablePub.Publish(NewDiscoKeyAvailable{
+			NodeFirstAddr: de.nodeAddr,
+			NodeID:        de.nodeID,
+		})
+	}
 }
