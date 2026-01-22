@@ -8,6 +8,8 @@ package magicsock
 import (
 	"errors"
 	"syscall"
+
+	"tailscale.com/net/neterror"
 )
 
 // shouldRebind returns if the error is one that is known to be healed by a
@@ -17,7 +19,7 @@ func shouldRebind(err error) (ok bool, reason string) {
 	// EPIPE/ENOTCONN are common errors when a send fails due to a closed
 	// socket. There is some platform and version inconsistency in which
 	// error is returned, but the meaning is the same.
-	case errors.Is(err, syscall.EPIPE), errors.Is(err, syscall.ENOTCONN):
+	case neterror.IsClosedPipeError(err):
 		return true, "broken-pipe"
 
 	// EPERM is typically caused by EDR software, and has been observed to be

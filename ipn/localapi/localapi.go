@@ -35,6 +35,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail"
+	"tailscale.com/net/neterror"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
@@ -913,7 +914,9 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 	h.b.WatchNotificationsAs(ctx, h.Actor, mask, f.Flush, func(roNotify *ipn.Notify) (keepGoing bool) {
 		err := enc.Encode(roNotify)
 		if err != nil {
-			h.logf("json.Encode: %v", err)
+			if !neterror.IsClosedPipeError(err) {
+				h.logf("json.Encode: %v", err)
+			}
 			return false
 		}
 		f.Flush()
