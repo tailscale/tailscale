@@ -6,7 +6,6 @@
 package sockopts
 
 import (
-	"net"
 	"syscall"
 
 	"tailscale.com/types/nettype"
@@ -18,13 +17,13 @@ import (
 // the portable implementation (errPortable) if that fails, which may be
 // silently capped to net.core.{r,w}mem_max.
 //
-// If pconn is not a [*net.UDPConn], then SetBufferSize is no-op.
+// If pconn does not support setting buffer sizes, then SetBufferSize is no-op.
 func SetBufferSize(pconn nettype.PacketConn, direction BufferDirection, size int) (errForce error, errPortable error) {
 	opt := syscall.SO_RCVBUFFORCE
 	if direction == WriteDirection {
 		opt = syscall.SO_SNDBUFFORCE
 	}
-	if c, ok := pconn.(*net.UDPConn); ok {
+	if c, ok := pconn.(syscall.Conn); ok {
 		var rc syscall.RawConn
 		rc, errForce = c.SyscallConn()
 		if errForce == nil {

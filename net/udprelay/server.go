@@ -514,11 +514,11 @@ var _ batching.Conn = (*singlePacketConn)(nil)
 // singlePacketConn implements [batching.Conn] with single packet syscall
 // operations.
 type singlePacketConn struct {
-	*net.UDPConn
+	nettype.PacketConn
 }
 
 func (c *singlePacketConn) ReadBatch(msgs []ipv6.Message, _ int) (int, error) {
-	n, ap, err := c.UDPConn.ReadFromUDPAddrPort(msgs[0].Buffers[0])
+	n, ap, err := c.PacketConn.ReadFromUDPAddrPort(msgs[0].Buffers[0])
 	if err != nil {
 		return 0, err
 	}
@@ -534,7 +534,7 @@ func (c *singlePacketConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort, gen
 		} else {
 			buff = buff[offset:]
 		}
-		_, err := c.UDPConn.WriteToUDPAddrPort(buff, addr)
+		_, err := c.PacketConn.WriteToUDPAddrPort(buff, addr)
 		if err != nil {
 			return err
 		}
@@ -623,7 +623,7 @@ func (s *Server) bindSockets(desiredPort uint16) error {
 					desiredPort = s.uc6Port
 				}
 			}
-			uc, boundPort, err := s.bindSocketTo(listenConfig, network, desiredPort)
+			uc, boundPort, err := s.bindSocketTo(listenConfig, network, desiredPort, batching.IdealBatchSize)
 			if err != nil {
 				switch {
 				case i == 0 && network == "udp4":
@@ -639,8 +639,7 @@ func (s *Server) bindSockets(desiredPort uint16) error {
 					break SocketsLoop
 				}
 			}
-			pc := batching.TryUpgradeToConn(uc, network, batching.IdealBatchSize)
-			bc, ok := pc.(batching.Conn)
+			bc, ok := uc.(batching.Conn)
 			if !ok {
 				bc = &singlePacketConn{uc}
 			}
@@ -663,12 +662,11 @@ func (s *Server) bindSockets(desiredPort uint16) error {
 	return nil
 }
 
-func (s *Server) bindSocketTo(listenConfig *net.ListenConfig, network string, port uint16) (*net.UDPConn, uint16, error) {
-	lis, err := listenConfig.ListenPacket(context.Background(), network, fmt.Sprintf(":%d", port))
+func (s *Server) bindSocketTo(listenConfig *net.ListenConfig, network string, port uint16, batchSize int) (nettype.PacketConn, uint16, error) {
+	uc, err := batching.NewPacketListener(listenConfig, batchSize).ListenPacket(context.Background(), network, fmt.Sprintf(":%d", port))
 	if err != nil {
 		return nil, 0, err
 	}
-	uc := lis.(*net.UDPConn)
 	trySetUDPSocketOptions(uc, s.logf)
 	_, boundPortStr, err := net.SplitHostPort(uc.LocalAddr().String())
 	if err != nil {

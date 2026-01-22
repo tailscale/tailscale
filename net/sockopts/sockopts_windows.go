@@ -7,7 +7,7 @@ package sockopts
 
 import (
 	"fmt"
-	"net"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -17,9 +17,9 @@ import (
 // SetICMPErrImmunity sets socket options on pconn to prevent ICMP reception,
 // e.g. ICMP Port Unreachable, from surfacing as a syscall error.
 //
-// If pconn is not a [*net.UDPConn], then SetICMPErrImmunity is no-op.
+// If pconn is not a [syscall.Conn], then SetICMPErrImmunity is no-op.
 func SetICMPErrImmunity(pconn nettype.PacketConn) error {
-	c, ok := pconn.(*net.UDPConn)
+	c, ok := pconn.(syscall.Conn)
 	if !ok {
 		// not a UDP connection; nothing to do
 		return nil

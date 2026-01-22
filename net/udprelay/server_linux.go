@@ -6,10 +6,10 @@
 package udprelay
 
 import (
-	"net"
 	"syscall"
 
 	"golang.org/x/sys/unix"
+	"tailscale.com/types/nettype"
 )
 
 func trySetReusePort(_ string, _ string, c syscall.RawConn) {
@@ -18,8 +18,12 @@ func trySetReusePort(_ string, _ string, c syscall.RawConn) {
 	})
 }
 
-func isReusableSocket(uc *net.UDPConn) bool {
-	rc, err := uc.SyscallConn()
+func isReusableSocket(pc nettype.PacketConn) bool {
+	sc, ok := pc.(syscall.Conn)
+	if !ok {
+		return false
+	}
+	rc, err := sc.SyscallConn()
 	if err != nil {
 		return false
 	}

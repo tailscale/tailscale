@@ -37,15 +37,10 @@ type RebindingUDPConn struct {
 }
 
 // setConnLocked sets the provided nettype.PacketConn. It should be called only
-// after acquiring RebindingUDPConn.mu. It upgrades the provided
-// nettype.PacketConn to a batchingConn when appropriate. This upgrade is
-// intentionally pushed closest to where read/write ops occur in order to avoid
-// disrupting surrounding code that assumes nettype.PacketConn is a
-// *net.UDPConn.
-func (c *RebindingUDPConn) setConnLocked(p nettype.PacketConn, network string, batchSize int) {
-	upc := batching.TryUpgradeToConn(p, network, batchSize)
-	c.pconn = upc
-	c.pconnAtomic.Store(&upc)
+// after acquiring RebindingUDPConn.mu.
+func (c *RebindingUDPConn) setConnLocked(p nettype.PacketConn) {
+	c.pconn = p
+	c.pconnAtomic.Store(&p)
 	c.port = uint16(c.localAddrLocked().Port)
 }
 

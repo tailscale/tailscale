@@ -46,6 +46,9 @@ type xnetBatchWriter interface {
 var (
 	// [linuxBatchingConn] implements [Conn].
 	_ Conn = (*linuxBatchingConn)(nil)
+
+	// [linuxBatchingConn] implements [syscall.Conn].
+	_ syscall.Conn = (*linuxBatchingConn)(nil)
 )
 
 // linuxBatchingConn is a UDP socket that provides batched i/o. It implements
@@ -383,10 +386,10 @@ func setGSOSizeInControl(control *[]byte, gsoSize uint16) {
 	*control = (*control)[:unix.CmsgSpace(2)]
 }
 
-// TryUpgradeToConn probes the capabilities of the OS and pconn, and upgrades
+// tryUpgradeToConn probes the capabilities of the OS and pconn, and upgrades
 // pconn to a [Conn] if appropriate. A batch size of [IdealBatchSize] is
 // suggested for the best performance.
-func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int) nettype.PacketConn {
+func tryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int) nettype.PacketConn {
 	if runtime.GOOS != "linux" {
 		// Exclude Android.
 		return pconn

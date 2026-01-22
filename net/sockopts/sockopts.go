@@ -20,13 +20,20 @@ const (
 	WriteDirection BufferDirection = "write"
 )
 
+type bufferedConn interface {
+	SetReadBuffer(bytes int) error
+	SetWriteBuffer(bytes int) error
+}
+
+var _ bufferedConn = (*net.UDPConn)(nil)
+
 func portableSetBufferSize(pconn nettype.PacketConn, direction BufferDirection, size int) error {
 	if runtime.GOOS == "plan9" {
 		// Not supported. Don't try. Avoid logspam.
 		return nil
 	}
 	var err error
-	if c, ok := pconn.(*net.UDPConn); ok {
+	if c, ok := pconn.(bufferedConn); ok {
 		if direction == WriteDirection {
 			err = c.SetWriteBuffer(size)
 		} else {

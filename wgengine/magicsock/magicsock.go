@@ -3507,7 +3507,7 @@ func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, er
 	if c.testOnlyPacketListener != nil {
 		return nettype.MakePacketListenerWithNetIP(c.testOnlyPacketListener).ListenPacket(ctx, network, addr)
 	}
-	return nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, c.netMon)).ListenPacket(ctx, network, addr)
+	return batching.NewPacketListener(netns.Listener(c.logf, c.netMon), c.bind.BatchSize()).ListenPacket(ctx, network, addr)
 }
 
 // bindSocket binds a UDP socket to ruc.
@@ -3527,13 +3527,13 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	defer ruc.mu.Unlock()
 
 	if runtime.GOOS == "js" {
-		ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize())
+		ruc.setConnLocked(newBlockForeverConn())
 		return nil
 	}
 
 	if debugAlwaysDERP() {
 		c.logf("disabled %v per TS_DEBUG_ALWAYS_USE_DERP", network)
-		ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize())
+		ruc.setConnLocked(newBlockForeverConn())
 		return nil
 	}
 
@@ -3592,7 +3592,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 		if debugBindSocket() {
 			c.logf("magicsock: bindSocket: successfully listened %v port %d", network, port)
 		}
-		ruc.setConnLocked(pconn, network, c.bind.BatchSize())
+		ruc.setConnLocked(pconn)
 		if network == "udp4" {
 			c.health.SetUDP4Unbound(false)
 		}
@@ -3603,7 +3603,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	// Set pconn to a dummy conn whose reads block until closed.
 	// This keeps the receive funcs alive for a future in which
 	// we get a link change and we can try binding again.
-	ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize())
+	ruc.setConnLocked(newBlockForeverConn())
 	if network == "udp4" {
 		c.health.SetUDP4Unbound(true)
 	}

@@ -6,12 +6,13 @@
 package udprelay
 
 import (
-	"net"
 	"syscall"
+
+	"tailscale.com/types/nettype"
 )
 
 func trySetReusePort(_ string, _ string, _ syscall.RawConn) {}
 
-func isReusableSocket(*net.UDPConn) bool {
+func isReusableSocket(nettype.PacketConn) bool {
 	return false
 }

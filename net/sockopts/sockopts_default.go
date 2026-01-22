@@ -15,7 +15,7 @@ import (
 // errForce is only relevant for Linux, and will always be nil otherwise,
 // but we maintain a consistent cross-platform API.
 //
-// If pconn is not a [*net.UDPConn], then SetBufferSize is no-op.
+// If pconn does not support setting buffer sizes, then SetBufferSize is no-op.
 func SetBufferSize(pconn nettype.PacketConn, direction BufferDirection, size int) (errForce error, errPortable error) {
 	return nil, portableSetBufferSize(pconn, direction, size)
 }

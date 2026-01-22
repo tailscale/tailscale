@@ -9,8 +9,8 @@ import (
 	"tailscale.com/types/nettype"
 )
 
-// TryUpgradeToConn is no-op on all platforms except linux.
-func TryUpgradeToConn(pconn nettype.PacketConn, _ string, _ int) nettype.PacketConn {
+// tryUpgradeToConn is no-op on all platforms except linux.
+func tryUpgradeToConn(pconn nettype.PacketConn, _ string, _ int) nettype.PacketConn {
 	return pconn
 }
 

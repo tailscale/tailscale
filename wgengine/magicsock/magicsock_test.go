@@ -2108,8 +2108,8 @@ func TestRebindingUDPConn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer realConn.Close()
-	c.setConnLocked(realConn.(nettype.PacketConn), "udp4", 1)
-	c.setConnLocked(newBlockForeverConn(), "", 1)
+	c.setConnLocked(realConn.(nettype.PacketConn))
+	c.setConnLocked(newBlockForeverConn())
 }
 
 // https://github.com/tailscale/tailscale/issues/6680: don't ignore
