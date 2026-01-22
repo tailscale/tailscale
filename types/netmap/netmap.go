@@ -27,6 +27,8 @@ import (
 // The fields should all be considered read-only. They might
 // alias parts of previous NetworkMap values.
 type NetworkMap struct {
+	Cached bool // whether this NetworkMap was loaded from disk cache (as opposed to live from network)
+
 	SelfNode tailcfg.NodeView
 	AllCaps  set.Set[tailcfg.NodeCapability] // set version of SelfNode.Capabilities + SelfNode.CapMap
 	NodeKey  key.NodePublic

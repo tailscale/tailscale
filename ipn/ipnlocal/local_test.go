@@ -2306,6 +2306,59 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 	}
 }
 
+func TestCurrentProfileMkdirAll(t *testing.T) {
+	t.Run("NoVarRoot", func(t *testing.T) {
+		b := newTestBackend(t)
+		b.SetVarRoot("")
+
+		got, err := b.CurrentProfileMkdirAll()
+		if got != "" || !errors.Is(err, errProfileStorageUnavailable) {
+			t.Errorf(`CurrentProfileMkdirAll: got %q, %v; want "", %v`, got, err, errProfileStorageUnavailable)
+		}
+	})
+
+	t.Run("InvalidProfile", func(t *testing.T) {
+		b := newTestBackend(t)
+		var invalid ipn.LoginProfileView
+		b.pm.currentProfile = invalid
+
+		got, err := b.CurrentProfileMkdirAll()
+		if got != "" || !errors.Is(err, errProfileNotFound) {
+			t.Errorf("CurrentProfileMkdirAll: got %q, %v; want %q, %v", got, err, "", errProfileNotFound)
+		}
+	})
+
+	t.Run("ProfileRoot", func(t *testing.T) {
+		b := newTestBackend(t)
+		want := filepath.Join(b.TailscaleVarRoot(), "profile-data-id0")
+
+		got, err := b.CurrentProfileMkdirAll()
+		if err != nil || got != want {
+			t.Errorf("CurrentProfileMkdirAll: got %q, %v, want %q, nil", got, err, want)
+		}
+		if fi, err := os.Stat(got); err != nil {
+			t.Errorf("Check directory: %v", err)
+		} else if !fi.IsDir() {
+			t.Errorf("Path %q is not a directory", got)
+		}
+	})
+
+	t.Run("ProfileSubdir", func(t *testing.T) {
+		b := newTestBackend(t)
+		want := filepath.Join(b.TailscaleVarRoot(), "profile-data-id0", "a", "b")
+
+		got, err := b.CurrentProfileMkdirAll("a", "b")
+		if err != nil || got != want {
+			t.Errorf("CurrentProfileMkdirAll: got %q, %v, want %q, nil", got, err, want)
+		}
+		if fi, err := os.Stat(got); err != nil {
+			t.Errorf("Check directory: %v", err)
+		} else if !fi.IsDir() {
+			t.Errorf("Path %q is not a directory", got)
+		}
+	})
+}
+
 func TestOfferingAppConnector(t *testing.T) {
 	for _, shouldStore := range []bool{false, true} {
 		b := newTestBackend(t)
