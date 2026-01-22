@@ -61,7 +61,7 @@ func (iw *ifaceWatcher) getOperStatus() winipcfg.IfOperStatus {
 
 func waitInterfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) error {
 	iw := &ifaceWatcher{
-		luid: winipcfg.LUID(iface.(*tun.NativeTun).LUID()),
+		luid: winipcfg.LUID(iface.(WindowsTun).LUID()),
 		logf: logger.WithPrefix(logf, "waitInterfaceUp: "),
 	}
 

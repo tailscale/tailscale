@@ -6,10 +6,13 @@ package featuretags
 
 import "tailscale.com/util/set"
 
-// CLI is a special feature in the [Features] map that works opposite
-// from the others: it is opt-in, rather than opt-out, having a different
+// CLI and TSVNIC are special features in the [Features] map that work opposite
+// from the others: they are opt-in, rather than opt-out, having a different
 // build tag format.
-const CLI FeatureTag = "cli"
+const (
+	CLI FeatureTag = "cli"
+	TSVNIC FeatureTag = "tsvnic"
+)
 
 // FeatureTag names a Tailscale feature that can be selectively added or removed
 // via build tags.
@@ -19,7 +22,7 @@ type FeatureTag string
 // omitted via a ts_omit_ build tag.
 func (ft FeatureTag) IsOmittable() bool {
 	switch ft {
-	case CLI:
+	case CLI, TSVNIC:
 		return false
 	}
 	return true
@@ -263,6 +266,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"tailnetlock": {Sym: "TailnetLock", Desc: "Tailnet Lock support"},
 	"tap":         {Sym: "Tap", Desc: "Experimental Layer 2 (ethernet) support"},
 	"tpm":         {Sym: "TPM", Desc: "TPM support"},
+	"tsvnic":      {Sym: "TSVNIC", Desc: "Experimental Windows driver"},
 	"unixsocketidentity": {
 		Sym:  "UnixSocketIdentity",
 		Desc: "differentiate between users accessing the LocalAPI over unix sockets (if omitted, all users have full access)",

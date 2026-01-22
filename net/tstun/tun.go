@@ -25,6 +25,9 @@ import (
 // CreateTAP is the hook maybe set by feature/tap.
 var CreateTAP feature.Hook[func(logf logger.Logf, tapName, bridgeName string) (tun.Device, error)]
 
+// CreateTSVNIC is the hook maybe set by feature/tsvnic.
+var CreateTSVNIC feature.Hook[func(logf logger.Logf, tunName string, mtu int) (tun.Device, error)]
+
 // HookSetLinkAttrs is the hook maybe set by feature/linkspeed.
 var HookSetLinkAttrs feature.Hook[func(tun.Device) error]
 
@@ -58,20 +61,27 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 		if runtime.GOOS == "plan9" {
 			cleanUpPlan9Interfaces()
 		}
+		if CreateTSVNIC.IsSet() {
+			if dev, err = CreateTSVNIC.Get()(logf, tunName, int(DefaultTUNMTU())); err != nil {
+				logf("CreateTSVNIC failed: %v. Falling back to the default implementation.", err)
+			}
+		}
 		// Try to create the TUN device up to two times. If it fails
 		// the first time and we're on Linux, try a desperate
 		// "modprobe tun" to load the tun module and try again.
-		for try := range 2 {
-			dev, err = tun.CreateTUN(tunName, int(DefaultTUNMTU()))
-			if err == nil || !modprobeTunHook.IsSet() {
-				if try > 0 {
-					logf("created TUN device %q after doing `modprobe tun`", tunName)
+		if dev == nil {
+			for try := range 2 {
+				dev, err = tun.CreateTUN(tunName, int(DefaultTUNMTU()))
+				if err == nil || !modprobeTunHook.IsSet() {
+					if try > 0 {
+						logf("created TUN device %q after doing `modprobe tun`", tunName)
+					}
+					break
 				}
-				break
-			}
-			if modprobeTunHook.Get()() != nil {
-				// modprobe failed; no point trying again.
-				break
+				if modprobeTunHook.Get()() != nil {
+					// modprobe failed; no point trying again.
+					break
+				}
 			}
 		}
 	}

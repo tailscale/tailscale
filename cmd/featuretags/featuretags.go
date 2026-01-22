@@ -48,6 +48,9 @@ func main() {
 	if keep[featuretags.CLI] {
 		tags = append(tags, "ts_include_cli")
 	}
+	if keep[featuretags.TSVNIC] {
+		tags = append(tags, "ts_include_tsvnic")
+	}
 	if *min {
 		for _, f := range slices.Sorted(maps.Keys(features)) {
 			if f == "" {

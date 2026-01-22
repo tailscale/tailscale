@@ -25,6 +25,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/tstun"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/backoff"
 	"tailscale.com/util/eventbus"
@@ -41,13 +42,13 @@ type winRouter struct {
 	logf                func(fmt string, args ...any)
 	netMon              *netmon.Monitor // may be nil
 	health              *health.Tracker
-	nativeTun           *tun.NativeTun
+	nativeTun           tstun.WindowsTun
 	routeChangeCallback *winipcfg.RouteChangeCallback
 	firewall            *firewallTweaker
 }
 
 func newUserspaceRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
-	nativeTun := tundev.(*tun.NativeTun)
+	nativeTun := tundev.(tstun.WindowsTun)
 	luid := winipcfg.LUID(nativeTun.LUID())
 	guid, err := luid.GUID()
 	if err != nil {
