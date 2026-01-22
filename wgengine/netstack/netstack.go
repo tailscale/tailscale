@@ -189,6 +189,10 @@ type Impl struct {
 	lb        *ipnlocal.LocalBackend // or nil
 	dns       *dns.Manager
 
+	// Before Start is called, there can IPv6 Neighbor Discovery from the
+	// OS landing on netstack. We need to drop those packets until Start.
+	ready atomic.Bool // set to true once Start has been called
+
 	// loopbackPort, if non-nil, will enable Impl to loop back (dnat to
 	// <address-family-loopback>:loopbackPort) TCP & UDP flows originally
 	// destined to serviceIP{v6}:loopbackPort.
@@ -597,6 +601,9 @@ func (ns *Impl) Start(b LocalBackend) error {
 	ns.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, ns.wrapTCPProtocolHandler(tcpFwd.HandlePacket))
 	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, ns.wrapUDPProtocolHandler(udpFwd.HandlePacket))
 	go ns.inject()
+	if ns.ready.Swap(true) {
+		panic("already started")
+	}
 	return nil
 }
 
@@ -764,8 +771,9 @@ func (ns *Impl) isLoopbackPort(port uint16) bool {
 // handleLocalPackets is hooked into the tun datapath for packets leaving
 // the host and arriving at tailscaled. This method returns filter.DropSilently
 // to intercept a packet for handling, for instance traffic to quad-100.
+// Caution: can be called before Start
 func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) (filter.Response, *gro.GRO) {
-	if ns.ctx.Err() != nil {
+	if !ns.ready.Load() || ns.ctx.Err() != nil {
 		return filter.DropSilently, gro
 	}
 
@@ -1232,8 +1240,9 @@ func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte, direction userPing
 // continue normally (typically being delivered to the host networking stack),
 // whereas returning filter.DropSilently is done when netstack intercepts the
 // packet and no further processing towards to host should be done.
+// Caution: can be called before Start
 func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) (filter.Response, *gro.GRO) {
-	if ns.ctx.Err() != nil {
+	if !ns.ready.Load() || ns.ctx.Err() != nil {
 		return filter.DropSilently, gro
 	}
 
