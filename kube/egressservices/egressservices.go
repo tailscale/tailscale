@@ -47,7 +47,7 @@ type TailnetTarget struct {
 	FQDN string `json:"fqdn"`
 }
 
-// PorMap is a mapping between match port on which proxy receives cluster
+// PortMap is a mapping between match port on which proxy receives cluster
 // traffic and target port where traffic received on match port should be
 // fowardded to.
 type PortMap struct {

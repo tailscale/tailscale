@@ -48,6 +48,20 @@ type Config struct {
 // Mapping describes a rule that forwards traffic from Tailscale Service IP to a
 // Kubernetes Service IP.
 type Mapping struct {
-	TailscaleServiceIP netip.Addr `json:"TailscaleServiceIP"`
-	ClusterIP          netip.Addr `json:"ClusterIP"`
+	TailscaleServiceName string     `json:"TailscaleServiceName"`
+	TailscaleServiceIP   netip.Addr `json:"TailscaleServiceIP"`
+	ClusterIP            netip.Addr `json:"ClusterIP"`
+	Ports                []uint16   `json:"ports"`
+}
+
+// Mappings returns all non-nil mappings for this config
+func (c *Config) Mappings() []*Mapping {
+	var mappings []*Mapping
+	if c.IPv4Mapping != nil {
+		mappings = append(mappings, c.IPv4Mapping)
+	}
+	if c.IPv6Mapping != nil {
+		mappings = append(mappings, c.IPv6Mapping)
+	}
+	return mappings
 }

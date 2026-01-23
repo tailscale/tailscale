@@ -14,6 +14,8 @@ import (
 	"net/netip"
 
 	"github.com/tailscale/hujson"
+	"tailscale.com/kube/egressservices"
+	"tailscale.com/kube/ingressservices"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
@@ -66,6 +68,12 @@ type ConfigV1Alpha1 struct {
 	AdvertiseServices []string              `json:",omitempty"` // Tailscale Services to advertise.
 	APIServerProxy    *APIServerProxyConfig `json:",omitempty"` // Config specific to the API Server proxy.
 	StaticEndpoints   []netip.AddrPort      `json:",omitempty"` // StaticEndpoints are additional, user-defined endpoints that this node should advertise amongst its wireguard endpoints.
+	L4Proxy           *L4ProxyConfig        `json:",omitempty"`
+}
+
+type L4ProxyConfig struct {
+	Ingress []ingressservices.Config `json:",omitempty"`
+	Egress  []egressservices.Config  `json:",omitempty"`
 }
 
 type APIServerProxyConfig struct {
