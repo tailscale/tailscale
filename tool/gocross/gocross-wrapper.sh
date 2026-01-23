@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) Tailscale Inc & AUTHORS
+# Copyright (c) Tailscale Inc & contributors
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # gocross-wrapper.sh is a wrapper that can be aliased to 'go', which
