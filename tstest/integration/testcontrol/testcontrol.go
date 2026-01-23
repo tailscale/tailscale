@@ -1327,16 +1327,19 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 
 	s.mu.Lock()
 	nodeCapMap := maps.Clone(s.nodeCapMaps[nk])
+	var dns *tailcfg.DNSConfig
+	if s.DNSConfig != nil {
+		dns = s.DNSConfig.Clone()
+	}
+	magicDNSDomain := s.MagicDNSDomain
 	s.mu.Unlock()
 
 	node.CapMap = nodeCapMap
 	node.Capabilities = append(node.Capabilities, tailcfg.NodeAttrDisableUPnP)
 
 	t := time.Date(2020, 8, 3, 0, 0, 0, 1, time.UTC)
-	dns := s.DNSConfig
-	if dns != nil && s.MagicDNSDomain != "" {
-		dns = dns.Clone()
-		dns.CertDomains = append(dns.CertDomains, node.Hostinfo.Hostname()+"."+s.MagicDNSDomain)
+	if dns != nil && magicDNSDomain != "" {
+		dns.CertDomains = append(dns.CertDomains, node.Hostinfo.Hostname()+"."+magicDNSDomain)
 	}
 
 	res = &tailcfg.MapResponse{
