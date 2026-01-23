@@ -441,6 +441,7 @@ func setServeConfig(ctx context.Context, lc *local.Client, cm *certs.CertManager
 	if err != nil {
 		return fmt.Errorf("error getting local client status: %w", err)
 	}
+
 	serviceHostPort := ipn.HostPort(fmt.Sprintf("%s.%s:443", name.WithoutPrefix(), status.CurrentTailnet.MagicDNSSuffix))
 
 	serveConfig := ipn.ServeConfig{

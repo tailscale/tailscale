@@ -66,6 +66,15 @@ type ConfigV1Alpha1 struct {
 	AdvertiseServices []string              `json:",omitempty"` // Tailscale Services to advertise.
 	APIServerProxy    *APIServerProxyConfig `json:",omitempty"` // Config specific to the API Server proxy.
 	StaticEndpoints   []netip.AddrPort      `json:",omitempty"` // StaticEndpoints are additional, user-defined endpoints that this node should advertise amongst its wireguard endpoints.
+	L4Proxies         []L4ProxyConfig       `json:",omitempty"`
+}
+
+type L4ProxyConfig struct {
+	ServiceName string     `json:",omitempty"`
+	ServiceVIP  netip.Addr `json:",omitempty"`
+	ListenPort  uint16     `json:",omitempty"`
+	Backend     string     `json:",omitempty"`
+	Proto       string     `json:",omitempty"`
 }
 
 type APIServerProxyConfig struct {
