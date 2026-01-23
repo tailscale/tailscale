@@ -11,4 +11,5 @@ import (
 	_ "github.com/golangci/golangci-lint/cmd/golangci-lint"
 	_ "github.com/tailscale/depaware/depaware"
 	_ "golang.org/x/tools/cmd/goimports"
+	_ "github.com/gokrazy/tools/cmd/gok"
 )
