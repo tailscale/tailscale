@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package codegen contains shared utilities for generating code.
@@ -69,7 +69,7 @@ func HasNoClone(structTag string) bool {
 	return false
 }
 
-const copyrightHeader = `// Copyright (c) Tailscale Inc & AUTHORS
+const copyrightHeader = `// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 `
