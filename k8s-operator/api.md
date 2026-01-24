@@ -12,6 +12,8 @@
 - [ConnectorList](#connectorlist)
 - [DNSConfig](#dnsconfig)
 - [DNSConfigList](#dnsconfiglist)
+- [EgressPolicy](#egresspolicy)
+- [EgressPolicyList](#egresspolicylist)
 - [ProxyClass](#proxyclass)
 - [ProxyClassList](#proxyclasslist)
 - [ProxyGroup](#proxygroup)
@@ -297,6 +299,64 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `enable` _boolean_ | Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9001/debug/pprof/<br />and internal debug metrics endpoint at <pod-ip>:9001/debug/metrics, where<br />9001 is a container port named "debug". The endpoints and their responses<br />may change in backwards incompatible ways in the future, and should not<br />be considered stable.<br />In 1.78.x and 1.80.x, this setting will default to the value of<br />.spec.metrics.enable, and requests to the "metrics" port matching the<br />mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,<br />this setting will default to false, and no requests will be proxied. |  |  |
+
+
+#### EgressPolicy
+
+
+
+
+
+
+
+_Appears in:_
+- [EgressPolicyList](#egresspolicylist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `EgressPolicy` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[NetworkPolicyPeer](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#networkpolicypeer-v1-networking) array_ | spec contains a list of sources which should be able to access the tailscale devices via the ProxyGroup Pods.<br />Items in this list are combined using a logical OR operation.<br />If this field is present and contains at least one item, this rule<br />allows traffic only if the traffic matches at least one item in the from list. |  |  |
+| `status` _[EgressPolicyStatus](#egresspolicystatus)_ | Status of the EgressPolicy. This is set and managed automatically.<br />https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status |  |  |
+
+
+#### EgressPolicyList
+
+
+
+
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `EgressPolicyList` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[EgressPolicy](#egresspolicy) array_ |  |  |  |
+
+
+#### EgressPolicyStatus
+
+
+
+
+
+
+
+_Appears in:_
+- [EgressPolicy](#egresspolicy)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `servicePortMapping` _object (keys:string, values:[NetworkPolicyPort](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#networkpolicyport-v1-networking))_ | Service to port mapping |  |  |
 
 
 #### Env
