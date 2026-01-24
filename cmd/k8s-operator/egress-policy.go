@@ -22,34 +22,6 @@ import (
 	"tailscale.com/util/set"
 )
 
-// import (
-// 	"context"
-// 	"fmt"
-// 	"slices"
-// 	"strings"
-// 	"sync"
-
-// 	dockerref "github.com/distribution/reference"
-// 	"go.uber.org/zap"
-// 	corev1 "k8s.io/api/core/v1"
-// 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-// 	apiequality "k8s.io/apimachinery/pkg/api/equality"
-// 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-// 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
-// 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-// 	metavalidation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
-// 	"k8s.io/apimachinery/pkg/types"
-// 	"k8s.io/apimachinery/pkg/util/validation/field"
-// 	"k8s.io/client-go/tools/record"
-// 	"sigs.k8s.io/controller-runtime/pkg/client"
-// 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-// 	tsoperator "tailscale.com/k8s-operator"
-// 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-// 	"tailscale.com/tstime"
-// 	"tailscale.com/util/clientmetric"
-// 	"tailscale.com/util/set"
-// )
-
 type EgressPolicyReconciler struct {
 	client.Client
 
@@ -78,6 +50,7 @@ func (epr *EgressPolicyReconciler) Reconcile(ctx context.Context, req reconcile.
 		return reconcile.Result{}, fmt.Errorf("failed to get tailscale.com EgressPolicy: %w", err)
 	}
 
+	// List all EndpointSlices created by egress Services which use this EgressPolicy.
 	epsList := &discoveryv1.EndpointSliceList{}
 	if err := epr.List(ctx, epsList,
 		client.InNamespace(epr.tsNamespace),
@@ -100,8 +73,6 @@ func (epr *EgressPolicyReconciler) Reconcile(ctx context.Context, req reconcile.
 			pgNameToPortsMap[pgName] = append(pgNameToPortsMap[pgName], eps.Ports...)
 		}
 	}
-
-	logger.Debugf("EgressPolicy not found, assuming it was deleted")
 
 	// Get all the network policies that are using this egress policy.
 	npList := &networkingv1.NetworkPolicyList{}
