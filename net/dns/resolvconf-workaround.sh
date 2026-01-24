@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copyright (c) Tailscale Inc & AUTHORS
+# Copyright (c) Tailscale Inc & contributors
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # This script is a workaround for a vpn-unfriendly behavior of the

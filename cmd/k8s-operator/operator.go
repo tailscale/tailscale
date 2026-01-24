@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !plan9
@@ -54,6 +54,7 @@ import (
 	"tailscale.com/ipn/store/kubestore"
 	apiproxy "tailscale.com/k8s-operator/api-proxy"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/tailnet"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstime"
@@ -323,6 +324,17 @@ func runReconcilers(opts reconcilerOpts) {
 	mgr, err := manager.New(opts.restConfig, mgrOpts)
 	if err != nil {
 		startlog.Fatalf("could not create manager: %v", err)
+	}
+
+	tailnetOptions := tailnet.ReconcilerOptions{
+		Client:             mgr.GetClient(),
+		TailscaleNamespace: opts.tailscaleNamespace,
+		Clock:              tstime.DefaultClock{},
+		Logger:             opts.log,
+	}
+
+	if err = tailnet.NewReconciler(tailnetOptions).Register(mgr); err != nil {
+		startlog.Fatalf("could not register tailnet reconciler: %v", err)
 	}
 
 	svcFilter := handler.EnqueueRequestsFromMapFunc(serviceHandler)

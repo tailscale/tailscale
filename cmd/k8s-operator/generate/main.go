@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !plan9
@@ -26,6 +26,7 @@ const (
 	dnsConfigCRDPath                = operatorDeploymentFilesPath + "/crds/tailscale.com_dnsconfigs.yaml"
 	recorderCRDPath                 = operatorDeploymentFilesPath + "/crds/tailscale.com_recorders.yaml"
 	proxyGroupCRDPath               = operatorDeploymentFilesPath + "/crds/tailscale.com_proxygroups.yaml"
+	tailnetCRDPath                  = operatorDeploymentFilesPath + "/crds/tailscale.com_tailnets.yaml"
 	egressPolicyCRDPath             = operatorDeploymentFilesPath + "/crds/tailscale.com_egresspolicies.yaml"
 	helmTemplatesPath               = operatorDeploymentFilesPath + "/chart/templates"
 	connectorCRDHelmTemplatePath    = helmTemplatesPath + "/connector.yaml"
@@ -33,6 +34,7 @@ const (
 	dnsConfigCRDHelmTemplatePath    = helmTemplatesPath + "/dnsconfig.yaml"
 	recorderCRDHelmTemplatePath     = helmTemplatesPath + "/recorder.yaml"
 	proxyGroupCRDHelmTemplatePath   = helmTemplatesPath + "/proxygroup.yaml"
+	tailnetCRDHelmTemplatePath      = helmTemplatesPath + "/tailnet.yaml"
 	egressPolicyCRDHelmTemplatePath = helmTemplatesPath + "/egresspolicy.yaml"
 
 	helmConditionalStart = "{{ if .Values.installCRDs -}}\n"
@@ -156,6 +158,7 @@ func generate(baseDir string) error {
 		{dnsConfigCRDPath, dnsConfigCRDHelmTemplatePath},
 		{recorderCRDPath, recorderCRDHelmTemplatePath},
 		{proxyGroupCRDPath, proxyGroupCRDHelmTemplatePath},
+		{tailnetCRDPath, tailnetCRDHelmTemplatePath},
 		{egressPolicyCRDPath, egressPolicyCRDHelmTemplatePath},
 	} {
 		if err := addCRDToHelm(crd.crdPath, crd.templatePath); err != nil {

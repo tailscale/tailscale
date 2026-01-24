@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !plan9
@@ -69,6 +69,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&ProxyGroupList{},
 		&EgressPolicy{},
 		&EgressPolicyList{},
+		&Tailnet{},
+		&TailnetList{},
 	)
 
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)

@@ -1,4 +1,4 @@
-# Copyright (c) Tailscale Inc & AUTHORS
+# Copyright (c) Tailscale Inc & contributors
 # SPDX-License-Identifier: BSD-3-Clause
 
 # Note that this Dockerfile is currently NOT used to build any of the published

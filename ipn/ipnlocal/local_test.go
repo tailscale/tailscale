@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package ipnlocal
@@ -2304,6 +2304,56 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProfileMkdirAll(t *testing.T) {
+	t.Run("NoVarRoot", func(t *testing.T) {
+		b := newTestBackend(t)
+		b.SetVarRoot("")
+
+		got, err := b.ProfileMkdirAll(b.CurrentProfile().ID())
+		if got != "" || !errors.Is(err, ErrProfileStorageUnavailable) {
+			t.Errorf(`ProfileMkdirAll: got %q, %v; want "", %v`, got, err, ErrProfileStorageUnavailable)
+		}
+	})
+
+	t.Run("InvalidProfileID", func(t *testing.T) {
+		b := newTestBackend(t)
+		got, err := b.ProfileMkdirAll("")
+		if got != "" || !errors.Is(err, errProfileNotFound) {
+			t.Errorf("ProfileMkdirAll: got %q, %v; want %q, %v", got, err, "", errProfileNotFound)
+		}
+	})
+
+	t.Run("ProfileRoot", func(t *testing.T) {
+		b := newTestBackend(t)
+		want := filepath.Join(b.TailscaleVarRoot(), "profile-data", "id0")
+
+		got, err := b.ProfileMkdirAll(b.CurrentProfile().ID())
+		if err != nil || got != want {
+			t.Errorf("ProfileMkdirAll: got %q, %v, want %q, nil", got, err, want)
+		}
+		if fi, err := os.Stat(got); err != nil {
+			t.Errorf("Check directory: %v", err)
+		} else if !fi.IsDir() {
+			t.Errorf("Path %q is not a directory", got)
+		}
+	})
+
+	t.Run("ProfileSubdir", func(t *testing.T) {
+		b := newTestBackend(t)
+		want := filepath.Join(b.TailscaleVarRoot(), "profile-data", "id0", "a", "b")
+
+		got, err := b.ProfileMkdirAll(b.CurrentProfile().ID(), "a", "b")
+		if err != nil || got != want {
+			t.Errorf("ProfileMkdirAll: got %q, %v, want %q, nil", got, err, want)
+		}
+		if fi, err := os.Stat(got); err != nil {
+			t.Errorf("Check directory: %v", err)
+		} else if !fi.IsDir() {
+			t.Errorf("Path %q is not a directory", got)
+		}
+	})
 }
 
 func TestOfferingAppConnector(t *testing.T) {

@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package udprelay
@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/views"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/usermetric"
 )
 
@@ -470,4 +472,76 @@ func TestServer_maybeRotateMACSecretLocked(t *testing.T) {
 	qt.Assert(t, macSecret, qt.Not(qt.Equals), s.macSecrets.At(0))
 	qt.Assert(t, macSecret, qt.Not(qt.Equals), s.macSecrets.At(1))
 	qt.Assert(t, s.macSecrets.At(0), qt.Not(qt.Equals), s.macSecrets.At(1))
+}
+
+func TestServer_endpointGC(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		addrs       [2]netip.AddrPort
+		lastSeen    [2]mono.Time
+		allocatedAt mono.Time
+		wantRemoved bool
+	}{
+		{
+			name:        "unbound_endpoint_expired",
+			allocatedAt: mono.Now().Add(-2 * defaultBindLifetime),
+			wantRemoved: true,
+		},
+		{
+			name:        "unbound_endpoint_kept",
+			allocatedAt: mono.Now(),
+			wantRemoved: false,
+		},
+		{
+			name:        "bound_endpoint_expired_a",
+			addrs:       [2]netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:1"), netip.MustParseAddrPort("192.0.2.2:1")},
+			lastSeen:    [2]mono.Time{mono.Now().Add(-2 * defaultSteadyStateLifetime), mono.Now()},
+			wantRemoved: true,
+		},
+		{
+			name:        "bound_endpoint_expired_b",
+			addrs:       [2]netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:1"), netip.MustParseAddrPort("192.0.2.2:1")},
+			lastSeen:    [2]mono.Time{mono.Now(), mono.Now().Add(-2 * defaultSteadyStateLifetime)},
+			wantRemoved: true,
+		},
+		{
+			name:        "bound_endpoint_kept",
+			addrs:       [2]netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:1"), netip.MustParseAddrPort("192.0.2.2:1")},
+			lastSeen:    [2]mono.Time{mono.Now(), mono.Now()},
+			wantRemoved: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			disco1 := key.NewDisco()
+			disco2 := key.NewDisco()
+			pair := key.NewSortedPairOfDiscoPublic(disco1.Public(), disco2.Public())
+			ep := &serverEndpoint{
+				discoPubKeys:   pair,
+				vni:            1,
+				lastSeen:       tc.lastSeen,
+				boundAddrPorts: tc.addrs,
+				allocatedAt:    tc.allocatedAt,
+			}
+			s := &Server{serverEndpointByVNI: sync.Map{}, metrics: &metrics{}}
+			mak.Set(&s.serverEndpointByDisco, pair, ep)
+			s.serverEndpointByVNI.Store(ep.vni, ep)
+			s.endpointGC(defaultBindLifetime, defaultSteadyStateLifetime)
+			removed := len(s.serverEndpointByDisco) > 0
+			if tc.wantRemoved {
+				if removed {
+					t.Errorf("expected endpoint to be removed from Server")
+				}
+				if !ep.closed {
+					t.Errorf("expected endpoint to be closed")
+				}
+			} else {
+				if !removed {
+					t.Errorf("expected endpoint to remain in Server")
+				}
+				if ep.closed {
+					t.Errorf("expected endpoint to remain open")
+				}
+			}
+		})
+	}
 }

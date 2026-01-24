@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !plan9
@@ -13,6 +13,7 @@ import (
 	xslices "golang.org/x/exp/slices"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tstime"
 )
@@ -89,6 +90,14 @@ func SetRecorderCondition(tsr *tsapi.Recorder, conditionType tsapi.ConditionType
 func SetProxyGroupCondition(pg *tsapi.ProxyGroup, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) {
 	conds := updateCondition(pg.Status.Conditions, conditionType, status, reason, message, gen, clock, logger)
 	pg.Status.Conditions = conds
+}
+
+// SetTailnetCondition ensures that Tailnet status has a condition with the
+// given attributes. LastTransitionTime gets set every time condition's status
+// changes.
+func SetTailnetCondition(tn *tsapi.Tailnet, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, clock tstime.Clock, logger *zap.SugaredLogger) {
+	conds := updateCondition(tn.Status.Conditions, conditionType, status, reason, message, tn.Generation, clock, logger)
+	tn.Status.Conditions = conds
 }
 
 func updateCondition(conds []metav1.Condition, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) []metav1.Condition {
@@ -186,4 +195,15 @@ func SvcIsReady(svc *corev1.Service) bool {
 	}
 	cond := svc.Status.Conditions[idx]
 	return cond.Status == metav1.ConditionTrue
+}
+
+func TailnetIsReady(tn *tsapi.Tailnet) bool {
+	idx := xslices.IndexFunc(tn.Status.Conditions, func(cond metav1.Condition) bool {
+		return cond.Type == string(tsapi.TailnetReady)
+	})
+	if idx == -1 {
+		return false
+	}
+	cond := tn.Status.Conditions[idx]
+	return cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == tn.Generation
 }

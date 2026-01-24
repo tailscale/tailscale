@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package ipnlocal is the heart of the Tailscale node agent that controls
@@ -21,6 +21,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"slices"
@@ -165,6 +166,10 @@ var (
 	// errManagedByPolicy indicates the operation is blocked
 	// because the target state is managed by a GP/MDM policy.
 	errManagedByPolicy = errors.New("managed by policy")
+
+	// ErrProfileStorageUnavailable indicates that profile-specific local data
+	// storage is not available; see [LocalBackend.ProfileMkdirAll].
+	ErrProfileStorageUnavailable = errors.New("profile local data storage unavailable")
 )
 
 // LocalBackend is the glue between the major pieces of the Tailscale
@@ -5228,6 +5233,56 @@ func (b *LocalBackend) TailscaleVarRoot() string {
 	return ""
 }
 
+// ProfileMkdirAll creates (if necessary) and returns the path of a directory
+// specific to the specified login profile, inside Tailscale's writable storage
+// area. If subs are provided, they are joined to the base path to form the
+// subdirectory path.
+//
+// It reports [ErrProfileStorageUnavailable] if there's no configured or
+// discovered storage location, or if there was an error making the
+// subdirectory.
+func (b *LocalBackend) ProfileMkdirAll(id ipn.ProfileID, subs ...string) (string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.profileMkdirAllLocked(id, subs...)
+}
+
+// profileDataPathLocked returns a path of a profile-specific (sub)directory
+// inside the writable storage area for the given profile ID. It does not
+// create or verify the existence of the path in the filesystem.
+// If b.varRoot == "", it returns "". It panics if id is empty.
+//
+// The caller must hold b.mu.
+func (b *LocalBackend) profileDataPathLocked(id ipn.ProfileID, subs ...string) string {
+	if id == "" {
+		panic("invalid empty profile ID")
+	}
+	vr := b.TailscaleVarRoot()
+	if vr == "" {
+		return ""
+	}
+	return filepath.Join(append([]string{vr, "profile-data", string(id)}, subs...)...)
+}
+
+// profileMkdirAllLocked implements ProfileMkdirAll.
+// The caller must hold b.mu.
+func (b *LocalBackend) profileMkdirAllLocked(id ipn.ProfileID, subs ...string) (string, error) {
+	if id == "" {
+		return "", errProfileNotFound
+	}
+	if vr := b.TailscaleVarRoot(); vr == "" {
+		return "", ErrProfileStorageUnavailable
+	}
+
+	// Use the LoginProfile ID rather than the UserProfile ID, as the latter may
+	// change over time.
+	dir := b.profileDataPathLocked(id, subs...)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", fmt.Errorf("create profile directory: %w", err)
+	}
+	return dir, nil
+}
+
 // closePeerAPIListenersLocked closes any existing PeerAPI listeners
 // and clears out the PeerAPI server state.
 //
@@ -7010,6 +7065,12 @@ func (b *LocalBackend) DeleteProfile(p ipn.ProfileID) error {
 			return nil
 		}
 		return err
+	}
+	// Make a best-effort to remove the profile-specific data directory, if one exists.
+	if pd := b.profileDataPathLocked(p); pd != "" {
+		if err := os.RemoveAll(pd); err != nil {
+			b.logf("warning: removing profile data for %q: %v", p, err)
+		}
 	}
 	if !needToRestart {
 		return nil

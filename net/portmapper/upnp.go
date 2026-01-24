@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !js
@@ -574,7 +574,7 @@ func (c *Client) getUPnPPortMapping(
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		c.mapping = upnp
-		c.localPort = externalAddrPort.Port()
+		c.localPort = internal.Port()
 		return upnp.external, true
 	}
 

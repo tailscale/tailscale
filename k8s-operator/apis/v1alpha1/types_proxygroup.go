@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !plan9
@@ -97,6 +97,12 @@ type ProxyGroupSpec struct {
 	// ProxyGroup type. This field is only used when Type is set to "kube-apiserver".
 	// +optional
 	KubeAPIServer *KubeAPIServerConfig `json:"kubeAPIServer,omitempty"`
+
+	// Tailnet specifies the tailnet this ProxyGroup should join. If blank, the default tailnet is used. When set, this
+	// name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set.
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ProxyGroup tailnet is immutable"
+	Tailnet string `json:"tailnet,omitempty"`
 }
 
 type ProxyGroupStatus struct {
