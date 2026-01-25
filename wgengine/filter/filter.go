@@ -630,10 +630,13 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) (Response, us
 		f.logRateLimit(rf, q, dir, Drop, "multicast")
 		return Drop, usermetric.ReasonMulticast
 	}
-	if q.Dst.Addr().IsLinkLocalUnicast() && q.Dst.Addr() != gcpDNSAddr {
-		f.logRateLimit(rf, q, dir, Drop, "link-local-unicast")
-		return Drop, usermetric.ReasonLinkLocalUnicast
-	}
+
+	// mzb disabling this for conn25 test
+
+	//	if q.Dst.Addr().IsLinkLocalUnicast() && q.Dst.Addr() != gcpDNSAddr {
+	//		f.logRateLimit(rf, q, dir, Drop, "link-local-unicast")
+	//		return Drop, usermetric.ReasonLinkLocalUnicast
+	//	}
 
 	if q.IPProto == ipproto.Fragment {
 		// Fragments after the first always need to be passed through.
