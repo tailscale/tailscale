@@ -13,12 +13,14 @@ import (
 	"log"
 	"math/big"
 	"net/netip"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
 	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/util/testenv"
 )
 
 // dohOfIP maps from public DNS IPs to their DoH base URL.
@@ -346,4 +348,40 @@ func IPIsDoHOnlyServer(ip netip.Addr) bool {
 		ip == wikimediaDNSv4Addr || ip == wikimediaDNSv6Addr ||
 		controlDv6RangeA.Contains(ip) || controlDv6RangeB.Contains(ip) ||
 		ip == controlDv4One || ip == controlDv4Two
+}
+
+var testMu sync.Mutex
+
+// RegisterTestDoHEndpoint registers a test DoH endpoint mapping for use in tests.
+// It maps the given IP to the DoH base URL, and the URL back to the IP.
+//
+// This function panics if called outside of tests, and cannot be called
+// concurrently with any usage of this package (i.e. before any DNS forwarders
+// are created). It is safe to call concurrently with itself.
+//
+// It returns a cleanup function that removes the registration.
+func RegisterTestDoHEndpoint(ip netip.Addr, dohBase string) func() {
+	if !testenv.InTest() {
+		panic("RegisterTestDoHEndpoint called outside of tests")
+	}
+	populateOnce.Do(populate)
+
+	testMu.Lock()
+	defer testMu.Unlock()
+
+	dohOfIP[ip] = dohBase
+	dohIPsOfBase[dohBase] = append(dohIPsOfBase[dohBase], ip)
+
+	return func() {
+		testMu.Lock()
+		defer testMu.Unlock()
+
+		delete(dohOfIP, ip)
+		dohIPsOfBase[dohBase] = slices.DeleteFunc(dohIPsOfBase[dohBase], func(addr netip.Addr) bool {
+			return addr == ip
+		})
+		if len(dohIPsOfBase[dohBase]) == 0 {
+			delete(dohIPsOfBase, dohBase)
+		}
+	}
 }
