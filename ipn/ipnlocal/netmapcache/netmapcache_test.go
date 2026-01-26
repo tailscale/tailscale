@@ -66,7 +66,7 @@ func init() {
 		panic(fmt.Sprintf("invalid test AUM hash %q: %v", testAUMHashString, err))
 	}
 
-	// The following network map must have a non-zero non-tempty value for every
+	// The following network map must have a non-zero non-empty value for every
 	// field that is to be stored in the cache. The test checks for this using
 	// reflection, as a way to ensure that new fields added to the type are
 	// covered by a test (see checkFieldCoverage).
