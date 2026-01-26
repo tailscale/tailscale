@@ -209,6 +209,10 @@ type Impl struct {
 
 	atomicIsVIPServiceIPFunc syncs.AtomicValue[func(netip.Addr) bool]
 
+	atomicIpVIPServiceMap syncs.AtomicValue[netmap.IPServiceMappings]
+	// make this a set of strings for faster lookup
+	atomicActiveVIPServices syncs.AtomicValue[set.Set[string]]
+
 	// forwardDialFunc, if non-nil, is the net.Dialer.DialContext-style
 	// function that is used to make outgoing connections when forwarding a
 	// TCP connection to another host (e.g. in subnet router mode).
@@ -761,6 +765,22 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 	}
 }
 
+// UpdateIPServiceMappings updates the IPServiceMappings when there is a change
+// in this value in localbackend. This is usually triggered from a netmap update.
+func (ns *Impl) UpdateIPServiceMappings(mappings netmap.IPServiceMappings) {
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+	ns.atomicIpVIPServiceMap.Store(mappings)
+}
+
+// UpdateActiveVIPServices updates the set of active VIP services names.
+func (ns *Impl) UpdateActiveVIPServices(activeServices []string) {
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+	activeServicesSet := set.SetOf(activeServices)
+	ns.atomicActiveVIPServices.Store(activeServicesSet)
+}
+
 func (ns *Impl) isLoopbackPort(port uint16) bool {
 	if ns.loopbackPort != nil && int(port) == *ns.loopbackPort {
 		return true
@@ -780,9 +800,7 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper, gro *gro.
 	// Determine if we care about this local packet.
 	dst := p.Dst.Addr()
 	var IPServiceMappings netmap.IPServiceMappings
-	if ns.lb != nil {
-		IPServiceMappings = ns.lb.IPServiceMappings()
-	}
+	IPServiceMappings = ns.atomicIpVIPServiceMap.Load()
 	serviceName, isVIPServiceIP := IPServiceMappings[dst]
 	switch {
 	case dst == serviceIP || dst == serviceIPv6:
@@ -804,19 +822,11 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper, gro *gro.
 		if p.IPProto != ipproto.TCP {
 			return filter.Accept, gro
 		}
-		// returns all configured VIP services, since the IPServiceMappings contains
-		// inactive service IPs when node hosts the service, we need to check the
-		// service is active or not before dropping the packet.
-		VIPServices := ns.lb.VIPServices()
-		serviceActive := false
-		for _, svc := range VIPServices {
-			// Even though control only send service IP down when there is a config
-			// for the service, we want to still check that the config still exists
-			// before passing the packet to netstack.
-			if svc.Name == serviceName {
-				serviceActive = svc.Active
-			}
-		}
+		// returns all active VIP services in a set, since the IPServiceMappings
+		// contains inactive service IPs when node hosts the service, we need to
+		// check the service is active or not before dropping the packet.
+		activeServices := ns.atomicActiveVIPServices.Load()
+		_, serviceActive := activeServices[serviceName.String()]
 		if !serviceActive {
 			return filter.Accept, gro
 		}

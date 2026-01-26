@@ -927,6 +927,9 @@ func (b *LocalBackend) SetIPServiceMappingsForTesting(m netmap.IPServiceMappings
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.ipVIPServiceMap = m
+	if ns, ok := b.sys.Netstack.GetOK(); ok {
+		ns.UpdateIPServiceMappings(m)
+	}
 }
 
 // setConfigLocked uses the provided config to update the backend's prefs
@@ -4509,6 +4512,12 @@ func (b *LocalBackend) onEditPrefsLocked(_ ipnauth.Actor, mp *ipn.MaskedPrefs, o
 		}
 	}
 
+	if mp.AdvertiseServicesSet {
+		if ns, ok := b.sys.Netstack.GetOK(); ok {
+			ns.UpdateActiveVIPServices(newPrefs.AdvertiseServices().AsSlice())
+		}
+	}
+
 	// This is recorded here in the EditPrefs path, not the setPrefs path on purpose.
 	// recordForEdit records metrics related to edits and changes, not the final state.
 	// If, in the future, we want to record gauge-metrics related to the state of prefs,
@@ -6238,7 +6247,12 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
 	if buildfeatures.HasServe {
-		b.ipVIPServiceMap = nm.GetIPVIPServiceMap()
+		ipsvMap := nm.GetIPVIPServiceMap()
+		b.ipVIPServiceMap = ipsvMap
+		if ns, ok := b.sys.Netstack.GetOK(); ok {
+			ns.UpdateIPServiceMappings(ipsvMap)
+		}
+
 	}
 
 	if !oldSelf.Equal(nm.SelfNodeOrZero()) {

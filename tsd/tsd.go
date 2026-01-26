@@ -111,6 +111,8 @@ type LocalBackend = any
 type NetstackImpl interface {
 	Start(LocalBackend) error
 	UpdateNetstackIPs(*netmap.NetworkMap)
+	UpdateIPServiceMappings(netmap.IPServiceMappings)
+	UpdateActiveVIPServices([]string)
 }
 
 // Set is a convenience method to set a subsystem value.

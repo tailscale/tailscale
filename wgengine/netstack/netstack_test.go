@@ -126,6 +126,7 @@ func makeNetstack(tb testing.TB, config func(*Impl)) *Impl {
 		tb.Fatal(err)
 	}
 	tb.Cleanup(func() { ns.Close() })
+	sys.Set(ns)
 
 	lb, err := ipnlocal.NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {
