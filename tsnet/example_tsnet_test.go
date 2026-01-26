@@ -205,19 +205,17 @@ func ExampleServer_ListenFunnel_funnelOnly() {
 
 // ExampleServer_ListenService demonstrates how to advertise an HTTPS Service.
 func ExampleServer_ListenService() {
-	s := &tsnet.Server{
-		Hostname: "tsnet-services-demo",
+	srv := &tsnet.Server{
+		Hostname: "atum",
 	}
-	defer s.Close()
 
-	ln, err := s.ListenService("svc:my-service", tsnet.ServiceModeHTTP{
+	ln, err := srv.ListenService("svc:my-service", tsnet.ServiceModeHTTP{
 		HTTPS: true,
 		Port:  443,
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer ln.Close()
 
 	log.Printf("Listening on https://%v\n", ln.FQDN)
 	log.Fatal(http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -238,19 +236,17 @@ func ExampleServer_ListenService_reverseProxy() {
 		Host:   targetAddress,
 	})
 
-	s := &tsnet.Server{
-		Hostname: "tsnet-services-demo",
+	srv := &tsnet.Server{
+		Hostname: "tefnut",
 	}
-	defer s.Close()
 
-	ln, err := s.ListenService("svc:my-service", tsnet.ServiceModeHTTP{
+	ln, err := srv.ListenService("svc:my-service", tsnet.ServiceModeHTTP{
 		HTTPS: true,
 		Port:  443,
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer ln.Close()
 
 	log.Printf("Listening on https://%v\n", ln.FQDN)
 	log.Fatal(http.Serve(ln, reverseProxy))

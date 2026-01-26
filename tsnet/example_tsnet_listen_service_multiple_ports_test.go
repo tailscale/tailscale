@@ -19,21 +19,19 @@ import (
 // Service on multiple ports. In this example, we run an HTTPS server on 443 and
 // an HTTP server handling pprof requests to the same runtime on 6060.
 func ExampleServer_ListenService_multiplePorts() {
-	s := &tsnet.Server{
-		Hostname: "tsnet-services-demo",
+	srv := &tsnet.Server{
+		Hostname: "shu",
 	}
-	defer s.Close()
 
-	ln, err := s.ListenService("svc:my-service", tsnet.ServiceModeHTTP{
+	ln, err := srv.ListenService("svc:my-service", tsnet.ServiceModeHTTP{
 		HTTPS: true,
 		Port:  443,
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer ln.Close()
 
-	pprofLn, err := s.ListenService("svc:my-service", tsnet.ServiceModeTCP{
+	pprofLn, err := srv.ListenService("svc:my-service", tsnet.ServiceModeTCP{
 		Port: 6060,
 	})
 	if err != nil {
