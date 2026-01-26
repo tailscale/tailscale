@@ -6,6 +6,7 @@
 package main
 
 import (
+	"net/netip"
 	"strings"
 	"testing"
 )
@@ -224,5 +225,32 @@ func TestValidateAuthMethods(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestHandlesKubeIPV6(t *testing.T) {
+	t.Setenv("TS_LOCAL_ADDR_PORT", "fd7a:115c:a1e0::6c34:352:9002")
+	t.Setenv("POD_IPS", "fd7a:115c:a1e0::6c34:352")
+
+	cfg, err := configFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.LocalAddrPort != "[fd7a:115c:a1e0::6c34:352]:9002" {
+		t.Errorf("LocalAddrPort is not set correctly")
+	}
+
+	parsed, err := netip.ParseAddrPort(cfg.LocalAddrPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !parsed.Addr().Is6() {
+		t.Errorf("expected v6 address but got %s", parsed)
+	}
+
+	if parsed.Port() != 9002 {
+		t.Errorf("expected port 9002 but got %d", parsed.Port())
 	}
 }
