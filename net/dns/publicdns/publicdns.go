@@ -275,6 +275,26 @@ func populate() {
 	addDoH("76.76.10.4", "https://freedns.controld.com/family")
 	addDoH("2606:1a40::4", "https://freedns.controld.com/family")
 	addDoH("2606:1a40:1::4", "https://freedns.controld.com/family")
+
+	// CIRA Canadian Shield: https://www.cira.ca/en/canadian-shield/configure/summary-cira-canadian-shield-dns-resolver-addresses/
+
+	// CIRA Canadian Shield Private (DNS resolution only)
+	addDoH("149.112.121.10", "https://private.canadianshield.cira.ca/dns-query")
+	addDoH("149.112.122.10", "https://private.canadianshield.cira.ca/dns-query")
+	addDoH("2620:10a:80bb::10", "https://private.canadianshield.cira.ca/dns-query")
+	addDoH("2620:10a:80bc::10", "https://private.canadianshield.cira.ca/dns-query")
+
+	// CIRA Canadian Shield Protected (Malware and phishing protection)
+	addDoH("149.112.121.20", "https://protected.canadianshield.cira.ca/dns-query")
+	addDoH("149.112.122.20", "https://protected.canadianshield.cira.ca/dns-query")
+	addDoH("2620:10a:80bb::20", "https://protected.canadianshield.cira.ca/dns-query")
+	addDoH("2620:10a:80bc::20", "https://protected.canadianshield.cira.ca/dns-query")
+
+	// CIRA Canadian Shield Family (Protected + blocking adult content)
+	addDoH("149.112.121.30", "https://family.canadianshield.cira.ca/dns-query")
+	addDoH("149.112.122.30", "https://family.canadianshield.cira.ca/dns-query")
+	addDoH("2620:10a:80bb::30", "https://family.canadianshield.cira.ca/dns-query")
+	addDoH("2620:10a:80bc::30", "https://family.canadianshield.cira.ca/dns-query")
 }
 
 var (
