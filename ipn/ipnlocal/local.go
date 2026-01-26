@@ -6251,6 +6251,9 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		b.ipVIPServiceMap = ipsvMap
 		if ns, ok := b.sys.Netstack.GetOK(); ok {
 			ns.UpdateIPServiceMappings(ipsvMap)
+			// In case the prefs reloaded from Profile Manager but didn't change,
+			// we still need to load the active VIP services into netstack.
+			ns.UpdateActiveVIPServices(b.pm.CurrentPrefs().AdvertiseServices().AsSlice())
 		}
 
 	}
