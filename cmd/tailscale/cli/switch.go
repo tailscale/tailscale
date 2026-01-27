@@ -116,11 +116,11 @@ func listProfiles(ctx context.Context) error {
 }
 
 type switchProfileJSON struct {
-	ID              string `json:"id"`
-	Tailnet         string `json:"tailnet"`
-	Account         string `json:"account"`
-	AccountNickname string `json:"accountNickname"`
-	Selected        bool   `json:"selected"`
+	ID       string `json:"id"`
+	Nickname string `json:"nickname"`
+	Tailnet  string `json:"tailnet"`
+	Account  string `json:"account"`
+	Selected bool   `json:"selected"`
 }
 
 func listProfilesJSON(ctx context.Context) error {
@@ -131,18 +131,18 @@ func listProfilesJSON(ctx context.Context) error {
 	profiles := make([]switchProfileJSON, 0, len(all))
 	for _, prof := range all {
 		profiles = append(profiles, switchProfileJSON{
-			ID:              string(prof.ID),
-			Tailnet:         prof.NetworkProfile.DisplayNameOrDefault(),
-			Account:         prof.UserProfile.LoginName,
-			AccountNickname: prof.Name,
-			Selected:        prof.ID == curP.ID,
+			ID:       string(prof.ID),
+			Tailnet:  prof.NetworkProfile.DisplayNameOrDefault(),
+			Account:  prof.UserProfile.LoginName,
+			Nickname: prof.Name,
+			Selected: prof.ID == curP.ID,
 		})
 	}
 	profilesJSON, err := json.MarshalIndent(profiles, "", "  ")
 	if err != nil {
 		return err
 	}
-	printf("%s", profilesJSON)
+	printf("%s\n", profilesJSON)
 	return nil
 }
 
