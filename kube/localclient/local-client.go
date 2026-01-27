@@ -17,6 +17,8 @@ import (
 // for easier testing.
 type LocalClient interface {
 	WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (IPNBusWatcher, error)
+	SetServeConfig(context.Context, *ipn.ServeConfig) error
+	EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error)
 	CertIssuer
 }
 
@@ -38,6 +40,14 @@ func New(lc *local.Client) LocalClient {
 
 type localClient struct {
 	lc *local.Client
+}
+
+func (lc *localClient) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {
+	return lc.lc.SetServeConfig(ctx, config)
+}
+
+func (lc *localClient) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
+	return lc.lc.EditPrefs(ctx, mp)
 }
 
 func (lc *localClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (IPNBusWatcher, error) {

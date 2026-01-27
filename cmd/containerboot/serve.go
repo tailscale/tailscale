@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"tailscale.com/kube/certs"
 	"tailscale.com/kube/kubetypes"
 	klc "tailscale.com/kube/localclient"
+	"tailscale.com/kube/services"
 	"tailscale.com/types/netmap"
 )
 
@@ -29,8 +31,9 @@ import (
 // the serve config from it, replacing ${TS_CERT_DOMAIN} with certDomain, and
 // applies it to lc. It exits when ctx is canceled. cdChanged is a channel that
 // is written to when the certDomain changes, causing the serve config to be
-// re-read and applied.
-func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDomainAtomic *atomic.Pointer[string], lc *local.Client, kc *kubeClient, cfg *settings) {
+// re-read and applied. prevServeConfig is the serve config that was fetched
+// during startup. This will be refreshed by the goroutine when serve config changes.
+func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDomainAtomic *atomic.Pointer[string], lc *local.Client, kc *kubeClient, cfg *settings, prevServeConfig *ipn.ServeConfig) {
 	if certDomainAtomic == nil {
 		panic("certDomainAtomic must not be nil")
 	}
@@ -53,10 +56,17 @@ func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDom
 	}
 
 	var certDomain string
-	var prevServeConfig *ipn.ServeConfig
 	var cm *certs.CertManager
 	if cfg.CertShareMode == "rw" {
 		cm = certs.NewCertManager(klc.New(lc), log.Printf)
+	}
+
+	var err error
+	if prevServeConfig == nil {
+		prevServeConfig, err = lc.GetServeConfig(ctx)
+		if err != nil {
+			log.Fatalf("serve proxy: failed to get serve config: %v", err)
+		}
 	}
 	for {
 		select {
@@ -70,33 +80,66 @@ func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDom
 			// k8s handles these mounts. So just re-read the file and apply it
 			// if it's changed.
 		}
-		sc, err := readServeConfig(cfg.ServeConfigPath, certDomain)
-		if err != nil {
-			log.Fatalf("serve proxy: failed to read serve config: %v", err)
+
+		var sc *ipn.ServeConfig
+		if cfg.ServeConfigPath != "" {
+			sc, err := readServeConfig(cfg.ServeConfigPath, certDomain)
+			if err != nil {
+				log.Fatalf("serve proxy: failed to read serve config: %v", err)
+			}
+			if sc == nil {
+				log.Printf("serve proxy: no serve config at %q, skipping", cfg.ServeConfigPath)
+				continue
+			}
+			if prevServeConfig != nil && reflect.DeepEqual(sc, prevServeConfig) {
+				continue
+			}
+			if err := updateServeConfig(ctx, sc, certDomain, klc.New(lc)); err != nil {
+				log.Fatalf("serve proxy: error updating serve config: %v", err)
+			}
+			if kc != nil && kc.canPatch {
+				if err := kc.storeHTTPSEndpoint(ctx, certDomain); err != nil {
+					log.Fatalf("serve proxy: error storing HTTPS endpoint: %v", err)
+				}
+			}
+			prevServeConfig = sc
+			if cfg.CertShareMode != "rw" {
+				continue
+			}
+			if err := cm.EnsureCertLoops(ctx, sc); err != nil {
+				log.Fatalf("serve proxy: error ensuring cert loops: %v", err)
+			}
+		} else {
+			log.Printf("serve config path not provided.")
+			sc = prevServeConfig
 		}
-		if sc == nil {
-			log.Printf("serve proxy: no serve config at %q, skipping", cfg.ServeConfigPath)
-			continue
-		}
-		if prevServeConfig != nil && reflect.DeepEqual(sc, prevServeConfig) {
-			continue
-		}
-		if err := updateServeConfig(ctx, sc, certDomain, lc); err != nil {
-			log.Fatalf("serve proxy: error updating serve config: %v", err)
-		}
-		if kc != nil && kc.canPatch {
-			if err := kc.storeHTTPSEndpoint(ctx, certDomain); err != nil {
-				log.Fatalf("serve proxy: error storing HTTPS endpoint: %v", err)
+
+		// if we are running in kubernetes, we want to leave advertisement to the operator
+		// to do (by updating the serve config)
+		if getAutoAdvertiseBool() {
+			if err := refreshAdvertiseServices(ctx, sc, klc.New(lc)); err != nil {
+				log.Fatalf("error refreshing advertised services: %v", err)
 			}
 		}
-		prevServeConfig = sc
-		if cfg.CertShareMode != "rw" {
-			continue
-		}
-		if err := cm.EnsureCertLoops(ctx, sc); err != nil {
-			log.Fatalf("serve proxy: error ensuring cert loops: %v", err)
-		}
 	}
+}
+
+func refreshAdvertiseServices(ctx context.Context, sc *ipn.ServeConfig, lc klc.LocalClient) error {
+	if sc == nil || len(sc.Services) == 0 {
+		return nil
+	}
+
+	var svcs []string
+	for svc := range sc.Services {
+		svcs = append(svcs, svc.String())
+	}
+
+	err := services.EnsureServicesAdvertised(ctx, svcs, lc, log.Printf)
+	if err != nil {
+		return fmt.Errorf("failed to ensure services advertised: %w", err)
+	}
+
+	return nil
 }
 
 func certDomainFromNetmap(nm *netmap.NetworkMap) string {
@@ -106,13 +149,7 @@ func certDomainFromNetmap(nm *netmap.NetworkMap) string {
 	return nm.DNS.CertDomains[0]
 }
 
-// localClient is a subset of [local.Client] that can be mocked for testing.
-type localClient interface {
-	SetServeConfig(context.Context, *ipn.ServeConfig) error
-	CertPair(context.Context, string) ([]byte, []byte, error)
-}
-
-func updateServeConfig(ctx context.Context, sc *ipn.ServeConfig, certDomain string, lc localClient) error {
+func updateServeConfig(ctx context.Context, sc *ipn.ServeConfig, certDomain string, lc klc.LocalClient) error {
 	if !isValidHTTPSConfig(certDomain, sc) {
 		return nil
 	}
