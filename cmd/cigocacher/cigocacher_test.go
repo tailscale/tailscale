@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bradfitz/go-tool-cache/gocached"
 )
@@ -27,12 +28,17 @@ func TestResultsAreCached(t *testing.T) {
 	bin := buildCigocacher(t, tmp)
 	cacheDir := filepath.Join(tmp, "cache")
 
-	for i := range 2 {
+	for i := range 3 {
+		fmt.Println("=== RUN", i)
+		mtime := time.Now().Add(-time.Hour*time.Duration(i) - time.Hour)
+		if err := os.Chtimes(filepath.Join("..", "testwrapper", "testwrapper.go"), mtime, mtime); err != nil {
+			t.Fatalf("updating mod time: %v", err)
+		}
 		initialGets, initialPuts := getsAndPuts(t, debugAddr)
 		if err := os.RemoveAll(cacheDir); err != nil {
 			t.Fatalf("removing cache dir before run %d: %v", i, err)
 		}
-		cmd := exec.Command("go", "test", "-run", "TestCacheable", "-v", "tailscale.com/cmd/cigocacher/testpkg")
+		cmd := exec.Command("go", "run", "tailscale.com/cmd/testwrapper", "-v", "tailscale.com/cmd/cigocacher/testpkg")
 		cmd.Env = append(
 			os.Environ(),
 			fmt.Sprintf(`GOCACHEPROG=%s --cache-dir=%s --cigocached-url http://%s`, bin, cacheDir, addr),
