@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package limiter provides a keyed token bucket rate limiter.
@@ -187,6 +187,9 @@ func (lm *Limiter[K]) collectDump(now time.Time) []dumpEntry[K] {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 
+	if lm.cache == nil {
+		return nil
+	}
 	ret := make([]dumpEntry[K], 0, lm.cache.Len())
 	lm.cache.ForEach(func(k K, v *bucket) {
 		lm.updateBucketLocked(v, now) // so stats are accurate

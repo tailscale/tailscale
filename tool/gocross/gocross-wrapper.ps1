@@ -1,4 +1,4 @@
-# Copyright (c) Tailscale Inc & AUTHORS
+# Copyright (c) Tailscale Inc & contributors
 # SPDX-License-Identifier: BSD-3-Clause
 
 #Requires -Version 7.4
@@ -114,7 +114,12 @@ $bootstrapScriptBlock = {
                     New-Item -Force -Path $toolchain -ItemType Directory | Out-Null
                     Start-ChildScope -ScriptBlock {
                         Set-Location -LiteralPath $toolchain
-                        tar --strip-components=1 -xf "$toolchain.tar.gz"
+
+                        # Using an absolute path to the tar that ships with Windows
+                        # to avoid conflicts with others (eg msys2).
+                        $system32 = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::System)
+                        $tar = Join-Path $system32 'tar.exe' -Resolve
+                        & $tar --strip-components=1 -xf "$toolchain.tar.gz"
                         if ($LASTEXITCODE -ne 0) {
                             throw "tar failed with exit code $LASTEXITCODE"
                         }

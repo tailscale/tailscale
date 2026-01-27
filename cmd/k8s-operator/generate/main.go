@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !plan9
@@ -26,12 +26,14 @@ const (
 	dnsConfigCRDPath              = operatorDeploymentFilesPath + "/crds/tailscale.com_dnsconfigs.yaml"
 	recorderCRDPath               = operatorDeploymentFilesPath + "/crds/tailscale.com_recorders.yaml"
 	proxyGroupCRDPath             = operatorDeploymentFilesPath + "/crds/tailscale.com_proxygroups.yaml"
+	tailnetCRDPath                = operatorDeploymentFilesPath + "/crds/tailscale.com_tailnets.yaml"
 	helmTemplatesPath             = operatorDeploymentFilesPath + "/chart/templates"
 	connectorCRDHelmTemplatePath  = helmTemplatesPath + "/connector.yaml"
 	proxyClassCRDHelmTemplatePath = helmTemplatesPath + "/proxyclass.yaml"
 	dnsConfigCRDHelmTemplatePath  = helmTemplatesPath + "/dnsconfig.yaml"
 	recorderCRDHelmTemplatePath   = helmTemplatesPath + "/recorder.yaml"
 	proxyGroupCRDHelmTemplatePath = helmTemplatesPath + "/proxygroup.yaml"
+	tailnetCRDHelmTemplatePath    = helmTemplatesPath + "/tailnet.yaml"
 
 	helmConditionalStart = "{{ if .Values.installCRDs -}}\n"
 	helmConditionalEnd   = "{{- end -}}"
@@ -154,6 +156,7 @@ func generate(baseDir string) error {
 		{dnsConfigCRDPath, dnsConfigCRDHelmTemplatePath},
 		{recorderCRDPath, recorderCRDHelmTemplatePath},
 		{proxyGroupCRDPath, proxyGroupCRDHelmTemplatePath},
+		{tailnetCRDPath, tailnetCRDHelmTemplatePath},
 	} {
 		if err := addCRDToHelm(crd.crdPath, crd.templatePath); err != nil {
 			return fmt.Errorf("error adding %s CRD to Helm templates: %w", crd.crdPath, err)

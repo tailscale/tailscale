@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package udprelay contains constructs for relaying Disco and WireGuard packets
@@ -43,6 +43,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/views"
+	"tailscale.com/util/cloudinfo"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/set"
 	"tailscale.com/util/usermetric"
@@ -81,6 +82,7 @@ type Server struct {
 	netChecker          *netcheck.Client
 	metrics             *metrics
 	netMon              *netmon.Monitor
+	cloudInfo           *cloudinfo.CloudInfo // used to query cloud metadata services
 
 	mu                  sync.Mutex                      // guards the following fields
 	macSecrets          views.Slice[[blake2s.Size]byte] // [0] is most recent, max 2 elements
@@ -120,6 +122,7 @@ type serverEndpoint struct {
 	allocatedAt        mono.Time
 
 	mu                   sync.Mutex        // guards the following fields
+	closed               bool              // signals that no new data should be accepted
 	inProgressGeneration [2]uint32         // or zero if a handshake has never started, or has just completed
 	boundAddrPorts       [2]netip.AddrPort // or zero value if a handshake has never completed for that relay leg
 	lastSeen             [2]mono.Time
@@ -149,9 +152,15 @@ func blakeMACFromBindMsg(blakeKey [blake2s.Size]byte, src netip.AddrPort, msg di
 	return out, nil
 }
 
-func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex int, discoMsg disco.Message, serverDisco key.DiscoPublic, macSecrets views.Slice[[blake2s.Size]byte], now mono.Time) (write []byte, to netip.AddrPort) {
+func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex int, discoMsg disco.Message, serverDisco key.DiscoPublic, macSecrets views.Slice[[blake2s.Size]byte], now mono.Time, m endpointUpdater) (write []byte, to netip.AddrPort) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	lastState := e.stateLocked()
+
+	if lastState == endpointClosed {
+		// endpoint was closed in [Server.endpointGC]
+		return nil, netip.AddrPort{}
+	}
 
 	if senderIndex != 0 && senderIndex != 1 {
 		return nil, netip.AddrPort{}
@@ -228,6 +237,7 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 			if bytes.Equal(mac[:], discoMsg.Challenge[:]) {
 				// Handshake complete. Update the binding for this sender.
 				e.boundAddrPorts[senderIndex] = from
+				m.updateEndpoint(lastState, e.stateLocked())
 				e.lastSeen[senderIndex] = now           // record last seen as bound time
 				e.inProgressGeneration[senderIndex] = 0 // reset to zero, which indicates there is no in-progress handshake
 				return nil, netip.AddrPort{}
@@ -241,7 +251,7 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 	}
 }
 
-func (e *serverEndpoint) handleSealedDiscoControlMsg(from netip.AddrPort, b []byte, serverDisco key.DiscoPublic, macSecrets views.Slice[[blake2s.Size]byte], now mono.Time) (write []byte, to netip.AddrPort) {
+func (e *serverEndpoint) handleSealedDiscoControlMsg(from netip.AddrPort, b []byte, serverDisco key.DiscoPublic, macSecrets views.Slice[[blake2s.Size]byte], now mono.Time, m endpointUpdater) (write []byte, to netip.AddrPort) {
 	senderRaw, isDiscoMsg := disco.Source(b)
 	if !isDiscoMsg {
 		// Not a Disco message
@@ -272,7 +282,7 @@ func (e *serverEndpoint) handleSealedDiscoControlMsg(from netip.AddrPort, b []by
 		return nil, netip.AddrPort{}
 	}
 
-	return e.handleDiscoControlMsg(from, senderIndex, discoMsg, serverDisco, macSecrets, now)
+	return e.handleDiscoControlMsg(from, senderIndex, discoMsg, serverDisco, macSecrets, now, m)
 }
 
 func (e *serverEndpoint) handleDataPacket(from netip.AddrPort, b []byte, now mono.Time) (write []byte, to netip.AddrPort) {
@@ -280,6 +290,10 @@ func (e *serverEndpoint) handleDataPacket(from netip.AddrPort, b []byte, now mon
 	defer e.mu.Unlock()
 	if !e.isBoundLocked() {
 		// not a control packet, but serverEndpoint isn't bound
+		return nil, netip.AddrPort{}
+	}
+	if e.stateLocked() == endpointClosed {
+		// endpoint was closed in [Server.endpointGC]
 		return nil, netip.AddrPort{}
 	}
 	switch {
@@ -299,9 +313,21 @@ func (e *serverEndpoint) handleDataPacket(from netip.AddrPort, b []byte, now mon
 	}
 }
 
-func (e *serverEndpoint) isExpired(now mono.Time, bindLifetime, steadyStateLifetime time.Duration) bool {
+// maybeExpire checks if the endpoint has expired according to the provided timeouts and sets its closed state accordingly.
+// True is returned if the endpoint was expired and closed.
+func (e *serverEndpoint) maybeExpire(now mono.Time, bindLifetime, steadyStateLifetime time.Duration, m endpointUpdater) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	before := e.stateLocked()
+	if e.isExpiredLocked(now, bindLifetime, steadyStateLifetime) {
+		e.closed = true
+		m.updateEndpoint(before, e.stateLocked())
+		return true
+	}
+	return false
+}
+
+func (e *serverEndpoint) isExpiredLocked(now mono.Time, bindLifetime, steadyStateLifetime time.Duration) bool {
 	if !e.isBoundLocked() {
 		if now.Sub(e.allocatedAt) > bindLifetime {
 			return true
@@ -321,6 +347,31 @@ func (e *serverEndpoint) isBoundLocked() bool {
 		e.boundAddrPorts[1].IsValid()
 }
 
+// stateLocked returns current endpointState according to the
+// peers handshake status.
+func (e *serverEndpoint) stateLocked() endpointState {
+	switch {
+	case e == nil, e.closed:
+		return endpointClosed
+	case e.boundAddrPorts[0].IsValid() && e.boundAddrPorts[1].IsValid():
+		return endpointOpen
+	default:
+		return endpointConnecting
+	}
+}
+
+// endpointState canonicalizes endpoint state names,
+// see [serverEndpoint.stateLocked].
+//
+// Usermetrics can't handle Stringer, must be a string enum.
+type endpointState string
+
+const (
+	endpointClosed     endpointState = "closed"     // unallocated, not tracked in metrics
+	endpointConnecting endpointState = "connecting" // at least one peer has not completed handshake
+	endpointOpen       endpointState = "open"       // ready to forward
+)
+
 // NewServer constructs a [Server] listening on port. If port is zero, then
 // port selection is left up to the host networking stack. If
 // onlyStaticAddrPorts is true, then dynamic addr:port discovery will be
@@ -336,6 +387,7 @@ func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool, metrics 
 		onlyStaticAddrPorts:   onlyStaticAddrPorts,
 		serverEndpointByDisco: make(map[key.SortedPairOfDiscoPublic]*serverEndpoint),
 		nextVNI:               minVNI,
+		cloudInfo:             cloudinfo.New(logf),
 	}
 	s.discoPublic = s.disco.Public()
 	s.metrics = registerMetrics(metrics)
@@ -402,11 +454,13 @@ func (s *Server) startPacketReaders() {
 
 func (s *Server) addrDiscoveryLoop() {
 	defer s.wg.Done()
-
 	timer := time.NewTimer(0) // fire immediately
 	defer timer.Stop()
 
 	getAddrPorts := func() ([]netip.AddrPort, error) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
 		var addrPorts set.Set[netip.AddrPort]
 		addrPorts.Make()
 
@@ -425,6 +479,21 @@ func (s *Server) addrDiscoveryLoop() {
 			}
 		}
 
+		// Get cloud metadata service addresses.
+		// TODO(illotum) Same is done within magicsock, consider caching within cloudInfo
+		cloudIPs, err := s.cloudInfo.GetPublicIPs(ctx)
+		if err == nil { // Not handling the err, GetPublicIPs already printed to log.
+			for _, ip := range cloudIPs {
+				if ip.IsValid() {
+					if ip.Is4() {
+						addrPorts.Add(netip.AddrPortFrom(ip, s.uc4Port))
+					} else {
+						addrPorts.Add(netip.AddrPortFrom(ip, s.uc6Port))
+					}
+				}
+			}
+		}
+
 		dm := s.getDERPMap()
 		if dm == nil {
 			// We don't have a DERPMap which is required to dynamically
@@ -434,9 +503,7 @@ func (s *Server) addrDiscoveryLoop() {
 		}
 
 		// get addrPorts as visible from DERP
-		netCheckerCtx, netCheckerCancel := context.WithTimeout(context.Background(), netcheck.ReportTimeout)
-		defer netCheckerCancel()
-		rep, err := s.netChecker.GetReport(netCheckerCtx, dm, &netcheck.GetReportOpts{
+		rep, err := s.netChecker.GetReport(ctx, dm, &netcheck.GetReportOpts{
 			OnlySTUN: true,
 		})
 		if err != nil {
@@ -474,6 +541,8 @@ func (s *Server) addrDiscoveryLoop() {
 			// Mirror magicsock behavior for duration between STUN. We consider
 			// 30s a min bound for NAT timeout.
 			timer.Reset(tstime.RandomDurationBetween(20*time.Second, 26*time.Second))
+			// TODO(illotum) Pass in context bound to the [s.closeCh] lifetime,
+			// and do not block on getAddrPorts IO.
 			addrPorts, err := getAddrPorts()
 			if err != nil {
 				s.logf("error discovering IP:port candidates: %v", err)
@@ -683,33 +752,33 @@ func (s *Server) Close() error {
 		clear(s.serverEndpointByDisco)
 		s.closed = true
 		s.bus.Close()
+		deregisterMetrics()
 	})
 	return nil
+}
+
+func (s *Server) endpointGC(bindLifetime, steadyStateLifetime time.Duration) {
+	now := mono.Now()
+	// TODO: consider performance implications of scanning all endpoints and
+	// holding s.mu for the duration. Keep it simple (and slow) for now.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, v := range s.serverEndpointByDisco {
+		if v.maybeExpire(now, bindLifetime, steadyStateLifetime, s.metrics) {
+			delete(s.serverEndpointByDisco, k)
+			s.serverEndpointByVNI.Delete(v.vni)
+		}
+	}
 }
 
 func (s *Server) endpointGCLoop() {
 	defer s.wg.Done()
 	ticker := time.NewTicker(s.bindLifetime)
 	defer ticker.Stop()
-
-	gc := func() {
-		now := mono.Now()
-		// TODO: consider performance implications of scanning all endpoints and
-		// holding s.mu for the duration. Keep it simple (and slow) for now.
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		for k, v := range s.serverEndpointByDisco {
-			if v.isExpired(now, s.bindLifetime, s.steadyStateLifetime) {
-				delete(s.serverEndpointByDisco, k)
-				s.serverEndpointByVNI.Delete(v.vni)
-			}
-		}
-	}
-
 	for {
 		select {
 		case <-ticker.C:
-			gc()
+			s.endpointGC(s.bindLifetime, s.steadyStateLifetime)
 		case <-s.closeCh:
 			return
 		}
@@ -753,7 +822,7 @@ func (s *Server) handlePacket(from netip.AddrPort, b []byte) (write []byte, to n
 		}
 		msg := b[packet.GeneveFixedHeaderLength:]
 		secrets := s.getMACSecrets(now)
-		write, to = e.(*serverEndpoint).handleSealedDiscoControlMsg(from, msg, s.discoPublic, secrets, now)
+		write, to = e.(*serverEndpoint).handleSealedDiscoControlMsg(from, msg, s.discoPublic, secrets, now, s.metrics)
 		isDataPacket = false
 		return
 	}
@@ -995,6 +1064,7 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 	s.serverEndpointByVNI.Store(e.vni, e)
 
 	s.logf("allocated endpoint vni=%d lamportID=%d disco[0]=%v disco[1]=%v", e.vni, e.lamportID, pair.Get()[0].ShortString(), pair.Get()[1].ShortString())
+	s.metrics.updateEndpoint(endpointClosed, endpointConnecting)
 	return endpoint.ServerEndpoint{
 		ServerDisco:         s.discoPublic,
 		ClientDisco:         pair.Get(),

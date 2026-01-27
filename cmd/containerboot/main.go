@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build linux
@@ -20,8 +20,12 @@
 //   - TS_ID_TOKEN: the ID token from the identity provider for workload identity federation.
 //     Must be used together with TS_CLIENT_ID. If the value begins with "file:", it is
 //     treated as a path to a file containing the token.
-//   - Note: TS_AUTHKEY is mutually exclusive with TS_CLIENT_ID, TS_CLIENT_SECRET, and TS_ID_TOKEN.
-//     TS_CLIENT_SECRET and TS_ID_TOKEN cannot be used together.
+//   - TS_AUDIENCE: the audience to use when requesting an ID token from a well-known identity provider
+//     to exchange with the control server for workload identity federation. Must be used together
+//     with TS_CLIENT_ID.
+//   - Note: TS_AUTHKEY is mutually exclusive with TS_CLIENT_ID, TS_CLIENT_SECRET, TS_ID_TOKEN,
+//     and TS_AUDIENCE.
+//     TS_CLIENT_SECRET, TS_ID_TOKEN, and TS_AUDIENCE cannot be used together.
 //   - TS_HOSTNAME: the hostname to request for the node.
 //   - TS_ROUTES: subnet routes to advertise. Explicitly setting it to an empty
 //     value will cause containerboot to stop acting as a subnet router for any
@@ -78,7 +82,7 @@
 //     directory that containers tailscaled config in file. The config file needs to be
 //     named cap-<current-tailscaled-cap>.hujson. If this is set, TS_HOSTNAME,
 //     TS_EXTRA_ARGS, TS_AUTHKEY, TS_CLIENT_ID, TS_CLIENT_SECRET, TS_ID_TOKEN,
-//     TS_ROUTES, TS_ACCEPT_DNS env vars must not be set. If this is set,
+//     TS_ROUTES, TS_ACCEPT_DNS, TS_AUDIENCE env vars must not be set. If this is set,
 //     containerboot only runs `tailscaled --config <path-to-this-configfile>`
 //     and not `tailscale up` or `tailscale set`.
 //     The config file contents are currently read once on container start.

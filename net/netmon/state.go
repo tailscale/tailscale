@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package netmon
@@ -287,9 +287,6 @@ type State struct {
 
 	// PAC is the URL to the Proxy Autoconfig URL, if applicable.
 	PAC string
-
-	// TailscaleInterfaceIndex is the index of the Tailscale interface
-	TailscaleInterfaceIndex int
 }
 
 func (s *State) String() string {
@@ -473,15 +470,22 @@ func hasTailscaleIP(pfxs []netip.Prefix) bool {
 }
 
 func isTailscaleInterface(name string, ips []netip.Prefix) bool {
+	// Sandboxed macOS and Plan9 (and anything else that explicitly calls SetTailscaleInterfaceProps).
+	tsIfName, err := TailscaleInterfaceName()
+	if err == nil {
+		// If we've been told the Tailscale interface name, use that.
+		return name == tsIfName
+	}
+
+	// The sandboxed app should (as of 1.92) set the tun interface name via SetTailscaleInterfaceProps
+	// early in the startup process.  The non-sandboxed app does not.
+	// TODO (barnstar):  If Wireguard created the tun device on darwin, it should know the name and it should
+	// be explicitly set instead checking addresses here.
 	if runtime.GOOS == "darwin" && strings.HasPrefix(name, "utun") && hasTailscaleIP(ips) {
-		// On macOS in the sandboxed app (at least as of
-		// 2021-02-25), we often see two utun devices
-		// (e.g. utun4 and utun7) with the same IPv4 and IPv6
-		// addresses. Just remove all utun devices with
-		// Tailscale IPs until we know what's happening with
-		// macOS NetworkExtensions and utun devices.
 		return true
 	}
+
+	// Windows, Linux...
 	return name == "Tailscale" || // as it is on Windows
 		strings.HasPrefix(name, "tailscale") // TODO: use --tun flag value, etc; see TODO in method doc
 }
@@ -505,18 +509,15 @@ func getState(optTSInterfaceName string) (*State, error) {
 		s.Interface[ni.Name] = ni
 		s.InterfaceIPs[ni.Name] = append(s.InterfaceIPs[ni.Name], pfxs...)
 
-		// Skip uninteresting interfaces.
+		// Skip uninteresting interfaces
 		if IsInterestingInterface != nil && !IsInterestingInterface(ni, pfxs) {
 			return
-		}
-
-		if isTailscaleInterface(ni.Name, pfxs) {
-			s.TailscaleInterfaceIndex = ni.Index
 		}
 
 		if !ifUp || isTSInterfaceName || isTailscaleInterface(ni.Name, pfxs) {
 			return
 		}
+
 		for _, pfx := range pfxs {
 			if pfx.Addr().IsLoopback() {
 				continue
@@ -803,8 +804,7 @@ func (m *Monitor) HasCGNATInterface() (bool, error) {
 	hasCGNATInterface := false
 	cgnatRange := tsaddr.CGNATRange()
 	err := ForeachInterface(func(i Interface, pfxs []netip.Prefix) {
-		isTSInterfaceName := m.tsIfName != "" && i.Name == m.tsIfName
-		if hasCGNATInterface || !i.IsUp() || isTSInterfaceName || isTailscaleInterface(i.Name, pfxs) {
+		if hasCGNATInterface || !i.IsUp() || isTailscaleInterface(i.Name, pfxs) {
 			return
 		}
 		for _, pfx := range pfxs {

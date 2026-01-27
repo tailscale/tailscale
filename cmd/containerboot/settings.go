@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build linux
@@ -26,6 +26,7 @@ type settings struct {
 	ClientID     string
 	ClientSecret string
 	IDToken      string
+	Audience     string
 	Hostname     string
 	Routes       *string
 	// ProxyTargetIP is the destination IP to which all incoming
@@ -92,6 +93,7 @@ func configFromEnv() (*settings, error) {
 		ClientID:                              defaultEnv("TS_CLIENT_ID", ""),
 		ClientSecret:                          defaultEnv("TS_CLIENT_SECRET", ""),
 		IDToken:                               defaultEnv("TS_ID_TOKEN", ""),
+		Audience:                              defaultEnv("TS_AUDIENCE", ""),
 		Hostname:                              defaultEnv("TS_HOSTNAME", ""),
 		Routes:                                defaultEnvStringPointer("TS_ROUTES"),
 		ServeConfigPath:                       defaultEnv("TS_SERVE_CONFIG", ""),
@@ -247,17 +249,46 @@ func (s *settings) validate() error {
 	if s.TailnetTargetFQDN != "" && s.TailnetTargetIP != "" {
 		return errors.New("Both TS_TAILNET_TARGET_IP and TS_TAILNET_FQDN cannot be set")
 	}
-	if s.TailscaledConfigFilePath != "" && (s.AcceptDNS != nil || s.AuthKey != "" || s.Routes != nil || s.ExtraArgs != "" || s.Hostname != "" || s.ClientID != "" || s.ClientSecret != "" || s.IDToken != "") {
-		return errors.New("TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR cannot be set in combination with TS_HOSTNAME, TS_EXTRA_ARGS, TS_AUTHKEY, TS_ROUTES, TS_ACCEPT_DNS, TS_CLIENT_ID, TS_CLIENT_SECRET, TS_ID_TOKEN.")
+	if s.TailscaledConfigFilePath != "" &&
+		(s.AcceptDNS != nil ||
+			s.AuthKey != "" ||
+			s.Routes != nil ||
+			s.ExtraArgs != "" ||
+			s.Hostname != "" ||
+			s.ClientID != "" ||
+			s.ClientSecret != "" ||
+			s.IDToken != "" ||
+			s.Audience != "") {
+		conflictingArgs := []string{
+			"TS_HOSTNAME",
+			"TS_EXTRA_ARGS",
+			"TS_AUTHKEY",
+			"TS_ROUTES",
+			"TS_ACCEPT_DNS",
+			"TS_CLIENT_ID",
+			"TS_CLIENT_SECRET",
+			"TS_ID_TOKEN",
+			"TS_AUDIENCE",
+		}
+		return fmt.Errorf("TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR cannot be set in combination with %s.", strings.Join(conflictingArgs, ", "))
 	}
 	if s.IDToken != "" && s.ClientID == "" {
 		return errors.New("TS_ID_TOKEN is set but TS_CLIENT_ID is not set")
 	}
+	if s.Audience != "" && s.ClientID == "" {
+		return errors.New("TS_AUDIENCE is set but TS_CLIENT_ID is not set")
+	}
 	if s.IDToken != "" && s.ClientSecret != "" {
 		return errors.New("TS_ID_TOKEN and TS_CLIENT_SECRET cannot both be set")
 	}
-	if s.AuthKey != "" && (s.ClientID != "" || s.ClientSecret != "" || s.IDToken != "") {
-		return errors.New("TS_AUTHKEY cannot be used with TS_CLIENT_ID, TS_CLIENT_SECRET, or TS_ID_TOKEN")
+	if s.IDToken != "" && s.Audience != "" {
+		return errors.New("TS_ID_TOKEN and TS_AUDIENCE cannot both be set")
+	}
+	if s.Audience != "" && s.ClientSecret != "" {
+		return errors.New("TS_AUDIENCE and TS_CLIENT_SECRET cannot both be set")
+	}
+	if s.AuthKey != "" && (s.ClientID != "" || s.ClientSecret != "" || s.IDToken != "" || s.Audience != "") {
+		return errors.New("TS_AUTHKEY cannot be used with TS_CLIENT_ID, TS_CLIENT_SECRET, TS_ID_TOKEN, or TS_AUDIENCE.")
 	}
 	if s.AllowProxyingClusterTrafficViaIngress && s.UserspaceMode {
 		return errors.New("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS is not supported in userspace mode")

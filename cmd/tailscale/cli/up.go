@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package cli
@@ -99,6 +99,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 		upf.StringVar(&upArgs.qrFormat, "qr-format", string(qrcodes.FormatAuto), fmt.Sprintf("QR code formatting (%s, %s, %s, %s)", qrcodes.FormatAuto, qrcodes.FormatASCII, qrcodes.FormatLarge, qrcodes.FormatSmall))
 	}
 	upf.StringVar(&upArgs.authKeyOrFile, "auth-key", "", `node authorization key; if it begins with "file:", then it's a path to a file containing the authkey`)
+	upf.StringVar(&upArgs.audience, "audience", "", "Audience used when requesting an ID token from an identity provider for auth keys via workload identity federation")
 	upf.StringVar(&upArgs.clientID, "client-id", "", "Client ID used to generate authkeys via workload identity federation")
 	upf.StringVar(&upArgs.clientSecretOrFile, "client-secret", "", `Client Secret used to generate authkeys via OAuth; if it begins with "file:", then it's a path to a file containing the secret`)
 	upf.StringVar(&upArgs.idTokenOrFile, "id-token", "", `ID token from the identity provider to exchange with the control server for workload identity federation; if it begins with "file:", then it's a path to a file containing the token`)
@@ -149,7 +150,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	return upf
 }
 
-// notFalseVar is is a flag.Value that can only be "true", if set.
+// notFalseVar is a flag.Value that can only be "true", if set.
 type notFalseVar struct{}
 
 func (notFalseVar) IsBoolFlag() bool { return true }
@@ -194,6 +195,7 @@ type upArgsT struct {
 	netfilterMode          string
 	authKeyOrFile          string // "secret" or "file:/path/to/secret"
 	clientID               string
+	audience               string
 	clientSecretOrFile     string // "secret" or "file:/path/to/secret"
 	idTokenOrFile          string // "secret" or "file:/path/to/secret"
 	hostname               string
@@ -628,7 +630,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 				return err
 			}
 
-			authKey, err = f(ctx, prefs.ControlURL, upArgs.clientID, idToken, strings.Split(upArgs.advertiseTags, ","))
+			authKey, err = f(ctx, prefs.ControlURL, upArgs.clientID, idToken, upArgs.audience, strings.Split(upArgs.advertiseTags, ","))
 			if err != nil {
 				return err
 			}
@@ -905,7 +907,7 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 // correspond to an ipn.Pref.
 func preflessFlag(flagName string) bool {
 	switch flagName {
-	case "auth-key", "force-reauth", "reset", "qr", "qr-format", "json", "timeout", "accept-risk", "host-routes", "client-id", "client-secret", "id-token":
+	case "auth-key", "force-reauth", "reset", "qr", "qr-format", "json", "timeout", "accept-risk", "host-routes", "client-id", "audience", "client-secret", "id-token":
 		return true
 	}
 	return false

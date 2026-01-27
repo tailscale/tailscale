@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build linux
@@ -117,6 +117,7 @@ func TestValidateAuthMethods(t *testing.T) {
 		clientID     string
 		clientSecret string
 		idToken      string
+		audience     string
 		errContains  string
 	}{
 		{
@@ -145,9 +146,19 @@ func TestValidateAuthMethods(t *testing.T) {
 			idToken:  "id-token",
 		},
 		{
+			name:     "wif_client_id_and_audience",
+			clientID: "client-id",
+			audience: "audience",
+		},
+		{
 			name:        "id_token_without_client_id",
 			idToken:     "id-token",
 			errContains: "TS_ID_TOKEN is set but TS_CLIENT_ID is not set",
+		},
+		{
+			name:        "audience_without_client_id",
+			audience:    "audience",
+			errContains: "TS_AUDIENCE is set but TS_CLIENT_ID is not set",
 		},
 		{
 			name:         "authkey_with_client_secret",
@@ -156,10 +167,17 @@ func TestValidateAuthMethods(t *testing.T) {
 			errContains:  "TS_AUTHKEY cannot be used with",
 		},
 		{
-			name:        "authkey_with_wif",
+			name:        "authkey_with_id_token",
 			authKey:     "tskey-auth-xxx",
 			clientID:    "client-id",
 			idToken:     "id-token",
+			errContains: "TS_AUTHKEY cannot be used with",
+		},
+		{
+			name:        "authkey_with_audience",
+			authKey:     "tskey-auth-xxx",
+			clientID:    "client-id",
+			audience:    "audience",
 			errContains: "TS_AUTHKEY cannot be used with",
 		},
 		{
@@ -168,6 +186,20 @@ func TestValidateAuthMethods(t *testing.T) {
 			clientSecret: "tskey-client-xxx",
 			idToken:      "id-token",
 			errContains:  "TS_ID_TOKEN and TS_CLIENT_SECRET cannot both be set",
+		},
+		{
+			name:        "id_token_with_audience",
+			clientID:    "client-id",
+			idToken:     "id-token",
+			audience:    "audience",
+			errContains: "TS_ID_TOKEN and TS_AUDIENCE cannot both be set",
+		},
+		{
+			name:         "audience_with_client_secret",
+			clientID:     "client-id",
+			clientSecret: "tskey-client-xxx",
+			audience:     "audience",
+			errContains:  "TS_AUDIENCE and TS_CLIENT_SECRET cannot both be set",
 		},
 	}
 
@@ -178,6 +210,7 @@ func TestValidateAuthMethods(t *testing.T) {
 				ClientID:     tt.clientID,
 				ClientSecret: tt.clientSecret,
 				IDToken:      tt.idToken,
+				Audience:     tt.audience,
 			}
 			err := s.validate()
 			if tt.errContains != "" {

@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package ipnlocal
@@ -306,7 +306,7 @@ func TestPeerRoutes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := peerRoutes(t.Logf, tt.peers, 2)
+			got := peerRoutes(t.Logf, tt.peers, 2, true)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("got = %v; want %v", got, tt.want)
 			}
@@ -2304,6 +2304,56 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProfileMkdirAll(t *testing.T) {
+	t.Run("NoVarRoot", func(t *testing.T) {
+		b := newTestBackend(t)
+		b.SetVarRoot("")
+
+		got, err := b.ProfileMkdirAll(b.CurrentProfile().ID())
+		if got != "" || !errors.Is(err, ErrProfileStorageUnavailable) {
+			t.Errorf(`ProfileMkdirAll: got %q, %v; want "", %v`, got, err, ErrProfileStorageUnavailable)
+		}
+	})
+
+	t.Run("InvalidProfileID", func(t *testing.T) {
+		b := newTestBackend(t)
+		got, err := b.ProfileMkdirAll("")
+		if got != "" || !errors.Is(err, errProfileNotFound) {
+			t.Errorf("ProfileMkdirAll: got %q, %v; want %q, %v", got, err, "", errProfileNotFound)
+		}
+	})
+
+	t.Run("ProfileRoot", func(t *testing.T) {
+		b := newTestBackend(t)
+		want := filepath.Join(b.TailscaleVarRoot(), "profile-data", "id0")
+
+		got, err := b.ProfileMkdirAll(b.CurrentProfile().ID())
+		if err != nil || got != want {
+			t.Errorf("ProfileMkdirAll: got %q, %v, want %q, nil", got, err, want)
+		}
+		if fi, err := os.Stat(got); err != nil {
+			t.Errorf("Check directory: %v", err)
+		} else if !fi.IsDir() {
+			t.Errorf("Path %q is not a directory", got)
+		}
+	})
+
+	t.Run("ProfileSubdir", func(t *testing.T) {
+		b := newTestBackend(t)
+		want := filepath.Join(b.TailscaleVarRoot(), "profile-data", "id0", "a", "b")
+
+		got, err := b.ProfileMkdirAll(b.CurrentProfile().ID(), "a", "b")
+		if err != nil || got != want {
+			t.Errorf("ProfileMkdirAll: got %q, %v, want %q, nil", got, err, want)
+		}
+		if fi, err := os.Stat(got); err != nil {
+			t.Errorf("Check directory: %v", err)
+		} else if !fi.IsDir() {
+			t.Errorf("Path %q is not a directory", got)
+		}
+	})
 }
 
 func TestOfferingAppConnector(t *testing.T) {
@@ -7291,6 +7341,108 @@ func TestStripKeysFromPrefs(t *testing.T) {
 
 			if got := okay.Load(); got != 2 {
 				t.Errorf("notify passed validation %d times; want 2", got)
+			}
+		})
+	}
+}
+
+func TestRouteAllDisabled(t *testing.T) {
+	pp := netip.MustParsePrefix
+
+	tests := []struct {
+		name          string
+		peers         []wgcfg.Peer
+		wantEndpoints []netip.Prefix
+		routeAll      bool
+	}{
+		{
+			name:     "route_all_disabled",
+			routeAll: false,
+			peers: []wgcfg.Peer{
+				{
+					AllowedIPs: []netip.Prefix{
+						// if one ip in the Tailscale ULA range is added, the entire range is added to the router config
+						pp("fd7a:115c:a1e0::2501:9b83/128"),
+						pp("100.80.207.38/32"),
+						pp("100.80.207.56/32"),
+						pp("100.80.207.40/32"),
+						pp("100.94.122.93/32"),
+						pp("100.79.141.115/32"),
+
+						// a /28 range will not be added, since this is not a Service IP range (which is always /32, a single IP)
+						pp("100.64.0.0/28"),
+
+						// ips outside the tailscale cgnat/ula range are not added to the router config
+						pp("192.168.0.45/32"),
+						pp("fd7a:115c:b1e0::2501:9b83/128"),
+						pp("fdf8:f966:e27c:0:5:0:0:10/128"),
+					},
+				},
+			},
+			wantEndpoints: []netip.Prefix{
+				pp("100.80.207.38/32"),
+				pp("100.80.207.56/32"),
+				pp("100.80.207.40/32"),
+				pp("100.94.122.93/32"),
+				pp("100.79.141.115/32"),
+				pp("fd7a:115c:a1e0::/48"),
+			},
+		},
+		{
+			name:     "route_all_enabled",
+			routeAll: true,
+			peers: []wgcfg.Peer{
+				{
+					AllowedIPs: []netip.Prefix{
+						// if one ip in the Tailscale ULA range is added, the entire range is added to the router config
+						pp("fd7a:115c:a1e0::2501:9b83/128"),
+						pp("100.80.207.38/32"),
+						pp("100.80.207.56/32"),
+						pp("100.80.207.40/32"),
+						pp("100.94.122.93/32"),
+						pp("100.79.141.115/32"),
+
+						// ips outside the tailscale cgnat/ula range are not added to the router config
+						pp("192.168.0.45/32"),
+						pp("fd7a:115c:b1e0::2501:9b83/128"),
+						pp("fdf8:f966:e27c:0:5:0:0:10/128"),
+					},
+				},
+			},
+			wantEndpoints: []netip.Prefix{
+				pp("100.80.207.38/32"),
+				pp("100.80.207.56/32"),
+				pp("100.80.207.40/32"),
+				pp("100.94.122.93/32"),
+				pp("100.79.141.115/32"),
+				pp("192.168.0.45/32"),
+				pp("fd7a:115c:a1e0::/48"),
+				pp("fd7a:115c:b1e0::2501:9b83/128"),
+				pp("fdf8:f966:e27c:0:5:0:0:10/128"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefs := ipn.Prefs{RouteAll: tt.routeAll}
+			lb := newTestLocalBackend(t)
+			cfg := &wgcfg.Config{
+				Peers: tt.peers,
+			}
+
+			rcfg := lb.routerConfigLocked(cfg, prefs.View(), false)
+			for _, p := range rcfg.Routes {
+				found := false
+				for _, r := range tt.wantEndpoints {
+					if p.Addr() == r.Addr() {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("unexpected prefix %q in router config", p.String())
+				}
 			}
 		})
 	}

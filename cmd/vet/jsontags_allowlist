@@ -221,6 +221,8 @@ OmitEmptyUnsupportedInV2	tailscale.com/kube/kubeapi.Event.Count
 OmitEmptyUnsupportedInV2	tailscale.com/kube/kubeapi.ObjectMeta.Generation
 OmitEmptyUnsupportedInV2	tailscale.com/kube/kubeapi.Status.Code
 OmitEmptyUnsupportedInV2	tailscale.com/kube/kubetypes.KubernetesCapRule.EnforceRecorder
+OmitEmptyUnsupportedInV2	tailscale.com/kube/kubetypes.KubernetesCapRule.EnableEvents
+OmitEmptyUnsupportedInV2	tailscale.com/kube/kubetypes.KubernetesCapRule.EnableSessionRecordings
 OmitEmptyUnsupportedInV2	tailscale.com/log/sockstatlog.event.IsCellularInterface
 OmitEmptyUnsupportedInV2	tailscale.com/sessionrecording.CastHeader.SrcNodeUserID
 OmitEmptyUnsupportedInV2	tailscale.com/sessionrecording.Source.NodeUserID

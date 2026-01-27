@@ -1,4 +1,4 @@
-# Copyright (c) Tailscale Inc & AUTHORS
+# Copyright (c) Tailscale Inc & contributors
 # SPDX-License-Identifier: BSD-3-Clause
 
 apiVersion: v1
@@ -36,6 +36,9 @@ rules:
   verbs: ["get", "list", "watch", "update"]
 - apiGroups: ["tailscale.com"]
   resources: ["dnsconfigs", "dnsconfigs/status"]
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: ["tailscale.com"]
+  resources: ["tailnets", "tailnets/status"]
   verbs: ["get", "list", "watch", "update"]
 - apiGroups: ["tailscale.com"]
   resources: ["recorders", "recorders/status"]

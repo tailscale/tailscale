@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package monitor provides facilities for monitoring network
@@ -78,8 +78,7 @@ type Monitor struct {
 	goroutines sync.WaitGroup
 	wallTimer  *time.Timer // nil until Started; re-armed AfterFunc per tick
 	lastWall   time.Time
-	timeJumped bool   // whether we need to send a changed=true after a big time jump
-	tsIfName   string // tailscale interface name, if known/set ("tailscale0", "utun3", ...)
+	timeJumped bool // whether we need to send a changed=true after a big time jump
 }
 
 // ChangeFunc is a callback function registered with Monitor that's called when the
@@ -102,10 +101,6 @@ type ChangeDelta struct {
 	// time we checked. This is a hint that a sleeping device might have
 	// come out of sleep.
 	TimeJumped bool
-
-	// The tailscale interface name, e.g. "tailscale0", "utun3", etc.  Not all
-	// platforms know this or set it.  Copied from netmon.Monitor.tsIfName.
-	TailscaleIfaceName string
 
 	DefaultRouteInterface string
 
@@ -134,12 +129,11 @@ func (cd *ChangeDelta) CurrentState() *State {
 // NewChangeDelta builds a ChangeDelta and eagerly computes the cached fields.
 // forceViability, if true, forces DefaultInterfaceMaybeViable to be true regardless of the
 // actual state of the default interface.  This is useful in testing.
-func NewChangeDelta(old, new *State, timeJumped bool, tsIfName string, forceViability bool) (*ChangeDelta, error) {
+func NewChangeDelta(old, new *State, timeJumped bool, forceViability bool) (*ChangeDelta, error) {
 	cd := ChangeDelta{
-		old:                old,
-		new:                new,
-		TimeJumped:         timeJumped,
-		TailscaleIfaceName: tsIfName,
+		old:        old,
+		new:        new,
+		TimeJumped: timeJumped,
 	}
 
 	if cd.new == nil {
@@ -162,8 +156,10 @@ func NewChangeDelta(old, new *State, timeJumped bool, tsIfName string, forceViab
 	cd.DefaultRouteInterface = new.DefaultRouteInterface
 	defIf := new.Interface[cd.DefaultRouteInterface]
 
+	tsIfName, err := TailscaleInterfaceName()
+
 	// The default interface is not viable if it is down or it is the Tailscale interface itself.
-	if !forceViability && (!defIf.IsUp() || cd.DefaultRouteInterface == tsIfName) {
+	if !forceViability && (!defIf.IsUp() || (err == nil && cd.DefaultRouteInterface == tsIfName)) {
 		cd.DefaultInterfaceMaybeViable = false
 	} else {
 		cd.DefaultInterfaceMaybeViable = true
@@ -223,10 +219,11 @@ func (cd *ChangeDelta) isInterestingInterfaceChange() bool {
 	}
 
 	// Compare interfaces in both directions.  Old to new and new to old.
+	tsIfName, ifNameErr := TailscaleInterfaceName()
 
 	for iname, oldInterface := range cd.old.Interface {
-		if iname == cd.TailscaleIfaceName {
-			// Ignore changes in the Tailscale interface itself.
+		if ifNameErr == nil && iname == tsIfName {
+			// Ignore changes in the Tailscale interface itself
 			continue
 		}
 		oldIps := filterRoutableIPs(cd.old.InterfaceIPs[iname])
@@ -259,7 +256,8 @@ func (cd *ChangeDelta) isInterestingInterfaceChange() bool {
 	}
 
 	for iname, newInterface := range cd.new.Interface {
-		if iname == cd.TailscaleIfaceName {
+		if ifNameErr == nil && iname == tsIfName {
+			// Ignore changes in the Tailscale interface itself
 			continue
 		}
 		newIps := filterRoutableIPs(cd.new.InterfaceIPs[iname])
@@ -360,24 +358,7 @@ func (m *Monitor) InterfaceState() *State {
 }
 
 func (m *Monitor) interfaceStateUncached() (*State, error) {
-	return getState(m.tsIfName)
-}
-
-// SetTailscaleInterfaceName sets the name of the Tailscale interface. For
-// example, "tailscale0", "tun0", "utun3", etc.
-//
-// This must be called only early in tailscaled startup before the monitor is
-// used.
-func (m *Monitor) SetTailscaleInterfaceName(ifName string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.tsIfName = ifName
-}
-
-func (m *Monitor) TailscaleInterfaceName() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.tsIfName
+	return getState(tsIfProps.tsIfName())
 }
 
 // GatewayAndSelfIP returns the current network's default gateway, and
@@ -598,7 +579,7 @@ func (m *Monitor) handlePotentialChange(newState *State, forceCallbacks bool) {
 		return
 	}
 
-	delta, err := NewChangeDelta(oldState, newState, timeJumped, m.tsIfName, false)
+	delta, err := NewChangeDelta(oldState, newState, timeJumped, false)
 	if err != nil {
 		m.logf("[unexpected] error creating ChangeDelta: %v", err)
 		return

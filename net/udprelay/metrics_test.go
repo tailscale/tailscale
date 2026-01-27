@@ -1,9 +1,10 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package udprelay
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -11,7 +12,7 @@ import (
 	"tailscale.com/util/usermetric"
 )
 
-func TestMetrics(t *testing.T) {
+func TestMetricsLifecycle(t *testing.T) {
 	c := qt.New(t)
 	deregisterMetrics()
 	r := &usermetric.Registry{}
@@ -22,6 +23,7 @@ func TestMetrics(t *testing.T) {
 	want := []string{
 		"tailscaled_peer_relay_forwarded_packets_total",
 		"tailscaled_peer_relay_forwarded_bytes_total",
+		"tailscaled_peer_relay_endpoints",
 	}
 	slices.Sort(have)
 	slices.Sort(want)
@@ -51,4 +53,57 @@ func TestMetrics(t *testing.T) {
 	c.Assert(m.forwarded66Packets.Value(), qt.Equals, int64(4))
 	c.Assert(cMetricForwarded66Bytes.Value(), qt.Equals, int64(4))
 	c.Assert(cMetricForwarded66Packets.Value(), qt.Equals, int64(4))
+
+	// Validate client metrics deregistration.
+	m.updateEndpoint(endpointClosed, endpointOpen)
+	deregisterMetrics()
+	c.Check(cMetricForwarded44Bytes.Value(), qt.Equals, int64(0))
+	c.Check(cMetricForwarded44Packets.Value(), qt.Equals, int64(0))
+	c.Check(cMetricForwarded46Bytes.Value(), qt.Equals, int64(0))
+	c.Check(cMetricForwarded46Packets.Value(), qt.Equals, int64(0))
+	c.Check(cMetricForwarded64Bytes.Value(), qt.Equals, int64(0))
+	c.Check(cMetricForwarded64Packets.Value(), qt.Equals, int64(0))
+	c.Check(cMetricForwarded66Bytes.Value(), qt.Equals, int64(0))
+	c.Check(cMetricForwarded66Packets.Value(), qt.Equals, int64(0))
+	for k := range cMetricEndpoints {
+		c.Check(cMetricEndpoints[k].Value(), qt.Equals, int64(0))
+	}
+}
+
+func TestMetricsEndpointTransitions(t *testing.T) {
+	c := qt.New(t)
+	var states = []endpointState{
+		endpointClosed,
+		endpointConnecting,
+		endpointOpen,
+	}
+	for _, a := range states {
+		for _, b := range states {
+			t.Run(fmt.Sprintf("%s-%s", a, b), func(t *testing.T) {
+				deregisterMetrics()
+				r := &usermetric.Registry{}
+				m := registerMetrics(r)
+				m.updateEndpoint(a, b)
+				var wantA, wantB int64
+				switch {
+				case a == b:
+					wantA, wantB = 0, 0
+				case a == endpointClosed:
+					wantA, wantB = 0, 1
+				case b == endpointClosed:
+					wantA, wantB = -1, 0
+				default:
+					wantA, wantB = -1, 1
+				}
+				if a != endpointClosed {
+					c.Check(m.endpoints[a].Value(), qt.Equals, wantA)
+					c.Check(cMetricEndpoints[a].Value(), qt.Equals, wantA)
+				}
+				if b != endpointClosed {
+					c.Check(m.endpoints[b].Value(), qt.Equals, wantB)
+					c.Check(cMetricEndpoints[b].Value(), qt.Equals, wantB)
+				}
+			})
+		}
+	}
 }

@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !plan9
@@ -102,7 +102,7 @@ func (a *IngressReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 		return nil
 	}
 
-	if done, err := a.ssr.Cleanup(ctx, logger, childResourceLabels(ing.Name, ing.Namespace, "ingress"), proxyTypeIngressResource); err != nil {
+	if done, err := a.ssr.Cleanup(ctx, operatorTailnet, logger, childResourceLabels(ing.Name, ing.Namespace, "ingress"), proxyTypeIngressResource); err != nil {
 		return fmt.Errorf("failed to cleanup: %w", err)
 	} else if !done {
 		logger.Debugf("cleanup not done yet, waiting for next reconcile")

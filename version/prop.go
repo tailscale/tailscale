@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package version
@@ -13,6 +13,22 @@ import (
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/lazy"
+)
+
+// AppIdentifierFn, if non-nil, is a callback function that returns the
+// application identifier of the running process or an empty string if unknown.
+//
+// tailscale(d) implementations can set an explicit callback to return an identifier
+// for the running process if such a concept exists.  The Apple bundle identifier, for example.
+var AppIdentifierFn func() string // or nil
+
+const (
+	macsysBundleID      = "io.tailscale.ipn.macsys"                     // The macsys gui app and CLI
+	appStoreBundleID    = "io.tailscale.ipn.macos"                      // The App Store gui app and CLI
+	macsysExtBundleId   = "io.tailscale.ipn.macsys.network-extension"   // The macsys system extension
+	appStoreExtBundleId = "io.tailscale.ipn.macos.network-extension"    // The App Store network extension
+	tvOSExtBundleId     = "io.tailscale.ipn.ios.network-extension-tvos" // The tvOS network extension
+	iOSExtBundleId      = "io.tailscale.ipn.ios.network-extension"      // The iOS network extension
 )
 
 // IsMobile reports whether this is a mobile client build.
@@ -52,8 +68,8 @@ func IsMacGUIVariant() bool {
 
 // IsSandboxedMacOS reports whether this process is a sandboxed macOS
 // process (either the app or the extension). It is true for the Mac App Store
-// and macsys (System Extension) version on macOS, and false for
-// tailscaled-on-macOS.
+// and macsys (only its System Extension) variants on macOS, and false for
+// tailscaled and the macsys GUI process on macOS.
 func IsSandboxedMacOS() bool {
 	return IsMacAppStore() || IsMacSysExt()
 }
@@ -73,10 +89,15 @@ func IsMacSysGUI() bool {
 	if runtime.GOOS != "darwin" {
 		return false
 	}
-
 	return isMacSysApp.Get(func() bool {
+		if AppIdentifierFn != nil {
+			return AppIdentifierFn() == macsysBundleID
+		}
+
+		// TODO (barnstar): This check should be redundant once all relevant callers
+		// use AppIdentifierFn.
 		return strings.Contains(os.Getenv("HOME"), "/Containers/io.tailscale.ipn.macsys/") ||
-			strings.Contains(os.Getenv("XPC_SERVICE_NAME"), "io.tailscale.ipn.macsys")
+			strings.Contains(os.Getenv("XPC_SERVICE_NAME"), macsysBundleID)
 	})
 }
 
@@ -90,11 +111,17 @@ func IsMacSysExt() bool {
 		return false
 	}
 	return isMacSysExt.Get(func() bool {
+		if AppIdentifierFn != nil {
+			return AppIdentifierFn() == macsysExtBundleId
+		}
+
+		// TODO (barnstar): This check should be redundant once all relevant callers
+		// use AppIdentifierFn.
 		exe, err := os.Executable()
 		if err != nil {
 			return false
 		}
-		return filepath.Base(exe) == "io.tailscale.ipn.macsys.network-extension"
+		return filepath.Base(exe) == macsysExtBundleId
 	})
 }
 
@@ -107,11 +134,17 @@ func IsMacAppStore() bool {
 		return false
 	}
 	return isMacAppStore.Get(func() bool {
+		if AppIdentifierFn != nil {
+			id := AppIdentifierFn()
+			return id == appStoreBundleID || id == appStoreExtBundleId
+		}
+		// TODO (barnstar): This check should be redundant once all relevant callers
+		// use AppIdentifierFn.
 		// Both macsys and app store versions can run CLI executable with
 		// suffix /Contents/MacOS/Tailscale. Check $HOME to filter out running
 		// as macsys.
 		return strings.Contains(os.Getenv("HOME"), "/Containers/io.tailscale.ipn.macos/") ||
-			strings.Contains(os.Getenv("XPC_SERVICE_NAME"), "io.tailscale.ipn.macos")
+			strings.Contains(os.Getenv("XPC_SERVICE_NAME"), appStoreBundleID)
 	})
 }
 
@@ -124,6 +157,11 @@ func IsMacAppStoreGUI() bool {
 		return false
 	}
 	return isMacAppStoreGUI.Get(func() bool {
+		if AppIdentifierFn != nil {
+			return AppIdentifierFn() == appStoreBundleID
+		}
+		// TODO (barnstar): This check should be redundant once all relevant callers
+		// use AppIdentifierFn.
 		exe, err := os.Executable()
 		if err != nil {
 			return false
@@ -143,7 +181,13 @@ func IsAppleTV() bool {
 		return false
 	}
 	return isAppleTV.Get(func() bool {
-		return strings.EqualFold(os.Getenv("XPC_SERVICE_NAME"), "io.tailscale.ipn.ios.network-extension-tvos")
+		if AppIdentifierFn != nil {
+			return AppIdentifierFn() == tvOSExtBundleId
+		}
+
+		// TODO (barnstar): This check should be redundant once all relevant callers
+		// use AppIdentifierFn.
+		return strings.EqualFold(os.Getenv("XPC_SERVICE_NAME"), tvOSExtBundleId)
 	})
 }
 
@@ -187,6 +231,23 @@ func IsUnstableBuild() bool {
 	})
 }
 
+// osVariant returns the OS variant string for systems where we support
+// multiple ways of running tailscale(d), if any.
+//
+// For example: "appstore", "macsys", "darwin".
+func osVariant() string {
+	if IsMacAppStore() {
+		return "appstore"
+	}
+	if IsMacSys() {
+		return "macsys"
+	}
+	if runtime.GOOS == "darwin" {
+		return "darwin"
+	}
+	return ""
+}
+
 var isDev = sync.OnceValue(func() bool {
 	return strings.Contains(Short(), "-dev")
 })
@@ -227,6 +288,11 @@ type Meta struct {
 	// setting "vcs.modified" was true).
 	GitDirty bool `json:"gitDirty,omitempty"`
 
+	// OSVariant is specific variant of the binary, if applicable. For example,
+	// macsys/appstore/darwin for macOS builds.  Nil/empty where not supported
+	// or on oses without variants.
+	OSVariant string `json:"osVariant,omitempty"`
+
 	// ExtraGitCommit, if non-empty, is the git commit of a "supplemental"
 	// repository at which Tailscale was built. Its format is the same as
 	// gitCommit.
@@ -264,6 +330,7 @@ func GetMeta() Meta {
 			GitCommitTime:   getEmbeddedInfo().commitTime,
 			GitCommit:       gitCommit(),
 			GitDirty:        gitDirty(),
+			OSVariant:       osVariant(),
 			ExtraGitCommit:  extraGitCommitStamp,
 			IsDev:           isDev(),
 			UnstableBranch:  IsUnstableBuild(),

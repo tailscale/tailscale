@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package netmon
@@ -64,7 +64,7 @@ func syncTestLinkChangeLogLimiter(t *testing.T) {
 	// InjectEvent doesn't work because it's not a major event, so we
 	// instead inject the event ourselves.
 	injector := eventbustest.NewInjector(t, bus)
-	cd, err := NewChangeDelta(nil, &State{}, true, "tailscale0", true)
+	cd, err := NewChangeDelta(nil, &State{}, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package ipnlocal
@@ -41,6 +41,8 @@ import (
 	"tailscale.com/wgengine/filter"
 )
 
+// initListenConfig, if non-nil, is called during peerAPIListener setup.  It is used only
+// on iOS and macOS to set socket options to bind the listener to the Tailscale interface.
 var initListenConfig func(config *net.ListenConfig, addr netip.Addr, tunIfIndex int) error
 
 // peerDNSQueryHandler is implemented by tsdns.Resolver.
@@ -69,6 +71,13 @@ func (s *peerAPIServer) listen(ip netip.Addr, tunIfIndex int) (ln net.Listener, 
 		// On iOS/macOS, this sets the lc.Control hook to
 		// setsockopt the interface index to bind to, to get
 		// out of the network sandbox.
+
+		// A zero tunIfIndex is invalid for peerapi.  A zero value will not get us
+		// out of the network sandbox.  Caller should log and retry.
+		if tunIfIndex == 0 {
+			return nil, fmt.Errorf("peerapi: cannot listen on %s with tunIfIndex 0", ipStr)
+		}
+
 		if err := initListenConfig(&lc, ip, tunIfIndex); err != nil {
 			return nil, err
 		}

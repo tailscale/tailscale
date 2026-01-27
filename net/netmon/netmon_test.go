@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package netmon
@@ -159,7 +159,7 @@ func TestMonitorMode(t *testing.T) {
 
 // tests (*ChangeDelta).RebindRequired
 func TestRebindRequired(t *testing.T) {
-	// s1 cannot be nil by definition
+	// s1 must not be nil by definition
 	tests := []struct {
 		name     string
 		s1, s2   *State
@@ -478,9 +478,11 @@ func TestRebindRequired(t *testing.T) {
 	withIsInterestingInterface(t, func(ni Interface, pfxs []netip.Prefix) bool {
 		return !strings.HasPrefix(ni.Name, "boring")
 	})
+	saveAndRestoreTailscaleIfaceProps(t)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+
 			// Populate dummy interfaces where missing.
 			for _, s := range []*State{tt.s1, tt.s2} {
 				if s == nil {
@@ -495,7 +497,8 @@ func TestRebindRequired(t *testing.T) {
 				}
 			}
 
-			cd, err := NewChangeDelta(tt.s1, tt.s2, false, tt.tsIfName, true)
+			SetTailscaleInterfaceProps(tt.tsIfName, 1)
+			cd, err := NewChangeDelta(tt.s1, tt.s2, false, true)
 			if err != nil {
 				t.Fatalf("NewChangeDelta error: %v", err)
 			}
@@ -505,6 +508,15 @@ func TestRebindRequired(t *testing.T) {
 			}
 		})
 	}
+}
+
+func saveAndRestoreTailscaleIfaceProps(t *testing.T) {
+	t.Helper()
+	index, _ := TailscaleInterfaceIndex()
+	name, _ := TailscaleInterfaceName()
+	t.Cleanup(func() {
+		SetTailscaleInterfaceProps(name, index)
+	})
 }
 
 func withIsInterestingInterface(t *testing.T, fn func(Interface, []netip.Prefix) bool) {

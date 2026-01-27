@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build go1.23
@@ -799,8 +799,9 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 
 		if runtime.GOOS == "plan9" {
 			// TODO(bradfitz): why don't we do this on all platforms?
+			// TODO(barnstar): we do it on sandboxed darwin now
 			// We should. Doing it just on plan9 for now conservatively.
-			sys.NetMon.Get().SetTailscaleInterfaceName(devName)
+			netmon.SetTailscaleInterfaceProps(devName, 0)
 		}
 
 		r, err := router.New(logf, dev, sys.NetMon.Get(), sys.HealthTracker.Get(), sys.Bus.Get())

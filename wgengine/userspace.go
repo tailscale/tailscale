@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package wgengine
@@ -54,6 +54,7 @@ import (
 	"tailscale.com/util/execqueue"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
+	"tailscale.com/util/singleflight"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
@@ -567,6 +568,14 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 			return
 		}
 		e.magicConn.HandleDiscoKeyAdvertisement(peer.Node, pkt)
+	})
+	var tsmpRequestGroup singleflight.Group[netip.Addr, struct{}]
+	eventbus.SubscribeFunc(ec, func(req magicsock.NewDiscoKeyAvailable) {
+		go tsmpRequestGroup.Do(req.NodeFirstAddr, func() (struct{}, error) {
+			e.sendTSMPDiscoAdvertisement(req.NodeFirstAddr)
+			e.logf("wgengine: sending TSMP disco key advertisement to %v", req.NodeFirstAddr)
+			return struct{}{}, nil
+		})
 	})
 	e.eventClient = ec
 	e.logf("Engine created.")

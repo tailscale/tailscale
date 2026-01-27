@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // The derper binary is a simple DERP server.
@@ -99,17 +99,12 @@ var (
 )
 
 var (
-	tlsRequestVersion = &metrics.LabelMap{Label: "version"}
-	tlsActiveVersion  = &metrics.LabelMap{Label: "version"}
+	tlsRequestVersion = metrics.NewLabelMap("derper_tls_request_version", "version")
+	tlsActiveVersion  = metrics.NewLabelMap("gauge_derper_tls_active_version", "version")
 )
 
 const setecMeshKeyName = "meshkey"
 const meshKeyEnvVar = "TAILSCALE_DERPER_MESH_KEY"
-
-func init() {
-	expvar.Publish("derper_tls_request_version", tlsRequestVersion)
-	expvar.Publish("gauge_derper_tls_active_version", tlsActiveVersion)
-}
 
 type config struct {
 	PrivateKey key.NodePrivate
