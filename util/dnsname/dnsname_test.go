@@ -123,6 +123,34 @@ func TestFQDNContains(t *testing.T) {
 	}
 }
 
+func TestFQDNParent(t *testing.T) {
+	tests := []struct {
+		in   string
+		want FQDN
+	}{
+		{"", ""},
+		{".", ""},
+		{"com.", ""},
+		{"foo.com.", "com."},
+		{"www.foo.com.", "foo.com."},
+		{"a.b.c.d.", "b.c.d."},
+		{"sub.node.tailnet.ts.net.", "node.tailnet.ts.net."},
+	}
+
+	for _, test := range tests {
+		t.Run(test.in, func(t *testing.T) {
+			in, err := ToFQDN(test.in)
+			if err != nil {
+				t.Fatalf("ToFQDN(%q): %v", test.in, err)
+			}
+			got := in.Parent()
+			if got != test.want {
+				t.Errorf("ToFQDN(%q).Parent() = %q, want %q", test.in, got, test.want)
+			}
+		})
+	}
+}
+
 func TestSanitizeLabel(t *testing.T) {
 	tests := []struct {
 		name string

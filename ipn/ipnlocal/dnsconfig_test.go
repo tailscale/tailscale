@@ -107,6 +107,39 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 		},
 		{
+			name: "subdomain_resolve_capability",
+			nm: &netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Name:      "myname.net.",
+					Addresses: ipps("100.101.101.101"),
+				}).View(),
+				AllCaps: set.SetOf([]tailcfg.NodeCapability{tailcfg.NodeAttrDNSSubdomainResolve}),
+			},
+			peers: nodeViews([]*tailcfg.Node{
+				{
+					ID:        1,
+					Name:      "peer-with-cap.net.",
+					Addresses: ipps("100.102.0.1"),
+					CapMap:    tailcfg.NodeCapMap{tailcfg.NodeAttrDNSSubdomainResolve: nil},
+				},
+				{
+					ID:        2,
+					Name:      "peer-without-cap.net.",
+					Addresses: ipps("100.102.0.2"),
+				},
+			}),
+			prefs: &ipn.Prefs{},
+			want: &dns.Config{
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"myname.net.":           ips("100.101.101.101"),
+					"peer-with-cap.net.":    ips("100.102.0.1"),
+					"peer-without-cap.net.": ips("100.102.0.2"),
+				},
+				SubdomainHosts: set.Of[dnsname.FQDN]("myname.net.", "peer-with-cap.net."),
+			},
+		},
+		{
 			// An ephemeral node with only an IPv6 address
 			// should get IPv6 records for all its peers,
 			// even if they have IPv4.

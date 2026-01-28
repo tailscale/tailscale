@@ -751,8 +751,20 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		dcfg.Hosts[fqdn] = ips
 	}
 	set(nm.SelfName(), nm.GetAddresses())
+	if nm.AllCaps.Contains(tailcfg.NodeAttrDNSSubdomainResolve) {
+		if fqdn, err := dnsname.ToFQDN(nm.SelfName()); err == nil {
+			dcfg.SubdomainHosts.Make()
+			dcfg.SubdomainHosts.Add(fqdn)
+		}
+	}
 	for _, peer := range peers {
 		set(peer.Name(), peer.Addresses())
+		if peer.CapMap().Contains(tailcfg.NodeAttrDNSSubdomainResolve) {
+			if fqdn, err := dnsname.ToFQDN(peer.Name()); err == nil {
+				dcfg.SubdomainHosts.Make()
+				dcfg.SubdomainHosts.Add(fqdn)
+			}
+		}
 	}
 	for _, rec := range nm.DNS.ExtraRecords {
 		switch rec.Type {
