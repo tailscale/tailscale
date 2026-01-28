@@ -54,297 +54,21 @@ main() {
 		. /etc/os-release
 		VERSION_MAJOR="${VERSION_ID:-}"
 		VERSION_MAJOR="${VERSION_MAJOR%%.*}"
-		case "$ID" in
-			ubuntu|pop|neon|zorin|tuxedo)
-				OS="ubuntu"
-				if [ "${UBUNTU_CODENAME:-}" != "" ]; then
-				    VERSION="$UBUNTU_CODENAME"
-				else
-				    VERSION="$VERSION_CODENAME"
-				fi
-				PACKAGETYPE="apt"
-				# Third-party keyrings became the preferred method of
-				# installation in Ubuntu 20.04.
-				if [ "$VERSION_MAJOR" -lt 20 ]; then
-					APT_KEY_TYPE="legacy"
-				else
-					APT_KEY_TYPE="keyring"
-				fi
-				;;
-			debian)
-				OS="$ID"
-				VERSION="$VERSION_CODENAME"
-				PACKAGETYPE="apt"
-				# Third-party keyrings became the preferred method of
-				# installation in Debian 11 (Bullseye).
-				if [ -z "${VERSION_ID:-}" ]; then
-					# rolling release. If you haven't kept current, that's on you.
-					APT_KEY_TYPE="keyring"
-				# Parrot Security is a special case that uses ID=debian
-				elif [ "$NAME" = "Parrot Security" ]; then
-					# All versions new enough to have this behaviour prefer keyring
-					# and their VERSION_ID is not consistent with Debian.
-					APT_KEY_TYPE="keyring"
-					# They don't specify the Debian version they're based off in os-release
-					# but Parrot 6 is based on Debian 12 Bookworm.
-					VERSION=bookworm
-				elif [ "$VERSION_MAJOR" -lt 11 ]; then
-					APT_KEY_TYPE="legacy"
-				else
-					APT_KEY_TYPE="keyring"
-				fi
-				;;
-			linuxmint)
-				if [ "${UBUNTU_CODENAME:-}" != "" ]; then
-				    OS="ubuntu"
-				    VERSION="$UBUNTU_CODENAME"
-				elif [ "${DEBIAN_CODENAME:-}" != "" ]; then
-				    OS="debian"
-				    VERSION="$DEBIAN_CODENAME"
-				else
-				    OS="ubuntu"
-				    VERSION="$VERSION_CODENAME"
-				fi
-				PACKAGETYPE="apt"
-				if [ "$VERSION_MAJOR" -lt 5 ]; then
-					APT_KEY_TYPE="legacy"
-				else
-					APT_KEY_TYPE="keyring"
-				fi
-				;;
-			elementary)
-				OS="ubuntu"
-				VERSION="$UBUNTU_CODENAME"
-				PACKAGETYPE="apt"
-				if [ "$VERSION_MAJOR" -lt 6 ]; then
-					APT_KEY_TYPE="legacy"
-				else
-					APT_KEY_TYPE="keyring"
-				fi
-				;;
-			industrial-os)
-				OS="debian"
-				PACKAGETYPE="apt"
-				if [ "$VERSION_MAJOR" -lt 5 ]; then
-					VERSION="buster"
-					APT_KEY_TYPE="legacy"
-				else
-					VERSION="bullseye"
-					APT_KEY_TYPE="keyring"
-				fi
-				;;
-			parrot|mendel)
-				OS="debian"
-				PACKAGETYPE="apt"
-				if [ "$VERSION_MAJOR" -lt 5 ]; then
-					VERSION="buster"
-					APT_KEY_TYPE="legacy"
-				else
-					VERSION="bullseye"
-					APT_KEY_TYPE="keyring"
-				fi
-				;;
-			galliumos)
-				OS="ubuntu"
-				PACKAGETYPE="apt"
-				VERSION="bionic"
-				APT_KEY_TYPE="legacy"
-				;;
-			pureos|kaisen)
-				OS="debian"
-				PACKAGETYPE="apt"
-				VERSION="bullseye"
-				APT_KEY_TYPE="keyring"
-				;;
-			raspbian)
-				OS="$ID"
-				VERSION="$VERSION_CODENAME"
-				PACKAGETYPE="apt"
-				# Third-party keyrings became the preferred method of
-				# installation in Raspbian 11 (Bullseye).
-				if [ "$VERSION_MAJOR" -lt 11 ]; then
-					APT_KEY_TYPE="legacy"
-				else
-					APT_KEY_TYPE="keyring"
-				fi
-				;;
-			kali)
-				OS="debian"
-				PACKAGETYPE="apt"
-				APT_SYSTEMCTL_START=true
-				# Third-party keyrings became the preferred method of
-				# installation in Debian 11 (Bullseye), which Kali switched
-				# to in roughly 2021.x releases
-				if [ "$VERSION_MAJOR" -lt 2021 ]; then
-					# Kali VERSION_ID is "kali-rolling", which isn't distinguishing
-					VERSION="buster"
-					APT_KEY_TYPE="legacy"
-				else
-					VERSION="bullseye"
-					APT_KEY_TYPE="keyring"
-				fi
-				;;
-			Deepin|deepin)  # https://github.com/tailscale/tailscale/issues/7862
-				OS="debian"
-				PACKAGETYPE="apt"
-				if [ "$VERSION_MAJOR" -lt 20 ]; then
-					APT_KEY_TYPE="legacy"
-					VERSION="buster"
-				else
-					APT_KEY_TYPE="keyring"
-					VERSION="bullseye"
-				fi
-				;;
-			pika)
-				PACKAGETYPE="apt"
-				# All versions of PikaOS are new enough to prefer keyring
-				APT_KEY_TYPE="keyring"
-				# Older versions of PikaOS are based on Ubuntu rather than Debian
-				if [ "$VERSION_MAJOR" -lt 4 ]; then
-					OS="ubuntu"
-					VERSION="$UBUNTU_CODENAME"
-				else
-					OS="debian"
-					VERSION="$DEBIAN_CODENAME"
-				fi
-				;;
-			sparky)
-				OS="debian"
-				PACKAGETYPE="apt"
-				VERSION="$DEBIAN_CODENAME"
-				APT_KEY_TYPE="keyring"
-				;;
-			centos)
-				OS="$ID"
-				VERSION="$VERSION_MAJOR"
-				PACKAGETYPE="dnf"
-				if [ "$VERSION" = "7" ]; then
-					PACKAGETYPE="yum"
-				fi
-				;;
-			ol)
-				OS="oracle"
-				VERSION="$VERSION_MAJOR"
-				PACKAGETYPE="dnf"
-				if [ "$VERSION" = "7" ]; then
-					PACKAGETYPE="yum"
-				fi
-				;;
-			rhel|miraclelinux)
-				OS="$ID"
-				if [ "$ID" = "miraclelinux" ]; then
-					OS="rhel"
-				fi
-				VERSION="$VERSION_MAJOR"
-				PACKAGETYPE="dnf"
-				if [ "$VERSION" = "7" ]; then
-					PACKAGETYPE="yum"
-				fi
-				;;
-			fedora)
-				OS="$ID"
-				VERSION=""
-				PACKAGETYPE="dnf"
-				;;
-			rocky|almalinux|nobara|openmandriva|sangoma|risios|cloudlinux|alinux|fedora-asahi-remix|ultramarine)
-				OS="fedora"
-				VERSION=""
-				PACKAGETYPE="dnf"
-				;;
-			amzn)
-				OS="amazon-linux"
-				VERSION="$VERSION_ID"
-				PACKAGETYPE="yum"
-				;;
-			xenenterprise)
-				OS="centos"
-				VERSION="$VERSION_MAJOR"
-				PACKAGETYPE="yum"
-				;;
-			opensuse-leap|sles)
-				OS="opensuse"
-				VERSION="leap/$VERSION_ID"
-				PACKAGETYPE="zypper"
-				;;
-			opensuse-tumbleweed)
-				OS="opensuse"
-				VERSION="tumbleweed"
-				PACKAGETYPE="zypper"
-				;;
-			sle-micro-rancher)
-				OS="opensuse"
-				VERSION="leap/15.4"
-				PACKAGETYPE="zypper"
-				;;
-			arch|archarm|endeavouros|blendos|garuda|archcraft|cachyos)
-				OS="arch"
-				VERSION="" # rolling release
-				PACKAGETYPE="pacman"
-				;;
-			manjaro|manjaro-arm|biglinux)
-				OS="manjaro"
-				VERSION="" # rolling release
-				PACKAGETYPE="pacman"
-				;;
-			alpine)
-				OS="$ID"
-				VERSION="$VERSION_ID"
-				PACKAGETYPE="apk"
-				;;
-			postmarketos)
-				OS="alpine"
-				VERSION="$VERSION_ID"
-				PACKAGETYPE="apk"
-				;;
-			nixos)
-				echo "Please add Tailscale to your NixOS configuration directly:"
-				echo
-				echo "services.tailscale.enable = true;"
-				exit 1
-				;;
-			bazzite)
-				echo "Bazzite comes with Tailscale installed by default."
-				echo "Please enable Tailscale by running the following commands as root:"
-				echo
-				echo "ujust enable-tailscale"
-				echo "tailscale up"
-				exit 1
-				;;
-			void)
-				OS="$ID"
-				VERSION="" # rolling release
-				PACKAGETYPE="xbps"
-				;;
-			gentoo)
-				OS="$ID"
-				VERSION="" # rolling release
-				PACKAGETYPE="emerge"
-				;;
-			freebsd)
-				OS="$ID"
-				VERSION="$VERSION_MAJOR"
-				PACKAGETYPE="pkg"
-				;;
-			osmc)
-				OS="debian"
-				PACKAGETYPE="apt"
-				VERSION="bullseye"
-				APT_KEY_TYPE="keyring"
-				;;
-			photon)
-				OS="photon"
-				VERSION="$VERSION_MAJOR"
-				PACKAGETYPE="tdnf"
-				;;
-			steamos)
-				echo "To install Tailscale on SteamOS, please follow the instructions here:"
-				echo "https://github.com/tailscale-dev/deck-tailscale"
-				exit 1
-				;;
 
-			# TODO: wsl?
-			# TODO: synology? qnap?
-		esac
+		# Try to detect by ID first
+		detect_os_by_id "$ID"
+
+		# If we can't match by ID, try using ID_LIKE
+		if [ -z "$OS" ] && [ -n "${ID_LIKE:-}" ]; then
+			# Loop through each ID in ID_LIKE (space-separated)
+			for like_id in $ID_LIKE; do
+				detect_os_by_id "$like_id"
+				# If we found a match, stop searching
+                if [ -n "$OS" ]; then
+                    break
+                fi
+			done
+		fi
 	fi
 
 	# If we failed to detect something through os-release, consult
@@ -721,6 +445,302 @@ main() {
 	else
 		echo "$SUDO tailscale up"
 	fi
+}
+
+detect_os_by_id() {
+	local id="$1"
+
+	case "$ID" in
+			ubuntu|pop|neon|zorin|tuxedo)
+				OS="ubuntu"
+				if [ "${UBUNTU_CODENAME:-}" != "" ]; then
+				    VERSION="$UBUNTU_CODENAME"
+				else
+				    VERSION="$VERSION_CODENAME"
+				fi
+				PACKAGETYPE="apt"
+				# Third-party keyrings became the preferred method of
+				# installation in Ubuntu 20.04.
+				if [ "$VERSION_MAJOR" -lt 20 ]; then
+					APT_KEY_TYPE="legacy"
+				else
+					APT_KEY_TYPE="keyring"
+				fi
+				;;
+			debian)
+				OS="$ID"
+				VERSION="$VERSION_CODENAME"
+				PACKAGETYPE="apt"
+				# Third-party keyrings became the preferred method of
+				# installation in Debian 11 (Bullseye).
+				if [ -z "${VERSION_ID:-}" ]; then
+					# rolling release. If you haven't kept current, that's on you.
+					APT_KEY_TYPE="keyring"
+				# Parrot Security is a special case that uses ID=debian
+				elif [ "$NAME" = "Parrot Security" ]; then
+					# All versions new enough to have this behaviour prefer keyring
+					# and their VERSION_ID is not consistent with Debian.
+					APT_KEY_TYPE="keyring"
+					# They don't specify the Debian version they're based off in os-release
+					# but Parrot 6 is based on Debian 12 Bookworm.
+					VERSION=bookworm
+				elif [ "$VERSION_MAJOR" -lt 11 ]; then
+					APT_KEY_TYPE="legacy"
+				else
+					APT_KEY_TYPE="keyring"
+				fi
+				;;
+			linuxmint)
+				if [ "${UBUNTU_CODENAME:-}" != "" ]; then
+				    OS="ubuntu"
+				    VERSION="$UBUNTU_CODENAME"
+				elif [ "${DEBIAN_CODENAME:-}" != "" ]; then
+				    OS="debian"
+				    VERSION="$DEBIAN_CODENAME"
+				else
+				    OS="ubuntu"
+				    VERSION="$VERSION_CODENAME"
+				fi
+				PACKAGETYPE="apt"
+				if [ "$VERSION_MAJOR" -lt 5 ]; then
+					APT_KEY_TYPE="legacy"
+				else
+					APT_KEY_TYPE="keyring"
+				fi
+				;;
+			elementary)
+				OS="ubuntu"
+				VERSION="$UBUNTU_CODENAME"
+				PACKAGETYPE="apt"
+				if [ "$VERSION_MAJOR" -lt 6 ]; then
+					APT_KEY_TYPE="legacy"
+				else
+					APT_KEY_TYPE="keyring"
+				fi
+				;;
+			industrial-os)
+				OS="debian"
+				PACKAGETYPE="apt"
+				if [ "$VERSION_MAJOR" -lt 5 ]; then
+					VERSION="buster"
+					APT_KEY_TYPE="legacy"
+				else
+					VERSION="bullseye"
+					APT_KEY_TYPE="keyring"
+				fi
+				;;
+			parrot|mendel)
+				OS="debian"
+				PACKAGETYPE="apt"
+				if [ "$VERSION_MAJOR" -lt 5 ]; then
+					VERSION="buster"
+					APT_KEY_TYPE="legacy"
+				else
+					VERSION="bullseye"
+					APT_KEY_TYPE="keyring"
+				fi
+				;;
+			galliumos)
+				OS="ubuntu"
+				PACKAGETYPE="apt"
+				VERSION="bionic"
+				APT_KEY_TYPE="legacy"
+				;;
+			pureos|kaisen)
+				OS="debian"
+				PACKAGETYPE="apt"
+				VERSION="bullseye"
+				APT_KEY_TYPE="keyring"
+				;;
+			raspbian)
+				OS="$ID"
+				VERSION="$VERSION_CODENAME"
+				PACKAGETYPE="apt"
+				# Third-party keyrings became the preferred method of
+				# installation in Raspbian 11 (Bullseye).
+				if [ "$VERSION_MAJOR" -lt 11 ]; then
+					APT_KEY_TYPE="legacy"
+				else
+					APT_KEY_TYPE="keyring"
+				fi
+				;;
+			kali)
+				OS="debian"
+				PACKAGETYPE="apt"
+				APT_SYSTEMCTL_START=true
+				# Third-party keyrings became the preferred method of
+				# installation in Debian 11 (Bullseye), which Kali switched
+				# to in roughly 2021.x releases
+				if [ "$VERSION_MAJOR" -lt 2021 ]; then
+					# Kali VERSION_ID is "kali-rolling", which isn't distinguishing
+					VERSION="buster"
+					APT_KEY_TYPE="legacy"
+				else
+					VERSION="bullseye"
+					APT_KEY_TYPE="keyring"
+				fi
+				;;
+			Deepin|deepin)  # https://github.com/tailscale/tailscale/issues/7862
+				OS="debian"
+				PACKAGETYPE="apt"
+				if [ "$VERSION_MAJOR" -lt 20 ]; then
+					APT_KEY_TYPE="legacy"
+					VERSION="buster"
+				else
+					APT_KEY_TYPE="keyring"
+					VERSION="bullseye"
+				fi
+				;;
+			pika)
+				PACKAGETYPE="apt"
+				# All versions of PikaOS are new enough to prefer keyring
+				APT_KEY_TYPE="keyring"
+				# Older versions of PikaOS are based on Ubuntu rather than Debian
+				if [ "$VERSION_MAJOR" -lt 4 ]; then
+					OS="ubuntu"
+					VERSION="$UBUNTU_CODENAME"
+				else
+					OS="debian"
+					VERSION="$DEBIAN_CODENAME"
+				fi
+				;;
+			sparky)
+				OS="debian"
+				PACKAGETYPE="apt"
+				VERSION="$DEBIAN_CODENAME"
+				APT_KEY_TYPE="keyring"
+				;;
+			centos)
+				OS="$ID"
+				VERSION="$VERSION_MAJOR"
+				PACKAGETYPE="dnf"
+				if [ "$VERSION" = "7" ]; then
+					PACKAGETYPE="yum"
+				fi
+				;;
+			ol)
+				OS="oracle"
+				VERSION="$VERSION_MAJOR"
+				PACKAGETYPE="dnf"
+				if [ "$VERSION" = "7" ]; then
+					PACKAGETYPE="yum"
+				fi
+				;;
+			rhel|miraclelinux)
+				OS="$ID"
+				if [ "$ID" = "miraclelinux" ]; then
+					OS="rhel"
+				fi
+				VERSION="$VERSION_MAJOR"
+				PACKAGETYPE="dnf"
+				if [ "$VERSION" = "7" ]; then
+					PACKAGETYPE="yum"
+				fi
+				;;
+			fedora)
+				OS="$ID"
+				VERSION=""
+				PACKAGETYPE="dnf"
+				;;
+			rocky|almalinux|nobara|openmandriva|sangoma|risios|cloudlinux|alinux|fedora-asahi-remix|ultramarine)
+				OS="fedora"
+				VERSION=""
+				PACKAGETYPE="dnf"
+				;;
+			amzn)
+				OS="amazon-linux"
+				VERSION="$VERSION_ID"
+				PACKAGETYPE="yum"
+				;;
+			xenenterprise)
+				OS="centos"
+				VERSION="$VERSION_MAJOR"
+				PACKAGETYPE="yum"
+				;;
+			opensuse-leap|sles)
+				OS="opensuse"
+				VERSION="leap/$VERSION_ID"
+				PACKAGETYPE="zypper"
+				;;
+			opensuse-tumbleweed)
+				OS="opensuse"
+				VERSION="tumbleweed"
+				PACKAGETYPE="zypper"
+				;;
+			sle-micro-rancher)
+				OS="opensuse"
+				VERSION="leap/15.4"
+				PACKAGETYPE="zypper"
+				;;
+			arch|archarm|endeavouros|blendos|garuda|archcraft|cachyos)
+				OS="arch"
+				VERSION="" # rolling release
+				PACKAGETYPE="pacman"
+				;;
+			manjaro|manjaro-arm|biglinux)
+				OS="manjaro"
+				VERSION="" # rolling release
+				PACKAGETYPE="pacman"
+				;;
+			alpine)
+				OS="$ID"
+				VERSION="$VERSION_ID"
+				PACKAGETYPE="apk"
+				;;
+			postmarketos)
+				OS="alpine"
+				VERSION="$VERSION_ID"
+				PACKAGETYPE="apk"
+				;;
+			nixos)
+				echo "Please add Tailscale to your NixOS configuration directly:"
+				echo
+				echo "services.tailscale.enable = true;"
+				exit 1
+				;;
+			bazzite)
+				echo "Bazzite comes with Tailscale installed by default."
+				echo "Please enable Tailscale by running the following commands as root:"
+				echo
+				echo "ujust enable-tailscale"
+				echo "tailscale up"
+				exit 1
+				;;
+			void)
+				OS="$ID"
+				VERSION="" # rolling release
+				PACKAGETYPE="xbps"
+				;;
+			gentoo)
+				OS="$ID"
+				VERSION="" # rolling release
+				PACKAGETYPE="emerge"
+				;;
+			freebsd)
+				OS="$ID"
+				VERSION="$VERSION_MAJOR"
+				PACKAGETYPE="pkg"
+				;;
+			osmc)
+				OS="debian"
+				PACKAGETYPE="apt"
+				VERSION="bullseye"
+				APT_KEY_TYPE="keyring"
+				;;
+			photon)
+				OS="photon"
+				VERSION="$VERSION_MAJOR"
+				PACKAGETYPE="tdnf"
+				;;
+			steamos)
+				echo "To install Tailscale on SteamOS, please follow the instructions here:"
+				echo "https://github.com/tailscale-dev/deck-tailscale"
+				exit 1
+				;;
+
+			# TODO: wsl?
+			# TODO: synology? qnap?
+		esac
 }
 
 main
