@@ -8,11 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"tailscale.com/net/sockstats"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -122,7 +122,7 @@ type Auto struct {
 	observerQueue execqueue.ExecQueue
 	shutdownFn    func() // to be called prior to shutdown or nil
 
-	mu sync.Mutex // mutex guards the following fields
+	mu syncs.Mutex // mutex guards the following fields
 
 	started      bool   // whether [Auto.Start] has been called
 	wantLoggedIn bool   // whether the user wants to be logged in per last method call
@@ -194,6 +194,7 @@ func newNoStart(opts Options) (_ *Auto, err error) {
 		observer:   opts.Observer,
 		shutdownFn: opts.Shutdown,
 	}
+	syncs.RegisterMutex(&c.mu, "controlclient.Auto.mu")
 
 	c.authCtx, c.authCancel = context.WithCancel(context.Background())
 	c.authCtx = sockstats.WithSockStats(c.authCtx, sockstats.LabelControlClientAuto, opts.Logf)

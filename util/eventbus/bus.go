@@ -59,6 +59,10 @@ func NewWithOptions(opts BusOptions) *Bus {
 		clients:  set.Set[*Client]{},
 		logf:     opts.logger(),
 	}
+
+	syncs.RegisterMutex(&ret.topicsMu, "eventbus.Bus.topicsMu")
+	syncs.RegisterMutex(&ret.clientsMu, "eventbus.Bus.clientsMu")
+
 	ret.router = runWorker(ret.pump)
 	return ret
 }
@@ -92,6 +96,8 @@ func (b *Bus) Client(name string) *Client {
 		bus:  b,
 		pub:  set.Set[publisher]{},
 	}
+	syncs.RegisterMutex(&ret.mu, "eventbus.Client.mu")
+	syncs.RegisterMutex(&ret.stop.mu, "eventbus.Client.stop.mu")
 	b.clientsMu.Lock()
 	defer b.clientsMu.Unlock()
 	b.clients.Add(ret)
