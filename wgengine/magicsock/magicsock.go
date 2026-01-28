@@ -722,7 +722,7 @@ func NewConn(opts Options) (*Conn, error) {
 		}
 		newPortMapper, ok := portmappertype.HookNewPortMapper.GetOk()
 		if ok {
-			c.portMapper = newPortMapper(portmapperLogf, opts.EventBus, opts.NetMon, disableUPnP, c.onlyTCP443.Load)
+			c.portMapper = newPortMapper(c.connCtx, portmapperLogf, opts.EventBus, opts.NetMon, disableUPnP, c.onlyTCP443.Load)
 		}
 		// If !ok, the HookNewPortMapper hook is not set (so feature/portmapper
 		// isn't linked), but the build tag to explicitly omit the portmapper
@@ -3464,7 +3464,11 @@ func (c *Conn) shouldDoPeriodicReSTUNLocked() bool {
 	return true
 }
 
-func (c *Conn) onPortMapChanged(portmappertype.Mapping) { c.ReSTUN("portmap-changed") }
+func (c *Conn) onPortMapChanged(m portmappertype.Mapping) {
+	if m.Status != portmappertype.StatusRemovedFromGateway {
+		c.ReSTUN("portmap-changed")
+	}
+}
 
 // ReSTUN triggers an address discovery.
 // The provided why string is for debug logging only.
