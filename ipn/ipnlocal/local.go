@@ -276,6 +276,7 @@ type LocalBackend struct {
 	ccGen            clientGen          // function for producing controlclient; lazily populated
 	sshServer        SSHServer          // or nil, initialized lazily.
 	appConnector     *appc.AppConnector // or nil, initialized when configured.
+	Conn25           *appc.Conn25       // or nil, initialized when configured.
 	// notifyCancel cancels notifications to the current SetNotifyCallback.
 	notifyCancel context.CancelFunc
 	cc           controlclient.Client // TODO(nickkhyl): move to nodeBackend
@@ -5014,6 +5015,31 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 	b.appConnector.UpdateDomainsAndRoutes(domains, routes)
 }
 
+// reconfigConn25Locked updates the conn25 state based on the current network map and preferences.
+// b.mu must be held.
+func (b *LocalBackend) reconfigConn25Locked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
+	// Conn25 connectors are different from App Connectors: clients are involved in
+	// the operation and also need a populated Conn25.
+	if !nm.HasCap(tailcfg.NodeCapability(appc.AppConnectorsExperimentalAttrName)) {
+		b.Conn25 = nil
+		return
+	}
+
+	if b.Conn25 == nil {
+		b.Conn25 = appc.NewConn25()
+		dnsManager, ok := b.sys.DNSManager.GetOK()
+		if ok {
+			dnsManager.SetQueryResponseMapper(b.Conn25.MapDNSResponse)
+		} else {
+			// We were unable to register with the dns manager, reset so we try again later.
+			b.Conn25 = nil
+		}
+	}
+	if b.Conn25 != nil {
+		b.Conn25.Reconfig(nm)
+	}
+}
+
 func (b *LocalBackend) readvertiseAppConnectorRoutes() {
 	// Note: we should never call b.appConnector methods while holding b.mu.
 	// This can lead to a deadlock, like
@@ -5085,6 +5111,8 @@ func (b *LocalBackend) authReconfigLocked() {
 	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, version.OS())
 	// If the current node is an app connector, ensure the app connector machine is started
 	b.reconfigAppConnectorLocked(nm, prefs)
+	// If there are conn25 connectors in the network (or we are one) manage that.
+	b.reconfigConn25Locked(nm, prefs)
 
 	if !prefs.WantRunning() {
 		b.logf("[v1] authReconfig: skipping because !WantRunning.")

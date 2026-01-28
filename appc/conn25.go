@@ -11,15 +11,35 @@ import (
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/appctype"
+	"tailscale.com/types/netmap"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 )
 
-// Conn25 holds the developing state for the as yet nascent next generation app connector.
-// There is currently (2025-12-08) no actual app connecting functionality.
+type appAddr struct {
+	app  string
+	addr netip.Addr
+}
+
+// Conn25 holds state for routing traffic for a domain via a connector.
 type Conn25 struct {
-	mu         sync.Mutex
-	transitIPs map[tailcfg.NodeID]map[netip.Addr]netip.Addr
+	client client
+	server server
+}
+
+func NewConn25() *Conn25 {
+	return &Conn25{
+		client: client{},
+		server: server{},
+	}
+}
+
+func (c *Conn25) Reconfig(nm *netmap.NetworkMap) error {
+	return nil
+}
+
+func (c *Conn25) MapDNSResponse(buf []byte) []byte {
+	return buf
 }
 
 const dupeTransitIPMessage = "Duplicate transit address in ConnectorTransitIPRequest"
@@ -38,32 +58,32 @@ func (c *Conn25) HandleConnectorTransitIPRequest(nid tailcfg.NodeID, ctipr Conne
 			})
 			continue
 		}
-		tipresp := c.handleTransitIPRequest(nid, each)
+		tipresp := c.server.handleTransitIPRequest(nid, each)
 		seen[each.TransitIP] = true
 		resp.TransitIPs = append(resp.TransitIPs, tipresp)
 	}
 	return resp
 }
 
-func (c *Conn25) handleTransitIPRequest(nid tailcfg.NodeID, tipr TransitIPRequest) TransitIPResponse {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.transitIPs == nil {
-		c.transitIPs = make(map[tailcfg.NodeID]map[netip.Addr]netip.Addr)
+func (s *server) handleTransitIPRequest(nid tailcfg.NodeID, tipr TransitIPRequest) TransitIPResponse {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.transitIPs == nil {
+		s.transitIPs = make(map[tailcfg.NodeID]map[netip.Addr]appAddr)
 	}
-	peerMap, ok := c.transitIPs[nid]
+	peerMap, ok := s.transitIPs[nid]
 	if !ok {
-		peerMap = make(map[netip.Addr]netip.Addr)
-		c.transitIPs[nid] = peerMap
+		peerMap = make(map[netip.Addr]appAddr)
+		s.transitIPs[nid] = peerMap
 	}
-	peerMap[tipr.TransitIP] = tipr.DestinationIP
+	peerMap[tipr.TransitIP] = appAddr{addr: tipr.DestinationIP, app: tipr.App}
 	return TransitIPResponse{}
 }
 
-func (c *Conn25) transitIPTarget(nid tailcfg.NodeID, tip netip.Addr) netip.Addr {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.transitIPs[nid][tip]
+func (s *server) transitIPTarget(nid tailcfg.NodeID, tip netip.Addr) netip.Addr {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.transitIPs[nid][tip].addr
 }
 
 // TransitIPRequest details a single TransitIP allocation request from a client to a
@@ -76,6 +96,10 @@ type TransitIPRequest struct {
 	// DestinationIP is the final destination IP that connections to the TransitIP
 	// should be mapped to when performing DNAT.
 	DestinationIP netip.Addr `json:"destinationIP,omitzero"`
+
+	// App is the name of the connector application from the tailnet
+	// configuration.
+	App string `json: "destinationIP,omitzero"`
 }
 
 // ConnectorTransitIPRequest is the request body for a PeerAPI request to
@@ -170,4 +194,22 @@ func PickSplitDNSPeers(hasCap func(c tailcfg.NodeCapability) bool, self tailcfg.
 		mak.Set(&m, domain, nodes)
 	}
 	return m
+}
+
+type client struct {
+	mu sync.Mutex
+	// map of magic IP -> (transit IP, app)
+	magicIPs map[netip.Addr]appAddr
+}
+
+func (c *client) setMagicIP(magicAddr, transitAddr netip.Addr, app string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	mak.Set(&c.magicIPs, magicAddr, appAddr{addr: transitAddr, app: app})
+}
+
+type server struct {
+	mu sync.Mutex
+	// transitIPs is a map of connector client peer NodeID -> client transitIPs that we update as connector client peers instruct us to, and then use to route traffic to its destination on behalf of connector clients.
+	transitIPs map[tailcfg.NodeID]map[netip.Addr]appAddr
 }
