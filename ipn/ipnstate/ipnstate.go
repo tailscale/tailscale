@@ -346,6 +346,20 @@ const (
 	TaildropTargetOwnedByOtherUser
 )
 
+// PeerOnlineStatusChange describes a change in a peer's online status.
+// This is sent via ipn.Notify when a peer goes online or offline.
+type PeerOnlineStatusChange struct {
+	// NodeKey is the peer's public node key.
+	NodeKey key.NodePublic
+
+	// Online is the peer's new online status.
+	Online bool
+
+	// LastSeen is the last time the peer was seen by the control server.
+	// This is only populated when Online is false.
+	LastSeen *time.Time
+}
+
 // HasCap reports whether ps has the given capability.
 func (ps *PeerStatus) HasCap(cap tailcfg.NodeCapability) bool {
 	return ps.CapMap.Contains(cap)
