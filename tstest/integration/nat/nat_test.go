@@ -81,7 +81,7 @@ func newNatTest(tb testing.TB) *natTest {
 		}
 	}
 
-	nt.kernel, err = findKernelPath(filepath.Join(modRoot, "gokrazy/natlabapp/builddir/github.com/tailscale/gokrazy-kernel/go.mod"))
+	nt.kernel, err = findKernelPath(filepath.Join(modRoot, "gokrazy/natlabapp/builddir/github.com/gokrazy/kernel.amd64/go.mod"))
 	if err != nil {
 		tb.Skipf("skipping test; kernel not found: %v", err)
 	}
@@ -104,7 +104,7 @@ func findKernelPath(goMod string) (string, error) {
 		return "", err
 	}
 	for _, r := range mf.Require {
-		if r.Mod.Path == "github.com/tailscale/gokrazy-kernel" {
+		if r.Mod.Path == "github.com/gokrazy/kernel.amd64" {
 			return strings.TrimSpace(string(goModB)) + "/" + r.Mod.String() + "/vmlinuz", nil
 		}
 	}

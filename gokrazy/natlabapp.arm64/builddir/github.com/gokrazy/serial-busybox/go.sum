@@ -4,8 +4,8 @@ github.com/gokrazy/gokrazy v0.0.0-20200501080617-f3445e01a904 h1:eqfH4A/LLgxv5Rv
 github.com/gokrazy/gokrazy v0.0.0-20200501080617-f3445e01a904/go.mod h1:pq6rGHqxMRPSaTXaCMzIZy0wLDusAJyoVNyNo05RLs0=
 github.com/gokrazy/internal v0.0.0-20200407075822-660ad467b7c9 h1:x5jR/nNo4/kMSoNo/nwa2xbL7PN1an8S3oIn4OZJdec=
 github.com/gokrazy/internal v0.0.0-20200407075822-660ad467b7c9/go.mod h1:LA5TQy7LcvYGQOy75tkrYkFUhbV2nl5qEBP47PSi2JA=
-github.com/gokrazy/serial-busybox v0.0.0-20220918193710-d728912733ca h1:x0eSjuFy8qsRctVHeWm3EC474q3xm4h3OOOrYpcqyyA=
-github.com/gokrazy/serial-busybox v0.0.0-20220918193710-d728912733ca/go.mod h1:OYcG5tSb+QrelmUOO4EZVUFcIHyyZb0QDbEbZFUp1TA=
+github.com/gokrazy/serial-busybox v0.0.0-20250119153030-ac58ba7574e7 h1:gurTGc4sL7Ik+IKZ29rhGgHNZQTXPtEXLw+aM9E+/HE=
+github.com/gokrazy/serial-busybox v0.0.0-20250119153030-ac58ba7574e7/go.mod h1:OYcG5tSb+QrelmUOO4EZVUFcIHyyZb0QDbEbZFUp1TA=
 github.com/google/go-cmp v0.4.0/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
 github.com/google/gopacket v1.1.16/go.mod h1:UCLx9mCmAwsVbn6qQl1WIEt2SO7Nd2fD0th1TBAsqBw=
 github.com/mdlayher/raw v0.0.0-20190303161257-764d452d77af/go.mod h1:rC/yE65s/DoHB6BzVOUBNYBGTg772JVytyAytffIZkY=
