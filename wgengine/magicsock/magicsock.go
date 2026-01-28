@@ -91,6 +91,7 @@ const (
 type Path string
 
 const (
+	PathNone          Path = "" // no active connection path
 	PathDirectIPv4    Path = "direct_ipv4"
 	PathDirectIPv6    Path = "direct_ipv6"
 	PathDERP          Path = "derp"
@@ -105,7 +106,7 @@ type pathLabel struct {
 	// - derp
 	// - peer_relay_ipv4
 	// - peer_relay_ipv6
-	Path Path
+	Path Path `prom:"path"`
 }
 
 // metrics in wgengine contains the usermetrics counters for magicsock, it
@@ -411,6 +412,11 @@ type Conn struct {
 	// homeDERPGauge is the usermetric gauge for the home DERP region ID.
 	// This can be nil when [Options.Metrics] are not enabled.
 	homeDERPGauge *usermetric.Gauge
+
+	// peersConnected tracks the number of peers by connection path type.
+	// Updated on: node view changes, pong reception, and connectivity changes.
+	// This can be nil when [Options.Metrics] are not enabled.
+	peersConnected *usermetric.MultiLabelMap[pathLabel]
 }
 
 // SetDebugLoggingEnabled controls whether spammy debug logging is enabled.
@@ -752,6 +758,16 @@ func NewConn(opts Options) (*Conn, error) {
 	c.metrics = registerMetrics(opts.Metrics)
 	if opts.Metrics != nil {
 		c.homeDERPGauge = opts.Metrics.NewGauge("tailscaled_home_derp_region_id", "DERP region ID of this node's home relay server")
+		c.peersConnected = usermetric.NewMultiLabelMapWithRegistry[pathLabel](
+			opts.Metrics,
+			"tailscaled_peers_connected",
+			"gauge",
+			"Number of peers by connection path type",
+		)
+		// Initialize all path labels to 0 for consistent Prometheus output.
+		for _, pt := range []Path{PathDirectIPv4, PathDirectIPv6, PathDERP, PathPeerRelayIPv4, PathPeerRelayIPv6} {
+			c.peersConnected.Add(pathLabel{Path: pt}, 0)
+		}
 	}
 
 	if d4, err := c.listenRawDisco("ip4"); err == nil {
@@ -3845,6 +3861,12 @@ const (
 	// trustUDPAddrDuration is how long we trust a UDP address as the exclusive
 	// path (without using DERP) without having heard a Pong reply.
 	trustUDPAddrDuration = 6500 * time.Millisecond
+
+	// derpActivityTimeout is how long we consider a peer to be actively using
+	// DERP based on recent WireGuard packet reception. Used for metrics when
+	// no trusted direct path exists. Set to 2 minutes to exceed typical DERP
+	// keepalive intervals and avoid flapping metrics during brief idle periods.
+	derpActivityTimeout = 2 * time.Minute
 
 	// goodEnoughLatency is the latency at or under which we don't
 	// try to upgrade to a better path.

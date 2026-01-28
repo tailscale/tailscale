@@ -99,6 +99,8 @@ type endpoint struct {
 	expired         bool // whether the node has expired
 	isWireguardOnly bool // whether the endpoint is WireGuard only
 	relayCapable    bool // whether the node is capable of speaking via a [tailscale.com/net/udprelay.Server]
+
+	lastReportedPath Path // last path type reported in metrics; used for accurate decrement
 }
 
 // udpRelayEndpointReady determines whether the given relay [addrQuality] should
@@ -127,6 +129,7 @@ func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
 		de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v", de.publicKey.ShortString(), de.discoShort(), maybeBest.epAddr, maybeBest.wireMTU)
 		de.setBestAddrLocked(maybeBest)
 		de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+		de.updatePathMetricLocked()
 	}
 }
 
@@ -486,6 +489,7 @@ func (de *endpoint) deleteEndpointLocked(why string, ep netip.AddrPort) {
 			From: de.bestAddr,
 		})
 		de.setBestAddrLocked(addrQuality{})
+		de.updatePathMetricLocked()
 	}
 }
 
@@ -509,6 +513,7 @@ func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
 		de.bestAddr.ap = src.ap
 		de.bestAddrAt = now
 		de.trustBestAddrUntil = now.Add(5 * time.Second)
+		de.updatePathMetricLocked()
 		de.mu.Unlock()
 	} else {
 		// TODO(jwhited): subject to change as part of silent disco effort.
@@ -518,6 +523,7 @@ func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
 		de.mu.Lock()
 		if de.heartbeatDisabled && de.bestAddr.epAddr == src {
 			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+			de.updatePathMetricLocked()
 		}
 		de.mu.Unlock()
 	}
@@ -582,7 +588,84 @@ func (de *endpoint) addrForSendLocked(now mono.Time) (udpAddr epAddr, derpAddr n
 
 	// We had a bestAddr but it expired so send both to it
 	// and DERP.
+	de.updatePathMetricLocked()
 	return udpAddr, de.derpAddr, false
+}
+
+// currentPathTypeLocked returns the current connection path type for this endpoint.
+// Returns PathNone if no trusted direct/relay path exists and there's no recent
+// DERP activity.
+//
+// de.mu must be held.
+func (de *endpoint) currentPathTypeLocked() Path {
+	now := mono.Now()
+
+	// Only report a path if we have a trusted bestAddr
+	if de.bestAddr.ap.IsValid() && !now.After(de.trustBestAddrUntil) {
+		if de.bestAddr.vni.IsSet() {
+			// Peer relay path
+			if de.bestAddr.ap.Addr().Is4() {
+				return PathPeerRelayIPv4
+			}
+			return PathPeerRelayIPv6
+		}
+		// Direct UDP path
+		if de.bestAddr.ap.Addr().Is4() {
+			return PathDirectIPv4
+		}
+		return PathDirectIPv6
+	}
+
+	// No trusted direct path - check for recent DERP activity.
+	if de.derpAddr.IsValid() {
+		lastRecv := de.lastRecvWG.LoadAtomic()
+		if !lastRecv.IsZero() && now.Sub(lastRecv) < derpActivityTimeout {
+			return PathDERP
+		}
+	}
+
+	return PathNone
+}
+
+// currentPathType returns the current connection path type for this endpoint.
+// It acquires de.mu and delegates to currentPathTypeLocked.
+func (de *endpoint) currentPathType() Path {
+	de.mu.Lock()
+	defer de.mu.Unlock()
+	return de.currentPathTypeLocked()
+}
+
+// updatePathMetricLocked updates the peersConnected gauge to reflect the current path.
+//
+// de.mu must be held.
+func (de *endpoint) updatePathMetricLocked() {
+	if de.c == nil || de.c.peersConnected == nil {
+		return
+	}
+	current := de.currentPathTypeLocked()
+	if current == de.lastReportedPath {
+		return
+	}
+	if de.lastReportedPath != PathNone {
+		de.c.peersConnected.Add(pathLabel{Path: de.lastReportedPath}, -1)
+	}
+	if current != PathNone {
+		de.c.peersConnected.Add(pathLabel{Path: current}, 1)
+	}
+	de.lastReportedPath = current
+}
+
+// clearPathMetricLocked clears this endpoint's path metric. Used during shutdown.
+//
+// de.mu must be held.
+func (de *endpoint) clearPathMetricLocked() {
+	if de.c == nil || de.c.peersConnected == nil {
+		return
+	}
+	if de.lastReportedPath != PathNone {
+		de.c.peersConnected.Add(pathLabel{Path: de.lastReportedPath}, -1)
+		de.lastReportedPath = PathNone
+	}
 }
 
 // addrForWireGuardSendLocked returns the address that should be used for
@@ -639,6 +722,7 @@ func (de *endpoint) addrForWireGuardSendLocked(now mono.Time) (udpAddr epAddr, s
 	// less than one second in good cases, in which case this will be then
 	// extended to 15 seconds.
 	de.trustBestAddrUntil = now.Add(time.Second)
+	de.updatePathMetricLocked()
 	return udpAddr, needPing
 }
 
@@ -667,6 +751,7 @@ func (de *endpoint) addrForPingSizeLocked(now mono.Time, size int) (udpAddr epAd
 		}
 		// We had a bestAddr with large enough MTU but it expired, so
 		// send both to it and DERP.
+		de.updatePathMetricLocked()
 		return udpAddr, de.derpAddr
 	}
 
@@ -674,6 +759,7 @@ func (de *endpoint) addrForPingSizeLocked(now mono.Time, size int) (udpAddr epAd
 	// for the packet. Return a zero-value udpAddr to signal that we should
 	// keep probing the path MTU to all addresses for this endpoint, and a
 	// valid DERP addr to signal that we should also send via DERP.
+	de.updatePathMetricLocked()
 	return epAddr{}, de.derpAddr
 }
 
@@ -827,6 +913,7 @@ func (de *endpoint) heartbeat() {
 	if now.Sub(de.lastSendExt) > sessionActiveTimeout {
 		// Session's idle. Stop heartbeating.
 		de.c.dlogf("[v1] magicsock: disco: ending heartbeats for idle session to %v (%v)", de.publicKey.ShortString(), de.discoShort())
+		de.updatePathMetricLocked()
 		if afterInactivityFor, ok := de.maybeProbeUDPLifetimeLocked(); ok {
 			// This is the best place to best effort schedule a probe of UDP
 			// path lifetime in the future as it loosely translates to "UDP path
@@ -1181,6 +1268,7 @@ func (de *endpoint) discoPingTimeout(txid stun.TxID) {
 	if sp.to == de.bestAddr.epAddr && sp.to.vni.IsSet() && bestUntrusted {
 		// TODO(jwhited): consider applying this to direct UDP paths as well
 		de.clearBestAddrLocked()
+		de.updatePathMetricLocked()
 	}
 	if debugDisco() || !de.bestAddr.ap.IsValid() || bestUntrusted {
 		de.c.dlogf("[v1] magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], sp.to, de.publicKey.ShortString(), de.discoShort())
@@ -1499,6 +1587,7 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 			What: "updateFromNode-resetLocked",
 		})
 		de.resetLocked()
+		de.updatePathMetricLocked()
 	}
 	if n.HomeDERP() == 0 {
 		if de.derpAddr.IsValid() {
@@ -1630,12 +1719,12 @@ func (de *endpoint) noteBadEndpoint(udpAddr epAddr) {
 	defer de.mu.Unlock()
 
 	de.clearBestAddrLocked()
-
 	if !udpAddr.vni.IsSet() {
 		if st, ok := de.endpointState[udpAddr.ap]; ok {
 			st.clear()
 		}
 	}
+	de.updatePathMetricLocked()
 }
 
 // noteConnectivityChange is called when connectivity changes enough
@@ -1646,10 +1735,10 @@ func (de *endpoint) noteConnectivityChange() {
 	defer de.mu.Unlock()
 
 	de.clearBestAddrLocked()
-
 	for k := range de.endpointState {
 		de.endpointState[k].clear()
 	}
+	de.updatePathMetricLocked()
 }
 
 // pingSizeToPktLen calculates the minimum path MTU that would permit
@@ -1691,8 +1780,6 @@ func pktLenToPingSize(mtu tstun.WireMTU, is6 bool) int {
 }
 
 // handlePongConnLocked handles a Pong message (a reply to an earlier ping).
-// It should be called with the Conn.mu held.
-//
 // It reports whether m.TxID corresponds to a ping that this endpoint sent.
 func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAddr) (knownTxID bool) {
 	de.mu.Lock()
@@ -1789,6 +1876,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 			de.bestAddrAt = now
 			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
 		}
+		de.updatePathMetricLocked()
 	}
 	return
 }
@@ -2032,6 +2120,9 @@ func (de *endpoint) stopAndReset() {
 	atomic.AddInt64(&de.numStopAndResetAtomic, 1)
 	de.mu.Lock()
 	defer de.mu.Unlock()
+
+	// Decrement metric for this endpoint's current path before cleanup.
+	de.clearPathMetricLocked()
 
 	if closing := de.c.closing.Load(); !closing {
 		if de.isWireguardOnly {
