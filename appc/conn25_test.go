@@ -9,16 +9,29 @@ import (
 	"reflect"
 	"testing"
 
+	"go4.org/netipx"
+	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/appctype"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
 )
+
+func mustIPSetFromPrefix(s string) *netipx.IPSet {
+	b := &netipx.IPSetBuilder{}
+	b.AddPrefix(netip.MustParsePrefix(s))
+	set, err := b.IPSet()
+	if err != nil {
+		panic(err)
+	}
+	return set
+}
 
 // TestHandleConnectorTransitIPRequestZeroLength tests that if sent a
 // ConnectorTransitIPRequest with 0 TransitIPRequests, we respond with a
 // ConnectorTransitIPResponse with 0 TransitIPResponses.
 func TestHandleConnectorTransitIPRequestZeroLength(t *testing.T) {
-	c := &Conn25{}
+	c := NewConn25()
 	req := ConnectorTransitIPRequest{}
 	nid := tailcfg.NodeID(1)
 
@@ -33,7 +46,7 @@ func TestHandleConnectorTransitIPRequestZeroLength(t *testing.T) {
 // and can retrieve it. If sent another req with a different dst for that transit addr
 // we store that instead.
 func TestHandleConnectorTransitIPRequestStoresAddr(t *testing.T) {
-	c := &Conn25{}
+	c := NewConn25()
 	nid := tailcfg.NodeID(1)
 	tip := netip.MustParseAddr("0.0.0.1")
 	dip := netip.MustParseAddr("1.2.3.4")
@@ -54,7 +67,7 @@ func TestHandleConnectorTransitIPRequestStoresAddr(t *testing.T) {
 	if got != TransitIPResponseCode(0) {
 		t.Fatalf("TransitIP Code: %d, want 0", got)
 	}
-	gotAddr := c.transitIPTarget(nid, tip)
+	gotAddr := c.server.transitIPTarget(nid, tip)
 	if gotAddr != dip {
 		t.Fatalf("Connector stored destination for tip: %v, want %v", gotAddr, dip)
 	}
@@ -68,7 +81,7 @@ func TestHandleConnectorTransitIPRequestStoresAddr(t *testing.T) {
 	if got2 != TransitIPResponseCode(0) {
 		t.Fatalf("TransitIP Code: %d, want 0", got2)
 	}
-	gotAddr2 := c.transitIPTarget(nid, tip)
+	gotAddr2 := c.server.transitIPTarget(nid, tip)
 	if gotAddr2 != dip2 {
 		t.Fatalf("Connector stored destination for tip: %v, want %v", gotAddr, dip2)
 	}
@@ -78,7 +91,7 @@ func TestHandleConnectorTransitIPRequestStoresAddr(t *testing.T) {
 // get a req with multiple mappings and we store them all. Including
 // multiple transit addrs for the same destination.
 func TestHandleConnectorTransitIPRequestMultipleTIP(t *testing.T) {
-	c := &Conn25{}
+	c := NewConn25()
 	nid := tailcfg.NodeID(1)
 	tip := netip.MustParseAddr("0.0.0.1")
 	tip2 := netip.MustParseAddr("0.0.0.2")
@@ -104,15 +117,15 @@ func TestHandleConnectorTransitIPRequestMultipleTIP(t *testing.T) {
 			t.Fatalf("i=%d TransitIP Code: %d, want 0", i, got)
 		}
 	}
-	gotAddr1 := c.transitIPTarget(nid, tip)
+	gotAddr1 := c.server.transitIPTarget(nid, tip)
 	if gotAddr1 != dip {
 		t.Fatalf("Connector stored destination for tip(%v): %v, want %v", tip, gotAddr1, dip)
 	}
-	gotAddr2 := c.transitIPTarget(nid, tip2)
+	gotAddr2 := c.server.transitIPTarget(nid, tip2)
 	if gotAddr2 != dip2 {
 		t.Fatalf("Connector stored destination for tip(%v): %v, want %v", tip2, gotAddr2, dip2)
 	}
-	gotAddr3 := c.transitIPTarget(nid, tip3)
+	gotAddr3 := c.server.transitIPTarget(nid, tip3)
 	if gotAddr3 != dip {
 		t.Fatalf("Connector stored destination for tip(%v): %v, want %v", tip3, gotAddr3, dip)
 	}
@@ -123,7 +136,7 @@ func TestHandleConnectorTransitIPRequestMultipleTIP(t *testing.T) {
 // only the first is stored, and the subsequent ones get an error code and
 // message in the response.
 func TestHandleConnectorTransitIPRequestSameTIP(t *testing.T) {
-	c := &Conn25{}
+	c := NewConn25()
 	nid := tailcfg.NodeID(1)
 	tip := netip.MustParseAddr("0.0.0.1")
 	tip2 := netip.MustParseAddr("0.0.0.2")
@@ -169,11 +182,11 @@ func TestHandleConnectorTransitIPRequestSameTIP(t *testing.T) {
 		t.Fatalf("i=2 TransitIP Message: \"%s\", want \"%s\"", msg, "")
 	}
 
-	gotAddr1 := c.transitIPTarget(nid, tip)
+	gotAddr1 := c.server.transitIPTarget(nid, tip)
 	if gotAddr1 != dip {
 		t.Fatalf("Connector stored destination for tip(%v): %v, want %v", tip, gotAddr1, dip)
 	}
-	gotAddr2 := c.transitIPTarget(nid, tip2)
+	gotAddr2 := c.server.transitIPTarget(nid, tip2)
 	if gotAddr2 != dip3 {
 		t.Fatalf("Connector stored destination for tip(%v): %v, want %v", tip2, gotAddr2, dip3)
 	}
@@ -181,10 +194,10 @@ func TestHandleConnectorTransitIPRequestSameTIP(t *testing.T) {
 
 // TestGetDstIPUnknownTIP tests that unknown transit addresses can be looked up without problem.
 func TestTransitIPTargetUnknownTIP(t *testing.T) {
-	c := &Conn25{}
+	c := NewConn25()
 	nid := tailcfg.NodeID(1)
 	tip := netip.MustParseAddr("0.0.0.1")
-	got := c.transitIPTarget(nid, tip)
+	got := c.server.transitIPTarget(nid, tip)
 	want := netip.Addr{}
 	if got != want {
 		t.Fatalf("Unknown transit addr, want: %v, got %v", want, got)
@@ -307,5 +320,175 @@ func TestPickSplitDNSPeers(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSetMagicIP(t *testing.T) {
+	c := NewConn25()
+	mip := netip.MustParseAddr("0.0.0.1")
+	tip := netip.MustParseAddr("0.0.0.2")
+	app := "a"
+	c.client.setMagicIP(mip, tip, app)
+	val, ok := c.client.magicIPs[mip]
+	if !ok {
+		t.Fatal("expected there to be a value stored for the magic IP")
+	}
+	if val.addr != tip {
+		t.Fatalf("want %v, got %v", tip, val.addr)
+	}
+	if val.app != app {
+		t.Fatalf("want %s, got %s", app, val.app)
+	}
+}
+
+func TestReserveIPs(t *testing.T) {
+	c := NewConn25()
+	c.client.magicIPPool = newIPPool(mustIPSetFromPrefix("100.64.0.0/24"))
+	c.client.transitIPPool = newIPPool(mustIPSetFromPrefix("169.254.0.0/24"))
+	mbd := map[string][]string{}
+	mbd["example.com."] = []string{"a"}
+	c.client.config.appsByDomain = mbd
+
+	dst := netip.MustParseAddr("0.0.0.1")
+	con, err := c.client.reserveAddresses("example.com.", dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantDst := netip.MustParseAddr("0.0.0.1")         // same as dst we pass in
+	wantMagic := netip.MustParseAddr("100.64.0.0")    // first from magic pool
+	wantTransit := netip.MustParseAddr("169.254.0.0") // first from transit pool
+	wantApp := "a"                                    // the app name related to example.com.
+
+	if wantDst != con.dst {
+		t.Errorf("want %v, got %v", wantDst, con.dst)
+	}
+	if wantMagic != con.magic {
+		t.Errorf("want %v, got %v", wantMagic, con.magic)
+	}
+	if wantTransit != con.transit {
+		t.Errorf("want %v, got %v", wantTransit, con.transit)
+	}
+	if wantApp != con.app {
+		t.Errorf("want %s, got %s", wantApp, con.app)
+	}
+}
+
+func TestReconfig(t *testing.T) {
+	rawCfg := `{"name":"app1","connectors":["tag:woo"],"domains":["example.com"]}`
+	capMap := tailcfg.NodeCapMap{
+		tailcfg.NodeCapability(AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
+			tailcfg.RawMessage(rawCfg),
+		},
+	}
+
+	c := NewConn25()
+	nm := &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			CapMap: capMap,
+		}).View(),
+	}
+
+	if c.client.config.raw != "" {
+		t.Fatal("unexpected failure in test setup")
+	}
+
+	err := c.Reconfig(nm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(c.client.config.raw) != rawCfg {
+		t.Fatalf("want %s, got %s", rawCfg, c.client.config.raw)
+	}
+	if len(c.client.config.apps) != 1 || c.client.config.apps[0].Name != "app1" {
+		t.Fatalf("want apps to have one entry 'app1', got %v", c.client.config.apps)
+	}
+}
+
+func TestMapDNSResponse(t *testing.T) {
+	b := dnsmessage.NewBuilder(nil,
+		dnsmessage.Header{
+			ID:            1,
+			Response:      true,
+			Authoritative: true,
+			RCode:         dnsmessage.RCodeSuccess,
+		})
+	b.EnableCompression()
+
+	if err := b.StartQuestions(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := b.Question(dnsmessage.Question{
+		Name:  dnsmessage.MustNewName("example.com."),
+		Type:  dnsmessage.TypeA,
+		Class: dnsmessage.ClassINET,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := b.StartAnswers(); err != nil {
+		t.Fatal(err)
+	}
+
+	b.AResource(
+		dnsmessage.ResourceHeader{
+			Name:  dnsmessage.MustNewName("example.com."),
+			Type:  dnsmessage.TypeA,
+			Class: dnsmessage.ClassINET,
+		},
+		dnsmessage.AResource{A: [4]byte{1, 0, 0, 0}}, // "1.0.0.0"
+	)
+
+	outbs, err := b.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rawCfg := `{
+		"name":"app1",
+		"connectors":["tag:woo"],
+		"domains":["example.com"],
+		"magicIPPool":[
+			"100.64.0.0-100.64.0.255",
+			"100.65.0.0-100.65.0.255"
+		],
+		"transitIPPool":[
+			"169.254.0.0-169.254.255.255"
+		]
+	}`
+	capMap := tailcfg.NodeCapMap{
+		tailcfg.NodeCapability(AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
+			tailcfg.RawMessage(rawCfg),
+		},
+	}
+
+	nm := &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			CapMap: capMap,
+		}).View(),
+	}
+	c := NewConn25()
+	c.Reconfig(nm)
+
+	bs := c.MapDNSResponse(outbs)
+	if !reflect.DeepEqual(outbs, bs) {
+		t.Fatal("shouldn't be changing the bytes (yet)")
+	}
+
+	// these are 'expected' because they are the beginning of the provided pools
+	expectedMIP := netip.MustParseAddr("100.64.0.0")
+	expectedTIP := netip.MustParseAddr("169.254.0.0")
+
+	val, ok := c.client.magicIPs[expectedMIP]
+	if !ok {
+		t.Fatal("expected to find mip has been set")
+	}
+	if val.addr != expectedTIP {
+		t.Fatalf("want %v got %v", expectedTIP, val.addr)
+	}
+	if val.app != "app1" {
+		t.Fatalf("want app1 got %s", val.app)
 	}
 }
