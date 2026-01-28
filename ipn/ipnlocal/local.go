@@ -6241,7 +6241,9 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	var login string
 	if nm != nil {
 		login = cmp.Or(profileFromView(nm.UserProfiles[nm.User()]).LoginName, "<missing-profile>")
-		b.writeNetmapToDiskLocked(nm)
+		if err := b.writeNetmapToDiskLocked(nm); err != nil {
+			b.logf("write netmap to cache: %v", err)
+		}
 	}
 	b.currentNode().SetNetMap(nm)
 	if login != b.activeLogin {
