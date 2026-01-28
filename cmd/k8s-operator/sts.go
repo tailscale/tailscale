@@ -237,10 +237,11 @@ func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.Suga
 		return nil, fmt.Errorf("failed to reconcile statefulset: %w", err)
 	}
 	mo := &metricsOpts{
-		proxyStsName: hsvc.Name,
-		tsNamespace:  hsvc.Namespace,
-		proxyLabels:  hsvc.Labels,
-		proxyType:    sts.proxyType,
+		proxyStsName:    hsvc.Name,
+		tsNamespace:     hsvc.Namespace,
+		proxyLabels:     hsvc.Labels,
+		proxyType:       sts.proxyType,
+		metricsPortName: metricsPortName(sts.ProxyClass),
 	}
 	if err = reconcileMetricsResources(ctx, logger, mo, sts.ProxyClass, a.Client); err != nil {
 		return nil, fmt.Errorf("failed to ensure metrics resources: %w", err)
@@ -887,7 +888,7 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 			// For egress proxies, currently all cluster traffic is forwarded to the tailnet target.
 			logger.Info("ProxyClass specifies that metrics should be enabled, but this is currently not supported for Ingress proxies that accept cluster traffic.")
 		} else {
-			enableEndpoints(ss, metricsEnabled, debugEnabled)
+			enableEndpoints(ss, metricsEnabled, debugEnabled, metricsPortName(pc))
 		}
 	}
 
@@ -1000,7 +1001,7 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 	return ss
 }
 
-func enableEndpoints(ss *appsv1.StatefulSet, metrics, debug bool) {
+func enableEndpoints(ss *appsv1.StatefulSet, metrics, debug bool, metricsPortName string) {
 	for i, c := range ss.Spec.Template.Spec.Containers {
 		if isMainContainer(&c) {
 			if debug {
@@ -1045,7 +1046,7 @@ func enableEndpoints(ss *appsv1.StatefulSet, metrics, debug bool) {
 				)
 				ss.Spec.Template.Spec.Containers[i].Ports = append(ss.Spec.Template.Spec.Containers[i].Ports,
 					corev1.ContainerPort{
-						Name:          "metrics",
+						Name:          metricsPortName,
 						Protocol:      "TCP",
 						ContainerPort: 9002,
 					},
