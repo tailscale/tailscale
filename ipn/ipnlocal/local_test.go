@@ -41,6 +41,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
+	"tailscale.com/ipn/ipnlocal/netmapcache"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
@@ -609,6 +610,105 @@ func TestSetUseExitNodeEnabled(t *testing.T) {
 
 func makeExitNode(id tailcfg.NodeID, opts ...peerOptFunc) tailcfg.NodeView {
 	return makePeer(id, append([]peerOptFunc{withCap(26), withSuggest(), withExitRoutes()}, opts...)...)
+}
+
+func TestLoadCachedNetMap(t *testing.T) {
+	t.Setenv("TS_USE_CACHED_NETMAP", "1")
+
+	// Write a small network map into a cache, and verify we can load it.
+	varRoot := t.TempDir()
+	cacheDir := filepath.Join(varRoot, "profile-data", "id0", "netmap-cache")
+	if err := os.MkdirAll(cacheDir, 0700); err != nil {
+		t.Fatalf("Create cache directory: %v", err)
+	}
+
+	testMap := &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Name: "example.ts.net",
+			User: tailcfg.UserID(1),
+			Addresses: []netip.Prefix{
+				netip.MustParsePrefix("100.2.3.4/32"),
+			},
+		}).View(),
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+			tailcfg.UserID(1): (&tailcfg.UserProfile{
+				ID:          1,
+				LoginName:   "amelie@example.com",
+				DisplayName: "Amelie du Pangoline",
+			}).View(),
+		},
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				ID:           601,
+				StableID:     "n601FAKE",
+				ComputedName: "some-peer",
+				User:         tailcfg.UserID(1),
+				Key:          makeNodeKeyFromID(601),
+				Addresses: []netip.Prefix{
+					netip.MustParsePrefix("100.2.3.5/32"),
+				},
+			}).View(),
+			(&tailcfg.Node{
+				ID:           602,
+				StableID:     "n602FAKE",
+				ComputedName: "some-tagged-peer",
+				Tags:         []string{"tag:server", "tag:test"},
+				User:         tailcfg.UserID(1),
+				Key:          makeNodeKeyFromID(602),
+				Addresses: []netip.Prefix{
+					netip.MustParsePrefix("100.2.3.6/32"),
+				},
+			}).View(),
+		},
+	}
+	dc := netmapcache.NewCache(netmapcache.FileStore(cacheDir))
+	if err := dc.Store(t.Context(), testMap); err != nil {
+		t.Fatalf("Store netmap in cache: %v", err)
+	}
+
+	// Now make a new backend and hook it up to have access to the cache created
+	// above, then start it to pull in the cached netmap.
+	sys := tsd.NewSystem()
+	e, err := wgengine.NewFakeUserspaceEngine(logger.Discard,
+		sys.Set,
+		sys.HealthTracker.Get(),
+		sys.UserMetricsRegistry(),
+		sys.Bus.Get(),
+	)
+	if err != nil {
+		t.Fatalf("Make userspace engine: %v", err)
+	}
+	t.Cleanup(e.Close)
+	sys.Set(e)
+	sys.Set(new(mem.Store))
+
+	logf := tstest.WhileTestRunningLogger(t)
+	clb, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
+	if err != nil {
+		t.Fatalf("Make local backend: %v", err)
+	}
+	t.Cleanup(clb.Shutdown)
+	clb.SetVarRoot(varRoot)
+
+	pm := must.Get(newProfileManager(new(mem.Store), logf, health.NewTracker(sys.Bus.Get())))
+	pm.currentProfile = (&ipn.LoginProfile{ID: "id0"}).View()
+	clb.pm = pm
+
+	// Start up the node. We can't actually log in, because we have no
+	// controlplane, but verify that we got a network map.
+	if err := clb.Start(ipn.Options{}); err != nil {
+		t.Fatalf("Start local backend: %v", err)
+	}
+
+	// Check that the network map the backend wound up with is the one we
+	// stored, modulo uncached fields.
+	nm := clb.currentNode().NetMap()
+	if diff := cmp.Diff(nm, testMap,
+		cmpopts.IgnoreFields(netmap.NetworkMap{}, "Cached", "PacketFilter", "PacketFilterRules"),
+		cmpopts.EquateComparable(key.NodePublic{}, key.MachinePublic{}),
+	); diff != "" {
+		t.Error(diff)
+	}
 }
 
 func TestConfigureExitNode(t *testing.T) {

@@ -34,7 +34,7 @@ func (b *LocalBackend) writeNetmapToDiskLocked(nm *netmap.NetworkMap) error {
 	return b.diskCache.cache.Store(b.currentNode().Context(), nm)
 }
 
-func (b *LocalBackend) loadDiskCacheLocked() (_ *netmap.NetworkMap, ok bool) {
+func (b *LocalBackend) loadDiskCacheLocked() (om *netmap.NetworkMap, ok bool) {
 	if !buildfeatures.HasCacheNetMap {
 		return nil, false
 	}
