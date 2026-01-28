@@ -298,3 +298,46 @@ var warmingUpWarnable = condRegister(func() *Warnable {
 		Text:     StaticMessage("Tailscale is starting. Please wait."),
 	}
 })
+
+// customMullvadExpiringWarnable is a Warnable that warns the user that their custom Mullvad account is about to expire.
+var customMullvadExpiringWarnable = condRegister(func() *Warnable {
+	return &Warnable{
+		Code:     tsconst.HealthWarnableCustomMullvadExpiring,
+		Title:    "Mullvad account expiring soon",
+		Severity: SeverityMedium,
+		Text: func(args Args) string {
+			return fmt.Sprintf("Your custom Mullvad account expires in %s days. Renew to keep using Mullvad exit nodes.", args[ArgDaysRemaining])
+		},
+	}
+})
+
+// customMullvadExpiredWarnable is a Warnable that warns the user that their custom Mullvad account has expired.
+var customMullvadExpiredWarnable = condRegister(func() *Warnable {
+	return &Warnable{
+		Code:     tsconst.HealthWarnableCustomMullvadExpired,
+		Title:    "Mullvad account expired",
+		Severity: SeverityHigh,
+		Text: func(args Args) string {
+			return fmt.Sprintf("Your custom Mullvad account expired on %s. Renew to restore Mullvad exit node functionality.", args[ArgExpiryDate])
+		},
+	}
+})
+
+// customMullvadAuthFailedWarnable is a Warnable that warns the user that authentication with their custom Mullvad account failed.
+var customMullvadAuthFailedWarnable = condRegister(func() *Warnable {
+	return &Warnable{
+		Code:     tsconst.HealthWarnableCustomMullvadAuthFailed,
+		Title:    "Mullvad authentication failed",
+		Severity: SeverityMedium,
+		Text: func(args Args) string {
+			return fmt.Sprintf("Failed to authenticate with your custom Mullvad account: %v", args[ArgError])
+		},
+	}
+})
+
+// Exported warnables for custom Mullvad integration
+var (
+	CustomMullvadExpiringWarnable   = customMullvadExpiringWarnable
+	CustomMullvadExpiredWarnable    = customMullvadExpiredWarnable
+	CustomMullvadAuthFailedWarnable = customMullvadAuthFailedWarnable
+)
