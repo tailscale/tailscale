@@ -155,7 +155,11 @@ func (s FileStore) List(ctx context.Context, prefix string) iter.Seq2[string, er
 
 // Load implements part of the [Store] interface.
 func (s FileStore) Load(ctx context.Context, key string) ([]byte, error) {
-	return os.ReadFile(filepath.Join(string(s), hex.EncodeToString([]byte(key))))
+	data, err := os.ReadFile(filepath.Join(string(s), hex.EncodeToString([]byte(key))))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("key %q not found: %w", key, ErrKeyNotFound)
+	}
+	return data, err
 }
 
 // Store implements part of the [Store] interface.
