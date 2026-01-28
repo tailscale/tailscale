@@ -1230,6 +1230,9 @@ func NetmapFromMapResponseForDebug(ctx context.Context, pr persist.PersistView, 
 	if resp.Node == nil {
 		return nil, errors.New("MapResponse lacks Node")
 	}
+	if !pr.Valid() {
+		return nil, errors.New("PersistView invalid")
+	}
 
 	nu := &rememberLastNetmapUpdater{}
 	sess := newMapSession(pr.PrivateNodeKey(), nu, nil)
