@@ -5,6 +5,7 @@ package vnet
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"iter"
 	"net/netip"
@@ -114,6 +115,10 @@ func (c *Config) AddNode(opts ...any) *Node {
 			switch o {
 			case HostFirewall:
 				n.hostFW = true
+			case RotateDisco:
+				n.rotateDisco = true
+			case PreICMPPing:
+				n.preICMPPing = true
 			case VerboseSyslog:
 				n.verboseSyslog = true
 			default:
@@ -137,6 +142,8 @@ type NodeOption string
 
 const (
 	HostFirewall  NodeOption = "HostFirewall"
+	RotateDisco   NodeOption = "RotateDisco"
+	PreICMPPing   NodeOption = "PreICMPPing"
 	VerboseSyslog NodeOption = "VerboseSyslog"
 )
 
@@ -197,12 +204,15 @@ func (c *Config) AddNetwork(opts ...any) *Network {
 
 // Node is the configuration of a node in the virtual network.
 type Node struct {
-	err error
-	num int   // 1-based node number
-	n   *node // nil until NewServer called
+	err    error
+	num    int   // 1-based node number
+	n      *node // nil until NewServer called
+	client *NodeAgentClient
 
 	env           []TailscaledEnv
 	hostFW        bool
+	rotateDisco   bool
+	preICMPPing   bool
 	verboseSyslog bool
 
 	// TODO(bradfitz): this is halfway converted to supporting multiple NICs
@@ -243,6 +253,31 @@ func (n *Node) SetVerboseSyslog(v bool) {
 	n.verboseSyslog = v
 }
 
+func (n *Node) SetClient(c *NodeAgentClient) {
+	n.client = c
+}
+
+// PostConnectedToControl should be called after the clients have connected to
+// control to modify the client behaviour after getting the network maps.
+// Currently, the only implemented behavior is rotating disco keys.
+func (n *Node) PostConnectedToControl(ctx context.Context) error {
+	if n.rotateDisco {
+		if err := n.client.DebugAction(ctx, "rotate-disco-key"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PreICMPPing indicates the need of the node to have an ICMP Ping sent before
+// the disco ping. This is important for the nodes having rotated their
+// disco keys while control is down. Disco pings deliberately does not
+// trigger a TSMPDiscoKeyAdvertisement, making the need for other traffic (here
+// simlulated as an ICMP ping) needed first.
+func (n *Node) PreICMPPing() bool {
+	return n.preICMPPing
+}
+
 // IsV6Only reports whether this node is only connected to IPv6 networks.
 func (n *Node) IsV6Only() bool {
 	for _, net := range n.nets {
@@ -275,10 +310,12 @@ type Network struct {
 
 	wanIP6 netip.Prefix // global unicast router in host bits; CIDR is /64 delegated to LAN
 
-	wanIP4    netip.Addr // IPv4 WAN IP, if any
-	lanIP4    netip.Prefix
-	nodes     []*Node
-	breakWAN4 bool // whether to break WAN IPv4 connectivity
+	wanIP4                      netip.Addr // IPv4 WAN IP, if any
+	lanIP4                      netip.Prefix
+	nodes                       []*Node
+	breakWAN4                   bool // whether to break WAN IPv4 connectivity
+	postConnectBlackholeControl bool // whether to break control connectivity after nodes have connected
+	network                     *network
 
 	svcs set.Set[NetworkService]
 
@@ -310,6 +347,12 @@ func (n *Network) SetBlackholedIPv4(v bool) {
 	n.breakWAN4 = v
 }
 
+// SetPostConnectControlBlackhole sets wether the network should blackhole all
+// traffic to the control server after the clients have connected.
+func (n *Network) SetPostConnectControlBlackhole(v bool) {
+	n.postConnectBlackholeControl = v
+}
+
 func (n *Network) CanV4() bool {
 	return n.lanIP4.IsValid() || n.wanIP4.IsValid()
 }
@@ -323,6 +366,13 @@ func (n *Network) CanTakeMoreNodes() bool {
 		return len(n.nodes) == 0
 	}
 	return len(n.nodes) < 150
+}
+
+// PostConnectedToControl should be called after the clients have connected to
+// the control server to modify network behaviors. Currently the only
+// implemented behavior is to conditionally blackhole traffic to control.
+func (n *Network) PostConnectedToControl() {
+	n.network.SetControlBlackholed(n.postConnectBlackholeControl)
 }
 
 // NetworkService is a service that can be added to a network.
@@ -390,6 +440,8 @@ func (s *Server) initFromConfig(c *Config) error {
 		}
 		netOfConf[conf] = n
 		s.networks.Add(n)
+
+		conf.network = n
 		if conf.wanIP4.IsValid() {
 			if conf.wanIP4.Is6() {
 				return fmt.Errorf("invalid IPv6 address in wanIP")
