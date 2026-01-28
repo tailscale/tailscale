@@ -274,6 +274,7 @@ jobs:
       env:
         GODEBUG: gocachehash=1,gocachetest=1
         TS_TESTWRAPPER_DEBUG: "1"
+        CMD_GO_USE_GIT_HASH: "true"
       working-directory: src
       run: ${{ github.workspace }}/testwrapper.exe tailscale.com/cmd/cigocacher/testpkg
 
