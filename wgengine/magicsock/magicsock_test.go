@@ -3224,6 +3224,174 @@ func TestNetworkSendErrors(t *testing.T) {
 	})
 }
 
+func TestEndpointCurrentPathType(t *testing.T) {
+	now := mono.Now()
+
+	tests := []struct {
+		name     string
+		setup    func(*endpoint)
+		wantPath Path
+	}{
+		{
+			name:     "no path - no bestAddr, no derp activity",
+			setup:    func(ep *endpoint) {},
+			wantPath: PathNone,
+		},
+		{
+			name: "direct IPv4 - trusted bestAddr",
+			setup: func(ep *endpoint) {
+				ep.bestAddr = addrQuality{
+					epAddr: epAddr{ap: netip.MustParseAddrPort("192.168.1.1:41641")},
+				}
+				ep.trustBestAddrUntil = now.Add(10 * time.Minute)
+			},
+			wantPath: PathDirectIPv4,
+		},
+		{
+			name: "direct IPv6 - trusted bestAddr",
+			setup: func(ep *endpoint) {
+				ep.bestAddr = addrQuality{
+					epAddr: epAddr{ap: netip.MustParseAddrPort("[2001:db8::1]:41641")},
+				}
+				ep.trustBestAddrUntil = now.Add(10 * time.Minute)
+			},
+			wantPath: PathDirectIPv6,
+		},
+		{
+			name: "DERP - valid derpAddr with recent activity",
+			setup: func(ep *endpoint) {
+				ep.derpAddr = netip.MustParseAddrPort("127.3.3.40:1")
+				ep.lastRecvWG.StoreAtomic(now)
+			},
+			wantPath: PathDERP,
+		},
+		{
+			name: "no path - derpAddr but no recent activity",
+			setup: func(ep *endpoint) {
+				ep.derpAddr = netip.MustParseAddrPort("127.3.3.40:1")
+				ep.lastRecvWG.StoreAtomic(now.Add(-3 * time.Minute)) // too old
+			},
+			wantPath: PathNone,
+		},
+		{
+			name: "no path - untrusted bestAddr falls back to no path",
+			setup: func(ep *endpoint) {
+				ep.bestAddr = addrQuality{
+					epAddr: epAddr{ap: netip.MustParseAddrPort("192.168.1.1:41641")},
+				}
+				ep.trustBestAddrUntil = now.Add(-1 * time.Minute) // expired
+			},
+			wantPath: PathNone,
+		},
+		{
+			name: "DERP - untrusted bestAddr with recent DERP activity",
+			setup: func(ep *endpoint) {
+				ep.bestAddr = addrQuality{
+					epAddr: epAddr{ap: netip.MustParseAddrPort("192.168.1.1:41641")},
+				}
+				ep.trustBestAddrUntil = now.Add(-1 * time.Minute) // expired
+				ep.derpAddr = netip.MustParseAddrPort("127.3.3.40:1")
+				ep.lastRecvWG.StoreAtomic(now) // recent activity
+			},
+			wantPath: PathDERP,
+		},
+		{
+			name: "peer relay IPv4 - trusted bestAddr with VNI",
+			setup: func(ep *endpoint) {
+				epA := epAddr{ap: netip.MustParseAddrPort("192.168.1.1:41641")}
+				epA.vni.Set(123)
+				ep.bestAddr = addrQuality{epAddr: epA}
+				ep.trustBestAddrUntil = now.Add(10 * time.Minute)
+			},
+			wantPath: PathPeerRelayIPv4,
+		},
+		{
+			name: "peer relay IPv6 - trusted bestAddr with VNI",
+			setup: func(ep *endpoint) {
+				epA := epAddr{ap: netip.MustParseAddrPort("[2001:db8::1]:41641")}
+				epA.vni.Set(456)
+				ep.bestAddr = addrQuality{epAddr: epA}
+				ep.trustBestAddrUntil = now.Add(10 * time.Minute)
+			},
+			wantPath: PathPeerRelayIPv6,
+		},
+		{
+			name: "no path - untrusted peer relay with no DERP activity",
+			setup: func(ep *endpoint) {
+				epA := epAddr{ap: netip.MustParseAddrPort("192.168.1.1:41641")}
+				epA.vni.Set(789)
+				ep.bestAddr = addrQuality{epAddr: epA}
+				ep.trustBestAddrUntil = now.Add(-1 * time.Minute) // expired
+			},
+			wantPath: PathNone,
+		},
+		{
+			name: "DERP - untrusted peer relay falls back to DERP",
+			setup: func(ep *endpoint) {
+				epA := epAddr{ap: netip.MustParseAddrPort("192.168.1.1:41641")}
+				epA.vni.Set(789)
+				ep.bestAddr = addrQuality{epAddr: epA}
+				ep.trustBestAddrUntil = now.Add(-1 * time.Minute) // expired
+				ep.derpAddr = netip.MustParseAddrPort("127.3.3.40:1")
+				ep.lastRecvWG.StoreAtomic(now) // recent DERP activity
+			},
+			wantPath: PathDERP,
+		},
+		// Boundary condition tests
+		// Note: currentPathType() calls mono.Now() internally, so test timestamps
+		{
+			name: "direct IPv4 - trust still valid with buffer",
+			setup: func(ep *endpoint) {
+				ep.bestAddr = addrQuality{
+					epAddr: epAddr{ap: netip.MustParseAddrPort("192.168.1.1:41641")},
+				}
+				// Set trust to current time + buffer; !now.After() check means
+				// path is valid when trustBestAddrUntil is in the future
+				ep.trustBestAddrUntil = mono.Now().Add(100 * time.Millisecond)
+			},
+			wantPath: PathDirectIPv4,
+		},
+		{
+			name: "no path - activity beyond derpActivityTimeout (stale)",
+			setup: func(ep *endpoint) {
+				ep.derpAddr = netip.MustParseAddrPort("127.3.3.40:1")
+				// Set activity to beyond derpActivityTimeout ago; the < check is strict
+				// so activity at or beyond threshold returns PathNone
+				ep.lastRecvWG.StoreAtomic(mono.Now().Add(-derpActivityTimeout - time.Second))
+			},
+			wantPath: PathNone,
+		},
+		{
+			name: "DERP - activity well inside timeout",
+			setup: func(ep *endpoint) {
+				ep.derpAddr = netip.MustParseAddrPort("127.3.3.40:1")
+				// Set activity to well under derpActivityTimeout ago
+				ep.lastRecvWG.StoreAtomic(mono.Now().Add(-derpActivityTimeout + 10*time.Second))
+			},
+			wantPath: PathDERP,
+		},
+		{
+			name: "no path - zero lastRecvWG with valid derpAddr",
+			setup: func(ep *endpoint) {
+				ep.derpAddr = netip.MustParseAddrPort("127.3.3.40:1")
+				// lastRecvWG is zero (never received WG packets)
+			},
+			wantPath: PathNone,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ep := &endpoint{c: &Conn{}}
+			tt.setup(ep)
+			got := ep.currentPathType()
+			if got != tt.wantPath {
+				t.Errorf("currentPathType() = %q, want %q", got, tt.wantPath)
+			}
+		})
+	}
+}
+
 func Test_packetLooksLike(t *testing.T) {
 	discoPub := key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 30: 30, 31: 31}))
 	nakedDisco := make([]byte, 0, 512)
