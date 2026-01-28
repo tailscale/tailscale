@@ -4,7 +4,6 @@
 package ipnlocal
 
 import (
-	"context"
 	"errors"
 
 	"tailscale.com/feature/buildfeatures"
@@ -38,7 +37,7 @@ func (b *LocalBackend) writeNetmapToDiskLocked(nm *netmap.NetworkMap) error {
 		b.diskCache.cache = netmapcache.NewCache(netmapcache.FileStore(dir))
 		b.diskCache.dir = dir
 	}
-	return b.diskCache.cache.Store(context.TODO(), nm)
+	return b.diskCache.cache.Store(b.currentNode().Context(), nm)
 }
 
 func (b *LocalBackend) loadDiskCacheLocked() (_ *netmap.NetworkMap, ok bool) {
@@ -54,7 +53,7 @@ func (b *LocalBackend) loadDiskCacheLocked() (_ *netmap.NetworkMap, ok bool) {
 		b.diskCache.cache = netmapcache.NewCache(netmapcache.FileStore(dir))
 		b.diskCache.dir = dir
 	}
-	nm, err := b.diskCache.cache.Load(context.TODO())
+	nm, err := b.diskCache.cache.Load(b.currentNode().Context())
 	if err != nil {
 		return nil, false
 	}
