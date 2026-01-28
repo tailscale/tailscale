@@ -6,9 +6,9 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
 
-if (($Env:CI -eq 'true') -and ($Env:NOPWSHDEBUG -ne 'true')) {
-    Set-PSDebug -Trace 1
-}
+# if (($Env:CI -eq 'true') -and ($Env:NOPWSHDEBUG -ne 'true')) {
+#     Set-PSDebug -Trace 1
+# }
 
 <#
   .DESCRIPTION
