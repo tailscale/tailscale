@@ -5,6 +5,7 @@ package netmapcache_test
 
 import (
 	"context"
+	jsonv1 "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -174,11 +175,7 @@ func TestRoundTrip(t *testing.T) {
 				t.Error("Cached map is not marked as such")
 			}
 
-			opts := []cmp.Option{
-				cmpopts.IgnoreFields(netmap.NetworkMap{}, skippedMapFields...),
-				cmpopts.EquateComparable(key.NodePublic{}, key.MachinePublic{}),
-			}
-			if diff := cmp.Diff(cmap, testMap, opts...); diff != "" {
+			if diff := diffNetMaps(cmap, testMap); diff != "" {
 				t.Fatalf("Cached map differs (-got, +want):\n%s", diff)
 			}
 
@@ -262,6 +259,56 @@ func checkFieldCoverage(t *testing.T, nm *netmap.NetworkMap) {
 	}
 }
 
+func TestPartial(t *testing.T) {
+	t.Run("Empty", func(t *testing.T) {
+		c := netmapcache.NewCache(make(testStore)) // empty
+		nm, err := c.Load(t.Context())
+		if !errors.Is(err, netmapcache.ErrCacheNotAvailable) {
+			t.Errorf("Load empty cache: got %+v, %v; want %v", nm, err, netmapcache.ErrCacheNotAvailable)
+		}
+	})
+
+	t.Run("SelfOnly", func(t *testing.T) {
+		self := (&tailcfg.Node{
+			ID:       24680,
+			StableID: "u24680FAKE",
+			User:     6174,
+			Name:     "test.example.com.",
+			Key:      testNodeKey,
+		}).View()
+
+		// A cached netmap must at least have a self node to be loaded without error,
+		// but other parts can be omitted without error.
+		//
+		// Set up a cache store with only the self node populated, and verify we
+		// can load that back into something with the right shape.
+		data, err := jsonv1.Marshal(struct {
+			Node tailcfg.NodeView
+		}{Node: self})
+		if err != nil {
+			t.Fatalf("Marshal test node: %v", err)
+		}
+
+		s := netmapcache.FileStore(t.TempDir())
+		if err := s.Store(t.Context(), "self", data); err != nil {
+			t.Fatalf("Write test cache: %v", err)
+		}
+
+		c := netmapcache.NewCache(s)
+		got, err := c.Load(t.Context())
+		if err != nil {
+			t.Fatalf("Load cached netmap: %v", err)
+		}
+		if diff := diffNetMaps(got, &netmap.NetworkMap{
+			Cached:   true,        // because we loaded it
+			SelfNode: self,        // what we originally stored
+			NodeKey:  testNodeKey, // the self-related field is populated
+		}); diff != "" {
+			t.Errorf("Cached map differs (-got, +want):\n%s", diff)
+		}
+	})
+}
+
 // testStore is an in-memory implementation of the [netmapcache.Store] interface.
 type testStore map[string][]byte
 
@@ -296,3 +343,10 @@ func (t testStore) Store(_ context.Context, key string, value []byte) error {
 }
 
 func (t testStore) Remove(_ context.Context, key string) error { delete(t, key); return nil }
+
+func diffNetMaps(got, want *netmap.NetworkMap) string {
+	return cmp.Diff(got, want,
+		cmpopts.IgnoreFields(netmap.NetworkMap{}, skippedMapFields...),
+		cmpopts.EquateComparable(key.NodePublic{}, key.MachinePublic{}),
+	)
+}
