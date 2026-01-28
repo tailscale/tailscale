@@ -203,6 +203,12 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 }
 
 func main() {
+	versionOutput, err := exec.Command("go", "version").CombinedOutput()
+	if err != nil {
+		log.Fatalf("testwrapper: failed to get go version: %v", err)
+	}
+	fmt.Printf("testwrapper: using %s", versionOutput)
+
 	goTestArgs, packages, testArgs, err := splitArgs(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)

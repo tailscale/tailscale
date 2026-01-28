@@ -267,7 +267,11 @@ jobs:
 
     - name: build test wrapper
       working-directory: ${{ github.workspace }}/src
-      run: go build -o ${{ github.workspace }}/testwrapper.exe ./cmd/testwrapper
+      run: ./tool/go build -o ${{ github.workspace }}/testwrapper.exe ./cmd/testwrapper
+
+    - name: Set PATH for ./tool/go
+      shell: bash
+      run: echo "${{ github.workspace }}/src/tool" >> $GITHUB_PATH
 
     - name: test
       if: matrix.key != 'win-bench' # skip on bench builder
