@@ -55,6 +55,7 @@ func (b *LocalBackend) loadDiskCacheLocked() (_ *netmap.NetworkMap, ok bool) {
 	}
 	nm, err := b.diskCache.cache.Load(b.currentNode().Context())
 	if err != nil {
+		b.logf("load netmap from cache: %v", err)
 		return nil, false
 	}
 	return nm, true
