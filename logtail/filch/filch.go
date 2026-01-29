@@ -129,6 +129,9 @@ func (f *Filch) ExpVar() expvar.Var {
 }
 
 func (f *Filch) unreadReadBuffer() []byte {
+	if f.rdBufIdx > len(f.rdBuf) {
+		f.rdBufIdx = len(f.rdBuf)
+	}
 	return f.rdBuf[f.rdBufIdx:]
 }
 func (f *Filch) availReadBuffer() []byte {
@@ -393,7 +396,12 @@ func (f *Filch) rotateLocked() error {
 		return b, maxLen
 	}
 	f.wrBuf, f.wrBufMaxLen = mayGarbageCollect(f.wrBuf, f.wrBufMaxLen)
+	oldRdBufCap := cap(f.rdBuf)
 	f.rdBuf, f.rdBufMaxLen = mayGarbageCollect(f.rdBuf, f.rdBufMaxLen)
+	if cap(f.rdBuf) != oldRdBufCap {
+		// Buffer was replaced; reset index to avoid out-of-bounds access.
+		f.rdBufIdx = 0
+	}
 
 	return nil
 }

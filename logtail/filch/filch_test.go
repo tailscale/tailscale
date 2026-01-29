@@ -381,3 +381,31 @@ func testMaxFileSize(t *testing.T, replaceStderr bool) {
 		t.Errorf("readBytes = %v, want %v", f.readBytes.Value(), readBytes)
 	}
 }
+
+func TestRotateWithEmptyOlderFile(t *testing.T) {
+	// Regression test: when older file is empty during rotation,
+	// mayGarbageCollect must not leave rdBufIdx pointing past rdBuf.
+	// See: https://github.com/tailscale/tailscale/issues/18552
+	f := newForTest(t, "", Options{MaxFileSize: 1000})
+
+	// Write and read to establish non-zero rdBufIdx.
+	must.Get(f.Write([]byte("line1")))
+	must.Get(f.Write([]byte("line2")))
+
+	// Read first line (rdBufIdx advances via consumeReadBuffer).
+	if got := must.Get(f.TryReadLine()); string(got) != "line1\n" {
+		t.Fatalf("got %q, want %q", got, "line1\n")
+	}
+
+	// Read remaining to drain the buffer, triggering rotation.
+	for must.Get(f.TryReadLine()) != nil {
+	}
+
+	// Force many rotations to trigger GC (rdBufMaxLen shrinks by 25% each time).
+	// After enough rotations, mayGarbageCollect will replace rdBuf with a new
+	// empty slice. Before the fix, rdBufIdx would remain stale, causing a panic
+	// in unreadReadBuffer() when rdBufIdx > len(rdBuf).
+	for range 64 {
+		must.Get(f.TryReadLine()) // must not panic
+	}
+}
