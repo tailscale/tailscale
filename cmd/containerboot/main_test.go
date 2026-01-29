@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/sys/unix"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/egressservices"
@@ -39,6 +40,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/dnsname"
 )
 
 func TestContainerBoot(t *testing.T) {
@@ -65,6 +67,8 @@ func TestContainerBoot(t *testing.T) {
 		// initial update for any future new watchers, then wait for all the
 		// Waits below to be true before proceeding to the next phase.
 		Notify *ipn.Notify
+
+		DnsBuilder func(b *dnsmessage.Builder)
 
 		// WantCmds is the commands that containerboot should run in this phase.
 		WantCmds []string
@@ -391,6 +395,20 @@ func TestContainerBoot(t *testing.T) {
 						},
 						WantLog:      "no forwarding rules for egress addresses [::1/128], host supports IPv6: false",
 						WantExitCode: ptr.To(1),
+						DnsBuilder: func(b *dnsmessage.Builder) {
+							b.AAAAResource(
+								dnsmessage.ResourceHeader{
+									Name:  dnsmessage.MustNewName("ipv6-node.test.ts.net."),
+									Type:  dnsmessage.TypeAAAA,
+									Class: dnsmessage.ClassINET,
+									TTL:   0,
+								},
+								dnsmessage.AAAAResource{
+									// ::1
+									AAAA: [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+								},
+							)
+						},
 					},
 				},
 			}
@@ -980,6 +998,19 @@ func TestContainerBoot(t *testing.T) {
 								},
 							},
 						},
+						DnsBuilder: func(b *dnsmessage.Builder) {
+							b.AResource(
+								dnsmessage.ResourceHeader{
+									Name:  dnsmessage.MustNewName("foo.tailnetxyz.ts.net."),
+									Type:  dnsmessage.TypeA,
+									Class: dnsmessage.ClassINET,
+									TTL:   0,
+								},
+								dnsmessage.AResource{
+									A: [4]byte{100, 64, 0, 2},
+								},
+							)
+						},
 						WantKubeSecret: map[string]string{
 							"egress-services":   string(mustJSON(t, egressStatus)),
 							"authkey":           "tskey-key",
@@ -1112,6 +1143,8 @@ func TestContainerBoot(t *testing.T) {
 
 			var wantCmds []string
 			for i, p := range tc.Phases {
+				env.lapi.build = p.DnsBuilder
+
 				for k, v := range p.UpdateKubeSecret {
 					env.kube.SetSecret(k, v)
 				}
@@ -1298,9 +1331,11 @@ type localAPI struct {
 
 	srv *http.Server
 
+	build func(*dnsmessage.Builder)
 	sync.Mutex
 	cond   *sync.Cond
 	notify *ipn.Notify
+	t      *testing.T
 }
 
 func (lc *localAPI) Start() error {
@@ -1344,6 +1379,43 @@ func (lc *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			panic(fmt.Sprintf("unsupported method %q", r.Method))
 		}
 		return
+	case "/localapi/v0/dns-query":
+		if r.Method != "GET" {
+			panic(fmt.Sprintf("unsupported method %q", r.Method))
+		}
+
+		name, err := dnsname.ToFQDN(r.URL.Query().Get("name"))
+		if err != nil {
+			panic(fmt.Sprintf("failed to parse dns name path value %q as fqdn", r.URL.Query().Get("name")))
+		}
+
+		tp := dnsmessage.TypeA
+		queryType := r.URL.Query().Get("type")
+		if queryType != "" {
+			t, err := dnsMessageTypeForString(queryType)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			tp = t
+		}
+
+		ans, err := lc.handlePeerDNSQuery(name, tp)
+		if err != nil {
+			panic(fmt.Sprintf("failed to query dns: %s", err.Error()))
+		}
+
+		resp := struct {
+			Bytes []byte `json:"bytes"`
+		}{
+			Bytes: ans,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			http.Error(w, fmt.Sprintf("failed to encode response: %v", err), http.StatusInternalServerError)
+		}
+		return
 	case "/localapi/v0/watch-ipn-bus":
 		if r.Method != "GET" {
 			panic(fmt.Sprintf("unsupported method %q", r.Method))
@@ -1383,6 +1455,47 @@ func (lc *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		lc.cond.Wait()
 	}
+}
+
+func (lc *localAPI) handlePeerDNSQuery(domain dnsname.FQDN, tp dnsmessage.Type) (res []byte, err error) {
+	if lc.build == nil {
+		lc.t.Logf("lc.build is empty, returning")
+		return []byte{}, nil
+	}
+
+	var dnsHeader dnsmessage.Header
+	dnsHeader.Response = true
+	dnsHeader.Authoritative = true
+
+	question := dnsmessage.Question{
+		Name:  dnsmessage.MustNewName(domain.WithTrailingDot()),
+		Type:  tp,
+		Class: dnsmessage.ClassINET,
+	}
+
+	b := dnsmessage.NewBuilder(nil, dnsHeader)
+	b.EnableCompression()
+
+	if err := b.StartQuestions(); err != nil {
+		return nil, err
+	}
+
+	if err := b.Question(question); err != nil {
+		return nil, err
+	}
+
+	if err := b.StartAnswers(); err != nil {
+		return nil, err
+	}
+
+	lc.build(&b)
+
+	ans, err := b.Finish()
+	if err != nil {
+		return nil, err
+	}
+
+	return ans, nil
 }
 
 // kubeServer is a minimal fake Kubernetes server that presents just
@@ -1623,7 +1736,7 @@ type testEnv struct {
 func newTestEnv(t *testing.T) testEnv {
 	d := t.TempDir()
 
-	lapi := localAPI{FSRoot: d}
+	lapi := localAPI{FSRoot: d, t: t}
 	if err := lapi.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -1697,4 +1810,41 @@ func newTestEnv(t *testing.T) testEnv {
 		localAddrPort:   localAddrPort,
 		healthAddrPort:  healthAddrPort,
 	}
+}
+
+// dnsMessageTypeForString returns the dnsmessage.Type for the given string.
+// For example, DNSMessageTypeForString("A") returns dnsmessage.TypeA.
+func dnsMessageTypeForString(s string) (t dnsmessage.Type, err error) {
+	s = strings.TrimSpace(strings.ToUpper(s))
+	switch s {
+	case "AAAA":
+		return dnsmessage.TypeAAAA, nil
+	case "ALL":
+		return dnsmessage.TypeALL, nil
+	case "A":
+		return dnsmessage.TypeA, nil
+	case "CNAME":
+		return dnsmessage.TypeCNAME, nil
+	case "HINFO":
+		return dnsmessage.TypeHINFO, nil
+	case "MINFO":
+		return dnsmessage.TypeMINFO, nil
+	case "MX":
+		return dnsmessage.TypeMX, nil
+	case "NS":
+		return dnsmessage.TypeNS, nil
+	case "OPT":
+		return dnsmessage.TypeOPT, nil
+	case "PTR":
+		return dnsmessage.TypePTR, nil
+	case "SOA":
+		return dnsmessage.TypeSOA, nil
+	case "SRV":
+		return dnsmessage.TypeSRV, nil
+	case "TXT":
+		return dnsmessage.TypeTXT, nil
+	case "WKS":
+		return dnsmessage.TypeWKS, nil
+	}
+	return 0, errors.New("unknown DNS message type: " + s)
 }
