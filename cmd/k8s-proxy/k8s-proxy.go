@@ -10,10 +10,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"reflect"
@@ -104,6 +106,7 @@ func run(logger *zap.SugaredLogger) error {
 	if err != nil {
 		return fmt.Errorf("error getting rest config: %w", err)
 	}
+
 	clientset, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
 		return fmt.Errorf("error creating Kubernetes clientset: %w", err)
@@ -122,6 +125,11 @@ func run(logger *zap.SugaredLogger) error {
 	case <-ctx.Done():
 		return group.Wait()
 	case cfg = <-cfgChan:
+	}
+
+	for i, proxy := range cfg.Parsed.L4Proxies {
+		logger.Infof("  L4Proxy[%d]: ServiceName=%s, ListenPort=%d, Backend=%s, Proto=%s, ServiceVIP=%s",
+			i, proxy.ServiceName, proxy.ListenPort, proxy.Backend, proxy.Proto, proxy.ServiceVIP)
 	}
 
 	if cfg.Parsed.LogLevel != nil {
@@ -152,10 +160,12 @@ func run(logger *zap.SugaredLogger) error {
 
 	// TODO(tomhjp): Pass this setting directly into the store instead of using
 	// environment variables.
-	if cfg.Parsed.APIServerProxy != nil && cfg.Parsed.APIServerProxy.IssueCerts.EqualBool(true) {
-		os.Setenv("TS_CERT_SHARE_MODE", "rw")
-	} else {
-		os.Setenv("TS_CERT_SHARE_MODE", "ro")
+	if cfg.Parsed.APIServerProxy != nil {
+		if cfg.Parsed.APIServerProxy.IssueCerts.EqualBool(true) {
+			os.Setenv("TS_CERT_SHARE_MODE", "rw")
+		} else {
+			os.Setenv("TS_CERT_SHARE_MODE", "ro")
+		}
 	}
 
 	st, err := getStateStore(cfg.Parsed.State, logger)
@@ -275,42 +285,98 @@ func run(logger *zap.SugaredLogger) error {
 	}
 
 	var cm *certs.CertManager
-	if shouldIssueCerts(cfg) {
-		logger.Infof("Will issue TLS certs for Tailscale Service")
-		cm = certs.NewCertManager(klc.New(lc), logger.Infof)
+
+	if cfg.Parsed.APIServerProxy != nil && len(cfg.Parsed.L4Proxies) > 0 {
+		return fmt.Errorf("proxy configured for both api-server-proxy and l4-proxy")
 	}
-	if err := setServeConfig(ctx, lc, cm, apiServerProxyService(cfg)); err != nil {
-		return err
+
+	if cfg.Parsed.APIServerProxy != nil {
+		// Setup for the API server proxy.
+		mode := kubetypes.APIServerProxyModeAuth
+		if cfg.Parsed.APIServerProxy != nil && cfg.Parsed.APIServerProxy.Mode != nil {
+			mode = *cfg.Parsed.APIServerProxy.Mode
+		}
+
+		ap, err := apiproxy.NewAPIServerProxy(logger.Named("apiserver-proxy"), restConfig, ts, mode, false)
+		if err != nil {
+			return fmt.Errorf("error creating api server proxy: %w", err)
+		}
+
+		group.Go(func() error {
+			if err := ap.Run(serveCtx); err != nil {
+				return fmt.Errorf("error running API server proxy: %w", err)
+			}
+
+			return nil
+		})
+
+		if shouldIssueCerts(cfg) {
+			logger.Infof("Will issue TLS certs for Tailscale Service")
+			cm = certs.NewCertManager(klc.New(lc), logger.Infof)
+		}
+		if err := setServeConfig(ctx, lc, cm, apiServerProxyService(cfg)); err != nil {
+			return err
+		}
+	}
+	if len(cfg.Parsed.L4Proxies) > 0 {
+		logger.Infof(">>> Entering L4_PROXY mode with %d proxies", len(cfg.Parsed.L4Proxies))
+
+		for _, p := range cfg.Parsed.L4Proxies {
+			logger.Infof("Processing L4Proxy: ServiceName=%s, ListenPort=%d, Backend=%s, Proto=%s",
+				p.ServiceName, p.ListenPort, p.Backend, p.Proto)
+
+			if p.Proto != "tcp" {
+				logger.Infof("Setting up UDP forwarder for service=%s, port=%d, backend=%s",
+					p.ServiceName, p.ListenPort, p.Backend)
+
+				f := &udpForwarder{
+					l:       logger.Named(fmt.Sprintf("udp-forwarder-%v", p.Backend)),
+					backend: p.Backend,
+					connMap: make(map[netip.AddrPort]*natEntry),
+				}
+
+				listenAddr := "0.0.0.0:" + strconv.Itoa(int(p.ListenPort))
+				logger.Infof("Attempting to listen on UDP address: %s", listenAddr)
+
+				f.listener, err = ts.ListenPacket("udp", listenAddr)
+				if err != nil {
+					return fmt.Errorf("failed to listen on %s: %w", listenAddr, err)
+				}
+				logger.Infof("Successfully created UDP listener on %s", listenAddr)
+
+				group.Go(func() error {
+					logger.Infof("Starting UDP forwarder goroutine for %s", p.Backend)
+					return f.run(serveCtx)
+				})
+			} else {
+				logger.Infof("Skipping UDP setup for TCP service=%s", p.ServiceName)
+			}
+		}
+
+		logger.Infof("Setting up TCP forwarding for L4 services")
+		err := setTCPForwardingForService(ctx, cfg, &ipn.ServeConfig{}, lc, logger)
+		if err != nil {
+			return fmt.Errorf("failed to set tcp forwarding for services: %w", err)
+		}
+		logger.Infof("TCP forwarding setup complete")
 	}
 
 	if cfg.Parsed.AdvertiseServices != nil {
-		if _, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+		if prefs, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 			AdvertiseServicesSet: true,
 			Prefs: ipn.Prefs{
 				AdvertiseServices: cfg.Parsed.AdvertiseServices,
 			},
 		}); err != nil {
 			return fmt.Errorf("error setting prefs AdvertiseServices: %w", err)
+		} else {
+			prefsJson, _ := json.Marshal(prefs)
+			logger.Infof("new prefs: %q", string(prefsJson))
 		}
+		logger.Infof("Successfully set AdvertiseServices")
+	} else {
+		logger.Infof("No AdvertiseServices configured")
 	}
-
-	// Setup for the API server proxy.
-	mode := kubetypes.APIServerProxyModeAuth
-	if cfg.Parsed.APIServerProxy != nil && cfg.Parsed.APIServerProxy.Mode != nil {
-		mode = *cfg.Parsed.APIServerProxy.Mode
-	}
-	ap, err := apiproxy.NewAPIServerProxy(logger.Named("apiserver-proxy"), restConfig, ts, mode, false)
-	if err != nil {
-		return fmt.Errorf("error creating api server proxy: %w", err)
-	}
-
-	group.Go(func() error {
-		if err := ap.Run(serveCtx); err != nil {
-			return fmt.Errorf("error running API server proxy: %w", err)
-		}
-
-		return nil
-	})
 
 	for {
 		select {
@@ -325,6 +391,7 @@ func run(logger *zap.SugaredLogger) error {
 		case cfg = <-cfgChan:
 			// Handle config reload.
 			// TODO(tomhjp): Make auth mode reloadable.
+			// TODO(ChaosInTheCRD): Make UDP and TCP forwarders reloadable.
 			var prefs ipn.MaskedPrefs
 			cfgLogger := logger
 			currentPrefs, err := lc.GetPrefs(ctx)
@@ -347,12 +414,16 @@ func run(logger *zap.SugaredLogger) error {
 				prefs.Prefs.RouteAll = v
 			}
 			if !prefs.IsEmpty() {
+				logger.Infof("Advertising Service: %v", cfg.Parsed.AdvertiseServices)
 				if _, err := lc.EditPrefs(ctx, &prefs); err != nil {
 					return fmt.Errorf("error editing prefs: %w", err)
 				}
 			}
-			if err := setServeConfig(ctx, lc, cm, apiServerProxyService(cfg)); err != nil {
-				return fmt.Errorf("error setting serve config: %w", err)
+
+			if cfg.Parsed.APIServerProxy != nil {
+				if err := setServeConfig(ctx, lc, cm, apiServerProxyService(cfg)); err != nil {
+					return fmt.Errorf("error setting serve config: %w", err)
+				}
 			}
 
 			cfgLogger.Infof("Config reloaded")

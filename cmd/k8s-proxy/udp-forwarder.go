@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
 	"sync"
@@ -121,13 +122,31 @@ func (f *udpForwarder) run(ctx context.Context) error {
 	}
 }
 
-func SetTCPForwardingForService(ctx context.Context, cfg *conf.Config, serveConfig *ipn.ServeConfig, lc *local.Client, magicDNSSuffix string) error {
+func setTCPForwardingForService(ctx context.Context, cfg *conf.Config, serveConfig *ipn.ServeConfig, lc *local.Client, logger *zap.SugaredLogger) error {
+	logger.Infof("setTCPForwardingForService: entered with %d L4 proxies", len(cfg.Parsed.L4Proxies))
+
+	status, err := lc.StatusWithoutPeers(ctx)
+	if err != nil {
+		return fmt.Errorf("error getting local client status: %w", err)
+	}
+
 	for _, rule := range cfg.Parsed.L4Proxies {
+		svcName := tailcfg.ServiceName(rule.ServiceName)
+
+		// NOTE: This isn't where we wanna set the serve config for udp, but fine here for now
 		if rule.Proto != "tcp" {
+			logger.Infof("Adding UDP service to ServeConfig: %s (proto=%s)", rule.ServiceName, rule.Proto)
+			if serveConfig.Services == nil {
+				serveConfig.Services = make(map[tailcfg.ServiceName]*ipn.ServiceConfig)
+			}
+			if serveConfig.Services[svcName] == nil {
+				serveConfig.Services[svcName] = &ipn.ServiceConfig{Tun: true}
+			}
 			continue
 		}
 
-		svcName := tailcfg.ServiceName(rule.ServiceName)
+		logger.Infof("Setting TCP forwarding for service=%s, port=%d, backend=%s",
+			svcName, rule.ListenPort, rule.Backend)
 
 		serveConfig.SetTCPForwardingForService(
 			rule.ListenPort,
@@ -135,10 +154,16 @@ func SetTCPForwardingForService(ctx context.Context, cfg *conf.Config, serveConf
 			false, // terminateTLS
 			svcName,
 			0, // proxyProtocol
-			magicDNSSuffix,
+			status.CurrentTailnet.MagicDNSSuffix,
 		)
 
 	}
 
-	return lc.SetServeConfig(ctx, serveConfig)
+	err = lc.SetServeConfig(ctx, serveConfig)
+	if err != nil {
+		logger.Errorf("Failed to set ServeConfig: %v", err)
+		return err
+	}
+	logger.Infof("Successfully applied ServeConfig")
+	return nil
 }
