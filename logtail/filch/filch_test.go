@@ -381,3 +381,26 @@ func testMaxFileSize(t *testing.T, replaceStderr bool) {
 		t.Errorf("readBytes = %v, want %v", f.readBytes.Value(), readBytes)
 	}
 }
+
+// TestConcurrentSameFile tests that concurrent Filch operations on the same
+// set of log files does not result in a panic.
+// The exact behavior is undefined, but we should at least avoid a panic.
+func TestConcurrentSameFile(t *testing.T) {
+	filePrefix := filepath.Join(t.TempDir(), "testlog")
+	f1 := must.Get(New(filePrefix, Options{MaxFileSize: 1000}))
+	f2 := must.Get(New(filePrefix, Options{MaxFileSize: 1000}))
+	var group sync.WaitGroup
+	for _, f := range []*Filch{f1, f2} {
+		group.Go(func() {
+			for range 1000 {
+				for range rand.IntN(10) {
+					f.Write([]byte("hello, world"))
+				}
+				for range rand.IntN(10) {
+					f.TryReadLine()
+				}
+			}
+		})
+	}
+	group.Wait()
+}

@@ -316,7 +316,7 @@ func waitIdleStderrForTest() {
 //     No data should be lost under this condition.
 //
 //   - The writer exceeded a limit for f.newer.
-//     Data may be lost under this cxondition.
+//     Data may be lost under this condition.
 func (f *Filch) rotateLocked() error {
 	f.rotateCalls.Add(1)
 
@@ -329,7 +329,6 @@ func (f *Filch) rotateLocked() error {
 			rdPos := pos - int64(len(f.unreadReadBuffer())) // adjust for data already read into the read buffer
 			f.droppedBytes.Add(max(0, fi.Size()-rdPos))
 		}
-		f.resetReadBuffer()
 
 		// Truncate the older file and write relative to the start.
 		if err := f.older.Truncate(0); err != nil {
@@ -339,6 +338,7 @@ func (f *Filch) rotateLocked() error {
 			return err
 		}
 	}
+	f.resetReadBuffer()
 
 	// Swap newer and older.
 	f.newer, f.older = f.older, f.newer
