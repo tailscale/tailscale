@@ -6,6 +6,7 @@ env:
   # toplevel directories "src" (for the checked out source code), and "gomodcache"
   # and other caches as siblings to follow.
   GOMODCACHE: ${{ github.workspace }}/gomodcache
+  CMD_GO_USE_GIT_HASH: "true"
 
 on:
   push:
