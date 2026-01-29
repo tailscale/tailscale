@@ -137,6 +137,7 @@ import (
 	kubeutils "tailscale.com/k8s-operator"
 	healthz "tailscale.com/kube/health"
 	"tailscale.com/kube/kubetypes"
+	klc "tailscale.com/kube/localclient"
 	"tailscale.com/kube/metrics"
 	"tailscale.com/kube/services"
 	"tailscale.com/tailcfg"
@@ -153,6 +154,10 @@ func newNetfilterRunner(logf logger.Logf) (linuxfw.NetfilterRunner, error) {
 		return linuxfw.NewFakeIPTablesRunner(), nil
 	}
 	return linuxfw.New(logf, "")
+}
+
+func getAutoAdvertiseBool() bool {
+	return defaultBool("TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT", true)
 }
 
 func main() {
@@ -229,8 +234,11 @@ func run() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
 
-		if err := services.EnsureServicesNotAdvertised(ctx, client, log.Printf); err != nil {
-			log.Printf("Error ensuring services are not advertised: %v", err)
+		// we always want to unadvertise, we know that the container is shutting down
+		if defaultBool("TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT", false) {
+			if err := services.EnsureServicesNotAdvertised(ctx, client, log.Printf); err != nil {
+				log.Printf("Error ensuring services are not advertised: %v", err)
+			}
 		}
 
 		if hasKubeStateStore(cfg) {
@@ -652,11 +660,22 @@ runLoop:
 					healthCheck.Update(len(addrs) != 0)
 				}
 
-				if cfg.ServeConfigPath != "" {
-					triggerWatchServeConfigChanges.Do(func() {
-						go watchServeConfigChanges(ctx, certDomainChanged, certDomain, client, kc, cfg)
-					})
+				var prevServeConfig *ipn.ServeConfig
+				if getAutoAdvertiseBool() {
+					prevServeConfig, err := client.GetServeConfig(ctx)
+					if err != nil {
+						return fmt.Errorf("serve proxy: failed to get serve config: %w", err)
+					}
+
+					err = refreshAdvertiseServices(ctx, prevServeConfig, klc.New(client))
+					if err != nil {
+						return fmt.Errorf("serve proxy: failed to refresh advertise services: %w", err)
+					}
 				}
+
+				triggerWatchServeConfigChanges.Do(func() {
+					go watchServeConfigChanges(ctx, certDomainChanged, certDomain, client, kc, cfg, prevServeConfig)
+				})
 
 				if egressSvcsNotify != nil {
 					egressSvcsNotify <- n
