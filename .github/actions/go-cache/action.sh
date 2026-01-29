@@ -49,6 +49,7 @@ fi
 
 echo "Fetched cigocacher token successfully"
 echo "::add-mask::${CIGOCACHER_TOKEN}"
+echo "CIGOCACHER_TOKEN=${CIGOCACHER_TOKEN}" >> "${GITHUB_ENV}"
 
-echo "GOCACHEPROG=${BIN_PATH} --cache-dir ${CACHE_DIR} --cigocached-url ${URL} --cigocached-host ${HOST} --token ${CIGOCACHER_TOKEN}" >> "${GITHUB_ENV}"
+echo "GOCACHEPROG=${BIN_PATH} --cache-dir ${CACHE_DIR} --cigocached-url ${URL} --cigocached-host ${HOST}" >> "${GITHUB_ENV}"
 echo "success=true" >> "${GITHUB_OUTPUT}"
