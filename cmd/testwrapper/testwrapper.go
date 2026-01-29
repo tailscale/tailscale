@@ -130,7 +130,10 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 			resultMap[pkg] = pkgTests
 		}
 		if goOutput.Test == "" {
-			if strings.HasSuffix(goOutput.Output, "\t(cached)\n") && goOutput.Package != "" {
+			// Detect output lines like:
+			// ok  \ttailscale.com/cmd/testwrapper\t(cached)
+			// ok  \ttailscale.com/cmd/testwrapper\t(cached)\tcoverage: 17.0% of statements
+			if goOutput.Package != "" && strings.Contains(goOutput.Output, fmt.Sprintf("%s\t(cached)", goOutput.Package)) {
 				pkgCached[goOutput.Package] = true
 			}
 			switch goOutput.Action {
