@@ -2555,6 +2555,10 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src epAddr, di *discoInfo, derpN
 
 	// This is a naked [disco.Ping] without a VNI.
 
+	if debugNeverDirectUDP() && !isDerp {
+		return
+	}
+
 	// If we can figure out with certainty which node key this disco
 	// message is for, eagerly update our [epAddr]<>node and disco<>node
 	// mappings to make p2p path discovery faster in simple
