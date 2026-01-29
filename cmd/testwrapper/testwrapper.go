@@ -130,6 +130,9 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 			resultMap[pkg] = pkgTests
 		}
 		if goOutput.Test == "" {
+			fmt.Println("=========== DEBUG START ===========")
+			fmt.Printf("goOutput: %s\n", goOutput.Output)
+			fmt.Println("=========== DEBUG END ===========")
 			if strings.HasSuffix(goOutput.Output, "\t(cached)\n") && goOutput.Package != "" {
 				pkgCached[goOutput.Package] = true
 			}
