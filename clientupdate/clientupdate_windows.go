@@ -114,7 +114,7 @@ you can run the command prompt as Administrator one of these ways:
 * press Windows+x, then press a
 * press Windows+r, type in "cmd", then press Ctrl+Shift+Enter`)
 	}
-	ver, err := requestedTailscaleVersion(up.Version, up.Track)
+	ver, isRC, err := requestedTailscaleVersion(up.Version, up.Track, up.acceptReleaseCandidates)
 	if err != nil {
 		return err
 	}
@@ -124,6 +124,13 @@ you can run the command prompt as Administrator one of these ways:
 	}
 	if !up.confirm(ver) {
 		return nil
+	}
+
+	track := up.Track
+
+	// If the update was found in the RC track, internally update to use the RC track.
+	if isRC {
+		track = ReleaseCandidateTrack
 	}
 
 	tsDir := filepath.Join(os.Getenv("ProgramData"), "Tailscale")
@@ -145,7 +152,7 @@ you can run the command prompt as Administrator one of these ways:
 		qualifiers = append(qualifiers, "winui")
 	}
 
-	pkgsPath := fmt.Sprintf("%s/tailscale-setup-%s.msi", up.Track, strings.Join(qualifiers, "-"))
+	pkgsPath := fmt.Sprintf("%s/tailscale-setup-%s.msi", track, strings.Join(qualifiers, "-"))
 	msiTarget := filepath.Join(msiDir, path.Base(pkgsPath))
 	if err := up.downloadURLToFile(pkgsPath, msiTarget); err != nil {
 		return err

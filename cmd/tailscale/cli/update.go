@@ -40,7 +40,7 @@ var updateCmd = &ffcli.Command{
 			distro.Get() != distro.Synology &&
 			runtime.GOOS != "freebsd" &&
 			runtime.GOOS != "darwin" {
-			fs.StringVar(&updateArgs.track, "track", "", `which track to check for updates: "stable" or "unstable" (dev); empty means same as current`)
+			fs.StringVar(&updateArgs.track, "track", "", `which track to check for updates: "stable", "release-candidate", or "unstable" (dev); empty means same as current`)
 			fs.StringVar(&updateArgs.version, "version", "", `explicit version to update/downgrade to`)
 		}
 		return fs
@@ -57,9 +57,6 @@ var updateArgs struct {
 func runUpdate(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return flag.ErrHelp
-	}
-	if updateArgs.version != "" && updateArgs.track != "" {
-		return errors.New("cannot specify both --version and --track")
 	}
 	err := clientupdate.Update(clientupdate.Arguments{
 		Version: updateArgs.version,

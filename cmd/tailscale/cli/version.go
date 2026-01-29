@@ -24,15 +24,17 @@ var versionCmd = &ffcli.Command{
 		fs.BoolVar(&versionArgs.daemon, "daemon", false, "also print local node's daemon version")
 		fs.BoolVar(&versionArgs.json, "json", false, "output in JSON format")
 		fs.BoolVar(&versionArgs.upstream, "upstream", false, "fetch and print the latest upstream release version from pkgs.tailscale.com")
+		fs.BoolVar(&versionArgs.acceptReleaseCandidates, "accept-release-candidates", false, "when used with -upstream, release candidates will be considered as valid latest versions")
 		return fs
 	})(),
 	Exec: runVersion,
 }
 
 var versionArgs struct {
-	daemon   bool // also check local node's daemon version
-	json     bool
-	upstream bool
+	daemon                  bool // also check local node's daemon version
+	json                    bool
+	upstream                bool
+	acceptReleaseCandidates bool
 }
 
 func runVersion(ctx context.Context, args []string) error {
@@ -51,7 +53,7 @@ func runVersion(ctx context.Context, args []string) error {
 
 	var upstreamVer string
 	if versionArgs.upstream {
-		upstreamVer, err = clientupdate.LatestTailscaleVersion(clientupdate.CurrentTrack)
+		upstreamVer, _, err = clientupdate.LatestTailscaleVersion(clientupdate.CurrentTrack, versionArgs.acceptReleaseCandidates)
 		if err != nil {
 			return err
 		}
