@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -294,6 +295,10 @@ change in the future.
 		if w.UsageFunc == nil {
 			w.UsageFunc = usageFunc
 		}
+		if w.FlagSet != nil {
+			// If flags cannot be parsed, redact any keys in the error output .
+			w.FlagSet.SetOutput(sanitizeOutput(w.FlagSet.Output()))
+		}
 		return true
 	})
 
@@ -565,4 +570,21 @@ func fixTailscaledConnectError(origErr error) error {
 		return f(origErr)
 	}
 	return origErr
+}
+
+func sanitizeOutput(w io.Writer) io.Writer {
+	return sanitizeWriter{w}
+}
+
+type sanitizeWriter struct {
+	w io.Writer
+}
+
+var reTskey = regexp.MustCompile(`tskey-\w+`)
+
+func (w sanitizeWriter) Write(buf []byte) (int, error) {
+	sanitized := reTskey.ReplaceAll(buf, []byte("tskey-REDACTED"))
+	diff := len(buf) - len(sanitized)
+	n, err := w.w.Write(sanitized)
+	return n - diff, err
 }
