@@ -11,11 +11,11 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"net/http"
 	"os"
@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 
+	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/hostinfo"
 	"tailscale.com/types/lazy"
@@ -288,6 +289,10 @@ func Update(args Arguments) error {
 }
 
 func (up *Updater) confirm(ver string) bool {
+	if envknob.Bool("TS_UPDATE_SKIP_VERSION_CHECK") {
+		up.Logf("current version: %v, latest version %v; forcing an update due to TS_UPDATE_SKIP_VERSION_CHECK", up.currentVersion, ver)
+		return true
+	}
 	// Only check version when we're not switching tracks.
 	if up.Track == "" || up.Track == CurrentTrack {
 		switch c := cmpver.Compare(up.currentVersion, ver); {
@@ -865,12 +870,17 @@ func (up *Updater) updateLinuxBinary() error {
 	if err := os.Remove(dlPath); err != nil {
 		up.Logf("failed to clean up %q: %v", dlPath, err)
 	}
-	if err := restartSystemdUnit(context.Background()); err != nil {
+
+	err = restartSystemdUnit(up.Logf)
+	if errors.Is(err, errors.ErrUnsupported) {
+		err = restartInitD()
 		if errors.Is(err, errors.ErrUnsupported) {
-			up.Logf("Tailscale binaries updated successfully.\nPlease restart tailscaled to finish the update.")
-		} else {
-			up.Logf("Tailscale binaries updated successfully, but failed to restart tailscaled: %s.\nPlease restart tailscaled to finish the update.", err)
+			err = errors.New("tailscaled is not running under systemd or init.d")
 		}
+	}
+	if err != nil {
+		up.Logf("Tailscale binaries updated successfully, but failed to restart tailscaled: %s.\nPlease restart tailscaled to finish the update.", err)
+
 	} else {
 		up.Logf("Success")
 	}
@@ -878,18 +888,52 @@ func (up *Updater) updateLinuxBinary() error {
 	return nil
 }
 
-func restartSystemdUnit(ctx context.Context) error {
+func restartSystemdUnit(logf logger.Logf) error {
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		// Likely not a systemd-managed distro.
 		return errors.ErrUnsupported
 	}
 	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
-		return fmt.Errorf("systemctl daemon-reload failed: %w\noutput: %s", err, out)
+		logf("systemctl daemon-reload failed: %w\noutput: %s", err, out)
 	}
 	if out, err := exec.Command("systemctl", "restart", "tailscaled.service").CombinedOutput(); err != nil {
 		return fmt.Errorf("systemctl restart failed: %w\noutput: %s", err, out)
 	}
 	return nil
+}
+
+// restartInitD attempts best-effort restart of tailscale on init.d systems
+// (for example, GL.iNet KVM devices running busybox). It returns
+// errors.ErrUnsupported if the expected service script is not found.
+//
+// There's probably a million variations of init.d configs out there, and this
+// function does not intend to support all of them.
+func restartInitD() error {
+	const initDir = "/etc/init.d/"
+	files, err := os.ReadDir(initDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return errors.ErrUnsupported
+		}
+		return err
+	}
+	for _, f := range files {
+		// Skip anything other than regular files.
+		if !f.Type().IsRegular() {
+			continue
+		}
+		// The script will be called something like /etc/init.d/tailscale or
+		// /etc/init.d/S99tailscale.
+		if n := f.Name(); strings.HasSuffix(n, "tailscale") {
+			path := filepath.Join(initDir, n)
+			if out, err := exec.Command(path, "restart").CombinedOutput(); err != nil {
+				return fmt.Errorf("%q failed: %w\noutput: %s", path+" restart", err, out)
+			}
+			return nil
+		}
+	}
+	// Init script for tailscale not found.
+	return errors.ErrUnsupported
 }
 
 func (up *Updater) downloadLinuxTarball(ver string) (string, error) {
