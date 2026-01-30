@@ -89,6 +89,7 @@ func newTestFlagSet() *flag.FlagSet {
 	// TODO(maisem): figure out what other flags we need to register explicitly.
 	fs.String("exec", "", "Command to run tests with")
 	fs.Bool("race", false, "build with race detector")
+	fs.String("vet", "", "vet checks to run, or 'off' or 'all'")
 	return fs
 }
 
