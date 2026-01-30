@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -88,6 +89,7 @@ type settings struct {
 }
 
 func configFromEnv() (*settings, error) {
+	root := defaultEnv("TS_TEST_ONLY_ROOT", "/")
 	cfg := &settings{
 		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
 		ClientID:                              defaultEnv("TS_CLIENT_ID", ""),
@@ -103,7 +105,7 @@ func configFromEnv() (*settings, error) {
 		TailnetTargetFQDN:                     defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
 		DaemonExtraArgs:                       defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
 		ExtraArgs:                             defaultEnv("TS_EXTRA_ARGS", ""),
-		InKubernetes:                          os.Getenv("KUBERNETES_SERVICE_HOST") != "",
+		InKubernetes:                          isRunningOnKubernetes(root),
 		UserspaceMode:                         defaultBool("TS_USERSPACE", true),
 		StateDir:                              defaultEnv("TS_STATE_DIR", ""),
 		AcceptDNS:                             defaultEnvBoolPointer("TS_ACCEPT_DNS"),
@@ -112,7 +114,7 @@ func configFromEnv() (*settings, error) {
 		HTTPProxyAddr:                         defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
 		Socket:                                defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
 		AuthOnce:                              defaultBool("TS_AUTH_ONCE", false),
-		Root:                                  defaultEnv("TS_TEST_ONLY_ROOT", "/"),
+		Root:                                  root,
 		TailscaledConfigFilePath:              tailscaledConfigFilePath(),
 		AllowProxyingClusterTrafficViaIngress: defaultBool("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS", false),
 		PodIP:                                 defaultEnv("POD_IP", ""),
@@ -486,4 +488,20 @@ func defaultBool(name string, defVal bool) bool {
 		return defVal
 	}
 	return ret
+}
+
+func isRunningOnKubernetes(root string) bool {
+	if os.Getenv("KUBERNETES_SERVICE_HOST") == "" {
+		return false
+	}
+	// Azure Container Apps sets KUBERNETES_SERVICE_HOST but doesn't provide the
+	// service account token. We check for the service account token to differentiate
+	// between a real Kubernetes environment and Azure Container Apps.
+	// We check for "namespace" file as that's what kubeclient.New checks first.
+	// See https://github.com/tailscale/tailscale/issues/18558
+	saNamespacePath := filepath.Join(root, "var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if _, err := os.Stat(saNamespacePath); err != nil {
+		return false
+	}
+	return true
 }
