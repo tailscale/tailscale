@@ -91,6 +91,7 @@ const (
 type Path string
 
 const (
+	PathNone          Path = "" // no active connection path
 	PathDirectIPv4    Path = "direct_ipv4"
 	PathDirectIPv6    Path = "direct_ipv6"
 	PathDERP          Path = "derp"
@@ -99,7 +100,7 @@ const (
 )
 
 type pathLabel struct {
-	// Path indicates the path that the packet took:
+	// Path indicates the path classification used for packet/connection metrics:
 	// - direct_ipv4
 	// - direct_ipv6
 	// - derp
@@ -149,6 +150,14 @@ type metrics struct {
 	// outboundPacketsDroppedErrors is the total number of outbound packets
 	// dropped due to errors.
 	outboundPacketsDroppedErrors expvar.Int
+
+	// peersConnectedTotal is the number of active peer connections (recent
+	// send/recv within sessionActiveTimeout), labeled by current path.
+	peersConnectedDirectIPv4    expvar.Int
+	peersConnectedDirectIPv6    expvar.Int
+	peersConnectedDERP          expvar.Int
+	peersConnectedPeerRelayIPv4 expvar.Int
+	peersConnectedPeerRelayIPv6 expvar.Int
 }
 
 // A Conn routes UDP packets and actively manages a list of its endpoints.
@@ -804,6 +813,12 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 		"counter",
 		"Counts the number of bytes sent to other peers",
 	)
+	peersConnectedTotal := usermetric.NewMultiLabelMapWithRegistry[pathLabel](
+		reg,
+		"tailscaled_peers_connected",
+		"gauge",
+		"Counts the number of active peers by connection path",
+	)
 	outboundPacketsDroppedErrors := reg.DroppedPacketsOutbound()
 
 	m := new(metrics)
@@ -860,6 +875,12 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 	outboundBytesTotal.Set(pathPeerRelayV6, &m.outboundBytesPeerRelayIPv6Total)
 
 	outboundPacketsDroppedErrors.Set(usermetric.DropLabels{Reason: usermetric.ReasonError}, &m.outboundPacketsDroppedErrors)
+
+	peersConnectedTotal.Set(pathDirectV4, &m.peersConnectedDirectIPv4)
+	peersConnectedTotal.Set(pathDirectV6, &m.peersConnectedDirectIPv6)
+	peersConnectedTotal.Set(pathDERP, &m.peersConnectedDERP)
+	peersConnectedTotal.Set(pathPeerRelayV4, &m.peersConnectedPeerRelayIPv4)
+	peersConnectedTotal.Set(pathPeerRelayV6, &m.peersConnectedPeerRelayIPv6)
 
 	return m
 }
