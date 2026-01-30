@@ -32,6 +32,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus/eventbustest"
+	"tailscale.com/util/set"
 )
 
 var (
@@ -422,6 +423,56 @@ func TestResolveLocal(t *testing.T) {
 				t.Errorf("code = %v; want %v", code, tt.code)
 			}
 			// Only check ip for non-err
+			if ip != tt.ip {
+				t.Errorf("ip = %v; want %v", ip, tt.ip)
+			}
+		})
+	}
+}
+
+func TestResolveLocalSubdomain(t *testing.T) {
+	r := newResolver(t)
+	defer r.Close()
+
+	// Configure with SubdomainHosts set for test1.ipn.dev
+	cfg := Config{
+		Hosts: map[dnsname.FQDN][]netip.Addr{
+			"test1.ipn.dev.": {testipv4},
+			"test2.ipn.dev.": {testipv6},
+		},
+		LocalDomains:   []dnsname.FQDN{"ipn.dev."},
+		SubdomainHosts: set.Of[dnsname.FQDN]("test1.ipn.dev."),
+	}
+	r.SetConfig(cfg)
+
+	tests := []struct {
+		name  string
+		qname dnsname.FQDN
+		qtype dns.Type
+		ip    netip.Addr
+		code  dns.RCode
+	}{
+		// Exact matches still work
+		{"exact-ipv4", "test1.ipn.dev.", dns.TypeA, testipv4, dns.RCodeSuccess},
+		{"exact-ipv6", "test2.ipn.dev.", dns.TypeAAAA, testipv6, dns.RCodeSuccess},
+
+		// Subdomain of test1 resolves (test1 has SubdomainHosts set)
+		{"subdomain-ipv4", "foo.test1.ipn.dev.", dns.TypeA, testipv4, dns.RCodeSuccess},
+		{"subdomain-deep", "bar.foo.test1.ipn.dev.", dns.TypeA, testipv4, dns.RCodeSuccess}, // Multi-level subdomain
+
+		// Subdomain of test2 does NOT resolve (test2 lacks SubdomainHosts)
+		{"subdomain-no-cap", "foo.test2.ipn.dev.", dns.TypeAAAA, netip.Addr{}, dns.RCodeNameError},
+
+		// Non-existent parent still returns NXDOMAIN
+		{"subdomain-no-parent", "foo.test3.ipn.dev.", dns.TypeA, netip.Addr{}, dns.RCodeNameError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ip, code := r.resolveLocal(tt.qname, tt.qtype)
+			if code != tt.code {
+				t.Errorf("code = %v; want %v", code, tt.code)
+			}
 			if ip != tt.ip {
 				t.Errorf("ip = %v; want %v", ip, tt.ip)
 			}

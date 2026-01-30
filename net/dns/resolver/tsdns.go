@@ -39,6 +39,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/set"
 )
 
 const dnsSymbolicFQDN = "magicdns.localhost-tailscale-daemon."
@@ -79,6 +80,12 @@ type Config struct {
 	// LocalDomains is a list of DNS name suffixes that should not be
 	// routed to upstream resolvers.
 	LocalDomains []dnsname.FQDN
+	// SubdomainHosts is a set of FQDNs from Hosts that should also
+	// resolve subdomain queries to the same IPs. If a query like
+	// "sub.node.tailnet.ts.net" doesn't match Hosts directly, and
+	// "node.tailnet.ts.net" is in SubdomainHosts, the query resolves
+	// to the IPs for "node.tailnet.ts.net".
+	SubdomainHosts set.Set[dnsname.FQDN]
 }
 
 // WriteToBufioWriter write a debug version of c for logs to w, omitting
@@ -214,10 +221,11 @@ type Resolver struct {
 	closed chan struct{}
 
 	// mu guards the following fields from being updated while used.
-	mu           syncs.Mutex
-	localDomains []dnsname.FQDN
-	hostToIP     map[dnsname.FQDN][]netip.Addr
-	ipToHost     map[netip.Addr]dnsname.FQDN
+	mu             syncs.Mutex
+	localDomains   []dnsname.FQDN
+	hostToIP       map[dnsname.FQDN][]netip.Addr
+	ipToHost       map[netip.Addr]dnsname.FQDN
+	subdomainHosts set.Set[dnsname.FQDN]
 }
 
 type ForwardLinkSelector interface {
@@ -278,6 +286,7 @@ func (r *Resolver) SetConfig(cfg Config) error {
 	r.localDomains = cfg.LocalDomains
 	r.hostToIP = cfg.Hosts
 	r.ipToHost = reverse
+	r.subdomainHosts = cfg.SubdomainHosts
 	return nil
 }
 
@@ -642,9 +651,18 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 	r.mu.Lock()
 	hosts := r.hostToIP
 	localDomains := r.localDomains
+	subdomainHosts := r.subdomainHosts
 	r.mu.Unlock()
 
 	addrs, found := hosts[domain]
+	if !found {
+		for parent := domain.Parent(); parent != ""; parent = parent.Parent() {
+			if subdomainHosts.Contains(parent) {
+				addrs, found = hosts[parent]
+				break
+			}
+		}
+	}
 	if !found {
 		for _, suffix := range localDomains {
 			if suffix.Contains(domain) {

@@ -6,10 +6,12 @@
 package dns
 
 import (
+	"maps"
 	"net/netip"
 
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/set"
 )
 
 // Clone makes a deep copy of Config.
@@ -43,6 +45,7 @@ func (src *Config) Clone() *Config {
 			dst.Hosts[k] = append([]netip.Addr{}, src.Hosts[k]...)
 		}
 	}
+	dst.SubdomainHosts = maps.Clone(src.SubdomainHosts)
 	return dst
 }
 
@@ -52,6 +55,7 @@ var _ConfigCloneNeedsRegeneration = Config(struct {
 	Routes           map[dnsname.FQDN][]*dnstype.Resolver
 	SearchDomains    []dnsname.FQDN
 	Hosts            map[dnsname.FQDN][]netip.Addr
+	SubdomainHosts   set.Set[dnsname.FQDN]
 	OnlyIPv6         bool
 }{})
 

@@ -2707,6 +2707,13 @@ const (
 	// server to answer AAAA queries about its peers. See tailscale/tailscale#1152.
 	NodeAttrMagicDNSPeerAAAA NodeCapability = "magicdns-aaaa"
 
+	// NodeAttrDNSSubdomainResolve, when set on Self or a Peer node, indicates
+	// that the subdomains of that node's MagicDNS name should resolve to the
+	// same IP addresses as the node itself.
+	// For example, if node "myserver.tailnet.ts.net" has this capability,
+	// then "anything.myserver.tailnet.ts.net" will resolve to myserver's IPs.
+	NodeAttrDNSSubdomainResolve NodeCapability = "dns-subdomain-resolve"
+
 	// NodeAttrTrafficSteering configures the node to use the traffic
 	// steering subsystem for via routes. See tailscale/corp#29966.
 	NodeAttrTrafficSteering NodeCapability = "traffic-steering"
