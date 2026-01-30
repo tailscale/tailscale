@@ -756,7 +756,7 @@ func TestHandleLocalPackets(t *testing.T) {
 		netip.MustParseAddr("100.99.55.111"):        "svc:test-service",
 		netip.MustParseAddr("fd7a:115c:a1e0::abcd"): "svc:test-service",
 	}
-	impl.lb.SetIPServiceMappingsForTesting(IPServiceMap)
+	impl.lb.SetIPServiceMappingsForTest(IPServiceMap)
 
 	t.Run("ShouldHandleServiceIP", func(t *testing.T) {
 		pkt := &packet.Parsed{

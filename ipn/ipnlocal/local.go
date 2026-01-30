@@ -923,9 +923,10 @@ func (b *LocalBackend) IPServiceMappings() netmap.IPServiceMappings {
 	return b.ipVIPServiceMap
 }
 
-func (b *LocalBackend) SetIPServiceMappingsForTesting(m netmap.IPServiceMappings) {
+func (b *LocalBackend) SetIPServiceMappingsForTest(m netmap.IPServiceMappings) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	testenv.AssertInTest()
 	b.ipVIPServiceMap = m
 	if ns, ok := b.sys.Netstack.GetOK(); ok {
 		ns.UpdateIPServiceMappings(m)
@@ -5553,22 +5554,23 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 
 	// Get the VIPs for VIP services this node hosts. We will add all locally served VIPs to routes then
 	// we terminate these connection locally in netstack instead of routing to peer.
-	VIPServiceIPs := nm.GetIPVIPServiceMap()
+	vipServiceIPs := nm.GetIPVIPServiceMap()
+	v4, v6 := false, false
 
 	if slices.ContainsFunc(rs.LocalAddrs, tsaddr.PrefixIs4) {
 		rs.Routes = append(rs.Routes, netip.PrefixFrom(tsaddr.TailscaleServiceIP(), 32))
-		for vip := range VIPServiceIPs {
-			if vip.Is4() {
-				rs.Routes = append(rs.Routes, netip.PrefixFrom(vip, 32))
-			}
-		}
+		v4 = true
 	}
 	if slices.ContainsFunc(rs.LocalAddrs, tsaddr.PrefixIs6) {
 		rs.Routes = append(rs.Routes, netip.PrefixFrom(tsaddr.TailscaleServiceIPv6(), 128))
-		for vip := range VIPServiceIPs {
-			if vip.Is6() {
-				rs.Routes = append(rs.Routes, netip.PrefixFrom(vip, 128))
-			}
+		v6 = true
+	}
+	for vip := range vipServiceIPs {
+		if vip.Is4() && v4 {
+			rs.Routes = append(rs.Routes, netip.PrefixFrom(vip, vip.BitLen()))
+		}
+		if vip.Is6() && v6 {
+			rs.Routes = append(rs.Routes, netip.PrefixFrom(vip, vip.BitLen()))
 		}
 	}
 
@@ -6247,10 +6249,10 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
 	if buildfeatures.HasServe {
-		ipsvMap := nm.GetIPVIPServiceMap()
-		b.ipVIPServiceMap = ipsvMap
+		m := nm.GetIPVIPServiceMap()
+		b.ipVIPServiceMap = m
 		if ns, ok := b.sys.Netstack.GetOK(); ok {
-			ns.UpdateIPServiceMappings(ipsvMap)
+			ns.UpdateIPServiceMappings(m)
 			// In case the prefs reloaded from Profile Manager but didn't change,
 			// we still need to load the active VIP services into netstack.
 			ns.UpdateActiveVIPServices(b.pm.CurrentPrefs().AdvertiseServices().AsSlice())
