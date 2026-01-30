@@ -4515,7 +4515,7 @@ func (b *LocalBackend) onEditPrefsLocked(_ ipnauth.Actor, mp *ipn.MaskedPrefs, o
 
 	if mp.AdvertiseServicesSet {
 		if ns, ok := b.sys.Netstack.GetOK(); ok {
-			ns.UpdateActiveVIPServices(newPrefs.AdvertiseServices().AsSlice())
+			ns.UpdateActiveVIPServices(newPrefs.AdvertiseServices())
 		}
 	}
 
@@ -5566,10 +5566,7 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 		v6 = true
 	}
 	for vip := range vipServiceIPs {
-		if vip.Is4() && v4 {
-			rs.Routes = append(rs.Routes, netip.PrefixFrom(vip, vip.BitLen()))
-		}
-		if vip.Is6() && v6 {
+		if (vip.Is4() && v4) || (vip.Is6() && v6) {
 			rs.Routes = append(rs.Routes, netip.PrefixFrom(vip, vip.BitLen()))
 		}
 	}
@@ -6255,7 +6252,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 			ns.UpdateIPServiceMappings(m)
 			// In case the prefs reloaded from Profile Manager but didn't change,
 			// we still need to load the active VIP services into netstack.
-			ns.UpdateActiveVIPServices(b.pm.CurrentPrefs().AdvertiseServices().AsSlice())
+			ns.UpdateActiveVIPServices(b.pm.CurrentPrefs().AdvertiseServices())
 		}
 
 	}

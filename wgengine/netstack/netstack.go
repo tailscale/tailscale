@@ -51,6 +51,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
+	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
 	"tailscale.com/version"
@@ -774,14 +775,13 @@ func (ns *Impl) UpdateIPServiceMappings(mappings netmap.IPServiceMappings) {
 }
 
 // UpdateActiveVIPServices updates the set of active VIP services names.
-func (ns *Impl) UpdateActiveVIPServices(activeServices []string) {
+func (ns *Impl) UpdateActiveVIPServices(activeServices views.Slice[string]) {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
-	activeServiceNames := make([]tailcfg.ServiceName, 0, len(activeServices))
-	for _, svc := range activeServices {
-		activeServiceNames = append(activeServiceNames, tailcfg.AsServiceName(svc))
+	activeServicesSet := make(set.Set[tailcfg.ServiceName], activeServices.Len())
+	for _, s := range activeServices.All() {
+		activeServicesSet.Add(tailcfg.AsServiceName(s))
 	}
-	activeServicesSet := set.SetOf(activeServiceNames)
 	ns.atomicActiveVIPServices.Store(activeServicesSet)
 }
 
@@ -803,8 +803,7 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper, gro *gro.
 
 	// Determine if we care about this local packet.
 	dst := p.Dst.Addr()
-	IPServiceMappings := ns.atomicIPVIPServiceMap.Load()
-	serviceName, isVIPServiceIP := IPServiceMappings[dst]
+	serviceName, isVIPServiceIP := ns.atomicIPVIPServiceMap.Load()[dst]
 	switch {
 	case dst == serviceIP || dst == serviceIPv6:
 		// We want to intercept some traffic to the "service IP" (e.g.
@@ -822,12 +821,11 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper, gro *gro.
 			}
 		}
 	case isVIPServiceIP:
-		// returns all active VIP services in a set, since the IPServiceMappings
+		// returns all active VIP services in a set, since the IPVIPServiceMap
 		// contains inactive service IPs when node hosts the service, we need to
 		// check the service is active or not before dropping the packet.
 		activeServices := ns.atomicActiveVIPServices.Load()
-		serviceActive := activeServices.Contains(serviceName)
-		if !serviceActive {
+		if !activeServices.Contains(serviceName) {
 			// Other host might have the service active, so we let the packet go through.
 			return filter.Accept, gro
 		}
