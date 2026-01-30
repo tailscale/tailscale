@@ -388,7 +388,9 @@ func testMaxFileSize(t *testing.T, replaceStderr bool) {
 func TestConcurrentSameFile(t *testing.T) {
 	filePrefix := filepath.Join(t.TempDir(), "testlog")
 	f1 := must.Get(New(filePrefix, Options{MaxFileSize: 1000}))
+	defer f1.Close()
 	f2 := must.Get(New(filePrefix, Options{MaxFileSize: 1000}))
+	defer f2.Close()
 	var group sync.WaitGroup
 	for _, f := range []*Filch{f1, f2} {
 		group.Go(func() {
