@@ -15,7 +15,6 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -67,8 +66,8 @@ type Manager struct {
 	knobs    *controlknobs.Knobs // or nil
 	goos     string              // if empty, gets set to runtime.GOOS
 
-	mu     sync.Mutex // guards following
-	config *Config    // Tracks the last viable DNS configuration set by Set.  nil on failures other than compilation failures or if set has never been called.
+	mu     syncs.Mutex // guards following
+	config *Config     // Tracks the last viable DNS configuration set by Set.  nil on failures other than compilation failures or if set has never been called.
 }
 
 // NewManager created a new manager from the given config.
@@ -97,6 +96,7 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, 
 		knobs:    knobs,
 		goos:     goos,
 	}
+	syncs.RegisterMutex(&m.mu, "dns.Manager.mu")
 
 	m.eventClient = bus.Client("dns.Manager")
 	eventbus.SubscribeFunc(m.eventClient, func(trample TrampleDNS) {

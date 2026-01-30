@@ -74,6 +74,7 @@ func newExtension(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, er
 		},
 		logf: logger.WithPrefix(logf, featureName+": "),
 	}
+	syncs.RegisterMutex(&e.mu, "relayserver.extension.mu")
 	e.ec = sb.Sys().Bus.Get().Client("relayserver.extension")
 	e.respPub = eventbus.Publish[magicsock.UDPRelayAllocResp](e.ec)
 	eventbus.SubscribeFunc(e.ec, e.onDERPMapView)

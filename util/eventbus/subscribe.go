@@ -62,6 +62,7 @@ func newSubscribeState(c *Client) *subscribeState {
 		snapshot: make(chan chan []DeliveredEvent),
 		outputs:  map[reflect.Type]subscriber{},
 	}
+	syncs.RegisterMutex(&ret.outputsMu, "eventbus.subscribeState.outputsMu")
 	ret.dispatcher = runWorker(ret.pump)
 	return ret
 }
@@ -194,18 +195,21 @@ type Subscriber[T any] struct {
 func newSubscriber[T any](r *subscribeState, logf logger.Logf) *Subscriber[T] {
 	slow := time.NewTimer(0)
 	slow.Stop() // reset in dispatch
-	return &Subscriber[T]{
+	s := &Subscriber[T]{
 		read:       make(chan T),
 		unregister: func() { r.deleteSubscriber(reflect.TypeFor[T]()) },
 		logf:       logf,
 		slow:       slow,
 	}
+	syncs.RegisterMutex(&s.stop.mu, "eventbus.Subscriber.stop.mu")
+	return s
 }
 
 func newMonitor[T any](attach func(fn func(T)) (cancel func())) *Subscriber[T] {
 	ret := &Subscriber[T]{
 		read: make(chan T, 100), // arbitrary, large
 	}
+	syncs.RegisterMutex(&ret.stop.mu, "eventbus.Subscriber.stop.mu")
 	ret.unregister = attach(ret.monitor)
 	return ret
 }
@@ -286,12 +290,14 @@ type SubscriberFunc[T any] struct {
 func newSubscriberFunc[T any](r *subscribeState, f func(T), logf logger.Logf) *SubscriberFunc[T] {
 	slow := time.NewTimer(0)
 	slow.Stop() // reset in dispatch
-	return &SubscriberFunc[T]{
+	s := &SubscriberFunc[T]{
 		read:       f,
 		unregister: func() { r.deleteSubscriber(reflect.TypeFor[T]()) },
 		logf:       logf,
 		slow:       slow,
 	}
+	syncs.RegisterMutex(&s.stop.mu, "eventbus.Subscriber.stop.mu")
+	return s
 }
 
 // Close closes the SubscriberFunc, indicating the caller no longer wishes to

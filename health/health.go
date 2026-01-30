@@ -35,6 +35,11 @@ var (
 	debugHandler map[string]http.Handler
 )
 
+var _ = func() bool {
+	syncs.RegisterMutex(&mu, "health.mu")
+	return true
+}()
+
 // ReceiveFunc is one of the three magicsock Receive funcs (IPv4, IPv6, or
 // DERP).
 type ReceiveFunc int
