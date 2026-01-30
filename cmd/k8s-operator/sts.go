@@ -66,7 +66,8 @@ const (
 	// MagicDNS name of tailnet node.
 	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
 
-	AnnotationProxyGroup = "tailscale.com/proxy-group"
+	AnnotationProxyGroup   = "tailscale.com/proxy-group"
+	AnnotationEgressPolicy = "tailscale.com/egress-policy"
 
 	// Annotations settable by users on ingresses.
 	AnnotationFunnel       = "tailscale.com/funnel"
