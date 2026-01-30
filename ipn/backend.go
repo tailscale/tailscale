@@ -85,6 +85,8 @@ const (
 	NotifyHealthActions NotifyWatchOpt = 1 << 9 // if set, include PrimaryActions in health.State. Otherwise append the action URL to the text
 
 	NotifyInitialSuggestedExitNode NotifyWatchOpt = 1 << 10 // if set, the first Notify message (sent immediately) will contain the current SuggestedExitNode if available
+
+	NotifyPeerOnlineStatusChanges NotifyWatchOpt = 1 << 11 // if set, send notifications when peer online status changes
 )
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
@@ -161,6 +163,11 @@ type Notify struct {
 	// be the best exit node for the current network conditions.
 	SuggestedExitNode *tailcfg.StableNodeID `json:",omitzero"`
 
+	// PeerOnlineStatusChanges, if non-nil, contains changes in peer online status.
+	// This is sent when a peer's online status changes (e.g., device goes offline
+	// or comes back online). The map is keyed by peer node public key.
+	PeerOnlineStatusChanges map[key.NodePublic]*ipnstate.PeerOnlineStatusChange `json:",omitzero"`
+
 	// type is mirrored in xcode/IPN/Core/LocalAPI/Model/LocalAPIModel.swift
 }
 
@@ -202,6 +209,10 @@ func (n Notify) String() string {
 	}
 	if n.SuggestedExitNode != nil {
 		fmt.Fprintf(&sb, "SuggestedExitNode=%v ", *n.SuggestedExitNode)
+	}
+	if len(n.PeerOnlineStatusChanges) > 0 {
+		sb.WriteString("PeerOnlineStatusChanges{...")
+		fmt.Fprintf(&sb, " count=%d}", len(n.PeerOnlineStatusChanges))
 	}
 
 	s := sb.String()
