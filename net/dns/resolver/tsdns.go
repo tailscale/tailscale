@@ -70,6 +70,9 @@ type packet struct {
 // Else forward the query to the most specific matching entry in Routes.
 // Else return SERVFAIL.
 type Config struct {
+	// True if [Prefs.CorpDNS] is true or --accept-dns=true was specified.
+	// This should only be used for error handling and health reporting.
+	AcceptDNS bool
 	// Routes is a map of DNS name suffix to the resolvers to use for
 	// queries within that suffix.
 	// Queries only match the most specific suffix.
@@ -279,7 +282,7 @@ func (r *Resolver) SetConfig(cfg Config) error {
 		}
 	}
 
-	r.forwarder.setRoutes(cfg.Routes)
+	r.forwarder.setRoutes(cfg.Routes, cfg.AcceptDNS)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
