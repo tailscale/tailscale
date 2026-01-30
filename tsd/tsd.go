@@ -32,6 +32,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/proxymap"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/usermetric"
@@ -111,6 +112,8 @@ type LocalBackend = any
 type NetstackImpl interface {
 	Start(LocalBackend) error
 	UpdateNetstackIPs(*netmap.NetworkMap)
+	UpdateIPServiceMappings(netmap.IPServiceMappings)
+	UpdateActiveVIPServices(views.Slice[string])
 }
 
 // Set is a convenience method to set a subsystem value.
