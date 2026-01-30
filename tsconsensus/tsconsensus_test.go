@@ -760,3 +760,96 @@ func TestFollowOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Unit tests (non-integration)
+
+func TestAddrFromServerAddress(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "valid ipv4 with port",
+			input:   "192.168.1.1:8080",
+			want:    "192.168.1.1",
+			wantErr: false,
+		},
+		{
+			name:    "valid ipv6 with port",
+			input:   "[fd7a:115c:a1e0::1]:8080",
+			want:    "fd7a:115c:a1e0::1",
+			wantErr: false,
+		},
+		{
+			name:    "invalid format - no port",
+			input:   "192.168.1.1",
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "invalid format - not an address",
+			input:   "not-an-address:8080",
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "empty string",
+			input:   "",
+			want:    "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := addrFromServerAddress(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("addrFromServerAddress() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && got.String() != tt.want {
+				t.Fatalf("addrFromServerAddress() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRaftAddr(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		port uint16
+		want string
+	}{
+		{
+			name: "ipv4 address",
+			host: "100.64.0.1",
+			port: 6270,
+			want: "100.64.0.1:6270",
+		},
+		{
+			name: "ipv6 address",
+			host: "fd7a:115c:a1e0::1",
+			port: 8080,
+			want: "[fd7a:115c:a1e0::1]:8080",
+		},
+		{
+			name: "default port",
+			host: "192.168.1.1",
+			port: DefaultConfig().RaftPort,
+			want: "192.168.1.1:6270",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{RaftPort: tt.port}
+			addr := netip.MustParseAddr(tt.host)
+			got := raftAddr(addr, cfg)
+			if got != tt.want {
+				t.Fatalf("raftAddr() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
