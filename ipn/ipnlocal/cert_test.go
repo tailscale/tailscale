@@ -225,6 +225,12 @@ func TestDebugACMEDirectoryURL(t *testing.T) {
 			if ac.DirectoryURL != tc {
 				t.Fatalf("acmeClient.DirectoryURL = %q, want %q", ac.DirectoryURL, tc)
 			}
+			if ac.HTTPClient == nil {
+				t.Fatal("acmeClient.HTTPClient is nil, want non-nil with timeout")
+			}
+			if ac.HTTPClient.Timeout != 60*time.Second {
+				t.Fatalf("acmeClient.HTTPClient.Timeout = %v, want %v", ac.HTTPClient.Timeout, 60*time.Second)
+			}
 		})
 	}
 }

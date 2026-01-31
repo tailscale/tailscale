@@ -760,10 +760,20 @@ func acmeClient(cs certStore) (*acme.Client, error) {
 	// Note: if we add support for additional ACME providers (other than
 	// LetsEncrypt), we should make sure that they support ARI extension (see
 	// shouldStartDomainRenewalARI).
+
+	// Create HTTP client with timeout for ACME operations.
+	// This ensures requests to LetsEncrypt (or other ACME CAs) fail quickly
+	// if the CA is unreachable, rather than hanging indefinitely.
+	// See https://github.com/tailscale/tailscale/issues/14677
+	httpClient := &http.Client{
+		Timeout: 60 * time.Second,
+	}
+
 	return &acme.Client{
 		Key:          key,
 		UserAgent:    "tailscaled/" + version.Long(),
 		DirectoryURL: envknob.String("TS_DEBUG_ACME_DIRECTORY_URL"),
+		HTTPClient:   httpClient,
 	}, nil
 }
 
