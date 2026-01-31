@@ -545,6 +545,12 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 		logf("acme: using Directory URL %q", ac.DirectoryURL)
 	}
 
+	// Determine the CA name for error messages
+	caName := "ACME CA"
+	if isDefaultDirectoryURL(ac.DirectoryURL) || ac.DirectoryURL == "" {
+		caName = "LetsEncrypt"
+	}
+
 	a, err := ac.GetReg(ctx, "" /* pre-RFC param */)
 	switch {
 	case err == nil:
@@ -557,12 +563,12 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 			a, err = ac.GetReg(ctx, "" /* pre-RFC param */)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("acme.Register: %w", err)
+			return nil, fmt.Errorf("registering ACME account with %s: %w (this may indicate network issues reaching the CA)", caName, err)
 		}
 		logf("registered ACME account.")
 		traceACME(a)
 	default:
-		return nil, fmt.Errorf("acme.GetReg: %w", err)
+		return nil, fmt.Errorf("fetching ACME account from %s: %w (this may indicate network issues reaching the CA)", caName, err)
 
 	}
 	if a.Status != acme.StatusValid {
@@ -590,14 +596,14 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 	}
 	order, err := ac.AuthorizeOrder(ctx, []acme.AuthzID{{Type: "dns", Value: domain}}, opts...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("creating certificate order with %s: %w (this may indicate network issues reaching the CA)", caName, err)
 	}
 	traceACME(order)
 
 	for _, aurl := range order.AuthzURLs {
 		az, err := ac.GetAuthorization(ctx, aurl)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("fetching authorization from %s: %w (this may indicate network issues reaching the CA)", caName, err)
 		}
 		traceACME(az)
 		for _, ch := range az.Challenges {
@@ -628,7 +634,7 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 
 				chal, err := ac.Accept(ctx, ch)
 				if err != nil {
-					return nil, fmt.Errorf("Accept: %v", err)
+					return nil, fmt.Errorf("accepting challenge from %s: %w (this may indicate network issues reaching the CA)", caName, err)
 				}
 				traceACME(chal)
 				break
@@ -640,14 +646,14 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 	order, err = ac.WaitOrder(ctx, orderURI)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, fmt.Errorf("waiting for %s to validate challenges: %w (the CA may be unreachable or slow to respond)", caName, ctx.Err())
 		}
 		if oe, ok := err.(*acme.OrderError); ok {
 			logf("acme: WaitOrder: OrderError status %q", oe.Status)
 		} else {
 			logf("acme: WaitOrder error: %v", err)
 		}
-		return nil, err
+		return nil, fmt.Errorf("waiting for %s to validate challenges: %w (this may indicate network issues reaching the CA)", caName, err)
 	}
 	traceACME(order)
 
@@ -669,7 +675,7 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 	traceACME(csr)
 	der, _, err := ac.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
 	if err != nil {
-		return nil, fmt.Errorf("CreateOrder: %v", err)
+		return nil, fmt.Errorf("requesting certificate from %s: %w (this may indicate network issues reaching the CA)", caName, err)
 	}
 	logf("got cert")
 
