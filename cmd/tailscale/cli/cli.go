@@ -278,6 +278,7 @@ change in the future.
 			configureHostCmd(),
 			systrayCmd,
 			appcRoutesCmd,
+			waitCmd,
 		),
 		FlagSet: rootfs,
 		Exec: func(ctx context.Context, args []string) error {
