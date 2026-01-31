@@ -54,7 +54,7 @@ func TestHandleConnectorTransitIPRequestStoresAddr(t *testing.T) {
 	if got != TransitIPResponseCode(0) {
 		t.Fatalf("TransitIP Code: %d, want 0", got)
 	}
-	gotAddr := c.transitIPTarget(nid, tip)
+	gotAddr := c.server.transitIPTarget(nid, tip)
 	if gotAddr != dip {
 		t.Fatalf("Connector stored destination for tip: %v, want %v", gotAddr, dip)
 	}
@@ -68,7 +68,7 @@ func TestHandleConnectorTransitIPRequestStoresAddr(t *testing.T) {
 	if got2 != TransitIPResponseCode(0) {
 		t.Fatalf("TransitIP Code: %d, want 0", got2)
 	}
-	gotAddr2 := c.transitIPTarget(nid, tip)
+	gotAddr2 := c.server.transitIPTarget(nid, tip)
 	if gotAddr2 != dip2 {
 		t.Fatalf("Connector stored destination for tip: %v, want %v", gotAddr, dip2)
 	}
@@ -104,15 +104,15 @@ func TestHandleConnectorTransitIPRequestMultipleTIP(t *testing.T) {
 			t.Fatalf("i=%d TransitIP Code: %d, want 0", i, got)
 		}
 	}
-	gotAddr1 := c.transitIPTarget(nid, tip)
+	gotAddr1 := c.server.transitIPTarget(nid, tip)
 	if gotAddr1 != dip {
 		t.Fatalf("Connector stored destination for tip(%v): %v, want %v", tip, gotAddr1, dip)
 	}
-	gotAddr2 := c.transitIPTarget(nid, tip2)
+	gotAddr2 := c.server.transitIPTarget(nid, tip2)
 	if gotAddr2 != dip2 {
 		t.Fatalf("Connector stored destination for tip(%v): %v, want %v", tip2, gotAddr2, dip2)
 	}
-	gotAddr3 := c.transitIPTarget(nid, tip3)
+	gotAddr3 := c.server.transitIPTarget(nid, tip3)
 	if gotAddr3 != dip {
 		t.Fatalf("Connector stored destination for tip(%v): %v, want %v", tip3, gotAddr3, dip)
 	}
@@ -169,11 +169,11 @@ func TestHandleConnectorTransitIPRequestSameTIP(t *testing.T) {
 		t.Fatalf("i=2 TransitIP Message: \"%s\", want \"%s\"", msg, "")
 	}
 
-	gotAddr1 := c.transitIPTarget(nid, tip)
+	gotAddr1 := c.server.transitIPTarget(nid, tip)
 	if gotAddr1 != dip {
 		t.Fatalf("Connector stored destination for tip(%v): %v, want %v", tip, gotAddr1, dip)
 	}
-	gotAddr2 := c.transitIPTarget(nid, tip2)
+	gotAddr2 := c.server.transitIPTarget(nid, tip2)
 	if gotAddr2 != dip3 {
 		t.Fatalf("Connector stored destination for tip(%v): %v, want %v", tip2, gotAddr2, dip3)
 	}
@@ -184,7 +184,7 @@ func TestTransitIPTargetUnknownTIP(t *testing.T) {
 	c := &Conn25{}
 	nid := tailcfg.NodeID(1)
 	tip := netip.MustParseAddr("0.0.0.1")
-	got := c.transitIPTarget(nid, tip)
+	got := c.server.transitIPTarget(nid, tip)
 	want := netip.Addr{}
 	if got != want {
 		t.Fatalf("Unknown transit addr, want: %v, got %v", want, got)
@@ -307,5 +307,23 @@ func TestPickSplitDNSPeers(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSetMagicIP(t *testing.T) {
+	c := &Conn25{}
+	mip := netip.MustParseAddr("0.0.0.1")
+	tip := netip.MustParseAddr("0.0.0.2")
+	app := "a"
+	c.client.setMagicIP(mip, tip, app)
+	val, ok := c.client.magicIPs[mip]
+	if !ok {
+		t.Fatal("expected there to be a value stored for the magic IP")
+	}
+	if val.addr != tip {
+		t.Fatalf("want %v, got %v", tip, val.addr)
+	}
+	if val.app != app {
+		t.Fatalf("want %s, got %s", app, val.app)
 	}
 }
