@@ -1006,6 +1006,9 @@ func TestPrefFlagMapping(t *testing.T) {
 		case "AutoExitNode":
 			// Handled by tailscale {set,up} --exit-node=auto:any.
 			continue
+		case "CustomMullvadAccount":
+			// Handled by tailscale set --mullvad-account, not tailscale up.
+			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
 	}
