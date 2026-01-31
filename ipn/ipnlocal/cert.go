@@ -508,6 +508,14 @@ func getCertPEMCached(cs certStore, domain string, now time.Time) (p *TLSCertKey
 // getCertPem checks if a cert needs to be renewed and if so, renews it.
 // It can be overridden in tests.
 var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*TLSCertKeyPair, error) {
+	// Add timeout for the entire ACME certificate issuance flow.
+	// This includes multiple round trips: account registration/lookup, order creation,
+	// challenge validation, and certificate retrieval. 2 minutes should be sufficient
+	// for legitimate operations while preventing indefinite hangs.
+	// See https://github.com/tailscale/tailscale/issues/14677
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
 	acmeMu.Lock()
 	defer acmeMu.Unlock()
 
