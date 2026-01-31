@@ -252,7 +252,7 @@ func getCredentials() (*http.Client, string) {
 				TokenURL:     fmt.Sprintf("https://%s/api/v2/oauth/token", *apiServer),
 			}
 			client = oauthConfig.Client(context.Background())
-		} else if idok {
+		} else if idok && idToken != "" && oiok && oauthId != "" {
 			if exchangeJWTForToken, ok := tailscale.HookExchangeJWTForTokenViaWIF.GetOk(); ok {
 				var err error
 				apiKeyEnv, err = exchangeJWTForToken(context.Background(), fmt.Sprintf("https://%s", *apiServer), oauthId, idToken)
