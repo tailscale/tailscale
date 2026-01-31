@@ -1,0 +1,4 @@
+[Unit]
+Description=Tailscale is online
+Requires=tailscale-wait-online.service
+After=tailscale-wait-online.service
