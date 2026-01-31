@@ -63,6 +63,17 @@ func truncatedFlagSet(pkt []byte) bool {
 	return (binary.BigEndian.Uint16(pkt[2:4]) & dnsFlagTruncated) != 0
 }
 
+// setTCFlag sets the TC (truncated) flag in the DNS packet header.
+// The packet must be at least headerBytes in length.
+func setTCFlag(packet []byte) {
+	if len(packet) < headerBytes {
+		return
+	}
+	flags := binary.BigEndian.Uint16(packet[2:4])
+	flags |= dnsFlagTruncated
+	binary.BigEndian.PutUint16(packet[2:4], flags)
+}
+
 const (
 	// dohIdleConnTimeout is how long to keep idle HTTP connections
 	// open to DNS-over-HTTPS servers. 10 seconds is a sensible
@@ -131,47 +142,59 @@ func getRCode(packet []byte) dns.RCode {
 	return dns.RCode(packet[3] & 0x0F)
 }
 
+// findOPTRecord finds and validates the EDNS OPT record at the end of a DNS packet.
+// Returns the requested buffer size and a pointer to the OPT record bytes if valid,
+// or (0, nil) if no valid OPT record is found.
+// The OPT record must be at the very end of the packet with no option codes.
+func findOPTRecord(packet []byte) (requestedSize uint16, opt []byte) {
+	const optFixedBytes = 11 // size of an OPT record with no option codes
+	const edns0Version = 0   // EDNS version number (currently only version 0 is defined)
+
+	if len(packet) < headerBytes+optFixedBytes {
+		return 0, nil
+	}
+
+	arCount := binary.BigEndian.Uint16(packet[10:12])
+	if arCount == 0 {
+		// OPT shows up in an AR, so there must be no OPT
+		return 0, nil
+	}
+
+	// https://datatracker.ietf.org/doc/html/rfc6891#section-6.1.2
+	opt = packet[len(packet)-optFixedBytes:]
+
+	if opt[0] != 0 {
+		// OPT NAME must be 0 (root domain)
+		return 0, nil
+	}
+	if dns.Type(binary.BigEndian.Uint16(opt[1:3])) != dns.TypeOPT {
+		// Not an OPT record
+		return 0, nil
+	}
+	requestedSize = binary.BigEndian.Uint16(opt[3:5])
+	// Ignore extended RCODE in opt[5]
+	if opt[6] != edns0Version {
+		// Be conservative and don't touch unknown versions.
+		return 0, nil
+	}
+	// Ignore flags in opt[6:9]
+	if binary.BigEndian.Uint16(opt[9:11]) != 0 {
+		// RDLEN must be 0 (no variable length data). We're at the end of the
+		// packet so this should be 0 anyway.
+		return 0, nil
+	}
+
+	return requestedSize, opt
+}
+
 // clampEDNSSize attempts to limit the maximum EDNS response size. This is not
 // an exhaustive solution, instead only easy cases are currently handled in the
 // interest of speed and reduced complexity. Only OPT records at the very end of
 // the message with no option codes are addressed.
 // TODO: handle more situations if we discover that they happen often
 func clampEDNSSize(packet []byte, maxSize uint16) {
-	// optFixedBytes is the size of an OPT record with no option codes.
-	const optFixedBytes = 11
-	const edns0Version = 0
-
-	if len(packet) < headerBytes+optFixedBytes {
-		return
-	}
-
-	arCount := binary.BigEndian.Uint16(packet[10:12])
-	if arCount == 0 {
-		// OPT shows up in an AR, so there must be no OPT
-		return
-	}
-
-	// https://datatracker.ietf.org/doc/html/rfc6891#section-6.1.2
-	opt := packet[len(packet)-optFixedBytes:]
-
-	if opt[0] != 0 {
-		// OPT NAME must be 0 (root domain)
-		return
-	}
-	if dns.Type(binary.BigEndian.Uint16(opt[1:3])) != dns.TypeOPT {
-		// Not an OPT record
-		return
-	}
-	requestedSize := binary.BigEndian.Uint16(opt[3:5])
-	// Ignore extended RCODE in opt[5]
-	if opt[6] != edns0Version {
-		// Be conservative and don't touch unknown versions.
-		return
-	}
-	// Ignore flags in opt[6:9]
-	if binary.BigEndian.Uint16(opt[9:11]) != 0 {
-		// RDLEN must be 0 (no variable length data). We're at the end of the
-		// packet so this should be 0 anyway)..
+	requestedSize, opt := findOPTRecord(packet)
+	if opt == nil {
 		return
 	}
 
@@ -181,6 +204,57 @@ func clampEDNSSize(packet []byte, maxSize uint16) {
 
 	// Clamp the maximum size
 	binary.BigEndian.PutUint16(opt[3:5], maxSize)
+}
+
+// getEDNSBufferSize extracts the EDNS buffer size from a DNS request packet.
+// Returns (bufferSize, true) if a valid EDNS OPT record is found,
+// or (0, false) if no EDNS OPT record is found or if there's an error.
+func getEDNSBufferSize(packet []byte) (uint16, bool) {
+	requestedSize, opt := findOPTRecord(packet)
+	return requestedSize, opt != nil
+}
+
+// checkResponseSizeAndSetTC sets the TC (truncated) flag in the DNS header when
+// the response exceeds the maximum UDP size. If no EDNS OPT record is present
+// in the request, it sets the TC flag when the response is bigger than 512 bytes
+// per RFC 1035. If an EDNS OPT record is present, it sets the TC flag when the
+// response is bigger than the EDNS buffer size. The response buffer is not
+// truncated; only the TC flag is set. Returns the response unchanged except for
+// the TC flag being set if needed.
+func checkResponseSizeAndSetTC(response []byte, request []byte, family string, logf logger.Logf) []byte {
+	const defaultUDPSize = 512 // default maximum UDP DNS packet size per RFC 1035
+
+	// Only check for UDP queries; TCP can handle larger responses
+	if family != "udp" {
+		return response
+	}
+
+	// Check if TC flag is already set
+	if len(response) < headerBytes {
+		return response
+	}
+	if truncatedFlagSet(response) {
+		// TC flag already set, nothing to do
+		return response
+	}
+
+	ednsSize, hasEDNS := getEDNSBufferSize(request)
+
+	// Determine maximum allowed size
+	var maxSize int
+	if hasEDNS {
+		maxSize = int(ednsSize)
+	} else {
+		// No EDNS: enforce default UDP size limit per RFC 1035
+		maxSize = defaultUDPSize
+	}
+
+	// Check if response exceeds maximum size
+	if len(response) > maxSize {
+		setTCFlag(response)
+	}
+
+	return response
 }
 
 // dnsForwarderFailing should be raised when the forwarder is unable to reach the
@@ -535,7 +609,13 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		if !buildfeatures.HasPeerAPIClient {
 			return nil, feature.ErrUnavailable
 		}
-		return f.sendDoH(ctx, rr.name.Addr, f.dialer.PeerAPIHTTPClient(), fq.packet)
+		res, err := f.sendDoH(ctx, rr.name.Addr, f.dialer.PeerAPIHTTPClient(), fq.packet)
+		if err != nil {
+			return nil, err
+		}
+		// Check response size and set TC flag if needed (only for UDP queries)
+		res = checkResponseSizeAndSetTC(res, fq.packet, fq.family, f.logf)
+		return res, nil
 	}
 	if strings.HasPrefix(rr.name.Addr, "https://") {
 		// Only known DoH providers are supported currently. Specifically, we
@@ -546,7 +626,13 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		// them.
 		urlBase := rr.name.Addr
 		if hc, ok := f.getKnownDoHClientForProvider(urlBase); ok {
-			return f.sendDoH(ctx, urlBase, hc, fq.packet)
+			res, err := f.sendDoH(ctx, urlBase, hc, fq.packet)
+			if err != nil {
+				return nil, err
+			}
+			// Check response size and set TC flag if needed (only for UDP queries)
+			res = checkResponseSizeAndSetTC(res, fq.packet, fq.family, f.logf)
+			return res, nil
 		}
 		metricDNSFwdErrorType.Add(1)
 		return nil, fmt.Errorf("arbitrary https:// resolvers not supported yet")
@@ -710,12 +796,15 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 		f.logf("recv: packet too small (%d bytes)", n)
 	}
 	out = out[:n]
+	tcFlagAlreadySet := truncatedFlagSet(out)
+
 	txid := getTxID(out)
 	if txid != fq.txid {
 		metricDNSFwdUDPErrorTxID.Add(1)
 		return nil, errTxIDMismatch
 	}
 	rcode := getRCode(out)
+
 	// don't forward transient errors back to the client when the server fails
 	if rcode == dns.RCodeServerFailure {
 		f.logf("recv: response code indicating server failure: %d", rcode)
@@ -723,11 +812,9 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 		return nil, errServerFailure
 	}
 
-	if truncated {
-		// Set the truncated bit if it wasn't already.
-		flags := binary.BigEndian.Uint16(out[2:4])
-		flags |= dnsFlagTruncated
-		binary.BigEndian.PutUint16(out[2:4], flags)
+	// Set the truncated bit if buffer was truncated during read and the flag isn't already set
+	if truncated && !tcFlagAlreadySet {
+		setTCFlag(out)
 
 		// TODO(#2067): Remove any incomplete records? RFC 1035 section 6.2
 		// states that truncation should head drop so that the authority
@@ -735,6 +822,8 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 		// a too-small buffer has already dropped the end, so that's the
 		// best we can do.
 	}
+
+	out = checkResponseSizeAndSetTC(out, fq.packet, fq.family, f.logf)
 
 	if truncatedFlagSet(out) {
 		metricDNSFwdTruncated.Add(1)
