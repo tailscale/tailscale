@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="304" viewBox="0 0 1280 304">
+<defs></defs>
+<rect width="1280" height="304" fill="#f3f4f6" />
+<foreignObject x="0" y="0" width="1280" height="304">
+<div xmlns="http://www.w3.org/1999/xhtml" style="width:1280px;height:304px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:50px 100px;box-sizing:border-box;">
+  <div style="font-family:Inter, system-ui, -apple-system, sans-serif;font-size:149px;font-weight:700;color:#1f2937;line-height:1;text-align:center;white-space:nowrap;">Tailscale</div>
+  <div style="font-family:Inter, system-ui, -apple-system, sans-serif;font-size:27px;font-weight:400;color:#1f2937;line-height:1;text-align:center;white-space:nowrap;margin-top:27px;">The easiest, most secure way to use WireGuard and 2FA.</div>
+</div>
+</foreignObject>
+
+</svg>

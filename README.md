@@ -1,8 +1,9 @@
 # Tailscale
 
-https://tailscale.com
+![GitHub Repo Banner](.github/assets/banner.svg)
+<!-- Created with GitHub Repo Banner by Waren Gonzaga: https://ghrb.waren.build -->
 
-Private WireGuard® networks made easy
+Private WireGuard® networks made easy - <https://tailscale.com>
 
 ## Overview
 
