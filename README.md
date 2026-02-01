@@ -1,11 +1,9 @@
 # Tailscale
 
-https://tailscale.com
-
-Private WireGuard® networks made easy
-
-![GitHub Repo Banner](https://ghrb.waren.build/banner?header=Tailscale&subheader=The+easiest%2C+most+secure+way+to+use+WireGuard+and+2FA.&bg=f3f4f6&color=1f2937&support=true)
+![GitHub Repo Banner](.github/assets/banner.svg)
 <!-- Created with GitHub Repo Banner by Waren Gonzaga: https://ghrb.waren.build -->
+
+Private WireGuard® networks made easy - <https://tailscale.com>
 
 ## Overview
 
