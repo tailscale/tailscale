@@ -192,9 +192,12 @@ func (srv *server) OnPolicyChange() {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 	for c := range srv.activeConns {
-		if c.info == nil {
-			// c.info is nil when the connection hasn't been authenticated yet.
-			// In that case, the connection will be terminated when it is.
+		// move info and localUser to be protected by conn mutex?
+		if c.info == nil || c.localUser == nil {
+			// c.info or c.localUser are nil when the connection hasn't been
+			// authenticated yet. We will continue here, but the connection will
+			// be rechecked once it is authenticated. If it no longer conforms
+			// with the SSH access policy at that point, it will be terminated.
 			continue
 		}
 		go c.checkStillValid()

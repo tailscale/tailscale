@@ -31,6 +31,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	gossh "golang.org/x/crypto/ssh"
@@ -1315,6 +1316,27 @@ func TestStdOsUserUserAssumptions(t *testing.T) {
 	if got, want := v.NumField(), 5; got != want {
 		t.Errorf("os/user.User has %v fields; this package assumes %v", got, want)
 	}
+}
+
+func TestOnPolicyChangeHandlesNilLocalUser(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := &server{
+			logf: tstest.WhileTestRunningLogger(t),
+			lb: &localState{
+				sshEnabled:   true,
+				matchingRule: newSSHRule(&tailcfg.SSHAction{Accept: true}),
+			},
+		}
+		c := &conn{
+			srv:  srv,
+			info: &sshConnInfo{sshUser: "alice"},
+		}
+		srv.activeConns = map[*conn]bool{c: true}
+
+		srv.OnPolicyChange()
+
+		synctest.Wait()
+	})
 }
 
 func mockRecordingServer(t *testing.T, handleRecord http.HandlerFunc) *httptest.Server {
