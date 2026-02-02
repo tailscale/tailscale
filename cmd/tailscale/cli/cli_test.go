@@ -1799,3 +1799,21 @@ func TestDepsNoCapture(t *testing.T) {
 	}.Check(t)
 
 }
+
+func TestSanitizeWriter(t *testing.T) {
+	buf := new(bytes.Buffer)
+	w := sanitizeOutput(buf)
+
+	in := []byte(`my auth key is tskey-auth-abc123-def456, what's yours?`)
+	want := []byte(`my auth key is tskey-REDACTED, what's yours?`)
+	n, err := w.Write(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != len(in) {
+		t.Errorf("unexpected write length %d, want %d", n, len(in))
+	}
+	if got := buf.Bytes(); !bytes.Equal(got, want) {
+		t.Errorf("unexpected sanitized content\ngot: %q\nwant: %q", got, want)
+	}
+}
