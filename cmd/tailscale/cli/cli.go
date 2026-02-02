@@ -581,11 +581,11 @@ type sanitizeWriter struct {
 	w io.Writer
 }
 
-var reTskey = regexp.MustCompile(`tskey-\w+`)
+var rxTskey = regexp.MustCompile(`tskey-[\w-]+`)
 
 func (w sanitizeWriter) Write(buf []byte) (int, error) {
-	sanitized := reTskey.ReplaceAll(buf, []byte("tskey-REDACTED"))
-	diff := len(buf) - len(sanitized)
+	sanitized := rxTskey.ReplaceAll(buf, []byte("tskey-REDACTED"))
+	diff := len(sanitized) - len(buf)
 	n, err := w.w.Write(sanitized)
 	return n - diff, err
 }
