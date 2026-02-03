@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -60,6 +61,9 @@ func splitArgs(args []string) (pre, pkgs, post []string, _ error) {
 		return nil, nil, nil, err
 	}
 	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "cachelink" && !cacheLink.enabled {
+			return
+		}
 		if f.Value.String() != f.DefValue && f.DefValue != "false" {
 			pre = append(pre, "-"+f.Name, f.Value.String())
 		} else {
@@ -79,6 +83,37 @@ func splitArgs(args []string) (pre, pkgs, post []string, _ error) {
 	return pre, pkgs, post, nil
 }
 
+// cacheLink is whether the -cachelink flag is enabled.
+//
+// The -cachelink flag is Tailscale-specific addition to the "go test" command;
+// see https://github.com/tailscale/go/issues/149 and
+// https://github.com/golang/go/issues/77349.
+//
+// In that PR, it's only a boolean, but we implement a custom flag type
+// so we can support -cachelink=auto, which enables cachelink if GOCACHEPROG
+// is set, which is a behavior we want in our CI environment.
+var cacheLink cacheLinkVal
+
+type cacheLinkVal struct {
+	enabled bool
+}
+
+func (c *cacheLinkVal) String() string {
+	return strconv.FormatBool(c.enabled)
+}
+
+func (c *cacheLinkVal) Set(s string) error {
+	if s == "auto" {
+		c.enabled = os.Getenv("GOCACHEPROG") != ""
+		return nil
+	}
+	var err error
+	c.enabled, err = strconv.ParseBool(s)
+	return err
+}
+
+func (*cacheLinkVal) IsBoolFlag() bool { return true }
+
 func newTestFlagSet() *flag.FlagSet {
 	fs := flag.NewFlagSet("testwrapper", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -90,6 +125,8 @@ func newTestFlagSet() *flag.FlagSet {
 	fs.String("exec", "", "Command to run tests with")
 	fs.Bool("race", false, "build with race detector")
 	fs.String("vet", "", "vet checks to run, or 'off' or 'all'")
+
+	fs.Var(&cacheLink, "cachelink", "Go -cachelink value (bool); or 'auto' to enable if GOCACHEPROG is set")
 	return fs
 }
 
