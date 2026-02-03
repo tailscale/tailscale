@@ -1339,6 +1339,57 @@ func TestOnPolicyChangeHandlesNilLocalUser(t *testing.T) {
 	})
 }
 
+func TestRaceWriteAndReadConnInfoAndLocalUser(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := &server{
+			logf: tstest.WhileTestRunningLogger(t),
+			lb: &localState{
+				sshEnabled:   true,
+				matchingRule: newSSHRule(&tailcfg.SSHAction{Accept: true}),
+			},
+		}
+		c := &conn{
+			srv:  srv,
+			info: &sshConnInfo{sshUser: "alice"},
+		}
+		srv.activeConns = map[*conn]bool{c: true}
+
+		fakeClientAuth := func() {
+			c.mu.Lock()
+			c.info = &sshConnInfo{sshUser: "alice"}
+			c.mu.Unlock()
+
+			c.mu.Lock()
+			c.localUser = &userMeta{User: user.User{Username: currentUser}}
+			c.mu.Unlock()
+		}
+
+		// Simulate a race between clientAuth() writing and OnPolicyChange reading a connection's info and localUser.
+		done := make(chan struct{})
+		go func() {
+			for i := 0; i < 100; i++ {
+				select {
+				case <-done:
+					return
+				default:
+					fakeClientAuth()
+				}
+			}
+		}()
+
+		go func() {
+			for i := 0; i < 100; i++ {
+				select {
+				case <-done:
+					return
+				default:
+					srv.OnPolicyChange()
+				}
+			}
+		}()
+	})
+}
+
 func mockRecordingServer(t *testing.T, handleRecord http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
