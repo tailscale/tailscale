@@ -1,0 +1,10 @@
+[Unit]
+Description=Wait for Tailscale to be online
+After=tailscaled.service
+Wants=tailscaled.service
+Before=tailscale-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/tailscale wait
