@@ -86,6 +86,7 @@ func (c *Cache) writeJSON(ctx context.Context, key string, v any) error {
 	// this at all?
 	last, ok := c.lastWrote[key]
 	if ok && cacheDigest(j) == last.digest {
+		c.wantKeys.Add(key)
 		return nil
 	}
 

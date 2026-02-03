@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"iter"
+	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -181,6 +182,24 @@ func TestRoundTrip(t *testing.T) {
 
 		})
 	}
+
+	t.Run("Twice", func(t *testing.T) {
+		// Verify that storing the same network map twice results in no change.
+
+		s := make(testStore)
+		c := netmapcache.NewCache(s)
+		if err := c.Store(t.Context(), testMap); err != nil {
+			t.Fatalf("Store 1 netmap failed: %v", err)
+		}
+		scp := maps.Clone(s) // for comparison, see below
+
+		if err := c.Store(t.Context(), testMap); err != nil {
+			t.Fatalf("Store 2 netmap failed; %v", err)
+		}
+		if diff := cmp.Diff(s, scp); diff != "" {
+			t.Errorf("Updated store (-got, +want):\n%s", diff)
+		}
+	})
 }
 
 func TestInvalidCache(t *testing.T) {
