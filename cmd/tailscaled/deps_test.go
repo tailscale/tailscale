@@ -293,6 +293,7 @@ func TestMinTailscaledWithCLI(t *testing.T) {
 			"github.com/hdevalence/ed25519consensus": "unexpected ed25519consensus dep",
 			"tailscale.com/clientupdate/distsign":    "unexpected distsign dep",
 			"archive/tar":                            "unexpected archive/tar dep",
+			"tailscale.com/feature/conn25":           "unexpected conn25 dep",
 		},
 	}.Check(t)
 }
