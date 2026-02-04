@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package conn25 registers the conn25 feature and implements its associated ipnext.Extension.
+// conn25 will be an app connector like feature that routes traffic for configured domains via
+// connector devices and avoids the "too many routes" pitfall of app connector. It is currently
+// (2026-02-04) some peer API routes for clients to tell connectors about their desired routing.
 package conn25
 
 import (
