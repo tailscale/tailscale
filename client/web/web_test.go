@@ -582,12 +582,23 @@ func TestServeAuth(t *testing.T) {
 
 	successCookie := "ts-cookie-success"
 	s.browserSessions.Store(successCookie, &browserSession{
-		ID:      successCookie,
-		SrcNode: remoteNode.Node.ID,
-		SrcUser: user.ID,
-		Created: oneHourAgo,
-		AuthID:  testAuthPathSuccess,
-		AuthURL: *testControlURL + testAuthPathSuccess,
+		ID:          successCookie,
+		SrcNode:     remoteNode.Node.ID,
+		SrcUser:     user.ID,
+		Created:     oneHourAgo,
+		AuthID:      testAuthPathSuccess,
+		AuthURL:     *testControlURL + testAuthPathSuccess,
+		PendingAuth: true,
+	})
+	successCookie2 := "ts-cookie-success-2"
+	s.browserSessions.Store(successCookie2, &browserSession{
+		ID:          successCookie2,
+		SrcNode:     remoteNode.Node.ID,
+		SrcUser:     user.ID,
+		Created:     oneHourAgo,
+		AuthID:      testAuthPathSuccess,
+		AuthURL:     *testControlURL + testAuthPathSuccess,
+		PendingAuth: true,
 	})
 	failureCookie := "ts-cookie-failure"
 	s.browserSessions.Store(failureCookie, &browserSession{
@@ -642,22 +653,7 @@ func TestServeAuth(t *testing.T) {
 				AuthID:        testAuthPath,
 				AuthURL:       *testControlURL + testAuthPath,
 				Authenticated: false,
-			},
-		},
-		{
-			name:       "query-existing-incomplete-session",
-			path:       "/api/auth",
-			cookie:     successCookie,
-			wantStatus: http.StatusOK,
-			wantResp:   &authResponse{ViewerIdentity: vi, ServerMode: ManageServerMode},
-			wantSession: &browserSession{
-				ID:            successCookie,
-				SrcNode:       remoteNode.Node.ID,
-				SrcUser:       user.ID,
-				Created:       oneHourAgo,
-				AuthID:        testAuthPathSuccess,
-				AuthURL:       *testControlURL + testAuthPathSuccess,
-				Authenticated: false,
+				PendingAuth:   true,
 			},
 		},
 		{
@@ -674,16 +670,33 @@ func TestServeAuth(t *testing.T) {
 				AuthID:        testAuthPathSuccess,
 				AuthURL:       *testControlURL + testAuthPathSuccess,
 				Authenticated: false,
+				PendingAuth:   true,
 			},
 		},
 		{
-			name:       "transition-to-successful-session",
+			name:       "transition-to-successful-session-via-api-auth-session-wait",
 			path:       "/api/auth/session/wait",
 			cookie:     successCookie,
 			wantStatus: http.StatusOK,
 			wantResp:   nil,
 			wantSession: &browserSession{
 				ID:            successCookie,
+				SrcNode:       remoteNode.Node.ID,
+				SrcUser:       user.ID,
+				Created:       oneHourAgo,
+				AuthID:        testAuthPathSuccess,
+				AuthURL:       *testControlURL + testAuthPathSuccess,
+				Authenticated: true,
+			},
+		},
+		{
+			name:       "transition-to-successful-session-via-api-auth",
+			path:       "/api/auth",
+			cookie:     successCookie2,
+			wantStatus: http.StatusOK,
+			wantResp:   &authResponse{Authorized: true, ViewerIdentity: vi, ServerMode: ManageServerMode},
+			wantSession: &browserSession{
+				ID:            successCookie2,
 				SrcNode:       remoteNode.Node.ID,
 				SrcUser:       user.ID,
 				Created:       oneHourAgo,
@@ -731,6 +744,7 @@ func TestServeAuth(t *testing.T) {
 				AuthID:        testAuthPath,
 				AuthURL:       *testControlURL + testAuthPath,
 				Authenticated: false,
+				PendingAuth:   true,
 			},
 		},
 		{
@@ -748,6 +762,7 @@ func TestServeAuth(t *testing.T) {
 				AuthID:        testAuthPath,
 				AuthURL:       *testControlURL + testAuthPath,
 				Authenticated: false,
+				PendingAuth:   true,
 			},
 		},
 		{
