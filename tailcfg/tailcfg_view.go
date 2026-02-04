@@ -606,6 +606,9 @@ func (v HostinfoView) AppConnector() opt.Bool { return v.ж.AppConnector }
 // opaque hash of the most recent list of tailnet services, change in hash indicates config should be fetched via c2n
 func (v HostinfoView) ServicesHash() string { return v.ж.ServicesHash }
 
+// if the client is willing to relay traffic for other peers
+func (v HostinfoView) PeerRelay() bool { return v.ж.PeerRelay }
+
 // the client’s selected exit node, empty when unselected.
 func (v HostinfoView) ExitNodeID() StableNodeID { return v.ж.ExitNodeID }
 
@@ -664,6 +667,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	UserspaceRouter opt.Bool
 	AppConnector    opt.Bool
 	ServicesHash    string
+	PeerRelay       bool
 	ExitNodeID      StableNodeID
 	Location        *Location
 	TPM             *TPMInfo

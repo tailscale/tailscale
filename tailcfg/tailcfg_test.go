@@ -67,6 +67,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"UserspaceRouter",
 		"AppConnector",
 		"ServicesHash",
+		"PeerRelay",
 		"ExitNodeID",
 		"Location",
 		"TPM",
@@ -242,6 +243,16 @@ func TestHostinfoEqual(t *testing.T) {
 		{
 			&Hostinfo{AppConnector: opt.Bool("true")},
 			&Hostinfo{AppConnector: opt.Bool("false")},
+			false,
+		},
+		{
+			&Hostinfo{PeerRelay: true},
+			&Hostinfo{PeerRelay: true},
+			true,
+		},
+		{
+			&Hostinfo{PeerRelay: true},
+			&Hostinfo{PeerRelay: false},
 			false,
 		},
 		{
