@@ -208,7 +208,7 @@ func run() error {
 	defer cancel()
 
 	var kc *kubeClient
-	if cfg.InKubernetes {
+	if cfg.KubeSecret != "" {
 		kc, err = newKubeClient(cfg.Root, cfg.KubeSecret)
 		if err != nil {
 			return fmt.Errorf("error initializing kube client: %w", err)
