@@ -10,7 +10,7 @@ import (
 	"fmt"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/clientupdate"
+	"tailscale.com/feature"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/version"
 )
@@ -35,6 +35,8 @@ var versionArgs struct {
 	upstream bool
 }
 
+var clientupdateLatestTailscaleVersion feature.Hook[func() (string, error)]
+
 func runVersion(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return fmt.Errorf("too many non-flag arguments: %q", args)
@@ -51,7 +53,11 @@ func runVersion(ctx context.Context, args []string) error {
 
 	var upstreamVer string
 	if versionArgs.upstream {
-		upstreamVer, err = clientupdate.LatestTailscaleVersion(clientupdate.CurrentTrack)
+		f, ok := clientupdateLatestTailscaleVersion.GetOk()
+		if !ok {
+			return fmt.Errorf("fetching latest version not supported in this build")
+		}
+		upstreamVer, err = f()
 		if err != nil {
 			return err
 		}
