@@ -6,6 +6,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,7 +15,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -582,11 +582,32 @@ type sanitizeWriter struct {
 	w io.Writer
 }
 
-var rxTskey = regexp.MustCompile(`tskey-[\w-]+`)
-
+// Write logically replaces /tskey-[A-Za-z0-9-]+/ with /tskey-XXXX.../ in buf
+// before writing to the underlying writer.
+//
+// We avoid the "regexp" package to not bloat the minbox build, and without
+// making this a featuretag-omittable protection.
 func (w sanitizeWriter) Write(buf []byte) (int, error) {
-	sanitized := rxTskey.ReplaceAll(buf, []byte("tskey-REDACTED"))
-	diff := len(sanitized) - len(buf)
-	n, err := w.w.Write(sanitized)
-	return n - diff, err
+	const prefix = "tskey-"
+	scrub := buf
+	for {
+		i := bytes.Index(scrub, []byte(prefix))
+		if i == -1 {
+			break
+		}
+		scrub = scrub[i+len(prefix):]
+
+		for i, b := range scrub {
+			if (b >= 'a' && b <= 'z') ||
+				(b >= 'A' && b <= 'Z') ||
+				(b >= '0' && b <= '9') ||
+				b == '-' {
+				scrub[i] = 'X'
+			} else {
+				break
+			}
+		}
+	}
+
+	return w.w.Write(buf)
 }

@@ -1804,8 +1804,8 @@ func TestSanitizeWriter(t *testing.T) {
 	buf := new(bytes.Buffer)
 	w := sanitizeOutput(buf)
 
-	in := []byte(`my auth key is tskey-auth-abc123-def456, what's yours?`)
-	want := []byte(`my auth key is tskey-REDACTED, what's yours?`)
+	in := []byte(`my auth key is tskey-auth-abc123-def456 and tskey-foo, what's yours?`)
+	want := []byte(`my auth key is tskey-XXXXXXXXXXXXXXXXXX and tskey-XXX, what's yours?`)
 	n, err := w.Write(in)
 	if err != nil {
 		t.Fatal(err)

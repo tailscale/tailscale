@@ -294,6 +294,7 @@ func TestMinTailscaledWithCLI(t *testing.T) {
 			"tailscale.com/clientupdate/distsign":    "unexpected distsign dep",
 			"archive/tar":                            "unexpected archive/tar dep",
 			"tailscale.com/feature/conn25":           "unexpected conn25 dep",
+			"regexp":                                 "unexpected regexp dep; bloats binary",
 		},
 	}.Check(t)
 }
