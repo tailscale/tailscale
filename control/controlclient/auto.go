@@ -452,7 +452,9 @@ func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
 		c.sendStatus("mapRoutine-got-netmap", nil, "", nm)
 	}
 	// Reset the backoff timer if we got a netmap.
+	c.mu.Lock()
 	mrs.bo.Reset()
+	c.mu.Unlock()
 }
 
 func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
@@ -526,13 +528,18 @@ func (c *Auto) mapRoutine() {
 		c.mu.Lock()
 		c.inMapPoll = false
 		paused := c.paused
-		c.mu.Unlock()
 
 		if paused {
 			mrs.bo.BackOff(ctx, nil)
-			c.logf("mapRoutine: paused")
 		} else {
 			mrs.bo.BackOff(ctx, err)
+		}
+		c.mu.Unlock()
+
+		// Now safe to call functions that might acquire the mutex
+		if paused {
+			c.logf("mapRoutine: paused")
+		} else {
 			report(err, "PollNetMap")
 		}
 	}

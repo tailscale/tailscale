@@ -22,6 +22,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
+	"tailscale.com/control/controlclient"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
@@ -552,7 +553,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		}
 		e.linkChangeQueue.Add(func() { e.linkChange(&cd) })
 	})
-	eventbus.SubscribeFunc(ec, func(update tstun.DiscoKeyAdvertisement) {
+	eventbus.SubscribeFunc(ec, func(update controlclient.DiscoKeyAdvertisement) {
 		e.logf("wgengine: got TSMP disco key advertisement from %v via eventbus", update.Src)
 		if e.magicConn == nil {
 			e.logf("wgengine: no magicConn")
