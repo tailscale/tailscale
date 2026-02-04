@@ -1098,6 +1098,8 @@ func BenchmarkMapSessionDelta(b *testing.B) {
 			ctx := context.Background()
 			nu := &countingNetmapUpdater{}
 			ms := newTestMapSession(b, nu)
+			// Disable log output for benchmarks to avoid races
+			ms.logf = func(string, ...any) {}
 			res := &tailcfg.MapResponse{
 				Node: &tailcfg.Node{
 					ID:   1,

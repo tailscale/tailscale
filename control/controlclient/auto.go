@@ -91,7 +91,7 @@ func (c *Auto) updateRoutine() {
 			bo.BackOff(ctx, err)
 			continue
 		}
-		bo.BackOff(ctx, nil)
+		bo.Reset()
 		c.direct.logf("[v1] successful lite map update in %v", d)
 
 		lastUpdateGenInformed = gen
@@ -382,7 +382,7 @@ func (c *Auto) authRoutine() {
 				// backoff to avoid a busy loop.
 				bo.BackOff(ctx, errors.New("login URL not changing"))
 			} else {
-				bo.BackOff(ctx, nil)
+				bo.Reset()
 			}
 			continue
 		}
@@ -397,7 +397,7 @@ func (c *Auto) authRoutine() {
 
 		c.sendStatus("authRoutine-success", nil, "", nil)
 		c.restartMap()
-		bo.BackOff(ctx, nil)
+		bo.Reset()
 	}
 }
 
@@ -446,13 +446,14 @@ func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	c.expiry = nm.SelfKeyExpiry()
 	stillAuthed := c.loggedIn
 	c.logf("[v1] mapRoutine: netmap received: loggedIn=%v inMapPoll=true", stillAuthed)
+
+	// Reset the backoff timer if we got a netmap.
+	mrs.bo.Reset()
 	c.mu.Unlock()
 
 	if stillAuthed {
 		c.sendStatus("mapRoutine-got-netmap", nil, "", nm)
 	}
-	// Reset the backoff timer if we got a netmap.
-	mrs.bo.Reset()
 }
 
 func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
@@ -526,13 +527,18 @@ func (c *Auto) mapRoutine() {
 		c.mu.Lock()
 		c.inMapPoll = false
 		paused := c.paused
-		c.mu.Unlock()
 
 		if paused {
-			mrs.bo.BackOff(ctx, nil)
-			c.logf("mapRoutine: paused")
+			mrs.bo.Reset()
 		} else {
 			mrs.bo.BackOff(ctx, err)
+		}
+		c.mu.Unlock()
+
+		// Now safe to call functions that might acquire the mutex
+		if paused {
+			c.logf("mapRoutine: paused")
+		} else {
 			report(err, "PollNetMap")
 		}
 	}
