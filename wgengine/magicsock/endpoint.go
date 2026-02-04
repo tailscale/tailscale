@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -89,6 +90,13 @@ type endpoint struct {
 	sentPing           map[stun.TxID]sentPing
 	endpointState      map[netip.AddrPort]*endpointState // netip.AddrPort type for key (instead of [epAddr]) as [endpointState] is irrelevant for Geneve-encapsulated paths
 	isCallMeMaybeEP    map[netip.AddrPort]bool
+
+	// We save the previous discoKeys to ensure that control is not overwriting a
+	// newer received via TSMP. We need to store multiple previous keys as we
+	// could have the endpoint restart multiple times while not connected to control.
+	previousDiscoKeys map[string]bool
+
+	initializeEndpoint sync.Once
 
 	// The following fields are related to the new "silent disco"
 	// implementation that's a WIP as of 2022-10-20.
@@ -1465,6 +1473,32 @@ func (de *endpoint) setLastPing(ipp netip.AddrPort, now mono.Time) {
 	state.lastPing = now
 }
 
+// updateDiscoKeyLocked takes in a new discoKey for the endpoint to be updated.
+// It ensures that the new key is not a previously held key. This prevents
+// control from overwriting a key set by TSMP in a case where the endpoint
+// represented by de is unable to contact control and has shared its disco key
+// via TSMP. If key is a previously held key, this method is a noop. de.mu must
+// be held while calling.
+func (de *endpoint) updateDiscoKeyLocked(key *key.DiscoPublic) {
+	de.initializeEndpoint.Do(func() {
+		de.previousDiscoKeys = make(map[string]bool)
+	})
+	var epDisco *endpointDisco
+	if key != nil {
+		if _, ok := de.previousDiscoKeys[key.String()]; ok {
+			return
+		}
+		epDisco = &endpointDisco{
+			key:   *key,
+			short: key.ShortString(),
+		}
+		if de.disco.Load() != nil {
+			de.previousDiscoKeys[de.disco.Load().key.String()] = true
+		}
+	}
+	de.disco.Store(epDisco)
+}
+
 // updateFromNode updates the endpoint based on a tailcfg.Node from a NetMap
 // update.
 func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, probeUDPLifetimeEnabled bool) {
@@ -1490,10 +1524,8 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 
 	if discoKey != n.DiscoKey() {
 		de.c.logf("[v1] magicsock: disco: node %s changed from %s to %s", de.publicKey.ShortString(), discoKey, n.DiscoKey())
-		de.disco.Store(&endpointDisco{
-			key:   n.DiscoKey(),
-			short: n.DiscoKey().ShortString(),
-		})
+		key := n.DiscoKey()
+		de.updateDiscoKeyLocked(&key)
 		de.debugUpdates.Add(EndpointChange{
 			When: time.Now(),
 			What: "updateFromNode-resetLocked",

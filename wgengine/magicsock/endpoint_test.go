@@ -453,3 +453,34 @@ func Test_endpoint_udpRelayEndpointReady(t *testing.T) {
 		})
 	}
 }
+
+func TestUpdateDiscoKey(t *testing.T) {
+	t.Run("SetKey", func(t *testing.T) {
+		de := &endpoint{}
+		newKey := key.NewDisco().Public()
+		de.updateDiscoKeyLocked(&newKey)
+		if newKey.Compare(de.disco.Load().key) != 0 {
+			t.Errorf("disco keys not equal, expected %v, got %v", newKey, de.disco.Load().key)
+		}
+	})
+
+	t.Run("SetNilKey", func(t *testing.T) {
+		de := &endpoint{}
+		de.updateDiscoKeyLocked(nil)
+		if de.disco.Load() != nil {
+			t.Errorf("disco keys not equal, expected %v, got %v", nil, de.disco.Load().key)
+		}
+	})
+
+	t.Run("SetPreviouslySetKey", func(t *testing.T) {
+		de := &endpoint{}
+		oldKey := key.NewDisco().Public()
+		newKey := key.NewDisco().Public()
+		de.updateDiscoKeyLocked(&oldKey)
+		de.updateDiscoKeyLocked(&newKey)
+		de.updateDiscoKeyLocked(&oldKey) // <- Should not change the key
+		if newKey.Compare(de.disco.Load().key) != 0 {
+			t.Errorf("disco keys not equal, expected %v, got %v", newKey, de.disco.Load().key)
+		}
+	})
+}
