@@ -3144,14 +3144,7 @@ func (c *Conn) updateNodes(self tailcfg.NodeView, peers []tailcfg.NodeView) (pee
 			ep.nodeAddr = n.Addresses().At(0).Addr()
 		}
 		ep.initFakeUDPAddr()
-		if n.DiscoKey().IsZero() {
-			ep.disco.Store(nil)
-		} else {
-			ep.disco.Store(&endpointDisco{
-				key:   n.DiscoKey(),
-				short: n.DiscoKey().ShortString(),
-			})
-		}
+		ep.updateDiscoKey(n.DiscoKey())
 
 		if debugPeerMap() {
 			c.logEndpointCreated(n)
@@ -4288,10 +4281,7 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 		return
 	}
 	c.discoInfoForKnownPeerLocked(discoKey)
-	ep.disco.Store(&endpointDisco{
-		key:   discoKey,
-		short: discoKey.ShortString(),
-	})
+	ep.updateDiscoKey(discoKey)
 	c.peerMap.upsertEndpoint(ep, oldDiscoKey)
 	c.logf("magicsock: updated disco key for peer %v to %v", nodeKey.ShortString(), discoKey.ShortString())
 	metricTSMPDiscoKeyAdvertisementApplied.Add(1)

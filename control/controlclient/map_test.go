@@ -623,6 +623,90 @@ func TestNetmapForResponse(t *testing.T) {
 	})
 }
 
+func TestUpdateDiscoForNode(t *testing.T) {
+	tests := []struct {
+		name            string
+		initialOnline   bool
+		initialLastSeen time.Time
+		updateOnline    bool
+		updateLastSeen  time.Time
+		wantUpdate      bool
+	}{
+		{
+			name:            "newer_key_not_online",
+			initialOnline:   true,
+			initialLastSeen: time.Unix(1, 0),
+			updateOnline:    false,
+			updateLastSeen:  time.Now(),
+			wantUpdate:      true,
+		},
+		{
+			name:            "newer_key_online",
+			initialOnline:   true,
+			initialLastSeen: time.Unix(1, 0),
+			updateOnline:    true,
+			updateLastSeen:  time.Now(),
+			wantUpdate:      true,
+		},
+		{
+			name:            "older_key_not_online",
+			initialOnline:   false,
+			initialLastSeen: time.Now(),
+			updateOnline:    false,
+			updateLastSeen:  time.Unix(1, 0),
+			wantUpdate:      false,
+		},
+		{
+			name:            "older_key_online",
+			initialOnline:   false,
+			initialLastSeen: time.Now(),
+			updateOnline:    true,
+			updateLastSeen:  time.Unix(1, 0),
+			wantUpdate:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nu := &rememberLastNetmapUpdater{
+				done: make(chan any),
+			}
+			ms := newTestMapSession(t, nu)
+
+			oldKey := key.NewDisco()
+
+			// Insert existing node
+			node := tailcfg.Node{
+				ID:       1,
+				DiscoKey: oldKey.Public(),
+				Online:   &tt.initialOnline,
+				LastSeen: &tt.initialLastSeen,
+			}
+
+			if nm := ms.netmapForResponse(&tailcfg.MapResponse{
+				Peers: []*tailcfg.Node{&node},
+			}); len(nm.Peers) != 1 {
+				t.Fatalf("node not inserted")
+			}
+
+			newKey := key.NewDisco()
+			ms.updateDiscoForNode(node.ID, newKey.Public(), tt.updateLastSeen, tt.updateOnline)
+			<-nu.done
+
+			nm := ms.netmap()
+			peerIdx := nm.PeerIndexByNodeID(node.ID)
+			if peerIdx == -1 {
+				t.Fatal("node not found")
+			}
+
+			updated := nm.Peers[peerIdx].DiscoKey().Compare(newKey.Public()) == 0
+			if updated != tt.wantUpdate {
+				t.Fatalf("Disco key update: %t, wanted update: %t", updated, tt.wantUpdate)
+			}
+		})
+	}
+}
+
 func first[T any](s []T) T {
 	if len(s) == 0 {
 		var zero T
@@ -1098,6 +1182,8 @@ func BenchmarkMapSessionDelta(b *testing.B) {
 			ctx := context.Background()
 			nu := &countingNetmapUpdater{}
 			ms := newTestMapSession(b, nu)
+			// Disable log output for benchmarks to avoid races
+			ms.logf = func(string, ...any) {}
 			res := &tailcfg.MapResponse{
 				Node: &tailcfg.Node{
 					ID:   1,
