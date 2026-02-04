@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_clientupdate
+
 package cli
 
 import (
@@ -16,6 +18,14 @@ import (
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
+
+func init() {
+	maybeUpdateCmd = func() *ffcli.Command { return updateCmd }
+
+	clientupdateLatestTailscaleVersion.Set(func() (string, error) {
+		return clientupdate.LatestTailscaleVersion(clientupdate.CurrentTrack)
+	})
+}
 
 var updateCmd = &ffcli.Command{
 	Name:       "update",
