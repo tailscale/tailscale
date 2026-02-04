@@ -5671,6 +5671,10 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	}
 	hi.SSH_HostKeys = sshHostKeys
 
+	if buildfeatures.HasRelayServer {
+		hi.PeerRelay = prefs.RelayServerPort().Valid()
+	}
+
 	for _, f := range hookMaybeMutateHostinfoLocked {
 		f(b, hi, prefs)
 	}
