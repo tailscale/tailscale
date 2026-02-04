@@ -139,7 +139,11 @@ var Features = map[FeatureTag]FeatureMeta{
 	},
 	"completion": {Sym: "Completion", Desc: "CLI shell completion"},
 	"conn25":     {Sym: "Conn25", Desc: "Route traffic for configured domains through connector devices"},
-	"cloud":      {Sym: "Cloud", Desc: "detect cloud environment to learn instances IPs and DNS servers"},
+	"completion_scripts": {
+		Sym: "CompletionScripts", Desc: "embed CLI shell completion scripts",
+		Deps: []FeatureTag{"completion"},
+	},
+	"cloud": {Sym: "Cloud", Desc: "detect cloud environment to learn instances IPs and DNS servers"},
 	"dbus": {
 		Sym:                  "DBus",
 		Desc:                 "Linux DBus support",
