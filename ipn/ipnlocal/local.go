@@ -2534,7 +2534,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 
 	if buildfeatures.HasTPM && b.HardwareAttested() {
 		if genKey, ok := feature.HookGenerateAttestationKeyIfEmpty.GetOk(); ok {
-			newKey, err := genKey(newPrefs.Persist, logf)
+			newKey, err := genKey(&newPrefs.Persist, logf)
 			if err != nil {
 				logf("failed to populate attestation key from TPM: %v", err)
 			}
