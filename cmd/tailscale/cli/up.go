@@ -641,7 +641,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 				}
 			}
 
-			authKey, err = f(ctx, clientSecret, strings.Split(upArgs.advertiseTags, ","))
+			authKey, err = f(ctx, clientSecret, prefs.AdvertiseTags)
 			if err != nil {
 				return err
 			}
@@ -654,7 +654,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 				return err
 			}
 
-			authKey, err = f(ctx, prefs.ControlURL, upArgs.clientID, idToken, upArgs.audience, strings.Split(upArgs.advertiseTags, ","))
+			authKey, err = f(ctx, prefs.ControlURL, upArgs.clientID, idToken, upArgs.audience, prefs.AdvertiseTags)
 			if err != nil {
 				return err
 			}
