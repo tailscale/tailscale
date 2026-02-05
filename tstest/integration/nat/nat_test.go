@@ -119,9 +119,13 @@ func v6cidr(n int) string {
 
 func easy(c *vnet.Config) *vnet.Node {
 	n := c.NumNodes() + 1
-	return c.AddNode(c.AddNetwork(
+	nw := c.AddNetwork(
 		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
-		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT))
+		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT)
+	if n == 2 {
+		nw.SetDERPLatency(500 * time.Millisecond)
+	}
+	return c.AddNode(nw)
 }
 
 func easyAnd6(c *vnet.Config) *vnet.Node {
@@ -415,7 +419,7 @@ func (nt *natTest) runTest(addNode ...addNodeFunc) pingRoute {
 		return ""
 	}
 
-	pingRes, err := ping(ctx, clients[0], sts[1].Self.TailscaleIPs[0])
+	pingRes, err := ping(ctx, t, clients[0], sts[1].Self.TailscaleIPs[0])
 	if err != nil {
 		t.Fatalf("ping failure: %v", err)
 	}
@@ -450,14 +454,16 @@ const (
 	routeNil    pingRoute = "nil" // *ipnstate.PingResult is nil
 )
 
-func ping(ctx context.Context, c *vnet.NodeAgentClient, target netip.Addr) (*ipnstate.PingResult, error) {
+func ping_old(ctx context.Context, t testing.TB, c *vnet.NodeAgentClient, target netip.Addr) (*ipnstate.PingResult, error) {
 	n := 0
 	var res *ipnstate.PingResult
 	anyPong := false
 	for n < 10 {
 		n++
+		t.Logf("ping_old attempt %d to %v ...", n, target)
 		pr, err := c.PingWithOpts(ctx, target, tailcfg.PingDisco, tailscale.PingOpts{})
 		if err != nil {
+			t.Logf("ping_old attempt %d error: %v", n, err)
 			if anyPong {
 				return res, nil
 			}
@@ -467,8 +473,10 @@ func ping(ctx context.Context, c *vnet.NodeAgentClient, target netip.Addr) (*ipn
 			return nil, errors.New(pr.Err)
 		}
 		if pr.DERPRegionID == 0 {
+			t.Logf("ping_old attempt %d: direct (endpoint %v, latency %v)", n, pr.Endpoint, pr.LatencySeconds)
 			return pr, nil
 		}
+		t.Logf("ping_old attempt %d: via DERP region %d (latency %v)", n, pr.DERPRegionID, pr.LatencySeconds)
 		res = pr
 		select {
 		case <-ctx.Done():
@@ -479,6 +487,40 @@ func ping(ctx context.Context, c *vnet.NodeAgentClient, target netip.Addr) (*ipn
 		return nil, errors.New("no ping response")
 	}
 	return res, nil
+}
+
+func ping(ctx context.Context, t testing.TB, c *vnet.NodeAgentClient, target netip.Addr) (*ipnstate.PingResult, error) {
+	var lastRes *ipnstate.PingResult
+	for n := range 10 {
+		t.Logf("ping attempt %d to %v ...", n+1, target)
+		pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		pr, err := c.PingWithOpts(pingCtx, target, tailcfg.PingDisco, tailscale.PingOpts{})
+		cancel()
+		if err != nil {
+			t.Logf("ping attempt %d error: %v", n+1, err)
+			if ctx.Err() != nil {
+				break
+			}
+			continue
+		}
+		if pr.Err != "" {
+			return nil, errors.New(pr.Err)
+		}
+		t.Logf("ping attempt %d: derp=%d endpoint=%v latency=%v", n+1, pr.DERPRegionID, pr.Endpoint, pr.LatencySeconds)
+		if pr.DERPRegionID == 0 {
+			return pr, nil
+		}
+		lastRes = pr
+		select {
+		case <-ctx.Done():
+			return lastRes, nil
+		case <-time.After(time.Second):
+		}
+	}
+	if lastRes != nil {
+		return lastRes, nil
+	}
+	return nil, fmt.Errorf("no ping response (ctx: %v)", ctx.Err())
 }
 
 func up(ctx context.Context, c *vnet.NodeAgentClient) error {

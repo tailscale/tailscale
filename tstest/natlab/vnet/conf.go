@@ -282,8 +282,9 @@ type Network struct {
 
 	svcs set.Set[NetworkService]
 
-	latency  time.Duration // latency applied to interface writes
-	lossRate float64       // chance of packet loss (0.0 to 1.0)
+	latency     time.Duration // latency applied to interface writes
+	lossRate    float64       // chance of packet loss (0.0 to 1.0)
+	derpLatency time.Duration // extra latency for DERP-related packets
 
 	// ...
 	err error // carried error
@@ -302,6 +303,10 @@ func (n *Network) SetPacketLoss(rate float64) {
 		rate = 1
 	}
 	n.lossRate = rate
+}
+
+func (n *Network) SetDERPLatency(d time.Duration) {
+	n.derpLatency = d
 }
 
 // SetBlackholedIPv4 sets whether the network should blackhole all IPv4 traffic
@@ -372,21 +377,22 @@ func (s *Server) initFromConfig(c *Config) error {
 			conf.lanIP4 = netip.MustParsePrefix("192.168.0.0/24")
 		}
 		n := &network{
-			num:        conf.num,
-			s:          s,
-			mac:        conf.mac,
-			portmap:    conf.svcs.Contains(NATPMP), // TODO: expand network.portmap
-			wanIP6:     conf.wanIP6,
-			v4:         conf.lanIP4.IsValid(),
-			v6:         conf.wanIP6.IsValid(),
-			wanIP4:     conf.wanIP4,
-			lanIP4:     conf.lanIP4,
-			breakWAN4:  conf.breakWAN4,
-			latency:    conf.latency,
-			lossRate:   conf.lossRate,
-			nodesByIP4: map[netip.Addr]*node{},
-			nodesByMAC: map[MAC]*node{},
-			logf:       logger.WithPrefix(s.logf, fmt.Sprintf("[net-%v] ", conf.mac)),
+			num:         conf.num,
+			s:           s,
+			mac:         conf.mac,
+			portmap:     conf.svcs.Contains(NATPMP), // TODO: expand network.portmap
+			wanIP6:      conf.wanIP6,
+			v4:          conf.lanIP4.IsValid(),
+			v6:          conf.wanIP6.IsValid(),
+			wanIP4:      conf.wanIP4,
+			lanIP4:      conf.lanIP4,
+			breakWAN4:   conf.breakWAN4,
+			latency:     conf.latency,
+			lossRate:    conf.lossRate,
+			derpLatency: conf.derpLatency,
+			nodesByIP4:  map[netip.Addr]*node{},
+			nodesByMAC:  map[MAC]*node{},
+			logf:        logger.WithPrefix(s.logf, fmt.Sprintf("[net-%v] ", conf.mac)),
 		}
 		netOfConf[conf] = n
 		s.networks.Add(n)

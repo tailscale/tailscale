@@ -268,10 +268,20 @@ func (n *network) handleIPPacketFromGvisor(ipRaw []byte) {
 		return
 	}
 	if nw, ok := n.writers.Load(node.mac); ok {
-		nw.write(resPkt)
+		if d := n.derpLatency; d > 0 && n.isDERPPacket(flow.src) {
+			pkt := make([]byte, len(resPkt))
+			copy(pkt, resPkt)
+			time.AfterFunc(d, func() { nw.write(pkt) })
+		} else {
+			nw.write(resPkt)
+		}
 	} else {
 		n.logf("gvisor write: no writeFunc for %v", node.mac)
 	}
+}
+
+func (n *network) isDERPPacket(ip netip.Addr) bool {
+	return fakeDERP1.Match(ip) || fakeDERP2.Match(ip)
 }
 
 func netaddrIPFromNetstackIP(s tcpip.Address) netip.Addr {
@@ -435,6 +445,7 @@ func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn) {
 			for _, lg := range logs {
 				tStr := lg.Logtail.Client_Time.Round(time.Millisecond).Format(time.RFC3339Nano)
 				fmt.Fprintf(&node.logBuf, "[%v] %s\n", tStr, lg.Text)
+				n.s.logf("[%v] %s: %s", node, tStr, lg.Text)
 			}
 		}
 	})
@@ -520,6 +531,7 @@ type network struct {
 	breakWAN4      bool                 // break WAN IPv4 connectivity
 	latency        time.Duration        // latency applied to interface writes
 	lossRate       float64              // probability of dropping a packet (0.0 to 1.0)
+	derpLatency    time.Duration        // extra latency for DERP-related packets
 	nodesByIP4     map[netip.Addr]*node // by LAN IPv4
 	nodesByMAC     map[MAC]*node
 	logf           func(format string, args ...any)
