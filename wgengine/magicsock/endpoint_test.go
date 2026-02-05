@@ -455,10 +455,19 @@ func Test_endpoint_udpRelayEndpointReady(t *testing.T) {
 }
 
 func TestUpdateDiscoKey(t *testing.T) {
-	t.Run("SetKey", func(t *testing.T) {
+	t.Run("SetKeyNotTSMP", func(t *testing.T) {
 		de := &endpoint{}
 		newKey := key.NewDisco().Public()
-		de.updateDiscoKeyLocked(&newKey)
+		de.updateDiscoKeyLocked(&newKey, false)
+		if newKey.Compare(de.disco.Load().key) != 0 {
+			t.Errorf("disco keys not equal, expected %v, got %v", newKey, de.disco.Load().key)
+		}
+	})
+
+	t.Run("SetKeyTSMP", func(t *testing.T) {
+		de := &endpoint{}
+		newKey := key.NewDisco().Public()
+		de.updateDiscoKeyLocked(&newKey, true)
 		if newKey.Compare(de.disco.Load().key) != 0 {
 			t.Errorf("disco keys not equal, expected %v, got %v", newKey, de.disco.Load().key)
 		}
@@ -466,7 +475,7 @@ func TestUpdateDiscoKey(t *testing.T) {
 
 	t.Run("SetNilKey", func(t *testing.T) {
 		de := &endpoint{}
-		de.updateDiscoKeyLocked(nil)
+		de.updateDiscoKeyLocked(nil, false)
 		if de.disco.Load() != nil {
 			t.Errorf("disco keys not equal, expected %v, got %v", nil, de.disco.Load().key)
 		}
@@ -476,11 +485,25 @@ func TestUpdateDiscoKey(t *testing.T) {
 		de := &endpoint{}
 		oldKey := key.NewDisco().Public()
 		newKey := key.NewDisco().Public()
-		de.updateDiscoKeyLocked(&oldKey)
-		de.updateDiscoKeyLocked(&newKey)
-		de.updateDiscoKeyLocked(&oldKey) // <- Should not change the key
+		de.updateDiscoKeyLocked(&oldKey, false)
+		de.updateDiscoKeyLocked(&newKey, true)
+		de.updateDiscoKeyLocked(&oldKey, false) // <- Should not change the key
+
 		if newKey.Compare(de.disco.Load().key) != 0 {
 			t.Errorf("disco keys not equal, expected %v, got %v", newKey, de.disco.Load().key)
+		}
+
+		de.updateDiscoKeyLocked(&newKey, false) // <- Connected to control
+		if de.disco.Load().viaTSMP {
+			t.Errorf("disco keys is learned viaTSMP, expected false")
+		}
+
+		newerKey := key.NewDisco().Public()
+		de.updateDiscoKeyLocked(&newerKey, true) // <- No longer connected to control
+		de.updateDiscoKeyLocked(&oldKey, false)
+		de.updateDiscoKeyLocked(&newKey, false)
+		if newerKey.Compare(de.disco.Load().key) != 0 {
+			t.Errorf("disco keys not equal, expected %v, got %v", newerKey, de.disco.Load().key)
 		}
 	})
 }
