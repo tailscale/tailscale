@@ -2478,7 +2478,9 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 
 	if b.state != ipn.Running && b.conf == nil && opts.AuthKey == "" {
 		sysak, _ := b.polc.GetString(pkey.AuthKey, "")
-		if sysak != "" {
+		if sysak != "" && len(b.pm.Profiles()) > 0 && b.state != ipn.NeedsLogin {
+			logf("not setting opts.AuthKey from syspolicy; login profiles exist, state=%v", b.state)
+		} else if sysak != "" {
 			logf("setting opts.AuthKey by syspolicy, len=%v", len(sysak))
 			opts.AuthKey = strings.TrimSpace(sysak)
 		}
