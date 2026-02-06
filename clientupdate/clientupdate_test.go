@@ -86,18 +86,8 @@ func TestUpdateDebianAptSourcesListBytes(t *testing.T) {
 	}
 }
 
-func TestUpdateYUMRepoTrack(t *testing.T) {
-	tests := []struct {
-		desc    string
-		before  string
-		track   string
-		after   string
-		rewrote bool
-		wantErr bool
-	}{
-		{
-			desc: "same track",
-			before: `
+var YUMRepos = map[string]string{
+	StableTrack: `
 [tailscale-stable]
 name=Tailscale stable
 baseurl=https://pkgs.tailscale.com/stable/fedora/$basearch
@@ -107,32 +97,8 @@ repo_gpgcheck=1
 gpgcheck=0
 gpgkey=https://pkgs.tailscale.com/stable/fedora/repo.gpg
 `,
-			track: StableTrack,
-			after: `
-[tailscale-stable]
-name=Tailscale stable
-baseurl=https://pkgs.tailscale.com/stable/fedora/$basearch
-enabled=1
-type=rpm
-repo_gpgcheck=1
-gpgcheck=0
-gpgkey=https://pkgs.tailscale.com/stable/fedora/repo.gpg
-`,
-		},
-		{
-			desc: "change track",
-			before: `
-[tailscale-stable]
-name=Tailscale stable
-baseurl=https://pkgs.tailscale.com/stable/fedora/$basearch
-enabled=1
-type=rpm
-repo_gpgcheck=1
-gpgcheck=0
-gpgkey=https://pkgs.tailscale.com/stable/fedora/repo.gpg
-`,
-			track: UnstableTrack,
-			after: `
+
+	UnstableTrack: `
 [tailscale-unstable]
 name=Tailscale unstable
 baseurl=https://pkgs.tailscale.com/unstable/fedora/$basearch
@@ -142,11 +108,19 @@ repo_gpgcheck=1
 gpgcheck=0
 gpgkey=https://pkgs.tailscale.com/unstable/fedora/repo.gpg
 `,
-			rewrote: true,
-		},
-		{
-			desc: "non-tailscale repo file",
-			before: `
+
+	ReleaseCandidateTrack: `
+[tailscale-release-candidate]
+name=Tailscale release-candidate
+baseurl=https://pkgs.tailscale.com/release-candidate/fedora/$basearch
+enabled=1
+type=rpm
+repo_gpgcheck=1
+gpgcheck=0
+gpgkey=https://pkgs.tailscale.com/release-candidate/fedora/repo.gpg
+`,
+
+	"FakeRepo": `
 [fedora]
 name=Fedora $releasever - $basearch
 #baseurl=http://download.example/pub/fedora/linux/releases/$releasever/Everything/$basearch/os/
@@ -158,8 +132,41 @@ repo_gpgcheck=0
 type=rpm
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-$releasever-$basearch
-skip_if_unavailable=False
-`,
+skip_if_unavailable=False`,
+}
+
+func TestUpdateYUMRepoTrack(t *testing.T) {
+	tests := []struct {
+		desc    string
+		before  string
+		track   string
+		after   string
+		rewrote bool
+		wantErr bool
+	}{
+		{
+			desc:   "same track",
+			before: YUMRepos[StableTrack],
+			track:  StableTrack,
+			after:  YUMRepos[StableTrack],
+		},
+		{
+			desc:    "change track",
+			before:  YUMRepos[StableTrack],
+			track:   UnstableTrack,
+			after:   YUMRepos[UnstableTrack],
+			rewrote: true,
+		},
+		{
+			desc:    "change track RC",
+			before:  YUMRepos[StableTrack],
+			track:   ReleaseCandidateTrack,
+			after:   YUMRepos[ReleaseCandidateTrack],
+			rewrote: true,
+		},
+		{
+			desc:    "non-tailscale repo file",
+			before:  YUMRepos["FakeRepo"],
 			track:   StableTrack,
 			wantErr: true,
 		},
