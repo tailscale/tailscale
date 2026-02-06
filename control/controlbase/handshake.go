@@ -20,6 +20,7 @@ import (
 	chp "golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/hkdf"
+	"tailscale.com/syncs"
 	"tailscale.com/types/key"
 )
 
@@ -186,6 +187,8 @@ func continueClientHandshake(ctx context.Context, conn net.Conn, s *symmetricSta
 			cipher: c2,
 		},
 	}
+	syncs.RegisterMutex(&c.rx.Mutex, "controlbase.Conn.rx.Mutex")
+	syncs.RegisterMutex(&c.tx.Mutex, "controlbase.Conn.tx.Mutex")
 	return c, nil
 }
 
