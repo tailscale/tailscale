@@ -446,6 +446,11 @@ func (lc *Client) EventBusGraph(ctx context.Context) ([]byte, error) {
 	return lc.get200(ctx, "/localapi/v0/debug-bus-graph")
 }
 
+// EventBusQueues returns a JSON snapshot of event bus queue depths per client.
+func (lc *Client) EventBusQueues(ctx context.Context) ([]byte, error) {
+	return lc.get200(ctx, "/localapi/v0/debug-bus-queues")
+}
+
 // StreamBusEvents returns an iterator of Tailscale bus events as they arrive.
 // Each pair is a valid event and a nil error, or a zero event a non-nil error.
 // In case of error, the iterator ends after the pair reporting the error.
