@@ -25,6 +25,7 @@ fi
 # don't yet support TS_GO_NEXT=1 with flake.nix or in our corp CI.
 if [ "${TS_GO_NEXT:-}" != "1" ]; then
     ./tool/go version 2>/dev/null | awk '{print $3}' | sed 's/^go//' > go.toolchain.version
+    ./tool/go mod edit -go "$(cat go.toolchain.version)"
     ./update-flake.sh
 fi
 
