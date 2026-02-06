@@ -125,6 +125,12 @@ func debugCmd() *ffcli.Command {
 				})(),
 			},
 			{
+				Name:       "daemon-bus-queues",
+				ShortUsage: "tailscale debug daemon-bus-queues",
+				Exec:       runDaemonBusQueues,
+				ShortHelp:  "Print event bus queue depths per client",
+			},
+			{
 				Name:       "metrics",
 				ShortUsage: "tailscale debug metrics",
 				Exec:       runDaemonMetrics,
@@ -837,6 +843,15 @@ func runDaemonBusGraph(ctx context.Context, args []string) error {
 	} else {
 		fmt.Print(string(graph))
 	}
+	return nil
+}
+
+func runDaemonBusQueues(ctx context.Context, args []string) error {
+	data, err := localClient.EventBusQueues(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Print(string(data))
 	return nil
 }
 
