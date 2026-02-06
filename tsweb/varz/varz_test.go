@@ -113,7 +113,6 @@ func TestVarzHandler(t *testing.T) {
 			&metrics.Set{
 				Map: *(func() *expvar.Map {
 					m := new(expvar.Map)
-					m.Init()
 					m.Add("foo", 1)
 					m.Add("bar", 2)
 					return m
@@ -127,7 +126,6 @@ func TestVarzHandler(t *testing.T) {
 			&metrics.Set{
 				Map: *(func() *expvar.Map {
 					m := new(expvar.Map)
-					m.Init()
 					m.Add("foo", 1)
 					m.Add("bar", 2)
 					return m
@@ -140,7 +138,6 @@ func TestVarzHandler(t *testing.T) {
 			"api_status_code",
 			func() *expvar.Map {
 				m := new(expvar.Map)
-				m.Init()
 				m.Add("2xx", 100)
 				m.Add("5xx", 2)
 				return m
@@ -172,7 +169,6 @@ func TestVarzHandler(t *testing.T) {
 				Label: "label",
 				Map: *(func() *expvar.Map {
 					m := new(expvar.Map)
-					m.Init()
 					m.Add("foo", 1)
 					m.Add("bar", 2)
 					return m
@@ -185,7 +181,6 @@ func TestVarzHandler(t *testing.T) {
 			"float_map",
 			func() *expvar.Map {
 				m := new(expvar.Map)
-				m.Init()
 				f := new(expvar.Float)
 				f.Set(1.5)
 				m.Set("a", f)
@@ -198,7 +193,6 @@ func TestVarzHandler(t *testing.T) {
 			"int_map",
 			func() *expvar.Map {
 				m := new(expvar.Map)
-				m.Init()
 				f := new(expvar.Int)
 				f.Set(55)
 				m.Set("a", f)
@@ -211,7 +205,6 @@ func TestVarzHandler(t *testing.T) {
 			"string_map",
 			func() *expvar.Map {
 				m := new(expvar.Map)
-				m.Init()
 				m.Set("a", expvar.NewString("foo"))
 				return m
 			}(),
@@ -256,7 +249,6 @@ func TestVarzHandler(t *testing.T) {
 			"counter_labelmap_keyname_m",
 			func() *expvar.Map {
 				m := new(expvar.Map)
-				m.Init()
 				m.Add("foo", 1)
 				m.Add("bar", 2)
 				return m
