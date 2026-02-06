@@ -245,11 +245,21 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 		if label != "" && typ != "" {
 			fmt.Fprintf(w, "# TYPE %s %s\n", name, typ)
 			v.Do(func(kv expvar.KeyValue) {
-				fmt.Fprintf(w, "%s{%s=%q} %v\n", name, label, kv.Key, kv.Value)
+				switch kv.Value.(type) {
+				case *expvar.Int, *expvar.Float:
+					fmt.Fprintf(w, "%s{%s=%q} %v\n", name, label, kv.Key, kv.Value)
+				default:
+					fmt.Fprintf(w, "# skipping %q expvar map key %q with unknown value type %T\n", name, kv.Key, kv.Value)
+				}
 			})
 		} else {
 			v.Do(func(kv expvar.KeyValue) {
-				fmt.Fprintf(w, "%s_%s %v\n", name, kv.Key, kv.Value)
+				switch kv.Value.(type) {
+				case *expvar.Int, *expvar.Float:
+					fmt.Fprintf(w, "%s_%s %v\n", name, kv.Key, kv.Value)
+				default:
+					fmt.Fprintf(w, "# skipping %q expvar map key %q with unknown value type %T\n", name, kv.Key, kv.Value)
+				}
 			})
 		}
 	}
