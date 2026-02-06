@@ -512,6 +512,23 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("could not create nameserver reconciler: %v", err)
 	}
 
+	epsFilter := handler.EnqueueRequestsFromMapFunc(epsHandlerForEgressPolicy)
+	err = builder.ControllerManagedBy(mgr).
+		For(&tsapi.EgressPolicy{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Named("egress-policy-reconciler").
+		Watches(&discoveryv1.EndpointSlice{}, epsFilter).
+		Owns(&networkingv1.NetworkPolicy{}).
+		Complete(&EgressPolicyReconciler{
+			Client:      mgr.GetClient(),
+			recorder:    eventRecorder,
+			logger:      opts.log.Named("egress-policy-reconciler"),
+			clock:       tstime.DefaultClock{},
+			tsNamespace: opts.tailscaleNamespace,
+		})
+	if err != nil {
+		startlog.Fatal("could not create egresspolicy reconciler: %v", err)
+	}
+
 	egressSvcFilter := handler.EnqueueRequestsFromMapFunc(egressSvcsHandler)
 	egressProxyGroupFilter := handler.EnqueueRequestsFromMapFunc(egressSvcsFromEgressProxyGroup(mgr.GetClient(), opts.log))
 	err = builder.
@@ -549,7 +566,7 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("could not create egress Services readiness reconciler: %v", err)
 	}
 
-	epsFilter := handler.EnqueueRequestsFromMapFunc(egressEpsHandler)
+	epsFilter = handler.EnqueueRequestsFromMapFunc(egressEpsHandler)
 	podsFilter := handler.EnqueueRequestsFromMapFunc(egressEpsFromPGPods(mgr.GetClient(), opts.tailscaleNamespace))
 	secretsFilter := handler.EnqueueRequestsFromMapFunc(egressEpsFromPGStateSecrets(mgr.GetClient(), opts.tailscaleNamespace))
 	epsFromExtNSvcFilter := handler.EnqueueRequestsFromMapFunc(epsFromExternalNameService(mgr.GetClient(), opts.log, opts.tailscaleNamespace))
@@ -1158,6 +1175,23 @@ func serviceHandlerForIngress(cl client.Client, logger *zap.SugaredLogger, ingre
 			}
 		}
 		return reqs
+	}
+}
+
+// epsHandlerForEgressPolicy ensures that serivce events triggering the EgressPolicy
+// reconciler are the managed ClusterIP services created by the egress-svcs-reconciler.
+func epsHandlerForEgressPolicy(_ context.Context, o client.Object) []reconcile.Request {
+	_, epsHasPGLabel := o.GetLabels()[AnnotationProxyGroup]
+	epName, epsHasEPLabel := o.GetLabels()[AnnotationEgressPolicy]
+	if !(epsHasPGLabel && epsHasEPLabel && isManagedByType(o, "svc") && isManagedResource(o)) {
+		return nil
+	}
+	return []reconcile.Request{
+		{
+			NamespacedName: types.NamespacedName{
+				Name: epName,
+			},
+		},
 	}
 }
 

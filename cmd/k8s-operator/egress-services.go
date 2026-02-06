@@ -46,7 +46,8 @@ const (
 	reasonEgressSvcCreationFailed = "EgressSvcCreationFailed"
 	reasonProxyGroupNotReady      = "ProxyGroupNotReady"
 
-	labelProxyGroup = "tailscale.com/proxy-group"
+	labelProxyGroup   = "tailscale.com/proxy-group"
+	labelEgressPolicy = "tailscale.com/egress-policy"
 
 	labelSvcType = "tailscale.com/svc-type" // ingress or egress
 	typeEgress   = "egress"
@@ -685,6 +686,7 @@ func egressSvcChildResourceLabels(svc *corev1.Service) map[string]string {
 		LabelParentName:        svc.Name,
 		LabelParentNamespace:   svc.Namespace,
 		labelProxyGroup:        svc.Annotations[AnnotationProxyGroup],
+		labelEgressPolicy:      svc.Annotations[AnnotationEgressPolicy],
 		labelSvcType:           typeEgress,
 	}
 }
