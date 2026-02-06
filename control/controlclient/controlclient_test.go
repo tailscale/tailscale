@@ -98,6 +98,7 @@ func TestCanSkipStatus(t *testing.T) {
 	nm1 := &netmap.NetworkMap{}
 	nm2 := &netmap.NetworkMap{}
 
+	commonPersist := new(persist.Persist).View()
 	tests := []struct {
 		name   string
 		s1, s2 *Status
@@ -165,8 +166,8 @@ func TestCanSkipStatus(t *testing.T) {
 		},
 		{
 			name: "skip",
-			s1:   &Status{NetMap: nm1},
-			s2:   &Status{NetMap: nm2},
+			s1:   &Status{NetMap: nm1, LoggedIn: true, InMapPoll: true, Persist: commonPersist},
+			s2:   &Status{NetMap: nm2, LoggedIn: true, InMapPoll: true, Persist: commonPersist},
 			want: true,
 		},
 	}
