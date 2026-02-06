@@ -68,8 +68,9 @@ func init() {
 }
 
 const (
-	contentTypeHeader   = "Content-Type"
-	grpcBaseContentType = "application/grpc"
+	contentTypeHeader      = "Content-Type"
+	grpcBaseContentType    = "application/grpc"
+	connectBaseContentType = "application/connect+"
 )
 
 // ErrETagMismatch signals that the given
@@ -1016,11 +1017,13 @@ func (rp *reverseProxy) getH2CTransport() http.RoundTripper {
 // for a h2c server, but sufficient for our particular use case.
 func (rp *reverseProxy) shouldProxyViaH2C(r *http.Request) bool {
 	contentType := r.Header.Get(contentTypeHeader)
-	// For unix sockets, check if it's gRPC content to determine h2c
+	// Check if content type requires HTTP/2 (gRPC or Connect RPC)
+	needsH2C := isGRPCContentType(contentType) || isConnectContentType(contentType)
+	// For unix sockets, check if it's gRPC/Connect content to determine h2c
 	if rp.socketPath != "" {
-		return r.ProtoMajor == 2 && isGRPCContentType(contentType)
+		return r.ProtoMajor == 2 && needsH2C
 	}
-	return r.ProtoMajor == 2 && strings.HasPrefix(rp.backend, "http://") && isGRPCContentType(contentType)
+	return r.ProtoMajor == 2 && strings.HasPrefix(rp.backend, "http://") && needsH2C
 }
 
 // isGRPC accepts an HTTP request's content type header value and determines
@@ -1031,6 +1034,13 @@ func (rp *reverseProxy) shouldProxyViaH2C(r *http.Request) bool {
 func isGRPCContentType(contentType string) bool {
 	s, ok := strings.CutPrefix(contentType, grpcBaseContentType)
 	return ok && (len(s) == 0 || s[0] == '+' || s[0] == ';')
+}
+
+// isConnectContentType returns true if the content type indicates a Connect RPC
+// streaming request, which requires HTTP/2 for bidirectional streaming.
+// https://connectrpc.com/docs/protocol/
+func isConnectContentType(contentType string) bool {
+	return strings.HasPrefix(contentType, connectBaseContentType)
 }
 
 func addProxyForwardedHeaders(r *httputil.ProxyRequest) {
