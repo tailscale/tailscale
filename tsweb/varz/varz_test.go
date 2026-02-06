@@ -181,6 +181,43 @@ func TestVarzHandler(t *testing.T) {
 			"# TYPE m counter\nm{label=\"bar\"} 2\nm{label=\"foo\"} 1\n",
 		},
 		{
+			"metrics_label_map_float",
+			"float_map",
+			func() *expvar.Map {
+				m := new(expvar.Map)
+				m.Init()
+				f := new(expvar.Float)
+				f.Set(1.5)
+				m.Set("a", f)
+				return m
+			}(),
+			"float_map_a 1.5\n",
+		},
+		{
+			"metrics_label_map_int",
+			"int_map",
+			func() *expvar.Map {
+				m := new(expvar.Map)
+				m.Init()
+				f := new(expvar.Int)
+				f.Set(55)
+				m.Set("a", f)
+				return m
+			}(),
+			"int_map_a 55\n",
+		},
+		{
+			"metrics_label_map_string",
+			"string_map",
+			func() *expvar.Map {
+				m := new(expvar.Map)
+				m.Init()
+				m.Set("a", expvar.NewString("foo"))
+				return m
+			}(),
+			"# skipping \"string_map\" expvar map key \"a\" with unknown value type *expvar.String\n",
+		},
+		{
 			"metrics_label_map_untyped",
 			"control_save_config",
 			(func() *metrics.LabelMap {
@@ -297,6 +334,12 @@ foo_foo_b 1
 # TYPE api_status_code counter
 api_status_code 42
 			`) + "\n",
+		},
+		{
+			"string_expvar_is_not_exported",
+			"foo_string",
+			new(expvar.String),
+			"# skipping expvar \"foo_string\" (Go type *expvar.String) with undeclared Prometheus type\n",
 		},
 	}
 	for _, tt := range tests {
