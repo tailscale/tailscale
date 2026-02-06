@@ -674,17 +674,16 @@ func canSkipStatus(s1, s2 *Status) bool {
 		// we can't skip it.
 		return false
 	}
-	if s1.Err != nil || s1.URL != "" || s1.LoggedIn {
-		// If s1 has an error, a URL, or LoginFinished set, we shouldn't skip it,
-		// lest the error go away in s2 or in-between. We want to make sure all
-		// the subsystems see it. Plus there aren't many of these, so not worth
-		// skipping.
+	if s1.Err != nil || s1.URL != "" {
+		// If s1 has an error or an URL, we shouldn't skip it, lest the error go
+		// away in s2 or in-between. We want to make sure all the subsystems see
+		// it. Plus there aren't many of these, so not worth skipping.
 		return false
 	}
 	if !s1.Persist.Equals(s2.Persist) || s1.LoggedIn != s2.LoggedIn || s1.InMapPoll != s2.InMapPoll || s1.URL != s2.URL {
-		// If s1 has a different Persist, LoginFinished, Synced, or URL than s2,
-		// don't skip it. We only care about skipping the typical
-		// entries where the only difference is the NetMap.
+		// If s1 has a different Persist, has changed login state, changed map
+		// poll state, or has a new login URL, don't skip it. We only care about
+		// skipping the typical entries where the only difference is the NetMap.
 		return false
 	}
 	// If nothing above precludes it, and both s1 and s2 have NetMaps, then
