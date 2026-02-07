@@ -23,14 +23,26 @@ type Config struct {
 	DNS        []netip.Addr
 	Peers      []Peer
 
-	// NetworkLogging enables network logging.
-	// It is disabled if either ID is the zero value.
-	// LogExitFlowEnabled indicates whether or not exit flows should be logged.
-	NetworkLogging struct {
-		NodeID             logid.PrivateID
-		DomainID           logid.PrivateID
-		LogExitFlowEnabled bool
-	}
+	NetworkLogging NetworkLoggingConfig
+}
+
+// NetworkLoggingConfig configures network flow logging.
+type NetworkLoggingConfig struct {
+	// TailnetID is the Tailnet-specific log ID to associate network flow logs with.
+	// If non-zero, then network flow logging is enabled.
+	TailnetID logid.PrivateID
+	// NodeID is the node-specific log ID to associate network flow logs with.
+	// It may be zero while TailnetID is non-zero.
+	NodeID logid.PrivateID
+	// HTTPAuth is an optional HTTP Authorization header to upload log with.
+	HTTPAuth string
+
+	// AnonymizeExitTraffic specifies whether to anonymize exit node traffic.
+	// Enable this to better preserve privacy.
+	AnonymizeExitTraffic bool
+	// ExcludeNodeInfo specifies whether to exclude node information.
+	// Enable this to reduce the size of each log message.
+	ExcludeNodeInfo bool
 }
 
 func (c *Config) Equal(o *Config) bool {
