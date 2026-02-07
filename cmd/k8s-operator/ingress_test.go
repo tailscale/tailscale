@@ -24,6 +24,7 @@ import (
 	"tailscale.com/ipn"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
@@ -941,5 +942,143 @@ func TestTailscaleIngressWithHTTPRedirect(t *testing.T) {
 	}
 	if !reflect.DeepEqual(ing.Status.LoadBalancer.Ingress[0].Ports, wantPorts) {
 		t.Errorf("incorrect status ports after removing redirect: got %v, want %v", ing.Status.LoadBalancer.Ingress[0].Ports, wantPorts)
+	}
+}
+
+func TestTailscaleIngressWithAcceptAppCaps(t *testing.T) {
+	fc := fake.NewFakeClient(ingressClass())
+	ft := &fakeTSClient{}
+	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingR := &IngressReconciler{
+		Client:           fc,
+		ingressClassName: "tailscale",
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			tsnetServer:       fakeTsnetServer,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+	}
+
+	// 1. Create Ingress with accept-app-caps annotation
+	ing := ingress()
+	mak.Set(&ing.Annotations, AnnotationAcceptAppCaps, "example.com/cap/monitoring,example.com/cap/admin")
+	mustCreate(t, fc, ing)
+	mustCreate(t, fc, service())
+
+	expectReconciled(t, ingR, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test", "ingress")
+	wantCaps := []tailcfg.PeerCapability{"example.com/cap/monitoring", "example.com/cap/admin"}
+	opts := configOpts{
+		replicas:   ptr.To[int32](1),
+		stsName:    shortName,
+		secretName: fullName,
+		namespace:  "default",
+		parentType: "ingress",
+		hostname:   "default-test",
+		app:        kubetypes.AppIngressResource,
+		serveConfig: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{
+				443: {HTTPS: true},
+			},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {
+						Proxy:         "http://1.2.3.4:8080/",
+						AcceptAppCaps: wantCaps,
+					},
+				}},
+			},
+		},
+	}
+
+	expectEqual(t, fc, expectedSecret(t, fc, opts))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"))
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeResourceReqs)
+}
+
+func TestParseAcceptAppCaps(t *testing.T) {
+	tests := []struct {
+		name       string
+		annotation string
+		wantCaps   []tailcfg.PeerCapability
+		wantEvents int // number of warning events expected
+	}{
+		{
+			name:       "empty",
+			annotation: "",
+			wantCaps:   nil,
+		},
+		{
+			name:       "single_valid",
+			annotation: "example.com/cap/monitoring",
+			wantCaps:   []tailcfg.PeerCapability{"example.com/cap/monitoring"},
+		},
+		{
+			name:       "multiple_valid",
+			annotation: "example.com/cap/monitoring,example.com/cap/admin",
+			wantCaps: []tailcfg.PeerCapability{
+				"example.com/cap/monitoring",
+				"example.com/cap/admin",
+			},
+		},
+		{
+			name:       "whitespace",
+			annotation: " example.com/cap/monitoring , example.com/cap/admin ",
+			wantCaps: []tailcfg.PeerCapability{
+				"example.com/cap/monitoring",
+				"example.com/cap/admin",
+			},
+		},
+		{
+			name:       "invalid_skipped",
+			annotation: "example.com/cap/valid,not-a-cap,another.com/cap/ok",
+			wantCaps: []tailcfg.PeerCapability{
+				"example.com/cap/valid",
+				"another.com/cap/ok",
+			},
+			wantEvents: 1,
+		},
+		{
+			name:       "all_invalid",
+			annotation: "bad,also-bad",
+			wantCaps:   nil,
+			wantEvents: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := record.NewFakeRecorder(10)
+			ing := &networkingv1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test",
+					Namespace: "default",
+				},
+			}
+			if tt.annotation != "" {
+				mak.Set(&ing.Annotations, AnnotationAcceptAppCaps, tt.annotation)
+			}
+			got := parseAcceptAppCaps(ing, rec)
+			if !reflect.DeepEqual(got, tt.wantCaps) {
+				t.Errorf("parseAcceptAppCaps() = %v, want %v", got, tt.wantCaps)
+			}
+			// Drain events and count warnings
+			close(rec.Events)
+			var gotEvents int
+			for range rec.Events {
+				gotEvents++
+			}
+			if gotEvents != tt.wantEvents {
+				t.Errorf("got %d warning events, want %d", gotEvents, tt.wantEvents)
+			}
+		})
 	}
 }
