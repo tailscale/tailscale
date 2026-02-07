@@ -736,7 +736,7 @@ func (c *conn) isStillValid() bool {
 	if !a.Accept && a.HoldAndDelegate == "" {
 		return false
 	}
-	return c.localUser.Username == localUser
+	return c.localUser != nil && c.localUser.Username == localUser
 }
 
 // checkStillValid checks that the conn is still valid per the latest SSHPolicy.
