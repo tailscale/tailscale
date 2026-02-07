@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 
 	"tailscale.com/ipn"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
@@ -320,7 +322,37 @@ func validateIngressClass(ctx context.Context, cl client.Client, ingressClassNam
 	return nil
 }
 
+// validAppCap matches application capability names of the form {domain}/{name}.
+// Both parts must use the (simplified) FQDN label character set.
+// The "name" can contain forward slashes.
+var validAppCap = regexp.MustCompile(`^([\pL\pN-]+\.)+[\pL\pN-]+\/[\pL\pN-/]+$`)
+
+// parseAcceptAppCaps reads the AnnotationAcceptAppCaps annotation from the
+// Ingress, splits it by comma, validates each capability name, and returns the
+// valid ones. Invalid capabilities are skipped with a warning event.
+func parseAcceptAppCaps(ing *networkingv1.Ingress, rec record.EventRecorder) []tailcfg.PeerCapability {
+	raw, ok := ing.Annotations[AnnotationAcceptAppCaps]
+	if !ok || raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	var caps []tailcfg.PeerCapability
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if !validAppCap.MatchString(p) {
+			rec.Eventf(ing, corev1.EventTypeWarning, "InvalidAppCapability", "ignoring invalid app capability %q", p)
+			continue
+		}
+		caps = append(caps, tailcfg.PeerCapability(p))
+	}
+	return caps
+}
+
 func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl client.Client, rec record.EventRecorder, tlsHost string, logger *zap.SugaredLogger) (handlers map[string]*ipn.HTTPHandler, err error) {
+	acceptAppCaps := parseAcceptAppCaps(ing, rec)
 	addIngressBackend := func(b *networkingv1.IngressBackend, path string) {
 		if path == "" {
 			path = "/"
@@ -364,7 +396,8 @@ func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl clien
 			proto = "https+insecure://"
 		}
 		mak.Set(&handlers, path, &ipn.HTTPHandler{
-			Proxy: proto + svc.Spec.ClusterIP + ":" + fmt.Sprint(port) + path,
+			Proxy:         proto + svc.Spec.ClusterIP + ":" + fmt.Sprint(port) + path,
+			AcceptAppCaps: acceptAppCaps,
 		})
 	}
 	addIngressBackend(ing.Spec.DefaultBackend, "/")
