@@ -13,6 +13,7 @@ import (
 
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/appctype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -46,7 +47,7 @@ func cidrIsSubnet(node tailcfg.NodeView, cidr netip.Prefix) bool {
 }
 
 // WGCfg returns the NetworkMaps's WireGuard configuration.
-func WGCfg(pk key.NodePrivate, nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, exitNode tailcfg.StableNodeID) (*wgcfg.Config, error) {
+func WGCfg(pk key.NodePrivate, nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, exitNode tailcfg.StableNodeID, transitIPsFn func(tailcfg.NodeView) []netip.Prefix) (*wgcfg.Config, error) {
 	cfg := &wgcfg.Config{
 		PrivateKey: pk,
 		Addresses:  nm.GetAddresses().AsSlice(),
@@ -117,6 +118,11 @@ func WGCfg(pk key.NodePrivate, nm *netmap.NetworkMap, logf logger.Logf, flags ne
 				}
 			}
 			cpeer.AllowedIPs = append(cpeer.AllowedIPs, allowedIP)
+		}
+
+		if nm.HasCap(appctype.AppConnectorExperimentalCap) && transitIPsFn != nil {
+			transitIPs := transitIPsFn(peer)
+			cpeer.AllowedIPs = append(cpeer.AllowedIPs, transitIPs...)
 		}
 	}
 

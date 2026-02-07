@@ -5,7 +5,9 @@ package appc
 
 import (
 	"cmp"
+	"errors"
 	"net/netip"
+	"os"
 	"slices"
 	"sync"
 
@@ -15,11 +17,63 @@ import (
 	"tailscale.com/util/set"
 )
 
+// // mzbs fake functions ////
+const testingTag = "tag:conn25-test"
+
+func (c *Conn25) ClientTransitIPForMagicIP(magic netip.Addr) (netip.Addr, error) {
+	if !magic.Is4() {
+		return netip.Addr{}, errors.New("bootleg transit ip for magic ip only deals with ip4 for now")
+	}
+	mb := magic.As4()
+	mb[0], mb[1] = 169, 254
+
+	return netip.AddrFrom4(mb), nil
+}
+
+func (c *Conn25) ConnectorRealIPForTransitIPConnection(clientSrc, transitIP netip.Addr) (netip.Addr, error) {
+	// The transitIP may have overlap on this connector, right?
+	// In order to disambiguate we also need to know what client this came from.
+	// And all we have in the packet is the client src IP address.
+	return netip.MustParseAddr("104.16.184.241"), nil // icanhazip.com
+}
+
+func (c *Conn25) SelfIsConnector() bool {
+	// We need this so that if this is a connector, the datapath can quickly look in the
+	// connector flow tracking table to fast path trafffic.
+	v, _ := os.LookupEnv("MZB_SELF_IS_CONNECTOR")
+	return v == "true"
+}
+
+func (c *Conn25) AllowedLinkLocalDestination(addr netip.Addr) bool {
+	return transitIPs.Contains(addr)
+}
+
+func (c *Conn25) AllTransitIPsForPeer(peer tailcfg.NodeView) []netip.Prefix {
+	// This method is expected to be called close to the wireguard config to configure
+	// WG Allowed IPs that aren't in the netmap Allowed IPs.
+	// For PoC purposes, anything with the testing tag will get the entire
+	// transit IP block, so the PoC should only use one connector at a time.
+	if peer.Tags().ContainsFunc(func(tag string) bool { return tag == testingTag }) {
+		return []netip.Prefix{transitIPs}
+	}
+	return nil
+	// TODO: Once Conn25 is more filled out, this function should search through state
+	// to determine which peers are active and what their transit IPs are, and append to the list.
+}
+
+//// end mzbs fake functions ////
+
 // Conn25 holds the developing state for the as yet nascent next generation app connector.
 // There is currently (2025-12-08) no actual app connecting functionality.
 type Conn25 struct {
 	mu         sync.Mutex
 	transitIPs map[tailcfg.NodeID]map[netip.Addr]netip.Addr
+
+	config config
+}
+
+type config struct {
+	apps []appctype.Conn25Attr
 }
 
 const dupeTransitIPMessage = "Duplicate transit address in ConnectorTransitIPRequest"

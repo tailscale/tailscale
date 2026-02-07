@@ -66,6 +66,19 @@ type Filter struct {
 	state *filterState
 
 	shieldsUp bool
+
+	linkLocalDestinationAllower LinkLocalDestinationAllower
+}
+type FilterOption func(*Filter)
+
+type LinkLocalDestinationAllower interface {
+	AllowedLinkLocalDestination(netip.Addr) bool
+}
+
+func WithLinkLocalDestinationAllower(a LinkLocalDestinationAllower) FilterOption {
+	return func(f *Filter) {
+		f.linkLocalDestinationAllower = a
+	}
 }
 
 // filterState is a state cache of past seen packets.
@@ -174,12 +187,12 @@ func NewAllowNone(logf logger.Logf, logIPs *netipx.IPSet) *Filter {
 //
 // If shareStateWith is non-nil, the returned filter shares state with the previous one,
 // as long as the previous one was also a shields up filter.
-func NewShieldsUpFilter(localNets *netipx.IPSet, logIPs *netipx.IPSet, shareStateWith *Filter, logf logger.Logf) *Filter {
+func NewShieldsUpFilter(localNets *netipx.IPSet, logIPs *netipx.IPSet, shareStateWith *Filter, logf logger.Logf, opts ...FilterOption) *Filter {
 	// Don't permit sharing state with a prior filter that wasn't a shields-up filter.
 	if shareStateWith != nil && !shareStateWith.shieldsUp {
 		shareStateWith = nil
 	}
-	f := New(nil, nil, localNets, logIPs, shareStateWith, logf)
+	f := New(nil, nil, localNets, logIPs, shareStateWith, logf, opts...)
 	f.shieldsUp = true
 	return f
 }
@@ -192,7 +205,7 @@ func NewShieldsUpFilter(localNets *netipx.IPSet, logIPs *netipx.IPSet, shareStat
 // If shareStateWith is non-nil, the returned filter shares state with the
 // previous one, to enable changing rules at runtime without breaking existing
 // stateful flows.
-func New(matches []Match, capTest CapTestFunc, localNets, logIPs *netipx.IPSet, shareStateWith *Filter, logf logger.Logf) *Filter {
+func New(matches []Match, capTest CapTestFunc, localNets, logIPs *netipx.IPSet, shareStateWith *Filter, logf logger.Logf, opts ...FilterOption) *Filter {
 	var state *filterState
 	if shareStateWith != nil {
 		state = shareStateWith.state
@@ -226,6 +239,10 @@ func New(matches []Match, capTest CapTestFunc, localNets, logIPs *netipx.IPSet, 
 		p4, p6 := slicesx.Partition(p, func(p netip.Prefix) bool { return p.Addr().Is4() })
 		f.logIPs4 = ipset.NewContainsIPFunc(views.SliceOf(p4))
 		f.logIPs6 = ipset.NewContainsIPFunc(views.SliceOf(p6))
+	}
+
+	for _, o := range opts {
+		o(f)
 	}
 
 	return f
@@ -426,6 +443,7 @@ func (f *Filter) RunIn(q *packet.Parsed, rf RunFlags) Response {
 	default:
 		r, why = Drop, "not-ip"
 	}
+	fmt.Println("run-in-4 result and reason:", r, why)
 	f.logRateLimit(rf, q, dir, r, why)
 	return r
 }
@@ -459,7 +477,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
-	if !f.local4(q.Dst.Addr()) {
+	if !f.local4(q.Dst.Addr()) && (f.linkLocalDestinationAllower == nil || !f.linkLocalDestinationAllower.AllowedLinkLocalDestination(q.Dst.Addr())) {
 		return Drop, "destination not allowed"
 	}
 
@@ -519,7 +537,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
-	if !f.local6(q.Dst.Addr()) {
+	if !f.local6(q.Dst.Addr()) && (f.linkLocalDestinationAllower == nil || f.linkLocalDestinationAllower.AllowedLinkLocalDestination(q.Dst.Addr())) {
 		return Drop, "destination not allowed"
 	}
 
@@ -630,7 +648,15 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) (Response, us
 		f.logRateLimit(rf, q, dir, Drop, "multicast")
 		return Drop, usermetric.ReasonMulticast
 	}
-	if q.Dst.Addr().IsLinkLocalUnicast() && q.Dst.Addr() != gcpDNSAddr {
+
+	// The special link-local destination for GCP DNS, and packets that have allow-listed
+	// link destination IPs, e.g. for app connectors, are allowed.
+	if q.Dst.Addr().IsLinkLocalUnicast() &&
+		q.Dst.Addr() != gcpDNSAddr &&
+		(f.linkLocalDestinationAllower == nil || !f.linkLocalDestinationAllower.AllowedLinkLocalDestination(q.Dst.Addr())) {
+
+		fmt.Println("mzb dropping link local unicast")
+
 		f.logRateLimit(rf, q, dir, Drop, "link-local-unicast")
 		return Drop, usermetric.ReasonLinkLocalUnicast
 	}

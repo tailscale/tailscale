@@ -60,7 +60,8 @@ type Parsed struct {
 	// TCPFlags is the packet's TCP flag bits. Valid iff IPProto == TCP.
 	TCPFlags TCPFlag
 
-	// CaptureMeta contains metadata that is used when debugging.
+	// CaptureMeta contains metadata that is used when debugging, and
+	// for some filtering decisions.
 	CaptureMeta CaptureMeta
 }
 
