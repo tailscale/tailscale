@@ -67,8 +67,9 @@ type Manager struct {
 	knobs    *controlknobs.Knobs // or nil
 	goos     string              // if empty, gets set to runtime.GOOS
 
-	mu     sync.Mutex // guards following
-	config *Config    // Tracks the last viable DNS configuration set by Set.  nil on failures other than compilation failures or if set has never been called.
+	mu                  sync.Mutex // guards following
+	config              *Config    // Tracks the last viable DNS configuration set by Set.  nil on failures other than compilation failures or if set has never been called.
+	queryResponseMapper func(bs []byte) []byte
 }
 
 // NewManager created a new manager from the given config.
@@ -466,7 +467,11 @@ func (m *Manager) Query(ctx context.Context, bs []byte, family string, from neti
 		return nil, errFullQueue
 	}
 	defer atomic.AddInt32(&m.activeQueriesAtomic, -1)
-	return m.resolver.Query(ctx, bs, family, from)
+	outbs, err := m.resolver.Query(ctx, bs, family, from)
+	if err == nil && m.queryResponseMapper != nil {
+		outbs = m.queryResponseMapper(outbs)
+	}
+	return outbs, err
 }
 
 const (
@@ -652,3 +657,9 @@ func CleanUp(logf logger.Logf, netMon *netmon.Monitor, bus *eventbus.Bus, health
 }
 
 var metricDNSQueryErrorQueue = clientmetric.NewCounter("dns_query_local_error_queue")
+
+func (m *Manager) SetQueryResponseMapper(fx func(bs []byte) []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.queryResponseMapper = fx
+}
