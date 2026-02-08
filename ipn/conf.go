@@ -4,6 +4,7 @@
 package ipn
 
 import (
+	"fmt"
 	"net/netip"
 
 	"tailscale.com/tailcfg"
@@ -101,6 +102,11 @@ func (c *ConfigVAlpha) ToPrefs() (MaskedPrefs, error) {
 		mp.ExitNodeAllowLANAccessSet = true
 	}
 	if c.AdvertiseRoutes != nil {
+		for _, route := range c.AdvertiseRoutes {
+			if route != route.Masked() {
+				return mp, fmt.Errorf("route %s has non-address bits set; expected %s", route, route.Masked())
+			}
+		}
 		mp.AdvertiseRoutes = c.AdvertiseRoutes
 		mp.AdvertiseRoutesSet = true
 	}
