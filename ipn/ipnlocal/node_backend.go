@@ -31,7 +31,6 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/wgengine/filter"
-	"tailscale.com/wgengine/magicsock"
 )
 
 // nodeBackend is node-specific [LocalBackend] state. It is usually the current node.
@@ -79,9 +78,6 @@ type nodeBackend struct {
 
 	// initialized once and immutable
 	eventClient    *eventbus.Client
-	filterPub      *eventbus.Publisher[magicsock.FilterUpdate]
-	nodeViewsPub   *eventbus.Publisher[magicsock.NodeViewsUpdate]
-	nodeMutsPub    *eventbus.Publisher[magicsock.NodeMutationsUpdate]
 	derpMapViewPub *eventbus.Publisher[tailcfg.DERPMapView]
 
 	// TODO(nickkhyl): maybe use sync.RWMutex?
@@ -122,11 +118,7 @@ func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *n
 	// Default filter blocks everything and logs nothing.
 	noneFilter := filter.NewAllowNone(logger.Discard, &netipx.IPSet{})
 	nb.filterAtomic.Store(noneFilter)
-	nb.filterPub = eventbus.Publish[magicsock.FilterUpdate](nb.eventClient)
-	nb.nodeViewsPub = eventbus.Publish[magicsock.NodeViewsUpdate](nb.eventClient)
-	nb.nodeMutsPub = eventbus.Publish[magicsock.NodeMutationsUpdate](nb.eventClient)
 	nb.derpMapViewPub = eventbus.Publish[tailcfg.DERPMapView](nb.eventClient)
-	nb.filterPub.Publish(magicsock.FilterUpdate{Filter: nb.filterAtomic.Load()})
 	return nb
 }
 
@@ -436,15 +428,11 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) {
 	nb.netMap = nm
 	nb.updateNodeByAddrLocked()
 	nb.updatePeersLocked()
-	nv := magicsock.NodeViewsUpdate{}
 	if nm != nil {
-		nv.SelfNode = nm.SelfNode
-		nv.Peers = nm.Peers
 		nb.derpMapViewPub.Publish(nm.DERPMap.View())
 	} else {
 		nb.derpMapViewPub.Publish(tailcfg.DERPMapView{})
 	}
-	nb.nodeViewsPub.Publish(nv)
 }
 
 func (nb *nodeBackend) updateNodeByAddrLocked() {
@@ -520,9 +508,6 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	// call (e.g. its endpoints + online status both change)
 	var mutableNodes map[tailcfg.NodeID]*tailcfg.Node
 
-	update := magicsock.NodeMutationsUpdate{
-		Mutations: make([]netmap.NodeMutation, 0, len(muts)),
-	}
 	for _, m := range muts {
 		n, ok := mutableNodes[m.NodeIDBeingMutated()]
 		if !ok {
@@ -533,14 +518,12 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			}
 			n = nv.AsStruct()
 			mak.Set(&mutableNodes, nv.ID(), n)
-			update.Mutations = append(update.Mutations, m)
 		}
 		m.Apply(n)
 	}
 	for nid, n := range mutableNodes {
 		nb.peers[nid] = n.View()
 	}
-	nb.nodeMutsPub.Publish(update)
 	return true
 }
 
@@ -562,7 +545,6 @@ func (nb *nodeBackend) filter() *filter.Filter {
 
 func (nb *nodeBackend) setFilter(f *filter.Filter) {
 	nb.filterAtomic.Store(f)
-	nb.filterPub.Publish(magicsock.FilterUpdate{Filter: f})
 }
 
 func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, versionOS string) *dns.Config {
