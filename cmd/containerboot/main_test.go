@@ -1009,6 +1009,25 @@ func TestContainerBoot(t *testing.T) {
 				},
 			}
 		},
+		"serve_config_with_service_auto_advertisement": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_SERVE_CONFIG": filepath.Join(env.d, "etc/tailscaled/serve-config-with-services.json"),
+					"TS_AUTHKEY":      "tskey-key",
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						},
+					},
+					{
+						Notify: runningNotify,
+					},
+				},
+			}
+		},
 		"kube_shutdown_during_state_write": func(env *testEnv) testCase {
 			return testCase{
 				Env: map[string]string{
@@ -1159,7 +1178,7 @@ func TestContainerBoot(t *testing.T) {
 					return nil
 				})
 				if err != nil {
-					t.Fatalf("phase %d: %v", i, err)
+					t.Fatalf("test: %q phase %d: %v", name, i, err)
 				}
 				err = tstest.WaitFor(2*time.Second, func() error {
 					for path, want := range p.WantFiles {
@@ -1340,10 +1359,16 @@ func (lc *localAPI) Notify(n *ipn.Notify) {
 func (lc *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/localapi/v0/serve-config":
-		if r.Method != "POST" {
+		switch r.Method {
+		case "GET":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(&ipn.ServeConfig{})
+			return
+		case "POST":
+			return
+		default:
 			panic(fmt.Sprintf("unsupported method %q", r.Method))
 		}
-		return
 	case "/localapi/v0/watch-ipn-bus":
 		if r.Method != "GET" {
 			panic(fmt.Sprintf("unsupported method %q", r.Method))
@@ -1355,10 +1380,19 @@ func (lc *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("fake metrics"))
 		return
 	case "/localapi/v0/prefs":
-		if r.Method != "GET" {
+		switch r.Method {
+		case "GET":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(&ipn.Prefs{})
+			return
+		case "PATCH":
+			// EditPrefs - just return empty prefs
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(&ipn.Prefs{})
+			return
+		default:
 			panic(fmt.Sprintf("unsupported method %q", r.Method))
 		}
-		return
 	default:
 		panic(fmt.Sprintf("unsupported path %q", r.URL.Path))
 	}
@@ -1635,6 +1669,13 @@ func newTestEnv(t *testing.T) testEnv {
 
 	tailscaledConf := &ipn.ConfigVAlpha{AuthKey: ptr.To("foo"), Version: "alpha0"}
 	serveConf := ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}}}
+	serveConfWithServices := ipn.ServeConfig{
+		TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			"svc:test-service-1": {},
+			"svc:test-service-2": {},
+		},
+	}
 	egressCfg := egressSvcConfig("foo", "foo.tailnetxyz.ts.net")
 
 	dirs := []string{
@@ -1652,15 +1693,16 @@ func newTestEnv(t *testing.T) testEnv {
 		}
 	}
 	files := map[string][]byte{
-		"usr/bin/tailscaled":                    fakeTailscaled,
-		"usr/bin/tailscale":                     fakeTailscale,
-		"usr/bin/iptables":                      fakeTailscale,
-		"usr/bin/ip6tables":                     fakeTailscale,
-		"dev/net/tun":                           []byte(""),
-		"proc/sys/net/ipv4/ip_forward":          []byte("0"),
-		"proc/sys/net/ipv6/conf/all/forwarding": []byte("0"),
-		"etc/tailscaled/cap-95.hujson":          mustJSON(t, tailscaledConf),
-		"etc/tailscaled/serve-config.json":      mustJSON(t, serveConf),
+		"usr/bin/tailscaled":                             fakeTailscaled,
+		"usr/bin/tailscale":                              fakeTailscale,
+		"usr/bin/iptables":                               fakeTailscale,
+		"usr/bin/ip6tables":                              fakeTailscale,
+		"dev/net/tun":                                    []byte(""),
+		"proc/sys/net/ipv4/ip_forward":                   []byte("0"),
+		"proc/sys/net/ipv6/conf/all/forwarding":          []byte("0"),
+		"etc/tailscaled/cap-95.hujson":                   mustJSON(t, tailscaledConf),
+		"etc/tailscaled/serve-config.json":               mustJSON(t, serveConf),
+		"etc/tailscaled/serve-config-with-services.json": mustJSON(t, serveConfWithServices),
 		filepath.Join("etc/tailscaled/", egressservices.KeyEgressServices): mustJSON(t, egressCfg),
 		filepath.Join("etc/tailscaled/", egressservices.KeyHEPPings):       []byte("4"),
 	}
