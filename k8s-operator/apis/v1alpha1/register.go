@@ -69,6 +69,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&ProxyGroupList{},
 		&Tailnet{},
 		&TailnetList{},
+		&ProxyGroupPolicy{},
+		&ProxyGroupPolicyList{},
 	)
 
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
