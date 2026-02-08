@@ -1562,22 +1562,6 @@ func (b *LocalBackend) GetFilterForTest() *filter.Filter {
 	return nb.filterAtomic.Load()
 }
 
-func (b *LocalBackend) settleEventBus() {
-	// The move to eventbus made some things racy that
-	// weren't before so we have to wait for it to all be settled
-	// before we call certain things.
-	// See https://github.com/tailscale/tailscale/issues/16369
-	// But we can't do this while holding b.mu without deadlocks,
-	// (https://github.com/tailscale/tailscale/pull/17804#issuecomment-3514426485) so
-	// now we just do it in lots of places before acquiring b.mu.
-	// Is this winning??
-	if b.sys != nil {
-		if ms, ok := b.sys.MagicSock.GetOK(); ok {
-			ms.Synchronize()
-		}
-	}
-}
-
 // SetControlClientStatus is the callback invoked by the control client whenever it posts a new status.
 // Among other things, this is where we update the netmap, packet filters, DNS and DERP maps.
 func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st controlclient.Status) {
@@ -2115,15 +2099,15 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		}
 	}()
 
-	// Gross. See https://github.com/tailscale/tailscale/issues/16369
-	b.settleEventBus()
-	defer b.settleEventBus()
-
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	cn := b.currentNode()
 	cn.UpdateNetmapDelta(muts)
+
+	if ms, ok := b.sys.MagicSock.GetOK(); ok {
+		ms.UpdateNetmapDelta(muts)
+	}
 
 	// If auto exit nodes are enabled and our exit node went offline,
 	// we need to schedule picking a new one.
@@ -2440,7 +2424,6 @@ func (b *LocalBackend) initOnce() {
 // actually a supported operation (it should be, but it's very unclear
 // from the following whether or not that is a safe transition).
 func (b *LocalBackend) Start(opts ipn.Options) error {
-	defer b.settleEventBus() // with b.mu unlocked
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.startLocked(opts)
@@ -2936,6 +2919,9 @@ func packetFilterPermitsUnlockedNodes(peers map[tailcfg.NodeID]tailcfg.NodeView,
 func (b *LocalBackend) setFilter(f *filter.Filter) {
 	b.currentNode().setFilter(f)
 	b.e.SetFilter(f)
+	if ms, ok := b.sys.MagicSock.GetOK(); ok {
+		ms.SetFilter(f)
+	}
 }
 
 var removeFromDefaultRoute = []netip.Prefix{
@@ -4352,7 +4338,6 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 	if mp.SetsInternal() {
 		return ipn.PrefsView{}, errors.New("can't set Internal fields")
 	}
-	defer b.settleEventBus()
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -6264,6 +6249,13 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		login = cmp.Or(profileFromView(nm.UserProfiles[nm.User()]).LoginName, "<missing-profile>")
 	}
 	b.currentNode().SetNetMap(nm)
+	if ms, ok := b.sys.MagicSock.GetOK(); ok {
+		if nm != nil {
+			ms.SetNetworkMap(nm.SelfNode, nm.Peers)
+		} else {
+			ms.SetNetworkMap(tailcfg.NodeView{}, nil)
+		}
+	}
 	if login != b.activeLogin {
 		b.logf("active login: %v", login)
 		b.activeLogin = login
