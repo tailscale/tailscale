@@ -86,14 +86,33 @@ func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf, createErr error) 
 			logf("kernel/drivers/net/tun.ko found on disk, but not for current kernel; are you in middle of a system update and haven't rebooted? found: %s", findOut)
 		}
 	case distro.OpenWrt:
-		out, err := exec.Command("opkg", "list-installed").CombinedOutput()
-		if err != nil {
-			logf("error querying OpenWrt installed packages: %s", out)
-			return
-		}
-		for _, pkg := range []string{"kmod-tun", "ca-bundle"} {
-			if !bytes.Contains(out, []byte(pkg+" - ")) {
-				logf("Missing required package %s; run: opkg install %s", pkg, pkg)
+		// OpenWRT switched to using apk as a package manager as of OpenWrt 25.12.0.
+		// Find out what is used on this system and use that, Maybe we can get rid
+		// of opkg in the future but for now keep checking.
+
+		if path, err := exec.LookPath("apk"); err == nil && path != "" {
+			// Test with apk
+			out, err := exec.Command("apk", "info").CombinedOutput()
+			if err != nil {
+				logf("error querying OpenWrt installed packages with apk: %s", out)
+				return
+			}
+			for _, pkg := range []string{"kmod-tun", "ca-bundle"} {
+				if !bytes.Contains(out, []byte(pkg)) {
+					logf("Missing required package %s; run: apk add %s", pkg, pkg)
+				}
+			}
+
+		} else { // Check for package with opkg (legacy)
+			out, err := exec.Command("opkg", "list-installed").CombinedOutput()
+			if err != nil {
+				logf("error querying OpenWrt installed packages with opkg: %s", out)
+				return
+			}
+			for _, pkg := range []string{"kmod-tun", "ca-bundle"} {
+				if !bytes.Contains(out, []byte(pkg+" - ")) {
+					logf("Missing required package %s; run: opkg install %s", pkg, pkg)
+				}
 			}
 		}
 	}
