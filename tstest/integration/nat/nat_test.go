@@ -81,7 +81,7 @@ func newNatTest(tb testing.TB) *natTest {
 		}
 	}
 
-	nt.kernel, err = findKernelPath(filepath.Join(modRoot, "gokrazy/natlabapp/builddir/github.com/tailscale/gokrazy-kernel/go.mod"))
+	nt.kernel, err = findKernelPath(filepath.Join(modRoot, "go.mod"))
 	if err != nil {
 		tb.Skipf("skipping test; kernel not found: %v", err)
 	}
