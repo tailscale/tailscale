@@ -453,6 +453,10 @@ func (v PrefsView) RelayServerStaticEndpoints() views.Slice[netip.AddrPort] {
 	return views.SliceOf(v.ж.RelayServerStaticEndpoints)
 }
 
+// NotifyPeerStatus specifies whether to send desktop notifications when
+// a peer's online status changes.
+func (v PrefsView) NotifyPeerStatus() bool { return v.ж.NotifyPeerStatus }
+
 // AllowSingleHosts was a legacy field that was always true
 // for the past 4.5 years. It controlled whether Tailscale
 // peers got /32 or /128 routes for each other.
@@ -506,6 +510,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	DriveShares                []*drive.Share
 	RelayServerPort            *uint16
 	RelayServerStaticEndpoints []netip.AddrPort
+	NotifyPeerStatus           bool
 	AllowSingleHosts           marshalAsTrueInJSON
 	Persist                    *persist.Persist
 }{})

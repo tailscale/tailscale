@@ -157,5 +157,6 @@ func isNotableNotify(n *ipn.Notify) bool {
 		len(n.IncomingFiles) > 0 ||
 		len(n.OutgoingFiles) > 0 ||
 		n.FilesWaiting != nil ||
-		n.SuggestedExitNode != nil
+		n.SuggestedExitNode != nil ||
+		len(n.PeerOnlineStatusChanges) > 0
 }
