@@ -137,25 +137,24 @@ func buildImage() error {
 	// Build the tsapp.img
 	var buf bytes.Buffer
 	cmd := exec.Command("go", "run",
-		"github.com/gokrazy/tools/cmd/gok",
-		"--parent_dir="+dir,
-		"--instance="+*app,
+		"github.com/bradfitz/monogok/cmd/monogok",
 		"overwrite",
-		"--full", *app+".img",
+		"--full", filepath.Join(dir, *app+".img"),
 		"--target_storage_bytes=1258299392")
+	cmd.Dir = filepath.Join(dir, *app)
 	cmd.Stdout = io.MultiWriter(os.Stdout, &buf)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return err
 	}
 
-	// gok overwrite emits a line of text saying how to run mkfs.ext4
+	// monogok overwrite emits a line of text saying how to run mkfs.ext4
 	// to create the ext4 /perm filesystem. Parse that and run it.
 	// The regexp is tight to avoid matching if the command changes,
 	// to force us to check it's still correct/safe. But it shouldn't
-	// change on its own because we pin the gok version in our go.mod.
+	// change on its own because we pin the monogok version in our go.mod.
 	//
-	// TODO(bradfitz): emit this in a machine-readable way from gok.
+	// TODO(bradfitz): emit this in a machine-readable way from monogok.
 	rx := regexp.MustCompile(`(?m)/mkfs.ext4 (-F) (-E) (offset=\d+) (\S+) (\d+)\s*?$`)
 	m := rx.FindStringSubmatch(buf.String())
 	if m == nil {
