@@ -295,6 +295,8 @@ func TestMinTailscaledWithCLI(t *testing.T) {
 			"archive/tar":                            "unexpected archive/tar dep",
 			"tailscale.com/feature/conn25":           "unexpected conn25 dep",
 			"regexp":                                 "unexpected regexp dep; bloats binary",
+			"github.com/toqueteos/webbrowser":        "unexpected webbrowser dep with ts_omit_webbrowser",
+			"github.com/mattn/go-colorable":          "unexpected go-colorable dep with ts_omit_colorable",
 		},
 	}.Check(t)
 }

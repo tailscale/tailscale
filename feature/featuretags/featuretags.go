@@ -84,7 +84,7 @@ type FeatureMeta struct {
 	Deps []FeatureTag // other features this feature requires
 
 	// ImplementationDetail is whether the feature is an internal implementation
-	// detail. That is, it's not something a user wuold care about having or not
+	// detail. That is, it's not something a user would care about having or not
 	// having, but we'd like to able to omit from builds if no other
 	// user-visible features depend on it.
 	ImplementationDetail bool
@@ -130,6 +130,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"captiveportal": {Sym: "CaptivePortal", Desc: "Captive portal detection"},
 	"capture":       {Sym: "Capture", Desc: "Packet capture"},
 	"cli":           {Sym: "CLI", Desc: "embed the CLI into the tailscaled binary"},
+	"colorable":     {Sym: "Colorable", Desc: "Colorized terminal output"},
 	"cliconndiag":   {Sym: "CLIConnDiag", Desc: "CLI connection error diagnostics"},
 	"clientmetrics": {Sym: "ClientMetrics", Desc: "Client metrics support"},
 	"clientupdate": {
@@ -256,7 +257,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"systray": {
 		Sym:  "SysTray",
 		Desc: "Linux system tray",
-		Deps: []FeatureTag{"dbus"},
+		Deps: []FeatureTag{"dbus", "webbrowser"},
 	},
 	"taildrop": {
 		Sym:  "Taildrop",
@@ -290,6 +291,10 @@ var Features = map[FeatureTag]FeatureMeta{
 		Desc: "Usermetrics (documented, stable) metrics support",
 	},
 	"wakeonlan": {Sym: "WakeOnLAN", Desc: "Wake-on-LAN support"},
+	"webbrowser": {
+		Sym:  "WebBrowser",
+		Desc: "Open URLs in the user's web browser",
+	},
 	"webclient": {
 		Sym: "WebClient", Desc: "Web client support",
 		Deps: []FeatureTag{"serve"},
