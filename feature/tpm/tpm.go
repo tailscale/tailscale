@@ -353,7 +353,7 @@ func unseal(logf logger.Logf, data encryptedData) (*decryptedData, error) {
 	}
 
 	return &decryptedData{
-		Key:  *(*[32]byte)(unsealedKey),
+		Key:  [32]byte(unsealedKey),
 		Data: unsealedData,
 	}, nil
 }
