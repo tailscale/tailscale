@@ -696,8 +696,9 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	}
 
 	dcfg := &dns.Config{
-		Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-		Hosts:  map[dnsname.FQDN][]netip.Addr{},
+		AcceptDNS: prefs.CorpDNS(),
+		Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+		Hosts:     map[dnsname.FQDN][]netip.Addr{},
 	}
 
 	// selfV6Only is whether we only have IPv6 addresses ourselves.
