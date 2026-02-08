@@ -1593,11 +1593,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				tt.steps(t, lb, cc)
 			}
 
-			// TODO(bradfitz): this whole event bus settling thing
-			// should be unnecessary once the bogus uses of eventbus
-			// are removed. (https://github.com/tailscale/tailscale/issues/16369)
-			lb.settleEventBus()
-
 			if gotState := lb.State(); gotState != tt.wantState {
 				t.Errorf("State: got %v; want %v", gotState, tt.wantState)
 			}
