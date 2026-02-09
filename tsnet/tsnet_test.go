@@ -1194,10 +1194,8 @@ func TestListenService(t *testing.T) {
 					tt.extraSetup(t, control)
 				}
 
-				// Force netmap updates to avoid race conditions. The nodes need to
-				// see our control updates before we can start the test.
-				must.Do(control.ForceNetmapUpdate(ctx, serviceHost.lb.NodeKey()))
-				must.Do(control.ForceNetmapUpdate(ctx, serviceClient.lb.NodeKey()))
+				// Wait until both nodes have up-to-date netmaps before
+				// proceeding with the test.
 				netmapUpToDate := func(s *Server) bool {
 					nm := s.lb.NetMap()
 					return slices.ContainsFunc(nm.DNS.ExtraRecords, func(r tailcfg.DNSRecord) bool {
