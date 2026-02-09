@@ -299,43 +299,6 @@ func (s *Server) addDebugMessage(nodeKeyDst key.NodePublic, msg any) bool {
 	return sendUpdate(oldUpdatesCh, updateDebugInjection)
 }
 
-// ForceNetmapUpdate waits for the node to get stuck in a map poll and then
-// sends the current netmap (which may result in a redundant netmap). The
-// intended use case is ensuring state changes propagate before running tests.
-//
-// This should only be called for nodes connected as streaming clients. Calling
-// this with a non-streaming node will result in non-deterministic behavior.
-//
-// This function cannot guarantee that the node has processed the issued update,
-// so tests should confirm processing by querying the node. By example:
-//
-//	if err := s.ForceNetmapUpdate(node.Key()); err != nil {
-//	// handle error
-//	}
-//	for !updatesPresent(node.NetMap()) {
-//	time.Sleep(10 * time.Millisecond)
-//	}
-func (s *Server) ForceNetmapUpdate(ctx context.Context, nodeKey key.NodePublic) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		if err := s.AwaitNodeInMapRequest(ctx, nodeKey); err != nil {
-			return fmt.Errorf("waiting for node to poll: %w", err)
-		}
-		mr, err := s.MapResponse(&tailcfg.MapRequest{NodeKey: nodeKey})
-		if err != nil {
-			return fmt.Errorf("generating map response: %w", err)
-		}
-		if s.addDebugMessage(nodeKey, mr) {
-			return nil
-		}
-		// If we failed to send the map response, loop around and try again.
-	}
-}
-
 // Mark the Node key of every node as expired
 func (s *Server) SetExpireAllNodes(expired bool) {
 	s.mu.Lock()
@@ -589,8 +552,9 @@ func (s *Server) SetNodeCapMap(nodeKey key.NodePublic, capMap tailcfg.NodeCapMap
 //	]
 func (s *Server) SetGlobalAppCaps(appCaps tailcfg.PeerCapMap) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.globalAppCaps = appCaps
-	s.mu.Unlock()
+	s.updateLocked("SetGlobalAppCaps", s.nodeIDsLocked(0))
 }
 
 // AddDNSRecords adds records to the server's DNS config.
@@ -601,6 +565,7 @@ func (s *Server) AddDNSRecords(records ...tailcfg.DNSRecord) {
 		s.DNSConfig = new(tailcfg.DNSConfig)
 	}
 	s.DNSConfig.ExtraRecords = append(s.DNSConfig.ExtraRecords, records...)
+	s.updateLocked("AddDNSRecords", s.nodeIDsLocked(0))
 }
 
 // nodeIDsLocked returns the node IDs of all nodes in the server, except
