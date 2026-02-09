@@ -6,6 +6,7 @@
 package ipnlocal
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -702,6 +703,126 @@ func TestServeHTTPProxyPath(t *testing.T) {
 	}
 }
 
+func TestServeHTTPProxyQueryParam(t *testing.T) {
+	b := newTestBackend(t)
+	// Start test serve endpoint that echoes back the URL path and query.
+	testServ := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Got-Path", r.URL.Path)
+			w.Header().Set("X-Got-Query", r.URL.RawQuery)
+		},
+	))
+	defer testServ.Close()
+	tests := []struct {
+		name      string
+		mount     string
+		proxyPath string
+		reqPath   string
+		reqQuery  string
+		wantPath  string
+		wantQuery string
+		upgrade   string // if non-empty, set Connection: Upgrade + Upgrade: <value>
+	}{
+		{
+			name:      "query params preserved",
+			mount:     "/",
+			proxyPath: "/",
+			reqPath:   "/stream",
+			reqQuery:  "token=abc123",
+			wantPath:  "/stream",
+			wantQuery: "token=abc123",
+		},
+		{
+			name:      "multiple query params",
+			mount:     "/",
+			proxyPath: "/",
+			reqPath:   "/api",
+			reqQuery:  "foo=bar&baz=qux",
+			wantPath:  "/api",
+			wantQuery: "foo=bar&baz=qux",
+		},
+		{
+			name:      "query params with non-root mount",
+			mount:     "/app",
+			proxyPath: "/app",
+			reqPath:   "/app/ws",
+			reqQuery:  "token=abc123",
+			wantPath:  "/app/ws",
+			wantQuery: "token=abc123",
+		},
+		{
+			name:      "websocket upgrade preserves query params",
+			mount:     "/",
+			proxyPath: "/",
+			reqPath:   "/stream",
+			reqQuery:  "token=abc123",
+			wantPath:  "/stream",
+			wantQuery: "token=abc123",
+			upgrade:   "websocket",
+		},
+		{
+			name:      "websocket upgrade with non-root mount preserves query params",
+			mount:     "/app",
+			proxyPath: "/app",
+			reqPath:   "/app/stream",
+			reqQuery:  "token=abc123",
+			wantPath:  "/app/stream",
+			wantQuery: "token=abc123",
+			upgrade:   "websocket",
+		},
+		{
+			name:      "encoded query params preserved",
+			mount:     "/",
+			proxyPath: "/",
+			reqPath:   "/stream",
+			reqQuery:  "msg=hello+world&name=foo%20bar",
+			wantPath:  "/stream",
+			wantQuery: "msg=hello+world&name=foo%20bar",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conf := &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"example.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						tt.mount: {Proxy: testServ.URL + tt.proxyPath},
+					}},
+				},
+			}
+			if err := b.SetServeConfig(conf, ""); err != nil {
+				t.Fatal(err)
+			}
+			req := &http.Request{
+				URL: &url.URL{
+					Path:     tt.reqPath,
+					RawQuery: tt.reqQuery,
+				},
+				Header: make(http.Header),
+				TLS:    &tls.ConnectionState{ServerName: "example.ts.net"},
+			}
+			if tt.upgrade != "" {
+				req.Header.Set("Connection", "Upgrade")
+				req.Header.Set("Upgrade", tt.upgrade)
+			}
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(),
+				&serveHTTPContext{
+					DestPort: 443,
+					SrcAddr:  netip.MustParseAddrPort("1.2.3.4:1234"),
+				}))
+
+			w := httptest.NewRecorder()
+			b.serveWebHandler(w, req)
+
+			if got := w.Result().Header.Get("X-Got-Path"); got != tt.wantPath {
+				t.Errorf("path: got %q, want %q", got, tt.wantPath)
+			}
+			if got := w.Result().Header.Get("X-Got-Query"); got != tt.wantQuery {
+				t.Errorf("query: got %q, want %q", got, tt.wantQuery)
+			}
+		})
+	}
+}
+
 func TestServeHTTPProxyHeaders(t *testing.T) {
 	b := newTestBackend(t)
 
@@ -1270,6 +1391,119 @@ func TestEncTailscaleHeaderValue(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("encTailscaleHeaderValue(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+// TestServeWebSocketProxyQueryParams tests that query parameters are
+// forwarded to the backend through a real WebSocket upgrade (101 Switching
+// Protocols) via the tailscale serve reverse proxy.
+func TestServeWebSocketProxyQueryParams(t *testing.T) {
+	var gotRequestURI string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRequestURI = r.RequestURI
+		if r.Header.Get("Upgrade") != "websocket" {
+			t.Errorf("expected websocket upgrade, got Upgrade: %q", r.Header.Get("Upgrade"))
+			http.Error(w, "expected websocket upgrade", http.StatusBadRequest)
+			return
+		}
+		c, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer c.Close()
+		io.WriteString(c, "HTTP/1.1 101 Switching Protocols\r\nConnection: upgrade\r\nUpgrade: websocket\r\n\r\n")
+		bs := bufio.NewScanner(c)
+		if !bs.Scan() {
+			t.Errorf("backend failed to read from client: %v", bs.Err())
+			return
+		}
+		fmt.Fprintf(c, "backend got %q\n", bs.Text())
+	}))
+	defer backend.Close()
+
+	backendURL := must.Get(url.Parse(backend.URL))
+
+	lb := newTestBackend(t)
+	rp := &reverseProxy{
+		logf:    t.Logf,
+		url:     backendURL,
+		backend: backend.URL,
+		lb:      lb,
+	}
+
+	frontendProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rp.ServeHTTP(w, r)
+	}))
+	defer frontendProxy.Close()
+
+	tests := []struct {
+		name     string
+		path     string
+		query    string
+		wantURI  string
+	}{
+		{
+			name:    "query params preserved through websocket upgrade",
+			path:    "/stream",
+			query:   "token=abc123",
+			wantURI: "/stream?token=abc123",
+		},
+		{
+			name:    "multiple query params preserved through websocket upgrade",
+			path:    "/ws",
+			query:   "token=abc123&session=xyz",
+			wantURI: "/ws?token=abc123&session=xyz",
+		},
+		{
+			name:    "no query params",
+			path:    "/stream",
+			query:   "",
+			wantURI: "/stream",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotRequestURI = "" // reset
+			u := frontendProxy.URL + tt.path
+			if tt.query != "" {
+				u += "?" + tt.query
+			}
+			req, err := http.NewRequest("GET", u, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Connection", "Upgrade")
+			req.Header.Set("Upgrade", "websocket")
+
+			res, err := frontendProxy.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.StatusCode != http.StatusSwitchingProtocols {
+				t.Fatalf("status = %d; want 101", res.StatusCode)
+			}
+			rwc, ok := res.Body.(io.ReadWriteCloser)
+			if !ok {
+				t.Fatalf("response body is %T, does not implement ReadWriteCloser", res.Body)
+			}
+			defer rwc.Close()
+
+			// Verify the backend received the correct request URI with query params.
+			if gotRequestURI != tt.wantURI {
+				t.Errorf("backend got request URI %q, want %q", gotRequestURI, tt.wantURI)
+			}
+
+			// Also verify the websocket connection is functional.
+			io.WriteString(rwc, "hello\n")
+			bs := bufio.NewScanner(rwc)
+			if !bs.Scan() {
+				t.Fatalf("scan from backend: %v", bs.Err())
+			}
+			if got, want := bs.Text(), `backend got "hello"`; got != want {
+				t.Errorf("got %q from backend, want %q", got, want)
+			}
+		})
 	}
 }
 
