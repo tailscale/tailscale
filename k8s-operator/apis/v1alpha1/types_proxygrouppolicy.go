@@ -18,7 +18,6 @@ var ProxyGroupPolicyKind = "ProxyGroupPolicy"
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=pgp
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
-// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "ProxyGroupPolicyReady")].reason`,description="Status of the deployed ProxyGroupPolicy resources."
 
 type ProxyGroupPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -62,6 +61,3 @@ type ProxyGroupPolicyStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions"`
 }
-
-// ProxyGroupPolicyReady is set to True if the ProxyGroupPolicy is available for use by operator workloads.
-const ProxyGroupPolicyReady ConditionType = "ProxyGroupPolicyReady"
