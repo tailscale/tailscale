@@ -74,6 +74,10 @@ type AppConnectorAttr struct {
 	Connectors []string `json:"connectors,omitempty"`
 }
 
+// AppConnectorExperimentalAttr is the same as AppConnectorAttr
+// as it is being developed.
+type AppConnectorExperimentalAttr = AppConnectorAttr
+
 // RouteInfo is a data structure used to persist the in memory state of an AppConnector
 // so that we can know, even after a restart, which routes came from ACLs and which were
 // learned from domains.

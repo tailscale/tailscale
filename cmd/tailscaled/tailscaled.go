@@ -27,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"tailscale.com/appc"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -741,14 +742,15 @@ var tstunNew = tstun.New
 
 func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack bool, err error) {
 	conf := wgengine.Config{
-		ListenPort:    args.port,
-		NetMon:        sys.NetMon.Get(),
-		HealthTracker: sys.HealthTracker.Get(),
-		Metrics:       sys.UserMetricsRegistry(),
-		Dialer:        sys.Dialer.Get(),
-		SetSubsystem:  sys.Set,
-		ControlKnobs:  sys.ControlKnobs(),
-		EventBus:      sys.Bus.Get(),
+		ListenPort:              args.port,
+		NetMon:                  sys.NetMon.Get(),
+		HealthTracker:           sys.HealthTracker.Get(),
+		Metrics:                 sys.UserMetricsRegistry(),
+		Dialer:                  sys.Dialer.Get(),
+		SetSubsystem:            sys.Set,
+		ControlKnobs:            sys.ControlKnobs(),
+		EventBus:                sys.Bus.Get(),
+		AppConnectorPacketHooks: appc.NewDatpathHooks(),
 	}
 	if f, ok := hookSetWgEnginConfigDrive.GetOk(); ok {
 		f(&conf, logf)

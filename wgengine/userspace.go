@@ -165,6 +165,9 @@ type userspaceEngine struct {
 	// networkLogger logs statistics about network connections.
 	networkLogger netlog.Logger
 
+	// appConnectorPacketHooks are the packet hooks for app connectors.
+	appConnectorPacketHooks AppConnectorPacketHooks
+
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
 
@@ -173,6 +176,11 @@ type BIRDClient interface {
 	EnableProtocol(proto string) error
 	DisableProtocol(proto string) error
 	Close() error
+}
+
+type AppConnectorPacketHooks interface {
+	HandlePacketsFromTunDevice(*packet.Parsed) filter.Response
+	HandlePacketsFromWireguard(*packet.Parsed) filter.Response
 }
 
 // Config is the engine configuration.
@@ -247,6 +255,10 @@ type Config struct {
 	// TODO(creachadair): As of 2025-03-19 this is optional, but is intended to
 	// become required non-nil.
 	EventBus *eventbus.Bus
+
+	// AppConnectorPacketHooks, if non-nil, is used to hook packets for App Connector
+	// handling logic.
+	AppConnectorPacketHooks AppConnectorPacketHooks
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.
@@ -348,19 +360,20 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 
 	e := &userspaceEngine{
-		eventBus:       conf.EventBus,
-		timeNow:        mono.Now,
-		logf:           logf,
-		reqCh:          make(chan struct{}, 1),
-		waitCh:         make(chan struct{}),
-		tundev:         tsTUNDev,
-		router:         rtr,
-		dialer:         conf.Dialer,
-		confListenPort: conf.ListenPort,
-		birdClient:     conf.BIRDClient,
-		controlKnobs:   conf.ControlKnobs,
-		reconfigureVPN: conf.ReconfigureVPN,
-		health:         conf.HealthTracker,
+		eventBus:                conf.EventBus,
+		timeNow:                 mono.Now,
+		logf:                    logf,
+		reqCh:                   make(chan struct{}, 1),
+		waitCh:                  make(chan struct{}),
+		tundev:                  tsTUNDev,
+		router:                  rtr,
+		dialer:                  conf.Dialer,
+		confListenPort:          conf.ListenPort,
+		birdClient:              conf.BIRDClient,
+		controlKnobs:            conf.ControlKnobs,
+		reconfigureVPN:          conf.ReconfigureVPN,
+		health:                  conf.HealthTracker,
+		appConnectorPacketHooks: conf.AppConnectorPacketHooks,
 	}
 
 	if e.birdClient != nil {
@@ -433,6 +446,20 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		e.tundev.PostFilterPacketInboundFromWireGuard = echoRespondToAll
 	}
 	e.tundev.PreFilterPacketOutboundToWireGuardEngineIntercept = e.handleLocalPackets
+
+	e.tundev.PreFilterPacketOutboundToWireGuardAppConnectorIntercept = func(p *packet.Parsed, _ *tstun.Wrapper) filter.Response {
+		if e.appConnectorPacketHooks.HandlePacketsFromTunDevice != nil {
+			return e.appConnectorPacketHooks.HandlePacketsFromTunDevice(p)
+		}
+		return filter.Accept
+	}
+
+	e.tundev.PostFilterPacketInboundFromWireGuardAppConector = func(p *packet.Parsed, _ *tstun.Wrapper) filter.Response {
+		if e.appConnectorPacketHooks.HandlePacketsFromWireguard != nil {
+			return e.appConnectorPacketHooks.HandlePacketsFromWireguard(p)
+		}
+		return filter.Accept
+	}
 
 	if buildfeatures.HasDebug && envknob.BoolDefaultTrue("TS_DEBUG_CONNECT_FAILURES") {
 		if e.tundev.PreFilterPacketInboundFromWireGuard != nil {
