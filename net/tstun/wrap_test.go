@@ -169,7 +169,7 @@ func setfilter(logf logger.Logf, tun *Wrapper) {
 	var sb netipx.IPSetBuilder
 	sb.AddPrefix(netip.MustParsePrefix("1.2.0.0/16"))
 	ipSet, _ := sb.IPSet()
-	tun.SetFilter(filter.New(matches, nil, ipSet, ipSet, nil, logf))
+	tun.SetFilter(filter.New(matches, nil, ipSet, ipSet, nil, nil, logf))
 }
 
 func newChannelTUN(logf logger.Logf, bus *eventbus.Bus, secure bool) (*tuntest.ChannelTUN, *Wrapper) {

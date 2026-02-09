@@ -14,7 +14,7 @@ import (
 
 type matches []filtertype.Match
 
-func (ms matches) match(q *packet.Parsed, hasCap CapTestFunc) bool {
+func (ms matches) match(q *packet.Parsed, hasCap CapTestFunc, conn25Matcher Conn25Matcher) bool {
 	for i := range ms {
 		m := &ms[i]
 		if !views.SliceContains(m.IPProto, q.IPProto) {
@@ -33,6 +33,10 @@ func (ms matches) match(q *packet.Parsed, hasCap CapTestFunc) bool {
 			return true
 		}
 	}
+	if conn25Matcher != nil {
+		return conn25Matcher.MatchPacket(*q)
+	}
+
 	return false
 }
 
@@ -59,7 +63,7 @@ func srcMatches(m *filtertype.Match, srcAddr netip.Addr, hasCap CapTestFunc) boo
 // It it used in the fast path of evaluating filter rules so should be fast.
 type CapTestFunc = func(srcIP netip.Addr, cap tailcfg.NodeCapability) bool
 
-func (ms matches) matchIPsOnly(q *packet.Parsed, hasCap CapTestFunc) bool {
+func (ms matches) matchIPsOnly(q *packet.Parsed, hasCap CapTestFunc, conn25Matcher Conn25Matcher) bool {
 	srcAddr := q.Src.Addr()
 	for _, m := range ms {
 		if !m.SrcsContains(srcAddr) {
@@ -80,13 +84,16 @@ func (ms matches) matchIPsOnly(q *packet.Parsed, hasCap CapTestFunc) bool {
 			}
 		}
 	}
+	if conn25Matcher != nil {
+		return conn25Matcher.MatchPacket(*q)
+	}
 	return false
 }
 
 // matchProtoAndIPsOnlyIfAllPorts reports q matches any Match in ms where the
 // Match if for the right IP Protocol and IP address, but ports are
 // ignored, as long as the match is for the entire uint16 port range.
-func (ms matches) matchProtoAndIPsOnlyIfAllPorts(q *packet.Parsed) bool {
+func (ms matches) matchProtoAndIPsOnlyIfAllPorts(q *packet.Parsed, conn25Matcher Conn25Matcher) bool {
 	for _, m := range ms {
 		if !views.SliceContains(m.IPProto, q.IPProto) {
 			continue
@@ -102,6 +109,9 @@ func (ms matches) matchProtoAndIPsOnlyIfAllPorts(q *packet.Parsed) bool {
 				return true
 			}
 		}
+	}
+	if conn25Matcher != nil {
+		return conn25Matcher.MatchPacket(*q)
 	}
 	return false
 }
