@@ -120,6 +120,12 @@ type Config struct {
 	// routing rules apply.
 	LocalRoutes []netip.Prefix
 
+	// ExitNodeEndpoints are the IP addresses of the WireGuard endpoints for the
+	// exit node. These need explicit routes via the original default gateway to
+	// prevent routing loops when exit node routes (0.0.0.0/0 or ::/0) are active.
+	// This is primarily used on macOS where we can't use policy routing.
+	ExitNodeEndpoints []netip.Addr
+
 	// NewMTU is currently only used by the MacOS network extension
 	// app to set the MTU of the tun in the router configuration
 	// callback. If zero, the MTU is unchanged.
@@ -157,5 +163,6 @@ func (c *Config) Clone() *Config {
 	c2.Routes = slices.Clone(c.Routes)
 	c2.LocalRoutes = slices.Clone(c.LocalRoutes)
 	c2.SubnetRoutes = slices.Clone(c.SubnetRoutes)
+	c2.ExitNodeEndpoints = slices.Clone(c.ExitNodeEndpoints)
 	return &c2
 }
