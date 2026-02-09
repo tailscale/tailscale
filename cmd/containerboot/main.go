@@ -131,7 +131,9 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/sys/unix"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	kubeutils "tailscale.com/k8s-operator"
@@ -542,7 +544,7 @@ runLoop:
 					}
 				}
 				if cfg.TailnetTargetFQDN != "" {
-					egressAddrs, err := resolveTailnetFQDN(n.NetMap, cfg.TailnetTargetFQDN)
+					egressAddrs, err := resolveTailnetFQDN(ctx, client, cfg.TailnetTargetFQDN)
 					if err != nil {
 						log.Print(err.Error())
 						break
@@ -898,25 +900,73 @@ func runHTTPServer(mux *http.ServeMux, addr string) (close func() error) {
 
 // resolveTailnetFQDN resolves a tailnet FQDN to a list of IP prefixes, which
 // can be either a peer device or a Tailscale Service.
-func resolveTailnetFQDN(nm *netmap.NetworkMap, fqdn string) ([]netip.Prefix, error) {
+func resolveTailnetFQDN(ctx context.Context, c *local.Client, fqdn string) ([]netip.Prefix, error) {
 	dnsFQDN, err := dnsname.ToFQDN(fqdn)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing %q as FQDN: %w", fqdn, err)
 	}
 
-	// Check all peer devices first.
-	for _, p := range nm.Peers {
-		if strings.EqualFold(p.Name(), dnsFQDN.WithTrailingDot()) {
-			return p.Addresses().AsSlice(), nil
-		}
+	bytes, _, err := c.QueryDNS(ctx, dnsFQDN.WithTrailingDot(), "ALL")
+	if err != nil {
+		return nil, fmt.Errorf("error querying tailscale DNS: %w", err)
 	}
 
-	// If not found yet, check for a matching Tailscale Service.
-	if svcIPs := serviceIPsFromNetMap(nm, dnsFQDN); len(svcIPs) != 0 {
-		return svcIPs, nil
+	addrs, err := processDNSAnswers(bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process answers from dns response: %w", err)
+	}
+
+	if len(addrs) > 0 {
+		return addrs, nil
 	}
 
 	return nil, fmt.Errorf("could not find Tailscale node or service %q; it either does not exist, or not reachable because of ACLs", fqdn)
+}
+
+func processDNSAnswers(bytes []byte) ([]netip.Prefix, error) {
+	var p dnsmessage.Parser
+	header, err := p.Start(bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse DNS response: %w", err)
+	}
+
+	p.SkipAllQuestions()
+	if header.RCode != dnsmessage.RCodeSuccess {
+		return nil, fmt.Errorf("no answers in response")
+	}
+
+	answers, err := p.AllAnswers()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse DNS answers: %w", err)
+	}
+
+	addrs := []netip.Prefix{}
+	for _, a := range answers {
+		switch body := a.Body.(type) {
+
+		case *dnsmessage.AResource:
+			addr := netip.AddrFrom4(body.A)
+			if !addr.IsValid() {
+				continue
+			}
+			// IPv4 uses /32
+			addrs = append(addrs, netip.PrefixFrom(addr, 32))
+
+		case *dnsmessage.AAAAResource:
+			addr := netip.AddrFrom16(body.AAAA)
+			if !addr.IsValid() {
+				continue
+			}
+			// IPv6 uses /128
+			addrs = append(addrs, netip.PrefixFrom(addr, 128))
+
+		default:
+			// Ignore other record types (CNAME, TXT, etc.)
+			continue
+		}
+	}
+
+	return addrs, nil
 }
 
 // serviceIPsFromNetMap returns all IPs of a Tailscale Service if its FQDN is
