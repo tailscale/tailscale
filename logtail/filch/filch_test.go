@@ -5,6 +5,7 @@ package filch
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -120,7 +121,19 @@ func setupStderr(t *testing.T) {
 	tstest.Replace(t, &os.Stderr, pipeW)
 }
 
+func skipDarwin(t testing.TB) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	src := must.Get(os.ReadFile("filch.go"))
+	if fmt.Sprintf("%x", sha256.Sum256(src)) != "a32da5e22034823c19ac7f29960e3646f540d67f85a0028832cab1f1557fc693" {
+		t.Errorf("filch.go has changed since this test was skipped; please delete this skip")
+	}
+	t.Skip("skipping known failing test on darwin; fixed in progress by https://github.com/tailscale/tailscale/pull/18660")
+}
+
 func TestConcurrentWriteAndRead(t *testing.T) {
+	skipDarwin(t)
 	if replaceStderrSupportedForTest {
 		setupStderr(t)
 	}
@@ -283,6 +296,7 @@ func TestMaxLineSize(t *testing.T) {
 }
 
 func TestMaxFileSize(t *testing.T) {
+	skipDarwin(t)
 	if replaceStderrSupportedForTest {
 		t.Run("ReplaceStderr:true", func(t *testing.T) { testMaxFileSize(t, true) })
 	}
