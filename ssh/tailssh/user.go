@@ -36,15 +36,15 @@ func (u *userMeta) GroupIds() ([]string, error) {
 	return osuser.GetGroupIds(&u.User)
 }
 
-// userLookup is like os/user.Lookup but it returns a *userMeta wrapper
+// userLookup is like os/user.Lookup but it returns a userMeta wrapper
 // around a *user.User with extra fields.
-func userLookup(username string) (*userMeta, error) {
+func userLookup(username string) (userMeta, error) {
 	u, s, err := osuser.LookupByUsernameWithShell(username)
 	if err != nil {
-		return nil, err
+		return userMeta{}, err
 	}
 
-	return &userMeta{User: *u, loginShellCached: s}, nil
+	return userMeta{User: *u, loginShellCached: s}, nil
 }
 
 func (u *userMeta) LoginShell() string {
