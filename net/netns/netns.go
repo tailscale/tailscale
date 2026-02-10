@@ -46,6 +46,18 @@ func SetBindToInterfaceByRoute(logf logger.Logf, v bool) {
 	}
 }
 
+// When true, disableAndroidBindToActiveNetwork skips binding sockets to the currently
+// active network on Android.
+var disableAndroidBindToActiveNetwork atomic.Bool
+
+// SetDisableAndroidBindToActiveNetwork disables the default behavior of binding
+// sockets to the currently active network on Android.
+func SetDisableAndroidBindToActiveNetwork(logf logger.Logf, v bool) {
+	if runtime.GOOS == "android" && disableAndroidBindToActiveNetwork.Swap(v) != v {
+		logf("netns: disableAndroidBindToActiveNetwork changed to %v", v)
+	}
+}
+
 var disableBindConnToInterface atomic.Bool
 
 // SetDisableBindConnToInterface disables the (normal) behavior of binding

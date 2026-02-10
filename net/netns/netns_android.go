@@ -17,6 +17,9 @@ import (
 var (
 	androidProtectFuncMu sync.Mutex
 	androidProtectFunc   func(fd int) error
+
+	androidBindToNetworkFuncMu sync.Mutex
+	androidBindToNetworkFunc   func(fd int) error
 )
 
 // UseSocketMark reports whether SO_MARK is in use. Android does not use SO_MARK.
@@ -50,6 +53,14 @@ func SetAndroidProtectFunc(f func(fd int) error) {
 	androidProtectFunc = f
 }
 
+// SetAndroidBindToNetworkFunc registers a func provided by Android that binds
+// the socket FD to the currently selected underlying network.
+func SetAndroidBindToNetworkFunc(f func(fd int) error) {
+	androidBindToNetworkFuncMu.Lock()
+	defer androidBindToNetworkFuncMu.Unlock()
+	androidBindToNetworkFunc = f
+}
+
 func control(logger.Logf, *netmon.Monitor) func(network, address string, c syscall.RawConn) error {
 	return controlC
 }
@@ -60,14 +71,36 @@ func control(logger.Logf, *netmon.Monitor) func(network, address string, c sysca
 // and net.ListenConfig.Control.
 func controlC(network, address string, c syscall.RawConn) error {
 	var sockErr error
+
 	err := c.Control(func(fd uintptr) {
+		fdInt := int(fd)
+
+		// Protect from VPN loops
 		androidProtectFuncMu.Lock()
-		f := androidProtectFunc
+		pf := androidProtectFunc
 		androidProtectFuncMu.Unlock()
-		if f != nil {
-			sockErr = f(int(fd))
+		if pf != nil {
+			if err := pf(fdInt); err != nil {
+				sockErr = err
+				return
+			}
+		}
+
+		if disableAndroidBindToActiveNetwork.Load() {
+			return
+		}
+
+		androidBindToNetworkFuncMu.Lock()
+		bf := androidBindToNetworkFunc
+		androidBindToNetworkFuncMu.Unlock()
+		if bf != nil {
+			if err := bf(fdInt); err != nil {
+				sockErr = err
+				return
+			}
 		}
 	})
+
 	if err != nil {
 		return fmt.Errorf("RawConn.Control on %T: %w", c, err)
 	}
