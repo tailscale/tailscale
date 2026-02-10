@@ -323,6 +323,12 @@ type forwarder struct {
 	// /etc/resolv.conf is missing/corrupt, and the peerapi ExitDNS stub
 	// resolver lookup.
 	cloudHostFallback []resolverAndDelay
+
+	// acceptDNS tracks the CorpDNS pref (--accept-dns)
+	// This lets us skip health warnings if the forwarder receives inbound
+	// queries directly - but we didn't configure it with any upstream resolvers.
+	// That's an error, but not a health error if the user has disabled CorpDNS.
+	acceptDNS bool
 }
 
 func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, health *health.Tracker, knobs *controlknobs.Knobs) *forwarder {
@@ -434,7 +440,7 @@ func cloudResolvers() []resolverAndDelay {
 // Resolver.SetConfig on reconfig.
 //
 // The memory referenced by routesBySuffix should not be modified.
-func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolver) {
+func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolver, acceptDNS bool) {
 	routes := make([]route, 0, len(routesBySuffix))
 
 	cloudHostFallback := cloudResolvers()
@@ -468,6 +474,7 @@ func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolve
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.acceptDNS = acceptDNS
 	f.routes = routes
 	f.cloudHostFallback = cloudHostFallback
 }
@@ -1056,7 +1063,9 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		resolvers = f.resolvers(domain)
 		if len(resolvers) == 0 {
 			metricDNSFwdErrorNoUpstream.Add(1)
-			f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: ""})
+			if f.acceptDNS {
+				f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: ""})
+			}
 			f.logf("no upstream resolvers set, returning SERVFAIL")
 
 			res, err := servfailResponse(query)
@@ -1156,7 +1165,9 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 						for _, rr := range resolvers {
 							resolverAddrs = append(resolverAddrs, rr.name.Addr)
 						}
-						f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: strings.Join(resolverAddrs, ",")})
+						if f.acceptDNS {
+							f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: strings.Join(resolverAddrs, ",")})
+						}
 					case responseChan <- res:
 						if f.verboseFwd {
 							f.logf("forwarder response(%d, %v, %d) = %d, %v", fq.txid, typ, len(domain), len(res.bs), firstErr)
@@ -1181,7 +1192,9 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			for _, rr := range resolvers {
 				resolverAddrs = append(resolverAddrs, rr.name.Addr)
 			}
-			f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: strings.Join(resolverAddrs, ",")})
+			if f.acceptDNS {
+				f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: strings.Join(resolverAddrs, ",")})
+			}
 			return fmt.Errorf("waiting for response or error from %v: %w", resolverAddrs, ctx.Err())
 		}
 	}

@@ -87,6 +87,11 @@ func (v *ConfigView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
+// AcceptDNS true if [Prefs.CorpDNS] is enabled (or --accept-dns=true).
+// This should be used for error handling and health reporting
+// purposes only.
+func (v ConfigView) AcceptDNS() bool { return v.ж.AcceptDNS }
+
 // DefaultResolvers are the DNS resolvers to use for DNS names
 // which aren't covered by more specific per-domain routes below.
 // If empty, the OS's default resolvers (the ones that predate
@@ -139,6 +144,7 @@ func (v ConfigView) Equal(v2 ConfigView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ConfigViewNeedsRegeneration = Config(struct {
+	AcceptDNS        bool
 	DefaultResolvers []*dnstype.Resolver
 	Routes           map[dnsname.FQDN][]*dnstype.Resolver
 	SearchDomains    []dnsname.FQDN

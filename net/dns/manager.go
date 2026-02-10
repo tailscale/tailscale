@@ -292,6 +292,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// the OS.
 	rcfg.Hosts = cfg.Hosts
 	rcfg.SubdomainHosts = cfg.SubdomainHosts
+	rcfg.AcceptDNS = cfg.AcceptDNS
 	routes := map[dnsname.FQDN][]*dnstype.Resolver{} // assigned conditionally to rcfg.Routes below.
 	var propagateHostsToOS bool
 	for suffix, resolvers := range cfg.Routes {

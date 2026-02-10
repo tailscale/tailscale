@@ -219,7 +219,8 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				CorpDNS: true,
 			},
 			want: &dns.Config{
-				Hosts: map[dnsname.FQDN][]netip.Addr{},
+				AcceptDNS: true,
+				Hosts:     map[dnsname.FQDN][]netip.Addr{},
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{
 					"0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa.": nil,
 					"100.100.in-addr.arpa.":             nil,
@@ -319,7 +320,8 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				CorpDNS: true,
 			},
 			want: &dns.Config{
-				Hosts: map[dnsname.FQDN][]netip.Addr{},
+				AcceptDNS: true,
+				Hosts:     map[dnsname.FQDN][]netip.Addr{},
 				DefaultResolvers: []*dnstype.Resolver{
 					{Addr: "8.8.8.8"},
 				},
@@ -342,8 +344,9 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				ExitNodeID: "some-id",
 			},
 			want: &dns.Config{
-				Hosts:  map[dnsname.FQDN][]netip.Addr{},
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
+				AcceptDNS: true,
+				Hosts:     map[dnsname.FQDN][]netip.Addr{},
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
 				DefaultResolvers: []*dnstype.Resolver{
 					{Addr: "8.8.4.4"},
 				},
@@ -362,8 +365,9 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				CorpDNS: true,
 			},
 			want: &dns.Config{
-				Hosts:  map[dnsname.FQDN][]netip.Addr{},
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
+				AcceptDNS: true,
+				Hosts:     map[dnsname.FQDN][]netip.Addr{},
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
 			},
 		},
 		{
@@ -420,6 +424,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				CorpDNS: true,
 			},
 			want: &dns.Config{
+				AcceptDNS: true,
 				Hosts: map[dnsname.FQDN][]netip.Addr{
 					"a.":  ips("100.101.101.101"),
 					"p1.": ips("100.102.0.1"),
@@ -466,7 +471,8 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				CorpDNS: true,
 			},
 			want: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
+				AcceptDNS: true,
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
 				Hosts: map[dnsname.FQDN][]netip.Addr{
 					"a.":  ips("100.101.101.101"),
 					"p1.": ips("100.102.0.1"),
