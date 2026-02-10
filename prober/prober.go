@@ -161,6 +161,7 @@ func newProbe(p *Prober, name string, interval time.Duration, lg prometheus.Labe
 		mEndTime:     prometheus.NewDesc("end_secs", "Latest probe end time (seconds since epoch)", nil, lg),
 		mLatency:     prometheus.NewDesc("latency_millis", "Latest probe latency (ms)", nil, lg),
 		mResult:      prometheus.NewDesc("result", "Latest probe result (1 = success, 0 = failure)", nil, lg),
+		mInFlight:    prometheus.NewDesc("in_flight", "Number of probes currently running", nil, lg),
 		mAttempts: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "attempts_total", Help: "Total number of probing attempts", ConstLabels: lg,
 		}, []string{"status"}),
@@ -261,10 +262,12 @@ type Probe struct {
 	mEndTime     *prometheus.Desc
 	mLatency     *prometheus.Desc
 	mResult      *prometheus.Desc
+	mInFlight    *prometheus.Desc
 	mAttempts    *prometheus.CounterVec
 	mSeconds     *prometheus.CounterVec
 
 	mu        sync.Mutex
+	inFlight  int           // number of currently running probes
 	start     time.Time     // last time doProbe started
 	end       time.Time     // last time doProbe returned
 	latency   time.Duration // last successful probe latency
@@ -392,11 +395,13 @@ func (p *Probe) run() (pi ProbeInfo, err error) {
 func (p *Probe) recordStart() {
 	p.mu.Lock()
 	p.start = p.prober.now()
+	p.inFlight++
 	p.mu.Unlock()
 }
 
 func (p *Probe) recordEndLocked(err error) {
 	end := p.prober.now()
+	p.inFlight--
 	p.end = end
 	p.succeeded = err == nil
 	p.lastErr = err
@@ -649,6 +654,7 @@ func (p *Probe) Describe(ch chan<- *prometheus.Desc) {
 	ch <- p.mStartTime
 	ch <- p.mEndTime
 	ch <- p.mResult
+	ch <- p.mInFlight
 	ch <- p.mLatency
 	p.mAttempts.Describe(ch)
 	p.mSeconds.Describe(ch)
@@ -664,6 +670,7 @@ func (p *Probe) Collect(ch chan<- prometheus.Metric) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	ch <- prometheus.MustNewConstMetric(p.mInterval, prometheus.GaugeValue, p.interval.Seconds())
+	ch <- prometheus.MustNewConstMetric(p.mInFlight, prometheus.GaugeValue, float64(p.inFlight))
 	if !p.start.IsZero() {
 		ch <- prometheus.MustNewConstMetric(p.mStartTime, prometheus.GaugeValue, float64(p.start.Unix()))
 	}
