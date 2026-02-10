@@ -297,12 +297,6 @@ func stderrWriteForTest(b []byte) int {
 	return must.Get(os.Stderr.Write(b))
 }
 
-// waitIdleStderrForTest waits until there are no active stderrWriteForTest calls.
-func waitIdleStderrForTest() {
-	activeStderrWriteForTest.Lock()
-	defer activeStderrWriteForTest.Unlock()
-}
-
 // rotateLocked swaps f.newer and f.older such that:
 //
 //   - f.newer will be truncated and future writes will be appended to the end.
@@ -350,8 +344,15 @@ func (f *Filch) rotateLocked() error {
 	// Note that mutex does not prevent stderr writes.
 	prevSize := f.newlyWrittenBytes + f.newlyFilchedBytes
 	f.newlyWrittenBytes, f.newlyFilchedBytes = 0, 0
+
+	// Hold the write lock around dup2 to prevent concurrent
+	// stderrWriteForTest calls from racing with dup2 on the same fd.
+	// On macOS, dup2 and write are not atomic with respect to each other,
+	// so a concurrent write can observe a bad file descriptor.
+	activeStderrWriteForTest.Lock()
 	if f.OrigStderr != nil {
 		if err := dup2Stderr(f.newer); err != nil {
+			activeStderrWriteForTest.Unlock()
 			return err
 		}
 	}
@@ -369,15 +370,15 @@ func (f *Filch) rotateLocked() error {
 	// In rare cases, it is possible that [Filch.TryReadLine] consumes
 	// the entire older file before the write commits,
 	// leading to dropped stderr lines.
-	waitIdleStderrForTest()
-	if fi, err := f.older.Stat(); err != nil {
+	fi, err := f.older.Stat()
+	activeStderrWriteForTest.Unlock()
+	if err != nil {
 		return err
-	} else {
-		filchedBytes := max(0, fi.Size()-prevSize)
-		f.writeBytes.Add(filchedBytes)
-		f.filchedBytes.Add(filchedBytes)
-		f.storedBytes.Set(fi.Size()) // newer has been truncated, so only older matters
 	}
+	filchedBytes := max(0, fi.Size()-prevSize)
+	f.writeBytes.Add(filchedBytes)
+	f.filchedBytes.Add(filchedBytes)
+	f.storedBytes.Set(fi.Size()) // newer has been truncated, so only older matters
 
 	// Start reading from the start of older.
 	if _, err := f.older.Seek(0, io.SeekStart); err != nil {
