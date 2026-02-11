@@ -432,6 +432,15 @@ func (v PrefsView) PostureChecking() bool { return v.ж.PostureChecking }
 // Linux-only.
 func (v PrefsView) NetfilterKind() string { return v.ж.NetfilterKind }
 
+// LinuxPacketMarks configures Linux packet mark values used by Tailscale
+// for subnet routing and bypass routing. When nil, defaults from tsconst
+// are used.
+//
+// Linux-only.
+func (v PrefsView) LinuxPacketMarks() views.ValuePointer[preftype.LinuxPacketMarks] {
+	return views.ValuePointerOf(v.ж.LinuxPacketMarks)
+}
+
 // DriveShares are the configured DriveShares, stored in increasing order
 // by name.
 func (v PrefsView) DriveShares() views.SliceView[*drive.Share, drive.ShareView] {
@@ -503,6 +512,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	AppConnector               AppConnectorPrefs
 	PostureChecking            bool
 	NetfilterKind              string
+	LinuxPacketMarks           *preftype.LinuxPacketMarks
 	DriveShares                []*drive.Share
 	RelayServerPort            *uint16
 	RelayServerStaticEndpoints []netip.AddrPort

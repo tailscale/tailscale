@@ -41,6 +41,11 @@ type ConfigVAlpha struct {
 	NetfilterMode       *string  `json:",omitempty"` // "on", "off", "nodivert"
 	NoStatefulFiltering opt.Bool `json:",omitempty"`
 
+	// LinuxPacketMarks configures the Linux firewall mark bits used for
+	// subnet routing and bypass routing. If unset, Tailscale's hardcoded
+	// defaults are used. This is only honored on Linux.
+	LinuxPacketMarks *preftype.LinuxPacketMarks `json:",omitzero"`
+
 	PostureChecking opt.Bool         `json:",omitempty"`
 	RunSSHServer    opt.Bool         `json:",omitempty"` // Tailscale SSH
 	RunWebClient    opt.Bool         `json:",omitempty"`
@@ -131,6 +136,13 @@ func (c *ConfigVAlpha) ToPrefs() (MaskedPrefs, error) {
 		}
 		mp.NetfilterMode = m
 		mp.NetfilterModeSet = true
+	}
+	if c.LinuxPacketMarks != nil {
+		if err := c.LinuxPacketMarks.Validate(); err != nil {
+			return mp, fmt.Errorf("invalid LinuxPacketMarks: %w", err)
+		}
+		mp.LinuxPacketMarks = c.LinuxPacketMarks
+		mp.LinuxPacketMarksSet = true
 	}
 	if c.PostureChecking != "" {
 		mp.PostureChecking = c.PostureChecking.EqualBool(true)
