@@ -67,6 +67,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&RecorderList{},
 		&ProxyGroup{},
 		&ProxyGroupList{},
+		&EgressPolicy{},
+		&EgressPolicyList{},
 		&Tailnet{},
 		&TailnetList{},
 	)
