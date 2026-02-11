@@ -361,9 +361,8 @@ func (de *endpoint) setProbeUDPLifetimeConfigLocked(desired *ProbeUDPLifetimeCon
 // endpointDisco is the current disco key and short string for an endpoint. This
 // structure is immutable.
 type endpointDisco struct {
-	key     key.DiscoPublic // for discovery messages.
-	short   string          // ShortString of discoKey.
-	viaTSMP bool            // the key was learned via TSMP
+	key   key.DiscoPublic // for discovery messages.
+	short string          // ShortString of discoKey.
 }
 
 type sentPing struct {
@@ -1466,52 +1465,15 @@ func (de *endpoint) setLastPing(ipp netip.AddrPort, now mono.Time) {
 	state.lastPing = now
 }
 
-// updateDiscoKeyLocked takes in a new discoKey for the endpoint to be updated.
-// It ensures that the new key is not a previously held key. This prevents
-// control from overwriting a key set by TSMP in a case where the endpoint
-// represented by de is unable to contact control and has shared its disco key
-// via TSMP. If key is a previously held key, this method is a noop. de.mu must
-// be held while calling. The return value is true if we stored a different key
-// but false if the key is the same or a previously used key.
-func (de *endpoint) updateDiscoKeyLocked(key *key.DiscoPublic, viaTSMP bool) bool {
+func (de *endpoint) updateDiscoKey(key *key.DiscoPublic) {
 	if key == nil {
 		de.disco.Store((*endpointDisco)(nil))
-		return true
-	}
-
-	epDisco := de.disco.Load()
-	// Existing key is nil, set new key
-	if epDisco == nil {
+	} else {
 		de.disco.Store(&endpointDisco{
-			key:     *key,
-			short:   key.ShortString(),
-			viaTSMP: viaTSMP,
+			key:   *key,
+			short: key.ShortString(),
 		})
-		return true
 	}
-
-	// Key is the same. If we had learned it via TSMP before and are now getting
-	// it via control, update the field, but do not change the key.
-	if epDisco.key.Compare(*key) == 0 {
-		if epDisco.viaTSMP && !viaTSMP {
-			epDisco.viaTSMP = false
-			de.disco.Store(epDisco)
-		}
-		return false
-	}
-
-	// The new key is from control but the old one viaTSMP, do nothing.
-	if !viaTSMP && epDisco.viaTSMP {
-		return false
-	}
-
-	// New key that needs to be stored.
-	de.disco.Store(&endpointDisco{
-		key:     *key,
-		short:   key.ShortString(),
-		viaTSMP: viaTSMP,
-	})
-	return true
 }
 
 // updateFromNode updates the endpoint based on a tailcfg.Node from a NetMap
@@ -1540,14 +1502,11 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 	if discoKey != n.DiscoKey() {
 		de.c.logf("[v1] magicsock: disco: node %s changed from %s to %s", de.publicKey.ShortString(), discoKey, n.DiscoKey())
 		key := n.DiscoKey()
-		keyChanged := de.updateDiscoKeyLocked(&key, false)
+		de.updateDiscoKey(&key)
 		de.debugUpdates.Add(EndpointChange{
 			When: time.Now(),
 			What: "updateFromNode-resetLocked",
 		})
-		if keyChanged {
-			de.resetLocked()
-		}
 	}
 	if n.HomeDERP() == 0 {
 		if de.derpAddr.IsValid() {

@@ -169,7 +169,7 @@ func (ms *mapSession) updateDiscoForNode(id tailcfg.NodeID, key key.DiscoPublic,
 		DiscoKey: &key,
 	}
 	resp.PeersChangedPatch = append(resp.PeersChangedPatch, change)
-	ms.handleNonKeepAliveMapResponse(ms.sessionAliveCtx, &resp)
+	ms.changeQueue <- &resp
 }
 
 func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *tailcfg.MapResponse) error {
@@ -322,23 +322,32 @@ func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse) {
 	filtered := resp.PeersChangedPatch[:0]
 
 	for _, change := range resp.PeersChangedPatch {
-		keep := false
-
-		if *change.Online {
-			keep = true
-		} else {
-			existingNode := existingMap.Peers[existingMap.PeerIndexByNodeID(change.NodeID)]
-
-			if existingLastSeen, ok := existingNode.LastSeen().GetOk(); ok &&
-				change.LastSeen.After(existingLastSeen) {
-				keep = true
-			}
+		// Accept if:
+		// - DiscoKey is nil and did not change.
+		// - Fields we rely on for rejection is missing.
+		if change.DiscoKey == nil || change.Online == nil || change.LastSeen == nil {
+			filtered = append(filtered, change)
+			continue
 		}
 
-		if keep {
+		// Accept if:
+		// - Node is online.
+		if *change.Online {
+			filtered = append(filtered, change)
+			continue
+		}
+
+		existingNode := existingMap.Peers[existingMap.PeerIndexByNodeID(change.NodeID)]
+
+		// Accept if:
+		// - lastSeen moved forward in time.
+		if existingLastSeen, ok := existingNode.LastSeen().GetOk(); ok &&
+			change.LastSeen.After(existingLastSeen) {
 			filtered = append(filtered, change)
 		}
 	}
+
+	resp.PeersChangedPatch = filtered
 }
 
 // updateStateFromResponse updates ms from res. It takes ownership of res.
