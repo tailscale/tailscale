@@ -4874,7 +4874,10 @@ func (b *LocalBackend) doSetHostinfoFilterServicesLocked() {
 
 	hi := b.hostInfoWithServicesLocked()
 
-	cc.SetHostinfo(hi)
+	_hi := hi.Clone()
+	_hi.SSH_HostKeys = []string{}
+
+	cc.SetHostinfo(_hi)
 }
 
 // hostInfoWithServicesLocked returns a shallow clone of b.hostinfo with
