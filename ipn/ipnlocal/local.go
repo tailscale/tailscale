@@ -10,7 +10,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -34,7 +33,6 @@ import (
 	"go4.org/mem"
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
-	"tailscale.com/appc"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/control/controlknobs"
@@ -70,7 +68,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
-	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
@@ -86,7 +83,6 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus"
-	"tailscale.com/util/execqueue"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/osuser"
@@ -191,7 +187,6 @@ type LocalBackend struct {
 	statsLogf   logger.Logf             // for printing peers stats on change
 	sys         *tsd.System
 	eventClient *eventbus.Client
-	appcTask    execqueue.ExecQueue // handles updates from appc
 
 	health                   *health.Tracker     // always non-nil
 	polc                     policyclient.Client // always non-nil
@@ -275,7 +270,6 @@ type LocalBackend struct {
 	httpTestClient   *http.Client       // for controlclient. nil by default, used by tests.
 	ccGen            clientGen          // function for producing controlclient; lazily populated
 	sshServer        SSHServer          // or nil, initialized lazily.
-	appConnector     *appc.AppConnector // or nil, initialized when configured.
 	// notifyCancel cancels notifications to the current SetNotifyCallback.
 	notifyCancel context.CancelFunc
 	cc           controlclient.Client // TODO(nickkhyl): move to nodeBackend
@@ -541,6 +535,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		return nil, fmt.Errorf("failed to create extension host: %w", err)
 	}
 	b.pm.SetExtensionHost(b.extHost)
+	b.setNodeBackendHooks(nb)
 
 	if b.unregisterSysPolicyWatch, err = b.registerSysPolicyWatch(); err != nil {
 		return nil, err
@@ -616,36 +611,15 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	if buildfeatures.HasPortList {
 		eventbus.SubscribeFunc(ec, b.setPortlistServices)
 	}
-	eventbus.SubscribeFunc(ec, b.onAppConnectorRouteUpdate)
-	eventbus.SubscribeFunc(ec, b.onAppConnectorStoreRoutes)
 	mConn.SetNetInfoCallback(b.setNetInfo) // TODO(tailscale/tailscale#17887): move to eventbus
 
 	return b, nil
 }
 
-func (b *LocalBackend) onAppConnectorRouteUpdate(ru appctype.RouteUpdate) {
-	// TODO(creachadair, 2025-10-02): It is currently possible for updates produced under
-	// one profile to arrive and be applied after a switch to another profile.
-	// We need to find a way to ensure that changes to the backend state are applied
-	// consistently in the presnce of profile changes, which currently may not happen in
-	// a single atomic step.  See: https://github.com/tailscale/tailscale/issues/17414
-	b.appcTask.Add(func() {
-		if err := b.AdvertiseRoute(ru.Advertise...); err != nil {
-			b.logf("appc: failed to advertise routes: %v: %v", ru.Advertise, err)
-		}
-		if err := b.UnadvertiseRoute(ru.Unadvertise...); err != nil {
-			b.logf("appc: failed to unadvertise routes: %v: %v", ru.Unadvertise, err)
-		}
-	})
-}
-
-func (b *LocalBackend) onAppConnectorStoreRoutes(ri appctype.RouteInfo) {
-	// Whether or not routes should be stored can change over time.
-	shouldStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
-	if shouldStoreRoutes {
-		if err := b.storeRouteInfo(ri); err != nil {
-			b.logf("appc: failed to store route info: %v", err)
-		}
+// setNodeBackendHooks wires extension hooks into the given nodeBackend.
+func (b *LocalBackend) setNodeBackendHooks(nb *nodeBackend) {
+	if f, ok := b.extHost.Hooks().SplitDNSResolverPeers.GetOk(); ok {
+		nb.pickSplitDNSPeers = f
 	}
 }
 
@@ -662,6 +636,7 @@ func (b *LocalBackend) currentNode() *nodeBackend {
 		return v
 	}
 	v := newNodeBackend(cmp.Or(b.ctx, context.Background()), b.logf, b.sys.Bus.Get())
+	b.setNodeBackendHooks(v)
 	if b.currentNodeAtomic.CompareAndSwap(nil, v) {
 		v.ready()
 	}
@@ -1124,7 +1099,6 @@ func (b *LocalBackend) Shutdown() {
 	//  1. Event handlers also acquire b.mu, they can deadlock with c.Shutdown().
 	//  2. Event handlers may not guard against undesirable post/in-progress
 	//     LocalBackend.Shutdown() behaviors.
-	b.appcTask.Shutdown()
 	b.eventClient.Close()
 
 	b.em.close()
@@ -1171,7 +1145,6 @@ func (b *LocalBackend) Shutdown() {
 	if b.notifyCancel != nil {
 		b.notifyCancel()
 	}
-	b.appConnector.Close()
 	b.mu.Unlock()
 	b.webClientShutdown()
 
@@ -2475,7 +2448,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	hostinfo.FrontendLogID = opts.FrontendLogID
 	hostinfo.Userspace.Set(b.sys.IsNetstack())
 	hostinfo.UserspaceRouter.Set(b.sys.IsNetstackRouter())
-	hostinfo.AppConnector.Set(b.appConnector != nil)
+	hostinfo.AppConnector.Set(b.OfferingAppConnector())
 	hostinfo.StateEncrypted = b.stateEncrypted()
 	b.logf.JSON(1, "Hostinfo", hostinfo)
 
@@ -2825,9 +2798,10 @@ func (b *LocalBackend) updateFilterLocked(prefs ipn.PrefsView) {
 		// The correct filter rules are synthesized by the coordination server
 		// and sent down, but the address needs to be part of the 'local net' for the
 		// filter package to even bother checking the filter rules, so we set them here.
-		if buildfeatures.HasAppConnectors && prefs.AppConnector().Advertise {
-			localNetsB.Add(netip.MustParseAddr("0.0.0.0"))
-			localNetsB.Add(netip.MustParseAddr("::0"))
+		for _, f := range b.extHost.Hooks().ExtraLocalAddrs {
+			for _, addr := range f() {
+				localNetsB.Add(addr)
+			}
 		}
 	}
 	localNets, _ := localNetsB.IPSet()
@@ -4310,20 +4284,14 @@ func (b *LocalBackend) SetUseExitNodeEnabled(actor ipnauth.Actor, v bool) (ipn.P
 	return b.editPrefsLocked(actor, mp)
 }
 
-// MaybeClearAppConnector clears the routes from any AppConnector if
-// AdvertiseRoutes has been set in the MaskedPrefs.
-func (b *LocalBackend) MaybeClearAppConnector(mp *ipn.MaskedPrefs) error {
-	if !buildfeatures.HasAppConnectors {
-		return nil
+// MaybeClearAutoRoutes clears auto-discovered routes (e.g., from the app
+// connector extension) if any hook is registered. It is called when the user
+// explicitly sets AdvertiseRoutes via the local API.
+func (b *LocalBackend) MaybeClearAutoRoutes() error {
+	if f, ok := b.extHost.Hooks().ClearAutoRoutes.GetOk(); ok {
+		return f()
 	}
-	var err error
-	if ac := b.AppConnector(); ac != nil && mp.AdvertiseRoutesSet {
-		err = ac.ClearRoutes()
-		if err != nil {
-			b.logf("appc: clear routes error: %v", err)
-		}
-	}
-	return err
+	return nil
 }
 
 // EditPrefs applies the changes in mp to the current prefs,
@@ -4952,110 +4920,6 @@ func (b *LocalBackend) blockEngineUpdatesLocked(block bool) {
 	b.blocked = block
 }
 
-// reconfigAppConnectorLocked updates the app connector state based on the
-// current network map and preferences.
-// b.mu must be held.
-func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
-	if !buildfeatures.HasAppConnectors {
-		return
-	}
-	const appConnectorCapName = "tailscale.com/app-connectors"
-	defer func() {
-		if b.hostinfo != nil {
-			b.hostinfo.AppConnector.Set(b.appConnector != nil)
-		}
-	}()
-
-	// App connectors have been disabled.
-	if !prefs.AppConnector().Advertise {
-		b.appConnector.Close() // clean up a previous connector (safe on nil)
-		b.appConnector = nil
-		return
-	}
-
-	// We don't (yet) have an app connector configured, or the configured
-	// connector has a different route persistence setting.
-	shouldStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
-	if b.appConnector == nil || (shouldStoreRoutes != b.appConnector.ShouldStoreRoutes()) {
-		ri, err := b.readRouteInfoLocked()
-		if err != nil && err != ipn.ErrStateNotExist {
-			b.logf("Unsuccessful Read RouteInfo: %v", err)
-		}
-		b.appConnector.Close() // clean up a previous connector (safe on nil)
-		b.appConnector = appc.NewAppConnector(appc.Config{
-			Logf:            b.logf,
-			EventBus:        b.sys.Bus.Get(),
-			RouteInfo:       ri,
-			HasStoredRoutes: shouldStoreRoutes,
-		})
-	}
-	if nm == nil {
-		return
-	}
-
-	attrs, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.AppConnectorAttr](nm.SelfNode.CapMap(), appConnectorCapName)
-	if err != nil {
-		b.logf("[unexpected] error parsing app connector mapcap: %v", err)
-		return
-	}
-
-	// Geometric cost, assumes that the number of advertised tags is small
-	selfHasTag := func(attrTags []string) bool {
-		return nm.SelfNode.Tags().ContainsFunc(func(tag string) bool {
-			return slices.Contains(attrTags, tag)
-		})
-	}
-
-	var (
-		domains []string
-		routes  []netip.Prefix
-	)
-	for _, attr := range attrs {
-		if slices.Contains(attr.Connectors, "*") || selfHasTag(attr.Connectors) {
-			domains = append(domains, attr.Domains...)
-			routes = append(routes, attr.Routes...)
-		}
-	}
-	slices.Sort(domains)
-	slices.SortFunc(routes, func(i, j netip.Prefix) int { return i.Addr().Compare(j.Addr()) })
-	domains = slices.Compact(domains)
-	routes = slices.Compact(routes)
-	b.appConnector.UpdateDomainsAndRoutes(domains, routes)
-}
-
-func (b *LocalBackend) readvertiseAppConnectorRoutes() {
-	// Note: we should never call b.appConnector methods while holding b.mu.
-	// This can lead to a deadlock, like
-	// https://github.com/tailscale/corp/issues/25965.
-	//
-	// Grab a copy of the field, since b.mu only guards access to the
-	// b.appConnector field itself.
-	appConnector := b.AppConnector()
-
-	if appConnector == nil {
-		return
-	}
-	domainRoutes := appConnector.DomainRoutes()
-	if domainRoutes == nil {
-		return
-	}
-
-	// Re-advertise the stored routes, in case stored state got out of
-	// sync with previously advertised routes in prefs.
-	var prefixes []netip.Prefix
-	for _, ips := range domainRoutes {
-		for _, ip := range ips {
-			prefixes = append(prefixes, netip.PrefixFrom(ip, ip.BitLen()))
-		}
-	}
-	// Note: AdvertiseRoute will trim routes that are already
-	// advertised, so if everything is already being advertised this is
-	// a noop.
-	if err := b.AdvertiseRoute(prefixes...); err != nil {
-		b.logf("error advertising stored app connector routes: %v", err)
-	}
-}
-
 // authReconfig pushes a new configuration into wgengine, if engine
 // updates are not currently blocked, based on the cached netmap and
 // user prefs.
@@ -5092,8 +4956,14 @@ func (b *LocalBackend) authReconfigLocked() {
 	disableSubnetsIfPAC := cn.SelfHasCap(tailcfg.NodeAttrDisableSubnetsIfPAC)
 	dohURL, dohURLOK := cn.exitNodeCanProxyDNS(prefs.ExitNodeID())
 	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, version.OS())
-	// If the current node is an app connector, ensure the app connector machine is started
-	b.reconfigAppConnectorLocked(nm, prefs)
+	// Notify extensions (e.g., app connector) about the reconfig asynchronously.
+	selfNode := nm.SelfNodeOrZero()
+	authReconfigPrefs := prefs
+	go func() {
+		for _, f := range b.extHost.Hooks().OnAuthReconfig {
+			f(selfNode, authReconfigPrefs)
+		}
+	}()
 
 	if !prefs.WantRunning() {
 		b.logf("[v1] authReconfig: skipping because !WantRunning.")
@@ -5143,9 +5013,6 @@ func (b *LocalBackend) authReconfigLocked() {
 	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", prefs.RouteAll(), prefs.CorpDNS(), flags, err)
 
 	b.initPeerAPIListenerLocked()
-	if buildfeatures.HasAppConnectors {
-		go b.goTracker.Go(b.readvertiseAppConnectorRoutes)
-	}
 }
 
 // shouldUseOneCGNATRoute reports whether we should prefer to make one big
@@ -5664,9 +5531,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 		f(b, hi, prefs)
 	}
 
-	if buildfeatures.HasAppConnectors {
-		hi.AppConnector.Set(prefs.AppConnector().Advertise)
-	}
+	hi.AppConnector.Set(prefs.AppConnector().Advertise)
 
 	// The [tailcfg.Hostinfo.ExitNodeID] field tells control which exit node
 	// was selected, if any.
@@ -6652,24 +6517,10 @@ func (b *LocalBackend) OfferingExitNode() bool {
 // OfferingAppConnector reports whether b is currently offering app
 // connector services.
 func (b *LocalBackend) OfferingAppConnector() bool {
-	if !buildfeatures.HasAppConnectors {
-		return false
+	if f, ok := b.extHost.Hooks().OfferingAppConnector.GetOk(); ok {
+		return f()
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.appConnector != nil
-}
-
-// AppConnector returns the current AppConnector, or nil if not configured.
-//
-// TODO(nickkhyl): move app connectors to [nodeBackend], or perhaps a feature package?
-func (b *LocalBackend) AppConnector() *appc.AppConnector {
-	if !buildfeatures.HasAppConnectors {
-		return nil
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.appConnector
+	return false
 }
 
 // allowExitNodeDNSProxyToServeName reports whether the Exit Node DNS
@@ -7062,6 +6913,7 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 		return nil
 	}
 	newNode := newNodeBackend(b.ctx, b.logf, b.sys.Bus.Get())
+	b.setNodeBackendHooks(newNode)
 	if oldNode := b.currentNodeAtomic.Swap(newNode); oldNode != nil {
 		oldNode.shutdown(errNodeContextChanged)
 	}
@@ -7202,22 +7054,12 @@ func (b *LocalBackend) DebugBreakDERPConns() error {
 	return b.MagicConn().DebugBreakDERPConns()
 }
 
-// ObserveDNSResponse passes a DNS response from the PeerAPI DNS server to the
-// App Connector to enable route discovery.
-func (b *LocalBackend) ObserveDNSResponse(res []byte) error {
-	if !buildfeatures.HasAppConnectors {
-		return nil
+// ObserveDNSResponse passes a DNS response from the PeerAPI DNS server to
+// registered observers (e.g., the app connector extension) for route discovery.
+func (b *LocalBackend) ObserveDNSResponse(res []byte) {
+	for _, f := range b.extHost.Hooks().ObserveDNSResponse {
+		f(res)
 	}
-	var appConnector *appc.AppConnector
-	b.mu.Lock()
-	if b.appConnector == nil {
-		b.mu.Unlock()
-		return nil
-	}
-	appConnector = b.appConnector
-	b.mu.Unlock()
-
-	return appConnector.ObserveDNSResponse(res)
 }
 
 // ErrDisallowedAutoRoute is returned by AdvertiseRoute when a route that is not allowed is requested.
@@ -7301,58 +7143,6 @@ func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 		AdvertiseRoutesSet: true,
 	})
 	return err
-}
-
-// namespace a key with the profile manager's current profile key, if any
-func namespaceKeyForCurrentProfile(pm *profileManager, key ipn.StateKey) ipn.StateKey {
-	return pm.CurrentProfile().Key() + "||" + key
-}
-
-const routeInfoStateStoreKey ipn.StateKey = "_routeInfo"
-
-func (b *LocalBackend) storeRouteInfo(ri appctype.RouteInfo) error {
-	if !buildfeatures.HasAppConnectors {
-		return feature.ErrUnavailable
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.pm.CurrentProfile().ID() == "" {
-		return nil
-	}
-	key := namespaceKeyForCurrentProfile(b.pm, routeInfoStateStoreKey)
-	bs, err := json.Marshal(ri)
-	if err != nil {
-		return err
-	}
-	return b.pm.WriteState(key, bs)
-}
-
-func (b *LocalBackend) readRouteInfoLocked() (*appctype.RouteInfo, error) {
-	if !buildfeatures.HasAppConnectors {
-		return nil, feature.ErrUnavailable
-	}
-	if b.pm.CurrentProfile().ID() == "" {
-		return &appctype.RouteInfo{}, nil
-	}
-	key := namespaceKeyForCurrentProfile(b.pm, routeInfoStateStoreKey)
-	bs, err := b.pm.Store().ReadState(key)
-	ri := &appctype.RouteInfo{}
-	if err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(bs, ri); err != nil {
-		return nil, err
-	}
-	return ri, nil
-}
-
-// ReadRouteInfo returns the app connector route information that is
-// stored in prefs to be consistent across restarts. It should be up
-// to date with the RouteInfo in memory being used by appc.
-func (b *LocalBackend) ReadRouteInfo() (*appctype.RouteInfo, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.readRouteInfoLocked()
 }
 
 // seamlessRenewalEnabled reports whether seamless key renewals are enabled.
