@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -395,7 +396,13 @@ func formatNodes(nodes []*tailcfg.Node) string {
 func newTestMapSession(t testing.TB, nu NetmapUpdater) *mapSession {
 	ms := newMapSession(key.NewNode(), nu, new(controlknobs.Knobs))
 	t.Cleanup(ms.Close)
-	ms.logf = t.Logf
+	var mu sync.Mutex
+	logger := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		t.Logf(format, args...)
+	}
+	ms.logf = logger
 	return ms
 }
 
@@ -1099,6 +1106,8 @@ func BenchmarkMapSessionDelta(b *testing.B) {
 			ctx := context.Background()
 			nu := &countingNetmapUpdater{}
 			ms := newTestMapSession(b, nu)
+			// We're benchmarking, and this is making the logger sad
+			ms.logf = func(string, ...any) {}
 			res := &tailcfg.MapResponse{
 				Node: &tailcfg.Node{
 					ID:   1,

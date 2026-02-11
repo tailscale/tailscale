@@ -120,7 +120,7 @@ func newMapSession(privateNodeKey key.NodePrivate, nu NetmapUpdater, controlKnob
 		cancel:            func() {},
 		onDebug:           func(context.Context, *tailcfg.Debug) error { return nil },
 		onSelfNodeChanged: func(*netmap.NetworkMap) {},
-		changeQueue:       make(chan *tailcfg.MapResponse, 16),
+		changeQueue:       make(chan *tailcfg.MapResponse, 32),
 	}
 	ms.sessionAliveCtx, ms.sessionAliveCtxClose = context.WithCancel(context.Background())
 	go ms.run()
@@ -133,7 +133,16 @@ func (ms *mapSession) run() {
 		case change := <-ms.changeQueue:
 			ms.handleNonKeepAliveMapResponse(ms.sessionAliveCtx, change)
 		case <-ms.sessionAliveCtx.Done():
-			return
+			// Drain any remaining items in the queue before exiting
+			for {
+				select {
+				case change := <-ms.changeQueue:
+					ms.handleNonKeepAliveMapResponse(ms.sessionAliveCtx, change)
+				default:
+					// Queue is empty, exit
+					return
+				}
+			}
 		}
 	}
 }
@@ -169,7 +178,7 @@ func (ms *mapSession) updateDiscoForNode(id tailcfg.NodeID, key key.DiscoPublic,
 		DiscoKey: &key,
 	}
 	resp.PeersChangedPatch = append(resp.PeersChangedPatch, change)
-	ms.handleNonKeepAliveMapResponse(ms.sessionAliveCtx, &resp)
+	ms.changeQueue <- &resp
 }
 
 func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *tailcfg.MapResponse) error {
@@ -322,23 +331,32 @@ func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse) {
 	filtered := resp.PeersChangedPatch[:0]
 
 	for _, change := range resp.PeersChangedPatch {
-		keep := false
-
-		if *change.Online {
-			keep = true
-		} else {
-			existingNode := existingMap.Peers[existingMap.PeerIndexByNodeID(change.NodeID)]
-
-			if existingLastSeen, ok := existingNode.LastSeen().GetOk(); ok &&
-				change.LastSeen.After(existingLastSeen) {
-				keep = true
-			}
+		// Accept if:
+		// - DiscoKey is nil and did not change.
+		// - Fields we rely on for rejection is missing.
+		if change.DiscoKey == nil || change.Online == nil || change.LastSeen == nil {
+			filtered = append(filtered, change)
+			continue
 		}
 
-		if keep {
+		// Accept if:
+		// - Node is online.
+		if *change.Online {
+			filtered = append(filtered, change)
+			continue
+		}
+
+		existingNode := existingMap.Peers[existingMap.PeerIndexByNodeID(change.NodeID)]
+
+		// Accept if:
+		// - lastSeen moved forward in time.
+		if existingLastSeen, ok := existingNode.LastSeen().GetOk(); ok &&
+			change.LastSeen.After(existingLastSeen) {
 			filtered = append(filtered, change)
 		}
 	}
+
+	resp.PeersChangedPatch = filtered
 }
 
 // updateStateFromResponse updates ms from res. It takes ownership of res.

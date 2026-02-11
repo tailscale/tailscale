@@ -369,11 +369,13 @@ func NewDirect(opts Options) (*Direct, error) {
 			if !ok {
 				return
 			}
+			c.logf("controlclient direct: updating discoKey for %v via mapSession", update.Src)
 			c.streamingMapSession.updateDiscoForNode(
 				peer.ID(), update.Key, time.Now(), false)
 		} else {
 			// We do not yet have a mapSession, perhaps because we don't have a
 			// connection to control. Punt the handling down to userspace+magicsock.
+			c.logf("controlclient direct: updating discoKey for %v via magicsock", update.Src)
 			go discoKeyPub.Publish(update)
 		}
 	})
@@ -852,19 +854,23 @@ func (c *Direct) PollNetMap(ctx context.Context, nu NetmapUpdater) error {
 
 type rememberLastNetmapUpdater struct {
 	last *netmap.NetworkMap
+	done chan (any)
 }
 
 func (nu *rememberLastNetmapUpdater) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	nu.last = nm
+	nu.done <- nil
 }
 
 // FetchNetMapForTest fetches the netmap once.
 func (c *Direct) FetchNetMapForTest(ctx context.Context) (*netmap.NetworkMap, error) {
 	var nu rememberLastNetmapUpdater
+	nu.done = make(chan any)
 	err := c.sendMapRequest(ctx, false, &nu)
 	if err == nil && nu.last == nil {
 		return nil, errors.New("[unexpected] sendMapRequest success without callback")
 	}
+	<-nu.done
 	return nu.last, err
 }
 
@@ -1110,7 +1116,11 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	sess := newMapSession(persist.PrivateNodeKey(), nu, c.controlKnobs)
 	defer sess.Close()
 	c.streamingMapSession = sess
-	defer func() { c.streamingMapSession = nil }()
+	defer func() {
+		c.mu.Lock()
+		c.streamingMapSession = nil
+		c.mu.Unlock()
+	}()
 	sess.cancel = cancel
 	sess.logf = c.logf
 	sess.vlogf = vlogf
@@ -1264,7 +1274,7 @@ func NetmapFromMapResponseForDebug(ctx context.Context, pr persist.PersistView, 
 		return nil, errors.New("PersistView invalid")
 	}
 
-	nu := &rememberLastNetmapUpdater{}
+	nu := &rememberLastNetmapUpdater{done: make(chan any)}
 	sess := newMapSession(pr.PrivateNodeKey(), nu, nil)
 	defer sess.Close()
 
@@ -1272,6 +1282,7 @@ func NetmapFromMapResponseForDebug(ctx context.Context, pr persist.PersistView, 
 		return nil, fmt.Errorf("HandleNonKeepAliveMapResponse: %w", err)
 	}
 
+	<-nu.done
 	return sess.netmap(), nil
 }
 
