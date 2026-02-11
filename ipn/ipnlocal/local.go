@@ -6,6 +6,7 @@
 package ipnlocal
 
 import (
+	"bufio"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -7484,13 +7485,16 @@ func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion ta
 	switch {
 	case nb.SelfHasCap(tailcfg.NodeAttrTrafficSteering):
 		// The traffic-steering feature flag is enabled on this tailnet.
-		return suggestExitNodeUsingTrafficSteering(nb, allowList)
+		res, err = suggestExitNodeUsingTrafficSteering(nb, allowList)
 	default:
 		// The control plane will always strip the `traffic-steering`
 		// node attribute if it isn’t enabled for this tailnet, even if
 		// it is set in the policy file: tailscale/corp#34401
-		return suggestExitNodeUsingDERP(report, nb, prevSuggestion, selectRegion, selectNode, allowList)
+		res, err = suggestExitNodeUsingDERP(report, nb, prevSuggestion, selectRegion, selectNode, allowList)
 	}
+	name, _, _ := strings.Cut(res.Name, ".")
+	nb.logf("netmap: suggested exit node: %s (%s)", name, res.ID)
+	return res, err
 }
 
 // suggestExitNodeUsingDERP is the classic algorithm used to suggest exit nodes,
@@ -7722,6 +7726,21 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcf
 		// a chance of picking the next best option.
 		pick = nodes[0]
 	}
+
+	nb.logf("netmap: traffic steering: exit node scores: %v", logger.ArgWriter(func(bw *bufio.Writer) {
+		const max = 10
+		for i, n := range nodes {
+			if i == max {
+				fmt.Fprintf(bw, "... +%d", len(nodes)-max)
+				return
+			}
+			if i > 0 {
+				bw.WriteString(", ")
+			}
+			name, _, _ := strings.Cut(n.Name(), ".")
+			fmt.Fprintf(bw, "%d:%s", score(n), name)
+		}
+	}))
 
 	if !pick.Valid() {
 		return apitype.ExitNodeSuggestionResponse{}, nil
