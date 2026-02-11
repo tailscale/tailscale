@@ -1007,6 +1007,9 @@ func (n *fakeIPTablesRunner) DelExternalCGNATRules(mode linuxfw.CGNATMode, tunna
 func (n *fakeIPTablesRunner) HasIPV6() bool       { return true }
 func (n *fakeIPTablesRunner) HasIPV6NAT() bool    { return true }
 func (n *fakeIPTablesRunner) HasIPV6Filter() bool { return true }
+func (n *fakeIPTablesRunner) SetPacketMarks(marks linuxfw.PacketMarks) {
+	// No-op for testing
+}
 
 // fakeOS implements commandRunner and provides v4 and v6
 // netfilterRunners, but captures changes without touching the OS.
@@ -1506,8 +1509,19 @@ func TestIPRulesForUBNT(t *testing.T) {
 	}
 	defer func() { getDistroFunc = distro.Get }() // Restore original after the test
 
-	expected := ubntIPRules
-	actual := ipRules()
+	r := &linuxRouter{
+		marks: linuxfw.DefaultPacketMarks(),
+	}
+
+	expected := []netlink.Rule{
+		{
+			Priority: 70,
+			Invert:   true,
+			Mark:     int(r.marks.BypassMark),
+			Table:    tailscaleRouteTable.Num,
+		},
+	}
+	actual := r.ipRules()
 
 	if len(expected) != len(actual) {
 		t.Fatalf("Expected %d rules, got %d", len(expected), len(actual))
