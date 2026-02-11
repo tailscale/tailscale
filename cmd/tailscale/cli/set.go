@@ -69,6 +69,9 @@ type setArgsT struct {
 	netfilterMode              string
 	relayServerPort            string
 	relayServerStaticEndpoints string
+	linuxFwmarkMask            string
+	linuxSubnetRouteMark       string
+	linuxBypassMark            string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -116,6 +119,9 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 		setf.BoolVar(&setArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
 		setf.BoolVar(&setArgs.statefulFiltering, "stateful-filtering", false, "apply stateful filtering to forwarded packets (subnet routers, exit nodes, and so on)")
 		setf.StringVar(&setArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
+		setf.StringVar(&setArgs.linuxFwmarkMask, "linux-fwmark-mask", "", "advanced: Linux packet mark mask for firewall rules (hex or decimal, e.g. 0xff0000)")
+		setf.StringVar(&setArgs.linuxSubnetRouteMark, "linux-subnet-route-mark", "", "advanced: Linux packet mark for subnet route traffic (hex or decimal, e.g. 0x40000)")
+		setf.StringVar(&setArgs.linuxBypassMark, "linux-bypass-mark", "", "advanced: Linux packet mark for bypass routing (hex or decimal, e.g. 0x80000)")
 	case "windows":
 		setf.BoolVar(&setArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
 	}
@@ -177,6 +183,15 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			warnf(warning)
 		}
 		maskedPrefs.Prefs.NetfilterMode = nfMode
+
+		// Parse Linux packet marks if any of the flags are set
+		if setArgs.linuxFwmarkMask != "" || setArgs.linuxSubnetRouteMark != "" || setArgs.linuxBypassMark != "" {
+			marks, err := parseLinuxPacketMarks(setArgs.linuxFwmarkMask, setArgs.linuxSubnetRouteMark, setArgs.linuxBypassMark)
+			if err != nil {
+				return fmt.Errorf("invalid Linux packet mark configuration: %w", err)
+			}
+			maskedPrefs.Prefs.LinuxPacketMarks = marks
+		}
 	}
 
 	if setArgs.exitNodeIP != "" {

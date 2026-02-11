@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -128,6 +129,9 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 		upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
 		upf.BoolVar(&upArgs.statefulFiltering, "stateful-filtering", false, "apply stateful filtering to forwarded packets (subnet routers, exit nodes, and so on)")
 		upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
+		upf.StringVar(&upArgs.linuxFwmarkMask, "linux-fwmark-mask", "", "advanced: Linux packet mark mask for firewall rules (hex or decimal, e.g. 0xff0000)")
+		upf.StringVar(&upArgs.linuxSubnetRouteMark, "linux-subnet-route-mark", "", "advanced: Linux packet mark for subnet route traffic (hex or decimal, e.g. 0x40000)")
+		upf.StringVar(&upArgs.linuxBypassMark, "linux-bypass-mark", "", "advanced: Linux packet mark for bypass routing (hex or decimal, e.g. 0x80000)")
 	case "windows":
 		upf.BoolVar(&upArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
 	}
@@ -206,6 +210,9 @@ type upArgsT struct {
 	acceptedRisks          string
 	profileName            string
 	postureChecking        bool
+	linuxFwmarkMask        string
+	linuxSubnetRouteMark   string
+	linuxBypassMark        string
 }
 
 // resolveValueFromFile returns the value as-is, or if it starts with "file:",
@@ -369,6 +376,15 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 		if warning != "" {
 			warnf(warning)
 		}
+
+		// Parse and validate Linux packet marks if any are specified
+		if upArgs.linuxFwmarkMask != "" || upArgs.linuxSubnetRouteMark != "" || upArgs.linuxBypassMark != "" {
+			marks, err := parseLinuxPacketMarks(upArgs.linuxFwmarkMask, upArgs.linuxSubnetRouteMark, upArgs.linuxBypassMark)
+			if err != nil {
+				return nil, fmt.Errorf("invalid Linux packet mark configuration: %w", err)
+			}
+			prefs.LinuxPacketMarks = marks
+		}
 	}
 	return prefs, nil
 }
@@ -395,6 +411,58 @@ func netfilterModeFromFlag(v string) (_ preftype.NetfilterMode, warning string, 
 		}
 	}
 	return m, warning, nil
+}
+
+// parseLinuxPacketMarks parses Linux packet mark values from command-line flags.
+// It accepts hex (0x...) or decimal format. All three marks must be specified together
+// or none at all.
+func parseLinuxPacketMarks(fwmarkMask, subnetRouteMark, bypassMark string) (*preftype.LinuxPacketMarks, error) {
+	// All three must be specified together
+	if (fwmarkMask == "") != (subnetRouteMark == "") || (fwmarkMask == "") != (bypassMark == "") {
+		return nil, errors.New("all three Linux packet mark flags must be specified together: --linux-fwmark-mask, --linux-subnet-route-mark, --linux-bypass-mark")
+	}
+	if fwmarkMask == "" {
+		return nil, nil
+	}
+
+	parseMark := func(s, name string) (uint32, error) {
+		var val uint64
+		var err error
+		if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+			val, err = strconv.ParseUint(s[2:], 16, 32)
+		} else {
+			val, err = strconv.ParseUint(s, 10, 32)
+		}
+		if err != nil {
+			return 0, fmt.Errorf("invalid %s value %q: %w", name, s, err)
+		}
+		return uint32(val), nil
+	}
+
+	mask, err := parseMark(fwmarkMask, "fwmark mask")
+	if err != nil {
+		return nil, err
+	}
+	subnet, err := parseMark(subnetRouteMark, "subnet route mark")
+	if err != nil {
+		return nil, err
+	}
+	bypass, err := parseMark(bypassMark, "bypass mark")
+	if err != nil {
+		return nil, err
+	}
+
+	marks := &preftype.LinuxPacketMarks{
+		FwmarkMask:      mask,
+		SubnetRouteMark: subnet,
+		BypassMark:      bypass,
+	}
+
+	if err := marks.Validate(); err != nil {
+		return nil, err
+	}
+
+	return marks, nil
 }
 
 // updatePrefs returns how to edit preferences based on the
@@ -931,7 +999,7 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 // correspond to an ipn.Pref.
 func preflessFlag(flagName string) bool {
 	switch flagName {
-	case "auth-key", "force-reauth", "reset", "qr", "qr-format", "json", "timeout", "accept-risk", "host-routes", "client-id", "audience", "client-secret", "id-token":
+	case "auth-key", "force-reauth", "reset", "qr", "qr-format", "json", "timeout", "accept-risk", "host-routes", "client-id", "audience", "client-secret", "id-token", "linux-fwmark-mask", "linux-subnet-route-mark", "linux-bypass-mark":
 		return true
 	}
 	return false
