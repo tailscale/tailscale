@@ -46,10 +46,7 @@ var netcheckCmd = &ffcli.Command{
 		fs.StringVar(&netcheckArgs.format, "format", "", `output format; empty (for human-readable), "json" or "json-line"`)
 		fs.DurationVar(&netcheckArgs.every, "every", 0, "if non-zero, do an incremental report with the given frequency")
 		fs.BoolVar(&netcheckArgs.verbose, "verbose", false, "verbose logs")
-		fs.StringVar(&netcheckArgs.bind, "bind", "", "IP address and UDP port to bind to as the source of UDP probes\n"+
-			"format: \"IPv4:port\" or \"[IPv6]:port\"\n"+
-			"falls back to environment variable \"TS_DEBUG_NETCHECK_UDP_BIND\" if absent\n"+
-			"if the environment variable is absent too, uses OS-assigned address and port")
+		fs.StringVar(&netcheckArgs.bind, "bind", "", "IP address and UDP port to bind to as the source of UDP probes; format: \"IPv4:port\" or \"[IPv6]:port\"")
 		return fs
 	})(),
 }
@@ -96,9 +93,9 @@ func runNetcheck(ctx context.Context, args []string) error {
 
 	// Fallback order: CLI flag -> environment variable -> empty string
 	// An empty string is handled by netcheck.Client.Standalone and lets the OS assign an IP and port instead.
-	bind := envknob.String("TS_DEBUG_NETCHECK_UDP_BIND")
-	if netcheckArgs.bind != "" {
-		bind = netcheckArgs.bind
+	bind := netcheckArgs.bind
+	if netcheckArgs.bind == "" {
+		bind = envknob.String("TS_DEBUG_NETCHECK_UDP_BIND")
 	}
 	if err := c.Standalone(ctx, bind); err != nil {
 		fmt.Fprintln(Stderr, "netcheck: UDP test failure:", err)
