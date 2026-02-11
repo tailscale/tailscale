@@ -61,54 +61,64 @@ const (
 	CGNATModeReturn CGNATMode = "RETURN"
 )
 
-// The following bits are added to packet marks for Tailscale use.
-//
-// We tried to pick bits sufficiently out of the way that it's
-// unlikely to collide with existing uses. We have 4 bytes of mark
-// bits to play with. We leave the lower byte alone on the assumption
-// that sysadmins would use those. Kubernetes uses a few bits in the
-// second byte, so we steer clear of that too.
-//
-// Empirically, most of the documentation on packet marks on the
-// internet gives the impression that the marks are 16 bits
-// wide. Based on this, we theorize that the upper two bytes are
-// relatively unused in the wild, and so we consume bits 16:23 (the
-// third byte).
-//
-// The constants are in the iptables/iproute2 string format for
-// matching and setting the bits, so they can be directly embedded in
-// commands.
-const (
-	fwmarkMask         = tsconst.LinuxFwmarkMask
-	fwmarkMaskNum      = tsconst.LinuxFwmarkMaskNum
-	subnetRouteMark    = tsconst.LinuxSubnetRouteMark
-	subnetRouteMarkNum = tsconst.LinuxSubnetRouteMarkNum
-	bypassMark         = tsconst.LinuxBypassMark
-	bypassMarkNum      = tsconst.LinuxBypassMarkNum
-)
-
-// getTailscaleFwmarkMaskNeg returns the negation of TailscaleFwmarkMask
-// in native byte order.
-func getTailscaleFwmarkMaskNeg() []byte {
-	return nativeEndianUint32(^uint32(fwmarkMaskNum))
-}
-
-// getTailscaleFwmarkMask returns the TailscaleFwmarkMask in native byte order.
-func getTailscaleFwmarkMask() []byte {
-	return nativeEndianUint32(fwmarkMaskNum)
-}
-
-// getTailscaleSubnetRouteMark returns the TailscaleSubnetRouteMark
-// in native byte order.
-func getTailscaleSubnetRouteMark() []byte {
-	return nativeEndianUint32(subnetRouteMarkNum)
-}
-
 // nativeEndianUint32 returns v as a 4-byte slice in the host's native byte order.
 func nativeEndianUint32(v uint32) []byte {
 	b := make([]byte, 4)
 	binary.NativeEndian.PutUint32(b, v)
 	return b
+}
+
+// PacketMarks contains the packet mark configuration to use for
+// firewall rules and routing. It provides methods to format marks
+// for both iptables (string format) and nftables (byte arrays).
+type PacketMarks struct {
+	FwmarkMask      uint32
+	SubnetRouteMark uint32
+	BypassMark      uint32
+}
+
+// DefaultPacketMarks returns the default packet marks from tsconst.
+func DefaultPacketMarks() PacketMarks {
+	return PacketMarks{
+		FwmarkMask:      tsconst.LinuxFwmarkMaskNum,
+		SubnetRouteMark: tsconst.LinuxSubnetRouteMarkNum,
+		BypassMark:      tsconst.LinuxBypassMarkNum,
+	}
+}
+
+// FwmarkMaskString returns the fwmark mask as an iptables-compatible string.
+func (m PacketMarks) FwmarkMaskString() string {
+	return fmt.Sprintf("0x%x", m.FwmarkMask)
+}
+
+// SubnetRouteMarkString returns the subnet route mark as an iptables-compatible string.
+func (m PacketMarks) SubnetRouteMarkString() string {
+	return fmt.Sprintf("0x%x", m.SubnetRouteMark)
+}
+
+// BypassMarkString returns the bypass mark as an iptables-compatible string.
+func (m PacketMarks) BypassMarkString() string {
+	return fmt.Sprintf("0x%x", m.BypassMark)
+}
+
+// FwmarkMaskBytes returns the fwmark mask in native byte order.
+func (m PacketMarks) FwmarkMaskBytes() []byte {
+	return nativeEndianUint32(m.FwmarkMask)
+}
+
+// FwmarkMaskNegBytes returns the negation of the fwmark mask in native byte order.
+func (m PacketMarks) FwmarkMaskNegBytes() []byte {
+	return nativeEndianUint32(^m.FwmarkMask)
+}
+
+// SubnetRouteMarkBytes returns the subnet route mark in native byte order.
+func (m PacketMarks) SubnetRouteMarkBytes() []byte {
+	return nativeEndianUint32(m.SubnetRouteMark)
+}
+
+// BypassMarkBytes returns the bypass mark in native byte order.
+func (m PacketMarks) BypassMarkBytes() []byte {
+	return nativeEndianUint32(m.BypassMark)
 }
 
 // checkIPv6ForTest can be set in tests.
@@ -177,7 +187,7 @@ func CheckIPRuleSupportsV6(logf logger.Logf) error {
 	// Try to actually create & delete one as a test.
 	rule := netlink.NewRule()
 	rule.Priority = 1234
-	rule.Mark = bypassMarkNum
+	rule.Mark = tsconst.LinuxBypassMarkNum
 	rule.Table = 52
 	rule.Family = netlink.FAMILY_V6
 	// First delete the rule unconditionally, and don't check for

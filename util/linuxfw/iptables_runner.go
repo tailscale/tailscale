@@ -43,6 +43,8 @@ type iptablesRunner struct {
 	v6Available       bool
 	v6NATAvailable    bool
 	v6FilterAvailable bool
+
+	marks PacketMarks
 }
 
 func checkIP6TablesExists() error {
@@ -231,11 +233,11 @@ func (i *iptablesRunner) addBase4(tunname string) error {
 	// POSTROUTING. So instead, we match on the inbound interface in
 	// filter/FORWARD, and set a packet mark that nat/POSTROUTING can
 	// use to effectively run that same test again.
-	args = []string{"-i", tunname, "-j", "MARK", "--set-mark", subnetRouteMark + "/" + fwmarkMask}
+	args = []string{"-i", tunname, "-j", "MARK", "--set-mark", i.marks.SubnetRouteMarkString() + "/" + i.marks.FwmarkMaskString()}
 	if err := i.ipt4.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
 	}
-	args = []string{"-m", "mark", "--mark", subnetRouteMark + "/" + fwmarkMask, "-j", "ACCEPT"}
+	args = []string{"-m", "mark", "--mark", i.marks.SubnetRouteMarkString() + "/" + i.marks.FwmarkMaskString(), "-j", "ACCEPT"}
 	if err := i.ipt4.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
 	}
@@ -337,11 +339,11 @@ func (i *iptablesRunner) addBase6(tunname string) error {
 		return fmt.Errorf("adding %v in v6/filter/ts-input: %w", args, err)
 	}
 
-	args = []string{"-i", tunname, "-j", "MARK", "--set-mark", subnetRouteMark + "/" + fwmarkMask}
+	args = []string{"-i", tunname, "-j", "MARK", "--set-mark", i.marks.SubnetRouteMarkString() + "/" + i.marks.FwmarkMaskString()}
 	if err := i.ipt6.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
 	}
-	args = []string{"-m", "mark", "--mark", subnetRouteMark + "/" + fwmarkMask, "-j", "ACCEPT"}
+	args = []string{"-m", "mark", "--mark", i.marks.SubnetRouteMarkString() + "/" + i.marks.FwmarkMaskString(), "-j", "ACCEPT"}
 	if err := i.ipt6.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
 	}
@@ -430,7 +432,7 @@ func (i *iptablesRunner) DelHooks(logf logger.Logf) error {
 // AddSNATRule adds a netfilter rule to SNAT traffic destined for
 // local subnets.
 func (i *iptablesRunner) AddSNATRule() error {
-	args := []string{"-m", "mark", "--mark", subnetRouteMark + "/" + fwmarkMask, "-j", "MASQUERADE"}
+	args := []string{"-m", "mark", "--mark", i.marks.SubnetRouteMarkString() + "/" + i.marks.FwmarkMaskString(), "-j", "MASQUERADE"}
 	for _, ipt := range i.getNATTables() {
 		if err := ipt.Append("nat", "ts-postrouting", args...); err != nil {
 			return fmt.Errorf("adding %v in nat/ts-postrouting: %w", args, err)
@@ -442,7 +444,7 @@ func (i *iptablesRunner) AddSNATRule() error {
 // DelSNATRule removes the netfilter rule to SNAT traffic destined for
 // local subnets. An error is returned if the rule does not exist.
 func (i *iptablesRunner) DelSNATRule() error {
-	args := []string{"-m", "mark", "--mark", subnetRouteMark + "/" + fwmarkMask, "-j", "MASQUERADE"}
+	args := []string{"-m", "mark", "--mark", i.marks.SubnetRouteMarkString() + "/" + i.marks.FwmarkMaskString(), "-j", "MASQUERADE"}
 	for _, ipt := range i.getNATTables() {
 		if err := ipt.Delete("nat", "ts-postrouting", args...); err != nil {
 			return fmt.Errorf("deleting %v in nat/ts-postrouting: %w", args, err)
@@ -524,10 +526,11 @@ func (i *iptablesRunner) AddConnmarkSaveRule() error {
 			continue
 		}
 		// Look for existing connmark restore rule
+		ctmaskMatch := "ctmask " + i.marks.FwmarkMaskString()
 		for _, rule := range rules {
 			if strings.Contains(rule, "CONNMARK") &&
 				strings.Contains(rule, "restore-mark") &&
-				strings.Contains(rule, "ctmask 0xff0000") {
+				strings.Contains(rule, ctmaskMatch) {
 				// Rules already exist, skip adding
 				return nil
 			}
@@ -538,16 +541,17 @@ func (i *iptablesRunner) AddConnmarkSaveRule() error {
 	// This runs BEFORE routing decision and rp_filter check
 	// The connmark check ensures we only restore when Tailscale has marked the connection,
 	// preventing us from wiping mark bits set by other systems when ct mark is zero.
+	mask := i.marks.FwmarkMaskString()
 	for _, ipt := range i.getTables() {
 		args := []string{
 			"-m", "conntrack",
 			"--ctstate", "ESTABLISHED,RELATED",
 			"-m", "connmark",
-			"!", "--mark", "0x0/" + fwmarkMask, // Only restore if ct mark has Tailscale bits set
+			"!", "--mark", "0x0/" + mask, // Only restore if ct mark has Tailscale bits set
 			"-j", "CONNMARK",
 			"--restore-mark",
-			"--nfmask", fwmarkMask,
-			"--ctmask", fwmarkMask,
+			"--nfmask", mask,
+			"--ctmask", mask,
 		}
 		if err := ipt.Insert("mangle", "PREROUTING", 1, args...); err != nil {
 			return fmt.Errorf("adding %v in mangle/PREROUTING: %w", args, err)
@@ -560,11 +564,11 @@ func (i *iptablesRunner) AddConnmarkSaveRule() error {
 			"-m", "conntrack",
 			"--ctstate", "NEW",
 			"-m", "mark",
-			"!", "--mark", "0x0/" + fwmarkMask,
+			"!", "--mark", "0x0/" + mask,
 			"-j", "CONNMARK",
 			"--save-mark",
-			"--nfmask", fwmarkMask,
-			"--ctmask", fwmarkMask,
+			"--nfmask", mask,
+			"--ctmask", mask,
 		}
 		if err := ipt.Insert("mangle", "OUTPUT", 1, args...); err != nil {
 			return fmt.Errorf("adding %v in mangle/OUTPUT: %w", args, err)
@@ -576,17 +580,18 @@ func (i *iptablesRunner) AddConnmarkSaveRule() error {
 
 // DelConnmarkSaveRule removes conntrack marking rules added by AddConnmarkSaveRule.
 func (i *iptablesRunner) DelConnmarkSaveRule() error {
+	mask := i.marks.FwmarkMaskString()
 	for _, ipt := range i.getTables() {
 		// Delete PREROUTING rule
 		args := []string{
 			"-m", "conntrack",
 			"--ctstate", "ESTABLISHED,RELATED",
 			"-m", "connmark",
-			"!", "--mark", "0x0/" + fwmarkMask,
+			"!", "--mark", "0x0/" + mask,
 			"-j", "CONNMARK",
 			"--restore-mark",
-			"--nfmask", fwmarkMask,
-			"--ctmask", fwmarkMask,
+			"--nfmask", mask,
+			"--ctmask", mask,
 		}
 		if err := ipt.Delete("mangle", "PREROUTING", args...); err != nil {
 			if !isNotExistError(err) {
@@ -600,11 +605,11 @@ func (i *iptablesRunner) DelConnmarkSaveRule() error {
 			"-m", "conntrack",
 			"--ctstate", "NEW",
 			"-m", "mark",
-			"!", "--mark", "0x0/" + fwmarkMask,
+			"!", "--mark", "0x0/" + mask,
 			"-j", "CONNMARK",
 			"--save-mark",
-			"--nfmask", fwmarkMask,
-			"--ctmask", fwmarkMask,
+			"--nfmask", mask,
+			"--ctmask", mask,
 		}
 		if err := ipt.Delete("mangle", "OUTPUT", args...); err != nil {
 			if !isNotExistError(err) {
@@ -732,6 +737,17 @@ func (i *iptablesRunner) DelExternalCGNATRules(mode CGNATMode, tunname string) e
 		}
 	}
 	return nil
+}
+
+// SetPacketMarks updates the packet marks used by the netfilter runner.
+//
+// SetPacketMarks only updates the runner's mark configuration used when
+// constructing future rules. It does not delete or rewrite any rules that
+// were already installed with the previous marks. Callers that want a clean
+// switch (e.g. when prefs change at runtime) are responsible for tearing
+// down the existing rules and reinstalling them outside this call.
+func (i *iptablesRunner) SetPacketMarks(marks PacketMarks) {
+	i.marks = marks
 }
 
 // delTSHook deletes hook in a chain that jumps to a ts-chain. If the hook does not

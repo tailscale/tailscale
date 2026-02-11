@@ -7,6 +7,7 @@ package linuxfw
 
 import (
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 
@@ -465,6 +466,7 @@ func TestAddAndDelConnmarkSaveRule(t *testing.T) {
 			v6Available:       false,
 			v6NATAvailable:    false,
 			v6FilterAvailable: false,
+			marks:             DefaultPacketMarks(),
 		}
 
 		// Add connmark rules should NOT panic with nil ipt6
@@ -503,6 +505,44 @@ func TestAddAndDelConnmarkSaveRule(t *testing.T) {
 			t.Errorf("IPv4 OUTPUT connmark rule still exists after deletion")
 		}
 	})
+}
+
+func TestSetPacketMarks_iptablesRunner(t *testing.T) {
+	iptr := newFakeIPTablesRunner()
+
+	// Defaults shifted up by one byte: a realistic non-default choice for
+	// users avoiding conflicts with other software that uses the third
+	// byte (e.g. Calico). Passes LinuxPacketMarks.Validate.
+	custom := PacketMarks{
+		FwmarkMask:      0xff000000,
+		SubnetRouteMark: 0x40000000,
+		BypassMark:      0x80000000,
+	}
+	iptr.SetPacketMarks(custom)
+
+	if err := iptr.AddChains(); err != nil {
+		t.Fatal(err)
+	}
+	if err := iptr.AddSNATRule(); err != nil {
+		t.Fatal(err)
+	}
+
+	wantMark := custom.SubnetRouteMarkString() + "/" + custom.FwmarkMaskString()
+	wantRule := strings.Join([]string{"-m", "mark", "--mark", wantMark, "-j", "MASQUERADE"}, " ")
+	defaultMark := tsconst.LinuxSubnetRouteMark + "/" + tsconst.LinuxFwmarkMask
+
+	got := iptr.ipt4.(*fakeIPTables).n["nat/ts-postrouting"]
+	if len(got) == 0 {
+		t.Fatalf("no rules in nat/ts-postrouting")
+	}
+	if !slices.Contains(got, wantRule) {
+		t.Errorf("SNAT rule missing custom marks; want substring %q in %v", wantRule, got)
+	}
+	for _, r := range got {
+		if strings.Contains(r, defaultMark) {
+			t.Errorf("SNAT rule unexpectedly contains the default mark %q: %q", defaultMark, r)
+		}
+	}
 }
 
 func TestAddAndDelCGNATRules(t *testing.T) {
