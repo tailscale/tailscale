@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -110,8 +111,25 @@ func controlC(network, address string, c syscall.RawConn) error {
 	return sockErr
 }
 
+var defaultBypassMarkAtomic atomic.Uint32
+
+// SetBypassMark sets the bypass mark to use for SO_MARK on Linux.
+// If not set or set to 0, uses the default from tsconst.
+func SetBypassMark(mark uint32) {
+	defaultBypassMarkAtomic.Store(mark)
+}
+
+// getBypassMark returns the configured bypass mark, or 0 if not set.
+func getBypassMark() uint32 {
+	return defaultBypassMarkAtomic.Load()
+}
+
 func setBypassMark(fd uintptr) error {
-	if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, tsconst.LinuxBypassMarkNum); err != nil {
+	mark := getBypassMark()
+	if mark == 0 {
+		mark = tsconst.LinuxBypassMarkNum
+	}
+	if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, int(mark)); err != nil {
 		return fmt.Errorf("setting SO_MARK bypass: %w", err)
 	}
 	return nil

@@ -27,7 +27,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
-	"tailscale.com/tsconst"
+	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/preftype"
@@ -77,8 +77,9 @@ type linuxRouter struct {
 	// ipPolicyPrefBase is the base priority at which ip rules are installed.
 	ipPolicyPrefBase int
 
-	cmd commandRunner
-	nfr linuxfw.NetfilterRunner
+	cmd   commandRunner
+	nfr   linuxfw.NetfilterRunner
+	marks linuxfw.PacketMarks
 
 	mu                sync.Mutex
 	addrs             map[netip.Prefix]bool
@@ -113,7 +114,8 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 		netMon:        netMon,
 		health:        health,
 
-		cmd: cmd,
+		cmd:   cmd,
+		marks: linuxfw.DefaultPacketMarks(),
 
 		ipRuleFixLimiter: rate.NewLimiter(rate.Every(5*time.Second), 10),
 		ipPolicyPrefBase: 5200,
@@ -402,6 +404,9 @@ func (r *linuxRouter) setupNetfilterLocked(kind string) error {
 		return fmt.Errorf("could not create new netfilter: %w", err)
 	}
 
+	// Apply current packet marks to the new netfilter runner
+	r.nfr.SetPacketMarks(r.marks)
+
 	return nil
 }
 
@@ -412,6 +417,41 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	var errs []error
 	if cfg == nil {
 		cfg = &shutdownConfig
+	}
+
+	// Track if marks changed to know if we need to recreate IP rules
+	marksChanged := false
+
+	// Update marks if provided in config
+	if cfg.LinuxPacketMarks != nil {
+		newMarks := linuxfw.PacketMarks{
+			FwmarkMask:      cfg.LinuxPacketMarks.FwmarkMask,
+			SubnetRouteMark: cfg.LinuxPacketMarks.SubnetRouteMark,
+			BypassMark:      cfg.LinuxPacketMarks.BypassMark,
+		}
+		// Check if marks actually changed
+		if r.marks != newMarks {
+			marksChanged = true
+			r.marks = newMarks
+		}
+		// Update netns bypass mark for socket marking
+		netns.SetBypassMark(cfg.LinuxPacketMarks.BypassMark)
+		// Update netfilter runner marks if it exists
+		if r.nfr != nil {
+			r.nfr.SetPacketMarks(r.marks)
+		}
+	}
+
+	// If marks changed, we need to recreate IP rules with the new marks
+	if marksChanged {
+		r.logf("packet marks changed, recreating IP rules")
+		if err := r.delIPRules(); err != nil {
+			r.logf("failed to delete old IP rules: %v", err)
+			errs = append(errs, fmt.Errorf("deleting IP rules: %w", err))
+		}
+		if err := r.addIPRules(); err != nil {
+			errs = append(errs, fmt.Errorf("adding IP rules with new marks: %w", err))
+		}
 	}
 
 	if cfg.NetfilterKind != r.netfilterKind {
@@ -1224,85 +1264,81 @@ var (
 	tailscaleRouteTable = newRouteTable("tailscale", 52)
 )
 
-// baseIPRules are the policy routing rules that Tailscale uses, when not
-// running on a UBNT device.
-//
-// The priority is the value represented here added to r.ipPolicyPrefBase,
-// which is usually 5200.
-//
-// NOTE(apenwarr): We leave spaces between each pref number.
-// This is so the sysadmin can override by inserting rules in
-// between if they want.
-//
-// NOTE(apenwarr): This sequence seems complicated, right?
-// If we could simply have a rule that said "match packets that
-// *don't* have this fwmark", then we would only need to add one
-// link to table 52 and we'd be done. Unfortunately, older kernels
-// and 'ip rule' implementations (including busybox), don't support
-// checking for the lack of a fwmark, only the presence. The technique
-// below works even on very old kernels.
-var baseIPRules = []netlink.Rule{
-	// Packets from us, tagged with our fwmark, first try the kernel's
-	// main routing table.
-	{
-		Priority: 10,
-		Mark:     tsconst.LinuxBypassMarkNum,
-		Table:    mainRouteTable.Num,
-	},
-	// ...and then we try the 'default' table, for correctness,
-	// even though it's been empty on every Linux system I've ever seen.
-	{
-		Priority: 30,
-		Mark:     tsconst.LinuxBypassMarkNum,
-		Table:    defaultRouteTable.Num,
-	},
-	// If neither of those matched (no default route on this system?)
-	// then packets from us should be aborted rather than falling through
-	// to the tailscale routes, because that would create routing loops.
-	{
-		Priority: 50,
-		Mark:     tsconst.LinuxBypassMarkNum,
-		Type:     unix.RTN_UNREACHABLE,
-	},
-	// If we get to this point, capture all packets and send them
-	// through to the tailscale route table. For apps other than us
-	// (ie. with no fwmark set), this is the first routing table, so
-	// it takes precedence over all the others, ie. VPN routes always
-	// beat non-VPN routes.
-	{
-		Priority: 70,
-		Table:    tailscaleRouteTable.Num,
-	},
-	// If that didn't match, then non-fwmark packets fall through to the
-	// usual rules (pref 32766 and 32767, ie. main and default).
-}
-
-// ubntIPRules are the policy routing rules that Tailscale uses, when running
-// on a UBNT device.
-//
-// The priority is the value represented here added to
-// r.ipPolicyPrefBase, which is usually 5200.
-//
-// This represents an experiment that will be used to gather more information.
-// If this goes well, Tailscale may opt to use this for all of Linux.
-var ubntIPRules = []netlink.Rule{
-	// non-fwmark packets fall through to the usual rules (pref 32766 and 32767,
-	// ie. main and default).
-	{
-		Priority: 70,
-		Invert:   true,
-		Mark:     tsconst.LinuxBypassMarkNum,
-		Table:    tailscaleRouteTable.Num,
-	},
-}
-
-// ipRules returns the appropriate list of ip rules to be used by Tailscale. See
-// comments on baseIPRules and ubntIPRules for more details.
-func ipRules() []netlink.Rule {
+// ipRules returns the appropriate list of ip rules to be used by Tailscale.
+// It constructs the rules dynamically using the router's configured packet marks.
+func (r *linuxRouter) ipRules() []netlink.Rule {
 	if getDistroFunc() == distro.UBNT {
-		return ubntIPRules
+		// ubntIPRules are the policy routing rules that Tailscale uses, when running
+		// on a UBNT device.
+		//
+		// The priority is the value represented here added to
+		// r.ipPolicyPrefBase, which is usually 5200.
+		//
+		// This represents an experiment that will be used to gather more information.
+		// If this goes well, Tailscale may opt to use this for all of Linux.
+		return []netlink.Rule{
+			// non-fwmark packets fall through to the usual rules (pref 32766 and 32767,
+			// ie. main and default).
+			{
+				Priority: 70,
+				Invert:   true,
+				Mark:     int(r.marks.BypassMark),
+				Table:    tailscaleRouteTable.Num,
+			},
+		}
 	}
-	return baseIPRules
+
+	// baseIPRules are the policy routing rules that Tailscale uses on most Linux systems.
+	//
+	// The priority is the value represented here added to r.ipPolicyPrefBase,
+	// which is usually 5200.
+	//
+	// NOTE(apenwarr): We leave spaces between each pref number.
+	// This is so the sysadmin can override by inserting rules in
+	// between if they want.
+	//
+	// NOTE(apenwarr): This sequence seems complicated, right?
+	// If we could simply have a rule that said "match packets that
+	// *don't* have this fwmark", then we would only need to add one
+	// link to table 52 and we'd be done. Unfortunately, older kernels
+	// and 'ip rule' implementations (including busybox), don't support
+	// checking for the lack of a fwmark, only the presence. The technique
+	// below works even on very old kernels.
+	return []netlink.Rule{
+		// Packets from us, tagged with our fwmark, first try the kernel's
+		// main routing table.
+		{
+			Priority: 10,
+			Mark:     int(r.marks.BypassMark),
+			Table:    mainRouteTable.Num,
+		},
+		// ...and then we try the 'default' table, for correctness,
+		// even though it's been empty on every Linux system I've ever seen.
+		{
+			Priority: 30,
+			Mark:     int(r.marks.BypassMark),
+			Table:    defaultRouteTable.Num,
+		},
+		// If neither of those matched (no default route on this system?)
+		// then packets from us should be aborted rather than falling through
+		// to the tailscale routes, because that would create routing loops.
+		{
+			Priority: 50,
+			Mark:     int(r.marks.BypassMark),
+			Type:     unix.RTN_UNREACHABLE,
+		},
+		// If we get to this point, capture all packets and send them
+		// through to the tailscale route table. For apps other than us
+		// (ie. with no fwmark set), this is the first routing table, so
+		// it takes precedence over all the others, ie. VPN routes always
+		// beat non-VPN routes.
+		{
+			Priority: 70,
+			Table:    tailscaleRouteTable.Num,
+		},
+		// If that didn't match, then non-fwmark packets fall through to the
+		// usual rules (pref 32766 and 32767, ie. main and default).
+	}
 }
 
 // justAddIPRules adds policy routing rule without deleting any first.
@@ -1315,11 +1351,11 @@ func (r *linuxRouter) justAddIPRules() error {
 	}
 	var errAcc error
 	for _, family := range r.addrFamilies() {
-		for _, ru := range ipRules() {
+		for _, ru := range r.ipRules() {
 			// Note: r is a value type here; safe to mutate it.
 			ru.Family = family.netlinkInt()
 			if ru.Mark != 0 {
-				ru.Mask = tsconst.LinuxFwmarkMaskNum
+				ru.Mask = int(r.marks.FwmarkMask)
 			}
 			ru.Goto = -1
 			ru.SuppressIfgroup = -1
@@ -1344,15 +1380,19 @@ func (r *linuxRouter) addIPRulesWithIPCommand() error {
 	rg := newRunGroup(nil, r.cmd)
 
 	for _, family := range r.addrFamilies() {
-		for _, rule := range ipRules() {
+		for _, rule := range r.ipRules() {
 			args := []string{
 				"ip", family.dashArg(),
 				"rule", "add",
 				"pref", strconv.Itoa(rule.Priority + r.ipPolicyPrefBase),
 			}
 			if rule.Mark != 0 {
+				// Handle inverted fwmark matching (e.g., "not fwmark 0x80000")
+				if rule.Invert {
+					args = append(args, "not")
+				}
 				if r.fwmaskWorks() {
-					args = append(args, "fwmark", fmt.Sprintf("0x%x/%s", rule.Mark, tsconst.LinuxFwmarkMask))
+					args = append(args, "fwmark", fmt.Sprintf("0x%x/%s", rule.Mark, r.marks.FwmarkMaskString()))
 				} else {
 					args = append(args, "fwmark", fmt.Sprintf("0x%x", rule.Mark))
 				}
@@ -1392,7 +1432,7 @@ func (r *linuxRouter) delIPRules() error {
 	}
 	var errAcc error
 	for _, family := range r.addrFamilies() {
-		for _, ru := range ipRules() {
+		for _, ru := range r.ipRules() {
 			// Note: r is a value type here; safe to mutate it.
 			// When deleting rules, we want to be a bit specific (mention which
 			// table we were routing to) but not *too* specific (fwmarks, etc).
@@ -1435,7 +1475,7 @@ func (r *linuxRouter) delIPRulesWithIPCommand() error {
 		// That leaves us some flexibility to change these values in later
 		// versions without having ongoing hacks for every possible
 		// combination.
-		for _, rule := range ipRules() {
+		for _, rule := range r.ipRules() {
 			args := []string{
 				"ip", family.dashArg(),
 				"rule", "del",
