@@ -43,10 +43,12 @@ import (
 	"tailscale.com/net/netx"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
+	"tailscale.com/types/events"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -107,8 +109,9 @@ type Direct struct {
 	netinfo                 *tailcfg.NetInfo
 	endpoints               []tailcfg.Endpoint
 	tkaHead                 string
-	lastPingURL             string // last PingRequest.URL received, for dup suppression
-	connectionHandleForTest string // sent in MapRequest.ConnectionHandleForTest
+	lastPingURL             string      // last PingRequest.URL received, for dup suppression
+	connectionHandleForTest string      // sent in MapRequest.ConnectionHandleForTest
+	streamingMapSession     *mapSession // the one streaming mapSession instance
 
 	controlClientID int64 // Random ID used to differentiate clients for consumers of messages.
 }
@@ -355,6 +358,25 @@ func NewDirect(opts Options) (*Direct, error) {
 	c.clientVersionPub = eventbus.Publish[tailcfg.ClientVersion](c.busClient)
 	c.autoUpdatePub = eventbus.Publish[AutoUpdate](c.busClient)
 	c.controlTimePub = eventbus.Publish[ControlTime](c.busClient)
+	discoKeyPub := eventbus.Publish[DiscoKeyAdvertisement](c.busClient)
+	eventbus.SubscribeFunc(c.busClient, func(update tstun.DiscoKeyAdvertisement) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.logf("controlclient direct: got TSMP disco key advertisement from %v via eventbus", update.Src)
+		if c.streamingMapSession != nil {
+			nm := c.streamingMapSession.netmap()
+			peer, ok := nm.PeerByTailscaleIP(update.Src)
+			if !ok {
+				return
+			}
+			c.streamingMapSession.updateDiscoForNode(
+				peer.ID(), update.Key, time.Now(), false)
+		} else {
+			// We do not yet have a mapSession, perhaps because we don't have a
+			// connection to control. Punt the handling down to userspace+magicsock.
+			go discoKeyPub.Publish(update)
+		}
+	})
 
 	return c, nil
 }
@@ -872,6 +894,8 @@ type AutoUpdate struct {
 	Value    bool  // The Value represents DefaultAutoUpdate from [tailcfg.MapResponse].
 }
 
+type DiscoKeyAdvertisement = events.DiscoKeyAdvertisement
+
 // ControlTime is an eventbus value, reporting the value of tailcfg.MapResponse.ControlTime.
 type ControlTime struct {
 	ClientID int64     // The ID field is used for consumers to differentiate instances of Direct.
@@ -1079,8 +1103,14 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		return nil
 	}
 
+	if c.streamingMapSession != nil {
+		panic("mapSession is already set")
+	}
+
 	sess := newMapSession(persist.PrivateNodeKey(), nu, c.controlKnobs)
 	defer sess.Close()
+	c.streamingMapSession = sess
+	defer func() { c.streamingMapSession = nil }()
 	sess.cancel = cancel
 	sess.logf = c.logf
 	sess.vlogf = vlogf
@@ -1302,10 +1332,10 @@ var jsonEscapedZero = []byte(`\u0000`)
 const justKeepAliveStr = `{"KeepAlive":true}`
 
 // decodeMsg is responsible for uncompressing msg and unmarshaling into v.
-func (sess *mapSession) decodeMsg(compressedMsg []byte, v *tailcfg.MapResponse) error {
+func (ms *mapSession) decodeMsg(compressedMsg []byte, v *tailcfg.MapResponse) error {
 	// Fast path for common case of keep-alive message.
 	// See tailscale/tailscale#17343.
-	if sess.keepAliveZ != nil && bytes.Equal(compressedMsg, sess.keepAliveZ) {
+	if ms.keepAliveZ != nil && bytes.Equal(compressedMsg, ms.keepAliveZ) {
 		v.KeepAlive = true
 		return nil
 	}
@@ -1314,7 +1344,7 @@ func (sess *mapSession) decodeMsg(compressedMsg []byte, v *tailcfg.MapResponse) 
 	if err != nil {
 		return err
 	}
-	sess.ztdDecodesForTest++
+	ms.ztdDecodesForTest++
 
 	if DevKnob.DumpNetMaps() {
 		var buf bytes.Buffer
@@ -1329,7 +1359,7 @@ func (sess *mapSession) decodeMsg(compressedMsg []byte, v *tailcfg.MapResponse) 
 		return fmt.Errorf("response: %v", err)
 	}
 	if v.KeepAlive && string(b) == justKeepAliveStr {
-		sess.keepAliveZ = compressedMsg
+		ms.keepAliveZ = compressedMsg
 	}
 	return nil
 }
