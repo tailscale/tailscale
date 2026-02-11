@@ -2475,7 +2475,8 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	hostinfo.FrontendLogID = opts.FrontendLogID
 	hostinfo.Userspace.Set(b.sys.IsNetstack())
 	hostinfo.UserspaceRouter.Set(b.sys.IsNetstackRouter())
-	hostinfo.AppConnector.Set(b.appConnector != nil)
+	// hostinfo.AppConnector.Set(b.appConnector != nil)
+	hostinfo.AppConnector.Set(true)
 	hostinfo.StateEncrypted = b.stateEncrypted()
 	b.logf.JSON(1, "Hostinfo", hostinfo)
 
@@ -4962,7 +4963,8 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 	const appConnectorCapName = "tailscale.com/app-connectors"
 	defer func() {
 		if b.hostinfo != nil {
-			b.hostinfo.AppConnector.Set(b.appConnector != nil)
+			b.hostinfo.AppConnector.Set(true)
+			// b.hostinfo.AppConnector.Set(b.appConnector != nil)
 		}
 	}()
 
@@ -5665,7 +5667,8 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	}
 
 	if buildfeatures.HasAppConnectors {
-		hi.AppConnector.Set(prefs.AppConnector().Advertise)
+		// hi.AppConnector.Set(prefs.AppConnector().Advertise)
+		hi.AppConnector.Set(true)
 	}
 
 	// The [tailcfg.Hostinfo.ExitNodeID] field tells control which exit node
