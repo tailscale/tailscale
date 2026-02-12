@@ -915,8 +915,8 @@ func FuzzAddr(f *testing.F) {
 		binary.LittleEndian.PutUint64(b2[8:], u2b)
 
 		var ips [4]netip.Addr
-		ips[0] = netip.AddrFrom4(*(*[4]byte)(b1[:]))
-		ips[1] = netip.AddrFrom4(*(*[4]byte)(b2[:]))
+		ips[0] = netip.AddrFrom4([4]byte(b1[:]))
+		ips[1] = netip.AddrFrom4([4]byte(b2[:]))
 		ips[2] = netip.AddrFrom16(b1)
 		if zone1 != "" {
 			ips[2] = ips[2].WithZone(zone1)
