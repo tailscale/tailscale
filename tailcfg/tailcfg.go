@@ -887,6 +887,7 @@ type Hostinfo struct {
 	UserspaceRouter opt.Bool       `json:",omitzero"` // if the client's subnet router is running in userspace (netstack) mode
 	AppConnector    opt.Bool       `json:",omitzero"` // if the client is running the app-connector service
 	ServicesHash    string         `json:",omitzero"` // opaque hash of the most recent list of tailnet services, change in hash indicates config should be fetched via c2n
+	PeerRelay       bool           `json:",omitzero"` // if the client is willing to relay traffic for other peers
 	ExitNodeID      StableNodeID   `json:",omitzero"` // the client’s selected exit node, empty when unselected.
 
 	// Location represents geographical location data about a

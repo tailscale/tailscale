@@ -190,7 +190,8 @@ $bootstrapScriptBlock = {
         $goBuildEnv['GOROOT'] = $null
 
         $procExe = Join-Path $toolchain 'bin' 'go.exe' -Resolve
-        $proc = Start-Process -FilePath $procExe -WorkingDirectory $repoRoot -Environment $goBuildEnv -ArgumentList 'build', '-o', $gocrossPath, "-ldflags=-X=tailscale.com/version.gitCommitStamp=$wantVer", 'tailscale.com/tool/gocross' -NoNewWindow -Wait -PassThru
+        $proc = Start-Process -FilePath $procExe -WorkingDirectory $repoRoot -Environment $goBuildEnv -ArgumentList 'build', '-o', $gocrossPath, "-ldflags=-X=tailscale.com/version.gitCommitStamp=$wantVer", 'tailscale.com/tool/gocross' -NoNewWindow -PassThru
+        $proc.WaitForExit()
         if ($proc.ExitCode -ne 0) {
             throw 'error building gocross'
         }
@@ -222,10 +223,12 @@ if ($Env:TS_USE_GOCROSS -ne '1') {
     }
 
     $procExe = Join-Path $toolchain 'bin' 'go.exe' -Resolve
-    $proc = Start-Process -FilePath $procExe -WorkingDirectory $repoRoot -Environment $execEnv -ArgumentList $argList -NoNewWindow -Wait -PassThru
+    $proc = Start-Process -FilePath $procExe -WorkingDirectory $repoRoot -Environment $execEnv -ArgumentList $argList -NoNewWindow -PassThru
+    $proc.WaitForExit()
     exit $proc.ExitCode
 }
 
 $procExe = Join-Path $repoRoot 'gocross.exe' -Resolve
-$proc = Start-Process -FilePath $procExe -WorkingDirectory $repoRoot -Environment $execEnv -ArgumentList $argList -NoNewWindow -Wait -PassThru
+$proc = Start-Process -FilePath $procExe -WorkingDirectory $repoRoot -Environment $execEnv -ArgumentList $argList -NoNewWindow -PassThru
+$proc.WaitForExit()
 exit $proc.ExitCode

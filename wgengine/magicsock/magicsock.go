@@ -177,9 +177,6 @@ type Conn struct {
 	connCtxCancel func()          // closes connCtx
 	donec         <-chan struct{} // connCtx.Done()'s to avoid context.cancelCtx.Done()'s mutex per call
 
-	// A publisher for synchronization points to ensure correct ordering of
-	// config changes between magicsock and wireguard.
-	syncPub                  *eventbus.Publisher[syncPoint]
 	allocRelayEndpointPub    *eventbus.Publisher[UDPRelayAllocReq]
 	portUpdatePub            *eventbus.Publisher[router.PortUpdate]
 	tsmpDiscoKeyAvailablePub *eventbus.Publisher[NewDiscoKeyAvailable]
@@ -362,11 +359,11 @@ type Conn struct {
 	netInfoLast *tailcfg.NetInfo
 
 	derpMap            *tailcfg.DERPMap              // nil (or zero regions/nodes) means DERP is disabled
-	self               tailcfg.NodeView              // from last onNodeViewsUpdate
-	peers              views.Slice[tailcfg.NodeView] // from last onNodeViewsUpdate, sorted by Node.ID; Note: [netmap.NodeMutation]'s rx'd in onNodeMutationsUpdate are never applied
-	filt               *filter.Filter                // from last onFilterUpdate
+	self               tailcfg.NodeView              // from last SetNetworkMap
+	peers              views.Slice[tailcfg.NodeView] // from last SetNetworkMap, sorted by Node.ID; Note: [netmap.NodeMutation]'s rx'd in UpdateNetmapDelta are never applied
+	filt               *filter.Filter                // from last SetFilter
 	relayClientEnabled bool                          // whether we can allocate UDP relay endpoints on UDP relay servers or receive CallMeMaybeVia messages from peers
-	lastFlags          debugFlags                    // at time of last onNodeViewsUpdate
+	lastFlags          debugFlags                    // at time of last SetNetworkMap
 	privateKey         key.NodePrivate               // WireGuard private key for this node
 	everHadKey         bool                          // whether we ever had a non-zero private key
 	myDerp             int                           // nearest DERP region ID; 0 means none/unknown
@@ -521,47 +518,6 @@ func (o *Options) derpActiveFunc() func() {
 	return o.DERPActiveFunc
 }
 
-// NodeViewsUpdate represents an update event of [tailcfg.NodeView] for all
-// nodes. This event is published over an [eventbus.Bus]. It may be published
-// with an invalid SelfNode, and/or zero/nil Peers. [magicsock.Conn] is the sole
-// subscriber as of 2025-06. If you are adding more subscribers consider moving
-// this type out of magicsock.
-type NodeViewsUpdate struct {
-	SelfNode tailcfg.NodeView
-	Peers    []tailcfg.NodeView // sorted by Node.ID
-}
-
-// NodeMutationsUpdate represents an update event of one or more
-// [netmap.NodeMutation]. This event is published over an [eventbus.Bus].
-// [magicsock.Conn] is the sole subscriber as of 2025-06. If you are adding more
-// subscribers consider moving this type out of magicsock.
-type NodeMutationsUpdate struct {
-	Mutations []netmap.NodeMutation
-}
-
-// FilterUpdate represents an update event for a [*filter.Filter]. This event is
-// signaled over an [eventbus.Bus]. [magicsock.Conn] is the sole subscriber as
-// of 2025-06. If you are adding more subscribers consider moving this type out
-// of magicsock.
-type FilterUpdate struct {
-	*filter.Filter
-}
-
-// syncPoint is an event published over an [eventbus.Bus] by [Conn.Synchronize].
-// It serves as a synchronization point, allowing to wait until magicsock
-// has processed all pending events.
-type syncPoint chan struct{}
-
-// Wait blocks until [syncPoint.Signal] is called.
-func (s syncPoint) Wait() {
-	<-s
-}
-
-// Signal signals the sync point, unblocking the [syncPoint.Wait] call.
-func (s syncPoint) Signal() {
-	close(s)
-}
-
 // UDPRelayAllocReq represents a [*disco.AllocateUDPRelayEndpointRequest]
 // reception event. This is signaled over an [eventbus.Bus] from
 // [magicsock.Conn] towards [relayserver.extension].
@@ -654,21 +610,6 @@ func (c *Conn) onUDPRelayAllocResp(allocResp UDPRelayAllocResp) {
 	}
 }
 
-// Synchronize waits for all [eventbus] events published
-// prior to this call to be processed by the receiver.
-func (c *Conn) Synchronize() {
-	if c.syncPub == nil {
-		// Eventbus is not used; no need to synchronize (in certain tests).
-		return
-	}
-	sp := syncPoint(make(chan struct{}))
-	c.syncPub.Publish(sp)
-	select {
-	case <-sp:
-	case <-c.donec:
-	}
-}
-
 // NewConn creates a magic Conn listening on opts.Port.
 // As the set of possible endpoints for a Conn changes, the
 // callback opts.EndpointsFunc is called.
@@ -694,18 +635,10 @@ func NewConn(opts Options) (*Conn, error) {
 	// NewConn otherwise published events can be missed.
 	ec := c.eventBus.Client("magicsock.Conn")
 	c.eventClient = ec
-	c.syncPub = eventbus.Publish[syncPoint](ec)
 	c.allocRelayEndpointPub = eventbus.Publish[UDPRelayAllocReq](ec)
 	c.portUpdatePub = eventbus.Publish[router.PortUpdate](ec)
 	c.tsmpDiscoKeyAvailablePub = eventbus.Publish[NewDiscoKeyAvailable](ec)
 	eventbus.SubscribeFunc(ec, c.onPortMapChanged)
-	eventbus.SubscribeFunc(ec, c.onFilterUpdate)
-	eventbus.SubscribeFunc(ec, c.onNodeViewsUpdate)
-	eventbus.SubscribeFunc(ec, c.onNodeMutationsUpdate)
-	eventbus.SubscribeFunc(ec, func(sp syncPoint) {
-		c.dlogf("magicsock: received sync point after reconfig")
-		sp.Signal()
-	})
 	eventbus.SubscribeFunc(ec, c.onUDPRelayAllocResp)
 
 	c.connCtx, c.connCtxCancel = context.WithCancel(context.Background())
@@ -2907,11 +2840,12 @@ func capVerIsRelayCapable(version tailcfg.CapabilityVersion) bool {
 	return version >= 121
 }
 
-// onFilterUpdate is called when a [FilterUpdate] is received over the
-// [eventbus.Bus].
-func (c *Conn) onFilterUpdate(f FilterUpdate) {
+// SetFilter updates the packet filter used by the connection.
+// It must be called synchronously from the caller's goroutine to ensure
+// magicsock has the current filter before subsequent operations proceed.
+func (c *Conn) SetFilter(f *filter.Filter) {
 	c.mu.Lock()
-	c.filt = f.Filter
+	c.filt = f
 	self := c.self
 	peers := c.peers
 	relayClientEnabled := c.relayClientEnabled
@@ -2924,7 +2858,7 @@ func (c *Conn) onFilterUpdate(f FilterUpdate) {
 
 	// The filter has changed, and we are operating as a relay server client.
 	// Re-evaluate it in order to produce an updated relay server set.
-	c.updateRelayServersSet(f.Filter, self, peers)
+	c.updateRelayServersSet(f, self, peers)
 }
 
 // updateRelayServersSet iterates all peers and self, evaluating filt for each
@@ -3015,21 +2949,24 @@ func (c *candidatePeerRelay) isValid() bool {
 	return !c.nodeKey.IsZero() && !c.discoKey.IsZero()
 }
 
-// onNodeViewsUpdate is called when a [NodeViewsUpdate] is received over the
-// [eventbus.Bus].
-func (c *Conn) onNodeViewsUpdate(update NodeViewsUpdate) {
-	peersChanged := c.updateNodes(update)
+// SetNetworkMap updates the network map with the given self node and peers.
+// It must be called synchronously from the caller's goroutine to ensure
+// magicsock has the current state before subsequent operations proceed.
+//
+// self may be invalid if there's no network map.
+func (c *Conn) SetNetworkMap(self tailcfg.NodeView, peers []tailcfg.NodeView) {
+	peersChanged := c.updateNodes(self, peers)
 
-	relayClientEnabled := update.SelfNode.Valid() &&
-		!update.SelfNode.HasCap(tailcfg.NodeAttrDisableRelayClient) &&
-		!update.SelfNode.HasCap(tailcfg.NodeAttrOnlyTCP443)
+	relayClientEnabled := self.Valid() &&
+		!self.HasCap(tailcfg.NodeAttrDisableRelayClient) &&
+		!self.HasCap(tailcfg.NodeAttrOnlyTCP443)
 
 	c.mu.Lock()
 	relayClientChanged := c.relayClientEnabled != relayClientEnabled
 	c.relayClientEnabled = relayClientEnabled
 	filt := c.filt
-	self := c.self
-	peers := c.peers
+	selfView := c.self
+	peersView := c.peers
 	isClosed := c.closed
 	c.mu.Unlock() // release c.mu before potentially calling c.updateRelayServersSet which is O(m * n)
 
@@ -3042,15 +2979,14 @@ func (c *Conn) onNodeViewsUpdate(update NodeViewsUpdate) {
 			c.relayManager.handleRelayServersSet(nil)
 			c.hasPeerRelayServers.Store(false)
 		} else {
-			c.updateRelayServersSet(filt, self, peers)
+			c.updateRelayServersSet(filt, selfView, peersView)
 		}
 	}
 }
 
-// updateNodes updates [Conn] to reflect the [tailcfg.NodeView]'s contained
-// in update. It returns true if update.Peers was unequal to c.peers, otherwise
-// false.
-func (c *Conn) updateNodes(update NodeViewsUpdate) (peersChanged bool) {
+// updateNodes updates [Conn] to reflect the given self node and peers.
+// It reports whether the peers were changed from before.
+func (c *Conn) updateNodes(self tailcfg.NodeView, peers []tailcfg.NodeView) (peersChanged bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -3059,11 +2995,11 @@ func (c *Conn) updateNodes(update NodeViewsUpdate) (peersChanged bool) {
 	}
 
 	priorPeers := c.peers
-	metricNumPeers.Set(int64(len(update.Peers)))
+	metricNumPeers.Set(int64(len(peers)))
 
 	// Update c.self & c.peers regardless, before the following early return.
-	c.self = update.SelfNode
-	curPeers := views.SliceOf(update.Peers)
+	c.self = self
+	curPeers := views.SliceOf(peers)
 	c.peers = curPeers
 
 	// [debugFlags] are mutable in [Conn.SetSilentDisco] &
@@ -3072,7 +3008,7 @@ func (c *Conn) updateNodes(update NodeViewsUpdate) (peersChanged bool) {
 	// [controlknobs.Knobs] are simply self [tailcfg.NodeCapability]'s. They are
 	// useful as a global view of notable feature toggles, but the magicsock
 	// setters are completely unnecessary as we have the same values right here
-	// (update.SelfNode.Capabilities) at a time they are considered most
+	// (self.Capabilities) at a time they are considered most
 	// up-to-date.
 	// TODO: mutate [debugFlags] here instead of in various [Conn] setters.
 	flags := c.debugFlagsLocked()
@@ -3088,16 +3024,16 @@ func (c *Conn) updateNodes(update NodeViewsUpdate) (peersChanged bool) {
 
 	c.lastFlags = flags
 
-	c.logf("[v1] magicsock: got updated network map; %d peers", len(update.Peers))
+	c.logf("[v1] magicsock: got updated network map; %d peers", len(peers))
 
-	entriesPerBuffer := debugRingBufferSize(len(update.Peers))
+	entriesPerBuffer := debugRingBufferSize(len(peers))
 
 	// Try a pass of just upserting nodes and creating missing
 	// endpoints. If the set of nodes is the same, this is an
 	// efficient alloc-free update. If the set of nodes is different,
 	// we'll fall through to the next pass, which allocates but can
 	// handle full set updates.
-	for _, n := range update.Peers {
+	for _, n := range peers {
 		if n.ID() == 0 {
 			devPanicf("node with zero ID")
 			continue
@@ -3197,14 +3133,14 @@ func (c *Conn) updateNodes(update NodeViewsUpdate) (peersChanged bool) {
 		c.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
 	}
 
-	// If the set of nodes changed since the last onNodeViewsUpdate, the
+	// If the set of nodes changed since the last SetNetworkMap, the
 	// upsert loop just above made c.peerMap contain the union of the
 	// old and new peers - which will be larger than the set from the
 	// current netmap. If that happens, go through the allocful
 	// deletion path to clean up moribund nodes.
-	if c.peerMap.nodeCount() != len(update.Peers) {
+	if c.peerMap.nodeCount() != len(peers) {
 		keep := set.Set[key.NodePublic]{}
-		for _, n := range update.Peers {
+		for _, n := range peers {
 			keep.Add(n.Key())
 		}
 		c.peerMap.forEachEndpoint(func(ep *endpoint) {
@@ -3739,13 +3675,15 @@ func simpleDur(d time.Duration) time.Duration {
 	return d.Round(time.Minute)
 }
 
-// onNodeMutationsUpdate is called when a [NodeMutationsUpdate] is received over
-// the [eventbus.Bus]. Note: It does not apply these mutations to c.peers.
-func (c *Conn) onNodeMutationsUpdate(update NodeMutationsUpdate) {
+// UpdateNetmapDelta applies the given node mutations to the connection's peer
+// state. It must be called synchronously from the caller's goroutine to ensure
+// magicsock has the current state before subsequent operations proceed.
+// Note: It does not apply these mutations to c.peers.
+func (c *Conn) UpdateNetmapDelta(muts []netmap.NodeMutation) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for _, m := range update.Mutations {
+	for _, m := range muts {
 		nodeID := m.NodeIDBeingMutated()
 		ep, ok := c.peerMap.endpointForNodeID(nodeID)
 		if !ok {

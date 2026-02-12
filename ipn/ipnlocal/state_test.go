@@ -1300,8 +1300,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node1),
+				AcceptDNS: true,
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:     hostsFor(node1),
 			},
 		},
 		{
@@ -1356,8 +1357,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node2),
+				AcceptDNS: true,
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:     hostsFor(node2),
 			},
 		},
 		{
@@ -1404,8 +1406,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node1),
+				AcceptDNS: true,
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:     hostsFor(node1),
 			},
 		},
 		{
@@ -1436,8 +1439,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node3),
+				AcceptDNS: true,
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:     hostsFor(node3),
 			},
 		},
 		{
@@ -1500,8 +1504,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node1),
+				AcceptDNS: true,
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:     hostsFor(node1),
 			},
 		},
 		{
@@ -1529,8 +1534,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node1),
+				AcceptDNS: true,
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:     hostsFor(node1),
 			},
 		},
 		{
@@ -1560,8 +1566,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node1),
+				AcceptDNS: true,
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:     hostsFor(node1),
 			},
 		},
 		{
@@ -1592,11 +1599,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			if tt.steps != nil {
 				tt.steps(t, lb, cc)
 			}
-
-			// TODO(bradfitz): this whole event bus settling thing
-			// should be unnecessary once the bogus uses of eventbus
-			// are removed. (https://github.com/tailscale/tailscale/issues/16369)
-			lb.settleEventBus()
 
 			if gotState := lb.State(); gotState != tt.wantState {
 				t.Errorf("State: got %v; want %v", gotState, tt.wantState)

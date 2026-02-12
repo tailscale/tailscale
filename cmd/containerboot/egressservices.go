@@ -478,7 +478,8 @@ func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, n ipn.N
 	}
 	egressAddrs, err := resolveTailnetFQDN(n.NetMap, svc.TailnetTarget.FQDN)
 	if err != nil {
-		return nil, fmt.Errorf("error fetching backend addresses for %q: %w", svc.TailnetTarget.FQDN, err)
+		log.Printf("error fetching backend addresses for %q: %v", svc.TailnetTarget.FQDN, err)
+		return addrs, nil
 	}
 	if len(egressAddrs) == 0 {
 		log.Printf("tailnet target %q does not have any backend addresses, skipping", svc.TailnetTarget.FQDN)

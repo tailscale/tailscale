@@ -300,6 +300,63 @@ jobs:
       working-directory: src
       run: ./tool/go version
 
+  macos:
+    runs-on: macos-latest
+    needs: gomod-cache
+    steps:
+    - name: checkout
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      with:
+        path: src
+    - name: Restore Go module cache
+      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
+    - name: Restore Cache
+      id: restore-cache
+      uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        path: ~/Library/Caches/go-build
+        key: ${{ runner.os }}-go-test-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        restore-keys: |
+          ${{ runner.os }}-go-test-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
+          ${{ runner.os }}-go-test-${{ hashFiles('**/go.sum') }}-
+          ${{ runner.os }}-go-test-
+    - name: build test wrapper
+      working-directory: src
+      run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
+    - name: test all
+      working-directory: src
+      run: PATH=$PWD/tool:$PATH /tmp/testwrapper ./...
+    - name: check that no tracked files changed
+      working-directory: src
+      run: git diff --no-ext-diff --name-only --exit-code || (echo "Build/test modified the files above."; exit 1)
+    - name: check that no new files were added
+      working-directory: src
+      run: |
+        # Note: The "error: pathspec..." you see below is normal!
+        # In the success case in which there are no new untracked files,
+        # git ls-files complains about the pathspec not matching anything.
+        # That's OK. It's not worth the effort to suppress. Please ignore it.
+        if git ls-files --others --exclude-standard --directory --no-empty-directory --error-unmatch -- ':/*'
+        then
+          echo "Build/test created untracked files in the repo (file names above)."
+          exit 1
+        fi
+    - name: Tidy cache
+      working-directory: src
+      run: |
+        find $(./tool/go env GOCACHE) -type f -mmin +90 -delete
+    - name: Save Cache
+      # Save cache even on failure, but only on cache miss and main branch to avoid thrashing.
+      if: always() && steps.restore-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        path: ~/Library/Caches/go-build
+        key: ${{ runner.os }}-go-test-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+
   privileged:
     needs: gomod-cache
     runs-on: ubuntu-24.04
@@ -851,10 +908,11 @@ jobs:
   notify_slack:
     if: always()
     # Any of these jobs failing causes a slack notification.
-    needs: 
+    needs:
       - android
       - test
       - windows
+      - macos
       - vm
       - cross
       - ios
@@ -900,6 +958,7 @@ jobs:
       - android
       - test
       - windows
+      - macos
       - vm
       - cross
       - ios
@@ -949,6 +1008,7 @@ jobs:
       - check_mergeability_strict
       - test
       - windows
+      - macos
       - vm
       - wasm
       - fuzz

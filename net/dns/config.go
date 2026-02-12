@@ -26,6 +26,10 @@ import (
 
 // Config is a DNS configuration.
 type Config struct {
+	// AcceptDNS true if [Prefs.CorpDNS] is enabled (or --accept-dns=true).
+	// This should be used for error handling and health reporting
+	// purposes only.
+	AcceptDNS bool
 	// DefaultResolvers are the DNS resolvers to use for DNS names
 	// which aren't covered by more specific per-domain routes below.
 	// If empty, the OS's default resolvers (the ones that predate

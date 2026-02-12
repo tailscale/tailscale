@@ -37,7 +37,7 @@ require (
 	github.com/fogleman/gg v1.3.0
 	github.com/frankban/quicktest v1.14.6
 	github.com/fxamacker/cbor/v2 v2.9.0
-	github.com/gaissmai/bart v0.18.0
+	github.com/gaissmai/bart v0.26.1
 	github.com/go-json-experiment/json v0.0.0-20250813024750-ebf49471dced
 	github.com/go-logr/zapr v1.3.0
 	github.com/go-ole/go-ole v1.3.0

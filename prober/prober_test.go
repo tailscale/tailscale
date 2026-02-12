@@ -213,6 +213,14 @@ func TestProberConcurrency(t *testing.T) {
 		if got, want := ran.Load(), int64(3); got != want {
 			return fmt.Errorf("expected %d probes to run concurrently, got %d", want, got)
 		}
+		wantMetrics := `
+		# HELP prober_in_flight Number of probes currently running
+        # TYPE prober_in_flight gauge
+        prober_in_flight{class="",name="foo"} 3
+		`
+		if err := testutil.GatherAndCompare(p.metrics, strings.NewReader(wantMetrics), "prober_in_flight"); err != nil {
+			return fmt.Errorf("unexpected metrics: %w", err)
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -308,9 +316,12 @@ probe_end_secs{class="",label="value",name="testprobe"} %d
 # HELP probe_result Latest probe result (1 = success, 0 = failure)
 # TYPE probe_result gauge
 probe_result{class="",label="value",name="testprobe"} 0
+# HELP probe_in_flight Number of probes currently running
+# TYPE probe_in_flight gauge
+probe_in_flight{class="",label="value",name="testprobe"} 0
 `, probeInterval.Seconds(), epoch.Unix(), epoch.Add(aFewMillis).Unix())
 		return testutil.GatherAndCompare(p.metrics, strings.NewReader(want),
-			"probe_interval_secs", "probe_start_secs", "probe_end_secs", "probe_result")
+			"probe_interval_secs", "probe_start_secs", "probe_end_secs", "probe_result", "probe_in_flight")
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -338,9 +349,13 @@ probe_latency_millis{class="",label="value",name="testprobe"} %d
 # HELP probe_result Latest probe result (1 = success, 0 = failure)
 # TYPE probe_result gauge
 probe_result{class="",label="value",name="testprobe"} 1
+# HELP probe_in_flight Number of probes currently running
+# TYPE probe_in_flight gauge
+probe_in_flight{class="",label="value",name="testprobe"} 0
 `, probeInterval.Seconds(), start.Unix(), end.Unix(), aFewMillis.Milliseconds())
 		return testutil.GatherAndCompare(p.metrics, strings.NewReader(want),
-			"probe_interval_secs", "probe_start_secs", "probe_end_secs", "probe_latency_millis", "probe_result")
+			"probe_interval_secs", "probe_start_secs", "probe_end_secs",
+			"probe_latency_millis", "probe_result", "probe_in_flight")
 	})
 	if err != nil {
 		t.Fatal(err)

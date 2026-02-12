@@ -1176,13 +1176,17 @@ func TestListenService(t *testing.T) {
 					tt.extraSetup(t, control)
 				}
 
-				// Force netmap updates to avoid race conditions. The nodes need to
-				// see our control updates before we can start the test.
-				must.Do(control.ForceNetmapUpdate(ctx, serviceHost.lb.NodeKey()))
-				must.Do(control.ForceNetmapUpdate(ctx, serviceClient.lb.NodeKey()))
+				sentinelRecord := "sentinel-record"
+				control.AddDNSRecords(tailcfg.DNSRecord{
+					Name:  sentinelRecord,
+					Value: "1.2.3.4",
+				})
+
+				// Wait until both nodes have up-to-date netmaps before
+				// proceeding with the test.
 				netmapUpToDate := func(nm *netmap.NetworkMap) bool {
 					return nm != nil && slices.ContainsFunc(nm.DNS.ExtraRecords, func(r tailcfg.DNSRecord) bool {
-						return r.Value == serviceVIP
+						return r.Name == sentinelRecord
 					})
 				}
 				waitForLatestNetmap := func(t *testing.T, s *Server) {
@@ -1227,9 +1231,7 @@ func TestListenService(t *testing.T) {
 		serviceHostNode.Tags = append(serviceHostNode.Tags, "some-tag")
 		control.UpdateNode(serviceHostNode)
 
-		// Force netmap updates to avoid race conditions. The node needs to see
-		// our control updates before we can proceed with the test.
-		must.Do(control.ForceNetmapUpdate(ctx, serviceHost.lb.NodeKey()))
+		// Wait for an up-to-date netmap before proceeding with the test.
 		netmapUpToDate := func(nm *netmap.NetworkMap) bool {
 			return nm != nil && nm.SelfNode.IsTagged()
 		}
@@ -1371,9 +1373,7 @@ func TestListenServiceClose(t *testing.T) {
 			serviceHostNode.Tags = append(serviceHostNode.Tags, "some-tag")
 			control.UpdateNode(serviceHostNode)
 
-			// Force netmap updates to avoid race conditions. The node needs to
-			// see our control updates before we can proceed with the test.
-			must.Do(control.ForceNetmapUpdate(ctx, s.lb.NodeKey()))
+			// Wait for an up-to-date netmap before proceeding with the test.
 			netmapUpToDate := func(nm *netmap.NetworkMap) bool {
 				return nm != nil && nm.SelfNode.IsTagged()
 			}

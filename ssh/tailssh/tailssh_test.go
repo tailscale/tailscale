@@ -495,6 +495,9 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skipf("skipping on %q; only runs on linux and darwin", runtime.GOOS)
 	}
+	if runtime.GOOS == "darwin" && cibuild.On() {
+		t.Skipf("this fails on CI on macOS; see https://github.com/tailscale/tailscale/issues/7707")
+	}
 
 	var handler http.HandlerFunc
 	recordingServer := mockRecordingServer(t, func(w http.ResponseWriter, r *http.Request) {

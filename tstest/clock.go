@@ -17,8 +17,11 @@ import (
 type ClockOpts struct {
 	// Start is the starting time for the Clock. When FollowRealTime is false,
 	// Start is also the value that will be returned by the first call
-	// to Clock.Now.
+	// to Clock.Now. If you are passing a value here, set an explicit
+	// timezone, otherwise the test may be non-deterministic when TZ environment
+	// variable is set to different values. The default time is in UTC.
 	Start time.Time
+
 	// Step is the amount of time the Clock will advance whenever Clock.Now is
 	// called. If set to zero, the Clock will only advance when Clock.Advance is
 	// called and/or if FollowRealTime is true.
@@ -119,7 +122,7 @@ func (c *Clock) init() {
 		}
 		if c.start.IsZero() {
 			if c.realTime.IsZero() {
-				c.start = time.Now()
+				c.start = time.Now().UTC()
 			} else {
 				c.start = c.realTime
 			}

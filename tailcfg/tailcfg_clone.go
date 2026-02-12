@@ -186,6 +186,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	UserspaceRouter opt.Bool
 	AppConnector    opt.Bool
 	ServicesHash    string
+	PeerRelay       bool
 	ExitNodeID      StableNodeID
 	Location        *Location
 	TPM             *TPMInfo
