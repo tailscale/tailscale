@@ -1075,14 +1075,21 @@ func sendUpdate(dst chan<- updateType, updateType updateType) bool {
 	}
 }
 
-func (s *Server) UpdateNode(n *tailcfg.Node) (peersToUpdate []tailcfg.NodeID) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Server) updateNodeLocked(n *tailcfg.Node) (peersToUpdate []tailcfg.NodeID) {
 	if n.Key.IsZero() {
 		panic("zero nodekey")
 	}
 	s.nodes[n.Key] = n.Clone()
 	return s.nodeIDsLocked(n.ID)
+}
+
+// UpdateNode updates or adds the input node, then triggers a netmap update for
+// all attached streaming clients.
+func (s *Server) UpdateNode(n *tailcfg.Node) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.updateNodeLocked(n)
+	s.updateLocked("UpdateNode", s.nodeIDsLocked(0))
 }
 
 func (s *Server) incrInServeMap(delta int) {
@@ -1143,7 +1150,9 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 				}
 			}
 		}
-		peersToUpdate = s.UpdateNode(node)
+		s.mu.Lock()
+		peersToUpdate = s.updateNodeLocked(node)
+		s.mu.Unlock()
 	}
 
 	nodeID := node.ID
