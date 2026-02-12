@@ -38,8 +38,9 @@ import (
 )
 
 const (
-	StableTrack   = "stable"
-	UnstableTrack = "unstable"
+	StableTrack           = "stable"
+	UnstableTrack         = "unstable"
+	ReleaseCandidateTrack = "release-candidate"
 )
 
 var CurrentTrack = func() string {
@@ -80,6 +81,8 @@ type Arguments struct {
 	//     running binary
 	//   - StableTrack and UnstableTrack will use the latest versions of the
 	//     corresponding tracks
+	//   - ReleaseCandidateTrack will use the newest version from StableTrack
+	// 	   and ReleaseCandidateTrack.
 	//
 	// Leaving this empty will use Version or fall back to CurrentTrack if both
 	// Track and Version are empty.
@@ -114,7 +117,7 @@ func (args Arguments) validate() error {
 		return fmt.Errorf("only one of Version(%q) or Track(%q) can be set", args.Version, args.Track)
 	}
 	switch args.Track {
-	case StableTrack, UnstableTrack, "":
+	case StableTrack, UnstableTrack, ReleaseCandidateTrack, "":
 		// All valid values.
 	default:
 		return fmt.Errorf("unsupported track %q", args.Track)
@@ -496,10 +499,10 @@ func (up *Updater) updateDebLike() error {
 const aptSourcesFile = "/etc/apt/sources.list.d/tailscale.list"
 
 // updateDebianAptSourcesList updates the /etc/apt/sources.list.d/tailscale.list
-// file to make sure it has the provided track (stable or unstable) in it.
+// file to make sure it has the provided track (stable, unstable, or release-candidate) in it.
 //
-// If it already has the right track (including containing both stable and
-// unstable), it does nothing.
+// If it already has the right track (including containing both stable,
+// unstable, and release-candidate), it does nothing.
 func updateDebianAptSourcesList(dstTrack string) (rewrote bool, err error) {
 	was, err := os.ReadFile(aptSourcesFile)
 	if err != nil {
@@ -522,7 +525,7 @@ func updateDebianAptSourcesListBytes(was []byte, dstTrack string) (newContent []
 	bs := bufio.NewScanner(bytes.NewReader(was))
 	hadCorrect := false
 	commentLine := regexp.MustCompile(`^\s*\#`)
-	pkgsURL := regexp.MustCompile(`\bhttps://pkgs\.tailscale\.com/((un)?stable)/`)
+	pkgsURL := regexp.MustCompile(`\bhttps://pkgs\.tailscale\.com/(stable|unstable|release-candidate)/`)
 	for bs.Scan() {
 		line := bs.Bytes()
 		if !commentLine.Match(line) {
@@ -616,15 +619,15 @@ func (up *Updater) updateFedoraLike(packageManager string) func() error {
 }
 
 // updateYUMRepoTrack updates the repoFile file to make sure it has the
-// provided track (stable or unstable) in it.
+// provided track (stable, unstable, or release-candidate) in it.
 func updateYUMRepoTrack(repoFile, dstTrack string) (rewrote bool, err error) {
 	was, err := os.ReadFile(repoFile)
 	if err != nil {
 		return false, err
 	}
 
-	urlRe := regexp.MustCompile(`^(baseurl|gpgkey)=https://pkgs\.tailscale\.com/(un)?stable/`)
-	urlReplacement := fmt.Sprintf("$1=https://pkgs.tailscale.com/%s/", dstTrack)
+	urlRe := regexp.MustCompile(`^(baseurl|gpgkey)=https://pkgs\.tailscale\.com/(stable|unstable|release-candidate)`)
+	urlReplacement := fmt.Sprintf("$1=https://pkgs.tailscale.com/%s", dstTrack)
 
 	s := bufio.NewScanner(bytes.NewReader(was))
 	newContent := bytes.NewBuffer(make([]byte, 0, len(was)))
