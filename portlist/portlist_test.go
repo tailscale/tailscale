@@ -11,7 +11,7 @@ import (
 	"tailscale.com/tstest"
 )
 
-func maybeSkip(t *testing.T) {
+func maybeSkip(t testing.TB) {
 	if runtime.GOOS == "linux" {
 		tstest.SkipOnKernelVersions(t,
 			"https://github.com/tailscale/tailscale/issues/16966",
@@ -214,6 +214,7 @@ func BenchmarkGetListIncremental(b *testing.B) {
 }
 
 func benchmarkGetList(b *testing.B, incremental bool) {
+	maybeSkip(b)
 	b.ReportAllocs()
 	var p Poller
 	p.init()
