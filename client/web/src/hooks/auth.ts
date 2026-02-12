@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { apiFetch, setSynoToken } from "src/api"
+import useSWR from "swr"
 
 export type AuthResponse = {
   serverMode: AuthServerMode
@@ -49,33 +50,26 @@ export function hasAnyEditCapabilities(auth: AuthResponse): boolean {
  * useAuth reports and refreshes Tailscale auth status for the web client.
  */
 export default function useAuth() {
-  const [data, setData] = useState<AuthResponse>()
-  const [loading, setLoading] = useState<boolean>(true)
+  const { data, error, mutate } = useSWR<AuthResponse>("/auth")
   const [ranSynoAuth, setRanSynoAuth] = useState<boolean>(false)
 
-  const loadAuth = useCallback(() => {
-    setLoading(true)
-    return apiFetch<AuthResponse>("/auth", "GET")
-      .then((d) => {
-        setData(d)
-        if (d.needsSynoAuth) {
-          fetch("/webman/login.cgi")
-            .then((r) => r.json())
-            .then((a) => {
-              setSynoToken(a.SynoToken)
-              setRanSynoAuth(true)
-              setLoading(false)
-            })
-        } else {
-          setLoading(false)
-        }
-        return d
-      })
-      .catch((error) => {
-        setLoading(false)
-        console.error(error)
-      })
-  }, [])
+  const loading = !data && !error
+
+  // Start Synology auth flow if needed.
+  useEffect(() => {
+    if (data?.needsSynoAuth && !ranSynoAuth) {
+      fetch("/webman/login.cgi")
+        .then((r) => r.json())
+        .then((a) => {
+          setSynoToken(a.SynoToken)
+          setRanSynoAuth(true)
+          mutate()
+        })
+        .catch((error) => {
+          console.error("Synology auth error:", error)
+        })
+    }
+  }, [data?.needsSynoAuth, ranSynoAuth, mutate])
 
   const newSession = useCallback(() => {
     return apiFetch<{ authUrl?: string }>("/auth/session/new", "GET")
@@ -86,34 +80,25 @@ export default function useAuth() {
         }
       })
       .then(() => {
-        loadAuth()
+        mutate()
       })
       .catch((error) => {
         console.error(error)
       })
-  }, [loadAuth])
+  }, [mutate])
 
+  // Start regular auth flow.
   useEffect(() => {
-    loadAuth().then((d) => {
-      if (!d) {
-        return
-      }
-      if (
-        !d.authorized &&
-        hasAnyEditCapabilities(d) &&
-        // Start auth flow immediately if browser has requested it.
-        new URLSearchParams(window.location.search).get("check") === "now"
-      ) {
-        newSession()
-      }
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    const needsAuth = data &&
+      !loading &&
+      !data.authorized &&
+      hasAnyEditCapabilities(data) &&
+      new URLSearchParams(window.location.search).get("check") === "now"
 
-  useEffect(() => {
-    loadAuth() // Refresh auth state after syno auth runs
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ranSynoAuth])
+    if (needsAuth) {
+      newSession()
+    }
+  }, [data, loading, newSession])
 
   return {
     data,
