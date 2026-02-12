@@ -170,6 +170,57 @@ func (kc *kubeClient) setReissueAuthKey(ctx context.Context, authKey string) err
 			kubetypes.KeyReissueAuthkey: []byte(authKey), // Empty string means no auth key.
 		},
 	}
+
+	log.Printf("requested for new auth key from operator")
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
+}
+
+// waitForAuthKeyReissue waits for the operator to provide a new auth key after
+// requesting reissue. It polls the state Secret for an updated authkey field.
+func (kc *kubeClient) waitForAuthKeyReissue(ctx context.Context, configPath string, oldAuthKey string, maxWait time.Duration) error {
+	log.Printf("Waiting for operator to provide new auth key (max wait: %v)", maxWait)
+
+	ctx, cancel := context.WithTimeout(ctx, maxWait)
+	defer cancel()
+
+	bo := backoff.NewBackoff("auth-key-reissue", logger.Discard, 5*time.Second)
+	bo.LogLongerThan = 10 * time.Second
+
+	start := time.Now()
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for auth key reissue after %v", maxWait)
+		default:
+		}
+
+		newAuthKey := authkeyFromTailscaledConfig(configPath)
+		if newAuthKey != "" && newAuthKey != oldAuthKey {
+			log.Printf("New auth key received from operator after %v", time.Since(start).Round(time.Second))
+
+			if err := kc.clearReissueAuthKeyRequest(ctx); err != nil {
+				log.Printf("Warning: failed to clear reissue request: %v", err)
+			}
+
+			return nil
+		}
+
+		waited := time.Since(start).Round(time.Second)
+		log.Printf("Waiting for new auth key from operator (%v elapsed)", waited)
+
+		bo.BackOff(ctx, fmt.Errorf("no new auth key yet"))
+	}
+}
+
+// clearReissueAuthKeyRequest removes the reissue_authkey marker from the Secret
+// to signal to the operator that we've successfully received the new key.
+func (kc *kubeClient) clearReissueAuthKeyRequest(ctx context.Context) error {
+	s := &kubeapi.Secret{
+		Data: map[string][]byte{
+			// Empty = cleared
+			kubetypes.KeyReissueAuthkey: []byte(""),
+		},
+	}
 	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
 }
 

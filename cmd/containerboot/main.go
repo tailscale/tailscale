@@ -297,7 +297,7 @@ func run() error {
 		}
 	}
 
-	w, err := client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialPrefs|ipn.NotifyInitialState)
+	w, err := client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialPrefs|ipn.NotifyInitialState|ipn.NotifyInitialHealthState|ipn.NotifyHealthActions)
 	if err != nil {
 		return fmt.Errorf("failed to watch tailscaled for updates: %w", err)
 	}
@@ -364,12 +364,23 @@ authLoop:
 					// This could happen if this is the first time tailscaled was run for this
 					// device and the auth key was not passed via the configfile.
 					if hasKubeStateStore(cfg) {
-						setErr := kc.setReissueAuthKey(bootCtx, tailscaledConfigAuthkey)
-						if setErr != nil {
-							return fmt.Errorf("failed to set reissue_authkey in Kubernetes Secret after NeedsLogin state change: %w", setErr)
+						log.Printf("stopping tailscale")
+
+						err := client.DisconnectControl(ctx)
+						if err != nil {
+							return fmt.Errorf("error disconnecting from control: %w", err)
 						}
 
-						return errors.New("invalid state: tailscaled daemon started with a config file, but tailscale is not logged in; auth key reissue from operator requested")
+						setErr := kc.setReissueAuthKey(ctx, tailscaledConfigAuthkey)
+						if setErr != nil {
+							return fmt.Errorf("failed to set reissue_authkey in Kubernetes Secret after login state warning: %w", err)
+						}
+
+						err = kc.waitForAuthKeyReissue(ctx, cfg.TailscaledConfigFilePath, tailscaledConfigAuthkey, 10*time.Minute)
+						if err != nil {
+							return fmt.Errorf("failed to receive new auth key: %w", err)
+						}
+						return fmt.Errorf("new auth key received, restarting to apply")
 					}
 					return errors.New("invalid state: tailscaled daemon started with a config file, but tailscale is not logged in: ensure you pass a valid auth key in the config file")
 				}
@@ -443,8 +454,10 @@ authLoop:
 
 	// If tailscaled config was read from a mounted file, watch the file for updates and reload.
 	cfgWatchErrChan := make(chan error)
+	cfgWatchCtx, cfgWatchCancel := context.WithCancel(ctx)
+	defer cfgWatchCancel()
 	if cfg.TailscaledConfigFilePath != "" {
-		go watchTailscaledConfigChanges(ctx, cfg.TailscaledConfigFilePath, client, cfgWatchErrChan)
+		go watchTailscaledConfigChanges(cfgWatchCtx, cfg.TailscaledConfigFilePath, client, cfgWatchErrChan)
 	}
 
 	var (
@@ -544,6 +557,20 @@ runLoop:
 		case err := <-cfgWatchErrChan:
 			return fmt.Errorf("failed to watch tailscaled config: %w", err)
 		case n := <-notifyChan:
+			if n.NodeRemoved != nil {
+				cfgWatchCancel()
+
+				err := client.DisconnectControl(ctx)
+				if err != nil {
+					return fmt.Errorf("error disconnecting from control: %w", err)
+				}
+
+				kc.setReissueAuthKey(ctx, tailscaledConfigAuthkey)
+				kc.waitForAuthKeyReissue(ctx, cfg.TailscaledConfigFilePath, tailscaledConfigAuthkey, 5*time.Minute)
+
+				return fmt.Errorf("new auth key received, restarting")
+			}
+
 			if n.State != nil && *n.State != ipn.Running {
 				// Something's gone wrong and we've left the authenticated state.
 				// Our container image never recovered gracefully from this, and the

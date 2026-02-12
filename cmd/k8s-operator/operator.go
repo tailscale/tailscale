@@ -719,6 +719,7 @@ func runReconcilers(opts reconcilerOpts) {
 			defaultProxyClass: opts.defaultProxyClass,
 			loginServer:       opts.tsServer.ControlURL,
 			authKeyRateLimits: make(map[string]*rate.Limiter),
+			authKeyReissuing:  make(map[string]bool),
 		})
 	if err != nil {
 		startlog.Fatalf("could not create ProxyGroup reconciler: %v", err)

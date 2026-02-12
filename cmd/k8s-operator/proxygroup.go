@@ -102,6 +102,7 @@ type ProxyGroupReconciler struct {
 	ingressProxyGroups   set.Slice[types.UID]     // for ingress proxygroups gauge
 	apiServerProxyGroups set.Slice[types.UID]     // for kube-apiserver proxygroups gauge
 	authKeyRateLimits    map[string]*rate.Limiter // per-ProxyGroup rate limiters for auth key re-issuance.
+	authKeyReissuing     map[string]bool
 }
 
 func (r *ProxyGroupReconciler) logger(name string) *zap.SugaredLogger {
@@ -763,38 +764,9 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 			return nil, err
 		}
 
-		var authKey *string
-		if existingCfgSecret == nil {
-			logger.Debugf("Creating authkey for new ProxyGroup proxy")
-			tags := pg.Spec.Tags.Stringify()
-			if len(tags) == 0 {
-				tags = r.defaultTags
-			}
-			key, err := newAuthKey(ctx, tailscaleClient, tags)
-			if err != nil {
-				return nil, err
-			}
-			authKey = &key
-		}
-
-		if authKey == nil {
-			// Get state Secret to check if it's already authed.
-			stateSecret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      pgStateSecretName(pg.Name, i),
-					Namespace: r.tsNamespace,
-				},
-			}
-			if err = r.Get(ctx, client.ObjectKeyFromObject(stateSecret), stateSecret); err != nil && !apierrors.IsNotFound(err) {
-				return nil, err
-			}
-
-			if deviceAuthed(stateSecret) && existingCfgSecret != nil {
-				authKey, err = authKeyFromSecret(existingCfgSecret)
-				if err != nil {
-					return nil, fmt.Errorf("error retrieving auth key from existing config Secret: %w", err)
-				}
-			}
+		authKey, err := r.getAuthKey(ctx, tailscaleClient, pg, existingCfgSecret, i, logger)
+		if err != nil {
+			return nil, err
 		}
 
 		nodePortSvcName := pgNodePortServiceName(pg.Name, i)
@@ -930,18 +902,16 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 				return nil, err
 			}
 		}
+
 	}
 
 	return endpoints, nil
 }
 
-// getAuthKey looks at the proxy's state and config Secrets, and may return:
-// * a newly created auth key,
-// * an existing auth key from the config Secret,
-// * or nil if the device is authed.
-//
-// It will create a new auth key if the config Secret is not yet created,
-// or if the proxy has set reissue_authkey in its state Secret.
+// getAuthKey returns an auth key for the proxy, or nil if none is needed.
+// A new key is created if the config Secret doesn't exist yet, or if the
+// proxy has requested a reissue via its state Secret. An existing key is
+// retained while the device hasn't authed or a reissue is in progress.
 func (r *ProxyGroupReconciler) getAuthKey(ctx context.Context, tailscaleClient tsClient, pg *tsapi.ProxyGroup, existingCfgSecret *corev1.Secret, ordinal int32, logger *zap.SugaredLogger) (*string, error) {
 	// Get state Secret to check if it's already authed or has requested
 	// a fresh auth key.
@@ -967,28 +937,17 @@ func (r *ProxyGroupReconciler) getAuthKey(ctx context.Context, tailscaleClient t
 		}
 	}
 
-	if shouldReissueAuthKey(stateSecret, cfgAuthKey) {
-		logger.Infof("Proxy is failing to auth; will attempt to clean up the old device if any found and issue a new auth key")
-
-		// If the device is already authed, we want to delete it from the tailnet.
-		if tsID, ok := stateSecret.Data[kubetypes.KeyDeviceID]; ok && len(tsID) > 0 {
-			id := tailcfg.StableNodeID(tsID)
-			if err := r.ensureDeviceDeleted(ctx, tailscaleClient, id, logger); err != nil {
-				return nil, err
-			}
-		}
-
-		if lim := r.authKeyRateLimits[pg.Name]; lim.Allow() {
-			createAuthKey = true
-		} else {
-			logger.Debugf("auth key re-issuance rate limit exceeded, limit: %.2f, burst: %d, tokens: %.2f", lim.Limit(), lim.Burst(), lim.Tokens())
-			return nil, fmt.Errorf("auth key re-issuance rate limit exceeded for ProxyGroup %q, will retry with backoff", pg.Name)
+	if !createAuthKey {
+		var err error
+		createAuthKey, err = r.shouldReissueAuthKey(ctx, pg, stateSecret, cfgAuthKey)
+		if err != nil {
+			return nil, err
 		}
 	}
 
 	var authKey *string
 	if createAuthKey {
-		logger.Debugf("Creating auth key for ProxyGroup proxy")
+		logger.Debugf("creating auth key for ProxyGroup proxy %q", stateSecret.Name)
 
 		tags := pg.Spec.Tags.Stringify()
 		if len(tags) == 0 {
@@ -999,39 +958,66 @@ func (r *ProxyGroupReconciler) getAuthKey(ctx context.Context, tailscaleClient t
 			return nil, err
 		}
 		authKey = &key
-	} else if !deviceAuthed(stateSecret) {
-		// Retain auth key from existing config.
-		authKey = cfgAuthKey
+	} else {
+		// Retain auth key if the device hasn't authed yet, or if a
+		// reissue is in progress (device_id is stale during reissue).
+		_, reissueRequested := stateSecret.Data[kubetypes.KeyReissueAuthkey]
+		if !deviceAuthed(stateSecret) || reissueRequested {
+			authKey = cfgAuthKey
+		}
 	}
 
 	return authKey, nil
 }
 
-// shouldReissueAuthKey extracts the value of reissue_authkey from the proxy's
-// state Secret, and returns true if a new auth key is needed. The proxy will
-// set the value of reissue_authkey to the auth key with which the it failed to
-// auth, or empty if it didn't have an auth key in its config file.
-func shouldReissueAuthKey(s *corev1.Secret, authKeyInConfig *string) bool {
-	// If the key exists but the value is empty, that means a previous reissue
-	// request got cleared.
-	brokenAuthkey, reissueRequested := s.Data[kubetypes.KeyReissueAuthkey]
+// shouldReissueAuthKey returns true if the proxy needs a new auth key. It
+// tracks in-flight reissues via authKeyReissuing to avoid duplicate API calls
+// across reconciles.
+func (r *ProxyGroupReconciler) shouldReissueAuthKey(ctx context.Context, pg *tsapi.ProxyGroup, stateSecret *corev1.Secret, cfgAuthKey *string) (shouldReissue bool, err error) {
+	r.mu.Lock()
+	reissuing := r.authKeyReissuing[stateSecret.Name]
+	r.mu.Unlock()
+
+	if reissuing {
+		// Reissue in-flight; waiting for the config Secret update
+		// to become visible in the cache.
+		return false, nil
+	}
+
+	defer func() {
+		r.mu.Lock()
+		r.authKeyReissuing[stateSecret.Name] = shouldReissue
+		r.mu.Unlock()
+	}()
+
+	brokenAuthkey, reissueRequested := stateSecret.Data[kubetypes.KeyReissueAuthkey]
 	if !reissueRequested {
-		return false
+		return false, nil
 	}
 
-	// Reissue requested and no auth key in config, definitely reissue.
-	if authKeyInConfig == nil || *authKeyInConfig == "" {
-		return true
+	empty := cfgAuthKey == nil || *cfgAuthKey == ""
+	broken := cfgAuthKey != nil && *cfgAuthKey == string(brokenAuthkey)
+
+	// A new key has been written but the proxy hasn't picked it up yet.
+	if !empty && !broken {
+		return false, nil
 	}
 
-	// The auth key we were going to use is already reported broken, reissue.
-	if *authKeyInConfig == string(brokenAuthkey) {
-		return true
+	lim := r.authKeyRateLimits[pg.Name]
+	if !lim.Allow() {
+		r.log.Debugf("auth key reissue rate limited for %q, will retry on next reconcile", pg.Name)
+		return false, nil
 	}
 
-	// Make sure we don't reissue again if we happened to reconcile again before
-	// the proxy got a chance to auth with a reissued auth key.
-	return false
+	r.log.Infof("Proxy failing to auth; attempting cleanup and new key")
+	if tsID := stateSecret.Data[kubetypes.KeyDeviceID]; len(tsID) > 0 {
+		id := tailcfg.StableNodeID(tsID)
+		if err := r.ensureDeviceDeleted(ctx, r.tsClient, id, r.log); err != nil {
+			return false, err
+		}
+	}
+
+	return true, nil
 }
 
 type FindStaticEndpointErr struct {
@@ -1146,6 +1132,13 @@ func (r *ProxyGroupReconciler) ensureStateAddedForProxyGroup(pg *tsapi.ProxyGrou
 		// Allow every replica to have its auth key re-issued quickly the first
 		// time, but with an overall limit of 1 every 30s after a burst.
 		r.authKeyRateLimits[pg.Name] = rate.NewLimiter(rate.Every(30*time.Second), int(pgReplicas(pg)))
+	}
+
+	for i := range pgReplicas(pg) {
+		rep := pgStateSecretName(pg.Name, i)
+		if _, ok := r.authKeyReissuing[rep]; !ok {
+			r.authKeyReissuing[pgStateSecretName(rep, i)] = false
+		}
 	}
 }
 
