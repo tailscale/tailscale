@@ -711,9 +711,9 @@ jobs:
     steps:
     - name: build fuzzers
       id: build
-      # As of 21 October 2025, this repo doesn't tag releases, so this commit
+      # As of 12 February 2026, this repo doesn't tag releases, so this commit
       # hash is just the tip of master.
-      uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@1242ccb5b6352601e73c00f189ac2ae397242264
+      uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@f277aafb36f358582fdb24a41a9a52f2e097a2fd
       # continue-on-error makes steps.build.conclusion be 'success' even if
       # steps.build.outcome is 'failure'. This means this step does not
       # contribute to the job's overall pass/fail evaluation.
@@ -743,9 +743,9 @@ jobs:
       # report a failure because TS_FUZZ_CURRENTLY_BROKEN is set to the wrong
       # value.
       if: steps.build.outcome == 'success'
-      # As of 21 October 2025, this repo doesn't tag releases, so this commit
+      # As of 12 February 2026, this repo doesn't tag releases, so this commit
       # hash is just the tip of master.
-      uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@1242ccb5b6352601e73c00f189ac2ae397242264
+      uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@f277aafb36f358582fdb24a41a9a52f2e097a2fd
       with:
         oss-fuzz-project-name: 'tailscale'
         fuzz-seconds: 150
