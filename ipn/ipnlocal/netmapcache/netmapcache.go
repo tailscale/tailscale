@@ -27,6 +27,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
+	"tailscale.com/wgengine/filter"
 )
 
 var (
@@ -182,13 +183,14 @@ func (s FileStore) Remove(ctx context.Context, key string) error {
 type cacheKey string
 
 const (
-	selfKey       cacheKey = "self"
-	miscKey       cacheKey = "msic"
-	dnsKey        cacheKey = "dns"
-	derpMapKey    cacheKey = "derpmap"
-	peerKeyPrefix cacheKey = "peer-" // + stable ID
-	userKeyPrefix cacheKey = "user-" // + profile ID
-	sshPolicyKey  cacheKey = "ssh"
+	selfKey         cacheKey = "self"
+	miscKey         cacheKey = "msic"
+	dnsKey          cacheKey = "dns"
+	derpMapKey      cacheKey = "derpmap"
+	peerKeyPrefix   cacheKey = "peer-" // + stable ID
+	userKeyPrefix   cacheKey = "user-" // + profile ID
+	sshPolicyKey    cacheKey = "ssh"
+	packetFilterKey cacheKey = "filter"
 )
 
 // Store records nm in the cache, replacing any previously-cached values.
@@ -225,8 +227,8 @@ func (c *Cache) Store(ctx context.Context, nm *netmap.NetworkMap) error {
 		// load, and do not need to be stored separately.
 	}
 	for _, p := range nm.Peers {
-		key := fmt.Sprintf("%s%s", peerKeyPrefix, p.StableID())
-		if err := c.writeJSON(ctx, cacheKey(key), netmapNode{Node: &p}); err != nil {
+		key := peerKeyPrefix + cacheKey(p.StableID())
+		if err := c.writeJSON(ctx, key, netmapNode{Node: &p}); err != nil {
 			return err
 		}
 	}
@@ -235,6 +237,9 @@ func (c *Cache) Store(ctx context.Context, nm *netmap.NetworkMap) error {
 		if err := c.writeJSON(ctx, cacheKey(key), netmapUserProfile{UserProfile: &u}); err != nil {
 			return err
 		}
+	}
+	if err := c.writeJSON(ctx, packetFilterKey, netmapPacketFilter{Rules: &nm.PacketFilterRules}); err != nil {
+		return err
 	}
 
 	if buildfeatures.HasSSH && nm.SSHPolicy != nil {
@@ -322,6 +327,15 @@ func (c *Cache) Load(ctx context.Context) (*netmap.NetworkMap, error) {
 	}
 	if err := c.readJSON(ctx, sshPolicyKey, &netmapSSH{SSHPolicy: &nm.SSHPolicy}); err != nil {
 		return nil, err
+	}
+	if err := c.readJSON(ctx, packetFilterKey, &netmapPacketFilter{Rules: &nm.PacketFilterRules}); err != nil {
+		return nil, err
+	} else if r := nm.PacketFilterRules; r.Len() != 0 {
+		// Reconstitute packet match expressions from the filter rules,
+		nm.PacketFilter, err = filter.MatchesFromFilterRules(r.AsSlice())
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &nm, nil
