@@ -192,9 +192,9 @@ func (srv *server) OnPolicyChange() {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 	for c := range srv.activeConns {
-		if c.info == nil {
-			// c.info is nil when the connection hasn't been authenticated yet.
-			// In that case, the connection will be terminated when it is.
+		if !c.authCompleted.Load() {
+			// The connection hasn't completed authentication yet.
+			// In that case, the connection will be terminated when it does.
 			continue
 		}
 		go c.checkStillValid()
@@ -236,13 +236,25 @@ type conn struct {
 	// Banners cannot be sent after auth completes.
 	spac gossh.ServerPreAuthConn
 
+	// The following fields are set during clientAuth and are used for policy
+	// evaluation and session management. They are immutable after clientAuth
+	// completes. They must not be read from other goroutines until
+	// authCompleted is set to true.
+
 	action0     *tailcfg.SSHAction // set by clientAuth
 	finalAction *tailcfg.SSHAction // set by clientAuth
 
-	info         *sshConnInfo // set by setInfo
+	info         *sshConnInfo // set by setInfo (during clientAuth)
 	localUser    *userMeta    // set by clientAuth
 	userGroupIDs []string     // set by clientAuth
 	acceptEnv    []string
+
+	// authCompleted is set to true after clientAuth has finished writing
+	// all authentication state fields (info, localUser, action0,
+	// finalAction, userGroupIDs, acceptEnv). It provides a memory
+	// barrier so that concurrent readers (e.g. OnPolicyChange) see
+	// fully-initialized values.
+	authCompleted atomic.Bool
 
 	// mu protects the following fields.
 	//
@@ -369,6 +381,7 @@ func (c *conn) clientAuth(cm gossh.ConnMetadata) (perms *gossh.Permissions, retE
 				}
 			}
 			c.finalAction = action
+			c.authCompleted.Store(true)
 			return &gossh.Permissions{}, nil
 		case action.Reject:
 			metricTerminalReject.Add(1)
