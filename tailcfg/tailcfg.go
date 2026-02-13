@@ -178,7 +178,8 @@ type CapabilityVersion int
 //   - 129: 2025-10-04: Fixed sleep/wake deadlock in magicsock when using peer relay (PR #17449)
 //   - 130: 2025-10-06: client can send key.HardwareAttestationPublic and key.HardwareAttestationKeySignature in MapRequest
 //   - 131: 2025-11-25: client respects [NodeAttrDefaultAutoUpdate]
-const CurrentCapabilityVersion CapabilityVersion = 131
+//   - 132: 2025-10-28: client is able to use NodeAttrLogUploadAuth when uploading logs, allow empty Node.DataPlaneAuditLogID, and disable embedded node info
+const CurrentCapabilityVersion CapabilityVersion = 132
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -466,6 +467,8 @@ type Node struct {
 	ComputedNameWithHost    string `json:",omitzero"` // either "ComputedName" or "ComputedName (computedHostIfDifferent)", if computedHostIfDifferent is set
 
 	// DataPlaneAuditLogID is the per-node logtail ID used for data plane audit logging.
+	// If empty, but [MapResponse.DomainDataPlaneAuditLogID] is non-empty,
+	// then logs are only uploaded under the domain-specific log ID.
 	DataPlaneAuditLogID string `json:",omitzero"`
 
 	// Expired is whether this node's key has expired. Control may send
@@ -2601,6 +2604,13 @@ const (
 
 	// NodeAttrLogExitFlows enables exit node destinations in network flow logs.
 	NodeAttrLogExitFlows NodeCapability = "log-exit-flows"
+
+	// NodeAttrExcludeNodeInfoInFlows disables embedded node information in network flow logs.
+	NodeAttrExcludeNodeInfoInFlows NodeCapability = "exclude-node-info-in-flows"
+
+	// NodeAttrLogUploadAuth specifies an the HTTP Authorization header
+	// to use when uploading logs.
+	NodeAttrLogUploadAuth NodeCapability = "log-upload-auth"
 
 	// NodeAttrAutoExitNode permits the automatic exit nodes feature.
 	NodeAttrAutoExitNode NodeCapability = "auto-exit-node"
