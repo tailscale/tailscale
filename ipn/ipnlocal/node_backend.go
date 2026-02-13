@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 
 	"go4.org/netipx"
-	"tailscale.com/appc"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
@@ -104,6 +103,14 @@ type nodeBackend struct {
 	// nodeByAddr maps nodes' own addresses (excluding subnet routes) to node IDs.
 	// It is mutated in place (with mu held) and must not escape the [nodeBackend].
 	nodeByAddr map[netip.Addr]tailcfg.NodeID
+
+	// pickSplitDNSPeers, if set, returns split DNS resolver peers for
+	// specific domains. It is set by LocalBackend based on extension hooks.
+	pickSplitDNSPeers func(
+		selfHasCap func(tailcfg.NodeCapability) bool,
+		self tailcfg.NodeView,
+		peers map[tailcfg.NodeID]tailcfg.NodeView,
+	) map[string][]tailcfg.NodeView
 }
 
 func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *nodeBackend {
@@ -550,7 +557,7 @@ func (nb *nodeBackend) setFilter(f *filter.Filter) {
 func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, versionOS string) *dns.Config {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	return dnsConfigForNetmap(nb.netMap, nb.peers, prefs, selfExpired, nb.logf, versionOS)
+	return dnsConfigForNetmap(nb.netMap, nb.peers, prefs, selfExpired, nb.logf, versionOS, nb.pickSplitDNSPeers)
 }
 
 func (nb *nodeBackend) exitNodeCanProxyDNS(exitNodeID tailcfg.StableNodeID) (dohURL string, ok bool) {
@@ -657,7 +664,7 @@ func useWithExitNodeRoutes(routes map[string][]*dnstype.Resolver) map[string][]*
 //
 // The versionOS is a Tailscale-style version ("iOS", "macOS") and not
 // a runtime.GOOS.
-func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
+func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string, pickSplitDNSPeers func(func(tailcfg.NodeCapability) bool, tailcfg.NodeView, map[tailcfg.NodeID]tailcfg.NodeView) map[string][]tailcfg.NodeView) *dns.Config {
 	if nm == nil {
 		return nil
 	}
@@ -840,7 +847,10 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	addSplitDNSRoutes(nm.DNS.Routes)
 
 	// Add split DNS routes for conn25
-	conn25DNSTargets := appc.PickSplitDNSPeers(nm.HasCap, nm.SelfNode, peers)
+	var conn25DNSTargets map[string][]tailcfg.NodeView
+	if pickSplitDNSPeers != nil {
+		conn25DNSTargets = pickSplitDNSPeers(nm.HasCap, nm.SelfNode, peers)
+	}
 	if conn25DNSTargets != nil {
 		var m map[string][]*dnstype.Resolver
 		for domain, candidateSplitDNSPeers := range conn25DNSTargets {

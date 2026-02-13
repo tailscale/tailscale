@@ -1377,6 +1377,9 @@ func (b *testBackend) SendNotify(ipn.Notify)           { panic("not implemented"
 func (b *testBackend) NodeBackend() ipnext.NodeBackend { panic("not implemented") }
 func (b *testBackend) TailscaleVarRoot() string        { panic("not implemented") }
 
+func (b *testBackend) AdvertiseRoute(routes ...netip.Prefix) error   { return nil }
+func (b *testBackend) UnadvertiseRoute(routes ...netip.Prefix) error { return nil }
+
 func (b *testBackend) SwitchToBestProfile(reason string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

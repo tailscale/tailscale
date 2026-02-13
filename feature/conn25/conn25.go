@@ -56,6 +56,7 @@ func (e *extension) Name() string {
 
 // Init implements [ipnext.Extension].
 func (e *extension) Init(host ipnext.Host) error {
+	host.Hooks().SplitDNSResolverPeers.Set(appc.PickSplitDNSPeers)
 	return nil
 }
 

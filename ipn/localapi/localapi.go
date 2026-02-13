@@ -40,7 +40,6 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
-	"tailscale.com/types/appctype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -92,9 +91,6 @@ var handler = map[string]LocalAPIHandler{
 }
 
 func init() {
-	if buildfeatures.HasAppConnectors {
-		Register("appc-route-info", (*Handler).serveGetAppcRouteInfo)
-	}
 	if buildfeatures.HasAdvertiseRoutes {
 		Register("check-ip-forwarding", (*Handler).serveCheckIPForwarding)
 		Register("check-udp-gro-forwarding", (*Handler).serveCheckUDPGROForwarding)
@@ -1003,8 +999,8 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if buildfeatures.HasAppConnectors {
-			if err := h.b.MaybeClearAppConnector(mp); err != nil {
+		if mp.AdvertiseRoutesSet {
+			if err := h.b.MaybeClearAutoRoutes(); err != nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusInternalServerError)
 				json.NewEncoder(w).Encode(resJSON{Error: err.Error()})
@@ -1738,24 +1734,3 @@ func (h *Handler) serveShutdown(w http.ResponseWriter, r *http.Request) {
 	eventbus.Publish[Shutdown](ec).Publish(Shutdown{})
 }
 
-func (h *Handler) serveGetAppcRouteInfo(w http.ResponseWriter, r *http.Request) {
-	if !buildfeatures.HasAppConnectors {
-		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
-		return
-	}
-	if r.Method != httpm.GET {
-		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	res, err := h.b.ReadRouteInfo()
-	if err != nil {
-		if errors.Is(err, ipn.ErrStateNotExist) {
-			res = &appctype.RouteInfo{}
-		} else {
-			WriteErrorJSON(w, err)
-			return
-		}
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
-}
