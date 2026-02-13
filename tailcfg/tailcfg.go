@@ -178,7 +178,8 @@ type CapabilityVersion int
 //   - 129: 2025-10-04: Fixed sleep/wake deadlock in magicsock when using peer relay (PR #17449)
 //   - 130: 2025-10-06: client can send key.HardwareAttestationPublic and key.HardwareAttestationKeySignature in MapRequest
 //   - 131: 2025-11-25: client respects [NodeAttrDefaultAutoUpdate]
-const CurrentCapabilityVersion CapabilityVersion = 131
+//   - 132: 2026-02-13: client respects [NodeAttrDisableHostsFileUpdates]
+const CurrentCapabilityVersion CapabilityVersion = 132
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2740,6 +2741,13 @@ const (
 	//
 	// The value of the key in [NodeCapMap] is a JSON boolean.
 	NodeAttrDefaultAutoUpdate NodeCapability = "default-auto-update"
+
+	// NodeAttrDisableHostsFileUpdates indicates that the node's DNS manager should
+	// not create hosts file entries when it normally would, such as when we're not
+	// the primary resolver on Windows or when the host is domain-joined and its
+	// primary domain takes precedence over MagicDNS. As of 2026-02-12, it is only
+	// used on Windows.
+	NodeAttrDisableHostsFileUpdates NodeCapability = "disable-hosts-file-updates"
 )
 
 // SetDNSRequest is a request to add a DNS record.
