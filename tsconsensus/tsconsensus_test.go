@@ -642,7 +642,7 @@ func TestOnlyTaggedPeersCanBeDialed(t *testing.T) {
 
 	// make a StreamLayer for ps[0]
 	ts := ps[0].ts
-	auth := newAuthorization(ts, clusterTag)
+	auth := newAuthorizationForTest(ts, clusterTag)
 
 	port := 19841
 	lns := make([]net.Listener, 3)
@@ -692,10 +692,12 @@ func TestOnlyTaggedPeersCanBeDialed(t *testing.T) {
 	conn.Close()
 
 	_, err = sl.Dial(a2, 2*time.Second)
+	if err == nil {
+		t.Fatal("expected dial error to untagged node, got none")
+	}
 	if err.Error() != "dial: peer is not allowed" {
 		t.Fatalf("expected dial: peer is not allowed, got: %v", err)
 	}
-
 }
 
 func TestOnlyTaggedPeersCanJoin(t *testing.T) {
