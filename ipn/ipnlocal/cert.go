@@ -660,9 +660,9 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 			return nil, ctx.Err()
 		}
 		if oe, ok := err.(*acme.OrderError); ok {
-			logf("acme: WaitOrder: OrderError status %q", oe.Status)
+			logf("acme: WaitOrder: OrderError status %q, Order URL %q", oe.Status, orderURI)
 		} else {
-			logf("acme: WaitOrder error: %v", err)
+			logf("acme: WaitOrder error: %v, Order URL %q", err, orderURI)
 		}
 		return nil, err
 	}
