@@ -75,14 +75,15 @@ func handleC2NPostureIdentityGet(b *ipnlocal.LocalBackend, w http.ResponseWriter
 			e.logf("c2n: GetSerialNumbers returned error: %v", err)
 		}
 
-		// TODO(tailscale/corp#21371, 2024-07-10): once this has landed in a stable release
-		// and looks good in client metrics, remove this parameter and always report MAC
-		// addresses.
-		if r.FormValue("hwaddrs") == "true" {
-			res.IfaceHardwareAddrs, err = e.getHardwareAddrs()
-			if err != nil {
-				e.logf("c2n: GetHardwareAddrs returned error: %v", err)
-			}
+		// Hardware addresses are always reported when posture checking
+		// is enabled. Previously, these were only reported when the
+		// control plane sent "?hwaddrs=true" (set when the CrowdStrike
+		// integration was enabled, but not by default), but this was
+		// always the intended steady-state behavior. The control plane
+		// may still send the hwaddrs parameter; it is now ignored.
+		res.IfaceHardwareAddrs, err = e.getHardwareAddrs()
+		if err != nil {
+			e.logf("c2n: GetHardwareAddrs returned error: %v", err)
 		}
 	} else {
 		res.PostureDisabled = true
