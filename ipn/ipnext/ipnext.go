@@ -21,6 +21,7 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/mapx"
+	"tailscale.com/wgengine/filter"
 )
 
 // Extension augments LocalBackend with additional functionality.
@@ -377,6 +378,9 @@ type Hooks struct {
 	// ShouldUploadServices reports whether this node should include services
 	// in Hostinfo from the portlist extension.
 	ShouldUploadServices feature.Hook[func() bool]
+
+	FilterIngressPacketMatch feature.Hooks[filter.PacketMatch]
+	FilterAllowLinkLocal     feature.Hook[filter.PacketMatch]
 }
 
 // NodeBackend is an interface to query the current node and its peers.
