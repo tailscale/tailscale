@@ -11,6 +11,7 @@ import (
 
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/mak"
 )
 
 // State contains the health status of the backend, and is
@@ -128,11 +129,7 @@ func (t *Tracker) CurrentState() *State {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if t.warnableVal == nil || len(t.warnableVal) == 0 {
-		return &State{}
-	}
-
-	wm := map[WarnableCode]UnhealthyState{}
+	var wm map[WarnableCode]UnhealthyState
 
 	for w, ws := range t.warnableVal {
 		if !w.IsVisible(ws, t.now) {
@@ -145,7 +142,7 @@ func (t *Tracker) CurrentState() *State {
 			continue
 		}
 		state := w.unhealthyState(ws)
-		wm[w.Code] = state.withETag()
+		mak.Set(&wm, w.Code, state.withETag())
 	}
 
 	for id, msg := range t.lastNotifiedControlMessages {
@@ -165,7 +162,7 @@ func (t *Tracker) CurrentState() *State {
 			}
 		}
 
-		wm[state.WarnableCode] = state.withETag()
+		mak.Set(&wm, state.WarnableCode, state.withETag())
 	}
 
 	return &State{
