@@ -34,6 +34,7 @@ import (
 	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/syspolicy/ptype"
 	"tailscale.com/util/winutil"
+	"tailscale.com/util/winutil/winenv"
 )
 
 const (
@@ -354,6 +355,10 @@ func (m *windowsManager) disableLocalDNSOverrideViaNRPT() bool {
 	return m.knobs != nil && m.knobs.DisableLocalDNSOverrideViaNRPT.Load()
 }
 
+func (m *windowsManager) disableHostsFileUpdates() bool {
+	return m.knobs != nil && m.knobs.DisableHostsFileUpdates.Load()
+}
+
 func (m *windowsManager) SetDNS(cfg OSConfig) error {
 	// We can configure Windows DNS in one of two ways:
 	//
@@ -400,7 +405,7 @@ func (m *windowsManager) SetDNS(cfg OSConfig) error {
 			return err
 		}
 		var hosts []*HostEntry
-		if winenv.IsDomainJoined() {
+		if !m.disableHostsFileUpdates() && winenv.IsDomainJoined() {
 			// On domain-joined Windows devices the primary search domain (the one the device is joined to)
 			// always takes precedence over other search domains. This breaks MagicDNS when we are the primary
 			// resolver on the device (see #18712). To work around this Windows behavior, we should write MagicDNS
@@ -429,12 +434,14 @@ func (m *windowsManager) SetDNS(cfg OSConfig) error {
 			return err
 		}
 
-		// As we are not the primary resolver in this setup, we need to
-		// explicitly set some single name hosts to ensure that we can resolve
-		// them quickly and get around the 2.3s delay that otherwise occurs due
-		// to multicast timeouts.
-		if err := m.setHosts(cfg.Hosts); err != nil {
-			return err
+		if !m.disableHostsFileUpdates() {
+			// As we are not the primary resolver in this setup, we need to
+			// explicitly set some single name hosts to ensure that we can resolve
+			// them quickly and get around the 2.3s delay that otherwise occurs due
+			// to multicast timeouts.
+			if err := m.setHosts(cfg.Hosts); err != nil {
+				return err
+			}
 		}
 	}
 
