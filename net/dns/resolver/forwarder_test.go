@@ -552,9 +552,19 @@ func makeTestRequest(tb testing.TB, domain string, queryType dns.Type, ednsSize 
 func makeTestResponse(tb testing.TB, domain string, code dns.RCode, addrs ...netip.Addr) []byte {
 	tb.Helper()
 	name := dns.MustNewName(domain)
+
+	// The correct value for the Authoritative bit is complicated.
+	// However, in all cases where a SERVFAIL is returned, it should be false.
+	// Since the servfailResponse() function correctly sets this bit to false,
+	// this test needs to also return false for RCodeServerFailure.
+	authoritative := true
+	if code == dns.RCodeServerFailure {
+		authoritative = false
+	}
+
 	builder := dns.NewBuilder(nil, dns.Header{
 		Response:      true,
-		Authoritative: true,
+		Authoritative: authoritative,
 		RCode:         code,
 	})
 	builder.StartQuestions()
