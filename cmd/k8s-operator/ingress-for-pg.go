@@ -655,6 +655,7 @@ func (r *HAIngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
 // validateIngress validates that the Ingress is properly configured.
 // Currently validates:
 // - Any tags provided via tailscale.com/tags annotation are valid Tailscale ACL tags
+// - Any accept-app-caps provided via tailscale.com/accept-app-caps annotation are valid capability names
 // - The derived hostname is a valid DNS label
 // - The referenced ProxyGroup exists and is of type 'ingress'
 // - Ingress' TLS block is invalid
@@ -665,6 +666,16 @@ func (r *HAIngressReconciler) validateIngress(ctx context.Context, ing *networki
 	violations := tagViolations(ing)
 	if len(violations) > 0 {
 		errs = append(errs, fmt.Errorf("Ingress contains invalid tags: %v", strings.Join(violations, ",")))
+	}
+
+	// Validate accept-app-caps if present
+	if raw, ok := ing.Annotations[AnnotationAcceptAppCaps]; ok && raw != "" {
+		for _, p := range strings.Split(raw, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" && !validAppCap.MatchString(p) {
+				errs = append(errs, fmt.Errorf("invalid app capability %q", p))
+			}
+		}
 	}
 
 	// Validate TLS configuration
