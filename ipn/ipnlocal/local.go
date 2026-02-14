@@ -1583,6 +1583,11 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			return
 		}
 		b.logf("Received error: %v", st.Err)
+		errMsg := st.Err.Error()
+		if strings.Contains(errMsg, "404") && strings.Contains(errMsg, "node not found") {
+			reason := "This node has been removed from the tailnet"
+			b.sendLocked(ipn.Notify{NodeRemoved: &reason})
+		}
 		var uerr controlclient.UserVisibleError
 		if errors.As(st.Err, &uerr) {
 			s := uerr.UserVisibleError()

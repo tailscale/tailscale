@@ -157,6 +157,12 @@ type Notify struct {
 	// any changes to the user in the UI.
 	Health *health.State `json:",omitzero"`
 
+	// NodeRemoved, if non-nil, indicates that this node has been removed
+	// from the tailnet by the control plane. When set, the value is a
+	// message describing why the node was removed (e.g., "node not found",
+	// "node deleted by admin", etc.)
+	NodeRemoved *string `json:",omitzero"`
+
 	// SuggestedExitNode, if non-nil, is the node that the backend has determined to
 	// be the best exit node for the current network conditions.
 	SuggestedExitNode *tailcfg.StableNodeID `json:",omitzero"`
@@ -202,6 +208,9 @@ func (n Notify) String() string {
 	}
 	if n.SuggestedExitNode != nil {
 		fmt.Fprintf(&sb, "SuggestedExitNode=%v ", *n.SuggestedExitNode)
+	}
+	if n.NodeRemoved != nil {
+		fmt.Fprintf(&sb, "nodeRemoved=%q ", *n.NodeRemoved)
 	}
 
 	s := sb.String()
