@@ -17,12 +17,20 @@ import (
 	"tailscale.com/util/set"
 )
 
+// defaultStatusCacheTimeout is the duration after which cached status will be
+// disregarded. See tailscaleStatusGetter.cacheTimeout.
+const defaultStatusCacheTimeout = time.Second
+
 type statusGetter interface {
 	getStatus(context.Context) (*ipnstate.Status, error)
 }
 
 type tailscaleStatusGetter struct {
 	ts *tsnet.Server
+
+	// cacheTimeout is used to determine when the cached status should be
+	// disregarded and a new status fetched. Zero means ignore the cache.
+	cacheTimeout time.Duration
 
 	mu             sync.Mutex // protects the following
 	lastStatus     *ipnstate.Status
@@ -40,7 +48,7 @@ func (sg *tailscaleStatusGetter) fetchStatus(ctx context.Context) (*ipnstate.Sta
 func (sg *tailscaleStatusGetter) getStatus(ctx context.Context) (*ipnstate.Status, error) {
 	sg.mu.Lock()
 	defer sg.mu.Unlock()
-	if sg.lastStatus != nil && time.Since(sg.lastStatusTime) < 1*time.Second {
+	if sg.lastStatus != nil && time.Since(sg.lastStatusTime) < sg.cacheTimeout {
 		return sg.lastStatus, nil
 	}
 	status, err := sg.fetchStatus(ctx)
@@ -61,12 +69,21 @@ type authorization struct {
 }
 
 func newAuthorization(ts *tsnet.Server, tag string) *authorization {
+	return newAuthorizationWithCacheTimeout(ts, tag, defaultStatusCacheTimeout)
+}
+
+func newAuthorizationWithCacheTimeout(ts *tsnet.Server, tag string, cacheTimeout time.Duration) *authorization {
 	return &authorization{
 		sg: &tailscaleStatusGetter{
-			ts: ts,
+			ts:           ts,
+			cacheTimeout: cacheTimeout,
 		},
 		tag: tag,
 	}
+}
+
+func newAuthorizationForTest(ts *tsnet.Server, tag string) *authorization {
+	return newAuthorizationWithCacheTimeout(ts, tag, 0)
 }
 
 func (a *authorization) Refresh(ctx context.Context) error {
