@@ -151,3 +151,22 @@ func TestSetDefaultsMatchUpDefaults(t *testing.T) {
 		}
 	})
 }
+
+// TestSetLinuxPacketMarksFlags verifies that the Linux packet marks flags
+// are properly defined in the set command.
+func TestSetLinuxPacketMarksFlags(t *testing.T) {
+	// Verify all three Linux packet marks flags exist
+	flags := []string{"linux-fwmark-mask", "linux-subnet-route-mark", "linux-bypass-mark"}
+	for _, flagName := range flags {
+		if setFlagSet.Lookup(flagName) == nil {
+			t.Errorf("Flag --%s should be defined in set command", flagName)
+		}
+	}
+
+	// Verify they're treated as prefless flags
+	for _, flagName := range flags {
+		if !preflessFlag(flagName) {
+			t.Errorf("Flag --%s should be in preflessFlag list", flagName)
+		}
+	}
+}

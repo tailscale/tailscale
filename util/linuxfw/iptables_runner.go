@@ -43,6 +43,8 @@ type iptablesRunner struct {
 	v6Available       bool
 	v6NATAvailable    bool
 	v6FilterAvailable bool
+
+	marks PacketMarks
 }
 
 func checkIP6TablesExists() error {
@@ -246,11 +248,11 @@ func (i *iptablesRunner) addBase4(tunname string) error {
 	// POSTROUTING. So instead, we match on the inbound interface in
 	// filter/FORWARD, and set a packet mark that nat/POSTROUTING can
 	// use to effectively run that same test again.
-	args = []string{"-i", tunname, "-j", "MARK", "--set-mark", subnetRouteMark + "/" + fwmarkMask}
+	args = []string{"-i", tunname, "-j", "MARK", "--set-mark", i.marks.SubnetRouteMarkString() + "/" + i.marks.FwmarkMaskString()}
 	if err := i.ipt4.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
 	}
-	args = []string{"-m", "mark", "--mark", subnetRouteMark + "/" + fwmarkMask, "-j", "ACCEPT"}
+	args = []string{"-m", "mark", "--mark", i.marks.SubnetRouteMarkString() + "/" + i.marks.FwmarkMaskString(), "-j", "ACCEPT"}
 	if err := i.ipt4.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
 	}
@@ -352,11 +354,11 @@ func (i *iptablesRunner) addBase6(tunname string) error {
 		return fmt.Errorf("adding %v in v6/filter/ts-input: %w", args, err)
 	}
 
-	args = []string{"-i", tunname, "-j", "MARK", "--set-mark", subnetRouteMark + "/" + fwmarkMask}
+	args = []string{"-i", tunname, "-j", "MARK", "--set-mark", i.marks.SubnetRouteMarkString() + "/" + i.marks.FwmarkMaskString()}
 	if err := i.ipt6.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
 	}
-	args = []string{"-m", "mark", "--mark", subnetRouteMark + "/" + fwmarkMask, "-j", "ACCEPT"}
+	args = []string{"-m", "mark", "--mark", i.marks.SubnetRouteMarkString() + "/" + i.marks.FwmarkMaskString(), "-j", "ACCEPT"}
 	if err := i.ipt6.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
 	}
@@ -445,7 +447,7 @@ func (i *iptablesRunner) DelHooks(logf logger.Logf) error {
 // AddSNATRule adds a netfilter rule to SNAT traffic destined for
 // local subnets.
 func (i *iptablesRunner) AddSNATRule() error {
-	args := []string{"-m", "mark", "--mark", subnetRouteMark + "/" + fwmarkMask, "-j", "MASQUERADE"}
+	args := []string{"-m", "mark", "--mark", i.marks.SubnetRouteMarkString() + "/" + i.marks.FwmarkMaskString(), "-j", "MASQUERADE"}
 	for _, ipt := range i.getNATTables() {
 		if err := ipt.Append("nat", "ts-postrouting", args...); err != nil {
 			return fmt.Errorf("adding %v in nat/ts-postrouting: %w", args, err)
@@ -457,7 +459,7 @@ func (i *iptablesRunner) AddSNATRule() error {
 // DelSNATRule removes the netfilter rule to SNAT traffic destined for
 // local subnets. An error is returned if the rule does not exist.
 func (i *iptablesRunner) DelSNATRule() error {
-	args := []string{"-m", "mark", "--mark", subnetRouteMark + "/" + fwmarkMask, "-j", "MASQUERADE"}
+	args := []string{"-m", "mark", "--mark", i.marks.SubnetRouteMarkString() + "/" + i.marks.FwmarkMaskString(), "-j", "MASQUERADE"}
 	for _, ipt := range i.getNATTables() {
 		if err := ipt.Delete("nat", "ts-postrouting", args...); err != nil {
 			return fmt.Errorf("deleting %v in nat/ts-postrouting: %w", args, err)
@@ -582,6 +584,11 @@ func (i *iptablesRunner) DelMagicsockPortRule(port uint16, network string) error
 	}
 
 	return nil
+}
+
+// SetPacketMarks updates the packet marks used by the netfilter runner.
+func (i *iptablesRunner) SetPacketMarks(marks PacketMarks) {
+	i.marks = marks
 }
 
 // delTSHook deletes hook in a chain that jumps to a ts-chain. If the hook does not

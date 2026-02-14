@@ -5543,6 +5543,15 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 		NetfilterKind:     netfilterKind,
 	}
 
+	// Add Linux packet marks if configured
+	if pm, ok := prefs.LinuxPacketMarks().GetOk(); ok {
+		rs.LinuxPacketMarks = &router.LinuxPacketMarks{
+			FwmarkMask:      pm.FwmarkMask,
+			SubnetRouteMark: pm.SubnetRouteMark,
+			BypassMark:      pm.BypassMark,
+		}
+	}
+
 	if buildfeatures.HasSynology && distro.Get() == distro.Synology {
 		// Issue 1995: we don't use iptables on Synology.
 		rs.NetfilterMode = preftype.NetfilterOff

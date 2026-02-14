@@ -79,17 +79,83 @@ const (
 	bypassMarkNum      = tsconst.LinuxBypassMarkNum
 )
 
+// PacketMarks contains the packet mark configuration to use for
+// firewall rules and routing. It provides methods to format marks
+// for both iptables (string format) and nftables (byte arrays).
+type PacketMarks struct {
+	FwmarkMask      uint32
+	SubnetRouteMark uint32
+	BypassMark      uint32
+}
+
+// DefaultPacketMarks returns the default packet marks from tsconst.
+func DefaultPacketMarks() PacketMarks {
+	return PacketMarks{
+		FwmarkMask:      tsconst.LinuxFwmarkMaskNum,
+		SubnetRouteMark: tsconst.LinuxSubnetRouteMarkNum,
+		BypassMark:      tsconst.LinuxBypassMarkNum,
+	}
+}
+
+// FwmarkMaskString returns the fwmark mask as an iptables-compatible string.
+func (m PacketMarks) FwmarkMaskString() string {
+	return fmt.Sprintf("0x%x", m.FwmarkMask)
+}
+
+// SubnetRouteMarkString returns the subnet route mark as an iptables-compatible string.
+func (m PacketMarks) SubnetRouteMarkString() string {
+	return fmt.Sprintf("0x%x", m.SubnetRouteMark)
+}
+
+// BypassMarkString returns the bypass mark as an iptables-compatible string.
+func (m PacketMarks) BypassMarkString() string {
+	return fmt.Sprintf("0x%x", m.BypassMark)
+}
+
+// FwmarkMaskBytes returns the fwmark mask as a big-endian byte array.
+func (m PacketMarks) FwmarkMaskBytes() []byte {
+	return uint32ToBytes(m.FwmarkMask)
+}
+
+// FwmarkMaskNegBytes returns the negation of the fwmark mask as a big-endian byte array.
+func (m PacketMarks) FwmarkMaskNegBytes() []byte {
+	return uint32ToBytes(^m.FwmarkMask)
+}
+
+// SubnetRouteMarkBytes returns the subnet route mark as a big-endian byte array.
+func (m PacketMarks) SubnetRouteMarkBytes() []byte {
+	return uint32ToBytes(m.SubnetRouteMark)
+}
+
+// BypassMarkBytes returns the bypass mark as a big-endian byte array.
+func (m PacketMarks) BypassMarkBytes() []byte {
+	return uint32ToBytes(m.BypassMark)
+}
+
+// uint32ToBytes converts a uint32 to a 4-byte big-endian array.
+func uint32ToBytes(v uint32) []byte {
+	return []byte{
+		byte(v >> 24),
+		byte(v >> 16),
+		byte(v >> 8),
+		byte(v),
+	}
+}
+
 // getTailscaleFwmarkMaskNeg returns the negation of TailscaleFwmarkMask in bytes.
+// Deprecated: Use PacketMarks.FwmarkMaskNegBytes instead.
 func getTailscaleFwmarkMaskNeg() []byte {
 	return []byte{0xff, 0x00, 0xff, 0xff}
 }
 
 // getTailscaleFwmarkMask returns the TailscaleFwmarkMask in bytes.
+// Deprecated: Use PacketMarks.FwmarkMaskBytes instead.
 func getTailscaleFwmarkMask() []byte {
 	return []byte{0x00, 0xff, 0x00, 0x00}
 }
 
 // getTailscaleSubnetRouteMark returns the TailscaleSubnetRouteMark in bytes.
+// Deprecated: Use PacketMarks.SubnetRouteMarkBytes instead.
 func getTailscaleSubnetRouteMark() []byte {
 	return []byte{0x00, 0x04, 0x00, 0x00}
 }

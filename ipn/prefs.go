@@ -276,6 +276,13 @@ type Prefs struct {
 	// Linux-only.
 	NetfilterKind string
 
+	// LinuxPacketMarks configures Linux packet mark values used by Tailscale
+	// for subnet routing and bypass routing. When nil, defaults from tsconst
+	// are used.
+	//
+	// Linux-only.
+	LinuxPacketMarks *preftype.LinuxPacketMarks `json:",omitempty"`
+
 	// DriveShares are the configured DriveShares, stored in increasing order
 	// by name.
 	DriveShares []*drive.Share
@@ -383,6 +390,7 @@ type MaskedPrefs struct {
 	AppConnectorSet               bool                `json:",omitempty"`
 	PostureCheckingSet            bool                `json:",omitempty"`
 	NetfilterKindSet              bool                `json:",omitempty"`
+	LinuxPacketMarksSet           bool                `json:",omitempty"`
 	DriveSharesSet                bool                `json:",omitempty"`
 	RelayServerPortSet            bool                `json:",omitempty"`
 	RelayServerStaticEndpointsSet bool                `json:",omitzero"`
@@ -692,6 +700,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.PostureChecking == p2.PostureChecking &&
 		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
 		p.NetfilterKind == p2.NetfilterKind &&
+		p.LinuxPacketMarks.Equals(p2.LinuxPacketMarks) &&
 		compareUint16Ptrs(p.RelayServerPort, p2.RelayServerPort) &&
 		slices.Equal(p.RelayServerStaticEndpoints, p2.RelayServerStaticEndpoints)
 }
