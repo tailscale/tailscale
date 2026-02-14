@@ -98,8 +98,14 @@ func newFilter(logf logger.Logf) *Filter {
 	localNetsSet, _ := localNets.IPSet()
 	logBSet, _ := logB.IPSet()
 
-	return New(matches, nil, localNetsSet, logBSet, nil, logf)
+	return New(matches, nil, localNetsSet, logBSet, nil, nil, logf)
 }
+
+// testMatchAllConn25 implements Conn25Matcher by allowing all packets
+// for tests.
+type testMatchAllConn25 struct{}
+
+func (_ testMatchAllConn25) MatchPacket(_ packet.Parsed) bool { return true }
 
 func TestFilter(t *testing.T) {
 	filt := newFilter(t.Logf)
@@ -197,6 +203,60 @@ func TestFilter(t *testing.T) {
 		}
 		// Update UDP state
 		_, _ = filt.runOut(&test.p)
+	}
+}
+
+func TestFilterForConnectors2025Packets(t *testing.T) {
+	filt := newFilter(t.Logf)
+
+	tests := []struct {
+		name       string
+		p          packet.Parsed
+		c25        Conn25Matcher
+		want       Response
+		wantReason string
+	}{
+		{
+			name:       "drop-non-local",
+			p:          parsed(ipproto.TCP, "100.100.1.2", "25.25.25.25", 1234, 8080),
+			want:       Drop,
+			wantReason: "destination not allowed",
+		},
+		{
+			name:       "drop-non-local-v6",
+			p:          parsed(ipproto.TCP, "fd7a:115c:a1e0::8c01:6807", "::ffff:1919:1919", 1234, 8080),
+			want:       Drop,
+			wantReason: "destination not allowed",
+		},
+		{
+			name:       "accept-non-local-conn25",
+			p:          parsed(ipproto.TCP, "100.100.1.2", "25.25.25.25", 1234, 8080),
+			c25:        testMatchAllConn25{},
+			want:       Accept,
+			wantReason: "tcp ok",
+		},
+		{
+			name:       "accept-non-local-v6-conn25",
+			p:          parsed(ipproto.TCP, "fd7a:115c:a1e0::8c01:6807", "::ffff:1919:1919", 1234, 8080),
+			c25:        testMatchAllConn25{},
+			want:       Accept,
+			wantReason: "tcp ok",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			aclFunc := filt.runIn4
+			if test.p.IPVersion == 6 {
+				aclFunc = filt.runIn6
+			}
+
+			filt.conn25Matcher = test.c25
+
+			if got, why := aclFunc(&test.p); test.want != got || test.wantReason != why {
+				t.Errorf("runIn got=%v want=%v why=%q packet:%v", got, test.want, why, test.p)
+			}
+		})
 	}
 }
 
@@ -383,22 +443,29 @@ func BenchmarkFilter(b *testing.B) {
 
 func TestPreFilter(t *testing.T) {
 	packets := []struct {
-		desc       string
-		want       Response
-		wantReason usermetric.DropReason
-		b          []byte
+		desc        string
+		allowConn25 bool
+		want        Response
+		wantReason  usermetric.DropReason
+		b           []byte
 	}{
-		{"empty", Accept, "", []byte{}},
-		{"short", Drop, usermetric.ReasonTooShort, []byte("short")},
-		{"short-junk", Drop, usermetric.ReasonTooShort, raw4default(ipproto.Unknown, 10)},
-		{"long-junk", Drop, usermetric.ReasonUnknownProtocol, raw4default(ipproto.Unknown, 21)},
-		{"fragment", Accept, "", raw4default(ipproto.Fragment, 40)},
-		{"tcp", noVerdict, "", raw4default(ipproto.TCP, 0)},
-		{"udp", noVerdict, "", raw4default(ipproto.UDP, 0)},
-		{"icmp", noVerdict, "", raw4default(ipproto.ICMPv4, 0)},
+		{"empty", false, Accept, "", []byte{}},
+		{"short", false, Drop, usermetric.ReasonTooShort, []byte("short")},
+		{"short-junk", false, Drop, usermetric.ReasonTooShort, raw4default(ipproto.Unknown, 10)},
+		{"long-junk", false, Drop, usermetric.ReasonUnknownProtocol, raw4default(ipproto.Unknown, 21)},
+		{"fragment", false, Accept, "", raw4default(ipproto.Fragment, 40)},
+		{"link-local-unicast", false, Drop, usermetric.ReasonLinkLocalUnicast, raw4(ipproto.TCP, "169.254.0.1", "169.254.0.2", 1234, 8080, 0)},
+		{"tcp", false, noVerdict, "", raw4default(ipproto.TCP, 0)},
+		{"udp", false, noVerdict, "", raw4default(ipproto.UDP, 0)},
+		{"icmp", false, noVerdict, "", raw4default(ipproto.ICMPv4, 0)},
+		{"connector-link-local-unicast-no-verdict", true, noVerdict, "", raw4(ipproto.TCP, "169.254.0.1", "169.254.0.2", 1234, 8080, 0)},
 	}
-	f := NewAllowNone(t.Logf, &netipx.IPSet{})
 	for _, testPacket := range packets {
+		f := NewAllowNone(t.Logf, &netipx.IPSet{})
+		if testPacket.allowConn25 {
+			f.conn25Matcher = testMatchAllConn25{}
+		}
+
 		p := &packet.Parsed{}
 		p.Decode(testPacket.b)
 		got, gotReason := f.pre(p, LogDrops|LogAccepts, in)
@@ -920,7 +987,7 @@ func TestMatchesMatchProtoAndIPsOnlyIfAllPorts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			matches := matches{tt.m}
-			got := matches.matchProtoAndIPsOnlyIfAllPorts(&tt.p)
+			got := matches.matchProtoAndIPsOnlyIfAllPorts(&tt.p, nil)
 			if got != tt.want {
 				t.Errorf("got = %v; want %v", got, tt.want)
 			}
@@ -961,7 +1028,7 @@ func TestPeerCaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	filt := New(mm, nil, nil, nil, nil, t.Logf)
+	filt := New(mm, nil, nil, nil, nil, nil, t.Logf)
 	tests := []struct {
 		name     string
 		src, dst string // IP
@@ -1094,7 +1161,7 @@ func benchmarkFile(b *testing.B, file string, opt benchOpt) {
 	logIPs.AddPrefix(tsaddr.CGNATRange())
 	logIPs.AddPrefix(tsaddr.TailscaleULARange())
 
-	f := New(matches, nil, must.Get(localNets.IPSet()), must.Get(logIPs.IPSet()), nil, logger.Discard)
+	f := New(matches, nil, must.Get(localNets.IPSet()), must.Get(logIPs.IPSet()), nil, nil, logger.Discard)
 	var srcIP, dstIP netip.Addr
 	if opt.v4 {
 		srcIP = netip.MustParseAddr("1.2.3.4")

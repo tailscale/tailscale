@@ -66,6 +66,20 @@ type Filter struct {
 	state *filterState
 
 	shieldsUp bool
+
+	// conn25Matcher matches packets for Connectors 2025 app connectors.
+	// See [Conn25Matcher].
+	conn25Matcher Conn25Matcher
+}
+
+// Conn25Matcher provides methods to check packets
+// against a Connectors 2025 app connector logic.
+// Valid traffic may not match traditional filter rules
+// because it contains a NATed "Transit IP".
+type Conn25Matcher interface {
+	// MatchPacket checks if packets are allowed
+	// because they are validated Connectors 2025 packets.
+	MatchPacket(packet.Parsed) bool
 }
 
 // filterState is a state cache of past seen packets.
@@ -162,12 +176,12 @@ func NewAllowAllForTest(logf logger.Logf) *Filter {
 	sb.AddPrefix(any4)
 	sb.AddPrefix(any6)
 	ipSet, _ := sb.IPSet()
-	return New(ms, nil, ipSet, ipSet, nil, logf)
+	return New(ms, nil, ipSet, ipSet, nil, nil, logf)
 }
 
 // NewAllowNone returns a packet filter that rejects everything.
 func NewAllowNone(logf logger.Logf, logIPs *netipx.IPSet) *Filter {
-	return New(nil, nil, &netipx.IPSet{}, logIPs, nil, logf)
+	return New(nil, nil, &netipx.IPSet{}, logIPs, nil, nil, logf)
 }
 
 // NewShieldsUpFilter returns a packet filter that rejects incoming connections.
@@ -179,7 +193,7 @@ func NewShieldsUpFilter(localNets *netipx.IPSet, logIPs *netipx.IPSet, shareStat
 	if shareStateWith != nil && !shareStateWith.shieldsUp {
 		shareStateWith = nil
 	}
-	f := New(nil, nil, localNets, logIPs, shareStateWith, logf)
+	f := New(nil, nil, localNets, logIPs, shareStateWith, nil, logf)
 	f.shieldsUp = true
 	return f
 }
@@ -192,7 +206,7 @@ func NewShieldsUpFilter(localNets *netipx.IPSet, logIPs *netipx.IPSet, shareStat
 // If shareStateWith is non-nil, the returned filter shares state with the
 // previous one, to enable changing rules at runtime without breaking existing
 // stateful flows.
-func New(matches []Match, capTest CapTestFunc, localNets, logIPs *netipx.IPSet, shareStateWith *Filter, logf logger.Logf) *Filter {
+func New(matches []Match, capTest CapTestFunc, localNets, logIPs *netipx.IPSet, shareStateWith *Filter, conn25Matcher Conn25Matcher, logf logger.Logf) *Filter {
 	var state *filterState
 	if shareStateWith != nil {
 		state = shareStateWith.state
@@ -203,17 +217,18 @@ func New(matches []Match, capTest CapTestFunc, localNets, logIPs *netipx.IPSet, 
 	}
 
 	f := &Filter{
-		logf:        logf,
-		matches4:    matchesFamily(matches, netip.Addr.Is4),
-		matches6:    matchesFamily(matches, netip.Addr.Is6),
-		cap4:        capMatchesFunc(matches, netip.Addr.Is4),
-		cap6:        capMatchesFunc(matches, netip.Addr.Is6),
-		local4:      ipset.FalseContainsIPFunc(),
-		local6:      ipset.FalseContainsIPFunc(),
-		logIPs4:     ipset.FalseContainsIPFunc(),
-		logIPs6:     ipset.FalseContainsIPFunc(),
-		state:       state,
-		srcIPHasCap: capTest,
+		logf:          logf,
+		matches4:      matchesFamily(matches, netip.Addr.Is4),
+		matches6:      matchesFamily(matches, netip.Addr.Is6),
+		cap4:          capMatchesFunc(matches, netip.Addr.Is4),
+		cap6:          capMatchesFunc(matches, netip.Addr.Is6),
+		local4:        ipset.FalseContainsIPFunc(),
+		local6:        ipset.FalseContainsIPFunc(),
+		logIPs4:       ipset.FalseContainsIPFunc(),
+		logIPs6:       ipset.FalseContainsIPFunc(),
+		state:         state,
+		srcIPHasCap:   capTest,
+		conn25Matcher: conn25Matcher,
 	}
 	if localNets != nil {
 		p := localNets.Prefixes()
@@ -459,7 +474,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
-	if !f.local4(q.Dst.Addr()) {
+	if !f.local4(q.Dst.Addr()) && !f.matchConn25(q) {
 		return Drop, "destination not allowed"
 	}
 
@@ -472,7 +487,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 			//  related to an existing ICMP-Echo, TCP, or UDP
 			//  session.
 			return Accept, "icmp response ok"
-		} else if f.matches4.matchIPsOnly(q, f.srcIPHasCap) {
+		} else if f.matches4.matchIPsOnly(q, f.srcIPHasCap, f.conn25Matcher) {
 			// If any port is open to an IP, allow ICMP to it.
 			return Accept, "icmp ok"
 		}
@@ -488,7 +503,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 		if !q.IsTCPSyn() {
 			return Accept, "tcp non-syn"
 		}
-		if f.matches4.match(q, f.srcIPHasCap) {
+		if f.matches4.match(q, f.srcIPHasCap, f.conn25Matcher) {
 			return Accept, "tcp ok"
 		}
 	case ipproto.UDP, ipproto.SCTP:
@@ -501,13 +516,13 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 		if ok {
 			return Accept, "cached"
 		}
-		if f.matches4.match(q, f.srcIPHasCap) {
+		if f.matches4.match(q, f.srcIPHasCap, f.conn25Matcher) {
 			return Accept, "ok"
 		}
 	case ipproto.TSMP:
 		return Accept, "tsmp ok"
 	default:
-		if f.matches4.matchProtoAndIPsOnlyIfAllPorts(q) {
+		if f.matches4.matchProtoAndIPsOnlyIfAllPorts(q, f.conn25Matcher) {
 			return Accept, "other-portless ok"
 		}
 		return Drop, unknownProtoString(q.IPProto)
@@ -519,7 +534,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
-	if !f.local6(q.Dst.Addr()) {
+	if !f.local6(q.Dst.Addr()) && !f.matchConn25(q) {
 		return Drop, "destination not allowed"
 	}
 
@@ -532,7 +547,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 			//  related to an existing ICMP-Echo, TCP, or UDP
 			//  session.
 			return Accept, "icmp response ok"
-		} else if f.matches6.matchIPsOnly(q, f.srcIPHasCap) {
+		} else if f.matches6.matchIPsOnly(q, f.srcIPHasCap, f.conn25Matcher) {
 			// If any port is open to an IP, allow ICMP to it.
 			return Accept, "icmp ok"
 		}
@@ -548,7 +563,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 		if q.IPProto == ipproto.TCP && !q.IsTCPSyn() {
 			return Accept, "tcp non-syn"
 		}
-		if f.matches6.match(q, f.srcIPHasCap) {
+		if f.matches6.match(q, f.srcIPHasCap, f.conn25Matcher) {
 			return Accept, "tcp ok"
 		}
 	case ipproto.UDP, ipproto.SCTP:
@@ -561,13 +576,13 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 		if ok {
 			return Accept, "cached"
 		}
-		if f.matches6.match(q, f.srcIPHasCap) {
+		if f.matches6.match(q, f.srcIPHasCap, f.conn25Matcher) {
 			return Accept, "ok"
 		}
 	case ipproto.TSMP:
 		return Accept, "tsmp ok"
 	default:
-		if f.matches6.matchProtoAndIPsOnlyIfAllPorts(q) {
+		if f.matches6.matchProtoAndIPsOnlyIfAllPorts(q, f.conn25Matcher) {
 			return Accept, "other-portless ok"
 		}
 		return Drop, unknownProtoString(q.IPProto)
@@ -630,7 +645,13 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) (Response, us
 		f.logRateLimit(rf, q, dir, Drop, "multicast")
 		return Drop, usermetric.ReasonMulticast
 	}
-	if q.Dst.Addr().IsLinkLocalUnicast() && q.Dst.Addr() != gcpDNSAddr {
+
+	// The special link-local destination for GCP DNS, and packets that have allow-listed
+	// link destination IPs, e.g. for app connectors, are allowed.
+	if q.Dst.Addr().IsLinkLocalUnicast() &&
+		q.Dst.Addr() != gcpDNSAddr &&
+		!f.matchConn25(q) {
+
 		f.logRateLimit(rf, q, dir, Drop, "link-local-unicast")
 		return Drop, usermetric.ReasonLinkLocalUnicast
 	}
@@ -666,4 +687,9 @@ func omitDropLogging(p *packet.Parsed, dir direction) bool {
 	}
 
 	return p.Dst.Addr().IsMulticast() || (p.Dst.Addr().IsLinkLocalUnicast() && p.Dst.Addr() != gcpDNSAddr) || p.IPProto == ipproto.IGMP
+}
+
+// matchConn25 checks if the packet is matched for Connectors 2025.
+func (f *Filter) matchConn25(q *packet.Parsed) bool {
+	return f.conn25Matcher != nil && f.conn25Matcher.MatchPacket(*q)
 }
