@@ -1099,7 +1099,7 @@ func (ss *sshSession) startWithStdPipes() (err error) {
 	return ss.cmd.Start()
 }
 
-func envForUser(u *userMeta) []string {
+func envForUser(u userMeta) []string {
 	return []string{
 		fmt.Sprintf("SHELL=%s", u.LoginShell()),
 		fmt.Sprintf("USER=%s", u.Username),

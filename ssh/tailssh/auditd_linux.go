@@ -123,7 +123,7 @@ func sendAuditMessage(logf logger.Logf, msgType uint16, message string) {
 
 // logSSHLogin logs an SSH login event to auditd with whois information.
 func logSSHLogin(logf logger.Logf, c *conn) {
-	if c == nil || c.info == nil || c.localUser == nil {
+	if c == nil {
 		return
 	}
 

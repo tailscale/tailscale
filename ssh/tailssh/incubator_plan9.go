@@ -400,7 +400,7 @@ func (ss *sshSession) startWithStdPipes() (err error) {
 	return ss.cmd.Start()
 }
 
-func envForUser(u *userMeta) []string {
+func envForUser(u userMeta) []string {
 	return []string{
 		fmt.Sprintf("user=%s", u.Username),
 		fmt.Sprintf("home=%s", u.HomeDir),

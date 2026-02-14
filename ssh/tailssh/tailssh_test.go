@@ -31,6 +31,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	gossh "golang.org/x/crypto/ssh"
@@ -63,31 +64,20 @@ func TestMatchRule(t *testing.T) {
 	tests := []struct {
 		name          string
 		rule          *tailcfg.SSHRule
-		ci            *sshConnInfo
+		ci            sshConnInfo
 		wantErr       error
 		wantUser      string
 		wantAcceptEnv []string
 	}{
 		{
-			name: "invalid-conn",
-			rule: &tailcfg.SSHRule{
-				Action:     someAction,
-				Principals: []*tailcfg.SSHPrincipal{{Any: true}},
-				SSHUsers: map[string]string{
-					"*": "ubuntu",
-				},
-			},
-			wantErr: errInvalidConn,
-		},
-		{
 			name:    "nil-rule",
-			ci:      &sshConnInfo{},
+			ci:      sshConnInfo{},
 			rule:    nil,
 			wantErr: errNilRule,
 		},
 		{
 			name:    "nil-action",
-			ci:      &sshConnInfo{},
+			ci:      sshConnInfo{},
 			rule:    &tailcfg.SSHRule{},
 			wantErr: errNilAction,
 		},
@@ -97,7 +87,7 @@ func TestMatchRule(t *testing.T) {
 				Action:      someAction,
 				RuleExpires: ptr.To(time.Unix(100, 0)),
 			},
-			ci:      &sshConnInfo{},
+			ci:      sshConnInfo{},
 			wantErr: errRuleExpired,
 		},
 		{
@@ -107,7 +97,7 @@ func TestMatchRule(t *testing.T) {
 				SSHUsers: map[string]string{
 					"*": "ubuntu",
 				}},
-			ci:      &sshConnInfo{},
+			ci:      sshConnInfo{},
 			wantErr: errPrincipalMatch,
 		},
 		{
@@ -116,7 +106,7 @@ func TestMatchRule(t *testing.T) {
 				Action:     someAction,
 				Principals: []*tailcfg.SSHPrincipal{{Any: true}},
 			},
-			ci:      &sshConnInfo{sshUser: "alice"},
+			ci:      sshConnInfo{sshUser: "alice"},
 			wantErr: errUserMatch,
 		},
 		{
@@ -128,7 +118,7 @@ func TestMatchRule(t *testing.T) {
 					"*": "ubuntu",
 				},
 			},
-			ci:       &sshConnInfo{sshUser: "alice"},
+			ci:       sshConnInfo{sshUser: "alice"},
 			wantUser: "ubuntu",
 		},
 		{
@@ -143,7 +133,7 @@ func TestMatchRule(t *testing.T) {
 					"*": "ubuntu",
 				},
 			},
-			ci:       &sshConnInfo{sshUser: "alice"},
+			ci:       sshConnInfo{sshUser: "alice"},
 			wantUser: "ubuntu",
 		},
 		{
@@ -156,7 +146,7 @@ func TestMatchRule(t *testing.T) {
 					"alice": "thealice",
 				},
 			},
-			ci:       &sshConnInfo{sshUser: "alice"},
+			ci:       sshConnInfo{sshUser: "alice"},
 			wantUser: "thealice",
 		},
 		{
@@ -170,7 +160,7 @@ func TestMatchRule(t *testing.T) {
 				},
 				AcceptEnv: []string{"EXAMPLE", "?_?", "TEST_*"},
 			},
-			ci:            &sshConnInfo{sshUser: "alice"},
+			ci:            sshConnInfo{sshUser: "alice"},
 			wantUser:      "thealice",
 			wantAcceptEnv: []string{"EXAMPLE", "?_?", "TEST_*"},
 		},
@@ -180,7 +170,7 @@ func TestMatchRule(t *testing.T) {
 				Principals: []*tailcfg.SSHPrincipal{{Any: true}},
 				Action:     &tailcfg.SSHAction{Reject: true},
 			},
-			ci: &sshConnInfo{sshUser: "alice"},
+			ci: sshConnInfo{sshUser: "alice"},
 		},
 		{
 			name: "match-principal-node-ip",
@@ -189,7 +179,7 @@ func TestMatchRule(t *testing.T) {
 				Principals: []*tailcfg.SSHPrincipal{{NodeIP: "1.2.3.4"}},
 				SSHUsers:   map[string]string{"*": "ubuntu"},
 			},
-			ci:       &sshConnInfo{src: netip.MustParseAddrPort("1.2.3.4:30343")},
+			ci:       sshConnInfo{src: netip.MustParseAddrPort("1.2.3.4:30343")},
 			wantUser: "ubuntu",
 		},
 		{
@@ -199,7 +189,7 @@ func TestMatchRule(t *testing.T) {
 				Principals: []*tailcfg.SSHPrincipal{{Node: "some-node-ID"}},
 				SSHUsers:   map[string]string{"*": "ubuntu"},
 			},
-			ci:       &sshConnInfo{node: (&tailcfg.Node{StableID: "some-node-ID"}).View()},
+			ci:       sshConnInfo{node: (&tailcfg.Node{StableID: "some-node-ID"}).View()},
 			wantUser: "ubuntu",
 		},
 		{
@@ -209,7 +199,7 @@ func TestMatchRule(t *testing.T) {
 				Principals: []*tailcfg.SSHPrincipal{{UserLogin: "foo@bar.com"}},
 				SSHUsers:   map[string]string{"*": "ubuntu"},
 			},
-			ci:       &sshConnInfo{uprof: tailcfg.UserProfile{LoginName: "foo@bar.com"}},
+			ci:       sshConnInfo{uprof: tailcfg.UserProfile{LoginName: "foo@bar.com"}},
 			wantUser: "ubuntu",
 		},
 		{
@@ -221,7 +211,7 @@ func TestMatchRule(t *testing.T) {
 					"*": "=",
 				},
 			},
-			ci:       &sshConnInfo{sshUser: "alice"},
+			ci:       sshConnInfo{sshUser: "alice"},
 			wantUser: "alice",
 		},
 	}
@@ -253,7 +243,7 @@ func TestEvalSSHPolicy(t *testing.T) {
 	tests := []struct {
 		name          string
 		policy        *tailcfg.SSHPolicy
-		ci            *sshConnInfo
+		ci            sshConnInfo
 		wantResult    evalResult
 		wantUser      string
 		wantAcceptEnv []string
@@ -297,7 +287,7 @@ func TestEvalSSHPolicy(t *testing.T) {
 					},
 				},
 			},
-			ci:            &sshConnInfo{sshUser: "alice"},
+			ci:            sshConnInfo{sshUser: "alice"},
 			wantUser:      "thealice",
 			wantAcceptEnv: []string{"EXAMPLE", "?_?", "TEST_*"},
 			wantResult:    accepted,
@@ -307,7 +297,7 @@ func TestEvalSSHPolicy(t *testing.T) {
 			policy: &tailcfg.SSHPolicy{
 				Rules: []*tailcfg.SSHRule{},
 			},
-			ci:            &sshConnInfo{sshUser: "alice"},
+			ci:            sshConnInfo{sshUser: "alice"},
 			wantUser:      "",
 			wantAcceptEnv: nil,
 			wantResult:    rejected,
@@ -348,7 +338,7 @@ func TestEvalSSHPolicy(t *testing.T) {
 					},
 				},
 			},
-			ci:            &sshConnInfo{sshUser: "alice"},
+			ci:            sshConnInfo{sshUser: "alice"},
 			wantUser:      "",
 			wantAcceptEnv: nil,
 			wantResult:    rejectedUser,
@@ -1102,7 +1092,7 @@ func TestSSH(t *testing.T) {
 		t.Fatal(err)
 	}
 	sc.localUser = um
-	sc.info = &sshConnInfo{
+	sc.info = sshConnInfo{
 		sshUser: "test",
 		src:     netip.MustParseAddrPort("1.2.3.4:32342"),
 		dst:     netip.MustParseAddrPort("1.2.3.5:22"),
@@ -1317,6 +1307,74 @@ func TestStdOsUserUserAssumptions(t *testing.T) {
 	v := reflect.TypeFor[user.User]()
 	if got, want := v.NumField(), 5; got != want {
 		t.Errorf("os/user.User has %v fields; this package assumes %v", got, want)
+	}
+}
+
+func TestOnPolicyChangeDefersValidationOnEmptyLocalUser(t *testing.T) {
+	tests := []struct {
+		name                   string
+		sshRule                *tailcfg.SSHRule
+		wantCancelOnValidation bool
+	}{
+		{
+			name:                   "defer-then-accept-when-allowed",
+			sshRule:                newSSHRule(&tailcfg.SSHAction{Accept: true}),
+			wantCancelOnValidation: false,
+		},
+		{
+			name:                   "defer-then-reject-when-not-allowed",
+			sshRule:                newSSHRule(&tailcfg.SSHAction{Reject: true}),
+			wantCancelOnValidation: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			synctest.Test(t, func(t *testing.T) {
+				srv := &server{
+					logf: tstest.WhileTestRunningLogger(t),
+					lb: &localState{
+						sshEnabled:   true,
+						matchingRule: tt.sshRule,
+					},
+				}
+				c := &conn{
+					srv:  srv,
+					info: sshConnInfo{sshUser: "alice"},
+				}
+				srv.activeConns = map[*conn]bool{c: true}
+				ctx, cancel := context.WithCancelCause(context.Background())
+				ss := &sshSession{ctx: ctx, cancelCtx: cancel}
+				c.sessions = []*sshSession{ss}
+
+				srv.OnPolicyChange()
+				synctest.Wait()
+				select {
+				case <-ctx.Done():
+					t.Fatal("expected deferral of cancellation decision while localUser unset but session got canceled")
+				default:
+				}
+
+				c.mu.Lock()
+				c.info.isSet = true
+				c.localUser = userMeta{User: user.User{Username: currentUser}}
+				c.mu.Unlock()
+
+				srv.OnPolicyChange()
+				synctest.Wait()
+				select {
+				case <-ctx.Done():
+					if !tt.wantCancelOnValidation {
+						t.Fatal("valid session shouldn't have been canceled")
+					}
+				default:
+					if tt.wantCancelOnValidation {
+						t.Fatal("invalid session should have been canceled but it wasn't")
+					}
+				}
+			})
+		})
 	}
 }
 
