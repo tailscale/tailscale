@@ -40,11 +40,16 @@ FROM golang:1.25-alpine AS build-env
 
 WORKDIR /go/src/tailscale
 
-COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=source=go.mod,target=go.mod \
+    --mount=source=go.sum,target=go.sum \
+    go mod download
 
 # Pre-build some stuff before the following COPY line invalidates the Docker cache.
-RUN go install \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=source=go.mod,target=go.mod \
+    --mount=source=go.sum,target=go.sum \
+    go install \
     github.com/aws/aws-sdk-go-v2/aws \
     github.com/aws/aws-sdk-go-v2/config \
     gvisor.dev/gvisor/pkg/tcpip/adapters/gonet \
@@ -53,8 +58,6 @@ RUN go install \
     golang.org/x/crypto/acme \
     github.com/coder/websocket \
     github.com/mdlayher/netlink
-
-COPY . .
 
 # see build_docker.sh
 ARG VERSION_LONG=""
@@ -65,7 +68,10 @@ ARG VERSION_GIT_HASH=""
 ENV VERSION_GIT_HASH=$VERSION_GIT_HASH
 ARG TARGETARCH
 
-RUN GOARCH=$TARGETARCH go install -ldflags="\
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    --mount=source=.,target=. \
+    go install -ldflags="\
       -X tailscale.com/version.longStamp=$VERSION_LONG \
       -X tailscale.com/version.shortStamp=$VERSION_SHORT \
       -X tailscale.com/version.gitCommitStamp=$VERSION_GIT_HASH" \
