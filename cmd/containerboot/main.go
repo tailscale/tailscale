@@ -101,6 +101,10 @@
 //     cluster using the same hostname (in this case, the MagicDNS name of the ingress proxy)
 //     as a non-cluster workload on tailnet.
 //     This is only meant to be configured by the Kubernetes operator.
+//   - TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT: If set to true and if this
+//     containerboot instance is not running in Kubernetes, autoadvertise any services
+//     defined in the devices serve config, and unadvertise on shutdown. Defaults
+//     to `true`, but can be disabled to allow user specific advertisement configuration.
 //
 // When running on Kubernetes, containerboot defaults to storing state in the
 // "tailscale" kube secret. To store state on local disk instead, set
@@ -137,6 +141,7 @@ import (
 	kubeutils "tailscale.com/k8s-operator"
 	healthz "tailscale.com/kube/health"
 	"tailscale.com/kube/kubetypes"
+	klc "tailscale.com/kube/localclient"
 	"tailscale.com/kube/metrics"
 	"tailscale.com/kube/services"
 	"tailscale.com/tailcfg"
@@ -153,6 +158,10 @@ func newNetfilterRunner(logf logger.Logf) (linuxfw.NetfilterRunner, error) {
 		return linuxfw.NewFakeIPTablesRunner(), nil
 	}
 	return linuxfw.New(logf, "")
+}
+
+func getAutoAdvertiseBool() bool {
+	return defaultBool("TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT", true)
 }
 
 func main() {
@@ -199,7 +208,7 @@ func run() error {
 	defer cancel()
 
 	var kc *kubeClient
-	if cfg.InKubernetes {
+	if cfg.KubeSecret != "" {
 		kc, err = newKubeClient(cfg.Root, cfg.KubeSecret)
 		if err != nil {
 			return fmt.Errorf("error initializing kube client: %w", err)
@@ -229,6 +238,7 @@ func run() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
 
+		// we are shutting down, we always want to unadvertise here
 		if err := services.EnsureServicesNotAdvertised(ctx, client, log.Printf); err != nil {
 			log.Printf("Error ensuring services are not advertised: %v", err)
 		}
@@ -652,9 +662,22 @@ runLoop:
 					healthCheck.Update(len(addrs) != 0)
 				}
 
+				var prevServeConfig *ipn.ServeConfig
+				if getAutoAdvertiseBool() {
+					prevServeConfig, err = client.GetServeConfig(ctx)
+					if err != nil {
+						return fmt.Errorf("autoadvertisement: failed to get serve config: %w", err)
+					}
+
+					err = refreshAdvertiseServices(ctx, prevServeConfig, klc.New(client))
+					if err != nil {
+						return fmt.Errorf("autoadvertisement: failed to refresh advertise services: %w", err)
+					}
+				}
+
 				if cfg.ServeConfigPath != "" {
 					triggerWatchServeConfigChanges.Do(func() {
-						go watchServeConfigChanges(ctx, certDomainChanged, certDomain, client, kc, cfg)
+						go watchServeConfigChanges(ctx, certDomainChanged, certDomain, client, kc, cfg, prevServeConfig)
 					})
 				}
 

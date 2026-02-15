@@ -174,6 +174,10 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 				Value: "$(POD_NAME)",
 			},
 			{
+				Name:  "TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT",
+				Value: "false",
+			},
+			{
 				// TODO(tomhjp): This is tsrecorder-specific and does nothing. Delete.
 				Name:  "TS_STATE",
 				Value: "kube:$(POD_NAME)",

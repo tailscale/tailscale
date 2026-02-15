@@ -693,6 +693,10 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Value: "$(POD_NAME)",
 		},
 		corev1.EnvVar{
+			Name:  "TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT",
+			Value: "false",
+		},
+		corev1.EnvVar{
 			Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
 			Value: "/etc/tsconfig/$(POD_NAME)",
 		},

@@ -107,7 +107,12 @@ func configFromEnv() (*settings, error) {
 		UserspaceMode:                         defaultBool("TS_USERSPACE", true),
 		StateDir:                              defaultEnv("TS_STATE_DIR", ""),
 		AcceptDNS:                             defaultEnvBoolPointer("TS_ACCEPT_DNS"),
-		KubeSecret:                            defaultEnv("TS_KUBE_SECRET", "tailscale"),
+		KubeSecret: func() string {
+			if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+				return defaultEnv("TS_KUBE_SECRET", "tailscale")
+			}
+			return defaultEnv("TS_KUBE_SECRET", "")
+		}(),
 		SOCKSProxyAddr:                        defaultEnv("TS_SOCKS5_SERVER", ""),
 		HTTPProxyAddr:                         defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
 		Socket:                                defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
