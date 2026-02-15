@@ -66,7 +66,12 @@ type Filter struct {
 	state *filterState
 
 	shieldsUp bool
+
+	AllowLinkLocalExtension       PacketMatch
+	IngressPacketMatchesExtension []PacketMatch
 }
+
+type PacketMatch func(packet.Parsed) bool
 
 // filterState is a state cache of past seen packets.
 type filterState struct {
@@ -417,6 +422,13 @@ func (f *Filter) RunIn(q *packet.Parsed, rf RunFlags) Response {
 		return r
 	}
 
+	for _, pm := range f.IngressPacketMatchesExtension {
+		if pm(*q) {
+			f.logRateLimit(rf, q, dir, Accept, "")
+			return Accept
+		}
+	}
+
 	var why string
 	switch q.IPVersion {
 	case 4:
@@ -439,6 +451,7 @@ func (f *Filter) RunOut(q *packet.Parsed, rf RunFlags) (Response, usermetric.Dro
 		// already logged
 		return r, reason
 	}
+
 	r, why := f.runOut(q)
 	f.logRateLimit(rf, q, dir, r, why)
 	return r, ""
@@ -609,6 +622,13 @@ func (d direction) String() string {
 
 var gcpDNSAddr = netaddr.IPv4(169, 254, 169, 254)
 
+func (f *Filter) allowLinkLocal(q *packet.Parsed) bool {
+	if q.Dst.Addr() == gcpDNSAddr {
+		return true
+	}
+	return f.AllowLinkLocalExtension != nil && f.AllowLinkLocalExtension(*q)
+}
+
 // pre runs the direction-agnostic filter logic. dir is only used for
 // logging.
 func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) (Response, usermetric.DropReason) {
@@ -630,7 +650,7 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) (Response, us
 		f.logRateLimit(rf, q, dir, Drop, "multicast")
 		return Drop, usermetric.ReasonMulticast
 	}
-	if q.Dst.Addr().IsLinkLocalUnicast() && q.Dst.Addr() != gcpDNSAddr {
+	if q.Dst.Addr().IsLinkLocalUnicast() && f.allowLinkLocal(q) {
 		f.logRateLimit(rf, q, dir, Drop, "link-local-unicast")
 		return Drop, usermetric.ReasonLinkLocalUnicast
 	}
