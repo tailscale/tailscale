@@ -307,6 +307,42 @@ func TestManager(t *testing.T) {
 			},
 		},
 		{
+			// On iOS, even trivial "default resolvers only" configs should
+			// route through quad-100 so the Go forwarder handles multi-server
+			// fallback instead of relying on iOS's NEDNSSettings.
+			// See https://github.com/tailscale/tailscale/issues/12677.
+			name: "corp-ios",
+			in: Config{
+				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),
+				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
+			},
+			goos: "ios",
+			os: OSConfig{
+				Nameservers:   mustIPs("100.100.100.100"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(".", "1.1.1.1", "9.9.9.9"),
+			},
+		},
+		{
+			// Same as corp-ios but with a single resolver, to verify the
+			// quad-100 proxy path is used even when there's only one server.
+			name: "corp-ios-single",
+			in: Config{
+				DefaultResolvers: mustRes("1.1.1.1"),
+				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
+			},
+			goos: "ios",
+			os: OSConfig{
+				Nameservers:   mustIPs("100.100.100.100"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(".", "1.1.1.1"),
+			},
+		},
+		{
 			name: "corp-magic",
 			in: Config{
 				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),
