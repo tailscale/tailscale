@@ -206,7 +206,7 @@ func (c *cigocacher) get(ctx context.Context, actionID string) (outputID, diskPa
 
 	outputID, diskPath, err = c.disk.Get(ctx, actionID)
 	if c.remote == nil || (err == nil && outputID != "") {
-		return outputID, diskPath, nil
+		return outputID, diskPath, err
 	}
 
 	// Disk miss; try remote. HTTPClient.Get handles the HTTP fetch
