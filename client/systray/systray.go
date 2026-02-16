@@ -171,6 +171,11 @@ tailscale systray
 See https://tailscale.com/kb/1597/linux-systray for more information.`)
 	}
 	setAppIcon(disconnected)
+
+	// set initial title, which is used by the systray package as the ID of the StatusNotifierItem.
+	// This value will get overwritten later as the client status changes.
+	systray.SetTitle("tailscale")
+
 	menu.rebuild()
 
 	menu.mu.Lock()
