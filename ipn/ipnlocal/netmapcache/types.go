@@ -7,6 +7,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
+	"tailscale.com/types/views"
 )
 
 // The fields in the following wrapper types are all pointers, even when their
@@ -49,4 +50,10 @@ type netmapNode struct {
 
 type netmapUserProfile struct {
 	UserProfile *tailcfg.UserProfileView
+}
+
+type netmapPacketFilter struct {
+	Rules *views.Slice[tailcfg.FilterRule]
+
+	// Match expressions are derived from the rules.
 }

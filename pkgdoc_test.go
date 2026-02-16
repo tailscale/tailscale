@@ -71,6 +71,10 @@ func TestPackageDocs(t *testing.T) {
 			t.Logf("multiple files with package doc in %s: %q", dir, ff)
 		}
 		if len(ff) == 0 {
+			if strings.HasPrefix(dir, "gokrazy/") {
+				// Ignore gokrazy appliances. Their *.go file is only for deps.
+				continue
+			}
 			t.Errorf("no package doc in %s", dir)
 		}
 	}

@@ -7492,8 +7492,12 @@ func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion ta
 		// it is set in the policy file: tailscale/corp#34401
 		res, err = suggestExitNodeUsingDERP(report, nb, prevSuggestion, selectRegion, selectNode, allowList)
 	}
-	name, _, _ := strings.Cut(res.Name, ".")
-	nb.logf("netmap: suggested exit node: %s (%s)", name, res.ID)
+	if err != nil {
+		nb.logf("netmap: suggested exit node: %v", err)
+	} else {
+		name, _, _ := strings.Cut(res.Name, ".")
+		nb.logf("netmap: suggested exit node: %s (%s)", name, res.ID)
+	}
 	return res, err
 }
 

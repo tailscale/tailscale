@@ -6,5 +6,5 @@
 package gokrazy
 
 import (
-	_ "github.com/gokrazy/tools/cmd/gok"
+	_ "github.com/bradfitz/monogok/cmd/monogok"
 )

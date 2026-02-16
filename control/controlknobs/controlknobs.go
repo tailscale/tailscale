@@ -107,6 +107,12 @@ type Knobs struct {
 	// of queued netmap.NetworkMap between the controlclient and LocalBackend.
 	// See tailscale/tailscale#14768.
 	DisableSkipStatusQueue atomic.Bool
+
+	// DisableHostsFileUpdates indicates that the node's DNS manager should not create
+	// hosts file entries when it normally would, such as when we're not the primary
+	// resolver on Windows or when the host is domain-joined and its primary domain
+	// takes precedence over MagicDNS. As of 2026-02-13, it is only used on Windows.
+	DisableHostsFileUpdates atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -137,6 +143,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		disableLocalDNSOverrideViaNRPT       = has(tailcfg.NodeAttrDisableLocalDNSOverrideViaNRPT)
 		disableCaptivePortalDetection        = has(tailcfg.NodeAttrDisableCaptivePortalDetection)
 		disableSkipStatusQueue               = has(tailcfg.NodeAttrDisableSkipStatusQueue)
+		disableHostsFileUpdates              = has(tailcfg.NodeAttrDisableHostsFileUpdates)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -163,6 +170,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.DisableLocalDNSOverrideViaNRPT.Store(disableLocalDNSOverrideViaNRPT)
 	k.DisableCaptivePortalDetection.Store(disableCaptivePortalDetection)
 	k.DisableSkipStatusQueue.Store(disableSkipStatusQueue)
+	k.DisableHostsFileUpdates.Store(disableHostsFileUpdates)
 
 	// If both attributes are present, then "enable" should win.  This reflects
 	// the history of seamless key renewal.
