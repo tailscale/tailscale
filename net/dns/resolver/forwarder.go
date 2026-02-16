@@ -36,6 +36,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netx"
 	"tailscale.com/net/sockstats"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/syncs"
 	"tailscale.com/types/dnstype"
@@ -896,7 +897,16 @@ func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	ctx, cancel := context.WithTimeout(ctx, tcpQueryTimeout)
 	defer cancel()
 
-	conn, err := f.getDialerType()(ctx, tcpFam, ipp.String())
+	dialFn := f.getDialerType()
+	if runtime.GOOS == "ios" && tsaddr.IsTailscaleIPv4(ipp.Addr()) {
+		// On iOS, SystemDial cannot reach tailnet IPs from the network
+		// extension. Use PeerDial which routes through the Tailscale
+		// network sandbox without requiring the full route table in
+		// memory (avoiding the bart.Table duplication that prevents
+		// enabling ShouldUseRoutes on iOS). See #12677.
+		dialFn = f.dialer.PeerDial
+	}
+	conn, err := dialFn(ctx, tcpFam, ipp.String())
 	if err != nil {
 		return nil, err
 	}

@@ -328,7 +328,18 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// TODO: for OSes that support it, pass IP:port and DoH
 		// addresses directly to OS.
 		// https://github.com/tailscale/tailscale/issues/1666
-		ocfg.Nameservers = toIPsOnly(cfg.DefaultResolvers)
+		if m.goos == "ios" {
+			// On iOS, route through quad-100 for proper multi-server fallback.
+			// iOS's NEDNSSettings doesn't reliably fail over between servers
+			// when one is unreachable. The Go forwarder races all servers
+			// and returns the first success. See #12677.
+			rcfg.Routes = map[dnsname.FQDN][]*dnstype.Resolver{
+				".": cfg.DefaultResolvers,
+			}
+			ocfg.Nameservers = cfg.serviceIPs(m.knobs)
+		} else {
+			ocfg.Nameservers = toIPsOnly(cfg.DefaultResolvers)
+		}
 		return rcfg, ocfg, nil
 	case cfg.hasDefaultResolvers():
 		// Default resolvers plus other stuff always ends up proxying
