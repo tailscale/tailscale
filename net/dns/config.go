@@ -73,11 +73,9 @@ func (c *Config) serviceIPs(knobs *controlknobs.Knobs) []netip.Addr {
 		return []netip.Addr{tsaddr.TailscaleServiceIPv6()}
 	}
 
-	// TODO(bradfitz,mikeodr,raggi): include IPv6 here too; tailscale/tailscale#15404
-	// And add a controlknobs knob to disable dual stack.
-	//
-	// For now, opt-in for testing.
-	if magicDNSDualStack() {
+	// See https://github.com/tailscale/tailscale/issues/15404 for the background
+	// on the opt-in debug knob and the controlknob opt-out.
+	if magicDNSDualStack() || !knobs.ShouldForceRegisterMagicDNSIPv4Only() {
 		return []netip.Addr{
 			tsaddr.TailscaleServiceIP(),
 			tsaddr.TailscaleServiceIPv6(),

@@ -179,7 +179,8 @@ type CapabilityVersion int
 //   - 130: 2025-10-06: client can send key.HardwareAttestationPublic and key.HardwareAttestationKeySignature in MapRequest
 //   - 131: 2025-11-25: client respects [NodeAttrDefaultAutoUpdate]
 //   - 132: 2026-02-13: client respects [NodeAttrDisableHostsFileUpdates]
-const CurrentCapabilityVersion CapabilityVersion = 132
+//   - 133: 2026-02-17: client understands [NodeAttrForceRegisterMagicDNSIPv4Only]; MagicDNS IPv6 registered w/ OS by default
+const CurrentCapabilityVersion CapabilityVersion = 133
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2748,6 +2749,12 @@ const (
 	// primary domain takes precedence over MagicDNS. As of 2026-02-12, it is only
 	// used on Windows.
 	NodeAttrDisableHostsFileUpdates NodeCapability = "disable-hosts-file-updates"
+
+	// NodeAttrForceRegisterMagicDNSIPv4Only forces the client to only register
+	// its MagicDNS IPv4 address with systemd/etc, and not both its IPv4 and IPv6 addresses.
+	// See https://github.com/tailscale/tailscale/issues/15404.
+	// TODO(bradfitz): remove this a few releases after 2026-02-16.
+	NodeAttrForceRegisterMagicDNSIPv4Only NodeCapability = "force-register-magicdns-ipv4-only"
 )
 
 // SetDNSRequest is a request to add a DNS record.
