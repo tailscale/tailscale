@@ -175,7 +175,10 @@ func (c *Conn25) isConfigured() bool {
 
 func newConn25(logf logger.Logf) *Conn25 {
 	c := &Conn25{
-		client: &client{logf: logf},
+		client: &client{
+			logf:  logf,
+			addrs: newAddrTable(),
+		},
 		server: &server{logf: logf},
 	}
 	return c
@@ -389,9 +392,8 @@ type client struct {
 	mu            sync.Mutex // protects the fields below
 	magicIPPool   *ippool
 	transitIPPool *ippool
-	// map of magic IP -> (transit IP, app)
-	magicIPs map[netip.Addr]appAddr
-	config   config
+	config        config
+	addrs         *addrTable
 }
 
 func (c *client) isConfigured() bool {
@@ -438,15 +440,7 @@ func (c *client) reconfig(selfNode tailcfg.NodeView) error {
 	return nil
 }
 
-func (c *client) setMagicIP(magicAddr, transitAddr netip.Addr, app string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	mak.Set(&c.magicIPs, magicAddr, appAddr{addr: transitAddr, app: app})
-}
-
 func (c *client) reserveAddresses(domain string, dst netip.Addr) (connection, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	appNames, ok := c.config.appsByDomain[domain]
 	// Is this domain routed by connectors?
 	if !ok || len(appNames) == 0 {
@@ -472,15 +466,29 @@ func (c *client) reserveAddresses(domain string, dst netip.Addr) (connection, er
 		magic:   mip,
 		transit: tip,
 		app:     app,
+		domain:  domain,
 	}
 	c.logf("assigning magic ip for domain: %s, app: %s, %v", domain, app, mip)
 	return connection, nil
 }
 
 func (c *client) enqueueAddressAssignment(conn connection) {
-	c.setMagicIP(conn.magic, conn.transit, conn.app)
 	// TODO(fran) 2026-02-03 asynchronously send peerapi req to connector to
 	// allocate these addresses for us.
+}
+
+func (c *client) handleObservedDNS(domain string, dst netip.Addr) (connection, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if addrs, ok := c.addrs.getByDomainAndDst(domain, dst); ok {
+		return addrs, nil
+	}
+	conn, err := c.reserveAddresses(domain, dst)
+	if err != nil || !conn.isValid() {
+		return conn, err
+	}
+	c.addrs.add(conn)
+	return conn, nil
 }
 
 func (c *client) mapDNSResponse(buf []byte) []byte {
@@ -497,7 +505,7 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 			msgARecord := (a.Body).(*dnsmessage.AResource)
 			domain := a.Header.Name.String()
 			dst := netip.AddrFrom4(msgARecord.A)
-			connection, err := c.reserveAddresses(domain, dst)
+			connection, err := c.handleObservedDNS(domain, dst)
 			if err != nil {
 				// TODO(fran) log
 				return buf
@@ -536,8 +544,46 @@ type connection struct {
 	magic   netip.Addr
 	transit netip.Addr
 	app     string
+	domain  string
 }
 
 func (c connection) isValid() bool {
 	return c.dst.IsValid()
+}
+
+// not safe for concurrent usage
+// correct usage in the context of conn25 requires client to manage the locks
+// ie, lock -> check if addr already has an entry -> if not check out an address from the pool -> assign to table -> unlock
+type addrTable struct {
+	entries map[netip.Addr]connection // indexed by magicIP
+}
+
+func (at *addrTable) add(c connection) {
+	if at == nil {
+		return
+	}
+	at.entries[c.magic] = c
+}
+
+func (at *addrTable) getByMagicIP(a netip.Addr) (connection, bool) {
+	c, ok := at.entries[a]
+	return c, ok
+}
+
+func (at *addrTable) getByDomainAndDst(domain string, dst netip.Addr) (connection, bool) {
+	if at == nil {
+		return connection{}, false
+	}
+	for _, val := range at.entries {
+		if val.domain == domain && val.dst == dst {
+			return val, true
+		}
+	}
+	return connection{}, false
+}
+
+func newAddrTable() *addrTable {
+	return &addrTable{
+		entries: make(map[netip.Addr]connection),
+	}
 }
