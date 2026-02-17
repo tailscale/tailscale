@@ -130,8 +130,6 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 	if err != nil {
 		return nil, err
 	}
-	storageKey := strings.TrimPrefix(certDomain, "*.")
-
 	logf := logger.WithPrefix(b.logf, fmt.Sprintf("cert(%q): ", domain))
 	now := b.clock.Now()
 	traceACME := func(v any) {
@@ -147,13 +145,13 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 		return nil, err
 	}
 
-	if pair, err := getCertPEMCached(cs, storageKey, now); err == nil {
+	if pair, err := getCertPEMCached(cs, certDomain, now); err == nil {
 		if envknob.IsCertShareReadOnlyMode() {
 			return pair, nil
 		}
 		// If we got here, we have a valid unexpired cert.
 		// Check whether we should start an async renewal.
-		shouldRenew, err := b.shouldStartDomainRenewal(cs, storageKey, now, pair, minValidity)
+		shouldRenew, err := b.shouldStartDomainRenewal(cs, certDomain, now, pair, minValidity)
 		if err != nil {
 			logf("error checking for certificate renewal: %v", err)
 			// Renewal check failed, but the current cert is valid and not
@@ -501,8 +499,12 @@ func (kp TLSCertKeyPair) parseCertificate() (*x509.Certificate, error) {
 	return x509.ParseCertificate(block.Bytes)
 }
 
-func keyFile(dir, domain string) string  { return filepath.Join(dir, domain+".key") }
-func certFile(dir, domain string) string { return filepath.Join(dir, domain+".crt") }
+func keyFile(dir, domain string) string {
+	return filepath.Join(dir, strings.Replace(domain, "*.", "wildcard_.", 1)+".key")
+}
+func certFile(dir, domain string) string {
+	return filepath.Join(dir, strings.Replace(domain, "*.", "wildcard_.", 1)+".crt")
+}
 
 // getCertPEMCached returns a non-nil keyPair if a cached keypair for domain
 // exists on disk in dir that is valid at the provided now time.
@@ -525,18 +527,16 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 	acmeMu.Lock()
 	defer acmeMu.Unlock()
 
-	// storageKey is used for file storage and renewal tracking.
-	// For wildcards, "*.node.ts.net" -> "node.ts.net"
-	storageKey, isWildcard := strings.CutPrefix(domain, "*.")
+	baseDomain, isWildcard := strings.CutPrefix(domain, "*.")
 
 	// In case this method was triggered multiple times in parallel (when
 	// serving incoming requests), check whether one of the other goroutines
 	// already renewed the cert before us.
-	previous, err := getCertPEMCached(cs, storageKey, now)
+	previous, err := getCertPEMCached(cs, domain, now)
 	if err == nil {
 		// shouldStartDomainRenewal caches its result so it's OK to call this
 		// frequently.
-		shouldRenew, err := b.shouldStartDomainRenewal(cs, storageKey, now, previous, minValidity)
+		shouldRenew, err := b.shouldStartDomainRenewal(cs, domain, now, previous, minValidity)
 		if err != nil {
 			logf("error checking for certificate renewal: %v", err)
 		} else if !shouldRenew {
@@ -598,7 +598,7 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 	if isWildcard {
 		authzIDs = []acme.AuthzID{
 			{Type: "dns", Value: domain},
-			{Type: "dns", Value: storageKey},
+			{Type: "dns", Value: baseDomain},
 		}
 	} else {
 		authzIDs = []acme.AuthzID{{Type: "dns", Value: domain}}
@@ -697,10 +697,10 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 			return nil, err
 		}
 	}
-	if err := cs.WriteTLSCertAndKey(storageKey, certPEM.Bytes(), privPEM.Bytes()); err != nil {
+	if err := cs.WriteTLSCertAndKey(domain, certPEM.Bytes(), privPEM.Bytes()); err != nil {
 		return nil, err
 	}
-	b.domainRenewed(storageKey)
+	b.domainRenewed(domain)
 
 	return &TLSCertKeyPair{CertPEM: certPEM.Bytes(), KeyPEM: privPEM.Bytes()}, nil
 }
@@ -924,7 +924,7 @@ func (b *LocalBackend) resolveCertDomain(domain string) (string, error) {
 			return "", fmt.Errorf("wildcard certificates are not enabled for this node")
 		}
 		if !slices.Contains(certDomains, base) {
-			return "", fmt.Errorf("invalid domain %q; parent domain must be one of %q", domain, certDomains)
+			return "", fmt.Errorf("invalid domain %q; wildcard certificates are not enabled for this domain", domain)
 		}
 		return domain, nil
 	}
@@ -951,7 +951,7 @@ func handleC2NTLSCertStatus(b *LocalBackend, w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	domain := strings.TrimPrefix(r.FormValue("domain"), "*.")
+	domain := r.FormValue("domain")
 	if domain == "" {
 		http.Error(w, "no 'domain'", http.StatusBadRequest)
 		return

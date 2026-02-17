@@ -108,8 +108,9 @@ func runCert(ctx context.Context, args []string) error {
 		log.SetFlags(0)
 	}
 	if certArgs.certFile == "" && certArgs.keyFile == "" {
-		certArgs.certFile = domain + ".crt"
-		certArgs.keyFile = domain + ".key"
+		fileBase := strings.Replace(domain, "*.", "wildcard_.", 1)
+		certArgs.certFile = fileBase + ".crt"
+		certArgs.keyFile = fileBase + ".key"
 	}
 	certPEM, keyPEM, err := localClient.CertPairWithValidity(ctx, domain, certArgs.minValidity)
 	if err != nil {
