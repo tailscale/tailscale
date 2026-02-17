@@ -24,6 +24,7 @@ func (src *LoginProfile) Clone() *LoginProfile {
 	}
 	dst := new(LoginProfile)
 	*dst = *src
+	dst.UserProfile = *src.UserProfile.Clone()
 	return dst
 }
 

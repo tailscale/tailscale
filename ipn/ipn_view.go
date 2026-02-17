@@ -113,7 +113,7 @@ func (v LoginProfileView) Key() StateKey { return v.ж.Key }
 
 // UserProfile is the server provided UserProfile for this profile.
 // This is updated whenever the server provides a new UserProfile.
-func (v LoginProfileView) UserProfile() tailcfg.UserProfile { return v.ж.UserProfile }
+func (v LoginProfileView) UserProfile() tailcfg.UserProfileView { return v.ж.UserProfile.View() }
 
 // NodeID is the NodeID of the node that this profile is logged into.
 // This should be stable across tagging and untagging nodes.
