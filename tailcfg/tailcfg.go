@@ -282,6 +282,13 @@ type UserProfile struct {
 	LoginName     string // "alice@smith.com"; for display purposes only (provider is not listed)
 	DisplayName   string // "Alice Smith"
 	ProfilePicURL string `json:",omitzero"`
+
+	// Groups is a subset of SCIM groups (e.g. "engineering@example.com")
+	// or group names in the tailnet policy document (e.g. "group:eng")
+	// that contain this user and that the coordination server was
+	// configured to report to this node.
+	// The list is always sorted when loaded from storage.
+	Groups []string `json:",omitempty"`
 }
 
 func (p *UserProfile) Equal(p2 *UserProfile) bool {
@@ -294,7 +301,8 @@ func (p *UserProfile) Equal(p2 *UserProfile) bool {
 	return p.ID == p2.ID &&
 		p.LoginName == p2.LoginName &&
 		p.DisplayName == p2.DisplayName &&
-		p.ProfilePicURL == p2.ProfilePicURL
+		p.ProfilePicURL == p2.ProfilePicURL &&
+		slices.Equal(p.Groups, p2.Groups)
 }
 
 // RawMessage is a raw encoded JSON value. It implements Marshaler and
