@@ -180,7 +180,8 @@ type CapabilityVersion int
 //   - 131: 2025-11-25: client respects [NodeAttrDefaultAutoUpdate]
 //   - 132: 2026-02-13: client respects [NodeAttrDisableHostsFileUpdates]
 //   - 133: 2026-02-17: client understands [NodeAttrForceRegisterMagicDNSIPv4Only]; MagicDNS IPv6 registered w/ OS by default
-const CurrentCapabilityVersion CapabilityVersion = 133
+//   - 134: 2026-02-18: UserProfile.Groups readded (available via WhoIs) (removed in 87)
+const CurrentCapabilityVersion CapabilityVersion = 134
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -282,6 +283,13 @@ type UserProfile struct {
 	LoginName     string // "alice@smith.com"; for display purposes only (provider is not listed)
 	DisplayName   string // "Alice Smith"
 	ProfilePicURL string `json:",omitzero"`
+
+	// Groups contains group identifiers for any group that this user is
+	// a part of and that the coordination server is configured to tell
+	// your node about. (Thus, it may be empty or incomplete.)
+	// There's no semantic difference between a nil and an empty list.
+	// The list is always sorted.
+	Groups []string `json:",omitempty"`
 }
 
 func (p *UserProfile) Equal(p2 *UserProfile) bool {
@@ -294,7 +302,8 @@ func (p *UserProfile) Equal(p2 *UserProfile) bool {
 	return p.ID == p2.ID &&
 		p.LoginName == p2.LoginName &&
 		p.DisplayName == p2.DisplayName &&
-		p.ProfilePicURL == p2.ProfilePicURL
+		p.ProfilePicURL == p2.ProfilePicURL &&
+		slices.Equal(p.Groups, p2.Groups)
 }
 
 // RawMessage is a raw encoded JSON value. It implements Marshaler and
