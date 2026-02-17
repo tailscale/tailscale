@@ -606,7 +606,7 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		cc.assertCalls()
 		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
-		c.Assert(nn[1].Prefs.Persist().UserProfile().LoginName, qt.Equals, "user1")
+		c.Assert(nn[1].Prefs.Persist().UserProfile().LoginName(), qt.Equals, "user1")
 		// nn[2] is a state notification after login
 		// Verify login finished but need machine auth using backend state
 		c.Assert(isFullyAuthenticated(b), qt.IsTrue)
@@ -818,7 +818,7 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(nn[1].Prefs.Persist(), qt.IsNotNil)
 		// Prefs after finishing the login, so LoginName updated.
-		c.Assert(nn[1].Prefs.Persist().UserProfile().LoginName, qt.Equals, "user2")
+		c.Assert(nn[1].Prefs.Persist().UserProfile().LoginName(), qt.Equals, "user2")
 		c.Assert(nn[1].Prefs.LoggedOut(), qt.IsFalse)
 		// If a user initiates an interactive login, they also expect WantRunning to become true.
 		c.Assert(nn[1].Prefs.WantRunning(), qt.IsTrue)
@@ -964,7 +964,7 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		// Prefs after finishing the login, so LoginName updated.
-		c.Assert(nn[1].Prefs.Persist().UserProfile().LoginName, qt.Equals, "user3")
+		c.Assert(nn[1].Prefs.Persist().UserProfile().LoginName(), qt.Equals, "user3")
 		c.Assert(nn[1].Prefs.LoggedOut(), qt.IsFalse)
 		c.Assert(nn[1].Prefs.WantRunning(), qt.IsTrue)
 		// nn[2] is state notification (Starting) - verify using backend state
