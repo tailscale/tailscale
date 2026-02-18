@@ -354,7 +354,14 @@ func (i *iptablesRunner) addBase6(tunname string) error {
 
 	args = []string{"-i", tunname, "-j", "MARK", "--set-mark", subnetRouteMark + "/" + fwmarkMask}
 	if err := i.ipt6.Append("filter", "ts-forward", args...); err != nil {
-		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
+		if strings.Contains(err.Error(), "MARK: bad value for option \"--set-mark\", or out of range (0-4294967295)") {
+			err = fmt.Errorf(
+				"The Linux kernel release you are running contains a bug that prevents setting packet marks via iptables in IPv6\n" +
+					"Please upgrade your kernel / seek a fix from your kernel vendor.\n" +
+					"See https://github.com/torvalds/linux/commit/306ed1728e8438caed30332e1ab46b28c25fe3d8\n" +
+					"To work around this issue, you can set TS_DEBUG_FIREWALL_MODE=nftables in /etc/default/tailscale")
+		}
+		return err
 	}
 	args = []string{"-m", "mark", "--mark", subnetRouteMark + "/" + fwmarkMask, "-j", "ACCEPT"}
 	if err := i.ipt6.Append("filter", "ts-forward", args...); err != nil {
