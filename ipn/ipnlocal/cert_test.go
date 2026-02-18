@@ -139,7 +139,7 @@ func TestResolveCertDomain(t *testing.T) {
 			domain:      "*.unrelated.ts.net",
 			certDomains: []string{"node.ts.net"},
 			hasCap:      true,
-			wantErr:     `invalid domain "*.unrelated.ts.net"; parent domain must be one of ["node.ts.net"]`,
+			wantErr:     `invalid domain "*.unrelated.ts.net"; wildcard certificates are not enabled for this domain`,
 		},
 		{
 			name:        "subdomain_unrelated_rejected",
