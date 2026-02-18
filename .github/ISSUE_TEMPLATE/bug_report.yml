@@ -1,5 +1,5 @@
 name: Bug report
-description: File a bug report. If you need help, contact support instead
+description: File a bug report. If you need help, contact support at https://tailscale.com/support instead.
 labels: [needs-triage, bug]
 body:
   - type: markdown
@@ -39,6 +39,7 @@ body:
         - macOS
         - Windows
         - iOS
+        - tvOS
         - Android
         - Synology
         - Other
@@ -57,21 +58,21 @@ body:
     attributes:
       label: Tailscale version
       description: What Tailscale version are you using?
-      placeholder: e.g., 1.14.4
+      placeholder: e.g., 1.68.1
     validations:
       required: false
   - type: textarea
     id: other-software
     attributes:
       label: Other software
-      description: What [other software](https://github.com/tailscale/tailscale/wiki/OtherSoftwareInterop) (networking, security, etc) are you running?
+      description: What [other software](https://github.com/tailscale/tailscale/wiki/OtherSoftwareInterop) (networking, security, etc) are you running? Are you using a work device managed by your employer?
     validations:
       required: false
   - type: input
     id: bug-report
     attributes:
       label: Bug report
-      description: Please run [`tailscale bugreport`](https://tailscale.com/kb/1080/cli/?q=Cli#bugreport) and share the bug identifier. The identifier is a random string which allows Tailscale support to locate your account and gives a point to focus on when looking for errors.
+      description: [Generate a bug report identifier](https://tailscale.com/kb/1227/bug-report) and attach it here. The identifier is a random string which allows Tailscale support to locate your account, and gives us a point in time to focus on when looking for errors. If you do not share a bug report identifier, the Tailscale team won't be able to investigate your issue.
       placeholder: e.g., BUG-1b7641a16971a9cd75822c0ed8043fee70ae88cf05c52981dc220eb96a5c49a8-20210427151443Z-fbcd4fd3a4b7ad94
     validations:
       required: false
