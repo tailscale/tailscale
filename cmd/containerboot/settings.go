@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build linux
@@ -22,9 +22,13 @@ import (
 
 // settings is all the configuration for containerboot.
 type settings struct {
-	AuthKey  string
-	Hostname string
-	Routes   *string
+	AuthKey      string
+	ClientID     string
+	ClientSecret string
+	IDToken      string
+	Audience     string
+	Hostname     string
+	Routes       *string
 	// ProxyTargetIP is the destination IP to which all incoming
 	// Tailscale traffic should be proxied. If empty, no proxying
 	// is done. This is typically a locally reachable IP.
@@ -86,6 +90,10 @@ type settings struct {
 func configFromEnv() (*settings, error) {
 	cfg := &settings{
 		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
+		ClientID:                              defaultEnv("TS_CLIENT_ID", ""),
+		ClientSecret:                          defaultEnv("TS_CLIENT_SECRET", ""),
+		IDToken:                               defaultEnv("TS_ID_TOKEN", ""),
+		Audience:                              defaultEnv("TS_AUDIENCE", ""),
 		Hostname:                              defaultEnv("TS_HOSTNAME", ""),
 		Routes:                                defaultEnvStringPointer("TS_ROUTES"),
 		ServeConfigPath:                       defaultEnv("TS_SERVE_CONFIG", ""),
@@ -118,6 +126,7 @@ func configFromEnv() (*settings, error) {
 		IngressProxiesCfgPath:                 defaultEnv("TS_INGRESS_PROXIES_CONFIG_PATH", ""),
 		PodUID:                                defaultEnv("POD_UID", ""),
 	}
+
 	podIPs, ok := os.LookupEnv("POD_IPS")
 	if ok {
 		ips := strings.Split(podIPs, ",")
@@ -136,6 +145,7 @@ func configFromEnv() (*settings, error) {
 			cfg.PodIPv6 = parsed.String()
 		}
 	}
+
 	// If cert share is enabled, set the replica as read or write. Only 0th
 	// replica should be able to write.
 	isInCertShareMode := defaultBool("TS_EXPERIMENTAL_CERT_SHARE", false)
@@ -157,9 +167,19 @@ func configFromEnv() (*settings, error) {
 		cfg.AcceptDNS = &acceptDNSNew
 	}
 
+	// In Kubernetes clusters, people like to use the "$(POD_IP):PORT" combination to configure the TS_LOCAL_ADDR_PORT
+	// environment variable (we even do this by default in the operator when enabling metrics), leading to a v6 address
+	// and port combo we cannot parse, as netip.ParseAddrPort expects the host segment to be enclosed in square brackets.
+	// We perform a check here to see if TS_LOCAL_ADDR_PORT is using the pod's IPv6 address and is not using brackets,
+	// adding the brackets in if need be.
+	if cfg.PodIPv6 != "" && strings.Contains(cfg.LocalAddrPort, cfg.PodIPv6) && !strings.ContainsAny(cfg.LocalAddrPort, "[]") {
+		cfg.LocalAddrPort = strings.Replace(cfg.LocalAddrPort, cfg.PodIPv6, "["+cfg.PodIPv6+"]", 1)
+	}
+
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %v", err)
 	}
+
 	return cfg, nil
 }
 
@@ -241,8 +261,46 @@ func (s *settings) validate() error {
 	if s.TailnetTargetFQDN != "" && s.TailnetTargetIP != "" {
 		return errors.New("Both TS_TAILNET_TARGET_IP and TS_TAILNET_FQDN cannot be set")
 	}
-	if s.TailscaledConfigFilePath != "" && (s.AcceptDNS != nil || s.AuthKey != "" || s.Routes != nil || s.ExtraArgs != "" || s.Hostname != "") {
-		return errors.New("TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR cannot be set in combination with TS_HOSTNAME, TS_EXTRA_ARGS, TS_AUTHKEY, TS_ROUTES, TS_ACCEPT_DNS.")
+	if s.TailscaledConfigFilePath != "" &&
+		(s.AcceptDNS != nil ||
+			s.AuthKey != "" ||
+			s.Routes != nil ||
+			s.ExtraArgs != "" ||
+			s.Hostname != "" ||
+			s.ClientID != "" ||
+			s.ClientSecret != "" ||
+			s.IDToken != "" ||
+			s.Audience != "") {
+		conflictingArgs := []string{
+			"TS_HOSTNAME",
+			"TS_EXTRA_ARGS",
+			"TS_AUTHKEY",
+			"TS_ROUTES",
+			"TS_ACCEPT_DNS",
+			"TS_CLIENT_ID",
+			"TS_CLIENT_SECRET",
+			"TS_ID_TOKEN",
+			"TS_AUDIENCE",
+		}
+		return fmt.Errorf("TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR cannot be set in combination with %s.", strings.Join(conflictingArgs, ", "))
+	}
+	if s.IDToken != "" && s.ClientID == "" {
+		return errors.New("TS_ID_TOKEN is set but TS_CLIENT_ID is not set")
+	}
+	if s.Audience != "" && s.ClientID == "" {
+		return errors.New("TS_AUDIENCE is set but TS_CLIENT_ID is not set")
+	}
+	if s.IDToken != "" && s.ClientSecret != "" {
+		return errors.New("TS_ID_TOKEN and TS_CLIENT_SECRET cannot both be set")
+	}
+	if s.IDToken != "" && s.Audience != "" {
+		return errors.New("TS_ID_TOKEN and TS_AUDIENCE cannot both be set")
+	}
+	if s.Audience != "" && s.ClientSecret != "" {
+		return errors.New("TS_AUDIENCE and TS_CLIENT_SECRET cannot both be set")
+	}
+	if s.AuthKey != "" && (s.ClientID != "" || s.ClientSecret != "" || s.IDToken != "" || s.Audience != "") {
+		return errors.New("TS_AUTHKEY cannot be used with TS_CLIENT_ID, TS_CLIENT_SECRET, TS_ID_TOKEN, or TS_AUDIENCE.")
 	}
 	if s.AllowProxyingClusterTrafficViaIngress && s.UserspaceMode {
 		return errors.New("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS is not supported in userspace mode")
@@ -312,8 +370,8 @@ func (cfg *settings) setupKube(ctx context.Context, kc *kubeClient) error {
 		}
 	}
 
-	// Return early if we already have an auth key.
-	if cfg.AuthKey != "" || isOneStepConfig(cfg) {
+	// Return early if we already have an auth key or are using OAuth/WIF.
+	if cfg.AuthKey != "" || cfg.ClientID != "" || cfg.ClientSecret != "" || isOneStepConfig(cfg) {
 		return nil
 	}
 

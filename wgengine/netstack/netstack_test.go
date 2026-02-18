@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package netstack
@@ -31,6 +31,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logid"
+	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 )
@@ -125,6 +126,7 @@ func makeNetstack(tb testing.TB, config func(*Impl)) *Impl {
 		tb.Fatal(err)
 	}
 	tb.Cleanup(func() { ns.Close() })
+	sys.Set(ns)
 
 	lb, err := ipnlocal.NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {
@@ -741,13 +743,20 @@ func TestHandleLocalPackets(t *testing.T) {
 		// fd7a:115c:a1e0:b1a:0:7:a01:100/120
 		netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:7:a01:100/120"),
 	}
+	prefs.AdvertiseServices = []string{"svc:test-service"}
 	_, err := impl.lb.EditPrefs(&ipn.MaskedPrefs{
-		Prefs:              *prefs,
-		AdvertiseRoutesSet: true,
+		Prefs:                *prefs,
+		AdvertiseRoutesSet:   true,
+		AdvertiseServicesSet: true,
 	})
 	if err != nil {
 		t.Fatalf("EditPrefs: %v", err)
 	}
+	IPServiceMap := netmap.IPServiceMappings{
+		netip.MustParseAddr("100.99.55.111"):        "svc:test-service",
+		netip.MustParseAddr("fd7a:115c:a1e0::abcd"): "svc:test-service",
+	}
+	impl.lb.SetIPServiceMappingsForTest(IPServiceMap)
 
 	t.Run("ShouldHandleServiceIP", func(t *testing.T) {
 		pkt := &packet.Parsed{
@@ -784,6 +793,19 @@ func TestHandleLocalPackets(t *testing.T) {
 			t.Errorf("got filter outcome %v, want filter.DropSilently", resp)
 		}
 	})
+	t.Run("ShouldHandleLocalTailscaleServices", func(t *testing.T) {
+		pkt := &packet.Parsed{
+			IPVersion: 4,
+			IPProto:   ipproto.TCP,
+			Src:       netip.MustParseAddrPort("127.0.0.1:9999"),
+			Dst:       netip.MustParseAddrPort("100.99.55.111:80"),
+			TCPFlags:  packet.TCPSyn,
+		}
+		resp, _ := impl.handleLocalPackets(pkt, impl.tundev, nil)
+		if resp != filter.DropSilently {
+			t.Errorf("got filter outcome %v, want filter.DropSilently", resp)
+		}
+	})
 	t.Run("OtherNonHandled", func(t *testing.T) {
 		pkt := &packet.Parsed{
 			IPVersion: 6,
@@ -809,8 +831,10 @@ func TestHandleLocalPackets(t *testing.T) {
 
 func TestShouldSendToHost(t *testing.T) {
 	var (
-		selfIP4 = netip.MustParseAddr("100.64.1.2")
-		selfIP6 = netip.MustParseAddr("fd7a:115c:a1e0::123")
+		selfIP4             = netip.MustParseAddr("100.64.1.2")
+		selfIP6             = netip.MustParseAddr("fd7a:115c:a1e0::123")
+		tailscaleServiceIP4 = netip.MustParseAddr("100.99.55.111")
+		tailscaleServiceIP6 = netip.MustParseAddr("fd7a:115c:a1e0::abcd")
 	)
 
 	makeTestNetstack := func(tb testing.TB) *Impl {
@@ -819,6 +843,9 @@ func TestShouldSendToHost(t *testing.T) {
 			impl.ProcessLocalIPs = false
 			impl.atomicIsLocalIPFunc.Store(func(addr netip.Addr) bool {
 				return addr == selfIP4 || addr == selfIP6
+			})
+			impl.atomicIsVIPServiceIPFunc.Store(func(addr netip.Addr) bool {
+				return addr == tailscaleServiceIP4 || addr == tailscaleServiceIP6
 			})
 		})
 
@@ -917,6 +944,33 @@ func TestShouldSendToHost(t *testing.T) {
 			// fd7a:115c:a1e0:b1a:0:7:a01:163/120
 			src:  netip.MustParseAddrPort("[fd7a:115c:a1e0:b1a:0:115c:a01:158]:12345"),
 			dst:  netip.MustParseAddrPort("[fd7a:115:a1e0::99]:7777"),
+			want: false,
+		},
+		// After accessing the Tailscale service from host, replies from Tailscale Service IPs
+		// to the local Tailscale IPs should be sent to the host.
+		{
+			name: "from_service_ip_to_local_ip",
+			src:  netip.AddrPortFrom(tailscaleServiceIP4, 80),
+			dst:  netip.AddrPortFrom(selfIP4, 12345),
+			want: true,
+		},
+		{
+			name: "from_service_ip_to_local_ip_v6",
+			src:  netip.AddrPortFrom(tailscaleServiceIP6, 80),
+			dst:  netip.AddrPortFrom(selfIP6, 12345),
+			want: true,
+		},
+		// Traffic from remote IPs to Tailscale Service IPs should be sent over WireGuard.
+		{
+			name: "from_service_ip_to_remote",
+			src:  netip.AddrPortFrom(tailscaleServiceIP4, 80),
+			dst:  netip.MustParseAddrPort("173.201.32.56:54321"),
+			want: false,
+		},
+		{
+			name: "from_service_ip_to_remote_v6",
+			src:  netip.AddrPortFrom(tailscaleServiceIP6, 80),
+			dst:  netip.MustParseAddrPort("[2001:4860:4860::8888]:54321"),
 			want: false,
 		},
 	}

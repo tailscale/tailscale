@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // testwrapper is a wrapper for retrying flaky tests. It is an alternative to
@@ -36,6 +36,7 @@ type testAttempt struct {
 	pkg           string // "tailscale.com/types/key"
 	testName      string // "TestFoo"
 	outcome       string // "pass", "fail", "skip"
+	cached        bool   // whether package-level (non-testName specific) was pass due to being cached
 	logs          bytes.Buffer
 	start, end    time.Time
 	isMarkedFlaky bool   // set if the test is marked as flaky
@@ -108,6 +109,8 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 		os.Exit(1)
 	}
 
+	pkgCached := map[string]bool{}
+
 	s := bufio.NewScanner(r)
 	resultMap := make(map[string]map[string]*testAttempt) // pkg -> test -> testAttempt
 	for s.Scan() {
@@ -127,6 +130,12 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 			resultMap[pkg] = pkgTests
 		}
 		if goOutput.Test == "" {
+			// Detect output lines like:
+			// ok  \ttailscale.com/cmd/testwrapper\t(cached)
+			// ok  \ttailscale.com/cmd/testwrapper\t(cached)\tcoverage: 17.0% of statements
+			if goOutput.Package != "" && strings.Contains(goOutput.Output, fmt.Sprintf("%s\t(cached)", goOutput.Package)) {
+				pkgCached[goOutput.Package] = true
+			}
 			switch goOutput.Action {
 			case "start":
 				pkgTests[""].start = goOutput.Time
@@ -151,6 +160,7 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 					end:         goOutput.Time,
 					logs:        pkgTests[""].logs,
 					pkgFinished: true,
+					cached:      pkgCached[goOutput.Package],
 				}
 			case "output":
 				// Capture all output from the package except for the final
@@ -235,7 +245,7 @@ func main() {
 		firstRun.tests = append(firstRun.tests, &packageTests{Pattern: pkg})
 	}
 	toRun := []*nextRun{firstRun}
-	printPkgOutcome := func(pkg, outcome string, attempt int, runtime time.Duration) {
+	printPkgOutcome := func(pkg, outcome string, cached bool, attempt int, testDur time.Duration) {
 		if pkg == "" {
 			return // We reach this path on a build error.
 		}
@@ -250,10 +260,16 @@ func main() {
 			outcome = "FAIL"
 		}
 		if attempt > 1 {
-			fmt.Printf("%s\t%s\t%.3fs\t[attempt=%d]\n", outcome, pkg, runtime.Seconds(), attempt)
+			fmt.Printf("%s\t%s\t%.3fs\t[attempt=%d]\n", outcome, pkg, testDur.Seconds(), attempt)
 			return
 		}
-		fmt.Printf("%s\t%s\t%.3fs\n", outcome, pkg, runtime.Seconds())
+		var lastCol string
+		if cached {
+			lastCol = "(cached)"
+		} else {
+			lastCol = fmt.Sprintf("%.3f", testDur.Seconds())
+		}
+		fmt.Printf("%s\t%s\t%v\n", outcome, pkg, lastCol)
 	}
 
 	for len(toRun) > 0 {
@@ -300,7 +316,7 @@ func main() {
 						// panics outside tests will be printed
 						io.Copy(os.Stdout, &tr.logs)
 					}
-					printPkgOutcome(tr.pkg, tr.outcome, thisRun.attempt, tr.end.Sub(tr.start))
+					printPkgOutcome(tr.pkg, tr.outcome, tr.cached, thisRun.attempt, tr.end.Sub(tr.start))
 					continue
 				}
 				if testingVerbose || tr.outcome == "fail" {

@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build cgo || !darwin
@@ -66,8 +66,8 @@ func (menu *Menu) Run(client *local.Client) {
 		case <-menu.bgCtx.Done():
 		}
 	}()
-	go menu.lc.IncrementGauge(menu.bgCtx, "systray_running", 1)
-	defer menu.lc.IncrementGauge(menu.bgCtx, "systray_running", -1)
+	go menu.lc.SetGauge(menu.bgCtx, "systray_running", 1)
+	defer menu.lc.SetGauge(menu.bgCtx, "systray_running", 0)
 
 	systray.Run(menu.onReady, menu.onExit)
 }
@@ -171,6 +171,11 @@ tailscale systray
 See https://tailscale.com/kb/1597/linux-systray for more information.`)
 	}
 	setAppIcon(disconnected)
+
+	// set initial title, which is used by the systray package as the ID of the StatusNotifierItem.
+	// This value will get overwritten later as the client status changes.
+	systray.SetTitle("tailscale")
+
 	menu.rebuild()
 
 	menu.mu.Lock()
@@ -372,6 +377,7 @@ func setRemoteIcon(menu *systray.MenuItem, urlStr string) {
 	}
 
 	cacheMu.Lock()
+	defer cacheMu.Unlock()
 	b, ok := httpCache[urlStr]
 	if !ok {
 		resp, err := http.Get(urlStr)
@@ -395,7 +401,6 @@ func setRemoteIcon(menu *systray.MenuItem, urlStr string) {
 			resp.Body.Close()
 		}
 	}
-	cacheMu.Unlock()
 
 	if len(b) > 0 {
 		menu.SetIcon(b)

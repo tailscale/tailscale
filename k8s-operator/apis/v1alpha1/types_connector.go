@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !plan9
@@ -133,6 +133,12 @@ type ConnectorSpec struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	Replicas *int32 `json:"replicas,omitempty"`
+
+	// Tailnet specifies the tailnet this Connector should join. If blank, the default tailnet is used. When set, this
+	// name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set.
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Connector tailnet is immutable"
+	Tailnet string `json:"tailnet,omitempty"`
 }
 
 // SubnetRouter defines subnet routes that should be exposed to tailnet via a

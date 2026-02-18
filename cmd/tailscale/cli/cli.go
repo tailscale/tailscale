@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package cli contains the cmd/tailscale CLI code in a package that can be included
@@ -6,6 +6,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,8 +21,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/mattn/go-colorable"
-	"github.com/mattn/go-isatty"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/local"
 	"tailscale.com/cmd/tailscale/cli/ffcomplete"
@@ -218,6 +217,7 @@ var (
 	maybeFunnelCmd,
 	maybeServeCmd,
 	maybeCertCmd,
+	maybeUpdateCmd,
 	_ func() *ffcli.Command
 )
 
@@ -269,7 +269,7 @@ change in the future.
 			nilOrCall(maybeNetlockCmd),
 			licensesCmd,
 			exitNodeCmd(),
-			updateCmd,
+			nilOrCall(maybeUpdateCmd),
 			whoisCmd,
 			debugCmd(),
 			nilOrCall(maybeDriveCmd),
@@ -277,6 +277,7 @@ change in the future.
 			configureHostCmd(),
 			systrayCmd,
 			appcRoutesCmd,
+			waitCmd,
 		),
 		FlagSet: rootfs,
 		Exec: func(ctx context.Context, args []string) error {
@@ -293,6 +294,10 @@ change in the future.
 	walkCommands(rootCmd, func(w cmdWalk) bool {
 		if w.UsageFunc == nil {
 			w.UsageFunc = usageFunc
+		}
+		if w.FlagSet != nil {
+			// If flags cannot be parsed, redact any keys in the error output .
+			w.FlagSet.SetOutput(sanitizeOutput(w.FlagSet.Output()))
 		}
 		return true
 	})
@@ -477,20 +482,6 @@ func countFlags(fs *flag.FlagSet) (n int) {
 	return n
 }
 
-// colorableOutput returns a colorable writer if stdout is a terminal (not, say,
-// redirected to a file or pipe), the Stdout writer is os.Stdout (we're not
-// embedding the CLI in wasm or a mobile app), and NO_COLOR is not set (see
-// https://no-color.org/). If any of those is not the case, ok is false
-// and w is Stdout.
-func colorableOutput() (w io.Writer, ok bool) {
-	if Stdout != os.Stdout ||
-		os.Getenv("NO_COLOR") != "" ||
-		!isatty.IsTerminal(os.Stdout.Fd()) {
-		return Stdout, false
-	}
-	return colorable.NewColorableStdout(), true
-}
-
 type commandDoc struct {
 	Name        string
 	Desc        string
@@ -565,4 +556,42 @@ func fixTailscaledConnectError(origErr error) error {
 		return f(origErr)
 	}
 	return origErr
+}
+
+func sanitizeOutput(w io.Writer) io.Writer {
+	return sanitizeWriter{w}
+}
+
+type sanitizeWriter struct {
+	w io.Writer
+}
+
+// Write logically replaces /tskey-[A-Za-z0-9-]+/ with /tskey-XXXX.../ in buf
+// before writing to the underlying writer.
+//
+// We avoid the "regexp" package to not bloat the minbox build, and without
+// making this a featuretag-omittable protection.
+func (w sanitizeWriter) Write(buf []byte) (int, error) {
+	const prefix = "tskey-"
+	scrub := buf
+	for {
+		i := bytes.Index(scrub, []byte(prefix))
+		if i == -1 {
+			break
+		}
+		scrub = scrub[i+len(prefix):]
+
+		for i, b := range scrub {
+			if (b >= 'a' && b <= 'z') ||
+				(b >= 'A' && b <= 'Z') ||
+				(b >= '0' && b <= '9') ||
+				b == '-' {
+				scrub[i] = 'X'
+			} else {
+				break
+			}
+		}
+	}
+
+	return w.w.Write(buf)
 }

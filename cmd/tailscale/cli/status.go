@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package cli
@@ -18,7 +18,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"github.com/toqueteos/webbrowser"
 	"golang.org/x/net/idna"
 	"tailscale.com/feature"
 	"tailscale.com/ipn"
@@ -113,7 +112,9 @@ func runStatus(ctx context.Context, args []string) error {
 			ln.Close()
 		}()
 		if statusArgs.browser {
-			go webbrowser.Open(statusURL)
+			if f, ok := hookOpenURL.GetOk(); ok {
+				go f(statusURL)
+			}
 		}
 		err = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.RequestURI != "/" {
@@ -251,6 +252,8 @@ func runStatus(ctx context.Context, args []string) error {
 	}
 	return nil
 }
+
+var hookOpenURL feature.Hook[func(string) error]
 
 var hookPrintFunnelStatus feature.Hook[func(context.Context)]
 

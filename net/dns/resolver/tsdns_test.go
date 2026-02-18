@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package resolver
@@ -32,6 +32,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus/eventbustest"
+	"tailscale.com/util/set"
 )
 
 var (
@@ -422,6 +423,56 @@ func TestResolveLocal(t *testing.T) {
 				t.Errorf("code = %v; want %v", code, tt.code)
 			}
 			// Only check ip for non-err
+			if ip != tt.ip {
+				t.Errorf("ip = %v; want %v", ip, tt.ip)
+			}
+		})
+	}
+}
+
+func TestResolveLocalSubdomain(t *testing.T) {
+	r := newResolver(t)
+	defer r.Close()
+
+	// Configure with SubdomainHosts set for test1.ipn.dev
+	cfg := Config{
+		Hosts: map[dnsname.FQDN][]netip.Addr{
+			"test1.ipn.dev.": {testipv4},
+			"test2.ipn.dev.": {testipv6},
+		},
+		LocalDomains:   []dnsname.FQDN{"ipn.dev."},
+		SubdomainHosts: set.Of[dnsname.FQDN]("test1.ipn.dev."),
+	}
+	r.SetConfig(cfg)
+
+	tests := []struct {
+		name  string
+		qname dnsname.FQDN
+		qtype dns.Type
+		ip    netip.Addr
+		code  dns.RCode
+	}{
+		// Exact matches still work
+		{"exact-ipv4", "test1.ipn.dev.", dns.TypeA, testipv4, dns.RCodeSuccess},
+		{"exact-ipv6", "test2.ipn.dev.", dns.TypeAAAA, testipv6, dns.RCodeSuccess},
+
+		// Subdomain of test1 resolves (test1 has SubdomainHosts set)
+		{"subdomain-ipv4", "foo.test1.ipn.dev.", dns.TypeA, testipv4, dns.RCodeSuccess},
+		{"subdomain-deep", "bar.foo.test1.ipn.dev.", dns.TypeA, testipv4, dns.RCodeSuccess}, // Multi-level subdomain
+
+		// Subdomain of test2 does NOT resolve (test2 lacks SubdomainHosts)
+		{"subdomain-no-cap", "foo.test2.ipn.dev.", dns.TypeAAAA, netip.Addr{}, dns.RCodeNameError},
+
+		// Non-existent parent still returns NXDOMAIN
+		{"subdomain-no-parent", "foo.test3.ipn.dev.", dns.TypeA, netip.Addr{}, dns.RCodeNameError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ip, code := r.resolveLocal(tt.qname, tt.qtype)
+			if code != tt.code {
+				t.Errorf("code = %v; want %v", code, tt.code)
+			}
 			if ip != tt.ip {
 				t.Errorf("ip = %v; want %v", ip, tt.ip)
 			}
@@ -1519,5 +1570,104 @@ func TestServfail(t *testing.T) {
 
 	if !bytes.Equal(pkt, wantPkt) {
 		t.Errorf("response was %X, want %X", pkt, wantPkt)
+	}
+}
+
+// TestLocalResponseTCFlagIntegration tests that checkResponseSizeAndSetTC is
+// correctly applied to local DNS responses through the Resolver.Query integration path.
+// This complements the unit test in forwarder_test.go by verifying the end-to-end behavior.
+func TestLocalResponseTCFlagIntegration(t *testing.T) {
+	r := newResolver(t)
+	defer r.Close()
+
+	r.SetConfig(dnsCfg)
+
+	tests := []struct {
+		name      string
+		query     []byte
+		family    string
+		wantTCSet bool
+		desc      string
+	}{
+		{
+			name:      "UDP_small_local_response_no_TC",
+			query:     dnspacket("test1.ipn.dev.", dns.TypeA, noEdns),
+			family:    "udp",
+			wantTCSet: false,
+			desc:      "Small local response (< 512 bytes) should not have TC flag set",
+		},
+		{
+			name:      "TCP_local_response_no_TC",
+			query:     dnspacket("test1.ipn.dev.", dns.TypeA, noEdns),
+			family:    "tcp",
+			wantTCSet: false,
+			desc:      "TCP queries should skip TC flag setting (even for large responses)",
+		},
+		{
+			name:      "UDP_EDNS_request_small_response",
+			query:     dnspacket("test1.ipn.dev.", dns.TypeA, 1500),
+			family:    "udp",
+			wantTCSet: false,
+			desc:      "Small response with EDNS request should not have TC flag set",
+		},
+		{
+			name:      "UDP_IPv6_response_no_TC",
+			query:     dnspacket("test2.ipn.dev.", dns.TypeAAAA, noEdns),
+			family:    "udp",
+			wantTCSet: false,
+			desc:      "Small IPv6 local response should not have TC flag set",
+		},
+		{
+			name:      "UDP_reverse_lookup_no_TC",
+			query:     dnspacket("4.3.2.1.in-addr.arpa.", dns.TypePTR, noEdns),
+			family:    "udp",
+			wantTCSet: false,
+			desc:      "Small reverse lookup response should not have TC flag set",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response, err := r.Query(context.Background(), tt.query, tt.family, netip.AddrPort{})
+			if err != nil {
+				t.Fatalf("Query failed: %v", err)
+			}
+
+			if len(response) < headerBytes {
+				t.Fatalf("Response too small: %d bytes", len(response))
+			}
+
+			hasTC := truncatedFlagSet(response)
+			if hasTC != tt.wantTCSet {
+				t.Errorf("%s: TC flag = %v, want %v (response size=%d bytes)", tt.desc, hasTC, tt.wantTCSet, len(response))
+			}
+
+			// Verify response is valid by parsing it (if possible)
+			// Note: unpackResponse may not support all record types (e.g., PTR)
+			parsed, err := unpackResponse(response)
+			if err == nil {
+				// Verify the truncated field in parsed response matches the flag
+				if parsed.truncated != hasTC {
+					t.Errorf("Parsed truncated field (%v) doesn't match TC flag (%v)", parsed.truncated, hasTC)
+				}
+			} else {
+				// For unsupported types, just verify we can parse the header
+				var parser dns.Parser
+				h, err := parser.Start(response)
+				if err != nil {
+					t.Errorf("Failed to parse DNS header: %v", err)
+				} else {
+					// Verify header truncated flag matches
+					if h.Truncated != hasTC {
+						t.Errorf("Header truncated field (%v) doesn't match TC flag (%v)", h.Truncated, hasTC)
+					}
+				}
+			}
+
+			// Verify response size is reasonable (local responses are typically small)
+			if len(response) > 1000 {
+				t.Logf("Warning: Local response is unusually large: %d bytes", len(response))
+			}
+		})
 	}
 }

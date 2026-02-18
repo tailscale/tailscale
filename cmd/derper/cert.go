@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package main
@@ -11,6 +11,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -24,6 +25,7 @@ import (
 	"regexp"
 	"time"
 
+	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 	"tailscale.com/tailcfg"
 )
@@ -42,19 +44,42 @@ type certProvider interface {
 	HTTPHandler(fallback http.Handler) http.Handler
 }
 
-func certProviderByCertMode(mode, dir, hostname string) (certProvider, error) {
+func certProviderByCertMode(mode, dir, hostname, eabKID, eabKey, email string) (certProvider, error) {
 	if dir == "" {
 		return nil, errors.New("missing required --certdir flag")
 	}
 	switch mode {
-	case "letsencrypt":
+	case "letsencrypt", "gcp":
 		certManager := &autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
 			HostPolicy: autocert.HostWhitelist(hostname),
 			Cache:      autocert.DirCache(dir),
 		}
+		if mode == "gcp" {
+			if eabKID == "" || eabKey == "" {
+				return nil, errors.New("--certmode=gcp requires --acme-eab-kid and --acme-eab-key flags")
+			}
+			if email == "" {
+				return nil, errors.New("--certmode=gcp requires --acme-email flag")
+			}
+			keyBytes, err := decodeEABKey(eabKey)
+			if err != nil {
+				return nil, err
+			}
+			certManager.Client = &acme.Client{
+				DirectoryURL: "https://dv.acme-v02.api.pki.goog/directory",
+			}
+			certManager.ExternalAccountBinding = &acme.ExternalAccountBinding{
+				KID: eabKID,
+				Key: keyBytes,
+			}
+		}
 		if hostname == "derp.tailscale.com" {
 			certManager.HostPolicy = prodAutocertHostPolicy
+		}
+		if email != "" {
+			certManager.Email = email
+		} else if hostname == "derp.tailscale.com" {
 			certManager.Email = "security@tailscale.com"
 		}
 		return certManager, nil
@@ -208,4 +233,18 @@ func createSelfSignedIPCert(crtPath, keyPath, ipStr string) (*tls.Certificate, e
 		return nil, fmt.Errorf("failed to create tls.Certificate: %v", err)
 	}
 	return &tlsCert, nil
+}
+
+// decodeEABKey decodes a base64-encoded EAB key.
+// It accepts both standard base64 (with padding) and base64url (without padding).
+func decodeEABKey(s string) ([]byte, error) {
+	// Try base64url first (no padding), then standard base64 (with padding).
+	// This handles both ACME spec format and gcloud output format.
+	if b, err := base64.RawURLEncoding.DecodeString(s); err == nil {
+		return b, nil
+	}
+	if b, err := base64.StdEncoding.DecodeString(s); err == nil {
+		return b, nil
+	}
+	return nil, errors.New("invalid base64 encoding for EAB key")
 }

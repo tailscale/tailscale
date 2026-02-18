@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package main_test
@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -211,6 +212,63 @@ func TestTimeout(t *testing.T) {
 
 	if testing.Verbose() {
 		t.Logf("success - output:\n%s", out)
+	}
+}
+
+func TestCached(t *testing.T) {
+	t.Parallel()
+
+	// Construct our trivial package.
+	pkgDir := t.TempDir()
+	goMod := fmt.Sprintf(`module example.com
+
+go %s
+`, runtime.Version()[2:]) // strip leading "go"
+
+	test := `package main
+import "testing"
+
+func TestCached(t *testing.T) {}
+`
+
+	for f, c := range map[string]string{
+		"go.mod":         goMod,
+		"cached_test.go": test,
+	} {
+		err := os.WriteFile(filepath.Join(pkgDir, f), []byte(c), 0o644)
+		if err != nil {
+			t.Fatalf("writing package: %s", err)
+		}
+	}
+
+	for name, args := range map[string][]string{
+		"without_flags":     {"./..."},
+		"with_short":        {"./...", "-short"},
+		"with_coverprofile": {"./...", "-coverprofile=" + filepath.Join(t.TempDir(), "coverage.out")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var (
+				out []byte
+				err error
+			)
+			for range 2 {
+				cmd := cmdTestwrapper(t, args...)
+				cmd.Dir = pkgDir
+				out, err = cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("testwrapper ./...: expected no error but got: %v; output was:\n%s", err, out)
+				}
+			}
+
+			want := []byte("ok\texample.com\t(cached)")
+			if !bytes.Contains(out, want) {
+				t.Fatalf("wanted output containing %q but got:\n%s", want, out)
+			}
+
+			if testing.Verbose() {
+				t.Logf("success - output:\n%s", out)
+			}
+		})
 	}
 }
 

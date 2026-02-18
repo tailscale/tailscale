@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build linux
@@ -119,6 +119,18 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 	}
 	if cfg.AuthKey != "" {
 		args = append(args, "--authkey="+cfg.AuthKey)
+	}
+	if cfg.ClientID != "" {
+		args = append(args, "--client-id="+cfg.ClientID)
+	}
+	if cfg.ClientSecret != "" {
+		args = append(args, "--client-secret="+cfg.ClientSecret)
+	}
+	if cfg.IDToken != "" {
+		args = append(args, "--id-token="+cfg.IDToken)
+	}
+	if cfg.Audience != "" {
+		args = append(args, "--audience="+cfg.Audience)
 	}
 	// --advertise-routes can be passed an empty string to configure a
 	// device (that might have previously advertised subnet routes) to not

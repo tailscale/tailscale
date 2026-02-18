@@ -1,5 +1,7 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
+
+//go:build !ts_omit_clientupdate
 
 package cli
 
@@ -16,6 +18,17 @@ import (
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
+
+func init() {
+	maybeUpdateCmd = func() *ffcli.Command { return updateCmd }
+
+	clientupdateLatestTailscaleVersion.Set(func(track string) (string, error) {
+		if track == "" {
+			return clientupdate.LatestTailscaleVersion(clientupdate.CurrentTrack)
+		}
+		return clientupdate.LatestTailscaleVersion(track)
+	})
+}
 
 var updateCmd = &ffcli.Command{
 	Name:       "update",
@@ -40,7 +53,7 @@ var updateCmd = &ffcli.Command{
 			distro.Get() != distro.Synology &&
 			runtime.GOOS != "freebsd" &&
 			runtime.GOOS != "darwin" {
-			fs.StringVar(&updateArgs.track, "track", "", `which track to check for updates: "stable" or "unstable" (dev); empty means same as current`)
+			fs.StringVar(&updateArgs.track, "track", "", `which track to check for updates: "stable", "release-candidate", or "unstable" (dev); empty means same as current`)
 			fs.StringVar(&updateArgs.version, "version", "", `explicit version to update/downgrade to`)
 		}
 		return fs

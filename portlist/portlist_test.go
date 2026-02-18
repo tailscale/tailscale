@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package portlist
@@ -11,12 +11,13 @@ import (
 	"tailscale.com/tstest"
 )
 
-func maybeSkip(t *testing.T) {
+func maybeSkip(t testing.TB) {
 	if runtime.GOOS == "linux" {
 		tstest.SkipOnKernelVersions(t,
 			"https://github.com/tailscale/tailscale/issues/16966",
 			"6.6.102", "6.6.103", "6.6.104",
 			"6.12.42", "6.12.43", "6.12.44", "6.12.45",
+			"6.14.0",
 		)
 	}
 }
@@ -213,6 +214,7 @@ func BenchmarkGetListIncremental(b *testing.B) {
 }
 
 func benchmarkGetList(b *testing.B, incremental bool) {
+	maybeSkip(b)
 	b.ReportAllocs()
 	var p Poller
 	p.init()

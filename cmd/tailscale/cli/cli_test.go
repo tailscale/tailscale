@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package cli
@@ -6,11 +6,14 @@ package cli
 import (
 	"bytes"
 	stdcmp "cmp"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -20,6 +23,7 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/envknob"
 	"tailscale.com/health/healthmsg"
+	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -1696,6 +1700,78 @@ func TestDocs(t *testing.T) {
 	walk(t, root)
 }
 
+func TestUpResolves(t *testing.T) {
+	const testARN = "arn:aws:ssm:us-east-1:123456789012:parameter/my-parameter"
+	undo := tailscale.HookResolveValueFromParameterStore.SetForTest(func(_ context.Context, valueOrARN string) (string, error) {
+		if valueOrARN == testARN {
+			return "resolved-value", nil
+		}
+		return valueOrARN, nil
+	})
+	defer undo()
+
+	const content = "file-content"
+	fpath := filepath.Join(t.TempDir(), "testfile")
+	if err := os.WriteFile(fpath, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	testCases := []struct {
+		name string
+		arg  string
+		want string
+	}{
+		{"parameter_store", testARN, "resolved-value"},
+		{"file", "file:" + fpath, "file-content"},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name+"_auth_key", func(t *testing.T) {
+			args := upArgsT{authKeyOrFile: tt.arg}
+			got, err := args.getAuthKey(t.Context())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+
+		t.Run(tt.name+"_client_secret", func(t *testing.T) {
+			args := upArgsT{clientSecretOrFile: tt.arg}
+			got, err := args.getClientSecret(t.Context())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+
+		t.Run(tt.name+"_id_token", func(t *testing.T) {
+			args := upArgsT{idTokenOrFile: tt.arg}
+			got, err := args.getIDToken(t.Context())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("passthrough", func(t *testing.T) {
+		args := upArgsT{authKeyOrFile: "tskey-abcd1234"}
+		got, err := args.getAuthKey(t.Context())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "tskey-abcd1234" {
+			t.Errorf("got %q, want %q", got, "tskey-abcd1234")
+		}
+	})
+}
+
 func TestDeps(t *testing.T) {
 	deptest.DepChecker{
 		GOOS:   "linux",
@@ -1722,4 +1798,22 @@ func TestDepsNoCapture(t *testing.T) {
 		},
 	}.Check(t)
 
+}
+
+func TestSanitizeWriter(t *testing.T) {
+	buf := new(bytes.Buffer)
+	w := sanitizeOutput(buf)
+
+	in := []byte(`my auth key is tskey-auth-abc123-def456 and tskey-foo, what's yours?`)
+	want := []byte(`my auth key is tskey-XXXXXXXXXXXXXXXXXX and tskey-XXX, what's yours?`)
+	n, err := w.Write(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != len(in) {
+		t.Errorf("unexpected write length %d, want %d", n, len(in))
+	}
+	if got := buf.Bytes(); !bytes.Equal(got, want) {
+		t.Errorf("unexpected sanitized content\ngot: %q\nwant: %q", got, want)
+	}
 }

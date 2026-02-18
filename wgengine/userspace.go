@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package wgengine
@@ -54,6 +54,7 @@ import (
 	"tailscale.com/util/execqueue"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
+	"tailscale.com/util/singleflight"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
@@ -142,8 +143,9 @@ type userspaceEngine struct {
 	trimmedNodes        map[key.NodePublic]bool   // set of node keys of peers currently excluded from wireguard config
 	sentActivityAt      map[netip.Addr]*mono.Time // value is accessed atomically
 	destIPActivityFuncs map[netip.Addr]func()
-	lastStatusPollTime  mono.Time    // last time we polled the engine status
-	reconfigureVPN      func() error // or nil
+	lastStatusPollTime  mono.Time         // last time we polled the engine status
+	reconfigureVPN      func() error      // or nil
+	conn25PacketHooks   Conn25PacketHooks // or nil
 
 	mu             sync.Mutex         // guards following; see lock order comment below
 	netMap         *netmap.NetworkMap // or nil
@@ -172,6 +174,19 @@ type BIRDClient interface {
 	EnableProtocol(proto string) error
 	DisableProtocol(proto string) error
 	Close() error
+}
+
+// Conn25PacketHooks are hooks for Connectors 2025 app connectors.
+// They are meant to be wired into to corresponding hooks in the
+// [tstun.Wrapper]. They may modify the packet (e.g., NAT), or drop
+// invalid app connector traffic.
+type Conn25PacketHooks interface {
+	// HandlePacketsFromTunDevice sends packets originating from the tun device
+	// for further Connectors 2025 app connectors processing.
+	HandlePacketsFromTunDevice(*packet.Parsed) filter.Response
+	// HandlePacketsFromWireguard sends packets originating from WireGuard
+	// for further Connectors 2025 app connectors processing.
+	HandlePacketsFromWireGuard(*packet.Parsed) filter.Response
 }
 
 // Config is the engine configuration.
@@ -246,6 +261,10 @@ type Config struct {
 	// TODO(creachadair): As of 2025-03-19 this is optional, but is intended to
 	// become required non-nil.
 	EventBus *eventbus.Bus
+
+	// Conn25PacketHooks, if non-nil, is used to hook packets for Connectors 2025
+	// app connector handling logic.
+	Conn25PacketHooks Conn25PacketHooks
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.
@@ -347,19 +366,20 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 
 	e := &userspaceEngine{
-		eventBus:       conf.EventBus,
-		timeNow:        mono.Now,
-		logf:           logf,
-		reqCh:          make(chan struct{}, 1),
-		waitCh:         make(chan struct{}),
-		tundev:         tsTUNDev,
-		router:         rtr,
-		dialer:         conf.Dialer,
-		confListenPort: conf.ListenPort,
-		birdClient:     conf.BIRDClient,
-		controlKnobs:   conf.ControlKnobs,
-		reconfigureVPN: conf.ReconfigureVPN,
-		health:         conf.HealthTracker,
+		eventBus:          conf.EventBus,
+		timeNow:           mono.Now,
+		logf:              logf,
+		reqCh:             make(chan struct{}, 1),
+		waitCh:            make(chan struct{}),
+		tundev:            tsTUNDev,
+		router:            rtr,
+		dialer:            conf.Dialer,
+		confListenPort:    conf.ListenPort,
+		birdClient:        conf.BIRDClient,
+		controlKnobs:      conf.ControlKnobs,
+		reconfigureVPN:    conf.ReconfigureVPN,
+		health:            conf.HealthTracker,
+		conn25PacketHooks: conf.Conn25PacketHooks,
 	}
 
 	if e.birdClient != nil {
@@ -387,7 +407,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	conf.Dialer.SetTUNName(tunName)
 	conf.Dialer.SetNetMon(e.netMon)
 	conf.Dialer.SetBus(e.eventBus)
-	e.dns = dns.NewManager(logf, conf.DNS, e.health, conf.Dialer, fwdDNSLinkSelector{e, tunName}, conf.ControlKnobs, runtime.GOOS)
+	e.dns = dns.NewManager(logf, conf.DNS, e.health, conf.Dialer, fwdDNSLinkSelector{e, tunName}, conf.ControlKnobs, runtime.GOOS, e.eventBus)
 
 	// TODO: there's probably a better place for this
 	sockstats.SetNetMon(e.netMon)
@@ -433,6 +453,16 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 	e.tundev.PreFilterPacketOutboundToWireGuardEngineIntercept = e.handleLocalPackets
 
+	if e.conn25PacketHooks != nil {
+		e.tundev.PreFilterPacketOutboundToWireGuardAppConnectorIntercept = func(p *packet.Parsed, _ *tstun.Wrapper) filter.Response {
+			return e.conn25PacketHooks.HandlePacketsFromTunDevice(p)
+		}
+
+		e.tundev.PostFilterPacketInboundFromWireGuardAppConnector = func(p *packet.Parsed, _ *tstun.Wrapper) filter.Response {
+			return e.conn25PacketHooks.HandlePacketsFromWireGuard(p)
+		}
+	}
+
 	if buildfeatures.HasDebug && envknob.BoolDefaultTrue("TS_DEBUG_CONNECT_FAILURES") {
 		if e.tundev.PreFilterPacketInboundFromWireGuard != nil {
 			return nil, errors.New("unexpected PreFilterIn already set")
@@ -451,6 +481,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		cb := e.pongCallback[pong.Data]
 		e.logf("wgengine: got TSMP pong %02x, peerAPIPort=%v; cb=%v", pong.Data, pong.PeerAPIPort, cb != nil)
 		if cb != nil {
+			delete(e.pongCallback, pong.Data)
 			go cb(pong)
 		}
 	}
@@ -464,6 +495,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 			// We didn't swallow it, so let it flow to the host.
 			return false
 		}
+		delete(e.icmpEchoResponseCallback, idSeq)
 		e.logf("wgengine: got diagnostic ICMP response %02x", idSeq)
 		go cb()
 		return true
@@ -548,6 +580,31 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 			f()
 		}
 		e.linkChangeQueue.Add(func() { e.linkChange(&cd) })
+	})
+	eventbus.SubscribeFunc(ec, func(update tstun.DiscoKeyAdvertisement) {
+		e.logf("wgengine: got TSMP disco key advertisement from %v via eventbus", update.Src)
+		if e.magicConn == nil {
+			e.logf("wgengine: no magicConn")
+			return
+		}
+
+		pkt := packet.TSMPDiscoKeyAdvertisement{
+			Key: update.Key,
+		}
+		peer, ok := e.PeerForIP(update.Src)
+		if !ok {
+			e.logf("wgengine: no peer found for %v", update.Src)
+			return
+		}
+		e.magicConn.HandleDiscoKeyAdvertisement(peer.Node, pkt)
+	})
+	var tsmpRequestGroup singleflight.Group[netip.Addr, struct{}]
+	eventbus.SubscribeFunc(ec, func(req magicsock.NewDiscoKeyAvailable) {
+		go tsmpRequestGroup.Do(req.NodeFirstAddr, func() (struct{}, error) {
+			e.sendTSMPDiscoAdvertisement(req.NodeFirstAddr)
+			e.logf("wgengine: sending TSMP disco key advertisement to %v", req.NodeFirstAddr)
+			return struct{}{}, nil
+		})
 	})
 	e.eventClient = ec
 	e.logf("Engine created.")
@@ -1330,20 +1387,18 @@ func (e *userspaceEngine) Done() <-chan struct{} {
 }
 
 func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
-	changed := delta.Major // TODO(bradfitz): ask more specific questions?
-	cur := delta.New
-	up := cur.AnyInterfaceUp()
+
+	up := delta.AnyInterfaceUp()
 	if !up {
-		e.logf("LinkChange: all links down; pausing: %v", cur)
-	} else if changed {
-		e.logf("LinkChange: major, rebinding. New state: %v", cur)
+		e.logf("LinkChange: all links down; pausing: %v", delta.StateDesc())
+	} else if delta.RebindLikelyRequired {
+		e.logf("LinkChange: major, rebinding: %v", delta.StateDesc())
 	} else {
 		e.logf("[v1] LinkChange: minor")
 	}
 
 	e.health.SetAnyInterfaceUp(up)
-	e.magicConn.SetNetworkUp(up)
-	if !up || changed {
+	if !up || delta.RebindLikelyRequired {
 		if err := e.dns.FlushCaches(); err != nil {
 			e.logf("wgengine: dns flush failed after major link change: %v", err)
 		}
@@ -1353,9 +1408,20 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 	// suspend/resume or whenever NetworkManager is started, it
 	// nukes all systemd-resolved configs. So reapply our DNS
 	// config on major link change.
-	// TODO: explain why this is ncessary not just on Linux but also android
-	// and Apple platforms.
-	if changed {
+	//
+	// On Darwin (netext), we reapply the DNS config when the interface flaps
+	// because the change in interface can potentially change the nameservers
+	// for the forwarder.  On Darwin netext clients, magicDNS is ~always the default
+	// resolver so having no nameserver to forward queries to (or one on a network we
+	// are not currently on) breaks DNS resolution system-wide.  There are notable
+	// timing issues here with Darwin's network stack.  It is not guaranteed that
+	// the forward resolver will be available immediately after the interface
+	// comes up.  We leave it to the network extension to also poke magicDNS directly
+	// via [dns.Manager.RecompileDNSConfig] when it detects any change in the
+	// nameservers.
+	//
+	// TODO: On Android, Darwin-tailscaled, and openbsd, why do we need this?
+	if delta.RebindLikelyRequired && up {
 		switch runtime.GOOS {
 		case "linux", "android", "ios", "darwin", "openbsd":
 			e.wgLock.Lock()
@@ -1373,15 +1439,23 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 		}
 	}
 
+	e.magicConn.SetNetworkUp(up)
+
 	why := "link-change-minor"
-	if changed {
+	if delta.RebindLikelyRequired {
 		why = "link-change-major"
 		metricNumMajorChanges.Add(1)
-		e.magicConn.Rebind()
 	} else {
 		metricNumMinorChanges.Add(1)
 	}
-	e.magicConn.ReSTUN(why)
+
+	// If we're up and it's a minor change, just send a STUN ping
+	if up {
+		if delta.RebindLikelyRequired {
+			e.magicConn.Rebind()
+		}
+		e.magicConn.ReSTUN(why)
+	}
 }
 
 func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {

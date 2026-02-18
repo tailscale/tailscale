@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package magicsock
@@ -64,6 +64,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/ptr"
+	"tailscale.com/types/views"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
@@ -170,7 +171,7 @@ type magicStack struct {
 }
 
 // newMagicStack builds and initializes an idle magicsock and
-// friends. You need to call conn.onNodeViewsUpdate and dev.Reconfig
+// friends. You need to call conn.SetNetworkMap and dev.Reconfig
 // before anything interesting happens.
 func newMagicStack(t testing.TB, logf logger.Logf, ln nettype.PacketListener, derpMap *tailcfg.DERPMap) *magicStack {
 	privateKey := key.NewNode()
@@ -345,13 +346,9 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 
 		for i, m := range ms {
 			nm := buildNetmapLocked(i)
-			nv := NodeViewsUpdate{
-				SelfNode: nm.SelfNode,
-				Peers:    nm.Peers,
-			}
-			m.conn.onNodeViewsUpdate(nv)
-			peerSet := make(set.Set[key.NodePublic], len(nv.Peers))
-			for _, peer := range nv.Peers {
+			m.conn.SetNetworkMap(nm.SelfNode, nm.Peers)
+			peerSet := make(set.Set[key.NodePublic], len(nm.Peers))
+			for _, peer := range nm.Peers {
 				peerSet.Add(peer.Key())
 			}
 			m.conn.UpdatePeers(peerSet)
@@ -1387,16 +1384,14 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (key.No
 	// codepath.
 	discoKey := key.DiscoPublicFromRaw32(mem.B([]byte{31: 1}))
 	nodeKey := key.NodePublicFromRaw32(mem.B([]byte{0: 'N', 1: 'K', 31: 0}))
-	conn.onNodeViewsUpdate(NodeViewsUpdate{
-		Peers: nodeViews([]*tailcfg.Node{
-			{
-				ID:        1,
-				Key:       nodeKey,
-				DiscoKey:  discoKey,
-				Endpoints: eps(sendConn.LocalAddr().String()),
-			},
-		}),
-	})
+	conn.SetNetworkMap(tailcfg.NodeView{}, nodeViews([]*tailcfg.Node{
+		{
+			ID:        1,
+			Key:       nodeKey,
+			DiscoKey:  discoKey,
+			Endpoints: eps(sendConn.LocalAddr().String()),
+		},
+	}))
 	conn.SetPrivateKey(key.NodePrivateFromRaw32(mem.B([]byte{0: 1, 31: 0})))
 	_, err := conn.ParseEndpoint(nodeKey.UntypedHexString())
 	if err != nil {
@@ -1580,7 +1575,7 @@ func nodeViews(v []*tailcfg.Node) []tailcfg.NodeView {
 // doesn't change its disco key doesn't result in a broken state.
 //
 // https://github.com/tailscale/tailscale/issues/1391
-func TestOnNodeViewsUpdateChangingNodeKey(t *testing.T) {
+func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 	conn := newTestConn(t)
 	t.Cleanup(func() { conn.Close() })
 	var buf tstest.MemLogger
@@ -1592,32 +1587,28 @@ func TestOnNodeViewsUpdateChangingNodeKey(t *testing.T) {
 	nodeKey1 := key.NodePublicFromRaw32(mem.B([]byte{0: 'N', 1: 'K', 2: '1', 31: 0}))
 	nodeKey2 := key.NodePublicFromRaw32(mem.B([]byte{0: 'N', 1: 'K', 2: '2', 31: 0}))
 
-	conn.onNodeViewsUpdate(NodeViewsUpdate{
-		Peers: nodeViews([]*tailcfg.Node{
-			{
-				ID:        1,
-				Key:       nodeKey1,
-				DiscoKey:  discoKey,
-				Endpoints: eps("192.168.1.2:345"),
-			},
-		}),
-	})
+	conn.SetNetworkMap(tailcfg.NodeView{}, nodeViews([]*tailcfg.Node{
+		{
+			ID:        1,
+			Key:       nodeKey1,
+			DiscoKey:  discoKey,
+			Endpoints: eps("192.168.1.2:345"),
+		},
+	}))
 	_, err := conn.ParseEndpoint(nodeKey1.UntypedHexString())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for range 3 {
-		conn.onNodeViewsUpdate(NodeViewsUpdate{
-			Peers: nodeViews([]*tailcfg.Node{
-				{
-					ID:        2,
-					Key:       nodeKey2,
-					DiscoKey:  discoKey,
-					Endpoints: eps("192.168.1.2:345"),
-				},
-			}),
-		})
+		conn.SetNetworkMap(tailcfg.NodeView{}, nodeViews([]*tailcfg.Node{
+			{
+				ID:        2,
+				Key:       nodeKey2,
+				DiscoKey:  discoKey,
+				Endpoints: eps("192.168.1.2:345"),
+			},
+		}))
 	}
 
 	de, ok := conn.peerMap.endpointForNodeKey(nodeKey2)
@@ -1931,7 +1922,7 @@ func eps(s ...string) []netip.AddrPort {
 	return eps
 }
 
-func TestStressOnNodeViewsUpdate(t *testing.T) {
+func TestStressSetNetworkMap(t *testing.T) {
 	t.Parallel()
 
 	conn := newTestConn(t)
@@ -1987,9 +1978,7 @@ func TestStressOnNodeViewsUpdate(t *testing.T) {
 			}
 		}
 		// Set the node views.
-		conn.onNodeViewsUpdate(NodeViewsUpdate{
-			Peers: nodeViews(peers),
-		})
+		conn.SetNetworkMap(tailcfg.NodeView{}, nodeViews(peers))
 		// Check invariants.
 		if err := conn.peerMap.validate(); err != nil {
 			t.Error(err)
@@ -2112,10 +2101,10 @@ func TestRebindingUDPConn(t *testing.T) {
 }
 
 // https://github.com/tailscale/tailscale/issues/6680: don't ignore
-// onNodeViewsUpdate calls when there are no peers. (A too aggressive fast path was
+// SetNetworkMap calls when there are no peers. (A too aggressive fast path was
 // previously bailing out early, thinking there were no changes since all zero
 // peers didn't change, but the node views has non-peer info in it too we shouldn't discard)
-func TestOnNodeViewsUpdateWithNoPeers(t *testing.T) {
+func TestSetNetworkMapWithNoPeers(t *testing.T) {
 	var c Conn
 	knobs := &controlknobs.Knobs{}
 	c.logf = logger.Discard
@@ -2124,9 +2113,7 @@ func TestOnNodeViewsUpdateWithNoPeers(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		v := !debugEnableSilentDisco()
 		envknob.Setenv("TS_DEBUG_ENABLE_SILENT_DISCO", fmt.Sprint(v))
-		nv := NodeViewsUpdate{}
-		c.onNodeViewsUpdate(nv)
-		t.Logf("ptr %d: %p", i, nv)
+		c.SetNetworkMap(tailcfg.NodeView{}, nil)
 		if c.lastFlags.heartbeatDisabled != v {
 			t.Fatalf("call %d: didn't store netmap", i)
 		}
@@ -2214,11 +2201,7 @@ func TestIsWireGuardOnlyPeer(t *testing.T) {
 			},
 		}),
 	}
-	nv := NodeViewsUpdate{
-		SelfNode: nm.SelfNode,
-		Peers:    nm.Peers,
-	}
-	m.conn.onNodeViewsUpdate(nv)
+	m.conn.SetNetworkMap(nm.SelfNode, nm.Peers)
 
 	cfg, err := nmcfg.WGCfg(m.privateKey, nm, t.Logf, netmap.AllowSubnetRoutes, "")
 	if err != nil {
@@ -2279,11 +2262,7 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 			},
 		}),
 	}
-	nv := NodeViewsUpdate{
-		SelfNode: nm.SelfNode,
-		Peers:    nm.Peers,
-	}
-	m.conn.onNodeViewsUpdate(nv)
+	m.conn.SetNetworkMap(nm.SelfNode, nm.Peers)
 
 	cfg, err := nmcfg.WGCfg(m.privateKey, nm, t.Logf, netmap.AllowSubnetRoutes, "")
 	if err != nil {
@@ -2320,11 +2299,7 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 // configures WG.
 func applyNetworkMap(t *testing.T, m *magicStack, nm *netmap.NetworkMap) {
 	t.Helper()
-	nv := NodeViewsUpdate{
-		SelfNode: nm.SelfNode,
-		Peers:    nm.Peers,
-	}
-	m.conn.onNodeViewsUpdate(nv)
+	m.conn.SetNetworkMap(nm.SelfNode, nm.Peers)
 	// Make sure we can't use v6 to avoid test failures.
 	m.conn.noV6.Store(true)
 
@@ -3589,7 +3564,7 @@ func Test_nodeHasCap(t *testing.T) {
 	}
 }
 
-func TestConn_onNodeViewsUpdate_updateRelayServersSet(t *testing.T) {
+func TestConn_SetNetworkMap_updateRelayServersSet(t *testing.T) {
 	peerNodeCandidateRelay := &tailcfg.Node{
 		Cap: 121,
 		ID:  1,
@@ -3751,10 +3726,7 @@ func TestConn_onNodeViewsUpdate_updateRelayServersSet(t *testing.T) {
 				c.hasPeerRelayServers.Store(true)
 			}
 
-			c.onNodeViewsUpdate(NodeViewsUpdate{
-				SelfNode: tt.self,
-				Peers:    tt.peers,
-			})
+			c.SetNetworkMap(tt.self, tt.peers)
 			got := c.relayManager.getServers()
 			if !got.Equal(tt.wantRelayServers) {
 				t.Fatalf("got: %v != want: %v", got, tt.wantRelayServers)
@@ -4300,5 +4272,49 @@ func TestRotateDiscoKeyMultipleTimes(t *testing.T) {
 		}
 
 		keys = append(keys, newKey)
+	}
+}
+
+func TestReceiveTSMPDiscoKeyAdvertisement(t *testing.T) {
+	conn := newTestConn(t)
+	t.Cleanup(func() { conn.Close() })
+
+	peerKey := key.NewNode().Public()
+	ep := &endpoint{
+		nodeID:    1,
+		publicKey: peerKey,
+		nodeAddr:  netip.MustParseAddr("100.64.0.1"),
+	}
+	discoKey := key.NewDisco().Public()
+	ep.disco.Store(&endpointDisco{
+		key:   discoKey,
+		short: discoKey.ShortString(),
+	})
+	ep.c = conn
+	conn.mu.Lock()
+	nodeView := (&tailcfg.Node{
+		Key: ep.publicKey,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.1/32"),
+		},
+	}).View()
+	conn.peers = views.SliceOf([]tailcfg.NodeView{nodeView})
+	conn.mu.Unlock()
+
+	conn.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
+
+	if ep.discoShort() != discoKey.ShortString() {
+		t.Errorf("Original disco key %s, does not match %s", discoKey.ShortString(), ep.discoShort())
+	}
+
+	newDiscoKey := key.NewDisco().Public()
+	tka := packet.TSMPDiscoKeyAdvertisement{
+		Src: netip.MustParseAddr("100.64.0.1"),
+		Key: newDiscoKey,
+	}
+	conn.HandleDiscoKeyAdvertisement(nodeView, tka)
+
+	if ep.disco.Load().short != newDiscoKey.ShortString() {
+		t.Errorf("New disco key %s, does not match %s", newDiscoKey.ShortString(), ep.disco.Load().short)
 	}
 }

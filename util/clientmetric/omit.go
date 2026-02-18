@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build ts_omit_clientmetrics
@@ -12,6 +12,13 @@ func (*Metric) Set(int64)              {}
 func (*Metric) Value() int64           { return 0 }
 func (*Metric) Register(expvarInt any) {}
 func (*Metric) UnregisterAll()         {}
+
+type MetricUpdate struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Value int    `json:"value"`
+	Op    string `json:"op"`
+}
 
 func HasPublished(string) bool            { panic("unreachable") }
 func EncodeLogTailMetricsDelta() string   { return "" }

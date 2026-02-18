@@ -8,3 +8,5 @@
 /proxyclass.yaml
 /proxygroup.yaml
 /recorder.yaml
+/tailnet.yaml 
+/proxygrouppolicy.yaml

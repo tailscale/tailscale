@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package ipnlocal
@@ -136,10 +136,12 @@ type mockControl struct {
 	calls       []string
 	authBlocked bool
 	shutdown    chan struct{}
+
+	hi *tailcfg.Hostinfo
 }
 
 func newClient(tb testing.TB, opts controlclient.Options) *mockControl {
-	return &mockControl{
+	cc := mockControl{
 		tb:              tb,
 		authBlocked:     true,
 		logf:            opts.Logf,
@@ -148,6 +150,10 @@ func newClient(tb testing.TB, opts controlclient.Options) *mockControl {
 		persist:         opts.Persist.Clone(),
 		controlClientID: rand.Int64(),
 	}
+	if opts.Hostinfo != nil {
+		cc.SetHostinfoDirect(opts.Hostinfo)
+	}
+	return &cc
 }
 
 func (cc *mockControl) assertShutdown(wasPaused bool) {
@@ -298,6 +304,11 @@ func (cc *mockControl) AuthCantContinue() bool {
 func (cc *mockControl) SetHostinfo(hi *tailcfg.Hostinfo) {
 	cc.logf("SetHostinfo: %v", *hi)
 	cc.called("SetHostinfo")
+	cc.SetHostinfoDirect(hi)
+}
+
+func (cc *mockControl) SetHostinfoDirect(hi *tailcfg.Hostinfo) {
+	cc.hi = hi
 }
 
 func (cc *mockControl) SetNetInfo(ni *tailcfg.NetInfo) {
@@ -1289,8 +1300,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node1),
+				AcceptDNS: true,
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:     hostsFor(node1),
 			},
 		},
 		{
@@ -1345,8 +1357,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node2),
+				AcceptDNS: true,
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:     hostsFor(node2),
 			},
 		},
 		{
@@ -1393,8 +1406,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node1),
+				AcceptDNS: true,
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:     hostsFor(node1),
 			},
 		},
 		{
@@ -1425,8 +1439,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node3),
+				AcceptDNS: true,
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:     hostsFor(node3),
 			},
 		},
 		{
@@ -1489,8 +1504,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node1),
+				AcceptDNS: true,
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:     hostsFor(node1),
 			},
 		},
 		{
@@ -1518,8 +1534,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node1),
+				AcceptDNS: true,
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:     hostsFor(node1),
 			},
 		},
 		{
@@ -1549,8 +1566,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  hostsFor(node1),
+				AcceptDNS: true,
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:     hostsFor(node1),
 			},
 		},
 		{
@@ -1581,11 +1599,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			if tt.steps != nil {
 				tt.steps(t, lb, cc)
 			}
-
-			// TODO(bradfitz): this whole event bus settling thing
-			// should be unnecessary once the bogus uses of eventbus
-			// are removed. (https://github.com/tailscale/tailscale/issues/16369)
-			lb.settleEventBus()
 
 			if gotState := lb.State(); gotState != tt.wantState {
 				t.Errorf("State: got %v; want %v", gotState, tt.wantState)
@@ -1634,7 +1647,7 @@ func runTestSendPreservesAuthURL(t *testing.T, seamless bool) {
 		return cc
 	})
 
-	t.Logf("Start")
+	t.Log("Start")
 	b.Start(ipn.Options{
 		UpdatePrefs: &ipn.Prefs{
 			WantRunning: true,
@@ -1642,7 +1655,7 @@ func runTestSendPreservesAuthURL(t *testing.T, seamless bool) {
 		},
 	})
 
-	t.Logf("LoginFinished")
+	t.Log("LoginFinished")
 	cc.persist.UserProfile.LoginName = "user1"
 	cc.persist.NodeID = "node1"
 
@@ -1654,13 +1667,13 @@ func runTestSendPreservesAuthURL(t *testing.T, seamless bool) {
 		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	}})
 
-	t.Logf("Running")
+	t.Log("Running")
 	b.setWgengineStatus(&wgengine.Status{AsOf: time.Now(), DERPs: 1}, nil)
 
-	t.Logf("Re-auth (StartLoginInteractive)")
+	t.Log("Re-auth (StartLoginInteractive)")
 	b.StartLoginInteractive(t.Context())
 
-	t.Logf("Re-auth (receive URL)")
+	t.Log("Re-auth (receive URL)")
 	url1 := "https://localhost:1/1"
 	cc.send(sendOpt{url: url1})
 
@@ -1668,9 +1681,76 @@ func runTestSendPreservesAuthURL(t *testing.T, seamless bool) {
 	// be set, and once .send has completed, any opportunities for a WG engine
 	// status update to trample it have ended as well.
 	if b.authURL == "" {
-		t.Fatalf("expected authURL to be set")
+		t.Fatal("expected authURL to be set")
 	} else {
 		t.Log("authURL was set")
+	}
+}
+
+func TestServicesNotClearedByStart(t *testing.T) {
+	connect := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: true}, WantRunningSet: true}
+	node1 := buildNetmapWithPeers(
+		makePeer(1, withName("node-1"), withAddresses(netip.MustParsePrefix("100.64.1.1/32"))),
+	)
+
+	var cc *mockControl
+	lb := newLocalBackendWithTestControl(t, true, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+		cc = newClient(t, opts)
+		return cc
+	})
+
+	mustDo(t)(lb.Start(ipn.Options{}))
+	mustDo2(t)(lb.EditPrefs(connect))
+	cc.assertCalls("Login")
+
+	// Simulate authentication and wait for goroutines to finish (so peer
+	// listeners have been set up and hostinfo updated)
+	cc.authenticated(node1)
+	waitForGoroutinesToStop(lb)
+
+	if cc.hi == nil || len(cc.hi.Services) == 0 {
+		t.Fatal("test setup bug: services should be present")
+	}
+
+	mustDo(t)(lb.Start(ipn.Options{}))
+
+	if len(cc.hi.Services) == 0 {
+		t.Error("services should still be present in hostinfo after no-op Start")
+	}
+
+	lb.initPeerAPIListenerLocked()
+	waitForGoroutinesToStop(lb)
+
+	// Clearing out services on Start would be less of a problem if they would at
+	// least come back after authreconfig or any other change, but they don't if
+	// the addresses in the netmap haven't changed and still match the stored
+	// peerAPIListeners.
+	if len(cc.hi.Services) == 0 {
+		t.Error("services STILL not present after authreconfig")
+	}
+}
+
+func waitForGoroutinesToStop(lb *LocalBackend) {
+	goroutineDone := make(chan struct{})
+	removeTrackerCallback := lb.goTracker.AddDoneCallback(func() {
+		select {
+		case goroutineDone <- struct{}{}:
+		default:
+		}
+	})
+	defer removeTrackerCallback()
+
+	for {
+		if lb.goTracker.RunningGoroutines() == 0 {
+			return
+		}
+
+		select {
+		case <-time.Tick(1 * time.Second):
+			continue
+		case <-goroutineDone:
+			continue
+		}
 	}
 }
 

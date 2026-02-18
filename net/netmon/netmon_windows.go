@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package netmon
@@ -73,8 +73,6 @@ func newOSMon(_ *eventbus.Bus, logf logger.Logf, pm *Monitor) (osMon, error) {
 
 	return m, nil
 }
-
-func (m *winMon) IsInterestingInterface(iface string) bool { return true }
 
 func (m *winMon) Close() (ret error) {
 	m.cancel()

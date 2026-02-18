@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package dns
@@ -14,4 +14,9 @@ func (m noopManager) GetBaseConfig() (OSConfig, error) {
 
 func NewNoopManager() (noopManager, error) {
 	return noopManager{}, nil
+}
+
+func isNoopManager(c OSConfigurator) bool {
+	_, ok := c.(noopManager)
+	return ok
 }

@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package ipn
@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -432,24 +433,37 @@ func (sc *ServeConfig) SetTCPForwarding(port uint16, fwdAddr string, terminateTL
 	if sc == nil {
 		sc = new(ServeConfig)
 	}
-	tcpPortHandler := &sc.TCP
-	if svcName := tailcfg.AsServiceName(host); svcName != "" {
-		svcConfig, ok := sc.Services[svcName]
-		if !ok {
-			svcConfig = new(ServiceConfig)
-			mak.Set(&sc.Services, svcName, svcConfig)
-		}
-		tcpPortHandler = &svcConfig.TCP
-	}
-
-	handler := &TCPPortHandler{
+	mak.Set(&sc.TCP, port, &TCPPortHandler{
 		TCPForward:    fwdAddr,
 		ProxyProtocol: proxyProtocol, // can be 0
-	}
+	})
+
 	if terminateTLS {
-		handler.TerminateTLS = host
+		sc.TCP[port].TerminateTLS = host
 	}
-	mak.Set(tcpPortHandler, port, handler)
+}
+
+// SetTCPForwardingForService sets the fwdAddr (IP:port form) to which to
+// forward connections from the given port on the service. If terminateTLS
+// is true, TLS connections are terminated, with only the FQDN that corresponds
+// to the given service being permitted, before passing them to the fwdAddr.
+func (sc *ServeConfig) SetTCPForwardingForService(port uint16, fwdAddr string, terminateTLS bool, svcName tailcfg.ServiceName, proxyProtocol int, magicDNSSuffix string) {
+	if sc == nil {
+		sc = new(ServeConfig)
+	}
+	svcConfig, ok := sc.Services[svcName]
+	if !ok {
+		svcConfig = new(ServiceConfig)
+		mak.Set(&sc.Services, svcName, svcConfig)
+	}
+	mak.Set(&svcConfig.TCP, port, &TCPPortHandler{
+		TCPForward:    fwdAddr,
+		ProxyProtocol: proxyProtocol, // can be 0
+	})
+
+	if terminateTLS {
+		svcConfig.TCP[port].TerminateTLS = fmt.Sprintf("%s.%s", svcName.WithoutPrefix(), magicDNSSuffix)
+	}
 }
 
 // SetFunnel sets the sc.AllowFunnel value for the given host and port.
@@ -711,6 +725,21 @@ func ExpandProxyTargetValue(target string, supportedSchemes []string, defaultSch
 	// support target being a port number
 	if port, err := strconv.ParseUint(target, 10, 16); err == nil {
 		return fmt.Sprintf("%s://%s:%d", defaultScheme, host, port), nil
+	}
+
+	// handle unix: scheme specially - it doesn't use standard URL format
+	if strings.HasPrefix(target, "unix:") {
+		if !slices.Contains(supportedSchemes, "unix") {
+			return "", fmt.Errorf("unix sockets are not supported for this target type")
+		}
+		if runtime.GOOS == "windows" {
+			return "", fmt.Errorf("unix socket serve target is not supported on Windows")
+		}
+		path := strings.TrimPrefix(target, "unix:")
+		if path == "" {
+			return "", fmt.Errorf("unix socket path cannot be empty")
+		}
+		return target, nil
 	}
 
 	hasScheme := true

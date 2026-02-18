@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // cigocacher is an opinionated-to-Tailscale client for gocached. It connects
@@ -12,18 +12,19 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	jsonv1 "encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -34,19 +35,56 @@ import (
 
 func main() {
 	var (
-		auth          = flag.Bool("auth", false, "auth with cigocached and exit, printing the access token as output")
-		token         = flag.String("token", "", "the cigocached access token to use, as created using --auth")
-		cigocachedURL = flag.String("cigocached-url", "", "optional cigocached URL (scheme, host, and port). empty means to not use one.")
-		verbose       = flag.Bool("verbose", false, "enable verbose logging")
+		version     = flag.Bool("version", false, "print version and exit")
+		auth        = flag.Bool("auth", false, "auth with cigocached and exit, printing the access token as output")
+		stats       = flag.Bool("stats", false, "fetch and print cigocached stats and exit")
+		token       = flag.String("token", "", "the cigocached access token to use, as created using --auth")
+		srvURL      = flag.String("cigocached-url", "", "optional cigocached URL (scheme, host, and port). Empty means to not use one.")
+		srvHostDial = flag.String("cigocached-host", "", "optional cigocached host to dial instead of the host in the provided --cigocached-url. Useful for public TLS certs on private addresses.")
+		dir         = flag.String("cache-dir", "", "cache directory; empty means automatic")
+		verbose     = flag.Bool("verbose", false, "enable verbose logging")
 	)
 	flag.Parse()
 
+	if *version {
+		info, ok := debug.ReadBuildInfo()
+		if !ok {
+			log.Fatal("no build info")
+		}
+		var (
+			rev   string
+			dirty bool
+		)
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				rev = s.Value
+			case "vcs.modified":
+				dirty, _ = strconv.ParseBool(s.Value)
+			}
+		}
+		if dirty {
+			rev += "-dirty"
+		}
+		fmt.Println(rev)
+		return
+	}
+
+	var srvHost string
+	if *srvHostDial != "" && *srvURL != "" {
+		u, err := url.Parse(*srvURL)
+		if err != nil {
+			log.Fatal(err)
+		}
+		srvHost = u.Hostname()
+	}
+
 	if *auth {
-		if *cigocachedURL == "" {
+		if *srvURL == "" {
 			log.Print("--cigocached-url is empty, skipping auth")
 			return
 		}
-		tk, err := fetchAccessToken(httpClient(), os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL"), os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN"), *cigocachedURL)
+		tk, err := fetchAccessToken(httpClient(srvHost, *srvHostDial), os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL"), os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN"), *srvURL)
 		if err != nil {
 			log.Printf("error fetching access token, skipping auth: %v", err)
 			return
@@ -55,34 +93,61 @@ func main() {
 		return
 	}
 
-	d, err := os.UserCacheDir()
-	if err != nil {
-		log.Fatal(err)
+	if *stats {
+		if *srvURL == "" {
+			log.Fatal("--cigocached-url is empty; cannot fetch stats")
+		}
+		tk := *token
+		if tk == "" {
+			log.Fatal("--token is empty; cannot fetch stats")
+		}
+		stats, err := fetchStats(httpClient(srvHost, *srvHostDial), *srvURL, tk)
+		if err != nil {
+			log.Fatalf("error fetching gocached stats: %v", err)
+		}
+		fmt.Println(stats)
+		return
 	}
-	d = filepath.Join(d, "go-cacher")
-	log.Printf("Defaulting to cache dir %v ...", d)
-	if err := os.MkdirAll(d, 0750); err != nil {
+
+	if *dir == "" {
+		d, err := os.UserCacheDir()
+		if err != nil {
+			log.Fatal(err)
+		}
+		*dir = filepath.Join(d, "go-cacher")
+		log.Printf("Defaulting to cache dir %v ...", *dir)
+	}
+	if err := os.MkdirAll(*dir, 0750); err != nil {
 		log.Fatal(err)
 	}
 
 	c := &cigocacher{
-		disk:    &cachers.DiskCache{Dir: d},
+		disk: &cachers.DiskCache{
+			Dir:     *dir,
+			Verbose: *verbose,
+		},
 		verbose: *verbose,
 	}
-	if *cigocachedURL != "" {
-		log.Printf("Using cigocached at %s", *cigocachedURL)
-		c.gocached = &gocachedClient{
-			baseURL:     *cigocachedURL,
-			cl:          httpClient(),
-			accessToken: *token,
-			verbose:     *verbose,
+	if *srvURL != "" {
+		if *verbose {
+			log.Printf("Using cigocached at %s", *srvURL)
+		}
+		c.remote = &cachers.HTTPClient{
+			BaseURL:        *srvURL,
+			Disk:           c.disk,
+			HTTPClient:     httpClient(srvHost, *srvHostDial),
+			AccessToken:    *token,
+			Verbose:        *verbose,
+			BestEffortHTTP: true,
 		}
 	}
 	var p *cacheproc.Process
 	p = &cacheproc.Process{
 		Close: func() error {
-			log.Printf("gocacheprog: closing; %d gets (%d hits, %d misses, %d errors); %d puts (%d errors)",
-				p.Gets.Load(), p.GetHits.Load(), p.GetMisses.Load(), p.GetErrors.Load(), p.Puts.Load(), p.PutErrors.Load())
+			if c.verbose {
+				log.Printf("gocacheprog: closing; %d gets (%d hits, %d misses, %d errors); %d puts (%d errors)",
+					p.Gets.Load(), p.GetHits.Load(), p.GetMisses.Load(), p.GetErrors.Load(), p.Puts.Load(), p.PutErrors.Load())
+			}
 			return c.close()
 		},
 		Get: c.get,
@@ -94,18 +159,18 @@ func main() {
 	}
 }
 
-func httpClient() *http.Client {
+func httpClient(srvHost, srvHostDial string) *http.Client {
+	if srvHost == "" || srvHostDial == "" {
+		return http.DefaultClient
+	}
 	return &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				host, port, err := net.SplitHostPort(addr)
-				if err == nil {
-					// This does not run in a tailnet. We serve corp.ts.net
-					// TLS certs, and override DNS resolution to lookup the
-					// private IP for the VM by its hostname.
-					if vm, ok := strings.CutSuffix(host, ".corp.ts.net"); ok {
-						addr = net.JoinHostPort(vm, port)
-					}
+				if host, port, err := net.SplitHostPort(addr); err == nil && host == srvHost {
+					// This allows us to serve a publicly trusted TLS cert
+					// while also minimising latency by explicitly using a
+					// private network address.
+					addr = net.JoinHostPort(srvHostDial, port)
 				}
 				var d net.Dialer
 				return d.DialContext(ctx, network, addr)
@@ -115,9 +180,9 @@ func httpClient() *http.Client {
 }
 
 type cigocacher struct {
-	disk     *cachers.DiskCache
-	gocached *gocachedClient
-	verbose  bool
+	disk    *cachers.DiskCache
+	remote  *cachers.HTTPClient // nil if no remote server
+	verbose bool
 
 	getNanos      atomic.Int64 // total nanoseconds spent in gets
 	putNanos      atomic.Int64 // total nanoseconds spent in puts
@@ -138,43 +203,33 @@ func (c *cigocacher) get(ctx context.Context, actionID string) (outputID, diskPa
 	defer func() {
 		c.getNanos.Add(time.Since(t0).Nanoseconds())
 	}()
-	if c.gocached == nil {
-		return c.disk.Get(ctx, actionID)
-	}
 
 	outputID, diskPath, err = c.disk.Get(ctx, actionID)
-	if err == nil && outputID != "" {
-		return outputID, diskPath, nil
+	if c.remote == nil || (err == nil && outputID != "") {
+		return outputID, diskPath, err
 	}
 
+	// Disk miss; try remote. HTTPClient.Get handles the HTTP fetch
+	// (including lz4 decompression) and writes to disk for us.
 	c.getHTTP.Add(1)
 	t0HTTP := time.Now()
 	defer func() {
 		c.getHTTPNanos.Add(time.Since(t0HTTP).Nanoseconds())
 	}()
-	outputID, res, err := c.gocached.get(ctx, actionID)
+	outputID, diskPath, err = c.remote.Get(ctx, actionID)
 	if err != nil {
 		c.getHTTPErrors.Add(1)
 		return "", "", nil
 	}
-	if outputID == "" || res == nil {
+	if outputID == "" {
 		c.getHTTPMisses.Add(1)
 		return "", "", nil
 	}
 
-	defer res.Body.Close()
-
-	// TODO(tomhjp): make sure we timeout if cigocached disappears, but for some
-	// reason, this seemed to tank network performance.
-	// ctx, cancel := context.WithTimeout(ctx, httpTimeout(res.ContentLength))
-	// defer cancel()
-	diskPath, err = c.disk.Put(ctx, actionID, outputID, res.ContentLength, res.Body)
-	if err != nil {
-		return "", "", fmt.Errorf("error filling disk cache from HTTP: %w", err)
-	}
-
 	c.getHTTPHits.Add(1)
-	c.getHTTPBytes.Add(res.ContentLength)
+	if fi, err := os.Stat(diskPath); err == nil {
+		c.getHTTPBytes.Add(fi.Size())
+	}
 	return outputID, diskPath, nil
 }
 
@@ -183,67 +238,33 @@ func (c *cigocacher) put(ctx context.Context, actionID, outputID string, size in
 	defer func() {
 		c.putNanos.Add(time.Since(t0).Nanoseconds())
 	}()
-	if c.gocached == nil {
+
+	if c.remote == nil {
 		return c.disk.Put(ctx, actionID, outputID, size, r)
 	}
 
 	c.putHTTP.Add(1)
-	var diskReader, httpReader io.Reader
-	tee := &bestEffortTeeReader{r: r}
-	if size == 0 {
-		// Special case the empty file so NewRequest sets "Content-Length: 0",
-		// as opposed to thinking we didn't set it and not being able to sniff its size
-		// from the type.
-		diskReader, httpReader = bytes.NewReader(nil), bytes.NewReader(nil)
-	} else {
-		pr, pw := io.Pipe()
-		defer pw.Close()
-		// The diskReader is in the driving seat. We will try to forward data
-		// to httpReader as well, but only best-effort.
-		diskReader = tee
-		tee.w = pw
-		httpReader = pr
-	}
-	httpErrCh := make(chan error)
-	go func() {
-		// TODO(tomhjp): make sure we timeout if cigocached disappears, but for some
-		// reason, this seemed to tank network performance.
-		// ctx, cancel := context.WithTimeout(ctx, httpTimeout(size))
-		// defer cancel()
-		t0HTTP := time.Now()
-		defer func() {
-			c.putHTTPNanos.Add(time.Since(t0HTTP).Nanoseconds())
-		}()
-		httpErrCh <- c.gocached.put(ctx, actionID, outputID, size, httpReader)
-	}()
-
-	diskPath, err = c.disk.Put(ctx, actionID, outputID, size, diskReader)
+	diskPath, err = c.remote.Put(ctx, actionID, outputID, size, r)
+	c.putHTTPNanos.Add(time.Since(t0).Nanoseconds())
 	if err != nil {
-		return "", fmt.Errorf("error writing to disk cache: %w", errors.Join(err, tee.err))
+		c.putHTTPErrors.Add(1)
+	} else {
+		c.putHTTPBytes.Add(size)
 	}
 
-	select {
-	case err := <-httpErrCh:
-		if err != nil {
-			c.putHTTPErrors.Add(1)
-		} else {
-			c.putHTTPBytes.Add(size)
-		}
-	case <-ctx.Done():
-	}
-
-	return diskPath, nil
+	return diskPath, err
 }
 
 func (c *cigocacher) close() error {
-	log.Printf("cigocacher HTTP stats: %d gets (%.1fMiB, %.2fs, %d hits, %d misses, %d errors ignored); %d puts (%.1fMiB, %.2fs, %d errors ignored)",
-		c.getHTTP.Load(), float64(c.getHTTPBytes.Load())/float64(1<<20), float64(c.getHTTPNanos.Load())/float64(time.Second), c.getHTTPHits.Load(), c.getHTTPMisses.Load(), c.getHTTPErrors.Load(),
-		c.putHTTP.Load(), float64(c.putHTTPBytes.Load())/float64(1<<20), float64(c.putHTTPNanos.Load())/float64(time.Second), c.putHTTPErrors.Load())
-	if !c.verbose || c.gocached == nil {
+	if !c.verbose || c.remote == nil {
 		return nil
 	}
 
-	stats, err := c.gocached.fetchStats()
+	log.Printf("cigocacher HTTP stats: %d gets (%.1fMiB, %.2fs, %d hits, %d misses, %d errors ignored); %d puts (%.1fMiB, %.2fs, %d errors ignored)",
+		c.getHTTP.Load(), float64(c.getHTTPBytes.Load())/float64(1<<20), float64(c.getHTTPNanos.Load())/float64(time.Second), c.getHTTPHits.Load(), c.getHTTPMisses.Load(), c.getHTTPErrors.Load(),
+		c.putHTTP.Load(), float64(c.putHTTPBytes.Load())/float64(1<<20), float64(c.putHTTPNanos.Load())/float64(time.Second), c.putHTTPErrors.Load())
+
+	stats, err := fetchStats(c.remote.HTTPClient, c.remote.BaseURL, c.remote.AccessToken)
 	if err != nil {
 		log.Printf("error fetching gocached stats: %v", err)
 	} else {
@@ -290,19 +311,20 @@ func fetchAccessToken(cl *http.Client, idTokenURL, idTokenRequestToken, gocached
 	return accessToken.AccessToken, nil
 }
 
-type bestEffortTeeReader struct {
-	r   io.Reader
-	w   io.WriteCloser
-	err error
-}
-
-func (t *bestEffortTeeReader) Read(p []byte) (int, error) {
-	n, err := t.r.Read(p)
-	if n > 0 && t.w != nil {
-		if _, err := t.w.Write(p[:n]); err != nil {
-			t.err = errors.Join(err, t.w.Close())
-			t.w = nil
-		}
+func fetchStats(cl *http.Client, baseURL, accessToken string) (string, error) {
+	req, _ := http.NewRequest("GET", baseURL+"/session/stats", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := cl.Do(req)
+	if err != nil {
+		return "", err
 	}
-	return n, err
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("fetching stats: %s", resp.Status)
+	}
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }

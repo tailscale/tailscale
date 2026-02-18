@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package dns
@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	dns "golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
@@ -93,7 +94,8 @@ func TestDNSOverTCP(t *testing.T) {
 	bus := eventbustest.NewBus(t)
 	dialer := tsdial.NewDialer(netmon.NewStatic())
 	dialer.SetBus(bus)
-	m := NewManager(t.Logf, &f, health.NewTracker(bus), dialer, nil, nil, "")
+	cknobs := &controlknobs.Knobs{}
+	m := NewManager(t.Logf, &f, health.NewTracker(bus), dialer, nil, cknobs, "", bus)
 	m.resolver.TestOnlySetHook(f.SetResolver)
 	m.Set(Config{
 		Hosts: hosts(
@@ -181,7 +183,7 @@ func TestDNSOverTCP_TooLarge(t *testing.T) {
 	bus := eventbustest.NewBus(t)
 	dialer := tsdial.NewDialer(netmon.NewStatic())
 	dialer.SetBus(bus)
-	m := NewManager(log, &f, health.NewTracker(bus), dialer, nil, nil, "")
+	m := NewManager(log, &f, health.NewTracker(bus), dialer, nil, nil, "", bus)
 	m.resolver.TestOnlySetHook(f.SetResolver)
 	m.Set(Config{
 		Hosts:         hosts("andrew.ts.com.", "1.2.3.4"),

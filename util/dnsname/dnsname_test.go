@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package dnsname
@@ -118,6 +118,34 @@ func TestFQDNContains(t *testing.T) {
 
 			if got := a.Contains(b); got != test.want {
 				t.Errorf("ToFQDN(%q).Contains(%q) got %v, want %v", a, b, got, test.want)
+			}
+		})
+	}
+}
+
+func TestFQDNParent(t *testing.T) {
+	tests := []struct {
+		in   string
+		want FQDN
+	}{
+		{"", ""},
+		{".", ""},
+		{"com.", ""},
+		{"foo.com.", "com."},
+		{"www.foo.com.", "foo.com."},
+		{"a.b.c.d.", "b.c.d."},
+		{"sub.node.tailnet.ts.net.", "node.tailnet.ts.net."},
+	}
+
+	for _, test := range tests {
+		t.Run(test.in, func(t *testing.T) {
+			in, err := ToFQDN(test.in)
+			if err != nil {
+				t.Fatalf("ToFQDN(%q): %v", test.in, err)
+			}
+			got := in.Parent()
+			if got != test.want {
+				t.Errorf("ToFQDN(%q).Parent() = %q, want %q", test.in, got, test.want)
 			}
 		})
 	}

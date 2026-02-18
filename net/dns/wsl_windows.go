@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package dns
@@ -76,7 +76,7 @@ func (wm *wslManager) SetDNS(cfg OSConfig) error {
 	}
 	managers := make(map[string]*directManager)
 	for _, distro := range distros {
-		managers[distro] = newDirectManagerOnFS(wm.logf, wm.health, wslFS{
+		managers[distro] = newDirectManagerOnFS(wm.logf, wm.health, nil, wslFS{
 			user:   "root",
 			distro: distro,
 		})

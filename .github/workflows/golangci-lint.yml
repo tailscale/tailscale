@@ -2,7 +2,11 @@ name: golangci-lint
 on:
   # For now, only lint pull requests, not the main branches.
   pull_request:
-
+    paths:
+      - ".github/workflows/golangci-lint.yml"
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
   # TODO(andrew): enable for main branch after an initial waiting period.
   #push:
   #  branches:
@@ -23,17 +27,21 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+      - uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
         with:
           go-version-file: go.mod
-          cache: false
+          cache: true
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@1481404843c368bc19ca9406f87d6e0fc97bdcfd # v7.0.0
+        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
         with:
           version: v2.4.0
 
           # Show only new issues if it's a pull request.
           only-new-issues: true
+
+          # Loading packages with a cold cache takes a while:
+          args: --timeout=10m
+          

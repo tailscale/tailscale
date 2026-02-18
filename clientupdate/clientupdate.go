@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package clientupdate implements tailscale client update for all supported
@@ -11,11 +11,11 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"net/http"
 	"os"
@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 
+	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/hostinfo"
 	"tailscale.com/types/lazy"
@@ -37,8 +38,9 @@ import (
 )
 
 const (
-	StableTrack   = "stable"
-	UnstableTrack = "unstable"
+	StableTrack           = "stable"
+	UnstableTrack         = "unstable"
+	ReleaseCandidateTrack = "release-candidate"
 )
 
 var CurrentTrack = func() string {
@@ -79,6 +81,8 @@ type Arguments struct {
 	//     running binary
 	//   - StableTrack and UnstableTrack will use the latest versions of the
 	//     corresponding tracks
+	//   - ReleaseCandidateTrack will use the newest version from StableTrack
+	// 	   and ReleaseCandidateTrack.
 	//
 	// Leaving this empty will use Version or fall back to CurrentTrack if both
 	// Track and Version are empty.
@@ -113,7 +117,7 @@ func (args Arguments) validate() error {
 		return fmt.Errorf("only one of Version(%q) or Track(%q) can be set", args.Version, args.Track)
 	}
 	switch args.Track {
-	case StableTrack, UnstableTrack, "":
+	case StableTrack, UnstableTrack, ReleaseCandidateTrack, "":
 		// All valid values.
 	default:
 		return fmt.Errorf("unsupported track %q", args.Track)
@@ -288,6 +292,10 @@ func Update(args Arguments) error {
 }
 
 func (up *Updater) confirm(ver string) bool {
+	if envknob.Bool("TS_UPDATE_SKIP_VERSION_CHECK") {
+		up.Logf("current version: %v, latest version %v; forcing an update due to TS_UPDATE_SKIP_VERSION_CHECK", up.currentVersion, ver)
+		return true
+	}
 	// Only check version when we're not switching tracks.
 	if up.Track == "" || up.Track == CurrentTrack {
 		switch c := cmpver.Compare(up.currentVersion, ver); {
@@ -491,10 +499,10 @@ func (up *Updater) updateDebLike() error {
 const aptSourcesFile = "/etc/apt/sources.list.d/tailscale.list"
 
 // updateDebianAptSourcesList updates the /etc/apt/sources.list.d/tailscale.list
-// file to make sure it has the provided track (stable or unstable) in it.
+// file to make sure it has the provided track (stable, unstable, or release-candidate) in it.
 //
-// If it already has the right track (including containing both stable and
-// unstable), it does nothing.
+// If it already has the right track (including containing both stable,
+// unstable, and release-candidate), it does nothing.
 func updateDebianAptSourcesList(dstTrack string) (rewrote bool, err error) {
 	was, err := os.ReadFile(aptSourcesFile)
 	if err != nil {
@@ -517,7 +525,7 @@ func updateDebianAptSourcesListBytes(was []byte, dstTrack string) (newContent []
 	bs := bufio.NewScanner(bytes.NewReader(was))
 	hadCorrect := false
 	commentLine := regexp.MustCompile(`^\s*\#`)
-	pkgsURL := regexp.MustCompile(`\bhttps://pkgs\.tailscale\.com/((un)?stable)/`)
+	pkgsURL := regexp.MustCompile(`\bhttps://pkgs\.tailscale\.com/(stable|unstable|release-candidate)/`)
 	for bs.Scan() {
 		line := bs.Bytes()
 		if !commentLine.Match(line) {
@@ -611,15 +619,15 @@ func (up *Updater) updateFedoraLike(packageManager string) func() error {
 }
 
 // updateYUMRepoTrack updates the repoFile file to make sure it has the
-// provided track (stable or unstable) in it.
+// provided track (stable, unstable, or release-candidate) in it.
 func updateYUMRepoTrack(repoFile, dstTrack string) (rewrote bool, err error) {
 	was, err := os.ReadFile(repoFile)
 	if err != nil {
 		return false, err
 	}
 
-	urlRe := regexp.MustCompile(`^(baseurl|gpgkey)=https://pkgs\.tailscale\.com/(un)?stable/`)
-	urlReplacement := fmt.Sprintf("$1=https://pkgs.tailscale.com/%s/", dstTrack)
+	urlRe := regexp.MustCompile(`^(baseurl|gpgkey)=https://pkgs\.tailscale\.com/(stable|unstable|release-candidate)`)
+	urlReplacement := fmt.Sprintf("$1=https://pkgs.tailscale.com/%s", dstTrack)
 
 	s := bufio.NewScanner(bytes.NewReader(was))
 	newContent := bytes.NewBuffer(make([]byte, 0, len(was)))
@@ -865,12 +873,17 @@ func (up *Updater) updateLinuxBinary() error {
 	if err := os.Remove(dlPath); err != nil {
 		up.Logf("failed to clean up %q: %v", dlPath, err)
 	}
-	if err := restartSystemdUnit(context.Background()); err != nil {
+
+	err = restartSystemdUnit(up.Logf)
+	if errors.Is(err, errors.ErrUnsupported) {
+		err = restartInitD()
 		if errors.Is(err, errors.ErrUnsupported) {
-			up.Logf("Tailscale binaries updated successfully.\nPlease restart tailscaled to finish the update.")
-		} else {
-			up.Logf("Tailscale binaries updated successfully, but failed to restart tailscaled: %s.\nPlease restart tailscaled to finish the update.", err)
+			err = errors.New("tailscaled is not running under systemd or init.d")
 		}
+	}
+	if err != nil {
+		up.Logf("Tailscale binaries updated successfully, but failed to restart tailscaled: %s.\nPlease restart tailscaled to finish the update.", err)
+
 	} else {
 		up.Logf("Success")
 	}
@@ -878,18 +891,52 @@ func (up *Updater) updateLinuxBinary() error {
 	return nil
 }
 
-func restartSystemdUnit(ctx context.Context) error {
+func restartSystemdUnit(logf logger.Logf) error {
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		// Likely not a systemd-managed distro.
 		return errors.ErrUnsupported
 	}
 	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
-		return fmt.Errorf("systemctl daemon-reload failed: %w\noutput: %s", err, out)
+		logf("systemctl daemon-reload failed: %w\noutput: %s", err, out)
 	}
 	if out, err := exec.Command("systemctl", "restart", "tailscaled.service").CombinedOutput(); err != nil {
 		return fmt.Errorf("systemctl restart failed: %w\noutput: %s", err, out)
 	}
 	return nil
+}
+
+// restartInitD attempts best-effort restart of tailscale on init.d systems
+// (for example, GL.iNet KVM devices running busybox). It returns
+// errors.ErrUnsupported if the expected service script is not found.
+//
+// There's probably a million variations of init.d configs out there, and this
+// function does not intend to support all of them.
+func restartInitD() error {
+	const initDir = "/etc/init.d/"
+	files, err := os.ReadDir(initDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return errors.ErrUnsupported
+		}
+		return err
+	}
+	for _, f := range files {
+		// Skip anything other than regular files.
+		if !f.Type().IsRegular() {
+			continue
+		}
+		// The script will be called something like /etc/init.d/tailscale or
+		// /etc/init.d/S99tailscale.
+		if n := f.Name(); strings.HasSuffix(n, "tailscale") {
+			path := filepath.Join(initDir, n)
+			if out, err := exec.Command(path, "restart").CombinedOutput(); err != nil {
+				return fmt.Errorf("%q failed: %w\noutput: %s", path+" restart", err, out)
+			}
+			return nil
+		}
+	}
+	// Init script for tailscale not found.
+	return errors.ErrUnsupported
 }
 
 func (up *Updater) downloadLinuxTarball(ver string) (string, error) {

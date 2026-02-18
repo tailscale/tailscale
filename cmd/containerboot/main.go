@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build linux
@@ -11,7 +11,21 @@
 // As with most container things, configuration is passed through environment
 // variables. All configuration is optional.
 //
-//   - TS_AUTHKEY: the authkey to use for login.
+//   - TS_AUTHKEY: the authkey to use for login. Also accepts TS_AUTH_KEY.
+//     If the value begins with "file:", it is treated as a path to a file containing the key.
+//   - TS_CLIENT_ID: the OAuth client ID. Can be used alone (ID token auto-generated
+//     in well-known environments), with TS_CLIENT_SECRET, or with TS_ID_TOKEN.
+//   - TS_CLIENT_SECRET: the OAuth client secret for generating authkeys.
+//     If the value begins with "file:", it is treated as a path to a file containing the secret.
+//   - TS_ID_TOKEN: the ID token from the identity provider for workload identity federation.
+//     Must be used together with TS_CLIENT_ID. If the value begins with "file:", it is
+//     treated as a path to a file containing the token.
+//   - TS_AUDIENCE: the audience to use when requesting an ID token from a well-known identity provider
+//     to exchange with the control server for workload identity federation. Must be used together
+//     with TS_CLIENT_ID.
+//   - Note: TS_AUTHKEY is mutually exclusive with TS_CLIENT_ID, TS_CLIENT_SECRET, TS_ID_TOKEN,
+//     and TS_AUDIENCE.
+//     TS_CLIENT_SECRET, TS_ID_TOKEN, and TS_AUDIENCE cannot be used together.
 //   - TS_HOSTNAME: the hostname to request for the node.
 //   - TS_ROUTES: subnet routes to advertise. Explicitly setting it to an empty
 //     value will cause containerboot to stop acting as a subnet router for any
@@ -67,8 +81,8 @@
 //   - TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR: if specified, a path to a
 //     directory that containers tailscaled config in file. The config file needs to be
 //     named cap-<current-tailscaled-cap>.hujson. If this is set, TS_HOSTNAME,
-//     TS_EXTRA_ARGS, TS_AUTHKEY,
-//     TS_ROUTES, TS_ACCEPT_DNS env vars must not be set. If this is set,
+//     TS_EXTRA_ARGS, TS_AUTHKEY, TS_CLIENT_ID, TS_CLIENT_SECRET, TS_ID_TOKEN,
+//     TS_ROUTES, TS_ACCEPT_DNS, TS_AUDIENCE env vars must not be set. If this is set,
 //     containerboot only runs `tailscaled --config <path-to-this-configfile>`
 //     and not `tailscale up` or `tailscale set`.
 //     The config file contents are currently read once on container start.
@@ -127,8 +141,10 @@ import (
 	"tailscale.com/kube/services"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/deephash"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/linuxfw"
 )
 
@@ -526,27 +542,14 @@ runLoop:
 					}
 				}
 				if cfg.TailnetTargetFQDN != "" {
-					var (
-						egressAddrs          []netip.Prefix
-						newCurentEgressIPs   deephash.Sum
-						egressIPsHaveChanged bool
-						node                 tailcfg.NodeView
-						nodeFound            bool
-					)
-					for _, n := range n.NetMap.Peers {
-						if strings.EqualFold(n.Name(), cfg.TailnetTargetFQDN) {
-							node = n
-							nodeFound = true
-							break
-						}
-					}
-					if !nodeFound {
-						log.Printf("Tailscale node %q not found; it either does not exist, or not reachable because of ACLs", cfg.TailnetTargetFQDN)
+					egressAddrs, err := resolveTailnetFQDN(n.NetMap, cfg.TailnetTargetFQDN)
+					if err != nil {
+						log.Print(err.Error())
 						break
 					}
-					egressAddrs = node.Addresses().AsSlice()
-					newCurentEgressIPs = deephash.Hash(&egressAddrs)
-					egressIPsHaveChanged = newCurentEgressIPs != currentEgressIPs
+
+					newCurentEgressIPs := deephash.Hash(&egressAddrs)
+					egressIPsHaveChanged := newCurentEgressIPs != currentEgressIPs
 					// The firewall rules get (re-)installed:
 					// - on startup
 					// - when the tailnet IPs of the tailnet target have changed
@@ -891,4 +894,66 @@ func runHTTPServer(mux *http.ServeMux, addr string) (close func() error) {
 		err := srv.Shutdown(context.Background())
 		return errors.Join(err, ln.Close())
 	}
+}
+
+// resolveTailnetFQDN resolves a tailnet FQDN to a list of IP prefixes, which
+// can be either a peer device or a Tailscale Service.
+func resolveTailnetFQDN(nm *netmap.NetworkMap, fqdn string) ([]netip.Prefix, error) {
+	dnsFQDN, err := dnsname.ToFQDN(fqdn)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing %q as FQDN: %w", fqdn, err)
+	}
+
+	// Check all peer devices first.
+	for _, p := range nm.Peers {
+		if strings.EqualFold(p.Name(), dnsFQDN.WithTrailingDot()) {
+			return p.Addresses().AsSlice(), nil
+		}
+	}
+
+	// If not found yet, check for a matching Tailscale Service.
+	if svcIPs := serviceIPsFromNetMap(nm, dnsFQDN); len(svcIPs) != 0 {
+		return svcIPs, nil
+	}
+
+	return nil, fmt.Errorf("could not find Tailscale node or service %q; it either does not exist, or not reachable because of ACLs", fqdn)
+}
+
+// serviceIPsFromNetMap returns all IPs of a Tailscale Service if its FQDN is
+// found in the netmap. Note that Tailscale Services are not a first-class
+// object in the netmap, so we guess based on DNS ExtraRecords and AllowedIPs.
+func serviceIPsFromNetMap(nm *netmap.NetworkMap, fqdn dnsname.FQDN) []netip.Prefix {
+	var extraRecords []tailcfg.DNSRecord
+	for _, rec := range nm.DNS.ExtraRecords {
+		recFQDN, err := dnsname.ToFQDN(rec.Name)
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(fqdn.WithTrailingDot(), recFQDN.WithTrailingDot()) {
+			extraRecords = append(extraRecords, rec)
+		}
+	}
+
+	if len(extraRecords) == 0 {
+		return nil
+	}
+
+	// Validate we can see a peer advertising the Tailscale Service.
+	var prefixes []netip.Prefix
+	for _, extraRecord := range extraRecords {
+		ip, err := netip.ParseAddr(extraRecord.Value)
+		if err != nil {
+			continue
+		}
+		ipPrefix := netip.PrefixFrom(ip, ip.BitLen())
+		for _, ps := range nm.Peers {
+			for _, allowedIP := range ps.AllowedIPs().All() {
+				if allowedIP == ipPrefix {
+					prefixes = append(prefixes, ipPrefix)
+				}
+			}
+		}
+	}
+
+	return prefixes
 }

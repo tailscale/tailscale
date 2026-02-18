@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !windows && !darwin
@@ -33,10 +33,6 @@ type pollingMon struct {
 
 	closeOnce sync.Once
 	stop      chan struct{}
-}
-
-func (pm *pollingMon) IsInterestingInterface(iface string) bool {
-	return true
 }
 
 func (pm *pollingMon) Close() error {

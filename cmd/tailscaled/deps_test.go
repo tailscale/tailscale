@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package main
@@ -285,9 +285,18 @@ func TestMinTailscaledWithCLI(t *testing.T) {
 			}
 		},
 		BadDeps: map[string]string{
-			"golang.org/x/net/http2":        "unexpected x/net/http2 dep; tailscale/tailscale#17305",
-			"expvar":                        "unexpected expvar dep",
-			"github.com/mdlayher/genetlink": "unexpected genetlink dep",
+			"golang.org/x/net/http2":                 "unexpected x/net/http2 dep; tailscale/tailscale#17305",
+			"expvar":                                 "unexpected expvar dep",
+			"github.com/mdlayher/genetlink":          "unexpected genetlink dep",
+			"tailscale.com/clientupdate":             "unexpected clientupdate dep",
+			"filippo.io/edwards25519":                "unexpected edwards25519 dep",
+			"github.com/hdevalence/ed25519consensus": "unexpected ed25519consensus dep",
+			"tailscale.com/clientupdate/distsign":    "unexpected distsign dep",
+			"archive/tar":                            "unexpected archive/tar dep",
+			"tailscale.com/feature/conn25":           "unexpected conn25 dep",
+			"regexp":                                 "unexpected regexp dep; bloats binary",
+			"github.com/toqueteos/webbrowser":        "unexpected webbrowser dep with ts_omit_webbrowser",
+			"github.com/mattn/go-colorable":          "unexpected go-colorable dep with ts_omit_colorable",
 		},
 	}.Check(t)
 }

@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package kubestore
@@ -19,6 +19,90 @@ import (
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/kube/kubetypes"
 )
+
+func TestKubernetesPodMigrationWithTPMAttestationKey(t *testing.T) {
+	stateWithAttestationKey := `{
+		"Config": {
+			"NodeID": "nSTABLE123456",
+			"AttestationKey": {
+				"tpmPrivate": "c2Vuc2l0aXZlLXRwbS1kYXRhLXRoYXQtb25seS13b3Jrcy1vbi1vcmlnaW5hbC1ub2Rl",
+				"tpmPublic": "cHVibGljLXRwbS1kYXRhLWZvci1hdHRlc3RhdGlvbi1rZXk="
+			}
+		}
+	}`
+
+	secretData := map[string][]byte{
+		"profile-abc123":   []byte(stateWithAttestationKey),
+		"_current-profile": []byte("profile-abc123"),
+	}
+
+	client := &kubeclient.FakeClient{
+		GetSecretImpl: func(ctx context.Context, name string) (*kubeapi.Secret, error) {
+			return &kubeapi.Secret{Data: secretData}, nil
+		},
+		CheckSecretPermissionsImpl: func(ctx context.Context, name string) (bool, bool, error) {
+			return true, true, nil
+		},
+		JSONPatchResourceImpl: func(ctx context.Context, name, resourceType string, patches []kubeclient.JSONPatch) error {
+			for _, p := range patches {
+				if p.Op == "add" && p.Path == "/data" {
+					secretData = p.Value.(map[string][]byte)
+				}
+			}
+			return nil
+		},
+	}
+
+	store := &Store{
+		client:     client,
+		canPatch:   true,
+		secretName: "ts-state",
+		memory:     mem.Store{},
+		logf:       t.Logf,
+	}
+
+	if err := store.loadState(); err != nil {
+		t.Fatalf("loadState failed: %v", err)
+	}
+
+	// Verify we can read the state from the store
+	stateBytes, err := store.ReadState("profile-abc123")
+	if err != nil {
+		t.Fatalf("ReadState failed: %v", err)
+	}
+
+	// The state should be readable as JSON
+	var state map[string]json.RawMessage
+	if err := json.Unmarshal(stateBytes, &state); err != nil {
+		t.Fatalf("failed to unmarshal state: %v", err)
+	}
+
+	// Verify the Config field exists
+	configRaw, ok := state["Config"]
+	if !ok {
+		t.Fatal("Config field not found in state")
+	}
+
+	// Parse the Config to verify fields are preserved
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(configRaw, &config); err != nil {
+		t.Fatalf("failed to unmarshal Config: %v", err)
+	}
+
+	// The AttestationKey should be stripped by the kubestore
+	if _, hasAttestation := config["AttestationKey"]; hasAttestation {
+		t.Error("AttestationKey should be stripped from state loaded by kubestore")
+	}
+
+	// Verify other fields are preserved
+	var nodeID string
+	if err := json.Unmarshal(config["NodeID"], &nodeID); err != nil {
+		t.Fatalf("failed to unmarshal NodeID: %v", err)
+	}
+	if nodeID != "nSTABLE123456" {
+		t.Errorf("NodeID mismatch: got %q, want %q", nodeID, "nSTABLE123456")
+	}
+}
 
 func TestWriteState(t *testing.T) {
 	tests := []struct {
@@ -604,7 +688,7 @@ func TestNewWithClient(t *testing.T) {
 			},
 		},
 		{
-			name:     "load_select_certs_in_read_write_mode",
+			name:     "do_not_load_certs_in_read_write_mode",
 			certMode: "rw",
 			stateSecretContents: map[string][]byte{
 				"foo": []byte("bar"),
@@ -620,11 +704,7 @@ func TestNewWithClient(t *testing.T) {
 				}, "4"),
 			},
 			wantMemoryStoreContents: map[ipn.StateKey][]byte{
-				"foo":                        []byte("bar"),
-				"app1.tailnetxyz.ts.net.crt": []byte(testCert + "1"),
-				"app1.tailnetxyz.ts.net.key": []byte(testKey + "1"),
-				"app2.tailnetxyz.ts.net.crt": []byte(testCert + "2"),
-				"app2.tailnetxyz.ts.net.key": []byte(testKey + "2"),
+				"foo": []byte("bar"),
 			},
 		},
 		{

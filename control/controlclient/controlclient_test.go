@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package controlclient
@@ -98,6 +98,7 @@ func TestCanSkipStatus(t *testing.T) {
 	nm1 := &netmap.NetworkMap{}
 	nm2 := &netmap.NetworkMap{}
 
+	commonPersist := new(persist.Persist).View()
 	tests := []struct {
 		name   string
 		s1, s2 *Status
@@ -165,8 +166,8 @@ func TestCanSkipStatus(t *testing.T) {
 		},
 		{
 			name: "skip",
-			s1:   &Status{NetMap: nm1},
-			s2:   &Status{NetMap: nm2},
+			s1:   &Status{NetMap: nm1, LoggedIn: true, InMapPoll: true, Persist: commonPersist},
+			s2:   &Status{NetMap: nm2, LoggedIn: true, InMapPoll: true, Persist: commonPersist},
 			want: true,
 		},
 	}
@@ -196,7 +197,7 @@ func TestRetryableErrors(t *testing.T) {
 		{fmt.Errorf("%w: %w", errHTTPPostFailure, errors.New("bad post")), true},
 		{fmt.Errorf("%w: %w", errNoNodeKey, errors.New("not node key")), true},
 		{errBadHTTPResponse(429, "too may requests"), true},
-		{errBadHTTPResponse(500, "internal server eror"), true},
+		{errBadHTTPResponse(500, "internal server error"), true},
 		{errBadHTTPResponse(502, "bad gateway"), true},
 		{errBadHTTPResponse(503, "service unavailable"), true},
 		{errBadHTTPResponse(504, "gateway timeout"), true},

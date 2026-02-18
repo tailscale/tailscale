@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package tsd (short for "Tailscale Daemon") contains a System type that
@@ -32,6 +32,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/proxymap"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/usermetric"
@@ -67,6 +68,10 @@ type System struct {
 	// This value is never updated after startup.
 	// LocalBackend tracks the current config after any reloads.
 	InitialConfig *conffile.Config
+
+	// SocketPath is the path to the tailscaled Unix socket.
+	// It is used to prevent serve from proxying to our own socket.
+	SocketPath string
 
 	// onlyNetstack is whether the Tun value is a fake TUN device
 	// and we're using netstack for everything.
@@ -107,6 +112,8 @@ type LocalBackend = any
 type NetstackImpl interface {
 	Start(LocalBackend) error
 	UpdateNetstackIPs(*netmap.NetworkMap)
+	UpdateIPServiceMappings(netmap.IPServiceMappings)
+	UpdateActiveVIPServices(views.Slice[string])
 }
 
 // Set is a convenience method to set a subsystem value.

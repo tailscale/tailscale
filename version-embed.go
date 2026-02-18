@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package tailscaleroot embeds VERSION.txt into the binary.
@@ -25,6 +25,12 @@ var AlpineDockerTag string
 //
 //go:embed go.toolchain.rev
 var GoToolchainRev string
+
+// GoToolchainNextRev is like GoToolchainRev, but when using the
+// "go.toolchain.next.rev" when TS_GO_NEXT=1 is set in the environment.
+//
+//go:embed go.toolchain.next.rev
+var GoToolchainNextRev string
 
 //lint:ignore U1000 used by tests + assert_ts_toolchain_match.go w/ right build tags
 func tailscaleToolchainRev() (gitHash string, ok bool) {

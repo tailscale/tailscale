@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !plan9
@@ -611,6 +611,236 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 
 	wantStatus = []networkingv1.IngressPortStatus{
 		{Port: 443, Protocol: "TCP"},
+	}
+	if !reflect.DeepEqual(ing.Status.LoadBalancer.Ingress[0].Ports, wantStatus) {
+		t.Errorf("incorrect status ports: got %v, want %v",
+			ing.Status.LoadBalancer.Ingress[0].Ports, wantStatus)
+	}
+}
+
+func TestIngressPGReconciler_HTTPRedirect(t *testing.T) {
+	ingPGR, fc, ft := setupIngressTest(t)
+
+	// Create backend Service that the Ingress will route to
+	backendSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.0.0.1",
+			Ports: []corev1.ServicePort{
+				{
+					Port: 8080,
+				},
+			},
+		},
+	}
+	mustCreate(t, fc, backendSvc)
+
+	// Create test Ingress with HTTP redirect enabled
+	ing := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingress",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group":   "test-pg",
+				"tailscale.com/http-redirect": "true",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "test",
+					Port: networkingv1.ServiceBackendPort{
+						Number: 8080,
+					},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"my-svc"}},
+			},
+		},
+	}
+	if err := fc.Create(context.Background(), ing); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify initial reconciliation with HTTP redirect enabled
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	populateTLSSecret(t, fc, "test-pg", "my-svc.ts.net")
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+
+	// Verify Tailscale Service includes both tcp:80 and tcp:443
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"tcp:80", "tcp:443"})
+
+	// Verify Ingress status includes port 80
+	ing = &networkingv1.Ingress{}
+	if err := fc.Get(context.Background(), types.NamespacedName{
+		Name:      "test-ingress",
+		Namespace: "default",
+	}, ing); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add the Tailscale Service to prefs to have the Ingress recognised as ready
+	mustCreate(t, fc, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pg-0",
+			Namespace: "operator-ns",
+			Labels:    pgSecretLabels("test-pg", kubetypes.LabelSecretTypeState),
+		},
+		Data: map[string][]byte{
+			"_current-profile": []byte("profile-foo"),
+			"profile-foo":      []byte(`{"AdvertiseServices":["svc:my-svc"],"Config":{"NodeID":"node-foo"}}`),
+		},
+	})
+
+	// Reconcile and re-fetch Ingress
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	if err := fc.Get(context.Background(), client.ObjectKeyFromObject(ing), ing); err != nil {
+		t.Fatal(err)
+	}
+
+	wantStatus := []networkingv1.IngressPortStatus{
+		{Port: 443, Protocol: "TCP"},
+		{Port: 80, Protocol: "TCP"},
+	}
+	if !reflect.DeepEqual(ing.Status.LoadBalancer.Ingress[0].Ports, wantStatus) {
+		t.Errorf("incorrect status ports: got %v, want %v",
+			ing.Status.LoadBalancer.Ingress[0].Ports, wantStatus)
+	}
+
+	// Remove HTTP redirect annotation
+	mustUpdate(t, fc, "default", "test-ingress", func(ing *networkingv1.Ingress) {
+		delete(ing.Annotations, "tailscale.com/http-redirect")
+	})
+
+	// Verify reconciliation after removing HTTP redirect
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"tcp:443"})
+
+	// Verify Ingress status no longer includes port 80
+	ing = &networkingv1.Ingress{}
+	if err := fc.Get(context.Background(), types.NamespacedName{
+		Name:      "test-ingress",
+		Namespace: "default",
+	}, ing); err != nil {
+		t.Fatal(err)
+	}
+
+	wantStatus = []networkingv1.IngressPortStatus{
+		{Port: 443, Protocol: "TCP"},
+	}
+	if !reflect.DeepEqual(ing.Status.LoadBalancer.Ingress[0].Ports, wantStatus) {
+		t.Errorf("incorrect status ports after removing redirect: got %v, want %v",
+			ing.Status.LoadBalancer.Ingress[0].Ports, wantStatus)
+	}
+}
+
+func TestIngressPGReconciler_HTTPEndpointAndRedirectConflict(t *testing.T) {
+	ingPGR, fc, ft := setupIngressTest(t)
+
+	// Create backend Service that the Ingress will route to
+	backendSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.0.0.1",
+			Ports: []corev1.ServicePort{
+				{
+					Port: 8080,
+				},
+			},
+		},
+	}
+	mustCreate(t, fc, backendSvc)
+
+	// Create test Ingress with both HTTP endpoint and HTTP redirect enabled
+	ing := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingress",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group":   "test-pg",
+				"tailscale.com/http-endpoint": "enabled",
+				"tailscale.com/http-redirect": "true",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "test",
+					Port: networkingv1.ServiceBackendPort{
+						Number: 8080,
+					},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"my-svc"}},
+			},
+		},
+	}
+	if err := fc.Create(context.Background(), ing); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify initial reconciliation - HTTP endpoint should take precedence
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	populateTLSSecret(t, fc, "test-pg", "my-svc.ts.net")
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+
+	// Verify Tailscale Service includes both tcp:80 and tcp:443
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"tcp:80", "tcp:443"})
+
+	// Verify the serve config has HTTP endpoint handlers on port 80, NOT redirect handlers
+	cm := &corev1.ConfigMap{}
+	if err := fc.Get(context.Background(), types.NamespacedName{
+		Name:      "test-pg-ingress-config",
+		Namespace: "operator-ns",
+	}, cm); err != nil {
+		t.Fatalf("getting ConfigMap: %v", err)
+	}
+
+	// Verify Ingress status includes port 80
+	ing = &networkingv1.Ingress{}
+	if err := fc.Get(context.Background(), types.NamespacedName{
+		Name:      "test-ingress",
+		Namespace: "default",
+	}, ing); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add the Tailscale Service to prefs to have the Ingress recognised as ready
+	mustCreate(t, fc, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pg-0",
+			Namespace: "operator-ns",
+			Labels:    pgSecretLabels("test-pg", kubetypes.LabelSecretTypeState),
+		},
+		Data: map[string][]byte{
+			"_current-profile": []byte("profile-foo"),
+			"profile-foo":      []byte(`{"AdvertiseServices":["svc:my-svc"],"Config":{"NodeID":"node-foo"}}`),
+		},
+	})
+
+	// Reconcile and re-fetch Ingress
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	if err := fc.Get(context.Background(), client.ObjectKeyFromObject(ing), ing); err != nil {
+		t.Fatal(err)
+	}
+
+	wantStatus := []networkingv1.IngressPortStatus{
+		{Port: 443, Protocol: "TCP"},
+		{Port: 80, Protocol: "TCP"},
 	}
 	if !reflect.DeepEqual(ing.Status.LoadBalancer.Ingress[0].Ports, wantStatus) {
 		t.Errorf("incorrect status ports: got %v, want %v",

@@ -4,7 +4,7 @@
 # environment for working on tailscale, for use with "nix develop".
 #
 # For more information about this and why this file is useful, see:
-# https://nixos.wiki/wiki/Flakes
+# https://wiki.nixos.org/wiki/Flakes
 #
 # Also look into direnv: https://direnv.net/, this can make it so that you can
 # automatically get your environment set up when you change folders into the
@@ -151,4 +151,4 @@
     });
   };
 }
-# nix-direnv cache busting line: sha256-IkodqRYdueML7U2Hh8vRw6Et7+WII+VXuPJ3jZ2xYx8=
+# nix-direnv cache busting line: sha256-JD1PZPZT5clhRWIAQO8skBRN59QPiyfTc7nPYTvGbd8=

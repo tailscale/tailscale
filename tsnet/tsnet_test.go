@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package tsnet
@@ -13,6 +13,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -27,27 +29,37 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/net/proxy"
+
 	"tailscale.com/client/local"
 	"tailscale.com/cmd/testwrapper/flakytest"
+	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/deptest"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/tstest/integration/testcontrol"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 )
 
@@ -133,7 +145,7 @@ func startControl(t *testing.T) (controlURL string, control *testcontrol.Server)
 
 type testCertIssuer struct {
 	mu    sync.Mutex
-	certs map[string]*tls.Certificate
+	certs map[string]ipnlocal.TLSCertKeyPair // keyed by hostname
 
 	root    *x509.Certificate
 	rootKey *ecdsa.PrivateKey
@@ -165,18 +177,18 @@ func newCertIssuer() *testCertIssuer {
 		panic(err)
 	}
 	return &testCertIssuer{
-		certs:   make(map[string]*tls.Certificate),
 		root:    rootCA,
 		rootKey: rootKey,
+		certs:   map[string]ipnlocal.TLSCertKeyPair{},
 	}
 }
 
-func (tci *testCertIssuer) getCert(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+func (tci *testCertIssuer) getCert(hostname string) (*ipnlocal.TLSCertKeyPair, error) {
 	tci.mu.Lock()
 	defer tci.mu.Unlock()
-	cert, ok := tci.certs[chi.ServerName]
+	cert, ok := tci.certs[hostname]
 	if ok {
-		return cert, nil
+		return &cert, nil
 	}
 
 	certPrivKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -185,7 +197,7 @@ func (tci *testCertIssuer) getCert(chi *tls.ClientHelloInfo) (*tls.Certificate, 
 	}
 	certTmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		DNSNames:     []string{chi.ServerName},
+		DNSNames:     []string{hostname},
 		NotBefore:    time.Now(),
 		NotAfter:     time.Now().Add(time.Hour),
 	}
@@ -193,12 +205,22 @@ func (tci *testCertIssuer) getCert(chi *tls.ClientHelloInfo) (*tls.Certificate, 
 	if err != nil {
 		return nil, err
 	}
-	cert = &tls.Certificate{
-		Certificate: [][]byte{certDER, tci.root.Raw},
-		PrivateKey:  certPrivKey,
+	keyDER, err := x509.MarshalPKCS8PrivateKey(certPrivKey)
+	if err != nil {
+		return nil, err
 	}
-	tci.certs[chi.ServerName] = cert
-	return cert, nil
+	cert = ipnlocal.TLSCertKeyPair{
+		CertPEM: pem.EncodeToMemory(&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: certDER,
+		}),
+		KeyPEM: pem.EncodeToMemory(&pem.Block{
+			Type:  "PRIVATE KEY",
+			Bytes: keyDER,
+		}),
+	}
+	tci.certs[hostname] = cert
+	return &cert, nil
 }
 
 func (tci *testCertIssuer) Pool() *x509.CertPool {
@@ -215,12 +237,11 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 	tmp := filepath.Join(t.TempDir(), hostname)
 	os.MkdirAll(tmp, 0755)
 	s := &Server{
-		Dir:               tmp,
-		ControlURL:        controlURL,
-		Hostname:          hostname,
-		Store:             new(mem.Store),
-		Ephemeral:         true,
-		getCertForTesting: testCertRoot.getCert,
+		Dir:        tmp,
+		ControlURL: controlURL,
+		Hostname:   hostname,
+		Store:      new(mem.Store),
+		Ephemeral:  true,
 	}
 	if *verboseNodes {
 		s.Logf = t.Logf
@@ -231,6 +252,8 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.lb.ConfigureCertsForTest(testCertRoot.getCert)
+
 	return s, status.TailscaleIPs[0], status.Self.PublicKey
 }
 
@@ -256,12 +279,11 @@ func TestDialBlocks(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "s2")
 	os.MkdirAll(tmp, 0755)
 	s2 := &Server{
-		Dir:               tmp,
-		ControlURL:        controlURL,
-		Hostname:          "s2",
-		Store:             new(mem.Store),
-		Ephemeral:         true,
-		getCertForTesting: testCertRoot.getCert,
+		Dir:        tmp,
+		ControlURL: controlURL,
+		Hostname:   "s2",
+		Store:      new(mem.Store),
+		Ephemeral:  true,
 	}
 	if *verboseNodes {
 		s2.Logf = log.Printf
@@ -737,6 +759,472 @@ func TestFunnel(t *testing.T) {
 	}
 	if string(body) != "hello" {
 		t.Errorf("unexpected body: %q", body)
+	}
+}
+
+// TestFunnelClose ensures that the listener returned by ListenFunnel cleans up
+// after itself when closed. Specifically, changes made to the serve config
+// should be cleared.
+func TestFunnelClose(t *testing.T) {
+	marshalServeConfig := func(t *testing.T, sc ipn.ServeConfigView) string {
+		t.Helper()
+		return string(must.Get(json.MarshalIndent(sc, "", "\t")))
+	}
+
+	t.Run("simple", func(t *testing.T) {
+		controlURL, _ := startControl(t)
+		s, _, _ := startServer(t, t.Context(), controlURL, "s")
+
+		before := s.lb.ServeConfig()
+
+		ln := must.Get(s.ListenFunnel("tcp", ":443"))
+		ln.Close()
+
+		after := s.lb.ServeConfig()
+		if diff := cmp.Diff(marshalServeConfig(t, after), marshalServeConfig(t, before)); diff != "" {
+			t.Fatalf("expected serve config to be unchanged after close (-got, +want):\n%s", diff)
+		}
+	})
+
+	// Closing the listener shouldn't clear out config that predates it.
+	t.Run("no_clobbering", func(t *testing.T) {
+		controlURL, _ := startControl(t)
+		s, _, _ := startServer(t, t.Context(), controlURL, "s")
+
+		// To obtain config the listener might want to clobber, we:
+		//  - run a listener
+		//  - grab the config
+		//  - close the listener (clearing config)
+		ln := must.Get(s.ListenFunnel("tcp", ":443"))
+		before := s.lb.ServeConfig()
+		ln.Close()
+
+		// Now we manually write the config to the local backend (it should have
+		// been cleared), run the listener again, and close it again.
+		must.Do(s.lb.SetServeConfig(before.AsStruct(), ""))
+		ln = must.Get(s.ListenFunnel("tcp", ":443"))
+		ln.Close()
+
+		// The config should not have been cleared this time since it predated
+		// the most recent run.
+		after := s.lb.ServeConfig()
+		if diff := cmp.Diff(marshalServeConfig(t, after), marshalServeConfig(t, before)); diff != "" {
+			t.Fatalf("expected existing config to remain intact (-got, +want):\n%s", diff)
+		}
+	})
+
+	// Closing one listener shouldn't affect config for another listener.
+	t.Run("two_listeners", func(t *testing.T) {
+		controlURL, _ := startControl(t)
+		s, _, _ := startServer(t, t.Context(), controlURL, "s1")
+
+		// Start a listener on 443.
+		ln1 := must.Get(s.ListenFunnel("tcp", ":443"))
+		defer ln1.Close()
+
+		// Save the serve config for this original listener.
+		before := s.lb.ServeConfig()
+
+		// Now start and close a new listener on a different port.
+		ln2 := must.Get(s.ListenFunnel("tcp", ":8080"))
+		ln2.Close()
+
+		// The serve config for the original listener should be intact.
+		after := s.lb.ServeConfig()
+		if diff := cmp.Diff(marshalServeConfig(t, after), marshalServeConfig(t, before)); diff != "" {
+			t.Fatalf("expected existing config to remain intact (-got, +want):\n%s", diff)
+		}
+	})
+
+	// It should be possible to close a listener and free system resources even
+	// when the Server has been closed (or the listener should be automatically
+	// closed).
+	t.Run("after_server_close", func(t *testing.T) {
+		controlURL, _ := startControl(t)
+		s, _, _ := startServer(t, t.Context(), controlURL, "s")
+
+		ln := must.Get(s.ListenFunnel("tcp", ":443"))
+
+		// Close the server, then close the listener.
+		must.Do(s.Close())
+		// We don't care whether we get an error from the listener closing.
+		ln.Close()
+
+		// The listener should immediately return an error indicating closure.
+		_, err := ln.Accept()
+		// Looking for a string in the error sucks, but it's supposed to stay
+		// consistent:
+		// https://github.com/golang/go/blob/108b333d510c1f60877ac917375d7931791acfe6/src/internal/poll/fd.go#L20-L24
+		if err == nil || !strings.Contains(err.Error(), "use of closed network connection") {
+			t.Fatal("expected listener to be closed, got:", err)
+		}
+	})
+}
+
+func TestListenService(t *testing.T) {
+	// First test an error case which doesn't require all of the fancy setup.
+	t.Run("untagged_node_error", func(t *testing.T) {
+		ctx := t.Context()
+
+		controlURL, _ := startControl(t)
+		serviceHost, _, _ := startServer(t, ctx, controlURL, "service-host")
+
+		ln, err := serviceHost.ListenService("svc:foo", ServiceModeTCP{Port: 8080})
+		if ln != nil {
+			ln.Close()
+		}
+		if !errors.Is(err, ErrUntaggedServiceHost) {
+			t.Fatalf("expected %v, got %v", ErrUntaggedServiceHost, err)
+		}
+	})
+
+	// Now on to the fancier tests.
+
+	type dialFn func(context.Context, string, string) (net.Conn, error)
+
+	// TCP helpers
+	acceptAndEcho := func(t *testing.T, ln net.Listener) {
+		t.Helper()
+		conn, err := ln.Accept()
+		if err != nil {
+			t.Error("accept error:", err)
+			return
+		}
+		defer conn.Close()
+		if _, err := io.Copy(conn, conn); err != nil {
+			t.Error("copy error:", err)
+		}
+	}
+	assertEcho := func(t *testing.T, conn net.Conn) {
+		t.Helper()
+		msg := "echo"
+		buf := make([]byte, 1024)
+		if _, err := conn.Write([]byte(msg)); err != nil {
+			t.Fatal("write failed:", err)
+		}
+		n, err := conn.Read(buf)
+		if err != nil {
+			t.Fatal("read failed:", err)
+		}
+		got := string(buf[:n])
+		if got != msg {
+			t.Fatalf("unexpected response:\n\twant: %s\n\tgot: %s", msg, got)
+		}
+	}
+
+	// HTTP helpers
+	checkAndEcho := func(t *testing.T, ln net.Listener, check func(r *http.Request)) {
+		t.Helper()
+		if check == nil {
+			check = func(*http.Request) {}
+		}
+		http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer r.Body.Close()
+			check(r)
+			if _, err := io.Copy(w, r.Body); err != nil {
+				t.Error("copy error:", err)
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		}))
+	}
+	assertEchoHTTP := func(t *testing.T, hostname, path string, dial dialFn) {
+		t.Helper()
+		c := http.Client{
+			Transport: &http.Transport{
+				DialContext: dial,
+			},
+		}
+		msg := "echo"
+		resp, err := c.Post("http://"+hostname+path, "text/plain", strings.NewReader(msg))
+		if err != nil {
+			t.Fatal("posting request:", err)
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal("reading body:", err)
+		}
+		got := string(b)
+		if got != msg {
+			t.Fatalf("unexpected response:\n\twant: %s\n\tgot: %s", msg, got)
+		}
+	}
+
+	tests := []struct {
+		name string
+
+		// modes is used as input to [Server.ListenService].
+		//
+		// If this slice has multiple modes, then ListenService will be invoked
+		// multiple times. The number of listeners provided to the run function
+		// (below) will always match the number of elements in this slice.
+		modes []ServiceMode
+
+		extraSetup func(t *testing.T, control *testcontrol.Server)
+
+		// run executes the test. This function does not need to close any of
+		// the input resources, but it should close any new resources it opens.
+		// listeners[i] corresponds to inputs[i].
+		run func(t *testing.T, listeners []*ServiceListener, peer *Server)
+	}{
+		{
+			name: "basic_TCP",
+			modes: []ServiceMode{
+				ServiceModeTCP{Port: 99},
+			},
+			run: func(t *testing.T, listeners []*ServiceListener, peer *Server) {
+				go acceptAndEcho(t, listeners[0])
+
+				target := fmt.Sprintf("%s:%d", listeners[0].FQDN, 99)
+				conn := must.Get(peer.Dial(t.Context(), "tcp", target))
+				defer conn.Close()
+
+				assertEcho(t, conn)
+			},
+		},
+		{
+			name: "TLS_terminated_TCP",
+			modes: []ServiceMode{
+				ServiceModeTCP{
+					TerminateTLS: true,
+					Port:         443,
+				},
+			},
+			run: func(t *testing.T, listeners []*ServiceListener, peer *Server) {
+				go acceptAndEcho(t, listeners[0])
+
+				target := fmt.Sprintf("%s:%d", listeners[0].FQDN, 443)
+				conn := must.Get(peer.Dial(t.Context(), "tcp", target))
+				defer conn.Close()
+
+				assertEcho(t, tls.Client(conn, &tls.Config{
+					ServerName: listeners[0].FQDN,
+					RootCAs:    testCertRoot.Pool(),
+				}))
+			},
+		},
+		{
+			name: "identity_headers",
+			modes: []ServiceMode{
+				ServiceModeHTTP{
+					Port: 80,
+				},
+			},
+			run: func(t *testing.T, listeners []*ServiceListener, peer *Server) {
+				expectHeader := "Tailscale-User-Name"
+				go checkAndEcho(t, listeners[0], func(r *http.Request) {
+					if _, ok := r.Header[expectHeader]; !ok {
+						t.Error("did not see expected header:", expectHeader)
+					}
+				})
+				assertEchoHTTP(t, listeners[0].FQDN, "", peer.Dial)
+			},
+		},
+		{
+			name: "identity_headers_TLS",
+			modes: []ServiceMode{
+				ServiceModeHTTP{
+					HTTPS: true,
+					Port:  80,
+				},
+			},
+			run: func(t *testing.T, listeners []*ServiceListener, peer *Server) {
+				expectHeader := "Tailscale-User-Name"
+				go checkAndEcho(t, listeners[0], func(r *http.Request) {
+					if _, ok := r.Header[expectHeader]; !ok {
+						t.Error("did not see expected header:", expectHeader)
+					}
+				})
+
+				dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+					tcpConn, err := peer.Dial(ctx, network, addr)
+					if err != nil {
+						return nil, err
+					}
+					return tls.Client(tcpConn, &tls.Config{
+						ServerName: listeners[0].FQDN,
+						RootCAs:    testCertRoot.Pool(),
+					}), nil
+				}
+
+				assertEchoHTTP(t, listeners[0].FQDN, "", dial)
+			},
+		},
+		{
+			name: "app_capabilities",
+			modes: []ServiceMode{
+				ServiceModeHTTP{
+					Port: 80,
+					AcceptAppCaps: map[string][]string{
+						"/":    {"example.com/cap/all-paths"},
+						"/foo": {"example.com/cap/all-paths", "example.com/cap/foo"},
+					},
+				},
+			},
+			extraSetup: func(t *testing.T, control *testcontrol.Server) {
+				control.SetGlobalAppCaps(tailcfg.PeerCapMap{
+					"example.com/cap/all-paths": []tailcfg.RawMessage{`true`},
+					"example.com/cap/foo":       []tailcfg.RawMessage{`true`},
+				})
+			},
+			run: func(t *testing.T, listeners []*ServiceListener, peer *Server) {
+				allPathsCap := "example.com/cap/all-paths"
+				fooCap := "example.com/cap/foo"
+				checkCaps := func(r *http.Request) {
+					rawCaps, ok := r.Header["Tailscale-App-Capabilities"]
+					if !ok {
+						t.Error("no app capabilities header")
+						return
+					}
+					if len(rawCaps) != 1 {
+						t.Error("expected one app capabilities header value, got", len(rawCaps))
+						return
+					}
+					var caps map[string][]any
+					if err := json.Unmarshal([]byte(rawCaps[0]), &caps); err != nil {
+						t.Error("error unmarshaling app caps:", err)
+						return
+					}
+					if _, ok := caps[allPathsCap]; !ok {
+						t.Errorf("got app caps, but %v is not present; saw:\n%v", allPathsCap, caps)
+					}
+					if strings.HasPrefix(r.URL.Path, "/foo") {
+						if _, ok := caps[fooCap]; !ok {
+							t.Errorf("%v should be present for /foo request; saw:\n%v", fooCap, caps)
+						}
+					} else {
+						if _, ok := caps[fooCap]; ok {
+							t.Errorf("%v should not be present for non-/foo request; saw:\n%v", fooCap, caps)
+						}
+					}
+				}
+
+				go checkAndEcho(t, listeners[0], checkCaps)
+				assertEchoHTTP(t, listeners[0].FQDN, "", peer.Dial)
+				assertEchoHTTP(t, listeners[0].FQDN, "/foo", peer.Dial)
+				assertEchoHTTP(t, listeners[0].FQDN, "/foo/bar", peer.Dial)
+			},
+		},
+		{
+			name: "multiple_ports",
+			modes: []ServiceMode{
+				ServiceModeTCP{
+					Port: 99,
+				},
+				ServiceModeHTTP{
+					Port: 80,
+				},
+			},
+			run: func(t *testing.T, listeners []*ServiceListener, peer *Server) {
+				go acceptAndEcho(t, listeners[0])
+
+				target := fmt.Sprintf("%s:%d", listeners[0].FQDN, 99)
+				conn := must.Get(peer.Dial(t.Context(), "tcp", target))
+				defer conn.Close()
+				assertEcho(t, conn)
+
+				go checkAndEcho(t, listeners[1], nil)
+				assertEchoHTTP(t, listeners[1].FQDN, "", peer.Dial)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		// Overview:
+		// - start test control
+		// - start 2 tsnet nodes:
+		//     one to act as Service host and a second to act as a peer client
+		// - configure necessary state on control mock
+		// - start a Service listener from the host
+		// - call tt.run with our test bed
+		//
+		// This ends up also testing the Service forwarding logic in
+		// LocalBackend, but that's useful too.
+		t.Run(tt.name, func(t *testing.T) {
+			// We run each test with and without a TUN device ([Server.Tun]).
+			// Note that this TUN device is distinct from TUN mode for Services.
+			doTest := func(t *testing.T, withTUNDevice bool) {
+				ctx := t.Context()
+
+				lt := setupTwoClientTest(t, withTUNDevice)
+				serviceHost := lt.s2
+				serviceClient := lt.s1
+				control := lt.control
+
+				const serviceName = tailcfg.ServiceName("svc:foo")
+				const serviceVIP = "100.11.22.33"
+
+				// == Set up necessary state in our mock ==
+
+				// The Service host must have the 'service-host' capability, which
+				// is a mapping from the Service name to the Service VIP.
+				var serviceHostCaps map[tailcfg.ServiceName]views.Slice[netip.Addr]
+				mak.Set(&serviceHostCaps, serviceName, views.SliceOf([]netip.Addr{netip.MustParseAddr(serviceVIP)}))
+				j := must.Get(json.Marshal(serviceHostCaps))
+				cm := serviceHost.lb.NetMap().SelfNode.CapMap().AsMap()
+				mak.Set(&cm, tailcfg.NodeAttrServiceHost, []tailcfg.RawMessage{tailcfg.RawMessage(j)})
+				control.SetNodeCapMap(serviceHost.lb.NodeKey(), cm)
+
+				// The Service host must be allowed to advertise the Service VIP.
+				control.SetSubnetRoutes(serviceHost.lb.NodeKey(), []netip.Prefix{
+					netip.MustParsePrefix(serviceVIP + `/32`),
+				})
+
+				// The Service host must be a tagged node (any tag will do).
+				serviceHostNode := control.Node(serviceHost.lb.NodeKey())
+				serviceHostNode.Tags = append(serviceHostNode.Tags, "some-tag")
+				control.UpdateNode(serviceHostNode)
+
+				// The service client must accept routes advertised by other nodes
+				// (RouteAll is equivalent to --accept-routes).
+				must.Get(serviceClient.localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
+					RouteAllSet: true,
+					Prefs: ipn.Prefs{
+						RouteAll: true,
+					},
+				}))
+
+				// Set up DNS for our Service.
+				control.AddDNSRecords(tailcfg.DNSRecord{
+					Name:  serviceName.WithoutPrefix() + "." + control.MagicDNSDomain,
+					Value: serviceVIP,
+				})
+
+				if tt.extraSetup != nil {
+					tt.extraSetup(t, control)
+				}
+
+				// Wait until both nodes have up-to-date netmaps before
+				// proceeding with the test.
+				netmapUpToDate := func(s *Server) bool {
+					nm := s.lb.NetMap()
+					return slices.ContainsFunc(nm.DNS.ExtraRecords, func(r tailcfg.DNSRecord) bool {
+						return r.Value == serviceVIP
+					})
+				}
+				for !netmapUpToDate(serviceClient) {
+					time.Sleep(10 * time.Millisecond)
+				}
+				for !netmapUpToDate(serviceHost) {
+					time.Sleep(10 * time.Millisecond)
+				}
+
+				// == Done setting up mock state ==
+
+				// Start the Service listeners.
+				listeners := make([]*ServiceListener, 0, len(tt.modes))
+				for _, input := range tt.modes {
+					ln := must.Get(serviceHost.ListenService(serviceName.String(), input))
+					defer ln.Close()
+					listeners = append(listeners, ln)
+				}
+
+				tt.run(t, listeners, serviceClient)
+			}
+
+			t.Run("TUN", func(t *testing.T) { doTest(t, true) })
+			t.Run("netstack", func(t *testing.T) { doTest(t, false) })
+		})
 	}
 }
 
@@ -1381,6 +1869,679 @@ func mustDirect(t *testing.T, logf logger.Logf, lc1, lc2 *local.Client) {
 	t.Error("magicsock did not find a direct path from lc1 to lc2")
 }
 
+// chanTUN is a tun.Device for testing that uses channels for packet I/O.
+// Inbound receives packets written to the TUN (from the perspective of the network stack).
+// Outbound is for injecting packets to be read from the TUN.
+type chanTUN struct {
+	Inbound  chan []byte // packets written to TUN
+	Outbound chan []byte // packets to read from TUN
+	closed   chan struct{}
+	events   chan tun.Event
+}
+
+func newChanTUN() *chanTUN {
+	t := &chanTUN{
+		Inbound:  make(chan []byte, 10),
+		Outbound: make(chan []byte, 10),
+		closed:   make(chan struct{}),
+		events:   make(chan tun.Event, 1),
+	}
+	t.events <- tun.EventUp
+	return t
+}
+
+func (t *chanTUN) File() *os.File { panic("not implemented") }
+
+func (t *chanTUN) Close() error {
+	select {
+	case <-t.closed:
+	default:
+		close(t.closed)
+		close(t.Inbound)
+	}
+	return nil
+}
+
+func (t *chanTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+	select {
+	case <-t.closed:
+		return 0, io.EOF
+	case pkt := <-t.Outbound:
+		sizes[0] = copy(bufs[0][offset:], pkt)
+		return 1, nil
+	}
+}
+
+func (t *chanTUN) Write(bufs [][]byte, offset int) (int, error) {
+	for _, buf := range bufs {
+		pkt := buf[offset:]
+		if len(pkt) == 0 {
+			continue
+		}
+		select {
+		case <-t.closed:
+			return 0, errors.New("closed")
+		case t.Inbound <- slices.Clone(pkt):
+		}
+	}
+	return len(bufs), nil
+}
+
+func (t *chanTUN) MTU() (int, error)        { return 1280, nil }
+func (t *chanTUN) Name() (string, error)    { return "chantun", nil }
+func (t *chanTUN) Events() <-chan tun.Event { return t.events }
+func (t *chanTUN) BatchSize() int           { return 1 }
+
+// listenTest provides common setup for listener and TUN tests.
+type listenTest struct {
+	control      *testcontrol.Server
+	s1, s2       *Server
+	s1ip4, s1ip6 netip.Addr
+	s2ip4, s2ip6 netip.Addr
+	tun          *chanTUN // nil for netstack mode
+}
+
+// setupTwoClientTest creates two tsnet servers for testing.
+// If useTUN is true, s2 uses a chanTUN; otherwise it uses netstack only.
+func setupTwoClientTest(t *testing.T, useTUN bool) *listenTest {
+	t.Helper()
+	tstest.Shard(t)
+	tstest.ResourceCheck(t)
+	ctx := t.Context()
+	controlURL, control := startControl(t)
+	s1, _, _ := startServer(t, ctx, controlURL, "s1")
+
+	tmp := filepath.Join(t.TempDir(), "s2")
+	must.Do(os.MkdirAll(tmp, 0755))
+	s2 := &Server{
+		Dir:        tmp,
+		ControlURL: controlURL,
+		Hostname:   "s2",
+		Store:      new(mem.Store),
+		Ephemeral:  true,
+	}
+
+	var tun *chanTUN
+	if useTUN {
+		tun = newChanTUN()
+		s2.Tun = tun
+	}
+
+	if *verboseNodes {
+		s2.Logf = t.Logf
+	}
+	t.Cleanup(func() { s2.Close() })
+
+	s2status, err := s2.Up(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2.lb.ConfigureCertsForTest(testCertRoot.getCert)
+
+	s1ip4, s1ip6 := s1.TailscaleIPs()
+	s2ip4 := s2status.TailscaleIPs[0]
+	var s2ip6 netip.Addr
+	if len(s2status.TailscaleIPs) > 1 {
+		s2ip6 = s2status.TailscaleIPs[1]
+	}
+
+	lc1 := must.Get(s1.LocalClient())
+	must.Get(lc1.Ping(ctx, s2ip4, tailcfg.PingTSMP))
+
+	return &listenTest{
+		control: control,
+		s1:      s1,
+		s2:      s2,
+		s1ip4:   s1ip4,
+		s1ip6:   s1ip6,
+		s2ip4:   s2ip4,
+		s2ip6:   s2ip6,
+		tun:     tun,
+	}
+}
+
+// echoUDP returns an IP packet with src/dst and ports swapped, with checksums recomputed.
+func echoUDP(pkt []byte) []byte {
+	var p packet.Parsed
+	p.Decode(pkt)
+	if p.IPProto != ipproto.UDP {
+		return nil
+	}
+	switch p.IPVersion {
+	case 4:
+		h := p.UDP4Header()
+		h.ToResponse()
+		return packet.Generate(h, p.Payload())
+	case 6:
+		h := packet.UDP6Header{
+			IP6Header: p.IP6Header(),
+			SrcPort:   p.Src.Port(),
+			DstPort:   p.Dst.Port(),
+		}
+		h.ToResponse()
+		return packet.Generate(h, p.Payload())
+	}
+	return nil
+}
+
+func TestTUN(t *testing.T) {
+	tt := setupTwoClientTest(t, true)
+
+	go func() {
+		for pkt := range tt.tun.Inbound {
+			var p packet.Parsed
+			p.Decode(pkt)
+			if p.Dst.Port() == 9999 {
+				tt.tun.Outbound <- echoUDP(pkt)
+			}
+		}
+	}()
+
+	test := func(t *testing.T, s2ip netip.Addr) {
+		conn, err := tt.s1.Dial(t.Context(), "udp", netip.AddrPortFrom(s2ip, 9999).String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+
+		want := "hello from s1"
+		if _, err := conn.Write([]byte(want)); err != nil {
+			t.Fatal(err)
+		}
+
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		got := make([]byte, 1024)
+		n, err := conn.Read(got)
+		if err != nil {
+			t.Fatalf("reading echo response: %v", err)
+		}
+		if string(got[:n]) != want {
+			t.Errorf("got %q, want %q", got[:n], want)
+		}
+	}
+
+	t.Run("IPv4", func(t *testing.T) { test(t, tt.s2ip4) })
+	t.Run("IPv6", func(t *testing.T) { test(t, tt.s2ip6) })
+}
+
+// TestTUNDNS tests that a TUN can send DNS queries to quad-100 and receive
+// responses. This verifies that handleLocalPackets intercepts outbound traffic
+// to the service IP.
+func TestTUNDNS(t *testing.T) {
+	tt := setupTwoClientTest(t, true)
+
+	test := func(t *testing.T, srcIP netip.Addr, serviceIP netip.Addr) {
+		tt.tun.Outbound <- buildDNSQuery("s2", srcIP)
+
+		ipVersion := uint8(4)
+		if srcIP.Is6() {
+			ipVersion = 6
+		}
+		for {
+			select {
+			case pkt := <-tt.tun.Inbound:
+				var p packet.Parsed
+				p.Decode(pkt)
+				if p.IPVersion != ipVersion || p.IPProto != ipproto.UDP {
+					continue
+				}
+				if p.Src.Addr() == serviceIP && p.Src.Port() == 53 {
+					if len(p.Payload()) < 12 {
+						t.Fatalf("DNS response too short: %d bytes", len(p.Payload()))
+					}
+					return // success
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("timeout waiting for DNS response")
+			}
+		}
+	}
+
+	t.Run("IPv4", func(t *testing.T) {
+		test(t, tt.s2ip4, netip.MustParseAddr("100.100.100.100"))
+	})
+	t.Run("IPv6", func(t *testing.T) {
+		test(t, tt.s2ip6, netip.MustParseAddr("fd7a:115c:a1e0::53"))
+	})
+}
+
+// TestListenPacket tests UDP listeners (ListenPacket) in both netstack and TUN modes.
+func TestListenPacket(t *testing.T) {
+	testListenPacket := func(t *testing.T, lt *listenTest, listenIP netip.Addr) {
+		pc, err := lt.s2.ListenPacket("udp", netip.AddrPortFrom(listenIP, 0).String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pc.Close()
+
+		echoErr := make(chan error, 1)
+		go func() {
+			buf := make([]byte, 1500)
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				echoErr <- err
+				return
+			}
+			_, err = pc.WriteTo(buf[:n], addr)
+			if err != nil {
+				echoErr <- err
+				return
+			}
+		}()
+
+		conn, err := lt.s1.Dial(t.Context(), "udp", pc.LocalAddr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+
+		want := "hello udp"
+		if _, err := conn.Write([]byte(want)); err != nil {
+			t.Fatal(err)
+		}
+
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		got := make([]byte, 1024)
+		n, err := conn.Read(got)
+		if err != nil {
+			select {
+			case e := <-echoErr:
+				t.Fatalf("echo error: %v; read error: %v", e, err)
+			default:
+				t.Fatalf("Read failed: %v", err)
+			}
+		}
+
+		if string(got[:n]) != want {
+			t.Errorf("got %q, want %q", got[:n], want)
+		}
+	}
+
+	t.Run("Netstack", func(t *testing.T) {
+		lt := setupTwoClientTest(t, false)
+		t.Run("IPv4", func(t *testing.T) { testListenPacket(t, lt, lt.s2ip4) })
+		t.Run("IPv6", func(t *testing.T) { testListenPacket(t, lt, lt.s2ip6) })
+	})
+
+	t.Run("TUN", func(t *testing.T) {
+		lt := setupTwoClientTest(t, true)
+		t.Run("IPv4", func(t *testing.T) { testListenPacket(t, lt, lt.s2ip4) })
+		t.Run("IPv6", func(t *testing.T) { testListenPacket(t, lt, lt.s2ip6) })
+	})
+}
+
+// TestListenTCP tests TCP listeners with concrete addresses in both netstack
+// and TUN modes.
+func TestListenTCP(t *testing.T) {
+	testListenTCP := func(t *testing.T, lt *listenTest, listenIP netip.Addr) {
+		ln, err := lt.s2.Listen("tcp", netip.AddrPortFrom(listenIP, 0).String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+
+		echoErr := make(chan error, 1)
+		go func() {
+			conn, err := ln.Accept()
+			if err != nil {
+				echoErr <- err
+				return
+			}
+			defer conn.Close()
+			buf := make([]byte, 1024)
+			n, err := conn.Read(buf)
+			if err != nil {
+				echoErr <- err
+				return
+			}
+			_, err = conn.Write(buf[:n])
+			if err != nil {
+				echoErr <- err
+				return
+			}
+		}()
+
+		conn, err := lt.s1.Dial(t.Context(), "tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatalf("Dial failed: %v", err)
+		}
+		defer conn.Close()
+
+		want := "hello tcp"
+		if _, err := conn.Write([]byte(want)); err != nil {
+			t.Fatalf("Write failed: %v", err)
+		}
+
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		got := make([]byte, 1024)
+		n, err := conn.Read(got)
+		if err != nil {
+			select {
+			case e := <-echoErr:
+				t.Fatalf("echo error: %v; read error: %v", e, err)
+			default:
+				t.Fatalf("Read failed: %v", err)
+			}
+		}
+
+		if string(got[:n]) != want {
+			t.Errorf("got %q, want %q", got[:n], want)
+		}
+	}
+
+	t.Run("Netstack", func(t *testing.T) {
+		lt := setupTwoClientTest(t, false)
+		t.Run("IPv4", func(t *testing.T) { testListenTCP(t, lt, lt.s2ip4) })
+		t.Run("IPv6", func(t *testing.T) { testListenTCP(t, lt, lt.s2ip6) })
+	})
+
+	t.Run("TUN", func(t *testing.T) {
+		lt := setupTwoClientTest(t, true)
+		t.Run("IPv4", func(t *testing.T) { testListenTCP(t, lt, lt.s2ip4) })
+		t.Run("IPv6", func(t *testing.T) { testListenTCP(t, lt, lt.s2ip6) })
+	})
+}
+
+// TestListenTCPDualStack tests TCP listeners with wildcard addresses (dual-stack)
+// in both netstack and TUN modes.
+func TestListenTCPDualStack(t *testing.T) {
+	testListenTCPDualStack := func(t *testing.T, lt *listenTest, dialIP netip.Addr) {
+		ln, err := lt.s2.Listen("tcp", ":0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+
+		_, portStr, err := net.SplitHostPort(ln.Addr().String())
+		if err != nil {
+			t.Fatalf("parsing listener address %q: %v", ln.Addr().String(), err)
+		}
+
+		echoErr := make(chan error, 1)
+		go func() {
+			conn, err := ln.Accept()
+			if err != nil {
+				echoErr <- err
+				return
+			}
+			defer conn.Close()
+			buf := make([]byte, 1024)
+			n, err := conn.Read(buf)
+			if err != nil {
+				echoErr <- err
+				return
+			}
+			_, err = conn.Write(buf[:n])
+			if err != nil {
+				echoErr <- err
+				return
+			}
+		}()
+
+		dialAddr := net.JoinHostPort(dialIP.String(), portStr)
+		conn, err := lt.s1.Dial(t.Context(), "tcp", dialAddr)
+		if err != nil {
+			t.Fatalf("Dial(%q) failed: %v", dialAddr, err)
+		}
+		defer conn.Close()
+
+		want := "hello tcp dualstack"
+		if _, err := conn.Write([]byte(want)); err != nil {
+			t.Fatalf("Write failed: %v", err)
+		}
+
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		got := make([]byte, 1024)
+		n, err := conn.Read(got)
+		if err != nil {
+			select {
+			case e := <-echoErr:
+				t.Fatalf("echo error: %v; read error: %v", e, err)
+			default:
+				t.Fatalf("Read failed: %v", err)
+			}
+		}
+
+		if string(got[:n]) != want {
+			t.Errorf("got %q, want %q", got[:n], want)
+		}
+	}
+
+	t.Run("Netstack", func(t *testing.T) {
+		lt := setupTwoClientTest(t, false)
+		t.Run("DialIPv4", func(t *testing.T) { testListenTCPDualStack(t, lt, lt.s2ip4) })
+		t.Run("DialIPv6", func(t *testing.T) { testListenTCPDualStack(t, lt, lt.s2ip6) })
+	})
+
+	t.Run("TUN", func(t *testing.T) {
+		lt := setupTwoClientTest(t, true)
+		t.Run("DialIPv4", func(t *testing.T) { testListenTCPDualStack(t, lt, lt.s2ip4) })
+		t.Run("DialIPv6", func(t *testing.T) { testListenTCPDualStack(t, lt, lt.s2ip6) })
+	})
+}
+
+// TestDialTCP tests TCP dialing from s2 to s1 in both netstack and TUN modes.
+// In TUN mode, this verifies that outbound TCP connections and their replies
+// are handled by netstack without packets escaping to the TUN.
+func TestDialTCP(t *testing.T) {
+	testDialTCP := func(t *testing.T, lt *listenTest, listenIP netip.Addr) {
+		ln, err := lt.s1.Listen("tcp", netip.AddrPortFrom(listenIP, 0).String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+
+		echoErr := make(chan error, 1)
+		go func() {
+			conn, err := ln.Accept()
+			if err != nil {
+				echoErr <- err
+				return
+			}
+			defer conn.Close()
+			buf := make([]byte, 1024)
+			n, err := conn.Read(buf)
+			if err != nil {
+				echoErr <- err
+				return
+			}
+			_, err = conn.Write(buf[:n])
+			if err != nil {
+				echoErr <- err
+				return
+			}
+		}()
+
+		conn, err := lt.s2.Dial(t.Context(), "tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatalf("Dial failed: %v", err)
+		}
+		defer conn.Close()
+
+		want := "hello tcp dial"
+		if _, err := conn.Write([]byte(want)); err != nil {
+			t.Fatalf("Write failed: %v", err)
+		}
+
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		got := make([]byte, 1024)
+		n, err := conn.Read(got)
+		if err != nil {
+			select {
+			case e := <-echoErr:
+				t.Fatalf("echo error: %v; read error: %v", e, err)
+			default:
+				t.Fatalf("Read failed: %v", err)
+			}
+		}
+
+		if string(got[:n]) != want {
+			t.Errorf("got %q, want %q", got[:n], want)
+		}
+	}
+
+	t.Run("Netstack", func(t *testing.T) {
+		lt := setupTwoClientTest(t, false)
+		t.Run("IPv4", func(t *testing.T) { testDialTCP(t, lt, lt.s1ip4) })
+		t.Run("IPv6", func(t *testing.T) { testDialTCP(t, lt, lt.s1ip6) })
+	})
+
+	t.Run("TUN", func(t *testing.T) {
+		lt := setupTwoClientTest(t, true)
+
+		var escapedTCPPackets atomic.Int32
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			for pkt := range lt.tun.Inbound {
+				var p packet.Parsed
+				p.Decode(pkt)
+				if p.IPProto == ipproto.TCP {
+					escapedTCPPackets.Add(1)
+					t.Logf("TCP packet escaped to TUN: %v -> %v", p.Src, p.Dst)
+				}
+			}
+		})
+
+		t.Run("IPv4", func(t *testing.T) { testDialTCP(t, lt, lt.s1ip4) })
+		t.Run("IPv6", func(t *testing.T) { testDialTCP(t, lt, lt.s1ip6) })
+
+		lt.tun.Close()
+		wg.Wait()
+		if escaped := escapedTCPPackets.Load(); escaped > 0 {
+			t.Errorf("%d TCP packets escaped to TUN", escaped)
+		}
+	})
+}
+
+// TestDialUDP tests UDP dialing from s2 to s1 in both netstack and TUN modes.
+// In TUN mode, this verifies that outbound UDP connections register endpoints
+// with gVisor, allowing reply packets to be routed through netstack instead of
+// escaping to the TUN.
+func TestDialUDP(t *testing.T) {
+	testDialUDP := func(t *testing.T, lt *listenTest, listenIP netip.Addr) {
+		pc, err := lt.s1.ListenPacket("udp", netip.AddrPortFrom(listenIP, 0).String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pc.Close()
+
+		echoErr := make(chan error, 1)
+		go func() {
+			buf := make([]byte, 1500)
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				echoErr <- err
+				return
+			}
+			_, err = pc.WriteTo(buf[:n], addr)
+			if err != nil {
+				echoErr <- err
+				return
+			}
+		}()
+
+		conn, err := lt.s2.Dial(t.Context(), "udp", pc.LocalAddr().String())
+		if err != nil {
+			t.Fatalf("Dial failed: %v", err)
+		}
+		defer conn.Close()
+
+		want := "hello udp dial"
+		if _, err := conn.Write([]byte(want)); err != nil {
+			t.Fatalf("Write failed: %v", err)
+		}
+
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		got := make([]byte, 1024)
+		n, err := conn.Read(got)
+		if err != nil {
+			select {
+			case e := <-echoErr:
+				t.Fatalf("echo error: %v; read error: %v", e, err)
+			default:
+				t.Fatalf("Read failed: %v", err)
+			}
+		}
+
+		if string(got[:n]) != want {
+			t.Errorf("got %q, want %q", got[:n], want)
+		}
+	}
+
+	t.Run("Netstack", func(t *testing.T) {
+		lt := setupTwoClientTest(t, false)
+		t.Run("IPv4", func(t *testing.T) { testDialUDP(t, lt, lt.s1ip4) })
+		t.Run("IPv6", func(t *testing.T) { testDialUDP(t, lt, lt.s1ip6) })
+	})
+
+	t.Run("TUN", func(t *testing.T) {
+		lt := setupTwoClientTest(t, true)
+
+		var escapedUDPPackets atomic.Int32
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			for pkt := range lt.tun.Inbound {
+				var p packet.Parsed
+				p.Decode(pkt)
+				if p.IPProto == ipproto.UDP {
+					escapedUDPPackets.Add(1)
+					t.Logf("UDP packet escaped to TUN: %v -> %v", p.Src, p.Dst)
+				}
+			}
+		})
+
+		t.Run("IPv4", func(t *testing.T) { testDialUDP(t, lt, lt.s1ip4) })
+		t.Run("IPv6", func(t *testing.T) { testDialUDP(t, lt, lt.s1ip6) })
+
+		lt.tun.Close()
+		wg.Wait()
+		if escaped := escapedUDPPackets.Load(); escaped > 0 {
+			t.Errorf("%d UDP packets escaped to TUN", escaped)
+		}
+	})
+}
+
+// buildDNSQuery builds a UDP/IP packet containing a DNS query for name to the
+// Tailscale service IP (100.100.100.100 for IPv4, fd7a:115c:a1e0::53 for IPv6).
+func buildDNSQuery(name string, srcIP netip.Addr) []byte {
+	qtype := byte(0x01) // Type A for IPv4
+	if srcIP.Is6() {
+		qtype = 0x1c // Type AAAA for IPv6
+	}
+	dns := []byte{
+		0x12, 0x34, // ID
+		0x01, 0x00, // Flags: standard query, recursion desired
+		0x00, 0x01, // QDCOUNT: 1
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // ANCOUNT, NSCOUNT, ARCOUNT
+	}
+	for _, label := range strings.Split(name, ".") {
+		dns = append(dns, byte(len(label)))
+		dns = append(dns, label...)
+	}
+	dns = append(dns, 0x00, 0x00, qtype, 0x00, 0x01) // null, Type A/AAAA, Class IN
+
+	if srcIP.Is4() {
+		h := packet.UDP4Header{
+			IP4Header: packet.IP4Header{
+				Src: srcIP,
+				Dst: netip.MustParseAddr("100.100.100.100"),
+			},
+			SrcPort: 12345,
+			DstPort: 53,
+		}
+		return packet.Generate(h, dns)
+	}
+	h := packet.UDP6Header{
+		IP6Header: packet.IP6Header{
+			Src: srcIP,
+			Dst: netip.MustParseAddr("fd7a:115c:a1e0::53"),
+		},
+		SrcPort: 12345,
+		DstPort: 53,
+	}
+	return packet.Generate(h, dns)
+}
+
 func TestDeps(t *testing.T) {
 	tstest.Shard(t)
 	deptest.DepChecker{
@@ -1392,4 +2553,242 @@ func TestDeps(t *testing.T) {
 			}
 		},
 	}.Check(t)
+}
+
+func TestResolveAuthKey(t *testing.T) {
+	tests := []struct {
+		name            string
+		authKey         string
+		clientSecret    string
+		clientID        string
+		idToken         string
+		audience        string
+		oauthAvailable  bool
+		wifAvailable    bool
+		resolveViaOAuth func(ctx context.Context, clientSecret string, tags []string) (string, error)
+		resolveViaWIF   func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error)
+		wantAuthKey     string
+		wantErr         bool
+		wantErrContains string
+	}{
+		{
+			name:           "successful resolution via OAuth client secret",
+			clientSecret:   "tskey-client-secret-123",
+			oauthAvailable: true,
+			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
+				if clientSecret != "tskey-client-secret-123" {
+					return "", fmt.Errorf("unexpected client secret: %s", clientSecret)
+				}
+				return "tskey-auth-via-oauth", nil
+			},
+			wantAuthKey:     "tskey-auth-via-oauth",
+			wantErrContains: "",
+		},
+		{
+			name:           "failing resolution via OAuth client secret",
+			clientSecret:   "tskey-client-secret-123",
+			oauthAvailable: true,
+			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
+				return "", fmt.Errorf("resolution failed")
+			},
+			wantErrContains: "resolution failed",
+		},
+		{
+			name:         "successful resolution via federated ID token",
+			clientID:     "client-id-123",
+			idToken:      "id-token-456",
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+				if clientID != "client-id-123" {
+					return "", fmt.Errorf("unexpected client ID: %s", clientID)
+				}
+				if idToken != "id-token-456" {
+					return "", fmt.Errorf("unexpected ID token: %s", idToken)
+				}
+				return "tskey-auth-via-wif", nil
+			},
+			wantAuthKey:     "tskey-auth-via-wif",
+			wantErrContains: "",
+		},
+		{
+			name:         "successful resolution via federated audience",
+			clientID:     "client-id-123",
+			audience:     "api.tailscale.com",
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+				if clientID != "client-id-123" {
+					return "", fmt.Errorf("unexpected client ID: %s", clientID)
+				}
+				if audience != "api.tailscale.com" {
+					return "", fmt.Errorf("unexpected ID token: %s", idToken)
+				}
+				return "tskey-auth-via-wif", nil
+			},
+			wantAuthKey:     "tskey-auth-via-wif",
+			wantErrContains: "",
+		},
+		{
+			name:         "failing resolution via federated ID token",
+			clientID:     "client-id-123",
+			idToken:      "id-token-456",
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+				return "", fmt.Errorf("resolution failed")
+			},
+			wantErrContains: "resolution failed",
+		},
+		{
+			name:         "empty client ID with ID token",
+			clientID:     "",
+			idToken:      "id-token-456",
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+				return "", fmt.Errorf("should not be called")
+			},
+			wantErrContains: "empty",
+		},
+		{
+			name:         "empty client ID with audience",
+			clientID:     "",
+			audience:     "api.tailscale.com",
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+				return "", fmt.Errorf("should not be called")
+			},
+			wantErrContains: "empty",
+		},
+		{
+			name:         "empty ID token",
+			clientID:     "client-id-123",
+			idToken:      "",
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+				return "", fmt.Errorf("should not be called")
+			},
+			wantErrContains: "empty",
+		},
+		{
+			name:         "audience with ID token",
+			clientID:     "client-id-123",
+			idToken:      "id-token-456",
+			audience:     "api.tailscale.com",
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+				return "", fmt.Errorf("should not be called")
+			},
+			wantErrContains: "only one of ID token and audience",
+		},
+		{
+			name:           "workload identity resolution skipped if resolution via OAuth token succeeds",
+			clientSecret:   "tskey-client-secret-123",
+			oauthAvailable: true,
+			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
+				if clientSecret != "tskey-client-secret-123" {
+					return "", fmt.Errorf("unexpected client secret: %s", clientSecret)
+				}
+				return "tskey-auth-via-oauth", nil
+			},
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+				return "", fmt.Errorf("should not be called")
+			},
+			wantAuthKey:     "tskey-auth-via-oauth",
+			wantErrContains: "",
+		},
+		{
+			name:           "workload identity resolution skipped if resolution via OAuth token fails",
+			clientID:       "tskey-client-id-123",
+			idToken:        "",
+			oauthAvailable: true,
+			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
+				return "", fmt.Errorf("resolution failed")
+			},
+			wifAvailable: true,
+			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+				return "", fmt.Errorf("should not be called")
+			},
+			wantErrContains: "failed",
+		},
+		{
+			name:            "authkey set and no resolution available",
+			authKey:         "tskey-auth-123",
+			oauthAvailable:  false,
+			wifAvailable:    false,
+			wantAuthKey:     "tskey-auth-123",
+			wantErrContains: "",
+		},
+		{
+			name:            "no authkey set and no resolution available",
+			oauthAvailable:  false,
+			wifAvailable:    false,
+			wantAuthKey:     "",
+			wantErrContains: "",
+		},
+		{
+			name:           "authkey is client secret and resolution via OAuth client secret succeeds",
+			authKey:        "tskey-client-secret-123",
+			oauthAvailable: true,
+			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
+				if clientSecret != "tskey-client-secret-123" {
+					return "", fmt.Errorf("unexpected client secret: %s", clientSecret)
+				}
+				return "tskey-auth-via-oauth", nil
+			},
+			wantAuthKey:     "tskey-auth-via-oauth",
+			wantErrContains: "",
+		},
+		{
+			name:           "authkey is client secret but resolution via OAuth client secret fails",
+			authKey:        "tskey-client-secret-123",
+			oauthAvailable: true,
+			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
+				return "", fmt.Errorf("resolution failed")
+			},
+			wantErrContains: "resolution failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.oauthAvailable {
+				t.Cleanup(tailscale.HookResolveAuthKey.SetForTest(tt.resolveViaOAuth))
+			}
+
+			if tt.wifAvailable {
+				t.Cleanup(tailscale.HookResolveAuthKeyViaWIF.SetForTest(tt.resolveViaWIF))
+			}
+
+			s := &Server{
+				AuthKey:      tt.authKey,
+				ClientSecret: tt.clientSecret,
+				ClientID:     tt.clientID,
+				IDToken:      tt.idToken,
+				Audience:     tt.audience,
+				ControlURL:   "https://control.example.com",
+			}
+			s.shutdownCtx = context.Background()
+
+			gotAuthKey, err := s.resolveAuthKey()
+
+			if tt.wantErrContains != "" {
+				if err == nil {
+					t.Errorf("expected error but got none")
+					return
+				}
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Errorf("expected error containing %q but got error: %v", tt.wantErrContains, err)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("resolveAuthKey expected no error but got error: %v", err)
+				return
+			}
+
+			if gotAuthKey != tt.wantAuthKey {
+				t.Errorf("resolveAuthKey() = %q, want %q", gotAuthKey, tt.wantAuthKey)
+			}
+		})
+	}
 }

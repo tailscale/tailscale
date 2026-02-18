@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Copyright (c) Tailscale Inc & AUTHORS
+# Copyright (c) Tailscale Inc & contributors
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # gocross-wrapper.sh is a wrapper that can be aliased to 'go', which
 # transparently runs the version of github.com/tailscale/go as specified repo's
-# go.toolchain.rev file.
+# go.toolchain.rev file (or go.toolchain.next.rev if TS_GO_NEXT=1).
 #
 # It also conditionally (if TS_USE_GOCROSS=1) builds gocross and uses it as a go
 # wrapper to inject certain go flags.
@@ -19,6 +19,12 @@ if [[ "${OSTYPE:-}" == "cygwin" || "${OSTYPE:-}" == "msys" ]]; then
     hash pwsh 2>/dev/null || { echo >&2 "This operation requires PowerShell Core."; exit 1; }
     pwsh -NoProfile -ExecutionPolicy Bypass "${BASH_SOURCE%/*}/gocross-wrapper.ps1" "$@"
     exit
+fi
+
+if [[ "${TS_GO_NEXT:-}" == "1" ]]; then
+    go_toolchain_rev_file="go.toolchain.next.rev"
+else
+    go_toolchain_rev_file="go.toolchain.rev"
 fi
 
 # Locate a bootstrap toolchain and (re)build gocross if necessary. We run all of
@@ -45,7 +51,7 @@ cd "$repo_root"
 # https://github.com/tailscale/go release artifact to download.
 toolchain=""
 
-read -r REV <go.toolchain.rev
+read -r REV <"$go_toolchain_rev_file"
 case "$REV" in
 /*)
     toolchain="$REV"
@@ -148,7 +154,7 @@ unset GOROOT
 # gocross is opt-in as of 2025-06-16. See tailscale/corp#26717
 # and comment above in this file.
 if [ "${TS_USE_GOCROSS:-}" != "1" ]; then
-    read -r REV <"${repo_root}/go.toolchain.rev"
+    read -r REV <"${repo_root}/$go_toolchain_rev_file"
     case "$REV" in
     /*)
         toolchain="$REV"

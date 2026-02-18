@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !plan9
@@ -51,6 +51,8 @@ type SessionType string
 var (
 	// CounterSessionRecordingsAttempted counts the number of session recording attempts.
 	CounterSessionRecordingsAttempted = clientmetric.NewCounter("k8s_auth_proxy_session_recordings_attempted")
+
+	CounterKubernetesAPIRequestEventsAttempted = clientmetric.NewCounter("k8s_auth_proxy_api_request_event_recording_attempted")
 
 	// counterSessionRecordingsUploaded counts the number of successfully uploaded session recordings.
 	counterSessionRecordingsUploaded = clientmetric.NewCounter("k8s_auth_proxy_session_recordings_uploaded")

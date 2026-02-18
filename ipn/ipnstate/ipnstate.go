@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package ipnstate captures the entire state of the Tailscale network.
@@ -89,6 +89,7 @@ type Status struct {
 
 // TKAKey describes a key trusted by network lock.
 type TKAKey struct {
+	Kind     string
 	Key      key.NLPublic
 	Metadata map[string]string
 	Votes    uint

@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !plan9
@@ -80,7 +80,14 @@ type RecorderSpec struct {
 	// Replicas specifies how many instances of tsrecorder to run. Defaults to 1.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:default=1
 	Replicas *int32 `json:"replicas,omitzero"`
+
+	// Tailnet specifies the tailnet this Recorder should join. If blank, the default tailnet is used. When set, this
+	// name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set.
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Recorder tailnet is immutable"
+	Tailnet string `json:"tailnet,omitempty"`
 }
 
 type RecorderStatefulSet struct {

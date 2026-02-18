@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build tailscale_go
@@ -17,6 +17,9 @@ func init() {
 		panic("binary built with tailscale_go build tag but failed to read build info or find tailscale.toolchain.rev in build info")
 	}
 	want := strings.TrimSpace(GoToolchainRev)
+	if os.Getenv("TS_GO_NEXT") == "1" {
+		want = strings.TrimSpace(GoToolchainNextRev)
+	}
 	if tsRev != want {
 		if os.Getenv("TS_PERMIT_TOOLCHAIN_MISMATCH") == "1" {
 			fmt.Fprintf(os.Stderr, "tailscale.toolchain.rev = %q, want %q; but ignoring due to TS_PERMIT_TOOLCHAIN_MISMATCH=1\n", tsRev, want)

@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // netlogfmt parses a stream of JSON log messages from stdin and
@@ -77,6 +77,7 @@ func main() {
 	*resolveAddrs = strings.ReplaceAll(*resolveAddrs, "-", "") // ignore dashes
 	*resolveAddrs = strings.ReplaceAll(*resolveAddrs, "_", "") // ignore underscores
 	switch *resolveAddrs {
+	case "":
 	case "id", "nodeid":
 		*resolveAddrs = "nodeid"
 	case "name", "hostname":

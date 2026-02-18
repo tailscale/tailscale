@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package tsweb contains code used in various Tailscale webservers.
@@ -685,6 +685,10 @@ func (lg loggingResponseWriter) Flush() {
 		return
 	}
 	f.Flush()
+}
+
+func (lg *loggingResponseWriter) Unwrap() http.ResponseWriter {
+	return lg.ResponseWriter
 }
 
 // errorHandler is an http.Handler that wraps a ReturnHandler to render the
