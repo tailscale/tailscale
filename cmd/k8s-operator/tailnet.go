@@ -56,3 +56,16 @@ func clientForTailnet(ctx context.Context, cl client.Client, namespace, name str
 
 	return ts, nil
 }
+
+func clientFromProxyGroup(ctx context.Context, cl client.Client, pg *tsapi.ProxyGroup, namespace string, def tsClient) (tsClient, error) {
+	if pg.Spec.Tailnet == "" {
+		return def, nil
+	}
+
+	tailscaleClient, err := clientForTailnet(ctx, cl, namespace, pg.Spec.Tailnet)
+	if err != nil {
+		return nil, err
+	}
+
+	return tailscaleClient, nil
+}

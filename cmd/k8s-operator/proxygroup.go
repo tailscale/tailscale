@@ -630,7 +630,7 @@ func (r *ProxyGroupReconciler) ensureNodePortServiceCreated(ctx context.Context,
 // tailnet devices when the number of replicas specified is reduced.
 func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, tailscaleClient tsClient, pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass) error {
 	logger := r.logger(pg.Name)
-	metadata, err := r.getNodeMetadata(ctx, pg)
+	metadata, err := getNodeMetadata(ctx, pg, r.Client, r.tsNamespace)
 	if err != nil {
 		return err
 	}
@@ -688,7 +688,7 @@ func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, tai
 func (r *ProxyGroupReconciler) maybeCleanup(ctx context.Context, tailscaleClient tsClient, pg *tsapi.ProxyGroup) (bool, error) {
 	logger := r.logger(pg.Name)
 
-	metadata, err := r.getNodeMetadata(ctx, pg)
+	metadata, err := getNodeMetadata(ctx, pg, r.Client, r.tsNamespace)
 	if err != nil {
 		return false, err
 	}
@@ -1106,10 +1106,10 @@ func extractAdvertiseServicesConfig(cfgSecret *corev1.Secret) ([]string, error) 
 // some pods have failed to write state.
 //
 // The returned metadata will contain an entry for each state Secret that exists.
-func (r *ProxyGroupReconciler) getNodeMetadata(ctx context.Context, pg *tsapi.ProxyGroup) (metadata []nodeMetadata, _ error) {
+func getNodeMetadata(ctx context.Context, pg *tsapi.ProxyGroup, cl client.Client, tsNamespace string) (metadata []nodeMetadata, _ error) {
 	// List all state Secrets owned by this ProxyGroup.
 	secrets := &corev1.SecretList{}
-	if err := r.List(ctx, secrets, client.InNamespace(r.tsNamespace), client.MatchingLabels(pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeState))); err != nil {
+	if err := cl.List(ctx, secrets, client.InNamespace(tsNamespace), client.MatchingLabels(pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeState))); err != nil {
 		return nil, fmt.Errorf("failed to list state Secrets: %w", err)
 	}
 	for _, secret := range secrets.Items {
@@ -1133,7 +1133,7 @@ func (r *ProxyGroupReconciler) getNodeMetadata(ctx context.Context, pg *tsapi.Pr
 		}
 
 		pod := &corev1.Pod{}
-		if err := r.Get(ctx, client.ObjectKey{Namespace: r.tsNamespace, Name: fmt.Sprintf("%s-%d", pg.Name, ordinal)}, pod); err != nil && !apierrors.IsNotFound(err) {
+		if err := cl.Get(ctx, client.ObjectKey{Namespace: tsNamespace, Name: fmt.Sprintf("%s-%d", pg.Name, ordinal)}, pod); err != nil && !apierrors.IsNotFound(err) {
 			return nil, err
 		} else if err == nil {
 			nm.podUID = string(pod.UID)
@@ -1152,7 +1152,7 @@ func (r *ProxyGroupReconciler) getNodeMetadata(ctx context.Context, pg *tsapi.Pr
 // getRunningProxies will return status for all proxy Pods whose state Secret
 // has an up to date Pod UID and at least a hostname.
 func (r *ProxyGroupReconciler) getRunningProxies(ctx context.Context, pg *tsapi.ProxyGroup, staticEndpoints map[string][]netip.AddrPort) (devices []tsapi.TailnetDevice, _ error) {
-	metadata, err := r.getNodeMetadata(ctx, pg)
+	metadata, err := getNodeMetadata(ctx, pg, r.Client, r.tsNamespace)
 	if err != nil {
 		return nil, err
 	}
