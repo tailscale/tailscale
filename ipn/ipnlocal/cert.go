@@ -555,7 +555,10 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 		logf("acme: using Directory URL %q", ac.DirectoryURL)
 	}
 
-	a, err := ac.GetReg(ctx, "" /* pre-RFC param */)
+	reg_ctx, reg_cancel := context.WithTimeout(ctx, 5*time.Second)
+	a, err := ac.GetReg(reg_ctx, "" /* pre-RFC param */)
+	reg_cancel()
+
 	switch {
 	case err == nil:
 		// Great, already registered.
@@ -573,8 +576,8 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 		traceACME(a)
 	default:
 		return nil, fmt.Errorf("acme.GetReg: %w", err)
-
 	}
+
 	if a.Status != acme.StatusValid {
 		return nil, fmt.Errorf("unexpected ACME account status %q", a.Status)
 	}
