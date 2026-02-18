@@ -8,9 +8,10 @@ package truncate
 // String returns a prefix of a UTF-8 string s, having length no greater than n
 // bytes. If s exceeds this length, it is truncated at a point ≤ n so that the
 // result does not end in a partial UTF-8 encoding.  If s is less than or equal
-// to this length, it is returned unmodified.
+// to this length, it is returned unmodified. If n is negative, s is also returned
+// unmodified.
 func String[String ~string | ~[]byte](s String, n int) String {
-	if n >= len(s) {
+	if n < 0 || n >= len(s) {
 		return s
 	}
 
