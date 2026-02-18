@@ -102,7 +102,10 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 		targetOS = "windows"
 		cgo = true
 		buildFlags = append(buildFlags, "-buildmode=c-shared")
-		ldflags = append(ldflags, "-H", "windows", "-s")
+		ldflags = append(ldflags, "-H", "windows")
+		if !env.IsSet("TS_WINBUILD_WANT_SYMBOLS") {
+			ldflags = append(ldflags, "-s")
+		}
 		cgoLdflags = append(cgoLdflags, "-static")
 		var mingwArch string
 		switch targetArch {
@@ -117,9 +120,15 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 	case "windowsgui":
 		// Fake GOOS that translates to "windows, but building GUI .exes not console .exes"
 		targetOS = "windows"
-		ldflags = append(ldflags, "-H", "windowsgui", "-s")
+		ldflags = append(ldflags, "-H", "windowsgui")
+		if !env.IsSet("TS_WINBUILD_WANT_SYMBOLS") {
+			ldflags = append(ldflags, "-s")
+		}
 	case "windows":
-		ldflags = append(ldflags, "-H", "windows", "-s")
+		ldflags = append(ldflags, "-H", "windows")
+		if !env.IsSet("TS_WINBUILD_WANT_SYMBOLS") {
+			ldflags = append(ldflags, "-s")
+		}
 	case "ios":
 		failReflect = true
 		fallthrough
