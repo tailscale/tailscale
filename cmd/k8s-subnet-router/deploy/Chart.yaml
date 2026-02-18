@@ -1,0 +1,12 @@
+apiVersion: v2
+name: tailscale-subnet-router
+description: Deploy Tailscale subnet router on k8s
+type: application
+version: 0.0.1
+appVersion: "latest"
+home: https://github.com/tailscale/tailscale
+sources:
+- https://github.com/tailscale/tailscale
+maintainers:
+  - name: tailscale-maintainers
+    url: https://tailscale.com/
