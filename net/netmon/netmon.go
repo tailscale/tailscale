@@ -201,12 +201,7 @@ func (cd *ChangeDelta) AnyInterfaceUp() bool {
 	if cd.new == nil {
 		return false
 	}
-	for _, ifi := range cd.new.Interface {
-		if ifi.IsUp() {
-			return true
-		}
-	}
-	return false
+	return cd.new.AnyInterfaceUp()
 }
 
 // isInterestingInterfaceChange reports whether any interfaces have changed in a meaningful way.
