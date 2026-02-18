@@ -32,7 +32,6 @@ import (
 
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/ipnstate"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
@@ -44,22 +43,15 @@ import (
 )
 
 const (
-	serveConfigKey       = "serve-config.json"
-	TailscaleSvcOwnerRef = "tailscale.com/k8s-operator:owned-by:%s"
+	serveConfigKey = "serve-config.json"
 	// FinalizerNamePG is the finalizer used by the IngressPGReconciler
-	FinalizerNamePG = "tailscale.com/ingress-pg-finalizer"
-
+	FinalizerNamePG        = "tailscale.com/ingress-pg-finalizer"
 	indexIngressProxyGroup = ".metadata.annotations.ingress-proxy-group"
 	// annotationHTTPEndpoint can be used to configure the Ingress to expose an HTTP endpoint to tailnet (as
 	// well as the default HTTPS endpoint).
-	annotationHTTPEndpoint = "tailscale.com/http-endpoint"
-
-	labelDomain              = "tailscale.com/domain"
-	msgFeatureFlagNotEnabled = "Tailscale Service feature flag is not enabled for this tailnet, skipping provisioning. " +
-		"Please contact Tailscale support through https://tailscale.com/contact/support to enable the feature flag, then recreate the operator's Pod."
-
-	warningTailscaleServiceFeatureFlagNotEnabled = "TailscaleServiceFeatureFlagNotEnabled"
-	managedTSServiceComment                      = "This Tailscale Service is managed by the Tailscale Kubernetes Operator, do not modify"
+	annotationHTTPEndpoint  = "tailscale.com/http-endpoint"
+	labelDomain             = "tailscale.com/domain"
+	managedTSServiceComment = "This Tailscale Service is managed by the Tailscale Kubernetes Operator, do not modify"
 )
 
 var gaugePGIngressResources = clientmetric.NewGauge(kubetypes.MetricIngressPGResourceCount)
@@ -74,7 +66,6 @@ type HAIngressReconciler struct {
 	tsClient         tsClient
 	tsnetServer      tsnetServer
 	tsNamespace      string
-	lc               localClient
 	defaultTags      []string
 	operatorID       string // stableID of the operator's Tailscale device
 	ingressClassName string
@@ -122,6 +113,21 @@ func (r *HAIngressReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	hostname := hostnameForIngress(ing)
 	logger = logger.With("hostname", hostname)
 
+	tailscaleClient, err := clientFromProxyGroup(ctx, r.Client, ing, r.tsNamespace, r.tsClient)
+	if err != nil {
+		return res, fmt.Errorf("failed to get tailscale client: %w", err)
+	}
+
+	pg := &tsapi.ProxyGroup{}
+	if err = r.Get(ctx, client.ObjectKey{Name: ing.Annotations[AnnotationProxyGroup]}, pg); err != nil {
+		if apierrors.IsNotFound(err) {
+			logger.Infof("ProxyGroup does not exist")
+			return res, nil
+		}
+
+		return res, fmt.Errorf("getting ProxyGroup %q: %w", ing.Annotations[AnnotationProxyGroup], err)
+	}
+
 	// needsRequeue is set to true if the underlying Tailscale Service has
 	// changed as a result of this reconcile. If that is the case, we
 	// reconcile the Ingress one more time to ensure that concurrent updates
@@ -129,9 +135,9 @@ func (r *HAIngressReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	// resulted in another actor overwriting our Tailscale Service update.
 	needsRequeue := false
 	if !ing.DeletionTimestamp.IsZero() || !r.shouldExpose(ing) {
-		needsRequeue, err = r.maybeCleanup(ctx, hostname, ing, logger)
+		needsRequeue, err = r.maybeCleanup(ctx, hostname, ing, logger, tailscaleClient, pg)
 	} else {
-		needsRequeue, err = r.maybeProvision(ctx, hostname, ing, logger)
+		needsRequeue, err = r.maybeProvision(ctx, hostname, ing, logger, tailscaleClient, pg)
 	}
 	if err != nil {
 		return res, err
@@ -150,16 +156,16 @@ func (r *HAIngressReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 // If a Tailscale Service exists, but does not have an owner reference from any operator, we error
 // out assuming that this is an owner reference created by an unknown actor.
 // Returns true if the operation resulted in a Tailscale Service update.
-func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname string, ing *networkingv1.Ingress, logger *zap.SugaredLogger) (svcsChanged bool, err error) {
+func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname string, ing *networkingv1.Ingress, logger *zap.SugaredLogger, tsClient tsClient, pg *tsapi.ProxyGroup) (svcsChanged bool, err error) {
 	// Currently (2025-05) Tailscale Services are behind an alpha feature flag that
 	// needs to be explicitly enabled for a tailnet to be able to use them.
 	serviceName := tailcfg.ServiceName("svc:" + hostname)
-	existingTSSvc, err := r.tsClient.GetVIPService(ctx, serviceName)
+	existingTSSvc, err := tsClient.GetVIPService(ctx, serviceName)
 	if err != nil && !isErrorTailscaleServiceNotFound(err) {
 		return false, fmt.Errorf("error getting Tailscale Service %q: %w", hostname, err)
 	}
 
-	if err := validateIngressClass(ctx, r.Client, r.ingressClassName); err != nil {
+	if err = validateIngressClass(ctx, r.Client, r.ingressClassName); err != nil {
 		logger.Infof("error validating tailscale IngressClass: %v.", err)
 		return false, nil
 	}
@@ -171,14 +177,6 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	}
 	logger = logger.With("ProxyGroup", pgName)
 
-	pg := &tsapi.ProxyGroup{}
-	if err := r.Get(ctx, client.ObjectKey{Name: pgName}, pg); err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Infof("ProxyGroup does not exist")
-			return false, nil
-		}
-		return false, fmt.Errorf("getting ProxyGroup %q: %w", pgName, err)
-	}
 	if !tsoperator.ProxyGroupAvailable(pg) {
 		logger.Infof("ProxyGroup is not (yet) ready")
 		return false, nil
@@ -219,7 +217,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	// that in edge cases (a single update changed both hostname and removed
 	// ProxyGroup annotation) the Tailscale Service is more likely to be
 	// (eventually) removed.
-	svcsChanged, err = r.maybeCleanupProxyGroup(ctx, pgName, logger)
+	svcsChanged, err = r.maybeCleanupProxyGroup(ctx, logger, tsClient, pg)
 	if err != nil {
 		return false, fmt.Errorf("failed to cleanup Tailscale Service resources for ProxyGroup: %w", err)
 	}
@@ -244,12 +242,12 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, nil
 	}
 	// 3. Ensure that TLS Secret and RBAC exists
-	tcd, err := tailnetCertDomain(ctx, r.lc)
+	dnsName, err := dnsNameForService(ctx, r.Client, serviceName, pg, r.tsNamespace)
 	if err != nil {
-		return false, fmt.Errorf("error determining DNS name base: %w", err)
+		return false, fmt.Errorf("error determining DNS name for service: %w", err)
 	}
-	dnsName := hostname + "." + tcd
-	if err := r.ensureCertResources(ctx, pg, dnsName, ing); err != nil {
+
+	if err = r.ensureCertResources(ctx, pg, dnsName, ing); err != nil {
 		return false, fmt.Errorf("error ensuring cert resources: %w", err)
 	}
 
@@ -357,7 +355,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		!reflect.DeepEqual(tsSvc.Ports, existingTSSvc.Ports) ||
 		!ownersAreSetAndEqual(tsSvc, existingTSSvc) {
 		logger.Infof("Ensuring Tailscale Service exists and is up to date")
-		if err := r.tsClient.CreateOrUpdateVIPService(ctx, tsSvc); err != nil {
+		if err := tsClient.CreateOrUpdateVIPService(ctx, tsSvc); err != nil {
 			return false, fmt.Errorf("error creating Tailscale Service: %w", err)
 		}
 	}
@@ -368,7 +366,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	if isHTTPEndpointEnabled(ing) || isHTTPRedirectEnabled(ing) {
 		mode = serviceAdvertisementHTTPAndHTTPS
 	}
-	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pg.Name, serviceName, mode, logger); err != nil {
+	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, serviceName, mode, pg); err != nil {
 		return false, fmt.Errorf("failed to update tailscaled config: %w", err)
 	}
 
@@ -385,7 +383,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		ing.Status.LoadBalancer.Ingress = nil
 	default:
 		var ports []networkingv1.IngressPortStatus
-		hasCerts, err := hasCerts(ctx, r.Client, r.lc, r.tsNamespace, serviceName)
+		hasCerts, err := hasCerts(ctx, r.Client, r.tsNamespace, serviceName, pg)
 		if err != nil {
 			return false, fmt.Errorf("error checking TLS credentials provisioned for Ingress: %w", err)
 		}
@@ -425,9 +423,10 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		logger.Infof("%s. %d Pod(s) advertising Tailscale Service", prefix, count)
 	}
 
-	if err := r.Status().Update(ctx, ing); err != nil {
+	if err = r.Status().Update(ctx, ing); err != nil {
 		return false, fmt.Errorf("failed to update Ingress status: %w", err)
 	}
+
 	return svcsChanged, nil
 }
 
@@ -437,9 +436,9 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 // operator instances, else the owner reference is cleaned up.  Returns true if
 // the operation resulted in an existing Tailscale Service updates (owner
 // reference removal).
-func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyGroupName string, logger *zap.SugaredLogger) (svcsChanged bool, err error) {
+func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, logger *zap.SugaredLogger, tsClient tsClient, pg *tsapi.ProxyGroup) (svcsChanged bool, err error) {
 	// Get serve config for the ProxyGroup
-	cm, cfg, err := r.proxyGroupServeConfig(ctx, proxyGroupName)
+	cm, cfg, err := r.proxyGroupServeConfig(ctx, pg.Name)
 	if err != nil {
 		return false, fmt.Errorf("getting serve config: %w", err)
 	}
@@ -467,7 +466,7 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 
 		if !found {
 			logger.Infof("Tailscale Service %q is not owned by any Ingress, cleaning up", tsSvcName)
-			tsService, err := r.tsClient.GetVIPService(ctx, tsSvcName)
+			tsService, err := tsClient.GetVIPService(ctx, tsSvcName)
 			if isErrorTailscaleServiceNotFound(err) {
 				return false, nil
 			}
@@ -476,22 +475,24 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 			}
 
 			// Delete the Tailscale Service from control if necessary.
-			svcsChanged, err = r.cleanupTailscaleService(ctx, tsService, logger)
+			svcsChanged, err = r.cleanupTailscaleService(ctx, tsService, logger, tsClient)
 			if err != nil {
 				return false, fmt.Errorf("deleting Tailscale Service %q: %w", tsSvcName, err)
 			}
 
 			// Make sure the Tailscale Service is not advertised in tailscaled or serve config.
-			if err = r.maybeUpdateAdvertiseServicesConfig(ctx, proxyGroupName, tsSvcName, serviceAdvertisementOff, logger); err != nil {
+			if err = r.maybeUpdateAdvertiseServicesConfig(ctx, tsSvcName, serviceAdvertisementOff, pg); err != nil {
 				return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
 			}
+
 			_, ok := cfg.Services[tsSvcName]
 			if ok {
 				logger.Infof("Removing Tailscale Service %q from serve config", tsSvcName)
 				delete(cfg.Services, tsSvcName)
 				serveConfigChanged = true
 			}
-			if err := cleanupCertResources(ctx, r.Client, r.lc, r.tsNamespace, proxyGroupName, tsSvcName); err != nil {
+
+			if err = cleanupCertResources(ctx, r.Client, r.tsNamespace, tsSvcName, pg); err != nil {
 				return false, fmt.Errorf("failed to clean up cert resources: %w", err)
 			}
 		}
@@ -514,7 +515,7 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 // Ingress is being deleted or is unexposed. The cleanup is safe for a multi-cluster setup- the Tailscale Service is only
 // deleted if it does not contain any other owner references. If it does the cleanup only removes the owner reference
 // corresponding to this Ingress.
-func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string, ing *networkingv1.Ingress, logger *zap.SugaredLogger) (svcChanged bool, err error) {
+func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string, ing *networkingv1.Ingress, logger *zap.SugaredLogger, tsClient tsClient, pg *tsapi.ProxyGroup) (svcChanged bool, err error) {
 	logger.Debugf("Ensuring any resources for Ingress are cleaned up")
 	ix := slices.Index(ing.Finalizers, FinalizerNamePG)
 	if ix < 0 {
@@ -523,7 +524,7 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	}
 	logger.Infof("Ensuring that Tailscale Service %q configuration is cleaned up", hostname)
 	serviceName := tailcfg.ServiceName("svc:" + hostname)
-	svc, err := r.tsClient.GetVIPService(ctx, serviceName)
+	svc, err := tsClient.GetVIPService(ctx, serviceName)
 	if err != nil && !isErrorTailscaleServiceNotFound(err) {
 		return false, fmt.Errorf("error getting Tailscale Service: %w", err)
 	}
@@ -537,8 +538,7 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	}()
 
 	// 1. Check if there is a Tailscale Service associated with this Ingress.
-	pg := ing.Annotations[AnnotationProxyGroup]
-	cm, cfg, err := r.proxyGroupServeConfig(ctx, pg)
+	cm, cfg, err := r.proxyGroupServeConfig(ctx, pg.Name)
 	if err != nil {
 		return false, fmt.Errorf("error getting ProxyGroup serve config: %w", err)
 	}
@@ -552,13 +552,13 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	}
 
 	// 2. Clean up the Tailscale Service resources.
-	svcChanged, err = r.cleanupTailscaleService(ctx, svc, logger)
+	svcChanged, err = r.cleanupTailscaleService(ctx, svc, logger, tsClient)
 	if err != nil {
 		return false, fmt.Errorf("error deleting Tailscale Service: %w", err)
 	}
 
 	// 3. Clean up any cluster resources
-	if err := cleanupCertResources(ctx, r.Client, r.lc, r.tsNamespace, pg, serviceName); err != nil {
+	if err = cleanupCertResources(ctx, r.Client, r.tsNamespace, serviceName, pg); err != nil {
 		return false, fmt.Errorf("failed to clean up cert resources: %w", err)
 	}
 
@@ -567,12 +567,12 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	}
 
 	// 4. Unadvertise the Tailscale Service in tailscaled config.
-	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pg, serviceName, serviceAdvertisementOff, logger); err != nil {
+	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, serviceName, serviceAdvertisementOff, pg); err != nil {
 		return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
 	}
 
 	// 5. Remove the Tailscale Service from the serve config for the ProxyGroup.
-	logger.Infof("Removing TailscaleService %q from serve config for ProxyGroup %q", hostname, pg)
+	logger.Infof("Removing TailscaleService %q from serve config for ProxyGroup %q", hostname, pg.Name)
 	delete(cfg.Services, serviceName)
 	cfgBytes, err := json.Marshal(cfg)
 	if err != nil {
@@ -628,19 +628,6 @@ func (r *HAIngressReconciler) proxyGroupServeConfig(ctx context.Context, pg stri
 		}
 	}
 	return cm, cfg, nil
-}
-
-type localClient interface {
-	StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error)
-}
-
-// tailnetCertDomain returns the base domain (TCD) of the current tailnet.
-func tailnetCertDomain(ctx context.Context, lc localClient) (string, error) {
-	st, err := lc.StatusWithoutPeers(ctx)
-	if err != nil {
-		return "", fmt.Errorf("error getting tailscale status: %w", err)
-	}
-	return st.CurrentTailnet.MagicDNSSuffix, nil
 }
 
 // shouldExpose returns true if the Ingress should be exposed over Tailscale in HA mode (on a ProxyGroup).
@@ -707,7 +694,7 @@ func (r *HAIngressReconciler) validateIngress(ctx context.Context, ing *networki
 // If a Tailscale Service is found, but contains other owner references, only removes this operator's owner reference.
 // If a Tailscale Service by the given name is not found or does not contain this operator's owner reference, do nothing.
 // It returns true if an existing Tailscale Service was updated to remove owner reference, as well as any error that occurred.
-func (r *HAIngressReconciler) cleanupTailscaleService(ctx context.Context, svc *tailscale.VIPService, logger *zap.SugaredLogger) (updated bool, _ error) {
+func (r *HAIngressReconciler) cleanupTailscaleService(ctx context.Context, svc *tailscale.VIPService, logger *zap.SugaredLogger, tsClient tsClient) (updated bool, _ error) {
 	if svc == nil {
 		return false, nil
 	}
@@ -730,7 +717,7 @@ func (r *HAIngressReconciler) cleanupTailscaleService(ctx context.Context, svc *
 	}
 	if len(o.OwnerRefs) == 1 {
 		logger.Infof("Deleting Tailscale Service %q", svc.Name)
-		if err = r.tsClient.DeleteVIPService(ctx, svc.Name); err != nil && !isErrorTailscaleServiceNotFound(err) {
+		if err = tsClient.DeleteVIPService(ctx, svc.Name); err != nil && !isErrorTailscaleServiceNotFound(err) {
 			return false, err
 		}
 
@@ -744,7 +731,7 @@ func (r *HAIngressReconciler) cleanupTailscaleService(ctx context.Context, svc *
 		return false, fmt.Errorf("error marshalling updated Tailscale Service owner reference: %w", err)
 	}
 	svc.Annotations[ownerAnnotation] = string(json)
-	return true, r.tsClient.CreateOrUpdateVIPService(ctx, svc)
+	return true, tsClient.CreateOrUpdateVIPService(ctx, svc)
 }
 
 // isHTTPEndpointEnabled returns true if the Ingress has been configured to expose an HTTP endpoint to tailnet.
@@ -764,10 +751,10 @@ const (
 	serviceAdvertisementHTTPAndHTTPS                                 // Both ports 80 and 443 should be advertised
 )
 
-func (a *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, pgName string, serviceName tailcfg.ServiceName, mode serviceAdvertisementMode, logger *zap.SugaredLogger) (err error) {
+func (r *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, serviceName tailcfg.ServiceName, mode serviceAdvertisementMode, pg *tsapi.ProxyGroup) (err error) {
 	// Get all config Secrets for this ProxyGroup.
 	secrets := &corev1.SecretList{}
-	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, kubetypes.LabelSecretTypeConfig))); err != nil {
+	if err := r.List(ctx, secrets, client.InNamespace(r.tsNamespace), client.MatchingLabels(pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeConfig))); err != nil {
 		return fmt.Errorf("failed to list config Secrets: %w", err)
 	}
 
@@ -779,7 +766,7 @@ func (a *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 	// The only exception is Ingresses with an HTTP endpoint enabled - if an
 	// Ingress has an HTTP endpoint enabled, it will be advertised even if the
 	// TLS cert is not yet provisioned.
-	hasCert, err := hasCerts(ctx, a.Client, a.lc, a.tsNamespace, serviceName)
+	hasCert, err := hasCerts(ctx, r.Client, r.tsNamespace, serviceName, pg)
 	if err != nil {
 		return fmt.Errorf("error checking TLS credentials provisioned for service %q: %w", serviceName, err)
 	}
@@ -819,7 +806,7 @@ func (a *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 		}
 
 		if updated {
-			if err := a.Update(ctx, &secret); err != nil {
+			if err := r.Update(ctx, &secret); err != nil {
 				return fmt.Errorf("error updating ProxyGroup config Secret: %w", err)
 			}
 		}
@@ -979,12 +966,12 @@ func (r *HAIngressReconciler) ensureCertResources(ctx context.Context, pg *tsapi
 
 // cleanupCertResources ensures that the TLS Secret and associated RBAC
 // resources that allow proxies to read/write to the Secret are deleted.
-func cleanupCertResources(ctx context.Context, cl client.Client, lc localClient, tsNamespace, pgName string, serviceName tailcfg.ServiceName) error {
-	domainName, err := dnsNameForService(ctx, lc, serviceName)
+func cleanupCertResources(ctx context.Context, cl client.Client, tsNamespace string, serviceName tailcfg.ServiceName, pg *tsapi.ProxyGroup) error {
+	domainName, err := dnsNameForService(ctx, cl, serviceName, pg, tsNamespace)
 	if err != nil {
 		return fmt.Errorf("error getting DNS name for Tailscale Service %s: %w", serviceName, err)
 	}
-	labels := certResourceLabels(pgName, domainName)
+	labels := certResourceLabels(pg.Name, domainName)
 	if err := cl.DeleteAllOf(ctx, &rbacv1.RoleBinding{}, client.InNamespace(tsNamespace), client.MatchingLabels(labels)); err != nil {
 		return fmt.Errorf("error deleting RoleBinding for domain name %s: %w", domainName, err)
 	}
@@ -1094,19 +1081,9 @@ func certResourceLabels(pgName, domain string) map[string]string {
 	}
 }
 
-// dnsNameForService returns the DNS name for the given Tailscale Service's name.
-func dnsNameForService(ctx context.Context, lc localClient, svc tailcfg.ServiceName) (string, error) {
-	s := svc.WithoutPrefix()
-	tcd, err := tailnetCertDomain(ctx, lc)
-	if err != nil {
-		return "", fmt.Errorf("error determining DNS name base: %w", err)
-	}
-	return s + "." + tcd, nil
-}
-
 // hasCerts checks if the TLS Secret for the given service has non-zero cert and key data.
-func hasCerts(ctx context.Context, cl client.Client, lc localClient, ns string, svc tailcfg.ServiceName) (bool, error) {
-	domain, err := dnsNameForService(ctx, lc, svc)
+func hasCerts(ctx context.Context, cl client.Client, ns string, svc tailcfg.ServiceName, pg *tsapi.ProxyGroup) (bool, error) {
+	domain, err := dnsNameForService(ctx, cl, svc, pg, ns)
 	if err != nil {
 		return false, fmt.Errorf("failed to get DNS name for service: %w", err)
 	}

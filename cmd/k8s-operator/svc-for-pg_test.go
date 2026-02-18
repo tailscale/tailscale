@@ -22,7 +22,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"tailscale.com/ipn/ipnstate"
+
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/ingressservices"
@@ -195,14 +195,6 @@ func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, clien
 		t.Fatal(err)
 	}
 
-	lc := &fakeLocalClient{
-		status: &ipnstate.Status{
-			CurrentTailnet: &ipnstate.TailnetStatus{
-				MagicDNSSuffix: "ts.net",
-			},
-		},
-	}
-
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	svcPGR := &HAServiceReconciler{
 		Client:      fc,
@@ -212,7 +204,6 @@ func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, clien
 		tsNamespace: "operator-ns",
 		logger:      zl.Sugar(),
 		recorder:    record.NewFakeRecorder(10),
-		lc:          lc,
 	}
 
 	return svcPGR, pgStateSecret, fc, ft, cl
@@ -280,15 +271,12 @@ func TestValidateService(t *testing.T) {
 
 func TestServicePGReconciler_MultiCluster(t *testing.T) {
 	var ft *fakeTSClient
-	var lc localClient
 	for i := 0; i <= 10; i++ {
 		pgr, stateSecret, fc, fti, _ := setupServiceTest(t)
 		if i == 0 {
 			ft = fti
-			lc = pgr.lc
 		} else {
 			pgr.tsClient = ft
-			pgr.lc = lc
 		}
 
 		svc, _ := setupTestService(t, "test-multi-cluster", "", "4.3.2.1", fc, stateSecret)

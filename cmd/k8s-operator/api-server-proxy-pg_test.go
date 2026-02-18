@@ -16,8 +16,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
 	"tailscale.com/internal/client/tailscale"
-	"tailscale.com/ipn/ipnstate"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/k8s-proxy/conf"
@@ -108,14 +108,6 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	}
 	ft.CreateOrUpdateVIPService(t.Context(), ingressTSSvc)
 
-	lc := &fakeLocalClient{
-		status: &ipnstate.Status{
-			CurrentTailnet: &ipnstate.TailnetStatus{
-				MagicDNSSuffix: "ts.net",
-			},
-		},
-	}
-
 	r := &KubeAPIServerTSServiceReconciler{
 		Client:      fc,
 		tsClient:    ft,
@@ -123,7 +115,6 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 		tsNamespace: ns,
 		logger:      zap.Must(zap.NewDevelopment()).Sugar(),
 		recorder:    record.NewFakeRecorder(10),
-		lc:          lc,
 		clock:       tstest.NewClock(tstest.ClockOpts{}),
 		operatorID:  "self-id",
 	}
@@ -148,6 +139,20 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	if err := ft.DeleteVIPService(t.Context(), "svc:"+pgName); err != nil {
 		t.Fatalf("deleting initial Tailscale Service: %v", err)
 	}
+
+	// Create the state secret for the ProxyGroup without services being advertised.
+	mustCreate(t, fc, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pg-0",
+			Namespace: ns,
+			Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeState),
+		},
+		Data: map[string][]byte{
+			"_current-profile": []byte("test"),
+			"test":             []byte(`{"Config":{"NodeID":"node-foo", "UserProfile": {"LoginName": "test-pg.ts.net" }}}`),
+		},
+	})
+
 	expectReconciled(t, r, "", pgName)
 
 	tsSvc, err := ft.GetVIPService(t.Context(), "svc:"+pgName)
@@ -191,17 +196,19 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	expectEqual(t, fc, pg, omitPGStatusConditionMessages) // Unchanged status.
 
 	// Simulate Pod prefs updated with advertised services; should see Configured condition updated to true.
-	mustCreate(t, fc, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pg-0",
-			Namespace: ns,
-			Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeState),
-		},
-		Data: map[string][]byte{
-			"_current-profile": []byte("profile-foo"),
-			"profile-foo":      []byte(`{"AdvertiseServices":["svc:test-pg"],"Config":{"NodeID":"node-foo"}}`),
-		},
+	mustUpdate(t, fc, ns, "test-pg-0", func(o *corev1.Secret) {
+		var p prefs
+		if err = json.Unmarshal(o.Data["test"], &p); err != nil {
+			t.Errorf("failed to unmarshal preferences: %v", err)
+		}
+
+		p.AdvertiseServices = []string{"svc:test-pg"}
+		o.Data["test"], err = json.Marshal(p)
+		if err != nil {
+			t.Errorf("failed to marshal preferences: %v", err)
+		}
 	})
+
 	expectReconciled(t, r, "", pgName)
 	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionTrue, reasonKubeAPIServerProxyConfigured, "", 1, r.clock, r.logger)
 	pg.Status.URL = "https://" + defaultDomain
