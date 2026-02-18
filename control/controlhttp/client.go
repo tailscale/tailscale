@@ -540,6 +540,7 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 			"Upgrade":                             []string{controlhttpcommon.UpgradeHeaderValue},
 			"Connection":                          []string{"upgrade"},
 			controlhttpcommon.HandshakeHeaderName: []string{base64.StdEncoding.EncodeToString(init)},
+			"User-Agent":                          []string{getUserAgent()},
 		},
 	}
 	req = req.WithContext(ctx)
