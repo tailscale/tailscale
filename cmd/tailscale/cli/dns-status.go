@@ -5,6 +5,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"maps"
@@ -13,12 +14,60 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/netmap"
 )
 
+// DNSResolverInfo describes a DNS resolver address and optional bootstrap
+// resolution addresses.
+type DNSResolverInfo struct {
+	Addr                string
+	BootstrapResolution []string `json:",omitempty"`
+}
+
+// DNSExtraRecord describes an additional DNS record provided by the
+// coordination server to the internal DNS resolver.
+type DNSExtraRecord struct {
+	Name  string
+	Type  string `json:",omitempty"`
+	Value string
+}
+
+// DNSSystemConfig describes the operating system's DNS configuration
+// as observed by Tailscale.
+type DNSSystemConfig struct {
+	Nameservers   []string
+	SearchDomains []string
+	MatchDomains  []string
+}
+
+// DNSTailnetInfo describes the MagicDNS configuration for the current tailnet.
+type DNSTailnetInfo struct {
+	MagicDNSEnabled bool
+	MagicDNSSuffix  string `json:",omitempty"`
+	SelfDNSName     string `json:",omitempty"`
+}
+
+// DNSStatusResult contains the full DNS status and configuration collected
+// from the local Tailscale daemon.
+type DNSStatusResult struct {
+	TailscaleDNS        bool
+	CurrentTailnet      *DNSTailnetInfo `json:",omitzero"`
+	Resolvers           []DNSResolverInfo
+	SplitDNSRoutes      map[string][]DNSResolverInfo
+	FallbackResolvers   []DNSResolverInfo
+	SearchDomains       []string
+	Nameservers         []string
+	CertDomains         []string
+	ExtraRecords        []DNSExtraRecord
+	ExitNodeFilteredSet []string
+	SystemDNS           *DNSSystemConfig `json:",omitzero"`
+	SystemDNSError      string           `json:",omitempty"`
+}
+
 var dnsStatusCmd = &ffcli.Command{
 	Name:       "status",
-	ShortUsage: "tailscale dns status [--all]",
+	ShortUsage: "tailscale dns status [--all] [--json]",
 	Exec:       runDNSStatus,
 	ShortHelp:  "Print the current DNS status and configuration",
 	LongHelp: strings.TrimSpace(`
@@ -72,17 +121,30 @@ https://tailscale.com/kb/1054/dns.
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("status")
 		fs.BoolVar(&dnsStatusArgs.all, "all", false, "outputs advanced debugging information")
+		fs.BoolVar(&dnsStatusArgs.json, "json", false, "output in JSON format")
 		return fs
 	})(),
 }
 
 // dnsStatusArgs are the arguments for the "dns status" subcommand.
 var dnsStatusArgs struct {
-	all bool
+	all  bool
+	json bool
+}
+
+// makeDNSResolverInfo converts a dnstype.Resolver to a DNSResolverInfo.
+func makeDNSResolverInfo(r *dnstype.Resolver) DNSResolverInfo {
+	info := DNSResolverInfo{Addr: r.Addr}
+	if r.BootstrapResolution != nil {
+		info.BootstrapResolution = make([]string, 0, len(r.BootstrapResolution))
+		for _, a := range r.BootstrapResolution {
+			info.BootstrapResolution = append(info.BootstrapResolution, a.String())
+		}
+	}
+	return info
 }
 
 func runDNSStatus(ctx context.Context, args []string) error {
-	all := dnsStatusArgs.all
 	s, err := localClient.Status(ctx)
 	if err != nil {
 		return err
@@ -92,167 +154,254 @@ func runDNSStatus(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	enabledStr := "disabled.\n\n(Run 'tailscale set --accept-dns=true' to start sending DNS queries to the Tailscale DNS resolver)"
-	if prefs.CorpDNS {
-		enabledStr = "enabled.\n\nTailscale is configured to handle DNS queries on this device.\nRun 'tailscale set --accept-dns=false' to revert to your system default DNS resolver."
-	}
-	fmt.Print("\n")
-	fmt.Println("=== 'Use Tailscale DNS' status ===")
-	fmt.Print("\n")
-	fmt.Printf("Tailscale DNS: %s\n", enabledStr)
-	fmt.Print("\n")
-	fmt.Println("=== MagicDNS configuration ===")
-	fmt.Print("\n")
-	fmt.Println("This is the DNS configuration provided by the coordination server to this device.")
-	fmt.Print("\n")
-	if s.CurrentTailnet == nil {
-		fmt.Println("No tailnet information available; make sure you're logged in to a tailnet.")
-		return nil
-	} else if s.CurrentTailnet.MagicDNSEnabled {
-		fmt.Printf("MagicDNS: enabled tailnet-wide (suffix = %s)", s.CurrentTailnet.MagicDNSSuffix)
-		fmt.Print("\n\n")
-		fmt.Printf("Other devices in your tailnet can reach this device at %s\n", s.Self.DNSName)
-	} else {
-		fmt.Printf("MagicDNS: disabled tailnet-wide.\n")
-	}
-	fmt.Print("\n")
 
-	netMap, err := fetchNetMap()
-	if err != nil {
-		fmt.Printf("Failed to fetch network map: %v\n", err)
-		return err
+	data := &DNSStatusResult{
+		TailscaleDNS: prefs.CorpDNS,
 	}
-	dnsConfig := netMap.DNS
-	fmt.Println("Resolvers (in preference order):")
-	if len(dnsConfig.Resolvers) == 0 {
-		fmt.Println("  (no resolvers configured, system default will be used: see 'System DNS configuration' below)")
-	}
-	for _, r := range dnsConfig.Resolvers {
-		fmt.Printf("  - %v", r.Addr)
-		if r.BootstrapResolution != nil {
-			fmt.Printf(" (bootstrap: %v)", r.BootstrapResolution)
+
+	if s.CurrentTailnet != nil {
+		data.CurrentTailnet = &DNSTailnetInfo{
+			MagicDNSEnabled: s.CurrentTailnet.MagicDNSEnabled,
+			MagicDNSSuffix:  s.CurrentTailnet.MagicDNSSuffix,
+			SelfDNSName:     s.Self.DNSName,
 		}
-		fmt.Print("\n")
-	}
-	fmt.Print("\n")
-	fmt.Println("Split DNS Routes:")
-	if len(dnsConfig.Routes) == 0 {
-		fmt.Println("  (no routes configured: split DNS disabled)")
-	}
-	for _, k := range slices.Sorted(maps.Keys(dnsConfig.Routes)) {
-		v := dnsConfig.Routes[k]
-		for _, r := range v {
-			fmt.Printf("  - %-30s -> %v", k, r.Addr)
-			if r.BootstrapResolution != nil {
-				fmt.Printf(" (bootstrap: %v)", r.BootstrapResolution)
+
+		netMap, err := fetchNetMap()
+		if err != nil {
+			return fmt.Errorf("failed to fetch network map: %w", err)
+		}
+		dnsConfig := netMap.DNS
+
+		for _, r := range dnsConfig.Resolvers {
+			data.Resolvers = append(data.Resolvers, makeDNSResolverInfo(r))
+		}
+
+		data.SplitDNSRoutes = make(map[string][]DNSResolverInfo)
+		for k, v := range dnsConfig.Routes {
+			for _, r := range v {
+				data.SplitDNSRoutes[k] = append(data.SplitDNSRoutes[k], makeDNSResolverInfo(r))
 			}
-			fmt.Print("\n")
 		}
-	}
-	fmt.Print("\n")
-	if all {
-		fmt.Println("Fallback Resolvers:")
-		if len(dnsConfig.FallbackResolvers) == 0 {
-			fmt.Println("  (no fallback resolvers configured)")
+
+		for _, r := range dnsConfig.FallbackResolvers {
+			data.FallbackResolvers = append(data.FallbackResolvers, makeDNSResolverInfo(r))
 		}
-		for i, r := range dnsConfig.FallbackResolvers {
-			fmt.Printf("  %d: %v\n", i, r)
+
+		domains := slices.Clone(dnsConfig.Domains)
+		slices.Sort(domains)
+		data.SearchDomains = domains
+
+		for _, a := range dnsConfig.Nameservers {
+			data.Nameservers = append(data.Nameservers, a.String())
 		}
-		fmt.Print("\n")
-	}
-	fmt.Println("Search Domains:")
-	if len(dnsConfig.Domains) == 0 {
-		fmt.Println("  (no search domains configured)")
-	}
-	domains := dnsConfig.Domains
-	slices.Sort(domains)
-	for _, r := range domains {
-		fmt.Printf("  - %v\n", r)
-	}
-	fmt.Print("\n")
-	if all {
-		fmt.Println("Nameservers IP Addresses:")
-		if len(dnsConfig.Nameservers) == 0 {
-			fmt.Println("  (none were provided)")
-		}
-		for _, r := range dnsConfig.Nameservers {
-			fmt.Printf("  - %v\n", r)
-		}
-		fmt.Print("\n")
-		fmt.Println("Certificate Domains:")
-		if len(dnsConfig.CertDomains) == 0 {
-			fmt.Println("  (no certificate domains are configured)")
-		}
-		for _, r := range dnsConfig.CertDomains {
-			fmt.Printf("  - %v\n", r)
-		}
-		fmt.Print("\n")
-		fmt.Println("Additional DNS Records:")
-		if len(dnsConfig.ExtraRecords) == 0 {
-			fmt.Println("  (no extra records are configured)")
-		}
+
+		data.CertDomains = dnsConfig.CertDomains
+
 		for _, er := range dnsConfig.ExtraRecords {
-			if er.Type == "" {
-				fmt.Printf("  - %-50s -> %v\n", er.Name, er.Value)
+			data.ExtraRecords = append(data.ExtraRecords, DNSExtraRecord{
+				Name:  er.Name,
+				Type:  er.Type,
+				Value: er.Value,
+			})
+		}
+
+		data.ExitNodeFilteredSet = dnsConfig.ExitNodeFilteredSet
+
+		osCfg, err := localClient.GetDNSOSConfig(ctx)
+		if err != nil {
+			if strings.Contains(err.Error(), "not supported") {
+				data.SystemDNSError = "not supported on this platform"
 			} else {
-				fmt.Printf("  - [%s] %-50s -> %v\n", er.Type, er.Name, er.Value)
+				data.SystemDNSError = err.Error()
+			}
+		} else if osCfg != nil {
+			data.SystemDNS = &DNSSystemConfig{
+				Nameservers:   osCfg.Nameservers,
+				SearchDomains: osCfg.SearchDomains,
+				MatchDomains:  osCfg.MatchDomains,
 			}
 		}
-		fmt.Print("\n")
-		fmt.Println("Filtered suffixes when forwarding DNS queries as an exit node:")
-		if len(dnsConfig.ExitNodeFilteredSet) == 0 {
-			fmt.Println("  (no suffixes are filtered)")
-		}
-		for _, s := range dnsConfig.ExitNodeFilteredSet {
-			fmt.Printf("  - %s\n", s)
-		}
-		fmt.Print("\n")
 	}
 
-	fmt.Println("=== System DNS configuration ===")
-	fmt.Print("\n")
-	fmt.Println("This is the DNS configuration that Tailscale believes your operating system is using.\nTailscale may use this configuration if 'Override Local DNS' is disabled in the admin console,\nor if no resolvers are provided by the coordination server.")
-	fmt.Print("\n")
-	osCfg, err := localClient.GetDNSOSConfig(ctx)
-	if err != nil {
-		if strings.Contains(err.Error(), "not supported") {
-			// avoids showing the HTTP error code which would be odd here
-			fmt.Println("  (reading the system DNS configuration is not supported on this platform)")
-		} else {
-			fmt.Printf("  (failed to read system DNS configuration: %v)\n", err)
+	if dnsStatusArgs.json {
+		j, err := json.MarshalIndent(data, "", "  ")
+		if err != nil {
+			return err
 		}
-	} else if osCfg == nil {
-		fmt.Println("  (no OS DNS configuration available)")
+		printf("%s\n", j)
+		return nil
+	}
+	printf("%s", formatDNSStatusText(data, dnsStatusArgs.all))
+	return nil
+}
+
+func formatDNSStatusText(data *DNSStatusResult, all bool) string {
+	var sb strings.Builder
+
+	fmt.Fprintf(&sb, "\n")
+	fmt.Fprintf(&sb, "=== 'Use Tailscale DNS' status ===\n")
+	fmt.Fprintf(&sb, "\n")
+	if data.TailscaleDNS {
+		fmt.Fprintf(&sb, "Tailscale DNS: enabled.\n\nTailscale is configured to handle DNS queries on this device.\nRun 'tailscale set --accept-dns=false' to revert to your system default DNS resolver.\n")
 	} else {
-		fmt.Println("Nameservers:")
-		if len(osCfg.Nameservers) == 0 {
-			fmt.Println("  (no nameservers found, DNS queries might fail\nunless the coordination server is providing a nameserver)")
+		fmt.Fprintf(&sb, "Tailscale DNS: disabled.\n\n(Run 'tailscale set --accept-dns=true' to start sending DNS queries to the Tailscale DNS resolver)\n")
+	}
+	fmt.Fprintf(&sb, "\n")
+	fmt.Fprintf(&sb, "=== MagicDNS configuration ===\n")
+	fmt.Fprintf(&sb, "\n")
+	fmt.Fprintf(&sb, "This is the DNS configuration provided by the coordination server to this device.\n")
+	fmt.Fprintf(&sb, "\n")
+	if data.CurrentTailnet == nil {
+		fmt.Fprintf(&sb, "No tailnet information available; make sure you're logged in to a tailnet.\n")
+		return sb.String()
+	}
+
+	if data.CurrentTailnet.MagicDNSEnabled {
+		fmt.Fprintf(&sb, "MagicDNS: enabled tailnet-wide (suffix = %s)", data.CurrentTailnet.MagicDNSSuffix)
+		fmt.Fprintf(&sb, "\n\n")
+		fmt.Fprintf(&sb, "Other devices in your tailnet can reach this device at %s\n", data.CurrentTailnet.SelfDNSName)
+	} else {
+		fmt.Fprintf(&sb, "MagicDNS: disabled tailnet-wide.\n")
+	}
+	fmt.Fprintf(&sb, "\n")
+
+	fmt.Fprintf(&sb, "Resolvers (in preference order):\n")
+	if len(data.Resolvers) == 0 {
+		fmt.Fprintf(&sb, "  (no resolvers configured, system default will be used: see 'System DNS configuration' below)\n")
+	}
+	for _, r := range data.Resolvers {
+		fmt.Fprintf(&sb, "  - %v", r.Addr)
+		if r.BootstrapResolution != nil {
+			fmt.Fprintf(&sb, " (bootstrap: %v)", r.BootstrapResolution)
 		}
-		for _, ns := range osCfg.Nameservers {
-			fmt.Printf("  - %v\n", ns)
+		fmt.Fprintf(&sb, "\n")
+	}
+	fmt.Fprintf(&sb, "\n")
+
+	fmt.Fprintf(&sb, "Split DNS Routes:\n")
+	if len(data.SplitDNSRoutes) == 0 {
+		fmt.Fprintf(&sb, "  (no routes configured: split DNS disabled)\n")
+	}
+	for _, k := range slices.Sorted(maps.Keys(data.SplitDNSRoutes)) {
+		for _, r := range data.SplitDNSRoutes[k] {
+			fmt.Fprintf(&sb, "  - %-30s -> %v", k, r.Addr)
+			if r.BootstrapResolution != nil {
+				fmt.Fprintf(&sb, " (bootstrap: %v)", r.BootstrapResolution)
+			}
+			fmt.Fprintf(&sb, "\n")
 		}
-		fmt.Print("\n")
-		fmt.Println("Search domains:")
-		if len(osCfg.SearchDomains) == 0 {
-			fmt.Println("  (no search domains found)")
+	}
+	fmt.Fprintf(&sb, "\n")
+
+	if all {
+		fmt.Fprintf(&sb, "Fallback Resolvers:\n")
+		if len(data.FallbackResolvers) == 0 {
+			fmt.Fprintf(&sb, "  (no fallback resolvers configured)\n")
 		}
-		for _, sd := range osCfg.SearchDomains {
-			fmt.Printf("  - %v\n", sd)
+		for i, r := range data.FallbackResolvers {
+			fmt.Fprintf(&sb, "  %d: %v", i, r.Addr)
+			if r.BootstrapResolution != nil {
+				fmt.Fprintf(&sb, " (bootstrap: %v)", r.BootstrapResolution)
+			}
+			fmt.Fprintf(&sb, "\n")
+		}
+		fmt.Fprintf(&sb, "\n")
+	}
+
+	fmt.Fprintf(&sb, "Search Domains:\n")
+	if len(data.SearchDomains) == 0 {
+		fmt.Fprintf(&sb, "  (no search domains configured)\n")
+	}
+	for _, r := range data.SearchDomains {
+		fmt.Fprintf(&sb, "  - %v\n", r)
+	}
+	fmt.Fprintf(&sb, "\n")
+
+	if all {
+		fmt.Fprintf(&sb, "Nameservers IP Addresses:\n")
+		if len(data.Nameservers) == 0 {
+			fmt.Fprintf(&sb, "  (none were provided)\n")
+		}
+		for _, r := range data.Nameservers {
+			fmt.Fprintf(&sb, "  - %v\n", r)
+		}
+		fmt.Fprintf(&sb, "\n")
+
+		fmt.Fprintf(&sb, "Certificate Domains:\n")
+		if len(data.CertDomains) == 0 {
+			fmt.Fprintf(&sb, "  (no certificate domains are configured)\n")
+		}
+		for _, r := range data.CertDomains {
+			fmt.Fprintf(&sb, "  - %v\n", r)
+		}
+		fmt.Fprintf(&sb, "\n")
+
+		fmt.Fprintf(&sb, "Additional DNS Records:\n")
+		if len(data.ExtraRecords) == 0 {
+			fmt.Fprintf(&sb, "  (no extra records are configured)\n")
+		}
+		for _, er := range data.ExtraRecords {
+			if er.Type == "" {
+				fmt.Fprintf(&sb, "  - %-50s -> %v\n", er.Name, er.Value)
+			} else {
+				fmt.Fprintf(&sb, "  - [%s] %-50s -> %v\n", er.Type, er.Name, er.Value)
+			}
+		}
+		fmt.Fprintf(&sb, "\n")
+
+		fmt.Fprintf(&sb, "Filtered suffixes when forwarding DNS queries as an exit node:\n")
+		if len(data.ExitNodeFilteredSet) == 0 {
+			fmt.Fprintf(&sb, "  (no suffixes are filtered)\n")
+		}
+		for _, s := range data.ExitNodeFilteredSet {
+			fmt.Fprintf(&sb, "  - %s\n", s)
+		}
+		fmt.Fprintf(&sb, "\n")
+	}
+
+	fmt.Fprintf(&sb, "=== System DNS configuration ===\n")
+	fmt.Fprintf(&sb, "\n")
+	fmt.Fprintf(&sb, "This is the DNS configuration that Tailscale believes your operating system is using.\nTailscale may use this configuration if 'Override Local DNS' is disabled in the admin console,\nor if no resolvers are provided by the coordination server.\n")
+	fmt.Fprintf(&sb, "\n")
+
+	if data.SystemDNSError != "" {
+		if strings.Contains(data.SystemDNSError, "not supported") {
+			fmt.Fprintf(&sb, "  (reading the system DNS configuration is not supported on this platform)\n")
+		} else {
+			fmt.Fprintf(&sb, "  (failed to read system DNS configuration: %s)\n", data.SystemDNSError)
+		}
+	} else if data.SystemDNS == nil {
+		fmt.Fprintf(&sb, "  (no OS DNS configuration available)\n")
+	} else {
+		fmt.Fprintf(&sb, "Nameservers:\n")
+		if len(data.SystemDNS.Nameservers) == 0 {
+			fmt.Fprintf(&sb, "  (no nameservers found, DNS queries might fail\nunless the coordination server is providing a nameserver)\n")
+		}
+		for _, ns := range data.SystemDNS.Nameservers {
+			fmt.Fprintf(&sb, "  - %v\n", ns)
+		}
+		fmt.Fprintf(&sb, "\n")
+		fmt.Fprintf(&sb, "Search domains:\n")
+		if len(data.SystemDNS.SearchDomains) == 0 {
+			fmt.Fprintf(&sb, "  (no search domains found)\n")
+		}
+		for _, sd := range data.SystemDNS.SearchDomains {
+			fmt.Fprintf(&sb, "  - %v\n", sd)
 		}
 		if all {
-			fmt.Print("\n")
-			fmt.Println("Match domains:")
-			if len(osCfg.MatchDomains) == 0 {
-				fmt.Println("  (no match domains found)")
+			fmt.Fprintf(&sb, "\n")
+			fmt.Fprintf(&sb, "Match domains:\n")
+			if len(data.SystemDNS.MatchDomains) == 0 {
+				fmt.Fprintf(&sb, "  (no match domains found)\n")
 			}
-			for _, md := range osCfg.MatchDomains {
-				fmt.Printf("  - %v\n", md)
+			for _, md := range data.SystemDNS.MatchDomains {
+				fmt.Fprintf(&sb, "  - %v\n", md)
 			}
 		}
 	}
-	fmt.Print("\n")
-	fmt.Println("[this is a preliminary version of this command; the output format may change in the future]")
-	return nil
+	fmt.Fprintf(&sb, "\n")
+	fmt.Fprintf(&sb, "[this is a preliminary version of this command; the output format may change in the future]\n")
+	return sb.String()
 }
 
 func fetchNetMap() (netMap *netmap.NetworkMap, err error) {
