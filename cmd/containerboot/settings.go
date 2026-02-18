@@ -393,6 +393,7 @@ func (cfg *settings) setupKube(ctx context.Context, kc *kubeClient) error {
 			return errors.New("authkey found in TS_KUBE_SECRET, but the pod doesn't have patch permissions on the Secret to manage the authkey.")
 		}
 		cfg.AuthKey = key
+		return nil
 	}
 
 	log.Print("No authkey found in state Secret and TS_AUTHKEY not provided, login will be interactive if needed.")
