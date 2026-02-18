@@ -159,6 +159,12 @@ func (fs wslFS) Stat(name string) (isRegular bool, err error) {
 	return true, nil
 }
 
+func (fs wslFS) Readlink(name string) (string, error) {
+	// As of 2024-07-01, this function is only used on Linux. We can return
+	// the original path and no error here.
+	return name, nil
+}
+
 func (fs wslFS) Chmod(name string, perm os.FileMode) error {
 	return wslRun(fs.cmd("chmod", "--", fmt.Sprintf("%04o", perm), name))
 }
