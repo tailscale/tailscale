@@ -875,7 +875,7 @@ func (f *forwarder) getDialerType() netx.DialFunc {
 	if ShouldUseRoutes(f.controlKnobs) {
 		return f.dialer.UserDial
 	}
-	return f.dialer.SystemDial
+	return f.dialer.UserDial
 }
 
 func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
