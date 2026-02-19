@@ -117,6 +117,15 @@ func (rsa rawSockaddr) ToAddrPort() (netip.AddrPort, error) {
 	}
 }
 
+// ToUDPAddr returns a [net.UDPAddr] representation of the receiver.
+func (rsa rawSockaddr) ToUDPAddr() (*net.UDPAddr, error) {
+	ap, err := rsa.ToAddrPort()
+	if err != nil {
+		return nil, err
+	}
+	return net.UDPAddrFromAddrPort(ap), nil
+}
+
 func addrPortFromSocket(socket windows.Handle) (netip.AddrPort, error) {
 	sa, err := windows.Getsockname(socket)
 	if err != nil {
@@ -148,6 +157,46 @@ func addrPortFromSockaddr(sa windows.Sockaddr) (netip.AddrPort, error) {
 	default:
 		return netip.AddrPort{}, fmt.Errorf("invalid sockaddr type: %T", sa)
 	}
+}
+
+func addrPortFromUDPAddr(network string, addr *net.UDPAddr) (_ netip.AddrPort, dualStack bool, err error) {
+	if addr == nil {
+		// A nil address is equivalent to an unspecified address.
+		addr = &net.UDPAddr{}
+	}
+
+	var ap netip.AddrPort
+	switch {
+	case addr.IP != nil:
+		// [net.IP] values are typically (always?) 16 bytes long, even for IPv4.
+		// As a result, [netip.AddrFromSlice] (and [net.UDPAddr.AddrPort], etc.)
+		// return IPv6-mapped IPv4 addresses. We need to unmap them back to IPv4 here
+		// if the network is not "udp6".
+		ip, ok := netip.AddrFromSlice(addr.IP)
+		if !ok {
+			return netip.AddrPort{}, false, fmt.Errorf("invalid IP address: %v", addr.IP)
+		}
+		switch network {
+		case "udp", "udp4":
+			ip = ip.Unmap()
+		case "udp6":
+			// Keep as-is, even if it's an IPv4-mapped IPv6 address.
+		default:
+			return netip.AddrPort{}, false, net.UnknownNetworkError(network)
+		}
+		ip = ip.WithZone(addr.Zone)
+		ap = netip.AddrPortFrom(ip, uint16(addr.Port))
+	case network == "udp":
+		ap = netip.AddrPortFrom(netip.IPv6Unspecified(), uint16(addr.Port))
+		dualStack = true // dual-stack, unspecified address
+	case network == "udp4":
+		ap = netip.AddrPortFrom(netip.IPv4Unspecified(), uint16(addr.Port))
+	case network == "udp6":
+		ap = netip.AddrPortFrom(netip.IPv6Unspecified(), uint16(addr.Port))
+	default:
+		return netip.AddrPort{}, false, net.UnknownNetworkError(network)
+	}
+	return ap, dualStack, nil
 }
 
 func sockaddrFromAddrPort(addr netip.AddrPort) (sa windows.Sockaddr, family int32, err error) {

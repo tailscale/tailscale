@@ -294,6 +294,13 @@ func TestRawSockaddrToAddrPort(t *testing.T) {
 			if ap != tt.want {
 				t.Errorf("rawSockaddr.ToAddrPort(): got %v; want %v", ap, tt.want)
 			}
+			gotUDPAddr, err := sa.ToUDPAddr()
+			if err != nil {
+				t.Fatalf("rawSockaddr.ToUDPAddr() error: %v", err)
+			}
+			if gotUDPAddr.AddrPort() != tt.want {
+				t.Errorf("rawSockaddr.ToUDPAddr(): got %v; want %v", gotUDPAddr, net.UDPAddrFromAddrPort(tt.want))
+			}
 		})
 	}
 }
@@ -541,6 +548,139 @@ func TestAddrPortFromSockaddr(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("addrPortFromSockaddr() got %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAddrPortFromUDPAddr(t *testing.T) {
+	t.Parallel()
+	iface := firstInterface(t)
+	tests := []struct {
+		name          string
+		network       string
+		udpAddr       *net.UDPAddr
+		wantAddr      netip.AddrPort
+		wantDualStack bool
+		wantErr       bool
+	}{
+		{
+			name:          "nil/udp",
+			network:       "udp",
+			udpAddr:       nil,
+			wantDualStack: true,
+			wantAddr:      netip.AddrPortFrom(netip.IPv6Unspecified(), 0),
+		},
+		{
+			name:          "nil/udp4",
+			network:       "udp4",
+			udpAddr:       nil,
+			wantDualStack: false,
+			wantAddr:      netip.AddrPortFrom(netip.IPv4Unspecified(), 0),
+		},
+		{
+			name:          "nil/udp6",
+			network:       "udp6",
+			udpAddr:       nil,
+			wantDualStack: false,
+			wantAddr:      netip.AddrPortFrom(netip.IPv6Unspecified(), 0),
+		},
+		{
+			name:          "unspecified/udp",
+			network:       "udp",
+			udpAddr:       &net.UDPAddr{Port: 1234},
+			wantDualStack: true,
+			wantAddr:      netip.AddrPortFrom(netip.IPv6Unspecified(), 1234),
+		},
+		{
+			name:          "unspecified/udp4",
+			network:       "udp4",
+			udpAddr:       &net.UDPAddr{Port: 1234},
+			wantDualStack: false,
+			wantAddr:      netip.AddrPortFrom(netip.IPv4Unspecified(), 1234),
+		},
+		{
+			name:          "unspecified/udp6",
+			network:       "udp6",
+			udpAddr:       &net.UDPAddr{Port: 1234},
+			wantDualStack: false,
+			wantAddr:      netip.AddrPortFrom(netip.IPv6Unspecified(), 1234),
+		},
+		{
+			name:          "IPv4/udp",
+			network:       "udp",
+			udpAddr:       &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1234},
+			wantDualStack: false,
+			wantAddr:      netip.MustParseAddrPort("192.0.2.1:1234"),
+		},
+		{
+			name:          "IPv6/udp",
+			network:       "udp",
+			udpAddr:       &net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 1234},
+			wantDualStack: false,
+			wantAddr:      netip.MustParseAddrPort("[2001:db8::1]:1234"),
+		},
+		{
+			name:          "IPv6-with-zone/udp",
+			network:       "udp",
+			udpAddr:       &net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 1234, Zone: iface.Name},
+			wantDualStack: false,
+			wantAddr:      netip.AddrPortFrom(netip.MustParseAddr("2001:db8::1").WithZone(iface.Name), 1234),
+		},
+		{
+			name:          "IPv4-mapped-IPv6/udp",
+			network:       "udp",
+			udpAddr:       &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1).To16(), Port: 1234},
+			wantDualStack: false,
+			wantAddr:      netip.MustParseAddrPort("192.0.2.1:1234"),
+		},
+		{
+			name:          "IPv4-mapped-IPv6/udp6",
+			network:       "udp6",
+			udpAddr:       &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1).To16(), Port: 1234},
+			wantDualStack: false,
+			wantAddr:      netip.MustParseAddrPort("[::ffff:192.0.2.1]:1234"),
+		},
+		{
+			name:    "nil/invalid-network",
+			network: "tcp",
+			udpAddr: nil,
+			wantErr: true,
+		},
+		{
+			name:    "IPv4/invalid-network",
+			network: "tcp",
+			udpAddr: &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1234},
+			wantErr: true,
+		},
+		{
+			name:    "IPv6/invalid-network",
+			network: "tcp",
+			udpAddr: &net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 1234},
+			wantErr: true,
+		},
+		{
+			name:    "IP/invalid-address",
+			network: "udp",
+			udpAddr: &net.UDPAddr{IP: []byte{1, 2, 3, 4, 5}, Port: 1234},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			gotAddr, dualStack, err := addrPortFromUDPAddr(tt.network, tt.udpAddr)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("addrPortFromUDPAddr: error: got %v; want %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if gotAddr != tt.wantAddr {
+				t.Errorf("addrPortFromUDPAddr: got addr %v; want %v", gotAddr, tt.wantAddr)
+			}
+			if dualStack != tt.wantDualStack {
+				t.Errorf("addrPortFromUDPAddr: dualStack: got %v; want %v", dualStack, tt.wantDualStack)
 			}
 		})
 	}
