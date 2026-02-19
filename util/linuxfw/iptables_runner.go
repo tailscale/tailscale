@@ -199,8 +199,8 @@ func (i *iptablesRunner) AddChains() error {
 
 // AddBase adds some basic processing rules to be supplemented by
 // later calls to other helpers.
-func (i *iptablesRunner) AddBase(tunname string) error {
-	if err := i.addBase4(tunname); err != nil {
+func (i *iptablesRunner) AddBase(tunname string, cgnatRules []CGNATRule) error {
+	if err := i.addBase4(tunname, cgnatRules); err != nil {
 		return err
 	}
 	if i.HasIPV6Filter() {
@@ -213,10 +213,22 @@ func (i *iptablesRunner) AddBase(tunname string) error {
 
 // addBase4 adds some basic IPv4 processing rules to be
 // supplemented by later calls to other helpers.
-func (i *iptablesRunner) addBase4(tunname string) error {
-	// Only allow CGNAT range traffic to come from tailscale0. There
-	// is an exception carved out for ranges used by ChromeOS, for
-	// which we fall out of the Tailscale chain.
+func iptablesTargetFromCGNATVerdict(v CGNATRuleVerdict) (string, bool) {
+	switch v {
+	case CGNATRuleVerdictDrop:
+		return "DROP", true
+	case CGNATRuleVerdictAccept:
+		return "ACCEPT", true
+	default:
+		return "", false
+	}
+}
+
+func (i *iptablesRunner) addBase4(tunname string, cgnatRules []CGNATRule) error {
+	// Apply configured CGNAT source-prefix verdicts for traffic not
+	// arriving from tailscale0. There is an exception carved out for
+	// ranges used by ChromeOS, for which we fall out of the Tailscale
+	// chain.
 	//
 	// Note, this will definitely break nodes that end up using the
 	// CGNAT range for other purposes :(.
@@ -224,9 +236,18 @@ func (i *iptablesRunner) addBase4(tunname string) error {
 	if err := i.ipt4.Append("filter", "ts-input", args...); err != nil {
 		return fmt.Errorf("adding %v in v4/filter/ts-input: %w", args, err)
 	}
-	args = []string{"!", "-i", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}
-	if err := i.ipt4.Append("filter", "ts-input", args...); err != nil {
-		return fmt.Errorf("adding %v in v4/filter/ts-input: %w", args, err)
+	for _, rule := range cgnatRulesOrDefault(cgnatRules) {
+		if !cgnatRuleAppliesToInput(rule.Chain) {
+			continue
+		}
+		target, ok := iptablesTargetFromCGNATVerdict(rule.Verdict)
+		if !ok {
+			return fmt.Errorf("unsupported CGNAT rule verdict %q", rule.Verdict)
+		}
+		args = []string{"!", "-i", tunname, "-s", rule.Prefix.String(), "-j", target}
+		if err := i.ipt4.Append("filter", "ts-input", args...); err != nil {
+			return fmt.Errorf("adding %v in v4/filter/ts-input: %w", args, err)
+		}
 	}
 
 	// Explicitly allow all other inbound traffic to the tun interface
@@ -254,9 +275,18 @@ func (i *iptablesRunner) addBase4(tunname string) error {
 	if err := i.ipt4.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
 	}
-	args = []string{"-o", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}
-	if err := i.ipt4.Append("filter", "ts-forward", args...); err != nil {
-		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
+	for _, rule := range cgnatRulesOrDefault(cgnatRules) {
+		if !cgnatRuleAppliesToForward(rule.Chain) {
+			continue
+		}
+		target, ok := iptablesTargetFromCGNATVerdict(rule.Verdict)
+		if !ok {
+			return fmt.Errorf("unsupported CGNAT rule verdict %q", rule.Verdict)
+		}
+		args = []string{"-o", tunname, "-s", rule.Prefix.String(), "-j", target}
+		if err := i.ipt4.Append("filter", "ts-forward", args...); err != nil {
+			return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
+		}
 	}
 	args = []string{"-o", tunname, "-j", "ACCEPT"}
 	if err := i.ipt4.Append("filter", "ts-forward", args...); err != nil {
