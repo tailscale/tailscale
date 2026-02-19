@@ -336,6 +336,11 @@ main() {
 				VERSION="$VERSION_MAJOR"
 				PACKAGETYPE="tdnf"
 				;;
+			solus)
+				OS="$ID"
+				VERSION="" # rolling release
+				PACKAGETYPE="eopkg"
+        ;;
 			steamos)
 				echo "To install Tailscale on SteamOS, please follow the instructions here:"
 				echo "https://github.com/tailscale-dev/deck-tailscale"
@@ -430,6 +435,9 @@ main() {
 			# Rolling release, no version checking needed.
 			;;
 		gentoo)
+			# Rolling release, no version checking needed.
+			;;
+		solus)
 			# Rolling release, no version checking needed.
 			;;
 		freebsd)
@@ -701,6 +709,12 @@ main() {
 			else
 				$SUDO emerge --ask=n net-vpn/tailscale
 			fi
+			set +x
+			;;
+		eopkg)
+			set -x
+			$SUDO eopkg install tailscale
+			$SUDO systemctl enable --now tailscaled
 			set +x
 			;;
 		appstore)
