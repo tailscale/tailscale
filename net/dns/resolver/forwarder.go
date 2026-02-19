@@ -1262,7 +1262,8 @@ func servfailResponse(req packet) (res packet, err error) {
 
 	h := p.Header
 	h.Response = true
-	h.Authoritative = true
+	// Correct behavior for SERVFAIL is to set the Authoritative flag to 0.
+	h.Authoritative = false
 	h.RCode = dns.RCodeServerFailure
 	b := dns.NewBuilder(nil, h)
 	b.StartQuestions()
