@@ -329,6 +329,16 @@ type PeerStatus struct {
 	KeyExpiry *time.Time `json:",omitempty"`
 
 	Location *tailcfg.Location `json:",omitempty"`
+
+	// MasqAddrV4 holds the IPv4 address that this peer knows the current
+	// node as. It may be empty if the peer knows the current node by its
+	// native IPv4 address.
+	MasqAddrV4 netip.Addr `json:",omitzero"`
+
+	// MasqAddrV6 holds the IPv6 address that this peer knows the current
+	// node as. It may be empty if the peer knows the current node by its
+	// native IPv6 address.
+	MasqAddrV6 netip.Addr `json:",omitzero"`
 }
 
 type TaildropTargetStatus int
@@ -547,6 +557,12 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 		e.TaildropTarget = v
 	}
 	e.Location = st.Location
+	if v := st.MasqAddrV4; v != (netip.Addr{}) {
+		e.MasqAddrV4 = v
+	}
+	if v := st.MasqAddrV6; v != (netip.Addr{}) {
+		e.MasqAddrV6 = v
+	}
 }
 
 type StatusUpdater interface {

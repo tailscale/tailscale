@@ -1408,6 +1408,8 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 			SSH_HostKeys:    p.Hostinfo().SSH_HostKeys().AsSlice(),
 			Location:        p.Hostinfo().Location().AsStruct(),
 			Capabilities:    p.Capabilities().AsSlice(),
+			MasqAddrV4:      p.SelfNodeV4MasqAddrForThisPeer().GetOr(netip.Addr{}),
+			MasqAddrV6:      p.SelfNodeV6MasqAddrForThisPeer().GetOr(netip.Addr{}),
 		}
 		for _, f := range b.extHost.Hooks().SetPeerStatus {
 			f(ps, p, cn)
