@@ -268,7 +268,8 @@ func (c *Auto) updateControl() {
 	}
 }
 
-// cancelAuthCtxLocked is like cancelAuthCtx, but assumes the caller holds c.mu.
+// cancelAuthCtxLocked cancels the [Auto.authRoutine] goroutine's context &
+// creates a new one, causing it to restart. Assumes the caller holds c.mu.
 func (c *Auto) cancelAuthCtxLocked() {
 	if c.authCancel != nil {
 		c.authCancel()
@@ -279,7 +280,9 @@ func (c *Auto) cancelAuthCtxLocked() {
 	}
 }
 
-// cancelMapCtxLocked is like cancelMapCtx, but assumes the caller holds c.mu.
+// cancelMapCtxLocked cancels the context for the [Auto.mapRoutine] and
+// [Auto.updateRoutine] goroutines and creates a new one, causing them to
+// restart. Assumes the caller holds c.mu.
 func (c *Auto) cancelMapCtxLocked() {
 	if c.mapCancel != nil {
 		c.mapCancel()
@@ -290,8 +293,9 @@ func (c *Auto) cancelMapCtxLocked() {
 	}
 }
 
-// restartMap cancels the existing mapPoll and liteUpdates, and then starts a
-// new one.
+// restartMap cancels the the context for the [Auto.mapRoutine] and
+// [Auto.updateRoutine] goroutines, and then creates a new one, causing them to
+// restart.
 func (c *Auto) restartMap() {
 	c.mu.Lock()
 	c.cancelMapCtxLocked()
@@ -717,8 +721,8 @@ func (c *Auto) Login(flags LoginFlags) {
 	c.loginGoal = &LoginGoal{
 		flags: flags,
 	}
-	c.cancelMapCtxLocked()
-	c.cancelAuthCtxLocked()
+	c.cancelMapCtxLocked()  // unblocks [Auto.mapRoutine] & [Auto.updateRoutine]
+	c.cancelAuthCtxLocked() // unblocks [Auto.authRoutine]
 }
 
 var ErrClientClosed = errors.New("client closed")
