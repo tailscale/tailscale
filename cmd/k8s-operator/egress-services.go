@@ -228,6 +228,11 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 	// loop over ClusterIP Service ports, remove any that are not needed.
 	for i := len(clusterIPSvc.Spec.Ports) - 1; i >= 0; i-- {
 		pm := clusterIPSvc.Spec.Ports[i]
+		// Remove health check port; will be re-added with correct configuration.
+		if pm.Name == tsHealthCheckPortName {
+			clusterIPSvc.Spec.Ports = slices.Delete(clusterIPSvc.Spec.Ports, i, i+1)
+			continue
+		}
 		found := false
 		for _, wantsPM := range svc.Spec.Ports {
 			if wantsPM.Port == pm.Port && strings.EqualFold(string(wantsPM.Protocol), string(pm.Protocol)) {
