@@ -420,6 +420,11 @@ type fakeIPTablesRunner struct {
 	ipt4 map[string][]string
 	ipt6 map[string][]string
 	// we always assume ipv6 and ipv6 nat are enabled when testing
+	af linuxfw.AddressFamilies
+}
+
+func (r *fakeIPTablesRunner) SetAddressFamilies(af linuxfw.AddressFamilies) {
+	r.af = af
 }
 
 func newIPTablesRunner(t *testing.T) linuxfw.NetfilterRunner {

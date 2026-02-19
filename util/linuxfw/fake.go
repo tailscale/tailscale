@@ -137,6 +137,12 @@ func NewFakeIPTablesRunner() NetfilterRunner {
 		v6Available = true
 	}
 
-	iptr := &iptablesRunner{ipt4, ipt6, v6Available, v6Available, v6Available}
-	return iptr
+	return &iptablesRunner{
+		af:                FamilyBoth,
+		ipt4:              ipt4,
+		ipt6:              ipt6,
+		v6Available:       v6Available,
+		v6NATAvailable:    v6Available,
+		v6FilterAvailable: v6Available,
+	}
 }

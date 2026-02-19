@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -81,6 +82,7 @@ type linuxRouter struct {
 	nfr linuxfw.NetfilterRunner
 
 	mu                sync.Mutex
+	af                linuxfw.AddressFamilies
 	addrs             map[netip.Prefix]bool
 	routes            map[netip.Prefix]bool
 	localRoutes       map[netip.Prefix]bool
@@ -112,6 +114,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 		netfilterMode: netfilterOff,
 		netMon:        netMon,
 		health:        health,
+		af:            linuxfw.FamilyBoth,
 
 		cmd: cmd,
 
@@ -401,6 +404,7 @@ func (r *linuxRouter) setupNetfilterLocked(kind string) error {
 	if err != nil {
 		return fmt.Errorf("could not create new netfilter: %w", err)
 	}
+	r.nfr.SetAddressFamilies(r.af)
 
 	return nil
 }
@@ -413,6 +417,12 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	if cfg == nil {
 		cfg = &shutdownConfig
 	}
+
+	r.af = linuxfw.FamilyBoth
+	if !slices.ContainsFunc(cfg.LocalAddrs, func(p netip.Prefix) bool { return p.Addr().Is4() }) {
+		r.af = linuxfw.FamilyIPv6
+	}
+	r.nfr.SetAddressFamilies(r.af)
 
 	if cfg.NetfilterKind != r.netfilterKind {
 		if err := r.setNetfilterModeLocked(netfilterOff); err != nil {
