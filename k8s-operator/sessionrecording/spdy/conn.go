@@ -72,6 +72,7 @@ type conn struct {
 	// rec knows how to send data written to it to a tsrecorder instance.
 	rec *tsrecorder.Client
 
+	stdinStreamID  atomic.Uint32
 	stdoutStreamID atomic.Uint32
 	stderrStreamID atomic.Uint32
 	resizeStreamID atomic.Uint32
@@ -141,10 +142,21 @@ func (c *conn) Read(b []byte) (int, error) {
 	}
 	c.readBuf.Next(len(sf.Raw)) // advance buffer past the parsed frame
 
-	if !sf.Ctrl && c.hasTerm { // data frame
+	if !sf.Ctrl { // data frame
 		switch sf.StreamID {
+		case c.stdinStreamID.Load():
+			select {
+			case <-c.ctx.Done():
+				return 0, c.ctx.Err()
+			case <-c.initialCastHeaderSent:
+				if err := c.rec.WriteInput(sf.Payload); err != nil {
+					return 0, fmt.Errorf("error sending stdin to session recorder: %w", err)
+				}
+			}
 		case c.resizeStreamID.Load():
-
+			if !c.hasTerm {
+				return n, nil
+			}
 			var msg spdyResizeMsg
 			if err = json.Unmarshal(sf.Payload, &msg); err != nil {
 				return 0, fmt.Errorf("error umarshalling resize msg: %w", err)
@@ -257,6 +269,8 @@ func (c *conn) storeStreamID(sf spdyFrame, header http.Header) {
 	)
 	id := binary.BigEndian.Uint32(sf.Payload[0:4])
 	switch header.Get(streamTypeHeaderKey) {
+	case corev1.StreamTypeStdin:
+		c.stdinStreamID.Store(id)
 	case corev1.StreamTypeStdout:
 		c.stdoutStreamID.Store(id)
 	case corev1.StreamTypeStderr:
