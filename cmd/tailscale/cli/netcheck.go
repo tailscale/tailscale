@@ -311,7 +311,7 @@ func createNetcheckBindString(CLIAddress string, CLIAddressIsSet bool, CLIPort i
 	if CLIAddressIsSet {
 		addr, err := netip.ParseAddr(CLIAddress)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("invalid bind address: %q (%v)", CLIAddress, err)
 		}
 		return netip.AddrPortFrom(addr, port).String(), nil
 	} else {

@@ -18,7 +18,7 @@ func TestCreateBindStr(t *testing.T) {
 		CLIPortIsSet    bool
 		envBind         string
 		want            string
-		wantError       bool
+		wantError       string
 	}{
 		{
 			name: "noAddr-noPort-noEnv",
@@ -72,29 +72,36 @@ func TestCreateBindStr(t *testing.T) {
 			want:    "55.55.55.55:789",
 		},
 		{
-			name:            "badAddr-noPort-noEnv",
+			name:            "badAddr-noPort-noEnv-1",
 			CLIAddress:      "678.678.678.678",
 			CLIAddressIsSet: true,
-			wantError:       true,
+			wantError:       `invalid bind address: "678.678.678.678" (ParseAddr("678.678.678.678"): IPv4 field has value >255)`,
+		},
+		{
+			name:            "badAddr-noPort-noEnv-2",
+			CLIAddress:      "lorem ipsum",
+			CLIAddressIsSet: true,
+			wantError:       `invalid bind address: "lorem ipsum" (ParseAddr("lorem ipsum"): unable to parse IP)`,
 		},
 		{
 			name:         "noAddr-badPort-noEnv",
 			CLIPort:      -1,
 			CLIPortIsSet: true,
-			wantError:    true,
+			wantError:    "invalid bind port number: -1",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, gotErr := createNetcheckBindString(tt.CLIAddress, tt.CLIAddressIsSet, tt.CLIPort, tt.CLIPortIsSet, tt.envBind)
-			if tt.wantError {
-				if gotErr == nil {
-					t.Errorf("error = got successful %q; want error", got)
-				}
-			} else {
-				if got != tt.want {
-					t.Errorf("error = got %q; want %q", got, tt.want)
-				}
+			var gotErrStr string
+			if gotErr != nil {
+				gotErrStr = gotErr.Error()
+			}
+			if gotErrStr != tt.wantError {
+				t.Errorf("got error %q; want error %q", gotErrStr, tt.wantError)
+			}
+			if got != tt.want {
+				t.Errorf("got result %q; want result %q", got, tt.want)
 			}
 		})
 	}
