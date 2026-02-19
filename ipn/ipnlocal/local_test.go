@@ -75,6 +75,7 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/filter/filtertype"
+	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -309,6 +310,122 @@ func TestPeerRoutes(t *testing.T) {
 			got := peerRoutes(t.Logf, tt.peers, 2, true)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("got = %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCGNATRulesFromCapability(t *testing.T) {
+	mustRaw := func(v any) tailcfg.RawMessage {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("json.Marshal(%v): %v", v, err)
+		}
+		return tailcfg.RawMessage(b)
+	}
+
+	tests := []struct {
+		name string
+		caps []tailcfg.RawMessage
+		want []router.CGNATRule
+	}{
+		{
+			name: "ordered-object-entries",
+			caps: []tailcfg.RawMessage{
+				mustRaw(map[string]string{"cidr": "100.100.0.0/24", "verdict": "accept", "chain": "input"}),
+				mustRaw(map[string]string{"cidr": "100.64.0.0/10", "verdict": "drop"}),
+			},
+			want: []router.CGNATRule{
+				{Prefix: netip.MustParsePrefix("100.100.0.0/24"), Verdict: router.CGNATRuleVerdictAccept, Chain: router.CGNATRuleChainInput},
+				{Prefix: netip.MustParsePrefix("100.64.0.0/10"), Verdict: router.CGNATRuleVerdictDrop, Chain: router.CGNATRuleChainBoth},
+			},
+		},
+		{
+			name: "multiple-object-entries",
+			caps: []tailcfg.RawMessage{
+				mustRaw(map[string]string{"cidr": "100.101.0.0/16", "verdict": "accept", "chain": "forward"}),
+				mustRaw(map[string]string{"cidr": "100.64.0.0/10", "verdict": "drop", "chain": "both"}),
+			},
+			want: []router.CGNATRule{
+				{Prefix: netip.MustParsePrefix("100.101.0.0/16"), Verdict: router.CGNATRuleVerdictAccept, Chain: router.CGNATRuleChainForward},
+				{Prefix: netip.MustParsePrefix("100.64.0.0/10"), Verdict: router.CGNATRuleVerdictDrop, Chain: router.CGNATRuleChainBoth},
+			},
+		},
+		{
+			name: "array-entry-rejected",
+			caps: []tailcfg.RawMessage{
+				mustRaw([]map[string]string{
+					{"cidr": "100.101.0.0/16", "verdict": "accept", "chain": "forward"},
+					{"cidr": "100.64.0.0/10", "verdict": "drop", "chain": "both"},
+				}),
+			},
+			want: nil,
+		},
+		{
+			name: "duplicates-removed",
+			caps: []tailcfg.RawMessage{
+				mustRaw(map[string]string{"cidr": "100.100.0.0/32", "verdict": "accept", "chain": "both"}),
+				mustRaw(map[string]string{"cidr": "100.64.0.0/10", "verdict": "drop", "chain": "both"}),
+				mustRaw(map[string]string{"cidr": "100.64.0.0/10", "verdict": "drop", "chain": "both"}),
+			},
+			want: []router.CGNATRule{
+				{Prefix: netip.MustParsePrefix("100.100.0.0/32"), Verdict: router.CGNATRuleVerdictAccept, Chain: router.CGNATRuleChainBoth},
+				{Prefix: netip.MustParsePrefix("100.64.0.0/10"), Verdict: router.CGNATRuleVerdictDrop, Chain: router.CGNATRuleChainBoth},
+			},
+		},
+		{
+			name: "invalid-entry-fails-closed",
+			caps: []tailcfg.RawMessage{
+				mustRaw(map[string]string{"cidr": "100.0.0.0/9", "verdict": "drop", "chain": "both"}),
+			},
+			want: nil,
+		},
+		{
+			name: "bad-verdict-fails-closed",
+			caps: []tailcfg.RawMessage{
+				mustRaw(map[string]string{"cidr": "100.100.0.0/24", "verdict": "queue", "chain": "both"}),
+			},
+			want: nil,
+		},
+		{
+			name: "bad-chain-fails-closed",
+			caps: []tailcfg.RawMessage{
+				mustRaw(map[string]string{"cidr": "100.100.0.0/24", "verdict": "drop", "chain": "output"}),
+			},
+			want: nil,
+		},
+		{
+			name: "malformed-json-fails-closed",
+			caps: []tailcfg.RawMessage{
+				tailcfg.RawMessage(`{"cidr":"not a prefix"`),
+			},
+			want: nil,
+		},
+		{
+			name: "raw-array-entry-fails-closed",
+			caps: []tailcfg.RawMessage{
+				tailcfg.RawMessage(`[
+					{"cidr":"100.100.20.0/24","verdict":"accept"},
+					{"cidr":"100.64.0.0/10","verdict":"drop"}
+				]`),
+			},
+			want: nil,
+		},
+		{
+			name: "valid-then-invalid-fails-closed",
+			caps: []tailcfg.RawMessage{
+				mustRaw(map[string]string{"cidr": "100.100.0.0/24", "verdict": "drop", "chain": "both"}),
+				mustRaw(map[string]string{"cidr": "10.0.0.0/8", "verdict": "drop", "chain": "both"}),
+			},
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := (&tailcfg.Node{CapMap: tailcfg.NodeCapMap{cgnatRulesCapability: tt.caps}}).View()
+			if got := cgnatRulesFromCapability(t.Logf, node); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("got %v; want %v", got, tt.want)
 			}
 		})
 	}
