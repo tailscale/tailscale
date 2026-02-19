@@ -239,6 +239,14 @@ jobs:
           - key: "win-shard-2-2"
             shard: "2/2"
     steps:
+    - uses: samypr100/setup-dev-drive@30f0f98ae5636b2b6501e181dfb3631b9974818d # v4.0.0
+      with:
+        drive-size: 4GB
+        drive-format: ReFS
+        drive-type: Dynamic
+        drive-path: "dev_drive.vhdx"
+        mount-path: ${{ github.workspace }}
+
     - name: checkout
       uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
       with:
