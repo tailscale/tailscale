@@ -5612,6 +5612,26 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 				b.logf("warning: ExitNodeAllowLANAccess has no effect on " + runtime.GOOS)
 			}
 		}
+
+		// On macOS (running tailscaled, not the Network Extension), we need
+		// explicit routes for WireGuard endpoints to prevent routing loops.
+		// When exit node routes are active (0.0.0.0/0 or ::/0), without these
+		// explicit routes, the WireGuard endpoint traffic would be captured
+		// by the /1 routes we use to override the default route.
+		// Linux avoids this with fwmark-based policy routing, but macOS
+		// doesn't have an equivalent mechanism.
+		if runtime.GOOS == "darwin" && !version.IsMacSysExt() {
+			exitNodeID := prefs.ExitNodeID()
+			if !exitNodeID.IsZero() {
+				if nm := b.currentNode().NetMap(); nm != nil {
+					if exitPeer, ok := nm.PeerWithStableID(exitNodeID); ok {
+						for _, ep := range exitPeer.Endpoints().All() {
+							rs.ExitNodeEndpoints = append(rs.ExitNodeEndpoints, ep.Addr())
+						}
+					}
+				}
+			}
+		}
 	}
 
 	// Get the VIPs for VIP services this node hosts. We will add all locally served VIPs to routes then
