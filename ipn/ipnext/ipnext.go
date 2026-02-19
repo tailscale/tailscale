@@ -201,6 +201,15 @@ type Host interface {
 	// NodeBackend returns the [NodeBackend] for the currently active node
 	// (which is approximately the same as the current profile).
 	NodeBackend() NodeBackend
+
+	// AdvertiseRoutesAsync enqueues adding the given route advertisements
+	// to the current node's prefs. Routes already present or disallowed are
+	// silently skipped. Errors are logged by the host.
+	AdvertiseRoutesAsync(routes []netip.Prefix)
+
+	// UnadvertiseRoutesAsync enqueues removing the given route advertisements
+	// from the current node's prefs. Errors are logged by the host.
+	UnadvertiseRoutesAsync(routes []netip.Prefix)
 }
 
 // SafeBackend is a subset of the [ipnlocal.LocalBackend] type's methods that
@@ -377,6 +386,46 @@ type Hooks struct {
 	// ShouldUploadServices reports whether this node should include services
 	// in Hostinfo from the portlist extension.
 	ShouldUploadServices feature.Hook[func() bool]
+
+	// OnAuthReconfig is called asynchronously after the backend reconfigures
+	// in response to a netmap or prefs change. The selfNode may be invalid if
+	// no netmap is available yet. It is currently used by the app connector
+	// extension to start, stop, or reconfigure its route discovery.
+	OnAuthReconfig feature.Hooks[func(selfNode tailcfg.NodeView, prefs ipn.PrefsView)]
+
+	// OfferingAppConnector reports whether this node is currently offering
+	// app connector services. It is used by peerapi DNS handling, hostinfo
+	// updates, and filter configuration. Only one extension may set this.
+	OfferingAppConnector feature.Hook[func() bool]
+
+	// ObserveDNSResponse passes a DNS response payload from the PeerAPI DNS
+	// server to registered observers. It is currently used by the app connector
+	// extension for route discovery, but multiple observers are supported.
+	ObserveDNSResponse feature.Hooks[func(dnsResponse []byte)]
+
+	// ExtraLocalAddrs returns additional addresses to include in the packet
+	// filter's local network set. It is currently used by the app connector
+	// extension to add 0.0.0.0 and ::0 so that PeerAPI DNS access validation
+	// passes for app connector nodes.
+	ExtraLocalAddrs feature.Hooks[func() []netip.Addr]
+
+	// ClearAutoRoutes is called when the user explicitly sets AdvertiseRoutes
+	// via the local API. The hook should clear any auto-discovered routes so
+	// that they do not conflict with the user's explicit configuration. It is
+	// currently used by the app connector extension. Only one extension may
+	// set this.
+	ClearAutoRoutes feature.Hook[func() error]
+
+	// SplitDNSResolverPeers is called during DNS config generation to find
+	// peers that serve as split DNS resolvers for specific domains. The
+	// selfHasCap parameter reports whether the local node has a given
+	// capability, which callers use to gate experimental behavior. It is
+	// currently used by the conn25 extension. Only one extension may set this.
+	SplitDNSResolverPeers feature.Hook[func(
+		selfHasCap func(tailcfg.NodeCapability) bool,
+		self tailcfg.NodeView,
+		peers map[tailcfg.NodeID]tailcfg.NodeView,
+	) map[string][]tailcfg.NodeView]
 }
 
 // NodeBackend is an interface to query the current node and its peers.

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/netip"
 	"reflect"
 	"slices"
 	"strings"
@@ -123,6 +124,9 @@ type Backend interface {
 	SendNotify(ipn.Notify)
 
 	NodeBackend() ipnext.NodeBackend
+
+	AdvertiseRoute(routes ...netip.Prefix) error
+	UnadvertiseRoute(routes ...netip.Prefix) error
 
 	ipnext.SafeBackend
 }
@@ -398,6 +402,30 @@ func (h *ExtensionHost) SendNotifyAsync(n ipn.Notify) {
 	}
 	h.enqueueBackendOperation(func(b Backend) {
 		b.SendNotify(n)
+	})
+}
+
+// AdvertiseRoutesAsync implements [ipnext.Host].
+func (h *ExtensionHost) AdvertiseRoutesAsync(routes []netip.Prefix) {
+	if h == nil || len(routes) == 0 {
+		return
+	}
+	h.enqueueBackendOperation(func(b Backend) {
+		if err := b.AdvertiseRoute(routes...); err != nil {
+			h.logf("failed to advertise routes: %v", err)
+		}
+	})
+}
+
+// UnadvertiseRoutesAsync implements [ipnext.Host].
+func (h *ExtensionHost) UnadvertiseRoutesAsync(routes []netip.Prefix) {
+	if h == nil || len(routes) == 0 {
+		return
+	}
+	h.enqueueBackendOperation(func(b Backend) {
+		if err := b.UnadvertiseRoute(routes...); err != nil {
+			h.logf("failed to unadvertise routes: %v", err)
+		}
 	})
 }
 

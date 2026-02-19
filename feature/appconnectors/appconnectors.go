@@ -25,14 +25,24 @@ func handleC2NAppConnectorDomainRoutesGet(b *ipnlocal.LocalBackend, w http.Respo
 	logf("c2n: GET /appconnector/routes received")
 
 	var res tailcfg.C2NAppConnectorDomainRoutesResponse
-	appConnector := b.AppConnector()
-	if appConnector == nil {
+	ext, ok := ipnlocal.GetExt[*extension](b)
+	if !ok {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(res)
 		return
 	}
 
-	res.Domains = appConnector.DomainRoutes()
+	ext.mu.Lock()
+	ac := ext.appConnector
+	ext.mu.Unlock()
+
+	if ac == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(res)
+		return
+	}
+
+	res.Domains = ac.DomainRoutes()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)

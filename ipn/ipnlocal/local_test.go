@@ -28,9 +28,6 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	memro "go4.org/mem"
 	"go4.org/netipx"
-	"golang.org/x/net/dns/dnsmessage"
-	"tailscale.com/appc"
-	"tailscale.com/appc/appctest"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive"
 	"tailscale.com/drive/driveimpl"
@@ -52,7 +49,6 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/deptest"
 	"tailscale.com/tstest/typewalk"
-	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
@@ -2395,7 +2391,7 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 			}
 
 			prefs := &ipn.Prefs{ExitNodeID: tc.exitNode, CorpDNS: true}
-			got := dnsConfigForNetmap(nm, peersMap(tc.peers), prefs.View(), false, t.Logf, "")
+			got := dnsConfigForNetmap(nm, peersMap(tc.peers), prefs.View(), false, t.Logf, "", nil)
 			if !resolversEqual(t, got.DefaultResolvers, tc.wantDefaultResolvers) {
 				t.Errorf("DefaultResolvers: got %#v, want %#v", got.DefaultResolvers, tc.wantDefaultResolvers)
 			}
@@ -2456,101 +2452,6 @@ func TestProfileMkdirAll(t *testing.T) {
 	})
 }
 
-func TestOfferingAppConnector(t *testing.T) {
-	for _, shouldStore := range []bool{false, true} {
-		b := newTestBackend(t)
-		bus := b.sys.Bus.Get()
-		if b.OfferingAppConnector() {
-			t.Fatal("unexpected offering app connector")
-		}
-		b.appConnector = appc.NewAppConnector(appc.Config{
-			Logf: t.Logf, EventBus: bus, HasStoredRoutes: shouldStore,
-		})
-		if !b.OfferingAppConnector() {
-			t.Fatal("unexpected not offering app connector")
-		}
-	}
-}
-
-func TestRouteAdvertiser(t *testing.T) {
-	b := newTestBackend(t)
-	testPrefix := netip.MustParsePrefix("192.0.0.8/32")
-
-	ra := appc.RouteAdvertiser(b)
-	must.Do(ra.AdvertiseRoute(testPrefix))
-
-	routes := b.Prefs().AdvertiseRoutes()
-	if routes.Len() != 1 || routes.At(0) != testPrefix {
-		t.Fatalf("got routes %v, want %v", routes, []netip.Prefix{testPrefix})
-	}
-
-	must.Do(ra.UnadvertiseRoute(testPrefix))
-
-	routes = b.Prefs().AdvertiseRoutes()
-	if routes.Len() != 0 {
-		t.Fatalf("got routes %v, want none", routes)
-	}
-}
-
-func TestRouterAdvertiserIgnoresContainedRoutes(t *testing.T) {
-	b := newTestBackend(t)
-	testPrefix := netip.MustParsePrefix("192.0.0.0/24")
-	ra := appc.RouteAdvertiser(b)
-	must.Do(ra.AdvertiseRoute(testPrefix))
-
-	routes := b.Prefs().AdvertiseRoutes()
-	if routes.Len() != 1 || routes.At(0) != testPrefix {
-		t.Fatalf("got routes %v, want %v", routes, []netip.Prefix{testPrefix})
-	}
-
-	must.Do(ra.AdvertiseRoute(netip.MustParsePrefix("192.0.0.8/32")))
-
-	// the above /32 is not added as it is contained within the /24
-	routes = b.Prefs().AdvertiseRoutes()
-	if routes.Len() != 1 || routes.At(0) != testPrefix {
-		t.Fatalf("got routes %v, want %v", routes, []netip.Prefix{testPrefix})
-	}
-}
-
-func TestObserveDNSResponse(t *testing.T) {
-	for _, shouldStore := range []bool{false, true} {
-		b := newTestBackend(t)
-		bus := b.sys.Bus.Get()
-		w := eventbustest.NewWatcher(t, bus)
-
-		// ensure no error when no app connector is configured
-		if err := b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
-			t.Errorf("ObserveDNSResponse: %v", err)
-		}
-
-		rc := &appctest.RouteCollector{}
-		a := appc.NewAppConnector(appc.Config{
-			Logf:            t.Logf,
-			EventBus:        bus,
-			RouteAdvertiser: rc,
-			HasStoredRoutes: shouldStore,
-		})
-		a.UpdateDomains([]string{"example.com"})
-		a.Wait(t.Context())
-		b.appConnector = a
-
-		if err := b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
-			t.Errorf("ObserveDNSResponse: %v", err)
-		}
-		a.Wait(t.Context())
-		wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
-		if !slices.Equal(rc.Routes(), wantRoutes) {
-			t.Fatalf("got routes %v, want %v", rc.Routes(), wantRoutes)
-		}
-
-		if err := eventbustest.Expect(w,
-			eqUpdate(appctype.RouteUpdate{Advertise: mustPrefix("192.0.0.8/32")}),
-		); err != nil {
-			t.Error(err)
-		}
-	}
-}
-
 func TestCoveredRouteRangeNoDefault(t *testing.T) {
 	tests := []struct {
 		existingRoute netip.Prefix
@@ -2597,128 +2498,6 @@ func TestCoveredRouteRangeNoDefault(t *testing.T) {
 	}
 }
 
-func TestReconfigureAppConnector(t *testing.T) {
-	b := newTestBackend(t)
-	b.reconfigAppConnectorLocked(b.NetMap(), b.pm.prefs)
-	if b.appConnector != nil {
-		t.Fatal("unexpected app connector")
-	}
-
-	b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AppConnector: ipn.AppConnectorPrefs{
-				Advertise: true,
-			},
-		},
-		AppConnectorSet: true,
-	})
-	b.reconfigAppConnectorLocked(b.NetMap(), b.pm.prefs)
-	if b.appConnector == nil {
-		t.Fatal("expected app connector")
-	}
-
-	appCfg := `{
-		"name": "example",
-		"domains": ["example.com"],
-		"connectors": ["tag:example"]
-	}`
-
-	nm := &netmap.NetworkMap{
-		SelfNode: (&tailcfg.Node{
-			Name: "example.ts.net",
-			Tags: []string{"tag:example"},
-			CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
-				"tailscale.com/app-connectors": {tailcfg.RawMessage(appCfg)},
-			}),
-		}).View(),
-	}
-
-	b.currentNode().SetNetMap(nm)
-
-	b.reconfigAppConnectorLocked(b.NetMap(), b.pm.prefs)
-	b.appConnector.Wait(context.Background())
-
-	want := []string{"example.com"}
-	if !slices.Equal(b.appConnector.Domains().AsSlice(), want) {
-		t.Fatalf("got domains %v, want %v", b.appConnector.Domains(), want)
-	}
-	if v, _ := b.hostinfo.AppConnector.Get(); !v {
-		t.Fatalf("expected app connector service")
-	}
-
-	// disable the connector in order to assert that the service is removed
-	b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AppConnector: ipn.AppConnectorPrefs{
-				Advertise: false,
-			},
-		},
-		AppConnectorSet: true,
-	})
-	b.reconfigAppConnectorLocked(b.NetMap(), b.pm.prefs)
-	if b.appConnector != nil {
-		t.Fatal("expected no app connector")
-	}
-	if v, _ := b.hostinfo.AppConnector.Get(); v {
-		t.Fatalf("expected no app connector service")
-	}
-}
-
-func TestBackfillAppConnectorRoutes(t *testing.T) {
-	// Create backend with an empty app connector.
-	b := newTestBackend(t)
-	// newTestBackend creates a backend with a non-nil netmap,
-	// but this test requires a nil netmap.
-	// Otherwise, instead of backfilling, [LocalBackend.reconfigAppConnectorLocked]
-	// uses the domains and routes from netmap's [appctype.AppConnectorAttr].
-	// Additionally, a non-nil netmap makes reconfigAppConnectorLocked
-	// asynchronous, resulting in a flaky test.
-	// Therefore, we set the netmap to nil to simulate a fresh backend start
-	// or a profile switch where the netmap is not yet available.
-	b.setNetMapLocked(nil)
-	if err := b.Start(ipn.Options{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AppConnector: ipn.AppConnectorPrefs{Advertise: true},
-		},
-		AppConnectorSet: true,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	b.reconfigAppConnectorLocked(b.NetMap(), b.pm.prefs)
-
-	// Smoke check that AdvertiseRoutes doesn't have the test IP.
-	ip := netip.MustParseAddr("1.2.3.4")
-	routes := b.Prefs().AdvertiseRoutes().AsSlice()
-	if slices.Contains(routes, netip.PrefixFrom(ip, ip.BitLen())) {
-		t.Fatalf("AdvertiseRoutes %v on a fresh backend already contains advertised route for %v", routes, ip)
-	}
-
-	// Store the test IP in profile data, but not in Prefs.AdvertiseRoutes.
-	b.ControlKnobs().AppCStoreRoutes.Store(true)
-	if err := b.storeRouteInfo(appctype.RouteInfo{
-		Domains: map[string][]netip.Addr{
-			"example.com": {ip},
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	// Mimic b.authReconfigure for the app connector bits.
-	b.mu.Lock()
-	b.reconfigAppConnectorLocked(b.NetMap(), b.pm.prefs)
-	b.mu.Unlock()
-	b.readvertiseAppConnectorRoutes()
-
-	// Check that Prefs.AdvertiseRoutes got backfilled with routes stored in
-	// profile data.
-	routes = b.Prefs().AdvertiseRoutes().AsSlice()
-	if !slices.Contains(routes, netip.PrefixFrom(ip, ip.BitLen())) {
-		t.Fatalf("AdvertiseRoutes %v was not backfilled from stored app connector routes with %v", routes, ip)
-	}
-}
 
 func resolversEqual(t *testing.T, a, b []*dnstype.Resolver) bool {
 	if a == nil && b == nil {
@@ -2753,43 +2532,6 @@ func routesEqual(t *testing.T, a, b map[dnsname.FQDN][]*dnstype.Resolver) bool {
 		}
 	}
 	return true
-}
-
-// dnsResponse is a test helper that creates a DNS response buffer for the given domain and address
-func dnsResponse(domain, address string) []byte {
-	addr := netip.MustParseAddr(address)
-	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{})
-	b.EnableCompression()
-	b.StartAnswers()
-	switch addr.BitLen() {
-	case 32:
-		b.AResource(
-			dnsmessage.ResourceHeader{
-				Name:  dnsmessage.MustNewName(domain),
-				Type:  dnsmessage.TypeA,
-				Class: dnsmessage.ClassINET,
-				TTL:   0,
-			},
-			dnsmessage.AResource{
-				A: addr.As4(),
-			},
-		)
-	case 128:
-		b.AAAAResource(
-			dnsmessage.ResourceHeader{
-				Name:  dnsmessage.MustNewName(domain),
-				Type:  dnsmessage.TypeAAAA,
-				Class: dnsmessage.ClassINET,
-				TTL:   0,
-			},
-			dnsmessage.AAAAResource{
-				AAAA: addr.As16(),
-			},
-		)
-	default:
-		panic("invalid address length")
-	}
-	return must.Get(b.Finish())
 }
 
 func TestSetExitNodeIDPolicy(t *testing.T) {
@@ -5717,69 +5459,6 @@ func TestEnableAutoUpdates(t *testing.T) {
 	}
 }
 
-func TestReadWriteRouteInfo(t *testing.T) {
-	// set up a backend with more than one profile
-	b := newTestBackend(t)
-	prof1 := ipn.LoginProfile{ID: "id1", Key: "key1"}
-	prof2 := ipn.LoginProfile{ID: "id2", Key: "key2"}
-	b.pm.knownProfiles["id1"] = prof1.View()
-	b.pm.knownProfiles["id2"] = prof2.View()
-	b.pm.currentProfile = prof1.View()
-
-	// set up routeInfo
-	ri1 := appctype.RouteInfo{}
-	ri1.Wildcards = []string{"1"}
-
-	ri2 := appctype.RouteInfo{}
-	ri2.Wildcards = []string{"2"}
-
-	// read before write
-	readRi, err := b.readRouteInfoLocked()
-	if readRi != nil {
-		t.Fatalf("read before writing: want nil, got %v", readRi)
-	}
-	if err != ipn.ErrStateNotExist {
-		t.Fatalf("read before writing: want %v, got %v", ipn.ErrStateNotExist, err)
-	}
-
-	// write the first routeInfo
-	if err := b.storeRouteInfo(ri1); err != nil {
-		t.Fatal(err)
-	}
-
-	// write the other routeInfo as the other profile
-	if _, _, err := b.pm.SwitchToProfileByID("id2"); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.storeRouteInfo(ri2); err != nil {
-		t.Fatal(err)
-	}
-
-	// read the routeInfo of the first profile
-	if _, _, err := b.pm.SwitchToProfileByID("id1"); err != nil {
-		t.Fatal(err)
-	}
-	readRi, err = b.readRouteInfoLocked()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(readRi.Wildcards, ri1.Wildcards) {
-		t.Fatalf("read prof1 routeInfo wildcards:  want %v, got %v", ri1.Wildcards, readRi.Wildcards)
-	}
-
-	// read the routeInfo of the second profile
-	if _, _, err := b.pm.SwitchToProfileByID("id2"); err != nil {
-		t.Fatal(err)
-	}
-	readRi, err = b.readRouteInfoLocked()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(readRi.Wildcards, ri2.Wildcards) {
-		t.Fatalf("read prof2 routeInfo wildcards:  want %v, got %v", ri2.Wildcards, readRi.Wildcards)
-	}
-}
-
 func TestFillAllowedSuggestions(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -7305,44 +6984,6 @@ func toStrings[T ~string](in []T) []string {
 		out[i] = string(v)
 	}
 	return out
-}
-
-type textUpdate struct {
-	Advertise   []string
-	Unadvertise []string
-}
-
-func routeUpdateToText(u appctype.RouteUpdate) textUpdate {
-	var out textUpdate
-	for _, p := range u.Advertise {
-		out.Advertise = append(out.Advertise, p.String())
-	}
-	for _, p := range u.Unadvertise {
-		out.Unadvertise = append(out.Unadvertise, p.String())
-	}
-	return out
-}
-
-func mustPrefix(ss ...string) (out []netip.Prefix) {
-	for _, s := range ss {
-		out = append(out, netip.MustParsePrefix(s))
-	}
-	return
-}
-
-// eqUpdate generates an eventbus test filter that matches an appctype.RouteUpdate
-// message equal to want, or reports an error giving a human-readable diff.
-//
-// TODO(creachadair): This is copied from the appc test package, but we can't
-// put it into the appctest package because the appc tests depend on it and
-// that makes a cycle. Clean up those tests and put this somewhere common.
-func eqUpdate(want appctype.RouteUpdate) func(appctype.RouteUpdate) error {
-	return func(got appctype.RouteUpdate) error {
-		if diff := cmp.Diff(routeUpdateToText(got), routeUpdateToText(want)); diff != "" {
-			return fmt.Errorf("wrong update (-got, +want):\n%s", diff)
-		}
-		return nil
-	}
 }
 
 type fakeAttestationKey struct{ key.HardwareAttestationKey }
