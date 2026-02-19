@@ -124,6 +124,7 @@ func TestUDPSendReceiveBatch(t *testing.T) {
 		iterations       int
 		sendBatchSize    int
 		receiveBatchSize int
+		uso              bool
 	}{
 		{
 			name:    "udp4/single",
@@ -131,14 +132,21 @@ func TestUDPSendReceiveBatch(t *testing.T) {
 			pattern: []int{1312},
 		},
 		{
+			name:       "udp4/batch",
+			network:    "udp4",
+			pattern:    []int{1312},
+			iterations: 1024,
+		},
+		{
 			name:    "udp4/single/max",
 			network: "udp4",
 			pattern: []int{rioconn.MaxUDPPayloadIPv4},
 		},
 		{
-			name:    "udp4/batch/max",
-			network: "udp4",
-			pattern: []int{rioconn.MaxUDPPayloadIPv4},
+			name:       "udp4/batch/max",
+			network:    "udp4",
+			pattern:    []int{rioconn.MaxUDPPayloadIPv4},
+			iterations: 1024,
 		},
 		{
 			name:    "udp6/single",
@@ -146,14 +154,35 @@ func TestUDPSendReceiveBatch(t *testing.T) {
 			pattern: []int{1312},
 		},
 		{
+			name:       "udp6/batch",
+			network:    "udp6",
+			pattern:    []int{1312},
+			iterations: 1024,
+		},
+		{
 			name:    "udp6/single/max",
 			network: "udp6",
 			pattern: []int{rioconn.MaxUDPPayloadIPv6},
 		},
 		{
-			name:    "udp6/batch/max",
-			network: "udp6",
-			pattern: []int{rioconn.MaxUDPPayloadIPv6},
+			name:       "udp6/batch/max",
+			network:    "udp6",
+			pattern:    []int{rioconn.MaxUDPPayloadIPv6},
+			iterations: 10,
+		},
+		{
+			name:       "udp6/batch/uso",
+			network:    "udp6",
+			pattern:    []int{1312},
+			iterations: 10,
+			uso:        true,
+		},
+		{
+			name:       "udp6/batch/max/uso",
+			network:    "udp6",
+			pattern:    []int{rioconn.MaxUDPPayloadIPv6},
+			iterations: 10,
+			uso:        true,
 		},
 	}
 	for _, tt := range tests {
@@ -164,7 +193,9 @@ func TestUDPSendReceiveBatch(t *testing.T) {
 				cmp.Or(tt.sendBatchSize, defaultBatchSize),
 				cmp.Or(tt.receiveBatchSize, defaultBatchSize),
 				tt.network, tt.network,
-				nil, nil,
+				[]rioconn.UDPOption{
+					rioconn.USO(tt.uso),
+				}, nil,
 			)
 		})
 	}
@@ -174,16 +205,19 @@ func FuzzUDPSendReceiveBatch(f *testing.F) {
 	batchSizes := []uint16{1, 64}
 	packetSizes := []uint16{0, 1, 64, 1312, 9000, rioconn.MaxUDPPayloadIPv4}
 	numIterations := []uint16{1024}
+	uso := []bool{false, true}
 
 	for _, packetLen := range packetSizes {
 		for _, numIter := range numIterations {
 			for _, batchSize := range batchSizes {
-				f.Add(packetLen, numIter, batchSize, batchSize)
+				for _, usoEnabled := range uso {
+					f.Add(packetLen, numIter, batchSize, batchSize, usoEnabled)
+				}
 			}
 		}
 	}
 
-	f.Fuzz(func(t *testing.T, packetLen, numIterations, sendBatchSize, receiveBatchSize uint16) {
+	f.Fuzz(func(t *testing.T, packetLen, numIterations, sendBatchSize, receiveBatchSize uint16, usoEnabled bool) {
 		network := "udp4"
 		maxPacketLen := uint16(rioconn.MaxUDPPayloadIPv4)
 
@@ -206,6 +240,7 @@ func FuzzUDPSendReceiveBatch(f *testing.F) {
 			[]rioconn.UDPOption{
 				rioconn.RxMemoryLimit(128 << 10),
 				rioconn.TxMemoryLimit(512 << 10),
+				rioconn.USO(usoEnabled),
 			},
 			[]rioconn.UDPOption{
 				rioconn.RxMemoryLimit(512 << 10),

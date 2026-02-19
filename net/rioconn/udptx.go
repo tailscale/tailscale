@@ -8,6 +8,7 @@ package rioconn
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"unsafe"
@@ -25,14 +26,26 @@ import (
 // otherwise specified by the method.
 type udpTx struct {
 	udpNx
+	maxCoalescedPackets int // the maximum number of coalesced packets, or 0 if no limit
+	maxCoalescedBytes   int // the maximum total length of coalesced packets, or 0 if no limit
 }
 
 // init initializes the transmit half of a [UDPConn] with the
 // specified underlying connection and options.
 func (tx *udpTx) init(conn *conn, options UDPConfig) error {
-	// Without USO, the data buffer for each send request only needs to hold
-	// a single packet's payload.
-	dataSize := min(options.Tx().MaxPayloadLen(), MaxUDPPayload)
+	var dataSize uint16
+	if uso := options.USO(); uso.Enabled() {
+		// When USO is enabled, the request's data buffer may need to
+		// hold multiple coalesced packets up to the maximum offload size,
+		// or a single packet up to the maximum payload size, whichever is larger.
+		dataSize = max(options.Tx().MaxPayloadLen(), uso.MaxOffloadSize())
+		tx.maxCoalescedBytes = int(uso.MaxOffloadSize())
+	} else {
+		// Otherwise, the data buffer for each send request only needs to hold
+		// a single packet's payload.
+		dataSize = min(options.Tx().MaxPayloadLen(), MaxUDPPayload)
+		tx.maxCoalescedPackets = 1
+	}
 	if err := tx.udpNx.init(conn, dataSize, options.Tx().MemoryLimit()); err != nil {
 		return fmt.Errorf("failed to initialize udpTx: %w", err)
 	}
@@ -99,20 +112,31 @@ func (tx *udpTx) writeBatchTo(buffs [][]byte, addr netip.AddrPort, geneve packet
 		w := req.Writer()
 		w.SetRemoteAddr(raddr)
 
-		if geneve.VNI.IsSet() {
-			geneveHeader := w.Reserve(packet.GeneveFixedHeaderLength)
-			geneve.Encode(geneveHeader[:])
-		}
-		if _, err := w.Write(buffs[n][offset:]); err != nil {
+		buf := w.Reserve(w.Cap()) // reserve the entire buffer
+		packets, bytes, packetSize, err := coalescePackets(
+			buf, geneve, buffs[n:], offset,
+			tx.maxCoalescedPackets,
+			tx.maxCoalescedBytes,
+		)
+		w.SetLen(bytes) // shrink the buffer to the actual number of bytes coalesced
+		if err != nil {
 			return err
 		}
+		if packets == 0 {
+			return io.ErrNoProgress
+		}
 
+		if packets > 1 {
+			if err := w.ControlMessages().AppendUInt32(windows.IPPROTO_UDP, windows.UDP_SEND_MSG_SIZE, uint32(packetSize)); err != nil {
+				return fmt.Errorf("failed to append UDP_SEND_MSG_SIZE cmsg: %w", err)
+			}
+		}
 		if err = tx.conn.postSendRequest(req, winrio.MsgDefer); err != nil {
 			return fmt.Errorf("failed to post send request: %w", err)
 		}
 
 		tx.requests.Advance() // advance after posting the request
-		n++
+		n += packets
 	}
 	return nil
 }

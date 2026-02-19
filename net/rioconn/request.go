@@ -27,8 +27,9 @@ type request struct {
 	buffID   winrio.BufferId // ID of the registered buffer containing this request
 	buffBase uintptr         // base address of the registered buffer
 
-	raddr rawSockaddr // remote address for RIO send/receive operations
-	data  []byte      // a slice pointing into the data buffer area after the struct
+	raddr   rawSockaddr     // remote address for RIO send/receive operations
+	data    []byte          // a slice pointing into the data buffer area after the struct
+	control controlMessages // control messages buffer
 	// followed by the actual data at [requestDataOffset]
 	// from the start of the struct.
 }
@@ -94,8 +95,22 @@ func (r *request) PostSend(rq winrio.Rq, flags uint32) error {
 		Length: uint32(len(r.data)),
 		Offset: uint32(uintptr(unsafe.Pointer(unsafe.SliceData(r.data))) - r.buffBase),
 	}
-	remoteAddr := r.remoteAddrDesc()
-	return winrio.SendEx(rq, &data, 1, nil, &remoteAddr, nil, nil, flags, uintptr(unsafe.Pointer(r)))
+	remoteAddress := winrio.Buffer{
+		Id:     r.buffID,
+		Length: uint32(unsafe.Sizeof(r.raddr)),
+		Offset: uint32(uintptr(unsafe.Pointer(&r.raddr)) - r.buffBase),
+	}
+	var control *winrio.Buffer
+	if !r.control.Empty() {
+		cmsgs := r.control.Buffer()
+		control = &winrio.Buffer{
+			Id:     r.buffID,
+			Length: uint32(len(cmsgs)),
+			Offset: uint32(uintptr(unsafe.Pointer(unsafe.SliceData(cmsgs))) - r.buffBase),
+		}
+	}
+	return winrio.SendEx(rq, &data, 1, nil, &remoteAddress, control,
+		nil, flags, uintptr(unsafe.Pointer(r)))
 }
 
 // PostReceive posts the request as a receive operation to the given RIO request queue
@@ -107,8 +122,18 @@ func (r *request) PostReceive(rq winrio.Rq, flags uint32) error {
 		Length: uint32(cap(r.data)),
 		Offset: uint32(uintptr(unsafe.Pointer(unsafe.SliceData(r.data))) - r.buffBase),
 	}
-	remoteAddress := r.remoteAddrDesc()
-	return winrio.ReceiveEx(rq, &data, 1, nil, &remoteAddress, nil,
+	remoteAddress := winrio.Buffer{
+		Id:     r.buffID,
+		Length: uint32(unsafe.Sizeof(r.raddr)),
+		Offset: uint32(uintptr(unsafe.Pointer(&r.raddr)) - r.buffBase),
+	}
+	controlBuffer := r.control.Buffer()
+	control := &winrio.Buffer{
+		Id:     r.buffID,
+		Length: uint32(len(controlBuffer)),
+		Offset: uint32(uintptr(unsafe.Pointer(unsafe.SliceData(controlBuffer))) - r.buffBase),
+	}
+	return winrio.ReceiveEx(rq, &data, 1, nil, &remoteAddress, control,
 		nil, flags, uintptr(unsafe.Pointer(r)))
 }
 
@@ -119,6 +144,8 @@ func (r *request) PostReceive(rq winrio.Rq, flags uint32) error {
 // of bytes written does not match the length of the request's data buffer.
 func (r *request) CompleteSend(status int32, bytesWritten uint32) error {
 	expected := len(r.data)
+	r.data = r.data[:0]
+	r.control.Clear()
 	if status != 0 {
 		return windows.Errno(status)
 	}
@@ -154,18 +181,11 @@ func (r *request) CompleteReceive(status int32, bytesRead uint32) (*requestReade
 	return r.Reader(), nil
 }
 
-func (r *request) remoteAddrDesc() winrio.Buffer {
-	return winrio.Buffer{
-		Id:     r.buffID,
-		Length: uint32(unsafe.Sizeof(r.raddr)),
-		Offset: uint32(uintptr(unsafe.Pointer(&r.raddr)) - r.buffBase),
-	}
-}
-
 // Reset prepares the request for reuse by resetting its state.
 func (r *request) Reset() {
 	r.raddr = rawSockaddr{}
 	r.data = r.data[:0]
+	r.control.Clear()
 }
 
 type (
@@ -199,6 +219,11 @@ func (w *requestWriter) SetRemoteAddrPort(raddr netip.AddrPort) error {
 // SetRemoteAddr sets the remote address for the request from a [rawSockaddr].
 func (w *requestWriter) SetRemoteAddr(raddr rawSockaddr) {
 	w.raddr = raddr
+}
+
+// ControlMessages returns a pointer to the request's control messages buffer.
+func (w *requestWriter) ControlMessages() *controlMessages {
+	return &w.control
 }
 
 // Reserve reserves n bytes in the request's data buffer,
@@ -261,4 +286,9 @@ func (r *requestReader) RemoteAddrPort() (netip.AddrPort, error) {
 // only needs the raw socket address.
 func (r *requestReader) RemoteAddr() rawSockaddr {
 	return r.raddr
+}
+
+// ControlMessages returns a pointer to the request's control messages buffer.
+func (r *requestReader) ControlMessages() *controlMessages {
+	return &r.control
 }

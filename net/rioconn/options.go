@@ -76,3 +76,10 @@ type udpOption func(*UDPConfig)
 func (o udpOption) applyUDP(opts *UDPConfig) {
 	o(opts)
 }
+
+// USO specifies whether UDP segmentation offload (USO) should be enabled.
+func USO(enabled bool) UDPOption {
+	return udpOption(func(opts *UDPConfig) {
+		opts.uso.enabled = enabled
+	})
+}

@@ -15,6 +15,11 @@ const (
 
 	defaultRXMemoryLimit = 2 << 20 // 2 MiB
 	defaultTXMemoryLimit = 2 << 20 // 2 MiB
+
+	// defaultMaxUSOOffloadSize is the default maximum offload size for USO.
+	// It should be smaller than or equal to the typical hardware offload size
+	// to avoid software fallback. Mellanox NICs typically support up to 64000.
+	defaultMaxUSOOffloadSize = 64000
 )
 
 // Config holds configuration for a RIO connection, independent of the transport protocol.
@@ -89,4 +94,30 @@ func (o TxConfig) MaxPayloadLen() uint16 {
 // UDPConfig holds configuration for a [UDPConn].
 type UDPConfig struct {
 	Config
+	uso USOConfig
+}
+
+// USO returns the UDP segmentation offload (USO) configuration.
+func (o UDPConfig) USO() *USOConfig {
+	return &o.uso
+}
+
+// USOConfig holds the  UDP segmentation offload (USO) configuration.
+type USOConfig struct {
+	enabled        bool
+	maxOffloadSize uint16 // 0 means default (i.e., [defaultMaxUSOOffloadSize])
+}
+
+// Enabled reports whether USO is enabled.
+func (o USOConfig) Enabled() bool {
+	return o.enabled
+}
+
+// MaxOffloadSize returns the maximum number of bytes that can be batched into a
+// single send for UDP segmentation offload.
+func (o USOConfig) MaxOffloadSize() uint16 {
+	if !o.Enabled() {
+		return 0
+	}
+	return cmp.Or(o.maxOffloadSize, defaultMaxUSOOffloadSize)
 }
