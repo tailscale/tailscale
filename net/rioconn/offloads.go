@@ -6,7 +6,9 @@ package rioconn
 import (
 	"fmt"
 	"io"
+	"net"
 
+	"golang.org/x/net/ipv6"
 	"tailscale.com/net/packet"
 )
 
@@ -81,4 +83,35 @@ func coalescePackets(
 		}
 	}
 	return packets, bytes, packetSize, nil
+}
+
+// splitCoalescedPackets splits src into msgs, treating it as coalesced packets
+// of packetSize. A packet is ignored if it does not fit in the destination buffer
+// of the corresponding msg, in which case its bytes are not copied into msgs,
+// but it still counts towards the packet count and bytes read from src.
+// The final packet in src may be smaller than packetSize.
+//
+// If packetSize <= 0, it treats src as a single packet.
+// A zero-length src is treated as a single zero-length packet.
+//
+// It returns the number of messages the caller should evaluate for nonzero len
+// and the number of bytes read from src for those messages.
+func splitCoalescedPackets(addr *net.UDPAddr, src []byte, packetSize int, msgs []ipv6.Message) (packets, bytes int) {
+	srcLen := len(src)
+	if packetSize <= 0 {
+		packetSize = srcLen
+	}
+	for ; packets < len(msgs) && (bytes < srcLen || packets == 0); packets++ {
+		packetLen := min(packetSize, srcLen-bytes) // last packet may be smaller
+		if packetLen <= len(msgs[packets].Buffers[0]) {
+			// TODO(nickkhyl): avoid the copy? We could transfer ownership of the underlying
+			// buffer to the reader until the next read or an explicit release.
+			msgs[packets].N = copy(msgs[packets].Buffers[0], src[bytes:bytes+packetLen])
+		} else {
+			msgs[packets].N = 0 // packet is too large; ignore it
+		}
+		msgs[packets].Addr = addr
+		bytes += packetLen
+	}
+	return packets, bytes
 }

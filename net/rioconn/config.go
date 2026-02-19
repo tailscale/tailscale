@@ -20,6 +20,11 @@ const (
 	// It should be smaller than or equal to the typical hardware offload size
 	// to avoid software fallback. Mellanox NICs typically support up to 64000.
 	defaultMaxUSOOffloadSize = 64000
+
+	// defaultMaxUROCoalesceSize is the default maximum coalesce size for URO.
+	// It should be greater than or equal to the typical hardware offload size
+	// to avoid software fallback. Mellanox NICs typically support up to 64000.
+	defaultMaxUROCoalesceSize = math.MaxUint16
 )
 
 // Config holds configuration for a RIO connection, independent of the transport protocol.
@@ -95,11 +100,17 @@ func (o TxConfig) MaxPayloadLen() uint16 {
 type UDPConfig struct {
 	Config
 	uso USOConfig
+	uro UROConfig
 }
 
 // USO returns the UDP segmentation offload (USO) configuration.
 func (o UDPConfig) USO() *USOConfig {
 	return &o.uso
+}
+
+// URO returns the UDP receive segment coalescing offload (URO) configuration.
+func (o UDPConfig) URO() *UROConfig {
+	return &o.uro
 }
 
 // USOConfig holds the  UDP segmentation offload (USO) configuration.
@@ -120,4 +131,24 @@ func (o USOConfig) MaxOffloadSize() uint16 {
 		return 0
 	}
 	return cmp.Or(o.maxOffloadSize, defaultMaxUSOOffloadSize)
+}
+
+// UROConfig holds the UDP receive segment coalescing offload (URO) configuration.
+type UROConfig struct {
+	enabled         bool
+	maxCoalesceSize uint16 // 0 means default (i.e., [defaultMaxUROCoalesceSize])
+}
+
+// Enabled reports whether URO is enabled.
+func (o UROConfig) Enabled() bool {
+	return o.enabled
+}
+
+// MaxCoalesceSize returns the maximum number of bytes from multiple packets
+// that can be coalesced into a single receive buffer.
+func (o UROConfig) MaxCoalesceSize() uint16 {
+	if !o.Enabled() {
+		return 0
+	}
+	return cmp.Or(o.maxCoalesceSize, defaultMaxUROCoalesceSize)
 }

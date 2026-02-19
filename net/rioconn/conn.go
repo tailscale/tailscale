@@ -384,3 +384,19 @@ func WSAIoctlIn[Input any](conn syscall.Conn, code uint32, in Input) error {
 	})
 	return cmp.Or(controlErr, err)
 }
+
+// SetSockOption sets a socket option on the connection's underlying socket
+// using the provided value. It is a type-safe shorthand for calling
+// [syscall.RawConn.Control] with a function that invokes
+// [windows.Setsockopt] with the appropriate arguments.
+func SetSockOption[T any](conn syscall.Conn, level int32, optname int32, value T) error {
+	rawConn, err := conn.SyscallConn()
+	if err != nil {
+		return err
+	}
+	controlErr := rawConn.Control(func(s uintptr) {
+		err = windows.Setsockopt(windows.Handle(s), level, optname,
+			(*byte)(unsafe.Pointer(&value)), int32(unsafe.Sizeof(value)))
+	})
+	return cmp.Or(controlErr, err)
+}

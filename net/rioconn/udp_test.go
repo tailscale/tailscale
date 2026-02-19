@@ -206,18 +206,21 @@ func FuzzUDPSendReceiveBatch(f *testing.F) {
 	packetSizes := []uint16{0, 1, 64, 1312, 9000, rioconn.MaxUDPPayloadIPv4}
 	numIterations := []uint16{1024}
 	uso := []bool{false, true}
+	uro := []bool{false, true}
 
 	for _, packetLen := range packetSizes {
 		for _, numIter := range numIterations {
 			for _, batchSize := range batchSizes {
 				for _, usoEnabled := range uso {
-					f.Add(packetLen, numIter, batchSize, batchSize, usoEnabled)
+					for _, uroEnabled := range uro {
+						f.Add(packetLen, numIter, batchSize, batchSize, usoEnabled, uroEnabled)
+					}
 				}
 			}
 		}
 	}
 
-	f.Fuzz(func(t *testing.T, packetLen, numIterations, sendBatchSize, receiveBatchSize uint16, usoEnabled bool) {
+	f.Fuzz(func(t *testing.T, packetLen, numIterations, sendBatchSize, receiveBatchSize uint16, usoEnabled, uroEnabled bool) {
 		network := "udp4"
 		maxPacketLen := uint16(rioconn.MaxUDPPayloadIPv4)
 
@@ -245,6 +248,7 @@ func FuzzUDPSendReceiveBatch(f *testing.F) {
 			[]rioconn.UDPOption{
 				rioconn.RxMemoryLimit(512 << 10),
 				rioconn.TxMemoryLimit(128 << 10),
+				rioconn.URO(uroEnabled),
 			},
 		)
 	})

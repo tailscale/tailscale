@@ -83,3 +83,10 @@ func USO(enabled bool) UDPOption {
 		opts.uso.enabled = enabled
 	})
 }
+
+// URO specifies whether UDP receive segment coalescing offload (URO) should be enabled.
+func URO(enabled bool) UDPOption {
+	return udpOption(func(opts *UDPConfig) {
+		opts.uro.enabled = enabled
+	})
+}

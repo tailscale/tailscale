@@ -25,17 +25,40 @@ import (
 // otherwise specified by the method.
 type udpRx struct {
 	udpNx
+	useURO bool // whether URO is enabled
 	// pendingResultIdx is the index in [udpNx.results]
 	// of the next pending result to process.
 	pendingResultIdx int
+	// pendingResultOffset is the offset into the pending result's data.
+	// It is used when the result contains coalesced packets and only
+	// part of the data has been processed and returned to the caller.
+	pendingResultOffset int
 }
 
 // init initializes the receive half of a [UDPConn] with the
 // specified underlying connection and options.
 func (rx *udpRx) init(conn *conn, options UDPConfig) error {
-	// Without URO, the data buffer for each receive request only needs
-	// to hold a single packet's payload.
-	dataSize := min(options.Rx().MaxPayloadLen(), MaxUDPPayload)
+	var dataSize uint16
+	if uro := options.URO(); uro.Enabled() {
+		// When URO is enabled, the data buffer for each receive request
+		// must be large enough to hold multiple coalesced packets up
+		// to the maximum coalescing size, or a single packet up to
+		// the maximum payload size, whichever is larger.
+		dataSize = max(uro.MaxCoalesceSize(), options.Rx().MaxPayloadLen())
+		maxCoalesceSize := uint32(uro.MaxCoalesceSize())
+		err := SetSockOption(conn, windows.IPPROTO_UDP,
+			windows.UDP_RECV_MAX_COALESCED_SIZE,
+			maxCoalesceSize,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to enable URO: %w", err)
+		}
+		rx.useURO = true
+	} else {
+		// Otherwise, the data buffer for each receive request only needs
+		// to hold a single packet's payload.
+		dataSize = min(options.Rx().MaxPayloadLen(), MaxUDPPayload)
+	}
 	if err := rx.udpNx.init(conn, dataSize, options.Rx().MemoryLimit()); err != nil {
 		return fmt.Errorf("failed to initialize udpRx: %w", err)
 	}
@@ -124,6 +147,7 @@ func (rx *udpRx) awaitCompletionsLocked() error {
 
 	rx.results = rx.results[:cap(rx.results)]
 	rx.pendingResultIdx = 0
+	rx.pendingResultOffset = 0
 
 	var count uint32
 	for {
@@ -172,6 +196,7 @@ func (rx *udpRx) processCompletionsLocked(msgs []ipv6.Message) (n int, err error
 		r, err := req.CompleteReceive(res.Status, res.BytesTransferred)
 		if err != nil {
 			rx.pendingResultIdx++
+			rx.pendingResultOffset = 0
 			if err == windows.WSAEMSGSIZE {
 				// The packet is larger than [RxConfig.MaxPayloadLen].
 				// Skip it and try to process the next one, if any.
@@ -189,16 +214,22 @@ func (rx *udpRx) processCompletionsLocked(msgs []ipv6.Message) (n int, err error
 			return n, fmt.Errorf("invalid remote address: %w", err)
 		}
 
-		if r.Len() <= len(msgs[n].Buffers[0]) {
-			// TODO(nickkhyl): avoid the copy? We could transfer ownership of the underlying
-			// buffer to the reader until the next read or an explicit release.
-			msgs[n].N = copy(msgs[n].Buffers[0], r.Bytes())
-		} else {
-			msgs[n].N = 0 // packet is too large; ignore it
+		var packetSize uint32
+		if rx.useURO {
+			// When URO is enabled, the result may contain multiple coalesced packets,
+			// so we need to get the size of the first packet to know how to split them.
+			packetSize = r.ControlMessages().GetUInt32(windows.IPPROTO_UDP, windows.UDP_COALESCED_INFO)
 		}
-		msgs[n].Addr = udpAddr
-		rx.pendingResultIdx++
-		n++
+		packetsProcessed, bytesProcessed := splitCoalescedPackets(
+			udpAddr, r.Bytes()[rx.pendingResultOffset:],
+			int(packetSize), msgs[n:],
+		)
+		rx.pendingResultOffset += bytesProcessed
+		if rx.pendingResultOffset >= r.Len() {
+			rx.pendingResultIdx++
+			rx.pendingResultOffset = 0
+		}
+		n += packetsProcessed
 	}
 	return n, nil
 }
