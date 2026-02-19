@@ -10,6 +10,8 @@ import (
 	"net/netip"
 	"testing"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestUnsafeMapRequest(t *testing.T) {
@@ -276,6 +278,128 @@ func TestRequestReader(t *testing.T) {
 	}
 	if gotAddrPort != addrPort {
 		t.Errorf("requestReader.RemoteAddrPort: got %v; want %v", gotAddrPort, addrPort)
+	}
+}
+
+func TestRequestCompleteSend(t *testing.T) {
+	tests := []struct {
+		name          string
+		payloadLength int
+		bytesWritten  uint32
+		status        int32
+		wantErr       bool
+	}{
+		{
+			name:         "empty/success",
+			bytesWritten: 0,
+			status:       0,
+		},
+		{
+			name:          "non-empty/success",
+			payloadLength: 100,
+			bytesWritten:  100,
+			status:        0,
+		},
+		{
+			name:          "non-empty/partial-write",
+			payloadLength: 100,
+			bytesWritten:  50,
+			status:        0,
+			wantErr:       true,
+		},
+		{
+			name:          "non-empty/overflow-write",
+			payloadLength: 100,
+			bytesWritten:  150,
+			status:        0,
+			wantErr:       true,
+		},
+		{
+			name:          "non-empty/error",
+			payloadLength: 100,
+			bytesWritten:  0,
+			status:        int32(windows.ERROR_GEN_FAILURE),
+			wantErr:       true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := makeRequest(t, tt.payloadLength)
+			req.Writer().Write(bytes.Repeat([]byte{'x'}, tt.payloadLength))
+
+			err := req.CompleteSend(tt.status, tt.bytesWritten)
+			if tt.wantErr && err == nil {
+				t.Error("request.CompleteSend: expected error; got nil")
+			} else if !tt.wantErr && err != nil {
+				t.Errorf("request.CompleteSend: unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestRequestCompleteReceive(t *testing.T) {
+	tests := []struct {
+		name      string
+		data      []byte
+		bytesRead uint32
+		status    int32
+		wantErr   bool
+		wantBytes []byte
+	}{
+		{
+			name:      "empty/success",
+			data:      nil,
+			bytesRead: 0,
+			wantBytes: nil,
+		},
+		{
+			name:      "non-empty/success/full",
+			data:      []byte("Hello World"),
+			bytesRead: 11,
+			wantBytes: []byte("Hello World"),
+		},
+		{
+			name: "non-empty/success/partial",
+			data: []byte("Hello World"),
+			// Simulate a partial read by reporting fewer bytes
+			// that the request's data buffer length.
+			bytesRead: 5,
+			wantErr:   false,
+			wantBytes: []byte("Hello"),
+		},
+		{
+			name:      "non-empty/overflow-read",
+			data:      []byte("Hello World"),
+			bytesRead: 20, // more than the data buffer can hold
+			wantErr:   true,
+		},
+		{
+			name:      "non-empty/error",
+			data:      []byte("Hello World"),
+			bytesRead: 0,
+			status:    int32(windows.ERROR_GEN_FAILURE),
+			wantErr:   true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := makeRequest(t, len(tt.data))
+			copy(req.data[:cap(req.data)], tt.data)
+
+			r, err := req.CompleteReceive(tt.status, tt.bytesRead)
+			if tt.wantErr && err == nil {
+				t.Error("request.CompleteReceive: expected error; got nil")
+			} else if !tt.wantErr && err != nil {
+				t.Errorf("request.CompleteReceive: unexpected error: %v", err)
+			}
+			if err != nil {
+				return
+			}
+
+			if !bytes.Equal(r.Bytes(), tt.wantBytes) {
+				t.Errorf("requestReader.Bytes: got %q; want %q", r.Bytes(), tt.wantBytes)
+			}
+		})
 	}
 }
 

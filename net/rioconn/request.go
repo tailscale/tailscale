@@ -12,6 +12,7 @@ import (
 	"unsafe"
 
 	"github.com/tailscale/wireguard-go/conn/winrio"
+	"golang.org/x/sys/windows"
 )
 
 // request represents a portion of a RIO-registered memory buffer used for
@@ -83,6 +84,82 @@ func (r *request) Writer() *requestWriter {
 // Reader returns a [requestReader] for the request.
 func (r *request) Reader() *requestReader {
 	return (*requestReader)(r)
+}
+
+// PostSend posts the request as a send operation to the given RIO request queue
+// with the specified flags.
+func (r *request) PostSend(rq winrio.Rq, flags uint32) error {
+	data := winrio.Buffer{
+		Id:     r.buffID,
+		Length: uint32(len(r.data)),
+		Offset: uint32(uintptr(unsafe.Pointer(unsafe.SliceData(r.data))) - r.buffBase),
+	}
+	remoteAddr := r.remoteAddrDesc()
+	return winrio.SendEx(rq, &data, 1, nil, &remoteAddr, nil, nil, flags, uintptr(unsafe.Pointer(r)))
+}
+
+// PostReceive posts the request as a receive operation to the given RIO request queue
+// with the specified flags.
+func (r *request) PostReceive(rq winrio.Rq, flags uint32) error {
+	r.data = r.data[:0]
+	data := winrio.Buffer{
+		Id:     r.buffID,
+		Length: uint32(cap(r.data)),
+		Offset: uint32(uintptr(unsafe.Pointer(unsafe.SliceData(r.data))) - r.buffBase),
+	}
+	remoteAddress := r.remoteAddrDesc()
+	return winrio.ReceiveEx(rq, &data, 1, nil, &remoteAddress, nil,
+		nil, flags, uintptr(unsafe.Pointer(r)))
+}
+
+// CompleteSend finalizes a send request.
+//
+// It validates the completion status and the number of bytes written,
+// returning an error if the status indicates a failure, or if the number
+// of bytes written does not match the length of the request's data buffer.
+func (r *request) CompleteSend(status int32, bytesWritten uint32) error {
+	expected := len(r.data)
+	if status != 0 {
+		return windows.Errno(status)
+	}
+	if uint64(bytesWritten) != uint64(expected) {
+		return fmt.Errorf(
+			"bytes written (%d) does not match data buffer length (%d)",
+			bytesWritten,
+			expected,
+		)
+	}
+	return nil
+}
+
+// CompleteReceive finalizes a receive request.
+//
+// It validates the completion status and the number of bytes read
+// returning an error if the status indicates a failure, or if the number
+// of bytes read exceeds the capacity of the request's data buffer.
+//
+// On success, it returns a reader view of the request.
+func (r *request) CompleteReceive(status int32, bytesRead uint32) (*requestReader, error) {
+	if status != 0 {
+		return nil, windows.Errno(status)
+	}
+	if uint64(bytesRead) > uint64(cap(r.data)) {
+		return nil, fmt.Errorf(
+			"bytes read (%d) exceeds data buffer capacity (%d)",
+			bytesRead,
+			cap(r.data),
+		)
+	}
+	r.data = r.data[:bytesRead]
+	return r.Reader(), nil
+}
+
+func (r *request) remoteAddrDesc() winrio.Buffer {
+	return winrio.Buffer{
+		Id:     r.buffID,
+		Length: uint32(unsafe.Sizeof(r.raddr)),
+		Offset: uint32(uintptr(unsafe.Pointer(&r.raddr)) - r.buffBase),
+	}
 }
 
 // Reset prepares the request for reuse by resetting its state.
