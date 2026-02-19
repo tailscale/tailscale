@@ -15,7 +15,7 @@ func TestConfigEqual(t *testing.T) {
 	testedFields := []string{
 		"LocalAddrs", "Routes", "LocalRoutes", "NewMTU",
 		"SubnetRoutes", "SNATSubnetRoutes", "StatefulFiltering",
-		"NetfilterMode", "NetfilterKind",
+		"NetfilterMode", "NetfilterKind", "CGNATRules",
 	}
 	configType := reflect.TypeFor[Config]()
 	configFields := []string{}
@@ -146,6 +146,16 @@ func TestConfigEqual(t *testing.T) {
 			&Config{NewMTU: 1280},
 			&Config{NewMTU: 0},
 			false,
+		},
+		{
+			&Config{CGNATRules: []CGNATRule{{Prefix: netip.MustParsePrefix("100.64.0.0/10"), Verdict: CGNATRuleVerdictDrop, Chain: CGNATRuleChainBoth}}},
+			&Config{CGNATRules: []CGNATRule{{Prefix: netip.MustParsePrefix("100.64.0.0/10"), Verdict: CGNATRuleVerdictAccept, Chain: CGNATRuleChainBoth}}},
+			false,
+		},
+		{
+			&Config{CGNATRules: []CGNATRule{{Prefix: netip.MustParsePrefix("100.100.0.0/24"), Verdict: CGNATRuleVerdictAccept, Chain: CGNATRuleChainInput}}},
+			&Config{CGNATRules: []CGNATRule{{Prefix: netip.MustParsePrefix("100.100.0.0/24"), Verdict: CGNATRuleVerdictAccept, Chain: CGNATRuleChainInput}}},
+			true,
 		},
 	}
 	for i, tt := range tests {
