@@ -63,7 +63,9 @@ func (f *FakeNetfilterRunner) HasIPV6NAT() bool {
 	return true
 }
 
-func (f *FakeNetfilterRunner) AddBase(tunname string) error              { return nil }
+func (f *FakeNetfilterRunner) AddBase(tunname string, cgnatRules []CGNATRule) error {
+	return nil
+}
 func (f *FakeNetfilterRunner) DelBase() error                            { return nil }
 func (f *FakeNetfilterRunner) AddChains() error                          { return nil }
 func (f *FakeNetfilterRunner) DelChains() error                          { return nil }

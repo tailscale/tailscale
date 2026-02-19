@@ -7,10 +7,8 @@ package linuxfw
 
 import (
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"net"
 	"net/netip"
 	"reflect"
 	"strings"
@@ -500,7 +498,7 @@ type NetfilterRunner interface {
 	DelChains() error
 
 	// AddBase adds rules reused by different other rules.
-	AddBase(tunname string) error
+	AddBase(tunname string, cgnatRules []CGNATRule) error
 
 	// DelBase removes rules added by AddBase.
 	DelBase() error
@@ -1145,6 +1143,17 @@ func maskof(pfx netip.Prefix) []byte {
 	return mask
 }
 
+func nftVerdictFromCGNATVerdict(v CGNATRuleVerdict) (expr.VerdictKind, bool) {
+	switch v {
+	case CGNATRuleVerdictDrop:
+		return expr.VerdictDrop, true
+	case CGNATRuleVerdictAccept:
+		return expr.VerdictAccept, true
+	default:
+		return 0, false
+	}
+}
+
 // createRangeRule creates a rule that matches packets with source IP from the give
 // range (like CGNAT range or ChromeOSVM range) and the interface is not the tunname,
 // and makes the given decision. Only IPv4 is supported.
@@ -1208,10 +1217,14 @@ func addReturnChromeOSVMRangeRule(c *nftables.Conn, table *nftables.Table, chain
 	return nil
 }
 
-// addDropCGNATRangeRule adds a rule to drop if the source IP is in the
-// CGNAT range.
-func addDropCGNATRangeRule(c *nftables.Conn, table *nftables.Table, chain *nftables.Chain, tunname string) error {
-	rule, err := createRangeRule(table, chain, tunname, tsaddr.CGNATRange(), expr.VerdictDrop)
+// addCGNATRangeRule adds a rule to match packets from a configured CGNAT source
+// prefix on ts-input.
+func addCGNATRangeRule(c *nftables.Conn, table *nftables.Table, chain *nftables.Chain, tunname string, cgnatRule CGNATRule) error {
+	verdict, ok := nftVerdictFromCGNATVerdict(cgnatRule.Verdict)
+	if !ok {
+		return fmt.Errorf("unsupported CGNAT rule verdict %q", cgnatRule.Verdict)
+	}
+	rule, err := createRangeRule(table, chain, tunname, cgnatRule.Prefix, verdict)
 	if err != nil {
 		return fmt.Errorf("create rule: %w", err)
 	}
@@ -1273,18 +1286,13 @@ func addSetSubnetRouteMarkRule(c *nftables.Conn, table *nftables.Table, chain *n
 	return nil
 }
 
-// createDropOutgoingPacketFromCGNATRangeRuleWithTunname creates a rule to drop
-// outgoing packets from the CGNAT range.
-func createDropOutgoingPacketFromCGNATRangeRuleWithTunname(table *nftables.Table, chain *nftables.Chain, tunname string) (*nftables.Rule, error) {
-	_, ipNet, err := net.ParseCIDR(tsaddr.CGNATRange().String())
-	if err != nil {
-		return nil, fmt.Errorf("parse cidr: %v", err)
+// createOutgoingPacketFromCGNATRangeRuleWithTunname creates a rule to match
+// outgoing packets from a configured CGNAT source prefix on ts-forward.
+func createOutgoingPacketFromCGNATRangeRuleWithTunname(table *nftables.Table, chain *nftables.Chain, tunname string, cgnatRule CGNATRule) (*nftables.Rule, error) {
+	verdict, ok := nftVerdictFromCGNATVerdict(cgnatRule.Verdict)
+	if !ok {
+		return nil, fmt.Errorf("unsupported CGNAT rule verdict %q", cgnatRule.Verdict)
 	}
-	mask, err := hex.DecodeString(ipNet.Mask.String())
-	if err != nil {
-		return nil, fmt.Errorf("decode mask: %v", err)
-	}
-	netip := ipNet.IP.Mask(ipNet.Mask).To4()
 	saddrExpr, err := newLoadSaddrExpr(nftables.TableFamilyIPv4, 1)
 	if err != nil {
 		return nil, fmt.Errorf("newLoadSaddrExpr: %v", err)
@@ -1304,27 +1312,36 @@ func createDropOutgoingPacketFromCGNATRangeRuleWithTunname(table *nftables.Table
 				SourceRegister: 1,
 				DestRegister:   1,
 				Len:            4,
-				Mask:           mask,
+				Mask:           maskof(cgnatRule.Prefix),
 				Xor:            []byte{0x00, 0x00, 0x00, 0x00},
 			},
 			&expr.Cmp{
 				Op:       expr.CmpOpEq,
 				Register: 1,
-				Data:     netip,
+				Data:     cgnatRule.Prefix.Addr().AsSlice(),
 			},
 			&expr.Counter{},
 			&expr.Verdict{
-				Kind: expr.VerdictDrop,
+				Kind: verdict,
 			},
 		},
 	}
 	return rule, nil
 }
 
-// addDropOutgoingPacketFromCGNATRangeRuleWithTunname adds a rule to drop
-// outgoing packets from the CGNAT range.
-func addDropOutgoingPacketFromCGNATRangeRuleWithTunname(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, tunname string) error {
-	rule, err := createDropOutgoingPacketFromCGNATRangeRuleWithTunname(table, chain, tunname)
+// createDropOutgoingPacketFromCGNATRangeRuleWithTunname creates a legacy DROP
+// rule for the provided prefix.
+func createDropOutgoingPacketFromCGNATRangeRuleWithTunname(table *nftables.Table, chain *nftables.Chain, tunname string, pfx netip.Prefix) (*nftables.Rule, error) {
+	return createOutgoingPacketFromCGNATRangeRuleWithTunname(table, chain, tunname, CGNATRule{
+		Prefix:  pfx,
+		Verdict: CGNATRuleVerdictDrop,
+		Chain:   CGNATRuleChainBoth,
+	})
+}
+
+// addOutgoingPacketFromCGNATRangeRuleWithTunname adds a ts-forward CGNAT rule.
+func addOutgoingPacketFromCGNATRangeRuleWithTunname(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, tunname string, cgnatRule CGNATRule) error {
+	rule, err := createOutgoingPacketFromCGNATRangeRuleWithTunname(table, chain, tunname, cgnatRule)
 	if err != nil {
 		return fmt.Errorf("create rule: %w", err)
 	}
@@ -1522,8 +1539,8 @@ func addAcceptIncomingPacketRule(conn *nftables.Conn, table *nftables.Table, cha
 }
 
 // AddBase adds some basic processing rules.
-func (n *nftablesRunner) AddBase(tunname string) error {
-	if err := n.addBase4(tunname); err != nil {
+func (n *nftablesRunner) AddBase(tunname string, cgnatRules []CGNATRule) error {
+	if err := n.addBase4(tunname, cgnatRules); err != nil {
 		return fmt.Errorf("add base v4: %w", err)
 	}
 	if n.HasIPV6() {
@@ -1535,7 +1552,7 @@ func (n *nftablesRunner) AddBase(tunname string) error {
 }
 
 // addBase4 adds some basic IPv4 processing rules.
-func (n *nftablesRunner) addBase4(tunname string) error {
+func (n *nftablesRunner) addBase4(tunname string, cgnatRules []CGNATRule) error {
 	conn := n.conn
 
 	inputChain, err := getChainFromTable(conn, n.nft4.Filter, chainNameInput)
@@ -1545,8 +1562,13 @@ func (n *nftablesRunner) addBase4(tunname string) error {
 	if err = addReturnChromeOSVMRangeRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
 		return fmt.Errorf("add return chromeos vm range rule v4: %w", err)
 	}
-	if err = addDropCGNATRangeRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
-		return fmt.Errorf("add drop cgnat range rule v4: %w", err)
+	for _, cgnatRule := range cgnatRulesOrDefault(cgnatRules) {
+		if !cgnatRuleAppliesToInput(cgnatRule.Chain) {
+			continue
+		}
+		if err = addCGNATRangeRule(conn, n.nft4.Filter, inputChain, tunname, cgnatRule); err != nil {
+			return fmt.Errorf("add cgnat ts-input rule v4: %w", err)
+		}
 	}
 	if err = addAcceptIncomingPacketRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
 		return fmt.Errorf("add accept incoming packet rule v4: %w", err)
@@ -1565,8 +1587,13 @@ func (n *nftablesRunner) addBase4(tunname string) error {
 		return fmt.Errorf("add match subnet route mark rule v4: %w", err)
 	}
 
-	if err = addDropOutgoingPacketFromCGNATRangeRuleWithTunname(conn, n.nft4.Filter, forwardChain, tunname); err != nil {
-		return fmt.Errorf("add drop outgoing packet from cgnat range rule v4: %w", err)
+	for _, cgnatRule := range cgnatRulesOrDefault(cgnatRules) {
+		if !cgnatRuleAppliesToForward(cgnatRule.Chain) {
+			continue
+		}
+		if err = addOutgoingPacketFromCGNATRangeRuleWithTunname(conn, n.nft4.Filter, forwardChain, tunname, cgnatRule); err != nil {
+			return fmt.Errorf("add cgnat ts-forward rule v4: %w", err)
+		}
 	}
 
 	if err = addAcceptOutgoingPacketRule(conn, n.nft4.Filter, forwardChain, tunname); err != nil {
