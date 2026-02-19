@@ -425,7 +425,14 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			defaultRoutes = append(defaultRoutes, &dnstype.Resolver{Addr: ip.String()})
 		}
 		rcfg.Routes["."] = defaultRoutes
-		ocfg.SearchDomains = append(ocfg.SearchDomains, baseCfg.SearchDomains...)
+		// Append base config search domains, but only if not already present.
+		// This prevents duplicates when GetBaseConfig() reads back domains that
+		// Tailscale itself previously wrote to resolv.conf.
+		for _, domain := range baseCfg.SearchDomains {
+			if !slices.Contains(ocfg.SearchDomains, domain) {
+				ocfg.SearchDomains = append(ocfg.SearchDomains, domain)
+			}
+		}
 	}
 
 	return rcfg, ocfg, nil
