@@ -75,13 +75,13 @@ func TestCreateBindStr(t *testing.T) {
 			name:            "badAddr-noPort-noEnv-1",
 			cliAddress:      "678.678.678.678",
 			cliAddressIsSet: true,
-			wantError:       `invalid bind address: "678.678.678.678" (ParseAddr("678.678.678.678"): IPv4 field has value >255)`,
+			wantError:       `invalid bind address: "678.678.678.678"`,
 		},
 		{
 			name:            "badAddr-noPort-noEnv-2",
 			cliAddress:      "lorem ipsum",
 			cliAddressIsSet: true,
-			wantError:       `invalid bind address: "lorem ipsum" (ParseAddr("lorem ipsum"): unable to parse IP)`,
+			wantError:       `invalid bind address: "lorem ipsum"`,
 		},
 		{
 			name:         "noAddr-badPort-noEnv",
