@@ -103,9 +103,19 @@ func main() {
 		}
 		stats, err := fetchStats(httpClient(srvHost, *srvHostDial), *srvURL, tk)
 		if err != nil {
-			log.Fatalf("error fetching gocached stats: %v", err)
+			// Errors that are not due to misconfiguration are non-fatal so we
+			// don't fail builds if e.g. cigocached is down.
+			//
+			// Print error as JSON so it can still be piped through jq.
+			statsErr := map[string]any{
+				"error": fmt.Sprintf("fetching gocached stats: %v", err),
+			}
+			b, _ := jsonv1.Marshal(statsErr)
+			fmt.Println(string(b))
+		} else {
+			fmt.Println(stats)
 		}
-		fmt.Println(stats)
+
 		return
 	}
 
