@@ -313,6 +313,7 @@ func New(bus *eventbus.Bus, logf logger.Logf) (*Monitor, error) {
 		stop:     make(chan struct{}),
 		lastWall: wallTime(),
 	}
+	syncs.RegisterMutex(&m.mu, "netmon.Monitor.mu")
 	m.changed = eventbus.Publish[ChangeDelta](m.b)
 	st, err := m.interfaceStateUncached()
 	if err != nil {

@@ -11,10 +11,10 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 )
 
@@ -147,7 +147,7 @@ func (d *Debugger) SubscribeTypes(client *Client) []reflect.Type {
 
 // A hook collects hook functions that can be run as a group.
 type hook[T any] struct {
-	syncs.Mutex
+	sync.Mutex
 	fns []hookFn[T]
 }
 

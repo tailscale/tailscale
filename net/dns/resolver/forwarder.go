@@ -347,6 +347,7 @@ func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkS
 		controlKnobs: knobs,
 		verboseFwd:   verboseDNSForward(),
 	}
+	syncs.RegisterMutex(&f.mu, "resolver.forwarder.mu")
 	f.ctx, f.ctxCancel = context.WithCancel(context.Background())
 	return f
 }

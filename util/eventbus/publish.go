@@ -5,6 +5,8 @@ package eventbus
 
 import (
 	"reflect"
+
+	"tailscale.com/syncs"
 )
 
 // publisher is a uniformly typed wrapper around Publisher[T], so that
@@ -21,7 +23,9 @@ type Publisher[T any] struct {
 }
 
 func newPublisher[T any](c *Client) *Publisher[T] {
-	return &Publisher[T]{client: c}
+	p := &Publisher[T]{client: c}
+	syncs.RegisterMutex(&p.stop.mu, "eventbus.Publisher.stop.mu")
+	return p
 }
 
 // Close closes the publisher.

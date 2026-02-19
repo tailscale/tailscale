@@ -19,6 +19,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/packet"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
@@ -117,9 +118,13 @@ func (e *watchdogEngine) watchdogErr(event watchdogEvent, fn func() error) error
 	}()
 
 	errCh := make(chan error)
-	go func() {
-		errCh <- fn()
-	}()
+	if syncs.MutexDebugging {
+		syncs.ForkJoinGo(func() { errCh <- fn() })
+	} else {
+		// Don't use ForkJoinGo to avoid the loss of "created by" in
+		// stack traces.
+		go func() { errCh <- fn() }()
+	}
 	t := time.NewTimer(e.maxWait)
 	select {
 	case err := <-errCh:

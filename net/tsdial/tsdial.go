@@ -75,6 +75,8 @@ type Dialer struct {
 	// If nil, it's not used.
 	NetstackDialUDP func(context.Context, netip.AddrPort) (net.Conn, error)
 
+	registerMutexOnce sync.Once
+
 	peerClientOnce sync.Once
 	peerClient     *http.Client
 
@@ -142,6 +144,7 @@ func (d *Dialer) SetExitDNSDoH(doh string) {
 	if !buildfeatures.HasUseExitNode {
 		return
 	}
+	d.registerMutexOnce.Do(d.registerMutex)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.exitDNSDoHBase == doh {
@@ -193,9 +196,15 @@ func (d *Dialer) Close() error {
 	return nil
 }
 
+func (d *Dialer) registerMutex() {
+	syncs.RegisterMutex(&d.mu, "tsdial.Dialer.mu")
+}
+
 // SetNetMon sets d's network monitor to netMon.
 // It is a no-op to call SetNetMon with the same netMon as the current one.
 func (d *Dialer) SetNetMon(netMon *netmon.Monitor) {
+	d.registerMutexOnce.Do(d.registerMutex)
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.netMon == netMon {
@@ -220,12 +229,14 @@ func (d *Dialer) SetNetMon(netMon *netmon.Monitor) {
 // NetMon returns the Dialer's network monitor.
 // It returns nil if SetNetMon has not been called.
 func (d *Dialer) NetMon() *netmon.Monitor {
+	d.registerMutexOnce.Do(d.registerMutex)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.netMon
 }
 
 func (d *Dialer) SetBus(bus *eventbus.Bus) {
+	d.registerMutexOnce.Do(d.registerMutex)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.bus == bus {

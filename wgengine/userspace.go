@@ -17,7 +17,6 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/tailscale/wireguard-go/device"
@@ -131,7 +130,7 @@ type userspaceEngine struct {
 	// is being routed over Tailscale.
 	isDNSIPOverTailscale syncs.AtomicValue[func(netip.Addr) bool]
 
-	wgLock              sync.Mutex // serializes all wgdev operations; see lock order comment below
+	wgLock              syncs.Mutex // serializes all wgdev operations; see lock order comment below
 	lastCfgFull         wgcfg.Config
 	lastNMinPeers       int
 	lastRouter          *router.Config
@@ -147,7 +146,7 @@ type userspaceEngine struct {
 	reconfigureVPN      func() error      // or nil
 	conn25PacketHooks   Conn25PacketHooks // or nil
 
-	mu             sync.Mutex         // guards following; see lock order comment below
+	mu             syncs.Mutex        // guards following; see lock order comment below
 	netMap         *netmap.NetworkMap // or nil
 	closing        bool               // Close was called (even if we're still closing)
 	statusCallback StatusCallback
@@ -381,6 +380,9 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		health:            conf.HealthTracker,
 		conn25PacketHooks: conf.Conn25PacketHooks,
 	}
+	syncs.RegisterMutex(&e.mu, "wgengine.userspaceEngine.mu")
+	syncs.RegisterMutex(&e.wgLock, "wgengine.userspaceEngine.wgLock")
+	e.networkLogger.RegisterMutex()
 
 	if e.birdClient != nil {
 		// Disable the protocol at start time.

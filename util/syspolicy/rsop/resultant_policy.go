@@ -96,6 +96,8 @@ func newPolicy(scope setting.PolicyScope, sources ...*source.Source) (_ *Policy,
 		closeCh:  make(chan struct{}),
 		doneCh:   make(chan struct{}),
 	}
+	syncs.RegisterMutex(&p.mu, "syspolicy/rsop.Policy.mu")
+
 	if _, err := p.reloadNow(false); err != nil {
 		p.Close()
 		return nil, err

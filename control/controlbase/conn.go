@@ -61,7 +61,7 @@ type rxState struct {
 
 // txState is all the Conn state that Write uses.
 type txState struct {
-	sync.Mutex
+	syncs.Mutex
 	cipher cipher.AEAD
 	nonce  nonce
 	err    error // records the first partial write error for all future calls

@@ -55,6 +55,11 @@ var (
 	regInt = map[string]*int{}
 )
 
+var _ = func() bool {
+	syncs.RegisterMutex(&mu, "envknob.mu")
+	return true
+}()
+
 func noteEnv(k, v string) {
 	mu.Lock()
 	defer mu.Unlock()

@@ -329,6 +329,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		dnsCache:              dnsCache,
 		dialPlan:              opts.DialPlan,
 	}
+	syncs.RegisterMutex(&c.mu, "controlclient.Direct.mu")
 	c.discoPubKey = opts.DiscoPublicKey
 	c.closedCtx, c.closeCtx = context.WithCancel(context.Background())
 
