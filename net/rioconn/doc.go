@@ -3,6 +3,9 @@
 
 //go:build windows
 
+// Package rioconn provides [UDPConn], a UDP socket implementation
+// that uses the Windows RIO API extensions and supports batched I/O
+// for improved performance on high-throughput UDP workloads.
 package rioconn
 
 import (

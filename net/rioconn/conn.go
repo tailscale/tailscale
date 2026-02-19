@@ -6,6 +6,7 @@
 package rioconn
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"iter"
@@ -13,6 +14,7 @@ import (
 	"net/netip"
 	"sync"
 	"syscall"
+	"unsafe"
 
 	"github.com/tailscale/wireguard-go/conn/winrio"
 	"golang.org/x/sys/windows"
@@ -362,4 +364,23 @@ func rioSocket(family, sotype, proto int32) (windows.Handle, error) {
 		windows.WSA_FLAG_NO_HANDLE_INHERIT |
 		windows.WSA_FLAG_OVERLAPPED
 	return windows.WSASocket(family, sotype, proto, nil, 0, rioWSAFlags)
+}
+
+// WSAIoctlIn issues an ioctl command with the provided code and input value
+// on the connection's underlying socket. It is a type-safe shorthand for calling
+// [syscall.RawConn.Control] with a function that invokes [windows.WSAIoctl]
+// with the appropriate arguments, without any output buffer.
+func WSAIoctlIn[Input any](conn syscall.Conn, code uint32, in Input) error {
+	rawConn, err := conn.SyscallConn()
+	if err != nil {
+		return err
+	}
+	controlErr := rawConn.Control(func(s uintptr) {
+		ret := uint32(0)
+		err = windows.WSAIoctl(windows.Handle(s), code,
+			(*byte)(unsafe.Pointer(&in)), uint32(unsafe.Sizeof(in)),
+			nil, 0, &ret, nil, 0,
+		)
+	})
+	return cmp.Or(controlErr, err)
 }
