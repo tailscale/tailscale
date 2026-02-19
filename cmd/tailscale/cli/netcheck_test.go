@@ -12,10 +12,10 @@ func TestCreateBindStr(t *testing.T) {
 	// as inputs to create netcheck bind string.
 	tests := []struct {
 		name            string
-		CLIAddress      string
-		CLIAddressIsSet bool
-		CLIPort         int
-		CLIPortIsSet    bool
+		cliAddress      string
+		cliAddressIsSet bool
+		cliPort         int
+		cliPortIsSet    bool
 		envBind         string
 		want            string
 		wantError       string
@@ -26,43 +26,43 @@ func TestCreateBindStr(t *testing.T) {
 		},
 		{
 			name:            "yesAddrv4-noPort-noEnv",
-			CLIAddress:      "100.123.123.123",
-			CLIAddressIsSet: true,
+			cliAddress:      "100.123.123.123",
+			cliAddressIsSet: true,
 			want:            "100.123.123.123:0",
 		},
 		{
 			name:            "yesAddrv6-noPort-noEnv",
-			CLIAddress:      "dead::beef",
-			CLIAddressIsSet: true,
+			cliAddress:      "dead::beef",
+			cliAddressIsSet: true,
 			want:            "[dead::beef]:0",
 		},
 		{
 			name:            "yesAddr-yesPort-noEnv",
-			CLIAddress:      "100.123.123.123",
-			CLIAddressIsSet: true,
-			CLIPort:         456,
-			CLIPortIsSet:    true,
+			cliAddress:      "100.123.123.123",
+			cliAddressIsSet: true,
+			cliPort:         456,
+			cliPortIsSet:    true,
 			want:            "100.123.123.123:456",
 		},
 		{
 			name:            "yesAddr-yesPort-yesEnv",
-			CLIAddress:      "100.123.123.123",
-			CLIAddressIsSet: true,
-			CLIPort:         456,
-			CLIPortIsSet:    true,
+			cliAddress:      "100.123.123.123",
+			cliAddressIsSet: true,
+			cliPort:         456,
+			cliPortIsSet:    true,
 			envBind:         "55.55.55.55:789",
 			want:            "100.123.123.123:456",
 		},
 		{
 			name:         "noAddr-yesPort-noEnv",
-			CLIPort:      456,
-			CLIPortIsSet: true,
+			cliPort:      456,
+			cliPortIsSet: true,
 			want:         ":456",
 		},
 		{
 			name:         "noAddr-yesPort-yesEnv",
-			CLIPort:      456,
-			CLIPortIsSet: true,
+			cliPort:      456,
+			cliPortIsSet: true,
 			envBind:      "55.55.55.55:789",
 			want:         ":456",
 		},
@@ -73,26 +73,26 @@ func TestCreateBindStr(t *testing.T) {
 		},
 		{
 			name:            "badAddr-noPort-noEnv-1",
-			CLIAddress:      "678.678.678.678",
-			CLIAddressIsSet: true,
+			cliAddress:      "678.678.678.678",
+			cliAddressIsSet: true,
 			wantError:       `invalid bind address: "678.678.678.678" (ParseAddr("678.678.678.678"): IPv4 field has value >255)`,
 		},
 		{
 			name:            "badAddr-noPort-noEnv-2",
-			CLIAddress:      "lorem ipsum",
-			CLIAddressIsSet: true,
+			cliAddress:      "lorem ipsum",
+			cliAddressIsSet: true,
 			wantError:       `invalid bind address: "lorem ipsum" (ParseAddr("lorem ipsum"): unable to parse IP)`,
 		},
 		{
 			name:         "noAddr-badPort-noEnv",
-			CLIPort:      -1,
-			CLIPortIsSet: true,
+			cliPort:      -1,
+			cliPortIsSet: true,
 			wantError:    "invalid bind port number: -1",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, gotErr := createNetcheckBindString(tt.CLIAddress, tt.CLIAddressIsSet, tt.CLIPort, tt.CLIPortIsSet, tt.envBind)
+			got, gotErr := createNetcheckBindString(tt.cliAddress, tt.cliAddressIsSet, tt.cliPort, tt.cliPortIsSet, tt.envBind)
 			var gotErrStr string
 			if gotErr != nil {
 				gotErrStr = gotErr.Error()

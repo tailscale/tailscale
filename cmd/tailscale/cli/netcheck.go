@@ -292,31 +292,31 @@ func prodDERPMap(ctx context.Context, httpc *http.Client) (*tailcfg.DERPMap, err
 
 // createNetcheckBindString determines the netcheck socket bind "address:port" string based
 // on the CLI args and environment variable values used to invoke the netcheck CLI.
-// Arguments CLIAddressIsSet and CLIPortIsSet explicitly indicate whether the
-// corresponding CLIAddress and CLIPort were set in CLI args, instead of relying
+// Arguments cliAddressIsSet and cliPortIsSet explicitly indicate whether the
+// corresponding cliAddress and cliPort were set in CLI args, instead of relying
 // on in-band sentinel values.
-func createNetcheckBindString(CLIAddress string, CLIAddressIsSet bool, CLIPort int, CLIPortIsSet bool, envBind string) (string, error) {
+func createNetcheckBindString(cliAddress string, cliAddressIsSet bool, cliPort int, cliPortIsSet bool, envBind string) (string, error) {
 	// Default to port number 0 but overwrite with a valid CLI value, if set.
 	var port uint16 = 0
-	if CLIPortIsSet {
+	if cliPortIsSet {
 		// 0 is valid, results in OS picking port.
-		if CLIPort >= 0 && CLIPort <= math.MaxUint16 {
-			port = uint16(CLIPort)
+		if cliPort >= 0 && cliPort <= math.MaxUint16 {
+			port = uint16(cliPort)
 		} else {
-			return "", fmt.Errorf("invalid bind port number: %d", CLIPort)
+			return "", fmt.Errorf("invalid bind port number: %d", cliPort)
 		}
 	}
 
 	// Use CLI address, if set.
-	if CLIAddressIsSet {
-		addr, err := netip.ParseAddr(CLIAddress)
+	if cliAddressIsSet {
+		addr, err := netip.ParseAddr(cliAddress)
 		if err != nil {
-			return "", fmt.Errorf("invalid bind address: %q (%v)", CLIAddress, err)
+			return "", fmt.Errorf("invalid bind address: %q (%v)", cliAddress, err)
 		}
 		return netip.AddrPortFrom(addr, port).String(), nil
 	} else {
 		// No CLI address set, but port is set.
-		if CLIPortIsSet {
+		if cliPortIsSet {
 			return fmt.Sprintf(":%d", port), nil
 		}
 	}
