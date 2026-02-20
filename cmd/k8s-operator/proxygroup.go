@@ -119,9 +119,11 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		return reconcile.Result{}, fmt.Errorf("failed to get tailscale.com ProxyGroup: %w", err)
 	}
 
+	var loginUrl string
 	tailscaleClient := r.tsClient
 	if pg.Spec.Tailnet != "" {
-		tc, err := clientForTailnet(ctx, r.Client, r.tsNamespace, pg.Spec.Tailnet)
+		var tc tsClient
+		tc, loginUrl, err = clientForTailnet(ctx, r.Client, r.tsNamespace, pg.Spec.Tailnet)
 		if err != nil {
 			oldPGStatus := pg.Status.DeepCopy()
 			nrr := &notReadyReason{
@@ -162,7 +164,8 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 
 	oldPGStatus := pg.Status.DeepCopy()
-	staticEndpoints, nrr, err := r.reconcilePG(ctx, tailscaleClient, pg, logger)
+	r.log.Infof("loginUrl %q specified in reconcile func", loginUrl)
+	staticEndpoints, nrr, err := r.reconcilePG(ctx, tailscaleClient, pg, loginUrl, logger)
 	return reconcile.Result{}, errors.Join(err, r.maybeUpdateStatus(ctx, logger, pg, oldPGStatus, nrr, staticEndpoints))
 }
 
@@ -170,7 +173,8 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 // for deletion. It is separated out from Reconcile to make a clear separation
 // between reconciling the ProxyGroup, and posting the status of its created
 // resources onto the ProxyGroup status field.
-func (r *ProxyGroupReconciler) reconcilePG(ctx context.Context, tailscaleClient tsClient, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) (map[string][]netip.AddrPort, *notReadyReason, error) {
+func (r *ProxyGroupReconciler) reconcilePG(ctx context.Context, tailscaleClient tsClient, pg *tsapi.ProxyGroup, loginUrl string, logger *zap.SugaredLogger) (map[string][]netip.AddrPort, *notReadyReason, error) {
+	r.log.Infof("loginUrl %q specified in reconcile PG", loginUrl)
 	if !slices.Contains(pg.Finalizers, FinalizerName) {
 		// This log line is printed exactly once during initial provisioning,
 		// because once the finalizer is in place this block gets skipped. So,
@@ -211,7 +215,7 @@ func (r *ProxyGroupReconciler) reconcilePG(ctx context.Context, tailscaleClient 
 		return notReady(reasonProxyGroupInvalid, fmt.Sprintf("invalid ProxyGroup spec: %v", err))
 	}
 
-	staticEndpoints, nrr, err := r.maybeProvision(ctx, tailscaleClient, pg, proxyClass)
+	staticEndpoints, nrr, err := r.maybeProvision(ctx, tailscaleClient, pg, loginUrl, proxyClass)
 	if err != nil {
 		return nil, nrr, err
 	}
@@ -297,7 +301,8 @@ func (r *ProxyGroupReconciler) validate(ctx context.Context, pg *tsapi.ProxyGrou
 	return errors.Join(errs...)
 }
 
-func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tailscaleClient tsClient, pg *tsapi.ProxyGroup, proxyClass *tsapi.ProxyClass) (map[string][]netip.AddrPort, *notReadyReason, error) {
+func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tailscaleClient tsClient, pg *tsapi.ProxyGroup, loginUrl string, proxyClass *tsapi.ProxyClass) (map[string][]netip.AddrPort, *notReadyReason, error) {
+	r.log.Infof("loginUrl %q specified in maybeProvision", loginUrl)
 	logger := r.logger(pg.Name)
 	r.mu.Lock()
 	r.ensureAddedToGaugeForProxyGroup(pg)
@@ -320,7 +325,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tailscaleClie
 		}
 	}
 
-	staticEndpoints, err := r.ensureConfigSecretsCreated(ctx, tailscaleClient, pg, proxyClass, svcToNodePorts)
+	staticEndpoints, err := r.ensureConfigSecretsCreated(ctx, tailscaleClient, pg, proxyClass, loginUrl, svcToNodePorts)
 	if err != nil {
 		var selectorErr *FindStaticEndpointErr
 		if errors.As(err, &selectorErr) {
@@ -737,6 +742,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 	tailscaleClient tsClient,
 	pg *tsapi.ProxyGroup,
 	proxyClass *tsapi.ProxyClass,
+	loginUrl string,
 	svcToNodePorts map[string]uint16,
 ) (endpoints map[string][]netip.AddrPort, err error) {
 	logger := r.logger(pg.Name)
@@ -750,6 +756,8 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 				OwnerReferences: pgOwnerReference(pg),
 			},
 		}
+
+		r.log.Infof("loginUrl populated as %q in ensure secrets", loginUrl)
 
 		var existingCfgSecret *corev1.Secret // unmodified copy of secret
 		if err = r.Get(ctx, client.ObjectKeyFromObject(cfgSecret), cfgSecret); err == nil {
@@ -874,6 +882,12 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 				cfg.ServerURL = &r.loginServer
 			}
 
+			if loginUrl != "" {
+				r.log.Infof("setting server url in config to %q", loginUrl)
+				cfg.ServerURL = ptr.To(loginUrl)
+				r.log.Infof("server url is now %q", *cfg.ServerURL)
+			}
+
 			if proxyClass != nil && proxyClass.Spec.TailscaleConfig != nil {
 				cfg.AcceptRoutes = opt.NewBool(proxyClass.Spec.TailscaleConfig.AcceptRoutes)
 			}
@@ -899,7 +913,10 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 				return nil, err
 			}
 
-			configs, err := pgTailscaledConfig(pg, proxyClass, i, authKey, endpoints[nodePortSvcName], existingAdvertiseServices, r.loginServer)
+			if r.loginServer != "" && loginUrl != "" {
+				loginUrl = r.loginServer
+			}
+			configs, err := pgTailscaledConfig(pg, proxyClass, i, authKey, endpoints[nodePortSvcName], existingAdvertiseServices, loginUrl)
 			if err != nil {
 				return nil, fmt.Errorf("error creating tailscaled config: %w", err)
 			}

@@ -99,9 +99,11 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 		return reconcile.Result{}, nil
 	}
 
+	var loginUrl string
 	tailscaleClient := r.tsClient
 	if tsr.Spec.Tailnet != "" {
-		tc, err := clientForTailnet(ctx, r.Client, r.tsNamespace, tsr.Spec.Tailnet)
+		var tc tsClient
+		tc, loginUrl, err = clientForTailnet(ctx, r.Client, r.tsNamespace, tsr.Spec.Tailnet)
 		if err != nil {
 			return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderTailnetUnavailable, err.Error())
 		}
@@ -149,7 +151,7 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 		return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderInvalid, message)
 	}
 
-	if err = r.maybeProvision(ctx, tailscaleClient, tsr); err != nil {
+	if err = r.maybeProvision(ctx, tailscaleClient, loginUrl, tsr); err != nil {
 		reason := reasonRecorderCreationFailed
 		message := fmt.Sprintf("failed creating Recorder: %s", err)
 		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
@@ -167,7 +169,7 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 	return setStatusReady(tsr, metav1.ConditionTrue, reasonRecorderCreated, reasonRecorderCreated)
 }
 
-func (r *RecorderReconciler) maybeProvision(ctx context.Context, tailscaleClient tsClient, tsr *tsapi.Recorder) error {
+func (r *RecorderReconciler) maybeProvision(ctx context.Context, tailscaleClient tsClient, loginUrl string, tsr *tsapi.Recorder) error {
 	logger := r.logger(tsr.Name)
 
 	r.mu.Lock()
@@ -175,7 +177,7 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tailscaleClient
 	gaugeRecorderResources.Set(int64(r.recorders.Len()))
 	r.mu.Unlock()
 
-	if err := r.ensureAuthSecretsCreated(ctx, tailscaleClient, tsr); err != nil {
+	if err := r.ensureAuthSecretsCreated(ctx, tailscaleClient, loginUrl, tsr); err != nil {
 		return fmt.Errorf("error creating secrets: %w", err)
 	}
 
@@ -437,7 +439,7 @@ func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Record
 	return true, nil
 }
 
-func (r *RecorderReconciler) ensureAuthSecretsCreated(ctx context.Context, tailscaleClient tsClient, tsr *tsapi.Recorder) error {
+func (r *RecorderReconciler) ensureAuthSecretsCreated(ctx context.Context, tailscaleClient tsClient, loginUrl string, tsr *tsapi.Recorder) error {
 	var replicas int32 = 1
 	if tsr.Spec.Replicas != nil {
 		replicas = *tsr.Spec.Replicas
@@ -470,7 +472,7 @@ func (r *RecorderReconciler) ensureAuthSecretsCreated(ctx context.Context, tails
 			return err
 		}
 
-		if err = r.Create(ctx, tsrAuthSecret(tsr, r.tsNamespace, authKey, replica)); err != nil {
+		if err = r.Create(ctx, tsrAuthSecret(tsr, r.tsNamespace, authKey, loginUrl, replica)); err != nil {
 			return err
 		}
 	}

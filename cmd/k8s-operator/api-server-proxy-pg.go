@@ -79,8 +79,9 @@ func (r *KubeAPIServerTSServiceReconciler) Reconcile(ctx context.Context, req re
 	logger = logger.With("Tailscale Service", serviceName)
 
 	tailscaleClient := r.tsClient
+	var loginUrl string
 	if pg.Spec.Tailnet != "" {
-		tailscaleClient, err = clientForTailnet(ctx, r.Client, r.tsNamespace, pg.Spec.Tailnet)
+		tailscaleClient, loginUrl, err = clientForTailnet(ctx, r.Client, r.tsNamespace, pg.Spec.Tailnet)
 		if err != nil {
 			return res, fmt.Errorf("failed to get tailscale client: %w", err)
 		}
@@ -96,7 +97,7 @@ func (r *KubeAPIServerTSServiceReconciler) Reconcile(ctx context.Context, req re
 		return res, err
 	}
 
-	err = r.maybeProvision(ctx, serviceName, pg, logger, tailscaleClient)
+	err = r.maybeProvision(ctx, serviceName, pg, logger, tailscaleClient, loginUrl)
 	if err != nil {
 		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
 			logger.Infof("optimistic lock error, retrying: %s", err)
@@ -112,7 +113,7 @@ func (r *KubeAPIServerTSServiceReconciler) Reconcile(ctx context.Context, req re
 // and is up to date.
 //
 // Returns true if the operation resulted in a Tailscale Service update.
-func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, serviceName tailcfg.ServiceName, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger, tsClient tsClient) (err error) {
+func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, serviceName tailcfg.ServiceName, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger, tsClient tsClient, loginUrl string) (err error) {
 	var dnsName string
 	oldPGStatus := pg.Status.DeepCopy()
 	defer func() {

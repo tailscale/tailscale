@@ -214,7 +214,7 @@ func tsrRoleBinding(tsr *tsapi.Recorder, namespace string) *rbacv1.RoleBinding {
 	}
 }
 
-func tsrAuthSecret(tsr *tsapi.Recorder, namespace string, authKey string, replica int32) *corev1.Secret {
+func tsrAuthSecret(tsr *tsapi.Recorder, namespace string, authKey string, serverUrl string, replica int32) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:       namespace,
@@ -224,6 +224,8 @@ func tsrAuthSecret(tsr *tsapi.Recorder, namespace string, authKey string, replic
 		},
 		StringData: map[string]string{
 			"authkey": authKey,
+			//TODO: Add this key to recorder
+			"serverUrl": serverUrl,
 		},
 	}
 }

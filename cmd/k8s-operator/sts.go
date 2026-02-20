@@ -199,8 +199,11 @@ func IsHTTPSEnabledOnTailnet(tsnetServer tsnetServer) bool {
 // up to date.
 func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
 	tailscaleClient := a.tsClient
+	var loginUrl string
 	if sts.Tailnet != "" {
-		tc, err := clientForTailnet(ctx, a.Client, a.operatorNamespace, sts.Tailnet)
+		var tc tsClient
+		var err error
+		tc, loginUrl, err = clientForTailnet(ctx, a.Client, a.operatorNamespace, sts.Tailnet)
 		if err != nil {
 			return nil, err
 		}
@@ -227,7 +230,7 @@ func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.Suga
 	}
 	sts.ProxyClass = proxyClass
 
-	secretNames, err := a.provisionSecrets(ctx, tailscaleClient, logger, sts, hsvc)
+	secretNames, err := a.provisionSecrets(ctx, tailscaleClient, loginUrl, logger, sts, hsvc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create or get API key secret: %w", err)
 	}
@@ -254,7 +257,7 @@ func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.Suga
 func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, tailnet string, logger *zap.SugaredLogger, labels map[string]string, typ string) (done bool, _ error) {
 	tailscaleClient := a.tsClient
 	if tailnet != "" {
-		tc, err := clientForTailnet(ctx, a.Client, a.operatorNamespace, tailnet)
+		tc, _, err := clientForTailnet(ctx, a.Client, a.operatorNamespace, tailnet)
 		if err != nil {
 			logger.Errorf("failed to get tailscale client: %v", err)
 			return false, nil
@@ -385,7 +388,7 @@ func (a *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, l
 	return createOrUpdate(ctx, a.Client, a.operatorNamespace, hsvc, func(svc *corev1.Service) { svc.Spec = hsvc.Spec })
 }
 
-func (a *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tailscaleClient tsClient, logger *zap.SugaredLogger, stsC *tailscaleSTSConfig, hsvc *corev1.Service) ([]string, error) {
+func (a *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tailscaleClient tsClient, loginUrl string, logger *zap.SugaredLogger, stsC *tailscaleSTSConfig, hsvc *corev1.Service) ([]string, error) {
 	secretNames := make([]string, stsC.Replicas)
 
 	// Start by ensuring we have Secrets for the desired number of replicas. This will handle both creating and scaling
@@ -434,7 +437,7 @@ func (a *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tailscale
 			}
 		}
 
-		configs, err := tailscaledConfig(stsC, authKey, orig, hostname)
+		configs, err := tailscaledConfig(stsC, authKey, orig, hostname, loginUrl)
 		if err != nil {
 			return nil, fmt.Errorf("error creating tailscaled config: %w", err)
 		}
@@ -1063,7 +1066,7 @@ func isMainContainer(c *corev1.Container) bool {
 
 // tailscaledConfig takes a proxy config, a newly generated auth key if generated and a Secret with the previous proxy
 // state and auth key and returns tailscaled config files for currently supported proxy versions.
-func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *corev1.Secret, hostname string) (tailscaledConfigs, error) {
+func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *corev1.Secret, hostname string, loginUrl string) (tailscaledConfigs, error) {
 	conf := &ipn.ConfigVAlpha{
 		Version:             "alpha0",
 		AcceptDNS:           "false",
@@ -1100,6 +1103,10 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 			return nil, fmt.Errorf("error retrieving auth key from Secret: %w", err)
 		}
 		conf.AuthKey = key
+	}
+
+	if loginUrl != "" {
+		conf.ServerURL = ptr.To(loginUrl)
 	}
 
 	capVerConfigs := make(map[tailcfg.CapabilityVersion]ipn.ConfigVAlpha)
