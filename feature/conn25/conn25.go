@@ -12,7 +12,6 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
-	"strings"
 	"sync"
 
 	"go4.org/netipx"
@@ -310,8 +309,8 @@ const AppConnectorsExperimentalAttrName = "tailscale.com/app-connectors-experime
 type config struct {
 	isConfigured      bool
 	apps              []appctype.Conn25Attr
-	appsByDomain      map[string][]string
-	selfRoutedDomains set.Set[string]
+	appsByDomain      map[dnsname.FQDN][]string
+	selfRoutedDomains set.Set[dnsname.FQDN]
 }
 
 func configFromNodeView(n tailcfg.NodeView) (config, error) {
@@ -326,8 +325,8 @@ func configFromNodeView(n tailcfg.NodeView) (config, error) {
 	cfg := config{
 		isConfigured:      true,
 		apps:              apps,
-		appsByDomain:      map[string][]string{},
-		selfRoutedDomains: set.Set[string]{},
+		appsByDomain:      map[dnsname.FQDN][]string{},
+		selfRoutedDomains: set.Set[dnsname.FQDN]{},
 	}
 	for _, app := range apps {
 		selfMatchesTags := false
@@ -342,10 +341,9 @@ func configFromNodeView(n tailcfg.NodeView) (config, error) {
 			if err != nil {
 				return config{}, err
 			}
-			key := fqdn.WithTrailingDot()
-			mak.Set(&cfg.appsByDomain, key, append(cfg.appsByDomain[key], app.Name))
+			mak.Set(&cfg.appsByDomain, fqdn, append(cfg.appsByDomain[fqdn], app.Name))
 			if selfMatchesTags {
-				cfg.selfRoutedDomains.Add(key)
+				cfg.selfRoutedDomains.Add(fqdn)
 			}
 		}
 	}
@@ -362,9 +360,8 @@ type client struct {
 	mu            sync.Mutex // protects the fields below
 	magicIPPool   *ippool
 	transitIPPool *ippool
-	// map of magic IP -> (transit IP, app)
-	magicIPs map[netip.Addr]appAddr
-	config   config
+	assignments   addrAssignments
+	config        config
 }
 
 func (c *client) isConfigured() bool {
@@ -407,13 +404,7 @@ func (c *client) reconfig(newCfg config) error {
 	return nil
 }
 
-func (c *client) setMagicIP(magicAddr, transitAddr netip.Addr, app string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	mak.Set(&c.magicIPs, magicAddr, appAddr{addr: transitAddr, app: app})
-}
-
-func (c *client) isConnectorDomain(domain string) bool {
+func (c *client) isConnectorDomain(domain dnsname.FQDN) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	appNames, ok := c.config.appsByDomain[domain]
@@ -424,9 +415,12 @@ func (c *client) isConnectorDomain(domain string) bool {
 // for this domain+dst address, so that this client can use conn25 connectors.
 // It checks that this domain should be routed and that this client is not itself a connector for the domain
 // and generally if it is valid to make the assignment.
-func (c *client) reserveAddresses(domain string, dst netip.Addr) (addrs, error) {
+func (c *client) reserveAddresses(domain dnsname.FQDN, dst netip.Addr) (addrs, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if existing, ok := c.assignments.lookupByDomainDst(domain, dst); ok {
+		return existing, nil
+	}
 	appNames, _ := c.config.appsByDomain[domain]
 	// only reserve for first app
 	app := appNames[0]
@@ -438,17 +432,20 @@ func (c *client) reserveAddresses(domain string, dst netip.Addr) (addrs, error) 
 	if err != nil {
 		return addrs{}, err
 	}
-	addrs := addrs{
+	as := addrs{
 		dst:     dst,
 		magic:   mip,
 		transit: tip,
 		app:     app,
+		domain:  domain,
 	}
-	return addrs, nil
+	if err := c.assignments.insert(as); err != nil {
+		return addrs{}, err
+	}
+	return as, nil
 }
 
 func (c *client) enqueueAddressAssignment(addrs addrs) {
-	c.setMagicIP(addrs.magic, addrs.transit, addrs.app)
 	// TODO(fran) 2026-02-03 asynchronously send peerapi req to connector to
 	// allocate these addresses for us.
 }
@@ -483,8 +480,12 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 
 		switch h.Type {
 		case dnsmessage.TypeA:
-			domain := strings.ToLower(h.Name.String())
-			if len(domain) == 0 || !c.isConnectorDomain(domain) {
+			domain, err := dnsname.ToFQDN(h.Name.String())
+			if err != nil {
+				c.logf("bad dnsname: %v", err)
+				return buf
+			}
+			if !c.isConnectorDomain(domain) {
 				if err := p.SkipAnswer(); err != nil {
 					c.logf("error parsing dns response: %v", err)
 					return buf
@@ -540,9 +541,44 @@ type addrs struct {
 	dst     netip.Addr
 	magic   netip.Addr
 	transit netip.Addr
+	domain  dnsname.FQDN
 	app     string
 }
 
 func (c addrs) isValid() bool {
 	return c.dst.IsValid()
+}
+
+// domainDst is a key for looking up an existing address assignment by the
+// DNS response domain and destination IP pair.
+type domainDst struct {
+	domain dnsname.FQDN
+	dst    netip.Addr
+}
+
+// addrAssignments is the collection of addrs assigned by this client
+// supporting lookup by magicip or domain+dst
+type addrAssignments struct {
+	byMagicIP   map[netip.Addr]addrs
+	byDomainDst map[domainDst]addrs
+}
+
+func (a *addrAssignments) insert(as addrs) error {
+	// we likely will want to allow overwriting in the future when we
+	// have address expiry, but for now this should not happen
+	if _, ok := a.byMagicIP[as.magic]; ok {
+		return errors.New("byMagicIP key exists")
+	}
+	ddst := domainDst{domain: as.domain, dst: as.dst}
+	if _, ok := a.byDomainDst[ddst]; ok {
+		return errors.New("byDomainDst key exists")
+	}
+	mak.Set(&a.byMagicIP, as.magic, as)
+	mak.Set(&a.byDomainDst, ddst, as)
+	return nil
+}
+
+func (a *addrAssignments) lookupByDomainDst(domain dnsname.FQDN, dst netip.Addr) (addrs, bool) {
+	v, ok := a.byDomainDst[domainDst{domain: domain, dst: dst}]
+	return v, ok
 }
