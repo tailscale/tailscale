@@ -103,6 +103,18 @@ func (p Point) LatLngFloat64() (lat, lng float64, err error) {
 	return float64(dlat), float64(dlng), err
 }
 
+// clamp returns v clamped to the [low, high] range.
+func clamp(v, low, high float64) float64 {
+	switch {
+	case v < low:
+		return low
+	case v > high:
+		return high
+	default:
+		return v
+	}
+}
+
 // SphericalAngleTo returns the angular distance from p to q, calculated on a
 // spherical Earth.
 func (p Point) SphericalAngleTo(q Point) (Radians, error) {
@@ -125,7 +137,10 @@ func (p Point) SphericalAngleTo(q Point) (Radians, error) {
 	sLat, sLng := float64(qLat.Radians()), float64(qLng.Radians())
 	cosA := math.Sin(rLat)*math.Sin(sLat) +
 		math.Cos(rLat)*math.Cos(sLat)*math.Cos(rLng-sLng)
-	return Radians(math.Acos(cosA)), nil
+	// Subtle floating point imprecision can lead to cosA being outside
+	// the domain of arccosine [-1, 1]. Clamp the input to avoid NaN return.
+	cosAClamped := clamp(cosA, -1.0, 1.0)
+	return Radians(math.Acos(cosAClamped)), nil
 }
 
 // DistanceTo reports the great-circle distance between p and q, in meters.
