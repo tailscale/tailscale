@@ -362,9 +362,8 @@ type client struct {
 	mu            sync.Mutex // protects the fields below
 	magicIPPool   *ippool
 	transitIPPool *ippool
-	// map of magic IP -> (transit IP, app)
-	magicIPs map[netip.Addr]appAddr
-	config   config
+	assignments   addrAssignments
+	config        config
 }
 
 func (c *client) isConfigured() bool {
@@ -407,12 +406,6 @@ func (c *client) reconfig(newCfg config) error {
 	return nil
 }
 
-func (c *client) setMagicIP(magicAddr, transitAddr netip.Addr, app string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	mak.Set(&c.magicIPs, magicAddr, appAddr{addr: transitAddr, app: app})
-}
-
 func (c *client) isConnectorDomain(domain string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -427,6 +420,9 @@ func (c *client) isConnectorDomain(domain string) bool {
 func (c *client) reserveAddresses(domain string, dst netip.Addr) (addrs, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if existing, ok := c.assignments.lookupByDomainDst(domain, dst); ok {
+		return existing, nil
+	}
 	appNames, _ := c.config.appsByDomain[domain]
 	// only reserve for first app
 	app := appNames[0]
@@ -443,12 +439,13 @@ func (c *client) reserveAddresses(domain string, dst netip.Addr) (addrs, error) 
 		magic:   mip,
 		transit: tip,
 		app:     app,
+		domain:  domain,
 	}
+	c.assignments.insert(addrs)
 	return addrs, nil
 }
 
 func (c *client) enqueueAddressAssignment(addrs addrs) {
-	c.setMagicIP(addrs.magic, addrs.transit, addrs.app)
 	// TODO(fran) 2026-02-03 asynchronously send peerapi req to connector to
 	// allocate these addresses for us.
 }
@@ -540,9 +537,41 @@ type addrs struct {
 	dst     netip.Addr
 	magic   netip.Addr
 	transit netip.Addr
+	domain  string
 	app     string
 }
 
 func (c addrs) isValid() bool {
 	return c.dst.IsValid()
+}
+
+// domainDst is a key for looking up an existing address assignment by the
+// DNS response domain and destination IP pair.
+type domainDst struct {
+	domain string
+	dst    netip.Addr
+}
+
+// addrAssignments is the collection of addrs assigned by this client
+// supporting lookup by magicip or domain+dst
+type addrAssignments struct {
+	byMagicIP   map[netip.Addr]addrs
+	byDomainDst map[domainDst]addrs
+}
+
+func (a *addrAssignments) insert(as addrs) {
+	mak.Set(&a.byMagicIP, as.magic, as)
+	mak.Set(&a.byDomainDst, domainDst{domain: as.domain, dst: as.dst}, as)
+}
+
+// TODO(fran) we will use this when a network flow wants to find if an address is
+// a magic ip and what it relates to.
+//func (a *addrAssignments) lookupByMagicIP(ip netip.Addr) (addrs, bool) {
+//v, ok := a.byMagicIP[ip]
+//return v, ok
+//}
+
+func (a *addrAssignments) lookupByDomainDst(domain string, dst netip.Addr) (addrs, bool) {
+	v, ok := a.byDomainDst[domainDst{domain: domain, dst: dst}]
+	return v, ok
 }
