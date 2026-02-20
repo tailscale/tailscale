@@ -21,6 +21,7 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/mapx"
+	"tailscale.com/wgengine/filter"
 )
 
 // Extension augments LocalBackend with additional functionality.
@@ -377,6 +378,27 @@ type Hooks struct {
 	// ShouldUploadServices reports whether this node should include services
 	// in Hostinfo from the portlist extension.
 	ShouldUploadServices feature.Hook[func() bool]
+
+	// Filter contains hooks for the packet filter.
+	// See filter.Filter for details on how these hooks are invoked.
+	Filter FilterHooks
+}
+
+// FilterHooks contains hooks that extensions can use to customize the packet
+// filter. Field names match the corresponding fields in filter.Filter.
+type FilterHooks struct {
+	// IngressAllowHooks are hooks that allow extensions to accept inbound
+	// packets beyond the standard filter rules. They run after pre() but
+	// before the normal match rules, so they can accept packets to
+	// destinations outside the node's local IP set. Hooks are checked in
+	// order; the first match wins. See filter.Filter.IngressAllowHooks.
+	IngressAllowHooks feature.Hooks[filter.PacketMatch]
+
+	// LinkLocalAllowHooks are hooks that provide exceptions to the default
+	// policy of dropping link-local unicast packets. They run inside pre()
+	// for both ingress and egress. Hooks are checked in order; the first
+	// match wins. See filter.Filter.LinkLocalAllowHooks.
+	LinkLocalAllowHooks feature.Hooks[filter.PacketMatch]
 }
 
 // NodeBackend is an interface to query the current node and its peers.
