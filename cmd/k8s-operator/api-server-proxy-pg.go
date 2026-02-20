@@ -78,12 +78,9 @@ func (r *KubeAPIServerTSServiceReconciler) Reconcile(ctx context.Context, req re
 	serviceName := serviceNameForAPIServerProxy(pg)
 	logger = logger.With("Tailscale Service", serviceName)
 
-	tailscaleClient := r.tsClient
-	if pg.Spec.Tailnet != "" {
-		tailscaleClient, err = clientForTailnet(ctx, r.Client, r.tsNamespace, pg.Spec.Tailnet)
-		if err != nil {
-			return res, fmt.Errorf("failed to get tailscale client: %w", err)
-		}
+	tailscaleClient, err := r.getClient(ctx, pg.Spec.Tailnet)
+	if err != nil {
+		return res, fmt.Errorf("failed to get tailscale client: %w", err)
 	}
 
 	if markedForDeletion(pg) {
@@ -106,6 +103,22 @@ func (r *KubeAPIServerTSServiceReconciler) Reconcile(ctx context.Context, req re
 	}
 
 	return reconcile.Result{}, nil
+}
+
+// getClient returns the appropriate Tailscale client for the given tailnet.
+// If no tailnet is specified, returns the default client.
+func (r *KubeAPIServerTSServiceReconciler) getClient(ctx context.Context, tailnetName string) (tsClient,
+	error) {
+	if tailnetName == "" {
+		return r.tsClient, nil
+	}
+
+	tc, _, err := clientForTailnet(ctx, r.Client, r.tsNamespace, tailnetName)
+	if err != nil {
+		return nil, err
+	}
+
+	return tc, nil
 }
 
 // maybeProvision ensures that a Tailscale Service for this ProxyGroup exists

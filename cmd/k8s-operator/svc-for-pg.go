@@ -109,9 +109,8 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	err = r.Get(ctx, client.ObjectKey{Name: pgName}, pg)
 	switch {
 	case apierrors.IsNotFound(err):
-		msg := fmt.Sprintf("ProxyGroup %q does not exist", pgName)
-		logger.Warnf(msg)
-		r.recorder.Event(svc, corev1.EventTypeWarning, "ProxyGroupNotFound", msg)
+		logger.Infof("ProxyGroup %q does not exist, it may have been deleted. Reconciliation for service %q will be skipped until the ProxyGroup is found", pgName, svc.Name)
+		r.recorder.Event(svc, corev1.EventTypeWarning, "ProxyGroupNotFound", "ProxyGroup not found")
 		return res, nil
 	case err != nil:
 		return res, fmt.Errorf("getting ProxyGroup %q: %w", pgName, err)

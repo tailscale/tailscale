@@ -115,14 +115,16 @@ func (r *HAIngressReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	hostname := hostnameForIngress(ing)
 	logger = logger.With("hostname", hostname)
 
+	pgName := ing.Annotations[AnnotationProxyGroup]
 	pg := &tsapi.ProxyGroup{}
-	err = r.Get(ctx, client.ObjectKey{Name: ing.Annotations[AnnotationProxyGroup]}, pg)
+
+	err = r.Get(ctx, client.ObjectKey{Name: pgName}, pg)
 	switch {
 	case apierrors.IsNotFound(err):
-		logger.Infof("ProxyGroup does not exist")
+		logger.Infof("ProxyGroup %q does not exist, it may have been deleted. Reconciliation for ingress %q will be skipped until the ProxyGroup is found", pgName, ing.Name)
 		return res, nil
 	case err != nil:
-		return res, fmt.Errorf("getting ProxyGroup %q: %w", ing.Annotations[AnnotationProxyGroup], err)
+		return res, fmt.Errorf("getting ProxyGroup %q: %w", pgName, err)
 	}
 
 	tailscaleClient, err := clientFromProxyGroup(ctx, r.Client, pg, r.tsNamespace, r.tsClient)
