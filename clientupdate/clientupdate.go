@@ -661,7 +661,7 @@ func updateYUMRepoTrack(repoFile, dstTrack string) (rewrote bool, err error) {
 
 func (up *Updater) updateAlpineLike() (err error) {
 	if up.Version != "" {
-		return errors.New("installing a specific version on Alpine-based distros is not supported")
+		return errors.New("installing a specific version on apk-based distros is not supported")
 	}
 	if err := requireRoot(); err != nil {
 		return err
@@ -742,22 +742,31 @@ func checkOutdatedAlpineRepo(logf logger.Logf, apkVer, track string) error {
 		// Actually on latest release.
 		return nil
 	}
-	f, err := os.Open("/etc/apk/repositories")
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	// Read the first repo line. Typically, there are multiple repos that all
-	// contain the same version in the path, like:
-	//   https://dl-cdn.alpinelinux.org/alpine/v3.20/main
-	//   https://dl-cdn.alpinelinux.org/alpine/v3.20/community
-	s := bufio.NewScanner(f)
-	if !s.Scan() {
-		return s.Err()
-	}
-	alpineVer := apkRepoVersionRE.FindString(s.Text())
-	if alpineVer != "" {
-		logf("The latest Tailscale release for Linux is %q, but your apk repository only provides %q.\nYour Alpine version is %q, you may need to upgrade the system to get the latest Tailscale version: https://wiki.alpinelinux.org/wiki/Upgrading_Alpine", latest, apkVer, alpineVer)
+
+	// OpenWrt uses a different repo file in repositories.d, check for that as well.
+	for _, repoFile := range []string{"/etc/apk/repositories", "/etc/apk/repositories.d/distfeeds.list"} {
+		f, err := os.Open(repoFile)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			} else {
+				return err
+			}
+		}
+		defer f.Close()
+		// Read the first repo line. Typically, there are multiple repos that all
+		// contain the same version in the path, like:
+		//   https://dl-cdn.alpinelinux.org/alpine/v3.20/main
+		//   https://dl-cdn.alpinelinux.org/alpine/v3.20/community
+		s := bufio.NewScanner(f)
+		if !s.Scan() {
+			return s.Err()
+		}
+		alpineVer := apkRepoVersionRE.FindString(s.Text())
+		if alpineVer != "" {
+			logf("The latest Tailscale release for Linux is %q, but your apk repository only provides %q.\nYour Alpine version is %q, you may need to upgrade the system to get the latest Tailscale version: https://wiki.alpinelinux.org/wiki/Upgrading_Alpine", latest, apkVer, alpineVer)
+		}
+		return nil
 	}
 	return nil
 }
