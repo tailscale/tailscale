@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Tailscale System Tray
+Comment=Tailscale system tray applet for managing Tailscale
+Exec=/usr/bin/tailscale systray
+TryExec=/usr/bin/tailscale
+Terminal=false
+NoDisplay=true
+StartupNotify=false
+Icon=tailscale
+Categories=Network;System;
+X-GNOME-Autostart-enabled=true
