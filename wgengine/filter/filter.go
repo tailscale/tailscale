@@ -32,8 +32,9 @@ import (
 type Filter struct {
 	logf logger.Logf
 	// local4 and local6 report whether an IP is "local" to this node, for the
-	// respective address family. All packets coming in over tailscale must have
-	// a destination within local, regardless of the policy filter below.
+	// respective address family. Inbound packets that pass the pre() checks and
+	// are not accepted by IngressAllowHooks must have a destination within local
+	// to be accepted by the standard filter rules.
 	local4 func(netip.Addr) bool
 	local6 func(netip.Addr) bool
 
@@ -66,7 +67,30 @@ type Filter struct {
 	state *filterState
 
 	shieldsUp bool
+
+	// LinkLocalAllowHooks are optional hooks that provide exceptions to the
+	// default policy of dropping link-local unicast packets. They run inside
+	// pre(), which is called for both ingress and egress. Hooks are checked
+	// in order; if any hook returns match=true, the packet is allowed through
+	// (the why string is unused). If no hook matches, the packet is dropped.
+	// The GCP DNS address (169.254.169.254) is always allowed regardless of hooks.
+	LinkLocalAllowHooks []PacketMatch
+
+	// IngressAllowHooks are optional hooks that allow extensions to accept
+	// inbound packets that would not be accepted by the standard filter rules.
+	// They run in RunIn after pre() but before the normal runIn4/runIn6 match
+	// rules, which means they can accept packets to destinations outside the
+	// local IP set. Hooks are checked in order; the first hook that returns
+	// match=true causes the packet to be accepted, and the returned why string
+	// is used for logging. If no hook matches, processing continues to the
+	// standard filter rules.
+	IngressAllowHooks []PacketMatch
 }
+
+// PacketMatch is a function that inspects a packet and reports whether it
+// matches a custom filter criterion. If match is true, why should be a short
+// human-readable reason for the match, used in filter logging (e.g. "corp-dns ok").
+type PacketMatch func(packet.Parsed) (match bool, why string)
 
 // filterState is a state cache of past seen packets.
 type filterState struct {
@@ -417,6 +441,13 @@ func (f *Filter) RunIn(q *packet.Parsed, rf RunFlags) Response {
 		return r
 	}
 
+	for _, pm := range f.IngressAllowHooks {
+		if match, why := pm(*q); match {
+			f.logRateLimit(rf, q, dir, Accept, why)
+			return Accept
+		}
+	}
+
 	var why string
 	switch q.IPVersion {
 	case 4:
@@ -439,6 +470,7 @@ func (f *Filter) RunOut(q *packet.Parsed, rf RunFlags) (Response, usermetric.Dro
 		// already logged
 		return r, reason
 	}
+
 	r, why := f.runOut(q)
 	f.logRateLimit(rf, q, dir, r, why)
 	return r, ""
@@ -609,6 +641,18 @@ func (d direction) String() string {
 
 var gcpDNSAddr = netaddr.IPv4(169, 254, 169, 254)
 
+func (f *Filter) isAllowedLinkLocal(q *packet.Parsed) bool {
+	if q.Dst.Addr() == gcpDNSAddr {
+		return true
+	}
+	for _, pm := range f.LinkLocalAllowHooks {
+		if match, _ := pm(*q); match {
+			return true
+		}
+	}
+	return false
+}
+
 // pre runs the direction-agnostic filter logic. dir is only used for
 // logging.
 func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) (Response, usermetric.DropReason) {
@@ -630,7 +674,7 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) (Response, us
 		f.logRateLimit(rf, q, dir, Drop, "multicast")
 		return Drop, usermetric.ReasonMulticast
 	}
-	if q.Dst.Addr().IsLinkLocalUnicast() && q.Dst.Addr() != gcpDNSAddr {
+	if q.Dst.Addr().IsLinkLocalUnicast() && !f.isAllowedLinkLocal(q) {
 		f.logRateLimit(rf, q, dir, Drop, "link-local-unicast")
 		return Drop, usermetric.ReasonLinkLocalUnicast
 	}
