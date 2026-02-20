@@ -17,6 +17,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unique"
 
 	"tailscale.com/derp"
 	"tailscale.com/derp/derpserver"
@@ -791,4 +792,41 @@ func TestServerRepliesToPing(t *testing.T) {
 			return
 		}
 	}
+}
+
+func BenchmarkUnique(b *testing.B) {
+	var key [32]byte
+	for i := range key {
+		key[i] = byte(i)
+	}
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			h := unique.Make(key)
+			if h.Value() != key {
+				b.Fatal("unexpected")
+			}
+		}
+	})
+}
+
+func BenchmarkLocalMap(b *testing.B) {
+	var key [32]byte
+	for i := range key {
+		key[i] = byte(i)
+	}
+	m := map[[32]byte]bool{
+		key: true,
+	}
+	k2 := key
+	for i := range k2 {
+		k2[0] = byte(i + 1)
+		m[k2] = false
+	}
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if !m[key] {
+				b.Fatal("unexpected")
+			}
+		}
+	})
 }
