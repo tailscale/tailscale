@@ -448,65 +448,79 @@ func TestPointMarshalUint64(t *testing.T) {
 	})
 }
 
+const earthRadius = 6371.000 // volumetric mean radius (km)
+const kmToRad = 1 / earthRadius
+
+// Test corpus for exercising PointSphericalAngleTo.
+var corpusPointSphericalAngleTo = []struct {
+	name    string
+	x       geo.Point
+	y       geo.Point
+	want    geo.Radians
+	wantErr string
+}{
+	{
+		name: "same-point-null-island",
+		x:    geo.MakePoint(0, 0),
+		y:    geo.MakePoint(0, 0),
+		want: 0.0 * geo.Radian,
+	},
+	{
+		name: "same-point-north-pole",
+		x:    geo.MakePoint(+90, 0),
+		y:    geo.MakePoint(+90, +90),
+		want: 0.0 * geo.Radian,
+	},
+	{
+		name: "same-point-south-pole",
+		x:    geo.MakePoint(-90, 0),
+		y:    geo.MakePoint(-90, -90),
+		want: 0.0 * geo.Radian,
+	},
+	{
+		name: "north-pole-to-south-pole",
+		x:    geo.MakePoint(+90, 0),
+		y:    geo.MakePoint(-90, -90),
+		want: math.Pi * geo.Radian,
+	},
+	{
+		name: "toronto-to-montreal",
+		x:    geo.MakePoint(+43.6532, -79.3832),
+		y:    geo.MakePoint(+45.5019, -73.5674),
+		want: 504.26 * kmToRad * geo.Radian,
+	},
+	{
+		name: "sydney-to-san-francisco",
+		x:    geo.MakePoint(-33.8727, +151.2057),
+		y:    geo.MakePoint(+37.7749, -122.4194),
+		want: 11948.18 * kmToRad * geo.Radian,
+	},
+	{
+		name: "new-york-to-paris",
+		x:    geo.MakePoint(+40.7128, -74.0060),
+		y:    geo.MakePoint(+48.8575, +2.3514),
+		want: 5837.15 * kmToRad * geo.Radian,
+	},
+	{
+		name: "seattle-to-tokyo",
+		x:    geo.MakePoint(+47.6061, -122.3328),
+		y:    geo.MakePoint(+35.6764, +139.6500),
+		want: 7700.00 * kmToRad * geo.Radian,
+	},
+	{
+		// Subtle floating point imprecision can propagate and lead to
+		// trigonometric functions receiving inputs outside their
+		// domain, thus returning NaN.
+		// Test one such case.
+		name: "floating-point-precision-test",
+		x:    geo.MakePoint(-6.0, 0.0),
+		y:    geo.MakePoint(-6.0, 0.0),
+		want: 0.0 * geo.Radian,
+	},
+}
+
 func TestPointSphericalAngleTo(t *testing.T) {
-	const earthRadius = 6371.000 // volumetric mean radius (km)
-	const kmToRad = 1 / earthRadius
-	for _, tt := range []struct {
-		name    string
-		x       geo.Point
-		y       geo.Point
-		want    geo.Radians
-		wantErr string
-	}{
-		{
-			name: "same-point-null-island",
-			x:    geo.MakePoint(0, 0),
-			y:    geo.MakePoint(0, 0),
-			want: 0.0 * geo.Radian,
-		},
-		{
-			name: "same-point-north-pole",
-			x:    geo.MakePoint(+90, 0),
-			y:    geo.MakePoint(+90, +90),
-			want: 0.0 * geo.Radian,
-		},
-		{
-			name: "same-point-south-pole",
-			x:    geo.MakePoint(-90, 0),
-			y:    geo.MakePoint(-90, -90),
-			want: 0.0 * geo.Radian,
-		},
-		{
-			name: "north-pole-to-south-pole",
-			x:    geo.MakePoint(+90, 0),
-			y:    geo.MakePoint(-90, -90),
-			want: math.Pi * geo.Radian,
-		},
-		{
-			name: "toronto-to-montreal",
-			x:    geo.MakePoint(+43.6532, -79.3832),
-			y:    geo.MakePoint(+45.5019, -73.5674),
-			want: 504.26 * kmToRad * geo.Radian,
-		},
-		{
-			name: "sydney-to-san-francisco",
-			x:    geo.MakePoint(-33.8727, +151.2057),
-			y:    geo.MakePoint(+37.7749, -122.4194),
-			want: 11948.18 * kmToRad * geo.Radian,
-		},
-		{
-			name: "new-york-to-paris",
-			x:    geo.MakePoint(+40.7128, -74.0060),
-			y:    geo.MakePoint(+48.8575, +2.3514),
-			want: 5837.15 * kmToRad * geo.Radian,
-		},
-		{
-			name: "seattle-to-tokyo",
-			x:    geo.MakePoint(+47.6061, -122.3328),
-			y:    geo.MakePoint(+35.6764, +139.6500),
-			want: 7700.00 * kmToRad * geo.Radian,
-		},
-	} {
+	for _, tt := range corpusPointSphericalAngleTo {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := tt.x.SphericalAngleTo(tt.y)
 			if tt.wantErr == "" && err != nil {
@@ -534,6 +548,23 @@ func TestPointSphericalAngleTo(t *testing.T) {
 			t.Logf("x to y: %v km", got/kmToRad)
 		})
 	}
+}
+
+func FuzzPointSphericalAngleTo(f *testing.F) {
+	for _, tt := range corpusPointSphericalAngleTo {
+		xLat, xLng, _ := tt.x.LatLngFloat64()
+		yLat, yLng, _ := tt.y.LatLngFloat64()
+		f.Add(xLat, xLng, yLat, yLng)
+	}
+
+	f.Fuzz(func(t *testing.T, xLat float64, xLng float64, yLat float64, yLng float64) {
+		x := geo.MakePoint(geo.Degrees(xLat), geo.Degrees(xLng))
+		y := geo.MakePoint(geo.Degrees(yLat), geo.Degrees(yLng))
+		got, _ := x.SphericalAngleTo(y)
+		if math.IsNaN(float64(got)) {
+			t.Errorf("got NaN result with xLat=%.15f xLng=%.15f yLat=%.15f yLng=%.15f", xLat, xLng, yLat, yLng)
+		}
+	})
 }
 
 func approx[T ~float64](x, y T) bool {
