@@ -69,7 +69,7 @@ func startTailscaled(ctx context.Context, cfg *settings) (*local.Client, *os.Pro
 func tailscaledArgs(cfg *settings) []string {
 	args := []string{"--socket=" + cfg.Socket}
 	switch {
-	case cfg.InKubernetes && cfg.KubeSecret != "":
+	case cfg.KubeSecret != "":
 		args = append(args, "--state=kube:"+cfg.KubeSecret)
 		if cfg.StateDir == "" {
 			cfg.StateDir = "/tmp"

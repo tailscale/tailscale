@@ -12,9 +12,10 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/kube/localclient"
+	"tailscale.com/tailcfg"
 )
 
 func TestUpdateServeConfig(t *testing.T) {
@@ -65,13 +66,13 @@ func TestUpdateServeConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fakeLC := &fakeLocalClient{}
+			fakeLC := &localclient.FakeLocalClient{}
 			err := updateServeConfig(context.Background(), tt.sc, tt.certDomain, fakeLC)
 			if err != nil {
 				t.Errorf("updateServeConfig() error = %v", err)
 			}
-			if fakeLC.setServeCalled != tt.wantCall {
-				t.Errorf("SetServeConfig() called = %v, want %v", fakeLC.setServeCalled, tt.wantCall)
+			if fakeLC.SetServeCalled != tt.wantCall {
+				t.Errorf("SetServeConfig() called = %v, want %v", fakeLC.SetServeCalled, tt.wantCall)
 			}
 		})
 	}
@@ -196,18 +197,114 @@ func TestReadServeConfig(t *testing.T) {
 	}
 }
 
-type fakeLocalClient struct {
-	*local.Client
-	setServeCalled bool
-}
+func TestRefreshAdvertiseServices(t *testing.T) {
+	tests := []struct {
+		name                string
+		sc                  *ipn.ServeConfig
+		wantServices        []string
+		wantEditPrefsCalled bool
+		wantErr             bool
+	}{
+		{
+			name:                "nil_serve_config",
+			sc:                  nil,
+			wantEditPrefsCalled: false,
+		},
+		{
+			name:                "empty_serve_config",
+			sc:                  &ipn.ServeConfig{},
+			wantEditPrefsCalled: false,
+		},
+		{
+			name: "no_services_defined",
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {HTTP: true},
+				},
+			},
+			wantEditPrefsCalled: false,
+		},
+		{
+			name: "single_service",
+			sc: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:my-service": {},
+				},
+			},
+			wantServices:        []string{"svc:my-service"},
+			wantEditPrefsCalled: true,
+		},
+		{
+			name: "multiple_services",
+			sc: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:service-a": {},
+					"svc:service-b": {},
+					"svc:service-c": {},
+				},
+			},
+			wantServices:        []string{"svc:service-a", "svc:service-b", "svc:service-c"},
+			wantEditPrefsCalled: true,
+		},
+		{
+			name: "services_with_tcp_and_web",
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {HTTP: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"example.com:443": {},
+				},
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:frontend": {},
+					"svc:backend":  {},
+				},
+			},
+			wantServices:        []string{"svc:frontend", "svc:backend"},
+			wantEditPrefsCalled: true,
+		},
+	}
 
-func (m *fakeLocalClient) SetServeConfig(ctx context.Context, cfg *ipn.ServeConfig) error {
-	m.setServeCalled = true
-	return nil
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeLC := &localclient.FakeLocalClient{}
+			err := refreshAdvertiseServices(context.Background(), tt.sc, fakeLC)
 
-func (m *fakeLocalClient) CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err error) {
-	return nil, nil, nil
+			if (err != nil) != tt.wantErr {
+				t.Errorf("refreshAdvertiseServices() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if tt.wantEditPrefsCalled != (len(fakeLC.EditPrefsCalls) > 0) {
+				t.Errorf("EditPrefs called = %v, want %v", len(fakeLC.EditPrefsCalls) > 0, tt.wantEditPrefsCalled)
+			}
+
+			if tt.wantEditPrefsCalled {
+				if len(fakeLC.EditPrefsCalls) != 1 {
+					t.Fatalf("expected 1 EditPrefs call, got %d", len(fakeLC.EditPrefsCalls))
+				}
+
+				mp := fakeLC.EditPrefsCalls[0]
+				if !mp.AdvertiseServicesSet {
+					t.Error("AdvertiseServicesSet should be true")
+				}
+
+				if len(mp.AdvertiseServices) != len(tt.wantServices) {
+					t.Errorf("AdvertiseServices length = %d, want %d", len(mp.Prefs.AdvertiseServices), len(tt.wantServices))
+				}
+
+				advertised := make(map[string]bool)
+				for _, svc := range mp.AdvertiseServices {
+					advertised[svc] = true
+				}
+
+				for _, want := range tt.wantServices {
+					if !advertised[want] {
+						t.Errorf("expected service %q to be advertised, but it wasn't", want)
+					}
+				}
+			}
+		})
+	}
 }
 
 func TestHasHTTPSEndpoint(t *testing.T) {
