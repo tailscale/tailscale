@@ -323,13 +323,22 @@ func TestExclusiveOwnerAnnotations(t *testing.T) {
 				},
 			},
 		},
-		"owned_by_another_operator": {
+		"owned_by_another_operator_no_resource": {
 			svc: &tailscale.VIPService{
 				Annotations: map[string]string{
 					ownerAnnotation: `{"ownerRefs":[{"operatorID":"operator-2"}]}`,
 				},
 			},
-			wantErr: "already owned by other operator(s)",
+			wantErr: "does not reference an owning resource",
+		},
+		"operator_recreated_same_pg": {
+			// Different operatorID but same ProxyGroup UID - operator pod was recreated.
+			// Should allow reclaiming ownership.
+			svc: &tailscale.VIPService{
+				Annotations: map[string]string{
+					ownerAnnotation: `{"ownerRefs":[{"operatorID":"old-operator-id","resource":{"kind":"ProxyGroup","name":"pg1","uid":"pg1-uid"}}]}`,
+				},
+			},
 		},
 		"owned_by_an_ingress": {
 			svc: &tailscale.VIPService{

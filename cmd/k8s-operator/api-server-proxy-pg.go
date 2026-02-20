@@ -446,14 +446,19 @@ func exclusiveOwnerAnnotations(pg *tsapi.ProxyGroup, operatorID string, svc *tai
 	if o == nil || len(o.OwnerRefs) == 0 {
 		return nil, fmt.Errorf("Tailscale Service %s exists, but does not contain owner annotation with owner references; not proceeding as this is likely a resource created by something other than the Tailscale Kubernetes operator", svc.Name)
 	}
-	if len(o.OwnerRefs) > 1 || o.OwnerRefs[0].OperatorID != operatorID {
-		return nil, fmt.Errorf("Tailscale Service %s is already owned by other operator(s) and cannot be shared across multiple clusters; configure a difference Service name to continue", svc.Name)
+	if len(o.OwnerRefs) > 1 {
+		return nil, fmt.Errorf("Tailscale Service %s is already owned by multiple operators and cannot be shared across multiple clusters; configure a difference Service name to continue", svc.Name)
 	}
 	if o.OwnerRefs[0].Resource == nil {
 		return nil, fmt.Errorf("Tailscale Service %s exists, but does not reference an owning resource; not proceeding as this is likely a Service already owned by an Ingress", svc.Name)
 	}
 	if o.OwnerRefs[0].Resource.Kind != "ProxyGroup" || o.OwnerRefs[0].Resource.UID != string(pg.UID) {
 		return nil, fmt.Errorf("Tailscale Service %s is already owned by another resource: %#v; configure a difference Service name to continue", svc.Name, o.OwnerRefs[0].Resource)
+	}
+	// Allow operator pod recreation: if the ProxyGroup UID matches but operatorID differs,
+	// the operator was recreated and should reclaim ownership.
+	if o.OwnerRefs[0].OperatorID != operatorID {
+		o.OwnerRefs[0].OperatorID = operatorID
 	}
 	if o.OwnerRefs[0].Resource.Name != pg.Name {
 		// ProxyGroup name can be updated in place.
