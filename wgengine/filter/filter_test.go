@@ -171,12 +171,8 @@ func TestFilter(t *testing.T) {
 		{Drop, parsed(ipproto.TCP, ipWithoutCap.String(), "1.2.3.4", 30000, 22)},
 	}
 	for i, test := range tests {
-		aclFunc := filt.runIn4
-		if test.p.IPVersion == 6 {
-			aclFunc = filt.runIn6
-		}
-		if got, why := aclFunc(&test.p); test.want != got {
-			t.Errorf("#%d runIn got=%v want=%v why=%q packet:%v", i, got, test.want, why, test.p)
+		if got := filt.RunIn(&test.p, 0); test.want != got {
+			t.Errorf("#%d RunIn got=%v want=%v packet:%v", i, got, test.want, test.p)
 			continue
 		}
 		if test.p.IPProto == ipproto.TCP {
@@ -191,8 +187,8 @@ func TestFilter(t *testing.T) {
 			}
 			// TCP and UDP are treated equivalently in the filter - verify that.
 			test.p.IPProto = ipproto.UDP
-			if got, why := aclFunc(&test.p); test.want != got {
-				t.Errorf("#%d runIn (UDP) got=%v want=%v why=%q packet:%v", i, got, test.want, why, test.p)
+			if got := filt.RunIn(&test.p, 0); test.want != got {
+				t.Errorf("#%d RunIn (UDP) got=%v want=%v packet:%v", i, got, test.want, test.p)
 			}
 		}
 		// Update UDP state
@@ -1069,6 +1065,192 @@ type benchOpt struct {
 	noLogs        bool
 	wantAccept    bool
 	udp, udpOpen  bool
+}
+
+func TestIngressAllowHooks(t *testing.T) {
+	matchSrc := func(ip string) PacketMatch {
+		return func(q packet.Parsed) (bool, string) {
+			return q.Src.Addr() == mustIP(ip), "match-src"
+		}
+	}
+	matchDst := func(ip string) PacketMatch {
+		return func(q packet.Parsed) (bool, string) {
+			return q.Dst.Addr() == mustIP(ip), "match-dst"
+		}
+	}
+	noMatch := func(q packet.Parsed) (bool, string) { return false, "" }
+
+	tests := []struct {
+		name  string
+		p     packet.Parsed
+		hooks []PacketMatch
+		want  Response
+	}{
+		{
+			name: "no_hooks_denied_src",
+			p:    parsed(ipproto.TCP, "99.99.99.99", "1.2.3.4", 0, 22),
+			want: Drop,
+		},
+		{
+			name:  "non_matching_hook",
+			p:     parsed(ipproto.TCP, "99.99.99.99", "1.2.3.4", 0, 22),
+			hooks: []PacketMatch{noMatch},
+			want:  Drop,
+		},
+		{
+			name:  "matching_hook_denied_src",
+			p:     parsed(ipproto.TCP, "99.99.99.99", "1.2.3.4", 0, 22),
+			hooks: []PacketMatch{matchSrc("99.99.99.99")},
+			want:  Accept,
+		},
+		{
+			name: "non_local_dst_no_hooks",
+			p:    parsed(ipproto.TCP, "8.1.1.1", "16.32.48.64", 0, 443),
+			want: Drop,
+		},
+		{
+			name:  "non_local_dst_with_hook",
+			p:     parsed(ipproto.TCP, "8.1.1.1", "16.32.48.64", 0, 443),
+			hooks: []PacketMatch{matchDst("16.32.48.64")},
+			want:  Accept,
+		},
+		{
+			name:  "first_match_wins",
+			p:     parsed(ipproto.TCP, "99.99.99.99", "1.2.3.4", 0, 22),
+			hooks: []PacketMatch{noMatch, matchSrc("99.99.99.99")},
+			want:  Accept,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filt := newFilter(t.Logf)
+			filt.IngressAllowHooks = tt.hooks
+			if got := filt.RunIn(&tt.p, 0); got != tt.want {
+				t.Errorf("RunIn = %v; want %v", got, tt.want)
+			}
+		})
+	}
+
+	// Verify first-match-wins stops calling subsequent hooks.
+	t.Run("first_match_stops_iteration", func(t *testing.T) {
+		filt := newFilter(t.Logf)
+		p := parsed(ipproto.TCP, "99.99.99.99", "1.2.3.4", 0, 22)
+		var called []int
+		filt.IngressAllowHooks = []PacketMatch{
+			func(q packet.Parsed) (bool, string) {
+				called = append(called, 0)
+				return true, "first"
+			},
+			func(q packet.Parsed) (bool, string) {
+				called = append(called, 1)
+				return true, "second"
+			},
+		}
+		filt.RunIn(&p, 0)
+		if len(called) != 1 || called[0] != 0 {
+			t.Errorf("called = %v; want [0]", called)
+		}
+	})
+}
+
+func TestLinkLocalAllowHooks(t *testing.T) {
+	matchDst := func(ip string) PacketMatch {
+		return func(q packet.Parsed) (bool, string) {
+			return q.Dst.Addr() == mustIP(ip), "match-dst"
+		}
+	}
+	noMatch := func(q packet.Parsed) (bool, string) { return false, "" }
+
+	llPkt := func() packet.Parsed {
+		p := parsed(ipproto.UDP, "8.1.1.1", "169.254.1.2", 0, 53)
+		p.StuffForTesting(1024)
+		return p
+	}
+	gcpPkt := func() packet.Parsed {
+		p := parsed(ipproto.UDP, "8.1.1.1", "169.254.169.254", 0, 53)
+		p.StuffForTesting(1024)
+		return p
+	}
+
+	tests := []struct {
+		name  string
+		p     packet.Parsed
+		hooks []PacketMatch
+		dir   direction
+		want  Response
+	}{
+		{
+			name: "dropped_by_default",
+			p:    llPkt(),
+			dir:  in,
+			want: Drop,
+		},
+		{
+			name:  "non_matching_hook",
+			p:     llPkt(),
+			hooks: []PacketMatch{noMatch},
+			dir:   in,
+			want:  Drop,
+		},
+		{
+			name:  "matching_hook_allows",
+			p:     llPkt(),
+			hooks: []PacketMatch{matchDst("169.254.1.2")},
+			dir:   in,
+			want:  noVerdict,
+		},
+		{
+			name: "gcp_dns_always_allowed",
+			p:    gcpPkt(),
+			dir:  in,
+			want: noVerdict,
+		},
+		{
+			name:  "matching_hook_allows_egress",
+			p:     llPkt(),
+			hooks: []PacketMatch{matchDst("169.254.1.2")},
+			dir:   out,
+			want:  noVerdict,
+		},
+		{
+			name:  "first_match_wins",
+			p:     llPkt(),
+			hooks: []PacketMatch{noMatch, matchDst("169.254.1.2")},
+			dir:   in,
+			want:  noVerdict,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filt := newFilter(t.Logf)
+			filt.LinkLocalAllowHooks = tt.hooks
+			got, reason := filt.pre(&tt.p, 0, tt.dir)
+			if got != tt.want {
+				t.Errorf("pre = %v (%s); want %v", got, reason, tt.want)
+			}
+		})
+	}
+
+	// Verify first-match-wins stops calling subsequent hooks.
+	t.Run("first_match_stops_iteration", func(t *testing.T) {
+		filt := newFilter(t.Logf)
+		p := llPkt()
+		var called []int
+		filt.LinkLocalAllowHooks = []PacketMatch{
+			func(q packet.Parsed) (bool, string) {
+				called = append(called, 0)
+				return true, "first"
+			},
+			func(q packet.Parsed) (bool, string) {
+				called = append(called, 1)
+				return true, "second"
+			},
+		}
+		filt.pre(&p, 0, in)
+		if len(called) != 1 || called[0] != 0 {
+			t.Errorf("called = %v; want [0]", called)
+		}
+	})
 }
 
 func benchmarkFile(b *testing.B, file string, opt benchOpt) {
