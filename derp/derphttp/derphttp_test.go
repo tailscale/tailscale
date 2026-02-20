@@ -629,3 +629,71 @@ func TestURLDial(t *testing.T) {
 		t.Fatalf("rc.Connect: %v", err)
 	}
 }
+
+func TestDerpNodeFallback(t *testing.T) {
+	if !*liveNetworkTest {
+		t.Skip("skipping live network test without --live-net-tests")
+	}
+
+	// create a tcp server that always fail, mock broken node
+	ln1, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln1.Close()
+	go func() {
+		for {
+			select {
+			case <-t.Context().Done():
+				return
+			default:
+				conn, err := ln1.Accept()
+				if err != nil {
+					continue
+				}
+				conn.Close()
+			}
+		}
+	}()
+
+	nodes := []*tailcfg.DERPNode{{
+		Name:     "treg1",
+		RegionID: 1,
+		IPv4:     "127.0.0.1",
+		DERPPort: ln1.Addr().(*net.TCPAddr).Port,
+	}}
+	derpRegion := &tailcfg.DERPRegion{
+		RegionID:   1,
+		RegionCode: "treg1",
+		RegionName: "test-reg",
+		Nodes:      nodes,
+	}
+
+	netMon := netmon.NewStatic()
+	rc := derphttp.NewRegionClient(key.NewNode(), t.Logf, netMon, func() *tailcfg.DERPRegion { return derpRegion })
+	defer rc.Close()
+
+	// Connect will always fail
+	if err = rc.Connect(context.Background()); err == nil {
+		t.Fatalf("expected connection to fail")
+	}
+
+	dm := &tailcfg.DERPMap{}
+	res, err := http.Get("https://controlplane.tailscale.com/derpmap/default")
+	if err != nil {
+		t.Fatalf("fetching DERPMap: %v", err)
+	}
+	defer res.Body.Close()
+	if err := json.NewDecoder(res.Body).Decode(dm); err != nil {
+		t.Fatalf("decoding DERPMap: %v", err)
+	}
+	region := slices.Sorted(maps.Keys(dm.Regions))[0]
+
+	// append normal nodes after broken node, Connect would success
+	nodes = append(nodes, dm.Regions[region].Nodes[:]...)
+	derpRegion.Nodes = nodes
+
+	if err := rc.Connect(context.Background()); err != nil {
+		t.Fatalf("client Connect: %v", err)
+	}
+}

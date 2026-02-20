@@ -386,7 +386,6 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		}
 	}()
 
-	var node *tailcfg.DERPNode // nil when using c.url to dial
 	var idealNodeInRegion bool
 	switch {
 	case canWebsockets && useWebsockets():
@@ -425,15 +424,44 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	case c.url != nil:
 		c.logf("%s: connecting to %v", caller, c.url)
 		tcpConn, err = c.dialURL(ctx)
+		if err != nil {
+			return nil, 0, err
+		}
+		return c.connectWithConn(ctx, reg, nil, tcpConn, idealNodeInRegion)
 	default:
 		c.logf("%s: connecting to derp-%d (%v)", caller, reg.RegionID, reg.RegionCode)
-		tcpConn, node, err = c.dialRegion(ctx, reg)
-		idealNodeInRegion = err == nil && reg.Nodes[0] == node
+		if len(reg.Nodes) == 0 {
+			return nil, 0, fmt.Errorf("no nodes for %s", c.targetString(reg))
+		}
+		var sawNonSTUN bool
+		var derpClient *derp.Client
+		for i, n := range reg.Nodes {
+			if n.STUNOnly {
+				continue
+			}
+			sawNonSTUN = true
+			tcpConn, err = c.dialNode(ctx, n)
+			if err != nil {
+				continue
+			}
+			idealNodeInRegion = i == 0
+			derpClient, connGen, err = c.connectWithConn(ctx, reg, n, tcpConn, idealNodeInRegion)
+			if err != nil {
+				if tcpConn != nil {
+					go tcpConn.Close()
+				}
+				continue
+			}
+			return derpClient, connGen, nil
+		}
+		if !sawNonSTUN {
+			return nil, 0, fmt.Errorf("no non-STUNOnly nodes for %s", c.targetString(reg))
+		}
+		return nil, 0, fmt.Errorf("all derp nodes in %s failed: %w", c.targetString(reg), err)
 	}
-	if err != nil {
-		return nil, 0, err
-	}
+}
 
+func (c *Client) connectWithConn(ctx context.Context, reg *tailcfg.DERPRegion, node *tailcfg.DERPNode, tcpConn net.Conn, idealNodeInRegion bool) (client *derp.Client, connGen int, err error) {
 	// Now that we have a TCP connection, force close it if the
 	// TLS handshake + DERP setup takes too long.
 	done := make(chan struct{})
