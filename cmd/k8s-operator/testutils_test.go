@@ -30,9 +30,9 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/ipnstate"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
@@ -985,19 +985,4 @@ func (c *fakeTSClient) DeleteVIPService(ctx context.Context, name tailcfg.Servic
 		delete(c.vipServices, name)
 	}
 	return nil
-}
-
-type fakeLocalClient struct {
-	status *ipnstate.Status
-}
-
-func (f *fakeLocalClient) StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
-	if f.status == nil {
-		return &ipnstate.Status{
-			Self: &ipnstate.PeerStatus{
-				DNSName: "test-node.test.ts.net.",
-			},
-		}, nil
-	}
-	return f.status, nil
 }

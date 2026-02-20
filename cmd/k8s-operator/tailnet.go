@@ -12,6 +12,7 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"tailscale.com/internal/client/tailscale"
@@ -55,4 +56,27 @@ func clientForTailnet(ctx context.Context, cl client.Client, namespace, name str
 	ts.BaseURL = baseURL
 
 	return ts, nil
+}
+
+func clientFromProxyGroup(ctx context.Context, cl client.Client, obj client.Object, namespace string, def tsClient) (tsClient, error) {
+	proxyGroup := obj.GetAnnotations()[AnnotationProxyGroup]
+	if proxyGroup == "" {
+		return def, nil
+	}
+
+	var pg tsapi.ProxyGroup
+	if err := cl.Get(ctx, types.NamespacedName{Name: proxyGroup}, &pg); err != nil {
+		return nil, err
+	}
+
+	if pg.Spec.Tailnet == "" {
+		return def, nil
+	}
+
+	tailscaleClient, err := clientForTailnet(ctx, cl, namespace, pg.Spec.Tailnet)
+	if err != nil {
+		return nil, err
+	}
+
+	return tailscaleClient, nil
 }
