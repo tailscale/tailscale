@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"path"
 	"runtime"
 	"slices"
 	"sort"
@@ -28,12 +29,57 @@ import (
 // same interface and subnet.
 var forceAllIPv6Endpoints = envknob.RegisterBool("TS_DEBUG_FORCE_ALL_IPV6_ENDPOINTS")
 
+// avoidInterfaces is a debug/power-user knob to exclude specific interfaces from consideration
+// when gathering endpoints.
+var avoidInterfaces = envknob.RegisterString("TS_AVOID_INTERFACES")
+
+// Likewise, onlyInterfaces can be set to specify the _only_ interfaces Tailscale is allowed to
+// consider when gathering endpoints.
+var onlyInterfaces = envknob.RegisterString("TS_ONLY_INTERFACES")
+
+// In the same vein, avoidPrefix is a debug/power-user knob to exclude any addresses within specific
+// prefixes from being used as endpoints. This is a more granular version of $TS_AVOID_INTERFACES.
+var avoidPrefix = envknob.RegisterString("TS_AVOID_PREFIX")
+
 // LoginEndpointForProxyDetermination is the URL used for testing
 // which HTTP proxy the system should use.
 var LoginEndpointForProxyDetermination = "https://controlplane.tailscale.com/"
 
 func isUp(nif *net.Interface) bool       { return nif.Flags&net.FlagUp != 0 }
 func isLoopback(nif *net.Interface) bool { return nif.Flags&net.FlagLoopback != 0 }
+
+func matchInterfaceName(name string, patterns string) bool {
+	patternsList := strings.Split(patterns, ",")
+	for _, pattern := range patternsList {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		if matched, _ := path.Match(pattern, name); matched {
+			return true
+		}
+	}
+	return false
+}
+
+func matchIP(ip netip.Addr, prefixes string) bool {
+	prefixList := strings.Split(prefixes, ",")
+	for _, arg := range prefixList {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(arg)
+		if err != nil {
+			continue
+		}
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+	return false
+
+}
 
 func isProblematicInterface(nif *net.Interface) bool {
 	name := nif.Name
@@ -45,6 +91,24 @@ func isProblematicInterface(nif *net.Interface) bool {
 		return true
 	}
 	return false
+}
+
+func isAllowedInterface(nif *net.Interface) bool {
+	name := nif.Name
+	if onlyInterfaces() != "" && !matchInterfaceName(name, onlyInterfaces()) {
+		return false
+	}
+	if avoidInterfaces() != "" && matchInterfaceName(name, avoidInterfaces()) {
+		return false
+	}
+	return true
+}
+
+func isAllowedAddress(ip netip.Addr) bool {
+	if avoidPrefix() != "" && matchIP(ip, avoidPrefix()) {
+		return false
+	}
+	return true
 }
 
 // LocalAddresses returns the machine's IP addresses, separated by
@@ -66,6 +130,10 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 			// send Tailscale traffic over.
 			continue
 		}
+		if !isAllowedInterface(stdIf) {
+			// Skip interfaces that the user does not want to use with Tailscale.
+			continue
+		}
 		ifcIsLoopback := isLoopback(stdIf)
 
 		addrs, err := iface.Addrs()
@@ -81,6 +149,10 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 					continue
 				}
 				ip = ip.Unmap()
+				if !isAllowedAddress(ip) {
+					// Skip addresses that the user does not want to use with Tailscale.
+					continue
+				}
 				// TODO(apenwarr): don't special case cgNAT.
 				// In the general wireguard case, it might
 				// very well be something we can route to
