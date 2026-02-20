@@ -123,7 +123,10 @@ export function useAPI() {
           return apiFetch<{ url?: string }>("/up", "POST", t.data)
             .then((d) => d.url && window.open(d.url, "_blank")) // "up" login step
             .then(() => incrementMetric("web_client_node_connect"))
-            .then(() => mutate("/data"))
+            .then(() => {
+              mutate("/data")
+              mutate("/auth")
+            })
             .catch(handlePostError("Failed to login"))
 
         /**
@@ -134,9 +137,9 @@ export function useAPI() {
           // For logout, must increment metric before running api call,
           // as tailscaled will be unreachable after the call completes.
           incrementMetric("web_client_node_disconnect")
-          return apiFetch("/local/v0/logout", "POST").catch(
-            handlePostError("Failed to logout")
-          )
+          return apiFetch("/local/v0/logout", "POST")
+            .then(() => mutate("/auth"))
+            .catch(handlePostError("Failed to logout"))
 
         /**
          * "new-auth-session" handles creating a new check mode session to
