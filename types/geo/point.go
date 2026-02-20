@@ -125,6 +125,9 @@ func (p Point) SphericalAngleTo(q Point) (Radians, error) {
 	sLat, sLng := float64(qLat.Radians()), float64(qLng.Radians())
 	cosA := math.Sin(rLat)*math.Sin(sLat) +
 		math.Cos(rLat)*math.Cos(sLat)*math.Cos(rLng-sLng)
+	// Subtle floating point imprecision can lead to cosA being outside
+	// the domain of arccosine [-1, 1]. Clamp the input to avoid NaN return.
+	cosA = min(max(-1.0, cosA), 1.0)
 	return Radians(math.Acos(cosA)), nil
 }
 
