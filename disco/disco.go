@@ -54,6 +54,7 @@ const (
 )
 
 const v0 = byte(0)
+const v1 = byte(1)
 
 var errShort = errors.New("short message")
 
@@ -466,15 +467,46 @@ type AllocateUDPRelayEndpointRequest struct {
 	// echo it back in the [AllocateUDPRelayEndpointResponse] to enable request
 	// and response alignment client-side.
 	Generation uint32
+	// ChainNextHop, when valid, requests that the relay operate in chain
+	// forwarding mode: instead of bidirectionally forwarding between two bound
+	// clients, the relay rewrites the Geneve VNI to [ChainNextHopVNI] and
+	// forwards every incoming data packet to ChainNextHop. This is the
+	// mechanism enabling multi-hop relay chains where intermediate nodes do
+	// not decrypt WireGuard payloads.
+	ChainNextHop netip.AddrPort
+	// ChainNextHopVNI is the Geneve VNI to use in the rewritten header when
+	// forwarding to [ChainNextHop]. Only meaningful when ChainNextHop is valid.
+	ChainNextHopVNI uint32
 }
 
-// allocateUDPRelayEndpointRequestLen is the length of a marshaled
-// [AllocateUDPRelayEndpointRequest] message without the message header.
-const allocateUDPRelayEndpointRequestLen = key.DiscoPublicRawLen*2 + // ClientDisco
+// allocateUDPRelayEndpointRequestBaseLen is the length of a marshaled
+// [AllocateUDPRelayEndpointRequest] message body (v0, no chain fields).
+const allocateUDPRelayEndpointRequestBaseLen = key.DiscoPublicRawLen*2 + // ClientDisco
 	4 // Generation
 
+// allocateUDPRelayEndpointRequestChainExtLen is the extra bytes appended for
+// chain forwarding fields in v1 messages.
+const allocateUDPRelayEndpointRequestChainExtLen = epLength + // ChainNextHop (addr as16 + port)
+	4 // ChainNextHopVNI
+
 func (m *AllocateUDPRelayEndpointRequest) AppendMarshal(b []byte) []byte {
-	ret, p := appendMsgHeader(b, TypeAllocateUDPRelayEndpointRequest, v0, allocateUDPRelayEndpointRequestLen)
+	if m.ChainNextHop.IsValid() {
+		ret, p := appendMsgHeader(b, TypeAllocateUDPRelayEndpointRequest, v1, allocateUDPRelayEndpointRequestBaseLen+allocateUDPRelayEndpointRequestChainExtLen)
+		for i := 0; i < len(m.ClientDisco); i++ {
+			disco := m.ClientDisco[i].AppendTo(nil)
+			copy(p, disco)
+			p = p[key.DiscoPublicRawLen:]
+		}
+		binary.BigEndian.PutUint32(p, m.Generation)
+		p = p[4:]
+		a := m.ChainNextHop.Addr().As16()
+		copy(p, a[:])
+		binary.BigEndian.PutUint16(p[16:18], m.ChainNextHop.Port())
+		p = p[epLength:]
+		binary.BigEndian.PutUint32(p, m.ChainNextHopVNI)
+		return ret
+	}
+	ret, p := appendMsgHeader(b, TypeAllocateUDPRelayEndpointRequest, v0, allocateUDPRelayEndpointRequestBaseLen)
 	for i := 0; i < len(m.ClientDisco); i++ {
 		disco := m.ClientDisco[i].AppendTo(nil)
 		copy(p, disco)
@@ -486,10 +518,10 @@ func (m *AllocateUDPRelayEndpointRequest) AppendMarshal(b []byte) []byte {
 
 func parseAllocateUDPRelayEndpointRequest(ver uint8, p []byte) (m *AllocateUDPRelayEndpointRequest, err error) {
 	m = new(AllocateUDPRelayEndpointRequest)
-	if ver != 0 {
-		return
+	if ver != 0 && ver != 1 {
+		return m, nil
 	}
-	if len(p) < allocateUDPRelayEndpointRequestLen {
+	if len(p) < allocateUDPRelayEndpointRequestBaseLen {
 		return m, errShort
 	}
 	for i := 0; i < len(m.ClientDisco); i++ {
@@ -497,6 +529,16 @@ func parseAllocateUDPRelayEndpointRequest(ver uint8, p []byte) (m *AllocateUDPRe
 		p = p[key.DiscoPublicRawLen:]
 	}
 	m.Generation = binary.BigEndian.Uint32(p)
+	p = p[4:]
+	if ver == 1 && len(p) >= allocateUDPRelayEndpointRequestChainExtLen {
+		var a [16]byte
+		copy(a[:], p)
+		m.ChainNextHop = netip.AddrPortFrom(
+			netip.AddrFrom16(a).Unmap(),
+			binary.BigEndian.Uint16(p[16:18]))
+		p = p[epLength:]
+		m.ChainNextHopVNI = binary.BigEndian.Uint32(p)
+	}
 	return m, nil
 }
 

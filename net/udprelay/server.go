@@ -99,6 +99,10 @@ type Server struct {
 	// sensitive paths, e.g. packet forwarding, do not need to acquire mu.
 	serverEndpointByVNI   sync.Map // key is uint32 (Geneve VNI), value is [*serverEndpoint]
 	serverEndpointByDisco map[key.SortedPairOfDiscoPublic]*serverEndpoint
+	// chainForwardByVNI maps an inbound Geneve VNI to a [*chainForwardEntry]
+	// for multi-hop relay chain forwarding. Read ops in the packet forwarding
+	// path do not need to acquire mu; writes are serialized under mu.
+	chainForwardByVNI sync.Map // key is uint32 (Geneve VNI), value is [*chainForwardEntry]
 }
 
 const macSecretRotationInterval = time.Minute * 2
@@ -128,6 +132,20 @@ type serverEndpoint struct {
 	lastSeen             [2]mono.Time
 	packetsRx            [2]uint64 // num packets received from/sent by each client after they are bound
 	bytesRx              [2]uint64 // num bytes received from/sent by each client after they are bound
+}
+
+// chainForwardEntry describes one hop of a multi-hop relay chain. When the
+// relay server receives a data packet whose Geneve VNI matches VNI_in (the key
+// in [Server.chainForwardByVNI]), it rewrites the Geneve VNI to VNI_out and
+// forwards the packet (WireGuard payload untouched) to NextHop. No WireGuard
+// decryption occurs; the relay is a transparent forwarder.
+type chainForwardEntry struct {
+	// NextHop is the destination to forward chain packets to.
+	NextHop netip.AddrPort
+	// VNI_out is the Geneve VNI written into the forwarded packet's header.
+	VNI_out uint32
+	// allocatedAt is used for GC: entries are removed after steadyStateLifetime.
+	allocatedAt mono.Time
 }
 
 func blakeMACFromBindMsg(blakeKey [blake2s.Size]byte, src netip.AddrPort, msg disco.BindUDPRelayEndpointCommon) ([blake2s.Size]byte, error) {
@@ -769,6 +787,16 @@ func (s *Server) endpointGC(bindLifetime, steadyStateLifetime time.Duration) {
 			s.serverEndpointByVNI.Delete(v.vni)
 		}
 	}
+	// Chain forward entries have no handshake lifecycle; expire them after
+	// steadyStateLifetime from allocation (same upper bound as peer endpoints).
+	s.chainForwardByVNI.Range(func(k, v any) bool {
+		entry := v.(*chainForwardEntry)
+		if now.Sub(entry.allocatedAt) > steadyStateLifetime {
+			s.chainForwardByVNI.Delete(k)
+			s.logf("expired chain endpoint vni=%d", k.(uint32))
+		}
+		return true
+	})
 }
 
 func (s *Server) endpointGCLoop() {
@@ -810,8 +838,18 @@ func (s *Server) handlePacket(from netip.AddrPort, b []byte) (write []byte, to n
 	}
 	e, ok := s.serverEndpointByVNI.Load(gh.VNI.Get())
 	if !ok {
-		// unknown VNI
-		return nil, netip.AddrPort{}, false
+		// Not a regular peer-pair endpoint. Check chain forwarding table.
+		cf, cfOk := s.chainForwardByVNI.Load(gh.VNI.Get())
+		if !cfOk || gh.Control {
+			// Unknown VNI, or a control/disco packet on a chain VNI (not
+			// expected; chain legs carry only data packets).
+			return nil, netip.AddrPort{}, false
+		}
+		entry := cf.(*chainForwardEntry)
+		// Rewrite the Geneve VNI in-place (bytes 4-7: VNI occupies the upper
+		// 24 bits, lowest byte is reserved and always 0).
+		binary.BigEndian.PutUint32(b[4:], entry.VNI_out<<8)
+		return b, entry.NextHop, true
 	}
 
 	now := mono.Now()
@@ -984,6 +1022,10 @@ func (s *Server) getNextVNILocked() (uint32, error) {
 			s.nextVNI++
 		}
 		_, ok := s.serverEndpointByVNI.Load(vni)
+		if ok {
+			continue
+		}
+		_, ok = s.chainForwardByVNI.Load(vni)
 		if !ok {
 			return vni, nil
 		}
@@ -1076,7 +1118,50 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 	}, nil
 }
 
-// extractClientInfo constructs a [status.ClientInfo] for both relay clients
+// AllocateChainEndpoint allocates a Geneve VNI for chain forwarding. When any
+// data packet arrives on the returned VNI, the server rewrites the Geneve
+// header VNI to vniOut and forwards the packet — WireGuard payload untouched —
+// to nextHop. No disco handshake is required for chain endpoints; the relay is
+// a transparent forwarder. The caller advertises the returned
+// [endpoint.ServerEndpoint] address and VNI to the upstream node so it knows
+// where to send its Geneve-encapsulated packets.
+//
+// Notable errors:
+//  1. [ErrServerClosed] if the server has been closed.
+//  2. [ErrServerNotReady] if the server is not ready.
+func (s *Server) AllocateChainEndpoint(nextHop netip.AddrPort, vniOut uint32) (endpoint.ServerEndpoint, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return endpoint.ServerEndpoint{}, ErrServerClosed
+	}
+	if s.staticAddrPorts.Len() == 0 && len(s.dynamicAddrPorts) == 0 {
+		return endpoint.ServerEndpoint{}, ErrServerNotReady{RetryAfter: endpoint.ServerRetryAfter}
+	}
+
+	vni, err := s.getNextVNILocked()
+	if err != nil {
+		return endpoint.ServerEndpoint{}, err
+	}
+
+	s.lamportID++
+	entry := &chainForwardEntry{
+		NextHop:     nextHop,
+		VNI_out:     vniOut,
+		allocatedAt: mono.Now(),
+	}
+	s.chainForwardByVNI.Store(vni, entry)
+
+	s.logf("allocated chain endpoint vni=%d nextHop=%v vniOut=%d", vni, nextHop, vniOut)
+	return endpoint.ServerEndpoint{
+		ServerDisco:         s.discoPublic,
+		AddrPorts:           s.getAllAddrPortsCopyLocked(),
+		VNI:                 vni,
+		LamportID:           s.lamportID,
+		BindLifetime:        tstime.GoDuration{Duration: s.bindLifetime},
+		SteadyStateLifetime: tstime.GoDuration{Duration: s.steadyStateLifetime},
+	}, nil
+}
 // involved in this session.
 func (e *serverEndpoint) extractClientInfo() [2]status.ClientInfo {
 	e.mu.Lock()

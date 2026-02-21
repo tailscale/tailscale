@@ -1567,6 +1567,13 @@ const (
 	// relay endpoints to the peer which has this capability.
 	PeerCapabilityRelayTarget PeerCapability = "tailscale.com/cap/relay-target"
 
+	// PeerCapabilityRelayChainTarget grants the current node the ability to
+	// use this peer as an intermediate hop in a multi-hop relay chain. A node
+	// with this capability will forward Geneve-encapsulated WireGuard packets
+	// to the next hop in the chain without decrypting the WireGuard payload.
+	// Requires [PeerCapabilityRelayTarget] to also be granted.
+	PeerCapabilityRelayChainTarget PeerCapability = "tailscale.com/cap/relay-chain-target"
+
 	// PeerCapabilityTsIDP grants a peer tsidp-specific
 	// capabilities, such as the ability to add user groups to the OIDC
 	// claim
