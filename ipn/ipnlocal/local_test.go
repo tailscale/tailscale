@@ -7570,3 +7570,112 @@ func TestRouteAllDisabled(t *testing.T) {
 		})
 	}
 }
+
+// TestAdvertiseRoute_InvalidPrefix tests that AdvertiseRoute rejects routes
+// with non-address bits set in the prefix.
+func TestAdvertiseRoute_InvalidPrefix(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	tests := []struct {
+		name    string
+		routes  []netip.Prefix
+		wantErr bool
+	}{
+		{
+			name: "valid_routes",
+			routes: []netip.Prefix{
+				netip.MustParsePrefix("10.0.0.0/24"),
+				netip.MustParsePrefix("2001:db8::/32"),
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid_ipv4_route",
+			routes: []netip.Prefix{
+				netip.MustParsePrefix("10.0.0.1/24"), // has non-address bits
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid_ipv6_route",
+			routes: []netip.Prefix{
+				netip.MustParsePrefix("2a01:4f9:c010:c015::1/64"), // has non-address bits
+			},
+			wantErr: true,
+		},
+		{
+			name: "mixed_valid_and_invalid",
+			routes: []netip.Prefix{
+				netip.MustParsePrefix("10.0.0.0/24"),    // valid
+				netip.MustParsePrefix("192.168.1.1/16"), // invalid - this should cause rejection
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := b.AdvertiseRoute(tt.routes...)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("AdvertiseRoute() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil {
+				t.Logf("Expected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestEditPrefs_InvalidAdvertiseRoutes tests that EditPrefs (used by the local
+// API) rejects routes with non-address bits set.
+func TestEditPrefs_InvalidAdvertiseRoutes(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	tests := []struct {
+		name    string
+		routes  []netip.Prefix
+		wantErr bool
+	}{
+		{
+			name: "valid_routes",
+			routes: []netip.Prefix{
+				netip.MustParsePrefix("10.0.0.0/24"),
+				netip.MustParsePrefix("2001:db8::/32"),
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid_ipv4_route",
+			routes: []netip.Prefix{
+				netip.MustParsePrefix("10.0.0.1/24"), // has non-address bits
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid_ipv6_route",
+			routes: []netip.Prefix{
+				netip.MustParsePrefix("fdf2:8bc1:6276:4f3f:dc33:c4ff:fe0b:120a/64"), // has non-address bits
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mp := &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					AdvertiseRoutes: tt.routes,
+				},
+				AdvertiseRoutesSet: true,
+			}
+
+			_, err := b.EditPrefs(mp)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("EditPrefs() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil {
+				t.Logf("Expected error: %v", err)
+			}
+		})
+	}
+}

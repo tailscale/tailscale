@@ -4150,6 +4150,9 @@ func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
 	if err := b.checkAutoUpdatePrefsLocked(p); err != nil {
 		errs = append(errs, err)
 	}
+	if err := validateAdvertiseRoutes(p); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
@@ -4272,6 +4275,17 @@ func (b *LocalBackend) checkAutoUpdatePrefsLocked(p *ipn.Prefs) error {
 	}
 	if p.AutoUpdate.Apply.EqualBool(true) && !feature.CanAutoUpdate() {
 		return errors.New("Auto-updates are not supported on this platform.")
+	}
+	return nil
+}
+
+// validateAdvertiseRoutes validates that all advertised routes have
+// properly masked prefixes (no non-address bits set).
+func validateAdvertiseRoutes(p *ipn.Prefs) error {
+	for _, route := range p.AdvertiseRoutes {
+		if route != route.Masked() {
+			return fmt.Errorf("route %s has non-address bits set; expected %s", route, route.Masked())
+		}
 	}
 	return nil
 }
@@ -7254,6 +7268,10 @@ func (b *LocalBackend) AdvertiseRoute(ipps ...netip.Prefix) error {
 	var newRoutes []netip.Prefix
 
 	for _, ipp := range ipps {
+		// Validate that the prefix has no non-address bits set
+		if ipp != ipp.Masked() {
+			return fmt.Errorf("route %s has non-address bits set; expected %s", ipp, ipp.Masked())
+		}
 		if !allowedAutoRoute(ipp) {
 			continue
 		}
