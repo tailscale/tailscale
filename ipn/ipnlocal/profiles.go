@@ -274,7 +274,7 @@ func (pm *profileManager) matchingProfiles(uid ipn.WindowsUserID, f func(ipn.Log
 func (pm *profileManager) findMatchingProfiles(uid ipn.WindowsUserID, prefs ipn.PrefsView) []ipn.LoginProfileView {
 	return pm.matchingProfiles(uid, func(p ipn.LoginProfileView) bool {
 		return p.ControlURL() == prefs.ControlURL() &&
-			(p.UserProfile().ID == prefs.Persist().UserProfile().ID ||
+			(p.UserProfile().ID() == prefs.Persist().UserProfile().ID() ||
 				p.NodeID() == prefs.Persist().NodeID())
 	})
 }
@@ -337,7 +337,7 @@ func (pm *profileManager) setUnattendedModeAsConfigured() error {
 // across user switches to disambiguate the same account but a different tailnet.
 func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile) error {
 	cp := pm.currentProfile
-	if persist := prefsIn.Persist(); !persist.Valid() || persist.NodeID() == "" || persist.UserProfile().LoginName == "" {
+	if persist := prefsIn.Persist(); !persist.Valid() || persist.NodeID() == "" || persist.UserProfile().LoginName() == "" {
 		// We don't know anything about this profile, so ignore it for now.
 		return pm.setProfilePrefsNoPermCheck(pm.currentProfile, prefsIn.AsStruct().View())
 	}
@@ -410,7 +410,7 @@ func (pm *profileManager) setProfilePrefs(lp *ipn.LoginProfile, prefsIn ipn.Pref
 	// and it hasn't been persisted yet. We'll generate both an ID and [ipn.StateKey]
 	// once the information is available and needs to be persisted.
 	if lp.ID == "" {
-		if persist := prefsIn.Persist(); persist.Valid() && persist.NodeID() != "" && persist.UserProfile().LoginName != "" {
+		if persist := prefsIn.Persist(); persist.Valid() && persist.NodeID() != "" && persist.UserProfile().LoginName() != "" {
 			// Generate an ID and [ipn.StateKey] now that we have the node info.
 			lp.ID, lp.Key = newUnusedID(pm.knownProfiles)
 		}
@@ -425,7 +425,7 @@ func (pm *profileManager) setProfilePrefs(lp *ipn.LoginProfile, prefsIn ipn.Pref
 
 	var up tailcfg.UserProfile
 	if persist := prefsIn.Persist(); persist.Valid() {
-		up = persist.UserProfile()
+		up = *persist.UserProfile().AsStruct()
 		if up.DisplayName == "" {
 			up.DisplayName = up.LoginName
 		}
