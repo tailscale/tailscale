@@ -53,16 +53,37 @@ func DirectTCPIPHandler(srv *Server, conn *gossh.ServerConn, newChan gossh.NewCh
 	}
 	go gossh.DiscardRequests(reqs)
 
+	defer ch.Close()
+	defer dconn.Close()
+
+	done := make(chan struct{}, 2)
 	go func() {
-		defer ch.Close()
-		defer dconn.Close()
+		defer ch.CloseWrite()
+		defer closeRead(dconn)
 		io.Copy(ch, dconn)
+		done <- struct{}{}
 	}()
 	go func() {
-		defer ch.Close()
-		defer dconn.Close()
+		defer closeWrite(dconn)
 		io.Copy(dconn, ch)
+		done <- struct{}{}
 	}()
+	<-done
+	<-done
+}
+
+func closeWrite(c net.Conn) error {
+	if cw, ok := c.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return c.Close()
+}
+
+func closeRead(c net.Conn) error {
+	if cr, ok := c.(interface{ CloseRead() error }); ok {
+		return cr.CloseRead()
+	}
+	return c.Close()
 }
 
 type remoteForwardRequest struct {
