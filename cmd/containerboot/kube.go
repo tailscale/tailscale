@@ -26,8 +26,9 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/backoff"
-	"tailscale.com/util/set"
 )
+
+const fieldManager = "tailscale-container"
 
 // kubeClient is a wrapper around Tailscale's internal kube client that knows how to talk to the kube API server. We use
 // this rather than any of the upstream Kubernetes client libaries to avoid extra imports.
@@ -63,7 +64,7 @@ func (kc *kubeClient) storeDeviceID(ctx context.Context, deviceID tailcfg.Stable
 			kubetypes.KeyDeviceID: []byte(deviceID),
 		},
 	}
-	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, "tailscale-container")
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
 }
 
 // storeDeviceEndpoints writes device's tailnet IPs and MagicDNS name to fields 'device_ips', 'device_fqdn' of client's
@@ -84,7 +85,7 @@ func (kc *kubeClient) storeDeviceEndpoints(ctx context.Context, fqdn string, add
 			kubetypes.KeyDeviceIPs:  deviceIPs,
 		},
 	}
-	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, "tailscale-container")
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
 }
 
 // storeHTTPSEndpoint writes an HTTPS endpoint exposed by this device via 'tailscale serve' to the client's state
@@ -96,7 +97,7 @@ func (kc *kubeClient) storeHTTPSEndpoint(ctx context.Context, ep string) error {
 			kubetypes.KeyHTTPSEndpoint: []byte(ep),
 		},
 	}
-	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, "tailscale-container")
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
 }
 
 // deleteAuthKey deletes the 'authkey' field of the given kube
@@ -122,7 +123,7 @@ func (kc *kubeClient) deleteAuthKey(ctx context.Context) error {
 
 // resetContainerbootState resets state from previous runs of containerboot to
 // ensure the operator doesn't use stale state when a Pod is first recreated.
-func (kc *kubeClient) resetContainerbootState(ctx context.Context, podUID string) error {
+func (kc *kubeClient) resetContainerbootState(ctx context.Context, podUID string, tailscaledConfigAuthkey string) error {
 	existingSecret, err := kc.GetSecret(ctx, kc.stateSecret)
 	switch {
 	case kubeclient.IsNotFoundErr(err):
@@ -131,32 +132,96 @@ func (kc *kubeClient) resetContainerbootState(ctx context.Context, podUID string
 	case err != nil:
 		return fmt.Errorf("failed to read state Secret %q to reset state: %w", kc.stateSecret, err)
 	}
+
 	s := &kubeapi.Secret{
 		Data: map[string][]byte{
 			kubetypes.KeyCapVer: fmt.Appendf(nil, "%d", tailcfg.CurrentCapabilityVersion),
+
+			// TODO(tomhjp): Perhaps shouldn't clear device ID and use a different signal, as this could leak tailnet devices.
+			kubetypes.KeyDeviceID:            nil,
+			kubetypes.KeyDeviceFQDN:          nil,
+			kubetypes.KeyDeviceIPs:           nil,
+			kubetypes.KeyHTTPSEndpoint:       nil,
+			egressservices.KeyEgressServices: nil,
+			ingressservices.IngressConfigKey: nil,
 		},
 	}
 	if podUID != "" {
 		s.Data[kubetypes.KeyPodUID] = []byte(podUID)
 	}
 
-	toClear := set.SetOf([]string{
-		kubetypes.KeyDeviceID,
-		kubetypes.KeyDeviceFQDN,
-		kubetypes.KeyDeviceIPs,
-		kubetypes.KeyHTTPSEndpoint,
-		egressservices.KeyEgressServices,
-		ingressservices.IngressConfigKey,
-	})
-	for key := range existingSecret.Data {
-		if toClear.Contains(key) {
-			// It's fine to leave the key in place as a debugging breadcrumb,
-			// it should get a new value soon.
-			s.Data[key] = nil
-		}
+	// Only clear reissue_authkey if the operator has actioned it.
+	existingSecret, err = kc.GetSecret(ctx, kc.stateSecret)
+	if err != nil {
+		return fmt.Errorf("failed to read state Secret %q to reset state: %w", kc.stateSecret, err)
 	}
 
-	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, "tailscale-container")
+	brokenAuthkey, ok := existingSecret.Data[kubetypes.KeyReissueAuthkey]
+	if ok && tailscaledConfigAuthkey != "" && string(brokenAuthkey) != tailscaledConfigAuthkey {
+		s.Data[kubetypes.KeyReissueAuthkey] = nil
+	}
+
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
+}
+
+func (kc *kubeClient) setReissueAuthKey(ctx context.Context, authKey string) error {
+	s := &kubeapi.Secret{
+		Data: map[string][]byte{
+			kubetypes.KeyReissueAuthkey: []byte(authKey), // Empty string means no auth key.
+		},
+	}
+
+	log.Printf("requested for new auth key from operator")
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
+}
+
+// waitForAuthKeyReissue waits for the operator to provide a new auth key after
+// requesting reissue. It polls the state Secret for an updated authkey field.
+func (kc *kubeClient) waitForAuthKeyReissue(ctx context.Context, configPath string, oldAuthKey string, maxWait time.Duration) error {
+	log.Printf("Waiting for operator to provide new auth key (max wait: %v)", maxWait)
+
+	ctx, cancel := context.WithTimeout(ctx, maxWait)
+	defer cancel()
+
+	bo := backoff.NewBackoff("auth-key-reissue", logger.Discard, 5*time.Second)
+	bo.LogLongerThan = 10 * time.Second
+
+	start := time.Now()
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for auth key reissue after %v", maxWait)
+		default:
+		}
+
+		newAuthKey := authkeyFromTailscaledConfig(configPath)
+		if newAuthKey != "" && newAuthKey != oldAuthKey {
+			log.Printf("New auth key received from operator after %v", time.Since(start).Round(time.Second))
+
+			if err := kc.clearReissueAuthKeyRequest(ctx); err != nil {
+				log.Printf("Warning: failed to clear reissue request: %v", err)
+			}
+
+			return nil
+		}
+
+		waited := time.Since(start).Round(time.Second)
+		log.Printf("Waiting for new auth key from operator (%v elapsed)", waited)
+
+		bo.BackOff(ctx, fmt.Errorf("no new auth key yet"))
+	}
+}
+
+// clearReissueAuthKeyRequest removes the reissue_authkey marker from the Secret
+// to signal to the operator that we've successfully received the new key.
+func (kc *kubeClient) clearReissueAuthKeyRequest(ctx context.Context) error {
+	s := &kubeapi.Secret{
+		Data: map[string][]byte{
+			// Empty = cleared
+			kubetypes.KeyReissueAuthkey: []byte(""),
+		},
+	}
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
 }
 
 // waitForConsistentState waits for tailscaled to finish writing state if it
