@@ -40,6 +40,18 @@ func NewBool(b bool) Bool {
 	return Bool(strconv.FormatBool(b))
 }
 
+// String implements the [fmt.Stringer] interface.
+//
+// It never returns an empty string, since it is easier to read "unset".
+func (b Bool) String() string {
+	switch b {
+	case "":
+		return "unset"
+	default:
+		return string(b)
+	}
+}
+
 func (b *Bool) Set(v bool) {
 	*b = Bool(strconv.FormatBool(v))
 }
@@ -54,6 +66,19 @@ func (b Bool) Get() (v bool, ok bool) {
 		return false, true
 	default:
 		return false, false
+	}
+}
+
+// Not returns the inverse of b, i.e. Bool("true") swapped with Bool("false").
+// However, b is returned unchanged if it was unset.
+func (b Bool) Not() Bool {
+	switch b {
+	case "true":
+		return Bool("false")
+	case "false":
+		return Bool("true")
+	default:
+		return b
 	}
 }
 
