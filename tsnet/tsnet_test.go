@@ -58,7 +58,7 @@ import (
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/views"
+	"tailscale.com/types/netmap"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 )
@@ -766,6 +766,8 @@ func TestFunnel(t *testing.T) {
 // after itself when closed. Specifically, changes made to the serve config
 // should be cleared.
 func TestFunnelClose(t *testing.T) {
+	tstest.Shard(t)
+
 	marshalServeConfig := func(t *testing.T, sc ipn.ServeConfigView) string {
 		t.Helper()
 		return string(must.Get(json.MarshalIndent(sc, "", "\t")))
@@ -794,7 +796,7 @@ func TestFunnelClose(t *testing.T) {
 		// To obtain config the listener might want to clobber, we:
 		//  - run a listener
 		//  - grab the config
-		//  - close the listener (clearing config)
+		//  - close the listener (so we can run another on the same port)
 		ln := must.Get(s.ListenFunnel("tcp", ":443"))
 		before := s.lb.ServeConfig()
 		ln.Close()
@@ -852,33 +854,14 @@ func TestFunnelClose(t *testing.T) {
 
 		// The listener should immediately return an error indicating closure.
 		_, err := ln.Accept()
-		// Looking for a string in the error sucks, but it's supposed to stay
-		// consistent:
-		// https://github.com/golang/go/blob/108b333d510c1f60877ac917375d7931791acfe6/src/internal/poll/fd.go#L20-L24
-		if err == nil || !strings.Contains(err.Error(), "use of closed network connection") {
+		if !errors.Is(err, net.ErrClosed) {
 			t.Fatal("expected listener to be closed, got:", err)
 		}
 	})
 }
 
 func TestListenService(t *testing.T) {
-	// First test an error case which doesn't require all of the fancy setup.
-	t.Run("untagged_node_error", func(t *testing.T) {
-		ctx := t.Context()
-
-		controlURL, _ := startControl(t)
-		serviceHost, _, _ := startServer(t, ctx, controlURL, "service-host")
-
-		ln, err := serviceHost.ListenService("svc:foo", ServiceModeTCP{Port: 8080})
-		if ln != nil {
-			ln.Close()
-		}
-		if !errors.Is(err, ErrUntaggedServiceHost) {
-			t.Fatalf("expected %v, got %v", ErrUntaggedServiceHost, err)
-		}
-	})
-
-	// Now on to the fancier tests.
+	tstest.Shard(t)
 
 	type dialFn func(context.Context, string, string) (net.Conn, error)
 
@@ -1158,11 +1141,10 @@ func TestListenService(t *testing.T) {
 
 				// The Service host must have the 'service-host' capability, which
 				// is a mapping from the Service name to the Service VIP.
-				var serviceHostCaps map[tailcfg.ServiceName]views.Slice[netip.Addr]
-				mak.Set(&serviceHostCaps, serviceName, views.SliceOf([]netip.Addr{netip.MustParseAddr(serviceVIP)}))
-				j := must.Get(json.Marshal(serviceHostCaps))
 				cm := serviceHost.lb.NetMap().SelfNode.CapMap().AsMap()
-				mak.Set(&cm, tailcfg.NodeAttrServiceHost, []tailcfg.RawMessage{tailcfg.RawMessage(j)})
+				mak.Set(&cm, tailcfg.NodeAttrServiceHost, []tailcfg.RawMessage{
+					tailcfg.RawMessage(fmt.Sprintf(`{"%s": ["%s"]}`, serviceName, serviceVIP)),
+				})
 				control.SetNodeCapMap(serviceHost.lb.NodeKey(), cm)
 
 				// The Service host must be allowed to advertise the Service VIP.
@@ -1184,47 +1166,226 @@ func TestListenService(t *testing.T) {
 					},
 				}))
 
+				// Do the test's extra setup before configuring DNS. This allows
+				// us to use the configured DNS records as sentinel values when
+				// waiting for all of this setup to be visible to test nodes.
+				if tt.extraSetup != nil {
+					tt.extraSetup(t, control)
+				}
+
 				// Set up DNS for our Service.
 				control.AddDNSRecords(tailcfg.DNSRecord{
 					Name:  serviceName.WithoutPrefix() + "." + control.MagicDNSDomain,
 					Value: serviceVIP,
 				})
 
-				if tt.extraSetup != nil {
-					tt.extraSetup(t, control)
-				}
-
 				// Wait until both nodes have up-to-date netmaps before
 				// proceeding with the test.
-				netmapUpToDate := func(s *Server) bool {
-					nm := s.lb.NetMap()
-					return slices.ContainsFunc(nm.DNS.ExtraRecords, func(r tailcfg.DNSRecord) bool {
+				netmapUpToDate := func(nm *netmap.NetworkMap) bool {
+					return nm != nil && slices.ContainsFunc(nm.DNS.ExtraRecords, func(r tailcfg.DNSRecord) bool {
 						return r.Value == serviceVIP
 					})
 				}
-				for !netmapUpToDate(serviceClient) {
-					time.Sleep(10 * time.Millisecond)
+				waitForLatestNetmap := func(t *testing.T, s *Server) {
+					t.Helper()
+					w := must.Get(s.localClient.WatchIPNBus(t.Context(), ipn.NotifyInitialNetMap))
+					defer w.Close()
+					for n := must.Get(w.Next()); !netmapUpToDate(n.NetMap); n = must.Get(w.Next()) {
+					}
 				}
-				for !netmapUpToDate(serviceHost) {
-					time.Sleep(10 * time.Millisecond)
-				}
-
-				// == Done setting up mock state ==
-
-				// Start the Service listeners.
-				listeners := make([]*ServiceListener, 0, len(tt.modes))
-				for _, input := range tt.modes {
-					ln := must.Get(serviceHost.ListenService(serviceName.String(), input))
-					defer ln.Close()
-					listeners = append(listeners, ln)
-				}
-
-				tt.run(t, listeners, serviceClient)
+				waitForLatestNetmap(t, serviceClient)
+				waitForLatestNetmap(t, serviceHost)
 			}
 
 			t.Run("TUN", func(t *testing.T) { doTest(t, true) })
 			t.Run("netstack", func(t *testing.T) { doTest(t, false) })
 		})
+	}
+
+	// Error cases.
+	t.Run("untagged_node_error", func(t *testing.T) {
+		ctx := t.Context()
+
+		controlURL, _ := startControl(t)
+		serviceHost, _, _ := startServer(t, ctx, controlURL, "service-host")
+
+		ln, err := serviceHost.ListenService("svc:foo", ServiceModeTCP{Port: 8080})
+		if ln != nil {
+			ln.Close()
+		}
+		if !errors.Is(err, ErrUntaggedServiceHost) {
+			t.Fatalf("expected %v, got %v", ErrUntaggedServiceHost, err)
+		}
+	})
+	t.Run("duplicate_listeners", func(t *testing.T) {
+		ctx := t.Context()
+
+		controlURL, control := startControl(t)
+		serviceHost, _, _ := startServer(t, ctx, controlURL, "service-host")
+
+		// Service hosts must be a tagged node (any tag will do).
+		serviceHostNode := control.Node(serviceHost.lb.NodeKey())
+		serviceHostNode.Tags = append(serviceHostNode.Tags, "some-tag")
+		control.UpdateNode(serviceHostNode)
+
+		// Wait for an up-to-date netmap before proceeding with the test.
+		netmapUpToDate := func(nm *netmap.NetworkMap) bool {
+			return nm != nil && nm.SelfNode.IsTagged()
+		}
+		waitForLatestNetmap := func(t *testing.T, s *Server) {
+			t.Helper()
+			w := must.Get(s.localClient.WatchIPNBus(t.Context(), ipn.NotifyInitialNetMap))
+			defer w.Close()
+			for n := must.Get(w.Next()); !netmapUpToDate(n.NetMap); n = must.Get(w.Next()) {
+			}
+		}
+		waitForLatestNetmap(t, serviceHost)
+
+		ln := must.Get(serviceHost.ListenService("svc:foo", ServiceModeTCP{Port: 8080}))
+		defer ln.Close()
+
+		ln, err := serviceHost.ListenService("svc:foo", ServiceModeTCP{Port: 8080})
+		if ln != nil {
+			ln.Close()
+		}
+		if err == nil {
+			t.Fatal("expected error for redundant listener")
+		}
+
+		// An HTTP listener on the same port should also collide
+		ln, err = serviceHost.ListenService("svc:foo", ServiceModeHTTP{Port: 8080})
+		if ln != nil {
+			ln.Close()
+		}
+		if err == nil {
+			t.Fatal("expected error for redundant listener")
+		}
+	})
+}
+
+func TestListenServiceClose(t *testing.T) {
+	tstest.Shard(t)
+
+	diffServeConfig := func(a, b ipn.ServeConfigView) string {
+		// We treat a mapping from svc:foo to nil or the zero value as if it
+		// didn't exist at all. This is consistent with how the local backend
+		// treats service configs when nil or zero.
+		tr := cmp.Transformer("DeleteEmptyServices", func(m map[tailcfg.ServiceName]*ipn.ServiceConfig) map[tailcfg.ServiceName]*ipn.ServiceConfig {
+			mCopy := map[tailcfg.ServiceName]*ipn.ServiceConfig{}
+			for k, v := range m {
+				if v == nil {
+					continue
+				}
+				if rv := reflect.ValueOf(*v); rv.IsValid() && rv.IsZero() {
+					continue
+				}
+				mCopy[k] = v
+			}
+			return mCopy
+		})
+
+		return cmp.Diff(a.AsStruct(), b.AsStruct(), tr)
+	}
+
+	tests := []struct {
+		name string
+		run  func(t *testing.T, serviceHost *Server)
+	}{
+		{
+			name: "TCP",
+			run: func(t *testing.T, s *Server) {
+				before := s.lb.ServeConfig()
+				ln := must.Get(s.ListenService("svc:foo", ServiceModeTCP{Port: 8080}))
+				ln.Close()
+				after := s.lb.ServeConfig()
+				if diff := diffServeConfig(after, before); diff != "" {
+					t.Fatalf("expected serve config to be unchanged after close (-got, +want):\n%s", diff)
+				}
+			},
+		},
+		{
+			name: "HTTP",
+			run: func(t *testing.T, s *Server) {
+				before := s.lb.ServeConfig()
+				ln := must.Get(s.ListenService("svc:foo", ServiceModeHTTP{Port: 8080}))
+				ln.Close()
+				after := s.lb.ServeConfig()
+				if diff := diffServeConfig(after, before); diff != "" {
+					t.Fatalf("expected serve config to be unchanged after close (-got, +want):\n%s", diff)
+				}
+			},
+		},
+		{
+			// Closing one listener should not affect config for another listener.
+			name: "two_listeners",
+			run: func(t *testing.T, s *Server) {
+				// Start a listener on 443.
+				ln1 := must.Get(s.ListenService("svc:foo", ServiceModeTCP{Port: 443}))
+				defer ln1.Close()
+
+				// Save the serve config for this original listener.
+				before := s.lb.ServeConfig()
+
+				// Now start and close a new listener on a different port.
+				ln2 := must.Get(s.ListenService("svc:foo", ServiceModeTCP{Port: 8080}))
+				ln2.Close()
+
+				// The serve config for the original listener should be intact.
+				after := s.lb.ServeConfig()
+				if diff := diffServeConfig(after, before); diff != "" {
+					t.Fatalf("expected existing config to remain intact (-got, +want):\n%s", diff)
+				}
+			},
+		},
+		{
+			// It should be possible to close a listener and free system
+			// resources even when the Server has been closed (or the listener
+			// should be automatically closed).
+			name: "after_server_close",
+			run: func(t *testing.T, s *Server) {
+				ln := must.Get(s.ListenService("svc:foo", ServiceModeTCP{Port: 8080}))
+
+				// Close the server, then close the listener.
+				must.Do(s.Close())
+				// We don't care whether we get an error from the listener closing.
+				ln.Close()
+
+				// The listener should immediately return an error indicating closure.
+				_, err := ln.Accept()
+				if !errors.Is(err, net.ErrClosed) {
+					t.Fatal("expected listener to be closed, got:", err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			controlURL, control := startControl(t)
+			s, _, _ := startServer(t, ctx, controlURL, "service-host")
+
+			// Service hosts must be a tagged node (any tag will do).
+			serviceHostNode := control.Node(s.lb.NodeKey())
+			serviceHostNode.Tags = append(serviceHostNode.Tags, "some-tag")
+			control.UpdateNode(serviceHostNode)
+
+			// Wait for an up-to-date netmap before proceeding with the test.
+			netmapUpToDate := func(nm *netmap.NetworkMap) bool {
+				return nm != nil && nm.SelfNode.IsTagged()
+			}
+			waitForLatestNetmap := func(t *testing.T, s *Server) {
+				t.Helper()
+				w := must.Get(s.localClient.WatchIPNBus(t.Context(), ipn.NotifyInitialNetMap))
+				defer w.Close()
+				for n := must.Get(w.Next()); !netmapUpToDate(n.NetMap); n = must.Get(w.Next()) {
+				}
+			}
+			waitForLatestNetmap(t, s)
+
+			tt.run(t, s)
+		})
+
 	}
 }
 
