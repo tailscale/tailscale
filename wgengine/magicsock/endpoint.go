@@ -1465,6 +1465,17 @@ func (de *endpoint) setLastPing(ipp netip.AddrPort, now mono.Time) {
 	state.lastPing = now
 }
 
+func (de *endpoint) updateDiscoKey(key *key.DiscoPublic) {
+	if key == nil {
+		de.disco.Store((*endpointDisco)(nil))
+	} else {
+		de.disco.Store(&endpointDisco{
+			key:   *key,
+			short: key.ShortString(),
+		})
+	}
+}
+
 // updateFromNode updates the endpoint based on a tailcfg.Node from a NetMap
 // update.
 func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, probeUDPLifetimeEnabled bool) {
@@ -1490,15 +1501,12 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 
 	if discoKey != n.DiscoKey() {
 		de.c.logf("[v1] magicsock: disco: node %s changed from %s to %s", de.publicKey.ShortString(), discoKey, n.DiscoKey())
-		de.disco.Store(&endpointDisco{
-			key:   n.DiscoKey(),
-			short: n.DiscoKey().ShortString(),
-		})
+		key := n.DiscoKey()
+		de.updateDiscoKey(&key)
 		de.debugUpdates.Add(EndpointChange{
 			When: time.Now(),
 			What: "updateFromNode-resetLocked",
 		})
-		de.resetLocked()
 	}
 	if n.HomeDERP() == 0 {
 		if de.derpAddr.IsValid() {
