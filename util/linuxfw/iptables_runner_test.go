@@ -134,7 +134,7 @@ func TestAddAndDeleteBase(t *testing.T) {
 	tsRulesCommon := []fakeRule{ // table/chain/rule
 		{"filter", "ts-input", []string{"-i", tunname, "-j", "ACCEPT"}},
 		{"filter", "ts-forward", []string{"-i", tunname, "-j", "MARK", "--set-mark", tsconst.LinuxSubnetRouteMark + "/" + tsconst.LinuxFwmarkMask}},
-		{"filter", "ts-forward", []string{"-m", "mark", "--mark", tsconst.LinuxSubnetRouteMark + "/" + tsconst.LinuxFwmarkMask, "-j", "ACCEPT"}},
+		{"filter", "ts-forward", []string{"-i", tunname, "-j", "ACCEPT"}},
 		{"filter", "ts-forward", []string{"-o", tunname, "-j", "ACCEPT"}},
 	}
 
