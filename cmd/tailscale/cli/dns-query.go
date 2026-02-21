@@ -5,21 +5,39 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/netip"
-	"os"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"golang.org/x/net/dns/dnsmessage"
-	"tailscale.com/types/dnstype"
 )
+
+// DNSAnswer describes a single answer from a DNS query response.
+type DNSAnswer struct {
+	Name  string
+	TTL   uint32
+	Class string
+	Type  string
+	Body  string
+}
+
+// DNSQueryResult contains the result of a DNS query performed via the
+// internal Tailscale DNS resolver.
+type DNSQueryResult struct {
+	Name         string
+	QueryType    string
+	Resolvers    []DNSResolverInfo
+	ResponseCode string
+	Answers      []DNSAnswer
+}
 
 var dnsQueryCmd = &ffcli.Command{
 	Name:       "query",
-	ShortUsage: "tailscale dns query <name> [a|aaaa|cname|mx|ns|opt|ptr|srv|txt]",
+	ShortUsage: "tailscale dns query <name> [a|aaaa|cname|mx|ns|opt|ptr|srv|txt] [--json]",
 	Exec:       runDNSQuery,
 	ShortHelp:  "Perform a DNS query",
 	LongHelp: strings.TrimSpace(`
@@ -32,6 +50,16 @@ be specified as the second parameter.
 The output also provides information about the resolver(s) used to resolve the
 query.
 `),
+	FlagSet: (func() *flag.FlagSet {
+		fs := newFlagSet("query")
+		fs.BoolVar(&dnsQueryArgs.json, "json", false, "output in JSON format")
+		return fs
+	})(),
+}
+
+// dnsQueryArgs are the arguments for the "dns query" subcommand.
+var dnsQueryArgs struct {
+	json bool
 }
 
 func runDNSQuery(ctx context.Context, args []string) error {
@@ -43,55 +71,103 @@ func runDNSQuery(ctx context.Context, args []string) error {
 	if len(args) >= 2 {
 		queryType = args[1]
 	}
-	fmt.Printf("DNS query for %q (%s) using internal resolver:\n", name, queryType)
-	fmt.Println()
-	bytes, resolvers, err := localClient.QueryDNS(ctx, name, queryType)
+
+	rawBytes, resolvers, err := localClient.QueryDNS(ctx, name, queryType)
 	if err != nil {
-		fmt.Printf("failed to query DNS: %v\n", err)
-		return nil
+		return fmt.Errorf("failed to query DNS: %w", err)
 	}
 
-	if len(resolvers) == 1 {
-		fmt.Printf("Forwarding to resolver: %v\n", makeResolverString(*resolvers[0]))
-	} else {
-		fmt.Println("Multiple resolvers available:")
-		for _, r := range resolvers {
-			fmt.Printf("  - %v\n", makeResolverString(*r))
+	data := &DNSQueryResult{
+		Name:      name,
+		QueryType: queryType,
+	}
+
+	for _, r := range resolvers {
+		data.Resolvers = append(data.Resolvers, makeDNSResolverInfo(r))
+	}
+
+	var p dnsmessage.Parser
+	header, err := p.Start(rawBytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse DNS response: %w", err)
+	}
+	data.ResponseCode = header.RCode.String()
+
+	p.SkipAllQuestions()
+
+	if header.RCode == dnsmessage.RCodeSuccess {
+		answers, err := p.AllAnswers()
+		if err != nil {
+			return fmt.Errorf("failed to parse DNS answers: %w", err)
+		}
+		data.Answers = make([]DNSAnswer, 0, len(answers))
+		for _, a := range answers {
+			data.Answers = append(data.Answers, DNSAnswer{
+				Name:  a.Header.Name.String(),
+				TTL:   a.Header.TTL,
+				Class: a.Header.Class.String(),
+				Type:  a.Header.Type.String(),
+				Body:  makeAnswerBody(a),
+			})
 		}
 	}
-	fmt.Println()
-	var p dnsmessage.Parser
-	header, err := p.Start(bytes)
-	if err != nil {
-		fmt.Printf("failed to parse DNS response: %v\n", err)
-		return err
-	}
-	fmt.Printf("Response code: %v\n", header.RCode.String())
-	fmt.Println()
-	p.SkipAllQuestions()
-	if header.RCode != dnsmessage.RCodeSuccess {
-		fmt.Println("No answers were returned.")
+
+	if dnsQueryArgs.json {
+		j, err := json.MarshalIndent(data, "", "  ")
+		if err != nil {
+			return err
+		}
+		printf("%s\n", j)
 		return nil
 	}
-	answers, err := p.AllAnswers()
-	if err != nil {
-		fmt.Printf("failed to parse DNS answers: %v\n", err)
-		return err
+	printf("%s", formatDNSQueryText(data))
+	return nil
+}
+
+func formatDNSQueryText(data *DNSQueryResult) string {
+	var sb strings.Builder
+
+	fmt.Fprintf(&sb, "DNS query for %q (%s) using internal resolver:\n", data.Name, data.QueryType)
+	fmt.Fprintf(&sb, "\n")
+	if len(data.Resolvers) == 1 {
+		fmt.Fprintf(&sb, "Forwarding to resolver: %v\n", formatResolverString(data.Resolvers[0]))
+	} else {
+		fmt.Fprintf(&sb, "Multiple resolvers available:\n")
+		for _, r := range data.Resolvers {
+			fmt.Fprintf(&sb, "  - %v\n", formatResolverString(r))
+		}
 	}
-	if len(answers) == 0 {
-		fmt.Println("  (no answers found)")
+	fmt.Fprintf(&sb, "\n")
+	fmt.Fprintf(&sb, "Response code: %v\n", data.ResponseCode)
+	fmt.Fprintf(&sb, "\n")
+
+	if data.Answers == nil {
+		fmt.Fprintf(&sb, "No answers were returned.\n")
+		return sb.String()
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	if len(data.Answers) == 0 {
+		fmt.Fprintf(&sb, "  (no answers found)\n")
+	}
+
+	w := tabwriter.NewWriter(&sb, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "Name\tTTL\tClass\tType\tBody")
 	fmt.Fprintln(w, "----\t---\t-----\t----\t----")
-	for _, a := range answers {
-		fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\n", a.Header.Name.String(), a.Header.TTL, a.Header.Class.String(), a.Header.Type.String(), makeAnswerBody(a))
+	for _, a := range data.Answers {
+		fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\n", a.Name, a.TTL, a.Class, a.Type, a.Body)
 	}
 	w.Flush()
 
-	fmt.Println()
-	return nil
+	fmt.Fprintf(&sb, "\n")
+	return sb.String()
+}
+
+// formatResolverString formats a DNSResolverInfo for human-readable text output.
+func formatResolverString(r DNSResolverInfo) string {
+	if len(r.BootstrapResolution) > 0 {
+		return fmt.Sprintf("%s (bootstrap: %v)", r.Addr, r.BootstrapResolution)
+	}
+	return r.Addr
 }
 
 // makeAnswerBody returns a string with the DNS answer body in a human-readable format.
@@ -173,10 +249,4 @@ func makeTXTBody(txt dnsmessage.ResourceBody) string {
 		return fmt.Sprintf("%q", t.TXT)
 	}
 	return ""
-}
-func makeResolverString(r dnstype.Resolver) string {
-	if len(r.BootstrapResolution) > 0 {
-		return fmt.Sprintf("%s (bootstrap: %v)", r.Addr, r.BootstrapResolution)
-	}
-	return fmt.Sprintf("%s", r.Addr)
 }
