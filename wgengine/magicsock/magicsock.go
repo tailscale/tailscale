@@ -68,6 +68,7 @@ import (
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/pathpolicy"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgint"
 )
@@ -91,11 +92,13 @@ const (
 type Path string
 
 const (
-	PathDirectIPv4    Path = "direct_ipv4"
-	PathDirectIPv6    Path = "direct_ipv6"
-	PathDERP          Path = "derp"
-	PathPeerRelayIPv4 Path = "peer_relay_ipv4"
-	PathPeerRelayIPv6 Path = "peer_relay_ipv6"
+	PathDirectIPv4         Path = "direct_ipv4"
+	PathDirectIPv6         Path = "direct_ipv6"
+	PathDERP               Path = "derp"
+	PathPeerRelayIPv4      Path = "peer_relay_ipv4"
+	PathPeerRelayIPv6      Path = "peer_relay_ipv6"
+	PathPeerRelayChainIPv4 Path = "peer_relay_chain_ipv4"
+	PathPeerRelayChainIPv6 Path = "peer_relay_chain_ipv6"
 )
 
 type pathLabel struct {
@@ -364,6 +367,7 @@ type Conn struct {
 	filt               *filter.Filter                // from last SetFilter
 	relayClientEnabled bool                          // whether we can allocate UDP relay endpoints on UDP relay servers or receive CallMeMaybeVia messages from peers
 	lastFlags          debugFlags                    // at time of last SetNetworkMap
+	pathPolicyEngine   pathpolicy.Engine             // evaluates PathPolicy rules from netmap
 	privateKey         key.NodePrivate               // WireGuard private key for this node
 	everHadKey         bool                          // whether we ever had a non-zero private key
 	myDerp             int                           // nearest DERP region ID; 0 means none/unknown
@@ -2832,6 +2836,47 @@ func (c *Conn) SetProbeUDPLifetime(v bool) {
 	c.peerMap.forEachEndpoint(func(ep *endpoint) {
 		ep.setProbeUDPLifetimeOn(v)
 	})
+}
+
+// SetPathPolicy updates the path policy engine with the given policy.
+// It should be called after SetNetworkMap when the network map changes.
+// A nil policy clears any prior policy; the default latency-based selection applies.
+func (c *Conn) SetPathPolicy(policy *tailcfg.PathPolicy) {
+	c.mu.Lock()
+	// Build a minimal NetworkMap so the engine can resolve tags against peers.
+	nm := &netmap.NetworkMap{
+		SelfNode:   c.self,
+		Peers:      c.peers.AsSlice(),
+		PathPolicy: policy,
+	}
+	c.pathPolicyEngine.Update(nm)
+
+	// Push per-endpoint path entries while c.mu is still held (safe: endpoint
+	// lock ordering is c.mu before endpoint.mu, and we are not acquiring
+	// endpoint.mu here — setPathEntriesLocked is called while holding c.mu
+	// only; the endpoint itself acquires de.mu separately).
+	//
+	// We iterate the peerMap and, for each endpoint, compute the entries that
+	// apply to the self→peer direction and store them on the endpoint so that
+	// path-selection code (handlePongConnLocked, udpRelayEndpointReady) can
+	// read them without holding c.mu.
+	self := c.self
+	c.peerMap.forEachEndpoint(func(ep *endpoint) {
+		var peer tailcfg.NodeView
+		if idx := nm.PeerIndexByNodeID(ep.nodeID); idx >= 0 {
+			peer = nm.Peers[idx]
+		}
+		entries, ruleIdx := c.pathPolicyEngine.PathEntriesAndRuleIdxFor(self, peer)
+		relayNodes := c.pathPolicyEngine.SingleHopRelayNodesFor(entries)
+		var relayKeys []key.NodePublic
+		for _, n := range relayNodes {
+			relayKeys = append(relayKeys, n.Key())
+		}
+		ep.mu.Lock()
+		ep.setPathEntriesLocked(entries, relayKeys, ruleIdx)
+		ep.mu.Unlock()
+	})
+	c.mu.Unlock()
 }
 
 // capVerIsRelayCapable returns true if version is relay client and server
