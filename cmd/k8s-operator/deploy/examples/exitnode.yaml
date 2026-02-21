@@ -1,0 +1,27 @@
+# Before applying ensure that the operator owns tag:k8s-operator
+# Note that Connector provides both subnetRouter and exitNode functionality
+# You can have both on the same cluster in the same namespace, but they must be deployed seperately
+# i.e. you can not set "exitNode: true" where you also have subnetRouter defined in spec
+# See: https://tailscale.com/kb/1441/kubernetes-operator-connector
+---
+apiVersion: tailscale.com/v1alpha1
+kind: Connector
+metadata:
+  name: gke-exit-node
+spec:
+  # Exit node configuration - allows Tailscale clients to route all internet traffic through this Connector
+  exitNode: true
+
+  # High availability: 2 replicas for redundancy
+  # Note: Must use hostnamePrefix (not hostname) when replicas > 1
+  replicas: 2
+
+  # Hostname prefix for the exit node devices
+  # Devices will be named: gke-exit-node-0, gke-exit-node-1
+  hostnamePrefix: gke-exit-node
+
+  # Tailscale tags for ACL policy management
+  # Using tag:k8s-operator to match existing GKE cluster deployment
+  tags:
+    - tag:k8s-operator
+
