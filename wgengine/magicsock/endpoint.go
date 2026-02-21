@@ -980,7 +980,7 @@ func (de *endpoint) discoverUDPRelayPathsLocked(now mono.Time) {
 	de.lastUDPRelayPathDiscovery = now
 	lastBest := de.bestAddr
 	lastBestIsTrusted := mono.Now().Before(de.trustBestAddrUntil)
-	de.c.relayManager.startUDPRelayPathDiscoveryFor(de, lastBest, lastBestIsTrusted)
+	de.c.relayManager.startUDPRelayPathDiscoveryFor(de, lastBest, lastBestIsTrusted, de.policyRelayNodeKeys)
 }
 
 // wantUDPRelayPathDiscoveryLocked reports whether we should kick off UDP relay
