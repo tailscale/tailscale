@@ -180,7 +180,8 @@ type CapabilityVersion int
 //   - 131: 2025-11-25: client respects [NodeAttrDefaultAutoUpdate]
 //   - 132: 2026-02-13: client respects [NodeAttrDisableHostsFileUpdates]
 //   - 133: 2026-02-17: client understands [NodeAttrForceRegisterMagicDNSIPv4Only]; MagicDNS IPv6 registered w/ OS by default
-const CurrentCapabilityVersion CapabilityVersion = 133
+//   - 134: 2026-02-21: client understands [MapResponse.PathPolicy] for policy-based path selection and multi-hop relay chains (#17765)
+const CurrentCapabilityVersion CapabilityVersion = 134
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -1566,6 +1567,13 @@ const (
 	// relay endpoints to the peer which has this capability.
 	PeerCapabilityRelayTarget PeerCapability = "tailscale.com/cap/relay-target"
 
+	// PeerCapabilityRelayChainTarget grants the current node the ability to
+	// use this peer as an intermediate hop in a multi-hop relay chain. A node
+	// with this capability will forward Geneve-encapsulated WireGuard packets
+	// to the next hop in the chain without decrypting the WireGuard payload.
+	// Requires [PeerCapabilityRelayTarget] to also be granted.
+	PeerCapabilityRelayChainTarget PeerCapability = "tailscale.com/cap/relay-chain-target"
+
 	// PeerCapabilityTsIDP grants a peer tsidp-specific
 	// capabilities, such as the ability to add user groups to the OIDC
 	// claim
@@ -2161,6 +2169,14 @@ type MapResponse struct {
 	// Deprecated: use NodeAttrDefaultAutoUpdate instead. See
 	// https://github.com/tailscale/tailscale/issues/11502.
 	DeprecatedDefaultAutoUpdate opt.Bool `json:"DefaultAutoUpdate,omitempty"`
+
+	// PathPolicy, if non-nil, specifies tag-based path selection rules for
+	// this node. A nil value means unchanged from the previous MapResponse.
+	// Clients with CapabilityVersion >= 134 ([NodeAttrPathPolicyRouting])
+	// understand this field. Older clients ignore it.
+	//
+	// See [PathPolicy] for details on the rule format.
+	PathPolicy *PathPolicy `json:",omitempty"`
 }
 
 // DisplayMessage represents a health state of the node from the control plane's
@@ -2755,11 +2771,89 @@ const (
 	// See https://github.com/tailscale/tailscale/issues/15404.
 	// TODO(bradfitz): remove this a few releases after 2026-02-16.
 	NodeAttrForceRegisterMagicDNSIPv4Only NodeCapability = "force-register-magicdns-ipv4-only"
+
+	// NodeAttrPathPolicyRouting indicates the client understands [MapResponse.PathPolicy]
+	// and will apply path policy rules for tag-based path selection and multi-hop relay chains.
+	// Corresponds to capability version 134.
+	NodeAttrPathPolicyRouting NodeCapability = "path-policy-routing"
 )
 
-// SetDNSRequest is a request to add a DNS record.
+// PathEntryType identifies the kind of path step in a [PathEntry].
+type PathEntryType string
+
+const (
+	// PathEntryDirect is a direct UDP path between two peers. The address
+	// family used can be restricted via [PathEntry.AF].
+	PathEntryDirect PathEntryType = "direct"
+
+	// PathEntryRelay is a peer relay path, optionally multi-hop. The relay
+	// hops are identified by tag sets in [PathEntry.Hops].
+	PathEntryRelay PathEntryType = "relay"
+
+	// PathEntryDERP routes traffic via a DERP server. [PathEntry.DERPRegion]
+	// identifies the region; zero means the public/default fleet.
+	PathEntryDERP PathEntryType = "derp"
+)
+
+// PathEntryAF restricts an address family for a [PathEntry].
+// An empty value means no restriction (both IPv4 and IPv6 are tried).
+type PathEntryAF string
+
+const (
+	// PathEntryAFIPv4 restricts the path entry to IPv4 addresses only.
+	PathEntryAFIPv4 PathEntryAF = "ipv4"
+	// PathEntryAFIPv6 restricts the path entry to IPv6 addresses only.
+	PathEntryAFIPv6 PathEntryAF = "ipv6"
+)
+
+// PathEntry is one step in a [PathRule]'s ordered fallback list.
 //
-// This is used to let tailscaled clients complete their ACME DNS-01 challenges
+// The client attempts path entries in order, advancing to the next entry only
+// when the current one cannot be established or fails liveness probing.
+type PathEntry struct {
+	// Type is the kind of path.
+	Type PathEntryType `json:",omitempty"`
+
+	// Hops is the ordered list of tag sets identifying relay hops.
+	// len(Hops)==1 means a single-hop peer relay.
+	// len(Hops)>=2 means a multi-hop chain; each element picks a tag group
+	// for one relay node, in order from src-adjacent to dst-adjacent.
+	// Only meaningful when Type == [PathEntryRelay].
+	Hops []string `json:",omitempty"`
+
+	// AF optionally restricts which address family is used for this path.
+	// Empty means no restriction (both IPv4 and IPv6 are tried).
+	// Satisfies issue #18206: AF=ipv6 for direct, AF=ipv4 for DERP/relay.
+	AF PathEntryAF `json:",omitempty"`
+
+	// DERPRegion is the DERP region ID.
+	// Only meaningful when Type == [PathEntryDERP].
+	// Zero means the default public DERP fleet.
+	DERPRegion int `json:",omitempty"`
+}
+
+// PathRule matches source and destination nodes by tag and specifies an ordered
+// path preference for traffic between them. First matching rule wins.
+type PathRule struct {
+	// Src is a list of tag names. A node matches if it carries any of these tags.
+	Src []string `json:",omitempty"`
+
+	// Dst is a list of tag names. A node matches if it carries any of these tags.
+	Dst []string `json:",omitempty"`
+
+	// Path is the ordered fallback list. The client tries entries in order.
+	Path []PathEntry `json:",omitempty"`
+}
+
+// PathPolicy is the top-level routing policy delivered from the control plane
+// via [MapResponse.PathPolicy]. Rules are evaluated in order; the first
+// matching rule governs path selection for a given src→dst pair.
+type PathPolicy struct {
+	// Rules is the ordered list of path rules.
+	Rules []PathRule `json:",omitempty"`
+}
+
+// SetDNSRequest is a request to add a DNS record.
 // (so people can use LetsEncrypt, etc) to get TLS certificates for
 // their foo.bar.ts.net MagicDNS names.
 //

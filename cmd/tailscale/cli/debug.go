@@ -377,6 +377,28 @@ func debugCmd() *ffcli.Command {
 				Exec:       runPeerRelayServers,
 			},
 			{
+				Name:       "set-path-policy",
+				ShortUsage: "tailscale debug set-path-policy [--file <policy.json>] [--clear]",
+				ShortHelp:  "Override the path policy for local testing (bypasses the online editor)",
+				LongHelp: `Sets a debug-only path policy override on the local tailscaled, bypassing
+whatever the control plane sends. Useful for testing PathPolicy routing
+before the online policy editor supports the field.
+
+Pass a JSON file with --file, or pipe JSON to stdin. Use --clear to remove
+any previously set override and revert to the control-plane-supplied policy.
+
+Example:
+  tailscale debug set-path-policy --file policy.json
+  tailscale debug set-path-policy --clear`,
+				Exec: runDebugSetPathPolicy,
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("set-path-policy")
+					fs.StringVar(&debugSetPathPolicyArgs.file, "file", "", "path to JSON file containing the PathPolicy; reads stdin if empty")
+					fs.BoolVar(&debugSetPathPolicyArgs.clear, "clear", false, "clear the debug override and revert to control-plane policy")
+					return fs
+				})(),
+			},
+			{
 				Name:       "test-risk",
 				ShortUsage: "tailscale debug test-risk",
 				ShortHelp:  "Do a fake risky action",
@@ -1395,6 +1417,46 @@ func runPeerRelayServers(ctx context.Context, args []string) error {
 
 var testRiskArgs struct {
 	acceptedRisk string
+}
+
+var debugSetPathPolicyArgs struct {
+	file  string
+	clear bool
+}
+
+func runDebugSetPathPolicy(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		return errors.New("unexpected arguments")
+	}
+	if debugSetPathPolicyArgs.clear {
+		if err := localClient.DebugSetPathPolicy(ctx, nil); err != nil {
+			return err
+		}
+		fmt.Println("path policy override cleared")
+		return nil
+	}
+
+	var r io.Reader
+	if debugSetPathPolicyArgs.file != "" {
+		f, err := os.Open(debugSetPathPolicyArgs.file)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		r = f
+	} else {
+		r = os.Stdin
+	}
+
+	var policy tailcfg.PathPolicy
+	if err := json.NewDecoder(r).Decode(&policy); err != nil {
+		return fmt.Errorf("decoding PathPolicy JSON: %w", err)
+	}
+	if err := localClient.DebugSetPathPolicy(ctx, &policy); err != nil {
+		return err
+	}
+	fmt.Println("path policy override set")
+	return nil
 }
 
 func runTestRisk(ctx context.Context, args []string) error {

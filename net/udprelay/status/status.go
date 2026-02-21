@@ -21,6 +21,27 @@ type ServerStatus struct {
 	// relay session that this node's peer relay server is involved with. It
 	// may be empty.
 	Sessions []ServerSession
+	// ChainSessions is a slice of chain forwarding entries currently active on
+	// this relay server. Each entry represents one inbound VNI that the server
+	// is transparently forwarding (with a different VNI) to a downstream hop.
+	// It may be empty.
+	ChainSessions []ChainSession
+}
+
+// ChainSession contains status information for a single chain forwarding entry
+// on a peer relay server. The server receives Geneve packets on VNI, rewrites
+// the VNI to VNI_out, and forwards the packet (WireGuard payload untouched) to
+// NextHop.
+type ChainSession struct {
+	// VNI is the inbound Geneve Virtual Network Identifier that this chain
+	// forwarding entry is listening on.
+	VNI uint32
+	// NextHop is the addr:port of the downstream relay hop to which packets
+	// are forwarded after VNI rewriting.
+	NextHop netip.AddrPort
+	// VNI_out is the Geneve VNI written into forwarded packets before they
+	// are sent to NextHop.
+	VNI_out uint32
 }
 
 // ClientInfo contains status-related information about a single peer relay

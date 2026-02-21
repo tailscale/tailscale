@@ -253,8 +253,12 @@ func (m *mockRelayServer) Close() error { return nil }
 func (m *mockRelayServer) AllocateEndpoint(_, _ key.DiscoPublic) (endpoint.ServerEndpoint, error) {
 	return endpoint.ServerEndpoint{}, errors.New("not implemented")
 }
-func (m *mockRelayServer) GetSessions() []status.ServerSession { return nil }
-func (m *mockRelayServer) SetDERPMapView(tailcfg.DERPMapView)  { return }
+func (m *mockRelayServer) AllocateChainEndpoint(_ netip.AddrPort, _ uint32) (endpoint.ServerEndpoint, error) {
+	return endpoint.ServerEndpoint{}, errors.New("not implemented")
+}
+func (m *mockRelayServer) GetSessions() []status.ServerSession      { return nil }
+func (m *mockRelayServer) GetChainSessions() []status.ChainSession  { return nil }
+func (m *mockRelayServer) SetDERPMapView(tailcfg.DERPMapView)       { return }
 func (m *mockRelayServer) SetStaticAddrPorts(aps views.Slice[netip.AddrPort]) {
 	m.addrPorts = aps
 }

@@ -85,7 +85,9 @@ func newExtension(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, er
 type relayServer interface {
 	Close() error
 	AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.ServerEndpoint, error)
+	AllocateChainEndpoint(nextHop netip.AddrPort, vniOut uint32) (endpoint.ServerEndpoint, error)
 	GetSessions() []status.ServerSession
+	GetChainSessions() []status.ChainSession
 	SetDERPMapView(tailcfg.DERPMapView)
 	SetStaticAddrPorts(addrPorts views.Slice[netip.AddrPort])
 }
@@ -146,7 +148,13 @@ func (e *extension) onAllocReq(req magicsock.UDPRelayAllocReq) {
 			return
 		}
 	}
-	se, err := e.rs.AllocateEndpoint(req.Message.ClientDisco[0], req.Message.ClientDisco[1])
+	var se endpoint.ServerEndpoint
+	var err error
+	if req.Message.ChainNextHop.IsValid() {
+		se, err = e.rs.AllocateChainEndpoint(req.Message.ChainNextHop, req.Message.ChainNextHopVNI)
+	} else {
+		se, err = e.rs.AllocateEndpoint(req.Message.ClientDisco[0], req.Message.ClientDisco[1])
+	}
 	if err != nil {
 		e.logf("error allocating endpoint: %v", err)
 		return
@@ -266,5 +274,6 @@ func (e *extension) serverStatus() status.ServerStatus {
 	}
 	st.UDPPort = ptr.To(*e.port)
 	st.Sessions = e.rs.GetSessions()
+	st.ChainSessions = e.rs.GetChainSessions()
 	return st
 }

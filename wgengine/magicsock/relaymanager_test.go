@@ -14,7 +14,7 @@ import (
 
 func TestRelayManagerInitAndIdle(t *testing.T) {
 	rm := relayManager{}
-	rm.startUDPRelayPathDiscoveryFor(&endpoint{}, addrQuality{}, false)
+	rm.startUDPRelayPathDiscoveryFor(&endpoint{}, addrQuality{}, false, nil)
 	<-rm.runLoopStoppedCh
 
 	rm = relayManager{}

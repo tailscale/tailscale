@@ -470,15 +470,21 @@ type endpointWithLastBest struct {
 	ep                *endpoint
 	lastBest          addrQuality
 	lastBestIsTrusted bool
+	// policyRelayNodeKeys, when non-nil, restricts relay allocation to the
+	// listed node keys. Derived from the path policy engine at discovery time.
+	// A nil value means "no policy: try all known relay servers".
+	policyRelayNodeKeys []key.NodePublic
 }
 
-// startUDPRelayPathDiscoveryFor starts UDP relay path discovery for ep on all
-// known relay servers if ep has no in-progress work.
-func (r *relayManager) startUDPRelayPathDiscoveryFor(ep *endpoint, lastBest addrQuality, lastBestIsTrusted bool) {
+// startUDPRelayPathDiscoveryFor starts UDP relay path discovery for ep.
+// When policyRelayNodeKeys is non-nil, only the listed relay servers are tried;
+// otherwise all known relay servers are attempted.
+func (r *relayManager) startUDPRelayPathDiscoveryFor(ep *endpoint, lastBest addrQuality, lastBestIsTrusted bool, policyRelayNodeKeys []key.NodePublic) {
 	relayManagerInputEvent(r, nil, &r.startDiscoveryCh, endpointWithLastBest{
-		ep:                ep,
-		lastBest:          lastBest,
-		lastBestIsTrusted: lastBestIsTrusted,
+		ep:                  ep,
+		lastBest:            lastBest,
+		lastBestIsTrusted:   lastBestIsTrusted,
+		policyRelayNodeKeys: policyRelayNodeKeys,
 	})
 }
 
@@ -1031,8 +1037,26 @@ func (r *relayManager) allocateAllServersRunLoop(wlb endpointWithLastBest) {
 	if remoteDisco == nil {
 		return
 	}
+
+	// Build an O(1) lookup set when a path policy has nominated specific relays.
+	var policySet map[key.NodePublic]struct{}
+	if len(wlb.policyRelayNodeKeys) > 0 {
+		policySet = make(map[key.NodePublic]struct{}, len(wlb.policyRelayNodeKeys))
+		for _, k := range wlb.policyRelayNodeKeys {
+			policySet[k] = struct{}{}
+		}
+	}
+
 	discoKeys := key.NewSortedPairOfDiscoPublic(wlb.ep.c.discoAtomic.Public(), remoteDisco.key)
 	for _, v := range r.serversByNodeKey {
+		// If a path policy constrains which relay servers are eligible, skip
+		// servers that are not in the policy set. Fall back to all servers
+		// when no policy applies (policySet == nil).
+		if policySet != nil {
+			if _, ok := policySet[v.nodeKey]; !ok {
+				continue
+			}
+		}
 		byDiscoKeys, ok := r.allocWorkByDiscoKeysByServerNodeKey[v.nodeKey]
 		if !ok {
 			byDiscoKeys = make(map[key.SortedPairOfDiscoPublic]*relayEndpointAllocWork)

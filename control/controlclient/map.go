@@ -97,6 +97,7 @@ type mapSession struct {
 	lastPopBrowserURL      string
 	lastTKAInfo            *tailcfg.TKAInfo
 	lastNetmapSummary      string // from NetworkMap.VeryConcise
+	lastPathPolicy         *tailcfg.PathPolicy
 }
 
 // newMapSession returns a mostly unconfigured new mapSession.
@@ -402,6 +403,9 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	}
 	if p := resp.SSHPolicy; p != nil {
 		ms.lastSSHPolicy = p
+	}
+	if p := resp.PathPolicy; p != nil {
+		ms.lastPathPolicy = p
 	}
 
 	if v, ok := resp.CollectServices.Get(); ok {
@@ -880,6 +884,7 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		DERPMap:           ms.lastDERPMap,
 		DisplayMessages:   msgs,
 		TKAEnabled:        ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
+		PathPolicy:        ms.lastPathPolicy,
 	}
 
 	if ms.lastTKAInfo != nil && ms.lastTKAInfo.Head != "" {

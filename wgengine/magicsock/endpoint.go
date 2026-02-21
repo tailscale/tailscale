@@ -35,6 +35,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/ringlog"
 	"tailscale.com/util/slicesx"
+	"tailscale.com/wgengine/pathpolicy"
 )
 
 var mtuProbePingSizesV4 []int
@@ -99,6 +100,102 @@ type endpoint struct {
 	expired         bool // whether the node has expired
 	isWireguardOnly bool // whether the endpoint is WireGuard only
 	relayCapable    bool // whether the node is capable of speaking via a [tailscale.com/net/udprelay.Server]
+
+	// pathEntries is the ordered path fallback list from [pathpolicy.Engine]
+	// for this specific src→dst pair. Nil means no policy applies (default
+	// latency-based selection). Updated by Conn.SetPathPolicy via setPathEntriesLocked.
+	pathEntries []tailcfg.PathEntry
+
+	// policyRelayNodeKeys is derived from pathEntries: it lists the NodePublic
+	// keys of relay servers that are explicitly preferred by the path policy
+	// for this endpoint (single-hop PathEntryRelay entries only). Nil means no
+	// relay restriction; all candidate relay servers will be tried.
+	// Updated atomically with pathEntries in setPathEntriesLocked.
+	policyRelayNodeKeys []key.NodePublic
+
+	// matchedPolicyRuleIdx is the zero-based index of the PathPolicy rule that
+	// matched this endpoint, or -1 if no rule matched. Set alongside
+	// pathEntries by SetPathPolicy. Used by the debug peer-relay CLI to show
+	// which rule is governing path selection for this peer.
+	matchedPolicyRuleIdx int
+}
+
+// setPathEntriesLocked updates de.pathEntries, de.policyRelayNodeKeys, and
+// de.matchedPolicyRuleIdx. de.mu must be held.
+func (de *endpoint) setPathEntriesLocked(entries []tailcfg.PathEntry, relayNodeKeys []key.NodePublic, ruleIdx int) {
+	de.pathEntries = entries
+	de.policyRelayNodeKeys = relayNodeKeys
+	de.matchedPolicyRuleIdx = ruleIdx
+}
+
+// directAFLocked returns the address-family constraint that applies to direct
+// UDP paths for this endpoint, based on the first PathEntryDirect entry in
+// de.pathEntries. An empty AF means no constraint (both families are allowed).
+//
+// de.mu must be held.
+func (de *endpoint) directAFLocked() tailcfg.PathEntryAF {
+	for _, e := range de.pathEntries {
+		if e.Type == tailcfg.PathEntryDirect {
+			return e.AF
+		}
+	}
+	return "" // no constraint
+}
+
+// directAllowedLocked reports whether the given address is permitted as a
+// direct path by the current path policy. Returns false when a policy applies
+// but contains no PathEntryDirect entry (i.e., direct paths are prohibited).
+//
+// de.mu must be held.
+func (de *endpoint) directAllowedLocked(addr netip.Addr) bool {
+	if len(de.pathEntries) == 0 {
+		return true // no policy applies; direct is always allowed
+	}
+	for _, e := range de.pathEntries {
+		if e.Type == tailcfg.PathEntryDirect {
+			return pathpolicy.AFAllowed(e.AF, addr)
+		}
+	}
+	return false // policy applies but has no direct entry; direct is prohibited
+}
+
+// policyIdxForAddrLocked returns the index of the first de.pathEntries entry
+// whose type matches the path kind of aq: PathEntryDirect for non-VNI paths,
+// PathEntryRelay for VNI (Geneve-encapsulated) paths. Returns
+// len(de.pathEntries) when the path type is not present in the policy (i.e.,
+// it is not explicitly listed and therefore has the lowest priority).
+//
+// de.mu must be held.
+func (de *endpoint) policyIdxForAddrLocked(aq addrQuality) int {
+	isDirect := !aq.vni.IsSet()
+	for i, e := range de.pathEntries {
+		if isDirect && e.Type == tailcfg.PathEntryDirect {
+			return i
+		}
+		if !isDirect && e.Type == tailcfg.PathEntryRelay {
+			return i
+		}
+	}
+	return len(de.pathEntries)
+}
+
+// betterAddrWithPolicy is like the package-level betterAddr but additionally
+// respects the path policy for this endpoint. When a policy is active, path
+// types are ranked by their position in de.pathEntries: a lower index means
+// higher priority and always beats a higher index regardless of latency. Within
+// the same policy tier (same index), the existing latency-based scoring of
+// betterAddr applies unchanged.
+//
+// de.mu must be held.
+func (de *endpoint) betterAddrWithPolicy(a, b addrQuality) bool {
+	if len(de.pathEntries) > 0 {
+		aIdx := de.policyIdxForAddrLocked(a)
+		bIdx := de.policyIdxForAddrLocked(b)
+		if aIdx != bIdx {
+			return aIdx < bIdx
+		}
+	}
+	return betterAddr(a, b)
 }
 
 // udpRelayEndpointReady determines whether the given relay [addrQuality] should
@@ -113,7 +210,7 @@ func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
 
 	if !curBestAddrTrusted ||
 		sameRelayServer ||
-		betterAddr(maybeBest, de.bestAddr) {
+		de.betterAddrWithPolicy(maybeBest, de.bestAddr) {
 		// We must set maybeBest as de.bestAddr if:
 		//   1. de.bestAddr is untrusted. betterAddr does not consider
 		//      time-based trust.
@@ -883,7 +980,7 @@ func (de *endpoint) discoverUDPRelayPathsLocked(now mono.Time) {
 	de.lastUDPRelayPathDiscovery = now
 	lastBest := de.bestAddr
 	lastBestIsTrusted := mono.Now().Before(de.trustBestAddrUntil)
-	de.c.relayManager.startUDPRelayPathDiscoveryFor(de, lastBest, lastBestIsTrusted)
+	de.c.relayManager.startUDPRelayPathDiscoveryFor(de, lastBest, lastBestIsTrusted, de.policyRelayNodeKeys)
 }
 
 // wantUDPRelayPathDiscoveryLocked reports whether we should kick off UDP relay
@@ -904,7 +1001,12 @@ func (de *endpoint) wantUDPRelayPathDiscoveryLocked(now mono.Time) bool {
 		return false
 	}
 	if de.bestAddr.isDirect() && now.Before(de.trustBestAddrUntil) {
-		return false
+		// Don't suppress relay discovery if the path policy prohibits direct
+		// paths — the relay path is required to satisfy the policy even when a
+		// direct path is currently established and trusted.
+		if de.directAllowedLocked(de.bestAddr.ap.Addr()) {
+			return false
+		}
 	}
 	if !de.lastUDPRelayPathDiscovery.IsZero() && now.Sub(de.lastUDPRelayPathDiscovery) < discoverUDPRelayPathsInterval {
 		return false
@@ -1768,7 +1870,14 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 		//  get stuck with a forever untrusted bestAddr that blackholes, since
 		//  we don't clear direct UDP paths on disco ping timeout (see
 		//  discoPingTimeout).
-		if betterAddr(thisPong, de.bestAddr) {
+		//
+		// If the path policy restricts address families for direct paths, skip
+		// this pong if the address family is not permitted.
+		if !thisPong.vni.IsSet() && !de.directAllowedLocked(sp.to.ap.Addr()) {
+			// Direct path address family not permitted by PathPolicy; skip.
+			return
+		}
+		if de.betterAddrWithPolicy(thisPong, de.bestAddr) {
 			de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v tx=%x", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.wireMTU, m.TxID[:6])
 			de.debugUpdates.Add(EndpointChange{
 				When: time.Now(),
