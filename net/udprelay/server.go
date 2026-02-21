@@ -1198,6 +1198,24 @@ func (s *Server) GetSessions() []status.ServerSession {
 	return sessions
 }
 
+// GetChainSessions returns the current set of chain forwarding entries on this
+// relay server. Each entry describes one inbound VNI that the server rewrites
+// and forwards to a downstream hop. This information is intended for
+// debugging/status UX only.
+func (s *Server) GetChainSessions() []status.ChainSession {
+	var out []status.ChainSession
+	s.chainForwardByVNI.Range(func(k, v any) bool {
+		entry := v.(*chainForwardEntry)
+		out = append(out, status.ChainSession{
+			VNI:     k.(uint32),
+			NextHop: entry.NextHop,
+			VNI_out: entry.VNI_out,
+		})
+		return true
+	})
+	return out
+}
+
 // SetDERPMapView sets the [tailcfg.DERPMapView] to use for future netcheck
 // reports.
 func (s *Server) SetDERPMapView(view tailcfg.DERPMapView) {

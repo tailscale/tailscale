@@ -296,6 +296,7 @@ type LocalBackend struct {
 	hostinfo          *tailcfg.Hostinfo      // TODO(nickkhyl): move to nodeBackend
 	nmExpiryTimer     tstime.TimerController // for updating netMap on node expiry; can be nil; TODO(nickkhyl): move to nodeBackend
 	activeLogin       string                 // last logged LoginName from netMap; TODO(nickkhyl): move to nodeBackend (or remove? it's in [ipn.LoginProfile]).
+	debugPathPolicy   *tailcfg.PathPolicy    // debug override for PathPolicy; nil means use what control sends
 	engineStatus      ipn.EngineStatus
 	endpoints         []tailcfg.Endpoint
 	blocked           bool
@@ -3296,6 +3297,21 @@ func (b *LocalBackend) DebugForceNetmapUpdate() {
 	b.setNetMapLocked(nm)
 }
 
+// DebugSetPathPolicy overrides the path policy that would normally be received
+// from the control plane. Pass nil to clear the override and revert to the
+// control-plane-supplied policy. The change takes effect immediately by
+// re-applying the current netmap with the new policy.
+//
+// This is intended for local testing when the online policy editor does not yet
+// support the PathPolicy field.
+func (b *LocalBackend) DebugSetPathPolicy(policy *tailcfg.PathPolicy) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.debugPathPolicy = policy
+	nm := b.currentNode().NetMap()
+	b.setNetMapLocked(nm)
+}
+
 // DebugPickNewDERP forwards to magicsock.Conn.DebugPickNewDERP.
 // See its docs.
 func (b *LocalBackend) DebugPickNewDERP() error {
@@ -6275,8 +6291,14 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	if ms, ok := b.sys.MagicSock.GetOK(); ok {
 		if nm != nil {
 			ms.SetNetworkMap(nm.SelfNode, nm.Peers)
+			pathPolicy := nm.PathPolicy
+			if b.debugPathPolicy != nil {
+				pathPolicy = b.debugPathPolicy
+			}
+			ms.SetPathPolicy(pathPolicy)
 		} else {
 			ms.SetNetworkMap(tailcfg.NodeView{}, nil)
+			ms.SetPathPolicy(nil)
 		}
 	}
 	if login != b.activeLogin {

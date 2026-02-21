@@ -47,7 +47,7 @@ func runPeerRelaySessions(ctx context.Context, args []string) error {
 	}
 	f("\n")
 	f("Sessions count: %d\n", len(srv.Sessions))
-	if len(srv.Sessions) == 0 {
+	if len(srv.Sessions) == 0 && len(srv.ChainSessions) == 0 {
 		Stdout.Write(buf.Bytes())
 		return nil
 	}
@@ -72,6 +72,15 @@ func runPeerRelaySessions(ctx context.Context, args []string) error {
 		f("  %s\n", fmtSessionDirection(s.Client1, s.Client2))
 		f("  %s\n", fmtSessionDirection(s.Client2, s.Client1))
 	}
+
+	if len(srv.ChainSessions) > 0 {
+		f("\nChain sessions count: %d\n", len(srv.ChainSessions))
+		slices.SortFunc(srv.ChainSessions, func(s1, s2 status.ChainSession) int { return cmp.Compare(s1.VNI, s2.VNI) })
+		for _, cs := range srv.ChainSessions {
+			f("VNI: %d --> NextHop: %s (out VNI: %d)\n", cs.VNI, cs.NextHop, cs.VNI_out)
+		}
+	}
+
 	Stdout.Write(buf.Bytes())
 	return nil
 }
