@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -37,6 +39,13 @@ func isLoopback(nif *net.Interface) bool { return nif.Flags&net.FlagLoopback != 
 
 func isProblematicInterface(nif *net.Interface) bool {
 	name := nif.Name
+
+	if regex := os.Getenv("TS_NETMON_IGNORE"); regex != "" {
+		if match, _ := regexp.MatchString(regex, name); match {
+			return true
+		}
+	}
+
 	// Don't try to send disco/etc packets over zerotier; they effectively
 	// DoS each other by doing traffic amplification, both of them
 	// preferring/trying to use each other for transport. See:
@@ -224,6 +233,9 @@ func ForeachInterface(fn func(Interface, []netip.Prefix)) error {
 // the interface, and Bits are the subnet mask.
 func (ifaces InterfaceList) ForeachInterface(fn func(Interface, []netip.Prefix)) error {
 	for _, iface := range ifaces {
+		if isProblematicInterface(iface.Interface) {
+			continue
+		}
 		addrs, err := iface.Addrs()
 		if err != nil {
 			return err
