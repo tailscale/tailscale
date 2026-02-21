@@ -291,6 +291,12 @@ type Prefs struct {
 	// non-nil.
 	RelayServerStaticEndpoints []netip.AddrPort `json:",omitempty"`
 
+	// CustomMullvadAccount is the 16-digit Mullvad account number for
+	// "Bring Your Own Mullvad Account" (BYOMA) integration. When set,
+	// Tailscale will register its WireGuard key with Mullvad and expose
+	// Mullvad servers as exit nodes.
+	CustomMullvadAccount string `json:",omitempty"`
+
 	// AllowSingleHosts was a legacy field that was always true
 	// for the past 4.5 years. It controlled whether Tailscale
 	// peers got /32 or /128 routes for each other.
@@ -386,6 +392,7 @@ type MaskedPrefs struct {
 	DriveSharesSet                bool                `json:",omitempty"`
 	RelayServerPortSet            bool                `json:",omitempty"`
 	RelayServerStaticEndpointsSet bool                `json:",omitzero"`
+	CustomMullvadAccountSet       bool                `json:",omitzero"`
 }
 
 // SetsInternal reports whether mp has any of the Internal*Set field bools set
@@ -693,7 +700,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
 		p.NetfilterKind == p2.NetfilterKind &&
 		compareUint16Ptrs(p.RelayServerPort, p2.RelayServerPort) &&
-		slices.Equal(p.RelayServerStaticEndpoints, p2.RelayServerStaticEndpoints)
+		slices.Equal(p.RelayServerStaticEndpoints, p2.RelayServerStaticEndpoints) &&
+		p.CustomMullvadAccount == p2.CustomMullvadAccount
 }
 
 func (au AutoUpdatePrefs) Pretty() string {

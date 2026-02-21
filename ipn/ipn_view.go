@@ -453,6 +453,12 @@ func (v PrefsView) RelayServerStaticEndpoints() views.Slice[netip.AddrPort] {
 	return views.SliceOf(v.ж.RelayServerStaticEndpoints)
 }
 
+// CustomMullvadAccount is the 16-digit Mullvad account number for
+// "Bring Your Own Mullvad Account" (BYOMA) integration. When set,
+// Tailscale will register its WireGuard key with Mullvad and expose
+// Mullvad servers as exit nodes.
+func (v PrefsView) CustomMullvadAccount() string { return v.ж.CustomMullvadAccount }
+
 // AllowSingleHosts was a legacy field that was always true
 // for the past 4.5 years. It controlled whether Tailscale
 // peers got /32 or /128 routes for each other.
@@ -506,6 +512,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	DriveShares                []*drive.Share
 	RelayServerPort            *uint16
 	RelayServerStaticEndpoints []netip.AddrPort
+	CustomMullvadAccount       string
 	AllowSingleHosts           marshalAsTrueInJSON
 	Persist                    *persist.Persist
 }{})
