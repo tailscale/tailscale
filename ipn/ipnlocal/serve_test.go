@@ -1255,6 +1255,29 @@ func Test_isGRPCContentType(t *testing.T) {
 	}
 }
 
+func Test_isConnectContentType(t *testing.T) {
+	tests := []struct {
+		contentType string
+		want        bool
+	}{
+		{contentType: "application/connect+proto", want: true},
+		{contentType: "application/connect+json", want: true},
+		{contentType: "application/connect+proto; charset=utf-8", want: true},
+		{contentType: "application/connect+json; charset=utf-8", want: true},
+		{contentType: "application/connect+custom", want: true},
+		{contentType: "application/connect"},
+		{contentType: "application/proto"},
+		{contentType: "application/json"},
+		{contentType: "application/grpc"},
+		{contentType: ""},
+	}
+	for _, tt := range tests {
+		if got := isConnectContentType(tt.contentType); got != tt.want {
+			t.Errorf("isConnectContentType(%q) = %v, want %v", tt.contentType, got, tt.want)
+		}
+	}
+}
+
 func TestEncTailscaleHeaderValue(t *testing.T) {
 	tests := []struct {
 		in   string
