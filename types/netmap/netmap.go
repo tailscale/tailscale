@@ -77,6 +77,11 @@ type NetworkMap struct {
 	// UserProfiles contains the profile information of UserIDs referenced
 	// in SelfNode and Peers.
 	UserProfiles map[tailcfg.UserID]tailcfg.UserProfileView
+
+	// PathPolicy, if non-nil, specifies tag-based path selection rules for
+	// this node's traffic. It is populated from [tailcfg.MapResponse.PathPolicy]
+	// and updated incrementally (nil means unchanged).
+	PathPolicy *tailcfg.PathPolicy
 }
 
 // User returns nm.SelfNode.User if nm.SelfNode is non-nil, otherwise it returns
