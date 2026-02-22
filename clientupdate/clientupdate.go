@@ -225,6 +225,8 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 			// The distro.Debian switch case above should catch most apt-based
 			// systems, but add this fallback just in case.
 			return up.updateDebLike, true
+		case haveExecutable("zypper"):
+			return up.updateZypperLike, true
 		case haveExecutable("dnf"):
 			return up.updateFedoraLike("dnf"), true
 		case haveExecutable("yum"):
@@ -575,6 +577,8 @@ func (up *Updater) updateNixos() error {
 
 const yumRepoConfigFile = "/etc/yum.repos.d/tailscale.repo"
 
+const zypperRepoConfigDir = "/etc/zypp/repos.d/"
+
 // updateFedoraLike updates tailscale on any distros in the Fedora family,
 // specifically anything that uses "dnf" or "yum" package managers. The actual
 // package manager is passed via packageManager.
@@ -616,6 +620,62 @@ func (up *Updater) updateFedoraLike(packageManager string) func() error {
 		}
 		return nil
 	}
+}
+
+// updateZypperLike updates tailscale on openSUSE and other zypper-based distros.
+func (up *Updater) updateZypperLike() (err error) {
+	if err := requireRoot(); err != nil {
+		return err
+	}
+	if err := exec.Command("rpm", "-q", "tailscale").Run(); err != nil && isExitError(err) {
+		// Tailscale was not installed via zypper/rpm, update via tarball download instead.
+		return up.updateLinuxBinary()
+	}
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf(`%w; you can try updating using "zypper update tailscale"`, err)
+		}
+	}()
+
+	ver, err := requestedTailscaleVersion(up.Version, up.Track)
+	if err != nil {
+		return err
+	}
+	if !up.confirm(ver) {
+		return nil
+	}
+
+	repoFile, err := findZypperRepoFile(zypperRepoConfigDir)
+	if err != nil {
+		return err
+	}
+	if updated, err := updateYUMRepoTrack(repoFile, up.Track); err != nil {
+		return err
+	} else if updated {
+		up.Logf("Updated %s to use the %s track", repoFile, up.Track)
+	}
+
+	cmd := exec.Command("zypper", "--non-interactive", "install", fmt.Sprintf("tailscale=%s", ver))
+	cmd.Stdout = up.Stdout
+	cmd.Stderr = up.Stderr
+	return cmd.Run()
+}
+
+// findZypperRepoFile returns the path to the tailscale zypper repo file in
+// dir. Zypper repo filenames include the track, so we probe each known track
+// name as well as a plain "tailscale.repo" fallback.
+func findZypperRepoFile(dir string) (string, error) {
+	for _, track := range []string{StableTrack, UnstableTrack, ReleaseCandidateTrack} {
+		p := filepath.Join(dir, "tailscale-"+track+".repo")
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	p := filepath.Join(dir, "tailscale.repo")
+	if _, err := os.Stat(p); err == nil {
+		return p, nil
+	}
+	return "", fmt.Errorf("tailscale repo file not found in %s", dir)
 }
 
 // updateYUMRepoTrack updates the repoFile file to make sure it has the

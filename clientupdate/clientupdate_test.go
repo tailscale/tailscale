@@ -133,6 +133,28 @@ type=rpm
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-$releasever-$basearch
 skip_if_unavailable=False`,
+
+	"openSUSEStable": `
+[tailscale-stable]
+name=Tailscale stable
+baseurl=https://pkgs.tailscale.com/stable/opensuse/tumbleweed/$basearch
+enabled=1
+type=rpm
+repo_gpgcheck=1
+gpgcheck=0
+gpgkey=https://pkgs.tailscale.com/stable/opensuse/tumbleweed/repo.gpg
+`,
+
+	"openSUSEUnstable": `
+[tailscale-unstable]
+name=Tailscale unstable
+baseurl=https://pkgs.tailscale.com/unstable/opensuse/tumbleweed/$basearch
+enabled=1
+type=rpm
+repo_gpgcheck=1
+gpgcheck=0
+gpgkey=https://pkgs.tailscale.com/unstable/opensuse/tumbleweed/repo.gpg
+`,
 }
 
 func TestUpdateYUMRepoTrack(t *testing.T) {
@@ -169,6 +191,13 @@ func TestUpdateYUMRepoTrack(t *testing.T) {
 			before:  YUMRepos["FakeRepo"],
 			track:   StableTrack,
 			wantErr: true,
+		},
+		{
+			desc:    "change track opensuse",
+			before:  YUMRepos["openSUSEStable"],
+			track:   UnstableTrack,
+			after:   YUMRepos["openSUSEUnstable"],
+			rewrote: true,
 		},
 	}
 
@@ -849,6 +878,55 @@ func TestParseUnraidPluginVersion(t *testing.T) {
 			}
 			if gotErr != tt.wantErr {
 				t.Errorf("got error: %q, want %q", gotErr, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestFindZypperRepoFile(t *testing.T) {
+	tests := []struct {
+		desc     string
+		files    []string
+		wantFile string
+		wantErr  bool
+	}{
+		{
+			desc:     "track-named file",
+			files:    []string{"tailscale-stable.repo"},
+			wantFile: "tailscale-stable.repo",
+		},
+		{
+			desc:     "plain fallback",
+			files:    []string{"tailscale.repo"},
+			wantFile: "tailscale.repo",
+		},
+		{
+			desc:    "not found",
+			files:   []string{"unrelated.repo"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			for _, f := range tt.files {
+				if err := os.WriteFile(filepath.Join(tmpDir, f), []byte("[tailscale-stable]\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := findZypperRepoFile(tmpDir)
+			if err != nil {
+				if !tt.wantErr {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if tt.wantErr {
+				t.Fatalf("got %q, expected an error", got)
+			}
+			if filepath.Base(got) != tt.wantFile {
+				t.Errorf("got %q, want basename %q", got, tt.wantFile)
 			}
 		})
 	}
