@@ -42,7 +42,7 @@
 //   - TS_TAILNET_TARGET_FQDN: proxy all incoming non-Tailscale traffic to the given
 //     destination defined by a MagicDNS name.
 //   - TS_TAILSCALED_EXTRA_ARGS: extra arguments to 'tailscaled'.
-//   - TS_EXTRA_ARGS: extra arguments to 'tailscale up'.
+//   - TS_EXTRA_ARGS: extra arguments to 'tailscale set'.
 //   - TS_USERSPACE: run with userspace networking (the default)
 //     instead of kernel networking.
 //   - TS_STATE_DIR: the directory in which to store tailscaled
