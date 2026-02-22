@@ -1,9 +1,9 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// This might work on other BSDs, but only tested on FreeBSD.
+// FreeBSD and OpenBSD routing table functions.
 
-//go:build freebsd
+//go:build freebsd || openbsd
 
 package netmon
 

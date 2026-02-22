@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build freebsd
+//go:build freebsd || openbsd
 
 package routetable
 
@@ -21,6 +21,7 @@ var flags = map[int]string{
 	unix.RTF_BROADCAST: "broadcast",
 	unix.RTF_GATEWAY:   "gateway",
 	unix.RTF_HOST:      "host",
+	unix.RTF_LOCAL:     "local",
 	unix.RTF_MULTICAST: "multicast",
 	unix.RTF_REJECT:    "reject",
 	unix.RTF_STATIC:    "static",

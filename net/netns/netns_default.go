@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !linux && !windows && !darwin
+//go:build !linux && !windows && !darwin && !openbsd
 
 package netns
 

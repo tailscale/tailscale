@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build darwin || freebsd
+//go:build darwin || freebsd || openbsd
 
 package routetable
 
