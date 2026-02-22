@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,6 +89,7 @@ type linuxRouter struct {
 	statefulFiltering bool
 	netfilterMode     preftype.NetfilterMode
 	netfilterKind     string
+	cgnatRules        []linuxfw.CGNATRule
 	magicsockPortV4   uint16
 	magicsockPortV6   uint16
 }
@@ -171,6 +173,18 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 	r.fixupWSLMTU()
 
 	return r, nil
+}
+
+func toLinuxFWCGNATRules(rules []router.CGNATRule) []linuxfw.CGNATRule {
+	ret := make([]linuxfw.CGNATRule, 0, len(rules))
+	for _, r := range rules {
+		ret = append(ret, linuxfw.CGNATRule{
+			Prefix:  r.Prefix,
+			Verdict: linuxfw.CGNATRuleVerdict(r.Verdict),
+			Chain:   linuxfw.CGNATRuleChain(r.Chain),
+		})
+	}
+	return ret
 }
 
 // ipCmdSupportsFwmask returns true if the system 'ip' binary supports using a
@@ -429,6 +443,15 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	if err := r.setNetfilterModeLocked(cfg.NetfilterMode); err != nil {
 		errs = append(errs, err)
 	}
+	cgnatRules := toLinuxFWCGNATRules(cfg.CGNATRules)
+	if r.netfilterMode != netfilterOff && !slices.Equal(r.cgnatRules, cgnatRules) {
+		if err := r.nfr.DelBase(); err != nil {
+			errs = append(errs, fmt.Errorf("could not update netfilter base rules: %w", err))
+		} else if err := r.nfr.AddBase(r.tunname, cgnatRules); err != nil {
+			errs = append(errs, fmt.Errorf("could not update netfilter base rules: %w", err))
+		}
+	}
+	r.cgnatRules = slices.Clone(cgnatRules)
 
 	newLocalRoutes, err := cidrDiff("localRoute", r.localRoutes, cfg.LocalRoutes, r.addThrowRoute, r.delThrowRoute, r.logf)
 	if err != nil {
@@ -653,7 +676,7 @@ func (r *linuxRouter) setNetfilterModeLocked(mode preftype.NetfilterMode) error 
 			if err := r.nfr.AddChains(); err != nil {
 				return err
 			}
-			if err := r.nfr.AddBase(r.tunname); err != nil {
+			if err := r.nfr.AddBase(r.tunname, r.cgnatRules); err != nil {
 				return err
 			}
 			if r.magicsockPortV4 != 0 {
@@ -693,7 +716,7 @@ func (r *linuxRouter) setNetfilterModeLocked(mode preftype.NetfilterMode) error 
 				return err
 			}
 			// AddBase adds base ts rules
-			if err := r.nfr.AddBase(r.tunname); err != nil {
+			if err := r.nfr.AddBase(r.tunname, r.cgnatRules); err != nil {
 				return err
 			}
 			if r.magicsockPortV4 != 0 {
@@ -715,7 +738,7 @@ func (r *linuxRouter) setNetfilterModeLocked(mode preftype.NetfilterMode) error 
 			if err := r.nfr.AddHooks(); err != nil {
 				return err
 			}
-			if err := r.nfr.AddBase(r.tunname); err != nil {
+			if err := r.nfr.AddBase(r.tunname, r.cgnatRules); err != nil {
 				return err
 			}
 			r.snatSubnetRoutes = false

@@ -519,8 +519,8 @@ func (n *fakeIPTablesRunner) AddLoopbackRule(addr netip.Addr) error {
 	return insertRule(n, curIPT, "filter/ts-input", newRule)
 }
 
-func (n *fakeIPTablesRunner) AddBase(tunname string) error {
-	if err := n.addBase4(tunname); err != nil {
+func (n *fakeIPTablesRunner) AddBase(tunname string, cgnatRules []linuxfw.CGNATRule) error {
+	if err := n.addBase4(tunname, cgnatRules); err != nil {
 		return err
 	}
 	if n.HasIPV6() {
@@ -571,22 +571,59 @@ func (n *fakeIPTablesRunner) DeleteDNATRuleForSvc(svcName string, origDst, dst n
 	return errors.New("not implemented")
 }
 
-func (n *fakeIPTablesRunner) addBase4(tunname string) error {
+func (n *fakeIPTablesRunner) addBase4(tunname string, cgnatRules []linuxfw.CGNATRule) error {
 	curIPT := n.ipt4
 	newRules := []struct{ chain, rule string }{
 		{"filter/ts-input", fmt.Sprintf("! -i %s -s %s -j RETURN", tunname, tsaddr.ChromeOSVMRange().String())},
-		{"filter/ts-input", fmt.Sprintf("! -i %s -s %s -j DROP", tunname, tsaddr.CGNATRange().String())},
-		{"filter/ts-forward", fmt.Sprintf("-i %s -j MARK --set-mark %s/%s", tunname, tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
-		{"filter/ts-forward", fmt.Sprintf("-m mark --mark %s/%s -j ACCEPT", tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
-		{"filter/ts-forward", fmt.Sprintf("-o %s -s %s -j DROP", tunname, tsaddr.CGNATRange().String())},
-		{"filter/ts-forward", fmt.Sprintf("-o %s -j ACCEPT", tunname)},
 	}
+	for _, rule := range linuxfwRulesOrDefault(cgnatRules) {
+		if !ruleAppliesToInput(rule.Chain) {
+			continue
+		}
+		target := strings.ToUpper(string(rule.Verdict))
+		newRules = append(newRules,
+			struct{ chain, rule string }{"filter/ts-input", fmt.Sprintf("! -i %s -s %s -j %s", tunname, rule.Prefix.String(), target)},
+		)
+	}
+	newRules = append(newRules,
+		struct{ chain, rule string }{"filter/ts-forward", fmt.Sprintf("-i %s -j MARK --set-mark %s/%s", tunname, tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
+		struct{ chain, rule string }{"filter/ts-forward", fmt.Sprintf("-m mark --mark %s/%s -j ACCEPT", tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
+	)
+	for _, rule := range linuxfwRulesOrDefault(cgnatRules) {
+		if !ruleAppliesToForward(rule.Chain) {
+			continue
+		}
+		target := strings.ToUpper(string(rule.Verdict))
+		newRules = append(newRules,
+			struct{ chain, rule string }{"filter/ts-forward", fmt.Sprintf("-o %s -s %s -j %s", tunname, rule.Prefix.String(), target)},
+		)
+	}
+	newRules = append(newRules, struct{ chain, rule string }{"filter/ts-forward", fmt.Sprintf("-o %s -j ACCEPT", tunname)})
 	for _, rule := range newRules {
 		if err := appendRule(n, curIPT, rule.chain, rule.rule); err != nil {
 			return fmt.Errorf("add rule %q to chain %q: %w", rule.rule, rule.chain, err)
 		}
 	}
 	return nil
+}
+
+func linuxfwRulesOrDefault(rules []linuxfw.CGNATRule) []linuxfw.CGNATRule {
+	if len(rules) > 0 {
+		return rules
+	}
+	return []linuxfw.CGNATRule{{
+		Prefix:  tsaddr.CGNATRange(),
+		Verdict: linuxfw.CGNATRuleVerdictDrop,
+		Chain:   linuxfw.CGNATRuleChainBoth,
+	}}
+}
+
+func ruleAppliesToInput(chain linuxfw.CGNATRuleChain) bool {
+	return chain == linuxfw.CGNATRuleChainBoth || chain == linuxfw.CGNATRuleChainInput
+}
+
+func ruleAppliesToForward(chain linuxfw.CGNATRuleChain) bool {
+	return chain == linuxfw.CGNATRuleChainBoth || chain == linuxfw.CGNATRuleChainForward
 }
 
 func (n *fakeIPTablesRunner) addBase6(tunname string) error {

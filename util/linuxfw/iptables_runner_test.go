@@ -120,7 +120,7 @@ func TestAddAndDeleteBase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := iptr.AddBase(tunname); err != nil {
+	if err := iptr.AddBase(tunname, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,6 +173,84 @@ func TestAddAndDeleteBase(t *testing.T) {
 
 	if err := iptr.DelChains(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAddBaseWithCGNATRules(t *testing.T) {
+	iptr := newFakeIPTablesRunner()
+	tunname := "tun0"
+	if err := iptr.AddChains(); err != nil {
+		t.Fatal(err)
+	}
+
+	rules := []CGNATRule{
+		{Prefix: netip.MustParsePrefix("100.81.0.0/16"), Verdict: CGNATRuleVerdictDrop, Chain: CGNATRuleChainBoth},
+		{Prefix: netip.MustParsePrefix("100.85.0.0/16"), Verdict: CGNATRuleVerdictDrop, Chain: CGNATRuleChainBoth},
+	}
+	if err := iptr.AddBase(tunname, rules); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, r := range rules {
+		if exists, err := iptr.ipt4.Exists("filter", "ts-input", "!", "-i", tunname, "-s", r.Prefix.String(), "-j", "DROP"); err != nil {
+			t.Fatal(err)
+		} else if !exists {
+			t.Errorf("ts-input drop rule for %s doesn't exist", r.Prefix)
+		}
+		if exists, err := iptr.ipt4.Exists("filter", "ts-forward", "-o", tunname, "-s", r.Prefix.String(), "-j", "DROP"); err != nil {
+			t.Fatal(err)
+		} else if !exists {
+			t.Errorf("ts-forward drop rule for %s doesn't exist", r.Prefix)
+		}
+	}
+
+	if exists, err := iptr.ipt4.Exists("filter", "ts-input", "!", "-i", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"); err != nil {
+		t.Fatal(err)
+	} else if exists {
+		t.Errorf("unexpected default CGNAT ts-input drop rule was installed")
+	}
+	if exists, err := iptr.ipt4.Exists("filter", "ts-forward", "-o", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"); err != nil {
+		t.Fatal(err)
+	} else if exists {
+		t.Errorf("unexpected default CGNAT ts-forward drop rule was installed")
+	}
+}
+
+func TestAddBaseWithCGNATRulesChainAndVerdict(t *testing.T) {
+	iptr := newFakeIPTablesRunner()
+	tunname := "tun0"
+	if err := iptr.AddChains(); err != nil {
+		t.Fatal(err)
+	}
+
+	rules := []CGNATRule{
+		{Prefix: netip.MustParsePrefix("100.100.0.0/24"), Verdict: CGNATRuleVerdictAccept, Chain: CGNATRuleChainInput},
+		{Prefix: netip.MustParsePrefix("100.64.0.0/10"), Verdict: CGNATRuleVerdictDrop, Chain: CGNATRuleChainForward},
+	}
+	if err := iptr.AddBase(tunname, rules); err != nil {
+		t.Fatal(err)
+	}
+
+	if exists, err := iptr.ipt4.Exists("filter", "ts-input", "!", "-i", tunname, "-s", "100.100.0.0/24", "-j", "ACCEPT"); err != nil {
+		t.Fatal(err)
+	} else if !exists {
+		t.Fatalf("missing input accept rule")
+	}
+	if exists, err := iptr.ipt4.Exists("filter", "ts-forward", "-o", tunname, "-s", "100.100.0.0/24", "-j", "ACCEPT"); err != nil {
+		t.Fatal(err)
+	} else if exists {
+		t.Fatalf("unexpected forward accept rule")
+	}
+
+	if exists, err := iptr.ipt4.Exists("filter", "ts-forward", "-o", tunname, "-s", "100.64.0.0/10", "-j", "DROP"); err != nil {
+		t.Fatal(err)
+	} else if !exists {
+		t.Fatalf("missing forward drop rule")
+	}
+	if exists, err := iptr.ipt4.Exists("filter", "ts-input", "!", "-i", tunname, "-s", "100.64.0.0/10", "-j", "DROP"); err != nil {
+		t.Fatal(err)
+	} else if exists {
+		t.Fatalf("unexpected input drop rule")
 	}
 }
 
