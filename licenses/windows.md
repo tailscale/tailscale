@@ -9,7 +9,7 @@ Windows][].  See also the dependencies in the [Tailscale CLI][].
 ## Go Packages
 
 
- - [filippo.io/edwards25519](https://pkg.go.dev/filippo.io/edwards25519) ([BSD-3-Clause](https://github.com/FiloSottile/edwards25519/blob/v1.1.0/LICENSE))
+ - [filippo.io/edwards25519](https://pkg.go.dev/filippo.io/edwards25519) ([BSD-3-Clause](https://github.com/FiloSottile/edwards25519/blob/v1.1.1/LICENSE))
  - [github.com/apenwarr/fixconsole](https://pkg.go.dev/github.com/apenwarr/fixconsole) ([Apache-2.0](https://github.com/apenwarr/fixconsole/blob/5a9f6489cc29/LICENSE))
  - [github.com/apenwarr/w32](https://pkg.go.dev/github.com/apenwarr/w32) ([BSD-3-Clause](https://github.com/apenwarr/w32/blob/aa00fece76ab/LICENSE))
  - [github.com/beorn7/perks/quantile](https://pkg.go.dev/github.com/beorn7/perks/quantile) ([MIT](https://github.com/beorn7/perks/blob/v1.0.1/LICENSE))
