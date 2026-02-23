@@ -252,6 +252,7 @@ change in the future.
 			configureCmd(),
 			nilOrCall(sysPolicyCmd),
 			netcheckCmd,
+			nattypeCmd,
 			ipCmd,
 			dnsCmd,
 			statusCmd,
