@@ -1236,6 +1236,7 @@ func stripKeysFromPrefs(p ipn.PrefsView) ipn.PrefsView {
 	p2.Persist.OldPrivateNodeKey = key.NodePrivate{}
 	p2.Persist.NetworkLockKey = key.NLPrivate{}
 	p2.Persist.AttestationKey = nil
+	p2.CustomMullvadAccount = "" // Strip Mullvad account credential
 	return p2.View()
 }
 
@@ -1390,14 +1391,8 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 	}
 	exitNodeID := b.pm.CurrentPrefs().ExitNodeID()
 
-	// Collect all peers, including custom Mullvad peers
-	peers := cn.Peers()
-	customMullvadPeers := b.getCustomMullvadPeersLocked()
-	allPeers := make([]tailcfg.NodeView, 0, len(peers)+len(customMullvadPeers))
-	allPeers = append(allPeers, peers...)
-	allPeers = append(allPeers, customMullvadPeers...)
-
-	for _, p := range allPeers {
+	// cn.Peers() already includes custom peers (e.g., Mullvad) via nodeBackend.customPeers.
+	for _, p := range cn.Peers() {
 		tailscaleIPs := make([]netip.Addr, 0, p.Addresses().Len())
 		isWireGuardOnly := p.IsWireGuardOnly()
 		for i := range p.Addresses().Len() {
@@ -5196,31 +5191,10 @@ func (b *LocalBackend) authReconfigLocked() {
 		return
 	}
 
-	// Inject custom Mullvad exit node peer into WireGuard config.
-	// The WGCfg function only knows about control-plane peers, so we need
-	// to add custom peers (like Mullvad) manually.
-	if exitNodeID := prefs.ExitNodeID(); exitNodeID != "" && strings.HasPrefix(string(exitNodeID), "custom-mullvad-") {
-		if peer, ok := cn.PeerByStableID(exitNodeID); ok {
-			wgPeer := wgcfg.Peer{
-				PublicKey: peer.Key(),
-			}
-			// Add AllowedIPs - for exit node this includes 0.0.0.0/0 and ::/0
-			for _, aip := range peer.AllowedIPs().All() {
-				wgPeer.AllowedIPs = append(wgPeer.AllowedIPs, aip)
-			}
-			// Set masquerade addresses - Mullvad expects traffic from our assigned IPs,
-			// not our Tailscale IP. The deviceInfo contains the IPs Mullvad assigned to us.
-			if b.customMullvadState != nil && b.customMullvadState.deviceInfo != nil {
-				if v4 := b.customMullvadState.deviceInfo.IPv4Address; v4.IsValid() {
-					wgPeer.V4MasqAddr = &v4
-				}
-				if v6 := b.customMullvadState.deviceInfo.IPv6Address; v6.IsValid() {
-					wgPeer.V6MasqAddr = &v6
-				}
-			}
-			cfg.Peers = append(cfg.Peers, wgPeer)
-		}
-	}
+	// Custom Mullvad peers are already included in nm.Peers via
+	// netMapWithPeers(), so WGCfg() processes them automatically.
+	// Masquerade addresses are set on the Node via SelfNodeV4MasqAddrForThisPeer
+	// in customMullvadServerToNode(), so WGCfg handles masquerade correctly.
 
 	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.NetMon.Get(), b.sys.ControlKnobs(), version.OS())
 	rcfg := b.routerConfigLocked(cfg, prefs, nm, oneCGNATRoute)
@@ -6397,12 +6371,17 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 	b.currentNode().SetNetMap(nm)
 	if ms, ok := b.sys.MagicSock.GetOK(); ok {
-		if nm != nil {
-			ms.SetNetworkMap(nm.SelfNode, nm.Peers)
+		// Use netMapWithPeers to include custom peers (e.g., Mullvad)
+		// in the magicsock peer set. Without this, custom peers would be
+		// lost on every control plane netmap update.
+		nmWithPeers := b.currentNode().netMapWithPeers()
+		if nmWithPeers != nil {
+			ms.SetNetworkMap(nmWithPeers.SelfNode, nmWithPeers.Peers)
 		} else {
 			ms.SetNetworkMap(tailcfg.NodeView{}, nil)
 		}
 	}
+
 	if login != b.activeLogin {
 		b.logf("active login: %v", login)
 		b.activeLogin = login

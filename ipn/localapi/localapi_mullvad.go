@@ -101,6 +101,20 @@ func (h *Handler) serveMullvadConfigure(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Validate account number format (empty means clear, otherwise must be 16 digits).
+	if req.AccountNumber != "" {
+		if len(req.AccountNumber) != 16 {
+			http.Error(w, "account number must be exactly 16 digits", http.StatusBadRequest)
+			return
+		}
+		for _, c := range req.AccountNumber {
+			if c < '0' || c > '9' {
+				http.Error(w, "account number must contain only digits", http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
 	// Use LocalBackend to configure Mullvad
 	// This is done via preferences to ensure persistence
 	if err := h.b.ConfigureCustomMullvad(r.Context(), req.AccountNumber); err != nil {

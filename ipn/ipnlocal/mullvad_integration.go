@@ -25,7 +25,6 @@ import (
 	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/dnstype"
-	"tailscale.com/types/views"
 )
 
 // customMullvadState holds the state for the custom Mullvad integration.
@@ -47,95 +46,6 @@ type customMullvadState struct {
 	accountStatus *mullvad.AccountStatus
 }
 
-// configureCustomMullvadLocked sets up personal Mullvad account integration.
-// Must be called with b.mu held.
-func (b *LocalBackend) configureCustomMullvadLocked(ctx context.Context, accountNumber string) error {
-	if !mullvad.CustomMullvadEnabled() {
-		b.logf("mullvad: feature not enabled (TS_ENABLE_CUSTOM_MULLVAD not set)")
-		return mullvad.ErrNotEnabled
-	}
-
-	// If account number is empty, clear the configuration
-	if accountNumber == "" {
-		b.clearCustomMullvadLocked()
-		return nil
-	}
-
-	// Get or initialize custom mullvad state
-	state := b.getOrCreateCustomMullvadStateLocked()
-
-	// Check if we need to create a new client
-	if state.client == nil || state.client.AccountNumber() != accountNumber {
-		// Create a DNS resolver that bypasses MagicDNS for Mullvad API calls.
-		// This solves the bootstrap problem where MagicDNS routes to Mullvad DNS
-		// which is unreachable before the Mullvad tunnel is established.
-		dnsResolver := b.createMullvadBootstrapDNSResolver()
-
-		// Use SystemDial to bypass Tailscale tunnel for Mullvad API calls.
-		// This is necessary because the exit node might be a Mullvad server,
-		// and we need to reach the Mullvad API directly.
-		client, err := mullvad.NewClient(accountNumber, b.logf, b.dialer.SystemDial, dnsResolver)
-		if err != nil {
-			return fmt.Errorf("creating Mullvad client: %w", err)
-		}
-		state.client = client
-	}
-
-	// Authenticate with Mullvad
-	if err := state.client.Authenticate(ctx); err != nil {
-		b.setCustomMullvadAuthFailedWarning(err)
-		return fmt.Errorf("authenticating with Mullvad: %w", err)
-	}
-
-	// Clear any previous auth failure warning
-	b.clearCustomMullvadAuthFailedWarning()
-
-	// Check account status
-	status, err := state.client.GetAccountStatus(ctx)
-	if err != nil {
-		b.setCustomMullvadAuthFailedWarning(err)
-		return fmt.Errorf("checking account status: %w", err)
-	}
-	state.accountStatus = status
-
-	if status.IsExpired {
-		b.setCustomMullvadExpiredWarning(status)
-		return mullvad.ErrAccountExpired
-	}
-
-	// Update health warnings based on account status
-	b.updateCustomMullvadHealthWarningsLocked(status)
-
-	// Ensure we have a dedicated WireGuard key for Mullvad
-	if err := b.ensureCustomMullvadKeyLocked(ctx, state); err != nil {
-		return fmt.Errorf("ensuring Mullvad key: %w", err)
-	}
-
-	// Fetch server list
-	servers, err := state.client.GetServers(ctx)
-	if err != nil {
-		return fmt.Errorf("fetching Mullvad servers: %w", err)
-	}
-
-	// Convert servers to tailcfg.Node entries
-	peers := make([]*tailcfg.Node, 0, len(servers))
-	for _, server := range servers {
-		if !server.Active {
-			continue
-		}
-		node := b.customMullvadServerToNode(server, state.deviceInfo)
-		peers = append(peers, node)
-	}
-
-	state.peers = peers
-	state.lastRefresh = time.Now()
-
-	// Inject peers into nodeBackend for proper routing and WireGuard config
-	b.injectCustomMullvadPeersLocked()
-
-	b.logf("mullvad: configured %d exit nodes from personal account", len(peers))
-	return nil
-}
 
 // getOrCreateCustomMullvadStateLocked returns the custom Mullvad state,
 // creating it if necessary. Must be called with b.mu held.
@@ -159,44 +69,23 @@ func (b *LocalBackend) clearCustomMullvadLocked() {
 	// Clear custom peers from nodeBackend
 	b.currentNode().SetCustomPeers(nil)
 
+	// Best-effort: deregister device from Mullvad to free up the device slot.
+	if client := b.customMullvadState.client; client != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(b.ctx, 10*time.Second)
+			defer cancel()
+			if err := client.RemoveDevice(ctx); err != nil {
+				b.logf("mullvad: failed to remove device: %v", err)
+			} else {
+				b.logf("mullvad: removed device from Mullvad account")
+			}
+		}()
+	}
+
 	b.customMullvadState = nil
 	b.logf("mullvad: cleared custom Mullvad configuration")
 }
 
-// ensureCustomMullvadKeyLocked registers the Tailscale node's public key with Mullvad.
-// We use the Tailscale node key (not a separate key) because wireguard-go only supports
-// a single private key per device. The Tailscale key is what wireguard-go will use
-// for all WireGuard connections, including to Mullvad servers.
-// Must be called with b.mu held.
-func (b *LocalBackend) ensureCustomMullvadKeyLocked(ctx context.Context, state *customMullvadState) error {
-	// Get the current Tailscale node key - this is what wireguard-go uses
-	priv := b.pm.CurrentPrefs().Persist().PrivateNodeKey()
-	if priv.IsZero() {
-		return fmt.Errorf("tailscale node key not available; login required")
-	}
-
-	pubKey := priv.Public()
-
-	// Check if we have a previously registered device ID
-	existingDeviceID, _ := b.loadMullvadDeviceIDLocked()
-
-	// Register/lookup device with Mullvad using Tailscale's public key
-	deviceInfo, err := state.client.RegisterDevice(ctx, pubKey)
-	if err != nil {
-		return fmt.Errorf("registering with Mullvad: %w", err)
-	}
-	state.deviceInfo = deviceInfo
-
-	// Save device ID for future lookups (key changes trigger re-registration)
-	if existingDeviceID != deviceInfo.ID {
-		if err := b.saveMullvadDeviceIDLocked(deviceInfo.ID); err != nil {
-			b.logf("mullvad: warning: failed to save device ID: %v", err)
-		}
-	}
-
-	b.logf("mullvad: registered Tailscale key with Mullvad (device: %s)", deviceInfo.ID)
-	return nil
-}
 
 // mullvadDeviceIDStateKey is the state key for storing the custom Mullvad device ID.
 const mullvadDeviceIDStateKey = "custom-mullvad-device-id"
@@ -255,7 +144,7 @@ func (b *LocalBackend) customMullvadServerToNode(server mullvad.Server, deviceIn
 		{Addr: "10.64.0.1"}, // Mullvad internal DNS
 	}
 
-	return &tailcfg.Node{
+	node := &tailcfg.Node{
 		ID:       nodeID,
 		StableID: tailcfg.StableNodeID("custom-mullvad-" + server.Hostname),
 		Name:     server.Hostname + ".mullvad.custom.",
@@ -284,44 +173,23 @@ func (b *LocalBackend) customMullvadServerToNode(server mullvad.Server, deviceIn
 			tailcfg.NodeAttrCustomMullvad:   nil,
 		},
 	}
-}
 
-// getCustomMullvadPeers returns the custom Mullvad peers as NodeViews.
-// Thread-safe.
-func (b *LocalBackend) getCustomMullvadPeers() []tailcfg.NodeView {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.getCustomMullvadPeersLocked()
-}
-
-// getCustomMullvadPeersLocked returns the custom Mullvad peers as NodeViews.
-// Must be called with b.mu held.
-func (b *LocalBackend) getCustomMullvadPeersLocked() []tailcfg.NodeView {
-	if b.customMullvadState == nil || len(b.customMullvadState.peers) == 0 {
-		return nil
+	// Set masquerade addresses so that nmcfg.WGCfg() configures WireGuard
+	// to masquerade traffic as the Mullvad-assigned IPs. Without this,
+	// Mullvad servers would see our Tailscale IP instead of the IP they
+	// assigned to us, and drop the traffic.
+	if deviceInfo != nil {
+		if v4 := deviceInfo.IPv4Address; v4.IsValid() {
+			node.SelfNodeV4MasqAddrForThisPeer = &v4
+		}
+		if v6 := deviceInfo.IPv6Address; v6.IsValid() {
+			node.SelfNodeV6MasqAddrForThisPeer = &v6
+		}
 	}
 
-	peers := make([]tailcfg.NodeView, len(b.customMullvadState.peers))
-	for i, p := range b.customMullvadState.peers {
-		peers[i] = p.View()
-	}
-	return peers
+	return node
 }
 
-// isCustomMullvadNode reports whether the node is a custom Mullvad node.
-func isCustomMullvadNode(node tailcfg.NodeView) bool {
-	if !node.Valid() {
-		return false
-	}
-	return node.CapMap().Contains(tailcfg.NodeAttrCustomMullvad)
-}
-
-// isCustomMullvadNodeByStableID reports whether the StableNodeID is a custom Mullvad node.
-func isCustomMullvadNodeByStableID(id tailcfg.StableNodeID) bool {
-	return strings.HasPrefix(string(id), "custom-mullvad-")
-}
-
-// Health warning helpers
 
 func (b *LocalBackend) updateCustomMullvadHealthWarningsLocked(status *mullvad.AccountStatus) {
 	if status == nil {
@@ -366,56 +234,6 @@ func (b *LocalBackend) clearCustomMullvadWarnings() {
 	b.health.SetHealthy(health.CustomMullvadAuthFailedWarnable)
 }
 
-// refreshCustomMullvadLocked re-fetches the Mullvad server list.
-// Must be called with b.mu held.
-func (b *LocalBackend) refreshCustomMullvadLocked(ctx context.Context) error {
-	if b.customMullvadState == nil || b.customMullvadState.client == nil {
-		return nil
-	}
-
-	state := b.customMullvadState
-
-	// Check account status
-	status, err := state.client.GetAccountStatus(ctx)
-	if err != nil {
-		b.setCustomMullvadAuthFailedWarning(err)
-		return fmt.Errorf("checking account status: %w", err)
-	}
-	state.accountStatus = status
-	b.clearCustomMullvadAuthFailedWarning()
-
-	// Update health warnings
-	b.updateCustomMullvadHealthWarningsLocked(status)
-
-	if status.IsExpired {
-		return mullvad.ErrAccountExpired
-	}
-
-	// Fetch updated server list
-	servers, err := state.client.GetServers(ctx)
-	if err != nil {
-		return fmt.Errorf("fetching Mullvad servers: %w", err)
-	}
-
-	// Convert servers to tailcfg.Node entries
-	peers := make([]*tailcfg.Node, 0, len(servers))
-	for _, server := range servers {
-		if !server.Active {
-			continue
-		}
-		node := b.customMullvadServerToNode(server, state.deviceInfo)
-		peers = append(peers, node)
-	}
-
-	state.peers = peers
-	state.lastRefresh = time.Now()
-
-	// Inject updated peers into nodeBackend
-	b.injectCustomMullvadPeersLocked()
-
-	b.logf("mullvad: refreshed server list, %d exit nodes available", len(peers))
-	return nil
-}
 
 // CustomMullvadStatus returns information about the custom Mullvad configuration.
 type CustomMullvadStatus struct {
@@ -458,59 +276,194 @@ func (b *LocalBackend) GetCustomMullvadStatus() CustomMullvadStatus {
 	return status
 }
 
-// injectCustomMullvadPeers adds custom Mullvad peers to the peer list.
-// This is used during netmap processing.
-func injectCustomMullvadPeers(peers []tailcfg.NodeView, customPeers []tailcfg.NodeView) []tailcfg.NodeView {
-	if len(customPeers) == 0 {
-		return peers
-	}
-	result := make([]tailcfg.NodeView, 0, len(peers)+len(customPeers))
-	result = append(result, peers...)
-	result = append(result, customPeers...)
-	return result
-}
-
-// filterCustomMullvadPeers returns only the custom Mullvad peers from a peer list.
-func filterCustomMullvadPeers(peers views.Slice[tailcfg.NodeView]) []tailcfg.NodeView {
-	var result []tailcfg.NodeView
-	for i := range peers.Len() {
-		if isCustomMullvadNode(peers.At(i)) {
-			result = append(result, peers.At(i))
-		}
-	}
-	return result
-}
-
 // ConfigureCustomMullvad configures the custom Mullvad account.
-// This is the public method called by the local API.
+// It releases b.mu during HTTP calls to avoid blocking the entire LocalBackend.
 func (b *LocalBackend) ConfigureCustomMullvad(ctx context.Context, accountNumber string) error {
+	if !mullvad.CustomMullvadEnabled() {
+		return mullvad.ErrNotEnabled
+	}
+
+	// Handle clearing under lock (quick, no HTTP).
+	if accountNumber == "" {
+		b.mu.Lock()
+		b.clearCustomMullvadLocked()
+		b.mu.Unlock()
+		return nil
+	}
+
+	// Phase 1: Under lock, create/reuse client and snapshot state needed for HTTP calls.
+	b.mu.Lock()
+	state := b.getOrCreateCustomMullvadStateLocked()
+	if state.client == nil || state.client.AccountNumber() != accountNumber {
+		dnsResolver := b.createMullvadBootstrapDNSResolver()
+		client, err := mullvad.NewClient(accountNumber, b.logf, b.dialer.SystemDial, dnsResolver)
+		if err != nil {
+			b.mu.Unlock()
+			return fmt.Errorf("creating Mullvad client: %w", err)
+		}
+		state.client = client
+	}
+	client := state.client
+	pubKey := b.pm.CurrentPrefs().Persist().PrivateNodeKey().Public()
+	b.mu.Unlock()
+
+	// Phase 2: HTTP calls without holding b.mu.
+	if err := client.Authenticate(ctx); err != nil {
+		b.setCustomMullvadAuthFailedWarning(err)
+		return fmt.Errorf("authenticating with Mullvad: %w", err)
+	}
+	b.clearCustomMullvadAuthFailedWarning()
+
+	status, err := client.GetAccountStatus(ctx)
+	if err != nil {
+		b.setCustomMullvadAuthFailedWarning(err)
+		return fmt.Errorf("checking account status: %w", err)
+	}
+
+	if status.IsExpired {
+		b.setCustomMullvadExpiredWarning(status)
+		return mullvad.ErrAccountExpired
+	}
+
+	deviceInfo, err := client.RegisterDevice(ctx, pubKey)
+	if err != nil {
+		return fmt.Errorf("registering with Mullvad: %w", err)
+	}
+
+	servers, err := client.GetServers(ctx)
+	if err != nil {
+		return fmt.Errorf("fetching Mullvad servers: %w", err)
+	}
+
+	// Phase 3: Re-acquire lock and update state with results.
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.configureCustomMullvadLocked(ctx, accountNumber)
+
+	// Verify the node key hasn't changed while we were doing HTTP calls.
+	// If it changed (e.g., re-auth), the device we registered with Mullvad
+	// has the wrong key and we need to re-register.
+	currentPubKey := b.pm.CurrentPrefs().Persist().PrivateNodeKey().Public()
+	if currentPubKey != pubKey {
+		b.logf("mullvad: node key changed during configuration, will re-register on next auth")
+		// Don't fail — save what we have. The enterStateLocked path
+		// will trigger re-registration when the new key is stable.
+	}
+
+	state = b.getOrCreateCustomMullvadStateLocked()
+	state.accountStatus = status
+	state.deviceInfo = deviceInfo
+
+	b.updateCustomMullvadHealthWarningsLocked(status)
+
+	// Save device ID for future lookups.
+	existingDeviceID, _ := b.loadMullvadDeviceIDLocked()
+	if existingDeviceID != deviceInfo.ID {
+		if err := b.saveMullvadDeviceIDLocked(deviceInfo.ID); err != nil {
+			b.logf("mullvad: warning: failed to save device ID: %v", err)
+		}
+	}
+
+	// Convert servers to tailcfg.Node entries.
+	peers := make([]*tailcfg.Node, 0, len(servers))
+	for _, server := range servers {
+		if !server.Active {
+			continue
+		}
+		peers = append(peers, b.customMullvadServerToNode(server, deviceInfo))
+	}
+
+	state.peers = peers
+	state.lastRefresh = time.Now()
+	b.injectCustomMullvadPeersLocked()
+
+	b.logf("mullvad: configured %d exit nodes from personal account", len(peers))
+	return nil
 }
 
 // RefreshCustomMullvad refreshes the custom Mullvad configuration.
-// This is the public method called by the local API.
+// It releases b.mu during HTTP calls to avoid blocking the entire LocalBackend.
 func (b *LocalBackend) RefreshCustomMullvad(ctx context.Context) error {
+	// Phase 1: Under lock, grab the client reference.
+	b.mu.Lock()
+	if b.customMullvadState == nil || b.customMullvadState.client == nil {
+		b.mu.Unlock()
+		return nil
+	}
+	client := b.customMullvadState.client
+	deviceInfo := b.customMullvadState.deviceInfo
+	b.mu.Unlock()
+
+	// Phase 2: HTTP calls without holding b.mu.
+	status, err := client.GetAccountStatus(ctx)
+	if err != nil {
+		b.setCustomMullvadAuthFailedWarning(err)
+		return fmt.Errorf("checking account status: %w", err)
+	}
+	b.clearCustomMullvadAuthFailedWarning()
+
+	if status.IsExpired {
+		b.mu.Lock()
+		b.updateCustomMullvadHealthWarningsLocked(status)
+		b.mu.Unlock()
+		return mullvad.ErrAccountExpired
+	}
+
+	servers, err := client.GetServers(ctx)
+	if err != nil {
+		return fmt.Errorf("fetching Mullvad servers: %w", err)
+	}
+
+	// Phase 3: Re-acquire lock and update state.
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.refreshCustomMullvadLocked(ctx)
+
+	if b.customMullvadState == nil {
+		return nil // cleared while we were fetching
+	}
+
+	b.customMullvadState.accountStatus = status
+	b.updateCustomMullvadHealthWarningsLocked(status)
+
+	peers := make([]*tailcfg.Node, 0, len(servers))
+	for _, server := range servers {
+		if !server.Active {
+			continue
+		}
+		peers = append(peers, b.customMullvadServerToNode(server, deviceInfo))
+	}
+
+	b.customMullvadState.peers = peers
+	b.customMullvadState.lastRefresh = time.Now()
+	b.injectCustomMullvadPeersLocked()
+
+	b.logf("mullvad: refreshed server list, %d exit nodes available", len(peers))
+	return nil
 }
 
 // injectCustomMullvadPeersLocked updates the nodeBackend with custom Mullvad peers
 // so they are included in peer lookups and WireGuard configuration.
+// It also notifies magicsock about the updated peer set so that ParseEndpoint
+// can find the custom peers when WireGuard needs to send to them.
 // Must be called with b.mu held.
 func (b *LocalBackend) injectCustomMullvadPeersLocked() {
+	cn := b.currentNode()
 	if b.customMullvadState == nil || len(b.customMullvadState.peers) == 0 {
-		b.currentNode().SetCustomPeers(nil)
-		return
+		cn.SetCustomPeers(nil)
+	} else {
+		peerViews := make([]tailcfg.NodeView, len(b.customMullvadState.peers))
+		for i, p := range b.customMullvadState.peers {
+			peerViews[i] = p.View()
+		}
+		cn.SetCustomPeers(peerViews)
 	}
 
-	peerViews := make([]tailcfg.NodeView, len(b.customMullvadState.peers))
-	for i, p := range b.customMullvadState.peers {
-		peerViews[i] = p.View()
+	// Notify magicsock about the combined peer set (control + custom).
+	// This is critical: magicsock needs to know about custom peers for
+	// ParseEndpoint to work when WireGuard sends packets to them.
+	nm := cn.netMapWithPeers()
+	if ms, ok := b.sys.MagicSock.GetOK(); ok && nm != nil {
+		ms.SetNetworkMap(nm.SelfNode, nm.Peers)
 	}
-	b.currentNode().SetCustomPeers(peerViews)
 }
 
 // createMullvadBootstrapDNSResolver creates a DNS resolver for Mullvad API calls
