@@ -8,6 +8,7 @@ package appctype
 import (
 	"net/netip"
 
+	"go4.org/netipx"
 	"tailscale.com/tailcfg"
 )
 
@@ -92,4 +93,18 @@ type RouteInfo struct {
 type RouteUpdate struct {
 	Advertise   []netip.Prefix
 	Unadvertise []netip.Prefix
+}
+
+type Conn25Attr struct {
+	// Name is the name of this collection of domains.
+	Name string `json:"name,omitempty"`
+	// Domains enumerates the domains serviced by the specified app connectors.
+	// Domains can be of the form: example.com, or *.example.com.
+	Domains []string `json:"domains,omitempty"`
+	// Connectors enumerates the app connectors which service these domains.
+	// These can either be "*" to match any advertising connector, or a
+	// tag of the form tag:<tag-name>.
+	Connectors    []string         `json:"connectors,omitempty"`
+	MagicIPPool   []netipx.IPRange `json:"magicIPPool,omitempty"`
+	TransitIPPool []netipx.IPRange `json:"transitIPPool,omitempty"`
 }

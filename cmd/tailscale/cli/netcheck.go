@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
+	"net/netip"
 	"sort"
 	"strings"
 	"time"
@@ -26,6 +28,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/set"
 
 	// The "netcheck" command also wants the portmapper linked.
 	//
@@ -41,19 +44,25 @@ var netcheckCmd = &ffcli.Command{
 	ShortUsage: "tailscale netcheck",
 	ShortHelp:  "Print an analysis of local network conditions",
 	Exec:       runNetcheck,
-	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("netcheck")
-		fs.StringVar(&netcheckArgs.format, "format", "", `output format; empty (for human-readable), "json" or "json-line"`)
-		fs.DurationVar(&netcheckArgs.every, "every", 0, "if non-zero, do an incremental report with the given frequency")
-		fs.BoolVar(&netcheckArgs.verbose, "verbose", false, "verbose logs")
-		return fs
-	})(),
+	FlagSet:    netcheckFlagSet,
 }
 
+var netcheckFlagSet = func() *flag.FlagSet {
+	fs := newFlagSet("netcheck")
+	fs.StringVar(&netcheckArgs.format, "format", "", `output format; empty (for human-readable), "json" or "json-line"`)
+	fs.DurationVar(&netcheckArgs.every, "every", 0, "if non-zero, do an incremental report with the given frequency")
+	fs.BoolVar(&netcheckArgs.verbose, "verbose", false, "verbose logs")
+	fs.StringVar(&netcheckArgs.bindAddress, "bind-address", "", "send and receive connectivity probes using this locally bound IP address; default: OS-assigned")
+	fs.IntVar(&netcheckArgs.bindPort, "bind-port", 0, "send and receive connectivity probes using this UDP port; default: OS-assigned")
+	return fs
+}()
+
 var netcheckArgs struct {
-	format  string
-	every   time.Duration
-	verbose bool
+	format      string
+	every       time.Duration
+	verbose     bool
+	bindAddress string
+	bindPort    int
 }
 
 func runNetcheck(ctx context.Context, args []string) error {
@@ -73,6 +82,11 @@ func runNetcheck(ctx context.Context, args []string) error {
 		defer pm.Close()
 	}
 
+	flagsProvided := set.Set[string]{}
+	netcheckFlagSet.Visit(func(f *flag.Flag) {
+		flagsProvided.Add(f.Name)
+	})
+
 	c := &netcheck.Client{
 		NetMon:      netMon,
 		PortMapper:  pm,
@@ -89,7 +103,17 @@ func runNetcheck(ctx context.Context, args []string) error {
 		fmt.Fprintln(Stderr, "# Warning: this JSON format is not yet considered a stable interface")
 	}
 
-	if err := c.Standalone(ctx, envknob.String("TS_DEBUG_NETCHECK_UDP_BIND")); err != nil {
+	bind, err := createNetcheckBindString(
+		netcheckArgs.bindAddress,
+		flagsProvided.Contains("bind-address"),
+		netcheckArgs.bindPort,
+		flagsProvided.Contains("bind-port"),
+		envknob.String("TS_DEBUG_NETCHECK_UDP_BIND"))
+	if err != nil {
+		return err
+	}
+
+	if err := c.Standalone(ctx, bind); err != nil {
 		fmt.Fprintln(Stderr, "netcheck: UDP test failure:", err)
 	}
 
@@ -264,4 +288,45 @@ func prodDERPMap(ctx context.Context, httpc *http.Client) (*tailcfg.DERPMap, err
 		return nil, fmt.Errorf("fetch prodDERPMap: %w", err)
 	}
 	return &derpMap, nil
+}
+
+// createNetcheckBindString determines the netcheck socket bind "address:port" string based
+// on the CLI args and environment variable values used to invoke the netcheck CLI.
+// Arguments cliAddressIsSet and cliPortIsSet explicitly indicate whether the
+// corresponding cliAddress and cliPort were set in CLI args, instead of relying
+// on in-band sentinel values.
+func createNetcheckBindString(cliAddress string, cliAddressIsSet bool, cliPort int, cliPortIsSet bool, envBind string) (string, error) {
+	// Default to port number 0 but overwrite with a valid CLI value, if set.
+	var port uint16 = 0
+	if cliPortIsSet {
+		// 0 is valid, results in OS picking port.
+		if cliPort >= 0 && cliPort <= math.MaxUint16 {
+			port = uint16(cliPort)
+		} else {
+			return "", fmt.Errorf("invalid bind port number: %d", cliPort)
+		}
+	}
+
+	// Use CLI address, if set.
+	if cliAddressIsSet {
+		addr, err := netip.ParseAddr(cliAddress)
+		if err != nil {
+			return "", fmt.Errorf("invalid bind address: %q", cliAddress)
+		}
+		return netip.AddrPortFrom(addr, port).String(), nil
+	} else {
+		// No CLI address set, but port is set.
+		if cliPortIsSet {
+			return fmt.Sprintf(":%d", port), nil
+		}
+	}
+
+	// Fall back to the environment variable.
+	// Intentionally skipping input validation here to avoid breaking legacy usage method.
+	if envBind != "" {
+		return envBind, nil
+	}
+
+	// OS picks both address and port.
+	return ":0", nil
 }
