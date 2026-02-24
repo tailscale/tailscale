@@ -704,6 +704,26 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, 
 	return nil
 }
 
+// addForwardedTCPToProxyMap registers a proxy mapping for a forwarded TCP
+// connection. This is used in forwardTCPWithProxyProtocol to ensure that WhoIs
+// lookups still work for the forwarded connection.
+func (b *LocalBackend) addForwardedTCPToProxyMap(backConn net.Conn, srcAddr netip.Addr) (unregister func(), err error) {
+	proxiedAddrPort, err := netip.ParseAddrPort(backConn.LocalAddr().String())
+	if err != nil {
+		return nil, fmt.Errorf("parsing addr: %v", err)
+	}
+	if proxiedAddrPort.Addr().Is4In6() {
+		proxiedAddrPort = netip.AddrPortFrom(proxiedAddrPort.Addr().Unmap(), proxiedAddrPort.Port())
+	}
+	err = b.sys.ProxyMapper().RegisterIPPortIdentity("tcp", proxiedAddrPort, srcAddr)
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		b.sys.ProxyMapper().UnregisterIPPortIdentity("tcp", proxiedAddrPort)
+	}, nil
+}
+
 // forwardTCPWithProxyProtocol forwards TCP traffic between conn and backConn,
 // optionally prepending a PROXY protocol header if proxyProtoVer > 0.
 // The srcAddr is the original client address used to build the PROXY header.
@@ -763,6 +783,13 @@ func (b *LocalBackend) forwardTCPWithProxyProtocol(conn, backConn net.Conn, prox
 		if err != nil {
 			b.logf("localbackend: failed to format proxy protocol header for port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
 		}
+	}
+
+	unregisterProxyMapping, err := b.addForwardedTCPToProxyMap(backConn, srcAddr.Addr())
+	if err != nil {
+		b.logf("failed to add forwarded TCP (%v -> %v) to proxy map: %v", backConn.LocalAddr(), srcAddr, err)
+	} else {
+		defer unregisterProxyMapping()
 	}
 
 	errc := make(chan error, 1)
@@ -965,20 +992,53 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.ServeHTTP(w, r)
 }
 
+// onCloseConn is a net.Conn with a custom callback invoked during Close.
+type onCloseConn struct {
+	net.Conn
+	onClose func()
+}
+
+func (conn onCloseConn) Close() error {
+	conn.onClose()
+	return conn.Conn.Close()
+}
+
+// dialForTransport is a dial function for use in the reverseProxy's HTTP
+// transport.
+func (rp *reverseProxy) dialForTransport(ctx context.Context, network, addr string) (net.Conn, error) {
+	dial := rp.lb.dialer.SystemDial
+	if rp.socketPath != "" {
+		// n.b. We do not currently support WhoIs lookups for Unix destinations.
+		return (&net.Dialer{}).DialContext(ctx, "unix", rp.socketPath)
+	}
+	conn, err := dial(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+	// Adding entries to the proxy map ensures that WhoIs lookups work for
+	// destinations receiving Tailscale traffic (likely via serve).
+	c, ok := serveHTTPContextKey.ValueOk(ctx)
+	if !ok {
+		rp.logf("failed to add proxy mapping: no source address in context")
+		return conn, nil
+	}
+	unregister, err := rp.lb.addForwardedTCPToProxyMap(conn, c.SrcAddr.Addr())
+	if err != nil {
+		rp.logf("failed to add forwarded TCP (%v -> %v) to proxy map: %v:", conn.LocalAddr(), c.SrcAddr, err)
+		return conn, nil
+	}
+	return onCloseConn{
+		Conn:    conn,
+		onClose: sync.OnceFunc(unregister),
+	}, nil
+}
+
 // getTransport returns the Transport used for regular (non-GRPC) requests
 // to the backend. The Transport gets created lazily, at most once.
 func (rp *reverseProxy) getTransport() *http.Transport {
 	return rp.httpTransport.Get(func() *http.Transport {
-		dial := rp.lb.dialer.SystemDial
-		if rp.socketPath != "" {
-			dial = func(ctx context.Context, _, _ string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, "unix", rp.socketPath)
-			}
-		}
-
 		return &http.Transport{
-			DialContext: dial,
+			DialContext: rp.dialForTransport,
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: rp.insecure,
 			},
@@ -999,14 +1059,8 @@ func (rp *reverseProxy) getH2CTransport() http.RoundTripper {
 		var p http.Protocols
 		p.SetUnencryptedHTTP2(true)
 		tr := &http.Transport{
-			Protocols: &p,
-			DialTLSContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
-				if rp.socketPath != "" {
-					var d net.Dialer
-					return d.DialContext(ctx, "unix", rp.socketPath)
-				}
-				return rp.lb.dialer.SystemDial(ctx, "tcp", rp.url.Host)
-			},
+			Protocols:      &p,
+			DialTLSContext: rp.dialForTransport,
 		}
 		return tr
 	})
