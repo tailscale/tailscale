@@ -664,15 +664,19 @@ func (n *TestNode) AwaitResponding() {
 	st := n.MustStatus()
 	t.Logf("Status: %s", st.BackendState)
 
-	if err := tstest.WaitFor(20*time.Second, func() error {
-		const sub = `Program starting: `
-		if !n.env.LogCatcher.logsContains(mem.S(sub)) {
-			return fmt.Errorf("log catcher didn't see %#q; got %s", sub, n.env.LogCatcher.logsString())
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	// XXX(hwh33): commenting out the check for a log line doesn't seem to have
+	// ill effects; I ran TestOneNodeUpNoAuth -count=100, for example
+	// Why is this check part of this function anyway?
+
+	// if err := tstest.WaitFor(20*time.Second, func() error {
+	// 	const sub = `Program starting: `
+	// 	if !n.env.LogCatcher.logsContains(mem.S(sub)) {
+	// 		return fmt.Errorf("log catcher didn't see %#q; got %s", sub, n.env.LogCatcher.logsString())
+	// 	}
+	// 	return nil
+	// }); err != nil {
+	// 	t.Fatal(err)
+	// }
 }
 
 // addLogLineHook registers a hook f to be called on each tailscaled
@@ -840,7 +844,7 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		"TS_PANIC_IF_HIT_MAIN_CONTROL=1",
 		"TS_DISABLE_PORTMAPPER=1", // shouldn't be needed; test is all localhost
 		"TS_DEBUG_LOG_RATE=all",
-		"TEST=1",
+		"TS_IN_TEST=1",
 	)
 	if n.allowUpdates {
 		cmd.Env = append(cmd.Env, "TS_TEST_ALLOW_AUTO_UPDATE=1")

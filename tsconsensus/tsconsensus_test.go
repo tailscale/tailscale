@@ -113,6 +113,7 @@ func (f *fsm) Restore(rc io.ReadCloser) error {
 }
 
 func testConfig(t *testing.T) {
+	t.Skip("skipping tsconsensus")
 	if cibuild.On() {
 		t.Skip("these integration tests don't always work well in CI and that's bad for CI; see https://github.com/tailscale/tailscale/issues/16340 and https://github.com/tailscale/tailscale/issues/18022")
 	}

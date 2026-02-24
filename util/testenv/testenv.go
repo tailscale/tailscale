@@ -18,7 +18,7 @@ var lazyInTest lazy.SyncValue[bool]
 // InTest reports whether the current binary is a test binary.
 func InTest() bool {
 	return lazyInTest.Get(func() bool {
-		return flag.Lookup("test.v") != nil || os.Getenv("TEST") == "1"
+		return flag.Lookup("test.v") != nil || os.Getenv("TS_IN_TEST") == "1"
 	})
 }
 
