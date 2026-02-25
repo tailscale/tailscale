@@ -1603,12 +1603,6 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func mustBase64(t *testing.T, v any) string {
-	b := mustJSON(t, v)
-	s := base64.StdEncoding.WithPadding('=').EncodeToString(b)
-	return s
-}
-
 func mustJSON(t *testing.T, v any) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {

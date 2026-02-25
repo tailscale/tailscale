@@ -595,12 +595,6 @@ func beVerbose(f *forwarder) {
 	f.verboseFwd = true
 }
 
-// makeTestRequestWithEDNS returns a new TypeTXT request for the given domain with EDNS buffer size.
-// Deprecated: Use makeTestRequest with queryType and ednsSize parameters instead.
-func makeTestRequestWithEDNS(tb testing.TB, domain string, ednsSize uint16) []byte {
-	return makeTestRequest(tb, domain, dns.TypeTXT, ednsSize)
-}
-
 // makeEDNSResponse creates a DNS response of approximately the specified size
 // with TXT records and an OPT record. The response will NOT have the TC flag set
 // (simulating a non-compliant server that doesn't set TC when response exceeds EDNS buffer).
