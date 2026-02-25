@@ -17,7 +17,7 @@ spec:
   replicas: 2
 
   # Hostname prefix for the exit node devices
-  # Devices will be named: gke-exit-node-0, gke-exit-node-1
+  # Devices will be named: exit-node-0, exit-node-1
   hostnamePrefix: exit-node
 
   # Tailscale tags for ACL policy management
