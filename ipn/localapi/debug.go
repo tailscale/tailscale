@@ -24,6 +24,7 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/httpm"
@@ -44,6 +45,7 @@ func init() {
 	Register("debug-packet-filter-rules", (*Handler).serveDebugPacketFilterRules)
 	Register("debug-peer-endpoint-changes", (*Handler).serveDebugPeerEndpointChanges)
 	Register("debug-optional-features", (*Handler).serveDebugOptionalFeatures)
+	Register("debug-path-policy", (*Handler).serveDebugPathPolicy)
 }
 
 func (h *Handler) serveDebugPeerEndpointChanges(w http.ResponseWriter, r *http.Request) {
@@ -550,4 +552,31 @@ func (h *Handler) serveDebugRotateDiscoKey(w http.ResponseWriter, r *http.Reques
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	io.WriteString(w, "done\n")
+}
+
+// serveDebugPathPolicy handles POST /localapi/v0/debug-path-policy.
+// The request body must be a JSON-encoded [tailcfg.PathPolicy], or the JSON
+// literal "null" to clear any previously set debug override.
+// This allows testing path policy routing without the online policy editor.
+func (h *Handler) serveDebugPathPolicy(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "debug access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != httpm.POST {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var policy *tailcfg.PathPolicy
+	if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	h.b.DebugSetPathPolicy(policy)
+	w.Header().Set("Content-Type", "text/plain")
+	if policy == nil {
+		io.WriteString(w, "path policy override cleared\n")
+	} else {
+		io.WriteString(w, "path policy override set\n")
+	}
 }

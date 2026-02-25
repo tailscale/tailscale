@@ -593,6 +593,22 @@ func (lc *Client) DebugActionBody(ctx context.Context, action string, rbody io.R
 	return nil
 }
 
+// DebugSetPathPolicy sets a local debug override for the path policy,
+// bypassing whatever the control plane sends. Pass nil to clear any
+// previously set override and revert to the control-plane-supplied policy.
+// This is a development/testing tool and subject to change or removal.
+func (lc *Client) DebugSetPathPolicy(ctx context.Context, policy *tailcfg.PathPolicy) error {
+	b, err := json.Marshal(policy)
+	if err != nil {
+		return err
+	}
+	body, err := lc.send(ctx, "POST", "/localapi/v0/debug-path-policy", 200, bytes.NewReader(b))
+	if err != nil {
+		return fmt.Errorf("error %w: %s", err, body)
+	}
+	return nil
+}
+
 // DebugResultJSON invokes a debug action and returns its result as something JSON-able.
 // These are development tools and subject to change or removal over time.
 func (lc *Client) DebugResultJSON(ctx context.Context, action string) (any, error) {
