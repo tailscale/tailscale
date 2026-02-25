@@ -530,6 +530,57 @@ func TestPickDERPFallback(t *testing.T) {
 	// have fixed DERP fallback logic.
 }
 
+// TestDERPActiveFuncCalledAfterConnect verifies that DERPActiveFunc is not
+// called until the DERP connection is actually established (i.e. after
+// startGate / derpStarted is closed).
+func TestDERPActiveFuncCalledAfterConnect(t *testing.T) {
+	derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
+	defer cleanup()
+
+	bus := eventbustest.NewBus(t)
+
+	netMon, err := netmon.New(bus, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resultCh := make(chan bool, 1)
+	var conn *Conn
+
+	conn, err = NewConn(Options{
+		Logf:                   t.Logf,
+		NetMon:                 netMon,
+		EventBus:               bus,
+		HealthTracker:          health.NewTracker(bus),
+		Metrics:                new(usermetric.Registry),
+		DisablePortMapper:      true,
+		TestOnlyPacketListener: localhostListener{},
+		EndpointsFunc:          func([]tailcfg.Endpoint) {},
+		DERPActiveFunc: func() {
+			// derpStarted should already be closed when DERPActiveFunc is called.
+			select {
+			case <-conn.derpStarted:
+				resultCh <- true
+			default:
+				resultCh <- false
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	conn.SetDERPMap(derpMap)
+	if err := conn.SetPrivateKey(key.NewNode()); err != nil {
+		t.Fatal(err)
+	}
+
+	if ok := <-resultCh; !ok {
+		t.Error("DERPActiveFunc was called before DERP connection was established")
+	}
+}
+
 // TestDeviceStartStop exercises the startup and shutdown logic of
 // wireguard-go, which is intimately intertwined with magicsock's own
 // lifecycle. We seem to be good at generating deadlocks here, so if
