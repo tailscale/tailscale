@@ -531,6 +531,15 @@ func (menu *Menu) watchIPNBusInner() error {
 			if err != nil {
 				return fmt.Errorf("ipnbus error: %w", err)
 			}
+			if url := n.BrowseToURL; url != nil {
+				// Avoid opening the browser when running as root, just in case.
+				runningAsRoot := os.Getuid() == 0
+				if !runningAsRoot {
+					if err := webbrowser.Open(*url); err != nil {
+						log.Printf("failed to open BrowseToURL: %v", err)
+					}
+				}
+			}
 			var rebuild bool
 			if n.State != nil {
 				log.Printf("new state: %v", n.State)
