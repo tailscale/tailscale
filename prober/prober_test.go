@@ -793,9 +793,14 @@ func TestExcludeInRunAll(t *testing.T) {
 		},
 	}
 
-	p.Run("includedProbe", probeInterval, nil, FuncProbe(func(context.Context) error { return nil }))
-	p.Run("excludedProbe", probeInterval, nil, FuncProbe(func(context.Context) error { return nil }))
-	p.Run("excludedOtherProbe", probeInterval, nil, FuncProbe(func(context.Context) error { return nil }))
+	includedProbe := p.Run("includedProbe", probeInterval, nil, FuncProbe(func(context.Context) error { return nil }))
+	excludedProbe := p.Run("excludedProbe", probeInterval, nil, FuncProbe(func(context.Context) error { return nil }))
+	excludedOtherProbe := p.Run("excludedOtherProbe", probeInterval, nil, FuncProbe(func(context.Context) error { return nil }))
+
+	// Wait for all probes to complete their initial run
+	<-includedProbe.stopped
+	<-excludedProbe.stopped
+	<-excludedOtherProbe.stopped
 
 	mux := http.NewServeMux()
 	server := httptest.NewServer(mux)
