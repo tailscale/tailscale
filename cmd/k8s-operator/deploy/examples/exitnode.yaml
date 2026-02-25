@@ -7,7 +7,7 @@
 apiVersion: tailscale.com/v1alpha1
 kind: Connector
 metadata:
-  name: gke-exit-node
+  name: exit-node
 spec:
   # Exit node configuration - allows Tailscale clients to route all internet traffic through this Connector
   exitNode: true
