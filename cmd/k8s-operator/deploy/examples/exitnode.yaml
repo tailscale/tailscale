@@ -21,7 +21,6 @@ spec:
   hostnamePrefix: exit-node
 
   # Tailscale tags for ACL policy management
-  # Using tag:k8s-operator to match existing GKE cluster deployment
   tags:
     - tag:k8s-operator
 
