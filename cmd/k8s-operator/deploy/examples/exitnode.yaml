@@ -18,7 +18,7 @@ spec:
 
   # Hostname prefix for the exit node devices
   # Devices will be named: gke-exit-node-0, gke-exit-node-1
-  hostnamePrefix: gke-exit-node
+  hostnamePrefix: exit-node
 
   # Tailscale tags for ACL policy management
   # Using tag:k8s-operator to match existing GKE cluster deployment
