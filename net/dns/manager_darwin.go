@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"sync"
+	"time"
 
 	"go4.org/mem"
 	"tailscale.com/control/controlknobs"
@@ -50,6 +51,18 @@ type darwinConfigurator struct {
 	listenerPort int                // actual port the listener is bound to
 	ctx          context.Context    // for listener goroutine
 	cancel       context.CancelFunc // cancels listener goroutine
+
+	// recompileFn, if set, is called when the resolver file watcher detects
+	// that files have been removed. It triggers the DNS Manager to re-apply
+	// the current DNS configuration, which re-creates the files.
+	recompileFn func()
+
+	// watchCtx/watchCancel control the resolver file watcher goroutine.
+	watchCtx    context.Context
+	watchCancel context.CancelFunc
+	// watchFiles is the set of /etc/resolver/ filenames the watcher expects
+	// to exist (just names, not full paths).
+	watchFiles map[string]bool
 }
 
 // SetResolver sets the DNS resolver to use for handling local DNS queries.
@@ -60,8 +73,24 @@ func (c *darwinConfigurator) SetResolver(r *resolver.Resolver) {
 	c.resolver = r
 }
 
+// SetRecompileFunc sets a callback that is invoked when the resolver file
+// watcher detects that /etc/resolver/ files have been removed externally
+// (e.g. by a concurrent tailscaled CleanUp during a crash-restart loop).
+// The callback should trigger a DNS recompilation to re-create the files.
+func (c *darwinConfigurator) SetRecompileFunc(fn func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recompileFn = fn
+}
+
 func (c *darwinConfigurator) Close() error {
 	c.mu.Lock()
+	hadFiles := len(c.watchFiles) > 0
+	if c.watchCancel != nil {
+		c.watchCancel()
+		c.watchCancel = nil
+	}
+	c.watchFiles = nil
 	if c.cancel != nil {
 		c.cancel()
 		c.cancel = nil
@@ -72,7 +101,13 @@ func (c *darwinConfigurator) Close() error {
 	}
 	c.mu.Unlock()
 
-	c.removeResolverFiles(func(domain string) bool { return true })
+	// Only remove resolver files if this instance actually wrote them (i.e.,
+	// SetDNS was called at least once). A fresh darwinConfigurator created by
+	// dns.CleanUp during startup never calls SetDNS, so it must not remove
+	// files that belong to an already-running instance.
+	if hadFiles {
+		c.removeResolverFiles(func(domain string) bool { return true })
+	}
 	return nil
 }
 
@@ -160,10 +195,66 @@ func (c *darwinConfigurator) SetDNS(cfg OSConfig) error {
 		fullPath := "/etc/resolver/" + fileBase
 
 		if err := os.WriteFile(fullPath, buf.Bytes(), 0644); err != nil {
+			c.logf("SetDNS: error writing %s: %v", fullPath, err)
 			return err
 		}
 	}
+	// Track written files and start the watcher to re-create them if they
+	// are removed by a concurrent CleanUp (e.g. crash-restart loop).
+	c.mu.Lock()
+	c.watchFiles = keep
+	c.startWatcherLocked()
+	c.mu.Unlock()
+
 	return c.removeResolverFiles(func(domain string) bool { return !keep[domain] })
+}
+
+// startWatcherLocked starts a background goroutine that periodically checks
+// whether the expected /etc/resolver/ files still exist. If any are missing
+// (e.g. removed by a concurrent tailscaled CleanUp during a restart), it
+// calls recompileFn to trigger the DNS Manager to re-apply the configuration.
+//
+// c.mu must be held.
+func (c *darwinConfigurator) startWatcherLocked() {
+	if c.recompileFn == nil {
+		return
+	}
+	if c.watchCancel != nil {
+		c.watchCancel()
+	}
+	c.watchCtx, c.watchCancel = context.WithCancel(context.Background())
+	go c.watchResolverFiles(c.watchCtx)
+}
+
+// resolverFileCheckInterval is how often the watcher checks for missing files.
+const resolverFileCheckInterval = 5 * time.Second
+
+// watchResolverFiles periodically checks that the expected /etc/resolver/ files
+// still exist and triggers a DNS recompilation if any are missing.
+func (c *darwinConfigurator) watchResolverFiles(ctx context.Context) {
+	ticker := time.NewTicker(resolverFileCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.mu.Lock()
+			files := c.watchFiles
+			fn := c.recompileFn
+			c.mu.Unlock()
+			if fn == nil || len(files) == 0 {
+				continue
+			}
+			for name := range files {
+				if _, err := os.Stat("/etc/resolver/" + name); os.IsNotExist(err) {
+					c.logf("resolver file watcher: %s was removed, triggering DNS recompile", name)
+					fn()
+					break
+				}
+			}
+		}
+	}
 }
 
 // tailscaleDNSPort is the preferred port for the local DNS listener.

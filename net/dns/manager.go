@@ -121,6 +121,13 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, 
 		rs.SetResolver(m.resolver)
 	}
 
+	// If the OS configurator supports a recompile callback (e.g., the macOS CLI
+	// darwinConfigurator watches /etc/resolver/ files and needs to re-create them
+	// if they are removed by a concurrent CleanUp), provide it.
+	if rc, ok := oscfg.(interface{ SetRecompileFunc(func()) }); ok {
+		rc.SetRecompileFunc(func() { m.RecompileDNSConfig() })
+	}
+
 	return m
 }
 
