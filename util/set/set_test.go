@@ -159,6 +159,39 @@ func TestSetJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func checkSliceSorted[T comparable](t *testing.T, s Set[T], want []T) {
+	t.Helper()
+	got := s.Slice()
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v; want %v", got, want)
+	}
+}
+
+func TestSliceSorted(t *testing.T) {
+	t.Run("int", func(t *testing.T) {
+		checkSliceSorted(t, Of(3, 1, 4, 1, 5), []int{1, 3, 4, 5})
+	})
+	t.Run("int8", func(t *testing.T) {
+		checkSliceSorted(t, Of[int8](-1, 3, -100, 50), []int8{-100, -1, 3, 50})
+	})
+	t.Run("uint16", func(t *testing.T) {
+		checkSliceSorted(t, Of[uint16](300, 1, 65535, 0), []uint16{0, 1, 300, 65535})
+	})
+	t.Run("float64", func(t *testing.T) {
+		checkSliceSorted(t, Of(2.7, 1.0, 3.14), []float64{1.0, 2.7, 3.14})
+	})
+	t.Run("float32", func(t *testing.T) {
+		checkSliceSorted(t, Of[float32](2.5, 1.0, 3.0), []float32{1.0, 2.5, 3.0})
+	})
+	t.Run("string", func(t *testing.T) {
+		checkSliceSorted(t, Of("banana", "apple", "cherry"), []string{"apple", "banana", "cherry"})
+	})
+	t.Run("named-uint", func(t *testing.T) {
+		type Port uint16
+		checkSliceSorted(t, Of[Port](443, 80, 8080), []Port{80, 443, 8080})
+	})
+}
+
 func TestMake(t *testing.T) {
 	var s Set[int]
 	s.Make()
