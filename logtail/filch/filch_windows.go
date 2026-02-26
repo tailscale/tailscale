@@ -1,5 +1,7 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
+
+//go:build !ts_omit_logtail && windows
 
 package filch
 
@@ -8,6 +10,8 @@ import (
 	"os"
 	"syscall"
 )
+
+const replaceStderrSupportedForTest = true
 
 var kernel32 = syscall.MustLoadDLL("kernel32.dll")
 var procSetStdHandle = kernel32.MustFindProc("SetStdHandle")

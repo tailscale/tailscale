@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package udprelay
@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,8 +19,11 @@ import (
 	"golang.org/x/crypto/blake2s"
 	"tailscale.com/disco"
 	"tailscale.com/net/packet"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/views"
+	"tailscale.com/util/mak"
+	"tailscale.com/util/usermetric"
 )
 
 type testClient struct {
@@ -208,7 +212,9 @@ func TestServer(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			server, err := NewServer(t.Logf, 0, true)
+			reg := new(usermetric.Registry)
+			deregisterMetrics()
+			server, err := NewServer(t.Logf, 0, true, reg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -338,19 +344,18 @@ func TestServer_getNextVNILocked(t *testing.T) {
 	c := qt.New(t)
 	s := &Server{
 		nextVNI: minVNI,
-		byVNI:   make(map[uint32]*serverEndpoint),
 	}
 	for i := uint64(0); i < uint64(totalPossibleVNI); i++ {
 		vni, err := s.getNextVNILocked()
 		if err != nil { // using quicktest here triples test time
 			t.Fatal(err)
 		}
-		s.byVNI[vni] = nil
+		s.serverEndpointByVNI.Store(vni, nil)
 	}
 	c.Assert(s.nextVNI, qt.Equals, minVNI)
 	_, err := s.getNextVNILocked()
 	c.Assert(err, qt.IsNotNil)
-	delete(s.byVNI, minVNI)
+	s.serverEndpointByVNI.Delete(minVNI)
 	_, err = s.getNextVNILocked()
 	c.Assert(err, qt.IsNil)
 }
@@ -452,19 +457,91 @@ func Benchmark_blakeMACFromBindMsg(b *testing.B) {
 
 func TestServer_maybeRotateMACSecretLocked(t *testing.T) {
 	s := &Server{}
-	start := time.Now()
+	start := mono.Now()
 	s.maybeRotateMACSecretLocked(start)
-	qt.Assert(t, len(s.macSecrets), qt.Equals, 1)
-	macSecret := s.macSecrets[0]
+	qt.Assert(t, s.macSecrets.Len(), qt.Equals, 1)
+	macSecret := s.macSecrets.At(0)
 	s.maybeRotateMACSecretLocked(start.Add(macSecretRotationInterval - time.Nanosecond))
-	qt.Assert(t, len(s.macSecrets), qt.Equals, 1)
-	qt.Assert(t, s.macSecrets[0], qt.Equals, macSecret)
+	qt.Assert(t, s.macSecrets.Len(), qt.Equals, 1)
+	qt.Assert(t, s.macSecrets.At(0), qt.Equals, macSecret)
 	s.maybeRotateMACSecretLocked(start.Add(macSecretRotationInterval))
-	qt.Assert(t, len(s.macSecrets), qt.Equals, 2)
-	qt.Assert(t, s.macSecrets[1], qt.Equals, macSecret)
-	qt.Assert(t, s.macSecrets[0], qt.Not(qt.Equals), s.macSecrets[1])
+	qt.Assert(t, s.macSecrets.Len(), qt.Equals, 2)
+	qt.Assert(t, s.macSecrets.At(1), qt.Equals, macSecret)
+	qt.Assert(t, s.macSecrets.At(0), qt.Not(qt.Equals), s.macSecrets.At(1))
 	s.maybeRotateMACSecretLocked(s.macSecretRotatedAt.Add(macSecretRotationInterval))
-	qt.Assert(t, macSecret, qt.Not(qt.Equals), s.macSecrets[0])
-	qt.Assert(t, macSecret, qt.Not(qt.Equals), s.macSecrets[1])
-	qt.Assert(t, s.macSecrets[0], qt.Not(qt.Equals), s.macSecrets[1])
+	qt.Assert(t, macSecret, qt.Not(qt.Equals), s.macSecrets.At(0))
+	qt.Assert(t, macSecret, qt.Not(qt.Equals), s.macSecrets.At(1))
+	qt.Assert(t, s.macSecrets.At(0), qt.Not(qt.Equals), s.macSecrets.At(1))
+}
+
+func TestServer_endpointGC(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		addrs       [2]netip.AddrPort
+		lastSeen    [2]mono.Time
+		allocatedAt mono.Time
+		wantRemoved bool
+	}{
+		{
+			name:        "unbound_endpoint_expired",
+			allocatedAt: mono.Now().Add(-2 * defaultBindLifetime),
+			wantRemoved: true,
+		},
+		{
+			name:        "unbound_endpoint_kept",
+			allocatedAt: mono.Now(),
+			wantRemoved: false,
+		},
+		{
+			name:        "bound_endpoint_expired_a",
+			addrs:       [2]netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:1"), netip.MustParseAddrPort("192.0.2.2:1")},
+			lastSeen:    [2]mono.Time{mono.Now().Add(-2 * defaultSteadyStateLifetime), mono.Now()},
+			wantRemoved: true,
+		},
+		{
+			name:        "bound_endpoint_expired_b",
+			addrs:       [2]netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:1"), netip.MustParseAddrPort("192.0.2.2:1")},
+			lastSeen:    [2]mono.Time{mono.Now(), mono.Now().Add(-2 * defaultSteadyStateLifetime)},
+			wantRemoved: true,
+		},
+		{
+			name:        "bound_endpoint_kept",
+			addrs:       [2]netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:1"), netip.MustParseAddrPort("192.0.2.2:1")},
+			lastSeen:    [2]mono.Time{mono.Now(), mono.Now()},
+			wantRemoved: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			disco1 := key.NewDisco()
+			disco2 := key.NewDisco()
+			pair := key.NewSortedPairOfDiscoPublic(disco1.Public(), disco2.Public())
+			ep := &serverEndpoint{
+				discoPubKeys:   pair,
+				vni:            1,
+				lastSeen:       tc.lastSeen,
+				boundAddrPorts: tc.addrs,
+				allocatedAt:    tc.allocatedAt,
+			}
+			s := &Server{serverEndpointByVNI: sync.Map{}, metrics: &metrics{}}
+			mak.Set(&s.serverEndpointByDisco, pair, ep)
+			s.serverEndpointByVNI.Store(ep.vni, ep)
+			s.endpointGC(defaultBindLifetime, defaultSteadyStateLifetime)
+			removed := len(s.serverEndpointByDisco) > 0
+			if tc.wantRemoved {
+				if removed {
+					t.Errorf("expected endpoint to be removed from Server")
+				}
+				if !ep.closed {
+					t.Errorf("expected endpoint to be closed")
+				}
+			} else {
+				if !removed {
+					t.Errorf("expected endpoint to remain in Server")
+				}
+				if ep.closed {
+					t.Errorf("expected endpoint to remain open")
+				}
+			}
+		})
+	}
 }

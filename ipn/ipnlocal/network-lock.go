@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !ts_omit_tailnetlock
@@ -563,6 +563,7 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 	outKeys := make([]ipnstate.TKAKey, len(keys))
 	for i, k := range keys {
 		outKeys[i] = ipnstate.TKAKey{
+			Kind:     k.Kind.String(),
 			Key:      key.NLPublicFromEd25519Unsafe(k.Public),
 			Metadata: k.Meta,
 			Votes:    k.Votes,

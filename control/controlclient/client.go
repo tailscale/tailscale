@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package controlclient implements the client for the Tailscale
@@ -91,9 +91,3 @@ type Client interface {
 	// distinguish one client from another.
 	ClientID() int64
 }
-
-// UserVisibleError is an error that should be shown to users.
-type UserVisibleError string
-
-func (e UserVisibleError) Error() string            { return string(e) }
-func (e UserVisibleError) UserVisibleError() string { return string(e) }

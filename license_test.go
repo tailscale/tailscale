@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package tailscaleroot
@@ -23,7 +23,7 @@ func normalizeLineEndings(b []byte) []byte {
 // directory tree have a correct-looking Tailscale license header.
 func TestLicenseHeaders(t *testing.T) {
 	want := normalizeLineEndings([]byte(strings.TrimLeft(`
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 `, "\n")))
 

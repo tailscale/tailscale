@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+# This is a wrapper around monogok that sets the working directory.
+
+dir=$(dirname "${BASH_SOURCE[0]}")
+
+cd $dir
+$dir/../tool/go run github.com/bradfitz/monogok/cmd/monogok "$@"

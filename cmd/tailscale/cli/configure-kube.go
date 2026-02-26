@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 //go:build !ts_omit_kube
 
@@ -247,7 +247,7 @@ func nodeOrServiceDNSNameFromArg(st *ipnstate.Status, nm *netmap.NetworkMap, arg
 	}
 
 	// If not found, check for a Tailscale Service DNS name.
-	rec, ok := serviceDNSRecordFromNetMap(nm, st.CurrentTailnet.MagicDNSSuffix, arg)
+	rec, ok := serviceDNSRecordFromNetMap(nm, arg)
 	if !ok {
 		return "", fmt.Errorf("no peer found for %q", arg)
 	}
@@ -287,7 +287,7 @@ func getNetMap(ctx context.Context) (*netmap.NetworkMap, error) {
 	return n.NetMap, nil
 }
 
-func serviceDNSRecordFromNetMap(nm *netmap.NetworkMap, tcd, arg string) (rec tailcfg.DNSRecord, ok bool) {
+func serviceDNSRecordFromNetMap(nm *netmap.NetworkMap, arg string) (rec tailcfg.DNSRecord, ok bool) {
 	argIP, _ := netip.ParseAddr(arg)
 	argFQDN, err := dnsname.ToFQDN(arg)
 	argFQDNValid := err == nil

@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package tailcfg_test
@@ -67,6 +67,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"UserspaceRouter",
 		"AppConnector",
 		"ServicesHash",
+		"PeerRelay",
 		"ExitNodeID",
 		"Location",
 		"TPM",
@@ -242,6 +243,16 @@ func TestHostinfoEqual(t *testing.T) {
 		{
 			&Hostinfo{AppConnector: opt.Bool("true")},
 			&Hostinfo{AppConnector: opt.Bool("false")},
+			false,
+		},
+		{
+			&Hostinfo{PeerRelay: true},
+			&Hostinfo{PeerRelay: true},
+			true,
+		},
+		{
+			&Hostinfo{PeerRelay: true},
+			&Hostinfo{PeerRelay: false},
 			false,
 		},
 		{

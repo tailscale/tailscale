@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build go1.23
@@ -209,7 +209,10 @@ func main() {
 	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
 	flag.StringVar(&args.confFile, "config", "", "path to config file, or 'vm:user-data' to use the VM's user-data (EC2)")
 	if buildfeatures.HasTPM {
-		flag.Var(&args.hardwareAttestation, "hardware-attestation", "use hardware-backed keys to bind node identity to this device when supported by the OS and hardware. Uses TPM 2.0 on Linux and Windows; SecureEnclave on macOS and iOS; and Keystore on Android")
+		flag.Var(&args.hardwareAttestation, "hardware-attestation", `use hardware-backed keys to bind node identity to this device when supported
+by the OS and hardware. Uses TPM 2.0 on Linux and Windows; SecureEnclave on
+macOS and iOS; and Keystore on Android. Only supported for Tailscale nodes that
+store state on filesystem.`)
 	}
 	if f, ok := hookRegisterOutboundProxyFlags.GetOk(); ok {
 		f()
@@ -401,6 +404,7 @@ func run() (err error) {
 	// Install an event bus as early as possible, so that it's
 	// available universally when setting up everything else.
 	sys := tsd.NewSystem()
+	sys.SocketPath = args.socketpath
 
 	// Parse config, if specified, to fail early if it's invalid.
 	var conf *conffile.Config
@@ -771,7 +775,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			// configuration being unavailable (from the noop
 			// manager). More in Issue 4017.
 			// TODO(bradfitz): add a Synology-specific DNS manager.
-			conf.DNS, err = dns.NewOSConfigurator(logf, sys.HealthTracker.Get(), sys.PolicyClientOrDefault(), sys.ControlKnobs(), "") // empty interface name
+			conf.DNS, err = dns.NewOSConfigurator(logf, sys.HealthTracker.Get(), sys.Bus.Get(), sys.PolicyClientOrDefault(), sys.ControlKnobs(), "") // empty interface name
 			if err != nil {
 				return false, fmt.Errorf("dns.NewOSConfigurator: %w", err)
 			}
@@ -795,8 +799,9 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 
 		if runtime.GOOS == "plan9" {
 			// TODO(bradfitz): why don't we do this on all platforms?
+			// TODO(barnstar): we do it on sandboxed darwin now
 			// We should. Doing it just on plan9 for now conservatively.
-			sys.NetMon.Get().SetTailscaleInterfaceName(devName)
+			netmon.SetTailscaleInterfaceProps(devName, 0)
 		}
 
 		r, err := router.New(logf, dev, sys.NetMon.Get(), sys.HealthTracker.Get(), sys.Bus.Get())
@@ -805,7 +810,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			return false, fmt.Errorf("creating router: %w", err)
 		}
 
-		d, err := dns.NewOSConfigurator(logf, sys.HealthTracker.Get(), sys.PolicyClientOrDefault(), sys.ControlKnobs(), devName)
+		d, err := dns.NewOSConfigurator(logf, sys.HealthTracker.Get(), sys.Bus.Get(), sys.PolicyClientOrDefault(), sys.ControlKnobs(), devName)
 		if err != nil {
 			dev.Close()
 			r.Close()
@@ -904,17 +909,17 @@ func applyIntegrationTestEnvKnob() {
 func handleTPMFlags() {
 	switch {
 	case args.hardwareAttestation.v:
-		if _, err := key.NewEmptyHardwareAttestationKey(); err == key.ErrUnsupported {
+		if err := canUseHardwareAttestation(); err != nil {
 			log.SetFlags(0)
-			log.Fatalf("--hardware-attestation is not supported on this platform or in this build of tailscaled")
+			log.Fatal(err)
 		}
 	case !args.hardwareAttestation.set:
-		policyHWAttestation, _ := policyclient.Get().GetBoolean(pkey.HardwareAttestation, feature.HardwareAttestationAvailable())
-		if !policyHWAttestation {
-			break
-		}
-		if feature.TPMAvailable() {
-			args.hardwareAttestation.v = true
+		policyHWAttestation, _ := policyclient.Get().GetBoolean(pkey.HardwareAttestation, false)
+		if err := canUseHardwareAttestation(); err != nil {
+			log.Printf("[unexpected] policy requires hardware attestation, but device does not support it: %v", err)
+			args.hardwareAttestation.v = false
+		} else {
+			args.hardwareAttestation.v = policyHWAttestation
 		}
 	}
 
@@ -926,16 +931,44 @@ func handleTPMFlags() {
 			log.Fatal(err)
 		}
 	case !args.encryptState.set:
-		policyEncrypt, _ := policyclient.Get().GetBoolean(pkey.EncryptState, feature.TPMAvailable())
-		if !policyEncrypt {
-			// Default disabled, no need to validate.
-			return
-		}
-		// Default enabled if available.
-		if err := canEncryptState(); err == nil {
+		policyEncrypt, _ := policyclient.Get().GetBoolean(pkey.EncryptState, false)
+		if err := canEncryptState(); policyEncrypt && err == nil {
 			args.encryptState.v = true
 		}
 	}
+}
+
+// canUseHardwareAttestation returns an error if hardware attestation can't be
+// enabled, either due to availability or compatibility with other settings.
+func canUseHardwareAttestation() error {
+	if _, err := key.NewEmptyHardwareAttestationKey(); err == key.ErrUnsupported {
+		return errors.New("--hardware-attestation is not supported on this platform or in this build of tailscaled")
+	}
+	// Hardware attestation keys are TPM-bound and cannot be migrated between
+	// machines. Disable when using portable state stores like kube: or arn:
+	// where state may be loaded on a different machine.
+	if args.statepath != "" && isPortableStore(args.statepath) {
+		return errors.New("--hardware-attestation cannot be used with portable state stores (kube:, arn:) because TPM-bound keys cannot be migrated between machines")
+	}
+	return nil
+}
+
+// isPortableStore reports whether the given state path refers to a portable
+// state store where state may be loaded on different machines.
+// All stores apart from file store and TPM store are portable.
+func isPortableStore(path string) bool {
+	if store.HasKnownProviderPrefix(path) && !strings.HasPrefix(path, store.TPMPrefix) {
+		return true
+	}
+	// In most cases Kubernetes Secret and AWS SSM stores would have been caught
+	// by the earlier check - but that check relies on those stores having been
+	// registered. This additional check is here to ensure that if we ever
+	// produce a faulty build that failed to register some store, users who
+	// upgraded to that don't get hardware keys generated.
+	if strings.HasPrefix(path, "kube:") || strings.HasPrefix(path, "arn:") {
+		return true
+	}
+	return false
 }
 
 // canEncryptState returns an error if state encryption can't be enabled,

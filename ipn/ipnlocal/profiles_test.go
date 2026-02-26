@@ -1,9 +1,10 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package ipnlocal
 
 import (
+	"errors"
 	"fmt"
 	"os/user"
 	"strconv"
@@ -1146,4 +1147,41 @@ func TestProfileStateChangeCallback(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProfileBadAttestationKey(t *testing.T) {
+	store := new(mem.Store)
+	pm, err := newProfileManagerWithGOOS(store, t.Logf, health.NewTracker(eventbustest.NewBus(t)), "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fk := new(failingHardwareAttestationKey)
+	pm.newEmptyHardwareAttestationKey = func() (key.HardwareAttestationKey, error) {
+		return fk, nil
+	}
+	sk := ipn.StateKey(t.Name())
+	if err := pm.store.WriteState(sk, []byte(`{"Config": {"AttestationKey": {}}}`)); err != nil {
+		t.Fatal(err)
+	}
+	prefs, err := pm.loadSavedPrefs(sk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ak := prefs.Persist().AsStruct().AttestationKey
+	if _, ok := ak.(noopAttestationKey); !ok {
+		t.Errorf("loaded attestation key of type %T, want noopAttestationKey", ak)
+	}
+	if !fk.unmarshalCalled {
+		t.Error("UnmarshalJSON was not called on failingHardwareAttestationKey")
+	}
+}
+
+type failingHardwareAttestationKey struct {
+	noopAttestationKey
+	unmarshalCalled bool
+}
+
+func (k *failingHardwareAttestationKey) UnmarshalJSON([]byte) error {
+	k.unmarshalCalled = true
+	return errors.New("failed to unmarshal attestation key!")
 }

@@ -1,10 +1,11 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package cli
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -18,9 +19,12 @@ import (
 )
 
 var switchCmd = &ffcli.Command{
-	Name:       "switch",
-	ShortUsage: "tailscale switch <id>",
-	ShortHelp:  "Switch to a different Tailscale account",
+	Name: "switch",
+	ShortUsage: strings.Join([]string{
+		"tailscale switch <id>",
+		"tailscale switch --list [--json]",
+	}, "\n"),
+	ShortHelp: "Switch to a different Tailscale account",
 	LongHelp: `"tailscale switch" switches between logged in accounts. You can
 use the ID that's returned from 'tailnet switch -list'
 to pick which profile you want to switch to. Alternatively, you
@@ -31,6 +35,7 @@ This command is currently in alpha and may change in the future.`,
 	FlagSet: func() *flag.FlagSet {
 		fs := flag.NewFlagSet("switch", flag.ExitOnError)
 		fs.BoolVar(&switchArgs.list, "list", false, "list available accounts")
+		fs.BoolVar(&switchArgs.json, "json", false, "list available accounts in JSON format")
 		return fs
 	}(),
 	Exec: switchProfile,
@@ -82,6 +87,7 @@ func init() {
 
 var switchArgs struct {
 	list bool
+	json bool
 }
 
 func listProfiles(ctx context.Context) error {
@@ -109,9 +115,47 @@ func listProfiles(ctx context.Context) error {
 	return nil
 }
 
+type switchProfileJSON struct {
+	ID       string `json:"id"`
+	Nickname string `json:"nickname"`
+	Tailnet  string `json:"tailnet"`
+	Account  string `json:"account"`
+	Selected bool   `json:"selected"`
+}
+
+func listProfilesJSON(ctx context.Context) error {
+	curP, all, err := localClient.ProfileStatus(ctx)
+	if err != nil {
+		return err
+	}
+	profiles := make([]switchProfileJSON, 0, len(all))
+	for _, prof := range all {
+		profiles = append(profiles, switchProfileJSON{
+			ID:       string(prof.ID),
+			Tailnet:  prof.NetworkProfile.DisplayNameOrDefault(),
+			Account:  prof.UserProfile.LoginName,
+			Nickname: prof.Name,
+			Selected: prof.ID == curP.ID,
+		})
+	}
+	profilesJSON, err := json.MarshalIndent(profiles, "", "  ")
+	if err != nil {
+		return err
+	}
+	printf("%s\n", profilesJSON)
+	return nil
+}
+
 func switchProfile(ctx context.Context, args []string) error {
 	if switchArgs.list {
+		if switchArgs.json {
+			return listProfilesJSON(ctx)
+		}
 		return listProfiles(ctx)
+	}
+	if switchArgs.json {
+		outln("--json argument cannot be used with tailscale switch NAME")
+		os.Exit(1)
 	}
 	if len(args) != 1 {
 		outln("usage: tailscale switch NAME")

@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !js && !ts_omit_acme
@@ -37,7 +37,6 @@ import (
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/bakedroots"
@@ -106,9 +105,30 @@ func (b *LocalBackend) GetCertPEM(ctx context.Context, domain string) (*TLSCertK
 //
 // If a cert is expired, or expires sooner than minValidity, it will be renewed
 // synchronously. Otherwise it will be renewed asynchronously.
+//
+// The domain must be one of:
+//
+//   - An exact CertDomain (e.g., "node.ts.net")
+//   - A wildcard domain (e.g., "*.node.ts.net")
+//
+// The wildcard format requires the NodeAttrDNSSubdomainResolve capability.
 func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string, minValidity time.Duration) (*TLSCertKeyPair, error) {
+	b.mu.Lock()
+	getCertForTest := b.getCertForTest
+	b.mu.Unlock()
+
+	if getCertForTest != nil {
+		testenv.AssertInTest()
+		return getCertForTest(domain)
+	}
+
 	if !validLookingCertDomain(domain) {
 		return nil, errors.New("invalid domain")
+	}
+
+	certDomain, err := b.resolveCertDomain(domain)
+	if err != nil {
+		return nil, err
 	}
 	logf := logger.WithPrefix(b.logf, fmt.Sprintf("cert(%q): ", domain))
 	now := b.clock.Now()
@@ -125,13 +145,13 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 		return nil, err
 	}
 
-	if pair, err := getCertPEMCached(cs, domain, now); err == nil {
+	if pair, err := getCertPEMCached(cs, certDomain, now); err == nil {
 		if envknob.IsCertShareReadOnlyMode() {
 			return pair, nil
 		}
 		// If we got here, we have a valid unexpired cert.
 		// Check whether we should start an async renewal.
-		shouldRenew, err := b.shouldStartDomainRenewal(cs, domain, now, pair, minValidity)
+		shouldRenew, err := b.shouldStartDomainRenewal(cs, certDomain, now, pair, minValidity)
 		if err != nil {
 			logf("error checking for certificate renewal: %v", err)
 			// Renewal check failed, but the current cert is valid and not
@@ -144,7 +164,11 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 		if minValidity == 0 {
 			logf("starting async renewal")
 			// Start renewal in the background, return current valid cert.
-			b.goTracker.Go(func() { getCertPEM(context.Background(), b, cs, logf, traceACME, domain, now, minValidity) })
+			b.goTracker.Go(func() {
+				if _, err := getCertPEM(context.Background(), b, cs, logf, traceACME, certDomain, now, minValidity); err != nil {
+					logf("async renewal failed: getCertPem: %v", err)
+				}
+			})
 			return pair, nil
 		}
 		// If the caller requested a specific validity duration, fall through
@@ -156,7 +180,7 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 		return nil, fmt.Errorf("retrieving cached TLS certificate failed and cert store is configured in read-only mode, not attempting to issue a new certificate: %w", err)
 	}
 
-	pair, err := getCertPEM(ctx, b, cs, logf, traceACME, domain, now, minValidity)
+	pair, err := getCertPEM(ctx, b, cs, logf, traceACME, certDomain, now, minValidity)
 	if err != nil {
 		logf("getCertPEM: %v", err)
 		return nil, err
@@ -297,6 +321,16 @@ func (b *LocalBackend) getCertStore() (certStore, error) {
 		panic("use of test hook outside of tests")
 	}
 	return certFileStore{dir: dir, testRoots: testX509Roots}, nil
+}
+
+// ConfigureCertsForTest sets a certificate retrieval function to be used by
+// this local backend, skipping the usual ACME certificate registration. Should
+// only be used in tests.
+func (b *LocalBackend) ConfigureCertsForTest(getCert func(hostname string) (*TLSCertKeyPair, error)) {
+	testenv.AssertInTest()
+	b.mu.Lock()
+	b.getCertForTest = getCert
+	b.mu.Unlock()
 }
 
 // certFileStore implements certStore by storing the cert & key files in the named directory.
@@ -465,8 +499,12 @@ func (kp TLSCertKeyPair) parseCertificate() (*x509.Certificate, error) {
 	return x509.ParseCertificate(block.Bytes)
 }
 
-func keyFile(dir, domain string) string  { return filepath.Join(dir, domain+".key") }
-func certFile(dir, domain string) string { return filepath.Join(dir, domain+".crt") }
+func keyFile(dir, domain string) string {
+	return filepath.Join(dir, strings.Replace(domain, "*.", "wildcard_.", 1)+".key")
+}
+func certFile(dir, domain string) string {
+	return filepath.Join(dir, strings.Replace(domain, "*.", "wildcard_.", 1)+".crt")
+}
 
 // getCertPEMCached returns a non-nil keyPair if a cached keypair for domain
 // exists on disk in dir that is valid at the provided now time.
@@ -483,10 +521,13 @@ func getCertPEMCached(cs certStore, domain string, now time.Time) (p *TLSCertKey
 }
 
 // getCertPem checks if a cert needs to be renewed and if so, renews it.
+// domain is the resolved cert domain (e.g., "*.node.ts.net" for wildcards).
 // It can be overridden in tests.
 var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*TLSCertKeyPair, error) {
 	acmeMu.Lock()
 	defer acmeMu.Unlock()
+
+	baseDomain, isWildcard := strings.CutPrefix(domain, "*.")
 
 	// In case this method was triggered multiple times in parallel (when
 	// serving incoming requests), check whether one of the other goroutines
@@ -538,23 +579,31 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 		return nil, fmt.Errorf("unexpected ACME account status %q", a.Status)
 	}
 
-	// Before hitting LetsEncrypt, see if this is a domain that Tailscale will do DNS challenges for.
-	st := b.StatusWithoutPeers()
-	if err := checkCertDomain(st, domain); err != nil {
-		return nil, err
-	}
-
 	// If we have a previous cert, include it in the order. Assuming we're
 	// within the ARI renewal window this should exclude us from LE rate
 	// limits.
+	// Note that this order extension will fail renewals if the ACME account key has changed
+	// since the last issuance, see
+	// https://github.com/tailscale/tailscale/issues/18251
 	var opts []acme.OrderOption
-	if previous != nil {
+	if previous != nil && !envknob.Bool("TS_DEBUG_ACME_FORCE_RENEWAL") {
 		prevCrt, err := previous.parseCertificate()
 		if err == nil {
 			opts = append(opts, acme.WithOrderReplacesCert(prevCrt))
 		}
 	}
-	order, err := ac.AuthorizeOrder(ctx, []acme.AuthzID{{Type: "dns", Value: domain}}, opts...)
+
+	// For wildcards, we need to authorize both the wildcard and base domain.
+	var authzIDs []acme.AuthzID
+	if isWildcard {
+		authzIDs = []acme.AuthzID{
+			{Type: "dns", Value: domain},
+			{Type: "dns", Value: baseDomain},
+		}
+	} else {
+		authzIDs = []acme.AuthzID{{Type: "dns", Value: domain}}
+	}
+	order, err := ac.AuthorizeOrder(ctx, authzIDs, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -572,7 +621,9 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 				if err != nil {
 					return nil, err
 				}
-				key := "_acme-challenge." + domain
+				// For wildcards, the challenge is on the base domain.
+				// e.g., "*.node.ts.net" -> "_acme-challenge.node.ts.net"
+				key := "_acme-challenge." + strings.TrimPrefix(az.Identifier.Value, "*.")
 
 				// Do a best-effort lookup to see if we've already created this DNS name
 				// in a previous attempt. Don't burn too much time on it, though. Worst
@@ -582,14 +633,14 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 				txts, _ := resolver.LookupTXT(lookupCtx, key)
 				lookupCancel()
 				if slices.Contains(txts, rec) {
-					logf("TXT record already existed")
+					logf("TXT record already existed for %s", key)
 				} else {
-					logf("starting SetDNS call...")
+					logf("starting SetDNS call for %s...", key)
 					err = b.SetDNS(ctx, key, rec)
 					if err != nil {
 						return nil, fmt.Errorf("SetDNS %q => %q: %w", key, rec, err)
 					}
-					logf("did SetDNS")
+					logf("did SetDNS for %s", key)
 				}
 
 				chal, err := ac.Accept(ctx, ch)
@@ -654,11 +705,19 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 	return &TLSCertKeyPair{CertPEM: certPEM.Bytes(), KeyPEM: privPEM.Bytes()}, nil
 }
 
-// certRequest generates a CSR for the given common name cn and optional SANs.
-func certRequest(key crypto.Signer, name string, ext []pkix.Extension) ([]byte, error) {
+// certRequest generates a CSR for the given domain and optional SANs.
+func certRequest(key crypto.Signer, domain string, ext []pkix.Extension) ([]byte, error) {
+	dnsNames := []string{domain}
+	if base, ok := strings.CutPrefix(domain, "*."); ok {
+		// Wildcard cert must also include the base domain as a SAN.
+		// This is load-bearing: getCertPEMCached validates certs using
+		// the storage key (base domain), which only passes x509 verification
+		// if the base domain is in DNSNames.
+		dnsNames = append(dnsNames, base)
+	}
 	req := &x509.CertificateRequest{
-		Subject:         pkix.Name{CommonName: name},
-		DNSNames:        []string{name},
+		Subject:         pkix.Name{CommonName: domain},
+		DNSNames:        dnsNames,
 		ExtraExtensions: ext,
 	}
 	return x509.CreateCertificateRequest(rand.Reader, req, key)
@@ -818,7 +877,7 @@ func isDefaultDirectoryURL(u string) bool {
 // we might be able to get a cert for.
 //
 // It's a light check primarily for double checking before it's used
-// as part of a filesystem path. The actual validation happens in checkCertDomain.
+// as part of a filesystem path. The actual validation happens in resolveCertDomain.
 func validLookingCertDomain(name string) bool {
 	if name == "" ||
 		strings.Contains(name, "..") ||
@@ -826,22 +885,56 @@ func validLookingCertDomain(name string) bool {
 		!strings.Contains(name, ".") {
 		return false
 	}
+	// Only allow * as a wildcard prefix "*.domain.tld"
+	if rest, ok := strings.CutPrefix(name, "*."); ok {
+		if strings.Contains(rest, "*") || !strings.Contains(rest, ".") {
+			return false
+		}
+	} else if strings.Contains(name, "*") {
+		return false
+	}
 	return true
 }
 
-func checkCertDomain(st *ipnstate.Status, domain string) error {
+// resolveCertDomain validates a domain and returns the cert domain to use.
+//
+//   - "node.ts.net" -> "node.ts.net" (exact CertDomain match)
+//   - "*.node.ts.net" -> "*.node.ts.net" (explicit wildcard, requires NodeAttrDNSSubdomainResolve)
+//
+// Subdomain requests like "app.node.ts.net" are rejected; callers should
+// request "*.node.ts.net" explicitly for subdomain coverage.
+func (b *LocalBackend) resolveCertDomain(domain string) (string, error) {
 	if domain == "" {
-		return errors.New("missing domain name")
+		return "", errors.New("missing domain name")
 	}
-	for _, d := range st.CertDomains {
-		if d == domain {
-			return nil
+
+	// Read the netmap once to get both CertDomains and capabilities atomically.
+	nm := b.NetMap()
+	if nm == nil {
+		return "", errors.New("no netmap available")
+	}
+	certDomains := nm.DNS.CertDomains
+	if len(certDomains) == 0 {
+		return "", errors.New("your Tailscale account does not support getting TLS certs")
+	}
+
+	// Wildcard request like "*.node.ts.net".
+	if base, ok := strings.CutPrefix(domain, "*."); ok {
+		if !nm.AllCaps.Contains(tailcfg.NodeAttrDNSSubdomainResolve) {
+			return "", fmt.Errorf("wildcard certificates are not enabled for this node")
 		}
+		if !slices.Contains(certDomains, base) {
+			return "", fmt.Errorf("invalid domain %q; wildcard certificates are not enabled for this domain", domain)
+		}
+		return domain, nil
 	}
-	if len(st.CertDomains) == 0 {
-		return errors.New("your Tailscale account does not support getting TLS certs")
+
+	// Exact CertDomain match.
+	if slices.Contains(certDomains, domain) {
+		return domain, nil
 	}
-	return fmt.Errorf("invalid domain %q; must be one of %q", domain, st.CertDomains)
+
+	return "", fmt.Errorf("invalid domain %q; must be one of %q", domain, certDomains)
 }
 
 // handleC2NTLSCertStatus returns info about the last TLS certificate issued for the

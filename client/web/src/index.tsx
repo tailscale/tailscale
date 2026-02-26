@@ -1,10 +1,10 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Preserved js license comment for web client app.
 /**
  * @license
- * Copyright (c) Tailscale Inc & AUTHORS
+ * Copyright (c) Tailscale Inc & contributors
  * SPDX-License-Identifier: BSD-3-Clause
  */
 

@@ -16,8 +16,12 @@
 - [ProxyClassList](#proxyclasslist)
 - [ProxyGroup](#proxygroup)
 - [ProxyGroupList](#proxygrouplist)
+- [ProxyGroupPolicy](#proxygrouppolicy)
+- [ProxyGroupPolicyList](#proxygrouppolicylist)
 - [Recorder](#recorder)
 - [RecorderList](#recorderlist)
+- [Tailnet](#tailnet)
+- [TailnetList](#tailnetlist)
 
 
 
@@ -139,6 +143,7 @@ _Appears in:_
 | `appConnector` _[AppConnector](#appconnector)_ | AppConnector defines whether the Connector device should act as a Tailscale app connector. A Connector that is<br />configured as an app connector cannot be a subnet router or an exit node. If this field is unset, the<br />Connector does not act as an app connector.<br />Note that you will need to manually configure the permissions and the domains for the app connector via the<br />Admin panel.<br />Note also that the main tested and supported use case of this config option is to deploy an app connector on<br />Kubernetes to access SaaS applications available on the public internet. Using the app connector to expose<br />cluster workloads or other internal workloads to tailnet might work, but this is not a use case that we have<br />tested or optimised for.<br />If you are using the app connector to access SaaS applications because you need a predictable egress IP that<br />can be whitelisted, it is also your responsibility to ensure that cluster traffic from the connector flows<br />via that predictable IP, for example by enforcing that cluster egress traffic is routed via an egress NAT<br />device with a static IP address.<br />https://tailscale.com/kb/1281/app-connectors |  |  |
 | `exitNode` _boolean_ | ExitNode defines whether the Connector device should act as a Tailscale exit node. Defaults to false.<br />This field is mutually exclusive with the appConnector field.<br />https://tailscale.com/kb/1103/exit-nodes |  |  |
 | `replicas` _integer_ | Replicas specifies how many devices to create. Set this to enable<br />high availability for app connectors, subnet routers, or exit nodes.<br />https://tailscale.com/kb/1115/high-availability. Defaults to 1. |  | Minimum: 0 <br /> |
+| `tailnet` _string_ | Tailnet specifies the tailnet this Connector should join. If blank, the default tailnet is used. When set, this<br />name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set. |  |  |
 
 
 #### ConnectorStatus
@@ -722,6 +727,81 @@ _Appears in:_
 | `items` _[ProxyGroup](#proxygroup) array_ |  |  |  |
 
 
+#### ProxyGroupPolicy
+
+
+
+
+
+
+
+_Appears in:_
+- [ProxyGroupPolicyList](#proxygrouppolicylist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `ProxyGroupPolicy` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[ProxyGroupPolicySpec](#proxygrouppolicyspec)_ | Spec describes the desired state of the ProxyGroupPolicy.<br />More info:<br />https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status |  |  |
+| `status` _[ProxyGroupPolicyStatus](#proxygrouppolicystatus)_ | Status describes the status of the ProxyGroupPolicy. This is set<br />and managed by the Tailscale operator. |  |  |
+
+
+#### ProxyGroupPolicyList
+
+
+
+
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `ProxyGroupPolicyList` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[ProxyGroupPolicy](#proxygrouppolicy) array_ |  |  |  |
+
+
+#### ProxyGroupPolicySpec
+
+
+
+
+
+
+
+_Appears in:_
+- [ProxyGroupPolicy](#proxygrouppolicy)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `ingress` _string array_ | Names of ProxyGroup resources that can be used by Ingress resources within this namespace. An empty list<br />denotes that no ingress via ProxyGroups is allowed within this namespace. |  |  |
+| `egress` _string array_ | Names of ProxyGroup resources that can be used by Service resources within this namespace. An empty list<br />denotes that no egress via ProxyGroups is allowed within this namespace. |  |  |
+
+
+#### ProxyGroupPolicyStatus
+
+
+
+
+
+
+
+_Appears in:_
+- [ProxyGroupPolicy](#proxygrouppolicy)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ |  |  |  |
+
+
 #### ProxyGroupSpec
 
 
@@ -741,6 +821,7 @@ _Appears in:_
 | `hostnamePrefix` _[HostnamePrefix](#hostnameprefix)_ | HostnamePrefix is the hostname prefix to use for tailnet devices created<br />by the ProxyGroup. Each device will have the integer number from its<br />StatefulSet pod appended to this prefix to form the full hostname.<br />HostnamePrefix can contain lower case letters, numbers and dashes, it<br />must not start with a dash and must be between 1 and 62 characters long. |  | Pattern: `^[a-z0-9][a-z0-9-]{0,61}$` <br />Type: string <br /> |
 | `proxyClass` _string_ | ProxyClass is the name of the ProxyClass custom resource that contains<br />configuration options that should be applied to the resources created<br />for this ProxyGroup. If unset, and there is no default ProxyClass<br />configured, the operator will create resources with the default<br />configuration. |  |  |
 | `kubeAPIServer` _[KubeAPIServerConfig](#kubeapiserverconfig)_ | KubeAPIServer contains configuration specific to the kube-apiserver<br />ProxyGroup type. This field is only used when Type is set to "kube-apiserver". |  |  |
+| `tailnet` _string_ | Tailnet specifies the tailnet this ProxyGroup should join. If blank, the default tailnet is used. When set, this<br />name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set. |  |  |
 
 
 #### ProxyGroupStatus
@@ -900,7 +981,8 @@ _Appears in:_
 | `tags` _[Tags](#tags)_ | Tags that the Tailscale device will be tagged with. Defaults to [tag:k8s].<br />If you specify custom tags here, make sure you also make the operator<br />an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a Recorder node has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
 | `enableUI` _boolean_ | Set to true to enable the Recorder UI. The UI lists and plays recorded sessions.<br />The UI will be served at <MagicDNS name of the recorder>:443. Defaults to false.<br />Corresponds to --ui tsrecorder flag https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.<br />Required if S3 storage is not set up, to ensure that recordings are accessible. |  |  |
 | `storage` _[Storage](#storage)_ | Configure where to store session recordings. By default, recordings will<br />be stored in a local ephemeral volume, and will not be persisted past the<br />lifetime of a specific pod. |  |  |
-| `replicas` _integer_ | Replicas specifies how many instances of tsrecorder to run. Defaults to 1. |  | Minimum: 0 <br /> |
+| `replicas` _integer_ | Replicas specifies how many instances of tsrecorder to run. Defaults to 1. | 1 | Minimum: 0 <br /> |
+| `tailnet` _string_ | Tailnet specifies the tailnet this Recorder should join. If blank, the default tailnet is used. When set, this<br />name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set. |  |  |
 
 
 #### RecorderStatefulSet
@@ -1154,6 +1236,44 @@ _Appears in:_
 
 
 
+#### Tailnet
+
+
+
+
+
+
+
+_Appears in:_
+- [TailnetList](#tailnetlist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `Tailnet` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[TailnetSpec](#tailnetspec)_ | Spec describes the desired state of the Tailnet.<br />More info:<br />https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status |  |  |
+| `status` _[TailnetStatus](#tailnetstatus)_ | Status describes the status of the Tailnet. This is set<br />and managed by the Tailscale operator. |  |  |
+
+
+#### TailnetCredentials
+
+
+
+
+
+
+
+_Appears in:_
+- [TailnetSpec](#tailnetspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `secretName` _string_ | The name of the secret containing the OAuth credentials. This secret must contain two fields "client_id" and<br />"client_secret". |  |  |
+
+
 #### TailnetDevice
 
 
@@ -1170,6 +1290,59 @@ _Appears in:_
 | `hostname` _string_ | Hostname is the fully qualified domain name of the device.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
 | `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the device. |  |  |
 | `staticEndpoints` _string array_ | StaticEndpoints are user configured, 'static' endpoints by which tailnet peers can reach this device. |  |  |
+
+
+#### TailnetList
+
+
+
+
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `TailnetList` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[Tailnet](#tailnet) array_ |  |  |  |
+
+
+#### TailnetSpec
+
+
+
+
+
+
+
+_Appears in:_
+- [Tailnet](#tailnet)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `loginUrl` _string_ | URL of the control plane to be used by all resources managed by the operator using this Tailnet. |  |  |
+| `credentials` _[TailnetCredentials](#tailnetcredentials)_ | Denotes the location of the OAuth credentials to use for authenticating with this Tailnet. |  |  |
+
+
+#### TailnetStatus
+
+
+
+
+
+
+
+_Appears in:_
+- [Tailnet](#tailnet)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ |  |  |  |
 
 
 #### TailscaleConfig

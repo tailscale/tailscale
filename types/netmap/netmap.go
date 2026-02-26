@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package netmap contains the netmap.NetworkMap type.
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
@@ -26,6 +27,8 @@ import (
 // The fields should all be considered read-only. They might
 // alias parts of previous NetworkMap values.
 type NetworkMap struct {
+	Cached bool // whether this NetworkMap was loaded from disk cache (as opposed to live from network)
+
 	SelfNode tailcfg.NodeView
 	AllCaps  set.Set[tailcfg.NodeCapability] // set version of SelfNode.Capabilities + SelfNode.CapMap
 	NodeKey  key.NodePublic
@@ -154,8 +157,11 @@ func (nm *NetworkMap) SelfNodeOrZero() tailcfg.NodeView {
 // AnyPeersAdvertiseRoutes reports whether any peer is advertising non-exit node routes.
 func (nm *NetworkMap) AnyPeersAdvertiseRoutes() bool {
 	for _, p := range nm.Peers {
-		if p.PrimaryRoutes().Len() > 0 {
-			return true
+		// NOTE: (ChaosInTheCRD) if the peer being advertised is a tailscale ip, we ignore it in this check
+		for _, r := range p.PrimaryRoutes().All() {
+			if !tsaddr.IsTailscaleIP(r.Addr()) || !r.IsSingleIP() {
+				return true
+			}
 		}
 	}
 	return false

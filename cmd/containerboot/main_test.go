@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build linux
@@ -46,7 +46,7 @@ func TestContainerBoot(t *testing.T) {
 	if err := exec.Command("go", "build", "-ldflags", "-X main.testSleepDuration=1ms", "-o", boot, "tailscale.com/cmd/containerboot").Run(); err != nil {
 		t.Fatalf("Building containerboot: %v", err)
 	}
-	egressStatus := egressSvcStatus("foo", "foo.tailnetxyz.ts.net")
+	egressStatus := egressSvcStatus("foo", "foo.tailnetxyz.ts.net", "100.64.0.2")
 
 	metricsURL := func(port int) string {
 		return fmt.Sprintf("http://127.0.0.1:%d/metrics", port)
@@ -99,7 +99,7 @@ func TestContainerBoot(t *testing.T) {
 		NetMap: &netmap.NetworkMap{
 			SelfNode: (&tailcfg.Node{
 				StableID:  tailcfg.StableNodeID("myID"),
-				Name:      "test-node.test.ts.net",
+				Name:      "test-node.test.ts.net.",
 				Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
 			}).View(),
 		},
@@ -356,7 +356,7 @@ func TestContainerBoot(t *testing.T) {
 			return testCase{
 				Env: map[string]string{
 					"TS_AUTHKEY":               "tskey-key",
-					"TS_TAILNET_TARGET_FQDN":   "ipv6-node.test.ts.net", // resolves to IPv6 address
+					"TS_TAILNET_TARGET_FQDN":   "ipv6-node.test.ts.net.", // resolves to IPv6 address
 					"TS_USERSPACE":             "false",
 					"TS_TEST_FAKE_NETFILTER_6": "false",
 				},
@@ -377,13 +377,13 @@ func TestContainerBoot(t *testing.T) {
 							NetMap: &netmap.NetworkMap{
 								SelfNode: (&tailcfg.Node{
 									StableID:  tailcfg.StableNodeID("myID"),
-									Name:      "test-node.test.ts.net",
+									Name:      "test-node.test.ts.net.",
 									Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
 								}).View(),
 								Peers: []tailcfg.NodeView{
 									(&tailcfg.Node{
 										StableID:  tailcfg.StableNodeID("ipv6ID"),
-										Name:      "ipv6-node.test.ts.net",
+										Name:      "ipv6-node.test.ts.net.",
 										Addresses: []netip.Prefix{netip.MustParsePrefix("::1/128")},
 									}).View(),
 								},
@@ -481,7 +481,7 @@ func TestContainerBoot(t *testing.T) {
 						Notify: runningNotify,
 						WantKubeSecret: map[string]string{
 							"authkey":           "tskey-key",
-							"device_fqdn":       "test-node.test.ts.net",
+							"device_fqdn":       "test-node.test.ts.net.",
 							"device_id":         "myID",
 							"device_ips":        `["100.64.0.1"]`,
 							kubetypes.KeyCapVer: capver,
@@ -580,7 +580,7 @@ func TestContainerBoot(t *testing.T) {
 							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
 						},
 						WantKubeSecret: map[string]string{
-							"device_fqdn":       "test-node.test.ts.net",
+							"device_fqdn":       "test-node.test.ts.net.",
 							"device_id":         "myID",
 							"device_ips":        `["100.64.0.1"]`,
 							kubetypes.KeyCapVer: capver,
@@ -613,7 +613,7 @@ func TestContainerBoot(t *testing.T) {
 						Notify: runningNotify,
 						WantKubeSecret: map[string]string{
 							"authkey":           "tskey-key",
-							"device_fqdn":       "test-node.test.ts.net",
+							"device_fqdn":       "test-node.test.ts.net.",
 							"device_id":         "myID",
 							"device_ips":        `["100.64.0.1"]`,
 							kubetypes.KeyCapVer: capver,
@@ -625,14 +625,14 @@ func TestContainerBoot(t *testing.T) {
 							NetMap: &netmap.NetworkMap{
 								SelfNode: (&tailcfg.Node{
 									StableID:  tailcfg.StableNodeID("newID"),
-									Name:      "new-name.test.ts.net",
+									Name:      "new-name.test.ts.net.",
 									Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
 								}).View(),
 							},
 						},
 						WantKubeSecret: map[string]string{
 							"authkey":           "tskey-key",
-							"device_fqdn":       "new-name.test.ts.net",
+							"device_fqdn":       "new-name.test.ts.net.",
 							"device_id":         "newID",
 							"device_ips":        `["100.64.0.1"]`,
 							kubetypes.KeyCapVer: capver,
@@ -927,7 +927,7 @@ func TestContainerBoot(t *testing.T) {
 						Notify: runningNotify,
 						WantKubeSecret: map[string]string{
 							"authkey":           "tskey-key",
-							"device_fqdn":       "test-node.test.ts.net",
+							"device_fqdn":       "test-node.test.ts.net.",
 							"device_id":         "myID",
 							"device_ips":        `["100.64.0.1"]`,
 							"https_endpoint":    "no-https",
@@ -963,11 +963,27 @@ func TestContainerBoot(t *testing.T) {
 						},
 					},
 					{
-						Notify: runningNotify,
+						Notify: &ipn.Notify{
+							State: ptr.To(ipn.Running),
+							NetMap: &netmap.NetworkMap{
+								SelfNode: (&tailcfg.Node{
+									StableID:  tailcfg.StableNodeID("myID"),
+									Name:      "test-node.test.ts.net.",
+									Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+								}).View(),
+								Peers: []tailcfg.NodeView{
+									(&tailcfg.Node{
+										StableID:  tailcfg.StableNodeID("fooID"),
+										Name:      "foo.tailnetxyz.ts.net.",
+										Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")},
+									}).View(),
+								},
+							},
+						},
 						WantKubeSecret: map[string]string{
 							"egress-services":   string(mustJSON(t, egressStatus)),
 							"authkey":           "tskey-key",
-							"device_fqdn":       "test-node.test.ts.net",
+							"device_fqdn":       "test-node.test.ts.net.",
 							"device_id":         "myID",
 							"device_ips":        `["100.64.0.1"]`,
 							kubetypes.KeyCapVer: capver,
@@ -989,6 +1005,25 @@ func TestContainerBoot(t *testing.T) {
 					{
 						WantLog:      "TS_EGRESS_PROXIES_CONFIG_PATH is only supported for Tailscale running on Kubernetes",
 						WantExitCode: ptr.To(1),
+					},
+				},
+			}
+		},
+		"serve_config_with_service_auto_advertisement": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_SERVE_CONFIG": filepath.Join(env.d, "etc/tailscaled/serve-config-with-services.json"),
+					"TS_AUTHKEY":      "tskey-key",
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						},
+					},
+					{
+						Notify: runningNotify,
 					},
 				},
 			}
@@ -1143,7 +1178,7 @@ func TestContainerBoot(t *testing.T) {
 					return nil
 				})
 				if err != nil {
-					t.Fatalf("phase %d: %v", i, err)
+					t.Fatalf("test: %q phase %d: %v", name, i, err)
 				}
 				err = tstest.WaitFor(2*time.Second, func() error {
 					for path, want := range p.WantFiles {
@@ -1324,10 +1359,16 @@ func (lc *localAPI) Notify(n *ipn.Notify) {
 func (lc *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/localapi/v0/serve-config":
-		if r.Method != "POST" {
+		switch r.Method {
+		case "GET":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(&ipn.ServeConfig{})
+			return
+		case "POST":
+			return
+		default:
 			panic(fmt.Sprintf("unsupported method %q", r.Method))
 		}
-		return
 	case "/localapi/v0/watch-ipn-bus":
 		if r.Method != "GET" {
 			panic(fmt.Sprintf("unsupported method %q", r.Method))
@@ -1338,6 +1379,20 @@ func (lc *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Write([]byte("fake metrics"))
 		return
+	case "/localapi/v0/prefs":
+		switch r.Method {
+		case "GET":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(&ipn.Prefs{})
+			return
+		case "PATCH":
+			// EditPrefs - just return empty prefs
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(&ipn.Prefs{})
+			return
+		default:
+			panic(fmt.Sprintf("unsupported method %q", r.Method))
+		}
 	default:
 		panic(fmt.Sprintf("unsupported path %q", r.URL.Path))
 	}
@@ -1548,12 +1603,6 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func mustBase64(t *testing.T, v any) string {
-	b := mustJSON(t, v)
-	s := base64.StdEncoding.WithPadding('=').EncodeToString(b)
-	return s
-}
-
 func mustJSON(t *testing.T, v any) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -1563,13 +1612,14 @@ func mustJSON(t *testing.T, v any) []byte {
 }
 
 // egress services status given one named tailnet target specified by FQDN. As written by the proxy to its state Secret.
-func egressSvcStatus(name, fqdn string) egressservices.Status {
+func egressSvcStatus(name, fqdn, ip string) egressservices.Status {
 	return egressservices.Status{
 		Services: map[string]*egressservices.ServiceStatus{
 			name: {
 				TailnetTarget: egressservices.TailnetTarget{
 					FQDN: fqdn,
 				},
+				TailnetTargetIPs: []netip.Addr{netip.MustParseAddr(ip)},
 			},
 		},
 	}
@@ -1613,6 +1663,13 @@ func newTestEnv(t *testing.T) testEnv {
 
 	tailscaledConf := &ipn.ConfigVAlpha{AuthKey: ptr.To("foo"), Version: "alpha0"}
 	serveConf := ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}}}
+	serveConfWithServices := ipn.ServeConfig{
+		TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			"svc:test-service-1": {},
+			"svc:test-service-2": {},
+		},
+	}
 	egressCfg := egressSvcConfig("foo", "foo.tailnetxyz.ts.net")
 
 	dirs := []string{
@@ -1630,15 +1687,16 @@ func newTestEnv(t *testing.T) testEnv {
 		}
 	}
 	files := map[string][]byte{
-		"usr/bin/tailscaled":                    fakeTailscaled,
-		"usr/bin/tailscale":                     fakeTailscale,
-		"usr/bin/iptables":                      fakeTailscale,
-		"usr/bin/ip6tables":                     fakeTailscale,
-		"dev/net/tun":                           []byte(""),
-		"proc/sys/net/ipv4/ip_forward":          []byte("0"),
-		"proc/sys/net/ipv6/conf/all/forwarding": []byte("0"),
-		"etc/tailscaled/cap-95.hujson":          mustJSON(t, tailscaledConf),
-		"etc/tailscaled/serve-config.json":      mustJSON(t, serveConf),
+		"usr/bin/tailscaled":                             fakeTailscaled,
+		"usr/bin/tailscale":                              fakeTailscale,
+		"usr/bin/iptables":                               fakeTailscale,
+		"usr/bin/ip6tables":                              fakeTailscale,
+		"dev/net/tun":                                    []byte(""),
+		"proc/sys/net/ipv4/ip_forward":                   []byte("0"),
+		"proc/sys/net/ipv6/conf/all/forwarding":          []byte("0"),
+		"etc/tailscaled/cap-95.hujson":                   mustJSON(t, tailscaledConf),
+		"etc/tailscaled/serve-config.json":               mustJSON(t, serveConf),
+		"etc/tailscaled/serve-config-with-services.json": mustJSON(t, serveConfWithServices),
 		filepath.Join("etc/tailscaled/", egressservices.KeyEgressServices): mustJSON(t, egressCfg),
 		filepath.Join("etc/tailscaled/", egressservices.KeyHEPPings):       []byte("4"),
 	}

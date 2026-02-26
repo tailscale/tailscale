@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-
-# This is a wrapper around gok that sets --parent_dir.
-
-dir=$(dirname "${BASH_SOURCE[0]}")
-
-cd $dir
-$dir/../tool/go run github.com/gokrazy/tools/cmd/gok --parent_dir="$dir" "$@"

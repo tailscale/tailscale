@@ -1,10 +1,10 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Common code for FreeBSD and Darwin. This might also work on other
 // BSD systems (e.g. OpenBSD) but has not been tested.
 
-//go:build darwin || freebsd
+//go:build darwin || freebsd || openbsd
 
 package netmon
 

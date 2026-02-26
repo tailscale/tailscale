@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build linux && !ts_omit_systray
@@ -33,7 +33,7 @@ func systrayConfigCmd() *ffcli.Command {
 		FlagSet: (func() *flag.FlagSet {
 			fs := newFlagSet("systray")
 			fs.StringVar(&systrayArgs.initSystem, "enable-startup", "",
-				"Install startup script for init system. Currently supported systems are [systemd].")
+				"Install startup script for init system. Currently supported systems are [systemd, freedesktop].")
 			return fs
 		})(),
 	}

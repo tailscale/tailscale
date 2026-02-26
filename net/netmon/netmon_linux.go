@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !android
@@ -80,8 +80,6 @@ func newOSMon(bus *eventbus.Bus, logf logger.Logf, m *Monitor) (osMon, error) {
 		addrCache:    make(map[uint32]map[netip.Addr]bool),
 	}, nil
 }
-
-func (c *nlConn) IsInterestingInterface(iface string) bool { return true }
 
 func (c *nlConn) Close() error {
 	c.busClient.Close()

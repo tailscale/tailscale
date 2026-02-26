@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package localapi contains the HTTP server handlers for tailscaled's API server.
@@ -35,6 +35,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail"
+	"tailscale.com/net/neterror"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
@@ -913,7 +914,9 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 	h.b.WatchNotificationsAs(ctx, h.Actor, mask, f.Flush, func(roNotify *ipn.Notify) (keepGoing bool) {
 		err := enc.Encode(roNotify)
 		if err != nil {
-			h.logf("json.Encode: %v", err)
+			if !neterror.IsClosedPipeError(err) {
+				h.logf("json.Encode: %v", err)
+			}
 			return false
 		}
 		f.Flush()
@@ -1283,13 +1286,8 @@ func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
 		return
 	}
-	type clientMetricJSON struct {
-		Name  string `json:"name"`
-		Type  string `json:"type"`  // one of "counter" or "gauge"
-		Value int    `json:"value"` // amount to increment metric by
-	}
 
-	var clientMetrics []clientMetricJSON
+	var clientMetrics []clientmetric.MetricUpdate
 	if err := json.NewDecoder(r.Body).Decode(&clientMetrics); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
@@ -1299,14 +1297,12 @@ func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Reques
 	defer metricsMu.Unlock()
 
 	for _, m := range clientMetrics {
-		if metric, ok := metrics[m.Name]; ok {
-			metric.Add(int64(m.Value))
-		} else {
+		metric, ok := metrics[m.Name]
+		if !ok {
 			if clientmetric.HasPublished(m.Name) {
 				http.Error(w, "Already have a metric named "+m.Name, http.StatusBadRequest)
 				return
 			}
-			var metric *clientmetric.Metric
 			switch m.Type {
 			case "counter":
 				metric = clientmetric.NewCounter(m.Name)
@@ -1317,7 +1313,15 @@ func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Reques
 				return
 			}
 			metrics[m.Name] = metric
+		}
+		switch m.Op {
+		case "add", "":
 			metric.Add(int64(m.Value))
+		case "set":
+			metric.Set(int64(m.Value))
+		default:
+			http.Error(w, "Unknown metric op "+m.Op, http.StatusBadRequest)
+			return
 		}
 	}
 

@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build ignore
@@ -17,7 +17,7 @@ import (
 	"tailscale.com/util/must"
 )
 
-const header = `// Copyright (c) Tailscale Inc & AUTHORS
+const header = `// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Code g|e|n|e|r|a|t|e|d by gen.go; D|O N|OT E|D|I|T.

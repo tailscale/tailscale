@@ -1,4 +1,4 @@
-# Copyright (c) Tailscale Inc & AUTHORS
+# Copyright (c) Tailscale Inc & contributors
 # SPDX-License-Identifier: BSD-3-Clause
 
 #Requires -Version 7.4
@@ -114,7 +114,12 @@ $bootstrapScriptBlock = {
                     New-Item -Force -Path $toolchain -ItemType Directory | Out-Null
                     Start-ChildScope -ScriptBlock {
                         Set-Location -LiteralPath $toolchain
-                        tar --strip-components=1 -xf "$toolchain.tar.gz"
+
+                        # Using an absolute path to the tar that ships with Windows
+                        # to avoid conflicts with others (eg msys2).
+                        $system32 = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::System)
+                        $tar = Join-Path $system32 'tar.exe' -Resolve
+                        & $tar --strip-components=1 -xf "$toolchain.tar.gz"
                         if ($LASTEXITCODE -ne 0) {
                             throw "tar failed with exit code $LASTEXITCODE"
                         }
@@ -185,7 +190,8 @@ $bootstrapScriptBlock = {
         $goBuildEnv['GOROOT'] = $null
 
         $procExe = Join-Path $toolchain 'bin' 'go.exe' -Resolve
-        $proc = Start-Process -FilePath $procExe -WorkingDirectory $repoRoot -Environment $goBuildEnv -ArgumentList 'build', '-o', $gocrossPath, "-ldflags=-X=tailscale.com/version.gitCommitStamp=$wantVer", 'tailscale.com/tool/gocross' -NoNewWindow -Wait -PassThru
+        $proc = Start-Process -FilePath $procExe -WorkingDirectory $repoRoot -Environment $goBuildEnv -ArgumentList 'build', '-o', $gocrossPath, "-ldflags=-X=tailscale.com/version.gitCommitStamp=$wantVer", 'tailscale.com/tool/gocross' -NoNewWindow -PassThru
+        $proc.WaitForExit()
         if ($proc.ExitCode -ne 0) {
             throw 'error building gocross'
         }
@@ -217,10 +223,12 @@ if ($Env:TS_USE_GOCROSS -ne '1') {
     }
 
     $procExe = Join-Path $toolchain 'bin' 'go.exe' -Resolve
-    $proc = Start-Process -FilePath $procExe -WorkingDirectory $repoRoot -Environment $execEnv -ArgumentList $argList -NoNewWindow -Wait -PassThru
+    $proc = Start-Process -FilePath $procExe -WorkingDirectory $repoRoot -Environment $execEnv -ArgumentList $argList -NoNewWindow -PassThru
+    $proc.WaitForExit()
     exit $proc.ExitCode
 }
 
 $procExe = Join-Path $repoRoot 'gocross.exe' -Resolve
-$proc = Start-Process -FilePath $procExe -WorkingDirectory $repoRoot -Environment $execEnv -ArgumentList $argList -NoNewWindow -Wait -PassThru
+$proc = Start-Process -FilePath $procExe -WorkingDirectory $repoRoot -Environment $execEnv -ArgumentList $argList -NoNewWindow -PassThru
+$proc.WaitForExit()
 exit $proc.ExitCode

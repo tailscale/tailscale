@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package kubetypes contains types and constants related to the Tailscale
@@ -38,8 +38,12 @@ type KubernetesCapRule struct {
 	// Default is to fail open.
 	// The field name matches `EnforceRecorder` field with equal semantics for Tailscale SSH
 	// session recorder.
-	// https://tailscale.com/kb/1246/tailscale-ssh-session-recording#turn-on-session-recording-in-acls
+	// https://tailscale.com/kb/1246/tailscale-ssh-session-recording#turn-on-session-recording-in-your-tailnet-policy-file
 	EnforceRecorder bool `json:"enforceRecorder,omitempty"`
+	// EnableEvents defines whether kubectl API request events (beta)
+	// should be recorded or not.
+	// https://tailscale.com/kb/1246/tailscale-ssh-session-recording#turn-on-session-recording-in-your-tailnet-policy-file
+	EnableEvents bool `json:"enableEvents,omitempty"`
 }
 
 // ImpersonateRule defines how a request from the tailnet identity matching

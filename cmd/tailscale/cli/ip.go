@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package cli
@@ -25,14 +25,16 @@ var ipCmd = &ffcli.Command{
 		fs.BoolVar(&ipArgs.want1, "1", false, "only print one IP address")
 		fs.BoolVar(&ipArgs.want4, "4", false, "only print IPv4 address")
 		fs.BoolVar(&ipArgs.want6, "6", false, "only print IPv6 address")
+		fs.StringVar(&ipArgs.assert, "assert", "", "assert that one of the node's IP(s) matches this IP address")
 		return fs
 	})(),
 }
 
 var ipArgs struct {
-	want1 bool
-	want4 bool
-	want6 bool
+	want1  bool
+	want4  bool
+	want6  bool
+	assert string
 }
 
 func runIP(ctx context.Context, args []string) error {
@@ -62,6 +64,14 @@ func runIP(ctx context.Context, args []string) error {
 		return err
 	}
 	ips := st.TailscaleIPs
+	if ipArgs.assert != "" {
+		for _, ip := range ips {
+			if ip.String() == ipArgs.assert {
+				return nil
+			}
+		}
+		return fmt.Errorf("assertion failed: IP %q not found among %v", ipArgs.assert, ips)
+	}
 	if of != "" {
 		ip, _, err := tailscaleIPFromArg(ctx, of)
 		if err != nil {

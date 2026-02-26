@@ -1,6 +1,6 @@
 [Unit]
 Description=Tailscale node agent
-Documentation=https://tailscale.com/kb/
+Documentation=https://tailscale.com/docs/
 Wants=network-pre.target
 After=network-pre.target NetworkManager.service systemd-resolved.service
 

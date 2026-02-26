@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package cli
@@ -1765,7 +1765,7 @@ func TestIsLegacyInvocation(t *testing.T) {
 			}
 
 			if gotTranslation != tt.translation {
-				t.Fatalf("expected translaction to be %q but got %q", tt.translation, gotTranslation)
+				t.Fatalf("expected translation to be %q but got %q", tt.translation, gotTranslation)
 			}
 		})
 	}
@@ -2077,9 +2077,11 @@ func TestSetServe(t *testing.T) {
 			if err == nil && tt.expectErr {
 				t.Fatalf("got no error; expected error.")
 			}
-			if !tt.expectErr && !reflect.DeepEqual(tt.cfg, tt.expected) {
-				svcName := tailcfg.ServiceName(tt.dnsName)
-				t.Fatalf("got: %v; expected: %v", tt.cfg.Services[svcName], tt.expected.Services[svcName])
+			if !tt.expectErr {
+				if diff := cmp.Diff(tt.expected, tt.cfg); diff != "" {
+					// svcName := tailcfg.ServiceName(tt.dnsName)
+					t.Fatalf("got diff:\n%s", diff)
+				}
 			}
 		})
 	}

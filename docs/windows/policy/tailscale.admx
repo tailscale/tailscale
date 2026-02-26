@@ -231,7 +231,7 @@
         <string>never</string>
       </disabledValue>
     </policy>
-    <policy name="DNSRegistration" class="Machine" displayName="$(string.DNSRegistration)" explainText="$(string.DNSRegistration_Help)" presentation="$(presentation.DNSRegistration)" key="Software\Policies\Tailscale" valueName="EnableDNSRegistration">
+    <policy name="DNSRegistration" class="Machine" displayName="$(string.DNSRegistration)" explainText="$(string.DNSRegistration_Help)" presentation="$(presentation.DNSRegistration)" key="Software\Policies\Tailscale" valueName="DNSRegistrationConfigured">
       <parentCategory ref="Settings_Category" />
       <supportedOn ref="SINCE_V1_84" />
       <elements>

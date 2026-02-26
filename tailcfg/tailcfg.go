@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package tailcfg contains types used by the Tailscale protocol with between
@@ -178,7 +178,9 @@ type CapabilityVersion int
 //   - 129: 2025-10-04: Fixed sleep/wake deadlock in magicsock when using peer relay (PR #17449)
 //   - 130: 2025-10-06: client can send key.HardwareAttestationPublic and key.HardwareAttestationKeySignature in MapRequest
 //   - 131: 2025-11-25: client respects [NodeAttrDefaultAutoUpdate]
-const CurrentCapabilityVersion CapabilityVersion = 131
+//   - 132: 2026-02-13: client respects [NodeAttrDisableHostsFileUpdates]
+//   - 133: 2026-02-17: client understands [NodeAttrForceRegisterMagicDNSIPv4Only]; MagicDNS IPv6 registered w/ OS by default
+const CurrentCapabilityVersion CapabilityVersion = 133
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -887,6 +889,7 @@ type Hostinfo struct {
 	UserspaceRouter opt.Bool       `json:",omitzero"` // if the client's subnet router is running in userspace (netstack) mode
 	AppConnector    opt.Bool       `json:",omitzero"` // if the client is running the app-connector service
 	ServicesHash    string         `json:",omitzero"` // opaque hash of the most recent list of tailnet services, change in hash indicates config should be fetched via c2n
+	PeerRelay       bool           `json:",omitzero"` // if the client is willing to relay traffic for other peers
 	ExitNodeID      StableNodeID   `json:",omitzero"` // the client’s selected exit node, empty when unselected.
 
 	// Location represents geographical location data about a
@@ -2707,6 +2710,13 @@ const (
 	// server to answer AAAA queries about its peers. See tailscale/tailscale#1152.
 	NodeAttrMagicDNSPeerAAAA NodeCapability = "magicdns-aaaa"
 
+	// NodeAttrDNSSubdomainResolve, when set on Self or a Peer node, indicates
+	// that the subdomains of that node's MagicDNS name should resolve to the
+	// same IP addresses as the node itself.
+	// For example, if node "myserver.tailnet.ts.net" has this capability,
+	// then "anything.myserver.tailnet.ts.net" will resolve to myserver's IPs.
+	NodeAttrDNSSubdomainResolve NodeCapability = "dns-subdomain-resolve"
+
 	// NodeAttrTrafficSteering configures the node to use the traffic
 	// steering subsystem for via routes. See tailscale/corp#29966.
 	NodeAttrTrafficSteering NodeCapability = "traffic-steering"
@@ -2732,6 +2742,19 @@ const (
 	//
 	// The value of the key in [NodeCapMap] is a JSON boolean.
 	NodeAttrDefaultAutoUpdate NodeCapability = "default-auto-update"
+
+	// NodeAttrDisableHostsFileUpdates indicates that the node's DNS manager should
+	// not create hosts file entries when it normally would, such as when we're not
+	// the primary resolver on Windows or when the host is domain-joined and its
+	// primary domain takes precedence over MagicDNS. As of 2026-02-12, it is only
+	// used on Windows.
+	NodeAttrDisableHostsFileUpdates NodeCapability = "disable-hosts-file-updates"
+
+	// NodeAttrForceRegisterMagicDNSIPv4Only forces the client to only register
+	// its MagicDNS IPv4 address with systemd/etc, and not both its IPv4 and IPv6 addresses.
+	// See https://github.com/tailscale/tailscale/issues/15404.
+	// TODO(bradfitz): remove this a few releases after 2026-02-16.
+	NodeAttrForceRegisterMagicDNSIPv4Only NodeCapability = "force-register-magicdns-ipv4-only"
 )
 
 // SetDNSRequest is a request to add a DNS record.

@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package kubetypes
@@ -33,6 +33,7 @@ const (
 	MetricProxyGroupEgressCount          = "k8s_proxygroup_egress_resources"
 	MetricProxyGroupIngressCount         = "k8s_proxygroup_ingress_resources"
 	MetricProxyGroupAPIServerCount       = "k8s_proxygroup_kube_apiserver_resources"
+	MetricTailnetCount                   = "k8s_tailnet_resources"
 
 	// Keys that containerboot writes to state file that can be used to determine its state.
 	// fields set in Tailscale state Secret. These are mostly used by the Tailscale Kubernetes operator to determine

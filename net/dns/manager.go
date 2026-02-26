@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package dns
@@ -46,6 +46,11 @@ var (
 // be running.
 const maxActiveQueries = 256
 
+// ResponseMapper is a function that accepts the bytes representing
+// a DNS response and returns bytes representing a DNS response.
+// Used to observe and/or mutate DNS responses managed by this manager.
+type ResponseMapper func([]byte) []byte
+
 // We use file-ignore below instead of ignore because on some platforms,
 // the lint exception is necessary and on others it is not,
 // and plain ignore complains if the exception is unnecessary.
@@ -54,6 +59,8 @@ const maxActiveQueries = 256
 type Manager struct {
 	logf   logger.Logf
 	health *health.Tracker
+
+	eventClient *eventbus.Client
 
 	activeQueriesAtomic int32
 
@@ -65,14 +72,15 @@ type Manager struct {
 	knobs    *controlknobs.Knobs // or nil
 	goos     string              // if empty, gets set to runtime.GOOS
 
-	mu     sync.Mutex // guards following
-	config *Config    // Tracks the last viable DNS configuration set by Set.  nil on failures other than compilation failures or if set has never been called.
+	mu                  sync.Mutex // guards following
+	config              *Config    // Tracks the last viable DNS configuration set by Set.  nil on failures other than compilation failures or if set has never been called.
+	queryResponseMapper ResponseMapper
 }
 
-// NewManagers created a new manager from the given config.
+// NewManager created a new manager from the given config.
 //
 // knobs may be nil.
-func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, dialer *tsdial.Dialer, linkSel resolver.ForwardLinkSelector, knobs *controlknobs.Knobs, goos string) *Manager {
+func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, dialer *tsdial.Dialer, linkSel resolver.ForwardLinkSelector, knobs *controlknobs.Knobs, goos string, bus *eventbus.Bus) *Manager {
 	if !buildfeatures.HasDNS {
 		return nil
 	}
@@ -95,6 +103,20 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, 
 		knobs:    knobs,
 		goos:     goos,
 	}
+
+	m.eventClient = bus.Client("dns.Manager")
+	eventbus.SubscribeFunc(m.eventClient, func(trample TrampleDNS) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.config == nil {
+			m.logf("resolve.conf was trampled, but there is no DNS config")
+			return
+		}
+		m.logf("resolve.conf was trampled, setting existing config again")
+		if err := m.setLocked(*m.config); err != nil {
+			m.logf("error setting DNS config: %s", err)
+		}
+	})
 
 	m.ctx, m.ctxCancel = context.WithCancel(context.Background())
 	m.logf("using %T", m.os)
@@ -178,15 +200,22 @@ func (m *Manager) setLocked(cfg Config) error {
 		m.config = nil
 		return err
 	}
-	if err := m.os.SetDNS(ocfg); err != nil {
-		m.config = nil
-		m.health.SetUnhealthy(osConfigurationSetWarnable, health.Args{health.ArgError: err.Error()})
+	if err := m.setDNSLocked(ocfg); err != nil {
 		return err
 	}
 
 	m.health.SetHealthy(osConfigurationSetWarnable)
 	m.config = &cfg
 
+	return nil
+}
+
+func (m *Manager) setDNSLocked(ocfg OSConfig) error {
+	if err := m.os.SetDNS(ocfg); err != nil {
+		m.config = nil
+		m.health.SetUnhealthy(osConfigurationSetWarnable, health.Args{health.ArgError: err.Error()})
+		return err
+	}
 	return nil
 }
 
@@ -268,6 +297,8 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// authoritative suffixes, even if we don't propagate MagicDNS to
 	// the OS.
 	rcfg.Hosts = cfg.Hosts
+	rcfg.SubdomainHosts = cfg.SubdomainHosts
+	rcfg.AcceptDNS = cfg.AcceptDNS
 	routes := map[dnsname.FQDN][]*dnstype.Resolver{} // assigned conditionally to rcfg.Routes below.
 	var propagateHostsToOS bool
 	for suffix, resolvers := range cfg.Routes {
@@ -365,9 +396,9 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		cfg, err := m.os.GetBaseConfig()
 		if err == nil {
 			baseCfg = &cfg
-		} else if isApple && err == ErrGetBaseConfigNotSupported {
-			// This is currently (2022-10-13) expected on certain iOS and macOS
-			// builds.
+		} else if (isApple || isNoopManager(m.os)) && err == ErrGetBaseConfigNotSupported {
+			// Expected when using noopManager (userspace networking) or on
+			// certain iOS/macOS builds. Continue without base config.
 		} else {
 			m.health.SetUnhealthy(osConfigurationReadWarnable, health.Args{health.ArgError: err.Error()})
 			return resolver.Config{}, OSConfig{}, err
@@ -442,7 +473,16 @@ func (m *Manager) Query(ctx context.Context, bs []byte, family string, from neti
 		return nil, errFullQueue
 	}
 	defer atomic.AddInt32(&m.activeQueriesAtomic, -1)
-	return m.resolver.Query(ctx, bs, family, from)
+	outbs, err := m.resolver.Query(ctx, bs, family, from)
+	if err != nil {
+		return outbs, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.queryResponseMapper != nil {
+		outbs = m.queryResponseMapper(outbs)
+	}
+	return outbs, err
 }
 
 const (
@@ -456,6 +496,13 @@ const (
 	// chosen 4k.
 	maxReqSizeTCP = 4096
 )
+
+// TrampleDNS is an an event indicating we detected that DNS config was
+// overwritten by another process.
+type TrampleDNS struct {
+	LastTrample       time.Time
+	TramplesInTimeout int64
+}
 
 // dnsTCPSession services DNS requests sent over TCP.
 type dnsTCPSession struct {
@@ -585,6 +632,7 @@ func (m *Manager) Down() error {
 	if err := m.os.Close(); err != nil {
 		return err
 	}
+	m.eventClient.Close()
 	m.resolver.Close()
 	return nil
 }
@@ -605,7 +653,7 @@ func CleanUp(logf logger.Logf, netMon *netmon.Monitor, bus *eventbus.Bus, health
 	if !buildfeatures.HasDNS {
 		return
 	}
-	oscfg, err := NewOSConfigurator(logf, health, policyclient.Get(), nil, interfaceName)
+	oscfg, err := NewOSConfigurator(logf, health, bus, policyclient.Get(), nil, interfaceName)
 	if err != nil {
 		logf("creating dns cleanup: %v", err)
 		return
@@ -613,12 +661,16 @@ func CleanUp(logf logger.Logf, netMon *netmon.Monitor, bus *eventbus.Bus, health
 	d := &tsdial.Dialer{Logf: logf}
 	d.SetNetMon(netMon)
 	d.SetBus(bus)
-	dns := NewManager(logf, oscfg, health, d, nil, nil, runtime.GOOS)
+	dns := NewManager(logf, oscfg, health, d, nil, nil, runtime.GOOS, bus)
 	if err := dns.Down(); err != nil {
 		logf("dns down: %v", err)
 	}
 }
 
-var (
-	metricDNSQueryErrorQueue = clientmetric.NewCounter("dns_query_local_error_queue")
-)
+var metricDNSQueryErrorQueue = clientmetric.NewCounter("dns_query_local_error_queue")
+
+func (m *Manager) SetQueryResponseMapper(fx ResponseMapper) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.queryResponseMapper = fx
+}

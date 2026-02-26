@@ -1,0 +1,26 @@
+# Before applying ensure that the operator owns tag:k8s-operator
+# To use both subnet routing and exit node on the same cluster, deploy a separate
+# Connector resource for each.
+# See connector.yaml for a subnet router example.
+# See: https://tailscale.com/kb/1441/kubernetes-operator-connector
+---
+apiVersion: tailscale.com/v1alpha1
+kind: Connector
+metadata:
+  name: exit-node
+spec:
+  # Exit node configuration - allows Tailscale clients to route all internet traffic through this Connector
+  exitNode: true
+
+  # High availability: 2 replicas for redundancy
+  # Note: Must use hostnamePrefix (not hostname) when replicas > 1
+  replicas: 2
+
+  # Hostname prefix for the exit node devices
+  # Devices will be named: exit-node-0, exit-node-1
+  hostnamePrefix: exit-node
+
+  # Tailscale tags for ACL policy management
+  tags:
+    - tag:k8s-operator
+

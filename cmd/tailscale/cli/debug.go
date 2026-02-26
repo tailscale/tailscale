@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 package cli
@@ -123,6 +123,12 @@ func debugCmd() *ffcli.Command {
 					fs.StringVar(&daemonBusGraphArgs.format, "format", "json", "output format [json/dot]")
 					return fs
 				})(),
+			},
+			{
+				Name:       "daemon-bus-queues",
+				ShortUsage: "tailscale debug daemon-bus-queues",
+				Exec:       runDaemonBusQueues,
+				ShortHelp:  "Print event bus queue depths per client",
 			},
 			{
 				Name:       "metrics",
@@ -263,7 +269,7 @@ func debugCmd() *ffcli.Command {
 					fs := newFlagSet("watch-ipn")
 					fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
 					fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include initial status")
-					fs.BoolVar(&watchIPNArgs.rateLimit, "rate-limit", true, "rate limit messags")
+					fs.BoolVar(&watchIPNArgs.rateLimit, "rate-limit", true, "rate limit messages")
 					fs.IntVar(&watchIPNArgs.count, "count", 0, "exit after printing this many statuses, or 0 to keep going forever")
 					return fs
 				})(),
@@ -837,6 +843,15 @@ func runDaemonBusGraph(ctx context.Context, args []string) error {
 	} else {
 		fmt.Print(string(graph))
 	}
+	return nil
+}
+
+func runDaemonBusQueues(ctx context.Context, args []string) error {
+	data, err := localClient.EventBusQueues(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Print(string(data))
 	return nil
 }
 

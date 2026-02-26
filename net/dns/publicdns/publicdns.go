@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package publicdns contains mapping and helpers for working with
@@ -13,12 +13,14 @@ import (
 	"log"
 	"math/big"
 	"net/netip"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
 	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/util/testenv"
 )
 
 // dohOfIP maps from public DNS IPs to their DoH base URL.
@@ -275,6 +277,26 @@ func populate() {
 	addDoH("76.76.10.4", "https://freedns.controld.com/family")
 	addDoH("2606:1a40::4", "https://freedns.controld.com/family")
 	addDoH("2606:1a40:1::4", "https://freedns.controld.com/family")
+
+	// CIRA Canadian Shield: https://www.cira.ca/en/canadian-shield/configure/summary-cira-canadian-shield-dns-resolver-addresses/
+
+	// CIRA Canadian Shield Private (DNS resolution only)
+	addDoH("149.112.121.10", "https://private.canadianshield.cira.ca/dns-query")
+	addDoH("149.112.122.10", "https://private.canadianshield.cira.ca/dns-query")
+	addDoH("2620:10a:80bb::10", "https://private.canadianshield.cira.ca/dns-query")
+	addDoH("2620:10a:80bc::10", "https://private.canadianshield.cira.ca/dns-query")
+
+	// CIRA Canadian Shield Protected (Malware and phishing protection)
+	addDoH("149.112.121.20", "https://protected.canadianshield.cira.ca/dns-query")
+	addDoH("149.112.122.20", "https://protected.canadianshield.cira.ca/dns-query")
+	addDoH("2620:10a:80bb::20", "https://protected.canadianshield.cira.ca/dns-query")
+	addDoH("2620:10a:80bc::20", "https://protected.canadianshield.cira.ca/dns-query")
+
+	// CIRA Canadian Shield Family (Protected + blocking adult content)
+	addDoH("149.112.121.30", "https://family.canadianshield.cira.ca/dns-query")
+	addDoH("149.112.122.30", "https://family.canadianshield.cira.ca/dns-query")
+	addDoH("2620:10a:80bb::30", "https://family.canadianshield.cira.ca/dns-query")
+	addDoH("2620:10a:80bc::30", "https://family.canadianshield.cira.ca/dns-query")
 }
 
 var (
@@ -346,4 +368,40 @@ func IPIsDoHOnlyServer(ip netip.Addr) bool {
 		ip == wikimediaDNSv4Addr || ip == wikimediaDNSv6Addr ||
 		controlDv6RangeA.Contains(ip) || controlDv6RangeB.Contains(ip) ||
 		ip == controlDv4One || ip == controlDv4Two
+}
+
+var testMu sync.Mutex
+
+// RegisterTestDoHEndpoint registers a test DoH endpoint mapping for use in tests.
+// It maps the given IP to the DoH base URL, and the URL back to the IP.
+//
+// This function panics if called outside of tests, and cannot be called
+// concurrently with any usage of this package (i.e. before any DNS forwarders
+// are created). It is safe to call concurrently with itself.
+//
+// It returns a cleanup function that removes the registration.
+func RegisterTestDoHEndpoint(ip netip.Addr, dohBase string) func() {
+	if !testenv.InTest() {
+		panic("RegisterTestDoHEndpoint called outside of tests")
+	}
+	populateOnce.Do(populate)
+
+	testMu.Lock()
+	defer testMu.Unlock()
+
+	dohOfIP[ip] = dohBase
+	dohIPsOfBase[dohBase] = append(dohIPsOfBase[dohBase], ip)
+
+	return func() {
+		testMu.Lock()
+		defer testMu.Unlock()
+
+		delete(dohOfIP, ip)
+		dohIPsOfBase[dohBase] = slices.DeleteFunc(dohIPsOfBase[dohBase], func(addr netip.Addr) bool {
+			return addr == ip
+		})
+		if len(dohIPsOfBase[dohBase]) == 0 {
+			delete(dohIPsOfBase, dohBase)
+		}
+	}
 }

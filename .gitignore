@@ -52,3 +52,6 @@ client/web/build/assets
 
 # Ignore personal IntelliJ settings
 .idea/
+
+# Ignore syncthing state directory.
+/.stfolder

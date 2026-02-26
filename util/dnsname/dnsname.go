@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package dnsname contains string functions for working with DNS names.
@@ -92,6 +92,18 @@ func (f FQDN) Contains(other FQDN) bool {
 		cmp = "." + cmp
 	}
 	return strings.HasSuffix(other.WithTrailingDot(), cmp)
+}
+
+// Parent returns the parent domain by stripping the first label.
+// For "foo.bar.baz.", it returns "bar.baz."
+// It returns an empty FQDN for root or single-label domains.
+func (f FQDN) Parent() FQDN {
+	s := f.WithTrailingDot()
+	_, rest, ok := strings.Cut(s, ".")
+	if !ok || rest == "" {
+		return ""
+	}
+	return FQDN(rest)
 }
 
 // ValidLabel reports whether label is a valid DNS label. All errors are

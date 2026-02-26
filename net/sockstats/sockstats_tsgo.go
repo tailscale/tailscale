@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build tailscale_go && (darwin || ios || android || ts_enable_sockstats)
@@ -271,10 +271,10 @@ func setNetMon(netMon *netmon.Monitor) {
 	}
 
 	netMon.RegisterChangeCallback(func(delta *netmon.ChangeDelta) {
-		if !delta.Major {
+		if !delta.RebindLikelyRequired {
 			return
 		}
-		state := delta.New
+		state := delta.CurrentState()
 		ifName := state.DefaultRouteInterface
 		if ifName == "" {
 			return

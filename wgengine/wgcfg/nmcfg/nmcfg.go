@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package nmcfg converts a controlclient.NetMap into a wgcfg config.
@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"strings"
 
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -32,6 +33,9 @@ func cidrIsSubnet(node tailcfg.NodeView, cidr netip.Prefix) bool {
 	}
 	if !cidr.IsSingleIP() {
 		return true
+	}
+	if tsaddr.IsTailscaleIP(cidr.Addr()) {
+		return false
 	}
 	for _, selfCIDR := range node.Addresses().All() {
 		if cidr == selfCIDR {

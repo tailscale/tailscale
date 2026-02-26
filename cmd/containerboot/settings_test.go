@@ -1,11 +1,15 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build linux
 
 package main
 
-import "testing"
+import (
+	"net/netip"
+	"strings"
+	"testing"
+)
 
 func Test_parseAcceptDNS(t *testing.T) {
 	tests := []struct {
@@ -104,5 +108,149 @@ func Test_parseAcceptDNS(t *testing.T) {
 				t.Errorf("parseAcceptDNS() gotAcceptDNS = %v, want %v", gotAcceptDNS, tt.wantAcceptDNS)
 			}
 		})
+	}
+}
+
+func TestValidateAuthMethods(t *testing.T) {
+	tests := []struct {
+		name         string
+		authKey      string
+		clientID     string
+		clientSecret string
+		idToken      string
+		audience     string
+		errContains  string
+	}{
+		{
+			name: "no_auth_method",
+		},
+		{
+			name:    "authkey_only",
+			authKey: "tskey-auth-xxx",
+		},
+		{
+			name:         "client_secret_only",
+			clientSecret: "tskey-client-xxx",
+		},
+		{
+			name:     "client_id_alone",
+			clientID: "client-id",
+		},
+		{
+			name:         "oauth_client_id_and_secret",
+			clientID:     "client-id",
+			clientSecret: "tskey-client-xxx",
+		},
+		{
+			name:     "wif_client_id_and_id_token",
+			clientID: "client-id",
+			idToken:  "id-token",
+		},
+		{
+			name:     "wif_client_id_and_audience",
+			clientID: "client-id",
+			audience: "audience",
+		},
+		{
+			name:        "id_token_without_client_id",
+			idToken:     "id-token",
+			errContains: "TS_ID_TOKEN is set but TS_CLIENT_ID is not set",
+		},
+		{
+			name:        "audience_without_client_id",
+			audience:    "audience",
+			errContains: "TS_AUDIENCE is set but TS_CLIENT_ID is not set",
+		},
+		{
+			name:         "authkey_with_client_secret",
+			authKey:      "tskey-auth-xxx",
+			clientSecret: "tskey-client-xxx",
+			errContains:  "TS_AUTHKEY cannot be used with",
+		},
+		{
+			name:        "authkey_with_id_token",
+			authKey:     "tskey-auth-xxx",
+			clientID:    "client-id",
+			idToken:     "id-token",
+			errContains: "TS_AUTHKEY cannot be used with",
+		},
+		{
+			name:        "authkey_with_audience",
+			authKey:     "tskey-auth-xxx",
+			clientID:    "client-id",
+			audience:    "audience",
+			errContains: "TS_AUTHKEY cannot be used with",
+		},
+		{
+			name:         "id_token_with_client_secret",
+			clientID:     "client-id",
+			clientSecret: "tskey-client-xxx",
+			idToken:      "id-token",
+			errContains:  "TS_ID_TOKEN and TS_CLIENT_SECRET cannot both be set",
+		},
+		{
+			name:        "id_token_with_audience",
+			clientID:    "client-id",
+			idToken:     "id-token",
+			audience:    "audience",
+			errContains: "TS_ID_TOKEN and TS_AUDIENCE cannot both be set",
+		},
+		{
+			name:         "audience_with_client_secret",
+			clientID:     "client-id",
+			clientSecret: "tskey-client-xxx",
+			audience:     "audience",
+			errContains:  "TS_AUDIENCE and TS_CLIENT_SECRET cannot both be set",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &settings{
+				AuthKey:      tt.authKey,
+				ClientID:     tt.clientID,
+				ClientSecret: tt.clientSecret,
+				IDToken:      tt.idToken,
+				Audience:     tt.audience,
+			}
+			err := s.validate()
+			if tt.errContains != "" {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("error %q does not contain %q", err.Error(), tt.errContains)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestHandlesKubeIPV6(t *testing.T) {
+	t.Setenv("TS_LOCAL_ADDR_PORT", "fd7a:115c:a1e0::6c34:352:9002")
+	t.Setenv("POD_IPS", "fd7a:115c:a1e0::6c34:352")
+
+	cfg, err := configFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.LocalAddrPort != "[fd7a:115c:a1e0::6c34:352]:9002" {
+		t.Errorf("LocalAddrPort is not set correctly")
+	}
+
+	parsed, err := netip.ParseAddrPort(cfg.LocalAddrPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !parsed.Addr().Is6() {
+		t.Errorf("expected v6 address but got %s", parsed)
+	}
+
+	if parsed.Port() != 9002 {
+		t.Errorf("expected port 9002 but got %d", parsed.Port())
 	}
 }

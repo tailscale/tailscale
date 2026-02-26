@@ -1,4 +1,4 @@
-// Copyright (c) Tailscale Inc & AUTHORS
+// Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build !plan9
@@ -174,6 +174,10 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 				Value: "$(POD_NAME)",
 			},
 			{
+				Name:  "TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT",
+				Value: "false",
+			},
+			{
 				// TODO(tomhjp): This is tsrecorder-specific and does nothing. Delete.
 				Name:  "TS_STATE",
 				Value: "kube:$(POD_NAME)",
@@ -181,6 +185,14 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 			{
 				Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
 				Value: "/etc/tsconfig/$(POD_NAME)",
+			},
+			{
+				// This ensures that cert renewals can succeed if ACME account
+				// keys have changed since issuance. We cannot guarantee or
+				// validate that the account key has not changed, see
+				// https://github.com/tailscale/tailscale/issues/18251
+				Name:  "TS_DEBUG_ACME_FORCE_RENEWAL",
+				Value: "true",
 			},
 		}
 
@@ -346,6 +358,14 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string, por
 											Namespace: namespace,
 											Name:      "$(POD_NAME)-config",
 										}.String(),
+									},
+									{
+										// This ensures that cert renewals can succeed if ACME account
+										// keys have changed since issuance. We cannot guarantee or
+										// validate that the account key has not changed, see
+										// https://github.com/tailscale/tailscale/issues/18251
+										Name:  "TS_DEBUG_ACME_FORCE_RENEWAL",
+										Value: "true",
 									},
 								}
 

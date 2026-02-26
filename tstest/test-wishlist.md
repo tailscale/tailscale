@@ -18,3 +18,6 @@ reference to an issue or PR about the feature.
   When the option is disabled, we should still permit it for internal interfaces,
   such as Hyper-V/WSL2 on Windows.
 
+- Inbound and outbound broadcasts when an exit node is used, both with and without
+  the "Allow local network access" option enabled. When the option is disabled,
+  we should still permit traffic on internal interfaces, such as Hyper-V/WSL2 on Windows.
