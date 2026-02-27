@@ -27,7 +27,7 @@ require (
 	github.com/creachadair/mds v0.25.9
 	github.com/creachadair/msync v0.7.1
 	github.com/creachadair/taskgroup v0.13.2
-	github.com/creack/pty v1.1.23
+	github.com/creack/pty v1.1.24
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa
 	github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e
 	github.com/distribution/reference v0.6.0
@@ -123,7 +123,7 @@ require (
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
 	gopkg.in/square/go-jose.v2 v2.6.0
-	gvisor.dev/gvisor v0.0.0-20250205023644-9414b50a5633
+	gvisor.dev/gvisor v0.0.0-20260224225140-573d5e7127a8
 	helm.sh/helm/v3 v3.19.0
 	honnef.co/go/tools v0.7.0-0.dev.0.20251022135355-8273271481d0
 	k8s.io/api v0.34.0

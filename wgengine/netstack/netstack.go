@@ -613,7 +613,7 @@ func (ns *Impl) Start(b LocalBackend) error {
 	}
 	ns.lb = lb
 	tcpFwd := tcp.NewForwarder(ns.ipstack, tcpRXBufDefSize, maxInFlightConnectionAttempts(), ns.acceptTCP)
-	udpFwd := udp.NewForwarder(ns.ipstack, ns.acceptUDP)
+	udpFwd := udp.NewForwarder(ns.ipstack, ns.acceptUDPNoICMP)
 	ns.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, ns.wrapTCPProtocolHandler(tcpFwd.HandlePacket))
 	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, ns.wrapUDPProtocolHandler(udpFwd.HandlePacket))
 	go ns.inject()
@@ -1767,6 +1767,19 @@ func (ns *Impl) ListenTCP(network, address string) (*gonet.TCPListener, error) {
 	}
 
 	return gonet.ListenTCP(ns.ipstack, localAddress, networkProto)
+}
+
+// acceptUDPNoICMP wraps acceptUDP to satisfy udp.ForwarderHandler.
+// A gvisor bump from 9414b50a to 573d5e71 on 2026-02-27 changed
+// udp.ForwarderHandler from func(*ForwarderRequest) to
+// func(*ForwarderRequest) bool, where returning false means unhandled
+// and causes gvisor to send an ICMP port unreachable. Previously there
+// was no such distinction and all packets were implicitly treated as
+// handled. Always returning true preserves the old behavior of silently
+// dropping packets we don't service rather than sending ICMP errors.
+func (ns *Impl) acceptUDPNoICMP(r *udp.ForwarderRequest) bool {
+	ns.acceptUDP(r)
+	return true
 }
 
 func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
