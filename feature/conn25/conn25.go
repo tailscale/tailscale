@@ -8,14 +8,18 @@
 package conn25
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/netip"
 	"sync"
 
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/appc"
 	"tailscale.com/feature"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
@@ -34,14 +38,12 @@ const featureName = "conn25"
 
 func init() {
 	feature.Register(featureName)
-	newExtension := func(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, error) {
-		e := &extension{
+	ipnext.RegisterExtension(featureName, func(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, error) {
+		return &extension{
 			conn25:  newConn25(logger.WithPrefix(logf, "conn25: ")),
 			backend: sb,
-		}
-		return e, nil
-	}
-	ipnext.RegisterExtension(featureName, newExtension)
+		}, nil
+	})
 	ipnlocal.RegisterPeerAPIHandler("/v0/connector/transit-ip", handleConnectorTransitIP)
 }
 
@@ -60,6 +62,9 @@ type extension struct {
 	conn25  *Conn25            // safe for concurrent access and only set at creation
 	backend ipnext.SafeBackend // safe for concurrent access and only set at creation
 
+	host      ipnext.Host        // set in Init, read-only after
+	ctxCancel context.CancelFunc // cancels sendLoop goroutine
+
 	mu                  sync.Mutex // protects the fields below
 	isDNSHookRegistered bool
 }
@@ -71,12 +76,19 @@ func (e *extension) Name() string {
 
 // Init implements [ipnext.Extension].
 func (e *extension) Init(host ipnext.Host) error {
+	e.host = host
 	host.Hooks().OnSelfChange.Add(e.onSelfChange)
+	ctx, cancel := context.WithCancel(context.Background())
+	e.ctxCancel = cancel
+	go e.sendLoop(ctx)
 	return nil
 }
 
 // Shutdown implements [ipnlocal.Extension].
 func (e *extension) Shutdown() error {
+	if e.ctxCancel != nil {
+		e.ctxCancel()
+	}
 	return nil
 }
 
@@ -171,7 +183,10 @@ func (c *Conn25) isConfigured() bool {
 
 func newConn25(logf logger.Logf) *Conn25 {
 	c := &Conn25{
-		client:    &client{logf: logf},
+		client: &client{
+			logf:    logf,
+			addrsCh: make(chan addrs, 64),
+		},
 		connector: &connector{logf: logf},
 	}
 	return c
@@ -355,7 +370,8 @@ func configFromNodeView(n tailcfg.NodeView) (config, error) {
 // connectors.
 // It's safe for concurrent use.
 type client struct {
-	logf logger.Logf
+	logf    logger.Logf
+	addrsCh chan addrs
 
 	mu            sync.Mutex // protects the fields below
 	magicIPPool   *ippool
@@ -442,12 +458,100 @@ func (c *client) reserveAddresses(domain dnsname.FQDN, dst netip.Addr) (addrs, e
 	if err := c.assignments.insert(as); err != nil {
 		return addrs{}, err
 	}
+	c.enqueueAddressAssignment(as)
 	return as, nil
 }
 
+func (e *extension) sendLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case as := <-e.conn25.client.addrsCh:
+			if err := e.sendAddressAssignment(ctx, as); err != nil {
+				e.conn25.client.logf("error sending transit IP assignment: %v", err)
+			}
+		}
+	}
+}
+
 func (c *client) enqueueAddressAssignment(addrs addrs) {
-	// TODO(fran) 2026-02-03 asynchronously send peerapi req to connector to
-	// allocate these addresses for us.
+	select {
+	case c.addrsCh <- addrs:
+	default:
+		c.logf("address assignment queue full, dropping transit assignment for %v", addrs.domain)
+	}
+}
+
+func makePeerAPIReq(ctx context.Context, httpClient *http.Client, urlBase string, as addrs) error {
+	url := urlBase + "/v0/connector/transit-ip"
+
+	reqBody := ConnectorTransitIPRequest{
+		TransitIPs: []TransitIPRequest{{
+			TransitIP:     as.transit,
+			DestinationIP: as.dst,
+			App:           as.app,
+		}},
+	}
+	bs, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("marshalling request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bs))
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("sending request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("connector returned HTTP %d", resp.StatusCode)
+	}
+
+	var respBody ConnectorTransitIPResponse
+	if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
+		return fmt.Errorf("decoding response: %w", err)
+	}
+	if len(respBody.TransitIPs) > 0 && respBody.TransitIPs[0].Code != OK {
+		return fmt.Errorf("connector error: %s", respBody.TransitIPs[0].Message)
+	}
+	return nil
+}
+
+func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) error {
+	var app appctype.Conn25Attr
+	found := false
+	for _, candApp := range e.conn25.client.config.apps {
+		if candApp.Name == as.app {
+			found = true
+			app = candApp
+			break
+		}
+	}
+	if !found {
+		e.conn25.client.logf("App not found for app: %s (domain: %s)", as.app, as.domain)
+		return errors.New("app not found")
+	}
+
+	nb := e.host.NodeBackend()
+	peers := nb.AppendMatchingPeers(nil, nb.PeerHasPeerAPI)
+	peers = appc.PickConnector(peers, app)
+	var urlBase string
+	for _, p := range peers {
+		urlBase = nb.PeerAPIBase(p)
+		if urlBase != "" {
+			break
+		}
+	}
+	if urlBase == "" {
+		return errors.New("no connector peer found to handle address assignment")
+	}
+	client := e.backend.Sys().Dialer.Get().PeerAPIHTTPClient()
+	return makePeerAPIReq(ctx, client, urlBase, as)
 }
 
 func (c *client) mapDNSResponse(buf []byte) []byte {
@@ -506,7 +610,6 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 				c.logf("assigned connector addresses unexpectedly empty: %v", err)
 				return buf
 			}
-			c.enqueueAddressAssignment(addrs)
 		default:
 			if err := p.SkipAnswer(); err != nil {
 				c.logf("error parsing dns response: %v", err)

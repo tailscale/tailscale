@@ -5,17 +5,24 @@ package conn25
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/ipn/ipnext"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsd"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/opt"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
@@ -520,5 +527,124 @@ func TestReserveAddressesDeduplicated(t *testing.T) {
 	}
 	if got := len(c.client.assignments.byDomainDst); got != 1 {
 		t.Errorf("want 1 entry in byDomainDst, got %d", got)
+	}
+}
+
+type testNodeBackend struct {
+	ipnext.NodeBackend
+	peers      []tailcfg.NodeView
+	peerAPIURL string // should be per peer but there's only one peer in our test so this is ok for now
+}
+
+func (nb *testNodeBackend) AppendMatchingPeers(base []tailcfg.NodeView, pred func(tailcfg.NodeView) bool) []tailcfg.NodeView {
+	for _, p := range nb.peers {
+		if pred(p) {
+			base = append(base, p)
+		}
+	}
+	return base
+}
+
+func (nb *testNodeBackend) PeerHasPeerAPI(p tailcfg.NodeView) bool {
+	return true
+}
+
+func (nb *testNodeBackend) PeerAPIBase(p tailcfg.NodeView) string {
+	return nb.peerAPIURL
+}
+
+type testHost struct {
+	ipnext.Host
+	nb    ipnext.NodeBackend
+	hooks ipnext.Hooks
+}
+
+func (h *testHost) NodeBackend() ipnext.NodeBackend { return h.nb }
+func (h *testHost) Hooks() *ipnext.Hooks            { return &h.hooks }
+
+type testSafeBackend struct {
+	ipnext.SafeBackend
+	sys *tsd.System
+}
+
+func (b *testSafeBackend) Sys() *tsd.System { return b.sys }
+
+// TestEnqueueAddress tests that after enqueueAddress has been called a
+// peerapi request is made to a peer.
+func TestEnqueueAddress(t *testing.T) {
+	// make a fake peer to test against
+	received := make(chan ConnectorTransitIPRequest, 1)
+	peersAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v0/connector/transit-ip" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		var req ConnectorTransitIPRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad body", http.StatusBadRequest)
+			return
+		}
+		received <- req
+		resp := ConnectorTransitIPResponse{
+			TransitIPs: []TransitIPResponse{{Code: OK}},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer peersAPI.Close()
+
+	connectorPeer := (&tailcfg.Node{
+		ID:       tailcfg.NodeID(1),
+		Tags:     []string{"tag:connector"},
+		Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
+	}).View()
+
+	// make extension to test
+	sys := &tsd.System{}
+	sys.Dialer.Set(&tsdial.Dialer{Logf: logger.Discard})
+
+	ext := &extension{
+		conn25:  newConn25(logger.Discard),
+		backend: &testSafeBackend{sys: sys},
+	}
+	if err := ext.Init(&testHost{
+		nb: &testNodeBackend{
+			peers:      []tailcfg.NodeView{connectorPeer},
+			peerAPIURL: peersAPI.URL,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Shutdown()
+
+	ext.conn25.client.config.apps = []appctype.Conn25Attr{
+		{Name: "app1", Connectors: []string{"tag:connector"}, Domains: []string{"example.com"}},
+	}
+
+	as := addrs{
+		dst:     netip.MustParseAddr("1.2.3.4"),
+		magic:   netip.MustParseAddr("100.64.0.0"),
+		transit: netip.MustParseAddr("169.254.0.1"),
+		domain:  "example.com.",
+		app:     "app1",
+	}
+	ext.conn25.client.enqueueAddressAssignment(as)
+
+	select {
+	case got := <-received:
+		if len(got.TransitIPs) != 1 {
+			t.Fatalf("want 1 TransitIP in request, got %d", len(got.TransitIPs))
+		}
+		tip := got.TransitIPs[0]
+		if tip.TransitIP != as.transit {
+			t.Errorf("TransitIP: got %v, want %v", tip.TransitIP, as.transit)
+		}
+		if tip.DestinationIP != as.dst {
+			t.Errorf("DestinationIP: got %v, want %v", tip.DestinationIP, as.dst)
+		}
+		if tip.App != as.app {
+			t.Errorf("App: got %q, want %q", tip.App, as.app)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for connector to receive request")
 	}
 }
