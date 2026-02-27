@@ -2792,3 +2792,76 @@ func TestResolveAuthKey(t *testing.T) {
 		})
 	}
 }
+
+// TestSelfDial verifies that a single tsnet.Server can Dial its own Listen
+// address. This is a regression test for a bug where self-addressed TCP SYN
+// packets were sent to WireGuard (which has no peer for the node's own IP)
+// and silently dropped, causing Dial to hang indefinitely.
+func TestSelfDial(t *testing.T) {
+	tstest.Shard(t)
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	controlURL, _ := startControl(t)
+	s1, s1ip, _ := startServer(t, ctx, controlURL, "s1")
+
+	ln, err := s1.Listen("tcp", ":8081")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	errc := make(chan error, 1)
+	connc := make(chan net.Conn, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			errc <- err
+			return
+		}
+		connc <- c
+	}()
+
+	// Self-dial: the same server dials its own Tailscale IP.
+	w, err := s1.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip))
+	if err != nil {
+		t.Fatalf("self-dial failed: %v", err)
+	}
+	defer w.Close()
+
+	var accepted net.Conn
+	select {
+	case accepted = <-connc:
+	case err := <-errc:
+		t.Fatalf("accept failed: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for accept")
+	}
+	defer accepted.Close()
+
+	// Verify bidirectional data exchange.
+	want := "hello self"
+	if _, err := io.WriteString(w, want); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(accepted, got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Errorf("client->server: got %q, want %q", got, want)
+	}
+
+	reply := "hello back"
+	if _, err := io.WriteString(accepted, reply); err != nil {
+		t.Fatal(err)
+	}
+	gotReply := make([]byte, len(reply))
+	if _, err := io.ReadFull(w, gotReply); err != nil {
+		t.Fatal(err)
+	}
+	if string(gotReply) != reply {
+		t.Errorf("server->client: got %q, want %q", gotReply, reply)
+	}
+}

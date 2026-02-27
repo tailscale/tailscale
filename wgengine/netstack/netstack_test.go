@@ -15,6 +15,7 @@ import (
 
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/envknob"
@@ -1072,4 +1073,296 @@ func makeUDP6PacketBuffer(src, dst netip.AddrPort) *stack.PacketBuffer {
 	udp.SetChecksum(^udp.CalculateChecksum(xsum))
 
 	return pkt
+}
+
+// TestIsSelfDst verifies that isSelfDst correctly identifies packets whose
+// destination IP is a local Tailscale IP assigned to this node.
+func TestIsSelfDst(t *testing.T) {
+	var (
+		selfIP4   = netip.MustParseAddr("100.64.1.2")
+		selfIP6   = netip.MustParseAddr("fd7a:115c:a1e0::123")
+		remoteIP4 = netip.MustParseAddr("100.64.99.88")
+		remoteIP6 = netip.MustParseAddr("fd7a:115c:a1e0::99")
+	)
+
+	ns := makeNetstack(t, func(impl *Impl) {
+		impl.ProcessLocalIPs = true
+		impl.atomicIsLocalIPFunc.Store(func(addr netip.Addr) bool {
+			return addr == selfIP4 || addr == selfIP6
+		})
+	})
+
+	testCases := []struct {
+		name     string
+		src, dst netip.AddrPort
+		want     bool
+	}{
+		{
+			name: "self_to_self_v4",
+			src:  netip.AddrPortFrom(selfIP4, 12345),
+			dst:  netip.AddrPortFrom(selfIP4, 8081),
+			want: true,
+		},
+		{
+			name: "self_to_self_v6",
+			src:  netip.AddrPortFrom(selfIP6, 12345),
+			dst:  netip.AddrPortFrom(selfIP6, 8081),
+			want: true,
+		},
+		{
+			name: "remote_to_self_v4",
+			src:  netip.AddrPortFrom(remoteIP4, 12345),
+			dst:  netip.AddrPortFrom(selfIP4, 8081),
+			want: true,
+		},
+		{
+			name: "remote_to_self_v6",
+			src:  netip.AddrPortFrom(remoteIP6, 12345),
+			dst:  netip.AddrPortFrom(selfIP6, 8081),
+			want: true,
+		},
+		{
+			name: "self_to_remote_v4",
+			src:  netip.AddrPortFrom(selfIP4, 12345),
+			dst:  netip.AddrPortFrom(remoteIP4, 8081),
+			want: false,
+		},
+		{
+			name: "self_to_remote_v6",
+			src:  netip.AddrPortFrom(selfIP6, 12345),
+			dst:  netip.AddrPortFrom(remoteIP6, 8081),
+			want: false,
+		},
+		{
+			name: "remote_to_remote_v4",
+			src:  netip.AddrPortFrom(remoteIP4, 12345),
+			dst:  netip.MustParseAddrPort("100.64.77.66:7777"),
+			want: false,
+		},
+		{
+			name: "service_ip_to_self_v4",
+			src:  netip.AddrPortFrom(serviceIP, 53),
+			dst:  netip.AddrPortFrom(selfIP4, 9999),
+			want: true,
+		},
+		{
+			name: "service_ip_to_self_v6",
+			src:  netip.AddrPortFrom(serviceIPv6, 53),
+			dst:  netip.AddrPortFrom(selfIP6, 9999),
+			want: true,
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			var pkt *stack.PacketBuffer
+			if tt.src.Addr().Is4() {
+				pkt = makeUDP4PacketBuffer(tt.src, tt.dst)
+			} else {
+				pkt = makeUDP6PacketBuffer(tt.src, tt.dst)
+			}
+			defer pkt.DecRef()
+
+			if got := ns.isSelfDst(pkt); got != tt.want {
+				t.Errorf("isSelfDst(%v -> %v) = %v, want %v", tt.src, tt.dst, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDeliverLoopback verifies that DeliverLoopback correctly re-serializes an
+// outbound packet and delivers it back into gVisor's inbound path.
+func TestDeliverLoopback(t *testing.T) {
+	ep := newLinkEndpoint(64, 1280, "", groNotSupported)
+
+	// Track delivered packets via a mock dispatcher.
+	type delivered struct {
+		proto tcpip.NetworkProtocolNumber
+		data  []byte
+	}
+	deliveredCh := make(chan delivered, 4)
+	ep.Attach(&mockDispatcher{
+		onDeliverNetworkPacket: func(proto tcpip.NetworkProtocolNumber, pkt *stack.PacketBuffer) {
+			// Capture the raw bytes from the delivered packet. At this
+			// point the packet is unparsed — everything is in the
+			// payload, no headers have been consumed yet.
+			buf := pkt.ToBuffer()
+			raw := buf.Flatten()
+			deliveredCh <- delivered{proto: proto, data: raw}
+		},
+	})
+
+	t.Run("ipv4", func(t *testing.T) {
+		selfAddr := netip.MustParseAddrPort("100.64.1.2:8081")
+		pkt := makeUDP4PacketBuffer(selfAddr, selfAddr)
+		// Capture what the outbound bytes look like before loopback.
+		wantLen := pkt.Size()
+		wantProto := pkt.NetworkProtocolNumber
+
+		if !ep.DeliverLoopback(pkt) {
+			t.Fatal("DeliverLoopback returned false")
+		}
+
+		select {
+		case got := <-deliveredCh:
+			if got.proto != wantProto {
+				t.Errorf("proto = %d, want %d", got.proto, wantProto)
+			}
+			if len(got.data) != wantLen {
+				t.Errorf("data length = %d, want %d", len(got.data), wantLen)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timeout waiting for loopback delivery")
+		}
+	})
+
+	t.Run("ipv6", func(t *testing.T) {
+		selfAddr := netip.MustParseAddrPort("[fd7a:115c:a1e0::123]:8081")
+		pkt := makeUDP6PacketBuffer(selfAddr, selfAddr)
+		wantLen := pkt.Size()
+		wantProto := pkt.NetworkProtocolNumber
+
+		if !ep.DeliverLoopback(pkt) {
+			t.Fatal("DeliverLoopback returned false")
+		}
+
+		select {
+		case got := <-deliveredCh:
+			if got.proto != wantProto {
+				t.Errorf("proto = %d, want %d", got.proto, wantProto)
+			}
+			if len(got.data) != wantLen {
+				t.Errorf("data length = %d, want %d", len(got.data), wantLen)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timeout waiting for loopback delivery")
+		}
+	})
+
+	t.Run("nil_dispatcher", func(t *testing.T) {
+		ep2 := newLinkEndpoint(64, 1280, "", groNotSupported)
+		// Don't attach a dispatcher.
+		selfAddr := netip.MustParseAddrPort("100.64.1.2:8081")
+		pkt := makeUDP4PacketBuffer(selfAddr, selfAddr)
+		if ep2.DeliverLoopback(pkt) {
+			t.Error("DeliverLoopback should return false with nil dispatcher")
+		}
+		// pkt refcount was consumed by DeliverLoopback, so we don't DecRef.
+	})
+}
+
+// mockDispatcher implements stack.NetworkDispatcher for testing.
+type mockDispatcher struct {
+	onDeliverNetworkPacket func(tcpip.NetworkProtocolNumber, *stack.PacketBuffer)
+}
+
+func (d *mockDispatcher) DeliverNetworkPacket(proto tcpip.NetworkProtocolNumber, pkt *stack.PacketBuffer) {
+	if d.onDeliverNetworkPacket != nil {
+		d.onDeliverNetworkPacket(proto, pkt)
+	}
+}
+
+func (d *mockDispatcher) DeliverLinkPacket(tcpip.NetworkProtocolNumber, *stack.PacketBuffer) {}
+
+// udp4raw constructs a valid raw IPv4+UDP packet with proper checksums.
+func udp4raw(t testing.TB, src, dst netip.Addr, sport, dport uint16, payload []byte) []byte {
+	t.Helper()
+	totalLen := header.IPv4MinimumSize + header.UDPMinimumSize + len(payload)
+	buf := make([]byte, totalLen)
+
+	ip := header.IPv4(buf)
+	ip.Encode(&header.IPv4Fields{
+		TotalLength: uint16(totalLen),
+		Protocol:    uint8(header.UDPProtocolNumber),
+		TTL:         64,
+		SrcAddr:     tcpip.AddrFrom4Slice(src.AsSlice()),
+		DstAddr:     tcpip.AddrFrom4Slice(dst.AsSlice()),
+	})
+	ip.SetChecksum(^ip.CalculateChecksum())
+
+	// Build UDP header + payload.
+	u := header.UDP(buf[header.IPv4MinimumSize:])
+	u.Encode(&header.UDPFields{
+		SrcPort: sport,
+		DstPort: dport,
+		Length:  uint16(header.UDPMinimumSize + len(payload)),
+	})
+	copy(buf[header.IPv4MinimumSize+header.UDPMinimumSize:], payload)
+
+	xsum := header.PseudoHeaderChecksum(
+		header.UDPProtocolNumber,
+		tcpip.AddrFrom4Slice(src.AsSlice()),
+		tcpip.AddrFrom4Slice(dst.AsSlice()),
+		uint16(header.UDPMinimumSize+len(payload)),
+	)
+	u.SetChecksum(^header.UDP(buf[header.IPv4MinimumSize:]).CalculateChecksum(xsum))
+	return buf
+}
+
+// TestInjectLoopback verifies that the inject goroutine delivers self-addressed
+// packets back into gVisor (via DeliverLoopback) instead of sending them to
+// WireGuard outbound. This is a regression test for a bug where self-dial
+// packets were sent to WireGuard and silently dropped.
+func TestInjectLoopback(t *testing.T) {
+	selfIP4 := netip.MustParseAddr("100.64.1.2")
+
+	ns := makeNetstack(t, func(impl *Impl) {
+		impl.ProcessLocalIPs = true
+		impl.atomicIsLocalIPFunc.Store(func(addr netip.Addr) bool {
+			return addr == selfIP4
+		})
+	})
+
+	// Register gVisor's NIC address so the stack accepts and routes
+	// packets for this IP.
+	protocolAddr := tcpip.ProtocolAddress{
+		Protocol:          header.IPv4ProtocolNumber,
+		AddressWithPrefix: tcpip.AddrFrom4(selfIP4.As4()).WithPrefix(),
+	}
+	if err := ns.ipstack.AddProtocolAddress(nicID, protocolAddr, stack.AddressProperties{}); err != nil {
+		t.Fatalf("AddProtocolAddress: %v", err)
+	}
+
+	// Bind a UDP socket on the gVisor stack to receive the loopback packet.
+	pc, err := gonet.DialUDP(ns.ipstack, &tcpip.FullAddress{
+		NIC:  nicID,
+		Addr: tcpip.AddrFrom4(selfIP4.As4()),
+		Port: 8081,
+	}, nil, header.IPv4ProtocolNumber)
+	if err != nil {
+		t.Fatalf("DialUDP: %v", err)
+	}
+	defer pc.Close()
+
+	// Build a valid self-addressed UDP packet from raw bytes and wrap it
+	// in a gVisor PacketBuffer with headers already pushed, as gVisor's
+	// outbound path produces.
+	payload := []byte("loopback test")
+	raw := udp4raw(t, selfIP4, selfIP4, 12345, 8081, payload)
+
+	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
+		ReserveHeaderBytes: header.IPv4MinimumSize + header.UDPMinimumSize,
+		Payload:            buffer.MakeWithData(payload),
+	})
+	copy(pkt.TransportHeader().Push(header.UDPMinimumSize),
+		raw[header.IPv4MinimumSize:header.IPv4MinimumSize+header.UDPMinimumSize])
+	pkt.TransportProtocolNumber = header.UDPProtocolNumber
+	copy(pkt.NetworkHeader().Push(header.IPv4MinimumSize), raw[:header.IPv4MinimumSize])
+	pkt.NetworkProtocolNumber = header.IPv4ProtocolNumber
+
+	if err := ns.linkEP.q.Write(pkt); err != nil {
+		t.Fatalf("queue.Write: %v", err)
+	}
+
+	// The inject goroutine should detect the self-addressed packet via
+	// isSelfDst and deliver it back into gVisor via DeliverLoopback.
+	pc.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 256)
+	n, _, err := pc.ReadFrom(buf)
+	if err != nil {
+		t.Fatalf("ReadFrom: %v (self-addressed packet was not looped back)", err)
+	}
+	if got := string(buf[:n]); got != "loopback test" {
+		t.Errorf("got %q, want %q", got, "loopback test")
+	}
 }
