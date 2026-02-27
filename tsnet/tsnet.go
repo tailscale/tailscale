@@ -196,6 +196,7 @@ type Server struct {
 
 	mu                  sync.Mutex
 	listeners           map[listenKey]*listener
+	nextEphemeralPort   uint16 // next port to try in ephemeral range; 0 means use ephemeralPortFirst
 	fallbackTCPHandlers set.HandleSet[FallbackTCPHandler]
 	dialer              *tsdial.Dialer
 	closed              bool
@@ -1087,16 +1088,27 @@ func (s *Server) ListenPacket(network, addr string) (net.PacketConn, error) {
 			network = "udp6"
 		}
 	}
+	if err := s.Start(); err != nil {
+		return nil, err
+	}
 
-	netLn, err := s.listen(network, addr, listenOnTailnet)
+	// Create the gVisor PacketConn first so it can handle port 0 allocation.
+	pc, err := s.netstack.ListenPacket(network, ap.String())
 	if err != nil {
 		return nil, err
 	}
-	ln := netLn.(*listener)
 
-	pc, err := s.netstack.ListenPacket(network, ap.String())
+	// If port 0 was requested, use the port gVisor assigned.
+	if ap.Port() == 0 {
+		if p := portFromAddr(pc.LocalAddr()); p != 0 {
+			ap = netip.AddrPortFrom(ap.Addr(), p)
+			addr = ap.String()
+		}
+	}
+
+	ln, err := s.registerListener(network, addr, ap, listenOnTailnet, nil)
 	if err != nil {
-		ln.Close()
+		pc.Close()
 		return nil, err
 	}
 
@@ -1609,6 +1621,11 @@ func resolveListenAddr(network, addr string) (netip.AddrPort, error) {
 	if err != nil {
 		return zero, fmt.Errorf("invalid Listen addr %q; host part must be empty or IP literal", host)
 	}
+	// Normalize unspecified addresses (0.0.0.0, ::) to the zero value,
+	// equivalent to an empty host, so they match the node's own IPs.
+	if bindHostOrZero.IsUnspecified() {
+		return netip.AddrPortFrom(netip.Addr{}, uint16(port)), nil
+	}
 	if strings.HasSuffix(network, "4") && !bindHostOrZero.Is4() {
 		return zero, fmt.Errorf("invalid non-IPv4 addr %v for network %q", host, network)
 	}
@@ -1617,6 +1634,17 @@ func resolveListenAddr(network, addr string) (netip.AddrPort, error) {
 	}
 	return netip.AddrPortFrom(bindHostOrZero, uint16(port)), nil
 }
+
+// ephemeral port range for non-TUN listeners requesting port 0. This range is
+// chosen to reduce the probability of collision with host listeners, avoiding
+// both the typical ephemeral range, and privilege listener ranges. Collisions
+// may still occur and could for example shadow host sockets in a netstack+TUN
+// situation, the range here is a UX improvement, not a guarantee that
+// application authors will never have to consider these cases.
+const (
+	ephemeralPortFirst = 10002
+	ephemeralPortLast  = 19999
+)
 
 func (s *Server) listen(network, addr string, lnOn listenOn) (net.Listener, error) {
 	switch network {
@@ -1631,6 +1659,76 @@ func (s *Server) listen(network, addr string, lnOn listenOn) (net.Listener, erro
 	if err := s.Start(); err != nil {
 		return nil, err
 	}
+
+	isTCP := network == "" || network == "tcp" || network == "tcp4" || network == "tcp6"
+
+	// When using a TUN with TCP, create a gVisor TCP listener.
+	// gVisor handles port 0 allocation natively.
+	var gonetLn net.Listener
+	if s.Tun != nil && isTCP {
+		gonetLn, err = s.listenTCP(network, host)
+		if err != nil {
+			return nil, err
+		}
+		// If port 0 was requested, update host to the port gVisor assigned
+		// so that the listenKey uses the real port.
+		if host.Port() == 0 {
+			if p := portFromAddr(gonetLn.Addr()); p != 0 {
+				host = netip.AddrPortFrom(host.Addr(), p)
+				addr = listenAddr(host)
+			}
+		}
+	}
+
+	ln, err := s.registerListener(network, addr, host, lnOn, gonetLn)
+	if err != nil {
+		if gonetLn != nil {
+			gonetLn.Close()
+		}
+		return nil, err
+	}
+	return ln, nil
+}
+
+// listenTCP creates a gVisor TCP listener for TUN mode.
+func (s *Server) listenTCP(network string, host netip.AddrPort) (net.Listener, error) {
+	var nsNetwork string
+	nsAddr := host
+	switch {
+	case network == "tcp4" || network == "tcp6":
+		nsNetwork = network
+	case host.Addr().Is4():
+		nsNetwork = "tcp4"
+	case host.Addr().Is6():
+		nsNetwork = "tcp6"
+	default:
+		// Wildcard address: use tcp6 for dual-stack (accepts both v4 and v6).
+		nsNetwork = "tcp6"
+		nsAddr = netip.AddrPortFrom(netip.IPv6Unspecified(), host.Port())
+	}
+	ln, err := s.netstack.ListenTCP(nsNetwork, nsAddr.String())
+	if err != nil {
+		return nil, fmt.Errorf("tsnet: %w", err)
+	}
+	return ln, nil
+}
+
+// registerListener allocates a port (if 0) and registers the listener in
+// s.listeners under s.mu.
+func (s *Server) registerListener(network, addr string, host netip.AddrPort, lnOn listenOn, gonetLn net.Listener) (*listener, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Allocate an ephemeral port for non-TUN listeners requesting port 0.
+	if host.Port() == 0 && gonetLn == nil {
+		p, ok := s.allocEphemeralLocked(network, host.Addr(), lnOn)
+		if !ok {
+			return nil, errors.New("tsnet: no available port in ephemeral range")
+		}
+		host = netip.AddrPortFrom(host.Addr(), p)
+		addr = listenAddr(host)
+	}
+
 	var keys []listenKey
 	switch lnOn {
 	case listenOnTailnet:
@@ -1642,47 +1740,19 @@ func (s *Server) listen(network, addr string, lnOn listenOn) (net.Listener, erro
 		keys = append(keys, listenKey{network, host.Addr(), host.Port(), true})
 	}
 
-	ln := &listener{
-		s:    s,
-		keys: keys,
-		addr: addr,
-
-		closedc: make(chan struct{}),
-		conn:    make(chan net.Conn),
-	}
-
-	// When using a TUN with TCP, create a gVisor TCP listener.
-	if s.Tun != nil && (network == "" || network == "tcp" || network == "tcp4" || network == "tcp6") {
-		var nsNetwork string
-		nsAddr := host
-		switch {
-		case network == "tcp4" || network == "tcp6":
-			nsNetwork = network
-		case host.Addr().Is4():
-			nsNetwork = "tcp4"
-		case host.Addr().Is6():
-			nsNetwork = "tcp6"
-		default:
-			// Wildcard address: use tcp6 for dual-stack (accepts both v4 and v6).
-			nsNetwork = "tcp6"
-			nsAddr = netip.AddrPortFrom(netip.IPv6Unspecified(), host.Port())
-		}
-		gonetLn, err := s.netstack.ListenTCP(nsNetwork, nsAddr.String())
-		if err != nil {
-			return nil, fmt.Errorf("tsnet: %w", err)
-		}
-		ln.gonetLn = gonetLn
-	}
-
-	s.mu.Lock()
 	for _, key := range keys {
 		if _, ok := s.listeners[key]; ok {
-			s.mu.Unlock()
-			if ln.gonetLn != nil {
-				ln.gonetLn.Close()
-			}
 			return nil, fmt.Errorf("tsnet: listener already open for %s, %s", network, addr)
 		}
+	}
+
+	ln := &listener{
+		s:       s,
+		keys:    keys,
+		addr:    addr,
+		closedc: make(chan struct{}),
+		conn:    make(chan net.Conn),
+		gonetLn: gonetLn,
 	}
 	if s.listeners == nil {
 		s.listeners = make(map[listenKey]*listener)
@@ -1690,8 +1760,71 @@ func (s *Server) listen(network, addr string, lnOn listenOn) (net.Listener, erro
 	for _, key := range keys {
 		s.listeners[key] = ln
 	}
-	s.mu.Unlock()
 	return ln, nil
+}
+
+// allocEphemeralLocked finds an unused port in [ephemeralPortFirst,
+// ephemeralPortLast] that does not collide with any existing listener for the
+// given network, host, and listenOn. s.mu must be held.
+func (s *Server) allocEphemeralLocked(network string, host netip.Addr, lnOn listenOn) (uint16, bool) {
+	if s.nextEphemeralPort < ephemeralPortFirst || s.nextEphemeralPort > ephemeralPortLast {
+		s.nextEphemeralPort = ephemeralPortFirst
+	}
+	start := s.nextEphemeralPort
+	for {
+		p := s.nextEphemeralPort
+		s.nextEphemeralPort++
+		if s.nextEphemeralPort > ephemeralPortLast {
+			s.nextEphemeralPort = ephemeralPortFirst
+		}
+		if !s.portInUseLocked(network, host, p, lnOn) {
+			return p, true
+		}
+		if s.nextEphemeralPort == start {
+			return 0, false
+		}
+	}
+}
+
+// portInUseLocked reports whether any listenKey for the given network, host,
+// port, and listenOn already exists in s.listeners.
+func (s *Server) portInUseLocked(network string, host netip.Addr, port uint16, lnOn listenOn) bool {
+	switch lnOn {
+	case listenOnTailnet:
+		_, ok := s.listeners[listenKey{network, host, port, false}]
+		return ok
+	case listenOnFunnel:
+		_, ok := s.listeners[listenKey{network, host, port, true}]
+		return ok
+	case listenOnBoth:
+		_, ok1 := s.listeners[listenKey{network, host, port, false}]
+		_, ok2 := s.listeners[listenKey{network, host, port, true}]
+		return ok1 || ok2
+	}
+	return false
+}
+
+// listenAddr formats host as a listen address string.
+// If host has no IP, it returns ":port".
+func listenAddr(host netip.AddrPort) string {
+	if !host.Addr().IsValid() {
+		return ":" + strconv.Itoa(int(host.Port()))
+	}
+	return host.String()
+}
+
+// portFromAddr extracts the port from a net.Addr, or returns 0.
+func portFromAddr(a net.Addr) uint16 {
+	switch v := a.(type) {
+	case *net.TCPAddr:
+		return uint16(v.Port)
+	case *net.UDPAddr:
+		return uint16(v.Port)
+	}
+	if ap, err := netip.ParseAddrPort(a.String()); err == nil {
+		return ap.Port()
+	}
+	return 0
 }
 
 // GetRootPath returns the root path of the tsnet server.
