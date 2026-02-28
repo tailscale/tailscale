@@ -72,6 +72,7 @@ func run(logger *zap.SugaredLogger) error {
 		configPath = os.Getenv("TS_K8S_PROXY_CONFIG")
 		podUID     = os.Getenv("POD_UID")
 		podIP      = os.Getenv("POD_IP")
+		port       = os.Getenv("PORT")
 	)
 	if configPath == "" {
 		return errors.New("TS_K8S_PROXY_CONFIG unset")
@@ -176,11 +177,21 @@ func run(logger *zap.SugaredLogger) error {
 		authKey = *cfg.Parsed.AuthKey
 	}
 
+	var tsPort uint16
+	if port != "" {
+		p, err := strconv.ParseUint(port, 10, 16)
+		if err != nil {
+			return fmt.Errorf("invalid PORT %q: %w", port, err)
+		}
+		tsPort = uint16(p)
+	}
+
 	ts := &tsnet.Server{
 		Logf:     logger.Named("tsnet").Debugf,
 		UserLogf: logger.Named("tsnet").Infof,
 		Store:    st,
 		AuthKey:  authKey,
+		Port:     tsPort,
 	}
 
 	if cfg.Parsed.ServerURL != nil {
