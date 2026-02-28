@@ -198,7 +198,7 @@ type Server struct {
 	listeners           map[listenKey]*listener
 	fallbackTCPHandlers set.HandleSet[FallbackTCPHandler]
 	dialer              *tsdial.Dialer
-	closed              bool
+	closeOnce           sync.Once
 }
 
 // FallbackTCPHandler describes the callback which
@@ -439,11 +439,29 @@ func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {
 //
 // It must not be called before or concurrently with Start.
 func (s *Server) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
+	didClose := false
+	s.closeOnce.Do(func() {
+		didClose = true
+		s.close()
+	})
+	if !didClose {
 		return fmt.Errorf("tsnet: %w", net.ErrClosed)
 	}
+	return nil
+}
+
+func (s *Server) close() {
+	// Close listeners under s.mu, then release before the heavy shutdown
+	// operations. We must not hold s.mu during netstack.Close, lb.Shutdown,
+	// etc. because callbacks from gVisor (e.g. getTCPHandlerForFlow)
+	// acquire s.mu, and waiting for those goroutines while holding the lock
+	// would deadlock.
+	s.mu.Lock()
+	for _, ln := range s.listeners {
+		ln.closeLocked()
+	}
+	s.mu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -466,12 +484,11 @@ func (s *Server) Close() error {
 		}
 	}()
 
-	if s.netstack != nil {
-		s.netstack.Close()
-		s.netstack = nil
-	}
 	if s.shutdownCancel != nil {
 		s.shutdownCancel()
+	}
+	if s.netstack != nil {
+		s.netstack.Close()
 	}
 	if s.lb != nil {
 		s.lb.Shutdown()
@@ -489,13 +506,8 @@ func (s *Server) Close() error {
 		s.loopbackListener.Close()
 	}
 
-	for _, ln := range s.listeners {
-		ln.closeLocked()
-	}
 	wg.Wait()
 	s.sys.Bus.Get().Close()
-	s.closed = true
-	return nil
 }
 
 func (s *Server) doInit() {
