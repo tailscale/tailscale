@@ -1881,8 +1881,8 @@ type chanTUN struct {
 
 func newChanTUN() *chanTUN {
 	t := &chanTUN{
-		Inbound:  make(chan []byte, 10),
-		Outbound: make(chan []byte, 10),
+		Inbound:  make(chan []byte, 1024),
+		Outbound: make(chan []byte, 1024),
 		closed:   make(chan struct{}),
 		events:   make(chan tun.Event, 1),
 	}
@@ -1922,6 +1922,10 @@ func (t *chanTUN) Write(bufs [][]byte, offset int) (int, error) {
 		case <-t.closed:
 			return 0, errors.New("closed")
 		case t.Inbound <- slices.Clone(pkt):
+		default:
+			// Drop the packet if the channel is full, like a real
+			// TUN under congestion. This avoids blocking the
+			// WireGuard send path when no goroutine is draining.
 		}
 	}
 	return len(bufs), nil
