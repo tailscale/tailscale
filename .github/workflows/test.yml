@@ -806,7 +806,7 @@ jobs:
         echo
         git diff --name-only --exit-code || (echo "The files above need updating. Please run 'go generate'."; exit 1)
 
-  go_mod_tidy:
+  make_tidy:
     runs-on: ubuntu-24.04
     needs: gomod-cache
     steps:
@@ -820,7 +820,7 @@ jobs:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
-    - name: check that 'go mod tidy' is clean
+    - name: check that 'make tidy' is clean
       working-directory: src
       run: |
         make tidy
@@ -921,7 +921,7 @@ jobs:
       - fuzz
       - depaware
       - go_generate
-      - go_mod_tidy
+      - make_tidy
       - licenses
       - staticcheck
     runs-on: ubuntu-24.04
@@ -967,7 +967,7 @@ jobs:
       - fuzz
       - depaware
       - go_generate
-      - go_mod_tidy
+      - make_tidy
       - licenses
       - staticcheck
     steps:
@@ -991,7 +991,7 @@ jobs:
       - tailscale_go
       - depaware
       - go_generate
-      - go_mod_tidy
+      - make_tidy
       - licenses
       - staticcheck
     steps:
