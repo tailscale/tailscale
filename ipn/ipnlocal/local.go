@@ -5129,6 +5129,16 @@ func (b *LocalBackend) authReconfigLocked() {
 	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.NetMon.Get(), b.sys.ControlKnobs(), version.OS())
 	rcfg := b.routerConfigLocked(cfg, prefs, nm, oneCGNATRoute)
 
+	// Add these extra Allowed IPs after router configuration, because the expected
+	// extension (features/conn25), does not want these routes installed on the OS.
+	// See also [Hooks.ExtraWireGuardAllowedIPs].
+	if extraAllowedIPsFn, ok := b.extHost.hooks.ExtraWireGuardAllowedIPs.GetOk(); ok {
+		for i := range cfg.Peers {
+			extras := extraAllowedIPsFn(cfg.Peers[i].PublicKey)
+			cfg.Peers[i].AllowedIPs = extras.AppendTo(cfg.Peers[i].AllowedIPs)
+		}
+	}
+
 	err = b.e.Reconfig(cfg, rcfg, dcfg)
 	if err == wgengine.ErrNoChanges {
 		return
