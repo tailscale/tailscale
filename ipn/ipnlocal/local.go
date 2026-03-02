@@ -1031,7 +1031,6 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	// If the local network configuration has changed, our filter may
 	// need updating to tweak default routes.
 	b.updateFilterLocked(prefs)
-	updateExitNodeUsageWarning(prefs, delta.CurrentState(), b.health)
 
 	if buildfeatures.HasPeerAPIServer {
 		cn := b.currentNode()
@@ -4211,35 +4210,6 @@ func (b *LocalBackend) isDefaultServerLocked() bool {
 		return true // assume true until set otherwise
 	}
 	return prefs.ControlURLOrDefault(b.polc) == ipn.DefaultControlURL
-}
-
-var exitNodeMisconfigurationWarnable = health.Register(&health.Warnable{
-	Code:     "exit-node-misconfiguration",
-	Title:    "Exit node misconfiguration",
-	Severity: health.SeverityMedium,
-	Text: func(args health.Args) string {
-		return "Exit node misconfiguration: " + args[health.ArgError]
-	},
-})
-
-// updateExitNodeUsageWarning updates a warnable meant to notify users of
-// configuration issues that could break exit node usage.
-func updateExitNodeUsageWarning(p ipn.PrefsView, state *netmon.State, healthTracker *health.Tracker) {
-	if !buildfeatures.HasUseExitNode {
-		return
-	}
-	var msg string
-	if p.ExitNodeIP().IsValid() || p.ExitNodeID() != "" {
-		warn, _ := netutil.CheckReversePathFiltering(state)
-		if len(warn) > 0 {
-			msg = fmt.Sprintf("%s: %v, %s", healthmsg.WarnExitNodeUsage, warn, healthmsg.DisableRPFilter)
-		}
-	}
-	if len(msg) > 0 {
-		healthTracker.SetUnhealthy(exitNodeMisconfigurationWarnable, health.Args{health.ArgError: msg})
-	} else {
-		healthTracker.SetHealthy(exitNodeMisconfigurationWarnable)
-	}
 }
 
 func (b *LocalBackend) checkExitNodePrefsLocked(p *ipn.Prefs) error {

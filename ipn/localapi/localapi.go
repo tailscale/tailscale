@@ -28,7 +28,6 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
-	"tailscale.com/health/healthmsg"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
@@ -99,9 +98,6 @@ func init() {
 		Register("check-ip-forwarding", (*Handler).serveCheckIPForwarding)
 		Register("check-udp-gro-forwarding", (*Handler).serveCheckUDPGROForwarding)
 		Register("set-udp-gro-forwarding", (*Handler).serveSetUDPGROForwarding)
-	}
-	if buildfeatures.HasUseExitNode && runtime.GOOS == "linux" {
-		Register("check-reverse-path-filtering", (*Handler).serveCheckReversePathFiltering)
 	}
 	if buildfeatures.HasClientMetrics {
 		Register("upload-client-metrics", (*Handler).serveUploadClientMetrics)
@@ -777,32 +773,6 @@ func (h *Handler) serveCheckSOMarkInUse(w http.ResponseWriter, r *http.Request) 
 		UseSOMark bool
 	}{
 		UseSOMark: usingSOMark || usingUserspaceNetworking,
-	})
-}
-
-func (h *Handler) serveCheckReversePathFiltering(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitRead {
-		http.Error(w, "reverse path filtering check access denied", http.StatusForbidden)
-		return
-	}
-	var warning string
-
-	state := h.b.Sys().NetMon.Get().InterfaceState()
-	warn, err := netutil.CheckReversePathFiltering(state)
-	if err == nil && len(warn) > 0 {
-		var msg strings.Builder
-		msg.WriteString(healthmsg.WarnExitNodeUsage + ":\n")
-		for _, w := range warn {
-			msg.WriteString("- " + w + "\n")
-		}
-		msg.WriteString(healthmsg.DisableRPFilter)
-		warning = msg.String()
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct {
-		Warning string
-	}{
-		Warning: warning,
 	})
 }
 
