@@ -12,20 +12,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/pires/go-proxyproto"
+	"go.uber.org/zap"
 	"io"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/transport"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
 	"strings"
-	"time"
-
-	"go.uber.org/zap"
-	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/apiserver/pkg/endpoints/request"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/transport"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
@@ -38,6 +37,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/ctxkey"
 	"tailscale.com/util/set"
+	"time"
 )
 
 var (
@@ -163,9 +163,17 @@ func (ap *APIServerProxy) Run(ctx context.Context) error {
 		}
 	} else {
 		var err error
-		proxyLn, err = net.Listen("tcp", "localhost:80")
+		baseLn, err := net.Listen("tcp", "localhost:80")
 		if err != nil {
 			return fmt.Errorf("could not listen on :80: %w", err)
+		}
+		proxyLn = &proxyproto.Listener{
+			Listener:          baseLn,
+			ReadHeaderTimeout: 10 * time.Second,
+			ConnPolicy: proxyproto.ConnPolicyFunc(func(opts proxyproto.ConnPolicyOptions) (proxyproto.Policy,
+				error) {
+				return proxyproto.REQUIRE, nil
+			}),
 		}
 		serve = ap.hs.Serve
 	}
