@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pires/go-proxyproto"
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/endpoints/request"
@@ -163,9 +164,17 @@ func (ap *APIServerProxy) Run(ctx context.Context) error {
 		}
 	} else {
 		var err error
-		proxyLn, err = net.Listen("tcp", "localhost:80")
+		baseLn, err := net.Listen("tcp", "localhost:80")
 		if err != nil {
 			return fmt.Errorf("could not listen on :80: %w", err)
+		}
+		proxyLn = &proxyproto.Listener{
+			Listener:          baseLn,
+			ReadHeaderTimeout: 10 * time.Second,
+			ConnPolicy: proxyproto.ConnPolicyFunc(func(opts proxyproto.ConnPolicyOptions) (proxyproto.Policy,
+				error) {
+				return proxyproto.REQUIRE, nil
+			}),
 		}
 		serve = ap.hs.Serve
 	}
