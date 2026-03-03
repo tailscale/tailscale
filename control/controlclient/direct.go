@@ -1111,6 +1111,19 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	// KeepAlive set.
 	var gotNonKeepAliveMessage bool
 
+	// Dump netmap to disk if we are in debug mode
+	var netmapDebug *os.File
+	if path := envknob.String("DEBUG_NETMAP_TO_DISK"); path != "" {
+		c.logf("Logger set to %s", path)
+		netmapDebug, err = os.Create(path)
+		if err != nil {
+			return err
+		}
+		defer netmapDebug.Close()
+	} else {
+		c.logf("Logger not set to %s", path)
+	}
+
 	// If allowStream, then the server will use an HTTP long poll to
 	// return incremental results. There is always one response right
 	// away, followed by a delay, and eventually others.
@@ -1141,6 +1154,19 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			return err
 		}
 		watchdogTimer.Stop()
+
+		if netmapDebug != nil {
+			out, err := json.MarshalIndent(resp, "", "  ")
+			if err != nil {
+				return fmt.Errorf("encoding response: %w", err)
+			}
+			out = append(out, '\n')
+			if _, err := netmapDebug.Write(out); err != nil {
+				vlogf("failed writing netmap debug file, closing file and stopping debug: %v", err)
+				netmapDebug.Close()
+				netmapDebug = nil
+			}
+		}
 
 		metricMapResponseMessages.Add(1)
 
