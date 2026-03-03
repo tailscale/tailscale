@@ -23,6 +23,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/mem"
 	"tailscale.com/disco"
+	"tailscale.com/envknob"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
@@ -1157,10 +1158,12 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook pa
 			t.injectOutboundPong(p, pingReq)
 			return filter.DropSilently, gro
 		} else if discoKeyAdvert, ok := p.AsTSMPDiscoAdvertisement(); ok {
-			t.discoKeyAdvertisementPub.Publish(DiscoKeyAdvertisement{
-				Src: discoKeyAdvert.Src,
-				Key: discoKeyAdvert.Key,
-			})
+			if buildfeatures.HasCacheNetMap && envknob.Bool("TS_USE_CACHED_NETMAP") {
+				t.discoKeyAdvertisementPub.Publish(DiscoKeyAdvertisement{
+					Src: discoKeyAdvert.Src,
+					Key: discoKeyAdvert.Key,
+				})
+			}
 			return filter.DropSilently, gro
 		} else if data, ok := p.AsTSMPPong(); ok {
 			if f := t.OnTSMPPongReceived; f != nil {

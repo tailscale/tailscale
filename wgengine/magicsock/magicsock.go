@@ -4309,6 +4309,10 @@ type NewDiscoKeyAvailable struct {
 //
 // We do not need the Conn to be locked, but the endpoint should be.
 func (c *Conn) maybeSendTSMPDiscoAdvert(de *endpoint) {
+	if !buildfeatures.HasCacheNetMap || !envknob.Bool("TS_USE_CACHED_NETMAP") {
+		return
+	}
+
 	de.mu.Lock()
 	defer de.mu.Unlock()
 	if !de.sentDiscoKeyAdvertisement {
