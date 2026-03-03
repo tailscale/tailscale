@@ -186,7 +186,19 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 	// The state returned by NetworkLockInit likely doesn't contain the initialized state,
 	// because that has to tick through from netmaps.
 	if _, err := localClient.NetworkLockInit(ctx, keys, disablementValues, supportDisablement); err != nil {
-		return err
+
+		// Tidy up the error before it's printed to the user.
+		//
+		// Parsing the error as a string isn't ideal, but it's hard to treat this as a more
+		// structured error -- it's bubbled through half a dozen layers and been sent across
+		// two HTTP responses. If the error changes and we start missing this branch, it's
+		// not a disaster, because the key information will still be presented.
+		tkaInitPrefix := "error: 500 Internal Server Error: initialization failed: tka init-begin RPC: request returned (403):"
+		if strings.HasPrefix(err.Error(), tkaInitPrefix) {
+			return fmt.Errorf("%s", strings.Replace(err.Error(), tkaInitPrefix, "Initializing Tailnet Lock failed:", 1))
+		} else {
+			return fmt.Errorf("Initializing Tailnet Lock failed: %w", err)
+		}
 	}
 
 	fmt.Print(successMsg.String())
