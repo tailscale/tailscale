@@ -560,68 +560,90 @@ func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) error {
 
 func (c *client) mapDNSResponse(buf []byte) []byte {
 	var p dnsmessage.Parser
-	if _, err := p.Start(buf); err != nil {
+	hdr, err := p.Start(buf)
+	if err != nil {
 		c.logf("error parsing dns response: %v", err)
 		return buf
 	}
-	if err := p.SkipAllQuestions(); err != nil {
+	questions, err := p.AllQuestions()
+	if err != nil {
 		c.logf("error parsing dns response: %v", err)
 		return buf
 	}
-	for {
-		h, err := p.AnswerHeader()
-		if err == dnsmessage.ErrSectionDone {
-			break
+	answers, err := p.AllAnswers()
+	if err != nil {
+		c.logf("error parsing dns response: %v", err)
+		return buf
+	}
+
+	// Collect magic IP rewrites for matching A answers.
+	type rewrite struct {
+		domain string
+		magic  netip.Addr
+	}
+	var rewrites []rewrite
+	for _, r := range answers {
+		body, ok := r.Body.(*dnsmessage.AResource)
+		if !ok {
+			continue
 		}
+		dst := netip.AddrFrom4(body.A)
+		domain := strings.ToLower(r.Header.Name.String())
+		if !c.isConnectorDomain(domain) {
+			continue
+		}
+		as, err := c.reserveAddresses(domain, dst)
 		if err != nil {
-			c.logf("error parsing dns response: %v", err)
+			c.logf("error assigning connector addresses: %v", err)
 			return buf
 		}
-
-		if h.Class != dnsmessage.ClassINET {
-			if err := p.SkipAnswer(); err != nil {
-				c.logf("error parsing dns response: %v", err)
-				return buf
-			}
-			continue
+		if !as.isValid() {
+			c.logf("assigned connector addresses unexpectedly empty")
+			return buf
 		}
-
-		switch h.Type {
-		case dnsmessage.TypeA:
-			domain := strings.ToLower(h.Name.String())
-			if len(domain) == 0 || !c.isConnectorDomain(domain) {
-				if err := p.SkipAnswer(); err != nil {
-					c.logf("error parsing dns response: %v", err)
-					return buf
-				}
-				continue
-			}
-			r, err := p.AResource()
-			if err != nil {
-				c.logf("error parsing dns response: %v", err)
-				return buf
-			}
-			addrs, err := c.reserveAddresses(domain, netip.AddrFrom4(r.A))
-			if err != nil {
-				c.logf("error assigning connector addresses: %v", err)
-				return buf
-			}
-			if !addrs.isValid() {
-				c.logf("assigned connector addresses unexpectedly empty: %v", err)
-				return buf
-			}
-		default:
-			if err := p.SkipAnswer(); err != nil {
-				c.logf("error parsing dns response: %v", err)
-				return buf
-			}
-			continue
-		}
+		rewrites = append(rewrites, rewrite{domain: domain, magic: as.magic})
 	}
 
-	// TODO(fran) 2026-01-21 return a dns response with addresses
-	// swapped out for the magic IPs to make conn25 work.
-	return buf
+	if len(rewrites) == 0 {
+		return buf
+	}
+
+	// Build a new DNS response with the same header and questions, but with
+	// A answers rewritten to magic IPs.
+	b := dnsmessage.NewBuilder(nil, hdr)
+	b.EnableCompression()
+	if err := b.StartQuestions(); err != nil {
+		c.logf("error building dns response: %v", err)
+		return buf
+	}
+	for _, q := range questions {
+		if err := b.Question(q); err != nil {
+			c.logf("error building dns response: %v", err)
+			return buf
+		}
+	}
+	if err := b.StartAnswers(); err != nil {
+		c.logf("error building dns response: %v", err)
+		return buf
+	}
+	for _, rw := range rewrites {
+		name, err := dnsmessage.NewName(rw.domain)
+		if err != nil {
+			c.logf("error building dns response: %v", err)
+			return buf
+		}
+		rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 0}
+		if err := b.AResource(rhdr, dnsmessage.AResource{A: rw.magic.As4()}); err != nil {
+			c.logf("error building dns response: %v", err)
+			return buf
+		}
+	}
+	out, err := b.Finish()
+	if err != nil {
+		c.logf("error building dns response: %v", err)
+		return buf
+	}
+	return out
 }
 
 type connector struct {
