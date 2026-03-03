@@ -73,8 +73,8 @@ func build(toolDir, appDir string) error {
 		if err := os.Remove(f); err != nil {
 			log.Printf("Failed to cleanup %q: %v", f, err)
 		}
-		// Removing intermediate ".br" version, we use ".gz" asset.
-		if err := os.Remove(f + ".br"); err != nil {
+		// Removing ".gz" version, we use the ".zst" asset.
+		if err := os.Remove(f + ".gz"); err != nil {
 			log.Printf("Failed to cleanup %q: %v", f+".gz", err)
 		}
 	}

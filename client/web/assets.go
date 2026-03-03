@@ -4,6 +4,7 @@
 package web
 
 import (
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -16,7 +17,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	prebuilt "github.com/tailscale/web-client-prebuilt"
+	"tailscale.com/tsweb/tswebutil"
 )
 
 var start = time.Now()
@@ -63,10 +66,76 @@ func assetsHandler(devMode bool) (_ http.Handler, cleanup func()) {
 	}), nil
 }
 
-func openPrecompressedFile(w http.ResponseWriter, r *http.Request, path string, fs fs.FS) (fs.File, error) {
-	if f, err := fs.Open(path + ".gz"); err == nil {
-		w.Header().Set("Content-Encoding", "gzip")
-		return f, nil
+// zstFile wraps a zstd-compressed fs.File and provides transparent
+// decompression. It implements io.ReadSeeker so that it can be used with
+// http.ServeContent. Note that Seek is implemented by decompressing from the
+// start, so http.ServeContent's size detection (SeekEnd then SeekStart) will
+// decompress the content twice. This is acceptable for the small web client
+// assets served here, but would not be appropriate for large files.
+type zstFile struct {
+	f fs.File
+	*zstd.Decoder
+}
+
+func newZSTFile(f fs.File) (*zstFile, error) {
+	zr, err := zstd.NewReader(f)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return &zstFile{f: f, Decoder: zr}, nil
+}
+
+func (z *zstFile) Seek(offset int64, whence int) (int64, error) {
+	reset := func() error {
+		if seeker, ok := z.f.(io.Seeker); ok {
+			if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+				return err
+			}
+		} else {
+			return fmt.Errorf("not seekable: %w", os.ErrInvalid)
+		}
+		return z.Decoder.Reset(z.f)
+	}
+
+	switch whence {
+	case io.SeekStart:
+		if err := reset(); err != nil {
+			return 0, err
+		}
+		return io.CopyN(io.Discard, z, offset)
+	case io.SeekCurrent:
+		if offset >= 0 {
+			return io.CopyN(io.Discard, z, offset)
+		}
+		return 0, fmt.Errorf("unsupported negative seek: %w", os.ErrInvalid)
+	case io.SeekEnd:
+		if offset != 0 {
+			return 0, fmt.Errorf("unsupported non-zero offset for SeekEnd: %w", os.ErrInvalid)
+		}
+		return io.Copy(io.Discard, z)
+	}
+	return 0, os.ErrInvalid
+}
+
+func (z *zstFile) Close() error {
+	z.Decoder.Close()
+	return z.f.Close()
+}
+
+func openPrecompressedFile(w http.ResponseWriter, r *http.Request, path string, fs fs.FS) (io.ReadCloser, error) {
+	if f, err := fs.Open(path + ".zst"); err == nil {
+		if tswebutil.AcceptsEncoding(r, "zstd") {
+			w.Header().Set("Content-Encoding", "zstd")
+			return f, nil
+		}
+		return newZSTFile(f)
+	}
+	if tswebutil.AcceptsEncoding(r, "gzip") {
+		if f, err := fs.Open(path + ".gz"); err == nil {
+			w.Header().Set("Content-Encoding", "gzip")
+			return f, nil
+		}
 	}
 	return fs.Open(path) // fallback
 }
