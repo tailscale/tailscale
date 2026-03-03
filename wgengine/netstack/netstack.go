@@ -119,6 +119,13 @@ func maxInFlightConnectionAttemptsPerClient() int {
 
 var debugNetstack = envknob.RegisterBool("TS_DEBUG_NETSTACK")
 
+// debugUDPRaw, if set, causes subnet-routed UDP packets to be forwarded
+// by constructing raw IP packets and injecting them into the tun device,
+// preserving the original source IP. Without this, netstack creates an
+// OS UDP socket which rewrites the source IP to the local interface
+// address.
+var debugUDPRaw = envknob.RegisterBool("TS_DEBUG_NETSTACK_UDP_RAW")
+
 var (
 	serviceIP   = tsaddr.TailscaleServiceIP()
 	serviceIPv6 = tsaddr.TailscaleServiceIPv6()
@@ -1886,15 +1893,16 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 	isLocal := ns.isLocalIP(dstAddr.Addr())
 	isLoopback := dstAddr.Addr() == ipv4Loopback || dstAddr.Addr() == ipv6Loopback
 
-	// For subnet-routed UDP traffic (non-local, non-loopback destinations),
-	// inject raw IP packets into the tun device instead of creating an OS
-	// UDP socket. This preserves the original source IP address from the
-	// tunnel peer, which is required for protocols like RADIUS where the
-	// source IP must be preserved end-to-end. The OS then forwards the
-	// packet based on its routing table. Reply packets from the LAN host
-	// are routed back to tailscale0 by the kernel and enter the WireGuard
-	// tunnel directly, without needing a proxy.
-	if !isLocal && !isLoopback {
+	// When TS_DEBUG_NETSTACK_UDP_RAW is set, subnet-routed UDP traffic
+	// (non-local, non-loopback destinations) is forwarded by injecting raw
+	// IP packets into the tun device instead of creating an OS UDP socket.
+	// This preserves the original source IP address from the tunnel peer,
+	// which is required for protocols like RADIUS where the source IP must
+	// be preserved end-to-end. The OS then forwards the packet based on
+	// its routing table. Reply packets from the LAN host are routed back
+	// to tailscale0 by the kernel and enter the WireGuard tunnel directly,
+	// without needing a proxy.
+	if debugUDPRaw() && !isLocal && !isLoopback {
 		ns.forwardUDPViaInjection(client, clientAddr, dstAddr)
 		return
 	}
@@ -1911,6 +1919,16 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 		}
 		backendRemoteAddr = &net.UDPAddr{IP: ip, Port: int(port)}
 		backendListenAddr = &net.UDPAddr{IP: ip, Port: int(srcPort)}
+	} else {
+		if dstIP := dstAddr.Addr(); viaRange.Contains(dstIP) {
+			dstAddr = netip.AddrPortFrom(tsaddr.UnmapVia(dstIP), dstAddr.Port())
+		}
+		backendRemoteAddr = net.UDPAddrFromAddrPort(dstAddr)
+		if dstAddr.Addr().Is4() {
+			backendListenAddr = &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: int(srcPort)}
+		} else {
+			backendListenAddr = &net.UDPAddr{IP: net.ParseIP("::"), Port: int(srcPort)}
+		}
 	}
 
 	backendConn, err := net.ListenUDP("udp", backendListenAddr)
