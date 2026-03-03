@@ -662,6 +662,9 @@ func (opts Options) init(disableLogging bool) (*logtail.Config, *Policy) {
 		}
 	}
 	lw := logtail.NewLogger(conf, opts.Logf)
+	if conf.MetricsDelta != nil {
+		exportClientMetrics(lw)
+	}
 
 	var logOutput io.Writer = lw
 
