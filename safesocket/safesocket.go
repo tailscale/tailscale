@@ -120,7 +120,7 @@ func PlatformUsesPeerCreds() bool {
 // runtime.GOOS value instead of using the current one.
 func GOOSUsesPeerCreds(goos string) bool {
 	switch goos {
-	case "linux", "darwin", "freebsd":
+	case "linux", "darwin", "freebsd", "solaris", "illumos":
 		return true
 	}
 	return false
