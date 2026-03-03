@@ -577,16 +577,24 @@ func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) error {
 	return makePeerAPIReq(ctx, client, urlBase, as)
 }
 
+type dnsResponseRewrite struct {
+	domain dnsname.FQDN
+	dst    netip.Addr
+}
+
 func (c *client) mapDNSResponse(buf []byte) []byte {
 	var p dnsmessage.Parser
-	if _, err := p.Start(buf); err != nil {
+	hdr, err := p.Start(buf)
+	if err != nil {
 		c.logf("error parsing dns response: %v", err)
 		return buf
 	}
-	if err := p.SkipAllQuestions(); err != nil {
+	questions, err := p.AllQuestions()
+	if err != nil {
 		c.logf("error parsing dns response: %v", err)
 		return buf
 	}
+	var rewrites []dnsResponseRewrite
 	for {
 		h, err := p.AnswerHeader()
 		if err == dnsmessage.ErrSectionDone {
@@ -596,7 +604,6 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 			c.logf("error parsing dns response: %v", err)
 			return buf
 		}
-
 		if h.Class != dnsmessage.ClassINET {
 			if err := p.SkipAnswer(); err != nil {
 				c.logf("error parsing dns response: %v", err)
@@ -604,7 +611,6 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 			}
 			continue
 		}
-
 		switch h.Type {
 		case dnsmessage.TypeA:
 			domain, err := dnsname.ToFQDN(h.Name.String())
@@ -624,15 +630,7 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 				c.logf("error parsing dns response: %v", err)
 				return buf
 			}
-			addrs, err := c.reserveAddresses(domain, netip.AddrFrom4(r.A))
-			if err != nil {
-				c.logf("error assigning connector addresses: %v", err)
-				return buf
-			}
-			if !addrs.isValid() {
-				c.logf("assigned connector addresses unexpectedly empty: %v", err)
-				return buf
-			}
+			rewrites = append(rewrites, dnsResponseRewrite{domain: domain, dst: netip.AddrFrom4(r.A)})
 		default:
 			if err := p.SkipAnswer(); err != nil {
 				c.logf("error parsing dns response: %v", err)
@@ -641,10 +639,63 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 			continue
 		}
 	}
-
-	// TODO(fran) 2026-01-21 return a dns response with addresses
-	// swapped out for the magic IPs to make conn25 work.
+	if len(rewrites) > 0 {
+		newBuf, err := c.rewriteDNSResponse(hdr, questions, rewrites)
+		if err != nil {
+			c.logf("error rewriting dns response: %v", err)
+			return buf
+		}
+		return newBuf
+	}
 	return buf
+}
+
+func (c *client) rewriteDNSResponse(hdr dnsmessage.Header, questions []dnsmessage.Question, rewrites []dnsResponseRewrite) ([]byte, error) {
+	// This assumes that the DNS query:
+	//  1. was for one type of resource
+	//  2. was for one domain
+	// And so we can 1. copy in the questions as is from the original response and 2. create all the answers from
+	// the rewrites in order
+	// If the assumptions do not hold we will return a response where the answers that do not line up with the questions.
+	// Also as we are currently (2026-03-10) only doing this for AResource records, we know that if we are here
+	// with non-empty rewrites, the type was AResource.
+	b := dnsmessage.NewBuilder(nil, hdr)
+	b.EnableCompression()
+	if err := b.StartQuestions(); err != nil {
+		return nil, err
+	}
+	for _, q := range questions {
+		if err := b.Question(q); err != nil {
+			return nil, err
+		}
+	}
+	if err := b.StartAnswers(); err != nil {
+		return nil, err
+	}
+	// make an answer for each rewrite
+	for _, rw := range rewrites {
+		as, err := c.reserveAddresses(rw.domain, rw.dst)
+		if err != nil {
+			return nil, err
+		}
+		if !as.isValid() {
+			return nil, errors.New("connector addresses empty")
+		}
+		name, err := dnsmessage.NewName(rw.domain.WithTrailingDot())
+		if err != nil {
+			return nil, err
+		}
+		// only handling TypeA right now
+		rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 0}
+		if err := b.AResource(rhdr, dnsmessage.AResource{A: as.magic.As4()}); err != nil {
+			return nil, err
+		}
+	}
+	out, err := b.Finish()
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 type connector struct {
