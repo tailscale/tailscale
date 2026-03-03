@@ -1883,10 +1883,24 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 		ns.logf("[v2] netstack: forwarding incoming UDP connection on port %v", port)
 	}
 
-	var backendListenAddr *net.UDPAddr
-	var backendRemoteAddr *net.UDPAddr
 	isLocal := ns.isLocalIP(dstAddr.Addr())
 	isLoopback := dstAddr.Addr() == ipv4Loopback || dstAddr.Addr() == ipv6Loopback
+
+	// For subnet-routed UDP traffic (non-local, non-loopback destinations),
+	// inject raw IP packets into the tun device instead of creating an OS
+	// UDP socket. This preserves the original source IP address from the
+	// tunnel peer, which is required for protocols like RADIUS where the
+	// source IP must be preserved end-to-end. The OS then forwards the
+	// packet based on its routing table. Reply packets from the LAN host
+	// are routed back to tailscale0 by the kernel and enter the WireGuard
+	// tunnel directly, without needing a proxy.
+	if !isLocal && !isLoopback {
+		ns.forwardUDPViaInjection(client, clientAddr, dstAddr)
+		return
+	}
+
+	var backendListenAddr *net.UDPAddr
+	var backendRemoteAddr *net.UDPAddr
 	if isLocal {
 		backendRemoteAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(port)}
 		backendListenAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(srcPort)}
@@ -1897,16 +1911,6 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 		}
 		backendRemoteAddr = &net.UDPAddr{IP: ip, Port: int(port)}
 		backendListenAddr = &net.UDPAddr{IP: ip, Port: int(srcPort)}
-	} else {
-		if dstIP := dstAddr.Addr(); viaRange.Contains(dstIP) {
-			dstAddr = netip.AddrPortFrom(tsaddr.UnmapVia(dstIP), dstAddr.Port())
-		}
-		backendRemoteAddr = net.UDPAddrFromAddrPort(dstAddr)
-		if dstAddr.Addr().Is4() {
-			backendListenAddr = &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: int(srcPort)}
-		} else {
-			backendListenAddr = &net.UDPAddr{IP: net.ParseIP("::"), Port: int(srcPort)}
-		}
 	}
 
 	backendConn, err := net.ListenUDP("udp", backendListenAddr)
@@ -1962,6 +1966,84 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 		// subnet address count to potentially remove the route.
 		<-ctx.Done()
 		ns.removeSubnetAddress(dstAddr.Addr())
+	}
+}
+
+// forwardUDPViaInjection handles forwarding of subnet-routed UDP packets by
+// constructing raw IP+UDP packets and injecting them into the tun device.
+// This preserves the original source IP from the tunnel peer, unlike the
+// OS socket approach which rewrites the source to the local interface IP.
+//
+// Packets are injected via InjectInboundCopy, which writes directly to the
+// underlying tun device (bypassing netstack's injectInbound hook, so there
+// is no re-interception). The OS then forwards the packet based on its
+// routing table. Reply packets from the destination host are routed back
+// to the tun device by the kernel and enter the WireGuard tunnel directly.
+func (ns *Impl) forwardUDPViaInjection(client *gonet.UDPConn, clientAddr, dstAddr netip.AddrPort) {
+	defer client.Close()
+
+	if dstIP := dstAddr.Addr(); viaRange.Contains(dstIP) {
+		dstAddr = netip.AddrPortFrom(tsaddr.UnmapVia(dstIP), dstAddr.Port())
+	}
+
+	if debugNetstack() {
+		ns.logf("[v2] netstack: forwarding UDP via tun injection: %v -> %v", clientAddr, dstAddr)
+	}
+
+	idleTimeout := 2 * time.Minute
+	if dstAddr.Port() == 53 {
+		idleTimeout = 30 * time.Second
+	}
+
+	bufp := udpBufPool.Get().(*[]byte)
+	defer udpBufPool.Put(bufp)
+	buf := *bufp
+
+	deadline := time.Now().Add(idleTimeout)
+	for {
+		client.SetReadDeadline(deadline)
+		n, _, err := client.ReadFrom(buf)
+		if err != nil {
+			if debugNetstack() {
+				ns.logf("[v2] netstack: UDP injection read done: %v", err)
+			}
+			return
+		}
+
+		payload := buf[:n]
+		var rawPkt []byte
+		if clientAddr.Addr().Is4() && dstAddr.Addr().Is4() {
+			h := packet.UDP4Header{
+				IP4Header: packet.IP4Header{
+					Src: clientAddr.Addr(),
+					Dst: dstAddr.Addr(),
+				},
+				SrcPort: clientAddr.Port(),
+				DstPort: dstAddr.Port(),
+			}
+			rawPkt = packet.Generate(&h, payload)
+		} else {
+			h := packet.UDP6Header{
+				IP6Header: packet.IP6Header{
+					Src: clientAddr.Addr(),
+					Dst: dstAddr.Addr(),
+				},
+				SrcPort: clientAddr.Port(),
+				DstPort: dstAddr.Port(),
+			}
+			rawPkt = packet.Generate(&h, payload)
+		}
+
+		if err := ns.tundev.InjectInboundCopy(rawPkt); err != nil {
+			ns.logf("netstack: UDP tun injection failed: %v", err)
+			return
+		}
+		if debugNetstack() {
+			ns.logf("[v2] netstack: injected UDP %v -> %v (%d bytes payload)", clientAddr, dstAddr, n)
+		}
+
+		// Reset the idle deadline after each successfully forwarded packet.
+		deadline = time.Now().Add(idleTimeout)
 	}
 }
 
