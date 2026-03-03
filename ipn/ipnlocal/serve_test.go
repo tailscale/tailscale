@@ -1235,26 +1235,6 @@ func TestServeFileOrDirectory(t *testing.T) {
 	}
 }
 
-func Test_isGRPCContentType(t *testing.T) {
-	tests := []struct {
-		contentType string
-		want        bool
-	}{
-		{contentType: "application/grpc", want: true},
-		{contentType: "application/grpc;", want: true},
-		{contentType: "application/grpc+", want: true},
-		{contentType: "application/grpcfoobar"},
-		{contentType: "application/text"},
-		{contentType: "foobar"},
-		{contentType: ""},
-	}
-	for _, tt := range tests {
-		if got := isGRPCContentType(tt.contentType); got != tt.want {
-			t.Errorf("isGRPCContentType(%q) = %v, want %v", tt.contentType, got, tt.want)
-		}
-	}
-}
-
 func TestEncTailscaleHeaderValue(t *testing.T) {
 	tests := []struct {
 		in   string
@@ -1273,7 +1253,7 @@ func TestEncTailscaleHeaderValue(t *testing.T) {
 	}
 }
 
-func TestServeGRPCProxy(t *testing.T) {
+func TestServeH2CProxy(t *testing.T) {
 	const msg = "some-response\n"
 	backend := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Path-Was", r.RequestURI)
@@ -1317,23 +1297,40 @@ func TestServeGRPCProxy(t *testing.T) {
 		req       *http.Request
 		wantPath  string
 		wantProto string
-		wantBody  string
 	}{
 		{
-			name:      "non-gRPC",
+			name:      "http1-no-h2c",
 			req:       req("GET", "http://foo/bar"),
 			wantPath:  "/bar",
 			wantProto: "HTTP/1.1",
 		},
 		{
-			name:      "gRPC-but-not-http2",
+			name:      "http1-with-grpc-content-type",
 			req:       req("GET", "http://foo/bar", "application/grpc"),
 			wantPath:  "/bar",
 			wantProto: "HTTP/1.1",
 		},
 		{
-			name:      "gRPC--http2",
+			name:      "http2-grpc",
 			req:       req("GET", "http://foo/bar", 2, "application/grpc"),
+			wantPath:  "/bar",
+			wantProto: "HTTP/2.0",
+		},
+		{
+			name:      "http2-connect-rpc-proto",
+			req:       req("POST", "http://foo/bar", 2, "application/connect+proto"),
+			wantPath:  "/bar",
+			wantProto: "HTTP/2.0",
+		},
+		{
+			name:      "http2-connect-rpc-json",
+			req:       req("POST", "http://foo/bar", 2, "application/connect+json"),
+			wantPath:  "/bar",
+			wantProto: "HTTP/2.0",
+		},
+		{
+			name:      "http2-no-content-type",
+			req:       req("GET", "http://foo/bar", 2),
 			wantPath:  "/bar",
 			wantProto: "HTTP/2.0",
 		},
