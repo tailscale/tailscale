@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"reflect"
 	"testing"
 	"time"
 
@@ -547,61 +546,139 @@ func rangeFrom(from, to string) netipx.IPRange {
 	)
 }
 
-func TestMapDNSResponse(t *testing.T) {
-	makeDNSResponse := func(domain string, addrs []dnsmessage.AResource) []byte {
-		b := dnsmessage.NewBuilder(nil,
-			dnsmessage.Header{
-				ID:            1,
-				Response:      true,
-				Authoritative: true,
-				RCode:         dnsmessage.RCodeSuccess,
-			})
-		b.EnableCompression()
-
-		if err := b.StartQuestions(); err != nil {
-			t.Fatal(err)
-		}
-
-		if err := b.Question(dnsmessage.Question{
-			Name:  dnsmessage.MustNewName(domain),
+func makeDNSResponse(t *testing.T, domain string, addrs []*dnsmessage.AResource) []byte {
+	t.Helper()
+	name := dnsmessage.MustNewName(domain)
+	questions := []dnsmessage.Question{
+		{
+			Name:  name,
 			Type:  dnsmessage.TypeA,
 			Class: dnsmessage.ClassINET,
-		}); err != nil {
-			t.Fatal(err)
+		},
+	}
+	var answers []dnsmessage.Resource
+	for _, addr := range addrs {
+		ans := dnsmessage.Resource{
+			Header: dnsmessage.ResourceHeader{
+				Name:  name,
+				Type:  dnsmessage.TypeA,
+				Class: dnsmessage.ClassINET,
+			},
+			Body: addr,
 		}
+		answers = append(answers, ans)
+	}
+	additional := []dnsmessage.Resource{
+		{
+			Header: dnsmessage.ResourceHeader{
+				Name:  name,
+				Type:  dnsmessage.TypeA,
+				Class: dnsmessage.ClassINET,
+			},
+			Body: &dnsmessage.AResource{A: [4]byte{9, 9, 9, 9}},
+		},
+	}
+	return makeDNSResponseForSections(t, questions, answers, additional)
+}
 
-		if err := b.StartAnswers(); err != nil {
-			t.Fatal(err)
+func makeV6DNSResponse(t *testing.T, domain string, addrs []*dnsmessage.AAAAResource) []byte {
+	t.Helper()
+	name := dnsmessage.MustNewName(domain)
+	questions := []dnsmessage.Question{
+		{
+			Name:  name,
+			Type:  dnsmessage.TypeAAAA,
+			Class: dnsmessage.ClassINET,
+		},
+	}
+	var answers []dnsmessage.Resource
+	for _, addr := range addrs {
+		ans := dnsmessage.Resource{
+			Header: dnsmessage.ResourceHeader{
+				Name:  name,
+				Type:  dnsmessage.TypeAAAA,
+				Class: dnsmessage.ClassINET,
+			},
+			Body: addr,
 		}
+		answers = append(answers, ans)
+	}
+	return makeDNSResponseForSections(t, questions, answers, nil)
+}
 
-		for _, addr := range addrs {
-			b.AResource(
-				dnsmessage.ResourceHeader{
-					Name:  dnsmessage.MustNewName(domain),
-					Type:  dnsmessage.TypeA,
-					Class: dnsmessage.ClassINET,
-				},
-				addr,
-			)
-		}
+func makeDNSResponseForSections(t *testing.T, questions []dnsmessage.Question, answers []dnsmessage.Resource, additional []dnsmessage.Resource) []byte {
+	t.Helper()
+	b := dnsmessage.NewBuilder(nil,
+		dnsmessage.Header{
+			ID:            1,
+			Response:      true,
+			Authoritative: true,
+			RCode:         dnsmessage.RCodeSuccess,
+		})
+	b.EnableCompression()
 
-		outbs, err := b.Finish()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return outbs
+	if err := b.StartQuestions(); err != nil {
+		t.Fatal(err)
 	}
 
+	for _, q := range questions {
+		if err := b.Question(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := b.StartAnswers(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, ans := range answers {
+		switch ans.Header.Type {
+		case dnsmessage.TypeA:
+			body, ok := (ans.Body).(*dnsmessage.AResource)
+			if !ok {
+				t.Fatalf("unexpected answer type, update test")
+			}
+			b.AResource(ans.Header, *body)
+		case dnsmessage.TypeAAAA:
+			body, ok := (ans.Body).(*dnsmessage.AAAAResource)
+			if !ok {
+				t.Fatalf("unexpected answer type, update test")
+			}
+			b.AAAAResource(ans.Header, *body)
+		default:
+			t.Fatalf("unhandled answer type, update test: %v", ans.Header.Type)
+		}
+	}
+
+	if err := b.StartAdditionals(); err != nil {
+		t.Fatal(err)
+	}
+	for _, add := range additional {
+		body, ok := (add.Body).(*dnsmessage.AResource)
+		if !ok {
+			t.Fatalf("unexpected additional type, update test")
+		}
+		b.AResource(add.Header, *body)
+	}
+
+	outbs, err := b.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return outbs
+}
+
+func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 	for _, tt := range []struct {
 		name          string
 		domain        string
-		addrs         []dnsmessage.AResource
+		addrs         []*dnsmessage.AResource
 		wantByMagicIP map[netip.Addr]addrs
 	}{
 		{
 			name:   "one-ip-matches",
 			domain: "example.com.",
-			addrs:  []dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
+			addrs:  []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
 			// these are 'expected' because they are the beginning of the provided pools
 			wantByMagicIP: map[netip.Addr]addrs{
 				netip.MustParseAddr("100.64.0.0"): {
@@ -616,7 +693,7 @@ func TestMapDNSResponse(t *testing.T) {
 		{
 			name:   "multiple-ip-matches",
 			domain: "example.com.",
-			addrs: []dnsmessage.AResource{
+			addrs: []*dnsmessage.AResource{
 				{A: [4]byte{1, 0, 0, 0}},
 				{A: [4]byte{2, 0, 0, 0}},
 			},
@@ -640,14 +717,14 @@ func TestMapDNSResponse(t *testing.T) {
 		{
 			name:   "no-domain-match",
 			domain: "x.example.com.",
-			addrs: []dnsmessage.AResource{
+			addrs: []*dnsmessage.AResource{
 				{A: [4]byte{1, 0, 0, 0}},
 				{A: [4]byte{2, 0, 0, 0}},
 			},
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			dnsResp := makeDNSResponse(tt.domain, tt.addrs)
+			dnsResp := makeDNSResponse(t, tt.domain, tt.addrs)
 			sn := makeSelfNode(t, appctype.Conn25Attr{
 				Name:          "app1",
 				Connectors:    []string{"tag:woo"},
@@ -658,10 +735,7 @@ func TestMapDNSResponse(t *testing.T) {
 			c := newConn25(logger.Discard)
 			c.reconfig(sn)
 
-			bs := c.mapDNSResponse(dnsResp)
-			if !reflect.DeepEqual(dnsResp, bs) {
-				t.Fatal("shouldn't be changing the bytes (yet)")
-			}
+			c.mapDNSResponse(dnsResp)
 			if diff := cmp.Diff(tt.wantByMagicIP, c.client.assignments.byMagicIP, cmpopts.EquateComparable(addrs{}, netip.Addr{})); diff != "" {
 				t.Errorf("byMagicIP diff (-want, +got):\n%s", diff)
 			}
@@ -819,5 +893,293 @@ func TestEnqueueAddress(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for connector to receive request")
+	}
+}
+
+func parseResponse(t *testing.T, buf []byte) ([]dnsmessage.Resource, []dnsmessage.Resource) {
+	t.Helper()
+	var p dnsmessage.Parser
+	header, err := p.Start(buf)
+	if err != nil {
+		t.Fatalf("parsing DNS response: %v", err)
+	}
+	if header.RCode != dnsmessage.RCodeSuccess {
+		t.Fatalf("RCode want: %v, got: %v", dnsmessage.RCodeSuccess, header.RCode)
+	}
+	if err := p.SkipAllQuestions(); err != nil {
+		t.Fatalf("skipping questions: %v", err)
+	}
+	answers, err := p.AllAnswers()
+	if err != nil {
+		t.Fatalf("reading answers: %v", err)
+	}
+	if err := p.SkipAllAuthorities(); err != nil {
+		t.Fatalf("skipping questions: %v", err)
+	}
+	additionals, err := p.AllAdditionals()
+	if err != nil {
+		t.Fatalf("reading additionals: %v", err)
+	}
+	return answers, additionals
+}
+
+func TestMapDNSResponseRewritesResponses(t *testing.T) {
+	configuredDomain := "example.com"
+	domainName := configuredDomain + "."
+	dnsMessageName := dnsmessage.MustNewName(domainName)
+	sn := makeSelfNode(t, appctype.Conn25Attr{
+		Name:          "app1",
+		Connectors:    []string{"tag:connector"},
+		Domains:       []string{configuredDomain},
+		MagicIPPool:   []netipx.IPRange{rangeFrom("0", "10")},
+		TransitIPPool: []netipx.IPRange{rangeFrom("40", "50")},
+	}, []string{})
+
+	compareToRecords := func(t *testing.T, resources []dnsmessage.Resource, want []netip.Addr) {
+		t.Helper()
+		var got []netip.Addr
+		for _, r := range resources {
+			if b, ok := r.Body.(*dnsmessage.AResource); ok {
+				got = append(got, netip.AddrFrom4(b.A))
+			} else if b, ok := r.Body.(*dnsmessage.AAAAResource); ok {
+				got = append(got, netip.AddrFrom16(b.AAAA))
+			}
+		}
+		if diff := cmp.Diff(want, got, cmpopts.EquateComparable(netip.Addr{})); diff != "" {
+			t.Fatalf("A/AAAA records mismatch (-want +got):\n%s", diff)
+		}
+	}
+
+	assertParsesToAnswers := func(want []netip.Addr) func(t *testing.T, bs []byte) {
+		return func(t *testing.T, bs []byte) {
+			t.Helper()
+			answers, _ := parseResponse(t, bs)
+			compareToRecords(t, answers, want)
+		}
+	}
+
+	assertParsesToAdditionals := func(want []netip.Addr) func(t *testing.T, bs []byte) {
+		return func(t *testing.T, bs []byte) {
+			t.Helper()
+			_, additionals := parseResponse(t, bs)
+			compareToRecords(t, additionals, want)
+		}
+	}
+
+	assertBytes := func(want []byte) func(t *testing.T, bs []byte) {
+		return func(t *testing.T, bs []byte) {
+			t.Helper()
+			if diff := cmp.Diff(want, bs); diff != "" {
+				t.Fatalf("bytes mismatch (-want +got):\n%s", diff)
+			}
+		}
+	}
+	assertServFail := func(t *testing.T, bs []byte) {
+		var p dnsmessage.Parser
+		header, err := p.Start(bs)
+		if err != nil {
+			t.Fatalf("parsing DNS response: %v", err)
+		}
+		if header.RCode != dnsmessage.RCodeServerFailure {
+			t.Fatalf("RCode want: %v, got: %v", dnsmessage.RCodeServerFailure, header.RCode)
+		}
+	}
+
+	ipv6ResponseUnhandledDomain := makeV6DNSResponse(t, "tailscale.com.", []*dnsmessage.AAAAResource{
+		{AAAA: netip.MustParseAddr("2606:4700::6812:1a78").As16()},
+		{AAAA: netip.MustParseAddr("2606:4700::6812:1b78").As16()},
+	})
+
+	ipv4ResponseUnhandledDomain := makeDNSResponse(t, "tailscale.com.", []*dnsmessage.AResource{
+		{A: netip.MustParseAddr("1.2.3.4").As4()},
+		{A: netip.MustParseAddr("5.6.7.8").As4()},
+	})
+
+	nonINETQuestionResp := makeDNSResponseForSections(t, []dnsmessage.Question{
+		{
+			Name:  dnsMessageName,
+			Type:  dnsmessage.TypeA,
+			Class: dnsmessage.ClassCHAOS,
+		},
+	}, nil, nil)
+
+	for _, tt := range []struct {
+		name     string
+		toMap    []byte
+		assertFx func(*testing.T, []byte)
+	}{
+		{
+			name:     "unparseable",
+			toMap:    []byte{1, 2, 3, 4},
+			assertFx: assertBytes([]byte{1, 2, 3, 4}),
+		},
+		{
+			name: "maps-multi-typea-answers",
+			toMap: makeDNSResponse(t, domainName, []*dnsmessage.AResource{
+				{A: netip.MustParseAddr("1.2.3.4").As4()},
+				{A: netip.MustParseAddr("5.6.7.8").As4()},
+			}),
+			assertFx: assertParsesToAnswers(
+				[]netip.Addr{
+					netip.MustParseAddr("100.64.0.0"),
+					netip.MustParseAddr("100.64.0.1"),
+				},
+			),
+		},
+		{
+			name: "ipv6-no-answers",
+			toMap: makeV6DNSResponse(t, domainName, []*dnsmessage.AAAAResource{
+				{AAAA: netip.MustParseAddr("2606:4700::6812:1a78").As16()},
+				{AAAA: netip.MustParseAddr("2606:4700::6812:1b78").As16()},
+			}),
+			assertFx: assertParsesToAnswers(nil),
+		},
+		{
+			name:     "not-our-domain",
+			toMap:    ipv4ResponseUnhandledDomain,
+			assertFx: assertBytes(ipv4ResponseUnhandledDomain),
+		},
+		{
+			name:     "ipv6-not-our-domain",
+			toMap:    ipv6ResponseUnhandledDomain,
+			assertFx: assertBytes(ipv6ResponseUnhandledDomain),
+		},
+		{
+			name: "case-insensitive",
+			toMap: makeDNSResponse(t, "eXample.com.", []*dnsmessage.AResource{
+				{A: netip.MustParseAddr("1.2.3.4").As4()},
+				{A: netip.MustParseAddr("5.6.7.8").As4()},
+			}),
+			assertFx: assertParsesToAnswers(
+				[]netip.Addr{
+					netip.MustParseAddr("100.64.0.0"),
+					netip.MustParseAddr("100.64.0.1"),
+				},
+			),
+		},
+		{
+			name: "unhandled-keeps-additional-section",
+			toMap: makeDNSResponse(t, "tailscale.com.", []*dnsmessage.AResource{
+				{A: netip.MustParseAddr("1.2.3.4").As4()},
+				{A: netip.MustParseAddr("5.6.7.8").As4()},
+			}),
+			assertFx: assertParsesToAdditionals(
+				// additionals are added in makeDNSResponse
+				[]netip.Addr{
+					netip.MustParseAddr("9.9.9.9"),
+				},
+			),
+		},
+		{
+			name: "handled-strips-additional-section",
+			toMap: makeDNSResponse(t, domainName, []*dnsmessage.AResource{
+				{A: netip.MustParseAddr("1.2.3.4").As4()},
+				{A: netip.MustParseAddr("5.6.7.8").As4()},
+			}),
+			assertFx: assertParsesToAdditionals(nil),
+		},
+		{
+			name: "servfail-when-we-should-handle-but-cant",
+			// produced by
+			// makeDNSResponse(t, domainName, []*dnsmessage.AResource{{A: netip.MustParseAddr("1.2.3.4").As4()}})
+			// and then taking 17 bytes off the end. So that the parsing of it breaks after we have decided we should handle it.
+			// Frozen like this so that it doesn't depend on the implementation of dnsmessage.
+			toMap:    []byte{0, 1, 132, 0, 0, 1, 0, 1, 0, 0, 0, 1, 7, 101, 120, 97, 109, 112, 108, 101, 3, 99, 111, 109, 0, 0, 1, 0, 1, 192, 12, 0, 1, 0, 1, 0, 0, 0, 0, 0, 4, 1, 2, 3},
+			assertFx: assertServFail,
+		},
+		{
+			name:     "not-inet-question",
+			toMap:    nonINETQuestionResp,
+			assertFx: assertBytes(nonINETQuestionResp),
+		},
+		{
+			name: "not-inet-answer",
+			toMap: makeDNSResponseForSections(t,
+				[]dnsmessage.Question{
+					{
+						Name:  dnsMessageName,
+						Type:  dnsmessage.TypeA,
+						Class: dnsmessage.ClassINET,
+					},
+				},
+				[]dnsmessage.Resource{
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsMessageName,
+							Type:  dnsmessage.TypeA,
+							Class: dnsmessage.ClassCHAOS,
+						},
+						Body: &dnsmessage.AResource{A: netip.MustParseAddr("1.2.3.4").As4()},
+					},
+				},
+				nil,
+			),
+			assertFx: assertParsesToAnswers(nil),
+		},
+		{
+			name: "answer-domain-mismatch",
+			toMap: makeDNSResponseForSections(t,
+				[]dnsmessage.Question{
+					{
+						Name:  dnsMessageName,
+						Type:  dnsmessage.TypeA,
+						Class: dnsmessage.ClassINET,
+					},
+				},
+				[]dnsmessage.Resource{
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsmessage.MustNewName("tailscale.com."),
+							Type:  dnsmessage.TypeA,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.AResource{A: netip.MustParseAddr("1.2.3.4").As4()},
+					},
+				},
+				nil,
+			),
+			assertFx: assertParsesToAnswers(nil),
+		},
+		{
+			name: "answer-type-mismatch",
+			toMap: makeDNSResponseForSections(t,
+				[]dnsmessage.Question{
+					{
+						Name:  dnsMessageName,
+						Type:  dnsmessage.TypeA,
+						Class: dnsmessage.ClassINET,
+					},
+				},
+				[]dnsmessage.Resource{
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsMessageName,
+							Type:  dnsmessage.TypeAAAA,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.AAAAResource{AAAA: netip.MustParseAddr("1.2.3.4").As16()},
+					},
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsMessageName,
+							Type:  dnsmessage.TypeA,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.AResource{A: netip.MustParseAddr("5.6.7.8").As4()},
+					},
+				},
+				nil,
+			),
+			assertFx: assertParsesToAnswers([]netip.Addr{netip.MustParseAddr("100.64.0.0")}),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConn25(logger.Discard)
+			if err := c.reconfig(sn); err != nil {
+				t.Fatal(err)
+			}
+			bs := c.mapDNSResponse(tt.toMap)
+			tt.assertFx(t, bs)
+		})
 	}
 }
