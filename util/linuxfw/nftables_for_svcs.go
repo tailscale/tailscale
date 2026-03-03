@@ -32,13 +32,13 @@ import (
 // - ensures that nat table exists
 // - ensures that there is a prerouting chain for the given service and IP family of the target address in the nat table
 // - ensures that there is a portmapping rule mathcing the given portmap (only creates the rule if it does not already exist)
-func (n *nftablesRunner) EnsurePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error {
-	t, ch, err := n.ensureChainForSvc(svc, targetIP)
+func (r *nftablesRunner) EnsurePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error {
+	t, ch, err := r.ensureChainForSvc(svc, targetIP)
 	if err != nil {
 		return fmt.Errorf("error ensuring chain for %s: %w", svc, err)
 	}
 	meta := svcPortMapRuleMeta(svc, targetIP, pm)
-	rule, err := n.findRuleByMetadata(t, ch, meta)
+	rule, err := r.findRuleByMetadata(t, ch, meta)
 	if err != nil {
 		return fmt.Errorf("error looking up rule: %w", err)
 	}
@@ -51,8 +51,8 @@ func (n *nftablesRunner) EnsurePortMapRuleForSvc(svc, tun string, targetIP netip
 	}
 
 	rule = portMapRule(t, ch, tun, targetIP, pm.MatchPort, pm.TargetPort, p, meta)
-	n.conn.InsertRule(rule)
-	return n.conn.Flush()
+	r.conn.InsertRule(rule)
+	return r.conn.Flush()
 }
 
 // DeletePortMapRuleForSvc deletes a portmapping rule in the given service/IP family chain.
@@ -60,19 +60,19 @@ func (n *nftablesRunner) EnsurePortMapRuleForSvc(svc, tun string, targetIP netip
 // The caller is expected to call DeleteSvc if the whole service (the chain)
 // needs to be deleted, so we don't deal with the case where this is the only
 // rule in the chain here.
-func (n *nftablesRunner) DeletePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error {
-	table, err := n.getNFTByAddr(targetIP)
+func (r *nftablesRunner) DeletePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error {
+	table, err := r.getNFTByAddr(targetIP)
 	if err != nil {
 		return fmt.Errorf("error setting up nftables for IP family of %s: %w", targetIP, err)
 	}
-	t, err := getTableIfExists(n.conn, table.Proto, "nat")
+	t, err := getTableIfExists(r.conn, table.Proto, "nat")
 	if err != nil {
 		return fmt.Errorf("error checking if nat table exists: %w", err)
 	}
 	if t == nil {
 		return nil
 	}
-	ch, err := getChainFromTable(n.conn, t, svc)
+	ch, err := getChainFromTable(r.conn, t, svc)
 	if err != nil && !errors.Is(err, errorChainNotFound{t.Name, svc}) {
 		return fmt.Errorf("error checking if chain %s exists: %w", svc, err)
 	}
@@ -80,56 +80,56 @@ func (n *nftablesRunner) DeletePortMapRuleForSvc(svc, tun string, targetIP netip
 		return nil // service chain does not exist, so neither does the portmapping rule
 	}
 	meta := svcPortMapRuleMeta(svc, targetIP, pm)
-	rule, err := n.findRuleByMetadata(t, ch, meta)
+	rule, err := r.findRuleByMetadata(t, ch, meta)
 	if err != nil {
 		return fmt.Errorf("error checking if rule exists: %w", err)
 	}
 	if rule == nil {
 		return nil
 	}
-	if err := n.conn.DelRule(rule); err != nil {
+	if err := r.conn.DelRule(rule); err != nil {
 		return fmt.Errorf("error deleting rule: %w", err)
 	}
-	return n.conn.Flush()
+	return r.conn.Flush()
 }
 
 // DeleteSvc deletes the chains for the given service if any exist.
-func (n *nftablesRunner) DeleteSvc(svc, tun string, targetIPs []netip.Addr, pm []PortMap) error {
+func (r *nftablesRunner) DeleteSvc(svc, tun string, targetIPs []netip.Addr, pm []PortMap) error {
 	for _, tip := range targetIPs {
-		table, err := n.getNFTByAddr(tip)
+		table, err := r.getNFTByAddr(tip)
 		if err != nil {
 			return fmt.Errorf("error setting up nftables for IP family of %s: %w", tip, err)
 		}
-		t, err := getTableIfExists(n.conn, table.Proto, "nat")
+		t, err := getTableIfExists(r.conn, table.Proto, "nat")
 		if err != nil {
 			return fmt.Errorf("error checking if nat table exists: %w", err)
 		}
 		if t == nil {
 			return nil
 		}
-		ch, err := getChainFromTable(n.conn, t, svc)
+		ch, err := getChainFromTable(r.conn, t, svc)
 		if err != nil && !errors.Is(err, errorChainNotFound{t.Name, svc}) {
 			return fmt.Errorf("error checking if chain %s exists: %w", svc, err)
 		}
 		if errors.Is(err, errorChainNotFound{t.Name, svc}) {
 			return nil
 		}
-		n.conn.DelChain(ch)
+		r.conn.DelChain(ch)
 	}
-	return n.conn.Flush()
+	return r.conn.Flush()
 }
 
 // EnsureDNATRuleForSvc adds a DNAT rule that forwards traffic from the
 // VIPService IP address to a local address. This is used by the Kubernetes
 // operator's network layer proxies to forward tailnet traffic for VIPServices
 // to Kubernetes Services.
-func (n *nftablesRunner) EnsureDNATRuleForSvc(svc string, origDst, dst netip.Addr) error {
-	t, ch, err := n.ensurePreroutingChain(origDst)
+func (r *nftablesRunner) EnsureDNATRuleForSvc(svc string, origDst, dst netip.Addr) error {
+	t, ch, err := r.ensurePreroutingChain(origDst)
 	if err != nil {
 		return fmt.Errorf("error ensuring chain for %s: %w", svc, err)
 	}
 	meta := svcRuleMeta(svc, origDst, dst)
-	rule, err := n.findRuleByMetadata(t, ch, meta)
+	rule, err := r.findRuleByMetadata(t, ch, meta)
 	if err != nil {
 		return fmt.Errorf("error looking up rule: %w", err)
 	}
@@ -137,25 +137,25 @@ func (n *nftablesRunner) EnsureDNATRuleForSvc(svc string, origDst, dst netip.Add
 		return nil
 	}
 	rule = dnatRuleForChain(t, ch, origDst, dst, meta)
-	n.conn.InsertRule(rule)
-	return n.conn.Flush()
+	r.conn.InsertRule(rule)
+	return r.conn.Flush()
 }
 
 // DeleteDNATRuleForSvc deletes a DNAT rule created by EnsureDNATRuleForSvc.
 // We use the metadata attached to the rule to look it up.
-func (n *nftablesRunner) DeleteDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error {
-	table, err := n.getNFTByAddr(origDst)
+func (r *nftablesRunner) DeleteDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error {
+	table, err := r.getNFTByAddr(origDst)
 	if err != nil {
 		return fmt.Errorf("error setting up nftables for IP family of %s: %w", origDst, err)
 	}
-	t, err := getTableIfExists(n.conn, table.Proto, "nat")
+	t, err := getTableIfExists(r.conn, table.Proto, "nat")
 	if err != nil {
 		return fmt.Errorf("error checking if nat table exists: %w", err)
 	}
 	if t == nil {
 		return nil
 	}
-	ch, err := getChainFromTable(n.conn, t, "PREROUTING")
+	ch, err := getChainFromTable(r.conn, t, "PREROUTING")
 	if errors.Is(err, errorChainNotFound{tableName: "nat", chainName: "PREROUTING"}) {
 		return nil
 	}
@@ -163,17 +163,17 @@ func (n *nftablesRunner) DeleteDNATRuleForSvc(svcName string, origDst, dst netip
 		return fmt.Errorf("error checking if chain PREROUTING exists: %w", err)
 	}
 	meta := svcRuleMeta(svcName, origDst, dst)
-	rule, err := n.findRuleByMetadata(t, ch, meta)
+	rule, err := r.findRuleByMetadata(t, ch, meta)
 	if err != nil {
 		return fmt.Errorf("error checking if rule exists: %w", err)
 	}
 	if rule == nil {
 		return nil
 	}
-	if err := n.conn.DelRule(rule); err != nil {
+	if err := r.conn.DelRule(rule); err != nil {
 		return fmt.Errorf("error deleting rule: %w", err)
 	}
-	return n.conn.Flush()
+	return r.conn.Flush()
 }
 
 func portMapRule(t *nftables.Table, ch *nftables.Chain, tun string, targetIP netip.Addr, matchPort, targetPort uint16, proto uint8, meta []byte) *nftables.Rule {
@@ -239,11 +239,11 @@ func svcPortMapRuleMeta(svcName string, targetIP netip.Addr, pm PortMap) []byte 
 	return []byte(fmt.Sprintf("svc:%s,targetIP:%s:matchPort:%v,targetPort:%v,proto:%v", svcName, targetIP.String(), pm.MatchPort, pm.TargetPort, pm.Protocol))
 }
 
-func (n *nftablesRunner) findRuleByMetadata(t *nftables.Table, ch *nftables.Chain, meta []byte) (*nftables.Rule, error) {
-	if n.conn == nil || t == nil || ch == nil || len(meta) == 0 {
+func (r *nftablesRunner) findRuleByMetadata(t *nftables.Table, ch *nftables.Chain, meta []byte) (*nftables.Rule, error) {
+	if r.conn == nil || t == nil || ch == nil || len(meta) == 0 {
 		return nil, nil
 	}
-	rules, err := n.conn.GetRules(t, ch)
+	rules, err := r.conn.GetRules(t, ch)
 	if err != nil {
 		return nil, fmt.Errorf("error listing rules: %w", err)
 	}
@@ -255,17 +255,17 @@ func (n *nftablesRunner) findRuleByMetadata(t *nftables.Table, ch *nftables.Chai
 	return nil, nil
 }
 
-func (n *nftablesRunner) ensureChainForSvc(svc string, targetIP netip.Addr) (*nftables.Table, *nftables.Chain, error) {
+func (r *nftablesRunner) ensureChainForSvc(svc string, targetIP netip.Addr) (*nftables.Table, *nftables.Chain, error) {
 	polAccept := nftables.ChainPolicyAccept
-	table, err := n.getNFTByAddr(targetIP)
+	table, err := r.getNFTByAddr(targetIP)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error setting up nftables for IP family of %v: %w", targetIP, err)
 	}
-	nat, err := createTableIfNotExist(n.conn, table.Proto, "nat")
+	nat, err := createTableIfNotExist(r.conn, table.Proto, "nat")
 	if err != nil {
 		return nil, nil, fmt.Errorf("error ensuring nat table: %w", err)
 	}
-	svcCh, err := getOrCreateChain(n.conn, chainInfo{
+	svcCh, err := getOrCreateChain(r.conn, chainInfo{
 		table:         nat,
 		name:          svc,
 		chainType:     nftables.ChainTypeNAT,
