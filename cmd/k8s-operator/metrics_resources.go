@@ -7,6 +7,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"reflect"
 
@@ -226,13 +228,13 @@ func metricsResourceLabels(opts *metricsOpts) map[string]string {
 		kubetypes.LabelManaged:   "true",
 		labelMetricsTarget:       opts.proxyStsName,
 		labelPromProxyType:       opts.proxyType,
-		labelPromProxyParentName: opts.proxyLabels[LabelParentName],
+		labelPromProxyParentName: truncateLabelValue(opts.proxyLabels[LabelParentName]),
 	}
 	// Include namespace label for proxies created for a namespaced type.
 	if isNamespacedProxyType(opts.proxyType) {
-		lbls[labelPromProxyParentNamespace] = opts.proxyLabels[LabelParentNamespace]
+		lbls[labelPromProxyParentNamespace] = truncateLabelValue(opts.proxyLabels[LabelParentNamespace])
 	}
-	lbls[labelPromJob] = promJobName(opts)
+	lbls[labelPromJob] = truncateLabelValue(promJobName(opts))
 	return lbls
 }
 
@@ -249,11 +251,11 @@ func promJobName(opts *metricsOpts) string {
 func metricsSvcSelector(proxyLabels map[string]string, proxyType string) map[string]string {
 	sel := map[string]string{
 		labelPromProxyType:       proxyType,
-		labelPromProxyParentName: proxyLabels[LabelParentName],
+		labelPromProxyParentName: truncateLabelValue(proxyLabels[LabelParentName]),
 	}
 	// Include namespace label for proxies created for a namespaced type.
 	if isNamespacedProxyType(proxyType) {
-		sel[labelPromProxyParentNamespace] = proxyLabels[LabelParentNamespace]
+		sel[labelPromProxyParentNamespace] = truncateLabelValue(proxyLabels[LabelParentNamespace])
 	}
 	return sel
 }
@@ -282,6 +284,20 @@ type metricsOpts struct {
 
 func isNamespacedProxyType(typ string) bool {
 	return typ == proxyTypeIngressResource || typ == proxyTypeIngressService
+}
+
+// truncateLabelValue truncates a Kubernetes label value to fit within the
+// 63-character limit. If the value exceeds the limit, it is truncated and a
+// short hash suffix is appended to preserve uniqueness.
+func truncateLabelValue(val string) string {
+	const maxLen = 63
+	if len(val) <= maxLen {
+		return val
+	}
+	hash := sha256.Sum256([]byte(val))
+	suffix := hex.EncodeToString(hash[:4]) // 8 hex chars
+	truncated := val[:maxLen-len(suffix)-1]
+	return truncated + "-" + suffix
 }
 
 func mergeMapKeys(a, b map[string]string) map[string]string {
