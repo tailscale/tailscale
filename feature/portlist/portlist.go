@@ -122,6 +122,19 @@ func (e *Extension) runPollLoop() {
 			return
 		}
 
+		// Before we do potentially expensive work below (polling what might be
+		// a ton of ports), double check that we actually need to do it.
+		// TODO(bradfitz): the onSelfChange, and onChangeProfile hooks above are
+		// not enough, because CollectServices is a NetMap-level thing and not a
+		// change to the local self node. We should add an eventbus topic for
+		// when CollectServices changes probably, or move the CollectServices
+		// thing into a local node self cap (at least logically, if not on the
+		// wire) so then the onSelfChange hook would cover it. In the meantime,
+		// we'll just end up doing some extra checks every PollInterval, which
+		// is not the end of the world, and fixes the problem of picking up
+		// changes to CollectServices that come down in the netmap.
+		e.updateShouldUploadServices()
+
 		if !e.shouldUploadServicesAtomic.Load() {
 			continue
 		}
