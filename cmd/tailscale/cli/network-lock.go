@@ -224,7 +224,7 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 		if nlStatusArgs.json.Value == 1 {
 			return jsonoutput.PrintNetworkLockStatusJSONV1(os.Stdout, st)
 		} else {
-			return fmt.Errorf("unrecognised version: %q", nlStatusArgs.json.Value)
+			return fmt.Errorf("unrecognised version: %d", nlStatusArgs.json.Value)
 		}
 	}
 
@@ -717,7 +717,7 @@ func printNetworkLockLog(updates []ipnstate.NetworkLockUpdate, out io.Writer, js
 		if jsonSchema.Value == 1 {
 			return jsonoutput.PrintNetworkLockLogJSONV1(out, updates)
 		} else {
-			return fmt.Errorf("unrecognised version: %q", jsonSchema.Value)
+			return fmt.Errorf("unrecognised version: %d", jsonSchema.Value)
 		}
 	}
 

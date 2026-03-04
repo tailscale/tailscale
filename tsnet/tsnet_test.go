@@ -445,7 +445,7 @@ func TestConn(t *testing.T) {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
-				if ctx.Err() != nil {
+				if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 					return
 				}
 				t.Errorf("s1.Accept: %v", err)

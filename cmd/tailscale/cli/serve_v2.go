@@ -219,7 +219,7 @@ var errHelpFunc = func(m serveMode) error {
 // newServeV2Command returns a new "serve" subcommand using e as its environment.
 func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 	if subcmd != serve && subcmd != funnel {
-		log.Fatalf("newServeDevCommand called with unknown subcmd %q", subcmd)
+		log.Fatalf("newServeDevCommand called with unknown subcmd %v", subcmd)
 	}
 
 	info := infoMap[subcmd]

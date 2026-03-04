@@ -265,7 +265,6 @@ func TestMinTailscaledWithCLI(t *testing.T) {
 	badSubstrs := []string{
 		"cbor",
 		"hujson",
-		"pprof",
 		"multierr", // https://github.com/tailscale/tailscale/pull/17379
 		"tailscale.com/metrics",
 		"tailscale.com/tsweb/varz",
@@ -287,6 +286,8 @@ func TestMinTailscaledWithCLI(t *testing.T) {
 		BadDeps: map[string]string{
 			"golang.org/x/net/http2":                 "unexpected x/net/http2 dep; tailscale/tailscale#17305",
 			"expvar":                                 "unexpected expvar dep",
+			"runtime/pprof":                          "unexpected runtime/pprof dep",
+			"net/http/pprof":                         "unexpected net/http/pprof dep",
 			"github.com/mdlayher/genetlink":          "unexpected genetlink dep",
 			"tailscale.com/clientupdate":             "unexpected clientupdate dep",
 			"filippo.io/edwards25519":                "unexpected edwards25519 dep",

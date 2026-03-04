@@ -384,7 +384,7 @@ func infoFromCache(ref string, runner dirRunner) (verInfo, error) {
 	}
 	changeCount, err := strconv.Atoi(s)
 	if err != nil {
-		return verInfo{}, fmt.Errorf("infoFromCache: parsing changeCount %q: %w", changeCount, err)
+		return verInfo{}, fmt.Errorf("infoFromCache: parsing changeCount %q: %w", s, err)
 	}
 
 	return verInfo{

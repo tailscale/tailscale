@@ -176,13 +176,13 @@ func runStatus(ctx context.Context, args []string) error {
 		}
 		if !ps.Active {
 			if ps.ExitNode {
-				f("idle; exit node" + offline)
+				f("idle; exit node%s", offline)
 			} else if ps.ExitNodeOption {
-				f("idle; offers exit node" + offline)
+				f("idle; offers exit node%s", offline)
 			} else if anyTraffic {
-				f("idle" + offline)
+				f("idle%s", offline)
 			} else if !ps.Online {
-				f("offline" + lastSeenFmt(ps.LastSeen))
+				f("offline%s", lastSeenFmt(ps.LastSeen))
 			} else {
 				f("-")
 			}
@@ -201,7 +201,7 @@ func runStatus(ctx context.Context, args []string) error {
 				f("peer-relay %s", ps.PeerRelay)
 			}
 			if !ps.Online {
-				f(offline)
+				f("%s", offline)
 			}
 		}
 		if anyTraffic {
