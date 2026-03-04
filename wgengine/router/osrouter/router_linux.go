@@ -86,6 +86,7 @@ type linuxRouter struct {
 	localRoutes       map[netip.Prefix]bool
 	snatSubnetRoutes  bool
 	statefulFiltering bool
+	connmarkEnabled   bool // whether connmark rules are currently enabled
 	netfilterMode     preftype.NetfilterMode
 	netfilterKind     string
 	magicsockPortV4   uint16
@@ -370,6 +371,12 @@ func (r *linuxRouter) Close() error {
 		r.unregNetMon()
 	}
 	r.eventClient.Close()
+
+	// Clean up connmark rules
+	if err := r.nfr.DelConnmarkSaveRule(); err != nil {
+		r.logf("warning: failed to delete connmark rules: %v", err)
+	}
+
 	if err := r.downInterface(); err != nil {
 		return err
 	}
@@ -478,6 +485,35 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	}
 	r.statefulFiltering = cfg.StatefulFiltering
 	r.updateStatefulFilteringWithDockerWarning(cfg)
+
+	// Connmark rules for rp_filter compatibility.
+	// Always enabled when netfilter is ON to handle all rp_filter=1 scenarios
+	// (normal operation, exit nodes, subnet routers, and clients using exit nodes).
+	netfilterOn := cfg.NetfilterMode == netfilterOn
+	switch {
+	case netfilterOn == r.connmarkEnabled:
+		// state already correct, nothing to do.
+	case netfilterOn:
+		r.logf("enabling connmark-based rp_filter workaround")
+		if err := r.nfr.AddConnmarkSaveRule(); err != nil {
+			r.logf("warning: failed to add connmark rules (rp_filter workaround may not work): %v", err)
+			errs = append(errs, fmt.Errorf("enabling connmark rules: %w", err))
+		} else {
+			// Only update state on success to keep it in sync with actual rules
+			r.connmarkEnabled = true
+		}
+	default:
+		r.logf("disabling connmark-based rp_filter workaround")
+		if err := r.nfr.DelConnmarkSaveRule(); err != nil {
+			// Deletion errors are only logged, not returned, because:
+			// 1. Rules may not exist (e.g., first run or after manual deletion)
+			// 2. Failure to delete is less critical than failure to add
+			// 3. We still want to update state to attempt re-add on next enable
+			r.logf("warning: failed to delete connmark rules: %v", err)
+		}
+		// Always clear state when disabling, even if delete failed
+		r.connmarkEnabled = false
+	}
 
 	// Issue 11405: enable IP forwarding on gokrazy.
 	advertisingRoutes := len(cfg.SubnetRoutes) > 0
