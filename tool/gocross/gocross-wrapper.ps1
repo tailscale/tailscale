@@ -204,7 +204,7 @@ Start-ChildScope -ScriptBlock $bootstrapScriptBlock
 $repoRoot = Get-RepoRoot
 
 $execEnv = Copy-Environment
-# Start-Process's -Environment arg applies diffs, so instead of removing
+# We're applying diffs to our current environment, so instead of removing
 # these variables from $execEnv, we must set them to $null to indicate
 # that they should be cleared.
 $execEnv['GOROOT'] = $null
@@ -223,12 +223,15 @@ if ($Env:TS_USE_GOCROSS -ne '1') {
     }
 
     $procExe = Join-Path $toolchain 'bin' 'go.exe' -Resolve
-    $proc = Start-Process -FilePath $procExe -WorkingDirectory $repoRoot -Environment $execEnv -ArgumentList $argList -NoNewWindow -PassThru
-    $proc.WaitForExit()
-    exit $proc.ExitCode
+}
+else {
+    $procExe = Join-Path $repoRoot 'gocross.exe' -Resolve
 }
 
-$procExe = Join-Path $repoRoot 'gocross.exe' -Resolve
-$proc = Start-Process -FilePath $procExe -WorkingDirectory $repoRoot -Environment $execEnv -ArgumentList $argList -NoNewWindow -PassThru
-$proc.WaitForExit()
-exit $proc.ExitCode
+Start-ChildScope -ScriptBlock {
+    Set-Location -LiteralPath $repoRoot
+    foreach ($key in $execEnv.Keys) {
+        Set-Item -Path "Env:$key" -Value $execEnv[$key]
+    }
+    & $procExe @argList
+}
