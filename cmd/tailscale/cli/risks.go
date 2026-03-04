@@ -4,13 +4,10 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"flag"
-	"runtime"
 	"strings"
 
-	"tailscale.com/ipn"
 	"tailscale.com/util/prompt"
 	"tailscale.com/util/testenv"
 )
@@ -19,7 +16,6 @@ var (
 	riskTypes           []string
 	riskLoseSSH         = registerRiskType("lose-ssh")
 	riskMacAppConnector = registerRiskType("mac-app-connector")
-	riskStrictRPFilter  = registerRiskType("linux-strict-rp-filter")
 	riskAll             = registerRiskType("all")
 )
 
@@ -71,19 +67,4 @@ func presentRiskToUser(riskType, riskMessage, acceptedRisks string) error {
 	}
 
 	return errAborted
-}
-
-// checkExitNodeRisk checks if the user is using an exit node on Linux and
-// whether reverse path filtering is enabled. If so, it presents a risk message.
-func checkExitNodeRisk(ctx context.Context, prefs *ipn.Prefs, acceptedRisks string) error {
-	if runtime.GOOS != "linux" {
-		return nil
-	}
-	if !prefs.ExitNodeIP.IsValid() && prefs.ExitNodeID == "" {
-		return nil
-	}
-	if err := localClient.CheckReversePathFiltering(ctx); err != nil {
-		return presentRiskToUser(riskStrictRPFilter, err.Error(), acceptedRisks)
-	}
-	return nil
 }

@@ -543,9 +543,6 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	}
 
 	warnOnAdvertiseRoutes(ctx, prefs)
-	if err := checkExitNodeRisk(ctx, prefs, upArgs.acceptedRisks); err != nil {
-		return err
-	}
 
 	curPrefs, err := localClient.GetPrefs(ctx)
 	if err != nil {
@@ -834,7 +831,6 @@ func upWorthyWarning(s string) bool {
 	return strings.Contains(s, healthmsg.TailscaleSSHOnBut) ||
 		strings.Contains(s, healthmsg.WarnAcceptRoutesOff) ||
 		strings.Contains(s, healthmsg.LockedOut) ||
-		strings.Contains(s, healthmsg.WarnExitNodeUsage) ||
 		strings.Contains(s, healthmsg.InMemoryTailnetLockState) ||
 		strings.Contains(strings.ToLower(s), "update available: ")
 }
