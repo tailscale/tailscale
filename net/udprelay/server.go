@@ -651,8 +651,9 @@ func trySetSOMark(logf logger.Logf, netMon *netmon.Monitor, network, address str
 // single packet syscall operations.
 func (s *Server) bindSockets(desiredPort uint16) error {
 	// maxSocketsPerAF is a conservative starting point, but is somewhat
-	// arbitrary.
-	maxSocketsPerAF := min(16, runtime.NumCPU())
+	// arbitrary. Use GOMAXPROCS rather than NumCPU as it is container-aware
+	// and respects CPU limits/quotas set via cgroups.
+	maxSocketsPerAF := min(16, runtime.GOMAXPROCS(0))
 	listenConfig := &net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
 			trySetReusePort(network, address, c)
