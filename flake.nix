@@ -55,7 +55,7 @@
           system = system;
           overlays = [
             (final: prev: {
-              go_1_25 = prev.go_1_25.overrideAttrs {
+              go_1_26 = prev.go_1_26.overrideAttrs {
                 version = goVersion;
                 src = prev.fetchFromGitHub {
                   owner = "tailscale";
@@ -140,7 +140,7 @@
           gotools
           graphviz
           perl
-          go_1_25
+          go_1_26
           yarn
 
           # qemu and e2fsprogs are needed for natlab
