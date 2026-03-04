@@ -1,3 +1,13 @@
+{{/*
+Fail on presence of removed TS_EXPERIMENTAL_KUBE_API_EVENTS extraEnv var.
+*/}}
+{{- $removed := "TS_EXPERIMENTAL_KUBE_API_EVENTS" -}}
+{{- range  .Values.operatorConfig.extraEnv }}
+  {{- if and .name (eq .name $removed) (eq .value "true") -}}
+    {{- fail (printf "ERROR: operatorConfig.extraEnv.%s has been removed. Use ACLs instead." $removed) -}}
+  {{- end -}}
+{{- end -}}
+
 You have successfully installed the Tailscale Kubernetes Operator!
 
 Once connected, the operator should appear as a device within the Tailscale admin console:

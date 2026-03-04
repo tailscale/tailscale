@@ -28,7 +28,6 @@ import (
 	"k8s.io/client-go/transport"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
-	"tailscale.com/envknob"
 	ksr "tailscale.com/k8s-operator/sessionrecording"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/netx"
@@ -43,13 +42,7 @@ import (
 var (
 	// counterNumRequestsproxies counts the number of API server requests proxied via this proxy.
 	counterNumRequestsProxied = clientmetric.NewCounter("k8s_auth_proxy_requests_proxied")
-	// NOTE: adding this metric so we can keep track of users during deprecation
-	counterExperimentalEventsVarUsed = clientmetric.NewCounter("ts_experimental_kube_api_events_var_used")
-	whoIsKey                         = ctxkey.New("", (*apitype.WhoIsResponse)(nil))
-)
-
-const (
-	eventsEnabledVar = "TS_EXPERIMENTAL_KUBE_API_EVENTS"
+	whoIsKey                  = ctxkey.New("", (*apitype.WhoIsResponse)(nil))
 )
 
 // NewAPIServerProxy creates a new APIServerProxy that's ready to start once Run
@@ -103,7 +96,6 @@ func NewAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, ts *tsn
 		upstreamURL:   u,
 		ts:            ts,
 		sendEventFunc: sessionrecording.SendEvent,
-		eventsEnabled: envknob.Bool(eventsEnabledVar),
 	}
 	ap.rp = &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -132,11 +124,6 @@ func (ap *APIServerProxy) Run(ctx context.Context) error {
 		Handler:      mux,
 		ErrorLog:     zap.NewStdLog(ap.log.Desugar()),
 		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
-	}
-
-	if ap.eventsEnabled {
-		counterExperimentalEventsVarUsed.Add(1)
-		ap.log.Warnf("DEPRECATED: %q environment variable is deprecated, and will be removed in v1.96. See documentation for more detail.", eventsEnabledVar)
 	}
 
 	mode := "noauth"
@@ -205,10 +192,6 @@ type APIServerProxy struct {
 	upstreamURL *url.URL
 
 	sendEventFunc func(ap netip.AddrPort, event io.Reader, dial netx.DialFunc) error
-
-	// Flag used to enable sending API requests as events to tsrecorder.
-	// Deprecated: events are now set via ACLs (see https://tailscale.com/kb/1246/tailscale-ssh-session-recording#turn-on-session-recording-in-your-tailnet-policy-file)
-	eventsEnabled bool
 }
 
 // serveDefault is the default handler for Kubernetes API server requests.
@@ -237,8 +220,7 @@ func (ap *APIServerProxy) serveDefault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// NOTE: (ChaosInTheCRD) ap.eventsEnabled deprecated, remove in v1.96
-	if c.enableEvents || ap.eventsEnabled {
+	if c.enableEvents {
 		if err = ap.recordRequestAsEvent(r, who, c.recorderAddresses, c.failOpen); err != nil {
 			msg := fmt.Sprintf("error recording Kubernetes API request: %v", err)
 			ap.log.Errorf(msg)
@@ -308,8 +290,7 @@ func (ap *APIServerProxy) sessionForProto(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// NOTE: (ChaosInTheCRD) ap.eventsEnabled deprecated, remove in v1.96
-	if c.enableEvents || ap.eventsEnabled {
+	if c.enableEvents {
 		if err = ap.recordRequestAsEvent(r, who, c.recorderAddresses, c.failOpen); err != nil {
 			msg := fmt.Sprintf("error recording Kubernetes API request: %v", err)
 			ap.log.Errorf(msg)
