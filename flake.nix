@@ -161,6 +161,17 @@
       default = self.nixosModules.override;
     };
 
+    checks = eachSystem (pkgs: {
+      single = import ./nixos/tests/single.nix {
+        inherit self pkgs;
+        inherit (pkgs) lib;
+      };
+      multi = import ./nixos/tests/multi.nix {
+        inherit self pkgs;
+        inherit (pkgs) lib;
+      };
+    });
+
     devShells = eachSystem (pkgs: {
       default = pkgs.mkShell {
         packages = with pkgs; [
