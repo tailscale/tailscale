@@ -1,0 +1,13 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
+package tsd
+
+import "testing"
+
+func TestSystem(t *testing.T) {
+	s := &System{}
+	if s == nil {
+		t.Fatal("System is nil")
+	}
+}
