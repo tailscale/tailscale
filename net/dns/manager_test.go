@@ -698,11 +698,9 @@ func TestManager(t *testing.T) {
 			goos: "linux",
 		},
 		{
-			// The `routes-magic-split-linux` test case above on Darwin should NOT result in a
-			// split DNS configuration.
-			// Check that MatchDomains is empty. Due to Apple limitations, we cannot set MatchDomains
-			// without those domains also being SearchDomains.
-			name: "routes-magic-does-not-split-on-darwin",
+			// On macOS CLI (tailscaled), MagicDNS domains AND split DNS routes
+			// should be in MatchDomains so /etc/resolver/<domain> files are created.
+			name: "routes-magic-split-on-darwin",
 			in: Config{
 				Routes: upstreams(
 					"corp.com", "2.2.2.2",
@@ -716,6 +714,7 @@ func TestManager(t *testing.T) {
 			os: OSConfig{
 				Nameservers:   serviceAddr46,
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+				MatchDomains:  fqdns("ts.com", "corp.com"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
@@ -866,9 +865,9 @@ func TestManager(t *testing.T) {
 			goos: "ios",
 		},
 		{
-			// on darwin, verify that with the same config as in ios-use-split-dns-when-no-custom-resolvers,
-			// MatchDomains are NOT set.
-			name: "darwin-dont-use-split-dns-when-no-custom-resolvers",
+			// On macOS CLI (tailscaled), MagicDNS domains AND split DNS routes
+			// should be in MatchDomains so /etc/resolver/<domain> files are created.
+			name: "darwin-use-split-dns-for-magicdns",
 			in: Config{
 				Routes:        upstreams("ts.net", "199.247.155.52", "optimistic-display.ts.net", ""),
 				SearchDomains: fqdns("optimistic-display.ts.net"),
@@ -877,6 +876,7 @@ func TestManager(t *testing.T) {
 			os: OSConfig{
 				Nameservers:   serviceAddr46,
 				SearchDomains: fqdns("optimistic-display.ts.net"),
+				MatchDomains:  fqdns("optimistic-display.ts.net", "ts.net"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
