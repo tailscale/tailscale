@@ -74,6 +74,7 @@ type nftablesRunner struct {
 	nft6 *nftable // IPv6 tables or nil if the system does not support IPv6
 
 	v6Available bool // whether the host supports IPv6
+	marks       PacketMarks
 }
 
 func (n *nftablesRunner) ensurePreroutingChain(dst netip.Addr) (*nftables.Table, *nftables.Chain, error) {
@@ -589,6 +590,10 @@ type NetfilterRunner interface {
 	// DelMagicsockPortRule removes the rule created by AddMagicsockPortRule,
 	// if it exists.
 	DelMagicsockPortRule(port uint16, network string) error
+
+	// SetPacketMarks updates the packet marks used by the netfilter runner.
+	// This should be called when the router's packet marks are updated.
+	SetPacketMarks(marks PacketMarks)
 }
 
 // New creates a NetfilterRunner, auto-detecting whether to use
@@ -654,6 +659,7 @@ func newNfTablesRunnerWithConn(logf logger.Logf, conn *nftables.Conn) *nftablesR
 		nft4:        nft4,
 		nft6:        nft6,
 		v6Available: supportsV6,
+		marks:       DefaultPacketMarks(),
 	}
 }
 
@@ -1233,9 +1239,9 @@ func addDropCGNATRangeRule(c *nftables.Conn, table *nftables.Table, chain *nftab
 
 // createSetSubnetRouteMarkRule creates a rule to set the subnet route
 // mark if the packet is from the given interface.
-func createSetSubnetRouteMarkRule(table *nftables.Table, chain *nftables.Chain, tunname string) (*nftables.Rule, error) {
-	hexTsFwmarkMaskNeg := getTailscaleFwmarkMaskNeg()
-	hexTSSubnetRouteMark := getTailscaleSubnetRouteMark()
+func createSetSubnetRouteMarkRule(table *nftables.Table, chain *nftables.Chain, tunname string, marks PacketMarks) (*nftables.Rule, error) {
+	hexTsFwmarkMaskNeg := marks.FwmarkMaskNegBytes()
+	hexTSSubnetRouteMark := marks.SubnetRouteMarkBytes()
 
 	rule := &nftables.Rule{
 		Table: table,
@@ -1268,8 +1274,8 @@ func createSetSubnetRouteMarkRule(table *nftables.Table, chain *nftables.Chain, 
 
 // addSetSubnetRouteMarkRule adds a rule to set the subnet route mark
 // if the packet is from the given interface.
-func addSetSubnetRouteMarkRule(c *nftables.Conn, table *nftables.Table, chain *nftables.Chain, tunname string) error {
-	rule, err := createSetSubnetRouteMarkRule(table, chain, tunname)
+func addSetSubnetRouteMarkRule(c *nftables.Conn, table *nftables.Table, chain *nftables.Chain, tunname string, marks PacketMarks) error {
+	rule, err := createSetSubnetRouteMarkRule(table, chain, tunname, marks)
 	if err != nil {
 		return fmt.Errorf("create rule: %w", err)
 	}
@@ -1498,6 +1504,11 @@ func (n *nftablesRunner) DelMagicsockPortRule(port uint16, network string) error
 	return nil
 }
 
+// SetPacketMarks updates the packet marks used by the netfilter runner.
+func (n *nftablesRunner) SetPacketMarks(marks PacketMarks) {
+	n.marks = marks
+}
+
 // createAcceptIncomingPacketRule creates a rule to accept incoming packets to
 // the given interface.
 func createAcceptIncomingPacketRule(table *nftables.Table, chain *nftables.Chain, tunname string) *nftables.Rule {
@@ -1566,11 +1577,11 @@ func (n *nftablesRunner) addBase4(tunname string) error {
 		return fmt.Errorf("get forward chain v4: %v", err)
 	}
 
-	if err = addSetSubnetRouteMarkRule(conn, n.nft4.Filter, forwardChain, tunname); err != nil {
+	if err = addSetSubnetRouteMarkRule(conn, n.nft4.Filter, forwardChain, tunname, n.marks); err != nil {
 		return fmt.Errorf("add set subnet route mark rule v4: %w", err)
 	}
 
-	if err = addMatchSubnetRouteMarkRule(conn, n.nft4.Filter, forwardChain, Accept); err != nil {
+	if err = addMatchSubnetRouteMarkRule(conn, n.nft4.Filter, forwardChain, Accept, n.marks); err != nil {
 		return fmt.Errorf("add match subnet route mark rule v4: %w", err)
 	}
 
@@ -1606,11 +1617,11 @@ func (n *nftablesRunner) addBase6(tunname string) error {
 		return fmt.Errorf("get forward chain v6: %w", err)
 	}
 
-	if err = addSetSubnetRouteMarkRule(conn, n.nft6.Filter, forwardChain, tunname); err != nil {
+	if err = addSetSubnetRouteMarkRule(conn, n.nft6.Filter, forwardChain, tunname, n.marks); err != nil {
 		return fmt.Errorf("add set subnet route mark rule v6: %w", err)
 	}
 
-	if err = addMatchSubnetRouteMarkRule(conn, n.nft6.Filter, forwardChain, Accept); err != nil {
+	if err = addMatchSubnetRouteMarkRule(conn, n.nft6.Filter, forwardChain, Accept, n.marks); err != nil {
 		return fmt.Errorf("add match subnet route mark rule v6: %w", err)
 	}
 
@@ -1654,9 +1665,9 @@ func (n *nftablesRunner) DelBase() error {
 
 // createMatchSubnetRouteMarkRule creates a rule that matches packets
 // with the subnet route mark and takes the specified action.
-func createMatchSubnetRouteMarkRule(table *nftables.Table, chain *nftables.Chain, action MatchDecision) (*nftables.Rule, error) {
-	hexTSFwmarkMask := getTailscaleFwmarkMask()
-	hexTSSubnetRouteMark := getTailscaleSubnetRouteMark()
+func createMatchSubnetRouteMarkRule(table *nftables.Table, chain *nftables.Chain, action MatchDecision, marks PacketMarks) (*nftables.Rule, error) {
+	hexTSFwmarkMask := marks.FwmarkMaskBytes()
+	hexTSSubnetRouteMark := marks.SubnetRouteMarkBytes()
 
 	var endAction expr.Any
 	endAction = &expr.Verdict{Kind: expr.VerdictAccept}
@@ -1692,8 +1703,8 @@ func createMatchSubnetRouteMarkRule(table *nftables.Table, chain *nftables.Chain
 
 // addMatchSubnetRouteMarkRule adds a rule that matches packets with
 // the subnet route mark and takes the specified action.
-func addMatchSubnetRouteMarkRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, action MatchDecision) error {
-	rule, err := createMatchSubnetRouteMarkRule(table, chain, action)
+func addMatchSubnetRouteMarkRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, action MatchDecision, marks PacketMarks) error {
+	rule, err := createMatchSubnetRouteMarkRule(table, chain, action, marks)
 	if err != nil {
 		return fmt.Errorf("create match subnet route mark rule: %w", err)
 	}
@@ -1717,7 +1728,7 @@ func (n *nftablesRunner) AddSNATRule() error {
 			return fmt.Errorf("get postrouting chain v4: %w", err)
 		}
 
-		if err = addMatchSubnetRouteMarkRule(conn, table.Nat, chain, Masq); err != nil {
+		if err = addMatchSubnetRouteMarkRule(conn, table.Nat, chain, Masq, n.marks); err != nil {
 			return fmt.Errorf("add match subnet route mark rule v4: %w", err)
 		}
 	}
@@ -1729,9 +1740,9 @@ func (n *nftablesRunner) AddSNATRule() error {
 	return nil
 }
 
-func delMatchSubnetRouteMarkMasqRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain) error {
+func delMatchSubnetRouteMarkMasqRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, marks PacketMarks) error {
 
-	rule, err := createMatchSubnetRouteMarkRule(table, chain, Masq)
+	rule, err := createMatchSubnetRouteMarkRule(table, chain, Masq, marks)
 	if err != nil {
 		return fmt.Errorf("create match subnet route mark rule: %w", err)
 	}
@@ -1762,7 +1773,7 @@ func (n *nftablesRunner) DelSNATRule() error {
 		if err != nil {
 			return fmt.Errorf("get postrouting chain: %w", err)
 		}
-		err = delMatchSubnetRouteMarkMasqRule(conn, table.Nat, chain)
+		err = delMatchSubnetRouteMarkMasqRule(conn, table.Nat, chain, n.marks)
 		if err != nil {
 			return err
 		}

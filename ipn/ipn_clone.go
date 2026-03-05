@@ -51,6 +51,9 @@ func (src *Prefs) Clone() *Prefs {
 	dst.AdvertiseTags = append(src.AdvertiseTags[:0:0], src.AdvertiseTags...)
 	dst.AdvertiseRoutes = append(src.AdvertiseRoutes[:0:0], src.AdvertiseRoutes...)
 	dst.AdvertiseServices = append(src.AdvertiseServices[:0:0], src.AdvertiseServices...)
+	if dst.LinuxPacketMarks != nil {
+		dst.LinuxPacketMarks = ptr.To(*src.LinuxPacketMarks)
+	}
 	if src.DriveShares != nil {
 		dst.DriveShares = make([]*drive.Share, len(src.DriveShares))
 		for i := range dst.DriveShares {
@@ -101,6 +104,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	AppConnector               AppConnectorPrefs
 	PostureChecking            bool
 	NetfilterKind              string
+	LinuxPacketMarks           *preftype.LinuxPacketMarks
 	DriveShares                []*drive.Share
 	RelayServerPort            *uint16
 	RelayServerStaticEndpoints []netip.AddrPort
