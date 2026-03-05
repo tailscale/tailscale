@@ -355,6 +355,10 @@ type LocalBackend struct {
 	// avoid unnecessary churn between multiple equally-good options.
 	lastSuggestedExitNode tailcfg.StableNodeID
 
+	// customMullvadState holds state for the "Bring Your Own Mullvad Account" feature.
+	// Protected by mu.
+	customMullvadState *customMullvadState
+
 	// allowedSuggestedExitNodes is a set of exit nodes permitted by the most recent
 	// [pkey.AllowedSuggestedExitNodes] value. The allowedSuggestedExitNodesMu
 	// mutex guards access to this set.
@@ -1231,6 +1235,7 @@ func stripKeysFromPrefs(p ipn.PrefsView) ipn.PrefsView {
 	p2.Persist.OldPrivateNodeKey = key.NodePrivate{}
 	p2.Persist.NetworkLockKey = key.NLPrivate{}
 	p2.Persist.AttestationKey = nil
+	p2.CustomMullvadAccount = "" // Strip Mullvad account credential
 	return p2.View()
 }
 
@@ -1384,11 +1389,15 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 		sb.AddUser(id, up)
 	}
 	exitNodeID := b.pm.CurrentPrefs().ExitNodeID()
+
+	// cn.Peers() already includes custom peers (e.g., Mullvad) via nodeBackend.customPeers.
 	for _, p := range cn.Peers() {
 		tailscaleIPs := make([]netip.Addr, 0, p.Addresses().Len())
+		isWireGuardOnly := p.IsWireGuardOnly()
 		for i := range p.Addresses().Len() {
 			addr := p.Addresses().At(i)
-			if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
+			// Include Tailscale IPs, or any IP for WireGuard-only nodes (like Mullvad)
+			if addr.IsSingleIP() && (tsaddr.IsTailscaleIP(addr.Addr()) || isWireGuardOnly) {
 				tailscaleIPs = append(tailscaleIPs, addr.Addr())
 			}
 		}
@@ -4517,6 +4526,33 @@ func (b *LocalBackend) onEditPrefsLocked(_ ipnauth.Actor, mp *ipn.MaskedPrefs, o
 		lastSuggestedExitNode: b.lastSuggestedExitNode,
 	}
 	e.record()
+
+	// Handle custom Mullvad account changes.
+	if mp.CustomMullvadAccountSet {
+		if oldPrefs.CustomMullvadAccount() != newPrefs.CustomMullvadAccount() {
+			account := newPrefs.CustomMullvadAccount()
+			// Use a background goroutine since API calls may block.
+			go func() {
+				b.logf("mullvad: starting configuration")
+				ctx, cancel := context.WithTimeout(b.ctx, 30*time.Second)
+				defer cancel()
+				if err := b.ConfigureCustomMullvad(ctx, account); err != nil {
+					b.logf("mullvad: failed to configure: %v", err)
+				} else {
+					b.logf("mullvad: configuration successful")
+					// Update engine's netmap to include custom peers for PeerForIP()
+					b.mu.Lock()
+					nm := b.currentNode().netMapWithPeers()
+					b.mu.Unlock()
+					if nm != nil {
+						b.e.SetNetworkMap(nm)
+					}
+					// Trigger WireGuard reconfiguration to include custom Mullvad peers
+					b.authReconfig()
+				}
+			}()
+		}
+	}
 }
 
 // startReconnectTimerLocked sets a timer to automatically set WantRunning to true
@@ -5075,7 +5111,9 @@ func (b *LocalBackend) authReconfigLocked() {
 
 	cn := b.currentNode()
 
-	nm := cn.NetMap()
+	// Use netMapWithPeers to include custom peers (e.g., custom Mullvad exit nodes)
+	// in the WireGuard configuration.
+	nm := cn.netMapWithPeers()
 	if nm == nil {
 		b.logf("[v1] authReconfig: netmap not yet valid. Skipping.")
 		return
@@ -5126,6 +5164,11 @@ func (b *LocalBackend) authReconfigLocked() {
 		b.logf("wgcfg: %v", err)
 		return
 	}
+
+	// Custom Mullvad peers are already included in nm.Peers via
+	// netMapWithPeers(), so WGCfg() processes them automatically.
+	// Masquerade addresses are set on the Node via SelfNodeV4MasqAddrForThisPeer
+	// in customMullvadServerToNode(), so WGCfg handles masquerade correctly.
 
 	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.NetMon.Get(), b.sys.ControlKnobs(), version.OS())
 	rcfg := b.routerConfigLocked(cfg, prefs, nm, oneCGNATRoute)
@@ -5547,7 +5590,21 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 	// likely to break some functionality, but if the user expressed a
 	// preference for routing remotely, we want to avoid leaking
 	// traffic at the expense of functionality.
-	if buildfeatures.HasUseExitNode && (prefs.ExitNodeID() != "" || prefs.ExitNodeIP().IsValid()) {
+	//
+	// For custom Mullvad exit nodes, we need to skip exit node routing
+	// until the Mullvad peers are configured. Otherwise, all traffic
+	// (including Mullvad API calls needed to configure peers) will try
+	// to route through a non-existent exit node and fail.
+	exitNodeReady := true
+	if exitNodeID := prefs.ExitNodeID(); exitNodeID != "" && strings.HasPrefix(string(exitNodeID), "custom-mullvad-") {
+		// Check if Mullvad is configured with peers.
+		// Use b.customMullvadState.peers (protected by b.mu) instead of
+		// b.currentNode().customPeers (which requires nodeBackend.mu).
+		if b.customMullvadState == nil || len(b.customMullvadState.peers) == 0 {
+			exitNodeReady = false
+		}
+	}
+	if buildfeatures.HasUseExitNode && exitNodeReady && (prefs.ExitNodeID() != "" || prefs.ExitNodeIP().IsValid()) {
 		var default4, default6 bool
 		for _, route := range rs.Routes {
 			switch route {
@@ -5716,6 +5773,47 @@ func (b *LocalBackend) enterStateLocked(newState ipn.State) {
 		// necessary and add unit tests to cover those cases, or remove it.
 		if oldState != ipn.Running {
 			b.resetAuthURLLocked()
+
+			// Initialize or refresh custom Mullvad integration.
+			// Case 1: Account is configured in prefs but state not initialized (daemon restart)
+			// Case 2: State exists and may need refresh (key rotation during re-auth)
+			if account := prefs.CustomMullvadAccount(); account != "" && envknob.Bool("TS_ENABLE_CUSTOM_MULLVAD") {
+				if b.customMullvadState == nil {
+					// Daemon restart with persisted account - initialize from saved config
+					b.logf("mullvad: initializing from saved account on startup")
+					go func() {
+						ctx, cancel := context.WithTimeout(b.ctx, 30*time.Second)
+						defer cancel()
+						if err := b.ConfigureCustomMullvad(ctx, account); err != nil {
+							b.logf("mullvad: failed to initialize on startup: %v", err)
+						} else {
+							b.logf("mullvad: initialized from saved account")
+							// Update engine's netmap to include custom peers for PeerForIP()
+							b.mu.Lock()
+							nm := b.currentNode().netMapWithPeers()
+							b.mu.Unlock()
+							if nm != nil {
+								b.e.SetNetworkMap(nm)
+							}
+							b.authReconfig()
+						}
+					}()
+				} else if b.customMullvadState.client != nil {
+					// Re-register with Mullvad in case the node key changed
+					// during re-authentication. The Tailscale node key is used for
+					// Mullvad device registration.
+					go func() {
+						ctx, cancel := context.WithTimeout(b.ctx, 30*time.Second)
+						defer cancel()
+						if err := b.RefreshCustomMullvad(ctx); err != nil {
+							b.logf("mullvad: failed to re-register after auth: %v", err)
+						} else {
+							b.logf("mullvad: re-registered after auth")
+							b.authReconfig()
+						}
+					}()
+				}
+			}
 		}
 
 		// Start a captive portal detection loop if none has been
@@ -6249,12 +6347,17 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 	b.currentNode().SetNetMap(nm)
 	if ms, ok := b.sys.MagicSock.GetOK(); ok {
-		if nm != nil {
-			ms.SetNetworkMap(nm.SelfNode, nm.Peers)
+		// Use netMapWithPeers to include custom peers (e.g., Mullvad)
+		// in the magicsock peer set. Without this, custom peers would be
+		// lost on every control plane netmap update.
+		nmWithPeers := b.currentNode().netMapWithPeers()
+		if nmWithPeers != nil {
+			ms.SetNetworkMap(nmWithPeers.SelfNode, nmWithPeers.Peers)
 		} else {
 			ms.SetNetworkMap(tailcfg.NodeView{}, nil)
 		}
 	}
+
 	if login != b.activeLogin {
 		b.logf("active login: %v", login)
 		b.activeLogin = login

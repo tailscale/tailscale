@@ -2613,6 +2613,10 @@ const (
 	// NodeAttrSuggestExitNodeUI allows the currently suggested exit node to appear in the client GUI.
 	NodeAttrSuggestExitNodeUI NodeCapability = "suggest-exit-node-ui"
 
+	// NodeAttrCustomMullvad marks a node as a custom Mullvad exit node
+	// (part of the "Bring Your Own Mullvad Account" feature).
+	NodeAttrCustomMullvad NodeCapability = "custom-mullvad"
+
 	// NodeAttrUserDialUseRoutes makes UserDial use either the peer dialer or the system dialer,
 	// depending on the destination address and the configured routes. When present, it also makes
 	// the DNS forwarder use UserDial instead of SystemDial when dialing resolvers.
