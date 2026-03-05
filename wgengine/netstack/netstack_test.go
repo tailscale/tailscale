@@ -6,12 +6,16 @@ package netstack
 import (
 	"context"
 	"fmt"
+	"io"
 	"maps"
 	"net"
 	"net/netip"
+	"os"
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/tailscale/wireguard-go/tun"
 
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -35,6 +39,46 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 )
+
+// captureTUN is a tun.Device that captures packets written to it.
+type captureTUN struct {
+	closechan chan struct{}
+	ch        chan []byte
+}
+
+func newCaptureTUN() *captureTUN {
+	return &captureTUN{
+		closechan: make(chan struct{}),
+		ch:        make(chan []byte, 16),
+	}
+}
+
+func (t *captureTUN) File() *os.File                { panic("not implemented") }
+func (t *captureTUN) Events() <-chan tun.Event       { return make(chan tun.Event) }
+func (t *captureTUN) BatchSize() int                 { return 1 }
+func (t *captureTUN) MTU() (int, error)              { return 1500, nil }
+func (t *captureTUN) Name() (string, error)          { return "CaptureTUN", nil }
+func (t *captureTUN) Flush() error                   { return nil }
+func (t *captureTUN) IsFakeTun() bool                { return true }
+func (t *captureTUN) Close() error                   { close(t.closechan); return nil }
+func (t *captureTUN) Read(out [][]byte, sizes []int, offset int) (int, error) {
+	<-t.closechan
+	return 0, io.EOF
+}
+
+func (t *captureTUN) Write(bufs [][]byte, offset int) (int, error) {
+	for _, buf := range bufs {
+		if offset < len(buf) {
+			pkt := make([]byte, len(buf)-offset)
+			copy(pkt, buf[offset:])
+			select {
+			case t.ch <- pkt:
+			default:
+			}
+		}
+	}
+	return len(bufs), nil
+}
 
 // TestInjectInboundLeak tests that injectInbound doesn't leak memory.
 // See https://github.com/tailscale/tailscale/issues/3762
@@ -1072,4 +1116,212 @@ func makeUDP6PacketBuffer(src, dst netip.AddrPort) *stack.PacketBuffer {
 	udp.SetChecksum(^udp.CalculateChecksum(xsum))
 
 	return pkt
+}
+
+// udp4packet constructs a raw IPv4+UDP packet with the given addresses, ports,
+// and payload, suitable for injecting via injectInbound.
+func udp4packet(tb testing.TB, src, dst netip.Addr, sport, dport uint16, payload []byte) []byte {
+	tb.Helper()
+	totalLen := header.IPv4MinimumSize + header.UDPMinimumSize + len(payload)
+	buf := make([]byte, totalLen)
+
+	ip := header.IPv4(buf)
+	ip.Encode(&header.IPv4Fields{
+		Protocol:    uint8(header.UDPProtocolNumber),
+		TotalLength: uint16(totalLen),
+		TTL:         64,
+		SrcAddr:     tcpip.AddrFrom4Slice(src.AsSlice()),
+		DstAddr:     tcpip.AddrFrom4Slice(dst.AsSlice()),
+	})
+	ip.SetChecksum(^ip.CalculateChecksum())
+
+	udpHdr := header.UDP(buf[header.IPv4MinimumSize:])
+	udpHdr.Encode(&header.UDPFields{
+		SrcPort: sport,
+		DstPort: dport,
+		Length:  uint16(header.UDPMinimumSize + len(payload)),
+	})
+	copy(buf[header.IPv4MinimumSize+header.UDPMinimumSize:], payload)
+
+	// Compute UDP checksum using tun.PseudoHeaderChecksum + tun.Checksum
+	// over the full UDP portion (header + payload), which matches how
+	// RXChecksumOffload validates packets.
+	udpHdr.SetChecksum(0)
+	pseudo := tun.PseudoHeaderChecksum(
+		uint8(header.UDPProtocolNumber),
+		src.AsSlice(), dst.AsSlice(),
+		uint16(len(buf)-header.IPv4MinimumSize),
+	)
+	udpHdr.SetChecksum(^tun.Checksum(buf[header.IPv4MinimumSize:], pseudo))
+
+	return buf
+}
+
+// udp6packet constructs a raw IPv6+UDP packet with the given addresses, ports,
+// and payload, suitable for injecting via injectInbound.
+func udp6packet(tb testing.TB, src, dst netip.Addr, sport, dport uint16, payload []byte) []byte {
+	tb.Helper()
+	udpLen := header.UDPMinimumSize + len(payload)
+	totalLen := header.IPv6MinimumSize + udpLen
+	buf := make([]byte, totalLen)
+
+	ip := header.IPv6(buf)
+	ip.Encode(&header.IPv6Fields{
+		PayloadLength:     uint16(udpLen),
+		TransportProtocol: header.UDPProtocolNumber,
+		HopLimit:          64,
+		SrcAddr:           tcpip.AddrFrom16(src.As16()),
+		DstAddr:           tcpip.AddrFrom16(dst.As16()),
+	})
+
+	udpHdr := header.UDP(buf[header.IPv6MinimumSize:])
+	udpHdr.Encode(&header.UDPFields{
+		SrcPort: sport,
+		DstPort: dport,
+		Length:  uint16(udpLen),
+	})
+	copy(buf[header.IPv6MinimumSize+header.UDPMinimumSize:], payload)
+
+	// Compute UDP checksum (mandatory for IPv6).
+	udpHdr.SetChecksum(0)
+	src16, dst16 := src.As16(), dst.As16()
+	pseudo := tun.PseudoHeaderChecksum(
+		uint8(header.UDPProtocolNumber),
+		src16[:], dst16[:],
+		uint16(udpLen),
+	)
+	udpHdr.SetChecksum(^tun.Checksum(buf[header.IPv6MinimumSize:], pseudo))
+
+	return buf
+}
+
+// makeNetstackForUDPInjectionTest creates a netstack instance with a
+// captureTUN for testing forwardUDPViaInjection. It sets ProcessSubnets=true,
+// enables TS_DEBUG_NETSTACK_UDP_RAW, and advertises the given routes.
+func makeNetstackForUDPInjectionTest(t *testing.T, routes []netip.Prefix) (*Impl, *captureTUN) {
+	t.Helper()
+
+	envknob.Setenv("TS_DEBUG_NETSTACK", "true")
+	envknob.Setenv("TS_DEBUG_NETSTACK_UDP_RAW", "true")
+	t.Cleanup(func() {
+		envknob.Setenv("TS_DEBUG_NETSTACK_UDP_RAW", "")
+	})
+
+	capTUN := newCaptureTUN()
+	sys := tsd.NewSystem()
+	sys.Set(new(mem.Store))
+	dialer := new(tsdial.Dialer)
+	logf := tstest.WhileTestRunningLogger(t)
+	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
+		Tun:           capTUN,
+		Dialer:        dialer,
+		SetSubsystem:  sys.Set,
+		HealthTracker: sys.HealthTracker.Get(),
+		Metrics:       sys.UserMetricsRegistry(),
+		EventBus:      sys.Bus.Get(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { eng.Close() })
+	sys.Set(eng)
+
+	ns, err := Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ns.Close() })
+	sys.Set(ns)
+	ns.ProcessSubnets = true
+
+	lb, err := ipnlocal.NewLocalBackend(logf, logid.PublicID{}, sys, 0)
+	if err != nil {
+		t.Fatalf("NewLocalBackend: %v", err)
+	}
+	t.Cleanup(lb.Shutdown)
+
+	if err := ns.Start(lb); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	prefs := ipn.NewPrefs()
+	prefs.AdvertiseRoutes = routes
+	lb.Start(ipn.Options{
+		UpdatePrefs: prefs,
+	})
+	ns.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
+
+	return ns, capTUN
+}
+
+// testUDPInjection injects a UDP packet into netstack and verifies that the
+// packet written to the tun device preserves the original source/destination
+// IPs, ports, and payload.
+func testUDPInjection(t *testing.T, ns *Impl, capTUN *captureTUN, pkt []byte, wantIPVersion int, srcAddr, dstAddr netip.Addr, srcPort, dstPort uint16, payload []byte) {
+	t.Helper()
+
+	var parsed packet.Parsed
+	parsed.Decode(pkt)
+
+	if resp, _ := ns.injectInbound(&parsed, ns.tundev, nil); resp != filter.DropSilently {
+		t.Fatalf("got filter outcome %v, want filter.DropSilently", resp)
+	}
+
+	select {
+	case gotPkt := <-capTUN.ch:
+		var got packet.Parsed
+		got.Decode(gotPkt)
+		if got.IPVersion != uint8(wantIPVersion) {
+			t.Fatalf("IP version = %d, want %d", got.IPVersion, wantIPVersion)
+		}
+		if got.IPProto != ipproto.UDP {
+			t.Fatalf("IP proto = %v, want UDP", got.IPProto)
+		}
+		if got.Src.Addr() != srcAddr {
+			t.Errorf("source IP = %v, want %v", got.Src.Addr(), srcAddr)
+		}
+		if got.Dst.Addr() != dstAddr {
+			t.Errorf("dest IP = %v, want %v", got.Dst.Addr(), dstAddr)
+		}
+		if got.Src.Port() != srcPort {
+			t.Errorf("source port = %d, want %d", got.Src.Port(), srcPort)
+		}
+		if got.Dst.Port() != dstPort {
+			t.Errorf("dest port = %d, want %d", got.Dst.Port(), dstPort)
+		}
+		if gotPayload := got.Payload(); string(gotPayload) != string(payload) {
+			t.Errorf("payload = %q, want %q", gotPayload, payload)
+		}
+		t.Logf("OK: captured packet %v:%d -> %v:%d (%d bytes payload)",
+			got.Src.Addr(), got.Src.Port(), got.Dst.Addr(), got.Dst.Port(), len(got.Payload()))
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for injected packet on tun device")
+	}
+}
+
+// TestForwardUDPViaInjection verifies that when TS_DEBUG_NETSTACK_UDP_RAW is
+// set, subnet-routed UDP packets are forwarded by injecting raw IP packets
+// into the tun device, preserving the original source IP address.
+func TestForwardUDPViaInjection(t *testing.T) {
+	t.Run("IPv4", func(t *testing.T) {
+		ns, capTUN := makeNetstackForUDPInjectionTest(t, []netip.Prefix{
+			netip.MustParsePrefix("192.0.2.0/24"),
+		})
+		srcAddr := netip.MustParseAddr("100.101.102.103")
+		dstAddr := netip.MustParseAddr("192.0.2.1")
+		payload := []byte("test-radius-payload")
+		pkt := udp4packet(t, srcAddr, dstAddr, 1812, 5678, payload)
+		testUDPInjection(t, ns, capTUN, pkt, 4, srcAddr, dstAddr, 1812, 5678, payload)
+	})
+
+	t.Run("IPv6", func(t *testing.T) {
+		ns, capTUN := makeNetstackForUDPInjectionTest(t, []netip.Prefix{
+			netip.MustParsePrefix("2001:db8::/32"),
+		})
+		srcAddr := netip.MustParseAddr("fd7a:115c:a1e0::1")
+		dstAddr := netip.MustParseAddr("2001:db8::1")
+		payload := []byte("test-radius-payload-v6")
+		pkt := udp6packet(t, srcAddr, dstAddr, 1812, 5678, payload)
+		testUDPInjection(t, ns, capTUN, pkt, 6, srcAddr, dstAddr, 1812, 5678, payload)
+	})
 }
