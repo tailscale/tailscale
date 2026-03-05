@@ -22,7 +22,6 @@ import (
 	"tailscale.com/cmd/testwrapper/flakytest"
 	kube "tailscale.com/k8s-operator"
 	"tailscale.com/tstest"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/httpm"
 )
 
@@ -44,7 +43,7 @@ func TestIngress(t *testing.T) {
 				},
 			},
 			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr.To[int32](1),
+				Replicas: new(int32(1)),
 				Selector: &metav1.LabelSelector{
 					MatchLabels: map[string]string{
 						"app.kubernetes.io/name": "nginx",

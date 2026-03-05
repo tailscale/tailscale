@@ -43,7 +43,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/httpm"
@@ -845,8 +844,8 @@ func InUseOtherUserIPNStream(w http.ResponseWriter, r *http.Request, err error) 
 	}
 	js, err := json.Marshal(&ipn.Notify{
 		Version:    version.Long(),
-		State:      ptr.To(ipn.InUseOtherUser),
-		ErrMessage: ptr.To(err.Error()),
+		State:      new(ipn.InUseOtherUser),
+		ErrMessage: new(err.Error()),
 	})
 	if err != nil {
 		return false

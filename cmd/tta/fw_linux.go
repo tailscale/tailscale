@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
-	"tailscale.com/types/ptr"
 )
 
 func init() {
@@ -35,7 +34,7 @@ func addFirewallLinux() error {
 		Type:     nftables.ChainTypeFilter,
 		Hooknum:  nftables.ChainHookInput,
 		Priority: nftables.ChainPriorityFilter,
-		Policy:   ptr.To(nftables.ChainPolicyDrop),
+		Policy:   new(nftables.ChainPolicyDrop),
 	}
 	c.AddChain(inputChain)
 

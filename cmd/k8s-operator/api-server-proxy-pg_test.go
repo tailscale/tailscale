@@ -25,7 +25,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/ptr"
 )
 
 func TestAPIServerProxyReconciler(t *testing.T) {
@@ -57,7 +56,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	initialCfg := &conf.VersionedConfig{
 		Version: "v1alpha1",
 		ConfigV1Alpha1: &conf.ConfigV1Alpha1{
-			AuthKey: ptr.To("test-key"),
+			AuthKey: new("test-key"),
 			APIServerProxy: &conf.APIServerProxyConfig{
 				Enabled: opt.NewBool(true),
 			},
@@ -174,7 +173,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionFalse, reasonKubeAPIServerProxyNoBackends, "", 1, r.clock, r.logger)
 	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
 
-	expectedCfg.APIServerProxy.ServiceName = ptr.To(tailcfg.ServiceName("svc:" + pgName))
+	expectedCfg.APIServerProxy.ServiceName = new(tailcfg.ServiceName("svc:" + pgName))
 	expectCfg(&expectedCfg)
 
 	expectEqual(t, fc, certSecret(pgName, ns, defaultDomain, pg))
@@ -230,7 +229,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 		t.Fatalf("expected Tailscale Service to be %+v, got %+v", expectedTSSvc, tsSvc)
 	}
 	// Check cfg and status reset until TLS certs are available again.
-	expectedCfg.APIServerProxy.ServiceName = ptr.To(updatedServiceName)
+	expectedCfg.APIServerProxy.ServiceName = new(updatedServiceName)
 	expectedCfg.AdvertiseServices = nil
 	expectCfg(&expectedCfg)
 	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionFalse, reasonKubeAPIServerProxyNoBackends, "", 1, r.clock, r.logger)

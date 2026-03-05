@@ -33,7 +33,6 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/ptr"
 )
 
 func TestIngressPGReconciler(t *testing.T) {
@@ -50,7 +49,7 @@ func TestIngressPGReconciler(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{
 					Name: "test",
@@ -117,7 +116,7 @@ func TestIngressPGReconciler(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{
 					Name: "test",
@@ -242,7 +241,7 @@ func TestIngressPGReconciler(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{
 					Name: "test",
@@ -286,7 +285,7 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{
 					Name: "test",
@@ -341,7 +340,7 @@ func TestValidateIngress(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			TLS: []networkingv1.IngressTLS{
 				{Hosts: []string{"test"}},
 			},
@@ -475,7 +474,7 @@ func TestValidateIngress(t *testing.T) {
 					},
 				},
 				Spec: networkingv1.IngressSpec{
-					IngressClassName: ptr.To("tailscale"),
+					IngressClassName: new("tailscale"),
 					TLS: []networkingv1.IngressTLS{
 						{Hosts: []string{"test"}},
 					},
@@ -522,7 +521,7 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{
 					Name: "test",
@@ -651,7 +650,7 @@ func TestIngressPGReconciler_HTTPRedirect(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{
 					Name: "test",
@@ -775,7 +774,7 @@ func TestIngressPGReconciler_HTTPEndpointAndRedirectConflict(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{
 					Name: "test",
@@ -864,7 +863,7 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			TLS: []networkingv1.IngressTLS{
 				{Hosts: []string{"my-svc"}},
 			},

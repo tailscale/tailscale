@@ -7,13 +7,11 @@ package lazy
 import (
 	"sync"
 	"sync/atomic"
-
-	"tailscale.com/types/ptr"
 )
 
 // nilErrPtr is a sentinel *error value for SyncValue.err to signal
 // that SyncValue.v is valid.
-var nilErrPtr = ptr.To[error](nil)
+var nilErrPtr = new(error(nil))
 
 // SyncValue is a lazily computed value.
 //
@@ -80,7 +78,7 @@ func (z *SyncValue[T]) GetErr(fill func() (T, error)) (T, error) {
 
 		// Update z.err after z.v; see field docs.
 		if err != nil {
-			z.err.Store(ptr.To(err))
+			z.err.Store(new(err))
 		} else {
 			z.err.Store(nilErrPtr)
 		}
@@ -145,7 +143,7 @@ func (z *SyncValue[T]) SetForTest(tb testing_TB, val T, err error) {
 
 	z.v = val
 	if err != nil {
-		z.err.Store(ptr.To(err))
+		z.err.Store(new(err))
 	} else {
 		z.err.Store(nilErrPtr)
 	}

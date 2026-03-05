@@ -11,7 +11,6 @@ import (
 	"github.com/go-json-experiment/json/jsontext"
 	"golang.org/x/exp/constraints"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 )
 
@@ -44,7 +43,7 @@ func (m *Map[K, V]) View() MapView[K, V] {
 
 // Clone returns a copy of m that aliases no memory with m.
 func (m Map[K, V]) Clone() *Map[K, V] {
-	res := ptr.To(m)
+	res := new(m)
 	if v, ok := m.s.Value.GetOk(); ok {
 		res.s.Value.Set(maps.Clone(v))
 	}

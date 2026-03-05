@@ -14,7 +14,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/types/ptr"
 )
 
 func TestRecorderSpecs(t *testing.T) {
@@ -24,7 +23,7 @@ func TestRecorderSpecs(t *testing.T) {
 				Name: "test",
 			},
 			Spec: tsapi.RecorderSpec{
-				Replicas: ptr.To[int32](3),
+				Replicas: new(int32(3)),
 				StatefulSet: tsapi.RecorderStatefulSet{
 					Labels: map[string]string{
 						"ss-label-key": "ss-label-value",
@@ -51,7 +50,7 @@ func TestRecorderSpecs(t *testing.T) {
 							},
 						},
 						SecurityContext: &corev1.PodSecurityContext{
-							RunAsUser: ptr.To[int64](1000),
+							RunAsUser: new(int64(1000)),
 						},
 						ImagePullSecrets: []corev1.LocalObjectReference{{
 							Name: "img-pull",
@@ -62,7 +61,7 @@ func TestRecorderSpecs(t *testing.T) {
 						Tolerations: []corev1.Toleration{{
 							Key:               "key",
 							Value:             "value",
-							TolerationSeconds: ptr.To[int64](60),
+							TolerationSeconds: new(int64(60)),
 						}},
 						Container: tsapi.RecorderContainer{
 							Env: []tsapi.Env{{

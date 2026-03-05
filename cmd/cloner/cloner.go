@@ -141,14 +141,12 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 					writef("if src.%s[i] == nil { dst.%s[i] = nil } else {", fname, fname)
 					if codegen.ContainsPointers(ptr.Elem()) {
 						if _, isIface := ptr.Elem().Underlying().(*types.Interface); isIface {
-							it.Import("", "tailscale.com/types/ptr")
-							writef("\tdst.%s[i] = ptr.To((*src.%s[i]).Clone())", fname, fname)
+							writef("\tdst.%s[i] = new((*src.%s[i]).Clone())", fname, fname)
 						} else {
 							writef("\tdst.%s[i] = src.%s[i].Clone()", fname, fname)
 						}
 					} else {
-						it.Import("", "tailscale.com/types/ptr")
-						writef("\tdst.%s[i] = ptr.To(*src.%s[i])", fname, fname)
+						writef("\tdst.%s[i] = new(*src.%s[i])", fname, fname)
 					}
 					writef("}")
 				} else if ft.Elem().String() == "encoding/json.RawMessage" {
@@ -170,12 +168,11 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 				writef("dst.%s = src.%s.Clone()", fname, fname)
 				continue
 			}
-			it.Import("", "tailscale.com/types/ptr")
 			writef("if dst.%s != nil {", fname)
 			if _, isIface := base.Underlying().(*types.Interface); isIface && hasPtrs {
-				writef("\tdst.%s = ptr.To((*src.%s).Clone())", fname, fname)
+				writef("\tdst.%s = new((*src.%s).Clone())", fname, fname)
 			} else if !hasPtrs {
-				writef("\tdst.%s = ptr.To(*src.%s)", fname, fname)
+				writef("\tdst.%s = new(*src.%s)", fname, fname)
 			} else {
 				writef("\t" + `panic("TODO pointers in pointers")`)
 			}
@@ -293,14 +290,12 @@ func writeMapValueClone(params mapValueCloneParams) {
 		writef("if %s == nil { %s = nil } else {", params.SrcExpr, params.DstExpr)
 		if base := elem.Elem().Underlying(); codegen.ContainsPointers(base) {
 			if _, isIface := base.(*types.Interface); isIface {
-				params.It.Import("", "tailscale.com/types/ptr")
-				writef("\t%s = ptr.To((*%s).Clone())", params.DstExpr, params.SrcExpr)
+				writef("\t%s = new((*%s).Clone())", params.DstExpr, params.SrcExpr)
 			} else {
 				writef("\t%s = %s.Clone()", params.DstExpr, params.SrcExpr)
 			}
 		} else {
-			params.It.Import("", "tailscale.com/types/ptr")
-			writef("\t%s = ptr.To(*%s)", params.DstExpr, params.SrcExpr)
+			writef("\t%s = new(*%s)", params.DstExpr, params.SrcExpr)
 		}
 		writef("}")
 

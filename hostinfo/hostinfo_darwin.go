@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 
 	"golang.org/x/sys/unix"
-	"tailscale.com/types/ptr"
 )
 
 func init() {
@@ -19,7 +18,7 @@ func init() {
 }
 
 var (
-	lazyOSVersion = &lazyAtomicValue[string]{f: ptr.To(osVersionDarwin)}
+	lazyOSVersion = &lazyAtomicValue[string]{f: new(osVersionDarwin)}
 )
 
 func packageTypeDarwin() string {

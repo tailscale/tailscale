@@ -23,7 +23,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/wgengine/magicsock"
@@ -225,7 +224,7 @@ func (e *extension) profileStateChanged(_ ipn.LoginProfileView, prefs ipn.PrefsV
 		e.stopRelayServerLocked()
 		e.port = nil
 		if ok {
-			e.port = ptr.To(newPort)
+			e.port = new(newPort)
 		}
 	}
 	e.handleRelayServerLifetimeLocked()
@@ -264,7 +263,7 @@ func (e *extension) serverStatus() status.ServerStatus {
 	if e.rs == nil {
 		return st
 	}
-	st.UDPPort = ptr.To(*e.port)
+	st.UDPPort = new(*e.port)
 	st.Sessions = e.rs.GetSessions()
 	return st
 }

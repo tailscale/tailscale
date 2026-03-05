@@ -24,7 +24,6 @@ import (
 	"tailscale.com/safesocket"
 	"tailscale.com/tsconst"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/set"
 	"tailscale.com/version"
@@ -247,7 +246,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		if err != nil {
 			return fmt.Errorf("failed to set relay server port: %v", err)
 		}
-		maskedPrefs.Prefs.RelayServerPort = ptr.To(uint16(uport))
+		maskedPrefs.Prefs.RelayServerPort = new(uint16(uport))
 	}
 
 	if setArgs.relayServerStaticEndpoints != "" {

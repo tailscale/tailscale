@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/ptr"
 )
 
 // NodeMutation is the common interface for types that describe
@@ -55,7 +54,7 @@ type NodeMutationOnline struct {
 }
 
 func (m NodeMutationOnline) Apply(n *tailcfg.Node) {
-	n.Online = ptr.To(m.Online)
+	n.Online = new(m.Online)
 }
 
 // NodeMutationLastSeen is a NodeMutation that says a node's LastSeen
@@ -66,14 +65,14 @@ type NodeMutationLastSeen struct {
 }
 
 func (m NodeMutationLastSeen) Apply(n *tailcfg.Node) {
-	n.LastSeen = ptr.To(m.LastSeen)
+	n.LastSeen = new(m.LastSeen)
 }
 
 var peerChangeFields = sync.OnceValue(func() []reflect.StructField {
 	var fields []reflect.StructField
 	rt := reflect.TypeFor[tailcfg.PeerChange]()
-	for i := range rt.NumField() {
-		fields = append(fields, rt.Field(i))
+	for field := range rt.Fields() {
+		fields = append(fields, field)
 	}
 	return fields
 })

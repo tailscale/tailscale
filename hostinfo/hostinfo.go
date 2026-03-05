@@ -23,7 +23,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/lineiter"
@@ -93,8 +92,8 @@ func condCall[T any](fn func() T) T {
 }
 
 var (
-	lazyInContainer = &lazyAtomicValue[opt.Bool]{f: ptr.To(inContainer)}
-	lazyGoArchVar   = &lazyAtomicValue[string]{f: ptr.To(goArchVar)}
+	lazyInContainer = &lazyAtomicValue[opt.Bool]{f: new(inContainer)}
+	lazyGoArchVar   = &lazyAtomicValue[string]{f: new(goArchVar)}
 )
 
 type lazyAtomicValue[T any] struct {

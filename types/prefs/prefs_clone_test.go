@@ -7,8 +7,6 @@ package prefs
 
 import (
 	"net/netip"
-
-	"tailscale.com/types/ptr"
 )
 
 // Clone makes a deep copy of TestPrefs.
@@ -67,7 +65,7 @@ func (src *TestBundle) Clone() *TestBundle {
 	dst := new(TestBundle)
 	*dst = *src
 	if dst.Nested != nil {
-		dst.Nested = ptr.To(*src.Nested)
+		dst.Nested = new(*src.Nested)
 	}
 	return dst
 }

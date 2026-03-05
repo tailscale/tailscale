@@ -30,7 +30,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
@@ -250,7 +249,7 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 			mapRes: &tailcfg.MapResponse{
 				PeersChangedPatch: []*tailcfg.PeerChange{{
 					NodeID: 1,
-					Key:    ptr.To(key.NodePublicFromRaw32(mem.B(append(make([]byte, 31), 'A')))),
+					Key:    new(key.NodePublicFromRaw32(mem.B(append(make([]byte, 31), 'A')))),
 				}},
 			}, want: peers(&tailcfg.Node{
 				ID:   1,
@@ -281,7 +280,7 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 			mapRes: &tailcfg.MapResponse{
 				PeersChangedPatch: []*tailcfg.PeerChange{{
 					NodeID:   1,
-					DiscoKey: ptr.To(key.DiscoPublicFromRaw32(mem.B(append(make([]byte, 31), 'A')))),
+					DiscoKey: new(key.DiscoPublicFromRaw32(mem.B(append(make([]byte, 31), 'A')))),
 				}},
 			},
 			want: peers(&tailcfg.Node{
@@ -297,13 +296,13 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 			mapRes: &tailcfg.MapResponse{
 				PeersChangedPatch: []*tailcfg.PeerChange{{
 					NodeID: 1,
-					Online: ptr.To(true),
+					Online: new(true),
 				}},
 			},
 			want: peers(&tailcfg.Node{
 				ID:     1,
 				Name:   "foo",
-				Online: ptr.To(true),
+				Online: new(true),
 			}),
 			wantStats: updateStats{changed: 1},
 		},
@@ -313,13 +312,13 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 			mapRes: &tailcfg.MapResponse{
 				PeersChangedPatch: []*tailcfg.PeerChange{{
 					NodeID:   1,
-					LastSeen: ptr.To(time.Unix(123, 0).UTC()),
+					LastSeen: new(time.Unix(123, 0).UTC()),
 				}},
 			},
 			want: peers(&tailcfg.Node{
 				ID:       1,
 				Name:     "foo",
-				LastSeen: ptr.To(time.Unix(123, 0).UTC()),
+				LastSeen: new(time.Unix(123, 0).UTC()),
 			}),
 			wantStats: updateStats{changed: 1},
 		},
@@ -329,7 +328,7 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 			mapRes: &tailcfg.MapResponse{
 				PeersChangedPatch: []*tailcfg.PeerChange{{
 					NodeID:    1,
-					KeyExpiry: ptr.To(time.Unix(123, 0).UTC()),
+					KeyExpiry: new(time.Unix(123, 0).UTC()),
 				}},
 			},
 			want: peers(&tailcfg.Node{
@@ -770,21 +769,21 @@ func TestPeerChangeDiff(t *testing.T) {
 		},
 		{
 			name: "patch-lastseen",
-			a:    &tailcfg.Node{ID: 1, LastSeen: ptr.To(time.Unix(1, 0))},
-			b:    &tailcfg.Node{ID: 1, LastSeen: ptr.To(time.Unix(2, 0))},
-			want: &tailcfg.PeerChange{NodeID: 1, LastSeen: ptr.To(time.Unix(2, 0))},
+			a:    &tailcfg.Node{ID: 1, LastSeen: new(time.Unix(1, 0))},
+			b:    &tailcfg.Node{ID: 1, LastSeen: new(time.Unix(2, 0))},
+			want: &tailcfg.PeerChange{NodeID: 1, LastSeen: new(time.Unix(2, 0))},
 		},
 		{
 			name: "patch-online-to-true",
-			a:    &tailcfg.Node{ID: 1, Online: ptr.To(false)},
-			b:    &tailcfg.Node{ID: 1, Online: ptr.To(true)},
-			want: &tailcfg.PeerChange{NodeID: 1, Online: ptr.To(true)},
+			a:    &tailcfg.Node{ID: 1, Online: new(false)},
+			b:    &tailcfg.Node{ID: 1, Online: new(true)},
+			want: &tailcfg.PeerChange{NodeID: 1, Online: new(true)},
 		},
 		{
 			name: "patch-online-to-false",
-			a:    &tailcfg.Node{ID: 1, Online: ptr.To(true)},
-			b:    &tailcfg.Node{ID: 1, Online: ptr.To(false)},
-			want: &tailcfg.PeerChange{NodeID: 1, Online: ptr.To(false)},
+			a:    &tailcfg.Node{ID: 1, Online: new(true)},
+			b:    &tailcfg.Node{ID: 1, Online: new(false)},
+			want: &tailcfg.PeerChange{NodeID: 1, Online: new(false)},
 		},
 		{
 			name: "mix-patchable-and-not",
@@ -818,14 +817,14 @@ func TestPeerChangeDiff(t *testing.T) {
 		},
 		{
 			name: "miss-change-masq-v4",
-			a:    &tailcfg.Node{ID: 1, SelfNodeV4MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("100.64.0.1"))},
-			b:    &tailcfg.Node{ID: 1, SelfNodeV4MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("100.64.0.2"))},
+			a:    &tailcfg.Node{ID: 1, SelfNodeV4MasqAddrForThisPeer: new(netip.MustParseAddr("100.64.0.1"))},
+			b:    &tailcfg.Node{ID: 1, SelfNodeV4MasqAddrForThisPeer: new(netip.MustParseAddr("100.64.0.2"))},
 			want: nil,
 		},
 		{
 			name: "miss-change-masq-v6",
-			a:    &tailcfg.Node{ID: 1, SelfNodeV6MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("2001::3456"))},
-			b:    &tailcfg.Node{ID: 1, SelfNodeV6MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("2001::3006"))},
+			a:    &tailcfg.Node{ID: 1, SelfNodeV6MasqAddrForThisPeer: new(netip.MustParseAddr("2001::3456"))},
+			b:    &tailcfg.Node{ID: 1, SelfNodeV6MasqAddrForThisPeer: new(netip.MustParseAddr("2001::3006"))},
 			want: nil,
 		},
 		{
@@ -1079,7 +1078,7 @@ func TestUpgradeNode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var got *tailcfg.Node
 			if tt.in != nil {
-				got = ptr.To(*tt.in) // shallow clone
+				got = new(*tt.in) // shallow clone
 			}
 			upgradeNode(got)
 			if diff := cmp.Diff(tt.want, got); diff != "" {
@@ -1122,7 +1121,7 @@ func BenchmarkMapSessionDelta(b *testing.B) {
 							{Proto: "peerapi-dns-proxy", Port: 1},
 						},
 					}).View(),
-					LastSeen: ptr.To(time.Unix(int64(i), 0)),
+					LastSeen: new(time.Unix(int64(i), 0)),
 				})
 			}
 			ms.HandleNonKeepAliveMapResponse(ctx, res)

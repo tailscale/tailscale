@@ -61,7 +61,6 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus"
@@ -877,7 +876,7 @@ func TestConfigureExitNode(t *testing.T) {
 				Prefs:           ipn.Prefs{AutoExitNode: "any"},
 				AutoExitNodeSet: true,
 			},
-			useExitNodeEnabled: ptr.To(false),
+			useExitNodeEnabled: new(false),
 			wantPrefs: ipn.Prefs{
 				ControlURL:            controlURL,
 				ExitNodeID:            "",
@@ -894,7 +893,7 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			netMap:             clientNetmap,
 			report:             report,
-			useExitNodeEnabled: ptr.To(true),
+			useExitNodeEnabled: new(true),
 			wantPrefs: ipn.Prefs{
 				ControlURL:            controlURL,
 				ExitNodeID:            exitNode1.StableID(),
@@ -909,7 +908,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ControlURL: controlURL,
 			},
 			netMap:           clientNetmap,
-			exitNodeIDPolicy: ptr.To(exitNode1.StableID()),
+			exitNodeIDPolicy: new(exitNode1.StableID()),
 			wantPrefs: ipn.Prefs{
 				ControlURL: controlURL,
 				ExitNodeID: exitNode1.StableID(),
@@ -922,7 +921,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ControlURL: controlURL,
 			},
 			netMap:           clientNetmap,
-			exitNodeIDPolicy: ptr.To(exitNode1.StableID()),
+			exitNodeIDPolicy: new(exitNode1.StableID()),
 			changePrefs: &ipn.MaskedPrefs{
 				Prefs: ipn.Prefs{
 					ExitNodeID: exitNode2.StableID(), // this should be ignored
@@ -942,7 +941,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ControlURL: controlURL,
 			},
 			netMap:           clientNetmap,
-			exitNodeIDPolicy: ptr.To(exitNode1.StableID()),
+			exitNodeIDPolicy: new(exitNode1.StableID()),
 			changePrefs: &ipn.MaskedPrefs{
 				Prefs: ipn.Prefs{
 					ExitNodeIP: exitNode2.Addresses().At(0).Addr(), // this should be ignored
@@ -962,7 +961,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ControlURL: controlURL,
 			},
 			netMap:           clientNetmap,
-			exitNodeIDPolicy: ptr.To(exitNode1.StableID()),
+			exitNodeIDPolicy: new(exitNode1.StableID()),
 			changePrefs: &ipn.MaskedPrefs{
 				Prefs: ipn.Prefs{
 					AutoExitNode: "any", // this should be ignored
@@ -982,7 +981,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ControlURL: controlURL,
 			},
 			netMap:           clientNetmap,
-			exitNodeIPPolicy: ptr.To(exitNode2.Addresses().At(0).Addr()),
+			exitNodeIPPolicy: new(exitNode2.Addresses().At(0).Addr()),
 			wantPrefs: ipn.Prefs{
 				ControlURL: controlURL,
 				ExitNodeID: exitNode2.StableID(),
@@ -996,7 +995,7 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			netMap:           clientNetmap,
 			report:           report,
-			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:any")),
+			exitNodeIDPolicy: new(tailcfg.StableNodeID("auto:any")),
 			wantPrefs: ipn.Prefs{
 				ControlURL:   controlURL,
 				ExitNodeID:   exitNode1.StableID(),
@@ -1011,7 +1010,7 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			netMap:           clientNetmap,
 			report:           nil,
-			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:any")),
+			exitNodeIDPolicy: new(tailcfg.StableNodeID("auto:any")),
 			wantPrefs: ipn.Prefs{
 				ControlURL:   controlURL,
 				ExitNodeID:   unresolvedExitNodeID,
@@ -1026,7 +1025,7 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			netMap:           nil,
 			report:           report,
-			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:any")),
+			exitNodeIDPolicy: new(tailcfg.StableNodeID("auto:any")),
 			wantPrefs: ipn.Prefs{
 				ControlURL:   controlURL,
 				ExitNodeID:   unresolvedExitNodeID,
@@ -1042,7 +1041,7 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			netMap:             nil,
 			report:             report,
-			exitNodeIDPolicy:   ptr.To(tailcfg.StableNodeID("auto:any")),
+			exitNodeIDPolicy:   new(tailcfg.StableNodeID("auto:any")),
 			exitNodeAllowedIDs: nil, // not configured, so all exit node IDs are implicitly allowed
 			wantPrefs: ipn.Prefs{
 				ControlURL:   controlURL,
@@ -1059,7 +1058,7 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			netMap:           nil,
 			report:           report,
-			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:any")),
+			exitNodeIDPolicy: new(tailcfg.StableNodeID("auto:any")),
 			exitNodeAllowedIDs: []tailcfg.StableNodeID{
 				exitNode2.StableID(), // the current exit node ID is allowed
 			},
@@ -1078,7 +1077,7 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			netMap:           nil,
 			report:           report,
-			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:any")),
+			exitNodeIDPolicy: new(tailcfg.StableNodeID("auto:any")),
 			exitNodeAllowedIDs: []tailcfg.StableNodeID{
 				exitNode1.StableID(), // a different exit node ID; the current one is not allowed
 			},
@@ -1097,7 +1096,7 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			netMap:           clientNetmap,
 			report:           report,
-			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:any")),
+			exitNodeIDPolicy: new(tailcfg.StableNodeID("auto:any")),
 			exitNodeAllowedIDs: []tailcfg.StableNodeID{
 				exitNode2.StableID(), // a different exit node ID; the current one is not allowed
 			},
@@ -1116,7 +1115,7 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			netMap:           clientNetmap,
 			report:           report,
-			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:any")),
+			exitNodeIDPolicy: new(tailcfg.StableNodeID("auto:any")),
 			wantPrefs: ipn.Prefs{
 				ControlURL:   controlURL,
 				ExitNodeID:   exitNode1.StableID(), // switch to the best exit node
@@ -1131,7 +1130,7 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			netMap:           clientNetmap,
 			report:           report,
-			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:foo")),
+			exitNodeIDPolicy: new(tailcfg.StableNodeID("auto:foo")),
 			wantPrefs: ipn.Prefs{
 				ControlURL:   controlURL,
 				ExitNodeID:   exitNode1.StableID(), // unknown exit node expressions should work as "any"
@@ -1164,8 +1163,8 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			netMap:                clientNetmap,
 			report:                report,
-			exitNodeIDPolicy:      ptr.To(tailcfg.StableNodeID("auto:any")),
-			useExitNodeEnabled:    ptr.To(false), // should fail with an error
+			exitNodeIDPolicy:      new(tailcfg.StableNodeID("auto:any")),
+			useExitNodeEnabled:    new(false), // should fail with an error
 			wantExitNodeToggleErr: errManagedByPolicy,
 			wantPrefs: ipn.Prefs{
 				ControlURL:            controlURL,
@@ -1182,7 +1181,7 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			netMap:                clientNetmap,
 			report:                report,
-			exitNodeIDPolicy:      ptr.To(tailcfg.StableNodeID("auto:any")),
+			exitNodeIDPolicy:      new(tailcfg.StableNodeID("auto:any")),
 			exitNodeAllowOverride: true, // allow changing the exit node
 			changePrefs: &ipn.MaskedPrefs{
 				Prefs: ipn.Prefs{
@@ -1204,7 +1203,7 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			netMap:                clientNetmap,
 			report:                report,
-			exitNodeIDPolicy:      ptr.To(tailcfg.StableNodeID("auto:any")),
+			exitNodeIDPolicy:      new(tailcfg.StableNodeID("auto:any")),
 			exitNodeAllowOverride: true, // allow changing, but not disabling, the exit node
 			changePrefs: &ipn.MaskedPrefs{
 				Prefs: ipn.Prefs{
@@ -1228,9 +1227,9 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			netMap:                clientNetmap,
 			report:                report,
-			exitNodeIDPolicy:      ptr.To(tailcfg.StableNodeID("auto:any")),
-			exitNodeAllowOverride: true,          // allow changing, but not disabling, the exit node
-			useExitNodeEnabled:    ptr.To(false), // should fail with an error
+			exitNodeIDPolicy:      new(tailcfg.StableNodeID("auto:any")),
+			exitNodeAllowOverride: true,       // allow changing, but not disabling, the exit node
+			useExitNodeEnabled:    new(false), // should fail with an error
 			wantExitNodeToggleErr: errManagedByPolicy,
 			wantPrefs: ipn.Prefs{
 				ControlURL:            controlURL,
@@ -1992,15 +1991,15 @@ func TestUpdateNetmapDelta(t *testing.T) {
 			},
 			{
 				NodeID: 2,
-				Online: ptr.To(true),
+				Online: new(true),
 			},
 			{
 				NodeID: 3,
-				Online: ptr.To(false),
+				Online: new(false),
 			},
 			{
 				NodeID:   4,
-				LastSeen: ptr.To(someTime),
+				LastSeen: new(someTime),
 			},
 		},
 	}, someTime)
@@ -2021,17 +2020,17 @@ func TestUpdateNetmapDelta(t *testing.T) {
 		{
 			ID:     2,
 			Key:    makeNodeKeyFromID(2),
-			Online: ptr.To(true),
+			Online: new(true),
 		},
 		{
 			ID:     3,
 			Key:    makeNodeKeyFromID(3),
-			Online: ptr.To(false),
+			Online: new(false),
 		},
 		{
 			ID:       4,
 			Key:      makeNodeKeyFromID(4),
-			LastSeen: ptr.To(someTime),
+			LastSeen: new(someTime),
 		},
 	}
 	for _, want := range wants {
@@ -3149,11 +3148,11 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 			muts: []*tailcfg.PeerChange{
 				{
 					NodeID: 1,
-					Online: ptr.To(true),
+					Online: new(true),
 				},
 				{
 					NodeID: 2,
-					Online: ptr.To(false), // the selected exit node goes offline
+					Online: new(false), // the selected exit node goes offline
 				},
 			},
 			exitNodeIDWant: peer1.StableID(),
@@ -3173,11 +3172,11 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 			muts: []*tailcfg.PeerChange{
 				{
 					NodeID: 1,
-					Online: ptr.To(false), // a different exit node goes offline
+					Online: new(false), // a different exit node goes offline
 				},
 				{
 					NodeID: 2,
-					Online: ptr.To(true),
+					Online: new(true),
 				},
 			},
 			exitNodeIDWant: peer2.StableID(),
@@ -4326,7 +4325,7 @@ func TestDriveManageShares(t *testing.T) {
 				b.driveSetSharesLocked(tt.existing)
 			}
 			if !tt.disabled {
-				nm := ptr.To(*b.currentNode().NetMap())
+				nm := new(*b.currentNode().NetMap())
 				self := nm.SelfNode.AsStruct()
 				self.CapMap = tailcfg.NodeCapMap{tailcfg.NodeAttrsTaildriveShare: nil}
 				nm.SelfNode = self.View()
@@ -4476,7 +4475,7 @@ func makePeer(id tailcfg.NodeID, opts ...peerOptFunc) tailcfg.NodeView {
 		DiscoKey:          makeDiscoKeyFromID(id),
 		StableID:          tailcfg.StableNodeID(fmt.Sprintf("stable%d", id)),
 		Name:              fmt.Sprintf("peer%d", id),
-		Online:            ptr.To(true),
+		Online:            new(true),
 		MachineAuthorized: true,
 		HomeDERP:          int(id),
 	}
@@ -6399,13 +6398,13 @@ func TestConfigFileReload(t *testing.T) {
 			initial: &conffile.Config{
 				Parsed: ipn.ConfigVAlpha{
 					Version:  "alpha0",
-					Hostname: ptr.To("initial-host"),
+					Hostname: new("initial-host"),
 				},
 			},
 			updated: &conffile.Config{
 				Parsed: ipn.ConfigVAlpha{
 					Version:  "alpha0",
-					Hostname: ptr.To("updated-host"),
+					Hostname: new("updated-host"),
 				},
 			},
 			checkFn: func(t *testing.T, b *LocalBackend) {
@@ -7362,28 +7361,28 @@ func TestStripKeysFromPrefs(t *testing.T) {
 	genNotify := map[string]func() ipn.Notify{
 		"Notify.Prefs.ж.Persist.PrivateNodeKey": func() ipn.Notify {
 			return ipn.Notify{
-				Prefs: ptr.To((&ipn.Prefs{
+				Prefs: new((&ipn.Prefs{
 					Persist: &persist.Persist{PrivateNodeKey: key.NewNode()},
 				}).View()),
 			}
 		},
 		"Notify.Prefs.ж.Persist.OldPrivateNodeKey": func() ipn.Notify {
 			return ipn.Notify{
-				Prefs: ptr.To((&ipn.Prefs{
+				Prefs: new((&ipn.Prefs{
 					Persist: &persist.Persist{OldPrivateNodeKey: key.NewNode()},
 				}).View()),
 			}
 		},
 		"Notify.Prefs.ж.Persist.NetworkLockKey": func() ipn.Notify {
 			return ipn.Notify{
-				Prefs: ptr.To((&ipn.Prefs{
+				Prefs: new((&ipn.Prefs{
 					Persist: &persist.Persist{NetworkLockKey: key.NewNLPrivate()},
 				}).View()),
 			}
 		},
 		"Notify.Prefs.ж.Persist.AttestationKey": func() ipn.Notify {
 			return ipn.Notify{
-				Prefs: ptr.To((&ipn.Prefs{
+				Prefs: new((&ipn.Prefs{
 					Persist: &persist.Persist{AttestationKey: new(fakeAttestationKey)},
 				}).View()),
 			}

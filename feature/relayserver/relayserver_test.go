@@ -18,15 +18,14 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 )
 
 func Test_extension_profileStateChanged(t *testing.T) {
-	prefsWithPortOne := ipn.Prefs{RelayServerPort: ptr.To(uint16(1))}
+	prefsWithPortOne := ipn.Prefs{RelayServerPort: new(uint16(1))}
 	prefsWithNilPort := ipn.Prefs{RelayServerPort: nil}
 	prefsWithPortOneRelayEndpoints := ipn.Prefs{
-		RelayServerPort:            ptr.To(uint16(1)),
+		RelayServerPort:            new(uint16(1)),
 		RelayServerStaticEndpoints: []netip.AddrPort{netip.MustParseAddrPort("127.0.0.1:7777")},
 	}
 
@@ -51,28 +50,28 @@ func Test_extension_profileStateChanged(t *testing.T) {
 		{
 			name: "no changes non-nil port previously running",
 			fields: fields{
-				port: ptr.To(uint16(1)),
+				port: new(uint16(1)),
 				rs:   mockRelayServerNotZeroVal(),
 			},
 			args: args{
 				prefs:    prefsWithPortOne.View(),
 				sameNode: true,
 			},
-			wantPort:                    ptr.To(uint16(1)),
+			wantPort:                    new(uint16(1)),
 			wantRelayServerFieldNonNil:  true,
 			wantRelayServerFieldMutated: false,
 		},
 		{
 			name: "set addr ports unchanged port previously running",
 			fields: fields{
-				port: ptr.To(uint16(1)),
+				port: new(uint16(1)),
 				rs:   mockRelayServerNotZeroVal(),
 			},
 			args: args{
 				prefs:    prefsWithPortOneRelayEndpoints.View(),
 				sameNode: true,
 			},
-			wantPort:                    ptr.To(uint16(1)),
+			wantPort:                    new(uint16(1)),
 			wantRelayServerFieldNonNil:  true,
 			wantRelayServerFieldMutated: false,
 			wantEndpoints:               prefsWithPortOneRelayEndpoints.RelayServerStaticEndpoints,
@@ -87,7 +86,7 @@ func Test_extension_profileStateChanged(t *testing.T) {
 				prefs:    prefsWithPortOneRelayEndpoints.View(),
 				sameNode: true,
 			},
-			wantPort:                    ptr.To(uint16(1)),
+			wantPort:                    new(uint16(1)),
 			wantRelayServerFieldNonNil:  true,
 			wantRelayServerFieldMutated: true,
 			wantEndpoints:               prefsWithPortOneRelayEndpoints.RelayServerStaticEndpoints,
@@ -95,7 +94,7 @@ func Test_extension_profileStateChanged(t *testing.T) {
 		{
 			name: "clear addr ports unchanged port previously running",
 			fields: fields{
-				port:            ptr.To(uint16(1)),
+				port:            new(uint16(1)),
 				staticEndpoints: views.SliceOf(prefsWithPortOneRelayEndpoints.RelayServerStaticEndpoints),
 				rs:              mockRelayServerNotZeroVal(),
 			},
@@ -103,7 +102,7 @@ func Test_extension_profileStateChanged(t *testing.T) {
 				prefs:    prefsWithPortOne.View(),
 				sameNode: true,
 			},
-			wantPort:                    ptr.To(uint16(1)),
+			wantPort:                    new(uint16(1)),
 			wantRelayServerFieldNonNil:  true,
 			wantRelayServerFieldMutated: false,
 			wantEndpoints:               nil,
@@ -111,7 +110,7 @@ func Test_extension_profileStateChanged(t *testing.T) {
 		{
 			name: "prefs port nil",
 			fields: fields{
-				port: ptr.To(uint16(1)),
+				port: new(uint16(1)),
 			},
 			args: args{
 				prefs:    prefsWithNilPort.View(),
@@ -124,7 +123,7 @@ func Test_extension_profileStateChanged(t *testing.T) {
 		{
 			name: "prefs port nil previously running",
 			fields: fields{
-				port: ptr.To(uint16(1)),
+				port: new(uint16(1)),
 				rs:   mockRelayServerNotZeroVal(),
 			},
 			args: args{
@@ -138,54 +137,54 @@ func Test_extension_profileStateChanged(t *testing.T) {
 		{
 			name: "prefs port changed",
 			fields: fields{
-				port: ptr.To(uint16(2)),
+				port: new(uint16(2)),
 			},
 			args: args{
 				prefs:    prefsWithPortOne.View(),
 				sameNode: true,
 			},
-			wantPort:                    ptr.To(uint16(1)),
+			wantPort:                    new(uint16(1)),
 			wantRelayServerFieldNonNil:  true,
 			wantRelayServerFieldMutated: true,
 		},
 		{
 			name: "prefs port changed previously running",
 			fields: fields{
-				port: ptr.To(uint16(2)),
+				port: new(uint16(2)),
 				rs:   mockRelayServerNotZeroVal(),
 			},
 			args: args{
 				prefs:    prefsWithPortOne.View(),
 				sameNode: true,
 			},
-			wantPort:                    ptr.To(uint16(1)),
+			wantPort:                    new(uint16(1)),
 			wantRelayServerFieldNonNil:  true,
 			wantRelayServerFieldMutated: true,
 		},
 		{
 			name: "sameNode false",
 			fields: fields{
-				port: ptr.To(uint16(1)),
+				port: new(uint16(1)),
 			},
 			args: args{
 				prefs:    prefsWithPortOne.View(),
 				sameNode: false,
 			},
-			wantPort:                    ptr.To(uint16(1)),
+			wantPort:                    new(uint16(1)),
 			wantRelayServerFieldNonNil:  true,
 			wantRelayServerFieldMutated: true,
 		},
 		{
 			name: "sameNode false previously running",
 			fields: fields{
-				port: ptr.To(uint16(1)),
+				port: new(uint16(1)),
 				rs:   mockRelayServerNotZeroVal(),
 			},
 			args: args{
 				prefs:    prefsWithPortOne.View(),
 				sameNode: false,
 			},
-			wantPort:                    ptr.To(uint16(1)),
+			wantPort:                    new(uint16(1)),
 			wantRelayServerFieldNonNil:  true,
 			wantRelayServerFieldMutated: true,
 		},
@@ -198,7 +197,7 @@ func Test_extension_profileStateChanged(t *testing.T) {
 				prefs:    prefsWithPortOne.View(),
 				sameNode: false,
 			},
-			wantPort:                    ptr.To(uint16(1)),
+			wantPort:                    new(uint16(1)),
 			wantRelayServerFieldNonNil:  true,
 			wantRelayServerFieldMutated: true,
 		},
@@ -280,7 +279,7 @@ func Test_extension_handleRelayServerLifetimeLocked(t *testing.T) {
 		{
 			name:                          "want running",
 			shutdown:                      false,
-			port:                          ptr.To(uint16(1)),
+			port:                          new(uint16(1)),
 			hasNodeAttrDisableRelayServer: false,
 			wantRelayServerFieldNonNil:    true,
 			wantRelayServerFieldMutated:   true,
@@ -288,7 +287,7 @@ func Test_extension_handleRelayServerLifetimeLocked(t *testing.T) {
 		{
 			name:                          "want running previously running",
 			shutdown:                      false,
-			port:                          ptr.To(uint16(1)),
+			port:                          new(uint16(1)),
 			rs:                            mockRelayServerNotZeroVal(),
 			hasNodeAttrDisableRelayServer: false,
 			wantRelayServerFieldNonNil:    true,
@@ -297,7 +296,7 @@ func Test_extension_handleRelayServerLifetimeLocked(t *testing.T) {
 		{
 			name:                          "shutdown true",
 			shutdown:                      true,
-			port:                          ptr.To(uint16(1)),
+			port:                          new(uint16(1)),
 			hasNodeAttrDisableRelayServer: false,
 			wantRelayServerFieldNonNil:    false,
 			wantRelayServerFieldMutated:   false,
@@ -305,7 +304,7 @@ func Test_extension_handleRelayServerLifetimeLocked(t *testing.T) {
 		{
 			name:                          "shutdown true previously running",
 			shutdown:                      true,
-			port:                          ptr.To(uint16(1)),
+			port:                          new(uint16(1)),
 			rs:                            mockRelayServerNotZeroVal(),
 			hasNodeAttrDisableRelayServer: false,
 			wantRelayServerFieldNonNil:    false,

@@ -25,7 +25,6 @@ import (
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tstest"
-	"tailscale.com/types/ptr"
 )
 
 const (
@@ -40,7 +39,7 @@ func TestRecorder(t *testing.T) {
 			Finalizers: []string{"tailscale.com/finalizer"},
 		},
 		Spec: tsapi.RecorderSpec{
-			Replicas: ptr.To[int32](3),
+			Replicas: new(int32(3)),
 		},
 	}
 

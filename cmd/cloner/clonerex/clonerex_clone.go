@@ -7,8 +7,6 @@ package clonerex
 
 import (
 	"maps"
-
-	"tailscale.com/types/ptr"
 )
 
 // Clone makes a deep copy of SliceContainer.
@@ -25,7 +23,7 @@ func (src *SliceContainer) Clone() *SliceContainer {
 			if src.Slice[i] == nil {
 				dst.Slice[i] = nil
 			} else {
-				dst.Slice[i] = ptr.To(*src.Slice[i])
+				dst.Slice[i] = new(*src.Slice[i])
 			}
 		}
 	}
@@ -70,7 +68,7 @@ func (src *MapWithPointers) Clone() *MapWithPointers {
 			if v == nil {
 				dst.Nested[k] = nil
 			} else {
-				dst.Nested[k] = ptr.To(*v)
+				dst.Nested[k] = new(*v)
 			}
 		}
 	}
