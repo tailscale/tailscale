@@ -49,7 +49,7 @@ func TestMapResponseContainsNonPatchFields(t *testing.T) {
 
 		var want bool
 		switch f.Name {
-		case "MapSessionHandle", "Seq", "KeepAlive", "PingRequest", "PopBrowserURL", "ControlTime":
+		case "MapSessionHandle", "Seq", "KeepAlive", "PingRequest", "PopBrowserURL", "ControlTime", "Error":
 			// There are meta fields that apply to all MapResponse values.
 			// They should be ignored.
 			want = false

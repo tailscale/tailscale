@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/tsconst"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -2161,6 +2162,23 @@ type MapResponse struct {
 	// Deprecated: use NodeAttrDefaultAutoUpdate instead. See
 	// https://github.com/tailscale/tailscale/issues/11502.
 	DeprecatedDefaultAutoUpdate opt.Bool `json:"DefaultAutoUpdate,omitempty"`
+
+	// Error, if non-nil, contains detail about the error that is being
+	// returned from control. Clients should attempt to parse this from
+	// non-2xx responses with Content-Type "application/json". For plaintext
+	// responses, assume "internal-error".
+	Error *MapResponseError `json:"err,omitempty"`
+}
+
+// MapResponseError is the error response body that is sent to the client
+// in the event that there is an error.
+type MapResponseError struct {
+	// Message is the human readable error message detailing the cause of
+	// the error.
+	Message string `json:"message"`
+	// Code is a unique string identifier for the particular error that has
+	// taken place.
+	Code tsconst.MapResponseErrorCode `json:"code"`
 }
 
 // DisplayMessage represents a health state of the node from the control plane's
