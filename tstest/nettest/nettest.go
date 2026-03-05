@@ -91,9 +91,9 @@ func NewUnstartedHTTPServer(nw netx.Network, handler http.Handler) *httptest.Ser
 				c.Transport = &http.Transport{}
 			}
 			tr := c.Transport.(*http.Transport)
-			if tr.Dial != nil || tr.DialContext != nil {
-				panic("unexpected non-nil Dial or DialContext in httptest.Server.Client.Transport")
-			}
+			// Clear any Dial/DialContext that Go's httptest may have set (the
+			// initialization order changed in Go 1.26) and replace with nw.Dial.
+			tr.Dial = nil
 			tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 				return nw.Dial(ctx, network, addr)
 			}
