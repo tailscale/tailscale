@@ -273,8 +273,7 @@ func TestCached(t *testing.T) {}
 }
 
 func errExitCode(err error) (int, bool) {
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 		return exit.ExitCode(), true
 	}
 	return 0, false

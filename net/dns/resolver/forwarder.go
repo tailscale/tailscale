@@ -727,8 +727,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	}
 
 	// If we got a truncated UDP response, return that instead of an error.
-	var trErr truncatedResponseError
-	if errors.As(err, &trErr) {
+	if trErr, ok := errors.AsType[truncatedResponseError](err); ok {
 		return trErr.res, nil
 	}
 	return nil, err

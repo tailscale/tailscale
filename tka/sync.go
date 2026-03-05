@@ -107,7 +107,7 @@ func (a *Authority) SyncOffer(storage Chonk) (SyncOffer, error) {
 		skipAmount uint64  = ancestorsSkipStart
 		curs       AUMHash = a.Head()
 	)
-	for i := uint64(0); i < maxSyncHeadIntersectionIter; i++ {
+	for i := range uint64(maxSyncHeadIntersectionIter) {
 		if i > 0 && (i%skipAmount) == 0 {
 			out.Ancestors = append(out.Ancestors, curs)
 			skipAmount = skipAmount << ancestorsSkipShift

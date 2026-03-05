@@ -15,7 +15,7 @@ func init() {
 
 func breakTCPConnsLinux() error {
 	var matched int
-	for fd := 0; fd < 1000; fd++ {
+	for fd := range 1000 {
 		_, err := unix.GetsockoptTCPInfo(fd, unix.IPPROTO_TCP, unix.TCP_INFO)
 		if err == nil {
 			matched++

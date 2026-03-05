@@ -95,7 +95,7 @@ func tcp4syn(src, dst string, sport, dport uint16) []byte {
 
 func nets(nets ...string) (ret []netip.Prefix) {
 	for _, s := range nets {
-		if i := strings.IndexByte(s, '/'); i == -1 {
+		if found := strings.Contains(s, "/"); !found {
 			ip, err := netip.ParseAddr(s)
 			if err != nil {
 				panic(err)
@@ -122,13 +122,13 @@ func ports(s string) filter.PortRange {
 	}
 
 	var fs, ls string
-	i := strings.IndexByte(s, '-')
-	if i == -1 {
+	before, after, ok := strings.Cut(s, "-")
+	if !ok {
 		fs = s
 		ls = fs
 	} else {
-		fs = s[:i]
-		ls = s[i+1:]
+		fs = before
+		ls = after
 	}
 	first, err := strconv.ParseInt(fs, 10, 16)
 	if err != nil {

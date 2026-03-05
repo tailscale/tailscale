@@ -25,7 +25,7 @@ import (
 
 func TestDo(t *testing.T) {
 	var g Group[string, any]
-	v, err, _ := g.Do("key", func() (interface{}, error) {
+	v, err, _ := g.Do("key", func() (any, error) {
 		return "bar", nil
 	})
 	if got, want := fmt.Sprintf("%v (%T)", v, v), "bar (string)"; got != want {
@@ -39,7 +39,7 @@ func TestDo(t *testing.T) {
 func TestDoErr(t *testing.T) {
 	var g Group[string, any]
 	someErr := errors.New("Some error")
-	v, err, _ := g.Do("key", func() (interface{}, error) {
+	v, err, _ := g.Do("key", func() (any, error) {
 		return nil, someErr
 	})
 	if err != someErr {
@@ -55,7 +55,7 @@ func TestDoDupSuppress(t *testing.T) {
 	var wg1, wg2 sync.WaitGroup
 	c := make(chan string, 1)
 	var calls int32
-	fn := func() (interface{}, error) {
+	fn := func() (any, error) {
 		if atomic.AddInt32(&calls, 1) == 1 {
 			// First invocation.
 			wg1.Done()
@@ -72,9 +72,7 @@ func TestDoDupSuppress(t *testing.T) {
 	wg1.Add(1)
 	for range n {
 		wg1.Add(1)
-		wg2.Add(1)
-		go func() {
-			defer wg2.Done()
+		wg2.Go(func() {
 			wg1.Done()
 			v, err, _ := g.Do("key", fn)
 			if err != nil {
@@ -84,7 +82,7 @@ func TestDoDupSuppress(t *testing.T) {
 			if s, _ := v.(string); s != "bar" {
 				t.Errorf("Do = %T %v; want %q", v, v, "bar")
 			}
-		}()
+		})
 	}
 	wg1.Wait()
 	// At least one goroutine is in fn now and all of them have at
@@ -108,7 +106,7 @@ func TestForget(t *testing.T) {
 	)
 
 	go func() {
-		g.Do("key", func() (i interface{}, e error) {
+		g.Do("key", func() (i any, e error) {
 			close(firstStarted)
 			<-unblockFirst
 			close(firstFinished)
@@ -119,7 +117,7 @@ func TestForget(t *testing.T) {
 	g.Forget("key")
 
 	unblockSecond := make(chan struct{})
-	secondResult := g.DoChan("key", func() (i interface{}, e error) {
+	secondResult := g.DoChan("key", func() (i any, e error) {
 		<-unblockSecond
 		return 2, nil
 	})
@@ -127,7 +125,7 @@ func TestForget(t *testing.T) {
 	close(unblockFirst)
 	<-firstFinished
 
-	thirdResult := g.DoChan("key", func() (i interface{}, e error) {
+	thirdResult := g.DoChan("key", func() (i any, e error) {
 		return 3, nil
 	})
 
@@ -141,7 +139,7 @@ func TestForget(t *testing.T) {
 
 func TestDoChan(t *testing.T) {
 	var g Group[string, any]
-	ch := g.DoChan("key", func() (interface{}, error) {
+	ch := g.DoChan("key", func() (any, error) {
 		return "bar", nil
 	})
 
@@ -160,7 +158,7 @@ func TestDoChan(t *testing.T) {
 // See https://github.com/golang/go/issues/41133
 func TestPanicDo(t *testing.T) {
 	var g Group[string, any]
-	fn := func() (interface{}, error) {
+	fn := func() (any, error) {
 		panic("invalid memory address or nil pointer dereference")
 	}
 
@@ -197,7 +195,7 @@ func TestPanicDo(t *testing.T) {
 
 func TestGoexitDo(t *testing.T) {
 	var g Group[string, any]
-	fn := func() (interface{}, error) {
+	fn := func() (any, error) {
 		runtime.Goexit()
 		return nil, nil
 	}
@@ -238,7 +236,7 @@ func TestPanicDoChan(t *testing.T) {
 		}()
 
 		g := new(Group[string, any])
-		ch := g.DoChan("", func() (interface{}, error) {
+		ch := g.DoChan("", func() (any, error) {
 			panic("Panicking in DoChan")
 		})
 		<-ch
@@ -283,7 +281,7 @@ func TestPanicDoSharedByDoChan(t *testing.T) {
 			defer func() {
 				recover()
 			}()
-			g.Do("", func() (interface{}, error) {
+			g.Do("", func() (any, error) {
 				close(blocked)
 				<-unblock
 				panic("Panicking in Do")
@@ -291,7 +289,7 @@ func TestPanicDoSharedByDoChan(t *testing.T) {
 		}()
 
 		<-blocked
-		ch := g.DoChan("", func() (interface{}, error) {
+		ch := g.DoChan("", func() (any, error) {
 			panic("DoChan unexpectedly executed callback")
 		})
 		close(unblock)
@@ -325,8 +323,7 @@ func TestPanicDoSharedByDoChan(t *testing.T) {
 
 func TestDoChanContext(t *testing.T) {
 	t.Run("Basic", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 
 		var g Group[string, int]
 		ch := g.DoChanContext(ctx, "key", func(_ context.Context) (int, error) {
@@ -337,8 +334,7 @@ func TestDoChanContext(t *testing.T) {
 	})
 
 	t.Run("DoesNotPropagateValues", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 
 		key := new(int)
 		const value = "hello world"
@@ -364,8 +360,7 @@ func TestDoChanContext(t *testing.T) {
 
 		ctx1, cancel1 := context.WithCancel(context.Background())
 		defer cancel1()
-		ctx2, cancel2 := context.WithCancel(context.Background())
-		defer cancel2()
+		ctx2 := t.Context()
 
 		fn := func(ctx context.Context) (int, error) {
 			select {

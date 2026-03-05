@@ -262,12 +262,10 @@ func maybeValidUID(id int) bool {
 		return true
 	}
 
-	var u1 user.UnknownUserIdError
-	if errors.As(err, &u1) {
+	if _, ok := errors.AsType[user.UnknownUserIdError](err); ok {
 		return false
 	}
-	var u2 user.UnknownUserError
-	if errors.As(err, &u2) {
+	if _, ok := errors.AsType[user.UnknownUserError](err); ok {
 		return false
 	}
 
@@ -281,12 +279,10 @@ func maybeValidGID(id int) bool {
 		return true
 	}
 
-	var u1 user.UnknownGroupIdError
-	if errors.As(err, &u1) {
+	if _, ok := errors.AsType[user.UnknownGroupIdError](err); ok {
 		return false
 	}
-	var u2 user.UnknownGroupError
-	if errors.As(err, &u2) {
+	if _, ok := errors.AsType[user.UnknownGroupError](err); ok {
 		return false
 	}
 

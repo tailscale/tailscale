@@ -7,6 +7,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -544,9 +545,7 @@ func pgSecretLabels(pgName, secretType string) map[string]string {
 
 func pgLabels(pgName string, customLabels map[string]string) map[string]string {
 	labels := make(map[string]string, len(customLabels)+3)
-	for k, v := range customLabels {
-		labels[k] = v
-	}
+	maps.Copy(labels, customLabels)
 
 	labels[kubetypes.LabelManaged] = "true"
 	labels[LabelParentType] = "proxygroup"

@@ -968,8 +968,8 @@ func containsPointers(typ reflect.Type) bool {
 		if isWellKnownImmutableStruct(typ) {
 			return false
 		}
-		for i := range typ.NumField() {
-			if containsPointers(typ.Field(i).Type) {
+		for field := range typ.Fields() {
+			if containsPointers(field.Type) {
 				return true
 			}
 		}

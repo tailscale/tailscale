@@ -2598,7 +2598,7 @@ func buildDNSQuery(name string, srcIP netip.Addr) []byte {
 		0x00, 0x01, // QDCOUNT: 1
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // ANCOUNT, NSCOUNT, ARCOUNT
 	}
-	for _, label := range strings.Split(name, ".") {
+	for label := range strings.SplitSeq(name, ".") {
 		dns = append(dns, byte(len(label)))
 		dns = append(dns, label...)
 	}

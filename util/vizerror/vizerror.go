@@ -77,6 +77,5 @@ func WrapWithMessage(wrapped error, publicMsg string) error {
 
 // As returns the first vizerror.Error in err's chain.
 func As(err error) (e Error, ok bool) {
-	ok = errors.As(err, &e)
-	return
+	return errors.AsType[Error](err)
 }

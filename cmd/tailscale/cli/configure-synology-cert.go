@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
@@ -85,11 +86,8 @@ func runConfigureSynologyCert(ctx context.Context, args []string) error {
 			domain = st.CertDomains[0]
 		} else {
 			var found bool
-			for _, d := range st.CertDomains {
-				if d == domain {
-					found = true
-					break
-				}
+			if slices.Contains(st.CertDomains, domain) {
+				found = true
 			}
 			if !found {
 				return fmt.Errorf("Domain %q was not one of the valid domain options: %q.", domain, st.CertDomains)

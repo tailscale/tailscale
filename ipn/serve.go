@@ -673,7 +673,7 @@ func CheckFunnelPort(wantedPort uint16, node *ipnstate.PeerStatus) error {
 		return deny("")
 	}
 	wantedPortString := strconv.Itoa(int(wantedPort))
-	for _, ps := range strings.Split(portsStr, ",") {
+	for ps := range strings.SplitSeq(portsStr, ",") {
 		if ps == "" {
 			continue
 		}

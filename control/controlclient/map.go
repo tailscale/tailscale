@@ -617,12 +617,12 @@ func (ms *mapSession) patchifyPeersChanged(resp *tailcfg.MapResponse) {
 
 var nodeFields = sync.OnceValue(getNodeFields)
 
-// getNodeFields returns the fails of tailcfg.Node.
+// getNodeFields returns the fields of tailcfg.Node.
 func getNodeFields() []string {
 	rt := reflect.TypeFor[tailcfg.Node]()
-	ret := make([]string, rt.NumField())
-	for i := range rt.NumField() {
-		ret[i] = rt.Field(i).Name
+	ret := make([]string, 0, rt.NumField())
+	for f := range rt.Fields() {
+		ret = append(ret, f.Name)
 	}
 	return ret
 }

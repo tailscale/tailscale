@@ -63,16 +63,16 @@ func LabelString(k any) string {
 	var sb strings.Builder
 	sb.WriteString("{")
 
-	for i := range t.NumField() {
-		if i > 0 {
+	first := true
+	for ft, fv := range rv.Fields() {
+		if !first {
 			sb.WriteString(",")
 		}
-		ft := t.Field(i)
+		first = false
 		label := ft.Tag.Get("prom")
 		if label == "" {
 			label = strings.ToLower(ft.Name)
 		}
-		fv := rv.Field(i)
 		switch fv.Kind() {
 		case reflect.String:
 			fmt.Fprintf(&sb, "%s=%q", label, fv.String())

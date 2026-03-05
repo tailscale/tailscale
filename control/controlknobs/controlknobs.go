@@ -205,17 +205,15 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 		return nil
 	}
 	ret := map[string]any{}
-	rt := reflect.TypeFor[Knobs]()
 	rv := reflect.ValueOf(k).Elem() // of *k
-	for i := 0; i < rt.NumField(); i++ {
-		name := rt.Field(i).Name
-		switch v := rv.Field(i).Addr().Interface().(type) {
+	for sf, fv := range rv.Fields() {
+		switch v := fv.Addr().Interface().(type) {
 		case *atomic.Bool:
-			ret[name] = v.Load()
+			ret[sf.Name] = v.Load()
 		case *syncs.AtomicValue[opt.Bool]:
-			ret[name] = v.Load()
+			ret[sf.Name] = v.Load()
 		default:
-			panic(fmt.Sprintf("unknown field type %T for %v", v, name))
+			panic(fmt.Sprintf("unknown field type %T for %v", v, sf.Name))
 		}
 	}
 	return ret

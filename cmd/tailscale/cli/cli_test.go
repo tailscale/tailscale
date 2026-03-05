@@ -962,8 +962,8 @@ func TestPrefFlagMapping(t *testing.T) {
 	}
 
 	prefType := reflect.TypeFor[ipn.Prefs]()
-	for i := range prefType.NumField() {
-		prefName := prefType.Field(i).Name
+	for field := range prefType.Fields() {
+		prefName := field.Name
 		if prefHasFlag[prefName] {
 			continue
 		}

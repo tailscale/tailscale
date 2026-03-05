@@ -835,8 +835,8 @@ func (b *LocalBackend) proxyHandlerForBackend(backend string) (http.Handler, err
 	targetURL, insecure := expandProxyArg(backend)
 
 	// Handle unix: scheme specially
-	if strings.HasPrefix(targetURL, "unix:") {
-		socketPath := strings.TrimPrefix(targetURL, "unix:")
+	if after, ok := strings.CutPrefix(targetURL, "unix:"); ok {
+		socketPath := after
 		if socketPath == "" {
 			return nil, fmt.Errorf("empty unix socket path")
 		}

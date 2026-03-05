@@ -8,6 +8,7 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	"maps"
 	"reflect"
 	"regexp"
 	"strings"
@@ -408,7 +409,5 @@ func Test_mergeStatefulSetLabelsOrAnnots(t *testing.T) {
 
 // updateMap updates map a with the values from map b.
 func updateMap(a, b map[string]string) {
-	for key, val := range b {
-		a[key] = val
-	}
+	maps.Copy(a, b)
 }

@@ -1484,7 +1484,7 @@ func (c *Direct) answerPing(pr *tailcfg.PingRequest) {
 		}
 		return
 	}
-	for _, t := range strings.Split(pr.Types, ",") {
+	for t := range strings.SplitSeq(pr.Types, ",") {
 		switch pt := tailcfg.PingType(t); pt {
 		case tailcfg.PingTSMP, tailcfg.PingDisco, tailcfg.PingICMP, tailcfg.PingPeerAPI:
 			go doPingerPing(c.logf, httpc, pr, c.pinger, pt)

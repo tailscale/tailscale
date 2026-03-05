@@ -627,22 +627,17 @@ func BenchmarkConcurrentStreams(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer ln.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := b.Context()
 
+	acceptDone := make(chan struct{})
 	go func() {
-		for ctx.Err() == nil {
+		defer close(acceptDone)
+		for {
 			connIn, err := ln.Accept()
 			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				b.Error(err)
 				return
 			}
-
 			brwServer := bufio.NewReadWriter(bufio.NewReader(connIn), bufio.NewWriter(connIn))
 			go s.Accept(ctx, connIn, brwServer, "test-client")
 		}
@@ -680,6 +675,9 @@ func BenchmarkConcurrentStreams(b *testing.B) {
 			}
 		}
 	})
+
+	ln.Close()
+	<-acceptDone
 }
 
 func BenchmarkSendRecv(b *testing.B) {
@@ -769,7 +767,7 @@ func TestServeDebugTrafficUniqueSenders(t *testing.T) {
 		senderCardinality: hyperloglog.New(),
 	}
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		c.senderCardinality.Insert(key.NewNode().Public().AppendTo(nil))
 	}
 
@@ -845,7 +843,7 @@ func TestSenderCardinality(t *testing.T) {
 		t.Errorf("EstimatedUniqueSenders() = %d, want ~10 (8-12 range)", estimate)
 	}
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		c.senderCardinality.Insert(senders[i].AppendTo(nil))
 	}
 
@@ -869,7 +867,7 @@ func TestSenderCardinality100(t *testing.T) {
 	}
 
 	numSenders := 100
-	for i := 0; i < numSenders; i++ {
+	for range numSenders {
 		c.senderCardinality.Insert(key.NewNode().Public().AppendTo(nil))
 	}
 
@@ -945,7 +943,7 @@ func BenchmarkHyperLogLogInsertUnique(b *testing.B) {
 func BenchmarkHyperLogLogEstimate(b *testing.B) {
 	hll := hyperloglog.New()
 
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		hll.Insert(key.NewNode().Public().AppendTo(nil))
 	}
 

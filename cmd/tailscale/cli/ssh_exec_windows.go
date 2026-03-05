@@ -28,9 +28,8 @@ func execSSH(ssh string, argv []string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	var ee *exec.ExitError
 	err := cmd.Run()
-	if errors.As(err, &ee) {
+	if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 		os.Exit(ee.ExitCode())
 	}
 	return err

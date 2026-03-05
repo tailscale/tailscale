@@ -30,7 +30,7 @@ func readAlpineTag(t *testing.T, file string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range bytes.Split(f, []byte{'\n'}) {
+	for line := range bytes.SplitSeq(f, []byte{'\n'}) {
 		line = bytes.TrimSpace(line)
 		_, suf, ok := bytes.Cut(line, []byte("FROM alpine:"))
 		if !ok {

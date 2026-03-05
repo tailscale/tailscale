@@ -121,8 +121,7 @@ func TestSendRecv(t *testing.T) {
 		}
 		defer cin.Close()
 
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 
 		brwServer := bufio.NewReadWriter(bufio.NewReader(cin), bufio.NewWriter(cin))
 		go s.Accept(ctx, cin, brwServer, fmt.Sprintf("[abc::def]:%v", i))
@@ -331,8 +330,7 @@ func TestSendFreeze(t *testing.T) {
 		return c, c2
 	}
 
-	ctx, clientCtxCancel := context.WithCancel(context.Background())
-	defer clientCtxCancel()
+	ctx := t.Context()
 
 	aliceKey := key.NewNode()
 	aliceClient, aliceConn := newClient(ctx, "alice", aliceKey)
@@ -716,8 +714,7 @@ func (c *testClient) close(t *testing.T) {
 // TestWatch tests the connection watcher mechanism used by regional
 // DERP nodes to mesh up with each other.
 func TestWatch(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	ts := newTestServer(t, ctx)
 	defer ts.close(t)
@@ -764,8 +761,7 @@ func waitConnect(t testing.TB, c *Client) {
 }
 
 func TestServerRepliesToPing(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	ts := newTestServer(t, ctx)
 	defer ts.close(t)

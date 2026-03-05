@@ -526,8 +526,7 @@ func (r *HAServiceReconciler) tailnetCertDomain(ctx context.Context) (string, er
 func cleanupTailscaleService(ctx context.Context, tsClient tsClient, name tailcfg.ServiceName, operatorID string, logger *zap.SugaredLogger) (updated bool, err error) {
 	svc, err := tsClient.GetVIPService(ctx, name)
 	if err != nil {
-		errResp := &tailscale.ErrResponse{}
-		ok := errors.As(err, errResp)
+		errResp, ok := errors.AsType[tailscale.ErrResponse](err)
 		if ok && errResp.Status == http.StatusNotFound {
 			return false, nil
 		}

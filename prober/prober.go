@@ -122,12 +122,8 @@ func (p *Prober) Run(name string, interval time.Duration, labels Labels, pc Prob
 		"name":  name,
 		"class": pc.Class,
 	}
-	for k, v := range pc.Labels {
-		lb[k] = v
-	}
-	for k, v := range labels {
-		lb[k] = v
-	}
+	maps.Copy(lb, pc.Labels)
+	maps.Copy(lb, labels)
 
 	probe := newProbe(p, name, interval, lb, pc)
 	p.probes[name] = probe

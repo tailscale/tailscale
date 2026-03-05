@@ -265,7 +265,7 @@ func TestServer(t *testing.T) {
 			tcB := newTestClient(t, endpoint.VNI, tcBServerEndpointAddr, discoB, discoA.Public(), endpoint.ServerDisco)
 			defer tcB.close()
 
-			for i := 0; i < 2; i++ {
+			for range 2 {
 				// We handshake both clients twice to guarantee server-side
 				// packet reading goroutines, which are independent across
 				// address families, have seen an answer from both clients
@@ -345,7 +345,7 @@ func TestServer_getNextVNILocked(t *testing.T) {
 	s := &Server{
 		nextVNI: minVNI,
 	}
-	for i := uint64(0); i < uint64(totalPossibleVNI); i++ {
+	for range uint64(totalPossibleVNI) {
 		vni, err := s.getNextVNILocked()
 		if err != nil { // using quicktest here triples test time
 			t.Fatal(err)

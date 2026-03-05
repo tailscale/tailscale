@@ -889,8 +889,7 @@ func remoteWriteTimeSeries(client *remoteWriteClient, tsCh chan []prompb.TimeSer
 			reqCtx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 			writeErr = client.write(reqCtx, ts)
 			cancel()
-			var re recoverableErr
-			recoverable := errors.As(writeErr, &re)
+			_, recoverable := errors.AsType[recoverableErr](writeErr)
 			if writeErr != nil {
 				log.Printf("remote write error(recoverable=%v): %v", recoverable, writeErr)
 			}

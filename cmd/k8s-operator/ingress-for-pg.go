@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"net/http"
 	"reflect"
@@ -914,9 +915,7 @@ func ownerAnnotations(operatorID string, svc *tailscale.VIPService) (map[string]
 	}
 
 	newAnnots := make(map[string]string, len(svc.Annotations)+1)
-	for k, v := range svc.Annotations {
-		newAnnots[k] = v
-	}
+	maps.Copy(newAnnots, svc.Annotations)
 	newAnnots[ownerAnnotation] = string(json)
 	return newAnnots, nil
 }
@@ -1129,8 +1128,7 @@ func hasCerts(ctx context.Context, cl client.Client, lc localClient, ns string, 
 }
 
 func isErrorTailscaleServiceNotFound(err error) bool {
-	var errResp tailscale.ErrResponse
-	ok := errors.As(err, &errResp)
+	errResp, ok := errors.AsType[tailscale.ErrResponse](err)
 	return ok && errResp.Status == http.StatusNotFound
 }
 
@@ -1144,7 +1142,7 @@ func tagViolations(obj client.Object) []string {
 		return nil
 	}
 
-	for _, tag := range strings.Split(tags, ",") {
+	for tag := range strings.SplitSeq(tags, ",") {
 		tag = strings.TrimSpace(tag)
 		if err := tailcfg.CheckTag(tag); err != nil {
 			violations = append(violations, fmt.Sprintf("invalid tag %q: %v", tag, err))

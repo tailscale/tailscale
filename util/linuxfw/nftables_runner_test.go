@@ -1066,7 +1066,7 @@ func checkSNATRule_nft(t *testing.T, runner *nftablesRunner, fam nftables.TableF
 	if chain == nil {
 		t.Fatal("POSTROUTING chain does not exist")
 	}
-	meta := []byte(fmt.Sprintf("dst:%s,src:%s", dst.String(), src.String()))
+	meta := fmt.Appendf(nil, "dst:%s,src:%s", dst.String(), src.String())
 	wantsRule := snatRule(chain.Table, chain, src, dst, meta)
 	checkRule(t, wantsRule, runner.conn)
 }

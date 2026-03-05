@@ -7,6 +7,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -312,9 +313,7 @@ func tsrEnv(tsr *tsapi.Recorder, loginServer string) []corev1.EnvVar {
 
 func tsrLabels(app, instance string, customLabels map[string]string) map[string]string {
 	labels := make(map[string]string, len(customLabels)+3)
-	for k, v := range customLabels {
-		labels[k] = v
-	}
+	maps.Copy(labels, customLabels)
 
 	// ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/
 	labels["app.kubernetes.io/name"] = app

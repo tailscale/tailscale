@@ -226,8 +226,7 @@ func (p *SubSystem[T]) Set(v T) {
 			return
 		}
 
-		var z *T
-		panic(fmt.Sprintf("%v is already set", reflect.TypeOf(z).Elem().String()))
+		panic(fmt.Sprintf("%v is already set", reflect.TypeFor[T]().String()))
 	}
 	p.v = v
 	p.set = true
@@ -236,8 +235,7 @@ func (p *SubSystem[T]) Set(v T) {
 // Get returns the value of p, panicking if it hasn't been set.
 func (p *SubSystem[T]) Get() T {
 	if !p.set {
-		var z *T
-		panic(fmt.Sprintf("%v is not set", reflect.TypeOf(z).Elem().String()))
+		panic(fmt.Sprintf("%v is not set", reflect.TypeFor[T]().String()))
 	}
 	return p.v
 }

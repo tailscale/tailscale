@@ -94,12 +94,12 @@ func TestPool(t *testing.T) {
 
 func TestTakeRandom(t *testing.T) {
 	p := Pool[int]{}
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		p.Add(i + 100)
 	}
 
 	seen := make(map[int]bool)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		item, ok := p.TakeRandom()
 		if !ok {
 			t.Errorf("unexpected empty pool")
@@ -116,7 +116,7 @@ func TestTakeRandom(t *testing.T) {
 		t.Errorf("expected empty pool")
 	}
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		want := 100 + i
 		if !seen[want] {
 			t.Errorf("item %v not seen", want)

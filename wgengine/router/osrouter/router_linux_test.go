@@ -1073,11 +1073,9 @@ func (o *fakeOS) run(args ...string) error {
 
 	switch args[2] {
 	case "add":
-		for _, el := range *ls {
-			if el == rest {
-				o.t.Errorf("can't add %q, already present", rest)
-				return errors.New("already exists")
-			}
+		if slices.Contains(*ls, rest) {
+			o.t.Errorf("can't add %q, already present", rest)
+			return errors.New("already exists")
 		}
 		*ls = append(*ls, rest)
 		sort.Strings(*ls)

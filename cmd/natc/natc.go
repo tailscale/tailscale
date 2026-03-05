@@ -149,7 +149,7 @@ func main() {
 	}
 
 	var prefixes []netip.Prefix
-	for _, s := range strings.Split(*v4PfxStr, ",") {
+	for s := range strings.SplitSeq(*v4PfxStr, ",") {
 		p := netip.MustParsePrefix(strings.TrimSpace(s))
 		if p.Masked() != p {
 			log.Fatalf("v4 prefix %v is not a masked prefix", p)
@@ -372,8 +372,7 @@ func (c *connector) handleDNS(pc net.PacketConn, buf []byte, remoteAddr *net.UDP
 		addrQCount++
 		if _, ok := resolves[q.Name.String()]; !ok {
 			addrs, err := c.resolver.LookupNetIP(ctx, "ip", q.Name.String())
-			var dnsErr *net.DNSError
-			if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			if dnsErr, ok := errors.AsType[*net.DNSError](err); ok && dnsErr.IsNotFound {
 				continue
 			}
 			if err != nil {

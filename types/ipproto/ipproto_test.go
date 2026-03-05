@@ -69,7 +69,7 @@ func TestProtoUnmarshalText(t *testing.T) {
 
 	for i := range 256 {
 		var p Proto
-		must.Do(p.UnmarshalText([]byte(fmt.Sprintf("%d", i))))
+		must.Do(p.UnmarshalText(fmt.Appendf(nil, "%d", i)))
 		if got, want := p, Proto(i); got != want {
 			t.Errorf("Proto(%d) = %v, want %v", i, got, want)
 		}
@@ -122,7 +122,7 @@ func TestProtoUnmarshalJSON(t *testing.T) {
 	var p Proto
 
 	for i := range 256 {
-		j := []byte(fmt.Sprintf(`%d`, i))
+		j := fmt.Appendf(nil, `%d`, i)
 		must.Do(json.Unmarshal(j, &p))
 		if got, want := p, Proto(i); got != want {
 			t.Errorf("Proto(%d) = %v, want %v", i, got, want)
@@ -130,7 +130,7 @@ func TestProtoUnmarshalJSON(t *testing.T) {
 	}
 
 	for name, wantProto := range acceptedNames {
-		must.Do(json.Unmarshal([]byte(fmt.Sprintf(`"%s"`, name)), &p))
+		must.Do(json.Unmarshal(fmt.Appendf(nil, `"%s"`, name), &p))
 		if got, want := p, wantProto; got != want {
 			t.Errorf("Proto(%q) = %v, want %v", name, got, want)
 		}

@@ -299,9 +299,7 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 		errChan := make(chan error, 1)
 
 		// Start the watcher thread (which connects to the watched server)
-		wg.Add(1) // To avoid using t.Logf after the test ends. See https://golang.org/issue/40343
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			var peers int
 			add := func(m derp.PeerPresentMessage) {
 				t.Logf("add: %v", m.Key.ShortString())
@@ -318,7 +316,7 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 			}
 
 			watcher.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove, notifyErr)
-		}()
+		})
 
 		synctest.Wait()
 
@@ -381,9 +379,7 @@ func TestBreakWatcherConn(t *testing.T) {
 		errorChan := make(chan error, 1)
 
 		// Start the watcher thread (which connects to the watched server)
-		wg.Add(1) // To avoid using t.Logf after the test ends. See https://golang.org/issue/40343
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			var peers int
 			add := func(m derp.PeerPresentMessage) {
 				t.Logf("add: %v", m.Key.ShortString())
@@ -403,7 +399,7 @@ func TestBreakWatcherConn(t *testing.T) {
 			}
 
 			watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove, notifyError)
-		}()
+		})
 
 		synctest.Wait()
 

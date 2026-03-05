@@ -101,7 +101,7 @@ func (f fsFileOps) Rename(oldPath, newName string) (newPath string, err error) {
 	wantSize := st.Size()
 
 	const maxRetries = 10
-	for i := 0; i < maxRetries; i++ {
+	for range maxRetries {
 		renameMu.Lock()
 		fi, statErr := os.Stat(dst)
 		// Atomically rename the partial file as the destination file if it doesn't exist.

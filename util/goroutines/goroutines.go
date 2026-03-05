@@ -52,7 +52,7 @@ func scrubHex(buf []byte) []byte {
 			in[0] = '?'
 			return
 		}
-		v := []byte(fmt.Sprintf("v%d%%%d", len(saw)+1, u64%8))
+		v := fmt.Appendf(nil, "v%d%%%d", len(saw)+1, u64%8)
 		saw[inStr] = v
 		copy(in, v)
 	})

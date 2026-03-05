@@ -66,10 +66,10 @@ func TestShardedInt(t *testing.T) {
 		numWorkers := 1000
 		numIncrements := 1000
 		wg.Add(numWorkers)
-		for i := 0; i < numWorkers; i++ {
+		for range numWorkers {
 			go func() {
 				defer wg.Done()
-				for i := 0; i < numIncrements; i++ {
+				for range numIncrements {
 					m.Add(1)
 				}
 			}()

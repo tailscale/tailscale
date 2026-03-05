@@ -812,11 +812,8 @@ func (m *Monitor) HasCGNATInterface() (bool, error) {
 		if hasCGNATInterface || !i.IsUp() || isTailscaleInterface(i.Name, pfxs) {
 			return
 		}
-		for _, pfx := range pfxs {
-			if cgnatRange.Overlaps(pfx) {
-				hasCGNATInterface = true
-				break
-			}
+		if slices.ContainsFunc(pfxs, cgnatRange.Overlaps) {
+			hasCGNATInterface = true
 		}
 	})
 	if err != nil {

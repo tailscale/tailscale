@@ -42,7 +42,7 @@ func TestWatchFile(t *testing.T) {
 	// Keep writing until we get a callback.
 	func() {
 		for i := range 10000 {
-			if err := os.WriteFile(filepath, []byte(fmt.Sprintf("write%d", i)), 0644); err != nil {
+			if err := os.WriteFile(filepath, fmt.Appendf(nil, "write%d", i), 0644); err != nil {
 				t.Fatal(err)
 			}
 			select {

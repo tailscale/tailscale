@@ -328,7 +328,7 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 		udpLn *net.UDPConn
 		err   error
 	)
-	for try := 0; try < tries; try++ {
+	for range tries {
 		if tcpLn != nil {
 			tcpLn.Close()
 			tcpLn = nil
@@ -392,9 +392,7 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 	var wg sync.WaitGroup
 
 	if opts == nil || !opts.SkipTCP {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				conn, err := tcpLn.Accept()
 				if err != nil {
@@ -402,7 +400,7 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 				}
 				go handleConn(conn)
 			}
-		}()
+		})
 	}
 
 	handleUDP := func(addr netip.AddrPort, req []byte) {
@@ -413,9 +411,7 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 	}
 
 	if opts == nil || !opts.SkipUDP {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				buf := make([]byte, 65535)
 				n, addr, err := udpLn.ReadFromUDPAddrPort(buf)
@@ -425,7 +421,7 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 				buf = buf[:n]
 				go handleUDP(addr, buf)
 			}
-		}()
+		})
 	}
 
 	tb.Cleanup(func() {
@@ -684,7 +680,7 @@ func makeResponseOfSize(tb testing.TB, domain string, targetSize int, includeOPT
 	var response []byte
 	var err error
 
-	for attempt := 0; attempt < 10; attempt++ {
+	for range 10 {
 		testBuilder := dns.NewBuilder(nil, dns.Header{
 			Response:      true,
 			Authoritative: true,

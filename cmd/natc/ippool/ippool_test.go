@@ -30,7 +30,7 @@ func TestIPPoolExhaustion(t *testing.T) {
 
 	from := tailcfg.NodeID(12345)
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		for _, domain := range domains {
 			addr, err := pool.IPForDomain(from, domain)
 			if err != nil {

@@ -234,7 +234,7 @@ func ValidHostname(hostname string) error {
 		return err
 	}
 
-	for _, label := range strings.Split(fqdn.WithoutTrailingDot(), ".") {
+	for label := range strings.SplitSeq(fqdn.WithoutTrailingDot(), ".") {
 		if err := ValidLabel(label); err != nil {
 			return err
 		}

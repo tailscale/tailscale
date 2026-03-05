@@ -12,6 +12,7 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
+	"slices"
 	"sync"
 
 	"go4.org/netipx"
@@ -329,13 +330,7 @@ func configFromNodeView(n tailcfg.NodeView) (config, error) {
 		selfRoutedDomains: set.Set[dnsname.FQDN]{},
 	}
 	for _, app := range apps {
-		selfMatchesTags := false
-		for _, tag := range app.Connectors {
-			if selfTags.Contains(tag) {
-				selfMatchesTags = true
-				break
-			}
-		}
+		selfMatchesTags := slices.ContainsFunc(app.Connectors, selfTags.Contains)
 		for _, d := range app.Domains {
 			fqdn, err := dnsname.ToFQDN(d)
 			if err != nil {

@@ -475,7 +475,7 @@ const allocateUDPRelayEndpointRequestLen = key.DiscoPublicRawLen*2 + // ClientDi
 
 func (m *AllocateUDPRelayEndpointRequest) AppendMarshal(b []byte) []byte {
 	ret, p := appendMsgHeader(b, TypeAllocateUDPRelayEndpointRequest, v0, allocateUDPRelayEndpointRequestLen)
-	for i := 0; i < len(m.ClientDisco); i++ {
+	for i := range len(m.ClientDisco) {
 		disco := m.ClientDisco[i].AppendTo(nil)
 		copy(p, disco)
 		p = p[key.DiscoPublicRawLen:]
@@ -492,7 +492,7 @@ func parseAllocateUDPRelayEndpointRequest(ver uint8, p []byte) (m *AllocateUDPRe
 	if len(p) < allocateUDPRelayEndpointRequestLen {
 		return m, errShort
 	}
-	for i := 0; i < len(m.ClientDisco); i++ {
+	for i := range len(m.ClientDisco) {
 		m.ClientDisco[i] = key.DiscoPublicFromRaw32(mem.B(p[:key.DiscoPublicRawLen]))
 		p = p[key.DiscoPublicRawLen:]
 	}
@@ -565,7 +565,7 @@ func (m *UDPRelayEndpoint) encode(b []byte) {
 	disco := m.ServerDisco.AppendTo(nil)
 	copy(b, disco)
 	b = b[key.DiscoPublicRawLen:]
-	for i := 0; i < len(m.ClientDisco); i++ {
+	for i := range len(m.ClientDisco) {
 		disco = m.ClientDisco[i].AppendTo(nil)
 		copy(b, disco)
 		b = b[key.DiscoPublicRawLen:]
@@ -594,7 +594,7 @@ func (m *UDPRelayEndpoint) decode(b []byte) error {
 	}
 	m.ServerDisco = key.DiscoPublicFromRaw32(mem.B(b[:key.DiscoPublicRawLen]))
 	b = b[key.DiscoPublicRawLen:]
-	for i := 0; i < len(m.ClientDisco); i++ {
+	for i := range len(m.ClientDisco) {
 		m.ClientDisco[i] = key.DiscoPublicFromRaw32(mem.B(b[:key.DiscoPublicRawLen]))
 		b = b[key.DiscoPublicRawLen:]
 	}

@@ -87,7 +87,7 @@ func verifyWebhookSignature(req *http.Request, secret string) (events []event, e
 		return nil, err
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(fmt.Sprint(timestamp.Unix())))
+	mac.Write(fmt.Append(nil, timestamp.Unix()))
 	mac.Write([]byte("."))
 	mac.Write(b)
 	want := hex.EncodeToString(mac.Sum(nil))
@@ -120,8 +120,8 @@ func parseSignatureHeader(header string) (timestamp time.Time, signatures map[st
 	}
 
 	signatures = make(map[string][]string)
-	pairs := strings.Split(header, ",")
-	for _, pair := range pairs {
+	pairs := strings.SplitSeq(header, ",")
+	for pair := range pairs {
 		parts := strings.Split(pair, "=")
 		if len(parts) != 2 {
 			return time.Time{}, nil, errNotSigned

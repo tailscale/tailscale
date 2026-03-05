@@ -91,7 +91,7 @@ func main() {
 	if distro.Get() == distro.Gokrazy {
 		cmdLine, _ := os.ReadFile("/proc/cmdline")
 		explicitNS := false
-		for _, s := range strings.Fields(string(cmdLine)) {
+		for s := range strings.FieldsSeq(string(cmdLine)) {
 			if ns, ok := strings.CutPrefix(s, "tta.nameserver="); ok {
 				err := atomicfile.WriteFile("/tmp/resolv.conf", []byte("nameserver "+ns+"\n"), 0644)
 				log.Printf("Wrote /tmp/resolv.conf: %v", err)

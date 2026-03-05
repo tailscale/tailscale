@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -71,7 +72,7 @@ func init() {
 	if keys == "" {
 		return
 	}
-	for _, keyStr := range strings.Split(keys, ",") {
+	for keyStr := range strings.SplitSeq(keys, ",") {
 		k, err := key.ParseNodePublicUntyped(mem.S(keyStr))
 		if err != nil {
 			log.Printf("ignoring invalid debug key %q: %v", keyStr, err)
@@ -1287,7 +1288,7 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 	if disco.LooksLikeDiscoWrapper(p.bs) {
 		sendQueue = dst.discoSendQueue
 	}
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := range 3 {
 		select {
 		case <-dst.done:
 			s.recordDrop(p.bs, c.key, dstKey, dropReasonGoneDisconnected)
@@ -1484,16 +1485,13 @@ func (s *Server) noteClientActivity(c *sclient) {
 	// If we saw this connection send previously, then consider
 	// the group fighting and disable them all.
 	if s.dupPolicy == disableFighters {
-		for _, prior := range dup.sendHistory {
-			if prior == c {
-				cs.ForeachClient(func(c *sclient) {
-					c.isDisabled.Store(true)
-					if cs.activeClient.Load() == c {
-						cs.activeClient.Store(nil)
-					}
-				})
-				break
-			}
+		if slices.Contains(dup.sendHistory, c) {
+			cs.ForeachClient(func(c *sclient) {
+				c.isDisabled.Store(true)
+				if cs.activeClient.Load() == c {
+					cs.activeClient.Store(nil)
+				}
+			})
 		}
 	}
 

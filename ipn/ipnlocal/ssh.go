@@ -101,9 +101,9 @@ func (b *LocalBackend) getSSHUsernames(req *tailcfg.C2NSSHUsernamesRequest) (*ta
 				mem.HasSuffix(mem.B(line), mem.S("/false")) {
 				continue
 			}
-			colon := bytes.IndexByte(line, ':')
-			if colon != -1 {
-				add(string(line[:colon]))
+			before, _, ok := bytes.Cut(line, []byte{':'})
+			if ok {
+				add(string(before))
 			}
 		}
 	}

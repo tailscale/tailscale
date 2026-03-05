@@ -363,15 +363,12 @@ func (r *RecorderReconciler) maybeCleanupSecrets(ctx context.Context, tailscaleC
 		}
 
 		if ok {
-			var errResp *tailscale.ErrResponse
-
 			r.log.Debugf("deleting device %s", devicePrefs.Config.NodeID)
 			err = tailscaleClient.DeleteDevice(ctx, string(devicePrefs.Config.NodeID))
-			switch {
-			case errors.As(err, &errResp) && errResp.Status == http.StatusNotFound:
+			if errResp, ok := errors.AsType[*tailscale.ErrResponse](err); ok && errResp.Status == http.StatusNotFound {
 				// This device has possibly already been deleted in the admin console. So we can ignore this
 				// and move on to removing the secret.
-			case err != nil:
+			} else if err != nil {
 				return err
 			}
 		}
@@ -412,8 +409,7 @@ func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Record
 		nodeID := string(devicePrefs.Config.NodeID)
 		logger.Debugf("deleting device %s from control", nodeID)
 		if err = tailscaleClient.DeleteDevice(ctx, nodeID); err != nil {
-			errResp := &tailscale.ErrResponse{}
-			if errors.As(err, errResp) && errResp.Status == http.StatusNotFound {
+			if errResp, ok := errors.AsType[tailscale.ErrResponse](err); ok && errResp.Status == http.StatusNotFound {
 				logger.Debugf("device %s not found, likely because it has already been deleted from control", nodeID)
 				continue
 			}
