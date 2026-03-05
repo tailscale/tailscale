@@ -25,6 +25,7 @@ import (
 	"golang.org/x/mod/modfile"
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -131,6 +132,24 @@ func easyAnd6(c *vnet.Config) *vnet.Node {
 		fmt.Sprintf("192.168.%d.1/24", n),
 		v6cidr(n),
 		vnet.EasyNAT))
+}
+
+// easyNoControlDiscoRotate sets up a node with easy NAT, cuts traffic to
+// control after connecting, and then rotates the disco key to simulate a newly
+// started node (from a disco perspective).
+func easyNoControlDiscoRotate(c *vnet.Config) *vnet.Node {
+	n := c.NumNodes() + 1
+	nw := c.AddNetwork(
+		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
+		fmt.Sprintf("192.168.%d.1/24", n),
+		vnet.EasyNAT)
+	nw.SetPostConnectControlBlackhole(true)
+	return c.AddNode(
+		vnet.TailscaledEnv{
+			Key:   "TS_USE_CACHED_NETMAP",
+			Value: "true",
+		},
+		vnet.RotateDisco, vnet.PreICMPPing, nw)
 }
 
 func v6AndBlackholedIPv4(c *vnet.Config) *vnet.Node {
@@ -364,7 +383,9 @@ func (nt *natTest) runTest(addNode ...addNodeFunc) pingRoute {
 
 	var clients []*vnet.NodeAgentClient
 	for _, n := range nodes {
-		clients = append(clients, nt.vnet.NodeAgentClient(n))
+		client := nt.vnet.NodeAgentClient(n)
+		n.SetClient(client)
+		clients = append(clients, client)
 	}
 	sts := make([]*ipnstate.Status, len(nodes))
 
@@ -415,7 +436,27 @@ func (nt *natTest) runTest(addNode ...addNodeFunc) pingRoute {
 		return ""
 	}
 
-	pingRes, err := ping(ctx, t, clients[0], sts[1].Self.TailscaleIPs[0])
+	preICMPPing := false
+	for _, node := range c.Nodes() {
+		node.Network().PostConnectedToControl()
+		if err := node.PostConnectedToControl(ctx); err != nil {
+			t.Fatalf("post control error: %s", err)
+		}
+		if node.PreICMPPing() {
+			preICMPPing = true
+		}
+	}
+
+	// Should we send traffic across the nodes before starting disco?
+	// For nodes that rotated disco keys after control going away.
+	if preICMPPing {
+		_, err := ping(ctx, t, clients[0], sts[1].Self.TailscaleIPs[0], tailcfg.PingICMP)
+		if err != nil {
+			t.Fatalf("ICMP ping failure: %v", err)
+		}
+	}
+
+	pingRes, err := ping(ctx, t, clients[0], sts[1].Self.TailscaleIPs[0], tailcfg.PingDisco)
 	if err != nil {
 		t.Fatalf("ping failure: %v", err)
 	}
@@ -450,12 +491,12 @@ const (
 	routeNil    pingRoute = "nil" // *ipnstate.PingResult is nil
 )
 
-func ping(ctx context.Context, t testing.TB, c *vnet.NodeAgentClient, target netip.Addr) (*ipnstate.PingResult, error) {
+func ping(ctx context.Context, t testing.TB, c *vnet.NodeAgentClient, target netip.Addr, pType tailcfg.PingType) (*ipnstate.PingResult, error) {
 	var lastRes *ipnstate.PingResult
 	for n := range 10 {
 		t.Logf("ping attempt %d to %v ...", n+1, target)
 		pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		pr, err := c.PingWithOpts(pingCtx, target, tailcfg.PingDisco, tailscale.PingOpts{})
+		pr, err := c.PingWithOpts(pingCtx, target, pType, tailscale.PingOpts{})
 		cancel()
 		if err != nil {
 			t.Logf("ping attempt %d error: %v", n+1, err)
@@ -526,6 +567,13 @@ func (nt *natTest) want(r pingRoute) {
 func TestEasyEasy(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(easy, easy)
+	nt.want(routeDirect)
+}
+
+func TestTwoEasyNoControlDiscoRotate(t *testing.T) {
+	envknob.Setenv("TS_USE_CACHED_NETMAP", "1")
+	nt := newNatTest(t)
+	nt.runTest(easyNoControlDiscoRotate, easyNoControlDiscoRotate)
 	nt.want(routeDirect)
 }
 

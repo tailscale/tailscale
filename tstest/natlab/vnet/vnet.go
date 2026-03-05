@@ -506,23 +506,24 @@ func (nw networkWriter) write(b []byte) {
 }
 
 type network struct {
-	s              *Server
-	num            int // 1-based
-	mac            MAC // of router
-	portmap        bool
-	lanInterfaceID int
-	wanInterfaceID int
-	v4             bool                 // network supports IPv4
-	v6             bool                 // network support IPv6
-	wanIP6         netip.Prefix         // router's WAN IPv6, if any, as a /64.
-	wanIP4         netip.Addr           // router's LAN IPv4, if any
-	lanIP4         netip.Prefix         // router's LAN IP + CIDR (e.g. 192.168.2.1/24)
-	breakWAN4      bool                 // break WAN IPv4 connectivity
-	latency        time.Duration        // latency applied to interface writes
-	lossRate       float64              // probability of dropping a packet (0.0 to 1.0)
-	nodesByIP4     map[netip.Addr]*node // by LAN IPv4
-	nodesByMAC     map[MAC]*node
-	logf           func(format string, args ...any)
+	s                *Server
+	num              int // 1-based
+	mac              MAC // of router
+	portmap          bool
+	lanInterfaceID   int
+	wanInterfaceID   int
+	v4               bool                 // network supports IPv4
+	v6               bool                 // network support IPv6
+	wanIP6           netip.Prefix         // router's WAN IPv6, if any, as a /64.
+	wanIP4           netip.Addr           // router's LAN IPv4, if any
+	lanIP4           netip.Prefix         // router's LAN IP + CIDR (e.g. 192.168.2.1/24)
+	breakWAN4        bool                 // break WAN IPv4 connectivity
+	blackholeControl bool                 // blackhole control connectivity
+	latency          time.Duration        // latency applied to interface writes
+	lossRate         float64              // probability of dropping a packet (0.0 to 1.0)
+	nodesByIP4       map[netip.Addr]*node // by LAN IPv4
+	nodesByMAC       map[MAC]*node
+	logf             func(format string, args ...any)
 
 	ns     *stack.Stack
 	linkEP *channel.Endpoint
@@ -576,6 +577,12 @@ func (n *network) MACOfIP(ip netip.Addr) (_ MAC, ok bool) {
 		return n.mac, true
 	}
 	return MAC{}, false
+}
+
+// SetControlBlackholed sets wether traffic to control should be blackholed for the
+// network.
+func (n *network) SetControlBlackholed(v bool) {
+	n.blackholeControl = v
 }
 
 type node struct {
@@ -1263,7 +1270,8 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 	}
 
 	if toForward && n.s.shouldInterceptTCP(packet) {
-		if flow.dst.Is4() && n.breakWAN4 {
+		if (flow.dst.Is4() && n.breakWAN4) ||
+			(n.blackholeControl && fakeControl.Match(flow.dst)) {
 			// Blackhole the packet.
 			return
 		}
