@@ -20,17 +20,21 @@ self: {
 }: let
   inherit (lib)
     any
+    attrNames
     attrValues
     boolToString
     concatMap
+    concatMapStringsSep
     concatStringsSep
     escapeShellArg
     escapeShellArgs
     filterAttrs
+    mapAttrs'
     mapAttrsToList
     mkIf
     mkMerge
     mkOverride
+    nameValuePair
     optional
     optionalAttrs
     optionals
@@ -258,7 +262,48 @@ self: {
           tailscale --socket=${escapeShellArg meta.socketPath} set ${escapeShellArgs cfg.extraSetFlags}
         '';
       };
-    };
+    }
+    # ── Serve config service (when services are defined) ──
+    // optionalAttrs (effServices != {}) (let
+      configFile = mkServeConfigFile name effServices;
+      socket = escapeShellArg meta.socketPath;
+      svcNames = attrNames effServices;
+    in {
+      "${meta.svcName}-serve-config" = {
+        description =
+          "Tailscale serve config"
+          + optionalString (!meta.isDefault) " (${name})";
+        after = [
+          "${meta.svcName}.service"
+          "${meta.svcName}-autoconnect.service"
+        ];
+        wants = ["${meta.svcName}.service"];
+        wantedBy = ["multi-user.target"];
+
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+        };
+
+        path = [cfg.package];
+
+        enableStrictShellChecks = true;
+
+        restartTriggers = [configFile];
+
+        script = ''
+          until tailscale --socket=${socket} status &>/dev/null; do
+            sleep 1
+          done
+
+          tailscale --socket=${socket} serve set-config --all ${configFile}
+
+          ${concatMapStringsSep "\n" (svcName:
+            "tailscale --socket=${socket} serve advertise svc:${escapeShellArg svcName}")
+          svcNames}
+        '';
+      };
+    });
 
   # Generate a CLI wrapper package for a named instance.
   mkCliWrapper = name: cfg: let
@@ -269,6 +314,25 @@ self: {
         exec ${cfg.package}/bin/tailscale --socket=${escapeShellArg meta.socketPath} "$@"
       '';
     };
+
+  # Generate the JSON config file for tailscale serve set-config --all.
+  # Prepends "svc:" to each service name and omits `advertised` when null
+  # to match the Go opt.Bool semantics (unset = advertised by default).
+  mkServeConfigFile = name: servicesAttr: let
+    servicesJson = {
+      version = "0.0.1";
+      services = mapAttrs' (svcName: svcCfg:
+        nameValuePair "svc:${svcName}" (
+          {inherit (svcCfg) endpoints;}
+          // optionalAttrs (svcCfg.advertised != null) {
+            inherit (svcCfg) advertised;
+          }
+        ))
+        servicesAttr;
+    };
+  in
+    pkgs.writeText "tailscale-services-${name}.json"
+    (builtins.toJSON servicesJson);
 in {
   config = mkMerge [
     # ── Option paths are statically visible here ──

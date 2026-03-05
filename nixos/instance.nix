@@ -202,5 +202,65 @@ in {
         iptables rules, routes, and the TUN device.
       '';
     };
+
+    services = mkOption {
+      type = types.attrsOf (types.submodule {
+        options = {
+          endpoints = mkOption {
+            type = types.attrsOf types.str;
+            description = ''
+              Endpoint mappings for this service.
+
+              Keys use the format `"tcp:PORT"` or `"tcp:START-END"` for
+              port ranges. Only TCP is supported as the transport protocol.
+
+              Values specify the local target using a URI:
+              `"http://host:port"`, `"https://host:port"`,
+              `"https+insecure://host:port"`, `"tcp://host:port"`,
+              or `"tls-terminated-tcp://host:port"`.
+            '';
+            example = {
+              "tcp:443" = "https://localhost:8443";
+              "tcp:5432" = "tcp://localhost:5432";
+            };
+          };
+
+          advertised = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Whether the service accepts new connections.
+              When null (the default), the service is advertised.
+              Set to false to configure endpoints without advertising.
+            '';
+          };
+        };
+      });
+      default = {};
+      description = ''
+        Tailscale Services configuration. Service names are specified
+        without the `svc:` prefix (it is added automatically).
+
+        When using `services.tailscales` (multi-instance), any services
+        defined under `services.tailscale.services` are automatically
+        merged into all plural instances as shared services. Per-instance
+        services with the same name take precedence over shared ones.
+
+        Services must be pre-defined in the Tailscale admin console.
+        The host must use tag-based identity.
+
+        See <https://tailscale.com/docs/features/tailscale-services>
+      '';
+      example = literalExpression ''
+        {
+          prometheus = {
+            endpoints."tcp:443" = "http://localhost:9090";
+          };
+          postgres = {
+            endpoints."tcp:5432" = "tcp://localhost:5432";
+          };
+        }
+      '';
+    };
   };
 }
