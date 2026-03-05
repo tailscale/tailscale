@@ -119,7 +119,7 @@ type NLPublic struct {
 // NLPublicFromEd25519Unsafe converts an ed25519 public key into
 // a type of NLPublic.
 //
-// New uses of this function should be avoided, as its possible to
+// New uses of this function should be avoided, as it's possible to
 // accidentally construct an NLPublic from a non network-lock key.
 func NLPublicFromEd25519Unsafe(public ed25519.PublicKey) NLPublic {
 	var out NLPublic

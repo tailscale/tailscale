@@ -579,7 +579,7 @@ func (n *network) MACOfIP(ip netip.Addr) (_ MAC, ok bool) {
 	return MAC{}, false
 }
 
-// SetControlBlackholed sets wether traffic to control should be blackholed for the
+// SetControlBlackholed sets whether traffic to control should be blackholed for the
 // network.
 func (n *network) SetControlBlackholed(v bool) {
 	n.blackholeControl = v
