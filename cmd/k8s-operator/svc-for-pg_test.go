@@ -28,7 +28,6 @@ import (
 	"tailscale.com/kube/ingressservices"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 
 	"tailscale.com/tailcfg"
@@ -235,7 +234,7 @@ func TestValidateService(t *testing.T) {
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "1.2.3.4",
 			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
+			LoadBalancerClass: new("tailscale"),
 		},
 	}
 	svc2 := &corev1.Service{
@@ -252,7 +251,7 @@ func TestValidateService(t *testing.T) {
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "1.2.3.5",
 			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
+			LoadBalancerClass: new("tailscale"),
 		},
 	}
 	wantSvc := &corev1.Service{
@@ -392,7 +391,7 @@ func setupTestService(t *testing.T, svcName string, hostname string, clusterIP s
 		},
 		Spec: corev1.ServiceSpec{
 			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
+			LoadBalancerClass: new("tailscale"),
 			ClusterIP:         clusterIP,
 			ClusterIPs:        []string{clusterIP},
 		},
@@ -412,7 +411,7 @@ func setupTestService(t *testing.T, svcName string, hostname string, clusterIP s
 			{
 				Addresses: []string{"4.3.2.1"},
 				Conditions: discoveryv1.EndpointConditions{
-					Ready: ptr.To(true),
+					Ready: new(true),
 				},
 			},
 		},

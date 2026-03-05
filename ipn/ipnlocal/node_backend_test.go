@@ -12,7 +12,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/eventbus"
 )
 
@@ -146,7 +145,7 @@ func TestNodeBackendReachability(t *testing.T) {
 			name: "disabled/offline",
 			cap:  false,
 			peer: tailcfg.Node{
-				Online: ptr.To(false),
+				Online: new(false),
 			},
 			want: false,
 		},
@@ -154,7 +153,7 @@ func TestNodeBackendReachability(t *testing.T) {
 			name: "disabled/online",
 			cap:  false,
 			peer: tailcfg.Node{
-				Online: ptr.To(true),
+				Online: new(true),
 			},
 			want: true,
 		},
@@ -162,7 +161,7 @@ func TestNodeBackendReachability(t *testing.T) {
 			name: "enabled/offline",
 			cap:  true,
 			peer: tailcfg.Node{
-				Online: ptr.To(false),
+				Online: new(false),
 			},
 			want: true,
 		},
@@ -170,7 +169,7 @@ func TestNodeBackendReachability(t *testing.T) {
 			name: "enabled/online",
 			cap:  true,
 			peer: tailcfg.Node{
-				Online: ptr.To(true),
+				Online: new(true),
 			},
 			want: true,
 		},

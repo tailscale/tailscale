@@ -22,7 +22,6 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 )
 
@@ -39,7 +38,7 @@ func TestConnector(t *testing.T) {
 			APIVersion: "tailscale.com/v1alpha1",
 		},
 		Spec: tsapi.ConnectorSpec{
-			Replicas: ptr.To[int32](1),
+			Replicas: new(int32(1)),
 			SubnetRouter: &tsapi.SubnetRouter{
 				AdvertiseRoutes: []tsapi.Route{"10.40.0.0/14"},
 			},
@@ -166,7 +165,7 @@ func TestConnector(t *testing.T) {
 			APIVersion: "tailscale.io/v1alpha1",
 		},
 		Spec: tsapi.ConnectorSpec{
-			Replicas: ptr.To[int32](1),
+			Replicas: new(int32(1)),
 			SubnetRouter: &tsapi.SubnetRouter{
 				AdvertiseRoutes: []tsapi.Route{"10.40.0.0/14"},
 			},
@@ -229,7 +228,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 			APIVersion: "tailscale.io/v1alpha1",
 		},
 		Spec: tsapi.ConnectorSpec{
-			Replicas: ptr.To[int32](1),
+			Replicas: new(int32(1)),
 			SubnetRouter: &tsapi.SubnetRouter{
 				AdvertiseRoutes: []tsapi.Route{"10.40.0.0/14"},
 			},
@@ -326,7 +325,7 @@ func TestConnectorWithAppConnector(t *testing.T) {
 			APIVersion: "tailscale.io/v1alpha1",
 		},
 		Spec: tsapi.ConnectorSpec{
-			Replicas:     ptr.To[int32](1),
+			Replicas:     new(int32(1)),
 			AppConnector: &tsapi.AppConnector{},
 		},
 	}
@@ -425,7 +424,7 @@ func TestConnectorWithMultipleReplicas(t *testing.T) {
 			APIVersion: "tailscale.io/v1alpha1",
 		},
 		Spec: tsapi.ConnectorSpec{
-			Replicas:       ptr.To[int32](3),
+			Replicas:       new(int32(3)),
 			AppConnector:   &tsapi.AppConnector{},
 			HostnamePrefix: "test-connector",
 		},
@@ -496,7 +495,7 @@ func TestConnectorWithMultipleReplicas(t *testing.T) {
 
 	// 5. We'll scale the connector down by 1 replica and make sure its secret is cleaned up
 	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
-		conn.Spec.Replicas = ptr.To[int32](2)
+		conn.Spec.Replicas = new(int32(2))
 	})
 	expectReconciled(t, cr, "", "test")
 	names = findGenNames(t, fc, "", "test", "connector")

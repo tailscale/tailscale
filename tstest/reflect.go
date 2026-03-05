@@ -8,8 +8,6 @@ import (
 	"reflect"
 	"testing"
 	"time"
-
-	"tailscale.com/types/ptr"
 )
 
 // IsZeroable is the interface for things with an IsZero method.
@@ -60,7 +58,7 @@ func CheckIsZero[T IsZeroable](t testing.TB, nonzeroValues map[reflect.Type]any)
 		case timeType:
 			return reflect.ValueOf(time.Unix(1704067200, 0))
 		case timePtrType:
-			return reflect.ValueOf(ptr.To(time.Unix(1704067200, 0)))
+			return reflect.ValueOf(new(time.Unix(1704067200, 0)))
 		}
 
 		switch ty.Kind() {

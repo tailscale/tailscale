@@ -14,7 +14,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/ptr"
 )
 
 // tests mapResponseContainsNonPatchFields
@@ -117,7 +116,7 @@ func TestMutationsFromMapResponse(t *testing.T) {
 			name: "patch-online",
 			mr: fromChanges(&tailcfg.PeerChange{
 				NodeID: 1,
-				Online: ptr.To(true),
+				Online: new(true),
 			}),
 			want: muts(NodeMutationOnline{1, true}),
 		},
@@ -125,7 +124,7 @@ func TestMutationsFromMapResponse(t *testing.T) {
 			name: "patch-online-false",
 			mr: fromChanges(&tailcfg.PeerChange{
 				NodeID: 1,
-				Online: ptr.To(false),
+				Online: new(false),
 			}),
 			want: muts(NodeMutationOnline{1, false}),
 		},
@@ -133,7 +132,7 @@ func TestMutationsFromMapResponse(t *testing.T) {
 			name: "patch-lastseen",
 			mr: fromChanges(&tailcfg.PeerChange{
 				NodeID:   1,
-				LastSeen: ptr.To(time.Unix(12345, 0)),
+				LastSeen: new(time.Unix(12345, 0)),
 			}),
 			want: muts(NodeMutationLastSeen{1, time.Unix(12345, 0)}),
 		},

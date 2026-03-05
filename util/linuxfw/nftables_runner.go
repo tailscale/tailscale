@@ -20,7 +20,6 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/ptr"
 )
 
 const (
@@ -955,7 +954,7 @@ const (
 // via netfilter via nftables, as a last resort measure to detect that nftables
 // can be used. It cleans up the dummy chains after creation.
 func (n *nftablesRunner) createDummyPostroutingChains() (retErr error) {
-	polAccept := ptr.To(nftables.ChainPolicyAccept)
+	polAccept := new(nftables.ChainPolicyAccept)
 	for _, table := range n.getTables() {
 		nat, err := createTableIfNotExist(n.conn, table.Proto, tsDummyTableName)
 		if err != nil {

@@ -12,8 +12,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	"tailscale.com/types/ptr"
 )
 
 func applyPebbleResources(ctx context.Context, cl client.Client) error {
@@ -46,7 +44,7 @@ func pebbleDeployment(tag string) *appsv1.Deployment {
 			Namespace: ns,
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr.To[int32](1),
+			Replicas: new(int32(1)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					"app": "pebble",

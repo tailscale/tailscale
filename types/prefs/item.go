@@ -9,7 +9,6 @@ import (
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/must"
 )
@@ -47,7 +46,7 @@ func (i *Item[T]) SetManagedValue(val T) {
 // It is a runtime error to call [Item.Clone] if T contains pointers
 // but does not implement [views.Cloner].
 func (i Item[T]) Clone() *Item[T] {
-	res := ptr.To(i)
+	res := new(i)
 	if v, ok := i.ValueOk(); ok {
 		res.s.Value.Set(must.Get(deepClone(v)))
 	}

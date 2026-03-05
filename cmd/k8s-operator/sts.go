@@ -38,7 +38,6 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 )
 
@@ -378,7 +377,7 @@ func (a *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, l
 			Selector: map[string]string{
 				"app": sts.ParentResourceUID,
 			},
-			IPFamilyPolicy: ptr.To(corev1.IPFamilyPolicyPreferDualStack),
+			IPFamilyPolicy: new(corev1.IPFamilyPolicyPreferDualStack),
 		},
 	}
 	logger.Debugf("reconciling headless service for StatefulSet")
@@ -526,7 +525,7 @@ func sanitizeConfig(c ipn.ConfigVAlpha) ipn.ConfigVAlpha {
 	// Explicitly redact AuthKey because we never want it appearing in logs. Never populate this with the
 	// actual auth key.
 	if c.AuthKey != nil {
-		c.AuthKey = ptr.To("**redacted**")
+		c.AuthKey = new("**redacted**")
 	}
 
 	return c
@@ -683,7 +682,7 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	}
 
 	if sts.Replicas > 0 {
-		ss.Spec.Replicas = ptr.To(sts.Replicas)
+		ss.Spec.Replicas = new(sts.Replicas)
 	}
 
 	// Generic containerboot configuration options.

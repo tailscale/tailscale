@@ -27,7 +27,6 @@ import (
 	clientcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/testenv"
 )
 
@@ -178,7 +177,7 @@ func (ld *configLoader) watchConfigSecretChanges(ctx context.Context, secretName
 		},
 		// Re-watch regularly to avoid relying on long-lived connections.
 		// See https://github.com/kubernetes-client/javascript/issues/596#issuecomment-786419380
-		TimeoutSeconds: ptr.To(int64(600)),
+		TimeoutSeconds: new(int64(600)),
 		FieldSelector:  fmt.Sprintf("metadata.name=%s", secretName),
 		Watch:          true,
 	})
@@ -216,7 +215,7 @@ func (ld *configLoader) watchConfigSecretChanges(ctx context.Context, secretName
 						Kind:       "Secret",
 						APIVersion: "v1",
 					},
-					TimeoutSeconds: ptr.To(int64(600)),
+					TimeoutSeconds: new(int64(600)),
 					FieldSelector:  fmt.Sprintf("metadata.name=%s", secretName),
 					Watch:          true,
 				})

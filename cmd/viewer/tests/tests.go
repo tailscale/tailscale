@@ -9,7 +9,6 @@ import (
 	"net/netip"
 
 	"golang.org/x/exp/constraints"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 )
 
@@ -135,7 +134,7 @@ func (c *Container[T]) Clone() *Container[T] {
 		return &Container[T]{cloner.Clone()}
 	}
 	if !views.ContainsPointers[T]() {
-		return ptr.To(*c)
+		return new(*c)
 	}
 	panic(fmt.Errorf("%T contains pointers, but is not cloneable", c.Item))
 }

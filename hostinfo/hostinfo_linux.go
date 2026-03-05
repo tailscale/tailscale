@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/lineiter"
 	"tailscale.com/version/distro"
 )
@@ -26,8 +25,8 @@ func init() {
 }
 
 var (
-	lazyVersionMeta = &lazyAtomicValue[versionMeta]{f: ptr.To(linuxVersionMeta)}
-	lazyOSVersion   = &lazyAtomicValue[string]{f: ptr.To(osVersionLinux)}
+	lazyVersionMeta = &lazyAtomicValue[versionMeta]{f: new(linuxVersionMeta)}
+	lazyOSVersion   = &lazyAtomicValue[string]{f: new(osVersionLinux)}
 )
 
 type versionMeta struct {

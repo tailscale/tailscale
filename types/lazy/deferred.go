@@ -6,8 +6,6 @@ package lazy
 import (
 	"sync"
 	"sync/atomic"
-
-	"tailscale.com/types/ptr"
 )
 
 // DeferredInit allows one or more funcs to be deferred
@@ -91,7 +89,7 @@ func (d *DeferredInit) doSlow() (err *error) {
 	}()
 	for _, f := range d.funcs {
 		if err := f(); err != nil {
-			return ptr.To(err)
+			return new(err)
 		}
 	}
 	return nilErrPtr

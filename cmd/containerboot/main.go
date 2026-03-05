@@ -147,7 +147,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/linuxfw"
@@ -612,7 +611,7 @@ runLoop:
 					if cd == "" {
 						cd = kubetypes.ValueNoHTTPS
 					}
-					prev := certDomain.Swap(ptr.To(cd))
+					prev := certDomain.Swap(new(cd))
 					if prev == nil || *prev != cd {
 						select {
 						case certDomainChanged <- true:

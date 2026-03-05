@@ -38,7 +38,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/ptr"
 )
 
 func TestContainerBoot(t *testing.T) {
@@ -95,7 +94,7 @@ func TestContainerBoot(t *testing.T) {
 		EndpointStatuses map[string]int
 	}
 	runningNotify := &ipn.Notify{
-		State: ptr.To(ipn.Running),
+		State: new(ipn.Running),
 		NetMap: &netmap.NetworkMap{
 			SelfNode: (&tailcfg.Node{
 				StableID:  tailcfg.StableNodeID("myID"),
@@ -373,7 +372,7 @@ func TestContainerBoot(t *testing.T) {
 					},
 					{
 						Notify: &ipn.Notify{
-							State: ptr.To(ipn.Running),
+							State: new(ipn.Running),
 							NetMap: &netmap.NetworkMap{
 								SelfNode: (&tailcfg.Node{
 									StableID:  tailcfg.StableNodeID("myID"),
@@ -390,7 +389,7 @@ func TestContainerBoot(t *testing.T) {
 							},
 						},
 						WantLog:      "no forwarding rules for egress addresses [::1/128], host supports IPv6: false",
-						WantExitCode: ptr.To(1),
+						WantExitCode: new(1),
 					},
 				},
 			}
@@ -409,7 +408,7 @@ func TestContainerBoot(t *testing.T) {
 					},
 					{
 						Notify: &ipn.Notify{
-							State: ptr.To(ipn.NeedsLogin),
+							State: new(ipn.NeedsLogin),
 						},
 						WantCmds: []string{
 							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
@@ -440,7 +439,7 @@ func TestContainerBoot(t *testing.T) {
 					},
 					{
 						Notify: &ipn.Notify{
-							State: ptr.To(ipn.NeedsLogin),
+							State: new(ipn.NeedsLogin),
 						},
 						WantCmds: []string{
 							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=true --authkey=tskey-key",
@@ -564,7 +563,7 @@ func TestContainerBoot(t *testing.T) {
 					},
 					{
 						Notify: &ipn.Notify{
-							State: ptr.To(ipn.NeedsLogin),
+							State: new(ipn.NeedsLogin),
 						},
 						WantCmds: []string{
 							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
@@ -621,7 +620,7 @@ func TestContainerBoot(t *testing.T) {
 					},
 					{
 						Notify: &ipn.Notify{
-							State: ptr.To(ipn.Running),
+							State: new(ipn.Running),
 							NetMap: &netmap.NetworkMap{
 								SelfNode: (&tailcfg.Node{
 									StableID:  tailcfg.StableNodeID("newID"),
@@ -964,7 +963,7 @@ func TestContainerBoot(t *testing.T) {
 					},
 					{
 						Notify: &ipn.Notify{
-							State: ptr.To(ipn.Running),
+							State: new(ipn.Running),
 							NetMap: &netmap.NetworkMap{
 								SelfNode: (&tailcfg.Node{
 									StableID:  tailcfg.StableNodeID("myID"),
@@ -1004,7 +1003,7 @@ func TestContainerBoot(t *testing.T) {
 				Phases: []phase{
 					{
 						WantLog:      "TS_EGRESS_PROXIES_CONFIG_PATH is only supported for Tailscale running on Kubernetes",
-						WantExitCode: ptr.To(1),
+						WantExitCode: new(1),
 					},
 				},
 			}
@@ -1053,7 +1052,7 @@ func TestContainerBoot(t *testing.T) {
 					{
 						// SIGTERM before state is finished writing, should wait for
 						// consistent state before propagating SIGTERM to tailscaled.
-						Signal: ptr.To(unix.SIGTERM),
+						Signal: new(unix.SIGTERM),
 						UpdateKubeSecret: map[string]string{
 							"_machinekey":  "foo",
 							"_profiles":    "foo",
@@ -1083,7 +1082,7 @@ func TestContainerBoot(t *testing.T) {
 							kubetypes.KeyCapVer: capver,
 						},
 						WantLog:      "HTTP server at [::]:9002 closed",
-						WantExitCode: ptr.To(0),
+						WantExitCode: new(0),
 					},
 				},
 			}
@@ -1661,7 +1660,7 @@ func newTestEnv(t *testing.T) testEnv {
 	kube.Start(t)
 	t.Cleanup(kube.Close)
 
-	tailscaledConf := &ipn.ConfigVAlpha{AuthKey: ptr.To("foo"), Version: "alpha0"}
+	tailscaledConf := &ipn.ConfigVAlpha{AuthKey: new("foo"), Version: "alpha0"}
 	serveConf := ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}}}
 	serveConfWithServices := ipn.ServeConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},

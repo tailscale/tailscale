@@ -10,7 +10,6 @@ import (
 	"net/netip"
 
 	"golang.org/x/exp/constraints"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 )
 
@@ -23,13 +22,13 @@ func (src *StructWithPtrs) Clone() *StructWithPtrs {
 	dst := new(StructWithPtrs)
 	*dst = *src
 	if dst.Value != nil {
-		dst.Value = ptr.To(*src.Value)
+		dst.Value = new(*src.Value)
 	}
 	if dst.Int != nil {
-		dst.Int = ptr.To(*src.Int)
+		dst.Int = new(*src.Int)
 	}
 	if dst.NoView != nil {
-		dst.NoView = ptr.To(*src.NoView)
+		dst.NoView = new(*src.NoView)
 	}
 	return dst
 }
@@ -90,7 +89,7 @@ func (src *Map) Clone() *Map {
 			if v == nil {
 				dst.StructPtrWithoutPtr[k] = nil
 			} else {
-				dst.StructPtrWithoutPtr[k] = ptr.To(*v)
+				dst.StructPtrWithoutPtr[k] = new(*v)
 			}
 		}
 	}
@@ -156,7 +155,7 @@ func (src *StructWithSlices) Clone() *StructWithSlices {
 			if src.ValuePointers[i] == nil {
 				dst.ValuePointers[i] = nil
 			} else {
-				dst.ValuePointers[i] = ptr.To(*src.ValuePointers[i])
+				dst.ValuePointers[i] = new(*src.ValuePointers[i])
 			}
 		}
 	}
@@ -185,7 +184,7 @@ func (src *StructWithSlices) Clone() *StructWithSlices {
 			if src.Ints[i] == nil {
 				dst.Ints[i] = nil
 			} else {
-				dst.Ints[i] = ptr.To(*src.Ints[i])
+				dst.Ints[i] = new(*src.Ints[i])
 			}
 		}
 	}
@@ -248,7 +247,7 @@ func (src *GenericIntStruct[T]) Clone() *GenericIntStruct[T] {
 	dst := new(GenericIntStruct[T])
 	*dst = *src
 	if dst.Pointer != nil {
-		dst.Pointer = ptr.To(*src.Pointer)
+		dst.Pointer = new(*src.Pointer)
 	}
 	dst.Slice = append(src.Slice[:0:0], src.Slice...)
 	dst.Map = maps.Clone(src.Map)
@@ -258,7 +257,7 @@ func (src *GenericIntStruct[T]) Clone() *GenericIntStruct[T] {
 			if src.PtrSlice[i] == nil {
 				dst.PtrSlice[i] = nil
 			} else {
-				dst.PtrSlice[i] = ptr.To(*src.PtrSlice[i])
+				dst.PtrSlice[i] = new(*src.PtrSlice[i])
 			}
 		}
 	}
@@ -269,7 +268,7 @@ func (src *GenericIntStruct[T]) Clone() *GenericIntStruct[T] {
 			if v == nil {
 				dst.PtrValueMap[k] = nil
 			} else {
-				dst.PtrValueMap[k] = ptr.To(*v)
+				dst.PtrValueMap[k] = new(*v)
 			}
 		}
 	}
@@ -305,7 +304,7 @@ func (src *GenericNoPtrsStruct[T]) Clone() *GenericNoPtrsStruct[T] {
 	dst := new(GenericNoPtrsStruct[T])
 	*dst = *src
 	if dst.Pointer != nil {
-		dst.Pointer = ptr.To(*src.Pointer)
+		dst.Pointer = new(*src.Pointer)
 	}
 	dst.Slice = append(src.Slice[:0:0], src.Slice...)
 	dst.Map = maps.Clone(src.Map)
@@ -315,7 +314,7 @@ func (src *GenericNoPtrsStruct[T]) Clone() *GenericNoPtrsStruct[T] {
 			if src.PtrSlice[i] == nil {
 				dst.PtrSlice[i] = nil
 			} else {
-				dst.PtrSlice[i] = ptr.To(*src.PtrSlice[i])
+				dst.PtrSlice[i] = new(*src.PtrSlice[i])
 			}
 		}
 	}
@@ -326,7 +325,7 @@ func (src *GenericNoPtrsStruct[T]) Clone() *GenericNoPtrsStruct[T] {
 			if v == nil {
 				dst.PtrValueMap[k] = nil
 			} else {
-				dst.PtrValueMap[k] = ptr.To(*v)
+				dst.PtrValueMap[k] = new(*v)
 			}
 		}
 	}
@@ -375,7 +374,7 @@ func (src *GenericCloneableStruct[T, V]) Clone() *GenericCloneableStruct[T, V] {
 		}
 	}
 	if dst.Pointer != nil {
-		dst.Pointer = ptr.To((*src.Pointer).Clone())
+		dst.Pointer = new((*src.Pointer).Clone())
 	}
 	if src.PtrSlice != nil {
 		dst.PtrSlice = make([]*T, len(src.PtrSlice))
@@ -383,7 +382,7 @@ func (src *GenericCloneableStruct[T, V]) Clone() *GenericCloneableStruct[T, V] {
 			if src.PtrSlice[i] == nil {
 				dst.PtrSlice[i] = nil
 			} else {
-				dst.PtrSlice[i] = ptr.To((*src.PtrSlice[i]).Clone())
+				dst.PtrSlice[i] = new((*src.PtrSlice[i]).Clone())
 			}
 		}
 	}
@@ -394,7 +393,7 @@ func (src *GenericCloneableStruct[T, V]) Clone() *GenericCloneableStruct[T, V] {
 			if v == nil {
 				dst.PtrValueMap[k] = nil
 			} else {
-				dst.PtrValueMap[k] = ptr.To((*v).Clone())
+				dst.PtrValueMap[k] = new((*v).Clone())
 			}
 		}
 	}
@@ -457,7 +456,7 @@ func (src *StructWithTypeAliasFields) Clone() *StructWithTypeAliasFields {
 	dst.WithPtr = *src.WithPtr.Clone()
 	dst.WithPtrByPtr = src.WithPtrByPtr.Clone()
 	if dst.WithoutPtrByPtr != nil {
-		dst.WithoutPtrByPtr = ptr.To(*src.WithoutPtrByPtr)
+		dst.WithoutPtrByPtr = new(*src.WithoutPtrByPtr)
 	}
 	if src.SliceWithPtrs != nil {
 		dst.SliceWithPtrs = make([]*StructWithPtrsAlias, len(src.SliceWithPtrs))
@@ -475,7 +474,7 @@ func (src *StructWithTypeAliasFields) Clone() *StructWithTypeAliasFields {
 			if src.SliceWithoutPtrs[i] == nil {
 				dst.SliceWithoutPtrs[i] = nil
 			} else {
-				dst.SliceWithoutPtrs[i] = ptr.To(*src.SliceWithoutPtrs[i])
+				dst.SliceWithoutPtrs[i] = new(*src.SliceWithoutPtrs[i])
 			}
 		}
 	}
@@ -495,7 +494,7 @@ func (src *StructWithTypeAliasFields) Clone() *StructWithTypeAliasFields {
 			if v == nil {
 				dst.MapWithoutPtrs[k] = nil
 			} else {
-				dst.MapWithoutPtrs[k] = ptr.To(*v)
+				dst.MapWithoutPtrs[k] = new(*v)
 			}
 		}
 	}

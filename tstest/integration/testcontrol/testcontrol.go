@@ -38,7 +38,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
@@ -1337,9 +1336,9 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		}
 		if masqIP := nodeMasqs[p.Key]; masqIP.IsValid() {
 			if masqIP.Is6() {
-				p.SelfNodeV6MasqAddrForThisPeer = ptr.To(masqIP)
+				p.SelfNodeV6MasqAddrForThisPeer = new(masqIP)
 			} else {
-				p.SelfNodeV4MasqAddrForThisPeer = ptr.To(masqIP)
+				p.SelfNodeV4MasqAddrForThisPeer = new(masqIP)
 			}
 		}
 		p.IsJailed = jailed[p.Key]

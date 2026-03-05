@@ -51,7 +51,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
@@ -383,7 +382,7 @@ func (c *Direct) SetHostinfo(hi *tailcfg.Hostinfo) bool {
 	if hi == nil {
 		panic("nil Hostinfo")
 	}
-	hi = ptr.To(*hi)
+	hi = new(*hi)
 	hi.NetInfo = nil
 	c.mu.Lock()
 	defer c.mu.Unlock()

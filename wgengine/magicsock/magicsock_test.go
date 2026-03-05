@@ -63,7 +63,6 @@ import (
 	"tailscale.com/types/netlogtype"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/clientmetric"
@@ -2309,7 +2308,7 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 				IsWireGuardOnly:               true,
 				Addresses:                     []netip.Prefix{wgaip},
 				AllowedIPs:                    []netip.Prefix{wgaip},
-				SelfNodeV4MasqAddrForThisPeer: ptr.To(masqip.Addr()),
+				SelfNodeV4MasqAddrForThisPeer: new(masqip.Addr()),
 			},
 		}),
 	}

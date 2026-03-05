@@ -42,7 +42,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
@@ -624,7 +623,7 @@ func (r *ProxyGroupReconciler) ensureNodePortServiceCreated(ctx context.Context,
 		}
 	}
 
-	return svcToNodePorts, ptr.To(tailscaledPort), nil
+	return svcToNodePorts, new(tailscaledPort), nil
 }
 
 // cleanupDanglingResources ensures we don't leak config secrets, state secrets, and
@@ -837,9 +836,9 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 				Version: "v1alpha1",
 				ConfigV1Alpha1: &conf.ConfigV1Alpha1{
 					AuthKey:  authKey,
-					State:    ptr.To(fmt.Sprintf("kube:%s", pgPodName(pg.Name, i))),
-					App:      ptr.To(kubetypes.AppProxyGroupKubeAPIServer),
-					LogLevel: ptr.To(logger.Level().String()),
+					State:    new(fmt.Sprintf("kube:%s", pgPodName(pg.Name, i))),
+					App:      new(kubetypes.AppProxyGroupKubeAPIServer),
+					LogLevel: new(logger.Level().String()),
 
 					// Reloadable fields.
 					Hostname: &hostname,
@@ -850,7 +849,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 						// as containerboot does for ingress-pg-reconciler.
 						IssueCerts: opt.NewBool(i == 0),
 					},
-					LocalPort:          ptr.To(uint16(9002)),
+					LocalPort:          new(uint16(9002)),
 					HealthCheckEnabled: opt.NewBool(true),
 				},
 			}
@@ -1021,7 +1020,7 @@ func getStaticEndpointAddress(a *corev1.NodeAddress, port uint16) *netip.AddrPor
 		return nil
 	}
 
-	return ptr.To(netip.AddrPortFrom(addr, port))
+	return new(netip.AddrPortFrom(addr, port))
 }
 
 // ensureAddedToGaugeForProxyGroup ensures the gauge metric for the ProxyGroup resource is updated when the ProxyGroup
@@ -1062,7 +1061,7 @@ func pgTailscaledConfig(pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass, idx int32, a
 		AcceptDNS:         "false",
 		AcceptRoutes:      "false", // AcceptRoutes defaults to true
 		Locked:            "false",
-		Hostname:          ptr.To(pgHostname(pg, idx)),
+		Hostname:          new(pgHostname(pg, idx)),
 		AdvertiseServices: oldAdvertiseServices,
 		AuthKey:           authKey,
 	}

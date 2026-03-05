@@ -14,7 +14,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/types/ptr"
 	"tailscale.com/version"
 )
 
@@ -33,7 +32,7 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string, loginServer string) *
 			Annotations:     tsr.Spec.StatefulSet.Annotations,
 		},
 		Spec: appsv1.StatefulSetSpec{
-			Replicas: ptr.To(replicas),
+			Replicas: new(replicas),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: tsrLabels("recorder", tsr.Name, tsr.Spec.StatefulSet.Pod.Labels),
 			},

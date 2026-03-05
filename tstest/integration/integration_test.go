@@ -50,7 +50,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
 )
@@ -730,8 +729,8 @@ func TestConfigFileAuthKey(t *testing.T) {
 	must.Do(os.WriteFile(authKeyFile, fmt.Appendf(nil, "%s\n", authKey), 0666))
 	must.Do(os.WriteFile(n1.configFile, must.Get(json.Marshal(ipn.ConfigVAlpha{
 		Version:   "alpha0",
-		AuthKey:   ptr.To("file:" + authKeyFile),
-		ServerURL: ptr.To(n1.env.ControlServer.URL),
+		AuthKey:   new("file:" + authKeyFile),
+		ServerURL: new(n1.env.ControlServer.URL),
 	})), 0644))
 	d1 := n1.StartDaemon()
 
@@ -2232,7 +2231,7 @@ func TestC2NDebugNetmap(t *testing.T) {
 	// Send a delta update to n1, marking node 0 as online.
 	env.Control.AddRawMapResponse(nodes[1].Key, &tailcfg.MapResponse{
 		PeersChangedPatch: []*tailcfg.PeerChange{{
-			NodeID: nodes[0].ID, Online: ptr.To(true),
+			NodeID: nodes[0].ID, Online: new(true),
 		}},
 	})
 

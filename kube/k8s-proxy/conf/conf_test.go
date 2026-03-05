@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"tailscale.com/types/ptr"
 )
 
 // Test that the config file can be at the root of the object, or in a versioned sub-object.
@@ -23,17 +22,17 @@ func TestVersionedConfig(t *testing.T) {
 	}{
 		"root_config_v1alpha1": {
 			inputConfig:    `{"version": "v1alpha1", "authKey": "abc123"}`,
-			expectedConfig: ConfigV1Alpha1{AuthKey: ptr.To("abc123")},
+			expectedConfig: ConfigV1Alpha1{AuthKey: new("abc123")},
 		},
 		"backwards_compat_v1alpha1_config": {
 			// Client doesn't know about v1beta1, so it should read in v1alpha1.
 			inputConfig:    `{"version": "v1beta1", "beta-key": "beta-value", "authKey": "def456", "v1alpha1": {"authKey": "abc123"}}`,
-			expectedConfig: ConfigV1Alpha1{AuthKey: ptr.To("abc123")},
+			expectedConfig: ConfigV1Alpha1{AuthKey: new("abc123")},
 		},
 		"unknown_key_allowed": {
 			// Adding new keys to the config doesn't require a version bump.
 			inputConfig:    `{"version": "v1alpha1", "unknown-key": "unknown-value", "authKey": "abc123"}`,
-			expectedConfig: ConfigV1Alpha1{AuthKey: ptr.To("abc123")},
+			expectedConfig: ConfigV1Alpha1{AuthKey: new("abc123")},
 		},
 		"version_only_no_authkey": {
 			inputConfig:    `{"version": "v1alpha1"}`,

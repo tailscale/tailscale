@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"tailscale.com/types/ptr"
 )
 
 func TestGeneveHeader(t *testing.T) {
@@ -47,22 +46,22 @@ func TestVirtualNetworkID(t *testing.T) {
 		},
 		{
 			"Set 0",
-			ptr.To(uint32(0)),
+			new(uint32(0)),
 			0,
 		},
 		{
 			"Set 1",
-			ptr.To(uint32(1)),
+			new(uint32(1)),
 			1,
 		},
 		{
 			"Set math.MaxUint32",
-			ptr.To(uint32(math.MaxUint32)),
+			new(uint32(math.MaxUint32)),
 			1<<24 - 1,
 		},
 		{
 			"Set max 3-byte value",
-			ptr.To(uint32(1<<24 - 1)),
+			new(uint32(1<<24 - 1)),
 			1<<24 - 1,
 		},
 	}

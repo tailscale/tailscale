@@ -34,7 +34,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netlogtype"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/eventbus/eventbustest"
@@ -655,9 +654,9 @@ func TestPeerCfg_NAT(t *testing.T) {
 			},
 		}
 		if masqIP.Is4() {
-			p.V4MasqAddr = ptr.To(masqIP)
+			p.V4MasqAddr = new(masqIP)
 		} else {
-			p.V6MasqAddr = ptr.To(masqIP)
+			p.V6MasqAddr = new(masqIP)
 		}
 		p.AllowedIPs = append(p.AllowedIPs, otherAllowedIPs...)
 		return p

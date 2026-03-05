@@ -11,7 +11,6 @@ import (
 	"os"
 
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/types/ptr"
 )
 
 func parseAPIProxyMode() *kubetypes.APIServerProxyMode {
@@ -23,18 +22,18 @@ func parseAPIProxyMode() *kubetypes.APIServerProxyMode {
 	case haveAuthProxyEnv:
 		var authProxyEnv = defaultBool("AUTH_PROXY", false) // deprecated
 		if authProxyEnv {
-			return ptr.To(kubetypes.APIServerProxyModeAuth)
+			return new(kubetypes.APIServerProxyModeAuth)
 		}
 		return nil
 	case haveAPIProxyEnv:
 		var apiProxyEnv = defaultEnv("APISERVER_PROXY", "") // true, false or "noauth"
 		switch apiProxyEnv {
 		case "true":
-			return ptr.To(kubetypes.APIServerProxyModeAuth)
+			return new(kubetypes.APIServerProxyModeAuth)
 		case "false", "":
 			return nil
 		case "noauth":
-			return ptr.To(kubetypes.APIServerProxyModeNoAuth)
+			return new(kubetypes.APIServerProxyModeNoAuth)
 		default:
 			panic(fmt.Sprintf("unknown APISERVER_PROXY value %q", apiProxyEnv))
 		}

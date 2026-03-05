@@ -36,7 +36,6 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 )
 
@@ -96,7 +95,7 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 			{Name: "TS_DEBUG_ACME_FORCE_RENEWAL", Value: "true"},
 		},
 		SecurityContext: &corev1.SecurityContext{
-			Privileged: ptr.To(true),
+			Privileged: new(true),
 		},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
@@ -231,7 +230,7 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations:                annots,
-					DeletionGracePeriodSeconds: ptr.To[int64](10),
+					DeletionGracePeriodSeconds: new(int64(10)),
 					Labels: map[string]string{
 						"tailscale.com/managed":              "true",
 						"tailscale.com/parent-resource":      "test",
@@ -250,7 +249,7 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 							Command: []string{"/bin/sh", "-c"},
 							Args:    []string{"sysctl -w net.ipv4.ip_forward=1 && if sysctl net.ipv6.conf.all.forwarding; then sysctl -w net.ipv6.conf.all.forwarding=1; fi"},
 							SecurityContext: &corev1.SecurityContext{
-								Privileged: ptr.To(true),
+								Privileged: new(true),
 							},
 						},
 					},
@@ -364,14 +363,14 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 			},
 		},
 		Spec: appsv1.StatefulSetSpec{
-			Replicas: ptr.To[int32](1),
+			Replicas: new(int32(1)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"app": "1234-UID"},
 			},
 			ServiceName: opts.stsName,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					DeletionGracePeriodSeconds: ptr.To[int64](10),
+					DeletionGracePeriodSeconds: new(int64(10)),
 					Labels: map[string]string{
 						"tailscale.com/managed":              "true",
 						"tailscale.com/parent-resource":      "test",
@@ -420,7 +419,7 @@ func expectedHeadlessService(name string, parentType string) *corev1.Service {
 				"app": "1234-UID",
 			},
 			ClusterIP:      "None",
-			IPFamilyPolicy: ptr.To(corev1.IPFamilyPolicyPreferDualStack),
+			IPFamilyPolicy: new(corev1.IPFamilyPolicyPreferDualStack),
 		},
 	}
 }
@@ -480,7 +479,7 @@ func expectedServiceMonitor(t *testing.T, opts configOpts) *unstructured.Unstruc
 			Namespace:       opts.tailscaleNamespace,
 			Labels:          smLabels,
 			ResourceVersion: opts.resourceVersion,
-			OwnerReferences: []metav1.OwnerReference{{APIVersion: "v1", Kind: "Service", Name: name, BlockOwnerDeletion: ptr.To(true), Controller: ptr.To(true)}},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "v1", Kind: "Service", Name: name, BlockOwnerDeletion: new(true), Controller: new(true)}},
 		},
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "ServiceMonitor",
@@ -529,7 +528,7 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 		AcceptDNS:           "false",
 		Hostname:            &opts.hostname,
 		Locked:              "false",
-		AuthKey:             ptr.To("secret-authkey"),
+		AuthKey:             new("secret-authkey"),
 		AcceptRoutes:        "false",
 		AppConnector:        &ipn.AppConnectorPrefs{Advertise: false},
 		NoStatefulFiltering: "true",

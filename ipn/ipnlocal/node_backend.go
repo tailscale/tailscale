@@ -24,7 +24,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus"
@@ -414,7 +413,7 @@ func (nb *nodeBackend) netMapWithPeers() *netmap.NetworkMap {
 	if nb.netMap == nil {
 		return nil
 	}
-	nm := ptr.To(*nb.netMap) // shallow clone
+	nm := new(*nb.netMap) // shallow clone
 	nm.Peers = slicesx.MapValues(nb.peers)
 	slices.SortFunc(nm.Peers, func(a, b tailcfg.NodeView) int {
 		return cmp.Compare(a.ID(), b.ID())

@@ -11,7 +11,6 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/winutil"
 	"tailscale.com/util/winutil/winenv"
 )
@@ -23,9 +22,9 @@ func init() {
 }
 
 var (
-	lazyDistroName  = &lazyAtomicValue[string]{f: ptr.To(distroNameWindows)}
-	lazyOSVersion   = &lazyAtomicValue[string]{f: ptr.To(osVersionWindows)}
-	lazyPackageType = &lazyAtomicValue[string]{f: ptr.To(packageTypeWindows)}
+	lazyDistroName  = &lazyAtomicValue[string]{f: new(distroNameWindows)}
+	lazyOSVersion   = &lazyAtomicValue[string]{f: new(osVersionWindows)}
+	lazyPackageType = &lazyAtomicValue[string]{f: new(packageTypeWindows)}
 )
 
 func distroNameWindows() string {

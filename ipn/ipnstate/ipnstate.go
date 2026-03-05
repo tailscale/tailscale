@@ -20,7 +20,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
@@ -535,7 +534,7 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 		e.Expired = true
 	}
 	if t := st.KeyExpiry; t != nil {
-		e.KeyExpiry = ptr.To(*t)
+		e.KeyExpiry = new(*t)
 	}
 	if v := st.CapMap; v != nil {
 		e.CapMap = v

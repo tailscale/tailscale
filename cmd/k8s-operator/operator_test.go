@@ -30,7 +30,6 @@ import (
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 )
@@ -71,7 +70,7 @@ func TestLoadBalancerClass(t *testing.T) {
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
+			LoadBalancerClass: new("tailscale"),
 		},
 	})
 
@@ -94,7 +93,7 @@ func TestLoadBalancerClass(t *testing.T) {
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
+			LoadBalancerClass: new("tailscale"),
 		},
 		Status: corev1.ServiceStatus{
 			Conditions: []metav1.Condition{{
@@ -119,7 +118,7 @@ func TestLoadBalancerClass(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	opts := configOpts{
-		replicas:        ptr.To[int32](1),
+		replicas:        new(int32(1)),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -259,7 +258,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
-		replicas:          ptr.To[int32](1),
+		replicas:          new(int32(1)),
 		stsName:           shortName,
 		secretName:        fullName,
 		namespace:         "default",
@@ -369,7 +368,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
-		replicas:        ptr.To[int32](1),
+		replicas:        new(int32(1)),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -466,7 +465,7 @@ func TestTailnetTargetIPAnnotation_IPCouldNotBeParsed(t *testing.T) {
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
+			LoadBalancerClass: new("tailscale"),
 		},
 	})
 
@@ -486,7 +485,7 @@ func TestTailnetTargetIPAnnotation_IPCouldNotBeParsed(t *testing.T) {
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
+			LoadBalancerClass: new("tailscale"),
 		},
 		Status: corev1.ServiceStatus{
 			Conditions: []metav1.Condition{{
@@ -534,7 +533,7 @@ func TestTailnetTargetIPAnnotation_InvalidIP(t *testing.T) {
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
+			LoadBalancerClass: new("tailscale"),
 		},
 	})
 
@@ -554,7 +553,7 @@ func TestTailnetTargetIPAnnotation_InvalidIP(t *testing.T) {
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
+			LoadBalancerClass: new("tailscale"),
 		},
 		Status: corev1.ServiceStatus{
 			Conditions: []metav1.Condition{{
@@ -612,7 +611,7 @@ func TestAnnotations(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
-		replicas:        ptr.To[int32](1),
+		replicas:        new(int32(1)),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -716,7 +715,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
-		replicas:        ptr.To[int32](1),
+		replicas:        new(int32(1)),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -767,7 +766,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 	mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
 		delete(s.ObjectMeta.Annotations, "tailscale.com/expose")
 		s.Spec.Type = corev1.ServiceTypeLoadBalancer
-		s.Spec.LoadBalancerClass = ptr.To("tailscale")
+		s.Spec.LoadBalancerClass = new("tailscale")
 	})
 	expectReconciled(t, sr, "default", "test")
 	// None of the proxy machinery should have changed...
@@ -785,7 +784,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
+			LoadBalancerClass: new("tailscale"),
 		},
 		Status: corev1.ServiceStatus{
 			LoadBalancer: corev1.LoadBalancerStatus{
@@ -836,7 +835,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
+			LoadBalancerClass: new("tailscale"),
 		},
 	})
 
@@ -844,7 +843,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
-		replicas:        ptr.To[int32](1),
+		replicas:        new(int32(1)),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -880,7 +879,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
+			LoadBalancerClass: new("tailscale"),
 		},
 		Status: corev1.ServiceStatus{
 			LoadBalancer: corev1.LoadBalancerStatus{
@@ -982,7 +981,7 @@ func TestCustomHostname(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
-		replicas:        ptr.To[int32](1),
+		replicas:        new(int32(1)),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -1092,7 +1091,7 @@ func TestCustomPriorityClassName(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
-		replicas:          ptr.To[int32](1),
+		replicas:          new(int32(1)),
 		stsName:           shortName,
 		secretName:        fullName,
 		namespace:         "default",
@@ -1332,13 +1331,13 @@ func TestProxyClassForService(t *testing.T) {
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
+			LoadBalancerClass: new("tailscale"),
 		},
 	})
 	expectReconciled(t, sr, "default", "test")
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	opts := configOpts{
-		replicas:        ptr.To[int32](1),
+		replicas:        new(int32(1)),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -1431,7 +1430,7 @@ func TestDefaultLoadBalancer(t *testing.T) {
 
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	o := configOpts{
-		replicas:        ptr.To[int32](1),
+		replicas:        new(int32(1)),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -1484,7 +1483,7 @@ func TestProxyFirewallMode(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
-		replicas:        ptr.To[int32](1),
+		replicas:        new(int32(1)),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -1596,7 +1595,7 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 			Name:      "ing-1",
 			Namespace: "ns-1",
 		},
-		Spec: networkingv1.IngressSpec{IngressClassName: ptr.To(tailscaleIngressClassName)},
+		Spec: networkingv1.IngressSpec{IngressClassName: new(tailscaleIngressClassName)},
 	})
 	svc1 := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1628,7 +1627,7 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{Name: "def-backend"},
 			},
-			IngressClassName: ptr.To(tailscaleIngressClassName),
+			IngressClassName: new(tailscaleIngressClassName),
 		},
 	})
 	backendSvc := &corev1.Service{
@@ -1652,7 +1651,7 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 			Namespace: "ns-3",
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To(tailscaleIngressClassName),
+			IngressClassName: new(tailscaleIngressClassName),
 			Rules: []networkingv1.IngressRule{{IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{
 				Paths: []networkingv1.HTTPIngressPath{
 					{Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "backend"}}},
@@ -1727,7 +1726,7 @@ func Test_serviceHandlerForIngress_multipleIngressClasses(t *testing.T) {
 	mustCreate(t, fc, &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-ing", Namespace: "default"},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("nginx"),
+			IngressClassName: new("nginx"),
 			DefaultBackend:   &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "backend"}},
 		},
 	})
@@ -1735,7 +1734,7 @@ func Test_serviceHandlerForIngress_multipleIngressClasses(t *testing.T) {
 	mustCreate(t, fc, &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{Name: "ts-ing", Namespace: "default"},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend:   &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "backend"}},
 		},
 	})
@@ -1844,7 +1843,7 @@ func Test_authKeyRemoval(t *testing.T) {
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
+			LoadBalancerClass: new("tailscale"),
 		},
 	})
 
@@ -1859,7 +1858,7 @@ func Test_authKeyRemoval(t *testing.T) {
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
 		app:             kubetypes.AppIngressProxy,
-		replicas:        ptr.To[int32](1),
+		replicas:        new(int32(1)),
 	}
 
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
@@ -1924,7 +1923,7 @@ func Test_externalNameService(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	opts := configOpts{
-		replicas:         ptr.To[int32](1),
+		replicas:         new(int32(1)),
 		stsName:          shortName,
 		secretName:       fullName,
 		namespace:        "default",
@@ -1969,7 +1968,7 @@ func Test_metricsResourceCreation(t *testing.T) {
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
+			LoadBalancerClass: new("tailscale"),
 		},
 	}
 	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}

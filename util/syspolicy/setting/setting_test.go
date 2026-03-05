@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"tailscale.com/types/lazy"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/syspolicy/internal"
 	"tailscale.com/util/syspolicy/pkey"
 )
@@ -138,7 +137,7 @@ func TestSettingDefinition(t *testing.T) {
 			if !tt.setting.Equal(tt.setting) {
 				t.Errorf("the setting should be equal to itself")
 			}
-			if tt.setting != nil && !tt.setting.Equal(ptr.To(*tt.setting)) {
+			if tt.setting != nil && !tt.setting.Equal(new(*tt.setting)) {
 				t.Errorf("the setting should be equal to its shallow copy")
 			}
 			if gotKey := tt.setting.Key(); gotKey != tt.wantKey {
