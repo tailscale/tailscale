@@ -5,6 +5,7 @@ package tka
 
 import (
 	"crypto/ed25519"
+	"maps"
 	"sort"
 	"testing"
 )
@@ -36,9 +37,7 @@ func (s *scenarioTest) mkNode(name string) *scenarioNode {
 	}
 
 	aums := make(map[string]AUM, len(s.initial.AUMs))
-	for k, v := range s.initial.AUMs {
-		aums[k] = v
-	}
+	maps.Copy(aums, s.initial.AUMs)
 
 	n := &scenarioNode{
 		A:       authority,

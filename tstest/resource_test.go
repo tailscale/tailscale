@@ -245,7 +245,7 @@ func TestParseGoroutines(t *testing.T) {
 					t.Errorf("sort field has different number of words: got %d, want %d", len(sorted), len(original))
 					continue
 				}
-				for i := 0; i < len(original); i++ {
+				for i := range original {
 					if original[i] != sorted[len(sorted)-1-i] {
 						t.Errorf("sort field word mismatch at position %d: got %q, want %q", i, sorted[len(sorted)-1-i], original[i])
 					}

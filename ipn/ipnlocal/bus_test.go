@@ -36,9 +36,8 @@ func TestIsNotableNotify(t *testing.T) {
 	// We use reflect to catch fields that might be added in the future without
 	// remembering to update the [isNotableNotify] function.
 	rt := reflect.TypeFor[ipn.Notify]()
-	for i := range rt.NumField() {
+	for sf := range rt.Fields() {
 		n := &ipn.Notify{}
-		sf := rt.Field(i)
 		switch sf.Name {
 		case "_", "NetMap", "Engine", "Version":
 			// Already covered above or not applicable.
@@ -46,7 +45,7 @@ func TestIsNotableNotify(t *testing.T) {
 		case "DriveShares":
 			n.DriveShares = views.SliceOfViews[*drive.Share, drive.ShareView](make([]*drive.Share, 1))
 		default:
-			rf := reflect.ValueOf(n).Elem().Field(i)
+			rf := reflect.ValueOf(n).Elem().FieldByIndex(sf.Index)
 			switch rf.Kind() {
 			case reflect.Pointer:
 				rf.Set(reflect.New(rf.Type().Elem()))
@@ -64,7 +63,7 @@ func TestIsNotableNotify(t *testing.T) {
 			notify *ipn.Notify
 			want   bool
 		}{
-			name:   "field-" + rt.Field(i).Name,
+			name:   "field-" + sf.Name,
 			notify: n,
 			want:   true,
 		})

@@ -1406,11 +1406,11 @@ func (t *Wrapper) InjectInboundPacketBuffer(pkt *netstack_PacketBuffer, buffs []
 			return err
 		}
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		buffs[i] = buffs[i][:PacketStartOffset+sizes[i]]
 	}
 	defer func() {
-		for i := 0; i < n; i++ {
+		for i := range n {
 			buffs[i] = buffs[i][:cap(buffs[i])]
 		}
 	}()

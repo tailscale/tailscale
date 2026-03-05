@@ -225,7 +225,7 @@ func (s *sniproxy) mergeConfigFromFlags(out *appctype.AppConnectorConfig, ports,
 		Addrs: []netip.Addr{ip4, ip6},
 	}
 	if ports != "" {
-		for _, portStr := range strings.Split(ports, ",") {
+		for portStr := range strings.SplitSeq(ports, ",") {
 			port, err := strconv.ParseUint(portStr, 10, 16)
 			if err != nil {
 				log.Fatalf("invalid port: %s", portStr)
@@ -238,7 +238,7 @@ func (s *sniproxy) mergeConfigFromFlags(out *appctype.AppConnectorConfig, ports,
 	}
 
 	var forwardConfigFromFlags []appctype.DNATConfig
-	for _, forwStr := range strings.Split(forwards, ",") {
+	for forwStr := range strings.SplitSeq(forwards, ",") {
 		if forwStr == "" {
 			continue
 		}

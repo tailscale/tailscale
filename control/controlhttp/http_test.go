@@ -814,8 +814,8 @@ func runDialPlanTest(t *testing.T, plan *tailcfg.ControlDialPlan, want []netip.A
 
 	// split on "|" first to remove memnet pipe suffix
 	addrPart := raddrStr
-	if idx := strings.Index(raddrStr, "|"); idx >= 0 {
-		addrPart = raddrStr[:idx]
+	if before, _, ok := strings.Cut(raddrStr, "|"); ok {
+		addrPart = before
 	}
 
 	host, _, err2 := net.SplitHostPort(addrPart)

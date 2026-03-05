@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -500,15 +501,9 @@ func (srv *server) newConn() (*conn, error) {
 		},
 	}
 	ss := c.Server
-	for k, v := range ssh.DefaultRequestHandlers {
-		ss.RequestHandlers[k] = v
-	}
-	for k, v := range ssh.DefaultChannelHandlers {
-		ss.ChannelHandlers[k] = v
-	}
-	for k, v := range ssh.DefaultSubsystemHandlers {
-		ss.SubsystemHandlers[k] = v
-	}
+	maps.Copy(ss.RequestHandlers, ssh.DefaultRequestHandlers)
+	maps.Copy(ss.ChannelHandlers, ssh.DefaultChannelHandlers)
+	maps.Copy(ss.SubsystemHandlers, ssh.DefaultSubsystemHandlers)
 	keys, err := srv.lb.GetSSH_HostKeys()
 	if err != nil {
 		return nil, err
@@ -964,8 +959,7 @@ func (ss *sshSession) run() {
 			var err error
 			rec, err = ss.startNewRecording()
 			if err != nil {
-				var uve userVisibleError
-				if errors.As(err, &uve) {
+				if uve, ok := errors.AsType[userVisibleError](err); ok {
 					fmt.Fprintf(ss, "%s\r\n", uve.SSHTerminationMessage())
 				} else {
 					fmt.Fprintf(ss, "can't start new recording\r\n")
@@ -986,8 +980,7 @@ func (ss *sshSession) run() {
 		logf("start failed: %v", err.Error())
 		if errors.Is(err, context.Canceled) {
 			err := context.Cause(ss.ctx)
-			var uve userVisibleError
-			if errors.As(err, &uve) {
+			if uve, ok := errors.AsType[userVisibleError](err); ok {
 				fmt.Fprintf(ss, "%s\r\n", uve)
 			}
 		}

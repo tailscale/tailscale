@@ -142,14 +142,11 @@ func (h *Handler) serveDebugDialTypes(w http.ResponseWriter, r *http.Request) {
 
 	var wg sync.WaitGroup
 	for _, dialer := range dialers {
-		dialer := dialer // loop capture
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			conn, err := dialer.dial(ctx, network, addr)
 			results <- result{dialer.name, conn, err}
-		}()
+		})
 	}
 
 	wg.Wait()

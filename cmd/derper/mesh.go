@@ -25,7 +25,7 @@ func startMesh(s *derpserver.Server) error {
 	if !s.HasMeshKey() {
 		return errors.New("--mesh-with requires --mesh-psk-file")
 	}
-	for _, hostTuple := range strings.Split(*meshWith, ",") {
+	for hostTuple := range strings.SplitSeq(*meshWith, ",") {
 		if err := startMeshWithHost(s, hostTuple); err != nil {
 			return err
 		}

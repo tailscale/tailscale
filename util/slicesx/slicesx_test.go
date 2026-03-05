@@ -53,7 +53,7 @@ func TestShuffle(t *testing.T) {
 	}
 
 	var wasShuffled bool
-	for try := 0; try < 10; try++ {
+	for range 10 {
 		shuffled := slices.Clone(sl)
 		Shuffle(shuffled)
 		if !reflect.DeepEqual(shuffled, sl) {

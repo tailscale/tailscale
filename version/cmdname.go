@@ -39,7 +39,7 @@ func cmdName(exe string) string {
 	}
 	// v is like:
 	// "path\ttailscale.com/cmd/tailscale\nmod\ttailscale.com\t(devel)\t\ndep\tgithub.com/apenwarr/fixconsole\tv0.0.0-20191012055117-5a9f6489cc29\th1:muXWUcay7DDy1/hEQWrYlBy+g0EuwT70sBHg65SeUc4=\ndep\tgithub....
-	for _, line := range strings.Split(info, "\n") {
+	for line := range strings.SplitSeq(info, "\n") {
 		if goPkg, ok := strings.CutPrefix(line, "path\t"); ok { // like "tailscale.com/cmd/tailscale"
 			ret = path.Base(goPkg) // goPkg is always forward slashes; use path, not filepath
 			break

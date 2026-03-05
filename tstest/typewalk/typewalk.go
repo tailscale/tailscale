@@ -54,14 +54,13 @@ func MatchingPaths(rt reflect.Type, match func(reflect.Type) bool) iter.Seq[Path
 				return
 			}
 			switch t.Kind() {
-			case reflect.Ptr, reflect.Slice, reflect.Array:
+			case reflect.Pointer, reflect.Slice, reflect.Array:
 				walk(t.Elem(), func(root reflect.Value) reflect.Value {
 					v := getV(root)
 					return v.Elem()
 				})
 			case reflect.Struct:
-				for i := range t.NumField() {
-					sf := t.Field(i)
+				for sf := range t.Fields() {
 					fieldName := sf.Name
 					if fieldName == "_" {
 						continue

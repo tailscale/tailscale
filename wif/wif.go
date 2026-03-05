@@ -190,8 +190,7 @@ func acquireAWSWebIdentityToken(ctx context.Context, audience string) (string, e
 
 	out, err := stsClient.GetWebIdentityToken(ctx, in)
 	if err != nil {
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) {
+		if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
 			return "", fmt.Errorf("aws sts:GetWebIdentityToken failed (%s): %w", apiErr.ErrorCode(), err)
 		}
 		return "", fmt.Errorf("aws sts:GetWebIdentityToken failed: %w", err)

@@ -2007,7 +2007,7 @@ func TestStressSetNetworkMap(t *testing.T) {
 
 	const iters = 1000 // approx 0.5s on an m1 mac
 	for range iters {
-		for j := 0; j < npeers; j++ {
+		for j := range npeers {
 			// Randomize which peers are present.
 			if prng.Int()&1 == 0 {
 				present[j] = !present[j]
@@ -2196,7 +2196,7 @@ func newWireguard(t *testing.T, uapi string, aips []netip.Prefix) (*device.Devic
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range strings.Split(s, "\n") {
+	for line := range strings.SplitSeq(s, "\n") {
 		line = strings.TrimSpace(line)
 		if len(line) == 0 {
 			continue
@@ -4311,7 +4311,7 @@ func TestRotateDiscoKeyMultipleTimes(t *testing.T) {
 	keys := make([]key.DiscoPublic, 0, 5)
 	keys = append(keys, c.discoAtomic.Public())
 
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		c.RotateDiscoKey()
 		newKey := c.discoAtomic.Public()
 

@@ -1673,7 +1673,7 @@ func TestNetstackTCPLoopback(t *testing.T) {
 		defer lis.Close()
 
 		writeFn := func(conn net.Conn) error {
-			for i := 0; i < writeBufIterations; i++ {
+			for range writeBufIterations {
 				toWrite := make([]byte, writeBufSize)
 				var wrote int
 				for {

@@ -82,7 +82,7 @@ func (m openresolvManager) GetBaseConfig() (OSConfig, error) {
 
 	// Remove the "tailscale" snippet from the list.
 	args := []string{"-l"}
-	for _, f := range strings.Split(strings.TrimSpace(string(bs)), " ") {
+	for f := range strings.SplitSeq(strings.TrimSpace(string(bs)), " ") {
 		if f == "tailscale" {
 			continue
 		}

@@ -183,8 +183,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			maskedPrefs.AutoExitNode = expr
 			maskedPrefs.AutoExitNodeSet = true
 		} else if err := maskedPrefs.Prefs.SetExitNodeIP(setArgs.exitNodeIP, st); err != nil {
-			var e ipn.ExitNodeLocalIPError
-			if errors.As(err, &e) {
+			if _, ok := errors.AsType[ipn.ExitNodeLocalIPError](err); ok {
 				return fmt.Errorf("%w; did you mean --advertise-exit-node?", err)
 			}
 			return err
@@ -251,8 +250,8 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 
 	if setArgs.relayServerStaticEndpoints != "" {
 		endpointsSet := make(set.Set[netip.AddrPort])
-		endpointsSplit := strings.Split(setArgs.relayServerStaticEndpoints, ",")
-		for _, s := range endpointsSplit {
+		endpointsSplit := strings.SplitSeq(setArgs.relayServerStaticEndpoints, ",")
+		for s := range endpointsSplit {
 			ap, err := netip.ParseAddrPort(s)
 			if err != nil {
 				return fmt.Errorf("failed to set relay server static endpoints: %q is not a valid IP:port", s)

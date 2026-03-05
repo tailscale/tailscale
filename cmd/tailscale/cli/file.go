@@ -19,6 +19,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -126,10 +127,8 @@ func runCp(ctx context.Context, args []string) error {
 		if cpArgs.name != "" {
 			return errors.New("can't use --name= with multiple files")
 		}
-		for _, fileArg := range files {
-			if fileArg == "-" {
-				return errors.New("can't use '-' as STDIN file when providing filename arguments")
-			}
+		if slices.Contains(files, "-") {
+			return errors.New("can't use '-' as STDIN file when providing filename arguments")
 		}
 	}
 

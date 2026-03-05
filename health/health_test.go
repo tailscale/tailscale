@@ -82,8 +82,7 @@ func TestAppendWarnableDebugFlags(t *testing.T) {
 func TestNilMethodsDontCrash(t *testing.T) {
 	var nilt *Tracker
 	rv := reflect.ValueOf(nilt)
-	for i := 0; i < rv.NumMethod(); i++ {
-		mt := rv.Type().Method(i)
+	for mt, method := range rv.Methods() {
 		t.Logf("calling Tracker.%s ...", mt.Name)
 		var args []reflect.Value
 		for j := 0; j < mt.Type.NumIn(); j++ {
@@ -92,7 +91,7 @@ func TestNilMethodsDontCrash(t *testing.T) {
 			}
 			args = append(args, reflect.Zero(mt.Type.In(j)))
 		}
-		rv.Method(i).Call(args)
+		method.Call(args)
 	}
 }
 

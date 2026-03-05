@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -247,12 +248,7 @@ func (f *Interface) String() string {
 
 // Contains reports whether f contains ip as an IP.
 func (f *Interface) Contains(ip netip.Addr) bool {
-	for _, v := range f.ips {
-		if ip == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(f.ips, ip)
 }
 
 type routeEntry struct {
@@ -348,10 +344,8 @@ func (m *Machine) isLocalIP(ip netip.Addr) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, intf := range m.interfaces {
-		for _, iip := range intf.ips {
-			if ip == iip {
-				return true
-			}
+		if slices.Contains(intf.ips, ip) {
+			return true
 		}
 	}
 	return false
@@ -565,7 +559,7 @@ func (m *Machine) interfaceForIP(ip netip.Addr) (*Interface, error) {
 func (m *Machine) pickEphemPort() (port uint16, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for tries := 0; tries < 500; tries++ {
+	for range 500 {
 		port := uint16(rand.IntN(32<<10) + 32<<10)
 		if !m.portInUseLocked(port) {
 			return port, nil

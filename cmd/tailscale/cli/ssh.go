@@ -14,6 +14,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
@@ -202,10 +203,8 @@ func peerStatusFromArg(st *ipnstate.Status, arg string) (*ipnstate.PeerStatus, b
 	argIP, _ := netip.ParseAddr(arg)
 	for _, ps := range st.Peer {
 		if argIP.IsValid() {
-			for _, ip := range ps.TailscaleIPs {
-				if ip == argIP {
-					return ps, true
-				}
+			if slices.Contains(ps.TailscaleIPs, argIP) {
+				return ps, true
 			}
 			continue
 		}
@@ -230,10 +229,8 @@ func nodeDNSNameFromArg(st *ipnstate.Status, arg string) (dnsName string, ok boo
 	for _, ps := range st.Peer {
 		dnsName = ps.DNSName
 		if argIP.IsValid() {
-			for _, ip := range ps.TailscaleIPs {
-				if ip == argIP {
-					return dnsName, true
-				}
+			if slices.Contains(ps.TailscaleIPs, argIP) {
+				return dnsName, true
 			}
 			continue
 		}

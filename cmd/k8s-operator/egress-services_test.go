@@ -243,7 +243,7 @@ func portsForEndpointSlice(svc *corev1.Service) []discoveryv1.EndpointPort {
 		ports = append(ports, discoveryv1.EndpointPort{
 			Name:     &p.Name,
 			Protocol: &p.Protocol,
-			Port:     pointer.ToInt32(p.TargetPort.IntVal),
+			Port:     new(p.TargetPort.IntVal),
 		})
 	}
 	return ports

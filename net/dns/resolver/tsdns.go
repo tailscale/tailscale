@@ -16,7 +16,7 @@ import (
 	"net/netip"
 	"os"
 	"runtime"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -172,7 +172,7 @@ func WriteRoutes(w *bufio.Writer, routes map[dnsname.FQDN][]*dnstype.Resolver) {
 		}
 		kk = append(kk, k)
 	}
-	sort.Slice(kk, func(i, j int) bool { return kk[i] < kk[j] })
+	slices.Sort(kk)
 	w.WriteByte('{')
 	for i, k := range kk {
 		if i > 0 {

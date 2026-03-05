@@ -13,6 +13,7 @@ import (
 	"expvar"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -734,8 +735,8 @@ func (h errorHandler) handleError(w http.ResponseWriter, r *http.Request, lw *lo
 
 	// Extract a presentable, loggable error.
 	var hOK bool
-	var hErr HTTPError
-	if errors.As(err, &hErr) {
+	hErr, hAsOK := errors.AsType[HTTPError](err)
+	if hAsOK {
 		hOK = true
 		if hErr.Code == 0 {
 			lw.logf("[unexpected] HTTPError %v did not contain an HTTP status code, sending internal server error", hErr)
@@ -854,9 +855,7 @@ func WriteHTTPError(w http.ResponseWriter, r *http.Request, e HTTPError) {
 	h.Set("X-Content-Type-Options", "nosniff")
 
 	// Custom headers from the error.
-	for k, vs := range e.Header {
-		h[k] = vs
-	}
+	maps.Copy(h, e.Header)
 
 	// Write the msg back to the user.
 	w.WriteHeader(e.Code)

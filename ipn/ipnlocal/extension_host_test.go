@@ -1010,9 +1010,8 @@ func TestNilExtensionHostMethodCall(t *testing.T) {
 	t.Parallel()
 
 	var h *ExtensionHost
-	typ := reflect.TypeOf(h)
-	for i := range typ.NumMethod() {
-		m := typ.Method(i)
+	typ := reflect.TypeFor[*ExtensionHost]()
+	for m := range typ.Methods() {
 		if strings.HasSuffix(m.Name, "ForTest") {
 			// Skip methods that are only for testing.
 			continue

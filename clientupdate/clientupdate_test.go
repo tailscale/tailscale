@@ -451,7 +451,7 @@ func TestSynoArch(t *testing.T) {
 			synoinfoConfPath := filepath.Join(t.TempDir(), "synoinfo.conf")
 			if err := os.WriteFile(
 				synoinfoConfPath,
-				[]byte(fmt.Sprintf("unique=%q\n", tt.synoinfoUnique)),
+				fmt.Appendf(nil, "unique=%q\n", tt.synoinfoUnique),
 				0600,
 			); err != nil {
 				t.Fatal(err)

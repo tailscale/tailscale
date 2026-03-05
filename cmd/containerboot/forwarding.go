@@ -51,7 +51,7 @@ func ensureIPForwarding(root, clusterProxyTargetIP, tailnetTargetIP, tailnetTarg
 		v4Forwarding = true
 	}
 	if routes != nil && *routes != "" {
-		for _, route := range strings.Split(*routes, ",") {
+		for route := range strings.SplitSeq(*routes, ",") {
 			cidr, err := netip.ParsePrefix(route)
 			if err != nil {
 				return fmt.Errorf("invalid subnet route: %v", err)

@@ -124,7 +124,7 @@ func Run(args []string) (err error) {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
-		if noexec := (ffcli.NoExecError{}); errors.As(err, &noexec) {
+		if noexec, ok := errors.AsType[ffcli.NoExecError](err); ok {
 			// When the user enters an unknown subcommand, ffcli tries to run
 			// the closest valid parent subcommand with everything else as args,
 			// returning NoExecError if it doesn't have an Exec function.

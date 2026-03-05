@@ -158,8 +158,7 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 			cmd.Dir = "/"
 		case errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist):
 			// Ensure that cmd.Dir is the source of the error.
-			var pathErr *fs.PathError
-			if errors.As(err, &pathErr) && pathErr.Path == cmd.Dir {
+			if pathErr, ok := errors.AsType[*fs.PathError](err); ok && pathErr.Path == cmd.Dir {
 				// If we cannot run loginShell in localUser.HomeDir,
 				// we will try to run this command in the root directory.
 				cmd.Dir = "/"
@@ -312,7 +311,7 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	flags.StringVar(&ia.encodedEnv, "encoded-env", "", "JSON encoded array of environment variables in '['key=value']' format")
 	flags.Parse(args)
 
-	for _, g := range strings.Split(groups, ",") {
+	for g := range strings.SplitSeq(groups, ",") {
 		gid, err := strconv.Atoi(g)
 		if err != nil {
 			return ia, fmt.Errorf("unable to parse group id %q: %w", g, err)

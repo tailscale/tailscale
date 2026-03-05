@@ -62,8 +62,7 @@ func NewSTUNServer(config *STUNServerConfig, opts ...STUNServerOption) (*STUNSer
 	objs := new(bpfObjects)
 	err = loadBpfObjects(objs, nil)
 	if err != nil {
-		var ve *ebpf.VerifierError
-		if config.FullVerifierErr && errors.As(err, &ve) {
+		if ve, ok := errors.AsType[*ebpf.VerifierError](err); config.FullVerifierErr && ok {
 			err = fmt.Errorf("verifier error: %+v", ve)
 		}
 		return nil, fmt.Errorf("error loading XDP program: %w", err)

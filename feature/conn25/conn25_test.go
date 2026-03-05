@@ -115,7 +115,7 @@ func TestHandleConnectorTransitIPRequestMultipleTIP(t *testing.T) {
 		t.Fatalf("n TransitIPs in response: %d, want 3", len(resp.TransitIPs))
 	}
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		got := resp.TransitIPs[i].Code
 		if got != TransitIPResponseCode(0) {
 			t.Fatalf("i=%d TransitIP Code: %d, want 0", i, got)

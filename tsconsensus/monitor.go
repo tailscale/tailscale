@@ -85,7 +85,7 @@ func (m *monitor) handleSummaryStatus(w http.ResponseWriter, r *http.Request) {
 			lines = append(lines, fmt.Sprintf("%s\t\t%d\t%d\t%t", name, p.RxBytes, p.TxBytes, p.Active))
 		}
 	}
-	_, err = w.Write([]byte(fmt.Sprintf("RaftState: %s\n", s.RaftState)))
+	_, err = w.Write(fmt.Appendf(nil, "RaftState: %s\n", s.RaftState))
 	if err != nil {
 		log.Printf("monitor: error writing status: %v", err)
 		return
@@ -93,7 +93,7 @@ func (m *monitor) handleSummaryStatus(w http.ResponseWriter, r *http.Request) {
 
 	slices.Sort(lines)
 	for _, ln := range lines {
-		_, err = w.Write([]byte(fmt.Sprintf("%s\n", ln)))
+		_, err = w.Write(fmt.Appendf(nil, "%s\n", ln))
 		if err != nil {
 			log.Printf("monitor: error writing status: %v", err)
 			return

@@ -6,6 +6,7 @@ package syncs
 import (
 	"context"
 	"io"
+	"maps"
 	"os"
 	"sync"
 	"testing"
@@ -226,9 +227,7 @@ func TestMap(t *testing.T) {
 	}
 	got := map[string]int{}
 	want := map[string]int{"one": 1, "two": 2, "three": 3}
-	for k, v := range m.All() {
-		got[k] = v
-	}
+	maps.Insert(got, m.All())
 	if d := cmp.Diff(got, want); d != "" {
 		t.Errorf("Range mismatch (-got +want):\n%s", d)
 	}
@@ -243,9 +242,7 @@ func TestMap(t *testing.T) {
 	m.Delete("noexist")
 	got = map[string]int{}
 	want = map[string]int{}
-	for k, v := range m.All() {
-		got[k] = v
-	}
+	maps.Insert(got, m.All())
 	if d := cmp.Diff(got, want); d != "" {
 		t.Errorf("Range mismatch (-got +want):\n%s", d)
 	}

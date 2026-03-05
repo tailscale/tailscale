@@ -27,7 +27,7 @@ func TestUsedConsistently(t *testing.T) {
 	cmd := exec.Command("git", "grep", "-l", "-F", "http.Method")
 	cmd.Dir = rootDir
 	matches, _ := cmd.Output()
-	for _, fn := range strings.Split(strings.TrimSpace(string(matches)), "\n") {
+	for fn := range strings.SplitSeq(strings.TrimSpace(string(matches)), "\n") {
 		switch fn {
 		case "util/httpm/httpm.go", "util/httpm/httpm_test.go":
 			continue

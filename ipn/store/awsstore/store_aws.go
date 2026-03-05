@@ -189,8 +189,7 @@ func (s *awsStore) LoadState() error {
 	)
 
 	if err != nil {
-		var pnf *ssmTypes.ParameterNotFound
-		if errors.As(err, &pnf) {
+		if _, ok := errors.AsType[*ssmTypes.ParameterNotFound](err); ok {
 			// Create the parameter as it does not exist yet
 			// and return directly as it is defacto empty
 			return s.persistState()

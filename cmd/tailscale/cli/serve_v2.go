@@ -114,8 +114,8 @@ func (u *acceptAppCapsFlag) Set(s string) error {
 	if s == "" {
 		return nil
 	}
-	appCaps := strings.Split(s, ",")
-	for _, appCap := range appCaps {
+	appCaps := strings.SplitSeq(s, ",")
+	for appCap := range appCaps {
 		appCap = strings.TrimSpace(appCap)
 		if !validAppCap.MatchString(appCap) {
 			return fmt.Errorf("%q does not match the form {domain}/{name}, where domain must be a fully qualified domain name", appCap)

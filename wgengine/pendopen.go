@@ -102,7 +102,7 @@ var (
 	canonicalIPs = sync.OnceValue(func() (checkIPFunc func(netip.Addr) bool) {
 		// https://bgp.he.net/AS41231#_prefixes
 		t := &bart.Table[bool]{}
-		for _, s := range strings.Fields(`
+		for s := range strings.FieldsSeq(`
 			91.189.89.0/24
 			91.189.91.0/24
 			91.189.92.0/24

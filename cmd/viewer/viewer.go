@@ -500,8 +500,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, fie
 		}
 		writeTemplateWithComment("unsupportedField", fname)
 	}
-	for i := range typ.NumMethods() {
-		f := typ.Method(i)
+	for f := range typ.Methods() {
 		if !f.Exported() {
 			continue
 		}
@@ -720,7 +719,7 @@ func main() {
 	fieldComments := getFieldComments(pkg.Syntax)
 
 	cloneOnlyType := map[string]bool{}
-	for _, t := range strings.Split(*flagCloneOnlyTypes, ",") {
+	for t := range strings.SplitSeq(*flagCloneOnlyTypes, ",") {
 		cloneOnlyType[t] = true
 	}
 

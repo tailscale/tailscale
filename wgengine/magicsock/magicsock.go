@@ -1474,8 +1474,7 @@ func (c *Conn) sendUDPBatch(addr epAddr, buffs [][]byte, offset int) (sent bool,
 		err = c.pconn4.WriteWireGuardBatchTo(buffs, addr, offset)
 	}
 	if err != nil {
-		var errGSO neterror.ErrUDPGSODisabled
-		if errors.As(err, &errGSO) {
+		if errGSO, ok := errors.AsType[neterror.ErrUDPGSODisabled](err); ok {
 			c.logf("magicsock: %s", errGSO.Error())
 			err = errGSO.RetryErr
 		} else {

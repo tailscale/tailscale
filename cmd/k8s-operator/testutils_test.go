@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"path"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -555,7 +556,7 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 		if opts.isExitNode {
 			r = "0.0.0.0/0,::/0," + r
 		}
-		for _, rr := range strings.Split(r, ",") {
+		for rr := range strings.SplitSeq(r, ",") {
 			prefix, err := netip.ParsePrefix(rr)
 			if err != nil {
 				t.Fatal(err)
@@ -822,12 +823,9 @@ func expectEvents(t *testing.T, rec *record.FakeRecorder, wantsEvents []string) 
 		select {
 		case gotEvent := <-rec.Events:
 			found := false
-			for _, wantEvent := range wantsEvents {
-				if wantEvent == gotEvent {
-					found = true
-					seenEvents = append(seenEvents, gotEvent)
-					break
-				}
+			if slices.Contains(wantsEvents, gotEvent) {
+				found = true
+				seenEvents = append(seenEvents, gotEvent)
 			}
 			if !found {
 				t.Errorf("got unexpected event %q, expected events: %+#v", gotEvent, wantsEvents)

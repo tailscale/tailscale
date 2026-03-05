@@ -124,7 +124,7 @@ func ImportAliasCheck(t testing.TB, relDir string) {
 	}
 	badRx := regexp.MustCompile(`^([^:]+:\d+):\s+"golang\.org/x/exp/(slices|maps)"`)
 	if s := strings.TrimSpace(string(matches)); s != "" {
-		for _, line := range strings.Split(s, "\n") {
+		for line := range strings.SplitSeq(s, "\n") {
 			if m := badRx.FindStringSubmatch(line); m != nil {
 				t.Errorf("%s: the x/exp/%s package should be imported as x%s", m[1], m[2], m[2])
 			}

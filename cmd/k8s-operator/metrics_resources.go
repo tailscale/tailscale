@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
 	"reflect"
 
 	"go.uber.org/zap"
@@ -286,11 +287,7 @@ func isNamespacedProxyType(typ string) bool {
 
 func mergeMapKeys(a, b map[string]string) map[string]string {
 	m := make(map[string]string, len(a)+len(b))
-	for key, val := range b {
-		m[key] = val
-	}
-	for key, val := range a {
-		m[key] = val
-	}
+	maps.Copy(m, b)
+	maps.Copy(m, a)
 	return m
 }

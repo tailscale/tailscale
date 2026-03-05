@@ -296,7 +296,7 @@ func startNodesAndWaitForPeerStatus(t testing.TB, ctx context.Context, clusterTa
 	keysToTag := make([]key.NodePublic, nNodes)
 	localClients := make([]*tailscale.LocalClient, nNodes)
 	control, controlURL := startControl(t)
-	for i := 0; i < nNodes; i++ {
+	for i := range nNodes {
 		ts, key, _ := startNode(t, ctx, controlURL, fmt.Sprintf("node %d", i))
 		ps[i] = &participant{ts: ts, key: key}
 		keysToTag[i] = key
@@ -353,7 +353,7 @@ func createConsensusCluster(t testing.TB, ctx context.Context, clusterTag string
 	}
 
 	fxRaftConfigContainsAll := func() bool {
-		for i := 0; i < len(participants); i++ {
+		for i := range participants {
 			fut := participants[i].c.raft.GetConfiguration()
 			err = fut.Error()
 			if err != nil {
@@ -618,8 +618,8 @@ func TestOnlyTaggedPeersCanDialRaftPort(t *testing.T) {
 	}
 
 	isNetErr := func(err error) bool {
-		var netErr net.Error
-		return errors.As(err, &netErr)
+		_, ok := errors.AsType[net.Error](err)
+		return ok
 	}
 
 	err := getErrorFromTryingToSend(untaggedNode)

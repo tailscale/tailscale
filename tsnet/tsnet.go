@@ -466,9 +466,7 @@ func (s *Server) close() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		// Perform a best-effort final flush.
 		if s.logtail != nil {
 			s.logtail.Shutdown(ctx)
@@ -476,14 +474,12 @@ func (s *Server) close() {
 		if s.logbuffer != nil {
 			s.logbuffer.Close()
 		}
-	}()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		if s.localAPIServer != nil {
 			s.localAPIServer.Shutdown(ctx)
 		}
-	}()
+	})
 
 	if s.shutdownCancel != nil {
 		s.shutdownCancel()

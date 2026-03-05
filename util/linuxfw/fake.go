@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -60,10 +61,8 @@ func (n *fakeIPTables) Append(table, chain string, args ...string) error {
 func (n *fakeIPTables) Exists(table, chain string, args ...string) (bool, error) {
 	k := table + "/" + chain
 	if rules, ok := n.n[k]; ok {
-		for _, rule := range rules {
-			if rule == strings.Join(args, " ") {
-				return true, nil
-			}
+		if slices.Contains(rules, strings.Join(args, " ")) {
+			return true, nil
 		}
 		return false, nil
 	} else {

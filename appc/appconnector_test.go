@@ -698,7 +698,7 @@ func TestRateLogger(t *testing.T) {
 		wasCalled = true
 	})
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		clock.Advance(1 * time.Millisecond)
 		rl.update(0)
 		if wasCalled {
@@ -720,7 +720,7 @@ func TestRateLogger(t *testing.T) {
 		wasCalled = true
 	})
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		clock.Advance(1 * time.Minute)
 		rl.update(0)
 		if wasCalled {

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"testing"
@@ -198,9 +199,7 @@ func (c *testChain) recordParent(t *testing.T, child, parent string) {
 // This method populates c.AUMs and c.AUMHashes.
 func (c *testChain) buildChain() {
 	pending := make(map[string]*testchainNode, len(c.Nodes))
-	for k, v := range c.Nodes {
-		pending[k] = v
-	}
+	maps.Copy(pending, c.Nodes)
 
 	// AUMs with a parent need to know their hash, so we
 	// only compute AUMs whose parents have been computed

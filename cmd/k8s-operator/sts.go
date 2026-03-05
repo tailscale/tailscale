@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path"
@@ -304,8 +305,7 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, tailnet string, lo
 		if dev.id != "" {
 			logger.Debugf("deleting device %s from control", string(dev.id))
 			if err = tailscaleClient.DeleteDevice(ctx, string(dev.id)); err != nil {
-				errResp := &tailscale.ErrResponse{}
-				if ok := errors.As(err, errResp); ok && errResp.Status == http.StatusNotFound {
+				if errResp, ok := errors.AsType[tailscale.ErrResponse](err); ok && errResp.Status == http.StatusNotFound {
 					logger.Debugf("device %s not found, likely because it has already been deleted from control", string(dev.id))
 				} else {
 					return false, fmt.Errorf("deleting device: %w", err)
@@ -499,14 +499,11 @@ func (a *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tailscale
 		}
 
 		if dev != nil && dev.id != "" {
-			var errResp *tailscale.ErrResponse
-
 			err = tailscaleClient.DeleteDevice(ctx, string(dev.id))
-			switch {
-			case errors.As(err, &errResp) && errResp.Status == http.StatusNotFound:
+			if errResp, ok := errors.AsType[*tailscale.ErrResponse](err); ok && errResp.Status == http.StatusNotFound {
 				// This device has possibly already been deleted in the admin console. So we can ignore this
 				// and move on to removing the secret.
-			case err != nil:
+			} else if err != nil {
 				return nil, err
 			}
 		}
@@ -677,9 +674,8 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		},
 	}
 	mak.Set(&pod.Labels, "app", sts.ParentResourceUID)
-	for key, val := range sts.ChildResourceLabels {
-		pod.Labels[key] = val // sync StatefulSet labels to Pod to make it easier for users to select the Pod
-	}
+	// sync StatefulSet labels to Pod to make it easier for users to select the Pod
+	maps.Copy(pod.Labels, sts.ChildResourceLabels)
 
 	if sts.Replicas > 0 {
 		ss.Spec.Replicas = new(sts.Replicas)

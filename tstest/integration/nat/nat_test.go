@@ -317,9 +317,7 @@ func (nt *natTest) runTest(addNode ...addNodeFunc) pingRoute {
 	}
 	defer srv.Close()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			c, err := srv.Accept()
 			if err != nil {
@@ -327,7 +325,7 @@ func (nt *natTest) runTest(addNode ...addNodeFunc) pingRoute {
 			}
 			go nt.vnet.ServeUnixConn(c.(*net.UnixConn), vnet.ProtocolQEMU)
 		}
-	}()
+	})
 
 	for i, node := range nodes {
 		disk := fmt.Sprintf("%s/node-%d.qcow2", nt.tempDir, i)
@@ -391,7 +389,6 @@ func (nt *natTest) runTest(addNode ...addNodeFunc) pingRoute {
 
 	var eg errgroup.Group
 	for i, c := range clients {
-		i, c := i, c
 		eg.Go(func() error {
 			node := nodes[i]
 			t.Logf("%v calling Status...", node)

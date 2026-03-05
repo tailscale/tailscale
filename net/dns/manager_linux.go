@@ -380,7 +380,7 @@ func isLibnssResolveUsed(env newOSConfigEnv) error {
 	if err != nil {
 		return fmt.Errorf("reading /etc/resolv.conf: %w", err)
 	}
-	for _, line := range strings.Split(string(bs), "\n") {
+	for line := range strings.SplitSeq(string(bs), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 || fields[0] != "hosts:" {
 			continue

@@ -439,12 +439,11 @@ func applyPrefsEdits(src, dst reflect.Value, mask map[string]reflect.Value) {
 
 func maskFields(v reflect.Value) map[string]reflect.Value {
 	mask := make(map[string]reflect.Value)
-	for i := range v.NumField() {
-		f := v.Type().Field(i).Name
-		if !strings.HasSuffix(f, "Set") {
+	for sf, fv := range v.Fields() {
+		if !strings.HasSuffix(sf.Name, "Set") {
 			continue
 		}
-		mask[strings.TrimSuffix(f, "Set")] = v.Field(i)
+		mask[strings.TrimSuffix(sf.Name, "Set")] = fv
 	}
 	return mask
 }
@@ -845,22 +844,15 @@ func (p *Prefs) SetAdvertiseExitNode(runExit bool) {
 // Tailscale IP.
 func peerWithTailscaleIP(st *ipnstate.Status, ip netip.Addr) (ps *ipnstate.PeerStatus, ok bool) {
 	for _, ps := range st.Peer {
-		for _, ip2 := range ps.TailscaleIPs {
-			if ip == ip2 {
-				return ps, true
-			}
+		if slices.Contains(ps.TailscaleIPs, ip) {
+			return ps, true
 		}
 	}
 	return nil, false
 }
 
 func isRemoteIP(st *ipnstate.Status, ip netip.Addr) bool {
-	for _, selfIP := range st.TailscaleIPs {
-		if ip == selfIP {
-			return false
-		}
-	}
-	return true
+	return !slices.Contains(st.TailscaleIPs, ip)
 }
 
 // ClearExitNode sets the ExitNodeID and ExitNodeIP to their zero values.

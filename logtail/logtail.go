@@ -902,8 +902,8 @@ func parseAndRemoveLogLevel(buf []byte) (level int, cleanBuf []byte) {
 	if bytes.Contains(buf, v2) {
 		return 2, bytes.ReplaceAll(buf, v2, nil)
 	}
-	if i := bytes.Index(buf, vJSON); i != -1 {
-		rest := buf[i+len(vJSON):]
+	if _, after, ok := bytes.Cut(buf, vJSON); ok {
+		rest := after
 		if len(rest) >= 2 {
 			v := rest[0]
 			if v >= '0' && v <= '9' {

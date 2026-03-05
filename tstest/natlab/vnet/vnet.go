@@ -1917,7 +1917,7 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 		}
 	}
 
-	for try := 0; try < 20_000; try++ {
+	for range 20_000 {
 		if wanAP.Port() > 0 && !n.natTable.IsPublicPortUsed(wanAP) {
 			mak.Set(&n.portMap, wanAP, portMapping{
 				dst:    dst,

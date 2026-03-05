@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1249,7 +1250,7 @@ func (b *lockingBuffer) String() string {
 func waitLogLine(t *testing.T, timeout time.Duration, b *lockingBuffer, want string) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		for _, line := range strings.Split(b.String(), "\n") {
+		for line := range strings.SplitSeq(b.String(), "\n") {
 			if !strings.HasPrefix(line, "boot: ") {
 				continue
 			}
@@ -1438,9 +1439,7 @@ func (k *kubeServer) Secret() map[string]string {
 	k.Lock()
 	defer k.Unlock()
 	ret := map[string]string{}
-	for k, v := range k.secret {
-		ret[k] = v
-	}
+	maps.Copy(ret, k.secret)
 	return ret
 }
 

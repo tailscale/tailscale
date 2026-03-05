@@ -39,7 +39,7 @@ func registerAcceptRiskFlag(f *flag.FlagSet, acceptedRisks *string) {
 // isRiskAccepted reports whether riskType is in the comma-separated list of
 // risks in acceptedRisks.
 func isRiskAccepted(riskType, acceptedRisks string) bool {
-	for _, r := range strings.Split(acceptedRisks, ",") {
+	for r := range strings.SplitSeq(acceptedRisks, ",") {
 		if r == riskType || r == riskAll {
 			return true
 		}
