@@ -715,7 +715,7 @@ func markActiveChain(storage Chonk, verdict map[AUMHash]retainState, minChain in
 
 		parent, hasParent := next.Parent()
 		if !hasParent {
-			// Genesis AUM (beginning of time). The chain isnt long enough to need truncating.
+			// Genesis AUM (beginning of time). The chain isn't long enough to need truncating.
 			return h, nil
 		}
 

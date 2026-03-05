@@ -1096,7 +1096,7 @@ func isRemote(target string) bool {
 		target = "tmp://" + target
 	}
 
-	// make sure we can parse the target, wether it's a full URL or just a host:port
+	// make sure we can parse the target, whether it's a full URL or just a host:port
 	u, err := url.ParseRequestURI(target)
 	if err != nil {
 		// If we can't parse the target, it doesn't matter if it's remote or not

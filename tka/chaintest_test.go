@@ -203,9 +203,9 @@ func (c *testChain) buildChain() {
 	}
 
 	// AUMs with a parent need to know their hash, so we
-	// only compute AUMs who's parents have been computed
+	// only compute AUMs whose parents have been computed
 	// each iteration. Since at least the genesis AUM
-	// had no parent, theres always a path to completion
+	// had no parent, there's always a path to completion
 	// in O(n+1) where n is the number of AUMs.
 	c.AUMs = make(map[string]AUM, len(c.Nodes))
 	c.AUMHashes = make(map[string]AUMHash, len(c.Nodes))

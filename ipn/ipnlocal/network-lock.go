@@ -407,7 +407,7 @@ func (b *LocalBackend) tkaSyncLocked(ourNodeKey key.NodePublic) error {
 	// has updates for us, or we have updates for the control plane.
 	//
 	// TODO(tom): Do we want to keep processing even if the Inform fails? Need
-	// to think through if theres holdback concerns here or not.
+	// to think through if there's holdback concerns here or not.
 	if len(offerResp.MissingAUMs) > 0 {
 		aums := make([]tka.AUM, len(offerResp.MissingAUMs))
 		for i, a := range offerResp.MissingAUMs {

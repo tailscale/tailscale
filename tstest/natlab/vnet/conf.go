@@ -349,7 +349,7 @@ func (n *Network) SetBlackholedIPv4(v bool) {
 	n.breakWAN4 = v
 }
 
-// SetPostConnectControlBlackhole sets wether the network should blackhole all
+// SetPostConnectControlBlackhole sets whether the network should blackhole all
 // traffic to the control server after the clients have connected.
 func (n *Network) SetPostConnectControlBlackhole(v bool) {
 	n.postConnectBlackholeControl = v

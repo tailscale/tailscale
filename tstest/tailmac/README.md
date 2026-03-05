@@ -53,7 +53,7 @@ All vm images, restore images, block device files, save states, and other suppor
 
 Each vm gets its own directory.  These can be archived for posterity to preserve a particular image and/or state.
 The mere existence of a directory containing all of the required files in ~/VM.bundle is sufficient for tailmac to 
-be able to see and run it.  ~/VM.bundle and it's contents *is* tailmac's state.  No other state is maintained elsewhere.
+be able to see and run it.  ~/VM.bundle and its contents *is* tailmac's state.  No other state is maintained elsewhere.
 
 Each vm has its own custom configuration which can be modified while the vm is idle.  It's simple JSON - you may
 modify this directly, or using 'tailmac configure'.

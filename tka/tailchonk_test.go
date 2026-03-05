@@ -309,7 +309,7 @@ func TestMarkDescendantAUMs(t *testing.T) {
 	}
 	for _, h := range []AUMHash{hs["genesis"], hs["B"], hs["D"]} {
 		if (verdict[h] & retainStateLeaf) != 0 {
-			t.Errorf("%v was marked as a descendant and shouldnt be", h)
+			t.Errorf("%v was marked as a descendant and shouldn't be", h)
 		}
 	}
 }
