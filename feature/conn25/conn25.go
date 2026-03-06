@@ -502,6 +502,8 @@ func (e *extension) sendLoop(ctx context.Context) {
 
 func (c *client) enqueueAddressAssignment(addrs addrs) {
 	select {
+	// TODO(fran) investigate the value of waiting for multiple addresses and sending them
+	// in one ConnectorTransitIPRequest
 	case c.addrsCh <- addrs:
 	default:
 		c.logf("address assignment queue full, dropping transit assignment for %v", addrs.domain)
