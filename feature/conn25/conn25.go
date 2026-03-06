@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/netip"
 	"sync"
@@ -35,6 +36,22 @@ import (
 // featureName is the name of the feature implemented by this package.
 // It is also the [extension] name and the log prefix.
 const featureName = "conn25"
+
+const maxBodyBytes = 1024 * 1024
+
+// jsonDecode decodes all of a io.ReadCloser (eg an http.Request Body) into one pointer with best practices.
+// It limits the size of bytes it will read.
+// It either decodes all of the bytes into the pointer, or errors (unlike json.Decoder.Decode).
+// It closes the ReadCloser after reading.
+func jsonDecode(target interface{}, rc io.ReadCloser) error {
+	defer rc.Close()
+	respBs, err := io.ReadAll(io.LimitReader(rc, maxBodyBytes+1))
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(respBs, &target)
+	return err
+}
 
 func init() {
 	feature.Register(featureName)
@@ -102,7 +119,6 @@ func (e *extension) Shutdown() error {
 }
 
 func (e *extension) handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
-	const maxBodyBytes = 1024 * 1024
 	defer r.Body.Close()
 	if r.Method != "POST" {
 		http.Error(w, "Method should be POST", http.StatusMethodNotAllowed)
@@ -522,9 +538,11 @@ func makePeerAPIReq(ctx context.Context, httpClient *http.Client, urlBase string
 	}
 
 	var respBody ConnectorTransitIPResponse
-	if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
+	err = jsonDecode(&respBody, resp.Body)
+	if err != nil {
 		return fmt.Errorf("decoding response: %w", err)
 	}
+
 	if len(respBody.TransitIPs) > 0 && respBody.TransitIPs[0].Code != OK {
 		return fmt.Errorf("connector error: %s", respBody.TransitIPs[0].Message)
 	}
