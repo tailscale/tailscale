@@ -269,6 +269,9 @@ jobs:
     - name: test
       if: matrix.key != 'win-bench' # skip on bench builder
       working-directory: src
+      env:
+        GOEXPERIMENT: nogreenteagc
+        GOCACHEPROG: ${{ env.GOCACHEPROG }}
       run: go run ./cmd/testwrapper sharded:${{ matrix.shard }}
 
     - name: bench all
@@ -283,6 +286,7 @@ jobs:
       shell: pwsh
       if: steps.cigocacher-setup.outputs.success == 'true'
       env:
+        GOEXPERIMENT: nogreenteagc
         GOCACHEPROG: ${{ env.GOCACHEPROG }}
       run: |
         Invoke-Expression "$env:GOCACHEPROG --stats" | jq .
