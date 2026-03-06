@@ -15,6 +15,44 @@ import (
 
 const AppConnectorsExperimentalAttrName = "tailscale.com/app-connectors-experimental"
 
+func isEligibleConnector(n tailcfg.NodeView) bool {
+	if !n.Valid() || !n.Hostinfo().Valid() {
+		return false
+	}
+	isConn, _ := n.Hostinfo().AppConnector().Get()
+	return isConn
+}
+
+func sortByPreference(ns []tailcfg.NodeView) {
+	// The ordering of the nodes is semantic (callers use the first node they can
+	// get a peer api url for). We don't (currently 2026-02-27) have any
+	// preference over which node is chosen as long as it's consistent.  In the
+	// future we anticipate integrating with traffic steering.
+	slices.SortFunc(ns, func(a, b tailcfg.NodeView) int {
+		return cmp.Compare(a.ID(), b.ID())
+	})
+}
+
+// PickConnector returns nodes from candidates that match the app, in order of preference to use as
+// a connector.
+func PickConnector(candidates []tailcfg.NodeView, app appctype.Conn25Attr) []tailcfg.NodeView {
+	appTagsSet := set.SetOf(app.Connectors)
+	matches := []tailcfg.NodeView{}
+	for _, n := range candidates {
+		if !isEligibleConnector(n) {
+			continue
+		}
+		for _, t := range n.Tags().All() {
+			if appTagsSet.Contains(t) {
+				matches = append(matches, n)
+				break
+			}
+		}
+	}
+	sortByPreference(matches)
+	return matches
+}
+
 // PickSplitDNSPeers looks at the netmap peers capabilities and finds which peers
 // want to be connectors for which domains.
 func PickSplitDNSPeers(hasCap func(c tailcfg.NodeCapability) bool, self tailcfg.NodeView, peers map[tailcfg.NodeID]tailcfg.NodeView) map[string][]tailcfg.NodeView {
@@ -36,10 +74,7 @@ func PickSplitDNSPeers(hasCap func(c tailcfg.NodeCapability) bool, self tailcfg.
 	// use a Set of NodeIDs to deduplicate, and populate into a []NodeView later.
 	var work map[string]set.Set[tailcfg.NodeID]
 	for _, peer := range peers {
-		if !peer.Valid() || !peer.Hostinfo().Valid() {
-			continue
-		}
-		if isConn, _ := peer.Hostinfo().AppConnector().Get(); !isConn {
+		if !isEligibleConnector(peer) {
 			continue
 		}
 		for _, t := range peer.Tags().All() {
@@ -60,12 +95,7 @@ func PickSplitDNSPeers(hasCap func(c tailcfg.NodeCapability) bool, self tailcfg.
 		for id := range ids {
 			nodes = append(nodes, peers[id])
 		}
-		// The ordering of the nodes in the map vals is semantic (dnsConfigForNetmap uses the first node it can
-		// get a peer api url for as its split dns target). We can think of it as a preference order, except that
-		// we don't (currently 2026-01-14) have any preference over which node is chosen.
-		slices.SortFunc(nodes, func(a, b tailcfg.NodeView) int {
-			return cmp.Compare(a.ID(), b.ID())
-		})
+		sortByPreference(nodes)
 		mak.Set(&m, domain, nodes)
 	}
 	return m
