@@ -5,15 +5,19 @@ package ipnlocal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/netip"
 	"testing"
 	"time"
 
+	"go4.org/netipx"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/wgengine/filter"
 )
 
 func TestNodeBackendReadiness(t *testing.T) {
@@ -124,6 +128,105 @@ func TestNodeBackendConcurrentReadyAndShutdown(t *testing.T) {
 	go nb.shutdown(errors.New("test shutdown"))
 
 	nb.Wait(context.Background())
+}
+
+func TestPeerCapsIncludesServiceVIPs(t *testing.T) {
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+
+	nodeIP := netip.MustParseAddr("100.64.1.1")
+	svcIP := netip.MustParseAddr("100.124.180.147")
+	peerIP := netip.MustParseAddr("100.64.2.2")
+
+	// One grant targets the node IP, one targets the service VIP.
+	mm, err := filter.MatchesFromFilterRules([]tailcfg.FilterRule{
+		{
+			SrcIPs: []string{"100.64.2.0/24"},
+			CapGrant: []tailcfg.CapGrant{{
+				Dsts: []netip.Prefix{netip.MustParsePrefix("100.64.1.1/32")},
+				Caps: []tailcfg.PeerCapability{"node-scoped-cap"},
+			}},
+		},
+		{
+			SrcIPs: []string{"100.64.2.0/24"},
+			CapGrant: []tailcfg.CapGrant{{
+				Dsts:   []netip.Prefix{netip.MustParsePrefix("100.124.180.147/32")},
+				Caps:   []tailcfg.PeerCapability{"svc-scoped-cap"},
+				CapMap: tailcfg.PeerCapMap{"svc-scoped-cap": {tailcfg.RawMessage(`{"routes":["/test/*"]}`)}},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filt := filter.New(mm, nil, nil, &netipx.IPSet{}, nil, t.Logf)
+	nb.filterAtomic.Store(filt)
+
+	// Set up the netmap with service VIP mappings.
+	svcMappings := tailcfg.ServiceIPMappings{
+		"svc:http": {svcIP},
+	}
+	svcMappingsJSON, err := json.Marshal(svcMappings)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nb.netMap = &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Addresses: []netip.Prefix{netip.PrefixFrom(nodeIP, 32)},
+			CapMap: tailcfg.NodeCapMap{
+				tailcfg.NodeAttrServiceHost: {tailcfg.RawMessage(svcMappingsJSON)},
+			},
+		}).View(),
+	}
+
+	caps := nb.PeerCaps(peerIP)
+	if caps == nil {
+		t.Fatal("PeerCaps returned nil")
+	}
+	if !caps.HasCapability("node-scoped-cap") {
+		t.Error("missing node-scoped-cap")
+	}
+	if !caps.HasCapability("svc-scoped-cap") {
+		t.Error("missing svc-scoped-cap — service VIP caps not included in PeerCaps")
+	}
+
+	vals := caps["svc-scoped-cap"]
+	if len(vals) == 0 {
+		t.Fatal("svc-scoped-cap has no values")
+	}
+}
+
+func TestPeerCapsNodeOnlyWithoutServiceVIPs(t *testing.T) {
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+
+	nodeIP := netip.MustParseAddr("100.64.1.1")
+	peerIP := netip.MustParseAddr("100.64.2.2")
+
+	mm, err := filter.MatchesFromFilterRules([]tailcfg.FilterRule{
+		{
+			SrcIPs: []string{"100.64.2.0/24"},
+			CapGrant: []tailcfg.CapGrant{{
+				Dsts: []netip.Prefix{netip.MustParsePrefix("100.64.1.1/32")},
+				Caps: []tailcfg.PeerCapability{"basic-cap"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filt := filter.New(mm, nil, nil, &netipx.IPSet{}, nil, t.Logf)
+	nb.filterAtomic.Store(filt)
+
+	nb.netMap = &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Addresses: []netip.Prefix{netip.PrefixFrom(nodeIP, 32)},
+		}).View(),
+	}
+
+	caps := nb.PeerCaps(peerIP)
+	if !caps.HasCapability("basic-cap") {
+		t.Error("missing basic-cap")
+	}
 }
 
 func TestNodeBackendReachability(t *testing.T) {
