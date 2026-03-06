@@ -220,11 +220,14 @@ func TestCached(t *testing.T) {
 
 	// Construct our trivial package.
 	pkgDir := t.TempDir()
+	goVersion := runtime.Version()
+	goVersion = strings.TrimPrefix(goVersion, "go")
+	goVersion, _, _ = strings.Cut(goVersion, "-X:") // map 1.26.1-X:nogreenteagc to 1.26.1
+
 	goMod := fmt.Sprintf(`module example.com
 
 go %s
-`, runtime.Version()[2:]) // strip leading "go"
-
+`, goVersion)
 	test := `package main
 import "testing"
 
