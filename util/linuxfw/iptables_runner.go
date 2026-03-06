@@ -250,7 +250,7 @@ func (i *iptablesRunner) addBase4(tunname string) error {
 	if err := i.ipt4.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
 	}
-	args = []string{"-m", "mark", "--mark", subnetRouteMark + "/" + fwmarkMask, "-j", "ACCEPT"}
+	args = []string{"-i", tunname, "-j", "ACCEPT"}
 	if err := i.ipt4.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
 	}
@@ -356,7 +356,7 @@ func (i *iptablesRunner) addBase6(tunname string) error {
 	if err := i.ipt6.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
 	}
-	args = []string{"-m", "mark", "--mark", subnetRouteMark + "/" + fwmarkMask, "-j", "ACCEPT"}
+	args = []string{"-i", tunname, "-j", "ACCEPT"}
 	if err := i.ipt6.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
 	}
