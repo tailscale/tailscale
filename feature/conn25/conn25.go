@@ -20,12 +20,15 @@ import (
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/packet"
+	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
+	"tailscale.com/wgengine/filter"
 )
 
 // featureName is the name of the feature implemented by this package.
@@ -35,9 +38,12 @@ const featureName = "conn25"
 func init() {
 	feature.Register(featureName)
 	newExtension := func(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, error) {
+		conn25 := newConn25(logger.WithPrefix(logf, "conn25: "))
+		datapathHandler := newDatpathHandler(conn25)
 		e := &extension{
-			conn25:  newConn25(logger.WithPrefix(logf, "conn25: ")),
-			backend: sb,
+			backend:         sb,
+			conn25:          conn25,
+			datapathHandler: datapathHandler,
 		}
 		return e, nil
 	}
@@ -57,8 +63,9 @@ func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, 
 // extension is an [ipnext.Extension] managing the connector on platforms
 // that import this package.
 type extension struct {
-	conn25  *Conn25            // safe for concurrent access and only set at creation
-	backend ipnext.SafeBackend // safe for concurrent access and only set at creation
+	conn25          *Conn25            // safe for concurrent access and only set at creation
+	backend         ipnext.SafeBackend // safe for concurrent access and only set at creation
+	datapathHandler *datapathHandler
 
 	mu                  sync.Mutex // protects the fields below
 	isDNSHookRegistered bool
@@ -71,6 +78,20 @@ func (e *extension) Name() string {
 
 // Init implements [ipnext.Extension].
 func (e *extension) Init(host ipnext.Host) error {
+	e.backend.Sys().Tun.Get().PostFilterPacketInboundFromWireGuardAppConnector = func(p *packet.Parsed, _ *tstun.Wrapper) filter.Response {
+		if !e.conn25.isConfigured() {
+			return filter.Accept
+		}
+		return e.datapathHandler.HandlePacketsFromWireguard(p)
+	}
+
+	e.backend.Sys().Tun.Get().PreFilterPacketOutboundToWireGuardAppConnectorIntercept = func(p *packet.Parsed, _ *tstun.Wrapper) filter.Response {
+
+		if !e.conn25.isConfigured() {
+			return filter.Accept
+		}
+		return e.datapathHandler.HandlePacketsFromTunDevice(p)
+	}
 	host.Hooks().OnSelfChange.Add(e.onSelfChange)
 	return nil
 }
