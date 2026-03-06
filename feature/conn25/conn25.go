@@ -62,8 +62,8 @@ type extension struct {
 	conn25  *Conn25            // safe for concurrent access and only set at creation
 	backend ipnext.SafeBackend // safe for concurrent access and only set at creation
 
-	host      ipnext.Host        // set in Init, read-only after
-	ctxCancel context.CancelFunc // cancels sendLoop goroutine
+	host      ipnext.Host             // set in Init, read-only after
+	ctxCancel context.CancelCauseFunc // cancels sendLoop goroutine
 
 	mu                  sync.Mutex // protects the fields below
 	isDNSHookRegistered bool
@@ -84,7 +84,7 @@ func (e *extension) Init(host ipnext.Host) error {
 	}
 	e.host = host
 	host.Hooks().OnSelfChange.Add(e.onSelfChange)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 	e.ctxCancel = cancel
 	go e.sendLoop(ctx)
 	return nil
@@ -93,7 +93,7 @@ func (e *extension) Init(host ipnext.Host) error {
 // Shutdown implements [ipnlocal.Extension].
 func (e *extension) Shutdown() error {
 	if e.ctxCancel != nil {
-		e.ctxCancel()
+		e.ctxCancel(errors.New("extension shutdown"))
 	}
 	return nil
 }
