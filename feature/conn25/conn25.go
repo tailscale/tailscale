@@ -76,6 +76,12 @@ func (e *extension) Name() string {
 
 // Init implements [ipnext.Extension].
 func (e *extension) Init(host ipnext.Host) error {
+	//Init only once
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.ctxCancel != nil {
+		return nil
+	}
 	e.host = host
 	host.Hooks().OnSelfChange.Add(e.onSelfChange)
 	ctx, cancel := context.WithCancel(context.Background())
