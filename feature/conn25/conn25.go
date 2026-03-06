@@ -186,6 +186,14 @@ type Conn25 struct {
 	connector *connector
 }
 
+func (c *Conn25) ClientTransitIPForMagicIP(addr netip.Addr) (netip.Addr, error) {
+	return netip.Addr{}, nil
+}
+
+func (c *Conn25) ConnectorRealIPForTransitIPConnection(src, dest netip.Addr) (netip.Addr, error) {
+	return netip.Addr{}, nil
+}
+
 func (c *Conn25) isConfigured() bool {
 	return c.client.isConfigured()
 }

@@ -209,20 +209,24 @@ func (dh *datapathHandler) processConnectorToClient(p *packet.Parsed) error {
 // which could indicate interesting traffic for outbound traffic from a client to a connector.
 func (dh *datapathHandler) dstIPIsMagicIP(p *packet.Parsed) bool {
 	// TODO: implement for real
-	return magicIPs.Contains(p.Dst.Addr())
+	// return magicIPs.Contains(p.Dst.Addr())
+	return false
 }
 
 func (dh *datapathHandler) srcIsTransitIP(p *packet.Parsed) bool {
 	// TODO: implement for real
-	return transitIPs.Contains(p.Src.Addr())
+	// return transitIPs.Contains(p.Src.Addr())
+	return false
 }
 
 func (dh *datapathHandler) dstIPIsTransitIP(p *packet.Parsed) bool {
 	// TODO: implement for real
-	return transitIPs.Contains(p.Dst.Addr())
+	// return transitIPs.Contains(p.Dst.Addr())
+	return false
 }
 
 // selfIsConnector returns whether this client is running on an app connector.
 func (dh *datapathHandler) selfIsConnector() bool {
-	return dh.conn25.SelfIsConnector()
+	// return dh.conn25.SelfIsConnector()
+	return false
 }
