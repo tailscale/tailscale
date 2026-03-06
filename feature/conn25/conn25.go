@@ -95,6 +95,9 @@ func (e *extension) Shutdown() error {
 	if e.ctxCancel != nil {
 		e.ctxCancel(errors.New("extension shutdown"))
 	}
+	if e.conn25 != nil {
+		close(e.conn25.client.addrsCh)
+	}
 	return nil
 }
 
