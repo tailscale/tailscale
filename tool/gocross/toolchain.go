@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -114,21 +115,25 @@ func getToolchain() (toolchainDir, gorootDir string, err error) {
 }
 
 func ensureToolchain(cacheDir, toolchainDir string) error {
+	log.Printf("ensuring toolchain with cacheDir=%q at %q", cacheDir, toolchainDir)
 	stampFile := toolchainDir + ".extracted"
 
 	wantRev, err := toolchainRev()
 	if err != nil {
 		return err
 	}
+	log.Printf("want toolchain rev %q", wantRev)
 	gotRev, err := readRevFile(stampFile)
 	if err != nil {
 		return fmt.Errorf("reading stamp file %q: %v", stampFile, err)
 	}
+	log.Printf("got toolchain rev %q", gotRev)
 	if gotRev == wantRev {
 		// Toolchain already good.
 		return nil
 	}
 
+	log.Printf("toolchain rev mismatch, got %q, want %q, refreshing toolchain", gotRev, wantRev)
 	if err := os.RemoveAll(toolchainDir); err != nil {
 		return err
 	}
