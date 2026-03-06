@@ -19,6 +19,7 @@ func (src *Persist) Clone() *Persist {
 	}
 	dst := new(Persist)
 	*dst = *src
+	dst.UserProfile = *src.UserProfile.Clone()
 	if src.AttestationKey != nil {
 		dst.AttestationKey = src.AttestationKey.Clone()
 	}
