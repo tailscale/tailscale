@@ -221,7 +221,7 @@ func TestReserveIPs(t *testing.T) {
 	c.client.transitIPPool = newIPPool(mustIPSetFromPrefix("169.254.0.0/24"))
 	mbd := map[dnsname.FQDN][]string{}
 	mbd["example.com."] = []string{"a"}
-	c.client.config.appsByDomain = mbd
+	c.client.config.appNamesByDomain = mbd
 
 	dst := netip.MustParseAddr("0.0.0.1")
 	addrs, err := c.client.reserveAddresses("example.com.", dst)
@@ -347,7 +347,7 @@ func TestConfigReconfig(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("wantErr: %t, err: %v", tt.wantErr, err)
 			}
-			if diff := cmp.Diff(tt.wantAppsByDomain, c.appsByDomain); diff != "" {
+			if diff := cmp.Diff(tt.wantAppsByDomain, c.appNamesByDomain); diff != "" {
 				t.Errorf("appsByDomain diff (-want, +got):\n%s", diff)
 			}
 			if diff := cmp.Diff(tt.wantSelfRoutedDomains, c.selfRoutedDomains); diff != "" {
@@ -506,7 +506,7 @@ func TestReserveAddressesDeduplicated(t *testing.T) {
 	c := newConn25(logger.Discard)
 	c.client.magicIPPool = newIPPool(mustIPSetFromPrefix("100.64.0.0/24"))
 	c.client.transitIPPool = newIPPool(mustIPSetFromPrefix("169.254.0.0/24"))
-	c.client.config.appsByDomain = map[dnsname.FQDN][]string{"example.com.": {"a"}}
+	c.client.config.appNamesByDomain = map[dnsname.FQDN][]string{"example.com.": {"a"}}
 
 	dst := netip.MustParseAddr("0.0.0.1")
 	first, err := c.client.reserveAddresses("example.com.", dst)
@@ -594,7 +594,7 @@ func TestEnqueueAddress(t *testing.T) {
 
 	connectorPeer := (&tailcfg.Node{
 		ID:       tailcfg.NodeID(1),
-		Tags:     []string{"tag:connector"},
+		Tags:     []string{"tag:woo"},
 		Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
 	}).View()
 
@@ -616,8 +616,14 @@ func TestEnqueueAddress(t *testing.T) {
 	}
 	defer ext.Shutdown()
 
-	ext.conn25.client.config.apps = []appctype.Conn25Attr{
-		{Name: "app1", Connectors: []string{"tag:connector"}, Domains: []string{"example.com"}},
+	sn := makeSelfNode(t, appctype.Conn25Attr{
+		Name:       "app1",
+		Connectors: []string{"tag:woo"},
+		Domains:    []string{"example.com"},
+	}, []string{})
+	err := ext.conn25.reconfig(sn)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	as := addrs{

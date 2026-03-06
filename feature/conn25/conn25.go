@@ -349,7 +349,8 @@ const AppConnectorsExperimentalAttrName = "tailscale.com/app-connectors-experime
 type config struct {
 	isConfigured      bool
 	apps              []appctype.Conn25Attr
-	appsByDomain      map[dnsname.FQDN][]string
+	appsByName        map[string]appctype.Conn25Attr
+	appNamesByDomain  map[dnsname.FQDN][]string
 	selfRoutedDomains set.Set[dnsname.FQDN]
 }
 
@@ -365,7 +366,8 @@ func configFromNodeView(n tailcfg.NodeView) (config, error) {
 	cfg := config{
 		isConfigured:      true,
 		apps:              apps,
-		appsByDomain:      map[dnsname.FQDN][]string{},
+		appsByName:        map[string]appctype.Conn25Attr{},
+		appNamesByDomain:  map[dnsname.FQDN][]string{},
 		selfRoutedDomains: set.Set[dnsname.FQDN]{},
 	}
 	for _, app := range apps {
@@ -381,11 +383,12 @@ func configFromNodeView(n tailcfg.NodeView) (config, error) {
 			if err != nil {
 				return config{}, err
 			}
-			mak.Set(&cfg.appsByDomain, fqdn, append(cfg.appsByDomain[fqdn], app.Name))
+			mak.Set(&cfg.appNamesByDomain, fqdn, append(cfg.appNamesByDomain[fqdn], app.Name))
 			if selfMatchesTags {
 				cfg.selfRoutedDomains.Add(fqdn)
 			}
 		}
+		mak.Set(&cfg.appsByName, app.Name, app)
 	}
 	return cfg, nil
 }
@@ -448,7 +451,7 @@ func (c *client) reconfig(newCfg config) error {
 func (c *client) isConnectorDomain(domain dnsname.FQDN) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	appNames, ok := c.config.appsByDomain[domain]
+	appNames, ok := c.config.appNamesByDomain[domain]
 	return ok && len(appNames) > 0
 }
 
@@ -462,7 +465,7 @@ func (c *client) reserveAddresses(domain dnsname.FQDN, dst netip.Addr) (addrs, e
 	if existing, ok := c.assignments.lookupByDomainDst(domain, dst); ok {
 		return existing, nil
 	}
-	appNames, _ := c.config.appsByDomain[domain]
+	appNames, _ := c.config.appNamesByDomain[domain]
 	// only reserve for first app
 	app := appNames[0]
 	mip, err := c.magicIPPool.next()
@@ -552,16 +555,8 @@ func makePeerAPIReq(ctx context.Context, httpClient *http.Client, urlBase string
 }
 
 func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) error {
-	var app appctype.Conn25Attr
-	found := false
-	for _, candApp := range e.conn25.client.config.apps {
-		if candApp.Name == as.app {
-			found = true
-			app = candApp
-			break
-		}
-	}
-	if !found {
+	app, ok := e.conn25.client.config.appsByName[as.app]
+	if !ok {
 		e.conn25.client.logf("App not found for app: %s (domain: %s)", as.app, as.domain)
 		return errors.New("app not found")
 	}
