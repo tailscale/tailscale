@@ -170,6 +170,10 @@
         inherit self pkgs;
         inherit (pkgs) lib;
       };
+      shared-services = import ./nixos/tests/shared-services.nix {
+        inherit self pkgs;
+        inherit (pkgs) lib;
+      };
     });
 
     devShells = eachSystem (pkgs: {
