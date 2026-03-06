@@ -475,7 +475,7 @@ func (e *extension) sendLoop(ctx context.Context) {
 			return
 		case as := <-e.conn25.client.addrsCh:
 			if err := e.sendAddressAssignment(ctx, as); err != nil {
-				e.conn25.client.logf("error sending transit IP assignment: %v", err)
+				e.conn25.client.logf("error sending transit IP assignment (app: %s, mip: %v, src: %v): %v", as.app, as.magic, as.dst, err)
 			}
 		}
 	}
