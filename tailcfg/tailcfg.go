@@ -1555,10 +1555,10 @@ const (
 
 	// PeerCapabilityTailsync grants the ability for a peer to sync files
 	// with this node's exported sync roots.
-	PeerCapabilityTailsync PeerCapability = "tailscale.com/cap/sync"
+	PeerCapabilityTailsync PeerCapability = "jasonodonnell.com/cap/tailsync"
 	// PeerCapabilityTailsyncSharer indicates that a peer has the ability to
 	// export sync roots to us.
-	PeerCapabilityTailsyncSharer PeerCapability = "tailscale.com/cap/sync-sharer"
+	PeerCapabilityTailsyncSharer PeerCapability = "jasonodonnell.com/cap/tailsync-sharer"
 
 	// PeerCapabilityKubernetes grants a peer Kubernetes-specific
 	// capabilities, such as the ability to impersonate specific Tailscale

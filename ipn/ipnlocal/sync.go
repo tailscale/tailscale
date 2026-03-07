@@ -10,6 +10,28 @@ import (
 	"tailscale.com/tailsync"
 )
 
+// SyncSetTransport configures the sync service with the PeerAPI transport.
+func (b *LocalBackend) SyncSetTransport() {
+	svc, ok := b.sys.FileSync.GetOK()
+	if !ok {
+		return
+	}
+	transport := b.Dialer().PeerAPITransport()
+	peerURL := func(peerID string) string {
+		cn := b.currentNode()
+		for _, p := range cn.Peers() {
+			if string(p.StableID()) == peerID || p.DisplayName(false) == peerID || p.Name() == peerID {
+				base := cn.PeerAPIBase(p)
+				if base != "" {
+					return base
+				}
+			}
+		}
+		return ""
+	}
+	svc.SetTransport(transport, peerURL)
+}
+
 // SyncSharingEnabled reports whether sharing sync roots via Tailsync is
 // enabled. This is currently based on checking for the sync:share node
 // attribute.
@@ -50,6 +72,8 @@ func (b *LocalBackend) SyncSetSession(session *tailsync.Session) error {
 	if !ok {
 		return tailsync.ErrSyncNotEnabled
 	}
+	// Ensure transport is configured before starting session.
+	b.SyncSetTransport()
 	return svc.SetSession(session)
 }
 

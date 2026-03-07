@@ -5,9 +5,12 @@
 package tailsyncimpl
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -25,10 +28,12 @@ const ConflictDir = ".tailsync-conflicts"
 type Service struct {
 	logf logger.Logf
 
-	mu       sync.RWMutex
-	roots    map[string]*tailsync.Root
-	sessions map[string]*sessionRunner
-	closed   bool
+	mu        sync.RWMutex
+	roots     map[string]*tailsync.Root
+	sessions  map[string]*sessionRunner
+	closed    bool
+	transport http.RoundTripper
+	peerURL   tailsync.PeerURLFunc
 }
 
 // NewService creates a new tailsync Service.
@@ -41,6 +46,13 @@ func NewService(logf logger.Logf) *Service {
 		roots:    make(map[string]*tailsync.Root),
 		sessions: make(map[string]*sessionRunner),
 	}
+}
+
+func (s *Service) SetTransport(transport http.RoundTripper, peerURL tailsync.PeerURLFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.transport = transport
+	s.peerURL = peerURL
 }
 
 func (s *Service) SetRoot(root *tailsync.Root) error {
@@ -131,7 +143,7 @@ func (s *Service) SetSession(session *tailsync.Session) error {
 		existing.stop()
 	}
 
-	sr := newSessionRunner(s.logf, session, root)
+	sr := newSessionRunner(s.logf, session, root, s.transport, s.peerURL)
 	s.sessions[session.Name] = sr
 	go sr.run()
 
@@ -196,6 +208,8 @@ func (s *Service) ServeHTTPWithPerms(permissions tailsync.Permissions, w http.Re
 		s.handleRemotePush(permissions, w, r)
 	case "pull":
 		s.handleRemotePull(permissions, w, r)
+	case "file":
+		s.handleRemoteFile(permissions, w, r)
 	default:
 		http.Error(w, "unknown action", http.StatusNotFound)
 	}
@@ -247,12 +261,6 @@ func (s *Service) handleRemoteIndex(permissions tailsync.Permissions, w http.Res
 	w.Write(data)
 }
 
-// pushRequest is the JSON payload for a push.
-type pushRequest struct {
-	RootName string                `json:"root"`
-	Entries  []*tailsync.FileEntry `json:"entries"`
-}
-
 func (s *Service) handleRemotePush(permissions tailsync.Permissions, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -273,20 +281,87 @@ func (s *Service) handleRemotePush(permissions tailsync.Permissions, w http.Resp
 		return
 	}
 
-	var req pushRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	contentType := r.Header.Get("Content-Type")
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil || !strings.HasPrefix(mediaType, "multipart/") {
+		http.Error(w, "expected multipart content", http.StatusBadRequest)
 		return
 	}
 
+	mr := multipart.NewReader(r.Body, params["boundary"])
+
+	// First part: JSON metadata.
+	metaPart, err := mr.NextPart()
+	if err != nil {
+		http.Error(w, "read metadata part: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var entries []*tailsync.FileEntry
+	if err := json.NewDecoder(metaPart).Decode(&entries); err != nil {
+		http.Error(w, "decode metadata: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	metaPart.Close()
+
+	// Build a map of paths that need file data.
+	needsData := make(map[string]bool)
+	for _, entry := range entries {
+		if !entry.Deleted && !entry.IsSymlink {
+			needsData[entry.Path] = true
+		}
+	}
+
+	// Read file data parts.
+	fileData := make(map[string][]byte)
+	for len(needsData) > 0 {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			s.logf("tailsync: push: read file part: %v", err)
+			break
+		}
+		path := part.Header.Get("X-Tailsync-Path")
+		if path == "" {
+			path = part.FileName()
+		}
+		data, err := io.ReadAll(part)
+		part.Close()
+		if err != nil {
+			s.logf("tailsync: push: read file data for %s: %v", path, err)
+			continue
+		}
+		fileData[path] = data
+		delete(needsData, path)
+	}
+
 	applied := 0
-	for _, entry := range req.Entries {
+	for _, entry := range entries {
 		if entry.Deleted {
 			absPath := filepath.Join(root.Path, entry.Path)
 			if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {
 				s.logf("tailsync: push: failed to delete %s: %v", entry.Path, err)
 			}
 			applied++
+			continue
+		}
+		if entry.IsSymlink {
+			applied++
+			continue
+		}
+		data, ok := fileData[entry.Path]
+		if !ok {
+			s.logf("tailsync: push: missing file data for %s", entry.Path)
+			continue
+		}
+		absPath := filepath.Join(root.Path, entry.Path)
+		mode := entry.Mode
+		if mode == 0 {
+			mode = 0o644
+		}
+		if err := fileWriter(absPath, bytes.NewReader(data), mode); err != nil {
+			s.logf("tailsync: push: write %s: %v", entry.Path, err)
 			continue
 		}
 		applied++
@@ -325,6 +400,36 @@ func (s *Service) handleRemotePull(permissions tailsync.Permissions, w http.Resp
 	entries := sr.idx.ChangedSince(sinceSeq)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(entries)
+}
+
+func (s *Service) handleRemoteFile(permissions tailsync.Permissions, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rootName := r.URL.Query().Get("root")
+	if permissions.For(rootName) == tailsync.PermissionNone {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	relPath := r.URL.Query().Get("path")
+	if relPath == "" {
+		http.Error(w, "missing path", http.StatusBadRequest)
+		return
+	}
+	s.mu.RLock()
+	root, ok := s.roots[rootName]
+	s.mu.RUnlock()
+	if !ok {
+		http.Error(w, "root not found", http.StatusNotFound)
+		return
+	}
+	absPath := filepath.Join(root.Path, filepath.FromSlash(relPath))
+	if !strings.HasPrefix(absPath, root.Path) {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	http.ServeFile(w, r, absPath)
 }
 
 func (s *Service) findSessionForRoot(rootName string) *sessionRunner {

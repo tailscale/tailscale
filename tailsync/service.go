@@ -9,6 +9,9 @@ import (
 	"strings"
 )
 
+// PeerURLFunc returns the PeerAPI base URL for a given peer ID (stable node ID or hostname).
+type PeerURLFunc func(peerID string) string
+
 var (
 	ErrSyncNotEnabled  = errors.New("tailsync not enabled")
 	ErrInvalidRootName = errors.New("root names may only contain the letters a-z, digits 0-9, underscore _, or hyphens -")
@@ -40,6 +43,10 @@ type Service interface {
 
 	// GetSessionStatus returns the status of a named session.
 	GetSessionStatus(name string) (*SessionStatus, error)
+
+	// SetTransport configures the HTTP transport and peer URL resolver
+	// used for reaching remote peers via PeerAPI.
+	SetTransport(transport http.RoundTripper, peerURL PeerURLFunc)
 
 	// ServeHTTPWithPerms handles incoming PeerAPI sync requests.
 	ServeHTTPWithPerms(permissions Permissions, w http.ResponseWriter, r *http.Request)
