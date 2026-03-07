@@ -8,8 +8,10 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -22,6 +24,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -388,6 +391,18 @@ func debugCmd() *ffcli.Command {
 				})(),
 			},
 			ccall(debugPeerRelayCmd),
+			{
+				Name:       "download-cert",
+				ShortUsage: "tailscale debug download-cert [output-path]",
+				ShortHelp:  "Download the TLS certificate chain from Tailscale's control server",
+				Exec:       runDownloadCert,
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("download-cert")
+					fs.StringVar(&downloadCertArgs.host, "host", "controlplane.tailscale.com", "hostname of control server to fetch certificates from")
+					fs.StringVar(&downloadCertArgs.out, "out", filepath.Join(paths.DefaultTailscaledStateDir(), "control-ca.pem"), "output file path, or - for stdout")
+					return fs
+				})(),
+			},
 		}...),
 	}
 }
@@ -1405,5 +1420,49 @@ func runTestRisk(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Println("did-test-risky-action")
+	return nil
+}
+
+var downloadCertArgs struct {
+	host string
+	out  string
+}
+
+func runDownloadCert(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		return errors.New("unexpected arguments")
+	}
+	host := downloadCertArgs.host
+	conn, err := tls.Dial("tcp", host+":443", &tls.Config{ServerName: host})
+	if err != nil {
+		return fmt.Errorf("connecting to %s: %w", host, err)
+	}
+	conn.Close()
+
+	certs := conn.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return errors.New("no certificates returned from server")
+	}
+
+	var buf bytes.Buffer
+	for _, cert := range certs {
+		if err := pem.Encode(&buf, &pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}); err != nil {
+			return err
+		}
+	}
+
+	out := downloadCertArgs.out
+	if out == "-" {
+		_, err := Stdout.Write(buf.Bytes())
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(out), 0755); err != nil {
+		return fmt.Errorf("creating output directory: %w", err)
+	}
+	if err := os.WriteFile(out, buf.Bytes(), 0644); err != nil {
+		return err
+	}
+	fmt.Fprintf(Stdout, "Wrote %d certificate(s) to %s\n", len(certs), out)
 	return nil
 }

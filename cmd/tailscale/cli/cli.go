@@ -265,6 +265,7 @@ change in the future.
 			nilOrCall(maybeWebCmd),
 			nilOrCall(fileCmd),
 			bugReportCmd,
+			doctorCmd,
 			nilOrCall(maybeCertCmd),
 			nilOrCall(maybeNetlockCmd),
 			licensesCmd,
