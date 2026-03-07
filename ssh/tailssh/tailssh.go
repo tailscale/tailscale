@@ -106,6 +106,23 @@ func (srv *server) now() time.Time {
 	return time.Now()
 }
 
+type dctpHooks struct{} // see tailscale/corp#24454
+
+// DCTP contains hooks for an external project.
+// See tailscale/corp#24454.
+var DCTP dctpHooks
+
+// NewServer returns an SSH connection handler for the given backend.
+// The backend must implement the ipnLocalBackend interface defined in
+// this package.
+func (dctpHooks) NewServer(logf logger.Logf, lb any) func(net.Conn) error {
+	srv := &server{
+		logf: logf,
+		lb:   lb.(ipnLocalBackend),
+	}
+	return srv.HandleSSHConn
+}
+
 func init() {
 	ipnlocal.RegisterNewSSHServer(func(logf logger.Logf, lb *ipnlocal.LocalBackend) (ipnlocal.SSHServer, error) {
 		tsd, err := os.Executable()
