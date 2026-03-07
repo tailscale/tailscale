@@ -36,6 +36,7 @@ import (
 	"github.com/pires/go-proxyproto"
 	"go4.org/mem"
 	"tailscale.com/ipn"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
 	"tailscale.com/syncs"
@@ -695,8 +696,13 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, 
 				})
 			}
 
-			// TODO(bradfitz): do the RegisterIPPortIdentity and
-			// UnregisterIPPortIdentity stuff that netstack does
+			backendLocalAddr := backConn.LocalAddr().(*net.TCPAddr)
+			backendLocalIPPort := netaddr.Unmap(backendLocalAddr.AddrPort())
+			if err := b.sys.ProxyMapper().RegisterIPPortIdentity("tcp", backendLocalIPPort, srcAddr.Addr()); err != nil {
+				b.logf("serve: could not register TCP mapping %s: %v", backendLocalIPPort, err)
+				return nil
+			}
+			defer b.sys.ProxyMapper().UnregisterIPPortIdentity("tcp", backendLocalIPPort)
 			return b.forwardTCPWithProxyProtocol(conn, backConn, tcph.ProxyProtocol(), srcAddr, dport, backDst)
 		}
 	}
