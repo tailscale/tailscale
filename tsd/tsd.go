@@ -24,6 +24,7 @@ import (
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/drive"
 	"tailscale.com/health"
+	"tailscale.com/tailsync"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/net/dns"
@@ -60,6 +61,7 @@ type System struct {
 	Netstack       SubSystem[NetstackImpl] // actually a *netstack.Impl
 	DriveForLocal  SubSystem[drive.FileSystemForLocal]
 	DriveForRemote SubSystem[drive.FileSystemForRemote]
+	FileSync       SubSystem[tailsync.Service]
 	PolicyClient   SubSystem[policyclient.Client]
 	HealthTracker  SubSystem[*health.Tracker]
 
@@ -151,6 +153,8 @@ func (s *System) Set(v any) {
 		s.DriveForLocal.Set(v)
 	case drive.FileSystemForRemote:
 		s.DriveForRemote.Set(v)
+	case tailsync.Service:
+		s.FileSync.Set(v)
 	case policyclient.Client:
 		s.PolicyClient.Set(v)
 	case *health.Tracker:

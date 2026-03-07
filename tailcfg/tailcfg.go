@@ -1553,6 +1553,13 @@ const (
 	// share folders with us.
 	PeerCapabilityTaildriveSharer PeerCapability = "tailscale.com/cap/drive-sharer"
 
+	// PeerCapabilityTailsync grants the ability for a peer to sync files
+	// with this node's exported sync roots.
+	PeerCapabilityTailsync PeerCapability = "tailscale.com/cap/sync"
+	// PeerCapabilityTailsyncSharer indicates that a peer has the ability to
+	// export sync roots to us.
+	PeerCapabilityTailsyncSharer PeerCapability = "tailscale.com/cap/sync-sharer"
+
 	// PeerCapabilityKubernetes grants a peer Kubernetes-specific
 	// capabilities, such as the ability to impersonate specific Tailscale
 	// user groups as Kubernetes user groups. This capability is read by
@@ -2593,6 +2600,12 @@ const (
 
 	// NodeAttrsTaildriveAccess enables accessing shares via Taildrive.
 	NodeAttrsTaildriveAccess NodeCapability = "drive:access"
+
+	// NodeAttrsTailsyncShare enables exporting sync roots via Tailsync.
+	NodeAttrsTailsyncShare NodeCapability = "sync:share"
+
+	// NodeAttrsTailsyncAccess enables syncing with remote sync roots via Tailsync.
+	NodeAttrsTailsyncAccess NodeCapability = "sync:access"
 
 	// NodeAttrSuggestExitNode is applied to each exit node which the control plane has determined
 	// is a recommended exit node.

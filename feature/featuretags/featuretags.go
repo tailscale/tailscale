@@ -249,6 +249,7 @@ var Features = map[FeatureTag]FeatureMeta{
 		Desc: "Tailscale SSH support",
 		Deps: []FeatureTag{"c2n", "dbus", "netstack"},
 	},
+	"sync":     {Sym: "Sync", Desc: "Tailsync support"},
 	"synology": {
 		Sym:  "Synology",
 		Desc: "Synology NAS integration (applies to Linux builds only)",

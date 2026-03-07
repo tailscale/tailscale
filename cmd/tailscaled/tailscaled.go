@@ -492,6 +492,9 @@ func run() (err error) {
 	if f, ok := hookSetSysDrive.GetOk(); ok {
 		f(sys, logf)
 	}
+	if f, ok := hookSetSysSync.GetOk(); ok {
+		f(sys, logf)
+	}
 
 	if app := envknob.App(); app != "" {
 		hostinfo.SetApp(app)
@@ -503,6 +506,7 @@ func run() (err error) {
 var (
 	hookSetSysDrive           feature.Hook[func(*tsd.System, logger.Logf)]
 	hookSetWgEnginConfigDrive feature.Hook[func(*wgengine.Config, logger.Logf)]
+	hookSetSysSync            feature.Hook[func(*tsd.System, logger.Logf)]
 )
 
 var sigPipe os.Signal // set by sigpipe.go
