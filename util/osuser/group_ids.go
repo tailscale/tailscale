@@ -23,7 +23,7 @@ func GetGroupIds(user *user.User) ([]string, error) {
 		return nil, nil
 	}
 
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != "linux" && runtime.GOOS != "freebsd" {
 		return user.GroupIds()
 	}
 
@@ -46,13 +46,24 @@ func getGroupIdsWithId(usernameOrUID string) ([]string, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "id", "-Gz", usernameOrUID)
-	out, err := cmd.Output()
+	if runtime.GOOS == "freebsd" {
+		cmd = exec.CommandContext(ctx, "id", "-G", usernameOrUID)
+	}
+
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("running 'id' command: %w", err)
 	}
+
 	return parseGroupIds(out), nil
 }
 
 func parseGroupIds(cmdOutput []byte) []string {
-	return strings.Split(strings.Trim(string(cmdOutput), "\n\x00"), "\x00")
+	s := strings.TrimSpace(string(cmdOutput))
+	// Parse NUL-delimited output.
+	if strings.ContainsRune(s, '\x00') {
+		return strings.Split(strings.Trim(s, "\x00"), "\x00")
+	}
+	// Parse whitespace-delimited output.
+	return strings.Fields(s)
 }
