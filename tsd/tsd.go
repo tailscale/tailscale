@@ -18,7 +18,10 @@
 package tsd
 
 import (
+	"context"
 	"fmt"
+	"net"
+	"net/netip"
 	"reflect"
 
 	"tailscale.com/control/controlknobs"
@@ -114,6 +117,7 @@ type NetstackImpl interface {
 	UpdateNetstackIPs(*netmap.NetworkMap)
 	UpdateIPServiceMappings(netmap.IPServiceMappings)
 	UpdateActiveVIPServices(views.Slice[string])
+	DialContextTCP(ctx context.Context, ipp netip.AddrPort) (net.Conn, error)
 }
 
 // Set is a convenience method to set a subsystem value.

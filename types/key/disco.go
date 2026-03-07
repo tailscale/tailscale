@@ -42,6 +42,16 @@ func NewDisco() DiscoPrivate {
 	return ret
 }
 
+// DiscoPrivateFromRaw32 parses a 32-byte raw value as a DiscoPrivate.
+func DiscoPrivateFromRaw32(raw mem.RO) DiscoPrivate {
+	if raw.Len() != 32 {
+		panic("input has wrong size")
+	}
+	var ret DiscoPrivate
+	raw.Copy(ret.k[:])
+	return ret
+}
+
 // IsZero reports whether k is the zero value.
 func (k DiscoPrivate) IsZero() bool {
 	return k.Equal(DiscoPrivate{})

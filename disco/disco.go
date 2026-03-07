@@ -57,6 +57,10 @@ const v0 = byte(0)
 
 var errShort = errors.New("short message")
 
+// ParseHook, if non-nil, is called for unknown message types.
+// If it returns (nil, nil), Parse returns the default "unknown type" error.
+var ParseHook func(t MessageType, ver uint8, p []byte) (Message, error)
+
 // LooksLikeDiscoWrapper reports whether p looks like it's a packet
 // containing an encrypted disco message.
 func LooksLikeDiscoWrapper(p []byte) bool {
@@ -104,6 +108,11 @@ func Parse(p []byte) (Message, error) {
 	case TypeAllocateUDPRelayEndpointResponse:
 		return parseAllocateUDPRelayEndpointResponse(ver, p)
 	default:
+		if ParseHook != nil {
+			if m, err := ParseHook(t, ver, p); m != nil || err != nil {
+				return m, err
+			}
+		}
 		return nil, fmt.Errorf("unknown message type 0x%02x", byte(t))
 	}
 }

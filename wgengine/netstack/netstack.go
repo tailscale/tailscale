@@ -604,14 +604,13 @@ type LocalBackend = any
 // Start sets up all the handlers so netstack can start working. Implements
 // wgengine.FakeImpl.
 func (ns *Impl) Start(b LocalBackend) error {
-	if b == nil {
-		panic("nil LocalBackend interface")
+	if b != nil {
+		lb, ok := b.(*ipnlocal.LocalBackend)
+		if !ok || lb == nil {
+			panic("non-nil LocalBackend is not *ipnlocal.LocalBackend")
+		}
+		ns.lb = lb
 	}
-	lb := b.(*ipnlocal.LocalBackend)
-	if lb == nil {
-		panic("nil LocalBackend")
-	}
-	ns.lb = lb
 	tcpFwd := tcp.NewForwarder(ns.ipstack, tcpRXBufDefSize, maxInFlightConnectionAttempts(), ns.acceptTCP)
 	udpFwd := udp.NewForwarder(ns.ipstack, ns.acceptUDPNoICMP)
 	ns.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, ns.wrapTCPProtocolHandler(tcpFwd.HandlePacket))
@@ -906,7 +905,7 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper, gro *gro.
 	return filter.DropSilently, gro
 }
 
-func (ns *Impl) DialContextTCP(ctx context.Context, ipp netip.AddrPort) (*gonet.TCPConn, error) {
+func (ns *Impl) DialContextTCP(ctx context.Context, ipp netip.AddrPort) (net.Conn, error) {
 	remoteAddress := tcpip.FullAddress{
 		NIC:  nicID,
 		Addr: tcpip.AddrFromSlice(ipp.Addr().AsSlice()),

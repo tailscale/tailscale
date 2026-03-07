@@ -23,6 +23,7 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/control/controlknobs"
+	"tailscale.com/disco"
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
 	"tailscale.com/feature"
@@ -265,6 +266,16 @@ type Config struct {
 	// Conn25PacketHooks, if non-nil, is used to hook packets for Connectors 2025
 	// app connector handling logic.
 	Conn25PacketHooks Conn25PacketHooks
+
+	// DiscoMessageHook, if non-nil, is called when a disco message is
+	// received from a peer. If it returns true, the message is considered
+	// handled and no further processing occurs.
+	DiscoMessageHook func(disco.Message, key.DiscoPublic, key.NodePublic) bool
+
+	// AcceptDiscoFromUnknownPeer, if non-nil, is called when a disco
+	// message arrives from an unknown peer. If it returns true, the
+	// message is accepted.
+	AcceptDiscoFromUnknownPeer func(key.DiscoPublic) bool
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.
@@ -422,17 +433,19 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		e.RequestStatus()
 	}
 	magicsockOpts := magicsock.Options{
-		EventBus:       e.eventBus,
-		Logf:           logf,
-		Port:           conf.ListenPort,
-		EndpointsFunc:  endpointsFn,
-		DERPActiveFunc: e.RequestStatus,
-		IdleFunc:       e.tundev.IdleDuration,
-		NetMon:         e.netMon,
-		HealthTracker:  e.health,
-		Metrics:        conf.Metrics,
-		ControlKnobs:   conf.ControlKnobs,
-		PeerByKeyFunc:  e.PeerByKey,
+		EventBus:                   e.eventBus,
+		Logf:                       logf,
+		Port:                       conf.ListenPort,
+		EndpointsFunc:              endpointsFn,
+		DERPActiveFunc:             e.RequestStatus,
+		IdleFunc:                   e.tundev.IdleDuration,
+		NetMon:                     e.netMon,
+		HealthTracker:              e.health,
+		Metrics:                    conf.Metrics,
+		ControlKnobs:               conf.ControlKnobs,
+		PeerByKeyFunc:              e.PeerByKey,
+		DiscoMessageHook:           conf.DiscoMessageHook,
+		AcceptDiscoFromUnknownPeer: conf.AcceptDiscoFromUnknownPeer,
 	}
 	if buildfeatures.HasLazyWG {
 		magicsockOpts.NoteRecvActivity = e.noteRecvActivity
