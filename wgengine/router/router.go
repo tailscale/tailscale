@@ -56,6 +56,30 @@ type PortUpdate struct {
 	EndpointNetwork string // either "udp4" or "udp6".
 }
 
+// CGNATRuleVerdict describes what action to take for a CGNAT firewall rule.
+type CGNATRuleVerdict string
+
+const (
+	CGNATRuleVerdictDrop   CGNATRuleVerdict = "drop"
+	CGNATRuleVerdictAccept CGNATRuleVerdict = "accept"
+)
+
+// CGNATRuleChain describes which base chain(s) a CGNAT firewall rule applies to.
+type CGNATRuleChain string
+
+const (
+	CGNATRuleChainInput   CGNATRuleChain = "input"
+	CGNATRuleChainForward CGNATRuleChain = "forward"
+	CGNATRuleChainBoth    CGNATRuleChain = "both"
+)
+
+// CGNATRule is a Linux firewall base rule for CGNAT source matching.
+type CGNATRule struct {
+	Prefix  netip.Prefix
+	Verdict CGNATRuleVerdict
+	Chain   CGNATRuleChain
+}
+
 // HookNewUserspaceRouter is the registration point for router implementations
 // to register a constructor for userspace routers. It's meant for implementations
 // in wgengine/router/osrouter.
@@ -136,6 +160,12 @@ type Config struct {
 	StatefulFiltering bool                   // Apply stateful filtering to inbound connections
 	NetfilterMode     preftype.NetfilterMode // how much to manage netfilter rules
 	NetfilterKind     string                 // what kind of netfilter to use ("nftables", "iptables", or "" to auto-detect)
+
+	// CGNATRules is the ordered set of IPv4 source-prefix rules to apply in Linux
+	// ts-input and ts-forward base chains.
+	//
+	// If empty, one default rule is used: drop 100.64.0.0/10 on both chains.
+	CGNATRules []CGNATRule
 }
 
 func (a *Config) Equal(b *Config) bool {
@@ -157,5 +187,6 @@ func (c *Config) Clone() *Config {
 	c2.Routes = slices.Clone(c.Routes)
 	c2.LocalRoutes = slices.Clone(c.LocalRoutes)
 	c2.SubnetRoutes = slices.Clone(c.SubnetRoutes)
+	c2.CGNATRules = slices.Clone(c.CGNATRules)
 	return &c2
 }
