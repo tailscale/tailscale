@@ -254,13 +254,23 @@ func Test_conn_ReadRand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error creating a test logger: %v", err)
 	}
+	cl := tstest.NewClock(tstest.ClockOpts{})
+	sr := &fakes.TestSessionRecorder{}
+	rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
 	for i := range 100 {
 		tc := &fakes.TestConn{}
 		tc.ResetReadBuf()
 		c := &conn{
-			Conn: tc,
-			log:  zl.Sugar(),
+			Conn:                  tc,
+			log:                   zl.Sugar(),
+			rec:                   rec,
+			ctx:                   context.Background(),
+			initialCastHeaderSent: make(chan struct{}),
 		}
+		// Never block for random data.
+		c.writeCastHeaderOnce.Do(func() {
+			close(c.initialCastHeaderSent)
+		})
 		bb := fakes.RandomBytes(t)
 		for j, input := range bb {
 			if err := tc.WriteReadBufBytes(input); err != nil {
