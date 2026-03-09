@@ -712,6 +712,12 @@ type sshSession struct {
 	// We use this sync.Once to ensure that we only terminate the process once,
 	// either it exits itself or is terminated
 	exitOnce sync.Once
+
+	// exitHandled is closed when killProcessOnContextDone finishes writing any
+	// termination message to the client. run() waits on this before calling
+	// ss.Exit to ensure the message is flushed before the SSH channel is torn
+	// down. It is initialized by run() before starting killProcessOnContextDone.
+	exitHandled chan struct{}
 }
 
 func (ss *sshSession) vlogf(format string, args ...any) {
@@ -807,6 +813,7 @@ func (c *conn) fetchSSHAction(ctx context.Context, url string) (*tailcfg.SSHActi
 // killProcessOnContextDone waits for ss.ctx to be done and kills the process,
 // unless the process has already exited.
 func (ss *sshSession) killProcessOnContextDone() {
+	defer close(ss.exitHandled)
 	<-ss.ctx.Done()
 	// Either the process has already exited, in which case this does nothing.
 	// Or, the process is still running in which case this will kill it.
@@ -987,6 +994,7 @@ func (ss *sshSession) run() {
 		ss.Exit(1)
 		return
 	}
+	ss.exitHandled = make(chan struct{})
 	go ss.killProcessOnContextDone()
 
 	var processDone atomic.Bool
@@ -1049,6 +1057,10 @@ func (ss *sshSession) run() {
 	select {
 	case <-outputDone:
 	case <-ss.ctx.Done():
+		// Wait for killProcessOnContextDone to finish writing any
+		// termination message to the client before we call ss.Exit,
+		// which tears down the SSH channel.
+		<-ss.exitHandled
 	}
 
 	if err == nil {
