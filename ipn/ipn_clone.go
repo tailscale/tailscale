@@ -85,6 +85,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	ShieldsUp                  bool
 	AdvertiseTags              []string
 	Hostname                   string
+	ForceHostname              bool
 	NotepadURLs                bool
 	ForceDaemon                bool
 	Egg                        bool

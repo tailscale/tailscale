@@ -52,6 +52,7 @@ func TestPrefsEqual(t *testing.T) {
 		"ShieldsUp",
 		"AdvertiseTags",
 		"Hostname",
+		"ForceHostname",
 		"NotepadURLs",
 		"ForceDaemon",
 		"Egg",

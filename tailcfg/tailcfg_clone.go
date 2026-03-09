@@ -163,8 +163,9 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	Package         string
 	DeviceModel     string
 	PushDeviceToken string
-	Hostname        string
-	ShieldsUp       bool
+	Hostname      string
+	ForceHostname bool
+	ShieldsUp     bool
 	ShareeNode      bool
 	NoLogsNoSupport bool
 	WireIngress     bool

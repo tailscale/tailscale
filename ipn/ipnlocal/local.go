@@ -5632,6 +5632,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	if h := prefs.Hostname(); h != "" {
 		hi.Hostname = h
 	}
+	hi.ForceHostname = prefs.ForceHostname()
 	hi.RoutableIPs = prefs.AdvertiseRoutes().AsSlice()
 	hi.RequestTags = prefs.AdvertiseTags().AsSlice()
 	hi.ShieldsUp = prefs.ShieldsUp()

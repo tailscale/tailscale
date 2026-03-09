@@ -25,6 +25,7 @@ var validUpFlags = set.Of(
 	"auth-key",
 	"exit-node",
 	"exit-node-allow-lan-access",
+	"force-hostname",
 	"force-reauth",
 	"host-routes",
 	"hostname",

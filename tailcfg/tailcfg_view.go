@@ -541,6 +541,8 @@ func (v HostinfoView) PushDeviceToken() string { return v.ж.PushDeviceToken }
 // name of the host the client runs on
 func (v HostinfoView) Hostname() string { return v.ж.Hostname }
 
+func (v HostinfoView) ForceHostname() bool { return v.ж.ForceHostname }
+
 // indicates whether the host is blocking incoming connections
 func (v HostinfoView) ShieldsUp() bool { return v.ж.ShieldsUp }
 
@@ -646,6 +648,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	DeviceModel     string
 	PushDeviceToken string
 	Hostname        string
+	ForceHostname   bool
 	ShieldsUp       bool
 	ShareeNode      bool
 	NoLogsNoSupport bool

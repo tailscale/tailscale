@@ -861,6 +861,10 @@ type Hostinfo struct {
 	DeviceModel     string   `json:",omitzero"` // mobile phone model ("Pixel 3a", "iPhone12,3")
 	PushDeviceToken string   `json:",omitzero"` // macOS/iOS APNs device token for notifications (and Android in the future)
 	Hostname        string   `json:",omitzero"` // name of the host the client runs on
+	// ForceHostname, when true, asks the control server to use this hostname
+	// even if it is already taken (e.g. by an offline node). The server may
+	// rename or remove the existing node. See https://github.com/tailscale/tailscale/issues/4778
+	ForceHostname   bool     `json:",omitzero"`
 	ShieldsUp       bool     `json:",omitzero"` // indicates whether the host is blocking incoming connections
 	ShareeNode      bool     `json:",omitzero"` // indicates this node exists in netmap because it's owned by a shared-to user
 	NoLogsNoSupport bool     `json:",omitzero"` // indicates that the user has opted out of sending logs and support

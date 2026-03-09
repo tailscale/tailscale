@@ -171,6 +171,10 @@ type Prefs struct {
 	// not set, os.Hostname is used.
 	Hostname string
 
+	// ForceHostname, when true, asks the control server to use the requested
+	// hostname even if it is already taken (e.g. by an offline node).
+	ForceHostname bool
+
 	// NotepadURLs is a debugging setting that opens OAuth URLs in
 	// notepad.exe on Windows, rather than loading them in a browser.
 	//
@@ -368,6 +372,7 @@ type MaskedPrefs struct {
 	ShieldsUpSet                  bool                `json:",omitempty"`
 	AdvertiseTagsSet              bool                `json:",omitempty"`
 	HostnameSet                   bool                `json:",omitempty"`
+	ForceHostnameSet              bool                `json:",omitempty"`
 	NotepadURLsSet                bool                `json:",omitempty"`
 	ForceDaemonSet                bool                `json:",omitempty"`
 	EggSet                        bool                `json:",omitempty"`
@@ -680,6 +685,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.NetfilterMode == p2.NetfilterMode &&
 		p.OperatorUser == p2.OperatorUser &&
 		p.Hostname == p2.Hostname &&
+		p.ForceHostname == p2.ForceHostname &&
 		p.ForceDaemon == p2.ForceDaemon &&
 		slices.Equal(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
 		slices.Equal(p.AdvertiseTags, p2.AdvertiseTags) &&

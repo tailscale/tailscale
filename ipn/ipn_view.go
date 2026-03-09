@@ -325,6 +325,8 @@ func (v PrefsView) AdvertiseTags() views.Slice[string] { return views.SliceOf(v.
 // not set, os.Hostname is used.
 func (v PrefsView) Hostname() string { return v.ж.Hostname }
 
+func (v PrefsView) ForceHostname() bool { return v.ж.ForceHostname }
+
 // NotepadURLs is a debugging setting that opens OAuth URLs in
 // notepad.exe on Windows, rather than loading them in a browser.
 //
@@ -488,6 +490,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	ShieldsUp                  bool
 	AdvertiseTags              []string
 	Hostname                   string
+	ForceHostname              bool
 	NotepadURLs                bool
 	ForceDaemon                bool
 	Egg                        bool

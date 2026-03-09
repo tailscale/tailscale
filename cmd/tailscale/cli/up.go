@@ -115,6 +115,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.BoolVar(&upArgs.runSSH, "ssh", false, "run an SSH server, permitting access per tailnet admin's declared policy")
 	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "comma-separated ACL tags to request; each must start with \"tag:\" (e.g. \"tag:eng,tag:montreal,tag:ssh\")")
 	upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
+	upf.BoolVar(&upArgs.forceHostname, "force-hostname", false, "if the hostname is already taken (e.g. by an offline node), ask the control server to use it anyway (existing device will be removed)")
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	upf.BoolVar(&upArgs.advertiseConnector, "advertise-connector", false, "advertise this node as an app connector")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
@@ -200,6 +201,7 @@ type upArgsT struct {
 	clientSecretOrFile     string // "secret" or "file:/path/to/secret"
 	idTokenOrFile          string // "secret" or "file:/path/to/secret"
 	hostname               string
+	forceHostname          bool
 	opUser                 string
 	json                   bool
 	timeout                time.Duration
@@ -349,6 +351,7 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs.AdvertiseRoutes = routes
 	prefs.AdvertiseTags = tags
 	prefs.Hostname = upArgs.hostname
+	prefs.ForceHostname = upArgs.forceHostname
 	prefs.ForceDaemon = upArgs.forceDaemon
 	prefs.OperatorUser = upArgs.opUser
 	prefs.ProfileName = upArgs.profileName
@@ -886,6 +889,7 @@ func init() {
 	addPrefFlagMapping("accept-routes", "RouteAll")
 	addPrefFlagMapping("advertise-tags", "AdvertiseTags")
 	addPrefFlagMapping("hostname", "Hostname")
+	addPrefFlagMapping("force-hostname", "ForceHostname")
 	addPrefFlagMapping("login-server", "ControlURL")
 	addPrefFlagMapping("netfilter-mode", "NetfilterMode")
 	addPrefFlagMapping("shields-up", "ShieldsUp")
@@ -1152,6 +1156,8 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			set(strings.Join(prefs.AdvertiseTags, ","))
 		case "hostname":
 			set(prefs.Hostname)
+		case "force-hostname":
+			set(prefs.ForceHostname)
 		case "operator":
 			set(prefs.OperatorUser)
 		case "advertise-routes":
