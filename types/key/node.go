@@ -61,6 +61,9 @@ func NewNode() NodePrivate {
 	return ret
 }
 
+// Raw32 returns k as 32 raw bytes.
+func (k NodePrivate) Raw32() [32]byte { return k.k }
+
 // NodePrivateFromRaw32 parses a 32-byte raw value as a NodePrivate.
 //
 // Deprecated: only needed to cast from legacy node private key types,
