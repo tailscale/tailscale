@@ -244,12 +244,6 @@ jobs:
       with:
         path: ${{ github.workspace }}/src
 
-    - name: Install Go
-      uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
-      with:
-        go-version-file: ${{ github.workspace }}/src/go.mod
-        cache: false
-
     - name: Restore Go module cache
       uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
       with:
@@ -269,7 +263,9 @@ jobs:
     - name: test
       if: matrix.key != 'win-bench' # skip on bench builder
       working-directory: src
-      run: go run ./cmd/testwrapper sharded:${{ matrix.shard }}
+      run: ./tool/go run ./cmd/testwrapper sharded:${{ matrix.shard }}
+      env:
+        NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
 
     - name: bench all
       if: matrix.key == 'win-bench'
@@ -277,7 +273,9 @@ jobs:
       # Don't use -bench=. -benchtime=1x.
       # Somewhere in the layers (powershell?)
       # the equals signs cause great confusion.
-      run: go test ./... -bench . -benchtime 1x -run "^$"
+      run: ./tool/go test ./... -bench . -benchtime 1x -run "^$"
+      env:
+        NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
 
     - name: Print stats
       shell: pwsh
@@ -286,19 +284,6 @@ jobs:
         GOCACHEPROG: ${{ env.GOCACHEPROG }}
       run: |
         Invoke-Expression "$env:GOCACHEPROG --stats" | jq .
-
-  win-tool-go:
-    runs-on: windows-latest
-    needs: gomod-cache
-    name: Windows (win-tool-go)
-    steps:
-    - name: checkout
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      with:
-        path: src
-    - name: test-tool-go
-      working-directory: src
-      run: ./tool/go version
 
   macos:
     runs-on: macos-latest
