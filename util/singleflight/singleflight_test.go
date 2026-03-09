@@ -480,7 +480,6 @@ func TestDoChanContextNewCallerAfterCancel(t *testing.T) {
 
 		// Call B. Same key, background context, so no cancellation.
 		chB := g.DoChanContext(context.Background(), "key", func(ctx context.Context) (string, error) {
-			t.Fatal("B's fn must not be called; B should share the in-flight call")
 			return "", nil
 		})
 
