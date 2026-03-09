@@ -480,6 +480,7 @@ func (srv *server) newConn() (*conn, error) {
 	now := srv.now()
 	c.connID = fmt.Sprintf("ssh-conn-%s-%02x", now.UTC().Format("20060102T150405"), randBytes(5))
 	fwdHandler := &ssh.ForwardedTCPHandler{}
+	streamLocalFwdHandler := &ssh.ForwardedUnixHandler{}
 	c.Server = &ssh.Server{
 		Version:              "Tailscale",
 		ServerConfigCallback: c.ServerConfig,
@@ -487,18 +488,22 @@ func (srv *server) newConn() (*conn, error) {
 		Handler:                       c.handleSessionPostSSHAuth,
 		LocalPortForwardingCallback:   c.mayForwardLocalPortTo,
 		ReversePortForwardingCallback: c.mayReversePortForwardTo,
+
+		LocalUnixForwardingCallback:   c.mayForwardLocalUnixTo,
+		ReverseUnixForwardingCallback: c.mayReverseUnixForwardTo,
+
 		SubsystemHandlers: map[string]ssh.SubsystemHandler{
 			"sftp": c.handleSessionPostSSHAuth,
 		},
-		// Note: the direct-tcpip channel handler and LocalPortForwardingCallback
-		// only adds support for forwarding ports from the local machine.
-		// TODO(maisem/bradfitz): add remote port forwarding support.
 		ChannelHandlers: map[string]ssh.ChannelHandler{
-			"direct-tcpip": ssh.DirectTCPIPHandler,
+			"direct-tcpip":                   ssh.DirectTCPIPHandler,
+			"direct-streamlocal@openssh.com": ssh.DirectStreamLocalHandler,
 		},
 		RequestHandlers: map[string]ssh.RequestHandler{
-			"tcpip-forward":        fwdHandler.HandleSSHRequest,
-			"cancel-tcpip-forward": fwdHandler.HandleSSHRequest,
+			"tcpip-forward":                          fwdHandler.HandleSSHRequest,
+			"cancel-tcpip-forward":                   fwdHandler.HandleSSHRequest,
+			"streamlocal-forward@openssh.com":        streamLocalFwdHandler.HandleSSHRequest,
+			"cancel-streamlocal-forward@openssh.com": streamLocalFwdHandler.HandleSSHRequest,
 		},
 	}
 	ss := c.Server
@@ -541,6 +546,46 @@ func (c *conn) mayForwardLocalPortTo(ctx ssh.Context, destinationHost string, de
 		return true
 	}
 	return false
+}
+
+// mayForwardLocalUnixTo reports whether the ctx should be allowed to forward
+// to the specified Unix domain socket path. This is the server-side handler for
+// direct-streamlocal@openssh.com (SSH -L with Unix sockets).
+func (c *conn) mayForwardLocalUnixTo(ctx ssh.Context, socketPath string) (net.Conn, error) {
+	if sshDisableForwarding() {
+		return nil, ssh.ErrRejected
+	}
+	if c.finalAction != nil && c.finalAction.AllowLocalPortForwarding {
+		metricLocalPortForward.Add(1)
+		cb := ssh.NewLocalUnixForwardingCallback(c.unixForwardingOptions())
+		return cb(ctx, socketPath)
+	}
+	return nil, ssh.ErrRejected
+}
+
+// mayReverseUnixForwardTo reports whether the ctx should be allowed to create
+// a reverse Unix domain socket forward. This is the server-side handler for
+// streamlocal-forward@openssh.com (SSH -R with Unix sockets).
+func (c *conn) mayReverseUnixForwardTo(ctx ssh.Context, socketPath string) (net.Listener, error) {
+	if sshDisableForwarding() {
+		return nil, ssh.ErrRejected
+	}
+	if c.finalAction != nil && c.finalAction.AllowRemotePortForwarding {
+		metricRemotePortForward.Add(1)
+		cb := ssh.NewReverseUnixForwardingCallback(c.unixForwardingOptions())
+		return cb(ctx, socketPath)
+	}
+	return nil, ssh.ErrRejected
+}
+
+// unixForwardingOptions returns the Unix forwarding options scoped to the
+// authenticated local user. Socket paths are restricted to the user's home
+// directory, /tmp, and /run/user/<uid>.
+func (c *conn) unixForwardingOptions() ssh.UnixForwardingOptions {
+	return ssh.UnixForwardingOptions{
+		AllowedDirectories: ssh.UserSocketDirectories(c.localUser.HomeDir, c.localUser.Uid),
+		BindUnlink:         true,
+	}
 }
 
 // sshPolicy returns the SSHPolicy for current node.
