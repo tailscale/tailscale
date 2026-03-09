@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -457,6 +458,46 @@ func TestDoChanContext(t *testing.T) {
 					}
 				}
 			})
+		}
+	})
+}
+
+func TestDoChanContextNewCallerAfterCancel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var g Group[string, string]
+
+		// Call A.
+		done := make(chan bool)
+		ctxA, cancelA := context.WithCancel(context.Background())
+		chA := g.DoChanContext(ctxA, "key", func(ctx context.Context) (string, error) {
+			<-done
+			return "ok", ctx.Err()
+		})
+
+		// Cancel A's context.
+		cancelA()
+		synctest.Wait()
+
+		// Call B. Same key, background context, so no cancellation.
+		chB := g.DoChanContext(context.Background(), "key", func(ctx context.Context) (string, error) {
+			t.Fatal("B's fn must not be called; B should share the in-flight call")
+			return "", nil
+		})
+
+		// Unblock A's closure.
+		close(done)
+
+		resA := <-chA
+		resB := <-chB
+
+		// A cancelled. A gets an error.
+		if !errors.Is(resA.Err, context.Canceled) {
+			t.Fatalf("A: got %v, want context.Canceled", resA.Err)
+		}
+
+		// B also cancelled. B should get an error.
+		if resB.Err != nil {
+			t.Errorf("B: got %v, want nil (B's context was never cancelled)", resB.Err)
 		}
 	})
 }
