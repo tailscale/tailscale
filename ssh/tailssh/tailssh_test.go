@@ -37,7 +37,6 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
-	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/memnet"
@@ -490,13 +489,8 @@ func newSSHRule(action *tailcfg.SSHAction) *tailcfg.SSHRule {
 }
 
 func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7707")
-
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skipf("skipping on %q; only runs on linux and darwin", runtime.GOOS)
-	}
-	if runtime.GOOS == "darwin" && cibuild.On() {
-		t.Skipf("this fails on CI on macOS; see https://github.com/tailscale/tailscale/issues/7707")
 	}
 
 	var handler http.HandlerFunc
