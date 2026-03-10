@@ -28,7 +28,6 @@ import (
 
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/ipnstate"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
@@ -563,16 +562,18 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 	}
 
 	// Add the Tailscale Service to prefs to have the Ingress recognised as ready.
-	mustCreate(t, fc, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pg-0",
-			Namespace: "operator-ns",
-			Labels:    pgSecretLabels("test-pg", kubetypes.LabelSecretTypeState),
-		},
-		Data: map[string][]byte{
-			"_current-profile": []byte("profile-foo"),
-			"profile-foo":      []byte(`{"AdvertiseServices":["svc:my-svc"],"Config":{"NodeID":"node-foo"}}`),
-		},
+	mustUpdate(t, fc, "operator-ns", "test-pg-0", func(o *corev1.Secret) {
+		var p prefs
+		var err error
+		if err = json.Unmarshal(o.Data["test"], &p); err != nil {
+			t.Errorf("failed to unmarshal preferences: %v", err)
+		}
+
+		p.AdvertiseServices = []string{"svc:my-svc"}
+		o.Data["test"], err = json.Marshal(p)
+		if err != nil {
+			t.Errorf("failed to marshal preferences: %v", err)
+		}
 	})
 
 	// Reconcile and re-fetch Ingress.
@@ -686,17 +687,19 @@ func TestIngressPGReconciler_HTTPRedirect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Add the Tailscale Service to prefs to have the Ingress recognised as ready
-	mustCreate(t, fc, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pg-0",
-			Namespace: "operator-ns",
-			Labels:    pgSecretLabels("test-pg", kubetypes.LabelSecretTypeState),
-		},
-		Data: map[string][]byte{
-			"_current-profile": []byte("profile-foo"),
-			"profile-foo":      []byte(`{"AdvertiseServices":["svc:my-svc"],"Config":{"NodeID":"node-foo"}}`),
-		},
+	// Add the Tailscale Service to prefs to have the Ingress recognised as ready.
+	mustUpdate(t, fc, "operator-ns", "test-pg-0", func(o *corev1.Secret) {
+		var p prefs
+		var err error
+		if err = json.Unmarshal(o.Data["test"], &p); err != nil {
+			t.Errorf("failed to unmarshal preferences: %v", err)
+		}
+
+		p.AdvertiseServices = []string{"svc:my-svc"}
+		o.Data["test"], err = json.Marshal(p)
+		if err != nil {
+			t.Errorf("failed to marshal preferences: %v", err)
+		}
 	})
 
 	// Reconcile and re-fetch Ingress
@@ -819,17 +822,19 @@ func TestIngressPGReconciler_HTTPEndpointAndRedirectConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Add the Tailscale Service to prefs to have the Ingress recognised as ready
-	mustCreate(t, fc, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pg-0",
-			Namespace: "operator-ns",
-			Labels:    pgSecretLabels("test-pg", kubetypes.LabelSecretTypeState),
-		},
-		Data: map[string][]byte{
-			"_current-profile": []byte("profile-foo"),
-			"profile-foo":      []byte(`{"AdvertiseServices":["svc:my-svc"],"Config":{"NodeID":"node-foo"}}`),
-		},
+	// Add the Tailscale Service to prefs to have the Ingress recognised as ready.
+	mustUpdate(t, fc, "operator-ns", "test-pg-0", func(o *corev1.Secret) {
+		var p prefs
+		var err error
+		if err = json.Unmarshal(o.Data["test"], &p); err != nil {
+			t.Errorf("failed to unmarshal preferences: %v", err)
+		}
+
+		p.AdvertiseServices = []string{"svc:my-svc"}
+		o.Data["test"], err = json.Marshal(p)
+		if err != nil {
+			t.Errorf("failed to marshal preferences: %v", err)
+		}
 	})
 
 	// Reconcile and re-fetch Ingress
@@ -1110,6 +1115,7 @@ func verifyTailscaledConfig(t *testing.T, fc client.Client, pgName string, expec
 
 func createPGResources(t *testing.T, fc client.Client, pgName string) {
 	t.Helper()
+
 	// Pre-create the ProxyGroup
 	pg := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1146,6 +1152,30 @@ func createPGResources(t *testing.T, fc client.Client, pgName string) {
 		},
 	}
 	mustCreate(t, fc, pgCfgSecret)
+
+	pr := prefs{}
+	pr.Config.UserProfile.LoginName = "test.ts.net"
+	pr.Config.NodeID = "test"
+
+	p, err := json.Marshal(pr)
+	if err != nil {
+		t.Fatalf("marshaling prefs: %v", err)
+	}
+
+	// Pre-create a state secret for the ProxyGroup
+	pgStateSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pgStateSecretName(pgName, 0),
+			Namespace: "operator-ns",
+			Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeState),
+		},
+		Data: map[string][]byte{
+			currentProfileKey: []byte("test"),
+			"test":            p,
+		},
+	}
+	mustCreate(t, fc, pgStateSecret)
+
 	pg.Status.Conditions = []metav1.Condition{
 		{
 			Type:               string(tsapi.ProxyGroupAvailable),
@@ -1180,14 +1210,6 @@ func setupIngressTest(t *testing.T) (*HAIngressReconciler, client.Client, *fakeT
 		t.Fatal(err)
 	}
 
-	lc := &fakeLocalClient{
-		status: &ipnstate.Status{
-			CurrentTailnet: &ipnstate.TailnetStatus{
-				MagicDNSSuffix: "ts.net",
-			},
-		},
-	}
-
 	ingPGR := &HAIngressReconciler{
 		Client:           fc,
 		tsClient:         ft,
@@ -1196,7 +1218,6 @@ func setupIngressTest(t *testing.T) (*HAIngressReconciler, client.Client, *fakeT
 		tsnetServer:      fakeTsnetServer,
 		logger:           zl.Sugar(),
 		recorder:         record.NewFakeRecorder(10),
-		lc:               lc,
 		ingressClassName: tsIngressClass.Name,
 	}
 

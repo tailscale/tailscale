@@ -20,19 +20,19 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 )
 
-func clientForTailnet(ctx context.Context, cl client.Client, namespace, name string) (tsClient, error) {
+func clientForTailnet(ctx context.Context, cl client.Client, namespace, name string) (tsClient, string, error) {
 	var tn tsapi.Tailnet
 	if err := cl.Get(ctx, client.ObjectKey{Name: name}, &tn); err != nil {
-		return nil, fmt.Errorf("failed to get tailnet %q: %w", name, err)
+		return nil, "", fmt.Errorf("failed to get tailnet %q: %w", name, err)
 	}
 
 	if !operatorutils.TailnetIsReady(&tn) {
-		return nil, fmt.Errorf("tailnet %q is not ready", name)
+		return nil, "", fmt.Errorf("tailnet %q is not ready", name)
 	}
 
 	var secret corev1.Secret
 	if err := cl.Get(ctx, client.ObjectKey{Name: tn.Spec.Credentials.SecretName, Namespace: namespace}, &secret); err != nil {
-		return nil, fmt.Errorf("failed to get Secret %q in namespace %q: %w", tn.Spec.Credentials.SecretName, namespace, err)
+		return nil, "", fmt.Errorf("failed to get Secret %q in namespace %q: %w", tn.Spec.Credentials.SecretName, namespace, err)
 	}
 
 	baseURL := ipn.DefaultControlURL
@@ -54,5 +54,18 @@ func clientForTailnet(ctx context.Context, cl client.Client, namespace, name str
 	ts.HTTPClient = httpClient
 	ts.BaseURL = baseURL
 
-	return ts, nil
+	return ts, baseURL, nil
+}
+
+func clientFromProxyGroup(ctx context.Context, cl client.Client, pg *tsapi.ProxyGroup, namespace string, def tsClient) (tsClient, error) {
+	if pg.Spec.Tailnet == "" {
+		return def, nil
+	}
+
+	tailscaleClient, _, err := clientForTailnet(ctx, cl, namespace, pg.Spec.Tailnet)
+	if err != nil {
+		return nil, err
+	}
+
+	return tailscaleClient, nil
 }
