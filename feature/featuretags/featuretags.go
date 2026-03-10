@@ -144,7 +144,8 @@ var Features = map[FeatureTag]FeatureMeta{
 		Sym: "CompletionScripts", Desc: "embed CLI shell completion scripts",
 		Deps: []FeatureTag{"completion"},
 	},
-	"cloud": {Sym: "Cloud", Desc: "detect cloud environment to learn instances IPs and DNS servers"},
+	"cloud":       {Sym: "Cloud", Desc: "detect cloud environment to learn instances IPs and DNS servers"},
+	"customdisco": {Sym: "CustomDisco", Desc: "Custom disco message support"},
 	"dbus": {
 		Sym:                  "DBus",
 		Desc:                 "Linux DBus support",

@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/types/key"
 )
 
@@ -39,6 +40,9 @@ const keyLen = 32
 // NonceLen is the length of the nonces used by nacl box.
 const NonceLen = 24
 
+// MessageType is the type byte at the start of a disco message payload.
+// Values 0x01 through 0x7f are reserved for the Tailscale disco protocol.
+// Values 0x80 and above are available for external/custom disco protocols.
 type MessageType byte
 
 const (
@@ -53,9 +57,20 @@ const (
 	TypeAllocateUDPRelayEndpointResponse = MessageType(0x09)
 )
 
+// MinCustomMessageType is the minimum MessageType value available for
+// external/custom disco protocols. Types below this value are reserved
+// for the Tailscale disco protocol.
+const MinCustomMessageType = MessageType(0x80)
+
 const v0 = byte(0)
 
 var errShort = errors.New("short message")
+
+// ParseHookFunc is the signature of a hook function that can parse custom
+// disco message types. It is called by ParseWithHook for message types
+// >= MinCustomMessageType (0x80) that are not handled by the standard parser.
+// If the hook returns (nil, nil), the default "unknown message type" error is used.
+type ParseHookFunc func(msgType MessageType, ver uint8, p []byte) (Message, error)
 
 // LooksLikeDiscoWrapper reports whether p looks like it's a packet
 // containing an encrypted disco message.
@@ -106,6 +121,27 @@ func Parse(p []byte) (Message, error) {
 	default:
 		return nil, fmt.Errorf("unknown message type 0x%02x", byte(t))
 	}
+}
+
+// ParseWithHook is like Parse but calls hook for message types
+// >= MinCustomMessageType (0x80) that are not handled by the standard parser.
+// If hook is nil, it behaves identically to Parse.
+func ParseWithHook(p []byte, hook ParseHookFunc) (Message, error) {
+	if !buildfeatures.HasCustomDisco {
+		return Parse(p)
+	}
+	if len(p) < 2 {
+		return nil, errShort
+	}
+	t := MessageType(p[0])
+	if t < MinCustomMessageType || hook == nil {
+		return Parse(p)
+	}
+	ver, rest := p[1], p[2:]
+	if m, err := hook(t, ver, rest); m != nil || err != nil {
+		return m, err
+	}
+	return nil, fmt.Errorf("unknown message type 0x%02x", byte(t))
 }
 
 // Message a discovery message.

@@ -168,6 +168,10 @@ type Conn struct {
 	health                 *health.Tracker      // or nil
 	controlKnobs           *controlknobs.Knobs  // or nil
 
+	// customDisco contains registered custom disco message types,
+	// keyed by MessageType. Set via AddCustomDiscoMessage.
+	customDisco customDiscoRegistry
+
 	// ================================================================
 	// No locking required to access these fields, either because
 	// they're static after construction, or are wholly owned by a
@@ -2151,6 +2155,8 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		}
 	case c.peerMap.knownPeerDiscoKey(sender):
 		di = c.discoInfoForKnownPeerLocked(sender)
+	case c.customDiscoAcceptsUnknownPeers():
+		di = c.discoInfoForKnownPeerLocked(sender)
 	default:
 		metricRecvDiscoBadPeer.Add(1)
 		if debugDisco() {
@@ -2199,7 +2205,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		cb(packet.PathDisco, time.Now(), disco.ToPCAPFrame(src.ap, derpNodeSrc, payload), packet.CaptureMeta{})
 	}
 
-	dm, err := disco.Parse(payload)
+	dm, err := disco.ParseWithHook(payload, c.customDiscoParseHook)
 	if debugDisco() {
 		c.logf("magicsock: disco: disco.Parse = %T, %v", dm, err)
 	}
@@ -2421,6 +2427,10 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 			RxFromNodeKey:  nodeKey,
 			Message:        req,
 		})
+	default:
+		if buildfeatures.HasCustomDisco {
+			c.customDisco.handleMessage(disco.MessageType(payload[0]), dm, sender, derpNodeSrc)
+		}
 	}
 	return
 }
