@@ -495,6 +495,13 @@ type Options struct {
 	// DisablePortMapper, if true, disables the portmapper.
 	// This is primarily useful in tests.
 	DisablePortMapper bool
+
+	// ForceDiscoKey, if non-zero, forces the use of a specific disco
+	// private key. This should only be used for special cases and
+	// experiments, not for production. The recommended normal path is to
+	// leave it zero, in which case a new disco key is generated per
+	// Tailscale start and kept only in memory.
+	ForceDiscoKey key.DiscoPrivate
 }
 
 func (o *Options) logf() logger.Logf {
@@ -622,6 +629,9 @@ func NewConn(opts Options) (*Conn, error) {
 	}
 
 	c := newConn(opts.logf())
+	if !opts.ForceDiscoKey.IsZero() {
+		c.discoAtomic.Set(opts.ForceDiscoKey)
+	}
 	c.eventBus = opts.EventBus
 	c.port.Store(uint32(opts.Port))
 	c.controlKnobs = opts.ControlKnobs
