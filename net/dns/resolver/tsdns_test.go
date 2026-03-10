@@ -1543,6 +1543,7 @@ func TestHandlePeerDNSQuery_iOS_NoCorpDNS(t *testing.T) {
 		if err := r.SetConfig(cfg); err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(r.Close)
 		return r
 	}
 	mustBuildQuery := func(t *testing.T, typ dns.Type) []byte {
@@ -1628,6 +1629,13 @@ func TestHandlePeerDNSQuery_iOS_NoCorpDNS(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := newResolver(t)
+			
+			// Clear cloudHostFallback so the test reliably exercises the no-upstream case
+			// regardless of the environment the test runs in.
+			r.forwarder.mu.Lock()
+			r.forwarder.cloudHostFallback = nil
+			r.forwarder.mu.Unlock()
+
 			if tt.configFn != nil {
 				if err := r.SetConfig(tt.configFn(t)); err != nil {
 					t.Fatal(err)
