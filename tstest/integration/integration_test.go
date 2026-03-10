@@ -200,23 +200,34 @@ func TestExpectedFeaturesLinked(t *testing.T) {
 }
 
 func TestCollectPanic(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/15865")
 	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n := NewTestNode(t, env)
 
-	cmd := exec.Command(env.daemon, "--cleanup")
+	// Wait for the binary to be executable, working around a
+	// mysterious ETXTBSY on GitHub Actions.
+	// See https://github.com/tailscale/tailscale/issues/15868.
+	if err := n.awaitTailscaledRunnable(); err != nil {
+		t.Fatal(err)
+	}
+
+	logsDir := t.TempDir()
+	cmd := exec.Command(env.daemon, "--cleanup", "--statedir="+n.dir)
 	cmd.Env = append(os.Environ(),
 		"TS_PLEASE_PANIC=1",
 		"TS_LOG_TARGET="+n.env.LogCatcherServer.URL,
+		"TS_LOGS_DIR="+logsDir,
 	)
 	got, _ := cmd.CombinedOutput() // we expect it to fail, ignore err
 	t.Logf("initial run: %s", got)
 
 	// Now we run it again, and on start, it will upload the logs to logcatcher.
-	cmd = exec.Command(env.daemon, "--cleanup")
-	cmd.Env = append(os.Environ(), "TS_LOG_TARGET="+n.env.LogCatcherServer.URL)
+	cmd = exec.Command(env.daemon, "--cleanup", "--statedir="+n.dir)
+	cmd.Env = append(os.Environ(),
+		"TS_LOG_TARGET="+n.env.LogCatcherServer.URL,
+		"TS_LOGS_DIR="+logsDir,
+	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("cleanup failed: %v: %q", err, out)
 	}
