@@ -1509,6 +1509,166 @@ type fakeAddr struct{}
 func (fakeAddr) Network() string { return "unused" }
 func (fakeAddr) String() string  { return "unused-todoAddr" }
 
+func TestHandlePeerDNSQuery_iOS_NoCorpDNS(t *testing.T) {
+	const (
+		queryName = "one-a.test."
+		goos      = "ios"
+		queryID   = 1234
+	)
+	remoteAddr := netip.MustParseAddrPort("192.168.0.1:12345")
+	allowAllNames := func(string) bool { return true }
+	noResolver := func(*testing.T) *net.Resolver { return nil }
+
+	newResolver := func(t *testing.T) *Resolver {
+		t.Helper()
+		logf := t.Logf
+		bus := eventbustest.NewBus(t)
+		netMon, err := netmon.New(bus, logf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { netMon.Close() })
+		dialer := &tsdial.Dialer{
+			Logf: logf,
+		}
+		dialer.SetNetMon(netMon)
+		ht := health.NewTracker(bus)
+
+		r := New(logf, nil, dialer, ht, nil)
+		cfg := Config{
+			AcceptDNS: false,
+			Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+			Hosts:     map[dnsname.FQDN][]netip.Addr{},
+		}
+		if err := r.SetConfig(cfg); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	mustBuildQuery := func(t *testing.T, typ dns.Type) []byte {
+		t.Helper()
+		b := dns.NewBuilder(nil, dns.Header{
+			ID:               queryID,
+			RecursionDesired: true,
+		})
+		b.StartQuestions()
+		b.Question(dns.Question{
+			Name:  dns.MustNewName(queryName),
+			Type:  typ,
+			Class: dns.ClassINET,
+		})
+		q, err := b.Finish()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return q
+	}
+	testResolverForA := func(t *testing.T) *net.Resolver {
+		t.Helper()
+		v4server := serveDNS(t, "127.0.0.1:0",
+			queryName,
+			dnsHandler(netip.MustParseAddr("1.2.3.4")),
+		)
+		t.Cleanup(func() { v4server.Shutdown() })
+		return &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "udp", v4server.PacketConn.LocalAddr().String())
+			},
+		}
+	}
+
+	tests := []struct {
+		name            string
+		qType           dns.Type
+		resolver        func(t *testing.T) *net.Resolver
+		configFn        func(t *testing.T) Config // if non-nil, reconfigure the resolver
+		wantErrContains string
+		wantRCode       dns.RCode
+		wantIP          netip.Addr
+	}{
+		{
+			name:      "supported_type_falls_back_to_netpkg",
+			qType:     dns.TypeA,
+			resolver:  testResolverForA,
+			wantRCode: dns.RCodeSuccess,
+			wantIP:    netip.MustParseAddr("1.2.3.4"),
+		},
+		{
+			name:            "unsupported_type_returns_error",
+			qType:           dns.TypeMX,
+			resolver:        noResolver,
+			wantErrContains: "unsupported record type",
+		},
+		{
+			name:     "has_resolvers_uses_forwarder_not_fallback",
+			qType:    dns.TypeA,
+			resolver: testResolverForA, // returns 1.2.3.4 if fallback triggers
+			configFn: func(t *testing.T) Config {
+				t.Helper()
+				fwdServer := serveDNS(t, "127.0.0.1:0",
+					queryName,
+					dnsHandler(netip.MustParseAddr("5.6.7.8")),
+				)
+				t.Cleanup(func() { fwdServer.Shutdown() })
+				return Config{
+					AcceptDNS: false,
+					Routes: map[dnsname.FQDN][]*dnstype.Resolver{
+						".": {{Addr: fwdServer.PacketConn.LocalAddr().String()}},
+					},
+					Hosts: map[dnsname.FQDN][]netip.Addr{},
+				}
+			},
+			wantRCode: dns.RCodeSuccess,
+			wantIP:    netip.MustParseAddr("5.6.7.8"), // from forwarder, not fallback
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newResolver(t)
+			if tt.configFn != nil {
+				if err := r.SetConfig(tt.configFn(t)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			q := mustBuildQuery(t, tt.qType)
+			res, err := r.handlePeerDNSQueryForOS(
+				context.Background(),
+				q,
+				remoteAddr,
+				allowAllNames,
+				goos,
+				tt.resolver(t),
+			)
+			if tt.wantErrContains != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q; got nil", tt.wantErrContains)
+				}
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Fatalf("got error %q; want contains %q", err, tt.wantErrContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("HandlePeerDNSQuery error: %v", err)
+			}
+
+			got, err := unpackResponse(res)
+			if err != nil {
+				t.Fatalf("failed to parse response: %v", err)
+			}
+			if got.rcode != tt.wantRCode {
+				t.Fatalf("got RCode %v; want %v", got.rcode, tt.wantRCode)
+			}
+			if tt.wantIP.IsValid() && got.ip != tt.wantIP {
+				t.Fatalf("got A answer %v; want %v", got.ip, tt.wantIP)
+			}
+		})
+	}
+}
+
 func TestUnARPA(t *testing.T) {
 	tests := []struct {
 		in, want string
