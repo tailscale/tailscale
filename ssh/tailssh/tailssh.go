@@ -74,7 +74,6 @@ const (
 // ipnLocalBackend is the subset of ipnlocal.LocalBackend that we use.
 // It is used for testing.
 type ipnLocalBackend interface {
-	GetSSH_HostKeys() ([]gossh.Signer, error)
 	ShouldRunSSH() bool
 	NetMap() *netmap.NetworkMap
 	WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
@@ -107,6 +106,8 @@ func (srv *server) now() time.Time {
 }
 
 func init() {
+	feature.HookGetSSHHostKeyPublicStrings.Set(getHostKeyPublicStrings)
+	ipnlocal.RegisterC2N("/ssh/usernames", handleC2NSSHUsernames)
 	ipnlocal.RegisterNewSSHServer(func(logf logger.Logf, lb *ipnlocal.LocalBackend) (ipnlocal.SSHServer, error) {
 		tsd, err := os.Executable()
 		if err != nil {
@@ -504,7 +505,7 @@ func (srv *server) newConn() (*conn, error) {
 	maps.Copy(ss.RequestHandlers, ssh.DefaultRequestHandlers)
 	maps.Copy(ss.ChannelHandlers, ssh.DefaultChannelHandlers)
 	maps.Copy(ss.SubsystemHandlers, ssh.DefaultSubsystemHandlers)
-	keys, err := srv.lb.GetSSH_HostKeys()
+	keys, err := getHostKeys(srv.lb.TailscaleVarRoot(), srv.logf)
 	if err != nil {
 		return nil, err
 	}

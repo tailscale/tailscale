@@ -5,5 +5,5 @@
 
 package main
 
-// Force registration of tailssh with LocalBackend.
-import _ "tailscale.com/ssh/tailssh"
+// Register implementations of various SSH hooks.
+import _ "tailscale.com/feature/ssh"

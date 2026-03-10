@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
-	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
@@ -34,7 +33,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"tailscale.com/cmd/testwrapper/flakytest"
@@ -381,6 +379,7 @@ func TestEvalSSHPolicy(t *testing.T) {
 type localState struct {
 	sshEnabled   bool
 	matchingRule *tailcfg.SSHRule
+	varRoot      string // if empty, TailscaleVarRoot returns ""
 
 	// serverActions is a map of the action name to the action.
 	// It is served for paths like https://unused/ssh-action/<action-name>.
@@ -388,29 +387,10 @@ type localState struct {
 	serverActions map[string]*tailcfg.SSHAction
 }
 
-var (
-	currentUser    = os.Getenv("USER") // Use the current user for the test.
-	testSigner     gossh.Signer
-	testSignerOnce sync.Once
-)
+var currentUser = os.Getenv("USER") // Use the current user for the test.
 
 func (ts *localState) Dialer() *tsdial.Dialer {
 	return &tsdial.Dialer{}
-}
-
-func (ts *localState) GetSSH_HostKeys() ([]gossh.Signer, error) {
-	testSignerOnce.Do(func() {
-		_, priv, err := ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			panic(err)
-		}
-		s, err := gossh.NewSignerFromSigner(priv)
-		if err != nil {
-			panic(err)
-		}
-		testSigner = s
-	})
-	return []gossh.Signer{testSigner}, nil
 }
 
 func (ts *localState) ShouldRunSSH() bool {
@@ -468,7 +448,7 @@ func (ts *localState) DoNoiseRequest(req *http.Request) (*http.Response, error) 
 }
 
 func (ts *localState) TailscaleVarRoot() string {
-	return ""
+	return ts.varRoot
 }
 
 func (ts *localState) NodeKey() key.NodePublic {
@@ -505,6 +485,7 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 		logf: tstest.WhileTestRunningLogger(t),
 		lb: &localState{
 			sshEnabled: true,
+			varRoot:    t.TempDir(),
 			matchingRule: newSSHRule(
 				&tailcfg.SSHAction{
 					Accept: true,
@@ -633,6 +614,7 @@ func TestMultipleRecorders(t *testing.T) {
 		logf: tstest.WhileTestRunningLogger(t),
 		lb: &localState{
 			sshEnabled: true,
+			varRoot:    t.TempDir(),
 			matchingRule: newSSHRule(
 				&tailcfg.SSHAction{
 					Accept: true,
@@ -724,6 +706,7 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 		logf: tstest.WhileTestRunningLogger(t),
 		lb: &localState{
 			sshEnabled: true,
+			varRoot:    t.TempDir(),
 			matchingRule: newSSHRule(
 				&tailcfg.SSHAction{
 					Accept: true,
@@ -792,6 +775,7 @@ func TestSSHAuthFlow(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skipf("skipping on %q; only runs on linux and darwin", runtime.GOOS)
 	}
+	varRoot := t.TempDir()
 	acceptRule := newSSHRule(&tailcfg.SSHAction{
 		Accept:  true,
 		Message: "Welcome to Tailscale SSH!",
@@ -818,6 +802,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			name: "no-policy",
 			state: &localState{
 				sshEnabled: true,
+				varRoot:    varRoot,
 			},
 			authErr:     true,
 			wantBanners: []string{"tailscale: tailnet policy does not permit you to SSH to this node\n"},
@@ -826,6 +811,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			name: "user-mismatch",
 			state: &localState{
 				sshEnabled:   true,
+				varRoot:      varRoot,
 				matchingRule: bobRule,
 			},
 			authErr:     true,
@@ -835,6 +821,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			name: "accept",
 			state: &localState{
 				sshEnabled:   true,
+				varRoot:      varRoot,
 				matchingRule: acceptRule,
 			},
 			wantBanners: []string{"Welcome to Tailscale SSH!"},
@@ -843,6 +830,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			name: "reject",
 			state: &localState{
 				sshEnabled:   true,
+				varRoot:      varRoot,
 				matchingRule: rejectRule,
 			},
 			wantBanners: []string{"Go Away!"},
@@ -852,6 +840,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			name: "simple-check",
 			state: &localState{
 				sshEnabled: true,
+				varRoot:    varRoot,
 				matchingRule: newSSHRule(&tailcfg.SSHAction{
 					HoldAndDelegate: "https://unused/ssh-action/accept",
 				}),
@@ -865,6 +854,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			name: "multi-check",
 			state: &localState{
 				sshEnabled: true,
+				varRoot:    varRoot,
 				matchingRule: newSSHRule(&tailcfg.SSHAction{
 					Message:         "First",
 					HoldAndDelegate: "https://unused/ssh-action/check1",
@@ -883,6 +873,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			name: "check-reject",
 			state: &localState{
 				sshEnabled: true,
+				varRoot:    varRoot,
 				matchingRule: newSSHRule(&tailcfg.SSHAction{
 					Message:         "First",
 					HoldAndDelegate: "https://unused/ssh-action/reject",
@@ -899,6 +890,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			sshUser: "alice+password",
 			state: &localState{
 				sshEnabled:   true,
+				varRoot:      varRoot,
 				matchingRule: acceptRule,
 			},
 			usesPassword: true,
