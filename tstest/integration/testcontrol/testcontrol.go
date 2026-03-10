@@ -839,8 +839,8 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 	if !ok {
 		// If ForceHostname is set, remove any existing node with the same
 		// hostname so this registration can take over the name.
-		if req.Hostinfo != nil && req.Hostinfo.ForceHostname() && req.Hostinfo.Hostname() != "" {
-			wantName := req.Hostinfo.Hostname()
+		if req.Hostinfo != nil && req.Hostinfo.ForceHostname && req.Hostinfo.Hostname != "" {
+			wantName := req.Hostinfo.Hostname
 			for existingNk, n := range s.nodes {
 				baseName := n.Name
 				if idx := strings.Index(baseName, "."); idx > 0 {
