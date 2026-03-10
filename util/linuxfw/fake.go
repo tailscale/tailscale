@@ -25,13 +25,15 @@ type fakeRule struct {
 func newFakeIPTables() *fakeIPTables {
 	return &fakeIPTables{
 		n: map[string][]string{
-			"filter/INPUT":    nil,
-			"filter/OUTPUT":   nil,
-			"filter/FORWARD":  nil,
-			"nat/PREROUTING":  nil,
-			"nat/OUTPUT":      nil,
-			"nat/POSTROUTING": nil,
-			"mangle/FORWARD":  nil,
+			"filter/INPUT":      nil,
+			"filter/OUTPUT":     nil,
+			"filter/FORWARD":    nil,
+			"nat/PREROUTING":    nil,
+			"nat/OUTPUT":        nil,
+			"nat/POSTROUTING":   nil,
+			"mangle/FORWARD":    nil,
+			"mangle/PREROUTING": nil,
+			"mangle/OUTPUT":     nil,
 		},
 	}
 }
@@ -81,7 +83,7 @@ func (n *fakeIPTables) Delete(table, chain string, args ...string) error {
 				return nil
 			}
 		}
-		return fmt.Errorf("delete of unknown rule %q from %s", strings.Join(args, " "), k)
+		return errors.New("exitcode:1")
 	} else {
 		return fmt.Errorf("unknown table/chain %s", k)
 	}
