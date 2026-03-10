@@ -533,7 +533,7 @@ func (i *iptablesRunner) DelStatefulRule(tunname string) error {
 // proper routing table lookups for exit nodes and subnet routers.
 func (i *iptablesRunner) AddConnmarkSaveRule() error {
 	// Check if rules already exist (idempotency)
-	for _, ipt := range []iptablesInterface{i.ipt4, i.ipt6} {
+	for _, ipt := range i.getTables() {
 		rules, err := ipt.List("mangle", "PREROUTING")
 		if err != nil {
 			continue
@@ -551,7 +551,7 @@ func (i *iptablesRunner) AddConnmarkSaveRule() error {
 
 	// mangle/PREROUTING: Restore mark from conntrack for ESTABLISHED/RELATED connections
 	// This runs BEFORE routing decision and rp_filter check
-	for _, ipt := range []iptablesInterface{i.ipt4, i.ipt6} {
+	for _, ipt := range i.getTables() {
 		args := []string{
 			"-m", "conntrack",
 			"--ctstate", "ESTABLISHED,RELATED",
@@ -566,7 +566,7 @@ func (i *iptablesRunner) AddConnmarkSaveRule() error {
 	}
 
 	// mangle/OUTPUT: Save mark to conntrack for NEW connections with non-zero marks
-	for _, ipt := range []iptablesInterface{i.ipt4, i.ipt6} {
+	for _, ipt := range i.getTables() {
 		args := []string{
 			"-m", "conntrack",
 			"--ctstate", "NEW",
@@ -587,7 +587,7 @@ func (i *iptablesRunner) AddConnmarkSaveRule() error {
 
 // DelConnmarkSaveRule removes conntrack marking rules added by AddConnmarkSaveRule.
 func (i *iptablesRunner) DelConnmarkSaveRule() error {
-	for _, ipt := range []iptablesInterface{i.ipt4, i.ipt6} {
+	for _, ipt := range i.getTables() {
 		// Delete PREROUTING rule
 		args := []string{
 			"-m", "conntrack",
