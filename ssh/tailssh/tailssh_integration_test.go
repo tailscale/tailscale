@@ -32,7 +32,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
-	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
@@ -629,28 +628,6 @@ type testBackend struct {
 	localUser       string
 	forceV1Behavior bool
 	allowSendEnv    bool
-}
-
-func (tb *testBackend) GetSSH_HostKeys() ([]gossh.Signer, error) {
-	var result []gossh.Signer
-	var priv any
-	var err error
-	const keySize = 2048
-	priv, err = rsa.GenerateKey(rand.Reader, keySize)
-	if err != nil {
-		return nil, err
-	}
-	mk, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		return nil, err
-	}
-	hostKey := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mk})
-	signer, err := gossh.ParsePrivateKey(hostKey)
-	if err != nil {
-		return nil, err
-	}
-	result = append(result, signer)
-	return result, nil
 }
 
 func (tb *testBackend) ShouldRunSSH() bool {

@@ -5646,10 +5646,12 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 		// TODO(bradfitz): this is called with b.mu held. Not ideal.
 		// If the filesystem gets wedged or something we could block for
 		// a long time. But probably fine.
-		var err error
-		sshHostKeys, err = b.getSSHHostKeyPublicStrings()
-		if err != nil {
-			b.logf("warning: unable to get SSH host keys, SSH will appear as disabled for this node: %v", err)
+		if f, ok := feature.HookGetSSHHostKeyPublicStrings.GetOk(); ok {
+			var err error
+			sshHostKeys, err = f(b.TailscaleVarRoot(), b.logf)
+			if err != nil {
+				b.logf("warning: unable to get SSH host keys, SSH will appear as disabled for this node: %v", err)
+			}
 		}
 	}
 	hi.SSH_HostKeys = sshHostKeys
@@ -6439,9 +6441,9 @@ func (b *LocalBackend) maybeSentHostinfoIfChangedLocked(prefs ipn.PrefsView) {
 	}
 }
 
-// operatorUserName returns the current pref's OperatorUser's name, or the
+// OperatorUserName returns the current pref's OperatorUser's name, or the
 // empty string if none.
-func (b *LocalBackend) operatorUserName() string {
+func (b *LocalBackend) OperatorUserName() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	prefs := b.pm.CurrentPrefs()
@@ -6454,7 +6456,7 @@ func (b *LocalBackend) operatorUserName() string {
 // OperatorUserID returns the current pref's OperatorUser's ID (in
 // os/user.User.Uid string form), or the empty string if none.
 func (b *LocalBackend) OperatorUserID() string {
-	opUserName := b.operatorUserName()
+	opUserName := b.OperatorUserName()
 	if opUserName == "" {
 		return ""
 	}

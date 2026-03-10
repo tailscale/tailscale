@@ -67,6 +67,11 @@ func TPMAvailable() bool {
 	return false
 }
 
+// HookGetSSHHostKeyPublicStrings is a hook for the ssh/hostkeys package to
+// provide SSH host key public strings to ipn/ipnlocal without ipnlocal needing
+// to import golang.org/x/crypto/ssh.
+var HookGetSSHHostKeyPublicStrings Hook[func(varRoot string, logf logger.Logf) ([]string, error)]
+
 // HookHardwareAttestationAvailable is a hook that reports whether hardware
 // attestation is supported and available.
 var HookHardwareAttestationAvailable Hook[func() bool]

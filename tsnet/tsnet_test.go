@@ -2631,6 +2631,10 @@ func TestDeps(t *testing.T) {
 	deptest.DepChecker{
 		GOOS:   "linux",
 		GOARCH: "amd64",
+		BadDeps: map[string]string{
+			"golang.org/x/crypto/ssh":                       "tsnet should not depend on SSH",
+			"golang.org/x/crypto/ssh/internal/bcrypt_pbkdf": "tsnet should not depend on SSH",
+		},
 		OnDep: func(dep string) {
 			if strings.Contains(dep, "portlist") {
 				t.Errorf("unexpected dep: %q", dep)
