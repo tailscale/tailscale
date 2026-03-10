@@ -265,6 +265,13 @@ type Config struct {
 	// Conn25PacketHooks, if non-nil, is used to hook packets for Connectors 2025
 	// app connector handling logic.
 	Conn25PacketHooks Conn25PacketHooks
+
+	// ForceDiscoKey, if non-zero, forces the use of a specific disco
+	// private key. This should only be used for special cases and
+	// experiments, not for production. The recommended normal path is to
+	// leave it zero, in which case a new disco key is generated per
+	// Tailscale start and kept only in memory.
+	ForceDiscoKey key.DiscoPrivate
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.
@@ -433,6 +440,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		Metrics:        conf.Metrics,
 		ControlKnobs:   conf.ControlKnobs,
 		PeerByKeyFunc:  e.PeerByKey,
+		ForceDiscoKey:  conf.ForceDiscoKey,
 	}
 	if buildfeatures.HasLazyWG {
 		magicsockOpts.NoteRecvActivity = e.noteRecvActivity
