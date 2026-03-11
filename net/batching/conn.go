@@ -19,14 +19,24 @@ var (
 	_ ipv6.Message = ipv4.Message{}
 )
 
-// Conn is a nettype.PacketConn that provides batched i/o using
+// Conn is a [nettype.PacketConn] that provides batched i/o using
 // platform-specific optimizations, e.g. {recv,send}mmsg & UDP GSO/GRO.
+//
+// Conn does not support single packet reads (see ReadFromUDPAddrPort docs). It
+// is the caller's responsibility to use the appropriate read API where a
+// [nettype.PacketConn] has been upgraded to support batched i/o.
 //
 // Conn originated from (and is still used by) magicsock where its API was
 // strongly influenced by [wireguard-go/conn.Bind] constraints, namely
 // wireguard-go's ownership of packet memory.
 type Conn interface {
 	nettype.PacketConn
+	// ReadFromUDPAddrPort always returns an error, as UDP GRO is incompatible
+	// with single packet reads. A single datagram may be multiple, coalesced
+	// datagrams, and this API lacks the ability to pass that context.
+	//
+	// TODO: consider detaching Conn from [nettype.PacketConn]
+	ReadFromUDPAddrPort([]byte) (int, netip.AddrPort, error)
 	// ReadBatch reads messages from [Conn] into msgs. It returns the number of
 	// messages the caller should evaluate for nonzero len, as a zero len
 	// message may fall on either side of a nonzero.
