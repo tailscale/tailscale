@@ -180,7 +180,8 @@ type CapabilityVersion int
 //   - 131: 2025-11-25: client respects [NodeAttrDefaultAutoUpdate]
 //   - 132: 2026-02-13: client respects [NodeAttrDisableHostsFileUpdates]
 //   - 133: 2026-02-17: client understands [NodeAttrForceRegisterMagicDNSIPv4Only]; MagicDNS IPv6 registered w/ OS by default
-const CurrentCapabilityVersion CapabilityVersion = 133
+//   - 134: 2026-03-09: Client understands [NodeAttrDisableAndroidBindToActiveNetwork]
+const CurrentCapabilityVersion CapabilityVersion = 134
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2462,6 +2463,12 @@ const (
 	// sockets (in the net/netns package). See that package for more
 	// details on the behaviour of this capability.
 	CapabilityBindToInterfaceByRoute NodeCapability = "https://tailscale.com/cap/bind-to-interface-by-route"
+
+	// NodeAttrDisableAndroidBindToActiveNetwork disables binding sockets to the
+	// currently active network on Android, which is enabled by default.
+	// This allows the control plane to turn off the behavior if it causes
+	// problems.
+	NodeAttrDisableAndroidBindToActiveNetwork NodeCapability = "disable-android-bind-to-active-network"
 
 	// CapabilityDebugDisableAlternateDefaultRouteInterface changes how Darwin
 	// nodes get the default interface. There is an optional hook (used by the
