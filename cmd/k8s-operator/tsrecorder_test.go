@@ -285,7 +285,7 @@ func expectRecorderResources(t *testing.T, fc client.WithWatch, tsr *tsapi.Recor
 	}
 
 	for replica := range replicas {
-		auth := tsrAuthSecret(tsr, tsNamespace, "secret-authkey", replica)
+		auth := tsrAuthSecret(tsr, tsNamespace, "new-authkey", replica)
 		state := tsrStateSecret(tsr, tsNamespace, replica)
 
 		if shouldExist {
