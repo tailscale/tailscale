@@ -14,9 +14,12 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/ingressservices"
@@ -26,8 +29,10 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/backoff"
-	"tailscale.com/util/set"
 )
+
+const fieldManager = "tailscale-container"
+const kubeletMountedConfigLn = "..data"
 
 // kubeClient is a wrapper around Tailscale's internal kube client that knows how to talk to the kube API server. We use
 // this rather than any of the upstream Kubernetes client libaries to avoid extra imports.
@@ -46,7 +51,7 @@ func newKubeClient(root string, stateSecret string) (*kubeClient, error) {
 	var err error
 	kc, err := kubeclient.New("tailscale-container")
 	if err != nil {
-		return nil, fmt.Errorf("Error creating kube client: %w", err)
+		return nil, fmt.Errorf("error creating kube client: %w", err)
 	}
 	if (root != "/") || os.Getenv("TS_KUBERNETES_READ_API_SERVER_ADDRESS_FROM_ENV") == "true" {
 		// Derive the API server address from the environment variables
@@ -63,7 +68,7 @@ func (kc *kubeClient) storeDeviceID(ctx context.Context, deviceID tailcfg.Stable
 			kubetypes.KeyDeviceID: []byte(deviceID),
 		},
 	}
-	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, "tailscale-container")
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
 }
 
 // storeDeviceEndpoints writes device's tailnet IPs and MagicDNS name to fields 'device_ips', 'device_fqdn' of client's
@@ -84,7 +89,7 @@ func (kc *kubeClient) storeDeviceEndpoints(ctx context.Context, fqdn string, add
 			kubetypes.KeyDeviceIPs:  deviceIPs,
 		},
 	}
-	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, "tailscale-container")
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
 }
 
 // storeHTTPSEndpoint writes an HTTPS endpoint exposed by this device via 'tailscale serve' to the client's state
@@ -96,7 +101,7 @@ func (kc *kubeClient) storeHTTPSEndpoint(ctx context.Context, ep string) error {
 			kubetypes.KeyHTTPSEndpoint: []byte(ep),
 		},
 	}
-	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, "tailscale-container")
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
 }
 
 // deleteAuthKey deletes the 'authkey' field of the given kube
@@ -122,7 +127,7 @@ func (kc *kubeClient) deleteAuthKey(ctx context.Context) error {
 
 // resetContainerbootState resets state from previous runs of containerboot to
 // ensure the operator doesn't use stale state when a Pod is first recreated.
-func (kc *kubeClient) resetContainerbootState(ctx context.Context, podUID string) error {
+func (kc *kubeClient) resetContainerbootState(ctx context.Context, podUID string, tailscaledConfigAuthkey string) error {
 	existingSecret, err := kc.GetSecret(ctx, kc.stateSecret)
 	switch {
 	case kubeclient.IsNotFoundErr(err):
@@ -131,32 +136,135 @@ func (kc *kubeClient) resetContainerbootState(ctx context.Context, podUID string
 	case err != nil:
 		return fmt.Errorf("failed to read state Secret %q to reset state: %w", kc.stateSecret, err)
 	}
+
 	s := &kubeapi.Secret{
 		Data: map[string][]byte{
 			kubetypes.KeyCapVer: fmt.Appendf(nil, "%d", tailcfg.CurrentCapabilityVersion),
+
+			// TODO(tomhjp): Perhaps shouldn't clear device ID and use a different signal, as this could leak tailnet devices.
+			kubetypes.KeyDeviceID:            nil,
+			kubetypes.KeyDeviceFQDN:          nil,
+			kubetypes.KeyDeviceIPs:           nil,
+			kubetypes.KeyHTTPSEndpoint:       nil,
+			egressservices.KeyEgressServices: nil,
+			ingressservices.IngressConfigKey: nil,
 		},
 	}
 	if podUID != "" {
 		s.Data[kubetypes.KeyPodUID] = []byte(podUID)
 	}
 
-	toClear := set.SetOf([]string{
-		kubetypes.KeyDeviceID,
-		kubetypes.KeyDeviceFQDN,
-		kubetypes.KeyDeviceIPs,
-		kubetypes.KeyHTTPSEndpoint,
-		egressservices.KeyEgressServices,
-		ingressservices.IngressConfigKey,
-	})
-	for key := range existingSecret.Data {
-		if toClear.Contains(key) {
-			// It's fine to leave the key in place as a debugging breadcrumb,
-			// it should get a new value soon.
-			s.Data[key] = nil
-		}
+	// Only clear reissue_authkey if the operator has actioned it.
+	brokenAuthkey, ok := existingSecret.Data[kubetypes.KeyReissueAuthkey]
+	if ok && tailscaledConfigAuthkey != "" && string(brokenAuthkey) != tailscaledConfigAuthkey {
+		s.Data[kubetypes.KeyReissueAuthkey] = nil
 	}
 
-	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, "tailscale-container")
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
+}
+
+func (kc *kubeClient) setAndWaitForAuthKeyReissue(ctx context.Context, client *local.Client, cfg *settings, tailscaledConfigAuthKey string) error {
+	err := client.DisconnectControl(ctx)
+	if err != nil {
+		return fmt.Errorf("error disconnecting from control: %w", err)
+	}
+
+	err = kc.setReissueAuthKey(ctx, tailscaledConfigAuthKey)
+	if err != nil {
+		return fmt.Errorf("failed to set reissue_authkey in Kubernetes Secret: %w", err)
+	}
+
+	err = kc.waitForAuthKeyReissue(ctx, cfg.TailscaledConfigFilePath, tailscaledConfigAuthKey, 10*time.Minute)
+	if err != nil {
+		return fmt.Errorf("failed to receive new auth key: %w", err)
+	}
+
+	return nil
+}
+
+func (kc *kubeClient) setReissueAuthKey(ctx context.Context, authKey string) error {
+	s := &kubeapi.Secret{
+		Data: map[string][]byte{
+			kubetypes.KeyReissueAuthkey: []byte(authKey),
+		},
+	}
+
+	log.Printf("Requesting a new auth key from operator")
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
+}
+
+func (kc *kubeClient) waitForAuthKeyReissue(ctx context.Context, configPath string, oldAuthKey string, maxWait time.Duration) error {
+	log.Printf("Waiting for operator to provide new auth key (max wait: %v)", maxWait)
+
+	ctx, cancel := context.WithTimeout(ctx, maxWait)
+	defer cancel()
+
+	tailscaledCfgDir := filepath.Dir(configPath)
+	toWatch := filepath.Join(tailscaledCfgDir, kubeletMountedConfigLn)
+
+	var (
+		pollTicker <-chan time.Time
+		eventChan  <-chan fsnotify.Event
+	)
+
+	pollInterval := 5 * time.Second
+
+	// Try to use fsnotify for faster notification
+	if w, err := fsnotify.NewWatcher(); err != nil {
+		log.Printf("auth key reissue: fsnotify unavailable, using polling: %v", err)
+	} else if err := w.Add(tailscaledCfgDir); err != nil {
+		w.Close()
+		log.Printf("auth key reissue: fsnotify watch failed, using polling: %v", err)
+	} else {
+		defer w.Close()
+		log.Printf("auth key reissue: watching for config changes via fsnotify")
+		eventChan = w.Events
+	}
+
+	// still keep polling if using fsnotify, for logging and in case fsnotify fails
+	pt := time.NewTicker(pollInterval)
+	defer pt.Stop()
+	pollTicker = pt.C
+
+	start := time.Now()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for auth key reissue after %v", maxWait)
+		case <-pollTicker: // Waits for polling tick, continues when received
+		case event := <-eventChan:
+			if event.Name != toWatch {
+				continue
+			}
+		}
+
+		newAuthKey := authkeyFromTailscaledConfig(configPath)
+		if newAuthKey != "" && newAuthKey != oldAuthKey {
+			log.Printf("New auth key received from operator after %v", time.Since(start).Round(time.Second))
+
+			if err := kc.clearReissueAuthKeyRequest(ctx); err != nil {
+				log.Printf("Warning: failed to clear reissue request: %v", err)
+			}
+
+			return nil
+		}
+
+		if eventChan == nil && pollTicker != nil {
+			log.Printf("Waiting for new auth key from operator (%v elapsed)", time.Since(start).Round(time.Second))
+		}
+	}
+}
+
+// clearReissueAuthKeyRequest removes the reissue_authkey marker from the Secret
+// to signal to the operator that we've successfully received the new key.
+func (kc *kubeClient) clearReissueAuthKeyRequest(ctx context.Context) error {
+	s := &kubeapi.Secret{
+		Data: map[string][]byte{
+			kubetypes.KeyReissueAuthkey: nil,
+		},
+	}
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
 }
 
 // waitForConsistentState waits for tailscaled to finish writing state if it
