@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	tsclient "tailscale.com/client/tailscale"
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	operatorutils "tailscale.com/k8s-operator"
@@ -76,6 +77,9 @@ type (
 		Devices(context.Context, *tailscale.DeviceFieldsOpts) ([]*tailscale.Device, error)
 		Keys(ctx context.Context) ([]string, error)
 		ListVIPServices(ctx context.Context) (*tailscale.VIPServiceList, error)
+		ACL(ctx context.Context) (*tsclient.ACL, error)
+		SetACL(ctx context.Context, acl tsclient.ACL, avoidCollisions bool) (*tsclient.ACL, error)
+		ValidateACL(ctx context.Context, policy tsclient.ACLDetails) (*tsclient.ACLTestError, error)
 	}
 )
 
@@ -239,7 +243,13 @@ func (r *Reconciler) createClient(ctx context.Context, tailnet *tsapi.Tailnet, s
 	if r.clientFunc != nil {
 		return r.clientFunc(tailnet, secret)
 	}
+	return ClientFromCredentials(tailnet, secret)
+}
 
+// ClientFromCredentials builds a TailscaleClient from a Tailnet resource and its
+// OAuth Secret. Used by the tailnet reconciler and by other reconcilers (e.g. ACL)
+// that need to call the Tailscale API for a given Tailnet.
+func ClientFromCredentials(tailnet *tsapi.Tailnet, secret *corev1.Secret) TailscaleClient {
 	baseURL := ipn.DefaultControlURL
 	if tailnet.Spec.LoginURL != "" {
 		baseURL = tailnet.Spec.LoginURL
@@ -251,8 +261,8 @@ func (r *Reconciler) createClient(ctx context.Context, tailnet *tsapi.Tailnet, s
 		TokenURL:     baseURL + "/api/v2/oauth/token",
 	}
 
-	source := credentials.TokenSource(ctx)
-	httpClient := oauth2.NewClient(ctx, source)
+	source := credentials.TokenSource(context.Background())
+	httpClient := oauth2.NewClient(context.Background(), source)
 
 	tsClient := tailscale.NewClient("-", nil)
 	tsClient.UserAgent = "tailscale-k8s-operator"
