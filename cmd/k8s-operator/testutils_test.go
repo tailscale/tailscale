@@ -529,7 +529,7 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 		AcceptDNS:           "false",
 		Hostname:            &opts.hostname,
 		Locked:              "false",
-		AuthKey:             new("secret-authkey"),
+		AuthKey:             new("new-authkey"),
 		AcceptRoutes:        "false",
 		AppConnector:        &ipn.AppConnectorPrefs{Advertise: false},
 		NoStatefulFiltering: "true",
@@ -859,7 +859,7 @@ func (c *fakeTSClient) CreateKey(ctx context.Context, caps tailscale.KeyCapabili
 		Created:      time.Now(),
 		Capabilities: caps,
 	}
-	return "secret-authkey", k, nil
+	return "new-authkey", k, nil
 }
 
 func (c *fakeTSClient) Device(ctx context.Context, deviceID string, fields *tailscale.DeviceFieldsOpts) (*tailscale.Device, error) {

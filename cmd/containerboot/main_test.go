@@ -32,6 +32,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/sys/unix"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubeclient"
@@ -40,6 +41,8 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/netmap"
 )
+
+const configFileAuthKey = "some-auth-key"
 
 func TestContainerBoot(t *testing.T) {
 	boot := filepath.Join(t.TempDir(), "containerboot")
@@ -76,6 +79,10 @@ func TestContainerBoot(t *testing.T) {
 		// Update the kube secret with these keys/values at the beginning of the
 		// phase (simulates our fake tailscaled doing it).
 		UpdateKubeSecret map[string]string
+
+		// Update files with these paths/contents at the beginning of the phase
+		// (simulates the operator updating mounted config files).
+		UpdateFiles map[string]string
 
 		// WantFiles files that should exist in the container and their
 		// contents.
@@ -781,6 +788,127 @@ func TestContainerBoot(t *testing.T) {
 				},
 			}
 		},
+		"sets_reissue_authkey_if_needs_login": func(env *testEnv) testCase {
+			newAuthKey := "new-reissued-auth-key"
+			return testCase{
+				Env: map[string]string{
+					"TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR": filepath.Join(env.d, "etc/tailscaled/"),
+					"KUBERNETES_SERVICE_HOST":              env.kube.Host,
+					"KUBERNETES_SERVICE_PORT_HTTPS":        env.kube.Port,
+				},
+				Phases: []phase{
+					{
+						UpdateFiles: map[string]string{
+							"etc/tailscaled/..data": "",
+						},
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking --config=/etc/tailscaled/cap-95.hujson",
+						},
+						WantKubeSecret: map[string]string{
+							kubetypes.KeyCapVer: capver,
+						},
+					}, {
+						Notify: &ipn.Notify{
+							State: new(ipn.NeedsLogin),
+						},
+						WantKubeSecret: map[string]string{
+							kubetypes.KeyCapVer:         capver,
+							kubetypes.KeyReissueAuthkey: configFileAuthKey,
+						},
+						WantLog: "watching for config changes via fsnotify",
+					}, {
+						UpdateFiles: map[string]string{
+							"etc/tailscaled/cap-95.hujson": fmt.Sprintf(`{"Version":"alpha0","AuthKey":"%s"}`, newAuthKey),
+							"etc/tailscaled/..data":        "updated",
+						},
+						WantKubeSecret: map[string]string{
+							kubetypes.KeyCapVer: capver,
+						},
+						WantExitCode: new(0),
+						WantLog:      "Successfully received new auth key, restarting to apply configuration",
+					},
+				},
+			}
+		},
+		"sets_reissue_authkey_if_auth_fails": func(env *testEnv) testCase {
+			newAuthKey := "new-reissued-auth-key"
+			return testCase{
+				Env: map[string]string{
+					"TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR": filepath.Join(env.d, "etc/tailscaled/"),
+					"KUBERNETES_SERVICE_HOST":              env.kube.Host,
+					"KUBERNETES_SERVICE_PORT_HTTPS":        env.kube.Port,
+				},
+				Phases: []phase{
+					{
+						UpdateFiles: map[string]string{
+							"etc/tailscaled/..data": "",
+						},
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking --config=/etc/tailscaled/cap-95.hujson",
+						},
+						WantKubeSecret: map[string]string{
+							kubetypes.KeyCapVer: capver,
+						},
+					}, {
+						Notify: &ipn.Notify{
+							Health: &health.State{
+								Warnings: map[health.WarnableCode]health.UnhealthyState{
+									health.LoginStateWarnable.Code: {},
+								},
+							},
+						},
+						WantKubeSecret: map[string]string{
+							kubetypes.KeyCapVer:         capver,
+							kubetypes.KeyReissueAuthkey: configFileAuthKey,
+						},
+						WantLog: "watching for config changes via fsnotify",
+					}, {
+						UpdateFiles: map[string]string{
+							"etc/tailscaled/cap-95.hujson": fmt.Sprintf(`{"Version":"alpha0","AuthKey":"%s"}`, newAuthKey),
+							"etc/tailscaled/..data":        "updated",
+						},
+						WantKubeSecret: map[string]string{
+							kubetypes.KeyCapVer: capver,
+						},
+						WantExitCode: new(0),
+						WantLog:      "Successfully received new auth key, restarting to apply configuration",
+					},
+				},
+			}
+		},
+		"clears_reissue_authkey_on_change": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR": filepath.Join(env.d, "etc/tailscaled/"),
+					"KUBERNETES_SERVICE_HOST":              env.kube.Host,
+					"KUBERNETES_SERVICE_PORT_HTTPS":        env.kube.Port,
+				},
+				KubeSecret: map[string]string{
+					kubetypes.KeyReissueAuthkey: "some-older-authkey",
+					"foo":                       "bar", // Check not everything is cleared.
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking --config=/etc/tailscaled/cap-95.hujson",
+						},
+						WantKubeSecret: map[string]string{
+							kubetypes.KeyCapVer: capver,
+							"foo":               "bar",
+						},
+					}, {
+						Notify: runningNotify,
+						WantKubeSecret: map[string]string{
+							kubetypes.KeyCapVer:     capver,
+							"foo":                   "bar",
+							kubetypes.KeyDeviceFQDN: "test-node.test.ts.net.",
+							kubetypes.KeyDeviceID:   "myID",
+							kubetypes.KeyDeviceIPs:  `["100.64.0.1"]`,
+						},
+					},
+				},
+			}
+		},
 		"metrics_enabled": func(env *testEnv) testCase {
 			return testCase{
 				Env: map[string]string{
@@ -1134,18 +1262,21 @@ func TestContainerBoot(t *testing.T) {
 				for k, v := range p.UpdateKubeSecret {
 					env.kube.SetSecret(k, v)
 				}
+				for path, content := range p.UpdateFiles {
+					fullPath := filepath.Join(env.d, path)
+					if err := os.WriteFile(fullPath, []byte(content), 0700); err != nil {
+						t.Fatalf("phase %d: updating file %q: %v", i, path, err)
+					}
+					// Explicitly update mtime to ensure fsnotify detects the change.
+					// Without this, file operations can be buffered and fsnotify events may not trigger.
+					now := time.Now()
+					if err := os.Chtimes(fullPath, now, now); err != nil {
+						t.Fatalf("phase %d: updating mtime for %q: %v", i, path, err)
+					}
+				}
 				env.lapi.Notify(p.Notify)
 				if p.Signal != nil {
 					cmd.Process.Signal(*p.Signal)
-				}
-				if p.WantLog != "" {
-					err := tstest.WaitFor(2*time.Second, func() error {
-						waitLogLine(t, time.Second, cbOut, p.WantLog)
-						return nil
-					})
-					if err != nil {
-						t.Fatal(err)
-					}
 				}
 
 				if p.WantExitCode != nil {
@@ -1156,14 +1287,19 @@ func TestContainerBoot(t *testing.T) {
 					if state.ExitCode() != *p.WantExitCode {
 						t.Fatalf("phase %d: want exit code %d, got %d", i, *p.WantExitCode, state.ExitCode())
 					}
-
-					// Early test return, we don't expect the successful startup log message.
-					return
 				}
 
-				wantCmds = append(wantCmds, p.WantCmds...)
-				waitArgs(t, 2*time.Second, env.d, env.argFile, strings.Join(wantCmds, "\n"))
-				err := tstest.WaitFor(2*time.Second, func() error {
+				if p.WantLog != "" {
+					err := tstest.WaitFor(5*time.Second, func() error {
+						waitLogLine(t, 5*time.Second, cbOut, p.WantLog)
+						return nil
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+
+				err := tstest.WaitFor(5*time.Second, func() error {
 					if p.WantKubeSecret != nil {
 						got := env.kube.Secret()
 						if diff := cmp.Diff(got, p.WantKubeSecret); diff != "" {
@@ -1180,6 +1316,16 @@ func TestContainerBoot(t *testing.T) {
 				if err != nil {
 					t.Fatalf("test: %q phase %d: %v", name, i, err)
 				}
+
+				// if we provide a wanted exit code, we expect that the process is finished,
+				// so should return from the test.
+				if p.WantExitCode != nil {
+					return
+				}
+
+				wantCmds = append(wantCmds, p.WantCmds...)
+				waitArgs(t, 2*time.Second, env.d, env.argFile, strings.Join(wantCmds, "\n"))
+
 				err = tstest.WaitFor(2*time.Second, func() error {
 					for path, want := range p.WantFiles {
 						gotBs, err := os.ReadFile(filepath.Join(env.d, path))
@@ -1393,6 +1539,13 @@ func (lc *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 			panic(fmt.Sprintf("unsupported method %q", r.Method))
 		}
+	// In the localAPI ServeHTTP method
+	case "/localapi/v0/disconnect-control":
+		if r.Method != "POST" {
+			panic(fmt.Sprintf("unsupported method %q", r.Method))
+		}
+		w.WriteHeader(http.StatusOK)
+		return
 	default:
 		panic(fmt.Sprintf("unsupported path %q", r.URL.Path))
 	}
@@ -1591,7 +1744,11 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 				panic(fmt.Sprintf("json decode failed: %v. Body:\n\n%s", err, string(bs)))
 			}
 			for key, val := range req.Data {
-				k.secret[key] = string(val)
+				if val == nil {
+					delete(k.secret, key)
+				} else {
+					k.secret[key] = string(val)
+				}
 			}
 		default:
 			panic(fmt.Sprintf("unknown content type %q", r.Header.Get("Content-Type")))
@@ -1659,7 +1816,7 @@ func newTestEnv(t *testing.T) testEnv {
 	kube.Start(t)
 	t.Cleanup(kube.Close)
 
-	tailscaledConf := &ipn.ConfigVAlpha{AuthKey: new("foo"), Version: "alpha0"}
+	tailscaledConf := &ipn.ConfigVAlpha{AuthKey: new(configFileAuthKey), Version: "alpha0"}
 	serveConf := ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}}}
 	serveConfWithServices := ipn.ServeConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
