@@ -82,7 +82,8 @@ type Direct struct {
 	debugFlags            []string
 	skipIPForwardingCheck bool
 	pinger                Pinger
-	popBrowser            func(url string)    // or nil
+	popBrowser            func(url string) // or nil
+	onDisableLogTail      func()          // or nil; called when control sends DisableLogTail
 	polc                  policyclient.Client // always non-nil
 	c2nHandler            http.Handler        // or nil
 	panicOnUse            bool                // if true, panic if client is used (for testing)
@@ -180,6 +181,13 @@ type Options struct {
 	// attempted. It is used to allow the client to clean up any resources or complete any
 	// tasks that are dependent on a live client.
 	Shutdown func()
+
+	// OnDisableLogTail, if non-nil, is called when the control plane
+	// requests logging to be disabled via MapResponse.Debug.DisableLogTail.
+	// This is primarily used by Headscale. The callback allows the caller
+	// (e.g., LocalBackend) to track this state per-instance rather than
+	// relying on global state.
+	OnDisableLogTail func()
 }
 
 // ControlDialPlanner is the interface optionally supplied when creating a
@@ -323,6 +331,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		pinger:                opts.Pinger,
 		polc:                  cmp.Or(opts.PolicyClient, policyclient.Client(policyclient.NoPolicyClient{})),
 		popBrowser:            opts.PopBrowserURL,
+		onDisableLogTail:      opts.OnDisableLogTail,
 		c2nHandler:            opts.C2NHandler,
 		dialer:                opts.Dialer,
 		dnsCache:              dnsCache,
@@ -1252,7 +1261,9 @@ func (c *Direct) handleDebugMessage(ctx context.Context, debug *tailcfg.Debug) e
 	}
 	if buildfeatures.HasLogTail && debug.DisableLogTail {
 		logtail.Disable()
-		envknob.SetNoLogsNoSupport()
+		if c.onDisableLogTail != nil {
+			c.onDisableLogTail()
+		}
 	}
 	if sleep := time.Duration(debug.SleepSeconds * float64(time.Second)); sleep > 0 {
 		if err := sleepAsRequested(ctx, c.logf, sleep, c.clock); err != nil {

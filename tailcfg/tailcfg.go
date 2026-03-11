@@ -2326,8 +2326,11 @@ type Debug struct {
 	// state machine.
 	SleepSeconds float64 `json:",omitempty"`
 
-	// DisableLogTail disables the logtail package. Once disabled it can't be
-	// re-enabled for the lifetime of the process.
+	// DisableLogTail disables the logtail package. When set by the control
+	// plane, logging is automatically re-enabled when switching to a
+	// different control server. When set by the user (via CLI flag or
+	// environment variable), it cannot be re-enabled for the lifetime of
+	// the process.
 	//
 	// This is primarily used by Headscale.
 	DisableLogTail bool `json:",omitempty"`

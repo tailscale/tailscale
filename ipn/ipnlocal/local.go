@@ -54,6 +54,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
+	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
@@ -214,7 +215,14 @@ type LocalBackend struct {
 	// Tailscale on port 5252.
 	exposeRemoteWebClientAtomicBool atomic.Bool // TODO(nickkhyl): move to nodeBackend
 	shutdownCalled                  bool        // if Shutdown has been called
-	debugSink                       packet.CaptureSink
+	// noLogsFromControl tracks whether the current control plane has
+	// requested logging to be disabled via MapResponse.Debug.DisableLogTail.
+	// This is primarily set by Headscale. It follows the control client's
+	// lifecycle: it is cleared when switching profiles or control servers.
+	// The global envknob.NoLogsNoSupport (user-set via CLI/env) always
+	// takes precedence over this per-instance flag.
+	noLogsFromControl atomic.Bool
+	debugSink         packet.CaptureSink
 	sockstatLogger                  *sockstatlog.Logger
 
 	// getTCPHandlerForFunnelFlow returns a handler for an incoming TCP flow for
@@ -1780,8 +1788,18 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 
 	// Now complete the lock-free parts of what we started while locked.
 	if st.NetMap != nil {
-		if envknob.NoLogsNoSupport() && st.NetMap.HasCap(tailcfg.CapabilityDataPlaneAuditLogs) {
-			msg := "tailnet requires logging to be enabled. Remove --no-logs-no-support from tailscaled command line."
+		if b.NoLogsNoSupport() && st.NetMap.HasCap(tailcfg.CapabilityDataPlaneAuditLogs) {
+			var msg string
+			if envknob.NoLogsNoSupport() {
+				msg = "This tailnet requires logging to be enabled. " +
+					"Tailscale is running with logging explicitly disabled " +
+					"(via --no-logs-no-support or TS_NO_LOGS_NO_SUPPORT). " +
+					"Restart Tailscale without this setting to connect to this tailnet."
+			} else {
+				msg = "This tailnet requires logging to be enabled. " +
+					"Logging was disabled by the control server. " +
+					"Restart Tailscale to connect to this tailnet."
+			}
 			b.health.SetLocalLogConfigHealth(errors.New(msg))
 			// Get the current prefs again, since we unlocked above.
 			prefs := b.pm.CurrentPrefs().AsStruct()
@@ -2607,6 +2625,16 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		c2nHandler = http.HandlerFunc(b.handleC2N)
 	}
 
+	// If no-logs-no-support was set by the previous control plane
+	// (e.g., Headscale's DisableLogTail), clear it before connecting to
+	// the new control server. If the new control plane also wants logging
+	// disabled, it will send DisableLogTail in its first MapResponse.
+	// The global user-set flag (envknob) always takes precedence.
+	if b.noLogsFromControl.Swap(false) && !envknob.NoLogsNoSupport() {
+		logtail.Enable()
+		b.logf("re-enabled logtail; was disabled by previous control server")
+	}
+
 	// TODO(apenwarr): The only way to change the ServerURL is to
 	// re-run b.Start, because this is the only place we create a
 	// new controlclient. EditPrefs allows you to overwrite ServerURL,
@@ -2625,6 +2653,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		PolicyClient:         b.sys.PolicyClientOrDefault(),
 		Pinger:               b,
 		PopBrowserURL:        b.tellClientToBrowseToURL,
+		OnDisableLogTail:     func() { b.noLogsFromControl.Store(true) },
 		Dialer:               b.Dialer(),
 		Observer:             b,
 		C2NHandler:           c2nHandler,
@@ -4206,6 +4235,14 @@ func (b *LocalBackend) isDefaultServerLocked() bool {
 	return prefs.ControlURLOrDefault(b.polc) == ipn.DefaultControlURL
 }
 
+// NoLogsNoSupport reports whether logging is effectively disabled for this
+// LocalBackend instance, either by the user (CLI flag or environment variable)
+// or by the current control plane (via MapResponse.Debug.DisableLogTail).
+// The global user-set flag always takes precedence.
+func (b *LocalBackend) NoLogsNoSupport() bool {
+	return envknob.NoLogsNoSupport() || b.noLogsFromControl.Load()
+}
+
 func (b *LocalBackend) checkExitNodePrefsLocked(p *ipn.Prefs) error {
 	tryingToUseExitNode := p.ExitNodeIP.IsValid() || p.ExitNodeID != ""
 	if !tryingToUseExitNode {
@@ -5636,6 +5673,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.RequestTags = prefs.AdvertiseTags().AsSlice()
 	hi.ShieldsUp = prefs.ShieldsUp()
 	hi.AllowsUpdate = buildfeatures.HasClientUpdate && (envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true))
+	hi.NoLogsNoSupport = b.NoLogsNoSupport()
 
 	if buildfeatures.HasAdvertiseRoutes {
 		b.metrics.advertisedRoutes.Set(float64(tsaddr.WithoutExitRoute(prefs.AdvertiseRoutes()).Len()))
