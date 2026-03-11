@@ -61,16 +61,7 @@ type linuxBatchingConn struct {
 }
 
 func (c *linuxBatchingConn) ReadFromUDPAddrPort(p []byte) (n int, addr netip.AddrPort, err error) {
-	if c.rxOffload {
-		// UDP_GRO is opt-in on Linux via setsockopt(). Once enabled you may
-		// receive a "monster datagram" from any read call. The ReadFrom() API
-		// does not support passing the GSO size and is unsafe to use in such a
-		// case. Other platforms may vary in behavior, but we go with the most
-		// conservative approach to prevent this from becoming a footgun in the
-		// future.
-		return 0, netip.AddrPort{}, errors.New("rx UDP offload is enabled on this socket, single packet reads are unavailable")
-	}
-	return c.pc.ReadFromUDPAddrPort(p)
+	return 0, netip.AddrPort{}, errors.New("single packet reads are unsupported")
 }
 
 func (c *linuxBatchingConn) SetDeadline(t time.Time) error {
