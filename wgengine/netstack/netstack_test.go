@@ -453,6 +453,194 @@ func TestShouldProcessInbound(t *testing.T) {
 			},
 			want: false,
 		},
+		{
+			name: "udp-on-service-vip-with-listener-ipv4",
+			pkt: &packet.Parsed{
+				IPVersion: 4,
+				IPProto:   ipproto.UDP,
+				Src:       netip.MustParseAddrPort("100.101.102.103:1234"),
+				Dst:       netip.MustParseAddrPort("100.100.100.100:8080"),
+			},
+			beforeStart: func(i *Impl) {
+				i.ProcessLocalIPs = false
+				i.ProcessSubnets = false
+			},
+			afterStart: func(i *Impl) {
+				IPServiceMap := netmap.IPServiceMappings{
+					serviceIP: "svc:test-service",
+				}
+				i.lb.SetIPServiceMappingsForTest(IPServiceMap)
+
+				i.atomicIsVIPServiceIPFunc.Store(func(addr netip.Addr) bool {
+					return addr == serviceIP
+				})
+
+				// Register the service VIP address on the NIC so gVisor can route to it
+				protocolAddr := tcpip.ProtocolAddress{
+					Protocol:          header.IPv4ProtocolNumber,
+					AddressWithPrefix: tcpip.AddrFrom4(serviceIP.As4()).WithPrefix(),
+				}
+
+				if err := i.ipstack.AddProtocolAddress(nicID, protocolAddr, stack.AddressProperties{}); err != nil {
+					t.Fatalf("AddProtocolAddress: %v", err)
+				}
+
+				// Create a UDP listener on the service VIP
+				pc, err := gonet.DialUDP(i.ipstack, &tcpip.FullAddress{
+					NIC:  nicID,
+					Addr: tcpip.AddrFrom4(serviceIP.As4()),
+					Port: 8080,
+				}, nil, header.IPv4ProtocolNumber)
+				if err != nil {
+					t.Fatalf("DialUDP: %v", err)
+				}
+				t.Cleanup(func() { pc.Close() })
+
+				i.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
+			},
+			want: true,
+		},
+		{
+			name: "udp-on-service-vip-no-listener-ipv4",
+			pkt: &packet.Parsed{
+				IPVersion: 4,
+				IPProto:   ipproto.UDP,
+				Src:       netip.MustParseAddrPort("100.101.102.103:1234"),
+				Dst:       netip.MustParseAddrPort("100.100.100.100:9999"),
+			},
+			beforeStart: func(i *Impl) {
+				i.ProcessLocalIPs = false
+				i.ProcessSubnets = false
+			},
+			afterStart: func(i *Impl) {
+				IPServiceMap := netmap.IPServiceMappings{
+					serviceIP: "svc:test-service",
+				}
+				i.lb.SetIPServiceMappingsForTest(IPServiceMap)
+
+				i.atomicIsVIPServiceIPFunc.Store(func(addr netip.Addr) bool {
+					return addr == serviceIP
+				})
+
+				i.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
+			},
+			want: false,
+		},
+		{
+			name: "udp-on-service-vip-with-listener-ipv6",
+			pkt: &packet.Parsed{
+				IPVersion: 6,
+				IPProto:   ipproto.UDP,
+				Src:       netip.MustParseAddrPort("[fd7a:115c:a1e0::1]:1234"),
+				Dst:       netip.MustParseAddrPort("[fd7a:115c:a1e0::53]:8080"),
+			},
+			beforeStart: func(i *Impl) {
+				i.ProcessLocalIPs = false
+				i.ProcessSubnets = false
+			},
+			afterStart: func(i *Impl) {
+				IPServiceMap := netmap.IPServiceMappings{
+					serviceIPv6: "svc:test-service",
+				}
+				i.lb.SetIPServiceMappingsForTest(IPServiceMap)
+
+				i.atomicIsVIPServiceIPFunc.Store(func(addr netip.Addr) bool {
+					return addr == serviceIPv6
+				})
+
+				protocolAddr := tcpip.ProtocolAddress{
+					Protocol:          header.IPv6ProtocolNumber,
+					AddressWithPrefix: tcpip.AddrFrom16(serviceIPv6.As16()).WithPrefix(),
+				}
+				if err := i.ipstack.AddProtocolAddress(nicID, protocolAddr, stack.AddressProperties{}); err != nil {
+					t.Fatalf("AddProtocolAddress: %v", err)
+				}
+
+				pc, err := gonet.DialUDP(i.ipstack, &tcpip.FullAddress{
+					NIC:  nicID,
+					Addr: tcpip.AddrFrom16(serviceIPv6.As16()),
+					Port: 8080,
+				}, nil, header.IPv6ProtocolNumber)
+				if err != nil {
+					t.Fatalf("DialUDP: %v", err)
+				}
+				t.Cleanup(func() { pc.Close() })
+
+				i.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
+			},
+			want: true,
+		},
+		{
+			name: "udp-on-service-vip-no-listener-ipv6",
+			pkt: &packet.Parsed{
+				IPVersion: 6,
+				IPProto:   ipproto.UDP,
+				Src:       netip.MustParseAddrPort("[fd7a:115c:a1e0::1]:1234"),
+				Dst:       netip.AddrPortFrom(serviceIPv6, 9999),
+			},
+			beforeStart: func(i *Impl) {
+				i.ProcessLocalIPs = false
+				i.ProcessSubnets = false
+			},
+			afterStart: func(i *Impl) {
+				IPServiceMap := netmap.IPServiceMappings{
+					serviceIPv6: "svc:test-service",
+				}
+				i.lb.SetIPServiceMappingsForTest(IPServiceMap)
+
+				i.atomicIsVIPServiceIPFunc.Store(func(addr netip.Addr) bool {
+					return addr == serviceIPv6
+				})
+
+				i.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
+			},
+			want: false,
+		},
+		{
+			name: "tcp-on-service-vip-with-udp-listener",
+			pkt: &packet.Parsed{
+				IPVersion: 4,
+				IPProto:   ipproto.TCP,
+				Src:       netip.MustParseAddrPort("100.101.102.103:1234"),
+				Dst:       netip.MustParseAddrPort("100.100.100.100:8080"), // serviceIP
+				TCPFlags:  packet.TCPSyn,
+			},
+			beforeStart: func(i *Impl) {
+				i.ProcessLocalIPs = false
+				i.ProcessSubnets = false
+			},
+			afterStart: func(i *Impl) {
+				IPServiceMap := netmap.IPServiceMappings{
+					serviceIP: "svc:test-service",
+				}
+				i.lb.SetIPServiceMappingsForTest(IPServiceMap)
+
+				i.atomicIsVIPServiceIPFunc.Store(func(addr netip.Addr) bool {
+					return addr == serviceIP
+				})
+
+				protocolAddr := tcpip.ProtocolAddress{
+					Protocol:          header.IPv4ProtocolNumber,
+					AddressWithPrefix: tcpip.AddrFrom4(serviceIP.As4()).WithPrefix(),
+				}
+				if err := i.ipstack.AddProtocolAddress(nicID, protocolAddr, stack.AddressProperties{}); err != nil {
+					t.Fatalf("AddProtocolAddress: %v", err)
+				}
+
+				pc, err := gonet.DialUDP(i.ipstack, &tcpip.FullAddress{
+					NIC:  nicID,
+					Addr: tcpip.AddrFrom4(serviceIP.As4()),
+					Port: 8080,
+				}, nil, header.IPv4ProtocolNumber)
+				if err != nil {
+					t.Fatalf("DialUDP: %v", err)
+				}
+				t.Cleanup(func() { pc.Close() })
+
+				i.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
+			},
+			want: false,
+		},
 
 		// TODO(andrew): test PeerAPI
 		// TODO(andrew): test TCP packets without the SYN flag set
