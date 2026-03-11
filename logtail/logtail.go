@@ -589,9 +589,18 @@ func (lg *Logger) ExpVar() expvar.Var {
 // logtailDisabled is whether logtail uploads to logcatcher are disabled.
 var logtailDisabled atomic.Bool
 
-// Disable disables logtail uploads for the lifetime of the process.
+// Disable disables logtail uploads. If the disable was initiated by the
+// control plane (not the user), it can be reversed by calling Enable.
 func Disable() {
 	logtailDisabled.Store(true)
+}
+
+// Enable re-enables logtail uploads that were previously disabled via
+// Disable. This is used when the control plane (not the user) had
+// disabled logging and the client is switching to a different control
+// server.
+func Enable() {
+	logtailDisabled.Store(false)
 }
 
 var debugWakesAndUploads = envknob.RegisterBool("TS_DEBUG_LOGTAIL_WAKES")
