@@ -11,42 +11,42 @@ import (
 )
 
 // Code comments on these types should be treated as user facing documentation;
-// they will appear on the ACLPolicy CRD.
+// they will appear on the ACL CRD.
 
-var ACLPolicyKind = "ACLPolicy"
+var ACLKind = "ACL"
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=acl
 // +kubebuilder:printcolumn:name="Tailnet",type=string,JSONPath=`.spec.tailnetRef`
-// +kubebuilder:printcolumn:name="Status",type=string,JSONPath=`.status.conditions[?(@.type == "ACLPolicySynced")].reason`
+// +kubebuilder:printcolumn:name="Status",type=string,JSONPath=`.status.conditions[?(@.type == "ACLSynced")].reason`
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
-// ACLPolicy defines the desired Tailnet ACL (policy file) to be applied to a Tailnet.
+// ACL defines the desired Tailnet ACL (policy file) to be applied to a Tailnet.
 // The operator syncs the policy from this resource to the Tailscale API using the
 // Tailnet's OAuth credentials. The Tailnet's Secret must have OAuth scopes
 // policy_file:read and policy_file.
 //
-// Only one ACLPolicy should target a given Tailnet. The policy can be provided
+// Only one ACL should target a given Tailnet. The policy can be provided
 // inline (spec.policy) or from a ConfigMap/Secret (spec.policyFrom).
 // See https://tailscale.com/kb/1018/acls and the Tailscale API policy file docs.
-type ACLPolicy struct {
+type ACL struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ACLPolicySpec   `json:"spec"`
-	Status ACLPolicyStatus `json:"status,omitempty"`
+	Spec   ACLSpec   `json:"spec"`
+	Status ACLStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-type ACLPolicyList struct {
+type ACLList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata"`
-	Items           []ACLPolicy `json:"items"`
+	Items           []ACL `json:"items"`
 }
 
-type ACLPolicySpec struct {
+type ACLSpec struct {
 	// TailnetRef is the name of the Tailnet custom resource whose credentials
 	// are used to get and set the ACL. The Tailnet must exist and be ready.
 	TailnetRef string `json:"tailnetRef"`
@@ -69,7 +69,7 @@ type PolicySource struct {
 	SecretKeyRef    *corev1.SecretKeySelector   `json:"secretKeyRef,omitempty"`
 }
 
-type ACLPolicyStatus struct {
+type ACLStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	// +optional
@@ -85,5 +85,5 @@ type ACLPolicyStatus struct {
 	LastSyncTime *metav1.Time `json:"lastSyncTime,omitempty"`
 }
 
-// ACLPolicySynced is set to True when the policy has been successfully applied to the Tailnet.
-const ACLPolicySynced ConditionType = `ACLPolicySynced`
+// ACLSynced is set to True when the policy has been successfully applied to the Tailnet.
+const ACLSynced ConditionType = `ACLSynced`

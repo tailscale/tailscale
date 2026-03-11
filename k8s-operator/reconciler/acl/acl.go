@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-// Package acl provides reconciliation logic for the ACLPolicy custom resource.
+// Package acl provides reconciliation logic for the ACL custom resource.
 // It syncs the policy file from the resource to the Tailscale API (GET/POST
 // tailnet ACL) using the referenced Tailnet's OAuth credentials.
 package acl
@@ -32,9 +32,9 @@ import (
 	"tailscale.com/tstime"
 )
 
-const reconcilerName = "aclpolicy-reconciler"
+const reconcilerName = "acl-reconciler"
 
-// Reconciler reconciles ACLPolicy resources by syncing their spec to the Tailscale API.
+// Reconciler reconciles ACL resources by syncing their spec to the Tailscale API.
 type Reconciler struct {
 	client.Client
 
@@ -53,7 +53,7 @@ type ReconcilerOptions struct {
 	ClientFunc         func(*tsapi.Tailnet, *corev1.Secret) tailnet.TailscaleClient
 }
 
-// NewReconciler returns a new ACLPolicy reconciler.
+// NewReconciler returns a new ACL reconciler.
 func NewReconciler(opts ReconcilerOptions) *Reconciler {
 	return &Reconciler{
 		Client:             opts.Client,
@@ -68,122 +68,122 @@ func NewReconciler(opts ReconcilerOptions) *Reconciler {
 func (r *Reconciler) Register(mgr manager.Manager) error {
 	return builder.
 		ControllerManagedBy(mgr).
-		For(&tsapi.ACLPolicy{}).
+		For(&tsapi.ACL{}).
 		Named(reconcilerName).
 		Complete(r)
 }
 
-// Reconcile syncs the ACLPolicy spec to the Tailnet's ACL via the Tailscale API.
+// Reconcile syncs the ACL spec to the Tailnet's ACL via the Tailscale API.
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
-	var policy tsapi.ACLPolicy
-	if err := r.Get(ctx, req.NamespacedName, &policy); err != nil {
+	var acl tsapi.ACL
+	if err := r.Get(ctx, req.NamespacedName, &acl); err != nil {
 		if apierrors.IsNotFound(err) {
 			return reconcile.Result{}, nil
 		}
-		return reconcile.Result{}, fmt.Errorf("get ACLPolicy: %w", err)
+		return reconcile.Result{}, fmt.Errorf("get ACL: %w", err)
 	}
 
-	if !policy.DeletionTimestamp.IsZero() {
-		reconciler.RemoveFinalizer(&policy)
-		if err := r.Update(ctx, &policy); err != nil {
+	if !acl.DeletionTimestamp.IsZero() {
+		reconciler.RemoveFinalizer(&acl)
+		if err := r.Update(ctx, &acl); err != nil {
 			return reconcile.Result{}, fmt.Errorf("remove finalizer: %w", err)
 		}
 		return reconcile.Result{}, nil
 	}
 
-	desiredPolicy, err := r.desiredPolicyContent(ctx, &policy)
+	desiredPolicy, err := r.desiredPolicyContent(ctx, &acl)
 	if err != nil {
-		operatorutils.SetACLPolicyCondition(&policy, tsapi.ACLPolicySynced, metav1.ConditionFalse, "InvalidPolicy", err.Error(), policy.Generation, r.clock, r.logger)
-		_ = r.Status().Update(ctx, &policy)
+		operatorutils.SetACLCondition(&acl, tsapi.ACLSynced, metav1.ConditionFalse, "InvalidPolicy", err.Error(), acl.Generation, r.clock, r.logger)
+		_ = r.Status().Update(ctx, &acl)
 		return reconcile.Result{}, nil
 	}
 
-	var tailnet tsapi.Tailnet
-	if err := r.Get(ctx, client.ObjectKey{Name: policy.Spec.TailnetRef}, &tailnet); err != nil {
+	var tn tsapi.Tailnet
+	if err := r.Get(ctx, client.ObjectKey{Name: acl.Spec.TailnetRef}, &tn); err != nil {
 		if apierrors.IsNotFound(err) {
-			operatorutils.SetACLPolicyCondition(&policy, tsapi.ACLPolicySynced, metav1.ConditionFalse, "TailnetNotFound", fmt.Sprintf("Tailnet %q not found", policy.Spec.TailnetRef), policy.Generation, r.clock, r.logger)
-			_ = r.Status().Update(ctx, &policy)
+			operatorutils.SetACLCondition(&acl, tsapi.ACLSynced, metav1.ConditionFalse, "TailnetNotFound", fmt.Sprintf("Tailnet %q not found", acl.Spec.TailnetRef), acl.Generation, r.clock, r.logger)
+			_ = r.Status().Update(ctx, &acl)
 			return reconcile.Result{RequeueAfter: time.Minute / 2}, nil
 		}
 		return reconcile.Result{}, fmt.Errorf("get Tailnet: %w", err)
 	}
 
-	if !operatorutils.TailnetIsReady(&tailnet) {
-		operatorutils.SetACLPolicyCondition(&policy, tsapi.ACLPolicySynced, metav1.ConditionFalse, "TailnetNotReady", fmt.Sprintf("Tailnet %q is not ready", policy.Spec.TailnetRef), policy.Generation, r.clock, r.logger)
-		_ = r.Status().Update(ctx, &policy)
+	if !operatorutils.TailnetIsReady(&tn) {
+		operatorutils.SetACLCondition(&acl, tsapi.ACLSynced, metav1.ConditionFalse, "TailnetNotReady", fmt.Sprintf("Tailnet %q is not ready", acl.Spec.TailnetRef), acl.Generation, r.clock, r.logger)
+		_ = r.Status().Update(ctx, &acl)
 		return reconcile.Result{RequeueAfter: time.Minute / 2}, nil
 	}
 
-	secretName := tailnet.Spec.Credentials.SecretName
+	secretName := tn.Spec.Credentials.SecretName
 	var secret corev1.Secret
 	if err := r.Get(ctx, client.ObjectKey{Name: secretName, Namespace: r.tailscaleNamespace}, &secret); err != nil {
 		if apierrors.IsNotFound(err) {
-			operatorutils.SetACLPolicyCondition(&policy, tsapi.ACLPolicySynced, metav1.ConditionFalse, "SecretNotFound", fmt.Sprintf("Secret %q not found in namespace %q", secretName, r.tailscaleNamespace), policy.Generation, r.clock, r.logger)
-			_ = r.Status().Update(ctx, &policy)
+			operatorutils.SetACLCondition(&acl, tsapi.ACLSynced, metav1.ConditionFalse, "SecretNotFound", fmt.Sprintf("Secret %q not found in namespace %q", secretName, r.tailscaleNamespace), acl.Generation, r.clock, r.logger)
+			_ = r.Status().Update(ctx, &acl)
 			return reconcile.Result{RequeueAfter: time.Minute / 2}, nil
 		}
 		return reconcile.Result{}, fmt.Errorf("get Secret: %w", err)
 	}
 
-	tsClient := r.tailscaleClient(&tailnet, &secret)
+	tsClient := r.tailscaleClient(&tn, &secret)
 	currentACL, err := tsClient.ACL(ctx)
 	if err != nil {
-		operatorutils.SetACLPolicyCondition(&policy, tsapi.ACLPolicySynced, metav1.ConditionFalse, "ACLGetFailed", err.Error(), policy.Generation, r.clock, r.logger)
-		_ = r.Status().Update(ctx, &policy)
+		operatorutils.SetACLCondition(&acl, tsapi.ACLSynced, metav1.ConditionFalse, "ACLGetFailed", err.Error(), acl.Generation, r.clock, r.logger)
+		_ = r.Status().Update(ctx, &acl)
 		return reconcile.Result{RequeueAfter: time.Minute / 2}, nil
 	}
 
 	var desiredDetails tsclient.ACLDetails
 	if err := json.Unmarshal([]byte(desiredPolicy), &desiredDetails); err != nil {
-		operatorutils.SetACLPolicyCondition(&policy, tsapi.ACLPolicySynced, metav1.ConditionFalse, "InvalidPolicy", fmt.Sprintf("policy is not valid JSON: %v", err), policy.Generation, r.clock, r.logger)
-		_ = r.Status().Update(ctx, &policy)
+		operatorutils.SetACLCondition(&acl, tsapi.ACLSynced, metav1.ConditionFalse, "InvalidPolicy", fmt.Sprintf("policy is not valid JSON: %v", err), acl.Generation, r.clock, r.logger)
+		_ = r.Status().Update(ctx, &acl)
 		return reconcile.Result{}, nil
 	}
 
 	if reflect.DeepEqual(currentACL.ACL, desiredDetails) {
-		operatorutils.SetACLPolicyCondition(&policy, tsapi.ACLPolicySynced, metav1.ConditionTrue, "Synced", "Policy is in sync with Tailnet", policy.Generation, r.clock, r.logger)
-		policy.Status.ETag = currentACL.ETag
-		if policy.Status.LastSyncTime == nil {
-			policy.Status.LastSyncTime = &metav1.Time{Time: r.clock.Now()}
+		operatorutils.SetACLCondition(&acl, tsapi.ACLSynced, metav1.ConditionTrue, "Synced", "Policy is in sync with Tailnet", acl.Generation, r.clock, r.logger)
+		acl.Status.ETag = currentACL.ETag
+		if acl.Status.LastSyncTime == nil {
+			acl.Status.LastSyncTime = &metav1.Time{Time: r.clock.Now()}
 		}
-		reconciler.SetFinalizer(&policy)
-		_ = r.Update(ctx, &policy)
-		_ = r.Status().Update(ctx, &policy)
+		reconciler.SetFinalizer(&acl)
+		_ = r.Update(ctx, &acl)
+		_ = r.Status().Update(ctx, &acl)
 		return reconcile.Result{}, nil
 	}
 
 	testErr, err := tsClient.ValidateACL(ctx, desiredDetails)
 	if err != nil {
-		operatorutils.SetACLPolicyCondition(&policy, tsapi.ACLPolicySynced, metav1.ConditionFalse, "ValidationError", fmt.Sprintf("failed to call ACL validate endpoint: %v", err), policy.Generation, r.clock, r.logger)
-		_ = r.Status().Update(ctx, &policy)
+		operatorutils.SetACLCondition(&acl, tsapi.ACLSynced, metav1.ConditionFalse, "ValidationError", fmt.Sprintf("failed to call ACL validate endpoint: %v", err), acl.Generation, r.clock, r.logger)
+		_ = r.Status().Update(ctx, &acl)
 		return reconcile.Result{RequeueAfter: time.Minute / 2}, nil
 	}
 	if testErr != nil {
-		operatorutils.SetACLPolicyCondition(&policy, tsapi.ACLPolicySynced, metav1.ConditionFalse, "ValidationFailed", fmt.Sprintf("policy validation failed: %v", testErr), policy.Generation, r.clock, r.logger)
-		_ = r.Status().Update(ctx, &policy)
+		operatorutils.SetACLCondition(&acl, tsapi.ACLSynced, metav1.ConditionFalse, "ValidationFailed", fmt.Sprintf("policy validation failed: %v", testErr), acl.Generation, r.clock, r.logger)
+		_ = r.Status().Update(ctx, &acl)
 		return reconcile.Result{}, nil
 	}
 
 	toSet := tsclient.ACL{
 		ACL:  desiredDetails,
-		ETag: policy.Status.ETag,
+		ETag: acl.Status.ETag,
 	}
 	if toSet.ETag == "" {
 		toSet.ETag = currentACL.ETag
 	}
 	updated, err := tsClient.SetACL(ctx, toSet, true)
 	if err != nil {
-		operatorutils.SetACLPolicyCondition(&policy, tsapi.ACLPolicySynced, metav1.ConditionFalse, "ACLSetFailed", err.Error(), policy.Generation, r.clock, r.logger)
-		_ = r.Status().Update(ctx, &policy)
+		operatorutils.SetACLCondition(&acl, tsapi.ACLSynced, metav1.ConditionFalse, "ACLSetFailed", err.Error(), acl.Generation, r.clock, r.logger)
+		_ = r.Status().Update(ctx, &acl)
 		return reconcile.Result{RequeueAfter: time.Minute / 2}, nil
 	}
 
-	operatorutils.SetACLPolicyCondition(&policy, tsapi.ACLPolicySynced, metav1.ConditionTrue, "Synced", "Policy synced to Tailnet", policy.Generation, r.clock, r.logger)
-	policy.Status.ETag = updated.ETag
-	policy.Status.LastSyncTime = &metav1.Time{Time: r.clock.Now()}
-	reconciler.SetFinalizer(&policy)
-	_ = r.Update(ctx, &policy)
-	_ = r.Status().Update(ctx, &policy)
+	operatorutils.SetACLCondition(&acl, tsapi.ACLSynced, metav1.ConditionTrue, "Synced", "Policy synced to Tailnet", acl.Generation, r.clock, r.logger)
+	acl.Status.ETag = updated.ETag
+	acl.Status.LastSyncTime = &metav1.Time{Time: r.clock.Now()}
+	reconciler.SetFinalizer(&acl)
+	_ = r.Update(ctx, &acl)
+	_ = r.Status().Update(ctx, &acl)
 	return reconcile.Result{}, nil
 }
 
@@ -194,16 +194,16 @@ func (r *Reconciler) tailscaleClient(tn *tsapi.Tailnet, secret *corev1.Secret) t
 	return tailnet.ClientFromCredentials(tn, secret)
 }
 
-func (r *Reconciler) desiredPolicyContent(ctx context.Context, policy *tsapi.ACLPolicy) (string, error) {
-	if policy.Spec.Policy != "" {
-		return policy.Spec.Policy, nil
+func (r *Reconciler) desiredPolicyContent(ctx context.Context, acl *tsapi.ACL) (string, error) {
+	if acl.Spec.Policy != "" {
+		return acl.Spec.Policy, nil
 	}
-	if policy.Spec.PolicyFrom == nil {
+	if acl.Spec.PolicyFrom == nil {
 		return "", fmt.Errorf("either spec.policy or spec.policyFrom must be set")
 	}
 	ns := r.tailscaleNamespace
-	if policy.Spec.PolicyFrom.ConfigMapKeyRef != nil {
-		ref := policy.Spec.PolicyFrom.ConfigMapKeyRef
+	if acl.Spec.PolicyFrom.ConfigMapKeyRef != nil {
+		ref := acl.Spec.PolicyFrom.ConfigMapKeyRef
 		var cm corev1.ConfigMap
 		if err := r.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: ns}, &cm); err != nil {
 			return "", fmt.Errorf("get ConfigMap %q: %w", ref.Name, err)
@@ -214,8 +214,8 @@ func (r *Reconciler) desiredPolicyContent(ctx context.Context, policy *tsapi.ACL
 		}
 		return data, nil
 	}
-	if policy.Spec.PolicyFrom.SecretKeyRef != nil {
-		ref := policy.Spec.PolicyFrom.SecretKeyRef
+	if acl.Spec.PolicyFrom.SecretKeyRef != nil {
+		ref := acl.Spec.PolicyFrom.SecretKeyRef
 		var sec corev1.Secret
 		if err := r.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: ns}, &sec); err != nil {
 			return "", fmt.Errorf("get Secret %q: %w", ref.Name, err)

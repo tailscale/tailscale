@@ -347,7 +347,7 @@ func runReconcilers(opts reconcilerOpts) {
 		Logger:             opts.log,
 	}
 	if err = acl.NewReconciler(aclOptions).Register(mgr); err != nil {
-		startlog.Fatalf("could not register ACLPolicy reconciler: %v", err)
+		startlog.Fatalf("could not register ACL reconciler: %v", err)
 	}
 
 	proxyGroupPolicyOptions := proxygrouppolicy.ReconcilerOptions{
