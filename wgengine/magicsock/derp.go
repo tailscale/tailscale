@@ -725,6 +725,10 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 		return 0, nil
 	}
 
+	if c.onDERPRecv != nil && c.onDERPRecv(regionID, dm.src, b[:n]) {
+		return 0, nil
+	}
+
 	var ok bool
 	c.mu.Lock()
 	ep, ok = c.peerMap.endpointForNodeKey(dm.src)
@@ -743,6 +747,15 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 	c.metrics.inboundPacketsDERPTotal.Add(1)
 	c.metrics.inboundBytesDERPTotal.Add(int64(n))
 	return n, ep
+}
+
+// SendDERPPacketTo sends an arbitrary packet to the given node key via
+// the DERP relay for the given region. It creates the DERP connection
+// to the region if one doesn't already exist.
+func (c *Conn) SendDERPPacketTo(dstKey key.NodePublic, regionID int, pkt []byte) (sent bool, err error) {
+	return c.sendAddr(
+		netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(regionID)),
+		dstKey, pkt, false, false)
 }
 
 // SetOnlyTCP443 set whether the magicsock connection is restricted

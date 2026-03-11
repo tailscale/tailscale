@@ -603,15 +603,25 @@ type LocalBackend = any
 
 // Start sets up all the handlers so netstack can start working. Implements
 // wgengine.FakeImpl.
+//
+// The provided LocalBackend interface can be either nil, for special case users
+// of netstack that don't have a LocalBackend, or a non-nil
+// *ipnlocal.LocalBackend. Any other type will cause Start to panic.
+//
+// Start currently (2026-03-11) never returns a non-nil error, but maybe it did
+// in the past and maybe it will in the future.
 func (ns *Impl) Start(b LocalBackend) error {
-	if b == nil {
-		panic("nil LocalBackend interface")
+	switch b := b.(type) {
+	case nil:
+		// No backend, so just continue with ns.lb unset.
+	case *ipnlocal.LocalBackend:
+		if b == nil {
+			panic("nil LocalBackend")
+		}
+		ns.lb = b
+	default:
+		panic(fmt.Sprintf("unexpected type for LocalBackend: %T", b))
 	}
-	lb := b.(*ipnlocal.LocalBackend)
-	if lb == nil {
-		panic("nil LocalBackend")
-	}
-	ns.lb = lb
 	tcpFwd := tcp.NewForwarder(ns.ipstack, tcpRXBufDefSize, maxInFlightConnectionAttempts(), ns.acceptTCP)
 	udpFwd := udp.NewForwarder(ns.ipstack, ns.acceptUDPNoICMP)
 	ns.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, ns.wrapTCPProtocolHandler(tcpFwd.HandlePacket))
