@@ -5,6 +5,7 @@ package wgengine
 
 import (
 	"fmt"
+	"math/rand"
 	"net/netip"
 	"os"
 	"reflect"
@@ -175,8 +176,8 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 	var ue *userspaceEngine
 	ht := health.NewTracker(bus)
 	reg := new(usermetric.Registry)
-	for i := range 100 {
-		attempt := uint16(defaultPort + i)
+	for range 100 {
+		attempt := uint16(defaultPort + rand.Intn(1000))
 		e, err := NewFakeUserspaceEngine(t.Logf, attempt, &knobs, ht, reg, bus)
 		if err != nil {
 			t.Fatal(err)
