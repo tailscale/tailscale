@@ -151,6 +151,8 @@ type Server struct {
 
 	// ControlURL optionally specifies the coordination server URL.
 	// If empty, the Tailscale default is used.
+	// If empty, it defaults to the TS_CONTROL_URL environment variable.
+	// If that is also empty, the Tailscale default is used.
 	ControlURL string
 
 	// RunWebClient, if true, runs a client for managing this node over
@@ -568,6 +570,13 @@ func (s *Server) getAuthKey() string {
 	return os.Getenv("TS_AUTH_KEY")
 }
 
+func (s *Server) getControlURL() string {
+	if v := s.ControlURL; v != "" {
+		return v
+	}
+	return os.Getenv("TS_CONTROL_URL")
+}
+
 func (s *Server) getClientSecret() string {
 	if v := s.ClientSecret; v != "" {
 		return v
@@ -769,7 +778,7 @@ func (s *Server) start() (reterr error) {
 	prefs := ipn.NewPrefs()
 	prefs.Hostname = s.hostname
 	prefs.WantRunning = true
-	prefs.ControlURL = s.ControlURL
+	prefs.ControlURL = s.getControlURL()
 	prefs.RunWebClient = s.RunWebClient
 	prefs.AdvertiseTags = s.AdvertiseTags
 	authKey, err := s.resolveAuthKey()
@@ -858,7 +867,7 @@ func (s *Server) resolveAuthKey() (string, error) {
 				return "", fmt.Errorf("audience for workload identity federation found, but client ID is empty")
 			}
 		}
-		authKey, err = resolveViaWIF(s.shutdownCtx, s.ControlURL, clientID, idToken, audience, s.AdvertiseTags)
+		authKey, err = resolveViaWIF(s.shutdownCtx, s.getControlURL(), clientID, idToken, audience, s.AdvertiseTags)
 		if err != nil {
 			return "", err
 		}
