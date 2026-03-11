@@ -5,20 +5,26 @@
 package wakeonlan
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/kortschak/wol"
+	"golang.org/x/sync/errgroup"
 	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
 )
@@ -27,6 +33,7 @@ func init() {
 	feature.Register("wakeonlan")
 	ipnlocal.RegisterC2N("POST /wol", handleC2NWoL)
 	ipnlocal.RegisterPeerAPIHandler("/v0/wol", handlePeerAPIWakeOnLAN)
+	ipnlocal.RegisterPeerAPIHandler("/v0/check-direct", handlePeerAPICheckDirect)
 	hostinfo.RegisterHostinfoNewHook(func(h *tailcfg.Hostinfo) {
 		h.WoLMACs = getWoLMACs()
 	})
@@ -93,7 +100,137 @@ func canWakeOnLAN(h ipnlocal.PeerAPIHandler) bool {
 	return h.IsSelfUntagged() || h.PeerCaps().HasCapability(tailcfg.PeerCapabilityWakeOnLAN)
 }
 
+func canCheckDirect(h ipnlocal.PeerAPIHandler) bool {
+	if h.Peer().UnsignedPeerAPIOnly() {
+		return false
+	}
+	return h.IsSelfUntagged() || h.PeerCaps().HasCapability(tailcfg.PeerCapabilityWakeOnLAN)
+}
+
+func handlePeerAPICheckDirect(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
+	// metricCheckDirectCalls.Add(1)
+
+	// Check capability
+	if !canCheckDirect(h) {
+		http.Error(w, "no check-direct access", http.StatusForbidden)
+		return
+	}
+
+	// Validate method
+	if r.Method != "POST" {
+		http.Error(w, "bad method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get backend and netmap
+	b := h.LocalBackend()
+	nm := b.NetMap()
+	if nm == nil {
+		http.Error(w, "no netmap available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Get local subnets
+	localSubnets := getLocalSubnets(b)
+	if len(localSubnets) == 0 {
+		// No local network interfaces, return empty results
+		writeJSON(w, &checkDirectResponse{})
+		return
+	}
+
+	// Find peers with overlapping endpoints (excluding mobile)
+	var candidateNodes []tailcfg.NodeView
+	for _, peer := range nm.Peers {
+		// Skip mobile devices - they can't be woken by WoL
+		if hostinfo := peer.Hostinfo(); hostinfo.Valid() {
+			os := hostinfo.OS()
+			if os == "android" || os == "iOS" {
+				continue
+			}
+		}
+
+		// Check for endpoint overlap
+		if peerHasOverlappingEndpoint(peer, localSubnets) {
+			candidateNodes = append(candidateNodes, peer)
+		}
+	}
+
+	// If no candidates found, return empty results
+	if len(candidateNodes) == 0 {
+		writeJSON(w, &checkDirectResponse{})
+		return
+	}
+
+	// Ping candidates concurrently
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	type nodeResult struct {
+		node   tailcfg.NodeView
+		result *ipnstate.PingResult
+		err    error
+	}
+
+	results := make([]nodeResult, len(candidateNodes))
+	g, ctx := errgroup.WithContext(ctx)
+
+	for i, node := range candidateNodes {
+		i, node := i, node // capture loop variables
+		g.Go(func() error {
+			// Get first Tailscale IP to ping
+			addrs := node.Addresses()
+			if addrs.Len() == 0 {
+				results[i] = nodeResult{node: node, err: errors.New("no addresses")}
+				return nil
+			}
+			ip := addrs.At(0).Addr()
+
+			// Ping with disco protocol
+			pr, err := b.Ping(ctx, ip, tailcfg.PingDisco, 0)
+			results[i] = nodeResult{node: node, result: pr, err: err}
+			return nil // Individual failures don't abort entire operation
+		})
+	}
+
+	g.Wait() // Wait for all pings to complete (or timeout)
+
+	// Process results and build response
+	var resp checkDirectResponse
+	for _, res := range results {
+		// Skip nodes without direct connections
+		if res.result == nil || res.result.Endpoint == "" {
+			continue
+		}
+
+		// Parse endpoint address
+		endpointAddrPort, err := netip.ParseAddrPort(res.result.Endpoint)
+		if err != nil {
+			continue
+		}
+
+		onSameSubnet := isOnSameSubnet(endpointAddrPort.Addr(), localSubnets)
+		if !onSameSubnet {
+			continue
+		}
+
+		// Build response entry
+		info := directNodeInfo{
+			NodeID:   res.node.StableID(),
+			NodeName: res.node.Name(),
+			Endpoint: res.result.Endpoint,
+			Latency:  res.result.LatencySeconds,
+		}
+
+		resp.Nodes = append(resp.Nodes, info)
+	}
+	resp.SelfMacAddresses = getWoLMACs()
+
+	writeJSON(w, resp)
+}
+
 var metricWakeOnLANCalls = clientmetric.NewCounter("peerapi_wol")
+
+// metricCheckDirectCalls = clientmetric.NewCounter("peerapi_check_direct")
 
 func handlePeerAPIWakeOnLAN(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
 	metricWakeOnLANCalls.Add(1)
@@ -148,6 +285,82 @@ func handlePeerAPIWakeOnLAN(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r 
 	}
 	sort.Strings(res.SentTo)
 	writeJSON(w, res)
+}
+
+type checkDirectResponse struct {
+	Nodes            []directNodeInfo `json:"nodes"`
+	SelfMacAddresses []string         `json:"self_mac_addresses"`
+}
+
+type directNodeInfo struct {
+	NodeID       tailcfg.StableNodeID `json:"nodeID"`
+	NodeName     string               `json:"nodeName,omitempty"`
+	Endpoint     string               `json:"endpoint"`
+	OnSameSubnet bool                 `json:"onSameSubnet"`
+	Latency      float64              `json:"latencySeconds"`
+}
+
+func getLocalSubnets(b *ipnlocal.LocalBackend) []netip.Prefix {
+	st := b.NetMon().InterfaceState()
+	if st == nil || st.InterfaceIPs == nil {
+		return nil
+	}
+
+	var subnets []netip.Prefix
+	for _, prefixes := range st.InterfaceIPs {
+		for _, prefix := range prefixes {
+			// Skip loopback
+			if prefix.Addr().IsLoopback() {
+				continue
+			}
+			// Skip Tailscale CGNAT range (100.64.0.0/10)
+			if prefix.Addr().IsPrivate() && prefix.Bits() >= 10 {
+				// Check if it's in the Tailscale CGNAT range
+				if prefix.Addr().Is4() {
+					ip := prefix.Addr().As4()
+					// 100.64.0.0/10 means first byte is 100 and second byte is 64-127
+					if ip[0] == 100 && ip[1] >= 64 && ip[1] < 128 {
+						continue
+					}
+				}
+			}
+			subnets = append(subnets, prefix)
+		}
+	}
+	return subnets
+}
+
+func peerHasOverlappingEndpoint(peer tailcfg.NodeView, localSubnets []netip.Prefix) bool {
+	endpoints := peer.Endpoints()
+	for i := range endpoints.Len() {
+		epAddrPort := endpoints.At(i)
+		epAddr := epAddrPort.Addr()
+
+		// Check if this endpoint IP is in any local subnet
+		for _, localSubnet := range localSubnets {
+			// Match IP families
+			if localSubnet.Addr().Is4() != epAddr.Is4() {
+				continue
+			}
+			if localSubnet.Contains(epAddr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isOnSameSubnet(endpointIP netip.Addr, localSubnets []netip.Prefix) bool {
+	for _, localSubnet := range localSubnets {
+		// Match IP families
+		if localSubnet.Addr().Is4() != endpointIP.Is4() {
+			continue
+		}
+		if localSubnet.Contains(endpointIP) {
+			return true
+		}
+	}
+	return false
 }
 
 // TODO(bradfitz): this is all too simplistic and static. It needs to run
