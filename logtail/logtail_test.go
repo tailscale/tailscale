@@ -470,6 +470,37 @@ func BenchmarkWriteText(b *testing.B) {
 	}
 }
 
+func TestEnableDisableRoundTrip(t *testing.T) {
+	// This test mutates package-level logtail state and must not run
+	// in parallel with tests that depend on logtailDisabled.
+	t.Cleanup(func() { logtailDisabled.Store(false) })
+
+	// Initially not disabled.
+	if logtailDisabled.Load() {
+		t.Fatal("logtailDisabled should be false at start of test")
+	}
+
+	Disable()
+	if !logtailDisabled.Load() {
+		t.Fatal("logtailDisabled should be true after Disable()")
+	}
+
+	Enable()
+	if logtailDisabled.Load() {
+		t.Fatal("logtailDisabled should be false after Enable()")
+	}
+
+	// Verify a second round-trip works.
+	Disable()
+	if !logtailDisabled.Load() {
+		t.Fatal("logtailDisabled should be true after second Disable()")
+	}
+	Enable()
+	if logtailDisabled.Load() {
+		t.Fatal("logtailDisabled should be false after second Enable()")
+	}
+}
+
 func BenchmarkWriteJSON(b *testing.B) {
 	var lg Logger
 	lg.clock = tstime.StdClock{}

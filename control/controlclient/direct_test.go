@@ -4,15 +4,19 @@
 package controlclient
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/logtail"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
@@ -180,4 +184,82 @@ func TestTsmpPing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestHandleDebugMessageDisableLogTail(t *testing.T) {
+	// This test mutates package-level logtail state and must not run in
+	// parallel with tests that depend on logtail being enabled.
+	t.Cleanup(func() { logtail.Enable() })
+
+	t.Run("callback_fires", func(t *testing.T) {
+		logtail.Enable() // reset from any prior subtest
+
+		var called atomic.Bool
+		c := &Direct{
+			logf:             t.Logf,
+			onDisableLogTail: func() { called.Store(true) },
+		}
+
+		err := c.handleDebugMessage(context.Background(), &tailcfg.Debug{DisableLogTail: true})
+		if err != nil {
+			t.Fatalf("handleDebugMessage: %v", err)
+		}
+
+		if !called.Load() {
+			t.Error("onDisableLogTail callback was not called")
+		}
+	})
+
+	t.Run("envknob_not_set", func(t *testing.T) {
+		logtail.Enable() // reset
+		t.Setenv("TS_NO_LOGS_NO_SUPPORT", "")
+
+		c := &Direct{
+			logf:             t.Logf,
+			onDisableLogTail: func() {},
+		}
+
+		err := c.handleDebugMessage(context.Background(), &tailcfg.Debug{DisableLogTail: true})
+		if err != nil {
+			t.Fatalf("handleDebugMessage: %v", err)
+		}
+
+		if envknob.NoLogsNoSupport() {
+			t.Error("envknob.NoLogsNoSupport() should be false; handleDebugMessage must not call envknob.SetNoLogsNoSupport()")
+		}
+	})
+
+	t.Run("nil_callback_no_panic", func(t *testing.T) {
+		logtail.Enable() // reset
+
+		c := &Direct{
+			logf:             t.Logf,
+			onDisableLogTail: nil,
+		}
+
+		err := c.handleDebugMessage(context.Background(), &tailcfg.Debug{DisableLogTail: true})
+		if err != nil {
+			t.Fatalf("handleDebugMessage: %v", err)
+		}
+		// No panic means success.
+	})
+
+	t.Run("false_does_not_fire", func(t *testing.T) {
+		logtail.Enable() // reset
+
+		var called atomic.Bool
+		c := &Direct{
+			logf:             t.Logf,
+			onDisableLogTail: func() { called.Store(true) },
+		}
+
+		err := c.handleDebugMessage(context.Background(), &tailcfg.Debug{DisableLogTail: false})
+		if err != nil {
+			t.Fatalf("handleDebugMessage: %v", err)
+		}
+
+		if called.Load() {
+			t.Error("onDisableLogTail should not be called when DisableLogTail is false")
+		}
+	})
 }

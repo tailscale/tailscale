@@ -43,6 +43,7 @@ import (
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal/netmapcache"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/logtail"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
@@ -3680,6 +3681,374 @@ func TestApplySysPolicy(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+func TestNoLogsNoSupportCombinesSources(t *testing.T) {
+	tests := []struct {
+		name            string
+		envknob         bool
+		controlDisabled bool
+		want            bool
+	}{
+		{name: "neither", envknob: false, controlDisabled: false, want: false},
+		{name: "control_only", envknob: false, controlDisabled: true, want: true},
+		{name: "envknob_only", envknob: true, controlDisabled: false, want: true},
+		{name: "both", envknob: true, controlDisabled: true, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.envknob {
+				t.Setenv("TS_NO_LOGS_NO_SUPPORT", "true")
+			} else {
+				t.Setenv("TS_NO_LOGS_NO_SUPPORT", "")
+			}
+
+			b := newTestLocalBackend(t)
+			b.noLogsFromControl.Store(tt.controlDisabled)
+
+			if got := b.NoLogsNoSupport(); got != tt.want {
+				t.Errorf("NoLogsNoSupport() = %v, want %v (envknob=%v, control=%v)",
+					got, tt.want, tt.envknob, tt.controlDisabled)
+			}
+		})
+	}
+}
+
+// withCapMap is a peerOptFunc that sets the given capabilities on a node.
+func withCapMap(caps tailcfg.NodeCapMap) peerOptFunc {
+	return func(n *tailcfg.Node) {
+		for k, v := range caps {
+			mak.Set(&n.CapMap, k, v)
+		}
+	}
+}
+
+// buildNetmapWithFlowLogs constructs a netmap whose self node advertises
+// CapabilityDataPlaneAuditLogs, with AllCaps properly populated.
+func buildNetmapWithFlowLogs(selfID tailcfg.NodeID) *netmap.NetworkMap {
+	self := makePeer(selfID,
+		withName("self"),
+		withAddresses(netip.MustParsePrefix("100.64.1.1/32")),
+		withCapMap(tailcfg.NodeCapMap{
+			tailcfg.CapabilityDataPlaneAuditLogs: nil,
+		}),
+	)
+	nm := buildNetmapWithPeers(self)
+	nm.AllCaps = set.SetOf([]tailcfg.NodeCapability{tailcfg.CapabilityDataPlaneAuditLogs})
+	return nm
+}
+
+func TestFlowLogsConflictCheck(t *testing.T) {
+	// This test mutates package-level logtail state.
+	t.Cleanup(func() { logtail.Enable() })
+
+	t.Run("control_disabled_logs", func(t *testing.T) {
+		t.Setenv("TS_NO_LOGS_NO_SUPPORT", "")
+
+		var cc *mockControl
+		lb := newLocalBackendWithTestControl(t, false, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+			cc = newClient(tb, opts)
+			return cc
+		})
+
+		// Capture error notifications.
+		gotErrMsg := make(chan string, 1)
+		lb.SetNotifyCallback(func(n ipn.Notify) {
+			if n.ErrMessage != nil {
+				select {
+				case gotErrMsg <- *n.ErrMessage:
+				default:
+				}
+			}
+		})
+
+		mustDo(t)(lb.Start(ipn.Options{}))
+		mustDo2(t)(lb.EditPrefs(&ipn.MaskedPrefs{
+			Prefs:          ipn.Prefs{WantRunning: true},
+			WantRunningSet: true,
+		}))
+
+		// Authenticate with a plain netmap (no flow logs cap).
+		plainNM := buildNetmapWithPeers(
+			makePeer(1, withName("self"), withAddresses(netip.MustParsePrefix("100.64.1.1/32"))),
+		)
+		cc.authenticated(plainNM)
+		waitForGoroutinesToStop(lb)
+
+		// Simulate control plane having disabled logs (Headscale).
+		lb.noLogsFromControl.Store(true)
+
+		// Now send a netmap that requires flow logs.
+		flowNM := buildNetmapWithFlowLogs(1)
+		cc.send(sendOpt{loginFinished: true, nm: flowNM})
+
+		if err := tstest.WaitFor(5*time.Second, func() error {
+			if lb.Prefs().WantRunning() {
+				return fmt.Errorf("WantRunning is still true; expected false after flow-logs conflict")
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify the error notification mentions "control server".
+		select {
+		case msg := <-gotErrMsg:
+			if !strings.Contains(msg, "disabled by the control server") {
+				t.Errorf("error message %q does not mention control server", msg)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for error notification")
+		}
+	})
+
+	t.Run("envknob_disabled_logs", func(t *testing.T) {
+		t.Setenv("TS_NO_LOGS_NO_SUPPORT", "true")
+
+		var cc *mockControl
+		lb := newLocalBackendWithTestControl(t, false, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+			cc = newClient(tb, opts)
+			return cc
+		})
+
+		// Capture error notifications.
+		gotErrMsg := make(chan string, 1)
+		lb.SetNotifyCallback(func(n ipn.Notify) {
+			if n.ErrMessage != nil {
+				select {
+				case gotErrMsg <- *n.ErrMessage:
+				default:
+				}
+			}
+		})
+
+		mustDo(t)(lb.Start(ipn.Options{}))
+		mustDo2(t)(lb.EditPrefs(&ipn.MaskedPrefs{
+			Prefs:          ipn.Prefs{WantRunning: true},
+			WantRunningSet: true,
+		}))
+
+		// Authenticate with a netmap requiring flow logs.
+		flowNM := buildNetmapWithFlowLogs(1)
+		cc.authenticated(flowNM)
+
+		if err := tstest.WaitFor(5*time.Second, func() error {
+			if lb.Prefs().WantRunning() {
+				return fmt.Errorf("WantRunning is still true; expected false after flow-logs conflict")
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify the error notification mentions the CLI flag.
+		select {
+		case msg := <-gotErrMsg:
+			if !strings.Contains(msg, "no-logs-no-support") {
+				t.Errorf("error message %q does not mention --no-logs-no-support", msg)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for error notification")
+		}
+	})
+
+	t.Run("no_conflict_without_cap", func(t *testing.T) {
+		t.Setenv("TS_NO_LOGS_NO_SUPPORT", "")
+
+		var cc *mockControl
+		lb := newLocalBackendWithTestControl(t, false, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+			cc = newClient(tb, opts)
+			return cc
+		})
+
+		mustDo(t)(lb.Start(ipn.Options{}))
+		mustDo2(t)(lb.EditPrefs(&ipn.MaskedPrefs{
+			Prefs:          ipn.Prefs{WantRunning: true},
+			WantRunningSet: true,
+		}))
+
+		lb.noLogsFromControl.Store(true)
+
+		// Netmap without CapabilityDataPlaneAuditLogs → no conflict.
+		plainNM := buildNetmapWithPeers(
+			makePeer(1, withName("self"), withAddresses(netip.MustParsePrefix("100.64.1.1/32"))),
+		)
+		cc.authenticated(plainNM)
+		waitForGoroutinesToStop(lb)
+
+		if !lb.Prefs().WantRunning() {
+			t.Error("WantRunning should still be true; no flow-logs conflict expected")
+		}
+	})
+}
+
+func TestStartLockedClearsControlDisableLogTail(t *testing.T) {
+	// This test mutates package-level logtail state.
+	t.Cleanup(func() { logtail.Enable() })
+	t.Setenv("TS_NO_LOGS_NO_SUPPORT", "")
+
+	lb := newLocalBackendWithTestControl(t, false, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+		return newClient(tb, opts)
+	})
+
+	// Simulate a previous control server having disabled logs.
+	lb.noLogsFromControl.Store(true)
+	logtail.Disable()
+
+	mustDo(t)(lb.Start(ipn.Options{}))
+
+	if err := tstest.WaitFor(2*time.Second, func() error {
+		if lb.noLogsFromControl.Load() {
+			return fmt.Errorf("noLogsFromControl should be cleared after Start")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tstest.WaitFor(2*time.Second, func() error {
+		if lb.NoLogsNoSupport() {
+			return fmt.Errorf("NoLogsNoSupport() should be false after Start re-enabled logging")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProfileSwitchHeadscaleToTailscale(t *testing.T) {
+	// This test mutates package-level logtail state.
+	t.Cleanup(func() { logtail.Enable() })
+	t.Setenv("TS_NO_LOGS_NO_SUPPORT", "")
+
+	var cc *mockControl
+	lb := newLocalBackendWithTestControl(t, false, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+		cc = newClient(tb, opts)
+		return cc
+	})
+
+	// Step 1: Start and connect (simulating Headscale).
+	mustDo(t)(lb.Start(ipn.Options{}))
+	mustDo2(t)(lb.EditPrefs(&ipn.MaskedPrefs{
+		Prefs:         ipn.Prefs{WantRunning: true},
+		WantRunningSet: true,
+	}))
+	plainNM := buildNetmapWithPeers(
+		makePeer(1, withName("self"), withAddresses(netip.MustParsePrefix("100.64.1.1/32"))),
+	)
+	cc.authenticated(plainNM)
+	waitForGoroutinesToStop(lb)
+
+	// Simulate Headscale having sent DisableLogTail.
+	lb.noLogsFromControl.Store(true)
+	logtail.Disable()
+
+	// Step 2: Re-start the backend (simulating a profile switch to a Tailscale
+	// control server). startLocked should clear the per-instance flag and
+	// re-enable logtail.
+	mustDo(t)(lb.Start(ipn.Options{}))
+	mustDo2(t)(lb.EditPrefs(&ipn.MaskedPrefs{
+		Prefs:         ipn.Prefs{WantRunning: true},
+		WantRunningSet: true,
+	}))
+
+	if err := tstest.WaitFor(2*time.Second, func() error {
+		if lb.noLogsFromControl.Load() {
+			return fmt.Errorf("noLogsFromControl should be cleared after profile switch")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Step 3: Authenticate with a netmap that requires flow logs.
+	// This should succeed because noLogsFromControl was cleared.
+	flowNM := buildNetmapWithFlowLogs(1)
+	cc.authenticated(flowNM)
+	waitForGoroutinesToStop(lb)
+
+	if err := tstest.WaitFor(2*time.Second, func() error {
+		if !lb.Prefs().WantRunning() {
+			return fmt.Errorf("WantRunning should be true; profile switch should have cleared no-logs state")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGlobalNoLogsPreventReEnable(t *testing.T) {
+	// This test mutates package-level logtail state.
+	t.Cleanup(func() { logtail.Enable() })
+	t.Setenv("TS_NO_LOGS_NO_SUPPORT", "true")
+
+	var cc *mockControl
+	lb := newLocalBackendWithTestControl(t, false, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+		cc = newClient(tb, opts)
+		return cc
+	})
+
+	// Capture error notifications.
+	gotErrMsg := make(chan string, 1)
+	lb.SetNotifyCallback(func(n ipn.Notify) {
+		if n.ErrMessage != nil {
+			select {
+			case gotErrMsg <- *n.ErrMessage:
+			default:
+			}
+		}
+	})
+
+	// Simulate a previous control server having disabled logs.
+	lb.noLogsFromControl.Store(true)
+	logtail.Disable()
+
+	// Start should clear the per-instance flag but NOT re-enable logtail
+	// because the global envknob is set.
+	mustDo(t)(lb.Start(ipn.Options{}))
+
+	if err := tstest.WaitFor(2*time.Second, func() error {
+		// The per-instance flag is always cleared on Start.
+		if lb.noLogsFromControl.Load() {
+			return fmt.Errorf("noLogsFromControl should be cleared after Start")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// But NoLogsNoSupport should still be true because of the envknob.
+	if !lb.NoLogsNoSupport() {
+		t.Fatal("NoLogsNoSupport() should still be true (envknob is set)")
+	}
+
+	// Authenticate with a netmap requiring flow logs → conflict.
+	mustDo2(t)(lb.EditPrefs(&ipn.MaskedPrefs{
+		Prefs:          ipn.Prefs{WantRunning: true},
+		WantRunningSet: true,
+	}))
+
+	flowNM := buildNetmapWithFlowLogs(1)
+	cc.authenticated(flowNM)
+
+	if err := tstest.WaitFor(5*time.Second, func() error {
+		if lb.Prefs().WantRunning() {
+			return fmt.Errorf("WantRunning should be false; global no-logs should conflict with flow logs")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the error notification mentions the CLI flag.
+	select {
+	case msg := <-gotErrMsg:
+		if !strings.Contains(msg, "no-logs-no-support") {
+			t.Errorf("error message %q does not mention --no-logs-no-support", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for error notification")
 	}
 }
 
