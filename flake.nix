@@ -87,7 +87,7 @@
     # you're an end user you should be prepared for this flake to not
     # build periodically.
     packages = eachSystem (pkgs: rec {
-      default = pkgs.buildGo125Module {
+      default = pkgs.buildGo126Module {
         name = "tailscale";
         pname = "tailscale";
         src = ./.;
