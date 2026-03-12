@@ -38,180 +38,347 @@ func mustIPSetFromPrefix(s string) *netipx.IPSet {
 	return set
 }
 
-// TestHandleConnectorTransitIPRequestZeroLength tests that if sent a
-// ConnectorTransitIPRequest with 0 TransitIPRequests, we respond with a
-// ConnectorTransitIPResponse with 0 TransitIPResponses.
-func TestHandleConnectorTransitIPRequestZeroLength(t *testing.T) {
-	c := newConn25(logger.Discard)
-	req := ConnectorTransitIPRequest{}
-	nid := tailcfg.NodeID(1)
-
-	resp := c.handleConnectorTransitIPRequest(nid, req)
-	if len(resp.TransitIPs) != 0 {
-		t.Fatalf("n TransitIPs in response: %d, want 0", len(resp.TransitIPs))
-	}
-}
-
-// TestHandleConnectorTransitIPRequestStoresAddr tests that if sent a
+// TestHandleConnectorTransitIPRequest tests that if sent a
 // request with a transit addr and a destination addr we store that mapping
-// and can retrieve it. If sent another req with a different dst for that transit addr
-// we store that instead.
-func TestHandleConnectorTransitIPRequestStoresAddr(t *testing.T) {
-	c := newConn25(logger.Discard)
-	nid := tailcfg.NodeID(1)
-	tip := netip.MustParseAddr("0.0.0.1")
-	dip := netip.MustParseAddr("1.2.3.4")
-	dip2 := netip.MustParseAddr("1.2.3.5")
-	mr := func(t, d netip.Addr) ConnectorTransitIPRequest {
-		return ConnectorTransitIPRequest{
-			TransitIPs: []TransitIPRequest{
-				{TransitIP: t, DestinationIP: d},
+// and can retrieve it.
+func TestHandleConnectorTransitIPRequest(t *testing.T) {
+
+	const appName = "TestApp"
+
+	// Peer IPs
+	pipV4_1 := netip.MustParseAddr("100.101.101.101")
+	pipV4_2 := netip.MustParseAddr("100.101.101.102")
+
+	pipV6_1 := netip.MustParseAddr("fd7a:115c:a1e0::101")
+	pipV6_3 := netip.MustParseAddr("fd7a:115c:a1e0::103")
+
+	// Transit IPs
+	tipV4_1 := netip.MustParseAddr("0.0.0.1")
+	tipV4_2 := netip.MustParseAddr("0.0.0.2")
+
+	tipV6_1 := netip.MustParseAddr("FE80::1")
+
+	// Destination IPs
+	dipV4_1 := netip.MustParseAddr("10.0.0.1")
+	dipV4_2 := netip.MustParseAddr("10.0.0.2")
+	dipV4_3 := netip.MustParseAddr("10.0.0.3")
+
+	dipV6_1 := netip.MustParseAddr("fc00::1")
+
+	// Peer nodes
+	peerV4V6 := (&tailcfg.Node{
+		ID:        tailcfg.NodeID(1),
+		Addresses: []netip.Prefix{netip.PrefixFrom(pipV4_1, 32), netip.PrefixFrom(pipV6_1, 128)},
+	}).View()
+
+	peerV4Only := (&tailcfg.Node{
+		ID:        tailcfg.NodeID(2),
+		Addresses: []netip.Prefix{netip.PrefixFrom(pipV4_2, 32)},
+	}).View()
+
+	peerV6Only := (&tailcfg.Node{
+		ID:        tailcfg.NodeID(3),
+		Addresses: []netip.Prefix{netip.PrefixFrom(pipV6_3, 128)},
+	}).View()
+
+	tests := []struct {
+		name         string
+		ctipReqPeers []tailcfg.NodeView           // One entry per request and the other
+		ctipReqs     []ConnectorTransitIPRequest  // arrays in this struct must have the same
+		wants        []ConnectorTransitIPResponse // cardinality
+		// For checking lookups:
+		//	The outer array needs to correspond to the number of requests,
+		//	can be nil if no lookups need to be done after the request is processed.
+		//
+		//	The middle array is the set of lookups for the corresponding request.
+		//
+		//	The inner array is a tuple of (PeerIP, TransitIP, ExpectedDestinationIP)
+		wantLookups [][][]netip.Addr
+	}{
+		// Single peer, single request with success ipV4
+		{
+			name:         "one-peer-one-req-ipv4",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
 			},
-		}
-	}
-
-	resp := c.handleConnectorTransitIPRequest(nid, mr(tip, dip))
-	if len(resp.TransitIPs) != 1 {
-		t.Fatalf("n TransitIPs in response: %d, want 1", len(resp.TransitIPs))
-	}
-	got := resp.TransitIPs[0].Code
-	if got != TransitIPResponseCode(0) {
-		t.Fatalf("TransitIP Code: %d, want 0", got)
-	}
-	gotAddr := c.connector.transitIPTarget(nid, tip)
-	if gotAddr != dip {
-		t.Fatalf("Connector stored destination for tip: %v, want %v", gotAddr, dip)
-	}
-
-	// mapping can be overwritten
-	resp2 := c.handleConnectorTransitIPRequest(nid, mr(tip, dip2))
-	if len(resp2.TransitIPs) != 1 {
-		t.Fatalf("n TransitIPs in response: %d, want 1", len(resp2.TransitIPs))
-	}
-	got2 := resp.TransitIPs[0].Code
-	if got2 != TransitIPResponseCode(0) {
-		t.Fatalf("TransitIP Code: %d, want 0", got2)
-	}
-	gotAddr2 := c.connector.transitIPTarget(nid, tip)
-	if gotAddr2 != dip2 {
-		t.Fatalf("Connector stored destination for tip: %v, want %v", gotAddr, dip2)
-	}
-}
-
-// TestHandleConnectorTransitIPRequestMultipleTIP tests that we can
-// get a req with multiple mappings and we store them all. Including
-// multiple transit addrs for the same destination.
-func TestHandleConnectorTransitIPRequestMultipleTIP(t *testing.T) {
-	c := newConn25(logger.Discard)
-	nid := tailcfg.NodeID(1)
-	tip := netip.MustParseAddr("0.0.0.1")
-	tip2 := netip.MustParseAddr("0.0.0.2")
-	tip3 := netip.MustParseAddr("0.0.0.3")
-	dip := netip.MustParseAddr("1.2.3.4")
-	dip2 := netip.MustParseAddr("1.2.3.5")
-	req := ConnectorTransitIPRequest{
-		TransitIPs: []TransitIPRequest{
-			{TransitIP: tip, DestinationIP: dip},
-			{TransitIP: tip2, DestinationIP: dip2},
-			// can store same dst addr for multiple transit addrs
-			{TransitIP: tip3, DestinationIP: dip},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV4_1, dipV4_1}},
+			},
+		},
+		// Single peer, single request with success ipV6
+		{
+			name:         "one-peer-one-req-ipv6",
+			ctipReqPeers: []tailcfg.NodeView{peerV6Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV6_1, DestinationIP: dipV6_1, App: appName}}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV6_3, tipV6_1, dipV6_1}},
+			},
+		},
+		// Single peer, multi request with success, ipV4
+		{
+			name:         "one-peer-multi-req-ipv4",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only, peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_2, DestinationIP: dipV4_2, App: appName}}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV4_1, dipV4_1}},
+				{{pipV4_2, tipV4_2, dipV4_2}},
+			},
+		},
+		// Single peer, multi request remap tip, ipV4
+		{
+			name:         "one-peer-remap-tip",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only, peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_2, App: appName}}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV4_1, dipV4_1}},
+				{{pipV4_2, tipV4_1, dipV4_2}},
+			},
+		},
+		// Single peer, multi request with success, ipV4 and ipV6
+		{
+			name:         "one-peer-multi-req-ipv4-ipv6",
+			ctipReqPeers: []tailcfg.NodeView{peerV4V6, peerV4V6},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV6_1, DestinationIP: dipV6_1, App: appName}}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_1, tipV4_1, dipV4_1}},
+				{{pipV4_1, tipV4_1, dipV4_1}, {pipV6_1, tipV6_1, dipV6_1}, {pipV4_1, tipV6_1, netip.Addr{}}},
+			},
+		},
+		// Single peer, multi map with success, ipV4
+		{
+			name:         "one-peer-multi-map-ipv4",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{
+					{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName},
+					{TransitIP: tipV4_2, DestinationIP: dipV4_2, App: appName},
+				}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}, {Code: OK, Message: ""}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV4_1, dipV4_1}, {pipV4_2, tipV4_2, dipV4_2}},
+			},
+		},
+		// Single peer, error reuse same tip in one request, ensure all non-dup requests are processed
+		{
+			name:         "one-peer-multi-map-duplicate-tip",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{
+					{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName},
+					{TransitIP: tipV4_1, DestinationIP: dipV4_2, App: appName},
+					{TransitIP: tipV4_2, DestinationIP: dipV4_3, App: appName},
+				}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{
+					{Code: OK, Message: ""},
+					{Code: DuplicateTransitIP, Message: dupeTransitIPMessage},
+					{Code: OK, Message: ""}},
+				},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV4_1, dipV4_1}, {pipV4_2, tipV4_2, dipV4_3}},
+			},
+		},
+		// Multi peer, success reuse same tip in one request
+		{
+			name:         "multi-peer-duplicate-tip",
+			ctipReqPeers: []tailcfg.NodeView{peerV4V6, peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_2, App: appName}}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_1, tipV4_1, dipV4_1}},
+				{{pipV4_1, tipV4_1, dipV4_1}, {pipV4_2, tipV4_1, dipV4_2}},
+			},
+		},
+		// Single peer, multi map, multiple tip to same dip
+		{
+			name:         "one-peer-multi-map-multi-tip-to-dip",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{
+					{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName},
+					{TransitIP: tipV4_2, DestinationIP: dipV4_1, App: appName},
+				}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}, {Code: OK, Message: ""}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV4_1, dipV4_1}, {pipV4_2, tipV4_2, dipV4_1}},
+			},
+		},
+		// Single peer, ipv4 tip, no ipv4 pip, but ipv6 tip works
+		{
+			name:         "one-peer-missing-ipv4-family",
+			ctipReqPeers: []tailcfg.NodeView{peerV6Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{
+					{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName},
+					{TransitIP: tipV6_1, DestinationIP: dipV6_1, App: appName},
+				}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{
+					{Code: NoMatchingPeerIPFamily, Message: noMatchingPeerIPFamilyMessage},
+					{Code: OK, Message: ""},
+				}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV6_3, tipV4_1, netip.Addr{}}, {pipV6_3, tipV6_1, dipV6_1}},
+			},
+		},
+		// Single peer, ipv6 tip, no ipv6 pip, but ipv4 tip works
+		{
+			name:         "one-peer-missing-ipv6-family",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{
+					{TransitIP: tipV6_1, DestinationIP: dipV6_1, App: appName},
+					{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName},
+				}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{
+					{Code: NoMatchingPeerIPFamily, Message: noMatchingPeerIPFamilyMessage},
+					{Code: OK, Message: ""},
+				}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV6_1, netip.Addr{}}, {pipV4_2, tipV4_1, dipV4_1}},
+			},
+		},
+		// Single peer, mismatched transit and destination ips
+		{
+			name:         "one-peer-mismatched-tip-dip",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV6_1, App: appName}}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: AddrFamilyMismatch, Message: addrFamilyMismatchMessage}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV4_1, netip.Addr{}}},
+			},
+		},
+		// Single peer, invalid app name
+		{
+			name:         "one-peer-invalid-app",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: "Unknown App"}}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: UnknownAppName, Message: unknownAppNameMessage}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV4_1, netip.Addr{}}},
+			},
 		},
 	}
-	resp := c.handleConnectorTransitIPRequest(nid, req)
-	if len(resp.TransitIPs) != 3 {
-		t.Fatalf("n TransitIPs in response: %d, want 3", len(resp.TransitIPs))
-	}
 
-	for i := range 3 {
-		got := resp.TransitIPs[i].Code
-		if got != TransitIPResponseCode(0) {
-			t.Fatalf("i=%d TransitIP Code: %d, want 0", i, got)
-		}
-	}
-	gotAddr1 := c.connector.transitIPTarget(nid, tip)
-	if gotAddr1 != dip {
-		t.Fatalf("Connector stored destination for tip(%v): %v, want %v", tip, gotAddr1, dip)
-	}
-	gotAddr2 := c.connector.transitIPTarget(nid, tip2)
-	if gotAddr2 != dip2 {
-		t.Fatalf("Connector stored destination for tip(%v): %v, want %v", tip2, gotAddr2, dip2)
-	}
-	gotAddr3 := c.connector.transitIPTarget(nid, tip3)
-	if gotAddr3 != dip {
-		t.Fatalf("Connector stored destination for tip(%v): %v, want %v", tip3, gotAddr3, dip)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			switch {
+			case len(tt.ctipReqPeers) != len(tt.ctipReqs):
+				t.Fatalf("error in test setup: ctipReqPeers has length %d does not match ctipReqs length %d",
+					len(tt.ctipReqPeers), len(tt.ctipReqs))
+			case len(tt.ctipReqPeers) != len(tt.wants):
+				t.Fatalf("error in test setup: ctipReqPeers has length %d does not match wants length %d",
+					len(tt.ctipReqPeers), len(tt.wants))
+			case len(tt.ctipReqPeers) != len(tt.wantLookups):
+				t.Fatalf("error in test setup: ctipReqPeers has length %d does not match wantLookups length %d",
+					len(tt.ctipReqPeers), len(tt.wantLookups))
+			}
 
-// TestHandleConnectorTransitIPRequestSameTIP tests that if we get
-// a req that has more than one TransitIPRequest for the same transit addr
-// only the first is stored, and the subsequent ones get an error code and
-// message in the response.
-func TestHandleConnectorTransitIPRequestSameTIP(t *testing.T) {
-	c := newConn25(logger.Discard)
-	nid := tailcfg.NodeID(1)
-	tip := netip.MustParseAddr("0.0.0.1")
-	tip2 := netip.MustParseAddr("0.0.0.2")
-	dip := netip.MustParseAddr("1.2.3.4")
-	dip2 := netip.MustParseAddr("1.2.3.5")
-	dip3 := netip.MustParseAddr("1.2.3.6")
-	req := ConnectorTransitIPRequest{
-		TransitIPs: []TransitIPRequest{
-			{TransitIP: tip, DestinationIP: dip},
-			// cannot have dupe TransitIPs in one ConnectorTransitIPRequest
-			{TransitIP: tip, DestinationIP: dip2},
-			{TransitIP: tip2, DestinationIP: dip3},
-		},
-	}
+			// Use the same Conn25 for each request in the test and seed it with a test app name.
+			c := newConn25(logger.Discard)
+			c.connector.config = config{
+				appsByName: map[string]appctype.Conn25Attr{appName: {}},
+			}
 
-	resp := c.handleConnectorTransitIPRequest(nid, req)
-	if len(resp.TransitIPs) != 3 {
-		t.Fatalf("n TransitIPs in response: %d, want 3", len(resp.TransitIPs))
-	}
+			for i, peer := range tt.ctipReqPeers {
+				req := tt.ctipReqs[i]
+				want := tt.wants[i]
 
-	got := resp.TransitIPs[0].Code
-	if got != TransitIPResponseCode(0) {
-		t.Fatalf("i=0 TransitIP Code: %d, want 0", got)
-	}
-	msg := resp.TransitIPs[0].Message
-	if msg != "" {
-		t.Fatalf("i=0 TransitIP Message: \"%s\", want \"%s\"", msg, "")
-	}
-	got1 := resp.TransitIPs[1].Code
-	if got1 != TransitIPResponseCode(1) {
-		t.Fatalf("i=1 TransitIP Code: %d, want 1", got1)
-	}
-	msg1 := resp.TransitIPs[1].Message
-	if msg1 != dupeTransitIPMessage {
-		t.Fatalf("i=1 TransitIP Message: \"%s\", want \"%s\"", msg1, dupeTransitIPMessage)
-	}
-	got2 := resp.TransitIPs[2].Code
-	if got2 != TransitIPResponseCode(0) {
-		t.Fatalf("i=2 TransitIP Code: %d, want 0", got2)
-	}
-	msg2 := resp.TransitIPs[2].Message
-	if msg2 != "" {
-		t.Fatalf("i=2 TransitIP Message: \"%s\", want \"%s\"", msg, "")
-	}
+				resp := c.handleConnectorTransitIPRequest(peer, req)
 
-	gotAddr1 := c.connector.transitIPTarget(nid, tip)
-	if gotAddr1 != dip {
-		t.Fatalf("Connector stored destination for tip(%v): %v, want %v", tip, gotAddr1, dip)
-	}
-	gotAddr2 := c.connector.transitIPTarget(nid, tip2)
-	if gotAddr2 != dip3 {
-		t.Fatalf("Connector stored destination for tip(%v): %v, want %v", tip2, gotAddr2, dip3)
-	}
-}
+				// Ensure that we have the expected number of responses
+				if len(resp.TransitIPs) != len(want.TransitIPs) {
+					t.Fatalf("wrong number of TransitIPs in response %d: got %d, want %d",
+						i, len(resp.TransitIPs), len(want.TransitIPs))
+				}
 
-// TestGetDstIPUnknownTIP tests that unknown transit addresses can be looked up without problem.
-func TestTransitIPTargetUnknownTIP(t *testing.T) {
-	c := newConn25(logger.Discard)
-	nid := tailcfg.NodeID(1)
-	tip := netip.MustParseAddr("0.0.0.1")
-	got := c.connector.transitIPTarget(nid, tip)
-	want := netip.Addr{}
-	if got != want {
-		t.Fatalf("Unknown transit addr, want: %v, got %v", want, got)
+				// Validate the contents of each response
+				for j, tipResp := range resp.TransitIPs {
+					wantResp := want.TransitIPs[j]
+					if tipResp.Code != wantResp.Code {
+						t.Errorf("transitIP.Code mismatch in response %d, tipresp %d: got %d, want %d",
+							i, j, tipResp.Code, wantResp.Code)
+					}
+					if tipResp.Message != wantResp.Message {
+						t.Errorf("transitIP.Message mismatch in response %d, tipresp %d: got %q, want %q",
+							i, j, tipResp.Message, wantResp.Message)
+					}
+				}
+
+				// Validate the state of the transitIP map after each request
+				if tt.wantLookups[i] != nil {
+					for j, wantLookup := range tt.wantLookups[i] {
+						if len(wantLookup) != 3 {
+							t.Fatalf("test setup error: wantLookup for request %d lookup %d contains %d IPs, expected 3",
+								i, j, len(wantLookup))
+						}
+						pip, tip, wantDip := wantLookup[0], wantLookup[1], wantLookup[2]
+						gotDip := c.connector.transitIPTarget(pip, tip)
+						if gotDip != wantDip {
+							t.Errorf("wrong result on lookup[%d][%d] ([%v], [%v]): got [%v] expected [%v]",
+								i, j, pip, tip, gotDip, wantDip)
+						}
+					}
+				}
+			}
+		})
 	}
 }
 
