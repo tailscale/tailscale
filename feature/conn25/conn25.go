@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 
 	"go4.org/netipx"
@@ -52,6 +53,12 @@ func jsonDecode(target any, rc io.ReadCloser) error {
 	}
 	err = json.Unmarshal(respBs, &target)
 	return err
+}
+
+func normalizeDnsName(name string) (dnsname.FQDN, error) {
+	// note that appconnector does this same thing, tsdns has its own custom lower casing
+	// it might be good to unify in a function in dnsname package.
+	return dnsname.ToFQDN(strings.ToLower(name))
 }
 
 func init() {
@@ -374,7 +381,7 @@ func configFromNodeView(n tailcfg.NodeView) (config, error) {
 	for _, app := range apps {
 		selfMatchesTags := slices.ContainsFunc(app.Connectors, selfTags.Contains)
 		for _, d := range app.Domains {
-			fqdn, err := dnsname.ToFQDN(d)
+			fqdn, err := normalizeDnsName(d)
 			if err != nil {
 				return config{}, err
 			}
@@ -620,7 +627,7 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 	if question.Class != dnsmessage.ClassINET {
 		return buf
 	}
-	queriedDomain, err := dnsname.ToFQDN(question.Name.String())
+	queriedDomain, err := normalizeDnsName(question.Name.String())
 	if err != nil {
 		return buf
 	}
@@ -674,7 +681,7 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 				return makeServFail(c.logf, hdr, question)
 			}
 		case dnsmessage.TypeA:
-			domain, err := dnsname.ToFQDN(h.Name.String())
+			domain, err := normalizeDnsName(h.Name.String())
 			if err != nil {
 				c.logf("bad dnsname: %v", err)
 				return makeServFail(c.logf, hdr, question)
