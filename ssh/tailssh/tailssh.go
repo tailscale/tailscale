@@ -1197,6 +1197,14 @@ func mapLocalUser(ruleSSHUsers map[string]string, reqSSHUser string) (localUser 
 	if !ok {
 		v = ruleSSHUsers["*"]
 	}
+	// We check whether the lowercased system user (i.e. unix user)
+	// matches any of the listed ssh users. This is done because the
+	// all users in ssh.[].users are normalized to lowercase, but the
+	// user email addresse username may originally be mixed case (e.g.
+	// "Bob@example.com"). This is especially true for SCIM users.
+	if _, ok := ruleSSHUsers[strings.ToLower(reqSSHUser)]; ok {
+		v = reqSSHUser // use the potentially-mixed case user.
+	}
 	if v == "=" {
 		return reqSSHUser
 	}
