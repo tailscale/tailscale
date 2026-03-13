@@ -40,7 +40,8 @@ const (
 //  1. GitHub Actions (strongest env signals; may run atop any cloud)
 //  2. AWS via IMDSv2 token endpoint (does not require env vars)
 //  3. GCP via metadata header semantics
-//  4. Azure via metadata endpoint
+//  4. AWS ECS via ECS token endpoint and env vars provided by ECS
+//  5. Azure via metadata endpoint
 func ObtainProviderToken(ctx context.Context, audience string) (string, error) {
 	env := detectEnvironment(ctx)
 
@@ -68,6 +69,9 @@ func detectEnvironment(ctx context.Context) Environment {
 	}
 	if detectGCPMetadata(ctx, client) {
 		return EnvGCP
+	}
+	if os.Getenv("ECS_CONTAINER_METADATA_URI_V4") != "" {
+		return EnvAWS
 	}
 	return EnvNone
 }
@@ -163,7 +167,7 @@ func acquireGitHubActionsIDToken(ctx context.Context, audience string) (string, 
 }
 
 func acquireAWSWebIdentityToken(ctx context.Context, audience string) (string, error) {
-	// LoadDefaultConfig wires up the default credential chain (incl. IMDS).
+	// LoadDefaultConfig wires up the default credential chain (incl. IMDS and ECS metadata).
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return "", fmt.Errorf("load aws config: %w", err)
@@ -174,12 +178,15 @@ func acquireAWSWebIdentityToken(ctx context.Context, audience string) (string, e
 		return "", fmt.Errorf("AWS credentials unavailable (instance profile/IMDS?): %w", err)
 	}
 
-	imdsClient := imds.NewFromConfig(cfg)
-	region, err := imdsClient.GetRegion(ctx, &imds.GetRegionInput{})
-	if err != nil {
-		return "", fmt.Errorf("couldn't get AWS region: %w", err)
+	// ECS does not have IMDS; region must come from AWS_DEFAULT_REGION or AWS_REGION,
+	if cfg.Region == "" {
+		imdsClient := imds.NewFromConfig(cfg)
+		region, err := imdsClient.GetRegion(ctx, &imds.GetRegionInput{})
+		if err != nil {
+			return "", fmt.Errorf("couldn't get AWS region: %w", err)
+		}
+		cfg.Region = region.Region
 	}
-	cfg.Region = region.Region
 
 	stsClient := sts.NewFromConfig(cfg)
 	in := &sts.GetWebIdentityTokenInput{
