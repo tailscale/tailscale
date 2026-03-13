@@ -594,8 +594,16 @@ func makeServFail(logf logger.Logf, h dnsmessage.Header, q dnsmessage.Question) 
 	h.Authoritative = true
 	h.RCode = dnsmessage.RCodeServerFailure
 	b := dnsmessage.NewBuilder(nil, h)
-	b.StartQuestions()
-	b.Question(q)
+	err := b.StartQuestions()
+	if err != nil {
+		logf("error making servfail: %v", err)
+		return []byte{}
+	}
+	err = b.Question(q)
+	if err != nil {
+		logf("error making servfail: %v", err)
+		return []byte{}
+	}
 	bs, err := b.Finish()
 	if err != nil {
 		// If there's an error here there's a bug somewhere directly above.
