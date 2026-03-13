@@ -1481,6 +1481,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 
 	dialIP := netaddrIPFromNetstackIP(reqDetails.LocalAddress)
 	isTailscaleIP := tsaddr.IsTailscaleIP(dialIP)
+	isLocal := ns.isLocalIP(dialIP) // i.e. not a subnet routed or 4via6 target
 
 	dstAddrPort := netip.AddrPortFrom(dialIP, reqDetails.LocalPort)
 
@@ -1600,7 +1601,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 	dialAddr := netip.AddrPortFrom(dialIP, uint16(reqDetails.LocalPort))
 
-	if !ns.forwardTCP(getConnOrReset, clientRemoteIP, &wq, dialAddr) {
+	if !ns.forwardTCP(getConnOrReset, clientRemoteIP, &wq, dialAddr, isLocal) {
 		r.Complete(true) // sends a RST
 	}
 }
@@ -1612,7 +1613,7 @@ type tcpCloser interface {
 	CloseWrite() error
 }
 
-func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.TCPConn, clientRemoteIP netip.Addr, wq *waiter.Queue, dialAddr netip.AddrPort) (handled bool) {
+func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.TCPConn, clientRemoteIP netip.Addr, wq *waiter.Queue, dialAddr netip.AddrPort, isLocal bool) (handled bool) {
 	dialAddrStr := dialAddr.String()
 	if debugNetstack() {
 		ns.logf("[v2] netstack: forwarding incoming connection to %s", dialAddrStr)
@@ -1659,11 +1660,13 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 
 	backendLocalAddr := backend.LocalAddr().(*net.TCPAddr)
 	backendLocalIPPort := netaddr.Unmap(backendLocalAddr.AddrPort())
-	if err := ns.pm.RegisterIPPortIdentity("tcp", backendLocalIPPort, clientRemoteIP); err != nil {
-		ns.logf("netstack: could not register TCP mapping %s: %v", backendLocalIPPort, err)
-		return
+	if isLocal {
+		if err := ns.pm.RegisterIPPortIdentity("tcp", backendLocalIPPort, clientRemoteIP); err != nil {
+			ns.logf("netstack: could not register TCP mapping %s: %v", backendLocalIPPort, err)
+			return
+		}
+		defer ns.pm.UnregisterIPPortIdentity("tcp", backendLocalIPPort)
 	}
-	defer ns.pm.UnregisterIPPortIdentity("tcp", backendLocalIPPort)
 
 	// If we get here, either the getClient call below will succeed and
 	// return something we can Close, or it will fail and will properly
