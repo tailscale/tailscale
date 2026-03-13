@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 
 	"go4.org/netipx"
@@ -53,6 +54,12 @@ func jsonDecode(target any, rc io.ReadCloser) error {
 	}
 	err = json.Unmarshal(respBs, &target)
 	return err
+}
+
+func normalizeDNSName(name string) (dnsname.FQDN, error) {
+	// note that appconnector does this same thing, tsdns has its own custom lower casing
+	// it might be good to unify in a function in dnsname package.
+	return dnsname.ToFQDN(strings.ToLower(name))
 }
 
 func init() {
@@ -438,7 +445,7 @@ func configFromNodeView(n tailcfg.NodeView) (config, error) {
 	for _, app := range apps {
 		selfMatchesTags := slices.ContainsFunc(app.Connectors, selfTags.Contains)
 		for _, d := range app.Domains {
-			fqdn, err := dnsname.ToFQDN(d)
+			fqdn, err := normalizeDNSName(d)
 			if err != nil {
 				return config{}, err
 			}
@@ -641,15 +648,80 @@ func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) error {
 	return makePeerAPIReq(ctx, client, urlBase, as)
 }
 
+type dnsResponseRewrite struct {
+	domain dnsname.FQDN
+	dst    netip.Addr
+}
+
+func makeServFail(logf logger.Logf, h dnsmessage.Header, q dnsmessage.Question) []byte {
+	h.Response = true
+	h.Authoritative = true
+	h.RCode = dnsmessage.RCodeServerFailure
+	b := dnsmessage.NewBuilder(nil, h)
+	err := b.StartQuestions()
+	if err != nil {
+		logf("error making servfail: %v", err)
+		return []byte{}
+	}
+	err = b.Question(q)
+	if err != nil {
+		logf("error making servfail: %v", err)
+		return []byte{}
+	}
+	bs, err := b.Finish()
+	if err != nil {
+		// If there's an error here there's a bug somewhere directly above.
+		// _possibly_ some kind of question that was parseable but not encodable?,
+		// otherwise we could panic.
+		logf("error making servfail: %v", err)
+	}
+	return bs
+}
+
 func (c *client) mapDNSResponse(buf []byte) []byte {
 	var p dnsmessage.Parser
-	if _, err := p.Start(buf); err != nil {
+	hdr, err := p.Start(buf)
+	if err != nil {
 		c.logf("error parsing dns response: %v", err)
 		return buf
 	}
-	if err := p.SkipAllQuestions(); err != nil {
+	questions, err := p.AllQuestions()
+	if err != nil {
 		c.logf("error parsing dns response: %v", err)
 		return buf
+	}
+	// Any message we are interested in has one question (RFC 9619)
+	if len(questions) != 1 {
+		return buf
+	}
+	question := questions[0]
+	// The other Class types are not commonly used and supporting them hasn't been considered.
+	if question.Class != dnsmessage.ClassINET {
+		return buf
+	}
+	queriedDomain, err := normalizeDNSName(question.Name.String())
+	if err != nil {
+		return buf
+	}
+	if !c.isConnectorDomain(queriedDomain) {
+		return buf
+	}
+
+	// Now we know this is a dns response we think we should rewrite, we're going to provide our response which
+	// currently means we will:
+	//  * write the questions through as they are
+	//  * not send through the additional section
+	//  * provide our answers, or no answers if we don't handle those answers (possibly in the future we should write through answers for eg TypeTXT)
+	var answers []dnsResponseRewrite
+	if question.Type != dnsmessage.TypeA {
+		// we plan to support TypeAAAA soon (2026-03-11)
+		c.logf("mapping dns response for connector domain, unsupported type: %v", question.Type)
+		newBuf, err := c.rewriteDNSResponse(hdr, questions, answers)
+		if err != nil {
+			c.logf("error writing empty response for unsupported type: %v", err)
+			return makeServFail(c.logf, hdr, question)
+		}
+		return newBuf
 	}
 	for {
 		h, err := p.AnswerHeader()
@@ -658,57 +730,108 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 		}
 		if err != nil {
 			c.logf("error parsing dns response: %v", err)
-			return buf
+			return makeServFail(c.logf, hdr, question)
 		}
-
+		// other classes are unsupported, and we checked the question was for ClassINET already
 		if h.Class != dnsmessage.ClassINET {
+			c.logf("unexpected class for connector domain dns response: %v %v", queriedDomain, h.Class)
 			if err := p.SkipAnswer(); err != nil {
 				c.logf("error parsing dns response: %v", err)
-				return buf
+				return makeServFail(c.logf, hdr, question)
 			}
 			continue
 		}
-
 		switch h.Type {
+		case dnsmessage.TypeCNAME:
+			// An A record was asked for, and the answer is a CNAME, this answer will tell us which domain it's a CNAME for
+			// and a subsequent answer should tell us what the target domains address is (or possibly another CNAME). Drop
+			// this for now (2026-03-11) but in the near future we should collapse the CNAME chain and map to the ultimate
+			// destination address (see eg appc/{appconnector,observe}.go).
+			c.logf("not yet implemented CNAME answer: %v", queriedDomain)
+			if err := p.SkipAnswer(); err != nil {
+				c.logf("error parsing dns response: %v", err)
+				return makeServFail(c.logf, hdr, question)
+			}
 		case dnsmessage.TypeA:
-			domain, err := dnsname.ToFQDN(h.Name.String())
+			domain, err := normalizeDNSName(h.Name.String())
 			if err != nil {
 				c.logf("bad dnsname: %v", err)
-				return buf
+				return makeServFail(c.logf, hdr, question)
 			}
-			if !c.isConnectorDomain(domain) {
+			// answers should be for the domain that was queried
+			if domain != queriedDomain {
+				c.logf("unexpected domain for connector domain dns response: %v %v", queriedDomain, domain)
 				if err := p.SkipAnswer(); err != nil {
 					c.logf("error parsing dns response: %v", err)
-					return buf
+					return makeServFail(c.logf, hdr, question)
 				}
 				continue
 			}
 			r, err := p.AResource()
 			if err != nil {
 				c.logf("error parsing dns response: %v", err)
-				return buf
+				return makeServFail(c.logf, hdr, question)
 			}
-			addrs, err := c.reserveAddresses(domain, netip.AddrFrom4(r.A))
-			if err != nil {
-				c.logf("error assigning connector addresses: %v", err)
-				return buf
-			}
-			if !addrs.isValid() {
-				c.logf("assigned connector addresses unexpectedly empty: %v", err)
-				return buf
-			}
+			answers = append(answers, dnsResponseRewrite{domain: domain, dst: netip.AddrFrom4(r.A)})
 		default:
+			// we already checked the question was for a supported type, this answer is unexpected
+			c.logf("unexpected type for connector domain dns response: %v %v", queriedDomain, h.Type)
 			if err := p.SkipAnswer(); err != nil {
 				c.logf("error parsing dns response: %v", err)
-				return buf
+				return makeServFail(c.logf, hdr, question)
 			}
-			continue
 		}
 	}
+	newBuf, err := c.rewriteDNSResponse(hdr, questions, answers)
+	if err != nil {
+		c.logf("error rewriting dns response: %v", err)
+		return makeServFail(c.logf, hdr, question)
+	}
+	return newBuf
+}
 
-	// TODO(fran) 2026-01-21 return a dns response with addresses
-	// swapped out for the magic IPs to make conn25 work.
-	return buf
+func (c *client) rewriteDNSResponse(hdr dnsmessage.Header, questions []dnsmessage.Question, answers []dnsResponseRewrite) ([]byte, error) {
+	// We are currently (2026-03-10) only doing this for AResource records, we know that if we are here
+	// with non-empty answers, the type was AResource.
+	b := dnsmessage.NewBuilder(nil, hdr)
+	b.EnableCompression()
+	if err := b.StartQuestions(); err != nil {
+		return nil, err
+	}
+	for _, q := range questions {
+		if err := b.Question(q); err != nil {
+			return nil, err
+		}
+	}
+	if err := b.StartAnswers(); err != nil {
+		return nil, err
+	}
+	// make an answer for each rewrite
+	for _, rw := range answers {
+		as, err := c.reserveAddresses(rw.domain, rw.dst)
+		if err != nil {
+			return nil, err
+		}
+		if !as.isValid() {
+			return nil, errors.New("connector addresses empty")
+		}
+		name, err := dnsmessage.NewName(rw.domain.WithTrailingDot())
+		if err != nil {
+			return nil, err
+		}
+		// only handling TypeA right now
+		rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 0}
+		if err := b.AResource(rhdr, dnsmessage.AResource{A: as.magic.As4()}); err != nil {
+			return nil, err
+		}
+	}
+	// We do _not_ include the additional section in our rewrite. (We don't want to include
+	// eg DNSSEC info, or other extra info like related records).
+	out, err := b.Finish()
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 type connector struct {
