@@ -1005,8 +1005,7 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			// c := newConn25(logger.Discard)
-			c := newConn25(t.Logf)
+			c := newConn25(logger.Discard)
 			if err := c.reconfig(sn); err != nil {
 				t.Fatal(err)
 			}
