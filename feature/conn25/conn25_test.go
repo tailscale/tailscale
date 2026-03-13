@@ -768,16 +768,18 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 		TransitIPPool: []netipx.IPRange{rangeFrom("40", "50")},
 	}, []string{})
 
-	compareToARecords := func(t *testing.T, resources []dnsmessage.Resource, want []netip.Addr) {
+	compareToRecords := func(t *testing.T, resources []dnsmessage.Resource, want []netip.Addr) {
 		t.Helper()
 		var got []netip.Addr
 		for _, r := range resources {
 			if b, ok := r.Body.(*dnsmessage.AResource); ok {
 				got = append(got, netip.AddrFrom4(b.A))
+			} else if b, ok := r.Body.(*dnsmessage.AAAAResource); ok {
+				got = append(got, netip.AddrFrom16(b.AAAA))
 			}
 		}
 		if diff := cmp.Diff(want, got, cmpopts.EquateComparable(netip.Addr{})); diff != "" {
-			t.Fatalf("A records mismatch (-want +got):\n%s", diff)
+			t.Fatalf("A/AAAA records mismatch (-want +got):\n%s", diff)
 		}
 	}
 
@@ -785,7 +787,7 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 		return func(t *testing.T, bs []byte) {
 			t.Helper()
 			answers, _ := parseResponse(t, bs)
-			compareToARecords(t, answers, want)
+			compareToRecords(t, answers, want)
 		}
 	}
 
@@ -793,7 +795,7 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 		return func(t *testing.T, bs []byte) {
 			t.Helper()
 			_, additionals := parseResponse(t, bs)
-			compareToARecords(t, additionals, want)
+			compareToRecords(t, additionals, want)
 		}
 	}
 
