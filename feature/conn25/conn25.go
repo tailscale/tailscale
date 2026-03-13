@@ -728,7 +728,7 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 
 func (c *client) rewriteDNSResponse(hdr dnsmessage.Header, questions []dnsmessage.Question, answers []dnsResponseRewrite) ([]byte, error) {
 	// We are currently (2026-03-10) only doing this for AResource records, we know that if we are here
-	// with non-empty rewrites, the type was AResource.
+	// with non-empty answers, the type was AResource.
 	b := dnsmessage.NewBuilder(nil, hdr)
 	b.EnableCompression()
 	if err := b.StartQuestions(); err != nil {
