@@ -737,7 +737,7 @@ func parseResponse(t *testing.T, buf []byte) ([]dnsmessage.Resource, []dnsmessag
 		t.Fatalf("parsing DNS response: %v", err)
 	}
 	if header.RCode != dnsmessage.RCodeSuccess {
-		t.Fatalf("RCode want: %v, got: %v", dnsmessage.RCodeServerFailure, header.RCode)
+		t.Fatalf("RCode want: %v, got: %v", dnsmessage.RCodeSuccess, header.RCode)
 	}
 	if err := p.SkipAllQuestions(); err != nil {
 		t.Fatalf("skipping questions: %v", err)
