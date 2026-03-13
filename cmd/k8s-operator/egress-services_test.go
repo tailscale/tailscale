@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/AlekSi/pointer"
@@ -114,6 +115,43 @@ func TestTailscaleEgressServices(t *testing.T) {
 		})
 		expectReconciled(t, esr, "default", "test")
 		validateReadyService(t, fc, esr, svc, clock, zl, cm)
+	})
+
+	t.Run("user_port_9002_gets_allocated_target_port", func(t *testing.T) {
+		svc.Spec.Ports = []corev1.ServicePort{
+			{Protocol: "TCP", Port: 80, Name: "http"},
+			{Protocol: "TCP", Port: 9002, Name: "custom-port"},
+		}
+		mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
+			s.Spec.Ports = svc.Spec.Ports
+		})
+		expectReconciled(t, esr, "default", "test")
+
+		name := findGenNameForEgressSvcResources(t, fc, svc)
+		clusterSvc := mustGetClusterIPSvc(t, fc, name)
+
+		idx := slices.IndexFunc(clusterSvc.Spec.Ports, func(p corev1.ServicePort) bool {
+			return p.Port == 9002 && p.Name == "custom-port"
+		})
+		if idx == -1 {
+			t.Fatal("user port 9002 not found")
+		}
+		if tp := clusterSvc.Spec.Ports[idx].TargetPort.IntVal; tp < 10000 || tp >= 11000 {
+			t.Errorf("user port 9002 TargetPort = %d, want [10000-11000)", tp)
+		}
+
+		idx = slices.IndexFunc(clusterSvc.Spec.Ports, func(p corev1.ServicePort) bool {
+			return p.Name == "tailscale-health-check"
+		})
+		if idx == -1 {
+			t.Fatal("health check port not found")
+		}
+		if got := clusterSvc.Spec.Ports[idx].Port; got != 9003 {
+			t.Errorf("health check Port = %d, want 9003", got)
+		}
+		if got := clusterSvc.Spec.Ports[idx].TargetPort.IntVal; got != 9002 {
+			t.Errorf("health check TargetPort = %d, want 9002", got)
+		}
 	})
 
 	t.Run("delete_external_name_service", func(t *testing.T) {
