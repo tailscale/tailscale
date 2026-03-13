@@ -56,6 +56,7 @@ import (
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
+	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tsnet"
 )
@@ -438,7 +439,7 @@ func runTests(m *testing.M) (int, error) {
 		return 0, fmt.Errorf("failed to install %q via helm: %w", relName, err)
 	}
 
-	if err := applyDefaultProxyClass(ctx, kubeClient); err != nil {
+	if err := applyDefaultProxyClass(ctx, logger, kubeClient); err != nil {
 		return 0, fmt.Errorf("failed to apply default ProxyClass: %w", err)
 	}
 
@@ -537,7 +538,7 @@ func tagForRepo(dir string) (string, error) {
 	return tag, nil
 }
 
-func applyDefaultProxyClass(ctx context.Context, cl client.Client) error {
+func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl client.Client) error {
 	pc := &tsapi.ProxyClass{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: tsapi.SchemeGroupVersion.String(),
@@ -563,6 +564,24 @@ func applyDefaultProxyClass(ctx context.Context, cl client.Client) error {
 	owner := client.FieldOwner("k8s-test")
 	if err := cl.Patch(ctx, pc, client.Apply, owner); err != nil {
 		return fmt.Errorf("failed to apply default ProxyClass: %w", err)
+	}
+
+	// Wait for the ProxyClass to be marked ready.
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	for {
+		if err := cl.Get(ctx, client.ObjectKeyFromObject(pc), pc); err != nil {
+			return fmt.Errorf("failed to get default ProxyClass: %w", err)
+		}
+		if tsoperator.ProxyClassIsReady(pc) {
+			break
+		}
+		logger.Info("waiting for default ProxyClass to be ready...")
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for default ProxyClass to be ready")
+		case <-time.After(time.Second):
+		}
 	}
 
 	return nil

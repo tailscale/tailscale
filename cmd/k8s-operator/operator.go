@@ -77,6 +77,12 @@ import (
 // Generate CRD API docs.
 //go:generate go run github.com/elastic/crd-ref-docs --renderer=markdown --source-path=../../k8s-operator/apis/ --config=../../k8s-operator/api-docs-config.yaml --output-path=../../k8s-operator/api.md
 
+const (
+	indexServiceProxyClass = ".metadata.annotations.service-proxy-class"
+	indexServiceExposed    = ".metadata.annotations.service-expose"
+	indexServiceType       = ".metadata.annotations.service-type"
+)
+
 func main() {
 	// Required to use our client API. We're fine with the instability since the
 	// client lives in the same repo as this code.
@@ -351,7 +357,12 @@ func runReconcilers(opts reconcilerOpts) {
 	svcChildFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("svc"))
 	// If a ProxyClass changes, enqueue all Services labeled with that
 	// ProxyClass's name.
-	proxyClassFilterForSvc := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForSvc(mgr.GetClient(), startlog))
+	proxyClassFilterForSvc := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForSvc(
+		mgr.GetClient(),
+		startlog,
+		opts.defaultProxyClass,
+		opts.proxyActAsDefaultLoadBalancer,
+	))
 
 	eventRecorder := mgr.GetEventRecorderFor("tailscale-operator")
 	ssr := &tailscaleSTSReconciler{
@@ -388,6 +399,18 @@ func runReconcilers(opts reconcilerOpts) {
 	}
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), new(corev1.Service), indexServiceProxyClass, indexProxyClass); err != nil {
 		startlog.Fatalf("failed setting up ProxyClass indexer for Services: %v", err)
+	}
+	if opts.defaultProxyClass != "" {
+		// If a default ProxyClass is specified, we'll need to list all objects
+		// that could be affected. For L3 ingress, this is Services with the
+		// "tailscale.com/expose" annotation and LoadBalancer services (either
+		// with the loadBalancerClass "tailscale", or unset if we're the default).
+		if err := mgr.GetFieldIndexer().IndexField(context.Background(), new(corev1.Service), indexServiceExposed, indexExposed); err != nil {
+			startlog.Fatalf("failed setting up exposed indexer for Services: %v", err)
+		}
+		if err := mgr.GetFieldIndexer().IndexField(context.Background(), new(corev1.Service), indexServiceType, indexType); err != nil {
+			startlog.Fatalf("failed setting up type indexer for Services: %v", err)
+		}
 	}
 
 	ingressChildFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("ingress"))
@@ -910,10 +933,27 @@ func indexProxyClass(o client.Object) []string {
 	return []string{o.GetAnnotations()[LabelAnnotationProxyClass]}
 }
 
+func indexExposed(o client.Object) []string {
+	if o.GetAnnotations()[AnnotationExpose] != "true" {
+		return nil
+	}
+
+	return []string{o.GetAnnotations()[AnnotationExpose]}
+}
+
+func indexType(o client.Object) []string {
+	svc, ok := o.(*corev1.Service)
+	if !ok {
+		return nil
+	}
+
+	return []string{string(svc.Spec.Type)}
+}
+
 // proxyClassHandlerForSvc returns a handler that, for a given ProxyClass,
 // returns a list of reconcile requests for all Services labeled with
 // tailscale.com/proxy-class: <proxy class name>.
-func proxyClassHandlerForSvc(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+func proxyClassHandlerForSvc(cl client.Client, logger *zap.SugaredLogger, defaultProxyClass string, isDefaultLoadBalancer bool) handler.MapFunc {
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		svcList := new(corev1.ServiceList)
 		labels := map[string]string{
@@ -932,13 +972,12 @@ func proxyClassHandlerForSvc(cl client.Client, logger *zap.SugaredLogger) handle
 			seenSvcs.Add(fmt.Sprintf("%s/%s", svc.Namespace, svc.Name))
 		}
 
-		svcAnnotationList := new(corev1.ServiceList)
-		if err := cl.List(ctx, svcAnnotationList, client.MatchingFields{indexServiceProxyClass: o.GetName()}); err != nil {
+		if err := cl.List(ctx, svcList, client.MatchingFields{indexServiceProxyClass: o.GetName()}); err != nil {
 			logger.Debugf("error listing Services for ProxyClass: %v", err)
 			return nil
 		}
 
-		for _, svc := range svcAnnotationList.Items {
+		for _, svc := range svcList.Items {
 			nsname := fmt.Sprintf("%s/%s", svc.Namespace, svc.Name)
 			if seenSvcs.Contains(nsname) {
 				continue
@@ -946,6 +985,36 @@ func proxyClassHandlerForSvc(cl client.Client, logger *zap.SugaredLogger) handle
 
 			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&svc)})
 			seenSvcs.Add(nsname)
+		}
+
+		if o.GetName() == defaultProxyClass {
+			// For the default ProxyClass, we also need to reconcile all exposed
+			// Services that don't have an explicit ProxyClass set.
+			for _, matcher := range []client.ListOption{
+				client.MatchingFields{indexServiceExposed: "true"},
+				client.MatchingFields{indexServiceType: string(corev1.ServiceTypeLoadBalancer)},
+			} {
+				if err := cl.List(ctx, svcList, matcher); err != nil {
+					logger.Debugf("error listing exposed Services for ProxyClass: %v", err)
+					return nil
+				}
+
+				for _, svc := range svcList.Items {
+					if hasProxyClassAnnotation(&svc) {
+						continue
+					}
+					if !shouldExpose(&svc, isDefaultLoadBalancer) {
+						continue
+					}
+					nsname := fmt.Sprintf("%s/%s", svc.Namespace, svc.Name)
+					if seenSvcs.Contains(nsname) {
+						continue
+					}
+
+					reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&svc)})
+					seenSvcs.Add(nsname)
+				}
+			}
 		}
 
 		return reqs
