@@ -517,3 +517,5 @@ require (
 )
 
 tool github.com/stacklok/frizbee
+
+replace gvisor.dev/gvisor => /home/ubuntu/src/gvisor
