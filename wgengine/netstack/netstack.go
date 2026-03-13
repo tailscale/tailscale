@@ -1659,11 +1659,8 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 
 	backendLocalAddr := backend.LocalAddr().(*net.TCPAddr)
 	backendLocalIPPort := netaddr.Unmap(backendLocalAddr.AddrPort())
-	if err := ns.pm.RegisterIPPortIdentity("tcp", backendLocalIPPort, clientRemoteIP); err != nil {
-		ns.logf("netstack: could not register TCP mapping %s: %v", backendLocalIPPort, err)
-		return
-	}
-	defer ns.pm.UnregisterIPPortIdentity("tcp", backendLocalIPPort)
+	unregister := ns.pm.RegisterIPPortIdentity("tcp", backendLocalIPPort, clientRemoteIP)
+	defer unregister()
 
 	// If we get here, either the getClient call below will succeed and
 	// return something we can Close, or it will fail and will properly
@@ -1972,11 +1969,9 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 	if !backendLocalIPPort.IsValid() {
 		ns.logf("could not get backend local IP:port from %v:%v", backendLocalAddr.IP, backendLocalAddr.Port)
 	}
+	unregister := func() {}
 	if isLocal {
-		if err := ns.pm.RegisterIPPortIdentity("udp", backendLocalIPPort, clientAddr.Addr()); err != nil {
-			ns.logf("netstack: could not register UDP mapping %s: %v", backendLocalIPPort, err)
-			return
-		}
+		unregister = ns.pm.RegisterIPPortIdentity("udp", backendLocalIPPort, clientAddr.Addr())
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -1991,9 +1986,7 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 		idleTimeout = 30 * time.Second
 	}
 	timer := time.AfterFunc(idleTimeout, func() {
-		if isLocal {
-			ns.pm.UnregisterIPPortIdentity("udp", backendLocalIPPort)
-		}
+		unregister()
 		ns.logf("netstack: UDP session between %s and %s timed out", backendListenAddr, backendRemoteAddr)
 		cancel()
 		client.Close()
