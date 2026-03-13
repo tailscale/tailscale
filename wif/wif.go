@@ -63,7 +63,7 @@ func detectEnvironment(ctx context.Context) Environment {
 	}
 
 	client := httpClient()
-	if detectAWSIMDSv2(ctx, client) {
+	if detectAWSIMDSv2(ctx, client) || detectAWSECS() {
 		return EnvAWS
 	}
 	if detectGCPMetadata(ctx, client) {
@@ -92,6 +92,13 @@ func detectAWSIMDSv2(ctx context.Context, client *http.Client) bool {
 	defer resp.Body.Close()
 
 	return resp.StatusCode == http.StatusOK
+}
+
+// detectAWSECS checks for environment variables set by ECS Fargate,
+// where IMDSv2 is not available.
+func detectAWSECS() bool {
+	return os.Getenv("ECS_CONTAINER_METADATA_URI_V4") != "" ||
+		os.Getenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") != ""
 }
 
 func detectGCPMetadata(ctx context.Context, client *http.Client) bool {
@@ -174,12 +181,17 @@ func acquireAWSWebIdentityToken(ctx context.Context, audience string) (string, e
 		return "", fmt.Errorf("AWS credentials unavailable (instance profile/IMDS?): %w", err)
 	}
 
-	imdsClient := imds.NewFromConfig(cfg)
-	region, err := imdsClient.GetRegion(ctx, &imds.GetRegionInput{})
-	if err != nil {
-		return "", fmt.Errorf("couldn't get AWS region: %w", err)
+	// config.LoadDefaultConfig reads AWS_REGION / AWS_DEFAULT_REGION from the
+	// environment. Only fall back to IMDS when the region is still unknown,
+	// which keeps this working on ECS Fargate where IMDS is not available.
+	if cfg.Region == "" {
+		imdsClient := imds.NewFromConfig(cfg)
+		region, err := imdsClient.GetRegion(ctx, &imds.GetRegionInput{})
+		if err != nil {
+			return "", fmt.Errorf("couldn't determine AWS region (set AWS_REGION or ensure IMDS is available): %w", err)
+		}
+		cfg.Region = region.Region
 	}
-	cfg.Region = region.Region
 
 	stsClient := sts.NewFromConfig(cfg)
 	in := &sts.GetWebIdentityTokenInput{
