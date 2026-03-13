@@ -26,6 +26,7 @@ import (
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/logger"
@@ -131,7 +132,7 @@ func (e *extension) handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.R
 		http.Error(w, "Error decoding JSON", http.StatusBadRequest)
 		return
 	}
-	resp := e.conn25.handleConnectorTransitIPRequest(h.Peer().ID(), req)
+	resp := e.conn25.handleConnectorTransitIPRequest(h.Peer(), req)
 	bs, err := json.Marshal(resp)
 	if err != nil {
 		http.Error(w, "Error encoding JSON", http.StatusInternalServerError)
@@ -248,47 +249,94 @@ func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 }
 
 const dupeTransitIPMessage = "Duplicate transit address in ConnectorTransitIPRequest"
+const noMatchingPeerIPFamilyMessage = "No peer IP found with matching IP family"
+const addrFamilyMismatchMessage = "Transit and Destination addresses must have matching IP family"
+const unknownAppNameMessage = "The App name in the request does not match a configured App"
 
-// handleConnectorTransitIPRequest creates a ConnectorTransitIPResponse in response to a ConnectorTransitIPRequest.
-// It updates the connectors mapping of TransitIP->DestinationIP per peer (tailcfg.NodeID).
-// If a peer has stored this mapping in the connector Conn25 will route traffic to TransitIPs to DestinationIPs for that peer.
-func (c *Conn25) handleConnectorTransitIPRequest(nid tailcfg.NodeID, ctipr ConnectorTransitIPRequest) ConnectorTransitIPResponse {
+// handleConnectorTransitIPRequest creates a ConnectorTransitIPResponse in response
+// to a ConnectorTransitIPRequest. It updates the connectors mapping of
+// TransitIP->DestinationIP per peer (using the Peer's IP that matches the address
+// family of the transitIP). If a peer has stored this mapping in the connector,
+// Conn25 will route traffic to TransitIPs to DestinationIPs for that peer.
+func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, ctipr ConnectorTransitIPRequest) ConnectorTransitIPResponse {
+	var peerIPv4, peerIPv6 netip.Addr
+	for _, ip := range n.Addresses().All() {
+		if !ip.IsSingleIP() || !tsaddr.IsTailscaleIP(ip.Addr()) {
+			continue
+		}
+		if ip.Addr().Is4() && !peerIPv4.IsValid() {
+			peerIPv4 = ip.Addr()
+		} else if ip.Addr().Is6() && !peerIPv6.IsValid() {
+			peerIPv6 = ip.Addr()
+		}
+	}
+
 	resp := ConnectorTransitIPResponse{}
 	seen := map[netip.Addr]bool{}
 	for _, each := range ctipr.TransitIPs {
 		if seen[each.TransitIP] {
 			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
-				Code:    OtherFailure,
+				Code:    DuplicateTransitIP,
 				Message: dupeTransitIPMessage,
 			})
+			c.connector.logf("[Unexpected] peer attempt to map a transit IP reused a transitIP: node: %s, IP: %v",
+				n.StableID(), each.TransitIP)
 			continue
 		}
-		tipresp := c.connector.handleTransitIPRequest(nid, each)
+		tipresp := c.connector.handleTransitIPRequest(n, peerIPv4, peerIPv6, each)
 		seen[each.TransitIP] = true
 		resp.TransitIPs = append(resp.TransitIPs, tipresp)
 	}
 	return resp
 }
 
-func (s *connector) handleTransitIPRequest(nid tailcfg.NodeID, tipr TransitIPRequest) TransitIPResponse {
+func (s *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr, peerV6 netip.Addr, tipr TransitIPRequest) TransitIPResponse {
+	if tipr.TransitIP.Is4() != tipr.DestinationIP.Is4() {
+		s.logf("[Unexpected] peer attempt to map a transit IP to dest IP did not have matching families: node: %s, tIPv4: %v dIPv4: %v",
+			n.StableID(), tipr.TransitIP.Is4(), tipr.DestinationIP.Is4())
+		return TransitIPResponse{Code: AddrFamilyMismatch, Message: addrFamilyMismatchMessage}
+	}
+
+	// Datapath lookups only have access to the peer IP, and that will match the family
+	// of the transit IP, so we need to store v4 and v6 mappings separately.
+	var peerAddr netip.Addr
+	if tipr.TransitIP.Is4() {
+		peerAddr = peerV4
+	} else {
+		peerAddr = peerV6
+	}
+
+	// If we couldn't find a matching family, return an error.
+	if !peerAddr.IsValid() {
+		s.logf("[Unexpected] peer attempt to map a transit IP did not have a matching address family: node: %s, IPv4: %v",
+			n.StableID(), tipr.TransitIP.Is4())
+		return TransitIPResponse{NoMatchingPeerIPFamily, noMatchingPeerIPFamilyMessage}
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.transitIPs == nil {
-		s.transitIPs = make(map[tailcfg.NodeID]map[netip.Addr]appAddr)
+	if _, ok := s.config.appsByName[tipr.App]; !ok {
+		s.logf("[Unexpected] peer attempt to map a transit IP referenced unknown app: node: %s, app: %q",
+			n.StableID(), tipr.App)
+		return TransitIPResponse{Code: UnknownAppName, Message: unknownAppNameMessage}
 	}
-	peerMap, ok := s.transitIPs[nid]
+
+	if s.transitIPs == nil {
+		s.transitIPs = make(map[netip.Addr]map[netip.Addr]appAddr)
+	}
+	peerMap, ok := s.transitIPs[peerAddr]
 	if !ok {
 		peerMap = make(map[netip.Addr]appAddr)
-		s.transitIPs[nid] = peerMap
+		s.transitIPs[peerAddr] = peerMap
 	}
 	peerMap[tipr.TransitIP] = appAddr{addr: tipr.DestinationIP, app: tipr.App}
 	return TransitIPResponse{}
 }
 
-func (s *connector) transitIPTarget(nid tailcfg.NodeID, tip netip.Addr) netip.Addr {
+func (s *connector) transitIPTarget(peerIP, tip netip.Addr) netip.Addr {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.transitIPs[nid][tip].addr
+	return s.transitIPs[peerIP][tip].addr
 }
 
 // TransitIPRequest details a single TransitIP allocation request from a client to a
@@ -322,8 +370,24 @@ const (
 	OK TransitIPResponseCode = 0
 
 	// OtherFailure indicates that the mapping failed for a reason that does not have
-	// another relevant [TransitIPResponsecode].
+	// another relevant [TransitIPResponseCode].
 	OtherFailure TransitIPResponseCode = 1
+
+	// DuplicateTransitIP indicates that the same transit address appeared more than
+	// once in a [ConnectorTransitIPRequest].
+	DuplicateTransitIP TransitIPResponseCode = 2
+
+	// NoMatchingPeerIPFamily indicates that the peer did not have an associated
+	// IP with the same family as transit IP being registered.
+	NoMatchingPeerIPFamily = 3
+
+	// AddrFamilyMismatch indicates that the transit IP and destination IP addresses
+	// do not belong to the same IP family.
+	AddrFamilyMismatch = 4
+
+	// UnknownAppName indicates that the connector is not configured to handle requests
+	// for the App name that was specified in the request.
+	UnknownAppName = 5
 )
 
 // TransitIPResponse is the response to a TransitIPRequest
@@ -651,8 +715,9 @@ type connector struct {
 	logf logger.Logf
 
 	mu sync.Mutex // protects the fields below
-	// transitIPs is a map of connector client peer NodeID -> client transitIPs that we update as connector client peers instruct us to, and then use to route traffic to its destination on behalf of connector clients.
-	transitIPs map[tailcfg.NodeID]map[netip.Addr]appAddr
+	// transitIPs is a map of connector client peer IP -> client transitIPs that we update as connector client peers instruct us to, and then use to route traffic to its destination on behalf of connector clients.
+	// Note that each peer could potentially have two maps: one for its IPv4 address, and one for its IPv6 address. The transit IPs map for a given peer IP will contain transit IPs of the same family as the peer's IP.
+	transitIPs map[netip.Addr]map[netip.Addr]appAddr
 	config     config
 }
 
