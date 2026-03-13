@@ -59,24 +59,31 @@ type mappingKey struct {
 //
 // The proto is the network protocol that is being proxied; it must be "tcp" or
 // "udp" (not e.g. "tcp4", "udp6", etc.)
-func (m *Mapper) RegisterIPPortIdentity(proto string, ipport netip.AddrPort, tsIP netip.Addr) error {
+//
+// If an entry already exists for this (proto, ipport), it is overwritten.
+// This happens when the kernel reuses the same local ephemeral port for a
+// connection to a different destination (valid 4-tuple reuse, unique at
+// the socket layer) while a previous registration's owning goroutine has
+// not yet unregistered it. Under high-concurrency subnet routing with
+// many distinct backend destinations, such reuse is common: the map
+// occupancy approaches (concurrent connections / ephemeral port range).
+// The overwrite keeps WhoIs pointing at the most recent live connection.
+//
+// The returned unregister func removes the registration. It is a no-op if
+// the entry has since been overwritten by another registration, so that a
+// goroutine holding a stale unregister cannot delete a live entry.
+func (m *Mapper) RegisterIPPortIdentity(proto string, ipport netip.AddrPort, tsIP netip.Addr) (unregister func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	k := mappingKey{proto, ipport}
-	if v, ok := m.m[k]; ok {
-		return fmt.Errorf("proxymap: RegisterIPPortIdentity: already registered: %v/%v=>%v", k.proto, k.ap, v)
-	}
 	mak.Set(&m.m, k, tsIP)
-	return nil
-}
-
-// UnregisterIPPortIdentity removes a temporary IP:port registration
-// made previously by RegisterIPPortIdentity.
-func (m *Mapper) UnregisterIPPortIdentity(proto string, ipport netip.AddrPort) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	k := mappingKey{proto, ipport}
-	delete(m.m, k) // safe to delete from a nil map
+	return func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.m[k] == tsIP {
+			delete(m.m, k)
+		}
+	}
 }
 
 var whoIsSleeps = [...]time.Duration{
