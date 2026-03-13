@@ -131,11 +131,12 @@ func TestProxyClassHandlerForSvc(t *testing.T) {
 			},
 		}
 	}
-	lbSvc := func(name string, class *string) *corev1.Service {
+	lbSvc := func(name string, annotations map[string]string, class *string) *corev1.Service {
 		return &corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: "foo",
+				Name:        name,
+				Namespace:   "foo",
+				Annotations: annotations,
 			},
 			Spec: corev1.ServiceSpec{
 				Type:              corev1.ServiceTypeLoadBalancer,
@@ -145,7 +146,11 @@ func TestProxyClassHandlerForSvc(t *testing.T) {
 		}
 	}
 
-	const pcName = "custom-metadata"
+	const (
+		defaultPCName      = "default-proxyclass"
+		otherPCName        = "other-proxyclass"
+		unreferencedPCName = "unreferenced-proxyclass"
+	)
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
 		WithIndex(&corev1.Service{}, indexServiceProxyClass, indexProxyClass).
@@ -154,32 +159,63 @@ func TestProxyClassHandlerForSvc(t *testing.T) {
 		WithObjects(
 			svc("not-exposed", nil, nil),
 			svc("exposed-default", map[string]string{AnnotationExpose: "true"}, nil),
-			svc("annotated", map[string]string{LabelAnnotationProxyClass: pcName}, nil),
-			svc("labelled", nil, map[string]string{LabelAnnotationProxyClass: pcName}),
-			lbSvc("lb-svc", new("tailscale")),
-			lbSvc("lb-svc-no-class", nil),
-			lbSvc("lb-svc-other-class", new("other")),
+			svc("exposed-other", map[string]string{AnnotationExpose: "true", LabelAnnotationProxyClass: otherPCName}, nil),
+			svc("annotated", map[string]string{LabelAnnotationProxyClass: defaultPCName}, nil),
+			svc("labelled", nil, map[string]string{LabelAnnotationProxyClass: defaultPCName}),
+			lbSvc("lb-svc", nil, new("tailscale")),
+			lbSvc("lb-svc-no-class", nil, nil),
+			lbSvc("lb-svc-other-class", nil, new("other")),
+			lbSvc("lb-svc-other-pc", map[string]string{LabelAnnotationProxyClass: otherPCName}, nil),
 		).
 		Build()
 
 	zl := zap.Must(zap.NewDevelopment())
-	mapFunc := proxyClassHandlerForSvc(fc, zl.Sugar(), pcName, true)
+	mapFunc := proxyClassHandlerForSvc(fc, zl.Sugar(), defaultPCName, true)
 
-	reqs := mapFunc(t.Context(), &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: pcName,
+	for _, tc := range []struct {
+		name           string
+		proxyClassName string
+		expected       []reconcile.Request
+	}{
+		{
+			name:           "default_ProxyClass",
+			proxyClassName: defaultPCName,
+			expected: []reconcile.Request{
+				{NamespacedName: types.NamespacedName{Namespace: "default", Name: "exposed-default"}},
+				{NamespacedName: types.NamespacedName{Namespace: "default", Name: "annotated"}},
+				{NamespacedName: types.NamespacedName{Namespace: "default", Name: "labelled"}},
+				{NamespacedName: types.NamespacedName{Namespace: "foo", Name: "lb-svc"}},
+				{NamespacedName: types.NamespacedName{Namespace: "foo", Name: "lb-svc-no-class"}},
+			},
 		},
-	})
-	expectedReqs := []reconcile.Request{
-		{NamespacedName: types.NamespacedName{Namespace: "default", Name: "exposed-default"}},
-		{NamespacedName: types.NamespacedName{Namespace: "default", Name: "annotated"}},
-		{NamespacedName: types.NamespacedName{Namespace: "default", Name: "labelled"}},
-		{NamespacedName: types.NamespacedName{Namespace: "foo", Name: "lb-svc"}},
-		{NamespacedName: types.NamespacedName{Namespace: "foo", Name: "lb-svc-no-class"}},
-	}
-	for _, expected := range expectedReqs {
-		if !slices.Contains(reqs, expected) {
-			t.Errorf("expected request for Service %q not found in results: %v", expected.Name, reqs)
-		}
+		{
+			name:           "other_ProxyClass",
+			proxyClassName: otherPCName,
+			expected: []reconcile.Request{
+				{NamespacedName: types.NamespacedName{Namespace: "default", Name: "exposed-other"}},
+				{NamespacedName: types.NamespacedName{Namespace: "foo", Name: "lb-svc-other-pc"}},
+			},
+		},
+		{
+			name:           "unreferenced_ProxyClass",
+			proxyClassName: unreferencedPCName,
+			expected:       nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reqs := mapFunc(t.Context(), &tsapi.ProxyClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: tc.proxyClassName,
+				},
+			})
+			if len(reqs) != len(tc.expected) {
+				t.Fatalf("expected %d requests, got %d: %v", len(tc.expected), len(reqs), reqs)
+			}
+			for _, expected := range tc.expected {
+				if !slices.Contains(reqs, expected) {
+					t.Errorf("expected request for Service %q not found in results: %v", expected.Name, reqs)
+				}
+			}
+		})
 	}
 }

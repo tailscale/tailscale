@@ -403,8 +403,8 @@ func runReconcilers(opts reconcilerOpts) {
 	if opts.defaultProxyClass != "" {
 		// If a default ProxyClass is specified, we'll need to list all objects
 		// that could be affected. For L3 ingress, this is Services with the
-		// "tailscale.com/expose" and LoadBalancer services (either with the
-		// loadBalancerClass "tailscale", or unset if we're the default).
+		// "tailscale.com/expose" annotation and LoadBalancer services (either
+		// with the loadBalancerClass "tailscale", or unset if we're the default).
 		if err := mgr.GetFieldIndexer().IndexField(context.Background(), new(corev1.Service), indexServiceExposed, indexExposed); err != nil {
 			startlog.Fatalf("failed setting up exposed indexer for Services: %v", err)
 		}
@@ -946,6 +946,7 @@ func indexType(o client.Object) []string {
 	if !ok {
 		return nil
 	}
+
 	return []string{string(svc.Spec.Type)}
 }
 
