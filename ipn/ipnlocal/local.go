@@ -144,6 +144,29 @@ func RegisterNewSSHServer(fn newSSHServerFunc) {
 	newSSHServer = fn
 }
 
+// listenSSHFunc, if non-nil, is the implementation of ListenSSH provided by the
+// ssh/tailssh package via RegisterListenSSH.
+var listenSSHFunc func(net.Listener, *LocalBackend, logger.Logf) (net.Listener, error)
+
+// RegisterListenSSH lets the conditionally linked ssh/tailssh package register
+// an implementation of ListenSSH for use by tsnet.
+func RegisterListenSSH(fn func(net.Listener, *LocalBackend, logger.Logf) (net.Listener, error)) {
+	listenSSHFunc = fn
+}
+
+// ListenSSH wraps the given listener with an SSH server that authenticates
+// connections using Tailscale peer identity. The returned listener's Accept
+// yields net.Conn values that are *tailssh.Session.
+//
+// If the ssh/tailssh package has not been linked (e.g. via
+// _ "tailscale.com/feature/ssh"), ListenSSH returns an error.
+func (b *LocalBackend) ListenSSH(ln net.Listener, logf logger.Logf) (net.Listener, error) {
+	if listenSSHFunc == nil {
+		return nil, errors.New("SSH support not available; import _ \"tailscale.com/feature/ssh\"")
+	}
+	return listenSSHFunc(ln, b, logf)
+}
+
 // watchSession represents a WatchNotifications channel,
 // an [ipnauth.Actor] that owns it (e.g., a connected GUI/CLI),
 // and sessionID as required to close targeted buses.
