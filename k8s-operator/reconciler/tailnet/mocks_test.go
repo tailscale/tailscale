@@ -9,6 +9,7 @@ import (
 	"context"
 	"io"
 
+	tsclient "tailscale.com/client/tailscale"
 	"tailscale.com/internal/client/tailscale"
 )
 
@@ -41,5 +42,17 @@ func (m MockTailnetClient) ListVIPServices(_ context.Context) (*tailscale.VIPSer
 		return nil, io.EOF
 	}
 
+	return nil, nil
+}
+
+func (m MockTailnetClient) ACL(_ context.Context) (*tsclient.ACL, error) {
+	return nil, nil
+}
+
+func (m MockTailnetClient) SetACL(_ context.Context, _ tsclient.ACL, _ bool) (*tsclient.ACL, error) {
+	return nil, nil
+}
+
+func (m MockTailnetClient) ValidateACL(_ context.Context, _ tsclient.ACLDetails) (*tsclient.ACLTestError, error) {
 	return nil, nil
 }

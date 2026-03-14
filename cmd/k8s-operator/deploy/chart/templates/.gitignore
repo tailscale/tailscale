@@ -3,6 +3,7 @@
 #
 # Generate for local usage with:
 # go run tailscale.com/cmd/k8s-operator/generate helmcrd
+/acl.yaml
 /connector.yaml
 /dnsconfig.yaml
 /proxyclass.yaml

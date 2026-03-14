@@ -8,6 +8,8 @@
 
 
 ### Resource Types
+- [ACL](#acl)
+- [ACLList](#acllist)
 - [Connector](#connector)
 - [ConnectorList](#connectorlist)
 - [DNSConfig](#dnsconfig)
@@ -23,6 +25,91 @@
 - [Tailnet](#tailnet)
 - [TailnetList](#tailnetlist)
 
+
+
+#### ACL
+
+
+
+ACL defines the desired Tailnet ACL (policy file) to be applied to a Tailnet.
+The operator syncs the policy from this resource to the Tailscale API using the
+Tailnet's OAuth credentials. The Tailnet's Secret must have OAuth scopes
+policy_file:read and policy_file.
+
+Only one ACL should target a given Tailnet. The policy can be provided
+inline (spec.policy) or from a ConfigMap/Secret (spec.policyFrom).
+See https://tailscale.com/kb/1018/acls and the Tailscale API policy file docs.
+
+
+
+_Appears in:_
+- [ACLList](#acllist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `ACL` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[ACLSpec](#aclspec)_ |  |  |  |
+| `status` _[ACLStatus](#aclstatus)_ |  |  |  |
+
+
+#### ACLList
+
+
+
+
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `ACLList` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[ACL](#acl) array_ |  |  |  |
+
+
+#### ACLSpec
+
+
+
+
+
+
+
+_Appears in:_
+- [ACL](#acl)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `tailnetRef` _string_ | TailnetRef is the name of the Tailnet custom resource whose credentials<br />are used to get and set the ACL. The Tailnet must exist and be ready. |  |  |
+| `policy` _string_ | Policy is the policy file content as JSON or HuJSON. Either Policy or<br />PolicyFrom must be set. |  |  |
+| `policyFrom` _[PolicySource](#policysource)_ | PolicyFrom references a ConfigMap or Secret key containing the policy<br />file (JSON or HuJSON). The referenced object must exist in the same<br />namespace as the operator (Tailscale namespace). |  |  |
+
+
+#### ACLStatus
+
+
+
+
+
+
+
+_Appears in:_
+- [ACL](#acl)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ |  |  |  |
+| `etag` _string_ | ETag is the last ETag returned by the Tailscale API for the policy file.<br />Used for safe updates (If-Match). |  |  |
+| `lastSyncTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#time-v1-meta)_ | LastSyncTime is the last time the policy was successfully synced. |  |  |
 
 
 #### APIServerProxyMode
@@ -561,6 +648,23 @@ _Appears in:_
 | `priorityClassName` _string_ | PriorityClassName for the proxy Pod.<br />By default Tailscale Kubernetes operator does not apply any priority class.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
 | `dnsPolicy` _[DNSPolicy](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#dnspolicy-v1-core)_ | DNSPolicy defines how DNS will be configured for the proxy Pod.<br />By default the Tailscale Kubernetes Operator does not set a DNS policy (uses cluster default).<br />https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-s-dns-policy |  | Enum: [ClusterFirstWithHostNet ClusterFirst Default None] <br /> |
 | `dnsConfig` _[PodDNSConfig](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#poddnsconfig-v1-core)_ | DNSConfig defines DNS parameters for the proxy Pod in addition to those generated from DNSPolicy.<br />When DNSPolicy is set to "None", DNSConfig must be specified.<br />https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-dns-config |  |  |
+
+
+#### PolicySource
+
+
+
+PolicySource references a key in a ConfigMap or Secret.
+
+
+
+_Appears in:_
+- [ACLSpec](#aclspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `configMapKeyRef` _[ConfigMapKeySelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#configmapkeyselector-v1-core)_ |  |  |  |
+| `secretKeyRef` _[SecretKeySelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#secretkeyselector-v1-core)_ |  |  |  |
 
 
 #### PortRange

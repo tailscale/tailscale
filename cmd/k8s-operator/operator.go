@@ -55,6 +55,7 @@ import (
 	"tailscale.com/ipn/store/kubestore"
 	apiproxy "tailscale.com/k8s-operator/api-proxy"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/acl"
 	"tailscale.com/k8s-operator/reconciler/proxygrouppolicy"
 	"tailscale.com/k8s-operator/reconciler/tailnet"
 	"tailscale.com/kube/kubetypes"
@@ -343,6 +344,16 @@ func runReconcilers(opts reconcilerOpts) {
 
 	if err = tailnet.NewReconciler(tailnetOptions).Register(mgr); err != nil {
 		startlog.Fatalf("could not register tailnet reconciler: %v", err)
+	}
+
+	aclOptions := acl.ReconcilerOptions{
+		Client:             mgr.GetClient(),
+		TailscaleNamespace: opts.tailscaleNamespace,
+		Clock:              tstime.DefaultClock{},
+		Logger:             opts.log,
+	}
+	if err = acl.NewReconciler(aclOptions).Register(mgr); err != nil {
+		startlog.Fatalf("could not register ACL reconciler: %v", err)
 	}
 
 	proxyGroupPolicyOptions := proxygrouppolicy.ReconcilerOptions{
