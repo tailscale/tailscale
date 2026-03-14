@@ -103,12 +103,14 @@ func NewManualCertManager(certdir, hostname string) (certProvider, error) {
 	keyPath := filepath.Join(certdir, keyname+".key")
 	cert, err := tls.LoadX509KeyPair(crtPath, keyPath)
 	hostnameIP := net.ParseIP(hostname) // or nil if hostname isn't an IP address
+	selfSigned := false
 	if err != nil {
 		// If the hostname is an IP address, automatically create a
 		// self-signed certificate for it.
 		var certp *tls.Certificate
 		if os.IsNotExist(err) && hostnameIP != nil {
 			certp, err = createSelfSignedIPCert(crtPath, keyPath, hostname)
+			selfSigned = true
 		}
 		if err != nil {
 			return nil, fmt.Errorf("can not load x509 key pair for hostname %q: %w", keyname, err)
@@ -123,9 +125,9 @@ func NewManualCertManager(certdir, hostname string) (certProvider, error) {
 	if err := x509Cert.VerifyHostname(hostname); err != nil {
 		return nil, fmt.Errorf("cert invalid for hostname %q: %w", hostname, err)
 	}
-	if hostnameIP != nil {
-		// If the hostname is an IP address, print out information on how to
-		// confgure this in the derpmap.
+	if hostnameIP != nil && selfSigned {
+		// If the hostname is an IP address and we generated a self-signed
+		// certificate, print out information on how to configure this in the derpmap.
 		dn := &tailcfg.DERPNode{
 			Name:     "custom",
 			RegionID: 900,
