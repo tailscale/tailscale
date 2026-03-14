@@ -42,6 +42,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/dnstype"
+	"tailscale.com/types/events"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -597,7 +598,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		}
 		e.linkChangeQueue.Add(func() { e.linkChange(&cd) })
 	})
-	eventbus.SubscribeFunc(ec, func(update tstun.DiscoKeyAdvertisement) {
+	eventbus.SubscribeFunc(ec, func(update events.PeerDiscoKeyUpdate) {
 		e.logf("wgengine: got TSMP disco key advertisement from %v via eventbus", update.Src)
 		if e.magicConn == nil {
 			e.logf("wgengine: no magicConn")

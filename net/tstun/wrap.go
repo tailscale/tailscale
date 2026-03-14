@@ -30,6 +30,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/tstime/mono"
+	"tailscale.com/types/events"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -220,7 +221,7 @@ type Wrapper struct {
 	metrics *metrics
 
 	eventClient              *eventbus.Client
-	discoKeyAdvertisementPub *eventbus.Publisher[DiscoKeyAdvertisement]
+	discoKeyAdvertisementPub *eventbus.Publisher[events.DiscoKeyAdvertisement]
 }
 
 type metrics struct {
@@ -296,7 +297,7 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry,
 	}
 
 	w.eventClient = bus.Client("net.tstun")
-	w.discoKeyAdvertisementPub = eventbus.Publish[DiscoKeyAdvertisement](w.eventClient)
+	w.discoKeyAdvertisementPub = eventbus.Publish[events.DiscoKeyAdvertisement](w.eventClient)
 
 	w.vectorBuffer = make([][]byte, tdev.BatchSize())
 	for i := range w.vectorBuffer {
@@ -1140,13 +1141,6 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 	return n, err
 }
 
-// DiscoKeyAdvertisement is a TSMP message used for distributing disco keys.
-// This struct is used an an event on the [eventbus.Bus].
-type DiscoKeyAdvertisement struct {
-	Src netip.Addr // Src field is populated by the IP header of the packet, not from the payload itself.
-	Key key.DiscoPublic
-}
-
 func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook packet.CaptureCallback, pc *peerConfigTable, gro *gro.GRO) (filter.Response, *gro.GRO) {
 	if captHook != nil {
 		captHook(packet.FromPeer, t.now(), p.Buffer(), p.CaptureMeta)
@@ -1159,7 +1153,7 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook pa
 			return filter.DropSilently, gro
 		} else if discoKeyAdvert, ok := p.AsTSMPDiscoAdvertisement(); ok {
 			if buildfeatures.HasCacheNetMap && envknob.Bool("TS_USE_CACHED_NETMAP") {
-				t.discoKeyAdvertisementPub.Publish(DiscoKeyAdvertisement{
+				t.discoKeyAdvertisementPub.Publish(events.DiscoKeyAdvertisement{
 					Src: discoKeyAdvert.Src,
 					Key: discoKeyAdvert.Key,
 				})
