@@ -114,6 +114,7 @@ OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.MapResponse.Node
 OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.MapResponse.PingRequest
 OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.MapResponse.SSHPolicy
 OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.MapResponse.TKAInfo
+OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.MapResponse.Error
 OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.NetPortRange.Bits
 OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.Node.Online
 OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.Node.SelfNodeV4MasqAddrForThisPeer
