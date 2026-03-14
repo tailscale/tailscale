@@ -120,6 +120,20 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, 
 
 	m.ctx, m.ctxCancel = context.WithCancel(context.Background())
 	m.logf("using %T", m.os)
+
+	// If the OS configurator supports receiving the resolver (e.g., for local DNS
+	// listening on macOS CLI), provide it.
+	if rs, ok := oscfg.(interface{ SetResolver(*resolver.Resolver) }); ok {
+		rs.SetResolver(m.resolver)
+	}
+
+	// If the OS configurator supports a recompile callback (e.g., the macOS CLI
+	// darwinConfigurator watches /etc/resolver/ files and needs to re-create them
+	// if they are removed by a concurrent CleanUp), provide it.
+	if rc, ok := oscfg.(interface{ SetRecompileFunc(func()) }); ok {
+		rc.SetRecompileFunc(func() { m.RecompileDNSConfig() })
+	}
+
 	return m
 }
 
@@ -342,6 +356,21 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		rcfg.Routes = routes
 		rcfg.Routes["."] = cfg.DefaultResolvers
 		ocfg.Nameservers = cfg.serviceIPs(m.knobs)
+		// On macOS CLI (tailscaled), set MatchDomains for MagicDNS domains
+		// and split DNS routes so that /etc/resolver/<domain> files are created.
+		if m.goos == "darwin" && m.os.SupportsSplitDNS() {
+			for _, domain := range rcfg.LocalDomains {
+				if !strings.HasSuffix(string(domain), ".arpa.") {
+					ocfg.MatchDomains = append(ocfg.MatchDomains, domain)
+				}
+			}
+			// Add split DNS routes (routes with custom resolvers)
+			for suffix, resolvers := range cfg.Routes {
+				if len(resolvers) > 0 && suffix != "." && !strings.HasSuffix(string(suffix), ".arpa.") {
+					ocfg.MatchDomains = append(ocfg.MatchDomains, suffix)
+				}
+			}
+		}
 		return rcfg, ocfg, nil
 	}
 
@@ -424,6 +453,29 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 				}
 			} else {
 				m.logf("iOS split DNS is disabled by nodeattr")
+			}
+		}
+		// On macOS CLI (tailscaled), we must set MatchDomains for MagicDNS
+		// domains and split DNS routes so that /etc/resolver/<domain> files
+		// are created. Without these files, macOS won't route queries to the
+		// local Tailscale DNS resolver.
+		// - MagicDNS domains (routes with no resolvers) are in LocalDomains.
+		// - Split DNS routes (routes with custom resolvers) are in cfg.Routes.
+		// We skip .arpa domains (reverse DNS) as they don't need resolver files.
+		// Only do this when the OS configurator supports split DNS (the real
+		// darwinConfigurator does, but tests may use a fake that doesn't).
+		if m.goos == "darwin" && m.os.SupportsSplitDNS() {
+			// Add MagicDNS domains (LocalDomains)
+			for _, domain := range rcfg.LocalDomains {
+				if !strings.HasSuffix(string(domain), ".arpa.") {
+					ocfg.MatchDomains = append(ocfg.MatchDomains, domain)
+				}
+			}
+			// Add split DNS routes (routes with custom resolvers)
+			for suffix, resolvers := range cfg.Routes {
+				if len(resolvers) > 0 && suffix != "." && !strings.HasSuffix(string(suffix), ".arpa.") {
+					ocfg.MatchDomains = append(ocfg.MatchDomains, suffix)
+				}
 			}
 		}
 		var defaultRoutes []*dnstype.Resolver
