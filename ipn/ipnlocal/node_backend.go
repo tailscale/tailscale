@@ -310,18 +310,49 @@ func (nb *nodeBackend) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
 	if filt == nil {
 		return nil
 	}
-	addrs := nb.netMap.GetAddresses()
-	for i := range addrs.Len() {
-		a := addrs.At(i)
-		if !a.IsSingleIP() {
-			continue
-		}
-		dst := a.Addr()
-		if dst.BitLen() == src.BitLen() { // match on family
-			return filt.CapsWithValues(src, dst)
+
+	var dsts []netip.Addr
+	for _, a := range nb.netMap.GetAddresses().All() {
+		if a.IsSingleIP() {
+			dsts = append(dsts, a.Addr())
 		}
 	}
-	return nil
+	for _, addr := range nb.serviceVIPAddrs() {
+		dsts = append(dsts, addr)
+	}
+
+	var out tailcfg.PeerCapMap
+	for _, dst := range dsts {
+		if dst.BitLen() != src.BitLen() {
+			continue
+		}
+		cm := filt.CapsWithValues(src, dst)
+		if len(cm) == 0 {
+			continue
+		}
+		if out == nil {
+			out = cm
+			continue
+		}
+		for k, v := range cm {
+			out[k] = append(out[k], v...)
+		}
+	}
+	return out
+}
+
+// serviceVIPAddrs returns the IP addresses of VIP services this node is
+// hosting, as delivered by the control plane via NodeAttrServiceHost.
+func (nb *nodeBackend) serviceVIPAddrs() []netip.Addr {
+	svcMap := nb.netMap.GetVIPServiceIPMap()
+	if len(svcMap) == 0 {
+		return nil
+	}
+	var addrs []netip.Addr
+	for _, svcAddrs := range svcMap {
+		addrs = append(addrs, svcAddrs...)
+	}
+	return addrs
 }
 
 // PeerHasCap reports whether the peer contains the given capability string,
