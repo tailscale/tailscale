@@ -85,6 +85,7 @@ var handler = map[string]LocalAPIHandler{
 	"set-expiry-sooner":    (*Handler).serveSetExpirySooner,
 	"shutdown":             (*Handler).serveShutdown,
 	"start":                (*Handler).serveStart,
+	"service-details":      (*Handler).serveServiceDetails,
 	"status":               (*Handler).serveStatus,
 	"whois":                (*Handler).serveWhoIs,
 }
@@ -1727,4 +1728,24 @@ func (h *Handler) serveGetAppcRouteInfo(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
+}
+
+// serveServiceDetails handles GET /localapi/v0/service-details and returns the
+// list of VIP services that the control plane has approved this node to serve,
+// including their names, assigned IP addresses, ports, and annotations (e.g.
+// proxy service configuration). Returns null if no service details are present.
+func (h *Handler) serveServiceDetails(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "service-details access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != httpm.GET {
+		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	details := h.b.NetMap().GetVIPServiceDetails()
+	w.Header().Set("Content-Type", "application/json")
+	e := json.NewEncoder(w)
+	e.SetIndent("", "\t")
+	e.Encode(details)
 }
