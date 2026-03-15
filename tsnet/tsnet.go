@@ -564,6 +564,19 @@ func (s *Server) TailscaleIPs() (ip4, ip6 netip.Addr) {
 	return ip4, ip6
 }
 
+// GetServiceDetails returns the VIP services that the control plane has
+// approved this node to serve, including their names, assigned IP addresses,
+// ports, and application-specific annotations (e.g. proxy service
+// configuration). Returns nil if the server is not running or no service
+// details have been received yet.
+func (s *Server) GetServiceDetails() []*tailcfg.ServiceDetail {
+	nm := s.lb.NetMap()
+	if nm == nil {
+		return nil
+	}
+	return nm.GetVIPServiceDetails()
+}
+
 // LogtailWriter returns an [io.Writer] that writes to Tailscale's logging service and will be only visible to Tailscale's
 // support team. Logs written there cannot be retrieved by the user. This method always returns a non-nil value.
 func (s *Server) LogtailWriter() io.Writer {

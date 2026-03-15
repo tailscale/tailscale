@@ -269,6 +269,7 @@ change in the future.
 			nilOrCall(maybeNetlockCmd),
 			licensesCmd,
 			exitNodeCmd(),
+			serviceCmd(),
 			nilOrCall(maybeUpdateCmd),
 			whoisCmd,
 			debugCmd(),

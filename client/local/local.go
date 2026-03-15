@@ -686,6 +686,18 @@ func (lc *Client) status(ctx context.Context, queryString string) (*ipnstate.Sta
 	return decodeJSON[*ipnstate.Status](body)
 }
 
+// GetServiceDetails returns the VIP services that the control plane has
+// approved this node to serve, including their names, assigned IP addresses,
+// ports, and annotations (e.g. proxy service configuration). Returns nil if
+// no service details are present.
+func (lc *Client) GetServiceDetails(ctx context.Context) ([]*tailcfg.ServiceDetail, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/service-details")
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[[]*tailcfg.ServiceDetail](body)
+}
+
 // IDToken is a request to get an OIDC ID token for an audience.
 // The token can be presented to any resource provider which offers OIDC
 // Federation.
