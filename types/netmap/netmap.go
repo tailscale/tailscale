@@ -120,6 +120,26 @@ func (nm *NetworkMap) GetVIPServiceIPMap() tailcfg.ServiceIPMappings {
 	return ipMaps[0]
 }
 
+// GetVIPServiceDetails returns the list of VIP services that the control plane
+// has approved this node to serve, including their names, assigned IP
+// addresses, port requirements, and application-specific annotations. Returns
+// nil if no service details are present.
+func (nm *NetworkMap) GetVIPServiceDetails() []*tailcfg.ServiceDetail {
+	if nm == nil {
+		return nil
+	}
+	if !nm.SelfNode.Valid() {
+		return nil
+	}
+
+	details, err := tailcfg.UnmarshalNodeCapViewJSON[[]*tailcfg.ServiceDetail](nm.SelfNode.CapMap(), tailcfg.NodeAttrServiceDetails)
+	if len(details) != 1 || err != nil {
+		return nil
+	}
+
+	return details[0]
+}
+
 // GetIPVIPServiceMap returns a map of VIP addresses to the service
 // names that has the VIP address. The service names are with the
 // prefix "svc:".
