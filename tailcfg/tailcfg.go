@@ -2694,6 +2694,13 @@ const (
 	// (replace conflicting keys).
 	NodeAttrServiceHost NodeCapability = "service-host"
 
+	// NodeAttrServiceDetails carries the full details of VIP services that
+	// this node is approved to serve, including their names, assigned IP
+	// addresses, port requirements, and application-specific annotations
+	// (e.g. proxy service configuration). There is exactly one value for this
+	// key in [NodeCapMap], of type []*[ServiceDetail].
+	NodeAttrServiceDetails NodeCapability = "service-details"
+
 	// NodeAttrMaxKeyDuration represents the MaxKeyDuration setting on the
 	// tailnet. The value of this key in [NodeCapMap] will be only one entry of
 	// type float64 representing the duration in seconds. This cap will be
@@ -3317,6 +3324,26 @@ const LBHeader = "Ts-Lb"
 // correspond to those IPs. Any services that don't correspond to a service
 // this client is hosting can be ignored.
 type ServiceIPMappings map[ServiceName][]netip.Addr
+
+// ServiceDetail describes a VIP service that the control plane has approved a
+// node to serve. It is used as the element type of the []*[ServiceDetail]
+// value sent via [NodeAttrServiceDetails].
+type ServiceDetail struct {
+	// Name is the name of the service, of the form "svc:dns-label".
+	Name ServiceName
+
+	// Addrs are the IP addresses (IPv4 and IPv6) assigned to this service.
+	Addrs []netip.Addr `json:",omitempty"`
+
+	// Ports are the protocol/port combinations the service is expected to
+	// accept.
+	Ports []ProtoPortRange `json:",omitempty"`
+
+	// Annotations are application-specific key-value pairs associated with
+	// the service, e.g. proxy configuration stored under the key
+	// "proxy/service-configuration".
+	Annotations map[string]string `json:",omitempty"`
+}
 
 // ClientAuditAction represents an auditable action that a client can report to the
 // control plane.  These actions must correspond to the supported actions
