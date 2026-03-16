@@ -119,6 +119,22 @@ func maxInFlightConnectionAttemptsPerClient() int {
 
 var debugNetstack = envknob.RegisterBool("TS_DEBUG_NETSTACK")
 
+// netstackKeepaliveIdle overrides the netstack default (~2h) TCP keepalive
+// idle time for forwarded connections. When a tailnet peer goes away without
+// closing its connections (pod deleted, peer removed from netmap, silent
+// network partition), the forwardTCP io.Copy goroutines block until keepalive
+// fires. Under high-churn forwarding — many short-lived peers, or peers
+// holding thousands of proxied connections that drop at once — the 2h default
+// lets stuck goroutines accumulate faster than they clear. Value is a Go
+// duration, e.g. "60s". See tailscale/tailscale#4522.
+var netstackKeepaliveIdle = envknob.RegisterDuration("TS_NETSTACK_KEEPALIVE_IDLE")
+
+// netstackKeepaliveInterval overrides the netstack default (75s) TCP keepalive
+// probe interval for forwarded connections. Independent of
+// netstackKeepaliveIdle; setting one without the other leaves the unset knob
+// at the netstack default. Value is a Go duration, e.g. "15s".
+var netstackKeepaliveInterval = envknob.RegisterDuration("TS_NETSTACK_KEEPALIVE_INTERVAL")
+
 var (
 	serviceIP   = tsaddr.TailscaleServiceIP()
 	serviceIPv6 = tsaddr.TailscaleServiceIPv6()
@@ -1520,14 +1536,26 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		// Applications might be setting this on a forwarded connection, but from
 		// userspace we can not see those, so the best we can do is to always
 		// perform them with conservative timing.
-		// TODO(tailscale/tailscale#4522): Netstack defaults match the Linux
-		// defaults, and results in a little over two hours before the socket would
-		// be closed due to keepalive. A shorter default might be better, or seeking
-		// a default from the host IP stack. This also might be a useful
-		// user-tunable, as in userspace mode this can have broad implications such
-		// as lingering connections to fork style daemons. On the other side of the
-		// fence, the long duration timers are low impact values for battery powered
-		// peers.
+		// Netstack defaults match the Linux defaults and result in a little over
+		// two hours before the socket is closed due to keepalive. Operators can
+		// shorten the timers with TS_NETSTACK_KEEPALIVE_IDLE and
+		// TS_NETSTACK_KEEPALIVE_INTERVAL (see netstackKeepaliveIdle); the
+		// defaults are left unchanged because the long timers are low-impact for
+		// battery-powered peers and this has broad implications in userspace
+		// mode (lingering connections to fork-style daemons, etc). See
+		// tailscale/tailscale#4522.
+		if d := netstackKeepaliveIdle(); d > 0 {
+			idle := tcpip.KeepaliveIdleOption(d)
+			if err := ep.SetSockOpt(&idle); err != nil {
+				ns.logf("netstack: SetSockOpt(KeepaliveIdle=%v) failed: %v", d, err)
+			}
+		}
+		if d := netstackKeepaliveInterval(); d > 0 {
+			intvl := tcpip.KeepaliveIntervalOption(d)
+			if err := ep.SetSockOpt(&intvl); err != nil {
+				ns.logf("netstack: SetSockOpt(KeepaliveInterval=%v) failed: %v", d, err)
+			}
+		}
 		ep.SocketOptions().SetKeepAlive(true)
 
 		// This function is called when we're ready to use the
