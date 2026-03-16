@@ -30,10 +30,12 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/tailscale/v2"
+
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
@@ -43,7 +45,6 @@ import (
 
 const (
 	testProxyImage = "tailscale/tailscale:test"
-	initialCfgHash = "6632726be70cf224049580deb4d317bba065915b5fd415461d60ed621c91b196"
 )
 
 var (
@@ -641,7 +642,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 				defaultProxyClass: "default-pc",
 
 				Client:            fc,
-				tsClient:          tsClient,
+				clients:           tsclient.NewProvider(tsClient),
 				recorder:          fr,
 				clock:             cl,
 				authKeyRateLimits: make(map[string]*rate.Limiter),
@@ -649,7 +650,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 			}
 
 			for i, r := range tt.reconciles {
-				createdNodes := []corev1.Node{}
+				var createdNodes []corev1.Node
 				t.Run(tt.name, func(t *testing.T) {
 					for _, n := range r.nodes {
 						no := &corev1.Node{
@@ -786,7 +787,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 					defaultProxyClass: "default-pc",
 
 					Client:            fc,
-					tsClient:          tsClient,
+					clients:           tsclient.NewProvider(tsClient),
 					recorder:          fr,
 					log:               zl.Sugar().With("TestName", tt.name).With("Reconcile", "cleanup"),
 					clock:             cl,
@@ -849,7 +850,7 @@ func TestProxyGroup(t *testing.T) {
 		defaultProxyClass: "default-pc",
 
 		Client:            fc,
-		tsClient:          tsClient,
+		clients:           tsclient.NewProvider(tsClient),
 		recorder:          fr,
 		log:               zl.Sugar(),
 		clock:             cl,
@@ -908,17 +909,13 @@ func TestProxyGroup(t *testing.T) {
 			t.Fatalf("expected %d egress ProxyGroups, got %d", expected, reconciler.egressProxyGroups.Len())
 		}
 		expectProxyGroupResources(t, fc, pg, true, pc)
-		keyReq := tailscale.KeyCapabilities{
-			Devices: tailscale.KeyDeviceCapabilities{
-				Create: tailscale.KeyDeviceCreateCapabilities{
-					Reusable:      false,
-					Ephemeral:     false,
-					Preauthorized: true,
-					Tags:          []string{"tag:test-tag"},
-				},
-			},
-		}
-		if diff := cmp.Diff(tsClient.KeyRequests(), []tailscale.KeyCapabilities{keyReq, keyReq}); diff != "" {
+		var keyReq tailscale.KeyCapabilities
+		keyReq.Devices.Create.Reusable = false
+		keyReq.Devices.Create.Ephemeral = false
+		keyReq.Devices.Create.Preauthorized = true
+		keyReq.Devices.Create.Tags = []string{"tag:test-tag"}
+
+		if diff := cmp.Diff(tsClient.keyRequests, []tailscale.KeyCapabilities{keyReq, keyReq}); diff != "" {
 			t.Fatalf("unexpected secrets (-got +want):\n%s", diff)
 		}
 	})
@@ -1059,7 +1056,7 @@ func TestProxyGroupTypes(t *testing.T) {
 		tsProxyImage:      testProxyImage,
 		Client:            fc,
 		log:               zl.Sugar(),
-		tsClient:          &fakeTSClient{},
+		clients:           tsclient.NewProvider(&fakeTSClient{}),
 		clock:             tstest.NewClock(tstest.ClockOpts{}),
 		authKeyRateLimits: make(map[string]*rate.Limiter),
 		authKeyReissuing:  make(map[string]bool),
@@ -1301,7 +1298,7 @@ func TestKubeAPIServerStatusConditionFlow(t *testing.T) {
 		tsProxyImage:      testProxyImage,
 		Client:            fc,
 		log:               zap.Must(zap.NewDevelopment()).Sugar(),
-		tsClient:          &fakeTSClient{},
+		clients:           tsclient.NewProvider(&fakeTSClient{}),
 		clock:             tstest.NewClock(tstest.ClockOpts{}),
 		authKeyRateLimits: make(map[string]*rate.Limiter),
 		authKeyReissuing:  make(map[string]bool),
@@ -1356,7 +1353,7 @@ func TestKubeAPIServerType_DoesNotOverwriteServicesConfig(t *testing.T) {
 		tsProxyImage:      testProxyImage,
 		Client:            fc,
 		log:               zap.Must(zap.NewDevelopment()).Sugar(),
-		tsClient:          &fakeTSClient{},
+		clients:           tsclient.NewProvider(&fakeTSClient{}),
 		clock:             tstest.NewClock(tstest.ClockOpts{}),
 		authKeyRateLimits: make(map[string]*rate.Limiter),
 		authKeyReissuing:  make(map[string]bool),
@@ -1443,7 +1440,7 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 		tsProxyImage:      testProxyImage,
 		Client:            fc,
 		log:               zap.Must(zap.NewDevelopment()).Sugar(),
-		tsClient:          &fakeTSClient{},
+		clients:           tsclient.NewProvider(&fakeTSClient{}),
 		clock:             tstest.NewClock(tstest.ClockOpts{}),
 		authKeyRateLimits: make(map[string]*rate.Limiter),
 		authKeyReissuing:  make(map[string]bool),
@@ -1713,7 +1710,7 @@ func TestProxyGroupGetAuthKey(t *testing.T) {
 			tsFirewallMode: "auto",
 
 			Client:            fc,
-			tsClient:          tsClient,
+			clients:           tsclient.NewProvider(tsClient),
 			recorder:          fr,
 			log:               zl.Sugar(),
 			clock:             cl,
@@ -2109,7 +2106,7 @@ func TestProxyGroupLetsEncryptStaging(t *testing.T) {
 				defaultTags:       []string{"tag:test"},
 				defaultProxyClass: tt.defaultProxyClass,
 				Client:            fc,
-				tsClient:          &fakeTSClient{},
+				clients:           tsclient.NewProvider(&fakeTSClient{}),
 				log:               zl.Sugar(),
 				clock:             cl,
 				authKeyRateLimits: make(map[string]*rate.Limiter),

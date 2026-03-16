@@ -21,8 +21,11 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"tailscale.com/client/tailscale/v2"
+
 	"tailscale.com/ipn"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
 	"tailscale.com/util/mak"
@@ -30,7 +33,9 @@ import (
 
 func TestTailscaleIngress(t *testing.T) {
 	fc := fake.NewFakeClient(ingressClass())
-	ft := &fakeTSClient{}
+	ft := &fakeTSClient{
+		vipServices: make(map[string]tailscale.VIPService),
+	}
 	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
 	zl, err := zap.NewDevelopment()
 	if err != nil {
@@ -41,7 +46,7 @@ func TestTailscaleIngress(t *testing.T) {
 		ingressClassName: "tailscale",
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			tsnetServer:       fakeTsnetServer,
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
@@ -130,7 +135,7 @@ func TestTailscaleIngressHostname(t *testing.T) {
 		ingressClassName: "tailscale",
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			tsnetServer:       fakeTsnetServer,
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
@@ -269,7 +274,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 		ingressClassName: "tailscale",
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			tsnetServer:       fakeTsnetServer,
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
@@ -378,7 +383,7 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 		ingressClassName: "tailscale",
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			tsnetServer:       fakeTsnetServer,
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
@@ -530,7 +535,7 @@ func TestIngressProxyClassAnnotation(t *testing.T) {
 				ingressClassName: "tailscale",
 				ssr: &tailscaleSTSReconciler{
 					Client:            fc,
-					tsClient:          &fakeTSClient{},
+					clients:           tsclient.NewProvider(&fakeTSClient{}),
 					tsnetServer:       &fakeTSNetServer{certDomains: []string{"test-host"}},
 					defaultTags:       []string{"tag:test"},
 					operatorNamespace: "operator-ns",
@@ -601,7 +606,7 @@ func TestIngressLetsEncryptStaging(t *testing.T) {
 				ingressClassName: "tailscale",
 				ssr: &tailscaleSTSReconciler{
 					Client:            fc,
-					tsClient:          &fakeTSClient{},
+					clients:           tsclient.NewProvider(&fakeTSClient{}),
 					tsnetServer:       &fakeTSNetServer{certDomains: []string{"test-host"}},
 					defaultTags:       []string{"tag:test"},
 					operatorNamespace: "operator-ns",
@@ -710,7 +715,7 @@ func TestEmptyPath(t *testing.T) {
 				ingressClassName: "tailscale",
 				ssr: &tailscaleSTSReconciler{
 					Client:            fc,
-					tsClient:          ft,
+					clients:           tsclient.NewProvider(ft),
 					tsnetServer:       fakeTsnetServer,
 					defaultTags:       []string{"tag:k8s"},
 					operatorNamespace: "operator-ns",
@@ -853,7 +858,7 @@ func TestTailscaleIngressWithHTTPRedirect(t *testing.T) {
 		ingressClassName: "tailscale",
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			tsnetServer:       fakeTsnetServer,
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",

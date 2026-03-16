@@ -136,7 +136,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-	"tailscale.com/client/tailscale"
+
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
@@ -173,7 +173,6 @@ func main() {
 
 func run() error {
 	log.SetPrefix("boot: ")
-	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 
 	cfg, err := configFromEnv()
 	if err != nil {
