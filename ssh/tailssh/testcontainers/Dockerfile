@@ -38,6 +38,10 @@ RUN if echo "$BASE" | grep "ubuntu:"; then rm -Rf /home/testuser; fi
 RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegrationSSH
 RUN if echo "$BASE" | grep "ubuntu:"; then rm -Rf /home/testuser; fi
 RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegrationParamiko
+RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestLocalUnixForwarding
+RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestReverseUnixForwarding
+RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestUnixForwardingDenied
+RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestUnixForwardingPathRestriction
 
 RUN echo "Then run tests as non-root user testuser and make sure tests still pass."
 RUN touch /tmp/tailscalessh.log

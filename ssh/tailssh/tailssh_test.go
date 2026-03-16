@@ -33,6 +33,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	gliderssh "github.com/tailscale/gliderssh"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"tailscale.com/cmd/testwrapper/flakytest"
@@ -42,7 +43,6 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tempfork/gliderlabs/ssh"
 	testssh "tailscale.com/tempfork/sshtest/ssh"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
@@ -688,9 +688,9 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 		t.Skipf("skipping on %q; only runs on linux and darwin", runtime.GOOS)
 	}
 	var recording []byte
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	done := make(chan struct{})
 	recordingServer := mockRecordingServer(t, func(w http.ResponseWriter, r *http.Request) {
-		defer cancel()
+		defer close(done)
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
 
@@ -758,7 +758,11 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 	}
 	wg.Wait()
 
-	<-ctx.Done() // wait for recording to finish
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for recording")
+	}
 	var ch sessionrecording.CastHeader
 	if err := json.NewDecoder(bytes.NewReader(recording)).Decode(&ch); err != nil {
 		t.Fatal(err)
@@ -1094,7 +1098,7 @@ func TestSSH(t *testing.T) {
 	sc.finalAction = sc.action0
 	sc.authCompleted.Store(true)
 
-	sc.Handler = func(s ssh.Session) {
+	sc.Handler = func(s gliderssh.Session) {
 		sc.newSSHSession(s).run()
 	}
 

@@ -21,7 +21,7 @@ import (
 	"strings"
 	"sync"
 
-	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 )
@@ -33,8 +33,8 @@ var keyTypes = []string{"rsa", "ecdsa", "ed25519"}
 
 // getHostKeys returns the SSH host keys, using system keys when running as root
 // and generating Tailscale-specific keys as needed.
-func getHostKeys(varRoot string, logf logger.Logf) ([]gossh.Signer, error) {
-	var existing map[string]gossh.Signer
+func getHostKeys(varRoot string, logf logger.Logf) ([]ssh.Signer, error) {
+	var existing map[string]ssh.Signer
 	if os.Geteuid() == 0 {
 		existing = getSystemHostKeys(logf)
 	}
@@ -49,14 +49,14 @@ func getHostKeyPublicStrings(varRoot string, logf logger.Logf) ([]string, error)
 	}
 	var keyStrings []string
 	for _, signer := range signers {
-		keyStrings = append(keyStrings, strings.TrimSpace(string(gossh.MarshalAuthorizedKey(signer.PublicKey()))))
+		keyStrings = append(keyStrings, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))))
 	}
 	return keyStrings, nil
 }
 
 // getTailscaleHostKeys returns the three (rsa, ecdsa, ed25519) SSH host
 // keys, reusing the provided ones in existing if present in the map.
-func getTailscaleHostKeys(varRoot string, existing map[string]gossh.Signer) (keys []gossh.Signer, err error) {
+func getTailscaleHostKeys(varRoot string, existing map[string]ssh.Signer) (keys []ssh.Signer, err error) {
 	var keyDir string // lazily initialized $TAILSCALE_VAR/ssh dir.
 	for _, typ := range keyTypes {
 		if s, ok := existing[typ]; ok {
@@ -76,7 +76,7 @@ func getTailscaleHostKeys(varRoot string, existing map[string]gossh.Signer) (key
 		if err != nil {
 			return nil, fmt.Errorf("error creating SSH host key type %q in %q: %w", typ, keyDir, err)
 		}
-		signer, err := gossh.ParsePrivateKey(hostKey)
+		signer, err := ssh.ParsePrivateKey(hostKey)
 		if err != nil {
 			return nil, fmt.Errorf("error parsing SSH host key type %q from %q: %w", typ, keyDir, err)
 		}
@@ -137,14 +137,14 @@ func hostKeyFileOrCreate(keyDir, typ string) ([]byte, error) {
 	return pemGen, err
 }
 
-func getSystemHostKeys(logf logger.Logf) (ret map[string]gossh.Signer) {
+func getSystemHostKeys(logf logger.Logf) (ret map[string]ssh.Signer) {
 	for _, typ := range keyTypes {
 		filename := "/etc/ssh/ssh_host_" + typ + "_key"
 		hostKey, err := os.ReadFile(filename)
 		if err != nil || len(bytes.TrimSpace(hostKey)) == 0 {
 			continue
 		}
-		signer, err := gossh.ParsePrivateKey(hostKey)
+		signer, err := ssh.ParsePrivateKey(hostKey)
 		if err != nil {
 			logf("warning: error reading host key %s: %v (generating one instead)", filename, err)
 			continue
