@@ -93,7 +93,7 @@ require (
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
 	github.com/tailscale/gokrazy-kernel v0.0.0-20240728225134-3d23beabda2e
 	github.com/tailscale/golang-x-crypto v0.0.0-20250404221719-a5573b049869
-	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
+	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
 	github.com/tailscale/mkctr v0.0.0-20260107121656-ea857e3e500b
 	github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc
@@ -114,7 +114,7 @@ require (
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b
 	golang.org/x/mod v0.31.0
 	golang.org/x/net v0.48.0
-	golang.org/x/oauth2 v0.33.0
+	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.19.0
 	golang.org/x/sys v0.40.0
 	golang.org/x/term v0.38.0
@@ -135,6 +135,7 @@ require (
 	sigs.k8s.io/kind v0.30.0
 	sigs.k8s.io/yaml v1.6.0
 	software.sslmate.com/src/go-pkcs12 v0.4.0
+	tailscale.com/client/tailscale/v2 v2.9.0
 )
 
 require (

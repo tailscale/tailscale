@@ -46,9 +46,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"tailscale.com/client/tailscale/v2"
 
 	"tailscale.com/client/local"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -57,6 +57,7 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/proxygrouppolicy"
 	"tailscale.com/k8s-operator/reconciler/tailnet"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstime"
@@ -84,10 +85,6 @@ const (
 )
 
 func main() {
-	// Required to use our client API. We're fine with the instability since the
-	// client lives in the same repo as this code.
-	tailscale.I_Acknowledge_This_API_Is_Unstable = true
-
 	var (
 		tsNamespace           = defaultEnv("OPERATOR_NAMESPACE", "")
 		tslogging             = defaultEnv("OPERATOR_LOGGING", "info")
@@ -155,7 +152,7 @@ func main() {
 		}))
 	}
 
-	rOpts := reconcilerOpts{
+	runReconcilers(reconcilerOpts{
 		log:                           zlog,
 		tsServer:                      s,
 		tsClient:                      tsc,
@@ -170,15 +167,14 @@ func main() {
 		defaultProxyClass:             defaultProxyClass,
 		loginServer:                   loginServer,
 		ingressClassName:              ingressClassName,
-	}
-	runReconcilers(rOpts)
+	})
 }
 
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. If CLIENT_ID
 // is set, it authenticates to the Tailscale API using the federated OIDC workload
 // identity flow. Otherwise, it uses the CLIENT_ID_FILE and CLIENT_SECRET_FILE
 // environment variables to authenticate with static credentials.
-func initTSNet(zlog *zap.SugaredLogger, loginServer string) (*tsnet.Server, tsClient) {
+func initTSNet(zlog *zap.SugaredLogger, loginServer string) (*tsnet.Server, *tailscale.Client) {
 	var (
 		clientID         = defaultEnv("CLIENT_ID", "")          // Used for workload identity federation.
 		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")     // Used for static client credentials.
@@ -187,19 +183,23 @@ func initTSNet(zlog *zap.SugaredLogger, loginServer string) (*tsnet.Server, tsCl
 		kubeSecret       = defaultEnv("OPERATOR_SECRET", "")
 		operatorTags     = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
 	)
+
 	startlog := zlog.Named("startup")
 	if clientID == "" && (clientIDPath == "" || clientSecretPath == "") {
 		startlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set") // TODO(tomhjp): error message can mention WIF once it's publicly available.
 	}
+
 	tsc, err := newTSClient(zlog.Named("ts-api-client"), clientID, clientIDPath, clientSecretPath, loginServer)
 	if err != nil {
 		startlog.Fatalf("error creating Tailscale client: %v", err)
 	}
+
 	s := &tsnet.Server{
 		Hostname:   hostname,
 		Logf:       zlog.Named("tailscaled").Debugf,
 		ControlURL: loginServer,
 	}
+
 	if p := os.Getenv("TS_PORT"); p != "" {
 		port, err := strconv.ParseUint(p, 10, 16)
 		if err != nil {
@@ -207,6 +207,7 @@ func initTSNet(zlog *zap.SugaredLogger, loginServer string) (*tsnet.Server, tsCl
 		}
 		s.Port = uint16(port)
 	}
+
 	if kubeSecret != "" {
 		st, err := kubestore.New(logger.Discard, kubeSecret)
 		if err != nil {
@@ -214,6 +215,7 @@ func initTSNet(zlog *zap.SugaredLogger, loginServer string) (*tsnet.Server, tsCl
 		}
 		s.Store = st
 	}
+
 	if err := s.Start(); err != nil {
 		startlog.Fatalf("starting tailscale server: %v", err)
 	}
@@ -239,27 +241,29 @@ waitOnline:
 			if loginDone {
 				break
 			}
-			caps := tailscale.KeyCapabilities{
-				Devices: tailscale.KeyDeviceCapabilities{
-					Create: tailscale.KeyDeviceCreateCapabilities{
-						Reusable:      false,
-						Preauthorized: true,
-						Tags:          strings.Split(operatorTags, ","),
-					},
-				},
-			}
-			authkey, _, err := tsc.CreateKey(ctx, caps)
+
+			var caps tailscale.KeyCapabilities
+			caps.Devices.Create.Reusable = false
+			caps.Devices.Create.Preauthorized = true
+			caps.Devices.Create.Tags = strings.Split(operatorTags, ",")
+
+			authKey, err := tsc.Keys().CreateAuthKey(ctx, tailscale.CreateKeyRequest{Capabilities: caps})
 			if err != nil {
 				startlog.Fatalf("creating operator authkey: %v", err)
 			}
-			if err := lc.Start(ctx, ipn.Options{
-				AuthKey: authkey,
-			}); err != nil {
+
+			opts := ipn.Options{
+				AuthKey: authKey.Key,
+			}
+
+			if err = lc.Start(ctx, opts); err != nil {
 				startlog.Fatalf("starting tailscale: %v", err)
 			}
-			if err := lc.StartLoginInteractive(ctx); err != nil {
+
+			if err = lc.StartLoginInteractive(ctx); err != nil {
 				startlog.Fatalf("starting login: %v", err)
 			}
+
 			startlog.Debugf("requested login by authkey")
 			loginDone = true
 		case "NeedsMachineAuth":
@@ -285,6 +289,12 @@ func serviceManagedResourceFilterPredicate() predicate.Predicate {
 		}
 	})
 }
+
+type (
+	ClientProvider interface {
+		For(tailnet string) (tsclient.Client, error)
+	}
+)
 
 // runReconcilers starts the controller-runtime manager and registers the
 // ServiceReconciler. It blocks forever.
@@ -334,11 +344,14 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("could not create manager: %v", err)
 	}
 
+	clients := tsclient.NewProvider(tsclient.Wrap(opts.tsClient))
+
 	tailnetOptions := tailnet.ReconcilerOptions{
 		Client:             mgr.GetClient(),
 		TailscaleNamespace: opts.tailscaleNamespace,
 		Clock:              tstime.DefaultClock{},
 		Logger:             opts.log,
+		Registry:           clients,
 	}
 
 	if err = tailnet.NewReconciler(tailnetOptions).Register(mgr); err != nil {
@@ -368,7 +381,7 @@ func runReconcilers(opts reconcilerOpts) {
 	ssr := &tailscaleSTSReconciler{
 		Client:                 mgr.GetClient(),
 		tsnetServer:            opts.tsServer,
-		tsClient:               opts.tsClient,
+		clients:                clients,
 		defaultTags:            strings.Split(opts.proxyTags, ","),
 		operatorNamespace:      opts.tailscaleNamespace,
 		proxyImage:             opts.proxyImage,
@@ -460,7 +473,7 @@ func runReconcilers(opts reconcilerOpts) {
 		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
 		Complete(&HAIngressReconciler{
 			recorder:         eventRecorder,
-			tsClient:         opts.tsClient,
+			clients:          clients,
 			tsnetServer:      opts.tsServer,
 			defaultTags:      strings.Split(opts.proxyTags, ","),
 			Client:           mgr.GetClient(),
@@ -486,7 +499,7 @@ func runReconcilers(opts reconcilerOpts) {
 		Watches(&discoveryv1.EndpointSlice{}, ingressSvcFromEpsFilter).
 		Complete(&HAServiceReconciler{
 			recorder:    eventRecorder,
-			tsClient:    opts.tsClient,
+			clients:     clients,
 			defaultTags: strings.Split(opts.proxyTags, ","),
 			Client:      mgr.GetClient(),
 			logger:      opts.log.Named("service-pg-reconciler"),
@@ -684,7 +697,7 @@ func runReconcilers(opts reconcilerOpts) {
 			Client:      mgr.GetClient(),
 			log:         opts.log.Named("recorder-reconciler"),
 			clock:       tstime.DefaultClock{},
-			tsClient:    opts.tsClient,
+			clients:     clients,
 			loginServer: opts.loginServer,
 		})
 	if err != nil {
@@ -706,7 +719,7 @@ func runReconcilers(opts reconcilerOpts) {
 			Client:      mgr.GetClient(),
 			recorder:    eventRecorder,
 			logger:      opts.log.Named("kube-apiserver-ts-service-reconciler"),
-			tsClient:    opts.tsClient,
+			clients:     clients,
 			tsNamespace: opts.tailscaleNamespace,
 			defaultTags: strings.Split(opts.proxyTags, ","),
 			operatorID:  id,
@@ -738,7 +751,7 @@ func runReconcilers(opts reconcilerOpts) {
 			Client:   mgr.GetClient(),
 			log:      opts.log.Named("proxygroup-reconciler"),
 			clock:    tstime.DefaultClock{},
-			tsClient: opts.tsClient,
+			clients:  clients,
 
 			tsNamespace:       opts.tailscaleNamespace,
 			tsProxyImage:      opts.proxyImage,
@@ -763,7 +776,7 @@ func runReconcilers(opts reconcilerOpts) {
 type reconcilerOpts struct {
 	log                *zap.SugaredLogger
 	tsServer           *tsnet.Server
-	tsClient           tsClient
+	tsClient           *tailscale.Client
 	tailscaleNamespace string       // namespace in which operator resources will be deployed
 	restConfig         *rest.Config // config for connecting to the kube API server
 	proxyImage         string       // <proxy-image-repo>:<proxy-image-tag>

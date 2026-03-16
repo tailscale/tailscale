@@ -12,12 +12,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/clientcredentials"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,12 +25,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"tailscale.com/client/tailscale/v2"
 
-	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
@@ -47,7 +47,8 @@ type (
 		tailscaleNamespace string
 		clock              tstime.Clock
 		logger             *zap.SugaredLogger
-		clientFunc         func(*tsapi.Tailnet, *corev1.Secret) TailscaleClient
+		clientFunc         func(*tsapi.Tailnet, *corev1.Secret) tsclient.Client
+		registry           ClientRegistry
 
 		// Metrics related fields
 		mu       sync.Mutex
@@ -68,14 +69,18 @@ type (
 		Logger *zap.SugaredLogger
 		// ClientFunc is a function that takes tailscale credentials and returns an implementation for the Tailscale
 		// HTTP API. This should generally be nil unless needed for testing.
-		ClientFunc func(*tsapi.Tailnet, *corev1.Secret) TailscaleClient
+		ClientFunc func(*tsapi.Tailnet, *corev1.Secret) tsclient.Client
+		// Registry is used to store and share initialized tailscale clients for use by other reconcilers.
+		Registry ClientRegistry
 	}
 
-	// The TailscaleClient interface describes types that interact with the Tailscale HTTP API.
-	TailscaleClient interface {
-		Devices(context.Context, *tailscale.DeviceFieldsOpts) ([]*tailscale.Device, error)
-		Keys(ctx context.Context) ([]string, error)
-		ListVIPServices(ctx context.Context) (*tailscale.VIPServiceList, error)
+	// The ClientRegistry interface describes types that can store initialized tailscale clients for use by other
+	// reconcilers.
+	ClientRegistry interface {
+		// Add should store the given tsclient.Client implementation for a specified tailnet.
+		Add(tailnet string, client tsclient.Client)
+		// Remove should remove any tsclient.Client implementation for a specified tailnet.
+		Remove(tailnet string)
 	}
 )
 
@@ -90,6 +95,7 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 		clock:              options.Clock,
 		logger:             options.Logger.Named(reconcilerName),
 		clientFunc:         options.ClientFunc,
+		registry:           options.Registry,
 	}
 }
 
@@ -137,6 +143,7 @@ func (r *Reconciler) delete(ctx context.Context, tailnet *tsapi.Tailnet) (reconc
 	r.tailnets.Remove(tailnet.UID)
 	r.mu.Unlock()
 	gaugeTailnetResources.Set(int64(r.tailnets.Len()))
+	r.registry.Remove(tailnet.Name)
 
 	return reconcile.Result{}, nil
 }
@@ -193,7 +200,10 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, tailnet *tsapi.Tailnet)
 		return reconcile.Result{RequeueAfter: time.Minute / 2}, nil
 	}
 
-	tsClient := r.createClient(ctx, tailnet, &secret)
+	tsClient, err := r.createClient(tailnet, &secret)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to create tailnet client: %w", err)
+	}
 
 	// Second, we ensure the OAuth credentials supplied in the secret are valid and have the required scopes to access
 	// the various API endpoints required by the operator.
@@ -226,6 +236,8 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, tailnet *tsapi.Tailnet)
 		return reconcile.Result{}, fmt.Errorf("failed to add finalizer to Tailnet %q: %w", tailnet.Name, err)
 	}
 
+	r.registry.Add(tailnet.Name, tsClient)
+
 	return reconcile.Result{}, nil
 }
 
@@ -235,9 +247,9 @@ const (
 	clientSecretKey = "client_secret"
 )
 
-func (r *Reconciler) createClient(ctx context.Context, tailnet *tsapi.Tailnet, secret *corev1.Secret) TailscaleClient {
+func (r *Reconciler) createClient(tailnet *tsapi.Tailnet, secret *corev1.Secret) (tsclient.Client, error) {
 	if r.clientFunc != nil {
-		return r.clientFunc(tailnet, secret)
+		return r.clientFunc(tailnet, secret), nil
 	}
 
 	baseURL := ipn.DefaultControlURL
@@ -245,38 +257,36 @@ func (r *Reconciler) createClient(ctx context.Context, tailnet *tsapi.Tailnet, s
 		baseURL = tailnet.Spec.LoginURL
 	}
 
-	credentials := clientcredentials.Config{
-		ClientID:     string(secret.Data[clientIDKey]),
-		ClientSecret: string(secret.Data[clientSecretKey]),
-		TokenURL:     baseURL + "/api/v2/oauth/token",
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse base URL %q: %w", baseURL, err)
 	}
 
-	source := credentials.TokenSource(ctx)
-	httpClient := oauth2.NewClient(ctx, source)
-
-	tsClient := tailscale.NewClient("-", nil)
-	tsClient.UserAgent = "tailscale-k8s-operator"
-	tsClient.HTTPClient = httpClient
-	tsClient.BaseURL = baseURL
-
-	return tsClient
+	return tsclient.Wrap(&tailscale.Client{
+		BaseURL:   base,
+		UserAgent: "tailscale-k8s-operator",
+		Auth: &tailscale.OAuth{
+			ClientID:     string(secret.Data[clientIDKey]),
+			ClientSecret: string(secret.Data[clientSecretKey]),
+		},
+	}), nil
 }
 
-func (r *Reconciler) ensurePermissions(ctx context.Context, tsClient TailscaleClient, tailnet *tsapi.Tailnet) bool {
+func (r *Reconciler) ensurePermissions(ctx context.Context, tsClient tsclient.Client, tailnet *tsapi.Tailnet) bool {
 	// Perform basic list requests here to confirm that the OAuth credentials referenced on the Tailnet resource
 	// can perform the basic operations required for the operator to function. This has a caveat of only performing
 	// read actions, as we don't want to create arbitrary keys and VIP services. However, it will catch when a user
 	// has completely forgotten an entire scope that's required.
 	var errs error
-	if _, err := tsClient.Devices(ctx, nil); err != nil {
+	if _, err := tsClient.Devices().List(ctx); err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to list devices: %w", err))
 	}
 
-	if _, err := tsClient.Keys(ctx); err != nil {
+	if _, err := tsClient.Keys().List(ctx, false); err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to list auth keys: %w", err))
 	}
 
-	if _, err := tsClient.ListVIPServices(ctx); err != nil {
+	if _, err := tsClient.VIPServices().List(ctx); err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to list tailscale services: %w", err))
 	}
 

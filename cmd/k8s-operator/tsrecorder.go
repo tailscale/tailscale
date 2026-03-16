@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,10 +29,11 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"tailscale.com/client/tailscale/v2"
 
-	"tailscale.com/client/tailscale"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
@@ -60,8 +60,8 @@ type RecorderReconciler struct {
 	log         *zap.SugaredLogger
 	recorder    record.EventRecorder
 	clock       tstime.Clock
+	clients     ClientProvider
 	tsNamespace string
-	tsClient    tsClient
 	loginServer string
 
 	mu        sync.Mutex           // protects following
@@ -99,7 +99,7 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 		return reconcile.Result{}, nil
 	}
 
-	tailscaleClient, loginUrl, err := r.getClientAndLoginURL(ctx, tsr.Spec.Tailnet)
+	tsClient, err := r.clients.For(tsr.Spec.Tailnet)
 	if err != nil {
 		return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderTailnetUnavailable, err.Error())
 	}
@@ -112,7 +112,7 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 			return reconcile.Result{}, nil
 		}
 
-		if done, err := r.maybeCleanup(ctx, tsr, tailscaleClient); err != nil {
+		if done, err := r.maybeCleanup(ctx, tsr, tsClient); err != nil {
 			return reconcile.Result{}, err
 		} else if !done {
 			logger.Debugf("Recorder resource cleanup not yet finished, will retry...")
@@ -144,7 +144,7 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 		return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderInvalid, message)
 	}
 
-	if err = r.maybeProvision(ctx, tailscaleClient, loginUrl, tsr); err != nil {
+	if err = r.maybeProvision(ctx, tsClient, tsr); err != nil {
 		reason := reasonRecorderCreationFailed
 		message := fmt.Sprintf("failed creating Recorder: %s", err)
 		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
@@ -162,30 +162,7 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 	return setStatusReady(tsr, metav1.ConditionTrue, reasonRecorderCreated, reasonRecorderCreated)
 }
 
-// getClientAndLoginURL returns the appropriate Tailscale client and resolved login URL
-// for the given tailnet name. If no tailnet is specified, returns the default client
-// and login server. Applies fallback to the operator's login server if the tailnet
-// doesn't specify a custom login URL.
-func (r *RecorderReconciler) getClientAndLoginURL(ctx context.Context, tailnetName string) (tsClient,
-	string, error) {
-	if tailnetName == "" {
-		return r.tsClient, r.loginServer, nil
-	}
-
-	tc, loginUrl, err := clientForTailnet(ctx, r.Client, r.tsNamespace, tailnetName)
-	if err != nil {
-		return nil, "", err
-	}
-
-	// Apply fallback if tailnet doesn't specify custom login URL
-	if loginUrl == "" {
-		loginUrl = r.loginServer
-	}
-
-	return tc, loginUrl, nil
-}
-
-func (r *RecorderReconciler) maybeProvision(ctx context.Context, tailscaleClient tsClient, loginUrl string, tsr *tsapi.Recorder) error {
+func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsClient tsclient.Client, tsr *tsapi.Recorder) error {
 	logger := r.logger(tsr.Name)
 
 	r.mu.Lock()
@@ -193,7 +170,7 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tailscaleClient
 	gaugeRecorderResources.Set(int64(r.recorders.Len()))
 	r.mu.Unlock()
 
-	if err := r.ensureAuthSecretsCreated(ctx, tailscaleClient, tsr); err != nil {
+	if err := r.ensureAuthSecretsCreated(ctx, tsClient, tsr); err != nil {
 		return fmt.Errorf("error creating secrets: %w", err)
 	}
 
@@ -252,7 +229,7 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tailscaleClient
 		return fmt.Errorf("error creating RoleBinding: %w", err)
 	}
 
-	ss := tsrStatefulSet(tsr, r.tsNamespace, loginUrl)
+	ss := tsrStatefulSet(tsr, r.tsNamespace, tsClient.LoginURL())
 	_, err = createOrUpdate(ctx, r.Client, r.tsNamespace, ss, func(s *appsv1.StatefulSet) {
 		s.ObjectMeta.Labels = ss.ObjectMeta.Labels
 		s.ObjectMeta.Annotations = ss.ObjectMeta.Annotations
@@ -271,13 +248,13 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tailscaleClient
 
 	// If we have scaled the recorder down, we will have dangling state secrets
 	// that we need to clean up.
-	if err = r.maybeCleanupSecrets(ctx, tailscaleClient, tsr); err != nil {
+	if err = r.maybeCleanupSecrets(ctx, tsClient, tsr); err != nil {
 		return fmt.Errorf("error cleaning up Secrets: %w", err)
 	}
 
 	var devices []tsapi.RecorderTailnetDevice
 	for replica := range replicas {
-		dev, ok, err := r.getDeviceInfo(ctx, tailscaleClient, tsr.Name, replica)
+		dev, ok, err := r.getDeviceInfo(ctx, tsClient, tsr.Name, replica)
 		switch {
 		case err != nil:
 			return fmt.Errorf("failed to get device info: %w", err)
@@ -342,7 +319,7 @@ func (r *RecorderReconciler) maybeCleanupServiceAccounts(ctx context.Context, ts
 	return nil
 }
 
-func (r *RecorderReconciler) maybeCleanupSecrets(ctx context.Context, tailscaleClient tsClient, tsr *tsapi.Recorder) error {
+func (r *RecorderReconciler) maybeCleanupSecrets(ctx context.Context, tsClient tsclient.Client, tsr *tsapi.Recorder) error {
 	options := []client.ListOption{
 		client.InNamespace(r.tsNamespace),
 		client.MatchingLabels(tsrLabels("recorder", tsr.Name, nil)),
@@ -382,11 +359,12 @@ func (r *RecorderReconciler) maybeCleanupSecrets(ctx context.Context, tailscaleC
 
 		if ok {
 			r.log.Debugf("deleting device %s", devicePrefs.Config.NodeID)
-			err = tailscaleClient.DeleteDevice(ctx, string(devicePrefs.Config.NodeID))
-			if errResp, ok := errors.AsType[*tailscale.ErrResponse](err); ok && errResp.Status == http.StatusNotFound {
-				// This device has possibly already been deleted in the admin console. So we can ignore this
-				// and move on to removing the secret.
-			} else if err != nil {
+			err = tsClient.Devices().Delete(ctx, string(devicePrefs.Config.NodeID))
+			switch {
+			case tailscale.IsNotFound(err):
+			// This device has possibly already been deleted in the admin console. So we can ignore this
+			// and move on to removing the secret.
+			case err != nil:
 				return err
 			}
 		}
@@ -402,7 +380,7 @@ func (r *RecorderReconciler) maybeCleanupSecrets(ctx context.Context, tailscaleC
 // maybeCleanup just deletes the device from the tailnet. All the kubernetes
 // resources linked to a Recorder will get cleaned up via owner references
 // (which we can use because they are all in the same namespace).
-func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Recorder, tailscaleClient tsClient) (bool, error) {
+func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Recorder, tsClient tsclient.Client) (bool, error) {
 	logger := r.logger(tsr.Name)
 
 	var replicas int32 = 1
@@ -426,12 +404,12 @@ func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Record
 
 		nodeID := string(devicePrefs.Config.NodeID)
 		logger.Debugf("deleting device %s from control", nodeID)
-		if err = tailscaleClient.DeleteDevice(ctx, nodeID); err != nil {
-			if errResp, ok := errors.AsType[tailscale.ErrResponse](err); ok && errResp.Status == http.StatusNotFound {
-				logger.Debugf("device %s not found, likely because it has already been deleted from control", nodeID)
-				continue
-			}
-
+		err = tsClient.Devices().Delete(ctx, nodeID)
+		switch {
+		case tailscale.IsNotFound(err):
+			logger.Debugf("device %s not found, likely because it has already been deleted from control", nodeID)
+			continue
+		case err != nil:
 			return false, fmt.Errorf("error deleting device: %w", err)
 		}
 
@@ -451,7 +429,7 @@ func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Record
 	return true, nil
 }
 
-func (r *RecorderReconciler) ensureAuthSecretsCreated(ctx context.Context, tailscaleClient tsClient, tsr *tsapi.Recorder) error {
+func (r *RecorderReconciler) ensureAuthSecretsCreated(ctx context.Context, tsClient tsclient.Client, tsr *tsapi.Recorder) error {
 	var replicas int32 = 1
 	if tsr.Spec.Replicas != nil {
 		replicas = *tsr.Spec.Replicas
@@ -479,7 +457,7 @@ func (r *RecorderReconciler) ensureAuthSecretsCreated(ctx context.Context, tails
 			return fmt.Errorf("failed to get Secret %q: %w", key.Name, err)
 		}
 
-		authKey, err := newAuthKey(ctx, tailscaleClient, tags.Stringify())
+		authKey, err := newAuthKey(ctx, tsClient, tags.Stringify())
 		if err != nil {
 			return err
 		}
@@ -581,7 +559,7 @@ func getDevicePrefs(secret *corev1.Secret) (prefs prefs, ok bool, err error) {
 	return prefs, ok, nil
 }
 
-func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tailscaleClient tsClient, tsrName string, replica int32) (d tsapi.RecorderTailnetDevice, ok bool, err error) {
+func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tsClient tsclient.Client, tsrName string, replica int32) (d tsapi.RecorderTailnetDevice, ok bool, err error) {
 	secret, err := r.getStateSecret(ctx, tsrName, replica)
 	if err != nil || secret == nil {
 		return tsapi.RecorderTailnetDevice{}, false, err
@@ -595,7 +573,7 @@ func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tailscaleClient 
 	// TODO(tomhjp): The profile info doesn't include addresses, which is why we
 	// need the API. Should maybe update tsrecorder to write IPs to the state
 	// Secret like containerboot does.
-	device, err := tailscaleClient.Device(ctx, string(prefs.Config.NodeID), nil)
+	device, err := tsClient.Devices().Get(ctx, string(prefs.Config.NodeID))
 	if err != nil {
 		return tsapi.RecorderTailnetDevice{}, false, fmt.Errorf("failed to get device info from API: %w", err)
 	}

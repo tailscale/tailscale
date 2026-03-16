@@ -24,8 +24,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	"tailscale.com/k8s-operator/apis/v1alpha1"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/tstest"
@@ -43,7 +45,7 @@ func TestLoadBalancerClass(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -62,7 +64,7 @@ func TestLoadBalancerClass(t *testing.T) {
 			// The apiserver is supposed to set the UID, but the fake client
 			// doesn't. So, set it explicitly because other code later depends
 			// on it being set.
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 			Annotations: map[string]string{
 				AnnotationTailnetTargetFQDN: "invalid.example.com",
 			},
@@ -203,7 +205,7 @@ func TestLoadBalancerClass(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test",
 			Namespace: "default",
-			UID:       types.UID("1234-UID"),
+			UID:       "1234-UID",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -223,7 +225,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -241,7 +243,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 			// The apiserver is supposed to set the UID, but the fake client
 			// doesn't. So, set it explicitly because other code later depends
 			// on it being set.
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 			Annotations: map[string]string{
 				AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
 			},
@@ -333,7 +335,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -351,7 +353,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 			// The apiserver is supposed to set the UID, but the fake client
 			// doesn't. So, set it explicitly because other code later depends
 			// on it being set.
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 			Annotations: map[string]string{
 				AnnotationTailnetTargetIP: tailnetTargetIP,
 			},
@@ -442,7 +444,7 @@ func TestTailnetTargetIPAnnotation_IPCouldNotBeParsed(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -457,7 +459,7 @@ func TestTailnetTargetIPAnnotation_IPCouldNotBeParsed(t *testing.T) {
 			Name:      "test",
 			Namespace: "default",
 
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 			Annotations: map[string]string{
 				AnnotationTailnetTargetIP: tailnetTargetIP,
 			},
@@ -510,7 +512,7 @@ func TestTailnetTargetIPAnnotation_InvalidIP(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -525,7 +527,7 @@ func TestTailnetTargetIPAnnotation_InvalidIP(t *testing.T) {
 			Name:      "test",
 			Namespace: "default",
 
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 			Annotations: map[string]string{
 				AnnotationTailnetTargetIP: tailnetTargetIP,
 			},
@@ -578,7 +580,7 @@ func TestAnnotations(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -596,7 +598,7 @@ func TestAnnotations(t *testing.T) {
 			// The apiserver is supposed to set the UID, but the fake client
 			// doesn't. So, set it explicitly because other code later depends
 			// on it being set.
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 			Annotations: map[string]string{
 				"tailscale.com/expose": "true",
 			},
@@ -663,7 +665,7 @@ func TestAnnotations(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test",
 			Namespace: "default",
-			UID:       types.UID("1234-UID"),
+			UID:       "1234-UID",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -682,7 +684,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -700,7 +702,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 			// The apiserver is supposed to set the UID, but the fake client
 			// doesn't. So, set it explicitly because other code later depends
 			// on it being set.
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 			Annotations: map[string]string{
 				"tailscale.com/expose": "true",
 			},
@@ -779,7 +781,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 			Name:       "test",
 			Namespace:  "default",
 			Finalizers: []string{"tailscale.com/finalizer"},
-			UID:        types.UID("1234-UID"),
+			UID:        "1234-UID",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
@@ -812,7 +814,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -830,7 +832,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 			// The apiserver is supposed to set the UID, but the fake client
 			// doesn't. So, set it explicitly because other code later depends
 			// on it being set.
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
@@ -925,7 +927,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 			Annotations: map[string]string{
 				"tailscale.com/expose": "true",
 			},
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -947,7 +949,7 @@ func TestCustomHostname(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -965,7 +967,7 @@ func TestCustomHostname(t *testing.T) {
 			// The apiserver is supposed to set the UID, but the fake client
 			// doesn't. So, set it explicitly because other code later depends
 			// on it being set.
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 			Annotations: map[string]string{
 				"tailscale.com/expose":   "true",
 				"tailscale.com/hostname": "reindeer-flotilla",
@@ -1034,7 +1036,7 @@ func TestCustomHostname(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test",
 			Namespace: "default",
-			UID:       types.UID("1234-UID"),
+			UID:       "1234-UID",
 			Annotations: map[string]string{
 				"tailscale.com/hostname": "reindeer-flotilla",
 			},
@@ -1056,7 +1058,7 @@ func TestCustomPriorityClassName(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:                 fc,
-			tsClient:               ft,
+			clients:                tsclient.NewProvider(ft),
 			defaultTags:            []string{"tag:k8s"},
 			operatorNamespace:      "operator-ns",
 			proxyImage:             "tailscale/tailscale",
@@ -1075,7 +1077,7 @@ func TestCustomPriorityClassName(t *testing.T) {
 			// The apiserver is supposed to set the UID, but the fake client
 			// doesn't. So, set it explicitly because other code later depends
 			// on it being set.
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 			Annotations: map[string]string{
 				"tailscale.com/expose":   "true",
 				"tailscale.com/hostname": "tailscale-critical",
@@ -1212,7 +1214,7 @@ func TestServiceProxyClassAnnotation(t *testing.T) {
 				Client: fc,
 				ssr: &tailscaleSTSReconciler{
 					Client:            fc,
-					tsClient:          ft,
+					clients:           tsclient.NewProvider(ft),
 					defaultTags:       []string{"tag:k8s"},
 					operatorNamespace: "operator-ns",
 					proxyImage:        "tailscale/tailscale",
@@ -1308,7 +1310,7 @@ func TestProxyClassForService(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -1326,7 +1328,7 @@ func TestProxyClassForService(t *testing.T) {
 			// The apiserver is supposed to set the UID, but the fake client
 			// doesn't. So, set it explicitly because other code later depends
 			// on it being set.
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
@@ -1397,7 +1399,7 @@ func TestDefaultLoadBalancer(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -1416,7 +1418,7 @@ func TestDefaultLoadBalancer(t *testing.T) {
 			// The apiserver is supposed to set the UID, but the fake client
 			// doesn't. So, set it explicitly because other code later depends
 			// on it being set.
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -1451,7 +1453,7 @@ func TestProxyFirewallMode(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -1471,7 +1473,7 @@ func TestProxyFirewallMode(t *testing.T) {
 			// The apiserver is supposed to set the UID, but the fake client
 			// doesn't. So, set it explicitly because other code later depends
 			// on it being set.
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -1541,7 +1543,7 @@ func Test_HeadlessService(t *testing.T) {
 			Name:      "test",
 			Namespace: "default",
 
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 			Annotations: map[string]string{
 				AnnotationExpose: "true",
 			},
@@ -1825,7 +1827,7 @@ func Test_authKeyRemoval(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -1838,7 +1840,7 @@ func Test_authKeyRemoval(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test",
 			Namespace: "default",
-			UID:       types.UID("1234-UID"),
+			UID:       "1234-UID",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
@@ -1890,7 +1892,7 @@ func Test_externalNameService(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -1908,7 +1910,7 @@ func Test_externalNameService(t *testing.T) {
 			// The apiserver is supposed to set the UID, but the fake client
 			// doesn't. So, set it explicitly because other code later depends
 			// on it being set.
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 			Annotations: map[string]string{
 				AnnotationExpose: "true",
 			},
@@ -1984,7 +1986,7 @@ func Test_metricsResourceCreation(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			operatorNamespace: "operator-ns",
 		},
 		logger: zl.Sugar(),
@@ -2055,7 +2057,7 @@ func TestIgnorePGService(t *testing.T) {
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -2073,7 +2075,7 @@ func TestIgnorePGService(t *testing.T) {
 			// The apiserver is supposed to set the UID, but the fake client
 			// doesn't. So, set it explicitly because other code later depends
 			// on it being set.
-			UID: types.UID("1234-UID"),
+			UID: "1234-UID",
 			Annotations: map[string]string{
 				"tailscale.com/proxygroup": "test-pg",
 			},

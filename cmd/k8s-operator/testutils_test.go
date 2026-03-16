@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/netip"
 	"path"
@@ -31,12 +32,12 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"tailscale.com/client/tailscale/v2"
 
-	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/tailcfg"
 	"tailscale.com/util/mak"
 )
 
@@ -836,60 +837,137 @@ func expectEvents(t *testing.T, rec *record.FakeRecorder, wantsEvents []string) 
 	}
 }
 
-type fakeTSClient struct {
-	sync.Mutex
-	keyRequests []tailscale.KeyCapabilities
-	deleted     []string
-	vipServices map[tailcfg.ServiceName]*tailscale.VIPService
+type (
+	fakeTSClient struct {
+		sync.Mutex
+		loginURL    string
+		keyRequests []tailscale.KeyCapabilities
+		deleted     []string
+		devices     []tailscale.Device
+		vipServices map[string]tailscale.VIPService
+	}
+
+	fakeVIPServices struct {
+		mu          sync.RWMutex
+		vipServices map[string]tailscale.VIPService
+	}
+
+	fakeKeys struct {
+		keyRequests *[]tailscale.KeyCapabilities
+	}
+
+	fakeDevices struct {
+		deleted *[]string
+		devices *[]tailscale.Device
+	}
+)
+
+func (c *fakeTSClient) VIPServices() tsclient.VIPServiceResource {
+	return &fakeVIPServices{
+		vipServices: c.vipServices,
+	}
 }
+
+func (m *fakeVIPServices) List(_ context.Context) ([]tailscale.VIPService, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if len(m.vipServices) == 0 {
+		return nil, tailscale.APIError{Status: http.StatusNotFound}
+	}
+
+	return slices.Collect(maps.Values(m.vipServices)), nil
+}
+
+func (m *fakeVIPServices) Delete(_ context.Context, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.vipServices[name]; !ok {
+		return tailscale.APIError{Status: http.StatusNotFound}
+	}
+
+	delete(m.vipServices, name)
+	return nil
+}
+
+func (m *fakeVIPServices) Get(_ context.Context, name string) (*tailscale.VIPService, error) {
+	if svc, ok := m.vipServices[name]; ok {
+		return &svc, nil
+	}
+
+	return nil, tailscale.APIError{Status: http.StatusNotFound}
+}
+
+func (m *fakeVIPServices) CreateOrUpdate(_ context.Context, svc tailscale.VIPService) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if svc.Addrs == nil {
+		svc.Addrs = []string{vipTestIP}
+	}
+
+	m.vipServices[svc.Name] = svc
+	return nil
+}
+
+func (c *fakeTSClient) Devices() tsclient.DeviceResource {
+	return &fakeDevices{
+		deleted: &c.deleted,
+		devices: &c.devices,
+	}
+}
+
+func (m *fakeDevices) Delete(_ context.Context, id string) error {
+	*m.deleted = append(*m.deleted, id)
+
+	return tailscale.APIError{Status: http.StatusNotFound}
+}
+
+func (m *fakeDevices) List(_ context.Context, _ ...tailscale.ListDevicesOptions) ([]tailscale.Device, error) {
+	return *m.devices, nil
+}
+
+func (m *fakeDevices) Get(_ context.Context, id string) (*tailscale.Device, error) {
+	if m.devices == nil {
+		return nil, tailscale.APIError{Status: http.StatusNotFound}
+	}
+
+	for _, dev := range *m.devices {
+		if dev.ID == id {
+			return &dev, nil
+		}
+	}
+
+	return nil, tailscale.APIError{Status: http.StatusNotFound}
+}
+
+func (c *fakeTSClient) Keys() tsclient.KeyResource {
+	return &fakeKeys{
+		keyRequests: &c.keyRequests,
+	}
+}
+
+func (m *fakeKeys) CreateAuthKey(_ context.Context, ckr tailscale.CreateKeyRequest) (*tailscale.Key, error) {
+	*m.keyRequests = append(*m.keyRequests, ckr.Capabilities)
+
+	return &tailscale.Key{Key: "new-authkey"}, nil
+}
+
+func (m *fakeKeys) List(_ context.Context, _ bool) ([]tailscale.Key, error) {
+	return nil, nil
+}
+
+func (c *fakeTSClient) LoginURL() string {
+	return c.loginURL
+}
+
 type fakeTSNetServer struct {
 	certDomains []string
 }
 
 func (f *fakeTSNetServer) CertDomains() []string {
 	return f.certDomains
-}
-
-func (c *fakeTSClient) CreateKey(ctx context.Context, caps tailscale.KeyCapabilities) (string, *tailscale.Key, error) {
-	c.Lock()
-	defer c.Unlock()
-	c.keyRequests = append(c.keyRequests, caps)
-	k := &tailscale.Key{
-		ID:           "key",
-		Created:      time.Now(),
-		Capabilities: caps,
-	}
-	return "new-authkey", k, nil
-}
-
-func (c *fakeTSClient) Device(ctx context.Context, deviceID string, fields *tailscale.DeviceFieldsOpts) (*tailscale.Device, error) {
-	return &tailscale.Device{
-		DeviceID: deviceID,
-		Hostname: "hostname-" + deviceID,
-		Addresses: []string{
-			"1.2.3.4",
-			"::1",
-		},
-	}, nil
-}
-
-func (c *fakeTSClient) DeleteDevice(ctx context.Context, deviceID string) error {
-	c.Lock()
-	defer c.Unlock()
-	c.deleted = append(c.deleted, deviceID)
-	return nil
-}
-
-func (c *fakeTSClient) KeyRequests() []tailscale.KeyCapabilities {
-	c.Lock()
-	defer c.Unlock()
-	return c.keyRequests
-}
-
-func (c *fakeTSClient) Deleted() []string {
-	c.Lock()
-	defer c.Unlock()
-	return c.deleted
 }
 
 func removeResourceReqs(sts *appsv1.StatefulSet) {
@@ -934,54 +1012,4 @@ func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {
 			mak.Set(&secret.StringData, "cap-107.hujson", string(b))
 		}
 	}
-}
-
-func (c *fakeTSClient) GetVIPService(ctx context.Context, name tailcfg.ServiceName) (*tailscale.VIPService, error) {
-	c.Lock()
-	defer c.Unlock()
-	if c.vipServices == nil {
-		return nil, tailscale.ErrResponse{Status: http.StatusNotFound}
-	}
-	svc, ok := c.vipServices[name]
-	if !ok {
-		return nil, tailscale.ErrResponse{Status: http.StatusNotFound}
-	}
-	return svc, nil
-}
-
-func (c *fakeTSClient) ListVIPServices(ctx context.Context) (*tailscale.VIPServiceList, error) {
-	c.Lock()
-	defer c.Unlock()
-	if c.vipServices == nil {
-		return nil, &tailscale.ErrResponse{Status: http.StatusNotFound}
-	}
-	result := &tailscale.VIPServiceList{}
-	for _, svc := range c.vipServices {
-		result.VIPServices = append(result.VIPServices, *svc)
-	}
-	return result, nil
-}
-
-func (c *fakeTSClient) CreateOrUpdateVIPService(ctx context.Context, svc *tailscale.VIPService) error {
-	c.Lock()
-	defer c.Unlock()
-	if c.vipServices == nil {
-		c.vipServices = make(map[tailcfg.ServiceName]*tailscale.VIPService)
-	}
-
-	if svc.Addrs == nil {
-		svc.Addrs = []string{vipTestIP}
-	}
-
-	c.vipServices[svc.Name] = svc
-	return nil
-}
-
-func (c *fakeTSClient) DeleteVIPService(ctx context.Context, name tailcfg.ServiceName) error {
-	c.Lock()
-	defer c.Unlock()
-	if c.vipServices != nil {
-		delete(c.vipServices, name)
-	}
-	return nil
 }

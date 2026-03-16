@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"net/http"
 	"os"
 	"path"
 	"slices"
@@ -30,11 +29,12 @@ import (
 	"k8s.io/apiserver/pkg/storage/names"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
+	"tailscale.com/client/tailscale/v2"
 
-	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
@@ -174,7 +174,7 @@ type tsnetServer interface {
 type tailscaleSTSReconciler struct {
 	client.Client
 	tsnetServer            tsnetServer
-	tsClient               tsClient
+	clients                ClientProvider
 	defaultTags            []string
 	operatorNamespace      string
 	proxyImage             string
@@ -183,9 +183,9 @@ type tailscaleSTSReconciler struct {
 	loginServer            string
 }
 
-func (sts tailscaleSTSReconciler) validate() error {
-	if sts.tsFirewallMode != "" && !isValidFirewallMode(sts.tsFirewallMode) {
-		return fmt.Errorf("invalid proxy firewall mode %s, valid modes are iptables, nftables or unset", sts.tsFirewallMode)
+func (r *tailscaleSTSReconciler) validate() error {
+	if r.tsFirewallMode != "" && !isValidFirewallMode(r.tsFirewallMode) {
+		return fmt.Errorf("invalid proxy firewall mode %s, valid modes are iptables, nftables or unset", r.tsFirewallMode)
 	}
 	return nil
 }
@@ -197,22 +197,17 @@ func IsHTTPSEnabledOnTailnet(tsnetServer tsnetServer) bool {
 
 // Provision ensures that the StatefulSet for the given service is running and
 // up to date.
-func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
-	tailscaleClient, loginUrl, err := a.getClientAndLoginURL(ctx, sts.Tailnet)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get tailscale client and loginUrl: %w", err)
-	}
-
+func (r *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
 	// Do full reconcile.
 	// TODO (don't create Service for the Connector)
-	hsvc, err := a.reconcileHeadlessService(ctx, logger, sts)
+	hsvc, err := r.reconcileHeadlessService(ctx, logger, sts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to reconcile headless service: %w", err)
 	}
 
 	proxyClass := new(tsapi.ProxyClass)
 	if sts.ProxyClassName != "" {
-		if err := a.Get(ctx, types.NamespacedName{Name: sts.ProxyClassName}, proxyClass); err != nil {
+		if err := r.Get(ctx, types.NamespacedName{Name: sts.ProxyClassName}, proxyClass); err != nil {
 			return nil, fmt.Errorf("failed to get ProxyClass: %w", err)
 		}
 		if !tsoperator.ProxyClassIsReady(proxyClass) {
@@ -222,12 +217,17 @@ func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.Suga
 	}
 	sts.ProxyClass = proxyClass
 
-	secretNames, err := a.provisionSecrets(ctx, tailscaleClient, loginUrl, sts, hsvc, logger)
+	tsClient, err := r.clients.For(sts.Tailnet)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tailscale client: %w", err)
+	}
+
+	secretNames, err := r.provisionSecrets(ctx, tsClient, sts, hsvc, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create or get API key secret: %w", err)
 	}
 
-	_, err = a.reconcileSTS(ctx, logger, sts, hsvc, secretNames)
+	_, err = r.reconcileSTS(ctx, logger, sts, hsvc, secretNames)
 	if err != nil {
 		return nil, fmt.Errorf("failed to reconcile statefulset: %w", err)
 	}
@@ -237,48 +237,20 @@ func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.Suga
 		proxyLabels:  hsvc.Labels,
 		proxyType:    sts.proxyType,
 	}
-	if err = reconcileMetricsResources(ctx, logger, mo, sts.ProxyClass, a.Client); err != nil {
+	if err = reconcileMetricsResources(ctx, logger, mo, sts.ProxyClass, r.Client); err != nil {
 		return nil, fmt.Errorf("failed to ensure metrics resources: %w", err)
 	}
 	return hsvc, nil
 }
 
-// getClientAndLoginURL returns the appropriate Tailscale client and resolved login URL
-// for the given tailnet name. If no tailnet is specified, returns the default client
-// and login server. Applies fallback to the operator's login server if the tailnet
-// doesn't specify a custom login URL.
-func (a *tailscaleSTSReconciler) getClientAndLoginURL(ctx context.Context, tailnetName string) (tsClient,
-	string, error) {
-	if tailnetName == "" {
-		return a.tsClient, a.loginServer, nil
-	}
-
-	tc, loginUrl, err := clientForTailnet(ctx, a.Client, a.operatorNamespace, tailnetName)
-	if err != nil {
-		return nil, "", err
-	}
-
-	// Apply fallback if tailnet doesn't specify custom login URL
-	if loginUrl == "" {
-		loginUrl = a.loginServer
-	}
-
-	return tc, loginUrl, nil
-}
-
 // Cleanup removes all resources associated that were created by Provision with
 // the given labels. It returns true when all resources have been removed,
 // otherwise it returns false and the caller should retry later.
-func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, tailnet string, logger *zap.SugaredLogger, labels map[string]string, typ string) (done bool, _ error) {
-	tailscaleClient := a.tsClient
-	if tailnet != "" {
-		tc, _, err := clientForTailnet(ctx, a.Client, a.operatorNamespace, tailnet)
-		if err != nil {
-			logger.Errorf("failed to get tailscale client: %v", err)
-			return false, nil
-		}
-
-		tailscaleClient = tc
+func (r *tailscaleSTSReconciler) Cleanup(ctx context.Context, tailnet string, logger *zap.SugaredLogger, labels map[string]string, typ string) (done bool, _ error) {
+	tsClient, err := r.clients.For(tailnet)
+	if err != nil {
+		logger.Errorf("failed to get tailscale client: %v", err)
+		return false, nil
 	}
 
 	// Need to delete the StatefulSet first, and delete it with foreground
@@ -287,7 +259,7 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, tailnet string, lo
 	// assuming k8s ordering semantics don't mess with us, that should avoid
 	// tailscale device deletion races where we fail to notice a device that
 	// should be removed.
-	sts, err := getSingleObject[appsv1.StatefulSet](ctx, a.Client, a.operatorNamespace, labels)
+	sts, err := getSingleObject[appsv1.StatefulSet](ctx, r.Client, r.operatorNamespace, labels)
 	if err != nil {
 		return false, fmt.Errorf("getting statefulset: %w", err)
 	}
@@ -301,12 +273,12 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, tailnet string, lo
 		}
 
 		options := []client.DeleteAllOfOption{
-			client.InNamespace(a.operatorNamespace),
+			client.InNamespace(r.operatorNamespace),
 			client.MatchingLabels(labels),
 			client.PropagationPolicy(metav1.DeletePropagationForeground),
 		}
 
-		if err = a.DeleteAllOf(ctx, &appsv1.StatefulSet{}, options...); err != nil {
+		if err = r.DeleteAllOf(ctx, &appsv1.StatefulSet{}, options...); err != nil {
 			return false, fmt.Errorf("deleting statefulset: %w", err)
 		}
 
@@ -314,7 +286,7 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, tailnet string, lo
 		return false, nil
 	}
 
-	devices, err := a.DeviceInfo(ctx, labels, logger)
+	devices, err := r.DeviceInfo(ctx, labels, logger)
 	if err != nil {
 		return false, fmt.Errorf("getting device info: %w", err)
 	}
@@ -322,33 +294,36 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, tailnet string, lo
 	for _, dev := range devices {
 		if dev.id != "" {
 			logger.Debugf("deleting device %s from control", string(dev.id))
-			if err = tailscaleClient.DeleteDevice(ctx, string(dev.id)); err != nil {
-				if errResp, ok := errors.AsType[tailscale.ErrResponse](err); ok && errResp.Status == http.StatusNotFound {
-					logger.Debugf("device %s not found, likely because it has already been deleted from control", string(dev.id))
-				} else {
-					return false, fmt.Errorf("deleting device: %w", err)
-				}
-			} else {
-				logger.Debugf("device %s deleted from control", string(dev.id))
+			err = tsClient.Devices().Delete(ctx, string(dev.id))
+			switch {
+			case tailscale.IsNotFound(err):
+				logger.Debugf("device %s not found, likely because it has already been deleted from control", string(dev.id))
+			case err != nil:
+				return false, fmt.Errorf("deleting device: %w", err)
 			}
+
+			logger.Debugf("device %s deleted from control", string(dev.id))
 		}
 	}
 
-	types := []client.Object{
+	resourceTypes := []client.Object{
 		&corev1.Service{},
 		&corev1.Secret{},
 	}
-	for _, typ := range types {
-		if err := a.DeleteAllOf(ctx, typ, client.InNamespace(a.operatorNamespace), client.MatchingLabels(labels)); err != nil {
+
+	for _, resourceType := range resourceTypes {
+		if err = r.DeleteAllOf(ctx, resourceType, client.InNamespace(r.operatorNamespace), client.MatchingLabels(labels)); err != nil {
 			return false, err
 		}
 	}
+
 	mo := &metricsOpts{
 		proxyLabels: labels,
-		tsNamespace: a.operatorNamespace,
+		tsNamespace: r.operatorNamespace,
 		proxyType:   typ,
 	}
-	if err = maybeCleanupMetricsResources(ctx, mo, a.Client); err != nil {
+
+	if err = maybeCleanupMetricsResources(ctx, mo, r.Client); err != nil {
 		return false, fmt.Errorf("error cleaning up metrics resources: %w", err)
 	}
 
@@ -382,12 +357,12 @@ func statefulSetNameBase(parent string) string {
 	}
 }
 
-func (a *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
+func (r *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
 	nameBase := statefulSetNameBase(sts.ParentResourceName)
 	hsvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: nameBase,
-			Namespace:    a.operatorNamespace,
+			Namespace:    r.operatorNamespace,
 			Labels:       sts.ChildResourceLabels,
 		},
 		Spec: corev1.ServiceSpec{
@@ -399,10 +374,10 @@ func (a *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, l
 		},
 	}
 	logger.Debugf("reconciling headless service for StatefulSet")
-	return createOrUpdate(ctx, a.Client, a.operatorNamespace, hsvc, func(svc *corev1.Service) { svc.Spec = hsvc.Spec })
+	return createOrUpdate(ctx, r.Client, r.operatorNamespace, hsvc, func(svc *corev1.Service) { svc.Spec = hsvc.Spec })
 }
 
-func (a *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tailscaleClient tsClient, loginUrl string, stsC *tailscaleSTSConfig, hsvc *corev1.Service, logger *zap.SugaredLogger) ([]string, error) {
+func (r *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tsClient tsclient.Client, stsC *tailscaleSTSConfig, hsvc *corev1.Service, logger *zap.SugaredLogger) ([]string, error) {
 	secretNames := make([]string, stsC.Replicas)
 
 	// Start by ensuring we have Secrets for the desired number of replicas. This will handle both creating and scaling
@@ -411,7 +386,7 @@ func (a *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tailscale
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      fmt.Sprintf("%s-%d", hsvc.Name, i),
-				Namespace: a.operatorNamespace,
+				Namespace: r.operatorNamespace,
 				Labels:    stsC.ChildResourceLabels,
 			},
 		}
@@ -426,7 +401,7 @@ func (a *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tailscale
 		secretNames[i] = secret.Name
 
 		var orig *corev1.Secret // unmodified copy of secret
-		if err := a.Get(ctx, client.ObjectKeyFromObject(secret), secret); err == nil {
+		if err := r.Get(ctx, client.ObjectKeyFromObject(secret), secret); err == nil {
 			logger.Debugf("secret %s/%s already exists", secret.GetNamespace(), secret.GetName())
 			orig = secret.DeepCopy()
 		} else if !apierrors.IsNotFound(err) {
@@ -437,21 +412,23 @@ func (a *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tailscale
 			authKey string
 			err     error
 		)
+
 		if orig == nil {
 			// Create API Key secret which is going to be used by the statefulset
 			// to authenticate with Tailscale.
 			logger.Debugf("creating authkey for new tailscale proxy")
 			tags := stsC.Tags
 			if len(tags) == 0 {
-				tags = a.defaultTags
+				tags = r.defaultTags
 			}
-			authKey, err = newAuthKey(ctx, tailscaleClient, tags)
+
+			authKey, err = newAuthKey(ctx, tsClient, tags)
 			if err != nil {
 				return nil, err
 			}
 		}
 
-		configs, err := tailscaledConfig(stsC, loginUrl, authKey, orig, hostname)
+		configs, err := tailscaledConfig(stsC, tsClient.LoginURL(), authKey, orig, hostname)
 		if err != nil {
 			return nil, fmt.Errorf("error creating tailscaled config: %w", err)
 		}
@@ -483,12 +460,12 @@ func (a *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tailscale
 
 		if orig != nil && !apiequality.Semantic.DeepEqual(latest, orig) {
 			logger.With("config", sanitizeConfig(latestConfig)).Debugf("patching the existing proxy Secret")
-			if err = a.Patch(ctx, secret, client.MergeFrom(orig)); err != nil {
+			if err = r.Patch(ctx, secret, client.MergeFrom(orig)); err != nil {
 				return nil, err
 			}
 		} else {
 			logger.With("config", sanitizeConfig(latestConfig)).Debugf("creating a new Secret for the proxy")
-			if err = a.Create(ctx, secret); err != nil {
+			if err = r.Create(ctx, secret); err != nil {
 				return nil, err
 			}
 		}
@@ -497,7 +474,7 @@ func (a *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tailscale
 	// Next, we check if we have additional secrets and remove them and their associated device. This happens when we
 	// scale an StatefulSet down.
 	var secrets corev1.SecretList
-	if err := a.List(ctx, &secrets, client.InNamespace(a.operatorNamespace), client.MatchingLabels(stsC.ChildResourceLabels)); err != nil {
+	if err := r.List(ctx, &secrets, client.InNamespace(r.operatorNamespace), client.MatchingLabels(stsC.ChildResourceLabels)); err != nil {
 		return nil, err
 	}
 
@@ -517,16 +494,18 @@ func (a *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tailscale
 		}
 
 		if dev != nil && dev.id != "" {
-			err = tailscaleClient.DeleteDevice(ctx, string(dev.id))
-			if errResp, ok := errors.AsType[*tailscale.ErrResponse](err); ok && errResp.Status == http.StatusNotFound {
+			err = tsClient.Devices().Delete(ctx, string(dev.id))
+			switch {
+			case tailscale.IsNotFound(err):
 				// This device has possibly already been deleted in the admin console. So we can ignore this
 				// and move on to removing the secret.
-			} else if err != nil {
+				continue
+			case err != nil:
 				return nil, err
 			}
 		}
 
-		if err = a.Delete(ctx, &secret); err != nil {
+		if err = r.Delete(ctx, &secret); err != nil {
 			return nil, err
 		}
 	}
@@ -550,9 +529,9 @@ func sanitizeConfig(c ipn.ConfigVAlpha) ipn.ConfigVAlpha {
 // It retrieves info from a Kubernetes Secret labeled with the provided labels. Capver is cross-validated against the
 // Pod to ensure that it is the currently running Pod that set the capver. If the Pod or the Secret does not exist, the
 // returned capver is -1. Either of device ID, hostname and IPs can be empty string if not found in the Secret.
-func (a *tailscaleSTSReconciler) DeviceInfo(ctx context.Context, childLabels map[string]string, logger *zap.SugaredLogger) ([]*device, error) {
+func (r *tailscaleSTSReconciler) DeviceInfo(ctx context.Context, childLabels map[string]string, logger *zap.SugaredLogger) ([]*device, error) {
 	var secrets corev1.SecretList
-	if err := a.List(ctx, &secrets, client.InNamespace(a.operatorNamespace), client.MatchingLabels(childLabels)); err != nil {
+	if err := r.List(ctx, &secrets, client.InNamespace(r.operatorNamespace), client.MatchingLabels(childLabels)); err != nil {
 		return nil, err
 	}
 
@@ -560,7 +539,7 @@ func (a *tailscaleSTSReconciler) DeviceInfo(ctx context.Context, childLabels map
 	for _, sec := range secrets.Items {
 		podUID := ""
 		pod := new(corev1.Pod)
-		err := a.Get(ctx, types.NamespacedName{Namespace: sec.Namespace, Name: sec.Name}, pod)
+		err := r.Get(ctx, types.NamespacedName{Namespace: sec.Namespace, Name: sec.Name}, pod)
 		switch {
 		case apierrors.IsNotFound(err):
 			// If the Pod is not found, we won't have its UID. We can still get the device information but the
@@ -633,22 +612,18 @@ func deviceInfo(sec *corev1.Secret, podUID string, log *zap.SugaredLogger) (dev 
 	return dev, nil
 }
 
-func newAuthKey(ctx context.Context, tsClient tsClient, tags []string) (string, error) {
-	caps := tailscale.KeyCapabilities{
-		Devices: tailscale.KeyDeviceCapabilities{
-			Create: tailscale.KeyDeviceCreateCapabilities{
-				Reusable:      false,
-				Preauthorized: true,
-				Tags:          tags,
-			},
-		},
-	}
+func newAuthKey(ctx context.Context, client tsclient.Client, tags []string) (string, error) {
+	var caps tailscale.KeyCapabilities
+	caps.Devices.Create.Reusable = false
+	caps.Devices.Create.Preauthorized = true
+	caps.Devices.Create.Tags = tags
 
-	key, _, err := tsClient.CreateKey(ctx, caps)
+	key, err := client.Keys().CreateAuthKey(ctx, tailscale.CreateKeyRequest{Capabilities: caps})
 	if err != nil {
 		return "", err
 	}
-	return key, nil
+
+	return key.Key, nil
 }
 
 //go:embed deploy/manifests/proxy.yaml
@@ -657,7 +632,7 @@ var proxyYaml []byte
 //go:embed deploy/manifests/userspace-proxy.yaml
 var userspaceProxyYaml []byte
 
-func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, proxySecrets []string) (*appsv1.StatefulSet, error) {
+func (r *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, proxySecrets []string) (*appsv1.StatefulSet, error) {
 	ss := new(appsv1.StatefulSet)
 	if sts.ServeConfig != nil && sts.ForwardClusterTrafficViaL7IngressProxy != true { // If forwarding cluster traffic via is required we need non-userspace + NET_ADMIN + forwarding
 		if err := yaml.Unmarshal(userspaceProxyYaml, &ss); err != nil {
@@ -670,17 +645,17 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		for i := range ss.Spec.Template.Spec.InitContainers {
 			c := &ss.Spec.Template.Spec.InitContainers[i]
 			if c.Name == "sysctler" {
-				c.Image = a.proxyImage
+				c.Image = r.proxyImage
 				break
 			}
 		}
 	}
 	pod := &ss.Spec.Template
 	container := &pod.Spec.Containers[0]
-	container.Image = a.proxyImage
+	container.Image = r.proxyImage
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,
-		Namespace: a.operatorNamespace,
+		Namespace: r.operatorNamespace,
 	}
 	for key, val := range sts.ChildResourceLabels {
 		mak.Set(&ss.ObjectMeta.Labels, key, val)
@@ -748,13 +723,13 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		})
 	}
 
-	if a.tsFirewallMode != "" {
+	if r.tsFirewallMode != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_DEBUG_FIREWALL_MODE",
-			Value: a.tsFirewallMode,
+			Value: r.tsFirewallMode,
 		})
 	}
-	pod.Spec.PriorityClassName = a.proxyPriorityClassName
+	pod.Spec.PriorityClassName = r.proxyPriorityClassName
 
 	// Ingress/egress proxy configuration options.
 	if sts.ClusterTargetIP != "" {
@@ -829,7 +804,7 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		s.ObjectMeta.Labels = ss.Labels
 		s.ObjectMeta.Annotations = ss.Annotations
 	}
-	return createOrUpdate(ctx, a.Client, a.operatorNamespace, ss, updateSS)
+	return createOrUpdate(ctx, r.Client, r.operatorNamespace, ss, updateSS)
 }
 
 func appInfoForProxy(cfg *tailscaleSTSConfig) (string, error) {
