@@ -87,6 +87,9 @@ type Client interface {
 	// future map requests. This should be called after rotating the discovery key.
 	// Note: the auto client uploads the new key to control immediately.
 	SetDiscoPublicKey(key.DiscoPublic)
+	// SetIPForwardingBroken updates the IP forwarding broken state
+	// and sends a control update if the value changed.
+	SetIPForwardingBroken(bool)
 	// ClientID returns the ClientID of a client. This ID is meant to
 	// distinguish one client from another.
 	ClientID() int64

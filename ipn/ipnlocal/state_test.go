@@ -336,6 +336,8 @@ func (cc *mockControl) ClientID() int64 {
 	return cc.controlClientID
 }
 
+func (cc *mockControl) SetIPForwardingBroken(bool) {}
+
 func (b *LocalBackend) nonInteractiveLoginForStateTest() {
 	b.mu.Lock()
 	if b.cc == nil {

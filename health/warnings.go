@@ -298,3 +298,16 @@ var warmingUpWarnable = condRegister(func() *Warnable {
 		Text:     StaticMessage("Tailscale is starting. Please wait."),
 	}
 })
+
+// ipForwardingWarnable is a Warnable that warns the user that IP forwarding is disabled
+// but subnet routing or exit node functionality is being used.
+var ipForwardingWarnable = condRegister(func() *Warnable {
+	return &Warnable{
+		Code:                "ip-forwarding-off",
+		Title:               "IP forwarding is off",
+		Severity:            SeverityMedium,
+		MapDebugFlag:        "warn-ip-forwarding-off",
+		Text:                StaticMessage("Subnet routing is enabled, but IP forwarding is disabled. Check that IP forwarding is enabled on your machine."),
+		ImpactsConnectivity: true,
+	}
+})

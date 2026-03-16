@@ -773,6 +773,15 @@ func (c *Auto) SetDiscoPublicKey(key key.DiscoPublic) {
 	c.updateControl()
 }
 
+// SetIPForwardingBroken updates the IP forwarding broken state and sends
+// a control update if the value changed.
+func (c *Auto) SetIPForwardingBroken(v bool) {
+	if !c.direct.SetIPForwardingBroken(v) {
+		return
+	}
+	c.updateControl()
+}
+
 func (c *Auto) Shutdown() {
 	c.mu.Lock()
 	if c.closed {
