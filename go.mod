@@ -9,7 +9,6 @@ require (
 	github.com/akutz/memconn v0.1.0
 	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa
 	github.com/andybalholm/brotli v1.1.0
-	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
 	github.com/atotto/clipboard v0.1.4
 	github.com/aws/aws-sdk-go-v2 v1.41.0
 	github.com/aws/aws-sdk-go-v2/config v1.29.5
@@ -90,6 +89,7 @@ require (
 	github.com/studio-b12/gowebdav v0.9.0
 	github.com/tailscale/certstore v0.1.1-0.20231202035212-d3fa0460f47e
 	github.com/tailscale/depaware v0.0.0-20251001183927-9c2ad255ef3f
+	github.com/tailscale/gliderssh v0.3.4-0.20260330083525-c1389c70ff89
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
 	github.com/tailscale/gokrazy-kernel v0.0.0-20240728225134-3d23beabda2e
 	github.com/tailscale/golang-x-crypto v0.0.0-20250404221719-a5573b049869
@@ -151,6 +151,7 @@ require (
 	github.com/OpenPeeDeeP/depguard/v2 v2.2.0 // indirect
 	github.com/alecthomas/go-check-sumtype v0.1.4 // indirect
 	github.com/alexkohler/nakedret/v2 v2.0.4 // indirect
+	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/armon/go-metrics v0.4.1 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/beevik/ntp v0.3.0 // indirect

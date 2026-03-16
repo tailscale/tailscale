@@ -103,5 +103,5 @@ Some packages may only be included on certain architectures or operating systems
  - [k8s.io/client-go/util/homedir](https://pkg.go.dev/k8s.io/client-go/util/homedir) ([Apache-2.0](https://github.com/kubernetes/client-go/blob/v0.34.0/LICENSE))
  - [sigs.k8s.io/yaml](https://pkg.go.dev/sigs.k8s.io/yaml) ([Apache-2.0](https://github.com/kubernetes-sigs/yaml/blob/v1.6.0/LICENSE))
  - [tailscale.com](https://pkg.go.dev/tailscale.com) ([BSD-3-Clause](https://github.com/tailscale/tailscale/blob/HEAD/LICENSE))
- - [tailscale.com/tempfork/gliderlabs/ssh](https://pkg.go.dev/tailscale.com/tempfork/gliderlabs/ssh) ([BSD-3-Clause](https://github.com/tailscale/tailscale/blob/HEAD/tempfork/gliderlabs/ssh/LICENSE))
+ - [github.com/tailscale/gliderssh](https://pkg.go.dev/github.com/tailscale/gliderssh) ([BSD-3-Clause](https://github.com/tailscale/gliderssh/blob/HEAD/LICENSE))
  - [tailscale.com/tempfork/spf13/cobra](https://pkg.go.dev/tailscale.com/tempfork/spf13/cobra) ([Apache-2.0](https://github.com/tailscale/tailscale/blob/HEAD/tempfork/spf13/cobra/LICENSE.txt))

@@ -28,8 +28,8 @@ import (
 	"path/filepath"
 	"time"
 
-	gossh "golang.org/x/crypto/ssh"
-	"tailscale.com/tempfork/gliderlabs/ssh"
+	gliderssh "github.com/tailscale/gliderssh"
+	"golang.org/x/crypto/ssh"
 )
 
 // keyTypes are the SSH key types that we either try to read from the
@@ -60,23 +60,23 @@ func main() {
 		log.Fatal("no host keys")
 	}
 
-	srv := &ssh.Server{
+	srv := &gliderssh.Server{
 		Addr:    *addr,
 		Version: "Tailscale",
 		Handler: handleSessionPostSSHAuth,
-		ServerConfigCallback: func(ctx ssh.Context) *gossh.ServerConfig {
+		ServerConfigCallback: func(ctx gliderssh.Context) *ssh.ServerConfig {
 			start := time.Now()
-			var spac gossh.ServerPreAuthConn
-			return &gossh.ServerConfig{
-				PreAuthConnCallback: func(conn gossh.ServerPreAuthConn) {
+			var spac ssh.ServerPreAuthConn
+			return &ssh.ServerConfig{
+				PreAuthConnCallback: func(conn ssh.ServerPreAuthConn) {
 					spac = conn
 				},
 				NoClientAuth: true, // required for the NoClientAuthCallback to run
-				NoClientAuthCallback: func(cm gossh.ConnMetadata) (*gossh.Permissions, error) {
+				NoClientAuthCallback: func(cm ssh.ConnMetadata) (*ssh.Permissions, error) {
 					spac.SendAuthBanner(fmt.Sprintf("# Banner: doing none auth at %v\r\n", time.Since(start)))
 
 					if cm.User() == "denyme" {
-						return nil, &gossh.BannerError{
+						return nil, &ssh.BannerError{
 							Err:     errors.New("denying access"),
 							Message: "denyme is not allowed to access this machine\n",
 						}
@@ -96,7 +96,7 @@ func main() {
 					}
 					return nil, nil
 				},
-				BannerCallback: func(cm gossh.ConnMetadata) string {
+				BannerCallback: func(cm ssh.ConnMetadata) string {
 					log.Printf("Got connection from user %q, %q from %v", cm.User(), cm.ClientVersion(), cm.RemoteAddr())
 					return fmt.Sprintf("# Banner for user %q, %q\n", cm.User(), cm.ClientVersion())
 				},
@@ -115,7 +115,7 @@ func main() {
 	log.Printf("done")
 }
 
-func handleSessionPostSSHAuth(s ssh.Session) {
+func handleSessionPostSSHAuth(s gliderssh.Session) {
 	log.Printf("Started session from user %q", s.User())
 	fmt.Fprintf(s, "Hello user %q, it worked.\n", s.User())
 
@@ -143,13 +143,13 @@ func handleSessionPostSSHAuth(s ssh.Session) {
 	s.Exit(0)
 }
 
-func getHostKeys(dir string) (ret []ssh.Signer, err error) {
+func getHostKeys(dir string) (ret []gliderssh.Signer, err error) {
 	for _, typ := range keyTypes {
 		hostKey, err := hostKeyFileOrCreate(dir, typ)
 		if err != nil {
 			return nil, err
 		}
-		signer, err := gossh.ParsePrivateKey(hostKey)
+		signer, err := ssh.ParsePrivateKey(hostKey)
 		if err != nil {
 			return nil, err
 		}
