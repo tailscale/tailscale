@@ -128,6 +128,43 @@ func TestEnsureCertLoops(t *testing.T) {
 			updatedGoroutines: 1, // one loop after removing service2
 		},
 		{
+			name: "tcp_terminate_tls",
+			initialConfig: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:my-apiserver": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							443: {
+								TCPForward:   "localhost:80",
+								TerminateTLS: "my-apiserver.tailnetxyz.ts.net",
+							},
+						},
+					},
+				},
+			},
+			initialGoroutines: 1,
+		},
+		{
+			name: "tcp_terminate_tls_and_web",
+			initialConfig: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:my-apiserver": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							443: {
+								TCPForward:   "localhost:80",
+								TerminateTLS: "my-apiserver.tailnetxyz.ts.net",
+							},
+						},
+					},
+					"svc:my-app": {
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"my-app.tailnetxyz.ts.net:443": {},
+						},
+					},
+				},
+			},
+			initialGoroutines: 2,
+		},
+		{
 			name: "add_domain",
 			initialConfig: &ipn.ServeConfig{
 				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
@@ -171,6 +208,7 @@ func TestEnsureCertLoops(t *testing.T) {
 								CertDomains: []string{
 									"my-app.tailnetxyz.ts.net",
 									"my-other-app.tailnetxyz.ts.net",
+									"my-apiserver.tailnetxyz.ts.net",
 								},
 							},
 						},
