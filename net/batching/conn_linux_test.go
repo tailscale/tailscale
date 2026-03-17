@@ -18,33 +18,17 @@ import (
 	"tailscale.com/net/packet"
 )
 
-func setGSOSize(control *[]byte, gsoSize uint16) {
-	*control = (*control)[:cap(*control)]
-	binary.LittleEndian.PutUint16(*control, gsoSize)
-}
-
-func getGSOSize(control []byte) (int, error) {
-	if len(control) < 2 {
-		return 0, nil
-	}
-	return int(binary.LittleEndian.Uint16(control)), nil
-}
-
 func Test_linuxBatchingConn_splitCoalescedMessages(t *testing.T) {
-	c := &linuxBatchingConn{
-		setGSOSizeInControl:   setGSOSize,
-		getGSOSizeFromControl: getGSOSize,
-	}
+	c := &linuxBatchingConn{}
 
-	newMsg := func(n, gso int) ipv6.Message {
+	newMsg := func(n int, gso uint16) ipv6.Message {
 		msg := ipv6.Message{
 			Buffers: [][]byte{make([]byte, 1024)},
 			N:       n,
-			OOB:     make([]byte, 2),
+			OOB:     gsoControl(gso),
 		}
-		binary.LittleEndian.PutUint16(msg.OOB, uint16(gso))
 		if gso > 0 {
-			msg.NN = 2
+			msg.NN = len(msg.OOB)
 		}
 		return msg
 	}
@@ -156,10 +140,7 @@ func Test_linuxBatchingConn_splitCoalescedMessages(t *testing.T) {
 }
 
 func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
-	c := &linuxBatchingConn{
-		setGSOSizeInControl:   setGSOSize,
-		getGSOSizeFromControl: getGSOSize,
-	}
+	c := &linuxBatchingConn{}
 
 	withGeneveSpace := func(len, cap int) []byte {
 		return make([]byte, len+packet.GeneveFixedHeaderLength, cap+packet.GeneveFixedHeaderLength)
@@ -285,7 +266,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			msgs := make([]ipv6.Message, len(tt.buffs))
 			for i := range msgs {
 				msgs[i].Buffers = make([][]byte, 1)
-				msgs[i].OOB = make([]byte, 0, 2)
+				msgs[i].OOB = make([]byte, controlMessageSize)
 			}
 			got := c.coalesceMessages(addr, tt.geneve, tt.buffs, msgs, packet.GeneveFixedHeaderLength)
 			if got != len(tt.wantLens) {
@@ -299,9 +280,18 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				if gotLen != tt.wantLens[i] {
 					t.Errorf("len(msgs[%d].Buffers[0]) %d != %d", i, gotLen, tt.wantLens[i])
 				}
-				gotGSO, err := getGSOSize(msgs[i].OOB)
+				// coalesceMessages calls setGSOSizeInControl, which uses a cmsg
+				// type of UDP_SEGMENT, and getGSOSizeInControl scans for a cmsg
+				// type of UDP_GRO. Therefore, we have to use the lower-level
+				// getDataFromControl in order to specify the cmsg type of
+				// interest for this test.
+				data, err := getDataFromControl(msgs[i].OOB, unix.SOL_UDP, unix.UDP_SEGMENT, 2)
 				if err != nil {
-					t.Fatalf("msgs[%d] getGSOSize err: %v", i, err)
+					t.Fatalf("msgs[%d] getDataFromControl err: %v", i, err)
+				}
+				var gotGSO int
+				if len(data) >= 2 {
+					gotGSO = int(binary.NativeEndian.Uint16(data))
 				}
 				if gotGSO != tt.wantGSO[i] {
 					t.Errorf("msgs[%d] gsoSize %d != %d", i, gotGSO, tt.wantGSO[i])
