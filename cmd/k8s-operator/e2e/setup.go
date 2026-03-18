@@ -555,6 +555,12 @@ func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl c
 					},
 					TailscaleContainer: &tsapi.Container{
 						ImagePullPolicy: "IfNotPresent",
+						Env: []tsapi.Env{
+							{
+								Name:  "TS_DEBUG_ACME_DIRECTORY_URL",
+								Value: "https://pebble:14000/dir",
+							},
+						},
 					},
 				},
 			},
