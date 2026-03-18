@@ -512,8 +512,9 @@ func (t *Wrapper) injectOutbound(r tunInjectedRead) {
 	if t.outboundClosed {
 		return
 	}
-	t.vectorOutbound <- tunVectorReadResult{
-		injected: r,
+	select {
+	case t.vectorOutbound <- tunVectorReadResult{injected: r}:
+	case <-t.closed:
 	}
 }
 
@@ -524,7 +525,10 @@ func (t *Wrapper) sendVectorOutbound(r tunVectorReadResult) {
 	if t.outboundClosed {
 		return
 	}
-	t.vectorOutbound <- r
+	select {
+	case t.vectorOutbound <- r:
+	case <-t.closed:
+	}
 }
 
 // snat does SNAT on p if the destination address requires a different source address.
