@@ -20,16 +20,25 @@ import (
 //
 // If pconn is not a [*net.UDPConn], then SetBufferSize is no-op.
 func SetBufferSize(pconn nettype.PacketConn, direction BufferDirection, size int) (errForce error, errPortable error) {
-	opt := syscall.SO_RCVBUFFORCE
+	forceOpt := syscall.SO_RCVBUFFORCE
+	getOpt := syscall.SO_RCVBUF
 	if direction == WriteDirection {
-		opt = syscall.SO_SNDBUFFORCE
+		forceOpt = syscall.SO_SNDBUFFORCE
+		getOpt = syscall.SO_SNDBUF
 	}
 	if c, ok := pconn.(*net.UDPConn); ok {
 		var rc syscall.RawConn
 		rc, errForce = c.SyscallConn()
 		if errForce == nil {
 			rc.Control(func(fd uintptr) {
-				errForce = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, opt, size)
+				// On Linux, getsockopt reports 2x the actual buffer size to
+				// account for kernel bookkeeping overhead. Skip if the buffer
+				// is already at least as large as the requested size.
+				current, err := syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, getOpt)
+				if err == nil && current >= size*2 {
+					return
+				}
+				errForce = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, forceOpt, size)
 			})
 		}
 		if errForce != nil {

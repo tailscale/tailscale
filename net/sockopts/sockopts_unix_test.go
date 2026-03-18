@@ -57,5 +57,5 @@ func TestSetBufferSize(t *testing.T) {
 	// On many systems we may not increase the value, particularly running as a
 	// regular user, so log the information for manual verification.
 	t.Logf("SO_RCVBUF: %v -> %v", curRcv, newRcv)
-	t.Logf("SO_SNDBUF: %v -> %v", curRcv, newRcv)
+	t.Logf("SO_SNDBUF: %v -> %v", curSnd, newSnd)
 }
