@@ -124,6 +124,8 @@ type Backend interface {
 
 	NodeBackend() ipnext.NodeBackend
 
+	authReconfig()
+
 	ipnext.SafeBackend
 }
 
@@ -539,6 +541,16 @@ func (h *ExtensionHost) Shutdown() {
 	// or prevent any further init calls from happening.
 	h.initOnce.Do(func() {})
 	h.shutdownOnce.Do(h.shutdown)
+}
+
+// AuthReconfigAsync implements [ipnext.Host.AuthReconfigAsync].
+func (h *ExtensionHost) AuthReconfigAsync() {
+	if h == nil {
+		return
+	}
+	h.enqueueBackendOperation(func(b Backend) {
+		b.authReconfig()
+	})
 }
 
 func (h *ExtensionHost) shutdown() {

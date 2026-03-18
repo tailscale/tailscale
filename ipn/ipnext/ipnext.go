@@ -204,6 +204,16 @@ type Host interface {
 	// NodeBackend returns the [NodeBackend] for the currently active node
 	// (which is approximately the same as the current profile).
 	NodeBackend() NodeBackend
+
+	// AuthReconfigAsync asynchronously pushes a new configuration into wgengine,
+	// if engine updates are not currently blocked, based on the cached netmap and
+	// user prefs. The reconfiguration is applied to [ipnlocal.LocalBackend]'s currently
+	// active node at the time of execution.
+	//
+	// AuthReconfigAsync should not be called at a high rate (i.e., more often
+	// than prefs and netmap changes), except in experimental or proof-of-concept
+	// contexts, since reconfiguration is known to be slow.
+	AuthReconfigAsync()
 }
 
 // SafeBackend is a subset of the [ipnlocal.LocalBackend] type's methods that
