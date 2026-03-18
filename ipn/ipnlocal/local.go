@@ -410,6 +410,12 @@ type LocalBackend struct {
 	// getCertForTest is used to retrieve TLS certificates in tests.
 	// See [LocalBackend.ConfigureCertsForTest].
 	getCertForTest func(hostname string) (*TLSCertKeyPair, error)
+
+	// existsPendingAuthReconfig tracks if a goroutine is waiting to
+	// acquire [LocalBackend]'s mutex inside of [LocalBackend.AuthReconfig].
+	// It is used to prevent goroutines from piling up to do the same
+	// work of [LocalBackend.authReconfigLocked].
+	existsPendingAuthReconfig atomic.Bool
 }
 
 // SetHardwareAttested enables hardware attestation key signatures in map
@@ -5066,10 +5072,26 @@ func (b *LocalBackend) readvertiseAppConnectorRoutes() {
 
 // authReconfig pushes a new configuration into wgengine, if engine
 // updates are not currently blocked, based on the cached netmap and
-// user prefs.
+// user prefs. Callers may experience an early return with no work
+// done if another goroutine is waiting for the mutex inside this method.
+// If there is no other goroutine waiting, the calling goroutine will
+// proceed to reconfiguration after acquiring the mutex.
+
+// Reconfiguration may run asynchronously and may not complete
+// before the call returns.
 func (b *LocalBackend) authReconfig() {
+	// If there's already a pending auth reconfig from another
+	// goroutine, exit early. If not, this goroutine becomes the pending.
+	if b.existsPendingAuthReconfig.Swap(true) {
+		return
+	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	// Allow another goroutine to become pending.
+	b.existsPendingAuthReconfig.Store(false)
+
 	b.authReconfigLocked()
 }
 
@@ -5356,7 +5378,7 @@ func (b *LocalBackend) initPeerAPIListenerLocked() {
 	cn := b.currentNode()
 	nm := cn.NetMap()
 	if nm == nil {
-		// We're called from authReconfig which checks that
+		// We're called from authReconfigLocked which checks that
 		// netMap is non-nil, but if a concurrent Logout,
 		// ResetForClientDisconnect, or Start happens when its
 		// mutex was released, the netMap could be
@@ -5801,7 +5823,7 @@ func (b *LocalBackend) enterStateLocked(newState ipn.State) {
 	case ipn.NeedsLogin:
 		feature.SystemdStatus("Needs login: %s", authURL)
 		// always block updates on NeedsLogin even if seamless renewal is enabled,
-		// to prevent calls to authReconfig from reconfiguring the engine when our
+		// to prevent calls to authReconfigLocked from reconfiguring the engine when our
 		// key has expired and we're waiting to authenticate to use the new key.
 		b.blockEngineUpdatesLocked(true)
 		fallthrough

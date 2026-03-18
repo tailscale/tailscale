@@ -1375,6 +1375,7 @@ func (b *testBackend) Sys() *tsd.System {
 func (b *testBackend) SendNotify(ipn.Notify)           { panic("not implemented") }
 func (b *testBackend) NodeBackend() ipnext.NodeBackend { panic("not implemented") }
 func (b *testBackend) TailscaleVarRoot() string        { panic("not implemented") }
+func (b *testBackend) authReconfig()                   { panic("not implemented") }
 
 func (b *testBackend) SwitchToBestProfile(reason string) {
 	b.mu.Lock()
