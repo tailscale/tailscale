@@ -1072,6 +1072,14 @@ func (b *LocalBackend) onHealthChange(change health.Change) {
 		Health: state,
 	})
 
+	// Update control if IP forwarding state changed
+	_, broken := state.Warnings["ip-forwarding-off"]
+	b.mu.Lock()
+	if b.cc != nil {
+		b.cc.SetIPForwardingBroken(broken)
+	}
+	b.mu.Unlock()
+
 	if f, ok := hookCaptivePortalHealthChange.GetOk(); ok {
 		f(b, state)
 	}
@@ -2633,10 +2641,6 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		Shutdown:             ccShutdown,
 		Bus:                  b.sys.Bus.Get(),
 		StartPaused:          prefs.Sync().EqualBool(false),
-
-		// Don't warn about broken Linux IP forwarding when
-		// netstack is being used.
-		SkipIPForwardingCheck: b.sys.IsNetstackRouter(),
 	})
 	if err != nil {
 		return err
@@ -5639,6 +5643,22 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 
 	if buildfeatures.HasAdvertiseRoutes {
 		b.metrics.advertisedRoutes.Set(float64(tsaddr.WithoutExitRoute(prefs.AdvertiseRoutes()).Len()))
+
+		// Set up IP forwarding check when routes change
+		if len(hi.RoutableIPs) > 0 && b.NetMon() != nil && !b.sys.IsNetstackRouter() {
+			routes := hi.RoutableIPs
+			netMon := b.NetMon()
+			b.health.SetIPForwardingCheck(func() bool {
+				warn, err := netutil.CheckIPForwarding(routes, netMon.InterfaceState())
+				if err != nil {
+					metricIPForwardingCheckError.Add(1)
+					return false // don't want false positives
+				}
+				return warn != nil // true if broken
+			})
+		} else {
+			b.health.SetIPForwardingCheck(nil)
+		}
 	}
 
 	var sshHostKeys []string
@@ -7917,7 +7937,8 @@ func maybeUsernameOf(actor ipnauth.Actor) string {
 }
 
 var (
-	metricCurrentWatchIPNBus = clientmetric.NewGauge("localbackend_current_watch_ipn_bus")
+	metricCurrentWatchIPNBus     = clientmetric.NewGauge("localbackend_current_watch_ipn_bus")
+	metricIPForwardingCheckError = clientmetric.NewCounter("localbackend_ip_forwarding_check_error")
 )
 
 func (b *LocalBackend) stateEncrypted() opt.Bool {

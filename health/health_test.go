@@ -999,3 +999,86 @@ func TestCurrentStateETagWarnable(t *testing.T) {
 		}
 	})
 }
+
+func TestIPForwardingState(t *testing.T) {
+	tests := []struct {
+		name          string
+		checkFunc     func() bool // nil means no check function
+		wantUnhealthy bool
+	}{
+		{
+			name:          "broken",
+			checkFunc:     func() bool { return true },
+			wantUnhealthy: true,
+		},
+		{
+			name:          "healthy",
+			checkFunc:     func() bool { return false },
+			wantUnhealthy: false,
+		},
+		{
+			name:          "no_check_function",
+			checkFunc:     nil,
+			wantUnhealthy: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bus := eventbus.New()
+			tr := NewTracker(bus)
+			defer bus.Close()
+
+			tr.SetIPNState("Running", true)
+			tr.SetIPForwardingCheck(tt.checkFunc)
+
+			tr.mu.Lock()
+			tr.updateBuiltinWarnablesLocked()
+			tr.mu.Unlock()
+
+			got := tr.IsUnhealthy(ipForwardingWarnable)
+			if got != tt.wantUnhealthy {
+				t.Errorf("IsUnhealthy(ipForwardingWarnable) = %v, want %v", got, tt.wantUnhealthy)
+			}
+		})
+	}
+
+	// Test state transitions
+	t.Run("transitions", func(t *testing.T) {
+		bus := eventbus.New()
+		tr := NewTracker(bus)
+		defer bus.Close()
+
+		tr.SetIPNState("Running", true)
+
+		// Start broken
+		tr.SetIPForwardingCheck(func() bool { return true })
+		tr.mu.Lock()
+		tr.updateBuiltinWarnablesLocked()
+		tr.mu.Unlock()
+
+		if !tr.IsUnhealthy(ipForwardingWarnable) {
+			t.Fatal("expected IP forwarding to be unhealthy initially")
+		}
+
+		// Transition to healthy
+		tr.SetIPForwardingCheck(func() bool { return false })
+		tr.mu.Lock()
+		tr.updateBuiltinWarnablesLocked()
+		tr.mu.Unlock()
+
+		if tr.IsUnhealthy(ipForwardingWarnable) {
+			t.Fatal("expected IP forwarding to be healthy after transition")
+		}
+
+		// Transition to nil (should stay healthy)
+		tr.SetIPForwardingCheck(nil)
+		tr.mu.Lock()
+		tr.updateBuiltinWarnablesLocked()
+		tr.mu.Unlock()
+
+		if tr.IsUnhealthy(ipForwardingWarnable) {
+			t.Fatal("expected IP forwarding to be healthy after clearing check")
+		}
+	})
+}

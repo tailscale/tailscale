@@ -39,7 +39,6 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netmon"
-	"tailscale.com/net/netutil"
 	"tailscale.com/net/netx"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
@@ -64,30 +63,29 @@ import (
 
 // Direct is the client that connects to a tailcontrol server for a node.
 type Direct struct {
-	httpc                 *http.Client // HTTP client used to do TLS requests to control (just https://controlplane.tailscale.com/key?v=123)
-	interceptedDial       *atomic.Bool // if non-nil, pointer to bool whether ScreenTime intercepted our dial
-	dialer                *tsdial.Dialer
-	dnsCache              *dnscache.Resolver
-	controlKnobs          *controlknobs.Knobs // always non-nil
-	serverURL             string              // URL of the tailcontrol server
-	clock                 tstime.Clock
-	logf                  logger.Logf
-	netMon                *netmon.Monitor // non-nil
-	health                *health.Tracker
-	busClient             *eventbus.Client
-	clientVersionPub      *eventbus.Publisher[tailcfg.ClientVersion]
-	autoUpdatePub         *eventbus.Publisher[AutoUpdate]
-	controlTimePub        *eventbus.Publisher[ControlTime]
-	getMachinePrivKey     func() (key.MachinePrivate, error)
-	debugFlags            []string
-	skipIPForwardingCheck bool
-	pinger                Pinger
-	popBrowser            func(url string)    // or nil
-	polc                  policyclient.Client // always non-nil
-	c2nHandler            http.Handler        // or nil
-	panicOnUse            bool                // if true, panic if client is used (for testing)
-	closedCtx             context.Context     // alive until Direct.Close is called
-	closeCtx              context.CancelFunc  // cancels closedCtx
+	httpc             *http.Client // HTTP client used to do TLS requests to control (just https://controlplane.tailscale.com/key?v=123)
+	interceptedDial   *atomic.Bool // if non-nil, pointer to bool whether ScreenTime intercepted our dial
+	dialer            *tsdial.Dialer
+	dnsCache          *dnscache.Resolver
+	controlKnobs      *controlknobs.Knobs // always non-nil
+	serverURL         string              // URL of the tailcontrol server
+	clock             tstime.Clock
+	logf              logger.Logf
+	netMon            *netmon.Monitor // non-nil
+	health            *health.Tracker
+	busClient         *eventbus.Client
+	clientVersionPub  *eventbus.Publisher[tailcfg.ClientVersion]
+	autoUpdatePub     *eventbus.Publisher[AutoUpdate]
+	controlTimePub    *eventbus.Publisher[ControlTime]
+	getMachinePrivKey func() (key.MachinePrivate, error)
+	debugFlags        []string
+	pinger            Pinger
+	popBrowser        func(url string)    // or nil
+	polc              policyclient.Client // always non-nil
+	c2nHandler        http.Handler        // or nil
+	panicOnUse        bool                // if true, panic if client is used (for testing)
+	closedCtx         context.Context     // alive until Direct.Close is called
+	closeCtx          context.CancelFunc  // cancels closedCtx
 
 	dialPlan ControlDialPlanner // can be nil
 
@@ -95,6 +93,7 @@ type Direct struct {
 	serverLegacyKey key.MachinePublic // original ("legacy") nacl crypto_box-based public key; only used for signRegisterRequest on Windows now
 	serverNoiseKey  key.MachinePublic
 	discoPubKey     key.DiscoPublic // protected by mu; can be updated via [SetDiscoPublicKey]
+	ipForwardBroken bool            // protected by mu; can be updated via [SetIPForwardingBroken]
 
 	sfGroup     singleflight.Group[struct{}, *ts2021.Client] // protects noiseClient creation.
 	noiseClient *ts2021.Client                               // also protected by mu
@@ -158,11 +157,6 @@ type Options struct {
 	// from the control client.
 	// If nil, no status updates are reported.
 	Observer Observer
-
-	// SkipIPForwardingCheck declares that the host's IP
-	// forwarding works and should not be double-checked by the
-	// controlclient package.
-	SkipIPForwardingCheck bool
 
 	// Pinger optionally specifies the Pinger to use to satisfy
 	// MapResponse.PingRequest queries from the control plane.
@@ -307,26 +301,25 @@ func NewDirect(opts Options) (*Direct, error) {
 	}
 
 	c := &Direct{
-		httpc:                 httpc,
-		interceptedDial:       interceptedDial,
-		controlKnobs:          opts.ControlKnobs,
-		getMachinePrivKey:     opts.GetMachinePrivateKey,
-		serverURL:             opts.ServerURL,
-		clock:                 opts.Clock,
-		logf:                  opts.Logf,
-		persist:               opts.Persist.View(),
-		authKey:               opts.AuthKey,
-		debugFlags:            opts.DebugFlags,
-		netMon:                netMon,
-		health:                opts.HealthTracker,
-		skipIPForwardingCheck: opts.SkipIPForwardingCheck,
-		pinger:                opts.Pinger,
-		polc:                  cmp.Or(opts.PolicyClient, policyclient.Client(policyclient.NoPolicyClient{})),
-		popBrowser:            opts.PopBrowserURL,
-		c2nHandler:            opts.C2NHandler,
-		dialer:                opts.Dialer,
-		dnsCache:              dnsCache,
-		dialPlan:              opts.DialPlan,
+		httpc:             httpc,
+		interceptedDial:   interceptedDial,
+		controlKnobs:      opts.ControlKnobs,
+		getMachinePrivKey: opts.GetMachinePrivateKey,
+		serverURL:         opts.ServerURL,
+		clock:             opts.Clock,
+		logf:              opts.Logf,
+		persist:           opts.Persist.View(),
+		authKey:           opts.AuthKey,
+		debugFlags:        opts.DebugFlags,
+		netMon:            netMon,
+		health:            opts.HealthTracker,
+		pinger:            opts.Pinger,
+		polc:              cmp.Or(opts.PolicyClient, policyclient.Client(policyclient.NoPolicyClient{})),
+		popBrowser:        opts.PopBrowserURL,
+		c2nHandler:        opts.C2NHandler,
+		dialer:            opts.Dialer,
+		dnsCache:          dnsCache,
+		dialPlan:          opts.DialPlan,
 	}
 	c.discoPubKey = opts.DiscoPublicKey
 	c.closedCtx, c.closeCtx = context.WithCancel(context.Background())
@@ -861,6 +854,18 @@ func (c *Direct) SetDiscoPublicKey(key key.DiscoPublic) {
 	c.discoPubKey = key
 }
 
+// SetIPForwardingBroken updates the IP forwarding broken state.
+// It reports whether the value changed.
+func (c *Direct) SetIPForwardingBroken(v bool) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ipForwardBroken == v {
+		return false
+	}
+	c.ipForwardBroken = v
+	return true
+}
+
 // ClientID returns the controlClientID of the controlClient.
 func (c *Direct) ClientID() int64 {
 	return c.controlClientID
@@ -991,10 +996,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	}
 
 	var extraDebugFlags []string
-	if buildfeatures.HasAdvertiseRoutes && hi != nil && c.netMon != nil && !c.skipIPForwardingCheck &&
-		ipForwardingBroken(hi.RoutableIPs, c.netMon.InterfaceState()) {
-		extraDebugFlags = append(extraDebugFlags, "warn-ip-forwarding-off")
-	}
 	if c.health.RouterHealth() != nil {
 		extraDebugFlags = append(extraDebugFlags, "warn-router-unhealthy")
 	}
@@ -1412,24 +1413,6 @@ func initDevKnob() devKnobs {
 }
 
 var clock tstime.Clock = tstime.StdClock{}
-
-// ipForwardingBroken reports whether the system's IP forwarding is disabled
-// and will definitely not work for the routes provided.
-//
-// It should not return false positives.
-//
-// TODO(bradfitz): Change controlclient.Options.SkipIPForwardingCheck into a
-// func([]netip.Prefix) error signature instead.
-func ipForwardingBroken(routes []netip.Prefix, state *netmon.State) bool {
-	warn, err := netutil.CheckIPForwarding(routes, state)
-	if err != nil {
-		// Oh well, we tried. This is just for debugging.
-		// We don't want false positives.
-		// TODO: maybe we want a different warning for inability to check?
-		return false
-	}
-	return warn != nil
-}
 
 // isUniquePingRequest reports whether pr contains a new PingRequest.URL
 // not already handled, noting its value when returning true.
