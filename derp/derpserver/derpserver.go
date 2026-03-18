@@ -1005,7 +1005,12 @@ func (c *sclient) run(ctx context.Context) error {
 		}
 	}()
 
-	c.startStatsLoop(sendCtx)
+	// Allow disabling RTT stats collection to reduce
+	// CPU and syscalls on servers with high connection
+	// counts
+	if !envknob.Bool("TS_DERP_DISABLE_RTT_STATS") {
+		c.startStatsLoop(sendCtx)
+	}
 
 	for {
 		ft, fl, err := derp.ReadFrameHeader(c.br)
