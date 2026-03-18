@@ -369,7 +369,8 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 								i, j, len(wantLookup))
 						}
 						pip, tip, wantDip := wantLookup[0], wantLookup[1], wantLookup[2]
-						gotDip := c.connector.transitIPTarget(pip, tip)
+						aa, _ := c.connector.lookupBySrcIPAndTransitIP(pip, tip)
+						gotDip := aa.addr
 						if gotDip != wantDip {
 							t.Errorf("wrong result on lookup[%d][%d] ([%v], [%v]): got [%v] expected [%v]",
 								i, j, pip, tip, gotDip, wantDip)
@@ -1180,6 +1181,131 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 			}
 			bs := c.mapDNSResponse(tt.toMap)
 			tt.assertFx(t, bs)
+		})
+	}
+}
+
+func TestClientTransitIPForMagicIP(t *testing.T) {
+	sn := makeSelfNode(t, appctype.Conn25Attr{
+		MagicIPPool: []netipx.IPRange{rangeFrom("0", "10")}, // 100.64.0.0 - 100.64.0.10
+	}, []string{})
+	mappedMip := netip.MustParseAddr("100.64.0.0")
+	mappedTip := netip.MustParseAddr("169.0.0.0")
+	unmappedMip := netip.MustParseAddr("100.64.0.1")
+	nonMip := netip.MustParseAddr("100.64.0.11")
+	for _, tt := range []struct {
+		name    string
+		mip     netip.Addr
+		wantTip netip.Addr
+		wantErr error
+	}{
+		{
+			name:    "not-a-magic-ip",
+			mip:     nonMip,
+			wantTip: netip.Addr{},
+			wantErr: nil,
+		},
+		{
+			name:    "unmapped-magic-ip",
+			mip:     unmappedMip,
+			wantTip: netip.Addr{},
+			wantErr: ErrUnmappedMagicIP,
+		},
+		{
+			name:    "mapped-magic-ip",
+			mip:     mappedMip,
+			wantTip: mappedTip,
+			wantErr: nil,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConn25(t.Logf)
+			if err := c.reconfig(sn); err != nil {
+				t.Fatal(err)
+			}
+			c.client.assignments.insert(addrs{
+				magic:   mappedMip,
+				transit: mappedTip,
+			})
+			tip, err := c.client.ClientTransitIPForMagicIP(tt.mip)
+			if tip != tt.wantTip {
+				t.Fatalf("checking transit ip: want %v, got %v", tt.wantTip, tip)
+			}
+			if err != tt.wantErr {
+				t.Fatalf("checking error: want %v, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestConnectorRealIPForTransitIPConnection(t *testing.T) {
+	sn := makeSelfNode(t, appctype.Conn25Attr{
+		TransitIPPool: []netipx.IPRange{rangeFrom("40", "50")}, // 100.64.0.40 - 100.64.0.50
+	}, []string{})
+	mappedSrc := netip.MustParseAddr("100.0.0.1")
+	unmappedSrc := netip.MustParseAddr("100.0.0.2")
+	mappedTip := netip.MustParseAddr("100.64.0.41")
+	unmappedTip := netip.MustParseAddr("100.64.0.42")
+	nonTip := netip.MustParseAddr("100.0.0.3")
+	mappedMip := netip.MustParseAddr("100.64.0.1")
+	for _, tt := range []struct {
+		name    string
+		src     netip.Addr
+		tip     netip.Addr
+		wantMip netip.Addr
+		wantErr error
+	}{
+		{
+			name:    "not-a-transit-ip-unmapped-src",
+			src:     unmappedSrc,
+			tip:     nonTip,
+			wantMip: netip.Addr{},
+			wantErr: nil,
+		},
+		{
+			name:    "not-a-transit-ip-mapped-src",
+			src:     mappedSrc,
+			tip:     nonTip,
+			wantMip: netip.Addr{},
+			wantErr: nil,
+		},
+		{
+			name:    "unmapped-src-transit-ip",
+			src:     unmappedSrc,
+			tip:     unmappedTip,
+			wantMip: netip.Addr{},
+			wantErr: ErrUnmappedSrcAndTransitIP,
+		},
+		{
+			name:    "unmapped-tip-transit-ip",
+			src:     mappedSrc,
+			tip:     unmappedTip,
+			wantMip: netip.Addr{},
+			wantErr: ErrUnmappedSrcAndTransitIP,
+		},
+		{
+			name:    "mapped-src-and-transit-ip",
+			src:     mappedSrc,
+			tip:     mappedTip,
+			wantMip: mappedMip,
+			wantErr: nil,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConn25(t.Logf)
+			if err := c.reconfig(sn); err != nil {
+				t.Fatal(err)
+			}
+			c.connector.transitIPs = map[netip.Addr]map[netip.Addr]appAddr{}
+			c.connector.transitIPs[mappedSrc] = map[netip.Addr]appAddr{}
+			c.connector.transitIPs[mappedSrc][mappedTip] = appAddr{addr: mappedMip}
+			mip, err := c.connector.ConnectorRealIPForTransitIPConnection(tt.src, tt.tip)
+			if mip != tt.wantMip {
+				t.Fatalf("checking magic ip: want %v, got %v", tt.wantMip, mip)
+			}
+			if err != tt.wantErr {
+				t.Fatalf("checking error: want %v, got %v", tt.wantErr, err)
+			}
 		})
 	}
 }

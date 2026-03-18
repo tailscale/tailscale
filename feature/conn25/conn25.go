@@ -340,12 +340,6 @@ func (s *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 	return TransitIPResponse{}
 }
 
-func (s *connector) transitIPTarget(peerIP, tip netip.Addr) netip.Addr {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.transitIPs[peerIP][tip].addr
-}
-
 // TransitIPRequest details a single TransitIP allocation request from a client to a
 // connector.
 type TransitIPRequest struct {
@@ -424,6 +418,8 @@ type config struct {
 	appsByName        map[string]appctype.Conn25Attr
 	appNamesByDomain  map[dnsname.FQDN][]string
 	selfRoutedDomains set.Set[dnsname.FQDN]
+	transitIPSet      netipx.IPSet
+	magicIPSet        netipx.IPSet
 }
 
 func configFromNodeView(n tailcfg.NodeView) (config, error) {
@@ -456,6 +452,21 @@ func configFromNodeView(n tailcfg.NodeView) (config, error) {
 		}
 		mak.Set(&cfg.appsByName, app.Name, app)
 	}
+	// TODO(fran) 2026-03-18 we don't yet have a proper way to communicate the
+	// global IP pool config. For now just take it from the first app.
+	if len(apps) != 0 {
+		app := apps[0]
+		mipp, err := ipSetFromIPRanges(app.MagicIPPool)
+		if err != nil {
+			return config{}, err
+		}
+		tipp, err := ipSetFromIPRanges(app.TransitIPPool)
+		if err != nil {
+			return config{}, err
+		}
+		cfg.magicIPSet = *mipp
+		cfg.transitIPSet = *tipp
+	}
 	return cfg, nil
 }
 
@@ -474,6 +485,20 @@ type client struct {
 	config        config
 }
 
+// ClientTransitIPForMagicIP is part of the implementation of the IPMapper interface for dataflows lookups.
+func (c *client) ClientTransitIPForMagicIP(magicIP netip.Addr) (netip.Addr, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, ok := c.assignments.lookupByMagicIP(magicIP)
+	if ok {
+		return v.transit, nil
+	}
+	if !c.config.magicIPSet.Contains(magicIP) {
+		return netip.Addr{}, nil
+	}
+	return netip.Addr{}, ErrUnmappedMagicIP
+}
+
 func (c *client) isConfigured() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -486,31 +511,8 @@ func (c *client) reconfig(newCfg config) error {
 
 	c.config = newCfg
 
-	// TODO(fran) this is not the correct way to manage the pools and changes to the pools.
-	// We probably want to:
-	//  * check the pools haven't changed
-	//  * reset the whole connector if the pools change? or just if they've changed to exclude
-	//    addresses we have in use?
-	//  * have config separate from the apps for this (rather than multiple potentially conflicting places)
-	// but this works while we are just getting started here.
-	for _, app := range c.config.apps {
-		if c.magicIPPool != nil { // just take the first config and never reconfig
-			break
-		}
-		if app.MagicIPPool == nil {
-			continue
-		}
-		mipp, err := ipSetFromIPRanges(app.MagicIPPool)
-		if err != nil {
-			return err
-		}
-		tipp, err := ipSetFromIPRanges(app.TransitIPPool)
-		if err != nil {
-			return err
-		}
-		c.magicIPPool = newIPPool(mipp)
-		c.transitIPPool = newIPPool(tipp)
-	}
+	c.magicIPPool = newIPPool(&(newCfg.magicIPSet))
+	c.transitIPPool = newIPPool(&(newCfg.transitIPSet))
 	return nil
 }
 
@@ -844,6 +846,29 @@ type connector struct {
 	config     config
 }
 
+// ConnectorRealIPForTransitIPConnection is part of the implementation of the IPMapper interface for dataflows lookups.
+func (c *connector) ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, ok := c.lookupBySrcIPAndTransitIP(srcIP, transitIP)
+	if ok {
+		return v.addr, nil
+	}
+	if !c.config.transitIPSet.Contains(transitIP) {
+		return netip.Addr{}, nil
+	}
+	return netip.Addr{}, ErrUnmappedSrcAndTransitIP
+}
+
+func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appAddr, bool) {
+	m, ok := c.transitIPs[srcIP]
+	if !ok || m == nil {
+		return appAddr{}, false
+	}
+	v, ok := m[transitIP]
+	return v, ok
+}
+
 func (s *connector) reconfig(newCfg config) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -894,5 +919,10 @@ func (a *addrAssignments) insert(as addrs) error {
 
 func (a *addrAssignments) lookupByDomainDst(domain dnsname.FQDN, dst netip.Addr) (addrs, bool) {
 	v, ok := a.byDomainDst[domainDst{domain: domain, dst: dst}]
+	return v, ok
+}
+
+func (a *addrAssignments) lookupByMagicIP(mip netip.Addr) (addrs, bool) {
+	v, ok := a.byMagicIP[mip]
 	return v, ok
 }
