@@ -2070,19 +2070,21 @@ func TestWhoIs(t *testing.T) {
 			}).View(),
 			20: (&tailcfg.UserProfile{
 				DisplayName: "Peer",
+				Groups:      []string{"group:foo"},
 			}).View(),
 		},
 	})
 	tests := []struct {
-		q        string
-		want     tailcfg.NodeID // 0 means want ok=false
-		wantName string
+		q          string
+		want       tailcfg.NodeID // 0 means want ok=false
+		wantName   string
+		wantGroups []string
 	}{
-		{"100.101.102.103:0", 1, "Myself"},
-		{"100.101.102.103:123", 1, "Myself"},
-		{"100.200.200.200:0", 2, "Peer"},
-		{"100.200.200.200:123", 2, "Peer"},
-		{"100.4.0.4:404", 0, ""},
+		{"100.101.102.103:0", 1, "Myself", nil},
+		{"100.101.102.103:123", 1, "Myself", nil},
+		{"100.200.200.200:0", 2, "Peer", []string{"group:foo"}},
+		{"100.200.200.200:123", 2, "Peer", []string{"group:foo"}},
+		{"100.4.0.4:404", 0, "", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.q, func(t *testing.T) {
@@ -2096,6 +2098,9 @@ func TestWhoIs(t *testing.T) {
 			}
 			if up.DisplayName != tt.wantName {
 				t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
+			}
+			if !slices.Equal(up.Groups, tt.wantGroups) {
+				t.Errorf("got groups %q; want %q", up.Groups, tt.wantGroups)
 			}
 		})
 	}
