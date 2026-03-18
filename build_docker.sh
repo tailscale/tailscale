@@ -4,7 +4,7 @@
 # github.com/tailscale/mkctr.
 # By default the images will be tagged with the current version and git
 # hash of this repository as produced by ./cmd/mkversion.
-# This is the image build mechanim used to build the official Tailscale
+# This is the image build mechanism used to build the official Tailscale
 # container images.
 #
 # If you want to build local images for testing, you can use make, which provides few convenience wrappers around this script.
