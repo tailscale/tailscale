@@ -24,6 +24,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
@@ -222,6 +223,10 @@ type Wrapper struct {
 
 	eventClient              *eventbus.Client
 	discoKeyAdvertisementPub *eventbus.Publisher[events.DiscoKeyAdvertisement]
+
+	// tunDevStatsCloser closes TUN device stats polling. It may be nil if
+	// [HookPollTUNDevStats] is unset, or the hook func returned an error.
+	tunDevStatsCloser io.Closer
 }
 
 type metrics struct {
@@ -296,6 +301,16 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry,
 		metrics:     registerMetrics(m),
 	}
 
+	if buildfeatures.HasTUNDevStats {
+		if f, ok := HookPollTUNDevStats.GetOk(); ok {
+			closer, err := f(tdev)
+			if err != nil {
+				w.logf("error initializing tun dev stats polling: %v", err)
+			}
+			w.tunDevStatsCloser = closer
+		}
+	}
+
 	w.eventClient = bus.Client("net.tstun")
 	w.discoKeyAdvertisementPub = eventbus.Publish[events.DiscoKeyAdvertisement](w.eventClient)
 
@@ -312,6 +327,9 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry,
 
 	return w
 }
+
+// HookPollTUNDevStats is the hook maybe set by feature/tundevstats.
+var HookPollTUNDevStats feature.Hook[func(dev tun.Device) (io.Closer, error)]
 
 // now returns the current time, either by calling t.timeNow if set or time.Now
 // if not.
@@ -374,6 +392,9 @@ func (t *Wrapper) Close() error {
 		t.outboundMu.Unlock()
 		err = t.tdev.Close()
 		t.eventClient.Close()
+		if t.tunDevStatsCloser != nil {
+			t.tunDevStatsCloser.Close()
+		}
 	})
 	return err
 }
