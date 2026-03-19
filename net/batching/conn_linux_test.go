@@ -152,10 +152,12 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 	geneve.VNI.Set(1)
 
 	cases := []struct {
-		name     string
-		buffs    [][]byte
-		geneve   packet.GeneveHeader
-		wantLens []int
+		name   string
+		buffs  [][]byte
+		geneve packet.GeneveHeader
+		// Each wantLens slice corresponds to the Buffers of a single coalesced message,
+		// and each int is the expected length of the corresponding Buffer[i].
+		wantLens [][]int
 		wantGSO  []int
 	}{
 		{
@@ -163,7 +165,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			buffs: [][]byte{
 				withGeneveSpace(1, 1),
 			},
-			wantLens: []int{1},
+			wantLens: [][]int{{1}},
 			wantGSO:  []int{0},
 		},
 		{
@@ -172,7 +174,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				withGeneveSpace(1, 1),
 			},
 			geneve:   geneve,
-			wantLens: []int{1 + packet.GeneveFixedHeaderLength},
+			wantLens: [][]int{{1 + packet.GeneveFixedHeaderLength}},
 			wantGSO:  []int{0},
 		},
 		{
@@ -181,7 +183,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				withGeneveSpace(1, 2),
 				withGeneveSpace(1, 1),
 			},
-			wantLens: []int{2},
+			wantLens: [][]int{{1, 1}},
 			wantGSO:  []int{1},
 		},
 		{
@@ -191,7 +193,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				withGeneveSpace(1, 1),
 			},
 			geneve:   geneve,
-			wantLens: []int{2 + (2 * packet.GeneveFixedHeaderLength)},
+			wantLens: [][]int{{1 + packet.GeneveFixedHeaderLength, 1 + packet.GeneveFixedHeaderLength}},
 			wantGSO:  []int{1 + packet.GeneveFixedHeaderLength},
 		},
 		{
@@ -200,7 +202,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				withGeneveSpace(2, 3),
 				withGeneveSpace(1, 1),
 			},
-			wantLens: []int{3},
+			wantLens: [][]int{{2, 1}},
 			wantGSO:  []int{2},
 		},
 		{
@@ -210,7 +212,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				withGeneveSpace(1, 1),
 			},
 			geneve:   geneve,
-			wantLens: []int{3 + (2 * packet.GeneveFixedHeaderLength)},
+			wantLens: [][]int{{2 + packet.GeneveFixedHeaderLength, 1 + packet.GeneveFixedHeaderLength}},
 			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength},
 		},
 		{
@@ -220,7 +222,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				withGeneveSpace(1, 1),
 				withGeneveSpace(2, 2),
 			},
-			wantLens: []int{3, 2},
+			wantLens: [][]int{{2, 1}, {2}},
 			wantGSO:  []int{2, 0},
 		},
 		{
@@ -231,7 +233,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				withGeneveSpace(2, 2),
 			},
 			geneve:   geneve,
-			wantLens: []int{3 + (2 * packet.GeneveFixedHeaderLength), 2 + packet.GeneveFixedHeaderLength},
+			wantLens: [][]int{{2 + packet.GeneveFixedHeaderLength, 1 + packet.GeneveFixedHeaderLength}, {2 + packet.GeneveFixedHeaderLength}},
 			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength, 0},
 		},
 		{
@@ -241,8 +243,8 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				withGeneveSpace(2, 2),
 				withGeneveSpace(2, 2),
 			},
-			wantLens: []int{4, 2},
-			wantGSO:  []int{2, 0},
+			wantLens: [][]int{{2, 2, 2}},
+			wantGSO:  []int{2},
 		},
 		{
 			name: "three messages limited cap coalesce vni.isSet",
@@ -252,8 +254,8 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				withGeneveSpace(2, 2),
 			},
 			geneve:   geneve,
-			wantLens: []int{4 + (2 * packet.GeneveFixedHeaderLength), 2 + packet.GeneveFixedHeaderLength},
-			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength, 0},
+			wantLens: [][]int{{2 + packet.GeneveFixedHeaderLength, 2 + packet.GeneveFixedHeaderLength, 2 + packet.GeneveFixedHeaderLength}},
+			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength},
 		},
 	}
 
@@ -276,10 +278,16 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				if msgs[i].Addr != addr {
 					t.Errorf("msgs[%d].Addr != passed addr", i)
 				}
-				gotLen := len(msgs[i].Buffers[0])
-				if gotLen != tt.wantLens[i] {
-					t.Errorf("len(msgs[%d].Buffers[0]) %d != %d", i, gotLen, tt.wantLens[i])
+				if len(msgs[i].Buffers) != len(tt.wantLens[i]) {
+					t.Fatalf("len(msgs[%d].Buffers) %d != %d", i, len(msgs[i].Buffers), len(tt.wantLens[i]))
 				}
+				for j := range tt.wantLens[i] {
+					gotLen := len(msgs[i].Buffers[j])
+					if gotLen != tt.wantLens[i][j] {
+						t.Errorf("len(msgs[%d].Buffers[%d]) %d != %d", i, j, gotLen, tt.wantLens[i][j])
+					}
+				}
+
 				// coalesceMessages calls setGSOSizeInControl, which uses a cmsg
 				// type of UDP_SEGMENT, and getGSOSizeInControl scans for a cmsg
 				// type of UDP_GRO. Therefore, we have to use the lower-level
