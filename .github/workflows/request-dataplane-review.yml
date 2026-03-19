@@ -1,0 +1,32 @@
+name: request-dataplane-review
+
+on:
+  pull_request:
+    types: [ opened, synchronize, reopened, ready_for_review ]
+    paths:
+      - ".github/workflows/request-dataplane-review.yml"
+      - "**/*derp*"
+      - "**/derp*/**"
+      - "!**/depaware.txt"
+
+jobs:
+  request-dataplane-review:
+    if: github.event.pull_request.draft == false
+    name: Request Dataplane Review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Get access token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        id: generate-token
+        with:
+          # Get token for app: https://github.com/apps/change-visibility-bot
+          app-id: ${{ secrets.VISIBILITY_BOT_APP_ID }}
+          private-key: ${{ secrets.VISIBILITY_BOT_APP_PRIVATE_KEY }}
+      - name: Add reviewers
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          url: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh pr edit "$url" --add-reviewer tailscale/dataplane

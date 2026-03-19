@@ -1,0 +1,25 @@
+#!/sbin/openrc-run
+
+set -a
+source /etc/default/tailscaled
+set +a
+
+command="/usr/sbin/tailscaled"
+command_args="--state=/var/lib/tailscale/tailscaled.state --port=$PORT --socket=/var/run/tailscale/tailscaled.sock $FLAGS"
+command_background=true
+pidfile="/run/tailscaled.pid"
+start_stop_daemon_args="-1 /var/log/tailscaled.log -2 /var/log/tailscaled.log"
+
+depend() {
+    need net
+}
+
+start_pre() {
+    mkdir -p /var/run/tailscale
+    mkdir -p /var/lib/tailscale
+    $command --cleanup
+}
+
+stop_post() {
+    $command --cleanup
+}

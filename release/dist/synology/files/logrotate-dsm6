@@ -1,0 +1,8 @@
+/var/packages/Tailscale/etc/tailscaled.stdout.log {
+  size 10M
+  rotate 3
+  missingok
+  copytruncate
+  compress
+  notifempty
+}

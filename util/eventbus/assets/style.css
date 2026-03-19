@@ -1,0 +1,90 @@
+/* CSS reset, thanks Josh Comeau: https://www.joshwcomeau.com/css/custom-css-reset/ */
+*, *::before, *::after { box-sizing: border-box; }
+* { margin: 0; }
+input, button, textarea, select { font: inherit; }
+p, h1, h2, h3, h4, h5, h6 { overflow-wrap: break-word; }
+p { text-wrap: pretty; }
+h1, h2, h3, h4, h5, h6 { text-wrap: balance; }
+#root, #__next { isolation: isolate; }
+body {
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+img, picture, video, canvas, svg {
+  display: block;
+  max-width: 100%;
+}
+
+/* Local styling begins */
+
+body {
+    padding: 12px;
+}
+
+div {
+    width: 100%;
+}
+
+section {
+    display: flex;
+    flex-direction: column;
+    flex-gap: 6px;
+    align-items: flex-start;
+    padding: 12px 0;
+}
+
+section > * {
+    margin-left: 24px;
+}
+
+section > h2, section > h3 {
+    margin-left: 0;
+    padding-bottom: 6px;
+    padding-top: 12px;
+}
+
+details {
+    padding-bottom: 12px;
+}
+
+table {
+    table-layout: fixed;
+    width: calc(100% - 48px);
+    border-collapse: collapse;
+    border: 1px solid black;
+}
+
+th, td {
+    padding: 12px;
+    border: 1px solid black;
+}
+
+td.list {
+    vertical-align: top;
+}
+
+ul {
+    list-style: none;
+}
+
+td ul {
+    margin: 0;
+    padding: 0;
+}
+
+code {
+    padding: 12px;
+    white-space: pre;
+}
+
+#monitor {
+    width: calc(100% - 48px);
+    resize: vertical;
+    padding: 12px;
+    overflow: scroll;
+    height: 15lh;
+    border: 1px inset;
+    min-height: 1em;
+    display: flex;
+    flex-direction: column-reverse;
+}

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Run a command with our local yarn install, rather than any globally installed
+# instance.
+
+set -euo pipefail
+
+if [[ "${CI:-}" == "true" ]]; then
+    set -x
+fi
+
+(
+    if [[ "${CI:-}" == "true" ]]; then
+        set -x
+    fi
+
+    repo_root="${BASH_SOURCE%/*}/../"
+    cd "$repo_root"
+
+    ./tool/node --version >/dev/null # Ensure node is unpacked and ready
+
+    cachedir="$HOME/.cache/tailscale-yarn"
+    tarball="${cachedir}.tar.gz"
+
+    read -r want_rev < "./tool/yarn.rev"
+
+    got_rev=""
+    if [[ -x "${cachedir}/bin/yarn" ]]; then
+        got_rev=$(PATH="$HOME/.cache/tailscale-node/bin:$PATH" "${cachedir}/bin/yarn" --version)
+    fi
+
+    if [[ "$want_rev" != "$got_rev" ]]; then
+        rm -rf "$cachedir" "$tarball"
+        mkdir -p "$cachedir"
+        curl -f -L -o "$tarball" "https://github.com/yarnpkg/yarn/releases/download/v${want_rev}/yarn-v${want_rev}.tar.gz"
+        (cd "$cachedir" && tar --strip-components=1 -xf "$tarball")
+        rm -f "$tarball"
+    fi
+)
+
+# Deliberately not using cachedir here, to keep the environment
+# completely pristine for execution of yarn.
+export PATH="$HOME/.cache/tailscale-node/bin:$HOME/.cache/tailscale-yarn/bin:$PATH"
+exec "$HOME/.cache/tailscale-yarn/bin/yarn" "$@"

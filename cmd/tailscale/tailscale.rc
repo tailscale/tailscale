@@ -1,0 +1,3 @@
+#!/bin/rc
+# Plan 9 cmd/tailscale wrapper script to run cmd/tailscaled's embedded CLI.
+TS_BE_CLI=1 tailscaled $*

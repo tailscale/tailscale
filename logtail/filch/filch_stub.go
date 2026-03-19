@@ -1,0 +1,23 @@
+// Copyright (c) Tailscale Inc & contributors
+// SPDX-License-Identifier: BSD-3-Clause
+
+//go:build !ts_omit_logtail && (wasm || plan9 || tamago)
+
+package filch
+
+import "os"
+
+const replaceStderrSupportedForTest = false
+
+func saveStderr() (*os.File, error) {
+	return os.Stderr, nil
+}
+
+func unsaveStderr(f *os.File) error {
+	os.Stderr = f
+	return nil
+}
+
+func dup2Stderr(f *os.File) error {
+	return nil
+}

@@ -1,0 +1,23 @@
+apiVersion: tailscale.com/v1alpha1
+kind: ProxyClass
+metadata:
+  name: prod
+spec:
+  metrics:
+    enable: true
+  statefulSet:
+    annotations:
+      platform-component: infra
+    pod:
+      labels:
+        team: eng
+      nodeSelector:
+        kubernetes.io/os: "linux"
+      imagePullSecrets:
+      - name: "foo"
+      tailscaleContainer:
+        image: "ghcr.io/tailscale/tailscale:v1.64"
+        imagePullPolicy: IfNotPresent
+      tailscaleInitContainer:
+        image: "ghcr.io/tailscale/tailscale:v1.64"
+        imagePullPolicy: IfNotPresent

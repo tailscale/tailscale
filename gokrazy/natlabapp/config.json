@@ -1,0 +1,31 @@
+{
+    "Hostname": "natlabapp",
+    "Update": {
+        "NoPassword": true
+    },
+    "SerialConsole": "ttyS0,115200",
+    "GokrazyPackages": [
+        "github.com/gokrazy/gokrazy/cmd/dhcp"
+    ],
+    "Packages": [
+        "github.com/gokrazy/serial-busybox",
+        "tailscale.com/cmd/tailscale",
+        "tailscale.com/cmd/tailscaled",
+        "tailscale.com/cmd/tta"
+    ],
+    "PackageConfig": {
+        "tailscale.com/cmd/tailscale": {
+            "ExtraFilePaths": {
+                "/usr": "usr-dir"
+            }
+        }
+    },
+    "Environment": [
+        "GOOS=linux",
+        "GOARCH=amd64"
+    ],
+    "KernelPackage": "github.com/tailscale/gokrazy-kernel",
+    "FirmwarePackage": "",
+    "EEPROMPackage": "",
+    "InternalCompatibilityFlags": {}
+}

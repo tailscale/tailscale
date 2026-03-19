@@ -1,0 +1,31 @@
+// NOTE(Xe): If you run into issues getting the autoconfig to work, run
+// this test with the flag `--distro-regex=alpine-edge`. Connect with a VNC
+// client with a command like this:
+//
+//    $ vncviewer :0
+//
+// On NixOS you can get away with something like this:
+//
+//    $ env NIXPKGS_ALLOW_UNFREE=1 nix-shell -p tigervnc --run 'vncviewer :0'
+//
+// Login as root with the password root. Then look in
+// /var/log/cloud-init-output.log for what you messed up.
+[
+    {
+        "Name": "ubuntu-24-04",
+        "URL": "https://cloud-images.ubuntu.com/noble/20250523/noble-server-cloudimg-amd64.img",
+        "SHA256Sum": "0e865619967706765cdc8179fb9929202417ab3a0719d77d8c8942d38aa9611b",
+        "MemoryMegs": 512,
+        "PackageManager": "apt",
+        "InitSystem": "systemd"
+    },
+    {
+        "Name": "nixos-25-05",
+        "URL": "channel:nixos-25.05",
+        "SHA256Sum": "lolfakesha",
+        "MemoryMegs": 512,
+        "PackageManager": "nix",
+        "InitSystem": "systemd",
+        "HostGenerated": true
+    },
+]

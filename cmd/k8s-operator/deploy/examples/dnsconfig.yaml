@@ -1,0 +1,6 @@
+apiVersion: tailscale.com/v1alpha1
+kind: DNSConfig 
+metadata:
+  name: ts-dns
+spec:
+  nameserver: {}

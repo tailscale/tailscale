@@ -1,0 +1,35 @@
+name: go-cache
+description: Set up build to use cigocacher
+
+inputs:
+  cigocached-url:
+    description: URL of the cigocached server
+    required: true
+  cigocached-host:
+    description: Host to dial for the cigocached server
+    required: true
+  checkout-path:
+    description: Path to cloned repository
+    required: true
+  cache-dir:
+    description: Directory to use for caching
+    required: true
+
+outputs:
+  success:
+    description: Whether cigocacher was set up successfully
+    value: ${{ steps.setup.outputs.success }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup cigocacher
+      id: setup
+      shell: bash
+      env:
+        URL: ${{ inputs.cigocached-url }}
+        HOST: ${{ inputs.cigocached-host }}
+        CACHE_DIR: ${{ inputs.cache-dir }}
+      working-directory: ${{ inputs.checkout-path }}
+      # https://github.com/orgs/community/discussions/25910
+      run: $GITHUB_ACTION_PATH/action.sh

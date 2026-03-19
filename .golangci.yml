@@ -1,0 +1,110 @@
+version: "2"
+# Configuration for how we run golangci-lint
+# Timeout of 5m was the default in v1.
+run:
+  timeout: 5m
+linters:
+  # Don't enable any linters by default; just the ones that we explicitly
+  # enable in the list below.
+  default: none
+  enable:
+    - bidichk
+    - govet
+    - misspell
+    - revive
+  settings:
+    # Matches what we use in corp as of 2023-12-07
+    govet:
+      enable:
+        - asmdecl
+        - assign
+        - atomic
+        - bools
+        - buildtag
+        - cgocall
+        - copylocks
+        - deepequalerrors
+        - errorsas
+        - framepointer
+        - httpresponse
+        - ifaceassert
+        - loopclosure
+        - lostcancel
+        - nilfunc
+        - nilness
+        - printf
+        - reflectvaluecompare
+        - shift
+        - sigchanyzer
+        - sortslice
+        - stdmethods
+        - stringintconv
+        - structtag
+        - testinggoroutine
+        - tests
+        - unmarshal
+        - unreachable
+        - unsafeptr
+        - unusedresult
+      settings:
+        printf:
+          # List of print function names to check (in addition to default)
+          funcs:
+            - github.com/tailscale/tailscale/types/logger.Discard
+            # NOTE(andrew-d): this doesn't currently work because the printf
+            # analyzer doesn't support type declarations
+            #- github.com/tailscale/tailscale/types/logger.Logf
+    revive:
+      enable-all-rules: false
+      rules:
+        - name: atomic
+        - name: context-keys-type
+        - name: defer
+          arguments: [[
+              # Calling 'recover' at the time a defer is registered (i.e. "defer recover()") has no effect.
+              "immediate-recover",
+              # Calling 'recover' outside of a deferred function has no effect
+              "recover",
+              # Returning values from a deferred function has no effect
+              "return",
+          ]]
+        - name: duplicated-imports
+        - name: errorf
+        - name: string-of-int
+        - name: time-equal
+        - name: unconditional-recursion
+        - name: useless-break
+        - name: waitgroup-by-value
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # These are forks of an upstream package and thus are exempt from stylistic
+      # changes that would make pulling in upstream changes harder.
+      - path: tempfork/.*\.go
+        text: File is not `gofmt`-ed with `-s` `-r 'interface{} -> any'`
+      - path: util/singleflight/.*\.go
+        text: File is not `gofmt`-ed with `-s` `-r 'interface{} -> any'`
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      rewrite-rules:
+        - pattern: interface{}
+          replacement: any
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

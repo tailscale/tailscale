@@ -1,0 +1,34 @@
+name: checklocks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - '**/*.go'
+      - '.github/workflows/checklocks.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  checklocks:
+    runs-on: [ ubuntu-latest ]
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Build checklocks
+        run: ./tool/go build -o /tmp/checklocks gvisor.dev/gvisor/tools/checklocks/cmd/checklocks
+
+      - name: Run checklocks vet
+        # TODO(#12625): add more packages as we add annotations
+        run: |-
+          ./tool/go vet -vettool=/tmp/checklocks \
+            ./envknob           \
+            ./ipn/store/mem     \
+            ./net/stun/stuntest \
+            ./net/wsconn        \
+            ./proxymap

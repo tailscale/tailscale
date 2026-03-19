@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nameserver 
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: nameserver
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: nameserver
+    spec:
+      containers:
+      - imagePullPolicy: IfNotPresent
+        name: nameserver
+        ports:
+        - name: tcp
+          protocol: TCP
+          containerPort: 1053
+        - name: udp
+          protocol: UDP
+          containerPort: 1053
+        volumeMounts:
+        - name: dnsrecords
+          mountPath: /config
+      restartPolicy: Always
+      serviceAccount: nameserver
+      serviceAccountName: nameserver
+      volumes:
+      - name: dnsrecords
+        configMap:
+          name: dnsrecords

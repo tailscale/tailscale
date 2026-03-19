@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+
+# installs $(cat ./helm.rev) version of helm as $HOME/.cache/tailscale-helm
+
+set -euo pipefail
+
+if [[ "${CI:-}" == "true" ]]; then
+    set -x
+fi
+
+(
+    if [[ "${CI:-}" == "true" ]]; then
+        set -x
+    fi
+
+    repo_root="${BASH_SOURCE%/*}/../"
+    cd "$repo_root"
+
+    cachedir="$HOME/.cache/tailscale-helm"
+    tarball="${cachedir}.tar.gz"
+
+    read -r want_rev < "$(dirname "$0")/helm.rev"
+
+    got_rev=""
+    if [[ -x "${cachedir}/helm" ]]; then
+        got_rev=$("${cachedir}/helm" version --short)
+        got_rev="${got_rev#v}" # trim the leading 'v'
+        got_rev="${got_rev%+*}" # trim the trailing '+" followed by a commit SHA'
+
+
+    fi
+
+    if [[ "$want_rev" != "$got_rev" ]]; then
+        rm -rf "$cachedir" "$tarball"
+        if [[ -n "${IN_NIX_SHELL:-}" ]]; then
+            nix_helm="$(which -a helm | grep /nix/store | head -1)"
+            nix_helm="${nix_helm%/helm}"
+            nix_helm_rev="${nix_helm##*-}"
+            if [[ "$nix_helm_rev" != "$want_rev" ]]; then
+                echo "Wrong helm version in Nix, got $nix_helm_rev want $want_rev" >&2
+		        exit 1
+            fi
+            ln -sf "$nix_helm" "$cachedir"
+        else
+            # works for linux and darwin
+            # https://github.com/helm/helm/releases
+            OS=$(uname -s | tr A-Z a-z)
+            ARCH=$(uname -m)
+            if [ "$ARCH" = "x86_64" ]; then
+                ARCH="amd64"
+            fi
+            if [ "$ARCH" = "aarch64" ]; then
+                ARCH="arm64"
+            fi
+            mkdir -p "$cachedir"
+            # When running on GitHub in CI, the below curl sometimes fails with
+            # INTERNAL_ERROR after finishing the download. The most common cause
+            # of INTERNAL_ERROR is glitches in intermediate hosts handling of
+            # HTTP/2 forwarding, so forcing HTTP 1.1 often fixes the issue. See
+            # https://github.com/tailscale/tailscale/issues/8988
+	        curl -f -L --http1.1 -o "$tarball" -sSL "https://get.helm.sh/helm-v${want_rev}-${OS}-${ARCH}.tar.gz"
+            (cd "$cachedir" && tar --strip-components=1 -xf "$tarball")
+            rm -f "$tarball"
+        fi
+    fi
+)
+
+export PATH="$HOME/.cache/tailscale-helm:$PATH"
+exec "$HOME/.cache/tailscale-helm/helm" "$@"

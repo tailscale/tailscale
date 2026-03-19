@@ -1,0 +1,40 @@
+# Copyright (c) Tailscale Inc & contributors
+# SPDX-License-Identifier: BSD-3-Clause
+
+# If old setting used, enable both old (operator) and new (ProxyGroup) workflows.
+# If new setting used, enable only new workflow.
+{{ if or (eq (toString .Values.apiServerProxyConfig.mode) "true")
+  (eq (toString .Values.apiServerProxyConfig.allowImpersonation) "true") }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-apiserver-auth-proxy
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tailscale-auth-proxy
+rules:
+- apiGroups: [""]
+  resources: ["users", "groups"]
+  verbs: ["impersonate"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tailscale-auth-proxy
+subjects:
+{{- if eq (toString .Values.apiServerProxyConfig.mode) "true" }}
+- kind: ServiceAccount
+  name: operator
+  namespace: {{ .Release.Namespace }}
+{{- end }}
+- kind: ServiceAccount
+  name: kube-apiserver-auth-proxy
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: tailscale-auth-proxy
+  apiGroup: rbac.authorization.k8s.io
+{{ end }}

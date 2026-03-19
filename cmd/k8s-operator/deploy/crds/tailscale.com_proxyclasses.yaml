@@ -1,0 +1,2424 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.0
+  name: proxyclasses.tailscale.com
+spec:
+  group: tailscale.com
+  names:
+    kind: ProxyClass
+    listKind: ProxyClassList
+    plural: proxyclasses
+    singular: proxyclass
+  scope: Cluster
+  versions:
+    - additionalPrinterColumns:
+        - description: Status of the ProxyClass.
+          jsonPath: .status.conditions[?(@.type == "ProxyClassReady")].reason
+          name: Status
+          type: string
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
+      name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: |-
+            ProxyClass describes a set of configuration parameters that can be applied to
+            proxy resources created by the Tailscale Kubernetes operator.
+            To apply a given ProxyClass to resources created for a tailscale Ingress or
+            Service, use tailscale.com/proxy-class=<proxyclass-name> label. To apply a
+            given ProxyClass to resources created for a Connector, use
+            connector.spec.proxyClass field.
+            ProxyClass is a cluster scoped resource.
+            More info:
+            https://tailscale.com/kb/1445/kubernetes-operator-customization#cluster-resource-customization-using-proxyclass-custom-resource
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              description: |-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+              type: string
+            kind:
+              description: |-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated.
+                In CamelCase.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: |-
+                Specification of the desired state of the ProxyClass resource.
+                https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+              type: object
+              properties:
+                metrics:
+                  description: |-
+                    Configuration for proxy metrics. Metrics are currently not supported
+                    for egress proxies and for Ingress proxies that have been configured
+                    with tailscale.com/experimental-forward-cluster-traffic-via-ingress
+                    annotation. Note that the metrics are currently considered unstable
+                    and will likely change in breaking ways in the future - we only
+                    recommend that you use those for debugging purposes.
+                  type: object
+                  required:
+                    - enable
+                  properties:
+                    enable:
+                      description: |-
+                        Setting enable to true will make the proxy serve Tailscale metrics
+                        at <pod-ip>:9002/metrics.
+                        A metrics Service named <proxy-statefulset>-metrics will also be created in the operator's namespace and will
+                        serve the metrics at <service-ip>:9002/metrics.
+
+                        In 1.78.x and 1.80.x, this field also serves as the default value for
+                        .spec.statefulSet.pod.tailscaleContainer.debug.enable. From 1.82.0, both
+                        fields will independently default to false.
+
+                        Defaults to false.
+                      type: boolean
+                    serviceMonitor:
+                      description: |-
+                        Enable to create a Prometheus ServiceMonitor for scraping the proxy's Tailscale metrics.
+                        The ServiceMonitor will select the metrics Service that gets created when metrics are enabled.
+                        The ingested metrics for each Service monitor will have labels to identify the proxy:
+                        ts_proxy_type: ingress_service|ingress_resource|connector|proxygroup
+                        ts_proxy_parent_name: name of the parent resource (i.e name of the Connector, Tailscale Ingress, Tailscale Service or ProxyGroup)
+                        ts_proxy_parent_namespace: namespace of the parent resource (if the parent resource is not cluster scoped)
+                        job: ts_<proxy type>_[<parent namespace>]_<parent_name>
+                      type: object
+                      required:
+                        - enable
+                      properties:
+                        enable:
+                          description: If Enable is set to true, a Prometheus ServiceMonitor will be created. Enable can only be set to true if metrics are enabled.
+                          type: boolean
+                        labels:
+                          description: |-
+                            Labels to add to the ServiceMonitor.
+                            Labels must be valid Kubernetes labels.
+                            https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
+                          type: object
+                          additionalProperties:
+                            type: string
+                            maxLength: 63
+                            pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
+                  x-kubernetes-validations:
+                    - rule: '!(has(self.serviceMonitor) && self.serviceMonitor.enable  && !self.enable)'
+                      message: ServiceMonitor can only be enabled if metrics are enabled
+                statefulSet:
+                  description: |-
+                    Configuration parameters for the proxy's StatefulSet. Tailscale
+                    Kubernetes operator deploys a StatefulSet for each of the user
+                    configured proxies (Tailscale Ingress, Tailscale Service, Connector).
+                  type: object
+                  properties:
+                    annotations:
+                      description: |-
+                        Annotations that will be added to the StatefulSet created for the proxy.
+                        Any Annotations specified here will be merged with the default annotations
+                        applied to the StatefulSet by the Tailscale Kubernetes operator as
+                        well as any other annotations that might have been applied by other
+                        actors.
+                        Annotations must be valid Kubernetes annotations.
+                        https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
+                      type: object
+                      additionalProperties:
+                        type: string
+                    labels:
+                      description: |-
+                        Labels that will be added to the StatefulSet created for the proxy.
+                        Any labels specified here will be merged with the default labels
+                        applied to the StatefulSet by the Tailscale Kubernetes operator as
+                        well as any other labels that might have been applied by other
+                        actors.
+                        Label keys and values must be valid Kubernetes label keys and values.
+                        https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
+                      type: object
+                      additionalProperties:
+                        type: string
+                        maxLength: 63
+                        pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
+                    pod:
+                      description: Configuration for the proxy Pod.
+                      type: object
+                      properties:
+                        affinity:
+                          description: |-
+                            Proxy Pod's affinity rules.
+                            By default, the Tailscale Kubernetes operator does not apply any affinity rules.
+                            https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#affinity
+                          type: object
+                          properties:
+                            nodeAffinity:
+                              description: Describes node affinity scheduling rules for the pod.
+                              type: object
+                              properties:
+                                preferredDuringSchedulingIgnoredDuringExecution:
+                                  description: |-
+                                    The scheduler will prefer to schedule pods to nodes that satisfy
+                                    the affinity expressions specified by this field, but it may choose
+                                    a node that violates one or more of the expressions. The node that is
+                                    most preferred is the one with the greatest sum of weights, i.e.
+                                    for each node that meets all of the scheduling requirements (resource
+                                    request, requiredDuringScheduling affinity expressions, etc.),
+                                    compute a sum by iterating through the elements of this field and adding
+                                    "weight" to the sum if the node matches the corresponding matchExpressions; the
+                                    node(s) with the highest sum are the most preferred.
+                                  type: array
+                                  items:
+                                    description: |-
+                                      An empty preferred scheduling term matches all objects with implicit weight 0
+                                      (i.e. it's a no-op). A null preferred scheduling term matches no objects (i.e. is also a no-op).
+                                    type: object
+                                    required:
+                                      - preference
+                                      - weight
+                                    properties:
+                                      preference:
+                                        description: A node selector term, associated with the corresponding weight.
+                                        type: object
+                                        properties:
+                                          matchExpressions:
+                                            description: A list of node selector requirements by node's labels.
+                                            type: array
+                                            items:
+                                              description: |-
+                                                A node selector requirement is a selector that contains values, a key, and an operator
+                                                that relates the key and values.
+                                              type: object
+                                              required:
+                                                - key
+                                                - operator
+                                              properties:
+                                                key:
+                                                  description: The label key that the selector applies to.
+                                                  type: string
+                                                operator:
+                                                  description: |-
+                                                    Represents a key's relationship to a set of values.
+                                                    Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                                  type: string
+                                                values:
+                                                  description: |-
+                                                    An array of string values. If the operator is In or NotIn,
+                                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                    the values array must be empty. If the operator is Gt or Lt, the values
+                                                    array must have a single element, which will be interpreted as an integer.
+                                                    This array is replaced during a strategic merge patch.
+                                                  type: array
+                                                  items:
+                                                    type: string
+                                                  x-kubernetes-list-type: atomic
+                                            x-kubernetes-list-type: atomic
+                                          matchFields:
+                                            description: A list of node selector requirements by node's fields.
+                                            type: array
+                                            items:
+                                              description: |-
+                                                A node selector requirement is a selector that contains values, a key, and an operator
+                                                that relates the key and values.
+                                              type: object
+                                              required:
+                                                - key
+                                                - operator
+                                              properties:
+                                                key:
+                                                  description: The label key that the selector applies to.
+                                                  type: string
+                                                operator:
+                                                  description: |-
+                                                    Represents a key's relationship to a set of values.
+                                                    Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                                  type: string
+                                                values:
+                                                  description: |-
+                                                    An array of string values. If the operator is In or NotIn,
+                                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                    the values array must be empty. If the operator is Gt or Lt, the values
+                                                    array must have a single element, which will be interpreted as an integer.
+                                                    This array is replaced during a strategic merge patch.
+                                                  type: array
+                                                  items:
+                                                    type: string
+                                                  x-kubernetes-list-type: atomic
+                                            x-kubernetes-list-type: atomic
+                                        x-kubernetes-map-type: atomic
+                                      weight:
+                                        description: Weight associated with matching the corresponding nodeSelectorTerm, in the range 1-100.
+                                        type: integer
+                                        format: int32
+                                  x-kubernetes-list-type: atomic
+                                requiredDuringSchedulingIgnoredDuringExecution:
+                                  description: |-
+                                    If the affinity requirements specified by this field are not met at
+                                    scheduling time, the pod will not be scheduled onto the node.
+                                    If the affinity requirements specified by this field cease to be met
+                                    at some point during pod execution (e.g. due to an update), the system
+                                    may or may not try to eventually evict the pod from its node.
+                                  type: object
+                                  required:
+                                    - nodeSelectorTerms
+                                  properties:
+                                    nodeSelectorTerms:
+                                      description: Required. A list of node selector terms. The terms are ORed.
+                                      type: array
+                                      items:
+                                        description: |-
+                                          A null or empty node selector term matches no objects. The requirements of
+                                          them are ANDed.
+                                          The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+                                        type: object
+                                        properties:
+                                          matchExpressions:
+                                            description: A list of node selector requirements by node's labels.
+                                            type: array
+                                            items:
+                                              description: |-
+                                                A node selector requirement is a selector that contains values, a key, and an operator
+                                                that relates the key and values.
+                                              type: object
+                                              required:
+                                                - key
+                                                - operator
+                                              properties:
+                                                key:
+                                                  description: The label key that the selector applies to.
+                                                  type: string
+                                                operator:
+                                                  description: |-
+                                                    Represents a key's relationship to a set of values.
+                                                    Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                                  type: string
+                                                values:
+                                                  description: |-
+                                                    An array of string values. If the operator is In or NotIn,
+                                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                    the values array must be empty. If the operator is Gt or Lt, the values
+                                                    array must have a single element, which will be interpreted as an integer.
+                                                    This array is replaced during a strategic merge patch.
+                                                  type: array
+                                                  items:
+                                                    type: string
+                                                  x-kubernetes-list-type: atomic
+                                            x-kubernetes-list-type: atomic
+                                          matchFields:
+                                            description: A list of node selector requirements by node's fields.
+                                            type: array
+                                            items:
+                                              description: |-
+                                                A node selector requirement is a selector that contains values, a key, and an operator
+                                                that relates the key and values.
+                                              type: object
+                                              required:
+                                                - key
+                                                - operator
+                                              properties:
+                                                key:
+                                                  description: The label key that the selector applies to.
+                                                  type: string
+                                                operator:
+                                                  description: |-
+                                                    Represents a key's relationship to a set of values.
+                                                    Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                                  type: string
+                                                values:
+                                                  description: |-
+                                                    An array of string values. If the operator is In or NotIn,
+                                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                    the values array must be empty. If the operator is Gt or Lt, the values
+                                                    array must have a single element, which will be interpreted as an integer.
+                                                    This array is replaced during a strategic merge patch.
+                                                  type: array
+                                                  items:
+                                                    type: string
+                                                  x-kubernetes-list-type: atomic
+                                            x-kubernetes-list-type: atomic
+                                        x-kubernetes-map-type: atomic
+                                      x-kubernetes-list-type: atomic
+                                  x-kubernetes-map-type: atomic
+                            podAffinity:
+                              description: Describes pod affinity scheduling rules (e.g. co-locate this pod in the same node, zone, etc. as some other pod(s)).
+                              type: object
+                              properties:
+                                preferredDuringSchedulingIgnoredDuringExecution:
+                                  description: |-
+                                    The scheduler will prefer to schedule pods to nodes that satisfy
+                                    the affinity expressions specified by this field, but it may choose
+                                    a node that violates one or more of the expressions. The node that is
+                                    most preferred is the one with the greatest sum of weights, i.e.
+                                    for each node that meets all of the scheduling requirements (resource
+                                    request, requiredDuringScheduling affinity expressions, etc.),
+                                    compute a sum by iterating through the elements of this field and adding
+                                    "weight" to the sum if the node has pods which matches the corresponding podAffinityTerm; the
+                                    node(s) with the highest sum are the most preferred.
+                                  type: array
+                                  items:
+                                    description: The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+                                    type: object
+                                    required:
+                                      - podAffinityTerm
+                                      - weight
+                                    properties:
+                                      podAffinityTerm:
+                                        description: Required. A pod affinity term, associated with the corresponding weight.
+                                        type: object
+                                        required:
+                                          - topologyKey
+                                        properties:
+                                          labelSelector:
+                                            description: |-
+                                              A label query over a set of resources, in this case pods.
+                                              If it's null, this PodAffinityTerm matches with no Pods.
+                                            type: object
+                                            properties:
+                                              matchExpressions:
+                                                description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                                                type: array
+                                                items:
+                                                  description: |-
+                                                    A label selector requirement is a selector that contains values, a key, and an operator that
+                                                    relates the key and values.
+                                                  type: object
+                                                  required:
+                                                    - key
+                                                    - operator
+                                                  properties:
+                                                    key:
+                                                      description: key is the label key that the selector applies to.
+                                                      type: string
+                                                    operator:
+                                                      description: |-
+                                                        operator represents a key's relationship to a set of values.
+                                                        Valid operators are In, NotIn, Exists and DoesNotExist.
+                                                      type: string
+                                                    values:
+                                                      description: |-
+                                                        values is an array of string values. If the operator is In or NotIn,
+                                                        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                        the values array must be empty. This array is replaced during a strategic
+                                                        merge patch.
+                                                      type: array
+                                                      items:
+                                                        type: string
+                                                      x-kubernetes-list-type: atomic
+                                                x-kubernetes-list-type: atomic
+                                              matchLabels:
+                                                description: |-
+                                                  matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                                  map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                                  operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                                type: object
+                                                additionalProperties:
+                                                  type: string
+                                            x-kubernetes-map-type: atomic
+                                          matchLabelKeys:
+                                            description: |-
+                                              MatchLabelKeys is a set of pod label keys to select which pods will
+                                              be taken into consideration. The keys are used to lookup values from the
+                                              incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
+                                              to select the group of existing pods which pods will be taken into consideration
+                                              for the incoming pod's pod (anti) affinity. Keys that don't exist in the incoming
+                                              pod labels will be ignored. The default value is empty.
+                                              The same key is forbidden to exist in both matchLabelKeys and labelSelector.
+                                              Also, matchLabelKeys cannot be set when labelSelector isn't set.
+                                            type: array
+                                            items:
+                                              type: string
+                                            x-kubernetes-list-type: atomic
+                                          mismatchLabelKeys:
+                                            description: |-
+                                              MismatchLabelKeys is a set of pod label keys to select which pods will
+                                              be taken into consideration. The keys are used to lookup values from the
+                                              incoming pod labels, those key-value labels are merged with `labelSelector` as `key notin (value)`
+                                              to select the group of existing pods which pods will be taken into consideration
+                                              for the incoming pod's pod (anti) affinity. Keys that don't exist in the incoming
+                                              pod labels will be ignored. The default value is empty.
+                                              The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
+                                              Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
+                                            type: array
+                                            items:
+                                              type: string
+                                            x-kubernetes-list-type: atomic
+                                          namespaceSelector:
+                                            description: |-
+                                              A label query over the set of namespaces that the term applies to.
+                                              The term is applied to the union of the namespaces selected by this field
+                                              and the ones listed in the namespaces field.
+                                              null selector and null or empty namespaces list means "this pod's namespace".
+                                              An empty selector ({}) matches all namespaces.
+                                            type: object
+                                            properties:
+                                              matchExpressions:
+                                                description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                                                type: array
+                                                items:
+                                                  description: |-
+                                                    A label selector requirement is a selector that contains values, a key, and an operator that
+                                                    relates the key and values.
+                                                  type: object
+                                                  required:
+                                                    - key
+                                                    - operator
+                                                  properties:
+                                                    key:
+                                                      description: key is the label key that the selector applies to.
+                                                      type: string
+                                                    operator:
+                                                      description: |-
+                                                        operator represents a key's relationship to a set of values.
+                                                        Valid operators are In, NotIn, Exists and DoesNotExist.
+                                                      type: string
+                                                    values:
+                                                      description: |-
+                                                        values is an array of string values. If the operator is In or NotIn,
+                                                        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                        the values array must be empty. This array is replaced during a strategic
+                                                        merge patch.
+                                                      type: array
+                                                      items:
+                                                        type: string
+                                                      x-kubernetes-list-type: atomic
+                                                x-kubernetes-list-type: atomic
+                                              matchLabels:
+                                                description: |-
+                                                  matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                                  map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                                  operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                                type: object
+                                                additionalProperties:
+                                                  type: string
+                                            x-kubernetes-map-type: atomic
+                                          namespaces:
+                                            description: |-
+                                              namespaces specifies a static list of namespace names that the term applies to.
+                                              The term is applied to the union of the namespaces listed in this field
+                                              and the ones selected by namespaceSelector.
+                                              null or empty namespaces list and null namespaceSelector means "this pod's namespace".
+                                            type: array
+                                            items:
+                                              type: string
+                                            x-kubernetes-list-type: atomic
+                                          topologyKey:
+                                            description: |-
+                                              This pod should be co-located (affinity) or not co-located (anti-affinity) with the pods matching
+                                              the labelSelector in the specified namespaces, where co-located is defined as running on a node
+                                              whose value of the label with key topologyKey matches that of any node on which any of the
+                                              selected pods is running.
+                                              Empty topologyKey is not allowed.
+                                            type: string
+                                      weight:
+                                        description: |-
+                                          weight associated with matching the corresponding podAffinityTerm,
+                                          in the range 1-100.
+                                        type: integer
+                                        format: int32
+                                  x-kubernetes-list-type: atomic
+                                requiredDuringSchedulingIgnoredDuringExecution:
+                                  description: |-
+                                    If the affinity requirements specified by this field are not met at
+                                    scheduling time, the pod will not be scheduled onto the node.
+                                    If the affinity requirements specified by this field cease to be met
+                                    at some point during pod execution (e.g. due to a pod label update), the
+                                    system may or may not try to eventually evict the pod from its node.
+                                    When there are multiple elements, the lists of nodes corresponding to each
+                                    podAffinityTerm are intersected, i.e. all terms must be satisfied.
+                                  type: array
+                                  items:
+                                    description: |-
+                                      Defines a set of pods (namely those matching the labelSelector
+                                      relative to the given namespace(s)) that this pod should be
+                                      co-located (affinity) or not co-located (anti-affinity) with,
+                                      where co-located is defined as running on a node whose value of
+                                      the label with key <topologyKey> matches that of any node on which
+                                      a pod of the set of pods is running
+                                    type: object
+                                    required:
+                                      - topologyKey
+                                    properties:
+                                      labelSelector:
+                                        description: |-
+                                          A label query over a set of resources, in this case pods.
+                                          If it's null, this PodAffinityTerm matches with no Pods.
+                                        type: object
+                                        properties:
+                                          matchExpressions:
+                                            description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                                            type: array
+                                            items:
+                                              description: |-
+                                                A label selector requirement is a selector that contains values, a key, and an operator that
+                                                relates the key and values.
+                                              type: object
+                                              required:
+                                                - key
+                                                - operator
+                                              properties:
+                                                key:
+                                                  description: key is the label key that the selector applies to.
+                                                  type: string
+                                                operator:
+                                                  description: |-
+                                                    operator represents a key's relationship to a set of values.
+                                                    Valid operators are In, NotIn, Exists and DoesNotExist.
+                                                  type: string
+                                                values:
+                                                  description: |-
+                                                    values is an array of string values. If the operator is In or NotIn,
+                                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                    the values array must be empty. This array is replaced during a strategic
+                                                    merge patch.
+                                                  type: array
+                                                  items:
+                                                    type: string
+                                                  x-kubernetes-list-type: atomic
+                                            x-kubernetes-list-type: atomic
+                                          matchLabels:
+                                            description: |-
+                                              matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                              map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                              operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                            type: object
+                                            additionalProperties:
+                                              type: string
+                                        x-kubernetes-map-type: atomic
+                                      matchLabelKeys:
+                                        description: |-
+                                          MatchLabelKeys is a set of pod label keys to select which pods will
+                                          be taken into consideration. The keys are used to lookup values from the
+                                          incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
+                                          to select the group of existing pods which pods will be taken into consideration
+                                          for the incoming pod's pod (anti) affinity. Keys that don't exist in the incoming
+                                          pod labels will be ignored. The default value is empty.
+                                          The same key is forbidden to exist in both matchLabelKeys and labelSelector.
+                                          Also, matchLabelKeys cannot be set when labelSelector isn't set.
+                                        type: array
+                                        items:
+                                          type: string
+                                        x-kubernetes-list-type: atomic
+                                      mismatchLabelKeys:
+                                        description: |-
+                                          MismatchLabelKeys is a set of pod label keys to select which pods will
+                                          be taken into consideration. The keys are used to lookup values from the
+                                          incoming pod labels, those key-value labels are merged with `labelSelector` as `key notin (value)`
+                                          to select the group of existing pods which pods will be taken into consideration
+                                          for the incoming pod's pod (anti) affinity. Keys that don't exist in the incoming
+                                          pod labels will be ignored. The default value is empty.
+                                          The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
+                                          Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
+                                        type: array
+                                        items:
+                                          type: string
+                                        x-kubernetes-list-type: atomic
+                                      namespaceSelector:
+                                        description: |-
+                                          A label query over the set of namespaces that the term applies to.
+                                          The term is applied to the union of the namespaces selected by this field
+                                          and the ones listed in the namespaces field.
+                                          null selector and null or empty namespaces list means "this pod's namespace".
+                                          An empty selector ({}) matches all namespaces.
+                                        type: object
+                                        properties:
+                                          matchExpressions:
+                                            description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                                            type: array
+                                            items:
+                                              description: |-
+                                                A label selector requirement is a selector that contains values, a key, and an operator that
+                                                relates the key and values.
+                                              type: object
+                                              required:
+                                                - key
+                                                - operator
+                                              properties:
+                                                key:
+                                                  description: key is the label key that the selector applies to.
+                                                  type: string
+                                                operator:
+                                                  description: |-
+                                                    operator represents a key's relationship to a set of values.
+                                                    Valid operators are In, NotIn, Exists and DoesNotExist.
+                                                  type: string
+                                                values:
+                                                  description: |-
+                                                    values is an array of string values. If the operator is In or NotIn,
+                                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                    the values array must be empty. This array is replaced during a strategic
+                                                    merge patch.
+                                                  type: array
+                                                  items:
+                                                    type: string
+                                                  x-kubernetes-list-type: atomic
+                                            x-kubernetes-list-type: atomic
+                                          matchLabels:
+                                            description: |-
+                                              matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                              map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                              operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                            type: object
+                                            additionalProperties:
+                                              type: string
+                                        x-kubernetes-map-type: atomic
+                                      namespaces:
+                                        description: |-
+                                          namespaces specifies a static list of namespace names that the term applies to.
+                                          The term is applied to the union of the namespaces listed in this field
+                                          and the ones selected by namespaceSelector.
+                                          null or empty namespaces list and null namespaceSelector means "this pod's namespace".
+                                        type: array
+                                        items:
+                                          type: string
+                                        x-kubernetes-list-type: atomic
+                                      topologyKey:
+                                        description: |-
+                                          This pod should be co-located (affinity) or not co-located (anti-affinity) with the pods matching
+                                          the labelSelector in the specified namespaces, where co-located is defined as running on a node
+                                          whose value of the label with key topologyKey matches that of any node on which any of the
+                                          selected pods is running.
+                                          Empty topologyKey is not allowed.
+                                        type: string
+                                  x-kubernetes-list-type: atomic
+                            podAntiAffinity:
+                              description: Describes pod anti-affinity scheduling rules (e.g. avoid putting this pod in the same node, zone, etc. as some other pod(s)).
+                              type: object
+                              properties:
+                                preferredDuringSchedulingIgnoredDuringExecution:
+                                  description: |-
+                                    The scheduler will prefer to schedule pods to nodes that satisfy
+                                    the anti-affinity expressions specified by this field, but it may choose
+                                    a node that violates one or more of the expressions. The node that is
+                                    most preferred is the one with the greatest sum of weights, i.e.
+                                    for each node that meets all of the scheduling requirements (resource
+                                    request, requiredDuringScheduling anti-affinity expressions, etc.),
+                                    compute a sum by iterating through the elements of this field and subtracting
+                                    "weight" from the sum if the node has pods which matches the corresponding podAffinityTerm; the
+                                    node(s) with the highest sum are the most preferred.
+                                  type: array
+                                  items:
+                                    description: The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+                                    type: object
+                                    required:
+                                      - podAffinityTerm
+                                      - weight
+                                    properties:
+                                      podAffinityTerm:
+                                        description: Required. A pod affinity term, associated with the corresponding weight.
+                                        type: object
+                                        required:
+                                          - topologyKey
+                                        properties:
+                                          labelSelector:
+                                            description: |-
+                                              A label query over a set of resources, in this case pods.
+                                              If it's null, this PodAffinityTerm matches with no Pods.
+                                            type: object
+                                            properties:
+                                              matchExpressions:
+                                                description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                                                type: array
+                                                items:
+                                                  description: |-
+                                                    A label selector requirement is a selector that contains values, a key, and an operator that
+                                                    relates the key and values.
+                                                  type: object
+                                                  required:
+                                                    - key
+                                                    - operator
+                                                  properties:
+                                                    key:
+                                                      description: key is the label key that the selector applies to.
+                                                      type: string
+                                                    operator:
+                                                      description: |-
+                                                        operator represents a key's relationship to a set of values.
+                                                        Valid operators are In, NotIn, Exists and DoesNotExist.
+                                                      type: string
+                                                    values:
+                                                      description: |-
+                                                        values is an array of string values. If the operator is In or NotIn,
+                                                        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                        the values array must be empty. This array is replaced during a strategic
+                                                        merge patch.
+                                                      type: array
+                                                      items:
+                                                        type: string
+                                                      x-kubernetes-list-type: atomic
+                                                x-kubernetes-list-type: atomic
+                                              matchLabels:
+                                                description: |-
+                                                  matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                                  map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                                  operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                                type: object
+                                                additionalProperties:
+                                                  type: string
+                                            x-kubernetes-map-type: atomic
+                                          matchLabelKeys:
+                                            description: |-
+                                              MatchLabelKeys is a set of pod label keys to select which pods will
+                                              be taken into consideration. The keys are used to lookup values from the
+                                              incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
+                                              to select the group of existing pods which pods will be taken into consideration
+                                              for the incoming pod's pod (anti) affinity. Keys that don't exist in the incoming
+                                              pod labels will be ignored. The default value is empty.
+                                              The same key is forbidden to exist in both matchLabelKeys and labelSelector.
+                                              Also, matchLabelKeys cannot be set when labelSelector isn't set.
+                                            type: array
+                                            items:
+                                              type: string
+                                            x-kubernetes-list-type: atomic
+                                          mismatchLabelKeys:
+                                            description: |-
+                                              MismatchLabelKeys is a set of pod label keys to select which pods will
+                                              be taken into consideration. The keys are used to lookup values from the
+                                              incoming pod labels, those key-value labels are merged with `labelSelector` as `key notin (value)`
+                                              to select the group of existing pods which pods will be taken into consideration
+                                              for the incoming pod's pod (anti) affinity. Keys that don't exist in the incoming
+                                              pod labels will be ignored. The default value is empty.
+                                              The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
+                                              Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
+                                            type: array
+                                            items:
+                                              type: string
+                                            x-kubernetes-list-type: atomic
+                                          namespaceSelector:
+                                            description: |-
+                                              A label query over the set of namespaces that the term applies to.
+                                              The term is applied to the union of the namespaces selected by this field
+                                              and the ones listed in the namespaces field.
+                                              null selector and null or empty namespaces list means "this pod's namespace".
+                                              An empty selector ({}) matches all namespaces.
+                                            type: object
+                                            properties:
+                                              matchExpressions:
+                                                description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                                                type: array
+                                                items:
+                                                  description: |-
+                                                    A label selector requirement is a selector that contains values, a key, and an operator that
+                                                    relates the key and values.
+                                                  type: object
+                                                  required:
+                                                    - key
+                                                    - operator
+                                                  properties:
+                                                    key:
+                                                      description: key is the label key that the selector applies to.
+                                                      type: string
+                                                    operator:
+                                                      description: |-
+                                                        operator represents a key's relationship to a set of values.
+                                                        Valid operators are In, NotIn, Exists and DoesNotExist.
+                                                      type: string
+                                                    values:
+                                                      description: |-
+                                                        values is an array of string values. If the operator is In or NotIn,
+                                                        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                        the values array must be empty. This array is replaced during a strategic
+                                                        merge patch.
+                                                      type: array
+                                                      items:
+                                                        type: string
+                                                      x-kubernetes-list-type: atomic
+                                                x-kubernetes-list-type: atomic
+                                              matchLabels:
+                                                description: |-
+                                                  matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                                  map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                                  operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                                type: object
+                                                additionalProperties:
+                                                  type: string
+                                            x-kubernetes-map-type: atomic
+                                          namespaces:
+                                            description: |-
+                                              namespaces specifies a static list of namespace names that the term applies to.
+                                              The term is applied to the union of the namespaces listed in this field
+                                              and the ones selected by namespaceSelector.
+                                              null or empty namespaces list and null namespaceSelector means "this pod's namespace".
+                                            type: array
+                                            items:
+                                              type: string
+                                            x-kubernetes-list-type: atomic
+                                          topologyKey:
+                                            description: |-
+                                              This pod should be co-located (affinity) or not co-located (anti-affinity) with the pods matching
+                                              the labelSelector in the specified namespaces, where co-located is defined as running on a node
+                                              whose value of the label with key topologyKey matches that of any node on which any of the
+                                              selected pods is running.
+                                              Empty topologyKey is not allowed.
+                                            type: string
+                                      weight:
+                                        description: |-
+                                          weight associated with matching the corresponding podAffinityTerm,
+                                          in the range 1-100.
+                                        type: integer
+                                        format: int32
+                                  x-kubernetes-list-type: atomic
+                                requiredDuringSchedulingIgnoredDuringExecution:
+                                  description: |-
+                                    If the anti-affinity requirements specified by this field are not met at
+                                    scheduling time, the pod will not be scheduled onto the node.
+                                    If the anti-affinity requirements specified by this field cease to be met
+                                    at some point during pod execution (e.g. due to a pod label update), the
+                                    system may or may not try to eventually evict the pod from its node.
+                                    When there are multiple elements, the lists of nodes corresponding to each
+                                    podAffinityTerm are intersected, i.e. all terms must be satisfied.
+                                  type: array
+                                  items:
+                                    description: |-
+                                      Defines a set of pods (namely those matching the labelSelector
+                                      relative to the given namespace(s)) that this pod should be
+                                      co-located (affinity) or not co-located (anti-affinity) with,
+                                      where co-located is defined as running on a node whose value of
+                                      the label with key <topologyKey> matches that of any node on which
+                                      a pod of the set of pods is running
+                                    type: object
+                                    required:
+                                      - topologyKey
+                                    properties:
+                                      labelSelector:
+                                        description: |-
+                                          A label query over a set of resources, in this case pods.
+                                          If it's null, this PodAffinityTerm matches with no Pods.
+                                        type: object
+                                        properties:
+                                          matchExpressions:
+                                            description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                                            type: array
+                                            items:
+                                              description: |-
+                                                A label selector requirement is a selector that contains values, a key, and an operator that
+                                                relates the key and values.
+                                              type: object
+                                              required:
+                                                - key
+                                                - operator
+                                              properties:
+                                                key:
+                                                  description: key is the label key that the selector applies to.
+                                                  type: string
+                                                operator:
+                                                  description: |-
+                                                    operator represents a key's relationship to a set of values.
+                                                    Valid operators are In, NotIn, Exists and DoesNotExist.
+                                                  type: string
+                                                values:
+                                                  description: |-
+                                                    values is an array of string values. If the operator is In or NotIn,
+                                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                    the values array must be empty. This array is replaced during a strategic
+                                                    merge patch.
+                                                  type: array
+                                                  items:
+                                                    type: string
+                                                  x-kubernetes-list-type: atomic
+                                            x-kubernetes-list-type: atomic
+                                          matchLabels:
+                                            description: |-
+                                              matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                              map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                              operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                            type: object
+                                            additionalProperties:
+                                              type: string
+                                        x-kubernetes-map-type: atomic
+                                      matchLabelKeys:
+                                        description: |-
+                                          MatchLabelKeys is a set of pod label keys to select which pods will
+                                          be taken into consideration. The keys are used to lookup values from the
+                                          incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
+                                          to select the group of existing pods which pods will be taken into consideration
+                                          for the incoming pod's pod (anti) affinity. Keys that don't exist in the incoming
+                                          pod labels will be ignored. The default value is empty.
+                                          The same key is forbidden to exist in both matchLabelKeys and labelSelector.
+                                          Also, matchLabelKeys cannot be set when labelSelector isn't set.
+                                        type: array
+                                        items:
+                                          type: string
+                                        x-kubernetes-list-type: atomic
+                                      mismatchLabelKeys:
+                                        description: |-
+                                          MismatchLabelKeys is a set of pod label keys to select which pods will
+                                          be taken into consideration. The keys are used to lookup values from the
+                                          incoming pod labels, those key-value labels are merged with `labelSelector` as `key notin (value)`
+                                          to select the group of existing pods which pods will be taken into consideration
+                                          for the incoming pod's pod (anti) affinity. Keys that don't exist in the incoming
+                                          pod labels will be ignored. The default value is empty.
+                                          The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
+                                          Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
+                                        type: array
+                                        items:
+                                          type: string
+                                        x-kubernetes-list-type: atomic
+                                      namespaceSelector:
+                                        description: |-
+                                          A label query over the set of namespaces that the term applies to.
+                                          The term is applied to the union of the namespaces selected by this field
+                                          and the ones listed in the namespaces field.
+                                          null selector and null or empty namespaces list means "this pod's namespace".
+                                          An empty selector ({}) matches all namespaces.
+                                        type: object
+                                        properties:
+                                          matchExpressions:
+                                            description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                                            type: array
+                                            items:
+                                              description: |-
+                                                A label selector requirement is a selector that contains values, a key, and an operator that
+                                                relates the key and values.
+                                              type: object
+                                              required:
+                                                - key
+                                                - operator
+                                              properties:
+                                                key:
+                                                  description: key is the label key that the selector applies to.
+                                                  type: string
+                                                operator:
+                                                  description: |-
+                                                    operator represents a key's relationship to a set of values.
+                                                    Valid operators are In, NotIn, Exists and DoesNotExist.
+                                                  type: string
+                                                values:
+                                                  description: |-
+                                                    values is an array of string values. If the operator is In or NotIn,
+                                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                    the values array must be empty. This array is replaced during a strategic
+                                                    merge patch.
+                                                  type: array
+                                                  items:
+                                                    type: string
+                                                  x-kubernetes-list-type: atomic
+                                            x-kubernetes-list-type: atomic
+                                          matchLabels:
+                                            description: |-
+                                              matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                              map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                              operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                            type: object
+                                            additionalProperties:
+                                              type: string
+                                        x-kubernetes-map-type: atomic
+                                      namespaces:
+                                        description: |-
+                                          namespaces specifies a static list of namespace names that the term applies to.
+                                          The term is applied to the union of the namespaces listed in this field
+                                          and the ones selected by namespaceSelector.
+                                          null or empty namespaces list and null namespaceSelector means "this pod's namespace".
+                                        type: array
+                                        items:
+                                          type: string
+                                        x-kubernetes-list-type: atomic
+                                      topologyKey:
+                                        description: |-
+                                          This pod should be co-located (affinity) or not co-located (anti-affinity) with the pods matching
+                                          the labelSelector in the specified namespaces, where co-located is defined as running on a node
+                                          whose value of the label with key topologyKey matches that of any node on which any of the
+                                          selected pods is running.
+                                          Empty topologyKey is not allowed.
+                                        type: string
+                                  x-kubernetes-list-type: atomic
+                        annotations:
+                          description: |-
+                            Annotations that will be added to the proxy Pod.
+                            Any annotations specified here will be merged with the default
+                            annotations applied to the Pod by the Tailscale Kubernetes operator.
+                            Annotations must be valid Kubernetes annotations.
+                            https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
+                          type: object
+                          additionalProperties:
+                            type: string
+                        dnsConfig:
+                          description: |-
+                            DNSConfig defines DNS parameters for the proxy Pod in addition to those generated from DNSPolicy.
+                            When DNSPolicy is set to "None", DNSConfig must be specified.
+                            https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-dns-config
+                          type: object
+                          properties:
+                            nameservers:
+                              description: |-
+                                A list of DNS name server IP addresses.
+                                This will be appended to the base nameservers generated from DNSPolicy.
+                                Duplicated nameservers will be removed.
+                              type: array
+                              items:
+                                type: string
+                              x-kubernetes-list-type: atomic
+                            options:
+                              description: |-
+                                A list of DNS resolver options.
+                                This will be merged with the base options generated from DNSPolicy.
+                                Duplicated entries will be removed. Resolution options given in Options
+                                will override those that appear in the base DNSPolicy.
+                              type: array
+                              items:
+                                description: PodDNSConfigOption defines DNS resolver options of a pod.
+                                type: object
+                                properties:
+                                  name:
+                                    description: |-
+                                      Name is this DNS resolver option's name.
+                                      Required.
+                                    type: string
+                                  value:
+                                    description: Value is this DNS resolver option's value.
+                                    type: string
+                              x-kubernetes-list-type: atomic
+                            searches:
+                              description: |-
+                                A list of DNS search domains for host-name lookup.
+                                This will be appended to the base search paths generated from DNSPolicy.
+                                Duplicated search paths will be removed.
+                              type: array
+                              items:
+                                type: string
+                              x-kubernetes-list-type: atomic
+                        dnsPolicy:
+                          description: |-
+                            DNSPolicy defines how DNS will be configured for the proxy Pod.
+                            By default the Tailscale Kubernetes Operator does not set a DNS policy (uses cluster default).
+                            https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-s-dns-policy
+                          type: string
+                          enum:
+                            - ClusterFirstWithHostNet
+                            - ClusterFirst
+                            - Default
+                            - None
+                        imagePullSecrets:
+                          description: |-
+                            Proxy Pod's image pull Secrets.
+                            https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec
+                          type: array
+                          items:
+                            description: |-
+                              LocalObjectReference contains enough information to let you locate the
+                              referenced object inside the same namespace.
+                            type: object
+                            properties:
+                              name:
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                                default: ""
+                            x-kubernetes-map-type: atomic
+                        labels:
+                          description: |-
+                            Labels that will be added to the proxy Pod.
+                            Any labels specified here will be merged with the default labels
+                            applied to the Pod by the Tailscale Kubernetes operator.
+                            Label keys and values must be valid Kubernetes label keys and values.
+                            https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
+                          type: object
+                          additionalProperties:
+                            type: string
+                            maxLength: 63
+                            pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
+                        nodeName:
+                          description: |-
+                            Proxy Pod's node name.
+                            https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
+                          type: string
+                        nodeSelector:
+                          description: |-
+                            Proxy Pod's node selector.
+                            By default Tailscale Kubernetes operator does not apply any node
+                            selector.
+                            https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
+                          type: object
+                          additionalProperties:
+                            type: string
+                        priorityClassName:
+                          description: |-
+                            PriorityClassName for the proxy Pod.
+                            By default Tailscale Kubernetes operator does not apply any priority class.
+                            https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
+                          type: string
+                        securityContext:
+                          description: |-
+                            Proxy Pod's security context.
+                            By default Tailscale Kubernetes operator does not apply any Pod
+                            security context.
+                            https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context-2
+                          type: object
+                          properties:
+                            appArmorProfile:
+                              description: |-
+                                appArmorProfile is the AppArmor options to use by the containers in this pod.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              type: object
+                              required:
+                                - type
+                              properties:
+                                localhostProfile:
+                                  description: |-
+                                    localhostProfile indicates a profile loaded on the node that should be used.
+                                    The profile must be preconfigured on the node to work.
+                                    Must match the loaded name of the profile.
+                                    Must be set if and only if type is "Localhost".
+                                  type: string
+                                type:
+                                  description: |-
+                                    type indicates which kind of AppArmor profile will be applied.
+                                    Valid options are:
+                                      Localhost - a profile pre-loaded on the node.
+                                      RuntimeDefault - the container runtime's default profile.
+                                      Unconfined - no AppArmor enforcement.
+                                  type: string
+                            fsGroup:
+                              description: |-
+                                A special supplemental group that applies to all containers in a pod.
+                                Some volume types allow the Kubelet to change the ownership of that volume
+                                to be owned by the pod:
+
+                                1. The owning GID will be the FSGroup
+                                2. The setgid bit is set (new files created in the volume will be owned by FSGroup)
+                                3. The permission bits are OR'd with rw-rw----
+
+                                If unset, the Kubelet will not modify the ownership and permissions of any volume.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              type: integer
+                              format: int64
+                            fsGroupChangePolicy:
+                              description: |-
+                                fsGroupChangePolicy defines behavior of changing ownership and permission of the volume
+                                before being exposed inside Pod. This field will only apply to
+                                volume types which support fsGroup based ownership(and permissions).
+                                It will have no effect on ephemeral volume types such as: secret, configmaps
+                                and emptydir.
+                                Valid values are "OnRootMismatch" and "Always". If not specified, "Always" is used.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              type: string
+                            runAsGroup:
+                              description: |-
+                                The GID to run the entrypoint of the container process.
+                                Uses runtime default if unset.
+                                May also be set in SecurityContext.  If set in both SecurityContext and
+                                PodSecurityContext, the value specified in SecurityContext takes precedence
+                                for that container.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              type: integer
+                              format: int64
+                            runAsNonRoot:
+                              description: |-
+                                Indicates that the container must run as a non-root user.
+                                If true, the Kubelet will validate the image at runtime to ensure that it
+                                does not run as UID 0 (root) and fail to start the container if it does.
+                                If unset or false, no such validation will be performed.
+                                May also be set in SecurityContext.  If set in both SecurityContext and
+                                PodSecurityContext, the value specified in SecurityContext takes precedence.
+                              type: boolean
+                            runAsUser:
+                              description: |-
+                                The UID to run the entrypoint of the container process.
+                                Defaults to user specified in image metadata if unspecified.
+                                May also be set in SecurityContext.  If set in both SecurityContext and
+                                PodSecurityContext, the value specified in SecurityContext takes precedence
+                                for that container.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              type: integer
+                              format: int64
+                            seLinuxChangePolicy:
+                              description: |-
+                                seLinuxChangePolicy defines how the container's SELinux label is applied to all volumes used by the Pod.
+                                It has no effect on nodes that do not support SELinux or to volumes does not support SELinux.
+                                Valid values are "MountOption" and "Recursive".
+
+                                "Recursive" means relabeling of all files on all Pod volumes by the container runtime.
+                                This may be slow for large volumes, but allows mixing privileged and unprivileged Pods sharing the same volume on the same node.
+
+                                "MountOption" mounts all eligible Pod volumes with `-o context` mount option.
+                                This requires all Pods that share the same volume to use the same SELinux label.
+                                It is not possible to share the same volume among privileged and unprivileged Pods.
+                                Eligible volumes are in-tree FibreChannel and iSCSI volumes, and all CSI volumes
+                                whose CSI driver announces SELinux support by setting spec.seLinuxMount: true in their
+                                CSIDriver instance. Other volumes are always re-labelled recursively.
+                                "MountOption" value is allowed only when SELinuxMount feature gate is enabled.
+
+                                If not specified and SELinuxMount feature gate is enabled, "MountOption" is used.
+                                If not specified and SELinuxMount feature gate is disabled, "MountOption" is used for ReadWriteOncePod volumes
+                                and "Recursive" for all other volumes.
+
+                                This field affects only Pods that have SELinux label set, either in PodSecurityContext or in SecurityContext of all containers.
+
+                                All Pods that use the same volume should use the same seLinuxChangePolicy, otherwise some pods can get stuck in ContainerCreating state.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              type: string
+                            seLinuxOptions:
+                              description: |-
+                                The SELinux context to be applied to all containers.
+                                If unspecified, the container runtime will allocate a random SELinux context for each
+                                container.  May also be set in SecurityContext.  If set in
+                                both SecurityContext and PodSecurityContext, the value specified in SecurityContext
+                                takes precedence for that container.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              type: object
+                              properties:
+                                level:
+                                  description: Level is SELinux level label that applies to the container.
+                                  type: string
+                                role:
+                                  description: Role is a SELinux role label that applies to the container.
+                                  type: string
+                                type:
+                                  description: Type is a SELinux type label that applies to the container.
+                                  type: string
+                                user:
+                                  description: User is a SELinux user label that applies to the container.
+                                  type: string
+                            seccompProfile:
+                              description: |-
+                                The seccomp options to use by the containers in this pod.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              type: object
+                              required:
+                                - type
+                              properties:
+                                localhostProfile:
+                                  description: |-
+                                    localhostProfile indicates a profile defined in a file on the node should be used.
+                                    The profile must be preconfigured on the node to work.
+                                    Must be a descending path, relative to the kubelet's configured seccomp profile location.
+                                    Must be set if type is "Localhost". Must NOT be set for any other type.
+                                  type: string
+                                type:
+                                  description: |-
+                                    type indicates which kind of seccomp profile will be applied.
+                                    Valid options are:
+
+                                    Localhost - a profile defined in a file on the node should be used.
+                                    RuntimeDefault - the container runtime default profile should be used.
+                                    Unconfined - no profile should be applied.
+                                  type: string
+                            supplementalGroups:
+                              description: |-
+                                A list of groups applied to the first process run in each container, in
+                                addition to the container's primary GID and fsGroup (if specified).  If
+                                the SupplementalGroupsPolicy feature is enabled, the
+                                supplementalGroupsPolicy field determines whether these are in addition
+                                to or instead of any group memberships defined in the container image.
+                                If unspecified, no additional groups are added, though group memberships
+                                defined in the container image may still be used, depending on the
+                                supplementalGroupsPolicy field.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              type: array
+                              items:
+                                type: integer
+                                format: int64
+                              x-kubernetes-list-type: atomic
+                            supplementalGroupsPolicy:
+                              description: |-
+                                Defines how supplemental groups of the first container processes are calculated.
+                                Valid values are "Merge" and "Strict". If not specified, "Merge" is used.
+                                (Alpha) Using the field requires the SupplementalGroupsPolicy feature gate to be enabled
+                                and the container runtime must implement support for this feature.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              type: string
+                            sysctls:
+                              description: |-
+                                Sysctls hold a list of namespaced sysctls used for the pod. Pods with unsupported
+                                sysctls (by the container runtime) might fail to launch.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              type: array
+                              items:
+                                description: Sysctl defines a kernel parameter to be set
+                                type: object
+                                required:
+                                  - name
+                                  - value
+                                properties:
+                                  name:
+                                    description: Name of a property to set
+                                    type: string
+                                  value:
+                                    description: Value of a property to set
+                                    type: string
+                              x-kubernetes-list-type: atomic
+                            windowsOptions:
+                              description: |-
+                                The Windows specific settings applied to all containers.
+                                If unspecified, the options within a container's SecurityContext will be used.
+                                If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                Note that this field cannot be set when spec.os.name is linux.
+                              type: object
+                              properties:
+                                gmsaCredentialSpec:
+                                  description: |-
+                                    GMSACredentialSpec is where the GMSA admission webhook
+                                    (https://github.com/kubernetes-sigs/windows-gmsa) inlines the contents of the
+                                    GMSA credential spec named by the GMSACredentialSpecName field.
+                                  type: string
+                                gmsaCredentialSpecName:
+                                  description: GMSACredentialSpecName is the name of the GMSA credential spec to use.
+                                  type: string
+                                hostProcess:
+                                  description: |-
+                                    HostProcess determines if a container should be run as a 'Host Process' container.
+                                    All of a Pod's containers must have the same effective HostProcess value
+                                    (it is not allowed to have a mix of HostProcess containers and non-HostProcess containers).
+                                    In addition, if HostProcess is true then HostNetwork must also be set to true.
+                                  type: boolean
+                                runAsUserName:
+                                  description: |-
+                                    The UserName in Windows to run the entrypoint of the container process.
+                                    Defaults to the user specified in image metadata if unspecified.
+                                    May also be set in PodSecurityContext. If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                  type: string
+                        tailscaleContainer:
+                          description: Configuration for the proxy container running tailscale.
+                          type: object
+                          properties:
+                            debug:
+                              description: |-
+                                Configuration for enabling extra debug information in the container.
+                                Not recommended for production use.
+                              type: object
+                              properties:
+                                enable:
+                                  description: |-
+                                    Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9001/debug/pprof/
+                                    and internal debug metrics endpoint at <pod-ip>:9001/debug/metrics, where
+                                    9001 is a container port named "debug". The endpoints and their responses
+                                    may change in backwards incompatible ways in the future, and should not
+                                    be considered stable.
+
+                                    In 1.78.x and 1.80.x, this setting will default to the value of
+                                    .spec.metrics.enable, and requests to the "metrics" port matching the
+                                    mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,
+                                    this setting will default to false, and no requests will be proxied.
+                                  type: boolean
+                            env:
+                              description: |-
+                                List of environment variables to set in the container.
+                                https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables
+                                Note that environment variables provided here will take precedence
+                                over Tailscale-specific environment variables set by the operator,
+                                however running proxies with custom values for Tailscale environment
+                                variables (i.e TS_USERSPACE) is not recommended and might break in
+                                the future.
+                              type: array
+                              items:
+                                type: object
+                                required:
+                                  - name
+                                properties:
+                                  name:
+                                    description: Name of the environment variable. Must be a C_IDENTIFIER.
+                                    type: string
+                                    pattern: ^[-._a-zA-Z][-._a-zA-Z0-9]*$
+                                  value:
+                                    description: |-
+                                      Variable references $(VAR_NAME) are expanded using the previously defined
+                                       environment variables in the container and any service environment
+                                      variables. If a variable cannot be resolved, the reference in the input
+                                      string will be unchanged. Double $$ are reduced to a single $, which
+                                      allows for escaping the $(VAR_NAME) syntax: i.e. "$$(VAR_NAME)" will
+                                      produce the string literal "$(VAR_NAME)". Escaped references will never
+                                      be expanded, regardless of whether the variable exists or not. Defaults
+                                      to "".
+                                    type: string
+                            image:
+                              description: |-
+                                Container image name. By default images are pulled from docker.io/tailscale,
+                                but the official images are also available at ghcr.io/tailscale.
+
+                                For all uses except on ProxyGroups of type "kube-apiserver", this image must
+                                be either tailscale/tailscale, or an equivalent mirror of that image.
+                                To apply to ProxyGroups of type "kube-apiserver", this image must be
+                                tailscale/k8s-proxy or a mirror of that image.
+
+                                For "tailscale/tailscale"-based proxies, specifying image name here will
+                                override any proxy image values specified via the Kubernetes operator's
+                                Helm chart values or PROXY_IMAGE env var in the operator Deployment.
+                                For "tailscale/k8s-proxy"-based proxies, there is currently no way to
+                                configure your own default, and this field is the only way to use a
+                                custom image.
+
+                                https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
+                              type: string
+                            imagePullPolicy:
+                              description: |-
+                                Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always.
+                                https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
+                              type: string
+                              enum:
+                                - Always
+                                - Never
+                                - IfNotPresent
+                            resources:
+                              description: |-
+                                Container resource requirements.
+                                By default Tailscale Kubernetes operator does not apply any resource
+                                requirements. The amount of resources required wil depend on the
+                                amount of resources the operator needs to parse, usage patterns and
+                                cluster size.
+                                https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources
+                              type: object
+                              properties:
+                                claims:
+                                  description: |-
+                                    Claims lists the names of resources, defined in spec.resourceClaims,
+                                    that are used by this container.
+
+                                    This field depends on the
+                                    DynamicResourceAllocation feature gate.
+
+                                    This field is immutable. It can only be set for containers.
+                                  type: array
+                                  items:
+                                    description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                                    type: object
+                                    required:
+                                      - name
+                                    properties:
+                                      name:
+                                        description: |-
+                                          Name must match the name of one entry in pod.spec.resourceClaims of
+                                          the Pod where this field is used. It makes that resource available
+                                          inside a container.
+                                        type: string
+                                      request:
+                                        description: |-
+                                          Request is the name chosen for a request in the referenced claim.
+                                          If empty, everything from the claim is made available, otherwise
+                                          only the result of this request.
+                                        type: string
+                                  x-kubernetes-list-map-keys:
+                                    - name
+                                  x-kubernetes-list-type: map
+                                limits:
+                                  description: |-
+                                    Limits describes the maximum amount of compute resources allowed.
+                                    More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                  type: object
+                                  additionalProperties:
+                                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                    anyOf:
+                                      - type: integer
+                                      - type: string
+                                    x-kubernetes-int-or-string: true
+                                requests:
+                                  description: |-
+                                    Requests describes the minimum amount of compute resources required.
+                                    If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                                    otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                                    More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                  type: object
+                                  additionalProperties:
+                                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                    anyOf:
+                                      - type: integer
+                                      - type: string
+                                    x-kubernetes-int-or-string: true
+                            securityContext:
+                              description: |-
+                                Container security context.
+                                Security context specified here will override the security context set by the operator.
+                                By default the operator sets the Tailscale container and the Tailscale init container to privileged
+                                for proxies created for Tailscale ingress and egress Service, Connector and ProxyGroup.
+                                You can reduce the permissions of the Tailscale container to cap NET_ADMIN by
+                                installing device plugin in your cluster and configuring the proxies tun device to be created
+                                by the device plugin, see  https://github.com/tailscale/tailscale/issues/10814#issuecomment-2479977752
+                                https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
+                              type: object
+                              properties:
+                                allowPrivilegeEscalation:
+                                  description: |-
+                                    AllowPrivilegeEscalation controls whether a process can gain more
+                                    privileges than its parent process. This bool directly controls if
+                                    the no_new_privs flag will be set on the container process.
+                                    AllowPrivilegeEscalation is true always when the container is:
+                                    1) run as Privileged
+                                    2) has CAP_SYS_ADMIN
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                appArmorProfile:
+                                  description: |-
+                                    appArmorProfile is the AppArmor options to use by this container. If set, this profile
+                                    overrides the pod's appArmorProfile.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: object
+                                  required:
+                                    - type
+                                  properties:
+                                    localhostProfile:
+                                      description: |-
+                                        localhostProfile indicates a profile loaded on the node that should be used.
+                                        The profile must be preconfigured on the node to work.
+                                        Must match the loaded name of the profile.
+                                        Must be set if and only if type is "Localhost".
+                                      type: string
+                                    type:
+                                      description: |-
+                                        type indicates which kind of AppArmor profile will be applied.
+                                        Valid options are:
+                                          Localhost - a profile pre-loaded on the node.
+                                          RuntimeDefault - the container runtime's default profile.
+                                          Unconfined - no AppArmor enforcement.
+                                      type: string
+                                capabilities:
+                                  description: |-
+                                    The capabilities to add/drop when running containers.
+                                    Defaults to the default set of capabilities granted by the container runtime.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: object
+                                  properties:
+                                    add:
+                                      description: Added capabilities
+                                      type: array
+                                      items:
+                                        description: Capability represent POSIX capabilities type
+                                        type: string
+                                      x-kubernetes-list-type: atomic
+                                    drop:
+                                      description: Removed capabilities
+                                      type: array
+                                      items:
+                                        description: Capability represent POSIX capabilities type
+                                        type: string
+                                      x-kubernetes-list-type: atomic
+                                privileged:
+                                  description: |-
+                                    Run container in privileged mode.
+                                    Processes in privileged containers are essentially equivalent to root on the host.
+                                    Defaults to false.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                procMount:
+                                  description: |-
+                                    procMount denotes the type of proc mount to use for the containers.
+                                    The default value is Default which uses the container runtime defaults for
+                                    readonly paths and masked paths.
+                                    This requires the ProcMountType feature flag to be enabled.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: string
+                                readOnlyRootFilesystem:
+                                  description: |-
+                                    Whether this container has a read-only root filesystem.
+                                    Default is false.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                runAsGroup:
+                                  description: |-
+                                    The GID to run the entrypoint of the container process.
+                                    Uses runtime default if unset.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: integer
+                                  format: int64
+                                runAsNonRoot:
+                                  description: |-
+                                    Indicates that the container must run as a non-root user.
+                                    If true, the Kubelet will validate the image at runtime to ensure that it
+                                    does not run as UID 0 (root) and fail to start the container if it does.
+                                    If unset or false, no such validation will be performed.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                  type: boolean
+                                runAsUser:
+                                  description: |-
+                                    The UID to run the entrypoint of the container process.
+                                    Defaults to user specified in image metadata if unspecified.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: integer
+                                  format: int64
+                                seLinuxOptions:
+                                  description: |-
+                                    The SELinux context to be applied to the container.
+                                    If unspecified, the container runtime will allocate a random SELinux context for each
+                                    container.  May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: object
+                                  properties:
+                                    level:
+                                      description: Level is SELinux level label that applies to the container.
+                                      type: string
+                                    role:
+                                      description: Role is a SELinux role label that applies to the container.
+                                      type: string
+                                    type:
+                                      description: Type is a SELinux type label that applies to the container.
+                                      type: string
+                                    user:
+                                      description: User is a SELinux user label that applies to the container.
+                                      type: string
+                                seccompProfile:
+                                  description: |-
+                                    The seccomp options to use by this container. If seccomp options are
+                                    provided at both the pod & container level, the container options
+                                    override the pod options.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: object
+                                  required:
+                                    - type
+                                  properties:
+                                    localhostProfile:
+                                      description: |-
+                                        localhostProfile indicates a profile defined in a file on the node should be used.
+                                        The profile must be preconfigured on the node to work.
+                                        Must be a descending path, relative to the kubelet's configured seccomp profile location.
+                                        Must be set if type is "Localhost". Must NOT be set for any other type.
+                                      type: string
+                                    type:
+                                      description: |-
+                                        type indicates which kind of seccomp profile will be applied.
+                                        Valid options are:
+
+                                        Localhost - a profile defined in a file on the node should be used.
+                                        RuntimeDefault - the container runtime default profile should be used.
+                                        Unconfined - no profile should be applied.
+                                      type: string
+                                windowsOptions:
+                                  description: |-
+                                    The Windows specific settings applied to all containers.
+                                    If unspecified, the options from the PodSecurityContext will be used.
+                                    If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is linux.
+                                  type: object
+                                  properties:
+                                    gmsaCredentialSpec:
+                                      description: |-
+                                        GMSACredentialSpec is where the GMSA admission webhook
+                                        (https://github.com/kubernetes-sigs/windows-gmsa) inlines the contents of the
+                                        GMSA credential spec named by the GMSACredentialSpecName field.
+                                      type: string
+                                    gmsaCredentialSpecName:
+                                      description: GMSACredentialSpecName is the name of the GMSA credential spec to use.
+                                      type: string
+                                    hostProcess:
+                                      description: |-
+                                        HostProcess determines if a container should be run as a 'Host Process' container.
+                                        All of a Pod's containers must have the same effective HostProcess value
+                                        (it is not allowed to have a mix of HostProcess containers and non-HostProcess containers).
+                                        In addition, if HostProcess is true then HostNetwork must also be set to true.
+                                      type: boolean
+                                    runAsUserName:
+                                      description: |-
+                                        The UserName in Windows to run the entrypoint of the container process.
+                                        Defaults to the user specified in image metadata if unspecified.
+                                        May also be set in PodSecurityContext. If set in both SecurityContext and
+                                        PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                      type: string
+                        tailscaleInitContainer:
+                          description: |-
+                            Configuration for the proxy init container that enables forwarding.
+                            Not valid to apply to ProxyGroups of type "kube-apiserver".
+                          type: object
+                          properties:
+                            debug:
+                              description: |-
+                                Configuration for enabling extra debug information in the container.
+                                Not recommended for production use.
+                              type: object
+                              properties:
+                                enable:
+                                  description: |-
+                                    Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9001/debug/pprof/
+                                    and internal debug metrics endpoint at <pod-ip>:9001/debug/metrics, where
+                                    9001 is a container port named "debug". The endpoints and their responses
+                                    may change in backwards incompatible ways in the future, and should not
+                                    be considered stable.
+
+                                    In 1.78.x and 1.80.x, this setting will default to the value of
+                                    .spec.metrics.enable, and requests to the "metrics" port matching the
+                                    mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,
+                                    this setting will default to false, and no requests will be proxied.
+                                  type: boolean
+                            env:
+                              description: |-
+                                List of environment variables to set in the container.
+                                https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables
+                                Note that environment variables provided here will take precedence
+                                over Tailscale-specific environment variables set by the operator,
+                                however running proxies with custom values for Tailscale environment
+                                variables (i.e TS_USERSPACE) is not recommended and might break in
+                                the future.
+                              type: array
+                              items:
+                                type: object
+                                required:
+                                  - name
+                                properties:
+                                  name:
+                                    description: Name of the environment variable. Must be a C_IDENTIFIER.
+                                    type: string
+                                    pattern: ^[-._a-zA-Z][-._a-zA-Z0-9]*$
+                                  value:
+                                    description: |-
+                                      Variable references $(VAR_NAME) are expanded using the previously defined
+                                       environment variables in the container and any service environment
+                                      variables. If a variable cannot be resolved, the reference in the input
+                                      string will be unchanged. Double $$ are reduced to a single $, which
+                                      allows for escaping the $(VAR_NAME) syntax: i.e. "$$(VAR_NAME)" will
+                                      produce the string literal "$(VAR_NAME)". Escaped references will never
+                                      be expanded, regardless of whether the variable exists or not. Defaults
+                                      to "".
+                                    type: string
+                            image:
+                              description: |-
+                                Container image name. By default images are pulled from docker.io/tailscale,
+                                but the official images are also available at ghcr.io/tailscale.
+
+                                For all uses except on ProxyGroups of type "kube-apiserver", this image must
+                                be either tailscale/tailscale, or an equivalent mirror of that image.
+                                To apply to ProxyGroups of type "kube-apiserver", this image must be
+                                tailscale/k8s-proxy or a mirror of that image.
+
+                                For "tailscale/tailscale"-based proxies, specifying image name here will
+                                override any proxy image values specified via the Kubernetes operator's
+                                Helm chart values or PROXY_IMAGE env var in the operator Deployment.
+                                For "tailscale/k8s-proxy"-based proxies, there is currently no way to
+                                configure your own default, and this field is the only way to use a
+                                custom image.
+
+                                https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
+                              type: string
+                            imagePullPolicy:
+                              description: |-
+                                Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always.
+                                https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
+                              type: string
+                              enum:
+                                - Always
+                                - Never
+                                - IfNotPresent
+                            resources:
+                              description: |-
+                                Container resource requirements.
+                                By default Tailscale Kubernetes operator does not apply any resource
+                                requirements. The amount of resources required wil depend on the
+                                amount of resources the operator needs to parse, usage patterns and
+                                cluster size.
+                                https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources
+                              type: object
+                              properties:
+                                claims:
+                                  description: |-
+                                    Claims lists the names of resources, defined in spec.resourceClaims,
+                                    that are used by this container.
+
+                                    This field depends on the
+                                    DynamicResourceAllocation feature gate.
+
+                                    This field is immutable. It can only be set for containers.
+                                  type: array
+                                  items:
+                                    description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                                    type: object
+                                    required:
+                                      - name
+                                    properties:
+                                      name:
+                                        description: |-
+                                          Name must match the name of one entry in pod.spec.resourceClaims of
+                                          the Pod where this field is used. It makes that resource available
+                                          inside a container.
+                                        type: string
+                                      request:
+                                        description: |-
+                                          Request is the name chosen for a request in the referenced claim.
+                                          If empty, everything from the claim is made available, otherwise
+                                          only the result of this request.
+                                        type: string
+                                  x-kubernetes-list-map-keys:
+                                    - name
+                                  x-kubernetes-list-type: map
+                                limits:
+                                  description: |-
+                                    Limits describes the maximum amount of compute resources allowed.
+                                    More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                  type: object
+                                  additionalProperties:
+                                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                    anyOf:
+                                      - type: integer
+                                      - type: string
+                                    x-kubernetes-int-or-string: true
+                                requests:
+                                  description: |-
+                                    Requests describes the minimum amount of compute resources required.
+                                    If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                                    otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                                    More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                  type: object
+                                  additionalProperties:
+                                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                    anyOf:
+                                      - type: integer
+                                      - type: string
+                                    x-kubernetes-int-or-string: true
+                            securityContext:
+                              description: |-
+                                Container security context.
+                                Security context specified here will override the security context set by the operator.
+                                By default the operator sets the Tailscale container and the Tailscale init container to privileged
+                                for proxies created for Tailscale ingress and egress Service, Connector and ProxyGroup.
+                                You can reduce the permissions of the Tailscale container to cap NET_ADMIN by
+                                installing device plugin in your cluster and configuring the proxies tun device to be created
+                                by the device plugin, see  https://github.com/tailscale/tailscale/issues/10814#issuecomment-2479977752
+                                https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
+                              type: object
+                              properties:
+                                allowPrivilegeEscalation:
+                                  description: |-
+                                    AllowPrivilegeEscalation controls whether a process can gain more
+                                    privileges than its parent process. This bool directly controls if
+                                    the no_new_privs flag will be set on the container process.
+                                    AllowPrivilegeEscalation is true always when the container is:
+                                    1) run as Privileged
+                                    2) has CAP_SYS_ADMIN
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                appArmorProfile:
+                                  description: |-
+                                    appArmorProfile is the AppArmor options to use by this container. If set, this profile
+                                    overrides the pod's appArmorProfile.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: object
+                                  required:
+                                    - type
+                                  properties:
+                                    localhostProfile:
+                                      description: |-
+                                        localhostProfile indicates a profile loaded on the node that should be used.
+                                        The profile must be preconfigured on the node to work.
+                                        Must match the loaded name of the profile.
+                                        Must be set if and only if type is "Localhost".
+                                      type: string
+                                    type:
+                                      description: |-
+                                        type indicates which kind of AppArmor profile will be applied.
+                                        Valid options are:
+                                          Localhost - a profile pre-loaded on the node.
+                                          RuntimeDefault - the container runtime's default profile.
+                                          Unconfined - no AppArmor enforcement.
+                                      type: string
+                                capabilities:
+                                  description: |-
+                                    The capabilities to add/drop when running containers.
+                                    Defaults to the default set of capabilities granted by the container runtime.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: object
+                                  properties:
+                                    add:
+                                      description: Added capabilities
+                                      type: array
+                                      items:
+                                        description: Capability represent POSIX capabilities type
+                                        type: string
+                                      x-kubernetes-list-type: atomic
+                                    drop:
+                                      description: Removed capabilities
+                                      type: array
+                                      items:
+                                        description: Capability represent POSIX capabilities type
+                                        type: string
+                                      x-kubernetes-list-type: atomic
+                                privileged:
+                                  description: |-
+                                    Run container in privileged mode.
+                                    Processes in privileged containers are essentially equivalent to root on the host.
+                                    Defaults to false.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                procMount:
+                                  description: |-
+                                    procMount denotes the type of proc mount to use for the containers.
+                                    The default value is Default which uses the container runtime defaults for
+                                    readonly paths and masked paths.
+                                    This requires the ProcMountType feature flag to be enabled.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: string
+                                readOnlyRootFilesystem:
+                                  description: |-
+                                    Whether this container has a read-only root filesystem.
+                                    Default is false.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                runAsGroup:
+                                  description: |-
+                                    The GID to run the entrypoint of the container process.
+                                    Uses runtime default if unset.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: integer
+                                  format: int64
+                                runAsNonRoot:
+                                  description: |-
+                                    Indicates that the container must run as a non-root user.
+                                    If true, the Kubelet will validate the image at runtime to ensure that it
+                                    does not run as UID 0 (root) and fail to start the container if it does.
+                                    If unset or false, no such validation will be performed.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                  type: boolean
+                                runAsUser:
+                                  description: |-
+                                    The UID to run the entrypoint of the container process.
+                                    Defaults to user specified in image metadata if unspecified.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: integer
+                                  format: int64
+                                seLinuxOptions:
+                                  description: |-
+                                    The SELinux context to be applied to the container.
+                                    If unspecified, the container runtime will allocate a random SELinux context for each
+                                    container.  May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: object
+                                  properties:
+                                    level:
+                                      description: Level is SELinux level label that applies to the container.
+                                      type: string
+                                    role:
+                                      description: Role is a SELinux role label that applies to the container.
+                                      type: string
+                                    type:
+                                      description: Type is a SELinux type label that applies to the container.
+                                      type: string
+                                    user:
+                                      description: User is a SELinux user label that applies to the container.
+                                      type: string
+                                seccompProfile:
+                                  description: |-
+                                    The seccomp options to use by this container. If seccomp options are
+                                    provided at both the pod & container level, the container options
+                                    override the pod options.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: object
+                                  required:
+                                    - type
+                                  properties:
+                                    localhostProfile:
+                                      description: |-
+                                        localhostProfile indicates a profile defined in a file on the node should be used.
+                                        The profile must be preconfigured on the node to work.
+                                        Must be a descending path, relative to the kubelet's configured seccomp profile location.
+                                        Must be set if type is "Localhost". Must NOT be set for any other type.
+                                      type: string
+                                    type:
+                                      description: |-
+                                        type indicates which kind of seccomp profile will be applied.
+                                        Valid options are:
+
+                                        Localhost - a profile defined in a file on the node should be used.
+                                        RuntimeDefault - the container runtime default profile should be used.
+                                        Unconfined - no profile should be applied.
+                                      type: string
+                                windowsOptions:
+                                  description: |-
+                                    The Windows specific settings applied to all containers.
+                                    If unspecified, the options from the PodSecurityContext will be used.
+                                    If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is linux.
+                                  type: object
+                                  properties:
+                                    gmsaCredentialSpec:
+                                      description: |-
+                                        GMSACredentialSpec is where the GMSA admission webhook
+                                        (https://github.com/kubernetes-sigs/windows-gmsa) inlines the contents of the
+                                        GMSA credential spec named by the GMSACredentialSpecName field.
+                                      type: string
+                                    gmsaCredentialSpecName:
+                                      description: GMSACredentialSpecName is the name of the GMSA credential spec to use.
+                                      type: string
+                                    hostProcess:
+                                      description: |-
+                                        HostProcess determines if a container should be run as a 'Host Process' container.
+                                        All of a Pod's containers must have the same effective HostProcess value
+                                        (it is not allowed to have a mix of HostProcess containers and non-HostProcess containers).
+                                        In addition, if HostProcess is true then HostNetwork must also be set to true.
+                                      type: boolean
+                                    runAsUserName:
+                                      description: |-
+                                        The UserName in Windows to run the entrypoint of the container process.
+                                        Defaults to the user specified in image metadata if unspecified.
+                                        May also be set in PodSecurityContext. If set in both SecurityContext and
+                                        PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                      type: string
+                        tolerations:
+                          description: |-
+                            Proxy Pod's tolerations.
+                            By default Tailscale Kubernetes operator does not apply any
+                            tolerations.
+                            https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
+                          type: array
+                          items:
+                            description: |-
+                              The pod this Toleration is attached to tolerates any taint that matches
+                              the triple <key,value,effect> using the matching operator <operator>.
+                            type: object
+                            properties:
+                              effect:
+                                description: |-
+                                  Effect indicates the taint effect to match. Empty means match all taint effects.
+                                  When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                                type: string
+                              key:
+                                description: |-
+                                  Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                                  If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                                type: string
+                              operator:
+                                description: |-
+                                  Operator represents a key's relationship to the value.
+                                  Valid operators are Exists and Equal. Defaults to Equal.
+                                  Exists is equivalent to wildcard for value, so that a pod can
+                                  tolerate all taints of a particular category.
+                                type: string
+                              tolerationSeconds:
+                                description: |-
+                                  TolerationSeconds represents the period of time the toleration (which must be
+                                  of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                                  it is not set, which means tolerate the taint forever (do not evict). Zero and
+                                  negative values will be treated as 0 (evict immediately) by the system.
+                                type: integer
+                                format: int64
+                              value:
+                                description: |-
+                                  Value is the taint value the toleration matches to.
+                                  If the operator is Exists, the value should be empty, otherwise just a regular string.
+                                type: string
+                        topologySpreadConstraints:
+                          description: |-
+                            Proxy Pod's topology spread constraints.
+                            By default Tailscale Kubernetes operator does not apply any topology spread constraints.
+                            https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/
+                          type: array
+                          items:
+                            description: TopologySpreadConstraint specifies how to spread matching pods among the given topology.
+                            type: object
+                            required:
+                              - maxSkew
+                              - topologyKey
+                              - whenUnsatisfiable
+                            properties:
+                              labelSelector:
+                                description: |-
+                                  LabelSelector is used to find matching pods.
+                                  Pods that match this label selector are counted to determine the number of pods
+                                  in their corresponding topology domain.
+                                type: object
+                                properties:
+                                  matchExpressions:
+                                    description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                                    type: array
+                                    items:
+                                      description: |-
+                                        A label selector requirement is a selector that contains values, a key, and an operator that
+                                        relates the key and values.
+                                      type: object
+                                      required:
+                                        - key
+                                        - operator
+                                      properties:
+                                        key:
+                                          description: key is the label key that the selector applies to.
+                                          type: string
+                                        operator:
+                                          description: |-
+                                            operator represents a key's relationship to a set of values.
+                                            Valid operators are In, NotIn, Exists and DoesNotExist.
+                                          type: string
+                                        values:
+                                          description: |-
+                                            values is an array of string values. If the operator is In or NotIn,
+                                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                            the values array must be empty. This array is replaced during a strategic
+                                            merge patch.
+                                          type: array
+                                          items:
+                                            type: string
+                                          x-kubernetes-list-type: atomic
+                                    x-kubernetes-list-type: atomic
+                                  matchLabels:
+                                    description: |-
+                                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                      map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                      operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                    type: object
+                                    additionalProperties:
+                                      type: string
+                                x-kubernetes-map-type: atomic
+                              matchLabelKeys:
+                                description: |-
+                                  MatchLabelKeys is a set of pod label keys to select the pods over which
+                                  spreading will be calculated. The keys are used to lookup values from the
+                                  incoming pod labels, those key-value labels are ANDed with labelSelector
+                                  to select the group of existing pods over which spreading will be calculated
+                                  for the incoming pod. The same key is forbidden to exist in both MatchLabelKeys and LabelSelector.
+                                  MatchLabelKeys cannot be set when LabelSelector isn't set.
+                                  Keys that don't exist in the incoming pod labels will
+                                  be ignored. A null or empty list means only match against labelSelector.
+
+                                  This is a beta field and requires the MatchLabelKeysInPodTopologySpread feature gate to be enabled (enabled by default).
+                                type: array
+                                items:
+                                  type: string
+                                x-kubernetes-list-type: atomic
+                              maxSkew:
+                                description: |-
+                                  MaxSkew describes the degree to which pods may be unevenly distributed.
+                                  When `whenUnsatisfiable=DoNotSchedule`, it is the maximum permitted difference
+                                  between the number of matching pods in the target topology and the global minimum.
+                                  The global minimum is the minimum number of matching pods in an eligible domain
+                                  or zero if the number of eligible domains is less than MinDomains.
+                                  For example, in a 3-zone cluster, MaxSkew is set to 1, and pods with the same
+                                  labelSelector spread as 2/2/1:
+                                  In this case, the global minimum is 1.
+                                  | zone1 | zone2 | zone3 |
+                                  |  P P  |  P P  |   P   |
+                                  - if MaxSkew is 1, incoming pod can only be scheduled to zone3 to become 2/2/2;
+                                  scheduling it onto zone1(zone2) would make the ActualSkew(3-1) on zone1(zone2)
+                                  violate MaxSkew(1).
+                                  - if MaxSkew is 2, incoming pod can be scheduled onto any zone.
+                                  When `whenUnsatisfiable=ScheduleAnyway`, it is used to give higher precedence
+                                  to topologies that satisfy it.
+                                  It's a required field. Default value is 1 and 0 is not allowed.
+                                type: integer
+                                format: int32
+                              minDomains:
+                                description: |-
+                                  MinDomains indicates a minimum number of eligible domains.
+                                  When the number of eligible domains with matching topology keys is less than minDomains,
+                                  Pod Topology Spread treats "global minimum" as 0, and then the calculation of Skew is performed.
+                                  And when the number of eligible domains with matching topology keys equals or greater than minDomains,
+                                  this value has no effect on scheduling.
+                                  As a result, when the number of eligible domains is less than minDomains,
+                                  scheduler won't schedule more than maxSkew Pods to those domains.
+                                  If value is nil, the constraint behaves as if MinDomains is equal to 1.
+                                  Valid values are integers greater than 0.
+                                  When value is not nil, WhenUnsatisfiable must be DoNotSchedule.
+
+                                  For example, in a 3-zone cluster, MaxSkew is set to 2, MinDomains is set to 5 and pods with the same
+                                  labelSelector spread as 2/2/2:
+                                  | zone1 | zone2 | zone3 |
+                                  |  P P  |  P P  |  P P  |
+                                  The number of domains is less than 5(MinDomains), so "global minimum" is treated as 0.
+                                  In this situation, new pod with the same labelSelector cannot be scheduled,
+                                  because computed skew will be 3(3 - 0) if new Pod is scheduled to any of the three zones,
+                                  it will violate MaxSkew.
+                                type: integer
+                                format: int32
+                              nodeAffinityPolicy:
+                                description: |-
+                                  NodeAffinityPolicy indicates how we will treat Pod's nodeAffinity/nodeSelector
+                                  when calculating pod topology spread skew. Options are:
+                                  - Honor: only nodes matching nodeAffinity/nodeSelector are included in the calculations.
+                                  - Ignore: nodeAffinity/nodeSelector are ignored. All nodes are included in the calculations.
+
+                                  If this value is nil, the behavior is equivalent to the Honor policy.
+                                type: string
+                              nodeTaintsPolicy:
+                                description: |-
+                                  NodeTaintsPolicy indicates how we will treat node taints when calculating
+                                  pod topology spread skew. Options are:
+                                  - Honor: nodes without taints, along with tainted nodes for which the incoming pod
+                                  has a toleration, are included.
+                                  - Ignore: node taints are ignored. All nodes are included.
+
+                                  If this value is nil, the behavior is equivalent to the Ignore policy.
+                                type: string
+                              topologyKey:
+                                description: |-
+                                  TopologyKey is the key of node labels. Nodes that have a label with this key
+                                  and identical values are considered to be in the same topology.
+                                  We consider each <key, value> as a "bucket", and try to put balanced number
+                                  of pods into each bucket.
+                                  We define a domain as a particular instance of a topology.
+                                  Also, we define an eligible domain as a domain whose nodes meet the requirements of
+                                  nodeAffinityPolicy and nodeTaintsPolicy.
+                                  e.g. If TopologyKey is "kubernetes.io/hostname", each Node is a domain of that topology.
+                                  And, if TopologyKey is "topology.kubernetes.io/zone", each zone is a domain of that topology.
+                                  It's a required field.
+                                type: string
+                              whenUnsatisfiable:
+                                description: |-
+                                  WhenUnsatisfiable indicates how to deal with a pod if it doesn't satisfy
+                                  the spread constraint.
+                                  - DoNotSchedule (default) tells the scheduler not to schedule it.
+                                  - ScheduleAnyway tells the scheduler to schedule the pod in any location,
+                                    but giving higher precedence to topologies that would help reduce the
+                                    skew.
+                                  A constraint is considered "Unsatisfiable" for an incoming pod
+                                  if and only if every possible node assignment for that pod would violate
+                                  "MaxSkew" on some topology.
+                                  For example, in a 3-zone cluster, MaxSkew is set to 1, and pods with the same
+                                  labelSelector spread as 3/1/1:
+                                  | zone1 | zone2 | zone3 |
+                                  | P P P |   P   |   P   |
+                                  If WhenUnsatisfiable is set to DoNotSchedule, incoming pod can only be scheduled
+                                  to zone2(zone3) to become 3/2/1(3/1/2) as ActualSkew(2-1) on zone2(zone3) satisfies
+                                  MaxSkew(1). In other words, the cluster can still be imbalanced, but scheduler
+                                  won't make it *more* imbalanced.
+                                  It's a required field.
+                                type: string
+                staticEndpoints:
+                  description: |-
+                    Configuration for 'static endpoints' on proxies in order to facilitate
+                    direct connections from other devices on the tailnet.
+                    See https://tailscale.com/kb/1445/kubernetes-operator-customization#static-endpoints.
+                  type: object
+                  required:
+                    - nodePort
+                  properties:
+                    nodePort:
+                      description: The configuration for static endpoints using NodePort Services.
+                      type: object
+                      required:
+                        - ports
+                      properties:
+                        ports:
+                          description: |-
+                            The port ranges from which the operator will select NodePorts for the Services.
+                            You must ensure that firewall rules allow UDP ingress traffic for these ports
+                            to the node's external IPs.
+                            The ports must be in the range of service node ports for the cluster (default `30000-32767`).
+                            See https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport.
+                          type: array
+                          minItems: 1
+                          items:
+                            type: object
+                            required:
+                              - port
+                            properties:
+                              endPort:
+                                description: |-
+                                  endPort indicates that the range of ports from port to endPort if set, inclusive,
+                                  should be used. This field cannot be defined if the port field is not defined.
+                                  The endPort must be either unset, or equal or greater than port.
+                                type: integer
+                              port:
+                                description: port represents a port selected to be used. This is a required field.
+                                type: integer
+                        selector:
+                          description: |-
+                            A selector which will be used to select the node's that will have their `ExternalIP`'s advertised
+                            by the ProxyGroup as Static Endpoints.
+                          type: object
+                          additionalProperties:
+                            type: string
+                tailscale:
+                  description: |-
+                    TailscaleConfig contains options to configure the tailscale-specific
+                    parameters of proxies.
+                  type: object
+                  properties:
+                    acceptRoutes:
+                      description: |-
+                        AcceptRoutes can be set to true to make the proxy instance accept
+                        routes advertized by other nodes on the tailnet, such as subnet
+                        routes.
+                        This is equivalent of passing --accept-routes flag to a tailscale Linux client.
+                        https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-devices
+                        Defaults to false.
+                      type: boolean
+                useLetsEncryptStagingEnvironment:
+                  description: |-
+                    Set UseLetsEncryptStagingEnvironment to true to issue TLS
+                    certificates for any HTTPS endpoints exposed to the tailnet from
+                    LetsEncrypt's staging environment.
+                    https://letsencrypt.org/docs/staging-environment/
+                    This setting only affects Tailscale Ingress resources.
+                    By default Ingress TLS certificates are issued from LetsEncrypt's
+                    production environment.
+                    Changing this setting true -> false, will result in any
+                    existing certs being re-issued from the production environment.
+                    Changing this setting false (default) -> true, when certs have already
+                    been provisioned from production environment will NOT result in certs
+                    being re-issued from the staging environment before they need to be
+                    renewed.
+                  type: boolean
+            status:
+              description: |-
+                Status of the ProxyClass. This is set and managed automatically.
+                https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+              type: object
+              properties:
+                conditions:
+                  description: |-
+                    List of status conditions to indicate the status of the ProxyClass.
+                    Known condition types are `ProxyClassReady`.
+                  type: array
+                  items:
+                    description: Condition contains details for one aspect of the current state of this API Resource.
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        description: |-
+                          lastTransitionTime is the last time the condition transitioned from one status to another.
+                          This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                        type: string
+                        format: date-time
+                      message:
+                        description: |-
+                          message is a human readable message indicating details about the transition.
+                          This may be an empty string.
+                        type: string
+                        maxLength: 32768
+                      observedGeneration:
+                        description: |-
+                          observedGeneration represents the .metadata.generation that the condition was set based upon.
+                          For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                          with respect to the current state of the instance.
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      reason:
+                        description: |-
+                          reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                          Producers of specific condition types may define expected values and meanings for this field,
+                          and whether the values are considered a guaranteed API.
+                          The value should be a CamelCase string.
+                          This field may not be empty.
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      status:
+                        description: status of the condition, one of True, False, Unknown.
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      type:
+                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                        type: string
+                        maxLength: 316
+                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                  x-kubernetes-list-map-keys:
+                    - type
+                  x-kubernetes-list-type: map
+      served: true
+      storage: true
+      subresources:
+        status: {}

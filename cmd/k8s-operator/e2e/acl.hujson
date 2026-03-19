@@ -1,0 +1,33 @@
+// To run the e2e tests against a tailnet, ensure its access controls are a
+// superset of the following:
+{
+	"tagOwners": {
+		"tag:k8s-operator": [],
+		"tag:k8s":          ["tag:k8s-operator"],
+		"tag:k8s-recorder": ["tag:k8s-operator"],
+	},
+	"autoApprovers": {
+		// Could be relaxed if we coordinated with the cluster config, but this
+		// wide subnet maximises compatibility for most clusters.
+		"routes": {
+			"10.0.0.0/8": ["tag:k8s"],
+		},
+		"services": {
+			"tag:k8s": ["tag:k8s"],
+		},
+	},
+	"grants": [
+		{
+			"src": ["tag:k8s"],
+			"dst": ["tag:k8s", "tag:k8s-operator"],
+			"ip":  ["tcp:80", "tcp:443"],
+			"app": {
+				"tailscale.com/cap/kubernetes": [{
+					"impersonate": {
+						"groups": ["ts:e2e-test-proxy"],
+					},
+				}],
+			},
+		},
+	],
+}

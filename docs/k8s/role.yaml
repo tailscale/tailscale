@@ -1,0 +1,18 @@
+# Copyright (c) Tailscale Inc & contributors
+# SPDX-License-Identifier: BSD-3-Clause
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tailscale
+rules:
+- apiGroups: [""] # "" indicates the core API group
+  resources: ["secrets"]
+  # Create can not be restricted to a resource name.
+  verbs: ["create"]
+- apiGroups: [""] # "" indicates the core API group
+  resourceNames: ["{{TS_KUBE_SECRET}}"]
+  resources: ["secrets"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: [""] # "" indicates the core API group
+  resources: ["events"]
+  verbs: ["get", "create", "patch"]

@@ -1,0 +1,38 @@
+# Copyright (c) Tailscale Inc & contributors
+# SPDX-License-Identifier: BSD-3-Clause
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  serviceAccountName: "{{SA_NAME}}"
+  containers:
+  - name: nginx
+    image: nginx
+  - name: ts-sidecar
+    imagePullPolicy: Always
+    image: "ghcr.io/tailscale/tailscale:latest"
+    env:
+      # Store the state in a k8s secret
+    - name: TS_KUBE_SECRET
+      value: "{{TS_KUBE_SECRET}}"
+    - name: TS_USERSPACE
+      value: "false"
+    - name: TS_DEBUG_FIREWALL_MODE
+      value: auto
+    - name: TS_AUTHKEY
+      valueFrom:
+        secretKeyRef:
+          name: tailscale-auth
+          key: TS_AUTHKEY
+          optional: true
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.name
+    - name: POD_UID
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.uid
+    securityContext:
+      privileged: true

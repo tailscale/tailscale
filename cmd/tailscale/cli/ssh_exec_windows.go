@@ -1,0 +1,36 @@
+// Copyright (c) Tailscale Inc & contributors
+// SPDX-License-Identifier: BSD-3-Clause
+
+package cli
+
+import (
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+)
+
+func findSSH() (string, error) {
+	// use C:\Windows\System32\OpenSSH\ssh.exe since unexpected behavior
+	// occurred with ssh.exe provided by msys2/cygwin and other environments.
+	if systemRoot := os.Getenv("SystemRoot"); systemRoot != "" {
+		exe := filepath.Join(systemRoot, "System32", "OpenSSH", "ssh.exe")
+		if st, err := os.Stat(exe); err == nil && !st.IsDir() {
+			return exe, nil
+		}
+	}
+	return exec.LookPath("ssh")
+}
+
+func execSSH(ssh string, argv []string) error {
+	// Don't use syscall.Exec on Windows, it's not fully implemented.
+	cmd := exec.Command(ssh, argv[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+	if ee, ok := errors.AsType[*exec.ExitError](err); ok {
+		os.Exit(ee.ExitCode())
+	}
+	return err
+}

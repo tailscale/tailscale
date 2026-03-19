@@ -1,0 +1,143 @@
+name: test installer.sh
+
+on:
+  schedule:
+    - cron: '0 15 * * *' # 10am EST (UTC-4/5)
+  push:
+    branches:
+      - "main"
+    paths:
+      - scripts/installer.sh
+      - .github/workflows/installer.yml
+  pull_request:
+    paths:
+      - scripts/installer.sh
+      - .github/workflows/installer.yml
+
+jobs:
+  test:
+    strategy:
+      # Don't abort the entire matrix if one element fails.
+      fail-fast: false
+      # Don't start all of these at once, which could saturate Github workers.
+      max-parallel: 4
+      matrix:
+        image:
+          # This is a list of Docker images against which we test our installer.
+          # If you find that some of these no longer exist, please feel free
+          # to remove them from the list.
+          # When adding new images, please only use official ones.
+          - "debian:oldstable-slim"
+          - "debian:stable-slim"
+          - "debian:testing-slim"
+          - "debian:sid-slim"
+          - "ubuntu:20.04"
+          - "ubuntu:22.04"
+          - "ubuntu:24.04"
+          - "elementary/docker:stable"
+          - "elementary/docker:unstable"
+          - "parrotsec/core:latest"
+          - "kalilinux/kali-rolling"
+          - "kalilinux/kali-dev"
+          - "oraclelinux:9"
+          - "oraclelinux:8"
+          - "fedora:latest"
+          - "rockylinux:8.7"
+          - "rockylinux:9"
+          - "amazonlinux:latest"
+          - "opensuse/leap:latest"
+          - "opensuse/tumbleweed:latest"
+          - "archlinux:latest"
+          - "alpine:3.21"
+          - "alpine:latest"
+          - "alpine:edge"
+        deps:
+          # Run all images installing curl as a dependency.
+          - curl
+        include:
+          # Check a few images with wget rather than curl.
+          - { image: "debian:oldstable-slim", deps: "wget" }
+          - { image: "debian:sid-slim", deps: "wget" }
+          - { image: "debian:stable-slim", deps: "curl" }
+          - { image: "ubuntu:24.04", deps: "curl" }
+          - { image: "fedora:latest", deps: "curl" }
+          # Test TAILSCALE_VERSION pinning on a subset of distros.
+          # Skip Alpine as community repos don't reliably keep old versions.
+          - { image: "debian:stable-slim", deps: "curl", version: "1.80.0" }
+          - { image: "ubuntu:24.04", deps: "curl", version: "1.80.0" }
+          - { image: "fedora:latest", deps: "curl", version: "1.80.0" }
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.image }}
+      options: --user root
+    steps:
+    - name: install dependencies (pacman)
+      # Refresh the package databases to ensure that the tailscale package is
+      # defined.
+      run: pacman -Sy
+      if: contains(matrix.image, 'archlinux')
+    - name: install dependencies (yum)
+      # tar and gzip are needed by the actions/checkout below.
+      run: yum install -y --allowerasing tar gzip ${{ matrix.deps }}
+      if: |
+        contains(matrix.image, 'centos') ||
+        contains(matrix.image, 'oraclelinux') ||
+        contains(matrix.image, 'fedora') ||
+        contains(matrix.image, 'amazonlinux')
+    - name: install dependencies (zypper)
+      # tar and gzip are needed by the actions/checkout below.
+      run: zypper --non-interactive install tar gzip ${{ matrix.deps }}
+      if: contains(matrix.image, 'opensuse')
+    - name: install dependencies (apt-get)
+      run: |
+        apt-get update
+        apt-get install -y ${{ matrix.deps }}
+      if: |
+        contains(matrix.image, 'debian') ||
+        contains(matrix.image, 'ubuntu') ||
+        contains(matrix.image, 'elementary') ||
+        contains(matrix.image, 'parrotsec') ||
+        contains(matrix.image, 'kalilinux')
+    - name: checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - name: run installer
+      run: scripts/installer.sh
+      env:
+        TAILSCALE_VERSION: ${{ matrix.version }}
+      # Package installation can fail in docker because systemd is not running
+      # as PID 1, so ignore errors at this step. The real check is the
+      # `tailscale --version` command below.
+      continue-on-error: true
+    - name: check tailscale version
+      run: |
+        tailscale --version
+        if [ -n "${{ matrix.version }}" ]; then
+          tailscale --version | grep -q "^${{ matrix.version }}" || { echo "Version mismatch!"; exit 1; }
+        fi
+  notify-slack:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack of failure on scheduled runs
+        if: failure() && github.event_name == 'schedule'
+        uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2.1.1
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "attachments": [{
+                "title": "Tailscale installer test failed",
+                "title_link": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+                "text": "One or more OSes in the test matrix failed. See the run for details.",
+                "fields": [
+                  {
+                    "title": "Ref",
+                    "value": "${{ github.ref_name }}",
+                    "short": true
+                  }
+                ],
+                "footer": "${{ github.workflow }} on schedule",
+                "color": "danger"
+              }]
+            }

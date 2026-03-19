@@ -1,0 +1,110 @@
+# Copyright (c) Tailscale Inc & contributors
+# SPDX-License-Identifier: BSD-3-Clause
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: operator
+  namespace: {{ .Release.Namespace }}
+  {{- with .Values.operatorConfig.serviceAccountAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tailscale-operator
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["events", "services", "services/status"]
+  verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses", "ingresses/status"]
+  verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingressclasses"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["tailscale.com"]
+  resources: ["connectors", "connectors/status", "proxyclasses", "proxyclasses/status", "proxygroups", "proxygroups/status"]
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: ["tailscale.com"]
+  resources: ["dnsconfigs", "dnsconfigs/status"]
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: ["tailscale.com"]
+  resources: ["tailnets", "tailnets/status"]
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: ["tailscale.com"]
+  resources: ["proxygrouppolicies", "proxygrouppolicies/status"]
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: ["tailscale.com"]
+  resources: ["recorders", "recorders/status"]
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: ["customresourcedefinitions"]
+  verbs: ["get", "list", "watch"]
+  resourceNames: ["servicemonitors.monitoring.coreos.com"]
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
+  verbs: ["list", "create", "delete", "update", "get", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tailscale-operator
+subjects:
+- kind: ServiceAccount
+  name: operator
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: tailscale-operator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: operator
+  namespace: {{ .Release.Namespace }}
+rules:
+- apiGroups: [""]
+  resources: ["secrets", "serviceaccounts", "configmaps"]
+  verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get","list","watch", "update"]
+- apiGroups: [""]
+  resources: ["pods/status"]
+  verbs: ["update"]
+- apiGroups: ["apps"]
+  resources: ["statefulsets", "deployments"]
+  verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
+  verbs: ["get", "list", "watch", "create", "update", "deletecollection"]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles", "rolebindings"]
+  verbs: ["get", "create", "patch", "update", "list", "watch", "deletecollection"]
+- apiGroups: ["monitoring.coreos.com"]
+  resources: ["servicemonitors"]
+  verbs: ["get", "list", "update", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: operator
+  namespace: {{ .Release.Namespace }}
+subjects:
+- kind: ServiceAccount
+  name: operator
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: operator
+  apiGroup: rbac.authorization.k8s.io

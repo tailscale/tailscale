@@ -1,0 +1,4 @@
+nga.sock
+*.deb
+*.rpm
+tailscale.nginx-auth

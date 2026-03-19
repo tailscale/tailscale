@@ -1,0 +1,7 @@
+#!/bin/sh
+#
+# This script acts like the "go" command, but uses Tailscale's
+# currently-desired version from https://github.com/tailscale/go,
+# downloading it first if necessary.
+
+exec "$(dirname "$0")/../tool/gocross/gocross-wrapper.sh" "$@"
