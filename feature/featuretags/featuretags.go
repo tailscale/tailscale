@@ -269,6 +269,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"tailnetlock": {Sym: "TailnetLock", Desc: "Tailnet Lock support"},
 	"tap":         {Sym: "Tap", Desc: "Experimental Layer 2 (ethernet) support"},
 	"tpm":         {Sym: "TPM", Desc: "TPM support"},
+	"tundevstats": {Sym: "TUNDevStats", Desc: "Poll TUN device statistics (Linux only)"},
 	"unixsocketidentity": {
 		Sym:  "UnixSocketIdentity",
 		Desc: "differentiate between users accessing the LocalAPI over unix sockets (if omitted, all users have full access)",
