@@ -346,6 +346,11 @@ main() {
 				echo "https://kde.org/linux/docs/more-software/#tailscale"
 				exit 1
 				;;
+			solus)
+				OS="$ID"
+				VERSION="" # rolling release
+				PACKAGETYPE="eopkg"
+				;;
 
 			# TODO: wsl?
 			# TODO: synology? qnap?
@@ -435,6 +440,9 @@ main() {
 			# Rolling release, no version checking needed.
 			;;
 		gentoo)
+			# Rolling release, no version checking needed.
+			;;
+		solus)
 			# Rolling release, no version checking needed.
 			;;
 		freebsd)
@@ -706,6 +714,13 @@ main() {
 			else
 				$SUDO emerge --ask=n net-vpn/tailscale
 			fi
+			set +x
+			;;
+		eopkg)
+			set -x
+			$SUDO eopkg install tailscale
+			# tailscaled enabled by default when installed
+			$SUDO systemctl start tailscaled
 			set +x
 			;;
 		appstore)
