@@ -618,10 +618,15 @@ func (s *Server) start() (reterr error) {
 			// directory and hostname when they're not supplied. But we can fall
 			// back to "tsnet" as well.
 			exe = "tsnet"
-		case "ios":
+		case "ios", "darwin":
 			// When compiled as a framework (via TailscaleKit in libtailscale),
-			// os.Executable() returns an error, so fall back to "tsnet" there
-			// too.
+			// os.Executable() returns an error on iOS. The same failure occurs
+			// on macOS (darwin) when the framework is loaded in a process
+			// launched by a debugger or certain host environments (e.g. Xcode),
+			// where the OS does not expose a resolvable executable path to the
+			// embedded Go runtime. Fall back to "tsnet" in both cases — the
+			// value is only used as a default hostname/directory when neither
+			// Server.Hostname nor Server.Dir is set.
 			exe = "tsnet"
 		default:
 			return err
