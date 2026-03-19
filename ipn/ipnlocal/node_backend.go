@@ -103,6 +103,10 @@ type nodeBackend struct {
 	// nodeByAddr maps nodes' own addresses (excluding subnet routes) to node IDs.
 	// It is mutated in place (with mu held) and must not escape the [nodeBackend].
 	nodeByAddr map[netip.Addr]tailcfg.NodeID
+
+	// nodeByKey is an index of node public key to node ID for fast lookups.
+	// It is mutated in place (with mu held) and must not escape the [nodeBackend].
+	nodeByKey map[key.NodePublic]tailcfg.NodeID
 }
 
 func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *nodeBackend {
@@ -192,19 +196,8 @@ func (nb *nodeBackend) NodeByAddr(ip netip.Addr) (_ tailcfg.NodeID, ok bool) {
 func (nb *nodeBackend) NodeByKey(k key.NodePublic) (_ tailcfg.NodeID, ok bool) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	if nb.netMap == nil {
-		return 0, false
-	}
-	if self := nb.netMap.SelfNode; self.Valid() && self.Key() == k {
-		return self.ID(), true
-	}
-	// TODO(bradfitz,nickkhyl): add nodeByKey like nodeByAddr instead of walking peers.
-	for _, n := range nb.peers {
-		if n.Key() == k {
-			return n.ID(), true
-		}
-	}
-	return 0, false
+	nid, ok := nb.nodeByKey[k]
+	return nid, ok
 }
 
 func (nb *nodeBackend) NodeByID(id tailcfg.NodeID) (_ tailcfg.NodeView, ok bool) {
@@ -426,6 +419,7 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) {
 	defer nb.mu.Unlock()
 	nb.netMap = nm
 	nb.updateNodeByAddrLocked()
+	nb.updateNodeByKeyLocked()
 	nb.updatePeersLocked()
 	if nm != nil {
 		nb.derpMapViewPub.Publish(nm.DERPMap.View())
@@ -466,6 +460,37 @@ func (nb *nodeBackend) updateNodeByAddrLocked() {
 	for k, v := range nb.nodeByAddr {
 		if v == 0 {
 			delete(nb.nodeByAddr, k)
+		}
+	}
+}
+
+func (nb *nodeBackend) updateNodeByKeyLocked() {
+	nm := nb.netMap
+	if nm == nil {
+		nb.nodeByKey = nil
+		return
+	}
+
+	if nb.nodeByKey == nil {
+		nb.nodeByKey = map[key.NodePublic]tailcfg.NodeID{}
+	}
+	// First pass, mark everything unwanted.
+	for k := range nb.nodeByKey {
+		nb.nodeByKey[k] = 0
+	}
+	addNode := func(n tailcfg.NodeView) {
+		nb.nodeByKey[n.Key()] = n.ID()
+	}
+	if nm.SelfNode.Valid() {
+		addNode(nm.SelfNode)
+	}
+	for _, p := range nm.Peers {
+		addNode(p)
+	}
+	// Third pass, actually delete the unwanted items.
+	for k, v := range nb.nodeByKey {
+		if v == 0 {
+			delete(nb.nodeByKey, k)
 		}
 	}
 }

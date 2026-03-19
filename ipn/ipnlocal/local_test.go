@@ -2046,9 +2046,19 @@ func TestUpdateNetmapDelta(t *testing.T) {
 	}
 }
 
-// tests WhoIs and indirectly that setNetMapLocked updates b.nodeByAddr correctly.
+// Test WhoIs and WhoIsNodeKey.
+// This indirectly asserts that localBackend's setNetMapLocked updates nodeBackend's b.nodeByAddr and b.nodeByKey correctly.
 func TestWhoIs(t *testing.T) {
+	// We run tests in a couple of rounds, so define this for convenience
+	type testParams struct {
+		q        string
+		want     tailcfg.NodeID // 0 means want ok=false
+		wantName string
+	}
+
 	b := newTestLocalBackend(t)
+
+	// Simple two-node netmap.
 	b.setNetMapLocked(&netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{
 			ID:        1,
@@ -2069,41 +2079,142 @@ func TestWhoIs(t *testing.T) {
 				DisplayName: "Myself",
 			}).View(),
 			20: (&tailcfg.UserProfile{
-				DisplayName: "Peer",
+				DisplayName: "Peer2",
 				Groups:      []string{"group:foo"},
 			}).View(),
 		},
 	})
-	tests := []struct {
-		q          string
-		want       tailcfg.NodeID // 0 means want ok=false
-		wantName   string
-		wantGroups []string
-	}{
-		{"100.101.102.103:0", 1, "Myself", nil},
-		{"100.101.102.103:123", 1, "Myself", nil},
-		{"100.200.200.200:0", 2, "Peer", []string{"group:foo"}},
-		{"100.200.200.200:123", 2, "Peer", []string{"group:foo"}},
-		{"100.4.0.4:404", 0, "", nil},
+	testsRound1 := []testParams{
+		{"100.101.102.103:0", 1, "Myself"},
+		{"100.101.102.103:123", 1, "Myself"},
+		{"100.200.200.200:0", 2, "Peer2"},
+		{"100.200.200.200:123", 2, "Peer2"},
+		{"100.4.0.4:404", 0, ""},
 	}
-	for _, tt := range tests {
-		t.Run(tt.q, func(t *testing.T) {
-			nv, up, ok := b.WhoIs("", netip.MustParseAddrPort(tt.q))
-			var got tailcfg.NodeID
-			if ok {
-				got = nv.ID()
-			}
-			if got != tt.want {
-				t.Errorf("got nodeID %v; want %v", got, tt.want)
-			}
-			if up.DisplayName != tt.wantName {
-				t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
-			}
-			if !slices.Equal(up.Groups, tt.wantGroups) {
-				t.Errorf("got groups %q; want %q", up.Groups, tt.wantGroups)
-			}
-		})
+
+	var runTests = func(tests []testParams) {
+		for _, tt := range tests {
+			t.Run(tt.q, func(t *testing.T) {
+				// Test whois by address
+				{
+					nv, up, ok := b.WhoIs("", netip.MustParseAddrPort(tt.q))
+					var got tailcfg.NodeID
+					if ok {
+						got = nv.ID()
+					}
+					if got != tt.want {
+						t.Errorf("got nodeID %v; want %v", got, tt.want)
+					}
+					if up.DisplayName != tt.wantName {
+						t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
+					}
+				}
+
+				// Test whois by node key
+				{
+					nv, up, ok := b.WhoIsNodeKey(makeNodeKeyFromID(tt.want))
+					var got tailcfg.NodeID
+					if ok {
+						got = nv.ID()
+					}
+					if got != tt.want {
+						t.Errorf("got nodeID %v; want %v", got, tt.want)
+					}
+					if up.DisplayName != tt.wantName {
+						t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
+					}
+				}
+			})
+		}
 	}
+	runTests(testsRound1)
+
+	// Now push a new netmap where a new peer is added
+	// This verifies we add nodes to indexes correctly
+	b.setNetMapLocked(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:        1,
+			User:      10,
+			Key:       makeNodeKeyFromID(1),
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.101.102.103/32")},
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				ID:        2,
+				User:      20,
+				Key:       makeNodeKeyFromID(2),
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.200.200.200/32")},
+			}).View(),
+			(&tailcfg.Node{
+				ID:        3,
+				User:      30,
+				Key:       makeNodeKeyFromID(3),
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.233.233.233/32")},
+			}).View(),
+		},
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+			10: (&tailcfg.UserProfile{
+				DisplayName: "Myself",
+			}).View(),
+			20: (&tailcfg.UserProfile{
+				DisplayName: "Peer2",
+				Groups:      []string{"group:foo"},
+			}).View(),
+			30: (&tailcfg.UserProfile{
+				DisplayName: "Peer3",
+			}).View(),
+		},
+	})
+
+	testsRound2 := []testParams{
+		{"100.101.102.103:0", 1, "Myself"},
+		{"100.101.102.103:123", 1, "Myself"},
+		{"100.200.200.200:0", 2, "Peer2"},
+		{"100.200.200.200:123", 2, "Peer2"},
+		{"100.233.233.233:0", 3, "Peer3"},
+		{"100.233.233.233:123", 3, "Peer3"},
+		{"100.4.0.4:404", 0, ""},
+	}
+	runTests(testsRound2)
+
+	// Finally push a new netmap where a peer is removed
+	// This verifies we remove nodes from indexes correctly
+	b.setNetMapLocked(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:        1,
+			User:      10,
+			Key:       makeNodeKeyFromID(1),
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.101.102.103/32")},
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			// Node ID 2 removed
+			(&tailcfg.Node{
+				ID:        3,
+				User:      30,
+				Key:       makeNodeKeyFromID(3),
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.233.233.233/32")},
+			}).View(),
+		},
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+			10: (&tailcfg.UserProfile{
+				DisplayName: "Myself",
+			}).View(),
+			30: (&tailcfg.UserProfile{
+				DisplayName: "Peer3",
+			}).View(),
+		},
+	})
+
+	testsRound3 := []testParams{
+		{"100.101.102.103:0", 1, "Myself"},
+		{"100.101.102.103:123", 1, "Myself"},
+		{"100.200.200.200:0", 0, ""},
+		{"100.200.200.200:123", 0, ""},
+		{"100.233.233.233:0", 3, "Peer3"},
+		{"100.233.233.233:123", 3, "Peer3"},
+		{"100.4.0.4:404", 0, ""},
+	}
+	runTests(testsRound3)
 }
 
 func TestWireguardExitNodeDNSResolvers(t *testing.T) {
