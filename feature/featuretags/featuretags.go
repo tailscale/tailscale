@@ -266,9 +266,10 @@ var Features = map[FeatureTag]FeatureMeta{
 			"peerapiclient", "peerapiserver", // assume Taildrop is both sides for now
 		},
 	},
-	"tailnetlock": {Sym: "TailnetLock", Desc: "Tailnet Lock support"},
-	"tap":         {Sym: "Tap", Desc: "Experimental Layer 2 (ethernet) support"},
-	"tpm":         {Sym: "TPM", Desc: "TPM support"},
+	"tailnetlock":  {Sym: "TailnetLock", Desc: "Tailnet Lock support"},
+	"tap":          {Sym: "Tap", Desc: "Experimental Layer 2 (ethernet) support"},
+	"tpm":          {Sym: "TPM", Desc: "TPM support"},
+	"tunlinkstats": {Sym: "TUNLinkStats", Desc: "Poll extended TUN link statistics (Linux only)"},
 	"unixsocketidentity": {
 		Sym:  "UnixSocketIdentity",
 		Desc: "differentiate between users accessing the LocalAPI over unix sockets (if omitted, all users have full access)",

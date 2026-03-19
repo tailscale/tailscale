@@ -31,6 +31,9 @@ var HookSetLinkAttrs feature.Hook[func(tun.Device) error]
 // modprobeTunHook is a Linux-specific hook to run "/sbin/modprobe tun".
 var modprobeTunHook feature.Hook[func() error]
 
+// HookPollTUNLinkStats is the hook maybe set by feature/tunlinkstats.
+var HookPollTUNLinkStats feature.Hook[func(ifName string)]
+
 // New returns a tun.Device for the requested device name, along with
 // the OS-dependent name that was allocated to the device.
 func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
@@ -93,6 +96,11 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 	if err != nil {
 		dev.Close()
 		return nil, "", err
+	}
+	if buildfeatures.HasTUNLinkStats {
+		if f, ok := HookPollTUNLinkStats.GetOk(); ok {
+			f(name)
+		}
 	}
 	return dev, name, nil
 }
