@@ -4254,12 +4254,13 @@ func (b *LocalBackend) checkAutoUpdatePrefsLocked(p *ipn.Prefs) error {
 // checkAdvertiseRoutes validates that all advertised routes have
 // properly masked prefixes (no non-address bits set).
 func checkAdvertiseRoutes(p *ipn.Prefs) error {
+	var errs []error
 	for _, route := range p.AdvertiseRoutes {
 		if route != route.Masked() {
-			return fmt.Errorf("route %s has non-address bits set; expected %s", route, route.Masked())
+			errs = append(errs, fmt.Errorf("route %s has non-address bits set; expected %s", route, route.Masked()))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // SetUseExitNodeEnabled turns on or off the most recently selected exit node.

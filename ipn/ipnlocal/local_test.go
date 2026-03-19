@@ -7618,9 +7618,6 @@ func TestAdvertiseRoute_InvalidPrefix(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Errorf("AdvertiseRoute() error = %v, wantErr %v", err, tt.wantErr)
 			}
-			if err != nil {
-				t.Logf("Expected error: %v", err)
-			}
 		})
 	}
 }
@@ -7671,9 +7668,6 @@ func TestEditPrefs_InvalidAdvertiseRoutes(t *testing.T) {
 			_, err := b.EditPrefs(mp)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("EditPrefs() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if err != nil {
-				t.Logf("Expected error: %v", err)
 			}
 		})
 	}
