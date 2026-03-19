@@ -297,9 +297,9 @@ func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, ctipr Conne
 	return resp
 }
 
-func (s *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr, peerV6 netip.Addr, tipr TransitIPRequest) TransitIPResponse {
+func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr, peerV6 netip.Addr, tipr TransitIPRequest) TransitIPResponse {
 	if tipr.TransitIP.Is4() != tipr.DestinationIP.Is4() {
-		s.logf("[Unexpected] peer attempt to map a transit IP to dest IP did not have matching families: node: %s, tIPv4: %v dIPv4: %v",
+		c.logf("[Unexpected] peer attempt to map a transit IP to dest IP did not have matching families: node: %s, tIPv4: %v dIPv4: %v",
 			n.StableID(), tipr.TransitIP.Is4(), tipr.DestinationIP.Is4())
 		return TransitIPResponse{Code: AddrFamilyMismatch, Message: addrFamilyMismatchMessage}
 	}
@@ -315,26 +315,26 @@ func (s *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 
 	// If we couldn't find a matching family, return an error.
 	if !peerAddr.IsValid() {
-		s.logf("[Unexpected] peer attempt to map a transit IP did not have a matching address family: node: %s, IPv4: %v",
+		c.logf("[Unexpected] peer attempt to map a transit IP did not have a matching address family: node: %s, IPv4: %v",
 			n.StableID(), tipr.TransitIP.Is4())
 		return TransitIPResponse{NoMatchingPeerIPFamily, noMatchingPeerIPFamilyMessage}
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.config.appsByName[tipr.App]; !ok {
-		s.logf("[Unexpected] peer attempt to map a transit IP referenced unknown app: node: %s, app: %q",
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.config.appsByName[tipr.App]; !ok {
+		c.logf("[Unexpected] peer attempt to map a transit IP referenced unknown app: node: %s, app: %q",
 			n.StableID(), tipr.App)
 		return TransitIPResponse{Code: UnknownAppName, Message: unknownAppNameMessage}
 	}
 
-	if s.transitIPs == nil {
-		s.transitIPs = make(map[netip.Addr]map[netip.Addr]appAddr)
+	if c.transitIPs == nil {
+		c.transitIPs = make(map[netip.Addr]map[netip.Addr]appAddr)
 	}
-	peerMap, ok := s.transitIPs[peerAddr]
+	peerMap, ok := c.transitIPs[peerAddr]
 	if !ok {
 		peerMap = make(map[netip.Addr]appAddr)
-		s.transitIPs[peerAddr] = peerMap
+		c.transitIPs[peerAddr] = peerMap
 	}
 	peerMap[tipr.TransitIP] = appAddr{addr: tipr.DestinationIP, app: tipr.App}
 	return TransitIPResponse{}
@@ -869,10 +869,10 @@ func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appA
 	return v, ok
 }
 
-func (s *connector) reconfig(newCfg config) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.config = newCfg
+func (c *connector) reconfig(newCfg config) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.config = newCfg
 	return nil
 }
 
