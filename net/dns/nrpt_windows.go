@@ -318,7 +318,7 @@ func (db *nrptRuleDatabase) writeNRPTRule(ruleID string, servers, doms []string)
 		}
 		defer key.Close()
 
-		if err := writeNRPTValues(key, strings.Join(servers, "; "), doms); err != nil {
+		if err := writeNRPTValues(key, strings.Join(servers, ";"), doms); err != nil {
 			return err
 		}
 	}
