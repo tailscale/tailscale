@@ -2047,10 +2047,11 @@ func TestUpdateNetmapDelta(t *testing.T) {
 }
 
 type whoIsTestParams struct {
-	testName string
-	q        string
-	want     tailcfg.NodeID // 0 means want ok=false
-	wantName string
+	testName   string
+	q          string
+	want       tailcfg.NodeID // 0 means want ok=false
+	wantName   string
+	wantGroups []string
 }
 
 func expectWhois(t *testing.T, tests []whoIsTestParams, b *LocalBackend) {
@@ -2068,6 +2069,9 @@ func expectWhois(t *testing.T, tests []whoIsTestParams, b *LocalBackend) {
 			if up.DisplayName != tt.wantName {
 				t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
 			}
+			if !slices.Equal(up.Groups, tt.wantGroups) {
+				t.Errorf("got groups %q; want %q", up.Groups, tt.wantGroups)
+			}
 		})
 		t.Run("ByNodeKey/"+tt.testName, func(t *testing.T) {
 			t.Helper()
@@ -2081,6 +2085,9 @@ func expectWhois(t *testing.T, tests []whoIsTestParams, b *LocalBackend) {
 			}
 			if up.DisplayName != tt.wantName {
 				t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
+			}
+			if !slices.Equal(up.Groups, tt.wantGroups) {
+				t.Errorf("got groups %q; want %q", up.Groups, tt.wantGroups)
 			}
 		})
 	}
@@ -2119,11 +2126,11 @@ func TestWhoIs(t *testing.T) {
 		},
 	})
 	testsRound1 := []whoIsTestParams{
-		{"round1MyselfNoPort", "100.101.102.103:0", 1, "Myself"},
-		{"round1MyselfWithPort", "100.101.102.103:123", 1, "Myself"},
-		{"round1Peer2NoPort", "100.200.200.200:0", 2, "Peer2"},
-		{"round1Peer2WithPort", "100.200.200.200:123", 2, "Peer2"},
-		{"round1UnknownPeer", "100.4.0.4:404", 0, ""},
+		{"round1MyselfNoPort", "100.101.102.103:0", 1, "Myself", nil},
+		{"round1MyselfWithPort", "100.101.102.103:123", 1, "Myself", nil},
+		{"round1Peer2NoPort", "100.200.200.200:0", 2, "Peer2", []string{"group:foo"}},
+		{"round1Peer2WithPort", "100.200.200.200:123", 2, "Peer2", []string{"group:foo"}},
+		{"round1UnknownPeer", "100.4.0.4:404", 0, "", nil},
 	}
 	expectWhois(t, testsRound1, b)
 
@@ -2165,13 +2172,13 @@ func TestWhoIs(t *testing.T) {
 	})
 
 	testsRound2 := []whoIsTestParams{
-		{"round2MyselfNoPort", "100.101.102.103:0", 1, "Myself"},
-		{"round2MyselfWithPort", "100.101.102.103:123", 1, "Myself"},
-		{"round2Peer2NoPort", "100.200.200.200:0", 2, "Peer2"},
-		{"round2Peer2WithPort", "100.200.200.200:123", 2, "Peer2"},
-		{"round2Peer3NoPort", "100.233.233.233:0", 3, "Peer3"},
-		{"round2Peer3WithPort", "100.233.233.233:123", 3, "Peer3"},
-		{"round2UnknownPeer", "100.4.0.4:404", 0, ""},
+		{"round2MyselfNoPort", "100.101.102.103:0", 1, "Myself", nil},
+		{"round2MyselfWithPort", "100.101.102.103:123", 1, "Myself", nil},
+		{"round2Peer2NoPort", "100.200.200.200:0", 2, "Peer2", []string{"group:foo"}},
+		{"round2Peer2WithPort", "100.200.200.200:123", 2, "Peer2", []string{"group:foo"}},
+		{"round2Peer3NoPort", "100.233.233.233:0", 3, "Peer3", nil},
+		{"round2Peer3WithPort", "100.233.233.233:123", 3, "Peer3", nil},
+		{"round2UnknownPeer", "100.4.0.4:404", 0, "", nil},
 	}
 	expectWhois(t, testsRound2, b)
 
@@ -2204,13 +2211,13 @@ func TestWhoIs(t *testing.T) {
 	})
 
 	testsRound3 := []whoIsTestParams{
-		{"round3MyselfNoPort", "100.101.102.103:0", 1, "Myself"},
-		{"round3MyselfWithPort", "100.101.102.103:123", 1, "Myself"},
-		{"round3Peer2NoPortUnknown", "100.200.200.200:0", 0, ""},
-		{"round3Peer2WithPortUnknown", "100.200.200.200:123", 0, ""},
-		{"round3Peer3NoPort", "100.233.233.233:0", 3, "Peer3"},
-		{"round3Peer3WithPort", "100.233.233.233:123", 3, "Peer3"},
-		{"round3UnknownPeer", "100.4.0.4:404", 0, ""},
+		{"round3MyselfNoPort", "100.101.102.103:0", 1, "Myself", nil},
+		{"round3MyselfWithPort", "100.101.102.103:123", 1, "Myself", nil},
+		{"round3Peer2NoPortUnknown", "100.200.200.200:0", 0, "", nil},
+		{"round3Peer2WithPortUnknown", "100.200.200.200:123", 0, "", nil},
+		{"round3Peer3NoPort", "100.233.233.233:0", 3, "Peer3", nil},
+		{"round3Peer3WithPort", "100.233.233.233:123", 3, "Peer3", nil},
+		{"round3UnknownPeer", "100.4.0.4:404", 0, "", nil},
 	}
 	expectWhois(t, testsRound3, b)
 }
