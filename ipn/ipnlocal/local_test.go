@@ -2046,15 +2046,49 @@ func TestUpdateNetmapDelta(t *testing.T) {
 	}
 }
 
+type whoIsTestParams struct {
+	testName string
+	q        string
+	want     tailcfg.NodeID // 0 means want ok=false
+	wantName string
+}
+
+func expectWhois(t *testing.T, tests []whoIsTestParams, b *LocalBackend) {
+	for _, tt := range tests {
+		t.Run("ByAddr/"+tt.testName, func(t *testing.T) {
+			t.Helper()
+			nv, up, ok := b.WhoIs("", netip.MustParseAddrPort(tt.q))
+			var got tailcfg.NodeID
+			if ok {
+				got = nv.ID()
+			}
+			if got != tt.want {
+				t.Errorf("got nodeID %v; want %v", got, tt.want)
+			}
+			if up.DisplayName != tt.wantName {
+				t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
+			}
+		})
+		t.Run("ByNodeKey/"+tt.testName, func(t *testing.T) {
+			t.Helper()
+			nv, up, ok := b.WhoIsNodeKey(makeNodeKeyFromID(tt.want))
+			var got tailcfg.NodeID
+			if ok {
+				got = nv.ID()
+			}
+			if got != tt.want {
+				t.Errorf("got nodeID %v; want %v", got, tt.want)
+			}
+			if up.DisplayName != tt.wantName {
+				t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
+			}
+		})
+	}
+}
+
 // Test WhoIs and WhoIsNodeKey.
 // This indirectly asserts that localBackend's setNetMapLocked updates nodeBackend's b.nodeByAddr and b.nodeByKey correctly.
 func TestWhoIs(t *testing.T) {
-	// We run tests in a couple of rounds, so define this for convenience
-	type testParams struct {
-		q        string
-		want     tailcfg.NodeID // 0 means want ok=false
-		wantName string
-	}
 
 	b := newTestLocalBackend(t)
 
@@ -2084,50 +2118,14 @@ func TestWhoIs(t *testing.T) {
 			}).View(),
 		},
 	})
-	testsRound1 := []testParams{
-		{"100.101.102.103:0", 1, "Myself"},
-		{"100.101.102.103:123", 1, "Myself"},
-		{"100.200.200.200:0", 2, "Peer2"},
-		{"100.200.200.200:123", 2, "Peer2"},
-		{"100.4.0.4:404", 0, ""},
+	testsRound1 := []whoIsTestParams{
+		{"round1MyselfNoPort", "100.101.102.103:0", 1, "Myself"},
+		{"round1MyselfWithPort", "100.101.102.103:123", 1, "Myself"},
+		{"round1Peer2NoPort", "100.200.200.200:0", 2, "Peer2"},
+		{"round1Peer2WithPort", "100.200.200.200:123", 2, "Peer2"},
+		{"round1UnknownPeer", "100.4.0.4:404", 0, ""},
 	}
-
-	var runTests = func(tests []testParams) {
-		for _, tt := range tests {
-			t.Run(tt.q, func(t *testing.T) {
-				// Test whois by address
-				{
-					nv, up, ok := b.WhoIs("", netip.MustParseAddrPort(tt.q))
-					var got tailcfg.NodeID
-					if ok {
-						got = nv.ID()
-					}
-					if got != tt.want {
-						t.Errorf("got nodeID %v; want %v", got, tt.want)
-					}
-					if up.DisplayName != tt.wantName {
-						t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
-					}
-				}
-
-				// Test whois by node key
-				{
-					nv, up, ok := b.WhoIsNodeKey(makeNodeKeyFromID(tt.want))
-					var got tailcfg.NodeID
-					if ok {
-						got = nv.ID()
-					}
-					if got != tt.want {
-						t.Errorf("got nodeID %v; want %v", got, tt.want)
-					}
-					if up.DisplayName != tt.wantName {
-						t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
-					}
-				}
-			})
-		}
-	}
-	runTests(testsRound1)
+	expectWhois(t, testsRound1, b)
 
 	// Now push a new netmap where a new peer is added
 	// This verifies we add nodes to indexes correctly
@@ -2166,16 +2164,16 @@ func TestWhoIs(t *testing.T) {
 		},
 	})
 
-	testsRound2 := []testParams{
-		{"100.101.102.103:0", 1, "Myself"},
-		{"100.101.102.103:123", 1, "Myself"},
-		{"100.200.200.200:0", 2, "Peer2"},
-		{"100.200.200.200:123", 2, "Peer2"},
-		{"100.233.233.233:0", 3, "Peer3"},
-		{"100.233.233.233:123", 3, "Peer3"},
-		{"100.4.0.4:404", 0, ""},
+	testsRound2 := []whoIsTestParams{
+		{"round2MyselfNoPort", "100.101.102.103:0", 1, "Myself"},
+		{"round2MyselfWithPort", "100.101.102.103:123", 1, "Myself"},
+		{"round2Peer2NoPort", "100.200.200.200:0", 2, "Peer2"},
+		{"round2Peer2WithPort", "100.200.200.200:123", 2, "Peer2"},
+		{"round2Peer3NoPort", "100.233.233.233:0", 3, "Peer3"},
+		{"round2Peer3WithPort", "100.233.233.233:123", 3, "Peer3"},
+		{"round2UnknownPeer", "100.4.0.4:404", 0, ""},
 	}
-	runTests(testsRound2)
+	expectWhois(t, testsRound2, b)
 
 	// Finally push a new netmap where a peer is removed
 	// This verifies we remove nodes from indexes correctly
@@ -2205,16 +2203,16 @@ func TestWhoIs(t *testing.T) {
 		},
 	})
 
-	testsRound3 := []testParams{
-		{"100.101.102.103:0", 1, "Myself"},
-		{"100.101.102.103:123", 1, "Myself"},
-		{"100.200.200.200:0", 0, ""},
-		{"100.200.200.200:123", 0, ""},
-		{"100.233.233.233:0", 3, "Peer3"},
-		{"100.233.233.233:123", 3, "Peer3"},
-		{"100.4.0.4:404", 0, ""},
+	testsRound3 := []whoIsTestParams{
+		{"round3MyselfNoPort", "100.101.102.103:0", 1, "Myself"},
+		{"round3MyselfWithPort", "100.101.102.103:123", 1, "Myself"},
+		{"round3Peer2NoPortUnknown", "100.200.200.200:0", 0, ""},
+		{"round3Peer2WithPortUnknown", "100.200.200.200:123", 0, ""},
+		{"round3Peer3NoPort", "100.233.233.233:0", 3, "Peer3"},
+		{"round3Peer3WithPort", "100.233.233.233:123", 3, "Peer3"},
+		{"round3UnknownPeer", "100.4.0.4:404", 0, ""},
 	}
-	runTests(testsRound3)
+	expectWhois(t, testsRound3, b)
 }
 
 func TestWireguardExitNodeDNSResolvers(t *testing.T) {
