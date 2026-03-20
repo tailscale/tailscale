@@ -7,6 +7,7 @@ package tka
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 
@@ -127,7 +128,7 @@ func DisablementKDF(secret []byte) []byte {
 func (s State) checkDisablement(secret []byte) bool {
 	derived := DisablementKDF(secret)
 	for _, candidate := range s.DisablementSecrets {
-		if bytes.Equal(derived, candidate) {
+		if subtle.ConstantTimeCompare(derived, candidate) == 1 {
 			return true
 		}
 	}
