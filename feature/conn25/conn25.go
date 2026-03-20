@@ -32,6 +32,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/appctype"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
@@ -123,6 +124,7 @@ func (e *extension) Init(host ipnext.Host) error {
 		return nil
 	}
 	e.host = host
+
 	host.Hooks().OnSelfChange.Add(e.onSelfChange)
 	host.Hooks().ExtraRouterConfigRoutes.Set(e.getMagicRange)
 	ctx, cancel := context.WithCancelCause(context.Background())
@@ -269,8 +271,7 @@ func (c *Conn25) reconfig(selfNode tailcfg.NodeView) error {
 }
 
 // mapDNSResponse parses and inspects the DNS response, and uses the
-// contents to assign addresses for connecting. It does not yet modify
-// the response.
+// contents to assign addresses for connecting.
 func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 	return c.client.mapDNSResponse(buf)
 }
@@ -610,6 +611,16 @@ func (c *client) reserveAddresses(domain dnsname.FQDN, dst netip.Addr) (addrs, e
 	return as, nil
 }
 
+func (c *client) addTransitIPForConnector(tip netip.Addr, conn tailcfg.NodeView) error {
+	if conn.Key().IsZero() {
+		return fmt.Errorf("node with stable ID %q does not have a key", conn.StableID())
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.assignments.insertTransitConnMapping(tip, conn.Key())
+}
+
 func (e *extension) sendLoop(ctx context.Context) {
 	for {
 		select {
@@ -624,10 +635,15 @@ func (e *extension) sendLoop(ctx context.Context) {
 }
 
 func (e *extension) handleAddressAssignment(ctx context.Context, as addrs) error {
-	if err := e.sendAddressAssignment(ctx, as); err != nil {
+	conn, err := e.sendAddressAssignment(ctx, as)
+	if err != nil {
 		return err
 	}
-	// TODO(fran) assign the connector publickey -> transit ip addresses
+	err = e.conn25.client.addTransitIPForConnector(as.transit, conn)
+	if err != nil {
+		return err
+	}
+
 	e.host.AuthReconfigAsync()
 	return nil
 }
@@ -685,27 +701,29 @@ func makePeerAPIReq(ctx context.Context, httpClient *http.Client, urlBase string
 	return nil
 }
 
-func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) error {
+func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) (tailcfg.NodeView, error) {
 	app, ok := e.conn25.client.getConfig().appsByName[as.app]
 	if !ok {
 		e.conn25.client.logf("App not found for app: %s (domain: %s)", as.app, as.domain)
-		return errors.New("app not found")
+		return tailcfg.NodeView{}, errors.New("app not found")
 	}
 
 	nb := e.host.NodeBackend()
 	peers := appc.PickConnector(nb, app)
 	var urlBase string
+	var conn tailcfg.NodeView
 	for _, p := range peers {
 		urlBase = nb.PeerAPIBase(p)
 		if urlBase != "" {
+			conn = p
 			break
 		}
 	}
 	if urlBase == "" {
-		return errors.New("no connector peer found to handle address assignment")
+		return tailcfg.NodeView{}, errors.New("no connector peer found to handle address assignment")
 	}
 	client := e.backend.Sys().Dialer.Get().PeerAPIHTTPClient()
-	return makePeerAPIReq(ctx, client, urlBase, as)
+	return conn, makePeerAPIReq(ctx, client, urlBase, as)
 }
 
 type dnsResponseRewrite struct {
@@ -866,6 +884,7 @@ func (c *client) rewriteDNSResponse(hdr dnsmessage.Header, questions []dnsmessag
 	if err := b.StartAnswers(); err != nil {
 		return nil, err
 	}
+
 	// make an answer for each rewrite
 	for _, rw := range answers {
 		as, err := c.reserveAddresses(rw.domain, rw.dst)
@@ -968,11 +987,15 @@ type domainDst struct {
 }
 
 // addrAssignments is the collection of addrs assigned by this client
-// supporting lookup by magic IP, transit IP or domain+dst
+// supporting lookup by magic IP, transit IP or domain+dst, or to lookup all
+// transit IPs associated with a given connector (identified by its node key).
+// byConnKey stores netip.Prefix versions of the transit IPs for use in the
+// WireGuard hooks.
 type addrAssignments struct {
 	byMagicIP   map[netip.Addr]addrs
 	byTransitIP map[netip.Addr]addrs
 	byDomainDst map[domainDst]addrs
+	byConnKey   map[key.NodePublic]set.Set[netip.Prefix]
 }
 
 func (a *addrAssignments) insert(as addrs) error {
@@ -988,9 +1011,32 @@ func (a *addrAssignments) insert(as addrs) error {
 	if _, ok := a.byTransitIP[as.transit]; ok {
 		return errors.New("byTransitIP key exists")
 	}
+
 	mak.Set(&a.byMagicIP, as.magic, as)
 	mak.Set(&a.byTransitIP, as.transit, as)
 	mak.Set(&a.byDomainDst, ddst, as)
+	return nil
+}
+
+// insertTransitConnMapping adds an entry to the byConnKey map
+// for the provided transitIP (as a prefix).
+// The provided transitIP must already be present in the byTransitIP map.
+func (a *addrAssignments) insertTransitConnMapping(tip netip.Addr, connKey key.NodePublic) error {
+	if _, ok := a.lookupByTransitIP(tip); !ok {
+		return errors.New("transit IP is not already known")
+	}
+
+	ctips, ok := a.byConnKey[connKey]
+	tipp := netip.PrefixFrom(tip, tip.BitLen())
+	if ok {
+		if ctips.Contains(tipp) {
+			return errors.New("byConnKey already contains transit")
+		}
+	} else {
+		ctips.Make()
+		mak.Set(&a.byConnKey, connKey, ctips)
+	}
+	ctips.Add(tipp)
 	return nil
 }
 
@@ -1007,4 +1053,15 @@ func (a *addrAssignments) lookupByMagicIP(mip netip.Addr) (addrs, bool) {
 func (a *addrAssignments) lookupByTransitIP(tip netip.Addr) (addrs, bool) {
 	v, ok := a.byTransitIP[tip]
 	return v, ok
+}
+
+// lookupTransitIPsByConnKey returns a slice containing the transit IPs (as netipPrefix)
+// associated with the given connector (identified by node key), or (nil, false) if there is no entry
+// for the given key.
+func (a *addrAssignments) lookupTransitIPsByConnKey(k key.NodePublic) ([]netip.Prefix, bool) {
+	s, ok := a.byConnKey[k]
+	if !ok {
+		return nil, false
+	}
+	return s.Slice(), true
 }
