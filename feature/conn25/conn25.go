@@ -27,6 +27,7 @@ import (
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/appctype"
@@ -499,6 +500,26 @@ func (c *client) ClientTransitIPForMagicIP(magicIP netip.Addr) (netip.Addr, erro
 	return netip.Addr{}, ErrUnmappedMagicIP
 }
 
+// linkLocalAllow returns true if the provided packet with a link-local Dst address has a
+// Dst that is one of our transit IPs, and false otherwise.
+// Tailscale's wireguard filters drop link-local unicast packets (see [wgengine/filter/filter.go])
+// but conn25 uses link-local addresses for transit IPs.
+// Let the filter know if this is one of our addresses and should be allowed.
+func (c *client) linkLocalAllow(p packet.Parsed) (bool, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ok := c.isKnownTransitIP(p.Dst.Addr())
+	if ok {
+		return true, packetFilterAllowReason
+	}
+	return false, ""
+}
+
+func (c *client) isKnownTransitIP(tip netip.Addr) bool {
+	_, ok := c.assignments.lookupByTransitIP(tip)
+	return ok
+}
+
 func (c *client) isConfigured() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -863,6 +884,20 @@ func (c *connector) ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, tran
 	return netip.Addr{}, ErrUnmappedSrcAndTransitIP
 }
 
+const packetFilterAllowReason = "app connector transit IP"
+
+// packetFilterAllow returns true if the provided packet has a Src that maps to a peer
+// that has a transit IP with us that is the packet Dst, and false otherwise.
+func (c *connector) packetFilterAllow(p packet.Parsed) (bool, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.lookupBySrcIPAndTransitIP(p.Src.Addr(), p.Dst.Addr())
+	if ok {
+		return true, packetFilterAllowReason
+	}
+	return false, ""
+}
+
 func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appAddr, bool) {
 	m, ok := c.transitIPs[srcIP]
 	if !ok || m == nil {
@@ -899,9 +934,10 @@ type domainDst struct {
 }
 
 // addrAssignments is the collection of addrs assigned by this client
-// supporting lookup by magicip or domain+dst
+// supporting lookup by magic IP, transit IP or domain+dst
 type addrAssignments struct {
 	byMagicIP   map[netip.Addr]addrs
+	byTransitIP map[netip.Addr]addrs
 	byDomainDst map[domainDst]addrs
 }
 
@@ -915,7 +951,11 @@ func (a *addrAssignments) insert(as addrs) error {
 	if _, ok := a.byDomainDst[ddst]; ok {
 		return errors.New("byDomainDst key exists")
 	}
+	if _, ok := a.byTransitIP[as.transit]; ok {
+		return errors.New("byTransitIP key exists")
+	}
 	mak.Set(&a.byMagicIP, as.magic, as)
+	mak.Set(&a.byTransitIP, as.transit, as)
 	mak.Set(&a.byDomainDst, ddst, as)
 	return nil
 }
@@ -927,5 +967,10 @@ func (a *addrAssignments) lookupByDomainDst(domain dnsname.FQDN, dst netip.Addr)
 
 func (a *addrAssignments) lookupByMagicIP(mip netip.Addr) (addrs, bool) {
 	v, ok := a.byMagicIP[mip]
+	return v, ok
+}
+
+func (a *addrAssignments) lookupByTransitIP(tip netip.Addr) (addrs, bool) {
+	v, ok := a.byTransitIP[tip]
 	return v, ok
 }

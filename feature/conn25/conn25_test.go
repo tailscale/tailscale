@@ -16,6 +16,7 @@ import (
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/ipn/ipnext"
+	"tailscale.com/net/packet"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
@@ -1307,5 +1308,75 @@ func TestConnectorRealIPForTransitIPConnection(t *testing.T) {
 				t.Fatalf("checking error: want %v, got %v", tt.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestIsKnownTransitIP(t *testing.T) {
+	knownTip := netip.MustParseAddr("100.64.0.41")
+	unknownTip := netip.MustParseAddr("100.64.0.42")
+
+	c := newConn25(t.Logf)
+	c.client.assignments.insert(addrs{
+		transit: knownTip,
+	})
+
+	if !c.client.isKnownTransitIP(knownTip) {
+		t.Fatal("knownTip: should have been known")
+	}
+	if c.client.isKnownTransitIP(unknownTip) {
+		t.Fatal("unknownTip: should not have been known")
+	}
+}
+
+func TestLinkLocalAllow(t *testing.T) {
+	knownTip := netip.MustParseAddr("100.64.0.41")
+
+	c := newConn25(t.Logf)
+	c.client.assignments.insert(addrs{
+		transit: knownTip,
+	})
+
+	if allow, _ := c.client.linkLocalAllow(packet.Parsed{
+		Dst: netip.AddrPortFrom(knownTip, 1234),
+	}); !allow {
+		t.Fatal("knownTip: should have been allowed")
+	}
+
+	if allow, _ := c.client.linkLocalAllow(packet.Parsed{
+		Dst: netip.AddrPort{},
+	}); allow {
+		t.Fatal("unknownTip: should not have been allowed")
+	}
+}
+
+func TestConnectorPacketFilterAllow(t *testing.T) {
+	knownTip := netip.MustParseAddr("100.64.0.41")
+	knownSrc := netip.MustParseAddr("100.64.0.1")
+	unknownTip := netip.MustParseAddr("100.64.0.42")
+	unknownSrc := netip.MustParseAddr("100.64.0.42")
+
+	c := newConn25(t.Logf)
+	c.connector.transitIPs = map[netip.Addr]map[netip.Addr]appAddr{}
+	c.connector.transitIPs[knownSrc] = map[netip.Addr]appAddr{}
+	c.connector.transitIPs[knownSrc][knownTip] = appAddr{}
+
+	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
+		Src: netip.AddrPortFrom(knownSrc, 1234),
+		Dst: netip.AddrPortFrom(knownTip, 1234),
+	}); !allow {
+		t.Fatal("knownTip: should have been allowed")
+	}
+
+	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
+		Src: netip.AddrPortFrom(unknownSrc, 1234),
+		Dst: netip.AddrPortFrom(knownTip, 1234),
+	}); allow {
+		t.Fatal("unknownSrc: should not have been allowed")
+	}
+	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
+		Src: netip.AddrPortFrom(knownSrc, 1234),
+		Dst: netip.AddrPortFrom(unknownTip, 1234),
+	}); allow {
+		t.Fatal("unknownTip: should not have been allowed")
 	}
 }
