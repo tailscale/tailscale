@@ -52,6 +52,7 @@ import (
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/bufiox"
 	"tailscale.com/util/ctxkey"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
@@ -1088,10 +1089,10 @@ func (c *sclient) handleFramePing(ft derp.FrameType, fl uint32) error {
 		// space for future extensibility, but not too much.
 		return fmt.Errorf("ping body too large: %v", fl)
 	}
-	_, err := io.ReadFull(c.br, m[:])
-	if err != nil {
+	if _, err := bufiox.ReadFull(c.br, m[:]); err != nil {
 		return err
 	}
+	var err error
 	if extra := int64(fl) - int64(len(m)); extra > 0 {
 		_, err = io.CopyN(io.Discard, c.br, extra)
 	}
