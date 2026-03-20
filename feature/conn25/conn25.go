@@ -534,6 +534,9 @@ func (c *client) reserveAddresses(domain dnsname.FQDN, dst netip.Addr) (addrs, e
 		return existing, nil
 	}
 	appNames, _ := c.config.appNamesByDomain[domain]
+	if len(appNames) == 0 {
+		return addrs{}, fmt.Errorf("no app names found for domain %q", domain)
+	}
 	// only reserve for first app
 	app := appNames[0]
 	mip, err := c.magicIPPool.next()
