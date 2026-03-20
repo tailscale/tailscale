@@ -2055,40 +2055,33 @@ type whoIsTestParams struct {
 }
 
 func expectWhois(t *testing.T, tests []whoIsTestParams, b *LocalBackend) {
+	t.Helper()
+
+	checkWhoIs := func(t *testing.T, tt whoIsTestParams, nv tailcfg.NodeView, up tailcfg.UserProfile, ok bool) {
+		t.Helper()
+		var got tailcfg.NodeID
+		if ok {
+			got = nv.ID()
+		}
+		if got != tt.want {
+			t.Errorf("got nodeID %v; want %v", got, tt.want)
+		}
+		if up.DisplayName != tt.wantName {
+			t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
+		}
+		if !slices.Equal(up.Groups, tt.wantGroups) {
+			t.Errorf("got groups %q; want %q", up.Groups, tt.wantGroups)
+		}
+	}
+
 	for _, tt := range tests {
 		t.Run("ByAddr/"+tt.testName, func(t *testing.T) {
-			t.Helper()
 			nv, up, ok := b.WhoIs("", netip.MustParseAddrPort(tt.q))
-			var got tailcfg.NodeID
-			if ok {
-				got = nv.ID()
-			}
-			if got != tt.want {
-				t.Errorf("got nodeID %v; want %v", got, tt.want)
-			}
-			if up.DisplayName != tt.wantName {
-				t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
-			}
-			if !slices.Equal(up.Groups, tt.wantGroups) {
-				t.Errorf("got groups %q; want %q", up.Groups, tt.wantGroups)
-			}
+			checkWhoIs(t, tt, nv, up, ok)
 		})
 		t.Run("ByNodeKey/"+tt.testName, func(t *testing.T) {
-			t.Helper()
 			nv, up, ok := b.WhoIsNodeKey(makeNodeKeyFromID(tt.want))
-			var got tailcfg.NodeID
-			if ok {
-				got = nv.ID()
-			}
-			if got != tt.want {
-				t.Errorf("got nodeID %v; want %v", got, tt.want)
-			}
-			if up.DisplayName != tt.wantName {
-				t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
-			}
-			if !slices.Equal(up.Groups, tt.wantGroups) {
-				t.Errorf("got groups %q; want %q", up.Groups, tt.wantGroups)
-			}
+			checkWhoIs(t, tt, nv, up, ok)
 		})
 	}
 }
