@@ -127,6 +127,7 @@ func (e *extension) Init(host ipnext.Host) error {
 
 	host.Hooks().OnSelfChange.Add(e.onSelfChange)
 	host.Hooks().ExtraRouterConfigRoutes.Set(e.getMagicRange)
+	host.Hooks().ExtraWireGuardAllowedIPs.Set(e.extraWireGuardAllowedIPs)
 	ctx, cancel := context.WithCancelCause(context.Background())
 	e.ctxCancel = cancel
 	go e.sendLoop(ctx)
@@ -185,6 +186,10 @@ func (e *extension) onSelfChange(selfNode tailcfg.NodeView) {
 	if err != nil {
 		e.conn25.client.logf("error managing DNS hook onSelfChange: %v", err)
 	}
+}
+
+func (e *extension) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
+	return e.conn25.client.extraWireGuardAllowedIPs(k)
 }
 
 func (e *extension) registerDNSHook() error {
@@ -658,6 +663,16 @@ func (c *client) enqueueAddressAssignment(addrs addrs) error {
 		c.logf("address assignment queue full, dropping transit assignment for %v", addrs.domain)
 		return errors.New("queue full")
 	}
+}
+
+func (c *client) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tips, ok := c.assignments.lookupTransitIPsByConnKey(k)
+	if !ok {
+		return views.Slice[netip.Prefix]{}
+	}
+	return views.SliceOf(tips)
 }
 
 func makePeerAPIReq(ctx context.Context, httpClient *http.Client, urlBase string, as addrs) error {
