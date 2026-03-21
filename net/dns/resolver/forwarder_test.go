@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
@@ -223,6 +225,576 @@ func TestGetKnownDoHClientForProvider(t *testing.T) {
 	}
 	defer res.Body.Close()
 	t.Logf("Got: %+v", res)
+}
+
+// makeBootstrapResponse builds a wire-format DNS response containing the given
+// IP addresses as A or AAAA answer records, for use in bootstrap tests.
+func makeBootstrapResponse(t *testing.T, ips []netip.Addr) []byte {
+	t.Helper()
+	b := dns.NewBuilder(nil, dns.Header{Response: true, RecursionAvailable: true})
+	if err := b.StartQuestions(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.StartAnswers(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ip := range ips {
+		hdr := dns.ResourceHeader{
+			Name:  dns.MustNewName("dns.nextdns.io."),
+			Class: dns.ClassINET,
+			TTL:   300,
+		}
+		if ip.Is4() {
+			hdr.Type = dns.TypeA
+			if err := b.AResource(hdr, dns.AResource{A: ip.As4()}); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			hdr.Type = dns.TypeAAAA
+			if err := b.AAAAResource(hdr, dns.AAAAResource{AAAA: ip.As16()}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	msg, err := b.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return msg
+}
+
+// waitForBootstrap polls until the bootstrap goroutine for urlBase completes
+// or the test deadline is exceeded.
+func waitForBootstrap(t *testing.T, fwd *forwarder, urlBase string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		fwd.mu.Lock()
+		done := !fwd.dohClientBootstrapping.Contains(urlBase)
+		fwd.mu.Unlock()
+		if done {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for bootstrap goroutine to complete")
+}
+
+// newTestForwarder returns a minimal forwarder suitable for bootstrap tests.
+func newTestForwarder(t *testing.T) *forwarder {
+	t.Helper()
+	fwd := &forwarder{logf: t.Logf}
+	fwd.ctx, fwd.ctxCancel = context.WithCancel(context.Background())
+	t.Cleanup(fwd.ctxCancel)
+	return fwd
+}
+
+func TestNextDNSBootstrapSwapsClient(t *testing.T) {
+	fwd := newTestForwarder(t)
+	urlBase := "https://dns.nextdns.io/abc123"
+
+	unicastA := netip.MustParseAddr("1.2.3.4")
+	unicastAAAA := netip.MustParseAddr("2001:db8::1")
+	var callCount atomic.Int32
+	fwd.nextDNSExchangeFunc = func(ctx context.Context, pkt []byte) ([]byte, error) {
+		n := callCount.Add(1)
+		if n == 1 {
+			return makeBootstrapResponse(t, []netip.Addr{unicastA}), nil
+		}
+		return makeBootstrapResponse(t, []netip.Addr{unicastAAAA}), nil
+	}
+
+	first, ok := fwd.getKnownDoHClientForProvider(urlBase)
+	if !ok {
+		t.Fatal("getKnownDoHClientForProvider returned !ok")
+	}
+
+	waitForBootstrap(t, fwd, urlBase)
+
+	fwd.mu.Lock()
+	upgraded := fwd.dohClient[urlBase]
+	fwd.mu.Unlock()
+
+	if upgraded == first {
+		t.Error("client was not replaced after bootstrap")
+	}
+}
+
+func TestNextDNSBootstrapFailureKeepsAnycast(t *testing.T) {
+	fwd := newTestForwarder(t)
+	urlBase := "https://dns.nextdns.io/abc123"
+
+	fwd.nextDNSExchangeFunc = func(ctx context.Context, pkt []byte) ([]byte, error) {
+		return nil, errors.New("injected transport failure")
+	}
+
+	first, ok := fwd.getKnownDoHClientForProvider(urlBase)
+	if !ok {
+		t.Fatal("getKnownDoHClientForProvider returned !ok")
+	}
+
+	waitForBootstrap(t, fwd, urlBase)
+
+	fwd.mu.Lock()
+	current := fwd.dohClient[urlBase]
+	fwd.mu.Unlock()
+
+	if current != first {
+		t.Error("client was swapped despite bootstrap failure")
+	}
+}
+
+func TestNextDNSBootstrapEmptyResultKeepsAnycast(t *testing.T) {
+	fwd := newTestForwarder(t)
+	urlBase := "https://dns.nextdns.io/abc123"
+
+	// Return only private IPs; filterGlobalUnicastIPs will drop them all.
+	fwd.nextDNSExchangeFunc = func(ctx context.Context, pkt []byte) ([]byte, error) {
+		return makeBootstrapResponse(t, []netip.Addr{netip.MustParseAddr("192.168.1.1")}), nil
+	}
+
+	first, ok := fwd.getKnownDoHClientForProvider(urlBase)
+	if !ok {
+		t.Fatal("getKnownDoHClientForProvider returned !ok")
+	}
+
+	waitForBootstrap(t, fwd, urlBase)
+
+	fwd.mu.Lock()
+	current := fwd.dohClient[urlBase]
+	fwd.mu.Unlock()
+
+	if current != first {
+		t.Error("client was swapped despite all resolved IPs being filtered out")
+	}
+}
+
+func TestNextDNSBootstrapNoDuplicateGoroutines(t *testing.T) {
+	fwd := newTestForwarder(t)
+	urlBase := "https://dns.nextdns.io/abc123"
+
+	var callCount atomic.Int32
+	fwd.nextDNSExchangeFunc = func(ctx context.Context, pkt []byte) ([]byte, error) {
+		callCount.Add(1)
+		return makeBootstrapResponse(t, []netip.Addr{netip.MustParseAddr("1.2.3.4")}), nil
+	}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			fwd.getKnownDoHClientForProvider(urlBase)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	waitForBootstrap(t, fwd, urlBase)
+
+	// Exactly one goroutine should have been launched: 2 calls (A + AAAA).
+	if n := callCount.Load(); n > 2 {
+		t.Errorf("exchange func called %d times, want ≤ 2", n)
+	}
+}
+
+func TestNonNextDNSNoBootstrap(t *testing.T) {
+	fwd := newTestForwarder(t)
+	urlBase := "https://cloudflare-dns.com/dns-query"
+
+	_, ok := fwd.getKnownDoHClientForProvider(urlBase)
+	if !ok {
+		t.Fatal("getKnownDoHClientForProvider returned !ok")
+	}
+
+	fwd.mu.Lock()
+	bootstrapping := len(fwd.dohClientBootstrapping)
+	fwd.mu.Unlock()
+
+	if bootstrapping != 0 {
+		t.Errorf("dohClientBootstrapping non-empty for non-NextDNS provider, len=%d", bootstrapping)
+	}
+}
+
+func TestSendBootstrapDNS(t *testing.T) {
+	// Spin up a local UDP server that echoes back with a controlled response.
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	serverAddr := pc.LocalAddr().(*net.UDPAddr)
+	serverAddrPort := netip.AddrPortFrom(netip.MustParseAddr(serverAddr.IP.String()), uint16(serverAddr.Port))
+
+	canned := makeBootstrapResponse(t, []netip.Addr{netip.MustParseAddr("1.2.3.4")})
+
+	// serveOnce reads one packet, patches in the response txid (matching the
+	// request), and sends canned back. tamperTxid overrides the txid written
+	// to the response (to simulate a mismatch).
+	serveOnce := func(tamperTxid uint16, useTamper bool) {
+		buf := make([]byte, 4096)
+		n, addr, err := pc.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+		resp := make([]byte, len(canned))
+		copy(resp, canned)
+		if useTamper {
+			binary.BigEndian.PutUint16(resp[0:2], tamperTxid)
+		} else {
+			// Echo the request txid back.
+			binary.BigEndian.PutUint16(resp[0:2], binary.BigEndian.Uint16(buf[:n]))
+		}
+		pc.WriteTo(resp, addr)
+	}
+
+	fwd := newTestForwarder(t)
+
+	query, err := buildDNSQuery("dns.nextdns.io.", dns.TypeA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Normal case: response round-trips.
+	go serveOnce(0, false)
+	ctx := context.Background()
+	got, err := fwd.sendBootstrapDNS(ctx, serverAddrPort, query)
+	if err != nil {
+		t.Fatalf("sendBootstrapDNS: %v", err)
+	}
+	if len(got) == 0 {
+		t.Error("got empty response")
+	}
+
+	// Txid mismatch: loop should keep reading until deadline, then return error.
+	go serveOnce(0xdead, true)
+	tctx, tcancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	_, err = fwd.sendBootstrapDNS(tctx, serverAddrPort, query)
+	tcancel()
+	if err == nil {
+		t.Error("expected error on txid mismatch, got nil")
+	}
+
+	// Wrong source: loop should keep reading until deadline, then return error.
+	pc2, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc2.Close()
+	go func() {
+		// Read the outgoing request on server1 to learn the client's ephemeral
+		// port, then send a correctly-txid'd response from server2 instead.
+		buf := make([]byte, 4096)
+		n, clientAddr, err := pc.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+		resp := make([]byte, len(canned))
+		copy(resp, canned)
+		binary.BigEndian.PutUint16(resp[0:2], binary.BigEndian.Uint16(buf[:n]))
+		pc2.WriteTo(resp, clientAddr) // wrong source: pc2, not pc (server1)
+	}()
+	tctx, tcancel = context.WithTimeout(context.Background(), 500*time.Millisecond)
+	_, err = fwd.sendBootstrapDNS(tctx, serverAddrPort, query)
+	tcancel()
+	if err == nil {
+		t.Error("expected error on wrong source addr, got nil")
+	}
+}
+
+func TestNextDNSBootstrapIPFallback(t *testing.T) {
+	// First server responds with a wrong txid (sendBootstrapDNS will reject it).
+	// Second server responds correctly. The exchangeFn should fall through to the
+	// second server and the client should be upgraded.
+	bad, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bad.Close()
+	// Serve bad responses (wrong txid).
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			_, addr, err := bad.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			bad.WriteTo([]byte{0xde, 0xad}, addr) // too short / wrong txid
+		}
+	}()
+
+	good, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer good.Close()
+	goodAddr := good.LocalAddr().(*net.UDPAddr)
+	goodAddrPort := netip.AddrPortFrom(netip.MustParseAddr(goodAddr.IP.String()), uint16(goodAddr.Port))
+
+	canned := makeBootstrapResponse(t, []netip.Addr{netip.MustParseAddr("1.2.3.4")})
+
+	// Serve valid responses on the good server.
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, addr, err := good.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			resp := make([]byte, len(canned))
+			copy(resp, canned)
+			binary.BigEndian.PutUint16(resp[0:2], binary.BigEndian.Uint16(buf[:n]))
+			good.WriteTo(resp, addr)
+		}
+	}()
+
+	badAddr := bad.LocalAddr().(*net.UDPAddr)
+	badAddrPort := netip.AddrPortFrom(netip.MustParseAddr(badAddr.IP.String()), uint16(badAddr.Port))
+
+	fwd := newTestForwarder(t)
+	fwd.testBootstrapUDPServers = []netip.AddrPort{badAddrPort, goodAddrPort}
+
+	urlBase := "https://dns.nextdns.io/abc123"
+	first, ok := fwd.getKnownDoHClientForProvider(urlBase)
+	if !ok {
+		t.Fatal("getKnownDoHClientForProvider returned !ok")
+	}
+
+	waitForBootstrap(t, fwd, urlBase)
+
+	fwd.mu.Lock()
+	upgraded := fwd.dohClient[urlBase]
+	fwd.mu.Unlock()
+
+	if upgraded == first {
+		t.Error("client was not upgraded after fallback bootstrap")
+	}
+}
+
+func TestNextDNSBootstrapRetryAfterFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		urlBase := "https://dns.nextdns.io/abc123"
+
+		var callCount atomic.Int32
+
+		fwd := newTestForwarder(t)
+
+		// First exchange always fails.
+		fwd.nextDNSExchangeFunc = func(ctx context.Context, pkt []byte) ([]byte, error) {
+			callCount.Add(1)
+			return nil, errors.New("injected failure")
+		}
+
+		first, ok := fwd.getKnownDoHClientForProvider(urlBase)
+		if !ok {
+			t.Fatal("getKnownDoHClientForProvider returned !ok")
+		}
+		synctest.Wait() // wait for bootstrap goroutine to finish
+
+		// Confirm failure was recorded.
+		fwd.mu.Lock()
+		_, hasPending := fwd.dohClientNextRetry[urlBase]
+		fwd.mu.Unlock()
+		if !hasPending {
+			t.Fatal("expected dohClientNextRetry entry after failure, got none")
+		}
+		callsBefore := callCount.Load()
+
+		// Call again immediately — cooldown is active, no new goroutine should launch.
+		c2, ok := fwd.getKnownDoHClientForProvider(urlBase)
+		if !ok {
+			t.Fatal("second getKnownDoHClientForProvider returned !ok")
+		}
+		if c2 != first {
+			t.Error("cached client changed unexpectedly during cooldown")
+		}
+		synctest.Wait() // drain any spurious goroutines
+		if callCount.Load() != callsBefore {
+			t.Error("exchange func called during cooldown — unexpected retry goroutine launched")
+		}
+
+		// Now make retries succeed.
+		canned := makeBootstrapResponse(t, []netip.Addr{netip.MustParseAddr("1.2.3.4")})
+		fwd.nextDNSExchangeFunc = func(ctx context.Context, pkt []byte) ([]byte, error) {
+			callCount.Add(1)
+			return canned, nil
+		}
+
+		// Fast-forward the cooldown by moving the retry time to the past.
+		fwd.mu.Lock()
+		fwd.dohClientNextRetry[urlBase] = time.Now().Add(-1 * time.Second)
+		fwd.mu.Unlock()
+
+		// Next call should launch the retry goroutine.
+		_, ok = fwd.getKnownDoHClientForProvider(urlBase)
+		if !ok {
+			t.Fatal("third getKnownDoHClientForProvider returned !ok")
+		}
+		synctest.Wait() // wait for retry goroutine to finish
+
+		fwd.mu.Lock()
+		upgraded := fwd.dohClient[urlBase]
+		_, stillPending := fwd.dohClientNextRetry[urlBase]
+		fwd.mu.Unlock()
+
+		if upgraded == first {
+			t.Error("client was not upgraded after successful retry")
+		}
+		if stillPending {
+			t.Error("dohClientNextRetry entry not cleared after successful retry")
+		}
+	})
+}
+
+func TestCombineBootstrapIPs(t *testing.T) {
+	mustParse := func(s string) netip.Addr { return netip.MustParseAddr(s) }
+
+	resolved := []netip.Addr{mustParse("1.2.3.4"), mustParse("2001:db8::1")}
+	bootstrap := []netip.Addr{mustParse("45.90.28.0"), mustParse("1.2.3.4")} // 1.2.3.4 is a dup
+
+	got := combineBootstrapIPs(resolved, bootstrap)
+	want := []netip.Addr{
+		mustParse("1.2.3.4"),
+		mustParse("2001:db8::1"),
+		mustParse("45.90.28.0"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("len(got)=%d, want %d; got=%v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d]=%v, want %v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestResolveBootstrapHostnamePartialSuccess(t *testing.T) {
+	mustParse := func(s string) netip.Addr { return netip.MustParseAddr(s) }
+	someA := makeBootstrapResponse(t, []netip.Addr{mustParse("1.2.3.4")})
+	someAAAA := makeBootstrapResponse(t, []netip.Addr{mustParse("2001:db8::1")})
+	empty := makeBootstrapResponse(t, nil)
+	injected := errors.New("injected")
+
+	tests := []struct {
+		name      string
+		responses [2]struct {
+			data []byte
+			err  error
+		}
+		wantIPs []netip.Addr
+		wantErr bool
+	}{
+		{
+			name: "A succeeds AAAA fails",
+			responses: [2]struct {
+				data []byte
+				err  error
+			}{{someA, nil}, {nil, injected}},
+			wantIPs: []netip.Addr{mustParse("1.2.3.4")},
+		},
+		{
+			name: "AAAA succeeds A fails",
+			responses: [2]struct {
+				data []byte
+				err  error
+			}{{nil, injected}, {someAAAA, nil}},
+			wantIPs: []netip.Addr{mustParse("2001:db8::1")},
+		},
+		{
+			name: "both fail",
+			responses: [2]struct {
+				data []byte
+				err  error
+			}{{nil, injected}, {nil, injected}},
+			wantErr: true,
+		},
+		{
+			name: "both succeed with no records",
+			responses: [2]struct {
+				data []byte
+				err  error
+			}{{empty, nil}, {empty, nil}},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var call int
+			exchangeFn := func(ctx context.Context, pkt []byte) ([]byte, error) {
+				r := tt.responses[call]
+				call++
+				return r.data, r.err
+			}
+			got, err := resolveBootstrapHostname(context.Background(), t.Logf, "dns.nextdns.io.", exchangeFn)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !slices.Equal(got, tt.wantIPs) {
+				t.Errorf("got %v, want %v", got, tt.wantIPs)
+			}
+		})
+	}
+}
+
+func TestBuildDNSQuery(t *testing.T) {
+	for _, qtype := range []dns.Type{dns.TypeA, dns.TypeAAAA} {
+		pkt, err := buildDNSQuery("dns.nextdns.io.", qtype)
+		if err != nil {
+			t.Fatalf("buildDNSQuery(%v): %v", qtype, err)
+		}
+		var p dns.Parser
+		hdr, err := p.Start(pkt)
+		if err != nil {
+			t.Fatalf("parse header: %v", err)
+		}
+		if !hdr.RecursionDesired {
+			t.Error("RecursionDesired not set")
+		}
+		q, err := p.Question()
+		if err != nil {
+			t.Fatalf("parse question: %v", err)
+		}
+		if q.Type != qtype {
+			t.Errorf("question type = %v, want %v", q.Type, qtype)
+		}
+		if q.Name.String() != "dns.nextdns.io." {
+			t.Errorf("question name = %q, want %q", q.Name.String(), "dns.nextdns.io.")
+		}
+	}
+}
+
+func TestParseDNSResponseIPs(t *testing.T) {
+	mustParse := func(s string) netip.Addr { return netip.MustParseAddr(s) }
+
+	want := []netip.Addr{mustParse("1.2.3.4"), mustParse("2001:db8::1")}
+	resp := makeBootstrapResponse(t, want)
+
+	got, err := parseDNSResponseIPs(resp)
+	if err != nil {
+		t.Fatalf("parseDNSResponseIPs: %v", err)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+
+	// Empty response should return nil, nil.
+	empty := makeBootstrapResponse(t, nil)
+	got, err = parseDNSResponseIPs(empty)
+	if err != nil {
+		t.Fatalf("parseDNSResponseIPs(empty): %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("empty response: got %v, want empty", got)
+	}
 }
 
 func BenchmarkNameFromQuery(b *testing.B) {

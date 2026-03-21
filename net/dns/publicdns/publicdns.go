@@ -108,15 +108,6 @@ func DoHIPsOfBase(dohBase string) []netip.Addr {
 			hexStr = hexStr[:i]
 		}
 
-		// TODO(bradfitz): using the NextDNS anycast addresses works but is not
-		// ideal. Some of their regions have better latency via a non-anycast IP
-		// which we could get by first resolving A/AAAA "dns.nextdns.io" over
-		// DoH using their anycast address. For now we only use the anycast
-		// addresses. The IPv4 IPs we use are just the first one in their ranges.
-		// For IPv6 we put the profile ID in the lower bytes, but that seems just
-		// conventional for them and not required (it'll already be in the DoH path).
-		// (Really we shouldn't use either IPv4 or IPv6 anycast for DoH once we
-		// resolve "dns.nextdns.io".)
 		if b, err := hex.DecodeString(hexStr); err == nil && len(b) <= 12 && len(b) > 0 {
 			return []netip.Addr{
 				nextDNSv4One,
@@ -138,6 +129,23 @@ func DoHIPsOfBase(dohBase string) []netip.Addr {
 		}
 	}
 	return nil
+}
+
+// DoHBootstrapHostname returns the hostname that should be resolved via UDP:53
+// to discover lower-latency unicast addresses for the given provider URL base,
+// or "" if bootstrap resolution is not applicable for that provider.
+//
+// This is provider metadata only — a non-empty return value does not imply that
+// urlBase alone is sufficient to establish a connection. The caller is still
+// responsible for verifying that DoHIPsOfBase(urlBase) returns bootstrap IPs
+// before attempting resolution.
+//
+// This is a pure static mapping; it performs no network I/O.
+func DoHBootstrapHostname(urlBase string) string {
+	if strings.HasPrefix(urlBase, nextDNSBase) {
+		return "dns.nextdns.io."
+	}
+	return ""
 }
 
 // DoHV6 returns the first IPv6 DNS address from a given public DNS provider

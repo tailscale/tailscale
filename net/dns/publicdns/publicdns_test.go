@@ -151,3 +151,22 @@ func TestDoHIPsOfBase(t *testing.T) {
 		}
 	}
 }
+
+func TestDoHBootstrapHostname(t *testing.T) {
+	tests := []struct {
+		urlBase string
+		want    string
+	}{
+		{"https://dns.nextdns.io/abc123", "dns.nextdns.io."},
+		{"https://dns.nextdns.io/c3a884/with/more/stuff", "dns.nextdns.io."},
+		{"https://cloudflare-dns.com/dns-query", ""},
+		{"https://dns.google/dns-query", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := DoHBootstrapHostname(tt.urlBase)
+		if got != tt.want {
+			t.Errorf("DoHBootstrapHostname(%q) = %q, want %q", tt.urlBase, got, tt.want)
+		}
+	}
+}
