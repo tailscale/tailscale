@@ -140,6 +140,12 @@ func (t *tgzTarget) Build(b *dist.Build) ([]string, error) {
 		if err := addFile(filepath.Join(tailscaledDir, "tailscaled.defaults"), filepath.Join(dir, "tailscaled.defaults"), 0644); err != nil {
 			return nil, err
 		}
+		if err := addFile(filepath.Join(tailscaledDir, "tailscale-online.target"), filepath.Join(dir, "tailscale-online.target"), 0644); err != nil {
+			return nil, err
+		}
+		if err := addFile(filepath.Join(tailscaledDir, "tailscale-wait-online.service"), filepath.Join(dir, "tailscale-wait-online.service"), 0644); err != nil {
+			return nil, err
+		}
 	}
 	if err := tw.Close(); err != nil {
 		return nil, err
@@ -222,6 +228,16 @@ func (t *debTarget) Build(b *dist.Build) ([]string, error) {
 			Type:        files.TypeFile,
 			Source:      filepath.Join(tailscaledDir, "tailscaled.service"),
 			Destination: "/lib/systemd/system/tailscaled.service",
+		},
+		&files.Content{
+			Type:        files.TypeFile,
+			Source:      filepath.Join(tailscaledDir, "tailscale-online.target"),
+			Destination: "/lib/systemd/system/tailscale-online.target",
+		},
+		&files.Content{
+			Type:        files.TypeFile,
+			Source:      filepath.Join(tailscaledDir, "tailscale-wait-online.service"),
+			Destination: "/lib/systemd/system/tailscale-wait-online.service",
 		},
 		&files.Content{
 			Type:        files.TypeConfigNoReplace,
@@ -359,6 +375,16 @@ func (t *rpmTarget) Build(b *dist.Build) ([]string, error) {
 			Type:        files.TypeFile,
 			Source:      filepath.Join(tailscaledDir, "tailscaled.service"),
 			Destination: "/lib/systemd/system/tailscaled.service",
+		},
+		&files.Content{
+			Type:        files.TypeFile,
+			Source:      filepath.Join(tailscaledDir, "tailscale-online.target"),
+			Destination: "/lib/systemd/system/tailscale-online.target",
+		},
+		&files.Content{
+			Type:        files.TypeFile,
+			Source:      filepath.Join(tailscaledDir, "tailscale-wait-online.service"),
+			Destination: "/lib/systemd/system/tailscale-wait-online.service",
 		},
 		&files.Content{
 			Type:        files.TypeConfigNoReplace,
