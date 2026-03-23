@@ -36,4 +36,8 @@ jobs:
 
       - name: Run 'go vet'
         working-directory: src
-        run: ./tool/go vet -vettool=/tmp/vettool tailscale.com/...
+        # Must use ./... instead of tailscale.com/... because the latter will
+        # include the v2 go client (tailscale.com/client/tailscale/v2) if it's
+        # a dependency in our go.mod file. Possibly a go vet bug, but avoid
+        # cross-repo vetting for now so we can safely add the dependency.
+        run: ./tool/go vet -vettool=/tmp/vettool ./...
