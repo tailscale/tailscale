@@ -268,13 +268,13 @@ func TestDNSResponse(t *testing.T) {
 				},
 			},
 		},
-		ignoreDsts: &bart.Table[bool]{},
+		ignoreDsts: &bart.Lite{},
 		routes:     routes,
 		v6ULA:      v6ULA,
 		ipPool:     &ippool.SingleMachineIPPool{IPSet: addrPool},
 		dnsAddr:    dnsAddr,
 	}
-	c.ignoreDsts.Insert(netip.MustParsePrefix("8.8.4.4/32"), true)
+	c.ignoreDsts.Insert(netip.MustParsePrefix("8.8.4.4/32"))
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -411,9 +411,9 @@ func TestDNSResponse(t *testing.T) {
 }
 
 func TestIgnoreDestination(t *testing.T) {
-	ignoreDstTable := &bart.Table[bool]{}
-	ignoreDstTable.Insert(netip.MustParsePrefix("192.168.1.0/24"), true)
-	ignoreDstTable.Insert(netip.MustParsePrefix("10.0.0.0/8"), true)
+	ignoreDstTable := &bart.Lite{}
+	ignoreDstTable.Insert(netip.MustParsePrefix("192.168.1.0/24"))
+	ignoreDstTable.Insert(netip.MustParsePrefix("10.0.0.0/8"))
 
 	c := &connector{
 		ignoreDsts: ignoreDstTable,
