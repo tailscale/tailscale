@@ -259,6 +259,16 @@
         <string>never</string>
       </disabledValue>
     </policy>
+    <policy name="CheckUpdates" class="Machine" displayName="$(string.CheckUpdates)" explainText="$(string.CheckUpdates_Help)" key="Software\Policies\Tailscale" valueName="CheckUpdates">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="PARTIAL_FULL_SINCE_V1_56" />
+      <enabledValue>
+        <string>always</string>
+      </enabledValue>
+      <disabledValue>
+        <string>never</string>
+      </disabledValue>
+    </policy>
     <policy name="AdvertiseExitNode" class="Machine" displayName="$(string.AdvertiseExitNode)" explainText="$(string.AdvertiseExitNode_Help)" key="Software\Policies\Tailscale" valueName="AdvertiseExitNode">
       <parentCategory ref="Settings_Category" />
       <supportedOn ref="PARTIAL_FULL_SINCE_V1_56" />
