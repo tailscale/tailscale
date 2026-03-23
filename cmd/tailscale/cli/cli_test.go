@@ -769,7 +769,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			args: upArgsT{
 				exitNodeIP: "foo",
 			},
-			wantErr: `invalid value "foo" for --exit-node; must be IP or unique node name`,
+			wantErr: `invalid value "foo" for --exit-node; must be IP or hostname`,
 		},
 		{
 			name: "error_exit_node_allow_lan_without_exit_node",
