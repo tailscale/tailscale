@@ -101,7 +101,7 @@ var (
 	appleIPRange = netip.MustParsePrefix("17.0.0.0/8")
 	canonicalIPs = sync.OnceValue(func() (checkIPFunc func(netip.Addr) bool) {
 		// https://bgp.he.net/AS41231#_prefixes
-		t := &bart.Table[bool]{}
+		t := &bart.Lite{}
 		for s := range strings.FieldsSeq(`
 			91.189.89.0/24
 			91.189.91.0/24
@@ -115,12 +115,9 @@ var (
 			185.125.188.0/23
 			185.125.190.0/24
 			194.169.254.0/24`) {
-			t.Insert(netip.MustParsePrefix(s), true)
+			t.Insert(netip.MustParsePrefix(s))
 		}
-		return func(ip netip.Addr) bool {
-			v, _ := t.Lookup(ip)
-			return v
-		}
+		return t.Contains
 	})
 )
 
