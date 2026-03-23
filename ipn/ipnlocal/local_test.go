@@ -2046,9 +2046,53 @@ func TestUpdateNetmapDelta(t *testing.T) {
 	}
 }
 
-// tests WhoIs and indirectly that setNetMapLocked updates b.nodeByAddr correctly.
+type whoIsTestParams struct {
+	testName   string
+	q          string
+	want       tailcfg.NodeID // 0 means want ok=false
+	wantName   string
+	wantGroups []string
+}
+
+func expectWhois(t *testing.T, tests []whoIsTestParams, b *LocalBackend) {
+	t.Helper()
+
+	checkWhoIs := func(t *testing.T, tt whoIsTestParams, nv tailcfg.NodeView, up tailcfg.UserProfile, ok bool) {
+		t.Helper()
+		var got tailcfg.NodeID
+		if ok {
+			got = nv.ID()
+		}
+		if got != tt.want {
+			t.Errorf("got nodeID %v; want %v", got, tt.want)
+		}
+		if up.DisplayName != tt.wantName {
+			t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
+		}
+		if !slices.Equal(up.Groups, tt.wantGroups) {
+			t.Errorf("got groups %q; want %q", up.Groups, tt.wantGroups)
+		}
+	}
+
+	for _, tt := range tests {
+		t.Run("ByAddr/"+tt.testName, func(t *testing.T) {
+			nv, up, ok := b.WhoIs("", netip.MustParseAddrPort(tt.q))
+			checkWhoIs(t, tt, nv, up, ok)
+		})
+		t.Run("ByNodeKey/"+tt.testName, func(t *testing.T) {
+			nv, up, ok := b.WhoIsNodeKey(makeNodeKeyFromID(tt.want))
+			checkWhoIs(t, tt, nv, up, ok)
+		})
+	}
+}
+
+// Test WhoIs and WhoIsNodeKey.
+// This indirectly asserts that localBackend's setNetMapLocked updates nodeBackend's b.nodeByAddr and b.nodeByKey correctly.
 func TestWhoIs(t *testing.T) {
+
 	b := newTestLocalBackend(t)
+
+	// Simple two-node netmap.
 	b.setNetMapLocked(&netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{
 			ID:        1,
@@ -2069,41 +2113,106 @@ func TestWhoIs(t *testing.T) {
 				DisplayName: "Myself",
 			}).View(),
 			20: (&tailcfg.UserProfile{
-				DisplayName: "Peer",
+				DisplayName: "Peer2",
 				Groups:      []string{"group:foo"},
 			}).View(),
 		},
 	})
-	tests := []struct {
-		q          string
-		want       tailcfg.NodeID // 0 means want ok=false
-		wantName   string
-		wantGroups []string
-	}{
-		{"100.101.102.103:0", 1, "Myself", nil},
-		{"100.101.102.103:123", 1, "Myself", nil},
-		{"100.200.200.200:0", 2, "Peer", []string{"group:foo"}},
-		{"100.200.200.200:123", 2, "Peer", []string{"group:foo"}},
-		{"100.4.0.4:404", 0, "", nil},
+	testsRound1 := []whoIsTestParams{
+		{"round1MyselfNoPort", "100.101.102.103:0", 1, "Myself", nil},
+		{"round1MyselfWithPort", "100.101.102.103:123", 1, "Myself", nil},
+		{"round1Peer2NoPort", "100.200.200.200:0", 2, "Peer2", []string{"group:foo"}},
+		{"round1Peer2WithPort", "100.200.200.200:123", 2, "Peer2", []string{"group:foo"}},
+		{"round1UnknownPeer", "100.4.0.4:404", 0, "", nil},
 	}
-	for _, tt := range tests {
-		t.Run(tt.q, func(t *testing.T) {
-			nv, up, ok := b.WhoIs("", netip.MustParseAddrPort(tt.q))
-			var got tailcfg.NodeID
-			if ok {
-				got = nv.ID()
-			}
-			if got != tt.want {
-				t.Errorf("got nodeID %v; want %v", got, tt.want)
-			}
-			if up.DisplayName != tt.wantName {
-				t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
-			}
-			if !slices.Equal(up.Groups, tt.wantGroups) {
-				t.Errorf("got groups %q; want %q", up.Groups, tt.wantGroups)
-			}
-		})
+	expectWhois(t, testsRound1, b)
+
+	// Now push a new netmap where a new peer is added
+	// This verifies we add nodes to indexes correctly
+	b.setNetMapLocked(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:        1,
+			User:      10,
+			Key:       makeNodeKeyFromID(1),
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.101.102.103/32")},
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				ID:        2,
+				User:      20,
+				Key:       makeNodeKeyFromID(2),
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.200.200.200/32")},
+			}).View(),
+			(&tailcfg.Node{
+				ID:        3,
+				User:      30,
+				Key:       makeNodeKeyFromID(3),
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.233.233.233/32")},
+			}).View(),
+		},
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+			10: (&tailcfg.UserProfile{
+				DisplayName: "Myself",
+			}).View(),
+			20: (&tailcfg.UserProfile{
+				DisplayName: "Peer2",
+				Groups:      []string{"group:foo"},
+			}).View(),
+			30: (&tailcfg.UserProfile{
+				DisplayName: "Peer3",
+			}).View(),
+		},
+	})
+
+	testsRound2 := []whoIsTestParams{
+		{"round2MyselfNoPort", "100.101.102.103:0", 1, "Myself", nil},
+		{"round2MyselfWithPort", "100.101.102.103:123", 1, "Myself", nil},
+		{"round2Peer2NoPort", "100.200.200.200:0", 2, "Peer2", []string{"group:foo"}},
+		{"round2Peer2WithPort", "100.200.200.200:123", 2, "Peer2", []string{"group:foo"}},
+		{"round2Peer3NoPort", "100.233.233.233:0", 3, "Peer3", nil},
+		{"round2Peer3WithPort", "100.233.233.233:123", 3, "Peer3", nil},
+		{"round2UnknownPeer", "100.4.0.4:404", 0, "", nil},
 	}
+	expectWhois(t, testsRound2, b)
+
+	// Finally push a new netmap where a peer is removed
+	// This verifies we remove nodes from indexes correctly
+	b.setNetMapLocked(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:        1,
+			User:      10,
+			Key:       makeNodeKeyFromID(1),
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.101.102.103/32")},
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			// Node ID 2 removed
+			(&tailcfg.Node{
+				ID:        3,
+				User:      30,
+				Key:       makeNodeKeyFromID(3),
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.233.233.233/32")},
+			}).View(),
+		},
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+			10: (&tailcfg.UserProfile{
+				DisplayName: "Myself",
+			}).View(),
+			30: (&tailcfg.UserProfile{
+				DisplayName: "Peer3",
+			}).View(),
+		},
+	})
+
+	testsRound3 := []whoIsTestParams{
+		{"round3MyselfNoPort", "100.101.102.103:0", 1, "Myself", nil},
+		{"round3MyselfWithPort", "100.101.102.103:123", 1, "Myself", nil},
+		{"round3Peer2NoPortUnknown", "100.200.200.200:0", 0, "", nil},
+		{"round3Peer2WithPortUnknown", "100.200.200.200:123", 0, "", nil},
+		{"round3Peer3NoPort", "100.233.233.233:0", 3, "Peer3", nil},
+		{"round3Peer3WithPort", "100.233.233.233:123", 3, "Peer3", nil},
+		{"round3UnknownPeer", "100.4.0.4:404", 0, "", nil},
+	}
+	expectWhois(t, testsRound3, b)
 }
 
 func TestWireguardExitNodeDNSResolvers(t *testing.T) {
