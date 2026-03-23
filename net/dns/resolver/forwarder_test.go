@@ -1162,8 +1162,19 @@ func TestForwarderWithManyResolvers(t *testing.T) {
 			},
 		},
 		{
-			name: "Refused",
-			responses: [][]byte{ // All upstream servers return different failures.
+			name: "AllRefused",
+			responses: [][]byte{ // All upstream servers return REFUSED.
+				makeTestResponse(t, domain, dns.RCodeRefused),
+				makeTestResponse(t, domain, dns.RCodeRefused),
+				makeTestResponse(t, domain, dns.RCodeRefused),
+			},
+			wantResponses: [][]byte{ // When all refuse, return REFUSED to the client.
+				makeTestResponse(t, domain, dns.RCodeRefused),
+			},
+		},
+		{
+			name: "Refused+Success",
+			responses: [][]byte{ // Some upstream servers refuse, but one succeeds.
 				makeTestResponse(t, domain, dns.RCodeRefused),
 				makeTestResponse(t, domain, dns.RCodeRefused),
 				makeTestResponse(t, domain, dns.RCodeRefused),
@@ -1171,21 +1182,30 @@ func TestForwarderWithManyResolvers(t *testing.T) {
 				makeTestResponse(t, domain, dns.RCodeRefused),
 				makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("127.0.0.1")),
 			},
-			wantResponses: [][]byte{ // Refused is not considered to be an error and can be forwarded.
-				makeTestResponse(t, domain, dns.RCodeRefused),
+			wantResponses: [][]byte{ // Refused is treated as a soft error; the Success response should win.
 				makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("127.0.0.1")),
 			},
 		},
 		{
+			name: "Refused+ServFail",
+			responses: [][]byte{ // Some servers refuse, at least one fails.
+				makeTestResponse(t, domain, dns.RCodeRefused),
+				makeTestResponse(t, domain, dns.RCodeServerFailure),
+				makeTestResponse(t, domain, dns.RCodeRefused),
+			},
+			wantResponses: [][]byte{ // Any non-REFUSED failure triggers SERVFAIL regardless of arrival order.
+				makeTestResponse(t, domain, dns.RCodeServerFailure),
+			},
+		},
+		{
 			name: "MixFail",
-			responses: [][]byte{ // All upstream servers return different failures.
+			responses: [][]byte{ // Upstream servers return different failures.
 				makeTestResponse(t, domain, dns.RCodeServerFailure),
 				makeTestResponse(t, domain, dns.RCodeNameError),
 				makeTestResponse(t, domain, dns.RCodeRefused),
 			},
-			wantResponses: [][]byte{ // Both NXDomain and Refused can be forwarded.
+			wantResponses: [][]byte{ // SERVFAIL and REFUSED are soft errors; NXDOMAIN wins.
 				makeTestResponse(t, domain, dns.RCodeNameError),
-				makeTestResponse(t, domain, dns.RCodeRefused),
 			},
 		},
 	}
@@ -1295,5 +1315,73 @@ func TestForwarderVerboseLogs(t *testing.T) {
 	logStr := logBuf.String()
 	if !strings.Contains(logStr, "forwarder.send(") {
 		t.Errorf("expected forwarding log, got:\n%s", logStr)
+	}
+}
+
+// TestForwarderHealthOnContextExpiry verifies that when all resolvers fail and
+// the context expires before the response can be sent, the health tracker is
+// set unhealthy if and only if acceptDNS is true.
+func TestForwarderHealthOnContextExpiry(t *testing.T) {
+	const domain = "health-test.example.com."
+
+	tests := []struct {
+		name          string
+		acceptDNS     bool
+		wantUnhealthy bool
+	}{
+		{"acceptDNS=true", true, true},
+		{"acceptDNS=false", false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := makeTestRequest(t, domain, dns.TypeA, 0)
+			logf := tstest.WhileTestRunningLogger(t)
+			bus := eventbustest.NewBus(t)
+			netMon, err := netmon.New(bus, logf)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var dialer tsdial.Dialer
+			dialer.SetNetMon(netMon)
+			dialer.SetBus(bus)
+
+			ht := health.NewTracker(bus)
+			fwd := newForwarder(logf, netMon, nil, &dialer, ht, nil)
+			fwd.acceptDNS = tt.acceptDNS
+
+			port1 := runDNSServer(t, nil, makeTestResponse(t, domain, dns.RCodeServerFailure), func(bool, []byte) {})
+			port2 := runDNSServer(t, nil, makeTestResponse(t, domain, dns.RCodeServerFailure), func(bool, []byte) {})
+
+			resolvers := []resolverAndDelay{
+				{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", port1)}},
+				{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", port2)}},
+			}
+
+			rpkt := packet{
+				bs:     request,
+				family: "udp",
+				addr:   netip.MustParseAddrPort("127.0.0.1:12345"),
+			}
+
+			// Use an unbuffered responseChan so the send blocks, forcing the
+			// ctx.Done path and the SetUnhealthy call.
+			responseChan := make(chan packet)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			// Cancel after DNS servers have had time to respond and their errors
+			// collected, leaving forwardWithDestChan blocked on responseChan.
+			go func() {
+				time.Sleep(50 * time.Millisecond)
+				cancel()
+			}()
+
+			fwd.forwardWithDestChan(ctx, rpkt, responseChan, resolvers...)
+
+			if got := ht.IsUnhealthy(dnsForwarderFailing); got != tt.wantUnhealthy {
+				t.Errorf("IsUnhealthy = %v, want %v", got, tt.wantUnhealthy)
+			}
+		})
 	}
 }
