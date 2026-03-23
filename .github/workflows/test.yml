@@ -145,10 +145,11 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        # Don't use ** globbing pattern for cache key calculation, it can take up to 15s.
+        key: ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('src/go.sum') }}-${{ github.job }}-${{ github.run_id }}
         restore-keys: |
-          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
-          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-
+          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('src/go.sum') }}-${{ github.job }}-
+          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('src/go.sum') }}-
           ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-
           ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-
     - name: build all
@@ -216,7 +217,8 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        # Don't use ** globbing pattern for cache key calculation, it can take up to 15s.
+        key: ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('src/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   windows:
     permissions:
@@ -304,10 +306,11 @@ jobs:
       uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
       with:
         path: ~/Library/Caches/go-build
-        key: ${{ runner.os }}-go-test-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        # Don't use ** globbing pattern for cache key calculation, it can take up to 15s.
+        key: ${{ runner.os }}-go-test-${{ hashFiles('src/go.sum') }}-${{ github.job }}-${{ github.run_id }}
         restore-keys: |
-          ${{ runner.os }}-go-test-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
-          ${{ runner.os }}-go-test-${{ hashFiles('**/go.sum') }}-
+          ${{ runner.os }}-go-test-${{ hashFiles('src/go.sum') }}-${{ github.job }}-
+          ${{ runner.os }}-go-test-${{ hashFiles('src/go.sum') }}-
           ${{ runner.os }}-go-test-
     - name: build test wrapper
       working-directory: src
@@ -340,7 +343,8 @@ jobs:
       uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
       with:
         path: ~/Library/Caches/go-build
-        key: ${{ runner.os }}-go-test-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        # Don't use ** globbing pattern for cache key calculation, it can take up to 15s.
+        key: ${{ runner.os }}-go-test-${{ hashFiles('src/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   privileged:
     needs: gomod-cache
@@ -447,10 +451,11 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        # Don't use ** globbing pattern for cache key calculation, it can take up to 15s.
+        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('src/go.sum') }}-${{ github.job }}-${{ github.run_id }}
         restore-keys: |
-          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
-          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-
+          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('src/go.sum') }}-${{ github.job }}-
+          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('src/go.sum') }}-
           ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-
     - name: build all
       working-directory: src
@@ -482,7 +487,8 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        # Don't use ** globbing pattern for cache key calculation, it can take up to 15s.
+        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('src/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   ios: # similar to cross above, but iOS can't build most of the repo. So, just
        # make it build a few smoke packages.
@@ -546,10 +552,11 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        # Don't use ** globbing pattern for cache key calculation, it can take up to 15s.
+        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('src/go.sum') }}-${{ github.job }}-${{ github.run_id }}
         restore-keys: |
-          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
-          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-
+          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('src/go.sum') }}-${{ github.job }}-
+          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('src/go.sum') }}-
           ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-
     - name: build core
       working-directory: src
@@ -574,7 +581,8 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        # Don't use ** globbing pattern for cache key calculation, it can take up to 15s.
+        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('src/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   android:
     # similar to cross above, but android fails to build a few pieces of the
@@ -627,10 +635,11 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        # Don't use ** globbing pattern for cache key calculation, it can take up to 15s.
+        key: ${{ runner.os }}-js-wasm-go-${{ hashFiles('src/go.sum') }}-${{ github.job }}-${{ github.run_id }}
         restore-keys: |
-          ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
-          ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-
+          ${{ runner.os }}-js-wasm-go-${{ hashFiles('src/go.sum') }}-${{ github.job }}-
+          ${{ runner.os }}-js-wasm-go-${{ hashFiles('src/go.sum') }}-
           ${{ runner.os }}-js-wasm-go-
     - name: build tsconnect client
       working-directory: src
@@ -660,7 +669,8 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        # Don't use ** globbing pattern for cache key calculation, it can take up to 15s.
+        key: ${{ runner.os }}-js-wasm-go-${{ hashFiles('src/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   tailscale_go: # Subset of tests that depend on our custom Go toolchain.
     runs-on: ubuntu-24.04
