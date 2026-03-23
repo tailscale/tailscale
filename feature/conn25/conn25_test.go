@@ -798,12 +798,14 @@ func (nb *testNodeBackend) PeerAPIBase(p tailcfg.NodeView) string {
 
 type testHost struct {
 	ipnext.Host
-	nb    ipnext.NodeBackend
-	hooks ipnext.Hooks
+	nb                ipnext.NodeBackend
+	hooks             ipnext.Hooks
+	authReconfigAsync func()
 }
 
 func (h *testHost) NodeBackend() ipnext.NodeBackend { return h.nb }
 func (h *testHost) Hooks() *ipnext.Hooks            { return &h.hooks }
+func (h *testHost) AuthReconfigAsync()              { h.authReconfigAsync() }
 
 type testSafeBackend struct {
 	ipnext.SafeBackend
@@ -812,9 +814,11 @@ type testSafeBackend struct {
 
 func (b *testSafeBackend) Sys() *tsd.System { return b.sys }
 
-// TestEnqueueAddress tests that after enqueueAddress has been called a
-// peerapi request is made to a peer.
-func TestEnqueueAddress(t *testing.T) {
+// TestAddressAssignmentIsHandled tests that after enqueueAddress has been called
+// we handle the assignment asynchronously by:
+//   - making a peerapi request to a peer.
+//   - calling AuthReconfigAsync on the host.
+func TestAddressAssignmentIsHandled(t *testing.T) {
 	// make a fake peer to test against
 	received := make(chan ConnectorTransitIPRequest, 1)
 	peersAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -849,10 +853,14 @@ func TestEnqueueAddress(t *testing.T) {
 		conn25:  newConn25(logger.Discard),
 		backend: &testSafeBackend{sys: sys},
 	}
+	authReconfigAsyncCalled := make(chan struct{}, 1)
 	if err := ext.Init(&testHost{
 		nb: &testNodeBackend{
 			peers:      []tailcfg.NodeView{connectorPeer},
 			peerAPIURL: peersAPI.URL,
+		},
+		authReconfigAsync: func() {
+			authReconfigAsyncCalled <- struct{}{}
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -895,6 +903,11 @@ func TestEnqueueAddress(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for connector to receive request")
+	}
+	select {
+	case <-authReconfigAsyncCalled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for AuthReconfigAsync to be called")
 	}
 }
 

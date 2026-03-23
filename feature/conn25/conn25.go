@@ -603,11 +603,20 @@ func (e *extension) sendLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case as := <-e.conn25.client.addrsCh:
-			if err := e.sendAddressAssignment(ctx, as); err != nil {
-				e.conn25.client.logf("error sending transit IP assignment (app: %s, mip: %v, src: %v): %v", as.app, as.magic, as.dst, err)
+			if err := e.handleAddressAssignment(ctx, as); err != nil {
+				e.conn25.client.logf("error handling transit IP assignment (app: %s, mip: %v, src: %v): %v", as.app, as.magic, as.dst, err)
 			}
 		}
 	}
+}
+
+func (e *extension) handleAddressAssignment(ctx context.Context, as addrs) error {
+	if err := e.sendAddressAssignment(ctx, as); err != nil {
+		return err
+	}
+	// TODO(fran) assign the connector publickey -> transit ip addresses
+	e.host.AuthReconfigAsync()
+	return nil
 }
 
 func (c *client) enqueueAddressAssignment(addrs addrs) error {
