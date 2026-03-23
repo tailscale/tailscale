@@ -387,6 +387,12 @@ func debugCmd() *ffcli.Command {
 					return fs
 				})(),
 			},
+			{
+				Name:       "statedir",
+				ShortUsage: "tailscale debug statedir",
+				ShortHelp:  "Print the location of the state directory (if any)",
+				Exec:       runPrintStateDir,
+			},
 			ccall(debugPeerRelayCmd),
 		}...),
 	}
@@ -1406,4 +1412,23 @@ func runTestRisk(ctx context.Context, args []string) error {
 	}
 	fmt.Println("did-test-risky-action")
 	return nil
+}
+
+func runPrintStateDir(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		return errors.New("unexpected arguments")
+	}
+	v, err := localClient.DebugResultJSON(ctx, "statedir")
+	if err != nil {
+		return err
+	}
+	statedir, ok := v.(string)
+	if ok && statedir != "" {
+		fmt.Println(statedir)
+		return nil
+	} else if ok && statedir == "" {
+		return errors.New("no statedir is set")
+	} else {
+		return fmt.Errorf("got unexpected response from debug API: %v", v)
+	}
 }
