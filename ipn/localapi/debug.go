@@ -234,6 +234,13 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		}
 	case "rotate-disco-key":
 		err = h.b.DebugRotateDiscoKey()
+	case "statedir":
+		root := h.b.TailscaleVarRoot()
+		w.Header().Set("Content-Type", "application/json")
+		err = json.NewEncoder(w).Encode(root)
+		if err == nil {
+			return
+		}
 	case "":
 		err = fmt.Errorf("missing parameter 'action'")
 	default:
