@@ -1009,7 +1009,7 @@ func TestExitNodeIPOfArg(t *testing.T) {
 			name:    "no_match",
 			arg:     "unknown",
 			st:      &ipnstate.Status{MagicDNSSuffix: ".foo"},
-			wantErr: `invalid value "unknown" for --exit-node; must be IP or unique node name`,
+			wantErr: `invalid value "unknown" for --exit-node; must be IP or hostname`,
 		},
 		{
 			name: "name",
@@ -1029,6 +1029,21 @@ func TestExitNodeIPOfArg(t *testing.T) {
 		{
 			name: "name_fqdn",
 			arg:  "skippy.foo.",
+			st: &ipnstate.Status{
+				MagicDNSSuffix: ".foo",
+				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
+					key.NewNode().Public(): {
+						DNSName:        "skippy.foo.",
+						TailscaleIPs:   []netip.Addr{mustIP("1.0.0.2")},
+						ExitNodeOption: true,
+					},
+				},
+			},
+			want: mustIP("1.0.0.2"),
+		},
+		{
+			name: "name_fqdn_sans_dot",
+			arg:  "skippy.foo",
 			st: &ipnstate.Status{
 				MagicDNSSuffix: ".foo",
 				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
@@ -1067,7 +1082,7 @@ func TestExitNodeIPOfArg(t *testing.T) {
 					},
 				},
 			},
-			wantErr: `invalid value "skippy.bar." for --exit-node; must be IP or unique node name`,
+			wantErr: `invalid value "skippy.bar." for --exit-node; must be IP or hostname`,
 		},
 		{
 			name: "ambiguous",
