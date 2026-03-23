@@ -145,7 +145,7 @@ func (a *actor) Username() (string, error) {
 		}
 		defer tok.Close()
 		return tok.Username()
-	case "darwin", "linux", "illumos", "solaris", "openbsd":
+	case "darwin", "linux", "illumos", "solaris", "openbsd", "freebsd":
 		creds := a.ci.Creds()
 		if creds == nil {
 			return "", errors.New("peer credentials not implemented on this OS")
