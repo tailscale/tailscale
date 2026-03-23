@@ -410,12 +410,6 @@ type LocalBackend struct {
 	// getCertForTest is used to retrieve TLS certificates in tests.
 	// See [LocalBackend.ConfigureCertsForTest].
 	getCertForTest func(hostname string) (*TLSCertKeyPair, error)
-
-	// existsPendingAuthReconfig tracks if a goroutine is waiting to
-	// acquire [LocalBackend]'s mutex inside of [LocalBackend.AuthReconfig].
-	// It is used to prevent goroutines from piling up to do the same
-	// work of [LocalBackend.authReconfigLocked].
-	existsPendingAuthReconfig atomic.Bool
 }
 
 // SetHardwareAttested enables hardware attestation key signatures in map
@@ -5080,18 +5074,8 @@ func (b *LocalBackend) readvertiseAppConnectorRoutes() {
 // Reconfiguration may run asynchronously and may not complete
 // before the call returns.
 func (b *LocalBackend) authReconfig() {
-	// If there's already a pending auth reconfig from another
-	// goroutine, exit early. If not, this goroutine becomes the pending.
-	if b.existsPendingAuthReconfig.Swap(true) {
-		return
-	}
-
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
-	// Allow another goroutine to become pending.
-	b.existsPendingAuthReconfig.Store(false)
-
 	b.authReconfigLocked()
 }
 

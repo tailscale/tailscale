@@ -111,6 +111,12 @@ type ExtensionHost struct {
 	// currentPrefs is a read-only view of the current profile's [ipn.Prefs]
 	// with any private keys stripped. It is always Valid.
 	currentPrefs ipn.PrefsView
+
+	// existsPendingAuthReconfig tracks if a goroutine is already enqueued
+	// to call [LocalBackend.authReconfig]. It is used to prevent goroutines
+	// from piling up in the queue to do the same
+	// work of [LocalBackend.authReconfigLocked].
+	existsPendingAuthReconfig atomic.Bool
 }
 
 // Backend is a subset of [LocalBackend] methods that are used by [ExtensionHost].
@@ -544,11 +550,19 @@ func (h *ExtensionHost) Shutdown() {
 }
 
 // AuthReconfigAsync implements [ipnext.Host.AuthReconfigAsync].
+// Callers may experience an early return with no work
+// done if another goroutine is waiting in the backend operation queue.
+// If there is no other goroutine waiting, the calling goroutine will
+// proceed to queue.
 func (h *ExtensionHost) AuthReconfigAsync() {
 	if h == nil {
 		return
 	}
+	if h.existsPendingAuthReconfig.Swap(true) {
+		return
+	}
 	h.enqueueBackendOperation(func(b Backend) {
+		h.existsPendingAuthReconfig.Store(false)
 		b.authReconfig()
 	})
 }
