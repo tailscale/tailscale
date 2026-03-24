@@ -121,7 +121,8 @@ type userspaceEngine struct {
 	birdClient     BIRDClient          // or nil
 	controlKnobs   *controlknobs.Knobs // or nil
 
-	testMaybeReconfigHook func() // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
+	testMaybeReconfigHook func()                        // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
+	testDiscoChangedHook  func(map[key.NodePublic]bool) // for tests; if non-nil, fires after assembling discoChanged map
 
 	// isLocalAddr reports the whether an IP is assigned to the local
 	// tunnel interface. It's used to reflect local packets
@@ -166,6 +167,10 @@ type userspaceEngine struct {
 
 	// networkLogger logs statistics about network connections.
 	networkLogger netlog.Logger
+
+	// tsmpLearnedDisco tracks per node key if a peer disco key was learned via TSMP.
+	// wgLock must be held when using this map.
+	tsmpLearnedDisco map[key.NodePublic]key.DiscoPublic
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
@@ -1028,6 +1033,12 @@ func (e *userspaceEngine) ResetAndStop() (*Status, error) {
 	}
 }
 
+func (e *userspaceEngine) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPublic) {
+	e.wgLock.Lock()
+	defer e.wgLock.Unlock()
+	mak.Set(&e.tsmpLearnedDisco, pub, disco)
+}
+
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config) error {
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
@@ -1119,12 +1130,29 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 			if p.DiscoKey.IsZero() {
 				continue
 			}
+
+			// If the key changed, mark the connection for reconfiguration.
 			pub := p.PublicKey
 			if old, ok := prevEP[pub]; ok && old != p.DiscoKey {
+				// If the disco key was learned via TSMP, we do not need to reset the
+				// wireguard config as the new key was received over an existing wireguard
+				// connection.
+				if discoTSMP, okTSMP := e.tsmpLearnedDisco[p.PublicKey]; okTSMP &&
+					discoTSMP == p.DiscoKey {
+					delete(e.tsmpLearnedDisco, p.PublicKey)
+					e.logf("wgengine: Skipping reconfig (TSMP key): %s changed from %q to %q", pub.ShortString(), old, p.DiscoKey)
+					continue
+				}
+
 				discoChanged[pub] = true
 				e.logf("wgengine: Reconfig: %s changed from %q to %q", pub.ShortString(), old, p.DiscoKey)
 			}
 		}
+	}
+
+	// For tests, what disco connections needs to be changed.
+	if e.testDiscoChangedHook != nil {
+		e.testDiscoChangedHook(discoChanged)
 	}
 
 	e.lastCfgFull = *cfg.Clone()
@@ -1142,6 +1170,13 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 
 	if err := e.maybeReconfigWireguardLocked(discoChanged); err != nil {
 		return err
+	}
+
+	// Cleanup map of tsmp marks for peers that no longer exists in config.
+	for nodeKey := range e.tsmpLearnedDisco {
+		if !peerSet.Contains(nodeKey) {
+			delete(e.tsmpLearnedDisco, nodeKey)
+		}
 	}
 
 	// Shutdown the network logger because the IDs changed.

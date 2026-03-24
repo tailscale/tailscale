@@ -242,3 +242,15 @@ func (e *watchdogEngine) InstallCaptureHook(cb packet.CaptureCallback) {
 func (e *watchdogEngine) PeerByKey(pubKey key.NodePublic) (_ wgint.Peer, ok bool) {
 	return e.wrap.PeerByKey(pubKey)
 }
+
+func (e *watchdogEngine) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPublic) {
+	// PatchDiscoKey mirrors the implementation of [controlclient.patchDiscoKeyer ].
+	// It is implemented here to avoid the dependency edge to controlclient, but must be kept
+	// in sync with the original implementation.
+	type patchDiscoKeyer interface {
+		PatchDiscoKey(key.NodePublic, key.DiscoPublic)
+	}
+	if n, ok := e.wrap.(patchDiscoKeyer); ok {
+		n.PatchDiscoKey(pub, disco)
+	}
+}

@@ -164,6 +164,79 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 	}
 }
 
+func TestUserspaceEngineTSMPLearned(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+
+	ht := health.NewTracker(bus)
+	reg := new(usermetric.Registry)
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, ht, reg, bus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+	ue := e.(*userspaceEngine)
+
+	discoChangedChan := make(chan map[key.NodePublic]bool, 1)
+	ue.testDiscoChangedHook = func(m map[key.NodePublic]bool) {
+		discoChangedChan <- m
+	}
+
+	routerCfg := &router.Config{}
+
+	keyChanges := []struct {
+		tsmp  bool
+		inMap bool
+	}{
+		{tsmp: false, inMap: false},
+		{tsmp: true, inMap: false},
+		{tsmp: false, inMap: true},
+	}
+
+	nkHex := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	for _, change := range keyChanges {
+		oldDisco := key.NewDisco()
+		nm := &netmap.NetworkMap{
+			Peers: nodeViews([]*tailcfg.Node{
+				{
+					ID:       1,
+					Key:      nkFromHex(nkHex),
+					DiscoKey: oldDisco.Public(),
+				},
+			}),
+		}
+		nk, err := key.ParseNodePublicUntyped(mem.S(nkHex))
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.SetNetworkMap(nm)
+
+		newDisco := key.NewDisco()
+		cfg := &wgcfg.Config{
+			Peers: []wgcfg.Peer{
+				{
+					PublicKey: nk,
+					DiscoKey:  newDisco.Public(),
+				},
+			},
+		}
+
+		if change.tsmp {
+			ue.PatchDiscoKey(nk, newDisco.Public())
+		}
+		err = e.Reconfig(cfg, routerCfg, &dns.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		changeMap := <-discoChangedChan
+
+		if _, ok := changeMap[nk]; ok != change.inMap {
+			t.Fatalf("expect key %v in map %v to be %t, got %t", nk, changeMap,
+				change.inMap, ok)
+		}
+	}
+}
+
 func TestUserspaceEnginePortReconfig(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/2855")
 	const defaultPort = 49983
