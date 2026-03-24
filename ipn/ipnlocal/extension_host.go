@@ -90,6 +90,11 @@ type ExtensionHost struct {
 
 	extByType sync.Map // reflect.Type -> ipnext.Extension
 
+	// hasPendingAuthReconfig tracks whether an AuthReconfig call
+	// has been enqueued but not yet executed. It avoids redundant
+	// reconfigs and prevents them from piling up in the workQueue.
+	hasPendingAuthReconfig atomic.Bool
+
 	// mu protects the following fields.
 	// It must not be held when calling [LocalBackend] methods
 	// or when invoking callbacks registered by extensions.
@@ -544,11 +549,17 @@ func (h *ExtensionHost) Shutdown() {
 }
 
 // AuthReconfigAsync implements [ipnext.Host.AuthReconfigAsync].
+// Since execution uses the most recent state at execution time,
+// multiple enqueued calls are redundant and are not enqueued.
 func (h *ExtensionHost) AuthReconfigAsync() {
 	if h == nil {
 		return
 	}
+	if h.hasPendingAuthReconfig.Swap(true) {
+		return
+	}
 	h.enqueueBackendOperation(func(b Backend) {
+		h.hasPendingAuthReconfig.Store(false)
 		b.authReconfig()
 	})
 }
