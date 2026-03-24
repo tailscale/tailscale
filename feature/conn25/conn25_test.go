@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"testing"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -814,13 +813,13 @@ type testSafeBackend struct {
 
 func (b *testSafeBackend) Sys() *tsd.System { return b.sys }
 
-// TestAddressAssignmentIsHandled tests that after enqueueAddress has been called
+// TestAddressAssignmentIsHandled tests that in handleAddressAssignment
 // we handle the assignment asynchronously by:
 //   - making a peerapi request to a peer.
 //   - calling AuthReconfigAsync on the host.
 func TestAddressAssignmentIsHandled(t *testing.T) {
 	// make a fake peer to test against
-	received := make(chan ConnectorTransitIPRequest, 1)
+	var received ConnectorTransitIPRequest
 	peersAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v0/connector/transit-ip" {
 			http.Error(w, "unexpected path", http.StatusNotFound)
@@ -831,7 +830,7 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 			http.Error(w, "bad body", http.StatusBadRequest)
 			return
 		}
-		received <- req
+		received = req
 		resp := ConnectorTransitIPResponse{
 			TransitIPs: []TransitIPResponse{{Code: OK}},
 		}
@@ -853,14 +852,14 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 		conn25:  newConn25(logger.Discard),
 		backend: &testSafeBackend{sys: sys},
 	}
-	authReconfigAsyncCalled := make(chan struct{}, 1)
+	var authReconfigAsyncCalled bool
 	if err := ext.Init(&testHost{
 		nb: &testNodeBackend{
 			peers:      []tailcfg.NodeView{connectorPeer},
 			peerAPIURL: peersAPI.URL,
 		},
 		authReconfigAsync: func() {
-			authReconfigAsyncCalled <- struct{}{}
+			authReconfigAsyncCalled = true
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -884,30 +883,50 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 		domain:  "example.com.",
 		app:     "app1",
 	}
-	ext.conn25.client.enqueueAddressAssignment(as)
+	ext.handleAddressAssignment(t.Context(), as)
 
-	select {
-	case got := <-received:
-		if len(got.TransitIPs) != 1 {
-			t.Fatalf("want 1 TransitIP in request, got %d", len(got.TransitIPs))
-		}
-		tip := got.TransitIPs[0]
-		if tip.TransitIP != as.transit {
-			t.Errorf("TransitIP: got %v, want %v", tip.TransitIP, as.transit)
-		}
-		if tip.DestinationIP != as.dst {
-			t.Errorf("DestinationIP: got %v, want %v", tip.DestinationIP, as.dst)
-		}
-		if tip.App != as.app {
-			t.Errorf("App: got %q, want %q", tip.App, as.app)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for connector to receive request")
+	got := received
+	if len(got.TransitIPs) != 1 {
+		t.Fatalf("want 1 TransitIP in request, got %d", len(got.TransitIPs))
 	}
-	select {
-	case <-authReconfigAsyncCalled:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for AuthReconfigAsync to be called")
+	tip := got.TransitIPs[0]
+	if tip.TransitIP != as.transit {
+		t.Errorf("TransitIP: got %v, want %v", tip.TransitIP, as.transit)
+	}
+	if tip.DestinationIP != as.dst {
+		t.Errorf("DestinationIP: got %v, want %v", tip.DestinationIP, as.dst)
+	}
+	if tip.App != as.app {
+		t.Errorf("App: got %q, want %q", tip.App, as.app)
+	}
+
+	if !authReconfigAsyncCalled {
+		t.Error("AuthReconfigAsync was not called")
+	}
+}
+
+// Test channel loading separately.
+func TestEnqueueAddressAssignment(t *testing.T) {
+	c := &client{
+		addrsCh: make(chan addrs, 64),
+		logf:    logger.Discard,
+	}
+
+	as := addrs{
+		dst:     netip.MustParseAddr("1.2.3.4"),
+		magic:   netip.MustParseAddr("100.64.0.0"),
+		transit: netip.MustParseAddr("169.254.0.1"),
+		domain:  "example.com.",
+		app:     "app1",
+	}
+
+	if err := c.enqueueAddressAssignment(as); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := <-c.addrsCh
+	if got != as {
+		t.Errorf("got %+v, want %+v", got, as)
 	}
 }
 
