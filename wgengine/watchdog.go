@@ -242,3 +242,15 @@ func (e *watchdogEngine) InstallCaptureHook(cb packet.CaptureCallback) {
 func (e *watchdogEngine) PeerByKey(pubKey key.NodePublic) (_ wgint.Peer, ok bool) {
 	return e.wrap.PeerByKey(pubKey)
 }
+
+func (e *watchdogEngine) MarkDiscoAsLearnedFromTSMP(pub key.NodePublic, disco key.DiscoPublic) {
+	// discoUpdateNotifier mirrors the implementation of [controlclient.DiscoUpdateNotifier].
+	// It is implemented here to avoid the dependency edge to controlclient, but must be kept
+	// in sync with the original implementation.
+	type discoUpdateNotifier interface {
+		MarkDiscoAsLearnedFromTSMP(key.NodePublic, key.DiscoPublic)
+	}
+	if n, ok := e.wrap.(discoUpdateNotifier); ok {
+		n.MarkDiscoAsLearnedFromTSMP(pub, disco)
+	}
+}
