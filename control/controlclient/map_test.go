@@ -669,7 +669,7 @@ func TestUpdateDiscoForNode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			nu := &rememberLastNetmapUpdater{
-				done: make(chan any),
+				done: make(chan any, 1),
 			}
 			ms := newTestMapSession(t, nu)
 
