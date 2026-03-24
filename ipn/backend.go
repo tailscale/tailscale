@@ -85,6 +85,8 @@ const (
 	NotifyHealthActions NotifyWatchOpt = 1 << 9 // if set, include PrimaryActions in health.State. Otherwise append the action URL to the text
 
 	NotifyInitialSuggestedExitNode NotifyWatchOpt = 1 << 10 // if set, the first Notify message (sent immediately) will contain the current SuggestedExitNode if available
+
+	NotifyInitialClientVersion NotifyWatchOpt = 1 << 11 // if set, the first Notify message (sent immediately) will contain the current ClientVersion if available and if update checks are enabled
 )
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend

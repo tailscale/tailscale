@@ -7400,6 +7400,98 @@ func TestDeps(t *testing.T) {
 	}.Check(t)
 }
 
+func TestOnClientVersionRespectsAutoUpdateCheck(t *testing.T) {
+	lb := newTestLocalBackend(t)
+
+	cv := &tailcfg.ClientVersion{
+		RunningLatest: false,
+		LatestVersion: "1.96.0",
+	}
+
+	// With Check disabled, onClientVersion should cache but not broadcast.
+	lb.SetPrefsForTest(&ipn.Prefs{
+		AutoUpdate: ipn.AutoUpdatePrefs{Check: false},
+	})
+
+	nw := newNotificationWatcher(t, lb, ipnauth.Self)
+	nw.watch(0, nil, unexpectedClientVersion)
+	lb.onClientVersion(cv)
+	nw.check()
+
+	// Verify it was cached despite not being broadcast.
+	lb.mu.Lock()
+	cached := lb.lastClientVersion
+	lb.mu.Unlock()
+	if cached == nil || cached.LatestVersion != "1.96.0" {
+		t.Fatalf("lastClientVersion not cached: got %v", cached)
+	}
+
+	// With Check enabled, onClientVersion should broadcast.
+	lb.SetPrefsForTest(&ipn.Prefs{
+		AutoUpdate: ipn.AutoUpdatePrefs{Check: true},
+	})
+
+	nw.watch(0, []wantedNotification{
+		wantClientVersionNotify("1.96.0"),
+	})
+	lb.onClientVersion(cv)
+	nw.check()
+}
+
+func TestWatchNotificationsInitialClientVersion(t *testing.T) {
+	lb := newTestLocalBackend(t)
+
+	cv := &tailcfg.ClientVersion{
+		RunningLatest: false,
+		LatestVersion: "1.96.0",
+	}
+
+	// Set Check=true and cache a ClientVersion.
+	lb.SetPrefsForTest(&ipn.Prefs{
+		AutoUpdate: ipn.AutoUpdatePrefs{Check: true},
+	})
+	lb.mu.Lock()
+	lb.lastClientVersion = cv
+	lb.mu.Unlock()
+
+	// Watch with NotifyInitialClientVersion should include ClientVersion.
+	nw := newNotificationWatcher(t, lb, ipnauth.Self)
+	nw.watch(ipn.NotifyInitialClientVersion, []wantedNotification{
+		wantClientVersionNotify("1.96.0"),
+	})
+	nw.check()
+
+	// Watch without the flag, should not include it.
+	nw2 := newNotificationWatcher(t, lb, ipnauth.Self)
+	nw2.watch(0, nil, unexpectedClientVersion)
+	nw2.check()
+
+	// Watch with the flag but Check=false, should not include it.
+	lb.SetPrefsForTest(&ipn.Prefs{
+		AutoUpdate: ipn.AutoUpdatePrefs{Check: false},
+	})
+	nw3 := newNotificationWatcher(t, lb, ipnauth.Self)
+	nw3.watch(ipn.NotifyInitialClientVersion, nil, unexpectedClientVersion)
+	nw3.check()
+}
+
+func wantClientVersionNotify(wantLatest string) wantedNotification {
+	return wantedNotification{
+		name: fmt.Sprintf("ClientVersion-%s", wantLatest),
+		cond: func(_ testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+			return n.ClientVersion != nil && n.ClientVersion.LatestVersion == wantLatest
+		},
+	}
+}
+
+func unexpectedClientVersion(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+	if n.ClientVersion != nil {
+		t.Errorf("unexpected ClientVersion: %v", n.ClientVersion)
+		return true
+	}
+	return false
+}
+
 func checkError(tb testing.TB, got, want error, fatal bool) {
 	tb.Helper()
 	f := tb.Errorf
