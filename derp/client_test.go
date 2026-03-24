@@ -141,15 +141,12 @@ func (r nopRead) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
-var sinkU32 uint32
-
-func BenchmarkReadUint32(b *testing.B) {
+func BenchmarkReadFrameHeader(b *testing.B) {
 	r := bufio.NewReader(nopRead{})
-	var err error
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		sinkU32, err = readUint32(r)
+		_, _, err := ReadFrameHeader(r)
 		if err != nil {
 			b.Fatal(err)
 		}

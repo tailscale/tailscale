@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/nacl/box"
 	"tailscale.com/types/structs"
+	"tailscale.com/util/bufiox"
 )
 
 const (
@@ -242,28 +243,14 @@ func (k NodePublic) AppendTo(buf []byte) []byte {
 }
 
 // ReadRawWithoutAllocating initializes k with bytes read from br.
-// The reading is done ~4x slower than io.ReadFull, but in exchange is
-// allocation-free.
+// It uses [bufiox.ReadFull] to read without heap allocations.
 func (k *NodePublic) ReadRawWithoutAllocating(br *bufio.Reader) error {
 	var z NodePublic
 	if *k != z {
 		return errors.New("refusing to read into non-zero NodePublic")
 	}
-	// This is ~4x slower than io.ReadFull, but using io.ReadFull
-	// causes one extra alloc, which is significant for the DERP
-	// server that consumes this method. So, process stuff slower but
-	// without allocation.
-	//
-	// Dear future: if io.ReadFull stops causing stuff to escape, you
-	// should switch back to that.
-	for i := range k.k {
-		b, err := br.ReadByte()
-		if err != nil {
-			return err
-		}
-		k.k[i] = b
-	}
-	return nil
+	_, err := bufiox.ReadFull(br, k.k[:])
+	return err
 }
 
 // WriteRawWithoutAllocating writes out k as 32 bytes to bw.

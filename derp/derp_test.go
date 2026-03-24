@@ -34,6 +34,65 @@ type (
 	Client     = derp.Client
 )
 
+func TestReadFrameHeader(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    [5]byte
+		wantType derp.FrameType
+		wantLen  uint32
+	}{
+		{
+			name:     "SendPacket",
+			input:    [5]byte{byte(derp.FrameSendPacket), 0x00, 0x00, 0x04, 0x00},
+			wantType: derp.FrameSendPacket,
+			wantLen:  1024,
+		},
+		{
+			name:     "KeepAlive",
+			input:    [5]byte{byte(derp.FrameKeepAlive), 0x00, 0x00, 0x00, 0x00},
+			wantType: derp.FrameKeepAlive,
+			wantLen:  0,
+		},
+		{
+			name:     "MaxLen",
+			input:    [5]byte{byte(derp.FrameRecvPacket), 0xff, 0xff, 0xff, 0xff},
+			wantType: derp.FrameRecvPacket,
+			wantLen:  0xffffffff,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			br := bufio.NewReader(bytes.NewReader(tt.input[:]))
+			gotType, gotLen, err := derp.ReadFrameHeader(br)
+			if err != nil {
+				t.Fatalf("ReadFrameHeader: %v", err)
+			}
+			if gotType != tt.wantType {
+				t.Errorf("type = %v, want %v", gotType, tt.wantType)
+			}
+			if gotLen != tt.wantLen {
+				t.Errorf("len = %v, want %v", gotLen, tt.wantLen)
+			}
+		})
+	}
+
+	// Verify zero allocations.
+	buf := make([]byte, 4096)
+	rd := bytes.NewReader(buf)
+	br := bufio.NewReader(rd)
+	got := testing.AllocsPerRun(1000, func() {
+		rd.Reset(buf)
+		br.Reset(rd)
+		_, _, err := derp.ReadFrameHeader(br)
+		if err != nil {
+			t.Fatalf("ReadFrameHeader: %v", err)
+		}
+	})
+	if got != 0 {
+		t.Fatalf("ReadFrameHeader allocs = %f, want 0", got)
+	}
+}
+
 func TestClientInfoUnmarshal(t *testing.T) {
 	for i, in := range map[string]struct {
 		json    string

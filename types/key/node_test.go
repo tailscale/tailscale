@@ -125,6 +125,25 @@ func TestNodeReadRawWithoutAllocating(t *testing.T) {
 	}
 }
 
+func BenchmarkNodeReadRawWithoutAllocating(b *testing.B) {
+	buf := make([]byte, 32)
+	for i := range buf {
+		buf[i] = 0x42
+	}
+	r := bytes.NewReader(buf)
+	br := bufio.NewReader(r)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		r.Reset(buf)
+		br.Reset(r)
+		var k NodePublic
+		if err := k.ReadRawWithoutAllocating(br); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestNodeWriteRawWithoutAllocating(t *testing.T) {
 	buf := make([]byte, 0, 32)
 	w := bytes.NewBuffer(buf)
