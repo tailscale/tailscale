@@ -23,6 +23,7 @@ import (
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc"
+	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
@@ -35,6 +36,7 @@ import (
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
+	"tailscale.com/util/testenv"
 )
 
 // featureName is the name of the feature implemented by this package.
@@ -75,6 +77,11 @@ func init() {
 }
 
 func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
+	// TODO(tailscale/corp#39033): Remove for alpha release.
+	if !envknob.UseWIPCode() && !testenv.InTest() {
+		w.WriteHeader(http.StatusNotImplemented)
+		return
+	}
 	e, ok := ipnlocal.GetExt[*extension](h.LocalBackend())
 	if !ok {
 		http.Error(w, "miswired", http.StatusInternalServerError)
@@ -103,6 +110,11 @@ func (e *extension) Name() string {
 
 // Init implements [ipnext.Extension].
 func (e *extension) Init(host ipnext.Host) error {
+	// TODO(tailscale/corp#39033): Remove for alpha release.
+	if !envknob.UseWIPCode() && !testenv.InTest() {
+		return ipnext.SkipExtension
+	}
+
 	//Init only once
 	e.mu.Lock()
 	defer e.mu.Unlock()
