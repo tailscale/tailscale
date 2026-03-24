@@ -307,8 +307,7 @@ func MessageSummary(m Message) string {
 // BindUDPRelayHandshakeState represents the state of the 3-way bind handshake
 // between UDP relay client and UDP relay server. Its potential values include
 // those for both participants, UDP relay client and UDP relay server. A UDP
-// relay server implementation can be found in net/udprelay. This is currently
-// considered experimental.
+// relay server implementation can be found in net/udprelay.
 type BindUDPRelayHandshakeState int
 
 const (
