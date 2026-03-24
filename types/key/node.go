@@ -253,18 +253,24 @@ func (k *NodePublic) ReadRawWithoutAllocating(br *bufio.Reader) error {
 	return err
 }
 
-// WriteRawWithoutAllocating writes out k as 32 bytes to bw.
-// The writing is done ~3x slower than bw.Write, but in exchange is
-// allocation-free.
+// WriteRawWithoutAllocating writes out k as 32 big-endian bytes to bw.
+//
+// It uses AvailableBuffer to append directly into bufio's internal
+// buffer without allocation, falling back to WriteByte when the
+// buffer has insufficient space.
 func (k NodePublic) WriteRawWithoutAllocating(bw *bufio.Writer) error {
-	// Equivalent to bw.Write(k.k[:]), but without causing an
-	// escape-related alloc.
-	//
-	// Dear future: if bw.Write(k.k[:]) stops causing stuff to escape,
-	// you should switch back to that.
+	// Fast path: enough space in the buffer to append directly.
+	if bw.Available() >= len(k.k) {
+		buf := bw.AvailableBuffer()
+		buf = append(buf, k.k[:]...)
+		_, err := bw.Write(buf)
+		return err
+	}
+	// Slow path: buffer nearly full. Write byte-at-a-time to let
+	// bufio flush as needed, avoiding a heap allocation from append
+	// growing past AvailableBuffer's capacity.
 	for _, b := range k.k {
-		err := bw.WriteByte(b)
-		if err != nil {
+		if err := bw.WriteByte(b); err != nil {
 			return err
 		}
 	}
