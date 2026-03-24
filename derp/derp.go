@@ -168,6 +168,8 @@ const FastStartHeader = "Derp-Fast-Start"
 
 var bin = binary.BigEndian
 
+// writeUint32 writes v to bw one byte at a time
+// as a big-endian uint32.
 func writeUint32(bw *bufio.Writer, v uint32) error {
 	var b [4]byte
 	bin.PutUint32(b[:], v)
@@ -243,14 +245,26 @@ func readFrame(br *bufio.Reader, maxSize uint32, b []byte) (t FrameType, frameLe
 	return t, frameLen, err
 }
 
-// WriteFrameHeader writes a frame header to bw.
+// WriteFrameHeader writes a DERP frame header to bw: a one-byte frame
+// type followed by a big-endian uint32 frame length.
 //
-// The frame header is 5 bytes: a one byte frame type
-// followed by a big-endian uint32 length of the
-// remaining frame (not including the 5 byte header).
-//
+// It uses AvailableBuffer to append the header directly into bufio's
+// internal buffer without allocation, falling back to WriteByte when
+// the buffer has insufficient space.
 // It does not flush bw.
 func WriteFrameHeader(bw *bufio.Writer, t FrameType, frameLen uint32) error {
+	// Fast path: enough space in the buffer to append the header
+	// directly without allocation via AvailableBuffer.
+	if bw.Available() >= FrameHeaderLen {
+		buf := bw.AvailableBuffer()
+		buf = append(buf, byte(t))
+		buf = bin.AppendUint32(buf, frameLen)
+		_, err := bw.Write(buf)
+		return err
+	}
+	// Slow path: buffer nearly full. Write byte-at-a-time to let
+	// bufio flush as needed, avoiding a heap allocation from append
+	// growing past AvailableBuffer's capacity.
 	if err := bw.WriteByte(byte(t)); err != nil {
 		return err
 	}
