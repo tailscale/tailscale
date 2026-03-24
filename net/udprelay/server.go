@@ -1,9 +1,9 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package udprelay contains constructs for relaying Disco and WireGuard packets
-// between Tailscale clients over UDP. This package is currently considered
-// experimental.
+// Package udprelay contains a relay server implementation for relaying Disco
+// and WireGuard packets between Tailscale clients over UDP. This relay
+// functionality is also known as Tailscale Peer Relays.
 package udprelay
 
 import (
