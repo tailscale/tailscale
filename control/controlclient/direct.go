@@ -1121,18 +1121,22 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		return nil
 	}
 
-	if c.streamingMapSession != nil {
+	if isStreaming && c.streamingMapSession != nil {
 		panic("mapSession is already set")
 	}
 
 	sess := newMapSession(persist.PrivateNodeKey(), nu, c.controlKnobs)
-	c.streamingMapSession = sess
-	defer func() {
-		sess.Close()
-		c.mu.Lock()
-		c.streamingMapSession = nil
-		c.mu.Unlock()
-	}()
+	if isStreaming {
+		c.streamingMapSession = sess
+		defer func() {
+			sess.Close()
+			c.mu.Lock()
+			c.streamingMapSession = nil
+			c.mu.Unlock()
+		}()
+	} else {
+		defer sess.Close()
+	}
 	sess.cancel = cancel
 	sess.logf = c.logf
 	sess.vlogf = vlogf
