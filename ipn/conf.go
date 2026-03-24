@@ -117,7 +117,7 @@ func (c *ConfigVAlpha) ToPrefs() (MaskedPrefs, error) {
 	}
 	if c.DisableSNAT != "" {
 		mp.NoSNAT = c.DisableSNAT.EqualBool(true)
-		mp.NoSNAT = true
+		mp.NoSNATSet = true
 	}
 	if c.NoStatefulFiltering != "" {
 		mp.NoStatefulFiltering = c.NoStatefulFiltering
