@@ -5667,6 +5667,11 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 		}
 	}
 
+	// Get any extra Routes an extension may want installed.
+	if extensionRoutesFx, ok := b.extHost.hooks.ExtraRouterConfigRoutes.GetOk(); ok {
+		rs.Routes = extensionRoutesFx().AppendTo(rs.Routes)
+	}
+
 	return rs
 }
 
