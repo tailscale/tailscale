@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 )
 
@@ -127,11 +128,78 @@ func mergeBoringNotifies(dst, src *ipn.Notify) *ipn.Notify {
 	}
 	if src.NetMap != nil {
 		dst.NetMap = src.NetMap
+		dst.PeerChanges = nil // full netmap supersedes any accumulated deltas
+	} else if src.PeerChanges != nil {
+		dst.PeerChanges = mergePeerChanges(dst.PeerChanges, src.PeerChanges)
 	}
 	if src.Engine != nil {
 		dst.Engine = src.Engine
 	}
 	return dst
+}
+
+// mergePeerChanges merges new peer changes into existing ones. If a new change
+// has the same NodeID as an existing delta, the two are merged into a single
+// delta with the newer values taking precedence, while preserving any fields
+// that were only set in the older delta.
+func mergePeerChanges(old, new []*tailcfg.PeerChange) []*tailcfg.PeerChange {
+	if old == nil {
+		old = []*tailcfg.PeerChange{}
+	}
+	idxByNode := make(map[tailcfg.NodeID]int, len(old))
+	for i, d := range old {
+		if d.NodeID != 0 {
+			idxByNode[d.NodeID] = i
+		}
+	}
+
+	for _, nd := range new {
+		if nd.NodeID != 0 {
+			if oi, ok := idxByNode[nd.NodeID]; ok {
+				old[oi] = mergePeerChange(old[oi], nd)
+				continue
+			}
+			idxByNode[nd.NodeID] = len(old)
+		}
+		old = append(old, nd)
+	}
+	return old
+}
+
+// mergePeerChange merges src into dst, returning the result.
+// Fields set in src override those in dst; fields only set in dst are preserved.
+func mergePeerChange(dst, src *tailcfg.PeerChange) *tailcfg.PeerChange {
+	out := *dst // shallow copy of old values
+
+	if src.DERPRegion != 0 {
+		out.DERPRegion = src.DERPRegion
+	}
+	if src.Cap != 0 {
+		out.Cap = src.Cap
+	}
+	if src.Online != nil {
+		out.Online = src.Online
+	}
+	if src.LastSeen != nil {
+		out.LastSeen = src.LastSeen
+	}
+	if src.KeyExpiry != nil {
+		out.KeyExpiry = src.KeyExpiry
+	}
+	if src.Endpoints != nil {
+		out.Endpoints = src.Endpoints
+	}
+	if src.Key != nil {
+		out.Key = src.Key
+	}
+	if src.DiscoKey != nil {
+		out.DiscoKey = src.DiscoKey
+	}
+	if src.KeySignature != nil {
+		out.KeySignature = src.KeySignature
+	}
+
+	return &out
 }
 
 // isNotableNotify reports whether n is a "notable" notification that

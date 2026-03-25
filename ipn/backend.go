@@ -87,6 +87,12 @@ const (
 	NotifyInitialSuggestedExitNode NotifyWatchOpt = 1 << 10 // if set, the first Notify message (sent immediately) will contain the current SuggestedExitNode if available
 
 	NotifyInitialClientVersion NotifyWatchOpt = 1 << 11 // if set, the first Notify message (sent immediately) will contain the current ClientVersion if available and if update checks are enabled
+
+	// NotifyPeerChanges, if set, causes netmap delta updates to be sent
+	// as [PeerChange] rather than a full NetMap.
+	// Full netmap responses from the control plane are still sent as
+	// a full NetMap, and the delta updates are only sent to sessions that have opted in to this mode.
+	NotifyPeerChanges NotifyWatchOpt = 1 << 12
 )
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
@@ -112,8 +118,15 @@ type Notify struct {
 	State         *State             // if non-nil, the new or current IPN state
 	Prefs         *PrefsView         // if non-nil && Valid, the new or current preferences
 	NetMap        *netmap.NetworkMap // if non-nil, the new or current netmap
-	Engine        *EngineStatus      // if non-nil, the new or current wireguard stats
-	BrowseToURL   *string            // if non-nil, UI should open a browser right now
+
+	// PeerChanges, if non-nil, is a list of peer changes applied to the netmap.
+	// It is sent (instead of NetMap) to sessions that have opted in to
+	//  when the update came from an incremental MapResponse.
+	// Full MapResponse updates still set NetMap.
+	PeerChanges []*tailcfg.PeerChange `json:",omitzero"`
+
+	Engine      *EngineStatus // if non-nil, the new or current wireguard stats
+	BrowseToURL *string       // if non-nil, UI should open a browser right now
 
 	// FilesWaiting if non-nil means that files are buffered in
 	// the Tailscale daemon and ready for local transfer to the
@@ -183,6 +196,9 @@ func (n Notify) String() string {
 	}
 	if n.NetMap != nil {
 		sb.WriteString("NetMap{...} ")
+	}
+	if n.PeerChanges != nil {
+		fmt.Fprintf(&sb, "PeerChanges(%d) ", len(n.PeerChanges))
 	}
 	if n.Engine != nil {
 		fmt.Fprintf(&sb, "wg=%v ", *n.Engine)

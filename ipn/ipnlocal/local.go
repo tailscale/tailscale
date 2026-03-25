@@ -152,6 +152,7 @@ type watchSession struct {
 	owner     ipnauth.Actor // or nil
 	sessionID string
 	cancel    context.CancelFunc // to shut down the session
+	mask      ipn.NotifyWatchOpt // watch options for this session
 }
 
 var (
@@ -2164,10 +2165,12 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		b.suggestExitNodeLocked()
 	}
 
-	if cn.NetMap() != nil && mutationsAreWorthyOfTellingIPNBus(muts) {
-
-		nm := cn.netMapWithPeers()
-		notify = &ipn.Notify{NetMap: nm}
+	peerChanges := nodeMutationsToPeerChanges(muts)
+	if len(peerChanges) > 0 {
+		notify = &ipn.Notify{PeerChanges: peerChanges}
+		if cn.NetMap() != nil && mutationsAreWorthyOfTellingIPNBus(muts) {
+			notify.NetMap = cn.netMapWithPeers()
+		}
 	} else if testenv.InTest() {
 		// In tests, send an empty Notify as a wake-up so end-to-end
 		// integration tests in another repo can check on the status of
@@ -2213,6 +2216,34 @@ func mutationsAreWorthyOfRecalculatingSuggestedExitNode(muts []netmap.NodeMutati
 		}
 	}
 	return false
+}
+
+// nodeMutationsToPeerChanges converts a slice of NodeMutations to a slice of
+// *tailcfg.PeerChange for use in ipn.Notify.PeerChanges.
+// Multiple mutations to the same node are merged into one PeerChange.
+func nodeMutationsToPeerChanges(muts []netmap.NodeMutation) []*tailcfg.PeerChange {
+	byID := map[tailcfg.NodeID]*tailcfg.PeerChange{}
+	var ordered []*tailcfg.PeerChange
+	for _, m := range muts {
+		nid := m.NodeIDBeingMutated()
+		pc := byID[nid]
+		if pc == nil {
+			pc = &tailcfg.PeerChange{NodeID: nid}
+			byID[nid] = pc
+			ordered = append(ordered, pc)
+		}
+		switch v := m.(type) {
+		case netmap.NodeMutationOnline:
+			pc.Online = &v.Online
+		case netmap.NodeMutationLastSeen:
+			pc.LastSeen = &v.LastSeen
+		case netmap.NodeMutationDERPHome:
+			pc.DERPRegion = v.DERPRegion
+		case netmap.NodeMutationEndpoints:
+			pc.Endpoints = v.Endpoints
+		}
+	}
+	return ordered
 }
 
 // mutationsAreWorthyOfTellingIPNBus reports whether any mutation type in muts is
@@ -3212,6 +3243,7 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		owner:     actor,
 		sessionID: sessionID,
 		cancel:    cancel,
+		mask:      mask,
 	}
 	mak.Set(&b.notifyWatchers, sessionID, session)
 	b.mu.Unlock()
@@ -3449,7 +3481,33 @@ func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) 
 	}
 
 	for _, sess := range b.notifyWatchers {
-		if recipient.match(sess.owner) {
+		if !recipient.match(sess.owner) {
+			continue
+		}
+		if n.PeerChanges != nil {
+			// Delta-scenario: filter based on the session's preference.
+			if sess.mask&ipn.NotifyPeerChanges != 0 {
+				// Delta watcher: send delta, strip full netmap.
+				n2 := n
+				n2.NetMap = nil
+				select {
+				case sess.ch <- &n2:
+				default:
+					// Drop the notification if the channel is full.
+				}
+			} else if n.NetMap != nil {
+				// Non-delta watcher: send full netmap only, strip delta.
+				n2 := n
+				n2.PeerChanges = nil
+				select {
+				case sess.ch <- &n2:
+				default:
+					// Drop the notification if the channel is full.
+				}
+			}
+			// else: non-worthy mutations with no full netmap, and session
+			// doesn't want delta → skip (preserving existing behavior).
+		} else {
 			select {
 			case sess.ch <- &n:
 			default:
