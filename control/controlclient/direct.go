@@ -865,15 +865,21 @@ type rememberLastNetmapUpdater struct {
 
 func (nu *rememberLastNetmapUpdater) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	nu.last = nm
-	nu.done <- nil
+	select {
+	case nu.done <- nil:
+	default:
+	}
 }
 
 // FetchNetMapForTest fetches the netmap once.
 func (c *Direct) FetchNetMapForTest(ctx context.Context) (*netmap.NetworkMap, error) {
 	var nu rememberLastNetmapUpdater
-	nu.done = make(chan any)
+	nu.done = make(chan any, 1)
 	err := c.sendMapRequest(ctx, false, &nu)
-	if err == nil && nu.last == nil {
+	if err != nil {
+		return nil, err
+	}
+	if nu.last == nil {
 		return nil, errors.New("[unexpected] sendMapRequest success without callback")
 	}
 	<-nu.done
@@ -1290,7 +1296,7 @@ func NetmapFromMapResponseForDebug(ctx context.Context, pr persist.PersistView, 
 		return nil, errors.New("PersistView invalid")
 	}
 
-	nu := &rememberLastNetmapUpdater{done: make(chan any)}
+	nu := &rememberLastNetmapUpdater{done: make(chan any, 1)}
 	sess := newMapSession(pr.PrivateNodeKey(), nu, nil)
 	defer sess.Close()
 
