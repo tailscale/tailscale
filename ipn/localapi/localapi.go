@@ -119,6 +119,7 @@ func init() {
 		Register("watch-ipn-bus", (*Handler).serveWatchIPNBus)
 	}
 	if buildfeatures.HasDNS {
+		Register("dns-manager-info", (*Handler).serveDNSManagerInfo)
 		Register("dns-osconfig", (*Handler).serveDNSOSConfig)
 		Register("dns-query", (*Handler).serveDNSQuery)
 	}
@@ -1525,6 +1526,33 @@ func (h *Handler) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(cv)
+}
+
+// serveDNSManagerInfo serves diagnostic information about the DNS manager
+// selected by tailscaled for the current device.
+func (h *Handler) serveDNSManagerInfo(w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDNS {
+		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
+		return
+	}
+	if r.Method != httpm.GET {
+		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !h.PermitWrite {
+		http.Error(w, "dns-manager-info dump access denied", http.StatusForbidden)
+		return
+	}
+	mode, err := h.b.GetDNSManagerMode()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	response := apitype.DNSManagerInfo{
+		Mode: mode,
+	}
+	json.NewEncoder(w).Encode(response)
 }
 
 // serveDNSOSConfig serves the current system DNS configuration as a JSON object, if

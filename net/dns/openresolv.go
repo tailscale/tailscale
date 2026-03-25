@@ -20,6 +20,8 @@ type openresolvManager struct {
 	logf logger.Logf
 }
 
+func (openresolvManager) osMode() string { return "openresolv" }
+
 func newOpenresolvManager(logf logger.Logf) (openresolvManager, error) {
 	return openresolvManager{logf}, nil
 }

@@ -34,6 +34,8 @@ type nmManager struct {
 	dnsManager    dbus.BusObject
 }
 
+func (*nmManager) osMode() string { return "network-manager" }
+
 func init() {
 	optNewNMManager.Set(newNMManager)
 	optNMIsUsingResolved.Set(nmIsUsingResolved)

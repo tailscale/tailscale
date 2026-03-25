@@ -785,6 +785,19 @@ func (b *LocalBackend) GetDNSOSConfig() (dns.OSConfig, error) {
 	return manager.GetBaseConfig()
 }
 
+// GetDNSManagerMode returns the selected Linux DNS manager mode, or the empty
+// string if the current DNS manager does not correspond to a Linux DNS mode.
+func (b *LocalBackend) GetDNSManagerMode() (string, error) {
+	if !buildfeatures.HasDNS {
+		panic("unreachable")
+	}
+	manager, ok := b.sys.DNSManager.GetOK()
+	if !ok {
+		return "", errors.New("DNS manager not available")
+	}
+	return manager.OSMode(), nil
+}
+
 // QueryDNS performs a DNS query for name and queryType using the built-in DNS resolver, and returns
 // the raw DNS response and the resolvers that are were able to handle the query (the internal forwarder
 // may race multiple resolvers).

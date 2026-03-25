@@ -171,6 +171,23 @@ func (m *Manager) GetBaseConfig() (OSConfig, error) {
 	return m.os.GetBaseConfig()
 }
 
+type osModeGetter interface {
+	osMode() string
+}
+
+// OSMode reports the selected Linux DNS manager mode, or the empty string if
+// the current OS configurator does not correspond to one of the Linux DNS
+// manager modes.
+func (m *Manager) OSMode() string {
+	if !buildfeatures.HasDNS {
+		panic("unreachable")
+	}
+	if om, ok := m.os.(osModeGetter); ok {
+		return om.osMode()
+	}
+	return ""
+}
+
 // setLocked sets the DNS configuration.
 //
 // m.mu must be held.

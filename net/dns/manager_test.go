@@ -40,6 +40,7 @@ import (
 type fakeOSConfigurator struct {
 	SplitDNS   bool
 	BaseConfig OSConfig
+	mode       string
 
 	OSConfig         OSConfig
 	ResolverConfig   resolver.Config
@@ -69,7 +70,37 @@ func (c *fakeOSConfigurator) GetBaseConfig() (OSConfig, error) {
 	return c.BaseConfig, nil
 }
 
+func (c *fakeOSConfigurator) osMode() string { return c.mode }
+
 func (c *fakeOSConfigurator) Close() error { return nil }
+
+func TestManagerOSMode(t *testing.T) {
+	tests := []struct {
+		name string
+		osc  OSConfigurator
+		want string
+	}{
+		{
+			name: "reported by configurator",
+			osc:  &fakeOSConfigurator{mode: "systemd-resolved"},
+			want: "systemd-resolved",
+		},
+		{
+			name: "not reported by configurator",
+			osc:  noopManager{},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Manager{os: tt.osc}
+			if got := m.OSMode(); got != tt.want {
+				t.Fatalf("OSMode = %q; want %q", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestCompileHostEntries(t *testing.T) {
 	tests := []struct {

@@ -151,6 +151,8 @@ type directManager struct {
 	lastWarnContents []byte // last resolv.conf contents that we warned about
 }
 
+func (*directManager) osMode() string { return "direct" }
+
 //lint:ignore U1000 used in manager_{freebsd,openbsd}.go
 func newDirectManager(logf logger.Logf, health *health.Tracker, bus *eventbus.Bus) *directManager {
 	return newDirectManagerOnFS(logf, health, bus, directFS{})
