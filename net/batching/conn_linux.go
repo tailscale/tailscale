@@ -87,6 +87,15 @@ const (
 	// This was initially established for Linux, but may split out to
 	// GOOS-specific values later. It originates as UDP_MAX_SEGMENTS in the
 	// kernel's TX path, and UDP_GRO_CNT_MAX for RX.
+	//
+	// As long as we use one fragment per datagram, this also serves as a
+	// limit for the number of fragments we can coalesce during scatter-gather writes.
+	//
+	// 64 is below the 1024 of IOV_MAX (Linux) or UIO_MAXIOV (BSD),
+	// and the 256 of WSABUF_MAX_COUNT (Windows).
+	//
+	// (2026-04) If we begin shipping datagrams in more than one fragment,
+	// an independent fragment count limit needs to be implemented.
 	udpSegmentMaxDatagrams = 64
 )
 
@@ -99,15 +108,24 @@ const (
 // coalesceMessages iterates 'buffs', setting and coalescing them in 'msgs'
 // where possible while maintaining datagram order.
 //
+// It aggregates message components as a list of buffers without copying,
+// and expects to be used only on Linux with scatter-gather writes via sendmmsg(2).
+//
+// All msgs[i].Buffers len must be one. Will panic if there is not enough msgs
+// to coalesce all buffs.
+//
 // All msgs have their Addr field set to addr.
 //
 // All msgs[i].Buffers[0] are preceded by a Geneve header (geneve) if geneve.VNI.IsSet().
+//
+// TODO(illotum) explore MSG_ZEROCOPY for large writes (>10KB).
 func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.GeneveHeader, buffs [][]byte, msgs []ipv6.Message, offset int) int {
 	var (
-		base     = -1 // index of msg we are currently coalescing into
-		gsoSize  int  // segmentation size of msgs[base]
-		dgramCnt int  // number of dgrams coalesced into msgs[base]
-		endBatch bool // tracking flag to start a new batch on next iteration of buffs
+		base         = -1 // index of msg we are currently coalescing into
+		gsoSize      int  // segmentation size of msgs[base]
+		dgramCnt     int  // number of dgrams coalesced into msgs[base]
+		endBatch     bool // tracking flag to start a new batch on next iteration of buffs
+		coalescedLen int  // bytes coalesced into msgs[base]
 	)
 	maxPayloadLen := maxIPv4PayloadLen
 	if addr.IP.To4() == nil {
@@ -122,19 +140,18 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.Ge
 		}
 		if i > 0 {
 			msgLen := len(buff)
-			baseLenBefore := len(msgs[base].Buffers[0])
-			freeBaseCap := cap(msgs[base].Buffers[0]) - baseLenBefore
-			if msgLen+baseLenBefore <= maxPayloadLen &&
+			if msgLen+coalescedLen <= maxPayloadLen &&
 				msgLen <= gsoSize &&
-				msgLen <= freeBaseCap &&
 				dgramCnt < udpSegmentMaxDatagrams &&
 				!endBatch {
-				msgs[base].Buffers[0] = append(msgs[base].Buffers[0], make([]byte, msgLen)...)
-				copy(msgs[base].Buffers[0][baseLenBefore:], buff)
+				// msgs[base].Buffers[0] is set to buff[i] when a new base is set.
+				// This appends a struct iovec element in the underlying struct msghdr (scatter-gather).
+				msgs[base].Buffers = append(msgs[base].Buffers, buff)
 				if i == len(buffs)-1 {
 					setGSOSizeInControl(&msgs[base].OOB, uint16(gsoSize))
 				}
 				dgramCnt++
+				coalescedLen += msgLen
 				if msgLen < gsoSize {
 					// A smaller than gsoSize packet on the tail is legal, but
 					// it must end the batch.
@@ -155,6 +172,7 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.Ge
 		msgs[base].Buffers[0] = buff
 		msgs[base].Addr = addr
 		dgramCnt = 1
+		coalescedLen = len(buff)
 	}
 	return base + 1
 }
@@ -171,7 +189,10 @@ func (c *linuxBatchingConn) getSendBatch() *sendBatch {
 
 func (c *linuxBatchingConn) putSendBatch(batch *sendBatch) {
 	for i := range batch.msgs {
-		batch.msgs[i] = ipv6.Message{Buffers: batch.msgs[i].Buffers, OOB: batch.msgs[i].OOB}
+		// Non coalesced write paths access only batch.msgs[i].Buffers[0],
+		// but we append more during [linuxBatchingConn.coalesceMessages].
+		// Leave index zero accessible:
+		batch.msgs[i] = ipv6.Message{Buffers: batch.msgs[i].Buffers[:1], OOB: batch.msgs[i].OOB}
 	}
 	c.sendBatchPool.Put(batch)
 }
