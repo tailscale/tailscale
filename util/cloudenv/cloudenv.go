@@ -143,12 +143,11 @@ func getCloud() Cloud {
 		}
 
 	default:
-		// TODO(bradfitz): use Win32_SystemEnclosure from WMI or something on
-		// Windows to see if it's a physical machine and skip the cloud check
-		// early. Otherwise use similar clues as Linux about whether we should
-		// burn up to 2 seconds waiting for a metadata server that might not be
-		// there. And for BSDs, look where the /sys stuff is.
-		return ""
+		// On non-Linux platforms (Windows, BSDs) we don't have /sys/class/dmi
+		// to check, so go straight to the metadata endpoint probe. This burns
+		// up to 2 seconds if there's no metadata server, but correctly detects
+		// AWS, GCP, and Azure on all platforms.
+		hitMetadata = true
 	}
 	if !hitMetadata {
 		return ""
