@@ -710,6 +710,118 @@ func TestLoadCachedNetMap(t *testing.T) {
 	}
 }
 
+func TestUpdateNetMapCache(t *testing.T) {
+	t.Setenv("TS_USE_CACHED_NETMAP", "1")
+
+	// Set up a cache directory so we can check what happens to it, in response
+	// to netmap updates.
+	varRoot := t.TempDir()
+	cacheDir := filepath.Join(varRoot, "profile-data", "id0", "netmap-cache")
+
+	testMap := &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Name: "example.ts.net",
+			User: tailcfg.UserID(1),
+			Addresses: []netip.Prefix{
+				netip.MustParsePrefix("100.2.3.4/32"),
+			},
+		}).View(),
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+			tailcfg.UserID(1): (&tailcfg.UserProfile{
+				ID:          1,
+				LoginName:   "amelie@example.com",
+				DisplayName: "Amelie du Pangoline",
+			}).View(),
+		},
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				ID:           601,
+				StableID:     "n601FAKE",
+				ComputedName: "some-peer",
+				User:         tailcfg.UserID(1),
+				Key:          makeNodeKeyFromID(601),
+				Addresses: []netip.Prefix{
+					netip.MustParsePrefix("100.2.3.5/32"),
+				},
+			}).View(),
+		},
+	}
+
+	// Make a new backend to which we can send network maps to test that
+	// netmap caching decisions are made appropriately.
+	sys := tsd.NewSystem()
+	e, err := wgengine.NewFakeUserspaceEngine(logger.Discard,
+		sys.Set,
+		sys.HealthTracker.Get(),
+		sys.UserMetricsRegistry(),
+		sys.Bus.Get(),
+	)
+	if err != nil {
+		t.Fatalf("Make userspace engine: %v", err)
+	}
+	t.Cleanup(e.Close)
+	sys.Set(e)
+	sys.Set(new(mem.Store))
+
+	logf := tstest.WhileTestRunningLogger(t)
+	clb, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
+	if err != nil {
+		t.Fatalf("Make local backend: %v", err)
+	}
+	t.Cleanup(clb.Shutdown)
+	clb.SetVarRoot(varRoot)
+
+	pm := must.Get(newProfileManager(new(mem.Store), logf, health.NewTracker(sys.Bus.Get())))
+	pm.currentProfile = (&ipn.LoginProfile{ID: "id0"}).View()
+	clb.pm = pm
+	if err := clb.Start(ipn.Options{}); err != nil {
+		t.Fatalf("Start local backend: %v", err)
+	}
+
+	wantCacheEmpty := func() {
+		// The cache directory should be empty, as caching is not enabled.
+		if des, err := os.ReadDir(cacheDir); err != nil {
+			t.Errorf("List cache directory: %v", err)
+		} else if len(des) != 0 {
+			t.Errorf("Cache directory has %d items, want 0\n%+v", len(des), des)
+		}
+	}
+
+	// Send the initial network map to the backend. Because the map does not
+	// include the cache attribute, no cache should be written.
+	clb.mu.Lock()
+	clb.setNetMapLocked(testMap)
+	clb.mu.Unlock()
+
+	wantCacheEmpty()
+
+	// Now enable the netmap caching attribute, and send another update.
+	// After doing so, the cache should have real data in it.
+	testMap.AllCaps = set.Of(tailcfg.NodeAttrCacheNetworkMaps)
+
+	clb.mu.Lock()
+	clb.setNetMapLocked(testMap)
+	clb.mu.Unlock()
+
+	if des, err := os.ReadDir(cacheDir); err != nil {
+		t.Errorf("List cache directory: %v", err)
+	} else if len(des) == 0 {
+		t.Error("Cache is unexpectedly empty")
+	} else {
+		t.Logf("Cache directory has %d entries (OK)", len(des))
+	}
+
+	// Now disable the node attribute again, send another update, and verify
+	// that the cache got cleaned up.
+	testMap.AllCaps = nil
+
+	clb.mu.Lock()
+	clb.setNetMapLocked(testMap)
+	clb.mu.Unlock()
+
+	wantCacheEmpty()
+}
+
 func TestConfigureExitNode(t *testing.T) {
 	controlURL := "https://localhost:1/"
 	exitNode1 := makeExitNode(1, withName("node-1"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.1/32")))

@@ -181,7 +181,8 @@ type CapabilityVersion int
 //   - 132: 2026-02-13: client respects [NodeAttrDisableHostsFileUpdates]
 //   - 133: 2026-02-17: client understands [NodeAttrForceRegisterMagicDNSIPv4Only]; MagicDNS IPv6 registered w/ OS by default
 //   - 134: 2026-03-09: Client understands [NodeAttrDisableAndroidBindToActiveNetwork]
-const CurrentCapabilityVersion CapabilityVersion = 134
+//   - 135: 2026-03-30: Client understands [NodeAttrCacheNetworkMaps]
+const CurrentCapabilityVersion CapabilityVersion = 135
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2770,6 +2771,13 @@ const (
 	// See https://github.com/tailscale/tailscale/issues/15404.
 	// TODO(bradfitz): remove this a few releases after 2026-02-16.
 	NodeAttrForceRegisterMagicDNSIPv4Only NodeCapability = "force-register-magicdns-ipv4-only"
+
+	// NodeAttrCacheNetworkMaps instructs the node to persistently cache network
+	// maps and use them to establish peer connectivity on start, if doing so is
+	// supported by the client and storage is available. When this attribute is
+	// absent (or removed), a node that supports netmap caching will ignore and
+	// discard existing cached maps, and will not store any.
+	NodeAttrCacheNetworkMaps NodeCapability = "cache-network-maps"
 )
 
 // SetDNSRequest is a request to add a DNS record.
