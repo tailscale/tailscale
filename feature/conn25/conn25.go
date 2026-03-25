@@ -33,6 +33,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
@@ -123,10 +124,16 @@ func (e *extension) Init(host ipnext.Host) error {
 	}
 	e.host = host
 	host.Hooks().OnSelfChange.Add(e.onSelfChange)
+	host.Hooks().ExtraRouterConfigRoutes.Set(e.getMagicRange)
 	ctx, cancel := context.WithCancelCause(context.Background())
 	e.ctxCancel = cancel
 	go e.sendLoop(ctx)
 	return nil
+}
+
+func (e *extension) getMagicRange() views.Slice[netip.Prefix] {
+	cfg := e.conn25.client.getConfig()
+	return views.SliceOf(cfg.magicIPSet.Prefixes())
 }
 
 // Shutdown implements [ipnlocal.Extension].
@@ -498,6 +505,12 @@ type client struct {
 	config        config
 }
 
+func (c *client) getConfig() config {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.config
+}
+
 // ClientTransitIPForMagicIP is part of the implementation of the IPMapper interface for dataflows lookups.
 func (c *client) ClientTransitIPForMagicIP(magicIP netip.Addr) (netip.Addr, error) {
 	c.mu.Lock()
@@ -673,7 +686,7 @@ func makePeerAPIReq(ctx context.Context, httpClient *http.Client, urlBase string
 }
 
 func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) error {
-	app, ok := e.conn25.client.config.appsByName[as.app]
+	app, ok := e.conn25.client.getConfig().appsByName[as.app]
 	if !ok {
 		e.conn25.client.logf("App not found for app: %s (domain: %s)", as.app, as.domain)
 		return errors.New("app not found")

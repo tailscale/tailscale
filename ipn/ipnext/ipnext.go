@@ -418,6 +418,18 @@ type Hooks struct {
 	// new hooks that fit into the new architecture that make use of new
 	// WireGuard APIs.
 	ExtraWireGuardAllowedIPs feature.Hook[func(key.NodePublic) views.Slice[netip.Prefix]]
+
+	// ExtraRouterConfigRoutes returns a view of prefixes to append to [router.Config.Routes].
+	//
+	// Routes goes through the WireGuard engine which makes efforts to avoid
+	// unnecessary reconfiguration by checking that things have actually changed.
+	// So implementors should make sure that the order of the prefixes is stable
+	// and that we don't have duplicate entries.
+	//
+	// The returned slice should not be mutated by the extension after it is returned.
+	//
+	// The hook is called with LocalBackend's mutex locked.
+	ExtraRouterConfigRoutes feature.Hook[func() views.Slice[netip.Prefix]]
 }
 
 // FilterHooks contains hooks that extensions can use to customize the packet
