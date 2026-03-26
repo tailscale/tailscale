@@ -43,13 +43,14 @@ Notably, for the subject (the first line of description):
 
   Examples:
 
-  | Good Example | notes |
-  | ------- | --- |
-  | `foo/bar: fix memory leak` |  |
-  | `foo/bar: bump deps` |  |
-  | `foo/bar: temporarily restrict access` | adverbs are okay |
-  | `foo/bar: implement new UI design` | |
-  | `control/{foo,bar}: optimize bar` | feel free to use {foo,bar} for common subpackages|
+  | Good Example                           | notes                                             |
+  |----------------------------------------|---------------------------------------------------|
+  | `foo/bar: fix memory leak`             |                                                   |
+  | `foo/bar: bump deps`                   |                                                   |
+  | `foo/bar: temporarily restrict access` | adverbs are okay                                  |
+  | `foo/bar: implement new UI design`     |                                                   |
+  | `control/{foo,bar}: optimize bar`      | feel free to use {foo,bar} for common subpackages |
+  | `control,docs: document control usage` | multiple top-level packages are affected          |
 
   | Bad Example | notes |
   | ------- | --- |
