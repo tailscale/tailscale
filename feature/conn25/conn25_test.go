@@ -18,8 +18,10 @@ import (
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/ipn/ipnext"
+	"tailscale.com/net/dns"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/types/appctype"
@@ -818,6 +820,16 @@ type testSafeBackend struct {
 	sys *tsd.System
 }
 
+func newTestSafeBackend() *testSafeBackend {
+	sb := &testSafeBackend{}
+	sys := &tsd.System{}
+	sys.Dialer.Set(&tsdial.Dialer{Logf: logger.Discard})
+	sys.DNSManager.Set(&dns.Manager{})
+	sys.Tun.Set(&tstun.Wrapper{})
+	sb.sys = sys
+	return sb
+}
+
 func (b *testSafeBackend) Sys() *tsd.System { return b.sys }
 
 // TestAddressAssignmentIsHandled tests that after enqueueAddress has been called
@@ -852,13 +864,9 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 		Key:      key.NodePublicFromRaw32(mem.B([]byte{0: 0xff, 1: 0xff, 31: 0x01})),
 	}).View()
 
-	// make extension to test
-	sys := &tsd.System{}
-	sys.Dialer.Set(&tsdial.Dialer{Logf: logger.Discard})
-
 	ext := &extension{
 		conn25:  newConn25(logger.Discard),
-		backend: &testSafeBackend{sys: sys},
+		backend: newTestSafeBackend(),
 	}
 	authReconfigAsyncCalled := make(chan struct{}, 1)
 	if err := ext.Init(&testHost{
@@ -1243,13 +1251,9 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 		}).View(),
 	}
 
-	// make extension to test
-	sys := &tsd.System{}
-	sys.Dialer.Set(&tsdial.Dialer{Logf: logger.Discard})
-
 	ext := &extension{
 		conn25:  newConn25(logger.Discard),
-		backend: &testSafeBackend{sys: sys},
+		backend: newTestSafeBackend(),
 	}
 	authReconfigAsyncCalled := make(chan struct{}, 1)
 	if err := ext.Init(&testHost{
@@ -1494,7 +1498,7 @@ func TestClientTransitIPForMagicIP(t *testing.T) {
 				magic:   mappedMip,
 				transit: mappedTip,
 			})
-			tip, err := c.client.ClientTransitIPForMagicIP(tt.mip)
+			tip, err := c.client.transitIPForMagicIP(tt.mip)
 			if tip != tt.wantTip {
 				t.Fatalf("checking transit ip: want %v, got %v", tt.wantTip, tip)
 			}
@@ -1566,7 +1570,7 @@ func TestConnectorRealIPForTransitIPConnection(t *testing.T) {
 			c.connector.transitIPs = map[netip.Addr]map[netip.Addr]appAddr{}
 			c.connector.transitIPs[mappedSrc] = map[netip.Addr]appAddr{}
 			c.connector.transitIPs[mappedSrc][mappedTip] = appAddr{addr: mappedMip}
-			mip, err := c.connector.ConnectorRealIPForTransitIPConnection(tt.src, tt.tip)
+			mip, err := c.connector.realIPForTransitIPConnection(tt.src, tt.tip)
 			if mip != tt.wantMip {
 				t.Fatalf("checking magic ip: want %v, got %v", tt.wantMip, mip)
 			}

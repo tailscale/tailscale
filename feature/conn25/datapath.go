@@ -37,8 +37,8 @@ type IPMapper interface {
 	// range for an app on the connector, but not mapped to the client at srcIP, implementations
 	// should return [ErrUnmappedSrcAndTransitIP]. If the transitIP is not within a configured
 	// Transit IP range, i.e. it is not actually a Transit IP, implementations should return
-	// a nil error, a zero-value [netip.Addr] to indicate this is potentially valid, non-app-connector
-	// traffic.
+	// a nil error, and a zero-value [netip.Addr] to indicate this is potentially valid,
+	// non-app-connector traffic.
 	ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error)
 }
 

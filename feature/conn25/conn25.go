@@ -27,9 +27,9 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
-	"tailscale.com/net/dns"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/key"
@@ -39,6 +39,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
+	"tailscale.com/wgengine/filter"
 )
 
 // featureName is the name of the feature implemented by this package.
@@ -100,9 +101,6 @@ type extension struct {
 
 	host      ipnext.Host             // set in Init, read-only after
 	ctxCancel context.CancelCauseFunc // cancels sendLoop goroutine
-
-	mu                  sync.Mutex // protects the fields below
-	isDNSHookRegistered bool
 }
 
 // Name implements [ipnext.Extension].
@@ -117,21 +115,116 @@ func (e *extension) Init(host ipnext.Host) error {
 		return ipnext.SkipExtension
 	}
 
-	//Init only once
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	if e.ctxCancel != nil {
 		return nil
 	}
 	e.host = host
 
-	host.Hooks().OnSelfChange.Add(e.onSelfChange)
-	host.Hooks().ExtraRouterConfigRoutes.Set(e.getMagicRange)
-	host.Hooks().ExtraWireGuardAllowedIPs.Set(e.extraWireGuardAllowedIPs)
+	dph := newDatapathHandler(e.conn25, e.conn25.client.logf)
+	if err := e.installHooks(dph); err != nil {
+		return err
+	}
+
 	ctx, cancel := context.WithCancelCause(context.Background())
 	e.ctxCancel = cancel
 	go e.sendLoop(ctx)
 	return nil
+}
+
+func (e *extension) installHooks(dph *datapathHandler) error {
+	// Make sure we can access the DNS manager and the system tun.
+	dnsManager, ok := e.backend.Sys().DNSManager.GetOK()
+	if !ok {
+		return errors.New("could not access system dns manager")
+	}
+	tun, ok := e.backend.Sys().Tun.GetOK()
+	if !ok {
+		return errors.New("could not access system tun")
+	}
+
+	// Set up the DNS manager to rewrite responses for app domains
+	// to answer with Magic IPs.
+	dnsManager.SetQueryResponseMapper(func(bs []byte) []byte {
+		if !e.conn25.isConfigured() {
+			return bs
+		}
+		return e.conn25.mapDNSResponse(bs)
+	})
+
+	// Intercept packets from the tun device and from WireGuard
+	// to perform DNAT and SNAT.
+	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept = func(p *packet.Parsed, _ *tstun.Wrapper) filter.Response {
+		if !e.conn25.isConfigured() {
+			return filter.Accept
+		}
+		return dph.HandlePacketFromTunDevice(p)
+	}
+	tun.PostFilterPacketInboundFromWireGuardAppConnector = func(p *packet.Parsed, _ *tstun.Wrapper) filter.Response {
+		if !e.conn25.isConfigured() {
+			return filter.Accept
+		}
+		return dph.HandlePacketFromWireGuard(p)
+	}
+
+	// Manage how we react to changes to the current node,
+	// including property changes (e.g. HostInfo, Capabilities, CapMap)
+	// and profile switches.
+	e.host.Hooks().OnSelfChange.Add(e.onSelfChange)
+
+	// Allow the client to send packets with Transit IP destinations
+	// in the link-local space.
+	e.host.Hooks().Filter.LinkLocalAllowHooks.Add(func(p packet.Parsed) (bool, string) {
+		if !e.conn25.isConfigured() {
+			return false, ""
+		}
+		return e.conn25.client.linkLocalAllow(p)
+	})
+
+	// Allow the connector to receive packets with Transit IP destinations
+	// in the link-local space.
+	e.host.Hooks().Filter.LinkLocalAllowHooks.Add(func(p packet.Parsed) (bool, string) {
+		if !e.conn25.isConfigured() {
+			return false, ""
+		}
+		return e.conn25.connector.packetFilterAllow(p)
+	})
+
+	// Allow the connector to receive packets with Transit IP destinations
+	// that are not "local" to it, and that it does not advertise.
+	e.host.Hooks().Filter.IngressAllowHooks.Add(func(p packet.Parsed) (bool, string) {
+		if !e.conn25.isConfigured() {
+			return false, ""
+		}
+		return e.conn25.connector.packetFilterAllow(p)
+	})
+
+	// Give the client the Magic IP range to install on the OS.
+	e.host.Hooks().ExtraRouterConfigRoutes.Set(func() views.Slice[netip.Prefix] {
+		if !e.conn25.isConfigured() {
+			return views.Slice[netip.Prefix]{}
+		}
+		return e.getMagicRange()
+	})
+
+	// Tell WireGuard what Transit IPs belong to which connector peers.
+	e.host.Hooks().ExtraWireGuardAllowedIPs.Set(func(k key.NodePublic) views.Slice[netip.Prefix] {
+		if !e.conn25.isConfigured() {
+			return views.Slice[netip.Prefix]{}
+		}
+		return e.extraWireGuardAllowedIPs(k)
+	})
+
+	return nil
+}
+
+// ClientTransitIPForMagicIP implements [IPMapper].
+func (c *Conn25) ClientTransitIPForMagicIP(m netip.Addr) (netip.Addr, error) {
+	return c.client.transitIPForMagicIP(m)
+}
+
+// ConnectorRealIPForTransitIPConnection implements [IPMapper].
+func (c *Conn25) ConnectorRealIPForTransitIPConnection(src, transit netip.Addr) (netip.Addr, error) {
+	return c.connector.realIPForTransitIPConnection(src, transit)
 }
 
 func (e *extension) getMagicRange() views.Slice[netip.Prefix] {
@@ -177,54 +270,10 @@ func (e *extension) onSelfChange(selfNode tailcfg.NodeView) {
 		e.conn25.client.logf("error during Reconfig onSelfChange: %v", err)
 		return
 	}
-
-	if e.conn25.isConfigured() {
-		err = e.registerDNSHook()
-	} else {
-		err = e.unregisterDNSHook()
-	}
-	if err != nil {
-		e.conn25.client.logf("error managing DNS hook onSelfChange: %v", err)
-	}
 }
 
 func (e *extension) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
 	return e.conn25.client.extraWireGuardAllowedIPs(k)
-}
-
-func (e *extension) registerDNSHook() error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.isDNSHookRegistered {
-		return nil
-	}
-	err := e.setDNSHookLocked(e.conn25.mapDNSResponse)
-	if err == nil {
-		e.isDNSHookRegistered = true
-	}
-	return err
-}
-
-func (e *extension) unregisterDNSHook() error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.isDNSHookRegistered {
-		return nil
-	}
-	err := e.setDNSHookLocked(nil)
-	if err == nil {
-		e.isDNSHookRegistered = false
-	}
-	return err
-}
-
-func (e *extension) setDNSHookLocked(fx dns.ResponseMapper) error {
-	dnsManager, ok := e.backend.Sys().DNSManager.GetOK()
-	if !ok || dnsManager == nil {
-		return errors.New("couldn't get DNSManager from sys")
-	}
-	dnsManager.SetQueryResponseMapper(fx)
-	return nil
 }
 
 type appAddr struct {
@@ -517,8 +566,9 @@ func (c *client) getConfig() config {
 	return c.config
 }
 
-// ClientTransitIPForMagicIP is part of the implementation of the IPMapper interface for dataflows lookups.
-func (c *client) ClientTransitIPForMagicIP(magicIP netip.Addr) (netip.Addr, error) {
+// transitIPForMagicIP is part of the implementation of the IPMapper interface for dataflows lookups.
+// See also [IPMapper.ClientTransitIPForMagicIP].
+func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	v, ok := c.assignments.lookupByMagicIP(magicIP)
@@ -938,8 +988,9 @@ type connector struct {
 	config     config
 }
 
-// ConnectorRealIPForTransitIPConnection is part of the implementation of the IPMapper interface for dataflows lookups.
-func (c *connector) ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error) {
+// realIPForTransitIPConnection is part of the implementation of the IPMapper interface for dataflows lookups.
+// See also [IPMapper.ConnectorRealIPForTransitIPConnection].
+func (c *connector) realIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	v, ok := c.lookupBySrcIPAndTransitIP(srcIP, transitIP)

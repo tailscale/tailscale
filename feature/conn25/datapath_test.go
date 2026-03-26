@@ -112,7 +112,7 @@ func TestHandlePacketFromTunDevice(t *testing.T) {
 				}
 				return netip.Addr{}, nil
 			}
-			dph := newDatapathHandler(mock, nil)
+			dph := newDatapathHandler(mock, t.Logf)
 
 			tt.p.IPProto = ipproto.UDP
 			tt.p.IPVersion = 4
@@ -217,7 +217,7 @@ func TestHandlePacketFromWireGuard(t *testing.T) {
 				}
 				return netip.Addr{}, nil
 			}
-			dph := newDatapathHandler(mock, nil)
+			dph := newDatapathHandler(mock, t.Logf)
 
 			tt.p.IPProto = ipproto.UDP
 			tt.p.IPVersion = 4
@@ -254,7 +254,7 @@ func TestClientFlowCache(t *testing.T) {
 		getTransitIPCalled = true
 		return transitIP, nil
 	}
-	dph := newDatapathHandler(mock, nil)
+	dph := newDatapathHandler(mock, t.Logf)
 
 	outgoing := packet.Parsed{
 		IPProto:   ipproto.UDP,
@@ -316,7 +316,7 @@ func TestConnectorFlowCache(t *testing.T) {
 		getRealIPCalled = true
 		return realIP, nil
 	}
-	dph := newDatapathHandler(mock, nil)
+	dph := newDatapathHandler(mock, t.Logf)
 
 	outgoing := packet.Parsed{
 		IPProto:   ipproto.UDP,
