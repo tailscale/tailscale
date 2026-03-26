@@ -77,7 +77,7 @@ func Config(ht *health.Tracker, base *tls.Config) *tls.Config {
 
 	if buildfeatures.HasDebug {
 		// If SSLKEYLOGFILE is set, it's a file to which we write our TLS private keys
-		// in a way that WireShark can read.
+		// in a way that Wireshark can read.
 		//
 		// See https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
 		if n := os.Getenv("SSLKEYLOGFILE"); n != "" {
