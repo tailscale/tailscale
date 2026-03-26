@@ -2030,7 +2030,7 @@ func (s *Server) GetRootPath() string {
 // debugging, probably not useful for production.
 //
 // Packets will be written to the pcap until the process exits. The pcap needs a Lua dissector
-// to be installed in WireShark in order to decode properly: wgengine/capture/ts-dissector.lua
+// to be installed in Wireshark in order to decode properly: wgengine/capture/ts-dissector.lua
 // in this repository.
 // https://tailscale.com/kb/1023/troubleshooting/#can-i-examine-network-traffic-inside-the-encrypted-tunnel
 func (s *Server) CapturePcap(ctx context.Context, pcapFile string) error {
