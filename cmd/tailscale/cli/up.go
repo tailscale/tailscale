@@ -357,6 +357,11 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 
 	if goos == "linux" {
 		prefs.NoSNAT = !upArgs.snat
+		// We want to make sure user is aware setting --snat-subnet-routes=false with --advertise-exit-node would break exitnode,
+		// but we won't prevent them from doing it since there are current dependencies on that combination. (as of 2026-03-25)
+		if prefs.NoSNAT && prefs.AdvertisesExitNode() {
+			warnf("--snat-subnet-routes=false is set with --advertise-exit-node; internet traffic through this exit node may not work as expected")
+		}
 
 		// Backfills for NoStatefulFiltering occur when loading a profile; just set it explicitly here.
 		prefs.NoStatefulFiltering.Set(!upArgs.statefulFiltering)

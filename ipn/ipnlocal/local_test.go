@@ -7878,3 +7878,75 @@ func TestEditPrefs_InvalidAdvertiseRoutes(t *testing.T) {
 		})
 	}
 }
+
+func TestNoSNATWithAdvertisedExitNodeWarning(t *testing.T) {
+	exitRoutes := []netip.Prefix{
+		netip.MustParsePrefix("0.0.0.0/0"),
+		netip.MustParsePrefix("::/0"),
+	}
+	warnCode := health.WarnableCode("nosnat-with-advertised-exit-node")
+
+	tests := []struct {
+		name        string
+		prefs       *ipn.Prefs
+		wantWarning bool
+	}{
+		{
+			name: "no-snat-without-exit-node",
+			prefs: &ipn.Prefs{
+				NoSNAT:          true,
+				AdvertiseRoutes: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")},
+			},
+			wantWarning: false,
+		},
+		{
+			name: "snat-enabled-with-exit-node",
+			prefs: &ipn.Prefs{
+				NoSNAT:          false,
+				AdvertiseRoutes: exitRoutes,
+			},
+			wantWarning: false,
+		},
+		{
+			name: "no-snat-with-exit-node",
+			prefs: &ipn.Prefs{
+				NoSNAT:          true,
+				AdvertiseRoutes: exitRoutes,
+			},
+			wantWarning: true,
+		},
+		{
+			name: "no-snat-with-exit-node-and-subnet",
+			prefs: &ipn.Prefs{
+				NoSNAT: true,
+				AdvertiseRoutes: append([]netip.Prefix{
+					netip.MustParsePrefix("10.0.0.0/24"),
+				}, exitRoutes...),
+			},
+			wantWarning: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestLocalBackend(t)
+			b.SetPrefsForTest(tt.prefs)
+			_, hasWarning := b.HealthTracker().CurrentState().Warnings[warnCode]
+			if hasWarning != tt.wantWarning {
+				t.Errorf("warning present = %v, want %v", hasWarning, tt.wantWarning)
+			}
+		})
+	}
+
+	// Verify that the warning clears when the conflicting combination is resolved.
+	t.Run("warning-clears-on-fix", func(t *testing.T) {
+		b := newTestLocalBackend(t)
+		b.SetPrefsForTest(&ipn.Prefs{NoSNAT: true, AdvertiseRoutes: exitRoutes})
+		if _, ok := b.HealthTracker().CurrentState().Warnings[warnCode]; !ok {
+			t.Fatal("expected warning to be set")
+		}
+		b.SetPrefsForTest(&ipn.Prefs{NoSNAT: false, AdvertiseRoutes: exitRoutes})
+		if _, ok := b.HealthTracker().CurrentState().Warnings[warnCode]; ok {
+			t.Fatal("expected warning to be cleared after enabling SNAT")
+		}
+	})
+}

@@ -265,6 +265,11 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 
 	checkPrefs := curPrefs.Clone()
 	checkPrefs.ApplyEdits(maskedPrefs)
+	// We want to make sure user is aware setting --snat-subnet-routes=false with --advertise-exit-node would break exitnode,
+	// but we won't prevent them from doing it since there are current dependencies on that combination. (as of 2026-03-25)
+	if checkPrefs.NoSNAT && checkPrefs.AdvertisesExitNode() {
+		warnf("--snat-subnet-routes=false is set with --advertise-exit-node; internet traffic through this exit node may not work as expected")
+	}
 	if err := localClient.CheckPrefs(ctx, checkPrefs); err != nil {
 		return err
 	}

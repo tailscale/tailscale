@@ -2576,6 +2576,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	// Reset the always-on override whenever Start is called.
 	b.resetAlwaysOnOverrideLocked()
 	b.setAtomicValuesFromPrefsLocked(prefs)
+	b.updateNoSNATExitNodeWarning(prefs)
 
 	wantRunning := prefs.WantRunning()
 	if wantRunning {
@@ -4745,6 +4746,7 @@ func (b *LocalBackend) setPrefsLocked(newp *ipn.Prefs) ipn.PrefsView {
 
 	b.pauseOrResumeControlClientLocked() // for prefs.Sync changes
 	b.updateWarnSync(prefs)
+	b.updateNoSNATExitNodeWarning(prefs)
 
 	if oldp.ShieldsUp() != newp.ShieldsUp || hostInfoChanged {
 		b.doSetHostinfoFilterServicesLocked()
@@ -6984,6 +6986,18 @@ var warnSSHSELinuxWarnable = health.Register(&health.Warnable{
 	Text:     health.StaticMessage("SELinux is enabled; Tailscale SSH may not work. See https://tailscale.com/s/ssh-selinux"),
 })
 
+// warnNoSNATWithExitNode is a warnable for when a node is advertising as an
+// exit node but has SNAT disabled. In this configuration internet-bound traffic
+// from peers using this exit node will not be masqueraded to the node's own
+// source IP, so return packets cannot be routed back, causing the exit node to
+// not work as expected.
+var warnNoSNATWithExitNode = health.Register(&health.Warnable{
+	Code:     "nosnat-with-advertised-exit-node",
+	Title:    "Exit node advertising may not work correctly",
+	Severity: health.SeverityMedium,
+	Text:     health.StaticMessage("snat-subnet-routes is disabled while advertising as an exit node; internet traffic through this exit node may not work as expected"),
+})
+
 func (b *LocalBackend) updateSELinuxHealthWarning() {
 	if hostinfo.IsSELinuxEnforcing() {
 		b.health.SetUnhealthy(warnSSHSELinuxWarnable, nil)
@@ -6997,6 +7011,17 @@ func (b *LocalBackend) updateWarnSync(prefs ipn.PrefsView) {
 		b.health.SetUnhealthy(warnSyncDisabled, nil)
 	} else {
 		b.health.SetHealthy(warnSyncDisabled)
+	}
+}
+
+func (b *LocalBackend) updateNoSNATExitNodeWarning(prefs ipn.PrefsView) {
+	if !buildfeatures.HasAdvertiseExitNode {
+		return
+	}
+	if prefs.NoSNAT() && prefs.AdvertisesExitNode() {
+		b.health.SetUnhealthy(warnNoSNATWithExitNode, nil)
+	} else {
+		b.health.SetHealthy(warnNoSNATWithExitNode)
 	}
 }
 
