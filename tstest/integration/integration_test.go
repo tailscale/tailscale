@@ -2374,6 +2374,38 @@ func TestTailnetLock(t *testing.T) {
 			t.Fatalf("ping node3 -> signing1: expected success, got err: %v", err)
 		}
 	})
+
+	// If you run `tailscale lock (add|remove|revoke-keys)` but don't pass any keys,
+	// we print a helpful error message.
+	//
+	// Regression test for tailscale/tailscale#19130
+	t.Run("no-keys-is-error", func(t *testing.T) {
+		for _, verb := range []string{"add", "remove", "revoke-keys"} {
+			t.Run(verb, func(t *testing.T) {
+				tstest.Shard(t)
+				t.Parallel()
+
+				env := NewTestEnv(t)
+				n1 := NewTestNode(t, env)
+				d1 := n1.StartDaemon()
+				defer d1.MustCleanShutdown(t)
+
+				n1.MustUp()
+				n1.AwaitRunning()
+
+				revokeCmd := n1.Tailscale("lock", verb)
+				out, err := revokeCmd.CombinedOutput()
+				if err == nil {
+					t.Fatal("expected command to fail, but succeeded")
+				}
+				want := "missing argument"
+				got := string(out)
+				if !strings.Contains(string(out), want) {
+					t.Fatalf("expected output to contain %q, got %q", want, got)
+				}
+			})
+		}
+	})
 }
 
 func TestNodeWithBadStateFile(t *testing.T) {

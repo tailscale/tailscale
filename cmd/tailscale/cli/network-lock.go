@@ -305,9 +305,7 @@ var nlAddCmd = &ffcli.Command{
 	Name:       "add",
 	ShortUsage: "tailscale lock add <public-key>...",
 	ShortHelp:  "Add one or more trusted signing keys to tailnet lock",
-	Exec: func(ctx context.Context, args []string) error {
-		return runNetworkLockModify(ctx, args, nil)
-	},
+	Exec:       runNetworkLockAdd,
 }
 
 var nlRemoveArgs struct {
@@ -330,6 +328,9 @@ func runNetworkLockRemove(ctx context.Context, args []string) error {
 	removeKeys, _, err := parseNLArgs(args, true, false)
 	if err != nil {
 		return err
+	}
+	if len(removeKeys) == 0 {
+		return fmt.Errorf("missing argument, expected one or more tailnet lock keys")
 	}
 	st, err := localClient.NetworkLockStatus(ctx)
 	if err != nil {
@@ -445,7 +446,15 @@ func parseNLArgs(args []string, parseKeys, parseDisablements bool) (keys []tka.K
 	return keys, disablements, nil
 }
 
-func runNetworkLockModify(ctx context.Context, addArgs, removeArgs []string) error {
+func runNetworkLockAdd(ctx context.Context, addArgs []string) error {
+	addKeys, _, err := parseNLArgs(addArgs, true, false)
+	if err != nil {
+		return err
+	}
+	if len(addKeys) == 0 {
+		return fmt.Errorf("missing argument, expected one or more tailnet lock keys")
+	}
+
 	st, err := localClient.NetworkLockStatus(ctx)
 	if err != nil {
 		return fixTailscaledConnectError(err)
@@ -454,16 +463,7 @@ func runNetworkLockModify(ctx context.Context, addArgs, removeArgs []string) err
 		return errors.New("tailnet lock is not enabled")
 	}
 
-	addKeys, _, err := parseNLArgs(addArgs, true, false)
-	if err != nil {
-		return err
-	}
-	removeKeys, _, err := parseNLArgs(removeArgs, true, false)
-	if err != nil {
-		return err
-	}
-
-	if err := localClient.NetworkLockModify(ctx, addKeys, removeKeys); err != nil {
+	if err := localClient.NetworkLockModify(ctx, addKeys, nil); err != nil {
 		return err
 	}
 	return nil
@@ -819,13 +819,17 @@ Revocation is a multi-step process that requires several signing nodes to ` + "`
 func runNetworkLockRevokeKeys(ctx context.Context, args []string) error {
 	// First step in the process
 	if !nlRevokeKeysArgs.cosign && !nlRevokeKeysArgs.finish {
-		removeKeys, _, err := parseNLArgs(args, true, false)
+		revokeKeys, _, err := parseNLArgs(args, true, false)
 		if err != nil {
 			return err
 		}
 
-		keyIDs := make([]tkatype.KeyID, len(removeKeys))
-		for i, k := range removeKeys {
+		if len(revokeKeys) == 0 {
+			return fmt.Errorf("missing argument, expected one or more tailnet lock keys")
+		}
+
+		keyIDs := make([]tkatype.KeyID, len(revokeKeys))
+		for i, k := range revokeKeys {
 			keyIDs[i], err = k.ID()
 			if err != nil {
 				return fmt.Errorf("generating keyID: %v", err)
