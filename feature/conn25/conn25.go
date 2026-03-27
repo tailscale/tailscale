@@ -72,8 +72,11 @@ func init() {
 	feature.Register(featureName)
 	ipnext.RegisterExtension(featureName, func(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, error) {
 		return &extension{
-			conn25:  newConn25(logger.WithPrefix(logf, "conn25: ")),
-			backend: sb,
+			conn25:         newConn25(logger.WithPrefix(logf, "conn25: ")),
+			backend:        sb,
+			debugLifecycle: envknob.Bool("TS_CONN25_DEBUG_LIFECYCLE"),
+			debugPeerAPI:   envknob.Bool("TS_CONN25_DEBUG_PEERAPI"),
+			debugDNS:       envknob.Bool("TS_CONN25_DEBUG_DNS"),
 		}, nil
 	})
 	ipnlocal.RegisterPeerAPIHandler("/v0/connector/transit-ip", handleConnectorTransitIP)
@@ -96,8 +99,12 @@ func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, 
 // extension is an [ipnext.Extension] managing the connector on platforms
 // that import this package.
 type extension struct {
-	conn25  *Conn25            // safe for concurrent access and only set at creation
-	backend ipnext.SafeBackend // safe for concurrent access and only set at creation
+	// Immutable fields (set at creation, available for concurrent read access)
+	conn25         *Conn25
+	backend        ipnext.SafeBackend
+	debugLifecycle bool
+	debugPeerAPI   bool
+	debugDNS       bool
 
 	host      ipnext.Host             // set in Init, read-only after
 	ctxCancel context.CancelCauseFunc // cancels sendLoop goroutine
@@ -112,6 +119,9 @@ func (e *extension) Name() string {
 func (e *extension) Init(host ipnext.Host) error {
 	// TODO(tailscale/corp#39033): Remove for alpha release.
 	if !envknob.UseWIPCode() && !testenv.InTest() {
+		if e.debugLifecycle {
+			e.conn25.client.logf("skipping extension")
+		}
 		return ipnext.SkipExtension
 	}
 
@@ -123,6 +133,9 @@ func (e *extension) Init(host ipnext.Host) error {
 	dph := newDatapathHandler(e.conn25, e.conn25.client.logf)
 	if err := e.installHooks(dph); err != nil {
 		return err
+	}
+	if e.debugLifecycle {
+		e.conn25.client.logf("installed data path hooks")
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
@@ -247,18 +260,30 @@ func (e *extension) handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.R
 	defer r.Body.Close()
 	if r.Method != "POST" {
 		http.Error(w, "Method should be POST", http.StatusMethodNotAllowed)
+		if e.debugPeerAPI {
+			e.conn25.connector.logf("TransitIP PeerAPI failed: bad method %v", r.Method)
+		}
 		return
 	}
 	var req ConnectorTransitIPRequest
 	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes+1)).Decode(&req)
 	if err != nil {
 		http.Error(w, "Error decoding JSON", http.StatusBadRequest)
+		if e.debugPeerAPI {
+			e.conn25.connector.logf("TransitIP PeerAPI failed: request decode: %v", err)
+		}
 		return
 	}
 	resp := e.conn25.handleConnectorTransitIPRequest(h.Peer(), req)
+	if e.debugPeerAPI {
+		e.conn25.connector.logf("TransitIP PeerAPI %v", resp)
+	}
 	bs, err := json.Marshal(resp)
 	if err != nil {
 		http.Error(w, "Error encoding JSON", http.StatusInternalServerError)
+		if e.debugPeerAPI {
+			e.conn25.connector.logf("TransitIP PeerAPI failed: response encode: %v", err)
+		}
 		return
 	}
 	w.Write(bs)
@@ -677,13 +702,22 @@ func (c *client) addTransitIPForConnector(tip netip.Addr, conn tailcfg.NodeView)
 }
 
 func (e *extension) sendLoop(ctx context.Context) {
+	if e.debugLifecycle {
+		e.conn25.client.logf("sendLoop start")
+	}
 	for {
 		select {
 		case <-ctx.Done():
+			if e.debugLifecycle {
+				e.conn25.client.logf("sendLoop end")
+			}
 			return
 		case as := <-e.conn25.client.addrsCh:
 			if err := e.handleAddressAssignment(ctx, as); err != nil {
-				e.conn25.client.logf("error handling transit IP assignment (app: %s, mip: %v, src: %v): %v", as.app, as.magic, as.dst, err)
+				e.conn25.client.logf("error handling transit IP assignment (app: %s, mip: %v, src: %v): %v", err)
+			}
+			if e.debugPeerAPI {
+				e.conn25.client.logf("successful transit IP assignment (app: %s, mip: %v, src: %v)", as.app, as.magic, as.dst)
 			}
 		}
 	}
