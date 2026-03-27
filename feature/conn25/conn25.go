@@ -713,9 +713,9 @@ func (e *extension) sendLoop(ctx context.Context) {
 			return
 		case as := <-e.conn25.client.addrsCh:
 			if err := e.handleAddressAssignment(ctx, as); err != nil {
-				e.conn25.client.logf("error handling transit IP assignment (app: %s, mip: %v, src: %v): %v", err)
+				e.conn25.client.logf("error handling transit IP assignment (app: %s, mip: %v, dst: %v): %v", err)
 			}
-			e.conn25.client.debugf("successful transit IP assignment (app: %s, mip: %v, src: %v)", as.app, as.magic, as.dst)
+			e.conn25.client.debugf("successful transit IP assignment (app: %s, mip: %v, dst: %v)", as.app, as.magic, as.dst)
 		}
 	}
 }
