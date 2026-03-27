@@ -35,6 +35,7 @@ import (
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/proxyclass"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
@@ -610,8 +611,8 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 					Conditions: []metav1.Condition{{
 						Type:               string(tsapi.ProxyClassReady),
 						Status:             metav1.ConditionTrue,
-						Reason:             reasonProxyClassValid,
-						Message:            reasonProxyClassValid,
+						Reason:             proxyclass.ReasonProxyClassValid,
+						Message:            proxyclass.ReasonProxyClassValid,
 						LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
 					}},
 				},
@@ -968,8 +969,8 @@ func TestProxyGroup(t *testing.T) {
 			Conditions: []metav1.Condition{{
 				Type:               string(tsapi.ProxyClassReady),
 				Status:             metav1.ConditionTrue,
-				Reason:             reasonProxyClassValid,
-				Message:            reasonProxyClassValid,
+				Reason:             proxyclass.ReasonProxyClassValid,
+				Message:            proxyclass.ReasonProxyClassValid,
 				LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
 			}},
 		}
@@ -1985,8 +1986,8 @@ func setProxyClassReady(t *testing.T, fc client.Client, cl *tstest.Clock, name s
 		Conditions: []metav1.Condition{{
 			Type:               string(tsapi.ProxyClassReady),
 			Status:             metav1.ConditionTrue,
-			Reason:             reasonProxyClassValid,
-			Message:            reasonProxyClassValid,
+			Reason:             proxyclass.ReasonProxyClassValid,
+			Message:            proxyclass.ReasonProxyClassValid,
 			LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
 			ObservedGeneration: pc.Generation,
 		}},
