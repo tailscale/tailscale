@@ -156,7 +156,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (res 
 
 	// Add a finalizer so that we can ensure that metrics get updated when
 	// this ProxyClass is deleted.
-	if err := reconciler.EnsureFinalizer(ctx, r.Client, pc); err != nil {
+	if err := reconciler.EnsureFinalizer(ctx, r.Client, pc, reconciler.Finalizer); err != nil {
 		return res, fmt.Errorf("failed to add finalizer: %w", err)
 	}
 
@@ -282,7 +282,7 @@ func hasServiceMonitorCRD(ctx context.Context, cl client.Client) (bool, error) {
 // maybeCleanup removes tailscale.com finalizer and ensures that the ProxyClass
 // is no longer counted towards k8s_proxyclass_resources.
 func (r *Reconciler) maybeCleanup(ctx context.Context, logger *zap.SugaredLogger, pc *tsapi.ProxyClass) error {
-	if err := reconciler.ClearFinalizer(ctx, r.Client, pc); err != nil {
+	if err := reconciler.ClearFinalizer(ctx, r.Client, pc, reconciler.Finalizer); err != nil {
 		return fmt.Errorf("failed to remove finalizer: %w", err)
 	}
 	r.tracker.Remove(pc.UID)

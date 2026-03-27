@@ -35,16 +35,16 @@ func TestFinalizers(t *testing.T) {
 		},
 	}
 
-	reconciler.SetFinalizer(object)
+	reconciler.SetFinalizer(object, reconciler.Finalizer)
 
-	if !slices.Contains(object.Finalizers, reconciler.FinalizerName) {
-		t.Fatalf("object does not have finalizer %q: %v", reconciler.FinalizerName, object.Finalizers)
+	if !slices.Contains(object.Finalizers, reconciler.Finalizer) {
+		t.Fatalf("object does not have finalizer %q: %v", reconciler.Finalizer, object.Finalizers)
 	}
 
-	reconciler.RemoveFinalizer(object)
+	reconciler.RemoveFinalizer(object, reconciler.Finalizer)
 
-	if slices.Contains(object.Finalizers, reconciler.FinalizerName) {
-		t.Fatalf("object still has finalizer %q: %v", reconciler.FinalizerName, object.Finalizers)
+	if slices.Contains(object.Finalizers, reconciler.Finalizer) {
+		t.Fatalf("object still has finalizer %q: %v", reconciler.Finalizer, object.Finalizers)
 	}
 }
 
@@ -201,7 +201,7 @@ func TestEnsureAndClearFinalizer(t *testing.T) {
 		if err := cl.Get(t.Context(), key, secret); err != nil {
 			t.Fatalf("Get after seed: %v", err)
 		}
-		if err := reconciler.EnsureFinalizer(t.Context(), cl, secret); err != nil {
+		if err := reconciler.EnsureFinalizer(t.Context(), cl, secret, reconciler.Finalizer); err != nil {
 			t.Fatalf("EnsureFinalizer: %v", err)
 		}
 
@@ -209,13 +209,13 @@ func TestEnsureAndClearFinalizer(t *testing.T) {
 		if err := cl.Get(t.Context(), key, got); err != nil {
 			t.Fatalf("Get after ensure: %v", err)
 		}
-		if !slices.Contains(got.Finalizers, reconciler.FinalizerName) {
+		if !slices.Contains(got.Finalizers, reconciler.Finalizer) {
 			t.Fatalf("finalizer not set: %v", got.Finalizers)
 		}
 		firstRV := got.ResourceVersion
 
 		// Second call must be a no-op — same ResourceVersion, no Update round-trip.
-		if err := reconciler.EnsureFinalizer(t.Context(), cl, got); err != nil {
+		if err := reconciler.EnsureFinalizer(t.Context(), cl, got, reconciler.Finalizer); err != nil {
 			t.Fatalf("EnsureFinalizer (2nd): %v", err)
 		}
 		if err := cl.Get(t.Context(), key, got); err != nil {
@@ -228,7 +228,7 @@ func TestEnsureAndClearFinalizer(t *testing.T) {
 
 	t.Run("clear-removes-and-is-idempotent", func(t *testing.T) {
 		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns", Finalizers: []string{reconciler.FinalizerName}},
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns", Finalizers: []string{reconciler.Finalizer}},
 		}
 		cl := newClient(secret)
 
@@ -236,7 +236,7 @@ func TestEnsureAndClearFinalizer(t *testing.T) {
 		if err := cl.Get(t.Context(), key, secret); err != nil {
 			t.Fatalf("Get after seed: %v", err)
 		}
-		if err := reconciler.ClearFinalizer(t.Context(), cl, secret); err != nil {
+		if err := reconciler.ClearFinalizer(t.Context(), cl, secret, reconciler.Finalizer); err != nil {
 			t.Fatalf("ClearFinalizer: %v", err)
 		}
 
@@ -244,13 +244,13 @@ func TestEnsureAndClearFinalizer(t *testing.T) {
 		if err := cl.Get(t.Context(), key, got); err != nil {
 			t.Fatalf("Get after clear: %v", err)
 		}
-		if slices.Contains(got.Finalizers, reconciler.FinalizerName) {
+		if slices.Contains(got.Finalizers, reconciler.Finalizer) {
 			t.Fatalf("finalizer still present: %v", got.Finalizers)
 		}
 		firstRV := got.ResourceVersion
 
 		// Idempotent — nothing left to remove, so no Update round-trip.
-		if err := reconciler.ClearFinalizer(t.Context(), cl, got); err != nil {
+		if err := reconciler.ClearFinalizer(t.Context(), cl, got, reconciler.Finalizer); err != nil {
 			t.Fatalf("ClearFinalizer (2nd): %v", err)
 		}
 		if err := cl.Get(t.Context(), key, got); err != nil {
