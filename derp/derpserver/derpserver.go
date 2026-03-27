@@ -87,6 +87,12 @@ const (
 	defaultPerClientSendQueueDepth = 32 // default packets buffered for sending
 	DefaultTCPWiteTimeout          = 2 * time.Second
 	privilegedWriteTimeout         = 30 * time.Second // for clients with the mesh key
+
+	// notHereCacheTTL is how long we suppress repeated lookups and
+	// peerGone notifications for a destination that is not connected
+	// to this server. Must be longer than the client's disco retry
+	// interval (3-5s) to suppress at least one retry.
+	notHereCacheTTL = 10 * time.Second
 )
 
 func getPerClientSendQueueDepth() int {
@@ -140,37 +146,44 @@ type Server struct {
 	localClient local.Client
 
 	// Counters:
-	packetsSent, bytesSent     expvar.Int
-	packetsRecv, bytesRecv     expvar.Int
-	packetsRecvByKind          metrics.LabelMap
-	packetsRecvDisco           *expvar.Int
-	packetsRecvOther           *expvar.Int
-	_                          align64
-	packetsForwardedOut        expvar.Int
-	packetsForwardedIn         expvar.Int
-	peerGoneDisconnectedFrames expvar.Int // number of peer disconnected frames sent
-	peerGoneNotHereFrames      expvar.Int // number of peer not here frames sent
-	gotPing                    expvar.Int // number of ping frames from client
-	sentPong                   expvar.Int // number of pong frames enqueued to client
-	accepts                    expvar.Int
-	curClients                 expvar.Int
-	curClientsNotIdeal         expvar.Int
-	curHomeClients             expvar.Int // ones with preferred
-	dupClientKeys              expvar.Int // current number of public keys we have 2+ connections for
-	dupClientConns             expvar.Int // current number of connections sharing a public key
-	dupClientConnTotal         expvar.Int // total number of accepted connections when a dup key existed
-	unknownFrames              expvar.Int
-	homeMovesIn                expvar.Int // established clients announce home server moves in
-	homeMovesOut               expvar.Int // established clients announce home server moves out
-	multiForwarderCreated      expvar.Int
-	multiForwarderDeleted      expvar.Int
-	removePktForwardOther      expvar.Int
-	sclientWriteTimeouts       expvar.Int
-	avgQueueDuration           *uint64          // In milliseconds; accessed atomically
-	tcpRtt                     metrics.LabelMap // histogram
-	meshUpdateBatchSize        *metrics.Histogram
-	meshUpdateLoopCount        *metrics.Histogram
-	bufferedWriteFrames        *metrics.Histogram // how many sendLoop frames (or groups of related frames) get written per flush
+	packetsSent, bytesSent      expvar.Int
+	packetsRecv, bytesRecv      expvar.Int
+	packetsRecvByKind           metrics.LabelMap
+	packetsRecvDisco            *expvar.Int
+	packetsRecvOther            *expvar.Int
+	_                           align64
+	packetsForwardedOut         expvar.Int
+	packetsForwardedIn          expvar.Int
+	peerGoneDisconnectedFrames  expvar.Int // number of peer disconnected frames sent
+	peerGoneNotHereFrames       expvar.Int // number of peer not here frames sent
+	packetsDroppedCachedNotHere expvar.Int // number of packets dropped via not-here cache
+	gotPing                     expvar.Int // number of ping frames from client
+	sentPong                    expvar.Int // number of pong frames enqueued to client
+	accepts                     expvar.Int
+	curClients                  expvar.Int
+	curClientsNotIdeal          expvar.Int
+	curHomeClients              expvar.Int // ones with preferred
+	dupClientKeys               expvar.Int // current number of public keys we have 2+ connections for
+	dupClientConns              expvar.Int // current number of connections sharing a public key
+	dupClientConnTotal          expvar.Int // total number of accepted connections when a dup key existed
+	unknownFrames               expvar.Int
+	homeMovesIn                 expvar.Int // established clients announce home server moves in
+	homeMovesOut                expvar.Int // established clients announce home server moves out
+	multiForwarderCreated       expvar.Int
+	multiForwarderDeleted       expvar.Int
+	removePktForwardOther       expvar.Int
+	sclientWriteTimeouts        expvar.Int
+	avgQueueDuration            *uint64          // In milliseconds; accessed atomically
+	tcpRtt                      metrics.LabelMap // histogram
+	meshUpdateBatchSize         *metrics.Histogram
+	meshUpdateLoopCount         *metrics.Histogram
+	bufferedWriteFrames         *metrics.Histogram // how many sendLoop frames (or groups of related frames) get written per flush
+
+	// notHereCache is a server-wide cache of destination keys that are
+	// not connected to this server. Shared across all client goroutines
+	// to avoid repeated mutex-protected client map lookups.
+	// Key: key.NodePublic, Value: time.Time (when entry was added).
+	notHereCache sync.Map
 
 	// verifyClientsLocalTailscaled only accepts client connections to the DERP
 	// server if the clientKey is a known peer in the network, as specified by a
@@ -667,6 +680,10 @@ func (s *Server) ModifyTLSConfigToAddMetaCert(c *tls.Config) {
 // observe EOFs/timeouts) but won't send them frames on the assumption
 // that they're dead.
 func (s *Server) registerClient(c *sclient) {
+	// Invalidate not-here cache so other clients sending to this
+	// key will do a fresh lookup and find the newly connected peer.
+	s.notHereCache.Delete(c.key)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -866,15 +883,21 @@ func (s *Server) notePeerGoneFromRegionLocked(key key.NodePublic) {
 
 // requestPeerGoneWriteLimited sends a request to write a "peer gone"
 // frame, but only in reply to a disco packet, and only if we haven't
-// sent one recently.
+// already notified this client about this specific peer recently.
+// The caller must add to notHereCache separately. The peerGoneLim
+// provides a per-client safety backstop against clients sending to
+// many unique absent destinations.
 func (c *sclient) requestPeerGoneWriteLimited(peer key.NodePublic, contents []byte, reason derp.PeerGoneReasonType) {
-	if disco.LooksLikeDiscoWrapper(contents) != true {
+	if !disco.LooksLikeDiscoWrapper(contents) {
 		return
 	}
 
-	if c.peerGoneLim.Allow() {
-		go c.requestPeerGoneWrite(peer, reason)
+	// Per-client safety backstop.
+	if !c.peerGoneLim.Allow() {
+		return
 	}
+
+	go c.requestPeerGoneWrite(peer, reason)
 }
 
 func (s *Server) addWatcher(c *sclient) {
@@ -952,7 +975,7 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 		peerGone:       make(chan peerGoneMsg),
 		canMesh:        s.isMeshPeer(clientInfo),
 		isNotIdealConn: IdealNodeContextKey.Value(ctx) != "",
-		peerGoneLim:    rate.NewLimiter(rate.Every(time.Second), 3),
+		peerGoneLim:    rate.NewLimiter(rate.Every(time.Second), 30),
 	}
 
 	if c.canMesh {
@@ -1185,9 +1208,13 @@ func (c *sclient) handleFrameForwardPacket(ft derp.FrameType, fl uint32) error {
 func (c *sclient) handleFrameSendPacket(ft derp.FrameType, fl uint32) error {
 	s := c.s
 
-	dstKey, contents, err := s.recvPacket(c.br, fl)
+	dstKey, contents, err := s.recvPacket(c, fl)
 	if err != nil {
 		return fmt.Errorf("client %v: recvPacket: %v", c.key, err)
+	}
+	if contents == nil {
+		// Packet was dropped early by the not-here cache.
+		return nil
 	}
 
 	var fwd PacketForwarder
@@ -1220,6 +1247,7 @@ func (c *sclient) handleFrameSendPacket(ft derp.FrameType, fl uint32) error {
 			reason = dropReasonDupClient
 		} else {
 			c.requestPeerGoneWriteLimited(dstKey, contents, derp.PeerGoneReasonNotHere)
+			s.addNotHereCache(dstKey, s.clock.Now())
 		}
 		s.recordDrop(contents, c.key, dstKey, reason)
 		c.debugLogf("SendPacket for %s, dropping with reason=%s", dstKey.ShortString(), reason)
@@ -1559,19 +1587,34 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.NodePublic, info
 	return clientKey, info, nil
 }
 
-func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.NodePublic, contents []byte, err error) {
+// recvPacket reads a send-packet frame from br. If the destination key
+// is in the client's not-here cache, the payload is discarded without
+// allocation and contents is returned as nil.
+func (s *Server) recvPacket(c *sclient, frameLen uint32) (dstKey key.NodePublic, contents []byte, err error) {
 	if frameLen < derp.KeyLen {
 		return zpub, nil, errors.New("short send packet frame")
 	}
-	if err := dstKey.ReadRawWithoutAllocating(br); err != nil {
+	if err := dstKey.ReadRawWithoutAllocating(c.br); err != nil {
 		return zpub, nil, err
 	}
 	packetLen := frameLen - derp.KeyLen
 	if packetLen > derp.MaxPacketSize {
 		return zpub, nil, fmt.Errorf("data packet longer (%d) than max of %v", packetLen, derp.MaxPacketSize)
 	}
+
+	// Check not-here cache before reading payload. This avoids
+	// payload allocation, io.ReadFull, s.mu lock, and client map
+	// lookup for repeated packets to absent destinations.
+	if s.isNotHereCached(dstKey, s.clock.Now()) {
+		if _, err := c.br.Discard(int(packetLen)); err != nil {
+			return zpub, nil, err
+		}
+		s.packetsDroppedCachedNotHere.Add(1)
+		return dstKey, nil, nil
+	}
+
 	contents = make([]byte, packetLen)
-	if _, err := io.ReadFull(br, contents); err != nil {
+	if _, err := io.ReadFull(c.br, contents); err != nil {
 		return zpub, nil, err
 	}
 	s.packetsRecv.Add(1)
@@ -1683,6 +1726,25 @@ func (c *sclient) presentFlags() derp.PeerPresentFlags {
 		return derp.PeerPresentIsRegular
 	}
 	return f
+}
+
+// isNotHereCached reports whether dstKey is in the server's not-here
+// cache and the entry has not expired.
+func (s *Server) isNotHereCached(dstKey key.NodePublic, now time.Time) bool {
+	v, ok := s.notHereCache.Load(dstKey)
+	if !ok {
+		return false
+	}
+	if now.Sub(v.(time.Time)) > notHereCacheTTL {
+		s.notHereCache.Delete(dstKey)
+		return false
+	}
+	return true
+}
+
+// addNotHereCache records that dstKey is not connected to this server.
+func (s *Server) addNotHereCache(dstKey key.NodePublic, now time.Time) {
+	s.notHereCache.Store(dstKey, now)
 }
 
 // peerConnState represents whether a peer is connected to the server
@@ -2233,6 +2295,7 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("sent_pong", &s.sentPong)
 	m.Set("peer_gone_disconnected_frames", &s.peerGoneDisconnectedFrames)
 	m.Set("peer_gone_not_here_frames", &s.peerGoneNotHereFrames)
+	m.Set("packets_dropped_cached_not_here", &s.packetsDroppedCachedNotHere)
 	m.Set("packets_forwarded_out", &s.packetsForwardedOut)
 	m.Set("packets_forwarded_in", &s.packetsForwardedIn)
 	m.Set("multiforwarder_created", &s.multiForwarderCreated)

@@ -27,6 +27,7 @@ import (
 	"golang.org/x/time/rate"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derpconst"
+	tsrate "tailscale.com/tstime/rate"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -680,10 +681,112 @@ func BenchmarkConcurrentStreams(b *testing.B) {
 	<-acceptDone
 }
 
+// loopReader is an io.Reader that repeats data infinitely.
+type loopReader struct {
+	data []byte
+	off  int
+}
+
+func (r *loopReader) Read(p []byte) (int, error) {
+	n := 0
+	for n < len(p) {
+		copied := copy(p[n:], r.data[r.off:])
+		n += copied
+		r.off += copied
+		if r.off >= len(r.data) {
+			r.off = 0
+		}
+	}
+	return n, nil
+}
+
 func BenchmarkSendRecv(b *testing.B) {
 	for _, size := range []int{10, 100, 1000, 10000} {
 		b.Run(fmt.Sprintf("msgsize=%d", size), func(b *testing.B) { benchmarkSendRecvSize(b, size) })
 	}
+}
+
+
+// BenchmarkHandleFrameSendPacketAbsent benchmarks the server-side
+// handleFrameSendPacket path directly, bypassing TLS and TCP to
+// isolate server processing cost. It compares cache hits (same absent
+// destination) vs cache misses (rotating through many absent destinations).
+func BenchmarkHandleFrameSendPacketAbsent(b *testing.B) {
+	const payloadSize = 100
+	const frameSize = derp.KeyLen + payloadSize
+
+	setup := func(b *testing.B) *sclient {
+		b.Helper()
+		s := New(key.NewNode(), logger.Discard)
+		b.Cleanup(func() { s.Close() })
+		c := &sclient{
+			s:           s,
+			key:         key.NewNode().Public(),
+			logf:        logger.Discard,
+			done:        make(chan struct{}),
+			peerGone:    make(chan peerGoneMsg, 100),
+			peerGoneLim: tsrate.NewLimiter(tsrate.Every(time.Second/50), 50),
+		}
+		return c
+	}
+
+	// buildFrames builds a byte buffer containing n frame payloads.
+	// If sameKey, all frames use the same destination key (cache hit
+	// after first). Otherwise, each frame uses a distinct key (cache miss).
+	buildFrames := func(n int, sameKey bool) []byte {
+		buf := make([]byte, n*frameSize)
+		var fixedKey []byte
+		if sameKey {
+			fixedKey = key.NewNode().Public().AppendTo(nil)
+		}
+		for i := range n {
+			off := i * frameSize
+			if sameKey {
+				copy(buf[off:], fixedKey)
+			} else {
+				k := key.NewNode().Public()
+				copy(buf[off:], k.AppendTo(nil))
+			}
+		}
+		return buf
+	}
+
+	// same_key: all packets to same absent peer (cache hit after first).
+	b.Run("same_key", func(b *testing.B) {
+		c := setup(b)
+		frame := buildFrames(1, true)
+		// Use an infinite reader that repeats the same frame.
+		c.br = bufio.NewReader(&loopReader{data: frame})
+
+		b.SetBytes(int64(payloadSize))
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if err := c.handleFrameSendPacket(derp.FrameSendPacket, frameSize); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	// unique_keys: each packet to a different absent peer (always cache miss).
+	// Uses a pool of 1000 keys cycling, each seen once per 1000 iterations.
+	// With 5s TTL the cache entries from earlier cycles are still valid,
+	// so this measures cache-miss-then-hit pattern.
+	b.Run("unique_keys", func(b *testing.B) {
+		const numKeys = 1000
+		c := setup(b)
+		pool := buildFrames(numKeys, false)
+		c.br = bufio.NewReader(&loopReader{data: pool})
+
+		b.SetBytes(int64(payloadSize))
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if err := c.handleFrameSendPacket(derp.FrameSendPacket, frameSize); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 func benchmarkSendRecvSize(b *testing.B, packetSize int) {
@@ -972,4 +1075,103 @@ func BenchmarkSenderCardinalityOverhead(b *testing.B) {
 			_ = sender.AppendTo(nil)
 		}
 	})
+}
+
+func TestNotHereCache(t *testing.T) {
+	s := New(key.NewNode(), t.Logf)
+	defer s.Close()
+
+	absentKey := key.NewNode().Public()
+	now := time.Now()
+
+	// Initially not cached.
+	if s.isNotHereCached(absentKey, now) {
+		t.Fatal("expected not cached initially")
+	}
+
+	// Add to cache.
+	s.addNotHereCache(absentKey, now)
+	if !s.isNotHereCached(absentKey, now) {
+		t.Fatal("expected cached after add")
+	}
+
+	// Still cached just before TTL expires.
+	if !s.isNotHereCached(absentKey, now.Add(notHereCacheTTL-time.Millisecond)) {
+		t.Fatal("expected cached just before TTL")
+	}
+
+	// Expired after TTL.
+	if s.isNotHereCached(absentKey, now.Add(notHereCacheTTL+time.Millisecond)) {
+		t.Fatal("expected expired after TTL")
+	}
+
+	// Re-add and verify invalidation on registerClient.
+	s.addNotHereCache(absentKey, time.Now())
+	if !s.isNotHereCached(absentKey, time.Now()) {
+		t.Fatal("expected cached after re-add")
+	}
+
+	c := &sclient{
+		s:              s,
+		key:            absentKey,
+		logf:           logger.WithPrefix(t.Logf, "test: "),
+		done:           make(chan struct{}),
+		peerGone:       make(chan peerGoneMsg),
+		sendQueue:      make(chan pkt, 1),
+		discoSendQueue: make(chan pkt, 1),
+		sendPongCh:     make(chan [8]byte, 1),
+	}
+	s.registerClient(c)
+	defer s.unregisterClient(c)
+
+	if s.isNotHereCached(absentKey, time.Now()) {
+		t.Fatal("expected cache invalidated after registerClient")
+	}
+}
+
+func TestNotHereCacheRecvPacket(t *testing.T) {
+	s := New(key.NewNode(), t.Logf)
+	defer s.Close()
+
+	absentKey := key.NewNode().Public()
+
+	// Build a frame payload: 32-byte dest key + 100-byte payload.
+	payload := make([]byte, derp.KeyLen+100)
+	copy(payload[:derp.KeyLen], absentKey.AppendTo(nil))
+
+	c := &sclient{
+		s:           s,
+		key:         key.NewNode().Public(),
+		logf:        logger.WithPrefix(t.Logf, "test: "),
+		done:        make(chan struct{}),
+		peerGone:    make(chan peerGoneMsg, 100),
+		peerGoneLim: tsrate.NewLimiter(tsrate.Every(time.Second/50), 50),
+	}
+
+	// First call: cache miss, should return contents.
+	c.br = bufio.NewReader(&loopReader{data: payload})
+	_, contents, err := s.recvPacket(c, uint32(len(payload)))
+	if err != nil {
+		t.Fatalf("recvPacket (miss): %v", err)
+	}
+	if contents == nil {
+		t.Fatal("expected non-nil contents on cache miss")
+	}
+
+	// Populate the cache as handleFrameSendPacket would.
+	s.addNotHereCache(absentKey, s.clock.Now())
+
+	// Second call: cache hit, should return nil contents.
+	_, contents, err = s.recvPacket(c, uint32(len(payload)))
+	if err != nil {
+		t.Fatalf("recvPacket (hit): %v", err)
+	}
+	if contents != nil {
+		t.Fatal("expected nil contents on cache hit")
+	}
+
+	// Verify metric incremented.
+	if got := s.packetsDroppedCachedNotHere.Value(); got != 1 {
+		t.Fatalf("packetsDroppedCachedNotHere = %d, want 1", got)
+	}
 }
