@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -34,6 +35,16 @@ const (
 
 	serviceMonitorCRD = "servicemonitors.monitoring.coreos.com"
 )
+
+func hasServiceMonitorCRD(ctx context.Context, cl client.Client) (bool, error) {
+	sm := &apiextensionsv1.CustomResourceDefinition{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: serviceMonitorCRD}, sm); apierrors.IsNotFound(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return true, nil
+}
 
 // ServiceMonitor contains a subset of fields of servicemonitors.monitoring.coreos.com Custom Resource Definition.
 // Duplicating it here allows us to avoid importing prometheus-operator library.

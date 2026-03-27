@@ -55,6 +55,7 @@ import (
 	"tailscale.com/ipn/store/kubestore"
 	apiproxy "tailscale.com/k8s-operator/api-proxy"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/proxyclass"
 	"tailscale.com/k8s-operator/reconciler/proxygrouppolicy"
 	"tailscale.com/k8s-operator/reconciler/tailnet"
 	"tailscale.com/kube/kubetypes"
@@ -619,26 +620,18 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("could not create egress Pods readiness reconciler: %v", err)
 	}
 
-	// ProxyClass reconciler gets triggered on ServiceMonitor CRD changes to ensure that any ProxyClasses, that
-	// define that a ServiceMonitor should be created, were set to invalid because the CRD did not exist get
-	// reconciled if the CRD is applied at a later point.
-	kPortRange := getServicesNodePortRange(context.Background(), mgr.GetClient(), opts.tailscaleNamespace, startlog)
-	serviceMonitorFilter := handler.EnqueueRequestsFromMapFunc(proxyClassesWithServiceMonitor(mgr.GetClient(), opts.log))
-	err = builder.ControllerManagedBy(mgr).
-		For(&tsapi.ProxyClass{}).
-		Named("proxyclass-reconciler").
-		Watches(&apiextensionsv1.CustomResourceDefinition{}, serviceMonitorFilter).
-		Complete(&ProxyClassReconciler{
-			Client:        mgr.GetClient(),
-			nodePortRange: kPortRange,
-			recorder:      eventRecorder,
-			tsNamespace:   opts.tailscaleNamespace,
-			logger:        opts.log.Named("proxyclass-reconciler"),
-			clock:         tstime.DefaultClock{},
-		})
-	if err != nil {
-		startlog.Fatal("could not create proxyclass reconciler: %v", err)
+	proxyClassOptions := proxyclass.ReconcilerOptions{
+		Client:      mgr.GetClient(),
+		Recorder:    eventRecorder,
+		TsNamespace: opts.tailscaleNamespace,
+		Logger:      opts.log,
+		Clock:       tstime.DefaultClock{},
 	}
+
+	if err = proxyclass.NewReconciler(proxyClassOptions).Register(mgr); err != nil {
+		startlog.Fatalf("could not create proxyclass reconciler: %v", err)
+	}
+
 	logger := startlog.Named("dns-records-reconciler-event-handlers")
 	// On EndpointSlice events, if it is an EndpointSlice for an
 	// ingress/egress proxy headless Service, reconcile the headless
@@ -1690,36 +1683,6 @@ func podsFromEgressEps(cl client.Client, logger *zap.SugaredLogger, ns string) h
 					Name:      pod.Name,
 				},
 			})
-		}
-		return reqs
-	}
-}
-
-// proxyClassesWithServiceMonitor returns an event handler that, given that the event is for the Prometheus
-// ServiceMonitor CRD, returns all ProxyClasses that define that a ServiceMonitor should be created.
-func proxyClassesWithServiceMonitor(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
-	return func(ctx context.Context, o client.Object) []reconcile.Request {
-		crd, ok := o.(*apiextensionsv1.CustomResourceDefinition)
-		if !ok {
-			logger.Debugf("[unexpected] ServiceMonitor CRD handler received an object that is not a CustomResourceDefinition")
-			return nil
-		}
-		if crd.Name != serviceMonitorCRD {
-			logger.Debugf("[unexpected] ServiceMonitor CRD handler received an unexpected CRD %q", crd.Name)
-			return nil
-		}
-		pcl := &tsapi.ProxyClassList{}
-		if err := cl.List(ctx, pcl); err != nil {
-			logger.Debugf("[unexpected] error listing ProxyClasses: %v", err)
-			return nil
-		}
-		reqs := make([]reconcile.Request, 0)
-		for _, pc := range pcl.Items {
-			if pc.Spec.Metrics != nil && pc.Spec.Metrics.ServiceMonitor != nil && pc.Spec.Metrics.ServiceMonitor.Enable {
-				reqs = append(reqs, reconcile.Request{
-					NamespacedName: types.NamespacedName{Namespace: pc.Namespace, Name: pc.Name},
-				})
-			}
 		}
 		return reqs
 	}
