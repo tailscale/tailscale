@@ -1140,7 +1140,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 				if discoTSMP, okTSMP := e.tsmpLearnedDisco[p.PublicKey]; okTSMP &&
 					discoTSMP == p.DiscoKey {
 					delete(e.tsmpLearnedDisco, p.PublicKey)
-					e.logf("wgengine: Skipping reconfig (TSMP key): %s changed from %q to %q", pub.ShortString(), old, p.DiscoKey)
+					e.logf("wgengine: Skipping reconfig (TSMP key) for: %s", pub.ShortString())
+					metricTSMPDiscoKeyResetAvoided.Add(1)
 					continue
 				}
 
@@ -1875,6 +1876,7 @@ var (
 
 	metricTSMPDiscoKeyAdvertisementSent  = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_sent")
 	metricTSMPDiscoKeyAdvertisementError = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_error")
+	metricTSMPDiscoKeyResetAvoided       = clientmetric.NewCounter("wgengine_tsmp_disco_key_reset_avoided")
 )
 
 func (e *userspaceEngine) InstallCaptureHook(cb packet.CaptureCallback) {

@@ -2133,7 +2133,8 @@ func (s *Server) takeAgentConnOne(n *node) (_ *agentConn, ok bool) {
 
 type NodeAgentClient struct {
 	*local.Client
-	HTTPClient *http.Client
+	HTTPClient      *http.Client
+	CapturedMetrics []byte
 }
 
 func (s *Server) NodeAgentDialer(n *Node) netx.DialFunc {
