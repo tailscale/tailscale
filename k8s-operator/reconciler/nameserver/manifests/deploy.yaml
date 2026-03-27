@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nameserver 
+  name: nameserver
 spec:
   replicas: 1
   revisionHistoryLimit: 5

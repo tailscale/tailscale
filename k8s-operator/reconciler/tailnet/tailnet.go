@@ -137,7 +137,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 }
 
 func (r *Reconciler) delete(ctx context.Context, tailnet *tsapi.Tailnet) (reconcile.Result, error) {
-	if err := reconciler.ClearFinalizer(ctx, r.Client, tailnet); err != nil {
+	if err := reconciler.ClearFinalizer(ctx, r.Client, tailnet, reconciler.Finalizer); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to remove finalizer from Tailnet %q: %w", tailnet.Name, err)
 	}
 
@@ -229,7 +229,7 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, tailnet *tsapi.Tailnet)
 		return reconcile.Result{}, fmt.Errorf("failed to update Tailnet status for %q: %w", tailnet.Name, err)
 	}
 
-	if err := reconciler.EnsureFinalizer(ctx, r.Client, tailnet); err != nil {
+	if err := reconciler.EnsureFinalizer(ctx, r.Client, tailnet, reconciler.Finalizer); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to add finalizer to Tailnet %q: %w", tailnet.Name, err)
 	}
 

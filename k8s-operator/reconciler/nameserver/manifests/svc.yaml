@@ -13,4 +13,4 @@ spec:
   - name: tcp
     targetPort: 1053
     port: 53
-    protocol: TCP 
+    protocol: TCP
