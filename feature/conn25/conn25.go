@@ -71,12 +71,15 @@ func normalizeDNSName(name string) (dnsname.FQDN, error) {
 func init() {
 	feature.Register(featureName)
 	ipnext.RegisterExtension(featureName, func(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, error) {
+		prefixLogf := logger.WithPrefix(logf, "conn25: ")
+		debugf := logger.Discard
+		if envknob.Bool("TS_CONN25_DEBUG_EXTENSION") {
+			debugf = prefixLogf
+		}
 		return &extension{
-			conn25:         newConn25(logger.WithPrefix(logf, "conn25: ")),
-			backend:        sb,
-			debugLifecycle: envknob.Bool("TS_CONN25_DEBUG_LIFECYCLE"),
-			debugPeerAPI:   envknob.Bool("TS_CONN25_DEBUG_PEERAPI"),
-			debugDNS:       envknob.Bool("TS_CONN25_DEBUG_DNS"),
+			conn25:  newConn25(logger.WithPrefix(logf, "conn25: ")),
+			backend: sb,
+			debugf:  debugf,
 		}, nil
 	})
 	ipnlocal.RegisterPeerAPIHandler("/v0/connector/transit-ip", handleConnectorTransitIP)
@@ -100,11 +103,9 @@ func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, 
 // that import this package.
 type extension struct {
 	// Immutable fields (set at creation, available for concurrent read access)
-	conn25         *Conn25
-	backend        ipnext.SafeBackend
-	debugLifecycle bool
-	debugPeerAPI   bool
-	debugDNS       bool
+	conn25  *Conn25
+	backend ipnext.SafeBackend
+	debugf  logger.Logf
 
 	host      ipnext.Host             // set in Init, read-only after
 	ctxCancel context.CancelCauseFunc // cancels sendLoop goroutine
@@ -119,9 +120,7 @@ func (e *extension) Name() string {
 func (e *extension) Init(host ipnext.Host) error {
 	// TODO(tailscale/corp#39033): Remove for alpha release.
 	if !envknob.UseWIPCode() && !testenv.InTest() {
-		if e.debugLifecycle {
-			e.conn25.client.logf("skipping extension")
-		}
+		e.debugf("skipping extension")
 		return ipnext.SkipExtension
 	}
 
@@ -134,9 +133,7 @@ func (e *extension) Init(host ipnext.Host) error {
 	if err := e.installHooks(dph); err != nil {
 		return err
 	}
-	if e.debugLifecycle {
-		e.conn25.client.logf("installed data path hooks")
-	}
+	e.debugf("installed data path hooks")
 
 	ctx, cancel := context.WithCancelCause(context.Background())
 	e.ctxCancel = cancel
@@ -247,6 +244,7 @@ func (e *extension) getMagicRange() views.Slice[netip.Prefix] {
 
 // Shutdown implements [ipnlocal.Extension].
 func (e *extension) Shutdown() error {
+	e.debugf("shutdown")
 	if e.ctxCancel != nil {
 		e.ctxCancel(errors.New("extension shutdown"))
 	}
@@ -258,32 +256,21 @@ func (e *extension) Shutdown() error {
 
 func (e *extension) handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
+
 	if r.Method != "POST" {
 		http.Error(w, "Method should be POST", http.StatusMethodNotAllowed)
-		if e.debugPeerAPI {
-			e.conn25.connector.logf("TransitIP PeerAPI failed: bad method %v", r.Method)
-		}
 		return
 	}
 	var req ConnectorTransitIPRequest
 	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes+1)).Decode(&req)
 	if err != nil {
 		http.Error(w, "Error decoding JSON", http.StatusBadRequest)
-		if e.debugPeerAPI {
-			e.conn25.connector.logf("TransitIP PeerAPI failed: request decode: %v", err)
-		}
 		return
 	}
 	resp := e.conn25.handleConnectorTransitIPRequest(h.Peer(), req)
-	if e.debugPeerAPI {
-		e.conn25.connector.logf("TransitIP PeerAPI %v", resp)
-	}
 	bs, err := json.Marshal(resp)
 	if err != nil {
 		http.Error(w, "Error encoding JSON", http.StatusInternalServerError)
-		if e.debugPeerAPI {
-			e.conn25.connector.logf("TransitIP PeerAPI failed: response encode: %v", err)
-		}
 		return
 	}
 	w.Write(bs)
@@ -317,12 +304,24 @@ func (c *Conn25) isConfigured() bool {
 }
 
 func newConn25(logf logger.Logf) *Conn25 {
+	clientDebugf := logger.Discard
+	if envknob.Bool("TS_CONN25_DEBUG_CLIENT") {
+		clientDebugf = logf
+	}
+	connectorDebugf := logger.Discard
+	if envknob.Bool("TS_CONN25_DEBUG_CONNECTOR") {
+		connectorDebugf = logf
+	}
 	c := &Conn25{
 		client: &client{
 			logf:    logf,
+			debugf:  clientDebugf,
 			addrsCh: make(chan addrs, 64),
 		},
-		connector: &connector{logf: logf},
+		connector: &connector{
+			logf:   logf,
+			debugf: connectorDebugf,
+		},
 	}
 	return c
 }
@@ -394,6 +393,7 @@ func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, ctipr Conne
 		seen[each.TransitIP] = true
 		resp.TransitIPs = append(resp.TransitIPs, tipresp)
 	}
+	c.connector.debugf("PeerAPI from %q TransitIP request %v / response %v", n.StableID(), ctipr, resp)
 	return resp
 }
 
@@ -576,6 +576,7 @@ func configFromNodeView(n tailcfg.NodeView) (config, error) {
 // It's safe for concurrent use.
 type client struct {
 	logf    logger.Logf
+	debugf  logger.Logf
 	addrsCh chan addrs
 
 	mu            sync.Mutex // protects the fields below
@@ -633,6 +634,8 @@ func (c *client) isConfigured() bool {
 }
 
 func (c *client) reconfig(newCfg config) error {
+	c.debugf("reconfig: %v", newCfg)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -702,23 +705,17 @@ func (c *client) addTransitIPForConnector(tip netip.Addr, conn tailcfg.NodeView)
 }
 
 func (e *extension) sendLoop(ctx context.Context) {
-	if e.debugLifecycle {
-		e.conn25.client.logf("sendLoop start")
-	}
+	e.debugf("sendLoop start")
 	for {
 		select {
 		case <-ctx.Done():
-			if e.debugLifecycle {
-				e.conn25.client.logf("sendLoop end")
-			}
+			e.debugf("sendLoop end")
 			return
 		case as := <-e.conn25.client.addrsCh:
 			if err := e.handleAddressAssignment(ctx, as); err != nil {
 				e.conn25.client.logf("error handling transit IP assignment (app: %s, mip: %v, src: %v): %v", err)
 			}
-			if e.debugPeerAPI {
-				e.conn25.client.logf("successful transit IP assignment (app: %s, mip: %v, src: %v)", as.app, as.magic, as.dst)
-			}
+			e.conn25.client.debugf("successful transit IP assignment (app: %s, mip: %v, src: %v)", as.app, as.magic, as.dst)
 		}
 	}
 }
@@ -869,18 +866,22 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 	}
 	// Any message we are interested in has one question (RFC 9619)
 	if len(questions) != 1 {
+		c.debugf("skipping DNS response: %v questions", len(questions))
 		return buf
 	}
 	question := questions[0]
 	// The other Class types are not commonly used and supporting them hasn't been considered.
 	if question.Class != dnsmessage.ClassINET {
+		c.debugf("skipping DNS response: class %v", question.Class)
 		return buf
 	}
 	queriedDomain, err := normalizeDNSName(question.Name.String())
 	if err != nil {
+		c.debugf("skipping DNS response: normalizeDNSName(%v): %v", question.Name.String(), err)
 		return buf
 	}
 	if !c.isConnectorDomain(queriedDomain) {
+		c.debugf("skipping DNS response: %v not connector domain", queriedDomain)
 		return buf
 	}
 
@@ -964,6 +965,7 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 		c.logf("error rewriting dns response: %v", err)
 		return makeServFail(c.logf, hdr, question)
 	}
+	c.debugf("sent rewritten response for %v", queriedDomain)
 	return newBuf
 }
 
@@ -1013,7 +1015,8 @@ func (c *client) rewriteDNSResponse(hdr dnsmessage.Header, questions []dnsmessag
 }
 
 type connector struct {
-	logf logger.Logf
+	logf   logger.Logf
+	debugf logger.Logf
 
 	mu sync.Mutex // protects the fields below
 	// transitIPs is a map of connector client peer IP -> client transitIPs that we update as connector client peers instruct us to, and then use to route traffic to its destination on behalf of connector clients.
