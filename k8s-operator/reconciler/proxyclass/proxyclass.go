@@ -93,8 +93,8 @@ type (
 		Client client.Client
 		// Recorder is used to emit Kubernetes events.
 		Recorder record.EventRecorder
-		// TsNamespace is the namespace the operator is installed in.
-		TsNamespace string
+		// TailscaleNamespace is the namespace the operator is installed in.
+		TailscaleNamespace string
 		// Clock controls time-based functions. Typically modified for tests.
 		Clock tstime.Clock
 		// Logger is the logger to use for this Reconciler.
@@ -109,9 +109,9 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 	logger := options.Logger.Named(reconcilerName)
 	return &Reconciler{
 		Client:        options.Client,
-		nodePortRange: getServicesNodePortRange(context.Background(), options.Client, options.TsNamespace, logger),
+		nodePortRange: getServicesNodePortRange(context.Background(), options.Client, options.TailscaleNamespace, logger),
 		recorder:      options.Recorder,
-		tsNamespace:   options.TsNamespace,
+		tsNamespace:   options.TailscaleNamespace,
 		clock:         options.Clock,
 		logger:        logger,
 	}

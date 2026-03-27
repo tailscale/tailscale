@@ -3,28 +3,34 @@
 
 //go:build !plan9
 
-// tailscale-operator provides a way to expose services running in a Kubernetes
-// cluster to your Tailnet and to make Tailscale nodes available to cluster
-// workloads
-package main
+package nameserver
 
 import (
+	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/yaml"
 
 	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/tstest"
 	"tailscale.com/util/mak"
 )
+
+const tsNamespace = "tailscale"
 
 func TestNameserverReconciler(t *testing.T) {
 	dnsConfig := &tsapi.DNSConfig{
@@ -68,13 +74,13 @@ func TestNameserverReconciler(t *testing.T) {
 	}
 
 	clock := tstest.NewClock(tstest.ClockOpts{})
-	reconciler := &NameserverReconciler{
+	r := &Reconciler{
 		Client:      fc,
 		clock:       clock,
 		logger:      logger.Sugar(),
 		tsNamespace: tsNamespace,
 	}
-	expectReconciled(t, reconciler, "", "test")
+	mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
 
 	ownerReference := metav1.NewControllerRef(dnsConfig, tsapi.SchemeGroupVersion.WithKind("DNSConfig"))
 	nameserverLabels := nameserverResourceLabels(dnsConfig.Name, tsNamespace)
@@ -114,22 +120,22 @@ func TestNameserverReconciler(t *testing.T) {
 	})
 
 	t.Run("dns config status is set", func(t *testing.T) {
-		// Verify that DNSConfig advertizes the nameserver's Service IP address,
+		// Verify that DNSConfig advertises the nameserver's Service IP address,
 		// has the ready status condition and tailscale finalizer.
 		mustUpdate(t, fc, "tailscale", "nameserver", func(svc *corev1.Service) {
 			svc.Spec.ClusterIP = "1.2.3.4"
 		})
-		expectReconciled(t, reconciler, "", "test")
+		mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
 
-		dnsConfig.Finalizers = []string{FinalizerName}
+		dnsConfig.Finalizers = []string{reconciler.FinalizerName}
 		dnsConfig.Status.Nameserver = &tsapi.NameserverStatus{
 			IP: "1.2.3.4",
 		}
 		dnsConfig.Status.Conditions = append(dnsConfig.Status.Conditions, metav1.Condition{
 			Type:               string(tsapi.NameserverReady),
 			Status:             metav1.ConditionTrue,
-			Reason:             reasonNameserverCreated,
-			Message:            reasonNameserverCreated,
+			Reason:             ReasonNameserverCreated,
+			Message:            ReasonNameserverCreated,
 			LastTransitionTime: metav1.Time{Time: clock.Now().Truncate(time.Second)},
 		})
 
@@ -141,7 +147,7 @@ func TestNameserverReconciler(t *testing.T) {
 		mustUpdate(t, fc, "", "test", func(dnsCfg *tsapi.DNSConfig) {
 			dnsCfg.Spec.Nameserver.Image.Tag = "v0.0.2"
 		})
-		expectReconciled(t, reconciler, "", "test")
+		mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
 		wantsDeploy.Spec.Template.Spec.Containers[0].Image = "test:v0.0.2"
 		expectEqual(t, fc, wantsDeploy)
 	})
@@ -159,7 +165,7 @@ func TestNameserverReconciler(t *testing.T) {
 			mak.Set(&cm.Data, "records.json", string(bs))
 		})
 
-		expectReconciled(t, reconciler, "", "test")
+		mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
 
 		wantCm := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
@@ -177,12 +183,56 @@ func TestNameserverReconciler(t *testing.T) {
 
 	t.Run("uses default nameserver image", func(t *testing.T) {
 		// Verify that if dnsconfig.spec.nameserver.image.{repo,tag} are unset,
-		// the nameserver image defaults to tailscale/k8s-nameserver:unstable.
+		// the nameserver image defaults to tailscale/k8s-nameserver:stable.
 		mustUpdate(t, fc, "", "test", func(dnsCfg *tsapi.DNSConfig) {
 			dnsCfg.Spec.Nameserver.Image = nil
 		})
-		expectReconciled(t, reconciler, "", "test")
+		mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
 		wantsDeploy.Spec.Template.Spec.Containers[0].Image = "tailscale/k8s-nameserver:stable"
 		expectEqual(t, fc, wantsDeploy)
 	})
+}
+
+func mustReconcile(t *testing.T, r *Reconciler, req reconcile.Request) {
+	t.Helper()
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("unexpected reconcile error: %v", err)
+	}
+}
+
+func mustUpdate[T any, O interface {
+	client.Object
+	*T
+}](t *testing.T, c client.Client, ns, name string, update func(O)) {
+	t.Helper()
+	obj := O(new(T))
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, obj); err != nil {
+		t.Fatalf("getting object: %v", err)
+	}
+	update(obj)
+	if err := c.Update(context.Background(), obj); err != nil {
+		t.Fatalf("updating object: %v", err)
+	}
+}
+
+func expectEqual[T any, O interface {
+	client.Object
+	*T
+}](t *testing.T, c client.Client, want O) {
+	t.Helper()
+	got := O(new(T))
+	if err := c.Get(context.Background(), types.NamespacedName{
+		Name:      want.GetName(),
+		Namespace: want.GetNamespace(),
+	}, got); err != nil {
+		t.Fatalf("getting %q: %v", want.GetName(), err)
+	}
+	// The resource version changes eagerly whenever the operator does even a
+	// no-op update. Asserting a specific value leads to overly brittle tests,
+	// so just remove it from both got and want.
+	got.SetResourceVersion("")
+	want.SetResourceVersion("")
+	if diff := cmp.Diff(got, want); diff != "" {
+		t.Fatalf("unexpected %s (-got +want):\n%s", reflect.TypeOf(want).Elem().Name(), diff)
+	}
 }

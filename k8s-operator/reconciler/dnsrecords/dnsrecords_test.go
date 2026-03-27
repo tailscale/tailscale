@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-package main
+package dnsrecords
 
 import (
 	"context"
@@ -21,8 +21,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/k8s-operator/reconciler/nameserver"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
 )
@@ -67,9 +71,9 @@ func TestDNSRecordsReconciler(t *testing.T) {
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	// Set the ready condition of the DNSConfig
 	mustUpdateStatus(t, fc, "", "test", func(c *tsapi.DNSConfig) {
-		operatorutils.SetDNSConfigCondition(c, tsapi.NameserverReady, metav1.ConditionTrue, reasonNameserverCreated, reasonNameserverCreated, 0, cl, zl.Sugar())
+		operatorutils.SetDNSConfigCondition(c, tsapi.NameserverReady, metav1.ConditionTrue, nameserver.ReasonNameserverCreated, nameserver.ReasonNameserverCreated, 0, cl, zl.Sugar())
 	})
-	dnsRR := &dnsRecordsReconciler{
+	dnsRR := &Reconciler{
 		Client:      fc,
 		logger:      zl.Sugar(),
 		tsNamespace: "tailscale",
@@ -182,12 +186,12 @@ func TestDNSRecordsReconciler(t *testing.T) {
 			Name:      "ts-proxygroup-egress-abcd1",
 			Namespace: "tailscale",
 			Labels: map[string]string{
-				kubetypes.LabelManaged: "true",
-				LabelParentName:        "external-service",
-				LabelParentNamespace:   "default",
-				LabelParentType:        "svc",
-				labelProxyGroup:        "test-proxy-group",
-				labelSvcType:           typeEgress,
+				kubetypes.LabelManaged:          "true",
+				reconciler.LabelParentName:      "external-service",
+				reconciler.LabelParentNamespace: "default",
+				reconciler.LabelParentType:      "svc",
+				labelProxyGroup:                 "test-proxy-group",
+				labelSvcType:                    typeEgress,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -206,13 +210,13 @@ func TestDNSRecordsReconciler(t *testing.T) {
 			Name:      "ts-proxygroup-egress-abcd1-ipv4",
 			Namespace: "tailscale",
 			Labels: map[string]string{
-				discoveryv1.LabelServiceName: "ts-proxygroup-egress-abcd1",
-				kubetypes.LabelManaged:       "true",
-				LabelParentName:              "external-service",
-				LabelParentNamespace:         "default",
-				LabelParentType:              "svc",
-				labelProxyGroup:              "test-proxy-group",
-				labelSvcType:                 typeEgress,
+				discoveryv1.LabelServiceName:    "ts-proxygroup-egress-abcd1",
+				kubetypes.LabelManaged:          "true",
+				reconciler.LabelParentName:      "external-service",
+				reconciler.LabelParentNamespace: "default",
+				reconciler.LabelParentType:      "svc",
+				labelProxyGroup:                 "test-proxy-group",
+				labelSvcType:                    typeEgress,
 			},
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
@@ -260,7 +264,7 @@ func TestDNSRecordsReconcilerErrorCases(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dnsRR := &dnsRecordsReconciler{
+	r := &Reconciler{
 		logger: zl.Sugar(),
 	}
 
@@ -271,14 +275,14 @@ func TestDNSRecordsReconcilerErrorCases(t *testing.T) {
 
 	// Test invalid IP format
 	testSvc.Spec.ClusterIP = "invalid-ip"
-	_, _, err = dnsRR.getClusterIPServiceIPs(testSvc, zl.Sugar())
+	_, _, err = r.getClusterIPServiceIPs(testSvc, zl.Sugar())
 	if err == nil {
 		t.Error("expected error for invalid IP format")
 	}
 
 	// Test valid IP
 	testSvc.Spec.ClusterIP = "10.0.100.50"
-	ip4s, ip6s, err := dnsRR.getClusterIPServiceIPs(testSvc, zl.Sugar())
+	ip4s, ip6s, err := r.getClusterIPServiceIPs(testSvc, zl.Sugar())
 	if err != nil {
 		t.Errorf("unexpected error for valid IP: %v", err)
 	}
@@ -329,20 +333,15 @@ func TestDNSRecordsReconcilerDualStack(t *testing.T) {
 	headlessSvc := headlessSvcForParent(ing, "ingress")
 	headlessSvc.Name = "ts-dual-stack-ingress"
 	headlessSvc.SetLabels(map[string]string{
-		kubetypes.LabelManaged: "true",
-		LabelParentName:        "dual-stack-ingress",
-		LabelParentNamespace:   "test",
-		LabelParentType:        "ingress",
+		kubetypes.LabelManaged:          "true",
+		reconciler.LabelParentName:      "dual-stack-ingress",
+		reconciler.LabelParentNamespace: "test",
+		reconciler.LabelParentType:      "ingress",
 	})
 
 	// Create both IPv4 and IPv6 endpoints
 	epv4 := endpointSliceForService(headlessSvc, "10.1.2.3", discoveryv1.AddressTypeIPv4)
 	epv6 := endpointSliceForService(headlessSvc, "2001:db8::1", discoveryv1.AddressTypeIPv6)
-
-	dnsRRDualStack := &dnsRecordsReconciler{
-		tsNamespace: "tailscale",
-		logger:      zl.Sugar(),
-	}
 
 	// Create the dnsrecords ConfigMap
 	cm := &corev1.ConfigMap{
@@ -358,7 +357,11 @@ func TestDNSRecordsReconcilerDualStack(t *testing.T) {
 		WithStatusSubresource(dnsCfg).
 		Build()
 
-	dnsRRDualStack.Client = fc
+	dnsRRDualStack := &Reconciler{
+		Client:      fc,
+		tsNamespace: "tailscale",
+		logger:      zl.Sugar(),
+	}
 
 	// Test dual-stack service records
 	expectReconciled(t, dnsRRDualStack, "tailscale", "ts-dual-stack-ingress")
@@ -388,12 +391,12 @@ func TestDNSRecordsReconcilerDualStack(t *testing.T) {
 			Name:      "ts-proxygroup-dualstack",
 			Namespace: "tailscale",
 			Labels: map[string]string{
-				kubetypes.LabelManaged: "true",
-				labelProxyGroup:        "test-pg",
-				labelSvcType:           typeEgress,
-				LabelParentName:        "pg-service",
-				LabelParentNamespace:   "tailscale",
-				LabelParentType:        "svc",
+				kubetypes.LabelManaged:          "true",
+				labelProxyGroup:                 "test-pg",
+				labelSvcType:                    typeEgress,
+				reconciler.LabelParentName:      "pg-service",
+				reconciler.LabelParentNamespace: "tailscale",
+				reconciler.LabelParentType:      "svc",
 			},
 			Annotations: map[string]string{
 				annotationTSMagicDNSName: "pg-service.example.ts.net",
@@ -421,10 +424,10 @@ func headlessSvcForParent(o client.Object, typ string) *corev1.Service {
 			Name:      o.GetName(),
 			Namespace: "tailscale",
 			Labels: map[string]string{
-				kubetypes.LabelManaged: "true",
-				LabelParentName:        o.GetName(),
-				LabelParentNamespace:   o.GetNamespace(),
-				LabelParentType:        typ,
+				kubetypes.LabelManaged:          "true",
+				reconciler.LabelParentName:      o.GetName(),
+				reconciler.LabelParentNamespace: o.GetNamespace(),
+				reconciler.LabelParentType:      typ,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -498,5 +501,65 @@ func expectHostsRecordsWithIPv6(t *testing.T, cl client.Client, wantsHostsIPv4, 
 	}
 	if diff := cmp.Diff(dnsConfig.IP6, wantsHostsIPv6); diff != "" {
 		t.Fatalf("unexpected IPv6 dns config (-got +want):\n%s", diff)
+	}
+}
+
+func expectReconciled(t *testing.T, r *Reconciler, ns, name string) {
+	t.Helper()
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: ns, Name: name},
+	}
+	res, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+	if res.Requeue {
+		t.Fatalf("unexpected immediate requeue")
+	}
+}
+
+func mustCreate(t *testing.T, c client.Client, obj client.Object) {
+	t.Helper()
+	if err := c.Create(context.Background(), obj); err != nil {
+		t.Fatalf("creating %q: %v", obj.GetName(), err)
+	}
+}
+
+func mustDeleteAll(t *testing.T, c client.Client, objs ...client.Object) {
+	t.Helper()
+	for _, obj := range objs {
+		if err := c.Delete(context.Background(), obj); err != nil {
+			t.Fatalf("deleting %q: %v", obj.GetName(), err)
+		}
+	}
+}
+
+func mustUpdate[T any, O interface {
+	client.Object
+	*T
+}](t *testing.T, c client.Client, ns, name string, update func(O)) {
+	t.Helper()
+	obj := O(new(T))
+	if err := c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: ns}, obj); err != nil {
+		t.Fatalf("getting %q: %v", name, err)
+	}
+	update(obj)
+	if err := c.Update(context.Background(), obj); err != nil {
+		t.Fatalf("updating %q: %v", name, err)
+	}
+}
+
+func mustUpdateStatus[T any, O interface {
+	client.Object
+	*T
+}](t *testing.T, c client.Client, ns, name string, update func(O)) {
+	t.Helper()
+	obj := O(new(T))
+	if err := c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: ns}, obj); err != nil {
+		t.Fatalf("getting %q: %v", name, err)
+	}
+	update(obj)
+	if err := c.Status().Update(context.Background(), obj); err != nil {
+		t.Fatalf("updating status %q: %v", name, err)
 	}
 }

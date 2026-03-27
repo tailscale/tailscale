@@ -55,6 +55,8 @@ import (
 	"tailscale.com/ipn/store/kubestore"
 	apiproxy "tailscale.com/k8s-operator/api-proxy"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/dnsrecords"
+	"tailscale.com/k8s-operator/reconciler/nameserver"
 	"tailscale.com/k8s-operator/reconciler/proxyclass"
 	"tailscale.com/k8s-operator/reconciler/proxygrouppolicy"
 	"tailscale.com/k8s-operator/reconciler/tailnet"
@@ -525,22 +527,14 @@ func runReconcilers(opts reconcilerOpts) {
 	// TODO (irbekrm): switch to metadata-only watches for resources whose
 	// spec we don't need to inspect to reduce memory consumption.
 	// https://github.com/kubernetes-sigs/controller-runtime/issues/1159
-	nameserverFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("nameserver"))
-	err = builder.ControllerManagedBy(mgr).
-		For(&tsapi.DNSConfig{}).
-		Named("nameserver-reconciler").
-		Watches(&appsv1.Deployment{}, nameserverFilter).
-		Watches(&corev1.ConfigMap{}, nameserverFilter).
-		Watches(&corev1.Service{}, nameserverFilter).
-		Watches(&corev1.ServiceAccount{}, nameserverFilter).
-		Complete(&NameserverReconciler{
-			recorder:    eventRecorder,
-			tsNamespace: opts.tailscaleNamespace,
-			Client:      mgr.GetClient(),
-			logger:      opts.log.Named("nameserver-reconciler"),
-			clock:       tstime.DefaultClock{},
-		})
-	if err != nil {
+	nameserverOptions := nameserver.ReconcilerOptions{
+		Client:             mgr.GetClient(),
+		Recorder:           eventRecorder,
+		TailscaleNamespace: opts.tailscaleNamespace,
+		Logger:             opts.log,
+		Clock:              tstime.DefaultClock{},
+	}
+	if err = nameserver.NewReconciler(nameserverOptions).Register(mgr); err != nil {
 		startlog.Fatalf("could not create nameserver reconciler: %v", err)
 	}
 
@@ -621,43 +615,24 @@ func runReconcilers(opts reconcilerOpts) {
 	}
 
 	proxyClassOptions := proxyclass.ReconcilerOptions{
-		Client:      mgr.GetClient(),
-		Recorder:    eventRecorder,
-		TsNamespace: opts.tailscaleNamespace,
-		Logger:      opts.log,
-		Clock:       tstime.DefaultClock{},
+		Client:             mgr.GetClient(),
+		Recorder:           eventRecorder,
+		TailscaleNamespace: opts.tailscaleNamespace,
+		Logger:             opts.log,
+		Clock:              tstime.DefaultClock{},
 	}
 
 	if err = proxyclass.NewReconciler(proxyClassOptions).Register(mgr); err != nil {
 		startlog.Fatalf("could not create proxyclass reconciler: %v", err)
 	}
 
-	logger := startlog.Named("dns-records-reconciler-event-handlers")
-	// On EndpointSlice events, if it is an EndpointSlice for an
-	// ingress/egress proxy headless Service, reconcile the headless
-	// Service.
-	dnsRREpsOpts := handler.EnqueueRequestsFromMapFunc(dnsRecordsReconcilerEndpointSliceHandler)
-	// On DNSConfig changes, reconcile all headless Services for
-	// ingress/egress proxies in operator namespace.
-	dnsRRDNSConfigOpts := handler.EnqueueRequestsFromMapFunc(enqueueAllIngressEgressProxySvcsInNS(opts.tailscaleNamespace, mgr.GetClient(), logger))
-	// On Service events, if it is an ingress/egress proxy headless Service, reconcile it.
-	dnsRRServiceOpts := handler.EnqueueRequestsFromMapFunc(dnsRecordsReconcilerServiceHandler)
-	// On Ingress events, if it is a tailscale Ingress or if tailscale is the default ingress controller, reconcile the proxy
-	// headless Service.
-	dnsRRIngressOpts := handler.EnqueueRequestsFromMapFunc(dnsRecordsReconcilerIngressHandler(opts.tailscaleNamespace, opts.proxyActAsDefaultLoadBalancer, mgr.GetClient(), logger))
-	err = builder.ControllerManagedBy(mgr).
-		Named("dns-records-reconciler").
-		Watches(&corev1.Service{}, dnsRRServiceOpts).
-		Watches(&networkingv1.Ingress{}, dnsRRIngressOpts).
-		Watches(&discoveryv1.EndpointSlice{}, dnsRREpsOpts).
-		Watches(&tsapi.DNSConfig{}, dnsRRDNSConfigOpts).
-		Complete(&dnsRecordsReconciler{
-			Client:                mgr.GetClient(),
-			tsNamespace:           opts.tailscaleNamespace,
-			logger:                opts.log.Named("dns-records-reconciler"),
-			isDefaultLoadBalancer: opts.proxyActAsDefaultLoadBalancer,
-		})
-	if err != nil {
+	dnsRecordsOptions := dnsrecords.ReconcilerOptions{
+		Client:                mgr.GetClient(),
+		TailscaleNamespace:    opts.tailscaleNamespace,
+		Logger:                opts.log,
+		IsDefaultLoadBalancer: opts.proxyActAsDefaultLoadBalancer,
+	}
+	if err = dnsrecords.NewReconciler(dnsRecordsOptions).Register(mgr); err != nil {
 		startlog.Fatalf("could not create DNS records reconciler: %v", err)
 	}
 
@@ -801,91 +776,6 @@ type reconcilerOpts struct {
 
 // enqueueAllIngressEgressProxySvcsinNS returns a reconcile request for each
 // ingress/egress proxy headless Service found in the provided namespace.
-func enqueueAllIngressEgressProxySvcsInNS(ns string, cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
-	return func(ctx context.Context, _ client.Object) []reconcile.Request {
-		reqs := make([]reconcile.Request, 0)
-
-		// Get all headless Services for proxies configured using Service.
-		svcProxyLabels := map[string]string{
-			kubetypes.LabelManaged: "true",
-			LabelParentType:        "svc",
-		}
-		svcHeadlessSvcList := &corev1.ServiceList{}
-		if err := cl.List(ctx, svcHeadlessSvcList, client.InNamespace(ns), client.MatchingLabels(svcProxyLabels)); err != nil {
-			logger.Errorf("error listing headless Services for tailscale ingress/egress Services in operator namespace: %v", err)
-			return nil
-		}
-		for _, svc := range svcHeadlessSvcList.Items {
-			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}})
-		}
-
-		// Get all headless Services for proxies configured using Ingress.
-		ingProxyLabels := map[string]string{
-			kubetypes.LabelManaged: "true",
-			LabelParentType:        "ingress",
-		}
-		ingHeadlessSvcList := &corev1.ServiceList{}
-		if err := cl.List(ctx, ingHeadlessSvcList, client.InNamespace(ns), client.MatchingLabels(ingProxyLabels)); err != nil {
-			logger.Errorf("error listing headless Services for tailscale Ingresses in operator namespace: %v", err)
-			return nil
-		}
-		for _, svc := range ingHeadlessSvcList.Items {
-			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}})
-		}
-		return reqs
-	}
-}
-
-// dnsRecordsReconciler filters EndpointSlice events for which
-// dns-records-reconciler should reconcile a headless Service. The only events
-// it should reconcile are those for EndpointSlices associated with proxy
-// headless Services.
-func dnsRecordsReconcilerEndpointSliceHandler(ctx context.Context, o client.Object) []reconcile.Request {
-	if !isManagedByType(o, "svc") && !isManagedByType(o, "ingress") {
-		return nil
-	}
-	headlessSvcName, ok := o.GetLabels()[discoveryv1.LabelServiceName] // https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#ownership
-	if !ok {
-		return nil
-	}
-	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: headlessSvcName}}}
-}
-
-// dnsRecordsReconcilerServiceHandler filters Service events for which
-// dns-records-reconciler should reconcile. If the event is for a cluster
-// ingress/cluster egress proxy's headless Service, returns the Service for
-// reconcile.
-func dnsRecordsReconcilerServiceHandler(ctx context.Context, o client.Object) []reconcile.Request {
-	if isManagedByType(o, "svc") || isManagedByType(o, "ingress") {
-		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: o.GetName()}}}
-	}
-	return nil
-}
-
-// dnsRecordsReconcilerIngressHandler filters Ingress events to ensure that
-// dns-records-reconciler only reconciles on tailscale Ingress events. When an
-// event is observed on a tailscale Ingress, reconcile the proxy headless Service.
-func dnsRecordsReconcilerIngressHandler(ns string, isDefaultLoadBalancer bool, cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
-	return func(ctx context.Context, o client.Object) []reconcile.Request {
-		ing, ok := o.(*networkingv1.Ingress)
-		if !ok {
-			return nil
-		}
-		if !isDefaultLoadBalancer && (ing.Spec.IngressClassName == nil || *ing.Spec.IngressClassName != "tailscale") {
-			return nil
-		}
-		proxyResourceLabels := childResourceLabels(ing.Name, ing.Namespace, "ingress")
-		headlessSvc, err := getSingleObject[corev1.Service](ctx, cl, ns, proxyResourceLabels)
-		if err != nil {
-			logger.Errorf("error getting headless Service from parent labels: %v", err)
-			return nil
-		}
-		if headlessSvc == nil {
-			return nil
-		}
-		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: headlessSvc.Namespace, Name: headlessSvc.Name}}}
-	}
-}
 
 func isManagedResource(o client.Object) bool {
 	ls := o.GetLabels()
