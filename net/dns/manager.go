@@ -175,9 +175,8 @@ type osModeGetter interface {
 	osMode() string
 }
 
-// OSMode reports the selected Linux DNS manager mode, or the empty string if
-// the current OS configurator does not correspond to one of the Linux DNS
-// manager modes.
+// OSMode reports the selected DNS manager mode, or the empty string if the
+// current OS configurator does not report one.
 func (m *Manager) OSMode() string {
 	if !buildfeatures.HasDNS {
 		panic("unreachable")
