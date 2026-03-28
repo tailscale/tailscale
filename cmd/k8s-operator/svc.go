@@ -263,14 +263,18 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 
 	sts := &tailscaleSTSConfig{
-		Replicas:            1,
-		ParentResourceName:  svc.Name,
-		ParentResourceUID:   string(svc.UID),
-		Hostname:            nameForService(svc),
-		Tags:                tags,
-		ChildResourceLabels: crl,
-		ProxyClassName:      proxyClass,
-		LoginServer:         a.ssr.loginServer,
+		Replicas:                1,
+		ParentResourceName:      svc.Name,
+		ParentResourceNamespace: svc.Namespace,
+		ParentResourceUID:       string(svc.UID),
+		Hostname:                nameForService(svc),
+		Tags:                    tags,
+		ChildResourceLabels:     crl,
+		ProxyClassName:          proxyClass,
+		LoginServer:             a.ssr.loginServer,
+	}
+	if len(svc.Spec.Selector) > 0 {
+		sts.ClusterTargetServiceSelectors = []map[string]string{svc.Spec.Selector}
 	}
 	sts.proxyType = proxyTypeEgress
 	if shouldExpose(svc, a.isDefaultLoadBalancer) {
