@@ -1438,7 +1438,18 @@ func (c *Conn) LocalPort() uint16 {
 
 var errNetworkDown = errors.New("magicsock: network down")
 
-func (c *Conn) networkDown() bool { return !c.networkUp.Load() }
+// This allows tests to pass when the user's machine is offline, but allows us
+// to still test network-down behaviour when desired.
+var checkNetworkDownDuringTests = false
+
+func (c *Conn) networkDown() bool {
+	// For tests, always assume the network is up unless we're explicitly
+	// testing this behaviour.
+	if envknob.AssumeNetworkUp() || (testenv.InTest() && !checkNetworkDownDuringTests) {
+		return false
+	}
+	return !c.networkUp.Load()
+}
 
 // Send implements conn.Bind.
 //
