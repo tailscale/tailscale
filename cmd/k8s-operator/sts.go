@@ -118,14 +118,16 @@ var (
 )
 
 type tailscaleSTSConfig struct {
-	Replicas            int32
-	ParentResourceName  string
-	ParentResourceUID   string
-	ChildResourceLabels map[string]string
+	Replicas                int32
+	ParentResourceName      string
+	ParentResourceNamespace string
+	ParentResourceUID       string
+	ChildResourceLabels     map[string]string
 
-	ServeConfig          *ipn.ServeConfig // if serve config is set, this is a proxy for Ingress
-	ClusterTargetIP      string           // ingress target IP
-	ClusterTargetDNSName string           // ingress target DNS name
+	ServeConfig                   *ipn.ServeConfig // if serve config is set, this is a proxy for Ingress
+	ClusterTargetIP               string           // ingress target IP
+	ClusterTargetDNSName          string           // ingress target DNS name
+	ClusterTargetServiceSelectors []map[string]string
 	// If set to true, operator should configure containerboot to forward
 	// cluster traffic via the proxy set up for Kubernetes Ingress.
 	ForwardClusterTrafficViaL7IngressProxy bool
@@ -926,22 +928,31 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 		}
 	}
 
-	if pc.Spec.StatefulSet == nil {
-		return ss
+	if pc.Spec.StatefulSet != nil {
+		// Update StatefulSet metadata.
+		if wantsSSLabels := pc.Spec.StatefulSet.Labels.Parse(); len(wantsSSLabels) > 0 {
+			ss.ObjectMeta.Labels = mergeStatefulSetLabelsOrAnnots(ss.ObjectMeta.Labels, wantsSSLabels, tailscaleManagedLabels)
+		}
+		if wantsSSAnnots := pc.Spec.StatefulSet.Annotations; len(wantsSSAnnots) > 0 {
+			ss.ObjectMeta.Annotations = mergeStatefulSetLabelsOrAnnots(ss.ObjectMeta.Annotations, wantsSSAnnots, tailscaleManagedAnnotations)
+		}
 	}
 
-	// Update StatefulSet metadata.
-	if wantsSSLabels := pc.Spec.StatefulSet.Labels.Parse(); len(wantsSSLabels) > 0 {
-		ss.ObjectMeta.Labels = mergeStatefulSetLabelsOrAnnots(ss.ObjectMeta.Labels, wantsSSLabels, tailscaleManagedLabels)
+	if ss.Spec.Template.Spec.Affinity == nil &&
+		stsCfg != nil &&
+		stsCfg.ParentResourceNamespace != "" &&
+		len(stsCfg.ClusterTargetServiceSelectors) > 0 &&
+		!proxyClassExplicitlySetsAffinity(pc) &&
+		(stsCfg.TailnetTargetFQDN == "" && stsCfg.TailnetTargetIP == "") &&
+		(stsCfg.ClusterTargetIP != "" || stsCfg.ServeConfig != nil) {
+		ss.Spec.Template.Spec.Affinity = affinityFromServiceSelectors(stsCfg.ParentResourceNamespace, stsCfg.ClusterTargetServiceSelectors)
 	}
-	if wantsSSAnnots := pc.Spec.StatefulSet.Annotations; len(wantsSSAnnots) > 0 {
-		ss.ObjectMeta.Annotations = mergeStatefulSetLabelsOrAnnots(ss.ObjectMeta.Annotations, wantsSSAnnots, tailscaleManagedAnnotations)
+
+	if pc.Spec.StatefulSet == nil || pc.Spec.StatefulSet.Pod == nil {
+		return ss
 	}
 
 	// Update Pod fields.
-	if pc.Spec.StatefulSet.Pod == nil {
-		return ss
-	}
 	wantsPod := pc.Spec.StatefulSet.Pod
 	if wantsPodLabels := wantsPod.Labels.Parse(); len(wantsPodLabels) > 0 {
 		ss.Spec.Template.ObjectMeta.Labels = mergeStatefulSetLabelsOrAnnots(ss.Spec.Template.ObjectMeta.Labels, wantsPodLabels, tailscaleManagedLabels)
@@ -953,7 +964,9 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 	ss.Spec.Template.Spec.ImagePullSecrets = wantsPod.ImagePullSecrets
 	ss.Spec.Template.Spec.NodeName = wantsPod.NodeName
 	ss.Spec.Template.Spec.NodeSelector = wantsPod.NodeSelector
-	ss.Spec.Template.Spec.Affinity = wantsPod.Affinity
+	if wantsPod.Affinity != nil {
+		ss.Spec.Template.Spec.Affinity = wantsPod.Affinity
+	}
 	ss.Spec.Template.Spec.Tolerations = wantsPod.Tolerations
 	ss.Spec.Template.Spec.PriorityClassName = wantsPod.PriorityClassName
 	ss.Spec.Template.Spec.TopologySpreadConstraints = wantsPod.TopologySpreadConstraints
@@ -1014,7 +1027,43 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 			}
 		}
 	}
+
 	return ss
+}
+
+func proxyClassExplicitlySetsAffinity(pc *tsapi.ProxyClass) bool {
+	return pc != nil &&
+		pc.Spec.StatefulSet != nil &&
+		pc.Spec.StatefulSet.Pod != nil &&
+		pc.Spec.StatefulSet.Pod.Affinity != nil
+}
+
+func affinityFromServiceSelectors(namespace string, selectors []map[string]string) *corev1.Affinity {
+	if namespace == "" || len(selectors) == 0 {
+		return nil
+	}
+	terms := make([]corev1.WeightedPodAffinityTerm, 0, len(selectors))
+	for _, sel := range selectors {
+		if len(sel) == 0 {
+			continue
+		}
+		terms = append(terms, corev1.WeightedPodAffinityTerm{
+			Weight: 100,
+			PodAffinityTerm: corev1.PodAffinityTerm{
+				LabelSelector: &metav1.LabelSelector{MatchLabels: sel},
+				Namespaces:    []string{namespace},
+				TopologyKey:   "kubernetes.io/hostname",
+			},
+		})
+	}
+	if len(terms) == 0 {
+		return nil
+	}
+	return &corev1.Affinity{
+		PodAffinity: &corev1.PodAffinity{
+			PreferredDuringSchedulingIgnoredDuringExecution: terms,
+		},
+	}
 }
 
 func enableEndpoints(ss *appsv1.StatefulSet, metrics, debug bool) {
