@@ -2639,6 +2639,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	// but it won't take effect until the next Start.
 	cc, err := b.getNewControlClientFuncLocked()(controlclient.Options{
 		GetMachinePrivateKey: b.createGetMachinePrivateKeyFunc(),
+		PersistState:         b.createPersistStateFunc(),
 		Logf:                 logger.WithPrefix(b.logf, "control: "),
 		Persist:              *persistv,
 		ServerURL:            serverURL,
@@ -3637,6 +3638,21 @@ func (b *LocalBackend) createGetMachinePrivateKeyFunc() func() (key.MachinePriva
 		}
 		cache.Store(b.machinePrivKey)
 		return b.machinePrivKey, nil
+	}
+}
+
+// createPersistStateFunc returns a function that writes an updated Persist
+// directly to the state store, bypassing setPrefsNoPermCheck to avoid
+// triggering hooks for state not yet confirmed by the control server.
+func (b *LocalBackend) createPersistStateFunc() func(persist.PersistView) {
+	return func(p persist.PersistView) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		prefs := b.pm.CurrentPrefs().AsStruct()
+		prefs.Persist = p.AsStruct()
+		if err := b.pm.writePrefsToStore(b.pm.currentProfile.Key(), prefs.View()); err != nil {
+			b.logf("persist node key before register: %v", err)
+		}
 	}
 }
 

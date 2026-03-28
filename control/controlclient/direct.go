@@ -79,6 +79,7 @@ type Direct struct {
 	autoUpdatePub     *eventbus.Publisher[AutoUpdate]
 	controlTimePub    *eventbus.Publisher[ControlTime]
 	getMachinePrivKey func() (key.MachinePrivate, error)
+	persistState      func(persist.PersistView) // or nil; called before RegisterRequest to persist new node key
 	debugFlags        []string
 	pinger            Pinger
 	popBrowser        func(url string)    // or nil
@@ -176,6 +177,12 @@ type Options struct {
 	// attempted. It is used to allow the client to clean up any resources or complete any
 	// tasks that are dependent on a live client.
 	Shutdown func()
+
+	// PersistState, if non-nil, is called with an updated Persist after
+	// generating a new node key but before sending the RegisterRequest.
+	// This allows the caller to write the key to durable storage so that
+	// a crash during registration doesn't lose the key.
+	PersistState func(persist.PersistView)
 }
 
 // ControlDialPlanner is the interface optionally supplied when creating a
@@ -331,6 +338,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		dialer:            opts.Dialer,
 		dnsCache:          dnsCache,
 		dialPlan:          opts.DialPlan,
+		persistState:      opts.PersistState,
 	}
 	c.discoPubKey = opts.DiscoPublicKey
 	c.closedCtx, c.closeCtx = context.WithCancel(context.Background())
@@ -655,6 +663,14 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	}
 	if persist.NetworkLockKey.IsZero() {
 		persist.NetworkLockKey = key.NewNLPrivate()
+	}
+
+	// Persist the new key before the RegisterRequest so a crash
+	// mid-HTTP doesn't lose it.
+	if c.persistState != nil && !tryingNewKey.IsZero() && (persist.PrivateNodeKey.IsZero() || tryingNewKey.Public() != persist.PrivateNodeKey.Public()) {
+		preHTTPPersist := persist
+		preHTTPPersist.PrivateNodeKey = tryingNewKey
+		c.persistState(preHTTPPersist.View())
 	}
 
 	nlPub := persist.NetworkLockKey.Public()
