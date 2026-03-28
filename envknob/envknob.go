@@ -405,6 +405,9 @@ func SSHIgnoreTailnetPolicy() bool { return Bool("TS_DEBUG_SSH_IGNORE_TAILNET_PO
 // TKASkipSignatureCheck reports whether to skip node-key signature checking for development.
 func TKASkipSignatureCheck() bool { return Bool("TS_UNSAFE_SKIP_NKS_VERIFICATION") }
 
+// AssumeNetworkUp reports whether to assume network connectivity for development.
+func AssumeNetworkUp() bool { return Bool("TS_ASSUME_NETWORK_UP_FOR_TEST") }
+
 // App returns the tailscale app type of this instance, if set via
 // TS_INTERNAL_APP env var. TS_INTERNAL_APP can be used to set app type for
 // components that wrap tailscaled, such as containerboot. App type is intended
