@@ -1574,7 +1574,7 @@ func (s *Server) advertiseService(name tailcfg.ServiceName) error {
 	advertised := s.lb.Prefs().AdvertiseServices()
 	if !views.SliceContains(advertised, name.String()) {
 		newAdvertised := make([]string, 0, advertised.Len()+1)
-		advertised.AppendTo(newAdvertised)
+		newAdvertised = advertised.AppendTo(newAdvertised)
 		newAdvertised = append(newAdvertised, name.String())
 		_, err := s.lb.EditPrefs(&ipn.MaskedPrefs{
 			AdvertiseServicesSet: true,
