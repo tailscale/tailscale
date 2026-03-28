@@ -38,6 +38,7 @@ TARGET="${TARGET:-${DEFAULT_TARGET}}"
 TAGS="${TAGS:-${DEFAULT_TAGS}}"
 BASE="${BASE:-${DEFAULT_BASE}}"
 PLATFORM="${PLATFORM:-}" # default to all platforms
+GOARCH="${GOARCH:-arm,arm64,amd64,386,riscv64}"
 FILES="${FILES:-}" # default to no extra files
 # OCI annotations that will be added to the image.
 # https://github.com/opencontainers/image-spec/blob/main/annotations.md
@@ -62,6 +63,7 @@ case "$TARGET" in
       --repos="${REPOS}" \
       --push="${PUSH}" \
       --target="${PLATFORM}" \
+      --goarch="${GOARCH}" \
       --annotations="${ANNOTATIONS}" \
       --files="${FILES}" \
       /usr/local/bin/containerboot
@@ -81,6 +83,7 @@ case "$TARGET" in
       --repos="${REPOS}" \
       --push="${PUSH}" \
       --target="${PLATFORM}" \
+      --goarch="${GOARCH}" \
       --annotations="${ANNOTATIONS}" \
       --files="${FILES}" \
       /usr/local/bin/operator
@@ -100,6 +103,7 @@ case "$TARGET" in
       --repos="${REPOS}" \
       --push="${PUSH}" \
       --target="${PLATFORM}" \
+      --goarch="${GOARCH}" \
       --annotations="${ANNOTATIONS}" \
       --files="${FILES}" \
       /usr/local/bin/k8s-nameserver
@@ -119,6 +123,7 @@ case "$TARGET" in
       --repos="${REPOS}" \
       --push="${PUSH}" \
       --target="${PLATFORM}" \
+      --goarch="${GOARCH}" \
       --annotations="${ANNOTATIONS}" \
       --files="${FILES}" \
       /usr/local/bin/tsidp
@@ -138,6 +143,7 @@ case "$TARGET" in
       --repos="${REPOS}" \
       --push="${PUSH}" \
       --target="${PLATFORM}" \
+      --goarch="${GOARCH}" \
       --annotations="${ANNOTATIONS}" \
       --files="${FILES}" \
       /usr/local/bin/k8s-proxy
