@@ -514,6 +514,64 @@ func TestResolveLocalReverse(t *testing.T) {
 	}
 }
 
+// tests that when a split DNS route is configured for a reverse DNS zone,
+// PTR queries are forwarded to the configured upstream resolver rather than
+// being answered locally by MagicDNS.
+// See https://github.com/tailscale/tailscale/issues/18370
+func TestResolveLocalReverseSplitDNS(t *testing.T) {
+	r := newResolver(t)
+	defer r.Close()
+
+	// Configure with:
+	// - Hosts mapping 1.2.3.4 -> test1.ipn.dev (MagicDNS)
+	// - A split DNS route for 3.2.1.in-addr.arpa -> upstream resolver
+	// The split DNS route should take priority over the MagicDNS answer.
+	r.SetConfig(Config{
+		Hosts: map[dnsname.FQDN][]netip.Addr{
+			"test1.ipn.dev.": {testipv4},
+			"test2.ipn.dev.": {testipv6},
+		},
+		LocalDomains: []dnsname.FQDN{"ipn.dev."},
+		Routes: map[dnsname.FQDN][]*dnstype.Resolver{
+			"3.2.1.in-addr.arpa.": {
+				{Addr: "100.100.100.100:53"},
+			},
+		},
+	})
+
+	tests := []struct {
+		name string
+		q    dnsname.FQDN
+		want dnsname.FQDN
+		code dns.RCode
+	}{
+		// PTR for 1.2.3.4 falls within the 3.2.1.in-addr.arpa split DNS route,
+		// so it should be forwarded (RCodeRefused) not answered locally.
+		{"ipv4_split_dns", testipv4Arpa, "", dns.RCodeRefused},
+		// PTR for an IP not in ipToHost but within the split DNS route
+		// should also be forwarded.
+		{"ipv4_split_dns_unknown", dnsname.FQDN("5.3.2.1.in-addr.arpa."), "", dns.RCodeRefused},
+		// PTR for an IP outside any split DNS route and not in ipToHost
+		// should still be refused (forwarded to default upstream).
+		{"ipv4_no_route", dnsname.FQDN("2.3.4.5.in-addr.arpa."), "", dns.RCodeRefused},
+		// The Tailscale service IP should still resolve locally even if
+		// its reverse zone has a split DNS route.
+		{"magicdns", dnsname.FQDN("100.100.100.100.in-addr.arpa."), dnsSymbolicFQDN, dns.RCodeSuccess},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name, code := r.resolveLocalReverse(tt.q)
+			if code != tt.code {
+				t.Errorf("code = %v; want %v", code, tt.code)
+			}
+			if name != tt.want {
+				t.Errorf("name = %v; want %v", name, tt.want)
+			}
+		})
+	}
+}
+
 func ipv6Works() bool {
 	c, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {

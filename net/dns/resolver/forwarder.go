@@ -1010,6 +1010,20 @@ func (f *forwarder) resolvers(domain dnsname.FQDN) []resolverAndDelay {
 	return cloudHostFallback // or nil if no fallback
 }
 
+// reports whether the forwarder has a non-catch-all route
+// (not the "." suffix) that matches the given domain.
+func (f *forwarder) hasSpecificRouteFor(domain dnsname.FQDN) bool {
+	f.mu.Lock()
+	routes := f.routes
+	f.mu.Unlock()
+	for _, route := range routes {
+		if route.Suffix != "." && route.Suffix.Contains(domain) {
+			return true
+		}
+	}
+	return false
+}
+
 // GetUpstreamResolvers returns the resolvers that would be used to resolve
 // the given FQDN.
 func (f *forwarder) GetUpstreamResolvers(name dnsname.FQDN) []*dnstype.Resolver {

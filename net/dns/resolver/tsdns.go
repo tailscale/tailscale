@@ -847,6 +847,13 @@ func (r *Resolver) resolveLocalReverse(name dnsname.FQDN) (dnsname.FQDN, dns.RCo
 		return "", dns.RCodeRefused
 	}
 
+	// If the forwarder has a specific split DNS route for this reverse
+	// DNS name, defer to it rather than answering from MagicDNS. The
+	// user has explicitly configured an upstream for this zone.
+	if r.forwarder != nil && r.forwarder.hasSpecificRouteFor(name) {
+		return "", dns.RCodeRefused
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
