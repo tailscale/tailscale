@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -44,6 +45,7 @@ type natTest struct {
 	tempDir string // for qcow2 images
 	vnet    *vnet.Server
 	kernel  string // linux kernel path
+	clients []*vnet.NodeAgentClient
 
 	gotRoute pingRoute
 }
@@ -150,6 +152,21 @@ func easyNoControlDiscoRotate(c *vnet.Config) *vnet.Node {
 			Value: "true",
 		},
 		vnet.RotateDisco, vnet.PreICMPPing, nw)
+}
+
+// easyNetmapCacheEnabled sets up a node with easy NAT, and enables netmap
+// caching, including reading from the cache and parsing/sending TSMP messages.
+func easyNetmapCacheEnabled(c *vnet.Config) *vnet.Node {
+	n := c.NumNodes() + 1
+	nw := c.AddNetwork(
+		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
+		fmt.Sprintf("192.168.%d.1/24", n),
+		vnet.EasyNAT)
+	return c.AddNode(
+		vnet.TailscaledEnv{
+			Key:   "TS_USE_CACHED_NETMAP",
+			Value: "true",
+		}, nw)
 }
 
 func v6AndBlackholedIPv4(c *vnet.Config) *vnet.Node {
@@ -379,16 +396,15 @@ func (nt *natTest) runTest(addNode ...addNodeFunc) pingRoute {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	var clients []*vnet.NodeAgentClient
 	for _, n := range nodes {
 		client := nt.vnet.NodeAgentClient(n)
 		n.SetClient(client)
-		clients = append(clients, client)
+		nt.clients = append(nt.clients, client)
 	}
 	sts := make([]*ipnstate.Status, len(nodes))
 
 	var eg errgroup.Group
-	for i, c := range clients {
+	for i, c := range nt.clients {
 		eg.Go(func() error {
 			node := nodes[i]
 			t.Logf("%v calling Status...", node)
@@ -447,18 +463,30 @@ func (nt *natTest) runTest(addNode ...addNodeFunc) pingRoute {
 	// Should we send traffic across the nodes before starting disco?
 	// For nodes that rotated disco keys after control going away.
 	if preICMPPing {
-		_, err := ping(ctx, t, clients[0], sts[1].Self.TailscaleIPs[0], tailcfg.PingICMP)
+		res, err := ping(ctx, t, nt.clients[0], sts[1].Self.TailscaleIPs[0], tailcfg.PingICMP)
 		if err != nil {
 			t.Fatalf("ICMP ping failure: %v", err)
 		}
+
+		t.Logf("ICMP ping route: %v", classifyPing(res))
 	}
 
-	pingRes, err := ping(ctx, t, clients[0], sts[1].Self.TailscaleIPs[0], tailcfg.PingDisco)
+	pingRes, err := ping(ctx, t, nt.clients[0], sts[1].Self.TailscaleIPs[0], tailcfg.PingDisco)
+
 	if err != nil {
 		t.Fatalf("ping failure: %v", err)
 	}
 	nt.gotRoute = classifyPing(pingRes)
 	t.Logf("ping route: %v", nt.gotRoute)
+
+	// Capture client metrics for use in validating test success.
+	for _, client := range nt.clients {
+		if mb, err := client.DaemonMetrics(ctx); err == nil {
+			client.CapturedMetrics = mb
+		} else {
+			t.Logf("DaemonMetrics: %v (metrics assertions will be skipped)", err)
+		}
+	}
 
 	return nt.gotRoute
 }
@@ -561,6 +589,35 @@ func (nt *natTest) want(r pingRoute) {
 	}
 }
 
+func (nt *natTest) wantWGEngineTSMPResetAvoided(client *vnet.NodeAgentClient) {
+	nt.tb.Helper()
+	if client == nil {
+		nt.tb.Error("wantWGSessionTSMPRetryAvoided: client is nil")
+		return
+	}
+	val := parseClientMetric(nt.tb, client.CapturedMetrics,
+		"wgengine_tsmp_disco_key_reset_avoided")
+	if val < 1 {
+		nt.tb.Errorf("WG engine reset for disco not avoided")
+	}
+}
+
+func parseClientMetric(tb testing.TB, data []byte, name string) int64 {
+	tb.Helper()
+	for line := range strings.SplitSeq(string(data), "\n") {
+		// tb.Logf("Line: %s", line)
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) == 2 && parts[0] == name {
+			v, _ := strconv.ParseInt(parts[1], 10, 64)
+			return v
+		}
+	}
+	return 0
+}
+
 func TestEasyEasy(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(easy, easy)
@@ -571,6 +628,14 @@ func TestTwoEasyNoControlDiscoRotate(t *testing.T) {
 	envknob.Setenv("TS_USE_CACHED_NETMAP", "1")
 	nt := newNatTest(t)
 	nt.runTest(easyNoControlDiscoRotate, easyNoControlDiscoRotate)
+	nt.want(routeDirect)
+}
+
+func TestTSMPOneConnectedOneNot(t *testing.T) {
+	t.Skip("Test is not working and should be wired up for a cached netmap. https://github.com/tailscale/tailscale/issues/19141")
+	nt := newNatTest(t)
+	nt.runTest(easyNoControlDiscoRotate, easyNetmapCacheEnabled)
+	nt.wantWGEngineTSMPResetAvoided(nt.clients[0])
 	nt.want(routeDirect)
 }
 

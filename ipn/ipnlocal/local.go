@@ -1857,6 +1857,12 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 	b.authReconfigLocked()
 }
 
+func (b *LocalBackend) MarkDiscoAsLearnedFromTSMP(pub key.NodePublic, disco key.DiscoPublic) {
+	if e, ok := b.e.(controlclient.DiscoUpdateNotifier); ok {
+		e.MarkDiscoAsLearnedFromTSMP(pub, disco)
+	}
+}
+
 type preferencePolicyInfo struct {
 	key pkey.Key
 	get func(ipn.PrefsView) bool

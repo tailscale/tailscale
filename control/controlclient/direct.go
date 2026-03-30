@@ -228,6 +228,17 @@ type NetmapDeltaUpdater interface {
 	UpdateNetmapDelta([]netmap.NodeMutation) (ok bool)
 }
 
+// DiscoUpdateNotifier is implemented by users of the control client (such as
+// local backend) to get notified of updates to disco keys received via TSMP.
+// This interface only regards itself with marking. Implementors must remove
+// marks themselves.
+//
+// There is a mirror implementation in the wgengine watchdog, implemented there
+// to avoid the dependency edge between controlClient and wgengine.
+type DiscoUpdateNotifier interface {
+	MarkDiscoAsLearnedFromTSMP(key.NodePublic, key.DiscoPublic)
+}
+
 var nextControlClientID atomic.Int64
 
 // NewDirect returns a new Direct client.
@@ -367,7 +378,7 @@ func NewDirect(opts Options) (*Direct, error) {
 			// mapSession has gone away, we want to fall back to pushing the key
 			// further down the chain.
 			if err := c.streamingMapSession.updateDiscoForNode(
-				peer.ID(), update.Key, time.Now(), false); err == nil ||
+				peer.ID(), peer.Key(), update.Key, time.Now(), false); err == nil ||
 				!errors.Is(err, ErrChangeQueueClosed) {
 				return
 			}
@@ -377,10 +388,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		// not have a mapSession (we are not connected to control) or because the
 		// mapSession queue has closed.
 		c.logf("controlclient direct: updating discoKey for %v via magicsock", update.Src)
-		discoKeyPub.Publish(events.PeerDiscoKeyUpdate{
-			Src: update.Src,
-			Key: update.Key,
-		})
+		discoKeyPub.Publish(events.PeerDiscoKeyUpdate(update))
 	})
 
 	return c, nil
@@ -859,8 +867,10 @@ func (c *Direct) PollNetMap(ctx context.Context, nu NetmapUpdater) error {
 // update it observed. It is used by tests and [NetmapFromMapResponseForDebug].
 // It will report only the first netmap seen.
 type rememberLastNetmapUpdater struct {
-	last *netmap.NetworkMap
-	done chan any
+	last          *netmap.NetworkMap
+	lastTSMPKey   key.NodePublic
+	lastTSMPDisco key.DiscoPublic
+	done          chan any
 }
 
 func (nu *rememberLastNetmapUpdater) UpdateFullNetmap(nm *netmap.NetworkMap) {
@@ -869,6 +879,12 @@ func (nu *rememberLastNetmapUpdater) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	case nu.done <- nil:
 	default:
 	}
+}
+
+func (nu *rememberLastNetmapUpdater) MarkDiscoAsLearnedFromTSMP(
+	key key.NodePublic, disco key.DiscoPublic) {
+	nu.lastTSMPKey = key
+	nu.lastTSMPDisco = disco
 }
 
 // FetchNetMapForTest fetches the netmap once.
