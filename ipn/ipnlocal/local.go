@@ -1857,6 +1857,18 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 	b.authReconfigLocked()
 }
 
+func (b *LocalBackend) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPublic) {
+	// PatchDiscoKey mirrors the implementation of [controlclient.patchDiscoKeyer].
+	// It is implemented here to avoid the dependency edge to controlclient, but must be kept
+	// in sync with the original implementation.
+	type patchDiscoKeyer interface {
+		PatchDiscoKey(key.NodePublic, key.DiscoPublic)
+	}
+	if e, ok := b.e.(patchDiscoKeyer); ok {
+		e.PatchDiscoKey(pub, disco)
+	}
+}
+
 type preferencePolicyInfo struct {
 	key pkey.Key
 	get func(ipn.PrefsView) bool

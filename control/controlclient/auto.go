@@ -478,6 +478,27 @@ func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
 	return err == nil && ok
 }
 
+var _ patchDiscoKeyer = mapRoutineState{}
+
+func (mrs mapRoutineState) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPublic) {
+	c := mrs.c
+	c.mu.Lock()
+	goodState := c.loggedIn && c.inMapPoll
+	dun, ok := c.observer.(patchDiscoKeyer)
+	c.mu.Unlock()
+
+	if !goodState || !ok {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	defer cancel()
+
+	c.observerQueue.RunSync(ctx, func() {
+		dun.PatchDiscoKey(pub, disco)
+	})
+}
+
 // mapRoutine is responsible for keeping a read-only streaming connection to the
 // control server, and keeping the netmap up to date.
 func (c *Auto) mapRoutine() {
