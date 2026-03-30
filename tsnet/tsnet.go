@@ -1540,13 +1540,16 @@ func (sl *ServiceListener) Close() error {
 	// We should only clean up state once. Otherwise we can stomp on state
 	// created by new listeners.
 	sl.closeOnce.Do(func() {
+		sl.s.mu.Lock()
+		defer sl.s.mu.Unlock()
+
 		// Two pieces of state we need to clear:
 		//  1. The Service advertisement pref
 		//  2. Artifacts in the serve config
 		// Then we can close the listener.
 
 		var adErr error
-		if err := sl.s.decrementServiceAdvertisement(sl.svcName); err != nil {
+		if err := sl.s.decrementServiceAdvertisementLocked(sl.svcName); err != nil {
 			adErr = fmt.Errorf("managing Service advertisements: %w", err)
 		}
 
@@ -1594,10 +1597,7 @@ func (s *Server) advertiseService(name tailcfg.ServiceName) error {
 // advertising the Service. Advertisement of the Service will be withdrawn if
 // the count hits zero. It is an error to call this function when the Service is
 // not being advertised by this node.
-func (s *Server) decrementServiceAdvertisement(name tailcfg.ServiceName) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+func (s *Server) decrementServiceAdvertisementLocked(name tailcfg.ServiceName) error {
 	cleanAdvertisement := func() error {
 		delete(s.advertisedServices, name)
 		advertised := s.lb.Prefs().AdvertiseServices()
@@ -1683,7 +1683,11 @@ func (s *Server) ListenService(name string, mode ServiceMode) (*ServiceListener,
 	if err := s.advertiseService(svcName); err != nil {
 		return nil, fmt.Errorf("advertising Service: %w", err)
 	}
-	onError = append(onError, func() { s.decrementServiceAdvertisement(svcName) })
+	onError = append(onError, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.decrementServiceAdvertisementLocked(svcName)
+	})
 
 	srvCfg := new(ipn.ServeConfig)
 	sc, srvCfgETag, err := s.lb.ServeConfigETag()
