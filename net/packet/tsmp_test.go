@@ -80,10 +80,10 @@ func TestTailscaleRejectedHeader(t *testing.T) {
 
 func TestTSMPDiscoKeyAdvertisementMarshal(t *testing.T) {
 	var (
-		// IPv4: Ver(4)Len(5), TOS, Len(53), ID, Flags, TTL(64), Proto(99), Cksum
-		headerV4, _ = hex.DecodeString("45000035000000004063705d")
-		// IPv6: Ver(6)TCFlow, Len(33), NextHdr(99), HopLim(64)
-		headerV6, _ = hex.DecodeString("6000000000216340")
+		// IPv4: Ver(4)Len(5), TOS, Len(54), ID, Flags, TTL(64), Proto(99), Cksum
+		headerV4, _ = hex.DecodeString("45000036000000004063705c")
+		// IPv6: Ver(6)TCFlow, Len(34), NextHdr(99), HopLim(64)
+		headerV6, _ = hex.DecodeString("6000000000226340")
 
 		packetType = []byte{'a'}
 		testKey    = bytes.Repeat([]byte{'a'}, 32)
@@ -107,20 +107,42 @@ func TestTSMPDiscoKeyAdvertisementMarshal(t *testing.T) {
 		{
 			name: "v4Header",
 			tka: TSMPDiscoKeyAdvertisement{
-				Src: srcV4,
-				Dst: dstV4,
-				Key: key.DiscoPublicFromRaw32(mem.B(testKey)),
+				Src:     srcV4,
+				Dst:     dstV4,
+				Key:     key.DiscoPublicFromRaw32(mem.B(testKey)),
+				Request: false,
 			},
-			want: join(headerV4, srcV4.AsSlice(), dstV4.AsSlice(), packetType, testKey),
+			want: join(headerV4, srcV4.AsSlice(), dstV4.AsSlice(), packetType, testKey, []byte{0}),
 		},
 		{
 			name: "v6Header",
 			tka: TSMPDiscoKeyAdvertisement{
-				Src: srcV6,
-				Dst: dstV6,
-				Key: key.DiscoPublicFromRaw32(mem.B(testKey)),
+				Src:     srcV6,
+				Dst:     dstV6,
+				Key:     key.DiscoPublicFromRaw32(mem.B(testKey)),
+				Request: false,
 			},
-			want: join(headerV6, srcV6.AsSlice(), dstV6.AsSlice(), packetType, testKey),
+			want: join(headerV6, srcV6.AsSlice(), dstV6.AsSlice(), packetType, testKey, []byte{0}),
+		},
+		{
+			name: "v4Header_request",
+			tka: TSMPDiscoKeyAdvertisement{
+				Src:     srcV4,
+				Dst:     dstV4,
+				Key:     key.DiscoPublicFromRaw32(mem.B(testKey)),
+				Request: true,
+			},
+			want: join(headerV4, srcV4.AsSlice(), dstV4.AsSlice(), packetType, testKey, []byte{1}),
+		},
+		{
+			name: "v6Header_request",
+			tka: TSMPDiscoKeyAdvertisement{
+				Src:     srcV6,
+				Dst:     dstV6,
+				Key:     key.DiscoPublicFromRaw32(mem.B(testKey)),
+				Request: true,
+			},
+			want: join(headerV6, srcV6.AsSlice(), dstV6.AsSlice(), packetType, testKey, []byte{1}),
 		},
 	}
 

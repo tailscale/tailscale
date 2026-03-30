@@ -1181,6 +1181,7 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook pa
 				t.discoKeyAdvertisementPub.Publish(events.DiscoKeyAdvertisement{
 					Src: discoKeyAdvert.Src,
 					Key: discoKeyAdvert.Key,
+					Request: discoKeyAdvert.Request,
 				})
 			}
 			return filter.DropSilently, gro

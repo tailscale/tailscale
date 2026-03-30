@@ -974,6 +974,7 @@ func TestTSMPDisco(t *testing.T) {
 			Src: src,
 			Dst: dst,
 			Key: discoKey.Public(),
+			Request: true,
 		}).Marshal()
 
 		var p packet.Parsed
@@ -988,6 +989,9 @@ func TestTSMPDisco(t *testing.T) {
 		}
 		if tda.Key.Compare(discoKey.Public()) != 0 {
 			t.Errorf("Key did not match, expected %q, got %q", discoKey.Public(), tda.Key)
+		}
+		if !tda.Request {
+			t.Errorf("Requested expected to be true, got false")
 		}
 	})
 }

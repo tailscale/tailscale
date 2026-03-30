@@ -621,9 +621,18 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		e.magicConn.HandleDiscoKeyAdvertisement(peer.Node, pkt)
 	})
 	var tsmpRequestGroup singleflight.Group[netip.Addr, struct{}]
+	eventbus.SubscribeFunc(ec, func(update events.DiscoKeyAdvertisement) {
+		if update.Request {
+			go tsmpRequestGroup.Do(update.Src, func() (struct{}, error) {
+				e.sendTSMPDiscoAdvertisement(update.Src, false)
+				e.logf("wgengine: sending TSMP disco key advertisement to %v", update.Src)
+				return struct{}{}, nil
+			})
+		}
+	})
 	eventbus.SubscribeFunc(ec, func(req magicsock.NewDiscoKeyAvailable) {
 		go tsmpRequestGroup.Do(req.NodeFirstAddr, func() (struct{}, error) {
-			e.sendTSMPDiscoAdvertisement(req.NodeFirstAddr)
+			e.sendTSMPDiscoAdvertisement(req.NodeFirstAddr, req.Request)
 			e.logf("wgengine: sending TSMP disco key advertisement to %v", req.NodeFirstAddr)
 			return struct{}{}, nil
 		})
@@ -1161,7 +1170,6 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 						metricTSMPLearnedKeyMismatch.Add(1)
 						p.DiscoKey = discoTSMP
 					}
-
 					// Skip session clear no matter what.
 					continue
 				}
@@ -1584,7 +1592,7 @@ func (e *userspaceEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, size in
 		e.magicConn.Ping(peer, res, size, cb)
 	case "TSMP":
 		e.sendTSMPPing(ip, peer, res, cb)
-		e.sendTSMPDiscoAdvertisement(ip)
+		e.sendTSMPDiscoAdvertisement(ip, false)
 	case "ICMP":
 		e.sendICMPEchoRequest(ip, peer, res, cb)
 	}
@@ -1705,16 +1713,17 @@ func (e *userspaceEngine) sendTSMPPing(ip netip.Addr, peer tailcfg.NodeView, res
 	e.tundev.InjectOutbound(tsmpPing)
 }
 
-func (e *userspaceEngine) sendTSMPDiscoAdvertisement(ip netip.Addr) {
+func (e *userspaceEngine) sendTSMPDiscoAdvertisement(ip netip.Addr, request bool) {
 	srcIP, err := e.mySelfIPMatchingFamily(ip)
 	if err != nil {
 		e.logf("getting matching node: %s", err)
 		return
 	}
 	tdka := packet.TSMPDiscoKeyAdvertisement{
-		Src: srcIP,
-		Dst: ip,
-		Key: e.magicConn.DiscoPublicKey(),
+		Src:     srcIP,
+		Dst:     ip,
+		Key:     e.magicConn.DiscoPublicKey(),
+		Request: request,
 	}
 	payload, err := tdka.Marshal()
 	if err != nil {

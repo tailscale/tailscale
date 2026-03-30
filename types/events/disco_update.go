@@ -17,8 +17,9 @@ import (
 // [controlclient.Direct], that injects the received key into the netmap as if
 // it was a netmap update from control.
 type DiscoKeyAdvertisement struct {
-	Src netip.Addr // Src field is populated by the IP header of the packet, not from the payload itself.
-	Key key.DiscoPublic
+	Src     netip.Addr // Src field is populated by the IP header of the packet, not from the payload itself.
+	Key     key.DiscoPublic
+	Request bool
 }
 
 // PeerDiscoKeyUpdate is an event sent on the [eventbus.Bus] when

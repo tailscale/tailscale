@@ -532,7 +532,7 @@ func TestTSMPKeyAdvertisement(t *testing.T) {
 
 	addr := netip.MustParseAddr("100.100.99.1")
 	previousValue := metricTSMPDiscoKeyAdvertisementSent.Value()
-	ue.sendTSMPDiscoAdvertisement(addr)
+	ue.sendTSMPDiscoAdvertisement(addr, false)
 	if val := metricTSMPDiscoKeyAdvertisementSent.Value(); val <= previousValue {
 		errs := metricTSMPDiscoKeyAdvertisementError.Value()
 		t.Errorf("Expected 1 disco key advert, got %d, errors %d", val, errs)

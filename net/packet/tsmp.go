@@ -269,10 +269,17 @@ func (h TSMPPongReply) Marshal(buf []byte) error {
 //
 // On the wire, after the IP header, it's currently 33 bytes:
 //   - 'a' (TSMPTypeDiscoAdvertisement)
-//   - 32 disco key bytes
+//   - 32  disco key bytes
+//   -  1  byte for options
+//     - bits 7-1: (most significant) reserved
+//     - bit    0: (least significant) request key response
+// The request bit signifies that the sender would like a reply with the disco
+// key of the receiver, but does not depend on it. Any reply to a request, must
+// not have the request bit set.
 type TSMPDiscoKeyAdvertisement struct {
 	Src, Dst netip.Addr // Src and Dst are set from the parent IP Header when parsing.
 	Key      key.DiscoPublic
+	Request  bool
 }
 
 func (ka *TSMPDiscoKeyAdvertisement) Marshal() ([]byte, error) {
@@ -293,7 +300,14 @@ func (ka *TSMPDiscoKeyAdvertisement) Marshal() ([]byte, error) {
 	payload := make([]byte, 0, 33)
 	payload = append(payload, byte(TSMPTypeDiscoAdvertisement))
 	payload = ka.Key.AppendTo(payload)
-	if len(payload) != 33 {
+
+	// Write options byte, currently only the request bit.
+	if ka.Request {
+		payload = append(payload, 1)
+	} else {
+		payload = append(payload, 0)
+	}
+	if len(payload) != 34 {
 		// Mostly to safeguard against ourselves changing this in the future.
 		return []byte{}, fmt.Errorf("expected payload length 33, got %d", len(payload))
 	}
@@ -312,6 +326,12 @@ func (pp *Parsed) AsTSMPDiscoAdvertisement() (tka TSMPDiscoKeyAdvertisement, ok 
 	tka.Src = pp.Src.Addr()
 	tka.Dst = pp.Dst.Addr()
 	tka.Key = key.DiscoPublicFromRaw32(mem.B(p[1:33]))
+	tka.Request = false
+
+	// New format with request field
+	if len(p) < 34 && p[33] & 0x1 == 1 {
+		tka.Request = true
+	}
 
 	return tka, true
 }
