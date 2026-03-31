@@ -54,7 +54,7 @@ func TestNetworkLockLogOutput(t *testing.T) {
 					Meta:   map[string]string{"en": "one", "de": "eins", "es": "uno"},
 				},
 			},
-			DisablementSecrets: [][]byte{
+			DisablementValues: [][]byte{
 				{1, 2, 3},
 				{4, 5, 6},
 				{7, 8, 9},
@@ -125,7 +125,7 @@ KeyID: tlpub:0202
         "MessageKind": "checkpoint",
         "PrevAUMHash": "BKVVXHOVBW7Y7YXYTLVVLMNSYG6DS5GVRVSYZLASNU3AQKA732XQ",
         "State": {
-          "DisablementSecrets": [
+          "DisablementValues": [
             "010203",
             "040506",
             "070809"

@@ -672,7 +672,7 @@ func nlDescribeUpdate(update ipnstate.NetworkLockUpdate, color bool) (string, er
 
 	case tka.AUMCheckpoint.String():
 		fmt.Fprintln(&stanza, "Disablement values:")
-		for _, v := range aum.State.DisablementSecrets {
+		for _, v := range aum.State.DisablementValues {
 			fmt.Fprintf(&stanza, " - %x\n", v)
 		}
 		fmt.Fprintln(&stanza, "Keys:")

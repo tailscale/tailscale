@@ -76,8 +76,8 @@ func toLogMessageV1(aum tka.AUM, update ipnstate.NetworkLockUpdate) logMessageV1
 		if h := state.LastAUMHash; h != nil {
 			expandedState.LastAUMHash = h.String()
 		}
-		for _, secret := range state.DisablementSecrets {
-			expandedState.DisablementSecrets = append(expandedState.DisablementSecrets, fmt.Sprintf("%x", secret))
+		for _, secret := range state.DisablementValues {
+			expandedState.DisablementValues = append(expandedState.DisablementValues, fmt.Sprintf("%x", secret))
 		}
 		for _, key := range state.Keys {
 			expandedState.Keys = append(expandedState.Keys, toTKAKeyV1(&key))
@@ -180,9 +180,13 @@ type expandedStateV1 struct {
 	// LastAUMHash is the blake2s digest of the last-applied AUM.
 	LastAUMHash string `json:"LastAUMHash,omitzero"`
 
-	// DisablementSecrets are KDF-derived values which can be used
-	// to turn off the TKA in the event of a consensus-breaking bug.
-	DisablementSecrets []string
+	// DisablementValues are KDF-derived values used to verify that a caller
+	// possesses a valid DisablementSecret. These values are used during the
+	// Tailnet Lock deactivation process.
+	//
+	// These are  safe to share publicly or store in the clear. They cannot be
+	// used to derive the original DisablementSecret.
+	DisablementValues []string
 
 	// Keys are the public keys of either:
 	//

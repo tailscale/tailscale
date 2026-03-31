@@ -29,9 +29,13 @@ type State struct {
 	// is the same as the LastAUMHash.
 	LastAUMHash *AUMHash `cbor:"1,keyasint"`
 
-	// DisablementSecrets are KDF-derived values which can be used
-	// to turn off the TKA in the event of a consensus-breaking bug.
-	DisablementSecrets [][]byte `cbor:"2,keyasint"`
+	// DisablementValues are KDF-derived values used to verify that a caller
+	// possesses a valid DisablementSecret. These values are used during the
+	// Tailnet Lock deactivation process.
+	//
+	// These are  safe to share publicly or store in the clear. They cannot be
+	// used to derive the original DisablementSecret.
+	DisablementValues [][]byte `cbor:"2,keyasint"`
 
 	// Keys are the public keys of either:
 	//
@@ -79,11 +83,11 @@ func (s State) Clone() State {
 		out.LastAUMHash = &dupe
 	}
 
-	if s.DisablementSecrets != nil {
-		out.DisablementSecrets = make([][]byte, len(s.DisablementSecrets))
-		for i := range s.DisablementSecrets {
-			out.DisablementSecrets[i] = make([]byte, len(s.DisablementSecrets[i]))
-			copy(out.DisablementSecrets[i], s.DisablementSecrets[i])
+	if s.DisablementValues != nil {
+		out.DisablementValues = make([][]byte, len(s.DisablementValues))
+		for i := range s.DisablementValues {
+			out.DisablementValues[i] = make([]byte, len(s.DisablementValues[i]))
+			copy(out.DisablementValues[i], s.DisablementValues[i])
 		}
 	}
 
@@ -114,7 +118,7 @@ var disablementSalt = []byte("tailscale network-lock disablement salt")
 // key authority, but cannot be reversed to find the input secret.
 //
 // When the output of this function is stored in tka state (i.e. in
-// tka.State.DisablementSecrets) a call to Authority.ValidDisablement()
+// tka.State.DisablementValues) a call to Authority.ValidDisablement()
 // with the input of this function as the argument will return true.
 func DisablementKDF(secret []byte) []byte {
 	// time = 4 (3 recommended, booped to 4 to compensate for less memory)
@@ -127,7 +131,7 @@ func DisablementKDF(secret []byte) []byte {
 // checkDisablement returns true for a valid disablement secret.
 func (s State) checkDisablement(secret []byte) bool {
 	derived := DisablementKDF(secret)
-	for _, candidate := range s.DisablementSecrets {
+	for _, candidate := range s.DisablementValues {
 		if subtle.ConstantTimeCompare(derived, candidate) == 1 {
 			return true
 		}
@@ -254,17 +258,17 @@ func (s *State) staticValidateCheckpoint() error {
 	if s.LastAUMHash != nil {
 		return errors.New("cannot specify a parent AUM")
 	}
-	if len(s.DisablementSecrets) == 0 {
+	if len(s.DisablementValues) == 0 {
 		return errors.New("at least one disablement secret required")
 	}
-	if numDS := len(s.DisablementSecrets); numDS > maxDisablementSecrets {
+	if numDS := len(s.DisablementValues); numDS > maxDisablementSecrets {
 		return fmt.Errorf("too many disablement secrets (%d, max %d)", numDS, maxDisablementSecrets)
 	}
-	for i, ds := range s.DisablementSecrets {
+	for i, ds := range s.DisablementValues {
 		if len(ds) != disablementLength {
 			return fmt.Errorf("disablement[%d]: invalid length (got %d, want %d)", i, len(ds), disablementLength)
 		}
-		for j, ds2 := range s.DisablementSecrets {
+		for j, ds2 := range s.DisablementValues {
 			if i == j {
 				continue
 			}

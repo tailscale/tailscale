@@ -104,8 +104,8 @@ func TestTKAEnablementFlow(t *testing.T) {
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 	chonk := tka.ChonkMem()
 	a1, genesisAUM, err := tka.Create(chonk, tka.State{
-		Keys:               []tka.Key{key},
-		DisablementSecrets: [][]byte{bytes.Repeat([]byte{0xa5}, 32)},
+		Keys:              []tka.Key{key},
+		DisablementValues: [][]byte{bytes.Repeat([]byte{0xa5}, 32)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -195,8 +195,8 @@ func TestTKADisablementFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority, _, err := tka.Create(chonk, tka.State{
-		Keys:               []tka.Key{key},
-		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+		Keys:              []tka.Key{key},
+		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -368,8 +368,8 @@ func TestTKASync(t *testing.T) {
 			key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 			controlStorage := tka.ChonkMem()
 			controlAuthority, bootstrap, err := tka.Create(controlStorage, tka.State{
-				Keys:               []tka.Key{key, someKey},
-				DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+				Keys:              []tka.Key{key, someKey},
+				DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 			}, nlPriv)
 			if err != nil {
 				t.Fatalf("tka.Create() failed: %v", err)
@@ -478,8 +478,8 @@ func TestTKASyncTriggersCompact(t *testing.T) {
 	controlStorage := tka.ChonkMem()
 	controlStorage.SetClock(clock)
 	controlAuthority, bootstrap, err := tka.Create(controlStorage, tka.State{
-		Keys:               []tka.Key{key, someKey},
-		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+		Keys:              []tka.Key{key, someKey},
+		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -608,8 +608,8 @@ func TestTKAFilterNetmap(t *testing.T) {
 	nlKey := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 	storage := tka.ChonkMem()
 	authority, _, err := tka.Create(storage, tka.State{
-		Keys:               []tka.Key{nlKey},
-		DisablementSecrets: [][]byte{bytes.Repeat([]byte{0xa5}, 32)},
+		Keys:              []tka.Key{nlKey},
+		DisablementValues: [][]byte{bytes.Repeat([]byte{0xa5}, 32)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -771,8 +771,8 @@ func TestTKADisable(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority, _, err := tka.Create(chonk, tka.State{
-		Keys:               []tka.Key{key},
-		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+		Keys:              []tka.Key{key},
+		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -859,8 +859,8 @@ func TestTKASign(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority, _, err := tka.Create(chonk, tka.State{
-		Keys:               []tka.Key{key},
-		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+		Keys:              []tka.Key{key},
+		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -918,8 +918,8 @@ func TestTKAForceDisable(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority, genesis, err := tka.Create(chonk, tka.State{
-		Keys:               []tka.Key{key},
-		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+		Keys:              []tka.Key{key},
+		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -1006,8 +1006,8 @@ func TestTKAAffectedSigs(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority, _, err := tka.Create(chonk, tka.State{
-		Keys:               []tka.Key{tkaKey},
-		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+		Keys:              []tka.Key{tkaKey},
+		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -1135,8 +1135,8 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority, _, err := tka.Create(chonk, tka.State{
-		Keys:               []tka.Key{key, compromisedKey, cosignKey},
-		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+		Keys:              []tka.Key{key, compromisedKey, cosignKey},
+		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)

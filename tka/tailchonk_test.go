@@ -316,8 +316,8 @@ func TestMarkDescendantAUMs(t *testing.T) {
 
 func TestMarkAncestorIntersectionAUMs(t *testing.T) {
 	fakeState := &State{
-		Keys:               []Key{{Kind: Key25519, Votes: 1}},
-		DisablementSecrets: [][]byte{bytes.Repeat([]byte{1}, 32)},
+		Keys:              []Key{{Kind: Key25519, Votes: 1}},
+		DisablementValues: [][]byte{bytes.Repeat([]byte{1}, 32)},
 	}
 
 	tcs := []struct {
@@ -542,8 +542,8 @@ func cloneMem(src, dst *Mem) {
 
 func TestCompact(t *testing.T) {
 	fakeState := &State{
-		Keys:               []Key{{Kind: Key25519, Votes: 1}},
-		DisablementSecrets: [][]byte{bytes.Repeat([]byte{1}, 32)},
+		Keys:              []Key{{Kind: Key25519, Votes: 1}},
+		DisablementValues: [][]byte{bytes.Repeat([]byte{1}, 32)},
 	}
 
 	// A & B are deleted because the new lastActiveAncestor advances beyond them.
@@ -610,8 +610,8 @@ func TestCompactLongButYoung(t *testing.T) {
 
 	storage := ChonkMem()
 	auth, _, err := Create(storage, State{
-		Keys:               []Key{ourKey, someOtherKey},
-		DisablementSecrets: [][]byte{DisablementKDF(bytes.Repeat([]byte{0xa5}, 32))},
+		Keys:              []Key{ourKey, someOtherKey},
+		DisablementValues: [][]byte{DisablementKDF(bytes.Repeat([]byte{0xa5}, 32))},
 	}, ourPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)

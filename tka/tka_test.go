@@ -305,8 +305,8 @@ func TestAuthorityValidDisablement(t *testing.T) {
         G1.template = genesis
     `,
 		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:               []Key{key},
-			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+			Keys:              []Key{key},
+			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 		}}),
 	)
 
@@ -321,8 +321,8 @@ func TestCreateBootstrapAuthority(t *testing.T) {
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
 	a1, genesisAUM, err := Create(ChonkMem(), State{
-		Keys:               []Key{key},
-		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+		Keys:              []Key{key},
+		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 	}, signer25519(priv))
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
@@ -353,8 +353,8 @@ func TestBootstrapChonkMustBeEmpty(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 	state := State{
-		Keys:               []Key{key},
-		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+		Keys:              []Key{key},
+		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 	}
 
 	// Bootstrap our chonk for the first time, which should succeed.
@@ -420,8 +420,8 @@ func TestAuthorityInformNonLinear(t *testing.T) {
         L4.hashSeed = 2
     `,
 		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:               []Key{key},
-			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+			Keys:              []Key{key},
+			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 		}}),
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
@@ -465,8 +465,8 @@ func TestAuthorityInformLinear(t *testing.T) {
         G1.template = genesis
     `,
 		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:               []Key{key},
-			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+			Keys:              []Key{key},
+			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 		}}),
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
@@ -517,7 +517,7 @@ func TestInteropWithNLKey(t *testing.T) {
 				Public: pub2.KeyID(),
 			},
 		},
-		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 	}, priv1)
 	if err != nil {
 		t.Errorf("tka.Create: %v", err)
@@ -546,12 +546,12 @@ func TestAuthorityCompact(t *testing.T) {
         C.template = checkpoint2
     `,
 		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:               []Key{key},
-			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+			Keys:              []Key{key},
+			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 		}}),
 		optTemplate("checkpoint2", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:               []Key{key},
-			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+			Keys:              []Key{key},
+			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 		}}),
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
@@ -603,8 +603,8 @@ func TestFindParentForRewrite(t *testing.T) {
         D.template = remove2
     `,
 		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:               []Key{k1},
-			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+			Keys:              []Key{k1},
+			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 		}}),
 		optTemplate("add2", AUM{MessageKind: AUMAddKey, Key: &k2}),
 		optTemplate("add3", AUM{MessageKind: AUMAddKey, Key: &k3}),
@@ -672,8 +672,8 @@ func TestMakeRetroactiveRevocation(t *testing.T) {
         D.template = add3
     `,
 		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:               []Key{k1},
-			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+			Keys:              []Key{k1},
+			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 		}}),
 		optTemplate("add2", AUM{MessageKind: AUMAddKey, Key: &k2}),
 		optTemplate("add3", AUM{MessageKind: AUMAddKey, Key: &k3}))

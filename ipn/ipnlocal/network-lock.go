@@ -654,15 +654,10 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 	// the filesystem until we've finished the initialization sequence,
 	// just in case something goes wrong.
 	_, genesisAUM, err := tka.Create(tka.ChonkMem(), tka.State{
-		Keys: keys,
-		// TODO(tom): s/tka.State.DisablementSecrets/tka.State.DisablementValues
-		//   This will center on consistent nomenclature:
-		//    - DisablementSecret: value needed to disable.
-		//    - DisablementValue: the KDF of the disablement secret, a public value.
-		DisablementSecrets: disablementValues,
-
-		StateID1: binary.LittleEndian.Uint64(entropy[:8]),
-		StateID2: binary.LittleEndian.Uint64(entropy[8:]),
+		Keys:              keys,
+		DisablementValues: disablementValues,
+		StateID1:          binary.LittleEndian.Uint64(entropy[:8]),
+		StateID2:          binary.LittleEndian.Uint64(entropy[8:]),
 	}, nlPriv)
 	if err != nil {
 		return fmt.Errorf("tka.Create: %v", err)
