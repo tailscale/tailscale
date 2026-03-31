@@ -414,6 +414,21 @@ func (c *Direct) Close() error {
 	return nil
 }
 
+// ResetConnections flushes the DNS cache, closes idle HTTP connections,
+// and tears down the Noise client so that subsequent requests use fresh
+// connections. It should be called on major link changes.
+func (c *Direct) ResetConnections() {
+	c.logf("control: resetting HTTP connections and DNS cache after link change")
+	c.dnsCache.FlushAll()
+	c.httpc.CloseIdleConnections()
+	c.mu.Lock()
+	if c.noiseClient != nil {
+		c.noiseClient.Close()
+		c.noiseClient = nil
+	}
+	c.mu.Unlock()
+}
+
 // SetHostinfo clones the provided Hostinfo and remembers it for the
 // next update. It reports whether the Hostinfo has changed.
 func (c *Direct) SetHostinfo(hi *tailcfg.Hostinfo) bool {

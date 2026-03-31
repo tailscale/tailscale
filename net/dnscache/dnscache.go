@@ -115,6 +115,14 @@ type ipCacheEntry struct {
 	expires time.Time
 }
 
+// FlushAll clears all cached DNS results, including any "last good"
+// fallback entries retained by UseLastGood.
+func (r *Resolver) FlushAll() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	clear(r.ipCache)
+}
+
 func (r *Resolver) fwd() *net.Resolver {
 	if r.Forward != nil {
 		return r.Forward
