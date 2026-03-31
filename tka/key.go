@@ -104,8 +104,6 @@ func (k Key) Ed25519() (ed25519.PublicKey, error) {
 	}
 }
 
-const maxMetaBytes = 512
-
 func (k Key) StaticValidate() error {
 	if k.Votes > 4096 {
 		return fmt.Errorf("excessive key weight: %d > 4096", k.Votes)
