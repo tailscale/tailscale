@@ -193,6 +193,9 @@ func main() {
 	ttaMux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
 		// Send 4 packets and wait a maximum of 1 second for each. The deadline
 		// is required for ping to return a non-zero exit code on no response.
+		// The busybox in question here is the breakglass busybox inside the
+		// natlab QEMU image - the host running the test does not need to have
+		// busybox installed at that path, or at all.
 		serveCmd(w, "/usr/local/bin/busybox", "ping", "-c", "4", "-W", "1", r.URL.Query().Get("host"))
 	})
 	ttaMux.HandleFunc("/fw", addFirewallHandler)

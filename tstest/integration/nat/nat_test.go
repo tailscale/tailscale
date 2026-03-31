@@ -637,8 +637,12 @@ func sendHostNetworkPing(ctx context.Context, tb testing.TB, fromClient, toClien
 		return false, err
 	}
 	defer res.Body.Close()
-	got, _ := io.ReadAll(res.Body)
-	tb.Logf("got body: %q", got)
+	got, err := io.ReadAll(res.Body)
+	if err != nil {
+		tb.Logf("error while reading http body: %v", err)
+	} else {
+		tb.Logf("got response from ping: %q", got)
+	}
 	ec, err := strconv.Atoi(res.Header.Get("Exec-Exit-Code"))
 	if err != nil {
 		return false, fmt.Errorf("parse exit code: %w", err)
