@@ -248,13 +248,6 @@ func (s State) applyVerifiedAUM(update AUM) (State, error) {
 	}
 }
 
-// Upper bound on checkpoint elements, chosen arbitrarily. Intended to
-// cap out insanely large AUMs.
-const (
-	maxDisablementSecrets = 32
-	maxKeys               = 512
-)
-
 // staticValidateCheckpoint validates that the state is well-formed for
 // inclusion in a checkpoint AUM.
 func (s *State) staticValidateCheckpoint() error {
