@@ -36,26 +36,26 @@ func TestCloneState(t *testing.T) {
 		State State
 	}{
 		{
-			"Empty",
-			State{},
+			Name:  "Empty",
+			State: State{},
 		},
 		{
-			"Key",
-			State{
+			Name: "Key",
+			State: State{
 				Keys: []Key{{Kind: Key25519, Votes: 2, Public: []byte{5, 6, 7, 8}, Meta: map[string]string{"a": "b"}}},
 			},
 		},
 		{
-			"StateID",
-			State{
+			Name: "StateID",
+			State: State{
 				StateID1: 42,
 				StateID2: 22,
 			},
 		},
 		{
-			"DisablementSecrets",
-			State{
-				DisablementSecrets: [][]byte{
+			Name: "DisablementValues",
+			State: State{
+				DisablementValues: [][]byte{
 					{1, 2, 3, 4},
 					{5, 6, 7, 8},
 				},
@@ -155,7 +155,7 @@ func TestApplyUpdatesChain(t *testing.T) {
 					Keys: []Key{{Kind: Key25519, Public: []byte{1, 2, 3, 4}}},
 				}, PrevAUMHash: fromHex("f09bda3bb7cf6756ea9adc25770aede4b3ca8142949d6ef5ca0add29af912fd4")},
 			},
-			State{DisablementSecrets: [][]byte{{1, 2, 3, 4}}},
+			State{DisablementValues: [][]byte{{1, 2, 3, 4}}},
 			State{
 				Keys:        []Key{{Kind: Key25519, Public: []byte{1, 2, 3, 4}}},
 				LastAUMHash: hashFromHex("57343671da5eea3cfb502954e976e8028bffd3540b50a043b2a65a8d8d8217d0"),

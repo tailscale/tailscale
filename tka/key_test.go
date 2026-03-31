@@ -73,8 +73,8 @@ func TestNLPrivate(t *testing.T) {
 	// authority.
 	k := Key{Kind: Key25519, Public: pub.Verifier(), Votes: 1}
 	_, aum, err := Create(ChonkMem(), State{
-		Keys:               []Key{k},
-		DisablementSecrets: [][]byte{bytes.Repeat([]byte{1}, 32)},
+		Keys:              []Key{k},
+		DisablementValues: [][]byte{bytes.Repeat([]byte{1}, 32)},
 	}, p)
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)

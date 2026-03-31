@@ -104,7 +104,7 @@ func TestSerialization(t *testing.T) {
 				},
 					bytes.Repeat([]byte{0}, 32)...),
 				[]byte{
-					0x02, //     |- major type 0 (int), value 2 (second key, DisablementSecrets)
+					0x02, //     |- major type 0 (int), value 2 (second key, DisablementValues)
 					0xf6, //     |- major type 7 (val), value null (second value, nil)
 					0x03, //     |- major type 0 (int), value 3 (third key, Keys)
 					0x81, //     |- major type 4 (array), value 1 (one item in array)
@@ -182,7 +182,7 @@ func TestDeserializeExistingAUMs(t *testing.T) {
 			Want: AUM{
 				MessageKind: AUMCheckpoint,
 				State: &State{
-					DisablementSecrets: [][]byte{
+					DisablementValues: [][]byte{
 						fromBase64("jSwtotIRlTdbkNPV0bZZifOMIGvi1e1VsJPYu8D0tLo="),
 						fromBase64("EIcFRg4lBkYrtz+t4LnGf/KLY7dg18pPjgY24eYlsdQ="),
 						fromBase64("5VU4oRQiMoq5qK00McfpwtmjcheVammLCRwzdp2Zje8="),

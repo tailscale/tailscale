@@ -148,8 +148,8 @@ func testScenario(t *testing.T, sharedChain string, sharedOptions ...testchainOp
 	key := Key{Kind: Key25519, Public: pub, Votes: 1}
 	sharedOptions = append(sharedOptions,
 		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:               []Key{key},
-			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+			Keys:              []Key{key},
+			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 		}}),
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
