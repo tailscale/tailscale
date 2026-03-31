@@ -9,5 +9,6 @@ qemu: image
 
 # For natlab integration tests:
 natlab:
+	@command -v qemu-img > /dev/null 2>&1 || { echo >&2 "please install qemu"; exit 1; }
 	go run build.go --build --app=natlabapp
 	qemu-img convert -O qcow2 natlabapp.img natlabapp.qcow2
