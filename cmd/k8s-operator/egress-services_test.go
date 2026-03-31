@@ -203,8 +203,9 @@ func clusterIPSvc(name string, extNSvc *corev1.Service) *corev1.Service {
 			Labels:       labels,
 		},
 		Spec: corev1.ServiceSpec{
-			Type:  corev1.ServiceTypeClusterIP,
-			Ports: ports,
+			Type:           corev1.ServiceTypeClusterIP,
+			IPFamilyPolicy: new(corev1.IPFamilyPolicyPreferDualStack),
+			Ports:          ports,
 		},
 	}
 }
