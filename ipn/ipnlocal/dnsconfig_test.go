@@ -10,11 +10,11 @@ import (
 	"reflect"
 	"testing"
 
-	"tailscale.com/appc"
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
@@ -396,12 +396,12 @@ func TestDNSConfigForNetmap(t *testing.T) {
 					Name:      "a",
 					Addresses: ipps("100.101.101.101"),
 					CapMap: tailcfg.NodeCapMap{
-						tailcfg.NodeCapability(appc.AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
+						tailcfg.NodeCapability(appctype.AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
 							tailcfg.RawMessage(`{"name":"app1","connectors":["tag:woo"],"domains":["example.com"]}`),
 						},
 					},
 				}).View(),
-				AllCaps: set.Of(tailcfg.NodeCapability(appc.AppConnectorsExperimentalAttrName)),
+				AllCaps: set.Of(tailcfg.NodeCapability(appctype.AppConnectorsExperimentalAttrName)),
 			},
 			peers: nodeViews([]*tailcfg.Node{
 				{
@@ -443,12 +443,12 @@ func TestDNSConfigForNetmap(t *testing.T) {
 					Name:      "a",
 					Addresses: ipps("100.101.101.101"),
 					CapMap: tailcfg.NodeCapMap{
-						tailcfg.NodeCapability(appc.AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
+						tailcfg.NodeCapability(appctype.AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
 							tailcfg.RawMessage(`{"name":"app1","connectors":["tag:woo"],"domains":["example.com"]}`),
 						},
 					},
 				}).View(),
-				AllCaps: set.Of(tailcfg.NodeCapability(appc.AppConnectorsExperimentalAttrName)),
+				AllCaps: set.Of(tailcfg.NodeCapability(appctype.AppConnectorsExperimentalAttrName)),
 			},
 			peers: nodeViews([]*tailcfg.Node{
 				{

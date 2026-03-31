@@ -863,9 +863,11 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// Add split DNS routes, with no regard to exit node configuration.
 	addSplitDNSRoutes(nm.DNS.Routes)
 
-	// Add split DNS routes for conn25
-	conn25DNSTargets := appc.PickSplitDNSPeers(nm.HasCap, nm.SelfNode, peers)
-	if conn25DNSTargets != nil {
+	// Add split DNS routes for conn25.
+	conn25DNSTargets, err := appc.PickSplitDNSPeers(nm.HasCap, nm.SelfNode, peers, prefs.AppConnector().Advertise)
+	if err != nil {
+		logf("error picking split dns peers for app connectors: %v", err)
+	} else {
 		var m map[string][]*dnstype.Resolver
 		for domain, candidateSplitDNSPeers := range conn25DNSTargets {
 			for _, peer := range candidateSplitDNSPeers {
@@ -873,7 +875,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 				if base == "" {
 					continue
 				}
-				mak.Set(&m, domain, []*dnstype.Resolver{{Addr: fmt.Sprintf("%s/dns-query", base)}})
+				mak.Set(&m, string(domain), []*dnstype.Resolver{{Addr: fmt.Sprintf("%s/dns-query", base)}})
 				break // Just make one resolver for the first peer we can get a peerAPIBase for.
 			}
 		}

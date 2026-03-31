@@ -428,7 +428,7 @@ func TestReserveIPs(t *testing.T) {
 func TestReconfig(t *testing.T) {
 	rawCfg := `{"name":"app1","connectors":["tag:woo"],"domains":["example.com"]}`
 	capMap := tailcfg.NodeCapMap{
-		tailcfg.NodeCapability(AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
+		tailcfg.NodeCapability(appctype.AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
 			tailcfg.RawMessage(rawCfg),
 		},
 	}
@@ -438,7 +438,7 @@ func TestReconfig(t *testing.T) {
 		CapMap: capMap,
 	}).View()
 
-	err := c.reconfig(sn)
+	err := c.reconfig(sn, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,6 +454,7 @@ func TestConfigReconfig(t *testing.T) {
 		rawCfg                string
 		cfg                   []appctype.Conn25Attr
 		tags                  []string
+		isEligibleConnector   bool
 		wantErr               bool
 		wantAppsByDomain      map[dnsname.FQDN][]string
 		wantSelfRoutedDomains set.Set[dnsname.FQDN]
@@ -469,7 +470,8 @@ func TestConfigReconfig(t *testing.T) {
 				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}},
 				{Name: "two", Domains: []string{"b.example.com"}, Connectors: []string{"tag:two"}},
 			},
-			tags: []string{"tag:one"},
+			tags:                []string{"tag:one"},
+			isEligibleConnector: true,
 			wantAppsByDomain: map[dnsname.FQDN][]string{
 				"a.example.com.": {"one"},
 				"b.example.com.": {"two"},
@@ -477,7 +479,41 @@ func TestConfigReconfig(t *testing.T) {
 			wantSelfRoutedDomains: set.SetOf([]dnsname.FQDN{"a.example.com."}),
 		},
 		{
-			name: "more-complex",
+			name: "more-complex-with-connector-self-routed-domains",
+			cfg: []appctype.Conn25Attr{
+				{Name: "one", Domains: []string{"1.a.example.com", "1.b.example.com"}, Connectors: []string{"tag:one", "tag:onea"}},
+				{Name: "two", Domains: []string{"2.b.example.com", "2.c.example.com"}, Connectors: []string{"tag:two", "tag:twoa"}},
+				{Name: "three", Domains: []string{"1.b.example.com", "1.c.example.com"}, Connectors: []string{}},
+				{Name: "four", Domains: []string{"4.b.example.com", "4.d.example.com"}, Connectors: []string{"tag:four"}},
+			},
+			tags:                []string{"tag:onea", "tag:four", "tag:unrelated"},
+			isEligibleConnector: true,
+			wantAppsByDomain: map[dnsname.FQDN][]string{
+				"1.a.example.com.": {"one"},
+				"1.b.example.com.": {"one", "three"},
+				"1.c.example.com.": {"three"},
+				"2.b.example.com.": {"two"},
+				"2.c.example.com.": {"two"},
+				"4.b.example.com.": {"four"},
+				"4.d.example.com.": {"four"},
+			},
+			wantSelfRoutedDomains: set.SetOf([]dnsname.FQDN{"1.a.example.com.", "1.b.example.com.", "4.b.example.com.", "4.d.example.com."}),
+		},
+		{
+			name: "connector-no-matching-tag-no-self-routed-domains",
+			cfg: []appctype.Conn25Attr{
+				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}},
+				{Name: "two", Domains: []string{"b.example.com"}, Connectors: []string{"tag:two"}},
+			},
+			tags:                []string{"tag:unrelated"},
+			isEligibleConnector: true,
+			wantAppsByDomain: map[dnsname.FQDN][]string{
+				"a.example.com.": {"one"},
+				"b.example.com.": {"two"},
+			},
+		},
+		{
+			name: "non-connector-no-self-routed-domains",
 			cfg: []appctype.Conn25Attr{
 				{Name: "one", Domains: []string{"1.a.example.com", "1.b.example.com"}, Connectors: []string{"tag:one", "tag:onea"}},
 				{Name: "two", Domains: []string{"2.b.example.com", "2.c.example.com"}, Connectors: []string{"tag:two", "tag:twoa"}},
@@ -494,7 +530,6 @@ func TestConfigReconfig(t *testing.T) {
 				"4.b.example.com.": {"four"},
 				"4.d.example.com.": {"four"},
 			},
-			wantSelfRoutedDomains: set.SetOf([]dnsname.FQDN{"1.a.example.com.", "1.b.example.com.", "4.b.example.com.", "4.d.example.com."}),
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -510,13 +545,13 @@ func TestConfigReconfig(t *testing.T) {
 				}
 			}
 			capMap := tailcfg.NodeCapMap{
-				tailcfg.NodeCapability(AppConnectorsExperimentalAttrName): cfg,
+				tailcfg.NodeCapability(appctype.AppConnectorsExperimentalAttrName): cfg,
 			}
 			sn := (&tailcfg.Node{
 				CapMap: capMap,
 				Tags:   tt.tags,
 			}).View()
-			c, err := configFromNodeView(sn)
+			c, err := configFromNodeView(sn, tt.isEligibleConnector)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("wantErr: %t, err: %v", tt.wantErr, err)
 			}
@@ -541,8 +576,9 @@ func makeSelfNode(t *testing.T, attrs []appctype.Conn25Attr, tags []string) tail
 		cfg = append(cfg, tailcfg.RawMessage(bs))
 	}
 	capMap := tailcfg.NodeCapMap{
-		tailcfg.NodeCapability(AppConnectorsExperimentalAttrName): cfg,
+		tailcfg.NodeCapability(appctype.AppConnectorsExperimentalAttrName): cfg,
 	}
+
 	return (&tailcfg.Node{
 		CapMap: capMap,
 		Tags:   tags,
@@ -680,10 +716,12 @@ func makeDNSResponseForSections(t *testing.T, questions []dnsmessage.Question, a
 
 func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 	for _, tt := range []struct {
-		name          string
-		domain        string
-		addrs         []*dnsmessage.AResource
-		wantByMagicIP map[netip.Addr]addrs
+		name                string
+		domain              string
+		addrs               []*dnsmessage.AResource
+		selfTags            []string
+		isEligibleConnector bool
+		wantByMagicIP       map[netip.Addr]addrs
 	}{
 		{
 			name:   "one-ip-matches",
@@ -732,6 +770,48 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 				{A: [4]byte{2, 0, 0, 0}},
 			},
 		},
+		{
+			name:                "exclude-connector-self-routed-domain",
+			domain:              "example.com.",
+			addrs:               []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
+			selfTags:            []string{"tag:woo"},
+			isEligibleConnector: true,
+		},
+		{
+			name:     "tagged-but-not-connector-rewrites",
+			domain:   "example.com.",
+			addrs:    []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
+			selfTags: []string{"tag:woo"},
+			// isEligibleConnector is false: tag matches but prefs not set,
+			// so DNS response should be rewritten normally.
+			wantByMagicIP: map[netip.Addr]addrs{
+				netip.MustParseAddr("100.64.0.0"): {
+					domain:  "example.com.",
+					dst:     netip.MustParseAddr("1.0.0.0"),
+					magic:   netip.MustParseAddr("100.64.0.0"),
+					transit: netip.MustParseAddr("100.64.0.40"),
+					app:     "app1",
+				},
+			},
+		},
+		{
+			name:                "connector-no-matching-tag-rewrites",
+			domain:              "example.com.",
+			addrs:               []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
+			selfTags:            []string{"tag:unrelated"},
+			isEligibleConnector: true,
+			// isEligibleConnector is true but tag doesn't match the app,
+			// so DNS response should be rewritten normally.
+			wantByMagicIP: map[netip.Addr]addrs{
+				netip.MustParseAddr("100.64.0.0"): {
+					domain:  "example.com.",
+					dst:     netip.MustParseAddr("1.0.0.0"),
+					magic:   netip.MustParseAddr("100.64.0.0"),
+					transit: netip.MustParseAddr("100.64.0.40"),
+					app:     "app1",
+				},
+			},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dnsResp := makeDNSResponse(t, tt.domain, tt.addrs)
@@ -741,9 +821,9 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 				Domains:       []string{"example.com"},
 				MagicIPPool:   []netipx.IPRange{rangeFrom("0", "10"), rangeFrom("20", "30")},
 				TransitIPPool: []netipx.IPRange{rangeFrom("40", "50")},
-			}}, []string{})
+			}}, tt.selfTags)
 			c := newConn25(logger.Discard)
-			c.reconfig(sn)
+			c.reconfig(sn, tt.isEligibleConnector)
 
 			c.mapDNSResponse(dnsResp)
 			if diff := cmp.Diff(tt.wantByMagicIP, c.client.assignments.byMagicIP, cmpopts.EquateComparable(addrs{}, netip.Addr{})); diff != "" {
@@ -887,7 +967,7 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 		Connectors: []string{"tag:woo"},
 		Domains:    []string{"example.com"},
 	}}, []string{})
-	err := ext.conn25.reconfig(sn)
+	err := ext.conn25.reconfig(sn, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1208,7 +1288,7 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newConn25(logger.Discard)
-			if err := c.reconfig(sn); err != nil {
+			if err := c.reconfig(sn, false); err != nil {
 				t.Fatal(err)
 			}
 			bs := c.mapDNSResponse(tt.toMap)
@@ -1281,7 +1361,7 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 			Domains:    []string{"hoo.example.com"},
 		},
 	}, []string{})
-	err := ext.conn25.reconfig(sn)
+	err := ext.conn25.reconfig(sn, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1491,7 +1571,7 @@ func TestClientTransitIPForMagicIP(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newConn25(t.Logf)
-			if err := c.reconfig(sn); err != nil {
+			if err := c.reconfig(sn, false); err != nil {
 				t.Fatal(err)
 			}
 			c.client.assignments.insert(addrs{
@@ -1564,7 +1644,7 @@ func TestConnectorRealIPForTransitIPConnection(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newConn25(t.Logf)
-			if err := c.reconfig(sn); err != nil {
+			if err := c.reconfig(sn, true); err != nil {
 				t.Fatal(err)
 			}
 			c.connector.transitIPs = map[netip.Addr]map[netip.Addr]appAddr{}

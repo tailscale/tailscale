@@ -13,6 +13,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/opt"
+	"tailscale.com/util/dnsname"
 )
 
 func TestPickSplitDNSPeers(t *testing.T) {
@@ -47,17 +48,21 @@ func TestPickSplitDNSPeers(t *testing.T) {
 	nvp4 := makeNodeView(4, "p4", []string{"tag:two", "tag:three2", "tag:four2"})
 
 	for _, tt := range []struct {
-		name   string
-		want   map[string][]tailcfg.NodeView
-		peers  []tailcfg.NodeView
-		config []tailcfg.RawMessage
+		name                string
+		peers               []tailcfg.NodeView
+		config              []tailcfg.RawMessage
+		isEligibleConnector bool
+		selfTags            []string
+		want                map[dnsname.FQDN][]tailcfg.NodeView
+		wantErr             bool
 	}{
 		{
 			name: "empty",
 		},
 		{
-			name:   "bad-config", // bad config should return a nil map rather than error.
-			config: []tailcfg.RawMessage{tailcfg.RawMessage(`hey`)},
+			name:    "bad-config",
+			config:  []tailcfg.RawMessage{tailcfg.RawMessage(`hey`)},
+			wantErr: true,
 		},
 		{
 			name:   "no-peers",
@@ -102,13 +107,92 @@ func TestPickSplitDNSPeers(t *testing.T) {
 				nvp4,
 				makeNodeView(5, "p5", nil),
 			},
-			want: map[string][]tailcfg.NodeView{
+			want: map[dnsname.FQDN][]tailcfg.NodeView{
 				// p5 has no matching tags and so doesn't appear
-				"example.com":       {nvp1},
-				"a.example.com":     {nvp3, nvp4},
-				"woo.b.example.com": {nvp2, nvp3, nvp4},
-				"hoo.b.example.com": {nvp3, nvp4},
-				"c.example.com":     {nvp2, nvp4},
+				"example.com.":       {nvp1},
+				"a.example.com.":     {nvp3, nvp4},
+				"woo.b.example.com.": {nvp2, nvp3, nvp4},
+				"hoo.b.example.com.": {nvp3, nvp4},
+				"c.example.com.":     {nvp2, nvp4},
+			},
+		},
+		{
+			name: "self-connector-exclude-self-domains",
+			config: []tailcfg.RawMessage{
+				tailcfg.RawMessage(appOneBytes),
+				tailcfg.RawMessage(appTwoBytes),
+				tailcfg.RawMessage(appThreeBytes),
+				tailcfg.RawMessage(appFourBytes),
+			},
+			peers: []tailcfg.NodeView{
+				nvp1,
+				nvp2,
+				nvp3,
+				nvp4,
+			},
+			isEligibleConnector: true,
+			selfTags:            []string{"tag:three1"},
+			want: map[dnsname.FQDN][]tailcfg.NodeView{
+				// woo.b.example.com and hoo.b.example.com are covered
+				// by tag:three1, and so is this self-node.
+				// So those domains should not be routed to peers.
+				// woo.b.example.com is also covered by another tag,
+				// but still not included since this connector can route to it.
+				"example.com.":   {nvp1},
+				"a.example.com.": {nvp3, nvp4},
+				"c.example.com.": {nvp2, nvp4},
+			},
+		},
+		{
+			name: "self-connector-no-matching-tag-include-all-domains",
+			config: []tailcfg.RawMessage{
+				tailcfg.RawMessage(appOneBytes),
+				tailcfg.RawMessage(appTwoBytes),
+				tailcfg.RawMessage(appThreeBytes),
+				tailcfg.RawMessage(appFourBytes),
+			},
+			peers: []tailcfg.NodeView{
+				nvp1,
+				nvp2,
+				nvp3,
+				nvp4,
+			},
+			isEligibleConnector: true,
+			selfTags:            []string{"tag:unrelated"},
+			want: map[dnsname.FQDN][]tailcfg.NodeView{
+				// Self has prefs set but no tags matching any app,
+				// so no domains are self-routed and all appear.
+				"example.com.":       {nvp1},
+				"a.example.com.":     {nvp3, nvp4},
+				"woo.b.example.com.": {nvp2, nvp3, nvp4},
+				"hoo.b.example.com.": {nvp3, nvp4},
+				"c.example.com.":     {nvp2, nvp4},
+			},
+		},
+		{
+			name: "self-not-connector-but-tagged-include-self-domains",
+			config: []tailcfg.RawMessage{
+				tailcfg.RawMessage(appOneBytes),
+				tailcfg.RawMessage(appTwoBytes),
+				tailcfg.RawMessage(appThreeBytes),
+				tailcfg.RawMessage(appFourBytes),
+			},
+			peers: []tailcfg.NodeView{
+				nvp1,
+				nvp2,
+				nvp3,
+				nvp4,
+			},
+			selfTags: []string{"tag:three1"},
+			want: map[dnsname.FQDN][]tailcfg.NodeView{
+				// Even though this self node has a tag for an app
+				// it doesn't have Hostinfo.AppConnector == true, so
+				// should still route through other connectors.
+				"example.com.":       {nvp1},
+				"a.example.com.":     {nvp3, nvp4},
+				"woo.b.example.com.": {nvp2, nvp3, nvp4},
+				"hoo.b.example.com.": {nvp3, nvp4},
+				"c.example.com.":     {nvp2, nvp4},
 			},
 		},
 	} {
@@ -116,19 +200,26 @@ func TestPickSplitDNSPeers(t *testing.T) {
 			selfNode := &tailcfg.Node{}
 			if tt.config != nil {
 				selfNode.CapMap = tailcfg.NodeCapMap{
-					tailcfg.NodeCapability(AppConnectorsExperimentalAttrName): tt.config,
+					tailcfg.NodeCapability(appctype.AppConnectorsExperimentalAttrName): tt.config,
 				}
 			}
+			selfNode.Tags = append(selfNode.Tags, tt.selfTags...)
 			selfView := selfNode.View()
 			peers := map[tailcfg.NodeID]tailcfg.NodeView{}
 			for _, p := range tt.peers {
 				peers[p.ID()] = p
 			}
-			got := PickSplitDNSPeers(func(_ tailcfg.NodeCapability) bool {
+			got, err := PickSplitDNSPeers(func(_ tailcfg.NodeCapability) bool {
 				return true
-			}, selfView, peers)
+			}, selfView, peers, tt.isEligibleConnector)
+			if tt.wantErr && (err == nil) {
+				t.Error("expected error in PickSplitDNSPeers but got none")
+			}
+			if !tt.wantErr && (err != nil) {
+				t.Errorf("unexpected error in PickSplitDNSPeers: %v", err)
+			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("got %v, want %v", got, tt.want)
+				t.Errorf("got %v, want %v", got, tt.want)
 			}
 		})
 	}

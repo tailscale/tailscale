@@ -16,8 +16,6 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
-	"slices"
-	"strings"
 	"sync"
 
 	"go4.org/netipx"
@@ -60,12 +58,6 @@ func jsonDecode(target any, rc io.ReadCloser) error {
 	}
 	err = json.Unmarshal(respBs, &target)
 	return err
-}
-
-func normalizeDNSName(name string) (dnsname.FQDN, error) {
-	// note that appconnector does this same thing, tsdns has its own custom lower casing
-	// it might be good to unify in a function in dnsname package.
-	return dnsname.ToFQDN(strings.ToLower(name))
 }
 
 func init() {
@@ -265,7 +257,9 @@ func (e *extension) handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.R
 }
 
 func (e *extension) onSelfChange(selfNode tailcfg.NodeView) {
-	err := e.conn25.reconfig(selfNode)
+	//TODO(mzb): Clean this up when we re-examine need for extension and conn25.
+	isEligibleConnector := e.host.Profiles().CurrentPrefs().AppConnector().Advertise
+	err := e.conn25.reconfig(selfNode, isEligibleConnector)
 	if err != nil {
 		e.conn25.client.logf("error during Reconfig onSelfChange: %v", err)
 		return
@@ -310,8 +304,8 @@ func ipSetFromIPRanges(rs []netipx.IPRange) (*netipx.IPSet, error) {
 	return b.IPSet()
 }
 
-func (c *Conn25) reconfig(selfNode tailcfg.NodeView) error {
-	cfg, err := configFromNodeView(selfNode)
+func (c *Conn25) reconfig(selfNode tailcfg.NodeView, isEligibleConnector bool) error {
+	cfg, err := configFromNodeView(selfNode, isEligibleConnector)
 	if err != nil {
 		return err
 	}
@@ -483,8 +477,6 @@ type ConnectorTransitIPResponse struct {
 	TransitIPs []TransitIPResponse `json:"transitIPs,omitempty"`
 }
 
-const AppConnectorsExperimentalAttrName = "tailscale.com/app-connectors-experimental"
-
 // config holds the config from the policy and lookups derived from that.
 // config is not safe for concurrent use.
 type config struct {
@@ -497,15 +489,18 @@ type config struct {
 	magicIPSet        netipx.IPSet
 }
 
-func configFromNodeView(n tailcfg.NodeView) (config, error) {
-	apps, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.Conn25Attr](n.CapMap(), AppConnectorsExperimentalAttrName)
+func configFromNodeView(n tailcfg.NodeView, isEligibleConnector bool) (config, error) {
+	if !n.HasCap(appctype.AppConnectorsExperimentalAttrName) {
+		return config{}, nil
+	}
+
+	apps, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.Conn25Attr](n.CapMap(), appctype.AppConnectorsExperimentalAttrName)
 	if err != nil {
 		return config{}, err
 	}
 	if len(apps) == 0 {
 		return config{}, nil
 	}
-	selfTags := set.SetOf(n.Tags().AsSlice())
 	cfg := config{
 		isConfigured:      true,
 		apps:              apps,
@@ -513,17 +508,22 @@ func configFromNodeView(n tailcfg.NodeView) (config, error) {
 		appNamesByDomain:  map[dnsname.FQDN][]string{},
 		selfRoutedDomains: set.Set[dnsname.FQDN]{},
 	}
+
+	if isEligibleConnector {
+		selfRoutedDomains, err := appc.ConnectorSelfRoutedDomains(n, apps)
+		if err != nil {
+			return config{}, err
+		}
+		cfg.selfRoutedDomains = selfRoutedDomains
+	}
+
 	for _, app := range apps {
-		selfMatchesTags := slices.ContainsFunc(app.Connectors, selfTags.Contains)
 		for _, d := range app.Domains {
-			fqdn, err := normalizeDNSName(d)
+			fqdn, err := appc.NormalizeDNSName(d)
 			if err != nil {
 				return config{}, err
 			}
 			mak.Set(&cfg.appNamesByDomain, fqdn, append(cfg.appNamesByDomain[fqdn], app.Name))
-			if selfMatchesTags {
-				cfg.selfRoutedDomains.Add(fqdn)
-			}
 		}
 		mak.Set(&cfg.appsByName, app.Name, app)
 	}
@@ -618,9 +618,17 @@ func (c *client) reconfig(newCfg config) error {
 	return nil
 }
 
+// isConnectorDomain determines if domain is routed through a connector peer,
+// and that it should not be handled by the self node, which could also
+// be a connector for the domain.
 func (c *client) isConnectorDomain(domain dnsname.FQDN) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.config.selfRoutedDomains.Contains(domain) {
+		return false
+	}
+
 	appNames, ok := c.config.appNamesByDomain[domain]
 	return ok && len(appNames) > 0
 }
@@ -656,6 +664,7 @@ func (c *client) reserveAddresses(domain dnsname.FQDN, dst netip.Addr) (addrs, e
 		app:     app,
 		domain:  domain,
 	}
+
 	if err := c.assignments.insert(as); err != nil {
 		return addrs{}, err
 	}
@@ -842,7 +851,7 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 	if question.Class != dnsmessage.ClassINET {
 		return buf
 	}
-	queriedDomain, err := normalizeDNSName(question.Name.String())
+	queriedDomain, err := appc.NormalizeDNSName(question.Name.String())
 	if err != nil {
 		return buf
 	}
@@ -896,7 +905,7 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 				return makeServFail(c.logf, hdr, question)
 			}
 		case dnsmessage.TypeA:
-			domain, err := normalizeDNSName(h.Name.String())
+			domain, err := appc.NormalizeDNSName(h.Name.String())
 			if err != nil {
 				c.logf("bad dnsname: %v", err)
 				return makeServFail(c.logf, hdr, question)
