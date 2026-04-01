@@ -2609,7 +2609,21 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		persistv = new(persist.Persist)
 	}
 
-	if envknob.Bool("TS_USE_CACHED_NETMAP") {
+	// At this point we do not yet know whether we are meant to cache netmaps by
+	// policy (as we have not yet spoken to the control plane).
+	//
+	// However, since we do not create or update a netmap cache unless we observe the
+	// [tailcfg.NodeAttrCachedNetworkMaps] capability, we can use the presence
+	// of the cached netmap as a signal that we were expected to do so as of the
+	// last time we updated the cache.
+	//
+	// If the policy has (since) changed, a subsequent network map from the control
+	// plane may remove the attribute, at which point we will drop the cache.
+	//
+	// As of 2026-03-25 we require the envknob set to read a cached netmap, with
+	// the envknob defaulted to true so we can use it as a safety override
+	// during rollout.
+	if envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
 		if nm, ok := b.loadDiskCacheLocked(); ok {
 			logf("loaded netmap from disk cache; %d peers", len(nm.Peers))
 			b.setControlClientStatusLocked(nil, controlclient.Status{
@@ -6336,11 +6350,6 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	var login string
 	if nm != nil {
 		login = cmp.Or(profileFromView(nm.UserProfiles[nm.User()]).LoginName, "<missing-profile>")
-		if envknob.Bool("TS_USE_CACHED_NETMAP") {
-			if err := b.writeNetmapToDiskLocked(nm); err != nil {
-				b.logf("write netmap to cache: %v", err)
-			}
-		}
 	}
 	b.currentNode().SetNetMap(nm)
 	if ms, ok := b.sys.MagicSock.GetOK(); ok {
@@ -6432,6 +6441,29 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	if buildfeatures.HasDrive && nm != nil {
 		if f, ok := hookSetNetMapLockedDrive.GetOk(); ok {
 			f(b, nm)
+		}
+	}
+
+	// Reaching here, we have successfully applied a new network map, and must
+	// now (if configured) update the cache. We do this after application to
+	// reduce the chance we will cache a QoD netmap.
+	//
+	// As of 2026-03-25 we require the envknob AND the node attribute to use
+	// a netmap cache, with the envknob defaulted to true so we can use it as
+	// a safety override during rollout.
+	//
+	// We treat the envknob being false as identical to disabling the feature
+	// by policy, and clean up the cache on that basis. That ensures we will
+	// not wind up in a situation where we have a stale cached netmap that is
+	// not being updated (because of the envknob) and could be read back when
+	// the node starts up.
+	if nm != nil {
+		if b.currentNode().SelfHasCap(tailcfg.NodeAttrCacheNetworkMaps) && envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
+			if err := b.writeNetmapToDiskLocked(nm); err != nil {
+				b.logf("write netmap to cache: %v", err)
+			}
+		} else {
+			b.discardDiskCacheLocked()
 		}
 	}
 }

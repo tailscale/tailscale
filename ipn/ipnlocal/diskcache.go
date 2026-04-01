@@ -54,3 +54,31 @@ func (b *LocalBackend) loadDiskCacheLocked() (om *netmap.NetworkMap, ok bool) {
 	}
 	return nm, true
 }
+
+// discardDiskCacheLocked removes a cached network map for the current node, if
+// one exists, and disables the cache.
+func (b *LocalBackend) discardDiskCacheLocked() {
+	if !buildfeatures.HasCacheNetMap {
+		return
+	}
+	if b.diskCache.cache == nil {
+		return // nothing to do, we do not have a cache
+	}
+
+	// Reaching here, we have a cache directory that needs to be purged.
+	// Log errors but do not fail for them.
+	store := netmapcache.FileStore(b.diskCache.dir)
+	ctx := b.currentNode().Context()
+	for key, err := range store.List(ctx, "") {
+		if err != nil {
+			b.logf("listing cache contents: %v", err)
+			break
+		}
+		if err := store.Remove(ctx, key); err != nil {
+			b.logf("discarding cache key %q: %v", key, err)
+		}
+	}
+
+	b.diskCache.cache = nil // drop reference
+	b.diskCache.dir = ""
+}
