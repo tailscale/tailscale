@@ -139,8 +139,8 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/conffile"
 	kubeutils "tailscale.com/k8s-operator"
+	"tailscale.com/kube/authkey"
 	healthz "tailscale.com/kube/health"
 	"tailscale.com/kube/kubetypes"
 	klc "tailscale.com/kube/localclient"
@@ -210,7 +210,7 @@ func run() error {
 
 	var tailscaledConfigAuthkey string
 	if isOneStepConfig(cfg) {
-		tailscaledConfigAuthkey = authkeyFromTailscaledConfig(cfg.TailscaledConfigFilePath)
+		tailscaledConfigAuthkey = authkey.AuthKeyFromConfig(cfg.TailscaledConfigFilePath)
 	}
 
 	var kc *kubeClient
@@ -1024,12 +1024,4 @@ func serviceIPsFromNetMap(nm *netmap.NetworkMap, fqdn dnsname.FQDN) []netip.Pref
 	}
 
 	return prefixes
-}
-
-func authkeyFromTailscaledConfig(path string) string {
-	if cfg, err := conffile.Load(path); err == nil && cfg.Parsed.AuthKey != nil {
-		return *cfg.Parsed.AuthKey
-	}
-
-	return ""
 }
