@@ -257,12 +257,8 @@ func TestResetContainerbootState(t *testing.T) {
 			authkey: "new-authkey",
 			initial: map[string][]byte{},
 			expected: map[string][]byte{
-				kubetypes.KeyCapVer: capver,
-				kubetypes.KeyPodUID: []byte("1234"),
-				// Cleared keys.
-				kubetypes.KeyDeviceID:            nil,
-				kubetypes.KeyDeviceFQDN:          nil,
-				kubetypes.KeyDeviceIPs:           nil,
+				kubetypes.KeyCapVer:              capver,
+				kubetypes.KeyPodUID:              []byte("1234"),
 				kubetypes.KeyHTTPSEndpoint:       nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,
@@ -271,11 +267,7 @@ func TestResetContainerbootState(t *testing.T) {
 		"empty_initial_no_pod_uid": {
 			initial: map[string][]byte{},
 			expected: map[string][]byte{
-				kubetypes.KeyCapVer: capver,
-				// Cleared keys.
-				kubetypes.KeyDeviceID:            nil,
-				kubetypes.KeyDeviceFQDN:          nil,
-				kubetypes.KeyDeviceIPs:           nil,
+				kubetypes.KeyCapVer:              capver,
 				kubetypes.KeyHTTPSEndpoint:       nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,

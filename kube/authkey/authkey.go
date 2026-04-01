@@ -76,8 +76,7 @@ func ClearReissueAuthKey(ctx context.Context, kc kubeclient.Client, stateSecretN
 // non-nil, it is used to wake the loop on config changes; otherwise it falls
 // back to periodic polling. The clearFn callback is called when a new key is
 // detected, to clear the reissue marker from the state Secret.
-func WaitForAuthKeyReissue(ctx context.Context, oldAuthKey string, maxWait time.Duration, getAuthKey func() string, clearFn func(context.Context) error,
-	notify <-chan struct{}) error {
+func WaitForAuthKeyReissue(ctx context.Context, oldAuthKey string, maxWait time.Duration, getAuthKey func() string, clearFn func(context.Context) error, notify <-chan struct{}) error {
 	log.Printf("Waiting for operator to provide new auth key (max wait: %v)", maxWait)
 
 	ctx, cancel := context.WithTimeout(ctx, maxWait)
