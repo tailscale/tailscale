@@ -7,7 +7,9 @@ package routecheck
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
+	"time"
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -80,4 +82,14 @@ func NewClient(logf logger.Logf, nb NodeBackender, nm NetMapWaiter, pinger Pinge
 		nm:     nm,
 		pinger: pinger,
 	}, nil
+}
+
+// Refresh generates a new reachability report and returns it.
+// A peer is considered unreachable if it doesn’t respond within the timeout.
+func (c *Client) Refresh(ctx context.Context, timeout time.Duration) (*Report, error) {
+	r, err := c.ProbeAllHARouters(ctx, 5, timeout)
+	if err != nil {
+		return nil, fmt.Errorf("error probing routers: %w", err)
+	}
+	return r, nil
 }

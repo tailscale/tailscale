@@ -125,6 +125,9 @@ func init() {
 	if buildfeatures.HasUserMetrics {
 		Register("usermetrics", (*Handler).serveUserMetrics)
 	}
+	if buildfeatures.HasRouteCheck {
+		Register("routecheck", (*Handler).serveRouteCheck)
+	}
 	if buildfeatures.HasServe {
 		Register("query-feature", (*Handler).serveQueryFeature)
 	}
@@ -1150,6 +1153,17 @@ func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
+}
+
+func defDuration(a string, def time.Duration) time.Duration {
+	if a == "" {
+		return def
+	}
+	v, err := time.ParseDuration(a)
+	if err != nil {
+		return def
+	}
+	return v
 }
 
 func (h *Handler) serveDial(w http.ResponseWriter, r *http.Request) {

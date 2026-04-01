@@ -26,7 +26,7 @@ import (
 	"tailscale.com/util/set"
 )
 
-func TestReport(t *testing.T) {
+func TestRefresh(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		init  bool // true before the netmap has been loaded
@@ -35,9 +35,13 @@ func TestReport(t *testing.T) {
 		want  []tailcfg.NodeID // Report.Reachable nodes
 	}{
 		{
-			name: "before-netmap",
+			name: "wait-for-netmap",
 			init: true,
-			want: nil,
+			peers: []tailcfg.NodeView{
+				makeNode(11, withName("exit11"), withExitRoutes()),
+				makeNode(12, withName("exit12"), withExitRoutes()),
+			},
+			want: []tailcfg.NodeID{11, 12},
 		},
 		{
 			name:  "no-peers",
@@ -128,29 +132,32 @@ func TestReport(t *testing.T) {
 
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				// The backend is initialized without a NetMap.
-				b := newStubBackend(tailcfg.NodeView{}, nil, withGone(tc.gone...))
+				self := makeNode(99, withName("self"))
+				var b *stubBackend
 				if !tc.init {
-					self := makeNode(99, withName("self"))
 					b = newStubBackend(self, tc.peers, withGone(tc.gone...))
+				} else {
+					// The backend is initialized without a NetMap,
+					// which gets “retrieved” after a delay.
+					b = newStubBackend(self, tc.peers, withGone(tc.gone...), withDelay(10*time.Second))
 				}
 				c, err := routecheck.NewClient(t.Logf, b, b, b)
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
 
-				got := c.Report()
+				got, err := c.Refresh(t.Context(), routecheck.DefaultTimeout)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
 				now := time.Now() // synctest will freeze time.
 
-				var want *routecheck.Report
 				peers := makeDB(tc.peers)
-				if !tc.init {
-					want = &routecheck.Report{
-						Done: now,
-					}
-					for _, nid := range tc.want {
-						mak.Set(&want.Reachable, nid, peers[nid])
-					}
+				want := &routecheck.Report{
+					Done: now,
+				}
+				for _, nid := range tc.want {
+					mak.Set(&want.Reachable, nid, peers[nid])
 				}
 
 				if diff := cmpDiff(want, got); diff != "" {
@@ -414,14 +421,21 @@ type stubBackend struct {
 	self  tailcfg.NodeView
 	peers []tailcfg.NodeView
 	gone  set.Set[tailcfg.NodeID]
+	delay context.Context
 }
 
 type backendOptFunc func(*stubBackend)
 
 func newStubBackend(self tailcfg.NodeView, peers []tailcfg.NodeView, opts ...backendOptFunc) *stubBackend {
+	if !self.Valid() {
+		panic("invalid self")
+	}
+
+	delay, _ := context.WithTimeout(context.Background(), 0) // No delay
 	b := &stubBackend{
 		self:  self,
 		peers: slices.Clone(peers),
+		delay: delay,
 	}
 	for _, opt := range opts {
 		opt(b)
@@ -430,7 +444,8 @@ func newStubBackend(self tailcfg.NodeView, peers []tailcfg.NodeView, opts ...bac
 }
 
 func (b *stubBackend) NetMap() *netmap.NetworkMap {
-	if !b.self.Valid() {
+	if b.delay.Err() == nil {
+		// Simulate the delay between startup and receiving the NetMap.
 		return nil
 	}
 	return &netmap.NetworkMap{
@@ -440,6 +455,7 @@ func (b *stubBackend) NetMap() *netmap.NetworkMap {
 }
 
 func (b *stubBackend) WaitForNetMap(ctx context.Context) (*netmap.NetworkMap, error) {
+	<-b.delay.Done()
 	nm := b.NetMap()
 	if nm == nil {
 		<-ctx.Done()
@@ -482,6 +498,12 @@ func (b *stubBackend) Ping(ip netip.Addr, pingType tailcfg.PingType, size int, c
 				LatencySeconds: 0.01,
 			})
 		}
+	}
+}
+
+func withDelay(d time.Duration) backendOptFunc {
+	return func(b *stubBackend) {
+		b.delay, _ = context.WithTimeout(context.Background(), d)
 	}
 }
 
