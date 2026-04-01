@@ -1220,7 +1220,7 @@ func (c *Conn) RotateDiscoKey() {
 	connCtx := c.connCtx
 	for _, endpoint := range c.peerMap.byEpAddr {
 		endpoint.ep.mu.Lock()
-		endpoint.ep.sentDiscoKeyAdvertisement = false
+		endpoint.ep.lastDiscoKeyAdvertisement = 0
 		endpoint.ep.mu.Unlock()
 	}
 	c.mu.Unlock()
@@ -4335,8 +4335,8 @@ func (c *Conn) maybeSendTSMPDiscoAdvert(de *endpoint) {
 
 	de.mu.Lock()
 	defer de.mu.Unlock()
-	if !de.sentDiscoKeyAdvertisement {
-		de.sentDiscoKeyAdvertisement = true
+	if mono.Now().Sub(de.lastDiscoKeyAdvertisement) > discoKeyAdvertisementInterval {
+		de.lastDiscoKeyAdvertisement = mono.Now()
 		c.tsmpDiscoKeyAvailablePub.Publish(NewDiscoKeyAvailable{
 			NodeFirstAddr: de.nodeAddr,
 			NodeID:        de.nodeID,

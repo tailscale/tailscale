@@ -4409,3 +4409,47 @@ func TestReceiveTSMPDiscoKeyAdvertisement(t *testing.T) {
 		t.Errorf("New disco key %s, does not match %s", newDiscoKey.ShortString(), ep.disco.Load().short)
 	}
 }
+
+func TestSendingTSMPDiscoTimer(t *testing.T) {
+	t.Setenv("TS_USE_CACHED_NETMAP", "1")
+	conn := newTestConn(t)
+	tw := eventbustest.NewWatcher(t, conn.eventBus)
+	t.Cleanup(func() { conn.Close() })
+
+	peerKey := key.NewNode().Public()
+	ep := &endpoint{
+		nodeID:    1,
+		publicKey: peerKey,
+		nodeAddr:  netip.MustParseAddr("100.64.0.1"),
+	}
+	discoKey := key.NewDisco().Public()
+	ep.disco.Store(&endpointDisco{
+		key:   discoKey,
+		short: discoKey.ShortString(),
+	})
+	ep.c = conn
+	conn.mu.Lock()
+	nodeView := (&tailcfg.Node{
+		Key: ep.publicKey,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.1/32"),
+		},
+	}).View()
+	conn.peers = views.SliceOf([]tailcfg.NodeView{nodeView})
+	conn.mu.Unlock()
+
+	conn.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
+
+	if ep.discoShort() != discoKey.ShortString() {
+		t.Errorf("Original disco key %s, does not match %s", discoKey.ShortString(), ep.discoShort())
+	}
+
+	conn.maybeSendTSMPDiscoAdvert(ep)
+	conn.maybeSendTSMPDiscoAdvert(ep)
+	eventbustest.ExpectExactly(tw, eventbustest.Type[NewDiscoKeyAvailable]())
+	ep.mu.Lock()
+	ep.lastDiscoKeyAdvertisement = 0
+	ep.mu.Unlock()
+	conn.maybeSendTSMPDiscoAdvert(ep)
+	eventbustest.Expect(tw, eventbustest.Type[NewDiscoKeyAvailable]())
+}
