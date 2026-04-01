@@ -5,6 +5,7 @@ package distsign
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"net/http"
@@ -12,10 +13,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/blake2s"
+	"tailscale.com/tstest"
 )
 
 func TestDownload(t *testing.T) {
@@ -23,11 +27,13 @@ func TestDownload(t *testing.T) {
 	c := srv.client(t)
 
 	tests := []struct {
-		desc    string
-		before  func(*testing.T)
-		src     string
-		want    []byte
-		wantErr bool
+		desc     string
+		before   func(*testing.T)
+		existing []byte // optional existing data on disk to resume from
+		src      string
+		want     []byte
+		wantErr  bool
+		wantCode int // HTTP status code of download to expect; 0 means http.StatusOK
 	}{
 		{
 			desc:    "missing file",
@@ -42,6 +48,45 @@ func TestDownload(t *testing.T) {
 			},
 			src:  "hello",
 			want: []byte("world"),
+		},
+		{
+			desc: "success-resume",
+			before: func(*testing.T) {
+				srv.addSigned("hello", []byte("world"))
+			},
+			src:      "hello",
+			existing: []byte("wo"),
+			want:     []byte("world"),
+			wantCode: http.StatusPartialContent,
+		},
+		{
+			desc: "success-resume-ignore-matching-size",
+			before: func(*testing.T) {
+				srv.addSigned("hello", []byte("world"))
+			},
+			src:      "hello",
+			existing: []byte("WORLD"), // same size as world
+			want:     []byte("world"),
+			wantCode: http.StatusOK,
+		},
+		{
+			desc: "success-resume-ignore-existing-too-big",
+			before: func(*testing.T) {
+				srv.addSigned("hello", []byte("world"))
+			},
+			src:      "hello",
+			existing: []byte("longer-than-world"), // len greater than len("world")
+			want:     []byte("world"),
+			wantCode: http.StatusOK,
+		},
+		{
+			desc: "resume-corrupt",
+			before: func(*testing.T) {
+				srv.addSigned("hello", []byte("world"))
+			},
+			src:      "hello",
+			existing: []byte("WO"), // previous download was bad
+			wantErr:  true,
 		},
 		{
 			desc: "no signature",
@@ -94,10 +139,17 @@ func TestDownload(t *testing.T) {
 			srv.reset()
 			tt.before(t)
 
-			dst := filepath.Join(t.TempDir(), tt.src)
-			t.Cleanup(func() {
-				os.Remove(dst)
+			var gotCodes []int
+			tstest.Replace(t, &onResponseForTest, func(res *http.Response) {
+				gotCodes = append(gotCodes, res.StatusCode)
 			})
+
+			dst := filepath.Join(t.TempDir(), tt.src)
+			if len(tt.existing) > 0 {
+				if err := os.WriteFile(dst+".unverified", tt.existing, 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
 			err := c.Download(context.Background(), tt.src, dst)
 			if err != nil {
 				if tt.wantErr {
@@ -107,6 +159,11 @@ func TestDownload(t *testing.T) {
 			}
 			if tt.wantErr {
 				t.Fatalf("Download(%q) succeeded, expected an error", tt.src)
+			} else {
+				wantCodes := []int{cmp.Or(tt.wantCode, http.StatusOK)}
+				if !reflect.DeepEqual(gotCodes, wantCodes) {
+					t.Errorf("HTTP response status code = %v; want %v", gotCodes, wantCodes)
+				}
 			}
 			got, err := os.ReadFile(dst)
 			if err != nil {
@@ -486,7 +543,7 @@ func (s *testServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Write(data)
+	http.ServeContent(w, r, path, time.Time{}, bytes.NewReader(data))
 }
 
 func (s *testServer) addSigned(name string, data []byte) {
