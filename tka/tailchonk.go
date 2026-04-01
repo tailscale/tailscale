@@ -597,6 +597,9 @@ func (c *FS) CommitVerifiedAUMs(updates []AUM) error {
 	for i, aum := range updates {
 		h := aum.Hash()
 		err := c.commit(h, func(info *fsHashInfo) {
+			if info.PurgedUnix > 0 {
+				log.Printf("tka: CommitVerifiedAUMs: committing previously-deleted AUM %s", h.String())
+			}
 			info.PurgedUnix = 0 // just in-case it was set for some reason
 			info.AUM = &aum
 		})
@@ -972,6 +975,9 @@ func Compact(storage CompactableChonk, head AUMHash, opts CompactionOptions) (la
 
 	if err := storage.SetLastActiveAncestor(lastActiveAncestor); err != nil {
 		return AUMHash{}, err
+	}
+	if len(toDelete) > 0 {
+		log.Printf("tka compaction: purging %d AUM(s) [%q]", len(toDelete), toDelete)
 	}
 	return lastActiveAncestor, storage.PurgeAUMs(toDelete)
 }
