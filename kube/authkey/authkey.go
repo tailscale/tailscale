@@ -64,7 +64,7 @@ func ClearReissueAuthKey(ctx context.Context, kc kubeclient.Client, stateSecretN
 		},
 	}
 
-	if profileKey := string(existing.Data["_current-profile"]); profileKey != "" {
+	if profileKey := string(existing.Data[string(ipn.CurrentProfileStateKey)]); profileKey != "" {
 		s.Data[profileKey] = nil
 	}
 
