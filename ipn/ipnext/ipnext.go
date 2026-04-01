@@ -22,6 +22,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/mapx"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
 	"tailscale.com/wgengine/filter"
 )
@@ -375,6 +376,12 @@ type Hooks struct {
 	// is created. It is called with the LocalBackend locked.
 	NewControlClient feature.Hooks[NewControlClientCallback]
 
+	// OnNetMapToggle is called (with LocalBackend.mu held) when the network map
+	// is toggled from nil to non-nil, or non-nil to nil. This usually happens
+	// when the client connects to the control plane and receives the initial MapResponse,
+	// or when the client disconnects and the network map is cleared.
+	OnNetMapToggle feature.Hooks[func(*netmap.NetworkMap)]
+
 	// OnSelfChange is called (with LocalBackend.mu held) when the self node
 	// changes, including changing to nothing (an invalid view).
 	OnSelfChange feature.Hooks[func(tailcfg.NodeView)]
@@ -465,9 +472,15 @@ type FilterHooks struct {
 //
 // It is not a snapshot in time but is locked to a particular node.
 type NodeBackend interface {
+	// Self returns the current node.
+	Self() tailcfg.NodeView
+
 	// AppendMatchingPeers appends all peers that match the predicate
 	// to the base slice and returns it.
 	AppendMatchingPeers(base []tailcfg.NodeView, pred func(tailcfg.NodeView) bool) []tailcfg.NodeView
+
+	// Peers returns all the current peers.
+	Peers() []tailcfg.NodeView
 
 	// PeerCaps returns the capabilities that src has to this node.
 	PeerCaps(src netip.Addr) tailcfg.PeerCapMap
