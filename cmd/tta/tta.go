@@ -187,6 +187,7 @@ func main() {
 		conn, ok := r.Context().Value(connContextKey).(net.Conn)
 		if !ok {
 			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
 		w.Write([]byte(conn.LocalAddr().String()))
 	})
