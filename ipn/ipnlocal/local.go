@@ -4990,6 +4990,25 @@ func (b *LocalBackend) NetMap() *netmap.NetworkMap {
 	return b.currentNode().NetMap()
 }
 
+// WaitForNetMap returns the latest cached network map received from
+// controlclient, or waits until the initial network map has been received.
+func (b *LocalBackend) WaitForNetMap(ctx context.Context) (*netmap.NetworkMap, error) {
+	nm := b.NetMap()
+	if nm != nil {
+		return nm, nil
+	}
+
+	// Wait for the initial NetworkMap to arrive:
+	b.WatchNotifications(ctx, ipn.NotifyInitialNetMap, nil, func(n *ipn.Notify) (keepGoing bool) {
+		nm = n.NetMap
+		return nm == nil // Keep going until nm contains a network map.
+	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nm, nil
+}
+
 func (b *LocalBackend) isEngineBlocked() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()

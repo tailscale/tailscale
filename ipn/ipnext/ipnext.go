@@ -465,9 +465,15 @@ type FilterHooks struct {
 //
 // It is not a snapshot in time but is locked to a particular node.
 type NodeBackend interface {
+	// Self returns the current node.
+	Self() tailcfg.NodeView
+
 	// AppendMatchingPeers appends all peers that match the predicate
 	// to the base slice and returns it.
 	AppendMatchingPeers(base []tailcfg.NodeView, pred func(tailcfg.NodeView) bool) []tailcfg.NodeView
+
+	// Peers returns all the current peers.
+	Peers() []tailcfg.NodeView
 
 	// PeerCaps returns the capabilities that src has to this node.
 	PeerCaps(src netip.Addr) tailcfg.PeerCapMap
