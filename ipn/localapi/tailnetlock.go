@@ -122,7 +122,7 @@ func (h *Handler) serveTKAInit(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serveTKAModify(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {
-		http.Error(w, "network-lock modify access denied", http.StatusForbidden)
+		http.Error(w, "tailnet-lock modify access denied", http.StatusForbidden)
 		return
 	}
 	if r.Method != httpm.POST {
@@ -141,7 +141,7 @@ func (h *Handler) serveTKAModify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.b.NetworkLockModify(req.AddKeys, req.RemoveKeys); err != nil {
-		http.Error(w, "network-lock modify failed: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "tailnet-lock modify failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(204)
@@ -149,7 +149,7 @@ func (h *Handler) serveTKAModify(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serveTKAWrapPreauthKey(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {
-		http.Error(w, "network-lock modify access denied", http.StatusForbidden)
+		http.Error(w, "tailnet-lock modify access denied", http.StatusForbidden)
 		return
 	}
 	if r.Method != httpm.POST {
@@ -212,7 +212,7 @@ func (h *Handler) serveTKAVerifySigningDeeplink(w http.ResponseWriter, r *http.R
 
 func (h *Handler) serveTKADisable(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {
-		http.Error(w, "network-lock modify access denied", http.StatusForbidden)
+		http.Error(w, "tailnet-lock modify access denied", http.StatusForbidden)
 		return
 	}
 	if r.Method != httpm.POST {
@@ -228,7 +228,7 @@ func (h *Handler) serveTKADisable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.b.NetworkLockDisable(secret); err != nil {
-		http.Error(w, "network-lock disable failed: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "tailnet-lock disable failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -236,7 +236,7 @@ func (h *Handler) serveTKADisable(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serveTKALocalDisable(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {
-		http.Error(w, "network-lock modify access denied", http.StatusForbidden)
+		http.Error(w, "tailnet-lock modify access denied", http.StatusForbidden)
 		return
 	}
 	if r.Method != httpm.POST {
@@ -252,7 +252,7 @@ func (h *Handler) serveTKALocalDisable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.b.NetworkLockForceLocalDisable(); err != nil {
-		http.Error(w, "network-lock local disable failed: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "tailnet-lock local disable failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
