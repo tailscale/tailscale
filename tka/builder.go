@@ -67,11 +67,11 @@ func (b *UpdateBuilder) AddKey(key Key) error {
 	}
 
 	if _, err := b.state.GetKey(keyID); err == nil {
-		return fmt.Errorf("cannot add key %v: already exists", key)
+		return fmt.Errorf("cannot add key tlpub:%x: already exists", key.Public)
 	}
 
 	if len(b.state.Keys) >= maxKeys {
-		return fmt.Errorf("cannot add key %v: maximum number of keys reached", key)
+		return fmt.Errorf("cannot add key tlpub:%x: maximum number of keys reached", key.Public)
 	}
 
 	return b.mkUpdate(AUM{MessageKind: AUMAddKey, Key: &key})
