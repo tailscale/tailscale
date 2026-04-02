@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/ipn"
 	"tailscale.com/kube/kubeapi"
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/kube/kubetypes"
@@ -42,6 +43,15 @@ func TestSetReissueAuthKey(t *testing.T) {
 func TestClearReissueAuthKey(t *testing.T) {
 	var patched map[string][]byte
 	kc := &kubeclient.FakeClient{
+		GetSecretImpl: func(ctx context.Context, name string) (*kubeapi.Secret, error) {
+			return &kubeapi.Secret{
+				Data: map[string][]byte{
+					"_current-profile": []byte("profile-abc1"),
+					"profile-abc1":     []byte("some-profile-data"),
+					"_machinekey":      []byte("machine-key-data"),
+				},
+			}, nil
+		},
 		StrategicMergePatchSecretImpl: func(ctx context.Context, name string, secret *kubeapi.Secret, _ string) error {
 			patched = secret.Data
 			return nil
@@ -54,7 +64,14 @@ func TestClearReissueAuthKey(t *testing.T) {
 	}
 
 	want := map[string][]byte{
-		kubetypes.KeyReissueAuthkey: nil,
+		kubetypes.KeyReissueAuthkey:        nil,
+		kubetypes.KeyDeviceID:              nil,
+		kubetypes.KeyDeviceFQDN:            nil,
+		kubetypes.KeyDeviceIPs:             nil,
+		string(ipn.MachineKeyStateKey):     nil,
+		string(ipn.CurrentProfileStateKey): nil,
+		string(ipn.KnownProfilesStateKey):  nil,
+		"profile-abc1":                     nil,
 	}
 	if diff := cmp.Diff(want, patched); diff != "" {
 		t.Errorf("ClearReissueAuthKey() mismatch (-want +got):\n%s", diff)
