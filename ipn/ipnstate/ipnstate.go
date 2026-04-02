@@ -48,6 +48,12 @@ type Status struct {
 	TailscaleIPs []netip.Addr // Tailscale IP(s) assigned to this node
 	Self         *PeerStatus
 
+	// UsingCachedNetworkMap is whether Self has a network map that was loaded
+	// from a local cache. If false, either Self has no network map (for
+	// example, if the node is not running), or its network map was received
+	// directly from the control plane.
+	UsingCachedNetworkMap bool
+
 	// ExitNodeStatus describes the current exit node.
 	// If nil, an exit node is not in use.
 	ExitNodeStatus *ExitNodeStatus `json:"ExitNodeStatus,omitempty"`
