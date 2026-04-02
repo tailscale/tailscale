@@ -38,6 +38,17 @@ import (
 	"tailscale.com/version/distro"
 )
 
+// connContextKeyType is the type of connContextKey, which isn't of type
+// `string` to avoid collisions while being used as a context key.
+type connContextKeyType string
+
+const (
+	// connContextKey is the key for looking up the TCP connection
+	// corresponding to an HTTP request coming in from testing
+	// infrastructure.
+	connContextKey connContextKeyType = "conn-context-key"
+)
+
 var (
 	driverAddr = flag.String("driver", "test-driver.tailscale:8008", "address of the test driver; by default we use the DNS name test-driver.tailscale which is special cased in the emulated network's DNS server")
 )
@@ -55,9 +66,13 @@ func serveCmd(w http.ResponseWriter, cmd string, args ...string) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	if err != nil {
 		w.Header().Set("Exec-Err", err.Error())
+		if exiterr, ok := err.(*exec.ExitError); ok {
+			w.Header().Set("Exec-Exit-Code", strconv.Itoa(exiterr.ExitCode()))
+		}
 		w.WriteHeader(500)
 		log.Printf("Err on serveCmd for %q %v, %d bytes of output: %v", cmd, args, len(out), err)
 	} else {
+		w.Header().Set("Exec-Exit-Code", "0")
 		log.Printf("Did serveCmd for %q %v, %d bytes of output", cmd, args, len(out))
 	}
 	w.Write(out)
@@ -139,8 +154,12 @@ func main() {
 		}
 		ttaMux.ServeHTTP(w, r)
 	})
+
 	var hs http.Server
 	hs.Handler = &serveMux
+	hs.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
+		return context.WithValue(ctx, connContextKey, c)
+	}
 	revSt := revDialState{
 		needConnCh: make(chan bool, 1),
 		debug:      debug,
@@ -163,6 +182,22 @@ func main() {
 	})
 	ttaMux.HandleFunc("/up", func(w http.ResponseWriter, r *http.Request) {
 		serveCmd(w, "tailscale", "up", "--login-server=http://control.tailscale")
+	})
+	ttaMux.HandleFunc("/ip", func(w http.ResponseWriter, r *http.Request) {
+		conn, ok := r.Context().Value(connContextKey).(net.Conn)
+		if !ok {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte(conn.LocalAddr().String()))
+	})
+	ttaMux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+		// Send 4 packets and wait a maximum of 1 second for each. The deadline
+		// is required for ping to return a non-zero exit code on no response.
+		// The busybox in question here is the breakglass busybox inside the
+		// natlab QEMU image - the host running the test does not need to have
+		// busybox installed at that path, or at all.
+		serveCmd(w, "/usr/local/bin/busybox", "ping", "-c", "4", "-W", "1", r.URL.Query().Get("host"))
 	})
 	ttaMux.HandleFunc("/fw", addFirewallHandler)
 	ttaMux.HandleFunc("/logs", func(w http.ResponseWriter, r *http.Request) {

@@ -119,6 +119,8 @@ func (c *Config) AddNode(opts ...any) *Node {
 				n.rotateDisco = true
 			case PreICMPPing:
 				n.preICMPPing = true
+			case DontJoinTailnet:
+				n.dontJoinTailnet = true
 			case VerboseSyslog:
 				n.verboseSyslog = true
 			default:
@@ -141,10 +143,11 @@ func (c *Config) AddNode(opts ...any) *Node {
 type NodeOption string
 
 const (
-	HostFirewall  NodeOption = "HostFirewall"
-	RotateDisco   NodeOption = "RotateDisco"
-	PreICMPPing   NodeOption = "PreICMPPing"
-	VerboseSyslog NodeOption = "VerboseSyslog"
+	HostFirewall    NodeOption = "HostFirewall"
+	RotateDisco     NodeOption = "RotateDisco"
+	PreICMPPing     NodeOption = "PreICMPPing"
+	DontJoinTailnet NodeOption = "DontJoinTailnet"
+	VerboseSyslog   NodeOption = "VerboseSyslog"
 )
 
 // TailscaledEnv is а option that can be passed to Config.AddNode
@@ -209,11 +212,12 @@ type Node struct {
 	n      *node // nil until NewServer called
 	client *NodeAgentClient
 
-	env           []TailscaledEnv
-	hostFW        bool
-	rotateDisco   bool
-	preICMPPing   bool
-	verboseSyslog bool
+	env             []TailscaledEnv
+	hostFW          bool
+	rotateDisco     bool
+	preICMPPing     bool
+	verboseSyslog   bool
+	dontJoinTailnet bool
 
 	// TODO(bradfitz): this is halfway converted to supporting multiple NICs
 	// but not done. We need a MAC-per-Network.
@@ -278,6 +282,13 @@ func (n *Node) PostConnectedToControl(ctx context.Context) error {
 // non-disco traffic.
 func (n *Node) PreICMPPing() bool {
 	return n.preICMPPing
+}
+
+// ShouldJoinTailnet reports whether node should join the test tailnet. Machines in
+// the virtual universe that aren't on the tailnet are useful for testing that
+// Tailscale does not break connectivity to resources outside the tailnet.
+func (n *Node) ShouldJoinTailnet() bool {
+	return !n.dontJoinTailnet
 }
 
 // IsV6Only reports whether this node is only connected to IPv6 networks.
