@@ -303,9 +303,6 @@ func TestResetContainerbootState(t *testing.T) {
 				kubetypes.KeyCapVer: capver,
 				kubetypes.KeyPodUID: []byte("1234"),
 				// Cleared keys.
-				kubetypes.KeyDeviceID:            nil,
-				kubetypes.KeyDeviceFQDN:          nil,
-				kubetypes.KeyDeviceIPs:           nil,
 				kubetypes.KeyHTTPSEndpoint:       nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,
@@ -321,9 +318,6 @@ func TestResetContainerbootState(t *testing.T) {
 				kubetypes.KeyCapVer:         capver,
 				kubetypes.KeyReissueAuthkey: nil,
 				// Cleared keys.
-				kubetypes.KeyDeviceID:            nil,
-				kubetypes.KeyDeviceFQDN:          nil,
-				kubetypes.KeyDeviceIPs:           nil,
 				kubetypes.KeyHTTPSEndpoint:       nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,
@@ -338,9 +332,6 @@ func TestResetContainerbootState(t *testing.T) {
 				kubetypes.KeyCapVer: capver,
 				// reissue_authkey not cleared.
 				// Cleared keys.
-				kubetypes.KeyDeviceID:            nil,
-				kubetypes.KeyDeviceFQDN:          nil,
-				kubetypes.KeyDeviceIPs:           nil,
 				kubetypes.KeyHTTPSEndpoint:       nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,
@@ -355,9 +346,6 @@ func TestResetContainerbootState(t *testing.T) {
 				kubetypes.KeyCapVer: capver,
 				// reissue_authkey not cleared.
 				// Cleared keys.
-				kubetypes.KeyDeviceID:            nil,
-				kubetypes.KeyDeviceFQDN:          nil,
-				kubetypes.KeyDeviceIPs:           nil,
 				kubetypes.KeyHTTPSEndpoint:       nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,

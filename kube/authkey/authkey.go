@@ -19,6 +19,7 @@ import (
 	"log"
 	"time"
 
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/kube/kubeapi"
 	"tailscale.com/kube/kubeclient"
@@ -46,11 +47,27 @@ func SetReissueAuthKey(ctx context.Context, kc kubeclient.Client, stateSecretNam
 // ClearReissueAuthKey removes the reissue_authkey marker from the state Secret
 // to signal to the operator that we've successfully received the new key.
 func ClearReissueAuthKey(ctx context.Context, kc kubeclient.Client, stateSecretName string, fieldManager string) error {
+	existing, err := kc.GetSecret(ctx, stateSecretName)
+	if err != nil {
+		return fmt.Errorf("error getting state secret: %w", err)
+	}
+
 	s := &kubeapi.Secret{
 		Data: map[string][]byte{
-			kubetypes.KeyReissueAuthkey: nil,
+			kubetypes.KeyReissueAuthkey:        nil,
+			kubetypes.KeyDeviceID:              nil,
+			kubetypes.KeyDeviceFQDN:            nil,
+			kubetypes.KeyDeviceIPs:             nil,
+			string(ipn.MachineKeyStateKey):     nil,
+			string(ipn.CurrentProfileStateKey): nil,
+			string(ipn.KnownProfilesStateKey):  nil,
 		},
 	}
+
+	if profileKey := string(existing.Data["_current-profile"]); profileKey != "" {
+		s.Data[profileKey] = nil
+	}
+
 	return kc.StrategicMergePatchSecret(ctx, stateSecretName, s, fieldManager)
 }
 

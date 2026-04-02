@@ -127,6 +127,9 @@ func (kc *kubeClient) deleteAuthKey(ctx context.Context) error {
 
 // resetContainerbootState resets state from previous runs of containerboot to
 // ensure the operator doesn't use stale state when a Pod is first recreated.
+//
+// Device identity keys (device_id, device_fqdn, device_ips) are preserved so
+// the operator can clean up the old device from the control plane.
 func (kc *kubeClient) resetContainerbootState(ctx context.Context, podUID string, tailscaledConfigAuthkey string) error {
 	existingSecret, err := kc.GetSecret(ctx, kc.stateSecret)
 	switch {

@@ -30,19 +30,8 @@ const (
 	keyDeviceFQDN = ipn.StateKey(kubetypes.KeyDeviceFQDN)
 )
 
-// SetInitialKeys sets Pod UID and cap ver and clears tailnet device state
-// keys to help stop the operator using stale tailnet device state.
+// SetInitialKeys sets Pod UID and cap ver.
 func SetInitialKeys(store ipn.StateStore, podUID string) error {
-	// Clear device state keys first so the operator knows if the pod UID
-	// matches, the other values are definitely not stale.
-	for _, key := range []ipn.StateKey{keyDeviceID, keyDeviceFQDN, keyDeviceIPs} {
-		if _, err := store.ReadState(key); err == nil {
-			if err := store.WriteState(key, nil); err != nil {
-				return fmt.Errorf("error writing %q to state store: %w", key, err)
-			}
-		}
-	}
-
 	if err := store.WriteState(keyPodUID, []byte(podUID)); err != nil {
 		return fmt.Errorf("error writing pod UID to state store: %w", err)
 	}
