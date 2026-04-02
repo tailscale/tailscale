@@ -743,6 +743,7 @@ func TestUpdateDiscoForNodeCallback(t *testing.T) {
 				nu.lastTSMPKey, nu.lastTSMPDisco)
 		}
 	})
+	// Even though key stays in list of update, the updater only triggers on TSMP.
 	t.Run("key_not_wired_through_to_updater", func(t *testing.T) {
 		nu := &rememberLastNetmapUpdater{
 			done: make(chan any, 1),
@@ -776,6 +777,7 @@ func TestUpdateDiscoForNodeCallback(t *testing.T) {
 				DiscoKey: &newKey,
 			}},
 		}
+		// Not TSMP Path, just regular injection path.
 		ms.HandleNonKeepAliveMapResponse(t.Context(), resp)
 		<-nu.done
 
@@ -784,6 +786,119 @@ func TestUpdateDiscoForNodeCallback(t *testing.T) {
 				nu.lastTSMPKey, nu.lastTSMPDisco)
 		}
 	})
+}
+
+func TestUpdateDiscoForNodeCallbackWithFullNetmap(t *testing.T) {
+	now := time.Now()
+	oldTime := time.Unix(1, 0)
+
+	tests := []struct {
+		name            string
+		initialOnline   bool
+		initialLastSeen time.Time
+		updateOnline    bool
+		updateLastSeen  time.Time
+		expectNewDisco  bool
+	}{
+		{
+			name:            "disco key wired through when newer lastSeen",
+			initialOnline:   false,
+			initialLastSeen: oldTime,
+			updateOnline:    false,
+			updateLastSeen:  now,
+			expectNewDisco:  true,
+		},
+		{
+			name:            "disco key NOT wired through when older lastSeen",
+			initialOnline:   false,
+			initialLastSeen: now,
+			updateOnline:    false,
+			updateLastSeen:  oldTime,
+			expectNewDisco:  false,
+		},
+		{
+			name:            "disco key wired through when newer lastSeen, going offline",
+			initialOnline:   true,
+			initialLastSeen: oldTime,
+			updateOnline:    false,
+			updateLastSeen:  now,
+			expectNewDisco:  true,
+		},
+		{
+			name:            "online flip with newer lastSeen",
+			initialOnline:   false,
+			initialLastSeen: oldTime,
+			updateOnline:    true,
+			updateLastSeen:  now,
+			expectNewDisco:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nu := &rememberLastNetmapUpdater{
+				done: make(chan any, 1),
+			}
+			ms := newTestMapSession(t, nu)
+
+			oldKey := key.NewDisco()
+
+			// Initial node
+			node := tailcfg.Node{
+				ID:       1,
+				Key:      key.NewNode().Public(),
+				DiscoKey: oldKey.Public(),
+				Online:   new(tt.initialOnline),
+				LastSeen: new(tt.initialLastSeen),
+				Name:     "host.network.ts.net",
+			}
+
+			if nm := ms.netmapForResponse(&tailcfg.MapResponse{
+				Peers: []*tailcfg.Node{&node},
+			}); len(nm.Peers) != 1 {
+				t.Fatalf("node not inserted")
+			}
+
+			newKey := key.NewDisco()
+
+			// Updated node
+			newNode := tailcfg.Node{
+				ID:       1,
+				Key:      node.Key,
+				DiscoKey: newKey.Public(),
+				Online:   new(tt.updateOnline),
+				LastSeen: new(tt.updateLastSeen),
+				Name:     "host.network.ts.net",
+			}
+
+			ms.HandleNonKeepAliveMapResponse(t.Context(), &tailcfg.MapResponse{
+				Node: &newNode,
+				Peers: []*tailcfg.Node{
+					&newNode,
+				},
+			})
+			<-nu.done
+
+			newMap := nu.last
+			if n := len(newMap.Peers); n != 1 {
+				t.Fatalf("netmap not right length, got %d, expected %d", n, 1)
+			}
+
+			peer := newMap.Peers[0]
+
+			expectedDisco := oldKey.Public()
+			if tt.expectNewDisco {
+				expectedDisco = newKey.Public()
+			}
+
+			if peer.Key() != node.Key || peer.DiscoKey() != expectedDisco {
+				t.Fatalf("expected [%s]=%s, got [%s]=%s",
+					node.Key, expectedDisco,
+					peer.Key(), peer.DiscoKey(),
+				)
+			}
+		})
+	}
 }
 
 func first[T any](s []T) T {

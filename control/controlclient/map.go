@@ -295,6 +295,7 @@ func (ms *mapSession) handleNonKeepAliveMapResponse(ctx context.Context, resp *t
 	ms.patchifyPeersChanged(resp)
 
 	ms.removeUnwantedDiscoUpdates(resp)
+	ms.removeUnwantedDiscoUpdatesFromFullNetmapUpdate(resp)
 
 	ms.updateStateFromResponse(resp)
 
@@ -404,6 +405,9 @@ type updateStats struct {
 // where the node is offline and has last been seen before the recorded last seen.
 func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse) {
 	existingMap := ms.netmap()
+	if existingMap == nil {
+		return
+	}
 	acceptedDiscoUpdates := resp.PeersChangedPatch[:0]
 
 	for _, change := range resp.PeersChangedPatch {
@@ -440,6 +444,62 @@ func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse) {
 	}
 
 	resp.PeersChangedPatch = acceptedDiscoUpdates
+}
+
+// removeUnwantedDiscoUpdatesFromFullNetmapUpdate makes a pass over the full
+// set of peers in an update, usually only received when getting a full netmap
+// from control at startup. If the pass finds a peer with a disco key where the
+// local netmap has a newer key learned via TSMP, overwrite the update with the
+// key from TSMP.
+func (ms *mapSession) removeUnwantedDiscoUpdatesFromFullNetmapUpdate(resp *tailcfg.MapResponse) {
+	if len(resp.Peers) == 0 {
+		return
+	}
+	existingMap := ms.netmap()
+	if existingMap == nil {
+		return
+	}
+	for _, peer := range resp.Peers {
+		if peer.DiscoKey.IsZero() {
+			continue
+		}
+
+		// Accept if:
+		// - peer is new
+		peerIdx := existingMap.PeerIndexByNodeID(peer.ID)
+		if peerIdx < 0 {
+			continue
+		}
+
+		// Accept if:
+		// - disco key has not changed
+		existingNode := existingMap.Peers[peerIdx]
+		if existingNode.DiscoKey() == peer.DiscoKey {
+			continue
+		}
+
+		// Accept if:
+		// - key has changed but peer is online
+		if peer.Online != nil && *peer.Online {
+			continue
+		}
+
+		// Accept if:
+		// - there's no last seen on the existing node
+		existingLastSeen, ok := existingNode.LastSeen().GetOk()
+		if !ok {
+			continue
+		}
+
+		// Accept if:
+		// - last seen on on control is higher
+		if peer.LastSeen != nil && peer.LastSeen.After(existingLastSeen) {
+			continue
+		}
+
+		// Overwrite the key in the full netmap update.
+		peer.DiscoKey = existingNode.DiscoKey()
+	}
 }
 
 // updateStateFromResponse updates ms from res. It takes ownership of res.
