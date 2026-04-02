@@ -130,7 +130,7 @@ func runTests(m *testing.M) (int, error) {
 			if err := kindProvider.Create(kindClusterName,
 				cluster.CreateWithWaitForReady(5*time.Minute),
 				cluster.CreateWithKubeconfigPath(kubeconfig),
-				cluster.CreateWithNodeImage("kindest/node:v1.30.0"),
+				cluster.CreateWithNodeImage("kindest/node:v1.35.0"),
 			); err != nil {
 				return 0, fmt.Errorf("failed to create kind cluster: %w", err)
 			}
@@ -321,7 +321,6 @@ func runTests(m *testing.M) (int, error) {
 		// An access token will last for an hour which is plenty of time for
 		// the tests to run. No need for token refresh logic.
 		tsClient = tailscale.NewClient("-", tailscale.APIKey(tk.AccessToken))
-		tsClient.BaseURL = "http://localhost:31544"
 	}
 
 	var ossTag string
@@ -389,6 +388,15 @@ func runTests(m *testing.M) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to load helm chart: %w", err)
 	}
+	extraEnv := []map[string]any{
+		{
+			"name":  "K8S_PROXY_IMAGE",
+			"value": "local/k8s-proxy:" + ossTag,
+		},
+	}
+	if *fDevcontrol {
+		extraEnv = append(extraEnv, map[string]any{"name": "TS_DEBUG_ACME_DIRECTORY_URL", "value": "https://pebble:14000/dir"})
+	}
 	values := map[string]any{
 		"loginServer": clusterLoginServer,
 		"oauth": map[string]any{
@@ -399,17 +407,8 @@ func runTests(m *testing.M) (int, error) {
 			"mode": "true",
 		},
 		"operatorConfig": map[string]any{
-			"logging": "debug",
-			"extraEnv": []map[string]any{
-				{
-					"name":  "K8S_PROXY_IMAGE",
-					"value": "local/k8s-proxy:" + ossTag,
-				},
-				{
-					"name":  "TS_DEBUG_ACME_DIRECTORY_URL",
-					"value": "https://pebble:14000/dir",
-				},
-			},
+			"logging":  "debug",
+			"extraEnv": extraEnv,
 			"image": map[string]any{
 				"repo":       "local/k8s-operator",
 				"tag":        ossTag,
@@ -539,6 +538,15 @@ func tagForRepo(dir string) (string, error) {
 }
 
 func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl client.Client) error {
+	var env []tsapi.Env
+	if *fDevcontrol {
+		env = []tsapi.Env{
+			{
+				Name:  "TS_DEBUG_ACME_DIRECTORY_URL",
+				Value: "https://pebble:14000/dir",
+			},
+		}
+	}
 	pc := &tsapi.ProxyClass{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: tsapi.SchemeGroupVersion.String(),
@@ -555,6 +563,7 @@ func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl c
 					},
 					TailscaleContainer: &tsapi.Container{
 						ImagePullPolicy: "IfNotPresent",
+						Env:             env,
 					},
 				},
 			},
