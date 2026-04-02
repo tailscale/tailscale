@@ -241,6 +241,8 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			return
 		}
+	case "clear-netmap-cache":
+		h.b.ClearNetmapCache(r.Context())
 	case "":
 		err = fmt.Errorf("missing parameter 'action'")
 	default:
