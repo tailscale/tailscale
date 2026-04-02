@@ -284,10 +284,10 @@ func (n *Node) PreICMPPing() bool {
 	return n.preICMPPing
 }
 
-// JoinTailnet reports whether node should join the test tailnet. Machines in
+// ShouldJoinTailnet reports whether node should join the test tailnet. Machines in
 // the virtual universe that aren't on the tailnet are useful for testing that
 // Tailscale does not break connectivity to resources outside the tailnet.
-func (n *Node) JoinTailnet() bool {
+func (n *Node) ShouldJoinTailnet() bool {
 	return !n.dontJoinTailnet
 }
 

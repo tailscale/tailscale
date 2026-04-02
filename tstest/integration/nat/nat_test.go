@@ -400,7 +400,7 @@ func (nt *natTest) setupTest(ctx context.Context, addNode ...addNodeFunc) (nodes
 				t.Logf("%v firewalled", node)
 			}
 
-			if node.JoinTailnet() {
+			if node.ShouldJoinTailnet() {
 				if err := up(ctx, c); err != nil {
 					return fmt.Errorf("%v up: %w", node, err)
 				}
@@ -430,7 +430,7 @@ func (nt *natTest) setupTest(ctx context.Context, addNode ...addNodeFunc) (nodes
 	return nodes, clients, nt.vnet.Close
 }
 
-func (nt *natTest) testPingDirect(addNode ...addNodeFunc) bool {
+func (nt *natTest) runHostConnectivityTest(addNode ...addNodeFunc) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	nodes, clients, cleanup := nt.setupTest(ctx, addNode...)
@@ -442,7 +442,7 @@ func (nt *natTest) testPingDirect(addNode ...addNodeFunc) bool {
 	}
 	var fromClient, toClient *vnet.NodeAgentClient
 	for i, n := range nodes {
-		if n.JoinTailnet() && fromClient == nil {
+		if n.ShouldJoinTailnet() && fromClient == nil {
 			fromClient = clients[i]
 		} else {
 			toClient = clients[i]
@@ -456,7 +456,7 @@ func (nt *natTest) testPingDirect(addNode ...addNodeFunc) bool {
 	return got
 }
 
-func (nt *natTest) testPingOverTailnet(addNode ...addNodeFunc) pingRoute {
+func (nt *natTest) runTailscaleConnectivityTest(addNode ...addNodeFunc) pingRoute {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -468,7 +468,7 @@ func (nt *natTest) testPingOverTailnet(addNode ...addNodeFunc) pingRoute {
 		return ""
 	}
 	for _, n := range nodes {
-		if !n.JoinTailnet() {
+		if !n.ShouldJoinTailnet() {
 			t.Logf("%v did not join tailnet", n)
 			return ""
 		}
@@ -676,14 +676,14 @@ func (nt *natTest) want(r pingRoute) {
 
 func TestEasyEasy(t *testing.T) {
 	nt := newNatTest(t)
-	nt.testPingOverTailnet(easy, easy)
+	nt.runTailscaleConnectivityTest(easy, easy)
 	nt.want(routeDirect)
 }
 
 func TestTwoEasyNoControlDiscoRotate(t *testing.T) {
 	envknob.Setenv("TS_USE_CACHED_NETMAP", "1")
 	nt := newNatTest(t)
-	nt.testPingOverTailnet(easyNoControlDiscoRotate, easyNoControlDiscoRotate)
+	nt.runTailscaleConnectivityTest(easyNoControlDiscoRotate, easyNoControlDiscoRotate)
 	nt.want(routeDirect)
 }
 
@@ -701,7 +701,7 @@ func TestNonTailscaleCGNATEndpoint(t *testing.T) {
 		t.Skip("skipping known-broken test; set --known-broken to run; see https://github.com/tailscale/corp/issues/36270")
 	}
 	nt := newNatTest(t)
-	if !nt.testPingDirect(cgnatNoTailnet, sameLAN) {
+	if !nt.runHostConnectivityTest(cgnatNoTailnet, sameLAN) {
 		t.Fatalf("could not ping")
 	}
 }
@@ -722,13 +722,13 @@ func TestNonTailscaleCGNATEndpoint(t *testing.T) {
 // packet over a particular DERP from that peer.
 func TestFallbackDERPRegionForPeer(t *testing.T) {
 	nt := newNatTest(t)
-	nt.testPingOverTailnet(hard, hardNoDERPOrEndoints)
+	nt.runTailscaleConnectivityTest(hard, hardNoDERPOrEndoints)
 	nt.want(routeDERP)
 }
 
 func TestSingleJustIPv6(t *testing.T) {
 	nt := newNatTest(t)
-	nt.testPingOverTailnet(just6)
+	nt.runTailscaleConnectivityTest(just6)
 }
 
 var knownBroken = flag.Bool("known-broken", false, "run known-broken tests")
@@ -742,24 +742,24 @@ func TestSingleDualBrokenIPv4(t *testing.T) {
 		t.Skip("skipping known-broken test; set --known-broken to run; see https://github.com/tailscale/tailscale/issues/13346")
 	}
 	nt := newNatTest(t)
-	nt.testPingOverTailnet(v6AndBlackholedIPv4)
+	nt.runTailscaleConnectivityTest(v6AndBlackholedIPv4)
 }
 
 func TestJustIPv6(t *testing.T) {
 	nt := newNatTest(t)
-	nt.testPingOverTailnet(just6, just6)
+	nt.runTailscaleConnectivityTest(just6, just6)
 	nt.want(routeDirect)
 }
 
 func TestEasy4AndJust6(t *testing.T) {
 	nt := newNatTest(t)
-	nt.testPingOverTailnet(easyAnd6, just6)
+	nt.runTailscaleConnectivityTest(easyAnd6, just6)
 	nt.want(routeDirect)
 }
 
 func TestSameLAN(t *testing.T) {
 	nt := newNatTest(t)
-	nt.testPingOverTailnet(easy, sameLAN)
+	nt.runTailscaleConnectivityTest(easy, sameLAN)
 	nt.want(routeLocal)
 }
 
@@ -769,25 +769,25 @@ func TestSameLAN(t *testing.T) {
 // * client machine has a stateful host firewall (e.g. ufw)
 func TestBPFDisco(t *testing.T) {
 	nt := newNatTest(t)
-	nt.testPingOverTailnet(easyPMPFWPlusBPF, hard)
+	nt.runTailscaleConnectivityTest(easyPMPFWPlusBPF, hard)
 	nt.want(routeDirect)
 }
 
 func TestHostFWNoBPF(t *testing.T) {
 	nt := newNatTest(t)
-	nt.testPingOverTailnet(easyPMPFWNoBPF, hard)
+	nt.runTailscaleConnectivityTest(easyPMPFWNoBPF, hard)
 	nt.want(routeDERP)
 }
 
 func TestHostFWPair(t *testing.T) {
 	nt := newNatTest(t)
-	nt.testPingOverTailnet(easyFW, easyFW)
+	nt.runTailscaleConnectivityTest(easyFW, easyFW)
 	nt.want(routeDirect)
 }
 
 func TestOneHostFW(t *testing.T) {
 	nt := newNatTest(t)
-	nt.testPingOverTailnet(easy, easyFW)
+	nt.runTailscaleConnectivityTest(easy, easyFW)
 	nt.want(routeDirect)
 }
 
@@ -809,7 +809,7 @@ func TestPair(t *testing.T) {
 	}
 
 	nt := newNatTest(t)
-	nt.testPingOverTailnet(find(t1), find(t2))
+	nt.runTailscaleConnectivityTest(find(t1), find(t2))
 }
 
 var runGrid = flag.Bool("run-grid", false, "run grid test")
@@ -845,7 +845,7 @@ func TestGrid(t *testing.T) {
 
 				if route == "" {
 					nt := newNatTest(t)
-					route = nt.testPingOverTailnet(a.fn, b.fn)
+					route = nt.runTailscaleConnectivityTest(a.fn, b.fn)
 					if err := os.WriteFile(filename, []byte(string(route)), 0666); err != nil {
 						t.Fatalf("writeFile: %v", err)
 					}
