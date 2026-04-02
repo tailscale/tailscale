@@ -1133,14 +1133,36 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 
 			// If the key changed, mark the connection for reconfiguration.
 			pub := p.PublicKey
+
 			if old, ok := prevEP[pub]; ok && old != p.DiscoKey {
 				// If the disco key was learned via TSMP, we do not need to reset the
 				// wireguard config as the new key was received over an existing wireguard
 				// connection.
-				if discoTSMP, okTSMP := e.tsmpLearnedDisco[p.PublicKey]; okTSMP &&
-					discoTSMP == p.DiscoKey {
-					delete(e.tsmpLearnedDisco, p.PublicKey)
-					e.logf("wgengine: Skipping reconfig (TSMP key): %s changed from %q to %q", pub.ShortString(), old, p.DiscoKey)
+				if discoTSMP, okTSMP := e.tsmpLearnedDisco[p.PublicKey]; okTSMP {
+					if discoTSMP == p.DiscoKey {
+						// Key matches, remove entry from map.
+						e.logf("wgengine: Skipping reconfig (TSMP key): %s changed from %q to %q",
+							pub.ShortString(), old, p.DiscoKey)
+						delete(e.tsmpLearnedDisco, p.PublicKey)
+					} else {
+						// The new disco key does not match what we received via
+						// TSMP for this peer. This is unexpected, so log it.
+						// If it does happen, overwrite the previously-saved
+						// disco key with the new one for now:  We expect another
+						// update must be pending in that case, so keep the map
+						// entry.
+						// The reason why this should never happen is that only a single
+						// request is coming through the netmap pipeline at a time, and there
+						// should realistically ever only be a single entry in the map. This
+						// is really a belt and suspenders solution to find usage that is
+						// inconsistent with our expectations.
+						e.logf("wgengine: [unexpected] Reconfig: using TSMP key for %s (control stale): tsmp=%q control=%q old=%q",
+							pub.ShortString(), discoTSMP, p.DiscoKey, old)
+						metricTSMPLearnedKeyMismatch.Add(1)
+						p.DiscoKey = discoTSMP
+					}
+
+					// Skip session clear no matter what.
 					continue
 				}
 
@@ -1875,6 +1897,8 @@ var (
 
 	metricTSMPDiscoKeyAdvertisementSent  = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_sent")
 	metricTSMPDiscoKeyAdvertisementError = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_error")
+
+	metricTSMPLearnedKeyMismatch = clientmetric.NewCounter("magicsock_tsmp_learned_key_mismatch")
 )
 
 func (e *userspaceEngine) InstallCaptureHook(cb packet.CaptureCallback) {
