@@ -582,7 +582,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 
 	// Call our linkChange code once with the current state.
 	// Following changes are triggered via the eventbus.
-	cd, err := netmon.NewChangeDelta(nil, b.interfaceState, false, false)
+	cd, err := netmon.NewChangeDelta(nil, b.interfaceState, 0, false)
 	if err != nil {
 		b.logf("[unexpected] setting initial netmon state failed: %v", err)
 	} else {
