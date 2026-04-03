@@ -55,7 +55,7 @@
           system = system;
           overlays = [
             (final: prev: {
-              go_1_26 = prev.go_1_26.overrideAttrs {
+              go_1_26 = prev.go_1_26.overrideAttrs (old: {
                 version = goVersion;
                 src = prev.fetchFromGitHub {
                   owner = "tailscale";
@@ -63,7 +63,19 @@
                   rev = toolChainRev;
                   sha256 = gitHash;
                 };
-              };
+                # The Tailscale Go fork carries a placeholder in
+                # src/runtime/debug/mod.go that must be replaced with
+                # the actual toolchain git rev at build time. Without
+                # this, binaries report an empty tailscale.toolchain.rev
+                # and the runtime assertion in
+                # assert_ts_toolchain_match.go panics.
+                postPatch =
+                  (old.postPatch or "")
+                  + ''
+                    substituteInPlace src/runtime/debug/mod.go \
+                      --replace-fail "TAILSCALE_GIT_REV_TO_BE_REPLACED_AT_BUILD_TIME" "${toolChainRev}"
+                  '';
+              });
             })
           ];
         }));
