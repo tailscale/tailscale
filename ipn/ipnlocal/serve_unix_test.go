@@ -8,6 +8,7 @@ package ipnlocal
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -100,6 +101,23 @@ func TestServeUnixSocket(t *testing.T) {
 	}
 	if rp.url.Host != "localhost" {
 		t.Errorf("url.Host = %q, want %q", rp.url.Host, "localhost")
+	}
+
+	req := httptest.NewRequest("GET", "http://foo.test.ts.net/", nil)
+	rec := httptest.NewRecorder()
+
+	rp.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatal("unexpected response code:", rec.Code)
+	}
+	resp := rec.Result()
+	defer resp.Body.Close()
+	respB, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal("read error:", err)
+	}
+	if string(respB) != testResponse {
+		t.Fatalf("unexpected response: want: '%s'; got: '%s'", testResponse, string(respB))
 	}
 }
 
