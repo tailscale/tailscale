@@ -13,6 +13,7 @@
 //
 //   - TS_AUTHKEY: the authkey to use for login. Also accepts TS_AUTH_KEY.
 //     If the value begins with "file:", it is treated as a path to a file containing the key.
+//   - TS_AUTHKEY_FILE: the path to a file containing the authkey to use for login.
 //   - TS_CLIENT_ID: the OAuth client ID. Can be used alone (ID token auto-generated
 //     in well-known environments), with TS_CLIENT_SECRET, or with TS_ID_TOKEN.
 //   - TS_CLIENT_SECRET: the OAuth client secret for generating authkeys.
