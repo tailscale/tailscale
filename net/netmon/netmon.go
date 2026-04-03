@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +31,15 @@ import (
 // Usually there are also minor network change events on wake that let
 // us check the wall time sooner than this.
 const pollWallTimeInterval = 15 * time.Second
+
+// majorTimeJumpThreshold is the minimum sleep duration that warrants
+// treating a time jump as a major event requiring socket rebinding,
+// even if the interface state appears unchanged. After a long sleep,
+// NAT mappings are likely stale and DHCP leases may have expired
+// (the renewal happens after wake, so local state may not yet reflect it).
+// Short sleeps (e.g., macOS DarkWake maintenance cycles of ~55s) should
+// not trigger rebinding if the network state is unchanged.
+const majorTimeJumpThreshold = 10 * time.Minute
 
 // message represents a message returned from an osMon.
 type message interface {
@@ -67,18 +77,18 @@ type Monitor struct {
 	stop   chan struct{} // closed on Stop
 	static bool          // static Monitor that doesn't actually monitor
 
-	mu         syncs.Mutex // guards all following fields
-	cbs        set.HandleSet[ChangeFunc]
-	ifState    *State
-	gwValid    bool       // whether gw and gwSelfIP are valid
-	gw         netip.Addr // our gateway's IP
-	gwSelfIP   netip.Addr // our own IP address (that corresponds to gw)
-	started    bool
-	closed     bool
-	goroutines sync.WaitGroup
-	wallTimer  *time.Timer // nil until Started; re-armed AfterFunc per tick
-	lastWall   time.Time
-	timeJumped bool // whether we need to send a changed=true after a big time jump
+	mu           syncs.Mutex // guards all following fields
+	cbs          set.HandleSet[ChangeFunc]
+	ifState      *State
+	gwValid      bool       // whether gw and gwSelfIP are valid
+	gw           netip.Addr // our gateway's IP
+	gwSelfIP     netip.Addr // our own IP address (that corresponds to gw)
+	started      bool
+	closed       bool
+	goroutines   sync.WaitGroup
+	wallTimer    *time.Timer // nil until Started; re-armed AfterFunc per tick
+	lastWall     time.Time
+	jumpDuration time.Duration // wall-clock time elapsed during detected time jump; 0 if no time jump observed since reset
 }
 
 // ChangeFunc is a callback function registered with Monitor that's called when the
@@ -97,10 +107,12 @@ type ChangeDelta struct {
 	// It is always non-nil.
 	new *State
 
-	// TimeJumped is whether there was a big jump in wall time since the last
-	// time we checked. This is a hint that a sleeping device might have
-	// come out of sleep.
-	TimeJumped bool
+	// JumpDuration is non-zero when a wall-clock time jump was detected,
+	// indicating the machine likely just woke from sleep. It is approximately
+	// how long the machine was asleep (the wall-clock delta since the last
+	// check, not an exact sleep measurement). Use TimeJumped() to check
+	// whether a time jump occurred.
+	JumpDuration time.Duration
 
 	DefaultRouteInterface string
 
@@ -121,19 +133,28 @@ type ChangeDelta struct {
 	RebindLikelyRequired bool
 }
 
+// TimeJumped reports whether a wall-clock time jump was detected,
+// indicating the machine likely just woke from sleep. When true,
+// JumpDuration contains the approximate duration.
+func (cd *ChangeDelta) TimeJumped() bool {
+	return cd.JumpDuration > 0
+}
+
 // CurrentState returns the current (new) state after the change.
 func (cd *ChangeDelta) CurrentState() *State {
 	return cd.new
 }
 
 // NewChangeDelta builds a ChangeDelta and eagerly computes the cached fields.
+// jumpDuration, if non-zero, indicates a wall-clock time jump was detected
+// (the machine likely woke from sleep) and is the approximate duration of the jump.
 // forceViability, if true, forces DefaultInterfaceMaybeViable to be true regardless of the
 // actual state of the default interface.  This is useful in testing.
-func NewChangeDelta(old, new *State, timeJumped bool, forceViability bool) (*ChangeDelta, error) {
+func NewChangeDelta(old, new *State, jumpDuration time.Duration, forceViability bool) (*ChangeDelta, error) {
 	cd := ChangeDelta{
-		old:        old,
-		new:        new,
-		TimeJumped: timeJumped,
+		old:          old,
+		new:          new,
+		JumpDuration: jumpDuration,
 	}
 
 	if cd.new == nil {
@@ -165,10 +186,18 @@ func NewChangeDelta(old, new *State, timeJumped bool, forceViability bool) (*Cha
 		cd.DefaultInterfaceMaybeViable = true
 	}
 
-	// Compute rebind requirement.   The default interface needs to be viable and
+	// Compute rebind requirement. The default interface needs to be viable and
 	// one of the other conditions needs to be true.
+	//
+	// Short time jumps (e.g., macOS DarkWake maintenance cycles of ~55s) are
+	// excluded — if the network state is unchanged after a brief sleep, there's
+	// no reason to rebind. However, a major time jump (over majorTimeJumpThreshold)
+	// warrants a rebind even if the local state looks the same, because NAT
+	// mappings are likely stale and DHCP leases may have changed (the renewal
+	// happens after wake, so local state may not yet reflect it).
+	majorTimeJump := cd.JumpDuration >= majorTimeJumpThreshold
 	cd.RebindLikelyRequired = (cd.old == nil ||
-		cd.TimeJumped ||
+		majorTimeJump ||
 		cd.DefaultInterfaceChanged ||
 		cd.InterfaceIPsChanged ||
 		cd.IsLessExpensive ||
@@ -181,7 +210,39 @@ func NewChangeDelta(old, new *State, timeJumped bool, forceViability bool) (*Cha
 
 // StateDesc returns a description of the old and new states for logging.
 func (cd *ChangeDelta) StateDesc() string {
-	return fmt.Sprintf("old: %v new: %v", cd.old, cd.new)
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "old: %v new: %v", cd.old, cd.new)
+	if cd.old != nil && cd.new != nil {
+		if diff := cd.old.InterfaceDiff(cd.new); diff != "" {
+			fmt.Fprintf(&sb, " diff: %s", diff)
+		}
+	}
+	if cd.RebindLikelyRequired {
+		var reasons []string
+		if cd.old == nil {
+			reasons = append(reasons, "initial-state")
+		}
+		if cd.TimeJumped() {
+			reasons = append(reasons, fmt.Sprintf("time-jumped(%v)", cd.JumpDuration.Round(time.Second)))
+		}
+		if cd.DefaultInterfaceChanged {
+			reasons = append(reasons, "default-if-changed")
+		}
+		if cd.InterfaceIPsChanged {
+			reasons = append(reasons, "ips-changed")
+		}
+		if cd.IsLessExpensive {
+			reasons = append(reasons, "less-expensive")
+		}
+		if cd.HasPACOrProxyConfigChanged {
+			reasons = append(reasons, "pac-proxy-changed")
+		}
+		if cd.AvailableProtocolsChanged {
+			reasons = append(reasons, "protocols-changed")
+		}
+		fmt.Fprintf(&sb, " rebind-reason=[%s]", strings.Join(reasons, ","))
+	}
+	return sb.String()
 }
 
 // InterfaceIPDisappeared reports whether the given IP address exists on any interface
@@ -245,7 +306,12 @@ func (cd *ChangeDelta) isInterestingInterfaceChange() bool {
 		}
 		newIps = filterRoutableIPs(newIps)
 
-		if !oldInterface.Equal(newInterface) || !prefixesEqual(oldIps, newIps) {
+		// Only consider routable IP changes and up/down state transitions
+		// as interesting. Transient metadata changes (Flags like FlagRunning,
+		// MTU, etc.) should not trigger a major link change, as they cause
+		// false "major" events on macOS and Windows when the OS notifies us
+		// of interface changes that don't affect connectivity.
+		if oldInterface.IsUp() != newInterface.IsUp() || !prefixesEqual(oldIps, newIps) {
 			return true
 		}
 	}
@@ -277,8 +343,8 @@ func (cd *ChangeDelta) isInterestingInterfaceChange() bool {
 		}
 		oldIps = filterRoutableIPs(oldIps)
 
-		// The interface's IPs, Name, MTU, etc have changed.  This is definitely interesting.
-		if !newInterface.Equal(oldInterface) || !prefixesEqual(oldIps, newIps) {
+		// Only consider routable IP changes and up/down state transitions.
+		if newInterface.IsUp() != oldInterface.IsUp() || !prefixesEqual(oldIps, newIps) {
 			return true
 		}
 	}
@@ -574,7 +640,8 @@ func (m *Monitor) handlePotentialChange(newState *State, forceCallbacks bool) {
 		return
 	}
 
-	delta, err := NewChangeDelta(oldState, newState, timeJumped, false)
+	jumpDuration := m.jumpDuration
+	delta, err := NewChangeDelta(oldState, newState, jumpDuration, false)
 	if err != nil {
 		m.logf("[unexpected] error creating ChangeDelta: %v", err)
 		return
@@ -587,12 +654,13 @@ func (m *Monitor) handlePotentialChange(newState *State, forceCallbacks bool) {
 	// See if we have a queued or new time jump signal.
 	if timeJumped {
 		m.resetTimeJumpedLocked()
+		m.logf("time jump detected (slept %v), probably wake from sleep", jumpDuration.Round(time.Second))
 	}
 	metricChange.Add(1)
 	if delta.RebindLikelyRequired {
 		metricChangeMajor.Add(1)
 	}
-	if delta.TimeJumped {
+	if delta.TimeJumped() {
 		metricChangeTimeJump.Add(1)
 	}
 	m.changed.Publish(*delta)
@@ -654,14 +722,14 @@ func (m *Monitor) checkWallTimeAdvanceLocked() bool {
 		panic("unreachable") // if callers are correct
 	}
 	now := wallTime()
-	if now.Sub(m.lastWall) > pollWallTimeInterval*3/2 {
-		m.timeJumped = true // it is reset by debounce.
+	if elapsed := now.Sub(m.lastWall); elapsed > pollWallTimeInterval*3/2 {
+		m.jumpDuration = elapsed
 	}
 	m.lastWall = now
-	return m.timeJumped
+	return m.jumpDuration != 0
 }
 
 // resetTimeJumpedLocked consumes the signal set by checkWallTimeAdvanceLocked.
 func (m *Monitor) resetTimeJumpedLocked() {
-	m.timeJumped = false
+	m.jumpDuration = 0
 }
