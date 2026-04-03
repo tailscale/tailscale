@@ -61,6 +61,19 @@ func (rec *Client) WriteOutput(p []byte) (err error) {
 		string(p)})
 }
 
+// WriteInput sends terminal stdin to the tsrecorder.
+// https://docs.asciinema.org/manual/asciicast/v2/#i-input-data-read-from-a-terminal
+func (rec *Client) WriteInput(p []byte) (err error) {
+	const inputEventCode = "i"
+	if len(p) == 0 {
+		return nil
+	}
+	return rec.write([]any{
+		rec.clock.Now().Sub(rec.start).Seconds(),
+		inputEventCode,
+		string(p)})
+}
+
 // WriteResize writes an asciinema resize message. This can be called if
 // terminal size has changed.
 // https://docs.asciinema.org/manual/asciicast/v2/#r-resize
