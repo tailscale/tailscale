@@ -801,7 +801,7 @@ func TestUpdateDiscoForNodeCallbackWithFullNetmap(t *testing.T) {
 		expectNewDisco  bool
 	}{
 		{
-			name:            "disco key wired through when newer lastSeen",
+			name:            "disco-key-newer-lastSeen",
 			initialOnline:   false,
 			initialLastSeen: oldTime,
 			updateOnline:    false,
@@ -809,7 +809,7 @@ func TestUpdateDiscoForNodeCallbackWithFullNetmap(t *testing.T) {
 			expectNewDisco:  true,
 		},
 		{
-			name:            "disco key NOT wired through when older lastSeen",
+			name:            "disco-key-older-lastSeen",
 			initialOnline:   false,
 			initialLastSeen: now,
 			updateOnline:    false,
@@ -817,7 +817,7 @@ func TestUpdateDiscoForNodeCallbackWithFullNetmap(t *testing.T) {
 			expectNewDisco:  false,
 		},
 		{
-			name:            "disco key wired through when newer lastSeen, going offline",
+			name:            "disco-key-newer-lastSeen-going-offline",
 			initialOnline:   true,
 			initialLastSeen: oldTime,
 			updateOnline:    false,
@@ -825,7 +825,7 @@ func TestUpdateDiscoForNodeCallbackWithFullNetmap(t *testing.T) {
 			expectNewDisco:  true,
 		},
 		{
-			name:            "online flip with newer lastSeen",
+			name:            "online-flip-newer-lastSeen",
 			initialOnline:   false,
 			initialLastSeen: oldTime,
 			updateOnline:    true,

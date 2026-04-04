@@ -388,7 +388,7 @@ func TestShowUpdateWarnable(t *testing.T) {
 		wantShow     bool
 	}{
 		{
-			desc:         "nil ClientVersion",
+			desc:         "nil-ClientVersion",
 			check:        true,
 			cv:           nil,
 			wantWarnable: nil,
@@ -402,35 +402,35 @@ func TestShowUpdateWarnable(t *testing.T) {
 			wantShow:     false,
 		},
 		{
-			desc:         "no LatestVersion",
+			desc:         "no-LatestVersion",
 			check:        true,
 			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: ""},
 			wantWarnable: nil,
 			wantShow:     false,
 		},
 		{
-			desc:         "show regular update",
+			desc:         "show-regular-update",
 			check:        true,
 			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3"},
 			wantWarnable: updateAvailableWarnable,
 			wantShow:     true,
 		},
 		{
-			desc:         "show security update",
+			desc:         "show-security-update",
 			check:        true,
 			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3", UrgentSecurityUpdate: true},
 			wantWarnable: securityUpdateAvailableWarnable,
 			wantShow:     true,
 		},
 		{
-			desc:         "update check disabled",
+			desc:         "update-check-disabled",
 			check:        false,
 			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3"},
 			wantWarnable: nil,
 			wantShow:     false,
 		},
 		{
-			desc:         "hide update with auto-updates",
+			desc:         "hide-update-with-auto-updates",
 			check:        true,
 			apply:        opt.NewBool(true),
 			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3"},
@@ -438,7 +438,7 @@ func TestShowUpdateWarnable(t *testing.T) {
 			wantShow:     false,
 		},
 		{
-			desc:         "show security update with auto-updates",
+			desc:         "show-security-update-with-auto-updates",
 			check:        true,
 			apply:        opt.NewBool(true),
 			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3", UrgentSecurityUpdate: true},
@@ -622,7 +622,7 @@ func TestControlHealth(t *testing.T) {
 		}
 	})
 
-	t.Run("Strings()", func(t *testing.T) {
+	t.Run("Strings", func(t *testing.T) {
 		wantStrs := []string{
 			"Control health message: Extra help.",
 			"Control health message: Extra help. Learn more: http://www.example.com",

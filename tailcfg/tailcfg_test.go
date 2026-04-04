@@ -841,12 +841,12 @@ func TestMarshalToRawMessageAndBack(t *testing.T) {
 			capType: PeerCapability("foo"),
 		},
 		{
-			name:    "some values",
+			name:    "some-values",
 			val:     testRule{Ports: []int{80, 443}, Name: "foo"},
 			capType: PeerCapability("foo"),
 		},
 		{
-			name:    "all values",
+			name:    "all-values",
 			val:     testRule{Ports: []int{80, 443}, Name: "foo", ToggleOn: true, Groups: inner{Groups: []string{"foo", "bar"}}, Addrs: []netip.AddrPort{testip}},
 			capType: PeerCapability("foo"),
 		},

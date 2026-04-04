@@ -960,32 +960,32 @@ func TestPickFirewallModeFromInstalledRules(t *testing.T) {
 		want FirewallMode
 	}{
 		{
-			name: "using iptables legacy",
+			name: "using-iptables-legacy",
 			det:  &testFWDetector{iptRuleCount: 1},
 			want: FirewallModeIPTables,
 		},
 		{
-			name: "using nftables",
+			name: "using-nftables",
 			det:  &testFWDetector{nftRuleCount: 1},
 			want: FirewallModeNfTables,
 		},
 		{
-			name: "using both iptables and nftables",
+			name: "using-both-iptables-and-nftables",
 			det:  &testFWDetector{iptRuleCount: 2, nftRuleCount: 2},
 			want: FirewallModeNfTables,
 		},
 		{
-			name: "not using any firewall, both available",
+			name: "no-firewall-both-available",
 			det:  &testFWDetector{},
 			want: FirewallModeNfTables,
 		},
 		{
-			name: "not using any firewall, iptables available only",
+			name: "no-firewall-iptables-only",
 			det:  &testFWDetector{iptRuleCount: 1, nftErr: errors.New("nft error")},
 			want: FirewallModeIPTables,
 		},
 		{
-			name: "not using any firewall, nftables available only",
+			name: "no-firewall-nftables-only",
 			det:  &testFWDetector{iptErr: errors.New("iptables error"), nftRuleCount: 1},
 			want: FirewallModeNfTables,
 		},

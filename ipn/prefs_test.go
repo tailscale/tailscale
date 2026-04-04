@@ -458,7 +458,7 @@ func TestPrefsFromBytesPreservesOldValues(t *testing.T) {
 			want: Prefs{ControlURL: "https://foo", RouteAll: true},
 		},
 		{
-			name: "opt.Bool", // test that we don't normalize it early
+			name: "opt-Bool", // test that we don't normalize it early
 			old:  Prefs{Sync: "unset"},
 			json: []byte(`{}`),
 			want: Prefs{Sync: "unset"},
@@ -1236,13 +1236,13 @@ func TestParseAutoExitNodeString(t *testing.T) {
 		wantExpr   ExitNodeExpression
 	}{
 		{
-			name:       "empty expr",
+			name:       "empty-expr",
 			exitNodeID: "",
 			wantOk:     false,
 			wantExpr:   "",
 		},
 		{
-			name:       "no auto prefix",
+			name:       "no-auto-prefix",
 			exitNodeID: "foo",
 			wantOk:     false,
 			wantExpr:   "",
@@ -1260,13 +1260,13 @@ func TestParseAutoExitNodeString(t *testing.T) {
 			wantExpr:   "foo",
 		},
 		{
-			name:       "auto prefix but empty suffix",
+			name:       "auto-prefix-empty-suffix",
 			exitNodeID: "auto:",
 			wantOk:     false,
 			wantExpr:   "",
 		},
 		{
-			name:       "auto prefix no colon",
+			name:       "auto-prefix-no-colon",
 			exitNodeID: "auto",
 			wantOk:     false,
 			wantExpr:   "",

@@ -54,13 +54,13 @@ ip rule add -6 pref 5270 table 52
 		want string
 	}{
 		{
-			name: "no config",
+			name: "no-config",
 			in:   nil,
 			want: `
 up` + basic,
 		},
 		{
-			name: "local addr only",
+			name: "local-addr-only",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.103/10"),
 				NetfilterMode: netfilterOff,
@@ -71,7 +71,7 @@ ip addr add 100.101.102.103/10 dev tailscale0` + basic,
 		},
 
 		{
-			name: "addr and routes",
+			name: "addr-and-routes",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.103/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "192.168.16.0/24"),
@@ -85,7 +85,7 @@ ip route add 192.168.16.0/24 dev tailscale0 table 52` + basic,
 		},
 
 		{
-			name: "addr and routes and subnet routes",
+			name: "addr-routes-and-subnet-routes",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.103/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "192.168.16.0/24"),
@@ -100,7 +100,7 @@ ip route add 192.168.16.0/24 dev tailscale0 table 52` + basic,
 		},
 
 		{
-			name: "addr and routes and subnet routes with netfilter",
+			name: "addr-routes-subnet-routes-with-netfilter",
 			in: &Config{
 				LocalAddrs:        mustCIDRs("100.101.102.104/10"),
 				Routes:            mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -141,7 +141,7 @@ v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 `,
 		},
 		{
-			name: "addr and routes and subnet routes with netfilter but no stateful filtering",
+			name: "addr-routes-subnet-routes-netfilter-no-stateful",
 			in: &Config{
 				LocalAddrs:        mustCIDRs("100.101.102.104/10"),
 				Routes:            mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -180,7 +180,7 @@ v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 `,
 		},
 		{
-			name: "addr and routes with netfilter",
+			name: "addr-and-routes-with-netfilter",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -215,7 +215,7 @@ v6/nat/POSTROUTING -j ts-postrouting
 		},
 
 		{
-			name: "addr and routes and subnet routes with netfilter but no SNAT",
+			name: "addr-routes-subnet-routes-netfilter-no-SNAT",
 			in: &Config{
 				LocalAddrs:       mustCIDRs("100.101.102.104/10"),
 				Routes:           mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -251,7 +251,7 @@ v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
 		{
-			name: "addr and routes with netfilter",
+			name: "addr-and-routes-with-netfilter-2",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -286,7 +286,7 @@ v6/nat/POSTROUTING -j ts-postrouting
 		},
 
 		{
-			name: "addr and routes with half netfilter",
+			name: "addr-and-routes-with-half-netfilter",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -310,7 +310,7 @@ v6/filter/ts-forward -o tailscale0 -j ACCEPT
 `,
 		},
 		{
-			name: "addr and routes with netfilter2",
+			name: "addr-and-routes-with-netfilter2",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -344,7 +344,7 @@ v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
 		{
-			name: "addr, routes, and local routes with netfilter",
+			name: "addr-routes-local-routes-with-netfilter",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "0.0.0.0/0"),
@@ -380,7 +380,7 @@ v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
 		{
-			name: "addr, routes, and local routes with no netfilter",
+			name: "addr-routes-local-routes-no-netfilter",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "0.0.0.0/0"),
@@ -396,7 +396,7 @@ ip route add throw 10.0.0.0/8 table 52
 ip route add throw 192.168.0.0/24 table 52` + basic,
 		},
 		{
-			name: "subnet routes with connmark for rp_filter",
+			name: "subnet-routes-connmark-for-rp_filter",
 			in: &Config{
 				LocalAddrs:       mustCIDRs("100.101.102.104/10"),
 				Routes:           mustCIDRs("100.100.100.100/32"),
@@ -433,7 +433,7 @@ v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 `,
 		},
 		{
-			name: "subnet routes (connmark always enabled)",
+			name: "subnet-routes-connmark-always-enabled",
 			in: &Config{
 				LocalAddrs:       mustCIDRs("100.101.102.104/10"),
 				Routes:           mustCIDRs("100.100.100.100/32"),
@@ -470,7 +470,7 @@ v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 `,
 		},
 		{
-			name: "connmark with stateful filtering",
+			name: "connmark-with-stateful-filtering",
 			in: &Config{
 				LocalAddrs:        mustCIDRs("100.101.102.104/10"),
 				Routes:            mustCIDRs("100.100.100.100/32"),

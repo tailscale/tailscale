@@ -616,13 +616,13 @@ func TestSendFreeze(t *testing.T) {
 		}
 	}
 
-	t.Run("initial send", func(t *testing.T) {
+	t.Run("initial-send", func(t *testing.T) {
 		drain(t, "bob")
 		drain(t, "cathy")
 		isEmpty(t, "alice")
 	})
 
-	t.Run("block cathy", func(t *testing.T) {
+	t.Run("block-cathy", func(t *testing.T) {
 		// Block cathy. Now the cathyConn buffer will fill up quickly,
 		// and the derp server will back up.
 		cathyConn.SetReadBlock(true)

@@ -196,15 +196,15 @@ func TestServer(t *testing.T) {
 		forceClientsMixedAF bool
 	}{
 		{
-			name:        "over ipv4",
+			name:        "over-ipv4",
 			staticAddrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")},
 		},
 		{
-			name:        "over ipv6",
+			name:        "over-ipv6",
 			staticAddrs: []netip.Addr{netip.MustParseAddr("::1")},
 		},
 		{
-			name:                "mixed address families",
+			name:                "mixed-address-families",
 			staticAddrs:         []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1")},
 			forceClientsMixedAF: true,
 		},

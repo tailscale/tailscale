@@ -1217,7 +1217,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	}
 
 	outerT := t
-	t.Run("ping 1.0.0.1", func(t *testing.T) {
+	t.Run("ping-1_0_0_1", func(t *testing.T) {
 		setT(t)
 		defer setT(outerT)
 		ping1(t)
@@ -1225,7 +1225,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		checkStats(t, m2, m2Conns)
 	})
 
-	t.Run("ping 1.0.0.2", func(t *testing.T) {
+	t.Run("ping-1_0_0_2", func(t *testing.T) {
 		setT(t)
 		defer setT(outerT)
 		ping2(t)
@@ -1233,7 +1233,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		checkStats(t, m2, m2Conns)
 	})
 
-	t.Run("ping 1.0.0.2 via SendPacket", func(t *testing.T) {
+	t.Run("ping-1_0_0_2-via-SendPacket", func(t *testing.T) {
 		setT(t)
 		defer setT(outerT)
 		msg1to2 := tuntest.Ping(netip.MustParseAddr("1.0.0.2"), netip.MustParseAddr("1.0.0.1"))
@@ -1251,7 +1251,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		checkStats(t, m2, m2Conns)
 	})
 
-	t.Run("no-op dev1 reconfig", func(t *testing.T) {
+	t.Run("no-op-dev1-reconfig", func(t *testing.T) {
 		setT(t)
 		defer setT(outerT)
 		if err := m1.Reconfig(m1cfg); err != nil {
@@ -2731,7 +2731,7 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 		want             epAddr
 	}{
 		{
-			name:             "no endpoints",
+			name:             "no-endpoints",
 			sendInitialPing:  false,
 			validAddr:        false,
 			sendFollowUpPing: false,
@@ -2740,7 +2740,7 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 			want:             epAddr{},
 		},
 		{
-			name:             "singular endpoint does not request ping",
+			name:             "singular-endpoint-no-ping-request",
 			sendInitialPing:  false,
 			validAddr:        true,
 			sendFollowUpPing: false,
@@ -2754,7 +2754,7 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 			want: epAddr{ap: netip.MustParseAddrPort("1.1.1.1:111")},
 		},
 		{
-			name:             "ping sent within wireguardPingInterval should not request ping",
+			name:             "ping-within-wireguardPingInterval-no-request",
 			sendInitialPing:  true,
 			validAddr:        true,
 			sendFollowUpPing: false,
@@ -2772,7 +2772,7 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 			want: epAddr{ap: netip.MustParseAddrPort("1.1.1.1:111")},
 		},
 		{
-			name:             "ping sent outside of wireguardPingInterval should request ping",
+			name:             "ping-outside-wireguardPingInterval-requests-ping",
 			sendInitialPing:  true,
 			validAddr:        true,
 			sendFollowUpPing: true,
@@ -2790,7 +2790,7 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 			want: epAddr{ap: netip.MustParseAddrPort("1.1.1.1:111")},
 		},
 		{
-			name:             "choose lowest latency for useable IPv4 and IPv6",
+			name:             "choose-lowest-latency-v4-and-v6",
 			sendInitialPing:  true,
 			validAddr:        true,
 			sendFollowUpPing: false,
@@ -2808,7 +2808,7 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 			want: epAddr{ap: netip.MustParseAddrPort("[2345:0425:2CA1:0000:0000:0567:5673:23b5]:222")},
 		},
 		{
-			name:             "choose IPv6 address when latency is the same for v4 and v6",
+			name:             "choose-IPv6-when-equal-latency",
 			sendInitialPing:  true,
 			validAddr:        true,
 			sendFollowUpPing: false,
@@ -3378,73 +3378,73 @@ func Test_packetLooksLike(t *testing.T) {
 		wantIsGeneveEncap       bool
 	}{
 		{
-			name:                    "STUN binding success response",
+			name:                    "STUN-binding-success-response",
 			msg:                     stun.Response(stun.NewTxID(), netip.MustParseAddrPort("127.0.0.1:1")),
 			wantPacketLooksLikeType: packetLooksLikeSTUNBinding,
 			wantIsGeneveEncap:       false,
 		},
 		{
-			name:                    "naked disco",
+			name:                    "naked-disco",
 			msg:                     nakedDisco,
 			wantPacketLooksLikeType: packetLooksLikeDisco,
 			wantIsGeneveEncap:       false,
 		},
 		{
-			name:                    "geneve encap disco",
+			name:                    "geneve-encap-disco",
 			msg:                     geneveEncapDisco,
 			wantPacketLooksLikeType: packetLooksLikeDisco,
 			wantIsGeneveEncap:       true,
 		},
 		{
-			name:                    "geneve encap too short disco",
+			name:                    "geneve-encap-too-short-disco",
 			msg:                     geneveEncapDisco[:len(geneveEncapDisco)-key.DiscoPublicRawLen],
 			wantPacketLooksLikeType: packetLooksLikeWireGuard,
 			wantIsGeneveEncap:       false,
 		},
 		{
-			name:                    "geneve encap disco nonzero geneve version",
+			name:                    "geneve-encap-disco-nonzero-geneve-version",
 			msg:                     geneveEncapDiscoNonZeroGeneveVersion,
 			wantPacketLooksLikeType: packetLooksLikeWireGuard,
 			wantIsGeneveEncap:       false,
 		},
 		{
-			name:                    "geneve encap disco nonzero geneve reserved bits",
+			name:                    "geneve-encap-disco-nonzero-geneve-reserved-bits",
 			msg:                     geneveEncapDiscoNonZeroGeneveReservedBits,
 			wantPacketLooksLikeType: packetLooksLikeWireGuard,
 			wantIsGeneveEncap:       false,
 		},
 		{
-			name:                    "geneve encap disco nonzero geneve vni lsb",
+			name:                    "geneve-encap-disco-nonzero-geneve-vni-lsb",
 			msg:                     geneveEncapDiscoNonZeroGeneveVNILSB,
 			wantPacketLooksLikeType: packetLooksLikeWireGuard,
 			wantIsGeneveEncap:       false,
 		},
 		{
-			name:                    "geneve encap wireguard",
+			name:                    "geneve-encap-wireguard",
 			msg:                     geneveEncapWireGuard,
 			wantPacketLooksLikeType: packetLooksLikeWireGuard,
 			wantIsGeneveEncap:       true,
 		},
 		{
-			name:                    "naked WireGuard Initiation type",
+			name:                    "naked-WireGuard-Initiation-type",
 			msg:                     nakedWireGuardInitiation,
 			wantPacketLooksLikeType: packetLooksLikeWireGuard,
 			wantIsGeneveEncap:       false,
 		},
 		{
-			name:                    "naked WireGuard Response type",
+			name:                    "naked-WireGuard-Response-type",
 			msg:                     nakedWireGuardResponse,
 			wantPacketLooksLikeType: packetLooksLikeWireGuard,
 			wantIsGeneveEncap:       false,
 		},
 		{
-			name:                    "naked WireGuard Cookie Reply type",
+			name:                    "naked-WireGuard-Cookie-Reply-type",
 			msg:                     nakedWireGuardCookieReply,
 			wantPacketLooksLikeType: packetLooksLikeWireGuard,
 			wantIsGeneveEncap:       false,
 		},
 		{
-			name:                    "naked WireGuard Transport type",
+			name:                    "naked-WireGuard-Transport-type",
 			msg:                     nakedWireGuardTransport,
 			wantPacketLooksLikeType: packetLooksLikeWireGuard,
 			wantIsGeneveEncap:       false,
@@ -3481,22 +3481,22 @@ func Test_looksLikeInitiationMsg(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "valid initiation",
+			name: "valid-initiation",
 			b:    initMsg,
 			want: true,
 		},
 		{
-			name: "invalid message type field",
+			name: "invalid-message-type-field",
 			b:    initMsgSizeTransportType,
 			want: false,
 		},
 		{
-			name: "too small",
+			name: "too-small",
 			b:    initMsg[:device.MessageInitiationSize-1],
 			want: false,
 		},
 		{
-			name: "too big",
+			name: "too-big",
 			b:    append(initMsg, 0),
 			want: false,
 		},
@@ -3538,7 +3538,7 @@ func Test_nodeHasCap(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "match v4",
+			name: "match-v4",
 			filt: filter.New([]filtertype.Match{
 				{
 					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
@@ -3556,7 +3556,7 @@ func Test_nodeHasCap(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "match v6",
+			name: "match-v6",
 			filt: filter.New([]filtertype.Match{
 				{
 					Srcs: []netip.Prefix{netip.MustParsePrefix("::2/128")},
@@ -3574,7 +3574,7 @@ func Test_nodeHasCap(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "no match CapMatch Dst",
+			name: "no-match-CapMatch-Dst",
 			filt: filter.New([]filtertype.Match{
 				{
 					Srcs: []netip.Prefix{netip.MustParsePrefix("::2/128")},
@@ -3592,7 +3592,7 @@ func Test_nodeHasCap(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "no match peer cap",
+			name: "no-match-peer-cap",
 			filt: filter.New([]filtertype.Match{
 				{
 					Srcs: []netip.Prefix{netip.MustParsePrefix("::2/128")},
@@ -3610,7 +3610,7 @@ func Test_nodeHasCap(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "nil src",
+			name: "nil-src",
 			filt: filter.New([]filtertype.Match{
 				{
 					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
@@ -3628,7 +3628,7 @@ func Test_nodeHasCap(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "nil dst",
+			name: "nil-dst",
 			filt: filter.New([]filtertype.Match{
 				{
 					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
@@ -3706,7 +3706,7 @@ func TestConn_SetNetworkMap_updateRelayServersSet(t *testing.T) {
 		wantRelayClientEnabled bool
 	}{
 		{
-			name: "candidate relay server",
+			name: "candidate-relay-server",
 			filt: filter.New([]filtertype.Match{
 				{
 					Srcs: peerNodeCandidateRelay.Addresses,
@@ -3730,7 +3730,7 @@ func TestConn_SetNetworkMap_updateRelayServersSet(t *testing.T) {
 			wantRelayClientEnabled: true,
 		},
 		{
-			name: "no candidate relay server because self has tailcfg.NodeAttrDisableRelayClient",
+			name: "no-candidate-self-has-DisableRelayClient", // self has tailcfg.NodeAttrDisableRelayClient
 			filt: filter.New([]filtertype.Match{
 				{
 					Srcs: peerNodeCandidateRelay.Addresses,
@@ -3748,7 +3748,7 @@ func TestConn_SetNetworkMap_updateRelayServersSet(t *testing.T) {
 			wantRelayClientEnabled: false,
 		},
 		{
-			name: "no candidate relay server because self has tailcfg.NodeAttrOnlyTCP443",
+			name: "no-candidate-self-has-OnlyTCP443", // self has tailcfg.NodeAttrOnlyTCP443
 			filt: filter.New([]filtertype.Match{
 				{
 					Srcs: peerNodeCandidateRelay.Addresses,
@@ -3766,7 +3766,7 @@ func TestConn_SetNetworkMap_updateRelayServersSet(t *testing.T) {
 			wantRelayClientEnabled: false,
 		},
 		{
-			name: "self candidate relay server",
+			name: "self-candidate-relay-server",
 			filt: filter.New([]filtertype.Match{
 				{
 					Srcs: selfNode.Addresses,
@@ -3790,7 +3790,7 @@ func TestConn_SetNetworkMap_updateRelayServersSet(t *testing.T) {
 			wantRelayClientEnabled: true,
 		},
 		{
-			name: "no candidate relay server",
+			name: "no-candidate-relay-server",
 			filt: filter.New([]filtertype.Match{
 				{
 					Srcs: peerNodeNotCandidateRelayCapVer.Addresses,
@@ -3911,7 +3911,7 @@ func TestConn_receiveIP(t *testing.T) {
 		wantNoteRecvActivityCalled bool
 	}{
 		{
-			name:                       "naked disco",
+			name:                       "naked-disco",
 			b:                          looksLikeNakedDisco,
 			ipp:                        netip.MustParseAddrPort("127.0.0.1:7777"),
 			cache:                      &epAddrEndpointCache{},
@@ -3923,7 +3923,7 @@ func TestConn_receiveIP(t *testing.T) {
 			wantNoteRecvActivityCalled: false,
 		},
 		{
-			name:                       "geneve encap disco",
+			name:                       "geneve-encap-disco",
 			b:                          looksLikeGeneveDisco,
 			ipp:                        netip.MustParseAddrPort("127.0.0.1:7777"),
 			cache:                      &epAddrEndpointCache{},
@@ -3935,7 +3935,7 @@ func TestConn_receiveIP(t *testing.T) {
 			wantNoteRecvActivityCalled: false,
 		},
 		{
-			name:                       "STUN binding",
+			name:                       "STUN-binding",
 			b:                          looksLikeSTUNBinding,
 			ipp:                        netip.MustParseAddrPort("127.0.0.1:7777"),
 			cache:                      &epAddrEndpointCache{},
@@ -3947,7 +3947,7 @@ func TestConn_receiveIP(t *testing.T) {
 			wantNoteRecvActivityCalled: false,
 		},
 		{
-			name:                       "naked WireGuard init lazyEndpoint empty peerMap",
+			name:                       "naked-WireGuard-init-lazyEndpoint-empty-peerMap",
 			b:                          looksLikeNakedWireGuardInit,
 			ipp:                        netip.MustParseAddrPort("127.0.0.1:7777"),
 			cache:                      &epAddrEndpointCache{},
@@ -3959,7 +3959,7 @@ func TestConn_receiveIP(t *testing.T) {
 			wantNoteRecvActivityCalled: false,
 		},
 		{
-			name:                            "naked WireGuard init endpoint matching peerMap entry",
+			name:                            "naked-WireGuard-init-endpoint-matching-peerMap-entry",
 			b:                               looksLikeNakedWireGuardInit,
 			ipp:                             netip.MustParseAddrPort("127.0.0.1:7777"),
 			cache:                           &epAddrEndpointCache{},
@@ -3973,7 +3973,7 @@ func TestConn_receiveIP(t *testing.T) {
 			wantNoteRecvActivityCalled:      true,
 		},
 		{
-			name:                       "geneve WireGuard init lazyEndpoint empty peerMap",
+			name:                       "geneve-WireGuard-init-lazyEndpoint-empty-peerMap",
 			b:                          looksLikeGeneveWireGuardInit,
 			ipp:                        netip.MustParseAddrPort("127.0.0.1:7777"),
 			cache:                      &epAddrEndpointCache{},
@@ -3985,7 +3985,7 @@ func TestConn_receiveIP(t *testing.T) {
 			wantNoteRecvActivityCalled: false,
 		},
 		{
-			name:                            "geneve WireGuard init lazyEndpoint matching peerMap activity noted",
+			name:                            "geneve-WireGuard-init-lazyEndpoint-matching-peerMap-activity-noted",
 			b:                               looksLikeGeneveWireGuardInit,
 			ipp:                             netip.MustParseAddrPort("127.0.0.1:7777"),
 			cache:                           &epAddrEndpointCache{},
@@ -4001,7 +4001,7 @@ func TestConn_receiveIP(t *testing.T) {
 			wantNoteRecvActivityCalled: true,
 		},
 		{
-			name:                            "geneve WireGuard init lazyEndpoint matching peerMap no activity noted",
+			name:                            "geneve-WireGuard-init-lazyEndpoint-matching-peerMap-no-activity-noted",
 			b:                               looksLikeGeneveWireGuardInit,
 			ipp:                             netip.MustParseAddrPort("127.0.0.1:7777"),
 			cache:                           &epAddrEndpointCache{},
@@ -4151,25 +4151,25 @@ func Test_lazyEndpoint_InitiationMessagePublicKey(t *testing.T) {
 		wantNoteRecvActivityCalled bool
 	}{
 		{
-			name:                       "noteRecvActivity called",
+			name:                       "noteRecvActivity-called",
 			callWithPeerMapKey:         true,
 			maybeEPMatchingKey:         false,
 			wantNoteRecvActivityCalled: true,
 		},
 		{
-			name:                       "maybeEP early return",
+			name:                       "maybeEP-early-return",
 			callWithPeerMapKey:         true,
 			maybeEPMatchingKey:         true,
 			wantNoteRecvActivityCalled: false,
 		},
 		{
-			name:                       "not in peerMap early return",
+			name:                       "not-in-peerMap-early-return",
 			callWithPeerMapKey:         false,
 			maybeEPMatchingKey:         false,
 			wantNoteRecvActivityCalled: false,
 		},
 		{
-			name:                       "not in peerMap maybeEP early return",
+			name:                       "not-in-peerMap-maybeEP-early-return",
 			callWithPeerMapKey:         false,
 			maybeEPMatchingKey:         true,
 			wantNoteRecvActivityCalled: false,
@@ -4232,25 +4232,25 @@ func Test_lazyEndpoint_FromPeer(t *testing.T) {
 		wantEpAddrInPeerMap bool
 	}{
 		{
-			name:                "epAddr in peerMap",
+			name:                "epAddr-in-peerMap",
 			callWithPeerMapKey:  true,
 			maybeEPMatchingKey:  false,
 			wantEpAddrInPeerMap: true,
 		},
 		{
-			name:                "maybeEP early return",
+			name:                "maybeEP-early-return",
 			callWithPeerMapKey:  true,
 			maybeEPMatchingKey:  true,
 			wantEpAddrInPeerMap: false,
 		},
 		{
-			name:                "not in peerMap early return",
+			name:                "not-in-peerMap-early-return",
 			callWithPeerMapKey:  false,
 			maybeEPMatchingKey:  false,
 			wantEpAddrInPeerMap: false,
 		},
 		{
-			name:                "not in peerMap maybeEP early return",
+			name:                "not-in-peerMap-maybeEP-early-return",
 			callWithPeerMapKey:  false,
 			maybeEPMatchingKey:  true,
 			wantEpAddrInPeerMap: false,

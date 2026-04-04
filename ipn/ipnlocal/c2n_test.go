@@ -63,7 +63,7 @@ func TestHandleC2NTLSCertStatus(t *testing.T) {
 		want       *tailcfg.C2NTLSCertInfo
 	}{
 		{
-			name:       "no domain",
+			name:       "no-domain",
 			wantStatus: 400,
 			wantError:  "no 'domain'\n",
 		},

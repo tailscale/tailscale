@@ -300,9 +300,9 @@ func TestTKASync(t *testing.T) {
 	}
 
 	tcs := []tkaSyncScenario{
-		{name: "up to date"},
+		{name: "up-to-date"},
 		{
-			name: "control has an update",
+			name: "control-has-an-update",
 			controlAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
 				b := a.NewUpdater(signer)
 				if err := b.RemoveKey(someKey.MustID()); err != nil {
@@ -317,7 +317,7 @@ func TestTKASync(t *testing.T) {
 		},
 		{
 			// AKA 'control data loss' scenario
-			name: "node has an update",
+			name: "node-has-an-update",
 			nodeAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
 				b := a.NewUpdater(signer)
 				if err := b.RemoveKey(someKey.MustID()); err != nil {
@@ -332,7 +332,7 @@ func TestTKASync(t *testing.T) {
 		},
 		{
 			// AKA 'control data loss + update in the meantime' scenario
-			name: "node and control diverge",
+			name: "node-and-control-diverge",
 			controlAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
 				b := a.NewUpdater(signer)
 				if err := b.SetKeyMeta(someKey.MustID(), map[string]string{"ye": "swiggity"}); err != nil {
@@ -1020,7 +1020,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 		wantErr string
 	}{
 		{
-			"no error",
+			"no-error",
 			func() *tka.NodeKeySignature {
 				sig, _ := signNodeKey(tailcfg.TKASignInfo{NodePublic: nodePriv.Public()}, nlPriv)
 				return sig
@@ -1028,7 +1028,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 			"",
 		},
 		{
-			"signature for different keyID",
+			"signature-for-different-keyID",
 			func() *tka.NodeKeySignature {
 				sig, _ := signNodeKey(tailcfg.TKASignInfo{NodePublic: nodePriv.Public()}, untrustedKey)
 				return sig
@@ -1036,7 +1036,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 			fmt.Sprintf("got signature with keyID %X from request for %X", untrustedKey.KeyID(), nlPriv.KeyID()),
 		},
 		{
-			"invalid signature",
+			"invalid-signature",
 			func() *tka.NodeKeySignature {
 				sig, _ := signNodeKey(tailcfg.TKASignInfo{NodePublic: nodePriv.Public()}, nlPriv)
 				copy(sig.Signature, []byte{1, 2, 3, 4, 5, 6}) // overwrite with trash to invalid signature

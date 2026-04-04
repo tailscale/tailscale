@@ -28,7 +28,7 @@ func TestSynologyProxyFromConfigCached(t *testing.T) {
 
 	tstest.Replace(t, &synologyProxyConfigPath, filepath.Join(t.TempDir(), "proxy.conf"))
 
-	t.Run("no config file", func(t *testing.T) {
+	t.Run("no-config-file", func(t *testing.T) {
 		if _, err := os.Stat(synologyProxyConfigPath); err == nil {
 			t.Fatalf("%s must not exist for this test", synologyProxyConfigPath)
 		}
@@ -52,7 +52,7 @@ func TestSynologyProxyFromConfigCached(t *testing.T) {
 		}
 	})
 
-	t.Run("config file updated", func(t *testing.T) {
+	t.Run("config-file-updated", func(t *testing.T) {
 		cache.updated = time.Now()
 		cache.httpProxy = nil
 		cache.httpsProxy = nil
@@ -84,7 +84,7 @@ https_port=443
 		}
 	})
 
-	t.Run("config file removed", func(t *testing.T) {
+	t.Run("config-file-removed", func(t *testing.T) {
 		cache.updated = time.Now()
 		cache.httpProxy = urlMustParse("http://127.0.0.1/")
 		cache.httpsProxy = urlMustParse("http://127.0.0.1/")
@@ -108,7 +108,7 @@ https_port=443
 		}
 	})
 
-	t.Run("picks proxy from request scheme", func(t *testing.T) {
+	t.Run("picks-proxy-from-request-scheme", func(t *testing.T) {
 		cache.updated = time.Now()
 		cache.httpProxy = nil
 		cache.httpsProxy = nil
@@ -164,7 +164,7 @@ func TestSynologyProxiesFromConfig(t *testing.T) {
 		return openReader, openErr
 	})
 
-	t.Run("with config", func(t *testing.T) {
+	t.Run("with-config", func(t *testing.T) {
 		mc := &mustCloser{Reader: strings.NewReader(`
 proxy_user=foo
 proxy_pwd=bar
@@ -200,7 +200,7 @@ http_port=80
 
 	})
 
-	t.Run("nonexistent config", func(t *testing.T) {
+	t.Run("nonexistent-config", func(t *testing.T) {
 		openReader = nil
 		openErr = os.ErrNotExist
 
@@ -216,7 +216,7 @@ http_port=80
 		}
 	})
 
-	t.Run("error opening config", func(t *testing.T) {
+	t.Run("error-opening-config", func(t *testing.T) {
 		openReader = nil
 		openErr = errors.New("example error")
 

@@ -30,7 +30,7 @@ func TestEmbeddedTypeUnmarshal(t *testing.T) {
 		},
 	}
 
-	t.Run("unmarshal gitops type from acl type", func(t *testing.T) {
+	t.Run("unmarshal-gitops-from-acl", func(t *testing.T) {
 		b, _ := json.Marshal(aclTestErr)
 		var e ACLGitopsTestError
 		err := json.Unmarshal(b, &e)
@@ -41,7 +41,7 @@ func TestEmbeddedTypeUnmarshal(t *testing.T) {
 			t.Fatalf("user heading for 'ACLError' not found in gitops error: %v", e.Error())
 		}
 	})
-	t.Run("unmarshal acl type from gitops type", func(t *testing.T) {
+	t.Run("unmarshal-acl-from-gitops", func(t *testing.T) {
 		b, _ := json.Marshal(gitopsErr)
 		var e tailscale.ACLTestError
 		err := json.Unmarshal(b, &e)

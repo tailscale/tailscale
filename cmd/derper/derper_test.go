@@ -46,30 +46,30 @@ func TestNoContent(t *testing.T) {
 		want  string
 	}{
 		{
-			name: "no challenge",
+			name: "no-challenge",
 		},
 		{
-			name:  "valid challenge",
+			name:  "valid-challenge",
 			input: "input",
 			want:  "response input",
 		},
 		{
-			name:  "valid challenge hostname",
+			name:  "valid-challenge-hostname",
 			input: "ts_derp99b.tailscale.com",
 			want:  "response ts_derp99b.tailscale.com",
 		},
 		{
-			name:  "invalid challenge",
+			name:  "invalid-challenge",
 			input: "foo\x00bar",
 			want:  "",
 		},
 		{
-			name:  "whitespace invalid challenge",
+			name:  "whitespace-invalid-challenge",
 			input: "foo bar",
 			want:  "",
 		},
 		{
-			name:  "long challenge",
+			name:  "long-challenge",
 			input: strings.Repeat("x", 65),
 			want:  "",
 		},

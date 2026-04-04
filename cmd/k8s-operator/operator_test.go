@@ -1498,24 +1498,28 @@ func TestProxyFirewallMode(t *testing.T) {
 
 func Test_isMagicDNSName(t *testing.T) {
 	tests := []struct {
+		name string
 		in   string
 		want bool
 	}{
 		{
+			name: "foo-tail4567-ts-net",
 			in:   "foo.tail4567.ts.net",
 			want: true,
 		},
 		{
+			name: "foo-tail4567-ts-net-trailing-dot",
 			in:   "foo.tail4567.ts.net.",
 			want: true,
 		},
 		{
+			name: "foo-tail4567",
 			in:   "foo.tail4567",
 			want: false,
 		},
 	}
 	for _, tt := range tests {
-		t.Run(tt.in, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			if got := isMagicDNSName(tt.in); got != tt.want {
 				t.Errorf("isMagicDNSName(%q) = %v, want %v", tt.in, got, tt.want)
 			}
@@ -1756,7 +1760,7 @@ func Test_clusterDomainFromResolverConf(t *testing.T) {
 		want      string
 	}{
 		{
-			name: "success- custom domain",
+			name: "success-custom-domain",
 			conf: &resolvconffile.Config{
 				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.department.org.io"), toFQDN(t, "svc.department.org.io"), toFQDN(t, "department.org.io")},
 			},
@@ -1764,7 +1768,7 @@ func Test_clusterDomainFromResolverConf(t *testing.T) {
 			want:      "department.org.io",
 		},
 		{
-			name: "success- default domain",
+			name: "success-default-domain",
 			conf: &resolvconffile.Config{
 				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.cluster.local."), toFQDN(t, "svc.cluster.local."), toFQDN(t, "cluster.local.")},
 			},
@@ -1772,7 +1776,7 @@ func Test_clusterDomainFromResolverConf(t *testing.T) {
 			want:      "cluster.local",
 		},
 		{
-			name: "only two search domains found",
+			name: "only-two-search-domains",
 			conf: &resolvconffile.Config{
 				SearchDomains: []dnsname.FQDN{toFQDN(t, "svc.department.org.io"), toFQDN(t, "department.org.io")},
 			},
@@ -1780,7 +1784,7 @@ func Test_clusterDomainFromResolverConf(t *testing.T) {
 			want:      "cluster.local",
 		},
 		{
-			name: "first search domain does not match the expected structure",
+			name: "first-search-domain-mismatch",
 			conf: &resolvconffile.Config{
 				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.bar.department.org.io"), toFQDN(t, "svc.department.org.io"), toFQDN(t, "some.other.fqdn")},
 			},
@@ -1788,7 +1792,7 @@ func Test_clusterDomainFromResolverConf(t *testing.T) {
 			want:      "cluster.local",
 		},
 		{
-			name: "second search domain does not match the expected structure",
+			name: "second-search-domain-mismatch",
 			conf: &resolvconffile.Config{
 				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.department.org.io"), toFQDN(t, "foo.department.org.io"), toFQDN(t, "some.other.fqdn")},
 			},
@@ -1796,7 +1800,7 @@ func Test_clusterDomainFromResolverConf(t *testing.T) {
 			want:      "cluster.local",
 		},
 		{
-			name: "third search domain does not match the expected structure",
+			name: "third-search-domain-mismatch",
 			conf: &resolvconffile.Config{
 				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.department.org.io"), toFQDN(t, "svc.department.org.io"), toFQDN(t, "some.other.fqdn")},
 			},

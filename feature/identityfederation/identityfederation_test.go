@@ -31,7 +31,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErr:     "",
 		},
 		{
-			name:        "missing client id short-circuits without error",
+			name:        "missing-client-id-noop",
 			clientID:    "",
 			idToken:     "token",
 			audience:    "api://tailscale-wif",
@@ -40,7 +40,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErr:     "",
 		},
 		{
-			name:     "missing id token and audience",
+			name:     "missing-id-token-and-audience",
 			clientID: "client-123",
 			idToken:  "",
 			audience: "",
@@ -48,7 +48,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErr:  "federated identity requires either an ID token or an audience",
 		},
 		{
-			name:     "missing tags",
+			name:     "missing-tags",
 			clientID: "client-123",
 			idToken:  "token",
 			audience: "api://tailscale-wif",
@@ -56,7 +56,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErr:  "federated identity authkeys require --advertise-tags",
 		},
 		{
-			name:     "invalid client id attributes",
+			name:     "invalid-client-id-attrs",
 			clientID: "client-123?invalid=value",
 			idToken:  "token",
 			audience: "api://tailscale-wif",
@@ -99,7 +99,7 @@ func TestParseOptionalAttributes(t *testing.T) {
 		wantErr       string
 	}{
 		{
-			name:          "default values",
+			name:          "default-values",
 			clientID:      "client-123",
 			wantClientID:  "client-123",
 			wantEphemeral: true,
@@ -107,7 +107,7 @@ func TestParseOptionalAttributes(t *testing.T) {
 			wantErr:       "",
 		},
 		{
-			name:          "custom values",
+			name:          "custom-values",
 			clientID:      "client-123?ephemeral=false&preauthorized=true",
 			wantClientID:  "client-123",
 			wantEphemeral: false,
@@ -115,7 +115,7 @@ func TestParseOptionalAttributes(t *testing.T) {
 			wantErr:       "",
 		},
 		{
-			name:          "unknown attribute",
+			name:          "unknown-attribute",
 			clientID:      "client-123?unknown=value",
 			wantClientID:  "",
 			wantEphemeral: false,
@@ -123,7 +123,7 @@ func TestParseOptionalAttributes(t *testing.T) {
 			wantErr:       `unknown optional config attribute "unknown"`,
 		},
 		{
-			name:          "invalid value",
+			name:          "invalid-value",
 			clientID:      "client-123?ephemeral=invalid",
 			wantClientID:  "",
 			wantEphemeral: false,

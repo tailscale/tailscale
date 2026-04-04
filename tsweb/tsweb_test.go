@@ -85,7 +85,7 @@ func TestStdHandler(t *testing.T) {
 		wantBody   string
 	}{
 		{
-			name:     "handler returns 200",
+			name:     "handler-returns-200",
 			rh:       handlerCode(200),
 			r:        req(bgCtx, "http://example.com/"),
 			wantCode: 200,
@@ -102,7 +102,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns 200 with request ID",
+			name:     "handler-returns-200-with-request-ID",
 			rh:       handlerCode(200),
 			r:        req(bgCtx, "http://example.com/"),
 			wantCode: 200,
@@ -119,7 +119,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns 404",
+			name:     "handler-returns-404",
 			rh:       handlerCode(404),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
@@ -135,7 +135,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns 404 with request ID",
+			name:     "handler-returns-404-with-request-ID",
 			rh:       handlerCode(404),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
@@ -151,7 +151,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns 404 via HTTPError",
+			name:     "handler-returns-404-via-HTTPError",
 			rh:       handlerErr(0, Error(404, "not found", testErr)),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
@@ -169,7 +169,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns 404 via HTTPError with request ID",
+			name:     "handler-returns-404-via-HTTPError-with-request-ID",
 			rh:       handlerErr(0, Error(404, "not found", testErr)),
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 404,
@@ -188,7 +188,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns 404 with nil child error",
+			name:     "handler-returns-404-nil-child-error",
 			rh:       handlerErr(0, Error(404, "not found", nil)),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
@@ -206,7 +206,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns 404 with request ID and nil child error",
+			name:     "handler-returns-404-request-ID-nil-child-error",
 			rh:       handlerErr(0, Error(404, "not found", nil)),
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 404,
@@ -225,7 +225,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns user-visible error",
+			name:     "handler-returns-user-visible-error",
 			rh:       handlerErr(0, vizerror.New("visible error")),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
@@ -243,7 +243,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns user-visible error with request ID",
+			name:     "handler-returns-user-visible-error-with-request-ID",
 			rh:       handlerErr(0, vizerror.New("visible error")),
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 500,
@@ -262,7 +262,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns user-visible error wrapped by private error",
+			name:     "handler-returns-vizerror-wrapped-by-private-error",
 			rh:       handlerErr(0, fmt.Errorf("private internal error: %w", vizerror.New("visible error"))),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
@@ -280,7 +280,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name: "handler returns JSON-formatted HTTPError",
+			name: "handler-returns-JSON-formatted-HTTPError",
 			rh: ReturnHandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
 				h := Error(http.StatusBadRequest, `{"isjson": true}`, errors.New("uh"))
 				h.Header = http.Header{"Content-Type": {"application/json"}}
@@ -303,7 +303,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns user-visible error wrapped by private error with request ID",
+			name:     "handler-returns-vizerror-wrapped-by-private-error-with-request-ID",
 			rh:       handlerErr(0, fmt.Errorf("private internal error: %w", vizerror.New("visible error"))),
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 500,
@@ -322,7 +322,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns generic error",
+			name:     "handler-returns-generic-error",
 			rh:       handlerErr(0, testErr),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
@@ -340,7 +340,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns generic error with request ID",
+			name:     "handler-returns-generic-error-with-request-ID",
 			rh:       handlerErr(0, testErr),
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 500,
@@ -359,7 +359,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns error after writing response",
+			name:     "handler-returns-error-after-writing-response",
 			rh:       handlerErr(200, testErr),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
@@ -376,7 +376,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns error after writing response with request ID",
+			name:     "handler-returns-error-after-writing-response-with-request-ID",
 			rh:       handlerErr(200, testErr),
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 200,
@@ -394,7 +394,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns HTTPError after writing response",
+			name:     "handler-returns-HTTPError-after-writing-response",
 			rh:       handlerErr(200, Error(404, "not found", testErr)),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
@@ -411,7 +411,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler does nothing",
+			name:     "handler-does-nothing",
 			rh:       handlerFunc(func(http.ResponseWriter, *http.Request) error { return nil }),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
@@ -427,7 +427,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name: "handler hijacks conn",
+			name: "handler-hijacks-conn",
 			rh: handlerFunc(func(w http.ResponseWriter, r *http.Request) error {
 				_, _, err := w.(http.Hijacker).Hijack()
 				if err != nil {
@@ -450,7 +450,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "error handler gets run",
+			name:     "error-handler-gets-run",
 			rh:       handlerErr(0, Error(404, "not found", nil)), // status code changed in errHandler
 			r:        req(bgCtx, "http://example.com/"),
 			wantCode: 200,
@@ -472,7 +472,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "error handler gets run with request ID",
+			name:     "error-handler-gets-run-with-request-ID",
 			rh:       handlerErr(0, Error(404, "not found", nil)), // status code changed in errHandler
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/"),
 			wantCode: 200,
