@@ -3035,20 +3035,20 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 		lastSuggestedExitNode tailcfg.StableNodeID
 	}{
 		{
-			name:           "ExitNodeID key is set",
+			name:           "exitNodeID-set",
 			exitNodeIDKey:  true,
 			exitNodeID:     "123",
 			exitNodeIDWant: "123",
 			prefsChanged:   true,
 		},
 		{
-			name:           "ExitNodeID key not set",
+			name:           "exitNodeID-not-set",
 			exitNodeIDKey:  true,
 			exitNodeIDWant: "",
 			prefsChanged:   false,
 		},
 		{
-			name:           "ExitNodeID key set, ExitNodeIP preference set",
+			name:           "exitNodeID-set-exitNodeIP-pref-set",
 			exitNodeIDKey:  true,
 			exitNodeID:     "123",
 			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
@@ -3056,7 +3056,7 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			prefsChanged:   true,
 		},
 		{
-			name:           "ExitNodeID key not set, ExitNodeIP key set",
+			name:           "exitNodeID-not-set-exitNodeIP-set",
 			exitNodeIPKey:  true,
 			exitNodeIP:     "127.0.0.1",
 			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
@@ -3064,7 +3064,7 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			prefsChanged:   false,
 		},
 		{
-			name:           "ExitNodeIP key set, existing ExitNodeIP pref",
+			name:           "exitNodeIP-set-existing-pref",
 			exitNodeIPKey:  true,
 			exitNodeIP:     "127.0.0.1",
 			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
@@ -3072,7 +3072,7 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			prefsChanged:   false,
 		},
 		{
-			name:           "existing preferences match policy",
+			name:           "existing-prefs-match-policy",
 			exitNodeIDKey:  true,
 			exitNodeID:     "123",
 			prefs:          &ipn.Prefs{ExitNodeID: tailcfg.StableNodeID("123")},
@@ -3080,7 +3080,8 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			prefsChanged:   false,
 		},
 		{
-			name:           "ExitNodeIP set if net map does not have corresponding node",
+			// ExitNodeIP is set when net map does not have a corresponding node.
+			name:           "exitNodeIP-set-no-matching-node",
 			exitNodeIPKey:  true,
 			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
 			exitNodeIP:     "127.0.0.1",
@@ -3116,7 +3117,8 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			},
 		},
 		{
-			name:           "ExitNodeIP cleared if net map has corresponding node - policy matches prefs",
+			// ExitNodeIP cleared when net map has corresponding node and policy matches prefs.
+			name:           "exitNodeIP-cleared-matching-node-policy-matches",
 			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
 			exitNodeIPKey:  true,
 			exitNodeIP:     "127.0.0.1",
@@ -3156,7 +3158,8 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			},
 		},
 		{
-			name:           "ExitNodeIP cleared if net map has corresponding node - no policy set",
+			// ExitNodeIP cleared when net map has corresponding node and no policy is set.
+			name:           "exitNodeIP-cleared-matching-node-no-policy",
 			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
 			exitNodeIPWant: "",
 			exitNodeIDWant: "123",
@@ -3194,7 +3197,8 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			},
 		},
 		{
-			name:           "ExitNodeIP cleared if net map has corresponding node - different exit node IP in policy",
+			// ExitNodeIP cleared when net map has corresponding node but policy has different exit node IP.
+			name:           "exitNodeIP-cleared-matching-node-different-policy-IP",
 			exitNodeIPKey:  true,
 			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
 			exitNodeIP:     "100.64.5.6",
@@ -3234,7 +3238,7 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			},
 		},
 		{
-			name:                  "ExitNodeID key is set to auto:any and last suggested exit node is populated",
+			name:                  "exitNodeID-auto-any-last-suggested-populated",
 			exitNodeIDKey:         true,
 			exitNodeID:            "auto:any",
 			lastSuggestedExitNode: "123",
@@ -3243,7 +3247,7 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			prefsChanged:          true,
 		},
 		{
-			name:             "ExitNodeID key is set to auto:any and last suggested exit node is not populated",
+			name:             "exitNodeID-auto-any-last-suggested-not-populated",
 			exitNodeIDKey:    true,
 			exitNodeID:       "auto:any",
 			exitNodeIDWant:   "auto:any",
@@ -3251,7 +3255,7 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			prefsChanged:     true,
 		},
 		{
-			name:                  "ExitNodeID key is set to auto:foo and last suggested exit node is populated",
+			name:                  "exitNodeID-auto-foo-last-suggested-populated",
 			exitNodeIDKey:         true,
 			exitNodeID:            "auto:foo",
 			lastSuggestedExitNode: "123",
@@ -3260,7 +3264,7 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			prefsChanged:          true,
 		},
 		{
-			name:             "ExitNodeID key is set to auto:foo and last suggested exit node is not populated",
+			name:             "exitNodeID-auto-foo-last-suggested-not-populated",
 			exitNodeIDKey:    true,
 			exitNodeID:       "auto:foo",
 			exitNodeIDWant:   "auto:any", // should be "auto:any" for compatibility with existing clients
@@ -3645,10 +3649,10 @@ func TestApplySysPolicy(t *testing.T) {
 		stringPolicies map[pkey.Key]string
 	}{
 		{
-			name: "empty prefs without policies",
+			name: "empty-prefs-no-policies",
 		},
 		{
-			name: "prefs set without policies",
+			name: "prefs-set-no-policies",
 			prefs: ipn.Prefs{
 				ControlURL:             "1",
 				ShieldsUp:              true,
@@ -3667,7 +3671,7 @@ func TestApplySysPolicy(t *testing.T) {
 			},
 		},
 		{
-			name: "empty prefs with policies",
+			name: "empty-prefs-with-policies",
 			wantPrefs: ipn.Prefs{
 				ControlURL:             "1",
 				ShieldsUp:              true,
@@ -3687,7 +3691,7 @@ func TestApplySysPolicy(t *testing.T) {
 			},
 		},
 		{
-			name: "prefs set with matching policies",
+			name: "prefs-set-matching-policies",
 			prefs: ipn.Prefs{
 				ControlURL:  "1",
 				ShieldsUp:   true,
@@ -3708,7 +3712,7 @@ func TestApplySysPolicy(t *testing.T) {
 			},
 		},
 		{
-			name: "prefs set with conflicting policies",
+			name: "prefs-set-conflicting-policies",
 			prefs: ipn.Prefs{
 				ControlURL:             "1",
 				ShieldsUp:              true,
@@ -3736,7 +3740,7 @@ func TestApplySysPolicy(t *testing.T) {
 			},
 		},
 		{
-			name: "prefs set with neutral policies",
+			name: "prefs-set-neutral-policies",
 			prefs: ipn.Prefs{
 				ControlURL:             "1",
 				ShieldsUp:              true,
@@ -3772,7 +3776,7 @@ func TestApplySysPolicy(t *testing.T) {
 			},
 		},
 		{
-			name: "enable AutoUpdate apply does not unset check",
+			name: "enable-apply-keeps-check",
 			prefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
@@ -3791,7 +3795,7 @@ func TestApplySysPolicy(t *testing.T) {
 			},
 		},
 		{
-			name: "disable AutoUpdate apply does not unset check",
+			name: "disable-apply-keeps-check",
 			prefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
@@ -3810,7 +3814,7 @@ func TestApplySysPolicy(t *testing.T) {
 			},
 		},
 		{
-			name: "enable AutoUpdate check does not unset apply",
+			name: "enable-check-keeps-apply",
 			prefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: false,
@@ -3829,7 +3833,7 @@ func TestApplySysPolicy(t *testing.T) {
 			},
 		},
 		{
-			name: "disable AutoUpdate check does not unset apply",
+			name: "disable-check-keeps-apply",
 			prefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
@@ -3879,7 +3883,7 @@ func TestApplySysPolicy(t *testing.T) {
 				}
 			})
 
-			t.Run("status update", func(t *testing.T) {
+			t.Run("status-update", func(t *testing.T) {
 				// Profile manager fills in blank ControlURL but it's not set
 				// in most test cases to avoid cluttering them, so adjust for
 				// that.
@@ -3919,75 +3923,75 @@ func TestPreferencePolicyInfo(t *testing.T) {
 		policyError  error
 	}{
 		{
-			name:         "force enable modify",
+			name:         "force-enable-modify",
 			initialValue: false,
 			wantValue:    true,
 			wantChange:   true,
 			policyValue:  "always",
 		},
 		{
-			name:         "force enable unchanged",
+			name:         "force-enable-unchanged",
 			initialValue: true,
 			wantValue:    true,
 			policyValue:  "always",
 		},
 		{
-			name:         "force disable modify",
+			name:         "force-disable-modify",
 			initialValue: true,
 			wantValue:    false,
 			wantChange:   true,
 			policyValue:  "never",
 		},
 		{
-			name:         "force disable unchanged",
+			name:         "force-disable-unchanged",
 			initialValue: false,
 			wantValue:    false,
 			policyValue:  "never",
 		},
 		{
-			name:         "unforced enabled",
+			name:         "unforced-enabled",
 			initialValue: true,
 			wantValue:    true,
 			policyValue:  "user-decides",
 		},
 		{
-			name:         "unforced disabled",
+			name:         "unforced-disabled",
 			initialValue: false,
 			wantValue:    false,
 			policyValue:  "user-decides",
 		},
 		{
-			name:         "blank enabled",
+			name:         "blank-enabled",
 			initialValue: true,
 			wantValue:    true,
 			policyValue:  "",
 		},
 		{
-			name:         "blank disabled",
+			name:         "blank-disabled",
 			initialValue: false,
 			wantValue:    false,
 			policyValue:  "",
 		},
 		{
-			name:         "unset enabled",
+			name:         "unset-enabled",
 			initialValue: true,
 			wantValue:    true,
 			policyError:  syspolicy.ErrNoSuchKey,
 		},
 		{
-			name:         "unset disabled",
+			name:         "unset-disabled",
 			initialValue: false,
 			wantValue:    false,
 			policyError:  syspolicy.ErrNoSuchKey,
 		},
 		{
-			name:         "error enabled",
+			name:         "error-enabled",
 			initialValue: true,
 			wantValue:    true,
 			policyError:  errors.New("test error"),
 		},
 		{
-			name:         "error disabled",
+			name:         "error-disabled",
 			initialValue: false,
 			wantValue:    false,
 			policyError:  errors.New("test error"),
@@ -4113,53 +4117,62 @@ func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
 func TestTCPHandlerForDst(t *testing.T) {
 	b := newTestBackend(t)
 	tests := []struct {
+		name      string
 		desc      string
 		dst       string
 		intercept bool
 	}{
 		{
+			name:      "100_100_100_100-port80",
 			desc:      "intercept port 80 (Web UI) on quad100 IPv4",
 			dst:       "100.100.100.100:80",
 			intercept: true,
 		},
 		{
+			name:      "fd7a-115c-a1e0--53-port80",
 			desc:      "intercept port 80 (Web UI) on quad100 IPv6",
 			dst:       "[fd7a:115c:a1e0::53]:80",
 			intercept: true,
 		},
 		{
+			name:      "100_100_103_100-port80",
 			desc:      "don't intercept port 80 on local ip",
 			dst:       "100.100.103.100:80",
 			intercept: false,
 		},
 		{
+			name:      "fd7a-115c-a1e0--53-port8080",
 			desc:      "intercept port 8080 (Taildrive) on quad100 IPv4",
 			dst:       "[fd7a:115c:a1e0::53]:8080",
 			intercept: true,
 		},
 		{
+			name:      "100_100_103_100-port8080",
 			desc:      "don't intercept port 8080 on local ip",
 			dst:       "100.100.103.100:8080",
 			intercept: false,
 		},
 		{
+			name:      "100_100_100_100-port9080",
 			desc:      "don't intercept port 9080 on quad100 IPv4",
 			dst:       "100.100.100.100:9080",
 			intercept: false,
 		},
 		{
+			name:      "fd7a-115c-a1e0--53-port9080",
 			desc:      "don't intercept port 9080 on quad100 IPv6",
 			dst:       "[fd7a:115c:a1e0::53]:9080",
 			intercept: false,
 		},
 		{
+			name:      "100_100_103_100-port9080",
 			desc:      "don't intercept port 9080 on local ip",
 			dst:       "100.100.103.100:9080",
 			intercept: false,
 		},
 	}
 	for _, tt := range tests {
-		t.Run(tt.dst, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Log(tt.desc)
 			src := netip.MustParseAddrPort("100.100.102.100:51234")
 			h, _ := b.TCPHandlerForDst(src, netip.MustParseAddrPort(tt.dst))
@@ -4258,122 +4271,146 @@ func TestTCPHandlerForDstWithVIPService(t *testing.T) {
 	}
 
 	tests := []struct {
+		name      string
 		desc      string
 		dst       string
 		intercept bool
 	}{
 		{
+			name:      "100_100_100_100-port80",
 			desc:      "intercept port 80 (Web UI) on quad100 IPv4",
 			dst:       "100.100.100.100:80",
 			intercept: true,
 		},
 		{
+			name:      "fd7a-115c-a1e0--53-port80",
 			desc:      "intercept port 80 (Web UI) on quad100 IPv6",
 			dst:       "[fd7a:115c:a1e0::53]:80",
 			intercept: true,
 		},
 		{
+			name:      "100_100_103_100-port80",
 			desc:      "don't intercept port 80 on local ip",
 			dst:       "100.100.103.100:80",
 			intercept: false,
 		},
 		{
+			name:      "100_100_100_100-port8080",
 			desc:      "intercept port 8080 (Taildrive) on quad100 IPv4",
 			dst:       "100.100.100.100:8080",
 			intercept: true,
 		},
 		{
+			name:      "fd7a-115c-a1e0--53-port8080",
 			desc:      "intercept port 8080 (Taildrive) on quad100 IPv6",
 			dst:       "[fd7a:115c:a1e0::53]:8080",
 			intercept: true,
 		},
 		{
+			name:      "100_100_103_100-port8080",
 			desc:      "don't intercept port 8080 on local ip",
 			dst:       "100.100.103.100:8080",
 			intercept: false,
 		},
 		{
+			name:      "100_100_100_100-port9080",
 			desc:      "don't intercept port 9080 on quad100 IPv4",
 			dst:       "100.100.100.100:9080",
 			intercept: false,
 		},
 		{
+			name:      "fd7a-115c-a1e0--53-port9080",
 			desc:      "don't intercept port 9080 on quad100 IPv6",
 			dst:       "[fd7a:115c:a1e0::53]:9080",
 			intercept: false,
 		},
 		{
+			name:      "100_100_103_100-port9080",
 			desc:      "don't intercept port 9080 on local ip",
 			dst:       "100.100.103.100:9080",
 			intercept: false,
 		},
 		// VIP service destinations
 		{
+			name:      "100_101_101_101-port882",
 			desc:      "intercept port 882 (HTTP) on service foo IPv4",
 			dst:       "100.101.101.101:882",
 			intercept: true,
 		},
 		{
+			name:      "fd7a-115c-a1e0-ab12-4843-cd96-6565-6565-port882",
 			desc:      "intercept port 882 (HTTP) on service foo IPv6",
 			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:6565:6565]:882",
 			intercept: true,
 		},
 		{
+			name:      "100_101_101_101-port883",
 			desc:      "intercept port 883 (HTTPS) on service foo IPv4",
 			dst:       "100.101.101.101:883",
 			intercept: true,
 		},
 		{
+			name:      "fd7a-115c-a1e0-ab12-4843-cd96-6565-6565-port883",
 			desc:      "intercept port 883 (HTTPS) on service foo IPv6",
 			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:6565:6565]:883",
 			intercept: true,
 		},
 		{
+			name:      "100_99_99_99-port990",
 			desc:      "intercept port 990 (TCPForward) on service bar IPv4",
 			dst:       "100.99.99.99:990",
 			intercept: true,
 		},
 		{
+			name:      "fd7a-115c-a1e0-ab12-4843-cd96-626b-628b-port990",
 			desc:      "intercept port 990 (TCPForward) on service bar IPv6",
 			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:990",
 			intercept: true,
 		},
 		{
+			name:      "100_99_99_99-port990-terminateTLS",
 			desc:      "intercept port 991 (TCPForward with TerminateTLS) on service bar IPv4",
 			dst:       "100.99.99.99:990",
 			intercept: true,
 		},
 		{
+			name:      "fd7a-115c-a1e0-ab12-4843-cd96-626b-628b-port990-terminateTLS",
 			desc:      "intercept port 991 (TCPForward with TerminateTLS) on service bar IPv6",
 			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:990",
 			intercept: true,
 		},
 		{
+			name:      "100_101_101_101-port4444",
 			desc:      "don't intercept port 4444 on service foo IPv4",
 			dst:       "100.101.101.101:4444",
 			intercept: false,
 		},
 		{
+			name:      "fd7a-115c-a1e0-ab12-4843-cd96-6565-6565-port4444",
 			desc:      "don't intercept port 4444 on service foo IPv6",
 			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:6565:6565]:4444",
 			intercept: false,
 		},
 		{
+			name:      "100_22_22_22-port883",
 			desc:      "don't intercept port 600 on unknown service IPv4",
 			dst:       "100.22.22.22:883",
 			intercept: false,
 		},
 		{
+			name:      "fd7a-115c-a1e0-ab12-4843-cd96-626b-628b-port883",
 			desc:      "don't intercept port 600 on unknown service IPv6",
 			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:883",
 			intercept: false,
 		},
 		{
+			name:      "100_133_133_133-port600",
 			desc:      "don't intercept port 600 (HTTPS) on service baz IPv4",
 			dst:       "100.133.133.133:600",
 			intercept: false,
 		},
 		{
+			name:      "fd7a-115c-a1e0-ab12-4843-cd96-8585-8585-port600",
 			desc:      "don't intercept port 600 (HTTPS) on service baz IPv6",
 			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:8585:8585]:600",
 			intercept: false,
@@ -4381,7 +4418,7 @@ func TestTCPHandlerForDstWithVIPService(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.dst, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Log(tt.desc)
 			src := netip.MustParseAddrPort("100.100.102.100:51234")
 			h, _ := b.TCPHandlerForDst(src, netip.MustParseAddrPort(tt.dst))
@@ -4664,14 +4701,14 @@ func TestRoundTraffic(t *testing.T) {
 		bytes int64
 		want  float64
 	}{
-		{name: "under 5 bytes", bytes: 4, want: 4},
-		{name: "under 1000 bytes", bytes: 987, want: 990},
-		{name: "under 10_000 bytes", bytes: 8875, want: 8900},
-		{name: "under 100_000 bytes", bytes: 77777, want: 78000},
-		{name: "under 1_000_000 bytes", bytes: 666523, want: 670000},
-		{name: "under 10_000_000 bytes", bytes: 22556677, want: 23000000},
-		{name: "under 1_000_000_000 bytes", bytes: 1234234234, want: 1200000000},
-		{name: "under 1_000_000_000 bytes", bytes: 123423423499, want: 123400000000},
+		{name: "under-5B", bytes: 4, want: 4},
+		{name: "under-1000B", bytes: 987, want: 990},
+		{name: "under-10000B", bytes: 8875, want: 8900},
+		{name: "under-100000B", bytes: 77777, want: 78000},
+		{name: "under-1000000B", bytes: 666523, want: 670000},
+		{name: "under-10000000B", bytes: 22556677, want: 23000000},
+		{name: "under-1000000000B", bytes: 1234234234, want: 1200000000},
+		{name: "over-1000000000B", bytes: 123423423499, want: 123400000000},
 	}
 
 	for _, tt := range tests {
@@ -5033,7 +5070,7 @@ func TestSuggestExitNode(t *testing.T) {
 		wantError error
 	}{
 		{
-			name:       "2 exit nodes in same region",
+			name:       "2-exits-same-region",
 			lastReport: preferred1Report,
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
@@ -5051,7 +5088,7 @@ func TestSuggestExitNode(t *testing.T) {
 			wantID:   "stable1",
 		},
 		{
-			name:        "2 exit nodes different regions unknown latency",
+			name:        "2-exits-different-regions-unknown-latency",
 			lastReport:  noLatency1Report,
 			netMap:      defaultNetmap,
 			wantRegions: []int{1, 3}, // the only regions with peers
@@ -5060,7 +5097,7 @@ func TestSuggestExitNode(t *testing.T) {
 			wantID:      "stable2",
 		},
 		{
-			name: "2 derp based exit nodes, different regions, equal latency",
+			name: "2-derp-exits-different-regions-equal-latency",
 			lastReport: &netcheck.Report{
 				RegionLatency: map[int]time.Duration{
 					1: 10,
@@ -5083,7 +5120,7 @@ func TestSuggestExitNode(t *testing.T) {
 			wantID:      "stable1",
 		},
 		{
-			name:         "mullvad nodes, no derp based exit nodes",
+			name:         "mullvad-no-derp-exits",
 			lastReport:   noLatency1Report,
 			netMap:       locationNetmap,
 			wantID:       "stable5",
@@ -5091,7 +5128,7 @@ func TestSuggestExitNode(t *testing.T) {
 			wantName:     "Dallas",
 		},
 		{
-			name:       "nearby mullvad nodes with different priorities",
+			name:       "nearby-mullvad-different-priorities",
 			lastReport: noLatency1Report,
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
@@ -5107,7 +5144,7 @@ func TestSuggestExitNode(t *testing.T) {
 			wantName:     "Fort Worth",
 		},
 		{
-			name:       "nearby mullvad nodes with same priorities",
+			name:       "nearby-mullvad-same-priorities",
 			lastReport: noLatency1Report,
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
@@ -5124,7 +5161,7 @@ func TestSuggestExitNode(t *testing.T) {
 			wantName:     "Dallas",
 		},
 		{
-			name:       "mullvad nodes, remaining node is not in preferred derp",
+			name:       "mullvad-remaining-not-in-preferred-derp",
 			lastReport: noLatency1Report,
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
@@ -5140,7 +5177,7 @@ func TestSuggestExitNode(t *testing.T) {
 			wantName:  "peer4",
 		},
 		{
-			name:       "no peers",
+			name:       "no-peers",
 			lastReport: noLatency1Report,
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
@@ -5148,13 +5185,13 @@ func TestSuggestExitNode(t *testing.T) {
 			},
 		},
 		{
-			name:       "nil report",
+			name:       "nil-report",
 			lastReport: nil,
 			netMap:     largeNetmap,
 			wantError:  ErrNoPreferredDERP,
 		},
 		{
-			name:       "no preferred derp region",
+			name:       "no-preferred-derp-region",
 			lastReport: preferredNoneReport,
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
@@ -5163,13 +5200,13 @@ func TestSuggestExitNode(t *testing.T) {
 			wantError: ErrNoPreferredDERP,
 		},
 		{
-			name:       "nil netmap",
+			name:       "nil-netmap",
 			lastReport: noLatency1Report,
 			netMap:     nil,
 			wantError:  ErrNoPreferredDERP,
 		},
 		{
-			name:       "nil derpmap",
+			name:       "nil-derpmap",
 			lastReport: noLatency1Report,
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
@@ -5181,7 +5218,7 @@ func TestSuggestExitNode(t *testing.T) {
 			wantError: ErrNoPreferredDERP,
 		},
 		{
-			name:       "missing suggestion capability",
+			name:       "missing-suggestion-capability",
 			lastReport: noLatency1Report,
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
@@ -5193,7 +5230,7 @@ func TestSuggestExitNode(t *testing.T) {
 			},
 		},
 		{
-			name:       "prefer last node",
+			name:       "prefer-last-node",
 			lastReport: preferred1Report,
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
@@ -5212,7 +5249,7 @@ func TestSuggestExitNode(t *testing.T) {
 			wantID:   "stable2",
 		},
 		{
-			name:           "found better derp node",
+			name:           "found-better-derp-node",
 			lastSuggestion: "stable3",
 			lastReport:     preferred1Report,
 			netMap:         defaultNetmap,
@@ -5220,7 +5257,7 @@ func TestSuggestExitNode(t *testing.T) {
 			wantName:       "peer2",
 		},
 		{
-			name:           "prefer last mullvad node",
+			name:           "prefer-last-mullvad-node",
 			lastSuggestion: "stable2",
 			lastReport:     preferred1Report,
 			netMap: &netmap.NetworkMap{
@@ -5238,7 +5275,7 @@ func TestSuggestExitNode(t *testing.T) {
 			wantLocation: dallas.View(),
 		},
 		{
-			name:           "prefer better mullvad node",
+			name:           "prefer-better-mullvad-node",
 			lastSuggestion: "stable2",
 			lastReport:     preferred1Report,
 			netMap: &netmap.NetworkMap{
@@ -5256,7 +5293,7 @@ func TestSuggestExitNode(t *testing.T) {
 			wantLocation: fortWorth.View(),
 		},
 		{
-			name:       "large netmap",
+			name:       "large-netmap",
 			lastReport: preferred1Report,
 			netMap:     largeNetmap,
 			wantNodes:  []tailcfg.StableNodeID{"stable1", "stable2"},
@@ -5264,13 +5301,13 @@ func TestSuggestExitNode(t *testing.T) {
 			wantName:   "peer2",
 		},
 		{
-			name:        "no allowed suggestions",
+			name:        "no-allowed-suggestions",
 			lastReport:  preferred1Report,
 			netMap:      largeNetmap,
 			allowPolicy: []tailcfg.StableNodeID{},
 		},
 		{
-			name:        "only derp suggestions",
+			name:        "only-derp-suggestions",
 			lastReport:  preferred1Report,
 			netMap:      largeNetmap,
 			allowPolicy: []tailcfg.StableNodeID{"stable1", "stable2", "stable3"},
@@ -5279,7 +5316,7 @@ func TestSuggestExitNode(t *testing.T) {
 			wantName:    "peer2",
 		},
 		{
-			name:         "only mullvad suggestions",
+			name:         "only-mullvad-suggestions",
 			lastReport:   preferred1Report,
 			netMap:       largeNetmap,
 			allowPolicy:  []tailcfg.StableNodeID{"stable5", "stable6", "stable7"},
@@ -5288,7 +5325,7 @@ func TestSuggestExitNode(t *testing.T) {
 			wantLocation: fortWorth.View(),
 		},
 		{
-			name:        "only worst derp",
+			name:        "only-worst-derp",
 			lastReport:  preferred1Report,
 			netMap:      largeNetmap,
 			allowPolicy: []tailcfg.StableNodeID{"stable3"},
@@ -5296,7 +5333,7 @@ func TestSuggestExitNode(t *testing.T) {
 			wantName:    "peer3",
 		},
 		{
-			name:         "only worst mullvad",
+			name:         "only-worst-mullvad",
 			lastReport:   preferred1Report,
 			netMap:       largeNetmap,
 			allowPolicy:  []tailcfg.StableNodeID{"stable6"},
@@ -5306,7 +5343,7 @@ func TestSuggestExitNode(t *testing.T) {
 		},
 		{
 			// Regression test for https://github.com/tailscale/tailscale/issues/17661
-			name: "exit nodes with no home DERP, randomly selected",
+			name: "exits-no-home-DERP-random-selection",
 			lastReport: &netcheck.Report{
 				RegionLatency: map[int]time.Duration{
 					1: 10,
@@ -5388,7 +5425,7 @@ func TestSuggestExitNodePickWeighted(t *testing.T) {
 		wantIDs    []tailcfg.StableNodeID
 	}{
 		{
-			name: "different priorities",
+			name: "different-priorities",
 			candidates: []tailcfg.NodeView{
 				makePeer(2, withExitRoutes(), withLocation(location20.View())),
 				makePeer(3, withExitRoutes(), withLocation(location10.View())),
@@ -5396,7 +5433,7 @@ func TestSuggestExitNodePickWeighted(t *testing.T) {
 			wantIDs: []tailcfg.StableNodeID{"stable2"},
 		},
 		{
-			name: "same priorities",
+			name: "same-priorities",
 			candidates: []tailcfg.NodeView{
 				makePeer(2, withExitRoutes(), withLocation(location10.View())),
 				makePeer(3, withExitRoutes(), withLocation(location10.View())),
@@ -5404,11 +5441,11 @@ func TestSuggestExitNodePickWeighted(t *testing.T) {
 			wantIDs: []tailcfg.StableNodeID{"stable2", "stable3"},
 		},
 		{
-			name:       "<1 candidates",
+			name:       "lt1-candidates",
 			candidates: []tailcfg.NodeView{},
 		},
 		{
-			name: "1 candidate",
+			name: "1-candidate",
 			candidates: []tailcfg.NodeView{
 				makePeer(2, withExitRoutes(), withLocation(location20.View())),
 			},
@@ -5444,7 +5481,7 @@ func TestSuggestExitNodeLongLatDistance(t *testing.T) {
 		want     float64
 	}{
 		{
-			name:     "zero values",
+			name:     "zero-values",
 			fromLat:  0,
 			fromLong: 0,
 			toLat:    0,
@@ -5452,7 +5489,7 @@ func TestSuggestExitNodeLongLatDistance(t *testing.T) {
 			want:     0,
 		},
 		{
-			name:     "valid values",
+			name:     "valid-values",
 			fromLat:  40.73061,
 			fromLong: -73.935242,
 			toLat:    37.3382082,
@@ -5460,7 +5497,8 @@ func TestSuggestExitNodeLongLatDistance(t *testing.T) {
 			want:     4117266.873301274,
 		},
 		{
-			name:     "valid values, locations in north and south of equator",
+			// Locations in north and south of equator.
+			name:     "valid-values-cross-equator",
 			fromLat:  40.73061,
 			fromLong: -73.935242,
 			toLat:    -33.861481,
@@ -5865,13 +5903,13 @@ func TestMinLatencyDERPregion(t *testing.T) {
 		wantRegion int
 	}{
 		{
-			name:       "regions, no latency values",
+			name:       "regions-no-latency",
 			regions:    []int{1, 2, 3},
 			wantRegion: 0,
 			report:     &netcheck.Report{},
 		},
 		{
-			name:       "regions, different latency values",
+			name:       "regions-different-latency",
 			regions:    []int{1, 2, 3},
 			wantRegion: 2,
 			report: &netcheck.Report{
@@ -5883,7 +5921,7 @@ func TestMinLatencyDERPregion(t *testing.T) {
 			},
 		},
 		{
-			name:       "regions, same values",
+			name:       "regions-same-latency",
 			regions:    []int{1, 2, 3},
 			wantRegion: 1,
 			report: &netcheck.Report{
@@ -6030,7 +6068,7 @@ func TestFillAllowedSuggestions(t *testing.T) {
 			want:        []tailcfg.StableNodeID{"one", "three", "four", "two"}, // order should not matter
 		},
 		{
-			name:        "preserve case",
+			name:        "preserve-case",
 			allowPolicy: []string{"ABC", "def", "gHiJ"},
 			want:        []tailcfg.StableNodeID{"ABC", "def", "gHiJ"},
 		},
@@ -6184,61 +6222,61 @@ func TestNotificationTargetMatch(t *testing.T) {
 			wantMatch: false,
 		},
 		{
-			name:      "FilterByUID+CID/Nil",
+			name:      "FilterByUID-CID/Nil",
 			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4"},
 			actor:     nil,
 			wantMatch: false,
 		},
 		{
-			name:      "FilterByUID+CID/NoUID/NoCID",
+			name:      "FilterByUID-CID/NoUID/NoCID",
 			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
 			actor:     &ipnauth.TestActor{},
 			wantMatch: false,
 		},
 		{
-			name:      "FilterByUID+CID/NoUID/SameCID",
+			name:      "FilterByUID-CID/NoUID/SameCID",
 			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
 			actor:     &ipnauth.TestActor{CID: ipnauth.ClientIDFrom("A")},
 			wantMatch: false,
 		},
 		{
-			name:      "FilterByUID+CID/NoUID/DifferentCID",
+			name:      "FilterByUID-CID/NoUID/DifferentCID",
 			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
 			actor:     &ipnauth.TestActor{CID: ipnauth.ClientIDFrom("B")},
 			wantMatch: false,
 		},
 		{
-			name:      "FilterByUID+CID/SameUID/NoCID",
+			name:      "FilterByUID-CID/SameUID/NoCID",
 			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
 			actor:     &ipnauth.TestActor{UID: "S-1-5-21-1-2-3-4"},
 			wantMatch: false,
 		},
 		{
-			name:      "FilterByUID+CID/SameUID/SameCID",
+			name:      "FilterByUID-CID/SameUID/SameCID",
 			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
 			actor:     &ipnauth.TestActor{UID: "S-1-5-21-1-2-3-4", CID: ipnauth.ClientIDFrom("A")},
 			wantMatch: true,
 		},
 		{
-			name:      "FilterByUID+CID/SameUID/DifferentCID",
+			name:      "FilterByUID-CID/SameUID/DifferentCID",
 			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
 			actor:     &ipnauth.TestActor{UID: "S-1-5-21-1-2-3-4", CID: ipnauth.ClientIDFrom("B")},
 			wantMatch: false,
 		},
 		{
-			name:      "FilterByUID+CID/DifferentUID/NoCID",
+			name:      "FilterByUID-CID/DifferentUID/NoCID",
 			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
 			actor:     &ipnauth.TestActor{UID: "S-1-5-21-5-6-7-8"},
 			wantMatch: false,
 		},
 		{
-			name:      "FilterByUID+CID/DifferentUID/SameCID",
+			name:      "FilterByUID-CID/DifferentUID/SameCID",
 			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
 			actor:     &ipnauth.TestActor{UID: "S-1-5-21-5-6-7-8", CID: ipnauth.ClientIDFrom("A")},
 			wantMatch: false,
 		},
 		{
-			name:      "FilterByUID+CID/DifferentUID/DifferentCID",
+			name:      "FilterByUID-CID/DifferentUID/DifferentCID",
 			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
 			actor:     &ipnauth.TestActor{UID: "S-1-5-21-5-6-7-8", CID: ipnauth.ClientIDFrom("B")},
 			wantMatch: false,

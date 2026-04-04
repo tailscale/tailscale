@@ -1127,7 +1127,7 @@ func TestForwarderWithManyResolvers(t *testing.T) {
 			},
 		},
 		{
-			name: "ServFail+Success",
+			name: "ServFail-and-Success",
 			responses: [][]byte{ // All upstream servers fail except for one.
 				makeTestResponse(t, domain, dns.RCodeServerFailure),
 				makeTestResponse(t, domain, dns.RCodeServerFailure),
@@ -1150,7 +1150,7 @@ func TestForwarderWithManyResolvers(t *testing.T) {
 			},
 		},
 		{
-			name: "NXDomain+Success",
+			name: "NXDomain-and-Success",
 			responses: [][]byte{ // All upstream servers returned NXDOMAIN except for one.
 				makeTestResponse(t, domain, dns.RCodeNameError),
 				makeTestResponse(t, domain, dns.RCodeNameError),
@@ -1173,7 +1173,7 @@ func TestForwarderWithManyResolvers(t *testing.T) {
 			},
 		},
 		{
-			name: "Refused+Success",
+			name: "Refused-and-Success",
 			responses: [][]byte{ // Some upstream servers refuse, but one succeeds.
 				makeTestResponse(t, domain, dns.RCodeRefused),
 				makeTestResponse(t, domain, dns.RCodeRefused),
@@ -1187,7 +1187,7 @@ func TestForwarderWithManyResolvers(t *testing.T) {
 			},
 		},
 		{
-			name: "Refused+ServFail",
+			name: "Refused-and-ServFail",
 			responses: [][]byte{ // Some servers refuse, at least one fails.
 				makeTestResponse(t, domain, dns.RCodeRefused),
 				makeTestResponse(t, domain, dns.RCodeServerFailure),

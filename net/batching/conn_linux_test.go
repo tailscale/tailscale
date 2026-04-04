@@ -42,7 +42,7 @@ func Test_linuxBatchingConn_splitCoalescedMessages(t *testing.T) {
 		wantErr     bool
 	}{
 		{
-			name: "second last split last empty",
+			name: "second-last-split-last-empty",
 			msgs: []ipv6.Message{
 				newMsg(0, 0),
 				newMsg(0, 0),
@@ -55,7 +55,7 @@ func Test_linuxBatchingConn_splitCoalescedMessages(t *testing.T) {
 			wantErr:     false,
 		},
 		{
-			name: "second last no split last empty",
+			name: "second-last-no-split-last-empty",
 			msgs: []ipv6.Message{
 				newMsg(0, 0),
 				newMsg(0, 0),
@@ -68,7 +68,7 @@ func Test_linuxBatchingConn_splitCoalescedMessages(t *testing.T) {
 			wantErr:     false,
 		},
 		{
-			name: "second last no split last no split",
+			name: "second-last-no-split-last-no-split",
 			msgs: []ipv6.Message{
 				newMsg(0, 0),
 				newMsg(0, 0),
@@ -81,7 +81,7 @@ func Test_linuxBatchingConn_splitCoalescedMessages(t *testing.T) {
 			wantErr:     false,
 		},
 		{
-			name: "second last no split last split",
+			name: "second-last-no-split-last-split",
 			msgs: []ipv6.Message{
 				newMsg(0, 0),
 				newMsg(0, 0),
@@ -94,7 +94,7 @@ func Test_linuxBatchingConn_splitCoalescedMessages(t *testing.T) {
 			wantErr:     false,
 		},
 		{
-			name: "second last split last split",
+			name: "second-last-split-last-split",
 			msgs: []ipv6.Message{
 				newMsg(0, 0),
 				newMsg(0, 0),
@@ -107,7 +107,7 @@ func Test_linuxBatchingConn_splitCoalescedMessages(t *testing.T) {
 			wantErr:     false,
 		},
 		{
-			name: "second last no split last split overflow",
+			name: "second-last-no-split-last-split-overflow",
 			msgs: []ipv6.Message{
 				newMsg(0, 0),
 				newMsg(0, 0),
@@ -161,7 +161,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 		wantGSO  []int
 	}{
 		{
-			name: "one message no coalesce",
+			name: "one-message-no-coalesce",
 			buffs: [][]byte{
 				withGeneveSpace(1, 1),
 			},
@@ -169,7 +169,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			wantGSO:  []int{0},
 		},
 		{
-			name: "one message no coalesce vni.isSet",
+			name: "one-message-no-coalesce-vni-isSet",
 			buffs: [][]byte{
 				withGeneveSpace(1, 1),
 			},
@@ -178,7 +178,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			wantGSO:  []int{0},
 		},
 		{
-			name: "two messages equal len coalesce",
+			name: "two-messages-equal-len-coalesce",
 			buffs: [][]byte{
 				withGeneveSpace(1, 2),
 				withGeneveSpace(1, 1),
@@ -187,7 +187,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			wantGSO:  []int{1},
 		},
 		{
-			name: "two messages equal len coalesce vni.isSet",
+			name: "two-messages-equal-len-coalesce-vni-isSet",
 			buffs: [][]byte{
 				withGeneveSpace(1, 2+packet.GeneveFixedHeaderLength),
 				withGeneveSpace(1, 1),
@@ -197,7 +197,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			wantGSO:  []int{1 + packet.GeneveFixedHeaderLength},
 		},
 		{
-			name: "two messages unequal len coalesce",
+			name: "two-messages-unequal-len-coalesce",
 			buffs: [][]byte{
 				withGeneveSpace(2, 3),
 				withGeneveSpace(1, 1),
@@ -206,7 +206,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			wantGSO:  []int{2},
 		},
 		{
-			name: "two messages unequal len coalesce vni.isSet",
+			name: "two-messages-unequal-len-coalesce-vni-isSet",
 			buffs: [][]byte{
 				withGeneveSpace(2, 3+packet.GeneveFixedHeaderLength),
 				withGeneveSpace(1, 1),
@@ -216,7 +216,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength},
 		},
 		{
-			name: "three messages second unequal len coalesce",
+			name: "three-messages-second-unequal-len-coalesce",
 			buffs: [][]byte{
 				withGeneveSpace(2, 3),
 				withGeneveSpace(1, 1),
@@ -226,7 +226,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			wantGSO:  []int{2, 0},
 		},
 		{
-			name: "three messages second unequal len coalesce vni.isSet",
+			name: "three-messages-second-unequal-len-coalesce-vni-isSet",
 			buffs: [][]byte{
 				withGeneveSpace(2, 3+(2*packet.GeneveFixedHeaderLength)),
 				withGeneveSpace(1, 1),
@@ -237,7 +237,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength, 0},
 		},
 		{
-			name: "three messages limited cap coalesce",
+			name: "three-messages-limited-cap-coalesce",
 			buffs: [][]byte{
 				withGeneveSpace(2, 4),
 				withGeneveSpace(2, 2),
@@ -247,7 +247,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			wantGSO:  []int{2},
 		},
 		{
-			name: "three messages limited cap coalesce vni.isSet",
+			name: "three-messages-limited-cap-coalesce-vni-isSet",
 			buffs: [][]byte{
 				withGeneveSpace(2, 4+packet.GeneveFixedHeaderLength),
 				withGeneveSpace(2, 2),
@@ -376,19 +376,19 @@ func Test_getRXQOverflowsFromControl(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "rxq overflows",
+			name:    "rxq-overflows",
 			control: rxqOverflowsControl(1),
 			want:    1,
 			wantErr: false,
 		},
 		{
-			name:    "multiple cmsg rxq overflows at head",
+			name:    "multiple-cmsg-rxq-overflows-at-head",
 			control: append(rxqOverflowsControl(1), gsoControl(1)...),
 			want:    1,
 			wantErr: false,
 		},
 		{
-			name:    "multiple cmsg rxq overflows at tail",
+			name:    "multiple-cmsg-rxq-overflows-at-tail",
 			control: append(gsoControl(1), rxqOverflowsControl(1)...),
 			want:    1,
 			wantErr: false,
@@ -432,19 +432,19 @@ func Test_getGSOSizeFromControl(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "rxq overflows",
+			name:    "rxq-overflows",
 			control: rxqOverflowsControl(1),
 			want:    0,
 			wantErr: false,
 		},
 		{
-			name:    "multiple cmsg gso at tail",
+			name:    "multiple-cmsg-gso-at-tail",
 			control: append(rxqOverflowsControl(1), gsoControl(1)...),
 			want:    1,
 			wantErr: false,
 		},
 		{
-			name:    "multiple cmsg gso at head",
+			name:    "multiple-cmsg-gso-at-head",
 			control: append(gsoControl(1), rxqOverflowsControl(1)...),
 			want:    1,
 			wantErr: false,

@@ -41,37 +41,37 @@ func TestQnapAuthnURL(t *testing.T) {
 		want string
 	}{
 		{
-			name: "localhost http",
+			name: "localhost-http",
 			in:   "http://localhost:8088/",
 			want: "http://localhost:8088/cgi-bin/authLogin.cgi?qtoken=token",
 		},
 		{
-			name: "localhost https",
+			name: "localhost-https",
 			in:   "https://localhost:5000/",
 			want: "https://localhost:5000/cgi-bin/authLogin.cgi?qtoken=token",
 		},
 		{
-			name: "IP http",
+			name: "IP-http",
 			in:   "http://10.1.20.4:80/",
 			want: "http://10.1.20.4:80/cgi-bin/authLogin.cgi?qtoken=token",
 		},
 		{
-			name: "IP6 https",
+			name: "IP6-https",
 			in:   "https://[ff7d:0:1:2::1]/",
 			want: "https://[ff7d:0:1:2::1]/cgi-bin/authLogin.cgi?qtoken=token",
 		},
 		{
-			name: "hostname https",
+			name: "hostname-https",
 			in:   "https://qnap.example.com/",
 			want: "https://qnap.example.com/cgi-bin/authLogin.cgi?qtoken=token",
 		},
 		{
-			name: "invalid URL",
+			name: "invalid-URL",
 			in:   "This is not a URL, it is a really really really really really really really really really really really really long string to exercise the URL truncation code in the error path.",
 			want: "http://localhost/cgi-bin/authLogin.cgi?qtoken=token",
 		},
 		{
-			name: "err != nil",
+			name: "err-not-nil",
 			in:   "http://192.168.0.%31/",
 			want: "http://localhost/cgi-bin/authLogin.cgi?qtoken=token",
 		},
@@ -1516,47 +1516,47 @@ func TestCSRFProtect(t *testing.T) {
 		wantError      bool
 	}{
 		{
-			name:   "GET requests with no header are allowed",
+			name:   "GET-no-header-allowed", // GET requests with no header are allowed
 			method: "GET",
 		},
 		{
-			name:         "POST requests with same-origin are allowed",
+			name:         "POST-same-origin-allowed",
 			method:       "POST",
 			secFetchSite: "same-origin",
 		},
 		{
-			name:         "POST requests with cross-site are not allowed",
+			name:         "POST-cross-site-rejected",
 			method:       "POST",
 			secFetchSite: "cross-site",
 			wantError:    true,
 		},
 		{
-			name:         "POST requests with unknown sec-fetch-site values are not allowed",
+			name:         "POST-unknown-sec-fetch-site-rejected",
 			method:       "POST",
 			secFetchSite: "new-unknown-value",
 			wantError:    true,
 		},
 		{
-			name:         "POST requests with none are not allowed",
+			name:         "POST-sec-fetch-none-rejected",
 			method:       "POST",
 			secFetchSite: "none",
 			wantError:    true,
 		},
 		{
-			name:   "POST requests with no sec-fetch-site header but matching host and origin are allowed",
+			name:   "POST-no-sec-fetch-site-matching-host-origin", // no sec-fetch-site header but matching host and origin are allowed
 			method: "POST",
 			host:   "example.com",
 			origin: "https://example.com",
 		},
 		{
-			name:      "POST requests with no sec-fetch-site and non-matching host and origin are not allowed",
+			name:      "POST-no-sec-fetch-site-mismatched-host-origin-rejected",
 			method:    "POST",
 			host:      "example.com",
 			origin:    "https://example.net",
 			wantError: true,
 		},
 		{
-			name:           "POST requests with no sec-fetch-site and and origin that matches the override are allowed",
+			name:           "POST-no-sec-fetch-site-origin-override-allowed",
 			method:         "POST",
 			originOverride: "example.net",
 			host:           "internal.example.foo", // Host can be changed by reverse proxies

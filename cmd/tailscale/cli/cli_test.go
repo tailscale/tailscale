@@ -1533,13 +1533,13 @@ func TestParseNLArgs(t *testing.T) {
 			parseDisablements: true,
 		},
 		{
-			name:      "key no votes",
+			name:      "key-no-votes",
 			input:     []string{"nlpub:" + strings.Repeat("00", 32)},
 			parseKeys: true,
 			wantKeys:  []tka.Key{{Kind: tka.Key25519, Votes: 1, Public: bytes.Repeat([]byte{0}, 32)}},
 		},
 		{
-			name:      "key with votes",
+			name:      "key-with-votes",
 			input:     []string{"nlpub:" + strings.Repeat("01", 32) + "?5"},
 			parseKeys: true,
 			wantKeys:  []tka.Key{{Kind: tka.Key25519, Votes: 5, Public: bytes.Repeat([]byte{1}, 32)}},
@@ -1551,13 +1551,13 @@ func TestParseNLArgs(t *testing.T) {
 			wantDisablements:  [][]byte{bytes.Repeat([]byte{2}, 32), bytes.Repeat([]byte{3}, 32)},
 		},
 		{
-			name:      "disablements not allowed",
+			name:      "disablements-not-allowed",
 			input:     []string{"disablement:" + strings.Repeat("02", 32)},
 			parseKeys: true,
 			wantErr:   fmt.Errorf("parsing key 1: key hex string doesn't have expected type prefix tlpub:"),
 		},
 		{
-			name:              "keys not allowed",
+			name:              "keys-not-allowed",
 			input:             []string{"nlpub:" + strings.Repeat("02", 32)},
 			parseDisablements: true,
 			wantErr:           fmt.Errorf("parsing argument 1: expected value with \"disablement:\" or \"disablement-secret:\" prefix, got %q", "nlpub:0202020202020202020202020202020202020202020202020202020202020202"),

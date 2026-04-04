@@ -185,7 +185,7 @@ func TestMarkActiveChain(t *testing.T) {
 			expectLastActiveIdx: 0,
 		},
 		{
-			name:     "simple truncate",
+			name:     "simple-truncate",
 			minChain: 2,
 			chain: []aumTemplate{
 				{AUM: AUM{MessageKind: AUMCheckpoint, State: &State{}}},
@@ -196,7 +196,7 @@ func TestMarkActiveChain(t *testing.T) {
 			expectLastActiveIdx: 1,
 		},
 		{
-			name:     "long truncate",
+			name:     "long-truncate",
 			minChain: 5,
 			chain: []aumTemplate{
 				{AUM: AUM{MessageKind: AUMCheckpoint, State: &State{}}},
@@ -211,7 +211,7 @@ func TestMarkActiveChain(t *testing.T) {
 			expectLastActiveIdx: 2,
 		},
 		{
-			name:     "truncate finding checkpoint",
+			name:     "truncate-finding-checkpoint",
 			minChain: 2,
 			chain: []aumTemplate{
 				{AUM: AUM{MessageKind: AUMCheckpoint, State: &State{}}},
@@ -342,7 +342,7 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
 			wantRetained: []string{"A"},
 		},
 		{
-			name: "no adjustment",
+			name: "no-adjustment",
 			chain: newTestchain(t, `
                 DEAD -> A -> B -> C
                 A.template = checkpoint
@@ -380,7 +380,7 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
 			wantDeleted:  []string{"A", "B"},
 		},
 		{
-			name: "fork finding earlier checkpoint",
+			name: "fork-finding-earlier-checkpoint",
 			chain: newTestchain(t, `
                 A -> B -> C -> D -> E -> F
                           | -> FORK
@@ -403,7 +403,7 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
 			wantDeleted:  []string{"A"},
 		},
 		{
-			name: "fork multi",
+			name: "fork-multi",
 			chain: newTestchain(t, `
                 A -> B -> C -> D -> E
                                | -> DEADFORK
@@ -429,7 +429,7 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
 			wantDeleted:  []string{"A", "B", "DEADFORK"},
 		},
 		{
-			name: "fork multi 2",
+			name: "fork-multi-2",
 			chain: newTestchain(t, `
                 A -> B -> C -> D -> E -> F -> G
 

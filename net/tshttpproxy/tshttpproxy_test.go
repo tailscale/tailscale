@@ -97,7 +97,7 @@ func TestSetSelfProxy(t *testing.T) {
 		wantHTTPS string
 	}{
 		{
-			name: "no self proxy",
+			name: "no-self-proxy",
 			env: map[string]string{
 				"HTTP_PROXY":  "127.0.0.1:1234",
 				"HTTPS_PROXY": "127.0.0.1:1234",
@@ -107,7 +107,7 @@ func TestSetSelfProxy(t *testing.T) {
 			wantHTTPS: "127.0.0.1:1234",
 		},
 		{
-			name: "skip proxies",
+			name: "skip-proxies",
 			env: map[string]string{
 				"HTTP_PROXY":  "127.0.0.1:1234",
 				"HTTPS_PROXY": "127.0.0.1:5678",
@@ -117,7 +117,7 @@ func TestSetSelfProxy(t *testing.T) {
 			wantHTTPS: "", // skipped
 		},
 		{
-			name: "localhost normalization of env var",
+			name: "localhost-normalization-of-env-var",
 			env: map[string]string{
 				"HTTP_PROXY":  "localhost:1234",
 				"HTTPS_PROXY": "[::1]:5678",
@@ -127,7 +127,7 @@ func TestSetSelfProxy(t *testing.T) {
 			wantHTTPS: "", // skipped
 		},
 		{
-			name: "localhost normalization of addr",
+			name: "localhost-normalization-of-addr",
 			env: map[string]string{
 				"HTTP_PROXY":  "127.0.0.1:1234",
 				"HTTPS_PROXY": "127.0.0.1:1234",
@@ -137,7 +137,7 @@ func TestSetSelfProxy(t *testing.T) {
 			wantHTTPS: "", // skipped
 		},
 		{
-			name: "no ports",
+			name: "no-ports",
 			env: map[string]string{
 				"HTTP_PROXY":  "myproxy",
 				"HTTPS_PROXY": "myproxy",

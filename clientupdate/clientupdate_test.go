@@ -148,27 +148,27 @@ func TestUpdateYUMRepoTrack(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			desc:   "same track",
+			desc:   "same-track",
 			before: YUMRepos[StableTrack],
 			track:  StableTrack,
 			after:  YUMRepos[StableTrack],
 		},
 		{
-			desc:    "change track",
+			desc:    "change-track",
 			before:  YUMRepos[StableTrack],
 			track:   UnstableTrack,
 			after:   YUMRepos[UnstableTrack],
 			rewrote: true,
 		},
 		{
-			desc:    "change track RC",
+			desc:    "change-track-RC",
 			before:  YUMRepos[StableTrack],
 			track:   ReleaseCandidateTrack,
 			after:   YUMRepos[ReleaseCandidateTrack],
 			rewrote: true,
 		},
 		{
-			desc:    "non-tailscale repo file",
+			desc:    "non-tailscale-repo-file",
 			before:  YUMRepos["FakeRepo"],
 			track:   StableTrack,
 			wantErr: true,
@@ -215,7 +215,7 @@ func TestParseAlpinePackageVersion(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			desc: "valid version",
+			desc: "valid-version",
 			out: `
 tailscale-1.44.2-r0 description:
 The easiest, most secure way to use WireGuard and 2FA
@@ -229,7 +229,7 @@ tailscale-1.44.2-r0 installed size:
 			want: "1.44.2",
 		},
 		{
-			desc: "wrong package output",
+			desc: "wrong-package-output",
 			out: `
 busybox-1.36.1-r0 description:
 Size optimized toolbox of many common UNIX utilities
@@ -243,7 +243,7 @@ busybox-1.36.1-r0 installed size:
 			wantErr: true,
 		},
 		{
-			desc: "missing version",
+			desc: "missing-version",
 			out: `
 tailscale description:
 The easiest, most secure way to use WireGuard and 2FA
@@ -257,12 +257,12 @@ tailscale installed size:
 			wantErr: true,
 		},
 		{
-			desc:    "empty output",
+			desc:    "empty-output",
 			out:     "",
 			wantErr: true,
 		},
 		{
-			desc: "multiple versions",
+			desc: "multiple-versions",
 			out: `
 tailscale-1.54.1-r0 description:
 The easiest, most secure way to use WireGuard and 2FA
@@ -322,14 +322,14 @@ func TestCheckOutdatedAlpineRepo(t *testing.T) {
 		track             string
 	}{
 		{
-			name:              "Up to date",
+			name:              "up-to-date",
 			fileContent:       "https://dl-cdn.alpinelinux.org/alpine/v3.20/main",
 			latestHTTPVersion: "1.95.3",
 			latestApkVersion:  "1.95.3",
 			track:             "unstable",
 		},
 		{
-			name:              "Behind unstable",
+			name:              "behind-unstable",
 			fileContent:       "https://dl-cdn.alpinelinux.org/alpine/v3.20/main",
 			latestHTTPVersion: "1.95.4",
 			latestApkVersion:  "1.95.3",
@@ -339,7 +339,7 @@ func TestCheckOutdatedAlpineRepo(t *testing.T) {
 			track:             "unstable",
 		},
 		{
-			name:              "Behind stable",
+			name:              "behind-stable",
 			fileContent:       "https://dl-cdn.alpinelinux.org/alpine/v2.40/main",
 			latestHTTPVersion: "1.94.3",
 			latestApkVersion:  "1.92.1",
@@ -349,7 +349,7 @@ func TestCheckOutdatedAlpineRepo(t *testing.T) {
 			track:             "stable",
 		},
 		{
-			name:              "Nothing in dist file",
+			name:              "nothing-in-dist-file",
 			fileContent:       "",
 			latestHTTPVersion: "1.94.3",
 			latestApkVersion:  "1.92.1",
@@ -505,14 +505,14 @@ unique=synology_88f6281_213air
 			want: "88f6281",
 		},
 		{
-			desc: "missing unique",
+			desc: "missing-unique",
 			content: `
 company_title="Synology"
 `,
 			wantErr: true,
 		},
 		{
-			desc: "empty unique",
+			desc: "empty-unique",
 			content: `
 company_title="Synology"
 unique=
@@ -520,7 +520,7 @@ unique=
 			wantErr: true,
 		},
 		{
-			desc: "empty unique double-quoted",
+			desc: "empty-unique-double-quoted",
 			content: `
 company_title="Synology"
 unique=""
@@ -528,7 +528,7 @@ unique=""
 			wantErr: true,
 		},
 		{
-			desc: "empty unique single-quoted",
+			desc: "empty-unique-single-quoted",
 			content: `
 company_title="Synology"
 unique=''
@@ -536,7 +536,7 @@ unique=''
 			wantErr: true,
 		},
 		{
-			desc: "malformed unique",
+			desc: "malformed-unique",
 			content: `
 company_title="Synology"
 unique="synology_88f6281"
@@ -544,12 +544,12 @@ unique="synology_88f6281"
 			wantErr: true,
 		},
 		{
-			desc:    "empty file",
+			desc:    "empty-file",
 			content: ``,
 			wantErr: true,
 		},
 		{
-			desc: "empty lines and comments",
+			desc: "empty-lines-and-comments",
 			content: `
 
 # In a file named synoinfo? Shocking!
@@ -613,7 +613,7 @@ func TestUnpackLinuxTarball(t *testing.T) {
 			},
 		},
 		{
-			desc: "don't touch unrelated files",
+			desc: "skip-unrelated-files", // don't touch unrelated files
 			before: map[string]string{
 				"tailscale":  "v1",
 				"tailscaled": "v1",
@@ -645,7 +645,7 @@ func TestUnpackLinuxTarball(t *testing.T) {
 			},
 		},
 		{
-			desc: "ignore extra tarball files",
+			desc: "ignore-extra-tarball-files",
 			before: map[string]string{
 				"tailscale":  "v1",
 				"tailscaled": "v1",
@@ -661,7 +661,7 @@ func TestUnpackLinuxTarball(t *testing.T) {
 			},
 		},
 		{
-			desc: "tarball missing tailscaled",
+			desc: "tarball-missing-tailscaled",
 			before: map[string]string{
 				"tailscale":  "v1",
 				"tailscaled": "v1",
@@ -677,7 +677,7 @@ func TestUnpackLinuxTarball(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			desc: "duplicate tailscale binary",
+			desc: "duplicate-tailscale-binary",
 			before: map[string]string{
 				"tailscale":  "v1",
 				"tailscaled": "v1",
@@ -696,7 +696,7 @@ func TestUnpackLinuxTarball(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			desc: "empty archive",
+			desc: "empty-archive",
 			before: map[string]string{
 				"tailscale":  "v1",
 				"tailscaled": "v1",
@@ -952,17 +952,18 @@ func TestCleanupOldDownloads(t *testing.T) {
 
 func TestParseUnraidPluginVersion(t *testing.T) {
 	tests := []struct {
+		name    string
 		plgPath string
 		wantVer string
 		wantErr string
 	}{
-		{plgPath: "testdata/tailscale-1.52.0.plg", wantVer: "1.52.0"},
-		{plgPath: "testdata/tailscale-1.54.0.plg", wantVer: "1.54.0"},
-		{plgPath: "testdata/tailscale-nover.plg", wantErr: "version not found in plg file"},
-		{plgPath: "testdata/tailscale-nover-path-mentioned.plg", wantErr: "version not found in plg file"},
+		{name: "v1_52_0", plgPath: "testdata/tailscale-1.52.0.plg", wantVer: "1.52.0"},
+		{name: "v1_54_0", plgPath: "testdata/tailscale-1.54.0.plg", wantVer: "1.54.0"},
+		{name: "nover", plgPath: "testdata/tailscale-nover.plg", wantErr: "version not found in plg file"},
+		{name: "nover-path-mentioned", plgPath: "testdata/tailscale-nover-path-mentioned.plg", wantErr: "version not found in plg file"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.plgPath, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			got, err := parseUnraidPluginVersion(tt.plgPath)
 			if got != tt.wantVer {
 				t.Errorf("got version: %q, want %q", got, tt.wantVer)
@@ -992,7 +993,7 @@ func TestConfirm(t *testing.T) {
 		want      bool
 	}{
 		{
-			desc:      "on latest stable",
+			desc:      "on-latest-stable",
 			fromTrack: StableTrack,
 			toTrack:   StableTrack,
 			fromVer:   "1.66.0",
@@ -1000,7 +1001,7 @@ func TestConfirm(t *testing.T) {
 			want:      false,
 		},
 		{
-			desc:      "stable upgrade",
+			desc:      "stable-upgrade",
 			fromTrack: StableTrack,
 			toTrack:   StableTrack,
 			fromVer:   "1.66.0",
@@ -1008,7 +1009,7 @@ func TestConfirm(t *testing.T) {
 			want:      true,
 		},
 		{
-			desc:      "unstable upgrade",
+			desc:      "unstable-upgrade",
 			fromTrack: UnstableTrack,
 			toTrack:   UnstableTrack,
 			fromVer:   "1.67.1",
@@ -1016,7 +1017,7 @@ func TestConfirm(t *testing.T) {
 			want:      true,
 		},
 		{
-			desc:      "from stable to unstable",
+			desc:      "from-stable-to-unstable",
 			fromTrack: StableTrack,
 			toTrack:   UnstableTrack,
 			fromVer:   "1.66.0",
@@ -1024,7 +1025,7 @@ func TestConfirm(t *testing.T) {
 			want:      true,
 		},
 		{
-			desc:      "from unstable to stable",
+			desc:      "from-unstable-to-stable",
 			fromTrack: UnstableTrack,
 			toTrack:   StableTrack,
 			fromVer:   "1.67.1",
@@ -1032,7 +1033,7 @@ func TestConfirm(t *testing.T) {
 			want:      true,
 		},
 		{
-			desc:      "confirm callback rejects",
+			desc:      "confirm-callback-rejects",
 			fromTrack: StableTrack,
 			toTrack:   StableTrack,
 			fromVer:   "1.66.0",
@@ -1043,7 +1044,7 @@ func TestConfirm(t *testing.T) {
 			want: false,
 		},
 		{
-			desc:      "confirm callback allows",
+			desc:      "confirm-callback-allows",
 			fromTrack: StableTrack,
 			toTrack:   StableTrack,
 			fromVer:   "1.66.0",

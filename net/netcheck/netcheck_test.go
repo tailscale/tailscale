@@ -998,7 +998,7 @@ func TestNodeAddrResolve(t *testing.T) {
 				}
 				t.Logf("got IPv6 addr: %v", ap)
 			})
-			t.Run("IPv6 Failure", func(t *testing.T) {
+			t.Run("IPv6-Failure", func(t *testing.T) {
 				ap, ok := c.nodeAddrPort(ctx, dnV4Only, dn.STUNPort, probeIPv6)
 				if ok {
 					t.Fatalf("expected no addr but got: %v", ap)

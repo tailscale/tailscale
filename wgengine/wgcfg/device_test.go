@@ -90,14 +90,14 @@ func TestDeviceConfig(t *testing.T) {
 		}
 	}
 
-	t.Run("device1 config", func(t *testing.T) {
+	t.Run("device1-config", func(t *testing.T) {
 		if err := ReconfigDevice(device1, cfg1, t.Logf); err != nil {
 			t.Fatal(err)
 		}
 		cmp(t, device1, cfg1)
 	})
 
-	t.Run("device2 config", func(t *testing.T) {
+	t.Run("device2-config", func(t *testing.T) {
 		if err := ReconfigDevice(device2, cfg2, t.Logf); err != nil {
 			t.Fatal(err)
 		}
@@ -105,7 +105,7 @@ func TestDeviceConfig(t *testing.T) {
 	})
 
 	// This is only to test that Config and Reconfig are properly synchronized.
-	t.Run("device2 config/reconfig", func(t *testing.T) {
+	t.Run("device2-config-reconfig", func(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(2)
 
@@ -122,7 +122,7 @@ func TestDeviceConfig(t *testing.T) {
 		wg.Wait()
 	})
 
-	t.Run("device1 modify peer", func(t *testing.T) {
+	t.Run("device1-modify-peer", func(t *testing.T) {
 		cfg1.Peers[0].DiscoKey = key.DiscoPublicFromRaw32(mem.B([]byte{0: 1, 31: 0}))
 		if err := ReconfigDevice(device1, cfg1, t.Logf); err != nil {
 			t.Fatal(err)
@@ -130,7 +130,7 @@ func TestDeviceConfig(t *testing.T) {
 		cmp(t, device1, cfg1)
 	})
 
-	t.Run("device1 replace endpoint", func(t *testing.T) {
+	t.Run("device1-replace-endpoint", func(t *testing.T) {
 		cfg1.Peers[0].DiscoKey = key.DiscoPublicFromRaw32(mem.B([]byte{0: 2, 31: 0}))
 		if err := ReconfigDevice(device1, cfg1, t.Logf); err != nil {
 			t.Fatal(err)
@@ -138,7 +138,7 @@ func TestDeviceConfig(t *testing.T) {
 		cmp(t, device1, cfg1)
 	})
 
-	t.Run("device1 add new peer", func(t *testing.T) {
+	t.Run("device1-add-new-peer", func(t *testing.T) {
 		cfg1.Peers = append(cfg1.Peers, Peer{
 			PublicKey:  k3,
 			AllowedIPs: []netip.Prefix{ip3},
@@ -178,7 +178,7 @@ func TestDeviceConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("device1 remove peer", func(t *testing.T) {
+	t.Run("device1-remove-peer", func(t *testing.T) {
 		removeKey := cfg1.Peers[len(cfg1.Peers)-1].PublicKey
 		cfg1.Peers = cfg1.Peers[:len(cfg1.Peers)-1]
 

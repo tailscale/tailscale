@@ -39,25 +39,29 @@ func TestCertRequest(t *testing.T) {
 	}
 
 	tests := []struct {
+		name     string
 		domain   string
 		wantSANs []string
 	}{
 		{
+			name:     "example-com",
 			domain:   "example.com",
 			wantSANs: []string{"example.com"},
 		},
 		{
+			name:     "wildcard-example-com",
 			domain:   "*.example.com",
 			wantSANs: []string{"*.example.com", "example.com"},
 		},
 		{
+			name:     "wildcard-foo-bar-com",
 			domain:   "*.foo.bar.com",
 			wantSANs: []string{"*.foo.bar.com", "foo.bar.com"},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.domain, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			csrDER, err := certRequest(key, tt.domain, nil)
 			if err != nil {
 				t.Fatalf("certRequest: %v", err)
@@ -365,19 +369,19 @@ func TestShouldStartDomainRenewal(t *testing.T) {
 		wantErr   string
 	}{
 		{
-			name:      "should renew",
+			name:      "should-renew",
 			notBefore: now.AddDate(0, 0, -89),
 			lifetime:  90 * 24 * time.Hour,
 			want:      true,
 		},
 		{
-			name:      "short-lived renewal",
+			name:      "short-lived-renewal",
 			notBefore: now.AddDate(0, 0, -7),
 			lifetime:  10 * 24 * time.Hour,
 			want:      true,
 		},
 		{
-			name:      "no renew",
+			name:      "no-renew",
 			notBefore: now.AddDate(0, 0, -59), // 59 days ago == not 2/3rds of the way through 90 days yet
 			lifetime:  90 * 24 * time.Hour,
 			want:      false,

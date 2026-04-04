@@ -17,7 +17,7 @@ import (
 )
 
 func TestRecorderSpecs(t *testing.T) {
-	t.Run("ensure spec fields are passed through correctly", func(t *testing.T) {
+	t.Run("spec-fields-passthrough", func(t *testing.T) {
 		tsr := &tsapi.Recorder{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "test",

@@ -447,7 +447,7 @@ func TestXDP(t *testing.T) {
 		wantMetrics   map[bpfCountersKey]uint64
 	}{
 		{
-			name:          "ipv4 STUN Binding Request Drop STUN",
+			name:          "ipv4-STUN-Binding-Request-Drop-STUN",
 			dropSTUN:      true,
 			packetIn:      ipv4STUNBindingReqTX,
 			wantCode:      xdpActionDrop,
@@ -466,7 +466,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv6 STUN Binding Request Drop STUN",
+			name:          "ipv6-STUN-Binding-Request-Drop-STUN",
 			dropSTUN:      true,
 			packetIn:      ipv6STUNBindingReqTX,
 			wantCode:      xdpActionDrop,
@@ -485,7 +485,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv4 STUN Binding Request TX",
+			name:          "ipv4-STUN-Binding-Request-TX",
 			packetIn:      ipv4STUNBindingReqTX,
 			wantCode:      xdpActionTX,
 			wantPacketOut: getIPv4STUNBindingResp(),
@@ -503,7 +503,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv6 STUN Binding Request TX",
+			name:          "ipv6-STUN-Binding-Request-TX",
 			packetIn:      ipv6STUNBindingReqTX,
 			wantCode:      xdpActionTX,
 			wantPacketOut: getIPv6STUNBindingResp(),
@@ -521,7 +521,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv4 STUN Binding Request invalid ip csum PASS",
+			name:          "ipv4-STUN-Binding-Request-invalid-ip-csum-PASS",
 			packetIn:      ipv4STUNBindingReqIPCsumPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv4STUNBindingReqIPCsumPass,
@@ -539,7 +539,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv4 STUN Binding Request ihl PASS",
+			name:          "ipv4-STUN-Binding-Request-ihl-PASS",
 			packetIn:      ipv4STUNBindingReqIHLPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv4STUNBindingReqIHLPass,
@@ -557,7 +557,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv4 STUN Binding Request ip version PASS",
+			name:          "ipv4-STUN-Binding-Request-ip-version-PASS",
 			packetIn:      ipv4STUNBindingReqIPVerPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv4STUNBindingReqIPVerPass,
@@ -575,7 +575,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv4 STUN Binding Request ip proto PASS",
+			name:          "ipv4-STUN-Binding-Request-ip-proto-PASS",
 			packetIn:      ipv4STUNBindingReqIPProtoPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv4STUNBindingReqIPProtoPass,
@@ -593,7 +593,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv4 STUN Binding Request frag offset PASS",
+			name:          "ipv4-STUN-Binding-Request-frag-offset-PASS",
 			packetIn:      ipv4STUNBindingReqFragOffsetPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv4STUNBindingReqFragOffsetPass,
@@ -611,7 +611,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv4 STUN Binding Request flags mf PASS",
+			name:          "ipv4-STUN-Binding-Request-flags-mf-PASS",
 			packetIn:      ipv4STUNBindingReqFlagsMFPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv4STUNBindingReqFlagsMFPass,
@@ -629,7 +629,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv4 STUN Binding Request tot len PASS",
+			name:          "ipv4-STUN-Binding-Request-tot-len-PASS",
 			packetIn:      ipv4STUNBindingReqTotLenPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv4STUNBindingReqTotLenPass,
@@ -647,7 +647,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv6 STUN Binding Request ip version PASS",
+			name:          "ipv6-STUN-Binding-Request-ip-version-PASS",
 			packetIn:      ipv6STUNBindingReqIPVerPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv6STUNBindingReqIPVerPass,
@@ -665,7 +665,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv6 STUN Binding Request next hdr PASS",
+			name:          "ipv6-STUN-Binding-Request-next-hdr-PASS",
 			packetIn:      ipv6STUNBindingReqNextHdrPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv6STUNBindingReqNextHdrPass,
@@ -683,7 +683,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv6 STUN Binding Request payload len PASS",
+			name:          "ipv6-STUN-Binding-Request-payload-len-PASS",
 			packetIn:      ipv6STUNBindingReqPayloadLenPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv6STUNBindingReqPayloadLenPass,
@@ -701,7 +701,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv4 STUN Binding Request UDP csum PASS",
+			name:          "ipv4-STUN-Binding-Request-UDP-csum-PASS",
 			packetIn:      ipv4STUNBindingReqUDPCsumPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv4STUNBindingReqUDPCsumPass,
@@ -719,7 +719,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv6 STUN Binding Request UDP csum PASS",
+			name:          "ipv6-STUN-Binding-Request-UDP-csum-PASS",
 			packetIn:      ipv6STUNBindingReqUDPCsumPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv6STUNBindingReqUDPCsumPass,
@@ -737,7 +737,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv4 STUN Binding Request STUN type PASS",
+			name:          "ipv4-STUN-Binding-Request-STUN-type-PASS",
 			packetIn:      ipv4STUNBindingReqSTUNTypePass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv4STUNBindingReqSTUNTypePass,
@@ -755,7 +755,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv6 STUN Binding Request STUN type PASS",
+			name:          "ipv6-STUN-Binding-Request-STUN-type-PASS",
 			packetIn:      ipv6STUNBindingReqSTUNTypePass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv6STUNBindingReqSTUNTypePass,
@@ -773,7 +773,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv4 STUN Binding Request STUN magic PASS",
+			name:          "ipv4-STUN-Binding-Request-STUN-magic-PASS",
 			packetIn:      ipv4STUNBindingReqSTUNMagicPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv4STUNBindingReqSTUNMagicPass,
@@ -791,7 +791,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv6 STUN Binding Request STUN magic PASS",
+			name:          "ipv6-STUN-Binding-Request-STUN-magic-PASS",
 			packetIn:      ipv6STUNBindingReqSTUNMagicPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv6STUNBindingReqSTUNMagicPass,
@@ -809,7 +809,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv4 STUN Binding Request STUN attrs len PASS",
+			name:          "ipv4-STUN-Binding-Request-STUN-attrs-len-PASS",
 			packetIn:      ipv4STUNBindingReqSTUNAttrsLenPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv4STUNBindingReqSTUNAttrsLenPass,
@@ -827,7 +827,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv6 STUN Binding Request STUN attrs len PASS",
+			name:          "ipv6-STUN-Binding-Request-STUN-attrs-len-PASS",
 			packetIn:      ipv6STUNBindingReqSTUNAttrsLenPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv6STUNBindingReqSTUNAttrsLenPass,
@@ -845,7 +845,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv4 STUN Binding Request STUN SW val PASS",
+			name:          "ipv4-STUN-Binding-Request-STUN-SW-val-PASS",
 			packetIn:      ipv4STUNBindingReqSTUNSWValPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv4STUNBindingReqSTUNSWValPass,
@@ -863,7 +863,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv6 STUN Binding Request STUN SW val PASS",
+			name:          "ipv6-STUN-Binding-Request-STUN-SW-val-PASS",
 			packetIn:      ipv6STUNBindingReqSTUNSWValPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv6STUNBindingReqSTUNSWValPass,
@@ -881,7 +881,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv4 STUN Binding Request STUN first attr PASS",
+			name:          "ipv4-STUN-Binding-Request-STUN-first-attr-PASS",
 			packetIn:      ipv4STUNBindingReqSTUNFirstAttrPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv4STUNBindingReqSTUNFirstAttrPass,
@@ -899,7 +899,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv6 STUN Binding Request STUN first attr PASS",
+			name:          "ipv6-STUN-Binding-Request-STUN-first-attr-PASS",
 			packetIn:      ipv6STUNBindingReqSTUNFirstAttrPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv6STUNBindingReqSTUNFirstAttrPass,
@@ -917,7 +917,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv4 UDP zero csum TX",
+			name:          "ipv4-UDP-zero-csum-TX",
 			packetIn:      ipv4STUNBindingReqUDPZeroCsumTx,
 			wantCode:      xdpActionTX,
 			wantPacketOut: getIPv4STUNBindingResp(),
@@ -935,7 +935,7 @@ func TestXDP(t *testing.T) {
 			},
 		},
 		{
-			name:          "ipv6 UDP zero csum PASS",
+			name:          "ipv6-UDP-zero-csum-PASS",
 			packetIn:      ipv6STUNBindingReqUDPZeroCsumPass,
 			wantCode:      xdpActionPass,
 			wantPacketOut: ipv6STUNBindingReqUDPZeroCsumPass,

@@ -20,42 +20,42 @@ func TestResolveAuthKey(t *testing.T) {
 		wantErr     bool
 	}{
 		{
-			name:        "keys without client secret prefix pass through unchanged",
+			name:        "non-client-secret-passthrough",
 			clientID:    "tskey-auth-regular",
 			tags:        []string{"tag:test"},
 			wantAuthKey: "tskey-auth-regular",
 			wantErr:     false,
 		},
 		{
-			name:        "client secret without advertised tags",
+			name:        "client-secret-no-tags",
 			clientID:    "tskey-client-abc",
 			tags:        nil,
 			wantAuthKey: "",
 			wantErr:     true,
 		},
 		{
-			name:        "client secret with default attributes",
+			name:        "client-secret-default-attrs",
 			clientID:    "tskey-client-abc",
 			tags:        []string{"tag:test"},
 			wantAuthKey: "tskey-auth-xyz",
 			wantErr:     false,
 		},
 		{
-			name:        "client secret with custom attributes",
+			name:        "client-secret-custom-attrs",
 			clientID:    "tskey-client-abc?ephemeral=false&preauthorized=true",
 			tags:        []string{"tag:test"},
 			wantAuthKey: "tskey-auth-xyz",
 			wantErr:     false,
 		},
 		{
-			name:        "client secret with unknown attribute",
+			name:        "client-secret-unknown-attr",
 			clientID:    "tskey-client-abc?unknown=value",
 			tags:        []string{"tag:test"},
 			wantAuthKey: "",
 			wantErr:     true,
 		},
 		{
-			name:        "oauth client secret with invalid attribute value",
+			name:        "client-secret-invalid-attr-value",
 			clientID:    "tskey-client-abc?ephemeral=invalid",
 			tags:        []string{"tag:test"},
 			wantAuthKey: "",
@@ -111,7 +111,7 @@ func TestResolveAuthKeyAttributes(t *testing.T) {
 		wantBaseURL   string
 	}{
 		{
-			name:          "default values",
+			name:          "default-values",
 			clientSecret:  "tskey-client-abc",
 			wantEphemeral: true,
 			wantPreauth:   false,
@@ -132,14 +132,14 @@ func TestResolveAuthKeyAttributes(t *testing.T) {
 			wantBaseURL:   "https://api.tailscale.com",
 		},
 		{
-			name:          "baseURL=https://api.example.com",
+			name:          "baseURL-custom",
 			clientSecret:  "tskey-client-abc?baseURL=https://api.example.com",
 			wantEphemeral: true,
 			wantPreauth:   false,
 			wantBaseURL:   "https://api.example.com",
 		},
 		{
-			name:          "all custom values",
+			name:          "all-custom-values",
 			clientSecret:  "tskey-client-abc?ephemeral=false&preauthorized=true&baseURL=https://api.example.com",
 			wantEphemeral: false,
 			wantPreauth:   true,

@@ -28,32 +28,32 @@ func TestServerEndpointJSONUnmarshal(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "invalid ServerDisco",
+			name:    "invalid-ServerDisco",
 			json:    []byte(`{"ServerDisco":"1","LamportID":18446744073709551615,"AddrPorts":["127.0.0.1:1","127.0.0.2:2"],"VNI":16777215,"BindLifetime":"30s","SteadyStateLifetime":"5m0s"}`),
 			wantErr: true,
 		},
 		{
-			name:    "invalid LamportID",
+			name:    "invalid-LamportID",
 			json:    []byte(`{"ServerDisco":"discokey:003cd7453e04a653eb0e7a18f206fc353180efadb2facfd05ebd6982a1392c7f","LamportID":1.1,"AddrPorts":["127.0.0.1:1","127.0.0.2:2"],"VNI":16777215,"BindLifetime":"30s","SteadyStateLifetime":"5m0s"}`),
 			wantErr: true,
 		},
 		{
-			name:    "invalid AddrPorts",
+			name:    "invalid-AddrPorts",
 			json:    []byte(`{"ServerDisco":"discokey:003cd7453e04a653eb0e7a18f206fc353180efadb2facfd05ebd6982a1392c7f","LamportID":18446744073709551615,"AddrPorts":["127.0.0.1.1:1","127.0.0.2:2"],"VNI":16777215,"BindLifetime":"30s","SteadyStateLifetime":"5m0s"}`),
 			wantErr: true,
 		},
 		{
-			name:    "invalid VNI",
+			name:    "invalid-VNI",
 			json:    []byte(`{"ServerDisco":"discokey:003cd7453e04a653eb0e7a18f206fc353180efadb2facfd05ebd6982a1392c7f","LamportID":18446744073709551615,"AddrPorts":["127.0.0.1:1","127.0.0.2:2"],"VNI":18446744073709551615,"BindLifetime":"30s","SteadyStateLifetime":"5m0s"}`),
 			wantErr: true,
 		},
 		{
-			name:    "invalid BindLifetime",
+			name:    "invalid-BindLifetime",
 			json:    []byte(`{"ServerDisco":"discokey:003cd7453e04a653eb0e7a18f206fc353180efadb2facfd05ebd6982a1392c7f","LamportID":18446744073709551615,"AddrPorts":["127.0.0.1:1","127.0.0.2:2"],"VNI":16777215,"BindLifetime":"5","SteadyStateLifetime":"5m0s"}`),
 			wantErr: true,
 		},
 		{
-			name:    "invalid SteadyStateLifetime",
+			name:    "invalid-SteadyStateLifetime",
 			json:    []byte(`{"ServerDisco":"discokey:003cd7453e04a653eb0e7a18f206fc353180efadb2facfd05ebd6982a1392c7f","LamportID":18446744073709551615,"AddrPorts":["127.0.0.1:1","127.0.0.2:2"],"VNI":16777215,"BindLifetime":"30s","SteadyStateLifetime":"5"}`),
 			wantErr: true,
 		},
@@ -79,7 +79,7 @@ func TestServerEndpointJSONMarshal(t *testing.T) {
 		serverEndpoint ServerEndpoint
 	}{
 		{
-			name: "valid roundtrip",
+			name: "valid-roundtrip",
 			serverEndpoint: ServerEndpoint{
 				ServerDisco:         key.NewDisco().Public(),
 				LamportID:           uint64(math.MaxUint64),

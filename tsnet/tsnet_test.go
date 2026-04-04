@@ -2933,7 +2933,7 @@ func TestResolveAuthKey(t *testing.T) {
 		wantErrContains string
 	}{
 		{
-			name:           "successful resolution via OAuth client secret",
+			name:           "success-oauth-client-secret",
 			clientSecret:   "tskey-client-secret-123",
 			oauthAvailable: true,
 			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
@@ -2946,7 +2946,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "",
 		},
 		{
-			name:           "failing resolution via OAuth client secret",
+			name:           "fail-oauth-client-secret",
 			clientSecret:   "tskey-client-secret-123",
 			oauthAvailable: true,
 			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
@@ -2955,7 +2955,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "resolution failed",
 		},
 		{
-			name:         "successful resolution via federated ID token",
+			name:         "success-federated-id-token",
 			clientID:     "client-id-123",
 			idToken:      "id-token-456",
 			wifAvailable: true,
@@ -2972,7 +2972,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "",
 		},
 		{
-			name:         "successful resolution via federated audience",
+			name:         "success-federated-audience",
 			clientID:     "client-id-123",
 			audience:     "api.tailscale.com",
 			wifAvailable: true,
@@ -2989,7 +2989,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "",
 		},
 		{
-			name:         "failing resolution via federated ID token",
+			name:         "fail-federated-id-token",
 			clientID:     "client-id-123",
 			idToken:      "id-token-456",
 			wifAvailable: true,
@@ -2999,7 +2999,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "resolution failed",
 		},
 		{
-			name:         "empty client ID with ID token",
+			name:         "empty-client-id-with-token",
 			clientID:     "",
 			idToken:      "id-token-456",
 			wifAvailable: true,
@@ -3009,7 +3009,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "empty",
 		},
 		{
-			name:         "empty client ID with audience",
+			name:         "empty-client-id-with-audience",
 			clientID:     "",
 			audience:     "api.tailscale.com",
 			wifAvailable: true,
@@ -3019,7 +3019,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "empty",
 		},
 		{
-			name:         "empty ID token",
+			name:         "empty-id-token",
 			clientID:     "client-id-123",
 			idToken:      "",
 			wifAvailable: true,
@@ -3029,7 +3029,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "empty",
 		},
 		{
-			name:         "audience with ID token",
+			name:         "audience-with-id-token",
 			clientID:     "client-id-123",
 			idToken:      "id-token-456",
 			audience:     "api.tailscale.com",
@@ -3040,7 +3040,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "only one of ID token and audience",
 		},
 		{
-			name:           "workload identity resolution skipped if resolution via OAuth token succeeds",
+			name:           "wif-skipped-oauth-succeeds",
 			clientSecret:   "tskey-client-secret-123",
 			oauthAvailable: true,
 			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
@@ -3057,7 +3057,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "",
 		},
 		{
-			name:           "workload identity resolution skipped if resolution via OAuth token fails",
+			name:           "wif-skipped-oauth-fails",
 			clientID:       "tskey-client-id-123",
 			idToken:        "",
 			oauthAvailable: true,
@@ -3071,7 +3071,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "failed",
 		},
 		{
-			name:            "authkey set and no resolution available",
+			name:            "authkey-set-no-resolution",
 			authKey:         "tskey-auth-123",
 			oauthAvailable:  false,
 			wifAvailable:    false,
@@ -3079,14 +3079,14 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "",
 		},
 		{
-			name:            "no authkey set and no resolution available",
+			name:            "no-authkey-no-resolution",
 			oauthAvailable:  false,
 			wifAvailable:    false,
 			wantAuthKey:     "",
 			wantErrContains: "",
 		},
 		{
-			name:           "authkey is client secret and resolution via OAuth client secret succeeds",
+			name:           "authkey-client-secret-oauth-succeeds",
 			authKey:        "tskey-client-secret-123",
 			oauthAvailable: true,
 			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
@@ -3099,7 +3099,7 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "",
 		},
 		{
-			name:           "authkey is client secret but resolution via OAuth client secret fails",
+			name:           "authkey-client-secret-oauth-fails",
 			authKey:        "tskey-client-secret-123",
 			oauthAvailable: true,
 			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
@@ -3282,12 +3282,12 @@ func TestListenUnspecifiedAddr(t *testing.T) {
 
 	t.Run("Netstack", func(t *testing.T) {
 		lt := setupTwoClientTest(t, false)
-		t.Run("0.0.0.0", func(t *testing.T) { testUnspec(t, lt, "0.0.0.0:8080", "8080") })
+		t.Run("v4-unspec", func(t *testing.T) { testUnspec(t, lt, "0.0.0.0:8080", "8080") })
 		t.Run("::", func(t *testing.T) { testUnspec(t, lt, "[::]:8081", "8081") })
 	})
 	t.Run("TUN", func(t *testing.T) {
 		lt := setupTwoClientTest(t, true)
-		t.Run("0.0.0.0", func(t *testing.T) { testUnspec(t, lt, "0.0.0.0:8080", "8080") })
+		t.Run("v4-unspec", func(t *testing.T) { testUnspec(t, lt, "0.0.0.0:8080", "8080") })
 		t.Run("::", func(t *testing.T) { testUnspec(t, lt, "[::]:8081", "8081") })
 	})
 }

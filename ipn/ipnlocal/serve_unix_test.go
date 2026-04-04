@@ -23,26 +23,30 @@ import (
 
 func TestExpandProxyArgUnix(t *testing.T) {
 	tests := []struct {
+		name         string
 		input        string
 		wantURL      string
 		wantInsecure bool
 	}{
 		{
+			name:    "unix-tmp-sock",
 			input:   "unix:/tmp/test.sock",
 			wantURL: "unix:/tmp/test.sock",
 		},
 		{
+			name:    "unix-var-run-docker-sock",
 			input:   "unix:/var/run/docker.sock",
 			wantURL: "unix:/var/run/docker.sock",
 		},
 		{
+			name:    "unix-relative-sock",
 			input:   "unix:./relative.sock",
 			wantURL: "unix:./relative.sock",
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			gotURL, gotInsecure := expandProxyArg(tt.input)
 			if gotURL != tt.wantURL {
 				t.Errorf("expandProxyArg(%q) url = %q, want %q", tt.input, gotURL, tt.wantURL)
