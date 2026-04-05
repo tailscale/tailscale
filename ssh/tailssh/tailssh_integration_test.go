@@ -6,7 +6,6 @@
 package tailssh
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -60,56 +59,33 @@ import (
 var testVarRoot string
 
 func TestMain(m *testing.M) {
+	debugTest.Store(true)
+
+	// Create our log file.
+	if err := os.WriteFile("/tmp/tailscalessh.log", nil, 0666); err != nil {
+		log.Fatal(err)
+	}
+
+	// Create a temp directory for SSH host keys.
 	var err error
 	testVarRoot, err = os.MkdirTemp("", "tailssh-test-var")
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer os.RemoveAll(testVarRoot)
 
-	// Create our log file.
-	file, err := os.OpenFile("/tmp/tailscalessh.log", os.O_CREATE|os.O_WRONLY, 0666)
-	if err != nil {
-		log.Fatal(err)
-	}
-	file.Close()
+	code := m.Run()
 
-	// Tail our log file.
-	cmd := exec.Command("tail", "-F", "/tmp/tailscalessh.log")
+	os.RemoveAll(testVarRoot)
 
-	r, err := cmd.StdoutPipe()
-	if err != nil {
-		return
+	// Print any log output from the incubator subprocesses.
+	if b, err := os.ReadFile("/tmp/tailscalessh.log"); err == nil && len(b) > 0 {
+		log.Print(string(b))
 	}
 
-	scanner := bufio.NewScanner(r)
-	go func() {
-		for scanner.Scan() {
-			line := scanner.Text()
-			log.Println(line)
-		}
-	}()
-
-	err = cmd.Start()
-	if err != nil {
-		return
-	}
-	defer func() {
-		// tail -f has a default sleep interval of 1 second, so it takes a
-		// moment for it to finish reading our log file after we've terminated.
-		// So, wait a bit to let it catch up.
-		time.Sleep(2 * time.Second)
-	}()
-
-	m.Run()
+	os.Exit(code)
 }
 
 func TestIntegrationSSH(t *testing.T) {
-	debugTest.Store(true)
-	t.Cleanup(func() {
-		debugTest.Store(false)
-	})
-
 	homeDir := "/home/testuser"
 	if runtime.GOOS == "darwin" {
 		homeDir = "/Users/testuser"
@@ -215,11 +191,6 @@ func TestIntegrationSSH(t *testing.T) {
 }
 
 func TestIntegrationSFTP(t *testing.T) {
-	debugTest.Store(true)
-	t.Cleanup(func() {
-		debugTest.Store(false)
-	})
-
 	for _, forceV1Behavior := range []bool{false, true} {
 		name := "v2"
 		if forceV1Behavior {
@@ -276,11 +247,6 @@ func TestIntegrationSFTP(t *testing.T) {
 }
 
 func TestIntegrationSCP(t *testing.T) {
-	debugTest.Store(true)
-	t.Cleanup(func() {
-		debugTest.Store(false)
-	})
-
 	for _, forceV1Behavior := range []bool{false, true} {
 		name := "v2"
 		if forceV1Behavior {
@@ -334,11 +300,6 @@ func TestIntegrationSCP(t *testing.T) {
 }
 
 func TestSSHAgentForwarding(t *testing.T) {
-	debugTest.Store(true)
-	t.Cleanup(func() {
-		debugTest.Store(false)
-	})
-
 	// Create a client SSH key
 	tmpDir, err := os.MkdirTemp("", "")
 	if err != nil {
@@ -428,11 +389,6 @@ func TestSSHAgentForwarding(t *testing.T) {
 // request 'none' auth and instead immediately authenticate with a public key
 // or password.
 func TestIntegrationParamiko(t *testing.T) {
-	debugTest.Store(true)
-	t.Cleanup(func() {
-		debugTest.Store(false)
-	})
-
 	addr := testServer(t, "testuser", true, false)
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -736,26 +692,34 @@ func (s *session) run(t *testing.T, cmdString string, shell bool) string {
 func (s *session) read() string {
 	ch := make(chan []byte)
 	go func() {
+		defer close(ch)
 		for {
 			b := make([]byte, 1)
 			n, err := s.stdout.Read(b)
 			if n > 0 {
 				ch <- b
 			}
-			if err == io.EOF {
+			if err != nil {
 				return
 			}
 		}
 	}()
 
 	// Read first byte in blocking fashion.
-	_got := <-ch
+	b, ok := <-ch
+	if !ok {
+		return ""
+	}
+	_got := b
 
-	// Read subsequent bytes in non-blocking fashion.
+	// Read subsequent bytes until EOF or silence.
 readLoop:
 	for {
 		select {
-		case b := <-ch:
+		case b, ok := <-ch:
+			if !ok {
+				break readLoop
+			}
 			_got = append(_got, b...)
 		case <-time.After(1 * time.Second):
 			break readLoop
