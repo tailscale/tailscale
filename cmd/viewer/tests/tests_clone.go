@@ -563,3 +563,37 @@ func (src *StructWithMapOfViews) Clone() *StructWithMapOfViews {
 var _StructWithMapOfViewsCloneNeedsRegeneration = StructWithMapOfViews(struct {
 	MapOfViews map[string]StructWithoutPtrsView
 }{})
+
+// Clone makes a deep copy of StructWithNamedMap.
+// The result aliases no memory with the original.
+func (src *StructWithNamedMap) Clone() *StructWithNamedMap {
+	if src == nil {
+		return nil
+	}
+	dst := new(StructWithNamedMap)
+	*dst = *src
+	dst.Attrs = src.Attrs.Clone()
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithNamedMapCloneNeedsRegeneration = StructWithNamedMap(struct {
+	Attrs NamedMap
+}{})
+
+// Clone makes a deep copy of StructWithNamedSlice.
+// The result aliases no memory with the original.
+func (src *StructWithNamedSlice) Clone() *StructWithNamedSlice {
+	if src == nil {
+		return nil
+	}
+	dst := new(StructWithNamedSlice)
+	*dst = *src
+	dst.Items = src.Items.Clone()
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithNamedSliceCloneNeedsRegeneration = StructWithNamedSlice(struct {
+	Items NamedSlice
+}{})
