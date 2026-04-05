@@ -1034,9 +1034,11 @@ func (ss *sshSession) run() {
 	if err != nil {
 		logf("start failed: %v", err.Error())
 		if errors.Is(err, context.Canceled) {
-			err := context.Cause(ss.ctx)
-			if uve, ok := errors.AsType[userVisibleError](err); ok {
-				fmt.Fprintf(ss, "%s\r\n", uve)
+			cause := context.Cause(ss.ctx)
+			if serr, ok := cause.(SSHTerminationError); ok {
+				if msg := serr.SSHTerminationMessage(); msg != "" {
+					io.WriteString(ss.Stderr(), "\r\n\r\n"+msg+"\r\n\r\n")
+				}
 			}
 		}
 		ss.Exit(1)
@@ -1093,6 +1095,15 @@ func (ss *sshSession) run() {
 	err = ss.cmd.Wait()
 	processDone.Store(true)
 
+	if ss.ctx.Err() != nil {
+		// Context was canceled (e.g., recording upload failure).
+		// Wait for killProcessOnContextDone to finish writing any
+		// termination message before we proceed. This must happen
+		// before closeAll and CloseWrite so the SSH channel is
+		// still writable.
+		<-ss.exitHandled
+	}
+
 	// This will either make the SSH Termination goroutine be a no-op,
 	// or itself will be a no-op because the process was killed by the
 	// aforementioned goroutine.
@@ -1105,9 +1116,6 @@ func (ss *sshSession) run() {
 	select {
 	case <-outputDone:
 	case <-ss.ctx.Done():
-		// Wait for killProcessOnContextDone to finish writing any
-		// termination message to the client before we call ss.Exit,
-		// which tears down the SSH channel.
 		<-ss.exitHandled
 	}
 
