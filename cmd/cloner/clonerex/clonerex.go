@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type SliceContainer,InterfaceContainer,MapWithPointers,DeeplyNestedMap
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type SliceContainer,InterfaceContainer,MapWithPointers,DeeplyNestedMap,NamedMapContainer
 
 // Package clonerex is an example package for the cloner tool.
 package clonerex
@@ -37,6 +37,27 @@ type MapWithPointers struct {
 	Nested          map[string]*int
 	WithCloneMethod map[string]*SliceContainer
 	CloneInterface  map[string]Cloneable
+}
+
+// NamedMap is a named map type with its own Clone method.
+// This tests that the cloner uses the type's Clone method
+// rather than trying to descend into the map's value type.
+type NamedMap map[string]any
+
+func (m NamedMap) Clone() NamedMap {
+	if m == nil {
+		return nil
+	}
+	m2 := make(NamedMap, len(m))
+	for k, v := range m {
+		m2[k] = v
+	}
+	return m2
+}
+
+// NamedMapContainer has a field whose type is a named map with a Clone method.
+type NamedMapContainer struct {
+	Attrs NamedMap
 }
 
 // DeeplyNestedMap tests arbitrary depth of map nesting (3+ levels)

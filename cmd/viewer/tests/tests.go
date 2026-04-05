@@ -12,7 +12,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers,StructWithTypeAliasFields,GenericTypeAliasStruct,StructWithMapOfViews --clone-only-type=OnlyGetClone
+//go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers,StructWithTypeAliasFields,GenericTypeAliasStruct,StructWithMapOfViews,StructWithNamedMap,StructWithNamedSlice --clone-only-type=OnlyGetClone
 
 type StructWithoutPtrs struct {
 	Int int
@@ -240,4 +240,62 @@ type GenericTypeAliasStruct[T integer, T2 views.ViewCloner[T2, V2], V2 views.Str
 
 type StructWithMapOfViews struct {
 	MapOfViews map[string]StructWithoutPtrsView
+}
+
+// NamedMap is a named map type with its own Clone and View methods.
+// This tests that the viewer calls View() on named map types rather
+// than trying to generate a view of the underlying map[string]any.
+type NamedMap map[string]any
+
+func (m NamedMap) Clone() NamedMap {
+	if m == nil {
+		return nil
+	}
+	m2 := make(NamedMap, len(m))
+	for k, v := range m {
+		m2[k] = v
+	}
+	return m2
+}
+
+// NamedMapView is a read-only view of NamedMap.
+type NamedMapView struct {
+	ж NamedMap
+}
+
+func (m NamedMap) View() NamedMapView { return NamedMapView{m} }
+
+func (v NamedMapView) Get(k string) (any, bool) { val, ok := v.ж[k]; return val, ok }
+func (v NamedMapView) Len() int                 { return len(v.ж) }
+
+type StructWithNamedMap struct {
+	Attrs NamedMap
+}
+
+// NamedSlice is a named slice type with its own Clone and View methods.
+// This tests that the viewer calls View() on named slice types rather
+// than trying to generate a view of the underlying []any.
+type NamedSlice []any
+
+func (s NamedSlice) Clone() NamedSlice {
+	if s == nil {
+		return nil
+	}
+	s2 := make(NamedSlice, len(s))
+	copy(s2, s)
+	return s2
+}
+
+// NamedSliceView is a read-only view of NamedSlice.
+type NamedSliceView struct {
+	ж NamedSlice
+}
+
+func (s NamedSlice) View() NamedSliceView { return NamedSliceView{s} }
+
+func (v NamedSliceView) At(i int) any { return v.ж[i] }
+func (v NamedSliceView) Len() int     { return len(v.ж) }
+
+type StructWithNamedSlice struct {
+	Items NamedSlice
 }

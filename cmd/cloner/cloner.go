@@ -129,6 +129,12 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 				}
 				continue
 			}
+			// Named types with basic underlying types (map/slice) that
+			// have their own Clone method should use it directly.
+			if methodResultType(ft, "Clone") != nil {
+				writef("dst.%s = src.%s.Clone()", fname, fname)
+				continue
+			}
 		}
 		switch ft := ft.Underlying().(type) {
 		case *types.Slice:

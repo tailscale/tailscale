@@ -6,7 +6,6 @@
 package dns
 
 import (
-	"maps"
 	"net/netip"
 
 	"tailscale.com/types/dnstype"
@@ -45,7 +44,7 @@ func (src *Config) Clone() *Config {
 			dst.Hosts[k] = append([]netip.Addr{}, src.Hosts[k]...)
 		}
 	}
-	dst.SubdomainHosts = maps.Clone(src.SubdomainHosts)
+	dst.SubdomainHosts = src.SubdomainHosts.Clone()
 	return dst
 }
 
