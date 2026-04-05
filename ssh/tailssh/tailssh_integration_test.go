@@ -52,7 +52,21 @@ import (
 // - User "testuser" exists
 // - "testuser" is in groups "groupone" and "grouptwo"
 
+// testVarRoot is a temp directory used as the TailscaleVarRoot for
+// host key generation during integration tests. The test containers
+// don't have system host keys (/etc/ssh/ssh_host_*_key) since they
+// only install openssh-client, so getHostKeys needs a valid var root
+// to generate keys into.
+var testVarRoot string
+
 func TestMain(m *testing.M) {
+	var err error
+	testVarRoot, err = os.MkdirTemp("", "tailssh-test-var")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer os.RemoveAll(testVarRoot)
+
 	// Create our log file.
 	file, err := os.OpenFile("/tmp/tailscalessh.log", os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
@@ -672,7 +686,7 @@ func (tb *testBackend) Dialer() *tsdial.Dialer {
 }
 
 func (tb *testBackend) TailscaleVarRoot() string {
-	return ""
+	return testVarRoot
 }
 
 func (tb *testBackend) NodeKey() key.NodePublic {
