@@ -1,5 +1,5 @@
-# Run the ssh integration tests with `make sshintegrationtest`.
-# These tests can also be running locally.
+# Run the ssh integration tests in various Docker containers.
+# These tests can also be run locally via `make sshintegrationtest`.
 name: "ssh-integrationtest"
 
 concurrency:
@@ -15,9 +15,25 @@ on:
 jobs:
   ssh-integrationtest:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - base: "ubuntu:focal"
+            tag: "ssh-ubuntu-focal"
+          - base: "ubuntu:jammy"
+            tag: "ssh-ubuntu-jammy"
+          - base: "ubuntu:noble"
+            tag: "ssh-ubuntu-noble"
+          - base: "alpine:latest"
+            tag: "ssh-alpine-latest"
     steps:
       - name: Check out code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Run SSH integration tests
+      - name: Build test binaries
         run: |
-          make sshintegrationtest
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 ./tool/go test -tags integrationtest -c ./ssh/tailssh -o ssh/tailssh/testcontainers/tailssh.test
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 ./tool/go build -o ssh/tailssh/testcontainers/tailscaled ./cmd/tailscaled
+      - name: Run SSH integration tests (${{ matrix.base }})
+        run: |
+          docker build --build-arg="BASE=${{ matrix.base }}" -t "${{ matrix.tag }}" ssh/tailssh/testcontainers
