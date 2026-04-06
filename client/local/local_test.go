@@ -61,6 +61,57 @@ func TestWhoIsPeerNotFound(t *testing.T) {
 	}
 }
 
+func TestUserDialSelf(t *testing.T) {
+	// Start a real TCP listener that the client should dial directly
+	// when the server tells it to dial-self.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Write([]byte("hello"))
+			c.Close()
+		}
+	}()
+	targetAddr := ln.Addr().(*net.TCPAddr)
+
+	// Mock LocalAPI server that returns Dial-Self response.
+	nw := nettest.GetNetwork(t)
+	ts := nettest.NewHTTPServer(nw, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Dial-Self", "true")
+		w.Header().Set("Dial-Addr", targetAddr.String())
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	lc := &Client{
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return nw.Dial(ctx, network, ts.Listener.Addr().String())
+		},
+	}
+
+	conn, err := lc.UserDial(context.Background(), "tcp", targetAddr.IP.String(), uint16(targetAddr.Port))
+	if err != nil {
+		t.Fatalf("UserDial: %v", err)
+	}
+	defer conn.Close()
+
+	buf := make([]byte, 5)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got := string(buf[:n]); got != "hello" {
+		t.Errorf("got %q, want %q", got, "hello")
+	}
+}
+
 func TestDeps(t *testing.T) {
 	deptest.DepChecker{
 		BadDeps: map[string]string{

@@ -500,3 +500,69 @@ func TestServeWithUnhealthyState(t *testing.T) {
 		})
 	}
 }
+
+func TestServeDialSelf(t *testing.T) {
+	h := handlerForTest(t, &Handler{
+		PermitRead:  true,
+		PermitWrite: true,
+		b:           newTestLocalBackend(t),
+	})
+
+	tests := []struct {
+		name       string
+		host       string
+		port       string
+		wantSelf   bool
+		wantAddr   string
+		wantStatus int
+	}{
+		{
+			name:       "loopback_v4",
+			host:       "127.0.0.1",
+			port:       "8080",
+			wantSelf:   true,
+			wantAddr:   "127.0.0.1:8080",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "loopback_v6",
+			host:       "::1",
+			port:       "8080",
+			wantSelf:   true,
+			wantAddr:   "[::1]:8080",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "localhost",
+			host:       "localhost",
+			port:       "3000",
+			wantSelf:   true,
+			wantStatus: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "http://local-tailscaled.sock/localapi/v0/dial", nil)
+			req.Header.Set("Connection", "upgrade")
+			req.Header.Set("Upgrade", "ts-dial")
+			req.Header.Set("Dial-Host", tt.host)
+			req.Header.Set("Dial-Port", tt.port)
+			resp := httptest.NewRecorder()
+			h.serveDial(resp, req)
+
+			if resp.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body: %s", resp.Code, tt.wantStatus, resp.Body.String())
+			}
+			gotSelf := resp.Header().Get("Dial-Self") == "true"
+			if gotSelf != tt.wantSelf {
+				t.Errorf("Dial-Self = %v, want %v", gotSelf, tt.wantSelf)
+			}
+			if tt.wantAddr != "" {
+				if got := resp.Header().Get("Dial-Addr"); got != tt.wantAddr {
+					t.Errorf("Dial-Addr = %q, want %q", got, tt.wantAddr)
+				}
+			}
+		})
+	}
+}
