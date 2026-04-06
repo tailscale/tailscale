@@ -408,10 +408,9 @@ type updateStats struct {
 // removeUnwantedDiscoUpdates goes over the patchified updates and reject items
 // where the node is offline and has last been seen before the recorded last seen.
 func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse) {
-	existingMap := ms.netmap()
-	if existingMap == nil {
-		return
-	}
+	ms.peersMu.RLock()
+	defer ms.peersMu.RUnlock()
+
 	acceptedDiscoUpdates := resp.PeersChangedPatch[:0]
 
 	for _, change := range resp.PeersChangedPatch {
@@ -430,14 +429,13 @@ func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse) {
 			continue
 		}
 
-		peerIdx := existingMap.PeerIndexByNodeID(change.NodeID)
+		existingNode, ok := ms.peers[change.NodeID]
 		// Accept if:
 		// - Cannot find the peer, don't have enough data
-		if peerIdx < 0 {
+		if !ok {
 			acceptedDiscoUpdates = append(acceptedDiscoUpdates, change)
 			continue
 		}
-		existingNode := existingMap.Peers[peerIdx]
 
 		// Accept if:
 		// - lastSeen moved forward in time.
@@ -456,11 +454,10 @@ func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse) {
 // local netmap has a newer key learned via TSMP, overwrite the update with the
 // key from TSMP.
 func (ms *mapSession) removeUnwantedDiscoUpdatesFromFullNetmapUpdate(resp *tailcfg.MapResponse) {
+	ms.peersMu.RLock()
+	defer ms.peersMu.RUnlock()
+
 	if len(resp.Peers) == 0 {
-		return
-	}
-	existingMap := ms.netmap()
-	if existingMap == nil {
 		return
 	}
 	for _, peer := range resp.Peers {
@@ -470,14 +467,13 @@ func (ms *mapSession) removeUnwantedDiscoUpdatesFromFullNetmapUpdate(resp *tailc
 
 		// Accept if:
 		// - peer is new
-		peerIdx := existingMap.PeerIndexByNodeID(peer.ID)
-		if peerIdx < 0 {
+		existingNode, ok := ms.peers[peer.ID]
+		if !ok {
 			continue
 		}
 
 		// Accept if:
 		// - disco key has not changed
-		existingNode := existingMap.Peers[peerIdx]
 		if existingNode.DiscoKey() == peer.DiscoKey {
 			continue
 		}
