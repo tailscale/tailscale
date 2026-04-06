@@ -13,6 +13,7 @@ import (
 	"io"
 	"maps"
 	"net"
+	"net/netip"
 	"reflect"
 	"runtime"
 	"runtime/debug"
@@ -86,7 +87,6 @@ type mapSession struct {
 	lastPrintMap           time.Time
 	lastNode               tailcfg.NodeView
 	lastCapSet             set.Set[tailcfg.NodeCapability]
-	peers                  map[tailcfg.NodeID]tailcfg.NodeView
 	lastDNSConfig          *tailcfg.DNSConfig
 	lastDERPMap            *tailcfg.DERPMap
 	lastUserProfile        map[tailcfg.UserID]tailcfg.UserProfileView
@@ -106,6 +106,10 @@ type mapSession struct {
 	changeQueue            chan responseWithSource
 	changeQueueClosed      bool
 	processQueue           sync.WaitGroup
+
+	// mu protects the peers map.
+	peersMu sync.RWMutex
+	peers   map[tailcfg.NodeID]tailcfg.NodeView
 }
 
 // newMapSession returns a mostly unconfigured new mapSession.
@@ -675,6 +679,9 @@ var (
 // updatePeersStateFromResponseres updates ms.peers from resp.
 // It takes ownership of resp.
 func (ms *mapSession) updatePeersStateFromResponse(resp *tailcfg.MapResponse) (stats updateStats) {
+	ms.peersMu.Lock()
+	defer ms.peersMu.Unlock()
+
 	if ms.peers == nil {
 		ms.peers = make(map[tailcfg.NodeID]tailcfg.NodeView)
 	}
@@ -854,6 +861,9 @@ func getNodeFields() []string {
 // It returns ok=false if a patch can't be made, (V, ok) on a delta, or (nil,
 // true) if all the fields were identical (a zero change).
 func (ms *mapSession) patchifyPeer(n *tailcfg.Node) (_ *tailcfg.PeerChange, ok bool) {
+	ms.peersMu.RLock()
+	defer ms.peersMu.RUnlock()
+
 	was, ok := ms.peers[n.ID]
 	if !ok {
 		return nil, false
@@ -1056,7 +1066,28 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 	return ret, true
 }
 
+// PeerIDAndKeyByTailscaleIP returns the node ID and node Key from the peers
+// map without touching the netmap itself. The implementation mirrors the
+// implementation of [netmap.PeerByTailscaleIP].
+func (ms *mapSession) PeerIDAndKeyByTailscaleIP(ip netip.Addr) (tailcfg.NodeID, key.NodePublic, bool) {
+	ms.peersMu.RLock()
+	defer ms.peersMu.RUnlock()
+	for _, n := range ms.peers {
+		ad := n.Addresses()
+		for i := range ad.Len() {
+			a := ad.At(i)
+			if a.Addr() == ip {
+				return n.ID(), n.Key(), true
+			}
+		}
+	}
+	return 0, key.NodePublic{}, false
+}
+
 func (ms *mapSession) sortedPeers() []tailcfg.NodeView {
+	ms.peersMu.RLock()
+	defer ms.peersMu.RUnlock()
+
 	ret := slicesx.MapValues(ms.peers)
 	slices.SortFunc(ret, func(a, b tailcfg.NodeView) int {
 		return cmp.Compare(a.ID(), b.ID())

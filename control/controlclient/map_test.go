@@ -1781,3 +1781,61 @@ func TestPathDiscokeyerImplementations(t *testing.T) {
 		t.Error("wgengine.watchdogEngine must implement patchDiscoKeyer")
 	}
 }
+
+func TestPeerIDAndKeyByTailscaleIP(t *testing.T) {
+	peerKey1 := key.NewNode().Public()
+	peerKey2 := key.NewNode().Public()
+
+	peer1 := &tailcfg.Node{
+		ID:        1,
+		Key:       peerKey1,
+		Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+	}
+	peer2 := &tailcfg.Node{
+		ID:  2,
+		Key: peerKey2,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.2/32"),
+			netip.MustParsePrefix("fd7a:115c::2/128"),
+		},
+	}
+
+	ms := newTestMapSession(t, nil)
+	ms.updateStateFromResponse(&tailcfg.MapResponse{
+		Node:  new(tailcfg.Node),
+		Peers: []*tailcfg.Node{peer1, peer2},
+	})
+
+	t.Run("known_ip_peer1", func(t *testing.T) {
+		gotID, gotKey, ok := ms.PeerIDAndKeyByTailscaleIP(netip.MustParseAddr("100.64.0.1"))
+		if !ok {
+			t.Fatal("PeerIDAndKeyByTailscaleIP returned ok=false, want true")
+		}
+		if gotID != peer1.ID {
+			t.Errorf("NodeID = %v, want %v", gotID, peer1.ID)
+		}
+		if gotKey != peerKey1 {
+			t.Errorf("NodePublic = %v, want %v", gotKey, peerKey1)
+		}
+	})
+
+	t.Run("known_ip_peer2_v6", func(t *testing.T) {
+		gotID, gotKey, ok := ms.PeerIDAndKeyByTailscaleIP(netip.MustParseAddr("fd7a:115c::2"))
+		if !ok {
+			t.Fatal("PeerIDAndKeyByTailscaleIP returned ok=false, want true")
+		}
+		if gotID != peer2.ID {
+			t.Errorf("NodeID = %v, want %v", gotID, peer2.ID)
+		}
+		if gotKey != peerKey2 {
+			t.Errorf("NodePublic = %v, want %v", gotKey, peerKey2)
+		}
+	})
+
+	t.Run("unknown_ip", func(t *testing.T) {
+		gotID, gotKey, ok := ms.PeerIDAndKeyByTailscaleIP(netip.MustParseAddr("100.64.0.99"))
+		if ok {
+			t.Errorf("PeerIDAndKeyByTailscaleIP returned ok=true for unknown IP, got id=%v key=%v", gotID, gotKey)
+		}
+	})
+}

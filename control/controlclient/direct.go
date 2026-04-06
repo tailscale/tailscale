@@ -362,26 +362,24 @@ func NewDirect(opts Options) (*Direct, error) {
 	discoKeyPub := eventbus.Publish[events.PeerDiscoKeyUpdate](c.busClient)
 	eventbus.SubscribeFunc(c.busClient, func(update events.DiscoKeyAdvertisement) {
 		c.logf("controlclient direct: got TSMP disco key advertisement from %v via eventbus", update.Src)
-		var nm *netmap.NetworkMap
+		var peerID tailcfg.NodeID
+		var peerKey key.NodePublic
+		var ok bool
 		c.mu.Lock()
 		sess := c.streamingMapSession
-		if sess != nil {
-			nm = c.streamingMapSession.netmap()
-		}
 		c.mu.Unlock()
-
 		if sess != nil {
-			peer, ok := nm.PeerByTailscaleIP(update.Src)
-			if !ok {
-				return
-			}
+			peerID, peerKey, ok = sess.PeerIDAndKeyByTailscaleIP(update.Src)
+		}
+
+		if sess != nil && ok {
 			c.logf("controlclient direct: updating discoKey for %v via mapSession", update.Src)
 
 			// If we update without error, return. If the err indicates that the
 			// mapSession has gone away, we want to fall back to pushing the key
 			// further down the chain.
 			if err := sess.updateDiscoForNode(
-				peer.ID(), peer.Key(), update.Key, time.Now(), false); err == nil ||
+				peerID, peerKey, update.Key, time.Now(), false); err == nil ||
 				!errors.Is(err, ErrChangeQueueClosed) {
 				return
 			}
