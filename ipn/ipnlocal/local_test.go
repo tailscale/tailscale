@@ -7763,6 +7763,7 @@ func TestStripKeysFromPrefs(t *testing.T) {
 			ch := make(chan *ipn.Notify, 1)
 			b := &LocalBackend{
 				extHost: h,
+				health:  health.NewTracker(eventbustest.NewBus(t)),
 				notifyWatchers: map[string]*watchSession{
 					"test": {ch: ch},
 				},

@@ -158,6 +158,7 @@ func TestTKAEnablementFlow(t *testing.T) {
 		cc:             cc,
 		ccAuto:         cc,
 		logf:           t.Logf,
+		health:         health.NewTracker(eventbustest.NewBus(t)),
 		pm:             pm,
 		store:          pm.Store(),
 	}
@@ -244,6 +245,7 @@ func TestTKADisablementFlow(t *testing.T) {
 		cc:      cc,
 		ccAuto:  cc,
 		logf:    t.Logf,
+		health:  health.NewTracker(eventbustest.NewBus(t)),
 		tka: &tkaState{
 			authority: authority,
 			storage:   chonk,
@@ -428,6 +430,7 @@ func TestTKASync(t *testing.T) {
 				cc:      cc,
 				ccAuto:  cc,
 				logf:    t.Logf,
+				health:  health.NewTracker(eventbustest.NewBus(t)),
 				pm:      pm,
 				store:   pm.Store(),
 				tka: &tkaState{
@@ -544,6 +547,7 @@ func TestTKASyncTriggersCompact(t *testing.T) {
 		cc:     cc,
 		ccAuto: cc,
 		logf:   t.Logf,
+		health: health.NewTracker(eventbustest.NewBus(t)),
 		pm:     pm,
 		store:  pm.Store(),
 		tka: &tkaState{
@@ -616,8 +620,9 @@ func TestTKAFilterNetmap(t *testing.T) {
 	}
 
 	b := &LocalBackend{
-		logf: t.Logf,
-		tka:  &tkaState{authority: authority},
+		logf:   t.Logf,
+		health: health.NewTracker(eventbustest.NewBus(t)),
+		tka:    &tkaState{authority: authority},
 	}
 
 	n1, n2, n3, n4, n5 := key.NewNode(), key.NewNode(), key.NewNode(), key.NewNode(), key.NewNode()
@@ -822,6 +827,7 @@ func TestTKADisable(t *testing.T) {
 		cc:      cc,
 		ccAuto:  cc,
 		logf:    t.Logf,
+		health:  health.NewTracker(eventbustest.NewBus(t)),
 		tka: &tkaState{
 			profile:   pm.CurrentProfile().ID(),
 			authority: authority,
@@ -887,6 +893,7 @@ func TestTKASign(t *testing.T) {
 		cc:      cc,
 		ccAuto:  cc,
 		logf:    t.Logf,
+		health:  health.NewTracker(eventbustest.NewBus(t)),
 		tka: &tkaState{
 			authority: authority,
 			storage:   chonk,
@@ -1083,6 +1090,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 				cc:      cc,
 				ccAuto:  cc,
 				logf:    t.Logf,
+				health:  health.NewTracker(eventbustest.NewBus(t)),
 				tka: &tkaState{
 					authority: authority,
 					storage:   chonk,
@@ -1168,6 +1176,7 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 		cc:      cc,
 		ccAuto:  cc,
 		logf:    t.Logf,
+		health:  health.NewTracker(eventbustest.NewBus(t)),
 		tka: &tkaState{
 			authority: authority,
 			storage:   chonk,
@@ -1187,6 +1196,7 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 		b := LocalBackend{
 			varRoot: temp,
 			logf:    t.Logf,
+			health:  health.NewTracker(eventbustest.NewBus(t)),
 			tka: &tkaState{
 				authority: authority,
 				storage:   chonk,
