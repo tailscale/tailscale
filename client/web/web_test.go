@@ -1477,7 +1477,9 @@ func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self fu
 				http.Error(w, "invalid JSON body", http.StatusBadRequest)
 				return
 			}
-			metricCapture(metricNames[0].Name)
+			if metricCapture != nil && len(metricNames) > 0 {
+				metricCapture(metricNames[0].Name)
+			}
 			writeJSON(w, struct{}{})
 			return
 		case "/localapi/v0/logout":
