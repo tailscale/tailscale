@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/health"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -23,6 +24,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
 
 	gcmp "github.com/google/go-cmp/cmp"
@@ -33,6 +35,7 @@ func TestHandleC2NTLSCertStatus(t *testing.T) {
 	b := &LocalBackend{
 		store:   &mem.Store{},
 		varRoot: t.TempDir(),
+		health:  health.NewTracker(eventbustest.NewBus(t)),
 	}
 	certDir, err := b.certDir()
 	if err != nil {

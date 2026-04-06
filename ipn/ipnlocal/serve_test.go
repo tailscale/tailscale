@@ -194,6 +194,7 @@ func TestGetServeHandler(t *testing.T) {
 			b := &LocalBackend{
 				serveConfig: tt.conf.View(),
 				logf:        t.Logf,
+				health:      health.NewTracker(eventbustest.NewBus(t)),
 			}
 			req := &http.Request{
 				URL: &url.URL{
@@ -1191,7 +1192,9 @@ func TestServeFileOrDirectory(t *testing.T) {
 		}
 	}
 
-	b := &LocalBackend{}
+	b := &LocalBackend{
+		health: health.NewTracker(eventbustest.NewBus(t)),
+	}
 
 	tests := []struct {
 		req   string
