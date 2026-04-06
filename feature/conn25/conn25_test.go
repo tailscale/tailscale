@@ -390,38 +390,57 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 
 func TestReserveIPs(t *testing.T) {
 	c := newConn25(logger.Discard)
-	c.client.magicIPPool = newIPPool(mustIPSetFromPrefix("100.64.0.0/24"))
-	c.client.transitIPPool = newIPPool(mustIPSetFromPrefix("169.254.0.0/24"))
+	c.client.v4MagicIPPool = newIPPool(mustIPSetFromPrefix("100.64.0.0/24"))
+	c.client.v6MagicIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0100::/80"))
+	c.client.v4TransitIPPool = newIPPool(mustIPSetFromPrefix("169.254.0.0/24"))
+	c.client.v6TransitIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0200::/80"))
+	app := "a"
+	domainStr := "example.com."
 	mbd := map[dnsname.FQDN][]string{}
-	mbd["example.com."] = []string{"a"}
+	mbd["example.com."] = []string{app}
 	c.client.config.appNamesByDomain = mbd
+	domain := must.Get(dnsname.ToFQDN(domainStr))
 
-	dst := netip.MustParseAddr("0.0.0.1")
-	addrs, err := c.client.reserveAddresses("example.com.", dst)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	wantDst := netip.MustParseAddr("0.0.0.1")         // same as dst we pass in
-	wantMagic := netip.MustParseAddr("100.64.0.0")    // first from magic pool
-	wantTransit := netip.MustParseAddr("169.254.0.0") // first from transit pool
-	wantApp := "a"                                    // the app name related to example.com.
-	wantDomain := must.Get(dnsname.ToFQDN("example.com."))
-
-	if wantDst != addrs.dst {
-		t.Errorf("want %v, got %v", wantDst, addrs.dst)
-	}
-	if wantMagic != addrs.magic {
-		t.Errorf("want %v, got %v", wantMagic, addrs.magic)
-	}
-	if wantTransit != addrs.transit {
-		t.Errorf("want %v, got %v", wantTransit, addrs.transit)
-	}
-	if wantApp != addrs.app {
-		t.Errorf("want %s, got %s", wantApp, addrs.app)
-	}
-	if wantDomain != addrs.domain {
-		t.Errorf("want %s, got %s", wantDomain, addrs.domain)
+	for _, tt := range []struct {
+		name        string
+		dst         netip.Addr
+		wantMagic   netip.Addr
+		wantTransit netip.Addr
+	}{
+		{
+			name:        "v4",
+			dst:         netip.MustParseAddr("0.0.0.1"),
+			wantMagic:   netip.MustParseAddr("100.64.0.0"),  // first from magic pool
+			wantTransit: netip.MustParseAddr("169.254.0.0"), // first from transit pool
+		},
+		{
+			name:        "v6",
+			dst:         netip.MustParseAddr("::1"),
+			wantMagic:   netip.MustParseAddr("fd7a:115c:a1e0:a99c:100::"), // first from magic pool
+			wantTransit: netip.MustParseAddr("fd7a:115c:a1e0:a99c:200::"), // first from transit pool
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			addrs, err := c.client.reserveAddresses(domain, tt.dst)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.dst != addrs.dst {
+				t.Errorf("want %v, got %v", tt.dst, addrs.dst)
+			}
+			if tt.wantMagic != addrs.magic {
+				t.Errorf("want %v, got %v", tt.wantMagic, addrs.magic)
+			}
+			if tt.wantTransit != addrs.transit {
+				t.Errorf("want %v, got %v", tt.wantTransit, addrs.transit)
+			}
+			if app != addrs.app {
+				t.Errorf("want %s, got %s", app, addrs.app)
+			}
+			if domain != addrs.domain {
+				t.Errorf("want %s, got %s", domain, addrs.domain)
+			}
+		})
 	}
 }
 
@@ -549,10 +568,17 @@ func makeSelfNode(t *testing.T, attrs []appctype.Conn25Attr, tags []string) tail
 	}).View()
 }
 
-func rangeFrom(from, to string) netipx.IPRange {
+func v4RangeFrom(from, to string) netipx.IPRange {
 	return netipx.IPRangeFrom(
 		netip.MustParseAddr("100.64.0."+from),
 		netip.MustParseAddr("100.64.0."+to),
+	)
+}
+
+func v6RangeFrom(from, to string) netipx.IPRange {
+	return netipx.IPRangeFrom(
+		netip.MustParseAddr("fd7a:115c:a1e0:a99c:"+from+"::"),
+		netip.MustParseAddr("fd7a:115c:a1e0:a99c:"+to+"::"),
 	)
 }
 
@@ -682,13 +708,14 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 	for _, tt := range []struct {
 		name          string
 		domain        string
-		addrs         []*dnsmessage.AResource
+		v4Addrs       []*dnsmessage.AResource
+		v6Addrs       []*dnsmessage.AAAAResource
 		wantByMagicIP map[netip.Addr]addrs
 	}{
 		{
-			name:   "one-ip-matches",
-			domain: "example.com.",
-			addrs:  []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
+			name:    "one-ip-matches",
+			domain:  "example.com.",
+			v4Addrs: []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
 			// these are 'expected' because they are the beginning of the provided pools
 			wantByMagicIP: map[netip.Addr]addrs{
 				netip.MustParseAddr("100.64.0.0"): {
@@ -701,9 +728,33 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 			},
 		},
 		{
+			name:   "v6-ip-matches",
+			domain: "example.com.",
+			v6Addrs: []*dnsmessage.AAAAResource{
+				{AAAA: [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}},
+				{AAAA: [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2}},
+			},
+			wantByMagicIP: map[netip.Addr]addrs{
+				netip.MustParseAddr("fd7a:115c:a1e0:a99c::"): {
+					domain:  "example.com.",
+					dst:     netip.MustParseAddr("::1"),
+					magic:   netip.MustParseAddr("fd7a:115c:a1e0:a99c:0::"),
+					transit: netip.MustParseAddr("fd7a:115c:a1e0:a99c:40::"),
+					app:     "app1",
+				},
+				netip.MustParseAddr("fd7a:115c:a1e0:a99c::1"): {
+					domain:  "example.com.",
+					dst:     netip.MustParseAddr("::2"),
+					magic:   netip.MustParseAddr("fd7a:115c:a1e0:a99c:0::1"),
+					transit: netip.MustParseAddr("fd7a:115c:a1e0:a99c:40::1"),
+					app:     "app1",
+				},
+			},
+		},
+		{
 			name:   "multiple-ip-matches",
 			domain: "example.com.",
-			addrs: []*dnsmessage.AResource{
+			v4Addrs: []*dnsmessage.AResource{
 				{A: [4]byte{1, 0, 0, 0}},
 				{A: [4]byte{2, 0, 0, 0}},
 			},
@@ -727,20 +778,27 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 		{
 			name:   "no-domain-match",
 			domain: "x.example.com.",
-			addrs: []*dnsmessage.AResource{
+			v4Addrs: []*dnsmessage.AResource{
 				{A: [4]byte{1, 0, 0, 0}},
 				{A: [4]byte{2, 0, 0, 0}},
 			},
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			dnsResp := makeDNSResponse(t, tt.domain, tt.addrs)
+			var dnsResp []byte
+			if len(tt.v4Addrs) > 0 {
+				dnsResp = makeDNSResponse(t, tt.domain, tt.v4Addrs)
+			} else {
+				dnsResp = makeV6DNSResponse(t, tt.domain, tt.v6Addrs)
+			}
 			sn := makeSelfNode(t, []appctype.Conn25Attr{{
-				Name:          "app1",
-				Connectors:    []string{"tag:woo"},
-				Domains:       []string{"example.com"},
-				MagicIPPool:   []netipx.IPRange{rangeFrom("0", "10"), rangeFrom("20", "30")},
-				TransitIPPool: []netipx.IPRange{rangeFrom("40", "50")},
+				Name:            "app1",
+				Connectors:      []string{"tag:woo"},
+				Domains:         []string{"example.com"},
+				V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10"), v4RangeFrom("20", "30")},
+				V6MagicIPPool:   []netipx.IPRange{v6RangeFrom("0", "10"), v6RangeFrom("20", "30")},
+				V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
+				V6TransitIPPool: []netipx.IPRange{v6RangeFrom("40", "50")},
 			}}, []string{})
 			c := newConn25(logger.Discard)
 			c.reconfig(sn)
@@ -754,30 +812,48 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 }
 
 func TestReserveAddressesDeduplicated(t *testing.T) {
-	c := newConn25(logger.Discard)
-	c.client.magicIPPool = newIPPool(mustIPSetFromPrefix("100.64.0.0/24"))
-	c.client.transitIPPool = newIPPool(mustIPSetFromPrefix("169.254.0.0/24"))
-	c.client.config.appNamesByDomain = map[dnsname.FQDN][]string{"example.com.": {"a"}}
+	for _, tt := range []struct {
+		name string
+		dst  netip.Addr
+	}{
+		{
+			name: "v4",
+			dst:  netip.MustParseAddr("0.0.0.1"),
+		},
+		{
+			name: "v6",
+			dst:  netip.MustParseAddr("::1"),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConn25(logger.Discard)
+			c.client.v4MagicIPPool = newIPPool(mustIPSetFromPrefix("100.64.0.0/24"))
+			c.client.v6MagicIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0100::/80"))
+			c.client.v4TransitIPPool = newIPPool(mustIPSetFromPrefix("169.254.0.0/24"))
+			c.client.v6TransitIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0200::/80"))
+			c.client.config.appNamesByDomain = map[dnsname.FQDN][]string{"example.com.": {"a"}}
 
-	dst := netip.MustParseAddr("0.0.0.1")
-	first, err := c.client.reserveAddresses("example.com.", dst)
-	if err != nil {
-		t.Fatal(err)
-	}
+			first, err := c.client.reserveAddresses("example.com.", tt.dst)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	second, err := c.client.reserveAddresses("example.com.", dst)
-	if err != nil {
-		t.Fatal(err)
-	}
+			second, err := c.client.reserveAddresses("example.com.", tt.dst)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	if first != second {
-		t.Errorf("expected same addrs on repeated call, got first=%v second=%v", first, second)
-	}
-	if got := len(c.client.assignments.byMagicIP); got != 1 {
-		t.Errorf("want 1 entry in byMagicIP, got %d", got)
-	}
-	if got := len(c.client.assignments.byDomainDst); got != 1 {
-		t.Errorf("want 1 entry in byDomainDst, got %d", got)
+			if first != second {
+				t.Errorf("expected same addrs on repeated call, got first=%v second=%v", first, second)
+			}
+			if got := len(c.client.assignments.byMagicIP); got != 1 {
+				t.Errorf("want 1 entry in byMagicIP, got %d", got)
+			}
+			if got := len(c.client.assignments.byDomainDst); got != 1 {
+				t.Errorf("want 1 entry in byDomainDst, got %d", got)
+			}
+
+		})
 	}
 }
 
@@ -961,11 +1037,13 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 	domainName := configuredDomain + "."
 	dnsMessageName := dnsmessage.MustNewName(domainName)
 	sn := makeSelfNode(t, []appctype.Conn25Attr{{
-		Name:          "app1",
-		Connectors:    []string{"tag:connector"},
-		Domains:       []string{configuredDomain},
-		MagicIPPool:   []netipx.IPRange{rangeFrom("0", "10")},
-		TransitIPPool: []netipx.IPRange{rangeFrom("40", "50")},
+		Name:            "app1",
+		Connectors:      []string{"tag:connector"},
+		Domains:         []string{configuredDomain},
+		V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10")},
+		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
+		V6MagicIPPool:   []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6812:100"), netip.MustParseAddr("2606:4700::6812:1ff"))},
+		V6TransitIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6813:100"), netip.MustParseAddr("2606:4700::6813:1ff"))},
 	}}, []string{})
 
 	compareToRecords := func(t *testing.T, resources []dnsmessage.Resource, want []netip.Addr) {
@@ -1060,12 +1138,17 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 			),
 		},
 		{
-			name: "ipv6-no-answers",
+			name: "ipv6-multiple",
 			toMap: makeV6DNSResponse(t, domainName, []*dnsmessage.AAAAResource{
 				{AAAA: netip.MustParseAddr("2606:4700::6812:1a78").As16()},
 				{AAAA: netip.MustParseAddr("2606:4700::6812:1b78").As16()},
 			}),
-			assertFx: assertParsesToAnswers(nil),
+			assertFx: assertParsesToAnswers(
+				[]netip.Addr{
+					netip.MustParseAddr("2606:4700::6812:100"),
+					netip.MustParseAddr("2606:4700::6812:101"),
+				},
+			),
 		},
 		{
 			name:     "not-our-domain",
@@ -1174,7 +1257,7 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 			assertFx: assertParsesToAnswers(nil),
 		},
 		{
-			name: "answer-type-mismatch",
+			name: "answer-type-mismatch-want-v4",
 			toMap: makeDNSResponseForSections(t,
 				[]dnsmessage.Question{
 					{
@@ -1204,6 +1287,38 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 				nil,
 			),
 			assertFx: assertParsesToAnswers([]netip.Addr{netip.MustParseAddr("100.64.0.0")}),
+		},
+		{
+			name: "answer-type-mismatch-want-v6",
+			toMap: makeDNSResponseForSections(t,
+				[]dnsmessage.Question{
+					{
+						Name:  dnsMessageName,
+						Type:  dnsmessage.TypeAAAA,
+						Class: dnsmessage.ClassINET,
+					},
+				},
+				[]dnsmessage.Resource{
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsMessageName,
+							Type:  dnsmessage.TypeAAAA,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.AAAAResource{AAAA: netip.MustParseAddr("1.2.3.4").As16()},
+					},
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsMessageName,
+							Type:  dnsmessage.TypeA,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.AResource{A: netip.MustParseAddr("5.6.7.8").As4()},
+					},
+				},
+				nil,
+			),
+			assertFx: assertParsesToAnswers([]netip.Addr{netip.MustParseAddr("2606:4700::6812:100")}),
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1458,12 +1573,22 @@ func TestTransitIPConnMapping(t *testing.T) {
 
 func TestClientTransitIPForMagicIP(t *testing.T) {
 	sn := makeSelfNode(t, []appctype.Conn25Attr{{
-		MagicIPPool: []netipx.IPRange{rangeFrom("0", "10")}, // 100.64.0.0 - 100.64.0.10
+		V4MagicIPPool: []netipx.IPRange{v4RangeFrom("0", "10")}, // 100.64.0.0 - 100.64.0.10
+		V6MagicIPPool: []netipx.IPRange{v6RangeFrom("0", "10")},
 	}}, []string{})
+
 	mappedMip := netip.MustParseAddr("100.64.0.0")
 	mappedTip := netip.MustParseAddr("169.0.0.0")
 	unmappedMip := netip.MustParseAddr("100.64.0.1")
 	nonMip := netip.MustParseAddr("100.64.0.11")
+	dst := netip.MustParseAddr("0.0.0.1")
+
+	v6MappedMip := netip.MustParseAddr("fd7a:115c:a1e0:a99c:0::")
+	v6MappedTip := netip.MustParseAddr("fd7a:115c:a1e0:a99c:100::")
+	v6UnmappedMip := netip.MustParseAddr("fd7a:115c:a1e0:a99c:1::")
+	v6NonMip := netip.MustParseAddr("fd7a:115c:a1e0:a99c:11::")
+	v6Dst := netip.MustParseAddr("::1")
+
 	for _, tt := range []struct {
 		name    string
 		mip     netip.Addr
@@ -1488,16 +1613,44 @@ func TestClientTransitIPForMagicIP(t *testing.T) {
 			wantTip: mappedTip,
 			wantErr: nil,
 		},
+		{
+			name:    "v6-not-magic",
+			mip:     v6NonMip,
+			wantTip: netip.Addr{},
+			wantErr: nil,
+		},
+		{
+			name:    "v6-unmapped-magic-ip",
+			mip:     v6UnmappedMip,
+			wantTip: netip.Addr{},
+			wantErr: ErrUnmappedMagicIP,
+		},
+		{
+			name:    "v6-mapped-magic-ip",
+			mip:     v6MappedMip,
+			wantTip: v6MappedTip,
+			wantErr: nil,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newConn25(t.Logf)
 			if err := c.reconfig(sn); err != nil {
 				t.Fatal(err)
 			}
-			c.client.assignments.insert(addrs{
+			if err := c.client.assignments.insert(addrs{
 				magic:   mappedMip,
 				transit: mappedTip,
-			})
+				dst:     dst,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.client.assignments.insert(addrs{
+				magic:   v6MappedMip,
+				transit: v6MappedTip,
+				dst:     v6Dst,
+			}); err != nil {
+				t.Fatal(err)
+			}
 			tip, err := c.client.transitIPForMagicIP(tt.mip)
 			if tip != tt.wantTip {
 				t.Fatalf("checking transit ip: want %v, got %v", tt.wantTip, tip)
@@ -1511,7 +1664,7 @@ func TestClientTransitIPForMagicIP(t *testing.T) {
 
 func TestConnectorRealIPForTransitIPConnection(t *testing.T) {
 	sn := makeSelfNode(t, []appctype.Conn25Attr{{
-		TransitIPPool: []netipx.IPRange{rangeFrom("40", "50")}, // 100.64.0.40 - 100.64.0.50
+		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")}, // 100.64.0.40 - 100.64.0.50
 	}}, []string{})
 	mappedSrc := netip.MustParseAddr("100.0.0.1")
 	unmappedSrc := netip.MustParseAddr("100.0.0.2")
@@ -1648,5 +1801,55 @@ func TestConnectorPacketFilterAllow(t *testing.T) {
 		Dst: netip.AddrPortFrom(unknownTip, 1234),
 	}); allow {
 		t.Fatal("unknownTip: should not have been allowed")
+	}
+}
+
+func TestGetMagicRange(t *testing.T) {
+	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+		Name:          "app1",
+		Connectors:    []string{"tag:woo"},
+		Domains:       []string{"example.com"},
+		V4MagicIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("0.0.0.1"), netip.MustParseAddr("0.0.0.3"))},
+		V6MagicIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("::1"), netip.MustParseAddr("::3"))},
+	}}, []string{})
+	c := newConn25(t.Logf)
+	if err := c.reconfig(sn); err != nil {
+		t.Fatal(err)
+	}
+	ext := &extension{
+		conn25: c,
+	}
+	mRange := ext.getMagicRange()
+	somePrefixCovers := func(a netip.Addr) bool {
+		for _, r := range mRange.All() {
+			if r.Contains(a) {
+				return true
+			}
+		}
+		return false
+	}
+	ins := []string{
+		"0.0.0.1",
+		"0.0.0.2",
+		"0.0.0.3",
+		"::1",
+		"::2",
+		"::3",
+	}
+	outs := []string{
+		"0.0.0.0",
+		"0.0.0.4",
+		"::",
+		"::4",
+	}
+	for _, s := range ins {
+		if !somePrefixCovers(netip.MustParseAddr(s)) {
+			t.Fatalf("expected addr to be covered but was not: %s", s)
+		}
+	}
+	for _, s := range outs {
+		if somePrefixCovers(netip.MustParseAddr(s)) {
+			t.Fatalf("expected addr to NOT be covered but WAS: %s", s)
+		}
 	}
 }

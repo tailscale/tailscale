@@ -229,7 +229,7 @@ func (c *Conn25) ConnectorRealIPForTransitIPConnection(src, transit netip.Addr) 
 
 func (e *extension) getMagicRange() views.Slice[netip.Prefix] {
 	cfg := e.conn25.client.getConfig()
-	return views.SliceOf(cfg.magicIPSet.Prefixes())
+	return views.SliceOf(slices.Concat(cfg.v4MagicIPSet.Prefixes(), cfg.v6MagicIPSet.Prefixes()))
 }
 
 // Shutdown implements [ipnlocal.Extension].
@@ -493,8 +493,10 @@ type config struct {
 	appsByName        map[string]appctype.Conn25Attr
 	appNamesByDomain  map[dnsname.FQDN][]string
 	selfRoutedDomains set.Set[dnsname.FQDN]
-	transitIPSet      netipx.IPSet
-	magicIPSet        netipx.IPSet
+	v4TransitIPSet    netipx.IPSet
+	v4MagicIPSet      netipx.IPSet
+	v6TransitIPSet    netipx.IPSet
+	v6MagicIPSet      netipx.IPSet
 }
 
 func configFromNodeView(n tailcfg.NodeView) (config, error) {
@@ -531,16 +533,26 @@ func configFromNodeView(n tailcfg.NodeView) (config, error) {
 	// global IP pool config. For now just take it from the first app.
 	if len(apps) != 0 {
 		app := apps[0]
-		mipp, err := ipSetFromIPRanges(app.MagicIPPool)
+		v4Mipp, err := ipSetFromIPRanges(app.V4MagicIPPool)
 		if err != nil {
 			return config{}, err
 		}
-		tipp, err := ipSetFromIPRanges(app.TransitIPPool)
+		v4Tipp, err := ipSetFromIPRanges(app.V4TransitIPPool)
 		if err != nil {
 			return config{}, err
 		}
-		cfg.magicIPSet = *mipp
-		cfg.transitIPSet = *tipp
+		v6Mipp, err := ipSetFromIPRanges(app.V6MagicIPPool)
+		if err != nil {
+			return config{}, err
+		}
+		v6Tipp, err := ipSetFromIPRanges(app.V6TransitIPPool)
+		if err != nil {
+			return config{}, err
+		}
+		cfg.v4MagicIPSet = *v4Mipp
+		cfg.v4TransitIPSet = *v4Tipp
+		cfg.v6MagicIPSet = *v6Mipp
+		cfg.v6TransitIPSet = *v6Tipp
 	}
 	return cfg, nil
 }
@@ -553,11 +565,13 @@ type client struct {
 	logf    logger.Logf
 	addrsCh chan addrs
 
-	mu            sync.Mutex // protects the fields below
-	magicIPPool   *ippool
-	transitIPPool *ippool
-	assignments   addrAssignments
-	config        config
+	mu              sync.Mutex // protects the fields below
+	v4MagicIPPool   *ippool
+	v4TransitIPPool *ippool
+	v6MagicIPPool   *ippool
+	v6TransitIPPool *ippool
+	assignments     addrAssignments
+	config          config
 }
 
 func (c *client) getConfig() config {
@@ -575,7 +589,7 @@ func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, error) {
 	if ok {
 		return v.transit, nil
 	}
-	if !c.config.magicIPSet.Contains(magicIP) {
+	if !c.config.v4MagicIPSet.Contains(magicIP) && !c.config.v6MagicIPSet.Contains(magicIP) {
 		return netip.Addr{}, nil
 	}
 	return netip.Addr{}, ErrUnmappedMagicIP
@@ -613,8 +627,10 @@ func (c *client) reconfig(newCfg config) error {
 
 	c.config = newCfg
 
-	c.magicIPPool = newIPPool(&(newCfg.magicIPSet))
-	c.transitIPPool = newIPPool(&(newCfg.transitIPSet))
+	c.v4MagicIPPool = newIPPool(&(newCfg.v4MagicIPSet))
+	c.v4TransitIPPool = newIPPool(&(newCfg.v4TransitIPSet))
+	c.v6MagicIPPool = newIPPool(&(newCfg.v6MagicIPSet))
+	c.v6TransitIPPool = newIPPool(&(newCfg.v6TransitIPSet))
 	return nil
 }
 
@@ -630,6 +646,9 @@ func (c *client) isConnectorDomain(domain dnsname.FQDN) bool {
 // It checks that this domain should be routed and that this client is not itself a connector for the domain
 // and generally if it is valid to make the assignment.
 func (c *client) reserveAddresses(domain dnsname.FQDN, dst netip.Addr) (addrs, error) {
+	if !dst.IsValid() {
+		return addrs{}, errors.New("dst is not valid")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if existing, ok := c.assignments.lookupByDomainDst(domain, dst); ok {
@@ -641,13 +660,29 @@ func (c *client) reserveAddresses(domain dnsname.FQDN, dst netip.Addr) (addrs, e
 	}
 	// only reserve for first app
 	app := appNames[0]
-	mip, err := c.magicIPPool.next()
-	if err != nil {
-		return addrs{}, err
-	}
-	tip, err := c.transitIPPool.next()
-	if err != nil {
-		return addrs{}, err
+
+	var mip, tip netip.Addr
+	var err error
+	if dst.Is4() {
+		mip, err = c.v4MagicIPPool.next()
+		if err != nil {
+			return addrs{}, err
+		}
+		tip, err = c.v4TransitIPPool.next()
+		if err != nil {
+			return addrs{}, err
+		}
+	} else if dst.Is6() {
+		mip, err = c.v6MagicIPPool.next()
+		if err != nil {
+			return addrs{}, err
+		}
+		tip, err = c.v6TransitIPPool.next()
+		if err != nil {
+			return addrs{}, err
+		}
+	} else {
+		return addrs{}, errors.New("unexpected neither 4 nor 6")
 	}
 	as := addrs{
 		dst:     dst,
@@ -856,8 +891,7 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 	//  * not send through the additional section
 	//  * provide our answers, or no answers if we don't handle those answers (possibly in the future we should write through answers for eg TypeTXT)
 	var answers []dnsResponseRewrite
-	if question.Type != dnsmessage.TypeA {
-		// we plan to support TypeAAAA soon (2026-03-11)
+	if question.Type != dnsmessage.TypeA && question.Type != dnsmessage.TypeAAAA {
 		c.logf("mapping dns response for connector domain, unsupported type: %v", question.Type)
 		newBuf, err := c.rewriteDNSResponse(hdr, questions, answers)
 		if err != nil {
@@ -895,7 +929,15 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 				c.logf("error parsing dns response: %v", err)
 				return makeServFail(c.logf, hdr, question)
 			}
-		case dnsmessage.TypeA:
+		case dnsmessage.TypeA, dnsmessage.TypeAAAA:
+			if h.Type != question.Type {
+				// would not expect a v4 response to a v6 question or vice versa, don't add a rewrite for this.
+				if err := p.SkipAnswer(); err != nil {
+					c.logf("error parsing dns response: %v", err)
+					return makeServFail(c.logf, hdr, question)
+				}
+				continue
+			}
 			domain, err := normalizeDNSName(h.Name.String())
 			if err != nil {
 				c.logf("bad dnsname: %v", err)
@@ -910,12 +952,23 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 				}
 				continue
 			}
-			r, err := p.AResource()
-			if err != nil {
-				c.logf("error parsing dns response: %v", err)
-				return makeServFail(c.logf, hdr, question)
+			var dstAddr netip.Addr
+			if h.Type == dnsmessage.TypeA {
+				r, err := p.AResource()
+				if err != nil {
+					c.logf("error parsing dns response: %v", err)
+					return makeServFail(c.logf, hdr, question)
+				}
+				dstAddr = netip.AddrFrom4(r.A)
+			} else {
+				r, err := p.AAAAResource()
+				if err != nil {
+					c.logf("error parsing dns response: %v", err)
+					return makeServFail(c.logf, hdr, question)
+				}
+				dstAddr = netip.AddrFrom16(r.AAAA)
 			}
-			answers = append(answers, dnsResponseRewrite{domain: domain, dst: netip.AddrFrom4(r.A)})
+			answers = append(answers, dnsResponseRewrite{domain: domain, dst: dstAddr})
 		default:
 			// we already checked the question was for a supported type, this answer is unexpected
 			c.logf("unexpected type for connector domain dns response: %v %v", queriedDomain, h.Type)
@@ -934,8 +987,6 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 }
 
 func (c *client) rewriteDNSResponse(hdr dnsmessage.Header, questions []dnsmessage.Question, answers []dnsResponseRewrite) ([]byte, error) {
-	// We are currently (2026-03-10) only doing this for AResource records, we know that if we are here
-	// with non-empty answers, the type was AResource.
 	b := dnsmessage.NewBuilder(nil, hdr)
 	b.EnableCompression()
 	if err := b.StartQuestions(); err != nil {
@@ -963,10 +1014,18 @@ func (c *client) rewriteDNSResponse(hdr dnsmessage.Header, questions []dnsmessag
 		if err != nil {
 			return nil, err
 		}
-		// only handling TypeA right now
-		rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 0}
-		if err := b.AResource(rhdr, dnsmessage.AResource{A: as.magic.As4()}); err != nil {
-			return nil, err
+		if rw.dst.Is4() {
+			rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 0}
+			if err := b.AResource(rhdr, dnsmessage.AResource{A: as.magic.As4()}); err != nil {
+				return nil, err
+			}
+		} else if rw.dst.Is6() {
+			rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET, TTL: 0}
+			if err := b.AAAAResource(rhdr, dnsmessage.AAAAResource{AAAA: as.magic.As16()}); err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, errors.New("unexpected neither 4 nor 6")
 		}
 	}
 	// We do _not_ include the additional section in our rewrite. (We don't want to include
@@ -997,7 +1056,7 @@ func (c *connector) realIPForTransitIPConnection(srcIP netip.Addr, transitIP net
 	if ok {
 		return v.addr, nil
 	}
-	if !c.config.transitIPSet.Contains(transitIP) {
+	if !c.config.v4TransitIPSet.Contains(transitIP) && !c.config.v6TransitIPSet.Contains(transitIP) {
 		return netip.Addr{}, nil
 	}
 	return netip.Addr{}, ErrUnmappedSrcAndTransitIP
