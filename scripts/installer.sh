@@ -413,7 +413,7 @@ main() {
 	# versions we support?
 	OS_UNSUPPORTED=
 	case "$OS" in
-		ubuntu|debian|raspbian|centos|oracle|rhel|amazon-linux|opensuse|photon)
+		ubuntu|debian|raspbian|centos|oracle|rhel|amazon-linux|opensuse|photon|peppermint)
 			# Check with the package server whether a given version is supported.
 			URL="https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/installer-supported"
 			$CURL "$URL" 2> /dev/null | grep -q OK || OS_UNSUPPORTED=1
