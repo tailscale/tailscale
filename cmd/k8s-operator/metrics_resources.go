@@ -7,8 +7,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"maps"
 	"reflect"
@@ -21,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	kube "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 )
@@ -229,13 +228,13 @@ func metricsResourceLabels(opts *metricsOpts) map[string]string {
 		kubetypes.LabelManaged:   "true",
 		labelMetricsTarget:       opts.proxyStsName,
 		labelPromProxyType:       opts.proxyType,
-		labelPromProxyParentName: truncateLabelValue(opts.proxyLabels[LabelParentName]),
+		labelPromProxyParentName: kube.TruncateLabelValue(opts.proxyLabels[LabelParentName]),
 	}
 	// Include namespace label for proxies created for a namespaced type.
 	if isNamespacedProxyType(opts.proxyType) {
-		lbls[labelPromProxyParentNamespace] = truncateLabelValue(opts.proxyLabels[LabelParentNamespace])
+		lbls[labelPromProxyParentNamespace] = kube.TruncateLabelValue(opts.proxyLabels[LabelParentNamespace])
 	}
-	lbls[labelPromJob] = truncateLabelValue(promJobName(opts))
+	lbls[labelPromJob] = kube.TruncateLabelValue(promJobName(opts))
 	return lbls
 }
 
@@ -252,11 +251,11 @@ func promJobName(opts *metricsOpts) string {
 func metricsSvcSelector(proxyLabels map[string]string, proxyType string) map[string]string {
 	sel := map[string]string{
 		labelPromProxyType:       proxyType,
-		labelPromProxyParentName: truncateLabelValue(proxyLabels[LabelParentName]),
+		labelPromProxyParentName: kube.TruncateLabelValue(proxyLabels[LabelParentName]),
 	}
 	// Include namespace label for proxies created for a namespaced type.
 	if isNamespacedProxyType(proxyType) {
-		sel[labelPromProxyParentNamespace] = truncateLabelValue(proxyLabels[LabelParentNamespace])
+		sel[labelPromProxyParentNamespace] = kube.TruncateLabelValue(proxyLabels[LabelParentNamespace])
 	}
 	return sel
 }
@@ -285,20 +284,6 @@ type metricsOpts struct {
 
 func isNamespacedProxyType(typ string) bool {
 	return typ == proxyTypeIngressResource || typ == proxyTypeIngressService
-}
-
-// truncateLabelValue truncates a Kubernetes label value to fit within the
-// 63-character limit. If the value exceeds the limit, it is truncated and a
-// short hash suffix is appended to preserve uniqueness.
-func truncateLabelValue(val string) string {
-	const maxLen = 63
-	if len(val) <= maxLen {
-		return val
-	}
-	hash := sha256.Sum256([]byte(val))
-	suffix := hex.EncodeToString(hash[:4]) // 8 hex chars
-	truncated := val[:maxLen-len(suffix)-1]
-	return truncated + "-" + suffix
 }
 
 func mergeMapKeys(a, b map[string]string) map[string]string {
