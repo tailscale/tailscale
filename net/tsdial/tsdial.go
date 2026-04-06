@@ -515,6 +515,33 @@ func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, 
 	return stdDialer.DialContext(ctx, network, ipp.String())
 }
 
+// UserDialPlan resolves addr and reports whether the dialer would
+// handle it via Tailscale. If viaTailscale is false, the resolved
+// address is not a Tailscale route and the caller may dial it directly.
+//
+// Warning: there is a TOCTOU race if addr contains a DNS name and the
+// caller subsequently passes the same DNS name to [Dialer.UserDial], as DNS
+// may resolve differently the second time. Callers who want to only
+// dial over Tailscale should call [Dialer.UserDial] with the returned
+// ipp.String() (an IP:port) rather than the original DNS name.
+func (d *Dialer) UserDialPlan(ctx context.Context, network, addr string) (ipp netip.AddrPort, viaTailscale bool, err error) {
+	ipp, err = d.userDialResolve(ctx, network, addr)
+	if err != nil {
+		return netip.AddrPort{}, false, err
+	}
+	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.Addr()) {
+		return ipp, true, nil
+	}
+	if routes := d.routes.Load(); routes != nil {
+		isTailscaleRoute, _ := routes.Lookup(ipp.Addr())
+		return ipp, isTailscaleRoute, nil
+	}
+	if version.IsMacGUIVariant() && tsaddr.IsTailscaleIP(ipp.Addr()) {
+		return ipp, true, nil
+	}
+	return ipp, false, nil
+}
+
 // dialPeerAPI connects to a Tailscale peer's peerapi over TCP.
 //
 // network must a "tcp" type, and addr must be an ip:port. Name resolution

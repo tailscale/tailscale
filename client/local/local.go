@@ -972,6 +972,19 @@ func (lc *Client) UserDial(ctx context.Context, network, host string, port uint1
 	if res.StatusCode != http.StatusSwitchingProtocols {
 		body, _ := io.ReadAll(res.Body)
 		res.Body.Close()
+		if res.StatusCode == http.StatusOK && res.Header.Get("Dial-Self") == "true" {
+			// Server told us to dial the address ourselves rather than
+			// proxying through the daemon. This happens for non-Tailscale
+			// addresses where the daemon shouldn't dial as root on the
+			// client's behalf. The server provides the resolved address
+			// to avoid a TOCTOU race with DNS re-resolution.
+			addr := res.Header.Get("Dial-Addr")
+			if addr == "" {
+				return nil, errors.New("server returned Dial-Self without Dial-Addr")
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		}
 		return nil, fmt.Errorf("unexpected HTTP response: %s, %s", res.Status, body)
 	}
 	// From here on, the underlying net.Conn is ours to use, but there

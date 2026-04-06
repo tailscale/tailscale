@@ -1169,16 +1169,34 @@ func (h *Handler) serveDial(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing Dial-Host or Dial-Port header", http.StatusBadRequest)
 		return
 	}
+	network := cmp.Or(r.Header.Get("Dial-Network"), "tcp")
+
+	addr := net.JoinHostPort(hostStr, portStr)
+
+	// Check whether the resolved address is a Tailscale route.
+	// If not, tell the client to dial it directly so the connection
+	// comes from the calling user's UID rather than our root-owned daemon.
+	ipp, viaTailscale, err := h.b.Dialer().UserDialPlan(r.Context(), network, addr)
+	if err != nil {
+		http.Error(w, "resolve failure: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	if !viaTailscale {
+		w.Header().Set("Dial-Self", "true")
+		w.Header().Set("Dial-Addr", ipp.String())
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "make request over HTTP/1", http.StatusBadRequest)
 		return
 	}
 
-	network := cmp.Or(r.Header.Get("Dial-Network"), "tcp")
-
-	addr := net.JoinHostPort(hostStr, portStr)
-	outConn, err := h.b.Dialer().UserDial(r.Context(), network, addr)
+	// Dial via Tailscale using the resolved IP:port to avoid a TOCTOU
+	// race with DNS re-resolution.
+	outConn, err := h.b.Dialer().UserDial(r.Context(), network, ipp.String())
 	if err != nil {
 		http.Error(w, "dial failure: "+err.Error(), http.StatusBadGateway)
 		return
