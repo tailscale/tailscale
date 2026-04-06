@@ -270,13 +270,7 @@ jobs:
     - name: bench all
       if: matrix.key == 'win-bench'
       working-directory: src
-      # Don't use -bench=. -benchtime=1x.
-      # Somewhere in the layers (powershell?)
-      # the equals signs cause great confusion.
-      # Don't use -run "^$" either; the ^ is cmd.exe's escape
-      # character, so go.cmd's cmd.exe layer eats it, turning
-      # -run "^$" into -run "$" which matches all test names.
-      run: ./tool/go test ./... -bench . -benchtime 1x -run XXXXNothingXXXX
+      run: ./tool/go test ./... -bench=. -benchtime=1x -run="^$"
       env:
         NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
 

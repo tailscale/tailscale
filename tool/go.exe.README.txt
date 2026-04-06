@@ -1,0 +1,20 @@
+What is go.exe, and why's a 32-bit x86 Windows binary checked into the repo?
+
+See https://github.com/tailscale/tailscale/pull/19256
+
+In summary, our previous attempts to provide a version of ./tool/go (a
+shell script) on Windows with PowerShell and cmd.exe both were
+lacking.
+
+So now we we're regrettably checking in a binary to the tree. Its
+source code is in ./tool/goexe. It's written in Rust without std so
+it's very small (smaller than plenty of of our source code files!) and
+it's 32-bit x86 so it runs on 32-bit x86, 64-bit x86, and arm64 Windows
+where it's emulated.
+
+This binary is not required, but it's used by our build system and
+people working on Tailscale who are used to being able to run
+"./tool/go" and have it do the right hermetic thing, using the correct
+Go toolchain.
+
+
