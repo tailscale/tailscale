@@ -74,6 +74,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"fmt"
+	"html/template"
 	"log"
 	"maps"
 	"net"
@@ -268,7 +269,7 @@ func NewServer(config Config) (*Server, error) {
 		csp:    config.CSP.String(),
 		// only set Secure flag on CSRF cookies if we are in a secure context
 		// as otherwise the browser will reject the cookie
-		csrfProtect: csrf.Protect(config.CSRFSecret, csrf.Secure(config.SecureContext), csrf.SameSite(sameSite)),
+		csrfProtect: csrf.Protect(config.CSRFSecret, csrf.Secure(config.SecureContext), csrf.SameSite(sameSite), csrf.Path("/")),
 	}
 	s.h = cmp.Or(config.HTTPServer, &http.Server{})
 	if s.h.Handler != nil {
@@ -428,3 +429,12 @@ func (s *Server) Close() error {
 // Shutdown gracefully shuts down the server without interrupting any active
 // connections. It has the same semantics as[http.Server.Shutdown].
 func (s *Server) Shutdown(ctx context.Context) error { return s.h.Shutdown(ctx) }
+
+// CSRFToken returns the masked CSRF token for the current request. Use this
+// to pass the token in JSON responses or custom headers.
+func CSRFToken(r *http.Request) string { return csrf.Token(r) }
+
+// CSRFTemplateField returns a hidden HTML input element containing the CSRF
+// token for the current request. Use this in HTML forms served by the
+// BrowserMux.
+func CSRFTemplateField(r *http.Request) template.HTML { return csrf.TemplateField(r) }
