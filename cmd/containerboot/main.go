@@ -306,7 +306,7 @@ func run() error {
 		}
 	}
 
-	w, err := client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialPrefs|ipn.NotifyInitialState|ipn.NotifyInitialHealthState)
+	w, err := client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialPrefs|ipn.NotifyInitialState|ipn.NotifyInitialHealthState|ipn.NotifyRateLimit)
 	if err != nil {
 		return fmt.Errorf("failed to watch tailscaled for updates: %w", err)
 	}
@@ -346,7 +346,7 @@ func run() error {
 		if err := tailscaleUp(bootCtx, cfg); err != nil {
 			return fmt.Errorf("failed to auth tailscale: %w", err)
 		}
-		w, err = client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
+		w, err = client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState|ipn.NotifyRateLimit)
 		if err != nil {
 			return fmt.Errorf("rewatching tailscaled for updates after auth: %w", err)
 		}
@@ -458,7 +458,7 @@ authLoop:
 		}
 	}
 
-	w, err = client.WatchIPNBus(ctx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
+	w, err = client.WatchIPNBus(ctx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState|ipn.NotifyRateLimit)
 	if err != nil {
 		return fmt.Errorf("rewatching tailscaled for updates after auth: %w", err)
 	}
