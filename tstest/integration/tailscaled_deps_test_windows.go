@@ -33,7 +33,6 @@ import (
 	_ "tailscale.com/ipn"
 	_ "tailscale.com/ipn/auditlog"
 	_ "tailscale.com/ipn/conffile"
-	_ "tailscale.com/ipn/desktop"
 	_ "tailscale.com/ipn/ipnlocal"
 	_ "tailscale.com/ipn/ipnserver"
 	_ "tailscale.com/ipn/store"
