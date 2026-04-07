@@ -37,6 +37,17 @@ func Test_conn_Read(t *testing.T) {
 		wantCastHeaderHeight int
 		wantRecorded         []byte
 	}{
+		// Empty final continuation frame after a resize frame.
+		{
+			name: "continuation_frame_with_empty_payload",
+			inputs: [][]byte{
+				append([]byte{0x02, lenResizeMsgPayload}, testResizeMsg...),
+				{0x80, 0x00},
+			},
+			wantRecorded:         fakes.AsciinemaCastHeaderMsg(t, 10, 20),
+			wantCastHeaderWidth:  10,
+			wantCastHeaderHeight: 20,
+		},
 		{
 			name:   "single_read_control_message",
 			inputs: [][]byte{{0x88, 0x0}},
@@ -169,6 +180,26 @@ func Test_conn_Write(t *testing.T) {
 		wantRecorded  []byte
 		hasTerm       bool
 	}{
+		// Empty final continuation frame; stream ID already set by
+		// the initial fragment.
+		{
+			name: "continuation_frame_with_empty_payload",
+			inputs: [][]byte{
+				{0x02, 0x03, 0x01, 0x07, 0x08},
+				{0x80, 0x00},
+			},
+			wantForwarded: []byte{0x02, 0x03, 0x01, 0x07, 0x08, 0x80, 0x00},
+			wantRecorded:  fakes.CastLine(t, []byte{0x07, 0x08}, cl),
+		},
+		// Same as above but both fragments land in one Write call.
+		{
+			name: "continuation_frame_with_empty_payload_single_write",
+			inputs: [][]byte{
+				{0x02, 0x03, 0x01, 0x07, 0x08, 0x80, 0x00},
+			},
+			wantForwarded: []byte{0x02, 0x03, 0x01, 0x07, 0x08, 0x80, 0x00},
+			wantRecorded:  fakes.CastLine(t, []byte{0x07, 0x08}, cl),
+		},
 		{
 			name:          "single_write_control_frame",
 			inputs:        [][]byte{{0x88, 0x0}},
