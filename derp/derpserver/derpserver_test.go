@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/axiomhq/hyperloglog"
@@ -951,6 +952,127 @@ func BenchmarkHyperLogLogEstimate(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = hll.Estimate()
 	}
+}
+
+func TestPerClientRateLimit(t *testing.T) {
+	t.Run("throttled", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			// 100 bytes/sec with a burst of 100 bytes.
+			const bytesPerSec = 100
+			const burst = 100
+
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+
+			c := &sclient{
+				ctx:     ctx,
+				recvLim: rate.NewLimiter(rate.Limit(bytesPerSec), burst),
+			}
+
+			// First call within burst should not block.
+			c.rateLimit(burst)
+
+			// Next call exceeds burst, should block until tokens replenish.
+			done := make(chan error, 1)
+			go func() {
+				done <- c.rateLimit(burst)
+			}()
+
+			// After settling, the goroutine should be blocked (no result yet).
+			synctest.Wait()
+			select {
+			case err := <-done:
+				t.Fatalf("rateLimit should have blocked, but returned: %v", err)
+			default:
+			}
+
+			// Advance time by 1 second; 100 bytes/sec * 1s = 100 bytes = burst.
+			time.Sleep(1 * time.Second)
+			synctest.Wait()
+
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("rateLimit after time advance: %v", err)
+				}
+			default:
+				t.Fatal("rateLimit should have unblocked after 1s")
+			}
+		})
+	})
+
+	t.Run("context_canceled", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+
+			c := &sclient{
+				ctx:     ctx,
+				recvLim: rate.NewLimiter(rate.Limit(100), 100),
+			}
+
+			// Exhaust burst.
+			if err := c.rateLimit(100); err != nil {
+				t.Fatalf("rateLimit: %v", err)
+			}
+
+			done := make(chan error, 1)
+			go func() {
+				done <- c.rateLimit(100)
+			}()
+			synctest.Wait()
+
+			// Cancel the context; the blocked rateLimit should return an error.
+			cancel()
+			synctest.Wait()
+
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("expected error from canceled context")
+				}
+			default:
+				t.Fatal("rateLimit should have returned after context cancelation")
+			}
+		})
+	})
+
+	t.Run("mesh_peer_exempt", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+
+		c := &sclient{
+			ctx:     ctx,
+			canMesh: true,
+			recvLim: rate.NewLimiter(rate.Limit(1), 1), // would block immediately if not exempt
+		}
+
+		// rateLimit should be a no-op for mesh peers.
+		if err := c.rateLimit(1000); err != nil {
+			t.Fatalf("mesh peer rateLimit should be no-op: %v", err)
+		}
+	})
+
+	t.Run("nil_limiter_no_op", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+
+		c := &sclient{
+			ctx: ctx,
+		}
+
+		// rateLimit with nil recvLim should be a no-op.
+		if err := c.rateLimit(1000); err != nil {
+			t.Fatalf("nil limiter rateLimit should be no-op: %v", err)
+		}
+	})
+
+	t.Run("zero_config_no_limiter", func(t *testing.T) {
+		s := New(key.NewNode(), logger.Discard)
+		defer s.Close()
+		if s.perClientRecvBytesPerSec != 0 {
+			t.Errorf("expected zero rate limit, got %d", s.perClientRecvBytesPerSec)
+		}
+	})
 }
 
 func BenchmarkSenderCardinalityOverhead(b *testing.B) {

@@ -40,6 +40,7 @@ import (
 	"github.com/axiomhq/hyperloglog"
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
+	xrate "golang.org/x/time/rate"
 	"tailscale.com/client/local"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derpconst"
@@ -204,6 +205,15 @@ type Server struct {
 	perClientSendQueueDepth int
 
 	tcpWriteTimeout time.Duration
+
+	// perClientRecvBytesPerSec is the rate limit for receiving data from
+	// a single client connection, in bytes per second. 0 means unlimited.
+	// Mesh peers are exempt from this limit.
+	perClientRecvBytesPerSec uint
+	// perClientRecvBurst is the burst size in bytes for the per-client
+	// receive rate limiter. perClientRecvBurst is only relevant when
+	// perClientRecvBytesPerSec is nonzero.
+	perClientRecvBurst uint
 
 	clock tstime.Clock
 }
@@ -506,6 +516,16 @@ func (s *Server) SetTailscaledSocketPath(path string) {
 // Defaults to 2 seconds.
 func (s *Server) SetTCPWriteTimeout(d time.Duration) {
 	s.tcpWriteTimeout = d
+}
+
+// SetPerClientRateLimit sets the per-client receive rate limit in bytes per
+// second and the burst size in bytes. Mesh peers are exempt from this limit.
+// The burst is at least [derp.MaxPacketSize], or burst, if burst is greater
+// than [derp.MaxPacketSize]. This ensures at least a full packet can
+// be received in a burst, even if the rate limit is low.
+func (s *Server) SetPerClientRateLimit(bytesPerSec, burst uint) {
+	s.perClientRecvBytesPerSec = bytesPerSec
+	s.perClientRecvBurst = max(burst, derp.MaxPacketSize)
 }
 
 // HasMeshKey reports whether the server is configured with a mesh key.
@@ -943,7 +963,7 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 		br:             br,
 		bw:             bw,
 		logf:           logger.WithPrefix(s.logf, fmt.Sprintf("derp client %v%s: ", remoteAddr, clientKey.ShortString())),
-		done:           ctx.Done(),
+		ctx:            ctx,
 		remoteIPPort:   remoteIPPort,
 		connectedAt:    s.clock.Now(),
 		sendQueue:      make(chan pkt, s.perClientSendQueueDepth),
@@ -955,6 +975,9 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 		peerGoneLim:    rate.NewLimiter(rate.Every(time.Second), 3),
 	}
 
+	if s.perClientRecvBytesPerSec > 0 && !c.canMesh {
+		c.recvLim = xrate.NewLimiter(xrate.Limit(s.perClientRecvBytesPerSec), int(s.perClientRecvBurst))
+	}
 	if c.canMesh {
 		c.meshUpdate = make(chan struct{}, 1) // must be buffered; >1 is fine but wasteful
 	}
@@ -1027,6 +1050,14 @@ func (c *sclient) run(ctx context.Context) error {
 			}
 			return fmt.Errorf("client %s: readFrameHeader: %w", c.key.ShortString(), err)
 		}
+		// Rate limit by DERP frame length (fl), which excludes DERP
+		// and TLS protocol overheads.
+		// Note: meshed clients are exempt from rate limits.
+		// meshed clients are exempt from rate limits
+		if err := c.rateLimit(int(fl)); err != nil {
+			return err // context canceled, connection closing
+		}
+
 		c.s.noteClientActivity(c)
 		switch ft {
 		case derp.FrameNotePreferred:
@@ -1096,6 +1127,7 @@ func (c *sclient) handleFramePing(ft derp.FrameType, fl uint32) error {
 	if extra := int64(fl) - int64(len(m)); extra > 0 {
 		_, err = io.CopyN(io.Discard, c.br, extra)
 	}
+
 	select {
 	case c.sendPongCh <- [8]byte(m):
 	default:
@@ -1139,7 +1171,7 @@ func (c *sclient) handleFrameClosePeer(ft derp.FrameType, fl uint32) error {
 
 // handleFrameForwardPacket reads a "forward packet" frame from the client
 // (which must be a trusted client, a peer in our mesh).
-func (c *sclient) handleFrameForwardPacket(ft derp.FrameType, fl uint32) error {
+func (c *sclient) handleFrameForwardPacket(_ derp.FrameType, fl uint32) error {
 	if !c.canMesh {
 		return fmt.Errorf("insufficient permissions")
 	}
@@ -1182,7 +1214,7 @@ func (c *sclient) handleFrameForwardPacket(ft derp.FrameType, fl uint32) error {
 }
 
 // handleFrameSendPacket reads a "send packet" frame from the client.
-func (c *sclient) handleFrameSendPacket(ft derp.FrameType, fl uint32) error {
+func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 	s := c.s
 
 	dstKey, contents, err := s.recvPacket(c.br, fl)
@@ -1233,6 +1265,21 @@ func (c *sclient) handleFrameSendPacket(ft derp.FrameType, fl uint32) error {
 		src:        c.key,
 	}
 	return c.sendPkt(dst, p)
+}
+
+// rateLimit applies the per-client receive rate limit, if configured.
+// By limiting here we prevent reading from the buffered reader
+// [sclient.br] if the limit has been exceeded. Any reads done here provide space
+// within the buffered reader to fill back in with data from
+// the TCP socket. Pacing reads acts as a form of natural
+// backpressure via TCP flow control.
+// meshed clients are exempt from rate limits.
+func (c *sclient) rateLimit(n int) error {
+	if c.recvLim == nil || c.canMesh {
+		return nil
+	}
+
+	return c.recvLim.WaitN(c.ctx, n)
 }
 
 func (c *sclient) debugLogf(format string, v ...any) {
@@ -1296,7 +1343,7 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 	}
 	for attempt := range 3 {
 		select {
-		case <-dst.done:
+		case <-dst.ctx.Done():
 			s.recordDrop(p.bs, c.key, dstKey, dropReasonGoneDisconnected)
 			dst.debugLogf("sendPkt attempt %d dropped, dst gone", attempt)
 			return nil
@@ -1341,7 +1388,7 @@ func (c *sclient) requestPeerGoneWrite(peer key.NodePublic, reason derp.PeerGone
 		peer:   peer,
 		reason: reason,
 	}:
-	case <-c.done:
+	case <-c.ctx.Done():
 	}
 }
 
@@ -1626,7 +1673,7 @@ type sclient struct {
 	key            key.NodePublic
 	info           derp.ClientInfo
 	logf           logger.Logf
-	done           <-chan struct{}  // closed when connection closes
+	ctx            context.Context  // closed when connection closes
 	remoteIPPort   netip.AddrPort   // zero if remoteAddr is not ip:port.
 	sendQueue      chan pkt         // packets queued to this client; never closed
 	discoSendQueue chan pkt         // important packets queued to this client; never closed
@@ -1666,6 +1713,11 @@ type sclient struct {
 	// client that it's trying to establish a direct connection
 	// through us with a peer we have no record of.
 	peerGoneLim *rate.Limiter
+
+	// recvLim is the per-connection receive rate limiter. If non-nil,
+	// the server calls WaitN per received DERP frame in order to
+	// apply TCP backpressure and throttle the sender.
+	recvLim *xrate.Limiter
 }
 
 func (c *sclient) presentFlags() derp.PeerPresentFlags {

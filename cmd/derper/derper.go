@@ -87,6 +87,9 @@ var (
 	acceptConnLimit = flag.Float64("accept-connection-limit", math.Inf(+1), "rate limit for accepting new connection")
 	acceptConnBurst = flag.Int("accept-connection-burst", math.MaxInt, "burst limit for accepting new connection")
 
+	perClientRateLimit = flag.Uint("per-client-rate-limit", 0, "per-client receive rate limit in bytes/sec; 0 means unlimited. Mesh peers are exempt.")
+	perClientRateBurst = flag.Uint("per-client-rate-burst", 0, "per-client receive rate burst in bytes; 0 defaults to 2x the rate limit (only relevant when using nonzero --per-client-rate-limit)")
+
 	// tcpKeepAlive is intentionally long, to reduce battery cost. There is an L7 keepalive on a higher frequency schedule.
 	tcpKeepAlive = flag.Duration("tcp-keepalive-time", 10*time.Minute, "TCP keepalive time")
 	// tcpUserTimeout is intentionally short, so that hung connections are cleaned up promptly. DERPs should be nearby users.
@@ -192,6 +195,13 @@ func main() {
 	s.SetVerifyClientURL(*verifyClientURL)
 	s.SetVerifyClientURLFailOpen(*verifyFailOpen)
 	s.SetTCPWriteTimeout(*tcpWriteTimeout)
+	if *perClientRateLimit > 0 {
+		burst := *perClientRateBurst
+		if burst < 1 {
+			burst = *perClientRateLimit * 2
+		}
+		s.SetPerClientRateLimit(*perClientRateLimit, burst)
+	}
 
 	var meshKey string
 	if *dev {
