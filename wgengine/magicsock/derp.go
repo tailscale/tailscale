@@ -6,6 +6,7 @@ package magicsock
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"maps"
 	"net"
@@ -392,6 +393,9 @@ func (c *Conn) derpWriteChanForRegion(regionID int, peer key.NodePublic) chan de
 		return derpMap.Regions[regionID]
 	})
 	dc.HealthTracker = c.health
+	if c.extraRootCAs != nil {
+		dc.TLSConfig = &tls.Config{RootCAs: c.extraRootCAs}
+	}
 
 	dc.SetCanAckPings(true)
 	dc.NotePreferred(c.myDerp == regionID)

@@ -2662,6 +2662,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		DiscoPublicKey:       discoPublic,
 		DebugFlags:           b.controlDebugFlags(),
 		HealthTracker:        b.health,
+		ExtraRootCAs:         b.sys.ExtraRootCAs,
 		PolicyClient:         b.sys.PolicyClientOrDefault(),
 		Pinger:               b,
 		PopBrowserURL:        b.tellClientToBrowseToURL,

@@ -110,6 +110,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 		SetSubsystem:  sys.Set,
 		ControlKnobs:  sys.ControlKnobs(),
 		HealthTracker: sys.HealthTracker.Get(),
+		ExtraRootCAs:  sys.ExtraRootCAs,
 		Metrics:       sys.UserMetricsRegistry(),
 		EventBus:      sys.Bus.Get(),
 	})

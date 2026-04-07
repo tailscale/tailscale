@@ -479,6 +479,9 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 	// Disable HTTP2, since h2 can't do protocol switching.
 	tr.TLSClientConfig.NextProtos = []string{}
 	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	if a.ExtraRootCAs != nil {
+		tr.TLSClientConfig.RootCAs = a.ExtraRootCAs
+	}
 	tr.TLSClientConfig = tlsdial.Config(a.HealthTracker, tr.TLSClientConfig)
 	if !tr.TLSClientConfig.InsecureSkipVerify {
 		panic("unexpected") // should be set by tlsdial.Config

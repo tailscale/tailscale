@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	crand "crypto/rand"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -236,6 +237,10 @@ type Config struct {
 	// If nil, a new Dialer is created.
 	Dialer *tsdial.Dialer
 
+	// ExtraRootCAs, if non-nil, specifies additional trusted root CAs for TLS
+	// connections (e.g. DERP). Passed through to magicsock.
+	ExtraRootCAs *x509.CertPool
+
 	// ControlKnobs is the set of control plane-provied knobs
 	// to use.
 	// If nil, defaults are used.
@@ -450,6 +455,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		IdleFunc:       e.tundev.IdleDuration,
 		NetMon:         e.netMon,
 		HealthTracker:  e.health,
+		ExtraRootCAs:   conf.ExtraRootCAs,
 		Metrics:        conf.Metrics,
 		ControlKnobs:   conf.ControlKnobs,
 		PeerByKeyFunc:  e.PeerByKey,

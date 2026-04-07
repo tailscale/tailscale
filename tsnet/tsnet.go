@@ -710,6 +710,7 @@ func (s *Server) start() (reterr error) {
 		SetSubsystem:  sys.Set,
 		ControlKnobs:  sys.ControlKnobs(),
 		HealthTracker: sys.HealthTracker.Get(),
+		ExtraRootCAs:  sys.ExtraRootCAs,
 		Metrics:       sys.UserMetricsRegistry(),
 	})
 	if err != nil {
