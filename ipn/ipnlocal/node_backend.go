@@ -864,7 +864,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	addSplitDNSRoutes(nm.DNS.Routes)
 
 	// Add split DNS routes for conn25
-	conn25DNSTargets := appc.PickSplitDNSPeers(nm.HasCap, nm.SelfNode, peers)
+	conn25DNSTargets := appc.PickSplitDNSPeers(nm.HasCap, nm.SelfNode, peers, prefs.AppConnector().Advertise)
 	if conn25DNSTargets != nil {
 		var m map[string][]*dnstype.Resolver
 		for domain, candidateSplitDNSPeers := range conn25DNSTargets {
