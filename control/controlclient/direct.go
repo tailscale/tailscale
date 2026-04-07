@@ -9,6 +9,8 @@ import (
 	"context"
 	"crypto"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -74,6 +76,7 @@ type Direct struct {
 	logf              logger.Logf
 	netMon            *netmon.Monitor // non-nil
 	health            *health.Tracker
+	extraRootCAs      *x509.CertPool // additional trusted root CAs; or nil
 	busClient         *eventbus.Client
 	clientVersionPub  *eventbus.Publisher[tailcfg.ClientVersion]
 	autoUpdatePub     *eventbus.Publisher[AutoUpdate]
@@ -141,6 +144,7 @@ type Options struct {
 	NoiseTestClient      *http.Client // optional HTTP client to use for noise RPCs (tests only)
 	DebugFlags           []string     // debug settings to send to control
 	HealthTracker        *health.Tracker
+	ExtraRootCAs         *x509.CertPool      // additional trusted root CAs; or nil
 	PopBrowserURL        func(url string)    // optional func to open browser
 	Dialer               *tsdial.Dialer      // non-nil
 	C2NHandler           http.Handler        // or nil
@@ -297,6 +301,12 @@ func NewDirect(opts Options) (*Direct, error) {
 				f(tr)
 			}
 		}
+		if opts.ExtraRootCAs != nil {
+			if tr.TLSClientConfig == nil {
+				tr.TLSClientConfig = &tls.Config{}
+			}
+			tr.TLSClientConfig.RootCAs = opts.ExtraRootCAs
+		}
 		tr.TLSClientConfig = tlsdial.Config(opts.HealthTracker, tr.TLSClientConfig)
 		var dialFunc netx.DialFunc
 		dialFunc, interceptedDial = makeScreenTimeDetectingDialFunc(opts.Dialer.SystemDial)
@@ -324,6 +334,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		debugFlags:        opts.DebugFlags,
 		netMon:            netMon,
 		health:            opts.HealthTracker,
+		extraRootCAs:      opts.ExtraRootCAs,
 		pinger:            opts.Pinger,
 		polc:              cmp.Or(opts.PolicyClient, policyclient.Client(policyclient.NoPolicyClient{})),
 		popBrowser:        opts.PopBrowserURL,
@@ -1631,6 +1642,7 @@ func (c *Direct) getNoiseClient() (*ts2021.Client, error) {
 			Logf:          c.logf,
 			NetMon:        c.netMon,
 			HealthTracker: c.health,
+			ExtraRootCAs:  c.extraRootCAs,
 			DialPlan:      dp,
 		})
 		if err != nil {

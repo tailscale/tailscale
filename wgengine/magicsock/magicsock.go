@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -167,6 +168,7 @@ type Conn struct {
 	onDERPRecv             func(int, key.NodePublic, []byte) bool // or nil, see Options.OnDERPRecv
 	netMon                 *netmon.Monitor                        // must be non-nil
 	health                 *health.Tracker                        // or nil
+	extraRootCAs           *x509.CertPool                         // additional trusted root CAs; or nil
 	controlKnobs           *controlknobs.Knobs                    // or nil
 
 	// ================================================================
@@ -481,6 +483,10 @@ type Options struct {
 	// report errors and warnings to.
 	HealthTracker *health.Tracker
 
+	// ExtraRootCAs, if non-nil, specifies additional trusted root CAs
+	// for TLS connections to DERP servers.
+	ExtraRootCAs *x509.CertPool
+
 	// Metrics specifies the metrics registry to record metrics to.
 	Metrics *usermetric.Registry
 
@@ -686,6 +692,7 @@ func NewConn(opts Options) (*Conn, error) {
 
 	c.netMon = opts.NetMon
 	c.health = opts.HealthTracker
+	c.extraRootCAs = opts.ExtraRootCAs
 	c.getPeerByKey = opts.PeerByKeyFunc
 
 	if err := c.rebind(keepCurrentPort); err != nil {

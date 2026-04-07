@@ -18,6 +18,7 @@
 package tsd
 
 import (
+	"crypto/x509"
 	"fmt"
 	"reflect"
 
@@ -62,6 +63,12 @@ type System struct {
 	DriveForRemote SubSystem[drive.FileSystemForRemote]
 	PolicyClient   SubSystem[policyclient.Client]
 	HealthTracker  SubSystem[*health.Tracker]
+
+	// ExtraRootCAs, if non-nil, specifies additional trusted root CAs
+	// beyond the system roots. On Android, this includes user-installed
+	// CA certificates that Go's crypto/x509 does not see.
+	// It is plumbed through to tlsdial.Config via tls.Config.RootCAs.
+	ExtraRootCAs *x509.CertPool
 
 	// InitialConfig is initial server config, if any.
 	// It is nil if the node is not in declarative mode.

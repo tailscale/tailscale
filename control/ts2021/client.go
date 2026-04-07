@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,6 +86,9 @@ type ClientOpts struct {
 
 	// HealthTracker, if non-nil, is the health tracker to use.
 	HealthTracker *health.Tracker
+
+	// ExtraRootCAs, if non-nil, specifies additional trusted root CAs for TLS.
+	ExtraRootCAs *x509.CertPool
 
 	// DialPlan, if set, is a function that should return an explicit plan
 	// on how to connect to the server.
@@ -252,6 +256,7 @@ func (nc *Client) dial(ctx context.Context) (*Conn, error) {
 		Logf:            nc.logf,
 		NetMon:          nc.opts.NetMon,
 		HealthTracker:   nc.opts.HealthTracker,
+		ExtraRootCAs:    nc.opts.ExtraRootCAs,
 		Clock:           tstime.StdClock{},
 	}
 	clientConn, err := chd.Dial(ctx)
