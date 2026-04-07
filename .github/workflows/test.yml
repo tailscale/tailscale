@@ -23,9 +23,6 @@ env:
 
 on:
   push:
-    branches:
-      - "main"
-      - "release-branch/*"
   pull_request:
     # all PRs on all branches
   merge_group:
@@ -263,6 +260,7 @@ jobs:
     - name: test
       if: matrix.key != 'win-bench' # skip on bench builder
       working-directory: src
+      shell: bash
       run: ./tool/go run ./cmd/testwrapper sharded:${{ matrix.shard }}
       env:
         NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
@@ -270,13 +268,8 @@ jobs:
     - name: bench all
       if: matrix.key == 'win-bench'
       working-directory: src
-      # Don't use -bench=. -benchtime=1x.
-      # Somewhere in the layers (powershell?)
-      # the equals signs cause great confusion.
-      # Don't use -run "^$" either; the ^ is cmd.exe's escape
-      # character, so go.cmd's cmd.exe layer eats it, turning
-      # -run "^$" into -run "$" which matches all test names.
-      run: ./tool/go test ./... -bench . -benchtime 1x -run XXXXNothingXXXX
+      shell: bash
+      run: ./tool/go test ./... -bench=. -benchtime=1x -run="^^$"
       env:
         NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
 
