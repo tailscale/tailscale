@@ -115,7 +115,7 @@ func init() {
 		Register("bugreport", (*Handler).serveBugReport)
 		Register("pprof", (*Handler).servePprof)
 	}
-	if buildfeatures.HasDebug || buildfeatures.HasServe {
+	if buildfeatures.HasIPNBus {
 		Register("watch-ipn-bus", (*Handler).serveWatchIPNBus)
 	}
 	if buildfeatures.HasDNS {
