@@ -27,7 +27,7 @@ import (
 // including its on-wire framing overhead)
 const MaxPacketSize = 64 << 10
 
-// Magic is the DERP Magic number, sent in the frameServerKey frame
+// Magic is the DERP Magic number, sent in the FrameServerKey frame
 // upon initial connection.
 const Magic = "DERP🔑" // 8 bytes: 0x44 45 52 50 f0 9f 94 91
 
@@ -58,15 +58,15 @@ Protocol flow:
 
 Login:
 * client connects
-* server sends frameServerKey
-* client sends frameClientInfo
-* server sends frameServerInfo
+* server sends FrameServerKey
+* client sends FrameClientInfo
+* server sends FrameServerInfo
 
 Steady state:
-* server occasionally sends frameKeepAlive (or framePing)
-* client responds to any framePing with a framePong
-* client sends frameSendPacket
-* server then sends frameRecvPacket to recipient
+* server occasionally sends FrameKeepAlive (or FramePing)
+* client responds to any FramePing with a FramePong
+* client sends FrameSendPacket
+* server then sends FrameRecvPacket to recipient
 */
 const (
 	FrameServerKey     = FrameType(0x01) // 8B magic + 32B public key + (0+ bytes future use)
@@ -78,16 +78,16 @@ const (
 	FrameKeepAlive     = FrameType(0x06) // no payload, no-op (to be replaced with ping/pong)
 	FrameNotePreferred = FrameType(0x07) // 1 byte payload: 0x01 or 0x00 for whether this is client's home node
 
-	// framePeerGone is sent from server to client to signal that
+	// FramePeerGone is sent from server to client to signal that
 	// a previous sender is no longer connected. That is, if A
 	// sent to B, and then if A disconnects, the server sends
-	// framePeerGone to B so B can forget that a reverse path
+	// FramePeerGone to B so B can forget that a reverse path
 	// exists on that connection to get back to A. It is also sent
 	// if A tries to send a CallMeMaybe to B and the server has no
 	// record of B
 	FramePeerGone = FrameType(0x08) // 32B pub key of peer that's gone + 1 byte reason
 
-	// framePeerPresent is like framePeerGone, but for other members of the DERP
+	// FramePeerPresent is like FramePeerGone, but for other members of the DERP
 	// region when they're meshed up together.
 	//
 	// The message is at least 32 bytes (the public key of the peer that's
@@ -98,15 +98,15 @@ const (
 	// servers might send more.
 	FramePeerPresent = FrameType(0x09)
 
-	// frameWatchConns is how one DERP node in a regional mesh
+	// FrameWatchConns is how one DERP node in a regional mesh
 	// subscribes to the others in the region.
 	// There's no payload. If the sender doesn't have permission, the connection
 	// is closed. Otherwise, the client is initially flooded with
-	// framePeerPresent for all connected nodes, and then a stream of
-	// framePeerPresent & framePeerGone has peers connect and disconnect.
+	// FramePeerPresent for all connected nodes, and then a stream of
+	// FramePeerPresent & FramePeerGone has peers connect and disconnect.
 	FrameWatchConns = FrameType(0x10)
 
-	// frameClosePeer is a privileged frame type (requires the
+	// FrameClosePeer is a privileged frame type (requires the
 	// mesh key for now) that closes the provided peer's
 	// connection. (To be used for cluster load balancing
 	// purposes, when clients end up on a non-ideal node)
@@ -115,14 +115,14 @@ const (
 	FramePing = FrameType(0x12) // 8 byte ping payload, to be echoed back in framePong
 	FramePong = FrameType(0x13) // 8 byte payload, the contents of the ping being replied to
 
-	// frameHealth is sent from server to client to tell the client
+	// FrameHealth is sent from server to client to tell the client
 	// if their connection is unhealthy somehow. Currently the only unhealthy state
 	// is whether the connection is detected as a duplicate.
 	// The entire frame body is the text of the error message. An empty message
 	// clears the error state.
 	FrameHealth = FrameType(0x14)
 
-	// frameRestarting is sent from server to client for the
+	// FrameRestarting is sent from server to client for the
 	// server to declare that it's restarting. Payload is two big
 	// endian uint32 durations in milliseconds: when to reconnect,
 	// and how long to try total. See ServerRestartingMessage docs for
@@ -140,7 +140,7 @@ const (
 	PeerGoneReasonMeshConnBroke = PeerGoneReasonType(0xf0) // invented by Client.RunWatchConnectionLoop on disconnect; not sent on the wire
 )
 
-// PeerPresentFlags is an optional byte of bit flags sent after a framePeerPresent message.
+// PeerPresentFlags is an optional byte of bit flags sent after a FramePeerPresent message.
 //
 // For a modern server, the value should always be non-zero. If the value is zero,
 // that means the server doesn't support this field.

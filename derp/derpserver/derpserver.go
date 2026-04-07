@@ -1570,7 +1570,7 @@ func (s *Server) sendServerInfo(bw *lazyBufioWriter, clientKey key.NodePublic) e
 	return bw.Flush()
 }
 
-// recvClientKey reads the frameClientInfo frame from the client (its
+// recvClientKey reads the FrameClientInfo frame from the client (its
 // proof of identity) upon its initial connection. It should be
 // considered especially untrusted at this point.
 func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.NodePublic, info *derp.ClientInfo, err error) {
