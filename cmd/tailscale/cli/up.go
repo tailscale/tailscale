@@ -599,6 +599,11 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		}
 	}()
 
+	if !buildfeatures.HasIPNBus {
+		fmt.Fprintln(Stderr, "binary built with ts_omit_ipnbus; not waiting for completion")
+		return nil
+	}
+
 	// Start watching the IPN bus before we call Start() or StartLoginInteractive(),
 	// or we could miss IPN notifications.
 	//
