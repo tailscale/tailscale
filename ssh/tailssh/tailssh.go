@@ -877,7 +877,12 @@ func (ss *sshSession) killProcessOnContextDone() {
 		// We don't need to Process.Wait here, sshSession.run() does
 		// the waiting regardless of termination reason.
 
-		// Send SIGHUP like a real terminal disconnect would.
+		// Send SIGHUP to match POSIX terminal disconnect semantics.
+		// OpenSSH achieves this implicitly by closing the PTY master fd
+		// (see openssh-portable session.c:2246), which causes the kernel
+		// to send SIGHUP to the child process group. Since tailssh uses
+		// pipes for non-PTY sessions, we send SIGHUP explicitly.
+		// https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap11.html#tag_11_01_03
 		ss.cmd.Process.Signal(syscall.SIGHUP)
 	})
 }
@@ -973,10 +978,18 @@ func (ss *sshSession) run() {
 	metricActiveSessions.Add(1)
 	defer metricActiveSessions.Add(-1)
 	defer ss.cancelCtx(errSessionDone)
+	// Close the channel after all I/O and exit-status have been sent.
+	// Per RFC 4254 Section 6.10, SSH_MSG_CHANNEL_CLOSE must come after
+	// exit-status. Since Exit() no longer calls Close() (to allow the
+	// caller to control ordering), we close explicitly here.
+	// https://datatracker.ietf.org/doc/html/rfc4254#section-6.10
 	defer ss.Close()
 
 	if attached := ss.conn.srv.attachSessionToConnIfNotShutdown(ss); !attached {
 		fmt.Fprintf(ss, "Tailscale SSH is shutting down\r\n")
+		// Exit code 255 matches OpenSSH's convention for SSH protocol/infrastructure
+		// errors that prevent the session from starting.
+		// https://github.com/openssh/openssh-portable/blob/master/ssh.c#L1693
 		ss.Exit(255)
 		return
 	}
@@ -999,8 +1012,9 @@ func (ss *sshSession) run() {
 		if lu.Uid != fmt.Sprint(euid) {
 			ss.logf("can't switch to user %q from process euid %v", lu.Username, euid)
 			fmt.Fprintf(ss, "can't switch user\r\n")
-			// Exit code 255 indicates SSH protocol/permission error,
-			// matching OpenSSH behavior for fatal errors.
+			// Exit code 255 matches OpenSSH's convention for SSH permission errors
+			// that prevent the session from starting.
+			// https://github.com/openssh/openssh-portable/blob/master/ssh.c#L1693
 			ss.Exit(255)
 			return
 		}
@@ -1053,7 +1067,8 @@ func (ss *sshSession) run() {
 				}
 			}
 		} else if isNotFoundOrExecutable(err) {
-			// Use exit code 127 for "command not found" per shell convention.
+			// Exit code 127 for "command not found" per POSIX shell convention.
+			// https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_08_02
 			exitCode = 127
 		}
 		ss.Exit(exitCode)
@@ -1082,6 +1097,10 @@ func (ss *sshSession) run() {
 		if _, err := io.Copy(rec.writer("o", ss), ss.rdStdout); err != nil && !errors.Is(err, io.EOF) {
 			logf("stdout copy: %v", err)
 		}
+		// Send EOF to the SSH client when stdout copying completes.
+		// Per RFC 4254 Section 5.3, SSH_MSG_CHANNEL_EOF signals that no
+		// more data will be sent. The channel remains open for exit-status.
+		// https://datatracker.ietf.org/doc/html/rfc4254#section-5.3
 		ss.CloseWrite()
 	}()
 
@@ -1124,8 +1143,12 @@ func (ss *sshSession) run() {
 		exitCode = 1
 	}
 
-	// Send exit-status before EOF/Close. Per RFC 4254 section 6.10,
-	// exit-status should be sent before channel close.
+	// Send exit-status before EOF/Close. Per RFC 4254 Section 6.10,
+	// exit-status must be sent before SSH_MSG_CHANNEL_CLOSE. By sending
+	// it here before closing the child pipes (which triggers the stdout
+	// goroutine to send EOF via CloseWrite), we guarantee the ordering:
+	//   exit-status -> EOF -> CHANNEL_CLOSE
+	// https://datatracker.ietf.org/doc/html/rfc4254#section-6.10
 	ss.Exit(exitCode)
 
 	// Close process-side of pipes to signal io.Copy goroutines
