@@ -1080,19 +1080,15 @@ func (ss *sshSession) run() {
 	// Start goroutines to copy stdin/stdout/stderr.
 	var wg sync.WaitGroup
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		defer ss.wrStdin.Close()
 		if _, err := io.Copy(rec.writer("i", ss.wrStdin), ss); err != nil {
 			logf("stdin copy: %v", err)
 			ss.cancelCtx(err)
 		}
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		defer ss.rdStdout.Close()
 		if _, err := io.Copy(rec.writer("o", ss), ss.rdStdout); err != nil && !errors.Is(err, io.EOF) {
 			logf("stdout copy: %v", err)
@@ -1102,18 +1098,16 @@ func (ss *sshSession) run() {
 		// more data will be sent. The channel remains open for exit-status.
 		// https://datatracker.ietf.org/doc/html/rfc4254#section-5.3
 		ss.CloseWrite()
-	}()
+	})
 
 	// rdStderr is nil for ptys.
 	if ss.rdStderr != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer ss.rdStderr.Close()
 			if _, err := io.Copy(ss.Stderr(), ss.rdStderr); err != nil {
 				logf("stderr copy: %v", err)
 			}
-		}()
+		})
 	}
 
 	err = ss.cmd.Wait()
