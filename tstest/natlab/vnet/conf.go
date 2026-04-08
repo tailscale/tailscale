@@ -72,6 +72,13 @@ func nodeMac(n int) MAC {
 	return MAC{0x52, 0xcc, 0xcc, 0xcc, 0xcc, byte(n)}
 }
 
+// nodeNICMac returns the MAC for the nicIdx-th secondary NIC (1-indexed) of node n.
+// Primary NICs (index 0) use nodeMac. Secondary NICs use a different scheme:
+// 52:cc:cc:cc:KK:NN where KK is the NIC index and NN is the node number.
+func nodeNICMac(nodeNum, nicIdx int) MAC {
+	return MAC{0x52, 0xcc, 0xcc, 0xcc, byte(nicIdx), byte(nodeNum)}
+}
+
 func routerMac(n int) MAC {
 	// 52=TS then 0xee for 'etwork
 	return MAC{0x52, 0xee, 0xee, 0xee, 0xee, byte(n)}
@@ -236,9 +243,29 @@ func (n *Node) String() string {
 	return fmt.Sprintf("node%d", n.num)
 }
 
-// MAC returns the MAC address of the node.
+// MAC returns the MAC address of the node's primary NIC.
 func (n *Node) MAC() MAC {
 	return n.mac
+}
+
+// NumNICs returns the number of network interfaces on the node
+// (one per network the node is on).
+func (n *Node) NumNICs() int {
+	return len(n.nets)
+}
+
+// NICMac returns the MAC address for the i-th NIC (0-indexed).
+// NIC 0 is the primary NIC (same as MAC()). NIC 1+ are extra NICs.
+func (n *Node) NICMac(i int) MAC {
+	if i == 0 {
+		return n.mac
+	}
+	return nodeNICMac(n.num, i)
+}
+
+// Networks returns the list of networks this node is on.
+func (n *Node) Networks() []*Network {
+	return n.nets
 }
 
 func (n *Node) Env() []TailscaledEnv {
@@ -304,6 +331,26 @@ func (n *Node) IsV6Only() bool {
 		}
 	}
 	return false
+}
+
+// LanIP returns the node's LAN IPv4 address on the given network.
+// It requires the [Server] to have been initialized (i.e., [New] was called).
+// Returns an invalid addr if the node has no IP on that network.
+func (n *Node) LanIP(net *Network) netip.Addr {
+	if n.n == nil {
+		return netip.Addr{}
+	}
+	for i, nn := range n.nets {
+		if nn == net {
+			if i == 0 {
+				return n.n.lanIP
+			}
+			if i-1 < len(n.n.extraNICs) {
+				return n.n.extraNICs[i-1].lanIP
+			}
+		}
+	}
+	return netip.Addr{}
 }
 
 // Network returns the first network this node is connected to,
@@ -486,10 +533,11 @@ func (s *Server) initFromConfig(c *Config) error {
 		if conf.err != nil {
 			return conf.err
 		}
+		primaryNet := netOfConf[conf.Network()]
 		n := &node{
 			num:           conf.num,
 			mac:           conf.mac,
-			net:           netOfConf[conf.Network()],
+			net:           primaryNet,
 			verboseSyslog: conf.VerboseSyslog(),
 		}
 		n.interfaceID = must.Get(s.pcapWriter.AddInterface(pcapgo.NgInterface{
@@ -503,16 +551,50 @@ func (s *Server) initFromConfig(c *Config) error {
 		s.nodes = append(s.nodes, n)
 		s.nodeByMAC[n.mac] = n
 
-		if n.net.v4 {
+		if n.net != nil && n.net.v4 {
 			// Allocate a lanIP for the node. Use the network's CIDR and use final
 			// octet 101 (for first node), 102, etc. The node number comes from the
-			// last octent of the MAC address (0-based)
+			// last octet of the MAC address (0-based)
 			ip4 := n.net.lanIP4.Addr().As4()
 			ip4[3] = 100 + n.mac[5]
 			n.lanIP = netip.AddrFrom4(ip4)
 			n.net.nodesByIP4[n.lanIP] = n
 		}
-		n.net.nodesByMAC[n.mac] = n
+		if n.net != nil {
+			n.net.nodesByMAC[n.mac] = n
+		}
+
+		// Set up extra NICs for multi-homed nodes (nodes on more than one network).
+		for nicIdx, confNet := range conf.nets[1:] {
+			extraNet := netOfConf[confNet]
+			if extraNet == nil {
+				continue
+			}
+			mac := nodeNICMac(conf.num, nicIdx+1)
+			nic := nodeNIC{
+				mac: mac,
+				net: extraNet,
+			}
+			nic.interfaceID = must.Get(s.pcapWriter.AddInterface(pcapgo.NgInterface{
+				Name:     fmt.Sprintf("%s-nic%d", n.String(), nicIdx+1),
+				LinkType: layers.LinkTypeEthernet,
+			}))
+			// Allocate a lanIP for the node. Use the network's CIDR and use final
+			// octet 101 (for first node), 102, etc. The node number comes from the
+			// last octet of the MAC address (0-based)
+			if extraNet.v4 {
+				ip4 := extraNet.lanIP4.Addr().As4()
+				ip4[3] = 100 + mac[5]
+				nic.lanIP = netip.AddrFrom4(ip4)
+				extraNet.nodesByIP4[nic.lanIP] = n
+			}
+			extraNet.nodesByMAC[mac] = n
+			if _, ok := s.nodeByMAC[mac]; ok {
+				return fmt.Errorf("two nodes have the same MAC %v", mac)
+			}
+			s.nodeByMAC[mac] = n
+			n.extraNICs = append(n.extraNICs, nic)
+		}
 	}
 
 	// Now that nodes are populated, set up NAT:
