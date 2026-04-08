@@ -486,6 +486,13 @@ func (s *Server) SetSubnetRoutes(nodeKey key.NodePublic, routes []netip.Prefix) 
 	mak.Set(&s.nodeSubnetRoutes, nodeKey, routes)
 	if node, ok := s.nodes[nodeKey]; ok {
 		sendUpdate(s.updates[node.ID], updateSelfChanged)
+		// Also notify all other peers so they get the updated AllowedIPs
+		// in their next MapResponse.
+		for _, n := range s.nodes {
+			if n.ID != node.ID {
+				sendUpdate(s.updates[n.ID], updatePeerChanged)
+			}
+		}
 	}
 }
 
