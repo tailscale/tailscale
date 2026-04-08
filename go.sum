@@ -753,6 +753,8 @@ github.com/karamaru-alpha/copyloopvar v1.0.8 h1:gieLARwuByhEMxRwM3GRS/juJqFbLraf
 github.com/karamaru-alpha/copyloopvar v1.0.8/go.mod h1:u7CIfztblY0jZLOQZgH3oYsJzpC2A7S6u/lfgSXHy0k=
 github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 h1:Z9n2FFNUXsshfwJMBgNA0RU6/i7WVaAegv3PtuIHPMs=
 github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51/go.mod h1:CzGEWj7cYgsdH8dAjBGEr58BoE7ScuLd+fwFZ44+/x8=
+github.com/kdomanski/iso9660 v0.4.0 h1:BPKKdcINz3m0MdjIMwS0wx1nofsOjxOq8TOr45WGHFg=
+github.com/kdomanski/iso9660 v0.4.0/go.mod h1:OxUSupHsO9ceI8lBLPJKWBTphLemjrCQY8LPXM7qSzU=
 github.com/kenshaw/evdev v0.1.0 h1:wmtceEOFfilChgdNT+c/djPJ2JineVsQ0N14kGzFRUo=
 github.com/kenshaw/evdev v0.1.0/go.mod h1:B/fErKCihUyEobz0mjn2qQbHgyJKFQAxkXSvkeeA/Wo=
 github.com/kevinburke/ssh_config v1.2.0 h1:x584FjTGwHzMwvHx18PXxbBVzfnxogHaAReU4gf13a4=
