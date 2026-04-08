@@ -19,6 +19,8 @@ var (
 	fakeDERP2             = newVIP("derp2.tailscale", "33.4.0.2") // 3340=DERP; 2=derp 2
 	fakeLogCatcher        = newVIP("log.tailscale.com", 4)
 	fakeSyslog            = newVIP("syslog.tailscale", 9)
+	fakeCloudInit         = newVIP("cloud-init.tailscale", 5) // serves cloud-init metadata/userdata per node
+	fakeFiles             = newVIP("files.tailscale", 6)      // serves binary files (tta, tailscale, tailscaled) to VMs
 )
 
 type virtualIP struct {
