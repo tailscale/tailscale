@@ -470,6 +470,53 @@ func (c *Client) PreviewACLHuJSONForIPPort(ctx context.Context, acl ACLHuJSON, i
 	}, nil
 }
 
+// ValidateACL sends the given policy to the /acl/validate endpoint as a JSON
+// object. The server validates that the policy is parsable and runs any
+// embedded ACL tests without modifying the tailnet's live policy. A nil
+// ACLTestError means validation passed; a non-nil ACLTestError contains the
+// test failures. A non-nil error (second return) indicates a transport or
+// server-side problem.
+func (c *Client) ValidateACL(ctx context.Context, policy ACLDetails) (testErr *ACLTestError, err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("tailscale.ValidateACL: %w", err)
+		}
+	}()
+
+	postData, err := json.Marshal(policy)
+	if err != nil {
+		return nil, err
+	}
+
+	path := c.BuildTailnetURL("acl", "validate")
+	req, err := http.NewRequestWithContext(ctx, "POST", path, bytes.NewBuffer(postData))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuth(req)
+
+	b, resp, err := c.sendRequest(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("control api responded with %d status code", resp.StatusCode)
+	}
+
+	if len(b) == 0 {
+		return nil, nil
+	}
+
+	var res ACLTestError
+	if err = json.Unmarshal(b, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
 // ValidateACLJSON takes in the given source and destination (in this situation,
 // it is assumed that you are checking whether the source can connect to destination)
 // and creates an ACLTest from that. It then sends the ACLTest to the control api acl
