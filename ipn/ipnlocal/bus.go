@@ -138,68 +138,53 @@ func mergeBoringNotifies(dst, src *ipn.Notify) *ipn.Notify {
 	return dst
 }
 
-// mergePeerChanges merges new peer changes into existing ones. If a new change
-// has the same NodeID as an existing delta, the two are merged into a single
-// delta with the newer values taking precedence, while preserving any fields
-// that were only set in the older delta.
-func mergePeerChanges(old, new []*tailcfg.PeerChange) []*tailcfg.PeerChange {
-	if old == nil {
-		old = []*tailcfg.PeerChange{}
-	}
-	idxByNode := make(map[tailcfg.NodeID]int, len(old))
-	for i, d := range old {
-		if d.NodeID != 0 {
-			idxByNode[d.NodeID] = i
-		}
+// mergePeerChanges merges new peer changes from 'src' into 'dst', either
+// mutating 'dst' or allocating a new slice if 'dst' is nil, returning the merged result.
+// Values in 'src' override those in 'dst' for the same NodeID.
+func mergePeerChanges(dst, src []*tailcfg.PeerChange) []*tailcfg.PeerChange {
+	idxByNode := make(map[tailcfg.NodeID]int, len(dst))
+	for i, d := range dst {
+		idxByNode[d.NodeID] = i
 	}
 
-	for _, nd := range new {
-		if nd.NodeID != 0 {
-			if oi, ok := idxByNode[nd.NodeID]; ok {
-				old[oi] = mergePeerChange(old[oi], nd)
-				continue
-			}
-			idxByNode[nd.NodeID] = len(old)
+	for _, nd := range src {
+		if oi, ok := idxByNode[nd.NodeID]; ok {
+			dst[oi] = mergePeerChangeForIpnBus(dst[oi], nd)
+			continue
 		}
-		old = append(old, nd)
+		idxByNode[nd.NodeID] = len(dst)
+		dst = append(dst, nd)
 	}
-	return old
+	return dst
 }
 
-// mergePeerChange merges src into dst, returning the result.
-// Fields set in src override those in dst; fields only set in dst are preserved.
-func mergePeerChange(dst, src *tailcfg.PeerChange) *tailcfg.PeerChange {
-	out := *dst // shallow copy of old values
+// mergePeerChangeForIpnBus merges new with old, returning the result.
+// Fields set in new override those in old; fields only set in old are preserved.
+func mergePeerChangeForIpnBus(old, new *tailcfg.PeerChange) *tailcfg.PeerChange {
+	merged := *old
 
-	if src.DERPRegion != 0 {
-		out.DERPRegion = src.DERPRegion
+	// This is a subset of PeerChange that reflects only the fields that can
+	// be changed via a NodeMutation.  If future fields can be udpated via
+	// NodeMutations from map responses (and they are relevant to the ipn bus), then
+	// they should be added here and merged in the same way.
+	if new.DERPRegion != 0 {
+		// netmap.NodeMutationDerpHome
+		merged.DERPRegion = new.DERPRegion
 	}
-	if src.Cap != 0 {
-		out.Cap = src.Cap
+	if new.Online != nil {
+		// netmap.NodeMutationOnline
+		merged.Online = new.Online
 	}
-	if src.Online != nil {
-		out.Online = src.Online
+	if new.LastSeen != nil {
+		// netmap.NodeMutationLastSeen
+		merged.LastSeen = new.LastSeen
 	}
-	if src.LastSeen != nil {
-		out.LastSeen = src.LastSeen
-	}
-	if src.KeyExpiry != nil {
-		out.KeyExpiry = src.KeyExpiry
-	}
-	if src.Endpoints != nil {
-		out.Endpoints = src.Endpoints
-	}
-	if src.Key != nil {
-		out.Key = src.Key
-	}
-	if src.DiscoKey != nil {
-		out.DiscoKey = src.DiscoKey
-	}
-	if src.KeySignature != nil {
-		out.KeySignature = src.KeySignature
+	if new.Endpoints != nil {
+		// netmap.NodeMutationEndpoints
+		merged.Endpoints = new.Endpoints
 	}
 
-	return &out
+	return &merged
 }
 
 // isNotableNotify reports whether n is a "notable" notification that

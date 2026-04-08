@@ -119,10 +119,10 @@ type Notify struct {
 	Prefs         *PrefsView         // if non-nil && Valid, the new or current preferences
 	NetMap        *netmap.NetworkMap // if non-nil, the new or current netmap
 
-	// PeerChanges, if non-nil, is a list of peer changes applied to the netmap.
-	// It is sent (instead of NetMap) to sessions that have opted in to
-	//  when the update came from an incremental MapResponse.
-	// Full MapResponse updates still set NetMap.
+	// PeerChanges, if non-nil, is a list of [tailcfg.PeerChange] that have occurred since the last
+	// full netmap update. This is sent in lieu of a full NetMap when NotifyPeerChanges is set in
+	// the session's mask and netmap update update is dervied from from an incremental MapResponse.
+	// Full MapResponse updates from the control plane are still sent as a full NetMap.
 	PeerChanges []*tailcfg.PeerChange `json:",omitzero"`
 
 	Engine      *EngineStatus // if non-nil, the new or current wireguard stats
