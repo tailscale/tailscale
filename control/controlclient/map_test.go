@@ -696,13 +696,12 @@ func TestUpdateDiscoForNode(t *testing.T) {
 			ms.updateDiscoForNode(node.ID, node.Key, newKey.Public(), tt.updateLastSeen, tt.updateOnline)
 			<-nu.done
 
-			nm := ms.netmap()
-			peerIdx := nm.PeerIndexByNodeID(node.ID)
-			if peerIdx == -1 {
+			peer, ok := ms.peers[node.ID]
+			if !ok {
 				t.Fatal("node not found")
 			}
 
-			updated := nm.Peers[peerIdx].DiscoKey().Compare(newKey.Public()) == 0
+			updated := peer.DiscoKey().Compare(newKey.Public()) == 0
 			if updated != tt.wantUpdate {
 				t.Fatalf("Disco key update: %t, wanted update: %t", updated, tt.wantUpdate)
 			}
