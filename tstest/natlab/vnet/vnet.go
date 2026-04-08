@@ -294,6 +294,24 @@ func stringifyTEI(tei stack.TransportEndpointID) string {
 	return fmt.Sprintf("%s -> %s", remoteHostPort, localHostPort)
 }
 
+// vipNameOf returns the VIP name for the given IP, or "" if it's not a VIP.
+func vipNameOf(ip netip.Addr) string {
+	for _, v := range vips {
+		if v.Match(ip) {
+			return v.name
+		}
+	}
+	return ""
+}
+
+// nodeNameOf returns the node's name for the given IP on this network, or "" if unknown.
+func (n *network) nodeNameOf(ip netip.Addr) string {
+	if node, ok := n.nodeByIP(ip); ok {
+		return node.String()
+	}
+	return ""
+}
+
 func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 	reqDetails := r.ID()
 
@@ -305,7 +323,17 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
-	log.Printf("vnet-AcceptTCP: %v", stringifyTEI(reqDetails))
+	// Annotate the log with node/VIP names for readability.
+	srcHP := net.JoinHostPort(clientRemoteIP.String(), strconv.Itoa(int(reqDetails.RemotePort)))
+	srcStr := srcHP
+	if name := n.nodeNameOf(clientRemoteIP); name != "" {
+		srcStr = fmt.Sprintf("%s (%s)", srcHP, name)
+	}
+	dstStr := net.JoinHostPort(destIP.String(), strconv.Itoa(int(destPort)))
+	if name := vipNameOf(destIP); name != "" {
+		dstStr = fmt.Sprintf("%s (%s)", dstStr, name)
+	}
+	log.Printf("vnet-AcceptTCP: %s -> %s", srcStr, dstStr)
 
 	var wq waiter.Queue
 	ep, err := r.CreateEndpoint(&wq)
@@ -1463,6 +1491,12 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 
 	if flow.src.Is6() && flow.src.IsLinkLocalUnicast() && !flow.dst.IsLinkLocalUnicast() {
 		// Don't log.
+		return
+	}
+
+	if toForward {
+		// Traffic to destinations we don't handle (e.g. VMs trying to reach
+		// the real internet for NTP, package updates, etc). Expected; drop silently.
 		return
 	}
 

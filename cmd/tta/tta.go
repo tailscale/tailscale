@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -181,7 +182,27 @@ func main() {
 		return
 	})
 	ttaMux.HandleFunc("/up", func(w http.ResponseWriter, r *http.Request) {
-		serveCmd(w, "tailscale", "up", "--login-server=http://control.tailscale")
+		args := []string{"up", "--login-server=http://control.tailscale"}
+		if routes := r.URL.Query().Get("advertise-routes"); routes != "" {
+			args = append(args, "--advertise-routes="+routes)
+		}
+		if snat := r.URL.Query().Get("snat-subnet-routes"); snat != "" {
+			args = append(args, "--snat-subnet-routes="+snat)
+		}
+		if r.URL.Query().Get("accept-routes") == "true" {
+			args = append(args, "--accept-routes")
+		}
+		serveCmd(w, "tailscale", args...)
+	})
+	ttaMux.HandleFunc("/set", func(w http.ResponseWriter, r *http.Request) {
+		args := []string{"set"}
+		if r.URL.Query().Get("accept-routes") == "true" {
+			args = append(args, "--accept-routes")
+		}
+		if routes := r.URL.Query().Get("advertise-routes"); routes != "" {
+			args = append(args, "--advertise-routes="+routes)
+		}
+		serveCmd(w, "tailscale", args...)
 	})
 	ttaMux.HandleFunc("/ip", func(w http.ResponseWriter, r *http.Request) {
 		conn, ok := r.Context().Value(connContextKey).(net.Conn)
@@ -192,12 +213,85 @@ func main() {
 		w.Write([]byte(conn.LocalAddr().String()))
 	})
 	ttaMux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
-		// Send 4 packets and wait a maximum of 1 second for each. The deadline
-		// is required for ping to return a non-zero exit code on no response.
-		// The busybox in question here is the breakglass busybox inside the
-		// natlab QEMU image - the host running the test does not need to have
-		// busybox installed at that path, or at all.
-		serveCmd(w, "/usr/local/bin/busybox", "ping", "-c", "4", "-W", "1", r.URL.Query().Get("host"))
+		host := r.URL.Query().Get("host")
+		if distro.Get() == distro.Gokrazy {
+			// The busybox in question here is the breakglass busybox inside the
+			// natlab QEMU image.
+			serveCmd(w, "/usr/local/bin/busybox", "ping", "-c", "4", "-W", "1", host)
+		} else {
+			serveCmd(w, "ping", "-c", "4", "-W", "1", host)
+		}
+	})
+	ttaMux.HandleFunc("/start-webserver", func(w http.ResponseWriter, r *http.Request) {
+		port := r.URL.Query().Get("port")
+		name := r.URL.Query().Get("name")
+		if port == "" {
+			http.Error(w, "missing port", http.StatusBadRequest)
+			return
+		}
+		if name == "" {
+			name = "unnamed"
+		}
+		log.Printf("Starting webserver on port %s as %q", port, name)
+		go func() {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintf(w, "Hello world I am %s", name)
+			})
+			if err := http.ListenAndServe(":"+port, mux); err != nil {
+				log.Printf("webserver on :%s failed: %v", port, err)
+			}
+		}()
+		io.WriteString(w, "OK\n")
+	})
+	ttaMux.HandleFunc("/http-get", func(w http.ResponseWriter, r *http.Request) {
+		targetURL := r.URL.Query().Get("url")
+		if targetURL == "" {
+			http.Error(w, "missing url", http.StatusBadRequest)
+			return
+		}
+		log.Printf("HTTP GET %s", targetURL)
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// Use Tailscale's SOCKS5 proxy if available, so traffic to Tailscale
+		// subnet routes goes through the WireGuard tunnel instead of the
+		// host network stack (which may not have the routes, especially
+		// in userspace networking mode).
+		client := &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					// Try the Tailscale localapi proxy dialer first.
+					host, portStr, err := net.SplitHostPort(addr)
+					if err != nil {
+						var d net.Dialer
+						return d.DialContext(ctx, network, addr)
+					}
+					port, _ := strconv.ParseUint(portStr, 10, 16)
+					var lc local.Client
+					conn, err := lc.UserDial(ctx, network, host, uint16(port))
+					if err == nil {
+						return conn, nil
+					}
+					log.Printf("http-get: UserDial failed, falling back to direct: %v", err)
+					var d net.Dialer
+					return d.DialContext(ctx, network, addr)
+				},
+			},
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.Header().Set("X-Upstream-Status", strconv.Itoa(resp.StatusCode))
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
 	})
 	ttaMux.HandleFunc("/fw", addFirewallHandler)
 	ttaMux.HandleFunc("/logs", func(w http.ResponseWriter, r *http.Request) {
