@@ -88,10 +88,9 @@ const (
 
 	NotifyInitialClientVersion NotifyWatchOpt = 1 << 11 // if set, the first Notify message (sent immediately) will contain the current ClientVersion if available and if update checks are enabled
 
-	// NotifyPeerChanges, if set, causes netmap delta updates to be sent
-	// as [PeerChange] rather than a full NetMap.
-	// Full netmap responses from the control plane are still sent as
-	// a full NetMap, and the delta updates are only sent to sessions that have opted in to this mode.
+	// NotifyPeerChanges, if set, causes netmap delta updates to be sents [tailcfg.PeerChange] rather than a full NetMap.
+	// when possible.  Full netmap responses from the control plane are still sent as
+	// a full NetMap.  PeerChanges are only sent to sessions that have opted in to this mode.
 	NotifyPeerChanges NotifyWatchOpt = 1 << 12
 )
 
@@ -121,7 +120,7 @@ type Notify struct {
 
 	// PeerChanges, if non-nil, is a list of [tailcfg.PeerChange] that have occurred since the last
 	// full netmap update. This is sent in lieu of a full NetMap when NotifyPeerChanges is set in
-	// the session's mask and netmap update update is dervied from from an incremental MapResponse.
+	// the session's mask and a netmap update is derived from an incremental MapResponse.
 	// Full MapResponse updates from the control plane are still sent as a full NetMap.
 	PeerChanges []*tailcfg.PeerChange `json:",omitzero"`
 
