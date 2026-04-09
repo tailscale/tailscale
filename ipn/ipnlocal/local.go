@@ -2174,8 +2174,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		// The notifier will strip the netmap based on the watchOpts mask if the watcher
 		// has indicated it can handle PeerChanges.
 		notify = &ipn.Notify{NetMap: cn.netMapWithPeers()}
-		peerChanges, ok := ipnBusPeerChangesFromNodeMutations(muts)
-		if ok {
+		if peerChanges, ok := ipnBusPeerChangesFromNodeMutations(muts); ok {
 			notify.PeerChanges = peerChanges
 		} else {
 			b.logf("[unexpected] got mutations worthy of telling IPN bus but failed to convert to peer changes")

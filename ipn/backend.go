@@ -88,9 +88,9 @@ const (
 
 	NotifyInitialClientVersion NotifyWatchOpt = 1 << 11 // if set, the first Notify message (sent immediately) will contain the current ClientVersion if available and if update checks are enabled
 
-	// NotifyPeerChanges, if set, causes netmap delta updates to be sents [tailcfg.PeerChange] rather than a full NetMap.
-	// when possible.  Full netmap responses from the control plane are still sent as
-	// a full NetMap.  PeerChanges are only sent to sessions that have opted in to this mode.
+	// NotifyPeerChanges, if set, causes netmap delta updates to be sent as [tailcfg.PeerChange] rather than a full NetMap.
+	// Full netmap responses from the control plane are still sent as a full NetMap.  PeerChanges are only sent to sessions
+	// that have opted in to this mode.
 	NotifyPeerChanges NotifyWatchOpt = 1 << 12
 )
 

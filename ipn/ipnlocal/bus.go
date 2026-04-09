@@ -117,8 +117,8 @@ func (s *rateLimitingBusSender) Run(ctx context.Context, ch <-chan *ipn.Notify) 
 	}
 }
 
-// mergeBoringNotify merges new notify 'src' into possibly-nil 'dst',
-// either mutating 'dst' or allocating a new one if 'dst' is nil,
+// mergeBoringNotify merges new notify src into possibly-nil dst,
+// either mutating dst or allocating a new one if dst is nil,
 // returning the merged result.
 //
 // dst and src must both be "boring" (i.e. not notable per isNotifiableNotify).
@@ -138,9 +138,9 @@ func mergeBoringNotifies(dst, src *ipn.Notify) *ipn.Notify {
 	return dst
 }
 
-// mergePeerChanges merges new peer changes from 'src' into 'dst', either
-// mutating 'dst' or allocating a new slice if 'dst' is nil, returning the merged result.
-// Values in 'src' override those in 'dst' for the same NodeID.
+// mergePeerChanges merges new peer changes from src into dst, either
+// mutating dst or allocating a new slice if dst is nil, returning the merged result.
+// Values in src override those in dst for the same NodeID.
 func mergePeerChanges(dst, src []*tailcfg.PeerChange) []*tailcfg.PeerChange {
 	idxByNode := make(map[tailcfg.NodeID]int, len(dst))
 	for i, d := range dst {
