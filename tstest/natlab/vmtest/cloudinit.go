@@ -162,9 +162,6 @@ func (e *Env) generateFreeBSDUserData(n *Node) string {
 	ud.WriteString("  - \"chmod +x /usr/local/bin/tailscaled /usr/local/bin/tailscale /usr/local/bin/tta\"\n")
 
 	// Enable IP forwarding for subnet routers.
-	// This is currently a noop as of 2026-04-08 because FreeBSD uses
-	// gvisor netstack for subnet routing until
-	// https://github.com/tailscale/tailscale/issues/5573 etc are fixed.
 	if n.advertiseRoutes != "" {
 		ud.WriteString("  - \"sysctl net.inet.ip.forwarding=1\"\n")
 		ud.WriteString("  - \"sysctl net.inet6.ip6.forwarding=1\"\n")
