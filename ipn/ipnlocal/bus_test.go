@@ -12,6 +12,7 @@ import (
 
 	"tailscale.com/drive"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
@@ -29,6 +30,7 @@ func TestIsNotableNotify(t *testing.T) {
 		{"empty", &ipn.Notify{}, false},
 		{"version", &ipn.Notify{Version: "foo"}, false},
 		{"netmap", &ipn.Notify{NetMap: new(netmap.NetworkMap)}, false},
+		{"peerchanges", &ipn.Notify{PeerChanges: []*tailcfg.PeerChange{{}}}, false},
 		{"engine", &ipn.Notify{Engine: new(ipn.EngineStatus)}, false},
 	}
 
@@ -39,7 +41,7 @@ func TestIsNotableNotify(t *testing.T) {
 	for sf := range rt.Fields() {
 		n := &ipn.Notify{}
 		switch sf.Name {
-		case "_", "NetMap", "Engine", "Version":
+		case "_", "NetMap", "PeerChanges", "Engine", "Version":
 			// Already covered above or not applicable.
 			continue
 		case "DriveShares":
@@ -215,5 +217,105 @@ func TestRateLimitingBusSender(t *testing.T) {
 		}()
 
 		st.s.Run(ctx, incoming)
+	})
+}
+
+func TestMergePeerChanges(t *testing.T) {
+	online := true
+	offline := false
+
+	t.Run("no_overlap_appends", func(t *testing.T) {
+		old := []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 1},
+		}
+		new := []*tailcfg.PeerChange{
+			{NodeID: 2, DERPRegion: 2},
+		}
+		got := mergePeerChanges(old, new)
+		if len(got) != 2 {
+			t.Fatalf("len = %d; want 2", len(got))
+		}
+		if got[0].NodeID != 1 || got[1].NodeID != 2 {
+			t.Errorf("got NodeIDs %d, %d; want 1, 2", got[0].NodeID, got[1].NodeID)
+		}
+	})
+
+	t.Run("overlap_merges", func(t *testing.T) {
+		old := []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 1, Online: &online},
+			{NodeID: 2, DERPRegion: 10},
+		}
+		new := []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 5, Online: &offline},
+		}
+		got := mergePeerChanges(old, new)
+		if len(got) != 2 {
+			t.Fatalf("len = %d; want 2 (merged, not appended)", len(got))
+		}
+		if got[0].DERPRegion != 5 {
+			t.Errorf("DERPRegion = %d; want 5 (from new)", got[0].DERPRegion)
+		}
+		if *got[0].Online != false {
+			t.Errorf("Online = %v; want false (from new)", *got[0].Online)
+		}
+		// Node 2 should be untouched.
+		if got[1].NodeID != 2 || got[1].DERPRegion != 10 {
+			t.Errorf("node 2 was modified unexpectedly")
+		}
+	})
+
+	t.Run("partial_overlap_merges_and_appends", func(t *testing.T) {
+		old := []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 1},
+		}
+		new := []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 2},
+			{NodeID: 3, DERPRegion: 30},
+		}
+		got := mergePeerChanges(old, new)
+		if len(got) != 2 {
+			t.Fatalf("len = %d; want 2", len(got))
+		}
+		if got[0].NodeID != 1 || got[0].DERPRegion != 2 {
+			t.Errorf("node 1: DERPRegion = %d; want 2", got[0].DERPRegion)
+		}
+		if got[1].NodeID != 3 || got[1].DERPRegion != 30 {
+			t.Errorf("node 3: DERPRegion = %d; want 30", got[1].DERPRegion)
+		}
+	})
+
+	t.Run("preserves_old_fields_on_merge", func(t *testing.T) {
+		old := []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 1, Online: &online, Cap: 10},
+		}
+		new := []*tailcfg.PeerChange{
+			{NodeID: 1, Online: &offline},
+		}
+		got := mergePeerChanges(old, new)
+		if len(got) != 1 {
+			t.Fatalf("len = %d; want 1", len(got))
+		}
+		if got[0].DERPRegion != 1 {
+			t.Errorf("DERPRegion = %d; want 1 (preserved from old)", got[0].DERPRegion)
+		}
+		if got[0].Cap != 10 {
+			t.Errorf("Cap = %d; want 10 (preserved from old)", got[0].Cap)
+		}
+		if *got[0].Online != false {
+			t.Errorf("Online = %v; want false (from new)", *got[0].Online)
+		}
+	})
+
+	t.Run("nil_old", func(t *testing.T) {
+		new := []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 1},
+		}
+		got := mergePeerChanges(nil, new)
+		if len(got) != 1 {
+			t.Fatalf("len = %d; want 1", len(got))
+		}
+		if got[0].NodeID != 1 {
+			t.Errorf("NodeID = %d; want 1", got[0].NodeID)
+		}
 	})
 }

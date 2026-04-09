@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 )
 
@@ -116,8 +117,8 @@ func (s *rateLimitingBusSender) Run(ctx context.Context, ch <-chan *ipn.Notify) 
 	}
 }
 
-// mergeBoringNotify merges new notify 'src' into possibly-nil 'dst',
-// either mutating 'dst' or allocating a new one if 'dst' is nil,
+// mergeBoringNotify merges new notify src into possibly-nil dst,
+// either mutating dst or allocating a new one if dst is nil,
 // returning the merged result.
 //
 // dst and src must both be "boring" (i.e. not notable per isNotifiableNotify).
@@ -127,11 +128,63 @@ func mergeBoringNotifies(dst, src *ipn.Notify) *ipn.Notify {
 	}
 	if src.NetMap != nil {
 		dst.NetMap = src.NetMap
+		dst.PeerChanges = nil // full netmap supersedes any accumulated deltas
+	} else if src.PeerChanges != nil {
+		dst.PeerChanges = mergePeerChanges(dst.PeerChanges, src.PeerChanges)
 	}
 	if src.Engine != nil {
 		dst.Engine = src.Engine
 	}
 	return dst
+}
+
+// mergePeerChanges merges new peer changes from src into dst, either
+// mutating dst or allocating a new slice if dst is nil, returning the merged result.
+// Values in src override those in dst for the same NodeID.
+func mergePeerChanges(dst, src []*tailcfg.PeerChange) []*tailcfg.PeerChange {
+	idxByNode := make(map[tailcfg.NodeID]int, len(dst))
+	for i, d := range dst {
+		idxByNode[d.NodeID] = i
+	}
+
+	for _, nd := range src {
+		if oi, ok := idxByNode[nd.NodeID]; ok {
+			dst[oi] = mergePeerChangeForIpnBus(dst[oi], nd)
+			continue
+		}
+		idxByNode[nd.NodeID] = len(dst)
+		dst = append(dst, nd)
+	}
+	return dst
+}
+
+// mergePeerChangeForIpnBus merges new with old, returning the result.
+// Fields set in new override those in old; fields only set in old are preserved.
+func mergePeerChangeForIpnBus(old, new *tailcfg.PeerChange) *tailcfg.PeerChange {
+	merged := *old
+
+	// This is a subset of PeerChange that reflects only the fields that can
+	// be changed via a NodeMutation.  If future fields can be updated via
+	// NodeMutations from map responses (and they are relevant to the ipn bus), then
+	// they should be added here and merged in the same way.
+	if new.DERPRegion != 0 {
+		// netmap.NodeMutationDerpHome
+		merged.DERPRegion = new.DERPRegion
+	}
+	if new.Online != nil {
+		// netmap.NodeMutationOnline
+		merged.Online = new.Online
+	}
+	if new.LastSeen != nil {
+		// netmap.NodeMutationLastSeen
+		merged.LastSeen = new.LastSeen
+	}
+	if new.Endpoints != nil {
+		// netmap.NodeMutationEndpoints
+		merged.Endpoints = new.Endpoints
+	}
+
+	return &merged
 }
 
 // isNotableNotify reports whether n is a "notable" notification that
