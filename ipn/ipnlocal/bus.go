@@ -164,7 +164,7 @@ func mergePeerChangeForIpnBus(old, new *tailcfg.PeerChange) *tailcfg.PeerChange 
 	merged := *old
 
 	// This is a subset of PeerChange that reflects only the fields that can
-	// be changed via a NodeMutation.  If future fields can be udpated via
+	// be changed via a NodeMutation.  If future fields can be updated via
 	// NodeMutations from map responses (and they are relevant to the ipn bus), then
 	// they should be added here and merged in the same way.
 	if new.DERPRegion != 0 {
