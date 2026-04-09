@@ -14,15 +14,34 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+
+	"github.com/ulikunitz/xz"
 )
 
 // OSImage describes a VM operating system image.
 type OSImage struct {
 	Name      string
 	URL       string // download URL for the cloud image
-	SHA256    string // expected SHA256 hash of the image
+	SHA256    string // expected SHA256 hash of the image (of the final qcow2, after any decompression)
 	MemoryMB  int    // RAM for the VM
 	IsGokrazy bool   // true for gokrazy images (different QEMU setup)
+}
+
+// GOOS returns the Go OS name for this image.
+func (img OSImage) GOOS() string {
+	if img.IsGokrazy {
+		return "linux"
+	}
+	if strings.HasPrefix(img.Name, "freebsd") {
+		return "freebsd"
+	}
+	return "linux"
+}
+
+// GOARCH returns the Go architecture name for this image.
+func (img OSImage) GOARCH() string {
+	return "amd64"
 }
 
 var (
@@ -44,6 +63,14 @@ var (
 	Debian12 = OSImage{
 		Name:     "debian-12",
 		URL:      "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2",
+		MemoryMB: 1024,
+	}
+
+	// FreeBSD150 is FreeBSD 15.0-RELEASE with BASIC-CLOUDINIT (nuageinit) support.
+	// The image is distributed as xz-compressed qcow2.
+	FreeBSD150 = OSImage{
+		Name:     "freebsd-15.0",
+		URL:      "https://download.freebsd.org/releases/VM-IMAGES/15.0-RELEASE/amd64/Latest/FreeBSD-15.0-RELEASE-amd64-BASIC-CLOUDINIT-ufs.qcow2.xz",
 		MemoryMB: 1024,
 	}
 )
@@ -84,6 +111,7 @@ func ensureImage(ctx context.Context, img OSImage) error {
 		}
 	}
 
+	isXZ := strings.HasSuffix(img.URL, ".xz")
 	log.Printf("downloading %s from %s...", img.Name, img.URL)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", img.URL, nil)
@@ -99,6 +127,16 @@ func ensureImage(ctx context.Context, img OSImage) error {
 		return fmt.Errorf("downloading %s: HTTP %s", img.Name, resp.Status)
 	}
 
+	// Set up the reader pipeline: HTTP body → (optional xz decompress) → file.
+	var src io.Reader = resp.Body
+	if isXZ {
+		xzr, err := xz.NewReader(resp.Body)
+		if err != nil {
+			return fmt.Errorf("creating xz reader for %s: %w", img.Name, err)
+		}
+		src = xzr
+	}
+
 	tmpFile := cachedPath + ".tmp"
 	f, err := os.Create(tmpFile)
 	if err != nil {
@@ -111,8 +149,7 @@ func ensureImage(ctx context.Context, img OSImage) error {
 
 	h := sha256.New()
 	w := io.MultiWriter(f, h)
-
-	if _, err := io.Copy(w, resp.Body); err != nil {
+	if _, err := io.Copy(w, src); err != nil {
 		return fmt.Errorf("downloading %s: %w", img.Name, err)
 	}
 	if err := f.Close(); err != nil {
