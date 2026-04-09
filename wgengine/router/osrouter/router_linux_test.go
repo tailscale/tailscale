@@ -1209,7 +1209,9 @@ func TestRuleDeletedEvent(t *testing.T) {
 }
 
 func TestDelRouteIdempotent(t *testing.T) {
+	fake := NewFakeOS(t)
 	lt, _ := newLinuxRootTest(t)
+	lt.r.nfr = fake.nfr
 	defer lt.Close()
 
 	for _, s := range []string{
@@ -1235,7 +1237,9 @@ func TestDelRouteIdempotent(t *testing.T) {
 }
 
 func TestAddRemoveRules(t *testing.T) {
+	fake := NewFakeOS(t)
 	lt, _ := newLinuxRootTest(t)
+	lt.r.nfr = fake.nfr
 	defer lt.Close()
 	r := lt.r
 
