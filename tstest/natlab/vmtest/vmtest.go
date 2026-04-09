@@ -26,7 +26,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -185,17 +184,22 @@ func (e *Env) Start() {
 		t.Fatal(err)
 	}
 
-	// Determine if we have any non-gokrazy "cloud" images (e.g. Ubuntu, Debian)
-	// that require compiled binaries pushed into their image later. (Gokrazy
-	// has them built-in, so doesn't need the compileBinaries step.)
-	needBuildBinaries := slices.ContainsFunc(e.nodes, func(n *Node) bool { return !n.os.IsGokrazy })
+	// Determine which GOOS/GOARCH pairs need compiled binaries (non-gokrazy
+	// images). Gokrazy has binaries built-in, so doesn't need compilation.
+	type platform struct{ goos, goarch string }
+	needPlatform := set.Set[platform]{}
+	for _, n := range e.nodes {
+		if !n.os.IsGokrazy {
+			needPlatform.Add(platform{n.os.GOOS(), n.os.GOARCH()})
+		}
+	}
 
 	// Compile binaries and download/build images in parallel.
 	// Any failure cancels the others via the errgroup context.
 	eg, egCtx := errgroup.WithContext(ctx)
-	if needBuildBinaries {
+	for _, p := range needPlatform.Slice() {
 		eg.Go(func() error {
-			return e.compileBinaries(egCtx)
+			return e.compileBinariesForOS(egCtx, p.goos, p.goarch)
 		})
 	}
 	didOS := set.Set[string]{} // dedup by image name
@@ -227,13 +231,15 @@ func (e *Env) Start() {
 	t.Cleanup(func() { e.server.Close() })
 
 	// Register compiled binaries with the file server VIP.
-	if needBuildBinaries {
+	// Binaries are registered at <goos>_<goarch>/<name> (e.g. "linux_amd64/tta").
+	for _, p := range needPlatform.Slice() {
+		dir := p.goos + "_" + p.goarch
 		for _, name := range []string{"tta", "tailscale", "tailscaled"} {
-			data, err := os.ReadFile(filepath.Join(e.binDir, name))
+			data, err := os.ReadFile(filepath.Join(e.binDir, dir, name))
 			if err != nil {
-				t.Fatalf("reading compiled %s: %v", name, err)
+				t.Fatalf("reading compiled %s/%s: %v", dir, name, err)
 			}
-			e.server.RegisterFile(name, data)
+			e.server.RegisterFile(dir+"/"+name, data)
 		}
 	}
 
@@ -603,11 +609,17 @@ func (e *Env) ensureGokrazy(ctx context.Context) error {
 	return nil
 }
 
-// compileBinaries cross-compiles tta, tailscale, and tailscaled for linux/amd64
-// and places them in e.binDir.
-func (e *Env) compileBinaries(ctx context.Context) error {
+// compileBinariesForOS cross-compiles tta, tailscale, and tailscaled for the
+// given GOOS/GOARCH and places them in e.binDir/<goos>_<goarch>/.
+func (e *Env) compileBinariesForOS(ctx context.Context, goos, goarch string) error {
 	modRoot, err := findModRoot()
 	if err != nil {
+		return err
+	}
+
+	dir := goos + "_" + goarch
+	outDir := filepath.Join(e.binDir, dir)
+	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return err
 	}
 
@@ -620,15 +632,15 @@ func (e *Env) compileBinaries(ctx context.Context) error {
 	var eg errgroup.Group
 	for _, bin := range binaries {
 		eg.Go(func() error {
-			outPath := filepath.Join(e.binDir, bin.name)
-			e.t.Logf("compiling %s...", bin.name)
+			outPath := filepath.Join(outDir, bin.name)
+			e.t.Logf("compiling %s/%s...", dir, bin.name)
 			cmd := exec.CommandContext(ctx, "go", "build", "-o", outPath, bin.pkg)
 			cmd.Dir = modRoot
-			cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
+			cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0")
 			if out, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("building %s: %v\n%s", bin.name, err, out)
+				return fmt.Errorf("building %s/%s: %v\n%s", dir, bin.name, err, out)
 			}
-			e.t.Logf("compiled %s", bin.name)
+			e.t.Logf("compiled %s/%s", dir, bin.name)
 			return nil
 		})
 	}

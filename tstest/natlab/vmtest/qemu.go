@@ -72,7 +72,7 @@ func (e *Env) startGokrazyQEMU(n *Node) error {
 	return e.launchQEMU(n.name, logPath, args)
 }
 
-// startCloudQEMU launches a QEMU process for a cloud image (Ubuntu, Debian, etc).
+// startCloudQEMU launches a QEMU process for a cloud image (Ubuntu, Debian, FreeBSD, etc).
 func (e *Env) startCloudQEMU(n *Node) error {
 	basePath := cachedImagePath(n.os)
 	disk := filepath.Join(e.tempDir, fmt.Sprintf("%s.qcow2", n.name))

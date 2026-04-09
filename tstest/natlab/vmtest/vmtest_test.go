@@ -13,6 +13,15 @@ import (
 )
 
 func TestSubnetRouter(t *testing.T) {
+	testSubnetRouterForOS(t, vmtest.Ubuntu2404)
+}
+
+func TestSubnetRouterFreeBSD(t *testing.T) {
+	testSubnetRouterForOS(t, vmtest.FreeBSD150)
+}
+
+func testSubnetRouterForOS(t testing.TB, srOS vmtest.OSImage) {
+	t.Helper()
 	env := vmtest.New(t)
 
 	clientNet := env.AddNetwork("2.1.1.1", "192.168.1.1/24", "2000:1::1/64", vnet.EasyNAT)
@@ -21,7 +30,7 @@ func TestSubnetRouter(t *testing.T) {
 	client := env.AddNode("client", clientNet,
 		vmtest.OS(vmtest.Gokrazy))
 	sr := env.AddNode("subnet-router", clientNet, internalNet,
-		vmtest.OS(vmtest.Ubuntu2404),
+		vmtest.OS(srOS),
 		vmtest.AdvertiseRoutes("10.0.0.0/24"))
 	backend := env.AddNode("backend", internalNet,
 		vmtest.OS(vmtest.Gokrazy),
