@@ -89,6 +89,7 @@ type linuxRouter struct {
 	connmarkEnabled   bool // whether connmark rules are currently enabled
 	netfilterMode     preftype.NetfilterMode
 	netfilterKind     string
+	dropCGNAT         bool
 	magicsockPortV4   uint16
 	magicsockPortV6   uint16
 }
@@ -359,6 +360,9 @@ func (r *linuxRouter) Up() error {
 	if err := r.upInterface(); err != nil {
 		return fmt.Errorf("bringing interface up: %w", err)
 	}
+	// For now (2026-04-09), assume that unless stated otherwise, we want to be
+	// dropping non-Tailscale CGNAT traffic to preserve old behavior.
+	r.dropCGNAT = true
 
 	return nil
 }
@@ -521,7 +525,53 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		r.enableIPForwarding()
 	}
 
+	// Remove the rule to drop off-tailnet CGNAT traffic, if asked.
+	if netfilterOn || cfg.NetfilterMode == netfilterNoDivert {
+		var current, next linuxfw.CGNATMode
+		if r.dropCGNAT {
+			current = linuxfw.CGNATModeDrop
+		} else {
+			current = linuxfw.CGNATModeReturn
+		}
+
+		// The boolean algebra here reads a little weird, but it works out because
+		// cfg.RemoveCGNATDropRule == false means we want r.dropCGNAT to be true,
+		// and vice-versa. The booleans being the same value mean that they're
+		// out of sync, because they're inverses of each other. This is so that the
+		// zero value of *router.Config can preserve the default behavior (ie.
+		// keep the drop rule), but internally in the router it makes more sense
+		// to elide the negation to prevent double-negation everywhere. This is
+		// the interface between those two, so all the weirdness is contained here.
+		if cfg.RemoveCGNATDropRule == r.dropCGNAT {
+			if cfg.RemoveCGNATDropRule {
+				next = linuxfw.CGNATModeReturn
+			} else {
+				next = linuxfw.CGNATModeDrop
+			}
+			r.dropCGNAT = !cfg.RemoveCGNATDropRule
+		} else {
+			next = current
+		}
+
+		err := r.setCGNATDropModeLocked(current, next)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("set cgnat mode: %w", err))
+		}
+	}
+
 	return errors.Join(errs...)
+}
+
+func (r *linuxRouter) setCGNATDropModeLocked(current, next linuxfw.CGNATMode) error {
+	err := r.nfr.DelExternalCGNATRules(current, r.tunname)
+	if err != nil {
+		return fmt.Errorf("clear old cgnat rules: %w", err)
+	}
+	err = r.nfr.AddExternalCGNATRules(next, r.tunname)
+	if err != nil {
+		return fmt.Errorf("add new cgnat rules: %w", err)
+	}
+	return nil
 }
 
 var dockerStatefulFilteringWarnable = health.Register(&health.Warnable{

@@ -214,23 +214,8 @@ func (i *iptablesRunner) AddBase(tunname string) error {
 // addBase4 adds some basic IPv4 processing rules to be
 // supplemented by later calls to other helpers.
 func (i *iptablesRunner) addBase4(tunname string) error {
-	// Only allow CGNAT range traffic to come from tailscale0. There
-	// is an exception carved out for ranges used by ChromeOS, for
-	// which we fall out of the Tailscale chain.
-	//
-	// Note, this will definitely break nodes that end up using the
-	// CGNAT range for other purposes :(.
-	args := []string{"!", "-i", tunname, "-s", tsaddr.ChromeOSVMRange().String(), "-j", "RETURN"}
-	if err := i.ipt4.Append("filter", "ts-input", args...); err != nil {
-		return fmt.Errorf("adding %v in v4/filter/ts-input: %w", args, err)
-	}
-	args = []string{"!", "-i", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}
-	if err := i.ipt4.Append("filter", "ts-input", args...); err != nil {
-		return fmt.Errorf("adding %v in v4/filter/ts-input: %w", args, err)
-	}
-
-	// Explicitly allow all other inbound traffic to the tun interface
-	args = []string{"-i", tunname, "-j", "ACCEPT"}
+	// Explicitly allow all inbound traffic to the tun interface
+	args := []string{"-i", tunname, "-j", "ACCEPT"}
 	if err := i.ipt4.Append("filter", "ts-input", args...); err != nil {
 		return fmt.Errorf("adding %v in v4/filter/ts-input: %w", args, err)
 	}
@@ -679,6 +664,67 @@ func (i *iptablesRunner) DelMagicsockPortRule(port uint16, network string) error
 		return fmt.Errorf("removing %v in filter/ts-input: %w", args, err)
 	}
 
+	return nil
+}
+
+// buildExternalCGNATRules abstracts out logic for constructing firewall rules
+// for handling non-Tailscale CGNAT traffic, since these rules need to be
+// identical across [AddExternalCGNATRules] and [DelExternalCGNATRules].
+func buildExternalCGNATRules(mode CGNATMode, tunname string) ([][]string, error) {
+	switch mode {
+	case CGNATModeDrop:
+		// Only allow CGNAT range traffic to come from the Tailscale interface.
+		// There is an exception carved out for ranges used by ChromeOS, for
+		// which we fall out of the Tailscale chain.
+		return [][]string{
+			{"!", "-i", tunname, "-s", tsaddr.ChromeOSVMRange().String(), "-j", "RETURN"},
+			{"!", "-i", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"},
+		}, nil
+	case CGNATModeReturn:
+		// Fall out of the Tailscale chain for CGNAT traffic that doesn't
+		// originate from the Tailscale interface.
+		return [][]string{
+			{"!", "-i", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "RETURN"},
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported mode %q", mode)
+	}
+}
+
+// AddExternalCGNATRules adds rules to the ts-input chain to deal with
+// traffic from the CGNAT range that arrives on non-Tailscale network
+// interfaces.
+func (i *iptablesRunner) AddExternalCGNATRules(mode CGNATMode, tunname string) error {
+	rules, err := buildExternalCGNATRules(mode, tunname)
+	if err != nil {
+		return fmt.Errorf("build cgnat mode rule: %v", err)
+	}
+	for _, rule := range rules {
+		if err := i.ipt4.Append("filter", "ts-input", rule...); err != nil {
+			return fmt.Errorf("adding %v in v4/filter/ts-input: %w", rule, err)
+		}
+	}
+	return nil
+}
+
+// DelExternalCGNATRules removes the rules created by AddExternalCGNATRules,
+// if they exist.
+func (i *iptablesRunner) DelExternalCGNATRules(mode CGNATMode, tunname string) error {
+	rules, err := buildExternalCGNATRules(mode, tunname)
+	if err != nil {
+		return fmt.Errorf("build cgnat mode rule: %v", err)
+	}
+	for _, rule := range rules {
+		if found, err := i.ipt4.Exists("filter", "ts-input", rule...); err != nil {
+			return fmt.Errorf("checking for %v in v4/filter/ts-input: %w", rule, err)
+		} else if !found {
+			// Don't need to delete a rule that isn't there.
+			continue
+		}
+		if err := i.ipt4.Delete("filter", "ts-input", rule...); err != nil {
+			return fmt.Errorf("adding %v in v4/filter/ts-input: %w", rule, err)
+		}
+	}
 	return nil
 }
 

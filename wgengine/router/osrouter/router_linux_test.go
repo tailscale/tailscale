@@ -717,11 +717,11 @@ func (n *fakeIPTablesRunner) DeleteDNATRuleForSvc(svcName string, origDst, dst n
 	return errors.New("not implemented")
 }
 
+type iptRule struct{ chain, rule string }
+
 func (n *fakeIPTablesRunner) addBase4(tunname string) error {
 	curIPT := n.ipt4
-	newRules := []struct{ chain, rule string }{
-		{"filter/ts-input", fmt.Sprintf("! -i %s -s %s -j RETURN", tunname, tsaddr.ChromeOSVMRange().String())},
-		{"filter/ts-input", fmt.Sprintf("! -i %s -s %s -j DROP", tunname, tsaddr.CGNATRange().String())},
+	newRules := []iptRule{
 		{"filter/ts-forward", fmt.Sprintf("-i %s -j MARK --set-mark %s/%s", tunname, tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
 		{"filter/ts-forward", fmt.Sprintf("-m mark --mark %s/%s -j ACCEPT", tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
 		{"filter/ts-forward", fmt.Sprintf("-o %s -s %s -j DROP", tunname, tsaddr.CGNATRange().String())},
@@ -737,7 +737,7 @@ func (n *fakeIPTablesRunner) addBase4(tunname string) error {
 
 func (n *fakeIPTablesRunner) addBase6(tunname string) error {
 	curIPT := n.ipt6
-	newRules := []struct{ chain, rule string }{
+	newRules := []iptRule{
 		{"filter/ts-forward", fmt.Sprintf("-i %s -j MARK --set-mark %s/%s", tunname, tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
 		{"filter/ts-forward", fmt.Sprintf("-m mark --mark %s/%s -j ACCEPT", tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
 		{"filter/ts-forward", fmt.Sprintf("-o %s -j ACCEPT", tunname)},
@@ -762,7 +762,7 @@ func (n *fakeIPTablesRunner) DelLoopbackRule(addr netip.Addr) error {
 }
 
 func (n *fakeIPTablesRunner) AddHooks() error {
-	newRules := []struct{ chain, rule string }{
+	newRules := []iptRule{
 		{"filter/INPUT", "-j ts-input"},
 		{"filter/FORWARD", "-j ts-forward"},
 		{"nat/POSTROUTING", "-j ts-postrouting"},
@@ -778,7 +778,7 @@ func (n *fakeIPTablesRunner) AddHooks() error {
 }
 
 func (n *fakeIPTablesRunner) DelHooks(logf logger.Logf) error {
-	delRules := []struct{ chain, rule string }{
+	delRules := []iptRule{
 		{"filter/INPUT", "-j ts-input"},
 		{"filter/FORWARD", "-j ts-forward"},
 		{"nat/POSTROUTING", "-j ts-postrouting"},
@@ -949,6 +949,48 @@ func (n *fakeIPTablesRunner) DelConnmarkSaveRule() error {
 	outputRule := "-m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000"
 	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
 		deleteRule(n, ipt, "mangle/OUTPUT", outputRule) // ignore errors
+	}
+	return nil
+}
+
+func buildExternalCGNATRules(mode linuxfw.CGNATMode, tunname string) ([]iptRule, error) {
+	switch mode {
+	case linuxfw.CGNATModeDrop:
+		return []iptRule{
+			{"filter/ts-input", fmt.Sprintf("! -i %s -s %s -j RETURN", tunname, tsaddr.ChromeOSVMRange().String())},
+			{"filter/ts-input", fmt.Sprintf("! -i %s -s %s -j DROP", tunname, tsaddr.CGNATRange().String())},
+		}, nil
+	case linuxfw.CGNATModeReturn:
+		return []iptRule{
+			{"filter/ts-input", fmt.Sprintf("! -i %s -s %s -j RETURN", tunname, tsaddr.CGNATRange().String())},
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported mode %q", mode)
+	}
+}
+
+func (n *fakeIPTablesRunner) AddExternalCGNATRules(mode linuxfw.CGNATMode, tunname string) error {
+	rules, err := buildExternalCGNATRules(mode, tunname)
+	if err != nil {
+		return err
+	}
+	for _, rule := range rules {
+		if err := appendRule(n, n.ipt4, rule.chain, rule.rule); err != nil {
+			return fmt.Errorf("add rule %q to chain %q: %w", rule.rule, rule.chain, err)
+		}
+	}
+	return nil
+}
+
+func (n *fakeIPTablesRunner) DelExternalCGNATRules(mode linuxfw.CGNATMode, tunname string) error {
+	rules, err := buildExternalCGNATRules(mode, tunname)
+	if err != nil {
+		return err
+	}
+	for _, rule := range rules {
+		if err := deleteRule(n, n.ipt4, rule.chain, rule.rule); err != nil {
+			return fmt.Errorf("del rule %q to chain %q: %w", rule.rule, rule.chain, err)
+		}
 	}
 	return nil
 }
