@@ -41,6 +41,8 @@ type Resolver struct {
 	// there are situations where it is preferable to still use a Split DNS server and/or
 	// global DNS server instead of the exit node.
 	UseWithExitNode bool `json:",omitempty"`
+
+	IsFranNewDynamicResolverThing bool `json:",omitempty"`
 }
 
 // IPPort returns r.Addr as an IP address and port if either

@@ -113,12 +113,14 @@ func (v ResolverView) BootstrapResolution() views.Slice[netip.Addr] {
 // exit node is in use. Normally, DNS resolution is delegated to the exit node but
 // there are situations where it is preferable to still use a Split DNS server and/or
 // global DNS server instead of the exit node.
-func (v ResolverView) UseWithExitNode() bool      { return v.ж.UseWithExitNode }
-func (v ResolverView) Equal(v2 ResolverView) bool { return v.ж.Equal(v2.ж) }
+func (v ResolverView) UseWithExitNode() bool               { return v.ж.UseWithExitNode }
+func (v ResolverView) IsFranNewDynamicResolverThing() bool { return v.ж.IsFranNewDynamicResolverThing }
+func (v ResolverView) Equal(v2 ResolverView) bool          { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ResolverViewNeedsRegeneration = Resolver(struct {
-	Addr                string
-	BootstrapResolution []netip.Addr
-	UseWithExitNode     bool
+	Addr                          string
+	BootstrapResolution           []netip.Addr
+	UseWithExitNode               bool
+	IsFranNewDynamicResolverThing bool
 }{})

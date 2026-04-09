@@ -47,6 +47,9 @@ import (
 	"tailscale.com/version"
 )
 
+// TODO comment, name
+var FranNewDynamicResolverThing feature.Hook[func(string) (string, error)]
+
 // headerBytes is the number of bytes in a DNS message header.
 const headerBytes = 12
 
@@ -1004,7 +1007,30 @@ func (f *forwarder) resolvers(domain dnsname.FQDN) []resolverAndDelay {
 	f.mu.Unlock()
 	for _, route := range routes {
 		if route.Suffix == "." || route.Suffix.Contains(domain) {
-			return route.Resolvers
+			triedToResolveResolver := false
+			resolvers := []resolverAndDelay{}
+			for _, r := range route.Resolvers {
+				if r.name.IsFranNewDynamicResolverThing {
+					triedToResolveResolver = true
+					fx := FranNewDynamicResolverThing.Get()
+					if fx != nil {
+						url, err := fx(r.name.Addr)
+						if err != nil {
+							continue
+						}
+						r.name.Addr = url
+					}
+				}
+				resolvers = append(resolvers, r)
+			}
+			// if there turned out to actually be no resolvers for this route Suffix then
+			// if the user configured that on purpose?? let it be, but if it's because
+			// there's a dynamic resolver that might have covered this domain but elected
+			// not to or was unable to do so here, then the route doesn't count.
+			if triedToResolveResolver && len(resolvers) == 0 {
+				continue
+			}
+			return resolvers
 		}
 	}
 	return cloudHostFallback // or nil if no fallback
