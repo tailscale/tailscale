@@ -23,10 +23,11 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"tailscale.com/client/tailscale/v2"
 
-	"tailscale.com/internal/client/tailscale"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
@@ -51,7 +52,7 @@ type KubeAPIServerTSServiceReconciler struct {
 	client.Client
 	recorder    record.EventRecorder
 	logger      *zap.SugaredLogger
-	tsClient    tsClient
+	clients     ClientProvider
 	tsNamespace string
 	defaultTags []string
 	operatorID  string // stableID of the operator's Tailscale device
@@ -77,15 +78,14 @@ func (r *KubeAPIServerTSServiceReconciler) Reconcile(ctx context.Context, req re
 
 	serviceName := serviceNameForAPIServerProxy(pg)
 	logger = logger.With("Tailscale Service", serviceName)
-
-	tailscaleClient, err := r.getClient(ctx, pg.Spec.Tailnet)
+	tsClient, err := r.clients.For(pg.Spec.Tailnet)
 	if err != nil {
 		return res, fmt.Errorf("failed to get tailscale client: %w", err)
 	}
 
 	if markedForDeletion(pg) {
 		logger.Debugf("ProxyGroup is being deleted, ensuring any created resources are cleaned up")
-		if err = r.maybeCleanup(ctx, serviceName, pg, logger, tailscaleClient); err != nil && strings.Contains(err.Error(), optimisticLockErrorMsg) {
+		if err = r.maybeCleanup(ctx, serviceName, pg, logger, tsClient); err != nil && strings.Contains(err.Error(), optimisticLockErrorMsg) {
 			logger.Infof("optimistic lock error, retrying: %s", err)
 			return res, nil
 		}
@@ -93,7 +93,7 @@ func (r *KubeAPIServerTSServiceReconciler) Reconcile(ctx context.Context, req re
 		return res, err
 	}
 
-	err = r.maybeProvision(ctx, serviceName, pg, logger, tailscaleClient)
+	err = r.maybeProvision(ctx, serviceName, pg, logger, tsClient)
 	if err != nil {
 		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
 			logger.Infof("optimistic lock error, retrying: %s", err)
@@ -105,31 +105,15 @@ func (r *KubeAPIServerTSServiceReconciler) Reconcile(ctx context.Context, req re
 	return reconcile.Result{}, nil
 }
 
-// getClient returns the appropriate Tailscale client for the given tailnet.
-// If no tailnet is specified, returns the default client.
-func (r *KubeAPIServerTSServiceReconciler) getClient(ctx context.Context, tailnetName string) (tsClient,
-	error) {
-	if tailnetName == "" {
-		return r.tsClient, nil
-	}
-
-	tc, _, err := clientForTailnet(ctx, r.Client, r.tsNamespace, tailnetName)
-	if err != nil {
-		return nil, err
-	}
-
-	return tc, nil
-}
-
 // maybeProvision ensures that a Tailscale Service for this ProxyGroup exists
 // and is up to date.
 //
 // Returns true if the operation resulted in a Tailscale Service update.
-func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, serviceName tailcfg.ServiceName, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger, tsClient tsClient) (err error) {
+func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, serviceName tailcfg.ServiceName, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger, tsClient tsclient.Client) (err error) {
 	var dnsName string
 	oldPGStatus := pg.Status.DeepCopy()
 	defer func() {
-		podsAdvertising, podsErr := numberPodsAdvertising(ctx, r.Client, r.tsNamespace, pg.Name, serviceName)
+		podsAdvertising, podsErr := numberPodsAdvertising(ctx, r.Client, r.tsNamespace, pg.Name, serviceName.String())
 		if podsErr != nil {
 			err = errors.Join(err, fmt.Errorf("failed to get number of advertised Pods: %w", podsErr))
 			// Continue, updating the status with the best available information.
@@ -177,8 +161,8 @@ func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, s
 
 	// 1. Check there isn't a Tailscale Service with the same hostname
 	// already created and not owned by this ProxyGroup.
-	existingTSSvc, err := tsClient.GetVIPService(ctx, serviceName)
-	if err != nil && !isErrorTailscaleServiceNotFound(err) {
+	existingTSSvc, err := tsClient.VIPServices().Get(ctx, serviceName.String())
+	if err != nil && !tailscale.IsNotFound(err) {
 		return fmt.Errorf("error getting Tailscale Service %q: %w", serviceName, err)
 	}
 
@@ -202,8 +186,8 @@ func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, s
 		serviceTags = pg.Spec.Tags.Stringify()
 	}
 
-	tsSvc := &tailscale.VIPService{
-		Name:        serviceName,
+	tsSvc := tailscale.VIPService{
+		Name:        serviceName.String(),
 		Tags:        serviceTags,
 		Ports:       []string{"tcp:443"},
 		Comment:     managedTSServiceComment,
@@ -216,10 +200,10 @@ func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, s
 	// 2. Ensure the Tailscale Service exists and is up to date.
 	if existingTSSvc == nil ||
 		!slices.Equal(tsSvc.Tags, existingTSSvc.Tags) ||
-		!ownersAreSetAndEqual(tsSvc, existingTSSvc) ||
+		!ownersAreSetAndEqual(tsSvc, *existingTSSvc) ||
 		!slices.Equal(tsSvc.Ports, existingTSSvc.Ports) {
 		logger.Infof("Ensuring Tailscale Service exists and is up to date")
-		if err = tsClient.CreateOrUpdateVIPService(ctx, tsSvc); err != nil {
+		if err = tsClient.VIPServices().CreateOrUpdate(ctx, tsSvc); err != nil {
 			return fmt.Errorf("error creating Tailscale Service: %w", err)
 		}
 	}
@@ -248,10 +232,10 @@ func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, s
 }
 
 // maybeCleanup ensures that any resources, such as a Tailscale Service created for this Service, are cleaned up when the
-// Service is being deleted or is unexposed. The cleanup is safe for a multi-cluster setup- the Tailscale Service is only
+// Service is being deleted or is unexposed. The cleanup is safe for a multi-cluster setup. The Tailscale Service is only
 // deleted if it does not contain any other owner references. If it does, the cleanup only removes the owner reference
 // corresponding to this Service.
-func (r *KubeAPIServerTSServiceReconciler) maybeCleanup(ctx context.Context, serviceName tailcfg.ServiceName, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger, tsClient tsClient) (err error) {
+func (r *KubeAPIServerTSServiceReconciler) maybeCleanup(ctx context.Context, serviceName tailcfg.ServiceName, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger, client tsclient.Client) (err error) {
 	ix := slices.Index(pg.Finalizers, proxyPGFinalizerName)
 	if ix < 0 {
 		logger.Debugf("no finalizer, nothing to do")
@@ -265,7 +249,7 @@ func (r *KubeAPIServerTSServiceReconciler) maybeCleanup(ctx context.Context, ser
 		}
 	}()
 
-	if _, err = cleanupTailscaleService(ctx, tsClient, serviceName, r.operatorID, logger); err != nil {
+	if _, err = cleanupTailscaleService(ctx, client, serviceName.String(), r.operatorID, logger); err != nil {
 		return fmt.Errorf("error deleting Tailscale Service: %w", err)
 	}
 
@@ -278,16 +262,16 @@ func (r *KubeAPIServerTSServiceReconciler) maybeCleanup(ctx context.Context, ser
 
 // maybeDeleteStaleServices deletes Services that have previously been created for
 // this ProxyGroup but are no longer needed.
-func (r *KubeAPIServerTSServiceReconciler) maybeDeleteStaleServices(ctx context.Context, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger, tsClient tsClient) error {
+func (r *KubeAPIServerTSServiceReconciler) maybeDeleteStaleServices(ctx context.Context, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger, tsClient tsclient.Client) error {
 	serviceName := serviceNameForAPIServerProxy(pg)
 
-	svcs, err := tsClient.ListVIPServices(ctx)
+	svcs, err := tsClient.VIPServices().List(ctx)
 	if err != nil {
 		return fmt.Errorf("error listing Tailscale Services: %w", err)
 	}
 
-	for _, svc := range svcs.VIPServices {
-		if svc.Name == serviceName {
+	for _, svc := range svcs {
+		if svc.Name == serviceName.String() {
 			continue
 		}
 
@@ -306,11 +290,11 @@ func (r *KubeAPIServerTSServiceReconciler) maybeDeleteStaleServices(ctx context.
 		}
 
 		logger.Infof("Deleting Tailscale Service %s", svc.Name)
-		if err = tsClient.DeleteVIPService(ctx, svc.Name); err != nil && !isErrorTailscaleServiceNotFound(err) {
+		if err = tsClient.VIPServices().Delete(ctx, svc.Name); err != nil && !tailscale.IsNotFound(err) {
 			return fmt.Errorf("error deleting Tailscale Service %s: %w", svc.Name, err)
 		}
 
-		if err = cleanupCertResources(ctx, r.Client, r.tsNamespace, svc.Name, pg); err != nil {
+		if err = cleanupCertResources(ctx, r.Client, r.tsNamespace, tailcfg.ServiceName(svc.Name), pg); err != nil {
 			return fmt.Errorf("failed to clean up cert resources: %w", err)
 		}
 	}
