@@ -119,9 +119,9 @@ type Notify struct {
 	NetMap        *netmap.NetworkMap // if non-nil, the new or current netmap
 
 	// PeerChanges, if non-nil, is a list of [tailcfg.PeerChange] that have occurred since the last
-	// full netmap update. This is sent in lieu of a full NetMap when NotifyPeerChanges is set in
+	// full netmap update. This is sent in lieu of a full NetMap when [NotifyPeerChanges] is set in
 	// the session's mask and a netmap update is derived from an incremental MapResponse.
-	// Full MapResponse updates from the control plane are still sent as a full NetMap.
+	// Full MapResponse updates from the control plane are sent as a full NetMap.
 	PeerChanges []*tailcfg.PeerChange `json:",omitzero"`
 
 	Engine      *EngineStatus // if non-nil, the new or current wireguard stats
