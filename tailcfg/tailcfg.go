@@ -183,7 +183,7 @@ type CapabilityVersion int
 //   - 134: 2026-03-09: Client understands [NodeAttrDisableAndroidBindToActiveNetwork]
 //   - 135: 2026-03-30: Client understands [NodeAttrCacheNetworkMaps]
 //   - 136: 2026-04-09: Client understands [NodeAttrDisableLinuxCGNATDropRule]
-const CurrentCapabilityVersion CapabilityVersion = 135
+const CurrentCapabilityVersion CapabilityVersion = 136
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
