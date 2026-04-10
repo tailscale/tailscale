@@ -1157,9 +1157,7 @@ func (lt *linuxTest) Close() error {
 }
 
 func newLinuxRootTest(t *testing.T) (*linuxTest, *eventbus.Bus) {
-	if os.Getuid() != 0 {
-		t.Skip("test requires root")
-	}
+	tstest.RequireRoot(t)
 
 	lt := new(linuxTest)
 	lt.tun = createTestTUN(t)
