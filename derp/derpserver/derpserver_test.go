@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"sync"
@@ -30,6 +31,7 @@ import (
 	"tailscale.com/derp/derpconst"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/set"
 )
 
 const testMeshKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -965,9 +967,9 @@ func TestPerClientRateLimit(t *testing.T) {
 			t.Cleanup(cancel)
 
 			c := &sclient{
-				ctx:     ctx,
-				recvLim: rate.NewLimiter(rate.Limit(bytesPerSec), burst),
+				ctx: ctx,
 			}
+			c.recvLim.Store(rate.NewLimiter(rate.Limit(bytesPerSec), burst))
 
 			// First call within burst should not block.
 			c.rateLimit(burst)
@@ -1006,9 +1008,9 @@ func TestPerClientRateLimit(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 
 			c := &sclient{
-				ctx:     ctx,
-				recvLim: rate.NewLimiter(rate.Limit(100), 100),
+				ctx: ctx,
 			}
+			c.recvLim.Store(rate.NewLimiter(rate.Limit(100), 100))
 
 			// Exhaust burst.
 			if err := c.rateLimit(100); err != nil {
@@ -1040,29 +1042,14 @@ func TestPerClientRateLimit(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
 
+		// Mesh peers have nil recvLim, so rate limiting is a no-op.
 		c := &sclient{
 			ctx:     ctx,
 			canMesh: true,
-			recvLim: rate.NewLimiter(rate.Limit(1), 1), // would block immediately if not exempt
 		}
 
-		// rateLimit should be a no-op for mesh peers.
 		if err := c.rateLimit(1000); err != nil {
 			t.Fatalf("mesh peer rateLimit should be no-op: %v", err)
-		}
-	})
-
-	t.Run("nil_limiter_no_op", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		t.Cleanup(cancel)
-
-		c := &sclient{
-			ctx: ctx,
-		}
-
-		// rateLimit with nil recvLim should be a no-op.
-		if err := c.rateLimit(1000); err != nil {
-			t.Fatalf("nil limiter rateLimit should be no-op: %v", err)
 		}
 	})
 
@@ -1071,6 +1058,293 @@ func TestPerClientRateLimit(t *testing.T) {
 		defer s.Close()
 		if s.perClientRecvBytesPerSec != 0 {
 			t.Errorf("expected zero rate limit, got %d", s.perClientRecvBytesPerSec)
+		}
+	})
+}
+
+func TestUpdatePerClientRateLimit(t *testing.T) {
+	const (
+		testBurst1 = derp.MaxPacketSize * 2
+		testRate1  = 1000
+		testBurst2 = derp.MaxPacketSize * 4
+		testRate2  = 5000
+	)
+
+	s := New(key.NewNode(), t.Logf)
+	defer s.Close()
+
+	// Create a non-mesh client with no initial limiter.
+	clientKey := key.NewNode().Public()
+	c := &sclient{
+		key:     clientKey,
+		s:       s,
+		logf:    logger.Discard,
+		canMesh: false,
+	}
+	cs := &clientSet{}
+	cs.activeClient.Store(c)
+
+	s.mu.Lock()
+	s.clients[clientKey] = cs
+	s.mu.Unlock()
+
+	s.UpdatePerClientRateLimit(testRate1, testBurst1)
+
+	lim := c.recvLim.Load()
+	if lim == nil {
+		t.Fatal("expected non-nil limiter after update")
+	}
+	if got := lim.Limit(); got != rate.Limit(testRate1) {
+		t.Errorf("rate limit = %v; want %d", got, testRate1)
+	}
+	if got := lim.Burst(); got != int(testBurst1) {
+		t.Errorf("burst = %v; want %d", got, testBurst1)
+	}
+
+	// Verify server fields updated.
+	s.mu.Lock()
+	if s.perClientRecvBytesPerSec != testRate1 {
+		t.Errorf("server rate = %d; want %d", s.perClientRecvBytesPerSec, testRate1)
+	}
+	if s.perClientRecvBurst != testBurst1 {
+		t.Errorf("server burst = %d; want %d", s.perClientRecvBurst, testBurst1)
+	}
+	s.mu.Unlock()
+
+	// Update again with different nonzero values. This exercises the
+	// in-place update path (existing limiter is reused, not recreated).
+	prevLim := c.recvLim.Load()
+	s.UpdatePerClientRateLimit(testRate2, testBurst2)
+	lim = c.recvLim.Load()
+	if lim == nil {
+		t.Fatal("expected non-nil limiter after in-place update")
+	}
+	if lim != prevLim {
+		t.Error("expected same limiter pointer after in-place update")
+	}
+	if got := lim.Limit(); got != rate.Limit(testRate2) {
+		t.Errorf("rate limit after in-place update = %v; want %d", got, testRate2)
+	}
+	if got := lim.Burst(); got != int(testBurst2) {
+		t.Errorf("burst after in-place update = %v; want %d", got, testBurst2)
+	}
+
+	// Disable rate limiting (set to 0).
+	s.UpdatePerClientRateLimit(0, 0)
+
+	if got := c.recvLim.Load(); got != nil {
+		t.Errorf("expected nil limiter after disable, got limit=%v", got.Limit())
+	}
+
+	// Mesh peer should always have nil limiter regardless of update.
+	meshKey := key.NewNode().Public()
+	meshClient := &sclient{
+		key:     meshKey,
+		s:       s,
+		logf:    logger.Discard,
+		canMesh: true,
+	}
+	meshCS := &clientSet{}
+	meshCS.activeClient.Store(meshClient)
+
+	s.mu.Lock()
+	s.clients[meshKey] = meshCS
+	s.mu.Unlock()
+
+	s.UpdatePerClientRateLimit(testRate2, testBurst2)
+
+	if got := meshClient.recvLim.Load(); got != nil {
+		t.Errorf("mesh peer should have nil limiter, got limit=%v", got.Limit())
+	}
+	// Non-mesh client should be updated.
+	lim = c.recvLim.Load()
+	if lim == nil {
+		t.Fatal("expected non-nil limiter for non-mesh client")
+	}
+	if got := lim.Limit(); got != rate.Limit(testRate2) {
+		t.Errorf("rate limit = %v; want %d", got, testRate2)
+	}
+	if got := lim.Burst(); got != int(testBurst2) {
+		t.Errorf("burst = %v; want %d", got, testBurst2)
+	}
+
+	// Verify dup clients are also updated.
+	dupKey := key.NewNode().Public()
+	d1 := &sclient{key: dupKey, s: s, logf: logger.Discard}
+	d2 := &sclient{key: dupKey, s: s, logf: logger.Discard}
+	dupCS := &clientSet{}
+	dupCS.activeClient.Store(d1)
+	dupCS.dup = &dupClientSet{set: set.Of(d1, d2)}
+	s.mu.Lock()
+	s.clients[dupKey] = dupCS
+	s.mu.Unlock()
+
+	s.UpdatePerClientRateLimit(testRate1, testBurst1)
+	for i, d := range []*sclient{d1, d2} {
+		dl := d.recvLim.Load()
+		if dl == nil {
+			t.Fatalf("dup client %d: expected non-nil limiter", i)
+		}
+		if got := dl.Limit(); got != rate.Limit(testRate1) {
+			t.Errorf("dup client %d: rate = %v; want %d", i, got, testRate1)
+		}
+		if got := dl.Burst(); got != int(testBurst1) {
+			t.Errorf("dup client %d: burst = %v; want %d", i, got, testBurst1)
+		}
+	}
+}
+
+func TestLoadRateConfig(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		json      string
+		wantRate  uint64
+		wantBurst uint64
+	}{
+		{"both_set", `{"PerClientRateLimitBytesPerSec": 1250000, "PerClientRateBurstBytes": 2500000}`, 1250000, 2500000},
+		{"rate_only", `{"PerClientRateLimitBytesPerSec": 500000}`, 500000, 0},
+		{"zeros", `{"PerClientRateLimitBytesPerSec": 0, "PerClientRateBurstBytes": 0}`, 0, 0},
+		{"empty_json", `{}`, 0, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := filepath.Join(t.TempDir(), "rate.json")
+			if err := os.WriteFile(f, []byte(tt.json), 0644); err != nil {
+				t.Fatal(err)
+			}
+			rc, err := LoadRateConfig(f)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if rc.PerClientRateLimitBytesPerSec != tt.wantRate {
+				t.Errorf("rate = %d; want %d", rc.PerClientRateLimitBytesPerSec, tt.wantRate)
+			}
+			if rc.PerClientRateBurstBytes != tt.wantBurst {
+				t.Errorf("burst = %d; want %d", rc.PerClientRateBurstBytes, tt.wantBurst)
+			}
+		})
+	}
+
+	for _, tt := range []struct {
+		name    string
+		path    string
+		content string // written to path if non-empty; path used as-is if empty
+	}{
+		{"empty_path", "", ""},
+		{"missing_file", filepath.Join(t.TempDir(), "nonexistent.json"), ""},
+		{"invalid_json", "", "not json"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := tt.path
+			if tt.content != "" {
+				path = filepath.Join(t.TempDir(), "rate.json")
+				if err := os.WriteFile(path, []byte(tt.content), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := LoadRateConfig(path)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
+func TestLoadAndApplyRateConfig(t *testing.T) {
+	writeConfig := func(t *testing.T, json string) string {
+		t.Helper()
+		f := filepath.Join(t.TempDir(), "rate.json")
+		if err := os.WriteFile(f, []byte(json), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+
+	t.Run("applies_and_updates_clients", func(t *testing.T) {
+		s := New(key.NewNode(), t.Logf)
+		defer s.Close()
+
+		clientKey := key.NewNode().Public()
+		c := &sclient{key: clientKey, s: s, logf: logger.Discard}
+		cs := &clientSet{}
+		cs.activeClient.Store(c)
+		s.mu.Lock()
+		s.clients[clientKey] = cs
+		s.mu.Unlock()
+
+		f := writeConfig(t, `{"PerClientRateLimitBytesPerSec": 1250000, "PerClientRateBurstBytes": 2500000}`)
+		if err := s.LoadAndApplyRateConfig(f); err != nil {
+			t.Fatalf("LoadAndApplyRateConfig: %v", err)
+		}
+
+		// Verify server fields.
+		s.mu.Lock()
+		gotRate := s.perClientRecvBytesPerSec
+		gotBurst := s.perClientRecvBurst
+		s.mu.Unlock()
+		if gotRate != 1250000 {
+			t.Errorf("server rate = %d; want 1250000", gotRate)
+		}
+		if gotBurst != 2500000 {
+			t.Errorf("server burst = %d; want 2500000", gotBurst)
+		}
+
+		// Verify client limiter.
+		lim := c.recvLim.Load()
+		if lim == nil {
+			t.Fatal("expected non-nil limiter")
+		}
+		if got := lim.Limit(); got != rate.Limit(1250000) {
+			t.Errorf("client rate = %v; want 1250000", got)
+		}
+	})
+
+	t.Run("burst_is_at_least_max_packet_size", func(t *testing.T) {
+		s := New(key.NewNode(), t.Logf)
+		defer s.Close()
+
+		f := writeConfig(t, `{"PerClientRateLimitBytesPerSec": 1250000, "PerClientRateBurstBytes": 10}`)
+		if err := s.LoadAndApplyRateConfig(f); err != nil {
+			t.Fatalf("LoadAndApplyRateConfig: %v", err)
+		}
+
+		s.mu.Lock()
+		gotBurst := s.perClientRecvBurst
+		s.mu.Unlock()
+		if gotBurst != derp.MaxPacketSize {
+			t.Errorf("burst = %d; want at least %d", gotBurst, derp.MaxPacketSize)
+		}
+	})
+
+	t.Run("reload_disables_limiting", func(t *testing.T) {
+		s := New(key.NewNode(), t.Logf)
+		defer s.Close()
+
+		f := writeConfig(t, `{"PerClientRateLimitBytesPerSec": 1250000, "PerClientRateBurstBytes": 2500000}`)
+		if err := s.LoadAndApplyRateConfig(f); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(f, []byte(`{}`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.LoadAndApplyRateConfig(f); err != nil {
+			t.Fatal(err)
+		}
+
+		s.mu.Lock()
+		gotRate := s.perClientRecvBytesPerSec
+		s.mu.Unlock()
+		if gotRate != 0 {
+			t.Errorf("rate = %d; want 0 (unlimited)", gotRate)
+		}
+	})
+
+	t.Run("propagates_errors", func(t *testing.T) {
+		s := New(key.NewNode(), t.Logf)
+		defer s.Close()
+
+		if err := s.LoadAndApplyRateConfig(filepath.Join(t.TempDir(), "nonexistent.json")); err == nil {
+			t.Fatal("expected error")
 		}
 	})
 }
