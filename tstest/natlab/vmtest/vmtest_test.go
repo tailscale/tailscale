@@ -20,6 +20,32 @@ func TestSubnetRouterFreeBSD(t *testing.T) {
 	testSubnetRouterForOS(t, vmtest.FreeBSD150)
 }
 
+// TestMacOSAndLinuxCanPing verifies basic LAN connectivity between a macOS VM
+// (via tailmac/Virtualization.framework) and a Gokrazy Linux VM (via QEMU).
+// Neither VM joins a tailnet; this only tests that the vnet virtual network
+// routes Ethernet frames correctly between QEMU (stream) and tailmac (dgram)
+// protocol clients. The macOS VM responds to ICMP natively (no TTA needed).
+func TestMacOSAndLinuxCanPing(t *testing.T) {
+	env := vmtest.New(t)
+
+	lan := env.AddNetwork("192.168.1.1/24")
+
+	linux := env.AddNode("linux", lan,
+		vmtest.OS(vmtest.Gokrazy),
+		vmtest.DontJoinTailnet())
+	macos := env.AddNode("macos", lan,
+		vmtest.OS(vmtest.MacOS),
+		vmtest.DontJoinTailnet(),
+		vmtest.NoAgent())
+
+	env.Start()
+
+	// Ping from Linux to macOS. This verifies bidirectional LAN connectivity
+	// since ICMP echo requires a reply. LANPing retries until the macOS VM
+	// has booted and acquired a DHCP lease from vnet.
+	env.LANPing(linux, macos.LanIP(lan))
+}
+
 func testSubnetRouterForOS(t testing.TB, srOS vmtest.OSImage) {
 	t.Helper()
 	env := vmtest.New(t)

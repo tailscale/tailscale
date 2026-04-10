@@ -83,7 +83,7 @@ struct TailMacConfigHelper {
         // Outbound network packets
         let serverSocket = config.serverSocket
 
-        // Inbound network packets
+        // Inbound network packets — bind a client socket so the server can reply.
         let clientSockId = config.vmID
         let clientSocket = "/tmp/qemu-dgram-\(clientSockId).sock"
 
@@ -118,19 +118,49 @@ struct TailMacConfigHelper {
                                         socklen_t(MemoryLayout<sockaddr_un>.size))
 
         if connectRes == -1 {
-            print("Error binding virtual network server socket - \(String(cString: strerror(errno)))")
+            print("Error connecting to server socket \(serverSocket) - \(String(cString: strerror(errno)))")
             return networkDevice
         }
 
         print("Virtual if mac address is \(config.mac)")
         print("Client bound to \(clientSocket)")
         print("Connected to server at \(serverSocket)")
-        print("Socket fd is \(socket)")
 
+        // Use a socketpair between VZ and the relay. VZ reads/writes one end;
+        // background threads relay between the other end and the vnet dgram socket.
+        // This is more reliable than giving VZ the dgram socket directly.
+        var spFds: [Int32] = [0, 0]
+        guard socketpair(AF_UNIX, SOCK_DGRAM, 0, &spFds) == 0 else {
+            print("socketpair failed: \(String(cString: strerror(errno)))")
+            return networkDevice
+        }
+        let vzFd = spFds[0]
+        let relayFd = spFds[1]
 
-        let handle = FileHandle(fileDescriptor: socket)
-        let device = VZFileHandleNetworkDeviceAttachment(fileHandle: handle)
+        let vzHandle = FileHandle(fileDescriptor: vzFd)
+        let device = VZFileHandleNetworkDeviceAttachment(fileHandle: vzHandle)
         networkDevice.attachment = device
+
+        // Relay: guest→network (read from relayFd, write to dgram socket)
+        DispatchQueue.global().async {
+            var buf = [UInt8](repeating: 0, count: 65536)
+            while true {
+                let n = Darwin.read(relayFd, &buf, buf.count)
+                if n <= 0 { break }
+                Darwin.write(socket, buf, n)
+            }
+        }
+
+        // Relay: network→guest (read from dgram socket, write to relayFd)
+        DispatchQueue.global().async {
+            var buf = [UInt8](repeating: 0, count: 65536)
+            while true {
+                let n = Darwin.read(socket, &buf, buf.count)
+                if n <= 0 { break }
+                Darwin.write(relayFd, buf, n)
+            }
+        }
+
         return networkDevice
     }
 

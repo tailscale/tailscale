@@ -12,11 +12,22 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"time"
 
 	"tailscale.com/tstest/natlab/vnet"
 )
+
+// qemuBinary returns the QEMU system emulator binary name for the current
+// host. On macOS arm64, gokrazy arm64 images use qemu-system-aarch64 with HVF.
+// On Linux x86_64, the standard qemu-system-x86_64 with KVM is used.
+func qemuBinary() string {
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		return "qemu-system-aarch64"
+	}
+	return "qemu-system-x86_64"
+}
 
 // startQEMU launches a QEMU process for the given node.
 func (e *Env) startQEMU(n *Node) error {
@@ -27,7 +38,8 @@ func (e *Env) startQEMU(n *Node) error {
 }
 
 // startGokrazyQEMU launches a QEMU process for a gokrazy node.
-// This follows the same pattern as tstest/integration/nat/nat_test.go.
+// On Linux x86_64, this uses microvm with KVM. On macOS arm64, it uses the
+// virt machine type with HVF for fast native arm64 VM execution.
 func (e *Env) startGokrazyQEMU(n *Node) error {
 	disk := filepath.Join(e.tempDir, fmt.Sprintf("%s.qcow2", n.name))
 	if err := createOverlay(e.gokrazyBase, disk); err != nil {
@@ -45,28 +57,56 @@ func (e *Env) startGokrazyQEMU(n *Node) error {
 
 	logPath := filepath.Join(e.tempDir, n.name+".log")
 
-	args := []string{
-		"-M", "microvm,isa-serial=off",
-		"-m", fmt.Sprintf("%dM", n.os.MemoryMB),
-		"-nodefaults", "-no-user-config", "-nographic",
-		"-kernel", e.gokrazyKernel,
-		"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-76baa2d60001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet gokrazy.remote_syslog.target=" + sysLogAddr + " tailscale-tta=1" + envBuf.String(),
-		"-drive", "id=blk0,file=" + disk + ",format=qcow2",
-		"-device", "virtio-blk-device,drive=blk0",
-		"-device", "virtio-serial-device",
-		"-device", "virtio-rng-device",
-		"-chardev", "file,id=virtiocon0,path=" + logPath,
-		"-device", "virtconsole,chardev=virtiocon0",
+	var args []string
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		// macOS arm64: use virt machine with HVF for native arm64 execution.
+		args = []string{
+			"-machine", "virt,gic-version=max",
+			"-accel", "hvf",
+			"-cpu", "host",
+			"-m", fmt.Sprintf("%dM", n.os.MemoryMB),
+			"-nodefaults", "-no-user-config", "-nographic",
+			"-kernel", e.gokrazyKernel,
+			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-76baa2d60001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic gokrazy.remote_syslog.target=" + sysLogAddr + " tailscale-tta=1" + envBuf.String(),
+			"-drive", "id=blk0,file=" + disk + ",format=qcow2,if=none",
+			"-device", "virtio-blk-pci,drive=blk0",
+			"-device", "virtio-serial-pci",
+			"-device", "virtio-rng-pci",
+			"-chardev", "file,id=virtiocon0,path=" + logPath,
+			"-device", "virtconsole,chardev=virtiocon0",
+		}
+	} else {
+		// Linux x86_64: use microvm with KVM.
+		args = []string{
+			"-M", "microvm,isa-serial=off",
+			"-m", fmt.Sprintf("%dM", n.os.MemoryMB),
+			"-nodefaults", "-no-user-config", "-nographic",
+			"-kernel", e.gokrazyKernel,
+			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-76baa2d60001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet gokrazy.remote_syslog.target=" + sysLogAddr + " tailscale-tta=1" + envBuf.String(),
+			"-drive", "id=blk0,file=" + disk + ",format=qcow2",
+			"-device", "virtio-blk-device,drive=blk0",
+			"-device", "virtio-serial-device",
+			"-device", "virtio-rng-device",
+			"-chardev", "file,id=virtiocon0,path=" + logPath,
+			"-device", "virtconsole,chardev=virtiocon0",
+		}
 	}
 
 	// Add network devices — one per NIC.
 	for i := range n.vnetNode.NumNICs() {
 		mac := n.vnetNode.NICMac(i)
 		netdevID := fmt.Sprintf("net%d", i)
-		args = append(args,
-			"-netdev", fmt.Sprintf("stream,id=%s,addr.type=unix,addr.path=%s", netdevID, e.sockAddr),
-			"-device", fmt.Sprintf("virtio-net-device,netdev=%s,mac=%s", netdevID, mac),
-		)
+		if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+			args = append(args,
+				"-netdev", fmt.Sprintf("stream,id=%s,addr.type=unix,addr.path=%s", netdevID, e.sockAddr),
+				"-device", fmt.Sprintf("virtio-net-pci,netdev=%s,mac=%s", netdevID, mac),
+			)
+		} else {
+			args = append(args,
+				"-netdev", fmt.Sprintf("stream,id=%s,addr.type=unix,addr.path=%s", netdevID, e.sockAddr),
+				"-device", fmt.Sprintf("virtio-net-device,netdev=%s,mac=%s", netdevID, mac),
+			)
+		}
 	}
 
 	return e.launchQEMU(n.name, logPath, args)
@@ -91,8 +131,12 @@ func (e *Env) startCloudQEMU(n *Node) error {
 	logPath := filepath.Join(e.tempDir, n.name+".log")
 	qmpSock := filepath.Join(e.tempDir, n.name+"-qmp.sock")
 
+	accel := "kvm"
+	if runtime.GOOS == "darwin" {
+		accel = "hvf"
+	}
 	args := []string{
-		"-machine", "q35,accel=kvm",
+		"-machine", "q35,accel=" + accel,
 		"-m", fmt.Sprintf("%dM", n.os.MemoryMB),
 		"-cpu", "host",
 		"-smp", "2",
@@ -141,7 +185,7 @@ func (e *Env) startCloudQEMU(n *Node) error {
 // VM console output goes to logPath (via QEMU's -serial or -chardev).
 // QEMU's own stdout/stderr go to logPath.qemu for diagnostics.
 func (e *Env) launchQEMU(name, logPath string, args []string) error {
-	cmd := exec.Command("qemu-system-x86_64", args...)
+	cmd := exec.Command(qemuBinary(), args...)
 	// Send stdout/stderr to the log file for any QEMU diagnostic messages.
 	// Stdin must be /dev/null to prevent QEMU from trying to read.
 	devNull, err := os.Open(os.DevNull)

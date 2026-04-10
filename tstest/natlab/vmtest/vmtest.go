@@ -2,13 +2,18 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package vmtest provides a high-level framework for running integration tests
-// across multiple QEMU virtual machines connected by natlab's vnet virtual
-// network infrastructure. It supports mixed OS types (gokrazy, Ubuntu, Debian)
-// and multi-NIC configurations for scenarios like subnet routing.
+// across multiple virtual machines connected by natlab's vnet virtual network
+// infrastructure. It supports mixed OS types (gokrazy, Ubuntu, Debian, FreeBSD,
+// macOS) and multi-NIC configurations for scenarios like subnet routing.
+//
+// QEMU VMs (Linux, FreeBSD) use stream Unix sockets to connect to vnet.
+// macOS VMs use tailmac (Apple Virtualization.framework) with datagram Unix sockets.
 //
 // Prerequisites:
-//   - qemu-system-x86_64 and KVM access (typically the "kvm" group; no root required)
-//   - A built gokrazy natlabapp image (auto-built on first run via "make natlab" in gokrazy/)
+//   - For QEMU VMs: qemu-system-x86_64 and KVM access (Linux), or qemu-system-aarch64 (macOS arm64)
+//   - For gokrazy: a built natlabapp image (auto-built on first run via "make natlab" in gokrazy/)
+//   - For macOS VMs: macOS arm64 host, tailmac built ("make all" in tstest/tailmac/),
+//     and a pre-created macOS VM (--macos-vm-id flag)
 //
 // Run tests with:
 //
@@ -26,6 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +47,7 @@ import (
 var (
 	runVMTests     = flag.Bool("run-vm-tests", false, "run tests that require VMs with KVM")
 	verboseVMDebug = flag.Bool("verbose-vm-debug", false, "enable verbose debug logging for VM tests")
+	macosVMID      = flag.String("macos-vm-id", "", "base macOS VM identifier in ~/VM.bundle/ for macOS VM tests")
 )
 
 // Env is a test environment that manages virtual networks and QEMU VMs.
@@ -52,8 +59,10 @@ type Env struct {
 	nodes   []*Node
 	tempDir string
 
-	sockAddr string // shared Unix socket path for all QEMU netdevs
-	binDir   string // directory for compiled binaries
+	sockAddr      string // shared Unix socket path for all QEMU netdevs
+	dgramSockAddr string // Unix datagram socket path for macOS VMs (tailmac)
+	binDir        string // directory for compiled binaries
+	tailmacDir    string // path to tailmac binaries (Host.app, etc.)
 
 	// gokrazy-specific paths
 	gokrazyBase   string // path to gokrazy base qcow2 image
@@ -100,6 +109,7 @@ type Node struct {
 	vnetNode        *vnet.Node // primary vnet node (set during Start)
 	agent           *vnet.NodeAgentClient
 	joinTailnet     bool
+	noAgent         bool // true to skip TTA agent setup (e.g. macOS VMs without TTA)
 	advertiseRoutes string
 	webServerPort   int
 	sshPort         int // host port for SSH debug access (cloud VMs only)
@@ -128,6 +138,10 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 		case nodeOptNoTailscale:
 			n.joinTailnet = false
 			vnetOpts = append(vnetOpts, vnet.DontJoinTailnet)
+		case nodeOptNoAgent:
+			n.noAgent = true
+			n.joinTailnet = false
+			vnetOpts = append(vnetOpts, vnet.DontJoinTailnet)
 		case nodeOptAdvertiseRoutes:
 			n.advertiseRoutes = string(o)
 		case nodeOptWebServer:
@@ -153,6 +167,7 @@ func (n *Node) LanIP(net *vnet.Network) netip.Addr {
 
 type nodeOptOS OSImage
 type nodeOptNoTailscale struct{}
+type nodeOptNoAgent struct{}
 type nodeOptAdvertiseRoutes string
 type nodeOptWebServer int
 
@@ -161,6 +176,10 @@ func OS(img OSImage) nodeOptOS { return nodeOptOS(img) }
 
 // DontJoinTailnet returns a NodeOption that prevents the node from running tailscale up.
 func DontJoinTailnet() nodeOptNoTailscale { return nodeOptNoTailscale{} }
+
+// NoAgent returns a NodeOption that skips the TTA agent setup and wait for a node.
+// Use this for VMs that don't run TTA (e.g. macOS VMs that only need to respond to ICMP).
+func NoAgent() nodeOptNoAgent { return nodeOptNoAgent{} }
 
 // AdvertiseRoutes returns a NodeOption that configures the node to advertise
 // the given routes (comma-separated CIDRs) when joining the tailnet.
@@ -184,12 +203,30 @@ func (e *Env) Start() {
 		t.Fatal(err)
 	}
 
+	// Check if any macOS nodes are present; if so, verify prerequisites.
+	hasMacOS := false
+	for _, n := range e.nodes {
+		if n.os.IsMacOS {
+			hasMacOS = true
+			break
+		}
+	}
+	if hasMacOS {
+		if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+			t.Skip("macOS VM tests require macOS arm64 host")
+		}
+		if *macosVMID == "" {
+			t.Skip("macOS VM tests require --macos-vm-id flag")
+		}
+	}
+
 	// Determine which GOOS/GOARCH pairs need compiled binaries (non-gokrazy
-	// images). Gokrazy has binaries built-in, so doesn't need compilation.
+	// images that aren't macOS). Gokrazy has binaries built-in. macOS VMs
+	// don't use compiled binaries (no TTA inside the VM for now).
 	type platform struct{ goos, goarch string }
 	needPlatform := set.Set[platform]{}
 	for _, n := range e.nodes {
-		if !n.os.IsGokrazy {
+		if !n.os.IsGokrazy && !n.os.IsMacOS {
 			needPlatform.Add(platform{n.os.GOOS(), n.os.GOARCH()})
 		}
 	}
@@ -208,7 +245,11 @@ func (e *Env) Start() {
 			continue
 		}
 		didOS.Add(n.os.Name)
-		if n.os.IsGokrazy {
+		if n.os.IsMacOS {
+			eg.Go(func() error {
+				return e.ensureTailMac()
+			})
+		} else if n.os.IsGokrazy {
 			eg.Go(func() error {
 				return e.ensureGokrazy(egCtx)
 			})
@@ -247,33 +288,73 @@ func (e *Env) Start() {
 	// not via the cloud-init HTTP VIP, because network-config must be available
 	// during init-local before systemd-networkd-wait-online blocks.
 
-	// Start Unix socket listener.
-	e.sockAddr = filepath.Join(e.tempDir, "vnet.sock")
-	srv, err := net.Listen("unix", e.sockAddr)
-	if err != nil {
-		t.Fatalf("listen unix: %v", err)
-	}
-	t.Cleanup(func() { srv.Close() })
-
-	go func() {
-		for {
-			c, err := srv.Accept()
-			if err != nil {
-				return
-			}
-			go e.server.ServeUnixConn(c.(*net.UnixConn), vnet.ProtocolQEMU)
-		}
-	}()
-
-	// Launch QEMU processes.
+	// Start Unix stream socket listener for QEMU VMs.
+	// Use /tmp for the socket path because the test temp directory path can
+	// exceed the 104-byte sun_path limit for Unix sockets on macOS.
+	hasQEMU := false
 	for _, n := range e.nodes {
-		if err := e.startQEMU(n); err != nil {
-			t.Fatalf("startQEMU(%s): %v", n.name, err)
+		if !n.os.IsMacOS {
+			hasQEMU = true
+			break
+		}
+	}
+	if hasQEMU {
+		e.sockAddr = fmt.Sprintf("/tmp/vmtest-qemu-%d.sock", os.Getpid())
+		t.Cleanup(func() { os.Remove(e.sockAddr) })
+		srv, err := net.Listen("unix", e.sockAddr)
+		if err != nil {
+			t.Fatalf("listen unix: %v", err)
+		}
+		t.Cleanup(func() { srv.Close() })
+
+		go func() {
+			for {
+				c, err := srv.Accept()
+				if err != nil {
+					return
+				}
+				go e.server.ServeUnixConn(c.(*net.UnixConn), vnet.ProtocolQEMU)
+			}
+		}()
+	}
+
+	// Start Unix datagram socket listener for macOS VMs (tailmac).
+	// Use /tmp for the socket path because the test temp directory path can
+	// exceed the 104-byte sun_path limit for Unix sockets on macOS.
+	if hasMacOS {
+		e.dgramSockAddr = fmt.Sprintf("/tmp/vmtest-dgram-%d.sock", os.Getpid())
+		t.Cleanup(func() { os.Remove(e.dgramSockAddr) })
+		dgramAddr, err := net.ResolveUnixAddr("unixgram", e.dgramSockAddr)
+		if err != nil {
+			t.Fatalf("resolve dgram addr: %v", err)
+		}
+		uc, err := net.ListenUnixgram("unixgram", dgramAddr)
+		if err != nil {
+			t.Fatalf("listen unixgram: %v", err)
+		}
+		t.Cleanup(func() { uc.Close() })
+		go e.server.ServeUnixConn(uc, vnet.ProtocolUnixDGRAM)
+	}
+
+	// Launch VM processes.
+	for _, n := range e.nodes {
+		if n.os.IsMacOS {
+			if err := e.startTailMacVM(n); err != nil {
+				t.Fatalf("startTailMacVM(%s): %v", n.name, err)
+			}
+		} else {
+			if err := e.startQEMU(n); err != nil {
+				t.Fatalf("startQEMU(%s): %v", n.name, err)
+			}
 		}
 	}
 
 	// Set up agent clients and wait for all agents to connect.
+	// Skip nodes with noAgent (e.g. macOS VMs without TTA).
 	for _, n := range e.nodes {
+		if n.noAgent {
+			continue
+		}
 		n.agent = e.server.NodeAgentClient(n.vnetNode)
 		n.vnetNode.SetClient(n.agent)
 	}
@@ -281,6 +362,9 @@ func (e *Env) Start() {
 	// Wait for agents, then bring up tailscale.
 	var agentEg errgroup.Group
 	for _, n := range e.nodes {
+		if n.noAgent {
+			continue
+		}
 		agentEg.Go(func() error {
 			t.Logf("[%s] waiting for agent...", n.name)
 			st, err := n.agent.Status(ctx)
@@ -575,6 +659,41 @@ func (e *Env) HTTPGet(from *Node, targetURL string) string {
 	return ""
 }
 
+// LANPing pings a LAN IP from the given node using TTA's /ping endpoint.
+// It retries until the ping succeeds or the timeout expires, which is useful
+// when waiting for the target VM to boot and acquire a DHCP lease.
+func (e *Env) LANPing(from *Node, targetIP netip.Addr) {
+	if from.agent == nil {
+		e.t.Fatalf("LANPing: node %s has no agent (NoAgent set?)", from.name)
+	}
+	e.t.Logf("LANPing: %s -> %s", from.name, targetIP)
+	for attempt := range 90 {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		reqURL := fmt.Sprintf("http://unused/ping?host=%s", targetIP)
+		req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+		if err != nil {
+			cancel()
+			e.t.Fatalf("LANPing: %v", err)
+		}
+		res, err := from.agent.HTTPClient.Do(req)
+		cancel()
+		if err != nil {
+			e.logVerbosef("LANPing attempt %d: %v", attempt+1, err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode == 200 {
+			e.t.Logf("LANPing: %s -> %s succeeded on attempt %d", from.name, targetIP, attempt+1)
+			return
+		}
+		e.logVerbosef("LANPing attempt %d: status %d, body: %s", attempt+1, res.StatusCode, string(body))
+		time.Sleep(2 * time.Second)
+	}
+	e.t.Fatalf("LANPing: %s -> %s timed out after all attempts", from.name, targetIP)
+}
+
 // ensureGokrazy finds or builds the gokrazy base image and kernel.
 func (e *Env) ensureGokrazy(ctx context.Context) error {
 	if e.gokrazyBase != "" {
@@ -586,22 +705,32 @@ func (e *Env) ensureGokrazy(ctx context.Context) error {
 		return err
 	}
 
-	e.gokrazyBase = filepath.Join(modRoot, "gokrazy/natlabapp.qcow2")
+	// On macOS arm64, use the arm64 gokrazy image.
+	app := "natlabapp"
+	makeTarget := "natlab"
+	kernelMod := "github.com/tailscale/gokrazy-kernel"
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		app = "natlabapp.arm64"
+		makeTarget = "natlab-arm64"
+		kernelMod = "github.com/gokrazy/kernel.arm64"
+	}
+
+	e.gokrazyBase = filepath.Join(modRoot, "gokrazy/"+app+".qcow2")
 	if _, err := os.Stat(e.gokrazyBase); err != nil {
 		if !os.IsNotExist(err) {
 			return err
 		}
-		e.t.Logf("building gokrazy natlab image...")
-		cmd := exec.CommandContext(ctx, "make", "natlab")
+		e.t.Logf("building gokrazy %s image...", app)
+		cmd := exec.CommandContext(ctx, "make", makeTarget)
 		cmd.Dir = filepath.Join(modRoot, "gokrazy")
 		cmd.Stderr = os.Stderr
 		cmd.Stdout = os.Stdout
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("make natlab: %w", err)
+			return fmt.Errorf("make %s: %w", makeTarget, err)
 		}
 	}
 
-	kernel, err := findKernelPath(filepath.Join(modRoot, "go.mod"))
+	kernel, err := findKernelPath(filepath.Join(modRoot, "go.mod"), kernelMod)
 	if err != nil {
 		return fmt.Errorf("finding kernel: %w", err)
 	}
@@ -661,8 +790,10 @@ func findModRoot() (string, error) {
 }
 
 // findKernelPath finds the gokrazy kernel vmlinuz path from go.mod.
-func findKernelPath(goMod string) (string, error) {
-	// Import the same logic as nat_test.go.
+// kernelMod is the Go module path for the kernel (e.g.
+// "github.com/tailscale/gokrazy-kernel" for x86_64 or
+// "github.com/gokrazy/kernel.arm64" for arm64).
+func findKernelPath(goMod string, kernelMod string) (string, error) {
 	b, err := os.ReadFile(goMod)
 	if err != nil {
 		return "", err
@@ -674,15 +805,15 @@ func findKernelPath(goMod string) (string, error) {
 	}
 	goModCache := strings.TrimSpace(string(goModCacheB))
 
-	// Parse go.mod to find gokrazy-kernel version.
+	// Parse go.mod to find the kernel module version.
 	for _, line := range strings.Split(string(b), "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "github.com/tailscale/gokrazy-kernel") {
+		if strings.HasPrefix(line, kernelMod) {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
 				return filepath.Join(goModCache, parts[0]+"@"+parts[1], "vmlinuz"), nil
 			}
 		}
 	}
-	return "", fmt.Errorf("gokrazy-kernel not found in %s", goMod)
+	return "", fmt.Errorf("kernel module %s not found in %s", kernelMod, goMod)
 }
