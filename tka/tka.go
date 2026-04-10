@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"sort"
 
@@ -557,8 +556,6 @@ func Bootstrap(storage Chonk, bootstrap AUM) (*Authority, error) {
 	// Everything looks good, write it to storage.
 	if err := storage.CommitVerifiedAUMs([]AUM{bootstrap}); err != nil {
 		return nil, fmt.Errorf("commit: %v", err)
-	} else {
-		log.Printf("tka.Bootstrap: successfully committed bootstrap AUM (%s)", bootstrap.Hash())
 	}
 	if err := storage.SetLastActiveAncestor(bootstrap.Hash()); err != nil {
 		return nil, fmt.Errorf("set ancestor: %v", err)
@@ -590,7 +587,6 @@ func (a *Authority) InformIdempotent(storage Chonk, updates []AUM) (Authority, e
 	}
 	stateAt := make(map[AUMHash]State, len(updates)+1)
 	toCommit := make([]AUM, 0, len(updates))
-	toCommitHashes := make([]AUMHash, 0, len(updates))
 	prevHash := a.Head()
 
 	// The state at HEAD is the current state of the authority. It's likely
@@ -640,13 +636,10 @@ func (a *Authority) InformIdempotent(storage Chonk, updates []AUM) (Authority, e
 		}
 		prevHash = hash
 		toCommit = append(toCommit, update)
-		toCommitHashes = append(toCommitHashes, update.Hash())
 	}
 
 	if err := storage.CommitVerifiedAUMs(toCommit); err != nil {
 		return Authority{}, fmt.Errorf("commit: %v", err)
-	} else {
-		log.Printf("tka.CommitVerifiedAUMs: successfully committed %d AUMs: %v", len(toCommit), toCommitHashes)
 	}
 
 	if isHeadChain {
