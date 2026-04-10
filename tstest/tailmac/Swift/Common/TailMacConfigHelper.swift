@@ -83,7 +83,7 @@ struct TailMacConfigHelper {
         // Outbound network packets
         let serverSocket = config.serverSocket
 
-        // Inbound network packets
+        // Inbound network packets — bind a client socket so the server can reply.
         let clientSockId = config.vmID
         let clientSocket = "/tmp/qemu-dgram-\(clientSockId).sock"
 
@@ -118,7 +118,7 @@ struct TailMacConfigHelper {
                                         socklen_t(MemoryLayout<sockaddr_un>.size))
 
         if connectRes == -1 {
-            print("Error binding virtual network server socket - \(String(cString: strerror(errno)))")
+            print("Error connecting to server socket \(serverSocket) - \(String(cString: strerror(errno)))")
             return networkDevice
         }
 
@@ -126,7 +126,6 @@ struct TailMacConfigHelper {
         print("Client bound to \(clientSocket)")
         print("Connected to server at \(serverSocket)")
         print("Socket fd is \(socket)")
-
 
         let handle = FileHandle(fileDescriptor: socket)
         let device = VZFileHandleNetworkDeviceAttachment(fileHandle: handle)
