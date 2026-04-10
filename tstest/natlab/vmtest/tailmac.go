@@ -13,6 +13,15 @@ import (
 	"time"
 )
 
+// macosVMDir returns the base directory for macOS VM images.
+func macosVMDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".cache", "tailscale", "vmtest", "macos"), nil
+}
+
 // ensureTailMac locates the pre-built tailmac Host.app binary.
 // Users must build it first with "make all" in tstest/tailmac/.
 func (e *Env) ensureTailMac() error {
@@ -28,37 +37,27 @@ func (e *Env) ensureTailMac() error {
 	return nil
 }
 
-// tailmacConfig is the JSON config format for tailmac VMs.
-// It uses the field names from the llmacstation Config type (vmName, mac, etc.)
-// since the base VM images are created by llmacstation.
-type tailmacConfig struct {
-	VMName     string `json:"vmName"`
-	MemorySize uint64 `json:"memorySize"`
-	DiskSize   int64  `json:"diskSize"`
-	Mac        string `json:"mac"`
-	Hostname   string `json:"hostname"`
-}
-
 // startTailMacVM clones the base macOS VM, configures it for this test's
 // vnet, and launches it headlessly via the tailmac Host.app.
 //
-// The base VM must have been created by llmacstation with a single-NIC config.
-// The headless Host.app matches this by using only the socket-based NIC,
-// connecting it directly to vnet's dgram socket.
+// The base VM is created by "go run ./tstest/build-macos-base-vm". The
+// headless Host.app uses a single socket-based NIC (matching the base VM's
+// config) connected directly to vnet's dgram socket.
 func (e *Env) startTailMacVM(n *Node) error {
 	baseID := *macosVMID
 	testID := fmt.Sprintf("vmtest-%s-%d", n.name, os.Getpid())
 
-	// Clone the base VM (APFS CoW makes this nearly instant).
-	home, err := os.UserHomeDir()
+	vmBase, err := macosVMDir()
 	if err != nil {
-		return fmt.Errorf("getting home dir: %w", err)
+		return err
 	}
-	baseDir := filepath.Join(home, "VM.bundle", baseID)
+	baseDir := filepath.Join(vmBase, baseID)
 	if _, err := os.Stat(baseDir); err != nil {
-		return fmt.Errorf("base macOS VM %q not found at %s; create with 'llmacstation create --name %s'", baseID, baseDir, baseID)
+		return fmt.Errorf("base macOS VM %q not found at %s; create with: go run ./tstest/build-macos-base-vm", baseID, baseDir)
 	}
-	cloneDir := filepath.Join(home, "VM.bundle", testID)
+
+	// Clone the base VM (APFS CoW via cp -c makes this nearly instant).
+	cloneDir := filepath.Join(vmBase, testID)
 	e.t.Logf("[%s] cloning macOS VM %s -> %s", n.name, baseID, testID)
 	if out, err := exec.Command("cp", "-c", "-r", baseDir, cloneDir).CombinedOutput(); err != nil {
 		if out2, err2 := exec.Command("cp", "-r", baseDir, cloneDir).CombinedOutput(); err2 != nil {
@@ -73,19 +72,15 @@ func (e *Env) startTailMacVM(n *Node) error {
 	// The serverSocket field tells the Swift code where to connect the VM's NIC.
 	mac := n.vnetNode.NICMac(0)
 	cfg := struct {
-		VMName       string `json:"vmName"`
-		MemorySize   uint64 `json:"memorySize"`
-		DiskSize     int64  `json:"diskSize"`
-		Mac          string `json:"mac"`
-		Hostname     string `json:"hostname"`
+		VMid         string `json:"vmID"`
 		ServerSocket string `json:"serverSocket"`
+		MemorySize   uint64 `json:"memorySize"`
+		Mac          string `json:"mac"`
 	}{
-		VMName:       testID,
-		MemorySize:   8 * 1024 * 1024 * 1024, // 8GB to match base VM
-		DiskSize:     72 * 1024 * 1024 * 1024,
-		Mac:          mac.String(),
-		Hostname:     testID,
+		VMid:         testID,
 		ServerSocket: e.dgramSockAddr,
+		MemorySize:   8 * 1024 * 1024 * 1024, // 8GB, matching base VM
+		Mac:          mac.String(),
 	}
 	cfgData, _ := json.MarshalIndent(cfg, "", "  ")
 	cfgPath := filepath.Join(cloneDir, "config.json")
@@ -95,7 +90,7 @@ func (e *Env) startTailMacVM(n *Node) error {
 	e.t.Logf("[%s] macOS VM config: mac=%s, socket=%s", n.name, mac, e.dgramSockAddr)
 
 	// Launch Host.app in headless mode. Headless mode uses a single NIC
-	// (matching the llmacstation VM config) connected to the dgram socket.
+	// connected to the vnet dgram socket.
 	hostBin := filepath.Join(e.tailmacDir, "Host.app", "Contents", "MacOS", "Host")
 	args := []string{"run", "--id", testID, "--headless"}
 

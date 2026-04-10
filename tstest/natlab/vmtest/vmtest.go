@@ -47,7 +47,7 @@ import (
 var (
 	runVMTests     = flag.Bool("run-vm-tests", false, "run tests that require VMs with KVM")
 	verboseVMDebug = flag.Bool("verbose-vm-debug", false, "enable verbose debug logging for VM tests")
-	macosVMID      = flag.String("macos-vm-id", "llmacstation", "base macOS VM identifier in ~/VM.bundle/ for macOS VM tests")
+	macosVMID      = flag.String("macos-vm-id", "macos-base", "base macOS VM name under ~/.cache/tailscale/vmtest/macos/")
 )
 
 // Env is a test environment that manages virtual networks and QEMU VMs.
@@ -219,7 +219,7 @@ func (e *Env) Start() {
 		if err != nil {
 			t.Fatalf("getting home dir: %v", err)
 		}
-		vmDir := filepath.Join(home, "VM.bundle", *macosVMID)
+		vmDir := filepath.Join(home, ".cache", "tailscale", "vmtest", "macos", *macosVMID)
 		if _, err := os.Stat(vmDir); err != nil {
 			t.Skipf("macOS base VM %q not found at %s; create it with:\n\tgo run ./tstest/build-macos-base-vm",
 				*macosVMID, vmDir)

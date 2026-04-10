@@ -92,9 +92,9 @@ class VMController: NSObject, VZVirtualMachineDelegate {
         virtualMachineConfiguration.storageDevices = [helper.createBlockDeviceConfiguration()]
         if headless {
             // In headless mode, use only the socket-based NIC. This matches
-            // the single-NIC configuration used by llmacstation when creating
-            // and saving VM state. Using a different NIC count would make
-            // saved state restoration fail silently.
+            // the single-NIC configuration used when creating the base VM.
+            // Using a different NIC count would make saved state restoration
+            // fail silently.
             virtualMachineConfiguration.networkDevices = [helper.createSocketNetworkDeviceConfiguration()]
         } else {
             virtualMachineConfiguration.networkDevices = [helper.createNetworkDeviceConfiguration(), helper.createSocketNetworkDeviceConfiguration()]

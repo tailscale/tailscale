@@ -10,8 +10,8 @@
 //
 //	go run ./tstest/build-macos-base-vm
 //
-// The VM is created at ~/VM.bundle/llmacstation/ and can be used by vmtest
-// tests that include macOS nodes. The IPSW is cached at ~/VM.bundle/RestoreImage.ipsw.
+// The VM is created at ~/.cache/tailscale/vmtest/macos/<name>/ and can be used
+// by vmtest tests that include macOS nodes. The IPSW is cached alongside it.
 //
 // This only runs on macOS arm64 (Apple Silicon) and requires the Virtualization
 // framework entitlement, so the helper Swift binary is compiled and ad-hoc signed
@@ -31,7 +31,7 @@ import (
 )
 
 var (
-	vmName  = flag.String("name", "llmacstation", "VM name (directory under ~/VM.bundle/)")
+	vmName  = flag.String("name", "macos-base", "VM name (directory under ~/.cache/tailscale/vmtest/macos/)")
 	rebuild = flag.Bool("rebuild", false, "delete existing VM and recreate it")
 )
 
@@ -45,7 +45,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	bundleDir := filepath.Join(home, "VM.bundle")
+	bundleDir := filepath.Join(home, ".cache", "tailscale", "vmtest", "macos")
 	vmDir := filepath.Join(bundleDir, *vmName)
 	ipswPath := filepath.Join(bundleDir, "RestoreImage.ipsw")
 
