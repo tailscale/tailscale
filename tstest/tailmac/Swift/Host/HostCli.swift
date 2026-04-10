@@ -20,12 +20,31 @@ extension HostCli {
     struct Run: ParsableCommand {
         @Option var id: String
         @Option var share: String?
+        @Flag(help: "Run without GUI (for automated testing)") var headless: Bool = false
 
         mutating func run() {
             config = Config(id)
             config.sharedDir = share
             print("Running vm with identifier \(id) and sharedDir \(share ?? "<none>")")
-            _ = NSApplicationMain(CommandLine.argc, CommandLine.unsafeArgv)
+
+            if headless {
+                DispatchQueue.main.async {
+                    let controller = VMController()
+                    controller.createVirtualMachine(headless: true)
+
+                    let fileManager = FileManager.default
+                    if fileManager.fileExists(atPath: config.saveFileURL.path) {
+                        print("Restoring virtual machine state from \(config.saveFileURL)")
+                        controller.restoreVirtualMachine()
+                    } else {
+                        print("Starting virtual machine")
+                        controller.startVirtualMachine()
+                    }
+                }
+                RunLoop.main.run()
+            } else {
+                _ = NSApplicationMain(CommandLine.argc, CommandLine.unsafeArgv)
+            }
         }
     }
 }

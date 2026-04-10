@@ -81,7 +81,7 @@ class VMController: NSObject, VZVirtualMachineDelegate {
         return macPlatform
     }
 
-    func createVirtualMachine() {
+    func createVirtualMachine(headless: Bool = false) {
         let virtualMachineConfiguration = VZVirtualMachineConfiguration()
 
         virtualMachineConfiguration.platform = createMacPlaform()
@@ -90,7 +90,15 @@ class VMController: NSObject, VZVirtualMachineDelegate {
         virtualMachineConfiguration.memorySize = helper.computeMemorySize()
         virtualMachineConfiguration.graphicsDevices = [helper.createGraphicsDeviceConfiguration()]
         virtualMachineConfiguration.storageDevices = [helper.createBlockDeviceConfiguration()]
-        virtualMachineConfiguration.networkDevices = [helper.createNetworkDeviceConfiguration(), helper.createSocketNetworkDeviceConfiguration()]
+        if headless {
+            // In headless mode, use only the socket-based NIC. This matches
+            // the single-NIC configuration used when creating the base VM.
+            // Using a different NIC count would make saved state restoration
+            // fail silently.
+            virtualMachineConfiguration.networkDevices = [helper.createSocketNetworkDeviceConfiguration()]
+        } else {
+            virtualMachineConfiguration.networkDevices = [helper.createNetworkDeviceConfiguration(), helper.createSocketNetworkDeviceConfiguration()]
+        }
         virtualMachineConfiguration.pointingDevices = [helper.createPointingDeviceConfiguration()]
         virtualMachineConfiguration.keyboards = [helper.createKeyboardConfiguration()]
         virtualMachineConfiguration.socketDevices = [helper.createSocketDeviceConfiguration()]
