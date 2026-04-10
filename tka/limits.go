@@ -3,6 +3,10 @@
 
 package tka
 
+import (
+	"time"
+)
+
 const (
 	// Upper bound on checkpoint elements, chosen arbitrarily. Intended
 	// to cap the size of large AUMs.
@@ -21,4 +25,11 @@ const (
 
 	// Limit on scanning AUM trees, chosen arbitrarily.
 	maxScanIterations = 2000
+)
+
+var (
+	CompactionDefaults = CompactionOptions{
+		MinChain: 24,                  // Keep at minimum 24 AUMs since head.
+		MinAge:   14 * 24 * time.Hour, // Keep 2 weeks of AUMs.
+	}
 )

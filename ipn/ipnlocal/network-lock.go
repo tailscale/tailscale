@@ -45,11 +45,6 @@ import (
 var (
 	errMissingNetmap        = errors.New("missing netmap: verify that you are logged in")
 	errNetworkLockNotActive = errors.New("tailnet-lock is not active")
-
-	tkaCompactionDefaults = tka.CompactionOptions{
-		MinChain: 24,                  // Keep at minimum 24 AUMs since head.
-		MinAge:   14 * 24 * time.Hour, // Keep 2 weeks of AUMs.
-	}
 )
 
 type tkaState struct {
@@ -92,7 +87,7 @@ func (b *LocalBackend) initTKALocked() error {
 			return fmt.Errorf("initializing tka: %v", err)
 		}
 
-		if err := authority.Compact(storage, tkaCompactionDefaults); err != nil {
+		if err := authority.Compact(storage, tka.CompactionDefaults); err != nil {
 			b.logf("tka compaction failed: %v", err)
 		}
 
@@ -360,7 +355,7 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 		//
 		// We run this on every sync so that clients compact consistently. In many
 		// cases this will be a no-op.
-		if err := b.tka.authority.Compact(b.tka.storage, tkaCompactionDefaults); err != nil {
+		if err := b.tka.authority.Compact(b.tka.storage, tka.CompactionDefaults); err != nil {
 			return fmt.Errorf("tka compact: %w", err)
 		}
 	}
