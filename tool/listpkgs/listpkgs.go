@@ -10,9 +10,12 @@ import (
 	"flag"
 	"fmt"
 	"go/build/constraint"
+	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 
@@ -27,10 +30,16 @@ var (
 	withoutTagsAnyStr = flag.String("without-tags-any", "", "if non-empty, a comma-separated list of build constraints to exclude (a package will be omitted if it contains any of these build tags)")
 	shard             = flag.String("shard", "", "if non-empty, a string of the form 'N/M' to only print packages in shard N of M (e.g. '1/3', '2/3', '3/3/' for different thirds of the list)")
 	affectedByTag     = flag.String("affected-by-tag", "", "if non-empty, only list packages whose test binary would be affected by the presence or absence of this build tag")
+	hasRootTests      = flag.Bool("has-root-tests", false, "list packages (as ./relative/path) containing _test.go files that call tstest.RequireRoot")
 )
 
 func main() {
 	flag.Parse()
+
+	if *hasRootTests {
+		printRootTestPkgs()
+		return
+	}
 
 	patterns := flag.Args()
 	if len(patterns) == 0 {
@@ -280,4 +289,65 @@ func fileMentionsTag(filename, tag string) (bool, error) {
 		return false, err
 	}
 	return tags[tag], nil
+}
+
+// printRootTestPkgs walks the current directory tree looking for _test.go
+// files that contain "tstest.RequireRoot" and prints the unique package
+// directories as ./relative/path.
+func printRootTestPkgs() {
+	root, err := os.Getwd()
+	if err != nil {
+		log.Fatal(err)
+	}
+	seen := map[string]bool{}
+	var dirs []string
+	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		name := d.Name()
+		if d.IsDir() {
+			// Skip hidden dirs and common non-Go dirs.
+			if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(name, "_test.go") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+		dir := filepath.Dir(rel)
+		if seen[dir] {
+			return nil // already found a match in this dir
+		}
+		if fileContains(path, "tstest.RequireRoot") {
+			seen[dir] = true
+			dirs = append(dirs, dir)
+		}
+		return nil
+	})
+	sort.Strings(dirs)
+	for _, d := range dirs {
+		fmt.Println("./" + filepath.ToSlash(d))
+	}
+}
+
+// fileContains reports whether the file at path contains the given substring.
+func fileContains(path, substr string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		if strings.Contains(s.Text(), substr) {
+			return true
+		}
+	}
+	return false
 }

@@ -361,7 +361,7 @@ jobs:
       run: chown -R $(id -u):$(id -g) $PWD
     - name: privileged tests
       working-directory: src
-      run: ./tool/go test ./util/linuxfw ./derp/xdp
+      run: ./tool/go test $(./tool/go run ./tool/listpkgs --has-root-tests)
 
   vm:
     needs: gomod-cache
