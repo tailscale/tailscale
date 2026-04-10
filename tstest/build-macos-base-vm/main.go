@@ -31,7 +31,8 @@ import (
 )
 
 var (
-	vmName = flag.String("name", "llmacstation", "VM name (directory under ~/VM.bundle/)")
+	vmName  = flag.String("name", "llmacstation", "VM name (directory under ~/VM.bundle/)")
+	rebuild = flag.Bool("rebuild", false, "delete existing VM and recreate it")
 )
 
 func main() {
@@ -49,7 +50,14 @@ func main() {
 	ipswPath := filepath.Join(bundleDir, "RestoreImage.ipsw")
 
 	if _, err := os.Stat(filepath.Join(vmDir, "Disk.img")); err == nil {
-		log.Fatalf("VM %q already exists at %s. Delete it first or choose a different --name.", *vmName, vmDir)
+		if !*rebuild {
+			log.Printf("VM %q already exists at %s; nothing to do. Use --rebuild to recreate.", *vmName, vmDir)
+			return
+		}
+		log.Printf("Removing existing VM %q...", *vmName)
+		if err := os.RemoveAll(vmDir); err != nil {
+			log.Fatalf("Removing %s: %v", vmDir, err)
+		}
 	}
 
 	os.MkdirAll(bundleDir, 0755)
@@ -185,23 +193,23 @@ func applyPostInstallFixups(vmDir string) error {
 		exec.Command("hdiutil", "detach", diskDev, "-force").Run()
 	}()
 
-	// Wait for APFS volumes to synthesize.
-	time.Sleep(2 * time.Second)
-
-	// Find the APFS Data volume. It's on a synthesized disk derived from
-	// the physical APFS container.
+	// Wait for the APFS Data volume to appear. After hdiutil attach,
+	// the kernel synthesizes APFS volumes asynchronously.
 	var dataVolDev string
-	allDisks, _ := exec.Command("diskutil", "list").CombinedOutput()
-	for _, line := range strings.Split(string(allDisks), "\n") {
-		if strings.Contains(line, "APFS Volume") && strings.Contains(line, "Data") {
-			fields := strings.Fields(line)
-			if len(fields) > 0 {
-				dataVolDev = fields[len(fields)-1]
+	if err := waitFor(10*time.Second, func() error {
+		out, _ := exec.Command("diskutil", "list").CombinedOutput()
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.Contains(line, "APFS Volume") && strings.Contains(line, "Data") {
+				fields := strings.Fields(line)
+				if len(fields) > 0 {
+					dataVolDev = fields[len(fields)-1]
+					return nil
+				}
 			}
 		}
-	}
-	if dataVolDev == "" {
-		return fmt.Errorf("no APFS Data volume found:\n%s", allDisks)
+		return fmt.Errorf("APFS Data volume not yet available")
+	}); err != nil {
+		return fmt.Errorf("waiting for APFS Data volume: %w", err)
 	}
 
 	// Mount the Data volume via diskutil (handles APFS permissions correctly).
@@ -218,13 +226,31 @@ func applyPostInstallFixups(vmDir string) error {
 	defer exec.Command("diskutil", "unmount", mountPoint).Run()
 
 	// Create .AppleSetupDone to skip the Setup Assistant.
-	setupDone := filepath.Join(mountPoint, "private", "var", "db", ".AppleSetupDone")
+	dbDir := filepath.Join(mountPoint, "private", "var", "db")
+	if err := os.MkdirAll(dbDir, 0755); err != nil {
+		return fmt.Errorf("creating var/db: %v", err)
+	}
+	setupDone := filepath.Join(dbDir, ".AppleSetupDone")
 	if err := os.WriteFile(setupDone, nil, 0644); err != nil {
 		return fmt.Errorf("creating .AppleSetupDone: %v", err)
 	}
 	log.Printf("Created %s", setupDone)
 
 	return nil
+}
+
+func waitFor(timeout time.Duration, try func() error) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		err := try()
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 const entitlementsPlist = `<?xml version="1.0" encoding="UTF-8"?>
