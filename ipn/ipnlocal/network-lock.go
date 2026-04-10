@@ -27,6 +27,7 @@ import (
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
@@ -38,6 +39,7 @@ import (
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
+	"tailscale.com/util/testenv"
 )
 
 // TODO(tom): RPC retry/backoff was broken and has been removed. Fix?
@@ -46,6 +48,13 @@ var (
 	errMissingNetmap        = errors.New("missing netmap: verify that you are logged in")
 	errNetworkLockNotActive = errors.New("tailnet-lock is not active")
 )
+
+// IsNetworkLockNotActive reports whether the given error indicates that
+// network-lock is not active. Stop-gap for feature/tailnetlock to check this
+// until all of this is code is moved to the feature.
+func IsNetworkLockNotActive(err error) bool {
+	return errors.Is(err, errNetworkLockNotActive)
+}
 
 type tkaState struct {
 	profile   ipn.ProfileID
@@ -698,6 +707,7 @@ func (b *LocalBackend) NetworkLockAllowed() bool {
 
 // Only use is in tests.
 func (b *LocalBackend) NetworkLockVerifySignatureForTest(nks tkatype.MarshaledSignature, nodeKey key.NodePublic) error {
+	testenv.AssertInTest()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
@@ -708,6 +718,7 @@ func (b *LocalBackend) NetworkLockVerifySignatureForTest(nks tkatype.MarshaledSi
 
 // Only use is in tests.
 func (b *LocalBackend) NetworkLockKeyTrustedForTest(keyID tkatype.KeyID) bool {
+	testenv.AssertInTest()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
@@ -1476,4 +1487,25 @@ func (b *LocalBackend) tkaReadAffectedSigs(ourNodeKey key.NodePublic, key tkatyp
 	}
 
 	return a, nil
+}
+
+// LocalBackendWithTKAForTest creates a LocalBackend with an initialized TKA
+// state for testing tailnet lock from the feature/tailnetlock package. Will be
+// removed when tailnet lock is fully moved to its own package. Do not use this
+// from any other package.
+func LocalBackendWithTKAForTest(chonk tka.CompactableChonk, tka *tka.Authority) *LocalBackend {
+	testenv.AssertInTest()
+
+	var state *tkaState
+	if tka != nil {
+		state = &tkaState{
+			authority: tka,
+			storage:   chonk,
+		}
+	}
+	return &LocalBackend{
+		store: &mem.Store{},
+		logf:  logger.Discard,
+		tka:   state,
+	}
 }

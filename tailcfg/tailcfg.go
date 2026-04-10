@@ -184,7 +184,8 @@ type CapabilityVersion int
 //   - 135: 2026-03-30: Client understands [NodeAttrCacheNetworkMaps]
 //   - 136: 2026-04-09: Client understands [NodeAttrDisableLinuxCGNATDropRule]
 //   - 137: 2026-04-15: Client handles 429 responses to /machine/register.
-const CurrentCapabilityVersion CapabilityVersion = 137
+//   - 138: 2026-03-31: can handle C2N /debug/tka.
+const CurrentCapabilityVersion CapabilityVersion = 138
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
