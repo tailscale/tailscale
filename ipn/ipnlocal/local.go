@@ -7444,7 +7444,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	// not being updated (because of the envknob) and could be read back when
 	// the node starts up.
 	if nm != nil {
-		if b.currentNode().SelfHasCap(nodecap.CacheNetworkMaps) && envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
+		if (b.currentNode().SelfHasCap(nodecap.CacheNetworkMaps) || envknob.Bool("TS_FORCE_CACHE_NETMAP")) && envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
 			if err := b.writeNetmapToDiskLockedWithPeers(nm); err != nil {
 				b.logf("write netmap to cache: %v", err)
 			}
