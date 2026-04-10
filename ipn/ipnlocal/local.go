@@ -3233,9 +3233,6 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		if mask&ipn.NotifyInitialDriveShares != 0 && b.DriveSharingEnabled() {
 			ini.DriveShares = b.pm.prefs.DriveShares()
 		}
-		if mask&ipn.NotifyInitialHealthState != 0 {
-			ini.Health = b.HealthTracker().CurrentState()
-		}
 		if mask&ipn.NotifyInitialSuggestedExitNode != 0 {
 			if en, err := b.suggestExitNodeLocked(); err == nil {
 				ini.SuggestedExitNode = &en.ID
@@ -3260,6 +3257,10 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	}
 	mak.Set(&b.notifyWatchers, sessionID, session)
 	b.mu.Unlock()
+
+	if mask&ipn.NotifyInitialHealthState != 0 && ini != nil {
+		ini.Health = b.HealthTracker().CurrentState()
+	}
 
 	metricCurrentWatchIPNBus.Add(1)
 	defer metricCurrentWatchIPNBus.Add(-1)
