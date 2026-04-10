@@ -45,6 +45,7 @@ require (
 	github.com/godbus/dbus/v5 v5.1.1-0.20230522191255-76236955d466
 	github.com/gokrazy/breakglass v0.0.0-20251229072214-9dbc0478d486
 	github.com/gokrazy/gokrazy v0.0.0-20260123094004-294c93fa173c
+	github.com/gokrazy/kernel.arm64 v0.0.0-20260403054012-807489e0272a
 	github.com/gokrazy/serial-busybox v0.0.0-20250119153030-ac58ba7574e7
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8
 	github.com/golang/snappy v0.0.4
