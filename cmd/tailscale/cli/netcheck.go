@@ -143,7 +143,7 @@ func runNetcheck(ctx context.Context, args []string) error {
 		if err != nil {
 			return fmt.Errorf("netcheck: %w", err)
 		}
-		if err := printReport(dm, report); err != nil {
+		if err := printNetCheckReport(dm, report); err != nil {
 			return err
 		}
 		if netcheckArgs.every == 0 {
@@ -153,7 +153,7 @@ func runNetcheck(ctx context.Context, args []string) error {
 	}
 }
 
-func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
+func printNetCheckReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 	var j []byte
 	var err error
 	switch netcheckArgs.format {
