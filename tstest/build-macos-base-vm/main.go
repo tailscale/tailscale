@@ -10,8 +10,9 @@
 //
 //	go run ./tstest/build-macos-base-vm
 //
-// The VM is created at ~/.cache/tailscale/vmtest/macos/<name>/ and can be used
-// by vmtest tests that include macOS nodes. The IPSW is cached alongside it.
+// The VM is created at ~/.cache/tailscale/vmtest/macos/<name>/. The IPSW
+// restore image is cached in ~/.cache/tailscale/vmtest/macos-ipsw/ and
+// only re-downloaded when Apple publishes a newer version.
 //
 // This only runs on macOS arm64 (Apple Silicon) and requires the Virtualization
 // framework entitlement, so the helper Swift binary is compiled and ad-hoc signed
@@ -21,7 +22,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,9 +48,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	bundleDir := filepath.Join(home, ".cache", "tailscale", "vmtest", "macos")
-	vmDir := filepath.Join(bundleDir, *vmName)
-	ipswPath := filepath.Join(bundleDir, "RestoreImage.ipsw")
+	cacheBase := filepath.Join(home, ".cache", "tailscale", "vmtest")
+	vmDir := filepath.Join(cacheBase, "macos", *vmName)
+	ipswDir := filepath.Join(cacheBase, "macos-ipsw")
 
 	if _, err := os.Stat(filepath.Join(vmDir, "Disk.img")); err == nil {
 		if !*rebuild {
@@ -60,10 +63,10 @@ func main() {
 		}
 	}
 
-	os.MkdirAll(bundleDir, 0755)
 	os.MkdirAll(vmDir, 0755)
+	os.MkdirAll(ipswDir, 0755)
 
-	// Step 1: Build the Swift helper that does the VZ install.
+	// Step 1: Build the Swift helper.
 	log.Println("Building macOS VM installer helper...")
 	helperBin, err := buildSwiftHelper()
 	if err != nil {
@@ -71,29 +74,47 @@ func main() {
 	}
 	defer os.RemoveAll(filepath.Dir(helperBin))
 
-	// Step 2: Run the helper to download IPSW (if needed) and install macOS.
-	log.Printf("Installing macOS into %s...", vmDir)
-	log.Println("(This downloads ~15GB on first run and takes several minutes to install.)")
-	cmd := exec.Command(helperBin, vmDir, ipswPath)
-	cmd.Stdout = os.Stdout
+	// Step 2: Get the latest IPSW URL from Apple via the VZ framework.
+	log.Println("Checking for latest macOS restore image...")
+	out, err := exec.Command(helperBin, "fetch-ipsw-url").Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			log.Fatalf("Fetching IPSW URL: %v\n%s", err, ee.Stderr)
+		}
+		log.Fatalf("Fetching IPSW URL: %v", err)
+	}
+	ipswURL := strings.TrimSpace(string(out))
+	log.Printf("Latest IPSW: %s", ipswURL)
+
+	// Step 3: Download the IPSW, using the cached copy if unchanged.
+	ipswPath, err := ensureIPSW(ipswDir, ipswURL)
+	if err != nil {
+		log.Fatalf("Downloading IPSW: %v", err)
+	}
+
+	// Step 4: Install macOS from the IPSW.
+	log.Printf("Installing macOS into %s (this takes a few minutes)...", vmDir)
+	cmd := exec.Command(helperBin, "install", vmDir, ipswPath)
+	cmd.Stdout = os.Stderr // Swift helper prints progress to stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		log.Fatalf("macOS installation failed: %v", err)
 	}
 
-	// Step 3: Write config.json.
+	// Step 5: Write config.json for the tailmac Host.app.
 	configJSON := fmt.Sprintf(`{
-  "vmName": %q,
+  "vmID": %q,
+  "serverSocket": "/tmp/qemu-dgram.sock",
   "memorySize": 8589934592,
-  "diskSize": 77309411328,
   "mac": "52:cc:cc:cc:cc:01",
-  "hostname": %q
-}`, *vmName, *vmName)
+  "ethermac": "52:cc:cc:cc:ce:01",
+  "port": 51009
+}`, *vmName)
 	if err := os.WriteFile(filepath.Join(vmDir, "config.json"), []byte(configJSON), 0644); err != nil {
 		log.Fatalf("Writing config.json: %v", err)
 	}
 
-	// Step 4: Mount the disk and apply post-install fixups.
+	// Step 6: Mount the disk and apply post-install fixups.
 	log.Println("Applying post-install fixups (skipping Setup Assistant)...")
 	if err := applyPostInstallFixups(vmDir); err != nil {
 		log.Fatalf("Post-install fixups: %v", err)
@@ -103,6 +124,120 @@ func main() {
 	log.Println("Run vmtest tests with: go test ./tstest/natlab/vmtest/ --run-vm-tests -v -run TestMacOS")
 }
 
+// ensureIPSW downloads the IPSW to ipswDir if it's not already cached or if
+// the remote version has changed. Only one IPSW is kept in the directory.
+// Returns the path to the local IPSW file.
+func ensureIPSW(ipswDir, ipswURL string) (string, error) {
+	// Use the filename from the URL (e.g. "UniversalMac_26.4.1_25E253_Restore.ipsw").
+	urlBase := filepath.Base(ipswURL)
+	if urlBase == "" || urlBase == "." || urlBase == "/" {
+		urlBase = "Restore.ipsw"
+	}
+	localPath := filepath.Join(ipswDir, urlBase)
+
+	// If we already have this exact file, do a conditional GET to check freshness.
+	if fi, err := os.Stat(localPath); err == nil && fi.Size() > 0 {
+		fresh, err := checkIPSWFresh(localPath, ipswURL)
+		if err != nil {
+			log.Printf("Warning: freshness check failed, using cached IPSW: %v", err)
+			return localPath, nil
+		}
+		if fresh {
+			log.Printf("Using cached IPSW at %s (%d MB)", localPath, fi.Size()/1024/1024)
+			return localPath, nil
+		}
+		log.Println("Cached IPSW is stale, re-downloading...")
+	}
+
+	// Remove any other .ipsw files in the directory (keep at most one).
+	entries, _ := os.ReadDir(ipswDir)
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".ipsw") || strings.HasSuffix(e.Name(), ".ipsw.etag") {
+			os.Remove(filepath.Join(ipswDir, e.Name()))
+		}
+	}
+
+	log.Printf("Downloading %s (~15GB)...", ipswURL)
+	tmpPath := localPath + ".tmp"
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		f.Close()
+		os.Remove(tmpPath)
+	}()
+
+	resp, err := http.Get(ipswURL)
+	if err != nil {
+		return "", fmt.Errorf("HTTP GET: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %s", resp.Status)
+	}
+
+	total := resp.ContentLength
+	pr := &progressReader{r: resp.Body, total: total}
+	if _, err := io.Copy(f, pr); err != nil {
+		return "", fmt.Errorf("downloading: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmpPath, localPath); err != nil {
+		return "", err
+	}
+
+	// Save the ETag for future freshness checks.
+	if etag := resp.Header.Get("ETag"); etag != "" {
+		os.WriteFile(localPath+".etag", []byte(etag), 0644)
+	}
+
+	log.Printf("Downloaded IPSW to %s", localPath)
+	return localPath, nil
+}
+
+// checkIPSWFresh does a HEAD request with If-None-Match (ETag) to see if
+// the cached IPSW is still current. Returns true if the cache is fresh.
+func checkIPSWFresh(localPath, ipswURL string) (bool, error) {
+	req, err := http.NewRequest("HEAD", ipswURL, nil)
+	if err != nil {
+		return false, err
+	}
+	if etag, err := os.ReadFile(localPath + ".etag"); err == nil && len(etag) > 0 {
+		req.Header.Set("If-None-Match", string(etag))
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusNotModified, nil
+}
+
+type progressReader struct {
+	r     io.Reader
+	total int64
+	read  int64
+	last  int // last printed percent
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.r.Read(p)
+	pr.read += int64(n)
+	if pr.total > 0 {
+		pct := int(pr.read * 100 / pr.total)
+		if pct != pr.last {
+			pr.last = pct
+			if pct%5 == 0 {
+				log.Printf("  download: %d%% (%d / %d MB)", pct, pr.read/1024/1024, pr.total/1024/1024)
+			}
+		}
+	}
+	return n, err
+}
+
 // buildSwiftHelper compiles and signs the embedded Swift installer program.
 func buildSwiftHelper() (string, error) {
 	tmpDir, err := os.MkdirTemp("", "build-macos-vm-*")
@@ -110,8 +245,6 @@ func buildSwiftHelper() (string, error) {
 		return "", err
 	}
 
-	// Find the Swift source file next to this Go file.
-	// When run via "go run", we need to find it relative to the source.
 	srcDir, err := findSourceDir()
 	if err != nil {
 		return "", fmt.Errorf("finding source dir: %w", err)
@@ -128,7 +261,6 @@ func buildSwiftHelper() (string, error) {
 		return "", fmt.Errorf("swiftc: %v\n%s", err, out)
 	}
 
-	// Sign with the virtualization entitlement.
 	entPath := filepath.Join(tmpDir, "entitlements.plist")
 	if err := os.WriteFile(entPath, []byte(entitlementsPlist), 0644); err != nil {
 		return "", err
@@ -143,7 +275,6 @@ func buildSwiftHelper() (string, error) {
 }
 
 func findSourceDir() (string, error) {
-	// Try relative to the working directory first.
 	candidates := []string{
 		"tstest/build-macos-base-vm",
 		".",
@@ -153,7 +284,6 @@ func findSourceDir() (string, error) {
 			return filepath.Abs(c)
 		}
 	}
-	// Try relative to the Go module root.
 	out, err := exec.Command("go", "env", "GOMOD").CombinedOutput()
 	if err == nil {
 		modRoot := filepath.Dir(strings.TrimSpace(string(out)))
@@ -170,13 +300,11 @@ func findSourceDir() (string, error) {
 func applyPostInstallFixups(vmDir string) error {
 	diskPath := filepath.Join(vmDir, "Disk.img")
 
-	// Attach the disk image without auto-mounting.
 	out, err := exec.Command("hdiutil", "attach", diskPath, "-nomount").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("hdiutil attach: %v\n%s", err, out)
 	}
 
-	// Parse the top-level disk device from output (e.g. /dev/disk4).
 	var diskDev string
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
@@ -212,7 +340,6 @@ func applyPostInstallFixups(vmDir string) error {
 		return fmt.Errorf("waiting for APFS Data volume: %w", err)
 	}
 
-	// Mount the Data volume via diskutil (handles APFS permissions correctly).
 	mountPoint, err := os.MkdirTemp("", "vm-data-*")
 	if err != nil {
 		return err
@@ -225,7 +352,6 @@ func applyPostInstallFixups(vmDir string) error {
 	}
 	defer exec.Command("diskutil", "unmount", mountPoint).Run()
 
-	// Create .AppleSetupDone to skip the Setup Assistant.
 	dbDir := filepath.Join(mountPoint, "private", "var", "db")
 	if err := os.MkdirAll(dbDir, 0755); err != nil {
 		return fmt.Errorf("creating var/db: %v", err)
