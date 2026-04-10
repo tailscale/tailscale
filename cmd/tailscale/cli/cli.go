@@ -211,6 +211,7 @@ func noDupFlagify(c *ffcli.Command) {
 var (
 	fileCmd,
 	sysPolicyCmd,
+	maybeRoutecheckCmd,
 	maybeWebCmd,
 	maybeDriveCmd,
 	maybeNetlockCmd,
@@ -252,6 +253,7 @@ change in the future.
 			configureCmd(),
 			nilOrCall(sysPolicyCmd),
 			netcheckCmd,
+			nilOrCall(maybeRoutecheckCmd),
 			ipCmd,
 			dnsCmd,
 			statusCmd,
