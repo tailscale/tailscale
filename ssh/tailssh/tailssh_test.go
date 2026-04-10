@@ -386,7 +386,14 @@ type localState struct {
 	serverActions map[string]*tailcfg.SSHAction
 }
 
-var currentUser = os.Getenv("USER") // Use the current user for the test.
+var currentUser = func() string {
+	// Prefer user.Current because the USER env var is not set in
+	// some environments (e.g. the golang:latest container used by CI).
+	if u, err := user.Current(); err == nil {
+		return u.Username
+	}
+	return os.Getenv("USER")
+}()
 
 func (ts *localState) Dialer() *tsdial.Dialer {
 	return &tsdial.Dialer{}

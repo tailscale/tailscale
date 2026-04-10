@@ -18,6 +18,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/checksum"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"tailscale.com/net/stun"
+	"tailscale.com/tstest"
 )
 
 type xdpAction uint32
@@ -271,6 +272,7 @@ func getIPv6STUNBindingResp() []byte {
 }
 
 func TestXDP(t *testing.T) {
+	tstest.RequireRoot(t)
 	ipv4STUNBindingReqTX := getIPv4STUNBindingReq(nil)
 	ipv6STUNBindingReqTX := getIPv6STUNBindingReq(nil)
 
@@ -957,10 +959,6 @@ func TestXDP(t *testing.T) {
 	server, err := NewSTUNServer(&STUNServerConfig{DeviceName: "fake", DstPort: defaultSTUNPort},
 		&noAttachOption{})
 	if err != nil {
-		if errors.Is(err, unix.EPERM) {
-			// TODO(jwhited): get this running
-			t.Skip("skipping due to EPERM error; test requires elevated privileges")
-		}
 		t.Fatalf("error constructing STUN server: %v", err)
 	}
 	defer server.Close()

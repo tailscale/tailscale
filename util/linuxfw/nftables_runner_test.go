@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"os"
 	"runtime"
 	"slices"
 	"strings"
@@ -522,10 +521,7 @@ func TestAddMatchSubnetRouteMarkRuleAccept(t *testing.T) {
 
 func newSysConn(t *testing.T) *nftables.Conn {
 	t.Helper()
-	if os.Geteuid() != 0 {
-		t.Skip(t.Name(), " requires privileges to create a namespace in order to run")
-		return nil
-	}
+	tstest.RequireRoot(t)
 
 	runtime.LockOSThread()
 
