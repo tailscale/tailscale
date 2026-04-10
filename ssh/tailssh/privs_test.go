@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"testing"
 
+	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 )
 
@@ -71,9 +72,7 @@ func TestDoDropPrivileges(t *testing.T) {
 		os.Exit(0)
 	}
 
-	if os.Getuid() != 0 {
-		t.Skip("test only works when run as root")
-	}
+	tstest.RequireRoot(t)
 
 	rerunSelf := func(t *testing.T, input SubprocInput) []byte {
 		fpath := filepath.Join(t.TempDir(), "out.json")

@@ -73,9 +73,7 @@ func TestMain(m *testing.M) {
 // https://github.com/tailscale/tailscale/issues/7894
 func TestTUNMode(t *testing.T) {
 	tstest.Shard(t)
-	if os.Getuid() != 0 {
-		t.Skip("skipping when not root")
-	}
+	tstest.RequireRoot(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	env.tunMode = true
@@ -1565,9 +1563,7 @@ func testAutoUpdateDefaults(t *testing.T, useCap bool) {
 // https://github.com/tailscale/corp/issues/22511
 func TestDNSOverTCPIntervalResolver(t *testing.T) {
 	tstest.Shard(t)
-	if os.Getuid() != 0 {
-		t.Skip("skipping when not root")
-	}
+	tstest.RequireRoot(t)
 	env := NewTestEnv(t)
 	env.tunMode = true
 	n1 := NewTestNode(t, env)
@@ -1637,9 +1633,7 @@ func TestDNSOverTCPIntervalResolver(t *testing.T) {
 // directions.
 func TestNetstackTCPLoopback(t *testing.T) {
 	tstest.Shard(t)
-	if os.Getuid() != 0 {
-		t.Skip("skipping when not root")
-	}
+	tstest.RequireRoot(t)
 
 	env := NewTestEnv(t)
 	env.tunMode = true
@@ -1779,9 +1773,7 @@ func TestNetstackTCPLoopback(t *testing.T) {
 // directions.
 func TestNetstackUDPLoopback(t *testing.T) {
 	tstest.Shard(t)
-	if os.Getuid() != 0 {
-		t.Skip("skipping when not root")
-	}
+	tstest.RequireRoot(t)
 
 	env := NewTestEnv(t)
 	env.tunMode = true
