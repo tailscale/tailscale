@@ -146,6 +146,31 @@ func (nm *NetworkMap) GetIPVIPServiceMap() IPServiceMappings {
 	return res
 }
 
+// Services returns the Services visible (accessible) to this node,
+// decoded from [tailcfg.NodeAttrPrefixServices]+serviceName entries in the
+// self node's CapMap. Returns nil if nm is nil or SelfNode is invalid.
+func (nm *NetworkMap) Services() map[tailcfg.ServiceName]tailcfg.ServiceDetails {
+	if nm == nil || !nm.SelfNode.Valid() {
+		return nil
+	}
+	prefix := string(tailcfg.NodeAttrPrefixServices)
+	var result map[tailcfg.ServiceName]tailcfg.ServiceDetails
+	for cap, _ := range nm.SelfNode.CapMap().All() {
+		if !strings.HasPrefix(string(cap), prefix) {
+			continue
+		}
+		svcs, err := tailcfg.UnmarshalNodeCapViewJSON[tailcfg.ServiceDetails](nm.SelfNode.CapMap(), cap)
+		if err != nil || len(svcs) < 1 {
+			continue
+		}
+		if result == nil {
+			result = make(map[tailcfg.ServiceName]tailcfg.ServiceDetails)
+		}
+		result[svcs[0].Name] = svcs[0]
+	}
+	return result
+}
+
 // SelfNodeOrZero returns the self node, or a zero value if nm is nil.
 func (nm *NetworkMap) SelfNodeOrZero() tailcfg.NodeView {
 	if nm == nil {

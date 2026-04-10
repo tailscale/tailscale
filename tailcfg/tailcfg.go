@@ -2447,6 +2447,18 @@ type Oauth2Token struct {
 // These are also referred to as "Node Attributes" in the ACL policy file.
 type NodeCapability string
 
+// NodeCapabilityPrefix is a prefix for [NodeCapMap] keys that share a common
+// namespace, where each entry represents a distinct named instance (e.g. one
+// per service). The full key is formed by concatenating the prefix with the
+// instance name.
+type NodeCapabilityPrefix string
+
+// ToAttribute returns the full [NodeCapability] key for the given value under
+// this prefix, of the form prefix+value.
+func (p NodeCapabilityPrefix) ToAttribute(value string) NodeCapability {
+	return NodeCapability(string(p) + value)
+}
+
 const (
 	CapabilityFileSharing        NodeCapability = "https://tailscale.com/cap/file-sharing"
 	CapabilityAdmin              NodeCapability = "https://tailscale.com/cap/is-admin"
@@ -2778,6 +2790,14 @@ const (
 	// absent (or removed), a node that supports netmap caching will ignore and
 	// discard existing cached maps, and will not store any.
 	NodeAttrCacheNetworkMaps NodeCapability = "cache-network-maps"
+)
+
+const (
+	// NodeAttrPrefixServices is the prefix for per-service [NodeCapMap]
+	// entries describing Services visible (accessible) to this node. The full
+	// key for a service named "svc:foo" is NodeAttrPrefixServices+"foo".
+	// Each value under such a key is of type [ServiceDetails].
+	NodeAttrPrefixServices NodeCapabilityPrefix = "services/"
 )
 
 // SetDNSRequest is a request to add a DNS record.
@@ -3317,6 +3337,19 @@ const LBHeader = "Ts-Lb"
 // correspond to those IPs. Any services that don't correspond to a service
 // this client is hosting can be ignored.
 type ServiceIPMappings map[ServiceName][]netip.Addr
+
+// ServiceDetails describes a Service visible to this node.
+// It is the value type stored under [NodeAttrPrefixServices]+serviceName keys in [NodeCapMap].
+type ServiceDetails struct {
+	// Name is the name of the Service, of the form "svc:dns-label".
+	Name ServiceName
+
+	// Addrs are the IP addresses (IPv4 and IPv6) assigned to this Service.
+	Addrs []netip.Addr `json:",omitempty"`
+
+	// Ports are the protocol/port combinations the Service accepts.
+	Ports []ProtoPortRange `json:",omitempty"`
+}
 
 // ClientAuditAction represents an auditable action that a client can report to the
 // control plane.  These actions must correspond to the supported actions
