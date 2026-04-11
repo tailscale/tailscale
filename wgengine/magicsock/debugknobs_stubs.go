@@ -7,6 +7,7 @@ package magicsock
 
 import (
 	"net/netip"
+	"os"
 
 	"tailscale.com/types/opt"
 )
@@ -32,3 +33,5 @@ func inTest() bool                     { return false }
 func debugPeerMap() bool               { return false }
 func pretendpoints() []netip.AddrPort  { return []netip.AddrPort{} }
 func debugNeverDirectUDP() bool        { return false }
+func debugWebRTCSignalingURL() string  { return os.Getenv("TS_DEBUG_WEBRTC_SIGNALING_URL") }
+func debugAlwaysWebRTC() bool          { return false }

@@ -66,6 +66,13 @@ var (
 	// suppressing/dropping inbound/outbound [disco.Ping] messages, forcing
 	// all peer communication over DERP or peer relay.
 	debugNeverDirectUDP = envknob.RegisterBool("TS_DEBUG_NEVER_DIRECT_UDP")
+	// debugWebRTCSignalingURL sets the WebRTC signaling server URL for
+	// establishing WebRTC peer connections. When set, magicsock will attempt
+	// to use WebRTC as an additional path for peer communication.
+	debugWebRTCSignalingURL = envknob.RegisterString("TS_DEBUG_WEBRTC_SIGNALING_URL")
+	// debugAlwaysWebRTC forces all peer communication over WebRTC by
+	// suppressing disco pings to direct UDP and DERP addresses.
+	debugAlwaysWebRTC = envknob.RegisterBool("TS_DEBUG_ALWAYS_USE_WEBRTC")
 	// Hey you! Adding a new debugknob? Make sure to stub it out in the
 	// debugknobs_stubs.go file too.
 )
