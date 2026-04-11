@@ -181,9 +181,8 @@ type Server struct {
 	verifyClientsURL         string
 	verifyClientsURLFailOpen bool
 
-	// a string prefix, with terminating :, from which to accept X-Real-IP headers from.
-	// specifically, this is matched against AddrPort.String()
-	acceptProxy              string
+	// IP address from which to accept X-Real-IP headers from
+	acceptProxy              netip.Addr
 
 	mu       syncs.Mutex
 	closed   bool
@@ -392,7 +391,6 @@ func New(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		keyOfAddr:           map[netip.AddrPort]key.NodePublic{},
 		clock:               tstime.StdClock{},
 		tcpWriteTimeout:     DefaultTCPWiteTimeout,
-		acceptProxy:         "127.0.0.1:",
 	}
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get(string(packetKindDisco))
@@ -480,6 +478,10 @@ func (s *Server) SetMeshKey(v string) error {
 	}
 	s.meshKey = k
 	return nil
+}
+
+func (s *Server) AcceptProxy(proxy netip.Addr) {
+	s.acceptProxy = proxy
 }
 
 // SetVerifyClients sets whether this DERP server verifies clients through tailscaled.
