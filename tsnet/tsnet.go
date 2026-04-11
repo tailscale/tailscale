@@ -1510,29 +1510,37 @@ func (sl *ServiceListener) Addr() net.Addr {
 // cleanServeConfig cleans serve config changes made to support this listener.
 // This should only be called by Close.
 func (sl *ServiceListener) cleanServeConfig() error {
-	sc, etag, err := sl.s.lb.ServeConfigETag()
-	if err != nil {
-		return fmt.Errorf("fetching current config: %w", err)
-	}
-	if !sc.Valid() || !sc.Services().Contains(sl.svcName) {
+	for {
+		sc, etag, err := sl.s.lb.ServeConfigETag()
+		if err != nil {
+			return fmt.Errorf("fetching current config: %w", err)
+		}
+		if !sc.Valid() || !sc.Services().Contains(sl.svcName) {
+			return nil
+		}
+		srvConfig := sc.AsStruct()
+		svcConfig := srvConfig.Services[sl.svcName]
+		switch m := sl.mode.(type) {
+		case ServiceModeTCP:
+			delete(svcConfig.TCP, m.Port)
+		case ServiceModeHTTP:
+			hp := net.JoinHostPort(sl.FQDN, strconv.Itoa(int(m.Port)))
+			delete(svcConfig.Web, ipn.HostPort(hp))
+			delete(svcConfig.TCP, m.Port)
+		default:
+			return fmt.Errorf("unexpected ServiceMode %T", sl.mode)
+		}
+		err = sl.s.lb.SetServeConfig(srvConfig, etag)
+		if errors.Is(err, ipnlocal.ErrETagMismatch) {
+			// Another ServiceListener modified the config concurrently.
+			// Re-read and retry.
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("setting config: %w", err)
+		}
 		return nil
 	}
-	srvConfig := sc.AsStruct()
-	svcConfig := srvConfig.Services[sl.svcName]
-	switch m := sl.mode.(type) {
-	case ServiceModeTCP:
-		delete(svcConfig.TCP, m.Port)
-	case ServiceModeHTTP:
-		hp := net.JoinHostPort(sl.FQDN, strconv.Itoa(int(m.Port)))
-		delete(svcConfig.Web, ipn.HostPort(hp))
-		delete(svcConfig.TCP, m.Port)
-	default:
-		return fmt.Errorf("unexpected ServiceMode %T", sl.mode)
-	}
-	if err := sl.s.lb.SetServeConfig(srvConfig, etag); err != nil {
-		return fmt.Errorf("setting config: %w", err)
-	}
-	return nil
 }
 
 // Close closes the listener and clears state related to hosting the Service.
