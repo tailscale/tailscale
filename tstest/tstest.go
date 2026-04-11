@@ -95,6 +95,14 @@ func Parallel(t *testing.T) {
 	}
 }
 
+// RequireRoot skips the test if the current user is not root.
+func RequireRoot(tb testing.TB) {
+	tb.Helper()
+	if os.Getuid() != 0 {
+		tb.Skip("skipping test; requires root")
+	}
+}
+
 // SkipOnKernelVersions skips the test if the current
 // kernel version is in the specified list.
 func SkipOnKernelVersions(t testing.TB, issue string, versions ...string) {

@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"net/netip"
+	"slices"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn/ipnstate"
@@ -114,17 +115,13 @@ func peerMatchingIP(st *ipnstate.Status, ipStr string) (ps *ipnstate.PeerStatus,
 		return
 	}
 	for _, ps = range st.Peer {
-		for _, pip := range ps.TailscaleIPs {
-			if ip == pip {
-				return ps, true
-			}
+		if slices.Contains(ps.TailscaleIPs, ip) {
+			return ps, true
 		}
 	}
 	if ps := st.Self; ps != nil {
-		for _, pip := range ps.TailscaleIPs {
-			if ip == pip {
-				return ps, true
-			}
+		if slices.Contains(ps.TailscaleIPs, ip) {
+			return ps, true
 		}
 	}
 	return nil, false

@@ -12,7 +12,6 @@ import (
 	"github.com/go-json-experiment/json/jsontext"
 	"golang.org/x/exp/constraints"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 )
 
@@ -62,7 +61,7 @@ func (ls *List[T]) View() ListView[T] {
 
 // Clone returns a copy of l that aliases no memory with l.
 func (ls List[T]) Clone() *List[T] {
-	res := ptr.To(ls)
+	res := new(ls)
 	if v, ok := ls.s.Value.GetOk(); ok {
 		res.s.Value.Set(append(v[:0:0], v...))
 	}

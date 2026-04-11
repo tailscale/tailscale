@@ -103,6 +103,11 @@ func parse(version string) (parsed, bool) {
 		}
 	}
 
+	// Ignore trailer like '_1 (Void Linux)'.
+	if rest[0] == '_' && strings.HasSuffix(rest, " (Void Linux)") {
+		return ret, true
+	}
+
 	// Optional extraCommits, if the next bit can be completely
 	// consumed as an integer.
 	if rest[0] != '-' {

@@ -18,31 +18,35 @@ func TestProtoPortRangeParsing(t *testing.T) {
 		return PortRange{First: s, Last: e}
 	}
 	tests := []struct {
-		in  string
-		out ProtoPortRange
-		err error
+		name string
+		in   string
+		out  ProtoPortRange
+		err  error
 	}{
-		{in: "tcp:80", out: ProtoPortRange{Proto: int(ipproto.TCP), Ports: pr(80, 80)}},
-		{in: "80", out: ProtoPortRange{Ports: pr(80, 80)}},
-		{in: "*", out: ProtoPortRange{Ports: PortRangeAny}},
-		{in: "*:*", out: ProtoPortRange{Ports: PortRangeAny}},
-		{in: "tcp:*", out: ProtoPortRange{Proto: int(ipproto.TCP), Ports: PortRangeAny}},
+		{name: "tcp-80", in: "tcp:80", out: ProtoPortRange{Proto: int(ipproto.TCP), Ports: pr(80, 80)}},
+		{name: "80", in: "80", out: ProtoPortRange{Ports: pr(80, 80)}},
+		{name: "star", in: "*", out: ProtoPortRange{Ports: PortRangeAny}},
+		{name: "star-star", in: "*:*", out: ProtoPortRange{Ports: PortRangeAny}},
+		{name: "tcp-star", in: "tcp:*", out: ProtoPortRange{Proto: int(ipproto.TCP), Ports: PortRangeAny}},
 		{
-			in:  "tcp:",
-			err: vizerror.Errorf("invalid port list: %#v", ""),
+			name: "tcp-empty-port",
+			in:   "tcp:",
+			err:  vizerror.Errorf("invalid port list: %#v", ""),
 		},
 		{
-			in:  ":80",
-			err: errEmptyProtocol,
+			name: "empty-proto-80",
+			in:   ":80",
+			err:  errEmptyProtocol,
 		},
 		{
-			in:  "",
-			err: errEmptyString,
+			name: "empty-string",
+			in:   "",
+			err:  errEmptyString,
 		},
 	}
 
 	for _, tc := range tests {
-		t.Run(tc.in, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			var ppr ProtoPortRange
 			err := ppr.UnmarshalText([]byte(tc.in))
 			if tc.err != err {

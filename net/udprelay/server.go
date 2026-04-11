@@ -1,9 +1,9 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package udprelay contains constructs for relaying Disco and WireGuard packets
-// between Tailscale clients over UDP. This package is currently considered
-// experimental.
+// Package udprelay contains a relay server implementation for relaying Disco
+// and WireGuard packets between Tailscale clients over UDP. This relay
+// functionality is also known as Tailscale Peer Relays.
 package udprelay
 
 import (
@@ -651,8 +651,9 @@ func trySetSOMark(logf logger.Logf, netMon *netmon.Monitor, network, address str
 // single packet syscall operations.
 func (s *Server) bindSockets(desiredPort uint16) error {
 	// maxSocketsPerAF is a conservative starting point, but is somewhat
-	// arbitrary.
-	maxSocketsPerAF := min(16, runtime.NumCPU())
+	// arbitrary. Use GOMAXPROCS rather than NumCPU as it is container-aware
+	// and respects CPU limits/quotas set via cgroups.
+	maxSocketsPerAF := min(16, runtime.GOMAXPROCS(0))
 	listenConfig := &net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
 			trySetReusePort(network, address, c)
@@ -688,7 +689,7 @@ func (s *Server) bindSockets(desiredPort uint16) error {
 					break SocketsLoop
 				}
 			}
-			pc := batching.TryUpgradeToConn(uc, network, batching.IdealBatchSize)
+			pc := batching.TryUpgradeToConn(uc, network, batching.IdealBatchSize, "udprelay_rxq_overflows")
 			bc, ok := pc.(batching.Conn)
 			if !ok {
 				bc = &singlePacketConn{uc}
@@ -976,7 +977,7 @@ func (e ErrServerNotReady) Error() string {
 // For now, we favor simplicity and reducing VNI re-use over more complex
 // ephemeral port (VNI) selection algorithms.
 func (s *Server) getNextVNILocked() (uint32, error) {
-	for i := uint32(0); i < totalPossibleVNI; i++ {
+	for range totalPossibleVNI {
 		vni := s.nextVNI
 		if vni == maxVNI {
 			s.nextVNI = minVNI

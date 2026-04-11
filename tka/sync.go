@@ -11,13 +11,6 @@ import (
 	"os"
 )
 
-const (
-	// Max iterations searching for any intersection.
-	maxSyncIter = 2000
-	// Max iterations searching for a head intersection.
-	maxSyncHeadIntersectionIter = 400
-)
-
 // ErrNoIntersection is returned when a shared AUM could
 // not be determined when evaluating a remote sync offer.
 var ErrNoIntersection = errors.New("no intersection")
@@ -107,7 +100,7 @@ func (a *Authority) SyncOffer(storage Chonk) (SyncOffer, error) {
 		skipAmount uint64  = ancestorsSkipStart
 		curs       AUMHash = a.Head()
 	)
-	for i := uint64(0); i < maxSyncHeadIntersectionIter; i++ {
+	for i := range uint64(maxSyncHeadIntersectionIter) {
 		if i > 0 && (i%skipAmount) == 0 {
 			out.Ancestors = append(out.Ancestors, curs)
 			skipAmount = skipAmount << ancestorsSkipShift

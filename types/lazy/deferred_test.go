@@ -145,13 +145,11 @@ func TestDeferredInit(t *testing.T) {
 			// Call [DeferredInit.Do] concurrently.
 			const N = 10000
 			for range N {
-				wg.Add(1)
-				go func() {
+				wg.Go(func() {
 					gotErr := di.Do()
 					checkError(t, gotErr, nil, false)
 					checkCalls()
-					wg.Done()
-				}()
+				})
 			}
 			wg.Wait()
 		})
@@ -193,12 +191,10 @@ func TestDeferredErr(t *testing.T) {
 			var wg sync.WaitGroup
 			N := 10000
 			for range N {
-				wg.Add(1)
-				go func() {
+				wg.Go(func() {
 					gotErr := di.Do()
 					checkError(t, gotErr, tt.wantErr, false)
-					wg.Done()
-				}()
+				})
 			}
 			wg.Wait()
 		})
@@ -254,11 +250,9 @@ func TestDeferAfterDo(t *testing.T) {
 	const N = 10000
 	var wg sync.WaitGroup
 	for range N {
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			deferOnce()
-			wg.Done()
-		}()
+		})
 	}
 
 	if err := di.Do(); err != nil {

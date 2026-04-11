@@ -175,8 +175,8 @@ func TestSigNested_DeepNesting(t *testing.T) {
 	// Test this works with our public API
 	a, _ := Open(newTestchain(t, "G1\nG1.template = genesis",
 		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:               []Key{k},
-			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+			Keys:              []Key{k},
+			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 		}})).Chonk())
 	if err := a.NodeKeyAuthorized(lastNodeKey.Public(), outer.Serialize()); err != nil {
 		t.Errorf("NodeKeyAuthorized(lastNodeKey) failed: %v", err)
@@ -240,8 +240,8 @@ func TestSigCredential(t *testing.T) {
 	// Test someone can't misuse our public API for verifying node-keys
 	a, _ := Open(newTestchain(t, "G1\nG1.template = genesis",
 		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:               []Key{k},
-			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+			Keys:              []Key{k},
+			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 		}})).Chonk())
 	if err := a.NodeKeyAuthorized(node.Public(), nestedSig.Serialize()); err == nil {
 		t.Error("NodeKeyAuthorized(SigCredential, node) did not fail")

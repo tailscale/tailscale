@@ -16,7 +16,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers,StructWithTypeAliasFields,GenericTypeAliasStruct,StructWithMapOfViews
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers,StructWithTypeAliasFields,GenericTypeAliasStruct,StructWithMapOfViews,StructWithNamedMap,StructWithNamedSlice
 
 // View returns a read-only view of StructWithPtrs.
 func (p *StructWithPtrs) View() StructWithPtrsView {
@@ -1128,4 +1128,152 @@ func (v StructWithMapOfViewsView) MapOfViews() views.Map[string, StructWithoutPt
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _StructWithMapOfViewsViewNeedsRegeneration = StructWithMapOfViews(struct {
 	MapOfViews map[string]StructWithoutPtrsView
+}{})
+
+// View returns a read-only view of StructWithNamedMap.
+func (p *StructWithNamedMap) View() StructWithNamedMapView {
+	return StructWithNamedMapView{ж: p}
+}
+
+// StructWithNamedMapView provides a read-only view over StructWithNamedMap.
+//
+// Its methods should only be called if `Valid()` returns true.
+type StructWithNamedMapView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *StructWithNamedMap
+}
+
+// Valid reports whether v's underlying value is non-nil.
+func (v StructWithNamedMapView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v StructWithNamedMapView) AsStruct() *StructWithNamedMap {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v StructWithNamedMapView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v StructWithNamedMapView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
+func (v *StructWithNamedMapView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x StructWithNamedMap
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *StructWithNamedMapView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x StructWithNamedMap
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v StructWithNamedMapView) Attrs() NamedMapView { return v.ж.Attrs.View() }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithNamedMapViewNeedsRegeneration = StructWithNamedMap(struct {
+	Attrs NamedMap
+}{})
+
+// View returns a read-only view of StructWithNamedSlice.
+func (p *StructWithNamedSlice) View() StructWithNamedSliceView {
+	return StructWithNamedSliceView{ж: p}
+}
+
+// StructWithNamedSliceView provides a read-only view over StructWithNamedSlice.
+//
+// Its methods should only be called if `Valid()` returns true.
+type StructWithNamedSliceView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *StructWithNamedSlice
+}
+
+// Valid reports whether v's underlying value is non-nil.
+func (v StructWithNamedSliceView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v StructWithNamedSliceView) AsStruct() *StructWithNamedSlice {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v StructWithNamedSliceView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v StructWithNamedSliceView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
+func (v *StructWithNamedSliceView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x StructWithNamedSlice
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *StructWithNamedSliceView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x StructWithNamedSlice
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v StructWithNamedSliceView) Items() NamedSliceView { return v.ж.Items.View() }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithNamedSliceViewNeedsRegeneration = StructWithNamedSlice(struct {
+	Items NamedSlice
 }{})

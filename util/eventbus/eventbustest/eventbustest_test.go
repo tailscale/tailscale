@@ -36,17 +36,17 @@ func TestExpectFilter(t *testing.T) {
 		wantErr    string // if non-empty, an error is expected containing this text
 	}{
 		{
-			name:       "single event",
+			name:       "single-event",
 			events:     []int{42},
 			expectFunc: eventbustest.Type[EventFoo](),
 		},
 		{
-			name:       "multiple events, single expectation",
+			name:       "multiple-events-single-expectation",
 			events:     []int{42, 1, 2, 3, 4, 5},
 			expectFunc: eventbustest.Type[EventFoo](),
 		},
 		{
-			name:   "filter on event with function",
+			name:   "filter-on-event-with-function",
 			events: []int{24, 42},
 			expectFunc: func(event EventFoo) (bool, error) {
 				if event.Value == 42 {
@@ -77,7 +77,7 @@ func TestExpectFilter(t *testing.T) {
 			wantErr: "value > 10",
 		},
 		{
-			name:   "first event has to be func",
+			name:   "first-event-has-to-be-func",
 			events: []int{24, 42},
 			expectFunc: func(event EventFoo) (bool, error) {
 				if event.Value != 42 {
@@ -99,7 +99,7 @@ func TestExpectFilter(t *testing.T) {
 			wantErr:    "wrong result (-got, +want)",
 		},
 		{
-			name:   "no events",
+			name:   "no-events",
 			events: []int{},
 			expectFunc: func(event EventFoo) (bool, error) {
 				return true, nil
@@ -151,37 +151,37 @@ func TestExpectEvents(t *testing.T) {
 		wantErr      bool
 	}{
 		{
-			name:         "No expectations",
+			name:         "no-expectations",
 			events:       []any{EventFoo{}},
 			expectEvents: []any{},
 			wantErr:      true,
 		},
 		{
-			name:         "One event",
+			name:         "one-event",
 			events:       []any{EventFoo{}},
 			expectEvents: []any{eventbustest.Type[EventFoo]()},
 			wantErr:      false,
 		},
 		{
-			name:         "Two events",
+			name:         "two-events",
 			events:       []any{EventFoo{}, EventBar{}},
 			expectEvents: []any{eventbustest.Type[EventFoo](), eventbustest.Type[EventBar]()},
 			wantErr:      false,
 		},
 		{
-			name:         "Two expected events with another in the middle",
+			name:         "two-expected-events-with-another-in-middle",
 			events:       []any{EventFoo{}, EventBaz{}, EventBar{}},
 			expectEvents: []any{eventbustest.Type[EventFoo](), eventbustest.Type[EventBar]()},
 			wantErr:      false,
 		},
 		{
-			name:         "Missing event",
+			name:         "missing-event",
 			events:       []any{EventFoo{}, EventBaz{}},
 			expectEvents: []any{eventbustest.Type[EventFoo](), eventbustest.Type[EventBar]()},
 			wantErr:      true,
 		},
 		{
-			name:   "One event with specific value",
+			name:   "one-event-with-specific-value",
 			events: []any{EventFoo{42}},
 			expectEvents: []any{
 				func(ev EventFoo) (bool, error) {
@@ -194,7 +194,7 @@ func TestExpectEvents(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:   "Two event with one specific value",
+			name:   "two-events-with-one-specific-value",
 			events: []any{EventFoo{43}, EventFoo{42}},
 			expectEvents: []any{
 				func(ev EventFoo) (bool, error) {
@@ -207,7 +207,7 @@ func TestExpectEvents(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:   "One event with wrong value",
+			name:   "one-event-with-wrong-value",
 			events: []any{EventFoo{43}},
 			expectEvents: []any{
 				func(ev EventFoo) (bool, error) {
@@ -220,7 +220,7 @@ func TestExpectEvents(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:   "Two events with specific values",
+			name:   "two-events-with-specific-values",
 			events: []any{EventFoo{42}, EventFoo{42}, EventBar{"42"}},
 			expectEvents: []any{
 				func(ev EventFoo) (bool, error) {
@@ -283,37 +283,37 @@ func TestExpectExactlyEventsFilter(t *testing.T) {
 		wantErr      bool
 	}{
 		{
-			name:         "No expectations",
+			name:         "no-expectations",
 			events:       []any{EventFoo{}},
 			expectEvents: []any{},
 			wantErr:      true,
 		},
 		{
-			name:         "One event",
+			name:         "one-event",
 			events:       []any{EventFoo{}},
 			expectEvents: []any{eventbustest.Type[EventFoo]()},
 			wantErr:      false,
 		},
 		{
-			name:         "Two events",
+			name:         "two-events",
 			events:       []any{EventFoo{}, EventBar{}},
 			expectEvents: []any{eventbustest.Type[EventFoo](), eventbustest.Type[EventBar]()},
 			wantErr:      false,
 		},
 		{
-			name:         "Two expected events with another in the middle",
+			name:         "two-expected-events-with-another-in-middle",
 			events:       []any{EventFoo{}, EventBaz{}, EventBar{}},
 			expectEvents: []any{eventbustest.Type[EventFoo](), eventbustest.Type[EventBar]()},
 			wantErr:      true,
 		},
 		{
-			name:         "Missing event",
+			name:         "missing-event",
 			events:       []any{EventFoo{}, EventBaz{}},
 			expectEvents: []any{eventbustest.Type[EventFoo](), eventbustest.Type[EventBar]()},
 			wantErr:      true,
 		},
 		{
-			name:   "One event with value",
+			name:   "one-event-with-value",
 			events: []any{EventFoo{42}},
 			expectEvents: []any{
 				func(ev EventFoo) (bool, error) {
@@ -326,7 +326,7 @@ func TestExpectExactlyEventsFilter(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:   "Two event with one specific value",
+			name:   "two-events-with-one-specific-value",
 			events: []any{EventFoo{43}, EventFoo{42}},
 			expectEvents: []any{
 				func(ev EventFoo) (bool, error) {
@@ -339,7 +339,7 @@ func TestExpectExactlyEventsFilter(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:   "One event with wrong value",
+			name:   "one-event-with-wrong-value",
 			events: []any{EventFoo{43}},
 			expectEvents: []any{
 				func(ev EventFoo) (bool, error) {
@@ -352,7 +352,7 @@ func TestExpectExactlyEventsFilter(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:   "Two events with specific values",
+			name:   "two-events-with-specific-values",
 			events: []any{EventFoo{42}, EventFoo{42}, EventBar{"42"}},
 			expectEvents: []any{
 				func(ev EventFoo) (bool, error) {

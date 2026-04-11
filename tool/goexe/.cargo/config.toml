@@ -1,0 +1,5 @@
+[build]
+target = "i686-pc-windows-gnu"
+
+[target.i686-pc-windows-gnu]
+rustflags = ["-C", "link-args=-nostartfiles -lkernel32"]

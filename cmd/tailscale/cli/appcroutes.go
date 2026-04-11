@@ -102,12 +102,12 @@ func getSummarizeLearnedOutput(ri *appctype.RouteInfo) string {
 		}
 		return 0
 	})
-	s := ""
+	var s strings.Builder
 	fmtString := fmt.Sprintf("%%-%ds %%d\n", maxDomainWidth) // eg "%-10s %d\n"
 	for _, dc := range x {
-		s += fmt.Sprintf(fmtString, dc.domain, dc.count)
+		s.WriteString(fmt.Sprintf(fmtString, dc.domain, dc.count))
 	}
-	return s
+	return s.String()
 }
 
 func runAppcRoutesInfo(ctx context.Context, args []string) error {

@@ -25,7 +25,6 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
-	"tailscale.com/types/ptr"
 )
 
 func TestDNSRecordsReconciler(t *testing.T) {
@@ -44,7 +43,7 @@ func TestDNSRecordsReconciler(t *testing.T) {
 			Namespace: "test",
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 		},
 		Status: networkingv1.IngressStatus{
 			LoadBalancer: networkingv1.IngressLoadBalancerStatus{
@@ -150,7 +149,7 @@ func TestDNSRecordsReconciler(t *testing.T) {
 
 	// 7. A not-ready Endpoint is removed from DNS config.
 	mustUpdate(t, fc, ep.Namespace, ep.Name, func(ep *discoveryv1.EndpointSlice) {
-		ep.Endpoints[0].Conditions.Ready = ptr.To(false)
+		ep.Endpoints[0].Conditions.Ready = new(false)
 		ep.Endpoints = append(ep.Endpoints, discoveryv1.Endpoint{
 			Addresses: []string{"1.2.3.4"},
 		})
@@ -220,13 +219,13 @@ func TestDNSRecordsReconciler(t *testing.T) {
 		Endpoints: []discoveryv1.Endpoint{{
 			Addresses: []string{"10.1.0.100", "10.1.0.101", "10.1.0.102"}, // Pod IPs that should NOT be used
 			Conditions: discoveryv1.EndpointConditions{
-				Ready:       ptr.To(true),
-				Serving:     ptr.To(true),
-				Terminating: ptr.To(false),
+				Ready:       new(true),
+				Serving:     new(true),
+				Terminating: new(false),
 			},
 		}},
 		Ports: []discoveryv1.EndpointPort{{
-			Port: ptr.To(int32(10443)),
+			Port: new(int32(10443)),
 		}},
 	}
 
@@ -316,7 +315,7 @@ func TestDNSRecordsReconcilerDualStack(t *testing.T) {
 			Namespace: "test",
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 		},
 		Status: networkingv1.IngressStatus{
 			LoadBalancer: networkingv1.IngressLoadBalancerStatus{
@@ -447,9 +446,9 @@ func endpointSliceForService(svc *corev1.Service, ip string, fam discoveryv1.Add
 		Endpoints: []discoveryv1.Endpoint{{
 			Addresses: []string{ip},
 			Conditions: discoveryv1.EndpointConditions{
-				Ready:       ptr.To(true),
-				Serving:     ptr.To(true),
-				Terminating: ptr.To(false),
+				Ready:       new(true),
+				Serving:     new(true),
+				Terminating: new(false),
 			},
 		}},
 	}

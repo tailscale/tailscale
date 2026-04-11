@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 )
@@ -125,20 +126,91 @@ func TestNodeReadRawWithoutAllocating(t *testing.T) {
 	}
 }
 
-func TestNodeWriteRawWithoutAllocating(t *testing.T) {
-	buf := make([]byte, 0, 32)
-	w := bytes.NewBuffer(buf)
-	bw := bufio.NewWriter(w)
-	got := testing.AllocsPerRun(1000, func() {
-		w.Reset()
-		bw.Reset(w)
+func BenchmarkNodeReadRawWithoutAllocating(b *testing.B) {
+	buf := make([]byte, 32)
+	for i := range buf {
+		buf[i] = 0x42
+	}
+	r := bytes.NewReader(buf)
+	br := bufio.NewReader(r)
+	b.ReportAllocs()
+	for b.Loop() {
+		r.Reset(buf)
+		br.Reset(r)
 		var k NodePublic
+		if err := k.ReadRawWithoutAllocating(br); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestNodeWriteRawWithoutAllocating(t *testing.T) {
+	var k NodePublic
+	for i := range k.k {
+		k.k[i] = byte(i)
+	}
+
+	// Test fast path (empty buffer, plenty of space).
+	t.Run("fast", func(t *testing.T) {
+		var buf bytes.Buffer
+		bw := bufio.NewWriter(&buf)
 		if err := k.WriteRawWithoutAllocating(bw); err != nil {
 			t.Fatalf("WriteRawWithoutAllocating: %v", err)
 		}
+		bw.Flush()
+		if got := buf.Bytes(); !bytes.Equal(got, k.k[:]) {
+			t.Errorf("wrote % 02x, want % 02x", got, k.k)
+		}
 	})
-	if want := 0.0; got != want {
-		t.Fatalf("WriteRawWithoutAllocating got %f allocs, want %f", got, want)
+
+	// Test slow path (buffer nearly full, less than 32 bytes available).
+	t.Run("slow", func(t *testing.T) {
+		var buf bytes.Buffer
+		const smallBuf = 40
+		bw := bufio.NewWriterSize(&buf, smallBuf)
+		// Fill buffer to leave less than 32 bytes available.
+		padding := make([]byte, smallBuf-len(k.k)+1)
+		if _, err := bw.Write(padding); err != nil {
+			t.Fatalf("Write padding: %v", err)
+		}
+		if err := k.WriteRawWithoutAllocating(bw); err != nil {
+			t.Fatalf("WriteRawWithoutAllocating: %v", err)
+		}
+		bw.Flush()
+		got := buf.Bytes()[len(padding):]
+		if !bytes.Equal(got, k.k[:]) {
+			t.Errorf("wrote % 02x, want % 02x", got, k.k)
+		}
+	})
+
+	// Verify zero allocations on fast path.
+	t.Run("allocs", func(t *testing.T) {
+		w := bytes.NewBuffer(make([]byte, 0, 32))
+		bw := bufio.NewWriter(w)
+		got := testing.AllocsPerRun(1000, func() {
+			w.Reset()
+			bw.Reset(w)
+			if err := k.WriteRawWithoutAllocating(bw); err != nil {
+				t.Fatalf("WriteRawWithoutAllocating: %v", err)
+			}
+		})
+		if got != 0 {
+			t.Fatalf("WriteRawWithoutAllocating allocs = %f, want 0", got)
+		}
+	})
+}
+
+func BenchmarkNodeWriteRawWithoutAllocating(b *testing.B) {
+	bw := bufio.NewWriter(io.Discard)
+	var k NodePublic
+	for i := range k.k {
+		k.k[i] = 0x42
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := k.WriteRawWithoutAllocating(bw); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

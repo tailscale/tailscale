@@ -24,7 +24,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/set"
 )
 
@@ -243,7 +242,7 @@ func (r *Reconciler) generateIngressPolicy(ctx context.Context, namespace string
 			ResourceVersion: policy.ResourceVersion,
 		},
 		Spec: admr.ValidatingAdmissionPolicySpec{
-			FailurePolicy: ptr.To(admr.Fail),
+			FailurePolicy: new(admr.Fail),
 			MatchConstraints: &admr.MatchResources{
 				// The operator allows ingress via Ingress resources & Service resources (that use the "tailscale" load
 				// balancer class), so we have two resource rules here with multiple validation expressions that attempt
@@ -304,7 +303,7 @@ func (r *Reconciler) generateEgressPolicy(ctx context.Context, namespace string,
 			ResourceVersion: policy.ResourceVersion,
 		},
 		Spec: admr.ValidatingAdmissionPolicySpec{
-			FailurePolicy: ptr.To(admr.Fail),
+			FailurePolicy: new(admr.Fail),
 			MatchConstraints: &admr.MatchResources{
 				ResourceRules: []admr.NamedRuleWithOperations{
 					{

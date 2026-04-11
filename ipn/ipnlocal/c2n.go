@@ -44,9 +44,6 @@ func init() {
 		// several candidate nodes is reachable and actually alive.
 		RegisterC2N("/echo", handleC2NEcho)
 	}
-	if buildfeatures.HasSSH {
-		RegisterC2N("/ssh/usernames", handleC2NSSHUsernames)
-	}
 	if buildfeatures.HasLogTail {
 		RegisterC2N("POST /logtail/flush", handleC2NLogtailFlush)
 	}
@@ -288,26 +285,6 @@ func handleC2NPprof(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
 	}
 	_, profile := path.Split(r.URL.Path)
 	c2nPprof(w, r, profile)
-}
-
-func handleC2NSSHUsernames(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
-	if !buildfeatures.HasSSH {
-		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
-		return
-	}
-	var req tailcfg.C2NSSHUsernamesRequest
-	if r.Method == "POST" {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
-	res, err := b.getSSHUsernames(&req)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	writeJSON(w, res)
 }
 
 func handleC2NSockStats(b *LocalBackend, w http.ResponseWriter, r *http.Request) {

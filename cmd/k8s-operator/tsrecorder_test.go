@@ -21,11 +21,12 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"tailscale.com/client/tailscale/v2"
 
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/tstest"
-	"tailscale.com/types/ptr"
 )
 
 const (
@@ -40,7 +41,7 @@ func TestRecorder(t *testing.T) {
 			Finalizers: []string{"tailscale.com/finalizer"},
 		},
 		Spec: tsapi.RecorderSpec{
-			Replicas: ptr.To[int32](3),
+			Replicas: new(int32(3)),
 		},
 	}
 
@@ -49,18 +50,17 @@ func TestRecorder(t *testing.T) {
 		WithObjects(tsr).
 		WithStatusSubresource(tsr).
 		Build()
-	tsClient := &fakeTSClient{}
+	tsClient := &fakeTSClient{loginURL: tsLoginServer}
 	zl, _ := zap.NewDevelopment()
 	fr := record.NewFakeRecorder(2)
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	reconciler := &RecorderReconciler{
 		tsNamespace: tsNamespace,
 		Client:      fc,
-		tsClient:    tsClient,
+		clients:     tsclient.NewProvider(tsClient),
 		recorder:    fr,
 		log:         zl.Sugar(),
 		clock:       cl,
-		loginServer: tsLoginServer,
 	}
 
 	t.Run("invalid_spec_gives_an_error_condition", func(t *testing.T) {
@@ -195,8 +195,8 @@ func TestRecorder(t *testing.T) {
 	})
 
 	t.Run("populate_node_info_in_state_secret_and_see_it_appear_in_status", func(t *testing.T) {
-
 		const key = "profile-abc"
+
 		for replica := range *tsr.Spec.Replicas {
 			bytes, err := json.Marshal(map[string]any{
 				"Config": map[string]any{
@@ -217,6 +217,24 @@ func TestRecorder(t *testing.T) {
 					key:               bytes,
 				}
 			})
+		}
+
+		tsClient.devices = []tailscale.Device{
+			{
+				ID:        "node-0",
+				Hostname:  "hostname-node-0",
+				Addresses: []string{"1.2.3.4", "::1"},
+			},
+			{
+				ID:        "node-1",
+				Hostname:  "hostname-node-1",
+				Addresses: []string{"1.2.3.4", "::1"},
+			},
+			{
+				ID:        "node-2",
+				Hostname:  "hostname-node-2",
+				Addresses: []string{"1.2.3.4", "::1"},
+			},
 		}
 
 		expectReconciled(t, reconciler, "", tsr.Name)
@@ -285,7 +303,7 @@ func expectRecorderResources(t *testing.T, fc client.WithWatch, tsr *tsapi.Recor
 	}
 
 	for replica := range replicas {
-		auth := tsrAuthSecret(tsr, tsNamespace, "secret-authkey", replica)
+		auth := tsrAuthSecret(tsr, tsNamespace, "new-authkey", replica)
 		state := tsrStateSecret(tsr, tsNamespace, replica)
 
 		if shouldExist {

@@ -142,14 +142,11 @@ func (h *Handler) serveDebugDialTypes(w http.ResponseWriter, r *http.Request) {
 
 	var wg sync.WaitGroup
 	for _, dialer := range dialers {
-		dialer := dialer // loop capture
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			conn, err := dialer.dial(ctx, network, addr)
 			results <- result{dialer.name, conn, err}
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -237,6 +234,15 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		}
 	case "rotate-disco-key":
 		err = h.b.DebugRotateDiscoKey()
+	case "statedir":
+		root := h.b.TailscaleVarRoot()
+		w.Header().Set("Content-Type", "application/json")
+		err = json.NewEncoder(w).Encode(root)
+		if err == nil {
+			return
+		}
+	case "clear-netmap-cache":
+		h.b.ClearNetmapCache(r.Context())
 	case "":
 		err = fmt.Errorf("missing parameter 'action'")
 	default:

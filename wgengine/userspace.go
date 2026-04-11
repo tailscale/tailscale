@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	crand "crypto/rand"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -42,6 +43,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/dnstype"
+	"tailscale.com/types/events"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -120,7 +122,8 @@ type userspaceEngine struct {
 	birdClient     BIRDClient          // or nil
 	controlKnobs   *controlknobs.Knobs // or nil
 
-	testMaybeReconfigHook func() // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
+	testMaybeReconfigHook func()                        // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
+	testDiscoChangedHook  func(map[key.NodePublic]bool) // for tests; if non-nil, fires after assembling discoChanged map
 
 	// isLocalAddr reports the whether an IP is assigned to the local
 	// tunnel interface. It's used to reflect local packets
@@ -165,6 +168,10 @@ type userspaceEngine struct {
 
 	// networkLogger logs statistics about network connections.
 	networkLogger netlog.Logger
+
+	// tsmpLearnedDisco tracks per node key if a peer disco key was learned via TSMP.
+	// wgLock must be held when using this map.
+	tsmpLearnedDisco map[key.NodePublic]key.DiscoPublic
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
@@ -230,6 +237,10 @@ type Config struct {
 	// If nil, a new Dialer is created.
 	Dialer *tsdial.Dialer
 
+	// ExtraRootCAs, if non-nil, specifies additional trusted root CAs for TLS
+	// connections (e.g. DERP). Passed through to magicsock.
+	ExtraRootCAs *x509.CertPool
+
 	// ControlKnobs is the set of control plane-provied knobs
 	// to use.
 	// If nil, defaults are used.
@@ -265,6 +276,20 @@ type Config struct {
 	// Conn25PacketHooks, if non-nil, is used to hook packets for Connectors 2025
 	// app connector handling logic.
 	Conn25PacketHooks Conn25PacketHooks
+
+	// ForceDiscoKey, if non-zero, forces the use of a specific disco
+	// private key. This should only be used for special cases and
+	// experiments, not for production. The recommended normal path is to
+	// leave it zero, in which case a new disco key is generated per
+	// Tailscale start and kept only in memory.
+	ForceDiscoKey key.DiscoPrivate
+
+	// OnDERPRecv, if non-nil, is called for every non-disco packet
+	// received from DERP before the peer map lookup. If it returns
+	// true, the packet is considered handled and is not passed to
+	// WireGuard. The pkt slice is borrowed and must be copied if
+	// the callee needs to retain it.
+	OnDERPRecv func(regionID int, src key.NodePublic, pkt []byte) (handled bool)
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.
@@ -430,9 +455,12 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		IdleFunc:       e.tundev.IdleDuration,
 		NetMon:         e.netMon,
 		HealthTracker:  e.health,
+		ExtraRootCAs:   conf.ExtraRootCAs,
 		Metrics:        conf.Metrics,
 		ControlKnobs:   conf.ControlKnobs,
 		PeerByKeyFunc:  e.PeerByKey,
+		ForceDiscoKey:  conf.ForceDiscoKey,
+		OnDERPRecv:     conf.OnDERPRecv,
 	}
 	if buildfeatures.HasLazyWG {
 		magicsockOpts.NoteRecvActivity = e.noteRecvActivity
@@ -581,7 +609,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		}
 		e.linkChangeQueue.Add(func() { e.linkChange(&cd) })
 	})
-	eventbus.SubscribeFunc(ec, func(update tstun.DiscoKeyAdvertisement) {
+	eventbus.SubscribeFunc(ec, func(update events.PeerDiscoKeyUpdate) {
 		e.logf("wgengine: got TSMP disco key advertisement from %v via eventbus", update.Src)
 		if e.magicConn == nil {
 			e.logf("wgengine: no magicConn")
@@ -1011,6 +1039,12 @@ func (e *userspaceEngine) ResetAndStop() (*Status, error) {
 	}
 }
 
+func (e *userspaceEngine) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPublic) {
+	e.wgLock.Lock()
+	defer e.wgLock.Unlock()
+	mak.Set(&e.tsmpLearnedDisco, pub, disco)
+}
+
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config) error {
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
@@ -1102,12 +1136,51 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 			if p.DiscoKey.IsZero() {
 				continue
 			}
+
+			// If the key changed, mark the connection for reconfiguration.
 			pub := p.PublicKey
+
 			if old, ok := prevEP[pub]; ok && old != p.DiscoKey {
+				// If the disco key was learned via TSMP, we do not need to reset the
+				// wireguard config as the new key was received over an existing wireguard
+				// connection.
+				if discoTSMP, okTSMP := e.tsmpLearnedDisco[p.PublicKey]; okTSMP {
+					if discoTSMP == p.DiscoKey {
+						// Key matches, remove entry from map.
+						e.logf("wgengine: Skipping reconfig (TSMP key): %s changed from %q to %q",
+							pub.ShortString(), old, p.DiscoKey)
+						delete(e.tsmpLearnedDisco, p.PublicKey)
+					} else {
+						// The new disco key does not match what we received via
+						// TSMP for this peer. This is unexpected, so log it.
+						// If it does happen, overwrite the previously-saved
+						// disco key with the new one for now:  We expect another
+						// update must be pending in that case, so keep the map
+						// entry.
+						// The reason why this should never happen is that only a single
+						// request is coming through the netmap pipeline at a time, and there
+						// should realistically ever only be a single entry in the map. This
+						// is really a belt and suspenders solution to find usage that is
+						// inconsistent with our expectations.
+						e.logf("wgengine: [unexpected] Reconfig: using TSMP key for %s (control stale): tsmp=%q control=%q old=%q",
+							pub.ShortString(), discoTSMP, p.DiscoKey, old)
+						metricTSMPLearnedKeyMismatch.Add(1)
+						p.DiscoKey = discoTSMP
+					}
+
+					// Skip session clear no matter what.
+					continue
+				}
+
 				discoChanged[pub] = true
 				e.logf("wgengine: Reconfig: %s changed from %q to %q", pub.ShortString(), old, p.DiscoKey)
 			}
 		}
+	}
+
+	// For tests, what disco connections needs to be changed.
+	if e.testDiscoChangedHook != nil {
+		e.testDiscoChangedHook(discoChanged)
 	}
 
 	e.lastCfgFull = *cfg.Clone()
@@ -1125,6 +1198,13 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 
 	if err := e.maybeReconfigWireguardLocked(discoChanged); err != nil {
 		return err
+	}
+
+	// Cleanup map of tsmp marks for peers that no longer exists in config.
+	for nodeKey := range e.tsmpLearnedDisco {
+		if !peerSet.Contains(nodeKey) {
+			delete(e.tsmpLearnedDisco, nodeKey)
+		}
 	}
 
 	// Shutdown the network logger because the IDs changed.
@@ -1823,6 +1903,8 @@ var (
 
 	metricTSMPDiscoKeyAdvertisementSent  = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_sent")
 	metricTSMPDiscoKeyAdvertisementError = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_error")
+
+	metricTSMPLearnedKeyMismatch = clientmetric.NewCounter("magicsock_tsmp_learned_key_mismatch")
 )
 
 func (e *userspaceEngine) InstallCaptureHook(cb packet.CaptureCallback) {

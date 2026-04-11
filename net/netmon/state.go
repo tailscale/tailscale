@@ -41,7 +41,12 @@ func isProblematicInterface(nif *net.Interface) bool {
 	// DoS each other by doing traffic amplification, both of them
 	// preferring/trying to use each other for transport. See:
 	// https://github.com/tailscale/tailscale/issues/1208
-	if strings.HasPrefix(name, "zt") || (runtime.GOOS == "windows" && strings.Contains(name, "ZeroTier")) {
+	// TODO(https://github.com/tailscale/tailscale/issues/18824): maybe exclude
+	// "WireGuard tunnel 0" as well on Windows (NetBird), but the name seems too
+	// generic where there is not a platform standard (on Linux wt0 is at least
+	// explicitly different from the WireGuard conventional default of wg0).
+	if strings.HasPrefix(name, "zt") || name == "wt0" /* NetBird */ ||
+		(runtime.GOOS == "windows" && strings.Contains(name, "ZeroTier")) {
 		return true
 	}
 	return false
@@ -438,6 +443,91 @@ func (a Interface) Equal(b Interface) bool {
 	return true
 }
 
+// InterfaceDiff returns a human-readable summary of the differences between s
+// and s2 that would cause Equal to return false. It returns "" if the states
+// are equal. This is useful for debugging false link change events where the
+// State.String() output looks identical but Equal() returns false because it
+// checks fields not shown in String() (like interface Flags, MTU, HardwareAddr).
+func (s *State) InterfaceDiff(s2 *State) string {
+	if s == nil && s2 == nil {
+		return ""
+	}
+	if s == nil {
+		return "old=nil"
+	}
+	if s2 == nil {
+		return "new=nil"
+	}
+	var diffs []string
+	if s.HaveV6 != s2.HaveV6 {
+		diffs = append(diffs, fmt.Sprintf("HaveV6: %v->%v", s.HaveV6, s2.HaveV6))
+	}
+	if s.HaveV4 != s2.HaveV4 {
+		diffs = append(diffs, fmt.Sprintf("HaveV4: %v->%v", s.HaveV4, s2.HaveV4))
+	}
+	if s.IsExpensive != s2.IsExpensive {
+		diffs = append(diffs, fmt.Sprintf("IsExpensive: %v->%v", s.IsExpensive, s2.IsExpensive))
+	}
+	if s.DefaultRouteInterface != s2.DefaultRouteInterface {
+		diffs = append(diffs, fmt.Sprintf("DefaultRoute: %q->%q", s.DefaultRouteInterface, s2.DefaultRouteInterface))
+	}
+	if s.HTTPProxy != s2.HTTPProxy {
+		diffs = append(diffs, fmt.Sprintf("HTTPProxy: %q->%q", s.HTTPProxy, s2.HTTPProxy))
+	}
+	if s.PAC != s2.PAC {
+		diffs = append(diffs, fmt.Sprintf("PAC: %q->%q", s.PAC, s2.PAC))
+	}
+	if len(s.Interface) != len(s2.Interface) {
+		diffs = append(diffs, fmt.Sprintf("numInterfaces: %d->%d", len(s.Interface), len(s2.Interface)))
+	}
+	if len(s.InterfaceIPs) != len(s2.InterfaceIPs) {
+		diffs = append(diffs, fmt.Sprintf("numInterfaceIPs: %d->%d", len(s.InterfaceIPs), len(s2.InterfaceIPs)))
+	}
+	for iname, i := range s.Interface {
+		i2, ok := s2.Interface[iname]
+		if !ok {
+			diffs = append(diffs, fmt.Sprintf("if %s: removed", iname))
+			continue
+		}
+		if !i.Equal(i2) {
+			if i.Interface != nil && i2.Interface != nil {
+				if i.Flags != i2.Flags {
+					diffs = append(diffs, fmt.Sprintf("if %s flags: %v->%v", iname, i.Flags, i2.Flags))
+				}
+				if i.MTU != i2.MTU {
+					diffs = append(diffs, fmt.Sprintf("if %s MTU: %d->%d", iname, i.MTU, i2.MTU))
+				}
+				if i.Index != i2.Index {
+					diffs = append(diffs, fmt.Sprintf("if %s index: %d->%d", iname, i.Index, i2.Index))
+				}
+				if !bytes.Equal([]byte(i.HardwareAddr), []byte(i2.HardwareAddr)) {
+					diffs = append(diffs, fmt.Sprintf("if %s hwaddr: %v->%v", iname, i.HardwareAddr, i2.HardwareAddr))
+				}
+			}
+			if i.Desc != i2.Desc {
+				diffs = append(diffs, fmt.Sprintf("if %s desc: %q->%q", iname, i.Desc, i2.Desc))
+			}
+		}
+	}
+	for iname := range s2.Interface {
+		if _, ok := s.Interface[iname]; !ok {
+			diffs = append(diffs, fmt.Sprintf("if %s: added", iname))
+		}
+	}
+	for iname, vv := range s.InterfaceIPs {
+		vv2 := s2.InterfaceIPs[iname]
+		if !slices.Equal(vv, vv2) {
+			diffs = append(diffs, fmt.Sprintf("ips %s: %v->%v", iname, vv, vv2))
+		}
+	}
+	for iname := range s2.InterfaceIPs {
+		if _, ok := s.InterfaceIPs[iname]; !ok {
+			diffs = append(diffs, fmt.Sprintf("ips %s: added %v", iname, s2.InterfaceIPs[iname]))
+		}
+	}
+	return strings.Join(diffs, "; ")
+}
+
 func (s *State) HasPAC() bool { return s != nil && s.PAC != "" }
 
 // AnyInterfaceUp reports whether any interface seems like it has Internet access.
@@ -807,11 +897,8 @@ func (m *Monitor) HasCGNATInterface() (bool, error) {
 		if hasCGNATInterface || !i.IsUp() || isTailscaleInterface(i.Name, pfxs) {
 			return
 		}
-		for _, pfx := range pfxs {
-			if cgnatRange.Overlaps(pfx) {
-				hasCGNATInterface = true
-				break
-			}
+		if slices.ContainsFunc(pfxs, cgnatRange.Overlaps) {
+			hasCGNATInterface = true
 		}
 	})
 	if err != nil {

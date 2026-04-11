@@ -352,8 +352,7 @@ func main() {
 			// If there's nothing to retry and no non-retryable tests have
 			// failed then we've probably hit a build error.
 			if err := <-runErr; len(toRetry) == 0 && err != nil {
-				var exit *exec.ExitError
-				if errors.As(err, &exit) {
+				if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 					if code := exit.ExitCode(); code > -1 {
 						os.Exit(exit.ExitCode())
 					}

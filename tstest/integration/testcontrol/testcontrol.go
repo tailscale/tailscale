@@ -38,7 +38,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
@@ -487,6 +486,13 @@ func (s *Server) SetSubnetRoutes(nodeKey key.NodePublic, routes []netip.Prefix) 
 	mak.Set(&s.nodeSubnetRoutes, nodeKey, routes)
 	if node, ok := s.nodes[nodeKey]; ok {
 		sendUpdate(s.updates[node.ID], updateSelfChanged)
+		// Also notify all other peers so they get the updated AllowedIPs
+		// in their next MapResponse.
+		for _, n := range s.nodes {
+			if n.ID != node.ID {
+				sendUpdate(s.updates[n.ID], updatePeerChanged)
+			}
+		}
 	}
 }
 
@@ -1337,9 +1343,9 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		}
 		if masqIP := nodeMasqs[p.Key]; masqIP.IsValid() {
 			if masqIP.Is6() {
-				p.SelfNodeV6MasqAddrForThisPeer = ptr.To(masqIP)
+				p.SelfNodeV6MasqAddrForThisPeer = new(masqIP)
 			} else {
-				p.SelfNodeV4MasqAddrForThisPeer = ptr.To(masqIP)
+				p.SelfNodeV4MasqAddrForThisPeer = new(masqIP)
 			}
 		}
 		p.IsJailed = jailed[p.Key]

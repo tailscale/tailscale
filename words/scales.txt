@@ -6,6 +6,7 @@ catfish
 bass
 salmon
 tuna
+fish
 hammerhead
 eel
 carp

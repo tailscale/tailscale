@@ -152,7 +152,7 @@ func (s bitSet) values() iter.Seq[uint64] {
 	return func(yield func(uint64) bool) {
 		// Hyrum-proofing: randomly iterate in forwards or reverse.
 		if rand.Uint64()%2 == 0 {
-			for i := 0; i < bits.UintSize; i++ {
+			for i := range bits.UintSize {
 				if s.contains(uint64(i)) && !yield(uint64(i)) {
 					return
 				}

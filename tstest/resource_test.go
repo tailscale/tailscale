@@ -22,7 +22,7 @@ func TestPrintGoroutines(t *testing.T) {
 			want: "goroutine profile: total 0",
 		},
 		{
-			name: "single goroutine",
+			name: "single-goroutine",
 			in: `goroutine profile: total 1
 1 @ 0x47bc0e 0x458e57 0x847587 0x483da1
 #   0x847586    database/sql.(*DB).connectionOpener+0x86    database/sql/sql.go:1261
@@ -34,7 +34,7 @@ func TestPrintGoroutines(t *testing.T) {
 `,
 		},
 		{
-			name: "multiple goroutines sorted",
+			name: "multiple-goroutines-sorted",
 			in: `goroutine profile: total 14
 7 @ 0x47bc0e 0x413705 0x4132b2 0x10fda4d 0x483da1
 #   0x10fda4c   github.com/user/pkg.RoutineA+0x16c    pkg/a.go:443
@@ -70,7 +70,7 @@ func TestDiffPprofGoroutines(t *testing.T) {
 		want string
 	}{
 		{
-			name: "no difference",
+			name: "no-difference",
 			x: `goroutine profile: total 1
 1 @ 0x47bc0e 0x458e57 0x847587 0x483da1
 #   0x847586    database/sql.(*DB).connectionOpener+0x86    database/sql/sql.go:1261`,
@@ -81,7 +81,7 @@ func TestDiffPprofGoroutines(t *testing.T) {
 			want: "",
 		},
 		{
-			name: "different counts",
+			name: "different-counts",
 			x: `goroutine profile: total 1
 1 @ 0x47bc0e 0x458e57 0x847587 0x483da1
 #   0x847586    database/sql.(*DB).connectionOpener+0x86    database/sql/sql.go:1261
@@ -99,7 +99,7 @@ func TestDiffPprofGoroutines(t *testing.T) {
 `,
 		},
 		{
-			name: "new goroutine",
+			name: "new-goroutine",
 			x: `goroutine profile: total 1
 1 @ 0x47bc0e 0x458e57 0x847587 0x483da1
 #   0x847586    database/sql.(*DB).connectionOpener+0x86    database/sql/sql.go:1261
@@ -119,7 +119,7 @@ func TestDiffPprofGoroutines(t *testing.T) {
 `,
 		},
 		{
-			name: "removed goroutine",
+			name: "removed-goroutine",
 			x: `goroutine profile: total 2
 1 @ 0x47bc0e 0x458e57 0x847587 0x483da1
 #   0x847586    database/sql.(*DB).connectionOpener+0x86    database/sql/sql.go:1261
@@ -139,7 +139,7 @@ func TestDiffPprofGoroutines(t *testing.T) {
 `,
 		},
 		{
-			name: "removed many goroutine",
+			name: "removed-many-goroutine",
 			x: `goroutine profile: total 2
 1 @ 0x47bc0e 0x458e57 0x847587 0x483da1
 #   0x847586    database/sql.(*DB).connectionOpener+0x86    database/sql/sql.go:1261
@@ -159,13 +159,13 @@ func TestDiffPprofGoroutines(t *testing.T) {
 `,
 		},
 		{
-			name: "invalid input x",
+			name: "invalid-input-x",
 			x:    "invalid",
 			y:    "goroutine profile: total 0\n",
 			want: "- invalid\n+ goroutine profile: total 0\n",
 		},
 		{
-			name: "invalid input y",
+			name: "invalid-input-y",
 			x:    "goroutine profile: total 0\n",
 			y:    "invalid",
 			want: "- goroutine profile: total 0\n+ invalid\n",
@@ -193,13 +193,13 @@ func TestParseGoroutines(t *testing.T) {
 		wantCount  int
 	}{
 		{
-			name:       "empty profile",
+			name:       "empty-profile",
 			in:         "goroutine profile: total 0\n",
 			wantHeader: "goroutine profile: total 0",
 			wantCount:  0,
 		},
 		{
-			name: "single goroutine",
+			name: "single-goroutine",
 			in: `goroutine profile: total 1
 1 @ 0x47bc0e 0x458e57 0x847587 0x483da1
 #   0x847586    database/sql.(*DB).connectionOpener+0x86    database/sql/sql.go:1261
@@ -208,7 +208,7 @@ func TestParseGoroutines(t *testing.T) {
 			wantCount:  1,
 		},
 		{
-			name: "multiple goroutines",
+			name: "multiple-goroutines",
 			in: `goroutine profile: total 14
 7 @ 0x47bc0e 0x413705 0x4132b2 0x10fda4d 0x483da1
 #   0x10fda4c   github.com/user/pkg.RoutineA+0x16c    pkg/a.go:443
@@ -220,7 +220,7 @@ func TestParseGoroutines(t *testing.T) {
 			wantCount:  2,
 		},
 		{
-			name:       "invalid format",
+			name:       "invalid-format",
 			in:         "invalid",
 			wantHeader: "invalid",
 		},
@@ -245,7 +245,7 @@ func TestParseGoroutines(t *testing.T) {
 					t.Errorf("sort field has different number of words: got %d, want %d", len(sorted), len(original))
 					continue
 				}
-				for i := 0; i < len(original); i++ {
+				for i := range original {
 					if original[i] != sorted[len(sorted)-1-i] {
 						t.Errorf("sort field word mismatch at position %d: got %q, want %q", i, sorted[len(sorted)-1-i], original[i])
 					}

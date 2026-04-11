@@ -11,7 +11,6 @@ import (
 	"math/rand/v2"
 	"testing"
 
-	"github.com/AlekSi/pointer"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -106,11 +105,11 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		expectReconciled(t, er, "operator-ns", "foo")
 		eps.Endpoints = append(eps.Endpoints, discoveryv1.Endpoint{
 			Addresses: []string{"10.0.0.1"},
-			Hostname:  pointer.To("foo"),
+			Hostname:  new("foo"),
 			Conditions: discoveryv1.EndpointConditions{
-				Serving:     pointer.ToBool(true),
-				Ready:       pointer.ToBool(true),
-				Terminating: pointer.ToBool(false),
+				Serving:     new(true),
+				Ready:       new(true),
+				Terminating: new(false),
 			},
 		})
 		expectEqual(t, fc, eps)

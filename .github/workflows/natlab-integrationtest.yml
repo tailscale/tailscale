@@ -7,9 +7,15 @@ concurrency:
   cancel-in-progress: true
 
 on:
+  push:
+    branches:
+      - "main"
+      - "release-branch/*"
   pull_request:
-    paths:
-      - "tstest/integration/nat/nat_test.go"
+    # all PRs on all branches
+  merge_group:
+    branches:
+      - "main"
 jobs:
   natlab-integrationtest:
     runs-on: ubuntu-latest

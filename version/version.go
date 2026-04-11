@@ -172,6 +172,10 @@ func majorMinorPatch() string {
 	return ret
 }
 
+// IsTailscaleGo reports whether the current binary was built with
+// Tailscale's custom Go toolchain.
+func IsTailscaleGo() bool { return isTailscaleGo }
+
 func isValidLongWithTwoRepos(v string) bool {
 	s := strings.Split(v, "-")
 	if len(s) != 3 {

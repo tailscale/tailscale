@@ -194,6 +194,7 @@ func TestGetServeHandler(t *testing.T) {
 			b := &LocalBackend{
 				serveConfig: tt.conf.View(),
 				logf:        t.Logf,
+				health:      health.NewTracker(eventbustest.NewBus(t)),
 			}
 			req := &http.Request{
 				URL: &url.URL{
@@ -619,49 +620,49 @@ func TestServeHTTPProxyPath(t *testing.T) {
 		wantRequestPath string
 	}{
 		{
-			name:            "/foo -> /foo, with mount point and path /foo",
+			name:            "foo-to-foo-mount-foo",
 			mountPoint:      "/foo",
 			proxyPath:       "/foo",
 			requestPath:     "/foo",
 			wantRequestPath: "/foo",
 		},
 		{
-			name:            "/foo/ -> /foo/, with mount point and path /foo",
+			name:            "foo-slash-to-foo-slash-mount-foo",
 			mountPoint:      "/foo",
 			proxyPath:       "/foo",
 			requestPath:     "/foo/",
 			wantRequestPath: "/foo/",
 		},
 		{
-			name:            "/foo -> /foo/, with mount point and path /foo/",
+			name:            "foo-to-foo-slash-mount-foo-slash",
 			mountPoint:      "/foo/",
 			proxyPath:       "/foo/",
 			requestPath:     "/foo",
 			wantRequestPath: "/foo/",
 		},
 		{
-			name:            "/-> /, with mount point and path /",
+			name:            "root-to-root-mount-root",
 			mountPoint:      "/",
 			proxyPath:       "/",
 			requestPath:     "/",
 			wantRequestPath: "/",
 		},
 		{
-			name:            "/foo -> /foo, with mount point and path /",
+			name:            "foo-to-foo-mount-root",
 			mountPoint:      "/",
 			proxyPath:       "/",
 			requestPath:     "/foo",
 			wantRequestPath: "/foo",
 		},
 		{
-			name:            "/foo/bar -> /foo/bar, with mount point and path /foo",
+			name:            "foo-bar-to-foo-bar-mount-foo",
 			mountPoint:      "/foo",
 			proxyPath:       "/foo",
 			requestPath:     "/foo/bar",
 			wantRequestPath: "/foo/bar",
 		},
 		{
-			name:            "/foo/bar/baz -> /foo/bar/baz, with mount point and path /foo",
+			name:            "foo-bar-baz-to-foo-bar-baz-mount-foo",
 			mountPoint:      "/foo",
 			proxyPath:       "/foo",
 			requestPath:     "/foo/bar/baz",
@@ -1191,7 +1192,9 @@ func TestServeFileOrDirectory(t *testing.T) {
 		}
 	}
 
-	b := &LocalBackend{}
+	b := &LocalBackend{
+		health: health.NewTracker(eventbustest.NewBus(t)),
+	}
 
 	tests := []struct {
 		req   string
@@ -1457,7 +1460,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 		wantError          bool
 	}{
 		{
-			name:        "empty existing config",
+			name:        "empty-existing-config",
 			description: "should be able to update with empty existing config",
 			existing:    &ipn.ServeConfig{},
 			incoming: &ipn.ServeConfig{
@@ -1468,7 +1471,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "no existing config",
+			name:        "no-existing-config",
 			description: "should be able to update with no existing config",
 			existing:    nil,
 			incoming: &ipn.ServeConfig{
@@ -1479,7 +1482,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "empty incoming config",
+			name:        "empty-incoming-config",
 			description: "wiping config should work",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1490,7 +1493,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "no incoming config",
+			name:        "no-incoming-config",
 			description: "missing incoming config should not result in an error",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1501,7 +1504,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "non-overlapping update",
+			name:        "non-overlapping-update",
 			description: "non-overlapping update should work",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1516,7 +1519,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "overwriting background port",
+			name:        "overwriting-background-port",
 			description: "should be able to overwrite a background port",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1535,7 +1538,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "broken existing config",
+			name:        "broken-existing-config",
 			description: "broken existing config should not prevent new config updates",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1573,7 +1576,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "services same port as background",
+			name:        "services-same-port-as-background",
 			description: "services should be able to use the same port as background listeners",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1592,7 +1595,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "services tun mode",
+			name:        "services-tun-mode",
 			description: "TUN mode should be mutually exclusive with TCP or web handlers for new Services",
 			existing:    &ipn.ServeConfig{},
 			incoming: &ipn.ServeConfig{
@@ -1608,7 +1611,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name:        "new foreground listener",
+			name:        "new-foreground-listener",
 			description: "new foreground listeners must be on open ports",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1627,7 +1630,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name:        "new background listener",
+			name:        "new-background-listener",
 			description: "new background listers cannot overwrite foreground listeners",
 			existing: &ipn.ServeConfig{
 				Foreground: map[string]*ipn.ServeConfig{
@@ -1646,7 +1649,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name:        "serve type overwrite",
+			name:        "serve-type-overwrite",
 			description: "incoming configuration cannot change the serve type in use by a port",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1665,7 +1668,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name:        "serve type overwrite services",
+			name:        "serve-type-overwrite-services",
 			description: "incoming Services configuration cannot change the serve type in use by a port",
 			existing: &ipn.ServeConfig{
 				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
@@ -1692,7 +1695,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name:        "tun mode with handlers",
+			name:        "tun-mode-with-handlers",
 			description: "Services cannot enable TUN mode if L4 or L7 handlers already exist",
 			existing: &ipn.ServeConfig{
 				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
@@ -1720,7 +1723,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name:        "handlers with tun mode",
+			name:        "handlers-with-tun-mode",
 			description: "Services cannot add L4 or L7 handlers if TUN mode is already enabled",
 			existing: &ipn.ServeConfig{
 				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{

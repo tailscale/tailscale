@@ -4,10 +4,8 @@
 package e2e
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"testing"
 	"time"
 
@@ -61,15 +59,7 @@ func TestProxy(t *testing.T) {
 		Host: fmt.Sprintf("https://%s:443", hostNameFromOperatorSecret(t, operatorSecret)),
 	}
 	proxyCl, err := client.New(proxyCfg, client.Options{
-		HTTPClient: &http.Client{
-			Timeout: 10 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					RootCAs: testCAs,
-				},
-				DialContext: tnClient.Dial,
-			},
-		},
+		HTTPClient: newHTTPClient(tnClient),
 	})
 	if err != nil {
 		t.Fatal(err)

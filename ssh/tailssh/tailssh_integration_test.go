@@ -31,12 +31,11 @@ import (
 	"github.com/bramvdbogaerde/go-scp"
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/sftp"
+	gliderssh "github.com/tailscale/gliderssh"
 	"golang.org/x/crypto/ssh"
-	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
-	glider "tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/set"
@@ -53,7 +52,21 @@ import (
 // - User "testuser" exists
 // - "testuser" is in groups "groupone" and "grouptwo"
 
+// testVarRoot is a temp directory used as the TailscaleVarRoot for
+// host key generation during integration tests. The test containers
+// don't have system host keys (/etc/ssh/ssh_host_*_key) since they
+// only install openssh-client, so getHostKeys needs a valid var root
+// to generate keys into.
+var testVarRoot string
+
 func TestMain(m *testing.M) {
+	var err error
+	testVarRoot, err = os.MkdirTemp("", "tailssh-test-var")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer os.RemoveAll(testVarRoot)
+
 	// Create our log file.
 	file, err := os.OpenFile("/tmp/tailscalessh.log", os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
@@ -347,11 +360,11 @@ func TestSSHAgentForwarding(t *testing.T) {
 	})
 
 	// Run an SSH server that accepts connections from that client SSH key.
-	gs := glider.Server{
-		Handler: func(s glider.Session) {
+	gs := gliderssh.Server{
+		Handler: func(s gliderssh.Session) {
 			io.WriteString(s, "Hello world\n")
 		},
-		PublicKeyHandler: func(ctx glider.Context, key glider.PublicKey) error {
+		PublicKeyHandler: func(ctx gliderssh.Context, key gliderssh.PublicKey) error {
 			// Note - this is not meant to be cryptographically secure, it's
 			// just checking that SSH agent forwarding is forwarding the right
 			// key.
@@ -448,6 +461,233 @@ client.exec_command('pwd')
 `, host, port)).CombinedOutput()
 	if err != nil {
 		t.Fatalf("failed to connect with Paramiko using password auth: %s\n%q", err, string(out))
+	}
+}
+
+// TestLocalUnixForwarding tests direct-streamlocal@openssh.com, which is what
+// podman remote (issue #12409) and VSCode Remote (issue #5295) use to reach
+// Unix domain sockets on the remote host through SSH. The client opens a
+// channel to a Unix socket path on the server, and data is proxied through.
+func TestLocalUnixForwarding(t *testing.T) {
+	debugTest.Store(true)
+	t.Cleanup(func() {
+		debugTest.Store(false)
+	})
+
+	// Create a Unix socket server in /tmp that simulates a service like
+	// podman's API socket at /run/user/<uid>/podman/podman.sock.
+	socketDir, err := os.MkdirTemp("", "tailssh-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(socketDir) })
+	socketPath := filepath.Join(socketDir, "test-service.sock")
+
+	ul, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ul.Close() })
+
+	// The service echoes back whatever it receives, like an API server would.
+	go func() {
+		for {
+			conn, err := ul.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				io.Copy(conn, conn)
+			}()
+		}
+	}()
+
+	// Start Tailscale SSH server with local port forwarding enabled.
+	addr := testServerWithOpts(t, testServerOpts{
+		username:                 "testuser",
+		allowLocalPortForwarding: true,
+	})
+
+	// Connect to the Tailscale SSH server.
+	cl, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cl.Close() })
+
+	// Open a direct-streamlocal@openssh.com channel to the Unix socket,
+	// exactly as podman remote does.
+	conn, err := cl.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("failed to dial unix socket through SSH: %s", err)
+	}
+	defer conn.Close()
+
+	// Send data through the tunnel and verify it echoes back.
+	want := "GET /_ping HTTP/1.1\r\nHost: d\r\n\r\n"
+	_, err = io.WriteString(conn, want)
+	if err != nil {
+		t.Fatalf("failed to write through tunnel: %s", err)
+	}
+
+	got := make([]byte, len(want))
+	_, err = io.ReadFull(conn, got)
+	if err != nil {
+		t.Fatalf("failed to read through tunnel: %s", err)
+	}
+	if string(got) != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestReverseUnixForwarding tests streamlocal-forward@openssh.com, which tools
+// like VSCode Remote and Zed use to create Unix domain sockets on the remote
+// host that forward connections back to the client through SSH.
+func TestReverseUnixForwarding(t *testing.T) {
+	debugTest.Store(true)
+	t.Cleanup(func() {
+		debugTest.Store(false)
+	})
+
+	// Start Tailscale SSH server with remote port forwarding enabled.
+	addr := testServerWithOpts(t, testServerOpts{
+		username:                  "testuser",
+		allowRemotePortForwarding: true,
+	})
+
+	// Connect to the Tailscale SSH server.
+	cl, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cl.Close() })
+
+	// Request reverse forwarding -- the server creates a Unix socket and
+	// forwards incoming connections back through the SSH tunnel.
+	socketDir, err := os.MkdirTemp("", "tailssh-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(socketDir) })
+	remoteSocketPath := filepath.Join(socketDir, "reverse.sock")
+
+	ln, err := cl.ListenUnix(remoteSocketPath)
+	if err != nil {
+		t.Fatalf("failed to request reverse unix forwarding: %s", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	// Verify the socket file was created on the server side.
+	if _, err := os.Stat(remoteSocketPath); err != nil {
+		t.Fatalf("reverse forwarded socket not created: %s", err)
+	}
+
+	// Accept a connection from the tunnel (client side) and write data.
+	want := "hello from reverse tunnel"
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		io.WriteString(conn, want)
+	}()
+
+	// Connect directly to the socket on the server side, simulating a
+	// local process connecting to the VSCode/Zed IPC socket.
+	conn, err := net.Dial("unix", remoteSocketPath)
+	if err != nil {
+		t.Fatalf("failed to connect to reverse forwarded socket: %s", err)
+	}
+	defer conn.Close()
+
+	got, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatalf("failed to read from reverse forwarded socket: %s", err)
+	}
+	if string(got) != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestUnixForwardingDenied verifies that Unix socket forwarding is rejected
+// when the SSH policy does not permit port forwarding.
+func TestUnixForwardingDenied(t *testing.T) {
+	debugTest.Store(true)
+	t.Cleanup(func() {
+		debugTest.Store(false)
+	})
+
+	// Start server with forwarding disabled (the default policy).
+	addr := testServerWithOpts(t, testServerOpts{
+		username: "testuser",
+	})
+
+	cl, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cl.Close() })
+
+	// Direct Unix socket forwarding should be rejected.
+	_, err = cl.Dial("unix", "/tmp/anything.sock")
+	if err == nil {
+		t.Error("expected direct unix forwarding to be rejected, but it succeeded")
+	}
+
+	// Reverse Unix socket forwarding should also be rejected.
+	socketDir, err := os.MkdirTemp("", "tailssh-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(socketDir) })
+
+	_, err = cl.ListenUnix(filepath.Join(socketDir, "denied.sock"))
+	if err == nil {
+		t.Error("expected reverse unix forwarding to be rejected, but it succeeded")
+	}
+}
+
+// TestUnixForwardingPathRestriction verifies that socket paths outside the
+// allowed directories (home, /tmp, /run/user/<uid>) are rejected even when
+// forwarding is permitted by policy.
+func TestUnixForwardingPathRestriction(t *testing.T) {
+	debugTest.Store(true)
+	t.Cleanup(func() {
+		debugTest.Store(false)
+	})
+
+	addr := testServerWithOpts(t, testServerOpts{
+		username:                  "testuser",
+		allowLocalPortForwarding:  true,
+		allowRemotePortForwarding: true,
+	})
+
+	cl, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cl.Close() })
+
+	// Paths outside allowed directories should be rejected.
+	restrictedPaths := []string{
+		"/var/run/docker.sock",
+		"/etc/evil.sock",
+	}
+	for _, path := range restrictedPaths {
+		_, err := cl.Dial("unix", path)
+		if err == nil {
+			t.Errorf("expected direct forwarding to %q to be rejected, but it succeeded", path)
+		}
 	}
 }
 
@@ -569,6 +809,47 @@ func testServer(t *testing.T, username string, forceV1Behavior bool, allowSendEn
 	return l.Addr().String()
 }
 
+type testServerOpts struct {
+	username                  string
+	forceV1Behavior           bool
+	allowSendEnv              bool
+	allowLocalPortForwarding  bool
+	allowRemotePortForwarding bool
+}
+
+func testServerWithOpts(t *testing.T, opts testServerOpts) string {
+	t.Helper()
+	srv := &server{
+		lb: &testBackend{
+			localUser:                 opts.username,
+			forceV1Behavior:           opts.forceV1Behavior,
+			allowSendEnv:              opts.allowSendEnv,
+			allowLocalPortForwarding:  opts.allowLocalPortForwarding,
+			allowRemotePortForwarding: opts.allowRemotePortForwarding,
+		},
+		logf:           log.Printf,
+		tailscaledPath: os.Getenv("TAILSCALED_PATH"),
+		timeNow:        time.Now,
+	}
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err == nil {
+				go srv.HandleSSHConn(&addressFakingConn{conn})
+			}
+		}
+	}()
+
+	return l.Addr().String()
+}
+
 func testSession(t *testing.T, forceV1Behavior bool, allowSendEnv bool, sendEnv map[string]string) *session {
 	cl := testClient(t, forceV1Behavior, allowSendEnv)
 	return testSessionFor(t, cl, sendEnv)
@@ -626,31 +907,11 @@ func generateClientKey(t *testing.T, privateKeyFile string) (ssh.Signer, *rsa.Pr
 
 // testBackend implements ipnLocalBackend
 type testBackend struct {
-	localUser       string
-	forceV1Behavior bool
-	allowSendEnv    bool
-}
-
-func (tb *testBackend) GetSSH_HostKeys() ([]gossh.Signer, error) {
-	var result []gossh.Signer
-	var priv any
-	var err error
-	const keySize = 2048
-	priv, err = rsa.GenerateKey(rand.Reader, keySize)
-	if err != nil {
-		return nil, err
-	}
-	mk, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		return nil, err
-	}
-	hostKey := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mk})
-	signer, err := gossh.ParsePrivateKey(hostKey)
-	if err != nil {
-		return nil, err
-	}
-	result = append(result, signer)
-	return result, nil
+	localUser                 string
+	forceV1Behavior           bool
+	allowSendEnv              bool
+	allowLocalPortForwarding  bool
+	allowRemotePortForwarding bool
 }
 
 func (tb *testBackend) ShouldRunSSH() bool {
@@ -670,7 +931,12 @@ func (tb *testBackend) NetMap() *netmap.NetworkMap {
 			Rules: []*tailcfg.SSHRule{
 				{
 					Principals: []*tailcfg.SSHPrincipal{{Any: true}},
-					Action:     &tailcfg.SSHAction{Accept: true, AllowAgentForwarding: true},
+					Action: &tailcfg.SSHAction{
+						Accept:                    true,
+						AllowAgentForwarding:      true,
+						AllowLocalPortForwarding:  tb.allowLocalPortForwarding,
+						AllowRemotePortForwarding: tb.allowRemotePortForwarding,
+					},
 					SSHUsers:   map[string]string{"*": tb.localUser},
 					AcceptEnv:  []string{"GIT_*", "EXACT_MATCH", "TEST?NG"},
 				},
@@ -695,7 +961,7 @@ func (tb *testBackend) Dialer() *tsdial.Dialer {
 }
 
 func (tb *testBackend) TailscaleVarRoot() string {
-	return ""
+	return testVarRoot
 }
 
 func (tb *testBackend) NodeKey() key.NodePublic {

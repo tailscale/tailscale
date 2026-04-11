@@ -22,7 +22,7 @@ func TestLinuxDNSMode(t *testing.T) {
 		want    string
 	}{
 		{
-			name:    "no_obvious_resolv.conf_owner",
+			name:    "no_obvious_resolvconf_owner",
 			env:     env(resolvDotConf("nameserver 10.0.0.1")),
 			wantLog: "dns: [rc=unknown ret=direct]",
 			want:    "direct",
@@ -153,7 +153,7 @@ func TestLinuxDNSMode(t *testing.T) {
 			// alleged that it was managed by systemd-resolved, but it
 			// was actually a completely static config file pointing
 			// elsewhere.
-			name: "allegedly_resolved_but_not_in_resolv.conf",
+			name: "allegedly_resolved_but_not_in_resolvconf",
 			env:  env(resolvDotConf("# Managed by systemd-resolved", "nameserver 10.0.0.1")),
 			wantLog: "dns: resolvedIsActuallyResolver error: resolv.conf doesn't point to systemd-resolved; points to [10.0.0.1]\n" +
 				"dns: [rc=resolved resolved=not-in-use ret=direct]",
@@ -163,7 +163,7 @@ func TestLinuxDNSMode(t *testing.T) {
 			// We used to incorrectly decide that resolved wasn't in
 			// charge when handed this (admittedly weird and bugged)
 			// resolv.conf.
-			name: "resolved_with_duplicates_in_resolv.conf",
+			name: "resolved_with_duplicates_in_resolvconf",
 			env: env(
 				resolvDotConf(
 					"# Managed by systemd-resolved",

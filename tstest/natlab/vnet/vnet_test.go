@@ -120,7 +120,7 @@ func TestPacketSideEffects(t *testing.T) {
 					check: all(
 						numPkts(2), // DHCP discover broadcast to node2 also, and the DHCP reply from router
 						pktSubstr("SrcMAC=52:cc:cc:cc:cc:01 DstMAC=ff:ff:ff:ff:ff:ff"),
-						pktSubstr("Options=[Option(ServerID:192.168.0.1), Option(MessageType:Offer)]}"),
+						pktSubstr("Option(ServerID:192.168.0.1), Option(MessageType:Offer), Option(LeaseTime:3600)"),
 					),
 				},
 				{

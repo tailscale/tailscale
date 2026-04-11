@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"maps"
 
 	"tailscale.com/types/tkatype"
 )
@@ -64,9 +65,7 @@ func (k Key) Clone() Key {
 
 	if k.Meta != nil {
 		out.Meta = make(map[string]string, len(k.Meta))
-		for k, v := range k.Meta {
-			out.Meta[k] = v
-		}
+		maps.Copy(out.Meta, k.Meta)
 	}
 
 	return out
@@ -104,8 +103,6 @@ func (k Key) Ed25519() (ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("key is of type %v, not ed25519", k.Kind)
 	}
 }
-
-const maxMetaBytes = 512
 
 func (k Key) StaticValidate() error {
 	if k.Votes > 4096 {

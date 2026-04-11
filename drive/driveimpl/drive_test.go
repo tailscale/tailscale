@@ -156,27 +156,27 @@ func TestMissingPaths(t *testing.T) {
 		wantStatus int
 	}{
 		{
-			name:       "empty path",
+			name:       "empty-path",
 			path:       "",
 			wantStatus: http.StatusForbidden,
 		},
 		{
-			name:       "single slash",
+			name:       "single-slash",
 			path:       "/",
 			wantStatus: http.StatusForbidden,
 		},
 		{
-			name:       "only token",
+			name:       "only-token",
 			path:       "/" + secretToken,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:       "token with trailing slash",
+			name:       "token-trailing-slash",
 			path:       "/" + secretToken + "/",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:       "token and invalid share",
+			name:       "token-invalid-share",
 			path:       "/" + secretToken + "/nonexistentshare",
 			wantStatus: http.StatusNotFound,
 		},

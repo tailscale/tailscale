@@ -19,7 +19,7 @@ import (
 func TestInversePrefix(t *testing.T) {
 	t.Parallel()
 	for i := range 256 {
-		for len := 0; len < 9; len++ {
+		for len := range 9 {
 			addr := i & (0xFF << (8 - len))
 			idx := prefixIndex(uint8(addr), len)
 			addr2, len2 := inversePrefixIndex(idx)

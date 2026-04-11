@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/tools/go/analysis/unitchecker"
 	"tailscale.com/cmd/vet/jsontags"
+	"tailscale.com/cmd/vet/subtestnames"
 )
 
 //go:embed jsontags_allowlist
@@ -20,5 +21,5 @@ func init() {
 }
 
 func main() {
-	unitchecker.Main(jsontags.Analyzer)
+	unitchecker.Main(jsontags.Analyzer, subtestnames.Analyzer)
 }

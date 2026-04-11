@@ -192,8 +192,8 @@ func (e *AccessDeniedError) Unwrap() error { return e.err }
 
 // IsAccessDeniedError reports whether err is or wraps an AccessDeniedError.
 func IsAccessDeniedError(err error) bool {
-	var ae *AccessDeniedError
-	return errors.As(err, &ae)
+	_, ok := errors.AsType[*AccessDeniedError](err)
+	return ok
 }
 
 // PreconditionsFailedError is returned when the server responds
@@ -210,8 +210,8 @@ func (e *PreconditionsFailedError) Unwrap() error { return e.err }
 
 // IsPreconditionsFailedError reports whether err is or wraps an PreconditionsFailedError.
 func IsPreconditionsFailedError(err error) bool {
-	var ae *PreconditionsFailedError
-	return errors.As(err, &ae)
+	_, ok := errors.AsType[*PreconditionsFailedError](err)
+	return ok
 }
 
 // bestError returns either err, or if body contains a valid JSON
@@ -818,25 +818,6 @@ func (lc *Client) CheckUDPGROForwarding(ctx context.Context) error {
 	return nil
 }
 
-// CheckReversePathFiltering asks the local Tailscale daemon whether strict
-// reverse path filtering is enabled, which would break exit node usage on Linux.
-func (lc *Client) CheckReversePathFiltering(ctx context.Context) error {
-	body, err := lc.get200(ctx, "/localapi/v0/check-reverse-path-filtering")
-	if err != nil {
-		return err
-	}
-	var jres struct {
-		Warning string
-	}
-	if err := json.Unmarshal(body, &jres); err != nil {
-		return fmt.Errorf("invalid JSON from check-reverse-path-filtering: %w", err)
-	}
-	if jres.Warning != "" {
-		return errors.New(jres.Warning)
-	}
-	return nil
-}
-
 // SetUDPGROForwarding enables UDP GRO forwarding for the main interface of this
 // node. This can be done to improve performance of tailnet nodes acting as exit
 // nodes or subnet routers.
@@ -1090,7 +1071,7 @@ func tailscaledConnectHint() string {
 	// ActiveState=inactive
 	// SubState=dead
 	st := map[string]string{}
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		if k, v, ok := strings.Cut(line, "="); ok {
 			st[k] = strings.TrimSpace(v)
 		}

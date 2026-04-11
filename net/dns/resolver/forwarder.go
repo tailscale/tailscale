@@ -727,8 +727,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	}
 
 	// If we got a truncated UDP response, return that instead of an error.
-	var trErr truncatedResponseError
-	if errors.As(err, &trErr) {
+	if trErr, ok := errors.AsType[truncatedResponseError](err); ok {
 		return trErr.res, nil
 	}
 	return nil, err
@@ -740,6 +739,27 @@ type truncatedResponseError struct {
 
 func (tr truncatedResponseError) Error() string { return "response truncated" }
 
+// rcodeResponseError is returned when an upstream DNS server responds with an
+// rcode that is treated as a soft error (currently REFUSED and SERVFAIL). The
+// response bytes are preserved so they can be returned to the client rather
+// than synthesizing a new response.
+type rcodeResponseError struct {
+	rcode dns.RCode
+	res   []byte
+}
+
+func (r rcodeResponseError) Error() string { return r.Unwrap().Error() }
+func (r rcodeResponseError) Unwrap() error {
+	switch r.rcode {
+	case dns.RCodeRefused:
+		return errRefused
+	case dns.RCodeServerFailure:
+		return errServerFailure
+	}
+	return nil
+}
+
+var errRefused = errors.New("response code indicates refusal")
 var errServerFailure = errors.New("response code indicates server issue")
 var errTxIDMismatch = errors.New("txid doesn't match")
 
@@ -813,10 +833,16 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	rcode := getRCode(out)
 
 	// don't forward transient errors back to the client when the server fails
-	if rcode == dns.RCodeServerFailure {
-		f.logf("recv: response code indicating server failure: %d", rcode)
+	switch rcode {
+	case dns.RCodeServerFailure:
+		f.logf("sendUDP: response code indicating server failure: %d", rcode)
 		metricDNSFwdUDPErrorServer.Add(1)
-		return nil, errServerFailure
+		return nil, rcodeResponseError{dns.RCodeServerFailure, out}
+	case dns.RCodeRefused:
+		// treat REFUSED as a soft error so other resolvers in the race can respond
+		f.logf("sendUDP: response code indicating refusal: %d", rcode)
+		metricDNSFwdUDPErrorRefused.Add(1)
+		return nil, rcodeResponseError{dns.RCodeRefused, out}
 	}
 
 	// Set the truncated bit if buffer was truncated during read and the flag isn't already set
@@ -952,10 +978,16 @@ func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	rcode := getRCode(out)
 
 	// don't forward transient errors back to the client when the server fails
-	if rcode == dns.RCodeServerFailure {
+	switch rcode {
+	case dns.RCodeServerFailure:
 		f.logf("sendTCP: response code indicating server failure: %d", rcode)
 		metricDNSFwdTCPErrorServer.Add(1)
-		return nil, errServerFailure
+		return nil, rcodeResponseError{dns.RCodeServerFailure, out}
+	case dns.RCodeRefused:
+		// treat REFUSED as a soft error so other resolvers in the race can respond
+		f.logf("sendTCP: response code indicating refusal: %d", rcode)
+		metricDNSFwdTCPErrorRefused.Add(1)
+		return nil, rcodeResponseError{dns.RCodeRefused, out}
 	}
 
 	// TODO(andrew): do we need to do this?
@@ -1129,6 +1161,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 
 	var firstErr error
 	var numErr int
+	var sawNonRefused bool
 	for {
 		select {
 		case v := <-resc:
@@ -1148,32 +1181,56 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			if firstErr == nil {
 				firstErr = err
 			}
+			if !errors.Is(err, errRefused) {
+				sawNonRefused = true
+			}
 			numErr++
 			if numErr == len(resolvers) {
-				if errors.Is(firstErr, errServerFailure) {
-					res, err := servfailResponse(query)
-					if err != nil {
-						f.logf("building servfail response: %v", err)
+				var res packet
+				if sawNonRefused {
+					// At least one server failed with SERVFAIL or a transport error
+					// (e.g. network failure, TxID mismatch, unsupported resolver type).
+					// All such errors map to SERVFAIL at the client level.
+					// Prefer returning the upstream SERVFAIL bytes from firstErr if
+					// available; otherwise synthesize a SERVFAIL response. Note the
+					// rcode guard: firstErr may be a REFUSED rcodeResponseError if it
+					// arrived before the SERVFAIL that set sawNonRefused.
+					if rcodeErr, ok := errors.AsType[rcodeResponseError](firstErr); ok && rcodeErr.rcode == dns.RCodeServerFailure {
+						res = packet{rcodeErr.res, query.family, query.addr}
+					} else {
+						r, err := servfailResponse(query)
+						if err != nil {
+							f.logf("building servfail response: %v", err)
+							return firstErr
+						}
+						res = r
+					}
+				} else {
+					// !sawNonRefused means every error was an rcodeResponseError with rcode REFUSED,
+					// so firstErr is guaranteed to wrap one.
+					rcodeErr, ok := errors.AsType[rcodeResponseError](firstErr)
+					if !ok {
+						f.logf("unexpected: all errors were REFUSED but firstErr is not rcodeResponseError: %v", firstErr)
 						return firstErr
 					}
-
-					select {
-					case <-ctx.Done():
-						metricDNSFwdErrorContext.Add(1)
-						metricDNSFwdErrorContextGotError.Add(1)
-						var resolverAddrs []string
-						for _, rr := range resolvers {
-							resolverAddrs = append(resolverAddrs, rr.name.Addr)
-						}
-						if f.acceptDNS {
-							f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: strings.Join(resolverAddrs, ",")})
-						}
-					case responseChan <- res:
-						if f.verboseFwd {
-							f.logf("forwarder response(%d, %v, %d) = %d, %v", fq.txid, typ, len(domain), len(res.bs), firstErr)
-						}
-						return nil
+					res = packet{rcodeErr.res, query.family, query.addr}
+				}
+				select {
+				case <-ctx.Done():
+					metricDNSFwdErrorContext.Add(1)
+					metricDNSFwdErrorContextGotError.Add(1)
+					var resolverAddrs []string
+					for _, rr := range resolvers {
+						resolverAddrs = append(resolverAddrs, rr.name.Addr)
 					}
+					if f.acceptDNS {
+						f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: strings.Join(resolverAddrs, ",")})
+					}
+				case responseChan <- res:
+					if f.verboseFwd {
+						f.logf("forwarder response(%d, %v, %d) = %d, %v", fq.txid, typ, len(domain), len(res.bs), firstErr)
+					}
+					return nil
 				}
 				return firstErr
 			}

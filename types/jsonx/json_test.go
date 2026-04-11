@@ -10,7 +10,6 @@ import (
 	"github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
 	"github.com/google/go-cmp/cmp"
-	"tailscale.com/types/ptr"
 )
 
 type Interface interface {
@@ -72,7 +71,7 @@ func TestInterfaceCoders(t *testing.T) {
 		wantJSON: `{"Foo":"hello"}`,
 	}, {
 		label:    "BarPointer",
-		wantVal:  InterfaceWrapper{ptr.To(Bar(5))},
+		wantVal:  InterfaceWrapper{new(Bar(5))},
 		wantJSON: `{"Bar":5}`,
 	}, {
 		label:   "BarValue",

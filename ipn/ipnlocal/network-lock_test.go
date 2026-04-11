@@ -104,8 +104,8 @@ func TestTKAEnablementFlow(t *testing.T) {
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 	chonk := tka.ChonkMem()
 	a1, genesisAUM, err := tka.Create(chonk, tka.State{
-		Keys:               []tka.Key{key},
-		DisablementSecrets: [][]byte{bytes.Repeat([]byte{0xa5}, 32)},
+		Keys:              []tka.Key{key},
+		DisablementValues: [][]byte{bytes.Repeat([]byte{0xa5}, 32)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -158,6 +158,7 @@ func TestTKAEnablementFlow(t *testing.T) {
 		cc:             cc,
 		ccAuto:         cc,
 		logf:           t.Logf,
+		health:         health.NewTracker(eventbustest.NewBus(t)),
 		pm:             pm,
 		store:          pm.Store(),
 	}
@@ -195,8 +196,8 @@ func TestTKADisablementFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority, _, err := tka.Create(chonk, tka.State{
-		Keys:               []tka.Key{key},
-		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+		Keys:              []tka.Key{key},
+		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -244,6 +245,7 @@ func TestTKADisablementFlow(t *testing.T) {
 		cc:      cc,
 		ccAuto:  cc,
 		logf:    t.Logf,
+		health:  health.NewTracker(eventbustest.NewBus(t)),
 		tka: &tkaState{
 			authority: authority,
 			storage:   chonk,
@@ -300,9 +302,9 @@ func TestTKASync(t *testing.T) {
 	}
 
 	tcs := []tkaSyncScenario{
-		{name: "up to date"},
+		{name: "up-to-date"},
 		{
-			name: "control has an update",
+			name: "control-has-an-update",
 			controlAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
 				b := a.NewUpdater(signer)
 				if err := b.RemoveKey(someKey.MustID()); err != nil {
@@ -317,7 +319,7 @@ func TestTKASync(t *testing.T) {
 		},
 		{
 			// AKA 'control data loss' scenario
-			name: "node has an update",
+			name: "node-has-an-update",
 			nodeAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
 				b := a.NewUpdater(signer)
 				if err := b.RemoveKey(someKey.MustID()); err != nil {
@@ -332,7 +334,7 @@ func TestTKASync(t *testing.T) {
 		},
 		{
 			// AKA 'control data loss + update in the meantime' scenario
-			name: "node and control diverge",
+			name: "node-and-control-diverge",
 			controlAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
 				b := a.NewUpdater(signer)
 				if err := b.SetKeyMeta(someKey.MustID(), map[string]string{"ye": "swiggity"}); err != nil {
@@ -368,8 +370,8 @@ func TestTKASync(t *testing.T) {
 			key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 			controlStorage := tka.ChonkMem()
 			controlAuthority, bootstrap, err := tka.Create(controlStorage, tka.State{
-				Keys:               []tka.Key{key, someKey},
-				DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+				Keys:              []tka.Key{key, someKey},
+				DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 			}, nlPriv)
 			if err != nil {
 				t.Fatalf("tka.Create() failed: %v", err)
@@ -428,6 +430,7 @@ func TestTKASync(t *testing.T) {
 				cc:      cc,
 				ccAuto:  cc,
 				logf:    t.Logf,
+				health:  health.NewTracker(eventbustest.NewBus(t)),
 				pm:      pm,
 				store:   pm.Store(),
 				tka: &tkaState{
@@ -478,8 +481,8 @@ func TestTKASyncTriggersCompact(t *testing.T) {
 	controlStorage := tka.ChonkMem()
 	controlStorage.SetClock(clock)
 	controlAuthority, bootstrap, err := tka.Create(controlStorage, tka.State{
-		Keys:               []tka.Key{key, someKey},
-		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+		Keys:              []tka.Key{key, someKey},
+		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -544,6 +547,7 @@ func TestTKASyncTriggersCompact(t *testing.T) {
 		cc:     cc,
 		ccAuto: cc,
 		logf:   t.Logf,
+		health: health.NewTracker(eventbustest.NewBus(t)),
 		pm:     pm,
 		store:  pm.Store(),
 		tka: &tkaState{
@@ -608,16 +612,17 @@ func TestTKAFilterNetmap(t *testing.T) {
 	nlKey := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 	storage := tka.ChonkMem()
 	authority, _, err := tka.Create(storage, tka.State{
-		Keys:               []tka.Key{nlKey},
-		DisablementSecrets: [][]byte{bytes.Repeat([]byte{0xa5}, 32)},
+		Keys:              []tka.Key{nlKey},
+		DisablementValues: [][]byte{bytes.Repeat([]byte{0xa5}, 32)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
 	}
 
 	b := &LocalBackend{
-		logf: t.Logf,
-		tka:  &tkaState{authority: authority},
+		logf:   t.Logf,
+		health: health.NewTracker(eventbustest.NewBus(t)),
+		tka:    &tkaState{authority: authority},
 	}
 
 	n1, n2, n3, n4, n5 := key.NewNode(), key.NewNode(), key.NewNode(), key.NewNode(), key.NewNode()
@@ -771,8 +776,8 @@ func TestTKADisable(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority, _, err := tka.Create(chonk, tka.State{
-		Keys:               []tka.Key{key},
-		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+		Keys:              []tka.Key{key},
+		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -822,6 +827,7 @@ func TestTKADisable(t *testing.T) {
 		cc:      cc,
 		ccAuto:  cc,
 		logf:    t.Logf,
+		health:  health.NewTracker(eventbustest.NewBus(t)),
 		tka: &tkaState{
 			profile:   pm.CurrentProfile().ID(),
 			authority: authority,
@@ -859,8 +865,8 @@ func TestTKASign(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority, _, err := tka.Create(chonk, tka.State{
-		Keys:               []tka.Key{key},
-		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+		Keys:              []tka.Key{key},
+		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -887,6 +893,7 @@ func TestTKASign(t *testing.T) {
 		cc:      cc,
 		ccAuto:  cc,
 		logf:    t.Logf,
+		health:  health.NewTracker(eventbustest.NewBus(t)),
 		tka: &tkaState{
 			authority: authority,
 			storage:   chonk,
@@ -918,8 +925,8 @@ func TestTKAForceDisable(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority, genesis, err := tka.Create(chonk, tka.State{
-		Keys:               []tka.Key{key},
-		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+		Keys:              []tka.Key{key},
+		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -1006,8 +1013,8 @@ func TestTKAAffectedSigs(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority, _, err := tka.Create(chonk, tka.State{
-		Keys:               []tka.Key{tkaKey},
-		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+		Keys:              []tka.Key{tkaKey},
+		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -1020,7 +1027,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 		wantErr string
 	}{
 		{
-			"no error",
+			"no-error",
 			func() *tka.NodeKeySignature {
 				sig, _ := signNodeKey(tailcfg.TKASignInfo{NodePublic: nodePriv.Public()}, nlPriv)
 				return sig
@@ -1028,7 +1035,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 			"",
 		},
 		{
-			"signature for different keyID",
+			"signature-for-different-keyID",
 			func() *tka.NodeKeySignature {
 				sig, _ := signNodeKey(tailcfg.TKASignInfo{NodePublic: nodePriv.Public()}, untrustedKey)
 				return sig
@@ -1036,7 +1043,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 			fmt.Sprintf("got signature with keyID %X from request for %X", untrustedKey.KeyID(), nlPriv.KeyID()),
 		},
 		{
-			"invalid signature",
+			"invalid-signature",
 			func() *tka.NodeKeySignature {
 				sig, _ := signNodeKey(tailcfg.TKASignInfo{NodePublic: nodePriv.Public()}, nlPriv)
 				copy(sig.Signature, []byte{1, 2, 3, 4, 5, 6}) // overwrite with trash to invalid signature
@@ -1083,6 +1090,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 				cc:      cc,
 				ccAuto:  cc,
 				logf:    t.Logf,
+				health:  health.NewTracker(eventbustest.NewBus(t)),
 				tka: &tkaState{
 					authority: authority,
 					storage:   chonk,
@@ -1135,8 +1143,8 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority, _, err := tka.Create(chonk, tka.State{
-		Keys:               []tka.Key{key, compromisedKey, cosignKey},
-		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+		Keys:              []tka.Key{key, compromisedKey, cosignKey},
+		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
 	}, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
@@ -1168,6 +1176,7 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 		cc:      cc,
 		ccAuto:  cc,
 		logf:    t.Logf,
+		health:  health.NewTracker(eventbustest.NewBus(t)),
 		tka: &tkaState{
 			authority: authority,
 			storage:   chonk,
@@ -1187,6 +1196,7 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 		b := LocalBackend{
 			varRoot: temp,
 			logf:    t.Logf,
+			health:  health.NewTracker(eventbustest.NewBus(t)),
 			tka: &tkaState{
 				authority: authority,
 				storage:   chonk,

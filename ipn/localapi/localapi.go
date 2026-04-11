@@ -28,7 +28,6 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
-	"tailscale.com/health/healthmsg"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
@@ -44,7 +43,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/httpm"
@@ -100,9 +98,6 @@ func init() {
 		Register("check-udp-gro-forwarding", (*Handler).serveCheckUDPGROForwarding)
 		Register("set-udp-gro-forwarding", (*Handler).serveSetUDPGROForwarding)
 	}
-	if buildfeatures.HasUseExitNode && runtime.GOOS == "linux" {
-		Register("check-reverse-path-filtering", (*Handler).serveCheckReversePathFiltering)
-	}
 	if buildfeatures.HasClientMetrics {
 		Register("upload-client-metrics", (*Handler).serveUploadClientMetrics)
 	}
@@ -120,7 +115,7 @@ func init() {
 		Register("bugreport", (*Handler).serveBugReport)
 		Register("pprof", (*Handler).servePprof)
 	}
-	if buildfeatures.HasDebug || buildfeatures.HasServe {
+	if buildfeatures.HasIPNBus {
 		Register("watch-ipn-bus", (*Handler).serveWatchIPNBus)
 	}
 	if buildfeatures.HasDNS {
@@ -780,32 +775,6 @@ func (h *Handler) serveCheckSOMarkInUse(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-func (h *Handler) serveCheckReversePathFiltering(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitRead {
-		http.Error(w, "reverse path filtering check access denied", http.StatusForbidden)
-		return
-	}
-	var warning string
-
-	state := h.b.Sys().NetMon.Get().InterfaceState()
-	warn, err := netutil.CheckReversePathFiltering(state)
-	if err == nil && len(warn) > 0 {
-		var msg strings.Builder
-		msg.WriteString(healthmsg.WarnExitNodeUsage + ":\n")
-		for _, w := range warn {
-			msg.WriteString("- " + w + "\n")
-		}
-		msg.WriteString(healthmsg.DisableRPFilter)
-		warning = msg.String()
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct {
-		Warning string
-	}{
-		Warning: warning,
-	})
-}
-
 func (h *Handler) serveCheckUDPGROForwarding(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitRead {
 		http.Error(w, "UDP GRO forwarding check access denied", http.StatusForbidden)
@@ -875,8 +844,8 @@ func InUseOtherUserIPNStream(w http.ResponseWriter, r *http.Request, err error) 
 	}
 	js, err := json.Marshal(&ipn.Notify{
 		Version:    version.Long(),
-		State:      ptr.To(ipn.InUseOtherUser),
-		ErrMessage: ptr.To(err.Error()),
+		State:      new(ipn.InUseOtherUser),
+		ErrMessage: new(err.Error()),
 	})
 	if err != nil {
 		return false

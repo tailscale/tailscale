@@ -94,8 +94,7 @@ func TestCaptivePortalRequest(t *testing.T) {
 	now := time.Now()
 	d.clock = func() time.Time { return now }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
@@ -133,8 +132,7 @@ func TestCaptivePortalRequest(t *testing.T) {
 func TestAgainstDERPHandler(t *testing.T) {
 	d := NewDetector(t.Logf)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	s := httptest.NewServer(http.HandlerFunc(derpserver.ServeNoContent))
 	defer s.Close()

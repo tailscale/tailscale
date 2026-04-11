@@ -24,7 +24,6 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
-	"tailscale.com/types/ptr"
 )
 
 func TestEgressPodReadiness(t *testing.T) {
@@ -48,7 +47,7 @@ func TestEgressPodReadiness(t *testing.T) {
 		},
 		Spec: tsapi.ProxyGroupSpec{
 			Type:     "egress",
-			Replicas: ptr.To(int32(3)),
+			Replicas: new(int32(3)),
 		},
 	}
 	mustCreate(t, fc, pg)

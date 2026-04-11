@@ -132,6 +132,11 @@ type Tracker struct {
 	localLogConfigErr           error
 	tlsConnectionErrors         map[string]error // map[ServerName]error
 	metricHealthMessage         any              // nil or *metrics.MultiLabelMap[metricHealthMessageLabel]
+
+	// IP forwarding check
+	// If non-nil, called periodically to check if IP forwarding is broken.
+	// Should return true if broken, false if healthy.
+	isIPForwardingBroken func() bool
 }
 
 // NewTracker contructs a new [Tracker] and attaches the given eventbus.
@@ -1097,6 +1102,8 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 		t.setHealthyLocked(NetworkStatusWarnable)
 	}
 
+	t.updateIPForwardingWarnableLocked()
+
 	if t.localLogConfigErr != nil {
 		t.setUnhealthyLocked(localLogWarnable, Args{
 			ArgError: t.localLogConfigErr.Error(),
@@ -1388,4 +1395,30 @@ func (t *Tracker) LastNoiseDialWasRecent() bool {
 	dur := now.Sub(t.lastNoiseDial)
 	t.lastNoiseDial = now
 	return dur < 2*time.Minute
+}
+
+// SetIPForwardingCheck sets the function to check if IP forwarding is broken.
+// The function should return true if IP forwarding is broken, false if healthy.
+// Pass nil to disable IP forwarding checks.
+func (t *Tracker) SetIPForwardingCheck(checkFunc func() bool) {
+	if t.nil() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.isIPForwardingBroken = checkFunc
+
+	// Run an immediate check to set initial state
+	t.updateIPForwardingWarnableLocked()
+}
+
+// updateIPForwardingWarnableLocked checks the IP forwarding state and
+// sets or clears the ipForwardingWarnable accordingly.
+func (t *Tracker) updateIPForwardingWarnableLocked() {
+	if t.isIPForwardingBroken != nil && t.isIPForwardingBroken() {
+		t.setUnhealthyLocked(ipForwardingWarnable, Args{})
+	} else {
+		t.setHealthyLocked(ipForwardingWarnable)
+	}
 }

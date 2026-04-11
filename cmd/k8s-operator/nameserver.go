@@ -31,7 +31,6 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
 )
@@ -245,7 +244,7 @@ var (
 			if err := yaml.Unmarshal(deployYaml, &d); err != nil {
 				return fmt.Errorf("error unmarshalling Deployment yaml: %w", err)
 			}
-			d.Spec.Replicas = ptr.To(cfg.replicas)
+			d.Spec.Replicas = new(cfg.replicas)
 			d.Spec.Template.Spec.Containers[0].Image = fmt.Sprintf("%s:%s", cfg.imageRepo, cfg.imageTag)
 			d.ObjectMeta.Namespace = cfg.namespace
 			d.ObjectMeta.Labels = cfg.labels

@@ -20,7 +20,6 @@ import (
 	ktesting "k8s.io/client-go/testing"
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/types/ptr"
 )
 
 func TestWatchConfig(t *testing.T) {
@@ -52,7 +51,7 @@ func TestWatchConfig(t *testing.T) {
 					initialConfig: `{"version": "v1alpha1", "authKey": "abc123"}`,
 					phases: []phase{{
 						expectedConf: &conf.ConfigV1Alpha1{
-							AuthKey: ptr.To("abc123"),
+							AuthKey: new("abc123"),
 						},
 					}},
 				},
@@ -62,7 +61,7 @@ func TestWatchConfig(t *testing.T) {
 					phases: []phase{
 						{
 							expectedConf: &conf.ConfigV1Alpha1{
-								AuthKey: ptr.To("abc123"),
+								AuthKey: new("abc123"),
 							},
 						},
 						{
@@ -76,13 +75,13 @@ func TestWatchConfig(t *testing.T) {
 					phases: []phase{
 						{
 							expectedConf: &conf.ConfigV1Alpha1{
-								AuthKey: ptr.To("abc123"),
+								AuthKey: new("abc123"),
 							},
 						},
 						{
 							config: `{"version": "v1alpha1", "authKey": "def456"}`,
 							expectedConf: &conf.ConfigV1Alpha1{
-								AuthKey: ptr.To("def456"),
+								AuthKey: new("def456"),
 							},
 						},
 					},
@@ -93,7 +92,7 @@ func TestWatchConfig(t *testing.T) {
 					phases: []phase{
 						{
 							expectedConf: &conf.ConfigV1Alpha1{
-								AuthKey: ptr.To("abc123"),
+								AuthKey: new("abc123"),
 							},
 						},
 						{

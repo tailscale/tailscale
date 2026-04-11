@@ -185,7 +185,7 @@ func TestMarkActiveChain(t *testing.T) {
 			expectLastActiveIdx: 0,
 		},
 		{
-			name:     "simple truncate",
+			name:     "simple-truncate",
 			minChain: 2,
 			chain: []aumTemplate{
 				{AUM: AUM{MessageKind: AUMCheckpoint, State: &State{}}},
@@ -196,7 +196,7 @@ func TestMarkActiveChain(t *testing.T) {
 			expectLastActiveIdx: 1,
 		},
 		{
-			name:     "long truncate",
+			name:     "long-truncate",
 			minChain: 5,
 			chain: []aumTemplate{
 				{AUM: AUM{MessageKind: AUMCheckpoint, State: &State{}}},
@@ -211,7 +211,7 @@ func TestMarkActiveChain(t *testing.T) {
 			expectLastActiveIdx: 2,
 		},
 		{
-			name:     "truncate finding checkpoint",
+			name:     "truncate-finding-checkpoint",
 			minChain: 2,
 			chain: []aumTemplate{
 				{AUM: AUM{MessageKind: AUMCheckpoint, State: &State{}}},
@@ -309,15 +309,15 @@ func TestMarkDescendantAUMs(t *testing.T) {
 	}
 	for _, h := range []AUMHash{hs["genesis"], hs["B"], hs["D"]} {
 		if (verdict[h] & retainStateLeaf) != 0 {
-			t.Errorf("%v was marked as a descendant and shouldnt be", h)
+			t.Errorf("%v was marked as a descendant and shouldn't be", h)
 		}
 	}
 }
 
 func TestMarkAncestorIntersectionAUMs(t *testing.T) {
 	fakeState := &State{
-		Keys:               []Key{{Kind: Key25519, Votes: 1}},
-		DisablementSecrets: [][]byte{bytes.Repeat([]byte{1}, 32)},
+		Keys:              []Key{{Kind: Key25519, Votes: 1}},
+		DisablementValues: [][]byte{bytes.Repeat([]byte{1}, 32)},
 	}
 
 	tcs := []struct {
@@ -342,7 +342,7 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
 			wantRetained: []string{"A"},
 		},
 		{
-			name: "no adjustment",
+			name: "no-adjustment",
 			chain: newTestchain(t, `
                 DEAD -> A -> B -> C
                 A.template = checkpoint
@@ -380,7 +380,7 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
 			wantDeleted:  []string{"A", "B"},
 		},
 		{
-			name: "fork finding earlier checkpoint",
+			name: "fork-finding-earlier-checkpoint",
 			chain: newTestchain(t, `
                 A -> B -> C -> D -> E -> F
                           | -> FORK
@@ -403,7 +403,7 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
 			wantDeleted:  []string{"A"},
 		},
 		{
-			name: "fork multi",
+			name: "fork-multi",
 			chain: newTestchain(t, `
                 A -> B -> C -> D -> E
                                | -> DEADFORK
@@ -429,7 +429,7 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
 			wantDeleted:  []string{"A", "B", "DEADFORK"},
 		},
 		{
-			name: "fork multi 2",
+			name: "fork-multi-2",
 			chain: newTestchain(t, `
                 A -> B -> C -> D -> E -> F -> G
 
@@ -542,8 +542,8 @@ func cloneMem(src, dst *Mem) {
 
 func TestCompact(t *testing.T) {
 	fakeState := &State{
-		Keys:               []Key{{Kind: Key25519, Votes: 1}},
-		DisablementSecrets: [][]byte{bytes.Repeat([]byte{1}, 32)},
+		Keys:              []Key{{Kind: Key25519, Votes: 1}},
+		DisablementValues: [][]byte{bytes.Repeat([]byte{1}, 32)},
 	}
 
 	// A & B are deleted because the new lastActiveAncestor advances beyond them.
@@ -610,8 +610,8 @@ func TestCompactLongButYoung(t *testing.T) {
 
 	storage := ChonkMem()
 	auth, _, err := Create(storage, State{
-		Keys:               []Key{ourKey, someOtherKey},
-		DisablementSecrets: [][]byte{DisablementKDF(bytes.Repeat([]byte{0xa5}, 32))},
+		Keys:              []Key{ourKey, someOtherKey},
+		DisablementValues: [][]byte{DisablementKDF(bytes.Repeat([]byte{0xa5}, 32))},
 	}, ourPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)

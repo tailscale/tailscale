@@ -114,8 +114,8 @@ func (u *acceptAppCapsFlag) Set(s string) error {
 	if s == "" {
 		return nil
 	}
-	appCaps := strings.Split(s, ",")
-	for _, appCap := range appCaps {
+	appCaps := strings.SplitSeq(s, ",")
+	for appCap := range appCaps {
 		appCap = strings.TrimSpace(appCap)
 		if !validAppCap.MatchString(appCap) {
 			return fmt.Errorf("%q does not match the form {domain}/{name}, where domain must be a fully qualified domain name", appCap)
@@ -219,7 +219,7 @@ var errHelpFunc = func(m serveMode) error {
 // newServeV2Command returns a new "serve" subcommand using e as its environment.
 func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 	if subcmd != serve && subcmd != funnel {
-		log.Fatalf("newServeDevCommand called with unknown subcmd %q", subcmd)
+		log.Fatalf("newServeDevCommand called with unknown subcmd %v", subcmd)
 	}
 
 	info := infoMap[subcmd]
@@ -1096,7 +1096,7 @@ func isRemote(target string) bool {
 		target = "tmp://" + target
 	}
 
-	// make sure we can parse the target, wether it's a full URL or just a host:port
+	// make sure we can parse the target, whether it's a full URL or just a host:port
 	u, err := url.ParseRequestURI(target)
 	if err != nil {
 		// If we can't parse the target, it doesn't matter if it's remote or not

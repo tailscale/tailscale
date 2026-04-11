@@ -7,6 +7,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,7 +23,6 @@ import (
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/ingressservices"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/types/ptr"
 )
 
 const (
@@ -87,7 +87,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		Labels:          pgLabels(pg.Name, nil),
 		OwnerReferences: pgOwnerReference(pg),
 	}
-	ss.Spec.Replicas = ptr.To(pgReplicas(pg))
+	ss.Spec.Replicas = new(pgReplicas(pg))
 	ss.Spec.Selector = &metav1.LabelSelector{
 		MatchLabels: pgLabels(pg.Name, nil),
 	}
@@ -98,7 +98,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		Name:                       pg.Name,
 		Namespace:                  namespace,
 		Labels:                     pgLabels(pg.Name, nil),
-		DeletionGracePeriodSeconds: ptr.To[int64](10),
+		DeletionGracePeriodSeconds: new(int64(10)),
 	}
 	tmpl.Spec.ServiceAccountName = pg.Name
 	tmpl.Spec.InitContainers[0].Image = image
@@ -282,7 +282,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		}
 		// Set the deletion grace period to 6 minutes to ensure that the pre-stop hook has enough time to terminate
 		// gracefully.
-		ss.Spec.Template.DeletionGracePeriodSeconds = ptr.To(deletionGracePeriodSeconds)
+		ss.Spec.Template.DeletionGracePeriodSeconds = new(deletionGracePeriodSeconds)
 	}
 
 	return ss, nil
@@ -297,7 +297,7 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string, por
 			OwnerReferences: pgOwnerReference(pg),
 		},
 		Spec: appsv1.StatefulSetSpec{
-			Replicas: ptr.To(pgReplicas(pg)),
+			Replicas: new(pgReplicas(pg)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: pgLabels(pg.Name, nil),
 			},
@@ -306,7 +306,7 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string, por
 					Name:                       pg.Name,
 					Namespace:                  namespace,
 					Labels:                     pgLabels(pg.Name, nil),
-					DeletionGracePeriodSeconds: ptr.To[int64](10),
+					DeletionGracePeriodSeconds: new(int64(10)),
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: pgServiceAccountName(pg),
@@ -545,9 +545,7 @@ func pgSecretLabels(pgName, secretType string) map[string]string {
 
 func pgLabels(pgName string, customLabels map[string]string) map[string]string {
 	labels := make(map[string]string, len(customLabels)+3)
-	for k, v := range customLabels {
-		labels[k] = v
-	}
+	maps.Copy(labels, customLabels)
 
 	labels[kubetypes.LabelManaged] = "true"
 	labels[LabelParentType] = "proxygroup"

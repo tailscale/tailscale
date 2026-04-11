@@ -44,12 +44,7 @@ import (
 
 var (
 	errMissingNetmap        = errors.New("missing netmap: verify that you are logged in")
-	errNetworkLockNotActive = errors.New("network-lock is not active")
-
-	tkaCompactionDefaults = tka.CompactionOptions{
-		MinChain: 24,                  // Keep at minimum 24 AUMs since head.
-		MinAge:   14 * 24 * time.Hour, // Keep 2 weeks of AUMs.
-	}
+	errNetworkLockNotActive = errors.New("tailnet-lock is not active")
 )
 
 type tkaState struct {
@@ -92,7 +87,7 @@ func (b *LocalBackend) initTKALocked() error {
 			return fmt.Errorf("initializing tka: %v", err)
 		}
 
-		if err := authority.Compact(storage, tkaCompactionDefaults); err != nil {
+		if err := authority.Compact(storage, tka.CompactionDefaults); err != nil {
 			b.logf("tka compaction failed: %v", err)
 		}
 
@@ -360,7 +355,7 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 		//
 		// We run this on every sync so that clients compact consistently. In many
 		// cases this will be a no-op.
-		if err := b.tka.authority.Compact(b.tka.storage, tkaCompactionDefaults); err != nil {
+		if err := b.tka.authority.Compact(b.tka.storage, tka.CompactionDefaults); err != nil {
 			return fmt.Errorf("tka compact: %w", err)
 		}
 	}
@@ -407,7 +402,7 @@ func (b *LocalBackend) tkaSyncLocked(ourNodeKey key.NodePublic) error {
 	// has updates for us, or we have updates for the control plane.
 	//
 	// TODO(tom): Do we want to keep processing even if the Inform fails? Need
-	// to think through if theres holdback concerns here or not.
+	// to think through if there's holdback concerns here or not.
 	if len(offerResp.MissingAUMs) > 0 {
 		aums := make([]tka.AUM, len(offerResp.MissingAUMs))
 		for i, a := range offerResp.MissingAUMs {
@@ -654,15 +649,10 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 	// the filesystem until we've finished the initialization sequence,
 	// just in case something goes wrong.
 	_, genesisAUM, err := tka.Create(tka.ChonkMem(), tka.State{
-		Keys: keys,
-		// TODO(tom): s/tka.State.DisablementSecrets/tka.State.DisablementValues
-		//   This will center on consistent nomenclature:
-		//    - DisablementSecret: value needed to disable.
-		//    - DisablementValue: the KDF of the disablement secret, a public value.
-		DisablementSecrets: disablementValues,
-
-		StateID1: binary.LittleEndian.Uint64(entropy[:8]),
-		StateID2: binary.LittleEndian.Uint64(entropy[8:]),
+		Keys:              keys,
+		DisablementValues: disablementValues,
+		StateID1:          binary.LittleEndian.Uint64(entropy[:8]),
+		StateID2:          binary.LittleEndian.Uint64(entropy[8:]),
 	}, nlPriv)
 	if err != nil {
 		return fmt.Errorf("tka.Create: %v", err)
@@ -806,7 +796,7 @@ func (b *LocalBackend) NetworkLockSign(nodeKey key.NodePublic, rotationPublic []
 func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err error) {
 	defer func() {
 		if err != nil {
-			err = fmt.Errorf("modify network-lock keys: %w", err)
+			err = fmt.Errorf("modify tailnet-lock keys: %w", err)
 		}
 	}()
 
@@ -1126,7 +1116,7 @@ func (b *LocalBackend) NetworkLockWrapPreauthKey(preauthKey string, tkaKey key.N
 		return "", fmt.Errorf("signing failed: %w", err)
 	}
 
-	b.logf("Generated network-lock credential signature using %s", tkaKey.Public().CLIString())
+	b.logf("Generated tailnet-lock credential signature using %s", tkaKey.Public().CLIString())
 	return fmt.Sprintf("%s--TL%s-%s", preauthKey, tkaSuffixEncoder.EncodeToString(sig.Serialize()), tkaSuffixEncoder.EncodeToString(priv)), nil
 }
 

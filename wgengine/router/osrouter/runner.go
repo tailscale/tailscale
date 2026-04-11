@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -42,8 +43,7 @@ func errCode(err error) int {
 	if err == nil {
 		return 0
 	}
-	var e *exec.ExitError
-	if ok := errors.As(err, &e); ok {
+	if e, ok := errors.AsType[*exec.ExitError](err); ok {
 		return e.ExitCode()
 	}
 	s := err.Error()
@@ -96,12 +96,7 @@ func newRunGroup(okCode []int, runner commandRunner) *runGroup {
 
 func (rg *runGroup) okCode(err error) bool {
 	got := errCode(err)
-	for _, want := range rg.OkCode {
-		if got == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(rg.OkCode, got)
 }
 
 func (rg *runGroup) Output(args ...string) []byte {

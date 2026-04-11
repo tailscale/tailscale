@@ -10,7 +10,6 @@ import (
 
 	"tailscale.com/types/key"
 	"tailscale.com/types/logid"
-	"tailscale.com/types/ptr"
 )
 
 // Clone makes a deep copy of Config.
@@ -56,10 +55,10 @@ func (src *Peer) Clone() *Peer {
 	*dst = *src
 	dst.AllowedIPs = append(src.AllowedIPs[:0:0], src.AllowedIPs...)
 	if dst.V4MasqAddr != nil {
-		dst.V4MasqAddr = ptr.To(*src.V4MasqAddr)
+		dst.V4MasqAddr = new(*src.V4MasqAddr)
 	}
 	if dst.V6MasqAddr != nil {
-		dst.V6MasqAddr = ptr.To(*src.V6MasqAddr)
+		dst.V6MasqAddr = new(*src.V6MasqAddr)
 	}
 	return dst
 }

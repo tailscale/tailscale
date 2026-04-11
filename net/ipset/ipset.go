@@ -20,13 +20,6 @@ func FalseContainsIPFunc() func(ip netip.Addr) bool {
 
 func emptySet(ip netip.Addr) bool { return false }
 
-func bartLookup(t *bart.Table[struct{}]) func(netip.Addr) bool {
-	return func(ip netip.Addr) bool {
-		_, ok := t.Lookup(ip)
-		return ok
-	}
-}
-
 func prefixContainsLoop(addrs []netip.Prefix) func(netip.Addr) bool {
 	return func(ip netip.Addr) bool {
 		for _, p := range addrs {
@@ -81,11 +74,11 @@ func NewContainsIPFunc(addrs views.Slice[netip.Prefix]) func(ip netip.Addr) bool
 		}
 		pathForTest("bart")
 		// Built a bart table.
-		t := &bart.Table[struct{}]{}
+		t := &bart.Lite{}
 		for _, p := range addrs.All() {
-			t.Insert(p, struct{}{})
+			t.Insert(p)
 		}
-		return bartLookup(t)
+		return t.Contains
 	}
 	// Fast paths for 1 and 2 IPs:
 	if addrs.Len() == 1 {

@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +40,7 @@ import (
 	"github.com/axiomhq/hyperloglog"
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
+	xrate "golang.org/x/time/rate"
 	"tailscale.com/client/local"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derpconst"
@@ -51,6 +53,7 @@ import (
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/bufiox"
 	"tailscale.com/util/ctxkey"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
@@ -71,7 +74,7 @@ func init() {
 	if keys == "" {
 		return
 	}
-	for _, keyStr := range strings.Split(keys, ",") {
+	for keyStr := range strings.SplitSeq(keys, ",") {
 		k, err := key.ParseNodePublicUntyped(mem.S(keyStr))
 		if err != nil {
 			log.Printf("ignoring invalid debug key %q: %v", keyStr, err)
@@ -203,6 +206,15 @@ type Server struct {
 
 	tcpWriteTimeout time.Duration
 
+	// perClientRecvBytesPerSec is the rate limit for receiving data from
+	// a single client connection, in bytes per second. 0 means unlimited.
+	// Mesh peers are exempt from this limit.
+	perClientRecvBytesPerSec uint64
+	// perClientRecvBurst is the burst size in bytes for the per-client
+	// receive rate limiter. Always at least [derp.MaxPacketSize] when
+	// set via [Server.UpdatePerClientRateLimit].
+	perClientRecvBurst uint64
+
 	clock tstime.Clock
 }
 
@@ -227,10 +239,6 @@ type clientSet struct {
 	// activeClient holds the currently active connection for the set. It's nil
 	// if there are no connections or the connection is disabled.
 	//
-	// A pointer to a clientSet can be held by peers for long periods of time
-	// without holding Server.mu to avoid mutex contention on Server.mu, only
-	// re-acquiring the mutex and checking the clients map if activeClient is
-	// nil.
 	activeClient atomic.Pointer[sclient]
 
 	// dup is non-nil if there are multiple connections for the
@@ -506,6 +514,64 @@ func (s *Server) SetTCPWriteTimeout(d time.Duration) {
 	s.tcpWriteTimeout = d
 }
 
+// RateConfig is a JSON-serializable configuration for per-client rate limits.
+// Values are in bytes.
+type RateConfig struct {
+	// PerClientRateLimitBytesPerSec represents the per-client
+	// rate limit in bytes per second. A zero value disables rate-limiting.
+	PerClientRateLimitBytesPerSec uint64 `json:",omitzero"`
+	// PerClientRateBurstBytes represents the per-client token bucket depth,
+	// or burst, in bytes. Any value lower than [derp.MaxPacketSize]
+	// will be increased to [derp.MaxPacketSize] before application.
+	PerClientRateBurstBytes uint64 `json:",omitzero"`
+}
+
+// LoadRateConfig reads and JSON-unmarshals a [RateConfig] from the file at path.
+func LoadRateConfig(path string) (RateConfig, error) {
+	if path == "" {
+		return RateConfig{}, errors.New("rate config path is empty")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return RateConfig{}, fmt.Errorf("reading rate config: %w", err)
+	}
+	var rc RateConfig
+	if err := json.Unmarshal(b, &rc); err != nil {
+		return RateConfig{}, fmt.Errorf("parsing rate config: %w", err)
+	}
+	return rc, nil
+}
+
+// LoadAndApplyRateConfig reads a [RateConfig] from the file at path and
+// applies it to the server via [Server.UpdatePerClientRateLimit].
+func (s *Server) LoadAndApplyRateConfig(path string) error {
+	rc, err := LoadRateConfig(path)
+	if err != nil {
+		return err
+	}
+	s.UpdatePerClientRateLimit(rc.PerClientRateLimitBytesPerSec, rc.PerClientRateBurstBytes)
+	s.logf("rate config applied: rate=%d bytes/sec, burst=%d bytes", rc.PerClientRateLimitBytesPerSec, rc.PerClientRateBurstBytes)
+	return nil
+}
+
+// UpdatePerClientRateLimit sets the per-client receive rate limit in bytes per
+// second and the burst size in bytes, updating all existing client connections.
+// The burst is at least [derp.MaxPacketSize], ensuring at least a full packet
+// can be received in a burst even if the rate limit is low. If bytesPerSec is
+// 0, rate limiting is set to infinity. Mesh peers are always exempt from rate
+// limiting.
+func (s *Server) UpdatePerClientRateLimit(bytesPerSec, burst uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.perClientRecvBytesPerSec = bytesPerSec
+	s.perClientRecvBurst = max(burst, derp.MaxPacketSize)
+	for _, cs := range s.clients {
+		cs.ForeachClient(func(c *sclient) {
+			c.setRateLimit(s.perClientRecvBytesPerSec, s.perClientRecvBurst)
+		})
+	}
+}
+
 // HasMeshKey reports whether the server is configured with a mesh key.
 func (s *Server) HasMeshKey() bool { return !s.meshKey.IsZero() }
 
@@ -667,6 +733,8 @@ func (s *Server) ModifyTLSConfigToAddMetaCert(c *tls.Config) {
 func (s *Server) registerClient(c *sclient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	c.setRateLimit(s.perClientRecvBytesPerSec, s.perClientRecvBurst)
 
 	cs, ok := s.clients[c.key]
 	if !ok {
@@ -941,7 +1009,7 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 		br:             br,
 		bw:             bw,
 		logf:           logger.WithPrefix(s.logf, fmt.Sprintf("derp client %v%s: ", remoteAddr, clientKey.ShortString())),
-		done:           ctx.Done(),
+		ctx:            ctx,
 		remoteIPPort:   remoteIPPort,
 		connectedAt:    s.clock.Now(),
 		sendQueue:      make(chan pkt, s.perClientSendQueueDepth),
@@ -1004,7 +1072,12 @@ func (c *sclient) run(ctx context.Context) error {
 		}
 	}()
 
-	c.startStatsLoop(sendCtx)
+	// Allow disabling RTT stats collection to reduce
+	// CPU and syscalls on servers with high connection
+	// counts
+	if !envknob.Bool("TS_DERP_DISABLE_RTT_STATS") {
+		c.startStatsLoop(sendCtx)
+	}
 
 	for {
 		ft, fl, err := derp.ReadFrameHeader(c.br)
@@ -1020,6 +1093,14 @@ func (c *sclient) run(ctx context.Context) error {
 			}
 			return fmt.Errorf("client %s: readFrameHeader: %w", c.key.ShortString(), err)
 		}
+		// Rate limit by DERP frame length (fl), which excludes DERP
+		// and TLS protocol overheads.
+		// Note: meshed clients are exempt from rate limits.
+		// meshed clients are exempt from rate limits
+		if err := c.rateLimit(int(fl)); err != nil {
+			return err // context canceled, connection closing
+		}
+
 		c.s.noteClientActivity(c)
 		switch ft {
 		case derp.FrameNotePreferred:
@@ -1082,13 +1163,14 @@ func (c *sclient) handleFramePing(ft derp.FrameType, fl uint32) error {
 		// space for future extensibility, but not too much.
 		return fmt.Errorf("ping body too large: %v", fl)
 	}
-	_, err := io.ReadFull(c.br, m[:])
-	if err != nil {
+	if _, err := bufiox.ReadFull(c.br, m[:]); err != nil {
 		return err
 	}
+	var err error
 	if extra := int64(fl) - int64(len(m)); extra > 0 {
 		_, err = io.CopyN(io.Discard, c.br, extra)
 	}
+
 	select {
 	case c.sendPongCh <- [8]byte(m):
 	default:
@@ -1132,7 +1214,7 @@ func (c *sclient) handleFrameClosePeer(ft derp.FrameType, fl uint32) error {
 
 // handleFrameForwardPacket reads a "forward packet" frame from the client
 // (which must be a trusted client, a peer in our mesh).
-func (c *sclient) handleFrameForwardPacket(ft derp.FrameType, fl uint32) error {
+func (c *sclient) handleFrameForwardPacket(_ derp.FrameType, fl uint32) error {
 	if !c.canMesh {
 		return fmt.Errorf("insufficient permissions")
 	}
@@ -1175,7 +1257,7 @@ func (c *sclient) handleFrameForwardPacket(ft derp.FrameType, fl uint32) error {
 }
 
 // handleFrameSendPacket reads a "send packet" frame from the client.
-func (c *sclient) handleFrameSendPacket(ft derp.FrameType, fl uint32) error {
+func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 	s := c.s
 
 	dstKey, contents, err := s.recvPacket(c.br, fl)
@@ -1226,6 +1308,40 @@ func (c *sclient) handleFrameSendPacket(ft derp.FrameType, fl uint32) error {
 		src:        c.key,
 	}
 	return c.sendPkt(dst, p)
+}
+
+// setRateLimit updates the per-client receive rate limiter.
+// When bytesPerSec is 0 or the client is a mesh peer, the limiter is
+// set to nil so that [sclient.rateLimit] is a no-op.
+func (c *sclient) setRateLimit(bytesPerSec uint64, burst uint64) {
+	if bytesPerSec == 0 || c.canMesh {
+		c.recvLim.Store(nil)
+		return
+	}
+	if lim := c.recvLim.Load(); lim != nil {
+		// Update in place. SetBurst before SetLimit to avoid a transient
+		// state where a new higher rate exceeds the old lower burst.
+		lim.SetBurst(int(burst))
+		lim.SetLimit(xrate.Limit(bytesPerSec))
+		return
+	}
+	lim := xrate.NewLimiter(xrate.Limit(bytesPerSec), int(burst))
+	c.recvLim.Store(lim)
+}
+
+// rateLimit applies the per-client receive rate limit.
+// By limiting here we prevent reading from the buffered reader
+// [sclient.br] if the limit has been exceeded. Any reads done here provide space
+// within the buffered reader to fill back in with data from
+// the TCP socket. Pacing reads acts as a form of natural
+// backpressure via TCP flow control.
+// When rate limiting is disabled or the client is a mesh peer, recvLim is nil
+// and this is a no-op.
+func (c *sclient) rateLimit(n int) error {
+	if lim := c.recvLim.Load(); lim != nil {
+		return lim.WaitN(c.ctx, n)
+	}
+	return nil
 }
 
 func (c *sclient) debugLogf(format string, v ...any) {
@@ -1287,9 +1403,9 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 	if disco.LooksLikeDiscoWrapper(p.bs) {
 		sendQueue = dst.discoSendQueue
 	}
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := range 3 {
 		select {
-		case <-dst.done:
+		case <-dst.ctx.Done():
 			s.recordDrop(p.bs, c.key, dstKey, dropReasonGoneDisconnected)
 			dst.debugLogf("sendPkt attempt %d dropped, dst gone", attempt)
 			return nil
@@ -1334,7 +1450,7 @@ func (c *sclient) requestPeerGoneWrite(peer key.NodePublic, reason derp.PeerGone
 		peer:   peer,
 		reason: reason,
 	}:
-	case <-c.done:
+	case <-c.ctx.Done():
 	}
 }
 
@@ -1484,16 +1600,13 @@ func (s *Server) noteClientActivity(c *sclient) {
 	// If we saw this connection send previously, then consider
 	// the group fighting and disable them all.
 	if s.dupPolicy == disableFighters {
-		for _, prior := range dup.sendHistory {
-			if prior == c {
-				cs.ForeachClient(func(c *sclient) {
-					c.isDisabled.Store(true)
-					if cs.activeClient.Load() == c {
-						cs.activeClient.Store(nil)
-					}
-				})
-				break
-			}
+		if slices.Contains(dup.sendHistory, c) {
+			cs.ForeachClient(func(c *sclient) {
+				c.isDisabled.Store(true)
+				if cs.activeClient.Load() == c {
+					cs.activeClient.Store(nil)
+				}
+			})
 		}
 	}
 
@@ -1519,7 +1632,7 @@ func (s *Server) sendServerInfo(bw *lazyBufioWriter, clientKey key.NodePublic) e
 	return bw.Flush()
 }
 
-// recvClientKey reads the frameClientInfo frame from the client (its
+// recvClientKey reads the FrameClientInfo frame from the client (its
 // proof of identity) upon its initial connection. It should be
 // considered especially untrusted at this point.
 func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.NodePublic, info *derp.ClientInfo, err error) {
@@ -1622,7 +1735,7 @@ type sclient struct {
 	key            key.NodePublic
 	info           derp.ClientInfo
 	logf           logger.Logf
-	done           <-chan struct{}  // closed when connection closes
+	ctx            context.Context  // closed when connection closes
 	remoteIPPort   netip.AddrPort   // zero if remoteAddr is not ip:port.
 	sendQueue      chan pkt         // packets queued to this client; never closed
 	discoSendQueue chan pkt         // important packets queued to this client; never closed
@@ -1662,6 +1775,16 @@ type sclient struct {
 	// client that it's trying to establish a direct connection
 	// through us with a peer we have no record of.
 	peerGoneLim *rate.Limiter
+
+	// recvLim is the per-connection receive rate limiter. When rate
+	// limiting is enabled for a non-mesh client, it points to an
+	// [xrate.Limiter]. When rate limiting is disabled or the client is a
+	// mesh peer, it is nil and [sclient.rateLimit] is a no-op.
+	// Updated atomically by [sclient.setRateLimitLocked] so that
+	// [sclient.rateLimit] can load it without holding Server.mu.
+	// TODO(mikeodr): update to use mono time, requires updates
+	// to tstime/rate.Limiter
+	recvLim atomic.Pointer[xrate.Limiter]
 }
 
 func (c *sclient) presentFlags() derp.PeerPresentFlags {
@@ -2210,9 +2333,9 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("gauge_current_connections", &s.curClients)
 	m.Set("gauge_current_home_connections", &s.curHomeClients)
 	m.Set("gauge_current_notideal_connections", &s.curClientsNotIdeal)
-	m.Set("gauge_clients_total", expvar.Func(func() any { return len(s.clientsMesh) }))
-	m.Set("gauge_clients_local", expvar.Func(func() any { return len(s.clients) }))
-	m.Set("gauge_clients_remote", expvar.Func(func() any { return len(s.clientsMesh) - len(s.clients) }))
+	m.Set("gauge_clients_total", s.expVarFunc(func() any { return len(s.clientsMesh) }))
+	m.Set("gauge_clients_local", s.expVarFunc(func() any { return len(s.clients) }))
+	m.Set("gauge_clients_remote", s.expVarFunc(func() any { return len(s.clientsMesh) - len(s.clients) }))
 	m.Set("gauge_current_dup_client_keys", &s.dupClientKeys)
 	m.Set("gauge_current_dup_client_conns", &s.dupClientConns)
 	m.Set("counter_total_dup_client_conns", &s.dupClientConnTotal)

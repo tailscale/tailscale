@@ -128,7 +128,7 @@ func BenchmarkEncode(b *testing.B) {
 		b.Run(bb.name, func(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(src)))
-			for range b.N {
+			for b.Loop() {
 				dst = AppendEncode(dst[:0], src, bb.opts...)
 			}
 		})
@@ -153,7 +153,7 @@ func BenchmarkDecode(b *testing.B) {
 		b.Run(bb.name, func(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(src)))
-			for range b.N {
+			for b.Loop() {
 				dst = must.Get(AppendDecode(dst[:0], src, bb.opts...))
 			}
 		})
@@ -169,16 +169,14 @@ func BenchmarkEncodeParallel(b *testing.B) {
 		}
 		b.Run(coder.name, func(b *testing.B) {
 			b.ReportAllocs()
-			for range b.N {
-				var group sync.WaitGroup
-				for j := 0; j < numCPU; j++ {
-					group.Add(1)
-					go func(j int) {
-						defer group.Done()
+			for b.Loop() {
+				var wg sync.WaitGroup
+				for j := range numCPU {
+					wg.Go(func() {
 						dsts[j] = coder.appendEncode(dsts[j][:0], src)
-					}(j)
+					})
 				}
-				group.Wait()
+				wg.Wait()
 			}
 		})
 	}
@@ -194,16 +192,14 @@ func BenchmarkDecodeParallel(b *testing.B) {
 		}
 		b.Run(coder.name, func(b *testing.B) {
 			b.ReportAllocs()
-			for range b.N {
-				var group sync.WaitGroup
-				for j := 0; j < numCPU; j++ {
-					group.Add(1)
-					go func(j int) {
-						defer group.Done()
+			for b.Loop() {
+				var wg sync.WaitGroup
+				for j := range numCPU {
+					wg.Go(func() {
 						dsts[j] = must.Get(coder.appendDecode(dsts[j][:0], src))
-					}(j)
+					})
 				}
-				group.Wait()
+				wg.Wait()
 			}
 		})
 	}

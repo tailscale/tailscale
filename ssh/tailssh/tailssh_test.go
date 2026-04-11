@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
-	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
@@ -34,24 +33,21 @@ import (
 	"testing/synctest"
 	"time"
 
-	gossh "golang.org/x/crypto/ssh"
+	gliderssh "github.com/tailscale/gliderssh"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
-	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/memnet"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tempfork/gliderlabs/ssh"
 	testssh "tailscale.com/tempfork/sshtest/ssh"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/lineiter"
 	"tailscale.com/util/must"
@@ -96,7 +92,7 @@ func TestMatchRule(t *testing.T) {
 			name: "expired",
 			rule: &tailcfg.SSHRule{
 				Action:      someAction,
-				RuleExpires: ptr.To(time.Unix(100, 0)),
+				RuleExpires: new(time.Unix(100, 0)),
 			},
 			ci:      &sshConnInfo{},
 			wantErr: errRuleExpired,
@@ -382,6 +378,7 @@ func TestEvalSSHPolicy(t *testing.T) {
 type localState struct {
 	sshEnabled   bool
 	matchingRule *tailcfg.SSHRule
+	varRoot      string // if empty, TailscaleVarRoot returns ""
 
 	// serverActions is a map of the action name to the action.
 	// It is served for paths like https://unused/ssh-action/<action-name>.
@@ -389,29 +386,17 @@ type localState struct {
 	serverActions map[string]*tailcfg.SSHAction
 }
 
-var (
-	currentUser    = os.Getenv("USER") // Use the current user for the test.
-	testSigner     gossh.Signer
-	testSignerOnce sync.Once
-)
+var currentUser = func() string {
+	// Prefer user.Current because the USER env var is not set in
+	// some environments (e.g. the golang:latest container used by CI).
+	if u, err := user.Current(); err == nil {
+		return u.Username
+	}
+	return os.Getenv("USER")
+}()
 
 func (ts *localState) Dialer() *tsdial.Dialer {
 	return &tsdial.Dialer{}
-}
-
-func (ts *localState) GetSSH_HostKeys() ([]gossh.Signer, error) {
-	testSignerOnce.Do(func() {
-		_, priv, err := ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			panic(err)
-		}
-		s, err := gossh.NewSignerFromSigner(priv)
-		if err != nil {
-			panic(err)
-		}
-		testSigner = s
-	})
-	return []gossh.Signer{testSigner}, nil
 }
 
 func (ts *localState) ShouldRunSSH() bool {
@@ -469,7 +454,7 @@ func (ts *localState) DoNoiseRequest(req *http.Request) (*http.Response, error) 
 }
 
 func (ts *localState) TailscaleVarRoot() string {
-	return ""
+	return ts.varRoot
 }
 
 func (ts *localState) NodeKey() key.NodePublic {
@@ -491,13 +476,8 @@ func newSSHRule(action *tailcfg.SSHAction) *tailcfg.SSHRule {
 }
 
 func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7707")
-
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skipf("skipping on %q; only runs on linux and darwin", runtime.GOOS)
-	}
-	if runtime.GOOS == "darwin" && cibuild.On() {
-		t.Skipf("this fails on CI on macOS; see https://github.com/tailscale/tailscale/issues/7707")
 	}
 
 	var handler http.HandlerFunc
@@ -509,6 +489,7 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 		logf: tstest.WhileTestRunningLogger(t),
 		lb: &localState{
 			sshEnabled: true,
+			varRoot:    t.TempDir(),
 			matchingRule: newSSHRule(
 				&tailcfg.SSHAction{
 					Accept: true,
@@ -572,9 +553,7 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 			tstest.Replace(t, &handler, tt.handler)
 			sc, dc := memnet.NewTCPConn(src, dst, 1024)
 			var wg sync.WaitGroup
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				c, chans, reqs, err := testssh.NewClientConn(sc, sc.RemoteAddr().String(), cfg)
 				if err != nil {
 					t.Errorf("client: %v", err)
@@ -604,7 +583,7 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 						t.Errorf("client output must not contain %q", x)
 					}
 				}
-			}()
+			})
 			if err := s.HandleSSHConn(dc); err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
@@ -639,6 +618,7 @@ func TestMultipleRecorders(t *testing.T) {
 		logf: tstest.WhileTestRunningLogger(t),
 		lb: &localState{
 			sshEnabled: true,
+			varRoot:    t.TempDir(),
 			matchingRule: newSSHRule(
 				&tailcfg.SSHAction{
 					Accept: true,
@@ -667,9 +647,7 @@ func TestMultipleRecorders(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		c, chans, reqs, err := testssh.NewClientConn(sc, sc.RemoteAddr().String(), cfg)
 		if err != nil {
 			t.Errorf("client: %v", err)
@@ -691,7 +669,7 @@ func TestMultipleRecorders(t *testing.T) {
 		if string(out) != "Ran echo!\n" {
 			t.Errorf("client: unexpected output: %q", out)
 		}
-	}()
+	})
 	if err := s.HandleSSHConn(dc); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -714,9 +692,9 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 		t.Skipf("skipping on %q; only runs on linux and darwin", runtime.GOOS)
 	}
 	var recording []byte
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	done := make(chan struct{})
 	recordingServer := mockRecordingServer(t, func(w http.ResponseWriter, r *http.Request) {
-		defer cancel()
+		defer close(done)
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
 
@@ -732,6 +710,7 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 		logf: tstest.WhileTestRunningLogger(t),
 		lb: &localState{
 			sshEnabled: true,
+			varRoot:    t.TempDir(),
 			matchingRule: newSSHRule(
 				&tailcfg.SSHAction{
 					Accept: true,
@@ -758,9 +737,7 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		c, chans, reqs, err := testssh.NewClientConn(sc, sc.RemoteAddr().String(), cfg)
 		if err != nil {
 			t.Errorf("client: %v", err)
@@ -779,13 +756,17 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 		if err != nil {
 			t.Errorf("client: %v", err)
 		}
-	}()
+	})
 	if err := s.HandleSSHConn(dc); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 	wg.Wait()
 
-	<-ctx.Done() // wait for recording to finish
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for recording")
+	}
 	var ch sessionrecording.CastHeader
 	if err := json.NewDecoder(bytes.NewReader(recording)).Decode(&ch); err != nil {
 		t.Fatal(err)
@@ -802,6 +783,7 @@ func TestSSHAuthFlow(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skipf("skipping on %q; only runs on linux and darwin", runtime.GOOS)
 	}
+	varRoot := t.TempDir()
 	acceptRule := newSSHRule(&tailcfg.SSHAction{
 		Accept:  true,
 		Message: "Welcome to Tailscale SSH!",
@@ -828,6 +810,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			name: "no-policy",
 			state: &localState{
 				sshEnabled: true,
+				varRoot:    varRoot,
 			},
 			authErr:     true,
 			wantBanners: []string{"tailscale: tailnet policy does not permit you to SSH to this node\n"},
@@ -836,6 +819,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			name: "user-mismatch",
 			state: &localState{
 				sshEnabled:   true,
+				varRoot:      varRoot,
 				matchingRule: bobRule,
 			},
 			authErr:     true,
@@ -845,6 +829,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			name: "accept",
 			state: &localState{
 				sshEnabled:   true,
+				varRoot:      varRoot,
 				matchingRule: acceptRule,
 			},
 			wantBanners: []string{"Welcome to Tailscale SSH!"},
@@ -853,6 +838,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			name: "reject",
 			state: &localState{
 				sshEnabled:   true,
+				varRoot:      varRoot,
 				matchingRule: rejectRule,
 			},
 			wantBanners: []string{"Go Away!"},
@@ -862,6 +848,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			name: "simple-check",
 			state: &localState{
 				sshEnabled: true,
+				varRoot:    varRoot,
 				matchingRule: newSSHRule(&tailcfg.SSHAction{
 					HoldAndDelegate: "https://unused/ssh-action/accept",
 				}),
@@ -875,6 +862,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			name: "multi-check",
 			state: &localState{
 				sshEnabled: true,
+				varRoot:    varRoot,
 				matchingRule: newSSHRule(&tailcfg.SSHAction{
 					Message:         "First",
 					HoldAndDelegate: "https://unused/ssh-action/check1",
@@ -893,6 +881,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			name: "check-reject",
 			state: &localState{
 				sshEnabled: true,
+				varRoot:    varRoot,
 				matchingRule: newSSHRule(&tailcfg.SSHAction{
 					Message:         "First",
 					HoldAndDelegate: "https://unused/ssh-action/reject",
@@ -909,6 +898,7 @@ func TestSSHAuthFlow(t *testing.T) {
 			sshUser: "alice+password",
 			state: &localState{
 				sshEnabled:   true,
+				varRoot:      varRoot,
 				matchingRule: acceptRule,
 			},
 			usesPassword: true,
@@ -989,9 +979,7 @@ func TestSSHAuthFlow(t *testing.T) {
 				}
 
 				var wg sync.WaitGroup
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				wg.Go(func() {
 					c, chans, reqs, err := testssh.NewClientConn(sc, sc.RemoteAddr().String(), cfg)
 					if err != nil {
 						if !tc.authErr {
@@ -1015,7 +1003,7 @@ func TestSSHAuthFlow(t *testing.T) {
 					if err != nil {
 						t.Errorf("client: %v", err)
 					}
-				}()
+				})
 				if err := s.HandleSSHConn(dc); err != nil {
 					t.Errorf("unexpected error: %v", err)
 				}
@@ -1114,7 +1102,7 @@ func TestSSH(t *testing.T) {
 	sc.finalAction = sc.action0
 	sc.authCompleted.Store(true)
 
-	sc.Handler = func(s ssh.Session) {
+	sc.Handler = func(s gliderssh.Session) {
 		sc.newSSHSession(s).run()
 	}
 
@@ -1229,8 +1217,8 @@ func TestSSH(t *testing.T) {
 func parseEnv(out []byte) map[string]string {
 	e := map[string]string{}
 	for line := range lineiter.Bytes(out) {
-		if i := bytes.IndexByte(line, '='); i != -1 {
-			e[string(line[:i])] = string(line[i+1:])
+		if before, after, ok := bytes.Cut(line, []byte{'='}); ok {
+			e[string(before)] = string(after)
 		}
 	}
 	return e

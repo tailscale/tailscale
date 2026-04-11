@@ -527,6 +527,104 @@ func (i *iptablesRunner) DelStatefulRule(tunname string) error {
 	return nil
 }
 
+// AddConnmarkSaveRule adds conntrack marking rules to save and restore marks.
+// These rules run in mangle/PREROUTING (to restore marks from conntrack) and
+// mangle/OUTPUT (to save marks to conntrack) before rp_filter checks, enabling
+// proper routing table lookups for exit nodes and subnet routers.
+func (i *iptablesRunner) AddConnmarkSaveRule() error {
+	// Check if rules already exist (idempotency)
+	for _, ipt := range i.getTables() {
+		rules, err := ipt.List("mangle", "PREROUTING")
+		if err != nil {
+			continue
+		}
+		// Look for existing connmark restore rule
+		for _, rule := range rules {
+			if strings.Contains(rule, "CONNMARK") &&
+				strings.Contains(rule, "restore-mark") &&
+				strings.Contains(rule, "ctmask 0xff0000") {
+				// Rules already exist, skip adding
+				return nil
+			}
+		}
+	}
+
+	// mangle/PREROUTING: Restore mark from conntrack for ESTABLISHED/RELATED connections
+	// This runs BEFORE routing decision and rp_filter check
+	for _, ipt := range i.getTables() {
+		args := []string{
+			"-m", "conntrack",
+			"--ctstate", "ESTABLISHED,RELATED",
+			"-j", "CONNMARK",
+			"--restore-mark",
+			"--nfmask", fwmarkMask,
+			"--ctmask", fwmarkMask,
+		}
+		if err := ipt.Insert("mangle", "PREROUTING", 1, args...); err != nil {
+			return fmt.Errorf("adding %v in mangle/PREROUTING: %w", args, err)
+		}
+	}
+
+	// mangle/OUTPUT: Save mark to conntrack for NEW connections with non-zero marks
+	for _, ipt := range i.getTables() {
+		args := []string{
+			"-m", "conntrack",
+			"--ctstate", "NEW",
+			"-m", "mark",
+			"!", "--mark", "0x0/" + fwmarkMask,
+			"-j", "CONNMARK",
+			"--save-mark",
+			"--nfmask", fwmarkMask,
+			"--ctmask", fwmarkMask,
+		}
+		if err := ipt.Insert("mangle", "OUTPUT", 1, args...); err != nil {
+			return fmt.Errorf("adding %v in mangle/OUTPUT: %w", args, err)
+		}
+	}
+
+	return nil
+}
+
+// DelConnmarkSaveRule removes conntrack marking rules added by AddConnmarkSaveRule.
+func (i *iptablesRunner) DelConnmarkSaveRule() error {
+	for _, ipt := range i.getTables() {
+		// Delete PREROUTING rule
+		args := []string{
+			"-m", "conntrack",
+			"--ctstate", "ESTABLISHED,RELATED",
+			"-j", "CONNMARK",
+			"--restore-mark",
+			"--nfmask", fwmarkMask,
+			"--ctmask", fwmarkMask,
+		}
+		if err := ipt.Delete("mangle", "PREROUTING", args...); err != nil {
+			if !isNotExistError(err) {
+				return fmt.Errorf("deleting connmark rule in mangle/PREROUTING: %w", err)
+			}
+			// Rule doesn't exist - this is fine for idempotency
+		}
+
+		// Delete OUTPUT rule
+		args = []string{
+			"-m", "conntrack",
+			"--ctstate", "NEW",
+			"-m", "mark",
+			"!", "--mark", "0x0/" + fwmarkMask,
+			"-j", "CONNMARK",
+			"--save-mark",
+			"--nfmask", fwmarkMask,
+			"--ctmask", fwmarkMask,
+		}
+		if err := ipt.Delete("mangle", "OUTPUT", args...); err != nil {
+			if !isNotExistError(err) {
+				return fmt.Errorf("deleting connmark rule in mangle/OUTPUT: %w", err)
+			}
+			// Rule doesn't exist - this is fine for idempotency
+		}
+	}
+	return nil
+}
+
 // buildMagicsockPortRule generates the string slice containing the arguments
 // to describe a rule accepting traffic on a particular port to iptables. It is
 // separated out here to avoid repetition in AddMagicsockPortRule and

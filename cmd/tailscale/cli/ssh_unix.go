@@ -39,7 +39,7 @@ func init() {
 			return ""
 		}
 		prefix := []byte("SSH_CLIENT=")
-		for _, env := range bytes.Split(b, []byte{0}) {
+		for env := range bytes.SplitSeq(b, []byte{0}) {
 			if bytes.HasPrefix(env, prefix) {
 				return string(env[len(prefix):])
 			}

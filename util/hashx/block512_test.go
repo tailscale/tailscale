@@ -47,7 +47,7 @@ type hasher interface {
 
 func hashSuite(h hasher) {
 	for i := range 10 {
-		for j := 0; j < 10; j++ {
+		for range 10 {
 			h.HashUint8(0x01)
 			h.HashUint8(0x23)
 			h.HashUint32(0x456789ab)

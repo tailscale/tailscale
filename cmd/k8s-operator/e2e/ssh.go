@@ -26,7 +26,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	tailscaleroot "tailscale.com"
-	"tailscale.com/types/ptr"
 )
 
 const (
@@ -206,7 +205,7 @@ func applySSHResources(ctx context.Context, cl client.Client, alpineTag string, 
 
 func cleanupSSHResources(ctx context.Context, cl client.Client) error {
 	noGrace := &client.DeleteOptions{
-		GracePeriodSeconds: ptr.To[int64](0),
+		GracePeriodSeconds: new(int64(0)),
 	}
 	if err := cl.Delete(ctx, sshDeployment("", nil), noGrace); err != nil {
 		return fmt.Errorf("failed to delete ssh-server Deployment: %w", err)
@@ -232,7 +231,7 @@ func sshDeployment(tag string, pubKey []byte) *appsv1.Deployment {
 			Namespace: ns,
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr.To[int32](1),
+			Replicas: new(int32(1)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					"app": "ssh-server",

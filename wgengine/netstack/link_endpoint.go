@@ -7,6 +7,7 @@ import (
 	"context"
 	"sync"
 
+	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
@@ -196,6 +197,43 @@ func (ep *linkEndpoint) injectInbound(p *packet.Parsed) {
 	}
 	d.DeliverNetworkPacket(pkt.NetworkProtocolNumber, pkt)
 	pkt.DecRef()
+}
+
+// DeliverLoopback delivers pkt back into gVisor's network stack as if it
+// arrived from the network, for self-addressed (loopback) packets. It takes
+// ownership of one reference count on pkt. The caller must not use pkt after
+// calling this method. It returns false if the dispatcher is not attached.
+//
+// Outbound packets from gVisor have their headers already parsed into separate
+// views (NetworkHeader, TransportHeader, Data). DeliverNetworkPacket expects
+// a raw unparsed packet, so we must re-serialize the packet into a new
+// PacketBuffer with all bytes in the payload for gVisor to parse on inbound.
+func (ep *linkEndpoint) DeliverLoopback(pkt *stack.PacketBuffer) bool {
+	ep.mu.RLock()
+	d := ep.dispatcher
+	ep.mu.RUnlock()
+	if d == nil {
+		pkt.DecRef()
+		return false
+	}
+
+	// Serialize the outbound packet back to raw bytes.
+	raw := stack.PayloadSince(pkt.NetworkHeader()).AsSlice()
+	proto := pkt.NetworkProtocolNumber
+
+	// We're done with the original outbound packet.
+	pkt.DecRef()
+
+	// Create a new PacketBuffer from the raw bytes for inbound delivery.
+	newPkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
+		Payload: buffer.MakeWithData(raw),
+	})
+	newPkt.NetworkProtocolNumber = proto
+	newPkt.RXChecksumValidated = true
+
+	d.DeliverNetworkPacket(proto, newPkt)
+	newPkt.DecRef()
+	return true
 }
 
 // Attach saves the stack network-layer dispatcher for use later when packets

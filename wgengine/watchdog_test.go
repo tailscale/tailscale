@@ -26,7 +26,7 @@ func TestWatchdog(t *testing.T) {
 		maxWaitMultiple = 15
 	}
 
-	t.Run("default watchdog does not fire", func(t *testing.T) {
+	t.Run("default-watchdog-does-not-fire", func(t *testing.T) {
 		t.Parallel()
 		bus := eventbustest.NewBus(t)
 		ht := health.NewTracker(bus)
@@ -55,7 +55,7 @@ func TestWatchdogMetrics(t *testing.T) {
 		wantCounts map[watchdogEvent]int64
 	}{
 		{
-			name:   "single event types",
+			name:   "single-event-types",
 			events: []watchdogEvent{RequestStatus, PeerForIPEvent, Ping},
 			wantCounts: map[watchdogEvent]int64{
 				RequestStatus:  1,
@@ -64,7 +64,7 @@ func TestWatchdogMetrics(t *testing.T) {
 			},
 		},
 		{
-			name:   "repeated events",
+			name:   "repeated-events",
 			events: []watchdogEvent{RequestStatus, RequestStatus, Ping, RequestStatus},
 			wantCounts: map[watchdogEvent]int64{
 				RequestStatus: 3,

@@ -5,9 +5,7 @@ package featuretags
 
 import (
 	"maps"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -91,19 +89,18 @@ func TestRequiredBy(t *testing.T) {
 
 // Verify that all "ts_omit_foo" build tags are declared in featuretags.go
 func TestAllOmitBuildTagsDeclared(t *testing.T) {
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not found in PATH; skipping test")
 	}
-	root := filepath.Join(dir, "..", "..")
+	root, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Skipf("not in a git repository; skipping test")
+	}
 
 	cmd := exec.Command("git", "grep", "ts_omit_")
-	cmd.Dir = root
+	cmd.Dir = strings.TrimSpace(string(root))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		if _, err := exec.LookPath("git"); err != nil {
-			t.Skipf("git not found in PATH; skipping test")
-		}
 		t.Fatalf("git grep failed: %v\nOutput:\n%s", err, out)
 	}
 	rx := regexp.MustCompile(`\bts_omit_[\w_]+\b`)

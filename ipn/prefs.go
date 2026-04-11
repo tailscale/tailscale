@@ -439,12 +439,11 @@ func applyPrefsEdits(src, dst reflect.Value, mask map[string]reflect.Value) {
 
 func maskFields(v reflect.Value) map[string]reflect.Value {
 	mask := make(map[string]reflect.Value)
-	for i := range v.NumField() {
-		f := v.Type().Field(i).Name
-		if !strings.HasSuffix(f, "Set") {
+	for sf, fv := range v.Fields() {
+		if !strings.HasSuffix(sf.Name, "Set") {
 			continue
 		}
-		mask[strings.TrimSuffix(f, "Set")] = v.Field(i)
+		mask[strings.TrimSuffix(sf.Name, "Set")] = fv
 	}
 	return mask
 }
@@ -845,22 +844,15 @@ func (p *Prefs) SetAdvertiseExitNode(runExit bool) {
 // Tailscale IP.
 func peerWithTailscaleIP(st *ipnstate.Status, ip netip.Addr) (ps *ipnstate.PeerStatus, ok bool) {
 	for _, ps := range st.Peer {
-		for _, ip2 := range ps.TailscaleIPs {
-			if ip == ip2 {
-				return ps, true
-			}
+		if slices.Contains(ps.TailscaleIPs, ip) {
+			return ps, true
 		}
 	}
 	return nil, false
 }
 
 func isRemoteIP(st *ipnstate.Status, ip netip.Addr) bool {
-	for _, selfIP := range st.TailscaleIPs {
-		if ip == selfIP {
-			return false
-		}
-	}
-	return true
+	return !slices.Contains(st.TailscaleIPs, ip)
 }
 
 // ClearExitNode sets the ExitNodeID and ExitNodeIP to their zero values.
@@ -904,8 +896,17 @@ func exitNodeIPOfArg(s string, st *ipnstate.Status) (ip netip.Addr, err error) {
 	}
 	match := 0
 	for _, ps := range st.Peer {
-		baseName := dnsname.TrimSuffix(ps.DNSName, st.MagicDNSSuffix)
-		if !strings.EqualFold(s, baseName) && !strings.EqualFold(s, ps.DNSName) {
+		// Compare to the peer name in three forms:
+		//
+		//	- base name ("example")
+		//	- FQDN ("example.tail1234.ts.net.")
+		// 	- FQDN sans dot ("example.tail1234.ts.net", as returned by `tailscale exit-node list`
+		//	  and the admin console)
+		//
+		fqdn := ps.DNSName
+		baseName := dnsname.TrimSuffix(fqdn, st.MagicDNSSuffix)
+		fqdnSansDot := dnsname.TrimSuffix(fqdn, ".")
+		if !strings.EqualFold(s, baseName) && !strings.EqualFold(s, fqdn) && !strings.EqualFold(s, fqdnSansDot) {
 			continue
 		}
 		match++
@@ -919,7 +920,7 @@ func exitNodeIPOfArg(s string, st *ipnstate.Status) (ip netip.Addr, err error) {
 	}
 	switch match {
 	case 0:
-		return ip, fmt.Errorf("invalid value %q for --exit-node; must be IP or unique node name", s)
+		return ip, fmt.Errorf("invalid value %q for --exit-node; must be IP or hostname", s)
 	case 1:
 		if !isRemoteIP(st, ip) {
 			return ip, ExitNodeLocalIPError{s}

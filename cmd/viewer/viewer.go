@@ -282,6 +282,22 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, fie
 			writeTemplateWithComment("valueField", fname)
 			continue
 		}
+		// Named map/slice types whose element type is opaque (e.g. any)
+		// can't be safely wrapped in views.Map/views.Slice because the
+		// accessor would leak the raw element.  If the type provides its
+		// own View() method the author can return a purpose-built safe
+		// view; use it.  Otherwise fall through to the normal handling,
+		// which will reject the type as unsupported.
+		if named, _ := codegen.NamedTypeOf(fieldType); named != nil {
+			switch fieldType.Underlying().(type) {
+			case *types.Map, *types.Slice:
+				if viewType := viewTypeForValueType(fieldType); viewType != nil {
+					args.FieldViewName = it.QualifiedName(viewType)
+					writeTemplateWithComment("viewField", fname)
+					continue
+				}
+			}
+		}
 		switch underlying := fieldType.Underlying().(type) {
 		case *types.Slice:
 			slice := underlying
@@ -500,8 +516,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, fie
 		}
 		writeTemplateWithComment("unsupportedField", fname)
 	}
-	for i := range typ.NumMethods() {
-		f := typ.Method(i)
+	for f := range typ.Methods() {
 		if !f.Exported() {
 			continue
 		}
@@ -720,7 +735,7 @@ func main() {
 	fieldComments := getFieldComments(pkg.Syntax)
 
 	cloneOnlyType := map[string]bool{}
-	for _, t := range strings.Split(*flagCloneOnlyTypes, ",") {
+	for t := range strings.SplitSeq(*flagCloneOnlyTypes, ",") {
 		cloneOnlyType[t] = true
 	}
 

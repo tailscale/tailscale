@@ -76,7 +76,7 @@ users:
     token: unused`,
 		},
 		{
-			name: "all configs, clusters, users have been deleted",
+			name: "all-configs-clusters-users-deleted",
 			in: `apiVersion: v1
 clusters: null
 contexts: null

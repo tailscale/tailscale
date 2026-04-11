@@ -19,8 +19,8 @@ func TestConfigEqual(t *testing.T) {
 	}
 	configType := reflect.TypeFor[Config]()
 	configFields := []string{}
-	for i := range configType.NumField() {
-		configFields = append(configFields, configType.Field(i).Name)
+	for field := range configType.Fields() {
+		configFields = append(configFields, field.Name)
 	}
 	if !reflect.DeepEqual(configFields, testedFields) {
 		t.Errorf("Config.Equal check might be out of sync\nfields: %q\nhandled: %q\n",

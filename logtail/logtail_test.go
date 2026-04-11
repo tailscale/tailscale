@@ -86,10 +86,10 @@ func TestDrainPendingMessages(t *testing.T) {
 	}
 
 	// all of the "log line" messages usually arrive at once, but poll if needed.
-	body := ""
+	var body strings.Builder
 	for i := 0; i <= logLines; i++ {
-		body += string(<-ts.uploaded)
-		count := strings.Count(body, "log line")
+		body.WriteString(string(<-ts.uploaded))
+		count := strings.Count(body.String(), "log line")
 		if count == logLines {
 			break
 		}

@@ -11,3 +11,8 @@ qemu: image
 natlab:
 	go run build.go --build --app=natlabapp
 	qemu-img convert -O qcow2 natlabapp.img natlabapp.qcow2
+
+# For natlab integration tests on macOS arm64:
+natlab-arm64:
+	go run build.go --build --app=natlabapp.arm64
+	qemu-img convert -O qcow2 natlabapp.arm64.img natlabapp.arm64.qcow2

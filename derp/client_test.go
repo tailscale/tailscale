@@ -6,7 +6,6 @@ package derp
 import (
 	"bufio"
 	"bytes"
-	"io"
 	"net"
 	"reflect"
 	"sync"
@@ -123,36 +122,6 @@ func TestClientSendPong(t *testing.T) {
 	}
 	if !bytes.Equal(buf.Bytes(), want) {
 		t.Errorf("unexpected output\nwrote: % 02x\n want: % 02x", buf.Bytes(), want)
-	}
-}
-
-func BenchmarkWriteUint32(b *testing.B) {
-	w := bufio.NewWriter(io.Discard)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		writeUint32(w, 0x0ba3a)
-	}
-}
-
-type nopRead struct{}
-
-func (r nopRead) Read(p []byte) (int, error) {
-	return len(p), nil
-}
-
-var sinkU32 uint32
-
-func BenchmarkReadUint32(b *testing.B) {
-	r := bufio.NewReader(nopRead{})
-	var err error
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		sinkU32, err = readUint32(r)
-		if err != nil {
-			b.Fatal(err)
-		}
 	}
 }
 

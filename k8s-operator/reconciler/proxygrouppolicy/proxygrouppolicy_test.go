@@ -30,7 +30,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		ExpectsError        bool
 	}{
 		{
-			Name:                "single policy, denies all",
+			Name:                "single-policy-denies-all",
 			ExpectedPolicyCount: 2,
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
@@ -53,7 +53,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
-			Name:                "multiple policies merged",
+			Name:                "multiple-policies-merged",
 			ExpectedPolicyCount: 2,
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
@@ -89,7 +89,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
-			Name:                "no policies, no child resources",
+			Name:                "no-policies-no-child-resources",
 			ExpectedPolicyCount: 0,
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{

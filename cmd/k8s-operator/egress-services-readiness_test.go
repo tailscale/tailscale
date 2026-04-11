@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/AlekSi/pointer"
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -145,9 +144,9 @@ func setEndpointForReplica(pg *tsapi.ProxyGroup, ordinal int32, eps *discoveryv1
 	eps.Endpoints = append(eps.Endpoints, discoveryv1.Endpoint{
 		Addresses: []string{p.Status.PodIPs[0].IP},
 		Conditions: discoveryv1.EndpointConditions{
-			Ready:       pointer.ToBool(true),
-			Serving:     pointer.ToBool(true),
-			Terminating: pointer.ToBool(false),
+			Ready:       new(true),
+			Serving:     new(true),
+			Terminating: new(false),
 		},
 	})
 }

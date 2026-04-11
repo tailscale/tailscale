@@ -8,9 +8,6 @@ import (
 	"net"
 	"runtime"
 	"testing"
-
-	"tailscale.com/net/netmon"
-	"tailscale.com/util/eventbus"
 )
 
 type conn struct {
@@ -67,22 +64,4 @@ func TestIPForwardingEnabledLinux(t *testing.T) {
 	if got {
 		t.Errorf("got true; want false")
 	}
-}
-
-func TestCheckReversePathFiltering(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skipf("skipping on %s", runtime.GOOS)
-	}
-	bus := eventbus.New()
-	defer bus.Close()
-
-	netMon, err := netmon.New(bus, t.Logf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer netMon.Close()
-
-	warn, err := CheckReversePathFiltering(netMon.InterfaceState())
-	t.Logf("err: %v", err)
-	t.Logf("warnings: %v", warn)
 }

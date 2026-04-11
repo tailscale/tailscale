@@ -14,7 +14,6 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
-	"tailscale.com/types/ptr"
 )
 
 // Clone makes a deep copy of LoginProfile.
@@ -25,6 +24,7 @@ func (src *LoginProfile) Clone() *LoginProfile {
 	}
 	dst := new(LoginProfile)
 	*dst = *src
+	dst.UserProfile = *src.UserProfile.Clone()
 	return dst
 }
 
@@ -62,7 +62,7 @@ func (src *Prefs) Clone() *Prefs {
 		}
 	}
 	if dst.RelayServerPort != nil {
-		dst.RelayServerPort = ptr.To(*src.RelayServerPort)
+		dst.RelayServerPort = new(*src.RelayServerPort)
 	}
 	dst.RelayServerStaticEndpoints = append(src.RelayServerStaticEndpoints[:0:0], src.RelayServerStaticEndpoints...)
 	dst.Persist = src.Persist.Clone()
@@ -122,7 +122,7 @@ func (src *ServeConfig) Clone() *ServeConfig {
 			if v == nil {
 				dst.TCP[k] = nil
 			} else {
-				dst.TCP[k] = ptr.To(*v)
+				dst.TCP[k] = new(*v)
 			}
 		}
 	}
@@ -184,7 +184,7 @@ func (src *ServiceConfig) Clone() *ServiceConfig {
 			if v == nil {
 				dst.TCP[k] = nil
 			} else {
-				dst.TCP[k] = ptr.To(*v)
+				dst.TCP[k] = new(*v)
 			}
 		}
 	}

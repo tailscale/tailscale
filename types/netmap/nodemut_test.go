@@ -14,7 +14,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/ptr"
 )
 
 // tests mapResponseContainsNonPatchFields
@@ -35,7 +34,7 @@ func TestMapResponseContainsNonPatchFields(t *testing.T) {
 			return reflect.ValueOf(int64(1)).Convert(t)
 		case reflect.Slice:
 			return reflect.MakeSlice(t, 1, 1)
-		case reflect.Ptr:
+		case reflect.Pointer:
 			return reflect.New(t.Elem())
 		case reflect.Map:
 			return reflect.MakeMap(t)
@@ -44,8 +43,7 @@ func TestMapResponseContainsNonPatchFields(t *testing.T) {
 	}
 
 	rt := reflect.TypeFor[tailcfg.MapResponse]()
-	for i := range rt.NumField() {
-		f := rt.Field(i)
+	for f := range rt.Fields() {
 
 		var want bool
 		switch f.Name {
@@ -117,7 +115,7 @@ func TestMutationsFromMapResponse(t *testing.T) {
 			name: "patch-online",
 			mr: fromChanges(&tailcfg.PeerChange{
 				NodeID: 1,
-				Online: ptr.To(true),
+				Online: new(true),
 			}),
 			want: muts(NodeMutationOnline{1, true}),
 		},
@@ -125,7 +123,7 @@ func TestMutationsFromMapResponse(t *testing.T) {
 			name: "patch-online-false",
 			mr: fromChanges(&tailcfg.PeerChange{
 				NodeID: 1,
-				Online: ptr.To(false),
+				Online: new(false),
 			}),
 			want: muts(NodeMutationOnline{1, false}),
 		},
@@ -133,7 +131,7 @@ func TestMutationsFromMapResponse(t *testing.T) {
 			name: "patch-lastseen",
 			mr: fromChanges(&tailcfg.PeerChange{
 				NodeID:   1,
-				LastSeen: ptr.To(time.Unix(12345, 0)),
+				LastSeen: new(time.Unix(12345, 0)),
 			}),
 			want: muts(NodeMutationLastSeen{1, time.Unix(12345, 0)}),
 		},

@@ -27,8 +27,8 @@ import (
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
-	for i := range t.NumField() {
-		fields = append(fields, t.Field(i).Name)
+	for field := range t.Fields() {
+		fields = append(fields, field.Name)
 	}
 	return
 }
@@ -458,7 +458,7 @@ func TestPrefsFromBytesPreservesOldValues(t *testing.T) {
 			want: Prefs{ControlURL: "https://foo", RouteAll: true},
 		},
 		{
-			name: "opt.Bool", // test that we don't normalize it early
+			name: "opt-Bool", // test that we don't normalize it early
 			old:  Prefs{Sync: "unset"},
 			json: []byte(`{}`),
 			want: Prefs{Sync: "unset"},
@@ -1009,7 +1009,7 @@ func TestExitNodeIPOfArg(t *testing.T) {
 			name:    "no_match",
 			arg:     "unknown",
 			st:      &ipnstate.Status{MagicDNSSuffix: ".foo"},
-			wantErr: `invalid value "unknown" for --exit-node; must be IP or unique node name`,
+			wantErr: `invalid value "unknown" for --exit-node; must be IP or hostname`,
 		},
 		{
 			name: "name",
@@ -1029,6 +1029,21 @@ func TestExitNodeIPOfArg(t *testing.T) {
 		{
 			name: "name_fqdn",
 			arg:  "skippy.foo.",
+			st: &ipnstate.Status{
+				MagicDNSSuffix: ".foo",
+				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
+					key.NewNode().Public(): {
+						DNSName:        "skippy.foo.",
+						TailscaleIPs:   []netip.Addr{mustIP("1.0.0.2")},
+						ExitNodeOption: true,
+					},
+				},
+			},
+			want: mustIP("1.0.0.2"),
+		},
+		{
+			name: "name_fqdn_sans_dot",
+			arg:  "skippy.foo",
 			st: &ipnstate.Status{
 				MagicDNSSuffix: ".foo",
 				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
@@ -1067,7 +1082,7 @@ func TestExitNodeIPOfArg(t *testing.T) {
 					},
 				},
 			},
-			wantErr: `invalid value "skippy.bar." for --exit-node; must be IP or unique node name`,
+			wantErr: `invalid value "skippy.bar." for --exit-node; must be IP or hostname`,
 		},
 		{
 			name: "ambiguous",
@@ -1221,13 +1236,13 @@ func TestParseAutoExitNodeString(t *testing.T) {
 		wantExpr   ExitNodeExpression
 	}{
 		{
-			name:       "empty expr",
+			name:       "empty-expr",
 			exitNodeID: "",
 			wantOk:     false,
 			wantExpr:   "",
 		},
 		{
-			name:       "no auto prefix",
+			name:       "no-auto-prefix",
 			exitNodeID: "foo",
 			wantOk:     false,
 			wantExpr:   "",
@@ -1245,13 +1260,13 @@ func TestParseAutoExitNodeString(t *testing.T) {
 			wantExpr:   "foo",
 		},
 		{
-			name:       "auto prefix but empty suffix",
+			name:       "auto-prefix-empty-suffix",
 			exitNodeID: "auto:",
 			wantOk:     false,
 			wantExpr:   "",
 		},
 		{
-			name:       "auto prefix no colon",
+			name:       "auto-prefix-no-colon",
 			exitNodeID: "auto",
 			wantOk:     false,
 			wantExpr:   "",

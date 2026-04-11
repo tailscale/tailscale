@@ -355,7 +355,7 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 		})
 	})
 
-	t.Run("tailscale status", func(t *testing.T) {
+	t.Run("tailscale-status", func(t *testing.T) {
 		dur := 100 * time.Millisecond
 		var outp []byte
 		var err error
@@ -364,7 +364,7 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 		// starts with testcontrol sometimes there can be up to a few seconds where
 		// tailscaled is in an unknown state on these virtual machines. This exponential
 		// delay loop should delay long enough for tailscaled to be ready.
-		for count := 0; count < 10; count++ {
+		for range 10 {
 			sess := getSession(t, cli)
 
 			outp, err = sess.CombinedOutput("tailscale status")
@@ -383,7 +383,7 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 		t.Fatalf("error: %v", err)
 	})
 
-	t.Run("dump routes", func(t *testing.T) {
+	t.Run("dump-routes", func(t *testing.T) {
 		sess, err := cli.NewSession()
 		if err != nil {
 			t.Fatal(err)

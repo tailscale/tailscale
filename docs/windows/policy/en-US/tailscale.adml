@@ -178,6 +178,16 @@ If you disable this policy, then Automatically Install Updates is always disable
 If you do not configure this policy, then Automatically Install Updates depends on what is selected in the Preferences submenu.
 
 See https://tailscale.com/kb/1067/update#auto-updates for more details.]]></string>
+            <string id="CheckUpdates">Automatically check for updates</string>
+            <string id="CheckUpdates_Help"><![CDATA[This policy can be used to control whether the Tailscale client periodically checks for updates.
+
+If you enable this policy, then update checks are always enabled.
+
+If you disable this policy, then update checks are always disabled.
+
+If you do not configure this policy, then update checks are enabled, but the user may disable them manually.
+
+See https://tailscale.com/docs/features/client/update for more details.]]></string>
             <string id="AdvertiseExitNode">Run Tailscale as an Exit Node</string>
             <string id="AdvertiseExitNode_Help"><![CDATA[This policy can be used to require that Run Exit Node is configured a certain way.
 

@@ -19,8 +19,10 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/mapx"
+	"tailscale.com/types/views"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -202,6 +204,16 @@ type Host interface {
 	// NodeBackend returns the [NodeBackend] for the currently active node
 	// (which is approximately the same as the current profile).
 	NodeBackend() NodeBackend
+
+	// AuthReconfigAsync asynchronously pushes a new configuration into wgengine,
+	// if engine updates are not currently blocked, based on the cached netmap and
+	// user prefs. The reconfiguration is applied to [ipnlocal.LocalBackend]'s currently
+	// active node at the time of execution.
+	//
+	// AuthReconfigAsync should not be called at a high rate (i.e., more often
+	// than prefs and netmap changes), except in experimental or proof-of-concept
+	// contexts, since reconfiguration is known to be slow.
+	AuthReconfigAsync()
 }
 
 // SafeBackend is a subset of the [ipnlocal.LocalBackend] type's methods that
@@ -382,6 +394,42 @@ type Hooks struct {
 	// Filter contains hooks for the packet filter.
 	// See [filter.Filter] for details on how these hooks are invoked.
 	Filter FilterHooks
+
+	// ExtraWireGuardAllowedIPs is called with each peer's public key
+	// from the initial [wgcfg.Config], and returns a view of prefixes to
+	// append to each peer's AllowedIPs.
+	//
+	// The extra AllowedIPs are added after the [router.Config] is generated, but
+	// before the WireGuard config is sent to the engine, so the extra IPs are
+	// given to WireGuard, but not the OS routing table.
+	//
+	// The prefixes returned from the hook should not contain duplicates, either
+	// internally, or with netmap peer prefixes. Returned prefixes should only
+	// contain host routes, and not contain default or subnet routes.
+	// Subsequent calls that return an unchanged set of prefixes for a given peer,
+	// should return the prefixes in the same order for that peer,
+	// to prevent configuration churn.
+	//
+	// The returned slice should not be mutated by the extension after it is returned.
+	//
+	// The hook is called with LocalBackend's mutex locked.
+	//
+	// TODO(#17858): This hook may not be needed and can possibly be replaced by
+	// new hooks that fit into the new architecture that make use of new
+	// WireGuard APIs.
+	ExtraWireGuardAllowedIPs feature.Hook[func(key.NodePublic) views.Slice[netip.Prefix]]
+
+	// ExtraRouterConfigRoutes returns a view of prefixes to append to [router.Config.Routes].
+	//
+	// Routes goes through the WireGuard engine which makes efforts to avoid
+	// unnecessary reconfiguration by checking that things have actually changed.
+	// So implementors should make sure that the order of the prefixes is stable
+	// and that we don't have duplicate entries.
+	//
+	// The returned slice should not be mutated by the extension after it is returned.
+	//
+	// The hook is called with LocalBackend's mutex locked.
+	ExtraRouterConfigRoutes feature.Hook[func() views.Slice[netip.Prefix]]
 }
 
 // FilterHooks contains hooks that extensions can use to customize the packet

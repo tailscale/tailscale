@@ -43,7 +43,7 @@ func TestTopK(t *testing.T) {
 		got  []int
 		want = []int{5, 6, 7, 8, 9}
 	)
-	for try := 0; try < 10; try++ {
+	for range 10 {
 		topk := NewWithParams[int](5, func(in []byte, val int) []byte {
 			return binary.LittleEndian.AppendUint64(in, uint64(val))
 		}, 4, 1000)

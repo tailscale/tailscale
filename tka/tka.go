@@ -31,9 +31,6 @@ var cborDecOpts = cbor.DecOptions{
 	MaxMapPairs:      1024,
 }
 
-// Arbitrarily chosen limit on scanning AUM trees.
-const maxScanIterations = 2000
-
 // Authority is a Tailnet Key Authority. This type is the main coupling
 // point to the rest of the tailscale client.
 //

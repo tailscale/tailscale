@@ -111,25 +111,25 @@ func TestFilterEnv(t *testing.T) {
 		wantErrMessage   string
 	}{
 		{
-			name:             "simple direct matches",
+			name:             "simple-direct-matches",
 			acceptEnv:        []string{"FOO", "FOO2", "FOO_3"},
 			environ:          []string{"FOO=BAR", "FOO2=BAZ", "FOO_3=123", "FOOOO4-2=AbCdEfG"},
 			expectedFiltered: []string{"FOO=BAR", "FOO2=BAZ", "FOO_3=123"},
 		},
 		{
-			name:             "bare wildcard",
+			name:             "bare-wildcard",
 			acceptEnv:        []string{"*"},
 			environ:          []string{"FOO=BAR", "FOO2=BAZ", "FOO_3=123", "FOOOO4-2=AbCdEfG"},
 			expectedFiltered: []string{"FOO=BAR", "FOO2=BAZ", "FOO_3=123", "FOOOO4-2=AbCdEfG"},
 		},
 		{
-			name:             "complex matches",
+			name:             "complex-matches",
 			acceptEnv:        []string{"FO?", "FOOO*", "FO*5?7"},
 			environ:          []string{"FOO=BAR", "FOO2=BAZ", "FOO_3=123", "FOOOO4-2=AbCdEfG", "FO1-kmndGamc79567=ABC", "FO57=BAR2"},
 			expectedFiltered: []string{"FOO=BAR", "FOOOO4-2=AbCdEfG", "FO1-kmndGamc79567=ABC"},
 		},
 		{
-			name:             "environ format invalid",
+			name:             "environ-format-invalid",
 			acceptEnv:        []string{"FO?", "FOOO*", "FO*5?7"},
 			environ:          []string{"FOOBAR"},
 			expectedFiltered: nil,

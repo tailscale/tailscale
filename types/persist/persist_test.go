@@ -12,8 +12,8 @@ import (
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
-	for i := range t.NumField() {
-		if name := t.Field(i).Name; name != "_" {
+	for field := range t.Fields() {
+		if name := field.Name; name != "_" {
 			fields = append(fields, name)
 		}
 	}

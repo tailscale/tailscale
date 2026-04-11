@@ -1557,15 +1557,13 @@ func TestServfail(t *testing.T) {
 		t.Fatalf("err = %v, want nil", err)
 	}
 
+	// The upstream server's SERVFAIL bytes are returned directly.
 	wantPkt := []byte{
 		0x00, 0x00, // transaction id: 0
-		0x84, 0x02, // flags: response, authoritative, error: servfail
-		0x00, 0x01, // one question
+		0x00, 0x02, // flags: error: servfail
+		0x00, 0x00, // no questions (upstream sent a minimal response)
 		0x00, 0x00, // no answers
 		0x00, 0x00, 0x00, 0x00, // no authority or additional RRs
-		// Question:
-		0x04, 0x74, 0x65, 0x73, 0x74, 0x04, 0x73, 0x69, 0x74, 0x65, 0x00, // name
-		0x00, 0x01, 0x00, 0x01, // type A, class IN
 	}
 
 	if !bytes.Equal(pkt, wantPkt) {

@@ -30,8 +30,8 @@ func TestAuthorityBuilderAddKey(t *testing.T) {
 
 	storage := ChonkMem()
 	a, _, err := Create(storage, State{
-		Keys:               []Key{key},
-		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+		Keys:              []Key{key},
+		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 	}, signer25519(priv))
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
@@ -64,8 +64,8 @@ func TestAuthorityBuilderMaxKey(t *testing.T) {
 
 	storage := ChonkMem()
 	a, _, err := Create(storage, State{
-		Keys:               []Key{key},
-		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+		Keys:              []Key{key},
+		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 	}, signer25519(priv))
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
@@ -111,8 +111,8 @@ func TestAuthorityBuilderRemoveKey(t *testing.T) {
 
 	storage := ChonkMem()
 	a, _, err := Create(storage, State{
-		Keys:               []Key{key, key2},
-		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+		Keys:              []Key{key, key2},
+		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 	}, signer25519(priv))
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
@@ -157,8 +157,8 @@ func TestAuthorityBuilderSetKeyVote(t *testing.T) {
 
 	storage := ChonkMem()
 	a, _, err := Create(storage, State{
-		Keys:               []Key{key},
-		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+		Keys:              []Key{key},
+		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 	}, signer25519(priv))
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
@@ -193,8 +193,8 @@ func TestAuthorityBuilderSetKeyMeta(t *testing.T) {
 
 	storage := ChonkMem()
 	a, _, err := Create(storage, State{
-		Keys:               []Key{key},
-		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+		Keys:              []Key{key},
+		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 	}, signer25519(priv))
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
@@ -229,8 +229,8 @@ func TestAuthorityBuilderMultiple(t *testing.T) {
 
 	storage := ChonkMem()
 	a, _, err := Create(storage, State{
-		Keys:               []Key{key},
-		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+		Keys:              []Key{key},
+		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 	}, signer25519(priv))
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
@@ -277,8 +277,8 @@ func TestAuthorityBuilderCheckpointsAfterXUpdates(t *testing.T) {
 
 	storage := ChonkMem()
 	a, _, err := Create(storage, State{
-		Keys:               []Key{key},
-		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+		Keys:              []Key{key},
+		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 	}, signer25519(priv))
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)

@@ -8,6 +8,7 @@ package ipnlocal
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,26 +23,30 @@ import (
 
 func TestExpandProxyArgUnix(t *testing.T) {
 	tests := []struct {
+		name         string
 		input        string
 		wantURL      string
 		wantInsecure bool
 	}{
 		{
+			name:    "unix-tmp-sock",
 			input:   "unix:/tmp/test.sock",
 			wantURL: "unix:/tmp/test.sock",
 		},
 		{
+			name:    "unix-var-run-docker-sock",
 			input:   "unix:/var/run/docker.sock",
 			wantURL: "unix:/var/run/docker.sock",
 		},
 		{
+			name:    "unix-relative-sock",
 			input:   "unix:./relative.sock",
 			wantURL: "unix:./relative.sock",
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			gotURL, gotInsecure := expandProxyArg(tt.input)
 			if gotURL != tt.wantURL {
 				t.Errorf("expandProxyArg(%q) url = %q, want %q", tt.input, gotURL, tt.wantURL)
@@ -100,6 +105,23 @@ func TestServeUnixSocket(t *testing.T) {
 	}
 	if rp.url.Host != "localhost" {
 		t.Errorf("url.Host = %q, want %q", rp.url.Host, "localhost")
+	}
+
+	req := httptest.NewRequest("GET", "http://foo.test.ts.net/", nil)
+	rec := httptest.NewRecorder()
+
+	rp.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatal("unexpected response code:", rec.Code)
+	}
+	resp := rec.Result()
+	defer resp.Body.Close()
+	respB, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal("read error:", err)
+	}
+	if string(respB) != testResponse {
+		t.Fatalf("unexpected response: want: '%s'; got: '%s'", testResponse, string(respB))
 	}
 }
 

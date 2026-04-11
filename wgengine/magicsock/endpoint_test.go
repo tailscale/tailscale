@@ -180,7 +180,7 @@ func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
 		wantMaybe                bool
 	}{
 		{
-			name:        "nil probeUDPLifetime",
+			name:        "nil-probeUDPLifetime",
 			localDisco:  higher,
 			remoteDisco: &lower,
 			probeUDPLifetimeFn: func() *probeUDPLifetime {
@@ -189,28 +189,28 @@ func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
 			bestAddr: addr,
 		},
 		{
-			name:               "local higher disco key",
+			name:               "local-higher-disco-key",
 			localDisco:         higher,
 			remoteDisco:        &lower,
 			probeUDPLifetimeFn: newProbeUDPLifetime,
 			bestAddr:           addr,
 		},
 		{
-			name:               "remote no disco key",
+			name:               "remote-no-disco-key",
 			localDisco:         higher,
 			remoteDisco:        nil,
 			probeUDPLifetimeFn: newProbeUDPLifetime,
 			bestAddr:           addr,
 		},
 		{
-			name:               "invalid bestAddr",
+			name:               "invalid-bestAddr",
 			localDisco:         lower,
 			remoteDisco:        &higher,
 			probeUDPLifetimeFn: newProbeUDPLifetime,
 			bestAddr:           addrQuality{},
 		},
 		{
-			name:        "cycle started too recently",
+			name:        "cycle-started-too-recently",
 			localDisco:  lower,
 			remoteDisco: &higher,
 			probeUDPLifetimeFn: func() *probeUDPLifetime {
@@ -222,7 +222,7 @@ func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
 			bestAddr: addr,
 		},
 		{
-			name:        "maybe cliff 0 cycle not active",
+			name:        "maybe-cliff-0-cycle-not-active",
 			localDisco:  lower,
 			remoteDisco: &higher,
 			probeUDPLifetimeFn: func() *probeUDPLifetime {
@@ -238,7 +238,7 @@ func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
 			wantMaybe: true,
 		},
 		{
-			name:        "maybe cliff 0",
+			name:        "maybe-cliff-0",
 			localDisco:  lower,
 			remoteDisco: &higher,
 			probeUDPLifetimeFn: func() *probeUDPLifetime {
@@ -254,7 +254,7 @@ func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
 			wantMaybe: true,
 		},
 		{
-			name:        "maybe cliff 1",
+			name:        "maybe-cliff-1",
 			localDisco:  lower,
 			remoteDisco: &higher,
 			probeUDPLifetimeFn: func() *probeUDPLifetime {
@@ -270,7 +270,7 @@ func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
 			wantMaybe: true,
 		},
 		{
-			name:        "maybe cliff 2",
+			name:        "maybe-cliff-2",
 			localDisco:  lower,
 			remoteDisco: &higher,
 			probeUDPLifetimeFn: func() *probeUDPLifetime {
@@ -341,13 +341,13 @@ func Test_epAddr_isDirectUDP(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "false derp magic addr",
+			name: "false-derp-magic-addr",
 			ap:   netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, 0),
 			vni:  packet.VirtualNetworkID{},
 			want: false,
 		},
 		{
-			name: "false vni set",
+			name: "false-vni-set",
 			ap:   netip.MustParseAddrPort("192.0.2.1:7"),
 			vni:  vni,
 			want: false,
@@ -397,42 +397,42 @@ func Test_endpoint_udpRelayEndpointReady(t *testing.T) {
 		wantBestAddr       addrQuality
 	}{
 		{
-			name:               "bestAddr trusted direct",
+			name:               "bestAddr-trusted-direct",
 			curBestAddr:        directAddrQuality,
 			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
 			maybeBest:          peerRelayAddrQuality,
 			wantBestAddr:       directAddrQuality,
 		},
 		{
-			name:               "bestAddr untrusted direct",
+			name:               "bestAddr-untrusted-direct",
 			curBestAddr:        directAddrQuality,
 			trustBestAddrUntil: mono.Now().Add(-1 * time.Hour),
 			maybeBest:          peerRelayAddrQuality,
 			wantBestAddr:       peerRelayAddrQuality,
 		},
 		{
-			name:               "maybeBest same relay server higher latency bestAddr trusted",
+			name:               "maybeBest-same-relay-higher-latency-trusted",
 			curBestAddr:        peerRelayAddrQuality,
 			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
 			maybeBest:          peerRelayAddrQualityHigherLatencySameServer,
 			wantBestAddr:       peerRelayAddrQualityHigherLatencySameServer,
 		},
 		{
-			name:               "maybeBest diff relay server higher latency bestAddr trusted",
+			name:               "maybeBest-diff-relay-higher-latency-trusted",
 			curBestAddr:        peerRelayAddrQuality,
 			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
 			maybeBest:          peerRelayAddrQualityHigherLatencyDiffServer,
 			wantBestAddr:       peerRelayAddrQuality,
 		},
 		{
-			name:               "maybeBest diff relay server lower latency bestAddr trusted",
+			name:               "maybeBest-diff-relay-lower-latency-trusted",
 			curBestAddr:        peerRelayAddrQuality,
 			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
 			maybeBest:          peerRelayAddrQualityLowerLatencyDiffServer,
 			wantBestAddr:       peerRelayAddrQualityLowerLatencyDiffServer,
 		},
 		{
-			name:               "maybeBest diff relay server equal latency bestAddr trusted",
+			name:               "maybeBest-diff-relay-equal-latency-trusted",
 			curBestAddr:        peerRelayAddrQuality,
 			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
 			maybeBest:          peerRelayAddrQualityEqualLatencyDiffServer,

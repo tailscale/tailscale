@@ -82,14 +82,14 @@ func main() {
 		log.Fatalf("site-id must be in the range [0, 65535]")
 	}
 
-	var ignoreDstTable *bart.Table[bool]
+	var ignoreDstTable *bart.Lite
 	for s := range strings.SplitSeq(*ignoreDstPfxStr, ",") {
 		s := strings.TrimSpace(s)
 		if s == "" {
 			continue
 		}
 		if ignoreDstTable == nil {
-			ignoreDstTable = &bart.Table[bool]{}
+			ignoreDstTable = &bart.Lite{}
 		}
 		pfx, err := netip.ParsePrefix(s)
 		if err != nil {
@@ -98,7 +98,7 @@ func main() {
 		if pfx.Masked() != pfx {
 			log.Fatalf("prefix %v is not normalized (bits are set outside the mask)", pfx)
 		}
-		ignoreDstTable.Insert(pfx, true)
+		ignoreDstTable.Insert(pfx)
 	}
 	ts := &tsnet.Server{
 		Hostname: *hostname,
@@ -149,7 +149,7 @@ func main() {
 	}
 
 	var prefixes []netip.Prefix
-	for _, s := range strings.Split(*v4PfxStr, ",") {
+	for s := range strings.SplitSeq(*v4PfxStr, ",") {
 		p := netip.MustParsePrefix(strings.TrimSpace(s))
 		if p.Masked() != p {
 			log.Fatalf("v4 prefix %v is not a masked prefix", p)
@@ -276,7 +276,7 @@ type connector struct {
 	// and if any of the ip addresses in response to the lookup match any 'ignore destinations' prefix we will
 	// return a dns response that contains the ip addresses we discovered with the lookup (ie not the
 	// natc behavior, which would return a dummy ip address pointing at natc).
-	ignoreDsts *bart.Table[bool]
+	ignoreDsts *bart.Lite
 
 	// ipPool contains the per-peer IPv4 address assignments.
 	ipPool ippool.IPPool
@@ -372,8 +372,7 @@ func (c *connector) handleDNS(pc net.PacketConn, buf []byte, remoteAddr *net.UDP
 		addrQCount++
 		if _, ok := resolves[q.Name.String()]; !ok {
 			addrs, err := c.resolver.LookupNetIP(ctx, "ip", q.Name.String())
-			var dnsErr *net.DNSError
-			if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			if dnsErr, ok := errors.AsType[*net.DNSError](err); ok && dnsErr.IsNotFound {
 				continue
 			}
 			if err != nil {
@@ -539,7 +538,7 @@ func (c *connector) ignoreDestination(dstAddrs []netip.Addr) bool {
 		return false
 	}
 	for _, a := range dstAddrs {
-		if _, ok := c.ignoreDsts.Lookup(a); ok {
+		if c.ignoreDsts.Contains(a) {
 			return true
 		}
 	}

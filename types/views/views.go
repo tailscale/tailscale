@@ -19,7 +19,6 @@ import (
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
 	"go4.org/mem"
-	"tailscale.com/types/ptr"
 )
 
 // ByteSlice is a read-only accessor for types that are backed by a []byte.
@@ -901,7 +900,7 @@ func (p ValuePointer[T]) Clone() *T {
 	if p.ж == nil {
 		return nil
 	}
-	return ptr.To(*p.ж)
+	return new(*p.ж)
 }
 
 // String implements [fmt.Stringer].
@@ -969,8 +968,8 @@ func containsPointers(typ reflect.Type) bool {
 		if isWellKnownImmutableStruct(typ) {
 			return false
 		}
-		for i := range typ.NumField() {
-			if containsPointers(typ.Field(i).Type) {
+		for field := range typ.Fields() {
+			if containsPointers(field.Type) {
 				return true
 			}
 		}

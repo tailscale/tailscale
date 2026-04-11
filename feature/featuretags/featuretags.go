@@ -168,6 +168,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"health":             {Sym: "Health", Desc: "Health checking support"},
 	"hujsonconf":         {Sym: "HuJSONConf", Desc: "HuJSON config file support"},
 	"identityfederation": {Sym: "IdentityFederation", Desc: "Auth key generation via identity federation support"},
+	"ipnbus":             {Sym: "IPNBus", Desc: "IPN notification bus (watch-ipn-bus) support, used by GUIs, debugging, and nicer 'tailscale up' support"},
 	"iptables":           {Sym: "IPTables", Desc: "Linux iptables support"},
 	"kube":               {Sym: "Kube", Desc: "Kubernetes integration"},
 	"lazywg":             {Sym: "LazyWG", Desc: "Lazy WireGuard configuration for memory-constrained devices with large netmaps"},
@@ -269,6 +270,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"tailnetlock": {Sym: "TailnetLock", Desc: "Tailnet Lock support"},
 	"tap":         {Sym: "Tap", Desc: "Experimental Layer 2 (ethernet) support"},
 	"tpm":         {Sym: "TPM", Desc: "TPM support"},
+	"tundevstats": {Sym: "TUNDevStats", Desc: "Poll TUN device statistics (Linux only)"},
 	"unixsocketidentity": {
 		Sym:  "UnixSocketIdentity",
 		Desc: "differentiate between users accessing the LocalAPI over unix sockets (if omitted, all users have full access)",

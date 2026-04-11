@@ -334,8 +334,7 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 		if expr, useAutoExitNode := ipn.ParseAutoExitNodeString(upArgs.exitNodeIP); useAutoExitNode {
 			prefs.AutoExitNode = expr
 		} else if err := prefs.SetExitNodeIP(upArgs.exitNodeIP, st); err != nil {
-			var e ipn.ExitNodeLocalIPError
-			if errors.As(err, &e) {
+			if _, ok := errors.AsType[ipn.ExitNodeLocalIPError](err); ok {
 				return nil, fmt.Errorf("%w; did you mean --advertise-exit-node?", err)
 			}
 			return nil, err
@@ -358,6 +357,11 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 
 	if goos == "linux" {
 		prefs.NoSNAT = !upArgs.snat
+		// We want to make sure user is aware setting --snat-subnet-routes=false with --advertise-exit-node would break exitnode,
+		// but we won't prevent them from doing it since there are current dependencies on that combination. (as of 2026-03-25)
+		if prefs.NoSNAT && prefs.AdvertisesExitNode() {
+			warnf("--snat-subnet-routes=false is set with --advertise-exit-node; internet traffic through this exit node may not work as expected")
+		}
 
 		// Backfills for NoStatefulFiltering occur when loading a profile; just set it explicitly here.
 		prefs.NoStatefulFiltering.Set(!upArgs.statefulFiltering)
@@ -543,9 +547,6 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	}
 
 	warnOnAdvertiseRoutes(ctx, prefs)
-	if err := checkExitNodeRisk(ctx, prefs, upArgs.acceptedRisks); err != nil {
-		return err
-	}
 
 	curPrefs, err := localClient.GetPrefs(ctx)
 	if err != nil {
@@ -597,6 +598,11 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		case <-watchCtx.Done():
 		}
 	}()
+
+	if !buildfeatures.HasIPNBus {
+		fmt.Fprintln(Stderr, "binary built with ts_omit_ipnbus; not waiting for completion")
+		return nil
+	}
 
 	// Start watching the IPN bus before we call Start() or StartLoginInteractive(),
 	// or we could miss IPN notifications.
@@ -834,7 +840,6 @@ func upWorthyWarning(s string) bool {
 	return strings.Contains(s, healthmsg.TailscaleSSHOnBut) ||
 		strings.Contains(s, healthmsg.WarnAcceptRoutesOff) ||
 		strings.Contains(s, healthmsg.LockedOut) ||
-		strings.Contains(s, healthmsg.WarnExitNodeUsage) ||
 		strings.Contains(s, healthmsg.InMemoryTailnetLockState) ||
 		strings.Contains(strings.ToLower(s), "update available: ")
 }
@@ -916,7 +921,7 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 	prefType := reflect.TypeFor[ipn.Prefs]()
 	for _, pref := range prefNames {
 		t := prefType
-		for _, name := range strings.Split(pref, ".") {
+		for name := range strings.SplitSeq(pref, ".") {
 			// Crash at runtime if there's a typo in the prefName.
 			f, ok := t.FieldByName(name)
 			if !ok {

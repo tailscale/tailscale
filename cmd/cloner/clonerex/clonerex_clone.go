@@ -7,8 +7,6 @@ package clonerex
 
 import (
 	"maps"
-
-	"tailscale.com/types/ptr"
 )
 
 // Clone makes a deep copy of SliceContainer.
@@ -25,7 +23,7 @@ func (src *SliceContainer) Clone() *SliceContainer {
 			if src.Slice[i] == nil {
 				dst.Slice[i] = nil
 			} else {
-				dst.Slice[i] = ptr.To(*src.Slice[i])
+				dst.Slice[i] = new(*src.Slice[i])
 			}
 		}
 	}
@@ -70,7 +68,7 @@ func (src *MapWithPointers) Clone() *MapWithPointers {
 			if v == nil {
 				dst.Nested[k] = nil
 			} else {
-				dst.Nested[k] = ptr.To(*v)
+				dst.Nested[k] = new(*v)
 			}
 		}
 	}
@@ -161,9 +159,26 @@ var _DeeplyNestedMapCloneNeedsRegeneration = DeeplyNestedMap(struct {
 	FourLevels  map[string]map[string]map[string]map[string]*SliceContainer
 }{})
 
+// Clone makes a deep copy of NamedMapContainer.
+// The result aliases no memory with the original.
+func (src *NamedMapContainer) Clone() *NamedMapContainer {
+	if src == nil {
+		return nil
+	}
+	dst := new(NamedMapContainer)
+	*dst = *src
+	dst.Attrs = src.Attrs.Clone()
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _NamedMapContainerCloneNeedsRegeneration = NamedMapContainer(struct {
+	Attrs NamedMap
+}{})
+
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of SliceContainer,InterfaceContainer,MapWithPointers,DeeplyNestedMap.
+// where T is one of SliceContainer,InterfaceContainer,MapWithPointers,DeeplyNestedMap,NamedMapContainer.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *SliceContainer:
@@ -199,6 +214,15 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **DeeplyNestedMap:
+			*dst = src.Clone()
+			return true
+		}
+	case *NamedMapContainer:
+		switch dst := dst.(type) {
+		case *NamedMapContainer:
+			*dst = *src.Clone()
+			return true
+		case **NamedMapContainer:
 			*dst = src.Clone()
 			return true
 		}

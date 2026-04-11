@@ -751,13 +751,13 @@ func ports(s string) PortRange {
 	}
 
 	var fs, ls string
-	i := strings.IndexByte(s, '-')
-	if i == -1 {
+	before, after, ok := strings.Cut(s, "-")
+	if !ok {
 		fs = s
 		ls = fs
 	} else {
-		fs = s[:i]
-		ls = s[i+1:]
+		fs = before
+		ls = after
 	}
 	first, err := strconv.ParseInt(fs, 10, 16)
 	if err != nil {

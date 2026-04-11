@@ -26,7 +26,7 @@ var whoisCmd = &ffcli.Command{
 	FlagSet: func() *flag.FlagSet {
 		fs := newFlagSet("whois")
 		fs.BoolVar(&whoIsArgs.json, "json", false, "output in JSON format")
-		fs.StringVar(&whoIsArgs.proto, "proto", "", `protocol; one of "tcp" or "udp"; empty mans both `)
+		fs.StringVar(&whoIsArgs.proto, "proto", "", `protocol; one of "tcp" or "udp"; empty means both`)
 		return fs
 	}(),
 }

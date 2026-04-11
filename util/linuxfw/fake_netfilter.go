@@ -71,6 +71,8 @@ func (f *FakeNetfilterRunner) AddHooks() error                           { retur
 func (f *FakeNetfilterRunner) DelHooks(logf logger.Logf) error           { return nil }
 func (f *FakeNetfilterRunner) AddSNATRule() error                        { return nil }
 func (f *FakeNetfilterRunner) DelSNATRule() error                        { return nil }
+func (f *FakeNetfilterRunner) AddConnmarkSaveRule() error                { return nil }
+func (f *FakeNetfilterRunner) DelConnmarkSaveRule() error                { return nil }
 func (f *FakeNetfilterRunner) AddStatefulRule(tunname string) error      { return nil }
 func (f *FakeNetfilterRunner) DelStatefulRule(tunname string) error      { return nil }
 func (f *FakeNetfilterRunner) AddLoopbackRule(addr netip.Addr) error     { return nil }

@@ -91,7 +91,7 @@ func (c *Auto) updateRoutine() {
 			bo.BackOff(ctx, err)
 			continue
 		}
-		bo.BackOff(ctx, nil)
+		bo.Reset()
 		c.direct.logf("[v1] successful lite map update in %v", d)
 
 		lastUpdateGenInformed = gen
@@ -382,7 +382,7 @@ func (c *Auto) authRoutine() {
 				// backoff to avoid a busy loop.
 				bo.BackOff(ctx, errors.New("login URL not changing"))
 			} else {
-				bo.BackOff(ctx, nil)
+				bo.Reset()
 			}
 			continue
 		}
@@ -397,7 +397,7 @@ func (c *Auto) authRoutine() {
 
 		c.sendStatus("authRoutine-success", nil, "", nil)
 		c.restartMap()
-		bo.BackOff(ctx, nil)
+		bo.Reset()
 	}
 }
 
@@ -446,13 +446,14 @@ func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	c.expiry = nm.SelfKeyExpiry()
 	stillAuthed := c.loggedIn
 	c.logf("[v1] mapRoutine: netmap received: loggedIn=%v inMapPoll=true", stillAuthed)
+
+	// Reset the backoff timer if we got a netmap.
+	mrs.bo.Reset()
 	c.mu.Unlock()
 
 	if stillAuthed {
 		c.sendStatus("mapRoutine-got-netmap", nil, "", nm)
 	}
-	// Reset the backoff timer if we got a netmap.
-	mrs.bo.Reset()
 }
 
 func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
@@ -475,6 +476,27 @@ func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
 		ok = ndu.UpdateNetmapDelta(muts)
 	})
 	return err == nil && ok
+}
+
+var _ patchDiscoKeyer = mapRoutineState{}
+
+func (mrs mapRoutineState) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPublic) {
+	c := mrs.c
+	c.mu.Lock()
+	goodState := c.loggedIn && c.inMapPoll
+	dun, ok := c.observer.(patchDiscoKeyer)
+	c.mu.Unlock()
+
+	if !goodState || !ok {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	defer cancel()
+
+	c.observerQueue.RunSync(ctx, func() {
+		dun.PatchDiscoKey(pub, disco)
+	})
 }
 
 // mapRoutine is responsible for keeping a read-only streaming connection to the
@@ -526,13 +548,18 @@ func (c *Auto) mapRoutine() {
 		c.mu.Lock()
 		c.inMapPoll = false
 		paused := c.paused
-		c.mu.Unlock()
 
 		if paused {
-			mrs.bo.BackOff(ctx, nil)
-			c.logf("mapRoutine: paused")
+			mrs.bo.Reset()
 		} else {
 			mrs.bo.BackOff(ctx, err)
+		}
+		c.mu.Unlock()
+
+		// Now safe to call functions that might acquire the mutex
+		if paused {
+			c.logf("mapRoutine: paused")
+		} else {
 			report(err, "PollNetMap")
 		}
 	}
@@ -770,6 +797,15 @@ func (c *Auto) UpdateEndpoints(endpoints []tailcfg.Endpoint) {
 // to the control server.
 func (c *Auto) SetDiscoPublicKey(key key.DiscoPublic) {
 	c.direct.SetDiscoPublicKey(key)
+	c.updateControl()
+}
+
+// SetIPForwardingBroken updates the IP forwarding broken state and sends
+// a control update if the value changed.
+func (c *Auto) SetIPForwardingBroken(v bool) {
+	if !c.direct.SetIPForwardingBroken(v) {
+		return
+	}
 	c.updateControl()
 }
 

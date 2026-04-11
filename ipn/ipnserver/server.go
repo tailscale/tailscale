@@ -429,7 +429,7 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, actor ipnauth.Actor) (o
 	if len(s.activeReqs) == 1 {
 		if envknob.GOOS() == "windows" && !actor.IsLocalSystem() {
 			// Tell the LocalBackend about the identity we're now running as,
-			// unless its the SYSTEM user. That user is not a real account and
+			// unless it's the SYSTEM user. That user is not a real account and
 			// doesn't have a home directory.
 			lb.SetCurrentUser(actor)
 		}

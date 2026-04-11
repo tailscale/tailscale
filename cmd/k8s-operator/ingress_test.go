@@ -21,17 +21,21 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"tailscale.com/client/tailscale/v2"
+
 	"tailscale.com/ipn"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 )
 
 func TestTailscaleIngress(t *testing.T) {
 	fc := fake.NewFakeClient(ingressClass())
-	ft := &fakeTSClient{}
+	ft := &fakeTSClient{
+		vipServices: make(map[string]tailscale.VIPService),
+	}
 	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
 	zl, err := zap.NewDevelopment()
 	if err != nil {
@@ -42,7 +46,7 @@ func TestTailscaleIngress(t *testing.T) {
 		ingressClassName: "tailscale",
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			tsnetServer:       fakeTsnetServer,
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
@@ -59,7 +63,7 @@ func TestTailscaleIngress(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "ingress")
 	opts := configOpts{
-		replicas:   ptr.To[int32](1),
+		replicas:   new(int32(1)),
 		stsName:    shortName,
 		secretName: fullName,
 		namespace:  "default",
@@ -109,7 +113,7 @@ func TestTailscaleIngress(t *testing.T) {
 
 	// 4. Resources get cleaned up when Ingress class is unset
 	mustUpdate(t, fc, "default", "test", func(ing *networkingv1.Ingress) {
-		ing.Spec.IngressClassName = ptr.To("nginx")
+		ing.Spec.IngressClassName = new("nginx")
 	})
 	expectReconciled(t, ingR, "default", "test")
 	expectReconciled(t, ingR, "default", "test") // deleting Ingress STS requires two reconciles
@@ -131,7 +135,7 @@ func TestTailscaleIngressHostname(t *testing.T) {
 		ingressClassName: "tailscale",
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			tsnetServer:       fakeTsnetServer,
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
@@ -270,7 +274,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 		ingressClassName: "tailscale",
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			tsnetServer:       fakeTsnetServer,
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
@@ -379,7 +383,7 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 		ingressClassName: "tailscale",
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			tsnetServer:       fakeTsnetServer,
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
@@ -531,7 +535,7 @@ func TestIngressProxyClassAnnotation(t *testing.T) {
 				ingressClassName: "tailscale",
 				ssr: &tailscaleSTSReconciler{
 					Client:            fc,
-					tsClient:          &fakeTSClient{},
+					clients:           tsclient.NewProvider(&fakeTSClient{}),
 					tsnetServer:       &fakeTSNetServer{certDomains: []string{"test-host"}},
 					defaultTags:       []string{"tag:test"},
 					operatorNamespace: "operator-ns",
@@ -602,7 +606,7 @@ func TestIngressLetsEncryptStaging(t *testing.T) {
 				ingressClassName: "tailscale",
 				ssr: &tailscaleSTSReconciler{
 					Client:            fc,
-					tsClient:          &fakeTSClient{},
+					clients:           tsclient.NewProvider(&fakeTSClient{}),
 					tsnetServer:       &fakeTSNetServer{certDomains: []string{"test-host"}},
 					defaultTags:       []string{"tag:test"},
 					operatorNamespace: "operator-ns",
@@ -639,7 +643,7 @@ func TestEmptyPath(t *testing.T) {
 			name: "empty_path_with_prefix_type",
 			paths: []networkingv1.HTTPIngressPath{
 				{
-					PathType: ptrPathType(networkingv1.PathTypePrefix),
+					PathType: new(networkingv1.PathTypePrefix),
 					Path:     "",
 					Backend:  *backend(),
 				},
@@ -652,7 +656,7 @@ func TestEmptyPath(t *testing.T) {
 			name: "empty_path_with_implementation_specific_type",
 			paths: []networkingv1.HTTPIngressPath{
 				{
-					PathType: ptrPathType(networkingv1.PathTypeImplementationSpecific),
+					PathType: new(networkingv1.PathTypeImplementationSpecific),
 					Path:     "",
 					Backend:  *backend(),
 				},
@@ -665,7 +669,7 @@ func TestEmptyPath(t *testing.T) {
 			name: "empty_path_with_exact_type",
 			paths: []networkingv1.HTTPIngressPath{
 				{
-					PathType: ptrPathType(networkingv1.PathTypeExact),
+					PathType: new(networkingv1.PathTypeExact),
 					Path:     "",
 					Backend:  *backend(),
 				},
@@ -679,12 +683,12 @@ func TestEmptyPath(t *testing.T) {
 			name: "two_competing_but_not_identical_paths_including_one_empty",
 			paths: []networkingv1.HTTPIngressPath{
 				{
-					PathType: ptrPathType(networkingv1.PathTypeImplementationSpecific),
+					PathType: new(networkingv1.PathTypeImplementationSpecific),
 					Path:     "",
 					Backend:  *backend(),
 				},
 				{
-					PathType: ptrPathType(networkingv1.PathTypeImplementationSpecific),
+					PathType: new(networkingv1.PathTypeImplementationSpecific),
 					Path:     "/",
 					Backend:  *backend(),
 				},
@@ -711,7 +715,7 @@ func TestEmptyPath(t *testing.T) {
 				ingressClassName: "tailscale",
 				ssr: &tailscaleSTSReconciler{
 					Client:            fc,
-					tsClient:          ft,
+					clients:           tsclient.NewProvider(ft),
 					tsnetServer:       fakeTsnetServer,
 					defaultTags:       []string{"tag:k8s"},
 					operatorNamespace: "operator-ns",
@@ -760,11 +764,6 @@ func TestEmptyPath(t *testing.T) {
 	}
 }
 
-// ptrPathType is a helper function to return a pointer to the pathtype string (required for TestEmptyPath)
-func ptrPathType(p networkingv1.PathType) *networkingv1.PathType {
-	return &p
-}
-
 func ingressClass() *networkingv1.IngressClass {
 	return &networkingv1.IngressClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "tailscale"},
@@ -799,7 +798,7 @@ func ingress() *networkingv1.Ingress {
 			UID:       "1234-UID",
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend:   backend(),
 			TLS: []networkingv1.IngressTLS{
 				{Hosts: []string{"default-test"}},
@@ -817,7 +816,7 @@ func ingressWithPaths(paths []networkingv1.HTTPIngressPath) *networkingv1.Ingres
 			UID:       types.UID("1234-UID"),
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			Rules: []networkingv1.IngressRule{
 				{
 					Host: "foo.tailnetxyz.ts.net",
@@ -859,7 +858,7 @@ func TestTailscaleIngressWithHTTPRedirect(t *testing.T) {
 		ingressClassName: "tailscale",
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			tsnetServer:       fakeTsnetServer,
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
@@ -878,7 +877,7 @@ func TestTailscaleIngressWithHTTPRedirect(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "ingress")
 	opts := configOpts{
-		replicas:   ptr.To[int32](1),
+		replicas:   new(int32(1)),
 		stsName:    shortName,
 		secretName: fullName,
 		namespace:  "default",

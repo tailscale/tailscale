@@ -1010,9 +1010,8 @@ func TestNilExtensionHostMethodCall(t *testing.T) {
 	t.Parallel()
 
 	var h *ExtensionHost
-	typ := reflect.TypeOf(h)
-	for i := range typ.NumMethod() {
-		m := typ.Method(i)
+	typ := reflect.TypeFor[*ExtensionHost]()
+	for m := range typ.Methods() {
 		if strings.HasSuffix(m.Name, "ForTest") {
 			// Skip methods that are only for testing.
 			continue
@@ -1376,6 +1375,7 @@ func (b *testBackend) Sys() *tsd.System {
 func (b *testBackend) SendNotify(ipn.Notify)           { panic("not implemented") }
 func (b *testBackend) NodeBackend() ipnext.NodeBackend { panic("not implemented") }
 func (b *testBackend) TailscaleVarRoot() string        { panic("not implemented") }
+func (b *testBackend) authReconfig()                   { panic("not implemented") }
 
 func (b *testBackend) SwitchToBestProfile(reason string) {
 	b.mu.Lock()

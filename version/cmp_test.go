@@ -33,6 +33,8 @@ func TestParse(t *testing.T) {
 		{"borkbork", parsed{}, false},
 		{"1a.2.3", parsed{}, false},
 		{"", parsed{}, false},
+		{"1.96.2_1 (Void Linux)", parsed{Major: 1, Minor: 96, Patch: 2}, true},
+		{"1.46.0_2 (Void Linux)", parsed{Major: 1, Minor: 46, Patch: 0}, true},
 	}
 
 	for _, test := range tests {
@@ -71,6 +73,7 @@ func TestAtLeast(t *testing.T) {
 		{"date.20200612", "date.20200612", true},
 		{"date.20200701", "date.20200612", true},
 		{"date.20200501", "date.20200612", false},
+		{"1.96.2_1 (Void Linux)", "1.42", true},
 	}
 
 	for _, test := range tests {

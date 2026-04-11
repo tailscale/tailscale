@@ -211,7 +211,7 @@ func parseHeaders(decompressor io.Reader, log *zap.SugaredLogger) (http.Header, 
 		return nil, fmt.Errorf("error determining num headers: %v", err)
 	}
 	h := make(http.Header, numHeaders)
-	for i := uint32(0); i < numHeaders; i++ {
+	for range numHeaders {
 		name, err := readLenBytes()
 		if err != nil {
 			return nil, err
@@ -224,7 +224,7 @@ func parseHeaders(decompressor io.Reader, log *zap.SugaredLogger) (http.Header, 
 		if err != nil {
 			return nil, fmt.Errorf("error reading header data: %w", err)
 		}
-		for _, v := range bytes.Split(val, headerSep) {
+		for v := range bytes.SplitSeq(val, headerSep) {
 			h.Add(ns, string(v))
 		}
 	}

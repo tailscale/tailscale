@@ -21,7 +21,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/kube/egressservices"
-	"tailscale.com/types/ptr"
 )
 
 // egressEpsReconciler reconciles EndpointSlices for tailnet services exposed to cluster via egress ProxyGroup proxies.
@@ -120,9 +119,9 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 			Hostname:  (*string)(&pod.UID),
 			Addresses: []string{podIP},
 			Conditions: discoveryv1.EndpointConditions{
-				Ready:       ptr.To(true),
-				Serving:     ptr.To(true),
-				Terminating: ptr.To(false),
+				Ready:       new(true),
+				Serving:     new(true),
+				Terminating: new(false),
 			},
 		})
 	}

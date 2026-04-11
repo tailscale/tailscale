@@ -42,8 +42,6 @@ const (
 	reasonProxyInvalid = "ProxyInvalid"
 	reasonProxyFailed  = "ProxyFailed"
 	reasonProxyPending = "ProxyPending"
-
-	indexServiceProxyClass = ".metadata.annotations.service-proxy-class"
 )
 
 type ServiceReconciler struct {
@@ -97,7 +95,7 @@ func childResourceLabels(name, ns, typ string) map[string]string {
 func (a *ServiceReconciler) isTailscaleService(svc *corev1.Service) bool {
 	targetIP := tailnetTargetAnnotation(svc)
 	targetFQDN := svc.Annotations[AnnotationTailnetTargetFQDN]
-	return a.shouldExpose(svc) || targetIP != "" || targetFQDN != ""
+	return shouldExpose(svc, a.isDefaultLoadBalancer) || targetIP != "" || targetFQDN != ""
 }
 
 func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, err error) {
@@ -164,7 +162,7 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 	}
 
 	proxyTyp := proxyTypeEgress
-	if a.shouldExpose(svc) {
+	if shouldExpose(svc, a.isDefaultLoadBalancer) {
 		proxyTyp = proxyTypeIngressService
 	}
 
@@ -275,16 +273,16 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		LoginServer:         a.ssr.loginServer,
 	}
 	sts.proxyType = proxyTypeEgress
-	if a.shouldExpose(svc) {
+	if shouldExpose(svc, a.isDefaultLoadBalancer) {
 		sts.proxyType = proxyTypeIngressService
 	}
 
 	a.mu.Lock()
-	if a.shouldExposeClusterIP(svc) {
+	if shouldExposeClusterIP(svc, a.isDefaultLoadBalancer) {
 		sts.ClusterTargetIP = svc.Spec.ClusterIP
 		a.managedIngressProxies.Add(svc.UID)
 		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
-	} else if a.shouldExposeDNSName(svc) {
+	} else if shouldExposeDNSName(svc) {
 		sts.ClusterTargetDNSName = svc.Spec.ExternalName
 		a.managedIngressProxies.Add(svc.UID)
 		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
@@ -410,19 +408,19 @@ func validateService(svc *corev1.Service) []string {
 	return violations
 }
 
-func (a *ServiceReconciler) shouldExpose(svc *corev1.Service) bool {
-	return a.shouldExposeClusterIP(svc) || a.shouldExposeDNSName(svc)
+func shouldExpose(svc *corev1.Service, isDefaultLoadBalancer bool) bool {
+	return shouldExposeClusterIP(svc, isDefaultLoadBalancer) || shouldExposeDNSName(svc)
 }
 
-func (a *ServiceReconciler) shouldExposeDNSName(svc *corev1.Service) bool {
+func shouldExposeDNSName(svc *corev1.Service) bool {
 	return hasExposeAnnotation(svc) && svc.Spec.Type == corev1.ServiceTypeExternalName && svc.Spec.ExternalName != ""
 }
 
-func (a *ServiceReconciler) shouldExposeClusterIP(svc *corev1.Service) bool {
+func shouldExposeClusterIP(svc *corev1.Service, isDefaultLoadBalancer bool) bool {
 	if svc.Spec.ClusterIP == "" {
 		return false
 	}
-	return isTailscaleLoadBalancerService(svc, a.isDefaultLoadBalancer) || hasExposeAnnotation(svc)
+	return isTailscaleLoadBalancerService(svc, isDefaultLoadBalancer) || hasExposeAnnotation(svc)
 }
 
 func isTailscaleLoadBalancerService(svc *corev1.Service, isDefaultLoadBalancer bool) bool {

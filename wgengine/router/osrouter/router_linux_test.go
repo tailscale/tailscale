@@ -54,13 +54,13 @@ ip rule add -6 pref 5270 table 52
 		want string
 	}{
 		{
-			name: "no config",
+			name: "no-config",
 			in:   nil,
 			want: `
 up` + basic,
 		},
 		{
-			name: "local addr only",
+			name: "local-addr-only",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.103/10"),
 				NetfilterMode: netfilterOff,
@@ -71,7 +71,7 @@ ip addr add 100.101.102.103/10 dev tailscale0` + basic,
 		},
 
 		{
-			name: "addr and routes",
+			name: "addr-and-routes",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.103/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "192.168.16.0/24"),
@@ -85,7 +85,7 @@ ip route add 192.168.16.0/24 dev tailscale0 table 52` + basic,
 		},
 
 		{
-			name: "addr and routes and subnet routes",
+			name: "addr-routes-and-subnet-routes",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.103/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "192.168.16.0/24"),
@@ -100,7 +100,7 @@ ip route add 192.168.16.0/24 dev tailscale0 table 52` + basic,
 		},
 
 		{
-			name: "addr and routes and subnet routes with netfilter",
+			name: "addr-routes-subnet-routes-with-netfilter",
 			in: &Config{
 				LocalAddrs:        mustCIDRs("100.101.102.104/10"),
 				Routes:            mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -124,6 +124,8 @@ v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v4/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
 v4/nat/POSTROUTING -j ts-postrouting
 v4/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 v6/filter/FORWARD -j ts-forward
@@ -132,12 +134,14 @@ v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
 v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v6/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
 v6/nat/POSTROUTING -j ts-postrouting
 v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 `,
 		},
 		{
-			name: "addr and routes and subnet routes with netfilter but no stateful filtering",
+			name: "addr-routes-subnet-routes-netfilter-no-stateful",
 			in: &Config{
 				LocalAddrs:        mustCIDRs("100.101.102.104/10"),
 				Routes:            mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -160,6 +164,8 @@ v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v4/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
 v4/nat/POSTROUTING -j ts-postrouting
 v4/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 v6/filter/FORWARD -j ts-forward
@@ -167,12 +173,14 @@ v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
 v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v6/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
 v6/nat/POSTROUTING -j ts-postrouting
 v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 `,
 		},
 		{
-			name: "addr and routes with netfilter",
+			name: "addr-and-routes-with-netfilter",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -192,18 +200,22 @@ v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v4/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
 v4/nat/POSTROUTING -j ts-postrouting
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
 v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v6/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
 v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
 
 		{
-			name: "addr and routes and subnet routes with netfilter but no SNAT",
+			name: "addr-routes-subnet-routes-netfilter-no-SNAT",
 			in: &Config{
 				LocalAddrs:       mustCIDRs("100.101.102.104/10"),
 				Routes:           mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -225,17 +237,21 @@ v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v4/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
 v4/nat/POSTROUTING -j ts-postrouting
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
 v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v6/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
 v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
 		{
-			name: "addr and routes with netfilter",
+			name: "addr-and-routes-with-netfilter-2",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -255,18 +271,22 @@ v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v4/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
 v4/nat/POSTROUTING -j ts-postrouting
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
 v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v6/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
 v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
 
 		{
-			name: "addr and routes with half netfilter",
+			name: "addr-and-routes-with-half-netfilter",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -290,7 +310,7 @@ v6/filter/ts-forward -o tailscale0 -j ACCEPT
 `,
 		},
 		{
-			name: "addr and routes with netfilter2",
+			name: "addr-and-routes-with-netfilter2",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -310,17 +330,21 @@ v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v4/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
 v4/nat/POSTROUTING -j ts-postrouting
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
 v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v6/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
 v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
 		{
-			name: "addr, routes, and local routes with netfilter",
+			name: "addr-routes-local-routes-with-netfilter",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "0.0.0.0/0"),
@@ -342,17 +366,21 @@ v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v4/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
 v4/nat/POSTROUTING -j ts-postrouting
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
 v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v6/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
 v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
 		{
-			name: "addr, routes, and local routes with no netfilter",
+			name: "addr-routes-local-routes-no-netfilter",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "0.0.0.0/0"),
@@ -366,6 +394,120 @@ ip route add 0.0.0.0/0 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52
 ip route add throw 10.0.0.0/8 table 52
 ip route add throw 192.168.0.0/24 table 52` + basic,
+		},
+		{
+			name: "subnet-routes-connmark-for-rp_filter",
+			in: &Config{
+				LocalAddrs:       mustCIDRs("100.101.102.104/10"),
+				Routes:           mustCIDRs("100.100.100.100/32"),
+				SubnetRoutes:     mustCIDRs("10.0.0.0/16"),
+				SNATSubnetRoutes: true,
+				NetfilterMode:    netfilterOn,
+			},
+			want: `
+up
+ip addr add 100.101.102.104/10 dev tailscale0
+ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
+				`v4/filter/FORWARD -j ts-forward
+v4/filter/INPUT -j ts-input
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v4/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-forward -o tailscale0 -j ACCEPT
+v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
+v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v4/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
+v4/nat/POSTROUTING -j ts-postrouting
+v4/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
+v6/filter/FORWARD -j ts-forward
+v6/filter/INPUT -j ts-input
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v6/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
+v6/nat/POSTROUTING -j ts-postrouting
+v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
+`,
+		},
+		{
+			name: "subnet-routes-connmark-always-enabled",
+			in: &Config{
+				LocalAddrs:       mustCIDRs("100.101.102.104/10"),
+				Routes:           mustCIDRs("100.100.100.100/32"),
+				SubnetRoutes:     mustCIDRs("10.0.0.0/16"),
+				SNATSubnetRoutes: true,
+				NetfilterMode:    netfilterOn,
+			},
+			want: `
+up
+ip addr add 100.101.102.104/10 dev tailscale0
+ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
+				`v4/filter/FORWARD -j ts-forward
+v4/filter/INPUT -j ts-input
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v4/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-forward -o tailscale0 -j ACCEPT
+v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
+v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v4/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
+v4/nat/POSTROUTING -j ts-postrouting
+v4/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
+v6/filter/FORWARD -j ts-forward
+v6/filter/INPUT -j ts-input
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v6/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
+v6/nat/POSTROUTING -j ts-postrouting
+v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
+`,
+		},
+		{
+			name: "connmark-with-stateful-filtering",
+			in: &Config{
+				LocalAddrs:        mustCIDRs("100.101.102.104/10"),
+				Routes:            mustCIDRs("100.100.100.100/32"),
+				SubnetRoutes:      mustCIDRs("10.0.0.0/16"),
+				SNATSubnetRoutes:  true,
+				StatefulFiltering: true,
+				NetfilterMode:     netfilterOn,
+			},
+			want: `
+up
+ip addr add 100.101.102.104/10 dev tailscale0
+ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
+				`v4/filter/FORWARD -j ts-forward
+v4/filter/INPUT -j ts-input
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v4/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-forward -o tailscale0 -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+v4/filter/ts-forward -o tailscale0 -j ACCEPT
+v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
+v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v4/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
+v4/nat/POSTROUTING -j ts-postrouting
+v4/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
+v6/filter/FORWARD -j ts-forward
+v6/filter/INPUT -j ts-input
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v6/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
+v6/nat/POSTROUTING -j ts-postrouting
+v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
+`,
 		},
 	}
 
@@ -426,20 +568,24 @@ func newIPTablesRunner(t *testing.T) linuxfw.NetfilterRunner {
 	return &fakeIPTablesRunner{
 		t: t,
 		ipt4: map[string][]string{
-			"filter/INPUT":    nil,
-			"filter/OUTPUT":   nil,
-			"filter/FORWARD":  nil,
-			"nat/PREROUTING":  nil,
-			"nat/OUTPUT":      nil,
-			"nat/POSTROUTING": nil,
+			"filter/INPUT":      nil,
+			"filter/OUTPUT":     nil,
+			"filter/FORWARD":    nil,
+			"nat/PREROUTING":    nil,
+			"nat/OUTPUT":        nil,
+			"nat/POSTROUTING":   nil,
+			"mangle/PREROUTING": nil,
+			"mangle/OUTPUT":     nil,
 		},
 		ipt6: map[string][]string{
-			"filter/INPUT":    nil,
-			"filter/OUTPUT":   nil,
-			"filter/FORWARD":  nil,
-			"nat/PREROUTING":  nil,
-			"nat/OUTPUT":      nil,
-			"nat/POSTROUTING": nil,
+			"filter/INPUT":      nil,
+			"filter/OUTPUT":     nil,
+			"filter/FORWARD":    nil,
+			"nat/PREROUTING":    nil,
+			"nat/OUTPUT":        nil,
+			"nat/POSTROUTING":   nil,
+			"mangle/PREROUTING": nil,
+			"mangle/OUTPUT":     nil,
 		},
 	}
 }
@@ -775,6 +921,38 @@ func (n *fakeIPTablesRunner) DelMagicsockPortRule(port uint16, network string) e
 	return nil
 }
 
+func (n *fakeIPTablesRunner) AddConnmarkSaveRule() error {
+	// PREROUTING rule: restore mark from conntrack
+	prerouteRule := "-m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000"
+	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
+		if err := insertRule(n, ipt, "mangle/PREROUTING", prerouteRule); err != nil {
+			return err
+		}
+	}
+
+	// OUTPUT rule: save mark to conntrack for NEW connections
+	outputRule := "-m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000"
+	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
+		if err := insertRule(n, ipt, "mangle/OUTPUT", outputRule); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (n *fakeIPTablesRunner) DelConnmarkSaveRule() error {
+	prerouteRule := "-m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000"
+	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
+		deleteRule(n, ipt, "mangle/PREROUTING", prerouteRule) // ignore errors
+	}
+
+	outputRule := "-m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000"
+	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
+		deleteRule(n, ipt, "mangle/OUTPUT", outputRule) // ignore errors
+	}
+	return nil
+}
+
 func (n *fakeIPTablesRunner) HasIPV6() bool       { return true }
 func (n *fakeIPTablesRunner) HasIPV6NAT() bool    { return true }
 func (n *fakeIPTablesRunner) HasIPV6Filter() bool { return true }
@@ -895,11 +1073,9 @@ func (o *fakeOS) run(args ...string) error {
 
 	switch args[2] {
 	case "add":
-		for _, el := range *ls {
-			if el == rest {
-				o.t.Errorf("can't add %q, already present", rest)
-				return errors.New("already exists")
-			}
+		if slices.Contains(*ls, rest) {
+			o.t.Errorf("can't add %q, already present", rest)
+			return errors.New("already exists")
 		}
 		*ls = append(*ls, rest)
 		sort.Strings(*ls)
@@ -981,9 +1157,7 @@ func (lt *linuxTest) Close() error {
 }
 
 func newLinuxRootTest(t *testing.T) (*linuxTest, *eventbus.Bus) {
-	if os.Getuid() != 0 {
-		t.Skip("test requires root")
-	}
+	tstest.RequireRoot(t)
 
 	lt := new(linuxTest)
 	lt.tun = createTestTUN(t)
@@ -1035,7 +1209,9 @@ func TestRuleDeletedEvent(t *testing.T) {
 }
 
 func TestDelRouteIdempotent(t *testing.T) {
+	fake := NewFakeOS(t)
 	lt, _ := newLinuxRootTest(t)
+	lt.r.nfr = fake.nfr
 	defer lt.Close()
 
 	for _, s := range []string{
@@ -1061,7 +1237,9 @@ func TestDelRouteIdempotent(t *testing.T) {
 }
 
 func TestAddRemoveRules(t *testing.T) {
+	fake := NewFakeOS(t)
 	lt, _ := newLinuxRootTest(t)
+	lt.r.nfr = fake.nfr
 	defer lt.Close()
 	r := lt.r
 

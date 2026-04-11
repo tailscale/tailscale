@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/lineiter"
 	"tailscale.com/version/distro"
 )
@@ -26,8 +25,8 @@ func init() {
 }
 
 var (
-	lazyVersionMeta = &lazyAtomicValue[versionMeta]{f: ptr.To(linuxVersionMeta)}
-	lazyOSVersion   = &lazyAtomicValue[string]{f: ptr.To(osVersionLinux)}
+	lazyVersionMeta = &lazyAtomicValue[versionMeta]{f: new(linuxVersionMeta)}
+	lazyOSVersion   = &lazyAtomicValue[string]{f: new(osVersionLinux)}
 )
 
 type versionMeta struct {
@@ -69,7 +68,7 @@ func deviceModelLinux() string {
 }
 
 func getQnapQtsVersion(versionInfo string) string {
-	for _, field := range strings.Fields(versionInfo) {
+	for field := range strings.FieldsSeq(versionInfo) {
 		if suffix, ok := strings.CutPrefix(field, "QTSFW_"); ok {
 			return suffix
 		}
@@ -111,11 +110,11 @@ func linuxVersionMeta() (meta versionMeta) {
 		if err != nil {
 			break
 		}
-		eq := bytes.IndexByte(line, '=')
-		if eq == -1 {
+		before, after, ok := bytes.Cut(line, []byte{'='})
+		if !ok {
 			continue
 		}
-		k, v := string(line[:eq]), strings.Trim(string(line[eq+1:]), `"'`)
+		k, v := string(before), strings.Trim(string(after), `"'`)
 		m[k] = v
 	}
 

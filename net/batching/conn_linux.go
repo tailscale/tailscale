@@ -24,6 +24,7 @@ import (
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/nettype"
+	"tailscale.com/util/clientmetric"
 )
 
 // xnetBatchReaderWriter defines the batching i/o methods of
@@ -51,26 +52,23 @@ var (
 // linuxBatchingConn is a UDP socket that provides batched i/o. It implements
 // [Conn].
 type linuxBatchingConn struct {
-	pc                    *net.UDPConn
-	xpc                   xnetBatchReaderWriter
-	rxOffload             bool                                  // supports UDP GRO or similar
-	txOffload             atomic.Bool                           // supports UDP GSO or similar
-	setGSOSizeInControl   func(control *[]byte, gsoSize uint16) // typically setGSOSizeInControl(); swappable for testing
-	getGSOSizeFromControl func(control []byte) (int, error)     // typically getGSOSizeFromControl(); swappable for testing
-	sendBatchPool         sync.Pool
+	pc                 *net.UDPConn
+	xpc                xnetBatchReaderWriter
+	rxOffload          bool        // supports UDP GRO or similar
+	txOffload          atomic.Bool // supports UDP GSO or similar
+	sendBatchPool      sync.Pool
+	rxqOverflowsMetric *clientmetric.Metric
+
+	// readOpMu guards read operations that must perform accounting against
+	// rxqOverflows in single-threaded fashion. There are no concurrent usages
+	// of read operations at the time of writing (2026-03-09), but it would be
+	// unidiomatic to push this responsibility onto callers.
+	readOpMu     sync.Mutex
+	rxqOverflows uint32 // kernel pumps a cumulative counter, which we track to push a clientmetric delta value
 }
 
 func (c *linuxBatchingConn) ReadFromUDPAddrPort(p []byte) (n int, addr netip.AddrPort, err error) {
-	if c.rxOffload {
-		// UDP_GRO is opt-in on Linux via setsockopt(). Once enabled you may
-		// receive a "monster datagram" from any read call. The ReadFrom() API
-		// does not support passing the GSO size and is unsafe to use in such a
-		// case. Other platforms may vary in behavior, but we go with the most
-		// conservative approach to prevent this from becoming a footgun in the
-		// future.
-		return 0, netip.AddrPort{}, errors.New("rx UDP offload is enabled on this socket, single packet reads are unavailable")
-	}
-	return c.pc.ReadFromUDPAddrPort(p)
+	return 0, netip.AddrPort{}, errors.New("single packet reads are unsupported")
 }
 
 func (c *linuxBatchingConn) SetDeadline(t time.Time) error {
@@ -89,6 +87,15 @@ const (
 	// This was initially established for Linux, but may split out to
 	// GOOS-specific values later. It originates as UDP_MAX_SEGMENTS in the
 	// kernel's TX path, and UDP_GRO_CNT_MAX for RX.
+	//
+	// As long as we use one fragment per datagram, this also serves as a
+	// limit for the number of fragments we can coalesce during scatter-gather writes.
+	//
+	// 64 is below the 1024 of IOV_MAX (Linux) or UIO_MAXIOV (BSD),
+	// and the 256 of WSABUF_MAX_COUNT (Windows).
+	//
+	// (2026-04) If we begin shipping datagrams in more than one fragment,
+	// an independent fragment count limit needs to be implemented.
 	udpSegmentMaxDatagrams = 64
 )
 
@@ -101,15 +108,24 @@ const (
 // coalesceMessages iterates 'buffs', setting and coalescing them in 'msgs'
 // where possible while maintaining datagram order.
 //
+// It aggregates message components as a list of buffers without copying,
+// and expects to be used only on Linux with scatter-gather writes via sendmmsg(2).
+//
+// All msgs[i].Buffers len must be one. Will panic if there is not enough msgs
+// to coalesce all buffs.
+//
 // All msgs have their Addr field set to addr.
 //
 // All msgs[i].Buffers[0] are preceded by a Geneve header (geneve) if geneve.VNI.IsSet().
+//
+// TODO(illotum) explore MSG_ZEROCOPY for large writes (>10KB).
 func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.GeneveHeader, buffs [][]byte, msgs []ipv6.Message, offset int) int {
 	var (
-		base     = -1 // index of msg we are currently coalescing into
-		gsoSize  int  // segmentation size of msgs[base]
-		dgramCnt int  // number of dgrams coalesced into msgs[base]
-		endBatch bool // tracking flag to start a new batch on next iteration of buffs
+		base         = -1 // index of msg we are currently coalescing into
+		gsoSize      int  // segmentation size of msgs[base]
+		dgramCnt     int  // number of dgrams coalesced into msgs[base]
+		endBatch     bool // tracking flag to start a new batch on next iteration of buffs
+		coalescedLen int  // bytes coalesced into msgs[base]
 	)
 	maxPayloadLen := maxIPv4PayloadLen
 	if addr.IP.To4() == nil {
@@ -124,19 +140,18 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.Ge
 		}
 		if i > 0 {
 			msgLen := len(buff)
-			baseLenBefore := len(msgs[base].Buffers[0])
-			freeBaseCap := cap(msgs[base].Buffers[0]) - baseLenBefore
-			if msgLen+baseLenBefore <= maxPayloadLen &&
+			if msgLen+coalescedLen <= maxPayloadLen &&
 				msgLen <= gsoSize &&
-				msgLen <= freeBaseCap &&
 				dgramCnt < udpSegmentMaxDatagrams &&
 				!endBatch {
-				msgs[base].Buffers[0] = append(msgs[base].Buffers[0], make([]byte, msgLen)...)
-				copy(msgs[base].Buffers[0][baseLenBefore:], buff)
+				// msgs[base].Buffers[0] is set to buff[i] when a new base is set.
+				// This appends a struct iovec element in the underlying struct msghdr (scatter-gather).
+				msgs[base].Buffers = append(msgs[base].Buffers, buff)
 				if i == len(buffs)-1 {
-					c.setGSOSizeInControl(&msgs[base].OOB, uint16(gsoSize))
+					setGSOSizeInControl(&msgs[base].OOB, uint16(gsoSize))
 				}
 				dgramCnt++
+				coalescedLen += msgLen
 				if msgLen < gsoSize {
 					// A smaller than gsoSize packet on the tail is legal, but
 					// it must end the batch.
@@ -146,7 +161,7 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.Ge
 			}
 		}
 		if dgramCnt > 1 {
-			c.setGSOSizeInControl(&msgs[base].OOB, uint16(gsoSize))
+			setGSOSizeInControl(&msgs[base].OOB, uint16(gsoSize))
 		}
 		// Reset prior to incrementing base since we are preparing to start a
 		// new potential batch.
@@ -157,6 +172,7 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.Ge
 		msgs[base].Buffers[0] = buff
 		msgs[base].Addr = addr
 		dgramCnt = 1
+		coalescedLen = len(buff)
 	}
 	return base + 1
 }
@@ -173,7 +189,10 @@ func (c *linuxBatchingConn) getSendBatch() *sendBatch {
 
 func (c *linuxBatchingConn) putSendBatch(batch *sendBatch) {
 	for i := range batch.msgs {
-		batch.msgs[i] = ipv6.Message{Buffers: batch.msgs[i].Buffers, OOB: batch.msgs[i].OOB}
+		// Non coalesced write paths access only batch.msgs[i].Buffers[0],
+		// but we append more during [linuxBatchingConn.coalesceMessages].
+		// Leave index zero accessible:
+		batch.msgs[i] = ipv6.Message{Buffers: batch.msgs[i].Buffers[:1], OOB: batch.msgs[i].OOB}
 	}
 	c.sendBatchPool.Put(batch)
 }
@@ -262,7 +281,7 @@ func (c *linuxBatchingConn) splitCoalescedMessages(msgs []ipv6.Message, firstMsg
 			end        = msg.N
 			numToSplit = 1
 		)
-		gsoSize, err = c.getGSOSizeFromControl(msg.OOB[:msg.NN])
+		gsoSize, err = getGSOSizeFromControl(msg.OOB[:msg.NN])
 		if err != nil {
 			return n, err
 		}
@@ -294,16 +313,87 @@ func (c *linuxBatchingConn) splitCoalescedMessages(msgs []ipv6.Message, firstMsg
 	return n, nil
 }
 
+// getDataFromControl returns the data portion of the first control msg with
+// matching cmsgLevel, matching cmsgType, and min data len of minDataLen, in
+// control. If no matching cmsg is found or the len(control) < unix.SizeofCmsghdr,
+// this function returns nil data. A non-nil error will be returned if
+// len(control) > unix.SizeofCmsghdr but its contents cannot be parsed as a
+// socket control message.
+func getDataFromControl(control []byte, cmsgLevel, cmsgType int32, minDataLen int) ([]byte, error) {
+	var (
+		hdr  unix.Cmsghdr
+		data []byte
+		rem  = control
+		err  error
+	)
+
+	for len(rem) > unix.SizeofCmsghdr {
+		hdr, data, rem, err = unix.ParseOneSocketControlMessage(rem)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing socket control message: %w", err)
+		}
+		if hdr.Level == cmsgLevel && hdr.Type == cmsgType && len(data) >= minDataLen {
+			return data, nil
+		}
+	}
+	return nil, nil
+}
+
+// getRXQOverflowsFromControl returns the rxq overflows cumulative counter found
+// in control. If no rxq counter is found or the len(control) < unix.SizeofCmsghdr,
+// this function returns 0. A non-nil error will be returned if control is
+// malformed.
+func getRXQOverflowsFromControl(control []byte) (uint32, error) {
+	data, err := getDataFromControl(control, unix.SOL_SOCKET, unix.SO_RXQ_OVFL, 4)
+	if err != nil {
+		return 0, err
+	}
+	if len(data) >= 4 {
+		return binary.NativeEndian.Uint32(data), nil
+	}
+	return 0, nil
+}
+
+// handleRXQOverflowCounter handles any rx queue overflow counter contained in
+// the tail of msgs.
+func (c *linuxBatchingConn) handleRXQOverflowCounter(msgs []ipv6.Message, n int, rxErr error) {
+	if n == 0 || rxErr != nil || c.rxqOverflowsMetric == nil {
+		return
+	}
+	tailMsg := msgs[n-1] // we only care about the latest value as it's a cumulative counter
+	if tailMsg.NN == 0 {
+		return
+	}
+	rxqOverflows, err := getRXQOverflowsFromControl(tailMsg.OOB[:tailMsg.NN])
+	if err != nil {
+		return
+	}
+	// The counter is always present once nonzero on the kernel side. Compare it
+	// with our previous view, push the delta to the clientmetric, and update
+	// our view.
+	if rxqOverflows == c.rxqOverflows {
+		return
+	}
+	delta := int64(rxqOverflows - c.rxqOverflows)
+	c.rxqOverflowsMetric.Add(delta)
+	c.rxqOverflows = rxqOverflows
+}
+
 func (c *linuxBatchingConn) ReadBatch(msgs []ipv6.Message, flags int) (n int, err error) {
+	c.readOpMu.Lock()
+	defer c.readOpMu.Unlock()
 	if !c.rxOffload || len(msgs) < 2 {
-		return c.xpc.ReadBatch(msgs, flags)
+		n, err = c.xpc.ReadBatch(msgs, flags)
+		c.handleRXQOverflowCounter(msgs, n, err)
+		return n, err
 	}
 	// Read into the tail of msgs, split into the head.
 	readAt := len(msgs) - 2
-	numRead, err := c.xpc.ReadBatch(msgs[readAt:], 0)
-	if err != nil || numRead == 0 {
+	n, err = c.xpc.ReadBatch(msgs[readAt:], 0)
+	if err != nil || n == 0 {
 		return 0, err
 	}
+	c.handleRXQOverflowCounter(msgs[readAt:], n, err)
 	return c.splitCoalescedMessages(msgs, readAt)
 }
 
@@ -317,6 +407,21 @@ func (c *linuxBatchingConn) WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (i
 
 func (c *linuxBatchingConn) Close() error {
 	return c.pc.Close()
+}
+
+// tryEnableRXQOverflowsCounter attempts to enable the SO_RXQ_OVFL socket option
+// on pconn, and returns the result. SO_RXQ_OVFL was added in Linux v2.6.33.
+func tryEnableRXQOverflowsCounter(pconn nettype.PacketConn) (enabled bool) {
+	if c, ok := pconn.(*net.UDPConn); ok {
+		rc, err := c.SyscallConn()
+		if err != nil {
+			return
+		}
+		rc.Control(func(fd uintptr) {
+			enabled = syscall.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RXQ_OVFL, 1) == nil
+		})
+	}
+	return enabled
 }
 
 // tryEnableUDPOffload attempts to enable the UDP_GRO socket option on pconn,
@@ -340,32 +445,25 @@ func tryEnableUDPOffload(pconn nettype.PacketConn) (hasTX bool, hasRX bool) {
 	return hasTX, hasRX
 }
 
-// getGSOSizeFromControl returns the GSO size found in control. If no GSO size
-// is found or the len(control) < unix.SizeofCmsghdr, this function returns 0.
-// A non-nil error will be returned if len(control) > unix.SizeofCmsghdr but
-// its contents cannot be parsed as a socket control message.
+// getGSOSizeFromControl returns the GSO size found in control associated with a
+// cmsg type of UDP_GRO, which the kernel populates in the read direction. If no
+// GSO size is found or the len(control) < unix.SizeofCmsghdr, this function
+// returns 0. A non-nil error will be returned if control is malformed.
 func getGSOSizeFromControl(control []byte) (int, error) {
-	var (
-		hdr  unix.Cmsghdr
-		data []byte
-		rem  = control
-		err  error
-	)
-
-	for len(rem) > unix.SizeofCmsghdr {
-		hdr, data, rem, err = unix.ParseOneSocketControlMessage(rem)
-		if err != nil {
-			return 0, fmt.Errorf("error parsing socket control message: %w", err)
-		}
-		if hdr.Level == unix.SOL_UDP && hdr.Type == unix.UDP_GRO && len(data) >= 2 {
-			return int(binary.NativeEndian.Uint16(data[:2])), nil
-		}
+	data, err := getDataFromControl(control, unix.SOL_UDP, unix.UDP_GRO, 2)
+	if err != nil {
+		return 0, err
+	}
+	if len(data) >= 2 {
+		return int(binary.NativeEndian.Uint16(data)), nil
 	}
 	return 0, nil
 }
 
 // setGSOSizeInControl sets a socket control message in control containing
-// gsoSize. If len(control) < controlMessageSize control's len will be set to 0.
+// gsoSize with an associated cmsg type of UDP_SEGMENT, which we are responsible
+// for populating prior to writing towards the kernel. If len(control) < controlMessageSize
+// control's len will be set to 0.
 func setGSOSizeInControl(control *[]byte, gsoSize uint16) {
 	*control = (*control)[:0]
 	if cap(*control) < int(unsafe.Sizeof(unix.Cmsghdr{})) {
@@ -383,10 +481,39 @@ func setGSOSizeInControl(control *[]byte, gsoSize uint16) {
 	*control = (*control)[:unix.CmsgSpace(2)]
 }
 
+var (
+	rxqOverflowsMetricsMu     sync.Mutex
+	rxqOverflowsMetricsByName map[string]*clientmetric.Metric
+)
+
+// getRXQOverflowsMetric returns a counter-based [*clientmetric.Metric] for the
+// provided name in a thread-safe manner. Callers may pass the same metric name
+// multiple times, which is common across rebinds of the underlying, associated
+// [Conn].
+func getRXQOverflowsMetric(name string) *clientmetric.Metric {
+	if len(name) == 0 {
+		return nil
+	}
+	rxqOverflowsMetricsMu.Lock()
+	defer rxqOverflowsMetricsMu.Unlock()
+	m, ok := rxqOverflowsMetricsByName[name]
+	if ok {
+		return m
+	}
+	if rxqOverflowsMetricsByName == nil {
+		rxqOverflowsMetricsByName = make(map[string]*clientmetric.Metric)
+	}
+	m = clientmetric.NewCounter(name)
+	rxqOverflowsMetricsByName[name] = m
+	return m
+}
+
 // TryUpgradeToConn probes the capabilities of the OS and pconn, and upgrades
 // pconn to a [Conn] if appropriate. A batch size of [IdealBatchSize] is
-// suggested for the best performance.
-func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int) nettype.PacketConn {
+// suggested for the best performance. If len(rxqOverflowsMetricName) is
+// nonzero, then read ops will propagate the SO_RXQ_OVFL control message counter
+// to a clientmetric with the supplied name.
+func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int, rxqOverflowsMetricName string) nettype.PacketConn {
 	if runtime.GOOS != "linux" {
 		// Exclude Android.
 		return pconn
@@ -408,9 +535,7 @@ func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int) n
 		return pconn
 	}
 	b := &linuxBatchingConn{
-		pc:                    uc,
-		getGSOSizeFromControl: getGSOSizeFromControl,
-		setGSOSizeInControl:   setGSOSizeInControl,
+		pc: uc,
 		sendBatchPool: sync.Pool{
 			New: func() any {
 				ua := &net.UDPAddr{
@@ -440,15 +565,23 @@ func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int) n
 	var txOffload bool
 	txOffload, b.rxOffload = tryEnableUDPOffload(uc)
 	b.txOffload.Store(txOffload)
+	if len(rxqOverflowsMetricName) > 0 && tryEnableRXQOverflowsCounter(uc) {
+		// Don't register the metric unless the socket option has been
+		// successfully set, otherwise we will report a misleading zero value
+		// counter on the wire. This is one reason why we prefer to handle
+		// clientmetric instantiation internally, vs letting callers pass them
+		// to TryUpgradeToConn.
+		b.rxqOverflowsMetric = getRXQOverflowsMetric(rxqOverflowsMetricName)
+	}
 	return b
 }
 
 var controlMessageSize = -1 // bomb if used for allocation before init
 
 func init() {
-	// controlMessageSize is set to hold a UDP_GRO or UDP_SEGMENT control
-	// message. These contain a single uint16 of data.
-	controlMessageSize = unix.CmsgSpace(2)
+	controlMessageSize =
+		unix.CmsgSpace(2) + // UDP_GRO or UDP_SEGMENT gsoSize (uint16)
+			unix.CmsgSpace(4) // SO_RXQ_OVFL counter (uint32)
 }
 
 // MinControlMessageSize returns the minimum control message size required to

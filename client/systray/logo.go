@@ -233,8 +233,8 @@ func (logo tsLogo) renderWithBorder(borderUnits int) *bytes.Buffer {
 		dc.InvertMask()
 	}
 
-	for y := 0; y < 3; y++ {
-		for x := 0; x < 3; x++ {
+	for y := range 3 {
+		for x := range 3 {
 			px := (borderUnits + 1 + 3*x) * radius
 			py := (borderUnits + 1 + 3*y) * radius
 			col := fg

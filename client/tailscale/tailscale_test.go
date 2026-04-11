@@ -40,7 +40,7 @@ func TestClientBuildURL(t *testing.T) {
 			want:     `http://127.0.0.1:1234/api/v2/tailnet/example%20dot%20com%3Ffoo=bar`,
 		},
 		{
-			desc:     "url.Values",
+			desc:     "url-Values",
 			elements: []any{"tailnet", "example.com", "acl", url.Values{"details": {"1"}}},
 			want:     `http://127.0.0.1:1234/api/v2/tailnet/example.com/acl?details=1`,
 		},
@@ -80,7 +80,7 @@ func TestClientBuildTailnetURL(t *testing.T) {
 			want:     `http://127.0.0.1:1234/api/v2/tailnet/example.com/foo%20bar%3Fbaz=qux`,
 		},
 		{
-			desc:     "url.Values",
+			desc:     "url-Values",
 			elements: []any{"acl", url.Values{"details": {"1"}}},
 			want:     `http://127.0.0.1:1234/api/v2/tailnet/example.com/acl?details=1`,
 		},

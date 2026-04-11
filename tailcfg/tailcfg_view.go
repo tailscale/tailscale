@@ -2505,8 +2505,15 @@ func (v UserProfileView) ID() UserID { return v.ж.ID }
 func (v UserProfileView) LoginName() string { return v.ж.LoginName }
 
 // "Alice Smith"
-func (v UserProfileView) DisplayName() string           { return v.ж.DisplayName }
-func (v UserProfileView) ProfilePicURL() string         { return v.ж.ProfilePicURL }
+func (v UserProfileView) DisplayName() string   { return v.ж.DisplayName }
+func (v UserProfileView) ProfilePicURL() string { return v.ж.ProfilePicURL }
+
+// Groups is a subset of SCIM groups (e.g. "engineering@example.com")
+// or group names in the tailnet policy document (e.g. "group:eng")
+// that contain this user and that the coordination server was
+// configured to report to this node.
+// The list is always sorted when loaded from storage.
+func (v UserProfileView) Groups() views.Slice[string]   { return views.SliceOf(v.ж.Groups) }
 func (v UserProfileView) Equal(v2 UserProfileView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -2515,6 +2522,7 @@ var _UserProfileViewNeedsRegeneration = UserProfile(struct {
 	LoginName     string
 	DisplayName   string
 	ProfilePicURL string
+	Groups        []string
 }{})
 
 // View returns a read-only view of VIPService.

@@ -38,8 +38,8 @@ import (
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
-	for i := range t.NumField() {
-		if name := t.Field(i).Name; name != "_" {
+	for field := range t.Fields() {
+		if name := field.Name; name != "_" {
 			fields = append(fields, name)
 		}
 	}
@@ -214,12 +214,12 @@ func TestRetryableErrors(t *testing.T) {
 }
 
 type retryableForTest interface {
+	error
 	Retryable() bool
 }
 
 func isRetryableErrorForTest(err error) bool {
-	var ae retryableForTest
-	if errors.As(err, &ae) {
+	if ae, ok := errors.AsType[retryableForTest](err); ok {
 		return ae.Retryable()
 	}
 	return false

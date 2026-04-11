@@ -180,7 +180,9 @@ type CapabilityVersion int
 //   - 131: 2025-11-25: client respects [NodeAttrDefaultAutoUpdate]
 //   - 132: 2026-02-13: client respects [NodeAttrDisableHostsFileUpdates]
 //   - 133: 2026-02-17: client understands [NodeAttrForceRegisterMagicDNSIPv4Only]; MagicDNS IPv6 registered w/ OS by default
-const CurrentCapabilityVersion CapabilityVersion = 133
+//   - 134: 2026-03-09: Client understands [NodeAttrDisableAndroidBindToActiveNetwork]
+//   - 135: 2026-03-30: Client understands [NodeAttrCacheNetworkMaps]
+const CurrentCapabilityVersion CapabilityVersion = 135
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -282,6 +284,13 @@ type UserProfile struct {
 	LoginName     string // "alice@smith.com"; for display purposes only (provider is not listed)
 	DisplayName   string // "Alice Smith"
 	ProfilePicURL string `json:",omitzero"`
+
+	// Groups is a subset of SCIM groups (e.g. "engineering@example.com")
+	// or group names in the tailnet policy document (e.g. "group:eng")
+	// that contain this user and that the coordination server was
+	// configured to report to this node.
+	// The list is always sorted when loaded from storage.
+	Groups []string `json:",omitempty"`
 }
 
 func (p *UserProfile) Equal(p2 *UserProfile) bool {
@@ -294,7 +303,8 @@ func (p *UserProfile) Equal(p2 *UserProfile) bool {
 	return p.ID == p2.ID &&
 		p.LoginName == p2.LoginName &&
 		p.DisplayName == p2.DisplayName &&
-		p.ProfilePicURL == p2.ProfilePicURL
+		p.ProfilePicURL == p2.ProfilePicURL &&
+		slices.Equal(p.Groups, p2.Groups)
 }
 
 // RawMessage is a raw encoded JSON value. It implements Marshaler and
@@ -2260,7 +2270,7 @@ type ClientVersion struct {
 
 	// UrgentSecurityUpdate is set when the client is missing an important
 	// security update. That update may be in LatestVersion or earlier.
-	// UrgentSecurityUpdate should not be set if RunningLatest is false.
+	// UrgentSecurityUpdate should not be set if RunningLatest is true.
 	UrgentSecurityUpdate bool `json:",omitempty"`
 
 	// Notify is whether the client should do an OS-specific notification about
@@ -2454,6 +2464,12 @@ const (
 	// sockets (in the net/netns package). See that package for more
 	// details on the behaviour of this capability.
 	CapabilityBindToInterfaceByRoute NodeCapability = "https://tailscale.com/cap/bind-to-interface-by-route"
+
+	// NodeAttrDisableAndroidBindToActiveNetwork disables binding sockets to the
+	// currently active network on Android, which is enabled by default.
+	// This allows the control plane to turn off the behavior if it causes
+	// problems.
+	NodeAttrDisableAndroidBindToActiveNetwork NodeCapability = "disable-android-bind-to-active-network"
 
 	// CapabilityDebugDisableAlternateDefaultRouteInterface changes how Darwin
 	// nodes get the default interface. There is an optional hook (used by the
@@ -2755,6 +2771,13 @@ const (
 	// See https://github.com/tailscale/tailscale/issues/15404.
 	// TODO(bradfitz): remove this a few releases after 2026-02-16.
 	NodeAttrForceRegisterMagicDNSIPv4Only NodeCapability = "force-register-magicdns-ipv4-only"
+
+	// NodeAttrCacheNetworkMaps instructs the node to persistently cache network
+	// maps and use them to establish peer connectivity on start, if doing so is
+	// supported by the client and storage is available. When this attribute is
+	// absent (or removed), a node that supports netmap caching will ignore and
+	// discard existing cached maps, and will not store any.
+	NodeAttrCacheNetworkMaps NodeCapability = "cache-network-maps"
 )
 
 // SetDNSRequest is a request to add a DNS record.

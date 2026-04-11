@@ -41,37 +41,37 @@ func TestQnapAuthnURL(t *testing.T) {
 		want string
 	}{
 		{
-			name: "localhost http",
+			name: "localhost-http",
 			in:   "http://localhost:8088/",
 			want: "http://localhost:8088/cgi-bin/authLogin.cgi?qtoken=token",
 		},
 		{
-			name: "localhost https",
+			name: "localhost-https",
 			in:   "https://localhost:5000/",
 			want: "https://localhost:5000/cgi-bin/authLogin.cgi?qtoken=token",
 		},
 		{
-			name: "IP http",
+			name: "IP-http",
 			in:   "http://10.1.20.4:80/",
 			want: "http://10.1.20.4:80/cgi-bin/authLogin.cgi?qtoken=token",
 		},
 		{
-			name: "IP6 https",
+			name: "IP6-https",
 			in:   "https://[ff7d:0:1:2::1]/",
 			want: "https://[ff7d:0:1:2::1]/cgi-bin/authLogin.cgi?qtoken=token",
 		},
 		{
-			name: "hostname https",
+			name: "hostname-https",
 			in:   "https://qnap.example.com/",
 			want: "https://qnap.example.com/cgi-bin/authLogin.cgi?qtoken=token",
 		},
 		{
-			name: "invalid URL",
+			name: "invalid-URL",
 			in:   "This is not a URL, it is a really really really really really really really really really really really really long string to exercise the URL truncation code in the error path.",
 			want: "http://localhost/cgi-bin/authLogin.cgi?qtoken=token",
 		},
 		{
-			name: "err != nil",
+			name: "err-not-nil",
 			in:   "http://192.168.0.%31/",
 			want: "http://localhost/cgi-bin/authLogin.cgi?qtoken=token",
 		},
@@ -582,12 +582,23 @@ func TestServeAuth(t *testing.T) {
 
 	successCookie := "ts-cookie-success"
 	s.browserSessions.Store(successCookie, &browserSession{
-		ID:      successCookie,
-		SrcNode: remoteNode.Node.ID,
-		SrcUser: user.ID,
-		Created: oneHourAgo,
-		AuthID:  testAuthPathSuccess,
-		AuthURL: *testControlURL + testAuthPathSuccess,
+		ID:          successCookie,
+		SrcNode:     remoteNode.Node.ID,
+		SrcUser:     user.ID,
+		Created:     oneHourAgo,
+		AuthID:      testAuthPathSuccess,
+		AuthURL:     *testControlURL + testAuthPathSuccess,
+		PendingAuth: true,
+	})
+	successCookie2 := "ts-cookie-success-2"
+	s.browserSessions.Store(successCookie2, &browserSession{
+		ID:          successCookie2,
+		SrcNode:     remoteNode.Node.ID,
+		SrcUser:     user.ID,
+		Created:     oneHourAgo,
+		AuthID:      testAuthPathSuccess,
+		AuthURL:     *testControlURL + testAuthPathSuccess,
+		PendingAuth: true,
 	})
 	failureCookie := "ts-cookie-failure"
 	s.browserSessions.Store(failureCookie, &browserSession{
@@ -642,22 +653,7 @@ func TestServeAuth(t *testing.T) {
 				AuthID:        testAuthPath,
 				AuthURL:       *testControlURL + testAuthPath,
 				Authenticated: false,
-			},
-		},
-		{
-			name:       "query-existing-incomplete-session",
-			path:       "/api/auth",
-			cookie:     successCookie,
-			wantStatus: http.StatusOK,
-			wantResp:   &authResponse{ViewerIdentity: vi, ServerMode: ManageServerMode},
-			wantSession: &browserSession{
-				ID:            successCookie,
-				SrcNode:       remoteNode.Node.ID,
-				SrcUser:       user.ID,
-				Created:       oneHourAgo,
-				AuthID:        testAuthPathSuccess,
-				AuthURL:       *testControlURL + testAuthPathSuccess,
-				Authenticated: false,
+				PendingAuth:   true,
 			},
 		},
 		{
@@ -674,16 +670,33 @@ func TestServeAuth(t *testing.T) {
 				AuthID:        testAuthPathSuccess,
 				AuthURL:       *testControlURL + testAuthPathSuccess,
 				Authenticated: false,
+				PendingAuth:   true,
 			},
 		},
 		{
-			name:       "transition-to-successful-session",
+			name:       "transition-to-successful-session-via-api-auth-session-wait",
 			path:       "/api/auth/session/wait",
 			cookie:     successCookie,
 			wantStatus: http.StatusOK,
 			wantResp:   nil,
 			wantSession: &browserSession{
 				ID:            successCookie,
+				SrcNode:       remoteNode.Node.ID,
+				SrcUser:       user.ID,
+				Created:       oneHourAgo,
+				AuthID:        testAuthPathSuccess,
+				AuthURL:       *testControlURL + testAuthPathSuccess,
+				Authenticated: true,
+			},
+		},
+		{
+			name:       "transition-to-successful-session-via-api-auth",
+			path:       "/api/auth",
+			cookie:     successCookie2,
+			wantStatus: http.StatusOK,
+			wantResp:   &authResponse{Authorized: true, ViewerIdentity: vi, ServerMode: ManageServerMode},
+			wantSession: &browserSession{
+				ID:            successCookie2,
 				SrcNode:       remoteNode.Node.ID,
 				SrcUser:       user.ID,
 				Created:       oneHourAgo,
@@ -731,6 +744,7 @@ func TestServeAuth(t *testing.T) {
 				AuthID:        testAuthPath,
 				AuthURL:       *testControlURL + testAuthPath,
 				Authenticated: false,
+				PendingAuth:   true,
 			},
 		},
 		{
@@ -748,6 +762,7 @@ func TestServeAuth(t *testing.T) {
 				AuthID:        testAuthPath,
 				AuthURL:       *testControlURL + testAuthPath,
 				Authenticated: false,
+				PendingAuth:   true,
 			},
 		},
 		{
@@ -1462,7 +1477,9 @@ func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self fu
 				http.Error(w, "invalid JSON body", http.StatusBadRequest)
 				return
 			}
-			metricCapture(metricNames[0].Name)
+			if metricCapture != nil && len(metricNames) > 0 {
+				metricCapture(metricNames[0].Name)
+			}
 			writeJSON(w, struct{}{})
 			return
 		case "/localapi/v0/logout":
@@ -1501,47 +1518,47 @@ func TestCSRFProtect(t *testing.T) {
 		wantError      bool
 	}{
 		{
-			name:   "GET requests with no header are allowed",
+			name:   "GET-no-header-allowed", // GET requests with no header are allowed
 			method: "GET",
 		},
 		{
-			name:         "POST requests with same-origin are allowed",
+			name:         "POST-same-origin-allowed",
 			method:       "POST",
 			secFetchSite: "same-origin",
 		},
 		{
-			name:         "POST requests with cross-site are not allowed",
+			name:         "POST-cross-site-rejected",
 			method:       "POST",
 			secFetchSite: "cross-site",
 			wantError:    true,
 		},
 		{
-			name:         "POST requests with unknown sec-fetch-site values are not allowed",
+			name:         "POST-unknown-sec-fetch-site-rejected",
 			method:       "POST",
 			secFetchSite: "new-unknown-value",
 			wantError:    true,
 		},
 		{
-			name:         "POST requests with none are not allowed",
+			name:         "POST-sec-fetch-none-rejected",
 			method:       "POST",
 			secFetchSite: "none",
 			wantError:    true,
 		},
 		{
-			name:   "POST requests with no sec-fetch-site header but matching host and origin are allowed",
+			name:   "POST-no-sec-fetch-site-matching-host-origin", // no sec-fetch-site header but matching host and origin are allowed
 			method: "POST",
 			host:   "example.com",
 			origin: "https://example.com",
 		},
 		{
-			name:      "POST requests with no sec-fetch-site and non-matching host and origin are not allowed",
+			name:      "POST-no-sec-fetch-site-mismatched-host-origin-rejected",
 			method:    "POST",
 			host:      "example.com",
 			origin:    "https://example.net",
 			wantError: true,
 		},
 		{
-			name:           "POST requests with no sec-fetch-site and and origin that matches the override are allowed",
+			name:           "POST-no-sec-fetch-site-origin-override-allowed",
 			method:         "POST",
 			originOverride: "example.net",
 			host:           "internal.example.foo", // Host can be changed by reverse proxies

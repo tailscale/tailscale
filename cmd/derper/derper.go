@@ -87,6 +87,8 @@ var (
 	acceptConnLimit = flag.Float64("accept-connection-limit", math.Inf(+1), "rate limit for accepting new connection")
 	acceptConnBurst = flag.Int("accept-connection-burst", math.MaxInt, "burst limit for accepting new connection")
 
+	rateConfigPath = flag.String("rate-config", "", "path to JSON rate limit config file; reloaded on SIGHUP")
+
 	// tcpKeepAlive is intentionally long, to reduce battery cost. There is an L7 keepalive on a higher frequency schedule.
 	tcpKeepAlive = flag.Duration("tcp-keepalive-time", 10*time.Minute, "TCP keepalive time")
 	// tcpUserTimeout is intentionally short, so that hung connections are cleaned up promptly. DERPs should be nearby users.
@@ -192,6 +194,12 @@ func main() {
 	s.SetVerifyClientURL(*verifyClientURL)
 	s.SetVerifyClientURLFailOpen(*verifyFailOpen)
 	s.SetTCPWriteTimeout(*tcpWriteTimeout)
+	if *rateConfigPath != "" {
+		if err := s.LoadAndApplyRateConfig(*rateConfigPath); err != nil {
+			log.Fatalf("derper: loading rate config: %v", err)
+		}
+		go watchRateConfig(ctx, s, *rateConfigPath)
+	}
 
 	var meshKey string
 	if *dev {
@@ -423,6 +431,27 @@ func main() {
 	}
 	if err != nil && err != http.ErrServerClosed {
 		log.Fatalf("derper: %v", err)
+	}
+}
+
+// watchRateConfig listens for SIGHUP signals and reloads the rate config
+// file on each signal, applying it to the server. It returns when ctx is done.
+func watchRateConfig(ctx context.Context, s *derpserver.Server, path string) {
+	sighup := make(chan os.Signal, 1)
+	signal.Notify(sighup, syscall.SIGHUP)
+	defer signal.Stop(sighup)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-sighup:
+			log.Printf("derper: received SIGHUP, reloading rate config from %s", path)
+			if err := s.LoadAndApplyRateConfig(path); err != nil {
+				log.Printf("derper: rate config reload failed: %v", err)
+				continue
+			}
+			log.Printf("derper: rate config reloaded successfully")
+		}
 	}
 }
 

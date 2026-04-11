@@ -28,8 +28,6 @@ func (lc *Client) NetworkLockStatus(ctx context.Context) (*ipnstate.NetworkLockS
 }
 
 // NetworkLockInit initializes the tailnet key authority.
-//
-// TODO(tom): Plumb through disablement secrets.
 func (lc *Client) NetworkLockInit(ctx context.Context, keys []tka.Key, disablementValues [][]byte, supportDisablement []byte) (*ipnstate.NetworkLockStatus, error) {
 	var b bytes.Buffer
 	type initRequest struct {

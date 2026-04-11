@@ -203,8 +203,9 @@ func clusterIPSvc(name string, extNSvc *corev1.Service) *corev1.Service {
 			Labels:       labels,
 		},
 		Spec: corev1.ServiceSpec{
-			Type:  corev1.ServiceTypeClusterIP,
-			Ports: ports,
+			Type:           corev1.ServiceTypeClusterIP,
+			IPFamilyPolicy: new(corev1.IPFamilyPolicyPreferDualStack),
+			Ports:          ports,
 		},
 	}
 }
@@ -243,7 +244,7 @@ func portsForEndpointSlice(svc *corev1.Service) []discoveryv1.EndpointPort {
 		ports = append(ports, discoveryv1.EndpointPort{
 			Name:     &p.Name,
 			Protocol: &p.Protocol,
-			Port:     pointer.ToInt32(p.TargetPort.IntVal),
+			Port:     new(p.TargetPort.IntVal),
 		})
 	}
 	return ports

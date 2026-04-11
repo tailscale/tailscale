@@ -40,6 +40,11 @@ import (
 var mtuProbePingSizesV4 []int
 var mtuProbePingSizesV6 []int
 
+// discoKeyAdvertisementInterval tells how often a disco update via TSMP can
+// happen. The update is triggered via enqueueCallMeMaybe, and thus it will
+// only be sent if the magicsock is in a state to send out CallMeMaybe.
+const discoKeyAdvertisementInterval = time.Second * 60
+
 func init() {
 	for _, m := range tstun.WireMTUsToProbe {
 		mtuProbePingSizesV4 = append(mtuProbePingSizesV4, pktLenToPingSize(m, false))
@@ -80,7 +85,7 @@ type endpoint struct {
 	lastSendAny               mono.Time      // last time there were outgoing packets sent this peer from any trigger, internal or external to magicsock
 	lastFullPing              mono.Time      // last time we pinged all disco or wireguard only endpoints
 	lastUDPRelayPathDiscovery mono.Time      // last time we ran UDP relay path discovery
-	sentDiscoKeyAdvertisement bool           // wether we sent a TSMPDiscoAdvertisement or not to this endpoint
+	lastDiscoKeyAdvertisement mono.Time      // last time we sent a TSMPDiscoAdvertisement or not to this endpoint
 	derpAddr                  netip.AddrPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
 
 	bestAddr           addrQuality // best non-DERP path; zero if none; mutate via setBestAddrLocked()
@@ -1465,6 +1470,19 @@ func (de *endpoint) setLastPing(ipp netip.AddrPort, now mono.Time) {
 	state.lastPing = now
 }
 
+// updateDiscoKey replaces the disco key for de. If the key is a zero value key,
+// set the key to nil.
+func (de *endpoint) updateDiscoKey(key key.DiscoPublic) {
+	if key.IsZero() {
+		de.disco.Store(nil)
+	} else {
+		de.disco.Store(&endpointDisco{
+			key:   key,
+			short: key.ShortString(),
+		})
+	}
+}
+
 // updateFromNode updates the endpoint based on a tailcfg.Node from a NetMap
 // update.
 func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, probeUDPLifetimeEnabled bool) {
@@ -1490,15 +1508,12 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 
 	if discoKey != n.DiscoKey() {
 		de.c.logf("[v1] magicsock: disco: node %s changed from %s to %s", de.publicKey.ShortString(), discoKey, n.DiscoKey())
-		de.disco.Store(&endpointDisco{
-			key:   n.DiscoKey(),
-			short: n.DiscoKey().ShortString(),
-		})
+		key := n.DiscoKey()
+		de.updateDiscoKey(key)
 		de.debugUpdates.Add(EndpointChange{
 			When: time.Now(),
 			What: "updateFromNode-resetLocked",
 		})
-		de.resetLocked()
 	}
 	if n.HomeDERP() == 0 {
 		if de.derpAddr.IsValid() {

@@ -25,15 +25,14 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"tailscale.com/client/tailscale/v2"
 
-	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/ipnstate"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/ptr"
 )
 
 func TestIngressPGReconciler(t *testing.T) {
@@ -50,7 +49,7 @@ func TestIngressPGReconciler(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{
 					Name: "test",
@@ -90,7 +89,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 
 	// Verify Tailscale Service uses custom tags
-	tsSvc, err := ft.GetVIPService(t.Context(), "svc:my-svc")
+	tsSvc, err := ft.VIPServices().Get(t.Context(), "svc:my-svc")
 	if err != nil {
 		t.Fatalf("getting Tailscale Service: %v", err)
 	}
@@ -117,7 +116,7 @@ func TestIngressPGReconciler(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{
 					Name: "test",
@@ -242,7 +241,7 @@ func TestIngressPGReconciler(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{
 					Name: "test",
@@ -261,7 +260,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectReconciled(t, ingPGR, ing3.Namespace, ing3.Name)
 
 	// Delete the service from "control"
-	ft.vipServices = make(map[tailcfg.ServiceName]*tailscale.VIPService)
+	ft.vipServices = make(map[string]tailscale.VIPService)
 
 	// Delete the ingress and confirm we don't get stuck due to the VIP service not existing.
 	if err = fc.Delete(t.Context(), ing3); err != nil {
@@ -286,7 +285,7 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{
 					Name: "test",
@@ -321,11 +320,11 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 	verifyTailscaleService(t, ft, "svc:updated-svc", []string{"tcp:443"})
 	verifyTailscaledConfig(t, fc, "test-pg", []string{"svc:updated-svc"})
 
-	_, err := ft.GetVIPService(context.Background(), "svc:my-svc")
+	_, err := ft.VIPServices().Get(context.Background(), "svc:my-svc")
 	if err == nil {
 		t.Fatalf("svc:my-svc not cleaned up")
 	}
-	if !isErrorTailscaleServiceNotFound(err) {
+	if !tailscale.IsNotFound(err) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -341,7 +340,7 @@ func TestValidateIngress(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			TLS: []networkingv1.IngressTLS{
 				{Hosts: []string{"test"}},
 			},
@@ -475,7 +474,7 @@ func TestValidateIngress(t *testing.T) {
 					},
 				},
 				Spec: networkingv1.IngressSpec{
-					IngressClassName: ptr.To("tailscale"),
+					IngressClassName: new("tailscale"),
 					TLS: []networkingv1.IngressTLS{
 						{Hosts: []string{"test"}},
 					},
@@ -522,7 +521,7 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{
 					Name: "test",
@@ -563,16 +562,18 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 	}
 
 	// Add the Tailscale Service to prefs to have the Ingress recognised as ready.
-	mustCreate(t, fc, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pg-0",
-			Namespace: "operator-ns",
-			Labels:    pgSecretLabels("test-pg", kubetypes.LabelSecretTypeState),
-		},
-		Data: map[string][]byte{
-			"_current-profile": []byte("profile-foo"),
-			"profile-foo":      []byte(`{"AdvertiseServices":["svc:my-svc"],"Config":{"NodeID":"node-foo"}}`),
-		},
+	mustUpdate(t, fc, "operator-ns", "test-pg-0", func(o *corev1.Secret) {
+		var p prefs
+		var err error
+		if err = json.Unmarshal(o.Data["test"], &p); err != nil {
+			t.Errorf("failed to unmarshal preferences: %v", err)
+		}
+
+		p.AdvertiseServices = []string{"svc:my-svc"}
+		o.Data["test"], err = json.Marshal(p)
+		if err != nil {
+			t.Errorf("failed to marshal preferences: %v", err)
+		}
 	})
 
 	// Reconcile and re-fetch Ingress.
@@ -651,7 +652,7 @@ func TestIngressPGReconciler_HTTPRedirect(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{
 					Name: "test",
@@ -686,17 +687,19 @@ func TestIngressPGReconciler_HTTPRedirect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Add the Tailscale Service to prefs to have the Ingress recognised as ready
-	mustCreate(t, fc, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pg-0",
-			Namespace: "operator-ns",
-			Labels:    pgSecretLabels("test-pg", kubetypes.LabelSecretTypeState),
-		},
-		Data: map[string][]byte{
-			"_current-profile": []byte("profile-foo"),
-			"profile-foo":      []byte(`{"AdvertiseServices":["svc:my-svc"],"Config":{"NodeID":"node-foo"}}`),
-		},
+	// Add the Tailscale Service to prefs to have the Ingress recognised as ready.
+	mustUpdate(t, fc, "operator-ns", "test-pg-0", func(o *corev1.Secret) {
+		var p prefs
+		var err error
+		if err = json.Unmarshal(o.Data["test"], &p); err != nil {
+			t.Errorf("failed to unmarshal preferences: %v", err)
+		}
+
+		p.AdvertiseServices = []string{"svc:my-svc"}
+		o.Data["test"], err = json.Marshal(p)
+		if err != nil {
+			t.Errorf("failed to marshal preferences: %v", err)
+		}
 	})
 
 	// Reconcile and re-fetch Ingress
@@ -775,7 +778,7 @@ func TestIngressPGReconciler_HTTPEndpointAndRedirectConflict(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{
 					Name: "test",
@@ -819,17 +822,19 @@ func TestIngressPGReconciler_HTTPEndpointAndRedirectConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Add the Tailscale Service to prefs to have the Ingress recognised as ready
-	mustCreate(t, fc, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pg-0",
-			Namespace: "operator-ns",
-			Labels:    pgSecretLabels("test-pg", kubetypes.LabelSecretTypeState),
-		},
-		Data: map[string][]byte{
-			"_current-profile": []byte("profile-foo"),
-			"profile-foo":      []byte(`{"AdvertiseServices":["svc:my-svc"],"Config":{"NodeID":"node-foo"}}`),
-		},
+	// Add the Tailscale Service to prefs to have the Ingress recognised as ready.
+	mustUpdate(t, fc, "operator-ns", "test-pg-0", func(o *corev1.Secret) {
+		var p prefs
+		var err error
+		if err = json.Unmarshal(o.Data["test"], &p); err != nil {
+			t.Errorf("failed to unmarshal preferences: %v", err)
+		}
+
+		p.AdvertiseServices = []string{"svc:my-svc"}
+		o.Data["test"], err = json.Marshal(p)
+		if err != nil {
+			t.Errorf("failed to marshal preferences: %v", err)
+		}
 	})
 
 	// Reconcile and re-fetch Ingress
@@ -864,7 +869,7 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 			},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
+			IngressClassName: new("tailscale"),
 			TLS: []networkingv1.IngressTLS{
 				{Hosts: []string{"my-svc"}},
 			},
@@ -873,20 +878,18 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 	mustCreate(t, fc, ing)
 
 	// Simulate existing Tailscale Service from another cluster
-	existingVIPSvc := &tailscale.VIPService{
+	existingVIPSvc := tailscale.VIPService{
 		Name: "svc:my-svc",
 		Annotations: map[string]string{
 			ownerAnnotation: `{"ownerrefs":[{"operatorID":"operator-2"}]}`,
 		},
 	}
-	ft.vipServices = map[tailcfg.ServiceName]*tailscale.VIPService{
-		"svc:my-svc": existingVIPSvc,
-	}
+	ft.VIPServices().CreateOrUpdate(t.Context(), existingVIPSvc)
 
 	// Verify reconciliation adds our operator reference
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 
-	tsSvc, err := ft.GetVIPService(context.Background(), "svc:my-svc")
+	tsSvc, err := ft.VIPServices().Get(context.Background(), "svc:my-svc")
 	if err != nil {
 		t.Fatalf("getting Tailscale Service: %v", err)
 	}
@@ -913,7 +916,7 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 	}
 	expectRequeue(t, ingPGR, "default", "test-ingress")
 
-	tsSvc, err = ft.GetVIPService(context.Background(), "svc:my-svc")
+	tsSvc, err = ft.VIPServices().Get(context.Background(), "svc:my-svc")
 	if err != nil {
 		t.Fatalf("getting Tailscale Service after deletion: %v", err)
 	}
@@ -1020,7 +1023,7 @@ func populateTLSSecret(t *testing.T, c client.Client, pgName, domain string) {
 
 func verifyTailscaleService(t *testing.T, ft *fakeTSClient, serviceName string, wantPorts []string) {
 	t.Helper()
-	tsSvc, err := ft.GetVIPService(context.Background(), tailcfg.ServiceName(serviceName))
+	tsSvc, err := ft.VIPServices().Get(context.Background(), serviceName)
 	if err != nil {
 		t.Fatalf("getting Tailscale Service %q: %v", serviceName, err)
 	}
@@ -1103,13 +1106,14 @@ func verifyTailscaledConfig(t *testing.T, fc client.Client, pgName string, expec
 			Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeConfig),
 		},
 		Data: map[string][]byte{
-			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): []byte(fmt.Sprintf(`{"Version":""%s}`, expected)),
+			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): fmt.Appendf(nil, `{"Version":""%s}`, expected),
 		},
 	})
 }
 
 func createPGResources(t *testing.T, fc client.Client, pgName string) {
 	t.Helper()
+
 	// Pre-create the ProxyGroup
 	pg := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1146,6 +1150,30 @@ func createPGResources(t *testing.T, fc client.Client, pgName string) {
 		},
 	}
 	mustCreate(t, fc, pgCfgSecret)
+
+	pr := prefs{}
+	pr.Config.UserProfile.LoginName = "test.ts.net"
+	pr.Config.NodeID = "test"
+
+	p, err := json.Marshal(pr)
+	if err != nil {
+		t.Fatalf("marshaling prefs: %v", err)
+	}
+
+	// Pre-create a state secret for the ProxyGroup
+	pgStateSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pgStateSecretName(pgName, 0),
+			Namespace: "operator-ns",
+			Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeState),
+		},
+		Data: map[string][]byte{
+			currentProfileKey: []byte("test"),
+			"test":            p,
+		},
+	}
+	mustCreate(t, fc, pgStateSecret)
+
 	pg.Status.Conditions = []metav1.Condition{
 		{
 			Type:               string(tsapi.ProxyGroupAvailable),
@@ -1174,29 +1202,22 @@ func setupIngressTest(t *testing.T) (*HAIngressReconciler, client.Client, *fakeT
 
 	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
 
-	ft := &fakeTSClient{}
+	ft := &fakeTSClient{
+		vipServices: make(map[string]tailscale.VIPService),
+	}
 	zl, err := zap.NewDevelopment()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	lc := &fakeLocalClient{
-		status: &ipnstate.Status{
-			CurrentTailnet: &ipnstate.TailnetStatus{
-				MagicDNSSuffix: "ts.net",
-			},
-		},
-	}
-
 	ingPGR := &HAIngressReconciler{
 		Client:           fc,
-		tsClient:         ft,
+		clients:          tsclient.NewProvider(ft),
 		defaultTags:      []string{"tag:k8s"},
 		tsNamespace:      "operator-ns",
 		tsnetServer:      fakeTsnetServer,
 		logger:           zl.Sugar(),
 		recorder:         record.NewFakeRecorder(10),
-		lc:               lc,
 		ingressClassName: tsIngressClass.Name,
 	}
 

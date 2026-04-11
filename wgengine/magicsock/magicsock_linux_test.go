@@ -184,19 +184,19 @@ func TestBpfDiscardV4(t *testing.T) {
 		accept  bool
 	}{
 		{
-			name:    "base accepted datagram",
+			name:    "base-accepted-datagram",
 			replace: map[int]byte{},
 			accept:  true,
 		},
 		{
-			name: "more fragments",
+			name: "more-fragments",
 			replace: map[int]byte{
 				6: 0x20,
 			},
 			accept: false,
 		},
 		{
-			name: "some fragment",
+			name: "some-fragment",
 			replace: map[int]byte{
 				7: 0x01,
 			},

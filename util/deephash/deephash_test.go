@@ -24,7 +24,6 @@ import (
 	"go4.org/netipx"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/deephash/testtype"
 	"tailscale.com/util/hashx"
 	"tailscale.com/version"
@@ -361,17 +360,17 @@ func TestGetTypeHasher(t *testing.T) {
 			out32: "\x01\x04\x00\x00\x00\x00\x00\x00\x00\x01\x03\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00*\v\x00\x00\x00\x00\x00\x00\x0010.1.3.4/32\v\x00\x00\x00\x00\x00\x00\x0010.0.0.0/24\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\n\x00\x00\x00\x00\x00\x00\x001.2.3.4/32\x01 \x00\x00\x00\x01\x00\x02\x00\x01\x04\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x03\x00\x00\x00\x04\x00\x00\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04!\x01\x01\x00\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\x00\x00\x00\x00foo\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\v\x00\x00\x00\x00\x00\x00\x00foooooooooo\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\f\x00\x00\x00\x00\x00\x00\x00baaaaaarrrrr\x00\x01\x00\x02\x00\x00\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\v\x00\x00\x00\x00\x00\x00\x00foooooooooo\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\f\x00\x00\x00\x00\x00\x00\x00baaaaaarrrrr\x00\x01\x00\x02\x00\x00\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\v\x00\x00\x00\x00\x00\x00\x00foooooooooo\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\f\x00\x00\x00\x00\x00\x00\x00baaaaaarrrrr\x00\x01\x00\x02\x00\x00\x00",
 		},
 		{
-			name: "netip.Addr",
+			name: "netip-Addr",
 			val:  netip.MustParseAddr("fe80::123%foo"),
 			out:  u64(16+3) + u64(0x80fe) + u64(0x2301<<48) + "foo",
 		},
 		{
-			name: "ptr-netip.Addr",
+			name: "ptr-netip-Addr",
 			val:  &someIP,
 			out:  u8(1) + u64(4) + u32(0x04030201),
 		},
 		{
-			name: "ptr-nil-netip.Addr",
+			name: "ptr-nil-netip-Addr",
 			val:  (*netip.Addr)(nil),
 			out:  "\x00",
 		},
@@ -382,7 +381,7 @@ func TestGetTypeHasher(t *testing.T) {
 		},
 		{
 			name: "time_ptr", // addressable, as opposed to "time" test above
-			val:  ptr.To(time.Unix(1234, 5678).In(time.UTC)),
+			val:  new(time.Unix(1234, 5678).In(time.UTC)),
 			out:  u8(1) + u64(1234) + u32(5678) + u32(0),
 		},
 		{
@@ -412,7 +411,7 @@ func TestGetTypeHasher(t *testing.T) {
 		},
 		{
 			name: "array_ptr_memhash",
-			val:  ptr.To([4]byte{1, 2, 3, 4}),
+			val:  new([4]byte{1, 2, 3, 4}),
 			out:  "\x01\x01\x02\x03\x04",
 		},
 		{
@@ -470,7 +469,7 @@ func TestGetTypeHasher(t *testing.T) {
 			out: "\x01\x01\x00\x00\x00\x02\x00\x00\x00\x03\x04\x00\x00\x00\x05\x00\x00\x00\x06\x00\x00\x00\a\b\x00\x00\x00",
 		},
 		{
-			name:  "tailcfg.Node",
+			name:  "tailcfg-Node",
 			val:   &tailcfg.Node{},
 			out:   "ANY", // magic value; just check it doesn't fail to hash
 			out32: "ANY",
@@ -640,7 +639,7 @@ var filterRules = []tailcfg.FilterRule{
 		SrcIPs: []string{"*", "10.1.3.4/32", "10.0.0.0/24"},
 		DstPorts: []tailcfg.NetPortRange{{
 			IP:    "1.2.3.4/32",
-			Bits:  ptr.To(32),
+			Bits:  new(32),
 			Ports: tailcfg.PortRange{First: 1, Last: 2},
 		}},
 		IPProto: []int{1, 2, 3, 4},
@@ -823,7 +822,7 @@ func TestHashThroughView(t *testing.T) {
 		SSHPolicy: &sshPolicyOut{
 			Rules: []tailcfg.SSHRuleView{
 				(&tailcfg.SSHRule{
-					RuleExpires: ptr.To(time.Unix(123, 0)),
+					RuleExpires: new(time.Unix(123, 0)),
 				}).View(),
 			},
 		},

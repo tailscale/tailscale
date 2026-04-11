@@ -341,6 +341,11 @@ main() {
 				echo "https://github.com/tailscale-dev/deck-tailscale"
 				exit 1
 				;;
+			kde-linux)
+				echo "The maintainers of KDE Linux provide documentation on multiple ways to install Tailscale. These instructions are not officially supported by Tailscale:"
+				echo "https://kde.org/linux/docs/more-software/#tailscale"
+				exit 1
+				;;
 
 			# TODO: wsl?
 			# TODO: synology? qnap?

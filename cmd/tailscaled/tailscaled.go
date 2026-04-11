@@ -744,6 +744,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 		ListenPort:    args.port,
 		NetMon:        sys.NetMon.Get(),
 		HealthTracker: sys.HealthTracker.Get(),
+		ExtraRootCAs:  sys.ExtraRootCAs,
 		Metrics:       sys.UserMetricsRegistry(),
 		Dialer:        sys.Dialer.Get(),
 		SetSubsystem:  sys.Set,

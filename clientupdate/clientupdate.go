@@ -661,7 +661,7 @@ func updateYUMRepoTrack(repoFile, dstTrack string) (rewrote bool, err error) {
 
 func (up *Updater) updateAlpineLike() (err error) {
 	if up.Version != "" {
-		return errors.New("installing a specific version on Alpine-based distros is not supported")
+		return errors.New("installing a specific version on apk-based distros is not supported")
 	}
 	if err := requireRoot(); err != nil {
 		return err
@@ -691,7 +691,7 @@ func (up *Updater) updateAlpineLike() (err error) {
 		return fmt.Errorf(`failed to parse latest version from "apk info tailscale": %w`, err)
 	}
 	if !up.confirm(ver) {
-		if err := checkOutdatedAlpineRepo(up.Logf, ver, up.Track); err != nil {
+		if err := checkOutdatedAlpineRepo(up.Logf, apkDirPaths, ver, up.Track); err != nil {
 			up.Logf("failed to check whether Alpine release is outdated: %v", err)
 		}
 		return nil
@@ -731,9 +731,12 @@ func parseAlpinePackageVersion(out []byte) (string, error) {
 	return "", errors.New("tailscale version not found in output")
 }
 
-var apkRepoVersionRE = regexp.MustCompile(`v[0-9]+\.[0-9]+`)
+var (
+	apkRepoVersionRE = regexp.MustCompile(`v[0-9]+\.[0-9]+`)
+	apkDirPaths      = []string{"/etc/apk/repositories", "/etc/apk/repositories.d/distfeeds.list"}
+)
 
-func checkOutdatedAlpineRepo(logf logger.Logf, apkVer, track string) error {
+func checkOutdatedAlpineRepo(logf logger.Logf, filePaths []string, apkVer, track string) error {
 	latest, err := LatestTailscaleVersion(track)
 	if err != nil {
 		return err
@@ -742,22 +745,34 @@ func checkOutdatedAlpineRepo(logf logger.Logf, apkVer, track string) error {
 		// Actually on latest release.
 		return nil
 	}
-	f, err := os.Open("/etc/apk/repositories")
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	// Read the first repo line. Typically, there are multiple repos that all
-	// contain the same version in the path, like:
-	//   https://dl-cdn.alpinelinux.org/alpine/v3.20/main
-	//   https://dl-cdn.alpinelinux.org/alpine/v3.20/community
-	s := bufio.NewScanner(f)
-	if !s.Scan() {
-		return s.Err()
-	}
-	alpineVer := apkRepoVersionRE.FindString(s.Text())
-	if alpineVer != "" {
-		logf("The latest Tailscale release for Linux is %q, but your apk repository only provides %q.\nYour Alpine version is %q, you may need to upgrade the system to get the latest Tailscale version: https://wiki.alpinelinux.org/wiki/Upgrading_Alpine", latest, apkVer, alpineVer)
+
+	// OpenWrt uses a different repo file in repositories.d, check for that as well.
+	for _, repoFile := range filePaths {
+		f, err := os.Open(repoFile)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			} else {
+				return err
+			}
+		}
+		defer f.Close()
+		// Read the first repo line. Typically, there are multiple repos that all
+		// contain the same version in the path, like:
+		//   https://dl-cdn.alpinelinux.org/alpine/v3.20/main
+		//   https://dl-cdn.alpinelinux.org/alpine/v3.20/community
+		s := bufio.NewScanner(f)
+		if !s.Scan() {
+			if s.Err() != nil {
+				return s.Err()
+			}
+			logf("The latest Tailscale release for Linux is %q, but your apk repository only provides %q.\nYou may need to upgrade your Alpine system to get the latest Tailscale version: https://wiki.alpinelinux.org/wiki/Upgrading_Alpine", latest, apkVer)
+		}
+		alpineVer := apkRepoVersionRE.FindString(s.Text())
+		if alpineVer != "" {
+			logf("The latest Tailscale release for Linux is %q, but your apk repository only provides %q.\nYour Alpine version is %q, you may need to upgrade the system to get the latest Tailscale version: https://wiki.alpinelinux.org/wiki/Upgrading_Alpine", latest, apkVer, alpineVer)
+		}
+		return nil
 	}
 	return nil
 }
@@ -1246,8 +1261,10 @@ type trackPackages struct {
 	SPKsVersion     string
 }
 
+var tailscaleHTTPEndpoint = "https://pkgs.tailscale.com"
+
 func latestPackages(track string) (*trackPackages, error) {
-	url := fmt.Sprintf("https://pkgs.tailscale.com/%s/?mode=json&os=%s", track, runtime.GOOS)
+	url := fmt.Sprintf("%s/%s/?mode=json&os=%s", tailscaleHTTPEndpoint, track, runtime.GOOS)
 	res, err := http.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("fetching latest tailscale version: %w", err)
@@ -1275,6 +1292,6 @@ func requireRoot() error {
 }
 
 func isExitError(err error) bool {
-	var exitErr *exec.ExitError
-	return errors.As(err, &exitErr)
+	_, ok := errors.AsType[*exec.ExitError](err)
+	return ok
 }

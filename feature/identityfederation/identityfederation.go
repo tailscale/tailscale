@@ -128,8 +128,7 @@ func exchangeJWTForToken(ctx context.Context, baseURL, clientID, idToken string)
 	}).Exchange(ctx, "", oauth2.SetAuthURLParam("client_id", clientID), oauth2.SetAuthURLParam("jwt", idToken))
 	if err != nil {
 		// Try to extract more detailed error message
-		var retrieveErr *oauth2.RetrieveError
-		if errors.As(err, &retrieveErr) {
+		if retrieveErr, ok := errors.AsType[*oauth2.RetrieveError](err); ok {
 			return "", fmt.Errorf("token exchange failed with status %d: %s", retrieveErr.Response.StatusCode, string(retrieveErr.Body))
 		}
 		return "", fmt.Errorf("unexpected token exchange request error: %w", err)

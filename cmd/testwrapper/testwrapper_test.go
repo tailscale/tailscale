@@ -220,11 +220,14 @@ func TestCached(t *testing.T) {
 
 	// Construct our trivial package.
 	pkgDir := t.TempDir()
+	goVersion := runtime.Version()
+	goVersion = strings.TrimPrefix(goVersion, "go")
+	goVersion, _, _ = strings.Cut(goVersion, "-X:") // map 1.26.1-X:nogreenteagc to 1.26.1
+
 	goMod := fmt.Sprintf(`module example.com
 
 go %s
-`, runtime.Version()[2:]) // strip leading "go"
-
+`, goVersion)
 	test := `package main
 import "testing"
 
@@ -273,8 +276,7 @@ func TestCached(t *testing.T) {}
 }
 
 func errExitCode(err error) (int, bool) {
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 		return exit.ExitCode(), true
 	}
 	return 0, false

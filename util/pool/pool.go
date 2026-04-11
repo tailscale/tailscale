@@ -12,8 +12,6 @@ package pool
 import (
 	"fmt"
 	"math/rand/v2"
-
-	"tailscale.com/types/ptr"
 )
 
 // consistencyCheck enables additional runtime checks to ensure that the pool
@@ -77,7 +75,7 @@ func (p *Pool[V]) AppendTakeAll(dst []V) []V {
 func (p *Pool[V]) Add(item V) Handle[V] {
 	// Store the index in a pointer, so that we can pass it to both the
 	// handle and store it in the itemAndIndex.
-	idx := ptr.To(len(p.s))
+	idx := new(len(p.s))
 	p.s = append(p.s, itemAndIndex[V]{
 		item:  item,
 		index: idx,

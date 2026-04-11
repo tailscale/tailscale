@@ -59,15 +59,26 @@ var mitmBlockWarnable = health.Register(&health.Warnable{
 // the baked-in LetsEncrypt roots as a fallback validation method.
 //
 // If base is non-nil, it's cloned as the base config before
-// being configured and returned.
+// being configured and returned. If base.RootCAs is non-nil, it is
+// used as an additional set of trusted roots (after system roots,
+// before baked-in LetsEncrypt roots). This is used on Android to
+// trust user-installed CA certificates that Go's crypto/x509
+// does not see.
+//
 // If ht is non-nil, it's used to report health errors.
 func Config(ht *health.Tracker, base *tls.Config) *tls.Config {
+	var extraRoots *x509.CertPool
+	if base != nil {
+		extraRoots = base.RootCAs
+	}
+
 	var conf *tls.Config
 	if base == nil {
 		conf = new(tls.Config)
 	} else {
 		conf = base.Clone()
 	}
+	conf.RootCAs = nil // we do our own verification in VerifyConnection
 
 	// Note: we do NOT set conf.ServerName here (as we accidentally did
 	// previously), as this path is also used when dialing an HTTPS proxy server
@@ -77,7 +88,7 @@ func Config(ht *health.Tracker, base *tls.Config) *tls.Config {
 
 	if buildfeatures.HasDebug {
 		// If SSLKEYLOGFILE is set, it's a file to which we write our TLS private keys
-		// in a way that WireShark can read.
+		// in a way that Wireshark can read.
 		//
 		// See https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
 		if n := os.Getenv("SSLKEYLOGFILE"); n != "" {
@@ -165,7 +176,26 @@ func Config(ht *health.Tracker, base *tls.Config) *tls.Config {
 		if debug() {
 			log.Printf("tlsdial(sys %q): %v", dialedHost, errSys)
 		}
-		if !buildfeatures.HasBakedRoots || (errSys == nil && !debug()) {
+		if errSys == nil && !debug() {
+			return nil
+		}
+
+		// If extra roots were provided (e.g. user-installed CAs on
+		// Android), try those next.
+		if extraRoots != nil {
+			opts.Roots = extraRoots
+			_, errExtra := cs.PeerCertificates[0].Verify(opts)
+			if debug() {
+				log.Printf("tlsdial(extra %q): %v", dialedHost, errExtra)
+			}
+			if errExtra == nil {
+				atomic.AddInt32(&counterFallbackOK, 1)
+				return nil
+			}
+			opts.Roots = nil // reset for baked roots check
+		}
+
+		if !buildfeatures.HasBakedRoots {
 			return errSys
 		}
 
@@ -178,7 +208,11 @@ func Config(ht *health.Tracker, base *tls.Config) *tls.Config {
 		} else if bakedErr != nil {
 			if _, loaded := tlsdialWarningPrinted.LoadOrStore(dialedHost, true); !loaded {
 				if errSys != nil {
-					log.Printf("tlsdial: error: server cert for %q failed both system roots & Let's Encrypt root validation", dialedHost)
+					if extraRoots != nil {
+						log.Printf("tlsdial: error: server cert for %q failed system roots, extra roots & Let's Encrypt root validation", dialedHost)
+					} else {
+						log.Printf("tlsdial: error: server cert for %q failed both system roots & Let's Encrypt root validation", dialedHost)
+					}
 				}
 			}
 		}
@@ -213,6 +247,10 @@ func SetConfigExpectedCert(c *tls.Config, certDNSName string) {
 		c.ServerName = certDNSName
 		return
 	}
+
+	extraRoots := c.RootCAs
+	c.RootCAs = nil
+
 	// Set InsecureSkipVerify to prevent crypto/tls from doing its
 	// own cert verification, but do the same work that it'd do
 	// (but using certDNSName) in the VerifyPeerCertificate hook.
@@ -242,7 +280,21 @@ func SetConfigExpectedCert(c *tls.Config, certDNSName string) {
 		if debug() {
 			log.Printf("tlsdial(sys %q/%q): %v", c.ServerName, certDNSName, errSys)
 		}
-		if !buildfeatures.HasBakedRoots || errSys == nil {
+		if errSys == nil {
+			return nil
+		}
+		if extraRoots != nil {
+			opts.Roots = extraRoots
+			_, errExtra := certs[0].Verify(opts)
+			if debug() {
+				log.Printf("tlsdial(extra %q/%q): %v", c.ServerName, certDNSName, errExtra)
+			}
+			if errExtra == nil {
+				return nil
+			}
+			opts.Roots = nil
+		}
+		if !buildfeatures.HasBakedRoots {
 			return errSys
 		}
 		opts.Roots = bakedroots.Get()

@@ -275,7 +275,7 @@ var skippedMapFields = []string{
 func checkFieldCoverage(t *testing.T, nm *netmap.NetworkMap) {
 	t.Helper()
 
-	mt := reflect.TypeOf(nm).Elem()
+	mt := reflect.TypeFor[netmap.NetworkMap]()
 	mv := reflect.ValueOf(nm).Elem()
 	for i := 0; i < mt.NumField(); i++ {
 		f := mt.Field(i)

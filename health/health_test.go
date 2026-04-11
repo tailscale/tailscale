@@ -82,8 +82,7 @@ func TestAppendWarnableDebugFlags(t *testing.T) {
 func TestNilMethodsDontCrash(t *testing.T) {
 	var nilt *Tracker
 	rv := reflect.ValueOf(nilt)
-	for i := 0; i < rv.NumMethod(); i++ {
-		mt := rv.Type().Method(i)
+	for mt, method := range rv.Methods() {
 		t.Logf("calling Tracker.%s ...", mt.Name)
 		var args []reflect.Value
 		for j := 0; j < mt.Type.NumIn(); j++ {
@@ -92,7 +91,7 @@ func TestNilMethodsDontCrash(t *testing.T) {
 			}
 			args = append(args, reflect.Zero(mt.Type.In(j)))
 		}
-		rv.Method(i).Call(args)
+		method.Call(args)
 	}
 }
 
@@ -389,7 +388,7 @@ func TestShowUpdateWarnable(t *testing.T) {
 		wantShow     bool
 	}{
 		{
-			desc:         "nil ClientVersion",
+			desc:         "nil-ClientVersion",
 			check:        true,
 			cv:           nil,
 			wantWarnable: nil,
@@ -403,35 +402,35 @@ func TestShowUpdateWarnable(t *testing.T) {
 			wantShow:     false,
 		},
 		{
-			desc:         "no LatestVersion",
+			desc:         "no-LatestVersion",
 			check:        true,
 			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: ""},
 			wantWarnable: nil,
 			wantShow:     false,
 		},
 		{
-			desc:         "show regular update",
+			desc:         "show-regular-update",
 			check:        true,
 			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3"},
 			wantWarnable: updateAvailableWarnable,
 			wantShow:     true,
 		},
 		{
-			desc:         "show security update",
+			desc:         "show-security-update",
 			check:        true,
 			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3", UrgentSecurityUpdate: true},
 			wantWarnable: securityUpdateAvailableWarnable,
 			wantShow:     true,
 		},
 		{
-			desc:         "update check disabled",
+			desc:         "update-check-disabled",
 			check:        false,
 			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3"},
 			wantWarnable: nil,
 			wantShow:     false,
 		},
 		{
-			desc:         "hide update with auto-updates",
+			desc:         "hide-update-with-auto-updates",
 			check:        true,
 			apply:        opt.NewBool(true),
 			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3"},
@@ -439,7 +438,7 @@ func TestShowUpdateWarnable(t *testing.T) {
 			wantShow:     false,
 		},
 		{
-			desc:         "show security update with auto-updates",
+			desc:         "show-security-update-with-auto-updates",
 			check:        true,
 			apply:        opt.NewBool(true),
 			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3", UrgentSecurityUpdate: true},
@@ -623,7 +622,7 @@ func TestControlHealth(t *testing.T) {
 		}
 	})
 
-	t.Run("Strings()", func(t *testing.T) {
+	t.Run("Strings", func(t *testing.T) {
 		wantStrs := []string{
 			"Control health message: Extra help.",
 			"Control health message: Extra help. Learn more: http://www.example.com",
@@ -997,6 +996,89 @@ func TestCurrentStateETagWarnable(t *testing.T) {
 
 		if state.ETag != newState.ETag {
 			t.Errorf("got changed ETag, want unchanged")
+		}
+	})
+}
+
+func TestIPForwardingState(t *testing.T) {
+	tests := []struct {
+		name          string
+		checkFunc     func() bool // nil means no check function
+		wantUnhealthy bool
+	}{
+		{
+			name:          "broken",
+			checkFunc:     func() bool { return true },
+			wantUnhealthy: true,
+		},
+		{
+			name:          "healthy",
+			checkFunc:     func() bool { return false },
+			wantUnhealthy: false,
+		},
+		{
+			name:          "no_check_function",
+			checkFunc:     nil,
+			wantUnhealthy: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bus := eventbus.New()
+			tr := NewTracker(bus)
+			defer bus.Close()
+
+			tr.SetIPNState("Running", true)
+			tr.SetIPForwardingCheck(tt.checkFunc)
+
+			tr.mu.Lock()
+			tr.updateBuiltinWarnablesLocked()
+			tr.mu.Unlock()
+
+			got := tr.IsUnhealthy(ipForwardingWarnable)
+			if got != tt.wantUnhealthy {
+				t.Errorf("IsUnhealthy(ipForwardingWarnable) = %v, want %v", got, tt.wantUnhealthy)
+			}
+		})
+	}
+
+	// Test state transitions
+	t.Run("transitions", func(t *testing.T) {
+		bus := eventbus.New()
+		tr := NewTracker(bus)
+		defer bus.Close()
+
+		tr.SetIPNState("Running", true)
+
+		// Start broken
+		tr.SetIPForwardingCheck(func() bool { return true })
+		tr.mu.Lock()
+		tr.updateBuiltinWarnablesLocked()
+		tr.mu.Unlock()
+
+		if !tr.IsUnhealthy(ipForwardingWarnable) {
+			t.Fatal("expected IP forwarding to be unhealthy initially")
+		}
+
+		// Transition to healthy
+		tr.SetIPForwardingCheck(func() bool { return false })
+		tr.mu.Lock()
+		tr.updateBuiltinWarnablesLocked()
+		tr.mu.Unlock()
+
+		if tr.IsUnhealthy(ipForwardingWarnable) {
+			t.Fatal("expected IP forwarding to be healthy after transition")
+		}
+
+		// Transition to nil (should stay healthy)
+		tr.SetIPForwardingCheck(nil)
+		tr.mu.Lock()
+		tr.updateBuiltinWarnablesLocked()
+		tr.mu.Unlock()
+
+		if tr.IsUnhealthy(ipForwardingWarnable) {
+			t.Fatal("expected IP forwarding to be healthy after clearing check")
 		}
 	})
 }

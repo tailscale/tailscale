@@ -9,14 +9,13 @@ import (
 	"runtime"
 
 	"golang.org/x/sys/unix"
-	"tailscale.com/types/ptr"
 )
 
 func init() {
 	unameMachine = lazyUnameMachine.Get
 }
 
-var lazyUnameMachine = &lazyAtomicValue[string]{f: ptr.To(unameMachineUnix)}
+var lazyUnameMachine = &lazyAtomicValue[string]{f: new(unameMachineUnix)}
 
 func unameMachineUnix() string {
 	switch runtime.GOOS {

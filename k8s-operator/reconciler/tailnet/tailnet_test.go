@@ -18,6 +18,7 @@ import (
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/tailnet"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/tstest"
 )
 
@@ -36,10 +37,10 @@ func TestReconciler_Reconcile(t *testing.T) {
 		Secret             *corev1.Secret
 		ExpectsError       bool
 		ExpectedConditions []metav1.Condition
-		ClientFunc         func(*tsapi.Tailnet, *corev1.Secret) tailnet.TailscaleClient
+		ClientFunc         func(*tsapi.Tailnet, *corev1.Secret) tsclient.Client
 	}{
 		{
-			Name: "ignores unknown tailnet requests",
+			Name: "ignores-unknown-tailnet-requests",
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name: "test",
@@ -47,7 +48,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
-			Name: "invalid status for missing secret",
+			Name: "invalid-status-missing-secret",
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name: "test",
@@ -73,7 +74,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
-			Name: "invalid status for empty secret",
+			Name: "invalid-status-empty-secret",
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name: "test",
@@ -105,7 +106,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
-			Name: "invalid status for missing client id",
+			Name: "invalid-status-missing-client-id",
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name: "test",
@@ -140,7 +141,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
-			Name: "invalid status for missing client secret",
+			Name: "invalid-status-missing-client-secret",
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name: "test",
@@ -175,7 +176,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
-			Name: "invalid status for bad devices scope",
+			Name: "invalid-status-bad-devices-scope",
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name: "test",
@@ -201,7 +202,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 					"client_secret": []byte("test"),
 				},
 			},
-			ClientFunc: func(_ *tsapi.Tailnet, _ *corev1.Secret) tailnet.TailscaleClient {
+			ClientFunc: func(_ *tsapi.Tailnet, _ *corev1.Secret) tsclient.Client {
 				return &MockTailnetClient{ErrorOnDevices: true}
 			},
 			ExpectedConditions: []metav1.Condition{
@@ -214,7 +215,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
-			Name: "invalid status for bad services scope",
+			Name: "invalid-status-bad-services-scope",
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name: "test",
@@ -240,7 +241,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 					"client_secret": []byte("test"),
 				},
 			},
-			ClientFunc: func(_ *tsapi.Tailnet, _ *corev1.Secret) tailnet.TailscaleClient {
+			ClientFunc: func(_ *tsapi.Tailnet, _ *corev1.Secret) tsclient.Client {
 				return &MockTailnetClient{ErrorOnServices: true}
 			},
 			ExpectedConditions: []metav1.Condition{
@@ -253,7 +254,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
-			Name: "invalid status for bad keys scope",
+			Name: "invalid-status-bad-keys-scope",
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name: "test",
@@ -279,7 +280,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 					"client_secret": []byte("test"),
 				},
 			},
-			ClientFunc: func(_ *tsapi.Tailnet, _ *corev1.Secret) tailnet.TailscaleClient {
+			ClientFunc: func(_ *tsapi.Tailnet, _ *corev1.Secret) tsclient.Client {
 				return &MockTailnetClient{ErrorOnKeys: true}
 			},
 			ExpectedConditions: []metav1.Condition{
@@ -292,7 +293,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
-			Name: "ready when valid and scopes are correct",
+			Name: "ready-valid-scopes-correct",
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name: "default",
@@ -318,7 +319,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 					"client_secret": []byte("test"),
 				},
 			},
-			ClientFunc: func(_ *tsapi.Tailnet, _ *corev1.Secret) tailnet.TailscaleClient {
+			ClientFunc: func(_ *tsapi.Tailnet, _ *corev1.Secret) tsclient.Client {
 				return &MockTailnetClient{}
 			},
 			ExpectedConditions: []metav1.Condition{
@@ -349,6 +350,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				Logger:             logger.Sugar(),
 				ClientFunc:         tc.ClientFunc,
 				TailscaleNamespace: "tailscale",
+				Registry:           tsclient.NewProvider(nil),
 			}
 
 			reconciler := tailnet.NewReconciler(opts)
