@@ -25,6 +25,19 @@ func TestOmitServiceClientPrefs(t *testing.T) {
 	}.Check(t)
 }
 
+func TestOmitWebRTC(t *testing.T) {
+	const msg = "unexpected with ts_omit_webrtc"
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_webrtc,ts_include_cli",
+		BadDeps: map[string]string{
+			"tailscale.com/feature/webrtc": msg,
+			"github.com/pion/webrtc/v4":    msg,
+		},
+	}.Check(t)
+}
+
 func TestOmitFavorites(t *testing.T) {
 	const msg = "unexpected with ts_omit_favorites"
 	deptest.DepChecker{
