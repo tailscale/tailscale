@@ -13,8 +13,8 @@ import (
 
 func TestConfigEqual(t *testing.T) {
 	testedFields := []string{
-		"LocalAddrs", "Routes", "LocalRoutes", "NewMTU",
-		"SubnetRoutes", "SNATSubnetRoutes", "StatefulFiltering",
+		"LocalAddrs", "Routes", "LocalRoutes", "ExitNodeEndpoints",
+		"NewMTU", "SubnetRoutes", "SNATSubnetRoutes", "StatefulFiltering",
 		"NetfilterMode", "NetfilterKind",
 	}
 	configType := reflect.TypeFor[Config]()
@@ -36,6 +36,16 @@ func TestConfigEqual(t *testing.T) {
 			ns = append(ns, n)
 		}
 		return ns
+	}
+	addrs := func(strs ...string) (as []netip.Addr) {
+		for _, s := range strs {
+			a, err := netip.ParseAddr(s)
+			if err != nil {
+				panic(err)
+			}
+			as = append(as, a)
+		}
+		return as
 	}
 	tests := []struct {
 		a, b *Config
@@ -92,6 +102,17 @@ func TestConfigEqual(t *testing.T) {
 		{
 			&Config{LocalRoutes: nets("100.1.27.0/24")},
 			&Config{LocalRoutes: nets("100.1.27.0/24")},
+			true,
+		},
+
+		{
+			&Config{ExitNodeEndpoints: addrs("141.98.252.130")},
+			&Config{ExitNodeEndpoints: addrs("1.2.3.4")},
+			false,
+		},
+		{
+			&Config{ExitNodeEndpoints: addrs("141.98.252.130")},
+			&Config{ExitNodeEndpoints: addrs("141.98.252.130")},
 			true,
 		},
 
