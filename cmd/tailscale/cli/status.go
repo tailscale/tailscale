@@ -23,6 +23,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netmon"
+	"tailscale.com/tailcfg"
 	"tailscale.com/util/dnsname"
 )
 
@@ -196,7 +197,19 @@ func runStatus(ctx context.Context, args []string) error {
 			if relay != "" && ps.CurAddr == "" && ps.PeerRelay == "" {
 				f("relay %q", relay)
 			} else if ps.CurAddr != "" {
-				f("direct %s", ps.CurAddr)
+				// Check if this is a WebRTC connection (address matches WebRTC magic IP)
+				if strings.HasPrefix(ps.CurAddr, tailcfg.WebRTCMagicIP) {
+					// Extract the actual remote address from CurAddr, which for a WebRTC path
+					// is of the form "${WEBRTC_MAGIC_IP}:${DUMMY_PORT} (${REAL_IP_AND_PORT})"
+					// e.g. "127.3.3.41:12345 (134.209.53.229:37792)".
+					realRemoteAddr := "<UNKNOWN>"
+					if idx := strings.Index(ps.CurAddr, " ("); idx > 0 {
+						realRemoteAddr = ps.CurAddr[idx+2 : len(ps.CurAddr)-1]
+					}
+					f("webrtc %s", realRemoteAddr)
+				} else {
+					f("direct %s", ps.CurAddr)
+				}
 			} else if ps.PeerRelay != "" {
 				f("peer-relay %s", ps.PeerRelay)
 			}
