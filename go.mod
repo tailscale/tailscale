@@ -57,6 +57,7 @@ require (
 	github.com/google/nftables v0.2.1-0.20240414091927-5e242ec57806
 	github.com/google/uuid v1.6.0
 	github.com/goreleaser/nfpm/v2 v2.33.1
+	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/hashicorp/go-hclog v1.6.2
 	github.com/hashicorp/raft v1.7.2
 	github.com/hashicorp/raft-boltdb/v2 v2.3.1
@@ -79,6 +80,7 @@ require (
 	github.com/miekg/dns v1.1.58
 	github.com/mitchellh/go-ps v1.0.0
 	github.com/peterbourgon/ff/v3 v3.4.0
+	github.com/pion/webrtc/v4 v4.2.11
 	github.com/pires/go-proxyproto v0.8.1
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/sftp v1.13.6
@@ -120,7 +122,7 @@ require (
 	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.43.0
 	golang.org/x/term v0.42.0
-	golang.org/x/time v0.12.0
+	golang.org/x/time v0.15.0
 	golang.org/x/tools v0.44.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
@@ -198,7 +200,6 @@ require (
 	github.com/google/renameio/v2 v2.0.0 // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
-	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/gosuri/uitable v0.0.4 // indirect
 	github.com/gregjones/httpcache v0.0.0-20190611155906-901d90724c79 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
@@ -232,6 +233,21 @@ require (
 	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
+	github.com/pion/datachannel v1.6.0 // indirect
+	github.com/pion/dtls/v3 v3.1.2 // indirect
+	github.com/pion/ice/v4 v4.2.5 // indirect
+	github.com/pion/interceptor v0.1.44 // indirect
+	github.com/pion/logging v0.2.4 // indirect
+	github.com/pion/mdns/v2 v2.1.0 // indirect
+	github.com/pion/randutil v0.1.0 // indirect
+	github.com/pion/rtcp v1.2.16 // indirect
+	github.com/pion/rtp v1.10.1 // indirect
+	github.com/pion/sctp v1.9.4 // indirect
+	github.com/pion/sdp/v3 v3.0.18 // indirect
+	github.com/pion/srtp/v3 v3.0.10 // indirect
+	github.com/pion/stun/v3 v3.1.2 // indirect
+	github.com/pion/transport/v4 v4.0.1 // indirect
+	github.com/pion/turn/v5 v5.0.3 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/puzpuzpuz/xsync v1.5.2 // indirect
 	github.com/rtr7/dhcp4 v0.0.0-20220302171438-18c84d089b46 // indirect
@@ -241,6 +257,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/stacklok/frizbee v0.1.7 // indirect
 	github.com/vishvananda/netlink v1.3.1-0.20240922070040-084abd93d350 // indirect
+	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/xen0n/gosmopolitan v1.2.2 // indirect
 	github.com/xlab/treeprint v1.2.0 // indirect
 	github.com/ykadowak/zerologlint v0.1.5 // indirect

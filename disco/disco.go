@@ -20,6 +20,7 @@
 package disco
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -51,6 +52,14 @@ const (
 	TypeCallMeMaybeVia                   = MessageType(0x07)
 	TypeAllocateUDPRelayEndpointRequest  = MessageType(0x08)
 	TypeAllocateUDPRelayEndpointResponse = MessageType(0x09)
+	// TypeWebRTCOffer, TypeWebRTCAnswer, and TypeWebRTCICECandidate carry
+	// WebRTC signaling payloads between Tailscale peers via DERP, eliminating
+	// the need for an external signaling server. Each message's payload is a
+	// JSON-encoded WebRTC type (*webrtc.SessionDescription or
+	// *webrtc.ICECandidateInit).
+	TypeWebRTCOffer        = MessageType(0x0A)
+	TypeWebRTCAnswer       = MessageType(0x0B)
+	TypeWebRTCICECandidate = MessageType(0x0C)
 )
 
 const v0 = byte(0)
@@ -103,6 +112,12 @@ func Parse(p []byte) (Message, error) {
 		return parseAllocateUDPRelayEndpointRequest(ver, p)
 	case TypeAllocateUDPRelayEndpointResponse:
 		return parseAllocateUDPRelayEndpointResponse(ver, p)
+	case TypeWebRTCOffer:
+		return parseWebRTCOffer(ver, p)
+	case TypeWebRTCAnswer:
+		return parseWebRTCAnswer(ver, p)
+	case TypeWebRTCICECandidate:
+		return parseWebRTCICECandidate(ver, p)
 	default:
 		return nil, fmt.Errorf("unknown message type 0x%02x", byte(t))
 	}
@@ -278,6 +293,48 @@ func parsePong(ver uint8, p []byte) (m *Pong, err error) {
 	return m, nil
 }
 
+// WebRTCOffer is sent only over DERP to deliver a WebRTC SDP offer to a peer.
+// Payload is a JSON-encoded *webrtc.SessionDescription.
+type WebRTCOffer struct{ Payload []byte }
+
+func (m *WebRTCOffer) AppendMarshal(b []byte) []byte {
+	ret, p := appendMsgHeader(b, TypeWebRTCOffer, v0, len(m.Payload))
+	copy(p, m.Payload)
+	return ret
+}
+
+func parseWebRTCOffer(_ uint8, p []byte) (*WebRTCOffer, error) {
+	return &WebRTCOffer{Payload: bytes.Clone(p)}, nil
+}
+
+// WebRTCAnswer is sent only over DERP to deliver a WebRTC SDP answer to a peer.
+// Payload is a JSON-encoded *webrtc.SessionDescription.
+type WebRTCAnswer struct{ Payload []byte }
+
+func (m *WebRTCAnswer) AppendMarshal(b []byte) []byte {
+	ret, p := appendMsgHeader(b, TypeWebRTCAnswer, v0, len(m.Payload))
+	copy(p, m.Payload)
+	return ret
+}
+
+func parseWebRTCAnswer(_ uint8, p []byte) (*WebRTCAnswer, error) {
+	return &WebRTCAnswer{Payload: bytes.Clone(p)}, nil
+}
+
+// WebRTCICECandidate is sent only over DERP to deliver a WebRTC ICE candidate
+// to a peer. Payload is a JSON-encoded *webrtc.ICECandidateInit.
+type WebRTCICECandidate struct{ Payload []byte }
+
+func (m *WebRTCICECandidate) AppendMarshal(b []byte) []byte {
+	ret, p := appendMsgHeader(b, TypeWebRTCICECandidate, v0, len(m.Payload))
+	copy(p, m.Payload)
+	return ret
+}
+
+func parseWebRTCICECandidate(_ uint8, p []byte) (*WebRTCICECandidate, error) {
+	return &WebRTCICECandidate{Payload: bytes.Clone(p)}, nil
+}
+
 // MessageSummary returns a short summary of m for logging purposes.
 func MessageSummary(m Message) string {
 	switch m := m.(type) {
@@ -299,6 +356,12 @@ func MessageSummary(m Message) string {
 		return "allocate-udp-relay-endpoint-request"
 	case *AllocateUDPRelayEndpointResponse:
 		return "allocate-udp-relay-endpoint-response"
+	case *WebRTCOffer:
+		return "webrtc-offer"
+	case *WebRTCAnswer:
+		return "webrtc-answer"
+	case *WebRTCICECandidate:
+		return "webrtc-ice-candidate"
 	default:
 		return fmt.Sprintf("%#v", m)
 	}

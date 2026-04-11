@@ -3301,6 +3301,14 @@ const DerpMagicIP = "127.3.3.40"
 
 var DerpMagicIPAddr = netip.MustParseAddr(DerpMagicIP)
 
+// WebRTCMagicIP is a fake WireGuard endpoint IP address that means
+// to use WebRTC data channel for packet transmission.
+//
+// Mnemonic: 127.3.3.41 is one above DerpMagicIP for WebRTC.
+const WebRTCMagicIP = "127.3.3.41"
+
+var WebRTCMagicIPAddr = netip.MustParseAddr(WebRTCMagicIP)
+
 // EarlyNoise is the early payload that's sent over Noise but before the HTTP/2
 // handshake when connecting to the coordination server.
 //
