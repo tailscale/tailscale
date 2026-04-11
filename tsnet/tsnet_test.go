@@ -3556,6 +3556,8 @@ func TestDeps(t *testing.T) {
 			"tailscale.com/feature/clientupdate":            "tsnet should not depend on feature/clientupdate",
 			"tailscale.com/feature/remoteconfig":            "tsnet should not depend on feature/remoteconfig",
 			"tailscale.com/feature/syspolicy":               "tsnet should not depend on syspolicy",
+			"tailscale.com/feature/webrtc":                  "tsnet callers wanting the experimental WebRTC path should import tailscale.com/feature/webrtc themselves",
+			"github.com/pion/webrtc/v4":                     "tsnet should not pull in the pion/WebRTC dependency tree; import tailscale.com/feature/webrtc explicitly if desired",
 			"tailscale.com/ipn/store/awsstore":              "tsnet callers wanting AWS state storage should import awsstore themselves",
 			"tailscale.com/ipn/store/kubestore":             "tsnet callers wanting Kubernetes state storage should import kubestore themselves",
 			"tailscale.com/wif":                             "tsnet callers wanting workload identity federation should import tailscale.com/feature/identityfederation themselves",
