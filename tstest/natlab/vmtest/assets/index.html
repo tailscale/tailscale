@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>VMTest: {{.TestName}}</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4"
+            integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
+            crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/htmx-ext-ws@2.0.2"
+            integrity="sha384-932iIqjARv+Gy0+r6RTGrfCkCKS5MsF539Iqf6Vt8L4YmbnnWI2DSFoMD90bvXd0"
+            crossorigin="anonymous"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body hx-ext="ws" ws-connect="ws">
+
+<h1>VMTest: {{.TestName}} <span class="test-status test-{{.TestStatus.State}}" id="test-status">{{.TestStatus.State}} ({{formatDuration .TestStatus.Elapsed}})</span></h1>
+
+<div class="steps">
+    <h2>Progress</h2>
+    {{range .Steps}}
+    <div class="step step-{{.Status}}" id="step-{{.Index}}">
+        <span class="step-icon">{{.Status.Icon}}</span>
+        <span class="step-name">{{.Name}}</span>
+        <span class="step-time">{{if ne .Status.String "pending"}}{{formatDuration .Elapsed}}{{end}}</span>
+    </div>
+    {{end}}
+</div>
+
+<div class="vm-grid">
+    {{range $node := .Nodes}}
+    <div class="vm-card" id="vm-{{$node.Name}}">
+        <div class="vm-header">
+            <span class="vm-name">{{$node.Name}}</span>
+            <span class="vm-os">{{$node.OS}}</span>
+        </div>
+        <div class="vm-status">
+            {{range $i, $nic := $node.NICs}}
+            <div class="vm-status-line">
+                <span class="vm-status-label">DHCP{{if gt (len $node.NICs) 1}} ({{$nic.NetName}}){{end}}:</span>
+                <span class="vm-status-value" id="dhcp-{{$node.Name}}-{{$i}}">{{$nic.DHCP}}</span>
+            </div>
+            {{end}}
+            {{if $node.JoinsTailnet}}
+            <div class="vm-status-line">
+                <span class="vm-status-label">Tailscale:</span>
+                <span class="vm-status-value" id="ts-{{$node.Name}}">{{$node.Tailscale}}</span>
+            </div>
+            {{end}}
+        </div>
+        <div class="console" id="console-{{$node.Name}}">{{range $node.Console}}{{ansi .}}
+{{end}}</div>
+    </div>
+    {{end}}
+</div>
+
+<div class="event-log">
+    <h2>Events</h2>
+    <div class="events" id="events"></div>
+</div>
+
+<script>
+// Tick the elapsed time on the test status badge while the test is running.
+(function() {
+    var startTime = {{.TestStatus.StartUnixMilli}};
+    var el = document.getElementById("test-status");
+    var timer = setInterval(function() {
+        if (!el || !el.classList.contains("test-Running")) {
+            clearInterval(timer);
+            return;
+        }
+        var elapsed = Date.now() - startTime;
+        var secs = elapsed / 1000;
+        var text;
+        if (secs < 1) {
+            text = Math.round(elapsed) + "ms";
+        } else {
+            text = secs.toFixed(1) + "s";
+        }
+        el.textContent = "Running (" + text + ")";
+    }, 100);
+})();
+
+// Auto-scroll console divs to bottom unless user has scrolled up.
+// Re-enable auto-scroll when user scrolls back to the bottom.
+(function() {
+    var consoles = document.querySelectorAll(".console");
+    consoles.forEach(function(el) {
+        el._autoScroll = true;
+        el.addEventListener("scroll", function() {
+            // At bottom if scrollTop + clientHeight >= scrollHeight - small threshold
+            var atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 5;
+            el._autoScroll = atBottom;
+        });
+    });
+    // Use MutationObserver to detect when content is added to console divs.
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(m) {
+            var el = m.target;
+            if (el.classList && el.classList.contains("console") && el._autoScroll) {
+                el.scrollTop = el.scrollHeight;
+            }
+        });
+    });
+    consoles.forEach(function(el) {
+        observer.observe(el, { childList: true, characterData: true, subtree: true });
+    });
+})();
+</script>
+
+</body>
+</html>

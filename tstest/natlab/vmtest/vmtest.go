@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/gopacket/layers"
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
@@ -67,6 +68,15 @@ type Env struct {
 	gokrazyKernel string // path to gokrazy kernel
 
 	qemuProcs []*exec.Cmd // launched QEMU processes
+
+	// Web UI support.
+	ctx        context.Context // cancelled when test ends
+	eventBus   *EventBus
+	testStatus *TestStatus
+	steps      []*Step
+
+	nodeStatusMu sync.Mutex
+	nodeStatus   map[string]*NodeStatus // keyed by node name
 }
 
 // logVerbosef logs a message only when --verbose-vm-debug is set.
@@ -77,6 +87,145 @@ func (e *Env) logVerbosef(format string, args ...any) {
 	}
 }
 
+// AddStep declares an expected stage of the test. The web UI shows all steps
+// from the start, tracking their progress. Call before or during the test.
+// Returns a *Step whose Begin/End methods drive the progress display.
+func (e *Env) AddStep(name string) *Step {
+	s := &Step{
+		name:  name,
+		index: len(e.steps),
+		env:   e,
+	}
+	e.steps = append(e.steps, s)
+	return s
+}
+
+// Steps returns all declared steps in order.
+func (e *Env) Steps() []*Step {
+	return e.steps
+}
+
+// publishStepChange publishes a step status change event.
+func (e *Env) publishStepChange(s *Step) {
+	e.eventBus.Publish(VMEvent{
+		Type:    EventStepChanged,
+		Message: fmt.Sprintf("%s %s", s.Status().Icon(), s.name),
+		Step:    s,
+	})
+}
+
+// initNodeStatus initializes the NodeStatus for all nodes. Called after
+// AddNode but before Start so the web UI can render them.
+func (e *Env) initNodeStatus() {
+	e.nodeStatusMu.Lock()
+	defer e.nodeStatusMu.Unlock()
+	for _, n := range e.nodes {
+		nics := make([]NICStatus, len(n.nets))
+		for i := range n.nets {
+			nics[i] = NICStatus{
+				NetName: e.nicLabel(n, i),
+				DHCP:    "waiting",
+			}
+		}
+		e.nodeStatus[n.name] = &NodeStatus{
+			Name:         n.name,
+			OS:           n.os.Name,
+			NICs:         nics,
+			JoinsTailnet: n.joinTailnet,
+			Tailscale:    "--",
+		}
+	}
+}
+
+// nicLabel returns a short human-readable label for a node's i-th NIC.
+// After Start(), we can use the assigned LAN IP. Before that, we use "NIC N".
+func (e *Env) nicLabel(n *Node, i int) string {
+	if n.vnetNode != nil {
+		ip := n.vnetNode.LanIP(n.nets[i])
+		if ip.IsValid() {
+			return ip.String()
+		}
+	}
+	return fmt.Sprintf("NIC %d", i)
+}
+
+// getNodeStatus returns the current status for a node.
+func (e *Env) getNodeStatus(name string) NodeStatus {
+	e.nodeStatusMu.Lock()
+	defer e.nodeStatusMu.Unlock()
+	ns := e.nodeStatus[name]
+	if ns == nil {
+		return NodeStatus{Name: name, Tailscale: "--"}
+	}
+	return *ns
+}
+
+// setNodeDHCP updates the DHCP status for a specific NIC on a node.
+func (e *Env) setNodeDHCP(name string, nicIdx int, status string) {
+	e.nodeStatusMu.Lock()
+	ns := e.nodeStatus[name]
+	if ns != nil && nicIdx < len(ns.NICs) {
+		ns.NICs[nicIdx].DHCP = status
+	}
+	e.nodeStatusMu.Unlock()
+}
+
+// setNodeTailscale updates the Tailscale status for a node and publishes
+// an event so the web UI updates via WebSocket.
+func (e *Env) setNodeTailscale(name, status string) {
+	e.nodeStatusMu.Lock()
+	ns := e.nodeStatus[name]
+	if ns != nil {
+		ns.Tailscale = status
+	}
+	e.nodeStatusMu.Unlock()
+	e.eventBus.Publish(VMEvent{
+		NodeName: name,
+		Type:     EventTailscale,
+		Message:  "Tailscale: " + status,
+		Detail:   status,
+	})
+}
+
+// appendConsoleLine adds a line to a node's console buffer.
+func (e *Env) appendConsoleLine(name, line string) {
+	e.nodeStatusMu.Lock()
+	ns := e.nodeStatus[name]
+	if ns != nil {
+		ns.Console = append(ns.Console, line)
+		if len(ns.Console) > maxConsoleLines {
+			ns.Console = ns.Console[len(ns.Console)-maxConsoleLines:]
+		}
+	}
+	e.nodeStatusMu.Unlock()
+}
+
+// nicIndexForMAC returns the NIC index (0-based) for a given MAC on a node.
+// Returns -1 if not found.
+func (e *Env) nicIndexForMAC(name string, mac vnet.MAC) int {
+	for _, n := range e.nodes {
+		if n.name != name {
+			continue
+		}
+		for i := range n.nets {
+			if n.vnetNode.NICMac(i) == mac {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// nodeNameByNum returns the node name for a given vnet node number.
+func (e *Env) nodeNameByNum(num int) string {
+	for _, n := range e.nodes {
+		if n.num == num {
+			return n.name
+		}
+	}
+	return fmt.Sprintf("node%d", num)
+}
+
 // New creates a new test environment. It skips the test if --run-vm-tests is not set.
 func New(t testing.TB) *Env {
 	if !*runVMTests {
@@ -84,11 +233,23 @@ func New(t testing.TB) *Env {
 	}
 
 	tempDir := t.TempDir()
-	return &Env{
-		t:       t,
-		tempDir: tempDir,
-		binDir:  filepath.Join(tempDir, "bin"),
+	e := &Env{
+		t:          t,
+		tempDir:    tempDir,
+		binDir:     filepath.Join(tempDir, "bin"),
+		eventBus:   newEventBus(),
+		testStatus: newTestStatus(),
+		nodeStatus: make(map[string]*NodeStatus),
 	}
+	t.Cleanup(func() {
+		e.testStatus.finish(t.Failed())
+		e.eventBus.Publish(VMEvent{
+			Type:    EventTestStatus,
+			Message: e.testStatus.State(),
+			Detail:  formatDuration(e.testStatus.Elapsed()),
+		})
+	})
+	return e
 }
 
 // AddNetwork creates a new virtual network. Arguments follow the same pattern as
@@ -197,6 +358,11 @@ func (e *Env) Start() {
 	t := e.t
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	t.Cleanup(cancel)
+	e.ctx = ctx
+
+	// Initialize node status and start web UI as early as possible.
+	e.initNodeStatus()
+	e.maybeStartWebServer()
 
 	if err := os.MkdirAll(e.binDir, 0755); err != nil {
 		t.Fatal(err)
@@ -223,27 +389,94 @@ func (e *Env) Start() {
 		}
 	}
 
-	// Compile binaries and download/build images in parallel.
-	// Any failure cancels the others via the errgroup context.
-	eg, egCtx := errgroup.WithContext(ctx)
+	// Declare framework steps for the web UI.
+	// User-declared steps (from AddStep before Start) get moved to the end
+	// so framework steps (compile, image, QEMU, etc.) come first.
+	userSteps := e.steps
+	e.steps = nil
+
+	compileSteps := map[platform]*Step{}
 	for _, p := range needPlatform.Slice() {
-		eg.Go(func() error {
-			return e.compileBinariesForOS(egCtx, p.goos, p.goarch)
-		})
+		compileSteps[p] = e.AddStep(fmt.Sprintf("Compile %s_%s binaries", p.goos, p.goarch))
 	}
-	didOS := set.Set[string]{} // dedup by image name
+	imageSteps := map[string]*Step{} // keyed by OS name
+	didOS := set.Set[string]{}       // dedup by image name
 	for _, n := range e.nodes {
 		if didOS.Contains(n.os.Name) {
 			continue
 		}
 		didOS.Add(n.os.Name)
 		if n.os.IsGokrazy {
+			imageSteps["gokrazy"] = e.AddStep("Build gokrazy image")
+		} else {
+			imageSteps[n.os.Name] = e.AddStep(fmt.Sprintf("Prepare %s image", n.os.Name))
+		}
+	}
+	vnetStep := e.AddStep("Create virtual network")
+
+	qemuSteps := map[string]*Step{}
+	agentSteps := map[string]*Step{}
+	tsUpSteps := map[string]*Step{}
+	for _, n := range e.nodes {
+		qemuSteps[n.name] = e.AddStep(fmt.Sprintf("Launch QEMU: %s", n.name))
+		agentSteps[n.name] = e.AddStep(fmt.Sprintf("Wait for agent: %s", n.name))
+		if n.joinTailnet {
+			tsUpSteps[n.name] = e.AddStep(fmt.Sprintf("Tailscale up: %s", n.name))
+		}
+	}
+
+	// Re-append user-declared steps after all framework steps.
+	for _, s := range userSteps {
+		s.index = len(e.steps)
+		e.steps = append(e.steps, s)
+	}
+
+	// Compile binaries and download/build images in parallel.
+	// Any failure cancels the others via the errgroup context.
+	eg, egCtx := errgroup.WithContext(ctx)
+	for _, p := range needPlatform.Slice() {
+		step := compileSteps[p]
+		eg.Go(func() error {
+			step.Begin()
+			err := e.compileBinariesForOS(egCtx, p.goos, p.goarch)
+			if err != nil {
+				step.End(err)
+				return err
+			}
+			step.End(nil)
+			return nil
+		})
+	}
+	didOS = set.Set[string]{} // reset for second pass
+	for _, n := range e.nodes {
+		if didOS.Contains(n.os.Name) {
+			continue
+		}
+		didOS.Add(n.os.Name)
+		if n.os.IsGokrazy {
+			step := imageSteps["gokrazy"]
 			eg.Go(func() error {
-				return e.ensureGokrazy(egCtx)
+				step.Begin()
+				err := e.ensureGokrazy(egCtx)
+				if err != nil {
+					step.End(err)
+					return err
+				}
+				step.End(nil)
+				return nil
 			})
 		} else {
+			step := imageSteps[n.os.Name]
+			osImg := n.os
 			eg.Go(func() error {
-				return ensureImage(egCtx, n.os)
+				step.Begin()
+				err := ensureImage(egCtx, osImg)
+				if err != nil {
+					step.End(err)
+					return err
+				}
+				step.End(nil)
+				return nil
 			})
 		}
 	}
@@ -252,12 +485,57 @@ func (e *Env) Start() {
 	}
 
 	// Create the vnet server.
+	vnetStep.Begin()
 	var err error
 	e.server, err = vnet.New(&e.cfg)
 	if err != nil {
 		t.Fatalf("vnet.New: %v", err)
 	}
 	t.Cleanup(func() { e.server.Close() })
+
+	// Register DHCP event callback for the web UI.
+	e.server.SetDHCPCallback(func(mac vnet.MAC, nodeNum int, msgType layers.DHCPMsgType, ip netip.Addr) {
+		name := e.nodeNameByNum(nodeNum)
+		nicIdx := e.nicIndexForMAC(name, mac)
+		ipStr := ip.String()
+		switch msgType {
+		case layers.DHCPMsgTypeDiscover:
+			e.setNodeDHCP(name, nicIdx, "Discover sent")
+			e.eventBus.Publish(VMEvent{
+				NodeName: name,
+				Type:     EventDHCPDiscover,
+				Message:  "DHCP Discover sent",
+				NIC:      nicIdx,
+			})
+		case layers.DHCPMsgTypeOffer:
+			e.setNodeDHCP(name, nicIdx, "Offered "+ipStr)
+			e.eventBus.Publish(VMEvent{
+				NodeName: name,
+				Type:     EventDHCPOffer,
+				Message:  "DHCP Offer received",
+				Detail:   ipStr,
+				NIC:      nicIdx,
+			})
+		case layers.DHCPMsgTypeRequest:
+			e.setNodeDHCP(name, nicIdx, "Requesting "+ipStr)
+			e.eventBus.Publish(VMEvent{
+				NodeName: name,
+				Type:     EventDHCPRequest,
+				Message:  "DHCP Request sent",
+				Detail:   ipStr,
+				NIC:      nicIdx,
+			})
+		case layers.DHCPMsgTypeAck:
+			e.setNodeDHCP(name, nicIdx, "Got "+ipStr)
+			e.eventBus.Publish(VMEvent{
+				NodeName: name,
+				Type:     EventDHCPAck,
+				Message:  "DHCP Ack: got " + ipStr,
+				Detail:   ipStr,
+				NIC:      nicIdx,
+			})
+		}
+	})
 
 	// Register compiled binaries with the file server VIP.
 	// Binaries are registered at <goos>_<goarch>/<name> (e.g. "linux_amd64/tta").
@@ -271,6 +549,7 @@ func (e *Env) Start() {
 			e.server.RegisterFile(dir+"/"+name, data)
 		}
 	}
+	vnetStep.End(nil)
 
 	// Cloud-init config is delivered via local seed ISOs (created in startCloudQEMU),
 	// not via the cloud-init HTTP VIP, because network-config must be available
@@ -296,9 +575,12 @@ func (e *Env) Start() {
 
 	// Launch QEMU processes.
 	for _, n := range e.nodes {
+		step := qemuSteps[n.name]
+		step.Begin()
 		if err := e.startQEMU(n); err != nil {
 			t.Fatalf("startQEMU(%s): %v", n.name, err)
 		}
+		step.End(nil)
 	}
 
 	// Set up agent clients and wait for all agents to connect.
@@ -311,12 +593,15 @@ func (e *Env) Start() {
 	var agentEg errgroup.Group
 	for _, n := range e.nodes {
 		agentEg.Go(func() error {
+			aStep := agentSteps[n.name]
+			aStep.Begin()
 			t.Logf("[%s] waiting for agent...", n.name)
 			st, err := n.agent.Status(ctx)
 			if err != nil {
 				return fmt.Errorf("[%s] agent status: %w", n.name, err)
 			}
 			t.Logf("[%s] agent connected, backend state: %s", n.name, st.BackendState)
+			aStep.End(nil)
 
 			if n.vnetNode.HostFirewall() {
 				if err := n.agent.EnableHostFirewall(ctx); err != nil {
@@ -325,6 +610,8 @@ func (e *Env) Start() {
 			}
 
 			if n.joinTailnet {
+				tsStep := tsUpSteps[n.name]
+				tsStep.Begin()
 				if err := e.tailscaleUp(ctx, n); err != nil {
 					return fmt.Errorf("[%s] tailscale up: %w", n.name, err)
 				}
@@ -335,7 +622,10 @@ func (e *Env) Start() {
 				if st.BackendState != "Running" {
 					return fmt.Errorf("[%s] state = %q, want Running", n.name, st.BackendState)
 				}
+				ips := fmt.Sprintf("%v", st.Self.TailscaleIPs)
+				e.setNodeTailscale(n.name, "Running "+ips)
 				t.Logf("[%s] up with %v", n.name, st.Self.TailscaleIPs)
+				tsStep.End(nil)
 			}
 
 			return nil

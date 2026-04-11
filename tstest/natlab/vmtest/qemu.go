@@ -5,6 +5,7 @@ package vmtest
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"tailscale.com/tstest/natlab/vnet"
@@ -163,6 +165,11 @@ func (e *Env) launchQEMU(name, logPath string, args []string) error {
 	}
 	e.t.Logf("launched QEMU for %s (pid %d), log: %s", name, cmd.Process.Pid, logPath)
 	e.qemuProcs = append(e.qemuProcs, cmd)
+
+	// Start tailing the VM console log for the web UI.
+	if e.ctx != nil {
+		go e.tailLogFile(e.ctx, name, logPath)
+	}
 	e.t.Cleanup(func() {
 		cmd.Process.Kill()
 		cmd.Wait()
@@ -236,4 +243,70 @@ func qmpQueryHostFwd(sockPath string) (int, error) {
 		return 0, fmt.Errorf("no hostfwd port found in: %s", hmpResp.Return)
 	}
 	return strconv.Atoi(m[1])
+}
+
+// tailLogFile tails a VM's serial console log file and publishes each line
+// as an EventConsoleOutput to the event bus for the web UI.
+func (e *Env) tailLogFile(ctx context.Context, name, logPath string) {
+	// Wait for the file to appear (QEMU may not have created it yet).
+	var f *os.File
+	for {
+		var err error
+		f, err = os.Open(logPath)
+		if err == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	defer f.Close()
+
+	// Read the file in a loop, tracking our position manually.
+	// We can't use bufio.Scanner because it caches EOF and won't
+	// pick up new data appended by QEMU after the first EOF.
+	var buf []byte
+	var partial string // incomplete line (no trailing newline yet)
+	readBuf := make([]byte, 4096)
+	for {
+		n, err := f.Read(readBuf)
+		if n > 0 {
+			buf = append(buf, readBuf[:n]...)
+			// Split into complete lines.
+			for {
+				idx := bytes.IndexByte(buf, '\n')
+				if idx < 0 {
+					break
+				}
+				line := partial + string(buf[:idx])
+				partial = ""
+				buf = buf[idx+1:]
+				// Strip trailing \r from serial consoles.
+				line = strings.TrimRight(line, "\r")
+				if line == "" {
+					continue
+				}
+				e.appendConsoleLine(name, line)
+				e.eventBus.Publish(VMEvent{
+					NodeName: name,
+					Type:     EventConsoleOutput,
+					Message:  line,
+				})
+			}
+			if len(buf) > 0 {
+				partial = string(buf)
+				buf = buf[:0]
+			}
+		}
+		if err != nil || n == 0 {
+			// EOF or error — wait for more data.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}
 }

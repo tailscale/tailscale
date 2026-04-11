@@ -751,6 +751,10 @@ type Server struct {
 
 	cloudInitData map[int]*CloudInitData // node num → cloud-init config
 	fileContents  map[string][]byte      // filename → file bytes
+
+	// onDHCPEvent, if non-nil, is called when DHCP messages are processed.
+	// Parameters are: source MAC, node number, DHCP message type, assigned IP.
+	onDHCPEvent func(nodeMAC MAC, nodeNum int, msgType layers.DHCPMsgType, assignedIP netip.Addr)
 }
 
 func (s *Server) logf(format string, args ...any) {
@@ -763,6 +767,13 @@ func (s *Server) logf(format string, args ...any) {
 
 func (s *Server) SetLoggerForTest(logf func(format string, args ...any)) {
 	s.optLogf = logf
+}
+
+// SetDHCPCallback registers a function to be called when DHCP messages are
+// processed. The callback receives the source MAC, node number, DHCP message
+// type (Discover, Offer, Request, Ack), and the assigned IP address.
+func (s *Server) SetDHCPCallback(fn func(MAC, int, layers.DHCPMsgType, netip.Addr)) {
+	s.onDHCPEvent = fn
 }
 
 var derpMap = &tailcfg.DERPMap{
@@ -1990,6 +2001,10 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 				Length: 4,
 			},
 		)
+		if s.onDHCPEvent != nil {
+			s.onDHCPEvent(srcMAC, node.num, layers.DHCPMsgTypeDiscover, clientIP)
+			s.onDHCPEvent(srcMAC, node.num, layers.DHCPMsgTypeOffer, clientIP)
+		}
 	case layers.DHCPMsgTypeRequest:
 		response.Options = append(response.Options,
 			layers.DHCPOption{
@@ -2018,6 +2033,10 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 				Length: 4,
 			},
 		)
+		if s.onDHCPEvent != nil {
+			s.onDHCPEvent(srcMAC, node.num, layers.DHCPMsgTypeRequest, clientIP)
+			s.onDHCPEvent(srcMAC, node.num, layers.DHCPMsgTypeAck, clientIP)
+		}
 	}
 
 	eth := &layers.Ethernet{
