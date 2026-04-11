@@ -320,4 +320,8 @@ var Features = map[FeatureTag]FeatureMeta{
 		Sym: "WebClient", Desc: "Web client support",
 		Deps: []FeatureTag{"serve"},
 	},
+	"webrtc": {
+		Sym:  "WebRTC",
+		Desc: "WebRTC peer connectivity path",
+	},
 }
