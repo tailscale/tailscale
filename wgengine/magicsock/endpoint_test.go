@@ -453,3 +453,119 @@ func Test_endpoint_udpRelayEndpointReady(t *testing.T) {
 		})
 	}
 }
+
+func Test_endpoint_currentPathTypeLocked(t *testing.T) {
+	now := mono.Now()
+	active := now.Add(-time.Second)
+	inactive := now.Add(-sessionActiveTimeout - time.Second)
+	trusted := now.Add(time.Minute)
+	expired := now.Add(-time.Minute)
+
+	relayVNI := packet.VirtualNetworkID{}
+	relayVNI.Set(7)
+
+	tests := []struct {
+		name    string
+		ep      endpoint
+		at      mono.Time
+		want    Path
+		setRecv bool
+	}{
+		{
+			name: "inactive no activity",
+			ep:   endpoint{},
+			at:   now,
+			want: PathNone,
+		},
+		{
+			name: "inactive stale activity",
+			ep: endpoint{
+				lastSendExt:        inactive,
+				bestAddr:           addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.1:123")}},
+				trustBestAddrUntil: trusted,
+			},
+			at:   now,
+			want: PathNone,
+		},
+		{
+			name: "direct ipv4 by send",
+			ep: endpoint{
+				lastSendExt:        active,
+				bestAddr:           addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.2:123")}},
+				trustBestAddrUntil: trusted,
+			},
+			at:   now,
+			want: PathDirectIPv4,
+		},
+		{
+			name: "direct ipv6 by recv",
+			ep: endpoint{
+				bestAddr:           addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("[2001:db8::1]:123")}},
+				trustBestAddrUntil: trusted,
+			},
+			at:      now,
+			want:    PathDirectIPv6,
+			setRecv: true,
+		},
+		{
+			name: "peer relay ipv4",
+			ep: endpoint{
+				lastSendExt: active,
+				bestAddr: addrQuality{epAddr: epAddr{
+					ap:  netip.MustParseAddrPort("192.0.2.9:123"),
+					vni: relayVNI,
+				}},
+				trustBestAddrUntil: trusted,
+			},
+			at:   now,
+			want: PathPeerRelayIPv4,
+		},
+		{
+			name: "peer relay ipv6",
+			ep: endpoint{
+				lastSendExt: active,
+				bestAddr: addrQuality{epAddr: epAddr{
+					ap:  netip.MustParseAddrPort("[2001:db8::9]:123"),
+					vni: relayVNI,
+				}},
+				trustBestAddrUntil: trusted,
+			},
+			at:   now,
+			want: PathPeerRelayIPv6,
+		},
+		{
+			name: "derp fallback when best addr expired",
+			ep: endpoint{
+				lastSendExt:        active,
+				bestAddr:           addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.3:123")}},
+				trustBestAddrUntil: expired,
+				derpAddr:           netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, 1),
+			},
+			at:   now,
+			want: PathDERP,
+		},
+		{
+			name: "active but no path",
+			ep: endpoint{
+				lastSendExt: active,
+			},
+			at:   now,
+			want: PathNone,
+		},
+	}
+
+	for i := range tests {
+		tt := &tests[i]
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.setRecv {
+				tt.ep.lastRecvWG.StoreAtomic(active)
+			}
+			tt.ep.mu.Lock()
+			got := tt.ep.currentPathTypeLocked(tt.at)
+			tt.ep.mu.Unlock()
+			if got != tt.want {
+				t.Fatalf("currentPathTypeLocked = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
