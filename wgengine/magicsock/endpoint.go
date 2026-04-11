@@ -104,6 +104,13 @@ type endpoint struct {
 	expired         bool // whether the node has expired
 	isWireguardOnly bool // whether the endpoint is WireGuard only. Must not be changed after initializing the endpont.
 	relayCapable    bool // whether the node is capable of speaking via a [tailscale.com/net/udprelay.Server]
+
+	// webrtcChannelReady reports whether a WebRTC data channel to this peer is
+	// currently open (set by the WebRTC manager on channel open/close). While
+	// true, the heartbeat re-probes the WebRTC magic address so that a WebRTC
+	// path can be (re)selected even after a fallback to DERP or a relay path.
+	// Channel existence is event-driven; path selection remains pong-driven.
+	webrtcChannelReady bool
 }
 
 // udpRelayEndpointReady determines whether the given relay [addrQuality] should
@@ -751,6 +758,11 @@ func (de *endpoint) maybeProbeUDPLifetimeLocked() (afterInactivityFor time.Durat
 	if !de.bestAddr.ap.IsValid() {
 		return afterInactivityFor, false
 	}
+	if de.bestAddr.ap.Addr() == tailcfg.WebRTCMagicIPAddr {
+		// The WebRTC path is not a real UDP socket, so there are no stateful
+		// middleboxes whose UDP mapping lifetime we'd be probing.
+		return afterInactivityFor, false
+	}
 	epDisco := de.disco.Load()
 	if epDisco == nil {
 		// peer does not support disco
@@ -920,8 +932,16 @@ func (de *endpoint) heartbeat() {
 	udpAddr, _, _ := de.addrForSendLocked(now)
 	if udpAddr.ap.IsValid() {
 		// We have a preferred path. Ping that every 'heartbeatInterval'.
+		// This includes the WebRTC magic address: like a peer-relay (VNI)
+		// path, WebRTC is bestAddr-only (never in de.endpointState) but its
+		// liveness is driven by these disco pings over the data channel, not
+		// by pion's connection-state callbacks. startDiscoPingLocked and
+		// handlePongConnLocked special-case the magic address the same way
+		// they special-case vni.IsSet().
 		de.startDiscoPingLocked(udpAddr, now, pingHeartbeat, 0, nil)
 	}
+
+	de.maybeProbeWebRTCLocked(now)
 
 	if de.wantFullPingLocked(now) {
 		de.sendDiscoPingsLocked(now, true)
@@ -932,6 +952,29 @@ func (de *endpoint) heartbeat() {
 	}
 
 	de.heartBeatTimer = time.AfterFunc(heartbeatInterval, de.heartbeat)
+}
+
+// maybeProbeWebRTCLocked sends a disco ping to the WebRTC magic address when a
+// data channel is open and WebRTC is not already our path, so that a pong can
+// (re)promote it via betterAddr. It is the WebRTC analogue of relay path
+// re-discovery: without it, promotion would be one-shot (only on channel open)
+// and a single late or dropped pong would wedge the peer on DERP for the rest
+// of the session, since the heartbeat only pings the current bestAddr.
+func (de *endpoint) maybeProbeWebRTCLocked(now mono.Time) {
+	if !de.webrtcChannelReady {
+		return
+	}
+	// If WebRTC is already our best path, the heartbeat ping to bestAddr keeps
+	// it alive; nothing extra to do.
+	if de.bestAddr.ap.Addr() == tailcfg.WebRTCMagicIPAddr {
+		return
+	}
+	// A direct UDP path outranks WebRTC (see betterAddr). If we're on a trusted
+	// direct path, don't bother probing WebRTC.
+	if de.bestAddr.isDirect() && now.Before(de.trustBestAddrUntil) {
+		return
+	}
+	de.startDiscoPingLocked(epAddr{ap: netip.AddrPortFrom(tailcfg.WebRTCMagicIPAddr, webrtcMagicPort)}, now, pingHeartbeat, 0, nil)
 }
 
 // setHeartbeatDisabled sets heartbeatDisabled to the provided value.
@@ -1134,7 +1177,13 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 		}
 	}
 	var err error
-	if udpAddr.ap.IsValid() {
+	// Check if this is a WebRTC address and route accordingly
+	if udpAddr.ap.IsValid() && udpAddr.ap.Addr() == tailcfg.WebRTCMagicIPAddr {
+		// Pack all buffs into one SCTP message. See sendWebRTCBatch for why.
+		if err = de.c.sendWebRTCBatch(de.publicKey, buffs, offset); err != nil {
+			return err
+		}
+	} else if udpAddr.ap.IsValid() {
 		_, err = de.c.sendUDPBatch(udpAddr, buffs, offset)
 
 		// If the error is known to indicate that the endpoint is no longer
@@ -1174,6 +1223,10 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 		}
 	}
 	if derpAddr.IsValid() {
+		// Traffic is flowing via DERP; opportunistically upgrade to WebRTC.
+		if mgr := de.c.webrtcMgr; mgr != nil {
+			mgr.EnsureConnecting(de)
+		}
 		allOk := true
 		var txBytes int
 		for _, buff := range buffs {
@@ -1346,7 +1399,12 @@ const (
 // is interested in the result (such as a CLI "tailscale ping" or a c2n ping
 // request, etc)
 func (de *endpoint) startDiscoPingLocked(ep epAddr, now mono.Time, purpose discoPingPurpose, size int, resCB *pingResultAndCallback) {
-	if runtime.GOOS == "js" {
+	isWebRTC := ep.ap.Addr() == tailcfg.WebRTCMagicIPAddr
+	if runtime.GOOS == "js" && !isWebRTC {
+		// A browser has no UDP socket, so it can't disco-ping a real endpoint.
+		// The WebRTC data channel is a usable transport though, so a ping to
+		// the WebRTC magic address is valid on js: sendAddr routes it over the
+		// data channel and never touches a UDP socket.
 		return
 	}
 	if debugNeverDirectUDP() && !ep.vni.IsSet() && ep.ap.Addr() != tailcfg.DerpMagicIPAddr {
@@ -1357,7 +1415,7 @@ func (de *endpoint) startDiscoPingLocked(ep epAddr, now mono.Time, purpose disco
 		return
 	}
 	if purpose != pingCLI &&
-		!ep.vni.IsSet() { // de.endpointState is only relevant for direct/non-vni epAddr's
+		!ep.vni.IsSet() && !isWebRTC { // de.endpointState is only relevant for direct/non-vni, non-WebRTC epAddr's
 		st, ok := de.endpointState[ep.ap]
 		if !ok {
 			// Shouldn't happen. But don't ping an endpoint that's
@@ -1934,9 +1992,11 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 	now := mono.Now()
 	latency := now.Sub(sp.at)
 
-	if !isDerp && !src.vni.IsSet() {
-		// Note: we check vni.isSet() as relay [epAddr]'s are not stored in
-		// endpointState, they are either de.bestAddr or not.
+	isWebRTC := src.ap.Addr() == tailcfg.WebRTCMagicIPAddr
+	if !isDerp && !src.vni.IsSet() && !isWebRTC {
+		// Note: we skip vni.isSet() and the WebRTC magic address as those
+		// [epAddr]'s are not stored in endpointState; they are either
+		// de.bestAddr or not. The promotion block below still runs for them.
 		st, ok := de.endpointState[sp.to.ap]
 		if !ok {
 			// This is no longer an endpoint we care about.
@@ -2010,10 +2070,13 @@ type epAddr struct {
 	vni packet.VirtualNetworkID // vni.IsSet() indicates if this [epAddr] involves a Geneve header
 }
 
-// isDirect returns true if e.ap is valid and not tailcfg.DerpMagicIPAddr,
+// isDirect returns true if e.ap is valid and not tailcfg.DerpMagicIPAddr or WebRTCMagicIPAddr,
 // and a VNI is not set.
 func (e epAddr) isDirect() bool {
-	return e.ap.IsValid() && e.ap.Addr() != tailcfg.DerpMagicIPAddr && !e.vni.IsSet()
+	return e.ap.IsValid() &&
+		e.ap.Addr() != tailcfg.DerpMagicIPAddr &&
+		e.ap.Addr() != tailcfg.WebRTCMagicIPAddr &&
+		!e.vni.IsSet()
 }
 
 func (e epAddr) String() string {
@@ -2066,6 +2129,28 @@ func betterAddr(a, b addrQuality) bool {
 		return false
 	}
 
+	// WebRTC path priority: Direct UDP > WebRTC > Peer Relay/DERP
+	aIsWebRTC := a.ap.Addr() == tailcfg.WebRTCMagicIPAddr
+	bIsWebRTC := b.ap.Addr() == tailcfg.WebRTCMagicIPAddr
+	aIsDERP := a.ap.Addr() == tailcfg.DerpMagicIPAddr
+	bIsDERP := b.ap.Addr() == tailcfg.DerpMagicIPAddr
+
+	// Direct paths beat WebRTC
+	if a.isDirect() && bIsWebRTC {
+		return true
+	}
+	if b.isDirect() && aIsWebRTC {
+		return false
+	}
+
+	// WebRTC beats DERP and relay (VNI)
+	if aIsWebRTC && (bIsDERP || b.vni.IsSet()) {
+		return true
+	}
+	if bIsWebRTC && (aIsDERP || a.vni.IsSet()) {
+		return false
+	}
+
 	// Each address starts with a set of points (from 0 to 100) that
 	// represents how much faster they are than the highest-latency
 	// endpoint. For example, if a has latency 200ms and b has latency
@@ -2086,19 +2171,26 @@ func betterAddr(a, b addrQuality) bool {
 	// addresses, and prefer link-local unicast addresses over other types
 	// of private IP addresses since it's definitionally more likely that
 	// they'll be on the same network segment than a general private IP.
-	if a.ap.Addr().IsLoopback() {
-		aPoints += 50
-	} else if a.ap.Addr().IsLinkLocalUnicast() {
-		aPoints += 30
-	} else if a.ap.Addr().IsPrivate() {
-		aPoints += 20
+	//
+	// Exclude magic IPs (DERP, WebRTC) from these bonuses as they're not
+	// real network paths.
+	if !aIsDERP && !aIsWebRTC {
+		if a.ap.Addr().IsLoopback() {
+			aPoints += 50
+		} else if a.ap.Addr().IsLinkLocalUnicast() {
+			aPoints += 30
+		} else if a.ap.Addr().IsPrivate() {
+			aPoints += 20
+		}
 	}
-	if b.ap.Addr().IsLoopback() {
-		bPoints += 50
-	} else if b.ap.Addr().IsLinkLocalUnicast() {
-		bPoints += 30
-	} else if b.ap.Addr().IsPrivate() {
-		bPoints += 20
+	if !bIsDERP && !bIsWebRTC {
+		if b.ap.Addr().IsLoopback() {
+			bPoints += 50
+		} else if b.ap.Addr().IsLinkLocalUnicast() {
+			bPoints += 30
+		} else if b.ap.Addr().IsPrivate() {
+			bPoints += 20
+		}
 	}
 
 	// Prefer IPv6 for being a bit more robust, as long as
@@ -2230,7 +2322,18 @@ func (de *endpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 			ps.PeerRelay = udpAddr.String()
 		} else {
 			ps.CurAddr = udpAddr.String()
+			// If this is a WebRTC connection, append the actual remote address
+			if udpAddr.ap.Addr() == tailcfg.WebRTCMagicIPAddr && de.c.webrtcMgr != nil {
+				if disco := de.disco.Load(); disco != nil {
+					if remoteAddr := de.c.webrtcMgr.GetRemoteAddr(disco.key()); remoteAddr != "" {
+						ps.CurAddr = fmt.Sprintf("%s (%s)", ps.CurAddr, remoteAddr)
+					}
+				}
+			}
 		}
+	} else {
+		// Not on a direct or WebRTC path; show the DERP relay being used.
+		ps.Relay = de.c.derpRegionCodeOfIDLocked(tailcfg.DERPRegionID(de.derpAddr.Port()))
 	}
 }
 
