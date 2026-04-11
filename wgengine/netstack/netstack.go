@@ -1785,9 +1785,12 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 }
 
 // ListenPacket listens for incoming packets for the given network and address.
-// Address must be of the form "ip:port" or "[ip]:port".
+// Address must be of the form "ip:port", "[ip]:port", or ":port".
 //
-// As of 2024-05-18, only udp4 and udp6 are supported.
+// Supported networks are "udp", "udp4", and "udp6". Unspecified addresses
+// (empty, 0.0.0.0, or ::) are accepted. A "udp" or "udp6" wildcard bind uses
+// IPv6 with V6Only=false, so gVisor registers the endpoint on both IPv4 and
+// IPv6 protocol numbers, mirroring the behaviour of ListenTCP.
 func (ns *Impl) ListenPacket(network, address string) (net.PacketConn, error) {
 	ap, err := netip.ParseAddrPort(address)
 	if err != nil {
@@ -1796,17 +1799,15 @@ func (ns *Impl) ListenPacket(network, address string) (net.PacketConn, error) {
 
 	var networkProto tcpip.NetworkProtocolNumber
 	switch network {
-	case "udp":
-		return nil, fmt.Errorf("netstack: udp not supported; use udp4 or udp6")
+	case "udp", "udp6":
+		networkProto = ipv6.ProtocolNumber
+		if ap.Addr().IsValid() && !ap.Addr().IsUnspecified() && !ap.Addr().Is6() {
+			return nil, fmt.Errorf("netstack: %s requires an IPv6 address", network)
+		}
 	case "udp4":
 		networkProto = ipv4.ProtocolNumber
-		if !ap.Addr().Is4() {
+		if ap.Addr().IsValid() && !ap.Addr().IsUnspecified() && !ap.Addr().Is4() {
 			return nil, fmt.Errorf("netstack: udp4 requires an IPv4 address")
-		}
-	case "udp6":
-		networkProto = ipv6.ProtocolNumber
-		if !ap.Addr().Is6() {
-			return nil, fmt.Errorf("netstack: udp6 requires an IPv6 address")
 		}
 	default:
 		return nil, fmt.Errorf("netstack: unsupported network %q", network)
@@ -1818,8 +1819,10 @@ func (ns *Impl) ListenPacket(network, address string) (net.PacketConn, error) {
 	}
 	localAddress := tcpip.FullAddress{
 		NIC:  nicID,
-		Addr: tcpip.AddrFromSlice(ap.Addr().AsSlice()),
 		Port: ap.Port(),
+	}
+	if ap.Addr().IsValid() && !ap.Addr().IsUnspecified() {
+		localAddress.Addr = tcpip.AddrFromSlice(ap.Addr().AsSlice())
 	}
 	if err := ep.Bind(localAddress); err != nil {
 		ep.Close()

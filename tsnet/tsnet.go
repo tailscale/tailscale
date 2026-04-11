@@ -1120,67 +1120,11 @@ func (s *Server) Listen(network, addr string) (net.Listener, error) {
 	return s.listen(network, addr, listenOnTailnet)
 }
 
-// ListenPacket announces on the Tailscale network.
-//
-// The network must be "udp", "udp4" or "udp6". The addr must be of the form
-// "ip:port" (or "[ip]:port") where ip is a valid IPv4 or IPv6 address
-// corresponding to "udp4" or "udp6" respectively. IP must be specified.
-//
-// If s has not been started yet, it will be started.
+// ListenPacket announces only on the Tailscale network.
+// It follows the same semantics as Listen but for UDP.
+// It will start the server if it has not been started yet.
 func (s *Server) ListenPacket(network, addr string) (net.PacketConn, error) {
-	ap, err := resolveListenAddr(network, addr)
-	if err != nil {
-		return nil, err
-	}
-	if !ap.Addr().IsValid() {
-		return nil, fmt.Errorf("tsnet.ListenPacket(%q, %q): address must be a valid IP", network, addr)
-	}
-	if network == "udp" {
-		if ap.Addr().Is4() {
-			network = "udp4"
-		} else {
-			network = "udp6"
-		}
-	}
-	if err := s.Start(); err != nil {
-		return nil, err
-	}
-
-	// Create the gVisor PacketConn first so it can handle port 0 allocation.
-	pc, err := s.netstack.ListenPacket(network, ap.String())
-	if err != nil {
-		return nil, err
-	}
-
-	// If port 0 was requested, use the port gVisor assigned.
-	if ap.Port() == 0 {
-		if p := portFromAddr(pc.LocalAddr()); p != 0 {
-			ap = netip.AddrPortFrom(ap.Addr(), p)
-			addr = ap.String()
-		}
-	}
-
-	ln, err := s.registerListener(network, addr, ap, listenOnTailnet, nil)
-	if err != nil {
-		pc.Close()
-		return nil, err
-	}
-
-	return &udpPacketConn{
-		PacketConn: pc,
-		ln:         ln,
-	}, nil
-}
-
-// udpPacketConn wraps a net.PacketConn to unregister from s.listeners on Close.
-type udpPacketConn struct {
-	net.PacketConn
-	ln *listener
-}
-
-func (c *udpPacketConn) Close() error {
-	c.ln.Close()
-	return c.PacketConn.Close()
+	return s.listenPacket(network, addr, listenOnTailnet)
 }
 
 // ListenTLS announces only on the Tailscale network.
@@ -1908,6 +1852,76 @@ func (s *Server) listenTCP(network string, host netip.AddrPort) (net.Listener, e
 		return nil, fmt.Errorf("tsnet: %w", err)
 	}
 	return ln, nil
+}
+
+func (s *Server) listenPacket(network, addr string, lnOn listenOn) (net.PacketConn, error) {
+	host, err := resolveListenAddr(network, addr)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Start(); err != nil {
+		return nil, err
+	}
+
+	// When using a TUN with UDP, create a gVisor UDP packet conn.
+	// gVisor handles port 0 allocation natively.
+	pc, err := s.listenUDP(network, host)
+	if err != nil {
+		return nil, err
+	}
+	// If port 0 was requested, update host to the port gVisor assigned
+	// so that the listenKey uses the real port.
+	if host.Port() == 0 {
+		if p := portFromAddr(pc.LocalAddr()); p != 0 {
+			host = netip.AddrPortFrom(host.Addr(), p)
+			addr = listenAddr(host)
+		}
+	}
+
+	ln, err := s.registerListener(network, addr, host, lnOn, nil)
+	if err != nil {
+		pc.Close()
+		return nil, err
+	}
+
+	return &udpPacketConn{
+		PacketConn: pc,
+		ln:         ln,
+	}, nil
+}
+
+// listenUDP creates a gVisor UDP packet conn for TUN mode.
+func (s *Server) listenUDP(network string, host netip.AddrPort) (net.PacketConn, error) {
+	var nsNetwork string
+	nsAddr := host
+	switch {
+	case network == "udp4" || network == "udp6":
+		nsNetwork = network
+	case host.Addr().Is4():
+		nsNetwork = "udp4"
+	case host.Addr().Is6():
+		nsNetwork = "udp6"
+	default:
+		// Wildcard address: use udp6 for dual-stack (accepts both v4 and v6).
+		nsNetwork = "udp6"
+		nsAddr = netip.AddrPortFrom(netip.IPv6Unspecified(), host.Port())
+	}
+	pc, err := s.netstack.ListenPacket(nsNetwork, nsAddr.String())
+	if err != nil {
+		return nil, fmt.Errorf("tsnet: %w", err)
+	}
+	return pc, nil
+}
+
+// udpPacketConn wraps a net.PacketConn to unregister from s.listeners on Close.
+type udpPacketConn struct {
+	net.PacketConn
+	ln *listener
+}
+
+func (c *udpPacketConn) Close() error {
+	c.ln.Close()
+	return c.PacketConn.Close()
 }
 
 // registerListener allocates a port (if 0) and registers the listener in
