@@ -444,16 +444,15 @@ func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	c.mu.Lock()
 	c.inMapPoll = true
 	c.expiry = nm.SelfKeyExpiry()
-	stillAuthed := c.loggedIn
-	c.logf("[v1] mapRoutine: netmap received: loggedIn=%v inMapPoll=true", stillAuthed)
+	c.logf("[v1] mapRoutine: netmap received: loggedIn=%v inMapPoll=true", c.loggedIn)
 
 	// Reset the backoff timer if we got a netmap.
 	mrs.bo.Reset()
 	c.mu.Unlock()
 
-	if stillAuthed {
-		c.sendStatus("mapRoutine-got-netmap", nil, "", nm)
-	}
+	// Always send status - sendStatus will check if we should forward the netmap
+	// based on loggedIn, hasNodeKey, and inMapPoll.
+	c.sendStatus("mapRoutine-got-netmap", nil, "", nm)
 }
 
 func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
@@ -516,9 +515,15 @@ func (c *Auto) mapRoutine() {
 
 		c.mu.Lock()
 		loggedIn := c.loggedIn
-		c.logf("[v1] mapRoutine: loggedIn=%v", loggedIn)
 		ctx := c.mapCtx
 		c.mu.Unlock()
+
+		// Check if we have a valid node key that could receive updates.
+		// Even if !loggedIn (e.g., key expired, waiting for interactive auth),
+		// we should still poll if we have credentials, because the server
+		// might send us a key extension notification.
+		_, hasNodeKey := c.direct.GetPersist().PublicNodeKeyOK()
+		c.logf("[v1] mapRoutine: loggedIn=%v hasNodeKey=%v", loggedIn, hasNodeKey)
 
 		report := func(err error, msg string) {
 			c.logf("[v1] %s: %v", msg, err)
@@ -530,8 +535,8 @@ func (c *Auto) mapRoutine() {
 			}
 		}
 
-		if !loggedIn {
-			// Wait for something interesting to happen
+		if !loggedIn && !hasNodeKey {
+			// No credentials at all, wait for auth to complete.
 			c.mu.Lock()
 			c.inMapPoll = false
 			c.mu.Unlock()
@@ -622,14 +627,17 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 	loginGoal := c.loginGoal
 	c.mu.Unlock()
 
-	c.logf("[v1] sendStatus: %s: loggedIn=%v inMapPoll=%v", who, loggedIn, inMapPoll)
+	// Check if we have a valid node key - if so, we should forward the netmap
+	// even if !loggedIn, to allow the backend to see key expiry changes.
+	_, hasNodeKey := c.direct.GetPersist().PublicNodeKeyOK()
+	c.logf("[v1] sendStatus: %s: loggedIn=%v inMapPoll=%v hasNodeKey=%v", who, loggedIn, inMapPoll, hasNodeKey)
 
 	var p persist.PersistView
-	if nm != nil && loggedIn && inMapPoll {
+	if nm != nil && (loggedIn || hasNodeKey) && inMapPoll {
 		p = c.direct.GetPersist()
 	} else {
 		// don't send netmap status, as it's misleading when we're
-		// not logged in.
+		// not logged in and have no credentials.
 		nm = nil
 	}
 	newSt := &Status{
@@ -744,7 +752,29 @@ func (c *Auto) Login(flags LoginFlags) {
 	c.loginGoal = &LoginGoal{
 		flags: flags,
 	}
-	c.cancelMapCtxLocked()
+	// If we have valid credentials (loggedIn=true) or a valid node key,
+	// don't cancel the map poll. This allows the client to continue receiving
+	// key extension notifications from the server while the auth flow proceeds
+	// in parallel.
+	//
+	// This is important for the "Extend key" feature: if the admin extends a
+	// key while the user has clicked "Login", we want the map poll to receive
+	// that notification and recover without requiring the user to complete the
+	// auth flow.
+	//
+	// The hasNodeKey check handles the case where a tsnet server restarts with
+	// an expired key: loggedIn is false (server returned AuthURL), but we have
+	// a valid node key that can still receive map updates including key extensions.
+	//
+	// "First successful flow wins": if a key extension arrives via map poll,
+	// the client recovers. If the auth flow completes first, that works too.
+	var hasNodeKey bool
+	if c.direct != nil {
+		_, hasNodeKey = c.direct.GetPersist().PublicNodeKeyOK()
+	}
+	if !c.loggedIn && !hasNodeKey {
+		c.cancelMapCtxLocked()
+	}
 	c.cancelAuthCtxLocked()
 }
 
