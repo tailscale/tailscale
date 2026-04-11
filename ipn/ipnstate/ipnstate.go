@@ -651,7 +651,18 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 			if ps.Relay != "" && ps.CurAddr == "" {
 				f("relay <b>%s</b>", html.EscapeString(ps.Relay))
 			} else if ps.CurAddr != "" {
-				f("direct <b>%s</b>", html.EscapeString(ps.CurAddr))
+				// Check if this is a WebRTC connection (magic IP 127.3.3.41)
+				if strings.HasPrefix(ps.CurAddr, "127.3.3.41:") {
+					// Extract the actual remote address if present
+					if idx := strings.Index(ps.CurAddr, " ("); idx > 0 {
+						remoteAddr := ps.CurAddr[idx+2 : len(ps.CurAddr)-1] // Extract address from " (addr)"
+						f("webrtc <b>%s</b>", html.EscapeString(remoteAddr))
+					} else {
+						f("webrtc")
+					}
+				} else {
+					f("direct <b>%s</b>", html.EscapeString(ps.CurAddr))
+				}
 			}
 		}
 
