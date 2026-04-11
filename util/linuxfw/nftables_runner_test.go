@@ -1309,3 +1309,39 @@ func TestMakeConnmarkSaveExprs(t *testing.T) {
 		t.Fatalf("Flush() failed: %v", err)
 	}
 }
+
+// TestGetOrCreateChainNilHooknum verifies that getOrCreateChain returns a clear
+// error when a ts- chain exists but has nil Hooknum/Priority, which happens when
+// the kernel lacks nftables support (CONFIG_NF_TABLES).
+func TestGetOrCreateChainNilHooknum(t *testing.T) {
+	conn := newSysConn(t)
+
+	table := conn.AddTable(&nftables.Table{
+		Family: nftables.TableFamilyIPv4,
+		Name:   "ts-filter-test",
+	})
+	// Add a ts- chain without hooknum/priority (regular chain), simulating
+	// the broken state returned by a kernel without nftables support.
+	conn.AddChain(&nftables.Chain{
+		Name:  "ts-input",
+		Table: table,
+	})
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("Flush() failed: %v", err)
+	}
+
+	// Now try getOrCreateChain expecting a base chain with hooknum/priority.
+	_, err := getOrCreateChain(conn, chainInfo{
+		table:         table,
+		name:          "ts-input",
+		chainType:     nftables.ChainTypeFilter,
+		chainHook:     nftables.ChainHookInput,
+		chainPriority: nftables.ChainPriorityFilter,
+	})
+	if err == nil {
+		t.Fatal("expected error for chain with nil hooknum/priority, got nil")
+	}
+	if !strings.Contains(err.Error(), "nil hooknum") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
