@@ -441,14 +441,12 @@ func (m *Monitor) GatewayAndSelfIP() (gw, myIP netip.Addr, ok bool) {
 		return m.gw, m.gwSelfIP, true
 	}
 	gw, myIP, ok = LikelyHomeRouterIP()
-	changed := false
 	if ok {
-		changed = m.gw != gw || m.gwSelfIP != myIP
+		if m.gw != gw || m.gwSelfIP != myIP {
+			m.logf("gateway and self IP changed: gw=%v -> %v self=%v -> %v", m.gw, gw, m.gwSelfIP, myIP)
+		}
 		m.gw, m.gwSelfIP = gw, myIP
 		m.gwValid = true
-	}
-	if changed {
-		m.logf("gateway and self IP changed: gw=%v self=%v", m.gw, m.gwSelfIP)
 	}
 	return gw, myIP, ok
 }
