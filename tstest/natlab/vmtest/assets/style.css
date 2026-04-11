@@ -1,0 +1,168 @@
+/* CSS reset */
+*, *::before, *::after { box-sizing: border-box; }
+* { margin: 0; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.5;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    padding: 16px;
+}
+
+h1 {
+    font-size: 1.4em;
+    margin-bottom: 16px;
+    color: #fff;
+}
+
+.test-status {
+    font-size: 0.7em;
+    padding: 2px 10px;
+    border-radius: 4px;
+    font-weight: bold;
+    vertical-align: middle;
+}
+
+.test-Running { background: #2563eb; color: #fff; }
+.test-Passed { background: #16a34a; color: #fff; }
+.test-Failed { background: #dc2626; color: #fff; }
+
+h2 {
+    font-size: 1.1em;
+    margin-bottom: 8px;
+    color: #ccc;
+}
+
+/* Step progress panel */
+.steps {
+    background: #16213e;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 16px;
+}
+
+.step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    font-family: monospace;
+    font-size: 13px;
+    border-radius: 3px;
+}
+
+.step-pending { color: #666; }
+.step-running { color: #4af; font-weight: bold; background: rgba(68, 170, 255, 0.1); }
+.step-done { color: #4a4; }
+.step-failed { color: #f44; font-weight: bold; background: rgba(255, 68, 68, 0.1); }
+
+.step-icon { width: 1.2em; text-align: center; }
+.step-name { flex: 1; }
+.step-time { color: #666; font-size: 12px; min-width: 6em; text-align: right; }
+
+/* VM card grid */
+.vm-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.vm-card {
+    background: #16213e;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 12px;
+}
+
+.vm-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.vm-name {
+    font-weight: bold;
+    font-size: 1.1em;
+    color: #fff;
+}
+
+.vm-os {
+    font-size: 0.8em;
+    background: #333;
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: #aaa;
+}
+
+.vm-status {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 8px;
+    font-family: monospace;
+    font-size: 13px;
+}
+
+.vm-status-line {
+    display: flex;
+    gap: 8px;
+}
+
+.vm-status-label {
+    color: #888;
+    min-width: 7em;
+}
+
+.vm-status-value {
+    color: #4af;
+}
+
+/* Console output */
+.console {
+    background: #0a0a0a;
+    color: #ccc;
+    font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+    font-size: 11px;
+    line-height: 1.3;
+    max-height: 300px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    padding: 8px;
+    border-radius: 4px;
+    border: 1px solid #222;
+}
+
+/* Event log */
+.event-log {
+    background: #16213e;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 12px;
+}
+
+.events {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.event {
+    font-family: monospace;
+    font-size: 12px;
+    padding: 1px 0;
+    border-bottom: 1px solid #1a1a2e;
+}
+
+.event-time { color: #666; }
+.event-node { color: #4af; font-weight: bold; }
+.event-msg { color: #ccc; }
+.event-detail { color: #888; }
+
+.event-dhcp_discover .event-msg,
+.event-dhcp_request .event-msg { color: #fa4; }
+.event-dhcp_offer .event-msg,
+.event-dhcp_ack .event-msg { color: #4f4; }
+.event-step_changed .event-msg { color: #aaf; }

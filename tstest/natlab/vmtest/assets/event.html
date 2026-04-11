@@ -1,0 +1,39 @@
+{{if eq .Type "test_status"}}
+<span class="test-status test-{{.Message}}" id="test-status" hx-swap-oob="outerHTML">{{.Message}} ({{.Detail}})</span>
+{{end}}
+
+{{if eq .Type "step_changed"}}
+<div class="step step-{{.Step.Status}}" id="step-{{.Step.Index}}" hx-swap-oob="outerHTML">
+    <span class="step-icon">{{.Step.Status.Icon}}</span>
+    <span class="step-name">{{.Step.Name}}</span>
+    <span class="step-time">{{formatDuration .Step.Elapsed}}</span>
+</div>
+{{end}}
+
+{{if eq .Type "console_output"}}
+<div id="console-{{.NodeName}}" hx-swap-oob="beforeend">{{ansi .Message}}
+</div>
+{{end}}
+
+{{if eq .Type "dhcp_discover"}}
+<span id="dhcp-{{.NodeName}}-{{.NIC}}" hx-swap-oob="innerHTML">Discover sent</span>
+{{end}}
+
+{{if eq .Type "dhcp_offer"}}
+<span id="dhcp-{{.NodeName}}-{{.NIC}}" hx-swap-oob="innerHTML">Offered {{.Detail}}</span>
+{{end}}
+
+{{if eq .Type "dhcp_request"}}
+<span id="dhcp-{{.NodeName}}-{{.NIC}}" hx-swap-oob="innerHTML">Requesting {{.Detail}}</span>
+{{end}}
+
+{{if eq .Type "dhcp_ack"}}
+<span id="dhcp-{{.NodeName}}-{{.NIC}}" hx-swap-oob="innerHTML">Got {{.Detail}}</span>
+{{end}}
+
+{{if eq .Type "tailscale"}}
+<span id="ts-{{.NodeName}}" hx-swap-oob="innerHTML">{{.Detail}}</span>
+{{end}}
+
+<div id="events" hx-swap-oob="beforeend"><div class="event event-{{.Type}}"><span class="event-time">{{.Time.Format "15:04:05.000"}}</span> {{if .NodeName}}<span class="event-node">[{{.NodeName}}]</span> {{end}}<span class="event-msg">{{.Message}}</span>{{if .Detail}} <span class="event-detail">{{.Detail}}</span>{{end}}</div>
+</div>

@@ -37,13 +37,23 @@ func testSubnetRouterForOS(t testing.TB, srOS vmtest.OSImage) {
 		vmtest.DontJoinTailnet(),
 		vmtest.WebServer(8080))
 
-	env.Start()
-	env.ApproveRoutes(sr, "10.0.0.0/24")
+	// Declare test-specific steps for the web UI.
+	approveStep := env.AddStep("Approve subnet routes")
+	httpStep := env.AddStep("HTTP GET through subnet router")
 
+	env.Start()
+
+	approveStep.Begin()
+	env.ApproveRoutes(sr, "10.0.0.0/24")
+	approveStep.End(nil)
+
+	httpStep.Begin()
 	body := env.HTTPGet(client, fmt.Sprintf("http://%s:8080/", backend.LanIP(internalNet)))
 	if !strings.Contains(body, "Hello world I am backend") {
+		httpStep.End(fmt.Errorf("got %q", body))
 		t.Fatalf("got %q", body)
 	}
+	httpStep.End(nil)
 }
 
 func TestSiteToSite(t *testing.T) {
@@ -95,9 +105,17 @@ func testSiteToSite(t *testing.T, srOS vmtest.OSImage) {
 		vmtest.DontJoinTailnet(),
 		vmtest.WebServer(8080))
 
+	// Declare test-specific steps for the web UI.
+	approveStep := env.AddStep("Approve subnet routes (sr-a, sr-b)")
+	staticRouteStep := env.AddStep("Add static routes on backends")
+	httpStep := env.AddStep("HTTP GET through site-to-site")
+
 	env.Start()
+
+	approveStep.Begin()
 	env.ApproveRoutes(srA, "10.1.0.0/24")
 	env.ApproveRoutes(srB, "10.2.0.0/24")
+	approveStep.End(nil)
 
 	// Add static routes on the backends so that traffic to the remote site's
 	// subnet goes through the local subnet router. This mirrors how a real
@@ -107,16 +125,20 @@ func testSiteToSite(t *testing.T, srOS vmtest.OSImage) {
 	t.Logf("sr-a LAN IP: %s, sr-b LAN IP: %s", srALanIP, srBLanIP)
 	t.Logf("backend-a LAN IP: %s, backend-b LAN IP: %s", backendA.LanIP(lanA), backendB.LanIP(lanB))
 
+	staticRouteStep.Begin()
 	env.AddRoute(backendA, "10.2.0.0/24", srALanIP)
 	env.AddRoute(backendB, "10.1.0.0/24", srBLanIP)
+	staticRouteStep.End(nil)
 
 	// Make an HTTP request from backend-a to backend-b through the subnet routers.
 	// TTA's /http-get falls back to direct dial on non-Tailscale nodes.
+	httpStep.Begin()
 	backendBIP := backendB.LanIP(lanB)
 	body := env.HTTPGet(backendA, fmt.Sprintf("http://%s:8080/", backendBIP))
 	t.Logf("response: %s", body)
 
 	if !strings.Contains(body, "Hello world I am backend-b") {
+		httpStep.End(fmt.Errorf("expected response from backend-b, got %q", body))
 		t.Fatalf("expected response from backend-b, got %q", body)
 	}
 
@@ -124,8 +146,10 @@ func testSiteToSite(t *testing.T, srOS vmtest.OSImage) {
 	// backend-b should see backend-a's LAN IP as the source, not sr-b's LAN IP.
 	backendAIP := backendA.LanIP(lanA).String()
 	if !strings.Contains(body, "from "+backendAIP) {
+		httpStep.End(fmt.Errorf("source IP not preserved: expected %q in response, got %q", backendAIP, body))
 		t.Fatalf("source IP not preserved: expected %q in response, got %q", backendAIP, body)
 	}
+	httpStep.End(nil)
 }
 
 // TestInterNetworkTCP verifies that vnet routes raw TCP between simulated
@@ -151,16 +175,23 @@ func TestInterNetworkTCP(t *testing.T) {
 		vmtest.DontJoinTailnet(),
 		vmtest.WebServer(8080))
 
+	// Declare test-specific steps for the web UI.
+	httpStep := env.AddStep("HTTP GET across networks via NAT")
+
 	env.Start()
 
+	httpStep.Begin()
 	body := env.HTTPGet(client, fmt.Sprintf("http://%s:8080/", webWAN))
 	t.Logf("response: %s", body)
 	if !strings.Contains(body, "Hello world I am webserver") {
+		httpStep.End(fmt.Errorf("unexpected response: %q", body))
 		t.Fatalf("unexpected response: %q", body)
 	}
 	if !strings.Contains(body, "from "+clientWAN) {
+		httpStep.End(fmt.Errorf("expected source %q in response, got %q", clientWAN, body))
 		t.Fatalf("expected source %q in response, got %q", clientWAN, body)
 	}
+	httpStep.End(nil)
 }
 
 // TestSubnetRouterPublicIP verifies that toggling --accept-routes on the
@@ -198,33 +229,45 @@ func TestSubnetRouterPublicIP(t *testing.T) {
 		vmtest.DontJoinTailnet(),
 		vmtest.WebServer(8080))
 
+	// Declare test-specific steps for the web UI.
+	approveStep := env.AddStep("Approve subnet route (public IP)")
+	checkOn1Step := env.AddStep("HTTP GET (accept-routes=on)")
+	checkOffStep := env.AddStep("HTTP GET (accept-routes=off)")
+	checkOn2Step := env.AddStep("HTTP GET (accept-routes=on, again)")
+
 	env.Start()
 	// ApproveRoutes also turns on RouteAll on the client.
+	approveStep.Begin()
 	env.ApproveRoutes(sr, webRoute)
+	approveStep.End(nil)
 
 	webURL := fmt.Sprintf("http://%s:8080/", webWAN)
-	check := func(label, wantSrc string) {
+	check := func(step *vmtest.Step, label, wantSrc string) {
 		t.Helper()
+		step.Begin()
 		body := env.HTTPGet(client, webURL)
 		t.Logf("[%s] response: %s", label, body)
 		if !strings.Contains(body, "Hello world I am webserver") {
+			step.End(fmt.Errorf("[%s] unexpected webserver response: %q", label, body))
 			t.Fatalf("[%s] unexpected webserver response: %q", label, body)
 		}
 		if !strings.Contains(body, "from "+wantSrc) {
+			step.End(fmt.Errorf("[%s] expected source %q in response, got %q", label, wantSrc, body))
 			t.Fatalf("[%s] expected source %q in response, got %q", label, wantSrc, body)
 		}
+		step.End(nil)
 	}
 
 	// accept-routes=on (set by ApproveRoutes): traffic flows via the subnet router.
-	check("accept-routes=on", routerWAN)
+	check(checkOn1Step, "accept-routes=on", routerWAN)
 
 	// accept-routes=off: client dials the webserver directly.
 	env.SetAcceptRoutes(client, false)
-	check("accept-routes=off", clientWAN)
+	check(checkOffStep, "accept-routes=off", clientWAN)
 
 	// Toggle back on to confirm the transition works in both directions.
 	env.SetAcceptRoutes(client, true)
-	check("accept-routes=on (again)", routerWAN)
+	check(checkOn2Step, "accept-routes=on (again)", routerWAN)
 }
 
 // TestSubnetRouterAndExitNode checks how the subnet router and exit node
@@ -266,13 +309,8 @@ func TestSubnetRouterAndExitNode(t *testing.T) {
 		vmtest.DontJoinTailnet(),
 		vmtest.WebServer(8080))
 
-	env.Start()
-	env.ApproveRoutes(sr, webRoute)
-	env.ApproveRoutes(exit, "0.0.0.0/0", "::/0")
-	// Don't let the exit node itself forward via the subnet router: when the
-	// client is using the exit node only, we want the exit node to egress to
-	// the simulated internet directly so the webserver sees the exit's WAN.
-	env.SetAcceptRoutes(exit, false)
+	// Declare test-specific steps for the web UI.
+	approveStep := env.AddStep("Approve subnet & exit routes")
 
 	webURL := fmt.Sprintf("http://%s:8080/", webWAN)
 	tests := []struct {
@@ -280,25 +318,44 @@ func TestSubnetRouterAndExitNode(t *testing.T) {
 		exit    *vmtest.Node
 		subnet  bool
 		wantSrc string
+		step    *vmtest.Step
 	}{
-		{"exit-off,subnet-off", nil, false, clientWAN},
-		{"exit-off,subnet-on", nil, true, routerWAN},
-		{"exit-on,subnet-off", exit, false, exitWAN},
+		{"exit-off,subnet-off", nil, false, clientWAN, nil},
+		{"exit-off,subnet-on", nil, true, routerWAN, nil},
+		{"exit-on,subnet-off", exit, false, exitWAN, nil},
 		// More-specific 5.0.0.0/24 from sr beats 0.0.0.0/0 from exit.
-		{"exit-on,subnet-on", exit, true, routerWAN},
+		{"exit-on,subnet-on", exit, true, routerWAN, nil},
 	}
+	for i := range tests {
+		tests[i].step = env.AddStep("HTTP GET: " + tests[i].name)
+	}
+
+	env.Start()
+	approveStep.Begin()
+	env.ApproveRoutes(sr, webRoute)
+	env.ApproveRoutes(exit, "0.0.0.0/0", "::/0")
+	// Don't let the exit node itself forward via the subnet router: when the
+	// client is using the exit node only, we want the exit node to egress to
+	// the simulated internet directly so the webserver sees the exit's WAN.
+	env.SetAcceptRoutes(exit, false)
+	approveStep.End(nil)
+
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			tc.step.Begin()
 			env.SetExitNode(client, tc.exit)
 			env.SetAcceptRoutes(client, tc.subnet)
 			body := env.HTTPGet(client, webURL)
 			t.Logf("response: %s", body)
 			if !strings.Contains(body, "Hello world I am webserver") {
+				tc.step.End(fmt.Errorf("unexpected webserver response: %q", body))
 				t.Fatalf("unexpected webserver response: %q", body)
 			}
 			if !strings.Contains(body, "from "+tc.wantSrc) {
+				tc.step.End(fmt.Errorf("expected source %q in response, got %q", tc.wantSrc, body))
 				t.Fatalf("expected source %q in response, got %q", tc.wantSrc, body)
 			}
+			tc.step.End(nil)
 		})
 	}
 }
@@ -342,31 +399,45 @@ func TestExitNode(t *testing.T) {
 		vmtest.DontJoinTailnet(),
 		vmtest.WebServer(8080))
 
-	env.Start()
-	env.ApproveRoutes(exit1, "0.0.0.0/0", "::/0")
-	env.ApproveRoutes(exit2, "0.0.0.0/0", "::/0")
+	// Declare test-specific steps for the web UI.
+	approveStep := env.AddStep("Approve exit-node routes (exit1, exit2)")
 
 	webURL := fmt.Sprintf("http://%s:8080/", webWAN)
 	tests := []struct {
 		name    string // subtest name
 		exit    *vmtest.Node
 		wantSrc string
+		step    *vmtest.Step
 	}{
-		{"off", nil, clientWAN},
-		{"exit1", exit1, exit1WAN},
-		{"exit2", exit2, exit2WAN},
+		{"off", nil, clientWAN, nil},
+		{"exit1", exit1, exit1WAN, nil},
+		{"exit2", exit2, exit2WAN, nil},
 	}
+	for i := range tests {
+		tests[i].step = env.AddStep("HTTP GET: exit=" + tests[i].name)
+	}
+
+	env.Start()
+	approveStep.Begin()
+	env.ApproveRoutes(exit1, "0.0.0.0/0", "::/0")
+	env.ApproveRoutes(exit2, "0.0.0.0/0", "::/0")
+	approveStep.End(nil)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			tt.step.Begin()
 			env.SetExitNode(client, tt.exit)
 			body := env.HTTPGet(client, webURL)
 			t.Logf("response: %s", body)
 			if !strings.Contains(body, "Hello world I am webserver") {
+				tt.step.End(fmt.Errorf("unexpected webserver response: %q", body))
 				t.Fatalf("unexpected webserver response: %q", body)
 			}
 			if !strings.Contains(body, "from "+tt.wantSrc) {
+				tt.step.End(fmt.Errorf("expected source %q in response, got %q", tt.wantSrc, body))
 				t.Fatalf("expected source %q in response, got %q", tt.wantSrc, body)
 			}
+			tt.step.End(nil)
 		})
 	}
 }
