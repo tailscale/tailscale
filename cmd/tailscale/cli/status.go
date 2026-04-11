@@ -195,6 +195,9 @@ func runStatus(ctx context.Context, args []string) error {
 			}
 			if relay != "" && ps.CurAddr == "" && ps.PeerRelay == "" {
 				f("relay %q", relay)
+			} else if ps.TransportName != "" {
+				// On a pluggable transport path; CurAddr is the real remote addr.
+				f("%s %s", ps.TransportName, ps.CurAddr)
 			} else if ps.CurAddr != "" {
 				f("direct %s", ps.CurAddr)
 			} else if ps.PeerRelay != "" {

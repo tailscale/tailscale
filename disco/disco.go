@@ -20,6 +20,7 @@
 package disco
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -51,6 +52,13 @@ const (
 	TypeCallMeMaybeVia                   = MessageType(0x07)
 	TypeAllocateUDPRelayEndpointRequest  = MessageType(0x08)
 	TypeAllocateUDPRelayEndpointResponse = MessageType(0x09)
+	// TypeTransportSignal carries an opaque signaling message for a pluggable
+	// transport (see tailscale.com/wgengine/magicsock's RegisterTransport)
+	// between Tailscale peers via DERP, so a transport can negotiate without an
+	// external signaling server. The transport name and its opaque payload
+	// travel in the message body; see [TransportSignal]. disco does not
+	// interpret the payload.
+	TypeTransportSignal = MessageType(0x0A)
 )
 
 const v0 = byte(0)
@@ -103,6 +111,8 @@ func Parse(p []byte) (Message, error) {
 		return parseAllocateUDPRelayEndpointRequest(ver, p)
 	case TypeAllocateUDPRelayEndpointResponse:
 		return parseAllocateUDPRelayEndpointResponse(ver, p)
+	case TypeTransportSignal:
+		return parseTransportSignal(ver, p)
 	default:
 		return nil, fmt.Errorf("unknown message type 0x%02x", byte(t))
 	}
@@ -283,6 +293,47 @@ func parsePong(ver uint8, p []byte) (m *Pong, err error) {
 	return m, nil
 }
 
+// TransportSignal is sent only over DERP to deliver a pluggable transport's
+// signaling message to a peer. Transport is the registered transport name that
+// owns the message (used to dispatch it to the right transport on the receiving
+// side); Payload is that transport's opaque signaling bytes, which disco does
+// not interpret. A single disco message type carrying a transport-tagged
+// payload keeps the disco protocol small and decouples it from any specific
+// transport.
+type TransportSignal struct {
+	Transport string
+	Payload   []byte
+}
+
+func (m *TransportSignal) AppendMarshal(b []byte) []byte {
+	// Body is a 1-byte transport-name length, the transport name, then the raw
+	// payload. The name is bounded to 255 bytes, which is far more than any real
+	// transport name needs.
+	name := m.Transport
+	if len(name) > 255 {
+		name = name[:255]
+	}
+	ret, p := appendMsgHeader(b, TypeTransportSignal, v0, 1+len(name)+len(m.Payload))
+	p[0] = byte(len(name))
+	n := copy(p[1:], name)
+	copy(p[1+n:], m.Payload)
+	return ret
+}
+
+func parseTransportSignal(_ uint8, p []byte) (*TransportSignal, error) {
+	if len(p) < 1 {
+		return nil, errShort
+	}
+	nameLen := int(p[0])
+	if len(p) < 1+nameLen {
+		return nil, errShort
+	}
+	return &TransportSignal{
+		Transport: string(p[1 : 1+nameLen]),
+		Payload:   bytes.Clone(p[1+nameLen:]),
+	}, nil
+}
+
 // MessageSummary returns a short summary of m for logging purposes.
 func MessageSummary(m Message) string {
 	switch m := m.(type) {
@@ -304,6 +355,8 @@ func MessageSummary(m Message) string {
 		return "allocate-udp-relay-endpoint-request"
 	case *AllocateUDPRelayEndpointResponse:
 		return "allocate-udp-relay-endpoint-response"
+	case *TransportSignal:
+		return "transport-signal-" + m.Transport
 	default:
 		return fmt.Sprintf("%#v", m)
 	}

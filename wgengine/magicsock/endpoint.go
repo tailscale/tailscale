@@ -105,6 +105,15 @@ type endpoint struct {
 	expired         bool // whether the node has expired
 	isWireguardOnly bool // whether the endpoint is WireGuard only. Must not be changed after initializing the endpont.
 	relayCapable    bool // whether the node is capable of speaking via a [tailscale.com/net/udprelay.Server]
+
+	// transportChannelReady tracks, per pluggable transport index, whether that
+	// transport currently has an open channel to this peer (set by the transport
+	// via TransportHost.SetChannelReady on channel open/close). While an index is
+	// true, the heartbeat re-probes that transport's magic address so its path
+	// can be (re)selected even after a fallback to DERP or a relay path. Channel
+	// existence is event-driven; path selection remains pong-driven. The map is
+	// nil until the first transport reports readiness.
+	transportChannelReady map[int]bool
 }
 
 // udpRelayEndpointReady determines whether the given relay [addrQuality] should
@@ -754,6 +763,11 @@ func (de *endpoint) maybeProbeUDPLifetimeLocked() (afterInactivityFor time.Durat
 	if !de.bestAddr.ap.IsValid() {
 		return afterInactivityFor, false
 	}
+	if _, ok := tailcfg.IsTransportMagicIP(de.bestAddr.ap.Addr()); ok {
+		// A pluggable transport path is not a real UDP socket, so there are no
+		// stateful middleboxes whose UDP mapping lifetime we'd be probing.
+		return afterInactivityFor, false
+	}
 	epDisco := de.disco.Load()
 	if epDisco == nil {
 		// peer does not support disco
@@ -931,8 +945,16 @@ func (de *endpoint) heartbeat() {
 	udpAddr, _, _ := de.addrForSendLocked(now)
 	if udpAddr.ap.IsValid() {
 		// We have a preferred path. Ping that every 'heartbeatInterval'.
+		// This includes a transport magic address: like a peer-relay (VNI)
+		// path, a transport path is bestAddr-only (never in de.endpointState)
+		// but its liveness is driven by these disco pings over the transport,
+		// not by the transport's own connection-state callbacks.
+		// startDiscoPingLocked and handlePongConnLocked special-case the magic
+		// address the same way they special-case vni.IsSet().
 		de.startDiscoPingLocked(udpAddr, now, pingHeartbeat, 0, nil)
 	}
+
+	de.maybeProbeTransportsLocked(now)
 
 	if de.wantFullPingLocked(now) {
 		de.sendDiscoPingsLocked(now, true)
@@ -943,6 +965,50 @@ func (de *endpoint) heartbeat() {
 	}
 
 	de.heartBeatTimer = time.AfterFunc(heartbeatInterval, de.heartbeat)
+}
+
+// setTransportChannelReadyLocked records whether the pluggable transport at
+// index idx currently has an open channel to this peer. de.mu must be held.
+func (de *endpoint) setTransportChannelReadyLocked(idx int, ready bool) {
+	if ready {
+		if de.transportChannelReady == nil {
+			de.transportChannelReady = make(map[int]bool)
+		}
+		de.transportChannelReady[idx] = true
+		return
+	}
+	delete(de.transportChannelReady, idx)
+}
+
+// maybeProbeTransportsLocked sends a disco ping to each ready transport's magic
+// address when that transport is not already our path, so that a pong can
+// (re)promote it via betterAddr. It is the transport analogue of relay path
+// re-discovery: without it, promotion would be one-shot (only on channel open)
+// and a single late or dropped pong would wedge the peer on DERP for the rest
+// of the session, since the heartbeat only pings the current bestAddr.
+func (de *endpoint) maybeProbeTransportsLocked(now mono.Time) {
+	if len(de.transportChannelReady) == 0 {
+		return
+	}
+	onTrustedDirect := de.bestAddr.isDirect() && now.Before(de.trustBestAddrUntil)
+	bestIdx, bestIsTransport := tailcfg.IsTransportMagicIP(de.bestAddr.ap.Addr())
+	for idx, ready := range de.transportChannelReady {
+		if !ready {
+			continue
+		}
+		// If this transport is already our best path, the heartbeat ping to
+		// bestAddr keeps it alive; nothing extra to do.
+		if bestIsTransport && bestIdx == idx {
+			continue
+		}
+		// If we're on a trusted direct path, only keep probing transports that
+		// outrank direct; a below-direct transport could never win the
+		// promotion anyway (see betterAddr), so don't waste the probe on it.
+		if onTrustedDirect && !transportAboveDirect(tailcfg.TransportMagicIP(idx)) {
+			continue
+		}
+		de.startDiscoPingLocked(epAddr{ap: netip.AddrPortFrom(tailcfg.TransportMagicIP(idx), transportMagicPort)}, now, pingHeartbeat, 0, nil)
+	}
 }
 
 // setHeartbeatDisabled sets heartbeatDisabled to the provided value.
@@ -1147,7 +1213,13 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 		}
 	}
 	var err error
-	if hasUDPTransport && udpAddr.ap.IsValid() {
+	// Check if this is a pluggable transport address and route accordingly.
+	if tIdx, isTransport := tailcfg.IsTransportMagicIP(udpAddr.ap.Addr()); isTransport && udpAddr.ap.IsValid() {
+		// Pack all buffs into one message. See sendTransportBatch for why.
+		if err = de.c.sendTransportBatch(tIdx, de.publicKey, buffs, offset); err != nil {
+			return err
+		}
+	} else if hasUDPTransport && udpAddr.ap.IsValid() {
 		_, err = de.c.sendUDPBatch(udpAddr, buffs, offset)
 
 		// If the error is known to indicate that the endpoint is no longer
@@ -1187,6 +1259,12 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 		}
 	}
 	if derpAddr.IsValid() {
+		// Traffic is flowing via DERP; opportunistically ask each pluggable
+		// transport to upgrade the path. Each transport decides for itself
+		// whether this peer is eligible.
+		for _, inst := range de.c.transports {
+			inst.t.EnsureConnecting(de)
+		}
 		allOk := true
 		var txBytes int
 		for _, buff := range buffs {
@@ -1359,7 +1437,12 @@ const (
 // is interested in the result (such as a CLI "tailscale ping" or a c2n ping
 // request, etc)
 func (de *endpoint) startDiscoPingLocked(ep epAddr, now mono.Time, purpose discoPingPurpose, size int, resCB *pingResultAndCallback) {
-	if runtime.GOOS == "js" {
+	_, isTransport := tailcfg.IsTransportMagicIP(ep.ap.Addr())
+	if runtime.GOOS == "js" && !isTransport {
+		// A browser has no UDP socket, so it can't disco-ping a real endpoint.
+		// A pluggable transport (e.g. WebRTC) is a usable path though, so a ping
+		// to a transport magic address is valid on js: sendAddr routes it over
+		// the transport and never touches a UDP socket.
 		return
 	}
 	if debugNeverDirectUDP() && !ep.vni.IsSet() && ep.ap.Addr() != tailcfg.DerpMagicIPAddr {
@@ -1370,7 +1453,7 @@ func (de *endpoint) startDiscoPingLocked(ep epAddr, now mono.Time, purpose disco
 		return
 	}
 	if purpose != pingCLI &&
-		!ep.vni.IsSet() { // de.endpointState is only relevant for direct/non-vni epAddr's
+		!ep.vni.IsSet() && !isTransport { // de.endpointState is only relevant for direct/non-vni, non-transport epAddr's
 		st, ok := de.endpointState[ep.ap]
 		if !ok {
 			// Shouldn't happen. But don't ping an endpoint that's
@@ -1958,9 +2041,11 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 	de.c.reportExitNodePong(de.publicKey, now)
 	latency := now.Sub(sp.at)
 
-	if hasUDPTransport && !isDerp && !src.vni.IsSet() {
-		// Note: we check vni.isSet() as relay [epAddr]'s are not stored in
-		// endpointState, they are either de.bestAddr or not.
+	_, isTransport := tailcfg.IsTransportMagicIP(src.ap.Addr())
+	if hasUDPTransport && !isDerp && !src.vni.IsSet() && !isTransport {
+		// Note: we check vni.isSet() and the transport magic addresses as those
+		// [epAddr]'s are not stored in endpointState; they are either
+		// de.bestAddr or not. The promotion block below still runs for them.
 		st, ok := de.endpointState[sp.to.ap]
 		if !ok {
 			// This is no longer an endpoint we care about.
@@ -2034,10 +2119,14 @@ type epAddr struct {
 	vni packet.VirtualNetworkID // vni.IsSet() indicates if this [epAddr] involves a Geneve header
 }
 
-// isDirect returns true if e.ap is valid and not tailcfg.DerpMagicIPAddr,
-// and a VNI is not set.
+// isDirect returns true if e.ap is valid and not tailcfg.DerpMagicIPAddr or a
+// pluggable transport magic IP, and a VNI is not set.
 func (e epAddr) isDirect() bool {
-	return e.ap.IsValid() && e.ap.Addr() != tailcfg.DerpMagicIPAddr && !e.vni.IsSet()
+	if !e.ap.IsValid() || e.ap.Addr() == tailcfg.DerpMagicIPAddr || e.vni.IsSet() {
+		return false
+	}
+	_, isTransport := tailcfg.IsTransportMagicIP(e.ap.Addr())
+	return !isTransport
 }
 
 func (e epAddr) String() string {
@@ -2090,6 +2179,33 @@ func betterAddr(a, b addrQuality) bool {
 		return false
 	}
 
+	// Pluggable transport path priority. Whether an address is a transport path
+	// is structural (its magic IP is in the reserved block). A transport ranks
+	// either above or below a direct UDP path depending on whether it registered
+	// with [WithPriorityOverDirect] (default: below); either way it ranks above
+	// DERP and peer-relay. Between two transport paths, or two paths in the same
+	// tier, fall through to the normal latency comparison.
+	_, aIsTransport := tailcfg.IsTransportMagicIP(a.ap.Addr())
+	_, bIsTransport := tailcfg.IsTransportMagicIP(b.ap.Addr())
+	aIsDERP := a.ap.Addr() == tailcfg.DerpMagicIPAddr
+	bIsDERP := b.ap.Addr() == tailcfg.DerpMagicIPAddr
+
+	// Transport vs. direct UDP: the transport's priority decides.
+	if aIsTransport && b.isDirect() {
+		return transportAboveDirect(a.ap.Addr())
+	}
+	if bIsTransport && a.isDirect() {
+		return !transportAboveDirect(b.ap.Addr())
+	}
+
+	// Transport vs. DERP/relay: the transport always wins.
+	if aIsTransport && !bIsTransport && (bIsDERP || b.vni.IsSet()) {
+		return true
+	}
+	if bIsTransport && !aIsTransport && (aIsDERP || a.vni.IsSet()) {
+		return false
+	}
+
 	// Each address starts with a set of points (from 0 to 100) that
 	// represents how much faster they are than the highest-latency
 	// endpoint. For example, if a has latency 200ms and b has latency
@@ -2110,19 +2226,26 @@ func betterAddr(a, b addrQuality) bool {
 	// addresses, and prefer link-local unicast addresses over other types
 	// of private IP addresses since it's definitionally more likely that
 	// they'll be on the same network segment than a general private IP.
-	if a.ap.Addr().IsLoopback() {
-		aPoints += 50
-	} else if a.ap.Addr().IsLinkLocalUnicast() {
-		aPoints += 30
-	} else if a.ap.Addr().IsPrivate() {
-		aPoints += 20
+	//
+	// Exclude magic IPs (DERP, transports) from these bonuses as they're not
+	// real network paths.
+	if !aIsDERP && !aIsTransport {
+		if a.ap.Addr().IsLoopback() {
+			aPoints += 50
+		} else if a.ap.Addr().IsLinkLocalUnicast() {
+			aPoints += 30
+		} else if a.ap.Addr().IsPrivate() {
+			aPoints += 20
+		}
 	}
-	if b.ap.Addr().IsLoopback() {
-		bPoints += 50
-	} else if b.ap.Addr().IsLinkLocalUnicast() {
-		bPoints += 30
-	} else if b.ap.Addr().IsPrivate() {
-		bPoints += 20
+	if !bIsDERP && !bIsTransport {
+		if b.ap.Addr().IsLoopback() {
+			bPoints += 50
+		} else if b.ap.Addr().IsLinkLocalUnicast() {
+			bPoints += 30
+		} else if b.ap.Addr().IsPrivate() {
+			bPoints += 20
+		}
 	}
 
 	// Prefer IPv6 for being a bit more robust, as long as
@@ -2252,9 +2375,22 @@ func (de *endpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	if udpAddr, derpAddr, _ := de.addrForSendLocked(now); udpAddr.ap.IsValid() && !derpAddr.IsValid() {
 		if udpAddr.vni.IsSet() {
 			ps.PeerRelay = udpAddr.String()
+		} else if inst, ok := de.c.transportByMagicIP(udpAddr.ap.Addr()); ok {
+			// On a pluggable transport path. Report the transport name and its
+			// real remote address (not the synthetic magic IP).
+			ps.TransportName = inst.name
+			ps.CurAddr = udpAddr.String()
+			if disco := de.disco.Load(); disco != nil {
+				if remoteAddr := inst.t.GetRemoteAddr(disco.key()); remoteAddr != "" {
+					ps.CurAddr = remoteAddr
+				}
+			}
 		} else {
 			ps.CurAddr = udpAddr.String()
 		}
+	} else {
+		// Not on a direct or transport path; show the DERP relay being used.
+		ps.Relay = de.c.derpRegionCodeOfIDLocked(tailcfg.DERPRegionID(de.derpAddr.Port()))
 	}
 }
 

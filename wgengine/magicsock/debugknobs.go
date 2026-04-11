@@ -66,6 +66,9 @@ var (
 	// suppressing/dropping inbound/outbound [disco.Ping] messages, forcing
 	// all peer communication over DERP or peer relay.
 	debugNeverDirectUDP = envknob.RegisterBool("TS_DEBUG_NEVER_DIRECT_UDP")
+	// debugDisablePluggableTransports disables all pluggable transports, so
+	// peers that would otherwise use one fall back to DERP.
+	debugDisablePluggableTransports = envknob.RegisterBool("TS_DEBUG_DISABLE_PLUGGABLE_TRANSPORTS")
 	// Hey you! Adding a new debugknob? Make sure to stub it out in the
 	// debugknobs_stubs.go file too.
 )

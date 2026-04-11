@@ -3079,6 +3079,57 @@ const DerpMagicIP = "127.3.3.40"
 
 var DerpMagicIPAddr = netip.MustParseAddr(DerpMagicIP)
 
+// Pluggable-transport magic IPs are a reserved block of fake WireGuard
+// endpoint IPs, one per registered pluggable transport (see
+// tailscale.com/wgengine/magicsock's RegisterTransport). Like [DerpMagicIP],
+// they are synthetic: they never appear on the wire, they only tag which local
+// path a packet took inside magicsock. Index 0 maps to the base address.
+//
+// Mnemonic: 127.3.3.41 is one above DerpMagicIP (127.3.3.40); the block grows
+// upward from there.
+const (
+	// TransportMagicIPBase is the first address of the reserved block.
+	TransportMagicIPBase = "127.3.3.41"
+	// MaxPluggableTransports is the number of addresses reserved for pluggable
+	// transports, i.e. the maximum number that can be registered in one
+	// process (127.3.3.41 through 127.3.3.50).
+	MaxPluggableTransports = 10
+)
+
+var transportMagicIPBaseAddr = netip.MustParseAddr(TransportMagicIPBase)
+
+// TransportMagicIP returns the synthetic magic IP for the pluggable transport
+// at index i (0-based). It panics if i is negative or >= MaxPluggableTransports.
+func TransportMagicIP(i int) netip.Addr {
+	if i < 0 || i >= MaxPluggableTransports {
+		panic("tailcfg: transport index out of range")
+	}
+	// The reserved block is contiguous within the final octet, so advancing by
+	// i addresses stays within 127.3.3.0/24.
+	a4 := transportMagicIPBaseAddr.As4()
+	a4[3] += byte(i)
+	return netip.AddrFrom4(a4)
+}
+
+// IsTransportMagicIP reports whether a is one of the reserved pluggable
+// transport magic IPs, and if so returns its 0-based transport index.
+func IsTransportMagicIP(a netip.Addr) (idx int, ok bool) {
+	if !a.Is4() {
+		return 0, false
+	}
+	base := transportMagicIPBaseAddr.As4()
+	got := a.As4()
+	// Must match on the first three octets (127.3.3) and the base of the block.
+	if got[0] != base[0] || got[1] != base[1] || got[2] != base[2] {
+		return 0, false
+	}
+	d := int(got[3]) - int(base[3])
+	if d < 0 || d >= MaxPluggableTransports {
+		return 0, false
+	}
+	return d, true
+}
+
 // EarlyNoise is the early payload that's sent over Noise but before the HTTP/2
 // handshake when connecting to the coordination server.
 //

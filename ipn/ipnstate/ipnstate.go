@@ -271,6 +271,11 @@ type PeerStatus struct {
 	Relay     string // DERP region
 	PeerRelay string // peer relay address (ip:port:vni)
 
+	// TransportName, if non-empty, is the name of the pluggable transport
+	// (e.g. "webrtc") currently carrying traffic to this peer. When set, CurAddr
+	// holds the transport's real remote address rather than a direct UDP addr.
+	TransportName string `json:",omitempty"`
+
 	RxBytes        int64
 	TxBytes        int64
 	Created        time.Time // time registered with tailcontrol
@@ -686,6 +691,9 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 		if ps.Active {
 			if ps.Relay != "" && ps.CurAddr == "" {
 				f("relay <b>%s</b>", html.EscapeString(ps.Relay))
+			} else if ps.TransportName != "" {
+				// On a pluggable transport path; CurAddr is the real remote addr.
+				f("%s <b>%s</b>", html.EscapeString(ps.TransportName), html.EscapeString(ps.CurAddr))
 			} else if ps.CurAddr != "" {
 				f("direct <b>%s</b>", html.EscapeString(ps.CurAddr))
 			}
