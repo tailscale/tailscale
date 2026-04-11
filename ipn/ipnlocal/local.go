@@ -777,13 +777,26 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 // GetDNSOSConfig returns the base OS DNS configuration, as seen by the DNS manager.
 func (b *LocalBackend) GetDNSOSConfig() (dns.OSConfig, error) {
 	if !buildfeatures.HasDNS {
-		panic("unreachable")
+		return dns.OSConfig{}, feature.ErrUnavailable
 	}
 	manager, ok := b.sys.DNSManager.GetOK()
 	if !ok {
 		return dns.OSConfig{}, errors.New("DNS manager not available")
 	}
 	return manager.GetBaseConfig()
+}
+
+// GetDNSManagerMode returns the selected DNS manager mode, or the empty string
+// if the current DNS manager does not report a mode.
+func (b *LocalBackend) GetDNSManagerMode() (string, error) {
+	if !buildfeatures.HasDNS {
+		return "", feature.ErrUnavailable
+	}
+	manager, ok := b.sys.DNSManager.GetOK()
+	if !ok {
+		return "", errors.New("DNS manager not available")
+	}
+	return manager.OSMode(), nil
 }
 
 // QueryDNS performs a DNS query for name and queryType using the built-in DNS resolver, and returns

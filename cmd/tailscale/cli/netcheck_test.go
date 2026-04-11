@@ -4,7 +4,14 @@
 package cli
 
 import (
+	"bytes"
+	"net/netip"
 	"testing"
+	"time"
+
+	"tailscale.com/net/netcheck"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/opt"
 )
 
 func TestCreateBindStr(t *testing.T) {
@@ -104,5 +111,43 @@ func TestCreateBindStr(t *testing.T) {
 				t.Errorf("got result %q; want result %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPrintReportIncludesDNSMode(t *testing.T) {
+	oldStdout := Stdout
+	oldFormat := netcheckArgs.format
+	defer func() {
+		Stdout = oldStdout
+		netcheckArgs.format = oldFormat
+	}()
+
+	var out bytes.Buffer
+	Stdout = &out
+	netcheckArgs.format = ""
+
+	report := &netcheck.Report{
+		Now:                   time.Unix(1700000000, 0),
+		UDP:                   true,
+		GlobalV4:              netip.AddrPortFrom(netip.MustParseAddr("203.0.113.4"), 12345),
+		PreferredDERP:         1,
+		RegionLatency:         map[int]time.Duration{1: 25 * time.Millisecond},
+		MappingVariesByDestIP: opt.False,
+	}
+	dm := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{
+			1: {RegionID: 1, RegionCode: "nyc", RegionName: "New York City"},
+		},
+	}
+
+	if err := printReport(netcheckOutput{
+		dm:      dm,
+		report:  report,
+		dnsMode: "systemd-resolved",
+	}); err != nil {
+		t.Fatalf("printReport: %v", err)
+	}
+	if got := out.String(); !bytes.Contains([]byte(got), []byte("DNS Mode: systemd-resolved")) {
+		t.Fatalf("output %q does not contain DNS mode line", got)
 	}
 }

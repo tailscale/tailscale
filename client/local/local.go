@@ -892,6 +892,23 @@ func (lc *Client) GetDNSOSConfig(ctx context.Context) (*apitype.DNSOSConfig, err
 	return &osCfg, nil
 }
 
+// GetDNSManagerInfo returns diagnostic information about the DNS manager
+// selected by tailscaled for the current device.
+func (lc *Client) GetDNSManagerInfo(ctx context.Context) (*apitype.DNSManagerInfo, error) {
+	if !buildfeatures.HasDNS {
+		return nil, feature.ErrUnavailable
+	}
+	body, err := lc.get200(ctx, "/localapi/v0/dns-manager-info")
+	if err != nil {
+		return nil, err
+	}
+	var info apitype.DNSManagerInfo
+	if err := json.Unmarshal(body, &info); err != nil {
+		return nil, fmt.Errorf("invalid DNS manager info: %w", err)
+	}
+	return &info, nil
+}
+
 // QueryDNS executes a DNS query for a name (`google.com.`) and query type (`CNAME`).
 // It returns the raw DNS response bytes and the resolvers that were used to answer the query
 // (often just one, but can be more if we raced multiple resolvers).
