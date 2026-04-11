@@ -181,6 +181,10 @@ type Server struct {
 	verifyClientsURL         string
 	verifyClientsURLFailOpen bool
 
+	// a string prefix, with terminating :, from which to accept X-Real-IP headers from.
+	// specifically, this is matched against AddrPort.String()
+	acceptProxy              string
+
 	mu       syncs.Mutex
 	closed   bool
 	netConns map[derp.Conn]chan struct{} // chan is closed when conn closes
@@ -388,6 +392,7 @@ func New(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		keyOfAddr:           map[netip.AddrPort]key.NodePublic{},
 		clock:               tstime.StdClock{},
 		tcpWriteTimeout:     DefaultTCPWiteTimeout,
+		acceptProxy:         "127.0.0.1:",
 	}
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get(string(packetKindDisco))

@@ -8,9 +8,12 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"regexp"
 
 	"tailscale.com/derp"
 )
+
+var IPsanitizer = regexp.MustCompile("[^][a-zA-Z0-9:.]+")
 
 // Handler returns an http.Handler to be mounted at /derp, serving s.
 func Handler(s *Server) http.Handler {
@@ -66,7 +69,25 @@ func Handler(s *Server) http.Handler {
 			ctx = IdealNodeContextKey.WithValue(ctx, v)
 		}
 
-		s.Accept(ctx, netConn, conn, netConn.RemoteAddr().String())
+		var remote_addr = netConn.RemoteAddr().String()
+
+		if (s.acceptProxy != "") && strings.HasPrefix(remote_addr, s.acceptProxy) {
+			var header_addr = IPsanitizer.ReplaceAllString(r.Header.Get("X-Real-IP"), "")
+
+			if (header_addr != "") {
+				// the port is only used as a key to index the connection.  there is
+				// a chance that two connections from the same remote, one from a proxy,
+				// and another direct, may have the same "remote" port (one, the actual
+				// source port on the derp client, the other the source port used by the
+				// proxy).
+
+				// ports are 16 bits, so that chance is 1 in ~ 2**8, which is
+				// frustratingly likely,  please don't connect to derper that way!
+				remote_addr = header_addr + remote_addr[len(s.acceptProxy)-1:len(remote_addr)]
+			}
+		}
+
+		s.Accept(ctx, netConn, conn, remote_addr)
 	})
 }
 
