@@ -396,7 +396,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		cfg, err := m.os.GetBaseConfig()
 		if err == nil {
 			baseCfg = &cfg
-		} else if (isApple || isNoopManager(m.os)) && err == ErrGetBaseConfigNotSupported {
+		} else if err == ErrGetBaseConfigNotSupported {
 			// Expected when using noopManager (userspace networking) or on
 			// certain iOS/macOS builds. Continue without base config.
 		} else {

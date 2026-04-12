@@ -1504,16 +1504,32 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 	if delta.RebindLikelyRequired && up {
 		switch runtime.GOOS {
 		case "linux", "android", "ios", "darwin", "openbsd":
-			e.wgLock.Lock()
-			dnsCfg := e.lastDNSConfig
-			e.wgLock.Unlock()
-			if dnsCfg.Valid() {
-				if err := e.dns.Set(*dnsCfg.AsStruct()); err != nil {
-					e.logf("wgengine: error setting DNS config after major link change: %v", err)
-				} else if err := e.reconfigureVPNIfNecessary(); err != nil {
-					e.logf("wgengine: error reconfiguring VPN after major link change: %v", err)
-				} else {
-					e.logf("wgengine: set DNS config again after major link change")
+			// On Android and Darwin, the upstream DNS servers may have changed
+			// along with the network interface (e.g. WiFi to mobile data).
+			// Use RecompileDNSConfig so that GetBaseConfig() is re-invoked to
+			// pick up the new upstream nameservers rather than reusing stale ones.
+			if runtime.GOOS == "android" || runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+				if err := e.dns.RecompileDNSConfig(); err != nil && err != dns.ErrNoDNSConfig {
+					e.logf("wgengine: error recompiling DNS config after major link change: %v", err)
+				} else if err == nil {
+					if err := e.reconfigureVPNIfNecessary(); err != nil {
+						e.logf("wgengine: error reconfiguring VPN after major link change: %v", err)
+					} else {
+						e.logf("wgengine: recompiled DNS config after major link change")
+					}
+				}
+			} else {
+				e.wgLock.Lock()
+				dnsCfg := e.lastDNSConfig
+				e.wgLock.Unlock()
+				if dnsCfg.Valid() {
+					if err := e.dns.Set(*dnsCfg.AsStruct()); err != nil {
+						e.logf("wgengine: error setting DNS config after major link change: %v", err)
+					} else if err := e.reconfigureVPNIfNecessary(); err != nil {
+						e.logf("wgengine: error reconfiguring VPN after major link change: %v", err)
+					} else {
+						e.logf("wgengine: set DNS config again after major link change")
+					}
 				}
 			}
 		}

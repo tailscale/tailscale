@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build (!linux || android) && !freebsd && !openbsd && !windows && !darwin && !illumos && !solaris && !plan9
+//go:build !linux && !android && !freebsd && !openbsd && !windows && !darwin && !illumos && !solaris && !plan9
 
 package dns
 

@@ -19,6 +19,7 @@ import (
 
 var (
 	lastKnownDefaultRouteIfName syncs.AtomicValue[string]
+	lastKnownDNSServers         syncs.AtomicValue[string] // comma-separated DNS server IPs
 )
 
 var procNetRoutePath = "/proc/net/route"
@@ -168,6 +169,23 @@ func UpdateLastKnownDefaultRouteInterface(ifName string) {
 	if old := lastKnownDefaultRouteIfName.Swap(ifName); old != ifName {
 		log.Printf("defaultroute: update from Android, ifName = %s (was %s)", ifName, old)
 	}
+}
+
+// UpdateLastKnownDNSServers is called by libtailscale in the Android app when
+// the connectivity manager detects a network change. The servers parameter is a
+// comma-separated list of DNS server IP addresses (e.g. "8.8.8.8,8.8.4.4").
+// This should be called alongside UpdateLastKnownDefaultRouteInterface before
+// calling Monitor.InjectEvent().
+func UpdateLastKnownDNSServers(servers string) {
+	if old := lastKnownDNSServers.Swap(servers); old != servers {
+		log.Printf("dns: update from Android, servers = %q (was %q)", servers, old)
+	}
+}
+
+// LastKnownDNSServers returns the DNS servers last provided by the Android app
+// via UpdateLastKnownDNSServers as a comma-separated string.
+func LastKnownDNSServers() string {
+	return lastKnownDNSServers.Load()
 }
 
 func defaultRoute() (d DefaultRouteDetails, err error) {

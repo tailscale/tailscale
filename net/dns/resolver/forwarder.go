@@ -477,6 +477,9 @@ func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolve
 	f.acceptDNS = acceptDNS
 	f.routes = routes
 	f.cloudHostFallback = cloudHostFallback
+	// Clear cached DoH HTTP clients so that stale connections from a
+	// previous network interface are not reused after a network change.
+	f.dohClient = nil
 }
 
 var stdNetPacketListener nettype.PacketListenerWithNetIP = nettype.MakePacketListenerWithNetIP(new(net.ListenConfig))
