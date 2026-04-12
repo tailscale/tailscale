@@ -5,6 +5,7 @@ package netmon
 
 import (
 	"flag"
+	"fmt"
 	"net"
 	"net/netip"
 	"reflect"
@@ -13,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/tstest"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/mak"
@@ -831,6 +834,126 @@ func TestInterfaceDiff(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGatewayAndSelfIPLogging(t *testing.T) {
+	if !buildfeatures.HasPortMapper {
+		t.Skip("portmapper not built in")
+	}
+
+	gw1 := netip.MustParseAddr("192.168.1.1")
+	self1 := netip.MustParseAddr("192.168.1.100")
+	gw2 := netip.MustParseAddr("10.0.0.1")
+	self2 := netip.MustParseAddr("10.0.0.50")
+
+	tests := []struct {
+		name      string
+		oldGW     netip.Addr
+		oldSelfIP netip.Addr
+		newGW     netip.Addr
+		newSelfIP netip.Addr
+		wantLog   string // substring expected in log; empty means no log expected
+	}{
+		{
+			name:      "gw_and_self_changed",
+			oldGW:     gw1,
+			oldSelfIP: self1,
+			newGW:     gw2,
+			newSelfIP: self2,
+			wantLog:   fmt.Sprintf("gw=%v->%v self=%v->%v", gw1, gw2, self1, self2),
+		},
+		{
+			name:      "only_gw_changed",
+			oldGW:     gw1,
+			oldSelfIP: self1,
+			newGW:     gw2,
+			newSelfIP: self1,
+			wantLog:   fmt.Sprintf("gw=%v->%v self=%v->%v", gw1, gw2, self1, self1),
+		},
+		{
+			name:      "no_change",
+			oldGW:     gw1,
+			oldSelfIP: self1,
+			newGW:     gw1,
+			newSelfIP: self1,
+			wantLog:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tstest.Replace(t, &likelyHomeRouterIP, func() (netip.Addr, netip.Addr, bool) {
+				return tt.newGW, tt.newSelfIP, true
+			})
+
+			var ml tstest.MemLogger
+			m := &Monitor{
+				logf:     ml.Logf,
+				gw:       tt.oldGW,
+				gwSelfIP: tt.oldSelfIP,
+				// gwValid left false to force a lookup
+			}
+
+			gotGW, gotSelf, ok := m.GatewayAndSelfIP()
+			if !ok {
+				t.Fatal("GatewayAndSelfIP returned ok=false")
+			}
+			if gotGW != tt.newGW {
+				t.Errorf("gw: got %v, want %v", gotGW, tt.newGW)
+			}
+			if gotSelf != tt.newSelfIP {
+				t.Errorf("selfIP: got %v, want %v", gotSelf, tt.newSelfIP)
+			}
+
+			logStr := ml.String()
+			if tt.wantLog == "" {
+				if logStr != "" {
+					t.Errorf("expected no log output, got: %q", logStr)
+				}
+			} else {
+				if !strings.Contains(logStr, tt.wantLog) {
+					t.Errorf("log %q does not contain %q", logStr, tt.wantLog)
+				}
+			}
+		})
+	}
+}
+
+func TestGatewayAndSelfIPCacheHit(t *testing.T) {
+	if !buildfeatures.HasPortMapper {
+		t.Skip("portmapper not built in")
+	}
+
+	gw := netip.MustParseAddr("192.168.1.1")
+	selfIP := netip.MustParseAddr("192.168.1.100")
+
+	// gwLookupFn should never be called when the cache is valid.
+	tstest.Replace(t, &likelyHomeRouterIP, func() (netip.Addr, netip.Addr, bool) {
+		t.Error("likelyHomeRouterIP called unexpectedly on cache hit")
+		return netip.Addr{}, netip.Addr{}, false
+	})
+
+	var ml tstest.MemLogger
+	m := &Monitor{
+		logf:     ml.Logf,
+		gw:       gw,
+		gwSelfIP: selfIP,
+		gwValid:  true, // cache is populated
+	}
+
+	gotGW, gotSelf, ok := m.GatewayAndSelfIP()
+	if !ok {
+		t.Fatal("GatewayAndSelfIP returned ok=false")
+	}
+	if gotGW != gw {
+		t.Errorf("gw: got %v, want %v", gotGW, gw)
+	}
+	if gotSelf != selfIP {
+		t.Errorf("selfIP: got %v, want %v", gotSelf, selfIP)
+	}
+	if logStr := ml.String(); logStr != "" {
+		t.Errorf("expected no log on cache hit, got: %q", logStr)
 	}
 }
 
