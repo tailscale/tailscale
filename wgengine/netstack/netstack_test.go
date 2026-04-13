@@ -814,8 +814,10 @@ func TestTCPForwardLimits_PerClient(t *testing.T) {
 	envknob.Setenv("TS_DEBUG_NETSTACK", "true")
 
 	// Set our test override limits during this test.
-	tstest.Replace(t, &maxInFlightConnectionAttemptsForTest, 2)
-	tstest.Replace(t, &maxInFlightConnectionAttemptsPerClientForTest, 1)
+	maxInFlightConnectionAttemptsForTest.Store(2)
+	t.Cleanup(func() { maxInFlightConnectionAttemptsForTest.Store(0) })
+	maxInFlightConnectionAttemptsPerClientForTest.Store(1)
+	t.Cleanup(func() { maxInFlightConnectionAttemptsPerClientForTest.Store(0) })
 
 	impl := makeNetstack(t, func(impl *Impl) {
 		impl.ProcessSubnets = true
