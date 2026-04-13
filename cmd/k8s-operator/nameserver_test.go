@@ -51,6 +51,23 @@ func TestNameserverReconciler(t *testing.T) {
 							Effect:   corev1.TaintEffectNoSchedule,
 						},
 					},
+					Affinity: &corev1.Affinity{
+						NodeAffinity: &corev1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+								NodeSelectorTerms: []corev1.NodeSelectorTerm{
+									{
+										MatchExpressions: []corev1.NodeSelectorRequirement{
+											{
+												Key:      "some-key",
+												Operator: corev1.NodeSelectorOpIn,
+												Values:   []string{"some-value"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
@@ -95,6 +112,23 @@ func TestNameserverReconciler(t *testing.T) {
 				Operator: corev1.TolerationOpEqual,
 				Value:    "some-value",
 				Effect:   corev1.TaintEffectNoSchedule,
+			},
+		}
+		wantsDeploy.Spec.Template.Spec.Affinity = &corev1.Affinity{
+			NodeAffinity: &corev1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{
+						{
+							MatchExpressions: []corev1.NodeSelectorRequirement{
+								{
+									Key:      "some-key",
+									Operator: corev1.NodeSelectorOpIn,
+									Values:   []string{"some-value"},
+								},
+							},
+						},
+					},
+				},
 			},
 		}
 
