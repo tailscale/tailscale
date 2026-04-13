@@ -2794,9 +2794,11 @@ const (
 
 const (
 	// NodeAttrPrefixServices is the prefix for per-service [NodeCapMap]
-	// entries describing Services visible (accessible) to this node. The full
-	// key for a service named "svc:foo" is NodeAttrPrefixServices+"foo".
+	// entries describing Services visible (accessible) to this node.
 	// Each value under such a key is of type [ServiceDetails].
+	// The suffix after the prefix is an opaque server-chosen identifier;
+	// consumers must use [ServiceDetails.Name] as the canonical service name
+	// rather than parsing it from the map key.
 	NodeAttrPrefixServices NodeCapabilityPrefix = "services/"
 )
 
