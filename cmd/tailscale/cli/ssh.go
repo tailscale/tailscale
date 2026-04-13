@@ -11,7 +11,6 @@ import (
 	"log"
 	"net/netip"
 	"os"
-	"os/user"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -59,11 +58,7 @@ func runSSH(ctx context.Context, args []string) error {
 	username, host, ok := strings.Cut(arg, "@")
 	if !ok {
 		host = arg
-		lu, err := user.Current()
-		if err != nil {
-			return nil
-		}
-		username = lu.Username
+		username = ""
 	}
 
 	st, err := localClient.Status(ctx)
@@ -146,7 +141,11 @@ func runSSH(ctx context.Context, args []string) error {
 	// to use a different one, we'll later be making stock ssh
 	// work well by default too. (doing things like automatically
 	// setting known_hosts, etc)
-	argv = append(argv, username+"@"+hostForSSH)
+	if username == "" {
+		argv = append(argv, hostForSSH)
+	} else {
+		argv = append(argv, username+"@"+hostForSSH)
+	}
 
 	argv = append(argv, argRest...)
 
