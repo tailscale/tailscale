@@ -42,12 +42,12 @@ var (
 	raceFlag     = flag.Bool("race", true, "also run tests with -race")
 	parallelFlag = flag.Int("parallel", runtime.NumCPU(), "number of packages to test in parallel")
 	maxBaseline  = flag.Duration("max-baseline", 60*time.Second, "max baseline time; tests exceeding this are marked as flakes")
-	baselineFile   = flag.String("baseline", "", "path to baseline.json (runs baseline if empty)")
-	csvFile        = flag.String("csv", "", "path to existing tests.csv to resume from")
-	outputFile     = flag.String("output", "tests.csv", "path to output CSV")
-	packagesFlag   = flag.String("packages", "./...", "package pattern to test")
-	flakeLogFile   = flag.String("flake-log", "flakes.log", "path to flake log file")
-	goToolFlag     = flag.String("go", "./tool/go", "path to go command")
+	baselineFile = flag.String("baseline", "", "path to baseline.json (runs baseline if empty)")
+	csvFile      = flag.String("csv", "", "path to existing tests.csv to resume from")
+	outputFile   = flag.String("output", "tests.csv", "path to output CSV")
+	packagesFlag = flag.String("packages", "./...", "package pattern to test")
+	flakeLogFile = flag.String("flake-log", "flakes.log", "path to flake log file")
+	goToolFlag   = flag.String("go", "./tool/go", "path to go command")
 )
 
 // TestEvent represents a single JSON event from go test -json
@@ -62,11 +62,11 @@ type TestEvent struct {
 
 // TestInfo holds baseline info for a test
 type TestInfo struct {
-	Package     string
-	Test        string
-	BaselineMS  float64 // baseline time in milliseconds
-	PassCount   int
-	Status      string // "pending", "pass", "flake", "flake-race"
+	Package    string
+	Test       string
+	BaselineMS float64 // baseline time in milliseconds
+	PassCount  int
+	Status     string // "pending", "pass", "flake", "flake-race"
 }
 
 func main() {

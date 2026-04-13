@@ -511,10 +511,10 @@ func (s *system) addRemote(name string) string {
 	s.t.Logf("FileServer for %v listening at %s", name, fileServer.Addr())
 
 	r := &remote{
-		l:          ln,
-		fileServer: fileServer,
-		fs:         NewFileSystemForRemote(log.Printf),
-		shares:     make(map[string]string),
+		l:           ln,
+		fileServer:  fileServer,
+		fs:          NewFileSystemForRemote(log.Printf),
+		shares:      make(map[string]string),
 		permissions: make(map[string]drive.Permission),
 	}
 	r.fs.SetFileServerAddr(fileServer.Addr())
