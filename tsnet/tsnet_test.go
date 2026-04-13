@@ -44,6 +44,7 @@ import (
 	"golang.org/x/net/proxy"
 
 	"tailscale.com/client/local"
+	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
@@ -518,6 +519,9 @@ func TestConn(t *testing.T) {
 }
 
 func TestLoopbackLocalAPI(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8557")
+	}
 	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -593,6 +597,9 @@ func TestLoopbackLocalAPI(t *testing.T) {
 }
 
 func TestLoopbackSOCKS5(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8198")
+	}
 	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
