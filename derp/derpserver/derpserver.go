@@ -566,11 +566,37 @@ func (s *Server) LoadAndApplyRateConfig(path string) error {
 	return nil
 }
 
+var publishRateLimitsMetricsOnce sync.Once
+
+func (s *Server) publishRateLimitsMetrics() {
+	// Rate limiting is currently experimental, its APIs are unstable, and it must
+	// be opted-in via --rate-config. Therefore, we only publish related metrics
+	// on demand, to avoid polluting uninterested metrics consumers.
+	//
+	// Note: The [sync.Once] is package-level, and the [expvar.Var] closures
+	// capture [Server], so first [Server] owns these for process lifetime.
+	publishRateLimitsMetricsOnce.Do(func() {
+		expvar.Publish("derp_per_client_rate_limit_bytes_per_second", s.expVarFunc(func() any {
+			return s.rateConfig.PerClientRateLimitBytesPerSec
+		}))
+		expvar.Publish("derp_per_client_rate_burst_bytes", s.expVarFunc(func() any {
+			return s.rateConfig.PerClientRateBurstBytes
+		}))
+		expvar.Publish("derp_global_rate_limit_bytes_per_second", s.expVarFunc(func() any {
+			return s.rateConfig.GlobalRateLimitBytesPerSec
+		}))
+		expvar.Publish("derp_global_rate_burst_bytes", s.expVarFunc(func() any {
+			return s.rateConfig.GlobalRateBurstBytes
+		}))
+	})
+}
+
 // UpdateRateLimits sets the receive rate limits, updating all existing client
 // connections. It returns the applied config, which may differ from rc. If the
 // per-client rate limit is 0, rate limiting is disabled. Mesh peers are always
 // exempt from rate limiting.
 func (s *Server) UpdateRateLimits(rc RateConfig) (applied RateConfig) {
+	s.publishRateLimitsMetrics()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if rc.PerClientRateLimitBytesPerSec == 0 {
