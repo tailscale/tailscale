@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,9 +44,10 @@ func NewWatcher(t *testing.T, bus *eventbus.Bus) *Watcher {
 //
 // For usage examples, see the documentation in the top of the package.
 type Watcher struct {
-	mon    *eventbus.Subscriber[eventbus.RoutedEvent]
-	events chan any
-	chDone chan bool
+	mon      *eventbus.Subscriber[eventbus.RoutedEvent]
+	events   chan any
+	chDone   chan bool
+	doneOnce sync.Once
 }
 
 // Type is a helper representing the expectation to see an event of type T, without
@@ -174,7 +176,9 @@ func (tw *Watcher) watch() {
 
 // done tells the watcher to stop monitoring for new events.
 func (tw *Watcher) done() {
-	close(tw.chDone)
+	tw.doneOnce.Do(func() {
+		close(tw.chDone)
+	})
 }
 
 type filter = func(any) (bool, error)

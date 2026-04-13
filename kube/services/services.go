@@ -16,6 +16,19 @@ import (
 	"tailscale.com/types/logger"
 )
 
+// serviceWaitDuration is the time to wait for services to propagate after
+// advertising/unadvertising. This can be overridden in tests via
+// SetWaitDurationForTest.
+var serviceWaitDuration = 20 * time.Second
+
+// SetWaitDurationForTest sets the service wait duration and returns a function
+// to restore the original value. This should only be used in tests.
+func SetWaitDurationForTest(d time.Duration) func() {
+	old := serviceWaitDuration
+	serviceWaitDuration = d
+	return func() { serviceWaitDuration = old }
+}
+
 // EnsureServicesAdvertised is a function that gets called on containerboot
 // startup and ensures that Services get advertised if they exist.
 func EnsureServicesAdvertised(ctx context.Context, services []string, lc localclient.LocalClient, logf logger.Logf) error {
@@ -47,7 +60,7 @@ func EnsureServicesAdvertised(ctx context.Context, services []string, lc localcl
 	select {
 	case <-ctx.Done():
 		return nil
-	case <-time.After(20 * time.Second):
+	case <-time.After(serviceWaitDuration):
 		return nil
 	}
 }
@@ -94,7 +107,7 @@ func EnsureServicesNotAdvertised(ctx context.Context, lc *local.Client, logf log
 	select {
 	case <-ctx.Done():
 		return nil
-	case <-time.After(20 * time.Second):
+	case <-time.After(serviceWaitDuration):
 		return nil
 	}
 }

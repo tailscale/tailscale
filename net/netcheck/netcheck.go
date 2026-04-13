@@ -1015,6 +1015,10 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	}
 
 	// Wait for captive portal check before finishing the report.
+	// Try to stop the captive portal check timer in case it hasn't fired yet.
+	// This is safe to call multiple times - if the timer already fired, the
+	// goroutine will close the channel when it completes.
+	captivePortalStop()
 	<-captivePortalDone
 
 	return c.finishAndStoreReport(rs, dm), nil
