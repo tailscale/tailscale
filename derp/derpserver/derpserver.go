@@ -514,6 +514,15 @@ func (s *Server) SetTCPWriteTimeout(d time.Duration) {
 	s.tcpWriteTimeout = d
 }
 
+// minRateLimitTokenBucketSize represents the minimum size of a token bucket
+// applied for the purposes of rate limiting a DERP connection per received DERP
+// frame.
+//
+// Note: The DERP protocol supports frames larger than this ([math.MaxUint32] length),
+// but a [derp.FrameSendPacket] cannot exceed this value, which is what we optimize
+// our token bucket calls for.
+const minRateLimitTokenBucketSize = derp.MaxPacketSize + derp.KeyLen
+
 // RateConfig is a JSON-serializable configuration for per-client rate limits.
 // Values are in bytes.
 type RateConfig struct {
@@ -521,8 +530,8 @@ type RateConfig struct {
 	// rate limit in bytes per second. A zero value disables rate-limiting.
 	PerClientRateLimitBytesPerSec uint64 `json:",omitzero"`
 	// PerClientRateBurstBytes represents the per-client token bucket depth,
-	// or burst, in bytes. Any value lower than [derp.MaxPacketSize]
-	// will be increased to [derp.MaxPacketSize] before application.
+	// or burst, in bytes. Any value lower than [minRateLimitTokenBucketSize]
+	// will be increased to [minRateLimitTokenBucketSize] before application.
 	PerClientRateBurstBytes uint64 `json:",omitzero"`
 }
 
@@ -556,15 +565,13 @@ func (s *Server) LoadAndApplyRateConfig(path string) error {
 
 // UpdatePerClientRateLimit sets the per-client receive rate limit in bytes per
 // second and the burst size in bytes, updating all existing client connections.
-// The burst is at least [derp.MaxPacketSize], ensuring at least a full packet
-// can be received in a burst even if the rate limit is low. If bytesPerSec is
-// 0, rate limiting is set to infinity. Mesh peers are always exempt from rate
-// limiting.
+// The applied burst will be at least [minRateLimitTokenBucketSize]. If bytesPerSec is
+// 0, rate limiting is disabled. Mesh peers are always exempt from rate limiting.
 func (s *Server) UpdatePerClientRateLimit(bytesPerSec, burst uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.perClientRecvBytesPerSec = bytesPerSec
-	s.perClientRecvBurst = max(burst, derp.MaxPacketSize)
+	s.perClientRecvBurst = max(burst, minRateLimitTokenBucketSize)
 	for _, cs := range s.clients {
 		cs.ForeachClient(func(c *sclient) {
 			c.setRateLimit(s.perClientRecvBytesPerSec, s.perClientRecvBurst)
@@ -1093,10 +1100,9 @@ func (c *sclient) run(ctx context.Context) error {
 			}
 			return fmt.Errorf("client %s: readFrameHeader: %w", c.key.ShortString(), err)
 		}
-		// Rate limit by DERP frame length (fl), which excludes DERP
-		// and TLS protocol overheads.
+		// Rate limit by DERP frame length (fl), which excludes TLS protocol and
+		// DERP frame length field overheads.
 		// Note: meshed clients are exempt from rate limits.
-		// meshed clients are exempt from rate limits
 		if err := c.rateLimit(int(fl)); err != nil {
 			return err // context canceled, connection closing
 		}
@@ -1339,7 +1345,17 @@ func (c *sclient) setRateLimit(bytesPerSec uint64, burst uint64) {
 // and this is a no-op.
 func (c *sclient) rateLimit(n int) error {
 	if lim := c.recvLim.Load(); lim != nil {
-		return lim.WaitN(c.ctx, n)
+		// If n exceeds the capacity of the bucket, then WaitN will return
+		// an error and consume zero tokens. To prevent this, clamp n to
+		// [minRateLimitTokenBucketSize].
+		//
+		// While we could call WaitN multiple times and/or more precisely for
+		// lim.Burst(), it's better to return early as a larger DERP frame is:
+		//   1. unexpected
+		//   2. only partially read off the socket (bufio)
+		//   3. would cause the connection to close shortly after rate limiting, anyway.
+		clampedN := min(n, minRateLimitTokenBucketSize)
+		return lim.WaitN(c.ctx, clampedN)
 	}
 	return nil
 }

@@ -959,25 +959,21 @@ func BenchmarkHyperLogLogEstimate(b *testing.B) {
 func TestPerClientRateLimit(t *testing.T) {
 	t.Run("throttled", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			// 100 bytes/sec with a burst of 100 bytes.
-			const bytesPerSec = 100
-			const burst = 100
-
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
 
 			c := &sclient{
 				ctx: ctx,
 			}
-			c.recvLim.Store(rate.NewLimiter(rate.Limit(bytesPerSec), burst))
+			c.recvLim.Store(rate.NewLimiter(rate.Limit(minRateLimitTokenBucketSize), minRateLimitTokenBucketSize))
 
 			// First call within burst should not block.
-			c.rateLimit(burst)
+			c.rateLimit(minRateLimitTokenBucketSize)
 
 			// Next call exceeds burst, should block until tokens replenish.
 			done := make(chan error, 1)
 			go func() {
-				done <- c.rateLimit(burst)
+				done <- c.rateLimit(minRateLimitTokenBucketSize)
 			}()
 
 			// After settling, the goroutine should be blocked (no result yet).
@@ -988,7 +984,7 @@ func TestPerClientRateLimit(t *testing.T) {
 			default:
 			}
 
-			// Advance time by 1 second; 100 bytes/sec * 1s = 100 bytes = burst.
+			// Advance time by 1 second
 			time.Sleep(1 * time.Second)
 			synctest.Wait()
 
@@ -1010,16 +1006,16 @@ func TestPerClientRateLimit(t *testing.T) {
 			c := &sclient{
 				ctx: ctx,
 			}
-			c.recvLim.Store(rate.NewLimiter(rate.Limit(100), 100))
+			c.recvLim.Store(rate.NewLimiter(rate.Limit(minRateLimitTokenBucketSize), minRateLimitTokenBucketSize))
 
 			// Exhaust burst.
-			if err := c.rateLimit(100); err != nil {
+			if err := c.rateLimit(minRateLimitTokenBucketSize); err != nil {
 				t.Fatalf("rateLimit: %v", err)
 			}
 
 			done := make(chan error, 1)
 			go func() {
-				done <- c.rateLimit(100)
+				done <- c.rateLimit(minRateLimitTokenBucketSize)
 			}()
 			synctest.Wait()
 
@@ -1310,8 +1306,8 @@ func TestLoadAndApplyRateConfig(t *testing.T) {
 		s.mu.Lock()
 		gotBurst := s.perClientRecvBurst
 		s.mu.Unlock()
-		if gotBurst != derp.MaxPacketSize {
-			t.Errorf("burst = %d; want at least %d", gotBurst, derp.MaxPacketSize)
+		if gotBurst != minRateLimitTokenBucketSize {
+			t.Errorf("burst = %d; want at least %d", gotBurst, minRateLimitTokenBucketSize)
 		}
 	})
 
