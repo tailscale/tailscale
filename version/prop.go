@@ -312,6 +312,11 @@ type Meta struct {
 	// GitCommitTime is the commit time of the git commit in GitCommit.
 	GitCommitTime string `json:"gitCommitTime,omitempty"`
 
+	// TailscaleGoGitHash is the git commit hash from
+	// https://github.com/tailscale/go used to build this binary, if built
+	// with the Tailscale Go toolchain. Otherwise it is empty.
+	TailscaleGoGitHash string `json:"tailscaleGoGitHash,omitempty"`
+
 	// Cap is the current Tailscale capability version. It's a monotonically
 	// incrementing integer that's incremented whenever a new capability is
 	// added.
@@ -324,17 +329,18 @@ var getMeta lazy.SyncValue[Meta]
 func GetMeta() Meta {
 	return getMeta.Get(func() Meta {
 		return Meta{
-			MajorMinorPatch: majorMinorPatch(),
-			Short:           Short(),
-			Long:            Long(),
-			GitCommitTime:   getEmbeddedInfo().commitTime,
-			GitCommit:       gitCommit(),
-			GitDirty:        gitDirty(),
-			OSVariant:       osVariant(),
-			ExtraGitCommit:  extraGitCommitStamp,
-			IsDev:           isDev(),
-			UnstableBranch:  IsUnstableBuild(),
-			Cap:             int(tailcfg.CurrentCapabilityVersion),
+			MajorMinorPatch:    majorMinorPatch(),
+			Short:              Short(),
+			Long:               Long(),
+			GitCommitTime:      getEmbeddedInfo().commitTime,
+			GitCommit:          gitCommit(),
+			GitDirty:           gitDirty(),
+			OSVariant:          osVariant(),
+			ExtraGitCommit:     extraGitCommitStamp,
+			IsDev:              isDev(),
+			UnstableBranch:     IsUnstableBuild(),
+			TailscaleGoGitHash: tailscaleToolchainRev(),
+			Cap:                int(tailcfg.CurrentCapabilityVersion),
 		}
 	})
 }
