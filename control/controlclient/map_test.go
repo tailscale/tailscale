@@ -1838,3 +1838,40 @@ func TestPeerIDAndKeyByTailscaleIP(t *testing.T) {
 		}
 	})
 }
+
+func BenchmarkSortedPeers(b *testing.B) {
+	const numPeers = 50_000
+	ctx := context.Background()
+	nu := &countingNetmapUpdater{}
+	ms := newTestMapSession(b, nu)
+	ms.logf = func(string, ...any) {}
+	res := &tailcfg.MapResponse{
+		Node: &tailcfg.Node{ID: 1, Name: "foo.bar.ts.net."},
+	}
+	for i := range numPeers {
+		res.Peers = append(res.Peers, &tailcfg.Node{
+			ID:         tailcfg.NodeID(i + 2),
+			Name:       fmt.Sprintf("peer%d.bar.ts.net.", i),
+			Addresses:  []netip.Prefix{netip.MustParsePrefix(fmt.Sprintf("100.64.%d.%d/32", i/256, i%256))},
+			AllowedIPs: []netip.Prefix{netip.MustParsePrefix(fmt.Sprintf("100.64.%d.%d/32", i/256, i%256))},
+			Hostinfo:   (&tailcfg.Hostinfo{OS: "linux"}).View(),
+		})
+	}
+	ms.HandleNonKeepAliveMapResponse(ctx, res)
+
+	b.Run("repeated", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			ms.sortedPeers()
+		}
+	})
+	b.Run("after_change", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			ms.updatePeersStateFromResponse(&tailcfg.MapResponse{
+				OnlineChange: map[tailcfg.NodeID]bool{2: true},
+			})
+			ms.sortedPeers()
+		}
+	})
+}

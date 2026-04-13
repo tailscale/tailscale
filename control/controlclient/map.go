@@ -107,9 +107,10 @@ type mapSession struct {
 	changeQueueClosed      bool
 	processQueue           sync.WaitGroup
 
-	// mu protects the peers map.
-	peersMu sync.RWMutex
-	peers   map[tailcfg.NodeID]tailcfg.NodeView
+	// peersMu protects the peers map and sortedPeersCache.
+	peersMu          sync.RWMutex
+	peers            map[tailcfg.NodeID]tailcfg.NodeView
+	sortedPeersCache []tailcfg.NodeView // lazily computed sorted view of peers; nil means dirty
 }
 
 // newMapSession returns a mostly unconfigured new mapSession.
@@ -678,6 +679,8 @@ func (ms *mapSession) updatePeersStateFromResponse(resp *tailcfg.MapResponse) (s
 	ms.peersMu.Lock()
 	defer ms.peersMu.Unlock()
 
+	ms.sortedPeersCache = nil // invalidate; peers are about to change
+
 	if ms.peers == nil {
 		ms.peers = make(map[tailcfg.NodeID]tailcfg.NodeView)
 	}
@@ -1082,12 +1085,24 @@ func (ms *mapSession) PeerIDAndKeyByTailscaleIP(ip netip.Addr) (tailcfg.NodeID, 
 
 func (ms *mapSession) sortedPeers() []tailcfg.NodeView {
 	ms.peersMu.RLock()
-	defer ms.peersMu.RUnlock()
+	if c := ms.sortedPeersCache; c != nil {
+		ms.peersMu.RUnlock()
+		return c
+	}
+	ms.peersMu.RUnlock()
 
+	// Cache miss; upgrade to write lock and rebuild.
+	ms.peersMu.Lock()
+	defer ms.peersMu.Unlock()
+	// Double-check after acquiring write lock.
+	if ms.sortedPeersCache != nil {
+		return ms.sortedPeersCache
+	}
 	ret := slicesx.MapValues(ms.peers)
 	slices.SortFunc(ret, func(a, b tailcfg.NodeView) int {
 		return cmp.Compare(a.ID(), b.ID())
 	})
+	ms.sortedPeersCache = ret
 	return ret
 }
 
