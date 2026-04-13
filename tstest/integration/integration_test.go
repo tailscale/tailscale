@@ -34,7 +34,6 @@ import (
 	"github.com/miekg/dns"
 	"go4.org/mem"
 	"tailscale.com/client/local"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/feature"
 	_ "tailscale.com/feature/clientupdate"
@@ -1194,40 +1193,46 @@ func TestClientSideJailing(t *testing.T) {
 		}
 	}
 
-	b1, err := lc1.WatchIPNBus(context.Background(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b2, err := lc2.WatchIPNBus(context.Background(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitPeerIsJailed := func(t *testing.T, b *tailscale.IPNBusWatcher, jailed bool) {
-		t.Helper()
-		for {
-			n, err := b.Next()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Start watchers BEFORE calling SetJailed to ensure we don't miss the update.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			b1, err := lc1.WatchIPNBus(ctx, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if n.NetMap == nil {
-				continue
+			defer b1.Close()
+			b2, err := lc2.WatchIPNBus(ctx, 0)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if len(n.NetMap.Peers) == 0 {
-				continue
-			}
-			if j := n.NetMap.Peers[0].IsJailed(); j == jailed {
-				break
-			}
-		}
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+			defer b2.Close()
+
 			env.Control.SetJailed(k1, k2, tc.n2JailedForN1)
 			env.Control.SetJailed(k2, k1, tc.n1JailedForN2)
 
 			// Wait for the jailed status to propagate.
-			waitPeerIsJailed(t, b1, tc.n2JailedForN1)
-			waitPeerIsJailed(t, b2, tc.n1JailedForN2)
+			waitPeerIsJailed := func(b *local.IPNBusWatcher, jailed bool) {
+				t.Helper()
+				for {
+					n, err := b.Next()
+					if err != nil {
+						t.Fatalf("waiting for peer jailed=%v: %v", jailed, err)
+					}
+					if n.NetMap == nil {
+						continue
+					}
+					if len(n.NetMap.Peers) == 0 {
+						continue
+					}
+					if j := n.NetMap.Peers[0].IsJailed(); j == jailed {
+						return
+					}
+				}
+			}
+			waitPeerIsJailed(b1, tc.n2JailedForN1)
+			waitPeerIsJailed(b2, tc.n1JailedForN2)
 
 			testDial(t, lc1, ip2, port, tc.n1JailedForN2)
 			testDial(t, lc2, ip1, port, tc.n2JailedForN1)
@@ -2050,18 +2055,28 @@ func TestPeerRelayPing(t *testing.T) {
 			a := pair[0]
 			z := pair[1]
 			err := tstest.WaitFor(time.Second*10, func() error {
-				remoteKey := z.MustStatus().Self.PublicKey
+				// Use Status() instead of MustStatus() to avoid calling t.Fatal
+				// from a goroutine, which can cause a race with test cleanup.
+				zSt, err := z.Status()
+				if err != nil {
+					return fmt.Errorf("z.Status: %w", err)
+				}
+				remoteKey := zSt.Self.PublicKey
 				if err := a.Tailscale("ping", "--until-direct=false", "--c=1", "--timeout=1s", z.AwaitIP4().String()).Run(); err != nil {
 					return err
 				}
-				remotePeer, ok := a.MustStatus().Peer[remoteKey]
+				aSt, err := a.Status()
+				if err != nil {
+					return fmt.Errorf("a.Status: %w", err)
+				}
+				remotePeer, ok := aSt.Peer[remoteKey]
 				if !ok {
-					return fmt.Errorf("%v->%v remote peer not found", a.MustStatus().Self.ID, z.MustStatus().Self.ID)
+					return fmt.Errorf("%v->%v remote peer not found", aSt.Self.ID, zSt.Self.ID)
 				}
 				if len(remotePeer.PeerRelay) == 0 {
-					return fmt.Errorf("%v->%v not using peer relay, curAddr=%v relay=%v", a.MustStatus().Self.ID, z.MustStatus().Self.ID, remotePeer.CurAddr, remotePeer.Relay)
+					return fmt.Errorf("%v->%v not using peer relay, curAddr=%v relay=%v", aSt.Self.ID, zSt.Self.ID, remotePeer.CurAddr, remotePeer.Relay)
 				}
-				t.Logf("%v->%v using peer relay addr: %v", a.MustStatus().Self.ID, z.MustStatus().Self.ID, remotePeer.PeerRelay)
+				t.Logf("%v->%v using peer relay addr: %v", aSt.Self.ID, zSt.Self.ID, remotePeer.PeerRelay)
 				return nil
 			})
 			errCh <- err
@@ -2256,6 +2271,8 @@ func TestC2NDebugNetmap(t *testing.T) {
 }
 
 func TestTailnetLock(t *testing.T) {
+	tstest.Shard(t)
+	tstest.Parallel(t)
 
 	// If you run `tailscale lock log` on a node where Tailnet Lock isn't
 	// enabled, you get an error explaining that.

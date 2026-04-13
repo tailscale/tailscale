@@ -434,6 +434,7 @@ type local struct {
 
 type remote struct {
 	l           net.Listener
+	httpServer  *http.Server
 	fs          *FileSystemForRemote
 	fileServer  *FileServer
 	shares      map[string]string
@@ -510,14 +511,15 @@ func (s *system) addRemote(name string) string {
 	s.t.Logf("FileServer for %v listening at %s", name, fileServer.Addr())
 
 	r := &remote{
-		l:           ln,
-		fileServer:  fileServer,
-		fs:          NewFileSystemForRemote(log.Printf),
-		shares:      make(map[string]string),
+		l:          ln,
+		fileServer: fileServer,
+		fs:         NewFileSystemForRemote(log.Printf),
+		shares:     make(map[string]string),
 		permissions: make(map[string]drive.Permission),
 	}
 	r.fs.SetFileServerAddr(fileServer.Addr())
-	go http.Serve(ln, r)
+	r.httpServer = &http.Server{Handler: r}
+	go r.httpServer.Serve(ln)
 	s.remotes[name] = r
 
 	remotes := make([]*drive.Remote, 0, len(s.remotes))
@@ -694,9 +696,9 @@ func (s *system) stop() {
 			s.t.Fatalf("failed to Close remote fs: %s", err)
 		}
 
-		err = r.l.Close()
+		err = r.httpServer.Close()
 		if err != nil {
-			s.t.Fatalf("failed to Close remote listener: %s", err)
+			s.t.Fatalf("failed to Close remote http server: %s", err)
 		}
 
 		err = r.fileServer.Close()

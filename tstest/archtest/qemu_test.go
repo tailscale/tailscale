@@ -1,7 +1,12 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux && amd64 && !race
+// This file previously had "!race" in its build constraint, which was a CI
+// optimization (qemu binaries aren't installed on the race builder to save
+// time). The constraint was removed because it's not a technical requirement:
+// the test gracefully skips architectures when qemu-{arch} isn't available.
+
+//go:build linux && amd64
 
 package archtest
 

@@ -736,12 +736,19 @@ func TestRateLogger(t *testing.T) {
 }
 
 func TestRouteStoreMetrics(t *testing.T) {
+	// Capture initial metric values before the test actions, since metrics
+	// are global counters that persist across test runs.
+	initial := make(map[string]int64)
+	for _, x := range clientmetric.Metrics() {
+		initial[x.Name()] = x.Value()
+	}
+
 	metricStoreRoutes(1, 1)
 	metricStoreRoutes(1, 1)         // the 1 buckets value should be 2
 	metricStoreRoutes(5, 5)         // the 5 buckets value should be 1
 	metricStoreRoutes(6, 6)         // the 10 buckets value should be 1
 	metricStoreRoutes(10001, 10001) // the over buckets value should be 1
-	wanted := map[string]int64{
+	wantedDelta := map[string]int64{
 		"appc_store_routes_n_routes_1":    2,
 		"appc_store_routes_rate_1":        2,
 		"appc_store_routes_n_routes_5":    1,
@@ -752,8 +759,9 @@ func TestRouteStoreMetrics(t *testing.T) {
 		"appc_store_routes_rate_over":     1,
 	}
 	for _, x := range clientmetric.Metrics() {
-		if x.Value() != wanted[x.Name()] {
-			t.Errorf("%s: want: %d, got: %d", x.Name(), wanted[x.Name()], x.Value())
+		delta := x.Value() - initial[x.Name()]
+		if delta != wantedDelta[x.Name()] {
+			t.Errorf("%s: want delta: %d, got delta: %d", x.Name(), wantedDelta[x.Name()], delta)
 		}
 	}
 }

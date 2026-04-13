@@ -342,22 +342,95 @@ func TestServer(t *testing.T) {
 func TestServer_getNextVNILocked(t *testing.T) {
 	t.Parallel()
 	c := qt.New(t)
+
+	// Test 1: Basic sequential allocation from minVNI
 	s := &Server{
 		nextVNI: minVNI,
 	}
-	for range uint64(totalPossibleVNI) {
-		vni, err := s.getNextVNILocked()
-		if err != nil { // using quicktest here triples test time
-			t.Fatal(err)
-		}
-		s.serverEndpointByVNI.Store(vni, nil)
-	}
-	c.Assert(s.nextVNI, qt.Equals, minVNI)
-	_, err := s.getNextVNILocked()
-	c.Assert(err, qt.IsNotNil)
-	s.serverEndpointByVNI.Delete(minVNI)
-	_, err = s.getNextVNILocked()
+	vni, err := s.getNextVNILocked()
 	c.Assert(err, qt.IsNil)
+	c.Assert(vni, qt.Equals, minVNI)
+	c.Assert(s.nextVNI, qt.Equals, minVNI+1)
+
+	// Test 2: Wrapping from maxVNI back to minVNI
+	s = &Server{
+		nextVNI: maxVNI,
+	}
+	vni, err = s.getNextVNILocked()
+	c.Assert(err, qt.IsNil)
+	c.Assert(vni, qt.Equals, maxVNI)
+	c.Assert(s.nextVNI, qt.Equals, minVNI) // Should wrap to minVNI
+
+	// Test 3: Skips occupied VNIs
+	s = &Server{
+		nextVNI: minVNI,
+	}
+	s.serverEndpointByVNI.Store(minVNI, nil)
+	s.serverEndpointByVNI.Store(minVNI+1, nil)
+	vni, err = s.getNextVNILocked()
+	c.Assert(err, qt.IsNil)
+	c.Assert(vni, qt.Equals, minVNI+2)
+
+	// Test 4: Wrapping while skipping occupied VNIs
+	s = &Server{
+		nextVNI: maxVNI - 1,
+	}
+	s.serverEndpointByVNI.Store(maxVNI-1, nil)
+	s.serverEndpointByVNI.Store(maxVNI, nil)
+	vni, err = s.getNextVNILocked()
+	c.Assert(err, qt.IsNil)
+	c.Assert(vni, qt.Equals, minVNI)
+	c.Assert(s.nextVNI, qt.Equals, minVNI+1)
+
+	// Test 5: VNI freeing and re-allocation
+	// Verify that when VNIs are freed, new allocations continue from nextVNI
+	// (the freed VNI won't be returned until nextVNI wraps back around to it).
+	s = &Server{
+		nextVNI: minVNI,
+	}
+	s.serverEndpointByVNI.Store(minVNI, nil)
+	s.serverEndpointByVNI.Store(minVNI+1, nil)
+	s.serverEndpointByVNI.Store(minVNI+2, nil)
+	vni, err = s.getNextVNILocked()
+	c.Assert(err, qt.IsNil)
+	c.Assert(vni, qt.Equals, minVNI+3)
+
+	// Delete minVNI+1 and verify we can get VNIs (even though minVNI+1 won't
+	// be returned next since nextVNI has advanced past it)
+	s.serverEndpointByVNI.Delete(minVNI + 1)
+	vni, err = s.getNextVNILocked()
+	c.Assert(err, qt.IsNil)
+	c.Assert(vni, qt.Equals, minVNI+4) // nextVNI is now at minVNI+4
+
+	// Test 6: Pool exhaustion with testVNIPoolSize
+	// Use a small pool size to test the exhaustion error path without
+	// allocating 16M entries. testVNIPoolSize limits how many VNIs the
+	// algorithm checks before giving up, simulating a full pool.
+	//
+	// We occupy more VNIs than testVNIPoolSize to ensure that no matter
+	// where nextVNI starts, the search will only find occupied VNIs.
+	const testPoolSize = 100
+	s = &Server{
+		nextVNI:         minVNI,
+		testVNIPoolSize: testPoolSize,
+	}
+	// Occupy VNIs [minVNI, minVNI + testPoolSize*2) to ensure the search
+	// window is fully covered regardless of where nextVNI advances to
+	for i := uint32(0); i < testPoolSize*2; i++ {
+		s.serverEndpointByVNI.Store(minVNI+i, nil)
+	}
+	// Search starts at minVNI, checks testPoolSize VNIs, all are occupied
+	_, err = s.getNextVNILocked()
+	c.Assert(err, qt.IsNotNil)
+	c.Assert(err.Error(), qt.Equals, "VNI pool exhausted")
+
+	// Test 7: Recovery after freeing a VNI in the search window
+	// nextVNI is now at minVNI+testPoolSize (after the failed search advanced it)
+	// Free a VNI that will be found in the next search
+	s.serverEndpointByVNI.Delete(minVNI + testPoolSize + 10)
+	vni, err = s.getNextVNILocked()
+	c.Assert(err, qt.IsNil)
+	c.Assert(vni, qt.Equals, minVNI+testPoolSize+10)
 }
 
 func Test_blakeMACFromBindMsg(t *testing.T) {

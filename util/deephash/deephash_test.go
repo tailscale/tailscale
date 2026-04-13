@@ -26,7 +26,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/util/deephash/testtype"
 	"tailscale.com/util/hashx"
-	"tailscale.com/version"
 )
 
 type appendBytes []byte
@@ -777,10 +776,6 @@ func TestMapCyclicFallback(t *testing.T) {
 }
 
 func TestArrayAllocs(t *testing.T) {
-	if version.IsRace() {
-		t.Skip("skipping test under race detector")
-	}
-
 	// In theory, there should be no allocations. However, escape analysis on
 	// certain architectures fails to detect that certain cases do not escape.
 	// This discrepancy currently affects sha256.digest.Sum.
@@ -801,9 +796,11 @@ func TestArrayAllocs(t *testing.T) {
 		X [32]byte
 	}
 	x := &T{X: [32]byte{1: 1, 2: 2, 3: 3, 4: 4}}
+	var localSink Sum
 	got := int(testing.AllocsPerRun(1000, func() {
-		sink = Hash(x)
+		localSink = Hash(x)
 	}))
+	_ = localSink // prevent compiler from optimizing away the Hash call
 	if got > want {
 		t.Errorf("allocs = %v; want %v", got, want)
 	}

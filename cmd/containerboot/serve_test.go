@@ -10,11 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/kube/localclient"
+	"tailscale.com/kube/services"
 	"tailscale.com/tailcfg"
 )
 
@@ -198,6 +200,10 @@ func TestReadServeConfig(t *testing.T) {
 }
 
 func TestRefreshAdvertiseServices(t *testing.T) {
+	// Use a very short wait duration for tests to avoid 20-second delays.
+	restore := services.SetWaitDurationForTest(1 * time.Millisecond)
+	t.Cleanup(restore)
+
 	tests := []struct {
 		name                string
 		sc                  *ipn.ServeConfig

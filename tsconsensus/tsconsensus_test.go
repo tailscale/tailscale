@@ -40,6 +40,24 @@ import (
 	"tailscale.com/util/racebuild"
 )
 
+func TestMain(m *testing.M) {
+	// tailscale/corp#4520: don't use netns for tests.
+	//
+	// When netns is enabled, it sets socket options (SO_MARK on Linux,
+	// IP_BOUND_IF on macOS) to bypass Tailscale routing and reach the physical
+	// network directly. These tests use fake localhost networks with tsnet.Server
+	// and testcontrol.Server. With netns enabled:
+	//   - Socket options may fail (non-root can't set SO_MARK on Linux)
+	//   - Traffic may route to real interfaces instead of test localhost servers
+	//
+	// We disable netns once in TestMain rather than per-test because the previous
+	// pattern of disabling in each test and restoring in t.Cleanup caused races:
+	// when tests run in parallel, Test A's cleanup would restore netns while
+	// Test B was still running with netns disabled.
+	netns.SetEnabled(false)
+	os.Exit(m.Run())
+}
+
 type fsm struct {
 	mu          sync.Mutex
 	applyEvents []string
@@ -125,11 +143,7 @@ func testConfig(t *testing.T) {
 
 func startControl(t testing.TB) (control *testcontrol.Server, controlURL string) {
 	t.Helper()
-	// tailscale/corp#4520: don't use netns for tests.
-	netns.SetEnabled(false)
-	t.Cleanup(func() {
-		netns.SetEnabled(true)
-	})
+	// netns is disabled for this package in TestMain.
 
 	derpLogf := logger.Discard
 	derpMap := integration.RunDERPAndSTUN(t, derpLogf, "127.0.0.1")
@@ -269,8 +283,10 @@ func TestStart(t *testing.T) {
 
 func waitFor(t testing.TB, msg string, condition func() bool, waitBetweenTries time.Duration) {
 	t.Helper()
+	// Use a deadline to prevent infinite waiting under load
+	deadline := time.Now().Add(2 * time.Minute)
 	try := 0
-	for true {
+	for time.Now().Before(deadline) {
 		try++
 		done := condition()
 		if done {
@@ -279,6 +295,7 @@ func waitFor(t testing.TB, msg string, condition func() bool, waitBetweenTries t
 		}
 		time.Sleep(waitBetweenTries)
 	}
+	t.Fatalf("waitFor timeout: %s: failed after %d tries over 2 minutes", msg, try)
 }
 
 type participant struct {

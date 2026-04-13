@@ -414,9 +414,11 @@ func TestNewConn(t *testing.T) {
 	stunAddr, stunCleanupFn := stuntest.Serve(t)
 	defer stunCleanupFn()
 
-	port := pickPort(t)
+	// Use port 0 to let the system assign a port, avoiding TOCTOU races
+	// from the previous pickPort approach which would close a socket and
+	// hope to rebind to the same port.
 	conn, err := NewConn(Options{
-		Port:              port,
+		Port:              0,
 		DisablePortMapper: true,
 		EndpointsFunc:     epFunc,
 		Logf:              t.Logf,
@@ -428,6 +430,13 @@ func TestNewConn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+
+	// Get the actual port that was assigned
+	port := conn.LocalPort()
+	if port == 0 {
+		t.Fatal("LocalPort returned 0")
+	}
+
 	conn.SetDERPMap(stuntest.DERPMapOf(stunAddr.String()))
 	conn.SetPrivateKey(key.NewNode())
 
@@ -461,16 +470,6 @@ collectEndpoints:
 			t.Fatalf("timeout with endpoints: %v", endpoints)
 		}
 	}
-}
-
-func pickPort(t testing.TB) uint16 {
-	t.Helper()
-	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	return uint16(conn.LocalAddr().(*net.UDPAddr).Port)
 }
 
 func TestPickDERPFallback(t *testing.T) {
@@ -557,6 +556,8 @@ func TestDERPActiveFuncCalledAfterConnect(t *testing.T) {
 		EndpointsFunc:          func([]tailcfg.Endpoint) {},
 		DERPActiveFunc: func() {
 			// derpStarted should already be closed when DERPActiveFunc is called.
+			// The goroutine calling this waits on startGate (= derpStarted for
+			// firstDerp), so by the time we get here, derpStarted must be closed.
 			select {
 			case <-conn.derpStarted:
 				resultCh <- true
@@ -575,8 +576,14 @@ func TestDERPActiveFuncCalledAfterConnect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if ok := <-resultCh; !ok {
-		t.Error("DERPActiveFunc was called before DERP connection was established")
+	// Add a timeout to avoid hanging forever if DERPActiveFunc is never called.
+	select {
+	case ok := <-resultCh:
+		if !ok {
+			t.Error("DERPActiveFunc was called before DERP connection was established")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for DERPActiveFunc to be called")
 	}
 }
 
@@ -1435,7 +1442,6 @@ func Test32bitAlignment(t *testing.T) {
 // newTestConn returns a new Conn.
 func newTestConn(t testing.TB) *Conn {
 	t.Helper()
-	port := pickPort(t)
 
 	bus := eventbustest.NewBus(t)
 
@@ -1445,6 +1451,7 @@ func newTestConn(t testing.TB) *Conn {
 	}
 	t.Cleanup(func() { netMon.Close() })
 
+	// Use port 0 to let the system assign a port, avoiding TOCTOU races.
 	conn, err := NewConn(Options{
 		NetMon:                 netMon,
 		EventBus:               bus,
@@ -1452,7 +1459,7 @@ func newTestConn(t testing.TB) *Conn {
 		Metrics:                new(usermetric.Registry),
 		DisablePortMapper:      true,
 		Logf:                   t.Logf,
-		Port:                   port,
+		Port:                   0,
 		TestOnlyPacketListener: localhostListener{},
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {
 			t.Logf("endpoints: %q", eps)

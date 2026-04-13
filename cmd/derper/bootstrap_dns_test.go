@@ -166,6 +166,13 @@ func TestUnpublishedDNSEmptyList(t *testing.T) {
 }
 
 func TestLookupMetric(t *testing.T) {
+	// Set up the DNS caches so handleBootstrapDNS returns valid JSON.
+	pub := &dnsEntryMap{
+		IPs: map[string][]net.IP{"tailscale.com": {net.IPv4(10, 10, 10, 10)}},
+	}
+	dnsCache.Store(pub)
+	dnsCacheBytes.Store([]byte(`{"tailscale.com":["10.10.10.10"]}`))
+
 	d := []string{"a.io", "b.io", "c.io", "d.io", "e.io", "e.io", "e.io", "a.io"}
 	resetMetrics()
 	for _, q := range d {

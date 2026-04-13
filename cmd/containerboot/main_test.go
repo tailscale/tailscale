@@ -1324,9 +1324,13 @@ func TestContainerBoot(t *testing.T) {
 				}
 
 				wantCmds = append(wantCmds, p.WantCmds...)
-				waitArgs(t, 2*time.Second, env.d, env.argFile, strings.Join(wantCmds, "\n"))
+				// Use generous timeouts (10s) because tests run in parallel,
+				// causing resource contention. The polling interval is 100ms,
+				// so successful tests complete quickly; the timeout only
+				// affects failure cases.
+				waitArgs(t, 10*time.Second, env.d, env.argFile, strings.Join(wantCmds, "\n"))
 
-				err = tstest.WaitFor(2*time.Second, func() error {
+				err = tstest.WaitFor(10*time.Second, func() error {
 					for path, want := range p.WantFiles {
 						gotBs, err := os.ReadFile(filepath.Join(env.d, path))
 						if err != nil {
@@ -1343,7 +1347,7 @@ func TestContainerBoot(t *testing.T) {
 				}
 
 				for url, want := range p.EndpointStatuses {
-					err := tstest.WaitFor(2*time.Second, func() error {
+					err := tstest.WaitFor(10*time.Second, func() error {
 						resp, err := http.Get(url)
 						if err != nil && want != -1 {
 							return fmt.Errorf("GET %s: %v", url, err)
@@ -1361,7 +1365,7 @@ func TestContainerBoot(t *testing.T) {
 					}
 				}
 			}
-			waitLogLine(t, 2*time.Second, cbOut, "Startup complete, waiting for shutdown signal")
+			waitLogLine(t, 10*time.Second, cbOut, "Startup complete, waiting for shutdown signal")
 			if cmd.ProcessState != nil {
 				t.Fatalf("containerboot should be running but exited with exit code %d", cmd.ProcessState.ExitCode())
 			}
