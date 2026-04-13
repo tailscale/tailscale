@@ -16,4 +16,4 @@
 ) {
   src =  ./.;
 }).shellNix
-# nix-direnv cache busting line: sha256-rP2sZu3H6exxwfqe0TSVQP1I0WmOuU6TlJuNLBE/Fjw=
+# nix-direnv cache busting line: sha256-E2F3zJsbmh1QGB0FHJmNBmfQt7To1OGoMGe0gIjMe3g=
