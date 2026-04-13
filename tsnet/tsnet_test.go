@@ -519,7 +519,6 @@ func TestConn(t *testing.T) {
 }
 
 func TestLoopbackLocalAPI(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8557")
 	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -595,7 +594,6 @@ func TestLoopbackLocalAPI(t *testing.T) {
 }
 
 func TestLoopbackSOCKS5(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8198")
 	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

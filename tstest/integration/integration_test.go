@@ -34,7 +34,6 @@ import (
 	"github.com/miekg/dns"
 	"go4.org/mem"
 	"tailscale.com/client/local"
-	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/feature"
 	_ "tailscale.com/feature/clientupdate"
 	"tailscale.com/health"
@@ -921,7 +920,6 @@ func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
 
 func TestNodeAddressIPFields(t *testing.T) {
 	tstest.Shard(t)
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7008")
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n1 := NewTestNode(t, env)
@@ -1122,7 +1120,6 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 // jailed node cannot initiate connections to the other node however the other
 // node can initiate connections to the jailed node.
 func TestClientSideJailing(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/17419")
 	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
@@ -1243,7 +1240,6 @@ func TestClientSideJailing(t *testing.T) {
 // TestNATPing creates two nodes, n1 and n2, sets up masquerades for both and
 // tries to do bi-directional pings between them.
 func TestNATPing(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/12169")
 	tstest.Shard(t)
 	tstest.Parallel(t)
 	for _, v6 := range []bool{false, true} {
@@ -1981,7 +1977,6 @@ func TestEncryptStateMigration(t *testing.T) {
 // relay between all 3 nodes, and "tailscale debug peer-relay-sessions" returns
 // expected values.
 func TestPeerRelayPing(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/17251")
 	tstest.Shard(t)
 	tstest.Parallel(t)
 
