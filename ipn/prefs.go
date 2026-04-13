@@ -239,6 +239,12 @@ type Prefs struct {
 	// Linux-only.
 	NoStatefulFiltering opt.Bool `json:",omitempty"`
 
+	// AllowAllInbound specifies whether or not to add a firewall rule allowing
+	// all inbound traffic on the tun interface. The default is to add it.
+	//
+	// Linux-only.
+	AllowAllInbound bool
+
 	// NetfilterMode specifies how much to manage netfilter rules for
 	// Tailscale, if at all.
 	NetfilterMode preftype.NetfilterMode
@@ -376,6 +382,7 @@ type MaskedPrefs struct {
 	SyncSet                       bool                `json:",omitzero"`
 	NoSNATSet                     bool                `json:",omitempty"`
 	NoStatefulFilteringSet        bool                `json:",omitempty"`
+	AllowAllInboundSet            bool                `json:",omitempty"`
 	NetfilterModeSet              bool                `json:",omitempty"`
 	OperatorUserSet               bool                `json:",omitempty"`
 	ProfileNameSet                bool                `json:",omitempty"`
@@ -594,6 +601,7 @@ func (p *Prefs) pretty(goos string) string {
 			fmt.Fprintf(&sb, "statefulFiltering=%v ", !bb)
 		}
 	}
+	fmt.Fprintf(&sb, "allow-all-inbound=%v ", p.AllowAllInbound)
 	if len(p.AdvertiseTags) > 0 {
 		fmt.Fprintf(&sb, "tags=%s ", strings.Join(p.AdvertiseTags, ","))
 	}
@@ -676,6 +684,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.NotepadURLs == p2.NotepadURLs &&
 		p.ShieldsUp == p2.ShieldsUp &&
 		p.NoSNAT == p2.NoSNAT &&
+		p.AllowAllInbound == p2.AllowAllInbound &&
 		p.NoStatefulFiltering == p2.NoStatefulFiltering &&
 		p.NetfilterMode == p2.NetfilterMode &&
 		p.OperatorUser == p2.OperatorUser &&
@@ -739,6 +748,7 @@ func NewPrefs() *Prefs {
 		CorpDNS:             true,
 		WantRunning:         false,
 		NetfilterMode:       preftype.NetfilterOn,
+		AllowAllInbound:     true,
 		NoStatefulFiltering: opt.NewBool(true),
 		AutoUpdate: AutoUpdatePrefs{
 			Check: true,

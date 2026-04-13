@@ -512,6 +512,13 @@ type NetfilterRunner interface {
 	// DelSNATRule removes the rule added by AddSNATRule.
 	DelSNATRule() error
 
+	// AddAllowAllInboundRule adds the netfilter rule to allow all inbound
+	// traffic destined for the Tailscale interface.
+	AddAllowAllInboundRule(tunname string) error
+
+	// DelAllowAllInboundRule removes the rule added by AddAllowAllInboundRule
+	DelAllowAllInboundRule(tunname string) error
+
 	// AddStatefulRule adds a netfilter rule for stateful packet filtering
 	// using conntrack.
 	AddStatefulRule(tunname string) error
@@ -1529,6 +1536,25 @@ func addAcceptIncomingPacketRule(conn *nftables.Conn, table *nftables.Table, cha
 	return nil
 }
 
+func delAcceptIncomingPacketRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, tunname string) error {
+	rule := createAcceptIncomingPacketRule(table, chain, tunname)
+
+	AllowInboundRule, err := findRule(conn, rule)
+	if err != nil {
+		return fmt.Errorf("find AllowInbound rule: %w", err)
+	}
+
+	if AllowInboundRule != nil {
+		_ = conn.DelRule(AllowInboundRule)
+	}
+
+	if err := conn.Flush(); err != nil {
+		return fmt.Errorf("flush del AllowInbound rule: %w", err)
+	}
+
+	return nil
+}
+
 // AddBase adds some basic processing rules.
 func (n *nftablesRunner) AddBase(tunname string) error {
 	if err := n.addBase4(tunname); err != nil {
@@ -1537,6 +1563,54 @@ func (n *nftablesRunner) AddBase(tunname string) error {
 	if n.HasIPV6() {
 		if err := n.addBase6(tunname); err != nil {
 			return fmt.Errorf("add base v6: %w", err)
+		}
+	}
+	return nil
+}
+
+// AddAllowAllInboundRule adds a netfilter rule to allow all inbound traffic
+// destined for the tun interface
+func (n *nftablesRunner) AddAllowAllInboundRule(tunname string) error {
+	conn := n.conn
+
+	inputChainV4, err := getChainFromTable(conn, n.nft4.Filter, chainNameInput)
+	if err != nil {
+		return fmt.Errorf("get input chain v4: %v", err)
+	}
+	if err = addAcceptIncomingPacketRule(conn, n.nft4.Filter, inputChainV4, tunname); err != nil {
+		return fmt.Errorf("add accept incoming packet rule v4: %w", err)
+	}
+	if n.HasIPV6() {
+		inputChainV6, err := getChainFromTable(conn, n.nft6.Filter, chainNameInput)
+		if err != nil {
+			return fmt.Errorf("get input chain v4: %v", err)
+		}
+		if err = addAcceptIncomingPacketRule(conn, n.nft6.Filter, inputChainV6, tunname); err != nil {
+			return fmt.Errorf("add accept incoming packet rule v6: %w", err)
+		}
+	}
+	return nil
+}
+
+// DelAllowAllInboundRule removes the netfilter rule to allow all inbound traffic
+// destined for the tun interface
+func (n *nftablesRunner) DelAllowAllInboundRule(tunname string) error {
+	conn := n.conn
+
+	inputChainV4, err := getChainFromTable(conn, n.nft4.Filter, chainNameInput)
+	if err != nil {
+		return fmt.Errorf("get input chain v4: %v", err)
+	}
+	if err = delAcceptIncomingPacketRule(conn, n.nft4.Filter, inputChainV4, tunname); err != nil {
+		return fmt.Errorf("del accept incoming packet rule v4: %w", err)
+	}
+	if n.HasIPV6() {
+		inputChainV6, err := getChainFromTable(conn, n.nft6.Filter, chainNameInput)
+		if err != nil {
+			return fmt.Errorf("get input chain v4: %v", err)
+		}
+		if err = delAcceptIncomingPacketRule(conn, n.nft6.Filter, inputChainV6, tunname); err != nil {
+			return fmt.Errorf("del accept incoming packet rule v6: %w", err)
 		}
 	}
 	return nil
@@ -1555,9 +1629,6 @@ func (n *nftablesRunner) addBase4(tunname string) error {
 	}
 	if err = addDropCGNATRangeRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
 		return fmt.Errorf("add drop cgnat range rule v4: %w", err)
-	}
-	if err = addAcceptIncomingPacketRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
-		return fmt.Errorf("add accept incoming packet rule v4: %w", err)
 	}
 
 	forwardChain, err := getChainFromTable(conn, n.nft4.Filter, chainNameForward)
@@ -1591,14 +1662,6 @@ func (n *nftablesRunner) addBase4(tunname string) error {
 // addBase6 adds some basic IPv6 processing rules.
 func (n *nftablesRunner) addBase6(tunname string) error {
 	conn := n.conn
-
-	inputChain, err := getChainFromTable(conn, n.nft6.Filter, chainNameInput)
-	if err != nil {
-		return fmt.Errorf("get input chain v4: %v", err)
-	}
-	if err = addAcceptIncomingPacketRule(conn, n.nft6.Filter, inputChain, tunname); err != nil {
-		return fmt.Errorf("add accept incoming packet rule v6: %w", err)
-	}
 
 	forwardChain, err := getChainFromTable(conn, n.nft6.Filter, chainNameForward)
 	if err != nil {

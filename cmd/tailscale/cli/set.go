@@ -66,6 +66,7 @@ type setArgsT struct {
 	statefulFiltering          bool
 	sync                       bool
 	netfilterMode              string
+	allowAllInbound            bool
 	relayServerPort            string
 	relayServerStaticEndpoints string
 }
@@ -114,6 +115,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	case "linux":
 		setf.BoolVar(&setArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
 		setf.BoolVar(&setArgs.statefulFiltering, "stateful-filtering", false, "apply stateful filtering to forwarded packets (subnet routers, exit nodes, and so on)")
+		setf.BoolVar(&setArgs.allowAllInbound, "allow-all-inbound", true, "allow all inbound traffic in the firewall on the tun interface")
 		setf.StringVar(&setArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
 	case "windows":
 		setf.BoolVar(&setArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
@@ -163,6 +165,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 				Advertise: setArgs.advertiseConnector,
 			},
 			PostureChecking:     setArgs.reportPosture,
+			AllowAllInbound:     setArgs.allowAllInbound,
 			NoStatefulFiltering: opt.NewBool(!setArgs.statefulFiltering),
 		},
 	}

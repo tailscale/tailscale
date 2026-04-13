@@ -87,6 +87,7 @@ type linuxRouter struct {
 	snatSubnetRoutes  bool
 	statefulFiltering bool
 	connmarkEnabled   bool // whether connmark rules are currently enabled
+	allowAllInbound   bool
 	netfilterMode     preftype.NetfilterMode
 	netfilterKind     string
 	magicsockPortV4   uint16
@@ -108,11 +109,12 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Moni
 
 func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon.Monitor, cmd commandRunner, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
 	r := &linuxRouter{
-		logf:          logf,
-		tunname:       tunname,
-		netfilterMode: netfilterOff,
-		netMon:        netMon,
-		health:        health,
+		logf:            logf,
+		tunname:         tunname,
+		allowAllInbound: true,
+		netfilterMode:   netfilterOff,
+		netMon:          netMon,
+		health:          health,
 
 		cmd: cmd,
 
@@ -455,6 +457,20 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	}
 	r.addrs = newAddrs
 
+	switch {
+	case cfg.AllowAllInbound == r.allowAllInbound:
+		// state is correct, nothing do do
+	case cfg.AllowAllInbound:
+		if err := r.addAllowAllInboundRule(); err != nil {
+			errs = append(errs, err)
+		}
+	default:
+		if err := r.delAllowAllInboundRule(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	r.allowAllInbound = cfg.AllowAllInbound
+
 	// Ensure that the SNAT rule is added or removed as needed.
 	switch {
 	case cfg.SNATSubnetRoutes == r.snatSubnetRoutes:
@@ -692,6 +708,11 @@ func (r *linuxRouter) setNetfilterModeLocked(mode preftype.NetfilterMode) error 
 			if err := r.nfr.AddBase(r.tunname); err != nil {
 				return err
 			}
+			if r.allowAllInbound {
+				if err := r.nfr.AddAllowAllInboundRule(r.tunname); err != nil {
+					return err
+				}
+			}
 			if r.magicsockPortV4 != 0 {
 				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV4, "udp4"); err != nil {
 					return fmt.Errorf("could not add magicsock port rule v4: %w", err)
@@ -732,6 +753,12 @@ func (r *linuxRouter) setNetfilterModeLocked(mode preftype.NetfilterMode) error 
 			if err := r.nfr.AddBase(r.tunname); err != nil {
 				return err
 			}
+			// AddAllowAllInboundRule adds the allow-all-inbound rule if enabled
+			if r.allowAllInbound {
+				if err := r.nfr.AddAllowAllInboundRule(r.tunname); err != nil {
+					return err
+				}
+			}
 			if r.magicsockPortV4 != 0 {
 				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV4, "udp4"); err != nil {
 					return fmt.Errorf("could not add magicsock port rule v4: %w", err)
@@ -753,6 +780,11 @@ func (r *linuxRouter) setNetfilterModeLocked(mode preftype.NetfilterMode) error 
 			}
 			if err := r.nfr.AddBase(r.tunname); err != nil {
 				return err
+			}
+			if r.allowAllInbound {
+				if err := r.nfr.AddAllowAllInboundRule(r.tunname); err != nil {
+					return err
+				}
 			}
 			r.snatSubnetRoutes = false
 		}
@@ -1487,6 +1519,32 @@ func (r *linuxRouter) delIPRulesWithIPCommand() error {
 	}
 
 	return rg.ErrAcc
+}
+
+// addAllowAllInboundRule adds a netfilter rule to allow all incoming traffic
+// for the tun interface
+func (r *linuxRouter) addAllowAllInboundRule() error {
+	if r.netfilterMode == netfilterOff {
+		return nil
+	}
+
+	if err := r.nfr.AddAllowAllInboundRule(r.tunname); err != nil {
+		return err
+	}
+	return nil
+}
+
+// delAllowAllInboundRule removes a netfilter rule to allow all incoming traffic
+// for the tun interface
+func (r *linuxRouter) delAllowAllInboundRule() error {
+	if r.netfilterMode == netfilterOff {
+		return nil
+	}
+
+	if err := r.nfr.DelAllowAllInboundRule(r.tunname); err != nil {
+		return err
+	}
+	return nil
 }
 
 // addSNATRule adds a netfilter rule to SNAT traffic destined for

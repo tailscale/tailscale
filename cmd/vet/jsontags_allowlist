@@ -16,6 +16,7 @@ OmitEmptyShouldBeOmitZero	tailscale.com/ipn.ConfigVAlpha.Hostname
 OmitEmptyShouldBeOmitZero	tailscale.com/ipn.ConfigVAlpha.Locked
 OmitEmptyShouldBeOmitZero	tailscale.com/ipn.ConfigVAlpha.NetfilterMode
 OmitEmptyShouldBeOmitZero	tailscale.com/ipn.ConfigVAlpha.NoStatefulFiltering
+OmitEmptyShouldBeOmitZero	tailscale.com/ipn.ConfigVAlpha.AllowAllInbound
 OmitEmptyShouldBeOmitZero	tailscale.com/ipn.ConfigVAlpha.OperatorUser
 OmitEmptyShouldBeOmitZero	tailscale.com/ipn.ConfigVAlpha.PostureChecking
 OmitEmptyShouldBeOmitZero	tailscale.com/ipn.ConfigVAlpha.RunSSHServer
@@ -26,6 +27,7 @@ OmitEmptyShouldBeOmitZero	tailscale.com/ipn.ConfigVAlpha.ShieldsUp
 OmitEmptyShouldBeOmitZero	tailscale.com/ipn.OutgoingFile.PeerID
 OmitEmptyShouldBeOmitZero	tailscale.com/ipn.Prefs.AutoExitNode
 OmitEmptyShouldBeOmitZero	tailscale.com/ipn.Prefs.NoStatefulFiltering
+OmitEmptyShouldBeOmitZero	tailscale.com/ipn.Prefs.AllowAllInbound
 OmitEmptyShouldBeOmitZero	tailscale.com/ipn.Prefs.RelayServerPort
 OmitEmptyShouldBeOmitZero	tailscale.com/ipn/auditlog.transaction.Action
 OmitEmptyShouldBeOmitZero	tailscale.com/ipn/ipnstate.PeerStatus.AllowedIPs
@@ -190,6 +192,7 @@ OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.NetfilterKindSet
 OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.NetfilterModeSet
 OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.NoSNATSet
 OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.NoStatefulFilteringSet
+OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.AllowAllInboundSet
 OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.NotepadURLsSet
 OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.OperatorUserSet
 OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.PostureCheckingSet

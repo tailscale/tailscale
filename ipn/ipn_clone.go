@@ -94,6 +94,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	Sync                       opt.Bool
 	NoSNAT                     bool
 	NoStatefulFiltering        opt.Bool
+	AllowAllInbound            bool
 	NetfilterMode              preftype.NetfilterMode
 	OperatorUser               string
 	ProfileName                string

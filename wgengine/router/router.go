@@ -134,6 +134,7 @@ type Config struct {
 	// Linux-only things below, ignored on other platforms.
 	SNATSubnetRoutes  bool                   // SNAT traffic to local subnets
 	StatefulFiltering bool                   // Apply stateful filtering to inbound connections
+	AllowAllInbound   bool                   // Explicitly allow all inbound traffic on the tun interface
 	NetfilterMode     preftype.NetfilterMode // how much to manage netfilter rules
 	NetfilterKind     string                 // what kind of netfilter to use ("nftables", "iptables", or "" to auto-detect)
 }

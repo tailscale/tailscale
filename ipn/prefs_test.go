@@ -60,6 +60,7 @@ func TestPrefsEqual(t *testing.T) {
 		"Sync",
 		"NoSNAT",
 		"NoStatefulFiltering",
+		"AllowAllInbound",
 		"NetfilterMode",
 		"OperatorUser",
 		"ProfileName",
@@ -205,6 +206,17 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{WantRunning: true},
 			&Prefs{WantRunning: true},
+			true,
+		},
+
+		{
+			&Prefs{AllowAllInbound: true},
+			&Prefs{AllowAllInbound: false},
+			false,
+		},
+		{
+			&Prefs{AllowAllInbound: true},
+			&Prefs{AllowAllInbound: true},
 			true,
 		},
 
@@ -512,29 +524,34 @@ func TestPrefsPretty(t *testing.T) {
 		{
 			Prefs{},
 			"linux",
-			"Prefs{ra=false dns=false want=false routes=[] nf=off update=off Persist=nil}",
+			"Prefs{ra=false dns=false want=false routes=[] allow-all-inbound=false nf=off update=off Persist=nil}",
+		},
+		{
+			Prefs{AllowAllInbound: true},
+			"linux",
+			"Prefs{ra=false dns=false want=false routes=[] allow-all-inbound=true nf=off update=off Persist=nil}",
 		},
 		{
 			Prefs{},
 			"windows",
-			"Prefs{ra=false dns=false want=false update=off Persist=nil}",
+			"Prefs{ra=false dns=false want=false allow-all-inbound=false update=off Persist=nil}",
 		},
 		{
 			Prefs{ShieldsUp: true},
 			"windows",
-			"Prefs{ra=false dns=false want=false shields=true update=off Persist=nil}",
+			"Prefs{ra=false dns=false want=false shields=true allow-all-inbound=false update=off Persist=nil}",
 		},
 		{
 			Prefs{},
 			"windows",
-			"Prefs{ra=false dns=false want=false update=off Persist=nil}",
+			"Prefs{ra=false dns=false want=false allow-all-inbound=false update=off Persist=nil}",
 		},
 		{
 			Prefs{
 				NotepadURLs: true,
 			},
 			"windows",
-			"Prefs{ra=false dns=false want=false notepad=true update=off Persist=nil}",
+			"Prefs{ra=false dns=false want=false notepad=true allow-all-inbound=false update=off Persist=nil}",
 		},
 		{
 			Prefs{
@@ -542,7 +559,7 @@ func TestPrefsPretty(t *testing.T) {
 				ForceDaemon: true, // server mode
 			},
 			"windows",
-			"Prefs{ra=false dns=false want=true server=true update=off Persist=nil}",
+			"Prefs{ra=false dns=false want=true server=true allow-all-inbound=false update=off Persist=nil}",
 		},
 		{
 			Prefs{
@@ -551,7 +568,7 @@ func TestPrefsPretty(t *testing.T) {
 				AdvertiseTags: []string{"tag:foo", "tag:bar"},
 			},
 			"darwin",
-			`Prefs{ra=false dns=false want=true tags=tag:foo,tag:bar url="http://localhost:1234" update=off Persist=nil}`,
+			`Prefs{ra=false dns=false want=true allow-all-inbound=false tags=tag:foo,tag:bar url="http://localhost:1234" update=off Persist=nil}`,
 		},
 		{
 			Prefs{
@@ -560,21 +577,21 @@ func TestPrefsPretty(t *testing.T) {
 				},
 			},
 			"linux",
-			`Prefs{ra=false dns=false want=false routes=[] nf=off update=off Persist{o=, n=[B1VKl] u="" ak=-}}`,
+			`Prefs{ra=false dns=false want=false routes=[] allow-all-inbound=false nf=off update=off Persist{o=, n=[B1VKl] u="" ak=-}}`,
 		},
 		{
 			Prefs{
 				ExitNodeIP: netip.MustParseAddr("1.2.3.4"),
 			},
 			"linux",
-			`Prefs{ra=false dns=false want=false exit=1.2.3.4 lan=false routes=[] nf=off update=off Persist=nil}`,
+			`Prefs{ra=false dns=false want=false exit=1.2.3.4 lan=false routes=[] allow-all-inbound=false nf=off update=off Persist=nil}`,
 		},
 		{
 			Prefs{
 				ExitNodeID: tailcfg.StableNodeID("myNodeABC"),
 			},
 			"linux",
-			`Prefs{ra=false dns=false want=false exit=myNodeABC lan=false routes=[] nf=off update=off Persist=nil}`,
+			`Prefs{ra=false dns=false want=false exit=myNodeABC lan=false routes=[] allow-all-inbound=false nf=off update=off Persist=nil}`,
 		},
 		{
 			Prefs{
@@ -582,21 +599,21 @@ func TestPrefsPretty(t *testing.T) {
 				ExitNodeAllowLANAccess: true,
 			},
 			"linux",
-			`Prefs{ra=false dns=false want=false exit=myNodeABC lan=true routes=[] nf=off update=off Persist=nil}`,
+			`Prefs{ra=false dns=false want=false exit=myNodeABC lan=true routes=[] allow-all-inbound=false nf=off update=off Persist=nil}`,
 		},
 		{
 			Prefs{
 				ExitNodeAllowLANAccess: true,
 			},
 			"linux",
-			`Prefs{ra=false dns=false want=false routes=[] nf=off update=off Persist=nil}`,
+			`Prefs{ra=false dns=false want=false routes=[] allow-all-inbound=false nf=off update=off Persist=nil}`,
 		},
 		{
 			Prefs{
 				Hostname: "foo",
 			},
 			"linux",
-			`Prefs{ra=false dns=false want=false routes=[] nf=off host="foo" update=off Persist=nil}`,
+			`Prefs{ra=false dns=false want=false routes=[] allow-all-inbound=false nf=off host="foo" update=off Persist=nil}`,
 		},
 		{
 			Prefs{
@@ -606,7 +623,7 @@ func TestPrefsPretty(t *testing.T) {
 				},
 			},
 			"linux",
-			`Prefs{ra=false dns=false want=false routes=[] nf=off update=check Persist=nil}`,
+			`Prefs{ra=false dns=false want=false routes=[] allow-all-inbound=false nf=off update=check Persist=nil}`,
 		},
 		{
 			Prefs{
@@ -616,7 +633,7 @@ func TestPrefsPretty(t *testing.T) {
 				},
 			},
 			"linux",
-			`Prefs{ra=false dns=false want=false routes=[] nf=off update=on Persist=nil}`,
+			`Prefs{ra=false dns=false want=false routes=[] allow-all-inbound=false nf=off update=on Persist=nil}`,
 		},
 		{
 			Prefs{
@@ -625,7 +642,7 @@ func TestPrefsPretty(t *testing.T) {
 				},
 			},
 			"linux",
-			`Prefs{ra=false dns=false want=false routes=[] nf=off update=off appconnector=advertise Persist=nil}`,
+			`Prefs{ra=false dns=false want=false routes=[] allow-all-inbound=false nf=off update=off appconnector=advertise Persist=nil}`,
 		},
 		{
 			Prefs{
@@ -634,26 +651,26 @@ func TestPrefsPretty(t *testing.T) {
 				},
 			},
 			"linux",
-			`Prefs{ra=false dns=false want=false routes=[] nf=off update=off Persist=nil}`,
+			`Prefs{ra=false dns=false want=false routes=[] allow-all-inbound=false nf=off update=off Persist=nil}`,
 		},
 		{
 			Prefs{
 				NetfilterKind: "iptables",
 			},
 			"linux",
-			`Prefs{ra=false dns=false want=false routes=[] nf=off netfilterKind=iptables update=off Persist=nil}`,
+			`Prefs{ra=false dns=false want=false routes=[] allow-all-inbound=false nf=off netfilterKind=iptables update=off Persist=nil}`,
 		},
 		{
 			Prefs{
 				NetfilterKind: "",
 			},
 			"linux",
-			`Prefs{ra=false dns=false want=false routes=[] nf=off update=off Persist=nil}`,
+			`Prefs{ra=false dns=false want=false routes=[] allow-all-inbound=false nf=off update=off Persist=nil}`,
 		},
 		{
 			Prefs{Sync: "false"},
 			"linux",
-			"Prefs{ra=false dns=false want=false sync=false routes=[] nf=off update=off Persist=nil}",
+			"Prefs{ra=false dns=false want=false sync=false routes=[] allow-all-inbound=false nf=off update=off Persist=nil}",
 		},
 	}
 	for i, tt := range tests {
@@ -901,6 +918,14 @@ func TestMaskedPrefsPretty(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("%d.\n got: %#q\nwant: %#q\n", i, got, tt.want)
 		}
+	}
+}
+
+func TestPrefsAllowAll(t *testing.T) {
+	var p *Prefs
+	p = NewPrefs()
+	if !p.AllowAllInbound {
+		t.Errorf("default should allow all inbound")
 	}
 }
 
