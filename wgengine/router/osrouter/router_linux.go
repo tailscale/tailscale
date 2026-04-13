@@ -557,6 +557,9 @@ func (r *linuxRouter) setCGNATDropModeLocked(want linuxfw.CGNATMode) error {
 	}
 	err := r.nfr.AddExternalCGNATRules(want, r.tunname)
 	if err != nil {
+		// We currently have no rules set, so change the state to reflect that
+		// so we might try again on a future Router update.
+		r.cgnatMode = ""
 		return fmt.Errorf("add new cgnat rules: %w", err)
 	}
 	r.cgnatMode = want
@@ -818,6 +821,9 @@ func (r *linuxRouter) setNetfilterModeLocked(mode preftype.NetfilterMode) error 
 	// code path, and is what we're fixing up here.
 	if r.cgnatMode != "" {
 		if err := r.nfr.AddExternalCGNATRules(r.cgnatMode, r.tunname); err != nil {
+			// We currently have no rules set, so change the state to reflect that
+			// so we might try again on a future Router update.
+			r.cgnatMode = ""
 			return fmt.Errorf("add cgnat rules: %w", err)
 		}
 	}
