@@ -19,6 +19,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 
+	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
@@ -375,6 +376,7 @@ func TestStateMachine(t *testing.T) {
 }
 
 func TestStateMachineSeamless(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/19377")
 	runTestStateMachine(t, true)
 }
 
