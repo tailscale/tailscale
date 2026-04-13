@@ -1,11 +1,6 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// This file previously had "!race" in its build constraint, which was a CI
-// optimization (qemu binaries aren't installed on the race builder to save
-// time). The constraint was removed because it's not a technical requirement:
-// the test gracefully skips architectures when qemu-{arch} isn't available.
-
 //go:build linux && amd64
 
 package archtest
@@ -19,6 +14,7 @@ import (
 	"testing"
 
 	"tailscale.com/util/cibuild"
+	"tailscale.com/util/racebuild"
 )
 
 func TestInQemu(t *testing.T) {
@@ -47,7 +43,9 @@ func TestInQemu(t *testing.T) {
 			} else {
 				look, err := exec.LookPath(qemuUser)
 				if err != nil {
-					if inCI {
+					// In CI, qemu should be available except on the race
+					// builder (which doesn't install qemu to save time).
+					if inCI && !racebuild.On {
 						t.Fatalf("in CI and qemu not available: %v", err)
 					}
 					t.Skipf("%s not found; skipping test. error was: %v", qemuUser, err)
@@ -63,7 +61,10 @@ func TestInQemu(t *testing.T) {
 			cmd.Env = append(os.Environ(), "GOARCH="+arch.Goarch)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
-				if strings.Contains(string(out), "fatal error: sigaction failed") && !inCI {
+				if strings.Contains(string(out), "fatal error: sigaction failed") {
+					if inCI && !racebuild.On {
+						t.Fatalf("qemu too old in CI; need 5.x: %s", out)
+					}
 					t.Skip("skipping; qemu too old. use 5.x.")
 				}
 				t.Errorf("failed: %s", out)
