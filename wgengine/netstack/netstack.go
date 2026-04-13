@@ -64,10 +64,12 @@ import (
 const debugPackets = false
 
 // If non-zero, these override the values returned from the corresponding
-// functions, below.
+// functions, below. They are accessed atomically because background
+// goroutines in the gVisor TCP stack read them while test cleanup
+// goroutines may be restoring them concurrently.
 var (
-	maxInFlightConnectionAttemptsForTest          int
-	maxInFlightConnectionAttemptsPerClientForTest int
+	maxInFlightConnectionAttemptsForTest          atomic.Int32
+	maxInFlightConnectionAttemptsPerClientForTest atomic.Int32
 )
 
 // maxInFlightConnectionAttempts returns the global number of in-flight
@@ -80,8 +82,8 @@ var (
 // connection, so we want to ensure that we don't allow an unbounded number of
 // connections.
 func maxInFlightConnectionAttempts() int {
-	if n := maxInFlightConnectionAttemptsForTest; n > 0 {
-		return n
+	if n := maxInFlightConnectionAttemptsForTest.Load(); n > 0 {
+		return int(n)
 	}
 
 	if version.IsMobile() {
@@ -106,8 +108,8 @@ func maxInFlightConnectionAttempts() int {
 // maxInFlightConnectionAttempts, but applies on a per-client basis
 // (i.e. keyed by the remote Tailscale IP).
 func maxInFlightConnectionAttemptsPerClient() int {
-	if n := maxInFlightConnectionAttemptsPerClientForTest; n > 0 {
-		return n
+	if n := maxInFlightConnectionAttemptsPerClientForTest.Load(); n > 0 {
+		return int(n)
 	}
 
 	// For now, allow each individual client at most 2/3rds of the global
