@@ -20,8 +20,13 @@ func KernelVersion() (major, minor, patch int) {
 		return 0, 0, 0
 	}
 	release := unix.ByteSliceToString(uname.Release[:])
+	return parseKernelVersion(release)
+}
 
-	// Parse version string (e.g., "5.15.0-...")
+// parseKernelVersion parses a Linux kernel version string like "6.12.73+deb13-amd64"
+// or "5.15.0-76-generic" and returns the major, minor, and patch components.
+// It returns (0, 0, 0) if the version cannot be parsed.
+func parseKernelVersion(release string) (major, minor, patch int) {
 	parts := strings.Split(release, ".")
 	if len(parts) < 3 {
 		return 0, 0, 0
@@ -37,9 +42,12 @@ func KernelVersion() (major, minor, patch int) {
 		return 0, 0, 0
 	}
 
-	// Patch version may have additional info after a hyphen (e.g., "0-76-generic")
-	// Extract just the numeric part before any hyphen
-	patchStr, _, _ := strings.Cut(parts[2], "-")
+	// Patch version may have additional info after a hyphen or plus (e.g., "0-76-generic" or "41+deb13-amd64")
+	// Extract just the numeric part before any hyphen or plus
+	patchStr := parts[2]
+	if idx := strings.IndexAny(patchStr, "-+"); idx != -1 {
+		patchStr = patchStr[:idx]
+	}
 
 	patch, err = strconv.Atoi(patchStr)
 	if err != nil {
