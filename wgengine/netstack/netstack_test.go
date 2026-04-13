@@ -870,6 +870,10 @@ func TestTCPForwardLimits_PerClient(t *testing.T) {
 		}
 	}
 
+	// Capture the initial value of the clientmetric before injecting packets,
+	// since it's a global counter that persists across test runs.
+	initialClientMetric := metricPerClientForwardLimit.Value()
+
 	// Inject the packet to start the TCP forward and wait until we have an
 	// in-flight outgoing connection.
 	mustInjectPacket()
@@ -901,9 +905,9 @@ func TestTCPForwardLimits_PerClient(t *testing.T) {
 		t.Errorf("got expvar metric %q=%s, want 1", metricName, v)
 	}
 
-	// client metric
-	if v := metricPerClientForwardLimit.Value(); v != 1 {
-		t.Errorf("got clientmetric limit metric=%d, want 1", v)
+	// client metric - check it increased by 1 from initial value
+	if v := metricPerClientForwardLimit.Value(); v != initialClientMetric+1 {
+		t.Errorf("got clientmetric limit metric=%d, want %d", v, initialClientMetric+1)
 	}
 }
 

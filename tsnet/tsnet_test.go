@@ -519,7 +519,9 @@ func TestConn(t *testing.T) {
 }
 
 func TestLoopbackLocalAPI(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8557")
+	if runtime.GOOS == "darwin" {
+		flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8557")
+	}
 	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -595,7 +597,9 @@ func TestLoopbackLocalAPI(t *testing.T) {
 }
 
 func TestLoopbackSOCKS5(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8198")
+	if runtime.GOOS == "darwin" {
+		flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8198")
+	}
 	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1012,21 +1016,51 @@ func setUpServiceState(t *testing.T, name, ip string, host, client *Server,
 	})
 
 	// Wait until both nodes have up-to-date netmaps before
-	// proceeding with the test.
-	netmapUpToDate := func(nm *netmap.NetworkMap) bool {
+	// proceeding with the test. We need to check both:
+	// 1. DNS records contain the service IP (sentinel for netmap propagation)
+	// 2. For the client: the service host peer has the service VIP in AllowedIPs
+	//    (required for routing to work)
+	servicePrefix := netip.MustParsePrefix(ip + "/32")
+	hasDNSRecord := func(nm *netmap.NetworkMap) bool {
 		return nm != nil && slices.ContainsFunc(nm.DNS.ExtraRecords, func(r tailcfg.DNSRecord) bool {
 			return r.Value == ip
 		})
 	}
-	waitForLatestNetmap := func(t *testing.T, s *Server) {
+	hasRouteToService := func(nm *netmap.NetworkMap, hostNodeKey key.NodePublic) bool {
+		if nm == nil {
+			return false
+		}
+		for _, peer := range nm.Peers {
+			if peer.Key() == hostNodeKey {
+				for _, aip := range peer.AllowedIPs().All() {
+					if aip == servicePrefix {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+	waitForLatestNetmap := func(t *testing.T, s *Server, checkRoute bool, hostNodeKey key.NodePublic) {
 		t.Helper()
 		w := must.Get(s.localClient.WatchIPNBus(t.Context(), ipn.NotifyInitialNetMap))
 		defer w.Close()
-		for n := must.Get(w.Next()); !netmapUpToDate(n.NetMap); n = must.Get(w.Next()) {
+		for {
+			n := must.Get(w.Next())
+			if !hasDNSRecord(n.NetMap) {
+				continue
+			}
+			if checkRoute && !hasRouteToService(n.NetMap, hostNodeKey) {
+				continue
+			}
+			break
 		}
 	}
-	waitForLatestNetmap(t, client)
-	waitForLatestNetmap(t, host)
+	hostNodeKey := host.lb.NodeKey()
+	// Client needs both DNS and route to service host
+	waitForLatestNetmap(t, client, true, hostNodeKey)
+	// Host only needs DNS (it's the one hosting the service)
+	waitForLatestNetmap(t, host, false, key.NodePublic{})
 }
 
 func TestListenService(t *testing.T) {

@@ -6,7 +6,7 @@ package art
 import (
 	crand "crypto/rand"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"net/netip"
 	"runtime"
 	"strconv"
@@ -1140,7 +1140,7 @@ func randomPrefixes4(n int) []slowPrefixEntry[int] {
 	pfxs := map[netip.Prefix]bool{}
 
 	for len(pfxs) < n {
-		len := rand.Intn(33)
+		len := rand.IntN(33)
 		pfx, err := randomAddr4().Prefix(len)
 		if err != nil {
 			panic(err)
@@ -1161,7 +1161,7 @@ func randomPrefixes6(n int) []slowPrefixEntry[int] {
 	pfxs := map[netip.Prefix]bool{}
 
 	for len(pfxs) < n {
-		len := rand.Intn(129)
+		len := rand.IntN(129)
 		pfx, err := randomAddr6().Prefix(len)
 		if err != nil {
 			panic(err)
@@ -1179,7 +1179,7 @@ func randomPrefixes6(n int) []slowPrefixEntry[int] {
 
 // randomAddr returns a randomly generated IP address.
 func randomAddr() netip.Addr {
-	if rand.Intn(2) == 1 {
+	if rand.IntN(2) == 1 {
 		return randomAddr6()
 	} else {
 		return randomAddr4()

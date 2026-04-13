@@ -94,6 +94,7 @@ type Server struct {
 	closed              bool
 	lamportID           uint64
 	nextVNI             uint32
+	testVNIPoolSize     uint32 // if non-zero, overrides totalPossibleVNI for testing
 	// serverEndpointByVNI is consistent with serverEndpointByDisco while mu is
 	// held, i.e. mu must be held around write ops. Read ops in performance
 	// sensitive paths, e.g. packet forwarding, do not need to acquire mu.
@@ -977,7 +978,11 @@ func (e ErrServerNotReady) Error() string {
 // For now, we favor simplicity and reducing VNI re-use over more complex
 // ephemeral port (VNI) selection algorithms.
 func (s *Server) getNextVNILocked() (uint32, error) {
-	for range totalPossibleVNI {
+	poolSize := totalPossibleVNI
+	if s.testVNIPoolSize > 0 {
+		poolSize = s.testVNIPoolSize
+	}
+	for range poolSize {
 		vni := s.nextVNI
 		if vni == maxVNI {
 			s.nextVNI = minVNI

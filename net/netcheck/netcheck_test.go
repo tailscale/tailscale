@@ -32,6 +32,10 @@ func newTestClient(t testing.TB) *Client {
 		TimeNow: func() time.Time {
 			return time.Unix(1729624521, 0)
 		},
+		// Disable captive portal detection in tests by setting a very long
+		// delay. The captivePortalStop() call before waiting ensures the
+		// channel is closed even if the timer hasn't fired.
+		testCaptivePortalDelay: time.Hour,
 	}
 	return c
 }

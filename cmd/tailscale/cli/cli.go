@@ -196,11 +196,17 @@ func (v *onceFlagValue) IsBoolFlag() bool {
 
 // noDupFlagify modifies c recursively to make all the
 // flag values be wrappers that permit setting the value
-// at most once.
+// at most once. If a flag is already wrapped, it resets
+// the wrapper's state instead of double-wrapping.
 func noDupFlagify(c *ffcli.Command) {
 	if c.FlagSet != nil {
 		c.FlagSet.VisitAll(func(f *flag.Flag) {
-			f.Value = &onceFlagValue{Value: f.Value}
+			if ofv, ok := f.Value.(*onceFlagValue); ok {
+				// Already wrapped; reset the flag state
+				ofv.set = false
+			} else {
+				f.Value = &onceFlagValue{Value: f.Value}
+			}
 		})
 	}
 	for _, sub := range c.Subcommands {

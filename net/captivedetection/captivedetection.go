@@ -93,6 +93,9 @@ func (d *Detector) detectCaptivePortalWithGOOS(ctx context.Context, netMon *netm
 	// the captive portal alert thrown by the system. If no default route interface is known,
 	// we need to try with anything that might remotely resemble a Wi-Fi interface.
 	for ifName, i := range ifState.Interface {
+		if ctx.Err() != nil {
+			return false
+		}
 		if !i.IsUp() || i.IsLoopback() || interfaceNameDoesNotNeedCaptiveDetection(ifName, goos) {
 			continue
 		}

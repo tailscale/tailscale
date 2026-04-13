@@ -518,9 +518,13 @@ func TestGetCertPEMWithValidity(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-
+			// Always reset the cert share mode at the start of each subtest to ensure
+			// test isolation. Without this, a previous subtest's "ro" setting would
+			// leak into subsequent subtests.
 			if tt.readOnlyMode {
 				envknob.Setenv("TS_CERT_SHARE_MODE", "ro")
+			} else {
+				envknob.Setenv("TS_CERT_SHARE_MODE", "")
 			}
 
 			os.RemoveAll(certDir)
