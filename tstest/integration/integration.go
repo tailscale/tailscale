@@ -1044,6 +1044,9 @@ func (n *TestNode) Tailscale(arg ...string) *exec.Cmd {
 	cmd.Env = append(os.Environ(),
 		"TS_DEBUG_UP_FLAG_GOOS="+n.upFlagGOOS,
 		"TS_LOGS_DIR="+n.env.t.TempDir(),
+		"SSH_CLIENT=",     // Clear SSH_CLIENT to prevent isSSHOverTailscale() false positives in tests
+		"SSH_CONNECTION=", // just in case
+		"SSH_AUTH_SOCK=",  // just in case
 	)
 	if *verboseTailscale {
 		cmd.Stdout = os.Stdout
