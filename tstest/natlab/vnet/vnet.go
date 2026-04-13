@@ -747,6 +747,7 @@ type Server struct {
 	agentConnWaiter map[*node]chan<- struct{} // signaled after added to set
 	agentConns      set.Set[*agentConn]       //  not keyed by node; should be small/cheap enough to scan all
 	agentDialer     map[*node]netx.DialFunc
+	gotFirstPacket  map[MAC]chan struct{} // closed on first packet from each MAC
 
 	cloudInitData map[int]*CloudInitData // node num → cloud-init config
 	fileContents  map[string][]byte      // filename → file bytes
@@ -824,6 +825,10 @@ func New(c *Config) (*Server, error) {
 	}
 	if err := s.initFromConfig(c); err != nil {
 		return nil, err
+	}
+	s.gotFirstPacket = make(map[MAC]chan struct{})
+	for mac := range s.nodeByMAC {
+		s.gotFirstPacket[mac] = make(chan struct{})
 	}
 	for n := range s.networks {
 		if err := n.initStack(); err != nil {
@@ -930,6 +935,22 @@ func (s *Server) Close() {
 		s.pcapWriter.Close()
 	}
 	s.wg.Wait()
+}
+
+// AwaitFirstPacket waits until the first ethernet frame is received from the
+// given MAC address, indicating the VM has booted far enough to send network
+// traffic. It returns an error if the context expires first.
+func (s *Server) AwaitFirstPacket(ctx context.Context, mac MAC) error {
+	ch, ok := s.gotFirstPacket[mac]
+	if !ok {
+		return fmt.Errorf("unknown MAC %v", mac)
+	}
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("no network packets received from %v: %w", mac, ctx.Err())
+	}
 }
 
 // MACs returns the MAC addresses of the configured nodes.
@@ -1088,6 +1109,13 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 		}
 		if !didReg[srcMAC] {
 			didReg[srcMAC] = true
+			if ch, ok := s.gotFirstPacket[srcMAC]; ok {
+				select {
+				case <-ch: // already closed
+				default:
+					close(ch)
+				}
+			}
 			srcNet := srcNode.netForMAC(srcMAC)
 			if srcNet == nil {
 				s.logf("[conn %p] node %v has no network for MAC %v", c.uc, srcNode, srcMAC)
