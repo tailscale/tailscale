@@ -32,6 +32,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/sys/unix"
+	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/egressservices"
@@ -45,6 +46,7 @@ import (
 const configFileAuthKey = "some-auth-key"
 
 func TestContainerBoot(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/19380")
 	boot := filepath.Join(t.TempDir(), "containerboot")
 	if err := exec.Command("go", "build", "-ldflags", "-X main.testSleepDuration=1ms", "-o", boot, "tailscale.com/cmd/containerboot").Run(); err != nil {
 		t.Fatalf("Building containerboot: %v", err)
