@@ -557,6 +557,70 @@ v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 	}
 }
 
+func TestCGNATRuleUpdatePreservesNetfilterState(t *testing.T) {
+	bus := eventbus.New()
+	defer bus.Close()
+	mon, err := netmon.New(bus, logger.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mon.Start()
+	defer mon.Close()
+
+	fake := NewFakeOS(t)
+	ht := health.NewTracker(bus)
+	r, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake, ht, bus)
+	if err != nil {
+		t.Fatalf("failed to create router: %v", err)
+	}
+	lr := r.(*linuxRouter)
+	lr.nfr = fake.nfr
+	if err := lr.Up(); err != nil {
+		t.Fatalf("failed to up router: %v", err)
+	}
+
+	cfg1 := &Config{
+		LocalAddrs:        mustCIDRs("100.101.102.104/10"),
+		Routes:            mustCIDRs("100.100.100.100/32"),
+		SubnetRoutes:      mustCIDRs("10.0.0.0/16"),
+		SNATSubnetRoutes:  true,
+		StatefulFiltering: true,
+		NetfilterMode:     netfilterOn,
+		CGNATRules: []router.CGNATRule{{
+			Prefix:  netip.MustParsePrefix("100.64.0.0/10"),
+			Verdict: router.CGNATRuleVerdictDrop,
+			Chain:   router.CGNATRuleChainBoth,
+		}},
+	}
+	if err := lr.Set(cfg1); err != nil {
+		t.Fatalf("initial Set failed: %v", err)
+	}
+
+	cfg2 := cfg1.Clone()
+	cfg2.CGNATRules = []router.CGNATRule{
+		{Prefix: netip.MustParsePrefix("100.100.0.0/24"), Verdict: router.CGNATRuleVerdictAccept, Chain: router.CGNATRuleChainInput},
+		{Prefix: netip.MustParsePrefix("100.64.0.0/10"), Verdict: router.CGNATRuleVerdictDrop, Chain: router.CGNATRuleChainBoth},
+	}
+	if err := lr.Set(cfg2); err != nil {
+		t.Fatalf("CGNAT-only update Set failed: %v", err)
+	}
+
+	got := fake.String()
+	for _, want := range []string{
+		"v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT",
+		"v4/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE",
+		"v4/filter/ts-forward -o tailscale0 -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP",
+		"v4/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000",
+		"v4/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000",
+		"v4/filter/ts-input ! -i tailscale0 -s 100.100.0.0/24 -j ACCEPT",
+		"v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing rule after CGNAT-only update: %s\nstate:\n%s", want, got)
+		}
+	}
+}
+
 type fakeIPTablesRunner struct {
 	t    *testing.T
 	ipt4 map[string][]string
@@ -665,8 +729,8 @@ func (n *fakeIPTablesRunner) AddLoopbackRule(addr netip.Addr) error {
 	return insertRule(n, curIPT, "filter/ts-input", newRule)
 }
 
-func (n *fakeIPTablesRunner) AddBase(tunname string) error {
-	if err := n.addBase4(tunname); err != nil {
+func (n *fakeIPTablesRunner) AddBase(tunname string, cgnatRules []linuxfw.CGNATRule) error {
+	if err := n.addBase4(tunname, cgnatRules); err != nil {
 		return err
 	}
 	if n.HasIPV6() {
@@ -717,22 +781,87 @@ func (n *fakeIPTablesRunner) DeleteDNATRuleForSvc(svcName string, origDst, dst n
 	return errors.New("not implemented")
 }
 
-func (n *fakeIPTablesRunner) addBase4(tunname string) error {
+func (n *fakeIPTablesRunner) addBase4(tunname string, cgnatRules []linuxfw.CGNATRule) error {
 	curIPT := n.ipt4
 	newRules := []struct{ chain, rule string }{
 		{"filter/ts-input", fmt.Sprintf("! -i %s -s %s -j RETURN", tunname, tsaddr.ChromeOSVMRange().String())},
-		{"filter/ts-input", fmt.Sprintf("! -i %s -s %s -j DROP", tunname, tsaddr.CGNATRange().String())},
-		{"filter/ts-forward", fmt.Sprintf("-i %s -j MARK --set-mark %s/%s", tunname, tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
-		{"filter/ts-forward", fmt.Sprintf("-m mark --mark %s/%s -j ACCEPT", tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
-		{"filter/ts-forward", fmt.Sprintf("-o %s -s %s -j DROP", tunname, tsaddr.CGNATRange().String())},
-		{"filter/ts-forward", fmt.Sprintf("-o %s -j ACCEPT", tunname)},
 	}
+	for _, rule := range linuxfwInputRulesOrDefault(cgnatRules) {
+		target := strings.ToUpper(string(rule.Verdict))
+		newRules = append(newRules,
+			struct{ chain, rule string }{"filter/ts-input", fmt.Sprintf("! -i %s -s %s -j %s", tunname, rule.Prefix.String(), target)},
+		)
+	}
+	newRules = append(newRules,
+		struct{ chain, rule string }{"filter/ts-forward", fmt.Sprintf("-i %s -j MARK --set-mark %s/%s", tunname, tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
+		struct{ chain, rule string }{"filter/ts-forward", fmt.Sprintf("-m mark --mark %s/%s -j ACCEPT", tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
+	)
+	for _, rule := range linuxfwForwardRulesOrDefault(cgnatRules) {
+		target := strings.ToUpper(string(rule.Verdict))
+		newRules = append(newRules,
+			struct{ chain, rule string }{"filter/ts-forward", fmt.Sprintf("-o %s -s %s -j %s", tunname, rule.Prefix.String(), target)},
+		)
+	}
+	newRules = append(newRules, struct{ chain, rule string }{"filter/ts-forward", fmt.Sprintf("-o %s -j ACCEPT", tunname)})
 	for _, rule := range newRules {
 		if err := appendRule(n, curIPT, rule.chain, rule.rule); err != nil {
 			return fmt.Errorf("add rule %q to chain %q: %w", rule.rule, rule.chain, err)
 		}
 	}
 	return nil
+}
+
+func linuxfwRulesOrDefault(rules []linuxfw.CGNATRule) []linuxfw.CGNATRule {
+	if len(rules) > 0 {
+		return rules
+	}
+	return []linuxfw.CGNATRule{{
+		Prefix:  tsaddr.CGNATRange(),
+		Verdict: linuxfw.CGNATRuleVerdictDrop,
+		Chain:   linuxfw.CGNATRuleChainBoth,
+	}}
+}
+
+func linuxfwInputRulesOrDefault(rules []linuxfw.CGNATRule) []linuxfw.CGNATRule {
+	filtered := make([]linuxfw.CGNATRule, 0, len(rules))
+	for _, rule := range rules {
+		if ruleAppliesToInput(rule.Chain) {
+			filtered = append(filtered, rule)
+		}
+	}
+	if len(filtered) > 0 {
+		return filtered
+	}
+	return []linuxfw.CGNATRule{{
+		Prefix:  tsaddr.CGNATRange(),
+		Verdict: linuxfw.CGNATRuleVerdictDrop,
+		Chain:   linuxfw.CGNATRuleChainInput,
+	}}
+}
+
+func linuxfwForwardRulesOrDefault(rules []linuxfw.CGNATRule) []linuxfw.CGNATRule {
+	filtered := make([]linuxfw.CGNATRule, 0, len(rules))
+	for _, rule := range rules {
+		if ruleAppliesToForward(rule.Chain) {
+			filtered = append(filtered, rule)
+		}
+	}
+	if len(filtered) > 0 {
+		return filtered
+	}
+	return []linuxfw.CGNATRule{{
+		Prefix:  tsaddr.CGNATRange(),
+		Verdict: linuxfw.CGNATRuleVerdictDrop,
+		Chain:   linuxfw.CGNATRuleChainForward,
+	}}
+}
+
+func ruleAppliesToInput(chain linuxfw.CGNATRuleChain) bool {
+	return chain == linuxfw.CGNATRuleChainBoth || chain == linuxfw.CGNATRuleChainInput
+}
+
+func ruleAppliesToForward(chain linuxfw.CGNATRuleChain) bool {
+	return chain == linuxfw.CGNATRuleChainBoth || chain == linuxfw.CGNATRuleChainForward
 }
 
 func (n *fakeIPTablesRunner) addBase6(tunname string) error {

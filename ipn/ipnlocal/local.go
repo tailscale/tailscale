@@ -5646,6 +5646,99 @@ func peerRoutes(logf logger.Logf, peers []wgcfg.Peer, cgnatThreshold int, routeA
 	return routes
 }
 
+// Hopefully change this to something like "cgnat-rules" or "tailscale.com/cap/cgnat-rules".
+// The current control plane ACL validation does not allow end users to add node app capability
+// that does not start with a domain name or start with tailscale.com.
+const cgnatRulesCapability tailcfg.NodeCapability = "ysun.co/tscgnat"
+
+type cgnatRuleJSON struct {
+	CIDR    string `json:"cidr"`
+	Verdict string `json:"verdict"`
+	Chain   string `json:"chain,omitempty"`
+}
+
+func parseCGNATRule(logf logger.Logf, raw cgnatRuleJSON) (router.CGNATRule, bool) {
+	pfx, err := netip.ParsePrefix(raw.CIDR)
+	if err != nil {
+		logf("[unexpected] ignoring invalid %q prefix %q: %v", cgnatRulesCapability, raw.CIDR, err)
+		return router.CGNATRule{}, false
+	}
+	pfx = pfx.Masked()
+	if !pfx.Addr().Is4() {
+		logf("[unexpected] ignoring non-IPv4 %q prefix %q", cgnatRulesCapability, pfx)
+		return router.CGNATRule{}, false
+	}
+	cgnat := tsaddr.CGNATRange()
+	if !cgnat.Contains(pfx.Addr()) || !cgnat.Contains(netipx.PrefixLastIP(pfx)) {
+		logf("[unexpected] ignoring out-of-range %q prefix %q", cgnatRulesCapability, pfx)
+		return router.CGNATRule{}, false
+	}
+
+	verdict := strings.ToLower(strings.TrimSpace(raw.Verdict))
+	var parsedVerdict router.CGNATRuleVerdict
+	switch verdict {
+	case string(router.CGNATRuleVerdictDrop):
+		parsedVerdict = router.CGNATRuleVerdictDrop
+	case string(router.CGNATRuleVerdictAccept):
+		parsedVerdict = router.CGNATRuleVerdictAccept
+	default:
+		logf("[unexpected] ignoring %q rule with unsupported verdict %q", cgnatRulesCapability, raw.Verdict)
+		return router.CGNATRule{}, false
+	}
+
+	chain := strings.ToLower(strings.TrimSpace(raw.Chain))
+	var parsedChain router.CGNATRuleChain
+	switch chain {
+	case "", string(router.CGNATRuleChainBoth):
+		parsedChain = router.CGNATRuleChainBoth
+	case string(router.CGNATRuleChainInput):
+		parsedChain = router.CGNATRuleChainInput
+	case string(router.CGNATRuleChainForward):
+		parsedChain = router.CGNATRuleChainForward
+	default:
+		logf("[unexpected] ignoring %q rule with unsupported chain %q", cgnatRulesCapability, raw.Chain)
+		return router.CGNATRule{}, false
+	}
+
+	return router.CGNATRule{Prefix: pfx, Verdict: parsedVerdict, Chain: parsedChain}, true
+}
+
+func cgnatRulesFromCapability(logf logger.Logf, selfNode tailcfg.NodeView) []router.CGNATRule {
+	if !selfNode.Valid() {
+		return nil
+	}
+
+	rawRules, err := tailcfg.UnmarshalNodeCapViewJSON[cgnatRuleJSON](selfNode.CapMap(), cgnatRulesCapability)
+	if err != nil {
+		logf("[unexpected] failed to unmarshal %q capability: %v; falling back to default CGNAT drop", cgnatRulesCapability, err)
+		return nil
+	}
+	if len(rawRules) == 0 {
+		return nil
+	}
+
+	rules := make([]router.CGNATRule, 0, len(rawRules))
+	for _, raw := range rawRules {
+		rule, ok := parseCGNATRule(logf, raw)
+		if !ok {
+			logf("[unexpected] rejecting all %q rules due to invalid entry; falling back to default CGNAT drop", cgnatRulesCapability)
+			return nil
+		}
+		rules = append(rules, rule)
+	}
+
+	seen := make(map[router.CGNATRule]bool, len(rules))
+	deduped := rules[:0]
+	for _, rule := range rules {
+		if seen[rule] {
+			continue
+		}
+		seen[rule] = true
+		deduped = append(deduped, rule)
+	}
+	return deduped
+}
+
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
 //
 // b.mu must be held.
@@ -5680,6 +5773,10 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 		NetfilterMode:     prefs.NetfilterMode(),
 		Routes:            peerRoutes(b.logf, cfg.Peers, singleRouteThreshold, prefs.RouteAll()),
 		NetfilterKind:     netfilterKind,
+	}
+
+	if nm != nil {
+		rs.CGNATRules = cgnatRulesFromCapability(b.logf, nm.SelfNode)
 	}
 
 	if buildfeatures.HasSynology && distro.Get() == distro.Synology {
