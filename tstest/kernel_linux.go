@@ -37,9 +37,12 @@ func KernelVersion() (major, minor, patch int) {
 		return 0, 0, 0
 	}
 
-	// Patch version may have additional info after a hyphen (e.g., "0-76-generic")
-	// Extract just the numeric part before any hyphen
-	patchStr, _, _ := strings.Cut(parts[2], "-")
+	// Patch version may have additional info after a hyphen or plus (e.g., "0-76-generic" or "41+deb13-amd64")
+	// Extract just the numeric part before any hyphen or plus
+	patchStr := parts[2]
+	if idx := strings.IndexAny(patchStr, "-+"); idx != -1 {
+		patchStr = patchStr[:idx]
+	}
 
 	patch, err = strconv.Atoi(patchStr)
 	if err != nil {
