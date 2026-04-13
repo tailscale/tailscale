@@ -20,8 +20,22 @@ import (
 	"tailscale.com/util/cibuild"
 )
 
+// AssertNotParallel asserts that t has not been marked as parallel.
+// It panics (via t.Setenv) if t.Parallel has already been called.
+//
+// Use this when a test modifies package-level globals or other shared
+// state that would be unsafe to modify concurrently with other tests.
+func AssertNotParallel(t testing.TB) {
+	t.Helper()
+	t.Setenv("ASSERT_NOT_PARALLEL_TEST", "1") // panics if t.Parallel was called
+}
+
 // Replace replaces the value of target with val.
 // The old value is restored when the test ends.
+//
+// When target is a package-level variable, the caller should also call
+// [AssertNotParallel] to ensure the test is not running in parallel with
+// other tests that may access the same variable.
 func Replace[T any](t testing.TB, target *T, val T) {
 	t.Helper()
 	if target == nil {
