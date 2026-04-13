@@ -93,13 +93,14 @@ func (b BinaryInfo) CopyTo(dir string) (BinaryInfo, error) {
 	ret.Path = filepath.Join(dir, path.Base(b.Path))
 
 	switch runtime.GOOS {
-	case "linux":
-		// TODO(bradfitz): be fancy and use linkat with AT_EMPTY_PATH to avoid
-		// copying? I couldn't get it to work, though.
-		// For now, just do the same thing as every other Unix and copy
-		// the binary.
-		fallthrough
-	case "darwin", "freebsd", "openbsd", "netbsd":
+	case "linux", "darwin", "freebsd", "openbsd", "netbsd":
+		// Try hard link first to save disk space. Hard links share the same
+		// inode so they don't consume additional disk space, which is
+		// important when running many parallel integration tests.
+		if err := os.Link(b.Path, ret.Path); err == nil {
+			return ret, nil
+		}
+		// Fall back to copying if hard link fails (e.g., cross-device).
 		f, err := os.OpenFile(ret.Path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o755)
 		if err != nil {
 			return BinaryInfo{}, err
