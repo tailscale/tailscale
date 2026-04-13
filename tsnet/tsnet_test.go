@@ -44,7 +44,6 @@ import (
 	"golang.org/x/net/proxy"
 
 	"tailscale.com/client/local"
-	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"

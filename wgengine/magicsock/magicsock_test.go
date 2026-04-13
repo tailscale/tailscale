@@ -39,7 +39,6 @@ import (
 	"go4.org/mem"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
-	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/derp/derpserver"
 	"tailscale.com/disco"
