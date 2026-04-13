@@ -1422,3 +1422,13 @@ func (lc *Client) GetAppConnectorRouteInfo(ctx context.Context) (appctype.RouteI
 	}
 	return decodeJSON[appctype.RouteInfo](body)
 }
+
+// GetServices returns the Services visible to this node,
+// including their names, IP addresses, and ports, keyed by service name.
+func (lc *Client) GetServices(ctx context.Context) (map[tailcfg.ServiceName]tailcfg.ServiceDetails, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/services")
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[map[tailcfg.ServiceName]tailcfg.ServiceDetails](body)
+}

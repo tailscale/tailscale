@@ -149,6 +149,9 @@ func (nm *NetworkMap) GetIPVIPServiceMap() IPServiceMappings {
 // Services returns the Services visible (accessible) to this node,
 // decoded from [tailcfg.NodeAttrPrefixServices]+serviceName entries in the
 // self node's CapMap. Returns nil if nm is nil or SelfNode is invalid.
+//
+// TODO(adrianosela): cache the result of decoding the capmap so
+// we don't have to decode it multiple times after each netmap update.
 func (nm *NetworkMap) Services() map[tailcfg.ServiceName]tailcfg.ServiceDetails {
 	if nm == nil || !nm.SelfNode.Valid() {
 		return nil
