@@ -89,7 +89,7 @@ type linuxRouter struct {
 	connmarkEnabled   bool // whether connmark rules are currently enabled
 	netfilterMode     preftype.NetfilterMode
 	netfilterKind     string
-	dropCGNAT         bool
+	cgnatMode         linuxfw.CGNATMode
 	magicsockPortV4   uint16
 	magicsockPortV6   uint16
 }
@@ -360,9 +360,6 @@ func (r *linuxRouter) Up() error {
 	if err := r.upInterface(); err != nil {
 		return fmt.Errorf("bringing interface up: %w", err)
 	}
-	// For now (2026-04-09), assume that unless stated otherwise, we want to be
-	// dropping non-Tailscale CGNAT traffic to preserve old behavior.
-	r.dropCGNAT = true
 
 	return nil
 }
@@ -527,33 +524,13 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 
 	// Remove the rule to drop off-tailnet CGNAT traffic, if asked.
 	if netfilterOn || cfg.NetfilterMode == netfilterNoDivert {
-		var current, next linuxfw.CGNATMode
-		if r.dropCGNAT {
-			current = linuxfw.CGNATModeDrop
+		var cgnatMode linuxfw.CGNATMode
+		if cfg.RemoveCGNATDropRule {
+			cgnatMode = linuxfw.CGNATModeReturn
 		} else {
-			current = linuxfw.CGNATModeReturn
+			cgnatMode = linuxfw.CGNATModeDrop
 		}
-
-		// The boolean algebra here reads a little weird, but it works out because
-		// cfg.RemoveCGNATDropRule == false means we want r.dropCGNAT to be true,
-		// and vice-versa. The booleans being the same value mean that they're
-		// out of sync, because they're inverses of each other. This is so that the
-		// zero value of *router.Config can preserve the default behavior (ie.
-		// keep the drop rule), but internally in the router it makes more sense
-		// to elide the negation to prevent double-negation everywhere. This is
-		// the interface between those two, so all the weirdness is contained here.
-		if cfg.RemoveCGNATDropRule == r.dropCGNAT {
-			if cfg.RemoveCGNATDropRule {
-				next = linuxfw.CGNATModeReturn
-			} else {
-				next = linuxfw.CGNATModeDrop
-			}
-			r.dropCGNAT = !cfg.RemoveCGNATDropRule
-		} else {
-			next = current
-		}
-
-		err := r.setCGNATDropModeLocked(current, next)
+		err := r.setCGNATDropModeLocked(cgnatMode)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("set cgnat mode: %w", err))
 		}
@@ -562,15 +539,27 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	return errors.Join(errs...)
 }
 
-func (r *linuxRouter) setCGNATDropModeLocked(current, next linuxfw.CGNATMode) error {
-	err := r.nfr.DelExternalCGNATRules(current, r.tunname)
-	if err != nil {
-		return fmt.Errorf("clear old cgnat rules: %w", err)
+// setCGNATDropModeLocked clears old rules and add new rules for the desired
+// behavior for incoming non-Tailscale CGNAT packets.
+// [linuxRouter.mu] must be held.
+func (r *linuxRouter) setCGNATDropModeLocked(want linuxfw.CGNATMode) error {
+	if want == r.cgnatMode {
+		return nil
 	}
-	err = r.nfr.AddExternalCGNATRules(next, r.tunname)
+	// r.cgnatMode is empty at initial startup, before this function has been
+	// called for the first time. In that case, we can skip deleting old
+	// rules, because there aren't any.
+	if r.cgnatMode != "" {
+		err := r.nfr.DelExternalCGNATRules(r.cgnatMode, r.tunname)
+		if err != nil {
+			return fmt.Errorf("clear old cgnat rules: %w", err)
+		}
+	}
+	err := r.nfr.AddExternalCGNATRules(want, r.tunname)
 	if err != nil {
 		return fmt.Errorf("add new cgnat rules: %w", err)
 	}
+	r.cgnatMode = want
 	return nil
 }
 
@@ -819,6 +808,17 @@ func (r *linuxRouter) setNetfilterModeLocked(mode preftype.NetfilterMode) error 
 	for cidr := range r.addrs {
 		if err := r.addLoopbackRule(cidr.Addr()); err != nil {
 			return fmt.Errorf("error adding loopback rule: %w", err)
+		}
+	}
+
+	// Re-add the CGNAT rules if we had any set.
+	// This does not call [linuxRouter.setCGNATDropModeLocked] because that
+	// function assumes that [linuxRouter.cgnatMode] accurately represents the
+	// current state in the firewall. This would not be true when we hit this
+	// code path, and is what we're fixing up here.
+	if r.cgnatMode != "" {
+		if err := r.nfr.AddExternalCGNATRules(r.cgnatMode, r.tunname); err != nil {
+			return fmt.Errorf("add cgnat rules: %w", err)
 		}
 	}
 

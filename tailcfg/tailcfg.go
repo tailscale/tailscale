@@ -2784,7 +2784,7 @@ const (
 	// blanket firewall DROP rule for inbound traffic from the CGNAT IP range
 	// that does not originate from the Tailscale network interface.
 	// This enables access to off-tailnet endpoints within that IP range.
-	NodeAttrDisableLinuxCGNATDropRule = "disable-linux-cgnat-drop-rule"
+	NodeAttrDisableLinuxCGNATDropRule NodeCapability = "disable-linux-cgnat-drop-rule"
 )
 
 // SetDNSRequest is a request to add a DNS record.

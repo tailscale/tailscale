@@ -722,7 +722,7 @@ func (i *iptablesRunner) DelExternalCGNATRules(mode CGNATMode, tunname string) e
 			continue
 		}
 		if err := i.ipt4.Delete("filter", "ts-input", rule...); err != nil {
-			return fmt.Errorf("adding %v in v4/filter/ts-input: %w", rule, err)
+			return fmt.Errorf("deleting %v in v4/filter/ts-input: %w", rule, err)
 		}
 	}
 	return nil
