@@ -298,7 +298,12 @@ func (ms *mapSession) handleNonKeepAliveMapResponse(ctx context.Context, resp *t
 
 	ms.patchifyPeersChanged(resp)
 
-	ms.removeUnwantedDiscoUpdates(resp)
+	ms.removeUnwantedDiscoUpdates(resp, viaTSMP)
+
+	// TSMP learned key was rejected, no need to do any more work in the engine.
+	if viaTSMP && len(resp.PeersChangedPatch) == 0 {
+		return nil
+	}
 	ms.removeUnwantedDiscoUpdatesFromFullNetmapUpdate(resp)
 
 	ms.updateStateFromResponse(resp)
@@ -407,7 +412,7 @@ type updateStats struct {
 
 // removeUnwantedDiscoUpdates goes over the patchified updates and reject items
 // where the node is offline and has last been seen before the recorded last seen.
-func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse) {
+func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse, viaTSMP bool) {
 	ms.peersMu.RLock()
 	defer ms.peersMu.RUnlock()
 
@@ -422,17 +427,33 @@ func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse) {
 			continue
 		}
 
+		existingNode, ok := ms.peers[change.NodeID]
 		// Accept if:
-		// - Node is online.
-		if *change.Online {
+		// - Cannot find the peer, don't have enough data.
+		if !ok {
 			acceptedDiscoUpdates = append(acceptedDiscoUpdates, change)
 			continue
 		}
 
-		existingNode, ok := ms.peers[change.NodeID]
+		// Reject if:
+		// - key was learned via tsmp AND,
+		// - existing node is online AND,
+		// - key did not change.
+		// Here to avoid a deeper reconfig in the case where we get a TSMP key
+		// exchange while that node is already in a connected state (from the view
+		// of the control plane). This is meant to keep the node stable, avoiding a
+		// reconfiguration of the node deeper down in the engine.
+		// With this, we are avoiding updating the LastSeen and Online fields from
+		// TSMP updates when that is not relevant, overall making the connection
+		// state change less, and updating the engine less.
+		if viaTSMP && existingNode.Online().Get() &&
+			*change.DiscoKey == existingNode.DiscoKey() {
+			continue
+		}
+
 		// Accept if:
-		// - Cannot find the peer, don't have enough data
-		if !ok {
+		// - Node is online.
+		if *change.Online {
 			acceptedDiscoUpdates = append(acceptedDiscoUpdates, change)
 			continue
 		}
@@ -497,8 +518,9 @@ func (ms *mapSession) removeUnwantedDiscoUpdatesFromFullNetmapUpdate(resp *tailc
 			continue
 		}
 
-		// Overwrite the key in the full netmap update.
+		// Overwrite the key and last seen in the full netmap update.
 		peer.DiscoKey = existingNode.DiscoKey()
+		*peer.LastSeen = existingNode.LastSeen().Get()
 	}
 }
 
