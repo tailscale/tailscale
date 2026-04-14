@@ -80,6 +80,11 @@ type Server struct {
 	ExplicitBaseURL string           // e.g. "http://127.0.0.1:1234" with no trailing URL
 	HTTPTestServer  *httptest.Server // if non-nil, used to get BaseURL
 
+	// MaybeRateLimitRegister, if non-nil, is called before processing
+	// register requests. If it returns true, a 429 response is sent
+	// with the given Retry-After header value and body string.
+	MaybeRateLimitRegister func() (reject bool, retryAfter string, msg string)
+
 	// ModifyFirstMapResponse, if non-nil, is called exactly once per
 	// MapResponse stream to modify the first MapResponse sent in response to it.
 	ModifyFirstMapResponse func(*tailcfg.MapResponse, *tailcfg.MapRequest)
@@ -768,6 +773,16 @@ func (s *Server) CompleteDeviceApproval(controlUrl string, urlStr string, nodeKe
 }
 
 func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.MachinePublic) {
+	if fn := s.MaybeRateLimitRegister; fn != nil {
+		if reject, retryAfter, msg := fn(); reject {
+			if retryAfter != "" {
+				w.Header().Set("Retry-After", retryAfter)
+			}
+			http.Error(w, msg, http.StatusTooManyRequests)
+			return
+		}
+	}
+
 	msg, err := io.ReadAll(io.LimitReader(r.Body, msgLimit))
 	r.Body.Close()
 	if err != nil {
