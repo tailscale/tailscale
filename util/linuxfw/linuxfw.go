@@ -7,6 +7,7 @@
 package linuxfw
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -79,19 +80,65 @@ const (
 	bypassMarkNum      = tsconst.LinuxBypassMarkNum
 )
 
-// getTailscaleFwmarkMaskNeg returns the negation of TailscaleFwmarkMask in bytes.
-func getTailscaleFwmarkMaskNeg() []byte {
-	return []byte{0xff, 0x00, 0xff, 0xff}
+// PacketMarks contains the packet mark configuration to use for
+// firewall rules and routing. It provides methods to format marks
+// for both iptables (string format) and nftables (byte arrays).
+type PacketMarks struct {
+	FwmarkMask      uint32
+	SubnetRouteMark uint32
+	BypassMark      uint32
 }
 
-// getTailscaleFwmarkMask returns the TailscaleFwmarkMask in bytes.
-func getTailscaleFwmarkMask() []byte {
-	return []byte{0x00, 0xff, 0x00, 0x00}
+// DefaultPacketMarks returns the default packet marks from tsconst.
+func DefaultPacketMarks() PacketMarks {
+	return PacketMarks{
+		FwmarkMask:      tsconst.LinuxFwmarkMaskNum,
+		SubnetRouteMark: tsconst.LinuxSubnetRouteMarkNum,
+		BypassMark:      tsconst.LinuxBypassMarkNum,
+	}
 }
 
-// getTailscaleSubnetRouteMark returns the TailscaleSubnetRouteMark in bytes.
-func getTailscaleSubnetRouteMark() []byte {
-	return []byte{0x00, 0x04, 0x00, 0x00}
+// FwmarkMaskString returns the fwmark mask as an iptables-compatible string.
+func (m PacketMarks) FwmarkMaskString() string {
+	return fmt.Sprintf("0x%x", m.FwmarkMask)
+}
+
+// SubnetRouteMarkString returns the subnet route mark as an iptables-compatible string.
+func (m PacketMarks) SubnetRouteMarkString() string {
+	return fmt.Sprintf("0x%x", m.SubnetRouteMark)
+}
+
+// BypassMarkString returns the bypass mark as an iptables-compatible string.
+func (m PacketMarks) BypassMarkString() string {
+	return fmt.Sprintf("0x%x", m.BypassMark)
+}
+
+// FwmarkMaskBytes returns the fwmark mask as a big-endian byte array.
+func (m PacketMarks) FwmarkMaskBytes() []byte {
+	b := make([]byte, 4)
+	binary.BigEndian.PutUint32(b, m.FwmarkMask)
+	return b
+}
+
+// FwmarkMaskNegBytes returns the negation of the fwmark mask as a big-endian byte array.
+func (m PacketMarks) FwmarkMaskNegBytes() []byte {
+	b := make([]byte, 4)
+	binary.BigEndian.PutUint32(b, ^m.FwmarkMask)
+	return b
+}
+
+// SubnetRouteMarkBytes returns the subnet route mark as a big-endian byte array.
+func (m PacketMarks) SubnetRouteMarkBytes() []byte {
+	b := make([]byte, 4)
+	binary.BigEndian.PutUint32(b, m.SubnetRouteMark)
+	return b
+}
+
+// BypassMarkBytes returns the bypass mark as a big-endian byte array.
+func (m PacketMarks) BypassMarkBytes() []byte {
+	b := make([]byte, 4)
+	binary.BigEndian.PutUint32(b, m.BypassMark)
+	return b
 }
 
 // checkIPv6ForTest can be set in tests.

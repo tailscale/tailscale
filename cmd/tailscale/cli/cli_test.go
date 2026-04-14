@@ -1006,6 +1006,10 @@ func TestPrefFlagMapping(t *testing.T) {
 		case "AutoExitNode":
 			// Handled by tailscale {set,up} --exit-node=auto:any.
 			continue
+		case "LinuxPacketMarks":
+			// Configured via three separate flags: --linux-fwmark-mask,
+			// --linux-subnet-route-mark, --linux-bypass-mark
+			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
 	}
@@ -1816,4 +1820,175 @@ func TestSanitizeWriter(t *testing.T) {
 	if got := buf.Bytes(); !bytes.Equal(got, want) {
 		t.Errorf("unexpected sanitized content\ngot: %q\nwant: %q", got, want)
 	}
+}
+
+func TestParseLinuxPacketMarks(t *testing.T) {
+	tests := []struct {
+		name            string
+		fwmarkMask      string
+		subnetRouteMark string
+		bypassMark      string
+		want            *preftype.LinuxPacketMarks
+		wantErr         bool
+		errContains     string
+	}{
+		{
+			name:            "all empty returns nil",
+			fwmarkMask:      "",
+			subnetRouteMark: "",
+			bypassMark:      "",
+			want:            nil,
+			wantErr:         false,
+		},
+		{
+			name:            "valid hex values",
+			fwmarkMask:      "0xff0000",
+			subnetRouteMark: "0x40000",
+			bypassMark:      "0x80000",
+			want: &preftype.LinuxPacketMarks{
+				FwmarkMask:      0xff0000,
+				SubnetRouteMark: 0x40000,
+				BypassMark:      0x80000,
+			},
+			wantErr: false,
+		},
+		{
+			name:            "valid decimal values",
+			fwmarkMask:      "16711680",
+			subnetRouteMark: "262144",
+			bypassMark:      "524288",
+			want: &preftype.LinuxPacketMarks{
+				FwmarkMask:      0xff0000,
+				SubnetRouteMark: 0x40000,
+				BypassMark:      0x80000,
+			},
+			wantErr: false,
+		},
+		{
+			name:            "mixed hex and decimal",
+			fwmarkMask:      "0xff0000",
+			subnetRouteMark: "262144",
+			bypassMark:      "0x80000",
+			want: &preftype.LinuxPacketMarks{
+				FwmarkMask:      0xff0000,
+				SubnetRouteMark: 0x40000,
+				BypassMark:      0x80000,
+			},
+			wantErr: false,
+		},
+		{
+			name:            "only mask specified",
+			fwmarkMask:      "0xff0000",
+			subnetRouteMark: "",
+			bypassMark:      "",
+			want:            nil,
+			wantErr:         true,
+			errContains:     "all three Linux packet mark flags must be specified together",
+		},
+		{
+			name:            "only subnet mark specified",
+			fwmarkMask:      "",
+			subnetRouteMark: "0x40000",
+			bypassMark:      "",
+			want:            nil,
+			wantErr:         true,
+			errContains:     "all three Linux packet mark flags must be specified together",
+		},
+		{
+			name:            "mask and subnet mark but no bypass",
+			fwmarkMask:      "0xff0000",
+			subnetRouteMark: "0x40000",
+			bypassMark:      "",
+			want:            nil,
+			wantErr:         true,
+			errContains:     "all three Linux packet mark flags must be specified together",
+		},
+		{
+			name:            "invalid hex format",
+			fwmarkMask:      "0xZZZZZZ",
+			subnetRouteMark: "0x40000",
+			bypassMark:      "0x80000",
+			want:            nil,
+			wantErr:         true,
+			errContains:     "invalid fwmark mask value",
+		},
+		{
+			name:            "invalid decimal format",
+			fwmarkMask:      "abc",
+			subnetRouteMark: "0x40000",
+			bypassMark:      "0x80000",
+			want:            nil,
+			wantErr:         true,
+			errContains:     "invalid fwmark mask value",
+		},
+		{
+			name:            "subnet mark not covered by mask",
+			fwmarkMask:      "0xff0000",
+			subnetRouteMark: "0x1000000",
+			bypassMark:      "0x80000",
+			want:            nil,
+			wantErr:         true,
+			errContains:     "subnet route mark",
+		},
+		{
+			name:            "bypass mark not covered by mask",
+			fwmarkMask:      "0xff0000",
+			subnetRouteMark: "0x40000",
+			bypassMark:      "0x1000000",
+			want:            nil,
+			wantErr:         true,
+			errContains:     "bypass mark",
+		},
+		{
+			name:            "subnet and bypass marks are the same",
+			fwmarkMask:      "0xff0000",
+			subnetRouteMark: "0x40000",
+			bypassMark:      "0x40000",
+			want:            nil,
+			wantErr:         true,
+			errContains:     "must differ",
+		},
+		{
+			name:            "zero mask",
+			fwmarkMask:      "0",
+			subnetRouteMark: "0x40000",
+			bypassMark:      "0x80000",
+			want:            nil,
+			wantErr:         true,
+			errContains:     "fwmark mask must be non-zero",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseLinuxPacketMarks(tt.fwmarkMask, tt.subnetRouteMark, tt.bypassMark)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseLinuxPacketMarks() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && err != nil {
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("parseLinuxPacketMarks() error = %q, want error containing %q", err.Error(), tt.errContains)
+				}
+				return
+			}
+			if !tt.wantErr {
+				if !equalLinuxPacketMarks(got, tt.want) {
+					t.Errorf("parseLinuxPacketMarks() = %+v, want %+v", got, tt.want)
+				}
+			}
+		})
+	}
+}
+
+func equalLinuxPacketMarks(a, b *preftype.LinuxPacketMarks) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.FwmarkMask == b.FwmarkMask &&
+		a.SubnetRouteMark == b.SubnetRouteMark &&
+		a.BypassMark == b.BypassMark
 }

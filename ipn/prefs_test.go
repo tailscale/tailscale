@@ -67,6 +67,7 @@ func TestPrefsEqual(t *testing.T) {
 		"AppConnector",
 		"PostureChecking",
 		"NetfilterKind",
+		"LinuxPacketMarks",
 		"DriveShares",
 		"RelayServerPort",
 		"RelayServerStaticEndpoints",
@@ -358,6 +359,36 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{NetfilterKind: "nftables"},
 			&Prefs{NetfilterKind: ""},
+			false,
+		},
+		{
+			&Prefs{LinuxPacketMarks: nil},
+			&Prefs{LinuxPacketMarks: nil},
+			true,
+		},
+		{
+			&Prefs{LinuxPacketMarks: nil},
+			&Prefs{LinuxPacketMarks: &preftype.LinuxPacketMarks{FwmarkMask: 0xff0000}},
+			false,
+		},
+		{
+			&Prefs{LinuxPacketMarks: &preftype.LinuxPacketMarks{FwmarkMask: 0xff0000, SubnetRouteMark: 0x40000, BypassMark: 0x80000}},
+			&Prefs{LinuxPacketMarks: &preftype.LinuxPacketMarks{FwmarkMask: 0xff0000, SubnetRouteMark: 0x40000, BypassMark: 0x80000}},
+			true,
+		},
+		{
+			&Prefs{LinuxPacketMarks: &preftype.LinuxPacketMarks{FwmarkMask: 0xff0000, SubnetRouteMark: 0x40000, BypassMark: 0x80000}},
+			&Prefs{LinuxPacketMarks: &preftype.LinuxPacketMarks{FwmarkMask: 0xff00, SubnetRouteMark: 0x40000, BypassMark: 0x80000}},
+			false,
+		},
+		{
+			&Prefs{LinuxPacketMarks: &preftype.LinuxPacketMarks{FwmarkMask: 0xff0000, SubnetRouteMark: 0x40000, BypassMark: 0x80000}},
+			&Prefs{LinuxPacketMarks: &preftype.LinuxPacketMarks{FwmarkMask: 0xff0000, SubnetRouteMark: 0x50000, BypassMark: 0x80000}},
+			false,
+		},
+		{
+			&Prefs{LinuxPacketMarks: &preftype.LinuxPacketMarks{FwmarkMask: 0xff0000, SubnetRouteMark: 0x40000, BypassMark: 0x80000}},
+			&Prefs{LinuxPacketMarks: &preftype.LinuxPacketMarks{FwmarkMask: 0xff0000, SubnetRouteMark: 0x40000, BypassMark: 0x90000}},
 			false,
 		},
 		{

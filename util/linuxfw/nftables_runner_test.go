@@ -314,7 +314,7 @@ func TestAddSetSubnetRouteMarkRule(t *testing.T) {
 		Hooknum:  nftables.ChainHookForward,
 		Priority: nftables.ChainPriorityFilter,
 	})
-	err := addSetSubnetRouteMarkRule(testConn, table, chain, "testTunn")
+	err := addSetSubnetRouteMarkRule(testConn, table, chain, "testTunn", DefaultPacketMarks())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +442,7 @@ func TestAddMatchSubnetRouteMarkRuleMasq(t *testing.T) {
 		Hooknum:  nftables.ChainHookPostrouting,
 		Priority: nftables.ChainPriorityNATSource,
 	})
-	err := addMatchSubnetRouteMarkRule(testConn, table, chain, Masq)
+	err := addMatchSubnetRouteMarkRule(testConn, table, chain, Masq, DefaultPacketMarks())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +481,7 @@ func TestDelMatchSubnetRouteMarkMasqRule(t *testing.T) {
 		Priority: nftables.ChainPriorityNATSource,
 	}
 
-	err := delMatchSubnetRouteMarkMasqRule(conn, table, chain)
+	err := delMatchSubnetRouteMarkMasqRule(conn, table, chain, DefaultPacketMarks())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +513,7 @@ func TestAddMatchSubnetRouteMarkRuleAccept(t *testing.T) {
 		Hooknum:  nftables.ChainHookForward,
 		Priority: nftables.ChainPriorityFilter,
 	})
-	err := addMatchSubnetRouteMarkRule(testConn, table, chain, Accept)
+	err := addMatchSubnetRouteMarkRule(testConn, table, chain, Accept, DefaultPacketMarks())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -690,12 +690,12 @@ func findCommonBaseRules(
 	forwChain *nftables.Chain,
 	tunname string) ([]*nftables.Rule, error) {
 	want := []*nftables.Rule{}
-	rule, err := createSetSubnetRouteMarkRule(forwChain.Table, forwChain, tunname)
+	rule, err := createSetSubnetRouteMarkRule(forwChain.Table, forwChain, tunname, DefaultPacketMarks())
 	if err != nil {
 		return nil, fmt.Errorf("create rule: %w", err)
 	}
 	want = append(want, rule)
-	rule, err = createMatchSubnetRouteMarkRule(forwChain.Table, forwChain, Accept)
+	rule, err = createMatchSubnetRouteMarkRule(forwChain.Table, forwChain, Accept, DefaultPacketMarks())
 	if err != nil {
 		return nil, fmt.Errorf("create rule: %w", err)
 	}
@@ -1262,7 +1262,7 @@ func TestMakeConnmarkRestoreExprs(t *testing.T) {
 	testConn.InsertRule(&nftables.Rule{
 		Table: table,
 		Chain: chain,
-		Exprs: makeConnmarkRestoreExprs(),
+		Exprs: makeConnmarkRestoreExprs(DefaultPacketMarks()),
 	})
 	if err := testConn.Flush(); err != nil {
 		t.Fatalf("Flush() failed: %v", err)
@@ -1303,7 +1303,7 @@ func TestMakeConnmarkSaveExprs(t *testing.T) {
 	testConn.InsertRule(&nftables.Rule{
 		Table: table,
 		Chain: chain,
-		Exprs: makeConnmarkSaveExprs(),
+		Exprs: makeConnmarkSaveExprs(DefaultPacketMarks()),
 	})
 	if err := testConn.Flush(); err != nil {
 		t.Fatalf("Flush() failed: %v", err)
