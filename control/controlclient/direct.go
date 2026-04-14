@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
@@ -24,6 +25,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -575,6 +577,37 @@ var macOSScreenTime = health.Register(&health.Warnable{
 	ImpactsConnectivity: true,
 })
 
+type rateLimitError struct {
+	msg        string
+	retryAfter time.Duration
+}
+
+func (e *rateLimitError) Error() string {
+	return fmt.Sprintf("rate limited: %s (retry after %v)", e.msg, e.retryAfter)
+}
+
+func parseRateLimitError(res *http.Response) *rateLimitError {
+	msg, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+
+	ret := &rateLimitError{
+		msg: strings.TrimSpace(string(msg)),
+	}
+
+	v := res.Header.Get("Retry-After")
+	if i, err := strconv.Atoi(v); err == nil {
+		ret.retryAfter = time.Duration(i) * time.Second
+	} else if t, err := http.ParseTime(v); err == nil {
+		ret.retryAfter = time.Until(t)
+	}
+
+	// If the server didn't give us a valid Retry-After, default to 10s.
+	if ret.retryAfter <= 0 || ret.retryAfter > time.Hour {
+		ret.retryAfter = 5*time.Second + rand.N(5*time.Second)
+	}
+	return ret
+}
+
 func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, newURL string, nks tkatype.MarshaledSignature, err error) {
 	if c.panicOnUse {
 		panic("tainted client")
@@ -768,6 +801,12 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	res, err := httpc.Do(req)
 	if err != nil {
 		return regen, opt.URL, nil, fmt.Errorf("register request: %w", err)
+	}
+	// Handle 429 Too Many Requests with a specific error type that includes the retry-after duration.
+	if res.StatusCode == 429 {
+		rle := parseRateLimitError(res)
+		msg := fmt.Sprintf("node registration rate limited; will retry after %v", rle.retryAfter)
+		return false, "", nil, vizerror.WrapWithMessage(rle, msg)
 	}
 	if res.StatusCode != 200 {
 		msg, _ := io.ReadAll(res.Body)
