@@ -717,6 +717,15 @@ func TestUpdateDiscoForNode(t *testing.T) {
 			wantUpdate:      true,
 			wantKeyChanged:  false,
 		},
+		{
+			name:           "no_initial_last_seen",
+			initialOnline:  false,
+			updateDiscoKey: true,
+			updateOnline:   false,
+			updateLastSeen: time.Now(),
+			wantUpdate:     true,
+			wantKeyChanged: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -736,7 +745,9 @@ func TestUpdateDiscoForNode(t *testing.T) {
 					Key:      key.NewNode().Public(),
 					DiscoKey: oldKey.Public(),
 					Online:   &tt.initialOnline,
-					LastSeen: &tt.initialLastSeen,
+				}
+				if !tt.initialLastSeen.IsZero() {
+					node.LastSeen = &tt.initialLastSeen
 				}
 
 				if nm := ms.netmapForResponse(&tailcfg.MapResponse{
