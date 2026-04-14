@@ -14,7 +14,6 @@ import (
 	"maps"
 	"math"
 	"net/netip"
-	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -793,15 +792,43 @@ func (e *userspaceEngine) isActiveSinceLocked(nk key.NodePublic, ip netip.Addr, 
 
 // maybeReconfigInputs holds the inputs to the maybeReconfigWireguardLocked
 // function. If these things don't change between calls, there's nothing to do.
+//
+// If you add a field, update Equal and Clone, and add a case to
+// TestMaybeReconfigInputsEqual.
 type maybeReconfigInputs struct {
 	WGConfig     *wgcfg.Config
 	TrimmedNodes map[key.NodePublic]bool
-	TrackNodes   views.Slice[key.NodePublic]
-	TrackIPs     views.Slice[netip.Addr]
+
+	// TrackNodes and TrackIPs are built in full.Peers iteration order,
+	// which is sorted by NodeID (via sortedPeers -> WGCfg). Equal uses
+	// order-dependent comparison, so any change to that ordering
+	// invariant must update the comparison logic.
+	TrackNodes views.Slice[key.NodePublic]
+	TrackIPs   views.Slice[netip.Addr]
 }
 
 func (i *maybeReconfigInputs) Equal(o *maybeReconfigInputs) bool {
-	return reflect.DeepEqual(i, o)
+	if i == o {
+		return true
+	}
+	if i == nil || o == nil {
+		return false
+	}
+	if !i.WGConfig.Equal(o.WGConfig) {
+		return false
+	}
+	if len(i.TrimmedNodes) != len(o.TrimmedNodes) {
+		return false
+	}
+	for k := range i.TrimmedNodes {
+		if !o.TrimmedNodes[k] {
+			return false
+		}
+	}
+	if !views.SliceEqual(i.TrackNodes, o.TrackNodes) {
+		return false
+	}
+	return views.SliceEqual(i.TrackIPs, o.TrackIPs)
 }
 
 func (i *maybeReconfigInputs) Clone() *maybeReconfigInputs {
@@ -849,6 +876,10 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 	// their NodeKey and Tailscale IPs. These are the ones we'll need
 	// to install tracking hooks for to watch their send/receive
 	// activity.
+	//
+	// trackNodes and trackIPs are appended in full.Peers order (sorted
+	// by NodeID). maybeReconfigInputs.Equal depends on this ordering;
+	// see the struct comment.
 	var trackNodes []key.NodePublic
 	var trackIPs []netip.Addr
 	if buildfeatures.HasLazyWG {

@@ -26,6 +26,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
+	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/router"
@@ -553,6 +554,121 @@ func nkFromHex(hex string) key.NodePublic {
 		panic(fmt.Sprintf("%q is not hex: %v", hex, err))
 	}
 	return k
+}
+
+// makeMaybeReconfigInputs builds a maybeReconfigInputs with n peers,
+// each with a unique key, disco key, and AllowedIPs entry.
+func makeMaybeReconfigInputs(n int) *maybeReconfigInputs {
+	peers := make([]wgcfg.Peer, n)
+	trimmed := make(map[key.NodePublic]bool, n)
+	trackNodes := make([]key.NodePublic, n)
+	trackIPs := make([]netip.Addr, n)
+
+	for i := range n {
+		nk := key.NewNode()
+		pub := nk.Public()
+		peers[i] = wgcfg.Peer{
+			PublicKey:  pub,
+			DiscoKey:   key.NewDisco().Public(),
+			AllowedIPs: []netip.Prefix{netip.PrefixFrom(netip.AddrFrom4([4]byte{100, 64, byte(i >> 8), byte(i)}), 32)},
+		}
+		trimmed[pub] = true
+		trackNodes[i] = pub
+		trackIPs[i] = netip.AddrFrom4([4]byte{100, 64, byte(i >> 8), byte(i)})
+	}
+
+	return &maybeReconfigInputs{
+		WGConfig: &wgcfg.Config{
+			PrivateKey: key.NewNode(),
+			Peers:      peers,
+			MTU:        1280,
+		},
+		TrimmedNodes: trimmed,
+		TrackNodes:   views.SliceOf(trackNodes),
+		TrackIPs:     views.SliceOf(trackIPs),
+	}
+}
+
+func TestMaybeReconfigInputsEqual(t *testing.T) {
+	a := makeMaybeReconfigInputs(100)
+	b := a.Clone()
+
+	// nil cases
+	if !(*maybeReconfigInputs)(nil).Equal(nil) {
+		t.Error("nil.Equal(nil) should be true")
+	}
+	if a.Equal(nil) {
+		t.Error("non-nil.Equal(nil) should be false")
+	}
+	if (*maybeReconfigInputs)(nil).Equal(a) {
+		t.Error("nil.Equal(non-nil) should be false")
+	}
+
+	// same pointer
+	if !a.Equal(a) {
+		t.Error("a.Equal(a) should be true")
+	}
+
+	// cloned equal value
+	if !a.Equal(b) {
+		t.Error("a.Equal(clone) should be true")
+	}
+
+	// Verify that every field in the struct is covered by Equal.
+	// Each entry mutates exactly one field of a clone and expects
+	// Equal to return false. If a new field is added to
+	// maybeReconfigInputs without a corresponding entry here, the
+	// field count check below will fail.
+	type mutator struct {
+		field string
+		fn    func(c *maybeReconfigInputs)
+	}
+	mutators := []mutator{
+		{"WGConfig", func(c *maybeReconfigInputs) {
+			c.WGConfig.MTU = 9999
+		}},
+		{"TrimmedNodes", func(c *maybeReconfigInputs) {
+			c.TrimmedNodes[key.NewNode().Public()] = true
+		}},
+		{"TrackNodes", func(c *maybeReconfigInputs) {
+			ns := c.TrackNodes.AsSlice()
+			ns[0] = key.NewNode().Public()
+			c.TrackNodes = views.SliceOf(ns)
+		}},
+		{"TrackIPs", func(c *maybeReconfigInputs) {
+			ips := c.TrackIPs.AsSlice()
+			ips[0] = netip.MustParseAddr("1.2.3.4")
+			c.TrackIPs = views.SliceOf(ips)
+		}},
+	}
+
+	// Ensure we have a mutator for every field.
+	numFields := reflect.TypeOf(maybeReconfigInputs{}).NumField()
+	if len(mutators) != numFields {
+		t.Fatalf("maybeReconfigInputs has %d fields but test covers %d; update the mutators table", numFields, len(mutators))
+	}
+
+	for _, m := range mutators {
+		c := a.Clone()
+		m.fn(c)
+		if a.Equal(c) {
+			t.Errorf("Equal did not detect change in field %s", m.field)
+		}
+	}
+}
+
+func BenchmarkMaybeReconfigInputsEqual(b *testing.B) {
+	for _, n := range []int{10, 100, 1000, 5000} {
+		b.Run(fmt.Sprintf("peers=%d", n), func(b *testing.B) {
+			a := makeMaybeReconfigInputs(n)
+			o := a.Clone()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				a.Equal(o)
+			}
+		})
+	}
 }
 
 // an experiment to see if genLocalAddrFunc was worth it. As of Go
