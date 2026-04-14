@@ -73,7 +73,11 @@ type Binaries struct {
 
 // BinaryInfo describes a tailscale or tailscaled binary.
 type BinaryInfo struct {
-	Path string // abs path to tailscale or tailscaled binary
+	// Path is the absolute path to the tailscale or tailscaled binary.
+	// This path may become invalid after the owning test's TempDir is
+	// cleaned up; use FD (or Contents on Windows) to access the binary
+	// contents.
+	Path string
 	Size int64
 
 	// FD and FDmu are set on Unix to efficiently copy the binary to a new
@@ -88,16 +92,24 @@ type BinaryInfo struct {
 	Contents []byte
 }
 
+// CopyTo copies or hardlinks the binary into dir, returning a new BinaryInfo
+// with an updated Path. The source bytes come from FD (or Contents on Windows),
+// not from b.Path, which may have been deleted when its owning test's TempDir
+// was cleaned up.
 func (b BinaryInfo) CopyTo(dir string) (BinaryInfo, error) {
 	ret := b
 	ret.Path = filepath.Join(dir, path.Base(b.Path))
 
 	switch runtime.GOOS {
 	case "linux":
-		// TODO(bradfitz): be fancy and use linkat with AT_EMPTY_PATH to avoid
-		// copying? I couldn't get it to work, though.
-		// For now, just do the same thing as every other Unix and copy
-		// the binary.
+		// Try to hardlink from the open FD via /proc/self/fd, avoiding a
+		// full copy of the binary. We can't use os.Link(b.Path, ret.Path)
+		// because b.Path is in the first test's TempDir, which may be
+		// cleaned up before later tests call CopyTo. The open FD keeps the
+		// inode alive after the path is deleted.
+		if err := tryLinkat(b.FD, ret.Path); err == nil {
+			return ret, nil
+		}
 		fallthrough
 	case "darwin", "freebsd", "openbsd", "netbsd":
 		f, err := os.OpenFile(ret.Path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o755)
