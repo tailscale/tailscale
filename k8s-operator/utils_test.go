@@ -17,27 +17,27 @@ func TestTruncateLabelValue(t *testing.T) {
 		want  string // empty means expect input unchanged
 	}{
 		{
-			name:  "short value unchanged",
+			name:  "short-value-unchanged",
 			input: "my-service",
 		},
 		{
-			name:  "exactly 63 chars unchanged",
+			name:  "exactly-63-chars-unchanged",
 			input: strings.Repeat("a", 63),
 		},
 		{
-			name:  "64 chars gets truncated",
+			name:  "64-chars-gets-truncated",
 			input: strings.Repeat("a", 64),
 		},
 		{
-			name:  "very long value gets truncated",
+			name:  "very-long-value-gets-truncated",
 			input: "tailscale-nginx-clickhouse-o11y-server-https-with-extra-long-suffix-that-exceeds-limit",
 		},
 		{
-			name:  "253 chars (max k8s resource name)",
+			name:  "253-chars-max-k8s-resource-name",
 			input: strings.Repeat("x", 253),
 		},
 		{
-			name:  "empty string unchanged",
+			name:  "empty-string-unchanged",
 			input: "",
 		},
 	}
