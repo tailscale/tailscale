@@ -182,7 +182,8 @@ type CapabilityVersion int
 //   - 133: 2026-02-17: client understands [NodeAttrForceRegisterMagicDNSIPv4Only]; MagicDNS IPv6 registered w/ OS by default
 //   - 134: 2026-03-09: Client understands [NodeAttrDisableAndroidBindToActiveNetwork]
 //   - 135: 2026-03-30: Client understands [NodeAttrCacheNetworkMaps]
-const CurrentCapabilityVersion CapabilityVersion = 135
+//   - 136: 2026-04-09: Client understands [NodeAttrDisableLinuxCGNATDropRule]
+const CurrentCapabilityVersion CapabilityVersion = 136
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2790,6 +2791,12 @@ const (
 	// absent (or removed), a node that supports netmap caching will ignore and
 	// discard existing cached maps, and will not store any.
 	NodeAttrCacheNetworkMaps NodeCapability = "cache-network-maps"
+
+	// NodeAttrDisableLinuxCGNATDropRule tells Linux clients to not insert a
+	// blanket firewall DROP rule for inbound traffic from the CGNAT IP range
+	// that does not originate from the Tailscale network interface.
+	// This enables access to off-tailnet endpoints within that IP range.
+	NodeAttrDisableLinuxCGNATDropRule NodeCapability = "disable-linux-cgnat-drop-rule"
 )
 
 const (

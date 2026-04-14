@@ -633,7 +633,7 @@ func TestAddAndDelNetfilterChains(t *testing.T) {
 func getTsChains(
 	conn *nftables.Conn,
 	proto nftables.TableFamily) (*nftables.Chain, *nftables.Chain, *nftables.Chain, error) {
-	chains, err := conn.ListChainsOfTableFamily(nftables.TableFamilyIPv4)
+	chains, err := conn.ListChainsOfTableFamily(proto)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("list chains failed: %w", err)
 	}
@@ -658,17 +658,7 @@ func findV4BaseRules(
 	forwChain *nftables.Chain,
 	tunname string) ([]*nftables.Rule, error) {
 	want := []*nftables.Rule{}
-	rule, err := createRangeRule(inpChain.Table, inpChain, tunname, tsaddr.ChromeOSVMRange(), expr.VerdictReturn)
-	if err != nil {
-		return nil, fmt.Errorf("create rule: %w", err)
-	}
-	want = append(want, rule)
-	rule, err = createRangeRule(inpChain.Table, inpChain, tunname, tsaddr.CGNATRange(), expr.VerdictDrop)
-	if err != nil {
-		return nil, fmt.Errorf("create rule: %w", err)
-	}
-	want = append(want, rule)
-	rule, err = createDropOutgoingPacketFromCGNATRangeRuleWithTunname(forwChain.Table, forwChain, tunname)
+	rule, err := createDropOutgoingPacketFromCGNATRangeRuleWithTunname(forwChain.Table, forwChain, tunname)
 	if err != nil {
 		return nil, fmt.Errorf("create rule: %w", err)
 	}
@@ -745,7 +735,7 @@ func TestNFTAddAndDelNetfilterBase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getTsChains() failed: %v", err)
 	}
-	checkChainRules(t, conn, inputV4, 3)
+	checkChainRules(t, conn, inputV4, 1)
 	checkChainRules(t, conn, forwardV4, 4)
 	checkChainRules(t, conn, postroutingV4, 0)
 
@@ -763,8 +753,8 @@ func TestNFTAddAndDelNetfilterBase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getTsChains() failed: %v", err)
 	}
-	checkChainRules(t, conn, inputV6, 3)
-	checkChainRules(t, conn, forwardV6, 4)
+	checkChainRules(t, conn, inputV6, 1)
+	checkChainRules(t, conn, forwardV6, 3)
 	checkChainRules(t, conn, postroutingV6, 0)
 
 	_, err = findCommonBaseRules(conn, forwardV6, "testTunn")
@@ -780,6 +770,92 @@ func TestNFTAddAndDelNetfilterBase(t *testing.T) {
 	}
 	for _, chain := range chains {
 		checkChainRules(t, conn, chain, 0)
+	}
+}
+
+func findCGNATRules(
+	conn *nftables.Conn,
+	inpChain *nftables.Chain,
+	mode CGNATMode,
+	tunname string,
+) error {
+	want := []*nftables.Rule{}
+	switch mode {
+	case CGNATModeDrop:
+		rule, err := createRangeRule(inpChain.Table, inpChain, tunname, tsaddr.ChromeOSVMRange(), expr.VerdictReturn)
+		if err != nil {
+			return fmt.Errorf("create rule: %w", err)
+		}
+		want = append(want, rule)
+		rule, err = createRangeRule(inpChain.Table, inpChain, tunname, tsaddr.CGNATRange(), expr.VerdictDrop)
+		if err != nil {
+			return fmt.Errorf("create rule: %w", err)
+		}
+		want = append(want, rule)
+	case CGNATModeReturn:
+		rule, err := createRangeRule(inpChain.Table, inpChain, tunname, tsaddr.CGNATRange(), expr.VerdictReturn)
+		if err != nil {
+			return fmt.Errorf("create rule: %w", err)
+		}
+		want = append(want, rule)
+	default:
+		return fmt.Errorf("unknown mode %q", mode)
+	}
+	for _, rule := range want {
+		_, err := findRule(conn, rule)
+		if err != nil {
+			return fmt.Errorf("find rule: %w", err)
+		}
+	}
+	return nil
+}
+
+func TestNFTAddAndDelCGNATRules(t *testing.T) {
+	modes := []CGNATMode{CGNATModeDrop, CGNATModeReturn}
+	for _, mode := range modes {
+		t.Run(string(mode), func(t *testing.T) {
+			conn := newSysConn(t)
+
+			runner := newFakeNftablesRunnerWithConn(t, conn, false)
+
+			if err := runner.AddChains(); err != nil {
+				t.Fatalf("AddChains() failed: %v", err)
+			}
+			defer runner.DelChains()
+
+			inputV4, _, _, err := getTsChains(conn, nftables.TableFamilyIPv4)
+			if err != nil {
+				t.Fatalf("getTsChains() failed: %v", err)
+			}
+
+			checkChainRules(t, conn, inputV4, 0)
+
+			tunname := "tun0"
+
+			if err := runner.AddExternalCGNATRules(mode, tunname); err != nil {
+				t.Fatalf("add rules: %v", err)
+			}
+
+			switch mode {
+			case CGNATModeDrop:
+				checkChainRules(t, conn, inputV4, 2)
+			case CGNATModeReturn:
+				checkChainRules(t, conn, inputV4, 1)
+			default:
+				t.Fatalf("unknown mode %q", mode)
+			}
+
+			if err := findCGNATRules(conn, inputV4, mode, tunname); err != nil {
+				t.Fatalf("find rules: %v", err)
+			}
+
+			if err := runner.DelExternalCGNATRules(mode, tunname); err != nil {
+				t.Fatalf("delete rules: %v", err)
+			}
+
+			// Verify that all the rules have been deleted (0 remaining).
+			checkChainRules(t, conn, inputV4, 0)
+		})
 	}
 }
 
@@ -845,16 +921,16 @@ func TestNFTAddAndDelLoopbackRule(t *testing.T) {
 
 	runner.AddBase("testTunn")
 	defer runner.DelBase()
-	checkChainRules(t, conn, inputV4, 3)
-	checkChainRules(t, conn, inputV6, 3)
+	checkChainRules(t, conn, inputV4, 1)
+	checkChainRules(t, conn, inputV6, 1)
 
 	addr := netip.MustParseAddr("192.168.0.2")
 	addrV6 := netip.MustParseAddr("2001:db8::2")
 	runner.AddLoopbackRule(addr)
 	runner.AddLoopbackRule(addrV6)
 
-	checkChainRules(t, conn, inputV4, 4)
-	checkChainRules(t, conn, inputV6, 4)
+	checkChainRules(t, conn, inputV4, 2)
+	checkChainRules(t, conn, inputV6, 2)
 
 	existingLoopBackRule, err := findLoopBackRule(conn, nftables.TableFamilyIPv4, runner.nft4.Filter, inputV4, addr)
 	if err != nil {
@@ -877,8 +953,8 @@ func TestNFTAddAndDelLoopbackRule(t *testing.T) {
 	runner.DelLoopbackRule(addr)
 	runner.DelLoopbackRule(addrV6)
 
-	checkChainRules(t, conn, inputV4, 3)
-	checkChainRules(t, conn, inputV6, 3)
+	checkChainRules(t, conn, inputV4, 1)
+	checkChainRules(t, conn, inputV6, 1)
 }
 
 func TestNFTAddAndDelHookRule(t *testing.T) {

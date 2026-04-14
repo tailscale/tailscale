@@ -197,6 +197,22 @@ func sameLAN(c *vnet.Config) *vnet.Node {
 	return c.AddNode(nw)
 }
 
+func sameLANNoDropCGNAT(c *vnet.Config) *vnet.Node {
+	nw := c.FirstNetwork()
+	if nw == nil {
+		return nil
+	}
+	if !nw.CanTakeMoreNodes() {
+		return nil
+	}
+	return c.AddNode(
+		nw,
+		tailcfg.NodeCapMap{
+			tailcfg.NodeAttrDisableLinuxCGNATDropRule: nil,
+		},
+	)
+}
+
 func one2one(c *vnet.Config) *vnet.Node {
 	n := c.NumNodes() + 1
 	return c.AddNode(c.AddNetwork(
@@ -435,6 +451,11 @@ func (nt *natTest) setupTest(ctx context.Context, addNode ...addNodeFunc) (nodes
 				st, err = c.Status(ctx)
 				if err != nil {
 					return fmt.Errorf("%v status: %w", node, err)
+				}
+
+				if capMap := node.WantCapMap(); capMap != nil {
+					nt.tb.Logf("using capmap for %s: %+v", node.String(), capMap)
+					nt.vnet.ControlServer().SetNodeCapMap(st.Self.PublicKey, capMap)
 				}
 
 				if st.BackendState != "Running" {
@@ -788,11 +809,8 @@ func cgnatNoTailnet(c *vnet.Config) *vnet.Node {
 }
 
 func TestNonTailscaleCGNATEndpoint(t *testing.T) {
-	if !*knownBroken {
-		t.Skip("skipping known-broken test; set --known-broken to run; see https://github.com/tailscale/corp/issues/36270")
-	}
 	nt := newNatTest(t)
-	if !nt.runHostConnectivityTest(cgnatNoTailnet, sameLAN) {
+	if !nt.runHostConnectivityTest(cgnatNoTailnet, sameLANNoDropCGNAT) {
 		t.Fatalf("could not ping")
 	}
 }

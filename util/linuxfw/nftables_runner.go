@@ -593,6 +593,15 @@ type NetfilterRunner interface {
 	// DelMagicsockPortRule removes the rule created by AddMagicsockPortRule,
 	// if it exists.
 	DelMagicsockPortRule(port uint16, network string) error
+
+	// AddExternalCGNATRules adds rules to the ts-input chain to deal with
+	// traffic from the CGNAT range that arrives on non-Tailscale network
+	// interfaces.
+	AddExternalCGNATRules(mode CGNATMode, tunname string) error
+
+	// DelExternalCGNATRules removes the rules created by AddExternalCGNATRules,
+	// if they exist.
+	DelExternalCGNATRules(mode CGNATMode, tunname string) error
 }
 
 // New creates a NetfilterRunner, auto-detecting whether to use
@@ -1221,6 +1230,27 @@ func addReturnChromeOSVMRangeRule(c *nftables.Conn, table *nftables.Table, chain
 	return nil
 }
 
+// delReturnChromeOSVMRangeRule deletes the rule created by addReturnChromeOSVMRangeRule,
+// if it exists.
+func delReturnChromeOSVMRangeRule(c *nftables.Conn, table *nftables.Table, chain *nftables.Chain, tunname string) error {
+	rule, err := createRangeRule(table, chain, tunname, tsaddr.ChromeOSVMRange(), expr.VerdictReturn)
+	if err != nil {
+		return fmt.Errorf("create rule: %w", err)
+	}
+	rule, err = findRule(c, rule)
+	if err != nil {
+		return fmt.Errorf("find rule: %v", err)
+	}
+	if rule == nil {
+		return nil
+	}
+	_ = c.DelRule(rule)
+	if err := c.Flush(); err != nil {
+		return fmt.Errorf("flush del rule: %w", err)
+	}
+	return nil
+}
+
 // addDropCGNATRangeRule adds a rule to drop if the source IP is in the
 // CGNAT range.
 func addDropCGNATRangeRule(c *nftables.Conn, table *nftables.Table, chain *nftables.Chain, tunname string) error {
@@ -1231,6 +1261,62 @@ func addDropCGNATRangeRule(c *nftables.Conn, table *nftables.Table, chain *nftab
 	_ = c.AddRule(rule)
 	if err = c.Flush(); err != nil {
 		return fmt.Errorf("add rule: %w", err)
+	}
+	return nil
+}
+
+// delDropCGNATRangeRule deletes the rule created by addDropCGNATRangeRule,
+// if it exists.
+func delDropCGNATRangeRule(c *nftables.Conn, table *nftables.Table, chain *nftables.Chain, tunname string) error {
+	rule, err := createRangeRule(table, chain, tunname, tsaddr.CGNATRange(), expr.VerdictDrop)
+	if err != nil {
+		return fmt.Errorf("create rule: %w", err)
+	}
+	rule, err = findRule(c, rule)
+	if err != nil {
+		return fmt.Errorf("find rule: %v", err)
+	}
+	if rule == nil {
+		return nil
+	}
+	_ = c.DelRule(rule)
+	if err := c.Flush(); err != nil {
+		return fmt.Errorf("flush del rule: %w", err)
+	}
+	return nil
+}
+
+// addReturnCGNATRangeRule adds a rule to return if the source IP is in the
+// CGNAT range.
+func addReturnCGNATRangeRule(c *nftables.Conn, table *nftables.Table, chain *nftables.Chain, tunname string) error {
+	rule, err := createRangeRule(table, chain, tunname, tsaddr.CGNATRange(), expr.VerdictReturn)
+	if err != nil {
+		return fmt.Errorf("create rule: %w", err)
+	}
+	_ = c.AddRule(rule)
+	if err = c.Flush(); err != nil {
+		return fmt.Errorf("add rule: %w", err)
+	}
+	return nil
+}
+
+// delReturnCGNATRangeRule deletes the rule created by addReturnCGNATRangeRule,
+// if it exists.
+func delReturnCGNATRangeRule(c *nftables.Conn, table *nftables.Table, chain *nftables.Chain, tunname string) error {
+	rule, err := createRangeRule(table, chain, tunname, tsaddr.CGNATRange(), expr.VerdictReturn)
+	if err != nil {
+		return fmt.Errorf("create rule: %w", err)
+	}
+	rule, err = findRule(c, rule)
+	if err != nil {
+		return fmt.Errorf("find rule: %v", err)
+	}
+	if rule == nil {
+		return nil
+	}
+	_ = c.DelRule(rule)
+	if err := c.Flush(); err != nil {
+		return fmt.Errorf("flush del rule: %w", err)
 	}
 	return nil
 }
@@ -1502,6 +1588,67 @@ func (n *nftablesRunner) DelMagicsockPortRule(port uint16, network string) error
 	return nil
 }
 
+// AddExternalCGNATRules adds rules to the ts-input chain to deal with
+// traffic from the CGNAT range that arrives on non-Tailscale network
+// interfaces.
+func (n *nftablesRunner) AddExternalCGNATRules(mode CGNATMode, tunname string) error {
+	conn := n.conn
+
+	inputChain, err := getChainFromTable(conn, n.nft4.Filter, chainNameInput)
+	if err != nil {
+		return fmt.Errorf("get input chain v4: %v", err)
+	}
+	switch mode {
+	case CGNATModeDrop:
+		if err = addReturnChromeOSVMRangeRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
+			return fmt.Errorf("add return chromeos vm range rule v4: %w", err)
+		}
+		if err = addDropCGNATRangeRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
+			return fmt.Errorf("add drop cgnat range rule v4: %w", err)
+		}
+	case CGNATModeReturn:
+		if err = addReturnCGNATRangeRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
+			return fmt.Errorf("add return cgnat range rule v4: %w", err)
+		}
+	default:
+		return fmt.Errorf("unsupported cgnat mode %q", mode)
+	}
+	if err = conn.Flush(); err != nil {
+		return fmt.Errorf("flush cgnat rules v4: %w", err)
+	}
+	return nil
+}
+
+// DelExternalCGNATRules removes the rules created by AddExternalCGNATRules,
+// if they exist.
+func (n *nftablesRunner) DelExternalCGNATRules(mode CGNATMode, tunname string) error {
+	conn := n.conn
+
+	inputChain, err := getChainFromTable(conn, n.nft4.Filter, chainNameInput)
+	if err != nil {
+		return fmt.Errorf("get input chain v4: %v", err)
+	}
+	switch mode {
+	case CGNATModeDrop:
+		if err = delReturnChromeOSVMRangeRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
+			return fmt.Errorf("del return chromeos vm range rule v4: %w", err)
+		}
+		if err = delDropCGNATRangeRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
+			return fmt.Errorf("del drop cgnat range rule v4: %w", err)
+		}
+	case CGNATModeReturn:
+		if err = delReturnCGNATRangeRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
+			return fmt.Errorf("del return cgnat range rule v4: %w", err)
+		}
+	default:
+		return fmt.Errorf("unsupported mode %q", mode)
+	}
+	if err = conn.Flush(); err != nil {
+		return fmt.Errorf("flush cgnat rules v4: %w", err)
+	}
+	return nil
+}
+
 // createAcceptIncomingPacketRule creates a rule to accept incoming packets to
 // the given interface.
 func createAcceptIncomingPacketRule(table *nftables.Table, chain *nftables.Chain, tunname string) *nftables.Rule {
@@ -1554,12 +1701,6 @@ func (n *nftablesRunner) addBase4(tunname string) error {
 	inputChain, err := getChainFromTable(conn, n.nft4.Filter, chainNameInput)
 	if err != nil {
 		return fmt.Errorf("get input chain v4: %v", err)
-	}
-	if err = addReturnChromeOSVMRangeRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
-		return fmt.Errorf("add return chromeos vm range rule v4: %w", err)
-	}
-	if err = addDropCGNATRangeRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
-		return fmt.Errorf("add drop cgnat range rule v4: %w", err)
 	}
 	if err = addAcceptIncomingPacketRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
 		return fmt.Errorf("add accept incoming packet rule v4: %w", err)
