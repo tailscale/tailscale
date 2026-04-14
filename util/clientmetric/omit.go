@@ -30,3 +30,5 @@ func NewCounter(string) *Metric                   { return &zeroMetric }
 func NewGauge(string) *Metric                     { return &zeroMetric }
 func NewAggregateCounter(string) *Metric          { return &zeroMetric }
 func NewCounterFunc(string, func() int64) *Metric { return &zeroMetric }
+
+func ResetForTest(any) {}

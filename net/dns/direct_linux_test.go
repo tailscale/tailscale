@@ -21,7 +21,7 @@ import (
 )
 
 func TestDNSTrampleRecovery(t *testing.T) {
-	HookWatchFile.Set(watchFile)
+	t.Cleanup(HookWatchFile.SetForTest(watchFile))
 	synctest.Test(t, func(t *testing.T) {
 		tmp := t.TempDir()
 		if err := os.MkdirAll(filepath.Join(tmp, "etc"), 0700); err != nil {

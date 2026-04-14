@@ -33,6 +33,7 @@ import (
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 )
@@ -811,6 +812,8 @@ func TestTCPForwardLimits(t *testing.T) {
 // TestTCPForwardLimits_PerClient verifies that the per-client limit for TCP
 // forwarding works.
 func TestTCPForwardLimits_PerClient(t *testing.T) {
+	clientmetric.ResetForTest(t)
+	tstest.AssertNotParallel(t) // calls envknob.Setenv
 	envknob.Setenv("TS_DEBUG_NETSTACK", "true")
 
 	// Set our test override limits during this test.
