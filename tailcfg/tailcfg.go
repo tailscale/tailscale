@@ -2600,21 +2600,6 @@ const (
 	// This cannot be set simultaneously with NodeAttrLinuxMustUseIPTables.
 	NodeAttrLinuxMustUseNfTables NodeCapability = "linux-netfilter?v=nftables"
 
-	// NodeAttrDisableSeamlessKeyRenewal disables seamless key renewal, which is
-	// enabled by default in clients as of 2025-09-17 (1.90 and later).
-	//
-	// We will use this attribute to manage the rollout, and disable seamless in
-	// clients with known bugs.
-	// http://go/seamless-key-renewal
-	NodeAttrDisableSeamlessKeyRenewal NodeCapability = "disable-seamless-key-renewal"
-
-	// NodeAttrSeamlessKeyRenewal was used to opt-in to seamless key renewal
-	// during its private alpha.
-	//
-	// Deprecated: NodeAttrSeamlessKeyRenewal is deprecated as of CapabilityVersion 126,
-	// because seamless key renewal is now enabled by default.
-	NodeAttrSeamlessKeyRenewal NodeCapability = "seamless-key-renewal"
-
 	// NodeAttrProbeUDPLifetime makes the client probe UDP path lifetime at the
 	// tail end of an active direct connection in magicsock.
 	NodeAttrProbeUDPLifetime NodeCapability = "probe-udp-lifetime"

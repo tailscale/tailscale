@@ -3571,12 +3571,11 @@ func (b *LocalBackend) setAuthURLLocked(url string) {
 //
 // b.mu must be held.
 func (b *LocalBackend) popBrowserAuthNowLocked(url string, keyExpired bool, recipient ipnauth.Actor) {
-	b.logf("popBrowserAuthNow(%q): url=%v, key-expired=%v, seamless-key-renewal=%v", maybeUsernameOf(recipient), url != "", keyExpired, b.seamlessRenewalEnabled())
+	b.logf("popBrowserAuthNow(%q): url=%v, key-expired=%v", maybeUsernameOf(recipient), url != "", keyExpired)
 
-	// Deconfigure the local network data plane if:
-	// - seamless key renewal is not enabled;
-	// - key is expired (in which case tailnet connectivity is down anyway).
-	if !b.seamlessRenewalEnabled() || keyExpired {
+	// Deconfigure the local network data plane if the key is expired
+	// (in which case tailnet connectivity is down anyway).
+	if keyExpired {
 		b.blockEngineUpdatesLocked(true)
 		b.stopEngineAndWaitLocked()
 
@@ -5938,9 +5937,9 @@ func (b *LocalBackend) enterStateLocked(newState ipn.State) {
 	switch newState {
 	case ipn.NeedsLogin:
 		feature.SystemdStatus("Needs login: %s", authURL)
-		// always block updates on NeedsLogin even if seamless renewal is enabled,
-		// to prevent calls to authReconfigLocked from reconfiguring the engine when our
-		// key has expired and we're waiting to authenticate to use the new key.
+		// always block updates on NeedsLogin, to prevent calls to authReconfigLocked
+		// from reconfiguring the engine when our key has expired and we're waiting
+		// to authenticate to use the new key.
 		b.blockEngineUpdatesLocked(true)
 		fallthrough
 	case ipn.Stopped, ipn.NoState:
@@ -7596,14 +7595,6 @@ func (b *LocalBackend) ReadRouteInfo() (*appctype.RouteInfo, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.readRouteInfoLocked()
-}
-
-// seamlessRenewalEnabled reports whether seamless key renewals are enabled.
-//
-// As of 2025-09-11, this is the default behaviour unless nodes receive
-// [tailcfg.NodeAttrDisableSeamlessKeyRenewal] in their netmap.
-func (b *LocalBackend) seamlessRenewalEnabled() bool {
-	return b.ControlKnobs().SeamlessKeyRenewal.Load()
 }
 
 var (

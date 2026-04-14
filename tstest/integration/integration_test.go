@@ -467,83 +467,70 @@ func TestOneNodeUpAuth(t *testing.T) {
 		},
 	} {
 		tstest.Shard(t)
+		t.Run(tt.name, func(t *testing.T) {
+			tstest.Parallel(t)
 
-		for _, useSeamlessKeyRenewal := range []bool{true, false} {
-			name := tt.name
-			if useSeamlessKeyRenewal {
-				name += "-with-seamless"
-			}
-			t.Run(name, func(t *testing.T) {
-				tstest.Parallel(t)
-
-				env := NewTestEnv(t, ConfigureControl(
-					func(control *testcontrol.Server) {
-						if tt.authKey != "" {
-							control.RequireAuthKey = tt.authKey
-						} else {
-							control.RequireAuth = true
-						}
-
-						if tt.requireDeviceApproval {
-							control.RequireMachineAuth = true
-						}
-
-						control.AllNodesSameUser = true
-
-						if useSeamlessKeyRenewal {
-							control.DefaultNodeCapabilities = &tailcfg.NodeCapMap{
-								tailcfg.NodeAttrSeamlessKeyRenewal: []tailcfg.RawMessage{},
-							}
-						}
-					},
-				))
-
-				n1 := NewTestNode(t, env)
-				d1 := n1.StartDaemon()
-				defer d1.MustCleanShutdown(t)
-
-				for i, step := range tt.steps {
-					t.Logf("Running step %d", i)
-					cmdArgs := append(step.args, "--login-server="+env.ControlURL())
-
-					t.Logf("Running command: %s", strings.Join(cmdArgs, " "))
-
-					var authURLCount atomic.Int32
-					var deviceApprovalURLCount atomic.Int32
-
-					handler := &authURLParserWriter{t: t,
-						authURLFn:           completeLogin(t, env.Control, &authURLCount),
-						deviceApprovalURLFn: completeDeviceApproval(t, n1, &deviceApprovalURLCount),
+			env := NewTestEnv(t, ConfigureControl(
+				func(control *testcontrol.Server) {
+					if tt.authKey != "" {
+						control.RequireAuthKey = tt.authKey
+					} else {
+						control.RequireAuth = true
 					}
 
-					cmd := n1.Tailscale(cmdArgs...)
-					cmd.Stdout = handler
-					cmd.Stdout = handler
-					cmd.Stderr = cmd.Stdout
-					if err := cmd.Run(); err != nil {
-						t.Fatalf("up: %v", err)
+					if tt.requireDeviceApproval {
+						control.RequireMachineAuth = true
 					}
 
-					n1.AwaitRunning()
+					control.AllNodesSameUser = true
+				},
+			))
 
-					var wantAuthURLCount int32
-					if step.wantAuthURL {
-						wantAuthURLCount = 1
-					}
-					if n := authURLCount.Load(); n != wantAuthURLCount {
-						t.Errorf("Auth URLs completed = %d; want %d", n, wantAuthURLCount)
-					}
+			n1 := NewTestNode(t, env)
+			d1 := n1.StartDaemon()
+			defer d1.MustCleanShutdown(t)
 
-					var wantDeviceApprovalURLCount int32
-					if step.wantDeviceApprovalURL {
-						wantDeviceApprovalURLCount = 1
-					}
-					if n := deviceApprovalURLCount.Load(); n != wantDeviceApprovalURLCount {
-						t.Errorf("Device approval URLs completed = %d; want %d", n, wantDeviceApprovalURLCount)
-					}
+			for i, step := range tt.steps {
+				t.Logf("Running step %d", i)
+				cmdArgs := append(step.args, "--login-server="+env.ControlURL())
+
+				t.Logf("Running command: %s", strings.Join(cmdArgs, " "))
+
+				var authURLCount atomic.Int32
+				var deviceApprovalURLCount atomic.Int32
+
+				handler := &authURLParserWriter{t: t,
+					authURLFn:           completeLogin(t, env.Control, &authURLCount),
+					deviceApprovalURLFn: completeDeviceApproval(t, n1, &deviceApprovalURLCount),
 				}
-			})
-		}
+
+				cmd := n1.Tailscale(cmdArgs...)
+				cmd.Stdout = handler
+				cmd.Stdout = handler
+				cmd.Stderr = cmd.Stdout
+				if err := cmd.Run(); err != nil {
+					t.Fatalf("up: %v", err)
+				}
+
+				n1.AwaitRunning()
+
+				var wantAuthURLCount int32
+				if step.wantAuthURL {
+					wantAuthURLCount = 1
+				}
+				if n := authURLCount.Load(); n != wantAuthURLCount {
+					t.Errorf("Auth URLs completed = %d; want %d", n, wantAuthURLCount)
+				}
+
+				var wantDeviceApprovalURLCount int32
+				if step.wantDeviceApprovalURL {
+					wantDeviceApprovalURLCount = 1
+				}
+				if n := deviceApprovalURLCount.Load(); n != wantDeviceApprovalURLCount {
+					t.Errorf("Device approval URLs completed = %d; want %d", n, wantDeviceApprovalURLCount)
+				}
+			}
+		})
 	}
 }
 
