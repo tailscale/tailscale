@@ -378,7 +378,7 @@ func (v PrefsView) Sync() opt.Bool { return v.ж.Sync }
 // network to route Tailscale traffic back to the subnet relay
 // machine.
 //
-// Linux-only.
+// Linux and FreeBSD only.
 func (v PrefsView) NoSNAT() bool { return v.ж.NoSNAT }
 
 // NoStatefulFiltering specifies whether to apply stateful filtering when

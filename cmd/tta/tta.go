@@ -202,6 +202,9 @@ func main() {
 		if routes := r.URL.Query().Get("advertise-routes"); routes != "" {
 			args = append(args, "--advertise-routes="+routes)
 		}
+		if snat := r.URL.Query().Get("snat-subnet-routes"); snat != "" {
+			args = append(args, "--snat-subnet-routes="+snat)
+		}
 		serveCmd(w, "tailscale", args...)
 	})
 	ttaMux.HandleFunc("/ip", func(w http.ResponseWriter, r *http.Request) {
@@ -236,7 +239,8 @@ func main() {
 		go func() {
 			mux := http.NewServeMux()
 			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-				fmt.Fprintf(w, "Hello world I am %s", name)
+				host, _, _ := net.SplitHostPort(r.RemoteAddr)
+				fmt.Fprintf(w, "Hello world I am %s from %s", name, host)
 			})
 			if err := http.ListenAndServe(":"+port, mux); err != nil {
 				log.Printf("webserver on :%s failed: %v", port, err)

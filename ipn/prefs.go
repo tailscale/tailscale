@@ -222,7 +222,7 @@ type Prefs struct {
 	// network to route Tailscale traffic back to the subnet relay
 	// machine.
 	//
-	// Linux-only.
+	// Linux and FreeBSD only.
 	NoSNAT bool
 
 	// NoStatefulFiltering specifies whether to apply stateful filtering when

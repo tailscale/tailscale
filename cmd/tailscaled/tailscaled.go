@@ -729,9 +729,9 @@ func handleSubnetsInNetstack() bool {
 		return true
 	}
 	switch runtime.GOOS {
-	case "windows", "darwin", "freebsd", "openbsd", "solaris", "illumos":
+	case "windows", "darwin", "openbsd", "solaris", "illumos":
 		// Enable on Windows and tailscaled-on-macOS (this doesn't
-		// affect the GUI clients), and on FreeBSD.
+		// affect the GUI clients).
 		return true
 	}
 	return false

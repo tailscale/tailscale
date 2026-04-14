@@ -128,6 +128,8 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 		upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
 		upf.BoolVar(&upArgs.statefulFiltering, "stateful-filtering", false, "apply stateful filtering to forwarded packets (subnet routers, exit nodes, and so on)")
 		upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
+	case "freebsd":
+		upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
 	case "windows":
 		upf.BoolVar(&upArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
 	}
@@ -355,14 +357,15 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs.AppConnector.Advertise = upArgs.advertiseConnector
 	prefs.PostureChecking = upArgs.postureChecking
 
-	if goos == "linux" {
+	if goos == "linux" || goos == "freebsd" {
 		prefs.NoSNAT = !upArgs.snat
 		// We want to make sure user is aware setting --snat-subnet-routes=false with --advertise-exit-node would break exitnode,
 		// but we won't prevent them from doing it since there are current dependencies on that combination. (as of 2026-03-25)
 		if prefs.NoSNAT && prefs.AdvertisesExitNode() {
 			warnf("--snat-subnet-routes=false is set with --advertise-exit-node; internet traffic through this exit node may not work as expected")
 		}
-
+	}
+	if goos == "linux" {
 		// Backfills for NoStatefulFiltering occur when loading a profile; just set it explicitly here.
 		prefs.NoStatefulFiltering.Set(!upArgs.statefulFiltering)
 		v, warning, err := netfilterModeFromFlag(upArgs.netfilterMode)
@@ -1106,8 +1109,10 @@ func applyImplicitPrefs(prefs, oldPrefs *ipn.Prefs, env upCheckEnv) {
 
 func flagAppliesToOS(flag, goos string) bool {
 	switch flag {
-	case "netfilter-mode", "snat-subnet-routes", "stateful-filtering":
+	case "netfilter-mode", "stateful-filtering":
 		return goos == "linux"
+	case "snat-subnet-routes":
+		return goos == "linux" || goos == "freebsd"
 	case "unattended":
 		return goos == "windows"
 	}
