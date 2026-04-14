@@ -28,6 +28,7 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/paths"
 	"tailscale.com/util/slicesx"
+	"tailscale.com/util/testenv"
 	"tailscale.com/version/distro"
 )
 
@@ -194,17 +195,39 @@ func (v *onceFlagValue) IsBoolFlag() bool {
 	return ok && bf.IsBoolFlag()
 }
 
-// noDupFlagify modifies c recursively to make all the
-// flag values be wrappers that permit setting the value
-// at most once.
-func noDupFlagify(c *ffcli.Command) {
-	if c.FlagSet != nil {
-		c.FlagSet.VisitAll(func(f *flag.Flag) {
-			f.Value = &onceFlagValue{Value: f.Value}
-		})
+// noDupFlagify modifies c recursively to make all the flag values be
+// wrappers that permit setting the value at most once. If tb is
+// non-nil, the original values are restored when the test completes.
+func noDupFlagify(c *ffcli.Command, tb testenv.TB) {
+	if tb == nil && testenv.InTest() {
+		return
 	}
-	for _, sub := range c.Subcommands {
-		noDupFlagify(sub)
+	type restore struct {
+		f *flag.Flag
+		v flag.Value
+	}
+	var restores []restore
+	var walk func(*ffcli.Command)
+	walk = func(c *ffcli.Command) {
+		if c.FlagSet != nil {
+			c.FlagSet.VisitAll(func(f *flag.Flag) {
+				if tb != nil {
+					restores = append(restores, restore{f, f.Value})
+				}
+				f.Value = &onceFlagValue{Value: f.Value}
+			})
+		}
+		for _, sub := range c.Subcommands {
+			walk(sub)
+		}
+	}
+	walk(c)
+	if tb != nil {
+		tb.Cleanup(func() {
+			for _, r := range restores {
+				r.f.Value = r.v
+			}
+		})
 	}
 }
 
@@ -221,7 +244,7 @@ var (
 	_ func() *ffcli.Command
 )
 
-func newRootCmd() *ffcli.Command {
+func newRootCmd(tb ...testenv.TB) *ffcli.Command {
 	rootfs := newFlagSet("tailscale")
 	rootfs.Func("socket", "path to tailscaled socket", func(s string) error {
 		localClient.Socket = s
@@ -303,7 +326,11 @@ change in the future.
 	})
 
 	ffcomplete.Inject(rootCmd, func(c *ffcli.Command) { c.LongHelp = hidden + c.LongHelp }, usageFunc)
-	noDupFlagify(rootCmd)
+	var t testenv.TB
+	if len(tb) > 0 {
+		t = tb[0]
+	}
+	noDupFlagify(rootCmd, t)
 	return rootCmd
 }
 

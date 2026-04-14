@@ -205,7 +205,7 @@ func TestVarzHandler(t *testing.T) {
 			"string_map",
 			func() *expvar.Map {
 				m := new(expvar.Map)
-				m.Set("a", expvar.NewString("foo"))
+				m.Set("a", new(expvar.String))
 				return m
 			}(),
 			"# skipping \"string_map\" expvar map key \"a\" with unknown value type *expvar.String\n",
