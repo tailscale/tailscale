@@ -148,6 +148,8 @@ type wslFS struct {
 	distro string
 }
 
+func (fs wslFS) ActualPath(name string) string { return name }
+
 func (fs wslFS) Stat(name string) (isRegular bool, err error) {
 	err = wslRun(fs.cmd("test", "-f", name))
 	if ee, _ := err.(*exec.ExitError); ee != nil {

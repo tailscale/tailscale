@@ -7,14 +7,12 @@ package dns
 
 import (
 	"context"
-	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"testing"
 	"testing/synctest"
-
-	"github.com/illarion/gonotify/v3"
+	"time"
 
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus/eventbustest"
@@ -77,33 +75,20 @@ search ts.net ts-dns.test
 	})
 }
 
-// watchFile is generally copied from linuxtrample, but cancels the context
-// after the first call to cb() after the first trample to end the test.
+// watchFile is a test implementation of the file watcher that uses a timer
+// instead of inotify. Real inotify (gonotify.NewDirWatcher) creates goroutines
+// that block on real syscalls, which don't work inside synctest's fake-time
+// bubble. Instead, we use a one-shot timer that synctest.Wait() will advance,
+// triggering a callback to check for file trampling.
 func watchFile(ctx context.Context, dir, filename string, cb func()) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	const events = gonotify.IN_ATTRIB |
-		gonotify.IN_CLOSE_WRITE |
-		gonotify.IN_CREATE |
-		gonotify.IN_DELETE |
-		gonotify.IN_MODIFY |
-		gonotify.IN_MOVE
-
-	watcher, err := gonotify.NewDirWatcher(ctx, events, dir)
-	if err != nil {
-		return fmt.Errorf("NewDirWatcher: %w", err)
+	timer := time.NewTimer(time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		cb()
 	}
-
-	for {
-		select {
-		case event := <-watcher.C:
-			if event.Name == filename {
-				cb()
-				cancel()
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
+	<-ctx.Done()
+	return ctx.Err()
 }
