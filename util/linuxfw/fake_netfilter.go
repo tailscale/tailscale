@@ -63,21 +63,23 @@ func (f *FakeNetfilterRunner) HasIPV6NAT() bool {
 	return true
 }
 
-func (f *FakeNetfilterRunner) AddBase(tunname string) error              { return nil }
-func (f *FakeNetfilterRunner) DelBase() error                            { return nil }
-func (f *FakeNetfilterRunner) AddChains() error                          { return nil }
-func (f *FakeNetfilterRunner) DelChains() error                          { return nil }
-func (f *FakeNetfilterRunner) AddHooks() error                           { return nil }
-func (f *FakeNetfilterRunner) DelHooks(logf logger.Logf) error           { return nil }
-func (f *FakeNetfilterRunner) AddSNATRule() error                        { return nil }
-func (f *FakeNetfilterRunner) DelSNATRule() error                        { return nil }
-func (f *FakeNetfilterRunner) AddConnmarkSaveRule() error                { return nil }
-func (f *FakeNetfilterRunner) DelConnmarkSaveRule() error                { return nil }
-func (f *FakeNetfilterRunner) AddStatefulRule(tunname string) error      { return nil }
-func (f *FakeNetfilterRunner) DelStatefulRule(tunname string) error      { return nil }
-func (f *FakeNetfilterRunner) AddLoopbackRule(addr netip.Addr) error     { return nil }
-func (f *FakeNetfilterRunner) DelLoopbackRule(addr netip.Addr) error     { return nil }
-func (f *FakeNetfilterRunner) AddDNATRule(origDst, dst netip.Addr) error { return nil }
+func (f *FakeNetfilterRunner) AddBase(tunname string) error                { return nil }
+func (f *FakeNetfilterRunner) DelBase() error                              { return nil }
+func (f *FakeNetfilterRunner) AddAllowAllInboundRule(tunname string) error { return nil }
+func (f *FakeNetfilterRunner) DelAllowAllInboundRule(tunname string) error { return nil }
+func (f *FakeNetfilterRunner) AddChains() error                            { return nil }
+func (f *FakeNetfilterRunner) DelChains() error                            { return nil }
+func (f *FakeNetfilterRunner) AddHooks() error                             { return nil }
+func (f *FakeNetfilterRunner) DelHooks(logf logger.Logf) error             { return nil }
+func (f *FakeNetfilterRunner) AddSNATRule() error                          { return nil }
+func (f *FakeNetfilterRunner) DelSNATRule() error                          { return nil }
+func (f *FakeNetfilterRunner) AddConnmarkSaveRule() error                  { return nil }
+func (f *FakeNetfilterRunner) DelConnmarkSaveRule() error                  { return nil }
+func (f *FakeNetfilterRunner) AddStatefulRule(tunname string) error        { return nil }
+func (f *FakeNetfilterRunner) DelStatefulRule(tunname string) error        { return nil }
+func (f *FakeNetfilterRunner) AddLoopbackRule(addr netip.Addr) error       { return nil }
+func (f *FakeNetfilterRunner) DelLoopbackRule(addr netip.Addr) error       { return nil }
+func (f *FakeNetfilterRunner) AddDNATRule(origDst, dst netip.Addr) error   { return nil }
 func (f *FakeNetfilterRunner) DNATWithLoadBalancer(origDst netip.Addr, dsts []netip.Addr) error {
 	return nil
 }

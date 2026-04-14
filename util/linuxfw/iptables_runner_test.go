@@ -132,7 +132,6 @@ func TestAddAndDeleteBase(t *testing.T) {
 	}
 
 	tsRulesCommon := []fakeRule{ // table/chain/rule
-		{"filter", "ts-input", []string{"-i", tunname, "-j", "ACCEPT"}},
 		{"filter", "ts-forward", []string{"-i", tunname, "-j", "MARK", "--set-mark", tsconst.LinuxSubnetRouteMark + "/" + tsconst.LinuxFwmarkMask}},
 		{"filter", "ts-forward", []string{"-m", "mark", "--mark", tsconst.LinuxSubnetRouteMark + "/" + tsconst.LinuxFwmarkMask, "-j", "ACCEPT"}},
 		{"filter", "ts-forward", []string{"-o", tunname, "-j", "ACCEPT"}},
@@ -240,6 +239,94 @@ func TestAddAndDelLoopbackRule(t *testing.T) {
 		t.Fatal(err)
 	} else if exist {
 		t.Errorf("rule %s/%s/%s still exists", tsRulesV6.table, tsRulesV6.chain, strings.Join(tsRulesV6.args, " "))
+	}
+
+	if err := iptr.DelChains(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAddAndDelAllowAllInboundRule(t *testing.T) {
+	iptr := newFakeIPTablesRunner()
+	tunname := "tun0"
+
+	if err := iptr.AddChains(); err != nil {
+		t.Fatal(err)
+	}
+
+	rule := fakeRule{"filter", "ts-input", []string{"-i", tunname, "-j", "ACCEPT"}}
+
+	// Add AllowAllInbound rule
+	if err := iptr.AddAllowAllInboundRule(tunname); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check that the rule was created for ipt4 and ipt6
+	for _, proto := range []iptablesInterface{iptr.ipt4, iptr.ipt6} {
+		if exist, err := proto.Exists(rule.table, rule.chain, rule.args...); err != nil {
+			t.Fatal(err)
+		} else if !exist {
+			t.Errorf("rule %s/%s/%s doesn't exist", rule.table, rule.chain, strings.Join(rule.args, " "))
+		}
+	}
+
+	// Delete AllowAllInbound rule
+	if err := iptr.DelAllowAllInboundRule(tunname); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check that the rule was deleted for ipt4 and ipt6
+	for _, proto := range []iptablesInterface{iptr.ipt4, iptr.ipt6} {
+		if exist, err := proto.Exists(rule.table, rule.chain, rule.args...); err != nil {
+			t.Fatal(err)
+		} else if exist {
+			t.Errorf("rule %s/%s/%s still exists", rule.table, rule.chain, strings.Join(rule.args, " "))
+		}
+	}
+
+	if err := iptr.DelChains(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAddAllowAllInboundRuleAndDelBase(t *testing.T) {
+	iptr := newFakeIPTablesRunner()
+	tunname := "tun0"
+
+	if err := iptr.AddChains(); err != nil {
+		t.Fatal(err)
+	}
+
+	rule := fakeRule{ // table/chain/rule
+		"filter", "ts-input", []string{"-i", tunname, "-j", "ACCEPT"},
+	}
+
+	// Add AllowAllInbound rule
+	if err := iptr.AddAllowAllInboundRule(tunname); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check that the rule was created for ipt4 and ipt6
+	for _, proto := range []iptablesInterface{iptr.ipt4, iptr.ipt6} {
+		if exist, err := proto.Exists(rule.table, rule.chain, rule.args...); err != nil {
+			t.Fatal(err)
+		} else if !exist {
+			t.Errorf("rule %s/%s/%s doesn't exist", rule.table, rule.chain, strings.Join(rule.args, " "))
+		}
+	}
+
+	// Delete base rules
+	if err := iptr.DelBase(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check that the rule was deleted for ipt4 and ipt6
+	for _, proto := range []iptablesInterface{iptr.ipt4, iptr.ipt6} {
+		if exist, err := proto.Exists(rule.table, rule.chain, rule.args...); err != nil {
+			t.Fatal(err)
+		} else if exist {
+			t.Errorf("rule %s/%s/%s still exists", rule.table, rule.chain, strings.Join(rule.args, " "))
+		}
 	}
 
 	if err := iptr.DelChains(); err != nil {

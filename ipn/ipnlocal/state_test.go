@@ -1269,7 +1269,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// Once started, all configs must be reset and have their zero values.
 			wantState:     ipn.NeedsLogin,
 			wantCfg:       &wgcfg.Config{},
-			wantRouterCfg: &router.Config{},
+			wantRouterCfg: &router.Config{AllowAllInbound: true},
 			wantDNSCfg:    &dns.Config{},
 		},
 		{
@@ -1281,7 +1281,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// Same if WantRunning is true, but the auth is not completed yet.
 			wantState:     ipn.NeedsLogin,
 			wantCfg:       &wgcfg.Config{},
-			wantRouterCfg: &router.Config{},
+			wantRouterCfg: &router.Config{AllowAllInbound: true},
 			wantDNSCfg:    &dns.Config{},
 		},
 		{
@@ -1300,6 +1300,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			wantRouterCfg: &router.Config{
 				SNATSubnetRoutes: true,
 				NetfilterMode:    preftype.NetfilterOn,
+				AllowAllInbound:  true,
 				LocalAddrs:       node1.SelfNode.Addresses().AsSlice(),
 				Routes:           routesWithQuad100(),
 			},
@@ -1320,7 +1321,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// After disconnecting, all configs must be reset and have their zero values.
 			wantState:     ipn.Stopped,
 			wantCfg:       &wgcfg.Config{},
-			wantRouterCfg: &router.Config{},
+			wantRouterCfg: &router.Config{AllowAllInbound: true},
 			wantDNSCfg:    &dns.Config{},
 		},
 		{
@@ -1335,7 +1336,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// and have their zero values until the auth is completed.
 			wantState:     ipn.NeedsLogin,
 			wantCfg:       &wgcfg.Config{},
-			wantRouterCfg: &router.Config{},
+			wantRouterCfg: &router.Config{AllowAllInbound: true},
 			wantDNSCfg:    &dns.Config{},
 		},
 		{
@@ -1357,6 +1358,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			wantRouterCfg: &router.Config{
 				SNATSubnetRoutes: true,
 				NetfilterMode:    preftype.NetfilterOn,
+				AllowAllInbound:  true,
 				LocalAddrs:       node2.SelfNode.Addresses().AsSlice(),
 				Routes:           routesWithQuad100(),
 			},
@@ -1381,7 +1383,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// and have their zero values until the (non-interactive) login is completed.
 			wantState:     ipn.NoState,
 			wantCfg:       &wgcfg.Config{},
-			wantRouterCfg: &router.Config{},
+			wantRouterCfg: &router.Config{AllowAllInbound: true},
 			wantDNSCfg:    &dns.Config{},
 		},
 		{
@@ -1406,6 +1408,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			wantRouterCfg: &router.Config{
 				SNATSubnetRoutes: true,
 				NetfilterMode:    preftype.NetfilterOn,
+				AllowAllInbound:  true,
 				LocalAddrs:       node1.SelfNode.Addresses().AsSlice(),
 				Routes:           routesWithQuad100(),
 			},
@@ -1439,6 +1442,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			wantRouterCfg: &router.Config{
 				SNATSubnetRoutes: true,
 				NetfilterMode:    preftype.NetfilterOn,
+				AllowAllInbound:  true,
 				LocalAddrs:       node3.SelfNode.Addresses().AsSlice(),
 				Routes:           routesWithQuad100(),
 			},
@@ -1462,7 +1466,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			},
 			wantState:     ipn.NeedsLogin,
 			wantCfg:       &wgcfg.Config{},
-			wantRouterCfg: &router.Config{},
+			wantRouterCfg: &router.Config{AllowAllInbound: true},
 			wantDNSCfg:    &dns.Config{},
 		},
 		{
@@ -1479,7 +1483,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// Without seamless renewal, even starting a reauth tears down everything:
 			wantState:     ipn.Starting,
 			wantCfg:       &wgcfg.Config{},
-			wantRouterCfg: &router.Config{},
+			wantRouterCfg: &router.Config{AllowAllInbound: true},
 			wantDNSCfg:    &dns.Config{},
 		},
 		{
@@ -1504,6 +1508,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			wantRouterCfg: &router.Config{
 				SNATSubnetRoutes: true,
 				NetfilterMode:    preftype.NetfilterOn,
+				AllowAllInbound:  true,
 				LocalAddrs:       node1.SelfNode.Addresses().AsSlice(),
 				Routes:           routesWithQuad100(),
 			},
@@ -1534,6 +1539,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			wantRouterCfg: &router.Config{
 				SNATSubnetRoutes: true,
 				NetfilterMode:    preftype.NetfilterOn,
+				AllowAllInbound:  true,
 				LocalAddrs:       node1.SelfNode.Addresses().AsSlice(),
 				Routes:           routesWithQuad100(),
 			},
@@ -1566,6 +1572,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			wantRouterCfg: &router.Config{
 				SNATSubnetRoutes: true,
 				NetfilterMode:    preftype.NetfilterOn,
+				AllowAllInbound:  true,
 				LocalAddrs:       node1.SelfNode.Addresses().AsSlice(),
 				Routes:           routesWithQuad100(),
 			},
@@ -1591,7 +1598,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// Even with seamless, if the key we are using expires, we want to disconnect:
 			wantState:     ipn.NeedsLogin,
 			wantCfg:       &wgcfg.Config{},
-			wantRouterCfg: &router.Config{},
+			wantRouterCfg: &router.Config{AllowAllInbound: true},
 			wantDNSCfg:    &dns.Config{},
 		},
 	}
@@ -1990,7 +1997,9 @@ func (e *mockEngine) RequestStatus() {
 }
 
 func (e *mockEngine) ResetAndStop() (*wgengine.Status, error) {
-	err := e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
+	err := e.Reconfig(&wgcfg.Config{}, &router.Config{
+		AllowAllInbound: true,
+	}, &dns.Config{})
 	if err != nil {
 		return nil, err
 	}

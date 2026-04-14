@@ -708,6 +708,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				WantRunning:         true,
 				NoSNAT:              false,
 				NoStatefulFiltering: "true",
+				AllowAllInbound:     true,
 				NetfilterMode:       preftype.NetfilterOn,
 				CorpDNS:             true,
 				AutoUpdate: ipn.AutoUpdatePrefs{
@@ -726,6 +727,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				RouteAll:            true,
 				NoSNAT:              false,
 				NoStatefulFiltering: "true",
+				AllowAllInbound:     true,
 				NetfilterMode:       preftype.NetfilterOn,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
@@ -744,6 +746,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 					netip.MustParsePrefix("::/0"),
 				},
 				NoStatefulFiltering: "true",
+				AllowAllInbound:     true,
 				NetfilterMode:       preftype.NetfilterOn,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
@@ -835,6 +838,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				NetfilterMode:       preftype.NetfilterNoDivert,
 				NoSNAT:              true,
 				NoStatefulFiltering: "true",
+				AllowAllInbound:     true,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
 				},
@@ -852,6 +856,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				NetfilterMode:       preftype.NetfilterOff,
 				NoSNAT:              true,
 				NoStatefulFiltering: "true",
+				AllowAllInbound:     true,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
 				},
@@ -868,6 +873,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				WantRunning:         true,
 				NoSNAT:              true,
 				NoStatefulFiltering: "true",
+				AllowAllInbound:     true,
 				AdvertiseRoutes: []netip.Prefix{
 					netip.MustParsePrefix("fd7a:115c:a1e0:b1a::bb:10.0.0.0/112"),
 				},
@@ -887,6 +893,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				WantRunning:         true,
 				NoSNAT:              true,
 				NoStatefulFiltering: "true",
+				AllowAllInbound:     true,
 				AdvertiseRoutes: []netip.Prefix{
 					netip.MustParsePrefix("fd7a:115c:a1e0:b1a::aabb:10.0.0.0/112"),
 				},

@@ -5678,6 +5678,7 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 		SNATSubnetRoutes:  !prefs.NoSNAT(),
 		StatefulFiltering: doStatefulFiltering,
 		NetfilterMode:     prefs.NetfilterMode(),
+		AllowAllInbound:   prefs.AllowAllInbound(),
 		Routes:            peerRoutes(b.logf, cfg.Peers, singleRouteThreshold, prefs.RouteAll()),
 		NetfilterKind:     netfilterKind,
 	}
@@ -5935,7 +5936,9 @@ func (b *LocalBackend) enterStateLocked(newState ipn.State) {
 	case ipn.Stopped, ipn.NoState:
 		// Unconfigure the engine if it has stopped (WantRunning is set to false)
 		// or if we've switched to a different profile and the state is unknown.
-		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
+		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{
+			AllowAllInbound: true,
+		}, &dns.Config{})
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
 		}

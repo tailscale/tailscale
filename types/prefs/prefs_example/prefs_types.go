@@ -86,6 +86,7 @@ type Prefs struct {
 	// Since the item type (netip.Prefix) is immutable, we can use [prefs.List].
 	AdvertiseRoutes     prefs.List[netip.Prefix]           `json:",omitzero"`
 	NoSNAT              prefs.Item[bool]                   `json:",omitzero"`
+	AllowAllInbound     prefs.Item[bool]                   `json:",omitzero"`
 	NoStatefulFiltering prefs.Item[opt.Bool]               `json:",omitzero"`
 	NetfilterMode       prefs.Item[preftype.NetfilterMode] `json:",omitzero"`
 	OperatorUser        prefs.Item[string]                 `json:",omitzero"`

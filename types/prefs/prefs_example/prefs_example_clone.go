@@ -52,6 +52,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	Egg                    prefs.Item[bool]
 	AdvertiseRoutes        prefs.List[netip.Prefix]
 	NoSNAT                 prefs.Item[bool]
+	AllowAllInbound        prefs.Item[bool]
 	NoStatefulFiltering    prefs.Item[opt.Bool]
 	NetfilterMode          prefs.Item[preftype.NetfilterMode]
 	OperatorUser           prefs.Item[string]

@@ -122,6 +122,7 @@ func (v PrefsView) Egg() prefs.Item[bool]                 { return v.ж.Egg }
 // Since the item type (netip.Prefix) is immutable, we can use [prefs.List].
 func (v PrefsView) AdvertiseRoutes() prefs.ListView[netip.Prefix]     { return v.ж.AdvertiseRoutes.View() }
 func (v PrefsView) NoSNAT() prefs.Item[bool]                          { return v.ж.NoSNAT }
+func (v PrefsView) AllowAllInbound() prefs.Item[bool]                 { return v.ж.AllowAllInbound }
 func (v PrefsView) NoStatefulFiltering() prefs.Item[opt.Bool]         { return v.ж.NoStatefulFiltering }
 func (v PrefsView) NetfilterMode() prefs.Item[preftype.NetfilterMode] { return v.ж.NetfilterMode }
 func (v PrefsView) OperatorUser() prefs.Item[string]                  { return v.ж.OperatorUser }
@@ -173,6 +174,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	Egg                    prefs.Item[bool]
 	AdvertiseRoutes        prefs.List[netip.Prefix]
 	NoSNAT                 prefs.Item[bool]
+	AllowAllInbound        prefs.Item[bool]
 	NoStatefulFiltering    prefs.Item[opt.Bool]
 	NetfilterMode          prefs.Item[preftype.NetfilterMode]
 	OperatorUser           prefs.Item[string]

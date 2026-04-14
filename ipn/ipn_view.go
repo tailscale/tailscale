@@ -395,6 +395,12 @@ func (v PrefsView) NoSNAT() bool { return v.ж.NoSNAT }
 // Linux-only.
 func (v PrefsView) NoStatefulFiltering() opt.Bool { return v.ж.NoStatefulFiltering }
 
+// AllowAllInbound specifies whether or not to add a firewall rule allowing
+// all inbound traffic on the tun interface. The default is to add it.
+//
+// Linux-only.
+func (v PrefsView) AllowAllInbound() bool { return v.ж.AllowAllInbound }
+
 // NetfilterMode specifies how much to manage netfilter rules for
 // Tailscale, if at all.
 func (v PrefsView) NetfilterMode() preftype.NetfilterMode { return v.ж.NetfilterMode }
@@ -496,6 +502,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	Sync                       opt.Bool
 	NoSNAT                     bool
 	NoStatefulFiltering        opt.Bool
+	AllowAllInbound            bool
 	NetfilterMode              preftype.NetfilterMode
 	OperatorUser               string
 	ProfileName                string
