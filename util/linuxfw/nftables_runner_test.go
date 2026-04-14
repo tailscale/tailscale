@@ -845,6 +845,8 @@ func TestNFTAddAndDelCGNATRules(t *testing.T) {
 				checkChainRules(t, conn, inputV4, 2)
 			case CGNATModeReturn:
 				checkChainRules(t, conn, inputV4, 1)
+			default:
+				t.Fatalf("unknown mode %q", mode)
 			}
 
 			if err := findCGNATRules(conn, inputV4, mode, tunname); err != nil {

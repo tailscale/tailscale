@@ -1605,6 +1605,8 @@ func (n *nftablesRunner) AddExternalCGNATRules(mode CGNATMode, tunname string) e
 		if err = addReturnCGNATRangeRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
 			return fmt.Errorf("add return cgnat range rule v4: %w", err)
 		}
+	default:
+		return fmt.Errorf("unsupported cgnat mode %q", mode)
 	}
 	if err = conn.Flush(); err != nil {
 		return fmt.Errorf("flush cgnat rules v4: %w", err)
@@ -1633,6 +1635,8 @@ func (n *nftablesRunner) DelExternalCGNATRules(mode CGNATMode, tunname string) e
 		if err = delReturnCGNATRangeRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
 			return fmt.Errorf("del return cgnat range rule v4: %w", err)
 		}
+	default:
+		return fmt.Errorf("unsupported mode %q", mode)
 	}
 	if err = conn.Flush(); err != nil {
 		return fmt.Errorf("flush cgnat rules v4: %w", err)

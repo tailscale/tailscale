@@ -5621,7 +5621,7 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 		NetfilterMode:       prefs.NetfilterMode(),
 		Routes:              peerRoutes(b.logf, cfg.Peers, singleRouteThreshold, prefs.RouteAll()),
 		NetfilterKind:       netfilterKind,
-		RemoveCGNATDropRule: nm.SelfNode.HasCap(tailcfg.NodeAttrDisableLinuxCGNATDropRule),
+		RemoveCGNATDropRule: nm.HasCap(tailcfg.NodeAttrDisableLinuxCGNATDropRule),
 	}
 
 	if buildfeatures.HasSynology && distro.Get() == distro.Synology {
