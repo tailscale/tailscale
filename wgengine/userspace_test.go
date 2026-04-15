@@ -8,7 +8,6 @@ import (
 	"math/rand"
 	"net/netip"
 	"os"
-	"reflect"
 	"runtime"
 	"testing"
 
@@ -19,80 +18,15 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netaddr"
-	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tstest"
-	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
-
-func TestNoteReceiveActivity(t *testing.T) {
-	now := mono.Time(123456)
-	var logBuf tstest.MemLogger
-
-	confc := make(chan bool, 1)
-	gotConf := func() bool {
-		select {
-		case <-confc:
-			return true
-		default:
-			return false
-		}
-	}
-	e := &userspaceEngine{
-		timeNow:               func() mono.Time { return now },
-		recvActivityAt:        map[key.NodePublic]mono.Time{},
-		logf:                  logBuf.Logf,
-		tundev:                new(tstun.Wrapper),
-		testMaybeReconfigHook: func() { confc <- true },
-		trimmedNodes:          map[key.NodePublic]bool{},
-	}
-	ra := e.recvActivityAt
-
-	nk := key.NewNode().Public()
-
-	// Activity on an untracked key should do nothing.
-	e.noteRecvActivity(nk)
-	if len(ra) != 0 {
-		t.Fatalf("unexpected growth in map: now has %d keys; want 0", len(ra))
-	}
-	if logBuf.Len() != 0 {
-		t.Fatalf("unexpected log write (and thus activity): %s", logBuf.Bytes())
-	}
-
-	// Now track it, but don't mark it trimmed, so shouldn't update.
-	ra[nk] = 0
-	e.noteRecvActivity(nk)
-	if len(ra) != 1 {
-		t.Fatalf("unexpected growth in map: now has %d keys; want 1", len(ra))
-	}
-	if got := ra[nk]; got != now {
-		t.Fatalf("time in map = %v; want %v", got, now)
-	}
-	if gotConf() {
-		t.Fatalf("unexpected reconfig")
-	}
-
-	// Now mark it trimmed and expect an update.
-	e.trimmedNodes[nk] = true
-	e.noteRecvActivity(nk)
-	if len(ra) != 1 {
-		t.Fatalf("unexpected growth in map: now has %d keys; want 1", len(ra))
-	}
-	if got := ra[nk]; got != now {
-		t.Fatalf("time in map = %v; want %v", got, now)
-	}
-	if !gotConf() {
-		t.Fatalf("didn't get expected reconfig")
-	}
-}
 
 func nodeViews(v []*tailcfg.Node) []tailcfg.NodeView {
 	nv := make([]tailcfg.NodeView, len(v))
@@ -112,7 +46,6 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(e.Close)
-	ue := e.(*userspaceEngine)
 
 	routerCfg := &router.Config{}
 
@@ -147,20 +80,6 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 		err = e.Reconfig(cfg, routerCfg, &dns.Config{})
 		if err != nil {
 			t.Fatal(err)
-		}
-
-		wantRecvAt := map[key.NodePublic]mono.Time{
-			nkFromHex(nodeHex): 0,
-		}
-		if got := ue.recvActivityAt; !reflect.DeepEqual(got, wantRecvAt) {
-			t.Errorf("wrong recvActivityAt\n got: %v\nwant: %v\n", got, wantRecvAt)
-		}
-
-		wantTrimmedNodes := map[key.NodePublic]bool{
-			nkFromHex(nodeHex): true,
-		}
-		if got := ue.trimmedNodes; !reflect.DeepEqual(got, wantTrimmedNodes) {
-			t.Errorf("wrong wantTrimmedNodes\n got: %v\nwant: %v\n", got, wantTrimmedNodes)
 		}
 	}
 }
@@ -555,121 +474,6 @@ func nkFromHex(hex string) key.NodePublic {
 		panic(fmt.Sprintf("%q is not hex: %v", hex, err))
 	}
 	return k
-}
-
-// makeMaybeReconfigInputs builds a maybeReconfigInputs with n peers,
-// each with a unique key, disco key, and AllowedIPs entry.
-func makeMaybeReconfigInputs(n int) *maybeReconfigInputs {
-	peers := make([]wgcfg.Peer, n)
-	trimmed := make(map[key.NodePublic]bool, n)
-	trackNodes := make([]key.NodePublic, n)
-	trackIPs := make([]netip.Addr, n)
-
-	for i := range n {
-		nk := key.NewNode()
-		pub := nk.Public()
-		peers[i] = wgcfg.Peer{
-			PublicKey:  pub,
-			DiscoKey:   key.NewDisco().Public(),
-			AllowedIPs: []netip.Prefix{netip.PrefixFrom(netip.AddrFrom4([4]byte{100, 64, byte(i >> 8), byte(i)}), 32)},
-		}
-		trimmed[pub] = true
-		trackNodes[i] = pub
-		trackIPs[i] = netip.AddrFrom4([4]byte{100, 64, byte(i >> 8), byte(i)})
-	}
-
-	return &maybeReconfigInputs{
-		WGConfig: &wgcfg.Config{
-			PrivateKey: key.NewNode(),
-			Peers:      peers,
-			MTU:        1280,
-		},
-		TrimmedNodes: trimmed,
-		TrackNodes:   views.SliceOf(trackNodes),
-		TrackIPs:     views.SliceOf(trackIPs),
-	}
-}
-
-func TestMaybeReconfigInputsEqual(t *testing.T) {
-	a := makeMaybeReconfigInputs(100)
-	b := a.Clone()
-
-	// nil cases
-	if !(*maybeReconfigInputs)(nil).Equal(nil) {
-		t.Error("nil.Equal(nil) should be true")
-	}
-	if a.Equal(nil) {
-		t.Error("non-nil.Equal(nil) should be false")
-	}
-	if (*maybeReconfigInputs)(nil).Equal(a) {
-		t.Error("nil.Equal(non-nil) should be false")
-	}
-
-	// same pointer
-	if !a.Equal(a) {
-		t.Error("a.Equal(a) should be true")
-	}
-
-	// cloned equal value
-	if !a.Equal(b) {
-		t.Error("a.Equal(clone) should be true")
-	}
-
-	// Verify that every field in the struct is covered by Equal.
-	// Each entry mutates exactly one field of a clone and expects
-	// Equal to return false. If a new field is added to
-	// maybeReconfigInputs without a corresponding entry here, the
-	// field count check below will fail.
-	type mutator struct {
-		field string
-		fn    func(c *maybeReconfigInputs)
-	}
-	mutators := []mutator{
-		{"WGConfig", func(c *maybeReconfigInputs) {
-			c.WGConfig.MTU = 9999
-		}},
-		{"TrimmedNodes", func(c *maybeReconfigInputs) {
-			c.TrimmedNodes[key.NewNode().Public()] = true
-		}},
-		{"TrackNodes", func(c *maybeReconfigInputs) {
-			ns := c.TrackNodes.AsSlice()
-			ns[0] = key.NewNode().Public()
-			c.TrackNodes = views.SliceOf(ns)
-		}},
-		{"TrackIPs", func(c *maybeReconfigInputs) {
-			ips := c.TrackIPs.AsSlice()
-			ips[0] = netip.MustParseAddr("1.2.3.4")
-			c.TrackIPs = views.SliceOf(ips)
-		}},
-	}
-
-	// Ensure we have a mutator for every field.
-	numFields := reflect.TypeOf(maybeReconfigInputs{}).NumField()
-	if len(mutators) != numFields {
-		t.Fatalf("maybeReconfigInputs has %d fields but test covers %d; update the mutators table", numFields, len(mutators))
-	}
-
-	for _, m := range mutators {
-		c := a.Clone()
-		m.fn(c)
-		if a.Equal(c) {
-			t.Errorf("Equal did not detect change in field %s", m.field)
-		}
-	}
-}
-
-func BenchmarkMaybeReconfigInputsEqual(b *testing.B) {
-	for _, n := range []int{10, 100, 1000, 5000} {
-		b.Run(fmt.Sprintf("peers=%d", n), func(b *testing.B) {
-			a := makeMaybeReconfigInputs(n)
-			o := a.Clone()
-			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
-				a.Equal(o)
-			}
-		})
-	}
 }
 
 // an experiment to see if genLocalAddrFunc was worth it. As of Go

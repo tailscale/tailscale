@@ -4,22 +4,21 @@
 package wgengine
 
 import (
-	"bufio"
 	"context"
 	crand "crypto/rand"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"math"
 	"net/netip"
 	"runtime"
 	"slices"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/gaissmai/bart"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/control/controlknobs"
@@ -69,29 +68,6 @@ import (
 	"tailscale.com/wgengine/wglog"
 )
 
-// Lazy wireguard-go configuration parameters.
-const (
-	// lazyPeerIdleThreshold is the idle duration after
-	// which we remove a peer from the wireguard configuration.
-	// (This includes peers that have never been idle, which
-	// effectively have infinite idleness)
-	lazyPeerIdleThreshold = 5 * time.Minute
-
-	// packetSendTimeUpdateFrequency controls how often we record
-	// the time that we wrote a packet to an IP address.
-	packetSendTimeUpdateFrequency = 10 * time.Second
-
-	// packetSendRecheckWireguardThreshold controls how long we can go
-	// between packet sends to an IP before checking to see
-	// whether this IP address needs to be added back to the
-	// WireGuard peer oconfig.
-	packetSendRecheckWireguardThreshold = 1 * time.Minute
-)
-
-// statusPollInterval is how often we ask wireguard-go for its engine
-// status (as long as there's activity). See docs on its use below.
-const statusPollInterval = 1 * time.Minute
-
 // networkLoggerUploadTimeout is the maximum timeout to wait when
 // shutting down the network logger as it uploads the last network log messages.
 const networkLoggerUploadTimeout = 5 * time.Second
@@ -133,21 +109,27 @@ type userspaceEngine struct {
 	// is being routed over Tailscale.
 	isDNSIPOverTailscale syncs.AtomicValue[func(netip.Addr) bool]
 
-	wgLock              sync.Mutex // serializes all wgdev operations; see lock order comment below
-	lastCfgFull         wgcfg.Config
-	lastNMinPeers       int
-	lastRouter          *router.Config
-	lastEngineFull      *wgcfg.Config // of full wireguard config, not trimmed
-	lastEngineInputs    *maybeReconfigInputs
-	lastDNSConfig       dns.ConfigView // or invalid if none
-	lastIsSubnetRouter  bool           // was the node a primary subnet router in the last run.
-	recvActivityAt      map[key.NodePublic]mono.Time
-	trimmedNodes        map[key.NodePublic]bool   // set of node keys of peers currently excluded from wireguard config
-	sentActivityAt      map[netip.Addr]*mono.Time // value is accessed atomically
-	destIPActivityFuncs map[netip.Addr]func()
-	lastStatusPollTime  mono.Time         // last time we polled the engine status
-	reconfigureVPN      func() error      // or nil
-	conn25PacketHooks   Conn25PacketHooks // or nil
+	wgLock sync.Mutex // serializes all wgdev operations; see lock order comment below
+
+	// peerByIPRoute is a longest-prefix-match table built from
+	// lastCfgFull.Peers AllowedIPs. It's the slow path for
+	// SetPeerByIPPacketFunc, used when LocalBackend's exact-IP fast path
+	// (nodeByAddr) misses — i.e. for subnet routes and exit-node default
+	// routes. Built from lastCfgFull (the wireguard-filtered peer list)
+	// rather than the netmap so that exit-node selection is honored: the
+	// netmap has 0.0.0.0/0 in AllowedIPs for every exit-capable peer, but
+	// lastCfgFull only has it for the currently-selected exit node.
+	//
+	// Replaced (not mutated) by maybeReconfigWireguardLocked. Read by
+	// the per-packet wgdev callback without locking.
+	peerByIPRoute atomic.Pointer[bart.Table[key.NodePublic]]
+
+	lastCfgFull        wgcfg.Config
+	lastRouter         *router.Config
+	lastDNSConfig      dns.ConfigView    // or invalid if none
+	lastIsSubnetRouter bool              // was the node a primary subnet router in the last run.
+	reconfigureVPN     func() error      // or nil
+	conn25PacketHooks  Conn25PacketHooks // or nil
 
 	mu             sync.Mutex         // guards following; see lock order comment below
 	netMap         *netmap.NetworkMap // or nil
@@ -461,10 +443,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		ForceDiscoKey:  conf.ForceDiscoKey,
 		OnDERPRecv:     conf.OnDERPRecv,
 	}
-	if buildfeatures.HasLazyWG {
-		magicsockOpts.NoteRecvActivity = e.noteRecvActivity
-	}
-
 	var err error
 	e.magicConn, err = magicsock.NewConn(magicsockOpts)
 	if err != nil {
@@ -532,6 +510,16 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	e.logf("Creating WireGuard device...")
 	e.wgdev = wgcfg.NewDevice(e.tundev, e.magicConn.Bind(), e.wgLogger.DeviceLogger)
 	closePool.addFunc(e.wgdev.Close)
+
+	// Install a default outbound-packet peer lookup callback. It uses only
+	// the engine's BART table, which is rebuilt from the wireguard-filtered
+	// peer list on every Reconfig. Consumers (e.g. LocalBackend) may later
+	// call SetPeerByIPPacketFunc to additionally install a fast path for
+	// exact node-address matches; the BART remains the slow-path fallback.
+	// Without this default, callers that don't run a LocalBackend would
+	// have no way to route outbound packets to peers, since peers are
+	// created lazily from inbound packets only via SetPeerLookupFunc.
+	e.SetPeerByIPPacketFunc(nil)
 	closePool.addFunc(func() {
 		if err := e.magicConn.Close(); err != nil {
 			e.logf("error closing magicconn: %v", err)
@@ -691,163 +679,11 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 	return filter.Accept
 }
 
-var debugTrimWireguard = envknob.RegisterOptBool("TS_DEBUG_TRIM_WIREGUARD")
-
-// forceFullWireguardConfig reports whether we should give wireguard our full
-// network map, even for inactive peers.
-//
-// TODO(bradfitz): remove this at some point. We had a TODO to do it before 1.0
-// but it's still there as of 1.30. Really we should not do this wireguard lazy
-// peer config at all and just fix wireguard-go to not have so much extra memory
-// usage per peer. That would simplify a lot of Tailscale code. OTOH, we have 50
-// MB of memory on iOS now instead of 15 MB, so the other option is to just give
-// up on lazy wireguard config and blow the memory and hope for the best on iOS.
-// That's sad too. Or we get rid of these knobs (lazy wireguard config has been
-// stable!) but I'm worried that a future regression would be easier to debug
-// with these knobs in place.
-func (e *userspaceEngine) forceFullWireguardConfig(numPeers int) bool {
-	// Did the user explicitly enable trimming via the environment variable knob?
-	if b, ok := debugTrimWireguard().Get(); ok {
-		return !b
-	}
-	return e.controlKnobs != nil && e.controlKnobs.KeepFullWGConfig.Load()
-}
-
-// isTrimmablePeer reports whether p is a peer that we can trim out of the
-// network map.
-//
-// For implementation simplicity, we can only trim peers that have
-// only non-subnet AllowedIPs (an IPv4 /32 or IPv6 /128), which is the
-// common case for most peers. Subnet router nodes will just always be
-// created in the wireguard-go config.
-func (e *userspaceEngine) isTrimmablePeer(p *wgcfg.Peer, numPeers int) bool {
-	if e.forceFullWireguardConfig(numPeers) {
-		return false
-	}
-
-	// AllowedIPs must all be single IPs, not subnets.
-	for _, aip := range p.AllowedIPs {
-		if !aip.IsSingleIP() {
-			return false
-		}
-	}
-	return true
-}
-
-// noteRecvActivity is called by magicsock when a packet has been
-// received for the peer with node key nk. Magicsock calls this no
-// more than every 10 seconds for a given peer.
-func (e *userspaceEngine) noteRecvActivity(nk key.NodePublic) {
-	e.wgLock.Lock()
-	defer e.wgLock.Unlock()
-
-	if _, ok := e.recvActivityAt[nk]; !ok {
-		// Not a trimmable peer we care about tracking. (See isTrimmablePeer)
-		if e.trimmedNodes[nk] {
-			e.logf("wgengine: [unexpected] noteReceiveActivity called on idle node %v that's not in recvActivityAt", nk.ShortString())
-		}
-		return
-	}
-	now := e.timeNow()
-	e.recvActivityAt[nk] = now
-
-	// As long as there's activity, periodically poll the engine to get
-	// stats for the far away side effect of
-	// ipn/ipnlocal.LocalBackend.parseWgStatusLocked to log activity, for
-	// use in various admin dashboards.
-	// This particularly matters on platforms without a connected GUI, as
-	// the GUIs generally poll this enough to cause that logging. But
-	// tailscaled alone did not, hence this.
-	if e.lastStatusPollTime.IsZero() || now.Sub(e.lastStatusPollTime) >= statusPollInterval {
-		e.lastStatusPollTime = now
-		go e.RequestStatus()
-	}
-
-	// If the last activity time jumped a bunch (say, at least
-	// half the idle timeout) then see if we need to reprogram
-	// WireGuard. This could probably be just
-	// lazyPeerIdleThreshold without the divide by 2, but
-	// maybeReconfigWireguardLocked is cheap enough to call every
-	// couple minutes (just not on every packet).
-	if e.trimmedNodes[nk] {
-		e.logf("wgengine: idle peer %v now active, reconfiguring WireGuard", nk.ShortString())
-		e.maybeReconfigWireguardLocked(nil)
-	}
-}
-
-// isActiveSinceLocked reports whether the peer identified by (nk, ip)
-// has had a packet sent to or received from it since t.
+// maybeReconfigWireguardLocked reconfigures wireguard-go with the current
+// full config, installing a PeerLookupFunc for on-demand peer creation.
 //
 // e.wgLock must be held.
-func (e *userspaceEngine) isActiveSinceLocked(nk key.NodePublic, ip netip.Addr, t mono.Time) bool {
-	if e.recvActivityAt[nk].After(t) {
-		return true
-	}
-	timePtr, ok := e.sentActivityAt[ip]
-	if !ok {
-		return false
-	}
-	return timePtr.LoadAtomic().After(t)
-}
-
-// maybeReconfigInputs holds the inputs to the maybeReconfigWireguardLocked
-// function. If these things don't change between calls, there's nothing to do.
-//
-// If you add a field, update Equal and Clone, and add a case to
-// TestMaybeReconfigInputsEqual.
-type maybeReconfigInputs struct {
-	WGConfig     *wgcfg.Config
-	TrimmedNodes map[key.NodePublic]bool
-
-	// TrackNodes and TrackIPs are built in full.Peers iteration order,
-	// which is sorted by NodeID (via sortedPeers -> WGCfg). Equal uses
-	// order-dependent comparison, so any change to that ordering
-	// invariant must update the comparison logic.
-	TrackNodes views.Slice[key.NodePublic]
-	TrackIPs   views.Slice[netip.Addr]
-}
-
-func (i *maybeReconfigInputs) Equal(o *maybeReconfigInputs) bool {
-	if i == o {
-		return true
-	}
-	if i == nil || o == nil {
-		return false
-	}
-	if !i.WGConfig.Equal(o.WGConfig) {
-		return false
-	}
-	if len(i.TrimmedNodes) != len(o.TrimmedNodes) {
-		return false
-	}
-	for k := range i.TrimmedNodes {
-		if !o.TrimmedNodes[k] {
-			return false
-		}
-	}
-	if !views.SliceEqual(i.TrackNodes, o.TrackNodes) {
-		return false
-	}
-	return views.SliceEqual(i.TrackIPs, o.TrackIPs)
-}
-
-func (i *maybeReconfigInputs) Clone() *maybeReconfigInputs {
-	if i == nil {
-		return nil
-	}
-	v := *i
-	v.WGConfig = i.WGConfig.Clone()
-	v.TrimmedNodes = maps.Clone(i.TrimmedNodes)
-	return &v
-}
-
-// discoChanged are the set of peers whose disco keys have changed, implying they've restarted.
-// If a peer is in this set and was previously in the live wireguard config,
-// it needs to be first removed and then re-added to flush out its wireguard session key.
-// If discoChanged is nil or empty, this extra removal step isn't done.
-//
-// e.wgLock must be held.
-func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.NodePublic]bool) error {
+func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 	if hook := e.testMaybeReconfigHook; hook != nil {
 		hook()
 		return nil
@@ -856,181 +692,49 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 	full := e.lastCfgFull
 	e.wgLogger.SetPeers(full.Peers)
 
-	// Compute a minimal config to pass to wireguard-go
-	// based on the full config. Prune off all the peers
-	// and only add the active ones back.
-	min := full
-	min.Peers = make([]wgcfg.Peer, 0, e.lastNMinPeers)
-
-	// We'll only keep a peer around if it's been active in
-	// the past 5 minutes. That's more than WireGuard's key
-	// rotation time anyway so it's no harm if we remove it
-	// later if it's been inactive.
-	var activeCutoff mono.Time
-	if buildfeatures.HasLazyWG {
-		activeCutoff = e.timeNow().Add(-lazyPeerIdleThreshold)
-	}
-
-	// Not all peers can be trimmed from the network map (see
-	// isTrimmablePeer). For those that are trimmable, keep track of
-	// their NodeKey and Tailscale IPs. These are the ones we'll need
-	// to install tracking hooks for to watch their send/receive
-	// activity.
-	//
-	// trackNodes and trackIPs are appended in full.Peers order (sorted
-	// by NodeID). maybeReconfigInputs.Equal depends on this ordering;
-	// see the struct comment.
-	var trackNodes []key.NodePublic
-	var trackIPs []netip.Addr
-	if buildfeatures.HasLazyWG {
-		trackNodes = make([]key.NodePublic, 0, len(full.Peers))
-		trackIPs = make([]netip.Addr, 0, len(full.Peers))
-	}
-
-	// Don't re-alloc the map; the Go compiler optimizes map clears as of
-	// Go 1.11, so we can re-use the existing + allocated map.
-	if e.trimmedNodes != nil {
-		clear(e.trimmedNodes)
-	} else {
-		e.trimmedNodes = make(map[key.NodePublic]bool)
-	}
-
-	needRemoveStep := false
-	for i := range full.Peers {
-		p := &full.Peers[i]
-		nk := p.PublicKey
-		if !buildfeatures.HasLazyWG || !e.isTrimmablePeer(p, len(full.Peers)) {
-			min.Peers = append(min.Peers, *p)
-			if discoChanged[nk] {
-				needRemoveStep = true
-			}
-			continue
-		}
-		trackNodes = append(trackNodes, nk)
-		recentlyActive := false
-		for _, cidr := range p.AllowedIPs {
-			trackIPs = append(trackIPs, cidr.Addr())
-			recentlyActive = recentlyActive || e.isActiveSinceLocked(nk, cidr.Addr(), activeCutoff)
-		}
-		if recentlyActive {
-			min.Peers = append(min.Peers, *p)
-			if discoChanged[nk] {
-				needRemoveStep = true
-			}
-		} else {
-			e.trimmedNodes[nk] = true
+	// Rebuild the prefix-match peer routing table from the current
+	// (wireguard-filtered) peer list and publish it atomically.
+	rt := &bart.Table[key.NodePublic]{}
+	for _, p := range full.Peers {
+		for _, pfx := range p.AllowedIPs {
+			rt.Insert(pfx, p.PublicKey)
 		}
 	}
-	e.lastNMinPeers = len(min.Peers)
+	e.peerByIPRoute.Store(rt)
 
-	if changed := checkchange.Update(&e.lastEngineInputs, &maybeReconfigInputs{
-		WGConfig:     &min,
-		TrimmedNodes: e.trimmedNodes,
-		TrackNodes:   views.SliceOf(trackNodes),
-		TrackIPs:     views.SliceOf(trackIPs),
-	}); !changed {
-		return nil
-	}
-
-	if buildfeatures.HasLazyWG {
-		e.updateActivityMapsLocked(trackNodes, trackIPs)
-	}
-
-	if needRemoveStep {
-		minner := min
-		minner.Peers = nil
-		numRemove := 0
-		for _, p := range min.Peers {
-			if discoChanged[p.PublicKey] {
-				numRemove++
-				continue
-			}
-			minner.Peers = append(minner.Peers, p)
-		}
-		if numRemove > 0 {
-			e.logf("wgengine: Reconfig: removing session keys for %d peers", numRemove)
-			if err := wgcfg.ReconfigDevice(e.wgdev, &minner, e.logf); err != nil {
-				e.logf("wgdev.Reconfig: %v", err)
-				return err
-			}
-		}
-	}
-
-	e.logf("wgengine: Reconfig: configuring userspace WireGuard config (with %d/%d peers)", len(min.Peers), len(full.Peers))
-	if err := wgcfg.ReconfigDevice(e.wgdev, &min, e.logf); err != nil {
+	e.logf("wgengine: Reconfig: configuring userspace WireGuard config (with %d peers)", len(full.Peers))
+	if err := wgcfg.ReconfigDevice(e.wgdev, &full, e.logf); err != nil {
 		e.logf("wgdev.Reconfig: %v", err)
 		return err
 	}
 	return nil
 }
 
-// updateActivityMapsLocked updates the data structures used for tracking the activity
-// of wireguard peers that we might add/remove dynamically from the real config
-// as given to wireguard-go.
+// SetPeerByIPPacketFunc installs a callback used by wireguard-go to look up
+// which peer should handle an outbound packet by destination IP.
 //
-// e.wgLock must be held.
-func (e *userspaceEngine) updateActivityMapsLocked(trackNodes []key.NodePublic, trackIPs []netip.Addr) {
-	if !buildfeatures.HasLazyWG {
-		return
-	}
-	// Generate the new map of which nodekeys we want to track
-	// receive times for.
-	mr := map[key.NodePublic]mono.Time{} // TODO: only recreate this if set of keys changed
-	for _, nk := range trackNodes {
-		// Preserve old times in the new map, but also
-		// populate map entries for new trackNodes values with
-		// time.Time{} zero values. (Only entries in this map
-		// are tracked, so the Time zero values allow it to be
-		// tracked later)
-		mr[nk] = e.recvActivityAt[nk]
-	}
-	e.recvActivityAt = mr
-
-	oldTime := e.sentActivityAt
-	e.sentActivityAt = make(map[netip.Addr]*mono.Time, len(oldTime))
-	oldFunc := e.destIPActivityFuncs
-	e.destIPActivityFuncs = make(map[netip.Addr]func(), len(oldFunc))
-
-	updateFn := func(timePtr *mono.Time) func() {
-		return func() {
-			now := e.timeNow()
-			old := timePtr.LoadAtomic()
-
-			// How long's it been since we last sent a packet?
-			elapsed := now.Sub(old)
-			if old == 0 {
-				// For our first packet, old is 0, which has indeterminate meaning.
-				// Set elapsed to a big number (four score and seven years).
-				elapsed = 762642 * time.Hour
-			}
-
-			if elapsed >= packetSendTimeUpdateFrequency {
-				timePtr.StoreAtomic(now)
-			}
-			// On a big jump, assume we might no longer be in the wireguard
-			// config and go check.
-			if elapsed >= packetSendRecheckWireguardThreshold {
-				e.wgLock.Lock()
-				defer e.wgLock.Unlock()
-				e.maybeReconfigWireguardLocked(nil)
+// fn is an optional fast path for exact node-address matches (e.g. dst is a
+// Tailscale IP). On miss (or if fn is nil), the engine's own BART table
+// ([userspaceEngine.peerByIPRoute], built from the wireguard-filtered peer
+// list) is consulted to handle subnet routes and exit-node default routes.
+//
+// [NewUserspaceEngine] installs a BART-only default at engine creation time,
+// so callers that don't call SetPeerByIPPacketFunc (e.g. those not running
+// a LocalBackend) still get working outbound packet routing.
+func (e *userspaceEngine) SetPeerByIPPacketFunc(fn func(netip.Addr) (_ key.NodePublic, ok bool)) {
+	e.wgdev.SetPeerByIPPacketFunc(func(_, dst netip.Addr, _ []byte) (device.NoisePublicKey, bool) {
+		if fn != nil {
+			if pk, ok := fn(dst); ok {
+				return pk.Raw32(), true
 			}
 		}
-	}
-
-	for _, ip := range trackIPs {
-		timePtr := oldTime[ip]
-		if timePtr == nil {
-			timePtr = new(mono.Time)
+		if rt := e.peerByIPRoute.Load(); rt != nil {
+			if pk, ok := rt.Lookup(dst); ok {
+				return pk.Raw32(), true
+			}
 		}
-		e.sentActivityAt[ip] = timePtr
-
-		fn := oldFunc[ip]
-		if fn == nil {
-			fn = updateFn(timePtr)
-		}
-		e.destIPActivityFuncs[ip] = fn
-	}
-	e.tundev.SetDestIPActivityFuncs(e.destIPActivityFuncs)
+		return device.NoisePublicKey{}, false
+	})
 }
 
 // hasOverlap checks if there is a IPPrefix which is common amongst the two
@@ -1119,7 +823,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	}
 	isSubnetRouterChanged := buildfeatures.HasAdvertiseRoutes && isSubnetRouter != e.lastIsSubnetRouter
 
-	engineChanged := checkchange.Update(&e.lastEngineFull, cfg)
+	engineChanged := !e.lastCfgFull.Equal(cfg)
 	routerChanged := checkchange.Update(&e.lastRouter, routerCfg)
 	dnsChanged := buildfeatures.HasDNS && !e.lastDNSConfig.Equal(dnsCfg.View())
 	if dnsChanged {
@@ -1151,11 +855,10 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	}
 
 	// See if any peers have changed disco keys, which means they've restarted.
-	// If so, we need to update the wireguard-go/device.Device in two phases:
-	// once without the node which has restarted, to clear its wireguard session key,
-	// and a second time with it.
+	// If so, remove the peer from wireguard-go to flush its session key,
+	// then let the PeerLookupFunc re-create it on demand.
 	discoChanged := make(map[key.NodePublic]bool)
-	{
+	if engineChanged {
 		prevEP := make(map[key.NodePublic]key.DiscoPublic)
 		for i := range e.lastCfgFull.Peers {
 			if p := &e.lastCfgFull.Peers[i]; !p.DiscoKey.IsZero() {
@@ -1168,7 +871,6 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 				continue
 			}
 
-			// If the key changed, mark the connection for reconfiguration.
 			pub := p.PublicKey
 
 			if old, ok := prevEP[pub]; ok && old != p.DiscoKey {
@@ -1209,21 +911,36 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		e.testDiscoChangedHook(discoChanged)
 	}
 
+	if !e.lastCfgFull.PrivateKey.Equal(cfg.PrivateKey) {
+		// Tell magicsock about the new (or initial) private key
+		// (which is needed by DERP) before wgdev gets it, as wgdev
+		// will start trying to handshake, which we want to be able to
+		// go over DERP.
+		if err := e.magicConn.SetPrivateKey(cfg.PrivateKey); err != nil {
+			e.logf("wgengine: Reconfig: SetPrivateKey: %v", err)
+		}
+
+		if err := e.wgdev.SetPrivateKey(key.NodePrivateAs[device.NoisePrivateKey](cfg.PrivateKey)); err != nil {
+			e.logf("wgengine: Reconfig: wgdev.SetPrivateKey: %v", err)
+		}
+	}
+
 	e.lastCfgFull = *cfg.Clone()
 
-	// Tell magicsock about the new (or initial) private key
-	// (which is needed by DERP) before wgdev gets it, as wgdev
-	// will start trying to handshake, which we want to be able to
-	// go over DERP.
-	if err := e.magicConn.SetPrivateKey(cfg.PrivateKey); err != nil {
-		e.logf("wgengine: Reconfig: SetPrivateKey: %v", err)
-	}
 	e.magicConn.UpdatePeers(peerSet)
 	e.magicConn.SetPreferredPort(listenPort)
 	e.magicConn.UpdatePMTUD()
 
-	if err := e.maybeReconfigWireguardLocked(discoChanged); err != nil {
-		return err
+	if engineChanged {
+		if err := e.maybeReconfigWireguardLocked(); err != nil {
+			return err
+		}
+		// Now that we've reconfigured wireguard-go, remove any peers with
+		// changed disco keys to flush their session keys, and let them be
+		// re-created on demand by the PeerLookupFunc.
+		for pub := range discoChanged {
+			e.wgdev.RemovePeer(pub.Raw32())
+		}
 	}
 
 	// Cleanup map of tsmp marks for peers that no longer exists in config.
@@ -1368,8 +1085,14 @@ func (e *userspaceEngine) PeerByKey(pubKey key.NodePublic) (_ wgint.Peer, ok boo
 	if dev == nil {
 		return wgint.Peer{}, false
 	}
-	peer := dev.LookupPeer(pubKey.Raw32())
-	if peer == nil {
+	// Use LookupActivePeer (not LookupPeer) to avoid triggering on-demand
+	// peer creation via PeerLookupFunc. PeerByKey is called from status
+	// polling paths (getStatus, getPeerStatusLite) which iterate every peer
+	// in the netmap; using LookupPeer would lazily create a wireguard-go
+	// peer for every single netmap peer on each status poll, leaking
+	// memory via per-peer queues and goroutines.
+	peer, ok := dev.LookupActivePeer(pubKey.Raw32())
+	if !ok {
 		return wgint.Peer{}, false
 	}
 	return wgint.PeerOf(peer), true
@@ -1465,8 +1188,6 @@ func (e *userspaceEngine) Close() {
 	e.closing = true
 	e.mu.Unlock()
 
-	r := bufio.NewReader(strings.NewReader(""))
-	e.wgdev.IpcSetOperation(r)
 	e.magicConn.Close()
 	if e.netMonOwned {
 		e.netMon.Close()
