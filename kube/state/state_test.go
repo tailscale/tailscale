@@ -58,9 +58,9 @@ func TestSetInitialStateKeys(t *testing.T) {
 			expected: map[ipn.StateKey][]byte{
 				keyPodUID:     podUID,
 				keyCapVer:     expectedCapVer,
-				keyDeviceID:   nil,
-				keyDeviceFQDN: nil,
-				keyDeviceIPs:  nil,
+				keyDeviceID:   []byte("existing-device-id"),
+				keyDeviceFQDN: []byte("existing-device-fqdn"),
+				keyDeviceIPs:  []byte(`["1.2.3.4"]`),
 			},
 		},
 	} {

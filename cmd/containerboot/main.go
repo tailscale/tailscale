@@ -139,8 +139,8 @@ import (
 
 	"tailscale.com/health"
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/conffile"
 	kubeutils "tailscale.com/k8s-operator"
+	"tailscale.com/kube/authkey"
 	healthz "tailscale.com/kube/health"
 	"tailscale.com/kube/kubetypes"
 	klc "tailscale.com/kube/localclient"
@@ -209,7 +209,7 @@ func run() error {
 
 	var tailscaledConfigAuthkey string
 	if isOneStepConfig(cfg) {
-		tailscaledConfigAuthkey = authkeyFromTailscaledConfig(cfg.TailscaledConfigFilePath)
+		tailscaledConfigAuthkey = authkey.AuthKeyFromConfig(cfg.TailscaledConfigFilePath)
 	}
 
 	var kc *kubeClient
@@ -374,7 +374,7 @@ authLoop:
 					if hasKubeStateStore(cfg) {
 						log.Printf("Auth key missing or invalid (NeedsLogin state), disconnecting from control and requesting new key from operator")
 
-						err := kc.setAndWaitForAuthKeyReissue(bootCtx, client, cfg, tailscaledConfigAuthkey)
+						err := kc.setAndWaitForAuthKeyReissue(ctx, client, cfg, tailscaledConfigAuthkey)
 						if err != nil {
 							return fmt.Errorf("failed to get a reissued authkey: %w", err)
 						}
@@ -414,7 +414,7 @@ authLoop:
 				if isOneStepConfig(cfg) && hasKubeStateStore(cfg) {
 					log.Printf("Auth key failed to authenticate (may be expired or single-use), disconnecting from control and requesting new key from operator")
 
-					err := kc.setAndWaitForAuthKeyReissue(bootCtx, client, cfg, tailscaledConfigAuthkey)
+					err := kc.setAndWaitForAuthKeyReissue(ctx, client, cfg, tailscaledConfigAuthkey)
 					if err != nil {
 						return fmt.Errorf("failed to get a reissued authkey: %w", err)
 					}
@@ -1023,12 +1023,4 @@ func serviceIPsFromNetMap(nm *netmap.NetworkMap, fqdn dnsname.FQDN) []netip.Pref
 	}
 
 	return prefixes
-}
-
-func authkeyFromTailscaledConfig(path string) string {
-	if cfg, err := conffile.Load(path); err == nil && cfg.Parsed.AuthKey != nil {
-		return *cfg.Parsed.AuthKey
-	}
-
-	return ""
 }
