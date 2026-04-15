@@ -341,6 +341,22 @@ main() {
 				echo "https://github.com/tailscale-dev/deck-tailscale"
 				exit 1
 				;;
+			solus)
+				echo "Solus packages and maintains its own Tailscale build."
+				echo "Please install it with the native package manager:"
+				echo
+				echo "    sudo eopkg install tailscale"
+				echo
+				exit 1
+				;;
+			aerynos|serpentos)
+				echo "AerynOS packages and maintains its own Tailscale build."
+				echo "Please install it with the native package manager:"
+				echo
+				echo "    sudo moss install tailscale"
+				echo
+				exit 1
+				;;
 			kde-linux)
 				echo "The maintainers of KDE Linux provide documentation on multiple ways to install Tailscale. These instructions are not officially supported by Tailscale:"
 				echo "https://kde.org/linux/docs/more-software/#tailscale"
