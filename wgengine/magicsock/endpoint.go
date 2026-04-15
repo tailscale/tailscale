@@ -530,11 +530,6 @@ func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
 	elapsed := now.Sub(de.lastRecvWG.LoadAtomic())
 	if elapsed > 10*time.Second {
 		de.lastRecvWG.StoreAtomic(now)
-
-		if de.c.noteRecvActivity == nil {
-			return false
-		}
-		de.c.noteRecvActivity(de.publicKey)
 		return true
 	}
 	return false

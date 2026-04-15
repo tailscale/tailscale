@@ -215,6 +215,10 @@ func (e *watchdogEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.watchdog(SetNetworkMap, func() { e.wrap.SetNetworkMap(nm) })
 }
 
+func (e *watchdogEngine) SetPeerByIPPacketFunc(fn func(netip.Addr) (_ key.NodePublic, ok bool)) {
+	e.wrap.SetPeerByIPPacketFunc(fn)
+}
+
 func (e *watchdogEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, size int, cb func(*ipnstate.PingResult)) {
 	e.watchdog(Ping, func() { e.wrap.Ping(ip, pingType, size, cb) })
 }

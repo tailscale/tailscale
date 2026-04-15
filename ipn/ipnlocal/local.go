@@ -540,6 +540,8 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
 
+	e.SetPeerByIPPacketFunc(b.lookupPeerByIP)
+
 	if sys.InitialConfig != nil {
 		if err := b.initPrefsFromConfig(sys.InitialConfig); err != nil {
 			return nil, err
@@ -5119,6 +5121,27 @@ func extractPeerAPIPorts(services []tailcfg.Service) portPair {
 // controlclient, or nil if no network map was received yet.
 func (b *LocalBackend) NetMap() *netmap.NetworkMap {
 	return b.currentNode().NetMap()
+}
+
+// lookupPeerByIP returns the node public key for the peer that owns the
+// given IP address. It is the fast path for [Engine.SetPeerByIPPacketFunc],
+// handling exact-IP matches against node addresses; subnet routes and exit
+// nodes are handled by a BART-based fallback in userspaceEngine that uses
+// the wireguard-filtered peer list (see lastCfgFull).
+//
+// It is called by wireguard-go on every outbound packet (not cached), so
+// it must be fast.
+func (b *LocalBackend) lookupPeerByIP(ip netip.Addr) (key.NodePublic, bool) {
+	nb := b.currentNode()
+	nid, ok := nb.NodeByAddr(ip)
+	if !ok {
+		return key.NodePublic{}, false
+	}
+	peer, ok := nb.NodeByID(nid)
+	if !ok {
+		return key.NodePublic{}, false
+	}
+	return peer.Key(), true
 }
 
 func (b *LocalBackend) isEngineBlocked() bool {

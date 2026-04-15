@@ -242,6 +242,25 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListe
 func (s *magicStack) Reconfig(cfg *wgcfg.Config) error {
 	s.tsTun.SetWGConfig(cfg)
 	s.wgLogger.SetPeers(cfg.Peers)
+
+	// In production, LocalBackend installs a PeerByIPPacketFunc via
+	// Engine.SetPeerByIPPacketFunc. Tests that bypass LocalBackend need
+	// to install one here for outbound packet routing.
+	ipToPeer := make(map[netip.Addr]device.NoisePublicKey, len(cfg.Peers))
+	for _, p := range cfg.Peers {
+		pk := p.PublicKey.Raw32()
+		for _, pfx := range p.AllowedIPs {
+			if pfx.IsSingleIP() {
+				ipToPeer[pfx.Addr()] = pk
+			}
+		}
+	}
+	s.dev.SetPeerByIPPacketFunc(func(_, dst netip.Addr, _ []byte) (device.NoisePublicKey, bool) {
+		pk, ok := ipToPeer[dst]
+		return pk, ok
+	})
+
+	s.dev.SetPrivateKey(key.NodePrivateAs[device.NoisePrivateKey](cfg.PrivateKey))
 	return wgcfg.ReconfigDevice(s.dev, cfg, s.conn.logf)
 }
 
@@ -1442,13 +1461,8 @@ func TestDiscoStringLogRace(t *testing.T) {
 }
 
 func Test32bitAlignment(t *testing.T) {
-	// Need an associated conn with non-nil noteRecvActivity to
-	// trigger interesting work on the atomics in endpoint.
-	called := 0
 	de := endpoint{
-		c: &Conn{
-			noteRecvActivity: func(key.NodePublic) { called++ },
-		},
+		c: &Conn{},
 	}
 
 	if off := unsafe.Offsetof(de.lastRecvWG); off%8 != 0 {
@@ -1456,13 +1470,7 @@ func Test32bitAlignment(t *testing.T) {
 	}
 
 	de.noteRecvActivity(epAddr{}, mono.Now()) // verify this doesn't panic on 32-bit
-	if called != 1 {
-		t.Fatal("expected call to noteRecvActivity")
-	}
-	de.noteRecvActivity(epAddr{}, mono.Now())
-	if called != 1 {
-		t.Error("expected no second call to noteRecvActivity")
-	}
+	de.noteRecvActivity(epAddr{}, mono.Now()) // second call should be throttled
 }
 
 // newTestConn returns a new Conn.
@@ -3957,60 +3965,55 @@ func TestConn_receiveIP(t *testing.T) {
 		// If [*endpoint] then we expect 'got' to be the same [*endpoint]. If
 		// [*lazyEndpoint] and [*lazyEndpoint.maybeEP] is non-nil, we expect
 		// got.maybeEP to also be non-nil. Must not be reused across tests.
-		wantEndpointType           wgconn.Endpoint
-		wantSize                   int
-		wantIsGeneveEncap          bool
-		wantOk                     bool
-		wantMetricInc              *clientmetric.Metric
-		wantNoteRecvActivityCalled bool
+		wantEndpointType  wgconn.Endpoint
+		wantSize          int
+		wantIsGeneveEncap bool
+		wantOk            bool
+		wantMetricInc     *clientmetric.Metric
 	}{
 		{
-			name:                       "naked-disco",
-			b:                          looksLikeNakedDisco,
-			ipp:                        netip.MustParseAddrPort("127.0.0.1:7777"),
-			cache:                      &epAddrEndpointCache{},
-			wantEndpointType:           nil,
-			wantSize:                   0,
-			wantIsGeneveEncap:          false,
-			wantOk:                     false,
-			wantMetricInc:              metricRecvDiscoBadPeer,
-			wantNoteRecvActivityCalled: false,
+			name:              "naked-disco",
+			b:                 looksLikeNakedDisco,
+			ipp:               netip.MustParseAddrPort("127.0.0.1:7777"),
+			cache:             &epAddrEndpointCache{},
+			wantEndpointType:  nil,
+			wantSize:          0,
+			wantIsGeneveEncap: false,
+			wantOk:            false,
+			wantMetricInc:     metricRecvDiscoBadPeer,
 		},
 		{
-			name:                       "geneve-encap-disco",
-			b:                          looksLikeGeneveDisco,
-			ipp:                        netip.MustParseAddrPort("127.0.0.1:7777"),
-			cache:                      &epAddrEndpointCache{},
-			wantEndpointType:           nil,
-			wantSize:                   0,
-			wantIsGeneveEncap:          false,
-			wantOk:                     false,
-			wantMetricInc:              metricRecvDiscoBadPeer,
-			wantNoteRecvActivityCalled: false,
+			name:              "geneve-encap-disco",
+			b:                 looksLikeGeneveDisco,
+			ipp:               netip.MustParseAddrPort("127.0.0.1:7777"),
+			cache:             &epAddrEndpointCache{},
+			wantEndpointType:  nil,
+			wantSize:          0,
+			wantIsGeneveEncap: false,
+			wantOk:            false,
+			wantMetricInc:     metricRecvDiscoBadPeer,
 		},
 		{
-			name:                       "STUN-binding",
-			b:                          looksLikeSTUNBinding,
-			ipp:                        netip.MustParseAddrPort("127.0.0.1:7777"),
-			cache:                      &epAddrEndpointCache{},
-			wantEndpointType:           nil,
-			wantSize:                   0,
-			wantIsGeneveEncap:          false,
-			wantOk:                     false,
-			wantMetricInc:              findMetricByName("netcheck_stun_recv_ipv4"),
-			wantNoteRecvActivityCalled: false,
+			name:              "STUN-binding",
+			b:                 looksLikeSTUNBinding,
+			ipp:               netip.MustParseAddrPort("127.0.0.1:7777"),
+			cache:             &epAddrEndpointCache{},
+			wantEndpointType:  nil,
+			wantSize:          0,
+			wantIsGeneveEncap: false,
+			wantOk:            false,
+			wantMetricInc:     findMetricByName("netcheck_stun_recv_ipv4"),
 		},
 		{
-			name:                       "naked-WireGuard-init-lazyEndpoint-empty-peerMap",
-			b:                          looksLikeNakedWireGuardInit,
-			ipp:                        netip.MustParseAddrPort("127.0.0.1:7777"),
-			cache:                      &epAddrEndpointCache{},
-			wantEndpointType:           &lazyEndpoint{},
-			wantSize:                   len(looksLikeNakedWireGuardInit),
-			wantIsGeneveEncap:          false,
-			wantOk:                     true,
-			wantMetricInc:              nil,
-			wantNoteRecvActivityCalled: false,
+			name:              "naked-WireGuard-init-lazyEndpoint-empty-peerMap",
+			b:                 looksLikeNakedWireGuardInit,
+			ipp:               netip.MustParseAddrPort("127.0.0.1:7777"),
+			cache:             &epAddrEndpointCache{},
+			wantEndpointType:  &lazyEndpoint{},
+			wantSize:          len(looksLikeNakedWireGuardInit),
+			wantIsGeneveEncap: false,
+			wantOk:            true,
+			wantMetricInc:     nil,
 		},
 		{
 			name:                            "naked-WireGuard-init-endpoint-matching-peerMap-entry",
@@ -4024,19 +4027,17 @@ func TestConn_receiveIP(t *testing.T) {
 			wantIsGeneveEncap:               false,
 			wantOk:                          true,
 			wantMetricInc:                   nil,
-			wantNoteRecvActivityCalled:      true,
 		},
 		{
-			name:                       "geneve-WireGuard-init-lazyEndpoint-empty-peerMap",
-			b:                          looksLikeGeneveWireGuardInit,
-			ipp:                        netip.MustParseAddrPort("127.0.0.1:7777"),
-			cache:                      &epAddrEndpointCache{},
-			wantEndpointType:           &lazyEndpoint{},
-			wantSize:                   len(looksLikeGeneveWireGuardInit) - packet.GeneveFixedHeaderLength,
-			wantIsGeneveEncap:          true,
-			wantOk:                     true,
-			wantMetricInc:              nil,
-			wantNoteRecvActivityCalled: false,
+			name:              "geneve-WireGuard-init-lazyEndpoint-empty-peerMap",
+			b:                 looksLikeGeneveWireGuardInit,
+			ipp:               netip.MustParseAddrPort("127.0.0.1:7777"),
+			cache:             &epAddrEndpointCache{},
+			wantEndpointType:  &lazyEndpoint{},
+			wantSize:          len(looksLikeGeneveWireGuardInit) - packet.GeneveFixedHeaderLength,
+			wantIsGeneveEncap: true,
+			wantOk:            true,
+			wantMetricInc:     nil,
 		},
 		{
 			name:                            "geneve-WireGuard-init-lazyEndpoint-matching-peerMap-activity-noted",
@@ -4048,11 +4049,10 @@ func TestConn_receiveIP(t *testing.T) {
 			wantEndpointType: &lazyEndpoint{
 				maybeEP: newPeerMapInsertableEndpoint(0),
 			},
-			wantSize:                   len(looksLikeGeneveWireGuardInit) - packet.GeneveFixedHeaderLength,
-			wantIsGeneveEncap:          true,
-			wantOk:                     true,
-			wantMetricInc:              nil,
-			wantNoteRecvActivityCalled: true,
+			wantSize:          len(looksLikeGeneveWireGuardInit) - packet.GeneveFixedHeaderLength,
+			wantIsGeneveEncap: true,
+			wantOk:            true,
+			wantMetricInc:     nil,
 		},
 		{
 			name:                            "geneve-WireGuard-init-lazyEndpoint-matching-peerMap-no-activity-noted",
@@ -4064,17 +4064,15 @@ func TestConn_receiveIP(t *testing.T) {
 			wantEndpointType: &lazyEndpoint{
 				maybeEP: newPeerMapInsertableEndpoint(mono.Now().Add(time.Hour * 24)),
 			},
-			wantSize:                   len(looksLikeGeneveWireGuardInit) - packet.GeneveFixedHeaderLength,
-			wantIsGeneveEncap:          true,
-			wantOk:                     true,
-			wantMetricInc:              nil,
-			wantNoteRecvActivityCalled: false,
+			wantSize:          len(looksLikeGeneveWireGuardInit) - packet.GeneveFixedHeaderLength,
+			wantIsGeneveEncap: true,
+			wantOk:            true,
+			wantMetricInc:     nil,
 		},
 		// TODO(jwhited): verify cache.de is used when conditions permit
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			noteRecvActivityCalled := false
 			metricBefore := int64(0)
 			if tt.wantMetricInc != nil {
 				metricBefore = tt.wantMetricInc.Value()
@@ -4087,9 +4085,6 @@ func TestConn_receiveIP(t *testing.T) {
 				peerMap:    newPeerMap(),
 			}
 			c.havePrivateKey.Store(true)
-			c.noteRecvActivity = func(public key.NodePublic) {
-				noteRecvActivityCalled = true
-			}
 			var counts netlogtype.CountsByConnection
 			c.SetConnectionCounter(counts.Add)
 
@@ -4144,10 +4139,6 @@ func TestConn_receiveIP(t *testing.T) {
 			if tt.wantMetricInc != nil && tt.wantMetricInc.Value() != metricBefore+1 {
 				t.Errorf("receiveIP() metric %v not incremented", tt.wantMetricInc.Name())
 			}
-			if tt.wantNoteRecvActivityCalled != noteRecvActivityCalled {
-				t.Errorf("receiveIP() noteRecvActivityCalled = %v, want %v", noteRecvActivityCalled, tt.wantNoteRecvActivityCalled)
-			}
-
 			if tt.cache.de != nil {
 				switch ep := got.(type) {
 				case *endpoint:
@@ -4199,34 +4190,29 @@ func TestConn_receiveIP(t *testing.T) {
 
 func Test_lazyEndpoint_InitiationMessagePublicKey(t *testing.T) {
 	tests := []struct {
-		name                       string
-		callWithPeerMapKey         bool
-		maybeEPMatchingKey         bool
-		wantNoteRecvActivityCalled bool
+		name               string
+		callWithPeerMapKey bool
+		maybeEPMatchingKey bool
 	}{
 		{
-			name:                       "noteRecvActivity-called",
-			callWithPeerMapKey:         true,
-			maybeEPMatchingKey:         false,
-			wantNoteRecvActivityCalled: true,
+			name:               "noteRecvActivity-called",
+			callWithPeerMapKey: true,
+			maybeEPMatchingKey: false,
 		},
 		{
-			name:                       "maybeEP-early-return",
-			callWithPeerMapKey:         true,
-			maybeEPMatchingKey:         true,
-			wantNoteRecvActivityCalled: false,
+			name:               "maybeEP-early-return",
+			callWithPeerMapKey: true,
+			maybeEPMatchingKey: true,
 		},
 		{
-			name:                       "not-in-peerMap-early-return",
-			callWithPeerMapKey:         false,
-			maybeEPMatchingKey:         false,
-			wantNoteRecvActivityCalled: false,
+			name:               "not-in-peerMap-early-return",
+			callWithPeerMapKey: false,
+			maybeEPMatchingKey: false,
 		},
 		{
-			name:                       "not-in-peerMap-maybeEP-early-return",
-			callWithPeerMapKey:         false,
-			maybeEPMatchingKey:         true,
-			wantNoteRecvActivityCalled: false,
+			name:               "not-in-peerMap-maybeEP-early-return",
+			callWithPeerMapKey: false,
+			maybeEPMatchingKey: true,
 		},
 	}
 	for _, tt := range tests {
@@ -4239,19 +4225,7 @@ func Test_lazyEndpoint_InitiationMessagePublicKey(t *testing.T) {
 				key: key.NewDisco().Public(),
 			})
 
-			var noteRecvActivityCalledFor key.NodePublic
 			conn := newConn(t.Logf)
-			conn.noteRecvActivity = func(public key.NodePublic) {
-				// wireguard-go will call into ParseEndpoint if the "real"
-				// noteRecvActivity ends up JIT configuring the peer. Mimic that
-				// to ensure there are no deadlocks around conn.mu.
-				// See tailscale/tailscale#16651 & http://go/corp#30836
-				_, err := conn.ParseEndpoint(ep.publicKey.UntypedHexString())
-				if err != nil {
-					t.Fatalf("ParseEndpoint() err: %v", err)
-				}
-				noteRecvActivityCalledFor = public
-			}
 			ep.c = conn
 
 			var pubKey [32]byte
@@ -4267,13 +4241,6 @@ func Test_lazyEndpoint_InitiationMessagePublicKey(t *testing.T) {
 				le.maybeEP = ep
 			}
 			le.InitiationMessagePublicKey(pubKey)
-			want := key.NodePublic{}
-			if tt.wantNoteRecvActivityCalled {
-				want = ep.publicKey
-			}
-			if noteRecvActivityCalledFor.Compare(want) != 0 {
-				t.Fatalf("noteRecvActivityCalledFor = %v, want %v", noteRecvActivityCalledFor, want)
-			}
 		})
 	}
 }

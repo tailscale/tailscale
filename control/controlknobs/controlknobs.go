@@ -21,11 +21,6 @@ type Knobs struct {
 	// DisableUPnP indicates whether to attempt UPnP mapping.
 	DisableUPnP atomic.Bool
 
-	// KeepFullWGConfig is whether we should disable the lazy wireguard
-	// programming and instead give WireGuard the full netmap always, even for
-	// idle peers.
-	KeepFullWGConfig atomic.Bool
-
 	// RandomizeClientPort is whether control says we should randomize
 	// the client port.
 	RandomizeClientPort atomic.Bool
@@ -125,7 +120,6 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	}
 	has := capMap.Contains
 	var (
-		keepFullWG                           = has(tailcfg.NodeAttrDebugDisableWGTrim)
 		disableUPnP                          = has(tailcfg.NodeAttrDisableUPnP)
 		randomizeClientPort                  = has(tailcfg.NodeAttrRandomizeClientPort)
 		disableDeltaUpdates                  = has(tailcfg.NodeAttrDisableDeltaUpdates)
@@ -153,7 +147,6 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		oneCGNAT.Set(false)
 	}
 
-	k.KeepFullWGConfig.Store(keepFullWG)
 	k.DisableUPnP.Store(disableUPnP)
 	k.RandomizeClientPort.Store(randomizeClientPort)
 	k.OneCGNAT.Store(oneCGNAT)

@@ -164,7 +164,6 @@ type Conn struct {
 	derpActiveFunc         func()
 	idleFunc               func() time.Duration // nil means unknown
 	testOnlyPacketListener nettype.PacketListener
-	noteRecvActivity       func(key.NodePublic)                   // or nil, see Options.NoteRecvActivity
 	onDERPRecv             func(int, key.NodePublic, []byte) bool // or nil, see Options.OnDERPRecv
 	netMon                 *netmon.Monitor                        // must be non-nil
 	health                 *health.Tracker                        // or nil
@@ -457,19 +456,6 @@ type Options struct {
 	// Only used by tests.
 	TestOnlyPacketListener nettype.PacketListener
 
-	// NoteRecvActivity, if provided, is a func for magicsock to call
-	// whenever it receives a packet from a a peer if it's been more
-	// than ~10 seconds since the last one. (10 seconds is somewhat
-	// arbitrary; the sole user, lazy WireGuard configuration,
-	// just doesn't need or want it called on
-	// every packet, just every minute or two for WireGuard timeouts,
-	// and 10 seconds seems like a good trade-off between often enough
-	// and not too often.)
-	// The provided func is likely to call back into
-	// Conn.ParseEndpoint, which acquires Conn.mu. As such, you should
-	// not hold Conn.mu while calling it.
-	NoteRecvActivity func(key.NodePublic)
-
 	// NetMon is the network monitor to use.
 	// It must be non-nil.
 	NetMon *netmon.Monitor
@@ -648,7 +634,6 @@ func NewConn(opts Options) (*Conn, error) {
 	c.derpActiveFunc = opts.derpActiveFunc()
 	c.idleFunc = opts.IdleFunc
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
-	c.noteRecvActivity = opts.NoteRecvActivity
 	c.onDERPRecv = opts.OnDERPRecv
 
 	// Set up publishers and subscribers. Subscribe calls must return before
@@ -4270,16 +4255,10 @@ var _ conn.Endpoint = (*lazyEndpoint)(nil)
 
 // InitiationMessagePublicKey implements [conn.InitiationAwareEndpoint].
 // wireguard-go calls us here if we passed it a [*lazyEndpoint] for an
-// initiation message, for which it might not have the relevant peer configured,
-// enabling us to just-in-time configure it and note its activity via
-// [*endpoint.noteRecvActivity], before it performs peer lookup and attempts
-// decryption.
+// initiation message, for which it might not have the relevant peer configured.
+// Wireguard-go's PeerLookupFunc handles on-demand peer creation.
 //
-// Reception of all other WireGuard message types implies pre-existing knowledge
-// of the peer by wireguard-go for it to do useful work. See
-// [userspaceEngine.maybeReconfigWireguardLocked] &
-// [userspaceEngine.noteRecvActivity] for more details around just-in-time
-// wireguard-go peer (de)configuration.
+// We still update endpoint activity tracking for bestAddr management.
 func (le *lazyEndpoint) InitiationMessagePublicKey(peerPublicKey [32]byte) {
 	pubKey := key.NodePublicFromRaw32(mem.B(peerPublicKey[:]))
 	if le.maybeEP != nil && pubKey.Compare(le.maybeEP.publicKey) == 0 {
@@ -4287,9 +4266,6 @@ func (le *lazyEndpoint) InitiationMessagePublicKey(peerPublicKey [32]byte) {
 	}
 	le.c.mu.Lock()
 	ep, ok := le.c.peerMap.endpointForNodeKey(pubKey)
-	// [Conn.mu] must not be held while [Conn.noteRecvActivity] is called, which
-	// [endpoint.noteRecvActivity] can end up calling. See
-	// [Options.NoteRecvActivity] docs.
 	le.c.mu.Unlock()
 	if !ok {
 		return
@@ -4297,11 +4273,6 @@ func (le *lazyEndpoint) InitiationMessagePublicKey(peerPublicKey [32]byte) {
 	now := mono.Now()
 	ep.lastRecvUDPAny.StoreAtomic(now)
 	ep.noteRecvActivity(le.src, now)
-	// [ep.noteRecvActivity] may end up JIT configuring the peer, but we don't
-	// update [peerMap] as wireguard-go hasn't decrypted the initiation
-	// message yet. wireguard-go will call us below in [lazyEndpoint.FromPeer]
-	// if it successfully decrypts the message, at which point it's safe to
-	// insert le.src into the [peerMap] for ep.
 }
 
 func (le *lazyEndpoint) ClearSrc()         {}
