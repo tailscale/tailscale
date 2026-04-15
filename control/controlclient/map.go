@@ -835,13 +835,22 @@ func (ms *mapSession) addUserProfile(nm *netmap.NetworkMap, userID tailcfg.UserI
 }
 
 var debugPatchifyPeer = envknob.RegisterBool("TS_DEBUG_PATCHIFY_PEER")
+var debugPatchifyPeerMiss = envknob.RegisterBool("TS_DEBUG_PATCHIFY_PEER_MISS")
+
+// patchifyMissOnFalse, if non-nil, is called with the field name when
+// patchifyPeer fails. It is set by an init func in map_debug.go.
+var patchifyMissOnFalse func(string)
 
 // patchifyPeersChanged mutates resp to promote PeersChanged entries to PeersChangedPatch
 // when possible.
 func (ms *mapSession) patchifyPeersChanged(resp *tailcfg.MapResponse) {
+	var onFalse func(string)
+	if debugPatchifyPeerMiss() {
+		onFalse = patchifyMissOnFalse
+	}
 	filtered := resp.PeersChanged[:0]
 	for _, n := range resp.PeersChanged {
-		if p, ok := ms.patchifyPeer(n); ok {
+		if p, ok := ms.patchifyPeer(n, onFalse); ok {
 			patchifiedPeer.Add(1)
 			if debugPatchifyPeer() {
 				patchj, _ := json.Marshal(p)
@@ -879,21 +888,27 @@ func getNodeFields() []string {
 //
 // It returns ok=false if a patch can't be made, (V, ok) on a delta, or (nil,
 // true) if all the fields were identical (a zero change).
-func (ms *mapSession) patchifyPeer(n *tailcfg.Node) (_ *tailcfg.PeerChange, ok bool) {
+func (ms *mapSession) patchifyPeer(n *tailcfg.Node, onFalse func(string)) (_ *tailcfg.PeerChange, ok bool) {
 	ms.peersMu.RLock()
 	defer ms.peersMu.RUnlock()
 
 	was, ok := ms.peers[n.ID]
 	if !ok {
+		if onFalse != nil {
+			onFalse("peer_not_found")
+		}
 		return nil, false
 	}
-	return peerChangeDiff(was, n)
+	return peerChangeDiff(was, n, onFalse)
 }
 
 // peerChangeDiff returns the difference from 'was' to 'n', if possible.
 //
 // It returns (nil, true) if the fields were identical.
-func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChange, ok bool) {
+func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node, onFalse func(string)) (_ *tailcfg.PeerChange, ok bool) {
+	if onFalse == nil {
+		onFalse = func(string) {}
+	}
 	var ret *tailcfg.PeerChange
 	pc := func() *tailcfg.PeerChange {
 		if ret == nil {
@@ -917,22 +932,27 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			// And it was never sent by any known control server.
 		case "ID":
 			if was.ID() != n.ID {
+				onFalse(field)
 				return nil, false
 			}
 		case "StableID":
 			if was.StableID() != n.StableID {
+				onFalse(field)
 				return nil, false
 			}
 		case "Name":
 			if was.Name() != n.Name {
+				onFalse(field)
 				return nil, false
 			}
 		case "User":
 			if was.User() != n.User {
+				onFalse(field)
 				return nil, false
 			}
 		case "Sharer":
 			if was.Sharer() != n.Sharer {
+				onFalse(field)
 				return nil, false
 			}
 		case "Key":
@@ -949,6 +969,7 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			}
 		case "Machine":
 			if was.Machine() != n.Machine {
+				onFalse(field)
 				return nil, false
 			}
 		case "DiscoKey":
@@ -957,10 +978,12 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			}
 		case "Addresses":
 			if !views.SliceEqual(was.Addresses(), views.SliceOf(n.Addresses)) {
+				onFalse(field)
 				return nil, false
 			}
 		case "AllowedIPs":
 			if !views.SliceEqual(was.AllowedIPs(), views.SliceOf(n.AllowedIPs)) {
+				onFalse(field)
 				return nil, false
 			}
 		case "Endpoints":
@@ -980,13 +1003,16 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 				continue
 			}
 			if !was.Hostinfo().Valid() || !n.Hostinfo.Valid() {
+				onFalse(field)
 				return nil, false
 			}
 			if !was.Hostinfo().Equal(n.Hostinfo) {
+				onFalse(field)
 				return nil, false
 			}
 		case "Created":
 			if !was.Created().Equal(n.Created) {
+				onFalse(field)
 				return nil, false
 			}
 		case "Cap":
@@ -1014,10 +1040,12 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			}
 		case "Tags":
 			if !views.SliceEqual(was.Tags(), views.SliceOf(n.Tags)) {
+				onFalse(field)
 				return nil, false
 			}
 		case "PrimaryRoutes":
 			if !views.SliceEqual(was.PrimaryRoutes(), views.SliceOf(n.PrimaryRoutes)) {
+				onFalse(field)
 				return nil, false
 			}
 		case "Online":
@@ -1030,22 +1058,27 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			}
 		case "MachineAuthorized":
 			if was.MachineAuthorized() != n.MachineAuthorized {
+				onFalse(field)
 				return nil, false
 			}
 		case "UnsignedPeerAPIOnly":
 			if was.UnsignedPeerAPIOnly() != n.UnsignedPeerAPIOnly {
+				onFalse(field)
 				return nil, false
 			}
 		case "IsWireGuardOnly":
 			if was.IsWireGuardOnly() != n.IsWireGuardOnly {
+				onFalse(field)
 				return nil, false
 			}
 		case "IsJailed":
 			if was.IsJailed() != n.IsJailed {
+				onFalse(field)
 				return nil, false
 			}
 		case "Expired":
 			if was.Expired() != n.Expired {
+				onFalse(field)
 				return nil, false
 			}
 		case "SelfNodeV4MasqAddrForThisPeer":
@@ -1054,6 +1087,7 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 				continue
 			}
 			if va, ok := va.GetOk(); !ok || vb == nil || va != *vb {
+				onFalse(field)
 				return nil, false
 			}
 		case "SelfNodeV6MasqAddrForThisPeer":
@@ -1062,17 +1096,20 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 				continue
 			}
 			if va, ok := va.GetOk(); !ok || vb == nil || va != *vb {
+				onFalse(field)
 				return nil, false
 			}
 		case "ExitNodeDNSResolvers":
 			va, vb := was.ExitNodeDNSResolvers(), views.SliceOfViews(n.ExitNodeDNSResolvers)
 
 			if va.Len() != vb.Len() {
+				onFalse(field)
 				return nil, false
 			}
 
 			for i := range va.Len() {
 				if !va.At(i).Equal(vb.At(i)) {
+					onFalse(field)
 					return nil, false
 				}
 			}
