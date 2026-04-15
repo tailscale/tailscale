@@ -6402,6 +6402,23 @@ func (b *LocalBackend) resolveExitNodeInPrefsLocked(prefs *ipn.Prefs) (changed b
 // received nm. If nm is nil, it resets all configuration as though
 // Tailscale is turned off.
 func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
+	if buildfeatures.HasCacheNetMap {
+		// As a defensive measure, if something triggers a panic when we are
+		// installing a network map, make an effort to discard any cached netmaps.
+		// This helps avert the possibility that a restart after panic will stick in
+		// a cycle. Importantly, we do not attempt to swallow or handle the panic,
+		// since that indicates a real bug.
+		//
+		// See https://github.com/tailscale/tailscale/issues/12639
+		defer func() {
+			if p := recover(); p != nil {
+				b.logf("WARNING: Panic while installing netmap; discardng caches")
+				b.discardDiskCacheLocked()
+				panic(p) // propagate
+			}
+		}()
+	}
+
 	oldSelf := b.currentNode().NetMap().SelfNodeOrZero()
 
 	b.dialer.SetNetMap(nm)
