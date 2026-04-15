@@ -1231,7 +1231,7 @@ func TestPeerChangeDiff(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pc, ok := peerChangeDiff(tt.a.View(), tt.b)
+			pc, ok := peerChangeDiff(tt.a.View(), tt.b, nil)
 			if tt.wantEqual {
 				if !ok || pc != nil {
 					t.Errorf("got (%p, %v); want (nil, true); pc=%v", pc, ok, logger.AsJSON(pc))
@@ -1252,7 +1252,7 @@ func TestPeerChangeDiffAllocs(t *testing.T) {
 	a := &tailcfg.Node{ID: 1}
 	b := &tailcfg.Node{ID: 1}
 	n := testing.AllocsPerRun(10000, func() {
-		diff, ok := peerChangeDiff(a.View(), b)
+		diff, ok := peerChangeDiff(a.View(), b, nil)
 		if !ok || diff != nil {
 			t.Fatalf("unexpected result: (%s, %v)", logger.AsJSON(diff), ok)
 		}
