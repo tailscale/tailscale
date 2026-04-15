@@ -89,7 +89,7 @@ require (
 	github.com/safchain/ethtool v0.3.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/studio-b12/gowebdav v0.9.0
-	github.com/tailscale/certstore v0.1.1-0.20231202035212-d3fa0460f47e
+	github.com/tailscale/certstore v0.1.1-0.20260409135935-3638fb84b77d
 	github.com/tailscale/depaware v0.0.0-20251001183927-9c2ad255ef3f
 	github.com/tailscale/gliderssh v0.3.4-0.20260330083525-c1389c70ff89
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
