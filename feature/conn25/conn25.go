@@ -25,6 +25,7 @@ import (
 	"tailscale.com/appc"
 	"tailscale.com/envknob"
 	"tailscale.com/feature"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/net/packet"
@@ -171,6 +172,10 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	// and profile switches.
 	e.host.Hooks().OnSelfChange.Add(e.onSelfChange)
 
+	profile, prefs := e.host.Profiles().CurrentProfileState()
+	e.profileStateChange(profile, prefs, false)
+	e.host.Hooks().ProfileStateChange.Add(e.profileStateChange)
+
 	// Allow the client to send packets with Transit IP destinations
 	// in the link-local space.
 	e.host.Hooks().Filter.LinkLocalAllowHooks.Add(func(p packet.Parsed) (bool, string) {
@@ -215,6 +220,27 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	})
 
 	return nil
+}
+
+func (c *client) setAdvertiseConnectorPref(v bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.config.advertiseConnectorPref = v
+}
+
+func (c *connector) setAdvertiseConnectorPref(v bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.config.advertiseConnectorPref = v
+}
+
+func (c *Conn25) setAdvertiseConnectorPref(v bool) {
+	c.client.setAdvertiseConnectorPref(v)
+	c.connector.setAdvertiseConnectorPref(v)
+}
+
+func (e *extension) profileStateChange(_ ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
+	e.conn25.setAdvertiseConnectorPref(prefs.AppConnector().Advertise)
 }
 
 // ClientTransitIPForMagicIP implements [IPMapper].
@@ -488,15 +514,16 @@ const AppConnectorsExperimentalAttrName = "tailscale.com/app-connectors-experime
 // config holds the config from the policy and lookups derived from that.
 // config is not safe for concurrent use.
 type config struct {
-	isConfigured      bool
-	apps              []appctype.Conn25Attr
-	appsByName        map[string]appctype.Conn25Attr
-	appNamesByDomain  map[dnsname.FQDN][]string
-	selfRoutedDomains set.Set[dnsname.FQDN]
-	v4TransitIPSet    netipx.IPSet
-	v4MagicIPSet      netipx.IPSet
-	v6TransitIPSet    netipx.IPSet
-	v6MagicIPSet      netipx.IPSet
+	isConfigured           bool
+	apps                   []appctype.Conn25Attr
+	appsByName             map[string]appctype.Conn25Attr
+	appNamesByDomain       map[dnsname.FQDN][]string
+	selfRoutedDomains      set.Set[dnsname.FQDN]
+	v4TransitIPSet         netipx.IPSet
+	v4MagicIPSet           netipx.IPSet
+	v6TransitIPSet         netipx.IPSet
+	v6MagicIPSet           netipx.IPSet
+	advertiseConnectorPref bool
 }
 
 func configFromNodeView(n tailcfg.NodeView) (config, error) {
@@ -637,6 +664,11 @@ func (c *client) reconfig(newCfg config) error {
 func (c *client) isConnectorDomain(domain dnsname.FQDN) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.config.advertiseConnectorPref && c.config.selfRoutedDomains.Contains(domain) {
+		return false
+	}
+
 	appNames, ok := c.config.appNamesByDomain[domain]
 	return ok && len(appNames) > 0
 }

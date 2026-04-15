@@ -17,6 +17,7 @@ import (
 	"go4.org/mem"
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/packet"
@@ -704,13 +705,20 @@ func makeDNSResponseForSections(t *testing.T, questions []dnsmessage.Question, a
 	return outbs
 }
 
+var (
+	testPrefsIsConnector  = (&ipn.Prefs{AppConnector: ipn.AppConnectorPrefs{Advertise: true}}).View()
+	testPrefsNotConnector = (&ipn.Prefs{AppConnector: ipn.AppConnectorPrefs{Advertise: false}}).View()
+)
+
 func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 	for _, tt := range []struct {
-		name          string
-		domain        string
-		v4Addrs       []*dnsmessage.AResource
-		v6Addrs       []*dnsmessage.AAAAResource
-		wantByMagicIP map[netip.Addr]addrs
+		name                   string
+		domain                 string
+		v4Addrs                []*dnsmessage.AResource
+		v6Addrs                []*dnsmessage.AAAAResource
+		wantByMagicIP          map[netip.Addr]addrs
+		advertiseConnectorPref bool
+		selfTags               []string
 	}{
 		{
 			name:    "one-ip-matches",
@@ -783,6 +791,31 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 				{A: [4]byte{2, 0, 0, 0}},
 			},
 		},
+		{
+			name:                   "no-rewrite-self-routed-domain",
+			domain:                 "example.com.",
+			v4Addrs:                []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
+			selfTags:               []string{"tag:woo"},
+			advertiseConnectorPref: true,
+		},
+		{
+			name:                   "rewrite-eligible-connector-no-matching-tag",
+			domain:                 "example.com.",
+			v4Addrs:                []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
+			selfTags:               []string{"tag:unrelated"},
+			advertiseConnectorPref: true,
+			// isEligibleConnector is true but tag doesn't match the app,
+			// so DNS response should be rewritten normally.
+			wantByMagicIP: map[netip.Addr]addrs{
+				netip.MustParseAddr("100.64.0.0"): {
+					domain:  "example.com.",
+					dst:     netip.MustParseAddr("1.0.0.0"),
+					magic:   netip.MustParseAddr("100.64.0.0"),
+					transit: netip.MustParseAddr("100.64.0.40"),
+					app:     "app1",
+				},
+			},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var dnsResp []byte
@@ -799,9 +832,10 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 				V6MagicIPPool:   []netipx.IPRange{v6RangeFrom("0", "10"), v6RangeFrom("20", "30")},
 				V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
 				V6TransitIPPool: []netipx.IPRange{v6RangeFrom("40", "50")},
-			}}, []string{})
+			}}, tt.selfTags)
 			c := newConn25(logger.Discard)
 			c.reconfig(sn)
+			c.client.config.advertiseConnectorPref = tt.advertiseConnectorPref
 
 			c.mapDNSResponse(dnsResp)
 			if diff := cmp.Diff(tt.wantByMagicIP, c.client.assignments.byMagicIP, cmpopts.EquateComparable(addrs{}, netip.Addr{})); diff != "" {
