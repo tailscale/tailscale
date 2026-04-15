@@ -459,8 +459,9 @@ func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse, viaT
 		}
 
 		// Accept if:
-		// - lastSeen moved forward in time.
-		if existingLastSeen, ok := existingNode.LastSeen().GetOk(); ok &&
+		// - if we don't have a last seen to compare against on the existing node.
+		// - OR lastSeen moved forward in time.
+		if existingLastSeen, ok := existingNode.LastSeen().GetOk(); !ok ||
 			change.LastSeen.After(existingLastSeen) {
 			acceptedDiscoUpdates = append(acceptedDiscoUpdates, change)
 		}

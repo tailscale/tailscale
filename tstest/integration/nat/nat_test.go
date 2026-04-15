@@ -28,7 +28,6 @@ import (
 	"golang.org/x/mod/modfile"
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/tailscale"
-	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -792,8 +791,12 @@ func TestEasyEasy(t *testing.T) {
 	nt.want(routeDirect)
 }
 
+// TestTwoEasyNoControlDiscoRotate tests a situation where two nodes have been
+// online and connected through control, but then loose control access and also
+// rotate keys. It is not a perfect proxy for a cached node, as the node will
+// still have a mapState and not use the backup method of inserting keys into
+// the engine directly.
 func TestTwoEasyNoControlDiscoRotate(t *testing.T) {
-	envknob.Setenv("TS_USE_CACHED_NETMAP", "1")
 	nt := newNatTest(t)
 	nt.runTailscaleConnectivityTest(easyNoControlDiscoRotate, easyNoControlDiscoRotate)
 	nt.want(routeDirect)
