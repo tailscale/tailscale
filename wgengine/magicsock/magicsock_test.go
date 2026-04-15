@@ -413,9 +413,11 @@ func TestNewConn(t *testing.T) {
 	stunAddr, stunCleanupFn := stuntest.Serve(t)
 	defer stunCleanupFn()
 
-	port := pickPort(t)
+	// Use port 0 to let the system assign a port, avoiding TOCTOU races
+	// from the previous pickPort approach which would close a socket and
+	// hope to rebind to the same port.
 	conn, err := NewConn(Options{
-		Port:              port,
+		Port:              0,
 		DisablePortMapper: true,
 		EndpointsFunc:     epFunc,
 		Logf:              t.Logf,
@@ -427,6 +429,13 @@ func TestNewConn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+
+	// Get the actual port that was assigned
+	port := conn.LocalPort()
+	if port == 0 {
+		t.Fatal("LocalPort returned 0")
+	}
+
 	conn.SetDERPMap(stuntest.DERPMapOf(stunAddr.String()))
 	conn.SetPrivateKey(key.NewNode())
 
@@ -460,16 +469,6 @@ collectEndpoints:
 			t.Fatalf("timeout with endpoints: %v", endpoints)
 		}
 	}
-}
-
-func pickPort(t testing.TB) uint16 {
-	t.Helper()
-	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	return uint16(conn.LocalAddr().(*net.UDPAddr).Port)
 }
 
 func TestPickDERPFallback(t *testing.T) {
@@ -1470,7 +1469,6 @@ func Test32bitAlignment(t *testing.T) {
 // newTestConn returns a new Conn.
 func newTestConn(t testing.TB) *Conn {
 	t.Helper()
-	port := pickPort(t)
 
 	bus := eventbustest.NewBus(t)
 
@@ -1487,7 +1485,7 @@ func newTestConn(t testing.TB) *Conn {
 		Metrics:                new(usermetric.Registry),
 		DisablePortMapper:      true,
 		Logf:                   t.Logf,
-		Port:                   port,
+		Port:                   0,
 		TestOnlyPacketListener: localhostListener{},
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {
 			t.Logf("endpoints: %q", eps)
