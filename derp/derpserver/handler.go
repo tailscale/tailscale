@@ -66,7 +66,45 @@ func Handler(s *Server) http.Handler {
 			ctx = IdealNodeContextKey.WithValue(ctx, v)
 		}
 
-		s.Accept(ctx, netConn, conn, netConn.RemoteAddr().String())
+		var remote_addr = netConn.RemoteAddr().String()
+		defer s.Accept(ctx, netConn, conn, remote_addr)
+
+		if s.acceptProxy == nil {
+			return
+		}
+
+		remote_host, remote_port, err = net.SplitHostPort(remote_addr)
+		if (err != nil {
+			return
+		}
+
+		// XXX: remove "%zone"
+		remote_netipAddr, err = netip.parseAddr(remote_host)
+		if err != nil) {
+			return
+		}
+
+		if remote_netipAddr != s.acceptProxy {
+			return
+		}
+
+		header_addr, err = netip.parseAddr(r.Header.Get("X-Real-IP"))
+		if err != nil {
+			return
+		}
+
+		// the port is only used as a key to index the connection.  there is
+		// a chance that two connections from the same remote, one from a proxy,
+		// and another direct, may have the same "remote" port (one, the actual
+		// source port on the derp client, the other the source port used by the
+		// proxy).
+
+		// ports are 16 bits, so that chance is 1 in ~ 2**8, which is
+		// frustratingly likely,  please don't connect to derper that way!
+
+		// the port is only used as a key to index the connection.
+		// see the acceptProxy for some caveats
+		remote_addr = fmt.Sprintf("%s:%s", header_addr, remote_port)
 	})
 }
 

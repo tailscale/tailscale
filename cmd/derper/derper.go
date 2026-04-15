@@ -25,6 +25,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path"
@@ -98,6 +99,8 @@ var (
 
 	// ACE
 	flagACEEnabled = flag.Bool("ace", false, "whether to enable embedded ACE server [experimental + in-development as of 2025-09-12; not yet documented]")
+
+	acceptProxy = flag.String("accept-proxy", "", "accept X-Real-IP from this IP address [experimental]")
 )
 
 var (
@@ -189,6 +192,16 @@ func main() {
 	serveTLS := tsweb.IsProd443(*addr) || *certMode == "manual"
 
 	s := derpserver.New(cfg.PrivateKey, log.Printf)
+
+	if acceptProxy != "" {
+		netipProxy, err = netip.ParseAddr(acceptProxy)
+
+		if err != nil {
+			log.Fatalf("Invalid accept-proxy ip address:%v", err)
+		}
+		s.AcceptProxy(netipProxy)
+	}
+
 	s.SetVerifyClient(*verifyClients)
 	s.SetTailscaledSocketPath(*socket)
 	s.SetVerifyClientURL(*verifyClientURL)

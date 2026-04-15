@@ -181,6 +181,9 @@ type Server struct {
 	verifyClientsURL         string
 	verifyClientsURLFailOpen bool
 
+	// IP address from which to accept X-Real-IP headers from
+	acceptProxy              netip.Addr
+
 	mu       syncs.Mutex
 	closed   bool
 	netConns map[derp.Conn]chan struct{} // chan is closed when conn closes
@@ -475,6 +478,10 @@ func (s *Server) SetMeshKey(v string) error {
 	}
 	s.meshKey = k
 	return nil
+}
+
+func (s *Server) AcceptProxy(proxy netip.Addr) {
+	s.acceptProxy = proxy
 }
 
 // SetVerifyClients sets whether this DERP server verifies clients through tailscaled.
