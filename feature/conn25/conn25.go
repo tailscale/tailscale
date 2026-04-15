@@ -652,7 +652,9 @@ func (c *client) reconfig(newCfg config) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	oldPref := c.config.advertiseConnectorPref
 	c.config = newCfg
+	c.config.advertiseConnectorPref = oldPref
 
 	c.v4MagicIPPool = newIPPool(&(newCfg.v4MagicIPSet))
 	c.v4TransitIPPool = newIPPool(&(newCfg.v4TransitIPSet))
@@ -1120,7 +1122,9 @@ func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appA
 func (c *connector) reconfig(newCfg config) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	oldPref := c.config.advertiseConnectorPref
 	c.config = newCfg
+	c.config.advertiseConnectorPref = oldPref
 	return nil
 }
 
