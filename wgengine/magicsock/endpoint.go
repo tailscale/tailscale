@@ -1183,8 +1183,7 @@ func (de *endpoint) discoPingTimeout(txid stun.TxID) {
 		return
 	}
 	bestUntrusted := mono.Now().After(de.trustBestAddrUntil)
-	if sp.to == de.bestAddr.epAddr && sp.to.vni.IsSet() && bestUntrusted {
-		// TODO(jwhited): consider applying this to direct UDP paths as well
+	if sp.to == de.bestAddr.epAddr && bestUntrusted {
 		de.clearBestAddrLocked()
 	}
 	if debugDisco() || !de.bestAddr.ap.IsValid() || bestUntrusted {
@@ -1778,12 +1777,8 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 			latency: latency,
 			wireMTU: pingSizeToPktLen(sp.size, sp.to),
 		}
-		// TODO(jwhited): consider checking de.trustBestAddrUntil as well. If
-		//  de.bestAddr is untrusted we may want to clear it, otherwise we could
-		//  get stuck with a forever untrusted bestAddr that blackholes, since
-		//  we don't clear direct UDP paths on disco ping timeout (see
-		//  discoPingTimeout).
-		if betterAddr(thisPong, de.bestAddr) {
+		bestUntrusted := now.After(de.trustBestAddrUntil)
+		if betterAddr(thisPong, de.bestAddr) || bestUntrusted {
 			de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v tx=%x", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.wireMTU, m.TxID[:6])
 			de.debugUpdates.Add(EndpointChange{
 				When: time.Now(),
