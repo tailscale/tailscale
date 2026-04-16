@@ -1665,7 +1665,7 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 
 			// Check that each of the lookups behaves as expected
 			for i, lu := range tt.lookups {
-				got, ok := ext.conn25.client.assignments.lookupTransitIPsByConnKey(lu.connKey)
+				got, ok := ext.conn25.client.lookupTransitIPsByConnKey(lu.connKey)
 				if ok != lu.expectedOk {
 					t.Fatalf("unexpected ok result at index %d wanted %v, got %v", i, lu.expectedOk, ok)
 				}

@@ -627,6 +627,7 @@ type client struct {
 	v6MagicIPPool   *ippool
 	v6TransitIPPool *ippool
 	assignments     addrAssignments
+	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
 	config          config
 }
 
@@ -775,7 +776,7 @@ func (c *client) addTransitIPForConnector(tip netip.Addr, conn tailcfg.NodeView)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.assignments.insertTransitConnMapping(tip, conn.Key())
+	return c.insertTransitConnMapping(tip, conn.Key())
 }
 
 func (e *extension) sendLoop(ctx context.Context) {
@@ -820,7 +821,7 @@ func (c *client) enqueueAddressAssignment(addrs addrs) error {
 func (c *client) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	tips, ok := c.assignments.lookupTransitIPsByConnKey(k)
+	tips, ok := c.lookupTransitIPsByConnKey(k)
 	if !ok {
 		return views.Slice[netip.Prefix]{}
 	}
@@ -1186,7 +1187,6 @@ type addrAssignments struct {
 	byMagicIP   map[netip.Addr]addrs
 	byTransitIP map[netip.Addr]addrs
 	byDomainDst map[domainDst]addrs
-	byConnKey   map[key.NodePublic]set.Set[netip.Prefix]
 }
 
 func (a *addrAssignments) insert(as addrs) error {
@@ -1209,28 +1209,6 @@ func (a *addrAssignments) insert(as addrs) error {
 	return nil
 }
 
-// insertTransitConnMapping adds an entry to the byConnKey map
-// for the provided transitIP (as a prefix).
-// The provided transitIP must already be present in the byTransitIP map.
-func (a *addrAssignments) insertTransitConnMapping(tip netip.Addr, connKey key.NodePublic) error {
-	if _, ok := a.lookupByTransitIP(tip); !ok {
-		return errors.New("transit IP is not already known")
-	}
-
-	ctips, ok := a.byConnKey[connKey]
-	tipp := netip.PrefixFrom(tip, tip.BitLen())
-	if ok {
-		if ctips.Contains(tipp) {
-			return errors.New("byConnKey already contains transit")
-		}
-	} else {
-		ctips.Make()
-		mak.Set(&a.byConnKey, connKey, ctips)
-	}
-	ctips.Add(tipp)
-	return nil
-}
-
 func (a *addrAssignments) lookupByDomainDst(domain dnsname.FQDN, dst netip.Addr) (addrs, bool) {
 	v, ok := a.byDomainDst[domainDst{domain: domain, dst: dst}]
 	return v, ok
@@ -1246,11 +1224,33 @@ func (a *addrAssignments) lookupByTransitIP(tip netip.Addr) (addrs, bool) {
 	return v, ok
 }
 
+// insertTransitConnMapping adds an entry to the byConnKey map
+// for the provided transitIP (as a prefix).
+// The provided transitIP must already be present in the byTransitIP map.
+func (c *client) insertTransitConnMapping(tip netip.Addr, connKey key.NodePublic) error {
+	if _, ok := c.assignments.lookupByTransitIP(tip); !ok {
+		return errors.New("transit IP is not already known")
+	}
+
+	ctips, ok := c.byConnKey[connKey]
+	tipp := netip.PrefixFrom(tip, tip.BitLen())
+	if ok {
+		if ctips.Contains(tipp) {
+			return errors.New("byConnKey already contains transit")
+		}
+	} else {
+		ctips.Make()
+		mak.Set(&c.byConnKey, connKey, ctips)
+	}
+	ctips.Add(tipp)
+	return nil
+}
+
 // lookupTransitIPsByConnKey returns a slice containing the transit IPs (as netipPrefix)
 // associated with the given connector (identified by node key), or (nil, false) if there is no entry
 // for the given key.
-func (a *addrAssignments) lookupTransitIPsByConnKey(k key.NodePublic) ([]netip.Prefix, bool) {
-	s, ok := a.byConnKey[k]
+func (c *client) lookupTransitIPsByConnKey(k key.NodePublic) ([]netip.Prefix, bool) {
+	s, ok := c.byConnKey[k]
 	if !ok {
 		return nil, false
 	}
