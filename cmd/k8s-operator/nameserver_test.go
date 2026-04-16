@@ -43,6 +43,9 @@ func TestNameserverReconciler(t *testing.T) {
 					ClusterIP: "5.4.3.2",
 				},
 				Pod: &tsapi.NameserverPod{
+					NodeSelector: map[string]string{
+						"foo": "bar",
+					},
 					Tolerations: []corev1.Toleration{
 						{
 							Key:      "some-key",
@@ -130,6 +133,9 @@ func TestNameserverReconciler(t *testing.T) {
 					},
 				},
 			},
+		}
+		wantsDeploy.Spec.Template.Spec.NodeSelector = map[string]string{
+			"foo": "bar",
 		}
 
 		expectEqual(t, fc, wantsDeploy)

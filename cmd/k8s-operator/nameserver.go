@@ -191,6 +191,7 @@ func (a *NameserverReconciler) maybeProvision(ctx context.Context, tsDNSCfg *tsa
 	if tsDNSCfg.Spec.Nameserver.Pod != nil {
 		dCfg.tolerations = tsDNSCfg.Spec.Nameserver.Pod.Tolerations
 		dCfg.affinity = tsDNSCfg.Spec.Nameserver.Pod.Affinity
+		dCfg.nodeSelector = tsDNSCfg.Spec.Nameserver.Pod.NodeSelector
 	}
 
 	for _, deployable := range []deployable{saDeployable, deployDeployable, svcDeployable, cmDeployable} {
@@ -218,15 +219,16 @@ type deployable struct {
 }
 
 type deployConfig struct {
-	replicas    int32
-	imageRepo   string
-	imageTag    string
-	labels      map[string]string
-	ownerRefs   []metav1.OwnerReference
-	namespace   string
-	clusterIP   string
-	tolerations []corev1.Toleration
-	affinity    *corev1.Affinity
+	replicas     int32
+	imageRepo    string
+	imageTag     string
+	labels       map[string]string
+	ownerRefs    []metav1.OwnerReference
+	namespace    string
+	clusterIP    string
+	tolerations  []corev1.Toleration
+	affinity     *corev1.Affinity
+	nodeSelector map[string]string
 }
 
 var (
@@ -253,6 +255,7 @@ var (
 			d.ObjectMeta.OwnerReferences = cfg.ownerRefs
 			d.Spec.Template.Spec.Tolerations = cfg.tolerations
 			d.Spec.Template.Spec.Affinity = cfg.affinity
+			d.Spec.Template.Spec.NodeSelector = cfg.nodeSelector
 			updateF := func(oldD *appsv1.Deployment) {
 				oldD.Spec = d.Spec
 			}

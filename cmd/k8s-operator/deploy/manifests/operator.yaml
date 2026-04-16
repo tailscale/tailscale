@@ -1315,6 +1315,11 @@ spec:
                                                                 x-kubernetes-list-type: atomic
                                                         type: object
                                                 type: object
+                                            nodeSelector:
+                                                additionalProperties:
+                                                    type: string
+                                                description: If specified, applies node selector rules to the pods deployed by the DNSConfig resource.
+                                                type: object
                                             tolerations:
                                                 description: If specified, applies tolerations to the pods deployed by the DNSConfig resource.
                                                 items:
