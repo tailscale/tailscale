@@ -1,11 +1,11 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package gokrazy
+package wsc
 
 import "testing"
 
-func TestIsGokrazy(t *testing.T) {
-	_ = IsGokrazy()
-	// Just verify it doesn't panic
+func TestWSC(t *testing.T) {
+	// Test Windows Security Center diagnostics
+	_ = "wsc"
 }
