@@ -173,6 +173,12 @@ type Server struct {
 	meshUpdateLoopCount        *metrics.Histogram
 	bufferedWriteFrames        *metrics.Histogram // how many sendLoop frames (or groups of related frames) get written per flush
 
+	// acceptProxyHeaders, if true, causes the server to trust
+	// X-Real-IP and X-Forwarded-For headers from connections
+	// originating from loopback addresses to determine the real
+	// client address when running behind a reverse proxy.
+	acceptProxyHeaders bool
+
 	// verifyClientsLocalTailscaled only accepts client connections to the DERP
 	// server if the clientKey is a known peer in the network, as specified by a
 	// running tailscaled's client's LocalAPI.
@@ -501,6 +507,21 @@ func (s *Server) SetTailscaledSocketPath(path string) {
 // Defaults to 2 seconds.
 func (s *Server) SetTCPWriteTimeout(d time.Duration) {
 	s.tcpWriteTimeout = d
+}
+
+// SetAcceptProxyHeaders sets whether this DERP server should use
+// X-Real-IP and X-Forwarded-For headers to determine the real client
+// address when the connection originates from a loopback address.
+//
+// It must be called before serving begins.
+func (s *Server) SetAcceptProxyHeaders(v bool) {
+	s.acceptProxyHeaders = v
+}
+
+// AcceptProxyHeaders reports whether the server is configured to
+// trust proxy headers from loopback connections.
+func (s *Server) AcceptProxyHeaders() bool {
+	return s.acceptProxyHeaders
 }
 
 // minRateLimitTokenBucketSize represents the minimum size of a token bucket
