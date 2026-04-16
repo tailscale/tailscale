@@ -96,7 +96,7 @@ func (b *LocalBackend) initTKALocked() error {
 			authority: authority,
 			storage:   storage,
 		}
-		b.logf("tka initialized at head %x", authority.Head())
+		b.logf("tka initialized at head %s", authority.Head())
 	}
 
 	return nil
