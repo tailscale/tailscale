@@ -163,6 +163,7 @@ func (e *extension) DoSelfUpdate() {
 	})
 	if err != nil {
 		e.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFailed, err.Error()))
+		return
 	}
 	err = up.Update()
 	if err != nil {
