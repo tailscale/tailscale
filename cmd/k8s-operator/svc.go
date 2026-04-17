@@ -175,7 +175,11 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 
 	svc.Finalizers = append(svc.Finalizers[:ix], svc.Finalizers[ix+1:]...)
 	if err := a.Update(ctx, svc); err != nil {
-		return fmt.Errorf("failed to remove finalizer: %w", err)
+		if apierrors.IsNotFound(err) {
+			logger.Debugf("service already deleted, finalizer removal not needed")
+		} else {
+			return fmt.Errorf("failed to remove finalizer: %w", err)
+		}
 	}
 
 	// Unlike most log entries in the reconcile loop, this will get printed

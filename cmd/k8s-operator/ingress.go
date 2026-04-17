@@ -111,7 +111,11 @@ func (a *IngressReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 
 	ing.Finalizers = append(ing.Finalizers[:ix], ing.Finalizers[ix+1:]...)
 	if err := a.Update(ctx, ing); err != nil {
-		return fmt.Errorf("failed to remove finalizer: %w", err)
+		if apierrors.IsNotFound(err) {
+			logger.Debugf("ingress already deleted, finalizer removal not needed")
+		} else {
+			return fmt.Errorf("failed to remove finalizer: %w", err)
+		}
 	}
 
 	// Unlike most log entries in the reconcile loop, this will get printed
