@@ -72,9 +72,10 @@ func normalizeDNSName(name string) (dnsname.FQDN, error) {
 func init() {
 	feature.Register(featureName)
 	ipnext.RegisterExtension(featureName, func(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, error) {
+		conn25 := newConn25(logger.WithPrefix(logf, "conn25: "))
+		conn25.backend = sb
 		return &extension{
-			conn25:  newConn25(logger.WithPrefix(logf, "conn25: ")),
-			backend: sb,
+			conn25: conn25,
 		}, nil
 	})
 	ipnlocal.RegisterPeerAPIHandler("/v0/connector/transit-ip", handleConnectorTransitIP)
@@ -97,10 +98,7 @@ func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, 
 // extension is an [ipnext.Extension] managing the connector on platforms
 // that import this package.
 type extension struct {
-	conn25  *Conn25            // safe for concurrent access and only set at creation
-	backend ipnext.SafeBackend // safe for concurrent access and only set at creation
-
-	host      ipnext.Host             // set in Init, read-only after
+	conn25    *Conn25                 // safe for concurrent access and only set at creation
 	ctxCancel context.CancelCauseFunc // cancels sendLoop goroutine
 }
 
@@ -119,7 +117,7 @@ func (e *extension) Init(host ipnext.Host) error {
 	if e.ctxCancel != nil {
 		return nil
 	}
-	e.host = host
+	e.conn25.host = host
 
 	dph := newDatapathHandler(e.conn25, e.conn25.client.logf)
 	if err := e.installHooks(dph); err != nil {
@@ -129,17 +127,17 @@ func (e *extension) Init(host ipnext.Host) error {
 
 	ctx, cancel := context.WithCancelCause(context.Background())
 	e.ctxCancel = cancel
-	go e.sendLoop(ctx)
+	go e.conn25.sendLoop(ctx)
 	return nil
 }
 
 func (e *extension) installHooks(dph *datapathHandler) error {
 	// Make sure we can access the DNS manager and the system tun.
-	dnsManager, ok := e.backend.Sys().DNSManager.GetOK()
+	dnsManager, ok := e.conn25.backend.Sys().DNSManager.GetOK()
 	if !ok {
 		return errors.New("could not access system dns manager")
 	}
-	tun, ok := e.backend.Sys().Tun.GetOK()
+	tun, ok := e.conn25.backend.Sys().Tun.GetOK()
 	if !ok {
 		return errors.New("could not access system tun")
 	}
@@ -170,15 +168,15 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 
 	// Manage how we react to changes to the current node,
 	// including property changes (e.g. HostInfo, Capabilities, CapMap).
-	e.host.Hooks().OnSelfChange.Add(e.onSelfChange)
+	e.conn25.host.Hooks().OnSelfChange.Add(e.onSelfChange)
 
 	// Manage how we react profile state changes, which include
 	// prefs changes.
-	e.host.Hooks().ProfileStateChange.Add(e.profileStateChange)
+	e.conn25.host.Hooks().ProfileStateChange.Add(e.profileStateChange)
 
 	// Allow the client to send packets with Transit IP destinations
 	// in the link-local space.
-	e.host.Hooks().Filter.LinkLocalAllowHooks.Add(func(p packet.Parsed) (bool, string) {
+	e.conn25.host.Hooks().Filter.LinkLocalAllowHooks.Add(func(p packet.Parsed) (bool, string) {
 		if !e.conn25.isConfigured() {
 			return false, ""
 		}
@@ -187,7 +185,7 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 
 	// Allow the connector to receive packets with Transit IP destinations
 	// in the link-local space.
-	e.host.Hooks().Filter.LinkLocalAllowHooks.Add(func(p packet.Parsed) (bool, string) {
+	e.conn25.host.Hooks().Filter.LinkLocalAllowHooks.Add(func(p packet.Parsed) (bool, string) {
 		if !e.conn25.isConfigured() {
 			return false, ""
 		}
@@ -196,7 +194,7 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 
 	// Allow the connector to receive packets with Transit IP destinations
 	// that are not "local" to it, and that it does not advertise.
-	e.host.Hooks().Filter.IngressAllowHooks.Add(func(p packet.Parsed) (bool, string) {
+	e.conn25.host.Hooks().Filter.IngressAllowHooks.Add(func(p packet.Parsed) (bool, string) {
 		if !e.conn25.isConfigured() {
 			return false, ""
 		}
@@ -204,7 +202,7 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	})
 
 	// Give the client the Magic IP range to install on the OS.
-	e.host.Hooks().ExtraRouterConfigRoutes.Set(func() views.Slice[netip.Prefix] {
+	e.conn25.host.Hooks().ExtraRouterConfigRoutes.Set(func() views.Slice[netip.Prefix] {
 		if !e.conn25.isConfigured() {
 			return views.Slice[netip.Prefix]{}
 		}
@@ -212,7 +210,7 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	})
 
 	// Tell WireGuard what Transit IPs belong to which connector peers.
-	e.host.Hooks().ExtraWireGuardAllowedIPs.Set(func(k key.NodePublic) views.Slice[netip.Prefix] {
+	e.conn25.host.Hooks().ExtraWireGuardAllowedIPs.Set(func(k key.NodePublic) views.Slice[netip.Prefix] {
 		if !e.conn25.isConfigured() {
 			return views.Slice[netip.Prefix]{}
 		}
@@ -227,7 +225,7 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 // for Conn25 to be fully configured and ready to use.
 func (e *extension) seedPrefsConfig() {
 	var cfg config
-	cfg.prefs = configFromPrefs(e.host.Profiles().CurrentPrefs())
+	cfg.prefs = configFromPrefs(e.conn25.host.Profiles().CurrentPrefs())
 	e.conn25.reconfig(cfg)
 }
 
@@ -315,7 +313,10 @@ type appAddr struct {
 
 // Conn25 holds state for routing traffic for a domain via a connector.
 type Conn25 struct {
-	mu        sync.Mutex // mu protects reconfiguration of client and connector
+	mu      sync.Mutex // mu protects reconfiguration of client and connector
+	host    ipnext.Host
+	backend ipnext.SafeBackend
+
 	client    *client
 	connector *connector
 }
@@ -778,30 +779,30 @@ func (c *client) addTransitIPForConnector(tip netip.Addr, conn tailcfg.NodeView)
 	return c.assignments.insertTransitConnMapping(tip, conn.Key())
 }
 
-func (e *extension) sendLoop(ctx context.Context) {
+func (c *Conn25) sendLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case as := <-e.conn25.client.addrsCh:
-			if err := e.handleAddressAssignment(ctx, as); err != nil {
-				e.conn25.client.logf("error handling transit IP assignment (app: %s, mip: %v, src: %v): %v", as.app, as.magic, as.dst, err)
+		case as := <-c.client.addrsCh:
+			if err := c.handleAddressAssignment(ctx, as); err != nil {
+				c.client.logf("error handling transit IP assignment (app: %s, mip: %v, src: %v): %v", as.app, as.magic, as.dst, err)
 			}
 		}
 	}
 }
 
-func (e *extension) handleAddressAssignment(ctx context.Context, as addrs) error {
-	conn, err := e.sendAddressAssignment(ctx, as)
+func (c *Conn25) handleAddressAssignment(ctx context.Context, as addrs) error {
+	conn, err := c.sendAddressAssignment(ctx, as)
 	if err != nil {
 		return err
 	}
-	err = e.conn25.client.addTransitIPForConnector(as.transit, conn)
+	err = c.client.addTransitIPForConnector(as.transit, conn)
 	if err != nil {
 		return err
 	}
 
-	e.host.AuthReconfigAsync()
+	c.host.AuthReconfigAsync()
 	return nil
 }
 
@@ -868,14 +869,14 @@ func makePeerAPIReq(ctx context.Context, httpClient *http.Client, urlBase string
 	return nil
 }
 
-func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) (tailcfg.NodeView, error) {
-	app, ok := e.conn25.client.getConfig().nv.appsByName[as.app]
+func (c *Conn25) sendAddressAssignment(ctx context.Context, as addrs) (tailcfg.NodeView, error) {
+	app, ok := c.client.getConfig().nv.appsByName[as.app]
 	if !ok {
-		e.conn25.client.logf("App not found for app: %s (domain: %s)", as.app, as.domain)
+		c.client.logf("App not found for app: %s (domain: %s)", as.app, as.domain)
 		return tailcfg.NodeView{}, errors.New("app not found")
 	}
 
-	nb := e.host.NodeBackend()
+	nb := c.host.NodeBackend()
 	peers := appc.PickConnector(nb, app)
 	var urlBase string
 	var conn tailcfg.NodeView
@@ -889,7 +890,7 @@ func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) (tailcf
 	if urlBase == "" {
 		return tailcfg.NodeView{}, errors.New("no connector peer found to handle address assignment")
 	}
-	client := e.backend.Sys().Dialer.Get().PeerAPIHTTPClient()
+	client := c.backend.Sys().Dialer.Get().PeerAPIHTTPClient()
 	return conn, makePeerAPIReq(ctx, client, urlBase, as)
 }
 

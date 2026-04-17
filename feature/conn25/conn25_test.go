@@ -1095,12 +1095,10 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 		Key:      key.NodePublicFromRaw32(mem.B([]byte{0: 0xff, 1: 0xff, 31: 0x01})),
 	}).View()
 
-	ext := &extension{
-		conn25:  newConn25(logger.Discard),
-		backend: newTestSafeBackend(),
-	}
+	conn25 := newConn25(logger.Discard)
+	backend := newTestSafeBackend()
 	authReconfigAsyncCalled := make(chan struct{}, 1)
-	if err := ext.Init(&testHost{
+	host := &testHost{
 		nb: &testNodeBackend{
 			peers:      []tailcfg.NodeView{connectorPeer},
 			peerAPIURL: peersAPI.URL,
@@ -1109,10 +1107,10 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 		authReconfigAsync: func() {
 			authReconfigAsyncCalled <- struct{}{}
 		},
-	}); err != nil {
-		t.Fatal(err)
 	}
-	defer ext.Shutdown()
+	conn25.backend = backend
+	conn25.host = host
+	go conn25.sendLoop(t.Context())
 
 	sn := makeSelfNode(t, []appctype.Conn25Attr{{
 		Name:       "app1",
@@ -1121,7 +1119,7 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 	}}, []string{})
 
 	cfg := mustConfig(t, sn, testPrefsNotConnector)
-	ext.conn25.reconfig(cfg)
+	conn25.reconfig(cfg)
 
 	as := addrs{
 		dst:     netip.MustParseAddr("1.2.3.4"),
@@ -1130,10 +1128,10 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 		domain:  "example.com.",
 		app:     "app1",
 	}
-	if err := ext.conn25.client.assignments.insert(as); err != nil {
+	if err := conn25.client.assignments.insert(as); err != nil {
 		t.Fatalf("error inserting address assignments: %v", err)
 	}
-	ext.conn25.client.enqueueAddressAssignment(as)
+	conn25.client.enqueueAddressAssignment(as)
 
 	select {
 	case got := <-received:
@@ -1521,12 +1519,10 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 		}).View(),
 	}
 
-	ext := &extension{
-		conn25:  newConn25(logger.Discard),
-		backend: newTestSafeBackend(),
-	}
+	conn25 := newConn25(logger.Discard)
+	backend := newTestSafeBackend()
 	authReconfigAsyncCalled := make(chan struct{}, 1)
-	if err := ext.Init(&testHost{
+	host := &testHost{
 		nb: &testNodeBackend{
 			peers:      connectorPeers,
 			peerAPIURL: peersAPI.URL,
@@ -1535,10 +1531,10 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 		authReconfigAsync: func() {
 			authReconfigAsyncCalled <- struct{}{}
 		},
-	}); err != nil {
-		t.Fatal(err)
 	}
-	defer ext.Shutdown()
+	conn25.backend = backend
+	conn25.host = host
+	go conn25.sendLoop(t.Context())
 
 	sn := makeSelfNode(t, []appctype.Conn25Attr{
 		{
@@ -1554,7 +1550,7 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 	}, []string{})
 
 	cfg := mustConfig(t, sn, testPrefsNotConnector)
-	ext.conn25.reconfig(cfg)
+	conn25.reconfig(cfg)
 
 	type lookup struct {
 		connKey     key.NodePublic
@@ -1651,10 +1647,10 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Add and enqueue the addrs, and then wait for the send to complete
 			// (as indicated by authReconfig being called).
-			if err := ext.conn25.client.assignments.insert(tt.as); err != nil {
+			if err := conn25.client.assignments.insert(tt.as); err != nil {
 				t.Fatalf("error inserting address assignment: %v", err)
 			}
-			if err := ext.conn25.client.enqueueAddressAssignment(tt.as); err != nil {
+			if err := conn25.client.enqueueAddressAssignment(tt.as); err != nil {
 				t.Fatalf("error enqueuing address assignment: %v", err)
 			}
 			select {
@@ -1665,7 +1661,7 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 
 			// Check that each of the lookups behaves as expected
 			for i, lu := range tt.lookups {
-				got, ok := ext.conn25.client.assignments.lookupTransitIPsByConnKey(lu.connKey)
+				got, ok := conn25.client.assignments.lookupTransitIPsByConnKey(lu.connKey)
 				if ok != lu.expectedOk {
 					t.Fatalf("unexpected ok result at index %d wanted %v, got %v", i, lu.expectedOk, ok)
 				}
