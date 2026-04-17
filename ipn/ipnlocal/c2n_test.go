@@ -220,6 +220,7 @@ func TestHandleC2NDebugNetmap(t *testing.T) {
 
 			if diff := gcmp.Diff(tt.want, got,
 				gcmp.AllowUnexported(netmap.NetworkMap{}, key.NodePublic{}, views.Slice[tailcfg.FilterRule]{}),
+				cmpopts.IgnoreFields(netmap.NetworkMap{}, "servicesCache"),
 				cmpopts.EquateComparable(key.MachinePublic{}),
 			); diff != "" {
 				t.Errorf("netmap mismatch (-want +got):\n%s", diff)
