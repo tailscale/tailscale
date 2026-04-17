@@ -137,6 +137,7 @@ type mockControl struct {
 	calls       []string
 	authBlocked bool
 	shutdown    chan struct{}
+	loginFlags  controlclient.LoginFlags
 
 	hi *tailcfg.Hostinfo
 }
@@ -274,6 +275,7 @@ func (cc *mockControl) Login(flags controlclient.LoginFlags) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
 	cc.authBlocked = interact || newKeys
+	cc.loginFlags |= flags
 }
 
 func (cc *mockControl) Logout(ctx context.Context) error {

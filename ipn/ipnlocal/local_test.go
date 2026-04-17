@@ -8101,3 +8101,60 @@ func TestNoSNATWithAdvertisedExitNodeWarning(t *testing.T) {
 		}
 	})
 }
+
+// TestStartPreservesLoginFlags is a regression test for a bug where the
+// LoginEphemeral flag stored on LocalBackend was silently dropped by the
+// auto-login paths in Start() and setPrefsLocked(). The user-visible symptom
+// was tsnet.Server.Ephemeral=true being ignored when combined with an auth
+// key, because the resulting RegisterRequest.Ephemeral was false.
+//
+// The test manually constructs the LocalBackend to be able set
+// loginFlags=LoginEphemeral, and then checks that at least one cc.Login call
+// carried the LoginEphemeral bit.
+func TestStartPreservesLoginFlags(t *testing.T) {
+	logf := tstest.WhileTestRunningLogger(t)
+	sys := tsd.NewSystem()
+	sys.Set(new(mem.Store))
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker.Get(), sys.UserMetricsRegistry(), sys.Bus.Get())
+	if err != nil {
+		t.Fatalf("NewFakeUserspaceEngine: %v", err)
+	}
+	t.Cleanup(e.Close)
+	sys.Set(e)
+
+	b, err := NewLocalBackend(logf, logid.PublicID{}, sys, controlclient.LoginEphemeral)
+	if err != nil {
+		t.Fatalf("NewLocalBackend: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+
+	var cc *mockControl
+	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+		cc = newClient(t, opts)
+		return cc, nil
+	})
+
+	if err := b.Start(ipn.Options{
+		UpdatePrefs: &ipn.Prefs{
+			ControlURL:  "https://controlplane.example.com",
+			WantRunning: false,
+		},
+		AuthKey: "tskey-auth-test",
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if _, err := b.EditPrefs(&ipn.MaskedPrefs{
+		Prefs:          ipn.Prefs{WantRunning: true},
+		WantRunningSet: true,
+	}); err != nil {
+		t.Fatalf("EditPrefs: %v", err)
+	}
+
+	cc.mu.Lock()
+	flags := cc.loginFlags
+	cc.mu.Unlock()
+	if flags&controlclient.LoginEphemeral == 0 {
+		t.Errorf("cc.Login was never called with LoginEphemeral; got flags=%v", flags)
+	}
+}
