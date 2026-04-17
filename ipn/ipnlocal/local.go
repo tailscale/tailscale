@@ -2767,7 +2767,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		// Without this, the state machine transitions to "NeedsLogin" implying
 		// that user interaction is required, which is not the case and can
 		// regress tsnet.Server restarts.
-		cc.Login(controlclient.LoginDefault)
+		cc.Login(b.loginFlags)
 	}
 	b.stateMachineLocked()
 
@@ -4842,7 +4842,7 @@ func (b *LocalBackend) setPrefsLocked(newp *ipn.Prefs) ipn.PrefsView {
 
 	if !oldp.WantRunning() && newp.WantRunning && cc != nil {
 		b.logf("transitioning to running; doing Login...")
-		cc.Login(controlclient.LoginDefault)
+		cc.Login(b.loginFlags)
 	}
 
 	if oldp.WantRunning() != newp.WantRunning {
