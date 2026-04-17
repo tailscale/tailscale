@@ -33,7 +33,7 @@ type State struct {
 	// possesses a valid DisablementSecret. These values are used during the
 	// Tailnet Lock deactivation process.
 	//
-	// These are  safe to share publicly or store in the clear. They cannot be
+	// These are safe to share publicly or store in the clear. They cannot be
 	// used to derive the original DisablementSecret.
 	DisablementValues [][]byte `cbor:"2,keyasint"`
 
