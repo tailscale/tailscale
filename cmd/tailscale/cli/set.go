@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"net/netip"
+	"os"
 	"os/exec"
 	"runtime"
 	"slices"
@@ -40,7 +41,7 @@ Unlike "tailscale up", this command does not require the complete set of desired
 Only settings explicitly mentioned will be set. There are no default values.`,
 	FlagSet:   setFlagSet,
 	Exec:      runSet,
-	UsageFunc: usageFuncNoDefaultValues,
+	UsageFunc: setUsageFunc,
 }
 
 type setArgsT struct {
@@ -127,6 +128,58 @@ var (
 	setArgs    setArgsT
 	setFlagSet = newSetFlagSet(effectiveGOOS(), &setArgs)
 )
+
+// flagMissingValueHelp maps a flag name to the help text shown when that flag
+// is passed without a required argument.
+var flagMissingValueHelp = map[string]string{
+	"exit-node": `The --exit-node flag requires an argument.
+
+If you want this device to route Internet traffic through an exit node,
+re-run this command with an argument specifying the Tailscale exit node
+(IP, base name, or auto:any). For example:
+
+    tailscale set --exit-node=example-exit-node-name
+    tailscale set --exit-node=192.0.2.42
+    tailscale set --exit-node=auto:any
+
+If you want this device to stop routing Internet traffic through an exit node,
+re-run this command with an empty string as an argument:
+
+    tailscale set --exit-node=""
+
+If you want to advertise this device as an exit node, re-run the CLI
+with the ` + "`--advertise-exit-node`" + ` argument:
+
+    tailscale set --advertise-exit-node
+
+
+`,
+}
+
+// setUsageFunc is the UsageFunc for setCmd. When a flag is passed without a
+// required argument, it prepends a helpful message explaining how to use that flag.
+func setUsageFunc(c *ffcli.Command) string {
+	for flagName, help := range flagMissingValueHelp {
+		if flagMissingValue(os.Args, flagName) {
+			return help + usageFuncNoDefaultValues(c)
+		}
+	}
+	return usageFuncNoDefaultValues(c)
+}
+
+// flagMissingValue reports whether args contains the named flag (e.g. "exit-node")
+// without a following value (i.e. not as --flag=value or --flag value).
+func flagMissingValue(args []string, flagName string) bool {
+	for i, arg := range args {
+		if arg == "--"+flagName || arg == "-"+flagName {
+			// No value follows, or next arg is itself a flag.
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func runSet(ctx context.Context, args []string) (retErr error) {
 	if len(args) > 0 {
