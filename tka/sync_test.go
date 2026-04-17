@@ -5,43 +5,12 @@ package tka
 
 import (
 	"bytes"
-	"strconv"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/tstest"
+	"tailscale.com/util/must"
 )
-
-func TestSyncOffer(t *testing.T) {
-	c := newTestchain(t, `
-        A1 -> A2 -> A3 -> A4 -> A5 -> A6 -> A7 -> A8 -> A9 -> A10
-        A10 -> A11 -> A12 -> A13 -> A14 -> A15 -> A16 -> A17 -> A18
-        A18 -> A19 -> A20 -> A21 -> A22 -> A23 -> A24 -> A25
-    `)
-	storage := c.Chonk()
-	a, err := Open(storage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := a.SyncOffer(storage)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// A SyncOffer includes a selection of AUMs going backwards in the tree,
-	// progressively skipping more and more each iteration.
-	want := SyncOffer{
-		Head: c.AUMHashes["A25"],
-		Ancestors: []AUMHash{
-			c.AUMHashes["A"+strconv.Itoa(25-ancestorsSkipStart)],
-			c.AUMHashes["A"+strconv.Itoa(25-ancestorsSkipStart<<ancestorsSkipShift)],
-			c.AUMHashes["A1"],
-		},
-	}
-
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("SyncOffer diff (-want, +got):\n%s", diff)
-	}
-}
 
 func TestComputeSyncIntersection_FastForward(t *testing.T) {
 	// Node 1 has: A1 -> A2
@@ -131,15 +100,6 @@ func TestComputeSyncIntersection_ForkSmallDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diff := cmp.Diff(SyncOffer{
-		Head: c.AUMHashes["F1"],
-		Ancestors: []AUMHash{
-			c.AUMHashes["A"+strconv.Itoa(9-ancestorsSkipStart)],
-			c.AUMHashes["A1"],
-		},
-	}, offer1); diff != "" {
-		t.Errorf("offer1 diff (-want, +got):\n%s", diff)
-	}
 
 	chonk2 := c.ChonkWith("A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10")
 	n2, err := Open(chonk2)
@@ -150,21 +110,12 @@ func TestComputeSyncIntersection_ForkSmallDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diff := cmp.Diff(SyncOffer{
-		Head: c.AUMHashes["A10"],
-		Ancestors: []AUMHash{
-			c.AUMHashes["A"+strconv.Itoa(10-ancestorsSkipStart)],
-			c.AUMHashes["A1"],
-		},
-	}, offer2); diff != "" {
-		t.Errorf("offer2 diff (-want, +got):\n%s", diff)
-	}
 
 	// Node 1 only knows about the first eight nodes, so the head of n2 is
 	// alien to it.
 	t.Run("n1", func(t *testing.T) {
-		// n2 has 10 nodes, so the first common ancestor should be 10-ancestorsSkipStart
-		wantIntersection := c.AUMHashes["A"+strconv.Itoa(10-ancestorsSkipStart)]
+		// n2 has 10 nodes, so the first common ancestor is the genesis AUM
+		wantIntersection := c.AUMHashes["A1"]
 
 		got, err := computeSyncIntersection(chonk1, offer1, offer2)
 		if err != nil {
@@ -180,8 +131,8 @@ func TestComputeSyncIntersection_ForkSmallDiff(t *testing.T) {
 
 	// Node 2 knows about the full chain but doesn't recognize the head.
 	t.Run("n2", func(t *testing.T) {
-		// n1 has 9 nodes, so the first common ancestor should be 9-ancestorsSkipStart
-		wantIntersection := c.AUMHashes["A"+strconv.Itoa(9-ancestorsSkipStart)]
+		// n1 has 9 nodes, so the first common ancestor is the genesis AUM
+		wantIntersection := c.AUMHashes["A1"]
 
 		got, err := computeSyncIntersection(chonk2, offer2, offer1)
 		if err != nil {
@@ -373,5 +324,103 @@ func TestSyncSimpleE2E(t *testing.T) {
 
 	if cHash, nHash := control.Head(), node.Head(); cHash != nHash {
 		t.Errorf("node & control are not synced: c=%x, n=%x", cHash, nHash)
+	}
+}
+
+// TestSyncFromFarBehind checks that nodes with compacted state can still find
+// a common ancestor when the remote is significantly ahead.
+//
+// We simulate a node that has compacted its early history and is now ~500 AUMs
+// behind the control plane, a distance that previously caused exponential sampling
+// in SyncOffer to skip the node's entire local history.
+//
+// Regression test for http://go/corp/40404
+func TestSyncFromFarBehind(t *testing.T) {
+	pub1, priv1 := testingKey25519(t, 1)
+	pub2, _ := testingKey25519(t, 2)
+	signer1 := signer25519(priv1)
+
+	key1 := Key{Kind: Key25519, Public: pub1, Votes: 2}
+	key2 := Key{Kind: Key25519, Public: pub2, Votes: 2}
+
+	// Setup: persistentAuthority (control plane) vs compactingAuthority (client node).
+	state := State{
+		Keys:              []Key{key1},
+		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+	}
+
+	persistentStorage, compactingStorage := ChonkMem(), ChonkMem()
+	persistentSize := func() int { return len(must.Get(persistentStorage.AllAUMs())) }
+	compactingSize := func() int { return len(must.Get(compactingStorage.AllAUMs())) }
+
+	persistentAuthority, genesisAUM := must.Get2(Create(persistentStorage, state, signer1))
+	compactingAuthority := must.Get(Bootstrap(compactingStorage, genesisAUM))
+
+	// Backdate the clock on the compactingStorage so all AUMs will be old enough
+	// to be considered for compacting.
+	clock := tstest.NewClock(tstest.ClockOpts{})
+	compactingStorage.SetClock(clock)
+
+	// 1. Generate enough history to trigger checkpoints.
+	for range checkpointEvery * 2 {
+		update := persistentAuthority.NewUpdater(signer1)
+
+		must.Do(update.AddKey(key2))
+		addKey := must.Get(update.Finalize(persistentStorage))
+		must.Do(persistentAuthority.Inform(persistentStorage, addKey))
+		must.Do(compactingAuthority.Inform(compactingStorage, addKey))
+
+		update = persistentAuthority.NewUpdater(signer1)
+		must.Do(update.RemoveKey(key2.MustID()))
+		removeKey := must.Get(update.Finalize(persistentStorage))
+		must.Do(persistentAuthority.Inform(persistentStorage, removeKey))
+		must.Do(compactingAuthority.Inform(compactingStorage, removeKey))
+	}
+
+	t.Logf("genesis and first batch of AUMs: persistent = %d, compacting = %d", persistentSize(), compactingSize())
+
+	// 2. Compact the node state.
+	//
+	// It now has a different 'oldestAncestor' than the control plane.
+	must.Do(compactingAuthority.Compact(compactingStorage, CompactionDefaults))
+
+	// 3. Advance the control plane far beyond the node.
+	//
+	// As of 2026-04-17, the largest TKA has ~750 AUMs.
+	//
+	// If you keep increasing this number, eventually the sync will fail because you
+	// hit the hard-coded limits on iteration during the sync process.
+	for persistentSize() < compactingSize()+800 {
+		b := persistentAuthority.NewUpdater(signer1)
+
+		must.Do(b.AddKey(key2))
+		addKey := must.Get(b.Finalize(persistentStorage))
+		must.Do(persistentAuthority.Inform(persistentStorage, addKey))
+
+		b = persistentAuthority.NewUpdater(signer1)
+		must.Do(b.RemoveKey(key2.MustID()))
+		removeKey := must.Get(b.Finalize(persistentStorage))
+		must.Do(persistentAuthority.Inform(persistentStorage, removeKey))
+	}
+
+	t.Logf("post-compacting and extra AUMs:  persistent = %d, compacting = %d", persistentSize(), compactingSize())
+
+	// 4. Verify Intersection.
+	// The node should find an intersection even with a 500-AUM gap.
+	persistentOffer := must.Get(persistentAuthority.SyncOffer(persistentStorage))
+	compactingOffer := must.Get(compactingAuthority.SyncOffer(compactingStorage))
+
+	if _, err := compactingAuthority.MissingAUMs(compactingStorage, persistentOffer); err != nil {
+		t.Errorf("node failed to find intersection with far-ahead control plane: %v", err)
+	}
+
+	// 4. Check that the persistent authority can find an intersection with the
+	// compacting authority, and has missing AUMs to send it.
+	missing, err := persistentAuthority.MissingAUMs(persistentStorage, compactingOffer)
+	if len(missing) == 0 {
+		t.Errorf("control plane did not find any missing AUMs for node")
+	}
+	if err != nil {
+		t.Errorf("control plane failed to find missing AUMs for node: %v", err)
 	}
 }
