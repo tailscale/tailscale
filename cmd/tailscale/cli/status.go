@@ -28,7 +28,7 @@ import (
 
 var statusCmd = &ffcli.Command{
 	Name:       "status",
-	ShortUsage: "tailscale status [--active] [--web] [--json]",
+	ShortUsage: "tailscale status [--active] [--web] [--json] [--services]",
 	ShortHelp:  "Show state of tailscaled and its connections",
 	LongHelp: strings.TrimSpace(`
 
@@ -56,19 +56,21 @@ https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go
 		fs.StringVar(&statusArgs.listen, "listen", "127.0.0.1:8384", "listen address for web mode; use port 0 for automatic")
 		fs.BoolVar(&statusArgs.browser, "browser", true, "Open a browser in web mode")
 		fs.BoolVar(&statusArgs.header, "header", false, "show column headers in table format")
+		fs.BoolVar(&statusArgs.services, "services", false, "show services visible to this node")
 		return fs
 	})(),
 }
 
 var statusArgs struct {
-	json    bool   // JSON output mode
-	web     bool   // run webserver
-	listen  string // in web mode, webserver address to listen on, empty means auto
-	browser bool   // in web mode, whether to open browser
-	active  bool   // in CLI mode, filter output to only peers with active sessions
-	self    bool   // in CLI mode, show status of local machine
-	peers   bool   // in CLI mode, show status of peer machines
-	header  bool   // in CLI mode, show column headers in table format
+	json     bool   // JSON output mode
+	web      bool   // run webserver
+	listen   string // in web mode, webserver address to listen on, empty means auto
+	browser  bool   // in web mode, whether to open browser
+	active   bool   // in CLI mode, filter output to only peers with active sessions
+	self     bool   // in CLI mode, show status of local machine
+	peers    bool   // in CLI mode, show status of peer machines
+	services bool   // in CLI mode, show services visible to this node
+	header   bool   // in CLI mode, show column headers in table format
 }
 
 const mullvadTCD = "mullvad.ts.net."
@@ -84,6 +86,40 @@ func runStatus(ctx context.Context, args []string) error {
 	st, err := getStatus(ctx)
 	if err != nil {
 		return fixTailscaledConnectError(err)
+	}
+	if statusArgs.services {
+		services, err := localClient.GetServices(ctx)
+		if err != nil {
+			return err
+		}
+		if statusArgs.json {
+			e := json.NewEncoder(Stdout)
+			e.SetIndent("", "\t")
+			return e.Encode(services)
+		}
+		if len(services) == 0 {
+			outln("No services visible to this node.")
+			return nil
+		}
+		w := tabwriter.NewWriter(Stdout, 10, 5, 5, ' ', 0)
+		defer w.Flush()
+		fmt.Fprintf(w, " %s\t%s\t%s\n", "SERVICE", "ADDRS", "PORTS")
+		for name, svc := range services {
+			addrs := make([]string, len(svc.Addrs))
+			for i, a := range svc.Addrs {
+				addrs[i] = a.String()
+			}
+			ports := make([]string, len(svc.Ports))
+			for i, p := range svc.Ports {
+				ports[i] = p.String()
+			}
+			fmt.Fprintf(w, " %s\t%s\t%s\n",
+				name,
+				strings.Join(addrs, ", "),
+				strings.Join(ports, ", "),
+			)
+		}
+		return nil
 	}
 	if statusArgs.json {
 		if statusArgs.active {
