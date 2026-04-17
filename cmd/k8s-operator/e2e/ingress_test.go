@@ -17,9 +17,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"tailscale.com/client/tailscale/v2"
 	kube "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/tsnet"
 	"tailscale.com/tstest"
 	"tailscale.com/util/httpm"
 )
@@ -274,6 +276,86 @@ func TestL7HAIngress(t *testing.T) {
 	}
 }
 
+func TestL7HAIngressMultiTailnet(t *testing.T) {
+	if tnClient == nil || secondTNClient == nil {
+		t.Skip("TestL7HAMultiTailnet requires a working tailnet client for a first and second tailnet")
+	}
+
+	// Apply nginx Deployment and Service.
+	createAndCleanup(t, kubeClient, nginxDeployment(ns, "nginx"))
+	createAndCleanup(t, kubeClient, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nginx",
+			Namespace: ns,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{
+				"app.kubernetes.io/name": "nginx",
+			},
+			Ports: []corev1.ServicePort{
+				{
+					Name: "http",
+					Port: 80,
+				},
+			},
+		},
+	})
+
+	// Create Ingress ProxyGroup for each Tailnet.
+	firstTailnetPG := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "first-tailnet",
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Type: tsapi.ProxyGroupTypeIngress,
+		},
+	}
+	createAndCleanup(t, kubeClient, firstTailnetPG)
+	secondTailnetPG := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "second-tailnet",
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Type:    tsapi.ProxyGroupTypeIngress,
+			Tailnet: "second-tailnet",
+		},
+	}
+	createAndCleanup(t, kubeClient, secondTailnetPG)
+
+	if err := verifyProxyGroupTailnet(t, firstTailnetPG, tnClient); err != nil {
+		t.Fatalf("verifying ProxyGroup %s is registered to the correct tailnet: %v", firstTailnetPG.Name, err)
+	}
+	if err := verifyProxyGroupTailnet(t, secondTailnetPG, secondTNClient); err != nil {
+		t.Fatalf("verifying ProxyGroup %s is registered to the correct tailnet: %v", secondTailnetPG.Name, err)
+	}
+
+	// Apply Ingress to expose nginx.
+	name := generateName("test-ingress")
+	ingress := l7Ingress(ns, name, map[string]string{
+		"tailscale.com/proxy-group": "second-tailnet",
+	})
+	createAndCleanup(t, kubeClient, ingress)
+
+	// Check that the tailscale (VIP) Service has been created in the expected Tailnet.
+	svcName := "svc:" + name
+	if err := tstest.WaitFor(3*time.Minute, func() error {
+		_, err := secondTSClient.VIPServices().Get(t.Context(), svcName)
+		if tailscale.IsNotFound(err) {
+			return fmt.Errorf("Tailscale service %q not yet in expected tailnet", svcName)
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("Tailscale service %q never appeared in expected tailnet: %v", svcName, err)
+	}
+	hostname, err := waitForIngressHostname(t, ns, name)
+	if err != nil {
+		t.Fatalf("error waiting for Ingress hostname: %v", err)
+	}
+	if err := testIngressIsReachable(t, newHTTPClient(secondTNClient), fmt.Sprintf("https://%s:443", hostname)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func l7Ingress(namespace, name string, annotations map[string]string) *networkingv1.Ingress {
 	ingress := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
@@ -402,6 +484,56 @@ func testIngressIsReachable(t *testing.T, httpClient *http.Client, url string) e
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status from %s: %d", url, resp.StatusCode)
+	}
+	return nil
+}
+
+// verifyProxyGroupTailnet verifies that a ProxyGroup is registered to the correct tailnet.
+// This is done by getting the expected tailnet domain for the tailnet client,
+// and comparing this with the actual device fqdn in the ProxyGroup state secret.
+func verifyProxyGroupTailnet(t *testing.T, pg *tsapi.ProxyGroup, cl *tsnet.Server) error {
+	t.Helper()
+	// Determine the expected tailnet Magic DNS Name.
+	lc, err := cl.LocalClient()
+	if err != nil {
+		return err
+	}
+	status, err := lc.Status(t.Context())
+	if err != nil {
+		return err
+	}
+	_, expectedTailnet, ok := strings.Cut(strings.TrimSuffix(status.Self.DNSName, "."), ".")
+	if !ok {
+		return fmt.Errorf("unexpected DNSName format %q", status.Self.DNSName)
+	}
+	// Read the device FQDN from the first state secret for the ProxyGroup,
+	// and verify that this matches the expected tailnet.
+	if err := tstest.WaitFor(3*time.Minute, func() error {
+		var secrets corev1.SecretList
+		if err := kubeClient.List(t.Context(), &secrets,
+			client.InNamespace("tailscale"),
+			client.MatchingLabels{
+				kubetypes.LabelSecretType:            kubetypes.LabelSecretTypeState,
+				"tailscale.com/parent-resource-type": "proxygroup",
+				"tailscale.com/parent-resource":      pg.Name,
+			},
+		); err != nil {
+			return err
+		}
+		if len(secrets.Items) == 0 {
+			return fmt.Errorf("no state secrets found for ProxyGroup %q yet", pg.Name)
+		}
+		fqdn := strings.TrimSuffix(string(secrets.Items[0].Data[kubetypes.KeyDeviceFQDN]), ".")
+		_, tailnet, ok := strings.Cut(fqdn, ".")
+		if !ok {
+			return fmt.Errorf("ProxyGroup %q: device FQDN %q has no domain yet", pg.Name, fqdn)
+		}
+		if tailnet != expectedTailnet {
+			return fmt.Errorf("ProxyGroup %q on wrong tailnet: got domain %q, want %q", pg.Name, tailnet, expectedTailnet)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("ProxyGroup %q not on expected tailnet: %v", pg.Name, err)
 	}
 	return nil
 }

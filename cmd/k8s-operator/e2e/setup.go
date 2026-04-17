@@ -4,6 +4,7 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -39,6 +40,7 @@ import (
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage/driver"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/rest"
@@ -69,10 +71,13 @@ const (
 )
 
 var (
-	tsClient   *tailscale.Client // For API calls to control.
-	tnClient   *tsnet.Server     // For testing real tailnet traffic.
-	restCfg    *rest.Config      // For constructing a client-go client if necessary.
-	kubeClient client.WithWatch  // For k8s API calls.
+	tsClient           *tailscale.Client // For API calls to control.
+	tnClient           *tsnet.Server     // For testing real tailnet traffic on first tailnet.
+	secondTSClient     *tailscale.Client // For API calls to the secondary tailnet (_second_tailnet).
+	secondTNClient     *tsnet.Server     // For testing real tailnet traffic on second tailnet.
+	restCfg            *rest.Config      // For constructing a client-go client if necessary.
+	kubeClient         client.WithWatch  // For k8s API calls.
+	clusterLoginServer string
 
 	//go:embed certs/pebble.minica.crt
 	pebbleMiniCACert []byte
@@ -157,11 +162,11 @@ func runTests(m *testing.M) (int, error) {
 	}
 
 	var (
-		clusterLoginServer     string   // Login server from cluster Pod point of view.
-		clientID, clientSecret string   // OAuth client for the operator to use.
+		clientID, clientSecret string   // OAuth client for the first tailnet (for the operator to use).
 		caPaths                []string // Extra CA cert file paths to add to images.
 
-		certsDir = filepath.Join(tmp, "certs") // Directory containing extra CA certs to add to images.
+		certsDir                           = filepath.Join(tmp, "certs") // Directory containing extra CA certs to add to images.
+		secondClientID, secondClientSecret string                        // OAuth client for the second tailnet (for the operator to use).
 	)
 	if *fDevcontrol {
 		// Deploy pebble and get its certs.
@@ -279,7 +284,7 @@ func runTests(m *testing.M) (int, error) {
 			return 0, fmt.Errorf("failed to set policy file: %w", err)
 		}
 
-		logger.Infof("ACLs configured")
+		logger.Info("ACLs configured for first tailnet")
 
 		key, err := tsClient.Keys().CreateOAuthClient(ctx, tailscale.CreateOAuthClientRequest{
 			Scopes:      []string{"auth_keys", "devices:core", "services"},
@@ -287,36 +292,77 @@ func runTests(m *testing.M) (int, error) {
 			Description: "k8s-operator client for e2e tests",
 		})
 		if err != nil {
-			return 0, fmt.Errorf("failed to marshal OAuth client creation request: %w", err)
+			return 0, fmt.Errorf("failed to create OAuth client for first tailnet: %w", err)
 		}
-
 		clientID = key.ID
 		clientSecret = key.Key
+
+		logger.Info("OAuth credentials set for first tailnet")
+
+		// Create second tailnet. The bootstrap credentials returned have 'all' permissions-
+		// they are used for administrative actions and to create a separately scoped
+		// Oauth client for the k8s operator.
+		bootstrapClient, err := createTailnet(ctx, tsClient)
+		if err != nil {
+			return 0, fmt.Errorf("failed to create second tailnet: %w", err)
+		}
+
+		// Set HTTPS on second tailnet.
+		err = bootstrapClient.TailnetSettings().Update(ctx, tailscale.UpdateTailnetSettingsRequest{HTTPSEnabled: new(true)})
+		if err != nil {
+			return 0, fmt.Errorf("failed to configure https for second tailnet: %w", err)
+		}
+		logger.Info("HTTPS settings configured for second tailnet")
+
+		// Set ACLs for second tailnet.
+		if err = bootstrapClient.PolicyFile().Set(ctx, string(requiredACLs), ""); err != nil {
+			return 0, fmt.Errorf("failed to set policy file: %w", err)
+		}
+
+		logger.Info("ACLs configured for second tailnet")
+
+		// Create an OAuth client for the second tailnet to be used
+		// by the k8s-operator.
+		secondKey, err := bootstrapClient.Keys().CreateOAuthClient(ctx, tailscale.CreateOAuthClientRequest{
+			Scopes:      []string{"auth_keys", "devices:core", "services"},
+			Tags:        []string{"tag:k8s-operator"},
+			Description: "k8s-operator client for e2e tests",
+		})
+		if err != nil {
+			return 0, fmt.Errorf("failed to create OAuth client for second tailnet: %w", err)
+		}
+		secondClientID = secondKey.ID
+		secondClientSecret = secondKey.Key
+
+		secondTSClient, err = tailscaleClientFromSecret(ctx, "http://localhost:31544", secondClientID, secondClientSecret)
+		if err != nil {
+			return 0, fmt.Errorf("failed to set up second tailnet client: %w", err)
+		}
+
 	} else {
 		clientSecret = os.Getenv("TS_API_CLIENT_SECRET")
 		if clientSecret == "" {
 			return 0, fmt.Errorf("must use --devcontrol or set TS_API_CLIENT_SECRET to an OAuth client suitable for the operator")
 		}
-		// Format is "tskey-client-<id>-<random>".
-		parts := strings.Split(clientSecret, "-")
-		if len(parts) != 4 {
-			return 0, fmt.Errorf("TS_API_CLIENT_SECRET is not valid")
-		}
-		clientID = parts[2]
-		credentials := clientcredentials.Config{
-			ClientID:     clientID,
-			ClientSecret: clientSecret,
-			TokenURL:     fmt.Sprintf("%s/api/v2/oauth/token", ipn.DefaultControlURL),
-			Scopes:       []string{"auth_keys"},
-		}
-		tk, err := credentials.Token(ctx)
+		clientID, err = clientIDFromSecret(clientSecret)
 		if err != nil {
-			return 0, fmt.Errorf("failed to get OAuth token: %w", err)
+			return 0, fmt.Errorf("failed to get client id from secret: %w", err)
 		}
-		// An access token will last for an hour which is plenty of time for
-		// the tests to run. No need for token refresh logic.
-		tsClient = &tailscale.Client{
-			APIKey: tk.AccessToken,
+		tsClient, err = tailscaleClientFromSecret(ctx, ipn.DefaultControlURL, clientID, clientSecret)
+		if err != nil {
+			return 0, fmt.Errorf("failed to set up first tailnet client: %w", err)
+		}
+		secondClientSecret = os.Getenv("SECOND_TS_API_CLIENT_SECRET")
+		if secondClientSecret == "" {
+			return 0, fmt.Errorf("must use --devcontrol or set SECOND_TS_API_CLIENT_SECRET to an OAuth client suitable for the operator")
+		}
+		secondClientID, err = clientIDFromSecret(secondClientSecret)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get client id from secret: %w", err)
+		}
+		secondTSClient, err = tailscaleClientFromSecret(ctx, ipn.DefaultControlURL, secondClientID, secondClientSecret)
+		if err != nil {
+			return 0, fmt.Errorf("failed to set up second tailnet client: %w", err)
 		}
 	}
 
@@ -446,9 +492,15 @@ func runTests(m *testing.M) (int, error) {
 
 	authKey, err := tsClient.Keys().CreateAuthKey(ctx, tailscale.CreateKeyRequest{Capabilities: caps})
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to create auth key for first tailnet: %w", err)
 	}
 	defer tsClient.Keys().Delete(context.Background(), authKey.ID)
+
+	secondAuthKey, err := secondTSClient.Keys().CreateAuthKey(ctx, tailscale.CreateKeyRequest{Capabilities: caps})
+	if err != nil {
+		return 0, fmt.Errorf("failed to create auth key for second tailnet: %w", err)
+	}
+	defer secondTSClient.Keys().Delete(context.Background(), secondAuthKey.ID)
 
 	tnClient = &tsnet.Server{
 		ControlURL: tsClient.BaseURL.String(),
@@ -463,7 +515,62 @@ func runTests(m *testing.M) (int, error) {
 	}
 	defer tnClient.Close()
 
+	secondTNClient = &tsnet.Server{
+		ControlURL: secondTSClient.BaseURL.String(),
+		Hostname:   "test-proxy",
+		Ephemeral:  true,
+		Store:      &mem.Store{},
+		AuthKey:    secondAuthKey.Key,
+	}
+	_, err = secondTNClient.Up(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer secondTNClient.Close()
+
+	// Create the tailnet Secret in the tailscale namespace.
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "second-tailnet-credentials",
+			Namespace: "tailscale",
+		},
+		Data: map[string][]byte{
+			"client_id":     []byte(secondClientID),
+			"client_secret": []byte(secondClientSecret),
+		},
+	}
+	if err := createOrUpdate(ctx, kubeClient, secret); err != nil {
+		return 0, fmt.Errorf("failed to create second-tailnet-credentials Secret: %w", err)
+	}
+	defer kubeClient.Delete(context.Background(), secret)
+
+	// Create the Tailnet resource.
+	tn := &tsapi.Tailnet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "second-tailnet",
+		},
+		Spec: tsapi.TailnetSpec{
+			LoginURL: clusterLoginServer,
+			Credentials: tsapi.TailnetCredentials{
+				SecretName: "second-tailnet-credentials",
+			},
+		},
+	}
+	if err := createOrUpdate(ctx, kubeClient, tn); err != nil {
+		return 0, fmt.Errorf("failed to create second-tailnet Tailnet: %w", err)
+	}
+	defer kubeClient.Delete(context.Background(), tn)
+
 	return m.Run(), nil
+}
+
+func clientIDFromSecret(clientSecret string) (string, error) {
+	// Format is "tskey-client-<id>-<random>".
+	parts := strings.Split(clientSecret, "-")
+	if len(parts) != 4 {
+		return "", fmt.Errorf("secret is not valid")
+	}
+	return parts[2], nil
 }
 
 func upgraderOrInstaller(cfg *action.Configuration, releaseName string) helmInstallerFunc {
@@ -723,4 +830,66 @@ func buildImage(ctx context.Context, dir, repo, target, tag string, extraCACerts
 	}
 
 	return nil
+}
+
+func createOrUpdate(ctx context.Context, cl client.Client, obj client.Object) error {
+	if err := cl.Create(ctx, obj); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return err
+		}
+		return cl.Update(ctx, obj)
+	}
+	return nil
+}
+
+// createTailnet creates a new tailnet and returns a tailscale.Client
+// authenticated against it using the bootstrap credentials included in the
+// creation response.
+func createTailnet(ctx context.Context, tsClient *tailscale.Client) (*tailscale.Client, error) {
+	tailnetName := fmt.Sprintf("second-tailnet-%d", time.Now().Unix())
+	body, err := json.Marshal(map[string]any{"displayName": tailnetName})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal tailnet creation request: %w", err)
+	}
+	// TODO(beckypauley): change to use a method on tailscale.Client once this is available.
+	req, _ := http.NewRequestWithContext(ctx, "POST", tsClient.BaseURL.String()+"/api/v2/organizations/-/tailnets", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", tsClient.APIKey))
+	resp, err := tsClient.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create tailnet: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d creating tailnet: %s", resp.StatusCode, string(b))
+	}
+	var result struct {
+		OauthClient struct {
+			ID     string `json:"id"`
+			Secret string `json:"secret"`
+		} `json:"oauthClient"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return tailscaleClientFromSecret(ctx, tsClient.BaseURL.String(), result.OauthClient.ID, result.OauthClient.Secret)
+}
+
+// tailscaleClientFromSecret exchanges OAuth client credentials for an access token and
+// returns a tailscale.Client configured to use it. The token is valid for
+// one hour, which is sufficient for the tests to run. No need for refresh logic.
+func tailscaleClientFromSecret(ctx context.Context, baseURL, clientID, clientSecret string) (*tailscale.Client, error) {
+	cfg := clientcredentials.Config{
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		TokenURL:     fmt.Sprintf("%s/api/v2/oauth/token", baseURL),
+	}
+	tk, err := cfg.Token(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get OAuth token for client %q: %w", clientID, err)
+	}
+	return &tailscale.Client{
+		APIKey:  tk.AccessToken,
+		BaseURL: must.Get(url.Parse(baseURL)),
+	}, nil
 }
