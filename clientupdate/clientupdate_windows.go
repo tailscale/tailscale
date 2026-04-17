@@ -38,12 +38,12 @@ const (
 	updaterPrefix = "tailscale-updater"
 )
 
-func makeSelfCopy() (origPathExe, tmpPathExe string, err error) {
-	selfExe, err := os.Executable()
+func makeCmdTailscaleCopy() (origPathExe, tmpPathExe string, err error) {
+	srcExe, err := findCmdTailscale()
 	if err != nil {
 		return "", "", err
 	}
-	f, err := os.Open(selfExe)
+	f, err := os.Open(srcExe)
 	if err != nil {
 		return "", "", err
 	}
@@ -59,7 +59,25 @@ func makeSelfCopy() (origPathExe, tmpPathExe string, err error) {
 		f2.Close()
 		return "", "", err
 	}
-	return selfExe, f2.Name(), f2.Close()
+	return srcExe, f2.Name(), f2.Close()
+}
+
+// findCmdTailscale returns the path to the binary that should be copied for the update
+// re-execution. The copy is re-executed with "update" as a subcommand, so it must be
+// a binary that handles "update" (ie tailscale.exe, not tailscaled.exe)
+func findCmdTailscale() (string, error) {
+	selfExe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if strings.EqualFold(filepath.Base(selfExe), "tailscale.exe") {
+		return selfExe, nil
+	}
+	ts := filepath.Join(filepath.Dir(selfExe), "tailscale.exe")
+	if _, err := os.Stat(ts); err != nil {
+		return "", fmt.Errorf("cannot find tailscale.exe alongside %s: %w", selfExe, err)
+	}
+	return ts, nil
 }
 
 func markTempFileWindows(name string) error {
@@ -159,14 +177,14 @@ you can run the command prompt as Administrator one of these ways:
 
 	up.Logf("making tailscale.exe copy to switch to...")
 	up.cleanupOldDownloads(filepath.Join(os.TempDir(), updaterPrefix+"-*.exe"))
-	_, selfCopy, err := makeSelfCopy()
+	_, cmdTailscaleCopy, err := makeCmdTailscaleCopy()
 	if err != nil {
 		return err
 	}
-	defer os.Remove(selfCopy)
+	defer os.Remove(cmdTailscaleCopy)
 	up.Logf("running tailscale.exe copy for final install...")
 
-	cmd := exec.Command(selfCopy, "update")
+	cmd := exec.Command(cmdTailscaleCopy, "update")
 	cmd.Env = append(os.Environ(), winMSIEnv+"="+msiTarget, winVersionEnv+"="+ver)
 	cmd.Stdout = up.Stderr
 	cmd.Stderr = up.Stderr
