@@ -156,8 +156,8 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 	})
 
 	// Not using DERP in this test (for now?).
-	s1.MagicSock.Get().SetDERPMap(&tailcfg.DERPMap{})
-	s2.MagicSock.Get().SetDERPMap(&tailcfg.DERPMap{})
+	s1.MagicSock.Get().SetDERPMap(&tailcfg.DERPMap{}, true)
+	s2.MagicSock.Get().SetDERPMap(&tailcfg.DERPMap{}, true)
 
 	wait.Wait()
 }

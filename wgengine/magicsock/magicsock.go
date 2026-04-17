@@ -183,6 +183,7 @@ type Conn struct {
 	allocRelayEndpointPub    *eventbus.Publisher[UDPRelayAllocReq]
 	portUpdatePub            *eventbus.Publisher[router.PortUpdate]
 	tsmpDiscoKeyAvailablePub *eventbus.Publisher[NewDiscoKeyAvailable]
+	homeDERPChangedPub       *eventbus.Publisher[HomeDERPChanged]
 
 	// pconn4 and pconn6 are the underlying UDP sockets used to
 	// send/receive packets for wireguard and other magicsock
@@ -657,6 +658,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.allocRelayEndpointPub = eventbus.Publish[UDPRelayAllocReq](ec)
 	c.portUpdatePub = eventbus.Publish[router.PortUpdate](ec)
 	c.tsmpDiscoKeyAvailablePub = eventbus.Publish[NewDiscoKeyAvailable](ec)
+	c.homeDERPChangedPub = eventbus.Publish[HomeDERPChanged](ec)
 	eventbus.SubscribeFunc(ec, c.onPortMapChanged)
 	eventbus.SubscribeFunc(ec, c.onUDPRelayAllocResp)
 
@@ -1056,7 +1058,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	ni.OSHasIPv6.Set(report.OSHasIPv6)
 	ni.WorkingUDP.Set(report.UDP)
 	ni.WorkingICMPv4.Set(report.ICMPv4)
-	ni.PreferredDERP = c.maybeSetNearestDERP(report)
+	ni.PreferredDERP = c.maybeSetNearestDERP(report, false)
 	ni.FirewallMode = hostinfo.FirewallMode()
 
 	c.callNetInfoCallback(ni)

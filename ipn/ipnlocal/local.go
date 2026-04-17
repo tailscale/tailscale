@@ -627,6 +627,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	}
 	eventbus.SubscribeFunc(ec, b.onAppConnectorRouteUpdate)
 	eventbus.SubscribeFunc(ec, b.onAppConnectorStoreRoutes)
+	eventbus.SubscribeFunc(ec, b.onHomeDERPUpdate)
 	mConn.SetNetInfoCallback(b.setNetInfo) // TODO(tailscale/tailscale#17887): move to eventbus
 
 	return b, nil
@@ -655,6 +656,51 @@ func (b *LocalBackend) onAppConnectorStoreRoutes(ri appctype.RouteInfo) {
 		if err := b.storeRouteInfo(ri); err != nil {
 			b.logf("appc: failed to store route info: %v", err)
 		}
+	}
+}
+
+// testOnlyHomeDERPUpdate if non-nil is called after setting home DERP and
+// writing netmap to disk.
+var testOnlyHomeDERPUpdate func()
+
+func (b *LocalBackend) onHomeDERPUpdate(du magicsock.HomeDERPChanged) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.onHomeDERPUpdateLocked(du)
+
+	if testOnlyHomeDERPUpdate != nil {
+		testOnlyHomeDERPUpdate()
+	}
+}
+
+// onHomeDERPUpdateLocked considitonally updates the homeDERP for use in the
+// netmap cache.
+// If we switched our currentNode by switching profiles, we might be trying
+// to update the homeDERP from another profile. If the old homeDERP does not
+// match what we expect, don't swap the homeDERP.
+// In practice, it is possible that one profile with a homeDERP of 0 (no-derp)
+// got switched before setting any home DERP or that DERP IDs match across
+// DERP maps. Since the risk of this happening is small and the consequences
+// of this is is just a possible less optimal DERP until the next reSTUN,
+// accept this possibility.
+func (b *LocalBackend) onHomeDERPUpdateLocked(du magicsock.HomeDERPChanged) {
+	cn := b.currentNode()
+
+	if cn == nil || cn.DERPMap() == nil || cn.DERPMap().Regions == nil {
+		return
+	}
+
+	if _, ok := cn.DERPMap().Regions[du.New]; !ok {
+		return
+	}
+
+	if !cn.homeDERP.CompareAndSwap(int64(du.Old), int64(du.New)) {
+		return
+	}
+
+	if err := b.writeNetmapToDiskLocked(b.NetMap()); err != nil {
+		b.logf("write netmap to cache: %v", err)
 	}
 }
 
@@ -1821,7 +1867,18 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		}
 
 		b.e.SetNetworkMap(st.NetMap)
-		b.MagicConn().SetDERPMap(st.NetMap.DERPMap)
+		b.MagicConn().SetDERPMap(st.NetMap.DERPMap, false)
+		if c == nil && st.NetMap.Cached && st.NetMap.SelfNode.Valid() {
+			// Loading from a cached netmap (c == nil means no live control
+			// client). Pre-seed the home DERP from the cached self node so
+			// that the guard in maybeSetNearestDERP prevents changing the
+			// DERP home before we reconnect to the control plane. If the cache has
+			// nothing in it, skip this, and let the node pick a DERP itself.
+			if cachedHome := st.NetMap.SelfNode.HomeDERP(); cachedHome != 0 {
+				b.health.SetOutOfPollNetMap()
+				b.MagicConn().ForceSetNearestDERP(cachedHome)
+			}
+		}
 		b.MagicConn().SetOnlyTCP443(st.NetMap.HasCap(tailcfg.NodeAttrOnlyTCP443))
 
 		// Update our cached DERP map
@@ -3388,7 +3445,7 @@ func (b *LocalBackend) DebugForceNetmapUpdate() {
 	nm := b.currentNode().NetMap()
 	b.e.SetNetworkMap(nm)
 	if nm != nil {
-		b.MagicConn().SetDERPMap(nm.DERPMap)
+		b.MagicConn().SetDERPMap(nm.DERPMap, true)
 	}
 	b.setNetMapLocked(nm)
 }
@@ -4846,7 +4903,7 @@ func (b *LocalBackend) setPrefsLocked(newp *ipn.Prefs) ipn.PrefsView {
 	}
 
 	if netMap != nil {
-		b.MagicConn().SetDERPMap(netMap.DERPMap)
+		b.MagicConn().SetDERPMap(netMap.DERPMap, true)
 	}
 
 	if !oldp.WantRunning() && newp.WantRunning && cc != nil {
@@ -5208,7 +5265,6 @@ func (b *LocalBackend) authReconfig() {
 //
 // b.mu must be held.
 func (b *LocalBackend) authReconfigLocked() {
-
 	if b.shutdownCalled {
 		b.logf("[v1] authReconfig: skipping because in shutdown")
 		return

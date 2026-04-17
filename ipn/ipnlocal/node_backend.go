@@ -80,6 +80,13 @@ type nodeBackend struct {
 	eventClient    *eventbus.Client
 	derpMapViewPub *eventbus.Publisher[tailcfg.DERPMapView]
 
+	// homeDERP lives here temporarily. as long as mapSession is short lived, we
+	// don't have a location delivering netmaps to local backend that knows our
+	// homeDERP hence why it is cached here for now.
+	// TODO(cmol): move this field into a refactored mapSession that is not
+	// short lived.
+	homeDERP atomic.Int64
+
 	// TODO(nickkhyl): maybe use sync.RWMutex?
 	mu syncs.Mutex // protects the following fields
 
