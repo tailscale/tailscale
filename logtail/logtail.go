@@ -172,6 +172,11 @@ type Logger struct {
 	procID              uint32
 	includeProcSequence bool
 
+	// disabled, when true, causes this logger to drop incoming log entries
+	// without buffering or uploading. It is independent of the process-wide
+	// Disable kill switch, which takes precedence. Toggled by SetEnabled.
+	disabled atomic.Bool
+
 	writeLock    sync.Mutex // guards procSequence, flushTimer, buffer.Write calls
 	procSequence uint64
 	flushTimer   tstime.TimerController // used when flushDelay is >0
@@ -594,6 +599,15 @@ func Disable() {
 	logtailDisabled.Store(true)
 }
 
+// SetEnabled enables or disables log uploading by lg. When disabled, log
+// entries passed to lg are dropped rather than buffered or uploaded; already
+// buffered entries may still drain. The process-wide [Disable] kill switch
+// takes precedence: if Disable has been called, SetEnabled(true) does not
+// re-enable uploads.
+func (lg *Logger) SetEnabled(enabled bool) {
+	lg.disabled.Store(!enabled)
+}
+
 var debugWakesAndUploads = envknob.RegisterBool("TS_DEBUG_LOGTAIL_WAKES")
 
 // tryDrainWake tries to send to lg.drainWake, to cause an uploading wakeup.
@@ -613,7 +627,7 @@ func (lg *Logger) tryDrainWake() {
 
 func (lg *Logger) sendLocked(jsonBlob []byte) (int, error) {
 	tapSend(jsonBlob)
-	if logtailDisabled.Load() {
+	if logtailDisabled.Load() || lg.disabled.Load() {
 		return len(jsonBlob), nil
 	}
 

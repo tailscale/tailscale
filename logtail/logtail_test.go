@@ -321,6 +321,37 @@ func TestLoggerWriteResult(t *testing.T) {
 	}
 }
 
+func TestLoggerSetEnabled(t *testing.T) {
+	buf := NewMemoryBuffer(100)
+	lg := &Logger{
+		clock:  tstest.NewClock(tstest.ClockOpts{Start: time.Unix(123, 0)}),
+		buffer: buf,
+	}
+
+	if _, err := lg.Write([]byte("enabled1")); err != nil {
+		t.Fatal(err)
+	}
+	if back, _ := buf.TryReadLine(); !strings.Contains(string(back), "enabled1") {
+		t.Fatalf("initial write not buffered; got %q", back)
+	}
+
+	lg.SetEnabled(false)
+	if _, err := lg.Write([]byte("disabled")); err != nil {
+		t.Fatal(err)
+	}
+	if back, _ := buf.TryReadLine(); len(back) != 0 {
+		t.Errorf("write while disabled leaked into buffer: %q", back)
+	}
+
+	lg.SetEnabled(true)
+	if _, err := lg.Write([]byte("enabled2")); err != nil {
+		t.Fatal(err)
+	}
+	if back, _ := buf.TryReadLine(); !strings.Contains(string(back), "enabled2") {
+		t.Errorf("write after re-enable not buffered; got %q", back)
+	}
+}
+
 func TestAppendMetadata(t *testing.T) {
 	var lg Logger
 	lg.clock = tstest.NewClock(tstest.ClockOpts{Start: time.Date(2000, 01, 01, 0, 0, 0, 0, time.UTC)})
