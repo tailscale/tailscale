@@ -123,6 +123,9 @@ func NewManualCertManager(certdir, hostname string) (certProvider, error) {
 	if err := x509Cert.VerifyHostname(hostname); err != nil {
 		return nil, fmt.Errorf("cert invalid for hostname %q: %w", hostname, err)
 	}
+	if cert.Leaf == nil {
+		cert.Leaf = x509Cert
+	}
 	if hostnameIP != nil {
 		// If the hostname is an IP address, print out information on how to
 		// confgure this in the derpmap.
