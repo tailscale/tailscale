@@ -249,6 +249,82 @@ func (s *MapSession) Close() error {
 	return s.closeErr
 }
 
+// SendMapUpdateOpts contains options for [Client.SendMapUpdate].
+type SendMapUpdateOpts struct {
+	// NodeKey is the node's private key. Required.
+	NodeKey key.NodePrivate
+
+	// DiscoKey, if non-zero, is the node's disco public key.
+	// Peers use it to verify disco pings from this node, which is
+	// what enables direct (non-DERP) paths.
+	DiscoKey key.DiscoPublic
+
+	// Hostinfo is the host information to send. Optional;
+	// if nil, a minimal default is used.
+	Hostinfo *tailcfg.Hostinfo
+}
+
+// SendMapUpdate sends a one-shot, non-streaming MapRequest to push small
+// updates (such as the node's endpoints, hostinfo, or disco public key) to the
+// coordination server without starting or disturbing a streaming map session.
+func (c *Client) SendMapUpdate(ctx context.Context, opts SendMapUpdateOpts) error {
+	if opts.NodeKey.IsZero() {
+		return fmt.Errorf("NodeKey is required")
+	}
+
+	hi := opts.Hostinfo
+	if hi == nil {
+		hi = defaultHostinfo()
+	}
+
+	mapReq := tailcfg.MapRequest{
+		Version:  tailcfg.CurrentCapabilityVersion,
+		NodeKey:  opts.NodeKey.Public(),
+		DiscoKey: opts.DiscoKey,
+		Hostinfo: hi,
+		Compress: "zstd",
+
+		// A lite update that lets the server persist our state without breaking
+		// any existing streaming map session. See the [tailcfg.MapResponse]
+		// OmitPeers docs.
+		OmitPeers: true,
+		Stream:    false,
+		ReadOnly:  false,
+	}
+
+	body, err := json.Marshal(mapReq)
+	if err != nil {
+		return fmt.Errorf("encoding map request: %w", err)
+	}
+
+	nc, err := c.noiseClient(ctx)
+	if err != nil {
+		return fmt.Errorf("establishing noise connection: %w", err)
+	}
+
+	url := c.serverURL + "/machine/map"
+	url = strings.Replace(url, "http:", "https:", 1)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("creating map request: %w", err)
+	}
+	ts2021.AddLBHeader(req, opts.NodeKey.Public())
+
+	res, err := nc.Do(req)
+	if err != nil {
+		return fmt.Errorf("map request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != 200 {
+		msg, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("map request: http %d: %.200s",
+			res.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	io.Copy(io.Discard, res.Body)
+	return nil
+}
+
 // Map sends a map request to the coordination server and returns a MapSession
 // for reading the framed, zstd-compressed response(s).
 func (c *Client) Map(ctx context.Context, opts MapOpts) (*MapSession, error) {

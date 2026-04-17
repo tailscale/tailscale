@@ -131,6 +131,135 @@ func TestMapAgainstTestControl(t *testing.T) {
 	}
 }
 
+// TestSendMapUpdateAgainstTestControl verifies that a [Client.SendMapUpdate]
+// call from one node lands on the coordination server and that peer nodes
+// subsequently observe the updated DiscoKey via their own streaming map poll.
+func TestSendMapUpdateAgainstTestControl(t *testing.T) {
+	ctrl := &testcontrol.Server{}
+	ctrl.HTTPTestServer = httptest.NewUnstartedServer(ctrl)
+	ctrl.HTTPTestServer.Start()
+	t.Cleanup(ctrl.HTTPTestServer.Close)
+	baseURL := ctrl.HTTPTestServer.URL
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	serverKey, err := DiscoverServerKey(ctx, baseURL)
+	if err != nil {
+		t.Fatalf("DiscoverServerKey: %v", err)
+	}
+
+	register := func(hostname string) (nodeKey key.NodePrivate, machineKey key.MachinePrivate) {
+		t.Helper()
+		nodeKey = key.NewNode()
+		machineKey = key.NewMachine()
+		c, err := NewClient(ClientOpts{
+			ServerURL:  baseURL,
+			MachineKey: machineKey,
+		})
+		if err != nil {
+			t.Fatalf("NewClient %s: %v", hostname, err)
+		}
+		defer c.Close()
+		c.SetControlPublicKey(serverKey)
+		if _, err := c.Register(ctx, RegisterOpts{
+			NodeKey:  nodeKey,
+			Hostinfo: &tailcfg.Hostinfo{Hostname: hostname},
+		}); err != nil {
+			t.Fatalf("Register %s: %v", hostname, err)
+		}
+		return nodeKey, machineKey
+	}
+
+	nodeKeyA, machineKeyA := register("a")
+	nodeKeyB, machineKeyB := register("b")
+
+	// B starts a streaming map poll so we can observe updates about peer A.
+	clientB, err := NewClient(ClientOpts{
+		ServerURL:  baseURL,
+		MachineKey: machineKeyB,
+	})
+	if err != nil {
+		t.Fatalf("NewClient B: %v", err)
+	}
+	defer clientB.Close()
+	clientB.SetControlPublicKey(serverKey)
+
+	session, err := clientB.Map(ctx, MapOpts{
+		NodeKey:  nodeKeyB,
+		Hostinfo: &tailcfg.Hostinfo{Hostname: "b"},
+		Stream:   true,
+	})
+	if err != nil {
+		t.Fatalf("Map B: %v", err)
+	}
+	defer session.Close()
+
+	nextNonKeepalive := func() *tailcfg.MapResponse {
+		t.Helper()
+		for {
+			resp, err := session.Next()
+			if err != nil {
+				t.Fatalf("session.Next: %v", err)
+			}
+			if resp.KeepAlive {
+				continue
+			}
+			return resp
+		}
+	}
+
+	// Drain B's initial MapResponse. A should be present as a peer with a
+	// zero DiscoKey (it never pushed one).
+	first := nextNonKeepalive()
+	var initialA *tailcfg.Node
+	for _, p := range first.Peers {
+		if p.Key == nodeKeyA.Public() {
+			initialA = p
+			break
+		}
+	}
+	if initialA == nil {
+		t.Fatalf("peer A (%v) not in B's first MapResponse", nodeKeyA.Public())
+	}
+	if !initialA.DiscoKey.IsZero() {
+		t.Fatalf("peer A initial DiscoKey = %v, want zero", initialA.DiscoKey)
+	}
+
+	// A pushes its disco key via SendMapUpdate.
+	clientA, err := NewClient(ClientOpts{
+		ServerURL:  baseURL,
+		MachineKey: machineKeyA,
+	})
+	if err != nil {
+		t.Fatalf("NewClient A: %v", err)
+	}
+	defer clientA.Close()
+	clientA.SetControlPublicKey(serverKey)
+
+	wantDisco := key.NewDisco().Public()
+	if err := clientA.SendMapUpdate(ctx, SendMapUpdateOpts{
+		NodeKey:  nodeKeyA,
+		DiscoKey: wantDisco,
+		Hostinfo: &tailcfg.Hostinfo{Hostname: "a"},
+	}); err != nil {
+		t.Fatalf("SendMapUpdate: %v", err)
+	}
+
+	// B should now observe A's new DiscoKey in a subsequent MapResponse.
+	for {
+		resp := nextNonKeepalive()
+		for _, p := range resp.Peers {
+			if p.Key != nodeKeyA.Public() {
+				continue
+			}
+			if p.DiscoKey == wantDisco {
+				return // success
+			}
+		}
+	}
+}
+
 // newTestPipeline builds the same framedReader → zstd → boundedReader →
 // json.Decoder pipeline that [Client.Map] builds for a live session, but
 // feeds it from a raw byte slice. Returned jdec can be used with Decode to
