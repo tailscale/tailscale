@@ -47,15 +47,15 @@ func TestSetBufferSize(t *testing.T) {
 
 	newRcv, newSnd := getBufs()
 
-	if curRcv > newRcv {
-		t.Errorf("SO_RCVBUF decreased: %v -> %v", curRcv, newRcv)
+	if newRcv < 7<<20 {
+		t.Errorf("SO_RCVBUF (%v) is below target (%v)", newRcv, 7<<20)
 	}
-	if curSnd > newSnd {
-		t.Errorf("SO_SNDBUF decreased: %v -> %v", curSnd, newSnd)
+	if newSnd < 7<<20 {
+		t.Errorf("SO_SNDBUF (%v) is below target (%v)", newSnd, 7<<20)
 	}
 
 	// On many systems we may not increase the value, particularly running as a
 	// regular user, so log the information for manual verification.
 	t.Logf("SO_RCVBUF: %v -> %v", curRcv, newRcv)
-	t.Logf("SO_SNDBUF: %v -> %v", curRcv, newRcv)
+	t.Logf("SO_SNDBUF: %v -> %v", curSnd, newSnd)
 }
