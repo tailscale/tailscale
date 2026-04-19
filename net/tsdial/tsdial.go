@@ -560,6 +560,17 @@ func (d *Dialer) getPeerDialer() *net.Dialer {
 	return d.peerDialer
 }
 
+// PeerDial connects to the provided network address using the peer dialer,
+// which routes through the Tailscale network sandbox on macOS and iOS
+// Network/System Extensions. Unlike [Dialer.UserDial], it does not require
+// routes to be set via [Dialer.SetRoutes].
+//
+// This is intended for dialing Tailscale IPs (e.g. DNS servers on the tailnet)
+// on platforms where [Dialer.SystemDial] cannot reach tailnet addresses.
+func (d *Dialer) PeerDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	return d.getPeerDialer().DialContext(ctx, network, addr)
+}
+
 // PeerAPIHTTPClient returns an HTTP Client to call peers' peerapi
 // endpoints.                                                                                                                                                                                                                      //
 // The returned Client must not be mutated; it's owned by the Dialer
