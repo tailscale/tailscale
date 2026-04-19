@@ -299,7 +299,11 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 	wantEnabled := nm.TKAEnabled
 
 	if isEnabled || wantEnabled {
-		b.logf("tkaSyncIfNeeded: isEnabled=%t, wantEnabled=%t, head=%v", isEnabled, wantEnabled, nm.TKAHead)
+		nodeHead := "<not-enabled>"
+		if b.tka != nil {
+			nodeHead = b.tka.authority.Head().String()
+		}
+		b.logf("tkaSyncIfNeeded: isEnabled=%t, wantEnabled=%t, nodeHead=%v, netmapHead=%v", isEnabled, wantEnabled, nodeHead, nm.TKAHead)
 	}
 
 	ourNodeKey, ok := prefs.Persist().PublicNodeKeyOK()
