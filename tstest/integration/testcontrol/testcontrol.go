@@ -1157,8 +1157,15 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 		return
 	}
 
+	// Per tailcfg.MapRequest.Stream docs: if Stream is true and Version >= 68,
+	// the server must treat this as read-only and ignore Hostinfo, Endpoints,
+	// DiscoKey, etc. — modern clients send those via a separate non-streaming
+	// POST /machine/map from a dedicated updateRoutine, not piggybacked on the
+	// streaming poll. Without this, the streaming MapRequest's zero-valued
+	// DiscoKey/Endpoints clobber whatever was just pushed out-of-band.
+	streamingNonUpdate := req.Stream && req.Version >= 68
 	var peersToUpdate []tailcfg.NodeID
-	if !req.ReadOnly {
+	if !req.ReadOnly && !streamingNonUpdate {
 		endpoints := filterInvalidIPv6Endpoints(req.Endpoints)
 		node.Endpoints = endpoints
 		node.DiscoKey = req.DiscoKey
