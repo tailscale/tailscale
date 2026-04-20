@@ -700,6 +700,7 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 	notifies.expect(5)
 	b.Logout(context.Background(), ipnauth.Self)
 	{
+		b.awaitNoGoroutinesInTest()
 		nn := notifies.drain(5)
 		previousCC.assertCalls("pause", "Logout", "unpause", "Shutdown")
 		// nn[0] is state notification (Stopped)
