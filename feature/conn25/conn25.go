@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
@@ -32,6 +33,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -327,8 +329,9 @@ func (c *Conn25) isConfigured() bool {
 func newConn25(logf logger.Logf) *Conn25 {
 	c := &Conn25{
 		client: &client{
-			logf:    logf,
-			addrsCh: make(chan addrs, 64),
+			logf:        logf,
+			addrsCh:     make(chan addrs, 64),
+			assignments: addrAssignments{clock: tstime.StdClock{}},
 		},
 		connector: &connector{logf: logf},
 	}
@@ -1160,11 +1163,12 @@ func (c *connector) reconfig(newCfg config) {
 }
 
 type addrs struct {
-	dst     netip.Addr
-	magic   netip.Addr
-	transit netip.Addr
-	domain  dnsname.FQDN
-	app     string
+	dst       netip.Addr
+	magic     netip.Addr
+	transit   netip.Addr
+	domain    dnsname.FQDN
+	app       string
+	expiresAt time.Time
 }
 
 func (c addrs) isValid() bool {
@@ -1187,22 +1191,38 @@ type addrAssignments struct {
 	byMagicIP   map[netip.Addr]addrs
 	byTransitIP map[netip.Addr]addrs
 	byDomainDst map[domainDst]addrs
+	clock       tstime.Clock
 }
 
+const defaultExpiry = 48 * time.Hour
+
 func (a *addrAssignments) insert(as addrs) error {
-	// we likely will want to allow overwriting in the future when we
-	// have address expiry, but for now this should not happen
-	if _, ok := a.byMagicIP[as.magic]; ok {
-		return errors.New("byMagicIP key exists")
+	return a.insertWithExpiry(as, defaultExpiry)
+}
+
+func (a *addrAssignments) insertWithExpiry(as addrs, d time.Duration) error {
+	if !as.expiresAt.IsZero() {
+		return errors.New("expiresAt already set")
+	}
+	now := a.clock.Now()
+	as.expiresAt = now.Add(d)
+	// we don't expect for addresses to be reused before expiry
+	if existing, ok := a.byMagicIP[as.magic]; ok {
+		if !existing.expiresAt.Before(now) {
+			return errors.New("byMagicIP key exists")
+		}
 	}
 	ddst := domainDst{domain: as.domain, dst: as.dst}
-	if _, ok := a.byDomainDst[ddst]; ok {
-		return errors.New("byDomainDst key exists")
+	if existing, ok := a.byDomainDst[ddst]; ok {
+		if !existing.expiresAt.Before(now) {
+			return errors.New("byDomainDst key exists")
+		}
 	}
-	if _, ok := a.byTransitIP[as.transit]; ok {
-		return errors.New("byTransitIP key exists")
+	if existing, ok := a.byTransitIP[as.transit]; ok {
+		if !existing.expiresAt.Before(now) {
+			return errors.New("byTransitIP key exists")
+		}
 	}
-
 	mak.Set(&a.byMagicIP, as.magic, as)
 	mak.Set(&a.byTransitIP, as.transit, as)
 	mak.Set(&a.byDomainDst, ddst, as)
@@ -1211,17 +1231,26 @@ func (a *addrAssignments) insert(as addrs) error {
 
 func (a *addrAssignments) lookupByDomainDst(domain dnsname.FQDN, dst netip.Addr) (addrs, bool) {
 	v, ok := a.byDomainDst[domainDst{domain: domain, dst: dst}]
-	return v, ok
+	if !ok || v.expiresAt.Before(a.clock.Now()) {
+		return addrs{}, false
+	}
+	return v, true
 }
 
 func (a *addrAssignments) lookupByMagicIP(mip netip.Addr) (addrs, bool) {
 	v, ok := a.byMagicIP[mip]
-	return v, ok
+	if !ok || v.expiresAt.Before(a.clock.Now()) {
+		return addrs{}, false
+	}
+	return v, true
 }
 
 func (a *addrAssignments) lookupByTransitIP(tip netip.Addr) (addrs, bool) {
 	v, ok := a.byTransitIP[tip]
-	return v, ok
+	if !ok || v.expiresAt.Before(a.clock.Now()) {
+		return addrs{}, false
+	}
+	return v, true
 }
 
 // insertTransitConnMapping adds an entry to the byConnKey map

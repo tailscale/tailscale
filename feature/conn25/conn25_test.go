@@ -26,6 +26,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
+	"tailscale.com/tstest"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -950,7 +951,13 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 			c.reconfig(cfg)
 
 			c.mapDNSResponse(dnsResp)
-			if diff := cmp.Diff(tt.wantByMagicIP, c.client.assignments.byMagicIP, cmpopts.EquateComparable(addrs{}, netip.Addr{})); diff != "" {
+			if diff := cmp.Diff(
+				tt.wantByMagicIP,
+				c.client.assignments.byMagicIP,
+				cmp.AllowUnexported(addrs{}),
+				cmpopts.IgnoreFields(addrs{}, "expiresAt"),
+				cmpopts.EquateComparable(netip.Addr{}),
+			); diff != "" {
 				t.Errorf("byMagicIP diff (-want, +got):\n%s", diff)
 			}
 		})
@@ -989,8 +996,8 @@ func TestReserveAddressesDeduplicated(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if first != second {
-				t.Errorf("expected same addrs on repeated call, got first=%v second=%v", first, second)
+			if first.magic != second.magic {
+				t.Errorf("expected same magic addrs on repeated call, got first=%v second=%v", first.magic, second.magic)
 			}
 			if got := len(c.client.assignments.byMagicIP); got != 1 {
 				t.Errorf("want 1 entry in byMagicIP, got %d", got)
@@ -2005,5 +2012,59 @@ func TestGetMagicRange(t *testing.T) {
 		if somePrefixCovers(netip.MustParseAddr(s)) {
 			t.Fatalf("expected addr to NOT be covered but WAS: %s", s)
 		}
+	}
+}
+
+func TestAssignmentsExpire(t *testing.T) {
+	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
+	assignments := addrAssignments{clock: clock}
+	as := addrs{
+		dst:     netip.MustParseAddr("0.0.0.1"),
+		magic:   netip.MustParseAddr("0.0.0.2"),
+		transit: netip.MustParseAddr("0.0.0.3"),
+		app:     "a",
+		domain:  "example.com.",
+	}
+	err := assignments.insert(as)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Time has not passed since the insert, the assignment should be returned.
+	foundAs, ok := assignments.lookupByMagicIP(as.magic)
+	if !ok {
+		t.Fatal("expected to find")
+	}
+	if foundAs.dst != as.dst {
+		t.Fatalf("want %v; got %v", as.dst, foundAs.dst)
+	}
+	// and we cannot insert over the addresses
+	err = assignments.insert(as)
+	if err == nil {
+		t.Fatal("expected an error but got nil")
+	}
+	// After a time greater than the default expiry passes, the assignment should
+	// not be returned.
+	clock.Advance(defaultExpiry * 2)
+	foundAsAfter, okAfter := assignments.lookupByMagicIP(as.magic)
+	if okAfter {
+		t.Fatal("expected not to find (expired)")
+	}
+	if foundAsAfter.isValid() {
+		t.Fatal("expected zero val")
+	}
+	// Now we can reuse the addresses
+	err = assignments.insert(as)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundAs, ok = assignments.lookupByMagicIP(as.magic)
+	if !ok {
+		t.Fatal("expected to find")
+	}
+	if foundAs.dst != as.dst {
+		t.Fatalf("want %v; got %v", as.dst, foundAs.dst)
+	}
+	if !foundAs.expiresAt.After(clock.Now()) {
+		t.Fatalf("expected foundAs to expire after now")
 	}
 }
