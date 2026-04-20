@@ -7,11 +7,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-json-experiment/json/jsontext"
@@ -20,6 +25,23 @@ import (
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
 )
+
+// TestMain installs a safety net that refuses non-localhost dials for any
+// test in this package. Config.BaseURL defaults to https://log.tailscale.com
+// and Config.HTTPC defaults to http.DefaultClient, so a test that forgets to
+// override either can otherwise silently hit the real logtail server.
+func TestMain(m *testing.M) {
+	tr := http.DefaultTransport.(*http.Transport)
+	orig := tr.DialContext
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err == nil && (host == "127.0.0.1" || host == "::1" || host == "localhost") {
+			return orig(ctx, network, addr)
+		}
+		return nil, fmt.Errorf("logtail tests: refusing to dial non-localhost address %q; use httptest.Server or a custom Config.HTTPC", addr)
+	}
+	os.Exit(m.Run())
+}
 
 func TestFastShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -318,6 +340,59 @@ func TestLoggerWriteResult(t *testing.T) {
 	}
 	if got, want := string(back), `{"logtail":{"client_time":"1970-01-01T00:02:03Z"},"v":1,"text":"foo"}`+"\n"; got != want {
 		t.Errorf("mismatch.\n got: %#q\nwant: %#q", back, want)
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestNewLoggerDisabled(t *testing.T) { synctest.Test(t, synctestNewLoggerDisabled) }
+
+func synctestNewLoggerDisabled(t *testing.T) {
+	// When Config.Disabled is true, NewLogger must not emit the usual
+	// "logtail started" banner: the logger should start in the disabled
+	// state before the internal startup write, so nothing ever lands
+	// in the buffer for the upload goroutine to drain.
+	buf := NewMemoryBuffer(100)
+
+	// Any HTTP attempt indicates the banner leaked into the buffer and
+	// the upload goroutine tried to ship it. Report it once (so the
+	// retry spin doesn't drown the log), then block on the request
+	// context so synctest.Wait sees a durable block and Shutdown's
+	// uploadCancel can unblock us cleanly.
+	var once sync.Once
+	httpc := &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			once.Do(func() {
+				t.Errorf("unexpected HTTP request while Disabled=true: %s", r.URL)
+			})
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		}),
+	}
+
+	logger := NewLogger(Config{
+		BaseURL:  "http://logtail.test.invalid",
+		HTTPC:    httpc,
+		Bus:      eventbustest.NewBus(t),
+		Buffer:   buf,
+		Disabled: true,
+	}, t.Logf)
+	defer func() {
+		// Pass an already-cancelled context so Shutdown invokes
+		// uploadCancel immediately; otherwise on the regression path
+		// (Disabled=false) the upload goroutine stays in its retry
+		// loop and synctest.Test never returns.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		logger.Shutdown(ctx)
+	}()
+
+	synctest.Wait()
+
+	if back, _ := buf.TryReadLine(); len(back) != 0 {
+		t.Errorf("Disabled logger buffered a startup entry: %q", back)
 	}
 }
 

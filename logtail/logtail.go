@@ -132,6 +132,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 	}
 	logger.SetSockstatsLabel(sockstats.LabelLogtailLogger)
 	logger.compressLogs = cfg.CompressLogs
+	logger.disabled.Store(cfg.Disabled)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	logger.uploadCancel = cancel
