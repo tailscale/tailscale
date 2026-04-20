@@ -1,0 +1,37 @@
+# Require that each commit contain a Signed-off-by trailer, as required by
+# the Developer Certificate of Origin (DCO, https://developercertificate.org/).
+# By adding the trailer, the committer certifies that they have the right to
+# submit the contribution under the project's open source license.
+# Contributors can add the trailer with `git commit -s`.
+name: Signed-off-by
+
+permissions: read-all
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-$${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  check-signed-off-by:
+    runs-on: ubuntu-latest
+    if: github.actor != 'dependabot[bot]'
+    steps:
+      - uses: octokit/request-action@dad4362715b7fb2ddedf9772c8670824af564f0d # v2.4.0
+        id: get_pr_commits
+        with:
+          route: GET /repos/tailscale/tailscale/pulls/${{ github.event.number }}/commits
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: check commit messages
+        run: |
+          jq '
+          .[] |
+            (.commit.message | test("\nSigned-off-by: .+ <.+@.+>(\n|$)"; "m"))
+              // error("Commit \(.sha) is missing Signed-off-by (and maybe others)
+                 Use `git commit -s` (or `git rebase -i` with `--signoff`) to add the trailer.")
+          ' >/dev/null << 'END_GITHUB_API_JSON'
+          ${{ steps.get_pr_commits.outputs.data }}
+          END_GITHUB_API_JSON
