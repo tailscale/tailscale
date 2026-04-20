@@ -30,6 +30,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
@@ -1557,5 +1558,61 @@ func TestInjectLoopback(t *testing.T) {
 	}
 	if got := string(buf[:n]); got != "loopback test" {
 		t.Errorf("got %q, want %q", got, "loopback test")
+	}
+}
+
+// TestUpdateNetstackIPsExitNodeNoZeroAddr verifies that when a node advertises
+// itself as an exit node (AllowedIPs includes 0.0.0.0/0 and ::/0) and runs in
+// ProcessSubnets mode, UpdateNetstackIPs does not register 0.0.0.0 or :: as
+// gVisor NIC addresses. Registering a /0 prefix would cause gVisor to pick
+// 0.0.0.0 as the source IP for outbound TCP connections, breaking subnet
+// routing. See https://github.com/tailscale/tailscale/issues/17167.
+func TestUpdateNetstackIPsExitNodeNoZeroAddr(t *testing.T) {
+	selfIP4 := netip.MustParsePrefix("100.64.1.2/32")
+	selfIP6 := netip.MustParsePrefix("fd7a:115c:a1e0::1/128")
+	subnet := netip.MustParsePrefix("192.168.66.0/24")
+
+	ns := makeNetstack(t, func(impl *Impl) {
+		impl.ProcessSubnets = true
+	})
+
+	// Build a NetworkMap where selfNode also advertises as an exit node.
+	// AllowedIPs will contain: Tailscale IPs, the subnet, and the two
+	// default-route prefixes that exit nodes advertise.
+	nm := &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Addresses: []netip.Prefix{selfIP4, selfIP6},
+			AllowedIPs: []netip.Prefix{
+				selfIP4,
+				selfIP6,
+				subnet,
+				netip.MustParsePrefix("0.0.0.0/0"),
+				netip.MustParsePrefix("::/0"),
+			},
+		}).View(),
+	}
+	ns.UpdateNetstackIPs(nm)
+
+	// Collect all addresses currently registered on the gVisor NIC.
+	registered := map[netip.Addr]bool{}
+	for _, pa := range ns.ipstack.AllAddresses()[nicID] {
+		ip := netaddrIPFromNetstackIP(pa.AddressWithPrefix.Address)
+		registered[ip] = true
+	}
+
+	// 0.0.0.0 and :: must not appear as NIC addresses.
+	if registered[netip.MustParseAddr("0.0.0.0")] {
+		t.Error("0.0.0.0 was registered as a gVisor NIC address; this breaks outbound TCP source IP selection")
+	}
+	if registered[netip.MustParseAddr("::")] {
+		t.Error(":: was registered as a gVisor NIC address; this breaks outbound TCP source IP selection")
+	}
+
+	// The node's actual Tailscale addresses must be registered.
+	if !registered[selfIP4.Addr()] {
+		t.Errorf("expected %v to be registered as a NIC address", selfIP4.Addr())
+	}
+	if !registered[selfIP6.Addr()] {
+		t.Errorf("expected %v to be registered as a NIC address", selfIP6.Addr())
 	}
 }

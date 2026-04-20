@@ -742,7 +742,6 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 			}
 		}
 	}
-
 	for addr := range serviceAddrSet {
 		p := netip.PrefixFrom(addr, addr.BitLen())
 		newPfx[p] = true
@@ -782,6 +781,16 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 	for p := range pfxToAdd {
 		if !p.IsValid() {
 			ns.logf("netstack: [unexpected] skipping invalid IP (%v/%v)", p.Addr(), p.Bits())
+			continue
+		}
+		// Skip /0 default-route prefixes (0.0.0.0/0, ::/0). These come from
+		// exit-node self-advertisement and should not be registered as NIC
+		// addresses in gVisor, because registering 0.0.0.0 or :: as a NIC
+		// address causes gVisor to select it as the source IP for outbound
+		// TCP connections, making the SYN-ACK unreachable back through the
+		// WireGuard tunnel.
+		if p.Bits() == 0 {
+			ns.logf("[v2] netstack: skipping /0 default-route prefix %v from NIC", p)
 			continue
 		}
 		tcpAddr := tcpip.ProtocolAddress{
