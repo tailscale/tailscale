@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -843,6 +844,403 @@ func backend() *networkingv1.IngressBackend {
 				Number: 8080,
 			},
 		},
+	}
+}
+
+func TestTailscaleIngressWithCustomTLS(t *testing.T) {
+	// Create a TLS secret in the "default" namespace that will be referenced by the Ingress.
+	tlsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-tls-secret",
+			Namespace: "default",
+		},
+		Type: corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			"tls.crt": []byte("fake-cert"),
+			"tls.key": []byte("fake-key"),
+		},
+	}
+	fc := fake.NewFakeClient(ingressClass(), tlsSecret)
+	ft := &fakeTSClient{}
+	// No cert domains -- simulates HTTPS not enabled on tailnet.
+	fakeTsnetServer := &fakeTSNetServer{certDomains: nil}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingR := &IngressReconciler{
+		Client:           fc,
+		ingressClassName: "tailscale",
+		apiReader:        fc, // fake client implements client.Reader
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			tsnetServer:       fakeTsnetServer,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+	}
+
+	// Create an Ingress with spec.tls[0].secretName set, which triggers custom TLS mode.
+	ing := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       "1234-UID",
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			DefaultBackend:   backend(),
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"myapp.example.com"}, SecretName: "my-tls-secret"},
+			},
+		},
+	}
+	mustCreate(t, fc, ing)
+	mustCreate(t, fc, service())
+
+	expectReconciled(t, ingR, "default", "test")
+
+	// Find the state secret (the one with serve-config). We can't use findGenName because
+	// the TLS secret also carries the same parent labels.
+	var secrets corev1.SecretList
+	if err := fc.List(context.Background(), &secrets, client.InNamespace("operator-ns"), client.MatchingLabels{
+		kubetypes.LabelManaged: "true",
+		LabelParentName:        "test",
+		LabelParentNamespace:   "default",
+		LabelParentType:        "ingress",
+	}); err != nil {
+		t.Fatalf("listing secrets: %v", err)
+	}
+	var scBytes []byte
+	for _, sec := range secrets.Items {
+		// The serve-config may be stored in StringData (written via mak.Set)
+		// which the fake client preserves as-is; check both Data and StringData.
+		if b, ok := sec.Data["serve-config"]; ok {
+			scBytes = b
+			break
+		}
+		if s, ok := sec.StringData["serve-config"]; ok {
+			scBytes = []byte(s)
+			break
+		}
+	}
+	if scBytes == nil {
+		t.Fatal("serve-config not found in any operator-ns secret")
+	}
+	var sc ipn.ServeConfig
+	if err := json.Unmarshal(scBytes, &sc); err != nil {
+		t.Fatalf("unmarshalling serve-config: %v", err)
+	}
+
+	// Check that the Web key uses the actual hostname, not the ${TS_CERT_DOMAIN} placeholder.
+	wantWebKey := ipn.HostPort("myapp.example.com:443")
+	if _, ok := sc.Web[wantWebKey]; !ok {
+		t.Errorf("expected Web key %q, got keys: %v", wantWebKey, sc.Web)
+	}
+	// The magic placeholder should NOT be present.
+	if _, ok := sc.Web["${TS_CERT_DOMAIN}:443"]; ok {
+		t.Error("did not expect ${TS_CERT_DOMAIN}:443 in Web when custom TLS is used")
+	}
+	// CustomCerts should reference the custom domain.
+	if sc.CustomCerts == nil {
+		t.Fatal("expected CustomCerts to be set")
+	}
+	certPaths, ok := sc.CustomCerts["myapp.example.com"]
+	if !ok {
+		t.Fatalf("expected CustomCerts entry for myapp.example.com, got: %v", sc.CustomCerts)
+	}
+	if certPaths.CertFile != "/etc/tailscaled-tls/tls.crt" {
+		t.Errorf("CertFile = %q, want /etc/tailscaled-tls/tls.crt", certPaths.CertFile)
+	}
+	if certPaths.KeyFile != "/etc/tailscaled-tls/tls.key" {
+		t.Errorf("KeyFile = %q, want /etc/tailscaled-tls/tls.key", certPaths.KeyFile)
+	}
+}
+
+func TestTailscaleIngressSharedProxy(t *testing.T) {
+	// Create TLS secrets for two different Ingresses.
+	tlsSecretA := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "tls-a", Namespace: "default"},
+		Type:       corev1.SecretTypeTLS,
+		Data:       map[string][]byte{"tls.crt": []byte("cert-a"), "tls.key": []byte("key-a")},
+	}
+	tlsSecretB := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "tls-b", Namespace: "default"},
+		Type:       corev1.SecretTypeTLS,
+		Data:       map[string][]byte{"tls.crt": []byte("cert-b"), "tls.key": []byte("key-b")},
+	}
+	svcA := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "svc-a", Namespace: "default"},
+		Spec:       corev1.ServiceSpec{ClusterIP: "10.0.0.1", Ports: []corev1.ServicePort{{Port: 8080, Name: "http"}}},
+	}
+	svcB := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "svc-b", Namespace: "default"},
+		Spec:       corev1.ServiceSpec{ClusterIP: "10.0.0.2", Ports: []corev1.ServicePort{{Port: 8080, Name: "http"}}},
+	}
+
+	fc := fake.NewFakeClient(ingressClass(), tlsSecretA, tlsSecretB, svcA, svcB)
+	ft := &fakeTSClient{}
+	fakeTsnetServer := &fakeTSNetServer{certDomains: nil}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingR := &IngressReconciler{
+		Client:           fc,
+		ingressClassName: "tailscale",
+		apiReader:        fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			tsnetServer:       fakeTsnetServer,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+	}
+
+	// Create two Ingresses with the same shared-proxy annotation.
+	ingA := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "ing-a",
+			Namespace:   "default",
+			UID:         "uid-a",
+			Annotations: map[string]string{AnnotationSharedProxy: "my-shared-proxy"},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "svc-a",
+					Port: networkingv1.ServiceBackendPort{Number: 8080},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"a.example.com"}, SecretName: "tls-a"},
+			},
+		},
+	}
+	ingB := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "ing-b",
+			Namespace:   "default",
+			UID:         "uid-b",
+			Annotations: map[string]string{AnnotationSharedProxy: "my-shared-proxy"},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "svc-b",
+					Port: networkingv1.ServiceBackendPort{Number: 8080},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"b.example.com"}, SecretName: "tls-b"},
+			},
+		},
+	}
+	mustCreate(t, fc, ingA)
+	mustCreate(t, fc, ingB)
+
+	// Reconcile ingA -- should see both Ingresses aggregated.
+	expectReconciled(t, ingR, "default", "ing-a")
+
+	// Verify the shared proxy's child resources exist using shared-ingress labels.
+	var stsList appsv1.StatefulSetList
+	if err := fc.List(context.Background(), &stsList, client.InNamespace("operator-ns"), client.MatchingLabels{
+		LabelParentType: "shared-ingress",
+		LabelParentName: "my-shared-proxy",
+	}); err != nil {
+		t.Fatalf("listing StatefulSets: %v", err)
+	}
+	if len(stsList.Items) == 0 {
+		t.Fatal("expected at least one StatefulSet for shared-ingress, got none")
+	}
+
+	// Look for the state secret to check the merged serve-config.
+	var secrets corev1.SecretList
+	if err := fc.List(context.Background(), &secrets, client.InNamespace("operator-ns"), client.MatchingLabels{
+		LabelParentType: "shared-ingress",
+		LabelParentName: "my-shared-proxy",
+	}); err != nil {
+		t.Fatalf("listing Secrets: %v", err)
+	}
+
+	// Find a secret with serve-config data (the state secret).
+	// The serve-config may be in StringData (fake client preserves it).
+	var sc ipn.ServeConfig
+	foundSC := false
+	for _, sec := range secrets.Items {
+		var raw []byte
+		if b, ok := sec.Data["serve-config"]; ok {
+			raw = b
+		} else if s, ok := sec.StringData["serve-config"]; ok {
+			raw = []byte(s)
+		}
+		if raw != nil {
+			if err := json.Unmarshal(raw, &sc); err != nil {
+				t.Fatalf("unmarshalling serve-config: %v", err)
+			}
+			foundSC = true
+			break
+		}
+	}
+	if !foundSC {
+		t.Fatal("no secret with serve-config found for shared proxy")
+	}
+
+	// The merged config should have Web entries for both hostnames.
+	if _, ok := sc.Web["a.example.com:443"]; !ok {
+		t.Errorf("expected Web key for a.example.com:443, got: %v", sc.Web)
+	}
+	if _, ok := sc.Web["b.example.com:443"]; !ok {
+		t.Errorf("expected Web key for b.example.com:443, got: %v", sc.Web)
+	}
+
+	// CustomCerts should have entries for both hostnames.
+	if sc.CustomCerts == nil {
+		t.Fatal("expected CustomCerts to be set in merged config")
+	}
+	if _, ok := sc.CustomCerts["a.example.com"]; !ok {
+		t.Errorf("expected CustomCerts entry for a.example.com")
+	}
+	if _, ok := sc.CustomCerts["b.example.com"]; !ok {
+		t.Errorf("expected CustomCerts entry for b.example.com")
+	}
+}
+
+func TestTailscaleIngressSharedProxyCleanup(t *testing.T) {
+	// Test that removing one Ingress from a shared proxy group doesn't
+	// delete the proxy when peers remain.
+	tlsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "tls-a", Namespace: "default"},
+		Type:       corev1.SecretTypeTLS,
+		Data:       map[string][]byte{"tls.crt": []byte("cert-a"), "tls.key": []byte("key-a")},
+	}
+	svcA := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "svc-a", Namespace: "default"},
+		Spec:       corev1.ServiceSpec{ClusterIP: "10.0.0.1", Ports: []corev1.ServicePort{{Port: 8080, Name: "http"}}},
+	}
+
+	fc := fake.NewFakeClient(ingressClass(), tlsSecret, svcA)
+	ft := &fakeTSClient{}
+	fakeTsnetServer := &fakeTSNetServer{certDomains: nil}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingR := &IngressReconciler{
+		Client:           fc,
+		ingressClassName: "tailscale",
+		apiReader:        fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			tsnetServer:       fakeTsnetServer,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+	}
+
+	// Create two Ingresses in the same shared proxy group.
+	ingA := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "ing-a",
+			Namespace:   "default",
+			UID:         "uid-a",
+			Annotations: map[string]string{AnnotationSharedProxy: "shared"},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "svc-a",
+					Port: networkingv1.ServiceBackendPort{Number: 8080},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"a.example.com"}, SecretName: "tls-a"},
+			},
+		},
+	}
+	ingB := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "ing-b",
+			Namespace:   "default",
+			UID:         "uid-b",
+			Annotations: map[string]string{AnnotationSharedProxy: "shared"},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "svc-a",
+					Port: networkingv1.ServiceBackendPort{Number: 8080},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"b.example.com"}, SecretName: "tls-a"},
+			},
+		},
+	}
+	mustCreate(t, fc, ingA)
+	mustCreate(t, fc, ingB)
+
+	// Provision both by reconciling.
+	expectReconciled(t, ingR, "default", "ing-a")
+	expectReconciled(t, ingR, "default", "ing-b")
+
+	// Verify StatefulSet exists.
+	var stsList appsv1.StatefulSetList
+	if err := fc.List(context.Background(), &stsList, client.InNamespace("operator-ns"), client.MatchingLabels{
+		LabelParentType: "shared-ingress",
+		LabelParentName: "shared",
+	}); err != nil {
+		t.Fatalf("listing StatefulSets: %v", err)
+	}
+	if len(stsList.Items) == 0 {
+		t.Fatal("expected StatefulSet for shared proxy group")
+	}
+
+	// Now "delete" ingA by changing its IngressClass (which triggers cleanup).
+	mustUpdate(t, fc, "default", "ing-a", func(ing *networkingv1.Ingress) {
+		ing.Spec.IngressClassName = ptr.To("nginx")
+	})
+	expectReconciled(t, ingR, "default", "ing-a")
+
+	// The StatefulSet should still exist because ingB is still a peer.
+	stsList = appsv1.StatefulSetList{}
+	if err := fc.List(context.Background(), &stsList, client.InNamespace("operator-ns"), client.MatchingLabels{
+		LabelParentType: "shared-ingress",
+		LabelParentName: "shared",
+	}); err != nil {
+		t.Fatalf("listing StatefulSets after cleanup: %v", err)
+	}
+	if len(stsList.Items) == 0 {
+		t.Fatal("StatefulSet should still exist while peers remain in shared proxy group")
+	}
+
+	// ingA's finalizer should have been removed.
+	updatedIngA := &networkingv1.Ingress{}
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: "ing-a", Namespace: "default"}, updatedIngA); err != nil {
+		t.Fatalf("getting ing-a: %v", err)
+	}
+	for _, f := range updatedIngA.Finalizers {
+		if f == FinalizerName {
+			t.Error("expected tailscale finalizer to be removed from ing-a after cleanup")
+		}
 	}
 }
 

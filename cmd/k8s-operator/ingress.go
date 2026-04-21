@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
@@ -35,14 +36,20 @@ const (
 	tailscaleIngressControllerName = "tailscale.com/ts-ingress"                    // ingressClass.spec.controllerName for tailscale IngressClass resource
 	ingressClassDefaultAnnotation  = "ingressclass.kubernetes.io/is-default-class" // we do not support this https://kubernetes.io/docs/concepts/services-networking/ingress/#default-ingress-class
 	indexIngressProxyClass         = ".metadata.annotations.ingress-proxy-class"
+
+	// AnnotationSharedProxy, when set on an Ingress, indicates that this Ingress
+	// should share a single proxy StatefulSet with all other Ingresses that have
+	// the same annotation value. The annotation value becomes the Tailscale hostname.
+	AnnotationSharedProxy = "tailscale.com/shared-proxy"
 )
 
 type IngressReconciler struct {
 	client.Client
 
-	recorder record.EventRecorder
-	ssr      *tailscaleSTSReconciler
-	logger   *zap.SugaredLogger
+	recorder  record.EventRecorder
+	ssr       *tailscaleSTSReconciler
+	logger    *zap.SugaredLogger
+	apiReader client.Reader // uncached reader for cross-namespace secret access
 
 	mu sync.Mutex // protects following
 
@@ -102,11 +109,52 @@ func (a *IngressReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 		return nil
 	}
 
-	if done, err := a.ssr.Cleanup(ctx, operatorTailnet, logger, childResourceLabels(ing.Name, ing.Namespace, "ingress"), proxyTypeIngressResource); err != nil {
-		return fmt.Errorf("failed to cleanup: %w", err)
-	} else if !done {
-		logger.Debugf("cleanup not done yet, waiting for next reconcile")
-		return nil
+	sharedName := ing.Annotations[AnnotationSharedProxy]
+	if sharedName != "" {
+		// Shared proxy mode: check if peers still exist.
+		peers, err := a.findSharedProxyPeers(ctx, sharedName, ing)
+		if err != nil {
+			return fmt.Errorf("failed to find shared proxy peers: %w", err)
+		}
+		if len(peers) > 0 {
+			// Peers remain -- don't delete the proxy. Remove our finalizer and
+			// re-trigger reconcile of a peer so the merged config gets rebuilt
+			// without this Ingress.
+			ing.Finalizers = append(ing.Finalizers[:ix], ing.Finalizers[ix+1:]...)
+			if err := a.Update(ctx, ing); err != nil {
+				return fmt.Errorf("failed to remove finalizer: %w", err)
+			}
+			// Enqueue a peer for re-reconcile by touching its annotation.
+			peer := peers[0]
+			if peer.Annotations == nil {
+				peer.Annotations = make(map[string]string)
+			}
+			peer.Annotations["tailscale.com/shared-proxy-reconcile"] = fmt.Sprintf("%d", time.Now().UnixNano())
+			if err := a.Update(ctx, &peer); err != nil {
+				logger.Warnf("failed to trigger peer reconcile for shared proxy cleanup: %v", err)
+			}
+			logger.Infof("removed ingress from shared proxy group %q, %d peers remain", sharedName, len(peers))
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.managedIngresses.Remove(ing.UID)
+			gaugeIngressResources.Set(int64(a.managedIngresses.Len()))
+			return nil
+		}
+		// No peers remain -- fall through to full cleanup using shared-ingress labels.
+		crl := sharedProxyChildResourceLabels(sharedName)
+		if done, err := a.ssr.Cleanup(ctx, operatorTailnet, logger, crl, proxyTypeIngressResource); err != nil {
+			return fmt.Errorf("failed to cleanup: %w", err)
+		} else if !done {
+			logger.Debugf("cleanup not done yet, waiting for next reconcile")
+			return nil
+		}
+	} else {
+		if done, err := a.ssr.Cleanup(ctx, operatorTailnet, logger, childResourceLabels(ing.Name, ing.Namespace, "ingress"), proxyTypeIngressResource); err != nil {
+			return fmt.Errorf("failed to cleanup: %w", err)
+		} else if !done {
+			logger.Debugf("cleanup not done yet, waiting for next reconcile")
+			return nil
+		}
 	}
 
 	ing.Finalizers = append(ing.Finalizers[:ix], ing.Finalizers[ix+1:]...)
@@ -136,10 +184,6 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		logger.Warnf("error validating tailscale IngressClass: %v. In future this might be a terminal error.", err)
 	}
 	if !slices.Contains(ing.Finalizers, FinalizerName) {
-		// This log line is printed exactly once during initial provisioning,
-		// because once the finalizer is in place this block gets skipped. So,
-		// this is a nice place to tell the operator that the high level,
-		// multi-reconcile operation is underway.
 		logger.Infof("exposing ingress over tailscale")
 		ing.Finalizers = append(ing.Finalizers, FinalizerName)
 		if err := a.Update(ctx, ing); err != nil {
@@ -162,37 +206,73 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	gaugeIngressResources.Set(int64(a.managedIngresses.Len()))
 	a.mu.Unlock()
 
-	if !IsHTTPSEnabledOnTailnet(a.ssr.tsnetServer) {
+	// Check for shared proxy mode.
+	sharedName := ing.Annotations[AnnotationSharedProxy]
+	if sharedName != "" {
+		return a.maybeProvisionShared(ctx, logger, ing, sharedName, proxyClass)
+	}
+
+	return a.maybeProvisionSingle(ctx, logger, ing, proxyClass)
+}
+
+// maybeProvisionSingle handles the original single-Ingress-per-proxy code path.
+func (a *IngressReconciler) maybeProvisionSingle(ctx context.Context, logger *zap.SugaredLogger, ing *networkingv1.Ingress, proxyClass string) error {
+	var tlsHost string
+	var tlsSecretName string
+	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 {
+		if len(ing.Spec.TLS[0].Hosts) > 0 {
+			tlsHost = ing.Spec.TLS[0].Hosts[0]
+		}
+		tlsSecretName = ing.Spec.TLS[0].SecretName
+	}
+
+	useCustomTLS := tlsSecretName != "" && tlsHost != ""
+
+	if !useCustomTLS && !IsHTTPSEnabledOnTailnet(a.ssr.tsnetServer) {
 		a.recorder.Event(ing, corev1.EventTypeWarning, "HTTPSNotEnabled", "HTTPS is not enabled on the tailnet; ingress may not work")
 	}
 
-	// magic443 is a fake hostname that we can use to tell containerboot to swap
-	// out with the real hostname once it's known.
-	const magic443 = "${TS_CERT_DOMAIN}:443"
-	sc := &ipn.ServeConfig{
-		TCP: map[uint16]*ipn.TCPPortHandler{
-			443: {
-				HTTPS: true,
+	var sc *ipn.ServeConfig
+	var webKey ipn.HostPort
+
+	if useCustomTLS {
+		webKey = ipn.HostPort(tlsHost + ":443")
+		sc = &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{
+				443: {HTTPS: true},
 			},
-		},
-		Web: map[ipn.HostPort]*ipn.WebServerConfig{
-			magic443: {
-				Handlers: map[string]*ipn.HTTPHandler{},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				webKey: {Handlers: map[string]*ipn.HTTPHandler{}},
 			},
-		},
-	}
-	if opt.Bool(ing.Annotations[AnnotationFunnel]).EqualBool(true) {
-		sc.AllowFunnel = map[ipn.HostPort]bool{
-			magic443: true,
+			CustomCerts: map[string]*ipn.TLSCertPaths{
+				tlsHost: {
+					CertFile: "/etc/tailscaled-tls/tls.crt",
+					KeyFile:  "/etc/tailscaled-tls/tls.key",
+				},
+			},
+		}
+		if opt.Bool(ing.Annotations[AnnotationFunnel]).EqualBool(true) {
+			logger.Warnf("Funnel is not supported with custom TLS certificates; ignoring funnel annotation")
+			a.recorder.Eventf(ing, corev1.EventTypeWarning, "FunnelNotSupported", "Funnel is not supported with custom TLS certificates")
+		}
+	} else {
+		const magic443 = "${TS_CERT_DOMAIN}:443"
+		webKey = magic443
+		sc = &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{
+				443: {HTTPS: true},
+			},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				magic443: {Handlers: map[string]*ipn.HTTPHandler{}},
+			},
+		}
+		if opt.Bool(ing.Annotations[AnnotationFunnel]).EqualBool(true) {
+			sc.AllowFunnel = map[ipn.HostPort]bool{magic443: true}
 		}
 	}
 
-	web := sc.Web[magic443]
+	web := sc.Web[webKey]
 
-	var tlsHost string // hostname or FQDN or empty
-	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 && len(ing.Spec.TLS[0].Hosts) > 0 {
-		tlsHost = ing.Spec.TLS[0].Hosts[0]
-	}
 	handlers, err := handlersForIngress(ctx, ing, a.Client, a.recorder, tlsHost, logger)
 	if err != nil {
 		return fmt.Errorf("failed to get handlers for ingress: %w", err)
@@ -206,17 +286,21 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 
 	if isHTTPRedirectEnabled(ing) {
 		logger.Infof("HTTP redirect enabled, setting up port 80 redirect handlers")
-		const magic80 = "${TS_CERT_DOMAIN}:80"
+		var redirect80Key ipn.HostPort
+		if useCustomTLS {
+			redirect80Key = ipn.HostPort(tlsHost + ":80")
+		} else {
+			redirect80Key = "${TS_CERT_DOMAIN}:80"
+		}
 		sc.TCP[80] = &ipn.TCPPortHandler{HTTP: true}
-		sc.Web[magic80] = &ipn.WebServerConfig{
+		sc.Web[redirect80Key] = &ipn.WebServerConfig{
 			Handlers: map[string]*ipn.HTTPHandler{},
 		}
-		if sc.AllowFunnel != nil && sc.AllowFunnel[magic443] {
-			sc.AllowFunnel[magic80] = true
+		if sc.AllowFunnel != nil && sc.AllowFunnel[webKey] {
+			sc.AllowFunnel[redirect80Key] = true
 		}
-		web80 := sc.Web[magic80]
+		web80 := sc.Web[redirect80Key]
 		for mountPoint := range handlers {
-			// We send a 301 - Moved Permanently redirect from HTTP to HTTPS
 			redirectURL := "301:https://${HOST}${REQUEST_URI}"
 			logger.Debugf("Creating redirect handler: %s -> %s", mountPoint, redirectURL)
 			web80.Handlers[mountPoint] = &ipn.HTTPHandler{
@@ -249,6 +333,19 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		sts.ForwardClusterTrafficViaL7IngressProxy = true
 	}
 
+	if useCustomTLS {
+		tlsSecret := &corev1.Secret{}
+		secretKey := types.NamespacedName{
+			Namespace: ing.Namespace,
+			Name:      tlsSecretName,
+		}
+		if err := a.apiReader.Get(ctx, secretKey, tlsSecret); err != nil {
+			return fmt.Errorf("failed to read TLS secret %s/%s: %w", ing.Namespace, tlsSecretName, err)
+		}
+		sts.CustomTLSHost = tlsHost
+		sts.CustomTLSData = tlsSecret.Data
+	}
+
 	if _, err = a.ssr.Provision(ctx, logger, sts); err != nil {
 		return fmt.Errorf("failed to provision: %w", err)
 	}
@@ -263,18 +360,17 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		if dev.ingressDNSName == "" {
 			continue
 		}
-
 		logger.Debugf("setting Ingress hostname to %q", dev.ingressDNSName)
 		ports := []networkingv1.IngressPortStatus{
-			{
-				Protocol: "TCP",
-				Port:     443,
-			},
+			{Protocol: "TCP", Port: 443},
 		}
 		if isHTTPRedirectEnabled(ing) {
-			ports = append(ports, networkingv1.IngressPortStatus{
-				Protocol: "TCP",
-				Port:     80,
+			ports = append(ports, networkingv1.IngressPortStatus{Protocol: "TCP", Port: 80})
+		}
+		if len(dev.ips) > 0 {
+			ing.Status.LoadBalancer.Ingress = append(ing.Status.LoadBalancer.Ingress, networkingv1.IngressLoadBalancerIngress{
+				IP:    dev.ips[0],
+				Ports: ports,
 			})
 		}
 		ing.Status.LoadBalancer.Ingress = append(ing.Status.LoadBalancer.Ingress, networkingv1.IngressLoadBalancerIngress{
@@ -288,6 +384,219 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 
 	return nil
+}
+
+// maybeProvisionShared handles the shared-proxy code path: multiple Ingresses
+// with the same shared-proxy annotation value share a single proxy StatefulSet.
+func (a *IngressReconciler) maybeProvisionShared(ctx context.Context, logger *zap.SugaredLogger, ing *networkingv1.Ingress, sharedName string, proxyClass string) error {
+	// Find all Ingresses in this shared group (including the current one).
+	allPeers, err := a.findSharedProxyPeers(ctx, sharedName, nil)
+	if err != nil {
+		return fmt.Errorf("failed to find shared proxy peers: %w", err)
+	}
+	// Ensure the current Ingress is in the list (it should be, but be safe).
+	found := false
+	for _, p := range allPeers {
+		if p.UID == ing.UID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		allPeers = append(allPeers, *ing)
+	}
+
+	logger.Infof("shared proxy %q: aggregating %d Ingresses", sharedName, len(allPeers))
+
+	// Build a merged ServeConfig across all peers.
+	sc := &ipn.ServeConfig{
+		TCP: map[uint16]*ipn.TCPPortHandler{
+			443: {HTTPS: true},
+		},
+		Web:         map[ipn.HostPort]*ipn.WebServerConfig{},
+		CustomCerts: map[string]*ipn.TLSCertPaths{},
+	}
+
+	// Collect all TLS certs: hostname -> {tls.crt: data, tls.key: data}
+	customTLSCerts := make(map[string]map[string][]byte)
+
+	var tags []string
+	// Use tags from the current Ingress if set (first one wins -- could also merge).
+	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
+		tags = strings.Split(tstr, ",")
+	}
+
+	anyHTTPRedirect := false
+
+	for i := range allPeers {
+		peer := &allPeers[i]
+		var peerTLSHost string
+		if peer.Spec.TLS != nil && len(peer.Spec.TLS) > 0 && len(peer.Spec.TLS[0].Hosts) > 0 {
+			peerTLSHost = peer.Spec.TLS[0].Hosts[0]
+		}
+		if peerTLSHost == "" {
+			logger.Warnf("shared proxy %q: peer Ingress %s/%s has no TLS host, skipping", sharedName, peer.Namespace, peer.Name)
+			continue
+		}
+
+		peerSecretName := ""
+		if peer.Spec.TLS != nil && len(peer.Spec.TLS) > 0 {
+			peerSecretName = peer.Spec.TLS[0].SecretName
+		}
+
+		// Get handlers for this peer.
+		handlers, err := handlersForIngress(ctx, peer, a.Client, a.recorder, peerTLSHost, logger)
+		if err != nil {
+			return fmt.Errorf("failed to get handlers for peer ingress %s/%s: %w", peer.Namespace, peer.Name, err)
+		}
+		if len(handlers) == 0 {
+			logger.Warnf("shared proxy %q: peer Ingress %s/%s has no valid backends, skipping", sharedName, peer.Namespace, peer.Name)
+			continue
+		}
+
+		// Add Web entry for this peer's hostname.
+		webKey := ipn.HostPort(peerTLSHost + ":443")
+		sc.Web[webKey] = &ipn.WebServerConfig{Handlers: handlers}
+
+		// Add CustomCerts entry.
+		sc.CustomCerts[peerTLSHost] = &ipn.TLSCertPaths{
+			CertFile: fmt.Sprintf("/etc/tailscaled-tls/%s/tls.crt", peerTLSHost),
+			KeyFile:  fmt.Sprintf("/etc/tailscaled-tls/%s/tls.key", peerTLSHost),
+		}
+
+		// Read the TLS secret for this peer.
+		if peerSecretName != "" {
+			tlsSecret := &corev1.Secret{}
+			secretKey := types.NamespacedName{
+				Namespace: peer.Namespace,
+				Name:      peerSecretName,
+			}
+			if err := a.apiReader.Get(ctx, secretKey, tlsSecret); err != nil {
+				return fmt.Errorf("failed to read TLS secret %s/%s for shared peer: %w", peer.Namespace, peerSecretName, err)
+			}
+			certData := make(map[string][]byte, len(tlsSecret.Data))
+			for k, v := range tlsSecret.Data {
+				certData[k] = v
+			}
+			customTLSCerts[peerTLSHost] = certData
+		}
+
+		// Handle HTTP redirect for this peer.
+		if isHTTPRedirectEnabled(peer) {
+			anyHTTPRedirect = true
+			redirect80Key := ipn.HostPort(peerTLSHost + ":80")
+			sc.TCP[80] = &ipn.TCPPortHandler{HTTP: true}
+			sc.Web[redirect80Key] = &ipn.WebServerConfig{
+				Handlers: map[string]*ipn.HTTPHandler{},
+			}
+			for mountPoint := range handlers {
+				redirectURL := "301:https://${HOST}${REQUEST_URI}"
+				sc.Web[redirect80Key].Handlers[mountPoint] = &ipn.HTTPHandler{
+					Redirect: redirectURL,
+				}
+			}
+		}
+	}
+
+	if len(sc.Web) == 0 {
+		logger.Warnf("shared proxy %q: no valid backends across all peers", sharedName)
+		return nil
+	}
+
+	crl := sharedProxyChildResourceLabels(sharedName)
+
+	sts := &tailscaleSTSConfig{
+		Replicas:            1,
+		Hostname:            sharedName,
+		ParentResourceName:  sharedName,
+		ParentResourceUID:   sharedName, // Stable ID for the shared group.
+		ServeConfig:         sc,
+		Tags:                tags,
+		ChildResourceLabels: crl,
+		ProxyClassName:      proxyClass,
+		proxyType:           proxyTypeIngressResource,
+		LoginServer:         a.ssr.loginServer,
+		CustomTLSCerts:      customTLSCerts,
+	}
+
+	if _, err = a.ssr.Provision(ctx, logger, sts); err != nil {
+		return fmt.Errorf("failed to provision shared proxy: %w", err)
+	}
+
+	// Update status for the current Ingress.
+	devices, err := a.ssr.DeviceInfo(ctx, crl, logger)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve shared Ingress HTTPS endpoint status: %w", err)
+	}
+
+	ing.Status.LoadBalancer.Ingress = nil
+	for _, dev := range devices {
+		if dev.ingressDNSName == "" {
+			continue
+		}
+		logger.Debugf("setting Ingress hostname to %q", dev.ingressDNSName)
+		ports := []networkingv1.IngressPortStatus{
+			{Protocol: "TCP", Port: 443},
+		}
+		if anyHTTPRedirect {
+			ports = append(ports, networkingv1.IngressPortStatus{Protocol: "TCP", Port: 80})
+		}
+		if len(dev.ips) > 0 {
+			ing.Status.LoadBalancer.Ingress = append(ing.Status.LoadBalancer.Ingress, networkingv1.IngressLoadBalancerIngress{
+				IP:    dev.ips[0],
+				Ports: ports,
+			})
+		}
+		ing.Status.LoadBalancer.Ingress = append(ing.Status.LoadBalancer.Ingress, networkingv1.IngressLoadBalancerIngress{
+			Hostname: dev.ingressDNSName,
+			Ports:    ports,
+		})
+	}
+
+	if err = a.Status().Update(ctx, ing); err != nil {
+		return fmt.Errorf("failed to update ingress status: %w", err)
+	}
+
+	return nil
+}
+
+// findSharedProxyPeers finds all Ingresses that share the given shared proxy
+// name, optionally excluding a specific Ingress.
+func (a *IngressReconciler) findSharedProxyPeers(ctx context.Context, sharedName string, exclude *networkingv1.Ingress) ([]networkingv1.Ingress, error) {
+	var allIngresses networkingv1.IngressList
+	if err := a.List(ctx, &allIngresses); err != nil {
+		return nil, fmt.Errorf("failed to list ingresses: %w", err)
+	}
+
+	var peers []networkingv1.Ingress
+	for _, candidate := range allIngresses.Items {
+		if candidate.Spec.IngressClassName == nil || *candidate.Spec.IngressClassName != a.ingressClassName {
+			continue
+		}
+		if candidate.Annotations[AnnotationSharedProxy] != sharedName {
+			continue
+		}
+		if exclude != nil && candidate.UID == exclude.UID {
+			continue
+		}
+		// Skip Ingresses being deleted.
+		if !candidate.DeletionTimestamp.IsZero() {
+			continue
+		}
+		peers = append(peers, candidate)
+	}
+	return peers, nil
+}
+
+// sharedProxyChildResourceLabels returns the child resource labels for a shared
+// proxy identified by the given name.
+func sharedProxyChildResourceLabels(sharedName string) map[string]string {
+	return map[string]string{
+		kubetypes.LabelManaged: "true",
+		LabelParentName:        sharedName,
+		LabelParentNamespace:   "shared",
+		LabelParentType:        "shared-ingress",
+	}
 }
 
 func (a *IngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
