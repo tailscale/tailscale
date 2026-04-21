@@ -236,6 +236,10 @@ var Features = map[FeatureTag]FeatureMeta{
 		Desc: "Linux systemd-resolved integration",
 		Deps: []FeatureTag{"dbus"},
 	},
+	"routecheck": {
+		Sym:  "RouteCheck",
+		Desc: "Support checking the reachability of overlapping routers",
+	},
 	"sdnotify": {
 		Sym:  "SDNotify",
 		Desc: "systemd notification support",
