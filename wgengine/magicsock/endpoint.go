@@ -897,7 +897,7 @@ func (de *endpoint) wantUDPRelayPathDiscoveryLocked(now mono.Time) bool {
 	if runtime.GOOS == "js" {
 		return false
 	}
-	if !de.c.hasPeerRelayServers.Load() {
+	if !de.c.relayManager.hasPeerRelayServers.Load() {
 		// Changes in this value between its access and a call to
 		// [endpoint.discoverUDPRelayPathsLocked] are fine, we will eventually
 		// do the "right" thing during future path discovery. The worst case is
@@ -2093,7 +2093,7 @@ func (de *endpoint) setDERPHome(regionID uint16) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 	de.derpAddr = netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(regionID))
-	if de.c.hasPeerRelayServers.Load() {
+	if de.c.relayManager.hasPeerRelayServers.Load() {
 		de.c.relayManager.handleDERPHomeChange(de.publicKey, regionID)
 	}
 }

@@ -62,7 +62,6 @@ import (
 	"tailscale.com/types/netlogtype"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
-	"tailscale.com/types/views"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
@@ -3847,7 +3846,7 @@ func TestConn_SetNetworkMap_updateRelayServersSet(t *testing.T) {
 			c.filt = tt.filt
 			if len(tt.wantRelayServers) == 0 {
 				// So we can verify it gets flipped back.
-				c.hasPeerRelayServers.Store(true)
+				c.relayManager.hasPeerRelayServers.Store(true)
 			}
 
 			c.SetNetworkMap(tt.self, tt.peers)
@@ -3855,8 +3854,8 @@ func TestConn_SetNetworkMap_updateRelayServersSet(t *testing.T) {
 			if !got.Equal(tt.wantRelayServers) {
 				t.Fatalf("got: %v != want: %v", got, tt.wantRelayServers)
 			}
-			if len(tt.wantRelayServers) > 0 != c.hasPeerRelayServers.Load() {
-				t.Fatalf("c.hasPeerRelayServers: %v != len(tt.wantRelayServers) > 0: %v", c.hasPeerRelayServers.Load(), len(tt.wantRelayServers) > 0)
+			if got, want := c.relayManager.hasPeerRelayServers.Load(), len(tt.wantRelayServers) > 0; got != want {
+				t.Fatalf("c.relayManager.hasPeerRelayServers: %v != len(tt.wantRelayServers) > 0: %v", got, want)
 			}
 			if c.relayClientEnabled != tt.wantRelayClientEnabled {
 				t.Fatalf("c.relayClientEnabled: %v != wantRelayClientEnabled: %v", c.relayClientEnabled, tt.wantRelayClientEnabled)
@@ -4422,7 +4421,7 @@ func TestReceiveTSMPDiscoKeyAdvertisement(t *testing.T) {
 			netip.MustParsePrefix("100.64.0.1/32"),
 		},
 	}).View()
-	conn.peers = views.SliceOf([]tailcfg.NodeView{nodeView})
+	conn.peersByID = map[tailcfg.NodeID]tailcfg.NodeView{nodeView.ID(): nodeView}
 	conn.mu.Unlock()
 
 	conn.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
@@ -4468,7 +4467,7 @@ func TestSendingTSMPDiscoTimer(t *testing.T) {
 			netip.MustParsePrefix("100.64.0.1/32"),
 		},
 	}).View()
-	conn.peers = views.SliceOf([]tailcfg.NodeView{nodeView})
+	conn.peersByID = map[tailcfg.NodeID]tailcfg.NodeView{nodeView.ID(): nodeView}
 	conn.mu.Unlock()
 
 	conn.peerMap.upsertEndpoint(ep, key.DiscoPublic{})

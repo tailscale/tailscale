@@ -269,12 +269,6 @@ type Conn struct {
 	// captureHook, if non-nil, is the pcap logging callback when capturing.
 	captureHook syncs.AtomicValue[packet.CaptureCallback]
 
-	// hasPeerRelayServers is whether [relayManager] is configured with at least
-	// one peer relay server via [relayManager.handleRelayServersSet]. It exists
-	// to suppress calls into [relayManager] leading to wasted work involving
-	// channel operations and goroutine creation.
-	hasPeerRelayServers atomic.Bool
-
 	// discoAtomic is the current disco private and public keypair for this conn.
 	discoAtomic discoAtomic
 
@@ -361,18 +355,18 @@ type Conn struct {
 	// magicsock could do with any complexity reduction it can get.
 	netInfoLast *tailcfg.NetInfo
 
-	derpMap            *tailcfg.DERPMap              // nil (or zero regions/nodes) means DERP is disabled
-	self               tailcfg.NodeView              // from last SetNetworkMap
-	peers              views.Slice[tailcfg.NodeView] // from last SetNetworkMap, sorted by Node.ID; Note: [netmap.NodeMutation]'s rx'd in UpdateNetmapDelta are never applied
-	filt               *filter.Filter                // from last SetFilter
-	relayClientEnabled bool                          // whether we can allocate UDP relay endpoints on UDP relay servers or receive CallMeMaybeVia messages from peers
-	lastFlags          debugFlags                    // at time of last SetNetworkMap
-	privateKey         key.NodePrivate               // WireGuard private key for this node
-	everHadKey         bool                          // whether we ever had a non-zero private key
-	myDerp             int                           // nearest DERP region ID; 0 means none/unknown
-	homeless           bool                          // if true, don't try to find & stay conneted to a DERP home (myDerp will stay 0)
-	derpStarted        chan struct{}                 // closed on first connection to DERP; for tests & cleaner Close
-	activeDerp         map[int]activeDerp            // DERP regionID -> connection to a node in that region
+	derpMap            *tailcfg.DERPMap                    // nil (or zero regions/nodes) means DERP is disabled
+	self               tailcfg.NodeView                    // from last SetNetworkMap
+	peersByID          map[tailcfg.NodeID]tailcfg.NodeView // current peer set, keyed by NodeID. Maintained by SetNetworkMap/UpsertPeer/RemovePeer. Note: per-field NodeMutation patches received in UpdateNetmapDelta are never applied to these snapshots.
+	filt               *filter.Filter                      // from last SetFilter
+	relayClientEnabled bool                                // whether we can allocate UDP relay endpoints on UDP relay servers or receive CallMeMaybeVia messages from peers
+	lastFlags          debugFlags                          // at time of last SetNetworkMap
+	privateKey         key.NodePrivate                     // WireGuard private key for this node
+	everHadKey         bool                                // whether we ever had a non-zero private key
+	myDerp             int                                 // nearest DERP region ID; 0 means none/unknown
+	homeless           bool                                // if true, don't try to find & stay conneted to a DERP home (myDerp will stay 0)
+	derpStarted        chan struct{}                       // closed on first connection to DERP; for tests & cleaner Close
+	activeDerp         map[int]activeDerp                  // DERP regionID -> connection to a node in that region
 	prevDerp           map[int]*syncs.WaitGroupChan
 
 	// derpRoute contains optional alternate routes to use as an
@@ -2430,24 +2424,12 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		if c.filt == nil {
 			return
 		}
-		// Binary search of peers is O(log n) while c.mu is held.
-		// TODO: We might be able to use ep.nodeAddr instead of all addresses,
-		//  or we might be able to release c.mu before doing this work. Keep it
-		//  simple and slow for now. c.peers.AsSlice is a copy. We may need to
-		//  write our own binary search for a [views.Slice].
-		peerI, ok := slices.BinarySearchFunc(c.peers.AsSlice(), ep.nodeID, func(peer tailcfg.NodeView, target tailcfg.NodeID) int {
-			if peer.ID() < target {
-				return -1
-			} else if peer.ID() > target {
-				return 1
-			}
-			return 0
-		})
+		peer, ok := c.peersByID[ep.nodeID]
 		if !ok {
 			// unexpected
 			return
 		}
-		if !nodeHasCap(c.filt, c.peers.At(peerI), c.self, tailcfg.PeerCapabilityRelay) {
+		if !nodeHasCap(c.filt, peer, c.self, tailcfg.PeerCapabilityRelay) {
 			return
 		}
 		// [Conn.mu] must not be held while publishing, or [Conn.onUDPRelayAllocResp]
@@ -2784,18 +2766,6 @@ func (c *Conn) UpdatePeers(newPeers set.Set[key.NodePublic]) {
 	}
 }
 
-func nodesEqual(x, y views.Slice[tailcfg.NodeView]) bool {
-	if x.Len() != y.Len() {
-		return false
-	}
-	for i := range x.Len() {
-		if !x.At(i).Equal(y.At(i)) {
-			return false
-		}
-	}
-	return true
-}
-
 // debugRingBufferSize returns a maximum size for our set of endpoint ring
 // buffers by assuming that a single large update is ~500 bytes, and that we
 // want to not use more than 1MiB of memory on phones / 4MiB on other devices.
@@ -2883,7 +2853,7 @@ func (c *Conn) SetFilter(f *filter.Filter) {
 	c.mu.Lock()
 	c.filt = f
 	self := c.self
-	peers := c.peers
+	peers := c.peerSnapshotLocked()
 	relayClientEnabled := c.relayClientEnabled
 	c.mu.Unlock() // release c.mu before potentially calling c.updateRelayServersSet which is O(m * n)
 
@@ -2897,11 +2867,26 @@ func (c *Conn) SetFilter(f *filter.Filter) {
 	c.updateRelayServersSet(f, self, peers)
 }
 
+// peerSnapshotLocked returns a freshly-allocated slice of the current peers.
+// It's used by callers that need to pass peer state to an O(m * n) callee
+// (like [Conn.updateRelayServersSet]) after releasing c.mu. c.mu must be held.
+func (c *Conn) peerSnapshotLocked() []tailcfg.NodeView {
+	if len(c.peersByID) == 0 {
+		return nil
+	}
+	out := make([]tailcfg.NodeView, 0, len(c.peersByID))
+	for _, p := range c.peersByID {
+		out = append(out, p)
+	}
+	return out
+}
+
 // updateRelayServersSet iterates all peers and self, evaluating filt for each
 // one in order to determine which are relay server candidates. filt, self, and
 // peers are passed as args (vs c.mu-guarded fields) to enable callers to
 // release c.mu before calling as this is O(m * n) (we iterate all cap rules 'm'
-// in filt for every peer 'n').
+// in filt for every peer 'n'). peers must be a snapshot owned by the caller;
+// this function does not retain it after return.
 //
 // Calls to updateRelayServersSet must never run concurrent to
 // [endpoint.setDERPHome], otherwise [candidatePeerRelay] DERP home changes may
@@ -2913,9 +2898,9 @@ func (c *Conn) SetFilter(f *filter.Filter) {
 //     them.
 //  2. Moving this work upstream into [nodeBackend] or similar, and publishing
 //     the computed result over the eventbus instead.
-func (c *Conn) updateRelayServersSet(filt *filter.Filter, self tailcfg.NodeView, peers views.Slice[tailcfg.NodeView]) {
+func (c *Conn) updateRelayServersSet(filt *filter.Filter, self tailcfg.NodeView, peers []tailcfg.NodeView) {
 	relayServers := make(set.Set[candidatePeerRelay])
-	nodes := append(peers.AsSlice(), self)
+	nodes := append(peers, self)
 	for _, maybeCandidate := range nodes {
 		if maybeCandidate.ID() != self.ID() && !capVerIsRelayCapable(maybeCandidate.Cap()) {
 			// If maybeCandidate's [tailcfg.CapabilityVersion] is not relay-capable,
@@ -2933,12 +2918,9 @@ func (c *Conn) updateRelayServersSet(filt *filter.Filter, self tailcfg.NodeView,
 			derpHomeRegionID: uint16(maybeCandidate.HomeDERP()),
 		})
 	}
+	// [relayManager]'s run loop updates [relayManager.hasPeerRelayServers]
+	// to reflect the new server count.
 	c.relayManager.handleRelayServersSet(relayServers)
-	if len(relayServers) > 0 {
-		c.hasPeerRelayServers.Store(true)
-	} else {
-		c.hasPeerRelayServers.Store(false)
-	}
 }
 
 // nodeHasCap returns true if src has cap on dst, otherwise it returns false.
@@ -2990,6 +2972,12 @@ func (c *candidatePeerRelay) isValid() bool {
 // magicsock has the current state before subsequent operations proceed.
 //
 // self may be invalid if there's no network map.
+//
+// SetNetworkMap takes the full peer list and walks all of it. For incremental
+// updates where only a single peer changes, prefer the O(1) [Conn.UpsertPeer]
+// and [Conn.RemovePeer] methods. SetNetworkMap remains the right call for the
+// initial netmap and for changes to self or to global state (filter, DERP,
+// etc.) that aren't covered by the per-peer methods.
 func (c *Conn) SetNetworkMap(self tailcfg.NodeView, peers []tailcfg.NodeView) {
 	peersChanged := c.updateNodes(self, peers)
 
@@ -3002,7 +2990,7 @@ func (c *Conn) SetNetworkMap(self tailcfg.NodeView, peers []tailcfg.NodeView) {
 	c.relayClientEnabled = relayClientEnabled
 	filt := c.filt
 	selfView := c.self
-	peersView := c.peers
+	peersSnap := c.peerSnapshotLocked()
 	isClosed := c.closed
 	c.mu.Unlock() // release c.mu before potentially calling c.updateRelayServersSet which is O(m * n)
 
@@ -3012,16 +3000,16 @@ func (c *Conn) SetNetworkMap(self tailcfg.NodeView, peers []tailcfg.NodeView) {
 
 	if peersChanged || relayClientChanged {
 		if !relayClientEnabled {
+			// [relayManager]'s run loop updates [relayManager.hasPeerRelayServers].
 			c.relayManager.handleRelayServersSet(nil)
-			c.hasPeerRelayServers.Store(false)
 		} else {
-			c.updateRelayServersSet(filt, selfView, peersView)
+			c.updateRelayServersSet(filt, selfView, peersSnap)
 		}
 	}
 }
 
 // updateNodes updates [Conn] to reflect the given self node and peers.
-// It reports whether the peers were changed from before.
+// It reports whether the peer set (membership or any field) changed.
 func (c *Conn) updateNodes(self tailcfg.NodeView, peers []tailcfg.NodeView) (peersChanged bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -3030,13 +3018,9 @@ func (c *Conn) updateNodes(self tailcfg.NodeView, peers []tailcfg.NodeView) (pee
 		return false
 	}
 
-	priorPeers := c.peers
 	metricNumPeers.Set(int64(len(peers)))
 
-	// Update c.self & c.peers regardless, before the following early return.
 	c.self = self
-	curPeers := views.SliceOf(peers)
-	c.peers = curPeers
 
 	// [debugFlags] are mutable in [Conn.SetSilentDisco] &
 	// [Conn.SetProbeUDPLifetime]. These setters are passed [controlknobs.Knobs]
@@ -3049,137 +3033,43 @@ func (c *Conn) updateNodes(self tailcfg.NodeView, peers []tailcfg.NodeView) (pee
 	// TODO: mutate [debugFlags] here instead of in various [Conn] setters.
 	flags := c.debugFlagsLocked()
 
-	peersChanged = !nodesEqual(priorPeers, curPeers)
-	if !peersChanged && c.lastFlags == flags {
-		// The rest of this function is all adjusting state for peers that have
-		// changed. But if the set of peers is equal and the debug flags (for
-		// silent disco and probe UDP lifetime) haven't changed, there is no
-		// need to do anything else.
-		return
+	// Fast path: if the peer set and every peer's NodeView are unchanged,
+	// and flags are unchanged, skip all further work.
+	if c.lastFlags == flags && len(peers) == len(c.peersByID) {
+		allSame := true
+		for _, n := range peers {
+			if prev, ok := c.peersByID[n.ID()]; !ok || !prev.Equal(n) {
+				allSame = false
+				break
+			}
+		}
+		if allSame {
+			return false
+		}
 	}
 
 	c.lastFlags = flags
-
 	c.logf("[v1] magicsock: got updated network map; %d peers", len(peers))
 
 	entriesPerBuffer := debugRingBufferSize(len(peers))
 
-	// Try a pass of just upserting nodes and creating missing
-	// endpoints. If the set of nodes is the same, this is an
-	// efficient alloc-free update. If the set of nodes is different,
-	// we'll fall through to the next pass, which allocates but can
-	// handle full set updates.
+	// Build the new peer map while upserting each peer.
+	newPeers := make(map[tailcfg.NodeID]tailcfg.NodeView, len(peers))
 	for _, n := range peers {
-		if n.ID() == 0 {
-			devPanicf("node with zero ID")
-			continue
-		}
-		if n.Key().IsZero() {
-			devPanicf("node with zero key")
-			continue
-		}
-		ep, ok := c.peerMap.endpointForNodeID(n.ID())
-		if ok && ep.publicKey != n.Key() {
-			// The node rotated public keys. Delete the old endpoint and create
-			// it anew.
-			c.peerMap.deleteEndpoint(ep)
-			ok = false
-		}
-		if ok {
-			// At this point we're modifying an existing endpoint (ep) whose
-			// public key and nodeID match n. Its other fields (such as disco
-			// key or endpoints) might've changed.
-
-			if n.DiscoKey().IsZero() && !n.IsWireGuardOnly() {
-				// Discokey transitioned from non-zero to zero? This should not
-				// happen in the wild, however it could mean:
-				// 1. A node was downgraded from post 0.100 to pre 0.100.
-				// 2. A Tailscale node key was extracted and used on a
-				//    non-Tailscale node (should not enter here due to the
-				//    IsWireGuardOnly check)
-				// 3. The server is misbehaving.
-				c.peerMap.deleteEndpoint(ep)
-				continue
-			}
-			var oldDiscoKey key.DiscoPublic
-			if epDisco := ep.disco.Load(); epDisco != nil {
-				oldDiscoKey = epDisco.key
-			}
-			ep.updateFromNode(n, flags.heartbeatDisabled, flags.probeUDPLifetimeOn)
-			c.peerMap.upsertEndpoint(ep, oldDiscoKey) // maybe update discokey mappings in peerMap
-			continue
-		}
-
-		if ep, ok := c.peerMap.endpointForNodeKey(n.Key()); ok {
-			// At this point n.Key() should be for a key we've never seen before. If
-			// ok was true above, it was an update to an existing matching key and
-			// we don't get this far. If ok was false above, that means it's a key
-			// that differs from the one the NodeID had. But double check.
-			if ep.nodeID != n.ID() {
-				// Server error. This is known to be a particular issue for Mullvad
-				// nodes (http://go/corp/27300), so log a distinct error for the
-				// Mullvad and non-Mullvad cases. The error will be logged either way,
-				// so an approximate heuristic is fine.
-				//
-				// When #27300 is fixed, we can delete this branch and log the same
-				// panic for any public key moving.
-				if strings.HasSuffix(n.Name(), ".mullvad.ts.net.") {
-					devPanicf("public key moved between Mullvad nodeIDs (old=%v new=%v, key=%s); see http://go/corp/27300", ep.nodeID, n.ID(), n.Key().String())
-				} else {
-					devPanicf("public key moved between nodeIDs (old=%v new=%v, key=%s)", ep.nodeID, n.ID(), n.Key().String())
-				}
-			} else {
-				// Internal data structures out of sync.
-				devPanicf("public key found in peerMap but not by nodeID")
-			}
-			continue
-		}
-		if n.DiscoKey().IsZero() && !n.IsWireGuardOnly() {
-			// Ancient pre-0.100 node, which does not have a disco key.
-			// No longer supported.
-			continue
-		}
-
-		ep = &endpoint{
-			c:                 c,
-			nodeID:            n.ID(),
-			publicKey:         n.Key(),
-			publicKeyHex:      n.Key().UntypedHexString(),
-			sentPing:          map[stun.TxID]sentPing{},
-			endpointState:     map[netip.AddrPort]*endpointState{},
-			heartbeatDisabled: flags.heartbeatDisabled,
-			isWireguardOnly:   n.IsWireGuardOnly(),
-		}
-		switch runtime.GOOS {
-		case "ios", "android":
-			// Omit, to save memory. Prior to 2024-03-20 we used to limit it to
-			// ~1MB on mobile but we never used the data so the memory was just
-			// wasted.
-		default:
-			ep.debugUpdates = ringlog.New[EndpointChange](entriesPerBuffer)
-		}
-		if n.Addresses().Len() > 0 {
-			ep.nodeAddr = n.Addresses().At(0).Addr()
-		}
-		ep.initFakeUDPAddr()
-		ep.updateDiscoKey(n.DiscoKey())
-
-		if debugPeerMap() {
-			c.logEndpointCreated(n)
-		}
-
-		ep.updateFromNode(n, flags.heartbeatDisabled, flags.probeUDPLifetimeOn)
-		c.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
+		newPeers[n.ID()] = n
+		c.upsertPeerLocked(n, flags, entriesPerBuffer)
 	}
+	if len(newPeers) != len(peers) {
+		// Duplicate NodeIDs in the input shouldn't happen, but log if so.
+		c.logf("[unexpected] magicsock.updateNodes: %d peers input but %d unique IDs", len(peers), len(newPeers))
+	}
+	c.peersByID = newPeers
 
-	// If the set of nodes changed since the last SetNetworkMap, the
-	// upsert loop just above made c.peerMap contain the union of the
-	// old and new peers - which will be larger than the set from the
-	// current netmap. If that happens, go through the allocful
-	// deletion path to clean up moribund nodes.
-	if c.peerMap.nodeCount() != len(peers) {
+	// If the upsert pass left stale endpoints in peerMap (peers removed
+	// relative to before), clean them up.
+	if c.peerMap.nodeCount() != len(newPeers) {
 		keep := set.Set[key.NodePublic]{}
-		for _, n := range peers {
+		for _, n := range newPeers {
 			keep.Add(n.Key())
 		}
 		c.peerMap.forEachEndpoint(func(ep *endpoint) {
@@ -3189,14 +3079,226 @@ func (c *Conn) updateNodes(self tailcfg.NodeView, peers []tailcfg.NodeView) (pee
 		})
 	}
 
-	// discokeys might have changed in the above. Discard unused info.
+	// discokeys might have changed above. Discard unused info.
 	for dk := range c.discoInfo {
 		if !c.peerMap.knownPeerDiscoKey(dk) {
 			delete(c.discoInfo, dk)
 		}
 	}
 
-	return peersChanged
+	return true
+}
+
+// upsertPeerLocked upserts a single peer's endpoint in c.peerMap. It is the
+// per-peer body shared by [Conn.SetNetworkMap]'s upsert pass and by the
+// efficient per-peer [Conn.UpsertPeer] path.
+//
+// c.mu must be held.
+func (c *Conn) upsertPeerLocked(n tailcfg.NodeView, flags debugFlags, entriesPerBuffer int) {
+	if n.ID() == 0 {
+		devPanicf("node with zero ID")
+		return
+	}
+	if n.Key().IsZero() {
+		devPanicf("node with zero key")
+		return
+	}
+	ep, ok := c.peerMap.endpointForNodeID(n.ID())
+	if ok && ep.publicKey != n.Key() {
+		// The node rotated public keys. Delete the old endpoint and create
+		// it anew.
+		c.peerMap.deleteEndpoint(ep)
+		ok = false
+	}
+	if ok {
+		// At this point we're modifying an existing endpoint (ep) whose
+		// public key and nodeID match n. Its other fields (such as disco
+		// key or endpoints) might've changed.
+
+		if n.DiscoKey().IsZero() && !n.IsWireGuardOnly() {
+			// Discokey transitioned from non-zero to zero? This should not
+			// happen in the wild, however it could mean:
+			// 1. A node was downgraded from post 0.100 to pre 0.100.
+			// 2. A Tailscale node key was extracted and used on a
+			//    non-Tailscale node (should not enter here due to the
+			//    IsWireGuardOnly check)
+			// 3. The server is misbehaving.
+			c.peerMap.deleteEndpoint(ep)
+			return
+		}
+		var oldDiscoKey key.DiscoPublic
+		if epDisco := ep.disco.Load(); epDisco != nil {
+			oldDiscoKey = epDisco.key
+		}
+		ep.updateFromNode(n, flags.heartbeatDisabled, flags.probeUDPLifetimeOn)
+		c.peerMap.upsertEndpoint(ep, oldDiscoKey) // maybe update discokey mappings in peerMap
+		return
+	}
+
+	if ep, ok := c.peerMap.endpointForNodeKey(n.Key()); ok {
+		// At this point n.Key() should be for a key we've never seen before. If
+		// ok was true above, it was an update to an existing matching key and
+		// we don't get this far. If ok was false above, that means it's a key
+		// that differs from the one the NodeID had. But double check.
+		if ep.nodeID != n.ID() {
+			// Server error. This is known to be a particular issue for Mullvad
+			// nodes (http://go/corp/27300), so log a distinct error for the
+			// Mullvad and non-Mullvad cases. The error will be logged either way,
+			// so an approximate heuristic is fine.
+			//
+			// When #27300 is fixed, we can delete this branch and log the same
+			// panic for any public key moving.
+			if strings.HasSuffix(n.Name(), ".mullvad.ts.net.") {
+				devPanicf("public key moved between Mullvad nodeIDs (old=%v new=%v, key=%s); see http://go/corp/27300", ep.nodeID, n.ID(), n.Key().String())
+			} else {
+				devPanicf("public key moved between nodeIDs (old=%v new=%v, key=%s)", ep.nodeID, n.ID(), n.Key().String())
+			}
+		} else {
+			// Internal data structures out of sync.
+			devPanicf("public key found in peerMap but not by nodeID")
+		}
+		return
+	}
+	if n.DiscoKey().IsZero() && !n.IsWireGuardOnly() {
+		// Ancient pre-0.100 node, which does not have a disco key.
+		// No longer supported.
+		return
+	}
+
+	ep = &endpoint{
+		c:                 c,
+		nodeID:            n.ID(),
+		publicKey:         n.Key(),
+		publicKeyHex:      n.Key().UntypedHexString(),
+		sentPing:          map[stun.TxID]sentPing{},
+		endpointState:     map[netip.AddrPort]*endpointState{},
+		heartbeatDisabled: flags.heartbeatDisabled,
+		isWireguardOnly:   n.IsWireGuardOnly(),
+	}
+	switch runtime.GOOS {
+	case "ios", "android":
+		// Omit, to save memory. Prior to 2024-03-20 we used to limit it to
+		// ~1MB on mobile but we never used the data so the memory was just
+		// wasted.
+	default:
+		ep.debugUpdates = ringlog.New[EndpointChange](entriesPerBuffer)
+	}
+	if n.Addresses().Len() > 0 {
+		ep.nodeAddr = n.Addresses().At(0).Addr()
+	}
+	ep.initFakeUDPAddr()
+	ep.updateDiscoKey(n.DiscoKey())
+
+	if debugPeerMap() {
+		c.logEndpointCreated(n)
+	}
+
+	ep.updateFromNode(n, flags.heartbeatDisabled, flags.probeUDPLifetimeOn)
+	c.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
+}
+
+// UpsertPeer adds or updates a single peer in c. It is the efficient
+// O(1)-per-peer alternative to [Conn.SetNetworkMap] when a single peer was
+// added or its fields changed. The caller is responsible for serializing
+// UpsertPeer/RemovePeer/SetNetworkMap calls relative to one another.
+//
+// UpsertPeer updates the relay-server set incrementally (O(1)) when the
+// upserted peer's relay candidacy changed, rather than rebuilding the
+// whole set with [Conn.updateRelayServersSet].
+func (c *Conn) UpsertPeer(n tailcfg.NodeView) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	if n.ID() == 0 {
+		c.mu.Unlock()
+		devPanicf("UpsertPeer: node with zero ID")
+		return
+	}
+	flags := c.debugFlagsLocked()
+	c.peersByID[n.ID()] = n
+	c.upsertPeerLocked(n, flags, debugRingBufferSize(len(c.peersByID)))
+
+	var relayUpsert candidatePeerRelay
+	relayQualifies := false
+	if c.relayClientEnabled {
+		relayQualifies, relayUpsert = c.relayCandidateLocked(n)
+	}
+	relayClientEnabled := c.relayClientEnabled
+	c.mu.Unlock()
+
+	if relayClientEnabled {
+		if relayQualifies {
+			c.relayManager.handleRelayServerUpsert(relayUpsert)
+		} else {
+			// The peer may have previously qualified; remove covers that
+			// case and is a no-op otherwise.
+			c.relayManager.handleRelayServerRemove(n.Key())
+		}
+	}
+}
+
+// RemovePeer removes a single peer from c. It is the efficient
+// O(1)-per-peer alternative to [Conn.SetNetworkMap] when a single peer was
+// removed. The caller is responsible for serializing UpsertPeer/RemovePeer/
+// SetNetworkMap calls relative to one another.
+func (c *Conn) RemovePeer(nid tailcfg.NodeID) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	prev, ok := c.peersByID[nid]
+	if !ok {
+		c.mu.Unlock()
+		return
+	}
+	delete(c.peersByID, nid)
+	if ep, ok := c.peerMap.endpointForNodeID(nid); ok {
+		c.peerMap.deleteEndpoint(ep)
+	}
+
+	// If the peer we just removed held the only reference to its disco
+	// key, drop the now-orphaned c.discoInfo entry. No need to scan the
+	// whole map — only this peer's disco key can have become unreferenced
+	// by this single removal.
+	if dk := prev.DiscoKey(); !dk.IsZero() && !c.peerMap.knownPeerDiscoKey(dk) {
+		delete(c.discoInfo, dk)
+	}
+
+	relayClientEnabled := c.relayClientEnabled
+	c.mu.Unlock()
+
+	if relayClientEnabled {
+		// Tell the relay manager to drop the peer. The run loop no-ops
+		// this if the peer wasn't a relay server.
+		c.relayManager.handleRelayServerRemove(prev.Key())
+	}
+}
+
+// relayCandidateLocked reports whether peer p is eligible to be a relay
+// server candidate for self, and if so returns the [candidatePeerRelay]
+// that would be added to the relay-server set. c.mu must be held.
+//
+// It mirrors the per-peer predicate in [Conn.updateRelayServersSet].
+func (c *Conn) relayCandidateLocked(p tailcfg.NodeView) (ok bool, cp candidatePeerRelay) {
+	if !p.Valid() {
+		return false, candidatePeerRelay{}
+	}
+	// The cap-version gate in updateRelayServersSet only applies to peers
+	// (not self). This helper is only called for peers, so always check.
+	if !capVerIsRelayCapable(p.Cap()) {
+		return false, candidatePeerRelay{}
+	}
+	if !nodeHasCap(c.filt, p, c.self, tailcfg.PeerCapabilityRelayTarget) {
+		return false, candidatePeerRelay{}
+	}
+	return true, candidatePeerRelay{
+		nodeKey:          p.Key(),
+		discoKey:         p.DiscoKey(),
+		derpHomeRegionID: uint16(p.HomeDERP()),
+	}
 }
 
 func devPanicf(format string, a ...any) {
