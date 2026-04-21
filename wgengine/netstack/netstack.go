@@ -2317,14 +2317,23 @@ func (ns *Impl) ExpVar() expvar.Var {
 // success ping response for ip.
 //
 // See https://github.com/tailscale/tailscale/issues/13654
+// See https://github.com/tailscale/tailscale/issues/18852
 //
 // TODO(bradfitz,nickkhyl): delete this and use the proper Windows APIs.
 func windowsPingOutputIsSuccess(ip netip.Addr, b []byte) bool {
-	// Look for a line that contains " <ip>: " and then three equal signs.
+	// Look for a line that contains the target IP and three equal signs.
 	// As a special case, the 2nd equal sign may be a '<' character
 	// for sub-millisecond pings.
-	// This heuristic seems to match the ping.exe output in any language.
-	sub := fmt.Appendf(nil, " %s: ", ip)
+	//
+	// Previously this looked for " <ip>: " which worked for English and
+	// German but failed for Chinese, Japanese, Korean, and other locales
+	// where the IP is not directly followed by ": ". For example:
+	//   English: "Reply from 1.2.3.4: bytes=32 time=7ms TTL=64"
+	//   Chinese: "来自 1.2.3.4 的回复: 字节=32 时间<1ms TTL=128"
+	// We now just check that the line contains the IP and has three
+	// equal-sign-like characters, which is sufficient to identify a
+	// successful reply line in any locale.
+	ipBytes := []byte(ip.String())
 
 	eqSigns := func(bb []byte) (n int) {
 		for _, b := range bb {
@@ -2338,7 +2347,7 @@ func windowsPingOutputIsSuccess(ip netip.Addr, b []byte) bool {
 	for len(b) > 0 {
 		var line []byte
 		line, b, _ = bytes.Cut(b, []byte("\n"))
-		if _, rest, ok := bytes.Cut(line, sub); ok && eqSigns(rest) == 3 {
+		if bytes.Contains(line, ipBytes) && eqSigns(line) == 3 {
 			return true
 		}
 	}
