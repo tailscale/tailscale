@@ -157,6 +157,16 @@ func (src *ServeConfig) Clone() *ServeConfig {
 			}
 		}
 	}
+	if dst.CustomCerts != nil {
+		dst.CustomCerts = map[string]*TLSCertPaths{}
+		for k, v := range src.CustomCerts {
+			if v == nil {
+				dst.CustomCerts[k] = nil
+			} else {
+				dst.CustomCerts[k] = ptr.To(*v)
+			}
+		}
+	}
 	return dst
 }
 
@@ -167,6 +177,7 @@ var _ServeConfigCloneNeedsRegeneration = ServeConfig(struct {
 	Services    map[tailcfg.ServiceName]*ServiceConfig
 	AllowFunnel map[HostPort]bool
 	Foreground  map[string]*ServeConfig
+	CustomCerts map[string]*TLSCertPaths
 	ETag        string
 }{})
 
@@ -273,4 +284,21 @@ func (src *WebServerConfig) Clone() *WebServerConfig {
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _WebServerConfigCloneNeedsRegeneration = WebServerConfig(struct {
 	Handlers map[string]*HTTPHandler
+}{})
+
+// Clone makes a deep copy of TLSCertPaths.
+// The result aliases no memory with the original.
+func (src *TLSCertPaths) Clone() *TLSCertPaths {
+	if src == nil {
+		return nil
+	}
+	dst := new(TLSCertPaths)
+	*dst = *src
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _TLSCertPathsCloneNeedsRegeneration = TLSCertPaths(struct {
+	CertFile string
+	KeyFile  string
 }{})

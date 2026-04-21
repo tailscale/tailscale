@@ -73,6 +73,9 @@ type ServeConfig struct {
 	// another Foreground block.
 	Foreground map[string]*ServeConfig `json:",omitempty"`
 
+	// CustomCerts maps SNI hostnames to TLS certificate file paths on disk.
+	CustomCerts map[string]*TLSCertPaths `json:",omitempty"`
+
 	// ETag is the checksum of the serve config that's populated
 	// by the LocalClient through the HTTP ETag header during a
 	// GetServeConfig request and is translated to an If-Match header
@@ -157,6 +160,12 @@ type TCPPortHandler struct {
 	//
 	// This is only valid if TCPForward is non-empty.
 	ProxyProtocol int `json:",omitzero"`
+}
+
+// TLSCertPaths specifies file paths for a custom TLS certificate and key.
+type TLSCertPaths struct {
+	CertFile string `json:"certFile"`
+	KeyFile  string `json:"keyFile"`
 }
 
 // HTTPHandler is either a path or a proxy to serve.

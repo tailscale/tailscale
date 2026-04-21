@@ -20,7 +20,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=LoginProfile,Prefs,ServeConfig,ServiceConfig,TCPPortHandler,HTTPHandler,WebServerConfig
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=LoginProfile,Prefs,ServeConfig,ServiceConfig,TCPPortHandler,HTTPHandler,WebServerConfig,TLSCertPaths
 
 // View returns a read-only view of LoginProfile.
 func (p *LoginProfile) View() LoginProfileView {
@@ -619,6 +619,13 @@ func (v ServeConfigView) Foreground() views.MapFn[string, *ServeConfig, ServeCon
 	})
 }
 
+// CustomCerts maps SNI hostnames to TLS certificate file paths on disk.
+func (v ServeConfigView) CustomCerts() views.MapFn[string, *TLSCertPaths, TLSCertPathsView] {
+	return views.MapFnOf(v.ж.CustomCerts, func(t *TLSCertPaths) TLSCertPathsView {
+		return t.View()
+	})
+}
+
 // ETag is the checksum of the serve config that's populated
 // by the LocalClient through the HTTP ETag header during a
 // GetServeConfig request and is translated to an If-Match header
@@ -632,6 +639,7 @@ var _ServeConfigViewNeedsRegeneration = ServeConfig(struct {
 	Services    map[tailcfg.ServiceName]*ServiceConfig
 	AllowFunnel map[HostPort]bool
 	Foreground  map[string]*ServeConfig
+	CustomCerts map[string]*TLSCertPaths
 	ETag        string
 }{})
 
@@ -1011,4 +1019,80 @@ func (v WebServerConfigView) Handlers() views.MapFn[string, *HTTPHandler, HTTPHa
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _WebServerConfigViewNeedsRegeneration = WebServerConfig(struct {
 	Handlers map[string]*HTTPHandler
+}{})
+
+// View returns a read-only view of TLSCertPaths.
+func (p *TLSCertPaths) View() TLSCertPathsView {
+	return TLSCertPathsView{ж: p}
+}
+
+// TLSCertPathsView provides a read-only view over TLSCertPaths.
+//
+// Its methods should only be called if `Valid()` returns true.
+type TLSCertPathsView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *TLSCertPaths
+}
+
+// Valid reports whether v's underlying value is non-nil.
+func (v TLSCertPathsView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v TLSCertPathsView) AsStruct() *TLSCertPaths {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v TLSCertPathsView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v TLSCertPathsView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
+func (v *TLSCertPathsView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x TLSCertPaths
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *TLSCertPathsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x TLSCertPaths
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v TLSCertPathsView) CertFile() string { return v.ж.CertFile }
+func (v TLSCertPathsView) KeyFile() string  { return v.ж.KeyFile }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _TLSCertPathsViewNeedsRegeneration = TLSCertPaths(struct {
+	CertFile string
+	KeyFile  string
 }{})
