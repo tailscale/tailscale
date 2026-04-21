@@ -3349,17 +3349,49 @@ const LBHeader = "Ts-Lb"
 // this client is hosting can be ignored.
 type ServiceIPMappings map[ServiceName][]netip.Addr
 
+// ServiceAction describes an action that a Tailscale
+// client can invoke for a [ServiceDetails].
+type ServiceAction struct {
+	// Type is the action's identifier i.e. a unique slug corresponding to a well
+	// known action. It drives icon selection and client application matching.
+	Type string
+
+	// Port is the target TCP port for this action. It must match one of
+	// the specific (non-range) TCP ports listed in the enclosing
+	// [ServiceDetails.Ports].
+	Port uint16
+
+	// DisplayName is an optional human-readable label which may be shown
+	// in client menus when there are multiple actions to select from.
+	// If empty, a display name may be inferred from the Type field.
+	DisplayName string `json:",omitzero"`
+}
+
 // ServiceDetails describes a Service visible to this node.
 // It is the value type stored under [NodeAttrPrefixServices]+serviceName keys in [NodeCapMap].
 type ServiceDetails struct {
 	// Name is the name of the Service, of the form "svc:dns-label".
 	Name ServiceName
 
+	// DisplayName is an optional human-readable label for the service.
+	// If empty, Name is used as a fallback by clients.
+	DisplayName string `json:",omitzero"`
+
 	// Addrs are the IP addresses (IPv4 and IPv6) assigned to this Service.
 	Addrs []netip.Addr `json:",omitempty"`
 
 	// Ports are the protocol/port combinations the Service accepts.
 	Ports []ProtoPortRange `json:",omitempty"`
+
+	// Actions is an optional list of actions describing how a client may
+	// interact with this service. Each action maps a [ServiceAction.Type] to a
+	// specific TCP port; the port must match one of the concrete (non-range)
+	// ports listed in Ports.
+	//
+	// Multiple actions may reference the same port. Not every port requires
+	// a corresponding action. When Actions has length zero, clients may infer
+	// default interactions from Ports.
+	Actions []ServiceAction `json:",omitzero"`
 }
 
 // ClientAuditAction represents an auditable action that a client can report to the
