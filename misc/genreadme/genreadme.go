@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & contributors
+// SPDX-License-Identifier: BSD-3-Clause
+//
 // The genreadme tool generates/updates README.md files in the tailscale repo.
 //
 // # Running
@@ -22,7 +25,7 @@ import (
 	"strings"
 
 	"github.com/creachadair/taskgroup"
-	"tailscale.io/misc/pkgdoc"
+	"tailscale.com/tempfork/pkgdoc"
 )
 
 var skip = map[string]bool{
