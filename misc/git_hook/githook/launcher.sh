@@ -36,7 +36,7 @@ if [ "$WANT" != "$HAVE" ]; then
   GO="$REPO_ROOT/tool/go$EXE"
   if [ ! -x "$GO" ]; then GO=go; fi
   echo "git-hook: rebuilding ts-git-hook-bin..." >&2
-  (cd "$REPO_ROOT" && "$GO" build -o "$BINARY" ./misc/git_hook) || {
+  (cd "$REPO_ROOT" && GOWORK=off "$GO" build -o "$BINARY" ./misc/git_hook) || {
     echo "git-hook: rebuild failed, run: ./tool/go run ./misc/install-git-hooks.go" >&2
     exit 1
   }
