@@ -22,6 +22,12 @@ import (
 //go:embed launcher.sh
 var Launcher []byte
 
+// HookVersion is the shared version of this package and launcher.sh.
+// Bump HOOK_VERSION on any change under this package.
+//
+//go:embed HOOK_VERSION
+var HookVersion string
+
 // RunLocalHook runs an optional user-supplied hook at
 // .git/hooks/<name>.local, if present.
 func RunLocalHook(hookName string, args []string) error {
