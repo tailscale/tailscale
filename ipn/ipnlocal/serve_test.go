@@ -9,11 +9,17 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"mime"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1143,6 +1150,92 @@ func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 		},
 	})
 	return b
+}
+
+func TestGetTLSServeCertForPortCustomCerts(t *testing.T) {
+	// Generate a self-signed certificate for testing.
+	td := t.TempDir()
+	certFile := filepath.Join(td, "tls.crt")
+	keyFile := filepath.Join(td, "tls.key")
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		DNSNames:     []string{"custom.example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	derBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+
+	os.WriteFile(certFile, certPEM, 0o600)
+	os.WriteFile(keyFile, keyPEM, 0o600)
+
+	const customHost = "custom.example.com"
+	conf := &ipn.ServeConfig{
+		TCP: map[uint16]*ipn.TCPPortHandler{
+			443: {HTTPS: true},
+		},
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			customHost + ":443": {
+				Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://127.0.0.1:8080"},
+				},
+			},
+		},
+		CustomCerts: map[string]*ipn.TLSCertPaths{
+			customHost: {
+				CertFile: certFile,
+				KeyFile:  keyFile,
+			},
+		},
+	}
+
+	b := &LocalBackend{
+		serveConfig: conf.View(),
+		logf:        t.Logf,
+	}
+
+	// Call getTLSServeCertForPort and invoke the returned callback.
+	getCert := b.getTLSServeCertForPort(443, "")
+
+	// Test: matching SNI should return the custom cert.
+	cert, err := getCert(&tls.ClientHelloInfo{ServerName: customHost})
+	if err != nil {
+		t.Fatalf("expected custom cert for %s, got error: %v", customHost, err)
+	}
+	if cert == nil {
+		t.Fatalf("expected non-nil cert for %s", customHost)
+	}
+
+	// Verify the cert matches what we generated.
+	parsedCert, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("parsing returned cert: %v", err)
+	}
+	if !slices.Contains(parsedCert.DNSNames, customHost) {
+		t.Errorf("cert DNSNames = %v, want to contain %q", parsedCert.DNSNames, customHost)
+	}
+
+	// Test: non-matching SNI should NOT return a custom cert.
+	// It will fall through to ACME (GetCertPEM) which will fail because
+	// there's no real ACME setup, but that's the expected behavior --
+	// the custom cert path was correctly skipped.
+	_, err = getCert(&tls.ClientHelloInfo{ServerName: "other.example.com"})
+	if err == nil {
+		t.Error("expected error for non-matching SNI (no web config for other.example.com), got nil")
+	}
 }
 
 func TestServeFileOrDirectory(t *testing.T) {

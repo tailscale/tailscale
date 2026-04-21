@@ -1316,6 +1316,20 @@ func (b *LocalBackend) getTLSServeCertForPort(port uint16, forVIPService tailcfg
 			return nil, errors.New("no webserver configured for name/port")
 		}
 
+		// Check for a custom certificate before falling back to ACME.
+		b.mu.Lock()
+		sc := b.serveConfig
+		b.mu.Unlock()
+		if sc.Valid() {
+			if paths, ok := sc.CustomCerts().GetOk(hi.ServerName); ok {
+				cert, err := tls.LoadX509KeyPair(paths.CertFile(), paths.KeyFile())
+				if err != nil {
+					return nil, fmt.Errorf("loading custom cert for %s: %w", hi.ServerName, err)
+				}
+				return &cert, nil
+			}
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		pair, err := b.GetCertPEM(ctx, hi.ServerName)
