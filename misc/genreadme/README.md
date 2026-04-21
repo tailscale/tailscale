@@ -2,9 +2,11 @@
 
 # genreadme
 
+Copyright (c) Tailscale Inc & contributors SPDX-License-Identifier: BSD-3-Clause
+
 The genreadme tool generates/updates README.md files in the tailscale repo.
 
 # Running
 
-From the tailscale root, run: `./tool/go run ./misc/genreadme` and it will update all
-the README.md files that are stale in the tree.
+From the tailscale root, run: `./tool/go run ./misc/genreadme` and it will
+update all the README.md files that are stale in the tree.
