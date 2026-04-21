@@ -38,7 +38,6 @@ var libraryDirs = map[string]bool{
 	"tsnet": true,
 }
 
-
 func main() {
 	flag.Parse()
 	root := "."
