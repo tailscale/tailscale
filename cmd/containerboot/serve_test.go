@@ -62,6 +62,22 @@ func TestUpdateServeConfig(t *testing.T) {
 			certDomain: kubetypes.ValueNoHTTPS,
 			wantCall:   false, // incorrect configuration- should not set serve config
 		},
+		{
+			name: "https_without_cert_domain_but_custom_certs",
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {HTTPS: true},
+				},
+				CustomCerts: map[string]*ipn.TLSCertPaths{
+					"example.com": {
+						CertFile: "/etc/tailscaled-tls/tls.crt",
+						KeyFile:  "/etc/tailscaled-tls/tls.key",
+					},
+				},
+			},
+			certDomain: kubetypes.ValueNoHTTPS,
+			wantCall:   true, // custom certs bypass ACME requirement
+		},
 	}
 
 	for _, tt := range tests {
@@ -362,6 +378,77 @@ func TestHasHTTPSEndpoint(t *testing.T) {
 			got := hasHTTPSEndpoint(tt.cfg)
 			if got != tt.want {
 				t.Errorf("hasHTTPSEndpoint() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsValidHTTPSConfigCustomCerts(t *testing.T) {
+	tests := []struct {
+		name       string
+		certDomain string
+		sc         *ipn.ServeConfig
+		want       bool
+	}{
+		{
+			name:       "no_https_no_custom_certs",
+			certDomain: kubetypes.ValueNoHTTPS,
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {HTTP: true},
+				},
+			},
+			want: true,
+		},
+		{
+			name:       "https_without_acme_or_custom_certs",
+			certDomain: kubetypes.ValueNoHTTPS,
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {HTTPS: true},
+				},
+			},
+			want: false,
+		},
+		{
+			name:       "https_with_custom_certs_no_acme",
+			certDomain: kubetypes.ValueNoHTTPS,
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {HTTPS: true},
+				},
+				CustomCerts: map[string]*ipn.TLSCertPaths{
+					"example.com": {
+						CertFile: "/etc/tailscaled-tls/tls.crt",
+						KeyFile:  "/etc/tailscaled-tls/tls.key",
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name:       "https_with_acme",
+			certDomain: "test-node.tailnet.ts.net",
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {HTTPS: true},
+				},
+			},
+			want: true,
+		},
+		{
+			name:       "nil_serve_config",
+			certDomain: kubetypes.ValueNoHTTPS,
+			sc:         nil,
+			want:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isValidHTTPSConfig(tt.certDomain, tt.sc)
+			if got != tt.want {
+				t.Errorf("isValidHTTPSConfig(%q, ...) = %v, want %v", tt.certDomain, got, tt.want)
 			}
 		})
 	}

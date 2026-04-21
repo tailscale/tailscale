@@ -159,6 +159,10 @@ func updateServeConfig(ctx context.Context, sc *ipn.ServeConfig, certDomain stri
 
 func isValidHTTPSConfig(certDomain string, sc *ipn.ServeConfig) bool {
 	if certDomain == kubetypes.ValueNoHTTPS && hasHTTPSEndpoint(sc) {
+		// If custom certs are configured, ACME is not required.
+		if sc != nil && len(sc.CustomCerts) > 0 {
+			return true
+		}
 		log.Printf(
 			`serve proxy: this node is configured as a proxy that exposes an HTTPS endpoint to tailnet,
 		(perhaps a Kubernetes operator Ingress proxy) but it is not able to issue TLS certs, so this will likely not work.
