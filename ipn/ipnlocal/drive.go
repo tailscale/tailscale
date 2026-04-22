@@ -303,18 +303,19 @@ func (b *LocalBackend) updateDrivePeersLocked(nm *netmap.NetworkMap) {
 }
 
 func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Remote {
-	b.logf("[v1] taildrive: setting up drive remotes from peers")
+	b.logf("[v1] taildrive: setting up drive remotes from %d peers", len(nm.Peers))
 	driveRemotes := make([]*drive.Remote, 0, len(nm.Peers))
 	for _, p := range nm.Peers {
 		peer := p
 		peerID := peer.ID()
 		peerKey := peer.Key().ShortString()
-		b.logf("[v1] taildrive: appending remote for peer %s", peerKey)
+		peerName := peer.DisplayName(false)
+
 		driveRemotes = append(driveRemotes, &drive.Remote{
-			Name: p.DisplayName(false),
+			Name: peerName,
 			URL: func() string {
 				url := fmt.Sprintf("%s/%s", b.currentNode().PeerAPIBase(peer), taildrivePrefix[1:])
-				b.logf("[v2] taildrive: url for peer %s: %s", peerKey, url)
+				b.logf("[v2] taildrive: url for peer %s (%s): %s", peerKey, peerName, url)
 				return url
 			},
 			Available: func() bool {
@@ -325,7 +326,7 @@ func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Rem
 				cn := b.currentNode()
 				peer, ok := cn.NodeByID(peerID)
 				if !ok {
-					b.logf("[v2] taildrive: Available(): peer %s not found", peerKey)
+					b.logf("[v2] taildrive: peer %s (%s, id=%v) not found", peerKey, peerName, peerID)
 					return false
 				}
 
@@ -338,26 +339,25 @@ func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Rem
 				// The netmap.Peers slice is not updated in all cases.
 				// It should be fixed now that we use PeerByIDOk.
 				if !peer.Online().Get() {
-					b.logf("[v2] taildrive: Available(): peer %s offline", peerKey)
+					b.logf("[v2] taildrive: peer %s (%s, id=%v) offline", peerKey, peerName, peerID)
 					return false
 				}
-
-				if b.currentNode().PeerAPIBase(peer) == "" {
-					b.logf("[v2] taildrive: Available(): peer %s PeerAPI unreachable", peerKey)
+				if cn.PeerAPIBase(peer) == "" {
+					b.logf("[v2] taildrive: peer %s (%s, id=%v) PeerAPI unreachable", peerKey, peerName, peerID)
 					return false
 				}
-
 				// Check that the peer is allowed to share with us.
 				if cn.PeerHasCap(peer, tailcfg.PeerCapabilityTaildriveSharer) {
-					b.logf("[v2] taildrive: Available(): peer %s available", peerKey)
+					b.logf("[v2] taildrive: peer %s (%s, id=%v) available", peerKey, peerName, peerID)
 					return true
 				}
 
-				b.logf("[v2] taildrive: Available(): peer %s not allowed to share", peerKey)
+				b.logf("[v2] taildrive: peer %s (%s, id=%v) not allowed to share", peerKey, peerName, peerID)
 				return false
 			},
 		})
 	}
+	b.logf("[v1] taildrive: built %d candidate remotes", len(driveRemotes))
 	return driveRemotes
 }
 
