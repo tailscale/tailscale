@@ -144,6 +144,10 @@ sshintegrationtest: ## Run the SSH integration tests in various Docker container
 	docker build --build-arg="BASE=alpine:latest" -t ssh-alpine-latest ssh/tailssh/testcontainers & \
 	wait
 
+.PHONY: genreadme
+genreadme: ## Regenerate README.md files via misc/genreadme
+	./tool/go run ./misc/genreadme
+
 .PHONY: generate
 generate: ## Generate code
 	./tool/go generate ./...

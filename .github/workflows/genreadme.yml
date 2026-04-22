@@ -1,0 +1,46 @@
+name: genreadme
+
+env:
+  HOME: ${{ github.workspace }}
+  GOMODCACHE: ${{ github.workspace }}/gomodcache
+  CMD_GO_USE_GIT_HASH: "true"
+
+on:
+  push:
+    branches:
+      - main
+      - "release-branch/*"
+    paths:
+      - "**.go"
+      - "misc/genreadme/**"
+      - "Makefile"
+      - ".github/workflows/genreadme.yml"
+  pull_request:
+    paths:
+      - "**.go"
+      - "misc/genreadme/**"
+      - "Makefile"
+      - ".github/workflows/genreadme.yml"
+
+jobs:
+  genreadme:
+    runs-on: [ self-hosted, linux ]
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: src
+
+      - name: Check 'genreadme' is clean
+        working-directory: src
+        run: |
+          make genreadme
+          echo
+          echo
+          if [[ $(git status -s) ]]; then
+            git status -s
+            echo "The files above need updating. Please run 'make genreadme'."
+            exit 1
+          fi
