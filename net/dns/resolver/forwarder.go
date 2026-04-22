@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/netip"
@@ -43,7 +44,9 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/race"
+	"tailscale.com/util/set"
 	"tailscale.com/version"
 )
 
@@ -308,7 +311,17 @@ type forwarder struct {
 
 	mu syncs.Mutex // guards following
 
-	dohClient map[string]*http.Client // urlBase -> client
+	dohClient              map[string]*http.Client // urlBase -> client
+	dohClientBootstrapping set.Set[string]          // urlBase values with a bootstrap goroutine currently in-flight
+	dohClientNextRetry     map[string]time.Time    // urlBase -> earliest retry time after a failed bootstrap; absent means no retry pending; guarded by mu
+
+	// nextDNSExchangeFunc, if non-nil, replaces the UDP exchangeFn passed to
+	// resolveBootstrapHostname in upgradeBootstrapClient. Only set in tests.
+	nextDNSExchangeFunc func(ctx context.Context, pkt []byte) ([]byte, error)
+
+	// testBootstrapUDPServers, if non-nil, replaces the server list derived
+	// from DoHIPsOfBase in upgradeBootstrapClient. Only set in tests.
+	testBootstrapUDPServers []netip.AddrPort
 
 	// routes are per-suffix resolvers to use, with
 	// the most specific routes first.
@@ -496,37 +509,20 @@ func (f *forwarder) packetListener(ip netip.Addr) (nettype.PacketListenerWithNet
 	return nettype.MakePacketListenerWithNetIP(lc), nil
 }
 
-// getKnownDoHClientForProvider returns an HTTP client for a specific DoH
-// provider named by its DoH base URL (like "https://dns.google/dns-query").
-//
-// The returned client race/Happy Eyeballs dials all IPs for urlBase (usually
-// 4), as statically known by the publicdns package.
-func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client, ok bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if c, ok := f.dohClient[urlBase]; ok {
-		return c, true
-	}
-	allIPs := publicdns.DoHIPsOfBase(urlBase)
-	if len(allIPs) == 0 {
-		return nil, false
-	}
+// buildDoHClient constructs an http.Client that dials urlBase using the given IPs.
+// Used for both the initial anycast client and the upgraded unicast client.
+// It contains no I/O — only struct allocation — so it is safe to call under f.mu.
+func (f *forwarder) buildDoHClient(urlBase string, ips []netip.Addr) (*http.Client, error) {
 	dohURL, err := url.Parse(urlBase)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
-
 	dialer := dnscache.Dialer(f.getDialerType(), &dnscache.Resolver{
 		SingleHost:             dohURL.Hostname(),
-		SingleHostStaticResult: allIPs,
+		SingleHostStaticResult: ips,
 		Logf:                   f.logf,
 	})
-	tlsConfig := &tls.Config{
-		// Enforce TLS 1.3, as all of our supported DNS-over-HTTPS servers are compatible with it
-		// (see tailscale.com/net/dns/publicdns/publicdns.go).
-		MinVersion: tls.VersionTLS13,
-	}
-	c = &http.Client{
+	return &http.Client{
 		Transport: &http.Transport{
 			ForceAttemptHTTP2: true,
 			IdleConnTimeout:   dohIdleConnTimeout,
@@ -540,14 +536,332 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 				}
 				return dialer(ctx, netw, addr)
 			},
-			TLSClientConfig: tlsConfig,
+			TLSClientConfig: &tls.Config{
+				// Enforce TLS 1.3, as all of our supported DNS-over-HTTPS servers are compatible with it
+				// (see tailscale.com/net/dns/publicdns/publicdns.go).
+				MinVersion: tls.VersionTLS13,
+			},
 		},
+	}, nil
+}
+
+// sendBootstrapDNS sends a single DNS query to server over UDP using
+// Tailscale's packet-listener infrastructure and returns the raw response.
+// It patches a random txid into the query, then verifies the txid and source
+// address in the response. This is a bootstrap-only path — it does not perform
+// RCODE handling or truncated-read recovery.
+func (f *forwarder) sendBootstrapDNS(ctx context.Context, server netip.AddrPort, query []byte) ([]byte, error) {
+	udpFam := "udp4"
+	if server.Addr().Is6() {
+		udpFam = "udp6"
+	}
+	// Copy query and patch in a random txid; UDP has no built-in
+	// request/response binding the way HTTP does.
+	pkt := make([]byte, len(query))
+	copy(pkt, query)
+	txid := uint16(rand.Uint32())
+	binary.BigEndian.PutUint16(pkt[0:2], txid)
+
+	ln, err := f.packetListener(server.Addr())
+	if err != nil {
+		return nil, err
+	}
+	conn, err := ln.ListenPacket(ctx, udpFam, ":0")
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(deadline)
+	}
+
+	if _, err := conn.WriteToUDPAddrPort(pkt, server); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 4096)
+	for {
+		n, src, err := conn.ReadFromUDPAddrPort(buf)
+		if err != nil {
+			return nil, err
+		}
+		if n < 2 || src != server || binary.BigEndian.Uint16(buf[:2]) != txid {
+			// Stray packet (wrong source or txid); keep waiting.
+			continue
+		}
+		return buf[:n], nil
+	}
+}
+
+// getKnownDoHClientForProvider returns an HTTP client for a specific DoH
+// provider named by its DoH base URL (like "https://dns.google/dns-query").
+// The candidate IPs come from publicdns.DoHIPsOfBase; TCP-level racing across
+// those IPs is handled by dnscache.Dialer inside the transport.
+//
+// For providers that support bootstrap hostname resolution (currently NextDNS),
+// a background goroutine is launched after the first call to upgrade the cached
+// client from anycast bootstrap IPs to lower-latency unicast IPs resolved via UDP:53.
+func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client, ok bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, ok := f.dohClient[urlBase]; ok {
+		// If a previous bootstrap attempt failed, retry on natural traffic once
+		// the cooldown has expired.
+		if bh := publicdns.DoHBootstrapHostname(urlBase); bh != "" {
+			if !f.dohClientBootstrapping.Contains(urlBase) {
+				if retryAt, failed := f.dohClientNextRetry[urlBase]; failed && !time.Now().Before(retryAt) {
+					f.dohClientBootstrapping.Make()
+					f.dohClientBootstrapping.Add(urlBase)
+					go f.upgradeBootstrapClient(urlBase, bh, publicdns.DoHIPsOfBase(urlBase))
+				}
+			}
+		}
+		return c, true
+	}
+	allIPs := publicdns.DoHIPsOfBase(urlBase)
+	if len(allIPs) == 0 {
+		return nil, false
+	}
+	c, err := f.buildDoHClient(urlBase, allIPs)
+	if err != nil {
+		return nil, false
 	}
 	if f.dohClient == nil {
 		f.dohClient = map[string]*http.Client{}
 	}
 	f.dohClient[urlBase] = c
+	// If the provider supports bootstrap hostname resolution, kick off an async
+	// upgrade to unicast IPs. dohClientBootstrapping prevents duplicate goroutines
+	// on concurrent first calls.
+	if bh := publicdns.DoHBootstrapHostname(urlBase); bh != "" {
+		if !f.dohClientBootstrapping.Contains(urlBase) {
+			f.dohClientBootstrapping.Make()
+			f.dohClientBootstrapping.Add(urlBase)
+			go f.upgradeBootstrapClient(urlBase, bh, allIPs)
+		}
+	}
 	return c, true
+}
+
+// upgradeBootstrapClient resolves bootstrapHostname via UDP:53 using the IPs
+// from DoHIPsOfBase, filters the results to global unicast addresses, then
+// swaps a better unicast-first client into the cache. bootstrapIPs are kept
+// as fallback. On any failure the anycast client remains unchanged.
+//
+// It runs in a background goroutine launched by getKnownDoHClientForProvider.
+func (f *forwarder) upgradeBootstrapClient(urlBase, bootstrapHostname string, bootstrapIPs []netip.Addr) {
+	var success bool
+	defer func() {
+		f.mu.Lock()
+		f.dohClientBootstrapping.Delete(urlBase)
+		if !success {
+			mak.Set(&f.dohClientNextRetry, urlBase, time.Now().Add(5*time.Minute))
+		} else {
+			delete(f.dohClientNextRetry, urlBase)
+		}
+		f.mu.Unlock()
+	}()
+
+	ctx, cancel := context.WithTimeout(f.ctx, 5*time.Second)
+	defer cancel()
+
+	// Read both test hooks under mu so they are synchronized with any test
+	// that sets them.
+	f.mu.Lock()
+	var udpServers []netip.AddrPort
+	if f.testBootstrapUDPServers != nil {
+		udpServers = f.testBootstrapUDPServers
+	} else {
+		// DoHIPsOfBase returns the IPs used to dial the DoH endpoint, which
+		// for NextDNS includes profile-specific v6 addresses. Those IPs also
+		// accept UDP:53 queries, so reusing this set as bootstrap targets is
+		// intentional: it avoids a separate API while still reaching valid
+		// recursive resolvers.
+		for _, ip := range publicdns.DoHIPsOfBase(urlBase) {
+			udpServers = append(udpServers, netip.AddrPortFrom(ip, 53))
+		}
+	}
+	exchangeFn := func(ctx context.Context, pkt []byte) ([]byte, error) {
+		var lastErr error
+		for _, server := range udpServers {
+			ipCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			resp, err := f.sendBootstrapDNS(ipCtx, server, pkt)
+			cancel()
+			if err == nil {
+				return resp, nil
+			}
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			lastErr = err
+		}
+		return nil, lastErr
+	}
+	if f.nextDNSExchangeFunc != nil {
+		exchangeFn = f.nextDNSExchangeFunc
+	}
+	f.mu.Unlock()
+
+	resolved, err := resolveBootstrapHostname(ctx, f.logf, bootstrapHostname, exchangeFn)
+	if err != nil {
+		f.logf("[v1] dns: UDP bootstrap for %s failed: %v", bootstrapHostname, err)
+		return
+	}
+
+	// Only trust addresses that pass IsGlobalUnicast() && !IsPrivate().
+	// This excludes loopback, link-local, RFC1918, and ULA.
+	resolved = filterGlobalUnicastIPs(resolved)
+	if len(resolved) == 0 {
+		return
+	}
+
+	// Unicast IPs first, anycast fallback at the end, no duplicates.
+	combined := combineBootstrapIPs(resolved, bootstrapIPs)
+
+	upgraded, err := f.buildDoHClient(urlBase, combined)
+	if err != nil {
+		return
+	}
+
+	f.mu.Lock()
+	old := f.dohClient[urlBase]
+	f.dohClient[urlBase] = upgraded
+	success = true
+	f.mu.Unlock()
+
+	if old != nil {
+		old.CloseIdleConnections()
+	}
+	f.logf("[v1] dns: UDP bootstrap upgraded %s to unicast IPs: %v", urlBase, resolved)
+}
+
+// resolveBootstrapHostname queries hostname A and AAAA using exchangeFn,
+// which sends one wire-format DNS query and returns the wire-format response.
+// Failure of one record type is non-fatal; an error is returned only if no IPs
+// were collected from either query.
+func resolveBootstrapHostname(ctx context.Context, logf logger.Logf, hostname string, exchangeFn func(context.Context, []byte) ([]byte, error)) ([]netip.Addr, error) {
+	var ips []netip.Addr
+	var lastErr error
+	for _, qtype := range []dns.Type{dns.TypeA, dns.TypeAAAA} {
+		pkt, err := buildDNSQuery(hostname, qtype)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		resp, err := exchangeFn(ctx, pkt)
+		if err != nil {
+			lastErr = err
+			logf("[v1] dns: UDP bootstrap %v lookup for %s failed: %v", qtype, hostname, err)
+			continue
+		}
+		addrs, err := parseDNSResponseIPs(resp)
+		if err != nil {
+			lastErr = err
+			logf("[v1] dns: UDP bootstrap parse error (%v, %s): %v", qtype, hostname, err)
+			continue
+		}
+		ips = append(ips, addrs...)
+	}
+	if len(ips) == 0 {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, fmt.Errorf("%s returned no A or AAAA records", hostname)
+	}
+	return ips, nil
+}
+
+// combineBootstrapIPs returns resolved IPs first, bootstrap IPs second, with
+// duplicates removed. This is the dial order the upgraded client will use.
+func combineBootstrapIPs(resolved, bootstrap []netip.Addr) []netip.Addr {
+	combined := make([]netip.Addr, 0, len(resolved)+len(bootstrap))
+	seen := make(map[netip.Addr]bool, len(resolved)+len(bootstrap))
+	for _, ip := range resolved {
+		if !seen[ip] {
+			seen[ip] = true
+			combined = append(combined, ip)
+		}
+	}
+	for _, ip := range bootstrap {
+		if !seen[ip] {
+			seen[ip] = true
+			combined = append(combined, ip)
+		}
+	}
+	return combined
+}
+
+// filterGlobalUnicastIPs returns only addresses that pass IsGlobalUnicast() &&
+// !IsPrivate(). This excludes loopback, link-local, multicast, RFC1918, and ULA.
+// Note: Go's IsGlobalUnicast() is broader than "publicly routable" — it still
+// admits ranges like 100.64.0.0/10 (CGNAT) and documentation ranges. This is a
+// basic sanity check against obviously wrong answers, not a routability guarantee.
+func filterGlobalUnicastIPs(ips []netip.Addr) []netip.Addr {
+	var out []netip.Addr
+	for _, ip := range ips {
+		ip = ip.Unmap()
+		if ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() {
+			out = append(out, ip)
+		}
+	}
+	return out
+}
+
+// buildDNSQuery returns a wire-format DNS query for use in UDP bootstrap lookups.
+func buildDNSQuery(name string, qtype dns.Type) ([]byte, error) {
+	b := dns.NewBuilder(nil, dns.Header{RecursionDesired: true})
+	if err := b.StartQuestions(); err != nil {
+		return nil, err
+	}
+	n, err := dns.NewName(name)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.Question(dns.Question{Name: n, Type: qtype, Class: dns.ClassINET}); err != nil {
+		return nil, err
+	}
+	return b.Finish()
+}
+
+// parseDNSResponseIPs extracts A and AAAA records from a DNS wire response.
+// Used only for UDP bootstrap lookups.
+func parseDNSResponseIPs(resp []byte) ([]netip.Addr, error) {
+	var p dns.Parser
+	if _, err := p.Start(resp); err != nil {
+		return nil, err
+	}
+	if err := p.SkipAllQuestions(); err != nil {
+		return nil, err
+	}
+	var ips []netip.Addr
+	for {
+		rh, err := p.AnswerHeader()
+		if err == dns.ErrSectionDone {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch rh.Type {
+		case dns.TypeA:
+			r, err := p.AResource()
+			if err != nil {
+				return nil, err
+			}
+			ips = append(ips, netip.AddrFrom4(r.A))
+		case dns.TypeAAAA:
+			r, err := p.AAAAResource()
+			if err != nil {
+				return nil, err
+			}
+			ips = append(ips, netip.AddrFrom16(r.AAAA))
+		default:
+			if err := p.SkipAnswer(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return ips, nil
 }
 
 const dohType = "application/dns-message"
