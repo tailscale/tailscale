@@ -431,7 +431,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				},
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{
 					dnsname.FQDN("example.com."): {
-						{Addr: "http://100.102.0.1:1234/dns-query"},
+						{Addr: "tailscale-app:app1"},
 					},
 				},
 			},

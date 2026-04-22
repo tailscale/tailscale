@@ -5,11 +5,13 @@ package appc
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
 
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/appctype"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/util/set"
 )
 
@@ -52,7 +54,12 @@ func PickConnector(nb ipnext.NodeBackend, app appctype.Conn25Attr) []tailcfg.Nod
 	return matches
 }
 
-func AppNameByDomain(hasCap func(c tailcfg.NodeCapability) bool, self tailcfg.NodeView) map[string]string {
+// DNSAddrScheme is the custom URI scheme used for conn25-managed split DNS
+// entries to determine the destination at query time rather than configuration
+// time.
+const DNSAddrScheme = "tailscale-app"
+
+func AppDNSRoutes(hasCap func(c tailcfg.NodeCapability) bool, self tailcfg.NodeView) map[string][]*dnstype.Resolver {
 	if !hasCap(AppConnectorsExperimentalAttrName) {
 		return nil
 	}
@@ -68,5 +75,13 @@ func AppNameByDomain(hasCap func(c tailcfg.NodeCapability) bool, self tailcfg.No
 			appNamesByDomain[domain] = app.Name
 		}
 	}
-	return appNamesByDomain
+
+	// TODO: filter out apps that have no peers? There is not enough information
+	// available here.
+
+	m := make(map[string][]*dnstype.Resolver, len(appNamesByDomain))
+	for domain, appName := range appNamesByDomain {
+		m[domain] = []*dnstype.Resolver{{Addr: fmt.Sprintf("%s:%s", DNSAddrScheme, appName)}}
+	}
+	return m
 }

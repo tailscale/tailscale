@@ -862,15 +862,10 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// Add split DNS routes, with no regard to exit node configuration.
 	addSplitDNSRoutes(nm.DNS.Routes)
 
-	// Add split DNS routes for conn25
-	appMap := appc.AppNameByDomain(nm.HasCap, nm.SelfNode)
-	if appMap != nil {
-		var m map[string][]*dnstype.Resolver
-		for domain, appName := range appMap {
-			mak.Set(&m, domain, []*dnstype.Resolver{{Addr: appName, IsFranNewDynamicResolverThing: true}})
-		}
-		if m != nil {
-			addSplitDNSRoutes(m)
+	if buildfeatures.HasConn25 {
+		// Add split DNS routes for conn25
+		if appRoutes := appc.AppDNSRoutes(nm.HasCap, nm.SelfNode); appRoutes != nil {
+			addSplitDNSRoutes(appRoutes)
 		}
 	}
 

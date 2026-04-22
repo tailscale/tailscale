@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -41,14 +42,13 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
+	"tailscale.com/types/views"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/race"
 	"tailscale.com/version"
 )
-
-// TODO comment, name
-var FranNewDynamicResolverThing feature.Hook[func(string) (string, error)]
 
 // headerBytes is the number of bytes in a DNS message header.
 const headerBytes = 12
@@ -326,6 +326,18 @@ type forwarder struct {
 	// /etc/resolv.conf is missing/corrupt, and the peerapi ExitDNS stub
 	// resolver lookup.
 	cloudHostFallback []resolverAndDelay
+	// schemes are the collection of registered URI scheme names that
+	// dynamically decide which resolver to use at the time of each query. The
+	// key is the scheme (the portion before the first `:`) and the value is a
+	// handler that determines where the current query should be sent.
+	// Use schemeCacheLocked() to get the current contents that can continue to
+	// be accessed once mu is released. This allows the (much more common)
+	// resolver code path to avoid repeated locking and unlocking.
+	// When modified, call invalidateSchemeCacheLocked() before unlocking mu.
+	schemes map[string]CustomSchemeHandler
+	// schemeCache is an immutable copy of schemes. Do not read directly,
+	// use schemeCacheLocked() which will regenerate its contents as needed.
+	schemeCache views.Map[string, CustomSchemeHandler]
 
 	// acceptDNS tracks the CorpDNS pref (--accept-dns)
 	// This lets us skip health warnings if the forwarder receives inbound
@@ -1004,23 +1016,35 @@ func (f *forwarder) resolvers(domain dnsname.FQDN) []resolverAndDelay {
 	f.mu.Lock()
 	routes := f.routes
 	cloudHostFallback := f.cloudHostFallback
+	schemes := f.schemeCacheLocked()
 	f.mu.Unlock()
 	for _, route := range routes {
 		if route.Suffix == "." || route.Suffix.Contains(domain) {
 			triedToResolveResolver := false
-			resolvers := []resolverAndDelay{}
+			resolvers := make([]resolverAndDelay, 0, len(route.Resolvers))
 			for _, r := range route.Resolvers {
-				if r.name.IsFranNewDynamicResolverThing {
-					triedToResolveResolver = true
-					fx := FranNewDynamicResolverThing.Get()
-					if fx != nil {
-						url, err := fx(r.name.Addr)
-						if err != nil {
-							continue
-						}
-						r.name.Addr = url
-					}
+				scheme, _, ok := strings.Cut(r.name.Addr, ":")
+				if !ok {
+					resolvers = append(resolvers, r)
+					continue
 				}
+				h := schemes.Get(scheme)
+				if h == nil {
+					resolvers = append(resolvers, r)
+					continue
+				}
+
+				triedToResolveResolver = true
+				newAddr, err := h(r.name.Addr)
+				if err != nil {
+					continue
+				}
+
+				r.name = &dnstype.Resolver{
+					Addr:            newAddr,
+					UseWithExitNode: r.name.UseWithExitNode,
+				}
+
 				resolvers = append(resolvers, r)
 			}
 			// if there turned out to actually be no resolvers for this route Suffix then
@@ -1045,6 +1069,52 @@ func (f *forwarder) GetUpstreamResolvers(name dnsname.FQDN) []*dnstype.Resolver 
 		upstreamResolvers = append(upstreamResolvers, r.name)
 	}
 	return upstreamResolvers
+}
+
+// RegisterCustomScheme adds a [CustomSchemaHandler] that is called to provide
+// an updated address when a [dnstype.Resolver.Addr] uses that scheme.
+func (f *forwarder) RegisterCustomScheme(scheme string, h CustomSchemeHandler) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.schemes[scheme]; ok {
+		return fmt.Errorf("scheme %q already registered", scheme)
+	}
+	f.invalidateSchemeCacheLocked()
+	mak.Set(&f.schemes, scheme, h)
+	return nil
+}
+
+// UnregisterCustomScheme removes a scheme previously registered via
+// RegisterCustomScheme.
+func (f *forwarder) UnregisterCustomScheme(scheme string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.schemes[scheme]; !ok {
+		return fmt.Errorf("scheme %q not registered", scheme)
+	}
+	f.invalidateSchemeCacheLocked()
+	delete(f.schemes, scheme)
+	return nil
+}
+
+// invalidateSchemeCacheLocked clears f.schemeCache so that it will be rebuilt
+// on the next call to f.schemeCacheLocked().
+func (f *forwarder) invalidateSchemeCacheLocked() {
+	f.schemeCache = views.Map[string, CustomSchemeHandler]{}
+}
+
+// schemeCacheLocked returns an immutable copy of f.schemes that can be used
+// after mu is unlocked.
+func (f *forwarder) schemeCacheLocked() views.Map[string, CustomSchemeHandler] {
+	if !f.schemeCache.IsNil() {
+		return f.schemeCache
+	}
+	if f.schemes == nil {
+		return f.schemeCache // returns a nil view
+	}
+	// Regenerate the cache
+	f.schemeCache = views.MapOf(maps.Clone(f.schemes))
+	return f.schemeCache
 }
 
 // forwardQuery is information and state about a forwarded DNS query that's

@@ -27,7 +27,6 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
-	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
@@ -138,6 +137,7 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	if !ok {
 		return errors.New("could not access system dns manager")
 	}
+
 	tun, ok := e.backend.Sys().Tun.GetOK()
 	if !ok {
 		return errors.New("could not access system tun")
@@ -152,8 +152,13 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 		return e.conn25.mapDNSResponse(bs)
 	})
 
-	if !resolver.FranNewDynamicResolverThing.IsSet() {
-		resolver.FranNewDynamicResolverThing.Set(func(appName string) (string, error) {
+	if resolver := dnsManager.Resolver(); resolver != nil {
+		if err := resolver.RegisterCustomScheme(appc.DNSAddrScheme, func(addr string) (newAddr string, err error) {
+			scheme, appName, ok := strings.Cut(addr, ":")
+			if !ok || scheme != appc.DNSAddrScheme {
+				return "", fmt.Errorf("unexpected conn25 scheme %q", scheme)
+			}
+
 			if !e.conn25.isConfigured() {
 				return "", errors.New("conn25 not configured")
 			}
@@ -167,7 +172,9 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 				return "", errors.New("no peer found for app")
 			}
 			return urlBase + "/dns-query", nil
-		})
+		}); err != nil {
+			return fmt.Errorf("could not register DNS resolver scheme: %w", err)
+		}
 	}
 
 	// Intercept packets from the tun device and from WireGuard

@@ -23,10 +23,9 @@ func (src *Resolver) Clone() *Resolver {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ResolverCloneNeedsRegeneration = Resolver(struct {
-	Addr                          string
-	BootstrapResolution           []netip.Addr
-	UseWithExitNode               bool
-	IsFranNewDynamicResolverThing bool
+	Addr                string
+	BootstrapResolution []netip.Addr
+	UseWithExitNode     bool
 }{})
 
 // Clone duplicates src into dst and reports whether it succeeded.
