@@ -19,7 +19,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 
-	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
@@ -378,7 +377,6 @@ func TestStateMachine(t *testing.T) {
 }
 
 func TestStateMachineSeamless(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/19377")
 	runTestStateMachine(t, true)
 }
 
@@ -878,7 +876,9 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 	// additional netmap updates. Since our LocalBackend instance already
 	// has a netmap, we will reset it to nil to simulate the first netmap
 	// retrieval.
+	b.mu.Lock()
 	b.setNetMapLocked(nil)
+	b.mu.Unlock()
 	cc.assertCalls("unpause")
 	//
 	// TODO: really the various GUIs and prefs should be refactored to
@@ -1057,6 +1057,7 @@ func runTestStateMachine(t *testing.T, seamless bool) {
 	}
 	notifies.expect(1)
 	// Fake a DERP connection.
+	b.awaitNoGoroutinesInTest()
 	b.setWgengineStatus(&wgengine.Status{DERPs: 1, AsOf: time.Now()}, nil)
 	{
 		nn := notifies.drain(1)
