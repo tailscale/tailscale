@@ -27,6 +27,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -95,14 +96,15 @@ type Node struct {
 	name string
 	num  int // assigned during AddNode
 
-	os              OSImage
-	nets            []*vnet.Network
-	vnetNode        *vnet.Node // primary vnet node (set during Start)
-	agent           *vnet.NodeAgentClient
-	joinTailnet     bool
-	advertiseRoutes string
-	webServerPort   int
-	sshPort         int // host port for SSH debug access (cloud VMs only)
+	os               OSImage
+	nets             []*vnet.Network
+	vnetNode         *vnet.Node // primary vnet node (set during Start)
+	agent            *vnet.NodeAgentClient
+	joinTailnet      bool
+	advertiseRoutes  string
+	snatSubnetRoutes *bool // nil means default (true)
+	webServerPort    int
+	sshPort          int // host port for SSH debug access (cloud VMs only)
 }
 
 // AddNode creates a new VM node. The name is used for identification and as the
@@ -130,6 +132,9 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 			vnetOpts = append(vnetOpts, vnet.DontJoinTailnet)
 		case nodeOptAdvertiseRoutes:
 			n.advertiseRoutes = string(o)
+		case nodeOptSNATSubnetRoutes:
+			v := bool(o)
+			n.snatSubnetRoutes = &v
 		case nodeOptWebServer:
 			n.webServerPort = int(o)
 		default:
@@ -154,6 +159,7 @@ func (n *Node) LanIP(net *vnet.Network) netip.Addr {
 type nodeOptOS OSImage
 type nodeOptNoTailscale struct{}
 type nodeOptAdvertiseRoutes string
+type nodeOptSNATSubnetRoutes bool
 type nodeOptWebServer int
 
 // OS returns a NodeOption that sets the node's operating system image.
@@ -168,8 +174,14 @@ func AdvertiseRoutes(routes string) nodeOptAdvertiseRoutes {
 	return nodeOptAdvertiseRoutes(routes)
 }
 
+// SNATSubnetRoutes returns a NodeOption that sets whether the node should
+// source NAT traffic to advertised subnet routes. The default is true.
+// Setting this to false preserves original source IPs, which is needed
+// for site-to-site configurations.
+func SNATSubnetRoutes(v bool) nodeOptSNATSubnetRoutes { return nodeOptSNATSubnetRoutes(v) }
+
 // WebServer returns a NodeOption that starts a webserver on the given port.
-// The webserver responds with "Hello world I am <nodename>" on all requests.
+// The webserver responds with "Hello world I am <nodename> from <sourceIP>" on all requests.
 func WebServer(port int) nodeOptWebServer { return nodeOptWebServer(port) }
 
 // Start initializes the virtual network, builds/downloads images, compiles
@@ -332,6 +344,13 @@ func (e *Env) tailscaleUp(ctx context.Context, n *Node) error {
 	if n.advertiseRoutes != "" {
 		url += "&advertise-routes=" + n.advertiseRoutes
 	}
+	if n.snatSubnetRoutes != nil {
+		if *n.snatSubnetRoutes {
+			url += "&snat-subnet-routes=true"
+		} else {
+			url += "&snat-subnet-routes=false"
+		}
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return err
@@ -462,6 +481,32 @@ func (e *Env) ping(from, to *Node) {
 	}
 }
 
+// AddRoute adds a kernel static route on the given node, pointing prefix at
+// via. It uses TTA's /add-route handler, so it works on any node where TTA
+// is running (which is all of them — DontJoinTailnet only skips
+// `tailscale up`; the agent runs regardless). Currently Linux-only in TTA.
+//
+// Fatals on error.
+func (e *Env) AddRoute(n *Node, prefix, via string) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	reqURL := fmt.Sprintf("http://unused/add-route?prefix=%s&via=%s", prefix, via)
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		e.t.Fatalf("AddRoute: %v", err)
+	}
+	resp, err := n.agent.HTTPClient.Do(req)
+	if err != nil {
+		e.t.Fatalf("AddRoute(%s, %s → %s): %v", n.name, prefix, via, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		e.t.Fatalf("AddRoute(%s, %s → %s): %s: %s", n.name, prefix, via, resp.Status, body)
+	}
+}
+
 // SSHExec runs a command on a cloud VM via its debug SSH NIC.
 // Only works for cloud VMs that have the debug NIC and SSH key configured.
 // Returns stdout and any error.
@@ -575,7 +620,11 @@ func (e *Env) HTTPGet(from *Node, targetURL string) string {
 	return ""
 }
 
-// ensureGokrazy finds or builds the gokrazy base image and kernel.
+var buildGokrazy sync.Once
+
+// ensureGokrazy builds the gokrazy base image (once per test process) and
+// locates the kernel. The build is fast (~4s) so we always rebuild to ensure
+// the baked-in binaries (tta, tailscale, tailscaled) match the current source.
 func (e *Env) ensureGokrazy(ctx context.Context) error {
 	if e.gokrazyBase != "" {
 		return nil // already found
@@ -586,20 +635,22 @@ func (e *Env) ensureGokrazy(ctx context.Context) error {
 		return err
 	}
 
-	e.gokrazyBase = filepath.Join(modRoot, "gokrazy/natlabapp.qcow2")
-	if _, err := os.Stat(e.gokrazyBase); err != nil {
-		if !os.IsNotExist(err) {
-			return err
-		}
+	var buildErr error
+	buildGokrazy.Do(func() {
 		e.t.Logf("building gokrazy natlab image...")
 		cmd := exec.CommandContext(ctx, "make", "natlab")
 		cmd.Dir = filepath.Join(modRoot, "gokrazy")
 		cmd.Stderr = os.Stderr
 		cmd.Stdout = os.Stdout
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("make natlab: %w", err)
+			buildErr = fmt.Errorf("make natlab: %w", err)
 		}
+	})
+	if buildErr != nil {
+		return buildErr
 	}
+
+	e.gokrazyBase = filepath.Join(modRoot, "gokrazy/natlabapp.qcow2")
 
 	kernel, err := findKernelPath(filepath.Join(modRoot, "go.mod"))
 	if err != nil {
