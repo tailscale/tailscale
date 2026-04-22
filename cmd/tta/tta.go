@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -202,6 +203,9 @@ func main() {
 		if routes := r.URL.Query().Get("advertise-routes"); routes != "" {
 			args = append(args, "--advertise-routes="+routes)
 		}
+		if snat := r.URL.Query().Get("snat-subnet-routes"); snat != "" {
+			args = append(args, "--snat-subnet-routes="+snat)
+		}
 		serveCmd(w, "tailscale", args...)
 	})
 	ttaMux.HandleFunc("/ip", func(w http.ResponseWriter, r *http.Request) {
@@ -222,6 +226,20 @@ func main() {
 			serveCmd(w, "ping", "-c", "4", "-W", "1", host)
 		}
 	})
+	ttaMux.HandleFunc("/add-route", func(w http.ResponseWriter, r *http.Request) {
+		prefix := r.URL.Query().Get("prefix")
+		via := r.URL.Query().Get("via")
+		if prefix == "" || via == "" {
+			http.Error(w, "missing prefix or via", http.StatusBadRequest)
+			return
+		}
+		switch runtime.GOOS {
+		case "linux":
+			serveCmd(w, "ip", "route", "add", prefix, "via", via)
+		default:
+			http.Error(w, "add-route not supported on "+runtime.GOOS, http.StatusNotImplemented)
+		}
+	})
 	ttaMux.HandleFunc("/start-webserver", func(w http.ResponseWriter, r *http.Request) {
 		port := r.URL.Query().Get("port")
 		name := r.URL.Query().Get("name")
@@ -236,7 +254,8 @@ func main() {
 		go func() {
 			mux := http.NewServeMux()
 			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-				fmt.Fprintf(w, "Hello world I am %s", name)
+				host, _, _ := net.SplitHostPort(r.RemoteAddr)
+				fmt.Fprintf(w, "Hello world I am %s from %s", name, host)
 			})
 			if err := http.ListenAndServe(":"+port, mux); err != nil {
 				log.Printf("webserver on :%s failed: %v", port, err)
