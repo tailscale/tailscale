@@ -382,6 +382,10 @@ func parseExitNodeQuery(q []byte) *response {
 // and a nil error.
 // TODO: figure out if we even need an error result.
 func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.AddrPort, allowName func(name string) bool) (res []byte, err error) {
+	return r.handlePeerDNSQueryForOS(ctx, q, from, allowName, runtime.GOOS, nil)
+}
+
+func (r *Resolver) handlePeerDNSQueryForOS(ctx context.Context, q []byte, from netip.AddrPort, allowName func(name string) bool, goos string, resolver *net.Resolver) (res []byte, err error) {
 	if !buildfeatures.HasDNS {
 		return nil, feature.ErrUnavailable
 	}
@@ -399,18 +403,18 @@ func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.
 		return marshalResponse(resp)
 	}
 
-	switch runtime.GOOS {
+	switch goos {
 	default:
 		return nil, errors.New("unsupported exit node OS")
 	case "windows", "android":
-		return handleExitNodeDNSQueryWithNetPkg(ctx, r.logf, nil, resp)
+		return handleExitNodeDNSQueryWithNetPkg(ctx, r.logf, resolver, resp)
 	case "darwin":
 		// /etc/resolv.conf is a lie and only says one upstream DNS
 		// but for now that's probably good enough. Later we'll
 		// want to blend in everything from scutil --dns.
 		fallthrough
 	case "linux", "freebsd", "openbsd", "illumos", "solaris", "ios":
-		nameserver, err := stubResolverForOS()
+		nameserver, err := stubResolverForOS(goos)
 		if err != nil {
 			r.logf("stubResolverForOS: %v", err)
 			metricDNSExitProxyErrorResolvConf.Add(1)
@@ -426,7 +430,15 @@ func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.
 			// would've done anyway. By not passing any resolvers, the forwarder
 			// will use its default ones from our DNS config.
 		case netip.Addr{}:
-			// Likewise, if the platform has no resolv.conf, just use our defaults.
+			// On iOS/tvOS (where there is no resolv.conf), if the user has
+			// "Override local DNS" disabled, we won't have any default resolvers
+			// configured. This will trigger a SERVFAIL later. In that case, we
+			// fall back to using the OS's native net.Resolver.
+			if goos == "ios" {
+				if fqdn, err := dnsname.ToFQDN(strings.ToLower(name)); err == nil && len(r.forwarder.resolvers(fqdn)) == 0 {
+					return handleExitNodeDNSQueryWithNetPkg(ctx, r.logf, resolver, resp)
+				}
+			}
 		default:
 			resolvers = []resolverAndDelay{{
 				name: &dnstype.Resolver{Addr: net.JoinHostPort(nameserver.String(), "53")},
@@ -599,9 +611,9 @@ var errEmptyResolvConf = errors.New("resolv.conf has no nameservers")
 //
 // It may also return the netip.Addr zero value and a nil error to mean
 // that the platform has no resolv.conf.
-func stubResolverForOS() (ip netip.Addr, err error) {
-	if runtime.GOOS == "ios" {
-		return netip.Addr{}, nil // no resolv.conf on iOS
+func stubResolverForOS(goos string) (ip netip.Addr, err error) {
+	if goos == "ios" {
+		return netip.Addr{}, nil // no resolv.conf on iOS/tvOS
 	}
 	fi, err := os.Stat(resolvconffile.Path)
 	if err != nil {
