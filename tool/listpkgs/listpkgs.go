@@ -31,6 +31,7 @@ var (
 	shard             = flag.String("shard", "", "if non-empty, a string of the form 'N/M' to only print packages in shard N of M (e.g. '1/3', '2/3', '3/3/' for different thirds of the list)")
 	affectedByTag     = flag.String("affected-by-tag", "", "if non-empty, only list packages whose test binary would be affected by the presence or absence of this build tag")
 	hasRootTests      = flag.Bool("has-root-tests", false, "list packages (as ./relative/path) containing _test.go files that call tstest.RequireRoot")
+	hasGoGenerate     = flag.Bool("has-go-generate", false, "only list packages that contain at least one //go:generate directive")
 )
 
 func main() {
@@ -120,6 +121,9 @@ Pkg:
 			if hasBuildTag(pkg, t) {
 				continue Pkg
 			}
+		}
+		if *hasGoGenerate && !pkgHasGoGenerate(pkg) {
+			continue Pkg
 		}
 		matches++
 
@@ -289,6 +293,65 @@ func fileMentionsTag(filename, tag string) (bool, error) {
 		return false, err
 	}
 	return tags[tag], nil
+}
+
+// pkgHasGoGenerate reports whether any source file in pkg contains a
+// //go:generate directive.
+func pkgHasGoGenerate(pkg *packages.Package) bool {
+	// Include IgnoredFiles so directives behind build constraints are still
+	// found; the caller can narrow by tag via -with-tags-all/-without-tags-any
+	// if they care.
+	all := slices.Concat(pkg.CompiledGoFiles, pkg.OtherFiles, pkg.IgnoredFiles)
+	for _, name := range all {
+		ok, err := fileHasGoGenerate(name)
+		if err != nil {
+			log.Printf("reading %s: %v", name, err)
+			continue
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	goGenerateMu sync.Mutex
+	goGenerate   = map[string]bool{} // abs path -> whether file has //go:generate
+)
+
+func fileHasGoGenerate(filename string) (bool, error) {
+	goGenerateMu.Lock()
+	v, ok := goGenerate[filename]
+	goGenerateMu.Unlock()
+	if ok {
+		return v, nil
+	}
+
+	f, err := os.Open(filename)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	has := false
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		// go:generate directives must start at column 1 (no leading
+		// whitespace) to be recognized by the go tool.
+		if strings.HasPrefix(s.Text(), "//go:generate") {
+			has = true
+			break
+		}
+	}
+	if err := s.Err(); err != nil {
+		return false, fmt.Errorf("reading %s: %w", filename, err)
+	}
+
+	goGenerateMu.Lock()
+	goGenerate[filename] = has
+	goGenerateMu.Unlock()
+	return has, nil
 }
 
 // printRootTestPkgs walks the current directory tree looking for _test.go
