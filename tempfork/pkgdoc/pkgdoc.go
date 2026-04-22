@@ -13,6 +13,7 @@ import (
 	"go/ast"
 	"go/build"
 	"go/doc"
+	"go/doc/comment"
 	"go/parser"
 	"go/token"
 	"io"
@@ -44,6 +45,31 @@ func (pkg *Package) ToText(w io.Writer, text, prefix, codePrefix string) {
 	pr.TextPrefix = prefix
 	pr.TextCodePrefix = codePrefix
 	w.Write(pr.Text(d))
+}
+
+// ToMarkdown parses the godoc comment text and writes a Markdown rendering to w
+// suitable for a repository README.md: top-level sections become ## headings
+// without per-heading anchor IDs, and [Symbol] doc links resolve to pkg.go.dev,
+// including for symbols in the current package (which the default printer would
+// otherwise emit as bare #Name fragments with no backing anchor).
+func (pkg *Package) ToMarkdown(w io.Writer, text string) {
+	d := pkg.doc.Parser().Parse(text)
+	pr := pkg.doc.Printer()
+	pr.HeadingLevel = 2
+	pr.HeadingID = func(*comment.Heading) string { return "" }
+	pr.DocLinkBaseURL = "https://pkg.go.dev"
+	pr.DocLinkURL = func(link *comment.DocLink) string {
+		importPath := link.ImportPath
+		if importPath == "" {
+			importPath = pkg.doc.ImportPath
+		}
+		name := link.Name
+		if link.Recv != "" {
+			name = link.Recv + "." + name
+		}
+		return "https://pkg.go.dev/" + importPath + "#" + name
+	}
+	w.Write(pr.Markdown(d))
 }
 
 // pkgBuffer is a wrapper for bytes.Buffer that prints a package clause the
@@ -85,7 +111,10 @@ func parsePackage(writer io.Writer, pkg *build.Package, userPath string) *Packag
 		return slices.Contains(pkg.GoFiles, info.Name()) || slices.Contains(pkg.CgoFiles, info.Name())
 	}
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, pkg.Dir, include, parser.ParseComments|parser.ImportsOnly)
+	// Parse declarations (not just imports) so that doc.Package knows the
+	// package's symbols; the Markdown printer needs this to resolve
+	// [Symbol] doc links in package comments.
+	pkgs, err := parser.ParseDir(fset, pkg.Dir, include, parser.ParseComments)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -144,10 +173,10 @@ func (pkg *Package) newlines(n int) {
 	}
 }
 
-// packageDoc prints the docs for the package.
+// packageDoc prints the docs for the package as Markdown.
 func (pkg *Package) packageDoc() {
 	pkg.Printf("") // Trigger the package clause; we know the package exists.
-	pkg.ToText(&pkg.buf, pkg.doc.Doc, "", indent)
+	pkg.ToMarkdown(&pkg.buf, pkg.doc.Doc)
 	pkg.newlines(1)
 
 	pkg.bugs()
@@ -175,8 +204,12 @@ func (pkg *Package) bugs() {
 	}
 }
 
-// PackageDoc generates documentation for a package in the given directory.
-func PackageDoc(dir string) ([]byte, error) {
+// PackageDoc generates Markdown documentation for the package in the given
+// directory. importPath is the full Go import path of that package (e.g.
+// "tailscale.com/tsnet"); it's used to render [Symbol] doc links to the
+// right pkg.go.dev URL. If importPath is empty, build.ImportDir's guess
+// is used (typically "." for module-based repos).
+func PackageDoc(dir, importPath string) ([]byte, error) {
 	var buf bytes.Buffer
 	var writer io.Writer = &buf
 
@@ -187,6 +220,9 @@ func PackageDoc(dir string) ([]byte, error) {
 			return nil, nil
 		}
 		return nil, err
+	}
+	if importPath != "" {
+		buildPackage.ImportPath = importPath
 	}
 	userPath := dir
 
