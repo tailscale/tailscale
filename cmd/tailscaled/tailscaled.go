@@ -179,6 +179,11 @@ var (
 type proxyStartFunc = func(logf logger.Logf, dialer *tsdial.Dialer)
 
 func main() {
+	// Start the optional startup profiler as early as possible. This is a
+	// no-op unless TS_STARTUPPROF_* envknobs are set. See startupprof.go.
+	startupProfileStart()
+	markPhase("main_enter")
+
 	envknob.PanicIfAnyEnvCheckedInInit()
 	if shouldRunCLI() {
 		beCLI()
@@ -399,11 +404,13 @@ var logPol *logpolicy.Policy // or nil if not used
 var debugMux *http.ServeMux
 
 func run() (err error) {
+	markPhase("run_enter")
 	var logf logger.Logf = log.Printf
 
 	// Install an event bus as early as possible, so that it's
 	// available universally when setting up everything else.
 	sys := tsd.NewSystem()
+	markPhase("tsd_new_system")
 	sys.SocketPath = args.socketpath
 
 	// Parse config, if specified, to fail early if it's invalid.
@@ -425,6 +432,7 @@ func run() (err error) {
 		}
 		sys.Set(netMon)
 	}
+	markPhase("netmon_new")
 
 	var publicLogID logid.PublicID
 	if buildfeatures.HasLogTail {
@@ -445,6 +453,7 @@ func run() (err error) {
 			pol.Shutdown(ctx)
 		}()
 	}
+	markPhase("logpolicy_new")
 
 	if err := envknob.ApplyDiskConfigError(); err != nil {
 		log.Printf("Error reading environment config: %v", err)
@@ -473,6 +482,7 @@ func run() (err error) {
 	// crashed, and would for example restore system DNS configuration.
 	dns.CleanUp(logf, netMon, sys.Bus.Get(), sys.HealthTracker.Get(), args.tunname)
 	router.CleanUp(logf, netMon, args.tunname)
+	markPhase("dns_router_cleanup")
 	// If the cleanUp flag was passed, then exit.
 	if args.cleanUp {
 		return nil
@@ -509,10 +519,12 @@ var sigPipe os.Signal // set by sigpipe.go
 
 // logID may be the zero value if logging is not in use.
 func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID, sys *tsd.System) error {
+	markPhase("startIPNServer_enter")
 	ln, err := safesocket.Listen(args.socketpath)
 	if err != nil {
 		return fmt.Errorf("safesocket.Listen: %v", err)
 	}
+	markPhase("safesocket_listen")
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -570,6 +582,7 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID,
 		lb, err := getLocalBackend(ctx, logf, logID, sys)
 		if err == nil {
 			logf("got LocalBackend in %v", time.Since(t0).Round(time.Millisecond))
+			markPhase("got_local_backend")
 			if lb.Prefs().Valid() {
 				if err := lb.Start(ipn.Options{}); err != nil {
 					logf("LocalBackend.Start: %v", err)
@@ -578,8 +591,11 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID,
 					cancel()
 					return
 				}
+				markPhase("lb_start_returned")
 			}
 			srv.SetLocalBackend(lb)
+			markPhase("srv_set_local_backend")
+			startupProfileWatchLocalBackend(lb)
 			close(wgEngineCreated)
 			return
 		}
@@ -624,6 +640,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	if err != nil {
 		return nil, fmt.Errorf("createEngine: %w", err)
 	}
+	markPhase("createEngine_returned")
 	if onlyNetstack && !buildfeatures.HasNetstack {
 		return nil, errors.New("userspace-networking support is not compiled in to this binary")
 	}
@@ -641,6 +658,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 			return nil, fmt.Errorf("newNetstack: %w", err)
 		}
 	}
+	markPhase("netstack_created")
 
 	if startProxy != nil {
 		go startProxy(logf, dialer)
@@ -662,15 +680,18 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 		ht.SetUnhealthy(ipn.StateStoreHealth, health.Args{health.ArgError: err.Error()})
 	}
 	sys.Set(store)
+	markPhase("store_new")
 
 	if w, ok := sys.Tun.GetOK(); ok {
 		w.Start()
 	}
+	markPhase("tun_start")
 
 	lb, err := ipnlocal.NewLocalBackend(logf, logID, sys, opts.LoginFlags)
 	if err != nil {
 		return nil, fmt.Errorf("ipnlocal.NewLocalBackend: %w", err)
 	}
+	markPhase("new_local_backend")
 	lb.SetVarRoot(opts.VarRoot)
 	if logPol != nil {
 		lb.SetLogFlusher(logPol.Logtail.StartFlush)
@@ -687,6 +708,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 			log.Fatalf("failed to start netstack: %v", err)
 		}
 	}
+	markPhase("netstack_started")
 	if buildfeatures.HasTPM && args.hardwareAttestation.v {
 		lb.SetHardwareAttested()
 	}
