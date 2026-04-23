@@ -67,11 +67,6 @@ func init() {
 	RegisterC2N("GET /vip-services", handleC2NVIPServicesGet)
 }
 
-const (
-	contentTypeHeader   = "Content-Type"
-	grpcBaseContentType = "application/grpc"
-)
-
 // ErrETagMismatch signals that the given
 // If-Match header does not match with the
 // current etag of a resource.
@@ -887,8 +882,8 @@ func (b *LocalBackend) isTailscaledSocket(socketPath string) bool {
 // reverseProxy is a proxy that forwards a request to a backend host
 // (preconfigured via ipn.ServeConfig). If the host is configured with
 // http+insecure prefix, connection between proxy and backend will be over
-// insecure TLS. If the backend host has a http prefix and the incoming request
-// has application/grpc content type header, the connection will be over h2c.
+// insecure TLS. If the backend is plaintext (http:// or unix socket) and the
+// incoming request is HTTP/2, the connection will be over h2c.
 // Otherwise standard Go http transport will be used.
 type reverseProxy struct {
 	logf logger.Logf
@@ -951,13 +946,10 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-	}} // There is no way to autodetect h2c as per RFC 9113
-	// https://datatracker.ietf.org/doc/html/rfc9113#name-starting-http-2.
-	// However, we assume that http:// proxy prefix in combination with the
-	// protoccol being HTTP/2 is sufficient to detect h2c for our needs. Only use this for
-	// gRPC to fix a known problem of plaintext gRPC backends
+	}} // Use h2c transport for HTTP/2 requests to plaintext backends. This is
+	// needed for protocols that require HTTP/2 (gRPC, Connect RPC, etc.)
+	// when the backend is running without TLS.
 	if rp.shouldProxyViaH2C(r) {
-		rp.logf("received a proxy request for plaintext gRPC")
 		p.Transport = rp.getH2CTransport()
 	} else {
 		p.Transport = rp.getTransport()
@@ -965,7 +957,7 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.ServeHTTP(w, r)
 }
 
-// getTransport returns the Transport used for regular (non-GRPC) requests
+// getTransport returns the Transport used for regular (non-h2c) requests
 // to the backend. The Transport gets created lazily, at most once.
 func (rp *reverseProxy) getTransport() *http.Transport {
 	return rp.httpTransport.Get(func() *http.Transport {
@@ -992,8 +984,8 @@ func (rp *reverseProxy) getTransport() *http.Transport {
 	})
 }
 
-// getH2CTransport returns the Transport used for GRPC requests to the backend.
-// The Transport gets created lazily, at most once.
+// getH2CTransport returns the Transport used for HTTP/2 cleartext (h2c)
+// requests to the backend. The Transport gets created lazily, at most once.
 func (rp *reverseProxy) getH2CTransport() http.RoundTripper {
 	return rp.h2cTransport.Get(func() *http.Transport {
 		var p http.Protocols
@@ -1012,25 +1004,18 @@ func (rp *reverseProxy) getH2CTransport() http.RoundTripper {
 	})
 }
 
-// This is not a generally reliable way how to determine whether a request is
-// for a h2c server, but sufficient for our particular use case.
+// shouldProxyViaH2C reports whether the request should be proxied using h2c
+// (HTTP/2 over cleartext TCP). This is used when the inbound connection is
+// HTTP/2 and the backend is a plaintext (http:// or unix socket) target,
+// supporting any protocol that requires HTTP/2 (gRPC, Connect RPC, etc.).
 func (rp *reverseProxy) shouldProxyViaH2C(r *http.Request) bool {
-	contentType := r.Header.Get(contentTypeHeader)
-	// For unix sockets, check if it's gRPC content to determine h2c
-	if rp.socketPath != "" {
-		return r.ProtoMajor == 2 && isGRPCContentType(contentType)
+	if r.ProtoMajor != 2 {
+		return false
 	}
-	return r.ProtoMajor == 2 && strings.HasPrefix(rp.backend, "http://") && isGRPCContentType(contentType)
-}
-
-// isGRPC accepts an HTTP request's content type header value and determines
-// whether this is gRPC content. grpc-go considers a value that equals
-// application/grpc or has a prefix of application/grpc+ or application/grpc; a
-// valid grpc content type header.
-// https://github.com/grpc/grpc-go/blob/v1.60.0-dev/internal/grpcutil/method.go#L41-L78
-func isGRPCContentType(contentType string) bool {
-	s, ok := strings.CutPrefix(contentType, grpcBaseContentType)
-	return ok && (len(s) == 0 || s[0] == '+' || s[0] == ';')
+	if rp.socketPath != "" {
+		return true
+	}
+	return strings.HasPrefix(rp.backend, "http://")
 }
 
 func addProxyForwardedHeaders(r *httputil.ProxyRequest) {
