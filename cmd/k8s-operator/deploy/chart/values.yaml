@@ -65,6 +65,8 @@ operatorConfig:
   podAnnotations: {}
   podLabels: {}
 
+  podHostAliases: []
+
   serviceAccountAnnotations: {}
   # eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/tailscale-operator-role
 
