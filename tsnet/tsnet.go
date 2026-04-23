@@ -1240,6 +1240,33 @@ func (s *Server) Listen(network, addr string) (net.Listener, error) {
 	return s.listen(network, addr, listenOnTailnet)
 }
 
+// ListenSSH listens on the Tailscale network for SSH connections at the given
+// addr (e.g. ":2222"). The returned listener's Accept method yields net.Conn
+// values that are actually *tailssh.Session, providing access to the
+// connecting peer's Tailscale identity, PTY information, signals, and more.
+//
+// Basic applications can use the returned connections as plain net.Conn
+// (Read/Write/Close). Applications that need richer SSH semantics should
+// type-assert to *tailssh.Session.
+//
+// SSH support must be linked into the binary by importing
+// _ "tailscale.com/feature/ssh". Without that import, ListenSSH returns an
+// error.
+//
+// If s has not been started yet, it will be started.
+func (s *Server) ListenSSH(addr string) (net.Listener, error) {
+	rawLn, err := s.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	sshLn, err := s.lb.ListenSSH(rawLn, s.logf)
+	if err != nil {
+		rawLn.Close()
+		return nil, err
+	}
+	return sshLn, nil
+}
+
 // ListenPacket announces on the Tailscale network.
 //
 // The network must be "udp", "udp4" or "udp6". The addr must be of the form
