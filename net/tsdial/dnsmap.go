@@ -74,6 +74,32 @@ func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
 		}
 		ret[canonMapKey(rec.Name)] = ip
 	}
+	// Map VIP service names into the DNS map so that MagicDNS can
+	// resolve e.g. "mydb" or "mydb.<tailnet>" to the service VIP.
+	// suffix is derived from the self node name; it's only empty when
+	// the self node is invalid, in which case there's nothing to do.
+	if suffix != "" {
+		for svcName, svcAddrs := range nm.GetVIPServiceIPMap() {
+			bare := svcName.WithoutPrefix()
+			if bare == "" {
+				continue
+			}
+			var ip netip.Addr
+			for _, a := range svcAddrs {
+				if a.Is4() && !have4 {
+					continue
+				}
+				ip = a
+				break
+			}
+			if !ip.IsValid() {
+				continue
+			}
+			fqdn := bare + "." + suffix
+			ret[canonMapKey(fqdn)] = ip
+			ret[canonMapKey(bare)] = ip
+		}
+	}
 	return ret
 }
 
