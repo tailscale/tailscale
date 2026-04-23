@@ -4430,11 +4430,8 @@ type NewDiscoKeyAvailable struct {
 
 // maybeSendTSMPDiscoAdvert conditionally emits an event indicating that we
 // should send our DiscoKey to the first node address of the magicksock endpoint.
-// The event is only emitted if we have not yet contacted that endpoint since
-// the DiscoKey changed.
-//
-// This condition is most likely met only once per endpoint, after the start of
-// tailscaled, but not until we contact the endpoint for the first time.
+// The event is only emitted if we are not already communicating directly and
+// more than 60 seconds has passed since the last DiscoKey was sent.
 //
 // We do not need the Conn to be locked, but the endpoint should be.
 func (c *Conn) maybeSendTSMPDiscoAdvert(de *endpoint) {
@@ -4444,11 +4441,16 @@ func (c *Conn) maybeSendTSMPDiscoAdvert(de *endpoint) {
 
 	de.mu.Lock()
 	defer de.mu.Unlock()
-	if mono.Now().Sub(de.lastDiscoKeyAdvertisement) > discoKeyAdvertisementInterval {
-		de.lastDiscoKeyAdvertisement = mono.Now()
-		c.tsmpDiscoKeyAvailablePub.Publish(NewDiscoKeyAvailable{
-			NodeFirstAddr: de.nodeAddr,
-			NodeID:        de.nodeID,
-		})
+
+	now := mono.Now()
+	if now.Sub(de.lastDiscoKeyAdvertisement) <= discoKeyAdvertisementInterval ||
+		(!de.lastDiscoKeyAdvertisement.IsZero() && de.bestAddr.isDirect()) {
+		return
 	}
+
+	de.lastDiscoKeyAdvertisement = now
+	c.tsmpDiscoKeyAvailablePub.Publish(NewDiscoKeyAvailable{
+		NodeFirstAddr: de.nodeAddr,
+		NodeID:        de.nodeID,
+	})
 }
