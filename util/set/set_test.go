@@ -5,6 +5,8 @@ package set
 
 import (
 	"encoding/json"
+	"iter"
+	"maps"
 	"slices"
 	"testing"
 )
@@ -198,5 +200,71 @@ func TestMake(t *testing.T) {
 	s.Add(1)
 	if !s.Contains(1) {
 		t.Error("missing 1")
+	}
+}
+
+func TestContainsCollection(t *testing.T) {
+	s := Of(1, 2, 3)
+	for name, tc := range map[string]struct {
+		e        []int
+		expected bool
+	}{
+		"equal": {
+			e:        []int{1, 2, 3},
+			expected: true,
+		},
+		"superset": {
+			e:        []int{2, 3},
+			expected: true,
+		},
+		"disjoint": {
+			e:        []int{4, 5},
+			expected: false,
+		},
+		"partial": {
+			e:        []int{2, 4},
+			expected: false,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if s.ContainsSet(Of(tc.e...)) != tc.expected {
+				t.Errorf("ContainsSet(%v) = %v; want %v", tc.e, !tc.expected, tc.expected)
+			}
+			if s.ContainsAll(slices.Values(tc.e)) != tc.expected {
+				t.Errorf("ContainsSet(%v) = %v; want %v", tc.e, !tc.expected, tc.expected)
+			}
+		})
+	}
+}
+
+// Test ContainsSet always return true for empty collections.
+func TestContainsSetEmpty(t *testing.T) {
+	var emptySets = []Set[int]{
+		nil,
+		make(Set[int]),
+		Of[int](),
+	}
+	for _, s := range []Set[int]{nil, make(Set[int]), Of[int](), Of(1, 2, 3)} {
+		for _, empty := range emptySets {
+			if !s.ContainsSet(empty) {
+				t.Errorf("set %v should contain empty set %v", s, empty)
+			}
+		}
+	}
+}
+
+// Test ContainsAll always return true for empty collections.
+func TestContainsAllEmpty(t *testing.T) {
+	var emptyIters = []iter.Seq[int]{
+		func(yield func(int) bool) {},
+		slices.Values([]int{}),
+		maps.Keys(map[int]struct{}{}),
+	}
+	for _, s := range []Set[int]{nil, make(Set[int]), Of[int](), Of(1, 2, 3)} {
+		for _, empty := range emptyIters {
+			if !s.ContainsAll(empty) {
+				t.Errorf("set %v should contain empty iterator %v", s, empty)
+			}
+		}
 	}
 }

@@ -6,6 +6,7 @@ package set
 
 import (
 	"encoding/json"
+	"iter"
 	"maps"
 	"reflect"
 	"sort"
@@ -109,6 +110,23 @@ func (s Set[T]) Delete(e T) { delete(s, e) }
 func (s Set[T]) Contains(e T) bool {
 	_, ok := s[e]
 	return ok
+}
+
+// ContainsSet reports whether s is a superset of e. Returns true if e is nil,
+// empty, or equal to s.
+func (s Set[T]) ContainsSet(e Set[T]) bool {
+	return s.ContainsAll(maps.Keys(e))
+}
+
+// ContainsAll reports whether s contains all elements of e. Returns true if e
+// has 0 elements.
+func (s Set[T]) ContainsAll(e iter.Seq[T]) bool {
+	for k := range e {
+		if !s.Contains(k) {
+			return false
+		}
+	}
+	return true
 }
 
 // Len reports the number of items in s.
