@@ -209,7 +209,7 @@ func RateLimitedFnWithClock(logf Logf, f time.Duration, burst int, maxCache int,
 			// message. Otherwise we'd *increase* the total
 			// number of log lines printed.
 			if rl.nBlocked > 1 {
-				logf("[RATELIMIT] format(%q) (%d dropped)",
+				logf("[RATELIMIT] suppressed msgs like %q (%d dropped)",
 					format, rl.nBlocked-1)
 			}
 			rl.nBlocked = 0
@@ -230,7 +230,7 @@ func RateLimitedFnWithClock(logf Logf, f time.Duration, burst int, maxCache int,
 			mu.Unlock() // release before calling logf
 			logf(format, args...)
 			if hitLimit {
-				logf("[RATELIMIT] format(%q)", format)
+				logf("[RATELIMIT] suppressed msgs like %q", format)
 			}
 		} else {
 			rl.nBlocked++
