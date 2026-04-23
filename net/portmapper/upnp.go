@@ -110,6 +110,7 @@ func (u *upnpMapping) MappingDebug() string {
 		u.renewAfter.Unix(), u.goodUntil.Unix(),
 		u.loc)
 }
+
 func (u *upnpMapping) Release(ctx context.Context) {
 	u.client.DeletePortMappingCtx(ctx, "", u.external.Port(), upnpProtocolUDP)
 }
