@@ -4444,7 +4444,6 @@ func TestReceiveTSMPDiscoKeyAdvertisement(t *testing.T) {
 }
 
 func TestSendingTSMPDiscoTimer(t *testing.T) {
-	t.Setenv("TS_USE_CACHED_NETMAP", "1")
 	conn := newTestConn(t)
 	tw := eventbustest.NewWatcher(t, conn.eventBus)
 	t.Cleanup(func() { conn.Close() })
@@ -4477,12 +4476,36 @@ func TestSendingTSMPDiscoTimer(t *testing.T) {
 		t.Errorf("Original disco key %s, does not match %s", discoKey.ShortString(), ep.discoShort())
 	}
 
+	// Only one gets through, second is rate limited.
 	conn.maybeSendTSMPDiscoAdvert(ep)
 	conn.maybeSendTSMPDiscoAdvert(ep)
-	eventbustest.ExpectExactly(tw, eventbustest.Type[NewDiscoKeyAvailable]())
+	if err := eventbustest.ExpectExactly(tw, eventbustest.Type[NewDiscoKeyAvailable]()); err != nil {
+		t.Errorf("expected only one event, got: %s", err)
+	}
+
+	// Reset to get the event firing again.
 	ep.mu.Lock()
 	ep.lastDiscoKeyAdvertisement = 0
 	ep.mu.Unlock()
 	conn.maybeSendTSMPDiscoAdvert(ep)
-	eventbustest.Expect(tw, eventbustest.Type[NewDiscoKeyAvailable]())
+	if err := eventbustest.Expect(tw, eventbustest.Type[NewDiscoKeyAvailable]()); err != nil {
+		t.Errorf("expected only one event, got: %s", err)
+	}
+
+	// With a direct bestAddr and a non-zero lastDiscoKeyAdvertisement past the
+	// rate-limit interval. No advert should be sent due to the active bestAddr.
+	ep.mu.Lock()
+	ep.lastDiscoKeyAdvertisement = mono.Now().Add(-discoKeyAdvertisementInterval - time.Second)
+	ep.bestAddr = addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("1.2.3.4:567")}}
+	ep.mu.Unlock()
+	conn.maybeSendTSMPDiscoAdvert(ep)
+
+	// Simulating restart should send an advert.
+	ep.mu.Lock()
+	ep.lastDiscoKeyAdvertisement = 0
+	ep.mu.Unlock()
+	conn.maybeSendTSMPDiscoAdvert(ep)
+	if err := eventbustest.ExpectExactly(tw, eventbustest.Type[NewDiscoKeyAvailable]()); err != nil {
+		t.Errorf("expected only one event, got: %s", err)
+	}
 }
