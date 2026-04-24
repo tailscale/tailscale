@@ -17,7 +17,7 @@ var (
 	// for testing.
 	DisallowShareAs     = false
 	ErrDriveNotEnabled  = errors.New("Taildrive not enabled")
-	ErrInvalidShareName = errors.New("Share names may only contain the letters a-z, underscore _, parentheses (), or spaces")
+	ErrInvalidShareName = errors.New("Share names may only contain the letters a-z, underscore _, parentheses (), plus +, or spaces")
 )
 
 // AllowShareAs reports whether sharing files as a specific user is allowed.
@@ -46,6 +46,11 @@ type Share struct {
 	// hold on to a security-scoped bookmark. That bookmark is stored here. See
 	// https://developer.apple.com/documentation/security/app_sandbox/accessing_files_from_the_macos_app_sandbox#4144043
 	BookmarkData []byte `json:"bookmarkData,omitempty"`
+
+	// IsGroup indicates that this share's name corresponds to a group
+	// identity. When true, only members of the matching group can access
+	// the share.
+	IsGroup bool `json:"isGroup,omitempty"`
 }
 
 func ShareViewsEqual(a, b ShareView) bool {
@@ -55,7 +60,7 @@ func ShareViewsEqual(a, b ShareView) bool {
 	if !a.Valid() || !b.Valid() {
 		return false
 	}
-	return a.Name() == b.Name() && a.Path() == b.Path() && a.As() == b.As() && a.BookmarkData().Equal(b.ж.BookmarkData)
+	return a.Name() == b.Name() && a.Path() == b.Path() && a.As() == b.As() && a.BookmarkData().Equal(b.ж.BookmarkData) && a.IsGroup() == b.IsGroup()
 }
 
 func SharesEqual(a, b *Share) bool {
@@ -65,7 +70,7 @@ func SharesEqual(a, b *Share) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	return a.Name == b.Name && a.Path == b.Path && a.As == b.As && bytes.Equal(a.BookmarkData, b.BookmarkData)
+	return a.Name == b.Name && a.Path == b.Path && a.As == b.As && bytes.Equal(a.BookmarkData, b.BookmarkData) && a.IsGroup == b.IsGroup
 }
 
 func CompareShares(a, b *Share) int {
@@ -124,6 +129,8 @@ func NormalizeShareName(name string) (string, error) {
 		return "", ErrInvalidShareName
 	}
 
+	name = NormalizeShareNameOrder(name)
+
 	return name, nil
 }
 
@@ -136,7 +143,7 @@ func validShareName(name string) bool {
 			continue
 		}
 		switch r {
-		case '_', ' ', '(', ')':
+		case '_', ' ', '(', ')', '+':
 			continue
 		}
 		return false

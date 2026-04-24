@@ -7,8 +7,10 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
@@ -16,7 +18,7 @@ import (
 )
 
 const (
-	driveShareUsage   = "tailscale drive share <name> <path>"
+	driveShareUsage   = "tailscale drive share [--users user1,user2 | --group groupname] <name> <path>"
 	driveRenameUsage  = "tailscale drive rename <oldname> <newname>"
 	driveUnshareUsage = "tailscale drive unshare <name>"
 	driveListUsage    = "tailscale drive list"
@@ -27,6 +29,10 @@ func init() {
 }
 
 func driveCmd() *ffcli.Command {
+	shareFlags := flag.NewFlagSet("share", flag.ContinueOnError)
+	usersFlag := shareFlags.String("users", "", "comma-separated list of users to share with (share name auto-generated)")
+	groupFlag := shareFlags.String("group", "", "group name to share with (share name auto-generated, only group members can access)")
+
 	return &ffcli.Command{
 		Name:      "drive",
 		ShortHelp: "Share a directory with your tailnet",
@@ -42,8 +48,11 @@ func driveCmd() *ffcli.Command {
 			{
 				Name:       "share",
 				ShortUsage: driveShareUsage,
-				Exec:       runDriveShare,
-				ShortHelp:  "[ALPHA] Create or modify a share",
+				FlagSet:    shareFlags,
+				Exec: func(ctx context.Context, args []string) error {
+					return runDriveShare(ctx, args, *usersFlag, *groupFlag)
+				},
+				ShortHelp: "[ALPHA] Create or modify a share",
 			},
 			{
 				Name:       "rename",
@@ -68,12 +77,54 @@ func driveCmd() *ffcli.Command {
 }
 
 // runDriveShare is the entry point for the "tailscale drive share" command.
-func runDriveShare(ctx context.Context, args []string) error {
-	if len(args) != 2 {
-		return fmt.Errorf("usage: %s", driveShareUsage)
+func runDriveShare(ctx context.Context, args []string, usersFlag, groupFlag string) error {
+	if usersFlag != "" && groupFlag != "" {
+		return fmt.Errorf("cannot specify both --users and --group")
 	}
 
-	name, path := args[0], args[1]
+	var name, path string
+	var isGroup bool
+
+	switch {
+	case usersFlag != "":
+		// --users joe,rhea → name = "joe+rhea", path from args[0]
+		if len(args) != 1 {
+			return fmt.Errorf("usage: tailscale drive share --users user1,user2 <path>")
+		}
+		users := strings.Split(usersFlag, ",")
+		for i, u := range users {
+			users[i] = strings.TrimSpace(u)
+			if users[i] == "" {
+				return fmt.Errorf("empty username in --users flag")
+			}
+		}
+		if err := validateUsers(ctx, users); err != nil {
+			return err
+		}
+		sort.Strings(users)
+		name = strings.Join(users, "+")
+		path = args[0]
+
+	case groupFlag != "":
+		// --group eng → name = "eng", path from args[0]
+		if len(args) != 1 {
+			return fmt.Errorf("usage: tailscale drive share --group groupname <path>")
+		}
+		if err := validateGroup(ctx, groupFlag); err != nil {
+			return err
+		}
+		name = groupFlag
+		path = args[0]
+		isGroup = true
+
+	default:
+		// Traditional: <name> <path>
+		if len(args) != 2 {
+			return fmt.Errorf("usage: %s", driveShareUsage)
+		}
+		name = args[0]
+		path = args[1]
+	}
 
 	absolutePath, err := filepath.Abs(path)
 	if err != nil {
@@ -81,13 +132,117 @@ func runDriveShare(ctx context.Context, args []string) error {
 	}
 
 	err = localClient.DriveShareSet(ctx, &drive.Share{
-		Name: name,
-		Path: absolutePath,
+		Name:    name,
+		Path:    absolutePath,
+		IsGroup: isGroup,
 	})
 	if err == nil {
 		fmt.Printf("Sharing %q as %q\n", path, name)
 	}
 	return err
+}
+
+// validateUsers checks that all specified usernames exist in the tailnet and
+// resolves display names. It modifies users in place, replacing each entry
+// with its resolved display name (which may include a domain qualifier for
+// disambiguation). It returns an error if any user is unknown or ambiguous.
+func validateUsers(ctx context.Context, users []string) error {
+	status, err := localClient.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get tailnet status: %w", err)
+	}
+
+	tailnetDomain := ""
+	if status.CurrentTailnet != nil {
+		tailnetDomain = status.CurrentTailnet.Name
+	}
+
+	// Build a map from short name to list of login names.
+	type userInfo struct {
+		loginName   string
+		displayName string
+	}
+	shortToUsers := make(map[string][]userInfo)
+	for _, u := range status.User {
+		short := drive.LoginShortName(u.LoginName)
+		display := drive.LoginDisplayName(u.LoginName, tailnetDomain)
+		shortToUsers[short] = append(shortToUsers[short], userInfo{
+			loginName:   u.LoginName,
+			displayName: display,
+		})
+	}
+
+	// Also build a lookup by display name for users specifying name(domain).
+	displayToUser := make(map[string]userInfo)
+	for _, infos := range shortToUsers {
+		for _, info := range infos {
+			displayToUser[info.displayName] = info
+		}
+	}
+
+	for i, u := range users {
+		// Check if user specified name(domain) form.
+		if strings.Contains(u, "(") && strings.Contains(u, ")") {
+			if _, ok := displayToUser[u]; !ok {
+				known := make([]string, 0)
+				for d := range displayToUser {
+					known = append(known, d)
+				}
+				sort.Strings(known)
+				return fmt.Errorf("unknown user %q\nvalid users: %s", u, strings.Join(known, ", "))
+			}
+			users[i] = u
+			continue
+		}
+
+		// Plain short name lookup.
+		matches, ok := shortToUsers[u]
+		if !ok || len(matches) == 0 {
+			known := make([]string, 0, len(shortToUsers))
+			for k := range shortToUsers {
+				known = append(known, k)
+			}
+			sort.Strings(known)
+			return fmt.Errorf("unknown user %q\nvalid users: %s", u, strings.Join(known, ", "))
+		}
+		if len(matches) == 1 {
+			users[i] = matches[0].displayName
+			continue
+		}
+		// Ambiguous: multiple users share the same short name.
+		options := make([]string, len(matches))
+		for j, m := range matches {
+			options[j] = m.displayName
+		}
+		sort.Strings(options)
+		return fmt.Errorf("ambiguous user %q, did you mean: %s?", u, strings.Join(options, " or "))
+	}
+	return nil
+}
+
+// validateGroup checks that the specified group exists in the tailnet.
+func validateGroup(ctx context.Context, group string) error {
+	status, err := localClient.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get tailnet status: %w", err)
+	}
+
+	knownGroups := make(map[string]bool)
+	for _, u := range status.User {
+		for _, g := range u.Groups {
+			knownGroups[drive.GroupShortName(g)] = true
+		}
+	}
+
+	if !knownGroups[group] {
+		known := make([]string, 0, len(knownGroups))
+		for k := range knownGroups {
+			known = append(known, k)
+		}
+		sort.Strings(known)
+		return fmt.Errorf("unknown group: %s\nvalid groups: %s", group, strings.Join(known, ", "))
+	}
+	return nil
 }
 
 // runDriveUnshare is the entry point for the "tailscale drive unshare" command.

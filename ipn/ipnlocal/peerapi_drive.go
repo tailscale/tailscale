@@ -53,6 +53,9 @@ func handleServeDrive(hi PeerAPIHandler, w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	shares := h.ps.b.DriveGetShares()
+	p = drive.FilterPermissionsByIdentity(p, h.peerUser.LoginName, h.peerUser.Groups, shares)
+
 	fs, ok := h.ps.b.sys.DriveForRemote.GetOK()
 	if !ok {
 		h.logf("taildrive: not supported on platform")

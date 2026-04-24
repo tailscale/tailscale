@@ -26,6 +26,22 @@ func TestNormalizeShareName(t *testing.T) {
 			name: "generally good except for .",
 			err:  ErrInvalidShareName,
 		},
+		{
+			name: "c++",
+			want: "c++",
+		},
+		{
+			name: "  my lib (c++) ",
+			want: "my lib (c++)",
+		},
+		{
+			name: "rhea+joe",
+			want: "joe+rhea",
+		},
+		{
+			name: "Charlie+Alice+Bob",
+			want: "alice+bob+charlie",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("name %q", tt.name), func(t *testing.T) {

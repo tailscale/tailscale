@@ -105,10 +105,16 @@ func (v ShareView) BookmarkData() views.ByteSlice[[]byte] {
 	return views.ByteSliceOf(v.ж.BookmarkData)
 }
 
+// IsGroup indicates that this share's name corresponds to a group
+// identity. When true, only members of the matching group can access
+// the share.
+func (v ShareView) IsGroup() bool { return v.ж.IsGroup }
+
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ShareViewNeedsRegeneration = Share(struct {
 	Name         string
 	Path         string
 	As           string
 	BookmarkData []byte
+	IsGroup      bool
 }{})

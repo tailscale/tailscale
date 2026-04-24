@@ -23,6 +23,7 @@ var _ShareCloneNeedsRegeneration = Share(struct {
 	Path         string
 	As           string
 	BookmarkData []byte
+	IsGroup      bool
 }{})
 
 // Clone duplicates src into dst and reports whether it succeeded.
