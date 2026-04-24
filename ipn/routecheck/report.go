@@ -30,6 +30,17 @@ type Report struct {
 	Reachable nodeset `json:"reachable"`
 }
 
+// IsReachable reports whether a peer is reachable by the current node
+// or if it is unknown because it has yet to be probed.
+func (rp Report) IsReachable(id tailcfg.NodeID) (ok, known bool) {
+	// TODO(sfllaw): We should actually track all routers and consider the
+	// absence of a router in the report as it being recently added for
+	// consideration, so it is unknown. Then we should positively track
+	// whether a node was reachable or not.
+	_, k := rp.Reachable[id]
+	return k, k
+}
+
 // RoutablePrefixes returns a [RoutingTable] mapping routable network prefixes
 // with the associated routers that were reachable by the current host,
 // at the time the report was finished.

@@ -12,6 +12,7 @@ import (
 	"fmt"
 
 	"tailscale.com/ipn/ipnext"
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/routecheck"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -28,6 +29,8 @@ func init() {
 			backend: b,
 		}, nil
 	})
+
+	ipnlocal.HookRouteCheckReport.Set(routeCheckReport)
 }
 
 // Extension implements the [ipnext.Extension] interface.
@@ -90,4 +93,8 @@ func (e *Extension) needsRefresh() {
 		return
 	}
 	e.Client.NeedsRefresh()
+}
+
+func routeCheckReport(b *ipnlocal.LocalBackend) ipnlocal.RouteCheckReport {
+	return ClientFor(b).Report()
 }

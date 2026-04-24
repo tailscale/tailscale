@@ -7573,6 +7573,9 @@ func allowedAutoRoute(ipp netip.Prefix) bool {
 	return true
 }
 
+// HookRouteCheckReport is the hook that returns the latest routecheck Report for this LocalBackend.
+var HookRouteCheckReport feature.Hook[func(*LocalBackend) RouteCheckReport]
+
 var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
 
 // suggestExitNodeLocked computes a suggestion based on the current netmap and
@@ -7588,7 +7591,12 @@ func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggest
 	lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
 	prevSuggestion := b.lastSuggestedExitNode
 
-	res, err := suggestExitNode(lastReport, b.currentNode(), prevSuggestion, randomRegion, randomNode, b.getAllowedSuggestions())
+	var rp RouteCheckReport
+	if HookRouteCheckReport.IsSet() {
+		hook := HookRouteCheckReport.Get()
+		rp = hook(b)
+	}
+	res, err := suggestExitNode(lastReport, rp, b.currentNode(), prevSuggestion, randomRegion, randomNode, b.getAllowedSuggestions())
 	if err != nil {
 		return res, err
 	}
@@ -7660,11 +7668,11 @@ func fillAllowedSuggestions(polc policyclient.Client) (set.Set[tailcfg.StableNod
 
 // suggestExitNode returns a suggestion for reasonably good exit node based on
 // the current netmap and the previous suggestion.
-func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
+func suggestExitNode(report *netcheck.Report, rp RouteCheckReport, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
 	switch {
 	case nb.SelfHasCap(tailcfg.NodeAttrTrafficSteering):
 		// The traffic-steering feature flag is enabled on this tailnet.
-		res, err = suggestExitNodeUsingTrafficSteering(nb, allowList)
+		res, err = suggestExitNodeUsingTrafficSteering(rp, nb, allowList)
 	default:
 		// The control plane will always strip the `traffic-steering`
 		// node attribute if it isn’t enabled for this tailnet, even if
@@ -7694,10 +7702,6 @@ func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion ta
 // the lowest latency to this device. For peers without a DERP home, we look for
 // geographic proximity to this device's DERP home.
 func suggestExitNodeUsingDERP(report *netcheck.Report, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
-	// TODO(sfllaw): Context needs to be plumbed down here to support
-	// reachability testing.
-	ctx := context.TODO()
-
 	netMap := nb.NetMap()
 	if report == nil || report.PreferredDERP == 0 || netMap == nil || netMap.DERPMap == nil {
 		return res, ErrNoPreferredDERP
@@ -7706,7 +7710,7 @@ func suggestExitNodeUsingDERP(report *netcheck.Report, nb *nodeBackend, prevSugg
 	// since the netmap doesn't include delta updates (e.g., home DERP or Online
 	// status changes) from the control plane since the last full update.
 	candidates := nb.AppendMatchingPeers(nil, func(peer tailcfg.NodeView) bool {
-		if !peer.Valid() || !nb.PeerIsReachable(ctx, peer) {
+		if !peer.Valid() || !nb.PeerIsReachable(nil, peer) {
 			return false
 		}
 		if allowList != nil && !allowList.Contains(peer.StableID()) {
@@ -7834,11 +7838,7 @@ var ErrNoNetMap = errors.New("no network map, try again later")
 // pick one of the best exit nodes. These priorities are provided by Control in
 // the node’s [tailcfg.Location]. To be eligible for consideration, the node
 // must have NodeAttrSuggestExitNode in its CapMap.
-func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcfg.StableNodeID]) (apitype.ExitNodeSuggestionResponse, error) {
-	// TODO(sfllaw): Context needs to be plumbed down here to support
-	// reachability testing.
-	ctx := context.TODO()
-
+func suggestExitNodeUsingTrafficSteering(rp RouteCheckReport, nb *nodeBackend, allowed set.Set[tailcfg.StableNodeID]) (apitype.ExitNodeSuggestionResponse, error) {
 	nm := nb.NetMap()
 	if nm == nil {
 		return apitype.ExitNodeSuggestionResponse{}, ErrNoNetMap
@@ -7857,7 +7857,7 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcf
 		if !p.Valid() {
 			return false
 		}
-		if !nb.PeerIsReachable(ctx, p) {
+		if !nb.PeerIsReachable(rp, p) {
 			return false
 		}
 		if allowed != nil && !allowed.Contains(p.StableID()) {

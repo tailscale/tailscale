@@ -182,7 +182,7 @@ func TestNodeBackendReachability(t *testing.T) {
 				nb.netMap.AllCaps.Add(tailcfg.NodeAttrClientSideReachability)
 			}
 
-			got := nb.PeerIsReachable(t.Context(), tc.peer.View())
+			got := nb.PeerIsReachable(nil, tc.peer.View())
 			if got != tc.want {
 				t.Errorf("got %v, want %v", got, tc.want)
 			}
