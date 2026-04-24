@@ -312,13 +312,6 @@ func (nm *NetworkMap) TailnetDisplayName() string {
 	return tailnetDisplayNames[0]
 }
 
-// HasSelfCapability reports whether nm.SelfNode contains capability c.
-//
-// It exists to satisify an unused (as of 2025-01-04) interface in the logknob package.
-func (nm *NetworkMap) HasSelfCapability(c tailcfg.NodeCapability) bool {
-	return nm.AllCaps.Contains(c)
-}
-
 func (nm *NetworkMap) String() string {
 	return nm.Concise()
 }
