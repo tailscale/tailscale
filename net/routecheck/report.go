@@ -15,6 +15,7 @@ import (
 	"github.com/go-json-experiment/json/jsontext"
 	jsonv1 "github.com/go-json-experiment/json/v1"
 
+	"tailscale.com/net/routecheck/peernode"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
@@ -44,6 +45,19 @@ type Report struct {
 	// This is used to rate-limit reachability probing, so an entry’s
 	// presence doesn’t imply that it is reachable.
 	LastProbed map[tailcfg.NodeID]time.Time `json:"-"` // not marshaled
+}
+
+// IsReachable reports whether a peer is reachable by the current node.
+func (rp Report) IsReachable(id tailcfg.NodeID) peernode.Reachability {
+	// TODO(sfllaw): We should actually track all routers and consider the
+	// absence of a router in the report as it being recently added for
+	// consideration, so it is unknown. Then we should positively track
+	// whether a node was reachable or not.
+	_, k := rp.Reachable[id]
+	if k {
+		return peernode.Reachable
+	}
+	return peernode.Unknown
 }
 
 // RoutablePrefixes returns a map of routable network prefixes associated with

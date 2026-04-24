@@ -2530,6 +2530,9 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		}
 	}
 
+	// TODO(sfllaw): If [buildfeatures.HasRouteCheck] is enabled,
+	// a probe may be triggered for an updated routecheck reachability report,
+	// which should influence which exit nodes are considered valid to suggest.
 	if cn.NetMap() != nil && mutationsAreWorthyOfRecalculatingSuggestedExitNode(muts, cn, b.lastSuggestedExitNode) {
 		// Recompute the suggested exit node
 		b.suggestExitNodeLocked()
@@ -8604,6 +8607,9 @@ func allowedAutoRoute(ipp netip.Prefix) bool {
 	return true
 }
 
+// HookRouteCheckReport is the hook that returns the latest routecheck Report for this LocalBackend.
+var HookRouteCheckReport feature.Hook[func(*LocalBackend) RouteCheckReport]
+
 var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
 
 // suggestExitNodeLocked computes a suggestion based on the current netmap and
@@ -8611,11 +8617,15 @@ var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
 // be selected at random, so the result is not stable. To be eligible for
 // consideration, the peer must have [tailcfg.NodeAttrSuggestExitNode] in its CapMap.
 //
+// When the client has [tailcfg.NodeAttrClientSideReachabilityRouteCheck] in its CapMap,
+// it will use [HookRouteCheckReport] to get the latest cached routecheck report.
+//
 // b.mu must be held.
 func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggestionResponse, err error) {
 	if !buildfeatures.HasUseExitNode {
 		return response, feature.ErrUnavailable
 	}
+
 	mc := b.MagicConn()
 	var preferredDERP int
 	if lastReport := mc.GetLastNetcheckReport(b.ctx); lastReport != nil {
@@ -8628,7 +8638,12 @@ func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggest
 	regionLatency := mc.GetDERPRegionLatency()
 	prevSuggestion := b.lastSuggestedExitNode
 
-	res, err := suggestExitNode(preferredDERP, regionLatency, b.currentNode(), prevSuggestion, randomRegion, randomNode, b.getAllowedSuggestions())
+	var rp RouteCheckReport
+	if hook := HookRouteCheckReport.GetOrNil(); hook != nil {
+		rp = hook(b)
+	}
+
+	res, err := suggestExitNode(preferredDERP, regionLatency, rp, b.currentNode(), prevSuggestion, randomRegion, randomNode, b.getAllowedSuggestions())
 	if err != nil {
 		return res, err
 	}
@@ -8710,11 +8725,11 @@ func fillAllowedSuggestions(polc policyclient.Client) (set.Set[tailcfg.StableNod
 // netcheck and are only used by the DERP-based algorithm.
 //
 // Errors are always logged. Suggestions are logged if they defer from prevSuggestion.
-func suggestExitNode(preferredDERP int, regionLatency map[int]time.Duration, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
+func suggestExitNode(preferredDERP int, regionLatency map[int]time.Duration, rp RouteCheckReport, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
 	switch {
 	case nb.SelfHasCap(tailcfg.NodeAttrTrafficSteering):
 		// The traffic-steering feature flag is enabled on this tailnet.
-		res, err = suggestExitNodeUsingTrafficSteering(nb, allowList)
+		res, err = suggestExitNodeUsingTrafficSteering(rp, nb, allowList)
 	default:
 		// The control plane will always strip the `traffic-steering`
 		// node attribute if it isn’t enabled for this tailnet, even if
@@ -8747,10 +8762,6 @@ func suggestExitNode(preferredDERP int, regionLatency map[int]time.Duration, nb 
 // the lowest latency to this device. For peers without a DERP home, we look for
 // geographic proximity to this device's DERP home.
 func suggestExitNodeUsingDERP(preferredRegionID int, regionLatency map[int]time.Duration, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
-	// TODO(sfllaw): Context needs to be plumbed down here to support
-	// reachability testing.
-	ctx := context.TODO()
-
 	netMap := nb.NetMap()
 	if preferredRegionID == 0 || netMap == nil || netMap.DERPMap == nil {
 		return res, ErrNoPreferredDERP
@@ -8759,7 +8770,7 @@ func suggestExitNodeUsingDERP(preferredRegionID int, regionLatency map[int]time.
 	// since the netmap doesn't include delta updates (e.g., home DERP or Online
 	// status changes) from the control plane since the last full update.
 	candidates := nb.AppendMatchingPeers(nil, func(peer tailcfg.NodeView) bool {
-		if !peer.Valid() || !nb.PeerIsReachable(ctx, peer) {
+		if !peer.Valid() || !nb.PeerIsReachable(nil, peer) {
 			return false
 		}
 		if allowList != nil && !allowList.Contains(peer.StableID()) {
@@ -8887,11 +8898,7 @@ var ErrNoNetMap = errors.New("no network map, try again later")
 // pick one of the best exit nodes. These priorities are provided by Control in
 // the node’s [tailcfg.Location]. To be eligible for consideration, the node
 // must have NodeAttrSuggestExitNode in its CapMap.
-func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcfg.StableNodeID]) (apitype.ExitNodeSuggestionResponse, error) {
-	// TODO(sfllaw): Context needs to be plumbed down here to support
-	// reachability testing.
-	ctx := context.TODO()
-
+func suggestExitNodeUsingTrafficSteering(rp RouteCheckReport, nb *nodeBackend, allowed set.Set[tailcfg.StableNodeID]) (apitype.ExitNodeSuggestionResponse, error) {
 	nm := nb.NetMap()
 	if nm == nil {
 		return apitype.ExitNodeSuggestionResponse{}, ErrNoNetMap
@@ -8910,7 +8917,7 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcf
 		if !p.Valid() {
 			return false
 		}
-		if !nb.PeerIsReachable(ctx, p) {
+		if !nb.PeerIsReachable(rp, p) {
 			return false
 		}
 		if allowed != nil && !allowed.Contains(p.StableID()) {

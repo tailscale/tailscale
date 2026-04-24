@@ -208,7 +208,7 @@ func TestOmitRouteCheck(t *testing.T) {
 		GOARCH: "amd64",
 		Tags:   "ts_omit_routecheck,ts_include_cli",
 		OnDep: func(dep string) {
-			if strings.Contains(dep, "routecheck") {
+			if strings.Contains(dep, "routecheck") && !strings.HasSuffix(dep, "/peernode") {
 				t.Errorf("unexpected dep: %q", dep)
 			}
 		},
