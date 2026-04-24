@@ -4,8 +4,10 @@
 package conn25
 
 import (
+	"context"
 	"errors"
 	"net/netip"
+	"sync"
 	"time"
 
 	"tailscale.com/tstime"
@@ -26,10 +28,12 @@ type domainDst struct {
 // byConnKey stores netip.Prefix versions of the transit IPs for use in the
 // WireGuard hooks.
 type addrAssignments struct {
+	clock tstime.Clock
+
+	mu          sync.Mutex // protects fields below
 	byMagicIP   map[netip.Addr]addrs
 	byTransitIP map[netip.Addr]addrs
 	byDomainDst map[domainDst]addrs
-	clock       tstime.Clock
 }
 
 const defaultExpiry = 48 * time.Hour
@@ -39,6 +43,8 @@ func (a *addrAssignments) insert(as addrs) error {
 }
 
 func (a *addrAssignments) insertWithExpiry(as addrs, d time.Duration) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if !as.expiresAt.IsZero() {
 		return errors.New("expiresAt already set")
 	}
@@ -67,7 +73,16 @@ func (a *addrAssignments) insertWithExpiry(as addrs, d time.Duration) error {
 	return nil
 }
 
+func (a *addrAssignments) remove(as addrs) {
+	delete(a.byMagicIP, as.magic)
+	ddst := domainDst{domain: as.domain, dst: as.dst}
+	delete(a.byDomainDst, ddst)
+	delete(a.byTransitIP, as.transit)
+}
+
 func (a *addrAssignments) lookupByDomainDst(domain dnsname.FQDN, dst netip.Addr) (addrs, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	v, ok := a.byDomainDst[domainDst{domain: domain, dst: dst}]
 	if !ok || v.expiresAt.Before(a.clock.Now()) {
 		return addrs{}, false
@@ -76,6 +91,8 @@ func (a *addrAssignments) lookupByDomainDst(domain dnsname.FQDN, dst netip.Addr)
 }
 
 func (a *addrAssignments) lookupByMagicIP(mip netip.Addr) (addrs, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	v, ok := a.byMagicIP[mip]
 	if !ok || v.expiresAt.Before(a.clock.Now()) {
 		return addrs{}, false
@@ -84,9 +101,38 @@ func (a *addrAssignments) lookupByMagicIP(mip netip.Addr) (addrs, bool) {
 }
 
 func (a *addrAssignments) lookupByTransitIP(tip netip.Addr) (addrs, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	v, ok := a.byTransitIP[tip]
 	if !ok || v.expiresAt.Before(a.clock.Now()) {
 		return addrs{}, false
 	}
 	return v, true
+}
+
+func (a *addrAssignments) removeExpiredAddrs() []addrs {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := a.clock.Now()
+	var removed []addrs
+	for _, ad := range a.byMagicIP {
+		if ad.expiresAt.Before(now) {
+			a.remove(ad)
+			removed = append(removed, ad)
+		}
+	}
+	return removed
+}
+
+func (a *addrAssignments) expireAddrAssignmentsLoop(ctx context.Context) {
+	ticker, ch := a.clock.NewTicker(61 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ch:
+			a.removeExpiredAddrs()
+		}
+	}
 }

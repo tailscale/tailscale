@@ -339,7 +339,7 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			}
 
 			// Use the same Conn25 for each request in the test and seed it with a test app name.
-			c := newConn25(logger.Discard)
+			c := newConn25(t.Context(), logger.Discard)
 			c.connector.config = config{
 				nv: nodeViewConfig{
 					appsByName: map[string]appctype.Conn25Attr{appName: {}},
@@ -393,7 +393,7 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 }
 
 func TestReserveIPs(t *testing.T) {
-	c := newConn25(logger.Discard)
+	c := newConn25(t.Context(), logger.Discard)
 	c.client.v4MagicIPPool = newIPPool(mustIPSetFromPrefix("100.64.0.0/24"))
 	c.client.v6MagicIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0100::/80"))
 	c.client.v4TransitIPPool = newIPPool(mustIPSetFromPrefix("169.254.0.0/24"))
@@ -456,7 +456,7 @@ func TestReconfig(t *testing.T) {
 		},
 	}
 
-	c := newConn25(logger.Discard)
+	c := newConn25(t.Context(), logger.Discard)
 	if c.isConfigured() {
 		t.Fatal("expected Conn25 to report unconfigured before reconfig")
 	}
@@ -945,7 +945,7 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 				prefs = testPrefsIsConnector
 			}
 
-			c := newConn25(logger.Discard)
+			c := newConn25(t.Context(), logger.Discard)
 			cfg := mustConfig(t, sn, prefs)
 			c.reconfig(cfg)
 
@@ -978,7 +978,7 @@ func TestReserveAddressesDeduplicated(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			c := newConn25(logger.Discard)
+			c := newConn25(t.Context(), logger.Discard)
 			c.client.v4MagicIPPool = newIPPool(mustIPSetFromPrefix("100.64.0.0/24"))
 			c.client.v6MagicIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0100::/80"))
 			c.client.v4TransitIPPool = newIPPool(mustIPSetFromPrefix("169.254.0.0/24"))
@@ -1102,7 +1102,7 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 	}).View()
 
 	ext := &extension{
-		conn25:  newConn25(logger.Discard),
+		conn25:  newConn25(t.Context(), logger.Discard),
 		backend: newTestSafeBackend(),
 	}
 	authReconfigAsyncCalled := make(chan struct{}, 1)
@@ -1485,7 +1485,7 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			c := newConn25(logger.Discard)
+			c := newConn25(t.Context(), logger.Discard)
 			c.reconfig(cfg)
 			bs := c.mapDNSResponse(tt.toMap)
 			tt.assertFx(t, bs)
@@ -1528,7 +1528,7 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 	}
 
 	ext := &extension{
-		conn25:  newConn25(logger.Discard),
+		conn25:  newConn25(t.Context(), logger.Discard),
 		backend: newTestSafeBackend(),
 	}
 	authReconfigAsyncCalled := make(chan struct{}, 1)
@@ -1685,7 +1685,7 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 }
 
 func TestTransitIPConnMapping(t *testing.T) {
-	conn25 := newConn25(t.Logf)
+	conn25 := newConn25(t.Context(), t.Logf)
 
 	as := addrs{
 		dst:     netip.MustParseAddr("1.2.3.1"),
@@ -1795,7 +1795,7 @@ func TestClientTransitIPForMagicIP(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			c := newConn25(t.Logf)
+			c := newConn25(t.Context(), t.Logf)
 			c.reconfig(cfg)
 
 			if err := c.client.assignments.insert(addrs{
@@ -1879,7 +1879,7 @@ func TestConnectorRealIPForTransitIPConnection(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			c := newConn25(t.Logf)
+			c := newConn25(t.Context(), t.Logf)
 			c.reconfig(cfg)
 			c.connector.transitIPs = map[netip.Addr]map[netip.Addr]appAddr{}
 			c.connector.transitIPs[mappedSrc] = map[netip.Addr]appAddr{}
@@ -1899,7 +1899,7 @@ func TestIsKnownTransitIP(t *testing.T) {
 	knownTip := netip.MustParseAddr("100.64.0.41")
 	unknownTip := netip.MustParseAddr("100.64.0.42")
 
-	c := newConn25(t.Logf)
+	c := newConn25(t.Context(), t.Logf)
 	c.client.assignments.insert(addrs{
 		transit: knownTip,
 	})
@@ -1915,7 +1915,7 @@ func TestIsKnownTransitIP(t *testing.T) {
 func TestLinkLocalAllow(t *testing.T) {
 	knownTip := netip.MustParseAddr("100.64.0.41")
 
-	c := newConn25(t.Logf)
+	c := newConn25(t.Context(), t.Logf)
 	c.client.assignments.insert(addrs{
 		transit: knownTip,
 	})
@@ -1939,7 +1939,7 @@ func TestConnectorPacketFilterAllow(t *testing.T) {
 	unknownTip := netip.MustParseAddr("100.64.0.42")
 	unknownSrc := netip.MustParseAddr("100.64.0.42")
 
-	c := newConn25(t.Logf)
+	c := newConn25(t.Context(), t.Logf)
 	c.connector.transitIPs = map[netip.Addr]map[netip.Addr]appAddr{}
 	c.connector.transitIPs[knownSrc] = map[netip.Addr]appAddr{}
 	c.connector.transitIPs[knownSrc][knownTip] = appAddr{}
@@ -1974,7 +1974,7 @@ func TestGetMagicRange(t *testing.T) {
 		V6MagicIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("::1"), netip.MustParseAddr("::3"))},
 	}}, []string{})
 	cfg := mustConfig(t, sn, testPrefsNotConnector)
-	c := newConn25(t.Logf)
+	c := newConn25(t.Context(), t.Logf)
 	c.reconfig(cfg)
 	ext := &extension{
 		conn25: c,

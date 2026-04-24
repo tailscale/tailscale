@@ -75,7 +75,7 @@ func init() {
 	feature.Register(featureName)
 	ipnext.RegisterExtension(featureName, func(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, error) {
 		return &extension{
-			conn25:  newConn25(logger.WithPrefix(logf, "conn25: ")),
+			logf:    logf,
 			backend: sb,
 		}, nil
 	})
@@ -99,11 +99,12 @@ func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, 
 // extension is an [ipnext.Extension] managing the connector on platforms
 // that import this package.
 type extension struct {
-	conn25  *Conn25            // safe for concurrent access and only set at creation
+	conn25  *Conn25            // safe for concurrent access and only set at Init
 	backend ipnext.SafeBackend // safe for concurrent access and only set at creation
+	logf    logger.Logf
 
-	host      ipnext.Host             // set in Init, read-only after
-	ctxCancel context.CancelCauseFunc // cancels sendLoop goroutine
+	host        ipnext.Host // set in Init, read-only after
+	ctxShutdown context.CancelCauseFunc
 }
 
 // Name implements [ipnext.Extension].
@@ -118,10 +119,13 @@ func (e *extension) Init(host ipnext.Host) error {
 		return ipnext.SkipExtension
 	}
 
-	if e.ctxCancel != nil {
+	if e.ctxShutdown != nil {
 		return nil
 	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	e.ctxShutdown = cancel
 	e.host = host
+	e.conn25 = newConn25(ctx, logger.WithPrefix(e.logf, "conn25: "))
 
 	dph := newDatapathHandler(e.conn25, e.conn25.client.logf)
 	if err := e.installHooks(dph); err != nil {
@@ -129,8 +133,6 @@ func (e *extension) Init(host ipnext.Host) error {
 	}
 	e.seedPrefsConfig()
 
-	ctx, cancel := context.WithCancelCause(context.Background())
-	e.ctxCancel = cancel
 	go e.sendLoop(ctx)
 	return nil
 }
@@ -250,8 +252,8 @@ func (e *extension) getMagicRange() views.Slice[netip.Prefix] {
 
 // Shutdown implements [ipnlocal.Extension].
 func (e *extension) Shutdown() error {
-	if e.ctxCancel != nil {
-		e.ctxCancel(errors.New("extension shutdown"))
+	if e.ctxShutdown != nil {
+		e.ctxShutdown(errors.New("extension shutdown"))
 	}
 	if e.conn25 != nil {
 		close(e.conn25.client.addrsCh)
@@ -261,6 +263,10 @@ func (e *extension) Shutdown() error {
 
 func (e *extension) handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
+	if e.conn25 == nil {
+		http.Error(w, "Server not ready", http.StatusServiceUnavailable)
+		return
+	}
 	if r.Method != "POST" {
 		http.Error(w, "Method should be POST", http.StatusMethodNotAllowed)
 		return
@@ -326,13 +332,9 @@ func (c *Conn25) isConfigured() bool {
 	return c.client.isConfigured()
 }
 
-func newConn25(logf logger.Logf) *Conn25 {
+func newConn25(ctx context.Context, logf logger.Logf) *Conn25 {
 	c := &Conn25{
-		client: &client{
-			logf:        logf,
-			addrsCh:     make(chan addrs, 64),
-			assignments: addrAssignments{clock: tstime.StdClock{}},
-		},
+		client:    newClient(ctx, logf),
 		connector: &connector{logf: logf},
 	}
 	return c
@@ -632,6 +634,16 @@ type client struct {
 	assignments     addrAssignments
 	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
 	config          config
+}
+
+func newClient(ctx context.Context, logf logger.Logf) *client {
+	c := &client{
+		logf:        logf,
+		addrsCh:     make(chan addrs, 64),
+		assignments: addrAssignments{clock: tstime.StdClock{}},
+	}
+	go c.assignments.expireAddrAssignmentsLoop(ctx)
+	return c
 }
 
 func (c *client) getConfig() config {
