@@ -845,20 +845,27 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper, gro *gro.
 	serviceName, isVIPServiceIP := ns.atomicIPVIPServiceMap.Load()[dst]
 	switch {
 	case dst == serviceIP || dst == serviceIPv6:
-		// We want to intercept some traffic to the "service IP" (e.g.
-		// 100.100.100.100 for IPv4). However, of traffic to the
-		// service IP, we only care about UDP 53, and TCP on port 53,
-		// 80, and 8080.
-		switch p.IPProto {
-		case ipproto.TCP:
-			if port := p.Dst.Port(); port != 53 && port != 80 && port != 8080 && !ns.isLoopbackPort(port) {
-				return filter.Accept, gro
-			}
-		case ipproto.UDP:
-			if port := p.Dst.Port(); port != 53 && !ns.isLoopbackPort(port) {
-				return filter.Accept, gro
-			}
-		}
+		// Traffic to the Tailscale service IP (100.100.100.100 /
+		// fd7a:115c:a1e0::53) is always terminated locally on this
+		// node; it must never be forwarded out over WireGuard to a
+		// peer. Netstack's TCP/UDP acceptors handle the ports we
+		// actually serve (UDP 53 MagicDNS, TCP 53/80/8080 for DNS,
+		// the web client, and Taildrive, plus any debug loopback
+		// port). Other ports are rejected cleanly by netstack: UDP
+		// closes the endpoint in acceptUDP, and TCP is RST'd by
+		// acceptTCP's hittingServiceIP guard.
+		//
+		// Previously we returned filter.Accept for TCP/UDP on any
+		// other port, which let the packet fall through to the ACL
+		// filter and ultimately wireguard-go, where no peer owns the
+		// quad-100 AllowedIP. That produced noisy "open-conn-track:
+		// timeout opening ...; no associated peer node" log lines
+		// (e.g. for stray traffic to 100.100.100.100:853 / DoT) and
+		// leaked quad-100 packets onto the tailnet.
+		//
+		// We now unconditionally absorb quad-100 into netstack here,
+		// regardless of IP protocol or port, so such traffic never
+		// reaches the conntrack / peer-routing layers.
 	case isVIPServiceIP:
 		// returns all active VIP services in a set, since the IPVIPServiceMap
 		// contains inactive service IPs when node hosts the service, we need to
@@ -1654,6 +1661,24 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		} else {
 			dialIP = ipv4Loopback
 		}
+	case hittingServiceIP:
+		// TCP to the Tailscale service IP on a port we don't serve
+		// (anything other than DNS/53, web client/80, Taildrive/8080,
+		// or the debug loopback port handled above). handleLocalPackets
+		// absorbs all quad-100 traffic into netstack to prevent it
+		// from leaking to WireGuard peers as noisy "open-conn-track:
+		// timeout opening ...; no associated peer node" log lines
+		// (see the comment there).
+		//
+		// Without this explicit guard, execution would fall through
+		// to the isTailscaleIP case below (quad-100 is in the
+		// tailscale IP range), rewriting the dial target to
+		// 127.0.0.1:<port> and forwardTCP'ing the connection onto
+		// whatever random service happens to be listening on the
+		// host's loopback at that port. Reject cleanly with a RST
+		// here instead.
+		r.Complete(true) // sends a RST
+		return
 	case isTailscaleIP:
 		dialIP = ipv4Loopback
 	}
