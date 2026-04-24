@@ -6067,7 +6067,7 @@ func TestSuggestExitNode(t *testing.T) {
 				regionLatency = tt.lastReport.RegionLatency
 			}
 
-			got, err := suggestExitNode(preferredDERP, regionLatency, nb, tt.lastSuggestion, selectRegion, selectNode, allowList)
+			got, err := suggestExitNode(preferredDERP, regionLatency, nil, nb, tt.lastSuggestion, selectRegion, selectNode, allowList)
 			if got.Name != tt.wantName {
 				t.Errorf("name=%v, want %v", got.Name, tt.wantName)
 			}
@@ -6625,7 +6625,7 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 			defer nb.shutdown(errShutdown)
 			nb.SetNetMap(tt.netMap)
 
-			got, err := suggestExitNodeUsingTrafficSteering(nb, allowList)
+			got, err := suggestExitNodeUsingTrafficSteering(nil, nb, allowList)
 			if tt.wantErr == nil && err != nil {
 				t.Fatalf("err=%v, want nil", err)
 			}
