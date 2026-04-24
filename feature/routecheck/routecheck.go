@@ -22,6 +22,7 @@ import (
 	"tailscale.com/net/routecheck"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
 )
 
 // FeatureName is the name of the feature implemented by this package.
@@ -43,6 +44,7 @@ type Extension struct {
 
 	logf    logger.Logf
 	backend ipnext.SafeBackend
+	ec      *eventbus.Client
 	nb      nodeBackender
 	nm      routecheck.NetMapper
 	routers *RouterTracker
@@ -83,7 +85,7 @@ func (e *Extension) Init(h ipnext.Host) error {
 
 	pinger := e.backend.Sys().Engine.Get()
 
-	c, err := routecheck.NewClient(e.logf, e.nb, e.nm, pinger)
+	c, err := routecheck.NewClient(context.Background(), e.logf, e.nb, e.nm, pinger)
 	if err != nil {
 		return err
 	}
@@ -91,13 +93,20 @@ func (e *Extension) Init(h ipnext.Host) error {
 
 	e.routers = TrackRouters(context.Background(), e.logf, ipnbus)
 	e.routers.OnNetMapAvailable = e.Client.NotifyNetMapAvailable
-	e.routers.OnRoutersChange = e.incrementalRefresh
+	e.routers.OnRoutersChange = e.Client.NeedsIncrRefresh
+
+	bus := e.backend.Sys().Bus.Get()
+	e.ec = bus.Client("routecheck")
+	eventbus.SubscribeFunc(e.ec, e.Client.WatchForNetMonRebind)
 
 	// Watch for changes to the self node that would toggle the routecheck feature.
 	e.reconcile.args = make(chan tailcfg.NodeView, 1)
 	e.reconcile.done = make(chan struct{})
 	go e.reconcileLoop()
 	h.Hooks().OnSelfChange.Add(e.reconcileWatcher)
+
+	// Probe for reachable peers.
+	go e.Client.Start()
 
 	return nil
 }
@@ -109,20 +118,10 @@ func (e *Extension) Shutdown() error {
 	close(e.reconcile.args) // lock prevents reconcileWatcher from writing to this channel
 	e.reconcile.Unlock()
 
+	e.ec.Close()
 	e.routers.Close() // stop the watcher before waiting for reconcile.done
 	<-e.reconcile.done
 	return e.Client.Close()
-}
-
-func (e *Extension) needsRefresh() {
-	// TODO(sfllaw): Call e.Client.NeedsRefresh() after implementing it.
-}
-
-func (e *Extension) incrementalRefresh(added, modified, removed []tailcfg.NodeID) {
-	// TODO(sfllaw): This refresh should be incremental,
-	// based on the added, modified, and removed nodes.
-	// Currently it refreshes everything.
-	e.needsRefresh()
 }
 
 // reconcileWatcher is called whenever e.routers should start, stop, or restart its watcher.
@@ -159,7 +158,7 @@ func (e *Extension) reconcileLoop() {
 			continue // can be started by toggling the nodeattr
 		}
 		if started {
-			e.needsRefresh()
+			e.Client.NeedsRefresh()
 		}
 	}
 }

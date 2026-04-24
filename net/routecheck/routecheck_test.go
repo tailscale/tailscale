@@ -145,7 +145,7 @@ func TestRefresh(t *testing.T) {
 						withDelay(t, 10*time.Second))
 				}
 				t.Cleanup(func() { b.Close() })
-				c, err := routecheck.NewClient(t.Logf, b, b, b)
+				c, err := routecheck.NewClient(t.Context(), t.Logf, b, b, b)
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -194,6 +194,64 @@ func TestRefresh(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestRefreshNewerReport(t *testing.T) {
+	cmpDiff := func(want, got any) string {
+		return gcmp.Diff(want, got,
+			gcmpopts.EquateComparable(netip.Addr{}, netip.Prefix{}))
+	}
+	peers := []tailcfg.NodeView{
+		makeNode(11, withName("exit11"), withExitRoutes()),
+		makeNode(12, withName("exit12"), withExitRoutes()),
+		makeNode(21, withName("subnet21"),
+			withRoutes(netip.MustParsePrefix("192.168.1.0/24")),
+			withRoutes(netip.MustParsePrefix("2002:c000:0100::/48"))),
+		makeNode(22, withName("subnet22"),
+			withRoutes(netip.MustParsePrefix("192.168.1.0/24")),
+			withRoutes(netip.MustParsePrefix("2002:c000:0100::/48"))),
+	}
+	synctest.Test(t, func(t *testing.T) {
+		self := makeNode(99, withName("self"))
+
+		// This is the “older” report where all the peers are online
+		// that we expect to get clobbered.
+		b := newStubBackend(self, peers)
+		t.Cleanup(func() { b.Close() })
+		c, err := routecheck.NewClient(t.Context(), t.Logf, b, b, b)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		older, err := c.Refresh(t.Context(), routecheck.DefaultTimeout)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// This is the “newer” report where some of the peers are online.
+		// Run this one before the actual test and fake its Done time.
+		time.Sleep(1 * time.Minute)
+		b.gone = set.Of(tailcfg.NodeID(11), tailcfg.NodeID(22))
+		newer, err := c.Refresh(t.Context(), routecheck.DefaultTimeout)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !older.Done.Before(newer.Done) {
+			t.Errorf("newer report didn’t clobber older")
+		}
+		newer.Done = newer.Done.Add(1 * time.Hour)
+
+		// Check that newer reports don’t get clobbered
+		// by simulating a run that happened between older and newer
+		// where only one node went offline.
+		b.gone = set.Of(tailcfg.NodeID(11))
+		between, err := c.Refresh(t.Context(), routecheck.DefaultTimeout)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if diff := cmpDiff(between, newer); diff != "" {
+			t.Errorf("newer report was clobbered, -newer +between:\n%s", diff)
+		}
+	})
 }
 
 func TestRoutersByPrefix(t *testing.T) {
@@ -388,7 +446,7 @@ func TestRoutersByPrefix(t *testing.T) {
 			self := makeNode(99, withName("self"))
 			b := newStubBackend(self, tt.peers)
 			t.Cleanup(func() { b.Close() })
-			c, err := routecheck.NewClient(t.Logf, b, b, b)
+			c, err := routecheck.NewClient(t.Context(), t.Logf, b, b, b)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

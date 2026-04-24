@@ -14,14 +14,17 @@ import (
 
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/mak"
 )
 
 var (
-	metricRefresh = clientmetric.NewCounter("routecheck_refresh")
+	metricNeedsRefresh = clientmetric.NewCounter("routecheck_needs_refresh")
+	metricRefresh      = clientmetric.NewCounter("routecheck_refresh")
 )
 
 // DebugForceClientSideReachabilityRoutecheck reports whether routecheck should be forced on or off.
@@ -58,6 +61,16 @@ type Client struct {
 	nb     NodeBackender
 	nm     NetMapper
 	pinger Pinger
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// needsRefresh is sent a message by [Client.NeedsRefresh]
+	// to signal that a new report is needed.
+	// This message is received by the goroutine spawned by [Client.Start]
+	// which probes the appropriate routers to compile a new [Client.report].
+	// This channel doesn’t need to be closed because the goroutine is canceled by ctx.
+	needsRefresh chan struct{}
+	report       atomic.Pointer[Report] // needsRefresh signals that this needs refreshing
 
 	// HasNetMap is a channel that can be closed to wake up goroutines
 	// waiting for the netmap received after connecting to the control plane.
@@ -116,7 +129,7 @@ type Pinger interface {
 }
 
 // NewClient returns a client that probes its peers using this LocalBackend.
-func NewClient(logf logger.Logf, nb NodeBackender, nm NetMapper, pinger Pinger) (*Client, error) {
+func NewClient(ctx context.Context, logf logger.Logf, nb NodeBackender, nm NetMapper, pinger Pinger) (*Client, error) {
 	if nb == nil {
 		return nil, errors.New("NodeBackender must be set")
 	}
@@ -126,11 +139,17 @@ func NewClient(logf logger.Logf, nb NodeBackender, nm NetMapper, pinger Pinger) 
 	if pinger == nil {
 		return nil, errors.New("Pinger must be set")
 	}
+
+	ctx, cancel := context.WithCancel(ctx)
 	c := &Client{
 		Logf:   logf,
 		nb:     nb,
 		nm:     nm,
 		pinger: pinger,
+		ctx:    ctx,
+		cancel: cancel,
+
+		needsRefresh: make(chan struct{}, 1), // debounce using buffer of 1
 	}
 	c.hasNetMap.Store(new(make(chan struct{})))
 	return c, nil
@@ -171,6 +190,8 @@ func (c *Client) waitForNetMap(ctx context.Context) (*netmap.NetworkMap, error) 
 		}
 
 		select {
+		case <-c.ctx.Done(): // closed
+			return nil, c.ctx.Err()
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-*ch: // woken up by NotifyNetMapAvailable
@@ -178,21 +199,160 @@ func (c *Client) waitForNetMap(ctx context.Context) (*netmap.NetworkMap, error) 
 	}
 }
 
-// Refresh generates a new reachability report and returns it.
+// Refresh generates and returns a new reachability report, after caching it in [Client.Report].
 // A peer is considered unreachable if it doesn’t respond within the timeout.
+// If the cached Client.Report is newer than the report that it just generated,
+// Refresh will return the cached report instead of clobbering it report.
 func (c *Client) Refresh(ctx context.Context, timeout time.Duration) (*Report, error) {
 	metricRefresh.Add(1)
+	c.vlogf("refreshing report")
 	r, err := c.ProbeAllHARouters(ctx, 5, timeout)
 	if err != nil {
-		return nil, fmt.Errorf("error probing routers: %w", err)
+		return nil, fmt.Errorf("error refreshing routers: %w", err)
 	}
-	return r, nil
+	for {
+		saved := c.report.Load()
+		if saved != nil && !saved.Done.Before(r.Done) {
+			return saved, nil // don’t clobber newer reports
+		}
+		if c.report.CompareAndSwap(saved, r) { // retry if a concurrent Refresh stored first
+			c.vlogf("saved new report at %v", r.Done)
+			return r, nil
+		}
+	}
+}
+
+// NeedsRefresh signals the need for a [Client.Refresh] to probe for a new report,
+// which will be done in the background by [Client.Start].
+func (c *Client) NeedsRefresh() {
+	if !IsEnabled(c.nb.NodeBackend().Self()) {
+		return
+	}
+
+	select {
+	case c.needsRefresh <- struct{}{}:
+		metricNeedsRefresh.Add(1)
+		c.vlogf("report needs refresh")
+	default:
+		// needsRefresh has already been raised, so debounce.
+	}
+}
+
+// NeedsIncrRefresh signals the need for an incremental probe for a new report,
+// because routers have been added, modified, or removed,
+// which will be done in the background by [Client.Start].
+func (c *Client) NeedsIncrRefresh(added, modified, removed []tailcfg.NodeID) {
+	// TODO(sfllaw): Currently, this refreshes everything.
+	c.NeedsRefresh()
+}
+
+// WatchForNetMonRebind watches the network monitor
+// for a signal that the sockets need to be rebound,
+// which implies that the cached report needs to be refreshed.
+// See [netmon.ChangeDelta.RebindLikelyRequired].
+func (c *Client) WatchForNetMonRebind(delta netmon.ChangeDelta) {
+	if delta.RebindLikelyRequired {
+		c.NeedsRefresh()
+	}
+}
+
+// Start runs periodic probes that compile routecheck reports.
+// Use [Client.Close] to stop probing.
+// Returns an error if the client has already been closed.
+func (c *Client) Start() error {
+	if c.ctx.Err() != nil {
+		return c.ctx.Err()
+	}
+
+	needsBootstrap := true
+	for {
+		select {
+		case <-c.needsRefresh:
+			nm := c.nm.NetMapWithPeers()
+			if nm == nil {
+				// There is no netmap: clear the cached report.
+				c.report.Store(nil)
+				needsBootstrap = true
+				continue
+			}
+
+			if needsBootstrap {
+				r := c.bootstrap(nm)
+				c.report.Store(r)
+				needsBootstrap = false
+			}
+
+			// TODO(sfllaw): Examine the shape of the overlapping
+			// routers and only probe if the routing table has
+			// changed sufficiently. For instance, a new router has
+			// come online or a router has been removed or a set of
+			// routers no longer overlap.
+			if _, err := c.Refresh(c.ctx, DefaultTimeout); err != nil {
+				c.logf("%v", err)
+			}
+		case <-c.ctx.Done(): // closed
+			return nil
+		}
+	}
+}
+
+// bootstrap assumes that nodes that are connected to the control plane are reachable,
+// while waiting for the first probe to finish.
+//
+// This function requires a netmap with peers.
+func (c *Client) bootstrap(nm *netmap.NetworkMap) *Report {
+	if nm == nil {
+		return nil
+	}
+
+	can4, can6 := supportsIPVersions(c.nb.NodeBackend().Self())
+	if !can4 && !can6 {
+		return nil
+	}
+	addrFor := addrPicker(can4, can6)
+
+	var r Report
+	for _, nodes := range GroupRoutersByPrefix(nm.Peers) {
+		if len(nodes) <= 1 {
+			continue // Not an overlapping router
+		}
+
+		// TODO(sfllaw): Instead of trusting the Node.Online flag,
+		// which actually represents whether the node is connected
+		// to the control plane and not that it is reachable,
+		// we should cache reachability alongside the cached netmap
+		// long enough to survive a restart or a brief disconnection.
+		for _, n := range nodes {
+			if !n.Online().Get() {
+				continue // Not connected to the control plane.
+			}
+
+			addr := addrFor(n)
+			if !addr.IsValid() {
+				continue // No valid addresses.
+			}
+
+			mak.Set(&r.Reachable, n.ID(), Node{
+				ID:     n.ID(),
+				Name:   n.Name(),
+				Addr:   addr,
+				Routes: routes(n),
+			})
+		}
+	}
+	r.Done = time.Now()
+	c.vlogf("bootstrapped report from netmap at %v", r.Done)
+	return &r
 }
 
 // Close immediately stops all active probes.
 func (c *Client) Close() error {
 	if c == nil {
 		return nil
+	}
+
+	if c.cancel != nil {
+		c.cancel()
 	}
 
 	hasNetMap := c.hasNetMap.Swap(nil) // clear before waking anything up

@@ -37,18 +37,16 @@ func serveRouteCheck(h *localapi.Handler, w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var err error
-	var report *routecheck.Report
+	report := rc.Report()
 	if def.Bool(r.FormValue("probe"), false) {
 		timeout := def.Duration(r.FormValue("timeout"), routecheck.DefaultTimeout)
-		timeout = min(max(0, timeout), 60*time.Second) // clamp to [0s, 60s]
-		report, err = rc.Refresh(r.Context(), timeout)
-	} else {
-		report = rc.Report()
-	}
-	if err != nil {
-		localapi.WriteErrorJSON(w, err)
-		return
+		timeout = clampRouteCheckTimeout(timeout)
+		rp, err := rc.Refresh(r.Context(), timeout)
+		if err != nil {
+			localapi.WriteErrorJSON(w, err)
+			return
+		}
+		report = rp
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -60,4 +58,11 @@ func serveRouteCheck(h *localapi.Handler, w http.ResponseWriter, r *http.Request
 	// TODO(sfllaw): Since ipn/localapi is still using encoding/json
 	// with its default options, marshal with DefaultOptionsV1.
 	jsonv2.MarshalWrite(w, report, jsonv1.DefaultOptionsV1())
+}
+
+func clampRouteCheckTimeout(timeout time.Duration) time.Duration {
+	if timeout < 0 {
+		timeout = routecheck.DefaultTimeout
+	}
+	return min(max(0, timeout), 60*time.Second) // clamp to [0s, 60s]
 }
