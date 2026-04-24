@@ -4,9 +4,7 @@
 package version
 
 var (
-	ExportParse          = parse
-	ExportFindModuleInfo = findModuleInfo
-	ExportCmdName        = cmdName
+	ExportParse = parse
 )
 
 type (
