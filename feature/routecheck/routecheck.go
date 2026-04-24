@@ -13,12 +13,16 @@
 package routecheck
 
 import (
+	"context"
 	"fmt"
 
 	"tailscale.com/ipn/ipnext"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/routecheck"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/eventbus"
 )
 
 // FeatureName is the name of the feature implemented by this package.
@@ -38,10 +42,11 @@ func init() {
 type Extension struct {
 	Client *routecheck.Client
 
-	logf    logger.Logf
-	backend ipnext.SafeBackend
-	nb      nodeBackender
-	nm      routecheck.NetMapper
+	logf        logger.Logf
+	backend     ipnext.SafeBackend
+	eventClient *eventbus.Client
+	nb          nodeBackender
+	nm          routecheck.NetMapper
 }
 
 var _ ipnext.Extension = new(Extension)
@@ -53,6 +58,10 @@ func (e *Extension) Name() string {
 
 // Init implements the [ipnext.Extension.Init] interface method.
 func (e *Extension) Init(h ipnext.Host) error {
+	if routecheck.DebugForceClientSideReachabilityRoutecheck().EqualBool(false) {
+		return ipnext.SkipExtension
+	}
+
 	e.nb = nodeBackender{h}
 
 	nm, ok := e.backend.(routecheck.NetMapper)
@@ -63,19 +72,32 @@ func (e *Extension) Init(h ipnext.Host) error {
 
 	pinger := e.backend.Sys().Engine.Get()
 
-	c, err := routecheck.NewClient(e.logf, e.nb, e.nm, pinger)
+	logf := logger.WithPrefix(e.logf, "routecheck: ")
+	c, err := routecheck.NewClient(logf, e.nb, e.nm, pinger)
 	if err != nil {
 		return err
 	}
 	e.Client = c
 
-	h.Hooks().OnNetMapToggle.Add(e.onNetMapToggle)
+	bus := e.backend.Sys().Bus.Get()
+	e.eventClient = bus.Client("routecheck")
+	eventbus.SubscribeFunc(e.eventClient, e.onNetMonChange)
 
+	h.Hooks().OnNetMapToggle.Add(e.onNetMapToggle)
+	h.Hooks().OnRoutersChange.Add(e.onRoutersChange)
+	h.Hooks().OnSelfChange.Add(e.onSelfChange)
+
+	go func() {
+		if err := e.Client.Start(context.Background()); err != nil {
+			logf("background client failed: %v", err)
+		}
+	}()
 	return nil
 }
 
 // Shutdown implements the [ipnext.Extension.Shutdown] interface method.
 func (e *Extension) Shutdown() error {
+	e.eventClient.Close()
 	err := e.Client.Close()
 	return err
 }
@@ -85,4 +107,27 @@ func (e *Extension) onNetMapToggle(nm *netmap.NetworkMap) {
 		return
 	}
 	e.Client.NotifyNetMapAvailable(nm)
+}
+
+func (e *Extension) onNetMonChange(delta netmon.ChangeDelta) {
+	if delta.RebindLikelyRequired {
+		e.needsRefresh()
+	}
+}
+
+func (e *Extension) onRoutersChange(added, modified, removed []tailcfg.NodeView) {
+	// TODO(sfllaw): This refresh could be incremental,
+	// based on the added, modified, and removed nodes.
+	e.needsRefresh()
+}
+
+func (e *Extension) onSelfChange(self tailcfg.NodeView) {
+	e.needsRefresh()
+}
+
+func (e *Extension) needsRefresh() {
+	if !routecheck.IsEnabled(e.nb.NodeBackend().Self()) {
+		return
+	}
+	e.Client.NeedsRefresh()
 }

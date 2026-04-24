@@ -2441,6 +2441,21 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		}
 	}
 
+	if cn.NetMap() != nil {
+		// Are any of the mutated nodes also routers?
+		if hooks := b.extHost.Hooks().OnRoutersChange; len(hooks) > 0 {
+			if routers := mutatedRouters(muts, cn); len(routers) > 0 {
+				for _, f := range hooks {
+					f(nil, routers, nil)
+				}
+			}
+		}
+	}
+
+	// TODO(sfllaw): If the above OnRoutesChange hook has fired
+	// while [buildfeatures.HasRouteCheck] is enabled,
+	// a probe will be triggered for an updated routecheck reachability report,
+	// which influences which exit nodes are considered valid to suggest.
 	if cn.NetMap() != nil && mutationsAreWorthyOfRecalculatingSuggestedExitNode(muts, cn, b.lastSuggestedExitNode) {
 		// Recompute the suggested exit node
 		b.suggestExitNodeLocked()
@@ -2565,6 +2580,22 @@ func (b *LocalBackend) UpdateUserProfiles(profiles map[tailcfg.UserID]tailcfg.Us
 	cn.mergeUserProfiles(profiles)
 	b.sendLocked(ipn.Notify{UserProfiles: profiles})
 	return true
+}
+
+// MutatedRouters returns a slice of routers that were mutated by muts.
+func mutatedRouters(muts []netmap.NodeMutation, cn *nodeBackend) (routers []tailcfg.NodeView) {
+	for _, m := range muts {
+		n, ok := cn.NodeByID(m.NodeIDBeingMutated())
+		if !ok {
+			// The node being mutated is not in the netmap.
+			continue
+		}
+
+		if n.IsRouter() {
+			routers = append(routers, n)
+		}
+	}
+	return routers
 }
 
 // mustationsAreWorthyOfRecalculatingSuggestedExitNode reports whether any mutation type in muts is
@@ -7024,7 +7055,15 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		}()
 	}
 
-	oldNetMap := b.currentNode().NetMap()
+	// OnRoutersChange needs to compare the old and new peers.
+	needsNetMapWithPeers := len(b.extHost.Hooks().OnRoutersChange) > 0
+
+	var oldNetMap *netmap.NetworkMap
+	if needsNetMapWithPeers {
+		oldNetMap = b.currentNode().netMapWithPeers()
+	} else {
+		oldNetMap = b.currentNode().NetMap()
+	}
 	oldSelf := oldNetMap.SelfNodeOrZero()
 
 	b.dialer.SetNetMap(nm)
@@ -7052,6 +7091,28 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		b.activeLogin = login
 	}
 	b.pauseOrResumeControlClientLocked()
+
+	if hooks := b.extHost.Hooks().OnRoutersChange; len(hooks) > 0 {
+		routers := func(nodes []tailcfg.NodeView) (ret []tailcfg.NodeView) {
+			for _, n := range nodes {
+				if n.IsRouter() {
+					ret = append(ret, n)
+				}
+			}
+			return ret
+		}
+		var oldRouters []tailcfg.NodeView
+		if oldNetMap != nil {
+			oldRouters = routers(oldNetMap.Peers)
+		}
+		newRouters := routers(b.currentNode().Peers())
+		added, modified, removed := diffNodeViews(oldRouters, newRouters)
+		if len(added) > 0 || len(modified) > 0 || len(removed) > 0 {
+			for _, f := range hooks {
+				f(added, modified, removed)
+			}
+		}
+	}
 
 	if nm != nil {
 		messages := make(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage)

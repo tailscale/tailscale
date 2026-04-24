@@ -382,6 +382,10 @@ type Hooks struct {
 	// or when the client disconnects and the network map is cleared.
 	OnNetMapToggle feature.Hooks[func(*netmap.NetworkMap)]
 
+	// OnRoutersChange is called (with LocalBackend.mu held) when one or more peer nodes,
+	// which function as routers, have been added, modified, or removed.
+	OnRoutersChange feature.Hooks[func(added, modified, removed []tailcfg.NodeView)]
+
 	// OnSelfChange is called (with LocalBackend.mu held) when the self node
 	// changes, including changing to nothing (an invalid view).
 	OnSelfChange feature.Hooks[func(tailcfg.NodeView)]

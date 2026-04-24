@@ -593,6 +593,14 @@ func (n *Node) DisplayNames(forOwner bool) (name, hostIfDifferent string) {
 	return n.ComputedName, ""
 }
 
+// IsRouter reports whether the node is a router:
+// an exit node, a subnet router, an app connector, etc.
+func (n *Node) IsRouter() bool {
+	// Node.AllowedIPs is a strict superset of Node.Addresses,
+	// so this node must be a router if it allows other addresses.
+	return len(n.AllowedIPs) > len(n.Addresses)
+}
+
 // IsTagged reports whether the node has any tags.
 func (n *Node) IsTagged() bool {
 	return len(n.Tags) > 0
@@ -602,6 +610,10 @@ func (n *Node) IsTagged() bool {
 func (n *Node) SharerOrUser() UserID {
 	return cmp.Or(n.Sharer, n.User)
 }
+
+// IsRouter reports whether the node is a router:
+// an exit node, a subnet router, an app connector, etc.
+func (n NodeView) IsRouter() bool { return n.ж.IsRouter() }
 
 // IsTagged reports whether the node has any tags.
 func (n NodeView) IsTagged() bool { return n.ж.IsTagged() }
@@ -2757,6 +2769,12 @@ const (
 	// default behavior is to trust the control plane when it claims that a
 	// node is no longer online, but that is not a reliable signal.
 	NodeAttrClientSideReachability = "client-side-reachability"
+
+	// NodeAttrClientSideReachabilityRouteCheck configures the node to use
+	// the routecheck subsystem to determine reachability when choosing
+	// connectors. This relies on [NodeAttrClientSideReachability] being set.
+	// See tailscale/tailscale#17367.
+	NodeAttrClientSideReachabilityRouteCheck = "client-side-reachability:routecheck"
 
 	// NodeAttrDefaultAutoUpdate advertises the default node auto-update setting
 	// for this tailnet. The node is free to opt-in or out locally regardless of
