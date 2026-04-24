@@ -375,6 +375,10 @@ type Hooks struct {
 	// is created. It is called with the LocalBackend locked.
 	NewControlClient feature.Hooks[NewControlClientCallback]
 
+	// OnPeersReceived is called (with LocalBackend.mu held) when a peer map has been received,
+	// whether or not it changed.
+	OnPeersReceived feature.Hooks[func([]tailcfg.NodeView)]
+
 	// OnSelfChange is called (with LocalBackend.mu held) when the self node
 	// changes, including changing to nothing (an invalid view).
 	OnSelfChange feature.Hooks[func(tailcfg.NodeView)]

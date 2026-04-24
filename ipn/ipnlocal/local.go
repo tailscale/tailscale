@@ -6385,6 +6385,13 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 	b.pauseOrResumeControlClientLocked()
 
+	if buildfeatures.HasRouteCheck {
+		peers := b.currentNode().Peers()
+		for _, f := range b.extHost.Hooks().OnPeersReceived {
+			f(peers)
+		}
+	}
+
 	if nm != nil {
 		messages := make(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage)
 		for id, msg := range nm.DisplayMessages {

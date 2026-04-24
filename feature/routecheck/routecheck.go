@@ -8,10 +8,12 @@
 package routecheck
 
 import (
+	"context"
 	"fmt"
 
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/routecheck"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 )
 
@@ -60,10 +62,32 @@ func (e *Extension) Init(h ipnext.Host) error {
 	}
 	e.Client = c
 
+	h.Hooks().OnPeersReceived.Add(e.onPeersReceived)
+	h.Hooks().OnSelfChange.Add(e.onSelfChange)
+
+	go c.Start(context.Background())
 	return nil
 }
 
 // Shutdown implements the [ipnext.Extension.Shutdown] interface method.
 func (e *Extension) Shutdown() error {
+	e.Client.Close()
 	return nil
+}
+
+func (e *Extension) onPeersReceived(peers []tailcfg.NodeView) {
+	e.needsRefresh()
+}
+
+func (e *Extension) onSelfChange(self tailcfg.NodeView) {
+	e.needsRefresh()
+}
+
+func (e *Extension) needsRefresh() {
+	self := e.nb.NodeBackend().Self()
+	if !(self.HasCap(tailcfg.NodeAttrClientSideReachability) &&
+		self.HasCap(tailcfg.NodeAttrClientSideReachabilityRouteCheck)) {
+		return
+	}
+	e.Client.NeedsRefresh()
 }

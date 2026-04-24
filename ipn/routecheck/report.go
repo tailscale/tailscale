@@ -4,7 +4,6 @@
 package routecheck
 
 import (
-	"context"
 	"encoding/json"
 	"maps"
 	"net/netip"
@@ -12,22 +11,13 @@ import (
 	"time"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/mak"
 )
 
 // Report returns the latest reachability report.
 // Returns nil if a report isn’t available, which happens during initialization.
 func (c *Client) Report() *Report {
-	nm := c.nm.NetMap()
-	if nm == nil {
-		return nil // The report wasn’t available.
-	}
-
-	// TODO(sfllaw): Return the latest snapshot produced by background probing.
-	r, err := c.Refresh(context.TODO(), DefaultTimeout)
-	if err != nil {
-		c.logf("%v", err)
-	}
-	return r
+	return c.report.Load()
 }
 
 // Report contains the result of a single routecheck.
@@ -38,6 +28,19 @@ type Report struct {
 	// Reachable is the set of nodes that were reachable from the current host
 	// when this report was compiled. Missing nodes may or may not be reachable.
 	Reachable nodeset `json:"reachable"`
+}
+
+// RoutablePrefixes returns a [RoutingTable] mapping routable network prefixes
+// with the associated routers that were reachable by the current host,
+// at the time the report was finished.
+func (rp Report) RoutablePrefixes() RoutingTable {
+	var out map[netip.Prefix][]Node
+	for _, n := range rp.Reachable {
+		for _, p := range n.Routes {
+			mak.Set(&out, p, append(out[p], n))
+		}
+	}
+	return out
 }
 
 // Node represents a node in the reachability report.
@@ -81,3 +84,6 @@ func (ns nodeset) UnmarshalJSON(b []byte) error {
 	}
 	return nil
 }
+
+// RoutingTable is a map of routers, keyed by the network prefix for which they route.
+type RoutingTable map[netip.Prefix][]Node

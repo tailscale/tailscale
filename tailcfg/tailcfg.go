@@ -2751,6 +2751,11 @@ const (
 	// node is no longer online, but that is not a reliable signal.
 	NodeAttrClientSideReachability = "client-side-reachability"
 
+	// NodeAttrClientSideReachabilityRouteCheck configures the node to use
+	// the routecheck subsystem to determine reachability when choosing
+	// connectors. This relies on [NodeAttrClientSideReachability] being set.
+	NodeAttrClientSideReachabilityRouteCheck = "client-side-reachability:routecheck"
+
 	// NodeAttrDefaultAutoUpdate advertises the default node auto-update setting
 	// for this tailnet. The node is free to opt-in or out locally regardless of
 	// this value. Once this has been set and stored in the client, future

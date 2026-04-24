@@ -76,14 +76,9 @@ func (c *Client) probe(ctx context.Context, nodes iter.Seq[probed], limit int, t
 //
 // This function tries both the IPv4 and IPv6 addresses
 func (c *Client) Probe(ctx context.Context, nodes iter.Seq[tailcfg.NodeView], limit int, timeout time.Duration) (*Report, error) {
-	var canIPv4, canIPv6 bool
-	for _, ip := range c.nb.NodeBackend().Self().Addresses().All() {
-		addr := ip.Addr()
-		if addr.Is4() {
-			canIPv4 = true
-		} else if addr.Is6() {
-			canIPv6 = true
-		}
+	canIPv4, canIPv6 := supportsIPVersions(c.nb.NodeBackend().Self())
+	if !(canIPv4 || canIPv6) {
+		return nil, nil
 	}
 
 	var dsts iter.Seq[probed] = func(yield func(probed) bool) {
@@ -187,4 +182,22 @@ func (c *Client) ping(ctx context.Context, ip netip.Addr, timeout time.Duration)
 		return nil, ctx.Err()
 	}
 
+}
+
+func supportsIPVersions(n tailcfg.NodeView) (ipv4, ipv6 bool) {
+	if !n.Valid() {
+		return false, false
+	}
+	for _, ip := range n.Addresses().All() {
+		addr := ip.Addr()
+		if addr.Is4() {
+			ipv4 = true
+		} else if addr.Is6() {
+			ipv6 = true
+		}
+		if ipv4 && ipv6 {
+			break
+		}
+	}
+	return ipv4, ipv6
 }
