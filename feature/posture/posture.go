@@ -8,8 +8,10 @@ package posture
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
+	"tailscale.com/health"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/posture"
@@ -24,6 +26,15 @@ func init() {
 	ipnext.RegisterExtension("posture", newExtension)
 	ipnlocal.RegisterC2N("GET /posture/identity", handleC2NPostureIdentityGet)
 }
+
+var postureSerialWarnable = health.Register(&health.Warnable{
+	Code:     "posture-checking-serial-collection-failed",
+	Title:    "Device Posture: serial number collection failed",
+	Severity: health.SeverityMedium,
+	Text: func(args health.Args) string {
+		return fmt.Sprintf("Could not collect device serial numbers for posture checking. (%v)", args[health.ArgError])
+	},
+})
 
 func newExtension(logf logger.Logf, b ipnext.SafeBackend) (ipnext.Extension, error) {
 	e := &extension{
@@ -73,6 +84,9 @@ func handleC2NPostureIdentityGet(b *ipnlocal.LocalBackend, w http.ResponseWriter
 		res.SerialNumbers, err = posture.GetSerialNumbers(b.PolicyClient(), e.logf)
 		if err != nil {
 			e.logf("c2n: GetSerialNumbers returned error: %v", err)
+			b.HealthTracker().SetUnhealthy(postureSerialWarnable, health.Args{health.ArgError: err.Error()})
+		} else {
+			b.HealthTracker().SetHealthy(postureSerialWarnable)
 		}
 
 		// TODO(tailscale/corp#21371, 2024-07-10): once this has landed in a stable release
