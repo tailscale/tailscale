@@ -4212,6 +4212,8 @@ func (b *LocalBackend) CurrentUserForTest() (ipn.WindowsUserID, ipnauth.Actor) {
 	return b.pm.CurrentUserID(), b.currentUser
 }
 
+// CheckPrefs validates the provided user modifiable settings for correctness
+// and returns an error if they are invalid for the current backend.
 func (b *LocalBackend) CheckPrefs(p *ipn.Prefs) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
