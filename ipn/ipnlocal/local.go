@@ -2471,6 +2471,14 @@ func (b *LocalBackend) PeersForTest() []tailcfg.NodeView {
 	return b.currentNode().PeersForTest()
 }
 
+// AwaitNodeKeyForTest returns a channel that is closed once a peer with the
+// given node key first appears in the current netmap. If the peer is already
+// present, the returned channel is already closed. See
+// [nodeBackend.AwaitNodeKeyForTest].
+func (b *LocalBackend) AwaitNodeKeyForTest(k key.NodePublic) <-chan struct{} {
+	return b.currentNode().AwaitNodeKeyForTest(k)
+}
+
 func (b *LocalBackend) getNewControlClientFuncLocked() clientGen {
 	if b.ccGen == nil {
 		// Initialize it rather than just returning the

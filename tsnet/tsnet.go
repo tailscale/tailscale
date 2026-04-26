@@ -403,6 +403,19 @@ func (s *Server) LocalClient() (*local.Client, error) {
 	return s.localClient, nil
 }
 
+// TestHooks are hooks meant for internal-testing only; they're not stable
+// or documented, intentionally.
+var TestHooks testHooks
+
+type testHooks struct{}
+
+// LocalBackend returns the [ipnlocal.LocalBackend] backing s. It panics
+// outside of tests.
+func (testHooks) LocalBackend(s *Server) *ipnlocal.LocalBackend {
+	testenv.AssertInTest()
+	return s.lb
+}
+
 // Loopback starts a routing server on a loopback address.
 //
 // The server has multiple functions.
