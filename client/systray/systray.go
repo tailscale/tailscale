@@ -56,6 +56,10 @@ func (menu *Menu) Run(client *local.Client) {
 	menu.lc = client
 	menu.updateState()
 
+	// Set the initial icon before systray.Run so the StatusNotifierItem
+	// exports a non-empty image on startup.
+	setAppIcon(&disconnected)
+
 	// exit cleanly on SIGINT and SIGTERM
 	go func() {
 		interrupt := make(chan os.Signal, 1)
@@ -78,6 +82,7 @@ type Menu struct {
 
 	lc          *local.Client
 	status      *ipnstate.Status
+	prefs       *ipn.Prefs
 	curProfile  ipn.LoginProfile
 	allProfiles []ipn.LoginProfile
 
@@ -98,9 +103,29 @@ type Menu struct {
 	rebuildMenu *systray.MenuItem
 	quit        *systray.MenuItem
 
-	rebuildCh  chan struct{} // triggers a menu rebuild
-	accountsCh chan ipn.ProfileID
-	exitNodeCh chan tailcfg.StableNodeID // ID of selected exit node
+	// lastShape is the menuShape from the most recent build.
+	lastShape menuShape
+
+	// Cached last-applied values used to short-circuit redundant updates.
+	connectTitle      string
+	selfTitle         string
+	disconnectVisible bool
+	lastTooltip       string
+	lastIcon          *tsLogo
+
+	// Per-row tracking, populated by buildMenu and reset on each rebuild.
+	accountItems          map[ipn.ProfileID]*systray.MenuItem
+	noExitNodeItem        *systray.MenuItem
+	recommendedExitItem   *systray.MenuItem
+	recommendedExitNodeID tailcfg.StableNodeID
+	tailnetExitItems      map[tailcfg.StableNodeID]*systray.MenuItem
+	mullvadCountryItems   map[string]*systray.MenuItem // CC -> item (single-city only)
+	mullvadCityItems      map[string]*systray.MenuItem // "<CC>/<CityCode>" -> item
+
+	rebuildCh    chan struct{} // triggers a menu refresh (build if shape changed)
+	forceBuildCh chan struct{} // forces a full buildMenu (escape hatch)
+	accountsCh   chan ipn.ProfileID
+	exitNodeCh   chan tailcfg.StableNodeID // ID of selected exit node
 
 	eventCancel context.CancelFunc // cancel eventLoop
 
@@ -114,6 +139,7 @@ func (menu *Menu) init() {
 	}
 
 	menu.rebuildCh = make(chan struct{}, 1)
+	menu.forceBuildCh = make(chan struct{}, 1)
 	menu.accountsCh = make(chan ipn.ProfileID)
 	menu.exitNodeCh = make(chan tailcfg.StableNodeID)
 
@@ -170,13 +196,13 @@ tailscale systray
 
 See https://tailscale.com/kb/1597/linux-systray for more information.`)
 	}
-	setAppIcon(disconnected)
+	setAppIcon(&disconnected)
 
 	// set initial title, which is used by the systray package as the ID of the StatusNotifierItem.
 	// This value will get overwritten later as the client status changes.
 	systray.SetTitle("tailscale")
 
-	menu.rebuild()
+	menu.buildMenu()
 
 	menu.mu.Lock()
 	if menu.readonly {
@@ -203,6 +229,13 @@ func (menu *Menu) updateState() {
 	if err != nil {
 		log.Print(err)
 	}
+	menu.prefs, err = menu.lc.GetPrefs(menu.bgCtx)
+	if err != nil {
+		if local.IsAccessDeniedError(err) {
+			menu.readonly = true
+		}
+		log.Print(err)
+	}
 	menu.curProfile, menu.allProfiles, err = menu.lc.ProfileStatus(menu.bgCtx)
 	if err != nil {
 		if local.IsAccessDeniedError(err) {
@@ -212,14 +245,253 @@ func (menu *Menu) updateState() {
 	}
 }
 
-// rebuild the systray menu based on the current Tailscale state.
-//
-// We currently rebuild the entire menu because it is not easy to update the existing menu.
-// You cannot iterate over the items in a menu, nor can you remove some items like separators.
-// So for now we rebuild the whole thing, and can optimize this later if needed.
-func (menu *Menu) rebuild() {
+// activeExitNodeID returns the user's selected exit node, preferring
+// prefs over status so a configured-but-unreachable exit node still
+// reports as selected.
+func activeExitNodeID(prefs *ipn.Prefs, status *ipnstate.Status) tailcfg.StableNodeID {
+	if prefs != nil && !prefs.ExitNodeID.IsZero() {
+		return prefs.ExitNodeID
+	}
+	if status != nil && status.ExitNodeStatus != nil {
+		return status.ExitNodeStatus.ID
+	}
+	return ""
+}
+
+// appearance returns the systray icon and tooltip for the given state.
+func appearance(status *ipnstate.Status, prefs *ipn.Prefs) (*tsLogo, string) {
+	if status == nil {
+		return &disconnected, "Disconnected"
+	}
+	switch status.BackendState {
+	case ipn.Running.String():
+		if !activeExitNodeID(prefs, status).IsZero() {
+			if status.ExitNodeStatus != nil && status.ExitNodeStatus.Online {
+				return &exitNodeOnline, "Using exit node"
+			}
+			return &exitNodeOffline, "Exit node offline"
+		}
+		return &connected, fmt.Sprintf("Connected to %s", status.CurrentTailnet.Name)
+	case ipn.Starting.String():
+		return &loading, "Connecting"
+	}
+	return &disconnected, "Disconnected"
+}
+
+// setEnabled and setChecked skip the underlying call when the item is
+// already in the desired state, to avoid redundant menu update signals.
+func setEnabled(item *systray.MenuItem, enabled bool) {
+	if item == nil || item.Disabled() == !enabled {
+		return
+	}
+
+	if enabled {
+		item.Enable()
+	} else {
+		item.Disable()
+	}
+}
+
+func setChecked(item *systray.MenuItem, checked bool) {
+	if item == nil || item.Checked() == checked {
+		return
+	}
+
+	if checked {
+		item.Check()
+	} else {
+		item.Uncheck()
+	}
+}
+
+// setTitleIfChanged updates item's title only when it differs from the
+// cached value.
+func setTitleIfChanged(cache *string, item *systray.MenuItem, title string) {
+	if item == nil || *cache == title {
+		return
+	}
+
+	*cache = title
+	item.SetTitle(title)
+}
+
+// setVisibleIfChanged toggles item visibility only when it differs from
+// the cached value.
+func setVisibleIfChanged(cache *bool, item *systray.MenuItem, visible bool) {
+	if item == nil || *cache == visible {
+		return
+	}
+
+	*cache = visible
+	if visible {
+		item.Show()
+	} else {
+		item.Hide()
+	}
+}
+
+// setTooltipIfChanged forwards to setTooltip only when the text differs
+// from the last call.
+func (menu *Menu) setTooltipIfChanged(text string) {
+	if menu.lastTooltip == text {
+		return
+	}
+	menu.lastTooltip = text
+	setTooltip(text)
+}
+
+// setAppIconIfChanged forwards to setAppIcon only when icon differs from
+// the last call.
+func (menu *Menu) setAppIconIfChanged(icon *tsLogo) {
+	if menu.lastIcon == icon {
+		return
+	}
+	menu.lastIcon = icon
+	setAppIcon(icon)
+}
+
+// menuShape captures everything that, if changed, requires a full rebuild of
+// the menu rather than an in-place property refresh.
+type menuShape struct {
+	readonly       bool
+	backendKnown   bool
+	curProfileID   ipn.ProfileID
+	profileIDs     string // sorted, comma-joined ProfileIDs
+	tailnetExitIDs string // sorted, comma-joined StableNodeIDs of tailnet exit nodes
+	mullvadEnabled bool
+	mullvadKey     string // sorted, comma-joined "<CC>/<CityCode>" pairs
+}
+
+// computeShape derives a menuShape from the given inputs.
+func computeShape(status *ipnstate.Status, curProfile ipn.LoginProfile, allProfiles []ipn.LoginProfile, readonly bool) menuShape {
+	s := menuShape{
+		readonly:     readonly,
+		backendKnown: status != nil,
+		curProfileID: curProfile.ID,
+	}
+
+	ids := make([]string, 0, len(allProfiles))
+	for _, p := range allProfiles {
+		ids = append(ids, string(p.ID))
+	}
+	slices.Sort(ids)
+	s.profileIDs = strings.Join(ids, ",")
+
+	if status == nil {
+		return s
+	}
+
+	var tailnetIDs []string
+	var mullvadPairs []string
+	mullvadEligible := status.Self != nil && status.Self.CapMap.Contains("mullvad")
+	for _, ps := range status.Peer {
+		if !ps.ExitNodeOption {
+			continue
+		}
+		if ps.Location == nil {
+			tailnetIDs = append(tailnetIDs, string(ps.ID))
+			continue
+		}
+		if mullvadEligible {
+			mullvadPairs = append(mullvadPairs, ps.Location.CountryCode+"/"+ps.Location.CityCode)
+		}
+	}
+	slices.Sort(tailnetIDs)
+	s.tailnetExitIDs = strings.Join(tailnetIDs, ",")
+	s.mullvadEnabled = mullvadEligible && len(mullvadPairs) > 0
+	if s.mullvadEnabled {
+		slices.Sort(mullvadPairs)
+		mullvadPairs = slices.Compact(mullvadPairs)
+		s.mullvadKey = strings.Join(mullvadPairs, ",")
+	}
+	return s
+}
+
+// refreshMenu reflects the current Tailscale state into the menu. If the
+// structural shape of the inputs hasn't changed, it mutates existing items
+// in place; otherwise it falls back to a full buildMenu.
+func (menu *Menu) refreshMenu() {
 	menu.mu.Lock()
 	defer menu.mu.Unlock()
+	menu.init()
+
+	shape := computeShape(menu.status, menu.curProfile, menu.allProfiles, menu.readonly)
+	if menu.connect == nil || shape != menu.lastShape {
+		menu.buildMenuLocked()
+		return
+	}
+
+	icon, tooltip := appearance(menu.status, menu.prefs)
+	menu.setTooltipIfChanged(tooltip)
+	menu.setAppIconIfChanged(icon)
+
+	running := menu.status != nil && menu.status.BackendState == ipn.Running.String()
+	if running {
+		setTitleIfChanged(&menu.connectTitle, menu.connect, "Connected")
+		setEnabled(menu.connect, false)
+		setVisibleIfChanged(&menu.disconnectVisible, menu.disconnect, true)
+		setEnabled(menu.disconnect, !menu.readonly)
+	} else {
+		setTitleIfChanged(&menu.connectTitle, menu.connect, "Connect")
+		setEnabled(menu.connect, !menu.readonly)
+		setVisibleIfChanged(&menu.disconnectVisible, menu.disconnect, false)
+	}
+	setEnabled(menu.more, running)
+
+	if menu.status != nil && menu.status.Self != nil && len(menu.status.Self.TailscaleIPs) > 0 {
+		setTitleIfChanged(&menu.selfTitle, menu.self, fmt.Sprintf("This Device: %s (%s)",
+			menu.status.Self.HostName, menu.status.Self.TailscaleIPs[0]))
+		setEnabled(menu.self, true)
+	} else {
+		setTitleIfChanged(&menu.selfTitle, menu.self, "This Device: not connected")
+		setEnabled(menu.self, false)
+	}
+
+	for id, item := range menu.accountItems {
+		setChecked(item, id == menu.curProfile.ID)
+	}
+
+	sel := activeExitNodeID(menu.prefs, menu.status)
+	setChecked(menu.noExitNodeItem, sel == "")
+	setChecked(menu.recommendedExitItem, sel != "" && sel == menu.recommendedExitNodeID)
+
+	var mvCountry, mvCity string
+	if menu.status != nil {
+		for _, ps := range menu.status.Peer {
+			if !ps.ExitNodeOption {
+				continue
+			}
+			if ps.Location == nil {
+				if item, ok := menu.tailnetExitItems[ps.ID]; ok {
+					setChecked(item, ps.ID == sel)
+					setEnabled(item, ps.Online)
+				}
+				continue
+			}
+			if sel != "" && ps.ID == sel {
+				mvCountry = ps.Location.CountryCode
+				mvCity = mvCountry + "/" + ps.Location.CityCode
+			}
+		}
+	}
+	for cc, item := range menu.mullvadCountryItems {
+		setChecked(item, cc == mvCountry)
+	}
+	for k, item := range menu.mullvadCityItems {
+		setChecked(item, k == mvCity)
+	}
+}
+
+// buildMenu rebuilds the menu from scratch. Prefer refreshMenu when only
+// properties have changed.
+func (menu *Menu) buildMenu() {
+	menu.mu.Lock()
+	defer menu.mu.Unlock()
+	menu.buildMenuLocked()
+}
+
+// buildMenuLocked is buildMenu with menu.mu already held.
+func (menu *Menu) buildMenuLocked() {
 	menu.init()
 
 	if menu.eventCancel != nil {
@@ -227,6 +499,21 @@ func (menu *Menu) rebuild() {
 	}
 	ctx := context.Background()
 	ctx, menu.eventCancel = context.WithCancel(ctx)
+
+	// Reset trackers and caches; ResetMenu invalidates the previous
+	// build's item pointers.
+	menu.accountItems = map[ipn.ProfileID]*systray.MenuItem{}
+	menu.tailnetExitItems = map[tailcfg.StableNodeID]*systray.MenuItem{}
+	menu.mullvadCountryItems = map[string]*systray.MenuItem{}
+	menu.mullvadCityItems = map[string]*systray.MenuItem{}
+	menu.noExitNodeItem = nil
+	menu.recommendedExitItem = nil
+	menu.recommendedExitNodeID = ""
+	menu.connectTitle = ""
+	menu.selfTitle = ""
+	menu.disconnectVisible = false
+	menu.lastTooltip = ""
+	menu.lastIcon = nil
 
 	systray.ResetMenu()
 
@@ -247,41 +534,17 @@ func (menu *Menu) rebuild() {
 	// delay to prevent race setting icon on first start
 	time.Sleep(newMenuDelay)
 
-	// Set systray menu icon and title.
-	// Also adjust connect/disconnect menu items if needed.
-	var backendState string
-	if menu.status != nil {
-		backendState = menu.status.BackendState
-	}
-	switch backendState {
-	case ipn.Running.String():
-		if menu.status.ExitNodeStatus != nil && !menu.status.ExitNodeStatus.ID.IsZero() {
-			if menu.status.ExitNodeStatus.Online {
-				setTooltip("Using exit node")
-				setAppIcon(exitNodeOnline)
-			} else {
-				setTooltip("Exit node offline")
-				setAppIcon(exitNodeOffline)
-			}
-		} else {
-			setTooltip(fmt.Sprintf("Connected to %s", menu.status.CurrentTailnet.Name))
-			setAppIcon(connected)
-		}
-		menu.connect.SetTitle("Connected")
-		menu.connect.Disable()
-		menu.disconnect.Show()
-		menu.disconnect.Enable()
-	case ipn.Starting.String():
-		setTooltip("Connecting")
-		setAppIcon(loading)
-	default:
-		setTooltip("Disconnected")
-		setAppIcon(disconnected)
-	}
+	icon, tooltip := appearance(menu.status, menu.prefs)
+	menu.setTooltipIfChanged(tooltip)
+	menu.setAppIconIfChanged(icon)
 
-	if menu.readonly {
+	if menu.status != nil && menu.status.BackendState == ipn.Running.String() {
+		setTitleIfChanged(&menu.connectTitle, menu.connect, "Connected")
 		menu.connect.Disable()
-		menu.disconnect.Disable()
+		setVisibleIfChanged(&menu.disconnectVisible, menu.disconnect, true)
+		setEnabled(menu.disconnect, !menu.readonly)
+	} else if menu.readonly {
+		menu.connect.Disable()
 	}
 
 	account := "Account"
@@ -298,8 +561,9 @@ func (menu *Menu) rebuild() {
 			if profile.ID == menu.curProfile.ID {
 				item = accounts.AddSubMenuItemCheckbox(title, "", true)
 			} else {
-				item = accounts.AddSubMenuItem(title, "")
+				item = accounts.AddSubMenuItemCheckbox(title, "", false)
 			}
+			menu.accountItems[profile.ID] = item
 			setRemoteIcon(item, profile.UserProfile.ProfilePicURL)
 			onClick(ctx, item, func(ctx context.Context) {
 				select {
@@ -337,15 +601,20 @@ func (menu *Menu) rebuild() {
 	// but is at least more discoverable than having users switch profiles or exit nodes.
 	menu.rebuildMenu = systray.AddMenuItem("Rebuild menu", "Fix missing menu items")
 	onClick(ctx, menu.rebuildMenu, func(ctx context.Context) {
+		// Force a full rebuild; refresh would be a no-op when the
+		// structural shape is unchanged.
 		select {
 		case <-ctx.Done():
-		case menu.rebuildCh <- struct{}{}:
+		case menu.forceBuildCh <- struct{}{}:
+		default:
 		}
 	})
 	menu.rebuildMenu.Enable()
 
 	menu.quit = systray.AddMenuItem("Quit", "Quit the app")
 	menu.quit.Enable()
+
+	menu.lastShape = computeShape(menu.status, menu.curProfile, menu.allProfiles, menu.readonly)
 
 	go menu.eventLoop(ctx)
 }
@@ -417,9 +686,9 @@ func setTooltip(text string) {
 	}
 }
 
-// eventLoop is the main event loop for handling click events on menu items
-// and responding to Tailscale state changes.
-// This method does not return until ctx.Done is closed.
+// eventLoop dispatches menu clicks and bus-driven refreshes until ctx is
+// canceled. Daemon API calls use menu.bgCtx so user actions aren't lost
+// when ctx is canceled by a concurrent rebuild.
 func (menu *Menu) eventLoop(ctx context.Context) {
 	for {
 		select {
@@ -427,9 +696,12 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 			return
 		case <-menu.rebuildCh:
 			menu.updateState()
-			menu.rebuild()
+			menu.refreshMenu()
+		case <-menu.forceBuildCh:
+			menu.updateState()
+			menu.buildMenu()
 		case <-menu.connect.ClickedCh:
-			_, err := menu.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+			_, err := menu.lc.EditPrefs(menu.bgCtx, &ipn.MaskedPrefs{
 				Prefs: ipn.Prefs{
 					WantRunning: true,
 				},
@@ -440,7 +712,7 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 			}
 
 		case <-menu.disconnect.ClickedCh:
-			_, err := menu.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+			_, err := menu.lc.EditPrefs(menu.bgCtx, &ipn.MaskedPrefs{
 				Prefs: ipn.Prefs{
 					WantRunning: false,
 				},
@@ -454,14 +726,14 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 			menu.copyTailscaleIP(menu.status.Self)
 
 		case id := <-menu.accountsCh:
-			if err := menu.lc.SwitchProfile(ctx, id); err != nil {
+			if err := menu.lc.SwitchProfile(menu.bgCtx, id); err != nil {
 				log.Printf("error switching to profile ID %v: %v", id, err)
 			}
 
 		case exitNode := <-menu.exitNodeCh:
 			if exitNode.IsZero() {
 				log.Print("disable exit node")
-				if err := menu.lc.SetUseExitNode(ctx, false); err != nil {
+				if err := menu.lc.SetUseExitNode(menu.bgCtx, false); err != nil {
 					log.Printf("error disabling exit node: %v", err)
 				}
 			} else {
@@ -472,7 +744,7 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 					},
 					ExitNodeIDSet: true,
 				}
-				if _, err := menu.lc.EditPrefs(ctx, mp); err != nil {
+				if _, err := menu.lc.EditPrefs(menu.bgCtx, mp); err != nil {
 					log.Printf("error setting exit node: %v", err)
 				}
 			}
@@ -549,7 +821,12 @@ func (menu *Menu) watchIPNBusInner() error {
 				rebuild = true
 			}
 			if rebuild {
-				menu.rebuildCh <- struct{}{}
+				// Refreshes are level-triggered; a queued request already
+				// covers any further events.
+				select {
+				case menu.rebuildCh <- struct{}{}:
+				default:
+				}
 			}
 		}
 	}
@@ -606,7 +883,10 @@ func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
 		})
 	}
 
-	noExitNodeMenu := menu.exitNodes.AddSubMenuItemCheckbox("None", "", status.ExitNodeStatus == nil)
+	sel := activeExitNodeID(menu.prefs, status)
+
+	noExitNodeMenu := menu.exitNodes.AddSubMenuItemCheckbox("None", "", sel == "")
+	menu.noExitNodeItem = noExitNodeMenu
 	setExitNodeOnClick(noExitNodeMenu, "")
 
 	// Show recommended exit node if available.
@@ -621,11 +901,10 @@ func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
 				title += strings.Split(sugg.Name, ".")[0]
 			}
 			menu.exitNodes.AddSeparator()
-			rm := menu.exitNodes.AddSubMenuItemCheckbox(title, "", false)
+			rm := menu.exitNodes.AddSubMenuItemCheckbox(title, "", sel != "" && sugg.ID == sel)
+			menu.recommendedExitItem = rm
+			menu.recommendedExitNodeID = sugg.ID
 			setExitNodeOnClick(rm, sugg.ID)
-			if status.ExitNodeStatus != nil && sugg.ID == status.ExitNodeStatus.ID {
-				rm.Check()
-			}
 		}
 	}
 
@@ -647,12 +926,10 @@ func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
 			if !ps.Online {
 				name += " (offline)"
 			}
-			sm := menu.exitNodes.AddSubMenuItemCheckbox(name, "", false)
+			sm := menu.exitNodes.AddSubMenuItemCheckbox(name, "", ps.ID == sel)
+			menu.tailnetExitItems[ps.ID] = sm
 			if !ps.Online {
 				sm.Disable()
-			}
-			if status.ExitNodeStatus != nil && ps.ID == status.ExitNodeStatus.ID {
-				sm.Check()
 			}
 			setExitNodeOnClick(sm, ps.ID)
 		}
@@ -666,46 +943,33 @@ func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
 	if len(mullvadExitNodes.countries) > 0 {
 		menu.exitNodes.AddSeparator()
 		menu.exitNodes.AddSubMenuItem("Location-based Exit Nodes", "").Disable()
-		mullvadMenu := menu.exitNodes.AddSubMenuItemCheckbox("Mullvad VPN", "", false)
+		// Use a plain submenu (no checkbox) for the parent. Some hosts
+		// treat a checkbox-with-children as a selectable leaf and dismiss
+		// the menu instead of expanding it.
+		mullvadMenu := menu.exitNodes.AddSubMenuItem("Mullvad VPN", "")
 
 		for _, country := range mullvadExitNodes.sortedCountries() {
-			flag := countryFlag(country.code)
-			countryMenu := mullvadMenu.AddSubMenuItemCheckbox(flag+" "+country.name, "", false)
+			title := countryFlag(country.code) + " " + country.name
 
-			// single-city country, no submenu
 			if len(country.cities) == 1 || hideMullvadCities {
+				countryMenu := mullvadMenu.AddSubMenuItemCheckbox(title, "", country.hasPeer(sel))
+				menu.mullvadCountryItems[country.code] = countryMenu
 				setExitNodeOnClick(countryMenu, country.best.ID)
-				if status.ExitNodeStatus != nil {
-					for _, city := range country.cities {
-						for _, ps := range city.peers {
-							if status.ExitNodeStatus.ID == ps.ID {
-								mullvadMenu.Check()
-								countryMenu.Check()
-							}
-						}
-					}
-				}
 				continue
 			}
 
-			// multi-city country, build submenu with "best available" option and cities.
+			// Multi-city country: plain submenu parent so the host expands
+			// it on click. Cities remain checkboxes.
+			countryMenu := mullvadMenu.AddSubMenuItem(title, "")
 			time.Sleep(newMenuDelay)
 			bm := countryMenu.AddSubMenuItemCheckbox("Best Available", "", false)
 			setExitNodeOnClick(bm, country.best.ID)
 			countryMenu.AddSeparator()
 
 			for _, city := range country.sortedCities() {
-				cityMenu := countryMenu.AddSubMenuItemCheckbox(city.name, "", false)
+				cityMenu := countryMenu.AddSubMenuItemCheckbox(city.name, "", city.hasPeer(sel))
+				menu.mullvadCityItems[country.code+"/"+city.best.Location.CityCode] = cityMenu
 				setExitNodeOnClick(cityMenu, city.best.ID)
-				if status.ExitNodeStatus != nil {
-					for _, ps := range city.peers {
-						if status.ExitNodeStatus.ID == ps.ID {
-							mullvadMenu.Check()
-							countryMenu.Check()
-							cityMenu.Check()
-						}
-					}
-				}
 			}
 		}
 	}
@@ -743,6 +1007,16 @@ func (mc *mvCountry) sortedCities() []*mvCity {
 	return cities
 }
 
+// hasPeer reports whether any city in mc contains a peer with the given ID.
+func (mc *mvCountry) hasPeer(id tailcfg.StableNodeID) bool {
+	for _, city := range mc.cities {
+		if city.hasPeer(id) {
+			return true
+		}
+	}
+	return false
+}
+
 // countryFlag takes a 2-character ASCII string and returns the corresponding emoji flag.
 // It returns the empty string on error.
 func countryFlag(code string) string {
@@ -765,6 +1039,16 @@ type mvCity struct {
 	name  string
 	best  *ipnstate.PeerStatus // highest priority peer in the city
 	peers []*ipnstate.PeerStatus
+}
+
+// hasPeer reports whether mc contains a peer with the given ID.
+func (mc *mvCity) hasPeer(id tailcfg.StableNodeID) bool {
+	for _, ps := range mc.peers {
+		if ps.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func newMullvadPeers(status *ipnstate.Status) mullvadPeers {

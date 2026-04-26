@@ -264,7 +264,7 @@ func (logo tsLogo) renderWithBorder(borderUnits int) *bytes.Buffer {
 }
 
 // setAppIcon renders logo and sets it as the systray icon.
-func setAppIcon(icon tsLogo) {
+func setAppIcon(icon *tsLogo) {
 	if icon.dots == loading.dots {
 		startLoadingAnimation()
 	} else {
