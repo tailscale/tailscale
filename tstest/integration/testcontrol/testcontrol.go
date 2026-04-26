@@ -89,6 +89,9 @@ type Server struct {
 	// MapResponse stream to modify the first MapResponse sent in response to it.
 	ModifyFirstMapResponse func(*tailcfg.MapResponse, *tailcfg.MapRequest)
 
+	// AltMapStream, if non-nil, takes over serveMap. See [AltMapStreamFunc].
+	AltMapStream AltMapStreamFunc
+
 	initMuxOnce sync.Once
 	mux         *http.ServeMux
 
@@ -1144,6 +1147,15 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 		go panic(fmt.Sprintf("bad map request: %v", err))
 	}
 
+	if s.AltMapStream != nil {
+		// The caller takes over the stream entirely; it must handle
+		// keeping the HTTP response alive until ctx is done.
+		compress := req.Compress != ""
+		w.WriteHeader(200)
+		s.AltMapStream(ctx, &mapStreamSender{s: s, w: w, compress: compress}, req)
+		return
+	}
+
 	jitter := rand.N(8 * time.Second)
 	keepAlive := 50*time.Second + jitter
 
@@ -1486,12 +1498,51 @@ func (s *Server) takeRawMapMessage(nk key.NodePublic) (mapResJSON []byte, ok boo
 	return mapResJSON, true
 }
 
+// AltMapStreamFunc is the type of [Server.AltMapStream]: a callback that
+// takes over the serveMap handler entirely. The callback hand-builds and
+// sends MapResponses via the provided [MapStreamWriter] and is responsible
+// for keeping the stream alive until ctx is done. When set, the normal
+// per-node map-stream state machine in serveMap is bypassed.
+//
+// The callback is invoked for every map long-poll, including the
+// non-streaming "lite" polls controlclient issues to push HostInfo updates
+// (req.Stream == false). Implementations that only care about the streaming
+// long-poll typically respond to non-streaming polls with an empty
+// MapResponse and return immediately.
+//
+// This hook is for benchmarks and stress tests that need to drive clients
+// with a controlled sequence of responses.
+type AltMapStreamFunc func(ctx context.Context, w MapStreamWriter, req *tailcfg.MapRequest)
+
+// MapStreamWriter is the interface passed to an [AltMapStreamFunc],
+// letting the callback write framed MapResponse messages directly onto the
+// long-poll HTTP response.
+type MapStreamWriter interface {
+	// SendMapMessage encodes and writes msg as a single framed
+	// MapResponse on the stream. It respects the client's Compress flag
+	// (captured when the stream started).
+	SendMapMessage(msg *tailcfg.MapResponse) error
+}
+
+// mapStreamSender implements [MapStreamWriter] for [Server.AltMapStream]
+// callbacks.
+type mapStreamSender struct {
+	s        *Server
+	w        http.ResponseWriter
+	compress bool
+}
+
+func (m *mapStreamSender) SendMapMessage(msg *tailcfg.MapResponse) error {
+	return m.s.sendMapMsg(m.w, m.compress, msg)
+}
+
 func (s *Server) sendMapMsg(w http.ResponseWriter, compress bool, msg any) error {
 	resBytes, err := s.encode(compress, msg)
 	if err != nil {
 		return err
 	}
-	if len(resBytes) > 16<<20 {
+	const maxMapSize = 256 << 20 // 256MB
+	if len(resBytes) > maxMapSize {
 		return fmt.Errorf("map message too big: %d", len(resBytes))
 	}
 	var siz [4]byte
