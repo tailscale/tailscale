@@ -503,6 +503,14 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 			// Only update state on success to keep it in sync with actual rules
 			r.connmarkEnabled = true
 		}
+		// Enable src_valid_mark so the kernel uses the packet's fwmark
+		// during the rp_filter reverse-path check. Without this, the
+		// connmark restore in mangle/PREROUTING is ineffective — rp_filter
+		// does its routing lookup with fwmark=0, ignoring the restored
+		// bypass mark, and drops reply packets as martians.
+		if err := writeSysctl("net.ipv4.conf.all.src_valid_mark", "1"); err != nil {
+			r.logf("warning: failed to enable src_valid_mark: %v", err)
+		}
 	default:
 		r.logf("disabling connmark-based rp_filter workaround")
 		if err := r.nfr.DelConnmarkSaveRule(); err != nil {
