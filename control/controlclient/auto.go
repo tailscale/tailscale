@@ -226,6 +226,17 @@ func (c *Auto) SetPaused(paused bool) {
 	c.unpauseWaiters = nil
 }
 
+// ResetConnections discards cached DNS, HTTP connection, and Noise client
+// state, and cancels in-flight auth/map requests so that retries use
+// fresh connections immediately. It should be called on major link changes.
+func (c *Auto) ResetConnections() {
+	c.direct.ResetConnections()
+	c.mu.Lock()
+	c.cancelAuthCtxLocked()
+	c.cancelMapCtxLocked()
+	c.mu.Unlock()
+}
+
 // StartForTest starts the client's goroutines.
 //
 // It should only be called for clients created with [Options.SkipStartForTests].

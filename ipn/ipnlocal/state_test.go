@@ -339,6 +339,7 @@ func (cc *mockControl) ClientID() int64 {
 }
 
 func (cc *mockControl) SetIPForwardingBroken(bool) {}
+func (cc *mockControl) ResetConnections()             {}
 
 func (b *LocalBackend) nonInteractiveLoginForStateTest() {
 	b.mu.Lock()

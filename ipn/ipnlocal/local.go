@@ -1004,6 +1004,11 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	b.interfaceState = delta.CurrentState()
 
 	b.pauseOrResumeControlClientLocked()
+	if delta.RebindLikelyRequired {
+		if cc := b.cc; cc != nil {
+			cc.ResetConnections()
+		}
+	}
 	prefs := b.pm.CurrentPrefs()
 	if delta.RebindLikelyRequired && prefs.AutoExitNode().IsSet() {
 		b.refreshAutoExitNode = true
