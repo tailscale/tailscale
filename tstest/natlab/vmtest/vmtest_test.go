@@ -127,3 +127,106 @@ func testSiteToSite(t *testing.T, srOS vmtest.OSImage) {
 		t.Fatalf("source IP not preserved: expected %q in response, got %q", backendAIP, body)
 	}
 }
+
+// TestInterNetworkTCP verifies that vnet routes raw TCP between simulated
+// networks: a non-Tailscale VM on one NAT'd LAN can reach a webserver on a
+// different network using a 1:1 NAT, and the webserver sees the client's
+// network's WAN IP as the source (post-NAT).
+func TestInterNetworkTCP(t *testing.T) {
+	env := vmtest.New(t)
+
+	const (
+		clientWAN = "1.0.0.1"
+		webWAN    = "5.0.0.1"
+	)
+
+	clientNet := env.AddNetwork(clientWAN, "192.168.1.1/24", vnet.EasyNAT)
+	webNet := env.AddNetwork(webWAN, "192.168.5.1/24", vnet.One2OneNAT)
+
+	client := env.AddNode("client", clientNet,
+		vmtest.OS(vmtest.Gokrazy),
+		vmtest.DontJoinTailnet())
+	env.AddNode("webserver", webNet,
+		vmtest.OS(vmtest.Gokrazy),
+		vmtest.DontJoinTailnet(),
+		vmtest.WebServer(8080))
+
+	env.Start()
+
+	body := env.HTTPGet(client, fmt.Sprintf("http://%s:8080/", webWAN))
+	t.Logf("response: %s", body)
+	if !strings.Contains(body, "Hello world I am webserver") {
+		t.Fatalf("unexpected response: %q", body)
+	}
+	if !strings.Contains(body, "from "+clientWAN) {
+		t.Fatalf("expected source %q in response, got %q", clientWAN, body)
+	}
+}
+
+// TestExitNode verifies that switching the client's exit node setting between
+// off, exit1, and exit2 correctly routes the client's internet traffic.
+//
+// Topology: each of the client and the two exit nodes lives behind its own NAT
+// with a unique WAN IP, and a webserver lives on yet another network using a
+// 1:1 NAT so it's reachable from the simulated internet at a stable address.
+// The webserver echoes the source IP of incoming requests, so we can tell
+// which network's NAT the client's traffic egressed through:
+//   - off:  source is the client's network WAN IP.
+//   - exit1: source is exit1's network WAN IP.
+//   - exit2: source is exit2's network WAN IP.
+func TestExitNode(t *testing.T) {
+	env := vmtest.New(t)
+
+	const (
+		clientWAN = "1.0.0.1"
+		exit1WAN  = "2.0.0.1"
+		exit2WAN  = "3.0.0.1"
+		webWAN    = "5.0.0.1"
+	)
+
+	clientNet := env.AddNetwork(clientWAN, "192.168.1.1/24", vnet.EasyNAT)
+	exit1Net := env.AddNetwork(exit1WAN, "192.168.2.1/24", vnet.EasyNAT)
+	exit2Net := env.AddNetwork(exit2WAN, "192.168.3.1/24", vnet.EasyNAT)
+	webNet := env.AddNetwork(webWAN, "192.168.5.1/24", vnet.One2OneNAT)
+
+	client := env.AddNode("client", clientNet,
+		vmtest.OS(vmtest.Gokrazy))
+	exit1 := env.AddNode("exit1", exit1Net,
+		vmtest.OS(vmtest.Gokrazy),
+		vmtest.AdvertiseRoutes("0.0.0.0/0,::/0"))
+	exit2 := env.AddNode("exit2", exit2Net,
+		vmtest.OS(vmtest.Gokrazy),
+		vmtest.AdvertiseRoutes("0.0.0.0/0,::/0"))
+	env.AddNode("webserver", webNet,
+		vmtest.OS(vmtest.Gokrazy),
+		vmtest.DontJoinTailnet(),
+		vmtest.WebServer(8080))
+
+	env.Start()
+	env.ApproveRoutes(exit1, "0.0.0.0/0", "::/0")
+	env.ApproveRoutes(exit2, "0.0.0.0/0", "::/0")
+
+	webURL := fmt.Sprintf("http://%s:8080/", webWAN)
+	tests := []struct {
+		name    string // subtest name
+		exit    *vmtest.Node
+		wantSrc string
+	}{
+		{"off", nil, clientWAN},
+		{"exit1", exit1, exit1WAN},
+		{"exit2", exit2, exit2WAN},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env.SetExitNode(client, tt.exit)
+			body := env.HTTPGet(client, webURL)
+			t.Logf("response: %s", body)
+			if !strings.Contains(body, "Hello world I am webserver") {
+				t.Fatalf("unexpected webserver response: %q", body)
+			}
+			if !strings.Contains(body, "from "+tt.wantSrc) {
+				t.Fatalf("expected source %q in response, got %q", tt.wantSrc, body)
+			}
+		})
+	}
+}

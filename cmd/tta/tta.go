@@ -335,7 +335,9 @@ func main() {
 }
 
 func connect() (net.Conn, error) {
-	var d net.Dialer
+	d := net.Dialer{
+		Control: bypassControlFunc,
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	c, err := d.DialContext(ctx, "tcp", *driverAddr)

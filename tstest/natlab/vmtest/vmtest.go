@@ -387,6 +387,45 @@ func (e *Env) startWebServer(ctx context.Context, n *Node) error {
 	return nil
 }
 
+// SetExitNode sets the client node's exit node to use for internet traffic.
+// If exitNode is nil, the client's exit node is cleared (i.e., turned off).
+// Otherwise exitNode must be a tailnet node with an approved 0.0.0.0/0 (and
+// ::/0) route, typically configured via [AdvertiseRoutes] and
+// [Env.ApproveRoutes].
+func (e *Env) SetExitNode(client, exitNode *Node) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var ip netip.Addr
+	if exitNode != nil {
+		st, err := exitNode.agent.Status(ctx)
+		if err != nil {
+			e.t.Fatalf("SetExitNode: status for %s: %v", exitNode.name, err)
+		}
+		if len(st.Self.TailscaleIPs) == 0 {
+			e.t.Fatalf("SetExitNode: %s has no Tailscale IPs", exitNode.name)
+		}
+		ip = st.Self.TailscaleIPs[0]
+	}
+
+	if _, err := client.agent.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			ExitNodeID: "",
+			ExitNodeIP: ip,
+		},
+		ExitNodeIDSet: true,
+		ExitNodeIPSet: true,
+	}); err != nil {
+		e.t.Fatalf("SetExitNode(%s -> %v): %v", client.name, exitNode, err)
+	}
+	if exitNode == nil {
+		e.t.Logf("[%s] cleared exit node", client.name)
+	} else {
+		e.t.Logf("[%s] using exit node %s (%v)", client.name, exitNode.name, ip)
+	}
+}
+
 // ApproveRoutes tells the test control server to approve subnet routes
 // for the given node. The routes should be CIDR strings.
 func (e *Env) ApproveRoutes(n *Node, routes ...string) {
