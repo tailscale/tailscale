@@ -6,6 +6,7 @@ package tka
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/tstest"
@@ -353,13 +354,15 @@ func TestSyncFromFarBehind(t *testing.T) {
 	persistentSize := func() int { return len(must.Get(persistentStorage.AllAUMs())) }
 	compactingSize := func() int { return len(must.Get(compactingStorage.AllAUMs())) }
 
-	persistentAuthority, genesisAUM := must.Get2(Create(persistentStorage, state, signer1))
-	compactingAuthority := must.Get(Bootstrap(compactingStorage, genesisAUM))
-
 	// Backdate the clock on the compactingStorage so all AUMs will be old enough
 	// to be considered for compacting.
-	clock := tstest.NewClock(tstest.ClockOpts{})
+	clock := tstest.NewClock(tstest.ClockOpts{
+		Start: time.Now().Add(-(CompactionDefaults.MinAge + 24*time.Hour)),
+	})
 	compactingStorage.SetClock(clock)
+
+	persistentAuthority, genesisAUM := must.Get2(Create(persistentStorage, state, signer1))
+	compactingAuthority := must.Get(Bootstrap(compactingStorage, genesisAUM))
 
 	// 1. Generate enough history to trigger checkpoints.
 	for range checkpointEvery * 2 {
@@ -382,6 +385,7 @@ func TestSyncFromFarBehind(t *testing.T) {
 	// 2. Compact the node state.
 	//
 	// It now has a different 'oldestAncestor' than the control plane.
+	clock.Advance(48 * 24 * time.Hour)
 	must.Do(compactingAuthority.Compact(compactingStorage, CompactionDefaults))
 
 	// 3. Advance the control plane far beyond the node.
