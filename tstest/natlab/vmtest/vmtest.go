@@ -426,6 +426,23 @@ func (e *Env) SetExitNode(client, exitNode *Node) {
 	}
 }
 
+// SetAcceptRoutes toggles the node's RouteAll preference (the
+// --accept-routes flag), controlling whether it installs subnet routes
+// advertised by peers.
+func (e *Env) SetAcceptRoutes(n *Node, on bool) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := n.agent.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs:       ipn.Prefs{RouteAll: on},
+		RouteAllSet: true,
+	}); err != nil {
+		e.t.Fatalf("SetAcceptRoutes(%s, %v): %v", n.name, on, err)
+	}
+	e.t.Logf("[%s] accept-routes=%v", n.name, on)
+}
+
 // ApproveRoutes tells the test control server to approve subnet routes
 // for the given node. The routes should be CIDR strings.
 func (e *Env) ApproveRoutes(n *Node, routes ...string) {
