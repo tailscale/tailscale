@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go4.org/netipx"
@@ -123,11 +124,12 @@ func (e *extension) Init(host ipnext.Host) error {
 	}
 	e.host = host
 
-	dph := newDatapathHandler(e.conn25, e.conn25.client.logf)
+	dph := newDatapathHandler(e.conn25, e.conn25.logf)
 	if err := e.installHooks(dph); err != nil {
 		return err
 	}
-	e.seedPrefsConfig()
+	profile, prefs := e.host.Profiles().CurrentProfileState()
+	e.profileStateChange(profile, prefs, false)
 
 	ctx, cancel := context.WithCancelCause(context.Background())
 	e.ctxCancel = cancel
@@ -224,28 +226,42 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	return nil
 }
 
-// seedPrefsConfig provides an initial prefs config before
-// any hooks fire. The OnSelfChange hook needs to fire
-// for Conn25 to be fully configured and ready to use.
-func (e *extension) seedPrefsConfig() {
-	var cfg config
-	cfg.prefs = configFromPrefs(e.host.Profiles().CurrentPrefs())
-	e.conn25.reconfig(cfg)
-}
-
 // ClientTransitIPForMagicIP implements [IPMapper].
 func (c *Conn25) ClientTransitIPForMagicIP(m netip.Addr) (netip.Addr, error) {
-	return c.client.transitIPForMagicIP(m)
+	if addr, ok := c.client.transitIPForMagicIP(m); ok {
+		return addr, nil
+	}
+	cfg, ok := c.getConfig()
+	if !ok {
+		return netip.Addr{}, nil
+	}
+	if !cfg.ipSets.v4Magic.Contains(m) && !cfg.ipSets.v6Magic.Contains(m) {
+		return netip.Addr{}, nil
+	}
+	return netip.Addr{}, ErrUnmappedMagicIP
 }
 
 // ConnectorRealIPForTransitIPConnection implements [IPMapper].
 func (c *Conn25) ConnectorRealIPForTransitIPConnection(src, transit netip.Addr) (netip.Addr, error) {
-	return c.connector.realIPForTransitIPConnection(src, transit)
+	if addr, ok := c.connector.realIPForTransitIPConnection(src, transit); ok {
+		return addr, nil
+	}
+	cfg, ok := c.getConfig()
+	if !ok {
+		return netip.Addr{}, nil
+	}
+	if !cfg.ipSets.v4Transit.Contains(transit) && !cfg.ipSets.v6Transit.Contains(transit) {
+		return netip.Addr{}, nil
+	}
+	return netip.Addr{}, ErrUnmappedSrcAndTransitIP
 }
 
 func (e *extension) getMagicRange() views.Slice[netip.Prefix] {
-	cfg := e.conn25.client.getConfig()
-	return views.SliceOf(slices.Concat(cfg.nv.v4MagicIPSet.Prefixes(), cfg.nv.v6MagicIPSet.Prefixes()))
+	cfg, ok := e.conn25.getConfig()
+	if !ok {
+		return views.Slice[netip.Prefix]{}
+	}
+	return views.SliceOf(slices.Concat(cfg.ipSets.v4Magic.Prefixes(), cfg.ipSets.v6Magic.Prefixes()))
 }
 
 // Shutdown implements [ipnlocal.Extension].
@@ -281,29 +297,20 @@ func (e *extension) handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.R
 }
 
 // onSelfChange implements the [ipnext.Hooks.OnSelfChange] hook.
-// It reads then modifies the current config. We expect that OnSelfChange
-// is not called concurrently with itself or with ProfileStateChange to
-// prevent TOCTOU errors.
 func (e *extension) onSelfChange(selfNode tailcfg.NodeView) {
-	cfg := e.conn25.client.getConfig()
-	nvCfg, err := configFromNodeView(selfNode)
+	cfg, err := configFromNodeView(selfNode)
 	if err != nil {
-		e.conn25.client.logf("error generating config from self node view: %v", err)
+		e.conn25.logf("error generating config from self node view: %v", err)
 		return
 	}
-	cfg.nv = nvCfg
 	e.conn25.reconfig(cfg)
 }
 
 // profileStateChange implements the [ipnext.Hooks.ProfileStateChange] hook.
-// It reads then modifies the current config. We expect that ProfileStateChange
-// is not called concurrently with itself or with OnSelfChange to
-// prevent TOCTOU errors.
 func (e *extension) profileStateChange(loginProfile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
 	// TODO(mzb): Handle node changes. Wipe out all config?
-	cfg := e.conn25.client.getConfig()
-	cfg.prefs = configFromPrefs(prefs)
-	e.conn25.reconfig(cfg)
+	// We'll need to look at the ordering of this hook and onSelfChange.
+	e.conn25.prefsAdvertiseConnector.Store(prefs.AppConnector().Advertise)
 }
 
 func (e *extension) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
@@ -317,23 +324,40 @@ type appAddr struct {
 
 // Conn25 holds state for routing traffic for a domain via a connector.
 type Conn25 struct {
-	mu        sync.Mutex // mu protects reconfiguration of client and connector
-	client    *client
-	connector *connector
+	config                  atomic.Pointer[config]
+	prefsAdvertiseConnector atomic.Bool
+	logf                    logger.Logf
+	client                  *client
+	connector               *connector
+}
+
+func (c *Conn25) getConfig() (*config, bool) {
+	cfg := c.config.Load()
+	return cfg, cfg.isConfigured
 }
 
 func (c *Conn25) isConfigured() bool {
-	return c.client.isConfigured()
+	_, ok := c.getConfig()
+	return ok
 }
 
 func newConn25(logf logger.Logf) *Conn25 {
 	c := &Conn25{
-		client: &client{
-			logf:        logf,
-			addrsCh:     make(chan addrs, 64),
-			assignments: addrAssignments{clock: tstime.StdClock{}},
-		},
+		logf:      logf,
 		connector: &connector{logf: logf},
+	}
+	c.config.Store(&config{}) // initialize with empty to avoid nil checks
+	c.client = &client{
+		logf:        logf,
+		addrsCh:     make(chan addrs, 64),
+		assignments: addrAssignments{clock: tstime.StdClock{}},
+		getIPSets: func() ipSets {
+			cfg, ok := c.getConfig()
+			if !ok {
+				return emptyIPSets()
+			}
+			return cfg.ipSets
+		},
 	}
 	return c
 }
@@ -346,18 +370,9 @@ func ipSetFromIPRanges(rs []netipx.IPRange) (*netipx.IPSet, error) {
 	return b.IPSet()
 }
 
-func (c *Conn25) reconfig(cfg config) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.client.reconfig(cfg)
-	c.connector.reconfig(cfg)
-}
-
-// mapDNSResponse parses and inspects the DNS response, and uses the
-// contents to assign addresses for connecting.
-func (c *Conn25) mapDNSResponse(buf []byte) []byte {
-	return c.client.mapDNSResponse(buf)
+func (c *Conn25) reconfig(cfg *config) {
+	c.config.Store(cfg)
+	c.client.reconfig()
 }
 
 const dupeTransitIPMessage = "Duplicate transit address in ConnectorTransitIPRequest"
@@ -371,6 +386,21 @@ const unknownAppNameMessage = "The App name in the request does not match a conf
 // family of the transitIP). If a peer has stored this mapping in the connector,
 // Conn25 will route traffic to TransitIPs to DestinationIPs for that peer.
 func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, ctipr ConnectorTransitIPRequest) ConnectorTransitIPResponse {
+	resp := ConnectorTransitIPResponse{}
+	cfg, ok := c.getConfig()
+	if !ok {
+		// TODO(mzb): If this node is no longer configured at the
+		// the time of this call, perhaps there should be a top-level
+		// error, instead of error-per-TransitIP?
+		for range ctipr.TransitIPs {
+			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
+				Code:    UnknownAppName,
+				Message: unknownAppNameMessage,
+			})
+		}
+		return resp
+	}
+
 	var peerIPv4, peerIPv6 netip.Addr
 	for _, ip := range n.Addresses().All() {
 		if !ip.IsSingleIP() || !tsaddr.IsTailscaleIP(ip.Addr()) {
@@ -383,7 +413,6 @@ func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, ctipr Conne
 		}
 	}
 
-	resp := ConnectorTransitIPResponse{}
 	seen := map[netip.Addr]bool{}
 	for _, each := range ctipr.TransitIPs {
 		if seen[each.TransitIP] {
@@ -391,8 +420,18 @@ func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, ctipr Conne
 				Code:    DuplicateTransitIP,
 				Message: dupeTransitIPMessage,
 			})
-			c.connector.logf("[Unexpected] peer attempt to map a transit IP reused a transitIP: node: %s, IP: %v",
+			c.logf("[Unexpected] peer attempt to map a transit IP reused a transitIP: node: %s, IP: %v",
 				n.StableID(), each.TransitIP)
+			continue
+		}
+
+		if _, ok := cfg.appsByName[each.App]; !ok {
+			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
+				Code:    UnknownAppName,
+				Message: unknownAppNameMessage,
+			})
+			c.logf("[Unexpected] peer attempt to map a transit IP referenced unknown app: node: %s, app: %q",
+				n.StableID(), each.App)
 			continue
 		}
 		tipresp := c.connector.handleTransitIPRequest(n, peerIPv4, peerIPv6, each)
@@ -427,12 +466,6 @@ func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.config.nv.appsByName[tipr.App]; !ok {
-		c.logf("[Unexpected] peer attempt to map a transit IP referenced unknown app: node: %s, app: %q",
-			n.StableID(), tipr.App)
-		return TransitIPResponse{Code: UnknownAppName, Message: unknownAppNameMessage}
-	}
-
 	if c.transitIPs == nil {
 		c.transitIPs = make(map[netip.Addr]map[netip.Addr]appAddr)
 	}
@@ -515,43 +548,58 @@ type ConnectorTransitIPResponse struct {
 
 const AppConnectorsExperimentalAttrName = "tailscale.com/app-connectors-experimental"
 
-// nodeViewConfig holds the config derived from the self node view,
+// ipSets wraps all the IPSets the config needs.
+type ipSets struct {
+	v4Transit *netipx.IPSet
+	v4Magic   *netipx.IPSet
+	v6Transit *netipx.IPSet
+	v6Magic   *netipx.IPSet
+}
+
+func emptyIPSets() ipSets {
+	return ipSets{
+		v4Transit: &netipx.IPSet{},
+		v4Magic:   &netipx.IPSet{},
+		v6Transit: &netipx.IPSet{},
+		v6Magic:   &netipx.IPSet{},
+	}
+}
+
+// config holds the config derived from the self node view,
 // which includes the policy.
-// nodeViewConfig is not safe for concurrent use.
-type nodeViewConfig struct {
+// config is not safe for concurrent use.
+type config struct {
 	isConfigured     bool
 	apps             []appctype.Conn25Attr
 	appsByName       map[string]appctype.Conn25Attr
 	appNamesByDomain map[dnsname.FQDN][]string
 	selfDomains      set.Set[dnsname.FQDN]
-	v4TransitIPSet   netipx.IPSet
-	v4MagicIPSet     netipx.IPSet
-	v6TransitIPSet   netipx.IPSet
-	v6MagicIPSet     netipx.IPSet
+	ipSets           ipSets
 }
 
-func configFromNodeView(n tailcfg.NodeView) (nodeViewConfig, error) {
+func configFromNodeView(n tailcfg.NodeView) (*config, error) {
 	apps, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.Conn25Attr](n.CapMap(), AppConnectorsExperimentalAttrName)
 	if err != nil {
-		return nodeViewConfig{}, err
+		return &config{}, err
 	}
 	if len(apps) == 0 {
-		return nodeViewConfig{}, nil
+		return &config{}, nil
 	}
 	selfTags := set.SetOf(n.Tags().AsSlice())
-	cfg := nodeViewConfig{
+	cfg := &config{
 		isConfigured:     true,
 		apps:             apps,
 		appsByName:       map[string]appctype.Conn25Attr{},
 		appNamesByDomain: map[dnsname.FQDN][]string{},
 		selfDomains:      set.Set[dnsname.FQDN]{},
+		ipSets:           emptyIPSets(),
 	}
 	for _, app := range apps {
 		selfMatchesTags := slices.ContainsFunc(app.Connectors, selfTags.Contains)
 		for _, d := range app.Domains {
 			fqdn, err := normalizeDNSName(d)
 			if err != nil {
-				return nodeViewConfig{}, err
+				return &config{}, err
 			}
 			mak.Set(&cfg.appNamesByDomain, fqdn, append(cfg.appNamesByDomain[fqdn], app.Name))
 			if selfMatchesTags {
@@ -567,53 +615,29 @@ func configFromNodeView(n tailcfg.NodeView) (nodeViewConfig, error) {
 		app := apps[0]
 		v4Mipp, err := ipSetFromIPRanges(app.V4MagicIPPool)
 		if err != nil {
-			return nodeViewConfig{}, err
+			return &config{}, err
 		}
 		v4Tipp, err := ipSetFromIPRanges(app.V4TransitIPPool)
 		if err != nil {
-			return nodeViewConfig{}, err
+			return &config{}, err
 		}
 		v6Mipp, err := ipSetFromIPRanges(app.V6MagicIPPool)
 		if err != nil {
-			return nodeViewConfig{}, err
+			return &config{}, err
 		}
 		v6Tipp, err := ipSetFromIPRanges(app.V6TransitIPPool)
 		if err != nil {
-			return nodeViewConfig{}, err
+			return &config{}, err
 		}
-		cfg.v4MagicIPSet = *v4Mipp
-		cfg.v4TransitIPSet = *v4Tipp
-		cfg.v6MagicIPSet = *v6Mipp
-		cfg.v6TransitIPSet = *v6Tipp
+		ipSets := ipSets{
+			v4Magic:   v4Mipp,
+			v4Transit: v4Tipp,
+			v6Magic:   v6Mipp,
+			v6Transit: v6Tipp,
+		}
+		cfg.ipSets = ipSets
 	}
 	return cfg, nil
-}
-
-// prefsConfig holds the config derived from the current prefs.
-// prefsConfig is not safe for concurrent use.
-type prefsConfig struct {
-	isConfigured        bool
-	isEligibleConnector bool
-}
-
-func configFromPrefs(prefs ipn.PrefsView) prefsConfig {
-	return prefsConfig{
-		isConfigured:        true,
-		isEligibleConnector: prefs.AppConnector().Advertise,
-	}
-}
-
-// config wraps the config from disparate sources.
-// config is not safe for concurrent use.
-type config struct {
-	nv    nodeViewConfig
-	prefs prefsConfig
-}
-
-// isSelfRoutedDomain reports whether the self node is currently
-// acting as a connector for the given domain.
-func (c config) isSelfRoutedDomain(d dnsname.FQDN) bool {
-	return c.prefs.isEligibleConnector && c.nv.selfDomains.Contains(d)
 }
 
 // client performs the conn25 functionality for clients of connectors
@@ -621,8 +645,9 @@ func (c config) isSelfRoutedDomain(d dnsname.FQDN) bool {
 // connectors.
 // It's safe for concurrent use.
 type client struct {
-	logf    logger.Logf
-	addrsCh chan addrs
+	logf      logger.Logf
+	addrsCh   chan addrs
+	getIPSets func() ipSets
 
 	mu              sync.Mutex // protects the fields below
 	v4MagicIPPool   *ippool
@@ -631,28 +656,18 @@ type client struct {
 	v6TransitIPPool *ippool
 	assignments     addrAssignments
 	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
-	config          config
-}
-
-func (c *client) getConfig() config {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.config
 }
 
 // transitIPForMagicIP is part of the implementation of the IPMapper interface for dataflows lookups.
 // See also [IPMapper.ClientTransitIPForMagicIP].
-func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, error) {
+func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	v, ok := c.assignments.lookupByMagicIP(magicIP)
 	if ok {
-		return v.transit, nil
+		return v.transit, true
 	}
-	if !c.config.nv.v4MagicIPSet.Contains(magicIP) && !c.config.nv.v6MagicIPSet.Contains(magicIP) {
-		return netip.Addr{}, nil
-	}
-	return netip.Addr{}, ErrUnmappedMagicIP
+	return netip.Addr{}, false
 }
 
 // linkLocalAllow returns true if the provided packet with a link-local Dst address has a
@@ -675,40 +690,28 @@ func (c *client) isKnownTransitIP(tip netip.Addr) bool {
 	return ok
 }
 
-// isConfigured reports whether the client has received both a node view
-// config (from the netmap/policy) and a prefs config. Both are required
-// before the feature is active.
-func (c *client) isConfigured() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.config.prefs.isConfigured && c.config.nv.isConfigured
-}
-
-func (c *client) reconfig(newCfg config) {
+func (c *client) reconfig() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.config = newCfg
+	ipSets := c.getIPSets()
 
-	c.v4MagicIPPool = newIPPool(&(newCfg.nv.v4MagicIPSet))
-	c.v4TransitIPPool = newIPPool(&(newCfg.nv.v4TransitIPSet))
-	c.v6MagicIPPool = newIPPool(&(newCfg.nv.v6MagicIPSet))
-	c.v6TransitIPPool = newIPPool(&(newCfg.nv.v6TransitIPSet))
+	c.v4MagicIPPool = newIPPool(ipSets.v4Magic)
+	c.v4TransitIPPool = newIPPool(ipSets.v4Transit)
+	c.v6MagicIPPool = newIPPool(ipSets.v6Magic)
+	c.v6TransitIPPool = newIPPool(ipSets.v6Transit)
 }
 
 // isConnectorDomain returns true if the domain is expected
 // to be routed through a peer connector, but returns false
 // if the self node is a connector responsible for routing the
 // domain, and false in all other cases.
-func (c *client) isConnectorDomain(domain dnsname.FQDN) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.config.isSelfRoutedDomain(domain) {
+func (cfg *config) isConnectorDomain(domain dnsname.FQDN, prefsAdvertiseConnector bool) bool {
+	if prefsAdvertiseConnector && cfg.selfDomains.Contains(domain) {
 		return false
 	}
 
-	appNames, ok := c.config.nv.appNamesByDomain[domain]
+	appNames, ok := cfg.appNamesByDomain[domain]
 	return ok && len(appNames) > 0
 }
 
@@ -716,7 +719,7 @@ func (c *client) isConnectorDomain(domain dnsname.FQDN) bool {
 // for this domain+dst address, so that this client can use conn25 connectors.
 // It checks that this domain should be routed and that this client is not itself a connector for the domain
 // and generally if it is valid to make the assignment.
-func (c *client) reserveAddresses(domain dnsname.FQDN, dst netip.Addr) (addrs, error) {
+func (c *client) reserveAddresses(app string, domain dnsname.FQDN, dst netip.Addr) (addrs, error) {
 	if !dst.IsValid() {
 		return addrs{}, errors.New("dst is not valid")
 	}
@@ -725,12 +728,6 @@ func (c *client) reserveAddresses(domain dnsname.FQDN, dst netip.Addr) (addrs, e
 	if existing, ok := c.assignments.lookupByDomainDst(domain, dst); ok {
 		return existing, nil
 	}
-	appNames, _ := c.config.nv.appNamesByDomain[domain]
-	if len(appNames) == 0 {
-		return addrs{}, fmt.Errorf("no app names found for domain %q", domain)
-	}
-	// only reserve for first app
-	app := appNames[0]
 
 	var mip, tip netip.Addr
 	var err error
@@ -789,7 +786,7 @@ func (e *extension) sendLoop(ctx context.Context) {
 			return
 		case as := <-e.conn25.client.addrsCh:
 			if err := e.handleAddressAssignment(ctx, as); err != nil {
-				e.conn25.client.logf("error handling transit IP assignment (app: %s, mip: %v, src: %v): %v", as.app, as.magic, as.dst, err)
+				e.conn25.logf("error handling transit IP assignment (app: %s, mip: %v, src: %v): %v", as.app, as.magic, as.dst, err)
 			}
 		}
 	}
@@ -873,9 +870,13 @@ func makePeerAPIReq(ctx context.Context, httpClient *http.Client, urlBase string
 }
 
 func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) (tailcfg.NodeView, error) {
-	app, ok := e.conn25.client.getConfig().nv.appsByName[as.app]
+	cfg, ok := e.conn25.getConfig()
 	if !ok {
-		e.conn25.client.logf("App not found for app: %s (domain: %s)", as.app, as.domain)
+		return tailcfg.NodeView{}, errors.New("not configured")
+	}
+	app, ok := cfg.appsByName[as.app]
+	if !ok {
+		e.conn25.logf("App not found for app: %s (domain: %s)", as.app, as.domain)
 		return tailcfg.NodeView{}, errors.New("app not found")
 	}
 
@@ -927,7 +928,10 @@ func makeServFail(logf logger.Logf, h dnsmessage.Header, q dnsmessage.Question) 
 	return bs
 }
 
-func (c *client) mapDNSResponse(buf []byte) []byte {
+// mapDNSResponse parses and inspects the DNS response. If the domain
+// is determined to belong to app this node is client for, it assigns addresses
+// for connecting and rewrites the response to contain Magic IPs.
+func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 	var p dnsmessage.Parser
 	hdr, err := p.Start(buf)
 	if err != nil {
@@ -952,9 +956,22 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 	if err != nil {
 		return buf
 	}
-	if !c.isConnectorDomain(queriedDomain) {
+
+	cfg, ok := c.getConfig()
+	if !ok {
 		return buf
 	}
+
+	if !cfg.isConnectorDomain(queriedDomain, c.prefsAdvertiseConnector.Load()) {
+		return buf
+	}
+
+	appNames, _ := cfg.appNamesByDomain[queriedDomain]
+	if len(appNames) == 0 {
+		return buf
+	}
+	// only reserve for first app
+	app := appNames[0]
 
 	// Now we know this is a dns response we think we should rewrite, we're going to provide our response which
 	// currently means we will:
@@ -964,7 +981,7 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 	var answers []dnsResponseRewrite
 	if question.Type != dnsmessage.TypeA && question.Type != dnsmessage.TypeAAAA {
 		c.logf("mapping dns response for connector domain, unsupported type: %v", question.Type)
-		newBuf, err := c.rewriteDNSResponse(hdr, questions, answers)
+		newBuf, err := c.client.rewriteDNSResponse(app, hdr, questions, answers)
 		if err != nil {
 			c.logf("error writing empty response for unsupported type: %v", err)
 			return makeServFail(c.logf, hdr, question)
@@ -1049,7 +1066,7 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 			}
 		}
 	}
-	newBuf, err := c.rewriteDNSResponse(hdr, questions, answers)
+	newBuf, err := c.client.rewriteDNSResponse(app, hdr, questions, answers)
 	if err != nil {
 		c.logf("error rewriting dns response: %v", err)
 		return makeServFail(c.logf, hdr, question)
@@ -1057,7 +1074,7 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 	return newBuf
 }
 
-func (c *client) rewriteDNSResponse(hdr dnsmessage.Header, questions []dnsmessage.Question, answers []dnsResponseRewrite) ([]byte, error) {
+func (c *client) rewriteDNSResponse(app string, hdr dnsmessage.Header, questions []dnsmessage.Question, answers []dnsResponseRewrite) ([]byte, error) {
 	b := dnsmessage.NewBuilder(nil, hdr)
 	b.EnableCompression()
 	if err := b.StartQuestions(); err != nil {
@@ -1074,7 +1091,7 @@ func (c *client) rewriteDNSResponse(hdr dnsmessage.Header, questions []dnsmessag
 
 	// make an answer for each rewrite
 	for _, rw := range answers {
-		as, err := c.reserveAddresses(rw.domain, rw.dst)
+		as, err := c.reserveAddresses(app, rw.domain, rw.dst)
 		if err != nil {
 			return nil, err
 		}
@@ -1115,22 +1132,18 @@ type connector struct {
 	// transitIPs is a map of connector client peer IP -> client transitIPs that we update as connector client peers instruct us to, and then use to route traffic to its destination on behalf of connector clients.
 	// Note that each peer could potentially have two maps: one for its IPv4 address, and one for its IPv6 address. The transit IPs map for a given peer IP will contain transit IPs of the same family as the peer's IP.
 	transitIPs map[netip.Addr]map[netip.Addr]appAddr
-	config     config
 }
 
 // realIPForTransitIPConnection is part of the implementation of the IPMapper interface for dataflows lookups.
 // See also [IPMapper.ConnectorRealIPForTransitIPConnection].
-func (c *connector) realIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error) {
+func (c *connector) realIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	v, ok := c.lookupBySrcIPAndTransitIP(srcIP, transitIP)
 	if ok {
-		return v.addr, nil
+		return v.addr, true
 	}
-	if !c.config.nv.v4TransitIPSet.Contains(transitIP) && !c.config.nv.v6TransitIPSet.Contains(transitIP) {
-		return netip.Addr{}, nil
-	}
-	return netip.Addr{}, ErrUnmappedSrcAndTransitIP
+	return netip.Addr{}, false
 }
 
 const packetFilterAllowReason = "app connector transit IP"
@@ -1154,12 +1167,6 @@ func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appA
 	}
 	v, ok := m[transitIP]
 	return v, ok
-}
-
-func (c *connector) reconfig(newCfg config) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.config = newCfg
 }
 
 type addrs struct {
