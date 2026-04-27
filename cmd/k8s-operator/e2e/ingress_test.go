@@ -33,12 +33,12 @@ func TestL3Ingress(t *testing.T) {
 	}
 
 	// Apply nginx
-	createAndCleanup(t, kubeClient, nginxDeployment(ns, "nginx"))
+	nginx := nginxDeployment(ns)
+	createAndCleanup(t, kubeClient, nginx)
 	// Apply service to expose it as ingress
-	name := generateName("test-ingress")
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      generateName("test-ingress"),
 			Namespace: ns,
 			Annotations: map[string]string{
 				"tailscale.com/expose": "true",
@@ -46,7 +46,7 @@ func TestL3Ingress(t *testing.T) {
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
-				"app.kubernetes.io/name": "nginx",
+				"app.kubernetes.io/name": nginx.Name,
 			},
 			Ports: []corev1.ServicePort{
 				{
@@ -60,7 +60,7 @@ func TestL3Ingress(t *testing.T) {
 	createAndCleanup(t, kubeClient, svc)
 
 	if err := tstest.WaitFor(time.Minute, func() error {
-		maybeReadySvc := &corev1.Service{ObjectMeta: objectMeta(ns, name)}
+		maybeReadySvc := &corev1.Service{ObjectMeta: objectMeta(ns, svc.Name)}
 		if err := get(t.Context(), kubeClient, maybeReadySvc); err != nil {
 			return err
 		}
@@ -81,7 +81,7 @@ func TestL3Ingress(t *testing.T) {
 		if err := kubeClient.List(t.Context(), &secrets,
 			client.InNamespace("tailscale"),
 			client.MatchingLabels{
-				"tailscale.com/parent-resource":    name,
+				"tailscale.com/parent-resource":    svc.Name,
 				"tailscale.com/parent-resource-ns": ns,
 			},
 		); err != nil {
@@ -111,33 +111,34 @@ func TestL3HAIngress(t *testing.T) {
 	}
 
 	// Apply nginx.
-	createAndCleanup(t, kubeClient, nginxDeployment(ns, "nginx"))
+	nginx := nginxDeployment(ns)
+	createAndCleanup(t, kubeClient, nginx)
 
 	// Create an ingress ProxyGroup.
-	createAndCleanup(t, kubeClient, &tsapi.ProxyGroup{
+	pg := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ingress",
+			Name: generateName("ingress"),
 		},
 		Spec: tsapi.ProxyGroupSpec{
 			Type: tsapi.ProxyGroupTypeIngress,
 		},
-	})
+	}
+	createAndCleanup(t, kubeClient, pg)
 
 	// Apply a Service to expose nginx via the ProxyGroup.
-	name := generateName("test-ingress")
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      generateName("test-ingress"),
 			Namespace: ns,
 			Annotations: map[string]string{
-				"tailscale.com/proxy-group": "ingress",
+				"tailscale.com/proxy-group": pg.Name,
 			},
 		},
 		Spec: corev1.ServiceSpec{
 			Type:              corev1.ServiceTypeLoadBalancer,
 			LoadBalancerClass: new("tailscale"),
 			Selector: map[string]string{
-				"app.kubernetes.io/name": "nginx",
+				"app.kubernetes.io/name": nginx.Name,
 			},
 			Ports: []corev1.ServicePort{
 				{
@@ -152,12 +153,12 @@ func TestL3HAIngress(t *testing.T) {
 
 	var svcIPv4 string
 	forceReconcile := triggerReconcile(t,
-		client.ObjectKey{Namespace: ns, Name: name},
+		client.ObjectKey{Namespace: ns, Name: svc.Name},
 		&corev1.Service{}, 30*time.Second)
 
 	// Wait for Service to be ready
 	if err := tstest.WaitFor(5*time.Minute, func() error {
-		maybeReadySvc := &corev1.Service{ObjectMeta: objectMeta(ns, name)}
+		maybeReadySvc := &corev1.Service{ObjectMeta: objectMeta(ns, svc.Name)}
 		forceReconcile()
 		if err := get(t.Context(), kubeClient, maybeReadySvc); err != nil {
 			return err
@@ -188,15 +189,16 @@ func TestL7Ingress(t *testing.T) {
 	}
 
 	// Apply nginx Deployment and Service.
-	createAndCleanup(t, kubeClient, nginxDeployment(ns, "nginx"))
+	nginx := nginxDeployment(ns)
+	createAndCleanup(t, kubeClient, nginx)
 	createAndCleanup(t, kubeClient, &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nginx",
+			Name:      nginx.Name,
 			Namespace: ns,
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
-				"app.kubernetes.io/name": "nginx",
+				"app.kubernetes.io/name": nginx.Name,
 			},
 			Ports: []corev1.ServicePort{
 				{
@@ -208,13 +210,12 @@ func TestL7Ingress(t *testing.T) {
 	})
 
 	// Apply Ingress to expose nginx.
-	name := generateName("test-ingress")
-	ingress := l7Ingress(ns, name, map[string]string{})
+	ingress := l7Ingress(ns, nginx.Name, map[string]string{})
 	createAndCleanup(t, kubeClient, ingress)
 
 	t.Log("Waiting for the Ingress to be ready...")
 
-	hostname, err := waitForIngressHostname(t, ns, name)
+	hostname, err := waitForIngressHostname(t, ns, ingress.Name)
 	if err != nil {
 		t.Fatalf("error waiting for Ingress hostname: %v", err)
 	}
@@ -230,15 +231,16 @@ func TestL7HAIngress(t *testing.T) {
 	}
 
 	// Apply nginx Deployment and Service.
-	createAndCleanup(t, kubeClient, nginxDeployment(ns, "nginx"))
+	nginx := nginxDeployment(ns)
+	createAndCleanup(t, kubeClient, nginx)
 	createAndCleanup(t, kubeClient, &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nginx",
+			Name:      nginx.Name,
 			Namespace: ns,
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
-				"app.kubernetes.io/name": "nginx",
+				"app.kubernetes.io/name": nginx.Name,
 			},
 			Ports: []corev1.ServicePort{
 				{
@@ -250,23 +252,23 @@ func TestL7HAIngress(t *testing.T) {
 	})
 
 	// Create ProxyGroup that the Ingress will reference.
-	createAndCleanup(t, kubeClient, &tsapi.ProxyGroup{
+	pg := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ingress",
+			Name: generateName("ingress"),
 		},
 		Spec: tsapi.ProxyGroupSpec{
 			Type: tsapi.ProxyGroupTypeIngress,
 		},
-	})
+	}
+	createAndCleanup(t, kubeClient, pg)
 
 	// Apply Ingress to expose nginx.
-	name := generateName("test-ingress")
-	ingress := l7Ingress(ns, name, map[string]string{"tailscale.com/proxy-group": "ingress"})
+	ingress := l7Ingress(ns, nginx.Name, map[string]string{"tailscale.com/proxy-group": pg.Name})
 	createAndCleanup(t, kubeClient, ingress)
 
 	t.Log("Waiting for the Ingress to be ready...")
 
-	hostname, err := waitForIngressHostname(t, ns, name)
+	hostname, err := waitForIngressHostname(t, ns, ingress.Name)
 	if err != nil {
 		t.Fatalf("error waiting for Ingress hostname: %v", err)
 	}
@@ -278,19 +280,20 @@ func TestL7HAIngress(t *testing.T) {
 
 func TestL7HAIngressMultiTailnet(t *testing.T) {
 	if tnClient == nil || secondTNClient == nil {
-		t.Skip("TestL7HAMultiTailnet requires a working tailnet client for a first and second tailnet")
+		t.Skip("TestL7HAIngressMultiTailnet requires a working tailnet client for a first and second tailnet")
 	}
 
 	// Apply nginx Deployment and Service.
-	createAndCleanup(t, kubeClient, nginxDeployment(ns, "nginx"))
+	nginx := nginxDeployment(ns)
+	createAndCleanup(t, kubeClient, nginx)
 	createAndCleanup(t, kubeClient, &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nginx",
+			Name:      nginx.Name,
 			Namespace: ns,
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
-				"app.kubernetes.io/name": "nginx",
+				"app.kubernetes.io/name": nginx.Name,
 			},
 			Ports: []corev1.ServicePort{
 				{
@@ -304,7 +307,7 @@ func TestL7HAIngressMultiTailnet(t *testing.T) {
 	// Create Ingress ProxyGroup for each Tailnet.
 	firstTailnetPG := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "first-tailnet",
+			Name: generateName("first-tailnet"),
 		},
 		Spec: tsapi.ProxyGroupSpec{
 			Type: tsapi.ProxyGroupTypeIngress,
@@ -313,7 +316,7 @@ func TestL7HAIngressMultiTailnet(t *testing.T) {
 	createAndCleanup(t, kubeClient, firstTailnetPG)
 	secondTailnetPG := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "second-tailnet",
+			Name: generateName("second-tailnet"),
 		},
 		Spec: tsapi.ProxyGroupSpec{
 			Type:    tsapi.ProxyGroupTypeIngress,
@@ -330,14 +333,13 @@ func TestL7HAIngressMultiTailnet(t *testing.T) {
 	}
 
 	// Apply Ingress to expose nginx.
-	name := generateName("test-ingress")
-	ingress := l7Ingress(ns, name, map[string]string{
-		"tailscale.com/proxy-group": "second-tailnet",
+	ingress := l7Ingress(ns, nginx.Name, map[string]string{
+		"tailscale.com/proxy-group": secondTailnetPG.Name,
 	})
 	createAndCleanup(t, kubeClient, ingress)
 
 	// Check that the tailscale (VIP) Service has been created in the expected Tailnet.
-	svcName := "svc:" + name
+	svcName := "svc:" + ingress.Name
 	if err := tstest.WaitFor(3*time.Minute, func() error {
 		_, err := secondTSClient.VIPServices().Get(t.Context(), svcName)
 		if tailscale.IsNotFound(err) {
@@ -347,7 +349,7 @@ func TestL7HAIngressMultiTailnet(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Tailscale service %q never appeared in expected tailnet: %v", svcName, err)
 	}
-	hostname, err := waitForIngressHostname(t, ns, name)
+	hostname, err := waitForIngressHostname(t, ns, ingress.Name)
 	if err != nil {
 		t.Fatalf("error waiting for Ingress hostname: %v", err)
 	}
@@ -356,7 +358,8 @@ func TestL7HAIngressMultiTailnet(t *testing.T) {
 	}
 }
 
-func l7Ingress(namespace, name string, annotations map[string]string) *networkingv1.Ingress {
+func l7Ingress(namespace, svc string, annotations map[string]string) *networkingv1.Ingress {
+	name := generateName("test-ingress")
 	ingress := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
@@ -378,7 +381,7 @@ func l7Ingress(namespace, name string, annotations map[string]string) *networkin
 									PathType: new(networkingv1.PathTypePrefix),
 									Backend: networkingv1.IngressBackend{
 										Service: &networkingv1.IngressServiceBackend{
-											Name: "nginx",
+											Name: svc,
 											Port: networkingv1.ServiceBackendPort{
 												Number: 80,
 											},
@@ -395,26 +398,27 @@ func l7Ingress(namespace, name string, annotations map[string]string) *networkin
 	return ingress
 }
 
-func nginxDeployment(namespace, name string) *appsv1.Deployment {
+func nginxDeployment(namespace string) *appsv1.Deployment {
+	name := generateName("nginx")
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/name": "nginx",
+				"app.kubernetes.io/name": name,
 			},
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: new(int32(1)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"app.kubernetes.io/name": "nginx",
+					"app.kubernetes.io/name": name,
 				},
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						"app.kubernetes.io/name": "nginx",
+						"app.kubernetes.io/name": name,
 					},
 				},
 				Spec: corev1.PodSpec{
