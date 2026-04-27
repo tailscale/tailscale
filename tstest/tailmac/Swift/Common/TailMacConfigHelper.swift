@@ -74,18 +74,31 @@ struct TailMacConfigHelper {
         return networkDevice
     }
 
+    /// Creates a NIC configuration connected to the vnet dgram socket.
     func createSocketNetworkDeviceConfiguration() -> VZVirtioNetworkDeviceConfiguration {
         let networkDevice = VZVirtioNetworkDeviceConfiguration()
         networkDevice.macAddress = VZMACAddress(string: config.mac)!
+        if let attachment = createDgramAttachment(serverSocket: config.serverSocket, clientID: config.vmID) {
+            networkDevice.attachment = attachment
+        }
+        return networkDevice
+    }
 
+    /// Creates a NIC configuration with no attachment (disconnected).
+    /// The attachment can be hot-swapped later via VZNetworkDevice.attachment.
+    func createDisconnectedNetworkDeviceConfiguration() -> VZVirtioNetworkDeviceConfiguration {
+        let networkDevice = VZVirtioNetworkDeviceConfiguration()
+        networkDevice.macAddress = VZMACAddress(string: config.mac)!
+        // No attachment — NIC appears disconnected to the guest.
+        return networkDevice
+    }
+
+    /// Creates a dgram socket attachment for connecting to a vnet server.
+    /// Returns nil on error.
+    func createDgramAttachment(serverSocket: String, clientID: String) -> VZFileHandleNetworkDeviceAttachment? {
         let socket = Darwin.socket(AF_UNIX, SOCK_DGRAM, 0)
 
-        // Outbound network packets
-        let serverSocket = config.serverSocket
-
-        // Inbound network packets — bind a client socket so the server can reply.
-        let clientSockId = config.vmID
-        let clientSocket = "/tmp/qemu-dgram-\(clientSockId).sock"
+        let clientSocket = "/tmp/qemu-dgram-\(clientID).sock"
 
         unlink(clientSocket)
         var clientAddr = sockaddr_un()
@@ -102,7 +115,7 @@ struct TailMacConfigHelper {
 
         if bindRes == -1 {
             print("Error binding virtual network client socket - \(String(cString: strerror(errno)))")
-            return networkDevice
+            return nil
         }
 
         var serverAddr = sockaddr_un()
@@ -119,18 +132,15 @@ struct TailMacConfigHelper {
 
         if connectRes == -1 {
             print("Error connecting to server socket \(serverSocket) - \(String(cString: strerror(errno)))")
-            return networkDevice
+            return nil
         }
 
         print("Virtual if mac address is \(config.mac)")
         print("Client bound to \(clientSocket)")
         print("Connected to server at \(serverSocket)")
-        print("Socket fd is \(socket)")
 
         let handle = FileHandle(fileDescriptor: socket)
-        let device = VZFileHandleNetworkDeviceAttachment(fileHandle: handle)
-        networkDevice.attachment = device
-        return networkDevice
+        return VZFileHandleNetworkDeviceAttachment(fileHandle: handle)
     }
 
     func createPointingDeviceConfiguration() -> VZPointingDeviceConfiguration {
