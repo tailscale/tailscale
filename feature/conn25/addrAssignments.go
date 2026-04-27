@@ -4,7 +4,6 @@
 package conn25
 
 import (
-	"context"
 	"errors"
 	"net/netip"
 	"sync"
@@ -122,17 +121,4 @@ func (a *addrAssignments) removeExpiredAddrs() []addrs {
 		}
 	}
 	return removed
-}
-
-func (a *addrAssignments) expireAddrAssignmentsLoop(ctx context.Context) {
-	ticker, ch := a.clock.NewTicker(61 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ch:
-			a.removeExpiredAddrs()
-		}
-	}
 }

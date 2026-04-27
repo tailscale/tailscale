@@ -5,6 +5,7 @@ package conn25
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -26,6 +27,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
+	"tailscale.com/tstest"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -2011,5 +2013,44 @@ func TestGetMagicRange(t *testing.T) {
 		if somePrefixCovers(netip.MustParseAddr(s)) {
 			t.Fatalf("expected addr to NOT be covered but WAS: %s", s)
 		}
+	}
+}
+
+func TestExpiredAddrsReturnedToPool(t *testing.T) {
+	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
+	c := newConn25(t.Context(), logger.Discard)
+	c.client.assignments.clock = clock
+	// Single address pools.
+	c.client.v6MagicIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0100::/128"))
+	c.client.v6TransitIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0200::/128"))
+	c.client.config.nv.appNamesByDomain = map[dnsname.FQDN][]string{"example.com.": {"app"}}
+
+	// Use the one address.
+	first, err := c.client.reserveAddresses("example.com.", netip.MustParseAddr("::1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The pools are exhausted.
+	_, err = c.client.reserveAddresses("example.com.", netip.MustParseAddr("::2"))
+	if !errors.Is(err, errPoolExhausted) {
+		t.Fatalf("want errPoolExhausted, got: %v", err)
+	}
+
+	// Advance the clock past the expiry window and run the expiry loop tick.
+	// The addresses are returned to their pools.
+	clock.Advance(defaultExpiry * 2)
+	c.client.handleExpireAddrAssignmentsLoopTick()
+
+	// The addresses are available for use again.
+	second, err := c.client.reserveAddresses("example.com.", netip.MustParseAddr("::2"))
+	if err != nil {
+		t.Fatalf("want nil error after pool return, got: %v", err)
+	}
+	if second.magic != first.magic {
+		t.Errorf("magic: want %v, got %v", first.magic, second.magic)
+	}
+	if second.transit != first.transit {
+		t.Errorf("transit: want %v, got %v", first.transit, second.transit)
 	}
 }

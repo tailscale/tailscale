@@ -642,8 +642,54 @@ func newClient(ctx context.Context, logf logger.Logf) *client {
 		addrsCh:     make(chan addrs, 64),
 		assignments: addrAssignments{clock: tstime.StdClock{}},
 	}
-	go c.assignments.expireAddrAssignmentsLoop(ctx)
+	// It gets racy in the tests whether the ticker fires when you advance the clock,
+	// so in the tests we'll call handleExpireAddrAssignmentsLoopTick by hand.
+	if !testenv.InTest() {
+		go c.expireAddrAssignmentsLoop(ctx)
+	}
 	return c
+}
+
+func (c *client) handleExpireAddrAssignmentsLoopTick() {
+	expired := c.assignments.removeExpiredAddrs()
+	c.returnExpiredToPool(expired)
+}
+
+func (c *client) expireAddrAssignmentsLoop(ctx context.Context) {
+	ticker, ch := c.assignments.clock.NewTicker(61 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ch:
+			c.handleExpireAddrAssignmentsLoopTick()
+		}
+	}
+}
+
+func (c *client) returnExpiredToPool(expired []addrs) {
+	if len(expired) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, as := range expired {
+		var magicPool, transitPool *ippool
+		if as.magic.Is4() {
+			magicPool = c.v4MagicIPPool
+			transitPool = c.v4TransitIPPool
+		} else {
+			magicPool = c.v6MagicIPPool
+			transitPool = c.v6TransitIPPool
+		}
+		if err := magicPool.returnAddr(as.magic); err != nil {
+			c.logf("error returning magic IP %v to pool: %v", as.magic, err)
+		}
+		if err := transitPool.returnAddr(as.transit); err != nil {
+			c.logf("error returning transit IP %v to pool: %v", as.transit, err)
+		}
+	}
 }
 
 func (c *client) getConfig() config {
