@@ -27,6 +27,7 @@ import (
 	"tailscale.com/drive/driveimpl/compositedav"
 	"tailscale.com/drive/driveimpl/dirfs"
 	"tailscale.com/drive/driveimpl/shared"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/safesocket"
 	"tailscale.com/types/logger"
 )
@@ -199,11 +200,14 @@ func (s *FileSystemForRemote) buildChild(share *drive.Share) *compositedav.Child
 }
 
 // ServeHTTPWithPerms implements drive.FileSystemForRemote.
-func (s *FileSystemForRemote) ServeHTTPWithPerms(permissions drive.Permissions, w http.ResponseWriter, r *http.Request) {
+func (s *FileSystemForRemote) ServeHTTPWithPerms(authz drive.Authz, w http.ResponseWriter, r *http.Request) {
+	permissions := authz.Permissions
+	pathComponents := shared.CleanAndSplit(r.URL.Path)
+	shareName := pathComponents[0]
+
 	isWrite := writeMethods[r.Method]
 	if isWrite {
-		share := shared.CleanAndSplit(r.URL.Path)[0]
-		switch permissions.For(share) {
+		switch permissions.For(shareName) {
 		case drive.PermissionNone:
 			// If we have no permissions to this share, treat it as not found
 			// to avoid leaking any information about the share's existence.
@@ -216,16 +220,32 @@ func (s *FileSystemForRemote) ServeHTTPWithPerms(permissions drive.Permissions, 
 	}
 
 	s.mu.RLock()
+	var matchedShare *drive.Share
+	for _, sh := range s.shares {
+		if sh.Name == shareName {
+			matchedShare = sh
+			break
+		}
+	}
 	childrenMap := s.children
 	s.mu.RUnlock()
 
+	if s.maybeServeMagic(authz, matchedShare, pathComponents, w, r) {
+		return
+	}
+
 	children := make([]*compositedav.Child, 0, len(childrenMap))
-	// filter out shares to which the connecting principal has no access
+	// filter out shares to which the connecting principal has no access. The
+	// magic share, if present, is also excluded here so a peer with the
+	// share-level grant can't bypass per-dir filtering by hitting top-level
+	// dirs directly through compositedav: it's served only via serveMagic.
 	for name, child := range childrenMap {
 		if permissions.For(name) == drive.PermissionNone {
 			continue
 		}
-
+		if buildfeatures.HasDriveMagic && name == drive.MagicShareName {
+			continue
+		}
 		children = append(children, child)
 	}
 

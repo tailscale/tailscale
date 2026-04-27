@@ -68,7 +68,7 @@ func TestRequiredBy(t *testing.T) {
 	}{
 		{
 			in:   "drive",
-			want: setOf("drive"),
+			want: setOf("drive", "drive_magic"),
 		},
 		{
 			in:   "webclient",

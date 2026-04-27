@@ -48,6 +48,17 @@ type Share struct {
 	BookmarkData []byte `json:"bookmarkData,omitempty"`
 }
 
+// MagicShareName is the reserved share name for a magic share, where each
+// top-level directory name inside the share encodes its own ACL (see package
+// drive/magic). A share is treated as magic if and only if its Name equals
+// MagicShareName.
+const MagicShareName = "magic"
+
+// IsMagic reports whether s is a magic share.
+func (s *Share) IsMagic() bool {
+	return s != nil && s.Name == MagicShareName
+}
+
 func ShareViewsEqual(a, b ShareView) bool {
 	if !a.Valid() && !b.Valid() {
 		return true
@@ -102,9 +113,8 @@ type FileSystemForRemote interface {
 	SetShares(shares []*Share)
 
 	// ServeHTTPWithPerms behaves like the similar method from http.Handler but
-	// also accepts a Permissions map that captures the permissions of the
-	// connecting node.
-	ServeHTTPWithPerms(permissions Permissions, w http.ResponseWriter, r *http.Request)
+	// also accepts an Authz value capturing the peer's identity and permissions.
+	ServeHTTPWithPerms(authz Authz, w http.ResponseWriter, r *http.Request)
 
 	// Close() stops serving the WebDAV content
 	Close() error

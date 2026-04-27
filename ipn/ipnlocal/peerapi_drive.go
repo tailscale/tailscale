@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"tailscale.com/drive"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/httpm"
 )
@@ -53,6 +54,20 @@ func handleServeDrive(hi PeerAPIHandler, w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	var sharerLogin string
+	if buildfeatures.HasDriveMagic {
+		if nm := h.ps.b.NetMap(); nm != nil {
+			if up, ok := nm.UserProfiles[nm.User()]; ok {
+				sharerLogin = up.LoginName()
+			}
+		}
+	}
+	authz := drive.Authz{
+		PeerLogin:   strings.ToLower(h.peerUser.LoginName),
+		SharerLogin: strings.ToLower(sharerLogin),
+		Permissions: p,
+	}
+
 	fs, ok := h.ps.b.sys.DriveForRemote.GetOK()
 	if !ok {
 		h.logf("taildrive: not supported on platform")
@@ -86,7 +101,7 @@ func handleServeDrive(hi PeerAPIHandler, w http.ResponseWriter, r *http.Request)
 	}()
 
 	r.URL.Path = strings.TrimPrefix(r.URL.Path, taildrivePrefix)
-	fs.ServeHTTPWithPerms(p, wr, r)
+	fs.ServeHTTPWithPerms(authz, wr, r)
 }
 
 // parseDriveFileExtensionForLog parses the file extension, if available.

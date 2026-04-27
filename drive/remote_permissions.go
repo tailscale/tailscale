@@ -27,6 +27,23 @@ const (
 // set of shares.
 type Permissions map[string]Permission
 
+// Authz captures the authorization context for a request to
+// FileSystemForRemote: the peer's tailnet identity and per-share permissions,
+// plus the local node's tailnet identity (used for the magic share's
+// "sharer-in-name" rule).
+type Authz struct {
+	// PeerLogin is the requesting peer's tailnet LoginName (e.g.
+	// "alice@example.com"). Lowercased for case-insensitive matching.
+	PeerLogin string
+
+	// SharerLogin is the local (sharing) node's tailnet LoginName.
+	// Lowercased for case-insensitive matching.
+	SharerLogin string
+
+	// Permissions maps share name to the peer's permission on that share.
+	Permissions Permissions
+}
+
 type grant struct {
 	Shares []string
 	Access string

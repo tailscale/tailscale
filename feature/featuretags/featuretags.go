@@ -160,6 +160,11 @@ var Features = map[FeatureTag]FeatureMeta{
 	"desktop_sessions": {Sym: "DesktopSessions", Desc: "Desktop sessions support"},
 	"doctor":           {Sym: "Doctor", Desc: "Diagnose possible issues with Tailscale and its host environment"},
 	"drive":            {Sym: "Drive", Desc: "Tailscale Drive (file server) support"},
+	"drive_magic": {
+		Sym:  "DriveMagic",
+		Desc: "Taildrive \"magic\" share (directory-name-encoded ACLs)",
+		Deps: []FeatureTag{"drive"},
+	},
 	"gro": {
 		Sym:  "GRO",
 		Desc: "Generic Receive Offload support (performance)",

@@ -8,11 +8,13 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/drive"
+	"tailscale.com/feature/buildfeatures"
 )
 
 const (
@@ -80,10 +82,27 @@ func runDriveShare(ctx context.Context, args []string) error {
 		return err
 	}
 
-	err = localClient.DriveShareSet(ctx, &drive.Share{
+	share := &drive.Share{
 		Name: name,
 		Path: absolutePath,
-	})
+	}
+
+	// "magic" is a reserved share name (drive.MagicShareName). Magic shares
+	// are treated specially server-side: each top-level directory inside the
+	// share encodes its own ACL (see package drive/magic). The path must
+	// already exist and be a directory; for non-magic shares we leave that
+	// check to the backend.
+	if buildfeatures.HasDriveMagic && share.IsMagic() {
+		fi, err := os.Stat(absolutePath)
+		if err != nil {
+			return fmt.Errorf("magic share path: %w", err)
+		}
+		if !fi.IsDir() {
+			return fmt.Errorf("magic share path %q is not a directory", absolutePath)
+		}
+	}
+
+	err = localClient.DriveShareSet(ctx, share)
 	if err == nil {
 		fmt.Printf("Sharing %q as %q\n", path, name)
 	}
@@ -144,11 +163,19 @@ func runDriveList(ctx context.Context, args []string) error {
 			longestAs = len(share.As)
 		}
 	}
-	formatString := fmt.Sprintf("%%-%ds    %%-%ds    %%s\n", longestName, longestPath)
-	fmt.Printf(formatString, "name", "path", "as")
-	fmt.Printf(formatString, strings.Repeat("-", longestName), strings.Repeat("-", longestPath), strings.Repeat("-", longestAs))
+	formatString := fmt.Sprintf("%%-%ds    %%-%ds    %%-%ds    %%s\n", longestName, longestPath, longestAs)
+	fmt.Printf(formatString, "name", "path", "as", "type")
+	fmt.Printf(formatString,
+		strings.Repeat("-", longestName),
+		strings.Repeat("-", longestPath),
+		strings.Repeat("-", longestAs),
+		"----")
 	for _, share := range shares {
-		fmt.Printf(formatString, share.Name, share.Path, share.As)
+		typ := "normal"
+		if buildfeatures.HasDriveMagic && share.IsMagic() {
+			typ = "magic"
+		}
+		fmt.Printf(formatString, share.Name, share.Path, share.As, typ)
 	}
 
 	return nil

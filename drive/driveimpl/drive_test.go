@@ -438,6 +438,8 @@ type remote struct {
 	fileServer  *FileServer
 	shares      map[string]string
 	permissions map[string]drive.Permission
+	peerLogin   string
+	sharerLogin string
 	mu          sync.RWMutex
 }
 
@@ -452,7 +454,11 @@ func (r *remote) unfreeze() {
 func (r *remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	r.fs.ServeHTTPWithPerms(r.permissions, w, req)
+	r.fs.ServeHTTPWithPerms(drive.Authz{
+		PeerLogin:   r.peerLogin,
+		SharerLogin: r.sharerLogin,
+		Permissions: r.permissions,
+	}, w, req)
 }
 
 type system struct {
@@ -745,7 +751,7 @@ func pathTo(remote, share, name string) string {
 type noopAuthorizer struct{}
 
 func (a *noopAuthorizer) NewAuthenticator(body io.Reader) (gowebdav.Authenticator, io.Reader) {
-	return &noopAuthenticator{}, nil
+	return &noopAuthenticator{}, body
 }
 
 func (a *noopAuthorizer) AddAuthenticator(key string, fn gowebdav.AuthFactory) {

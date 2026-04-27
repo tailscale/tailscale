@@ -93,6 +93,17 @@ func TestOmitDrive(t *testing.T) {
 	}.Check(t)
 }
 
+func TestOmitDriveMagic(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_drive_magic,ts_include_cli",
+		BadDeps: map[string]string{
+			"tailscale.com/drive/magic": "unexpected dep with ts_omit_drive_magic",
+		},
+	}.Check(t)
+}
+
 func TestOmitPortmapper(t *testing.T) {
 	deptest.DepChecker{
 		GOOS:   "linux",
