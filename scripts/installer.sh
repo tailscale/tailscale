@@ -342,20 +342,14 @@ main() {
 				exit 1
 				;;
 			solus)
-				echo "Solus packages and maintains its own Tailscale build."
-				echo "Please install it with the native package manager:"
-				echo
-				echo "    sudo eopkg install tailscale"
-				echo
-				exit 1
+				OS="$ID"
+				VERSION="$VERSION_ID"
+				PACKAGETYPE="eopkg"
 				;;
 			aerynos|serpentos)
-				echo "AerynOS packages and maintains its own Tailscale build."
-				echo "Please install it with the native package manager:"
-				echo
-				echo "    sudo moss install tailscale"
-				echo
-				exit 1
+				OS="$ID"
+				VERSION="$VERSION_ID"
+				PACKAGETYPE="moss"
 				;;
 			kde-linux)
 				echo "The maintainers of KDE Linux provide documentation on multiple ways to install Tailscale. These instructions are not officially supported by Tailscale:"
@@ -722,6 +716,24 @@ main() {
 			else
 				$SUDO emerge --ask=n net-vpn/tailscale
 			fi
+			set +x
+			;;
+		eopkg)
+			set -x
+			if [ -n "$TAILSCALE_VERSION" ]; then
+				echo "Warning: Solus maintains their own Tailscale package. Version pinning may not work as expected, as the target version may no longer be available."
+			fi
+			$SUDO eopkg install -y tailscale
+			$SUDO systemctl enable --now tailscaled
+			set +x
+			;;
+		moss)
+			set -x
+			if [ -n "$TAILSCALE_VERSION" ]; then
+				echo "Warning: AerynOS maintains their own Tailscale package. Version pinning may not work as expected, as the target version may no longer be available."
+			fi
+			$SUDO moss install -y tailscale
+			$SUDO systemctl enable --now tailscaled
 			set +x
 			;;
 		appstore)
