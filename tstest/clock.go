@@ -20,6 +20,9 @@ type ClockOpts struct {
 	// to Clock.Now. If you are passing a value here, set an explicit
 	// timezone, otherwise the test may be non-deterministic when TZ environment
 	// variable is set to different values. The default time is in UTC.
+	//
+	// If you do not pass an explicit Start time, the clock will start at the
+	// current UTC time.
 	Start time.Time
 
 	// Step is the amount of time the Clock will advance whenever Clock.Now is
