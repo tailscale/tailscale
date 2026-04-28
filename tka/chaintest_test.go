@@ -320,6 +320,22 @@ func optTemplate(name string, template AUM) testchainOpt {
 	}
 }
 
+func genesisTemplate(key Key) testchainOpt {
+	return optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
+		Keys:              []Key{key},
+		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+	}})
+}
+
+func checkpointTemplate() testchainOpt {
+	fakeState := &State{
+		Keys:              []Key{{Kind: Key25519, Votes: 1}},
+		DisablementValues: [][]byte{bytes.Repeat([]byte{1}, 32)},
+	}
+
+	return optTemplate("checkpoint", AUM{MessageKind: AUMCheckpoint, State: fakeState})
+}
+
 func optKey(name string, key Key, priv ed25519.PrivateKey) testchainOpt {
 	return testchainOpt{
 		Name:    name,

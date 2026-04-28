@@ -304,10 +304,7 @@ func TestAuthorityValidDisablement(t *testing.T) {
 
         G1.template = genesis
     `,
-		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:              []Key{key},
-			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-		}}),
+		genesisTemplate(key),
 	)
 
 	a, _ := Open(c.Chonk())
@@ -419,10 +416,7 @@ func TestAuthorityInformNonLinear(t *testing.T) {
         L2.hashSeed = 2
         L4.hashSeed = 2
     `,
-		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:              []Key{key},
-			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-		}}),
+		genesisTemplate(key),
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
 
@@ -464,10 +458,7 @@ func TestAuthorityInformLinear(t *testing.T) {
 
         G1.template = genesis
     `,
-		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:              []Key{key},
-			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-		}}),
+		genesisTemplate(key),
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
 
@@ -545,10 +536,7 @@ func TestAuthorityCompact(t *testing.T) {
         G.template = genesis
         C.template = checkpoint2
     `,
-		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:              []Key{key},
-			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-		}}),
+		genesisTemplate(key),
 		optTemplate("checkpoint2", AUM{MessageKind: AUMCheckpoint, State: &State{
 			Keys:              []Key{key},
 			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
@@ -602,10 +590,7 @@ func TestFindParentForRewrite(t *testing.T) {
         C.template = add3
         D.template = remove2
     `,
-		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:              []Key{k1},
-			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-		}}),
+		genesisTemplate(k1),
 		optTemplate("add2", AUM{MessageKind: AUMAddKey, Key: &k2}),
 		optTemplate("add3", AUM{MessageKind: AUMAddKey, Key: &k3}),
 		optTemplate("remove2", AUM{MessageKind: AUMRemoveKey, KeyID: k2ID}))
@@ -671,10 +656,7 @@ func TestMakeRetroactiveRevocation(t *testing.T) {
         C.template = add2
         D.template = add3
     `,
-		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:              []Key{k1},
-			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-		}}),
+		genesisTemplate(k1),
 		optTemplate("add2", AUM{MessageKind: AUMAddKey, Key: &k2}),
 		optTemplate("add3", AUM{MessageKind: AUMAddKey, Key: &k3}))
 
