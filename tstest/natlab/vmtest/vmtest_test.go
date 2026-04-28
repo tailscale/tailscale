@@ -9,11 +9,14 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/tstest/natlab/vmtest"
 	"tailscale.com/tstest/natlab/vnet"
+	"tailscale.com/types/key"
 )
 
 func TestMacOSAndLinuxCanPing(t *testing.T) {
@@ -532,6 +535,226 @@ func TestExitNode(t *testing.T) {
 			tt.step.End(nil)
 		})
 	}
+}
+
+// TestDiscoKeyChange verifies that when one node's disco key rotates without
+// its WireGuard node key changing, peers detect the change, tear down stale
+// WireGuard session state for that peer, and re-establish the tunnel in both
+// directions. This exercises the disco-key-change handling that the
+// bradfitz/rm_lazy_wg branch relies on for traffic to and from a peer whose
+// magicsock state has been reset.
+//
+// Topology: two gokrazy nodes A and B, each on its own One2OneNAT network so
+// every connection between them is a direct UDP path with no port-mapping or
+// filtering. With NAT effects out of the way, what we measure here is the
+// speed of disco-key-change reconciliation in wgengine/magicsock alone. The
+// test control server is also configured with [testcontrol.Server.AllOnline]
+// (via [vmtest.AllOnline]) so the controlclient/wgengine fast paths that
+// branch on Online actually fire — without that flag the test exercises
+// only the offline-peer code paths, which mask separate latent issues and
+// are several seconds slower.
+//
+// The test runs four B-side rotations followed by a TSMP ping in the
+// requested direction:
+//
+//	rotate (LocalAPI rotate-disco-key) → ping B → A
+//	rotate (LocalAPI rotate-disco-key) → ping A → B
+//	restart  (SIGKILL tailscaled)      → ping B → A
+//	restart  (SIGKILL tailscaled)      → ping A → B
+//
+// Plus an initial A→B TSMP ping with a generous 30s budget to bring up the
+// WireGuard tunnel before the rotations begin (so the post-rotation pings
+// measure stale-state recovery, not first-time setup). All pings are TSMP
+// because TSMP traverses the actual WireGuard data plane; PingDisco only
+// exercises the magicsock disco layer and would mask any stale WG session
+// problems.
+//
+// Two rotation methods are exercised:
+//
+//   - LocalAPI rotate-disco-key (debug action): rolls B's magicsock disco
+//     private key in place, then bounces WantRunning to force wgengine to
+//     drop wireguard-go session keys for every peer (RotateDiscoKey alone
+//     only touches local disco state; without the WantRunning bounce, B
+//     keeps using stale per-peer session keys against A and A drops
+//     everything until B's WG rekey timer eventually fires).
+//   - SIGKILL of tailscaled (via TTA's /kill-tailscaled): the gokrazy
+//     supervisor respawns tailscaled, fully resetting B's magicsock and
+//     wgengine state in addition to rotating the disco key.
+//
+// Each post-rotation ping currently gets a 15-second budget. On a
+// hypothetical perfect build it should take well under a second. In
+// practice today there are two unavoidable multi-second waits:
+//
+//   - The rotate-then-a→b phase on main takes ~10s for LazyWG. After
+//     B's WantRunning bounce, B's wgengine resets its sentActivityAt/
+//     recvActivityAt maps and trims A out of the wireguard-go config
+//     as an "idle peer"; B only re-adds A on inbound activity, by
+//     which point A's first few TSMP packets have been silently
+//     dropped at B's tundev. The bradfitz/rm_lazy_wg branch removes
+//     that trimming entirely (verified locally), so this phase will
+//     drop to <100ms once that branch lands.
+//
+//   - The restart phases take ~5s for the wireguard-go handshake retry
+//     timer. After SIGKILL+respawn the first WG handshake init from
+//     the restarted node sometimes goes into the void (likely the
+//     brief peer-removed window in the receiver's two-step
+//     [wgengine.userspaceEngine.maybeReconfigWireguardLocked] reconfig
+//     during which the peer is absent from wireguard-go), and wg-go's
+//     [device.RekeyTimeout] of 5s + jitter is the next opportunity to
+//     retry. That retry succeeds and the staged TSMP packet flushes.
+//     This is intrinsic to the protocol's retransmit policy.
+//
+// Once LazyWG is removed and the first-handshake-after-reconfig race
+// is fixed, this budget should be tightened to 5s (or less).
+//
+// All four rotations also assert that B's WireGuard node key is unchanged.
+func TestDiscoKeyChange(t *testing.T) {
+	// AllOnline makes the test control server mark every peer as Online=true
+	// in its MapResponses. Several disco-key handling fast paths
+	// (controlclient.removeUnwantedDiscoUpdates,
+	// removeUnwantedDiscoUpdatesFromFullNetmapUpdate, and the wgengine
+	// tsmpLearnedDisco fast path) only fire for online peers. Production
+	// control servers always populate Online; without this flag the test
+	// would only exercise the offline-peer paths.
+	env := vmtest.New(t, vmtest.AllOnline())
+
+	// One2OneNAT so each node has a 1:1 mapping to a public WAN IP with no
+	// port-translation or address-port filtering. This makes A↔B traffic
+	// behave like two unfirewalled hosts on the public internet, so any
+	// slowness we observe in this test cannot be blamed on NAT traversal.
+	aNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.One2OneNAT)
+	bNet := env.AddNetwork("2.0.0.1", "192.168.2.1/24", vnet.One2OneNAT)
+
+	a := env.AddNode("a", aNet, vmtest.OS(vmtest.Gokrazy))
+	b := env.AddNode("b", bNet, vmtest.OS(vmtest.Gokrazy))
+
+	type phase struct {
+		name      string
+		rotate    func()
+		pingFrom  *vmtest.Node
+		pingTo    *vmtest.Node
+		applyStep *vmtest.Step
+		verify    *vmtest.Step
+		wait      *vmtest.Step
+		ping      *vmtest.Step
+	}
+	phases := []*phase{
+		{name: "rotate (LocalAPI), b → a", pingFrom: b, pingTo: a, rotate: func() { env.RotateDiscoKey(b) }},
+		{name: "rotate (LocalAPI), a → b", pingFrom: a, pingTo: b, rotate: func() { env.RotateDiscoKey(b) }},
+		{name: "restart, b → a", pingFrom: b, pingTo: a, rotate: func() { env.RestartTailscaled(b) }},
+		{name: "restart, a → b", pingFrom: a, pingTo: b, rotate: func() { env.RestartTailscaled(b) }},
+	}
+
+	pingABStep := env.AddStep("Ping a → b TSMP (establish tunnel)")
+	for _, p := range phases {
+		p.applyStep = env.AddStep("Apply: " + p.name)
+		p.verify = env.AddStep("Verify b: same node key, new disco key (" + p.name + ")")
+		p.wait = env.AddStep("Wait for a to see b's new disco key (" + p.name + ")")
+		p.ping = env.AddStep("Ping " + p.pingFrom.Name() + " → " + p.pingTo.Name() + " TSMP (" + p.name + ")")
+	}
+
+	env.Start()
+
+	pingABStep.Begin()
+	if err := env.Ping(a, b, tailcfg.PingTSMP, 30*time.Second); err != nil {
+		pingABStep.End(err)
+		t.Fatal(err)
+	}
+	pingABStep.End(nil)
+
+	bStInitial := env.Status(b)
+	bNodeKey := bStInitial.Self.PublicKey
+	cs := env.ControlServer()
+	bCtlNode := cs.Node(bNodeKey)
+	if bCtlNode == nil {
+		t.Fatalf("control server has no node for b's key %v", bNodeKey)
+	}
+	prevDisco := bCtlNode.DiscoKey
+	if prevDisco.IsZero() {
+		t.Fatalf("control server has no disco key for b before rotation")
+	}
+	t.Logf("[b] initial: nodekey=%s discokey=%s", bNodeKey.ShortString(), prevDisco.ShortString())
+
+	for _, p := range phases {
+		p.applyStep.Begin()
+		p.rotate()
+		p.applyStep.End(nil)
+		prevDisco = checkDiscoRotated(t, env, a, b, p.pingFrom, p.pingTo, bNodeKey, prevDisco, p.name,
+			p.verify, p.wait, p.ping)
+	}
+}
+
+// checkDiscoRotated verifies that after some action that should have rotated
+// b's disco key, control has learned the new key, b's node key is unchanged,
+// a's local view picks up the new disco key, and pingFrom can ping pingTo
+// (TSMP) within the budget. It returns b's new disco key and fatals on
+// failure.
+//
+// The TSMP ping budget is 15 seconds rather than the few hundred ms it
+// ought to take. See the top-level test docstring for a full breakdown:
+// it has to absorb LazyWG's trim+re-add for the rotate-a→b phase (~10s)
+// and wireguard-go's RekeyTimeout retry for the SIGKILL+restart phases
+// (~5s). Tighten this once both are addressed.
+func checkDiscoRotated(t *testing.T, env *vmtest.Env, a, b, pingFrom, pingTo *vmtest.Node, bNodeKey key.NodePublic, oldDisco key.DiscoPublic, label string, verifyStep, waitStep, pingStep *vmtest.Step) key.DiscoPublic {
+	t.Helper()
+	cs := env.ControlServer()
+
+	verifyStep.Begin()
+	bSt := env.Status(b)
+	if got := bSt.Self.PublicKey; got != bNodeKey {
+		err := fmt.Errorf("[%s] b's node key changed: %v -> %v", label, bNodeKey, got)
+		verifyStep.End(err)
+		t.Fatal(err)
+	}
+	var newDisco key.DiscoPublic
+	if err := tstest.WaitFor(15*time.Second, func() error {
+		n := cs.Node(bNodeKey)
+		if n == nil {
+			return fmt.Errorf("control server has no node for b")
+		}
+		if n.DiscoKey.IsZero() || n.DiscoKey == oldDisco {
+			return fmt.Errorf("control still has old disco key %v for b", n.DiscoKey)
+		}
+		newDisco = n.DiscoKey
+		return nil
+	}); err != nil {
+		verifyStep.End(err)
+		t.Fatalf("[%s] %v", label, err)
+	}
+	t.Logf("[b] after %s: nodekey=%s discokey=%s", label, bNodeKey.ShortString(), newDisco.ShortString())
+	verifyStep.End(nil)
+
+	waitStep.Begin()
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		d, ok, err := env.PeerDiscoKey(a, bNodeKey)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("a doesn't yet have b in its status")
+		}
+		if d != newDisco {
+			return fmt.Errorf("a still sees b's old disco %v, want %v", d.ShortString(), newDisco.ShortString())
+		}
+		return nil
+	}); err != nil {
+		waitStep.End(err)
+		env.DumpStatus(a)
+		t.Fatalf("[%s] %v", label, err)
+	}
+	waitStep.End(nil)
+
+	pingStep.Begin()
+	t0 := time.Now()
+	if err := env.Ping(pingFrom, pingTo, tailcfg.PingTSMP, 15*time.Second); err != nil {
+		pingStep.End(err)
+		env.DumpStatus(a)
+		env.DumpStatus(b)
+		t.Fatalf("[%s] %v", label, err)
+	}
+	t.Logf("[%s] ping %s -> %s succeeded in %v", label, pingFrom.Name(), pingTo.Name(), time.Since(t0).Round(100*time.Millisecond))
+	pingStep.End(nil)
+	return newDisco
 }
 
 // TestMullvadExitNode verifies that a Tailscale client whose netmap contains

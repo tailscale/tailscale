@@ -7093,9 +7093,26 @@ func (b *LocalBackend) DebugRotateDiscoKey() error {
 
 	b.mu.Lock()
 	cc := b.cc
+	wantRunning := b.pm.CurrentPrefs().WantRunning()
 	b.mu.Unlock()
 	if cc != nil {
 		cc.SetDiscoPublicKey(newDiscoKey)
+	}
+
+	// Bounce WantRunning to fully reset wireguard-go state for all peers.
+	if wantRunning {
+		if _, err := b.EditPrefs(&ipn.MaskedPrefs{
+			Prefs:          ipn.Prefs{WantRunning: false},
+			WantRunningSet: true,
+		}); err != nil {
+			return err
+		}
+		if _, err := b.EditPrefs(&ipn.MaskedPrefs{
+			Prefs:          ipn.Prefs{WantRunning: true},
+			WantRunningSet: true,
+		}); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -7103,6 +7120,25 @@ func (b *LocalBackend) DebugRotateDiscoKey() error {
 
 func (b *LocalBackend) DebugPeerRelayServers() set.Set[netip.Addr] {
 	return b.MagicConn().PeerRelays()
+}
+
+// DebugPeerDiscoKeys returns the disco public keys this node has learned for
+// each of its peers from the most recent network map. Intended for tests
+// (the production [ipnstate.PeerStatus] purposefully does not surface disco
+// keys; surfacing them via the [ipnstate.Status] API would also pollute
+// every PeerStatus consumer with a non-comparable struct field).
+func (b *LocalBackend) DebugPeerDiscoKeys() map[key.NodePublic]key.DiscoPublic {
+	nm := b.currentNode().NetMap()
+	if nm == nil {
+		return nil
+	}
+	m := make(map[key.NodePublic]key.DiscoPublic, len(nm.Peers))
+	for _, p := range nm.Peers {
+		if dk := p.DiscoKey(); !dk.IsZero() {
+			m[p.Key()] = dk
+		}
+	}
+	return m
 }
 
 // ControlKnobs returns the node's control knobs.

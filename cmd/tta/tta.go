@@ -391,6 +391,18 @@ func main() {
 		}
 		wgServerUp(w, r)
 	})
+	ttaMux.HandleFunc("/restart-tailscaled", func(w http.ResponseWriter, r *http.Request) {
+		if restartTailscaled == nil {
+			http.Error(w, "restart-tailscaled not supported on this platform", http.StatusNotImplemented)
+			return
+		}
+		pid, err := restartTailscaled()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprintf(w, "killed tailscaled pid %d (supervisor will respawn)\n", pid)
+	})
 	ttaMux.HandleFunc("/logs", func(w http.ResponseWriter, r *http.Request) {
 		logBuf.mu.Lock()
 		defer logBuf.mu.Unlock()
@@ -599,6 +611,11 @@ var addFirewall func() error // set by fw_linux.go
 // server on this VM. It is set by wgserver_linux.go and is nil on
 // non-Linux.
 var wgServerUp func(w http.ResponseWriter, r *http.Request)
+
+// restartTailscaled sends SIGKILL to the local tailscaled process so the
+// gokrazy supervisor restarts it. It is set by restart_tailscaled_linux.go
+// and is nil on non-Linux.
+var restartTailscaled func() (pid int, err error)
 
 // logBuffer is a bytes.Buffer that is safe for concurrent use
 // intended to capture early logs from the process, even if
