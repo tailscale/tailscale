@@ -48,7 +48,8 @@
   }: let
     goVersion = nixpkgs.lib.fileContents ./go.toolchain.version;
     toolChainRev = nixpkgs.lib.fileContents ./go.toolchain.rev;
-    gitHash = nixpkgs.lib.fileContents ./go.toolchain.rev.sri;
+    flakeHashes = builtins.fromJSON (builtins.readFile ./flakehashes.json);
+    gitHash = flakeHashes.toolchain.sri;
     eachSystem = f:
       nixpkgs.lib.genAttrs (import systems) (system:
         f (import nixpkgs {
@@ -103,7 +104,7 @@
         name = "tailscale";
         pname = "tailscale";
         src = ./.;
-        vendorHash = pkgs.lib.fileContents ./go.mod.sri;
+        vendorHash = flakeHashes.vendor.sri;
         nativeBuildInputs = [pkgs.makeWrapper pkgs.installShellFiles];
         ldflags = ["-X tailscale.com/version.gitCommitStamp=${tailscaleRev}"];
         env.CGO_ENABLED = 0;
