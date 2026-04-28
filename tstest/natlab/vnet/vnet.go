@@ -1077,8 +1077,7 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 			n, addr, err := uc.ReadFromUnix(buf)
 			raddr = addr
 			if err != nil {
-				if s.shutdownCtx.Err() != nil {
-					// Return without logging.
+				if s.shutdownCtx.Err() != nil || errors.Is(err, net.ErrClosed) {
 					return
 				}
 				s.logf("ReadFromUnix: %#v", err)
