@@ -120,6 +120,20 @@ h2 {
     color: #4af;
 }
 
+/* VM display screenshot */
+.screenshot:empty { display: none; }
+.screenshot {
+    margin-bottom: 4px;
+}
+.screenshot img {
+    width: 100%;
+    height: auto;
+    display: block;
+    border-radius: 4px;
+    border: 1px solid #222;
+    cursor: pointer;
+}
+
 /* Console output */
 .console {
     background: #0a0a0a;

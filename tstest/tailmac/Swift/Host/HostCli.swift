@@ -202,12 +202,6 @@ class ScreenshotHTTPServer: NSObject {
         let n = read(fd, &buf, buf.count)
         let requestLine = n > 0 ? String(bytes: buf[..<n], encoding: .utf8) ?? "" : ""
 
-        // Route: POST /keypress?key=<keycode> — send a key event to the VM.
-        if requestLine.contains("/keypress") {
-            handleKeypress(fd, requestLine)
-            return
-        }
-
         // Route: GET /screenshot — capture the VM display.
         let wantFull = requestLine.contains("full=1")
 

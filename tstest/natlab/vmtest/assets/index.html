@@ -47,6 +47,7 @@
             </div>
             {{end}}
         </div>
+        <div class="screenshot" id="screenshot-{{$node.Name}}">{{if $node.Screenshot}}<a href="/screenshot/{{$node.Name}}" target="_blank"><img src="{{$node.Screenshot}}"></a>{{end}}</div>
         <div class="console" id="console-{{$node.Name}}">{{range $node.Console}}{{ansi .}}
 {{end}}</div>
     </div>

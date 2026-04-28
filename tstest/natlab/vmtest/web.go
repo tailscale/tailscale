@@ -108,6 +108,7 @@ func (e *Env) maybeStartWebServer() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", e.serveIndex)
 	mux.HandleFunc("GET /ws", e.serveWebSocket)
+	mux.HandleFunc("GET /screenshot/{node}", e.serveScreenshot)
 	mux.HandleFunc("GET /style.css", serveStaticAsset("style.css"))
 
 	srv := &http.Server{Handler: mux}
@@ -153,6 +154,25 @@ func (e *Env) serveIndex(w http.ResponseWriter, r *http.Request) {
 	if err := tmpl().ExecuteTemplate(w, "index.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// serveScreenshot proxies a full-resolution screenshot from the Host.app
+// screenshot server. Returns raw JPEG with no HTML wrapper.
+func (e *Env) serveScreenshot(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("node")
+	port := e.nodeScreenshotPort(name)
+	if port == 0 {
+		http.Error(w, "no screenshot server for node", http.StatusNotFound)
+		return
+	}
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/screenshot?full=1", port))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", "image/jpeg")
+	io.Copy(w, resp.Body)
 }
 
 func (e *Env) serveWebSocket(w http.ResponseWriter, r *http.Request) {

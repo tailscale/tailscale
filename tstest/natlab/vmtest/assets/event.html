@@ -35,5 +35,11 @@
 <span id="ts-{{.NodeName}}" hx-swap-oob="innerHTML">{{.Detail}}</span>
 {{end}}
 
+{{if eq .Type "screenshot"}}
+<div id="screenshot-{{.NodeName}}" hx-swap-oob="innerHTML"><a href="/screenshot/{{.NodeName}}" target="_blank"><img src="data:image/jpeg;base64,{{.Message}}"></a></div>
+{{end}}
+
+{{if ne .Type "screenshot"}}
 <div id="events" hx-swap-oob="beforeend"><div class="event event-{{.Type}}"><span class="event-time">{{.Time.Format "15:04:05.000"}}</span> {{if .NodeName}}<span class="event-node">[{{.NodeName}}]</span> {{end}}<span class="event-msg">{{.Message}}</span>{{if .Detail}} <span class="event-detail">{{.Detail}}</span>{{end}}</div>
 </div>
+{{end}}

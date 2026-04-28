@@ -1198,6 +1198,34 @@ func (e *Env) HTTPGet(from *Node, targetURL string) string {
 	return ""
 }
 
+// setNodeScreenshot stores the latest screenshot data URI for a node.
+func (e *Env) setNodeScreenshot(name, dataURI string) {
+	e.nodeStatusMu.Lock()
+	if ns := e.nodeStatus[name]; ns != nil {
+		ns.Screenshot = dataURI
+	}
+	e.nodeStatusMu.Unlock()
+}
+
+// setNodeScreenshotPort stores the Host.app screenshot server port for a node.
+func (e *Env) setNodeScreenshotPort(name string, port int) {
+	e.nodeStatusMu.Lock()
+	if ns := e.nodeStatus[name]; ns != nil {
+		ns.ScreenshotPort = port
+	}
+	e.nodeStatusMu.Unlock()
+}
+
+// nodeScreenshotPort returns the Host.app screenshot server port for a node, or 0.
+func (e *Env) nodeScreenshotPort(name string) int {
+	e.nodeStatusMu.Lock()
+	defer e.nodeStatusMu.Unlock()
+	if ns := e.nodeStatus[name]; ns != nil {
+		return ns.ScreenshotPort
+	}
+	return 0
+}
+
 // Agent returns the node's TTA agent client, or nil if NoAgent is set.
 func (n *Node) Agent() *vnet.NodeAgentClient {
 	return n.agent

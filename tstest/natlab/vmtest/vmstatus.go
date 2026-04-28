@@ -139,6 +139,7 @@ const (
 	EventDHCPOffer     EventType = "dhcp_offer"     // server sent DHCP Offer
 	EventDHCPRequest   EventType = "dhcp_request"   // VM sent DHCP Request
 	EventDHCPAck       EventType = "dhcp_ack"       // server sent DHCP Ack
+	EventScreenshot    EventType = "screenshot"     // VM display screenshot (JPEG, base64)
 	EventTailscale     EventType = "tailscale"      // Tailscale status change
 	EventTestStatus    EventType = "test_status"    // test Running/Passed/Failed
 )
@@ -212,12 +213,14 @@ type NICStatus struct {
 // NodeStatus tracks the current DHCP and Tailscale state of a VM node
 // for rendering on the web UI's initial page load.
 type NodeStatus struct {
-	Name         string
-	OS           string
-	NICs         []NICStatus // one per NIC; index matches NIC index
-	JoinsTailnet bool        // whether this node runs Tailscale
-	Tailscale    string      // "--", "Up (100.64.0.1)", etc.
-	Console      []string    // recent console output lines (ring buffer)
+	Name           string
+	OS             string
+	NICs           []NICStatus // one per NIC; index matches NIC index
+	JoinsTailnet   bool        // whether this node runs Tailscale
+	Tailscale      string      // "--", "Up (100.64.0.1)", etc.
+	Console        []string    // recent console output lines (ring buffer)
+	Screenshot     string      // latest screenshot as data URI, or ""
+	ScreenshotPort int         // Host.app screenshot server port, or 0
 }
 
 const maxConsoleLines = 200
@@ -249,7 +252,11 @@ func (b *EventBus) Publish(ev VMEvent) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.history = append(b.history, ev)
+	// Don't store screenshots in history — they're large and only the
+	// latest one matters (stored in NodeStatus.Screenshot instead).
+	if ev.Type != EventScreenshot {
+		b.history = append(b.history, ev)
+	}
 	if len(b.history) > eventBusHistorySize {
 		// Trim old events.
 		copy(b.history, b.history[len(b.history)-eventBusHistorySize:])
