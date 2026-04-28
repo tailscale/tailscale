@@ -4,9 +4,13 @@
 package vmtest
 
 import (
+	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -168,11 +172,14 @@ func (e *Env) startTailMacVM(n *Node) error {
 	}
 	e.t.Cleanup(func() { os.RemoveAll(cloneDir) })
 
-	// Launch Host.app in headless mode with disconnected NIC,
-	// then hot-swap to the vnet dgram socket after boot.
 	hostBin := filepath.Join(e.tailmacDir, "Host.app", "Contents", "MacOS", "Host")
 	args := []string{
 		"run", "--id", testID, "--headless",
+	}
+
+	wantScreenshots := *vmtestWeb != ""
+	if wantScreenshots {
+		args = append(args, "--screenshot-port", "0")
 	}
 
 	logPath := filepath.Join(e.tempDir, n.name+"-tailmac.log")
@@ -182,11 +189,22 @@ func (e *Env) startTailMacVM(n *Node) error {
 	}
 
 	cmd := exec.Command(hostBin, args...)
-	// NSUnbufferedIO forces Swift/Foundation to unbuffer stdout so we can
-	// see output in the log file as it happens.
 	cmd.Env = append(os.Environ(), "NSUnbufferedIO=YES")
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
+
+	// If screenshots are enabled, we need to parse stdout for the
+	// SCREENSHOT_PORT=<port> line, while also logging everything to file.
+	var stdoutPipe io.ReadCloser
+	if wantScreenshots {
+		stdoutPipe, err = cmd.StdoutPipe()
+		if err != nil {
+			logFile.Close()
+			return fmt.Errorf("stdout pipe: %w", err)
+		}
+		cmd.Stderr = logFile
+	} else {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+	}
 	devNull, err := os.Open(os.DevNull)
 	if err != nil {
 		logFile.Close()
@@ -200,6 +218,36 @@ func (e *Env) startTailMacVM(n *Node) error {
 		return fmt.Errorf("starting tailmac for %s: %w", n.name, err)
 	}
 	e.t.Logf("[%s] launched tailmac (pid %d), log: %s", n.name, cmd.Process.Pid, logPath)
+
+	// Parse screenshot port from stdout and start polling goroutine.
+	if wantScreenshots {
+		screenshotPortCh := make(chan int, 1)
+		go func() {
+			scanner := bufio.NewScanner(stdoutPipe)
+			for scanner.Scan() {
+				line := scanner.Text()
+				fmt.Fprintln(logFile, line) // tee to log file
+				if port := 0; strings.HasPrefix(line, "SCREENSHOT_PORT=") {
+					fmt.Sscanf(line, "SCREENSHOT_PORT=%d", &port)
+					if port > 0 {
+						screenshotPortCh <- port
+					}
+				}
+			}
+		}()
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			select {
+			case port := <-screenshotPortCh:
+				e.t.Logf("[%s] screenshot server on port %d", n.name, port)
+				e.setNodeScreenshotPort(n.name, port)
+				e.tailScreenshots(n.name, port)
+			case <-ctx.Done():
+				e.t.Logf("[%s] screenshot port not received", n.name)
+			}
+		}()
+	}
 
 	clientSock := fmt.Sprintf("/tmp/qemu-dgram-%s.sock", testID)
 
@@ -233,4 +281,33 @@ func (e *Env) startTailMacVM(n *Node) error {
 	})
 
 	return nil
+}
+
+// tailScreenshots polls the Host.app screenshot HTTP server every 2 seconds
+// and publishes each screenshot as a base64 data URI to the web UI.
+func (e *Env) tailScreenshots(name string, port int) {
+	url := fmt.Sprintf("http://127.0.0.1:%d/screenshot", port)
+	client := &http.Client{Timeout: 5 * time.Second}
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		resp, err := client.Get(url)
+		if err != nil {
+			continue
+		}
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || len(data) == 0 {
+			continue
+		}
+		b64 := base64.StdEncoding.EncodeToString(data)
+		dataURI := "data:image/jpeg;base64," + b64
+		e.setNodeScreenshot(name, dataURI)
+		e.eventBus.Publish(VMEvent{
+			NodeName: name,
+			Type:     EventScreenshot,
+			Message:  b64,
+		})
+	}
 }
