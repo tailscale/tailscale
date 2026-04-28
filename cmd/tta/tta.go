@@ -313,6 +313,13 @@ func main() {
 		io.Copy(w, resp.Body)
 	})
 	ttaMux.HandleFunc("/fw", addFirewallHandler)
+	ttaMux.HandleFunc("/wg-server-up", func(w http.ResponseWriter, r *http.Request) {
+		if wgServerUp == nil {
+			http.Error(w, "wg-server-up not supported on this platform", http.StatusNotImplemented)
+			return
+		}
+		wgServerUp(w, r)
+	})
 	ttaMux.HandleFunc("/logs", func(w http.ResponseWriter, r *http.Request) {
 		logBuf.mu.Lock()
 		defer logBuf.mu.Unlock()
@@ -476,6 +483,11 @@ func addFirewallHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 var addFirewall func() error // set by fw_linux.go
+
+// wgServerUp brings up a userspace WireGuard "Mullvad-style" exit-node
+// server on this VM. It is set by wgserver_linux.go and is nil on
+// non-Linux.
+var wgServerUp func(w http.ResponseWriter, r *http.Request)
 
 // logBuffer is a bytes.Buffer that is safe for concurrent use
 // intended to capture early logs from the process, even if
