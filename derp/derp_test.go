@@ -353,7 +353,7 @@ func TestSendRecv(t *testing.T) {
 		}
 	}
 
-	serverMetrics := s.ExpVar().(*metrics.Set)
+	serverMetrics := s.ExpVar(false).(*metrics.Set)
 
 	wantActive := func(total, home int64) {
 		t.Helper()
