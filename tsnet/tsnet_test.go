@@ -1258,6 +1258,113 @@ func TestListenService(t *testing.T) {
 			},
 		},
 		{
+			// Test that [local.Client.WhoIs] lookups succeed for connections
+			// received by the Service listener.
+			name: "whois-TCP",
+			modes: []ServiceMode{
+				ServiceModeTCP{
+					Port: 99,
+				},
+			},
+			run: func(t *testing.T, listeners []*ServiceListener, peer *Server) {
+				go func() {
+					target := fmt.Sprintf("%s:%d", listeners[0].FQDN, 99)
+					conn, err := peer.Dial(t.Context(), "tcp", target)
+					if err != nil {
+						t.Error("dial error:", err)
+						return
+					}
+					t.Cleanup(func() { conn.Close() })
+				}()
+
+				conn, err := listeners[0].Accept()
+				if err != nil {
+					t.Fatal("accept error:", err)
+				}
+				defer conn.Close()
+
+				lc := listeners[0].s.localClient
+				resp, err := lc.WhoIs(t.Context(), conn.RemoteAddr().String())
+				if err != nil {
+					t.Fatal("whois lookup failed:", err)
+				}
+				if resp.Node.ID != peer.lb.NetMap().SelfNode.ID() {
+					t.Log("reported hostname:", resp.Node.Hostinfo.Hostname())
+					t.Fatalf("unexpected node ID for peer\nexpected %v, got %v", peer.lb.NetMap().SelfNode.ID(), resp.Node.ID)
+				}
+			},
+		},
+		{
+			name: "whois-HTTP",
+			modes: []ServiceMode{
+				ServiceModeHTTP{
+					Port: 80,
+				},
+			},
+			run: func(t *testing.T, listeners []*ServiceListener, peer *Server) {
+				go http.Serve(listeners[0], http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					resp, err := listeners[0].s.localClient.WhoIs(t.Context(), r.RemoteAddr)
+					if err != nil {
+						t.Error("whois lookup failed:", err)
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+					if resp.Node.ID != peer.lb.NetMap().SelfNode.ID() {
+						t.Log("reported hostname:", resp.Node.Hostinfo.Hostname())
+						t.Errorf("unexpected node ID for peer\nexpected %v, got %v", peer.lb.NetMap().SelfNode.ID(), resp.Node.ID)
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+				}))
+
+				resp, err := peer.HTTPClient().Get("http://" + listeners[0].FQDN)
+				if err != nil {
+					t.Fatal("GET error:", err)
+				}
+				defer resp.Body.Close()
+			},
+		},
+		{
+			name: "whois-HTTPS",
+			modes: []ServiceMode{
+				ServiceModeHTTP{
+					Port:  443,
+					HTTPS: true,
+				},
+			},
+			run: func(t *testing.T, listeners []*ServiceListener, peer *Server) {
+				go http.Serve(listeners[0], http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					resp, err := listeners[0].s.localClient.WhoIs(t.Context(), r.RemoteAddr)
+					if err != nil {
+						t.Error("whois lookup failed:", err)
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+					if resp.Node.ID != peer.lb.NetMap().SelfNode.ID() {
+						t.Log("reported hostname:", resp.Node.Hostinfo.Hostname())
+						t.Errorf("unexpected node ID for peer\nexpected %v, got %v", peer.lb.NetMap().SelfNode.ID(), resp.Node.ID)
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+				}))
+
+				c := http.Client{
+					Transport: &http.Transport{
+						DialContext: peer.Dial,
+						TLSClientConfig: &tls.Config{
+							ServerName: listeners[0].FQDN,
+							RootCAs:    testCertRoot.Pool(),
+						},
+					},
+				}
+				resp, err := c.Get("https://" + listeners[0].FQDN)
+				if err != nil {
+					t.Fatal("GET error:", err)
+				}
+				defer resp.Body.Close()
+			},
+		},
+		{
 			name: "multiple_ports",
 			modes: []ServiceMode{
 				ServiceModeTCP{

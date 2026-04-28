@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -22,9 +23,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	gocmp "github.com/google/go-cmp/cmp"
 
 	"tailscale.com/control/controlclient"
 	"tailscale.com/health"
@@ -1453,6 +1457,254 @@ func TestServeHTTPRedirect(t *testing.T) {
 	}
 }
 
+// TestServeWithWhoIs ensures that WhoIs lookups function for connections
+// proxied through serve.
+func TestServeWithWhoIs(t *testing.T) {
+	tests := []struct {
+		name string
+
+		// tcpCfg and httpCfg define the serve configuration to test. Exactly
+		// one of these should be non-nil.
+		tcpCfg  func(backAddr string) *ipn.TCPPortHandler
+		httpCfg func(backAddr string) (*ipn.TCPPortHandler, *ipn.HTTPHandler)
+
+		// service indicates whether to serve a Tailscale Service, as oppposed
+		// to serving the node address itself.
+		service bool
+
+		// fourViaSix indicates whether to serve a 4via6 destination.
+		fourViaSix bool
+	}{
+		{
+			name: "TCP",
+			tcpCfg: func(backAddr string) *ipn.TCPPortHandler {
+				return &ipn.TCPPortHandler{
+					TCPForward: backAddr,
+				}
+			},
+		},
+		{
+			name: "HTTP",
+			httpCfg: func(backAddr string) (*ipn.TCPPortHandler, *ipn.HTTPHandler) {
+				return &ipn.TCPPortHandler{
+						HTTP: true,
+					}, &ipn.HTTPHandler{
+						Proxy: backAddr,
+					}
+			},
+		},
+		{
+			name: "TCP_Service",
+			tcpCfg: func(backAddr string) *ipn.TCPPortHandler {
+				return &ipn.TCPPortHandler{
+					TCPForward: backAddr,
+				}
+			},
+			service: true,
+		},
+		{
+			name: "HTTP_Service",
+			httpCfg: func(backAddr string) (*ipn.TCPPortHandler, *ipn.HTTPHandler) {
+				return &ipn.TCPPortHandler{
+						HTTP: true,
+					}, &ipn.HTTPHandler{
+						Proxy: backAddr,
+					}
+			},
+			service: true,
+		},
+		{
+			name: "TCP_4via6",
+			tcpCfg: func(backAddr string) *ipn.TCPPortHandler {
+				return &ipn.TCPPortHandler{
+					TCPForward: backAddr,
+				}
+			},
+			fourViaSix: true,
+		},
+		{
+			name: "HTTP_4via6",
+			httpCfg: func(backAddr string) (*ipn.TCPPortHandler, *ipn.HTTPHandler) {
+				return &ipn.TCPPortHandler{
+						HTTP: true,
+					}, &ipn.HTTPHandler{
+						Proxy: backAddr,
+					}
+			},
+			fourViaSix: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			const servePort = 99
+
+			switch {
+			case tt.tcpCfg == nil && tt.httpCfg == nil, tt.tcpCfg != nil && tt.httpCfg != nil:
+				t.Fatal("exactly one of tcpCfg or httpCfg must be non-nil")
+			}
+			httpTest := tt.httpCfg != nil
+
+			// == Set up a local backend and a netmap with a peer we can look up ==
+
+			magicDNSSuffix := "example.ts.net"
+			hostNodeDNSName := "host-node" + "." + magicDNSSuffix
+			hostAddr := netip.MustParsePrefix("100.150.151.151/32")
+			clientAddr := netip.MustParsePrefix("100.150.151.152/32")
+
+			// Only used in tests with tt.service == true
+			serviceName := tailcfg.ServiceName("svc:foo")
+			serviceIP := netip.MustParsePrefix("100.152.99.99/32")
+			serviceDNSName := serviceName.WithoutPrefix() + "." + magicDNSSuffix
+
+			clientProfile := (&tailcfg.UserProfile{
+				LoginName:     "someone@example.com",
+				DisplayName:   "Some One",
+				ProfilePicURL: "https://example.com/photo.jpg",
+			}).View()
+			clientDevice := (&tailcfg.Node{
+				ID:           152,
+				ComputedName: "some-peer",
+				User:         tailcfg.UserID(1),
+				Key:          makeNodeKeyFromID(152),
+				Addresses:    []netip.Prefix{clientAddr},
+			}).View()
+
+			lb := newTestBackend(t)
+			pm := must.Get(newProfileManager(new(mem.Store), lb.logf, health.NewTracker(lb.sys.Bus.Get())))
+			pm.currentProfile = (&ipn.LoginProfile{
+				ID: "id0",
+				NetworkProfile: ipn.NetworkProfile{
+					MagicDNSName: magicDNSSuffix,
+				},
+			}).View()
+			lb.mu.Lock()
+			lb.pm = pm
+			lb.setNetMapLocked(&netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Name: hostNodeDNSName + ".",
+					Addresses: []netip.Prefix{
+						hostAddr,
+					},
+					CapMap: tailcfg.NodeCapMap{
+						tailcfg.NodeAttrServiceHost: []tailcfg.RawMessage{
+							tailcfg.RawMessage(fmt.Sprintf(`{"%v":["%v"]}`, serviceName, serviceIP.Addr())),
+						},
+					},
+				}).View(),
+				UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+					tailcfg.UserID(1): clientProfile,
+				},
+				Peers: []tailcfg.NodeView{
+					clientDevice,
+				},
+			})
+			lb.mu.Unlock()
+
+			checkWhoIs := func(lb *LocalBackend, remoteAddr string) error {
+				remote := netip.MustParseAddrPort(remoteAddr)
+				n, u, ok := lb.WhoIs("tcp", remote)
+				if !ok {
+					return errors.New("no matching peer")
+				}
+				if diff := gocmp.Diff(n, clientDevice); diff != "" {
+					return fmt.Errorf("unexpected node result: (+got, -want):\n%s", diff)
+				}
+				if diff := gocmp.Diff(u.View(), clientProfile); diff != "" {
+					return fmt.Errorf("unexpected user result: (+got, -want):\n%s", diff)
+				}
+				return nil
+			}
+
+			// == Start a back listener and set up serve config pointed at it ==
+
+			backLn := must.Get(net.Listen("tcp4", "localhost:0"))
+			backLnAddr := backLn.Addr().String()
+			defer backLn.Close()
+			if tt.fourViaSix {
+				backAddrAs4In6 := must.Get(map4In6(netip.MustParseAddrPort(backLnAddr)))
+				backLnAddr = backAddrAs4In6.String()
+				lb.dialer.SetSystemDialerForTest(dialWithFake4In6)
+			}
+
+			httpServeAddr := ipn.HostPort(hostNodeDNSName + ":" + strconv.Itoa(servePort))
+			if tt.service {
+				httpServeAddr = ipn.HostPort(serviceDNSName + ":" + strconv.Itoa(servePort))
+			}
+
+			var srvCfg ipn.ServeConfig
+			tcpHandlers := &srvCfg.TCP
+			webHandlers := &srvCfg.Web
+			if tt.service {
+				var svcCfg ipn.ServiceConfig
+				tcpHandlers = &svcCfg.TCP
+				webHandlers = &svcCfg.Web
+				mak.Set(&srvCfg.Services, serviceName, &svcCfg)
+			}
+			if httpTest {
+				go http.Serve(backLn, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if err := checkWhoIs(lb, r.RemoteAddr); err != nil {
+						w.WriteHeader(http.StatusInternalServerError)
+						fmt.Fprint(w, err)
+					}
+				}))
+				tcpph, httph := tt.httpCfg(backLnAddr)
+				mak.Set(tcpHandlers, servePort, tcpph)
+				mak.Set(webHandlers, httpServeAddr, &ipn.WebServerConfig{
+					Handlers: map[string]*ipn.HTTPHandler{
+						"/": httph,
+					},
+				})
+			} else {
+				mak.Set(tcpHandlers, servePort, tt.tcpCfg(backLnAddr))
+			}
+			must.Do(lb.SetServeConfig(&srvCfg, ""))
+
+			// == Simulate an inbound connection and try a WhoIs lookup ==
+
+			simulatedSrcAddr := netip.AddrPortFrom(clientAddr.Addr(), 1234)
+			handleTCP := lb.tcpHandlerForServe(servePort, simulatedSrcAddr, nil)
+			if tt.service {
+				dst := netip.AddrPortFrom(serviceIP.Addr(), servePort)
+				handleTCP = lb.tcpHandlerForVIPService(dst, simulatedSrcAddr)
+			}
+			if handleTCP == nil {
+				t.Fatal("unexpected nil TCP handler")
+			}
+
+			clientSide, serverSide := net.Pipe()
+			defer clientSide.Close()
+			defer serverSide.Close()
+			go handleTCP(serverSide)
+
+			// To test HTTP, we need to trigger request proxying, which means
+			// sending an HTTP request through the pipe. Testing TCP requires
+			// only an established connection, which we've already simulated.
+			if httpTest {
+				client := http.Client{
+					Transport: &http.Transport{
+						DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+							return clientSide, nil
+						},
+					},
+				}
+				resp := must.Get(client.Get("http://" + string(httpServeAddr)))
+				defer resp.Body.Close()
+				if resp.StatusCode != http.StatusOK {
+					t.Fatal("WhoIs lookup error:", string(must.Get(io.ReadAll(resp.Body))))
+				}
+			} else {
+				forwardedConn := must.Get(backLn.Accept())
+				defer forwardedConn.Close()
+				if err := checkWhoIs(lb, forwardedConn.RemoteAddr().String()); err != nil {
+					t.Fatal("WhoIs lookup error:", err)
+				}
+			}
+		})
+	}
+}
+
 func TestValidateServeConfigUpdate(t *testing.T) {
 	tests := []struct {
 		name, description  string
@@ -1763,4 +2015,73 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// addr implements net.Addr.
+type addr struct {
+	network, addr string
+}
+
+func (a addr) Network() string { return a.network }
+func (a addr) String() string  { return a.addr }
+
+// connWithCustomAddrs is a net.Conn with custom addresses.
+type connWithCustomAddrs struct {
+	net.Conn
+	local, remote addr
+}
+
+func (conn connWithCustomAddrs) LocalAddr() net.Addr  { return conn.local }
+func (conn connWithCustomAddrs) RemoteAddr() net.Addr { return conn.remote }
+
+// map4In6 maps an IPv4 into an IPv6 address according to
+// https://www.rfc-editor.org/rfc/rfc4291.html#section-2.5.5.2
+func map4In6(addr netip.AddrPort) (netip.AddrPort, error) {
+	if !addr.Addr().Is4() {
+		return netip.AddrPort{}, errors.New("addr must be an IPv4 address")
+	}
+	ipv4 := addr.Addr().As4()
+	mapped := [16]byte{}
+	mapped[10], mapped[11] = 0xff, 0xff
+	copy(mapped[12:16], ipv4[:])
+	return netip.AddrPortFrom(netip.AddrFrom16(mapped), addr.Port()), nil
+}
+
+// dialWithFake4In6 behaves like [net.Dialer.DialContext], except in the case
+// of IPv4 addresses mapped as IPv6 addresses. These addresses will be unmapped
+// before dialing, thus dialing the embedded IPv4 address. The net.Conn returned
+// will have IPv6 remote and local addresses. The remote will be the input
+// address and the local will be the true IPv4 local address mapped as an IPv6
+// address. This is useful in tests when one wants to pretend to be on an
+// IPv6-only network.
+func dialWithFake4In6(ctx context.Context, network, address string) (net.Conn, error) {
+	addrPort, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("parsing addr: %w", err)
+	}
+	if !addrPort.Addr().Is4In6() {
+		return (&net.Dialer{}).DialContext(ctx, network, address)
+	}
+
+	unmappedRemote := netip.AddrPortFrom(addrPort.Addr().Unmap(), addrPort.Port())
+	conn, err := (&net.Dialer{}).DialContext(ctx, network, unmappedRemote.String())
+	if err != nil {
+		return nil, err
+	}
+	mappedLocal, err := map4In6(netip.MustParseAddrPort(conn.LocalAddr().String()))
+	if err != nil {
+		return nil, fmt.Errorf("mapping local addr into IPv6: %w", err)
+	}
+	conn = connWithCustomAddrs{
+		Conn: conn,
+		local: addr{
+			network: network,
+			addr:    mappedLocal.String(),
+		},
+		remote: addr{
+			network: network,
+			addr:    address,
+		},
+	}
+	return conn, nil
 }
