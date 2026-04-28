@@ -1140,6 +1140,9 @@ type postRoutesRequest struct {
 }
 
 func (s *Server) servePostRoutes(ctx context.Context, data postRoutesRequest) error {
+	if !data.SetExitNode && !data.SetRoutes {
+		return errors.New("must specify SetExitNode or SetRoutes")
+	}
 	prefs, err := s.lc.GetPrefs(ctx)
 	if err != nil {
 		return err
@@ -1153,12 +1156,13 @@ func (s *Server) servePostRoutes(ctx context.Context, data postRoutesRequest) er
 		}
 		currNonExitRoutes = append(currNonExitRoutes, r.String())
 	}
-	// Set non-edited fields to their current values.
-	if data.SetExitNode {
-		data.AdvertiseRoutes = currNonExitRoutes
-	} else if data.SetRoutes {
+	// For each group of fields not being set, preserve the current prefs.
+	if !data.SetExitNode {
 		data.AdvertiseExitNode = currAdvertisingExitNode
 		data.UseExitNode = prefs.ExitNodeID
+	}
+	if !data.SetRoutes {
+		data.AdvertiseRoutes = currNonExitRoutes
 	}
 
 	// Calculate routes.
