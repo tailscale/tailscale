@@ -7,6 +7,8 @@
 package kube
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 
 	"tailscale.com/tailcfg"
@@ -49,4 +51,18 @@ func CapVerFromFileName(name string) (tailcfg.CapabilityVersion, error) {
 	var cap tailcfg.CapabilityVersion
 	_, err := fmt.Sscanf(name, "cap-%d.hujson", &cap)
 	return cap, err
+}
+
+// TruncateLabelValue truncates a Kubernetes label value to fit within the
+// 63-character limit. If the value exceeds the limit, it is truncated and a
+// short hash suffix is appended to preserve uniqueness.
+func TruncateLabelValue(val string) string {
+	const maxLen = 63
+	if len(val) <= maxLen {
+		return val
+	}
+	hash := sha256.Sum256([]byte(val))
+	suffix := hex.EncodeToString(hash[:4]) // 8 hex chars
+	truncated := val[:maxLen-len(suffix)-1]
+	return truncated + "-" + suffix
 }
