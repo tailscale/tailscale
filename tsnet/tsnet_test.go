@@ -1530,6 +1530,100 @@ func TestListenService(t *testing.T) {
 			}
 		}
 	})
+
+	// TODO(hwh33):
+	// - cover TCP in this test
+	// - get rid of WhoIs tests above
+	t.Run("whois", func(t *testing.T) {
+		ctx := t.Context()
+
+		const serviceName = "svc:foo"
+
+		controlURL, control := startControl(t)
+		serviceHost, _, _ := startServer(t, ctx, controlURL, "service-host")
+
+		client1, _, _ := startServer(t, ctx, controlURL, "client1")
+		client2, _, _ := startServer(t, ctx, controlURL, "client2")
+
+		extraSetup := func(_ *testing.T, _ *testcontrol.Server) {
+			// setUpServiceState already handles this for client1
+			must.Get(client2.localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
+				RouteAllSet: true,
+				Prefs: ipn.Prefs{
+					RouteAll: true,
+				},
+			}))
+		}
+		setUpServiceState(t, serviceName, "1.2.3.4", serviceHost, client1, control, extraSetup)
+
+		client1NodeID := client1.lb.NetMap().SelfNode.ID()
+		client2NodeID := client2.lb.NetMap().SelfNode.ID()
+
+		ln := must.Get(serviceHost.ListenService(serviceName, ServiceModeHTTP{
+			Port: 80,
+		}))
+		defer ln.Close()
+
+		go http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, r.RemoteAddr)
+		}))
+
+		resp := must.Get(client1.HTTPClient().Get("http://" + ln.FQDN))
+		remote := string(must.Get(io.ReadAll(resp.Body)))
+		resp.Body.Close()
+
+		whoIsResp, err := serviceHost.localClient.WhoIs(ctx, remote)
+		if err != nil {
+			t.Fatal("whois lookup failed:", err)
+		}
+		if whoIsResp.Node.ID != client1NodeID {
+			t.Log("reported hostname:", whoIsResp.Node.Hostinfo.Hostname())
+			t.Fatalf("unexpected node ID for peer\nexpected %v, got %v", client1NodeID, whoIsResp.Node.ID)
+		}
+
+		// Now we want to trigger any possible connection pooling and ensure our
+		// WhoIs lookups still work. We trigger connection pooling by opening a
+		// request and neglecting to read or close the body. Idle timeouts
+		// probably make this unnecessary, but it can't hurt.
+		openConn := make(chan struct{})
+		go func() {
+			resp := must.Get(client1.HTTPClient().Get("http://" + ln.FQDN))
+			close(openConn)
+			<-t.Context().Done()
+			resp.Body.Close()
+		}()
+		<-openConn
+
+		// client2 lookups should work even if client1 has a connection open.
+
+		resp = must.Get(client2.HTTPClient().Get("http://" + ln.FQDN))
+		remote = string(must.Get(io.ReadAll(resp.Body)))
+		resp.Body.Close()
+
+		whoIsResp, err = serviceHost.localClient.WhoIs(ctx, remote)
+		if err != nil {
+			t.Fatal("whois lookup failed:", err)
+		}
+		if whoIsResp.Node.ID != client2NodeID {
+			t.Log("reported hostname:", whoIsResp.Node.Hostinfo.Hostname())
+			t.Fatalf("unexpected node ID for peer\nexpected %v, got %v", client1NodeID, whoIsResp.Node.ID)
+		}
+
+		// client1 lookups should still work too.
+
+		resp = must.Get(client1.HTTPClient().Get("http://" + ln.FQDN))
+		remote = string(must.Get(io.ReadAll(resp.Body)))
+		resp.Body.Close()
+
+		whoIsResp, err = serviceHost.localClient.WhoIs(ctx, remote)
+		if err != nil {
+			t.Fatal("whois lookup failed:", err)
+		}
+		if whoIsResp.Node.ID != client1NodeID {
+			t.Log("reported hostname:", whoIsResp.Node.Hostinfo.Hostname())
+			t.Fatalf("unexpected node ID for peer\nexpected %v, got %v", client1NodeID, whoIsResp.Node.ID)
+		}
+	})
 }
 
 func TestListenServiceClose(t *testing.T) {
