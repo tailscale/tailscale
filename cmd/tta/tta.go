@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -262,6 +263,72 @@ func main() {
 			}
 		}()
 		io.WriteString(w, "OK\n")
+	})
+	ttaMux.HandleFunc("/taildrop-send", func(w http.ResponseWriter, r *http.Request) {
+		to := r.URL.Query().Get("to") // peer's Tailscale IP
+		name := r.URL.Query().Get("name")
+		if to == "" || name == "" {
+			http.Error(w, "missing to or name", http.StatusBadRequest)
+			return
+		}
+		if strings.ContainsAny(name, "/\\") {
+			http.Error(w, "bad name", http.StatusBadRequest)
+			return
+		}
+		dir, err := os.MkdirTemp("", "taildrop-send-")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer os.RemoveAll(dir)
+		path := filepath.Join(dir, name)
+		f, err := os.Create(path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if _, err := io.Copy(f, r.Body); err != nil {
+			f.Close()
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := f.Close(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		serveCmd(w, "tailscale", "file", "cp", path, to+":")
+	})
+	ttaMux.HandleFunc("/taildrop-recv", func(w http.ResponseWriter, r *http.Request) {
+		dir, err := os.MkdirTemp("", "taildrop-recv-")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer os.RemoveAll(dir)
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, absify("tailscale"), "file", "get", "--wait", dir)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			http.Error(w, fmt.Sprintf("tailscale file get: %v\n%s", err, out), http.StatusInternalServerError)
+			return
+		}
+		ents, err := os.ReadDir(dir)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(ents) != 1 {
+			http.Error(w, fmt.Sprintf("got %d files, want 1", len(ents)), http.StatusInternalServerError)
+			return
+		}
+		data, err := os.ReadFile(filepath.Join(dir, ents[0].Name()))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Taildrop-Filename", ents[0].Name())
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write(data)
 	})
 	ttaMux.HandleFunc("/http-get", func(w http.ResponseWriter, r *http.Request) {
 		targetURL := r.URL.Query().Get("url")

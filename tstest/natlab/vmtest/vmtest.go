@@ -16,6 +16,7 @@
 package vmtest
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"flag"
@@ -75,6 +76,8 @@ type Env struct {
 	gokrazyKernel string // path to gokrazy kernel
 
 	qemuProcs []*exec.Cmd // launched QEMU processes
+
+	sameTailnetUser bool // all nodes register as the same Tailnet user
 
 	// Web UI support.
 	ctx        context.Context // cancelled when test ends
@@ -233,8 +236,10 @@ func (e *Env) nodeNameByNum(num int) string {
 	return fmt.Sprintf("node%d", num)
 }
 
-// New creates a new test environment. It skips the test if --run-vm-tests is not set.
-func New(t testing.TB) *Env {
+// New creates a new test environment. It skips the test if --run-vm-tests is
+// not set. opts may contain [EnvOption] values returned by helpers like
+// [SameTailnetUser].
+func New(t testing.TB, opts ...EnvOption) *Env {
 	if !*runVMTests {
 		t.Skip("skipping VM test; set --run-vm-tests to run")
 	}
@@ -248,6 +253,9 @@ func New(t testing.TB) *Env {
 		testStatus: newTestStatus(),
 		nodeStatus: make(map[string]*NodeStatus),
 	}
+	for _, o := range opts {
+		o.applyTo(e)
+	}
 	t.Cleanup(func() {
 		e.testStatus.finish(t.Failed())
 		e.eventBus.Publish(VMEvent{
@@ -257,6 +265,23 @@ func New(t testing.TB) *Env {
 		})
 	})
 	return e
+}
+
+// EnvOption configures an [Env] in [New].
+type EnvOption interface {
+	applyTo(*Env)
+}
+
+type envOptFunc func(*Env)
+
+func (f envOptFunc) applyTo(e *Env) { f(e) }
+
+// SameTailnetUser returns an [EnvOption] that makes every node register with
+// the test control server as the same Tailnet user. This is needed for
+// cross-node features that require a same-user relationship — Taildrop, for
+// example.
+func SameTailnetUser() EnvOption {
+	return envOptFunc(func(e *Env) { e.sameTailnetUser = true })
 }
 
 // AddNetwork creates a new virtual network. Arguments follow the same pattern as
@@ -543,6 +568,10 @@ func (e *Env) Start() {
 			})
 		}
 	})
+
+	if e.sameTailnetUser {
+		e.server.ControlServer().AllNodesSameUser = true
+	}
 
 	// Register compiled binaries with the file server VIP.
 	// Binaries are registered at <goos>_<goarch>/<name> (e.g. "linux_amd64/tta").
@@ -1092,6 +1121,69 @@ func (e *Env) HTTPGet(from *Node, targetURL string) string {
 	}
 	e.t.Fatalf("HTTPGet from %s to %s: all attempts failed", from.name, targetURL)
 	return ""
+}
+
+// SendTaildropFile sends a file via Taildrop from one node to another.
+// The to node must be on the tailnet. It fatals on error.
+func (e *Env) SendTaildropFile(from, to *Node, name string, content []byte) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	st, err := to.agent.Status(ctx)
+	if err != nil {
+		e.t.Fatalf("SendTaildropFile: status for %s: %v", to.name, err)
+	}
+	if len(st.Self.TailscaleIPs) == 0 {
+		e.t.Fatalf("SendTaildropFile: %s has no Tailscale IPs", to.name)
+	}
+	target := st.Self.TailscaleIPs[0].String()
+
+	reqURL := fmt.Sprintf("http://unused/taildrop-send?to=%s&name=%s", target, name)
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, bytes.NewReader(content))
+	if err != nil {
+		e.t.Fatalf("SendTaildropFile: %v", err)
+	}
+	res, err := from.agent.HTTPClient.Do(req)
+	if err != nil {
+		e.t.Fatalf("SendTaildropFile(%s -> %s): %v", from.name, to.name, err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 {
+		e.t.Fatalf("SendTaildropFile(%s -> %s): %s: %s", from.name, to.name, res.Status, body)
+	}
+	if msg := strings.TrimSpace(string(body)); msg != "" {
+		e.t.Logf("[%s] %s", from.name, msg)
+	}
+	e.t.Logf("[%s] sent Taildrop %q (%d bytes) to %s", from.name, name, len(content), to.name)
+}
+
+// RecvTaildropFile waits for an incoming Taildrop file on the node and
+// returns the filename and contents. The provided context bounds the wait;
+// in addition, RecvTaildropFile imposes its own 90s upper bound. It fatals
+// on error or timeout.
+func (e *Env) RecvTaildropFile(ctx context.Context, n *Node) (name string, content []byte) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://unused/taildrop-recv", nil)
+	if err != nil {
+		e.t.Fatalf("RecvTaildropFile: %v", err)
+	}
+	res, err := n.agent.HTTPClient.Do(req)
+	if err != nil {
+		e.t.Fatalf("RecvTaildropFile(%s): %v", n.name, err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 {
+		e.t.Fatalf("RecvTaildropFile(%s): %s: %s", n.name, res.Status, body)
+	}
+	name = res.Header.Get("Taildrop-Filename")
+	e.t.Logf("[%s] received Taildrop %q (%d bytes)", n.name, name, len(body))
+	return name, body
 }
 
 var buildGokrazy sync.Once

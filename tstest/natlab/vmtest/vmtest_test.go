@@ -4,6 +4,7 @@
 package vmtest_test
 
 import (
+	"bytes"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -361,6 +362,58 @@ func TestSubnetRouterAndExitNode(t *testing.T) {
 			tc.step.End(nil)
 		})
 	}
+}
+
+// TestTaildrop verifies that one Ubuntu node can send a file to another
+// Ubuntu node via Taildrop, and the receiver gets the same content.
+//
+// Topology: two Ubuntu nodes, each behind its own EasyNAT, both joined to the
+// tailnet. The sender runs `tailscale file cp` to push to the receiver's
+// Tailscale IP; the receiver then runs `tailscale file get --wait` to fetch
+// it.
+func TestTaildrop(t *testing.T) {
+	env := vmtest.New(t, vmtest.SameTailnetUser())
+
+	senderNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.EasyNAT)
+	receiverNet := env.AddNetwork("2.0.0.1", "192.168.2.1/24", vnet.EasyNAT)
+
+	sender := env.AddNode("sender", senderNet,
+		vmtest.OS(vmtest.Ubuntu2404))
+	receiver := env.AddNode("receiver", receiverNet,
+		vmtest.OS(vmtest.Ubuntu2404))
+
+	// Declare test-specific steps for the web UI.
+	sendStep := env.AddStep("Taildrop send (sender -> receiver)")
+	recvStep := env.AddStep("Taildrop receive (on receiver)")
+	verifyStep := env.AddStep("Verify received name and contents")
+
+	env.Start()
+
+	const filename = "hello.txt"
+	want := []byte("hello world this is a Taildrop test\n")
+
+	sendStep.Begin()
+	env.SendTaildropFile(sender, receiver, filename, want)
+	sendStep.End(nil)
+
+	recvStep.Begin()
+	gotName, gotContent := env.RecvTaildropFile(t.Context(), receiver)
+	recvStep.End(nil)
+
+	verifyStep.Begin()
+	if gotName != filename {
+		err := fmt.Errorf("received name = %q; want %q", gotName, filename)
+		verifyStep.End(err)
+		t.Error(err)
+		return
+	}
+	if !bytes.Equal(gotContent, want) {
+		err := fmt.Errorf("received content = %q; want %q", gotContent, want)
+		verifyStep.End(err)
+		t.Error(err)
+		return
+	}
+	verifyStep.End(nil)
 }
 
 // TestExitNode verifies that switching the client's exit node setting between
