@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,8 +64,9 @@ type Env struct {
 	nodes   []*Node
 	tempDir string
 
-	sockAddr string // shared Unix socket path for all QEMU netdevs
-	binDir   string // directory for compiled binaries
+	sockAddr      string // shared Unix socket path for all QEMU netdevs
+	dgramSockAddr string // Unix dgram socket path for macOS VMs (tailmac)
+	binDir        string // directory for compiled binaries
 
 	// testVersion is the resolved Tailscale release version to use (empty if
 	// building from source). When non-empty, tailscale and tailscaled binaries
@@ -74,6 +76,9 @@ type Env struct {
 	// gokrazy-specific paths
 	gokrazyBase   string // path to gokrazy base qcow2 image
 	gokrazyKernel string // path to gokrazy kernel
+
+	// tailmac-specific paths (macOS VMs)
+	tailmacDir string // path to tailmac bin/ directory containing Host.app
 
 	qemuProcs []*exec.Cmd // launched QEMU processes
 
@@ -300,6 +305,7 @@ type Node struct {
 	vnetNode         *vnet.Node // primary vnet node (set during Start)
 	agent            *vnet.NodeAgentClient
 	joinTailnet      bool
+	noAgent          bool // true to skip TTA agent setup (e.g. macOS VMs without TTA)
 	advertiseRoutes  string
 	snatSubnetRoutes *bool // nil means default (true)
 	webServerPort    int
@@ -329,6 +335,8 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 		case nodeOptNoTailscale:
 			n.joinTailnet = false
 			vnetOpts = append(vnetOpts, vnet.DontJoinTailnet)
+		case nodeOptNoAgent:
+			n.noAgent = true
 		case nodeOptAdvertiseRoutes:
 			n.advertiseRoutes = string(o)
 		case nodeOptSNATSubnetRoutes:
@@ -357,6 +365,7 @@ func (n *Node) LanIP(net *vnet.Network) netip.Addr {
 
 type nodeOptOS OSImage
 type nodeOptNoTailscale struct{}
+type nodeOptNoAgent struct{}
 type nodeOptAdvertiseRoutes string
 type nodeOptSNATSubnetRoutes bool
 type nodeOptWebServer int
@@ -366,6 +375,11 @@ func OS(img OSImage) nodeOptOS { return nodeOptOS(img) }
 
 // DontJoinTailnet returns a NodeOption that prevents the node from running tailscale up.
 func DontJoinTailnet() nodeOptNoTailscale { return nodeOptNoTailscale{} }
+
+// NoAgent returns a NodeOption that skips TTA agent setup. The node will not
+// have a test agent, so agent-dependent operations (Status, ExecOnNode, etc.)
+// won't work. Useful for VMs that just need to boot and respond to ICMP.
+func NoAgent() nodeOptNoAgent { return nodeOptNoAgent{} }
 
 // AdvertiseRoutes returns a NodeOption that configures the node to advertise
 // the given routes (comma-separated CIDRs) when joining the tailnet.
@@ -411,12 +425,27 @@ func (e *Env) Start() {
 		t.Logf("using Tailscale release version %s (from --test-version=%q)", v, *testVersion)
 	}
 
-	// Determine which GOOS/GOARCH pairs need compiled binaries (non-gokrazy
-	// images). Gokrazy has binaries built-in, so doesn't need compilation.
+	// Check if any macOS nodes are present; if so, verify prerequisites.
+	hasMacOS := false
+	for _, n := range e.nodes {
+		if n.os.IsMacOS {
+			hasMacOS = true
+			break
+		}
+	}
+	if hasMacOS {
+		if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+			t.Skip("macOS VM tests require macOS arm64 host")
+		}
+	}
+
+	// Determine which GOOS/GOARCH pairs need compiled binaries (non-gokrazy,
+	// non-macOS images). Gokrazy has binaries built-in. macOS VMs don't use
+	// compiled binaries (no TTA agent).
 	type platform struct{ goos, goarch string }
 	needPlatform := set.Set[platform]{}
 	for _, n := range e.nodes {
-		if !n.os.IsGokrazy {
+		if !n.os.IsGokrazy && !n.os.IsMacOS {
 			needPlatform.Add(platform{n.os.GOOS(), n.os.GOARCH()})
 		}
 	}
@@ -438,7 +467,9 @@ func (e *Env) Start() {
 			continue
 		}
 		didOS.Add(n.os.Name)
-		if n.os.IsGokrazy {
+		if n.os.IsMacOS {
+			imageSteps[n.os.Name] = e.AddStep("Prepare macOS Tart image")
+		} else if n.os.IsGokrazy {
 			imageSteps["gokrazy"] = e.AddStep("Build gokrazy image")
 		} else {
 			imageSteps[n.os.Name] = e.AddStep(fmt.Sprintf("Prepare %s image", n.os.Name))
@@ -446,12 +477,18 @@ func (e *Env) Start() {
 	}
 	vnetStep := e.AddStep("Create virtual network")
 
-	qemuSteps := map[string]*Step{}
+	vmSteps := map[string]*Step{}
 	agentSteps := map[string]*Step{}
 	tsUpSteps := map[string]*Step{}
 	for _, n := range e.nodes {
-		qemuSteps[n.name] = e.AddStep(fmt.Sprintf("Launch QEMU: %s", n.name))
-		agentSteps[n.name] = e.AddStep(fmt.Sprintf("Wait for agent: %s", n.name))
+		if n.os.IsMacOS {
+			vmSteps[n.name] = e.AddStep(fmt.Sprintf("Launch macOS VM: %s", n.name))
+		} else {
+			vmSteps[n.name] = e.AddStep(fmt.Sprintf("Launch QEMU: %s", n.name))
+		}
+		if !n.noAgent {
+			agentSteps[n.name] = e.AddStep(fmt.Sprintf("Wait for agent: %s", n.name))
+		}
 		if n.joinTailnet {
 			tsUpSteps[n.name] = e.AddStep(fmt.Sprintf("Tailscale up: %s", n.name))
 		}
@@ -485,7 +522,15 @@ func (e *Env) Start() {
 			continue
 		}
 		didOS.Add(n.os.Name)
-		if n.os.IsGokrazy {
+		if n.os.IsMacOS {
+			step := imageSteps[n.os.Name]
+			eg.Go(func() error {
+				step.Begin()
+				ensureTartImage(t)
+				step.End(nil)
+				return nil
+			})
+		} else if n.os.IsGokrazy {
 			step := imageSteps["gokrazy"]
 			eg.Go(func() error {
 				step.Begin()
@@ -591,7 +636,7 @@ func (e *Env) Start() {
 	// not via the cloud-init HTTP VIP, because network-config must be available
 	// during init-local before systemd-networkd-wait-online blocks.
 
-	// Start Unix socket listener.
+	// Start Unix stream socket listener (for QEMU VMs).
 	e.sockAddr = filepath.Join(e.tempDir, "vnet.sock")
 	srv, err := net.Listen("unix", e.sockAddr)
 	if err != nil {
@@ -609,18 +654,45 @@ func (e *Env) Start() {
 		}
 	}()
 
-	// Launch QEMU processes.
+	// Start Unix dgram socket listener (for macOS VMs via tailmac).
+	// Use /tmp/ instead of the test temp dir because Unix socket paths
+	// are limited to 104 bytes on macOS, and test temp dir paths are long.
+	if hasMacOS {
+		e.dgramSockAddr = fmt.Sprintf("/tmp/vmtest-dgram-%d.sock", os.Getpid())
+		t.Cleanup(func() { os.Remove(e.dgramSockAddr) })
+		dgramAddr, err := net.ResolveUnixAddr("unixgram", e.dgramSockAddr)
+		if err != nil {
+			t.Fatalf("resolve dgram addr: %v", err)
+		}
+		uc, err := net.ListenUnixgram("unixgram", dgramAddr)
+		if err != nil {
+			t.Fatalf("listen unixgram: %v", err)
+		}
+		t.Cleanup(func() { uc.Close() })
+		go e.server.ServeUnixConn(uc, vnet.ProtocolUnixDGRAM)
+	}
+
+	// Launch VM processes.
 	for _, n := range e.nodes {
-		step := qemuSteps[n.name]
+		step := vmSteps[n.name]
 		step.Begin()
-		if err := e.startQEMU(n); err != nil {
-			t.Fatalf("startQEMU(%s): %v", n.name, err)
+		if n.os.IsMacOS {
+			if err := e.startTailMacVM(n); err != nil {
+				t.Fatalf("startTailMacVM(%s): %v", n.name, err)
+			}
+		} else {
+			if err := e.startQEMU(n); err != nil {
+				t.Fatalf("startQEMU(%s): %v", n.name, err)
+			}
 		}
 		step.End(nil)
 	}
 
 	// Set up agent clients and wait for all agents to connect.
 	for _, n := range e.nodes {
+		if n.noAgent {
+			continue
+		}
 		n.agent = e.server.NodeAgentClient(n.vnetNode)
 		n.vnetNode.SetClient(n.agent)
 	}
@@ -628,6 +700,9 @@ func (e *Env) Start() {
 	// Wait for agents, then bring up tailscale.
 	var agentEg errgroup.Group
 	for _, n := range e.nodes {
+		if n.noAgent {
+			continue
+		}
 		agentEg.Go(func() error {
 			aStep := agentSteps[n.name]
 			aStep.Begin()
@@ -1121,6 +1196,51 @@ func (e *Env) HTTPGet(from *Node, targetURL string) string {
 	}
 	e.t.Fatalf("HTTPGet from %s to %s: all attempts failed", from.name, targetURL)
 	return ""
+}
+
+// Agent returns the node's TTA agent client, or nil if NoAgent is set.
+func (n *Node) Agent() *vnet.NodeAgentClient {
+	return n.agent
+}
+
+// LANPing pings a LAN IP from the given node using TTA's /ping endpoint.
+// It retries for up to 2 minutes, which is enough for a macOS VM to boot
+// and acquire a DHCP lease.
+func (e *Env) LANPing(from *Node, targetIP netip.Addr) {
+	if from.agent == nil {
+		e.t.Fatalf("LANPing: node %s has no agent (NoAgent set?)", from.name)
+	}
+	e.t.Logf("LANPing: %s -> %s", from.name, targetIP)
+	deadline := time.Now().Add(2 * time.Minute)
+	for attempt := 0; time.Now().Before(deadline); attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		reqURL := fmt.Sprintf("http://unused/ping?host=%s", targetIP)
+		req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+		if err != nil {
+			cancel()
+			e.t.Fatalf("LANPing: %v", err)
+		}
+		res, err := from.agent.HTTPClient.Do(req)
+		cancel()
+		if err != nil {
+			if attempt%10 == 0 {
+				e.t.Logf("LANPing attempt %d: %v", attempt+1, err)
+			}
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode == 200 {
+			e.t.Logf("LANPing: %s -> %s succeeded on attempt %d", from.name, targetIP, attempt+1)
+			return
+		}
+		if attempt%10 == 0 {
+			e.t.Logf("LANPing attempt %d: status %d, body: %s", attempt+1, res.StatusCode, string(body))
+		}
+		time.Sleep(2 * time.Second)
+	}
+	e.t.Fatalf("LANPing: %s -> %s timed out after 2 minutes", from.name, targetIP)
 }
 
 // SendTaildropFile sends a file via Taildrop from one node to another.

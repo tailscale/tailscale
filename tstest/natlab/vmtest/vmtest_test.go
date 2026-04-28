@@ -16,6 +16,26 @@ import (
 	"tailscale.com/tstest/natlab/vnet"
 )
 
+func TestMacOSAndLinuxCanPing(t *testing.T) {
+	env := vmtest.New(t)
+
+	lan := env.AddNetwork("192.168.1.1/24")
+
+	linux := env.AddNode("linux", lan,
+		vmtest.OS(vmtest.Gokrazy),
+		vmtest.DontJoinTailnet())
+	macos := env.AddNode("macos", lan,
+		vmtest.OS(vmtest.MacOS),
+		vmtest.DontJoinTailnet(),
+		vmtest.NoAgent())
+
+	env.Start()
+
+	// Ping from Linux (which has TTA) to macOS (which just responds to ICMP).
+	// LANPing retries until the macOS VM has booted and acquired a DHCP lease.
+	env.LANPing(linux, macos.LanIP(lan))
+}
+
 func TestSubnetRouter(t *testing.T) {
 	testSubnetRouterForOS(t, vmtest.Ubuntu2404)
 }
