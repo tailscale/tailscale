@@ -5,9 +5,12 @@ package vmtest_test
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 	"testing"
 
+	"tailscale.com/tailcfg"
+	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/tstest/natlab/vmtest"
 	"tailscale.com/tstest/natlab/vnet"
 )
@@ -440,4 +443,153 @@ func TestExitNode(t *testing.T) {
 			tt.step.End(nil)
 		})
 	}
+}
+
+// TestMullvadExitNode verifies that a Tailscale client whose netmap contains
+// a plain-WireGuard exit node (the way Mullvad exit nodes are wired up by
+// the control plane) can route internet traffic through it, with the source
+// IP rewritten to the per-client Mullvad-assigned address.
+//
+// Topology:
+//
+//	client (Tailscale, gokrazy)         — clientNet (EasyNAT)     WAN 1.0.0.1
+//	mullvad (Ubuntu, userspace WG)      — mullvadNet (One2OneNAT) WAN 2.0.0.1
+//	webserver (no Tailscale, gokrazy)   — webNet     (One2OneNAT) WAN 5.0.0.1
+//
+// The mullvad VM impersonates a Mullvad WireGuard server. After boot, the
+// test asks its TTA agent to bring up a userspace WireGuard interface (a
+// real Linux TUN driven by wireguard-go) that pins the client's Tailscale
+// node public key as its only allowed peer, sets up IP-forwarding + a
+// MASQUERADE rule, and reports the WG server's freshly generated public
+// key back. Userspace vs kernel WireGuard makes no difference on the wire
+// — what's being tested is Tailscale's plain-WireGuard exit-node code
+// path, not the kernel module.
+//
+// The test then injects a netmap peer with IsWireGuardOnly=true,
+// AllowedIPs=[gw/32, 0.0.0.0/0, ::/0], the WG endpoint, and a per-client
+// SelfNodeV4MasqAddrForThisPeer (the mock equivalent of the per-client IP
+// Mullvad's API hands out at registration time).
+//
+// The webserver echoes the source IP it sees:
+//   - exit-node off:  source is client's WAN  (direct egress)
+//   - exit-node on:   source is mullvad's WAN (egress via WG + MASQUERADE)
+func TestMullvadExitNode(t *testing.T) {
+	env := vmtest.New(t)
+
+	const (
+		clientWAN  = "1.0.0.1"
+		mullvadWAN = "2.0.0.1"
+		webWAN     = "5.0.0.1"
+	)
+	// Mullvad-side WG network. The client appears as clientMasqIP to
+	// mullvad's wg0; mullvad terminates the tunnel at gw.
+	var (
+		mullvadWGNet = netip.MustParsePrefix("10.64.0.0/24")
+		gw           = netip.MustParsePrefix("10.64.0.1/24")
+		clientMasq   = netip.MustParsePrefix("10.64.0.2/32")
+	)
+	const wgListenPort uint16 = 51820
+
+	clientNet := env.AddNetwork(clientWAN, "192.168.1.1/24", vnet.EasyNAT)
+	mullvadNet := env.AddNetwork(mullvadWAN, "192.168.2.1/24", vnet.One2OneNAT)
+	webNet := env.AddNetwork(webWAN, "192.168.5.1/24", vnet.One2OneNAT)
+
+	client := env.AddNode("client", clientNet, vmtest.OS(vmtest.Gokrazy))
+	mullvad := env.AddNode("mullvad", mullvadNet,
+		vmtest.OS(vmtest.Ubuntu2404),
+		vmtest.DontJoinTailnet())
+	env.AddNode("webserver", webNet,
+		vmtest.OS(vmtest.Gokrazy),
+		vmtest.DontJoinTailnet(),
+		vmtest.WebServer(8080))
+
+	// Declare test-specific steps for the web UI.
+	wgUpStep := env.AddStep("Bring up Mullvad WG server")
+	injectStep := env.AddStep("Inject Mullvad netmap peer")
+	checkOff1Step := env.AddStep("HTTP GET (exit off)")
+	checkMullvadStep := env.AddStep("HTTP GET (exit=mullvad)")
+	checkOff2Step := env.AddStep("HTTP GET (exit off, again)")
+
+	env.Start()
+
+	// Bring up the WG server inside mullvad's TTA, pinning the client's
+	// Tailscale node public key as the sole allowed peer.
+	wgUpStep.Begin()
+	clientStatus := env.Status(client)
+	mullvadPub := env.BringUpMullvadWGServer(mullvad,
+		gw, wgListenPort,
+		clientStatus.Self.PublicKey, clientMasq, mullvadWGNet)
+	wgUpStep.End(nil)
+
+	// Inject the mullvad node into the netmap as a plain-WireGuard exit
+	// node. This mirrors how the control plane describes Mullvad exit
+	// nodes to clients (see control/cmullvad in the closed repo): a
+	// peer with IsWireGuardOnly=true, an Endpoints entry pointing at
+	// the public WG host:port, and AllowedIPs covering both the gateway
+	// /32 and the 0.0.0.0/0+::/0 exit-node routes.
+	injectStep.Begin()
+	mullvadEndpoint := netip.AddrPortFrom(netip.MustParseAddr(mullvadWAN), wgListenPort)
+	gwHost := netip.PrefixFrom(gw.Addr(), gw.Addr().BitLen())
+	mullvadNode := &tailcfg.Node{
+		ID:                999_001,
+		StableID:          "mullvad-test",
+		Name:              "mullvad-test.fake-control.example.net.",
+		Key:               mullvadPub,
+		MachineAuthorized: true,
+		IsWireGuardOnly:   true,
+		Endpoints:         []netip.AddrPort{mullvadEndpoint},
+		Addresses:         []netip.Prefix{gwHost},
+		AllowedIPs: []netip.Prefix{
+			gwHost,
+			netip.MustParsePrefix("0.0.0.0/0"),
+			netip.MustParsePrefix("::/0"),
+		},
+		Hostinfo: (&tailcfg.Hostinfo{
+			Hostname: "mullvad-test",
+		}).View(),
+	}
+	cs := env.ControlServer()
+	cs.UpdateNode(mullvadNode)
+
+	// Set the per-peer source-IP masquerade. The control plane normally
+	// derives this from the Mullvad API's per-client registration; here
+	// we just pin it to the address mullvad's wg0 was told to accept.
+	cs.SetMasqueradeAddresses([]testcontrol.MasqueradePair{{
+		Node:              clientStatus.Self.PublicKey,
+		Peer:              mullvadPub,
+		NodeMasqueradesAs: clientMasq.Addr(),
+	}})
+	injectStep.End(nil)
+
+	webURL := fmt.Sprintf("http://%s:8080/", webWAN)
+	check := func(step *vmtest.Step, label, wantSrc string) {
+		t.Helper()
+		step.Begin()
+		body := env.HTTPGet(client, webURL)
+		t.Logf("[%s] response: %s", label, body)
+		if !strings.Contains(body, "Hello world I am webserver") {
+			step.End(fmt.Errorf("[%s] unexpected webserver response: %q", label, body))
+			t.Fatalf("[%s] unexpected webserver response: %q", label, body)
+		}
+		if !strings.Contains(body, "from "+wantSrc) {
+			step.End(fmt.Errorf("[%s] expected source %q in response, got %q", label, wantSrc, body))
+			t.Fatalf("[%s] expected source %q in response, got %q", label, wantSrc, body)
+		}
+		step.End(nil)
+	}
+
+	// Exit-node off: client routes 0.0.0.0/0 directly via its host stack,
+	// so the webserver sees client's WAN IP.
+	check(checkOff1Step, "exit-off", clientWAN)
+
+	// Switch to the Mullvad WG-only peer as exit node. The client should
+	// now route 0.0.0.0/0 through the WG tunnel; mullvad MASQUERADEs to
+	// its WAN; the webserver sees the mullvad VM's WAN IP.
+	env.SetExitNodeIP(client, gw.Addr())
+	check(checkMullvadStep, "exit-mullvad", mullvadWAN)
+
+	// And back off again, to make sure the transition works in both
+	// directions.
+	env.SetExitNodeIP(client, netip.Addr{})
+	check(checkOff2Step, "exit-off (again)", clientWAN)
 }

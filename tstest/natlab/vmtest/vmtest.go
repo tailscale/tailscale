@@ -17,26 +17,33 @@ package vmtest
 
 import (
 	"context"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/gopacket/layers"
+	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/tstest/natlab/vnet"
+	"tailscale.com/types/key"
 	"tailscale.com/util/set"
 )
 
@@ -733,6 +740,110 @@ func (e *Env) SetExitNode(client, exitNode *Node) {
 	}
 }
 
+// SetExitNodeIP sets the client's ExitNodeIP preference directly, by IP.
+// This is the right helper for plain-WireGuard exit nodes (Mullvad-style)
+// that aren't on the tailnet — pass an invalid netip.Addr{} to clear.
+// For tailnet exit nodes whose Tailscale IP is discoverable via TTA, use
+// [Env.SetExitNode] instead.
+func (e *Env) SetExitNodeIP(client *Node, ip netip.Addr) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := client.agent.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			ExitNodeID: "",
+			ExitNodeIP: ip,
+		},
+		ExitNodeIDSet: true,
+		ExitNodeIPSet: true,
+	}); err != nil {
+		e.t.Fatalf("SetExitNodeIP(%s, %v): %v", client.name, ip, err)
+	}
+	if !ip.IsValid() {
+		e.t.Logf("[%s] cleared exit node", client.name)
+	} else {
+		e.t.Logf("[%s] using exit-node IP %v", client.name, ip)
+	}
+}
+
+// ControlServer returns the underlying test control server, for tests that
+// need to inject custom peers, masquerade pairs, etc. The returned server's
+// Node store is shared with the running tailnet, so changes take effect on
+// the next netmap update sent to peers.
+func (e *Env) ControlServer() *testcontrol.Server {
+	return e.server.ControlServer()
+}
+
+// BringUpMullvadWGServer brings up a userspace WireGuard server on n,
+// configured as a single-peer "Mullvad-style" exit-node target. The
+// server runs inside n's TTA process on a Linux TUN named "wg0".
+//
+// gw is the WG interface address (e.g. 10.64.0.1/24). The server listens
+// on listenPort, accepts only the single peer whose public key is peerPub
+// at peerAllowedIP, and MASQUERADEs egress traffic from masqSrc so that
+// decrypted packets from the peer egress with n's WAN IP.
+//
+// It returns the freshly generated public key of the WG server, which
+// the caller must pin as the peer key on the [tailcfg.Node] it injects
+// into the netmap to advertise this server as a plain-WireGuard exit
+// node. It fatals the test on error.
+func (e *Env) BringUpMullvadWGServer(n *Node, gw netip.Prefix, listenPort uint16, peerPub key.NodePublic, peerAllowedIP, masqSrc netip.Prefix) key.NodePublic {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	peerPubRaw := peerPub.Raw32()
+	v := url.Values{
+		"addr":            {gw.String()},
+		"listen-port":     {strconv.Itoa(int(listenPort))},
+		"peer-pub-b64":    {base64.StdEncoding.EncodeToString(peerPubRaw[:])},
+		"peer-allowed-ip": {peerAllowedIP.String()},
+		"masq-src":        {masqSrc.String()},
+	}
+	reqURL := "http://unused/wg-server-up?" + v.Encode()
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		e.t.Fatalf("BringUpMullvadWGServer: %v", err)
+	}
+	res, err := n.agent.HTTPClient.Do(req)
+	if err != nil {
+		e.t.Fatalf("BringUpMullvadWGServer(%s): %v", n.name, err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 {
+		e.t.Fatalf("BringUpMullvadWGServer(%s): %s: %s", n.name, res.Status, body)
+	}
+	var pubB64 string
+	for _, line := range strings.Split(string(body), "\n") {
+		if s, ok := strings.CutPrefix(strings.TrimSpace(line), "PUBKEY="); ok {
+			pubB64 = s
+			break
+		}
+	}
+	if pubB64 == "" {
+		e.t.Fatalf("BringUpMullvadWGServer(%s): no PUBKEY in response: %q", n.name, body)
+	}
+	pubRaw, err := base64.StdEncoding.DecodeString(pubB64)
+	if err != nil || len(pubRaw) != 32 {
+		e.t.Fatalf("BringUpMullvadWGServer(%s): bad PUBKEY %q: %v", n.name, pubB64, err)
+	}
+	return key.NodePublicFromRaw32(mem.B(pubRaw))
+}
+
+// Status returns the tailscale status of the given node, fetched from its
+// TTA agent. It fatals the test on error.
+func (e *Env) Status(n *Node) *ipnstate.Status {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st, err := n.agent.Status(ctx)
+	if err != nil {
+		e.t.Fatalf("Status(%s): %v", n.name, err)
+	}
+	return st
+}
+
 // SetAcceptRoutes toggles the node's RouteAll preference (the
 // --accept-routes flag), controlling whether it installs subnet routes
 // advertised by peers.
@@ -849,7 +960,7 @@ func (e *Env) ping(from, to *Node) {
 // is running (which is all of them — DontJoinTailnet only skips
 // `tailscale up`; the agent runs regardless). Currently Linux-only in TTA.
 //
-// Fatals on error.
+// It fatals the test on error.
 func (e *Env) AddRoute(n *Node, prefix, via string) {
 	e.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
