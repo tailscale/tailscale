@@ -78,16 +78,28 @@ type Env struct {
 	gokrazyKernel string // path to gokrazy kernel
 
 	// tailmac-specific paths (macOS VMs)
-	tailmacDir string // path to tailmac bin/ directory containing Host.app
+	tailmacDir        string // path to tailmac bin/ directory containing Host.app
+	macosSnapshot     string // path to cached macOS VM snapshot directory
+	macosSnapshotOnce sync.Once
 
 	qemuProcs []*exec.Cmd // launched QEMU processes
 
 	sameTailnetUser bool // all nodes register as the same Tailnet user
 
+	// Shared resource initialization (sync.Once for things multiple nodes share).
+	vnetOnce      sync.Once
+	gokrazyOnce   sync.Once
+	qemuSockOnce  sync.Once
+	dgramSockOnce sync.Once
+	compileMu     sync.Mutex
+	compiled      set.Set[string]
+
 	// Web UI support.
 	ctx        context.Context // cancelled when test ends
 	eventBus   *EventBus
 	testStatus *TestStatus
+	stepsMu    sync.Mutex
+	stepsByKey map[string]*Step
 	steps      []*Step
 
 	nodeStatusMu sync.Mutex
@@ -102,6 +114,28 @@ func (e *Env) logVerbosef(format string, args ...any) {
 	}
 }
 
+// vmPlatform defines how a VM type boots. Each OS image type (gokrazy,
+// cloud, macOS) implements this interface.
+type vmPlatform interface {
+	// planSteps registers steps with the web UI in a dry-run pass.
+	planSteps(e *Env, n *Node)
+
+	// boot does everything needed to get this node running: ensure images,
+	// compile binaries, set up sockets, launch VM. Called concurrently.
+	boot(ctx context.Context, e *Env, n *Node) error
+}
+
+// platform returns the vmPlatform for this node's OS type.
+func (n *Node) platform() vmPlatform {
+	if n.os.IsMacOS {
+		return macPlatform{}
+	}
+	if n.os.IsGokrazy {
+		return gokrazyPlatform{}
+	}
+	return qemuCloudPlatform{}
+}
+
 // AddStep declares an expected stage of the test. The web UI shows all steps
 // from the start, tracking their progress. Call before or during the test.
 // Returns a *Step whose Begin/End methods drive the progress display.
@@ -112,6 +146,28 @@ func (e *Env) AddStep(name string) *Step {
 		env:   e,
 	}
 	e.steps = append(e.steps, s)
+	return s
+}
+
+// Step returns a step by key, creating it if it doesn't exist.
+// Safe for concurrent use. Both planSteps (dry-run) and boot (real-run)
+// call this to get the same Step object.
+func (e *Env) Step(key string) *Step {
+	e.stepsMu.Lock()
+	defer e.stepsMu.Unlock()
+	if s, ok := e.stepsByKey[key]; ok {
+		return s
+	}
+	s := &Step{
+		name:  key,
+		index: len(e.steps),
+		env:   e,
+	}
+	e.steps = append(e.steps, s)
+	if e.stepsByKey == nil {
+		e.stepsByKey = make(map[string]*Step)
+	}
+	e.stepsByKey[key] = s
 	return s
 }
 
@@ -397,16 +453,14 @@ func SNATSubnetRoutes(v bool) nodeOptSNATSubnetRoutes { return nodeOptSNATSubnet
 // The webserver responds with "Hello world I am <nodename> from <sourceIP>" on all requests.
 func WebServer(port int) nodeOptWebServer { return nodeOptWebServer(port) }
 
-// Start initializes the virtual network, builds/downloads images, compiles
-// binaries, launches QEMU processes, and waits for all TTA agents to connect.
-// It should be called after all AddNetwork/AddNode calls.
+// Start initializes the virtual network, boots all VMs in parallel, and waits
+// for all TTA agents to connect. It should be called after all AddNetwork/AddNode calls.
 func (e *Env) Start() {
 	t := e.t
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	t.Cleanup(cancel)
 	e.ctx = ctx
 
-	// Initialize node status and start web UI as early as possible.
 	e.initNodeStatus()
 	e.maybeStartWebServer()
 
@@ -414,8 +468,6 @@ func (e *Env) Start() {
 		t.Fatal(err)
 	}
 
-	// Resolve --test-version up front (e.g. "unstable" -> "1.97.255") so all
-	// platforms see the same concrete version.
 	if *testVersion != "" {
 		v, err := resolveTestVersion(ctx, *testVersion)
 		if err != nil {
@@ -425,267 +477,42 @@ func (e *Env) Start() {
 		t.Logf("using Tailscale release version %s (from --test-version=%q)", v, *testVersion)
 	}
 
-	// Check if any macOS nodes are present; if so, verify prerequisites.
-	hasMacOS := false
 	for _, n := range e.nodes {
-		if n.os.IsMacOS {
-			hasMacOS = true
-			break
-		}
-	}
-	if hasMacOS {
-		if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		if n.os.IsMacOS && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
 			t.Skip("macOS VM tests require macOS arm64 host")
 		}
 	}
 
-	// Determine which GOOS/GOARCH pairs need compiled binaries (non-gokrazy,
-	// non-macOS images). Gokrazy has binaries built-in. macOS VMs don't use
-	// compiled binaries (no TTA agent).
-	type platform struct{ goos, goarch string }
-	needPlatform := set.Set[platform]{}
-	for _, n := range e.nodes {
-		if !n.os.IsGokrazy && !n.os.IsMacOS {
-			needPlatform.Add(platform{n.os.GOOS(), n.os.GOARCH()})
-		}
-	}
-
-	// Declare framework steps for the web UI.
-	// User-declared steps (from AddStep before Start) get moved to the end
-	// so framework steps (compile, image, QEMU, etc.) come first.
+	// Dry-run: let each platform register its steps with the web UI.
 	userSteps := e.steps
 	e.steps = nil
-
-	compileSteps := map[platform]*Step{}
-	for _, p := range needPlatform.Slice() {
-		compileSteps[p] = e.AddStep(fmt.Sprintf("Compile %s_%s binaries", p.goos, p.goarch))
-	}
-	imageSteps := map[string]*Step{} // keyed by OS name
-	didOS := set.Set[string]{}       // dedup by image name
 	for _, n := range e.nodes {
-		if didOS.Contains(n.os.Name) {
-			continue
-		}
-		didOS.Add(n.os.Name)
-		if n.os.IsMacOS {
-			imageSteps[n.os.Name] = e.AddStep("Prepare macOS Tart image")
-		} else if n.os.IsGokrazy {
-			imageSteps["gokrazy"] = e.AddStep("Build gokrazy image")
-		} else {
-			imageSteps[n.os.Name] = e.AddStep(fmt.Sprintf("Prepare %s image", n.os.Name))
-		}
+		n.platform().planSteps(e, n)
 	}
-	vnetStep := e.AddStep("Create virtual network")
-
-	vmSteps := map[string]*Step{}
-	agentSteps := map[string]*Step{}
-	tsUpSteps := map[string]*Step{}
 	for _, n := range e.nodes {
-		if n.os.IsMacOS {
-			vmSteps[n.name] = e.AddStep(fmt.Sprintf("Launch macOS VM: %s", n.name))
-		} else {
-			vmSteps[n.name] = e.AddStep(fmt.Sprintf("Launch QEMU: %s", n.name))
-		}
 		if !n.noAgent {
-			agentSteps[n.name] = e.AddStep(fmt.Sprintf("Wait for agent: %s", n.name))
+			e.Step("Wait for agent: " + n.name)
 		}
 		if n.joinTailnet {
-			tsUpSteps[n.name] = e.AddStep(fmt.Sprintf("Tailscale up: %s", n.name))
+			e.Step("Tailscale up: " + n.name)
 		}
 	}
-
-	// Re-append user-declared steps after all framework steps.
 	for _, s := range userSteps {
 		s.index = len(e.steps)
 		e.steps = append(e.steps, s)
 	}
 
-	// Compile binaries and download/build images in parallel.
-	// Any failure cancels the others via the errgroup context.
-	eg, egCtx := errgroup.WithContext(ctx)
-	for _, p := range needPlatform.Slice() {
-		step := compileSteps[p]
-		eg.Go(func() error {
-			step.Begin()
-			err := e.compileBinariesForOS(egCtx, p.goos, p.goarch)
-			if err != nil {
-				step.End(err)
-				return err
-			}
-			step.End(nil)
-			return nil
+	// Boot all nodes in parallel. Each platform handles its own
+	// dependencies (image prep, binary compilation, socket setup)
+	// via sync.Once, so independent work overlaps naturally.
+	var bootEg errgroup.Group
+	for _, n := range e.nodes {
+		bootEg.Go(func() error {
+			return n.platform().boot(ctx, e, n)
 		})
 	}
-	didOS = set.Set[string]{} // reset for second pass
-	for _, n := range e.nodes {
-		if didOS.Contains(n.os.Name) {
-			continue
-		}
-		didOS.Add(n.os.Name)
-		if n.os.IsMacOS {
-			step := imageSteps[n.os.Name]
-			eg.Go(func() error {
-				step.Begin()
-				ensureTartImage(t)
-				step.End(nil)
-				return nil
-			})
-		} else if n.os.IsGokrazy {
-			step := imageSteps["gokrazy"]
-			eg.Go(func() error {
-				step.Begin()
-				err := e.ensureGokrazy(egCtx)
-				if err != nil {
-					step.End(err)
-					return err
-				}
-				step.End(nil)
-				return nil
-			})
-		} else {
-			step := imageSteps[n.os.Name]
-			osImg := n.os
-			eg.Go(func() error {
-				step.Begin()
-				err := ensureImage(egCtx, osImg)
-				if err != nil {
-					step.End(err)
-					return err
-				}
-				step.End(nil)
-				return nil
-			})
-		}
-	}
-	if err := eg.Wait(); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	// Create the vnet server.
-	vnetStep.Begin()
-	var err error
-	e.server, err = vnet.New(&e.cfg)
-	if err != nil {
-		t.Fatalf("vnet.New: %v", err)
-	}
-	t.Cleanup(func() { e.server.Close() })
-
-	// Register DHCP event callback for the web UI.
-	e.server.SetDHCPCallback(func(mac vnet.MAC, nodeNum int, msgType layers.DHCPMsgType, ip netip.Addr) {
-		name := e.nodeNameByNum(nodeNum)
-		nicIdx := e.nicIndexForMAC(name, mac)
-		ipStr := ip.String()
-		switch msgType {
-		case layers.DHCPMsgTypeDiscover:
-			e.setNodeDHCP(name, nicIdx, "Discover sent")
-			e.eventBus.Publish(VMEvent{
-				NodeName: name,
-				Type:     EventDHCPDiscover,
-				Message:  "DHCP Discover sent",
-				NIC:      nicIdx,
-			})
-		case layers.DHCPMsgTypeOffer:
-			e.setNodeDHCP(name, nicIdx, "Offered "+ipStr)
-			e.eventBus.Publish(VMEvent{
-				NodeName: name,
-				Type:     EventDHCPOffer,
-				Message:  "DHCP Offer received",
-				Detail:   ipStr,
-				NIC:      nicIdx,
-			})
-		case layers.DHCPMsgTypeRequest:
-			e.setNodeDHCP(name, nicIdx, "Requesting "+ipStr)
-			e.eventBus.Publish(VMEvent{
-				NodeName: name,
-				Type:     EventDHCPRequest,
-				Message:  "DHCP Request sent",
-				Detail:   ipStr,
-				NIC:      nicIdx,
-			})
-		case layers.DHCPMsgTypeAck:
-			e.setNodeDHCP(name, nicIdx, "Got "+ipStr)
-			e.eventBus.Publish(VMEvent{
-				NodeName: name,
-				Type:     EventDHCPAck,
-				Message:  "DHCP Ack: got " + ipStr,
-				Detail:   ipStr,
-				NIC:      nicIdx,
-			})
-		}
-	})
-
-	if e.sameTailnetUser {
-		e.server.ControlServer().AllNodesSameUser = true
-	}
-
-	// Register compiled binaries with the file server VIP.
-	// Binaries are registered at <goos>_<goarch>/<name> (e.g. "linux_amd64/tta").
-	for _, p := range needPlatform.Slice() {
-		dir := p.goos + "_" + p.goarch
-		for _, name := range []string{"tta", "tailscale", "tailscaled"} {
-			data, err := os.ReadFile(filepath.Join(e.binDir, dir, name))
-			if err != nil {
-				t.Fatalf("reading compiled %s/%s: %v", dir, name, err)
-			}
-			e.server.RegisterFile(dir+"/"+name, data)
-		}
-	}
-	vnetStep.End(nil)
-
-	// Cloud-init config is delivered via local seed ISOs (created in startCloudQEMU),
-	// not via the cloud-init HTTP VIP, because network-config must be available
-	// during init-local before systemd-networkd-wait-online blocks.
-
-	// Start Unix stream socket listener (for QEMU VMs).
-	e.sockAddr = filepath.Join(e.tempDir, "vnet.sock")
-	srv, err := net.Listen("unix", e.sockAddr)
-	if err != nil {
-		t.Fatalf("listen unix: %v", err)
-	}
-	t.Cleanup(func() { srv.Close() })
-
-	go func() {
-		for {
-			c, err := srv.Accept()
-			if err != nil {
-				return
-			}
-			go e.server.ServeUnixConn(c.(*net.UnixConn), vnet.ProtocolQEMU)
-		}
-	}()
-
-	// Start Unix dgram socket listener (for macOS VMs via tailmac).
-	// Use /tmp/ instead of the test temp dir because Unix socket paths
-	// are limited to 104 bytes on macOS, and test temp dir paths are long.
-	if hasMacOS {
-		e.dgramSockAddr = fmt.Sprintf("/tmp/vmtest-dgram-%d.sock", os.Getpid())
-		t.Cleanup(func() { os.Remove(e.dgramSockAddr) })
-		dgramAddr, err := net.ResolveUnixAddr("unixgram", e.dgramSockAddr)
-		if err != nil {
-			t.Fatalf("resolve dgram addr: %v", err)
-		}
-		uc, err := net.ListenUnixgram("unixgram", dgramAddr)
-		if err != nil {
-			t.Fatalf("listen unixgram: %v", err)
-		}
-		t.Cleanup(func() { uc.Close() })
-		go e.server.ServeUnixConn(uc, vnet.ProtocolUnixDGRAM)
-	}
-
-	// Launch VM processes.
-	for _, n := range e.nodes {
-		step := vmSteps[n.name]
-		step.Begin()
-		if n.os.IsMacOS {
-			if err := e.startTailMacVM(n); err != nil {
-				t.Fatalf("startTailMacVM(%s): %v", n.name, err)
-			}
-		} else {
-			if err := e.startQEMU(n); err != nil {
-				t.Fatalf("startQEMU(%s): %v", n.name, err)
-			}
-		}
-		step.End(nil)
+	if err := bootEg.Wait(); err != nil {
+		t.Fatalf("boot: %v", err)
 	}
 
 	// Set up agent clients and wait for all agents to connect.
@@ -693,25 +520,32 @@ func (e *Env) Start() {
 		if n.noAgent {
 			continue
 		}
+		e.initVnet() // ensure vnet is ready for agent clients
 		n.agent = e.server.NodeAgentClient(n.vnetNode)
 		n.vnetNode.SetClient(n.agent)
 	}
 
-	// Wait for agents, then bring up tailscale.
 	var agentEg errgroup.Group
 	for _, n := range e.nodes {
 		if n.noAgent {
 			continue
 		}
 		agentEg.Go(func() error {
-			aStep := agentSteps[n.name]
+			aStep := e.Step("Wait for agent: " + n.name)
 			aStep.Begin()
 			t.Logf("[%s] waiting for agent...", n.name)
-			st, err := n.agent.Status(ctx)
-			if err != nil {
-				return fmt.Errorf("[%s] agent status: %w", n.name, err)
+			if n.joinTailnet {
+				st, err := n.agent.Status(ctx)
+				if err != nil {
+					return fmt.Errorf("[%s] agent status: %w", n.name, err)
+				}
+				t.Logf("[%s] agent connected, backend state: %s", n.name, st.BackendState)
+			} else {
+				if err := e.waitForAgentConn(ctx, n); err != nil {
+					return fmt.Errorf("[%s] agent connect: %w", n.name, err)
+				}
+				t.Logf("[%s] agent connected (no tailscale)", n.name)
 			}
-			t.Logf("[%s] agent connected, backend state: %s", n.name, st.BackendState)
 			aStep.End(nil)
 
 			if n.vnetNode.HostFirewall() {
@@ -721,21 +555,21 @@ func (e *Env) Start() {
 			}
 
 			if n.joinTailnet {
-				tsStep := tsUpSteps[n.name]
+				tsStep := e.Step("Tailscale up: " + n.name)
 				tsStep.Begin()
 				if err := e.tailscaleUp(ctx, n); err != nil {
 					return fmt.Errorf("[%s] tailscale up: %w", n.name, err)
 				}
-				st, err = n.agent.Status(ctx)
+				st2, err := n.agent.Status(ctx)
 				if err != nil {
 					return fmt.Errorf("[%s] status after up: %w", n.name, err)
 				}
-				if st.BackendState != "Running" {
-					return fmt.Errorf("[%s] state = %q, want Running", n.name, st.BackendState)
+				if st2.BackendState != "Running" {
+					return fmt.Errorf("[%s] state = %q, want Running", n.name, st2.BackendState)
 				}
-				ips := fmt.Sprintf("%v", st.Self.TailscaleIPs)
+				ips := fmt.Sprintf("%v", st2.Self.TailscaleIPs)
 				e.setNodeTailscale(n.name, "Running "+ips)
-				t.Logf("[%s] up with %v", n.name, st.Self.TailscaleIPs)
+				t.Logf("[%s] up with %v", n.name, st2.Self.TailscaleIPs)
 				tsStep.End(nil)
 			}
 
@@ -1224,6 +1058,147 @@ func (e *Env) nodeScreenshotPort(name string) int {
 		return ns.ScreenshotPort
 	}
 	return 0
+}
+
+// initVnet creates the vnet server. Called once via sync.Once.
+func (e *Env) initVnet() {
+	e.vnetOnce.Do(func() {
+		var err error
+		e.server, err = vnet.New(&e.cfg)
+		if err != nil {
+			e.t.Fatalf("vnet.New: %v", err)
+		}
+		e.t.Cleanup(func() { e.server.Close() })
+
+		e.server.SetDHCPCallback(func(mac vnet.MAC, nodeNum int, msgType layers.DHCPMsgType, ip netip.Addr) {
+			name := e.nodeNameByNum(nodeNum)
+			nicIdx := e.nicIndexForMAC(name, mac)
+			ipStr := ip.String()
+			switch msgType {
+			case layers.DHCPMsgTypeDiscover:
+				e.setNodeDHCP(name, nicIdx, "Discover sent")
+				e.eventBus.Publish(VMEvent{NodeName: name, Type: EventDHCPDiscover, Message: "DHCP Discover sent", NIC: nicIdx})
+			case layers.DHCPMsgTypeOffer:
+				e.setNodeDHCP(name, nicIdx, "Offered "+ipStr)
+				e.eventBus.Publish(VMEvent{NodeName: name, Type: EventDHCPOffer, Message: "DHCP Offer received", Detail: ipStr, NIC: nicIdx})
+			case layers.DHCPMsgTypeRequest:
+				e.setNodeDHCP(name, nicIdx, "Requesting "+ipStr)
+				e.eventBus.Publish(VMEvent{NodeName: name, Type: EventDHCPRequest, Message: "DHCP Request sent", Detail: ipStr, NIC: nicIdx})
+			case layers.DHCPMsgTypeAck:
+				e.setNodeDHCP(name, nicIdx, "Got "+ipStr)
+				e.eventBus.Publish(VMEvent{NodeName: name, Type: EventDHCPAck, Message: "DHCP Ack: got " + ipStr, Detail: ipStr, NIC: nicIdx})
+			}
+		})
+
+		if e.sameTailnetUser {
+			e.server.ControlServer().AllNodesSameUser = true
+		}
+	})
+}
+
+// ensureQEMUSocket creates the Unix stream socket for QEMU VMs. Called once.
+func (e *Env) ensureQEMUSocket() {
+	e.qemuSockOnce.Do(func() {
+		e.initVnet()
+		e.sockAddr = filepath.Join(e.tempDir, "vnet.sock")
+		srv, err := net.Listen("unix", e.sockAddr)
+		if err != nil {
+			e.t.Fatalf("listen unix: %v", err)
+		}
+		e.t.Cleanup(func() { srv.Close() })
+		go func() {
+			for {
+				c, err := srv.Accept()
+				if err != nil {
+					return
+				}
+				go e.server.ServeUnixConn(c.(*net.UnixConn), vnet.ProtocolQEMU)
+			}
+		}()
+	})
+}
+
+// ensureDgramSocket creates the Unix dgram socket for macOS VMs. Called once.
+func (e *Env) ensureDgramSocket() {
+	e.dgramSockOnce.Do(func() {
+		e.initVnet()
+		e.dgramSockAddr = fmt.Sprintf("/tmp/vmtest-dgram-%d.sock", os.Getpid())
+		e.t.Cleanup(func() { os.Remove(e.dgramSockAddr) })
+		dgramAddr, err := net.ResolveUnixAddr("unixgram", e.dgramSockAddr)
+		if err != nil {
+			e.t.Fatalf("resolve dgram addr: %v", err)
+		}
+		uc, err := net.ListenUnixgram("unixgram", dgramAddr)
+		if err != nil {
+			e.t.Fatalf("listen unixgram: %v", err)
+		}
+		e.t.Cleanup(func() { uc.Close() })
+		go e.server.ServeUnixConn(uc, vnet.ProtocolUnixDGRAM)
+	})
+}
+
+// ensureCompiled compiles binaries for the given platform and registers them
+// with the vnet file server. Safe for concurrent use; only compiles once per platform.
+func (e *Env) ensureCompiled(ctx context.Context, goos, goarch string) {
+	key := goos + "_" + goarch
+
+	e.compileMu.Lock()
+	if e.compiled.Contains(key) {
+		e.compileMu.Unlock()
+		return
+	}
+	e.compileMu.Unlock()
+
+	step := e.Step(fmt.Sprintf("Compile %s_%s binaries", goos, goarch))
+	step.Begin()
+	if err := e.compileBinariesForOS(ctx, goos, goarch); err != nil {
+		step.End(err)
+		e.t.Fatalf("compileBinariesForOS(%s, %s): %v", goos, goarch, err)
+	}
+	step.End(nil)
+	e.registerBinaries(goos, goarch)
+
+	e.compileMu.Lock()
+	e.compiled.Make()
+	e.compiled.Add(key)
+	e.compileMu.Unlock()
+}
+
+// registerBinaries registers compiled binaries with the vnet file server.
+// Safe for concurrent use.
+func (e *Env) registerBinaries(goos, goarch string) {
+	e.initVnet()
+	dir := goos + "_" + goarch
+	for _, name := range []string{"tta", "tailscale", "tailscaled"} {
+		data, err := os.ReadFile(filepath.Join(e.binDir, dir, name))
+		if err != nil {
+			e.t.Fatalf("reading compiled %s/%s: %v", dir, name, err)
+		}
+		e.server.RegisterFile(dir+"/"+name, data)
+	}
+}
+
+// waitForAgentConn waits for a TTA agent to connect by issuing a simple
+// HTTP GET to the root endpoint, without requiring tailscaled.
+func (e *Env) waitForAgentConn(ctx context.Context, n *Node) error {
+	for {
+		reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		req, err := http.NewRequestWithContext(reqCtx, "GET", "http://unused/", nil)
+		if err != nil {
+			cancel()
+			return err
+		}
+		res, err := n.agent.HTTPClient.Do(req)
+		cancel()
+		if err == nil {
+			res.Body.Close()
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // Agent returns the node's TTA agent client, or nil if NoAgent is set.

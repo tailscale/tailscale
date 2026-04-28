@@ -105,6 +105,10 @@ func main() {
 	}
 	flag.Parse()
 
+	// On macOS VMs, start polling the host via vsock for an IP assignment.
+	// This bypasses DHCP for near-instant network configuration.
+	startIPAssignLoop()
+
 	debug := false
 	if distro.Get() == distro.Gokrazy {
 		cmdLine, _ := os.ReadFile("/proc/cmdline")
@@ -408,12 +412,48 @@ func main() {
 	revSt.runDialOutLoop(conns)
 }
 
+// dialCancels tracks cancel funcs for in-flight connect() and sleep contexts.
+// resetDialCancels cancels them all so the dial loop retries immediately.
+var (
+	dialCancelMu sync.Mutex
+	dialCancels  set.HandleSet[context.CancelFunc]
+)
+
+// registerDialCancel adds a cancel func and returns a handle for removal.
+func registerDialCancel(cancel context.CancelFunc) set.Handle {
+	dialCancelMu.Lock()
+	defer dialCancelMu.Unlock()
+	return dialCancels.Add(cancel)
+}
+
+// unregisterDialCancel removes a previously registered cancel func.
+func unregisterDialCancel(h set.Handle) {
+	dialCancelMu.Lock()
+	defer dialCancelMu.Unlock()
+	delete(dialCancels, h)
+}
+
+// resetDialCancels cancels all in-flight connect and sleep contexts,
+// causing the dial loop to retry immediately with the updated driver address.
+func resetDialCancels() {
+	dialCancelMu.Lock()
+	defer dialCancelMu.Unlock()
+	for h, cancel := range dialCancels {
+		cancel()
+		delete(dialCancels, h)
+	}
+}
+
 func connect() (net.Conn, error) {
 	d := net.Dialer{
 		Control: bypassControlFunc,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
+	h := registerDialCancel(cancel)
+	defer func() {
+		cancel()
+		unregisterDialCancel(h)
+	}()
 	c, err := d.DialContext(ctx, "tcp", *driverAddr)
 	if err != nil {
 		return nil, err
@@ -510,7 +550,11 @@ func (s *revDialState) runDialOutLoop(conns chan<- net.Conn) {
 				log.Printf("[dial-driver] connect failure: %v", s)
 			}
 			lastErr = s
-			time.Sleep(time.Second)
+			sleepCtx, sleepCancel := context.WithTimeout(context.Background(), time.Second)
+			h := registerDialCancel(sleepCancel)
+			<-sleepCtx.Done()
+			sleepCancel()
+			unregisterDialCancel(h)
 			continue
 		}
 		if !connected {

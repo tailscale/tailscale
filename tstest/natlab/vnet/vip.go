@@ -33,6 +33,13 @@ func (v virtualIP) Match(a netip.Addr) bool {
 	return v.v4 == a.Unmap() || v.v6 == a
 }
 
+// TestDriverIPv4 returns the IPv4 address of the test driver VIP (52.52.0.2).
+// TTA agents dial this IP on port TestDriverPort to connect to the test harness.
+func TestDriverIPv4() netip.Addr { return fakeTestAgent.v4 }
+
+// TestDriverPort is the port the test driver listens on.
+const TestDriverPort = 8008
+
 // FakeDNSIPv4 returns the fake DNS IPv4 address.
 func FakeDNSIPv4() netip.Addr { return fakeDNS.v4 }
 
