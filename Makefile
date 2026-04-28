@@ -10,7 +10,7 @@ vet: ## Run go vet
 
 tidy: ## Run go mod tidy and update nix flake hashes
 	./tool/go mod tidy
-	./update-flake.sh
+	./tool/go run ./tool/updateflakes
 
 lint: ## Run golangci-lint
 	./tool/go run github.com/golangci/golangci-lint/cmd/golangci-lint run
