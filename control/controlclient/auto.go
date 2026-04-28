@@ -633,9 +633,10 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 	c.logf("[v1] sendStatus: %s: loggedIn=%v inMapPoll=%v", who, loggedIn, inMapPoll)
 
 	var p persist.PersistView
-	if nm != nil && loggedIn && inMapPoll {
+	if loggedIn {
 		p = c.direct.GetPersist()
-	} else {
+	}
+	if !(nm != nil && loggedIn && inMapPoll) {
 		// don't send netmap status, as it's misleading when we're
 		// not logged in.
 		nm = nil
