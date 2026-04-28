@@ -232,6 +232,12 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			return
 		}
+	case "peer-disco-keys":
+		w.Header().Set("Content-Type", "application/json")
+		err = json.NewEncoder(w).Encode(h.b.DebugPeerDiscoKeys())
+		if err == nil {
+			return
+		}
 	case "rotate-disco-key":
 		err = h.b.DebugRotateDiscoKey()
 	case "statedir":

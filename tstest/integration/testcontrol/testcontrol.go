@@ -69,6 +69,22 @@ type Server struct {
 	// belong to the same user.
 	AllNodesSameUser bool
 
+	// AllOnline, if true, marks every peer entry in MapResponses as
+	// Online=true. This is a coarse stand-in for the per-node
+	// online/offline tracking that production control servers do based
+	// on streaming map sessions: certain disco-key handling fast paths
+	// in [tailscale.com/control/controlclient] and
+	// [tailscale.com/wgengine/userspace] only fire when the peer is
+	// reported online, so without this flag they are silently skipped
+	// in tests, which can mask bugs and slow down recovery from disco
+	// rotations. See [tailscale.com/control/controlclient/map.go]
+	// removeUnwantedDiscoUpdates and
+	// removeUnwantedDiscoUpdatesFromFullNetmapUpdate for callers that
+	// branch on Online.
+	//
+	// Finer-grained per-node online tracking can be added later.
+	AllOnline bool
+
 	// DefaultNodeCapabilities overrides the capability map sent to each client.
 	DefaultNodeCapabilities *tailcfg.NodeCapMap
 
@@ -1404,6 +1420,9 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		if len(routes) > 0 {
 			p.PrimaryRoutes = routes
 			p.AllowedIPs = append(p.AllowedIPs, routes...)
+		}
+		if s.AllOnline {
+			p.Online = new(true)
 		}
 		res.Peers = append(res.Peers, p)
 	}

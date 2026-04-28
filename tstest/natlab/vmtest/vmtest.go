@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -43,6 +44,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/tstest/natlab/vnet"
 	"tailscale.com/types/key"
@@ -85,6 +87,7 @@ type Env struct {
 	qemuProcs []*exec.Cmd // launched QEMU processes
 
 	sameTailnetUser bool // all nodes register as the same Tailnet user
+	allOnline       bool // mark every peer as Online=true in MapResponses
 
 	// Shared resource initialization (sync.Once for things multiple nodes share).
 	vnetOnce      sync.Once
@@ -346,6 +349,16 @@ func SameTailnetUser() EnvOption {
 	return envOptFunc(func(e *Env) { e.sameTailnetUser = true })
 }
 
+// AllOnline returns an [EnvOption] that makes the test control server mark
+// every peer as Online=true in MapResponses (testcontrol.Server.AllOnline).
+// Several disco-key handling fast paths in the controlclient and wgengine
+// only fire when the peer is reported online; without this option those
+// paths are silently skipped, which can mask bugs and slow down recovery
+// from disco-key rotations.
+func AllOnline() EnvOption {
+	return envOptFunc(func(e *Env) { e.allOnline = true })
+}
+
 // AddNetwork creates a new virtual network. Arguments follow the same pattern as
 // vnet.Config.AddNetwork (string IPs, NAT types, NetworkService values).
 func (e *Env) AddNetwork(opts ...any) *vnet.Network {
@@ -414,6 +427,11 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 
 // LanIP returns the LAN IPv4 address of this node on the given network.
 // This is only valid after Env.Start() has been called.
+// Name returns the node's name as set in [Env.AddNode].
+func (n *Node) Name() string {
+	return n.name
+}
+
 func (n *Node) LanIP(net *vnet.Network) netip.Addr {
 	return n.vnetNode.LanIP(net)
 }
@@ -864,33 +882,172 @@ func (e *Env) ApproveRoutes(n *Node, routes ...string) {
 	}
 }
 
-// ping pings from one node to another's Tailscale IP, retrying until it succeeds
-// or the timeout expires. This establishes the WireGuard tunnel between the nodes.
+// ping does a disco ping from one node to another's Tailscale IP, retrying
+// for up to 30 seconds, fataling on failure. It is used internally to wake
+// up magicsock peer state before a test runs; tests that want to assert
+// connectivity should use [Env.Ping] with the appropriate ping type and
+// timeout.
 func (e *Env) ping(from, to *Node) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	e.t.Helper()
+	if err := e.Ping(from, to, tailcfg.PingDisco, 30*time.Second); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// Ping pings from one node to another's Tailscale IP using the given ping
+// type, retrying until it succeeds or timeout expires. It returns the error
+// from the last attempt if the timeout expires. Unlike the internal ping
+// helper, it does not fatal the test on failure; callers can check the error
+// to assert on timing.
+//
+// [tailcfg.PingTSMP] actually flows packets across the WireGuard tunnel and is
+// the right choice for asserting end-to-end connectivity.
+// [tailcfg.PingDisco] only exchanges disco messages between magicsock layers
+// and is useful for warming up peer state without requiring a working tunnel.
+func (e *Env) Ping(from, to *Node, ptype tailcfg.PingType, timeout time.Duration) error {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	toSt, err := to.agent.Status(ctx)
 	if err != nil {
-		e.t.Fatalf("ping: can't get %s status: %v", to.name, err)
+		return fmt.Errorf("ping: can't get %s status: %w", to.name, err)
 	}
 	if len(toSt.Self.TailscaleIPs) == 0 {
-		e.t.Fatalf("ping: %s has no Tailscale IPs", to.name)
+		return fmt.Errorf("ping: %s has no Tailscale IPs", to.name)
 	}
 	targetIP := toSt.Self.TailscaleIPs[0]
 
+	var lastErr error
 	for {
-		pingCtx, pingCancel := context.WithTimeout(ctx, 3*time.Second)
-		pr, err := from.agent.PingWithOpts(pingCtx, targetIP, tailcfg.PingDisco, local.PingOpts{})
+		// Per-attempt timeout: cap at 3s but never exceed the remaining budget.
+		attemptTimeout := 3 * time.Second
+		if d := time.Until(deadline(ctx)); d < attemptTimeout {
+			attemptTimeout = d
+		}
+		if attemptTimeout <= 0 {
+			break
+		}
+		pingCtx, pingCancel := context.WithTimeout(ctx, attemptTimeout)
+		pr, err := from.agent.PingWithOpts(pingCtx, targetIP, ptype, local.PingOpts{})
 		pingCancel()
 		if err == nil && pr.Err == "" {
-			e.logVerbosef("ping: %s -> %s OK", from.name, targetIP)
-			return
+			e.logVerbosef("ping(%s): %s -> %s OK", ptype, from.name, targetIP)
+			return nil
+		}
+		switch {
+		case err != nil:
+			lastErr = err
+		case pr.Err != "":
+			lastErr = fmt.Errorf("%s", pr.Err)
 		}
 		if ctx.Err() != nil {
-			e.t.Fatalf("ping: %s -> %s timed out", from.name, targetIP)
+			break
 		}
-		time.Sleep(time.Second)
+		time.Sleep(500 * time.Millisecond)
+	}
+	if lastErr == nil {
+		lastErr = ctx.Err()
+	}
+	return fmt.Errorf("ping(%s): %s -> %s (%s) timed out after %v: %w", ptype, from.name, to.name, targetIP, timeout, lastErr)
+}
+
+// deadline returns ctx's deadline, or a zero Time if it has none.
+func deadline(ctx context.Context) time.Time {
+	d, _ := ctx.Deadline()
+	return d
+}
+
+// PeerDiscoKey returns n's view of the given peer's disco key. It returns a
+// non-nil error if the LocalAPI request fails (e.g. tailscaled briefly
+// unavailable during a restart). It returns (zero, false, nil) if n is
+// reachable but has no record of the given peer in its current netmap.
+//
+// PeerDiscoKey is suitable for use inside a [tstest.WaitFor] poll loop: it
+// does not fatal the test on transient errors.
+//
+// The disco key is fetched from the debug-only "peer-disco-keys" LocalAPI
+// action ([ipnlocal.LocalBackend.DebugPeerDiscoKeys]) rather than via
+// [ipnstate.Status], to keep the production PeerStatus struct free of disco
+// keys (and free of non-comparable fields like [key.DiscoPublic] that break
+// reflect-based test helpers).
+func (e *Env) PeerDiscoKey(n *Node, peer key.NodePublic) (key.DiscoPublic, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	got, err := n.agent.DebugResultJSON(ctx, "peer-disco-keys")
+	if err != nil {
+		return key.DiscoPublic{}, false, err
+	}
+	// DebugResultJSON returns the result as a generic any (the body is
+	// re-decoded into any), so the map comes back keyed by string text-
+	// encoded node keys. Re-marshal+unmarshal into a typed map for cleaner
+	// lookup. (Roundtripping through JSON is fine for a test helper.)
+	raw, err := json.Marshal(got)
+	if err != nil {
+		return key.DiscoPublic{}, false, fmt.Errorf("re-marshal: %w", err)
+	}
+	var m map[key.NodePublic]key.DiscoPublic
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return key.DiscoPublic{}, false, fmt.Errorf("unmarshal peer-disco-keys: %w", err)
+	}
+	d, ok := m[peer]
+	return d, ok, nil
+}
+
+// RotateDiscoKey asks tailscaled on n to rotate its discovery (magicsock) key
+// in place via the LocalAPI debug action. The node key, control connection,
+// and other tailscaled state are unaffected. It fatals the test on error.
+func (e *Env) RotateDiscoKey(n *Node) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := n.agent.DebugAction(ctx, "rotate-disco-key"); err != nil {
+		e.t.Fatalf("RotateDiscoKey(%s): %v", n.name, err)
+	}
+}
+
+// RestartTailscaled signals tailscaled on n to die so that its supervisor
+// (gokrazy) restarts it. It then waits for tailscaled to come back to the
+// "Running" backend state. It fatals the test on error.
+//
+// Restarting tailscaled is currently only supported on gokrazy nodes.
+func (e *Env) RestartTailscaled(n *Node) {
+	e.t.Helper()
+	if !n.os.IsGokrazy {
+		e.t.Fatalf("RestartTailscaled(%s): only supported on gokrazy nodes (have %q)", n.name, n.os.Name)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://unused/restart-tailscaled", nil)
+	if err != nil {
+		e.t.Fatalf("RestartTailscaled(%s): %v", n.name, err)
+	}
+	res, err := n.agent.HTTPClient.Do(req)
+	if err != nil {
+		e.t.Fatalf("RestartTailscaled(%s): %v", n.name, err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		e.t.Fatalf("RestartTailscaled(%s): %s: %s", n.name, res.Status, body)
+	}
+	e.t.Logf("[%s] %s", n.name, strings.TrimSpace(string(body)))
+
+	// Wait for tailscaled to come back. Status calls will fail while the unix
+	// socket is gone, then return Starting/NeedsLogin briefly before settling
+	// on Running.
+	if err := tstest.WaitFor(45*time.Second, func() error {
+		st, err := n.agent.Status(ctx)
+		if err != nil {
+			return err
+		}
+		if st.BackendState != "Running" {
+			return fmt.Errorf("backend state = %q", st.BackendState)
+		}
+		return nil
+	}); err != nil {
+		e.t.Fatalf("RestartTailscaled(%s): waiting for Running: %v", n.name, err)
 	}
 }
 
@@ -1093,6 +1250,9 @@ func (e *Env) initVnet() {
 
 		if e.sameTailnetUser {
 			e.server.ControlServer().AllNodesSameUser = true
+		}
+		if e.allOnline {
+			e.server.ControlServer().AllOnline = true
 		}
 	})
 }
