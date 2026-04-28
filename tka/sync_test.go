@@ -5,42 +5,139 @@ package tka
 
 import (
 	"bytes"
-	"strconv"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/tstest"
+	"tailscale.com/util/must"
 )
 
 func TestSyncOffer(t *testing.T) {
-	c := newTestchain(t, `
-        A1 -> A2 -> A3 -> A4 -> A5 -> A6 -> A7 -> A8 -> A9 -> A10
-        A10 -> A11 -> A12 -> A13 -> A14 -> A15 -> A16 -> A17 -> A18
-        A18 -> A19 -> A20 -> A21 -> A22 -> A23 -> A24 -> A25
-    `)
-	storage := c.Chonk()
-	a, err := Open(storage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := a.SyncOffer(storage)
-	if err != nil {
-		t.Fatal(err)
+	getSyncOffer := func(t *testing.T, storage Chonk) SyncOffer {
+		t.Helper()
+
+		a, err := Open(storage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := a.SyncOffer(storage)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return got
 	}
 
-	// A SyncOffer includes a selection of AUMs going backwards in the tree,
-	// progressively skipping more and more each iteration.
-	want := SyncOffer{
-		Head: c.AUMHashes["A25"],
-		Ancestors: []AUMHash{
-			c.AUMHashes["A"+strconv.Itoa(25-ancestorsSkipStart)],
-			c.AUMHashes["A"+strconv.Itoa(25-ancestorsSkipStart<<ancestorsSkipShift)],
-			c.AUMHashes["A1"],
-		},
+	fakeState := &State{
+		Keys:              []Key{{Kind: Key25519, Votes: 1}},
+		DisablementValues: [][]byte{bytes.Repeat([]byte{1}, 32)},
 	}
 
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("SyncOffer diff (-want, +got):\n%s", diff)
-	}
+	checkpointTemplate := optTemplate("checkpoint", AUM{MessageKind: AUMCheckpoint, State: fakeState})
+
+	// If we have a small chain with just a handful of AUMs, the SyncOffer
+	// contains the current HEAD and the first checkpoint.
+	t.Run("short-chain", func(t *testing.T) {
+		c := newTestchain(t, `A1 -> A2 -> A3 -> A4 -> A5`)
+		got := getSyncOffer(t, c.Chonk())
+
+		// A SyncOffer includes the first checkpoint.
+		want := SyncOffer{
+			Head: c.AUMHashes["A5"],
+			Ancestors: []AUMHash{
+				c.AUMHashes["A1"],
+			},
+		}
+
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("SyncOffer diff (-want, +got):\n%s", diff)
+		}
+	})
+
+	// If the chain contains multiple checkpoints, the SyncOffer includes
+	// all of them.
+	t.Run("chain-with-multiple-checkpoints", func(t *testing.T) {
+		c := newTestchain(t, `
+            A1 -> A2 -> A3 -> A4 -> A5 -> A6 -> A7 -> A8 -> A9 -> A10
+            A10 -> A11 -> A12 -> A13 -> A14 -> A15 -> A16 -> A17 -> A18
+            A18 -> A19 -> A20 -> A21 -> A22 -> A23 -> A24 -> A25 -> A26
+            A26 -> A27 -> A28 -> A29 -> A30 -> A31 -> A32 -> A33 -> A34
+            A34 -> A35 -> A36 -> A37 -> A38 -> A39 -> A40 -> A41 -> A42
+            A42 -> A43 -> A45 -> A46 -> A47 -> A48 -> A49 -> A50 -> A51
+            A51 -> A52 -> A53 -> A54 -> A55
+
+            A1.template = checkpoint
+            A11.template = checkpoint
+            A21.template = checkpoint
+            A31.template = checkpoint
+            A41.template = checkpoint
+            A51.template = checkpoint
+        `, checkpointTemplate)
+		got := getSyncOffer(t, c.Chonk())
+
+		// A SyncOffer includes the first checkpoint.
+		want := SyncOffer{
+			Head: c.AUMHashes["A55"],
+			Ancestors: []AUMHash{
+				c.AUMHashes["A51"],
+				c.AUMHashes["A41"],
+				c.AUMHashes["A31"],
+				c.AUMHashes["A21"],
+				c.AUMHashes["A11"],
+				c.AUMHashes["A1"],
+			},
+		}
+
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("SyncOffer diff (-want, +got):\n%s", diff)
+		}
+	})
+
+	// The size of a SyncOffer does not grow without bound as the number of AUMs increases.
+	t.Run("long-chain-size-is-bounded", func(t *testing.T) {
+		size := 1800
+
+		// Build a template string with a checkpoint every 50 AUMs.
+		var sb strings.Builder
+		sb.WriteString("A")
+		for i := range size {
+			sb.WriteString(fmt.Sprintf(" -> A%d", i))
+		}
+		for i := range size {
+			if i%50 == 0 {
+				sb.WriteString(fmt.Sprintf("\nA%d.template = checkpoint", i))
+			}
+		}
+
+		c := newTestchain(t, sb.String(), checkpointTemplate)
+		got := getSyncOffer(t, c.Chonk())
+
+		// We expect the SyncOffer to include:
+		//
+		//	- the latest AUM as the HEAD
+		//	- the checkpoints from the last 1000 AUMs (maxSyncHeadIntersectionIter)
+		//	- the oldest AUM in storage
+		//
+		want := SyncOffer{
+			Head: c.AUMHashes["A1799"],
+			Ancestors: []AUMHash{
+				c.AUMHashes["A1750"], c.AUMHashes["A1700"], c.AUMHashes["A1650"],
+				c.AUMHashes["A1600"], c.AUMHashes["A1550"], c.AUMHashes["A1500"],
+				c.AUMHashes["A1450"], c.AUMHashes["A1400"], c.AUMHashes["A1350"],
+				c.AUMHashes["A1300"], c.AUMHashes["A1250"], c.AUMHashes["A1200"],
+				c.AUMHashes["A1150"], c.AUMHashes["A1100"], c.AUMHashes["A1050"],
+				c.AUMHashes["A1000"], c.AUMHashes["A950"], c.AUMHashes["A900"],
+				c.AUMHashes["A850"], c.AUMHashes["A800"], c.AUMHashes["A"],
+			},
+		}
+
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("SyncOffer diff (-want, +got):\n%s", diff)
+		}
+	})
 }
 
 func TestComputeSyncIntersection_FastForward(t *testing.T) {
@@ -131,15 +228,6 @@ func TestComputeSyncIntersection_ForkSmallDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diff := cmp.Diff(SyncOffer{
-		Head: c.AUMHashes["F1"],
-		Ancestors: []AUMHash{
-			c.AUMHashes["A"+strconv.Itoa(9-ancestorsSkipStart)],
-			c.AUMHashes["A1"],
-		},
-	}, offer1); diff != "" {
-		t.Errorf("offer1 diff (-want, +got):\n%s", diff)
-	}
 
 	chonk2 := c.ChonkWith("A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10")
 	n2, err := Open(chonk2)
@@ -150,21 +238,12 @@ func TestComputeSyncIntersection_ForkSmallDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diff := cmp.Diff(SyncOffer{
-		Head: c.AUMHashes["A10"],
-		Ancestors: []AUMHash{
-			c.AUMHashes["A"+strconv.Itoa(10-ancestorsSkipStart)],
-			c.AUMHashes["A1"],
-		},
-	}, offer2); diff != "" {
-		t.Errorf("offer2 diff (-want, +got):\n%s", diff)
-	}
 
 	// Node 1 only knows about the first eight nodes, so the head of n2 is
 	// alien to it.
 	t.Run("n1", func(t *testing.T) {
-		// n2 has 10 nodes, so the first common ancestor should be 10-ancestorsSkipStart
-		wantIntersection := c.AUMHashes["A"+strconv.Itoa(10-ancestorsSkipStart)]
+		// n2 has 10 nodes, so the first common ancestor is the genesis AUM
+		wantIntersection := c.AUMHashes["A1"]
 
 		got, err := computeSyncIntersection(chonk1, offer1, offer2)
 		if err != nil {
@@ -180,8 +259,8 @@ func TestComputeSyncIntersection_ForkSmallDiff(t *testing.T) {
 
 	// Node 2 knows about the full chain but doesn't recognize the head.
 	t.Run("n2", func(t *testing.T) {
-		// n1 has 9 nodes, so the first common ancestor should be 9-ancestorsSkipStart
-		wantIntersection := c.AUMHashes["A"+strconv.Itoa(9-ancestorsSkipStart)]
+		// n1 has 9 nodes, so the first common ancestor is the genesis AUM
+		wantIntersection := c.AUMHashes["A1"]
 
 		got, err := computeSyncIntersection(chonk2, offer2, offer1)
 		if err != nil {
@@ -373,5 +452,111 @@ func TestSyncSimpleE2E(t *testing.T) {
 
 	if cHash, nHash := control.Head(), node.Head(); cHash != nHash {
 		t.Errorf("node & control are not synced: c=%x, n=%x", cHash, nHash)
+	}
+}
+
+// TestSyncFromFarBehind checks that nodes with compacted state can still find
+// a common ancestor when the remote is significantly ahead.
+//
+// We simulate a node that has compacted its early history and is now ~500 AUMs
+// behind the control plane, a distance that previously caused exponential sampling
+// in SyncOffer to skip the node's entire local history.
+//
+// Regression test for http://go/corp/40404
+func TestSyncFromFarBehind(t *testing.T) {
+	pub1, priv1 := testingKey25519(t, 1)
+	pub2, _ := testingKey25519(t, 2)
+	signer1 := signer25519(priv1)
+
+	key1 := Key{Kind: Key25519, Public: pub1, Votes: 2}
+	key2 := Key{Kind: Key25519, Public: pub2, Votes: 2}
+
+	// Setup: persistentAuthority (control plane) vs compactingAuthority (client node).
+	state := State{
+		Keys:              []Key{key1},
+		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+	}
+
+	persistentStorage, compactingStorage := ChonkMem(), ChonkMem()
+	persistentSize := func() int { return len(must.Get(persistentStorage.AllAUMs())) }
+	compactingSize := func() int { return len(must.Get(compactingStorage.AllAUMs())) }
+
+	// Backdate the clock on the compactingStorage so all AUMs will be old enough
+	// to be considered for compacting.
+	clock := tstest.NewClock(tstest.ClockOpts{
+		Start: time.Now().Add(-(CompactionDefaults.MinAge + 24*time.Hour)),
+	})
+	compactingStorage.SetClock(clock)
+
+	persistentAuthority, genesisAUM := must.Get2(Create(persistentStorage, state, signer1))
+	compactingAuthority := must.Get(Bootstrap(compactingStorage, genesisAUM))
+
+	// 1. Generate enough history to trigger checkpoints.
+	for range checkpointEvery * 2 {
+		update := persistentAuthority.NewUpdater(signer1)
+
+		must.Do(update.AddKey(key2))
+		addKey := must.Get(update.Finalize(persistentStorage))
+		must.Do(persistentAuthority.Inform(persistentStorage, addKey))
+		must.Do(compactingAuthority.Inform(compactingStorage, addKey))
+
+		update = persistentAuthority.NewUpdater(signer1)
+		must.Do(update.RemoveKey(key2.MustID()))
+		removeKey := must.Get(update.Finalize(persistentStorage))
+		must.Do(persistentAuthority.Inform(persistentStorage, removeKey))
+		must.Do(compactingAuthority.Inform(compactingStorage, removeKey))
+	}
+
+	t.Logf("genesis and first batch of AUMs: persistent = %d, compacting = %d", persistentSize(), compactingSize())
+
+	// 2. Compact the node state.
+	//
+	// It now has a different 'oldestAncestor' than the control plane.
+	beforeCompacting := compactingSize()
+	must.Do(compactingAuthority.Compact(compactingStorage, CompactionDefaults))
+	afterCompacting := compactingSize()
+
+	if beforeCompacting == afterCompacting {
+		t.Errorf("expected Compact to reduce the number of AUMs, but unchanged: size = %d", afterCompacting)
+	}
+
+	// 3. Advance the control plane far beyond the node.
+	//
+	// As of 2026-04-17, the largest TKA has ~750 AUMs.
+	//
+	// If you keep increasing this number, eventually the sync will fail because you
+	// hit the hard-coded limits on iteration during the sync process.
+	for persistentSize() < compactingSize()+800 {
+		b := persistentAuthority.NewUpdater(signer1)
+
+		must.Do(b.AddKey(key2))
+		addKey := must.Get(b.Finalize(persistentStorage))
+		must.Do(persistentAuthority.Inform(persistentStorage, addKey))
+
+		b = persistentAuthority.NewUpdater(signer1)
+		must.Do(b.RemoveKey(key2.MustID()))
+		removeKey := must.Get(b.Finalize(persistentStorage))
+		must.Do(persistentAuthority.Inform(persistentStorage, removeKey))
+	}
+
+	t.Logf("post-compacting and extra AUMs:  persistent = %d, compacting = %d", persistentSize(), compactingSize())
+
+	// 4. Verify Intersection.
+	// The node should find an intersection even with a 500-AUM gap.
+	persistentOffer := must.Get(persistentAuthority.SyncOffer(persistentStorage))
+	compactingOffer := must.Get(compactingAuthority.SyncOffer(compactingStorage))
+
+	if _, err := compactingAuthority.MissingAUMs(compactingStorage, persistentOffer); err != nil {
+		t.Errorf("node failed to find intersection with far-ahead control plane: %v", err)
+	}
+
+	// 4. Check that the persistent authority can find an intersection with the
+	// compacting authority, and has missing AUMs to send it.
+	missing, err := persistentAuthority.MissingAUMs(persistentStorage, compactingOffer)
+	if len(missing) == 0 {
+		t.Errorf("control plane did not find any missing AUMs for node")
+	}
+	if err != nil {
+		t.Errorf("control plane failed to find missing AUMs for node: %v", err)
 	}
 }
