@@ -141,6 +141,8 @@ type userspaceEngine struct {
 	lastEngineInputs    *maybeReconfigInputs
 	lastDNSConfig       dns.ConfigView // or invalid if none
 	lastIsSubnetRouter  bool           // was the node a primary subnet router in the last run.
+	lastTrackNodes      []key.NodePublic // trackNodes from the last updateActivityMapsLocked call
+	lastTrackIPs        []netip.Addr     // trackIPs from the last updateActivityMapsLocked call
 	recvActivityAt      map[key.NodePublic]mono.Time
 	trimmedNodes        map[key.NodePublic]bool   // set of node keys of peers currently excluded from wireguard config
 	sentActivityAt      map[netip.Addr]*mono.Time // value is accessed atomically
@@ -854,7 +856,6 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 	}
 
 	full := e.lastCfgFull
-	e.wgLogger.SetPeers(full.Peers)
 
 	// Compute a minimal config to pass to wireguard-go
 	// based on the full config. Prune off all the peers
@@ -973,9 +974,18 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackNodes []key.NodePublic, 
 	if !buildfeatures.HasLazyWG {
 		return
 	}
+
+	// Skip the map rebuild if the set of tracked keys hasn't changed;
+	// the maps and activity funcs from the previous call are still valid.
+	if e.lastTrackNodes != nil && slices.Equal(e.lastTrackNodes, trackNodes) && slices.Equal(e.lastTrackIPs, trackIPs) {
+		return
+	}
+	e.lastTrackNodes = slices.Clone(trackNodes)
+	e.lastTrackIPs = slices.Clone(trackIPs)
+
 	// Generate the new map of which nodekeys we want to track
 	// receive times for.
-	mr := map[key.NodePublic]mono.Time{} // TODO: only recreate this if set of keys changed
+	mr := map[key.NodePublic]mono.Time{}
 	for _, nk := range trackNodes {
 		// Preserve old times in the new map, but also
 		// populate map entries for new trackNodes values with
@@ -1085,6 +1095,10 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	}
 
 	e.isLocalAddr.Store(ipset.NewContainsIPFunc(views.SliceOf(routerCfg.LocalAddrs)))
+
+	// SetPeers is safe for concurrent use; call before wgLock to avoid
+	// holding the lock during the O(n) formatting pass.
+	e.wgLogger.SetPeers(cfg.Peers)
 
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
