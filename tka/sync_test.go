@@ -5,6 +5,8 @@ package tka
 
 import (
 	"bytes"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +14,131 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/util/must"
 )
+
+func TestSyncOffer(t *testing.T) {
+	getSyncOffer := func(t *testing.T, storage Chonk) SyncOffer {
+		t.Helper()
+
+		a, err := Open(storage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := a.SyncOffer(storage)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return got
+	}
+
+	fakeState := &State{
+		Keys:              []Key{{Kind: Key25519, Votes: 1}},
+		DisablementValues: [][]byte{bytes.Repeat([]byte{1}, 32)},
+	}
+
+	checkpointTemplate := optTemplate("checkpoint", AUM{MessageKind: AUMCheckpoint, State: fakeState})
+
+	// If we have a small chain with just a handful of AUMs, the SyncOffer
+	// contains the current HEAD and the first checkpoint.
+	t.Run("short-chain", func(t *testing.T) {
+		c := newTestchain(t, `A1 -> A2 -> A3 -> A4 -> A5`)
+		got := getSyncOffer(t, c.Chonk())
+
+		// A SyncOffer includes the first checkpoint.
+		want := SyncOffer{
+			Head: c.AUMHashes["A5"],
+			Ancestors: []AUMHash{
+				c.AUMHashes["A1"],
+			},
+		}
+
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("SyncOffer diff (-want, +got):\n%s", diff)
+		}
+	})
+
+	// If the chain contains multiple checkpoints, the SyncOffer includes
+	// all of them.
+	t.Run("chain-with-multiple-checkpoints", func(t *testing.T) {
+		c := newTestchain(t, `
+            A1 -> A2 -> A3 -> A4 -> A5 -> A6 -> A7 -> A8 -> A9 -> A10
+            A10 -> A11 -> A12 -> A13 -> A14 -> A15 -> A16 -> A17 -> A18
+            A18 -> A19 -> A20 -> A21 -> A22 -> A23 -> A24 -> A25 -> A26
+            A26 -> A27 -> A28 -> A29 -> A30 -> A31 -> A32 -> A33 -> A34
+            A34 -> A35 -> A36 -> A37 -> A38 -> A39 -> A40 -> A41 -> A42
+            A42 -> A43 -> A45 -> A46 -> A47 -> A48 -> A49 -> A50 -> A51
+            A51 -> A52 -> A53 -> A54 -> A55
+
+            A1.template = checkpoint
+            A11.template = checkpoint
+            A21.template = checkpoint
+            A31.template = checkpoint
+            A41.template = checkpoint
+            A51.template = checkpoint
+        `, checkpointTemplate)
+		got := getSyncOffer(t, c.Chonk())
+
+		// A SyncOffer includes the first checkpoint.
+		want := SyncOffer{
+			Head: c.AUMHashes["A55"],
+			Ancestors: []AUMHash{
+				c.AUMHashes["A51"],
+				c.AUMHashes["A41"],
+				c.AUMHashes["A31"],
+				c.AUMHashes["A21"],
+				c.AUMHashes["A11"],
+				c.AUMHashes["A1"],
+			},
+		}
+
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("SyncOffer diff (-want, +got):\n%s", diff)
+		}
+	})
+
+	// The size of a SyncOffer does not grow without bound as the number of AUMs increases.
+	t.Run("long-chain-size-is-bounded", func(t *testing.T) {
+		size := 1800
+
+		// Build a template string with a checkpoint every 50 AUMs.
+		var sb strings.Builder
+		sb.WriteString("A")
+		for i := range size {
+			sb.WriteString(fmt.Sprintf(" -> A%d", i))
+		}
+		for i := range size {
+			if i%50 == 0 {
+				sb.WriteString(fmt.Sprintf("\nA%d.template = checkpoint", i))
+			}
+		}
+
+		c := newTestchain(t, sb.String(), checkpointTemplate)
+		got := getSyncOffer(t, c.Chonk())
+
+		// We expect the SyncOffer to include:
+		//
+		//	- the latest AUM as the HEAD
+		//	- the checkpoints from the last 1000 AUMs (maxSyncHeadIntersectionIter)
+		//	- the oldest AUM in storage
+		//
+		want := SyncOffer{
+			Head: c.AUMHashes["A1799"],
+			Ancestors: []AUMHash{
+				c.AUMHashes["A1750"], c.AUMHashes["A1700"], c.AUMHashes["A1650"],
+				c.AUMHashes["A1600"], c.AUMHashes["A1550"], c.AUMHashes["A1500"],
+				c.AUMHashes["A1450"], c.AUMHashes["A1400"], c.AUMHashes["A1350"],
+				c.AUMHashes["A1300"], c.AUMHashes["A1250"], c.AUMHashes["A1200"],
+				c.AUMHashes["A1150"], c.AUMHashes["A1100"], c.AUMHashes["A1050"],
+				c.AUMHashes["A1000"], c.AUMHashes["A950"], c.AUMHashes["A900"],
+				c.AUMHashes["A850"], c.AUMHashes["A800"], c.AUMHashes["A"],
+			},
+		}
+
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("SyncOffer diff (-want, +got):\n%s", diff)
+		}
+	})
+}
 
 func TestComputeSyncIntersection_FastForward(t *testing.T) {
 	// Node 1 has: A1 -> A2
