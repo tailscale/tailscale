@@ -42,6 +42,7 @@ import (
 var (
 	runVMTests     = flag.Bool("run-vm-tests", false, "run tests that require VMs with KVM")
 	verboseVMDebug = flag.Bool("verbose-vm-debug", false, "enable verbose debug logging for VM tests")
+	testVersion    = flag.String("test-version", "", `if non-empty, download tailscale & tailscaled at the given release version (e.g. "1.97.255", "unstable", or "stable") instead of building from the source tree`)
 )
 
 // Env is a test environment that manages virtual networks and QEMU VMs.
@@ -55,6 +56,11 @@ type Env struct {
 
 	sockAddr string // shared Unix socket path for all QEMU netdevs
 	binDir   string // directory for compiled binaries
+
+	// testVersion is the resolved Tailscale release version to use (empty if
+	// building from source). When non-empty, tailscale and tailscaled binaries
+	// are downloaded from pkgs.tailscale.com instead of compiled from the tree.
+	testVersion string
 
 	// gokrazy-specific paths
 	gokrazyBase   string // path to gokrazy base qcow2 image
@@ -194,6 +200,17 @@ func (e *Env) Start() {
 
 	if err := os.MkdirAll(e.binDir, 0755); err != nil {
 		t.Fatal(err)
+	}
+
+	// Resolve --test-version up front (e.g. "unstable" -> "1.97.255") so all
+	// platforms see the same concrete version.
+	if *testVersion != "" {
+		v, err := resolveTestVersion(ctx, *testVersion)
+		if err != nil {
+			t.Fatalf("resolving --test-version=%q: %v", *testVersion, err)
+		}
+		e.testVersion = v
+		t.Logf("using Tailscale release version %s (from --test-version=%q)", v, *testVersion)
 	}
 
 	// Determine which GOOS/GOARCH pairs need compiled binaries (non-gokrazy
@@ -716,8 +733,13 @@ func (e *Env) ensureGokrazy(ctx context.Context) error {
 	return nil
 }
 
-// compileBinariesForOS cross-compiles tta, tailscale, and tailscaled for the
-// given GOOS/GOARCH and places them in e.binDir/<goos>_<goarch>/.
+// compileBinariesForOS prepares the tta, tailscale, and tailscaled binaries
+// for the given GOOS/GOARCH and places them in e.binDir/<goos>_<goarch>/.
+//
+// tta is always built from the local source tree (the test agent must match
+// the test framework). When --test-version is set, tailscale and tailscaled
+// are taken from the downloaded release tarball instead of being compiled
+// from source.
 func (e *Env) compileBinariesForOS(ctx context.Context, goos, goarch string) error {
 	modRoot, err := findModRoot()
 	if err != nil {
@@ -730,14 +752,20 @@ func (e *Env) compileBinariesForOS(ctx context.Context, goos, goarch string) err
 		return err
 	}
 
-	binaries := []struct{ name, pkg string }{
-		{"tta", "./cmd/tta"},
-		{"tailscale", "./cmd/tailscale"},
-		{"tailscaled", "./cmd/tailscaled"},
+	// Use downloaded release binaries only on Linux: pkgs.tailscale.com only
+	// publishes Linux tarballs, so other GOOS values still build from source.
+	useDownloaded := e.testVersion != "" && goos == "linux"
+
+	type binary struct{ name, pkg string }
+	buildBins := []binary{{"tta", "./cmd/tta"}}
+	if !useDownloaded {
+		buildBins = append(buildBins,
+			binary{"tailscale", "./cmd/tailscale"},
+			binary{"tailscaled", "./cmd/tailscaled"})
 	}
 
 	var eg errgroup.Group
-	for _, bin := range binaries {
+	for _, bin := range buildBins {
 		eg.Go(func() error {
 			outPath := filepath.Join(outDir, bin.name)
 			e.t.Logf("compiling %s/%s...", dir, bin.name)
@@ -751,7 +779,34 @@ func (e *Env) compileBinariesForOS(ctx context.Context, goos, goarch string) err
 			return nil
 		})
 	}
+
+	if useDownloaded {
+		eg.Go(func() error {
+			srcDir, err := ensureVersionBinaries(ctx, e.testVersion, goarch, e.t.Logf)
+			if err != nil {
+				return err
+			}
+			for _, name := range []string{"tailscale", "tailscaled"} {
+				if err := copyFile(filepath.Join(srcDir, name), filepath.Join(outDir, name), 0755); err != nil {
+					return fmt.Errorf("staging %s/%s: %w", dir, name, err)
+				}
+			}
+			e.t.Logf("staged version %s tailscale & tailscaled for %s", e.testVersion, dir)
+			return nil
+		})
+	}
+
 	return eg.Wait()
+}
+
+// copyFile copies src to dst with the given permission bits.
+func copyFile(src, dst string, perm os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	return writeAtomic(dst, in, perm)
 }
 
 // findModRoot returns the root of the Go module (where go.mod is).
