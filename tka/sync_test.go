@@ -385,8 +385,13 @@ func TestSyncFromFarBehind(t *testing.T) {
 	// 2. Compact the node state.
 	//
 	// It now has a different 'oldestAncestor' than the control plane.
-	clock.Advance(48 * 24 * time.Hour)
+	beforeCompacting := compactingSize()
 	must.Do(compactingAuthority.Compact(compactingStorage, CompactionDefaults))
+	afterCompacting := compactingSize()
+
+	if beforeCompacting == afterCompacting {
+		t.Errorf("expected Compact to reduce the number of AUMs, but unchanged: size = %d", afterCompacting)
+	}
 
 	// 3. Advance the control plane far beyond the node.
 	//
