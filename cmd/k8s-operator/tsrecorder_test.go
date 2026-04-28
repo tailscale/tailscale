@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -55,12 +56,14 @@ func TestRecorder(t *testing.T) {
 	fr := record.NewFakeRecorder(2)
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	reconciler := &RecorderReconciler{
-		tsNamespace: tsNamespace,
-		Client:      fc,
-		clients:     tsclient.NewProvider(tsClient),
-		recorder:    fr,
-		log:         zl.Sugar(),
-		clock:       cl,
+		tsNamespace:       tsNamespace,
+		Client:            fc,
+		clients:           tsclient.NewProvider(tsClient),
+		recorder:          fr,
+		log:               zl.Sugar(),
+		clock:             cl,
+		authKeyRateLimits: make(map[string]*rate.Limiter),
+		authKeyReissuing:  make(map[string]bool),
 	}
 
 	t.Run("invalid_spec_gives_an_error_condition", func(t *testing.T) {

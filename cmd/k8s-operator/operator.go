@@ -692,12 +692,14 @@ func runReconcilers(opts reconcilerOpts) {
 		Watches(&rbacv1.Role{}, recorderFilter).
 		Watches(&rbacv1.RoleBinding{}, recorderFilter).
 		Complete(&RecorderReconciler{
-			recorder:    eventRecorder,
-			tsNamespace: opts.tailscaleNamespace,
-			Client:      mgr.GetClient(),
-			log:         opts.log.Named("recorder-reconciler"),
-			clock:       tstime.DefaultClock{},
-			clients:     clients,
+			recorder:          eventRecorder,
+			tsNamespace:       opts.tailscaleNamespace,
+			Client:            mgr.GetClient(),
+			log:               opts.log.Named("recorder-reconciler"),
+			clock:             tstime.DefaultClock{},
+			clients:           clients,
+			authKeyRateLimits: make(map[string]*rate.Limiter),
+			authKeyReissuing:  make(map[string]bool),
 		})
 	if err != nil {
 		startlog.Fatalf("could not create Recorder reconciler: %v", err)
