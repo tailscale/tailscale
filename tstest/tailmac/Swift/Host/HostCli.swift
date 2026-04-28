@@ -22,8 +22,10 @@ extension HostCli {
         @Option var share: String?
         @Flag(help: "Run without GUI (for automated testing)") var headless: Bool = false
         @Flag(help: "Create NIC with no attachment (for later hot-swap)") var disconnectedNic: Bool = false
+        @Flag(help: "Use NAT NIC instead of socket NIC (for snapshot prep)") var natNic: Bool = false
         @Option(help: "Hot-swap NIC to this dgram socket path after boot/restore") var attachNetwork: String?
         @Option(help: "Serve screenshots on this localhost port (0 = auto)") var screenshotPort: Int?
+        @Option(help: "Assign IP/mask/gw to guest via vsock (e.g. 192.168.1.2/255.255.255.0/192.168.1.1)") var assignIp: String?
 
         mutating func run() {
             config = Config(id)
@@ -32,19 +34,38 @@ extension HostCli {
 
             if headless {
                 let attachSocket = attachNetwork
-                let disconnected = disconnectedNic || attachSocket != nil
+                let useNatNIC = natNic
+                let disconnected = !useNatNIC && (disconnectedNic || attachSocket != nil)
                 let wantScreenshots = screenshotPort != nil
                 let requestedPort = UInt16(screenshotPort ?? 0)
+                let ipConfig = assignIp
+
+                // Set up SIGINT handler before entering the event loop.
+                // The dispatch source must be stored in a global to prevent ARC deallocation.
+                signal(SIGINT, SIG_IGN)
+                let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+                retainedSigintSource = sigintSource
 
                 DispatchQueue.main.async {
                     let controller = VMController()
-                    controller.createVirtualMachine(headless: true, disconnectedNIC: disconnected)
+                    controller.createVirtualMachine(headless: true, disconnectedNIC: disconnected, natNIC: useNatNIC)
 
-                    // Handle SIGINT (from test cleanup) by saving VM state before exit.
-                    let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-                    signal(SIGINT, SIG_IGN) // Let DispatchSource handle it
+                    // Start vsock listener for IP assignment.
+                    // If --assign-ip is set, the listener replies with the IP config JSON.
+                    // If not set (snapshot prep), it replies "wait" so TTA keeps polling.
+                    if let ipCfg = ipConfig {
+                        let parts = ipCfg.split(separator: "/")
+                        if parts.count == 3 {
+                            let response = "{\"ip\":\"\(parts[0])\",\"mask\":\"\(parts[1])\",\"gw\":\"\(parts[2])\"}"
+                            controller.startIPConfigListener(response: response)
+                        }
+                    } else {
+                        controller.startIPConfigListener(response: "wait")
+                    }
+
                     sigintSource.setEventHandler {
-                        print("SIGINT received, saving VM state...")
+                        print("SIGINT received, disconnecting NIC and saving VM state...")
+                        controller.disconnectNetwork()
                         controller.pauseAndSaveVirtualMachine {
                             print("VM state saved, exiting.")
                             Foundation.exit(0)
@@ -79,11 +100,7 @@ extension HostCli {
 
                     let doAttach = {
                         if let sock = attachSocket {
-                            // Give macOS a moment to settle after boot/restore,
-                            // then hot-swap the NIC attachment.
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                                controller.attachNetwork(serverSocket: sock, clientID: config.vmID)
-                            }
+                            controller.attachNetwork(serverSocket: sock, clientID: config.vmID)
                         }
                     }
 
@@ -107,7 +124,9 @@ extension HostCli {
                     fflush(stdout)
                     app.run()
                 } else {
-                    RunLoop.main.run()
+                    // Use dispatchMain() instead of RunLoop.main.run() so that
+                    // GCD dispatch sources (like the SIGINT handler) are processed.
+                    dispatchMain()
                 }
             } else {
                 _ = NSApplicationMain(CommandLine.argc, CommandLine.unsafeArgv)
@@ -119,6 +138,7 @@ extension HostCli {
 // startScreenshotServer starts a localhost HTTP server that serves VM display
 // screenshots on GET /screenshot as JPEG. The port is printed to stdout as
 // "SCREENSHOT_PORT=<port>" so the Go test harness can discover it.
+var retainedSigintSource: DispatchSourceSignal? // prevent ARC deallocation
 var screenshotServer: ScreenshotHTTPServer? // prevent GC
 
 func startScreenshotServer(view: NSView, port: UInt16) {

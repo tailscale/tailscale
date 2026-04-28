@@ -26,14 +26,30 @@ func TestMacOSAndLinuxCanPing(t *testing.T) {
 		vmtest.DontJoinTailnet())
 	macos := env.AddNode("macos", lan,
 		vmtest.OS(vmtest.MacOS),
-		vmtest.DontJoinTailnet(),
-		vmtest.NoAgent())
+		vmtest.DontJoinTailnet())
 
 	env.Start()
 
-	// Ping from Linux (which has TTA) to macOS (which just responds to ICMP).
-	// LANPing retries until the macOS VM has booted and acquired a DHCP lease.
 	env.LANPing(linux, macos.LanIP(lan))
+}
+
+func TestTwoMacOSVMsCanPing(t *testing.T) {
+	env := vmtest.New(t)
+
+	lan := env.AddNetwork("192.168.1.1/24")
+
+	mac1 := env.AddNode("mac1", lan,
+		vmtest.OS(vmtest.MacOS),
+		vmtest.DontJoinTailnet())
+	mac2 := env.AddNode("mac2", lan,
+		vmtest.OS(vmtest.MacOS),
+		vmtest.DontJoinTailnet())
+
+	env.Start()
+
+	// Both macOS VMs have TTA. Ping from mac1 to mac2 and vice versa.
+	env.LANPing(mac1, mac2.LanIP(lan))
+	env.LANPing(mac2, mac1.LanIP(lan))
 }
 
 func TestSubnetRouter(t *testing.T) {

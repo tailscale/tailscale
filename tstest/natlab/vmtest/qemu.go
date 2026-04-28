@@ -20,12 +20,69 @@ import (
 	"tailscale.com/tstest/natlab/vnet"
 )
 
-// startQEMU launches a QEMU process for the given node.
-func (e *Env) startQEMU(n *Node) error {
-	if n.os.IsGokrazy {
-		return e.startGokrazyQEMU(n)
+// gokrazyPlatform boots gokrazy (Linux) VMs via QEMU.
+type gokrazyPlatform struct{}
+
+func (gokrazyPlatform) planSteps(e *Env, n *Node) {
+	e.Step("Build gokrazy image")
+	e.Step("Launch QEMU: " + n.name)
+}
+
+func (gokrazyPlatform) boot(ctx context.Context, e *Env, n *Node) error {
+	e.gokrazyOnce.Do(func() {
+		step := e.Step("Build gokrazy image")
+		step.Begin()
+		if err := e.ensureGokrazy(ctx); err != nil {
+			step.End(err)
+			e.t.Fatalf("ensureGokrazy: %v", err)
+		}
+		step.End(nil)
+	})
+
+	e.ensureQEMUSocket()
+
+	vmStep := e.Step("Launch QEMU: " + n.name)
+	vmStep.Begin()
+	if err := e.startGokrazyQEMU(n); err != nil {
+		vmStep.End(err)
+		return err
 	}
-	return e.startCloudQEMU(n)
+	vmStep.End(nil)
+	return nil
+}
+
+// qemuCloudPlatform boots cloud images (Ubuntu, Debian, FreeBSD) via QEMU.
+type qemuCloudPlatform struct{}
+
+func (qemuCloudPlatform) planSteps(e *Env, n *Node) {
+	e.Step(fmt.Sprintf("Compile %s_%s binaries", n.os.GOOS(), n.os.GOARCH()))
+	e.Step(fmt.Sprintf("Prepare %s image", n.os.Name))
+	e.Step("Launch QEMU: " + n.name)
+}
+
+func (qemuCloudPlatform) boot(ctx context.Context, e *Env, n *Node) error {
+	goos, goarch := n.os.GOOS(), n.os.GOARCH()
+
+	e.ensureCompiled(ctx, goos, goarch)
+
+	imgStep := e.Step(fmt.Sprintf("Prepare %s image", n.os.Name))
+	imgStep.Begin()
+	if err := ensureImage(ctx, n.os); err != nil {
+		imgStep.End(err)
+		return err
+	}
+	imgStep.End(nil)
+
+	e.ensureQEMUSocket()
+
+	vmStep := e.Step("Launch QEMU: " + n.name)
+	vmStep.Begin()
+	if err := e.startCloudQEMU(n); err != nil {
+		vmStep.End(err)
+		return err
+	}
+	vmStep.End(nil)
+	return nil
 }
 
 // startGokrazyQEMU launches a QEMU process for a gokrazy node.

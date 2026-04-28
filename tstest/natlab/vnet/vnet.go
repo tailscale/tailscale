@@ -352,7 +352,7 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
-	if destPort == 8008 && fakeTestAgent.Match(destIP) {
+	if destPort == TestDriverPort && fakeTestAgent.Match(destIP) {
 		node, ok := n.nodeByIP(clientRemoteIP)
 		if !ok {
 			n.logf("unknown client IP %v trying to connect to test driver", clientRemoteIP)
@@ -2106,7 +2106,7 @@ func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
 			return true
 		}
 	}
-	if tcp.DstPort == 8008 && fakeTestAgent.Match(flow.dst) {
+	if tcp.DstPort == TestDriverPort && fakeTestAgent.Match(flow.dst) {
 		// Connection from cmd/tta.
 		return true
 	}

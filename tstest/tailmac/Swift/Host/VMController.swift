@@ -81,7 +81,7 @@ class VMController: NSObject, VZVirtualMachineDelegate {
         return macPlatform
     }
 
-    func createVirtualMachine(headless: Bool = false, disconnectedNIC: Bool = false) {
+    func createVirtualMachine(headless: Bool = false, disconnectedNIC: Bool = false, natNIC: Bool = false) {
         let virtualMachineConfiguration = VZVirtualMachineConfiguration()
 
         virtualMachineConfiguration.platform = createMacPlaform()
@@ -91,7 +91,10 @@ class VMController: NSObject, VZVirtualMachineDelegate {
         virtualMachineConfiguration.graphicsDevices = [helper.createGraphicsDeviceConfiguration()]
         virtualMachineConfiguration.storageDevices = [helper.createBlockDeviceConfiguration()]
         if headless {
-            if disconnectedNIC {
+            if natNIC {
+                // NAT NIC for SSH access during snapshot preparation.
+                virtualMachineConfiguration.networkDevices = [helper.createNetworkDeviceConfiguration()]
+            } else if disconnectedNIC {
                 // Create a NIC with no attachment. The NIC exists in the hardware
                 // config (so saved state is compatible) but appears disconnected.
                 // Call attachNetwork() after restore to hot-swap the attachment.
@@ -118,6 +121,17 @@ class VMController: NSObject, VZVirtualMachineDelegate {
 
         virtualMachine = VZVirtualMachine(configuration: virtualMachineConfiguration)
         virtualMachine.delegate = self
+    }
+
+    /// Disconnect the NIC by setting its attachment to nil.
+    /// Call before saving state so the snapshot has no active link.
+    func disconnectNetwork() {
+        guard let nic = virtualMachine.networkDevices.first else {
+            print("disconnectNetwork: no network devices")
+            return
+        }
+        nic.attachment = nil
+        print("disconnectNetwork: NIC attachment set to nil")
     }
 
     /// Hot-swap the NIC attachment on a running VM. The VM must have been
@@ -155,6 +169,21 @@ class VMController: NSObject, VZVirtualMachineDelegate {
         } else {
             print("Virtual machine could not start it's socket device")
         }
+    }
+
+    /// Start a vsock listener that tells the guest TTA agent what IP to configure.
+    /// If response is nil, the listener replies "wait" (snapshot prep mode).
+    func startIPConfigListener(response: String) {
+        guard let device = virtualMachine.socketDevices.first as? VZVirtioSocketDevice else {
+            print("startIPConfigListener: no socket device")
+            return
+        }
+        let listener = IPConfigListener(response: response)
+        retainedIPConfigListener = listener
+        let vsockListener = VZVirtioSocketListener()
+        vsockListener.delegate = listener
+        device.setSocketListener(vsockListener, forPort: 51011)
+        print("startIPConfigListener: listening on vsock port 51011")
     }
 
     func resumeVirtualMachine() {
@@ -209,5 +238,30 @@ class VMController: NSObject, VZVirtualMachineDelegate {
     func guestDidStop(_ virtualMachine: VZVirtualMachine) {
         print("Guest did stop virtual machine.")
         exit(0)
+    }
+}
+
+// Global to prevent ARC deallocation of the vsock listener.
+var retainedIPConfigListener: IPConfigListener?
+
+/// Listens on vsock port 51011 for TTA connections and replies with
+/// an IP configuration JSON string (or "wait" during snapshot prep).
+class IPConfigListener: NSObject, VZVirtioSocketListenerDelegate {
+    let response: String
+
+    init(response: String) {
+        self.response = response
+    }
+
+    func listener(_ listener: VZVirtioSocketListener,
+                  shouldAcceptNewConnection connection: VZVirtioSocketConnection,
+                  from socketDevice: VZVirtioSocketDevice) -> Bool {
+        let fd = connection.fileDescriptor
+        let data = Array((response + "\n").utf8)
+        data.withUnsafeBufferPointer { buf in
+            _ = write(fd, buf.baseAddress!, buf.count)
+        }
+        connection.close()
+        return true
     }
 }
