@@ -1176,31 +1176,26 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 				// wireguard config as the new key was received over an existing wireguard
 				// connection.
 				if discoTSMP, okTSMP := e.tsmpLearnedDisco[p.PublicKey]; okTSMP {
+					// Key matches, remove entry from map.
+					delete(e.tsmpLearnedDisco, p.PublicKey)
 					if discoTSMP == p.DiscoKey {
-						// Key matches, remove entry from map.
 						e.logf("wgengine: Skipping reconfig (TSMP key): %s changed from %q to %q",
 							pub.ShortString(), old, p.DiscoKey)
-						delete(e.tsmpLearnedDisco, p.PublicKey)
-					} else {
-						// The new disco key does not match what we received via
-						// TSMP for this peer. This is unexpected, so log it.
-						// If it does happen, overwrite the previously-saved
-						// disco key with the new one for now:  We expect another
-						// update must be pending in that case, so keep the map
-						// entry.
-						// The reason why this should never happen is that only a single
-						// request is coming through the netmap pipeline at a time, and there
-						// should realistically ever only be a single entry in the map. This
-						// is really a belt and suspenders solution to find usage that is
-						// inconsistent with our expectations.
-						e.logf("wgengine: [unexpected] Reconfig: using TSMP key for %s (control stale): tsmp=%q control=%q old=%q",
-							pub.ShortString(), discoTSMP, p.DiscoKey, old)
-						metricTSMPLearnedKeyMismatch.Add(1)
-						p.DiscoKey = discoTSMP
+						// Skip session clear.
+						continue
 					}
 
-					// Skip session clear no matter what.
-					continue
+					// The new disco key does not match what we received via
+					// TSMP for this peer. This is unexpected, though possible
+					// if processing a change in a large netmap ends up taking
+					// longer than the 2 second timeout in
+					// [controlClient.mapRoutineState.UpdateNetmapDelta], or if
+					// the context is cancelled mid update. Log the event, and reset
+					// the connection as it is possibly a stale entry in the map
+					// instead of a TSMP disco key update that led us here.
+					e.logf("wgengine: [unexpected] Reconfig: using TSMP key for %s (control stale): tsmp=%q control=%q old=%q",
+						pub.ShortString(), discoTSMP, p.DiscoKey, old)
+					metricTSMPLearnedKeyMismatch.Add(1)
 				}
 
 				discoChanged[pub] = true
