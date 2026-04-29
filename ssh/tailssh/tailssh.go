@@ -877,9 +877,20 @@ func (ss *sshSession) killProcessOnContextDone() {
 		// We don't need to Process.Wait here, sshSession.run() does
 		// the waiting regardless of termination reason.
 
-		// TODO(maisem): should this be a SIGTERM followed by a SIGKILL?
-		ss.cmd.Process.Kill()
+		// Send SIGHUP to match POSIX terminal disconnect semantics.
+		// OpenSSH achieves this implicitly by closing the PTY master fd
+		// (see openssh-portable session.c:2246), which causes the kernel
+		// to send SIGHUP to the child process group. Since tailssh uses
+		// pipes for non-PTY sessions, we send SIGHUP explicitly.
+		// https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap11.html#tag_11_01_03
+		ss.cmd.Process.Signal(syscall.SIGHUP)
 	})
+}
+
+// isNotFoundOrExecutable reports whether err indicates the command
+// could not be found or executed.
+func isNotFoundOrExecutable(err error) bool {
+	return errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist)
 }
 
 // attachSession registers ss as an active session.
@@ -967,10 +978,19 @@ func (ss *sshSession) run() {
 	metricActiveSessions.Add(1)
 	defer metricActiveSessions.Add(-1)
 	defer ss.cancelCtx(errSessionDone)
+	// Close the channel after all I/O and exit-status have been sent.
+	// Per RFC 4254 Section 6.10, SSH_MSG_CHANNEL_CLOSE must come after
+	// exit-status. Since Exit() no longer calls Close() (to allow the
+	// caller to control ordering), we close explicitly here.
+	// https://datatracker.ietf.org/doc/html/rfc4254#section-6.10
+	defer ss.Close()
 
 	if attached := ss.conn.srv.attachSessionToConnIfNotShutdown(ss); !attached {
 		fmt.Fprintf(ss, "Tailscale SSH is shutting down\r\n")
-		ss.Exit(1)
+		// Exit code 255 matches OpenSSH's convention for SSH protocol/infrastructure
+		// errors that prevent the session from starting.
+		// https://github.com/openssh/openssh-portable/blob/master/ssh.c#L1693
+		ss.Exit(255)
 		return
 	}
 	defer ss.conn.detachSession(ss)
@@ -992,7 +1012,10 @@ func (ss *sshSession) run() {
 		if lu.Uid != fmt.Sprint(euid) {
 			ss.logf("can't switch to user %q from process euid %v", lu.Username, euid)
 			fmt.Fprintf(ss, "can't switch user\r\n")
-			ss.Exit(1)
+			// Exit code 255 matches OpenSSH's convention for SSH permission errors
+			// that prevent the session from starting.
+			// https://github.com/openssh/openssh-portable/blob/master/ssh.c#L1693
+			ss.Exit(255)
 			return
 		}
 	}
@@ -1020,7 +1043,9 @@ func (ss *sshSession) run() {
 					fmt.Fprintf(ss, "can't start new recording\r\n")
 				}
 				ss.logf("startNewRecording: %v", err)
-				ss.Exit(1)
+				// Exit code 254 for recording infrastructure failure.
+				// Distinct from 255 (SSH protocol error) and 1 (general failure).
+				ss.Exit(254)
 				return
 			}
 			ss.logf("startNewRecording: <nil>")
@@ -1033,6 +1058,7 @@ func (ss *sshSession) run() {
 	err := ss.launchProcess()
 	if err != nil {
 		logf("start failed: %v", err.Error())
+		exitCode := 1
 		if errors.Is(err, context.Canceled) {
 			cause := context.Cause(ss.ctx)
 			if serr, ok := cause.(SSHTerminationError); ok {
@@ -1040,67 +1066,57 @@ func (ss *sshSession) run() {
 					io.WriteString(ss.Stderr(), "\r\n\r\n"+msg+"\r\n\r\n")
 				}
 			}
+		} else if isNotFoundOrExecutable(err) {
+			// Exit code 127 for "command not found" per POSIX shell convention.
+			// https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_08_02
+			exitCode = 127
 		}
-		ss.Exit(1)
+		ss.Exit(exitCode)
 		return
 	}
 	ss.exitHandled = make(chan struct{})
 	go ss.killProcessOnContextDone()
 
-	var processDone atomic.Bool
-	go func() {
+	// Start goroutines to copy stdin/stdout/stderr.
+	var wg sync.WaitGroup
+
+	wg.Go(func() {
 		defer ss.wrStdin.Close()
 		if _, err := io.Copy(rec.writer("i", ss.wrStdin), ss); err != nil {
 			logf("stdin copy: %v", err)
 			ss.cancelCtx(err)
 		}
-	}()
-	outputDone := make(chan struct{})
-	var openOutputStreams atomic.Int32
-	if ss.rdStderr != nil {
-		openOutputStreams.Store(2)
-	} else {
-		openOutputStreams.Store(1)
-	}
-	go func() {
+	})
+
+	wg.Go(func() {
 		defer ss.rdStdout.Close()
-		_, err := io.Copy(rec.writer("o", ss), ss.rdStdout)
-		if err != nil && !errors.Is(err, io.EOF) {
-			isErrBecauseProcessExited := processDone.Load() && errors.Is(err, syscall.EIO)
-			if !isErrBecauseProcessExited {
-				logf("stdout copy: %v", err)
-				ss.cancelCtx(err)
-			}
+		if _, err := io.Copy(rec.writer("o", ss), ss.rdStdout); err != nil && !errors.Is(err, io.EOF) {
+			logf("stdout copy: %v", err)
 		}
-		if openOutputStreams.Add(-1) == 0 {
-			ss.CloseWrite()
-			close(outputDone)
-		}
-	}()
+		// Send EOF to the SSH client when stdout copying completes.
+		// Per RFC 4254 Section 5.3, SSH_MSG_CHANNEL_EOF signals that no
+		// more data will be sent. The channel remains open for exit-status.
+		// https://datatracker.ietf.org/doc/html/rfc4254#section-5.3
+		ss.CloseWrite()
+	})
+
 	// rdStderr is nil for ptys.
 	if ss.rdStderr != nil {
-		go func() {
+		wg.Go(func() {
 			defer ss.rdStderr.Close()
-			_, err := io.Copy(ss.Stderr(), ss.rdStderr)
-			if err != nil {
+			if _, err := io.Copy(ss.Stderr(), ss.rdStderr); err != nil {
 				logf("stderr copy: %v", err)
 			}
-			if openOutputStreams.Add(-1) == 0 {
-				ss.CloseWrite()
-				close(outputDone)
-			}
-		}()
+		})
 	}
 
 	err = ss.cmd.Wait()
-	processDone.Store(true)
 
 	if ss.ctx.Err() != nil {
 		// Context was canceled (e.g., recording upload failure).
 		// Wait for killProcessOnContextDone to finish writing any
 		// termination message before we proceed. This must happen
-		// before closeAll and CloseWrite so the SSH channel is
-		// still writable.
+		// before Exit so the SSH channel is still writable.
 		<-ss.exitHandled
 	}
 
@@ -1109,31 +1125,30 @@ func (ss *sshSession) run() {
 	// aforementioned goroutine.
 	ss.exitOnce.Do(func() {})
 
-	// Close the process-side of all pipes to signal the asynchronous
-	// io.Copy routines reading/writing from the pipes to terminate.
-	// Block for the io.Copy to finish before calling ss.Exit below.
-	closeAll(ss.childPipes...)
-	select {
-	case <-outputDone:
-	case <-ss.ctx.Done():
-		<-ss.exitHandled
-	}
-
+	var exitCode int
 	if err == nil {
 		ss.logf("Session complete")
-		ss.Exit(0)
-		return
-	}
-	if ee, ok := err.(*exec.ExitError); ok {
-		code := ee.ProcessState.ExitCode()
-		ss.logf("Wait: code=%v", code)
-		ss.Exit(code)
-		return
+		exitCode = 0
+	} else if ee, ok := err.(*exec.ExitError); ok {
+		exitCode = ee.ProcessState.ExitCode()
+		ss.logf("Wait: code=%v", exitCode)
+	} else {
+		ss.logf("Wait: %v", err)
+		exitCode = 1
 	}
 
-	ss.logf("Wait: %v", err)
-	ss.Exit(1)
-	return
+	// Send exit-status before EOF/Close. Per RFC 4254 Section 6.10,
+	// exit-status must be sent before SSH_MSG_CHANNEL_CLOSE. By sending
+	// it here before closing the child pipes (which triggers the stdout
+	// goroutine to send EOF via CloseWrite), we guarantee the ordering:
+	//   exit-status -> EOF -> CHANNEL_CLOSE
+	// https://datatracker.ietf.org/doc/html/rfc4254#section-6.10
+	ss.Exit(exitCode)
+
+	// Close process-side of pipes to signal io.Copy goroutines
+	// to finish, then wait for all I/O to complete.
+	closeAll(ss.childPipes...)
+	wg.Wait()
 }
 
 // recordSSHToLocalDisk is a deprecated dev knob to allow recording SSH sessions
