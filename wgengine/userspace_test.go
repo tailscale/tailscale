@@ -264,8 +264,9 @@ func TestUserspaceEngineTSMPLearnedMismatch(t *testing.T) {
 		wrongKey bool
 	}{
 		{tsmp: false, inMap: false, wrongKey: false},
-		{tsmp: true, inMap: false, wrongKey: true},
-		{tsmp: false, inMap: false, wrongKey: false},
+		{tsmp: true, inMap: false, wrongKey: false},
+		{tsmp: true, inMap: true, wrongKey: true},
+		{tsmp: false, inMap: true, wrongKey: false},
 	}
 
 	nkHex := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
