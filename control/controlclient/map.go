@@ -521,7 +521,11 @@ func (ms *mapSession) removeUnwantedDiscoUpdatesFromFullNetmapUpdate(resp *tailc
 
 		// Overwrite the key and last seen in the full netmap update.
 		peer.DiscoKey = existingNode.DiscoKey()
-		*peer.LastSeen = existingNode.LastSeen().Get()
+		if t, ok := existingNode.LastSeen().GetOk(); ok {
+			peer.LastSeen = new(t)
+		} else {
+			peer.LastSeen = nil
+		}
 	}
 }
 
