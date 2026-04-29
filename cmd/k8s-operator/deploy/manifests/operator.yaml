@@ -125,7 +125,6 @@ spec:
                                         items:
                                             format: cidr
                                             type: string
-                                        minItems: 1
                                         type: array
                                 type: object
                             exitNode:
