@@ -1,3 +1,5 @@
+# Copyright (c) Tailscale Inc & AUTHORS
+# SPDX-License-Identifier: BSD-3-Clause
 # flake.nix describes a Nix source repository that provides
 # development builds of Tailscale and the fork of the Go compiler
 # toolchain that Tailscale maintains. It also provides a development
@@ -80,7 +82,12 @@
             })
           ];
         }));
+
+    # tailscaleRev is the git commit at which this flake was imported,
+    # or the empty string when building from a local checkout of the
+    # tailscale repo.
     tailscaleRev = self.rev or "";
+    lib = nixpkgs.lib;
   in {
     # tailscale takes a nixpkgs package set, and builds Tailscale from
     # the same commit as this flake. IOW, it provides "tailscale built
@@ -103,6 +110,8 @@
       default = pkgs.buildGo126Module {
         name = "tailscale";
         pname = "tailscale";
+        meta.mainProgram = "tailscaled";
+
         src = ./.;
         vendorHash = flakeHashes.vendor.sri;
         nativeBuildInputs = [pkgs.makeWrapper pkgs.installShellFiles];
@@ -111,7 +120,6 @@
         subPackages = [
           "cmd/tailscale"
           "cmd/tailscaled"
-          "cmd/tsidp"
         ];
         doCheck = false;
 
@@ -142,6 +150,43 @@
           '';
       };
       tailscale = default;
+    });
+
+    overlays.default = final: prev: {
+      tailscale = self.packages.${prev.stdenv.hostPlatform.system}.default;
+    };
+
+    nixosModules = {
+      tailscale = import ./nixos/default.nix self;
+      # Module that disables upstream nixpkgs tailscale and uses this one.
+      # This is the recommended import for most users.
+      override = {
+        imports = [(import ./nixos/default.nix self)];
+        # Disable both upstream modules: tailscale.nix defines individual
+        # options under services.tailscale.* that conflict with our submodule,
+        # and tailscale-derper.nix nests its options under services.tailscale.derper
+        # which forces evaluation of our submodule and causes infinite recursion.
+        disabledModules = [
+          "services/networking/tailscale.nix"
+          "services/networking/tailscale-derper.nix"
+        ];
+      };
+      default = self.nixosModules.override;
+    };
+
+    checks = eachSystem (pkgs: {
+      single = import ./nixos/tests/single.nix {
+        inherit self pkgs;
+        inherit (pkgs) lib;
+      };
+      multi = import ./nixos/tests/multi.nix {
+        inherit self pkgs;
+        inherit (pkgs) lib;
+      };
+      shared-services = import ./nixos/tests/shared-services.nix {
+        inherit self pkgs;
+        inherit (pkgs) lib;
+      };
     });
 
     devShells = eachSystem (pkgs: {
