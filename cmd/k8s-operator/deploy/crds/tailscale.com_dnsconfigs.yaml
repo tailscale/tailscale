@@ -977,6 +977,11 @@ spec:
                                           Empty topologyKey is not allowed.
                                         type: string
                                   x-kubernetes-list-type: atomic
+                        nodeSelector:
+                          description: If specified, applies node selector rules to the pods deployed by the DNSConfig resource.
+                          type: object
+                          additionalProperties:
+                            type: string
                         tolerations:
                           description: If specified, applies tolerations to the pods deployed by the DNSConfig resource.
                           type: array
