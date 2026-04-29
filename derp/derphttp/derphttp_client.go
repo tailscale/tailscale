@@ -103,6 +103,21 @@ type Client struct {
 	tlsState     *tls.ConnectionState
 	pingOut      map[derp.PingMessage]chan<- bool // chan to send to on pong
 	clock        tstime.Clock
+
+	// lastRecv is the time of the last frame successfully read from the
+	// current connection. It is reset each time connect succeeds and updated
+	// by RecvDetail. The watchdog reads it without holding mu to decide
+	// whether the connection is idle and should be probed.
+	lastRecv syncs.AtomicValue[time.Time]
+	// watchdogStop, if non-nil, is the stop signal for the watchdog goroutine
+	// of the current connection. It is closed (via stopWatchdogLocked) from
+	// closeForReconnect, Close, or when startWatchdogLocked replaces the
+	// watchdog during a reconnect. Read and written under mu.
+	watchdogStop chan struct{}
+	// watchdogWG tracks live watchdog goroutines so Close can block until they
+	// exit. This prevents goroutine leaks after Close returns and gives tests
+	// that swap the watchdog tunables a happens-before edge for cleanup.
+	watchdogWG sync.WaitGroup
 }
 
 // ConnectedState describes the state of a derphttp Client.
@@ -421,6 +436,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		c.client = derpClient
 		c.netConn = conn
 		c.connGen++
+		c.startWatchdogLocked(derpClient)
 		return c.client, c.connGen, nil
 	case c.url != nil:
 		c.logf("%s: connecting to %v", caller, c.url)
@@ -575,6 +591,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	c.netConn = tcpConn
 	c.tlsState = tlsState
 	c.connGen++
+	c.startWatchdogLocked(derpClient)
 
 	localAddr, _ := c.client.LocalAddr()
 	c.atomicState.Store(ConnectedState{
@@ -1095,6 +1112,9 @@ func (c *Client) RecvDetail() (m derp.ReceivedMessage, connGen int, err error) {
 	}
 	for {
 		m, err = client.Recv()
+		if err == nil {
+			c.lastRecv.Store(c.clock.Now())
+		}
 		switch m := m.(type) {
 		case derp.PongMessage:
 			if c.handledPong(m) {
@@ -1125,15 +1145,21 @@ func (c *Client) Close() error {
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed {
+		c.mu.Unlock()
 		return ErrClientClosed
 	}
 	c.closed = true
+	c.stopWatchdogLocked()
 	if c.netConn != nil {
 		c.netConn.Close()
 	}
 	c.atomicState.Store(ConnectedState{Closed: true})
+	c.mu.Unlock()
+
+	// Wait outside mu so a watchdog goroutine that's racing toward
+	// closeForReconnect (which takes mu) can complete and exit.
+	c.watchdogWG.Wait()
 	return nil
 }
 
@@ -1153,6 +1179,7 @@ func (c *Client) closeForReconnect(brokenClient *derp.Client) {
 	if c.client != brokenClient {
 		return
 	}
+	c.stopWatchdogLocked()
 	if c.netConn != nil {
 		c.netConn.Close()
 		c.netConn = nil
@@ -1161,6 +1188,113 @@ func (c *Client) closeForReconnect(brokenClient *derp.Client) {
 }
 
 var ErrClientClosed = errors.New("derphttp.Client closed")
+
+// Watchdog parameters. Declared as vars (rather than const) so tests can lower
+// them via export_test.go to drive the watchdog quickly.
+//
+// Half-open TCP connections (e.g. after a Wi-Fi to cellular handoff that the
+// client OS does not surface as a link change) can otherwise sit unnoticed
+// until derp.Client's 120s read deadline fires. The watchdog probes the server
+// with a ping after a shorter period of silence to catch this earlier.
+var (
+	// derpWatchdogIdleThreshold is the duration of silence (no frames received
+	// from the server) on a DERP connection that triggers an active probe via
+	// ping. Chosen to be longer than [derp.KeepAlive] (60s) plus its jitter so
+	// that a healthy idle connection does not get probed gratuitously, but
+	// shorter than the 120s baseline read deadline so that a half-open
+	// connection is detected sooner.
+	derpWatchdogIdleThreshold = 75 * time.Second
+
+	// derpWatchdogTickInterval is how often the watchdog wakes to check
+	// whether the connection has been idle past derpWatchdogIdleThreshold.
+	derpWatchdogTickInterval = 15 * time.Second
+
+	// derpWatchdogPongTimeout bounds how long the watchdog waits for the pong
+	// reply to its probe before declaring the connection dead and tearing it
+	// down. Note that [Client.Ping] internally caps at 5s, so values above 5s
+	// here are advisory.
+	derpWatchdogPongTimeout = 5 * time.Second
+)
+
+// startWatchdogLocked starts a watchdog goroutine bound to dc and stores its
+// stop signal on c. Any prior watchdog stop signal is closed first so the
+// previous watchdog (if any) exits.
+//
+// c.mu must be held.
+func (c *Client) startWatchdogLocked(dc *derp.Client) {
+	if c.watchdogStop != nil {
+		close(c.watchdogStop)
+	}
+	c.lastRecv.Store(c.clock.Now())
+	stop := make(chan struct{})
+	c.watchdogStop = stop
+	c.watchdogWG.Add(1)
+	go func() {
+		defer c.watchdogWG.Done()
+		c.runWatchdog(dc, stop)
+	}()
+}
+
+// stopWatchdogLocked closes the current watchdog stop channel (if any),
+// signalling the watchdog goroutine to exit.
+//
+// c.mu must be held.
+func (c *Client) stopWatchdogLocked() {
+	if c.watchdogStop != nil {
+		close(c.watchdogStop)
+		c.watchdogStop = nil
+	}
+}
+
+// runWatchdog probes a silent DERP connection with a ping and tears it down
+// if the ping fails, so that the next Send/Recv reconnects. It exits when stop
+// is closed (by Close, closeForReconnect, or a reconnect replacing this
+// watchdog) or when its probe fails.
+//
+// The watchdog depends on a concurrent caller of [Client.RecvDetail] (typically
+// the magicsock derp reader) to dispatch incoming pong frames so [Client.Ping]
+// can return. Clients that do not run a Recv loop will have their connection
+// torn down on each idle cycle.
+func (c *Client) runWatchdog(dc *derp.Client, stop <-chan struct{}) {
+	tick, tickCh := c.clock.NewTicker(derpWatchdogTickInterval)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-tickCh:
+		}
+		if c.clock.Now().Sub(c.lastRecv.Load()) < derpWatchdogIdleThreshold {
+			continue
+		}
+		// Bail out if this watchdog is no longer bound to the live
+		// connection — e.g. a concurrent reconnect replaced it. The
+		// stop channel will fire shortly; skip the probe to avoid
+		// pinging the successor connection.
+		c.mu.Lock()
+		stillCurrent := c.client == dc
+		c.mu.Unlock()
+		if !stillCurrent {
+			continue
+		}
+		// The connection has been silent past the threshold. Probe it.
+		// If the underlying TCP connection is half-open the write may be
+		// absorbed by the kernel buffer but no pong will arrive, and Ping
+		// will return a deadline error.
+		ctx, cancel := context.WithTimeout(c.newContext(), derpWatchdogPongTimeout)
+		err := c.Ping(ctx)
+		cancel()
+		if err == nil {
+			continue
+		}
+		idle := c.clock.Now().Sub(c.lastRecv.Load())
+		c.logf("derphttp.Client: watchdog: connection silent for %v and ping failed (%v); closing for reconnect",
+			idle.Round(time.Second), err)
+		c.closeForReconnect(dc)
+		return
+	}
+}
 
 func parseMetaCert(certs []*x509.Certificate) (serverPub key.NodePublic, serverProtoVersion int) {
 	for _, cert := range certs {
