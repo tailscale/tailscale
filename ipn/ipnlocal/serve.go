@@ -1063,6 +1063,8 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	if !ok {
 		return // traffic from outside of Tailnet (funneled or local machine)
 	}
+	// TODO(hwh33): add a toggle for this to LocalBackend
+	r.Out.Header.Set("Tailscale-Src", c.SrcAddr.String())
 	if node.IsTagged() {
 		// 2023-06-14: Not setting identity headers for tagged nodes.
 		// Only currently set for nodes with user identities.

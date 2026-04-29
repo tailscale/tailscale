@@ -125,6 +125,8 @@
 package tsnet
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	crand "crypto/rand"
 	"crypto/tls"
@@ -1872,6 +1874,9 @@ func (s *Server) ListenService(name string, mode ServiceMode) (*ServiceListener,
 			m.Port, ln.Addr().String(), m.TerminateTLS,
 			tailcfg.ServiceName(svcName), m.PROXYProtocolVersion, st.CurrentTailnet.MagicDNSSuffix)
 	case ServiceModeHTTP:
+		backAddr := ln.Addr().String()
+		ln = newRequestListener(ln, svcAddr)
+
 		// For HTTP Services, proxy all connections to our socket.
 		mds := st.CurrentTailnet.MagicDNSSuffix
 		haveRootHandler := false
@@ -1882,7 +1887,7 @@ func (s *Server) ListenService(name string, mode ServiceMode) (*ServiceListener,
 			}
 			h := ipn.HTTPHandler{
 				AcceptAppCaps: caps,
-				Proxy:         ln.Addr().String(),
+				Proxy:         backAddr,
 			}
 			if path == "/" {
 				haveRootHandler = true
@@ -1893,7 +1898,7 @@ func (s *Server) ListenService(name string, mode ServiceMode) (*ServiceListener,
 		}
 		// We always need a root handler.
 		if !haveRootHandler {
-			h := ipn.HTTPHandler{Proxy: ln.Addr().String()}
+			h := ipn.HTTPHandler{Proxy: backAddr}
 			srvCfg.SetWebHandler(&h, svcName.String(), m.Port, "/", m.HTTPS, mds)
 		}
 	default:
@@ -2305,4 +2310,142 @@ func (cl *cleanupListener) Close() error {
 		}
 	})
 	return errors.Join(cl.Listener.Close(), cleanupErr)
+}
+
+type requestConn struct {
+	rx                    io.Reader
+	tx                    io.Writer
+	localAddr, remoteAddr addr
+	closed                chan struct{}
+}
+
+func (conn requestConn) Write(b []byte) (n int, err error) {
+	return conn.tx.Write(b)
+}
+
+func (conn requestConn) Read(b []byte) (n int, err error) {
+	return conn.rx.Read(b)
+}
+
+func (conn requestConn) Close() error {
+	close(conn.closed)
+	return nil
+}
+
+func (conn requestConn) LocalAddr() net.Addr {
+	return conn.localAddr
+}
+
+func (conn requestConn) RemoteAddr() net.Addr {
+	return conn.remoteAddr
+}
+
+func (conn requestConn) SetDeadline(t time.Time) error {
+	// TODO(hwh33): implement
+	return nil
+}
+
+func (conn requestConn) SetReadDeadline(t time.Time) error {
+	// TODO(hwh33): implement
+	return nil
+}
+func (conn requestConn) SetWriteDeadline(t time.Time) error {
+	// TODO(hwh33): implement
+	return nil
+}
+
+type responseCopier struct {
+	buf  *bytes.Buffer
+	req  *http.Request
+	resp http.ResponseWriter
+}
+
+func (rc *responseCopier) Write(b []byte) (n int, err error) {
+	rc.buf.Write(b)
+	current := bytes.NewBuffer(rc.buf.Bytes())
+	resp, err := http.ReadResponse(bufio.NewReader(current), rc.req)
+	if err != nil {
+		return len(b), nil
+	}
+	// TODO(hwh33): do we need to track that the response is fully written now?
+	defer resp.Body.Close()
+	for k, vv := range resp.Header {
+		for _, v := range vv {
+			rc.resp.Header().Add(k, v)
+		}
+	}
+	rc.resp.WriteHeader(resp.StatusCode)
+	if _, err := io.Copy(rc.resp, resp.Body); err != nil {
+		return 0, err // TODO(hwh33): not sure how to represent n here
+	}
+	return len(b), nil
+}
+
+type requestListener struct {
+	conns       <-chan requestConn
+	closed      chan struct{}
+	closeServer func() error
+	addr        addr
+}
+
+func newRequestListener(ln net.Listener, lnAddr addr) requestListener {
+	conns := make(chan requestConn)
+	listenerClosed := make(chan struct{})
+	s := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			src := r.Header.Get("Tailscale-Src")
+			if src == "" {
+				// TODO(hwh33): handle this
+				panic("unexpected missing source header")
+			}
+
+			reqBuffer := new(bytes.Buffer)
+			r.Write(reqBuffer) // TODO(hwh33): can we stream this somehow?
+
+			conn := requestConn{
+				localAddr: lnAddr,
+				remoteAddr: addr{
+					network: "tcp",
+					addr:    src,
+				},
+				rx: reqBuffer,
+				tx: &responseCopier{
+					buf:  new(bytes.Buffer),
+					req:  r,
+					resp: w,
+				},
+				closed: make(chan struct{}),
+			}
+			select {
+			case conns <- conn:
+				<-conn.closed
+			case <-listenerClosed:
+			}
+		}),
+	}
+	go s.Serve(ln)
+	return requestListener{
+		conns:       conns,
+		closed:      listenerClosed,
+		closeServer: s.Close,
+		addr:        lnAddr,
+	}
+}
+
+func (ln requestListener) Accept() (net.Conn, error) {
+	select {
+	case conn := <-ln.conns:
+		return conn, nil
+	case <-ln.closed:
+		return nil, net.ErrClosed
+	}
+}
+
+func (ln requestListener) Close() error {
+	close(ln.closed)
+	return ln.closeServer()
+}
+
+func (ln requestListener) Addr() net.Addr {
+	return ln.addr
 }
