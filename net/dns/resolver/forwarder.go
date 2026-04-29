@@ -1089,19 +1089,6 @@ func (f *forwarder) RegisterCustomScheme(scheme string, h CustomSchemeHandler) e
 	return nil
 }
 
-// UnregisterCustomScheme removes a scheme previously registered via
-// RegisterCustomScheme.
-func (f *forwarder) UnregisterCustomScheme(scheme string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if _, ok := f.schemes[scheme]; !ok {
-		return fmt.Errorf("scheme %q not registered", scheme)
-	}
-	f.invalidateSchemeCacheLocked()
-	delete(f.schemes, scheme)
-	return nil
-}
-
 // invalidateSchemeCacheLocked clears f.schemeCache so that it will be rebuilt
 // on the next call to f.schemeCacheLocked().
 func (f *forwarder) invalidateSchemeCacheLocked() {
