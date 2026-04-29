@@ -293,6 +293,24 @@ func (r *Resolver) SetConfig(cfg Config) error {
 	return nil
 }
 
+// CustomSchemeHandler takes a URI (retrieved from [dnstype.Resolver.Addr]) and
+// returns an updated URI to use for the current query. The result is only valid
+// for right now and may change over time.
+type CustomSchemeHandler func(addr string) (newAddr string, err error)
+
+// RegisterCustomScheme adds a [CustomSchemaHandler] that is called to provide
+// an updated address to the forwarder when a [dnstype.Resolver.Addr] uses that
+// scheme.
+func (r *Resolver) RegisterCustomScheme(scheme string, h CustomSchemeHandler) error {
+	return r.forwarder.RegisterCustomScheme(scheme, h)
+}
+
+// UnregisterCustomScheme unregisters a scheme previously registered with
+// RegisterCustomScheme.
+func (r *Resolver) UnregisterCustomScheme(scheme string) error {
+	return r.forwarder.UnregisterCustomScheme(scheme)
+}
+
 // Close shuts down the resolver and ensures poll goroutines have exited.
 // The Resolver cannot be used again after Close is called.
 func (r *Resolver) Close() {
