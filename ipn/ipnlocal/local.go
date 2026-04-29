@@ -1867,7 +1867,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		}
 
 		b.e.SetNetworkMap(st.NetMap)
-		b.MagicConn().SetDERPMap(st.NetMap.DERPMap, false)
+		b.MagicConn().SetDERPMapWithoutReSTUN(st.NetMap.DERPMap)
 		if c == nil && st.NetMap.Cached && st.NetMap.SelfNode.Valid() {
 			// Loading from a cached netmap (c == nil means no live control
 			// client). Pre-seed the home DERP from the cached self node so
@@ -3445,7 +3445,7 @@ func (b *LocalBackend) DebugForceNetmapUpdate() {
 	nm := b.currentNode().NetMap()
 	b.e.SetNetworkMap(nm)
 	if nm != nil {
-		b.MagicConn().SetDERPMap(nm.DERPMap, true)
+		b.MagicConn().SetDERPMap(nm.DERPMap)
 	}
 	b.setNetMapLocked(nm)
 }
@@ -4903,7 +4903,7 @@ func (b *LocalBackend) setPrefsLocked(newp *ipn.Prefs) ipn.PrefsView {
 	}
 
 	if netMap != nil {
-		b.MagicConn().SetDERPMap(netMap.DERPMap, true)
+		b.MagicConn().SetDERPMap(netMap.DERPMap)
 	}
 
 	if !oldp.WantRunning() && newp.WantRunning && cc != nil {
