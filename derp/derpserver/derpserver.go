@@ -570,9 +570,9 @@ func (s *Server) LoadAndApplyRateConfig(path string) error {
 }
 
 // UpdateRateLimits sets the receive rate limits, updating all existing client
-// connections. It returns the applied config, which may differ from rc. If the
-// per-client rate limit is 0, rate limiting is disabled. Mesh peers are always
-// exempt from rate limiting.
+// connections. It returns the applied config, which may differ from rc. If both
+// the per-client and global rate limits are 0, rate limiting is disabled. Mesh
+// peers are always exempt from rate limiting.
 func (s *Server) UpdateRateLimits(rc RateConfig) (applied RateConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
