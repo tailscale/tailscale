@@ -65,13 +65,9 @@ func (qemuCloudPlatform) boot(ctx context.Context, e *Env, n *Node) error {
 
 	e.ensureCompiled(ctx, goos, goarch)
 
-	imgStep := e.Step(fmt.Sprintf("Prepare %s image", n.os.Name))
-	imgStep.Begin()
-	if err := ensureImage(ctx, n.os); err != nil {
-		imgStep.End(err)
+	if err := e.ensureImage(ctx, n.os); err != nil {
 		return err
 	}
-	imgStep.End(nil)
 
 	e.ensureQEMUSocket()
 
