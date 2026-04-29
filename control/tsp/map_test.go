@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+	"tailscale.com/health"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/key"
@@ -31,6 +32,8 @@ func TestMapAgainstTestControl(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	ht := new(health.Tracker)
+
 	serverKey, err := DiscoverServerKey(ctx, baseURL)
 	if err != nil {
 		t.Fatalf("DiscoverServerKey: %v", err)
@@ -41,8 +44,9 @@ func TestMapAgainstTestControl(t *testing.T) {
 		nodeKey = key.NewNode()
 		machineKey = key.NewMachine()
 		c, err := NewClient(ClientOpts{
-			ServerURL:  baseURL,
-			MachineKey: machineKey,
+			ServerURL:     baseURL,
+			MachineKey:    machineKey,
+			HealthTracker: ht,
 		})
 		if err != nil {
 			t.Fatalf("NewClient %s: %v", hostname, err)
@@ -62,8 +66,9 @@ func TestMapAgainstTestControl(t *testing.T) {
 	nodeKeyB, _ := register("b")
 
 	clientA, err := NewClient(ClientOpts{
-		ServerURL:  baseURL,
-		MachineKey: machineKeyA,
+		ServerURL:     baseURL,
+		MachineKey:    machineKeyA,
+		HealthTracker: ht,
 	})
 	if err != nil {
 		t.Fatalf("NewClient A: %v", err)
@@ -144,6 +149,8 @@ func TestSendMapUpdateAgainstTestControl(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	ht := new(health.Tracker)
+
 	serverKey, err := DiscoverServerKey(ctx, baseURL)
 	if err != nil {
 		t.Fatalf("DiscoverServerKey: %v", err)
@@ -154,8 +161,9 @@ func TestSendMapUpdateAgainstTestControl(t *testing.T) {
 		nodeKey = key.NewNode()
 		machineKey = key.NewMachine()
 		c, err := NewClient(ClientOpts{
-			ServerURL:  baseURL,
-			MachineKey: machineKey,
+			ServerURL:     baseURL,
+			MachineKey:    machineKey,
+			HealthTracker: ht,
 		})
 		if err != nil {
 			t.Fatalf("NewClient %s: %v", hostname, err)
@@ -176,8 +184,9 @@ func TestSendMapUpdateAgainstTestControl(t *testing.T) {
 
 	// B starts a streaming map poll so we can observe updates about peer A.
 	clientB, err := NewClient(ClientOpts{
-		ServerURL:  baseURL,
-		MachineKey: machineKeyB,
+		ServerURL:     baseURL,
+		MachineKey:    machineKeyB,
+		HealthTracker: ht,
 	})
 	if err != nil {
 		t.Fatalf("NewClient B: %v", err)
@@ -228,8 +237,9 @@ func TestSendMapUpdateAgainstTestControl(t *testing.T) {
 
 	// A pushes its disco key via SendMapUpdate.
 	clientA, err := NewClient(ClientOpts{
-		ServerURL:  baseURL,
-		MachineKey: machineKeyA,
+		ServerURL:     baseURL,
+		MachineKey:    machineKeyA,
+		HealthTracker: ht,
 	})
 	if err != nil {
 		t.Fatalf("NewClient A: %v", err)

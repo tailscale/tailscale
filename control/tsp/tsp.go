@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"tailscale.com/control/ts2021"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
@@ -43,6 +44,10 @@ type ClientOpts struct {
 
 	// Logf is the log function. If nil, logger.Discard is used.
 	Logf logger.Logf
+
+	// HealthTracker, if non-nil, is the health tracker passed through
+	// to the underlying noise client. May be nil.
+	HealthTracker *health.Tracker
 }
 
 // Client is a Tailscale protocol client that speaks to a coordination
@@ -155,11 +160,12 @@ func (c *Client) noiseClient(ctx context.Context) (*ts2021.Client, error) {
 	}
 
 	nc, err := ts2021.NewClient(ts2021.ClientOpts{
-		ServerURL:    c.serverURL,
-		PrivKey:      c.opts.MachineKey,
-		ServerPubKey: c.serverPub,
-		Dialer:       tsdial.NewFromFuncForDebug(c.logf, (&net.Dialer{}).DialContext),
-		Logf:         c.logf,
+		ServerURL:     c.serverURL,
+		PrivKey:       c.opts.MachineKey,
+		ServerPubKey:  c.serverPub,
+		Dialer:        tsdial.NewFromFuncForDebug(c.logf, (&net.Dialer{}).DialContext),
+		Logf:          c.logf,
+		HealthTracker: c.opts.HealthTracker,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating noise client: %w", err)
