@@ -962,8 +962,12 @@ func TestPerClientRateLimit(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
 
+			s := New(key.NewNode(), logger.Discard)
+			defer s.Close()
+
 			c := &sclient{
 				ctx: ctx,
+				s:   s,
 			}
 			lim := &parentChildTokenBuckets{
 				// Set parent limit to half of child to enable verification of
@@ -1029,6 +1033,15 @@ func TestPerClientRateLimit(t *testing.T) {
 			}
 
 			wantTokens(t, 0, minRateLimitTokenBucketSize)
+
+			// The second rateLimit call had to wait for both child and parent
+			// buckets, so both counters should be 1.
+			if got := s.rateLimitPerClientWaited.Value(); got != 1 {
+				t.Fatalf("rateLimitPerClientWaited = %d, want 1", got)
+			}
+			if got := s.rateLimitGlobalWaited.Value(); got != 1 {
+				t.Fatalf("rateLimitGlobalWaited = %d, want 1", got)
+			}
 		})
 	})
 
@@ -1036,8 +1049,12 @@ func TestPerClientRateLimit(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 
+			s := New(key.NewNode(), logger.Discard)
+			defer s.Close()
+
 			c := &sclient{
 				ctx: ctx,
+				s:   s,
 			}
 			lim := &parentChildTokenBuckets{
 				child:  rate.NewLimiter(rate.Limit(minRateLimitTokenBucketSize), minRateLimitTokenBucketSize),
@@ -1091,6 +1108,80 @@ func TestPerClientRateLimit(t *testing.T) {
 		defer s.Close()
 		if !reflect.DeepEqual(s.rateConfig, RateConfig{}) {
 			t.Errorf("expected zero rate limit, got %+v", s.rateConfig)
+		}
+	})
+}
+
+// zeroTimer returns a timer that fires immediately.
+func zeroTimer(_ time.Duration) (<-chan time.Time, func() bool) {
+	t := time.NewTimer(0)
+	return t.C, t.Stop
+}
+
+// neverTimer returns a timer that never fires.
+func neverTimer(_ time.Duration) (<-chan time.Time, func() bool) {
+	return make(chan time.Time), func() bool { return false }
+}
+
+func TestRateLimitWait(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("no_wait", func(t *testing.T) {
+		lim := rate.NewLimiter(10, 10)
+		waited, err := rateLimitWait(ctx, lim, 5, time.Now(), zeroTimer)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if waited != 0 {
+			t.Fatalf("waited = %v, want 0", waited)
+		}
+	})
+
+	t.Run("wait_for_tokens", func(t *testing.T) {
+		lim := rate.NewLimiter(10, 10)
+		now := time.Now()
+		waited, err := rateLimitWait(ctx, lim, 10, now, zeroTimer) // exhaust all tokens
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if waited != 0 {
+			t.Fatalf("waited = %v, want 0", waited)
+		}
+		waited, err = rateLimitWait(ctx, lim, 10, now, zeroTimer)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if waited == 0 {
+			t.Fatal("waited = 0, want > 0")
+		}
+	})
+
+	t.Run("context_canceled", func(t *testing.T) {
+		lim := rate.NewLimiter(10, 10)
+		now := time.Now()
+		_, err := rateLimitWait(ctx, lim, 10, now, zeroTimer) // exhaust all tokens
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		canceled, cancel := context.WithCancel(ctx) // cancel context so the select picks ctx.Done()
+		cancel()
+		waited, err := rateLimitWait(canceled, lim, 10, now, neverTimer) // neverTimer to only unblock via context
+		if err == nil {
+			t.Fatal("expected error from canceled context")
+		}
+		if waited != 0 {
+			t.Fatalf("waited = %v, want 0", waited)
+		}
+	})
+
+	t.Run("n_exceeds_burst", func(t *testing.T) {
+		lim := rate.NewLimiter(10, 5)
+		waited, err := rateLimitWait(ctx, lim, 10, time.Now(), zeroTimer)
+		if err == nil {
+			t.Fatal("expected error when n > burst")
+		}
+		if waited != 0 {
+			t.Fatalf("waited = %v, want 0", waited)
 		}
 	})
 }

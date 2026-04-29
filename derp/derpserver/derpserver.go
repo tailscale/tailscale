@@ -172,6 +172,9 @@ type Server struct {
 	meshUpdateBatchSize        *metrics.Histogram
 	meshUpdateLoopCount        *metrics.Histogram
 	bufferedWriteFrames        *metrics.Histogram // how many sendLoop frames (or groups of related frames) get written per flush
+	rateLimitGlobalWaited      expvar.Int         // number of times global rate limit caused a wait
+	rateLimitPerClientWaited   expvar.Int         // number of times per-client rate limit caused a wait
+	// TODO(illotum): add metrics for rate limited wait time, consider total seconds vs a histogram.
 
 	// verifyClientsLocalTailscaled only accepts client connections to the DERP
 	// server if the clientKey is a known peer in the network, as specified by a
@@ -566,37 +569,11 @@ func (s *Server) LoadAndApplyRateConfig(path string) error {
 	return nil
 }
 
-var publishRateLimitsMetricsOnce sync.Once
-
-func (s *Server) publishRateLimitsMetrics() {
-	// Rate limiting is currently experimental, its APIs are unstable, and it must
-	// be opted-in via --rate-config. Therefore, we only publish related metrics
-	// on demand, to avoid polluting uninterested metrics consumers.
-	//
-	// Note: The [sync.Once] is package-level, and the [expvar.Var] closures
-	// capture [Server], so first [Server] owns these for process lifetime.
-	publishRateLimitsMetricsOnce.Do(func() {
-		expvar.Publish("derp_per_client_rate_limit_bytes_per_second", s.expVarFunc(func() any {
-			return s.rateConfig.PerClientRateLimitBytesPerSec
-		}))
-		expvar.Publish("derp_per_client_rate_burst_bytes", s.expVarFunc(func() any {
-			return s.rateConfig.PerClientRateBurstBytes
-		}))
-		expvar.Publish("derp_global_rate_limit_bytes_per_second", s.expVarFunc(func() any {
-			return s.rateConfig.GlobalRateLimitBytesPerSec
-		}))
-		expvar.Publish("derp_global_rate_burst_bytes", s.expVarFunc(func() any {
-			return s.rateConfig.GlobalRateBurstBytes
-		}))
-	})
-}
-
 // UpdateRateLimits sets the receive rate limits, updating all existing client
 // connections. It returns the applied config, which may differ from rc. If the
 // per-client rate limit is 0, rate limiting is disabled. Mesh peers are always
 // exempt from rate limiting.
 func (s *Server) UpdateRateLimits(rc RateConfig) (applied RateConfig) {
-	s.publishRateLimitsMetrics()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if rc.PerClientRateLimitBytesPerSec == 0 {
@@ -1374,7 +1351,33 @@ func (c *sclient) setRateLimit(bytesPerSec, burst uint64, parent *xrate.Limiter)
 	c.recvLim.Store(lim)
 }
 
-// rateLimit applies the per-client receive rate limit.
+// rateLimitWait is a reimplementation of [xrate.Limiter.WaitN] via [xrate.Limiter.ReserveN].
+// It returns the duration waited for tokens to become available.
+func rateLimitWait(ctx context.Context, lim *xrate.Limiter, n int, now time.Time, newTimer func(time.Duration) (<-chan time.Time, func() bool)) (time.Duration, error) {
+	r := lim.ReserveN(now, n)
+	if !r.OK() {
+		return 0, fmt.Errorf("rate: Wait(n=%d) exceeds limiter's burst %d", n, lim.Burst())
+	}
+	delay := r.DelayFrom(now)
+	if delay == 0 {
+		return 0, nil
+	}
+	ch, stop := newTimer(delay)
+	defer stop()
+	select {
+	case <-ch:
+		// Note: We return the predicted delay as wall-clock duration. May be not the same.
+		return delay, nil
+	case <-ctx.Done():
+		r.Cancel()
+		return 0, ctx.Err()
+	}
+}
+
+// rateLimit applies the receive rate limit.
+// Per-client rate limiting is applied before global.
+// The former lets us differentiate classes of service,
+// the latter sets the overall pace of reading.
 // By limiting here we prevent reading from the buffered reader
 // [sclient.br] if the limit has been exceeded. Any reads done here provide space
 // within the buffered reader to fill back in with data from
@@ -1384,6 +1387,10 @@ func (c *sclient) setRateLimit(bytesPerSec, burst uint64, parent *xrate.Limiter)
 // and this is a no-op.
 func (c *sclient) rateLimit(n int) error {
 	if lim := c.recvLim.Load(); lim != nil {
+		newTimer := func(d time.Duration) (<-chan time.Time, func() bool) {
+			tc, ch := c.s.clock.NewTimer(d)
+			return ch, tc.Stop
+		}
 		// If n exceeds the capacity of the bucket, then WaitN will return
 		// an error and consume zero tokens. To prevent this, clamp n to
 		// [minRateLimitTokenBucketSize].
@@ -1394,12 +1401,25 @@ func (c *sclient) rateLimit(n int) error {
 		//   2. is only partially read off the socket (bufio)
 		//   3. would cause the connection to close shortly after rate limiting, anyway.
 		clampedN := min(n, minRateLimitTokenBucketSize)
-		err := lim.child.WaitN(c.ctx, clampedN)
+		now := c.s.clock.Now()
+		durationWaited, err := rateLimitWait(c.ctx, lim.child, clampedN, now, newTimer)
 		if err != nil {
 			return err
 		}
+		if durationWaited > 0 {
+			c.s.rateLimitPerClientWaited.Add(1)
+		}
 		if lim.parent != nil {
-			return lim.parent.WaitN(c.ctx, clampedN)
+			if durationWaited > 0 {
+				now = c.s.clock.Now() // update 'now' if we already waited
+			}
+			durationWaited, err = rateLimitWait(c.ctx, lim.parent, clampedN, now, newTimer)
+			if err != nil {
+				return err
+			}
+			if durationWaited > 0 {
+				c.s.rateLimitGlobalWaited.Add(1)
+			}
 		}
 	}
 	return nil
@@ -2393,7 +2413,7 @@ func (s *Server) expVarFunc(f func() any) expvar.Func {
 }
 
 // ExpVar returns an expvar variable suitable for registering with expvar.Publish.
-func (s *Server) ExpVar() expvar.Var {
+func (s *Server) ExpVar(rateLimitEnabled bool) expvar.Var {
 	m := new(metrics.Set)
 	m.Set("gauge_memstats_sys0", expvar.Func(func() any { return int64(s.memSys0) }))
 	m.Set("gauge_watchers", s.expVarFunc(func() any { return len(s.watchers) }))
@@ -2436,6 +2456,25 @@ func (s *Server) ExpVar() expvar.Var {
 	var expvarVersion expvar.String
 	expvarVersion.Set(version.Long())
 	m.Set("version", &expvarVersion)
+	if rateLimitEnabled {
+		// Rate limiting is currently experimental, its APIs are unstable, and it must
+		// be opted-in via --rate-config. Therefore, we only publish related metrics
+		// on demand, to avoid polluting uninterested metrics consumers.
+		m.Set("rate_limit_per_client_bytes_per_second", s.expVarFunc(func() any {
+			return s.rateConfig.PerClientRateLimitBytesPerSec
+		}))
+		m.Set("rate_limit_per_client_burst_bytes", s.expVarFunc(func() any {
+			return s.rateConfig.PerClientRateBurstBytes
+		}))
+		m.Set("rate_limit_global_bytes_per_second", s.expVarFunc(func() any {
+			return s.rateConfig.GlobalRateLimitBytesPerSec
+		}))
+		m.Set("rate_limit_global_burst_bytes", s.expVarFunc(func() any {
+			return s.rateConfig.GlobalRateBurstBytes
+		}))
+		m.Set("rate_limit_per_client_waited", &s.rateLimitPerClientWaited)
+		m.Set("rate_limit_global_waited", &s.rateLimitGlobalWaited)
+	}
 	return m
 }
 
