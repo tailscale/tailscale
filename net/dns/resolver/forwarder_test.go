@@ -27,6 +27,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus/eventbustest"
 )
 
@@ -1381,6 +1382,145 @@ func TestForwarderHealthOnContextExpiry(t *testing.T) {
 
 			if got := ht.IsUnhealthy(dnsForwarderFailing); got != tt.wantUnhealthy {
 				t.Errorf("IsUnhealthy = %v, want %v", got, tt.wantUnhealthy)
+			}
+		})
+	}
+}
+
+func TestResolversCustomScheme(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		domain    dnsname.FQDN
+		schemes   map[string]CustomSchemeHandler
+		routes    map[dnsname.FQDN][]*dnstype.Resolver
+		wantAddrs []string
+	}{
+		{
+			name:    "no-custom-scheme",
+			domain:  "example.com.",
+			schemes: map[string]CustomSchemeHandler{},
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"example.com.": {
+					{Addr: "192.168.1.1:53"},
+					{Addr: "192.168.1.2:53"},
+				},
+			},
+			wantAddrs: []string{"192.168.1.1:53", "192.168.1.2:53"},
+		},
+		{
+			name:   "single-custom-scheme",
+			domain: "example.com.",
+			schemes: map[string]CustomSchemeHandler{
+				"myscheme": func(string) (string, error) { return "1.2.3.4:53", nil },
+			},
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"example.com.": {{Addr: "myscheme:customKey"}},
+			},
+			wantAddrs: []string{"1.2.3.4:53"},
+		},
+		{
+			name:   "with-other-resolvers",
+			domain: "example.com.",
+			schemes: map[string]CustomSchemeHandler{
+				"myscheme": func(key string) (string, error) { return "1.2.3.4:53", nil },
+			},
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"example.com.": {
+					{Addr: "192.168.1.1:53"},
+					{Addr: "myscheme:customKey"},
+					{Addr: "192.168.1.2:53"},
+				},
+			},
+			wantAddrs: []string{"192.168.1.1:53", "1.2.3.4:53", "192.168.1.2:53"},
+		},
+		{
+			name:   "multiple-custom-schemes",
+			domain: "example.com.",
+			schemes: map[string]CustomSchemeHandler{
+				"schemeOne": func(string) (string, error) { return "1.2.3.4:53", nil },
+				"schemeTwo": func(string) (string, error) { return "5.6.7.8:53", nil },
+			},
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"example.com.": {
+					{Addr: "schemeOne:customKey"},
+					{Addr: "schemeTwo:customKey"},
+				},
+			},
+			wantAddrs: []string{"1.2.3.4:53", "5.6.7.8:53"},
+		},
+		{
+			name:   "empty-string-means-no-resolver",
+			domain: "example.com.",
+			schemes: map[string]CustomSchemeHandler{
+				"myscheme": func(string) (string, error) { return "", nil },
+			},
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"example.com.": {
+					{Addr: "192.168.1.1:53"},
+					{Addr: "myscheme:customKey"},
+				},
+			},
+			wantAddrs: []string{"192.168.1.1:53"},
+		},
+		{
+			name:   "error-means-no-resolver",
+			domain: "example.com.",
+			schemes: map[string]CustomSchemeHandler{
+				"myscheme": func(string) (string, error) { return "", fmt.Errorf("handler error") },
+			},
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"example.com.": {
+					{Addr: "192.168.1.1:53"},
+					{Addr: "myscheme:customKey"},
+				},
+			},
+			wantAddrs: []string{"192.168.1.1:53"},
+		},
+		{
+			// If the best-matching route yields no resolvers after scheme
+			// resolution, fall through to the next matching route.
+			name:   "empty-scheme-result-falls-through-to-next-matching-route",
+			domain: "example.com.",
+			schemes: map[string]CustomSchemeHandler{
+				"myscheme": func(string) (string, error) { return "", nil },
+			},
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"example.com.": {{Addr: "myscheme:customKey"}},
+				".":            {{Addr: "192.168.1.1:53"}},
+			},
+			wantAddrs: []string{"192.168.1.1:53"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logf := tstest.WhileTestRunningLogger(t)
+			bus := eventbustest.NewBus(t)
+			netMon, err := netmon.New(bus, logf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var dialer tsdial.Dialer
+			dialer.SetNetMon(netMon)
+			dialer.SetBus(bus)
+
+			fwd := newForwarder(logf, netMon, nil, &dialer, health.NewTracker(bus), nil)
+			for scheme, handler := range tt.schemes {
+				if err := fwd.RegisterCustomScheme(scheme, handler); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			fwd.setRoutes(tt.routes, false)
+
+			got := fwd.resolvers(tt.domain)
+			var gotAddrs []string
+			for _, r := range got {
+				gotAddrs = append(gotAddrs, r.name.Addr)
+			}
+			if !slices.Equal(gotAddrs, tt.wantAddrs) {
+				t.Errorf("got %v, want %v", gotAddrs, tt.wantAddrs)
 			}
 		})
 	}
