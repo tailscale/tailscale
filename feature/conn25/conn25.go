@@ -75,7 +75,7 @@ func init() {
 	feature.Register(featureName)
 	ipnext.RegisterExtension(featureName, func(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, error) {
 		return &extension{
-			conn25:  newConn25(logger.WithPrefix(logf, "conn25: ")),
+			logf:    logf,
 			backend: sb,
 		}, nil
 	})
@@ -99,11 +99,12 @@ func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, 
 // extension is an [ipnext.Extension] managing the connector on platforms
 // that import this package.
 type extension struct {
-	conn25  *Conn25            // safe for concurrent access and only set at creation
+	conn25  *Conn25            // safe for concurrent access and only set at Init
 	backend ipnext.SafeBackend // safe for concurrent access and only set at creation
+	logf    logger.Logf
 
-	host      ipnext.Host             // set in Init, read-only after
-	ctxCancel context.CancelCauseFunc // cancels sendLoop goroutine
+	host        ipnext.Host // set in Init, read-only after
+	ctxShutdown context.CancelCauseFunc
 }
 
 // Name implements [ipnext.Extension].
@@ -118,10 +119,13 @@ func (e *extension) Init(host ipnext.Host) error {
 		return ipnext.SkipExtension
 	}
 
-	if e.ctxCancel != nil {
+	if e.ctxShutdown != nil {
 		return nil
 	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	e.ctxShutdown = cancel
 	e.host = host
+	e.conn25 = newConn25(ctx, logger.WithPrefix(e.logf, "conn25: "))
 
 	dph := newDatapathHandler(e.conn25, e.conn25.client.logf)
 	if err := e.installHooks(dph); err != nil {
@@ -129,8 +133,6 @@ func (e *extension) Init(host ipnext.Host) error {
 	}
 	e.seedPrefsConfig()
 
-	ctx, cancel := context.WithCancelCause(context.Background())
-	e.ctxCancel = cancel
 	go e.sendLoop(ctx)
 	return nil
 }
@@ -250,8 +252,8 @@ func (e *extension) getMagicRange() views.Slice[netip.Prefix] {
 
 // Shutdown implements [ipnlocal.Extension].
 func (e *extension) Shutdown() error {
-	if e.ctxCancel != nil {
-		e.ctxCancel(errors.New("extension shutdown"))
+	if e.ctxShutdown != nil {
+		e.ctxShutdown(errors.New("extension shutdown"))
 	}
 	if e.conn25 != nil {
 		close(e.conn25.client.addrsCh)
@@ -261,6 +263,10 @@ func (e *extension) Shutdown() error {
 
 func (e *extension) handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
+	if e.conn25 == nil {
+		http.Error(w, "Server not ready", http.StatusServiceUnavailable)
+		return
+	}
 	if r.Method != "POST" {
 		http.Error(w, "Method should be POST", http.StatusMethodNotAllowed)
 		return
@@ -326,13 +332,9 @@ func (c *Conn25) isConfigured() bool {
 	return c.client.isConfigured()
 }
 
-func newConn25(logf logger.Logf) *Conn25 {
+func newConn25(ctx context.Context, logf logger.Logf) *Conn25 {
 	c := &Conn25{
-		client: &client{
-			logf:        logf,
-			addrsCh:     make(chan addrs, 64),
-			assignments: addrAssignments{clock: tstime.StdClock{}},
-		},
+		client:    newClient(ctx, logf),
 		connector: &connector{logf: logf},
 	}
 	return c
@@ -632,6 +634,62 @@ type client struct {
 	assignments     addrAssignments
 	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
 	config          config
+}
+
+func newClient(ctx context.Context, logf logger.Logf) *client {
+	c := &client{
+		logf:        logf,
+		addrsCh:     make(chan addrs, 64),
+		assignments: addrAssignments{clock: tstime.StdClock{}},
+	}
+	// It gets racy in the tests whether the ticker fires when you advance the clock,
+	// so in the tests we'll call handleExpireAddrAssignmentsLoopTick by hand.
+	if !testenv.InTest() {
+		go c.expireAddrAssignmentsLoop(ctx)
+	}
+	return c
+}
+
+func (c *client) handleExpireAddrAssignmentsLoopTick() {
+	expired := c.assignments.removeExpiredAddrs()
+	c.returnExpiredToPool(expired)
+}
+
+func (c *client) expireAddrAssignmentsLoop(ctx context.Context) {
+	ticker, ch := c.assignments.clock.NewTicker(61 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ch:
+			c.handleExpireAddrAssignmentsLoopTick()
+		}
+	}
+}
+
+func (c *client) returnExpiredToPool(expired []addrs) {
+	if len(expired) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, as := range expired {
+		var magicPool, transitPool *ippool
+		if as.magic.Is4() {
+			magicPool = c.v4MagicIPPool
+			transitPool = c.v4TransitIPPool
+		} else {
+			magicPool = c.v6MagicIPPool
+			transitPool = c.v6TransitIPPool
+		}
+		if err := magicPool.returnAddr(as.magic); err != nil {
+			c.logf("error returning magic IP %v to pool: %v", as.magic, err)
+		}
+		if err := transitPool.returnAddr(as.transit); err != nil {
+			c.logf("error returning transit IP %v to pool: %v", as.transit, err)
+		}
+	}
 }
 
 func (c *client) getConfig() config {
@@ -1173,84 +1231,6 @@ type addrs struct {
 
 func (c addrs) isValid() bool {
 	return c.dst.IsValid()
-}
-
-// domainDst is a key for looking up an existing address assignment by the
-// DNS response domain and destination IP pair.
-type domainDst struct {
-	domain dnsname.FQDN
-	dst    netip.Addr
-}
-
-// addrAssignments is the collection of addrs assigned by this client
-// supporting lookup by magic IP, transit IP or domain+dst, or to lookup all
-// transit IPs associated with a given connector (identified by its node key).
-// byConnKey stores netip.Prefix versions of the transit IPs for use in the
-// WireGuard hooks.
-type addrAssignments struct {
-	byMagicIP   map[netip.Addr]addrs
-	byTransitIP map[netip.Addr]addrs
-	byDomainDst map[domainDst]addrs
-	clock       tstime.Clock
-}
-
-const defaultExpiry = 48 * time.Hour
-
-func (a *addrAssignments) insert(as addrs) error {
-	return a.insertWithExpiry(as, defaultExpiry)
-}
-
-func (a *addrAssignments) insertWithExpiry(as addrs, d time.Duration) error {
-	if !as.expiresAt.IsZero() {
-		return errors.New("expiresAt already set")
-	}
-	now := a.clock.Now()
-	as.expiresAt = now.Add(d)
-	// we don't expect for addresses to be reused before expiry
-	if existing, ok := a.byMagicIP[as.magic]; ok {
-		if !existing.expiresAt.Before(now) {
-			return errors.New("byMagicIP key exists")
-		}
-	}
-	ddst := domainDst{domain: as.domain, dst: as.dst}
-	if existing, ok := a.byDomainDst[ddst]; ok {
-		if !existing.expiresAt.Before(now) {
-			return errors.New("byDomainDst key exists")
-		}
-	}
-	if existing, ok := a.byTransitIP[as.transit]; ok {
-		if !existing.expiresAt.Before(now) {
-			return errors.New("byTransitIP key exists")
-		}
-	}
-	mak.Set(&a.byMagicIP, as.magic, as)
-	mak.Set(&a.byTransitIP, as.transit, as)
-	mak.Set(&a.byDomainDst, ddst, as)
-	return nil
-}
-
-func (a *addrAssignments) lookupByDomainDst(domain dnsname.FQDN, dst netip.Addr) (addrs, bool) {
-	v, ok := a.byDomainDst[domainDst{domain: domain, dst: dst}]
-	if !ok || v.expiresAt.Before(a.clock.Now()) {
-		return addrs{}, false
-	}
-	return v, true
-}
-
-func (a *addrAssignments) lookupByMagicIP(mip netip.Addr) (addrs, bool) {
-	v, ok := a.byMagicIP[mip]
-	if !ok || v.expiresAt.Before(a.clock.Now()) {
-		return addrs{}, false
-	}
-	return v, true
-}
-
-func (a *addrAssignments) lookupByTransitIP(tip netip.Addr) (addrs, bool) {
-	v, ok := a.byTransitIP[tip]
-	if !ok || v.expiresAt.Before(a.clock.Now()) {
-		return addrs{}, false
-	}
-	return v, true
 }
 
 // insertTransitConnMapping adds an entry to the byConnKey map
