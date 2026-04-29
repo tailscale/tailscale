@@ -1388,6 +1388,7 @@ func TestForwarderHealthOnContextExpiry(t *testing.T) {
 }
 
 func TestResolversCustomScheme(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		domain    dnsname.FQDN
