@@ -793,10 +793,23 @@ func (c *Conn) SetOnlyTCP443(v bool) {
 // SetDERPMap controls which (if any) DERP servers are used.
 // A nil value means to disable DERP; it's disabled by default.
 //
-// If doReStun is false, the post setting ReSTUN is not performed.
-// This flag is used for setting the map from a cache to make it possible to
-// also set the homeDERP from cache.
-func (c *Conn) SetDERPMap(dm *tailcfg.DERPMap, doReStun bool) {
+// SetDERPMap triggers a ReSTUN after updating the map. Callers that want to
+// set the map without triggering a ReSTUN should use [Conn.SetDERPMapWithoutReSTUN]
+// instead.
+func (c *Conn) SetDERPMap(dm *tailcfg.DERPMap) {
+	c.setDERPMap(dm, true)
+}
+
+// SetDERPMapWithoutReSTUN is like [Conn.SetDERPMap] but does not trigger a
+// ReSTUN after updating the map.
+//
+// It is used for setting the map from a cache, so the homeDERP can be set
+// from cache before any STUN happens.
+func (c *Conn) SetDERPMapWithoutReSTUN(dm *tailcfg.DERPMap) {
+	c.setDERPMap(dm, false)
+}
+
+func (c *Conn) setDERPMap(dm *tailcfg.DERPMap, doReStun bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

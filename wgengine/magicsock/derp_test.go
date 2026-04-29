@@ -116,15 +116,15 @@ func TestSetDERPMapDoReStun(t *testing.T) {
 	// spawning updateEndpoints.
 	c.everHadKey = true
 
-	// Should not trigger a ReSTUN.
-	c.SetDERPMap(derpMap1, false)
+	// SetDERPMapWithoutReSTUN should not trigger a ReSTUN.
+	c.SetDERPMapWithoutReSTUN(derpMap1)
 	if reSTUNCalls != 0 {
-		t.Errorf("SetDERPMap(dm, doReStun=false): got %d ReSTUN calls, want 0", reSTUNCalls)
+		t.Errorf("SetDERPMapWithoutReSTUN: got %d ReSTUN calls, want 0", reSTUNCalls)
 	}
 
-	// doReStun=true: should trigger a ReSTUN.
-	c.SetDERPMap(derpMap2, true)
+	// SetDERPMap should trigger a ReSTUN.
+	c.SetDERPMap(derpMap2)
 	if reSTUNCalls != 1 {
-		t.Errorf("SetDERPMap(dm, doReStun=true): got %d ReSTUN calls, want 1", reSTUNCalls)
+		t.Errorf("SetDERPMap: got %d ReSTUN calls, want 1", reSTUNCalls)
 	}
 }

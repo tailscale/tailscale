@@ -203,7 +203,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListe
 	if err != nil {
 		t.Fatalf("constructing magicsock: %v", err)
 	}
-	conn.SetDERPMap(derpMap, true)
+	conn.SetDERPMap(derpMap)
 	if err := conn.SetPrivateKey(privateKey); err != nil {
 		t.Fatalf("setting private key in magicsock: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestNewConn(t *testing.T) {
 		t.Fatal("LocalPort returned 0")
 	}
 
-	conn.SetDERPMap(stuntest.DERPMapOf(stunAddr.String()), true)
+	conn.SetDERPMap(stuntest.DERPMapOf(stunAddr.String()))
 	conn.SetPrivateKey(key.NewNode())
 
 	go func() {
@@ -567,7 +567,7 @@ func TestDERPActiveFuncCalledAfterConnect(t *testing.T) {
 	}
 	defer conn.Close()
 
-	conn.SetDERPMap(derpMap, true)
+	conn.SetDERPMap(derpMap)
 	if err := conn.SetPrivateKey(key.NewNode()); err != nil {
 		t.Fatal(err)
 	}
