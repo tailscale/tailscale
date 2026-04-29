@@ -722,8 +722,10 @@ main() {
 			set -x
 			if [ -n "$TAILSCALE_VERSION" ]; then
 				echo "Warning: Solus maintains their own Tailscale package. Version pinning may not work as expected, as the target version may no longer be available."
+				$SUDO eopkg install -y "tailscale-$TAILSCALE_VERSION"
+			else
+				$SUDO eopkg install -y tailscale
 			fi
-			$SUDO eopkg install -y tailscale
 			$SUDO systemctl enable --now tailscaled
 			set +x
 			;;
@@ -731,8 +733,10 @@ main() {
 			set -x
 			if [ -n "$TAILSCALE_VERSION" ]; then
 				echo "Warning: AerynOS maintains their own Tailscale package. Version pinning may not work as expected, as the target version may no longer be available."
+				$SUDO moss install -y "tailscale-$TAILSCALE_VERSION"
+			else
+				$SUDO moss install -y tailscale
 			fi
-			$SUDO moss install -y tailscale
 			$SUDO systemctl enable --now tailscaled
 			set +x
 			;;
