@@ -17,7 +17,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.44.7
 	github.com/axiomhq/hyperloglog v0.0.0-20240319100328-84253e514e02
 	github.com/bradfitz/go-tool-cache v0.0.0-20260216153636-9e5201344fe5
-	github.com/bradfitz/monogok v0.0.0-20260310223834-65a3d9465088
+	github.com/bradfitz/monogok v0.0.0-20260429173803-229ef7981a6b
 	github.com/bramvdbogaerde/go-scp v1.4.0
 	github.com/cilium/ebpf v0.16.0
 	github.com/coder/websocket v1.8.12
@@ -44,7 +44,7 @@ require (
 	github.com/go4org/plan9netshell v0.0.0-20250324183649-788daa080737
 	github.com/godbus/dbus/v5 v5.1.1-0.20230522191255-76236955d466
 	github.com/gokrazy/breakglass v0.0.0-20251229072214-9dbc0478d486
-	github.com/gokrazy/gokrazy v0.0.0-20260123094004-294c93fa173c
+	github.com/gokrazy/gokrazy v0.0.0-20260418085648-c38c3134b8a7
 	github.com/gokrazy/kernel.arm64 v0.0.0-20260403054012-807489e0272a
 	github.com/gokrazy/serial-busybox v0.0.0-20250119153030-ac58ba7574e7
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8
@@ -101,6 +101,7 @@ require (
 	github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc
 	github.com/tailscale/setec v0.0.0-20251203133219-2ab774e4129a
+	github.com/tailscale/ts-gokrazy v0.0.0-20260429180033-fe741c6deb44
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
 	github.com/tailscale/wireguard-go v0.0.0-20260304043104-4184faf59e56
@@ -196,7 +197,7 @@ require (
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-github/v66 v66.0.0 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
-	github.com/google/renameio/v2 v2.0.0 // indirect
+	github.com/google/renameio/v2 v2.0.2 // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
@@ -241,7 +242,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/stacklok/frizbee v0.1.7 // indirect
-	github.com/vishvananda/netlink v1.3.1-0.20240922070040-084abd93d350 // indirect
+	github.com/vishvananda/netlink v1.3.1 // indirect
 	github.com/xen0n/gosmopolitan v1.2.2 // indirect
 	github.com/xlab/treeprint v1.2.0 // indirect
 	github.com/ykadowak/zerologlint v0.1.5 // indirect
