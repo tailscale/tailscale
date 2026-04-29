@@ -191,7 +191,7 @@ func TestServeAPI(t *testing.T) {
 		reqBody:   "{\"setExitNode\":true}",
 		tests: []requestTest{{
 			remoteIP:     remoteIPWithNoCapabilities,
-			wantResponse: "not allowed",
+			wantResponse: "SetExitNode not allowed",
 			wantStatus:   http.StatusUnauthorized,
 		}, {
 			remoteIP:   remoteIPWithAllCapabilities,
@@ -204,7 +204,7 @@ func TestServeAPI(t *testing.T) {
 		reqContentType: "application/json",
 		tests: []requestTest{{
 			remoteIP:     remoteIPWithNoCapabilities,
-			wantResponse: "not allowed",
+			wantResponse: "RunSSHSet not allowed",
 			wantStatus:   http.StatusUnauthorized,
 		}, {
 			remoteIP:   remoteIPWithAllCapabilities,
@@ -1617,6 +1617,7 @@ func TestServePostRoutes(t *testing.T) {
 	tests := []struct {
 		name           string
 		data           postRoutesRequest
+		peerCaps       peerCapabilities
 		wantErr        bool
 		wantEditPrefs  bool // whether EditPrefs (PATCH /prefs) should be called
 		wantExitNodeID tailcfg.StableNodeID
@@ -1625,6 +1626,7 @@ func TestServePostRoutes(t *testing.T) {
 		{
 			name:          "empty-request",
 			data:          postRoutesRequest{},
+			peerCaps:      peerCapabilities{capFeatureExitNodes: true, capFeatureSubnets: true},
 			wantErr:       true,
 			wantEditPrefs: false,
 		},
@@ -1634,9 +1636,19 @@ func TestServePostRoutes(t *testing.T) {
 				SetExitNode: true,
 				UseExitNode: "new-exit-node",
 			},
+			peerCaps:       peerCapabilities{capFeatureExitNodes: true, capFeatureSubnets: true},
 			wantEditPrefs:  true,
 			wantExitNodeID: "new-exit-node",
 			wantRoutes:     []netip.Prefix{existingRoute},
+		},
+		{
+			name: "SetExitNode-not-allowed",
+			data: postRoutesRequest{
+				SetExitNode: true,
+				UseExitNode: "new-exit-node",
+			},
+			peerCaps: peerCapabilities{capFeatureSubnets: true},
+			wantErr:  true,
 		},
 		{
 			name: "SetRoutes-only",
@@ -1644,9 +1656,19 @@ func TestServePostRoutes(t *testing.T) {
 				SetRoutes:       true,
 				AdvertiseRoutes: []string{"10.0.0.0/8"},
 			},
+			peerCaps:       peerCapabilities{capFeatureExitNodes: true, capFeatureSubnets: true},
 			wantEditPrefs:  true,
 			wantExitNodeID: existingExitNodeID,
 			wantRoutes:     []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+		},
+		{
+			name: "SetRoutes-not-allowed",
+			data: postRoutesRequest{
+				SetRoutes:       true,
+				AdvertiseRoutes: []string{"10.0.0.0/8"},
+			},
+			peerCaps: peerCapabilities{capFeatureExitNodes: true},
+			wantErr:  true,
 		},
 		{
 			name: "SetExitNode-and-SetRoutes",
@@ -1656,6 +1678,7 @@ func TestServePostRoutes(t *testing.T) {
 				UseExitNode:     "new-exit-node",
 				AdvertiseRoutes: []string{"10.0.0.0/8"},
 			},
+			peerCaps:       peerCapabilities{capFeatureExitNodes: true, capFeatureSubnets: true},
 			wantEditPrefs:  true,
 			wantExitNodeID: "new-exit-node",
 			wantRoutes:     []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
@@ -1699,7 +1722,8 @@ func TestServePostRoutes(t *testing.T) {
 				lc:   &local.Client{Dial: lal.Dial},
 			}
 
-			err := s.servePostRoutes(context.Background(), tt.data)
+			ctx := contextKeyPeer.WithValue(t.Context(), tt.peerCaps)
+			err := s.servePostRoutes(ctx, tt.data)
 
 			if tt.wantErr {
 				if err == nil {
