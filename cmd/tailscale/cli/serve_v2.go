@@ -177,7 +177,7 @@ func serveTypeFromConfString(sp conffile.ServiceProtocol) (st serveType, ok bool
 	switch sp {
 	case conffile.ProtoHTTP:
 		return serveTypeHTTP, true
-	case conffile.ProtoHTTPS, conffile.ProtoHTTPSInsecure, conffile.ProtoFile:
+	case conffile.ProtoHTTPS, conffile.ProtoHTTPSInsecure, conffile.ProtoTLSTerminatedHTTP, conffile.ProtoFile:
 		return serveTypeHTTPS, true
 	case conffile.ProtoTCP:
 		return serveTypeTCP, true
@@ -746,8 +746,13 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 						return nil, fmt.Errorf("service %q: parse port %q: %w", svcName, portStr, err)
 					}
 
+					protocol := conffile.ServiceProtocol(proto)
+					if config.HTTPS && !config.HTTP {
+						protocol = conffile.ProtoTLSTerminatedHTTP
+					}
+
 					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
-						Protocol:         conffile.ServiceProtocol(proto),
+						Protocol:         protocol,
 						Destination:      host,
 						DestinationPorts: tailcfg.PortRange{First: uint16(port), Last: uint16(port)},
 					})
@@ -859,9 +864,15 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 			serveType, _ := serveTypeFromConfString(ep.Protocol)
 			for port := ppr.Ports.First; port <= ppr.Ports.Last; port++ {
 				var target string
-				if ep.Protocol == conffile.ProtoFile {
+				switch ep.Protocol {
+				case conffile.ProtoFile:
 					target = ep.Destination
-				} else {
+				case conffile.ProtoTLSTerminatedHTTP:
+					// map source port range 1-1 to destination port range
+					destPort := ep.DestinationPorts.First + (port - ppr.Ports.First)
+					portStr := fmt.Sprint(destPort)
+					target = fmt.Sprintf("http://%s", net.JoinHostPort(ep.Destination, portStr))
+				default:
 					// map source port range 1-1 to destination port range
 					destPort := ep.DestinationPorts.First + (port - ppr.Ports.First)
 					portStr := fmt.Sprint(destPort)
