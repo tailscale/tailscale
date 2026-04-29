@@ -1076,7 +1076,7 @@ func (f *forwarder) GetUpstreamResolvers(name dnsname.FQDN) []*dnstype.Resolver 
 	return upstreamResolvers
 }
 
-// RegisterCustomScheme adds a [CustomSchemaHandler] that is called to provide
+// RegisterCustomScheme adds a [CustomSchemeHandler] that is called to provide
 // an updated address when a [dnstype.Resolver.Addr] uses that scheme.
 func (f *forwarder) RegisterCustomScheme(scheme string, h CustomSchemeHandler) error {
 	f.mu.Lock()
