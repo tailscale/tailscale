@@ -519,7 +519,8 @@ const minRateLimitTokenBucketSize = derp.MaxPacketSize + derp.KeyLen
 // in bytes.
 type RateConfig struct {
 	// PerClientRateLimitBytesPerSec represents the per-client
-	// rate limit in bytes per second. A zero value disables rate limiting.
+	// rate limit in bytes per second. A zero value disables per-client rate limiting,
+	// but global (GlobalRate...) configuration may still apply.
 	PerClientRateLimitBytesPerSec uint64 `json:",omitzero"`
 	// PerClientRateBurstBytes represents the per-client token bucket depth,
 	// or burst, in bytes. Any value lower than [minRateLimitTokenBucketSize]
@@ -528,15 +529,14 @@ type RateConfig struct {
 	PerClientRateBurstBytes uint64 `json:",omitzero"`
 	// GlobalRateLimitBytesPerSec represents the global rate limit in bytes per
 	// second. A zero value disables global rate limiting, but per-client (PerClient...)
-	// configuration may still apply. Only relevant if PerClientRateLimitBytesPerSec
-	// is nonzero. If GlobalRateLimitBytesPerSec is nonzero and less than
+	// configuration may still apply. If GlobalRateLimitBytesPerSec is nonzero and less than
 	// PerClientRateLimitBytesPerSec, then GlobalRateLimitBytesPerSec will be set
 	// equal to PerClientRateLimitBytesPerSec before application.
 	GlobalRateLimitBytesPerSec uint64 `json:",omitzero"`
 	// GlobalRateBurstBytes represents the global token bucket depth, or burst,
 	// in bytes. Any value lower than [minRateLimitTokenBucketSize] will be increased to
 	// [minRateLimitTokenBucketSize] before application. Only relevant if
-	// PerClientRateLimitBytesPerSec and GlobalRateLimitBytesPerSec are nonzero.
+	// GlobalRateLimitBytesPerSec is nonzero.
 	GlobalRateBurstBytes uint64 `json:",omitzero"`
 }
 
@@ -576,8 +576,8 @@ func (s *Server) LoadAndApplyRateConfig(path string) error {
 func (s *Server) UpdateRateLimits(rc RateConfig) (applied RateConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if rc.PerClientRateLimitBytesPerSec == 0 {
-		// if per-client is disabled, all rate limiting is disabled
+	if rc.PerClientRateLimitBytesPerSec == 0 && rc.GlobalRateLimitBytesPerSec == 0 {
+		// if per-client and global are disabled, all rate limiting is disabled
 		rc = RateConfig{}
 	}
 	if rc.PerClientRateLimitBytesPerSec != 0 {
@@ -1336,14 +1336,17 @@ func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 	return c.sendPkt(dst, p)
 }
 
-// setRateLimit updates the receive rate limiter. When bytesPerSec is 0 or the
+// setRateLimit updates the receive rate limiter. When bytesPerSec is 0 and parent is nil, or the
 // client is a mesh peer, the limiter is set to nil so that [sclient.rateLimit] is a no-op.
 func (c *sclient) setRateLimit(bytesPerSec, burst uint64, parent *xrate.Limiter) {
-	if bytesPerSec == 0 || c.canMesh {
+	if c.canMesh || (bytesPerSec == 0 && parent == nil) {
 		c.recvLim.Store(nil)
 		return
 	}
-	child := xrate.NewLimiter(xrate.Limit(bytesPerSec), int(burst))
+	var child *xrate.Limiter
+	if bytesPerSec != 0 {
+		child = xrate.NewLimiter(xrate.Limit(bytesPerSec), int(burst))
+	}
 	lim := &parentChildTokenBuckets{
 		parent: parent,
 		child:  child,
@@ -1402,12 +1405,18 @@ func (c *sclient) rateLimit(n int) error {
 		//   3. would cause the connection to close shortly after rate limiting, anyway.
 		clampedN := min(n, minRateLimitTokenBucketSize)
 		now := c.s.clock.Now()
-		durationWaited, err := rateLimitWait(c.ctx, lim.child, clampedN, now, newTimer)
-		if err != nil {
-			return err
-		}
-		if durationWaited > 0 {
-			c.s.rateLimitPerClientWaited.Add(1)
+		var (
+			durationWaited time.Duration
+			err            error
+		)
+		if lim.child != nil {
+			durationWaited, err = rateLimitWait(c.ctx, lim.child, clampedN, now, newTimer)
+			if err != nil {
+				return err
+			}
+			if durationWaited > 0 {
+				c.s.rateLimitPerClientWaited.Add(1)
+			}
 		}
 		if lim.parent != nil {
 			if durationWaited > 0 {
@@ -1872,7 +1881,7 @@ type sclient struct {
 // which is already optimized to use [mono.Time].
 type parentChildTokenBuckets struct {
 	parent *xrate.Limiter // parent may be nil
-	child  *xrate.Limiter // child is always non-nil
+	child  *xrate.Limiter // child may be nil
 }
 
 func (c *sclient) presentFlags() derp.PeerPresentFlags {
