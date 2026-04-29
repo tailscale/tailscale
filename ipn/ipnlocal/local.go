@@ -1867,18 +1867,24 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		}
 
 		b.e.SetNetworkMap(st.NetMap)
-		b.MagicConn().SetDERPMapWithoutReSTUN(st.NetMap.DERPMap)
+
+		var cachedHome int
 		if c == nil && st.NetMap.Cached && st.NetMap.SelfNode.Valid() {
+			cachedHome = st.NetMap.SelfNode.HomeDERP()
+		}
+		if cachedHome != 0 {
 			// Loading from a cached netmap (c == nil means no live control
 			// client). Pre-seed the home DERP from the cached self node so
 			// that the guard in maybeSetNearestDERP prevents changing the
 			// DERP home before we reconnect to the control plane. If the cache has
 			// nothing in it, skip this, and let the node pick a DERP itself.
-			if cachedHome := st.NetMap.SelfNode.HomeDERP(); cachedHome != 0 {
-				b.health.SetOutOfPollNetMap()
-				b.MagicConn().ForceSetNearestDERP(cachedHome)
-			}
+			b.MagicConn().SetDERPMapWithoutReSTUN(st.NetMap.DERPMap)
+			b.health.SetOutOfPollNetMap()
+			b.MagicConn().ForceSetNearestDERP(cachedHome)
+		} else {
+			b.MagicConn().SetDERPMap(st.NetMap.DERPMap)
 		}
+
 		b.MagicConn().SetOnlyTCP443(st.NetMap.HasCap(tailcfg.NodeAttrOnlyTCP443))
 
 		// Update our cached DERP map
