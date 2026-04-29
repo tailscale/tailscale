@@ -46,7 +46,7 @@ import (
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/tstest/natlab/vnet"
 	"tailscale.com/types/key"
-	"tailscale.com/util/set"
+	"tailscale.com/util/mak"
 )
 
 var (
@@ -92,7 +92,8 @@ type Env struct {
 	qemuSockOnce  sync.Once
 	dgramSockOnce sync.Once
 	compileMu     sync.Mutex
-	compiled      set.Set[string]
+	compileOnce   map[string]*sync.Once // keyed by goos_goarch
+	imageOnce     map[string]*sync.Once // keyed by OSImage.Name
 
 	// Web UI support.
 	ctx        context.Context // cancelled when test ends
@@ -1143,25 +1144,44 @@ func (e *Env) ensureCompiled(ctx context.Context, goos, goarch string) {
 	key := goos + "_" + goarch
 
 	e.compileMu.Lock()
-	if e.compiled.Contains(key) {
-		e.compileMu.Unlock()
-		return
+	once, ok := e.compileOnce[key]
+	if !ok {
+		once = new(sync.Once)
+		mak.Set(&e.compileOnce, key, once)
 	}
 	e.compileMu.Unlock()
 
-	step := e.Step(fmt.Sprintf("Compile %s_%s binaries", goos, goarch))
-	step.Begin()
-	if err := e.compileBinariesForOS(ctx, goos, goarch); err != nil {
-		step.End(err)
-		e.t.Fatalf("compileBinariesForOS(%s, %s): %v", goos, goarch, err)
-	}
-	step.End(nil)
-	e.registerBinaries(goos, goarch)
+	once.Do(func() {
+		step := e.Step(fmt.Sprintf("Compile %s_%s binaries", goos, goarch))
+		step.Begin()
+		if err := e.compileBinariesForOS(ctx, goos, goarch); err != nil {
+			step.End(err)
+			e.t.Fatalf("compileBinariesForOS(%s, %s): %v", goos, goarch, err)
+		}
+		step.End(nil)
+		e.registerBinaries(goos, goarch)
+	})
+}
 
+// ensureImage prepares the cloud image for os and returns any error from the
+// preparation. Safe for concurrent use; only prepares once per OS name.
+func (e *Env) ensureImage(ctx context.Context, os OSImage) error {
 	e.compileMu.Lock()
-	e.compiled.Make()
-	e.compiled.Add(key)
+	once, ok := e.imageOnce[os.Name]
+	if !ok {
+		once = new(sync.Once)
+		mak.Set(&e.imageOnce, os.Name, once)
+	}
 	e.compileMu.Unlock()
+
+	var err error
+	once.Do(func() {
+		step := e.Step(fmt.Sprintf("Prepare %s image", os.Name))
+		step.Begin()
+		err = ensureImage(ctx, os)
+		step.End(err)
+	})
+	return err
 }
 
 // registerBinaries registers compiled binaries with the vnet file server.
