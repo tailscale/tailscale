@@ -620,10 +620,10 @@ var fileGetCmd = &ffcli.Command{
 	Exec:       runFileGet,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("get")
-		fs.BoolVar(&getArgs.wait, "wait", false, "wait for a file to arrive if inbox is empty")
-		fs.BoolVar(&getArgs.loop, "loop", false, "run get in a loop, receiving files as they come in")
-		fs.BoolVar(&getArgs.verbose, "verbose", false, "verbose output")
-		fs.Var(&getArgs.conflict, "conflict", "`behavior`"+` when a conflicting (same-named) file already exists in the target directory.
+		fs.BoolVar(&fileGetArgs.wait, "wait", false, "wait for a file to arrive if inbox is empty")
+		fs.BoolVar(&fileGetArgs.loop, "loop", false, "run get in a loop, receiving files as they come in")
+		fs.BoolVar(&fileGetArgs.verbose, "verbose", false, "verbose output")
+		fs.Var(&fileGetArgs.conflict, "conflict", "`behavior`"+` when a conflicting (same-named) file already exists in the target directory.
 	skip:       skip conflicting files: leave them in the taildrop inbox and print an error. get any non-conflicting files
 	overwrite:  overwrite existing file
 	rename:     write to a new number-suffixed filename`)
@@ -632,7 +632,7 @@ var fileGetCmd = &ffcli.Command{
 	})(),
 }
 
-var getArgs = struct {
+var fileGetArgs = struct {
 	wait     bool
 	loop     bool
 	verbose  bool
@@ -694,7 +694,7 @@ func receiveFile(ctx context.Context, wf apitype.WaitingFile, dir string) (targe
 		return "", 0, fmt.Errorf("opening inbox file %q: %w", wf.Name, err)
 	}
 	defer rc.Close()
-	f, err := openFileOrSubstitute(dir, wf.Name, getArgs.conflict)
+	f, err := openFileOrSubstitute(dir, wf.Name, fileGetArgs.conflict)
 	if err != nil {
 		return "", 0, err
 	}
@@ -720,10 +720,10 @@ func runFileGetOneBatch(ctx context.Context, dir string) []error {
 			errs = append(errs, fmt.Errorf("getting WaitingFiles: %w", err))
 			break
 		}
-		if len(wfs) != 0 || !(getArgs.wait || getArgs.loop) {
+		if len(wfs) != 0 || !(fileGetArgs.wait || fileGetArgs.loop) {
 			break
 		}
-		if getArgs.verbose {
+		if fileGetArgs.verbose {
 			printf("waiting for file...")
 		}
 		if err := waitForFile(ctx); err != nil {
@@ -744,7 +744,7 @@ func runFileGetOneBatch(ctx context.Context, dir string) []error {
 			errs = append(errs, err)
 			continue
 		}
-		if getArgs.verbose {
+		if fileGetArgs.verbose {
 			printf("wrote %v as %v (%d bytes)\n", wf.Name, writtenFile, size)
 		}
 		if err = localClient.DeleteWaitingFile(ctx, wf.Name); err != nil {
@@ -756,7 +756,7 @@ func runFileGetOneBatch(ctx context.Context, dir string) []error {
 	if deleted == 0 && len(wfs) > 0 {
 		// persistently stuck files are basically an error
 		errs = append(errs, fmt.Errorf("moved %d/%d files", deleted, len(wfs)))
-	} else if getArgs.verbose {
+	} else if fileGetArgs.verbose {
 		printf("moved %d/%d files\n", deleted, len(wfs))
 	}
 	return errs
@@ -776,7 +776,7 @@ func runFileGet(ctx context.Context, args []string) error {
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return fmt.Errorf("%q is not a directory", dir)
 	}
-	if getArgs.loop {
+	if fileGetArgs.loop {
 		for {
 			errs := runFileGetOneBatch(ctx, dir)
 			for _, err := range errs {
@@ -808,7 +808,7 @@ func runFileGet(ctx context.Context, args []string) error {
 }
 
 func wipeInbox(ctx context.Context) error {
-	if getArgs.wait {
+	if fileGetArgs.wait {
 		return errors.New("can't use --wait with /dev/null target")
 	}
 	wfs, err := localClient.WaitingFiles(ctx)
@@ -817,7 +817,7 @@ func wipeInbox(ctx context.Context) error {
 	}
 	deleted := 0
 	for _, wf := range wfs {
-		if getArgs.verbose {
+		if fileGetArgs.verbose {
 			log.Printf("deleting %v ...", wf.Name)
 		}
 		if err := localClient.DeleteWaitingFile(ctx, wf.Name); err != nil {
@@ -825,7 +825,7 @@ func wipeInbox(ctx context.Context) error {
 		}
 		deleted++
 	}
-	if getArgs.verbose {
+	if fileGetArgs.verbose {
 		log.Printf("deleted %d files", deleted)
 	}
 	return nil

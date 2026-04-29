@@ -269,6 +269,7 @@ change in the future.
 			upCmd,
 			downCmd,
 			setCmd,
+			getCmd,
 			loginCmd,
 			logoutCmd,
 			switchCmd,
