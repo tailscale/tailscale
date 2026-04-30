@@ -119,14 +119,6 @@ func Expect(tw *Watcher, filters ...any) error {
 // you are testing for the absence of events, call [synctest.Wait] after
 // actions that would publish an event, but before calling ExpectExactly.
 func ExpectExactly(tw *Watcher, filters ...any) error {
-	if len(filters) == 0 {
-		select {
-		case event := <-tw.events:
-			return fmt.Errorf("saw event type %s, expected none", reflect.TypeOf(event))
-		case <-time.After(100 * time.Second): // "indefinitely", to advance a synctest clock
-			return nil
-		}
-	}
 	eventCount := 0
 	for pos, next := range filters {
 		eventFunc := eventFilter(next)
@@ -153,6 +145,12 @@ func ExpectExactly(tw *Watcher, filters ...any) error {
 		case <-tw.chDone:
 			return errors.New("watcher closed while waiting for events")
 		}
+	}
+	select {
+	case event := <-tw.events:
+		return fmt.Errorf("saw event type %s at index %d, expected none", reflect.TypeOf(event), eventCount)
+	case <-time.After(100 * time.Second): // "indefinitely", to advance a synctest clock
+		return nil
 	}
 	return nil
 }
