@@ -173,6 +173,12 @@ func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
 
 // waitForCertDomain ensures the requested domain is in the list of allowed
 // domains before issuing the cert for the first time.
+// It uses the IPN bus only as a wake-up trigger and queries the current cert
+// domains explicitly via [LocalClient.CertDomains].
+//
+// TODO(bradfitz): once Notify.SelfChange lands upstream, switch this to
+// watch for SelfChange events instead of NotifyInitialNetMap, and drop the
+// netmap dependency on the bus entirely.
 func (cm *CertManager) waitForCertDomain(ctx context.Context, domain string) error {
 	w, err := cm.lc.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
 	if err != nil {
@@ -188,8 +194,11 @@ func (cm *CertManager) waitForCertDomain(ctx context.Context, domain string) err
 		if n.NetMap == nil {
 			continue
 		}
-
-		if slices.Contains(n.NetMap.DNS.CertDomains, domain) {
+		domains, err := cm.lc.CertDomains(ctx)
+		if err != nil {
+			continue
+		}
+		if slices.Contains(domains, domain) {
 			return nil
 		}
 	}

@@ -1040,6 +1040,30 @@ func (lc *Client) CurrentDERPMap(ctx context.Context) (*tailcfg.DERPMap, error) 
 	return &derpMap, nil
 }
 
+// CertDomains returns the list of domains for which the local tailscaled can
+// fetch TLS certificates, equivalent to the DNS.CertDomains field of the
+// current netmap. The returned list is sorted in ascending order, and is
+// empty if no netmap has been received yet.
+func (lc *Client) CertDomains(ctx context.Context) ([]string, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/cert-domains")
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[[]string](body)
+}
+
+// DNSConfig returns the [tailcfg.DNSConfig] from the current netmap.
+// It returns an error if no netmap has been received yet.
+// It is intended for callers that need fields like ExtraRecords or CertDomains
+// without pulling the rest of the netmap.
+func (lc *Client) DNSConfig(ctx context.Context) (*tailcfg.DNSConfig, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/dns-config")
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[*tailcfg.DNSConfig](body)
+}
+
 // PingOpts contains options for the ping request.
 //
 // The zero value is valid, which means to use defaults.

@@ -72,9 +72,11 @@ var handler = map[string]LocalAPIHandler{
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
+	"cert-domains":         (*Handler).serveCertDomains,
 	"check-prefs":          (*Handler).serveCheckPrefs,
 	"check-so-mark-in-use": (*Handler).serveCheckSOMarkInUse,
 	"derpmap":              (*Handler).serveDERPMap,
+	"dns-config":           (*Handler).serveDNSConfig,
 	"goroutines":           (*Handler).serveGoroutines,
 	"login-interactive":    (*Handler).serveLoginInteractive,
 	"logout":               (*Handler).serveLogout,
@@ -1071,6 +1073,41 @@ func (h *Handler) serveDERPMap(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(h.b.DERPMap())
+}
+
+// serveCertDomains returns the list of DNS.CertDomains from the current
+// netmap, or an empty list if no netmap has been received yet.
+// The returned list is sorted in ascending order.
+func (h *Handler) serveCertDomains(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "cert-domains access denied", http.StatusForbidden)
+		return
+	}
+	var domains []string
+	if nm := h.b.NetMapNoPeers(); nm != nil {
+		domains = slices.Clone(nm.DNS.CertDomains)
+		slices.Sort(domains)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(domains)
+}
+
+// serveDNSConfig returns the [tailcfg.DNSConfig] from the current netmap.
+// It returns 503 if no netmap has been received yet.
+func (h *Handler) serveDNSConfig(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "dns-config access denied", http.StatusForbidden)
+		return
+	}
+	nm := h.b.NetMapNoPeers()
+	if nm == nil {
+		http.Error(w, "no netmap", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	e := json.NewEncoder(w)
+	e.SetIndent("", "\t")
+	e.Encode(nm.DNS)
 }
 
 // serveSetExpirySooner sets the expiry date on the current machine, specified

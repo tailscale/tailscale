@@ -20,10 +20,8 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"k8s.io/client-go/util/homedir"
 	"sigs.k8s.io/yaml"
-	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/netmap"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
 )
@@ -98,12 +96,12 @@ func runConfigureKubeconfig(ctx context.Context, args []string) error {
 	if st.BackendState != "Running" {
 		return errors.New("Tailscale is not running")
 	}
-	nm, err := getNetMap(ctx)
+	dnsCfg, err := getDNSConfig(ctx)
 	if err != nil {
 		return err
 	}
 
-	targetFQDN, err := nodeOrServiceDNSNameFromArg(st, nm, hostOrFQDNOrIP)
+	targetFQDN, err := nodeOrServiceDNSNameFromArg(st, dnsCfg, hostOrFQDNOrIP)
 	if err != nil {
 		return err
 	}
@@ -240,14 +238,14 @@ func setKubeconfigForPeer(scheme, fqdn, filePath string) error {
 // nodeOrServiceDNSNameFromArg returns the PeerStatus.DNSName value from a peer
 // in st that matches the input arg which can be a base name, full DNS name, or
 // an IP. If none is found, it looks for a Tailscale Service
-func nodeOrServiceDNSNameFromArg(st *ipnstate.Status, nm *netmap.NetworkMap, arg string) (string, error) {
+func nodeOrServiceDNSNameFromArg(st *ipnstate.Status, dns *tailcfg.DNSConfig, arg string) (string, error) {
 	// First check for a node DNS name.
 	if dnsName, ok := nodeDNSNameFromArg(st, arg); ok {
 		return dnsName, nil
 	}
 
 	// If not found, check for a Tailscale Service DNS name.
-	rec, ok := serviceDNSRecordFromNetMap(nm, arg)
+	rec, ok := serviceDNSRecordFromDNSConfig(dns, arg)
 	if !ok {
 		return "", fmt.Errorf("no peer found for %q", arg)
 	}
@@ -269,25 +267,13 @@ func nodeOrServiceDNSNameFromArg(st *ipnstate.Status, nm *netmap.NetworkMap, arg
 	return "", fmt.Errorf("%q is in MagicDNS, but is not currently reachable on any known peer", arg)
 }
 
-func getNetMap(ctx context.Context) (*netmap.NetworkMap, error) {
+func getDNSConfig(ctx context.Context) (*tailcfg.DNSConfig, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-
-	watcher, err := localClient.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
-	if err != nil {
-		return nil, err
-	}
-	defer watcher.Close()
-
-	n, err := watcher.Next()
-	if err != nil {
-		return nil, err
-	}
-
-	return n.NetMap, nil
+	return localClient.DNSConfig(ctx)
 }
 
-func serviceDNSRecordFromNetMap(nm *netmap.NetworkMap, arg string) (rec tailcfg.DNSRecord, ok bool) {
+func serviceDNSRecordFromDNSConfig(dns *tailcfg.DNSConfig, arg string) (rec tailcfg.DNSRecord, ok bool) {
 	argIP, _ := netip.ParseAddr(arg)
 	argFQDN, err := dnsname.ToFQDN(arg)
 	argFQDNValid := err == nil
@@ -295,7 +281,7 @@ func serviceDNSRecordFromNetMap(nm *netmap.NetworkMap, arg string) (rec tailcfg.
 		return rec, false
 	}
 
-	for _, rec := range nm.DNS.ExtraRecords {
+	for _, rec := range dns.ExtraRecords {
 		if argIP.IsValid() {
 			recIP, _ := netip.ParseAddr(rec.Value)
 			if recIP == argIP {

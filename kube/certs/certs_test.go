@@ -201,24 +201,23 @@ func TestEnsureCertLoops(t *testing.T) {
 
 			notifyChan := make(chan ipn.Notify)
 			go func() {
+				// Drive waitForCertDomain by sending notifications
+				// with empty netmaps as wake-up triggers; the cert
+				// manager queries CertDomains via the local
+				// client and not by reading the bus payload.
 				for {
-					notifyChan <- ipn.Notify{
-						NetMap: &netmap.NetworkMap{
-							DNS: tailcfg.DNSConfig{
-								CertDomains: []string{
-									"my-app.tailnetxyz.ts.net",
-									"my-other-app.tailnetxyz.ts.net",
-									"my-apiserver.tailnetxyz.ts.net",
-								},
-							},
-						},
-					}
+					notifyChan <- ipn.Notify{NetMap: &netmap.NetworkMap{}}
 				}
 			}()
 			cm := &CertManager{
 				lc: &localclient.FakeLocalClient{
 					FakeIPNBusWatcher: localclient.FakeIPNBusWatcher{
 						NotifyChan: notifyChan,
+					},
+					CertDomainsResult: []string{
+						"my-app.tailnetxyz.ts.net",
+						"my-other-app.tailnetxyz.ts.net",
+						"my-apiserver.tailnetxyz.ts.net",
 					},
 				},
 				logf:      log.Printf,

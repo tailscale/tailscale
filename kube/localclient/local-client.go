@@ -19,6 +19,7 @@ type LocalClient interface {
 	WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (IPNBusWatcher, error)
 	SetServeConfig(context.Context, *ipn.ServeConfig) error
 	EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error)
+	CertDomains(ctx context.Context) ([]string, error)
 	CertIssuer
 }
 
@@ -56,4 +57,8 @@ func (lc *localClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt)
 
 func (lc *localClient) CertPair(ctx context.Context, domain string) ([]byte, []byte, error) {
 	return lc.lc.CertPair(ctx, domain)
+}
+
+func (lc *localClient) CertDomains(ctx context.Context) ([]string, error) {
+	return lc.lc.CertDomains(ctx)
 }
