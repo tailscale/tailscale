@@ -129,7 +129,7 @@ type Tracker struct {
 	lastNotifiedControlMessages map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage // latest control messages processed, kept for change detection
 	controlMessages             map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage // latest control messages received
 	lastLoginErr                error
-	mapRoutineNodeNotFound      bool             // control returned 404 on /machine/map
+	mapRoutineNodeNotFound      bool // control returned 404 on /machine/map
 	localLogConfigErr           error
 	tlsConnectionErrors         map[string]error // map[ServerName]error
 	metricHealthMessage         any              // nil or *metrics.MultiLabelMap[metricHealthMessageLabel]
