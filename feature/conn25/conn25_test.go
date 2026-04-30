@@ -399,11 +399,12 @@ func TestReserveIPs(t *testing.T) {
 	c.client.v6MagicIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0100::/80"))
 	c.client.v4TransitIPPool = newIPPool(mustIPSetFromPrefix("169.254.0.0/24"))
 	c.client.v6TransitIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0200::/80"))
-	app := "a"
+	const appName = "a"
 	domainStr := "example.com."
 	mbd := map[dnsname.FQDN][]string{}
-	mbd["example.com."] = []string{app}
+	mbd["example.com."] = []string{appName}
 	c.client.config.nv.appNamesByDomain = mbd
+	c.client.config.nv.appsByName = map[string]appctype.Conn25Attr{appName: {}}
 	domain := must.Get(dnsname.ToFQDN(domainStr))
 
 	for _, tt := range []struct {
@@ -426,7 +427,7 @@ func TestReserveIPs(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			addrs, err := c.client.reserveAddresses(domain, tt.dst)
+			addrs, err := c.client.reserveAddresses(domain, tt.dst, appName)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -439,8 +440,8 @@ func TestReserveIPs(t *testing.T) {
 			if tt.wantTransit != addrs.transit {
 				t.Errorf("want %v, got %v", tt.wantTransit, addrs.transit)
 			}
-			if app != addrs.app {
-				t.Errorf("want %s, got %s", app, addrs.app)
+			if appName != addrs.app {
+				t.Errorf("want %s, got %s", appName, addrs.app)
 			}
 			if domain != addrs.domain {
 				t.Errorf("want %s, got %s", domain, addrs.domain)
@@ -532,13 +533,14 @@ func TestConfigFromPrefs(t *testing.T) {
 
 func TestConfigFromNodeView(t *testing.T) {
 	for _, tt := range []struct {
-		name             string
-		rawCfg           string
-		cfg              []appctype.Conn25Attr
-		tags             []string
-		wantErr          bool
-		wantAppsByDomain map[dnsname.FQDN][]string
-		wantSelfDomains  set.Set[dnsname.FQDN]
+		name               string
+		rawCfg             string
+		cfg                []appctype.Conn25Attr
+		tags               []string
+		wantErr            bool
+		wantAppsByDomain   map[dnsname.FQDN][]string
+		wantAppsByWCDomain map[dnsname.FQDN][]string
+		wantSelfAppNames   set.Set[string]
 	}{
 		{
 			name:    "bad-config",
@@ -556,7 +558,8 @@ func TestConfigFromNodeView(t *testing.T) {
 				"a.example.com.": {"one"},
 				"b.example.com.": {"two"},
 			},
-			wantSelfDomains: set.SetOf([]dnsname.FQDN{"a.example.com."}),
+			wantAppsByWCDomain: map[dnsname.FQDN][]string{},
+			wantSelfAppNames:   set.SetOf([]string{"one"}),
 		},
 		{
 			name: "more-complex-with-connector-self-domains",
@@ -576,7 +579,8 @@ func TestConfigFromNodeView(t *testing.T) {
 				"4.b.example.com.": {"four"},
 				"4.d.example.com.": {"four"},
 			},
-			wantSelfDomains: set.SetOf([]dnsname.FQDN{"1.a.example.com.", "1.b.example.com.", "4.b.example.com.", "4.d.example.com."}),
+			wantAppsByWCDomain: map[dnsname.FQDN][]string{},
+			wantSelfAppNames:   set.SetOf([]string{"one", "four"}),
 		},
 		{
 			name: "eligible-connector-no-matching-tag-no-self-domains",
@@ -589,6 +593,49 @@ func TestConfigFromNodeView(t *testing.T) {
 				"a.example.com.": {"one"},
 				"b.example.com.": {"two"},
 			},
+			wantAppsByWCDomain: map[dnsname.FQDN][]string{}},
+		{
+			name: "wildcard-collapse-and-deduplication",
+			cfg: []appctype.Conn25Attr{
+				{Name: "one", Domains: []string{"*.example.com", "example.com"}, Connectors: []string{"tag:one"}},
+				{Name: "two", Domains: []string{"example.com", "sub.example.com"}, Connectors: []string{"tag:two"}},
+			},
+			tags: []string{"tag:one", "tag:two"},
+			wantAppsByDomain: map[dnsname.FQDN][]string{
+				"example.com.":     {"one", "two"},
+				"sub.example.com.": {"two"},
+			},
+			wantAppsByWCDomain: map[dnsname.FQDN][]string{
+				"example.com.": {"one"},
+			},
+			wantSelfAppNames: set.SetOf([]string{"one", "two"}),
+		},
+		{
+			// Domain names that differ only in case must be treated as the same
+			// domain and the app name must appear exactly once in appNamesByDomain,
+			// not once per case variant.
+			name: "case-variant-exact-domains-deduplicated-within-app",
+			cfg: []appctype.Conn25Attr{
+				{Name: "one", Domains: []string{"EXAMPLE.com", "example.COM", "Example.COM"}, Connectors: []string{"tag:one"}},
+			},
+			tags: []string{"tag:one"},
+			wantAppsByDomain: map[dnsname.FQDN][]string{
+				"example.com.": {"one"},
+			},
+			wantAppsByWCDomain: map[dnsname.FQDN][]string{},
+			wantSelfAppNames:   set.SetOf([]string{"one"}),
+		},
+		{
+			// Same as above but for wildcard domains: *.EXAMPLE.com and *.example.COM
+			// must collapse to a single entry in appNamesByWCDomain.
+			name: "case-variant-wildcard-domains-deduplicated-within-app",
+			cfg: []appctype.Conn25Attr{
+				{Name: "one", Domains: []string{"*.EXAMPLE.com", "*.example.COM"}, Connectors: []string{"tag:one"}},
+			},
+			tags:               []string{"tag:one"},
+			wantAppsByDomain:   map[dnsname.FQDN][]string{},
+			wantAppsByWCDomain: map[dnsname.FQDN][]string{"example.com.": {"one"}},
+			wantSelfAppNames:   set.SetOf([]string{"one"}),
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -618,8 +665,90 @@ func TestConfigFromNodeView(t *testing.T) {
 			if diff := cmp.Diff(tt.wantAppsByDomain, c.appNamesByDomain); diff != "" {
 				t.Errorf("appsByDomain diff (-want, +got):\n%s", diff)
 			}
-			if diff := cmp.Diff(tt.wantSelfDomains, c.selfDomains); diff != "" {
-				t.Errorf("selfDomains diff (-want, +got):\n%s", diff)
+			if diff := cmp.Diff(tt.wantAppsByWCDomain, c.appNamesByWCDomain); diff != "" {
+				t.Errorf("appsByWCDomain diff (-want, +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tt.wantSelfAppNames, c.selfAppNames); diff != "" {
+				t.Errorf("selfAppNames diff (-want, +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestGetAppsForDomainName(t *testing.T) {
+	defaultSN := makeSelfNode(
+		t,
+		[]appctype.Conn25Attr{
+			{Name: "one", Domains: []string{"*.example.com", "example.com"}, Connectors: []string{"tag:one"}},
+			{Name: "two", Domains: []string{"sub.example.com", "example.com"}, Connectors: []string{"tag:two"}},
+			{Name: "three", Domains: []string{"*.sub.example.com"}, Connectors: []string{"tag:three"}},
+			{Name: "four", Domains: []string{"a.sub.example.com"}, Connectors: []string{"tag:four"}},
+		},
+		[]string{"one", "two", "three", "four"},
+	)
+	// selfSN has a tag that matches the connector tag of "self-app" and
+	// "wildcard-self-app", so those apps will be self-routed when
+	// isEligibleConnector is true.
+	selfSN := makeSelfNode(
+		t,
+		[]appctype.Conn25Attr{
+			{Name: "self-app", Domains: []string{"example.com"}, Connectors: []string{"tag:self-connector"}},
+			{Name: "wildcard-self-app", Domains: []string{"*.wildcard.com"}, Connectors: []string{"tag:self-connector"}},
+			{Name: "other-app", Domains: []string{"other.com"}, Connectors: []string{"tag:other-connector"}},
+		},
+		[]string{"tag:self-connector"},
+	)
+
+	for _, tt := range []struct {
+		name     string
+		sn       tailcfg.NodeView
+		prefs    ipn.PrefsView
+		domain   dnsname.FQDN
+		wantOk   bool
+		wantApps []string
+	}{
+		{name: "no-match", sn: defaultSN, prefs: testPrefsIsConnector, domain: "nomatch.com.", wantOk: false, wantApps: nil},
+		{name: "exact-match", sn: defaultSN, prefs: testPrefsIsConnector, domain: "example.com.", wantOk: true, wantApps: []string{"one", "two"}},
+		{name: "wildcard-subdomain-match", sn: defaultSN, prefs: testPrefsIsConnector, domain: "a.example.com.", wantOk: true, wantApps: []string{"one"}},
+		{name: "exact-subdomain-match", sn: defaultSN, prefs: testPrefsIsConnector, domain: "sub.example.com.", wantOk: true, wantApps: []string{"two"}},
+		{name: "wildcard-sub-of-subdomain-match", sn: defaultSN, prefs: testPrefsIsConnector, domain: "b.sub.example.com.", wantOk: true, wantApps: []string{"three"}},
+		{name: "exact-sub-of-subdomain-match", sn: defaultSN, prefs: testPrefsIsConnector, domain: "a.sub.example.com.", wantOk: true, wantApps: []string{"four"}},
+		{
+			// Self node is an eligible connector for "self-app", so the exact
+			// match must be suppressed.
+			name: "self-routed-exact-domain-suppressed", sn: selfSN, prefs: testPrefsIsConnector,
+			domain: "example.com.", wantOk: false, wantApps: nil,
+		},
+		{
+			// Self node is an eligible connector for "wildcard-self-app" via
+			// *.wildcard.com, so the wildcard match must also be suppressed.
+			name: "self-routed-wildcard-domain-suppressed", sn: selfSN, prefs: testPrefsIsConnector,
+			domain: "sub.wildcard.com.", wantOk: false, wantApps: nil,
+		},
+		{
+			// "other-app" is not on a self-connector tag, so it must not be suppressed.
+			name: "non-self-routed-domain-not-suppressed", sn: selfSN, prefs: testPrefsIsConnector,
+			domain: "other.com.", wantOk: true, wantApps: []string{"other-app"},
+		},
+		{
+			// Even though the app's connector tag matches the self node's tags,
+			// if the node is not an eligible connector (Advertise=false) then
+			// isSelfRoutedApp returns false and the domain is forwarded normally.
+			name: "not-eligible-connector-not-suppressed", sn: selfSN, prefs: testPrefsNotConnector,
+			domain: "example.com.", wantOk: true, wantApps: []string{"self-app"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConn25(logger.Discard)
+			cfg := mustConfig(t, tt.sn, tt.prefs)
+			c.reconfig(cfg)
+
+			gotApps, gotOk := c.client.getAppsForConnectorDomain(tt.domain)
+			if gotOk != tt.wantOk {
+				t.Errorf("unexpected ok result, want %v, got %v", tt.wantOk, gotOk)
+			}
+			if diff := cmp.Diff(tt.wantApps, gotApps); diff != "" {
+				t.Errorf("unexpected appNames result: diff (-want, +got):\n%s", diff)
 			}
 		})
 	}
@@ -804,6 +933,7 @@ func makeDNSResponseForSections(t *testing.T, questions []dnsmessage.Question, a
 func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 	for _, tt := range []struct {
 		name                string
+		appDomains          []string
 		domain              string
 		v4Addrs             []*dnsmessage.AResource
 		v6Addrs             []*dnsmessage.AAAAResource
@@ -812,9 +942,10 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 		wantByMagicIP       map[netip.Addr]addrs
 	}{
 		{
-			name:    "one-ip-matches",
-			domain:  "example.com.",
-			v4Addrs: []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
+			name:       "one-ip-matches",
+			appDomains: []string{"example.com"},
+			domain:     "example.com.",
+			v4Addrs:    []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
 			// these are 'expected' because they are the beginning of the provided pools
 			wantByMagicIP: map[netip.Addr]addrs{
 				netip.MustParseAddr("100.64.0.0"): {
@@ -827,8 +958,9 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 			},
 		},
 		{
-			name:   "v6-ip-matches",
-			domain: "example.com.",
+			name:       "v6-ip-matches",
+			appDomains: []string{"example.com"},
+			domain:     "example.com.",
 			v6Addrs: []*dnsmessage.AAAAResource{
 				{AAAA: [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}},
 				{AAAA: [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2}},
@@ -851,8 +983,9 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 			},
 		},
 		{
-			name:   "multiple-ip-matches",
-			domain: "example.com.",
+			name:       "multiple-ip-matches",
+			appDomains: []string{"example.com"},
+			domain:     "example.com.",
 			v4Addrs: []*dnsmessage.AResource{
 				{A: [4]byte{1, 0, 0, 0}},
 				{A: [4]byte{2, 0, 0, 0}},
@@ -875,8 +1008,9 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 			},
 		},
 		{
-			name:   "no-domain-match",
-			domain: "x.example.com.",
+			name:       "no-domain-match",
+			appDomains: []string{"foo.example.com"},
+			domain:     "bad.example.com.",
 			v4Addrs: []*dnsmessage.AResource{
 				{A: [4]byte{1, 0, 0, 0}},
 				{A: [4]byte{2, 0, 0, 0}},
@@ -884,16 +1018,18 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 		},
 		{
 			name:                "no-rewrite-self-routed-domain",
+			appDomains:          []string{"example.com"},
 			domain:              "example.com.",
 			v4Addrs:             []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
 			selfTags:            []string{"tag:woo"},
 			isEligibleConnector: true,
 		},
 		{
-			name:     "rewrite-tagged-but-not-eligible-connector",
-			domain:   "example.com.",
-			v4Addrs:  []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
-			selfTags: []string{"tag:woo"},
+			name:       "rewrite-tagged-but-not-eligible-connector",
+			appDomains: []string{"example.com"},
+			domain:     "example.com.",
+			v4Addrs:    []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
+			selfTags:   []string{"tag:woo"},
 			// isEligibleConnector is false: tag matches but prefs not set,
 			// so DNS response should be rewritten normally.
 			wantByMagicIP: map[netip.Addr]addrs{
@@ -908,6 +1044,7 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 		},
 		{
 			name:                "rewrite-eligible-connector-no-matching-tag",
+			appDomains:          []string{"example.com"},
 			domain:              "example.com.",
 			v4Addrs:             []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
 			selfTags:            []string{"tag:unrelated"},
@@ -917,6 +1054,54 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 			wantByMagicIP: map[netip.Addr]addrs{
 				netip.MustParseAddr("100.64.0.0"): {
 					domain:  "example.com.",
+					dst:     netip.MustParseAddr("1.0.0.0"),
+					magic:   netip.MustParseAddr("100.64.0.0"),
+					transit: netip.MustParseAddr("100.64.0.40"),
+					app:     "app1",
+				},
+			},
+		},
+		{
+			name:       "subdomain-matches-wildcard",
+			appDomains: []string{"*.example.com"},
+			domain:     "sub.example.com.",
+			v4Addrs:    []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
+			// these are 'expected' because they are the beginning of the provided pools
+			wantByMagicIP: map[netip.Addr]addrs{
+				netip.MustParseAddr("100.64.0.0"): {
+					domain:  "sub.example.com.",
+					dst:     netip.MustParseAddr("1.0.0.0"),
+					magic:   netip.MustParseAddr("100.64.0.0"),
+					transit: netip.MustParseAddr("100.64.0.40"),
+					app:     "app1",
+				},
+			},
+		},
+		{
+			name:       "exact-subdomain-matches",
+			appDomains: []string{"example.com", "sub.example.com"},
+			domain:     "sub.example.com.",
+			v4Addrs:    []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
+			// these are 'expected' because they are the beginning of the provided pools
+			wantByMagicIP: map[netip.Addr]addrs{
+				netip.MustParseAddr("100.64.0.0"): {
+					domain:  "sub.example.com.",
+					dst:     netip.MustParseAddr("1.0.0.0"),
+					magic:   netip.MustParseAddr("100.64.0.0"),
+					transit: netip.MustParseAddr("100.64.0.40"),
+					app:     "app1",
+				},
+			},
+		},
+		{
+			name:       "wildcard-subdomain-matches-subdomain",
+			appDomains: []string{"example.com", "*.sub.example.com"},
+			domain:     "a.sub.example.com.",
+			v4Addrs:    []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
+			// these are 'expected' because they are the beginning of the provided pools
+			wantByMagicIP: map[netip.Addr]addrs{
+				netip.MustParseAddr("100.64.0.0"): {
+					domain:  "a.sub.example.com.",
 					dst:     netip.MustParseAddr("1.0.0.0"),
 					magic:   netip.MustParseAddr("100.64.0.0"),
 					transit: netip.MustParseAddr("100.64.0.40"),
@@ -935,7 +1120,7 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 			sn := makeSelfNode(t, []appctype.Conn25Attr{{
 				Name:            "app1",
 				Connectors:      []string{"tag:woo"},
-				Domains:         []string{"example.com"},
+				Domains:         tt.appDomains,
 				V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10"), v4RangeFrom("20", "30")},
 				V6MagicIPPool:   []netipx.IPRange{v6RangeFrom("0", "10"), v6RangeFrom("20", "30")},
 				V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
@@ -964,6 +1149,29 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 	}
 }
 
+func TestNormalizedDNSNames(t *testing.T) {
+	tests := []struct {
+		name   string
+		domain string
+		want   dnsname.FQDN
+	}{
+		{name: "no-change", domain: "example.com.", want: "example.com."},
+		{name: "mixed-case", domain: "eXAmPle.COM", want: "example.com."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeDNSName(tt.domain)
+			if err != nil {
+				t.Errorf("unexpected error %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("Unexpected result, want %q, got %q", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestReserveAddressesDeduplicated(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -979,19 +1187,21 @@ func TestReserveAddressesDeduplicated(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			const appName = "a"
 			c := newConn25(logger.Discard)
 			c.client.v4MagicIPPool = newIPPool(mustIPSetFromPrefix("100.64.0.0/24"))
 			c.client.v6MagicIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0100::/80"))
 			c.client.v4TransitIPPool = newIPPool(mustIPSetFromPrefix("169.254.0.0/24"))
 			c.client.v6TransitIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0200::/80"))
-			c.client.config.nv.appNamesByDomain = map[dnsname.FQDN][]string{"example.com.": {"a"}}
+			c.client.config.nv.appNamesByDomain = map[dnsname.FQDN][]string{"example.com.": {appName}}
+			c.client.config.nv.appsByName = map[string]appctype.Conn25Attr{appName: {}}
 
-			first, err := c.client.reserveAddresses("example.com.", tt.dst)
+			first, err := c.client.reserveAddresses("example.com.", tt.dst, appName)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			second, err := c.client.reserveAddresses("example.com.", tt.dst)
+			second, err := c.client.reserveAddresses("example.com.", tt.dst, appName)
 			if err != nil {
 				t.Fatal(err)
 			}

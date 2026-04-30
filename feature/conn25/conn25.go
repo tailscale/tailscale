@@ -519,15 +519,16 @@ const AppConnectorsExperimentalAttrName = "tailscale.com/app-connectors-experime
 // which includes the policy.
 // nodeViewConfig is not safe for concurrent use.
 type nodeViewConfig struct {
-	isConfigured     bool
-	apps             []appctype.Conn25Attr
-	appsByName       map[string]appctype.Conn25Attr
-	appNamesByDomain map[dnsname.FQDN][]string
-	selfDomains      set.Set[dnsname.FQDN]
-	v4TransitIPSet   netipx.IPSet
-	v4MagicIPSet     netipx.IPSet
-	v6TransitIPSet   netipx.IPSet
-	v6MagicIPSet     netipx.IPSet
+	isConfigured       bool
+	apps               []appctype.Conn25Attr
+	appsByName         map[string]appctype.Conn25Attr
+	appNamesByDomain   map[dnsname.FQDN][]string
+	appNamesByWCDomain map[dnsname.FQDN][]string
+	selfAppNames       set.Set[string]
+	v4TransitIPSet     netipx.IPSet
+	v4MagicIPSet       netipx.IPSet
+	v6TransitIPSet     netipx.IPSet
+	v6MagicIPSet       netipx.IPSet
 }
 
 func configFromNodeView(n tailcfg.NodeView) (nodeViewConfig, error) {
@@ -540,25 +541,35 @@ func configFromNodeView(n tailcfg.NodeView) (nodeViewConfig, error) {
 	}
 	selfTags := set.SetOf(n.Tags().AsSlice())
 	cfg := nodeViewConfig{
-		isConfigured:     true,
-		apps:             apps,
-		appsByName:       map[string]appctype.Conn25Attr{},
-		appNamesByDomain: map[dnsname.FQDN][]string{},
-		selfDomains:      set.Set[dnsname.FQDN]{},
+		isConfigured:       true,
+		apps:               apps,
+		appsByName:         map[string]appctype.Conn25Attr{},
+		appNamesByDomain:   map[dnsname.FQDN][]string{},
+		appNamesByWCDomain: map[dnsname.FQDN][]string{},
+		selfAppNames:       set.Set[string]{},
 	}
 	for _, app := range apps {
-		selfMatchesTags := slices.ContainsFunc(app.Connectors, selfTags.Contains)
+		normalizedDomains := set.Set[dnsname.FQDN]{}
+		normalizedWildCardDomains := set.Set[dnsname.FQDN]{}
 		for _, d := range app.Domains {
-			fqdn, err := normalizeDNSName(d)
+			domain, isWild := strings.CutPrefix(d, "*.")
+			fqdn, err := normalizeDNSName(domain)
 			if err != nil {
 				return nodeViewConfig{}, err
 			}
-			mak.Set(&cfg.appNamesByDomain, fqdn, append(cfg.appNamesByDomain[fqdn], app.Name))
-			if selfMatchesTags {
-				cfg.selfDomains.Add(fqdn)
+			if isWild && !normalizedWildCardDomains.Contains(fqdn) {
+				normalizedWildCardDomains.Add(fqdn)
+				mak.Set(&cfg.appNamesByWCDomain, fqdn, append(cfg.appNamesByWCDomain[fqdn], app.Name))
+			} else if !isWild && !normalizedDomains.Contains(fqdn) {
+				normalizedDomains.Add(fqdn)
+				mak.Set(&cfg.appNamesByDomain, fqdn, append(cfg.appNamesByDomain[fqdn], app.Name))
 			}
 		}
 		mak.Set(&cfg.appsByName, app.Name, app)
+		if slices.ContainsFunc(app.Connectors, selfTags.Contains) {
+			cfg.selfAppNames.Add(app.Name)
+		}
+
 	}
 
 	// TODO(fran) 2026-03-18 we don't yet have a proper way to communicate the
@@ -610,10 +621,10 @@ type config struct {
 	prefs prefsConfig
 }
 
-// isSelfRoutedDomain reports whether the self node is currently
-// acting as a connector for the given domain.
-func (c config) isSelfRoutedDomain(d dnsname.FQDN) bool {
-	return c.prefs.isEligibleConnector && c.nv.selfDomains.Contains(d)
+// isSelfRoutedApp reports whether the self node is currently
+// acting as a connector for the given app.
+func (c config) isSelfRoutedApp(appName string) bool {
+	return c.prefs.isEligibleConnector && c.nv.selfAppNames.Contains(appName)
 }
 
 // client performs the conn25 functionality for clients of connectors
@@ -696,27 +707,41 @@ func (c *client) reconfig(newCfg config) {
 	c.v6TransitIPPool = newIPPool(&(newCfg.nv.v6TransitIPSet))
 }
 
-// isConnectorDomain returns true if the domain is expected
-// to be routed through a peer connector, but returns false
-// if the self node is a connector responsible for routing the
-// domain, and false in all other cases.
-func (c *client) isConnectorDomain(domain dnsname.FQDN) bool {
+// getAppsForConnectorDomain returns the set of apps which match the (sub)domain which
+// is longest suffix of the specified domain, or returns an empty slice if
+// there are no apps which match. The returned boolean is true only if there is at
+// least one app that matches, false otherwise. Also returns false if the associated set
+// of apps would contain an app processed by the self-node's connector.
+func (c *client) getAppsForConnectorDomain(domain dnsname.FQDN) ([]string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.config.isSelfRoutedDomain(domain) {
-		return false
+	// Lookup exact matches first
+	appNames, ok := c.config.nv.appNamesByDomain[domain]
+	if !ok || len(appNames) == 0 {
+		// No exact match, check wildcard domains
+		for d := domain; d != ""; d = d.Parent() {
+			if appNames, ok = c.config.nv.appNamesByWCDomain[d]; ok && len(appNames) > 0 {
+				break
+			}
+		}
 	}
 
-	appNames, ok := c.config.nv.appNamesByDomain[domain]
-	return ok && len(appNames) > 0
+	// If we have a candidate match, make sure that no candidate app is pointing
+	// at a connector on the self-node.
+	if !ok || slices.ContainsFunc(appNames, c.config.isSelfRoutedApp) {
+		return nil, false
+	}
+	return appNames, true
 }
 
 // reserveAddresses tries to make an assignment of addrs from the address pools
 // for this domain+dst address, so that this client can use conn25 connectors.
+// The name of the matching app is also provided, no validation is done to check whether or not
+// the app name refers to a configured app.
 // It checks that this domain should be routed and that this client is not itself a connector for the domain
 // and generally if it is valid to make the assignment.
-func (c *client) reserveAddresses(domain dnsname.FQDN, dst netip.Addr) (addrs, error) {
+func (c *client) reserveAddresses(domain dnsname.FQDN, dst netip.Addr, appName string) (addrs, error) {
 	if !dst.IsValid() {
 		return addrs{}, errors.New("dst is not valid")
 	}
@@ -725,13 +750,6 @@ func (c *client) reserveAddresses(domain dnsname.FQDN, dst netip.Addr) (addrs, e
 	if existing, ok := c.assignments.lookupByDomainDst(domain, dst); ok {
 		return existing, nil
 	}
-	appNames, _ := c.config.nv.appNamesByDomain[domain]
-	if len(appNames) == 0 {
-		return addrs{}, fmt.Errorf("no app names found for domain %q", domain)
-	}
-	// only reserve for first app
-	app := appNames[0]
-
 	var mip, tip netip.Addr
 	var err error
 	if dst.Is4() {
@@ -759,7 +777,7 @@ func (c *client) reserveAddresses(domain dnsname.FQDN, dst netip.Addr) (addrs, e
 		dst:     dst,
 		magic:   mip,
 		transit: tip,
-		app:     app,
+		app:     appName,
 		domain:  domain,
 	}
 	if err := c.assignments.insert(as); err != nil {
@@ -952,9 +970,12 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 	if err != nil {
 		return buf
 	}
-	if !c.isConnectorDomain(queriedDomain) {
+	appNames, ok := c.getAppsForConnectorDomain(queriedDomain)
+	if !ok {
 		return buf
 	}
+	// There is guaranteed to be at least one matching app, so just take the first one for now
+	appName := appNames[0]
 
 	// Now we know this is a dns response we think we should rewrite, we're going to provide our response which
 	// currently means we will:
@@ -964,7 +985,7 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 	var answers []dnsResponseRewrite
 	if question.Type != dnsmessage.TypeA && question.Type != dnsmessage.TypeAAAA {
 		c.logf("mapping dns response for connector domain, unsupported type: %v", question.Type)
-		newBuf, err := c.rewriteDNSResponse(hdr, questions, answers)
+		newBuf, err := c.rewriteDNSResponse(hdr, questions, answers, appName)
 		if err != nil {
 			c.logf("error writing empty response for unsupported type: %v", err)
 			return makeServFail(c.logf, hdr, question)
@@ -1049,7 +1070,7 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 			}
 		}
 	}
-	newBuf, err := c.rewriteDNSResponse(hdr, questions, answers)
+	newBuf, err := c.rewriteDNSResponse(hdr, questions, answers, appName)
 	if err != nil {
 		c.logf("error rewriting dns response: %v", err)
 		return makeServFail(c.logf, hdr, question)
@@ -1057,7 +1078,7 @@ func (c *client) mapDNSResponse(buf []byte) []byte {
 	return newBuf
 }
 
-func (c *client) rewriteDNSResponse(hdr dnsmessage.Header, questions []dnsmessage.Question, answers []dnsResponseRewrite) ([]byte, error) {
+func (c *client) rewriteDNSResponse(hdr dnsmessage.Header, questions []dnsmessage.Question, answers []dnsResponseRewrite, appName string) ([]byte, error) {
 	b := dnsmessage.NewBuilder(nil, hdr)
 	b.EnableCompression()
 	if err := b.StartQuestions(); err != nil {
@@ -1074,7 +1095,7 @@ func (c *client) rewriteDNSResponse(hdr dnsmessage.Header, questions []dnsmessag
 
 	// make an answer for each rewrite
 	for _, rw := range answers {
-		as, err := c.reserveAddresses(rw.domain, rw.dst)
+		as, err := c.reserveAddresses(rw.domain, rw.dst, appName)
 		if err != nil {
 			return nil, err
 		}
