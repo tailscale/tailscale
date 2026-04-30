@@ -22,15 +22,12 @@ func TestHandleC2NDebugTKA(t *testing.T) {
 			return nil, nil
 		}
 
-		disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
 		signerKey := key.NewNLPrivate()
 		key1 := tka.Key{Kind: tka.Key25519, Public: signerKey.Public().Verifier(), Votes: 2}
+		state := tka.CreateStateForTest(key1)
 
 		chonk := tka.ChonkMem()
-		authority, _, err := tka.Create(chonk, tka.State{
-			Keys:              []tka.Key{key1},
-			DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
-		}, signerKey)
+		authority, _, err := tka.Create(chonk, state, signerKey)
 		if err != nil {
 			t.Fatalf("tka.Create() failed: %v", err)
 		}

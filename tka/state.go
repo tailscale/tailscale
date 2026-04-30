@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/crypto/argon2"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/testenv"
 )
 
 // ErrNoSuchKey is returned if the key referenced by a KeyID does not exist.
@@ -312,4 +313,19 @@ func (s *State) staticValidateCheckpoint() error {
 		}
 	}
 	return nil
+}
+
+// CreateStateForTest creates a [State] that marks the given keys as trusted
+// with an arbitrary disablement value.
+//
+// This is only for use in tests, and will panic if called outside a test.
+func CreateStateForTest(keys ...Key) State {
+	testenv.AssertInTest()
+
+	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
+
+	return State{
+		Keys:              keys,
+		DisablementValues: [][]byte{DisablementKDF(disablementSecret)},
+	}
 }
