@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/netip"
 	"strings"
 
 	"tailscale.com/derp"
@@ -66,7 +67,7 @@ func Handler(s *Server) http.Handler {
 			ctx = IdealNodeContextKey.WithValue(ctx, v)
 		}
 
-		s.Accept(ctx, netConn, conn, netConn.RemoteAddr().String())
+		s.Accept(ctx, netConn, conn, RealClientAddr(r, s.AcceptProxyHeaders()))
 	})
 }
 
@@ -101,6 +102,40 @@ func isChallengeChar(c rune) bool {
 	return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') ||
 		('0' <= c && c <= '9') ||
 		c == '.' || c == '-' || c == '_' || c == ':'
+}
+
+// RealClientAddr returns the real client address from r.
+//
+// If acceptProxyHeaders is true and r.RemoteAddr is a loopback address,
+// the client IP is taken from X-Real-IP (preferred) or the left-most
+// entry of X-Forwarded-For (the original client by convention). The port
+// is taken from r.RemoteAddr — the reverse proxy's upstream connection
+// port — since the original client port is not preserved in either
+// header. This keeps each returned address unique per connection and
+// lets operators correlate it with the proxy's access log.
+//
+// Otherwise, or if the headers are absent or unparseable, r.RemoteAddr
+// is returned unchanged.
+func RealClientAddr(r *http.Request, acceptProxyHeaders bool) string {
+	if !acceptProxyHeaders {
+		return r.RemoteAddr
+	}
+	addrPort, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil || !addrPort.Addr().IsLoopback() {
+		return r.RemoteAddr
+	}
+	if v := r.Header.Get("X-Real-IP"); v != "" {
+		if ip, err := netip.ParseAddr(strings.TrimSpace(v)); err == nil {
+			return netip.AddrPortFrom(ip, addrPort.Port()).String()
+		}
+	}
+	if v := r.Header.Get("X-Forwarded-For"); v != "" {
+		first, _, _ := strings.Cut(v, ",")
+		if ip, err := netip.ParseAddr(strings.TrimSpace(first)); err == nil {
+			return netip.AddrPortFrom(ip, addrPort.Port()).String()
+		}
+	}
+	return r.RemoteAddr
 }
 
 const (
