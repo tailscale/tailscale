@@ -305,12 +305,6 @@ func (r *Resolver) RegisterCustomScheme(scheme string, h CustomSchemeHandler) er
 	return r.forwarder.RegisterCustomScheme(scheme, h)
 }
 
-// UnregisterCustomScheme unregisters a scheme previously registered with
-// RegisterCustomScheme.
-func (r *Resolver) UnregisterCustomScheme(scheme string) error {
-	return r.forwarder.UnregisterCustomScheme(scheme)
-}
-
 // Close shuts down the resolver and ensures poll goroutines have exited.
 // The Resolver cannot be used again after Close is called.
 func (r *Resolver) Close() {
