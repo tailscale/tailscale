@@ -52,7 +52,16 @@ func TestMapResponseContainsNonPatchFields(t *testing.T) {
 			// They should be ignored.
 			want = false
 		case "PeersChangedPatch", "PeerSeenChange", "OnlineChange":
-			// The actual three delta fields we care about handling.
+			// The three legacy delta fields handled via NodeMutation patches.
+			want = false
+		case "PeersChanged", "PeersRemoved":
+			// Now carried as NodeMutationAdd / NodeMutationRemove entries.
+			want = false
+		case "PacketFilter", "PacketFilters":
+			// Now delivered separately via PacketFilterUpdater.
+			want = false
+		case "UserProfiles":
+			// Now delivered separately via UserProfileUpdater.
 			want = false
 		default:
 			// Everything else should be conseratively handled as a
@@ -175,6 +184,36 @@ func TestMutationsFromMapResponse(t *testing.T) {
 			},
 			want: nil,
 		},
+		{
+			name: "peer-removed",
+			mr: &tailcfg.MapResponse{
+				PeersRemoved: []tailcfg.NodeID{5},
+			},
+			want: muts(NodeMutationRemove{5}),
+		},
+		{
+			name: "peer-added",
+			mr: &tailcfg.MapResponse{
+				PeersChanged: []*tailcfg.Node{{ID: 7}},
+			},
+			want: muts(NodeMutationAdd{Node: (&tailcfg.Node{ID: 7}).View()}),
+		},
+		{
+			name: "add-and-remove-mixed-with-patch",
+			mr: &tailcfg.MapResponse{
+				PeersRemoved: []tailcfg.NodeID{3},
+				PeersChanged: []*tailcfg.Node{{ID: 7}},
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:     5,
+					DERPRegion: 2,
+				}},
+			},
+			want: muts(
+				NodeMutationRemove{3},
+				NodeMutationDERPHome{5, 2},
+				NodeMutationAdd{Node: (&tailcfg.Node{ID: 7}).View()},
+			),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -188,11 +227,13 @@ func TestMutationsFromMapResponse(t *testing.T) {
 			if diff := cmp.Diff(tt.want, got,
 				cmp.Comparer(func(a, b netip.Addr) bool { return a == b }),
 				cmp.Comparer(func(a, b netip.AddrPort) bool { return a == b }),
+				cmp.Comparer(func(a, b tailcfg.NodeView) bool { return a.ID() == b.ID() }),
 				cmp.AllowUnexported(
 					NodeMutationEndpoints{},
 					NodeMutationDERPHome{},
 					NodeMutationOnline{},
 					NodeMutationLastSeen{},
+					NodeMutationRemove{},
 				)); diff != "" {
 				t.Errorf("wrong result (-want +got):\n%s", diff)
 			}

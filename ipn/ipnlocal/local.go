@@ -152,6 +152,18 @@ type watchSession struct {
 	sessionID string
 	cancel    context.CancelFunc // to shut down the session
 	mask      ipn.NotifyWatchOpt // watch options for this session
+
+	// lastSentUserProfile is the per-UserID [tailcfg.UserProfileView]
+	// most recently delivered to this session via [Notify.UserProfiles].
+	// On a subsequent send, an incoming entry whose
+	// [tailcfg.UserProfileView.Equal] reports identity-or-equal-fields
+	// to the stored view for that UserID is dropped from the
+	// per-session copy of [Notify.UserProfiles], so the session only
+	// sees genuinely new or changed profiles. The views share backing
+	// memory with the producer's tracking maps, so the common
+	// "control re-announces the same profile" case is a pointer-cheap
+	// equality check.
+	lastSentUserProfile map[tailcfg.UserID]tailcfg.UserProfileView
 }
 
 var (
@@ -1338,7 +1350,13 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.updateStatusLocked(sb)
+}
 
+// updateStatusLocked is the b.mu-holding portion of [LocalBackend.UpdateStatus].
+//
+// b.mu must be held.
+func (b *LocalBackend) updateStatusLocked(sb *ipnstate.StatusBuilder) {
 	cn := b.currentNode()
 	nm := cn.NetMap()
 	sb.MutateStatus(func(s *ipnstate.Status) {
@@ -1540,9 +1558,9 @@ func (b *LocalBackend) WhoIsNodeKey(k key.NodePublic) (n tailcfg.NodeView, u tai
 	cn := b.currentNode()
 	if nid, ok := cn.NodeByKey(k); ok {
 		if n, ok := cn.NodeByID(nid); ok {
-			up, ok := cn.NetMap().UserProfiles[n.User()]
+			up, _ := cn.UserByID(n.User())
 			u = profileFromView(up)
-			return n, u, ok
+			return n, u, true
 		}
 	}
 	return n, u, false
@@ -1638,14 +1656,32 @@ func (b *LocalBackend) PeerCapsForService(src netip.Addr, svcName tailcfg.Servic
 // given NodeID, in O(1) time. It returns ok=false if no such peer is in
 // the current netmap.
 //
-// It is intended for callers that need the latest state of a single peer
-// without fetching the entire netmap.
+// It is intended for callers that observed a peer-mutation signal (e.g.
+// [ipn.Notify.PeerChangedPatch] or [ipn.Notify.PeersChanged]) and want
+// the latest state of the affected node without having to apply the patch
+// themselves — useful for older clients that don't recognize a new
+// [tailcfg.PeerChange] field, or that just don't want to bother.
 func (b *LocalBackend) PeerByID(id tailcfg.NodeID) (n tailcfg.NodeView, ok bool) {
 	return b.currentNode().NodeByID(id)
 }
 
+// UserProfile returns the current [tailcfg.UserProfile] for the given UserID,
+// in O(1) time. It returns ok=false if no such User is in the current netmap.
+//
+// It is the LocalAPI/LocalBackend fallback for IPN-bus consumers that see a
+// UserID they don't recognize and want to resolve it.
+func (b *LocalBackend) UserProfile(id tailcfg.UserID) (u tailcfg.UserProfileView, ok bool) {
+	return b.currentNode().UserByID(id)
+}
+
 func (b *LocalBackend) GetFilterForTest() *filter.Filter {
 	testenv.AssertInTest()
+	// Take b.mu so the read serializes with [setControlClientStatusLocked],
+	// which installs the netmap and the filter at separate sub-steps. Without
+	// this, a test thread that observes the new netmap (via [NetMapWithPeers])
+	// can race ahead of the filter store and read the previous filter.
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	nb := b.currentNode()
 	return nb.filterAtomic.Load()
 }
@@ -1922,13 +1958,17 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 
 		// Notify watchers that the self node may have changed. Reactive
 		// consumers (containerboot, kube agents, sniproxy, etc.) listen on
-		// this signal and re-fetch peers/DNS via the LocalAPI if they need
-		// more than self info.
+		// this signal and re-fetch peers/DNS via [LocalClient.NetMap] if
+		// they need more than self info.
 		var selfChange *tailcfg.Node
 		if st.NetMap.SelfNode.Valid() {
 			selfChange = st.NetMap.SelfNode.AsStruct()
 		}
-		b.sendLocked(ipn.Notify{NetMap: st.NetMap, SelfChange: selfChange})
+		notify := ipn.Notify{SelfChange: selfChange}
+		if goosGetsLegacyNetmapNotify {
+			notify.NetMap = st.NetMap
+		}
+		b.sendLocked(notify)
 
 		// The error here is unimportant as is the result.  This will recalculate the suggested exit node
 		// cache the value and push any changes to the IPN bus.
@@ -2218,7 +2258,11 @@ func (b *LocalBackend) sysPolicyChanged(policy policyclient.PolicyChange) {
 	}
 }
 
-var _ controlclient.NetmapDeltaUpdater = (*LocalBackend)(nil)
+var (
+	_ controlclient.NetmapDeltaUpdater  = (*LocalBackend)(nil)
+	_ controlclient.PacketFilterUpdater = (*LocalBackend)(nil)
+	_ controlclient.UserProfileUpdater  = (*LocalBackend)(nil)
+)
 
 // UpdateNetmapDelta implements controlclient.NetmapDeltaUpdater.
 func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
@@ -2235,9 +2279,27 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	cn := b.currentNode()
 	cn.UpdateNetmapDelta(muts)
 
-	if ms, ok := b.sys.MagicSock.GetOK(); ok {
-		ms.UpdateNetmapDelta(muts)
+	// Dispatch Add/Remove per-peer to magicsock, and any per-field
+	// patches via the existing UpdateNetmapDelta path. The per-peer
+	// methods take c.mu themselves, so we can't call them from inside
+	// magicsock.UpdateNetmapDelta which already holds c.mu.
+	peersAddedOrRemoved := false
+	ms := b.MagicConn()
+	for _, m := range muts {
+		switch m := m.(type) {
+		case netmap.NodeMutationAdd:
+			ms.UpsertPeer(m.Node)
+			peersAddedOrRemoved = true
+			metricNetmapDeltaPeerAdded.Add(1)
+		case netmap.NodeMutationRemove:
+			ms.RemovePeer(m.NodeIDBeingMutated())
+			peersAddedOrRemoved = true
+			metricNetmapDeltaPeerRemoved.Add(1)
+		default:
+			metricNetmapDeltaPeerPatched.Add(1)
+		}
 	}
+	ms.UpdateNetmapDelta(muts)
 
 	// If auto exit nodes are enabled and our exit node went offline,
 	// we need to schedule picking a new one.
@@ -2268,14 +2330,29 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		return true
 	}
 
-	if mutationsAreWorthyOfTellingIPNBus(muts) {
-		// The notifier will strip the netmap based on the watchOpts mask if the watcher
-		// has indicated it can handle PeerChanges.
-		notify = &ipn.Notify{NetMap: cn.netMapWithPeers()}
-		if peerChanges, ok := ipnBusPeerChangesFromNodeMutations(muts); ok {
-			notify.PeerChanges = peerChanges
-		} else {
+	// A single MapResponse can carry adds/removes (full Nodes) AND
+	// per-field patches in the same delta. Build one Notify that
+	// reflects all of them; per-session stripping in [sendToLocked]
+	// hides fields the watcher didn't opt in to (and promotes patches
+	// into full Nodes for watchers that asked for PeerChanges but not
+	// PeerPatches).
+	if peersAddedOrRemoved || mutationsAreWorthyOfTellingIPNBus(muts) {
+		notify = &ipn.Notify{}
+		for _, m := range muts {
+			switch m := m.(type) {
+			case netmap.NodeMutationAdd:
+				notify.PeersChanged = append(notify.PeersChanged, m.Node.AsStruct())
+			case netmap.NodeMutationRemove:
+				notify.PeersRemoved = append(notify.PeersRemoved, m.NodeIDBeingMutated())
+			}
+		}
+		if patches, ok := ipnBusPeerChangedPatchFromNodeMutations(muts); ok && len(patches) > 0 {
+			notify.PeerChangedPatch = patches
+		} else if !ok {
 			b.logf("[unexpected] got mutations worthy of telling IPN bus but failed to convert to peer changes")
+		}
+		if goosGetsLegacyNetmapNotify {
+			notify.NetMap = cn.netMapWithPeers()
 		}
 	} else if testenv.InTest() {
 		// In tests, send an empty Notify as a wake-up so end-to-end
@@ -2283,6 +2360,58 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		// LocalBackend after processing deltas.
 		notify = new(ipn.Notify)
 	}
+	return true
+}
+
+// UpdatePacketFilter implements [controlclient.PacketFilterUpdater].
+//
+// It is called by the controlclient when a MapResponse carries a new packet
+// filter. Avoiding a full netmap rebuild matters here because the packet
+// filter currently changes on every peer add on large tailnets.
+func (b *LocalBackend) UpdatePacketFilter(rules views.Slice[tailcfg.FilterRule], parsed []filter.Match) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	cn := b.currentNode()
+	if cn.NetMap() == nil {
+		// No netmap installed yet; the initial full-netmap path will
+		// take care of installing the filter.
+		return false
+	}
+	metricUpdatePacketFilter.Add(1)
+	cn.setPacketFilter(rules, parsed)
+	b.updateFilterLocked(b.pm.CurrentPrefs())
+	return true
+}
+
+// UpdateUserProfiles implements [controlclient.UserProfileUpdater].
+//
+// It is called by the controlclient when a MapResponse carries new or
+// updated [tailcfg.UserProfileView] entries. It merges them into the
+// current netmap's UserProfiles so [LocalBackend.UserProfile] can
+// resolve them, and emits an [ipn.Notify] with [Notify.UserProfiles]
+// populated so IPN-bus consumers (sessions opted in to
+// NotifyPeerChanges / NotifyPeerPatches) get the new profiles before
+// any subsequent PeersChanged / PeerChangedPatch entries that reference
+// these UserIDs.
+//
+// The views in profiles share backing memory with the controlclient
+// caller's tracking map; nodeBackend stores them as-is, and per-bus
+// sessions can dedup via [UserProfileView.Equal] without copying.
+func (b *LocalBackend) UpdateUserProfiles(profiles map[tailcfg.UserID]tailcfg.UserProfileView) bool {
+	if len(profiles) == 0 {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	cn := b.currentNode()
+	if cn.NetMap() == nil {
+		// No netmap installed yet; the initial full-netmap path will
+		// take care of installing UserProfiles.
+		return false
+	}
+	metricUpdateUserProfiles.Add(1)
+	cn.mergeUserProfiles(profiles)
+	b.sendLocked(ipn.Notify{UserProfiles: profiles})
 	return true
 }
 
@@ -2324,32 +2453,40 @@ func mutationsAreWorthyOfRecalculatingSuggestedExitNode(muts []netmap.NodeMutati
 	return false
 }
 
-// ipnBusPeerChangesFromNodeMutations converts a slice of NodeMutations to a slice of
-// *tailcfg.PeerChange for use in ipn.Notify.PeerChanges.
-// Multiple mutations to the same node are merged into a single PeerChange.
-// If we encounter any mutations that we cannot convert to a PeerChange, we return (nil, false)
-// to indicate that the caller should send a Notify with the full netmap instead of
-// trying to send granular peer changes.
-func ipnBusPeerChangesFromNodeMutations(muts []netmap.NodeMutation) ([]*tailcfg.PeerChange, bool) {
+// ipnBusPeerChangedPatchFromNodeMutations converts the patch-shaped subset of
+// muts (per-field updates that fit in a [tailcfg.PeerChange]) into a slice of
+// [tailcfg.PeerChange] for use in [ipn.Notify.PeerChangedPatch]. Multiple
+// mutations against the same node are merged into a single PeerChange.
+//
+// Add/Remove mutations are skipped (they ride
+// [ipn.Notify.PeersChanged]/[ipn.Notify.PeersRemoved]). Any other mutation
+// type that doesn't fit a [tailcfg.PeerChange] causes ok=false; the caller
+// should fall back to a full netmap rebuild.
+func ipnBusPeerChangedPatchFromNodeMutations(muts []netmap.NodeMutation) ([]*tailcfg.PeerChange, bool) {
 	byID := map[tailcfg.NodeID]*tailcfg.PeerChange{}
 	var ordered []*tailcfg.PeerChange
-	for _, m := range muts {
-		nid := m.NodeIDBeingMutated()
+	getOrAdd := func(nid tailcfg.NodeID) *tailcfg.PeerChange {
 		pc := byID[nid]
 		if pc == nil {
 			pc = &tailcfg.PeerChange{NodeID: nid}
 			byID[nid] = pc
 			ordered = append(ordered, pc)
 		}
+		return pc
+	}
+	for _, m := range muts {
 		switch v := m.(type) {
+		case netmap.NodeMutationAdd, netmap.NodeMutationRemove:
+			// These go in PeersChanged / PeersRemoved, not as patches.
+			continue
 		case netmap.NodeMutationOnline:
-			pc.Online = &v.Online
+			getOrAdd(v.NodeIDBeingMutated()).Online = &v.Online
 		case netmap.NodeMutationLastSeen:
-			pc.LastSeen = &v.LastSeen
+			getOrAdd(v.NodeIDBeingMutated()).LastSeen = &v.LastSeen
 		case netmap.NodeMutationDERPHome:
-			pc.DERPRegion = v.DERPRegion
+			getOrAdd(v.NodeIDBeingMutated()).DERPRegion = v.DERPRegion
 		case netmap.NodeMutationEndpoints:
-			pc.Endpoints = v.Endpoints
+			getOrAdd(v.NodeIDBeingMutated()).Endpoints = v.Endpoints
 		default:
 			return nil, false
 		}
@@ -2979,7 +3116,7 @@ func (b *LocalBackend) updateFilterLocked(prefs ipn.PrefsView) {
 		for i := range addrs.Len() {
 			localNetsB.AddPrefix(addrs.At(i))
 		}
-		packetFilter = netMap.PacketFilter
+		packetFilter = cn.PacketFilter()
 
 		if cn.unlockedNodesPermitted(packetFilter) {
 			b.health.SetUnhealthy(invalidPacketFilterWarnable, nil)
@@ -3317,9 +3454,21 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 
 	var ini *ipn.Notify
 
+	// Build the engine half of the InitialStatus before taking b.mu, since
+	// b.e.UpdateStatus has its own locking and shouldn't be called under
+	// b.mu (lock-ordering: outer-to-inner is b.mu -> engine, not the other
+	// way). The backend half is then populated under b.mu below, atomically
+	// with watcher registration so no events arrive on the watcher's
+	// channel before InitialStatus is delivered.
+	var statusSB *ipnstate.StatusBuilder
+	if mask&ipn.NotifyInitialStatus != 0 {
+		statusSB = &ipnstate.StatusBuilder{WantPeers: true}
+		b.e.UpdateStatus(statusSB)
+	}
+
 	b.mu.Lock()
 
-	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode | ipn.NotifyInitialClientVersion
+	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialStatus | ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode | ipn.NotifyInitialClientVersion
 	if mask&initialBits != 0 {
 		cn := b.currentNode()
 		ini = &ipn.Notify{Version: version.Long()}
@@ -3334,7 +3483,18 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 			ini.Prefs = new(b.sanitizedPrefsLocked())
 		}
 		if mask&ipn.NotifyInitialNetMap != 0 {
-			ini.NetMap = cn.NetMap()
+			if nm := cn.NetMap(); nm != nil && nm.SelfNode.Valid() {
+				ini.SelfChange = nm.SelfNode.AsStruct()
+			}
+			// The legacy initial NetMap is delivered cross-platform: it
+			// is what watchers asked for by setting NotifyInitialNetMap
+			// and is always a one-shot, so the cost of building it is
+			// paid once per bus subscription.
+			ini.NetMap = cn.netMapWithPeers()
+		}
+		if statusSB != nil {
+			b.updateStatusLocked(statusSB)
+			ini.InitialStatus = statusSB.Status()
 		}
 		if mask&ipn.NotifyInitialDriveShares != 0 && b.DriveSharingEnabled() {
 			ini.DriveShares = b.pm.prefs.DriveShares()
@@ -3461,16 +3621,6 @@ func (b *LocalBackend) pollRequestEngineStatus(ctx context.Context) {
 // It should only be used via the LocalAPI's debug handler.
 func (b *LocalBackend) DebugNotify(n ipn.Notify) {
 	b.send(n)
-}
-
-// DebugNotifyLastNetMap injects a fake notify message to clients,
-// repeating whatever the last netmap was.
-//
-// It should only be used via the LocalAPI's debug handler.
-func (b *LocalBackend) DebugNotifyLastNetMap() {
-	if nm := b.currentNode().NetMap(); nm != nil {
-		b.send(ipn.Notify{NetMap: nm})
-	}
 }
 
 // DebugForceNetmapUpdate forces a full no-op netmap update of the current
@@ -3603,25 +3753,105 @@ func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) 
 		if !recipient.match(sess.owner) {
 			continue
 		}
-		nOut := &n
-		if n.PeerChanges != nil {
-			// Take a shallow copy of n so we can elide the PeerChanges or the Netmap
-			// based on the session's mask.
-			nOut = new(n)
-			if sess.mask&ipn.NotifyPeerChanges != 0 {
-				// Skip the full Netmap
-				nOut.NetMap = nil
-			} else {
-				// Skip the PeerChanges
-				nOut.PeerChanges = nil
-			}
-		}
+		nForSess := b.notifyForSessionLocked(sess, &n)
 		select {
-		case sess.ch <- nOut:
+		case sess.ch <- nForSess:
 		default:
 			// Drop the notification if the channel is full.
 		}
 	}
+}
+
+// notifyForSessionLocked returns the [ipn.Notify] to deliver to sess,
+// applying per-session field gating to n: stripping fields the session
+// didn't opt in to receive, promoting [Notify.PeerChangedPatch] entries
+// into full-Node [Notify.PeersChanged] entries for sessions that asked
+// for peer changes but not patches, and tracking on sess which
+// [tailcfg.UserProfileView]s have already been delivered so subsequent
+// sends only carry new/changed profiles.
+//
+// The returned pointer is either n itself (no adjustments needed for
+// this session) or a fresh *ipn.Notify with the adjusted fields. The
+// caller's *ipn.Notify is not mutated.
+//
+// b.mu must be held.
+func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify) *ipn.Notify {
+	// Visibility of peer-set fields is governed by the watcher's mask:
+	//
+	//   - NotifyPeerChanges:           PeersChanged + PeersRemoved
+	//   - NotifyPeerPatches (implies):  + PeerChangedPatch
+	//
+	// A watcher with NotifyPeerChanges but not NotifyPeerPatches still
+	// observes every per-peer mutation; we just promote each
+	// PeerChangedPatch entry into a full-Node entry in PeersChanged so
+	// the watcher doesn't have to handle the patch shape.
+	wantsPeerChanges := sess.mask&(ipn.NotifyPeerChanges|ipn.NotifyPeerPatches) != 0
+	wantsPeerPatches := sess.mask&ipn.NotifyPeerPatches != 0
+	stripNetMap := goosGetsLegacyNetmapNotify && n.NetMap != nil && sess.mask&ipn.NotifyNoNetMap != 0
+	stripPeersChanged := len(n.PeersChanged) > 0 && !wantsPeerChanges
+	stripPeersRemoved := len(n.PeersRemoved) > 0 && !wantsPeerChanges
+	stripPatches := len(n.PeerChangedPatch) > 0 && !wantsPeerPatches
+	promotePatches := len(n.PeerChangedPatch) > 0 && wantsPeerChanges && !wantsPeerPatches
+
+	// UserProfiles ride alongside peer changes and are gated on the
+	// same opt-in. Sessions that didn't ask for peer changes get the
+	// field stripped entirely; opted-in sessions get a per-session
+	// subset containing only profiles that differ from what was last
+	// delivered to that session, compared via
+	// [tailcfg.UserProfileView.Equal] (pointer-cheap when the view
+	// shares backing memory with the previous send).
+	stripUserProfiles := len(n.UserProfiles) > 0 && !wantsPeerChanges
+	var sessUserProfiles map[tailcfg.UserID]tailcfg.UserProfileView
+	if !stripUserProfiles && len(n.UserProfiles) > 0 {
+		for id, up := range n.UserProfiles {
+			if up.Equal(sess.lastSentUserProfile[id]) {
+				continue // already has this exact profile
+			}
+			mak.Set(&sessUserProfiles, id, up)
+			mak.Set(&sess.lastSentUserProfile, id, up)
+		}
+		if len(sessUserProfiles) == 0 {
+			// All entries deduped.
+			stripUserProfiles = true
+		}
+	}
+	replaceUserProfiles := !stripUserProfiles && len(sessUserProfiles) != len(n.UserProfiles)
+
+	if !stripNetMap && !stripPeersChanged && !stripPeersRemoved && !stripPatches && !stripUserProfiles && !replaceUserProfiles && !promotePatches {
+		return n
+	}
+	nCopy := *n
+	if stripNetMap {
+		nCopy.NetMap = nil
+	}
+	if stripPeersChanged {
+		nCopy.PeersChanged = nil
+	}
+	if stripPeersRemoved {
+		nCopy.PeersRemoved = nil
+	}
+	if promotePatches {
+		// Look up each patched peer's current Node and append it to
+		// PeersChanged. Watchers in this mode receive only full-Node
+		// updates; they never see PeerChangedPatch.
+		cn := b.currentNode()
+		for _, pc := range n.PeerChangedPatch {
+			nv, ok := cn.NodeByID(pc.NodeID)
+			if !ok {
+				continue
+			}
+			nCopy.PeersChanged = append(nCopy.PeersChanged, nv.AsStruct())
+		}
+	}
+	if stripPatches {
+		nCopy.PeerChangedPatch = nil
+	}
+	if stripUserProfiles {
+		nCopy.UserProfiles = nil
+	} else if replaceUserProfiles {
+		nCopy.UserProfiles = sessUserProfiles
+	}
+	return &nCopy
 }
 
 // setAuthURLLocked sets the authURL and triggers [LocalBackend.popBrowserAuthNow] if the URL has changed.
@@ -4911,7 +5141,8 @@ func (b *LocalBackend) setPrefsLocked(newp *ipn.Prefs) ipn.PrefsView {
 		}
 	}
 	if netMap != nil {
-		newProfile := profileFromView(netMap.UserProfiles[netMap.User()])
+		selfProfileView, _ := cn.UserByID(netMap.User())
+		newProfile := profileFromView(selfProfileView)
 		if newLoginName := newProfile.LoginName; newLoginName != "" {
 			if !oldp.Persist().Valid() {
 				b.logf("active login: %s", newLoginName)
@@ -5173,24 +5404,20 @@ func (b *LocalBackend) NetMap() *netmap.NetworkMap {
 // current. Use this for any caller that does not need to iterate Peers,
 // since it's O(1) regardless of tailnet size.
 //
-// Returns nil if no network map has been received yet.
+// It returns nil if no network map has been received yet.
 func (b *LocalBackend) NetMapNoPeers() *netmap.NetworkMap {
 	return b.currentNode().NetMap()
 }
 
-// NetMapWithPeers returns the latest network map with the Peers slice
-// populated.
+// NetMapWithPeers returns a copy of the latest cached network map with
+// its Peers slice populated from the live per-node-backend peers map
+// (i.e. reflecting any incremental delta updates applied since the last
+// full netmap install). It is O(N) in the size of the peer set; prefer
+// [LocalBackend.NetMapNoPeers] when only non-Peers fields are needed.
 //
-// Currently this is the same as [LocalBackend.NetMapNoPeers]: the cached
-// netmap's Peers slice may be stale relative to the live per-node-backend
-// peers map. A follow-up change will switch this method to return a
-// freshly-built netmap with up-to-date Peers, at O(N) cost per call.
-// Callers that genuinely need the up-to-date peer set should use this
-// method (and document why) so the upcoming change reaches them.
-//
-// Returns nil if no network map has been received yet.
+// It returns nil if no netmap is yet available.
 func (b *LocalBackend) NetMapWithPeers() *netmap.NetworkMap {
-	return b.currentNode().NetMap()
+	return b.currentNode().netMapWithPeers()
 }
 
 // lookupPeerByIP returns the node public key for the peer that owns the
@@ -8316,6 +8543,17 @@ func maybeUsernameOf(actor ipnauth.Actor) string {
 var (
 	metricCurrentWatchIPNBus     = clientmetric.NewGauge("localbackend_current_watch_ipn_bus")
 	metricIPForwardingCheckError = clientmetric.NewCounter("localbackend_ip_forwarding_check_error")
+
+	// Counters for the controlclient's delta-update fast path: each
+	// counts a destination-side call into [LocalBackend] from
+	// [mapSession.tryHandleIncrementally]. Useful as test signals that a
+	// MapResponse landed on the incremental path with the expected
+	// payload shape.
+	metricNetmapDeltaPeerAdded   = clientmetric.NewCounter("localbackend_netmap_delta_peer_added")
+	metricNetmapDeltaPeerRemoved = clientmetric.NewCounter("localbackend_netmap_delta_peer_removed")
+	metricNetmapDeltaPeerPatched = clientmetric.NewCounter("localbackend_netmap_delta_peer_patched")
+	metricUpdatePacketFilter     = clientmetric.NewCounter("localbackend_update_packet_filter")
+	metricUpdateUserProfiles     = clientmetric.NewCounter("localbackend_update_user_profiles")
 )
 
 func (b *LocalBackend) stateEncrypted() opt.Bool {

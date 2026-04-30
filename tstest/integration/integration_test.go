@@ -34,7 +34,6 @@ import (
 	"github.com/miekg/dns"
 	"go4.org/mem"
 	"tailscale.com/client/local"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/feature"
 	_ "tailscale.com/feature/clientupdate"
@@ -67,6 +66,14 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	os.Exit(0)
+}
+
+// fetchNetMapForTest fetches the current netmap from tailscaled via the
+// "current-netmap" debug action. The debug action's payload shape is
+// intentionally not part of any stable API; tests use it to inspect
+// internal state.
+func fetchNetMapForTest(ctx context.Context, lc *local.Client) (*netmap.NetworkMap, error) {
+	return local.GetDebugResultJSON[*netmap.NetworkMap](ctx, lc, "current-netmap")
 }
 
 // Tests that tailscaled starts up in TUN mode, and also without data races:
@@ -1189,20 +1196,18 @@ func TestClientSideJailing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitPeerIsJailed := func(t *testing.T, b *tailscale.IPNBusWatcher, jailed bool) {
+	waitPeerIsJailed := func(t *testing.T, b *local.IPNBusWatcher, lc *local.Client, jailed bool) {
 		t.Helper()
 		for {
-			n, err := b.Next()
+			_, err := b.Next()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if n.NetMap == nil {
+			nm, err := fetchNetMapForTest(context.Background(), lc)
+			if err != nil || nm == nil || len(nm.Peers) == 0 {
 				continue
 			}
-			if len(n.NetMap.Peers) == 0 {
-				continue
-			}
-			if j := n.NetMap.Peers[0].IsJailed(); j == jailed {
+			if j := nm.Peers[0].IsJailed(); j == jailed {
 				break
 			}
 		}
@@ -1213,8 +1218,8 @@ func TestClientSideJailing(t *testing.T) {
 			env.Control.SetJailed(k2, k1, tc.n1JailedForN2)
 
 			// Wait for the jailed status to propagate.
-			waitPeerIsJailed(t, b1, tc.n2JailedForN1)
-			waitPeerIsJailed(t, b2, tc.n1JailedForN2)
+			waitPeerIsJailed(t, b1, lc1, tc.n2JailedForN1)
+			waitPeerIsJailed(t, b2, lc2, tc.n1JailedForN2)
 
 			testDial(t, lc1, ip2, port, tc.n1JailedForN2)
 			testDial(t, lc2, ip1, port, tc.n2JailedForN1)

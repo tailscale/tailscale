@@ -20,26 +20,23 @@ import (
 	"tailscale.com/wgengine/filter"
 )
 
-// waitFor blocks until a NetMap is seen on the IPN bus that satisfies the given
-// function f. Note: has no timeout, should be called with a ctx that has an
-// appropriate timeout set.
+// waitFor blocks until the LocalBackend's current netmap satisfies the given
+// function f. It uses a bus subscription to wake up on netmap and peer-mutation
+// events rather than polling. Note: it has no timeout and should be called with
+// a ctx that has an appropriate timeout set.
 func waitFor(t testing.TB, ctx context.Context, s *Server, f func(*netmap.NetworkMap) bool) error {
 	t.Helper()
-	watcher, err := s.localClient.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
+	w, err := s.localClient.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyPeerChanges)
 	if err != nil {
-		t.Fatalf("error watching IPN bus: %s", err)
+		return fmt.Errorf("watching IPN bus: %w", err)
 	}
-	defer watcher.Close()
-
+	defer w.Close()
 	for {
-		n, err := watcher.Next()
-		if err != nil {
-			return fmt.Errorf("getting next ipn.Notify from IPN bus: %w", err)
+		if nm := s.lb.NetMapWithPeers(); nm != nil && f(nm) {
+			return nil
 		}
-		if n.NetMap != nil {
-			if f(n.NetMap) {
-				return nil
-			}
+		if _, err := w.Next(); err != nil {
+			return fmt.Errorf("waiting for netmap: %w", err)
 		}
 	}
 }
@@ -192,7 +189,7 @@ func TestPacketFilterFromNetmap(t *testing.T) {
 			controlURL, c := startControl(t)
 			s, _, pubKey := startServer(t, ctx, controlURL, "node")
 
-			if test.waitTest(s.lb.NetMap()) {
+			if test.waitTest(s.lb.NetMapWithPeers()) {
 				t.Fatal("waitTest already passes before sending initial netmap: this will be flaky")
 			}
 
@@ -223,7 +220,7 @@ func TestPacketFilterFromNetmap(t *testing.T) {
 					t.Fatal("incrementalWaitTest must be set if incrementalMapResponse is set")
 				}
 
-				if test.incrementalWaitTest(s.lb.NetMap()) {
+				if test.incrementalWaitTest(s.lb.NetMapWithPeers()) {
 					t.Fatal("incrementalWaitTest already passes before sending incremental netmap: this will be flaky")
 				}
 

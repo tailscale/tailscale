@@ -1693,18 +1693,18 @@ func TestExitNodeNotifyOrder(t *testing.T) {
 	// and an exit node ID notification (since an exit node is selected).
 	// The netmap notification should be sent first.
 	nw.watch(0, []wantedNotification{
-		wantNetmapNotify(clientNetmap),
+		wantSelfChangeNotify(selfNode),
 		wantExitNodeIDNotify(exitNode1.StableID()),
 	})
 	lb.SetControlClientStatus(lb.cc, controlclient.Status{NetMap: clientNetmap})
 	nw.check()
 }
 
-func wantNetmapNotify(want *netmap.NetworkMap) wantedNotification {
+func wantSelfChangeNotify(want tailcfg.NodeView) wantedNotification {
 	return wantedNotification{
-		name: "Netmap",
+		name: "SelfChange",
 		cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
-			return n.NetMap == want
+			return n.SelfChange != nil && want.Valid() && n.SelfChange.StableID == want.StableID()
 		},
 	}
 }
@@ -2076,6 +2076,198 @@ func TestWatchNotificationsCallbacks(t *testing.T) {
 	if len(b.notifyWatchers) != 0 {
 		t.Fatalf("unexpected number of watchers in new LocalBackend, want: 0 got: %v", len(b.notifyWatchers))
 	}
+}
+
+// TestNotifyForSessionPeerVisibility verifies the per-session masking
+// logic in [LocalBackend.notifyForSessionLocked] for the
+// NotifyPeerChanges / NotifyPeerPatches flag pair:
+//
+//   - A watcher with no peer-change bits should not see PeersChanged,
+//     PeersRemoved, or PeerChangedPatch.
+//   - A watcher with NotifyPeerChanges (but not NotifyPeerPatches) should
+//     see PeersChanged and PeersRemoved, AND any incoming
+//     PeerChangedPatch entries should be promoted to full Nodes in
+//     PeersChanged. PeerChangedPatch itself must be cleared.
+//   - A watcher with NotifyPeerPatches should see all three fields.
+func TestNotifyForSessionPeerVisibility(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	// Install a netmap with two peers so the patch-promotion path can
+	// resolve PeerChangedPatch entries to full Nodes.
+	nm := &netmap.NetworkMap{}
+	for _, id := range []tailcfg.NodeID{10, 20} {
+		nm.Peers = append(nm.Peers, (&tailcfg.Node{
+			ID:        id,
+			Key:       makeNodeKeyFromID(id),
+			Addresses: []netip.Prefix{netip.MustParsePrefix(fmt.Sprintf("100.64.0.%d/32", id))},
+		}).View())
+	}
+	b.currentNode().SetNetMap(nm)
+
+	// Build a Notify carrying every peer-change kind: an added peer
+	// (PeersChanged), a removed peer (PeersRemoved), and a patch for an
+	// existing peer (PeerChangedPatch).
+	addedPeer := &tailcfg.Node{ID: 30, Key: makeNodeKeyFromID(30)}
+	online := true
+	notify := ipn.Notify{
+		PeersChanged:     []*tailcfg.Node{addedPeer},
+		PeersRemoved:     []tailcfg.NodeID{99},
+		PeerChangedPatch: []*tailcfg.PeerChange{{NodeID: 10, Online: &online}},
+	}
+
+	deliver := func(mask ipn.NotifyWatchOpt) *ipn.Notify {
+		sess := &watchSession{mask: mask}
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.notifyForSessionLocked(sess, &notify)
+	}
+
+	t.Run("no_peer_bits", func(t *testing.T) {
+		n := deliver(0)
+		if len(n.PeersChanged) != 0 {
+			t.Errorf("PeersChanged = %v; want empty", n.PeersChanged)
+		}
+		if len(n.PeersRemoved) != 0 {
+			t.Errorf("PeersRemoved = %v; want empty", n.PeersRemoved)
+		}
+		if len(n.PeerChangedPatch) != 0 {
+			t.Errorf("PeerChangedPatch = %v; want empty", n.PeerChangedPatch)
+		}
+	})
+
+	t.Run("peer_changes_only_promotes_patches", func(t *testing.T) {
+		n := deliver(ipn.NotifyPeerChanges)
+		if len(n.PeerChangedPatch) != 0 {
+			t.Errorf("PeerChangedPatch should be stripped; got %v", n.PeerChangedPatch)
+		}
+		if len(n.PeersRemoved) != 1 || n.PeersRemoved[0] != 99 {
+			t.Errorf("PeersRemoved = %v; want [99]", n.PeersRemoved)
+		}
+		// PeersChanged should contain the originally-added peer (30) AND
+		// a promoted full-Node entry for the patched peer (10).
+		ids := make(map[tailcfg.NodeID]bool, len(n.PeersChanged))
+		for _, p := range n.PeersChanged {
+			ids[p.ID] = true
+		}
+		if !ids[30] {
+			t.Errorf("PeersChanged missing added peer 30; got %+v", n.PeersChanged)
+		}
+		if !ids[10] {
+			t.Errorf("PeersChanged missing promoted peer 10; got %+v", n.PeersChanged)
+		}
+	})
+
+	t.Run("peer_patches_keeps_patch_field", func(t *testing.T) {
+		n := deliver(ipn.NotifyPeerPatches)
+		if len(n.PeerChangedPatch) != 1 || n.PeerChangedPatch[0].NodeID != 10 {
+			t.Errorf("PeerChangedPatch = %v; want [{NodeID:10,...}]", n.PeerChangedPatch)
+		}
+		if len(n.PeersChanged) != 1 || n.PeersChanged[0].ID != 30 {
+			t.Errorf("PeersChanged = %v; want [{ID:30}]", n.PeersChanged)
+		}
+		if len(n.PeersRemoved) != 1 || n.PeersRemoved[0] != 99 {
+			t.Errorf("PeersRemoved = %v; want [99]", n.PeersRemoved)
+		}
+	})
+
+	t.Run("both_bits_unchanged", func(t *testing.T) {
+		n := deliver(ipn.NotifyPeerChanges | ipn.NotifyPeerPatches)
+		if len(n.PeerChangedPatch) != 1 {
+			t.Errorf("PeerChangedPatch len = %d; want 1", len(n.PeerChangedPatch))
+		}
+		if len(n.PeersChanged) != 1 {
+			t.Errorf("PeersChanged len = %d; want 1", len(n.PeersChanged))
+		}
+		if len(n.PeersRemoved) != 1 {
+			t.Errorf("PeersRemoved len = %d; want 1", len(n.PeersRemoved))
+		}
+	})
+}
+
+// TestNotifyForSessionUserProfilesGating verifies that
+// [Notify.UserProfiles] is only delivered to sessions opted in to
+// NotifyPeerChanges/NotifyPeerPatches, and is deduped per-UserID
+// against [watchSession.lastSentUserProfile] across successive sends.
+func TestNotifyForSessionUserProfilesGating(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	deliver := func(sess *watchSession, profiles map[tailcfg.UserID]tailcfg.UserProfileView) *ipn.Notify {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.notifyForSessionLocked(sess, &ipn.Notify{UserProfiles: profiles})
+	}
+
+	profiles := map[tailcfg.UserID]tailcfg.UserProfileView{
+		7: (&tailcfg.UserProfile{ID: 7, LoginName: "alice@example.com", DisplayName: "Alice"}).View(),
+	}
+
+	t.Run("no_bits_strips", func(t *testing.T) {
+		n := deliver(&watchSession{}, profiles)
+		if len(n.UserProfiles) != 0 {
+			t.Errorf("UserProfiles = %v; want empty", n.UserProfiles)
+		}
+	})
+	t.Run("peer_changes_delivers", func(t *testing.T) {
+		n := deliver(&watchSession{mask: ipn.NotifyPeerChanges}, profiles)
+		if got, want := len(n.UserProfiles), 1; got != want {
+			t.Fatalf("UserProfiles len = %d; want %d", got, want)
+		}
+		if n.UserProfiles[7].LoginName() != "alice@example.com" {
+			t.Errorf("got %+v; want alice", n.UserProfiles)
+		}
+	})
+	t.Run("peer_patches_delivers", func(t *testing.T) {
+		n := deliver(&watchSession{mask: ipn.NotifyPeerPatches}, profiles)
+		if got, want := len(n.UserProfiles), 1; got != want {
+			t.Fatalf("UserProfiles len = %d; want %d", got, want)
+		}
+	})
+
+	// The remaining cases share a single session so the dedup state on
+	// [watchSession.lastSentUserProfile] persists across deliveries.
+	sess := &watchSession{mask: ipn.NotifyPeerChanges}
+
+	t.Run("first_send", func(t *testing.T) {
+		n := deliver(sess, profiles)
+		if got, want := len(n.UserProfiles), 1; got != want {
+			t.Fatalf("UserProfiles len = %d; want %d", got, want)
+		}
+	})
+	t.Run("dedup_repeat_same_map", func(t *testing.T) {
+		// Resending the exact same map should deliver nothing.
+		n := deliver(sess, profiles)
+		if len(n.UserProfiles) != 0 {
+			t.Errorf("got UserProfiles=%v on repeat; want empty (deduped)", n.UserProfiles)
+		}
+	})
+	t.Run("per_user_dedup", func(t *testing.T) {
+		// A Notify with two profiles where only one changed should
+		// deliver only the changed one.
+		mixed := map[tailcfg.UserID]tailcfg.UserProfileView{
+			7: (&tailcfg.UserProfile{ID: 7, LoginName: "alice@example.com", DisplayName: "Alice"}).View(),     // unchanged
+			8: (&tailcfg.UserProfile{ID: 8, LoginName: "bob@example.com", DisplayName: "Bob the New"}).View(), // new
+		}
+		n := deliver(sess, mixed)
+		if got, want := len(n.UserProfiles), 1; got != want {
+			t.Fatalf("UserProfiles len = %d; want %d (only the new user)", got, want)
+		}
+		if _, ok := n.UserProfiles[7]; ok {
+			t.Errorf("UserProfiles still includes user 7 (should have been deduped)")
+		}
+		if got := n.UserProfiles[8].LoginName(); got != "bob@example.com" {
+			t.Errorf("UserProfiles[8].LoginName = %q; want bob", got)
+		}
+	})
+	t.Run("changed_user_delivers", func(t *testing.T) {
+		// Updating an existing UserID re-sends just that one.
+		updated := map[tailcfg.UserID]tailcfg.UserProfileView{
+			7: (&tailcfg.UserProfile{ID: 7, LoginName: "alice@example.com", DisplayName: "Alice 2.0"}).View(),
+		}
+		n := deliver(sess, updated)
+		if n.UserProfiles[7].DisplayName() != "Alice 2.0" {
+			t.Errorf("got %+v; want updated alice", n.UserProfiles)
+		}
+	})
 }
 
 // tests LocalBackend.updateNetmapDeltaLocked

@@ -3229,7 +3229,7 @@ func (c *Conn) UpsertPeer(n tailcfg.NodeView) {
 		return
 	}
 	flags := c.debugFlagsLocked()
-	c.peersByID[n.ID()] = n
+	mak.Set(&c.peersByID, n.ID(), n)
 	c.upsertPeerLocked(n, flags, debugRingBufferSize(len(c.peersByID)))
 
 	var relayUpsert candidatePeerRelay

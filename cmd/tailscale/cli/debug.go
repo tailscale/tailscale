@@ -268,8 +268,7 @@ func debugCmd() *ffcli.Command {
 				ShortHelp:  "Subscribe to IPN message bus",
 				FlagSet: (func() *flag.FlagSet {
 					fs := newFlagSet("watch-ipn")
-					fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
-					fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include initial status")
+					fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include the initial backend State and Prefs in the first message")
 					fs.BoolVar(&watchIPNArgs.rateLimit, "rate-limit", true, "rate limit messages")
 					fs.IntVar(&watchIPNArgs.count, "count", 0, "exit after printing this many statuses, or 0 to keep going forever")
 					return fs
@@ -632,16 +631,15 @@ func runPrefs(ctx context.Context, args []string) error {
 }
 
 var watchIPNArgs struct {
-	netmap    bool
 	initial   bool
 	rateLimit bool
 	count     int
 }
 
 func runWatchIPN(ctx context.Context, args []string) error {
-	var mask ipn.NotifyWatchOpt
+	mask := ipn.NotifyPeerChanges | ipn.NotifyPeerPatches
 	if watchIPNArgs.initial {
-		mask = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap
+		mask |= ipn.NotifyInitialState | ipn.NotifyInitialPrefs
 	}
 	if watchIPNArgs.rateLimit {
 		mask |= ipn.NotifyRateLimit
@@ -656,9 +654,6 @@ func runWatchIPN(ctx context.Context, args []string) error {
 		n, err := watcher.Next()
 		if err != nil {
 			return err
-		}
-		if !watchIPNArgs.netmap {
-			n.NetMap = nil
 		}
 		j, _ := json.MarshalIndent(n, "", "\t")
 		fmt.Printf("%s\n", j)
