@@ -162,6 +162,10 @@ type Server struct {
 	// tkaStorage records the Tailnet Lock state, if any.
 	// If nil, Tailnet Lock is not enabled in the Tailnet.
 	tkaStorage tka.CompactableChonk
+
+	// onMapRequest, if non-nil, is called at the start of each map poll request.
+	// It can be used in tests to panic or fail if a node contacts control unexpectedly.
+	onMapRequest func(nodeKey key.NodePublic)
 }
 
 // BaseURL returns the server's base URL, without trailing slash.
@@ -1169,6 +1173,12 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 		go panic(fmt.Sprintf("bad map request: %v", err))
 	}
 
+	s.mu.Lock()
+	if s.onMapRequest != nil {
+		s.onMapRequest(req.NodeKey)
+	}
+	s.mu.Unlock()
+
 	if s.AltMapStream != nil {
 		// The caller takes over the stream entirely; it must handle
 		// keeping the HTTP response alive until ctx is done.
@@ -1618,6 +1628,15 @@ func (s *Server) encode(compress bool, v any) (b []byte, err error) {
 		b = zstdframe.AppendEncode(nil, b, zstdframe.FastestCompression)
 	}
 	return b, nil
+}
+
+// SetOnMapRequest sets callback used for testing when a new mapRequest happens.
+// Pass nil to remove the callback.
+func (s *Server) SetOnMapRequest(f func(key.NodePublic)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.onMapRequest = f
 }
 
 // filterInvalidIPv6Endpoints removes invalid IPv6 endpoints from eps,

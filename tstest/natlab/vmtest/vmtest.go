@@ -586,6 +586,31 @@ func (e *Env) Start() {
 				if st2.BackendState != "Running" {
 					return fmt.Errorf("[%s] state = %q, want Running", n.name, st2.BackendState)
 				}
+
+				// Apply any capabilities for the node to the map.
+				// SetNodeCapMap pushes an updated map response immediately, then wait
+				// until the node reports the capability in its status.
+				if cm := n.vnetNode.WantCapMap(); cm != nil {
+					e.server.ControlServer().SetNodeCapMap(st2.Self.PublicKey, cm)
+					if err := tstest.WaitFor(15*time.Second, func() error {
+						st, err := n.agent.Status(ctx)
+						if err != nil {
+							return err
+						}
+						if st.Self == nil {
+							return fmt.Errorf("self is nil")
+						}
+						for c := range cm {
+							if !st.Self.HasCap(c) {
+								return fmt.Errorf("cap %v not yet received", c)
+							}
+						}
+						return nil
+					}); err != nil {
+						return fmt.Errorf("[%s] waiting for capabilities: %w", n.name, err)
+					}
+				}
+
 				ips := fmt.Sprintf("%v", st2.Self.TailscaleIPs)
 				e.setNodeTailscale(n.name, "Running "+ips)
 				t.Logf("[%s] up with %v", n.name, st2.Self.TailscaleIPs)

@@ -11,12 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/client/local"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/tstest/natlab/vmtest"
 	"tailscale.com/tstest/natlab/vnet"
 	"tailscale.com/types/key"
+	"tailscale.com/types/netmap"
 )
 
 func TestMacOSAndLinuxCanPing(t *testing.T) {
@@ -904,4 +906,75 @@ func TestMullvadExitNode(t *testing.T) {
 	// directions.
 	env.SetExitNodeIP(client, netip.Addr{})
 	check(checkOff2Step, "exit-off (again)", clientWAN)
+}
+
+// TestCachedNetmapAfterRestart verifies that two nodes with netmap
+// caching enabled (NodeAttrCacheNetworkMaps) can re-establish a direct
+// WireGuard tunnel after both are restarted while the control server is
+// unreachable. After restart the nodes must use only their on-disk cached
+// netmaps to re-connect.
+func TestCachedNetmapAfterRestart(t *testing.T) {
+	env := vmtest.New(t)
+
+	aNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.EasyNAT)
+	bNet := env.AddNetwork("2.0.0.1", "192.168.2.1/24", vnet.EasyNAT)
+
+	aNet.SetPostConnectControlBlackhole(true)
+	bNet.SetPostConnectControlBlackhole(true)
+
+	a := env.AddNode("a", aNet,
+		vmtest.OS(vmtest.Gokrazy),
+		tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
+	b := env.AddNode("b", bNet,
+		vmtest.OS(vmtest.Gokrazy),
+		tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
+
+	connectStep := env.AddStep("Establish initial TSMP tunnel")
+	cutControlStep := env.AddStep("Cut control server access")
+	restartStep := env.AddStep("Restart tailscaled on both nodes")
+	netmapCheckStep := env.AddStep("Check netmap loaded is cached")
+	pingStep := env.AddStep("Ping a → b TSMP (cached netmap, no control)")
+
+	env.Start()
+
+	connectStep.Begin()
+	if err := env.Ping(a, b, tailcfg.PingTSMP, 30*time.Second); err != nil {
+		connectStep.End(err)
+		t.Fatal(err)
+	}
+	connectStep.End(nil)
+
+	cutControlStep.Begin()
+	aNet.PostConnectedToControl()
+	bNet.PostConnectedToControl()
+	env.ControlServer().SetOnMapRequest(func(nk key.NodePublic) {
+		panic(fmt.Sprintf("got connection from %v", nk))
+	})
+	cutControlStep.End(nil)
+
+	restartStep.Begin()
+	env.RestartTailscaled(a)
+	env.RestartTailscaled(b)
+	restartStep.End(nil)
+
+	netmapCheckStep.Begin()
+	for _, node := range []*vmtest.Node{a, b} {
+		nm, err := local.GetDebugResultJSON[netmap.NetworkMap](t.Context(), node.Agent().Client, "current-netmap")
+		if err != nil {
+			netmapCheckStep.End(fmt.Errorf("[%s] got err fetching netmap %q", node.Name(), err))
+			t.Fatalf("[%s] got err fetching netmap %q", node.Name(), err)
+		}
+		if !nm.Cached {
+			netmapCheckStep.End(fmt.Errorf("[%s] expected netmap.Cached = true, got: %t", node.Name(), nm.Cached))
+			t.Fatalf("[%s] expected netmap.Cached = true, got: %t", node.Name(), nm.Cached)
+		}
+	}
+	netmapCheckStep.End(nil)
+
+	pingStep.Begin()
+	if err := env.Ping(a, b, tailcfg.PingTSMP, 30*time.Second); err != nil {
+		pingStep.End(err)
+		t.Fatal(err)
+	}
+	pingStep.End(nil)
 }
