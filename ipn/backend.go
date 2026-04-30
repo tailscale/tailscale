@@ -118,6 +118,17 @@ type Notify struct {
 	Prefs         *PrefsView         // if non-nil && Valid, the new or current preferences
 	NetMap        *netmap.NetworkMap // if non-nil, the new or current netmap
 
+	// SelfChange, if non-nil, indicates that this node's own [tailcfg.Node]
+	// has changed: addresses, name, key expiry, capabilities, etc. It carries
+	// the new self node so reactive consumers (containerboot, kube agents,
+	// sniproxy, etc.) can read the current self state without watching the
+	// full netmap.
+	//
+	// Consumers that need additional state (peers, DNS config, packet
+	// filter) should react to SelfChange by fetching the relevant bits on
+	// demand via [LocalClient].
+	SelfChange *tailcfg.Node `json:",omitzero"`
+
 	// PeerChanges, if non-nil, is a list of [tailcfg.PeerChange] that have occurred since the last
 	// full netmap update. This is sent in lieu of a full NetMap when [NotifyPeerChanges] is set in
 	// the session's mask and a netmap update is derived from an incremental MapResponse.
@@ -195,6 +206,9 @@ func (n Notify) String() string {
 	}
 	if n.NetMap != nil {
 		sb.WriteString("NetMap{...} ")
+	}
+	if n.SelfChange != nil {
+		fmt.Fprintf(&sb, "SelfChange(%v) ", n.SelfChange.StableID)
 	}
 	if n.PeerChanges != nil {
 		fmt.Fprintf(&sb, "PeerChanges(%d) ", len(n.PeerChanges))

@@ -1897,7 +1897,15 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		// Update the DERP map in the health package, which uses it for health notifications
 		b.health.SetDERPMap(st.NetMap.DERPMap)
 
-		b.sendLocked(ipn.Notify{NetMap: st.NetMap})
+		// Notify watchers that the self node may have changed. Reactive
+		// consumers (containerboot, kube agents, sniproxy, etc.) listen on
+		// this signal and re-fetch peers/DNS via the LocalAPI if they need
+		// more than self info.
+		var selfChange *tailcfg.Node
+		if st.NetMap.SelfNode.Valid() {
+			selfChange = st.NetMap.SelfNode.AsStruct()
+		}
+		b.sendLocked(ipn.Notify{NetMap: st.NetMap, SelfChange: selfChange})
 
 		// The error here is unimportant as is the result.  This will recalculate the suggested exit node
 		// cache the value and push any changes to the IPN bus.
