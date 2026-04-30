@@ -779,11 +779,43 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			wantErr: `--exit-node-allow-lan-access can only be used with --exit-node`,
 		},
 		{
-			name: "error_tag_prefix",
+			name: "error_tag_bad_prefix",
 			args: upArgsT{
-				advertiseTags: "foo",
+				advertiseTags: "notatag:foo",
 			},
-			wantErr: `tag: "foo": tags must start with 'tag:'`,
+			wantErr: `tag: "notatag:foo": tags must start with 'tag:'`,
+		},
+		{
+			name: "tag_auto_prefix",
+			args: upArgsFromOSArgs("linux", "--advertise-tags=foo,bar"),
+			want: &ipn.Prefs{
+				ControlURL:          ipn.DefaultControlURL,
+				WantRunning:         true,
+				CorpDNS:             true,
+				AdvertiseTags:       []string{"tag:foo", "tag:bar"},
+				NoSNAT:              false,
+				NoStatefulFiltering: "true",
+				NetfilterMode:       preftype.NetfilterOn,
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+				},
+			},
+		},
+		{
+			name: "tag_mixed_prefix",
+			args: upArgsFromOSArgs("linux", "--advertise-tags=tag:foo,bar"),
+			want: &ipn.Prefs{
+				ControlURL:          ipn.DefaultControlURL,
+				WantRunning:         true,
+				CorpDNS:             true,
+				AdvertiseTags:       []string{"tag:foo", "tag:bar"},
+				NoSNAT:              false,
+				NoStatefulFiltering: "true",
+				NetfilterMode:       preftype.NetfilterOn,
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+				},
+			},
 		},
 		{
 			name: "error_long_hostname",
