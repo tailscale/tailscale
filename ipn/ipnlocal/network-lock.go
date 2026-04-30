@@ -96,10 +96,6 @@ func (b *LocalBackend) initTKALocked() error {
 			return fmt.Errorf("initializing tka: %v", err)
 		}
 
-		if err := authority.Compact(storage, tka.CompactionDefaults); err != nil {
-			b.logf("tka compaction failed: %v", err)
-		}
-
 		b.tka = &tkaState{
 			profile:   cp.ID(),
 			authority: authority,
