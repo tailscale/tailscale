@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/tstest"
@@ -284,11 +285,11 @@ func configFromCM(t *testing.T, cm *corev1.ConfigMap, svcName string) *egressser
 	if !ok {
 		return nil
 	}
-	cfgs := &egressservices.Configs{}
-	if err := json.Unmarshal(cfgBs, cfgs); err != nil {
+	cfgs := egressservices.Configs{}
+	if err := json.Unmarshal(cfgBs, &cfgs); err != nil {
 		t.Fatalf("error unmarshalling config: %v", err)
 	}
-	cfg, ok := (*cfgs)[svcName]
+	cfg, ok := cfgs[svcName]
 	if ok {
 		return &cfg
 	}

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/egressservices"
@@ -194,7 +195,7 @@ func (ep *egressProxy) addrsHaveChanged(n ipn.Notify) bool {
 // syncEgressConfigs adds and deletes firewall rules to match the desired
 // configuration. It uses the provided status to determine what is currently
 // applied and updates the status after a successful sync.
-func (ep *egressProxy) syncEgressConfigs(cfgs *egressservices.Configs, status *egressservices.Status, n ipn.Notify) (*egressservices.Status, error) {
+func (ep *egressProxy) syncEgressConfigs(cfgs egressservices.Configs, status *egressservices.Status, n ipn.Notify) (*egressservices.Status, error) {
 	if !(wantsServicesConfigured(cfgs) || hasServicesConfigured(status)) {
 		return nil, nil
 	}
@@ -212,7 +213,7 @@ func (ep *egressProxy) syncEgressConfigs(cfgs *egressservices.Configs, status *e
 	// Add new services, update rules for any that have changed.
 	rulesPerSvcToAdd := make(map[string][]rule, 0)
 	rulesPerSvcToDelete := make(map[string][]rule, 0)
-	for svcName, cfg := range *cfgs {
+	for svcName, cfg := range cfgs {
 		tailnetTargetIPs, err := ep.tailnetTargetIPsForSvc(cfg, n)
 		if err != nil {
 			return nil, fmt.Errorf("error determining tailnet target IPs: %w", err)
@@ -352,7 +353,7 @@ func updatesForCfg(svcName string, cfg egressservices.Config, status *egressserv
 
 // deleteUnneccessaryServices ensure that any services found on status, but not
 // present in config are deleted.
-func (ep *egressProxy) deleteUnnecessaryServices(cfgs *egressservices.Configs, status *egressservices.Status) error {
+func (ep *egressProxy) deleteUnnecessaryServices(cfgs egressservices.Configs, status *egressservices.Status) error {
 	if !hasServicesConfigured(status) {
 		return nil
 	}
@@ -367,7 +368,7 @@ func (ep *egressProxy) deleteUnnecessaryServices(cfgs *egressservices.Configs, s
 	}
 
 	for svcName, svc := range status.Services {
-		if _, ok := (*cfgs)[svcName]; !ok {
+		if _, ok := cfgs[svcName]; !ok {
 			log.Printf("service %s is no longer required, deleting", svcName)
 			if err := ensureServiceDeleted(svcName, svc, ep.nfr); err != nil {
 				return fmt.Errorf("error deleting service %s: %w", svcName, err)
@@ -379,7 +380,7 @@ func (ep *egressProxy) deleteUnnecessaryServices(cfgs *egressservices.Configs, s
 }
 
 // getConfigs gets the mounted egress service configuration.
-func (ep *egressProxy) getConfigs() (*egressservices.Configs, error) {
+func (ep *egressProxy) getConfigs() (egressservices.Configs, error) {
 	svcsCfg := filepath.Join(ep.cfgPath, egressservices.KeyEgressServices)
 	j, err := os.ReadFile(svcsCfg)
 	if os.IsNotExist(err) {
@@ -391,7 +392,7 @@ func (ep *egressProxy) getConfigs() (*egressservices.Configs, error) {
 	if len(j) == 0 || string(j) == "" {
 		return nil, nil
 	}
-	cfg := &egressservices.Configs{}
+	cfg := egressservices.Configs{}
 	if err := json.Unmarshal(j, &cfg); err != nil {
 		return nil, err
 	}
@@ -602,8 +603,8 @@ type rule struct {
 	protocol      string
 }
 
-func wantsServicesConfigured(cfgs *egressservices.Configs) bool {
-	return cfgs != nil && len(*cfgs) != 0
+func wantsServicesConfigured(cfgs egressservices.Configs) bool {
+	return cfgs != nil && len(cfgs) != 0
 }
 
 func hasServicesConfigured(status *egressservices.Status) bool {
@@ -657,13 +658,13 @@ func (ep *egressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // would normally be this Pod. When this Pod is being deleted, the operator should have removed it from the Service
 // backends and eventually kube proxy routing rules should be updated to no longer route traffic for the Service to this
 // Pod.
-func (ep *egressProxy) waitTillSafeToShutdown(ctx context.Context, cfgs *egressservices.Configs, hp int) {
-	if cfgs == nil || len(*cfgs) == 0 { // avoid sleeping if no services are configured
+func (ep *egressProxy) waitTillSafeToShutdown(ctx context.Context, cfgs egressservices.Configs, hp int) {
+	if cfgs == nil || len(cfgs) == 0 { // avoid sleeping if no services are configured
 		return
 	}
 	log.Printf("Ensuring that cluster traffic for egress targets is no longer routed via this Pod...")
 	var wg sync.WaitGroup
-	for s, cfg := range *cfgs {
+	for s, cfg := range cfgs {
 		hep := cfg.HealthCheckEndpoint
 		if hep == "" {
 			log.Printf("Tailnet target %q does not have a cluster healthcheck specified, unable to verify if cluster traffic for the target is still routed via this Pod", s)
