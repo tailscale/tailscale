@@ -234,6 +234,19 @@ var mapResponseTimeoutWarnable = condRegister(func() *Warnable {
 	}
 })
 
+// NodeNotFoundWarnable is a Warnable that warns the user that the control plane
+// has reported this node as not present in the tailnet.
+var NodeNotFoundWarnable = condRegister(func() *Warnable {
+	return &Warnable{
+		Code:                tsconst.HealthWarnableNodeNotFound,
+		Title:               "Node not found",
+		Severity:            SeverityHigh,
+		DependsOn:           []*Warnable{NetworkStatusWarnable, IPNStateWarnable},
+		Text:                StaticMessage("Tailscale reports this node is not present in the tailnet. It will not reconnect until re-registered."),
+		ImpactsConnectivity: true,
+	}
+})
+
 // tlsConnectionFailedWarnable is a Warnable that warns the user that Tailscale could not establish an encrypted connection with a server.
 var tlsConnectionFailedWarnable = condRegister(func() *Warnable {
 	return &Warnable{

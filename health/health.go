@@ -129,6 +129,7 @@ type Tracker struct {
 	lastNotifiedControlMessages map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage // latest control messages processed, kept for change detection
 	controlMessages             map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage // latest control messages received
 	lastLoginErr                error
+	mapRoutineNodeNotFound      bool             // control returned 404 on /machine/map
 	localLogConfigErr           error
 	tlsConnectionErrors         map[string]error // map[ServerName]error
 	metricHealthMessage         any              // nil or *metrics.MultiLabelMap[metricHealthMessageLabel]
@@ -932,6 +933,22 @@ func (t *Tracker) SetAuthRoutineInError(err error) {
 	t.selfCheckLocked()
 }
 
+// SetMapRoutineNodeNotFound records whether the control plane has reported
+// (via HTTP 404 on /machine/map) that this node no longer exists in the
+// tailnet.
+func (t *Tracker) SetMapRoutineNodeNotFound(notFound bool) {
+	if t.nil() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.mapRoutineNodeNotFound == notFound {
+		return
+	}
+	t.mapRoutineNodeNotFound = notFound
+	t.selfCheckLocked()
+}
+
 // SetLatestVersion records the latest version of the Tailscale client.
 // v can be nil if unknown.
 func (t *Tracker) SetLatestVersion(v *tailcfg.ClientVersion) {
@@ -1178,6 +1195,13 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 		return
 	} else {
 		t.setHealthyLocked(LoginStateWarnable)
+	}
+
+	if t.mapRoutineNodeNotFound {
+		t.setUnhealthyLocked(NodeNotFoundWarnable, nil)
+		return
+	} else {
+		t.setHealthyLocked(NodeNotFoundWarnable)
 	}
 
 	if !t.inMapPoll && (t.lastMapPollEndedAt.IsZero() || now.Sub(t.lastMapPollEndedAt) > 10*time.Second) {
