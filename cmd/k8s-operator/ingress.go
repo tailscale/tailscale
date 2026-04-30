@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -364,7 +365,7 @@ func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl clien
 			proto = "https+insecure://"
 		}
 		mak.Set(&handlers, path, &ipn.HTTPHandler{
-			Proxy: proto + svc.Spec.ClusterIP + ":" + fmt.Sprint(port) + path,
+			Proxy: proto + ipPortPath(svc.Spec.ClusterIP, port, path),
 		})
 	}
 	addIngressBackend(ing.Spec.DefaultBackend, "/")
@@ -407,4 +408,14 @@ func hostnameForIngress(ing *networkingv1.Ingress) string {
 		return hostname
 	}
 	return ing.Namespace + "-" + ing.Name + "-ingress"
+}
+
+// ipPortPath formats an IP address with port and path for use in a URL.
+// IPv6 addresses are wrapped in brackets as required by RFC 3986.
+func ipPortPath(ip string, port int32, path string) string {
+	host := ip
+	if addr, err := netip.ParseAddr(ip); err == nil && addr.Is6() {
+		host = "[" + ip + "]"
+	}
+	return host + ":" + fmt.Sprint(port) + path
 }
