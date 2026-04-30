@@ -282,6 +282,15 @@ func (v PrefsView) InternalExitNodePrior() tailcfg.StableNodeID { return v.ж.In
 // routed directly or via the exit node.
 func (v PrefsView) ExitNodeAllowLANAccess() bool { return v.ж.ExitNodeAllowLANAccess }
 
+// ExitNodeAllowWANPorts specifies proto:port pairs for which incoming
+// WAN connections should bypass exit node routing. When set, reply
+// traffic for connections arriving on these ports is routed directly
+// via the physical interface instead of through the exit node tunnel.
+// Linux-only.
+func (v PrefsView) ExitNodeAllowWANPorts() views.Slice[tailcfg.ProtoPortRange] {
+	return views.SliceOf(v.ж.ExitNodeAllowWANPorts)
+}
+
 // CorpDNS specifies whether to install the Tailscale network's
 // DNS configuration, if it exists.
 func (v PrefsView) CorpDNS() bool { return v.ж.CorpDNS }
@@ -480,6 +489,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	AutoExitNode               ExitNodeExpression
 	InternalExitNodePrior      tailcfg.StableNodeID
 	ExitNodeAllowLANAccess     bool
+	ExitNodeAllowWANPorts      []tailcfg.ProtoPortRange
 	CorpDNS                    bool
 	RunSSH                     bool
 	RunWebClient               bool

@@ -128,6 +128,13 @@ type Prefs struct {
 	// routed directly or via the exit node.
 	ExitNodeAllowLANAccess bool
 
+	// ExitNodeAllowWANPorts specifies proto:port pairs for which incoming
+	// WAN connections should bypass exit node routing. When set, reply
+	// traffic for connections arriving on these ports is routed directly
+	// via the physical interface instead of through the exit node tunnel.
+	// Linux-only.
+	ExitNodeAllowWANPorts []tailcfg.ProtoPortRange
+
 	// CorpDNS specifies whether to install the Tailscale network's
 	// DNS configuration, if it exists.
 	CorpDNS bool
@@ -360,6 +367,7 @@ type MaskedPrefs struct {
 	AutoExitNodeSet               bool                `json:",omitempty"`
 	InternalExitNodePriorSet      bool                `json:",omitempty"` // Internal; can't be set by LocalAPI clients
 	ExitNodeAllowLANAccessSet     bool                `json:",omitempty"`
+	ExitNodeAllowWANPortsSet      bool                `json:",omitzero"`
 	CorpDNSSet                    bool                `json:",omitempty"`
 	RunSSHSet                     bool                `json:",omitempty"`
 	RunWebClientSet               bool                `json:",omitempty"`
@@ -575,6 +583,9 @@ func (p *Prefs) pretty(goos string) string {
 		} else if !p.ExitNodeID.IsZero() {
 			fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeID, p.ExitNodeAllowLANAccess)
 		}
+		if len(p.ExitNodeAllowWANPorts) > 0 {
+			fmt.Fprintf(&sb, "wanPorts=%v ", p.ExitNodeAllowWANPorts)
+		}
 		if p.AutoExitNode.IsSet() {
 			fmt.Fprintf(&sb, "auto=%v ", p.AutoExitNode)
 		}
@@ -667,6 +678,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.AutoExitNode == p2.AutoExitNode &&
 		p.InternalExitNodePrior == p2.InternalExitNodePrior &&
 		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
+		slices.Equal(p.ExitNodeAllowWANPorts, p2.ExitNodeAllowWANPorts) &&
 		p.CorpDNS == p2.CorpDNS &&
 		p.RunSSH == p2.RunSSH &&
 		p.Sync.Normalized() == p2.Sync.Normalized() &&

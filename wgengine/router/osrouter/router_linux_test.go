@@ -25,6 +25,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsconst"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
@@ -509,6 +510,46 @@ v6/nat/POSTROUTING -j ts-postrouting
 v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 `,
 		},
+		{
+			name: "wan-bypass-single-port",
+			in: &Config{
+				LocalAddrs:            mustCIDRs("100.101.102.104/10"),
+				Routes:                mustCIDRs("0.0.0.0/0", "::/0", "100.100.100.100/32"),
+				ExitNodeAllowWANPorts: []tailcfg.ProtoPortRange{{Proto: 6, Ports: tailcfg.PortRange{First: 443, Last: 443}}},
+				NetfilterMode:         netfilterOn,
+			},
+			want: `
+up
+ip addr add 100.101.102.104/10 dev tailscale0
+ip route add 0.0.0.0/0 dev tailscale0 table 52
+ip route add 100.100.100.100/32 dev tailscale0 table 52
+ip route add ::/0 dev tailscale0 table 52` + basic +
+				`v4/filter/FORWARD -j ts-forward
+v4/filter/INPUT -j ts-input
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v4/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-forward -o tailscale0 -j ACCEPT
+v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
+v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v4/mangle/OUTPUT -p tcp --sport 443 -m connmark --mark 0x80000/0xff0000 -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment ts-wan-bypass -j MARK --set-mark 0x80000/0xff0000
+v4/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
+v4/mangle/PREROUTING ! -i tailscale0 -p tcp --dport 443 -m comment --comment ts-wan-bypass -j CONNMARK --set-mark 0x80000/0xff0000
+v4/nat/POSTROUTING -j ts-postrouting
+v6/filter/FORWARD -j ts-forward
+v6/filter/INPUT -j ts-input
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/mangle/OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000
+v6/mangle/OUTPUT -p tcp --sport 443 -m connmark --mark 0x80000/0xff0000 -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment ts-wan-bypass -j MARK --set-mark 0x80000/0xff0000
+v6/mangle/PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000
+v6/mangle/PREROUTING ! -i tailscale0 -p tcp --dport 443 -m comment --comment ts-wan-bypass -j CONNMARK --set-mark 0x80000/0xff0000
+v6/nat/POSTROUTING -j ts-postrouting
+`,
+		},
 	}
 
 	bus := eventbus.New()
@@ -949,6 +990,59 @@ func (n *fakeIPTablesRunner) DelConnmarkSaveRule() error {
 	outputRule := "-m conntrack --ctstate NEW -m mark ! --mark 0x0/0xff0000 -j CONNMARK --save-mark --nfmask 0xff0000 --ctmask 0xff0000"
 	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
 		deleteRule(n, ipt, "mangle/OUTPUT", outputRule) // ignore errors
+	}
+	return nil
+}
+
+func (n *fakeIPTablesRunner) AddWANBypassRule(tunname string, ports []tailcfg.ProtoPortRange) error {
+	// Clear existing rules first.
+	n.DelWANBypassRule(tunname)
+
+	for _, ppr := range ports {
+		protos := []int{ppr.Proto}
+		if ppr.Proto == 0 {
+			protos = []int{6, 17}
+		}
+		pr := fmt.Sprintf("%d", ppr.Ports.First)
+		if ppr.Ports.First != ppr.Ports.Last {
+			pr = fmt.Sprintf("%d:%d", ppr.Ports.First, ppr.Ports.Last)
+		}
+		for _, proto := range protos {
+			pn := "tcp"
+			if proto == 17 {
+				pn = "udp"
+			}
+			prerouteRule := fmt.Sprintf("! -i %s -p %s --dport %s -m comment --comment ts-wan-bypass -j CONNMARK --set-mark 0x80000/0xff0000", tunname, pn, pr)
+			for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
+				if err := appendRule(n, ipt, "mangle/PREROUTING", prerouteRule); err != nil {
+					return err
+				}
+			}
+			outputRule := fmt.Sprintf("-p %s --sport %s -m connmark --mark 0x80000/0xff0000 -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment ts-wan-bypass -j MARK --set-mark 0x80000/0xff0000", pn, pr)
+			for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
+				if err := appendRule(n, ipt, "mangle/OUTPUT", outputRule); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (n *fakeIPTablesRunner) DelWANBypassRule(tunname string) error {
+	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
+		for _, chain := range []string{"mangle/PREROUTING", "mangle/OUTPUT"} {
+			rules := ipt[chain]
+			var kept []string
+			for _, rule := range rules {
+				if !strings.Contains(rule, "ts-wan-bypass") {
+					kept = append(kept, rule)
+				}
+			}
+			if len(kept) != len(rules) {
+				ipt[chain] = kept
+			}
+		}
 	}
 	return nil
 }

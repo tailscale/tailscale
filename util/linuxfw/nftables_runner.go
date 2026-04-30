@@ -19,6 +19,7 @@ import (
 	"github.com/google/nftables/expr"
 	"golang.org/x/sys/unix"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 )
 
@@ -533,6 +534,19 @@ type NetfilterRunner interface {
 
 	// DelConnmarkSaveRule removes conntrack marking rules added by AddConnmarkSaveRule.
 	DelConnmarkSaveRule() error
+
+	// AddWANBypassRule adds port-specific conntrack rules that allow incoming
+	// WAN connections on the specified proto:port pairs to bypass exit node
+	// routing. In mangle/PREROUTING, all packets matching the ports on
+	// non-tailscale interfaces get their conntrack mark set to the bypass
+	// fwmark (matching all connection states, not just NEW, so that existing
+	// connections get tagged when rules are installed after an exit node is
+	// activated). In mangle/OUTPUT, ESTABLISHED/RELATED replies to those
+	// connections get their packet mark set to the bypass fwmark.
+	AddWANBypassRule(tunname string, ports []tailcfg.ProtoPortRange) error
+
+	// DelWANBypassRule removes all rules added by AddWANBypassRule.
+	DelWANBypassRule(tunname string) error
 
 	// HasIPV6 reports true if the system supports IPv6.
 	HasIPV6() bool
@@ -1917,9 +1931,7 @@ func (n *nftablesRunner) DelSNATRule() error {
 }
 
 func nativeUint32(v uint32) []byte {
-	b := make([]byte, 4)
-	binary.NativeEndian.PutUint32(b, v)
-	return b
+	return nativeEndianUint32(v)
 }
 
 func makeStatefulRuleExprs(tunname string) []expr.Any {
@@ -2211,6 +2223,267 @@ func makeConnmarkSaveExprs() []expr.Any {
 			Register:       1,
 		},
 	}
+}
+
+// makeWANBypassPreroutingExprs creates nftables expressions for the PREROUTING
+// rule that tags connections on non-tailscale interfaces for a specific
+// proto:port with the bypass conntrack mark. Matches all connection states
+// (not just NEW) so existing connections get tagged when rules are installed.
+// Implements: iifname != <tunname> meta l4proto <proto> th dport <port> ct mark set 0x80000
+func makeWANBypassPreroutingExprs(tunname string, proto uint8, portFirst, portLast uint16) []expr.Any {
+	exprs := []expr.Any{
+		// Match: iifname != tunname
+		&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+		&expr.Cmp{
+			Op:       expr.CmpOpNeq,
+			Register: 1,
+			Data:     []byte(tunname + "\x00"),
+		},
+		// Match: meta l4proto
+		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     []byte{proto},
+		},
+		// Match: th dport (transport header offset 2, length 2)
+		&expr.Payload{
+			DestRegister: 1,
+			Base:         expr.PayloadBaseTransportHeader,
+			Offset:       2,
+			Len:          2,
+		},
+	}
+	if portFirst == portLast {
+		exprs = append(exprs, &expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     binary.BigEndian.AppendUint16(nil, portFirst),
+		})
+	} else {
+		exprs = append(exprs,
+			&expr.Cmp{
+				Op:       expr.CmpOpGte,
+				Register: 1,
+				Data:     binary.BigEndian.AppendUint16(nil, portFirst),
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpLte,
+				Register: 1,
+				Data:     binary.BigEndian.AppendUint16(nil, portLast),
+			},
+		)
+	}
+	exprs = append(exprs,
+		// Action: ct mark set bypass mark
+		&expr.Immediate{Register: 1, Data: getTailscaleBypassMark()},
+		&expr.Ct{
+			Key:            expr.CtKeyMARK,
+			SourceRegister: true,
+			Register:       1,
+		},
+	)
+	return exprs
+}
+
+// makeWANBypassOutputExprs creates nftables expressions for the OUTPUT rule
+// that sets the bypass fwmark on replies to tagged connections for a specific
+// proto:port.
+// Implements: meta l4proto <proto> th sport <port> ct mark & 0xff0000 == 0x80000 ct state established,related meta mark set 0x80000
+func makeWANBypassOutputExprs(proto uint8, portFirst, portLast uint16) []expr.Any {
+	exprs := []expr.Any{
+		// Match: meta l4proto
+		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     []byte{proto},
+		},
+		// Match: th sport (transport header offset 0, length 2)
+		&expr.Payload{
+			DestRegister: 1,
+			Base:         expr.PayloadBaseTransportHeader,
+			Offset:       0,
+			Len:          2,
+		},
+	}
+	if portFirst == portLast {
+		exprs = append(exprs, &expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     binary.BigEndian.AppendUint16(nil, portFirst),
+		})
+	} else {
+		exprs = append(exprs,
+			&expr.Cmp{
+				Op:       expr.CmpOpGte,
+				Register: 1,
+				Data:     binary.BigEndian.AppendUint16(nil, portFirst),
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpLte,
+				Register: 1,
+				Data:     binary.BigEndian.AppendUint16(nil, portLast),
+			},
+		)
+	}
+	exprs = append(exprs,
+		// Match: ct mark & 0xff0000 == 0x80000
+		&expr.Ct{Register: 1, Key: expr.CtKeyMARK},
+		&expr.Bitwise{
+			SourceRegister: 1,
+			DestRegister:   1,
+			Len:            4,
+			Mask:           getTailscaleFwmarkMask(),
+			Xor:            []byte{0x00, 0x00, 0x00, 0x00},
+		},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     getTailscaleBypassMark(),
+		},
+		// Match: ct state established,related
+		&expr.Ct{Register: 1, Key: expr.CtKeySTATE},
+		&expr.Bitwise{
+			SourceRegister: 1,
+			DestRegister:   1,
+			Len:            4,
+			Mask:           nativeUint32(expr.CtStateBitESTABLISHED | expr.CtStateBitRELATED),
+			Xor:            nativeUint32(0),
+		},
+		&expr.Cmp{
+			Op:       expr.CmpOpNeq,
+			Register: 1,
+			Data:     []byte{0, 0, 0, 0},
+		},
+		// Action: meta mark set (meta mark & ~fwmarkMask) | bypassMark
+		// Uses Bitwise to preserve non-Tailscale mark bits.
+		&expr.Meta{Key: expr.MetaKeyMARK, Register: 1},
+		&expr.Bitwise{
+			SourceRegister: 1,
+			DestRegister:   1,
+			Len:            4,
+			Mask:           getTailscaleFwmarkMaskNeg(),
+			Xor:            getTailscaleBypassMark(),
+		},
+		&expr.Meta{
+			Key:            expr.MetaKeyMARK,
+			SourceRegister: true,
+			Register:       1,
+		},
+	)
+	return exprs
+}
+
+// wanBypassChainName is the name of the nftables chain used for WAN bypass
+// OUTPUT rules. It uses ChainTypeRoute to trigger re-routing when the packet
+// mark changes.
+const wanBypassChainName = "ts-wan-bypass"
+
+// AddWANBypassRule adds port-specific conntrack rules for WAN bypass.
+func (n *nftablesRunner) AddWANBypassRule(tunname string, ports []tailcfg.ProtoPortRange) error {
+	// Clear existing rules first. DelWANBypassRule is lenient (always
+	// returns nil) to support idempotent cleanup when rules don't exist.
+	n.DelWANBypassRule(tunname)
+
+	conn := n.conn
+	for _, table := range n.getTables() {
+		mangleTable := &nftables.Table{Family: table.Proto, Name: "mangle"}
+		conn.AddTable(mangleTable)
+
+		// Get or create PREROUTING chain.
+		preroutingChain, err := getChainFromTable(conn, mangleTable, "PREROUTING")
+		if err != nil {
+			preroutingChain = conn.AddChain(&nftables.Chain{
+				Name:     "PREROUTING",
+				Table:    mangleTable,
+				Type:     nftables.ChainTypeFilter,
+				Hooknum:  nftables.ChainHookPrerouting,
+				Priority: nftables.ChainPriorityMangle,
+			})
+		}
+
+		// Get or create ts-wan-bypass OUTPUT chain with type route for re-routing.
+		wanBypassPri := nftables.ChainPriorityRef(-149) // mangle (-150) + 1
+		wanBypassChain, err := getChainFromTable(conn, mangleTable, wanBypassChainName)
+		if err != nil {
+			wanBypassChain = conn.AddChain(&nftables.Chain{
+				Name:     wanBypassChainName,
+				Table:    mangleTable,
+				Type:     nftables.ChainTypeRoute,
+				Hooknum:  nftables.ChainHookOutput,
+				Priority: wanBypassPri,
+			})
+		}
+
+		for _, ppr := range ports {
+			// Expand Proto=0 into tcp and udp.
+			protos := []uint8{uint8(ppr.Proto)}
+			if ppr.Proto == 0 {
+				protos = []uint8{6, 17}
+			}
+			for _, proto := range protos {
+				tag := fmt.Sprintf("ts-wan-bypass-%d-%d", proto, ppr.Ports.First)
+
+				// PREROUTING rule
+				conn.AddRule(&nftables.Rule{
+					Table:    mangleTable,
+					Chain:    preroutingChain,
+					Exprs:    makeWANBypassPreroutingExprs(tunname, proto, ppr.Ports.First, ppr.Ports.Last),
+					UserData: []byte("pre-" + tag),
+				})
+
+				// OUTPUT rule in ts-wan-bypass chain
+				conn.AddRule(&nftables.Rule{
+					Table:    mangleTable,
+					Chain:    wanBypassChain,
+					Exprs:    makeWANBypassOutputExprs(proto, ppr.Ports.First, ppr.Ports.Last),
+					UserData: []byte("out-" + tag),
+				})
+			}
+		}
+	}
+
+	if err := conn.Flush(); err != nil {
+		return fmt.Errorf("flush add WAN bypass rules: %w", err)
+	}
+	return nil
+}
+
+// DelWANBypassRule removes all WAN bypass rules.
+func (n *nftablesRunner) DelWANBypassRule(tunname string) error {
+	conn := n.conn
+
+	for _, table := range n.getTables() {
+		mangleTable := &nftables.Table{Family: table.Proto, Name: "mangle"}
+
+		// Remove PREROUTING rules with ts-wan-bypass prefix.
+		preroutingChain, err := getChainFromTable(conn, mangleTable, "PREROUTING")
+		if err == nil {
+			rules, _ := conn.GetRules(preroutingChain.Table, preroutingChain)
+			for _, rule := range rules {
+				if strings.HasPrefix(string(rule.UserData), "pre-ts-wan-bypass-") {
+					conn.DelRule(rule)
+				}
+			}
+		}
+
+		// Remove ts-wan-bypass chain and its rules.
+		wanBypassChain, err := getChainFromTable(conn, mangleTable, wanBypassChainName)
+		if err == nil {
+			rules, _ := conn.GetRules(wanBypassChain.Table, wanBypassChain)
+			for _, rule := range rules {
+				conn.DelRule(rule)
+			}
+			conn.FlushChain(wanBypassChain)
+			conn.DelChain(wanBypassChain)
+		}
+	}
+
+	// Ignore errors during deletion — rules/chains may not exist.
+	// Matches the pattern used by DelConnmarkSaveRule.
+	conn.Flush()
+	return nil
 }
 
 // AddConnmarkSaveRule adds conntrack marking rules to save and restore marks.

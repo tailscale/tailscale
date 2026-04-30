@@ -32,6 +32,7 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(pkey.EnableTailscaleDNS, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(pkey.EnableTailscaleSubnets, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(pkey.ExitNodeAllowLANAccess, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(pkey.ExitNodeAllowWANPorts, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(pkey.ExitNodeID, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(pkey.ExitNodeIP, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(pkey.FlushDNSOnSessionUnlock, setting.DeviceSetting, setting.BooleanValue),

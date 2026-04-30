@@ -16,6 +16,7 @@ var (
 	riskTypes           []string
 	riskLoseSSH         = registerRiskType("lose-ssh")
 	riskMacAppConnector = registerRiskType("mac-app-connector")
+	riskWANBypass       = registerRiskType("wan-bypass")
 	riskAll             = registerRiskType("all")
 )
 
@@ -23,6 +24,10 @@ const riskMacAppConnectorMessage = `
 You are trying to configure an app connector on macOS, which is not officially supported due to system limitations. This may result in performance and reliability issues.
 
 Do not use a macOS app connector for any mission-critical purposes. For the best experience, Linux is the only recommended platform for app connectors.
+`
+
+const riskWANBypassMessage = `
+Reply traffic for incoming connections on the specified ports will bypass the exit node and go directly from this machine's physical interface. This reveals the machine's real IP address to any client that connects to those ports.
 `
 
 func registerRiskType(riskType string) string {

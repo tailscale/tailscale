@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 )
 
@@ -605,6 +607,111 @@ func (i *iptablesRunner) DelConnmarkSaveRule() error {
 				return fmt.Errorf("deleting connmark rule in mangle/OUTPUT: %w", err)
 			}
 			// Rule doesn't exist - this is fine for idempotency
+		}
+	}
+	return nil
+}
+
+const wanBypassComment = "ts-wan-bypass"
+
+// iptPortRange returns the iptables port range string for a PortRange.
+// iptables uses ":" as the range separator (e.g., "80:443"), while
+// tailcfg.PortRange.String() uses "-".
+func iptPortRange(pr tailcfg.PortRange) string {
+	return strings.ReplaceAll(pr.String(), "-", ":")
+}
+
+// AddWANBypassRule adds port-specific conntrack rules that allow incoming WAN
+// connections on the specified proto:port pairs to bypass exit node routing.
+func (i *iptablesRunner) AddWANBypassRule(tunname string, ports []tailcfg.ProtoPortRange) error {
+	// Clear any existing rules first for clean state.
+	if err := i.DelWANBypassRule(tunname); err != nil {
+		return err
+	}
+
+	for _, ppr := range ports {
+		// Expand Proto=0 (all) into tcp and udp separately since ICMP has no ports.
+		protos := []int{ppr.Proto}
+		if ppr.Proto == 0 {
+			protos = []int{6, 17}
+		}
+		pr := iptPortRange(ppr.Ports)
+
+		for _, proto := range protos {
+			pnBytes, err := ipproto.Proto(proto).MarshalText()
+			if err != nil {
+				return fmt.Errorf("unsupported protocol %d: %w", proto, err)
+			}
+			pn := string(pnBytes)
+
+			// mangle/PREROUTING: tag connections on non-tailscale interfaces
+			// for the specified port. Matches all states (not just NEW) so
+			// that existing connections get tagged when rules are installed
+			// after an exit node is activated.
+			for _, ipt := range i.getTables() {
+				args := []string{
+					"!", "-i", tunname,
+					"-p", pn, "--dport", pr,
+					"-m", "comment", "--comment", wanBypassComment,
+					"-j", "CONNMARK", "--set-mark", bypassMark + "/" + fwmarkMask,
+				}
+				if err := ipt.Append("mangle", "PREROUTING", args...); err != nil {
+					return fmt.Errorf("adding WAN bypass PREROUTING rule for %s:%s: %w", pn, pr, err)
+				}
+			}
+
+			// mangle/OUTPUT: set bypass fwmark on replies to tagged connections
+			for _, ipt := range i.getTables() {
+				args := []string{
+					"-p", pn, "--sport", pr,
+					"-m", "connmark", "--mark", bypassMark + "/" + fwmarkMask,
+					"-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED",
+					"-m", "comment", "--comment", wanBypassComment,
+					"-j", "MARK", "--set-mark", bypassMark + "/" + fwmarkMask,
+				}
+				if err := ipt.Append("mangle", "OUTPUT", args...); err != nil {
+					return fmt.Errorf("adding WAN bypass OUTPUT rule for %s:%s: %w", pn, pr, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// DelWANBypassRule removes all rules added by AddWANBypassRule by scanning for
+// rules with the ts-wan-bypass comment marker.
+func (i *iptablesRunner) DelWANBypassRule(tunname string) error {
+	for _, ipt := range i.getTables() {
+		for _, chain := range []string{"PREROUTING", "OUTPUT"} {
+			// Repeatedly scan and delete until no more ts-wan-bypass rules remain,
+			// since indices shift after each deletion.
+			for {
+				rules, err := ipt.List("mangle", chain)
+				if err != nil {
+					break
+				}
+				found := false
+				for _, rule := range rules {
+					if !strings.Contains(rule, wanBypassComment) {
+						continue
+					}
+					found = true
+					// Strip leading "-A <CHAIN> " prefix if present (real iptables adds it).
+					args := strings.Fields(rule)
+					if len(args) >= 2 && args[0] == "-A" {
+						args = args[2:]
+					}
+					if err := ipt.Delete("mangle", chain, args...); err != nil {
+						if !isNotExistError(err) {
+							return fmt.Errorf("deleting WAN bypass rule in mangle/%s: %w", chain, err)
+						}
+					}
+					break // restart scan since indices shifted
+				}
+				if !found {
+					break
+				}
+			}
 		}
 	}
 	return nil

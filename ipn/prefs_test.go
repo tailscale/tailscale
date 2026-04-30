@@ -44,6 +44,7 @@ func TestPrefsEqual(t *testing.T) {
 		"AutoExitNode",
 		"InternalExitNodePrior",
 		"ExitNodeAllowLANAccess",
+		"ExitNodeAllowWANPorts",
 		"CorpDNS",
 		"RunSSH",
 		"RunWebClient",
@@ -388,6 +389,21 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{RelayServerStaticEndpoints: aps("[2001:db8::1]:40000", "192.0.2.2:40000")},
 			&Prefs{RelayServerStaticEndpoints: aps("[2001:db8::1]:40000", "192.0.2.1:40000")},
+			false,
+		},
+		{
+			&Prefs{ExitNodeAllowWANPorts: []tailcfg.ProtoPortRange{{Proto: 6, Ports: tailcfg.PortRange{First: 443, Last: 443}}}},
+			&Prefs{ExitNodeAllowWANPorts: []tailcfg.ProtoPortRange{{Proto: 6, Ports: tailcfg.PortRange{First: 443, Last: 443}}}},
+			true,
+		},
+		{
+			&Prefs{ExitNodeAllowWANPorts: []tailcfg.ProtoPortRange{{Proto: 6, Ports: tailcfg.PortRange{First: 443, Last: 443}}}},
+			&Prefs{ExitNodeAllowWANPorts: []tailcfg.ProtoPortRange{{Proto: 6, Ports: tailcfg.PortRange{First: 22, Last: 22}}}},
+			false,
+		},
+		{
+			&Prefs{ExitNodeAllowWANPorts: []tailcfg.ProtoPortRange{{Proto: 6, Ports: tailcfg.PortRange{First: 443, Last: 443}}}},
+			&Prefs{ExitNodeAllowWANPorts: nil},
 			false,
 		},
 	}

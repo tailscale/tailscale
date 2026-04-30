@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsconst"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
@@ -87,6 +89,7 @@ type linuxRouter struct {
 	snatSubnetRoutes  bool
 	statefulFiltering bool
 	connmarkEnabled   bool // whether connmark rules are currently enabled
+	wanBypassPorts    []tailcfg.ProtoPortRange
 	netfilterMode     preftype.NetfilterMode
 	netfilterKind     string
 	cgnatMode         linuxfw.CGNATMode
@@ -373,6 +376,11 @@ func (r *linuxRouter) Close() error {
 	}
 	r.eventClient.Close()
 
+	// Clean up WAN bypass rules
+	if err := r.nfr.DelWANBypassRule(r.tunname); err != nil {
+		r.logf("warning: failed to delete WAN bypass rules: %v", err)
+	}
+
 	// Clean up connmark rules
 	if err := r.nfr.DelConnmarkSaveRule(); err != nil {
 		r.logf("warning: failed to delete connmark rules: %v", err)
@@ -438,6 +446,29 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		errs = append(errs, err)
 	}
 
+	// WAN bypass rules must be installed before routes so that existing
+	// connections on the specified ports get tagged before the exit node's
+	// default route captures their reply traffic.
+	isNetfilterOn := cfg.NetfilterMode == netfilterOn
+	wantWANBypass := len(cfg.ExitNodeAllowWANPorts) > 0 && isNetfilterOn
+	if wantWANBypass {
+		if !slices.Equal(cfg.ExitNodeAllowWANPorts, r.wanBypassPorts) {
+			r.logf("enabling WAN bypass for ports %v", cfg.ExitNodeAllowWANPorts)
+			if err := r.nfr.AddWANBypassRule(r.tunname, cfg.ExitNodeAllowWANPorts); err != nil {
+				r.logf("warning: failed to add WAN bypass rules: %v", err)
+				errs = append(errs, fmt.Errorf("enabling WAN bypass rules: %w", err))
+			} else {
+				r.wanBypassPorts = slices.Clone(cfg.ExitNodeAllowWANPorts)
+			}
+		}
+	} else if len(r.wanBypassPorts) > 0 {
+		r.logf("disabling WAN bypass for incoming connections")
+		if err := r.nfr.DelWANBypassRule(r.tunname); err != nil {
+			r.logf("warning: failed to delete WAN bypass rules: %v", err)
+		}
+		r.wanBypassPorts = nil
+	}
+
 	newLocalRoutes, err := cidrDiff("localRoute", r.localRoutes, cfg.LocalRoutes, r.addThrowRoute, r.delThrowRoute, r.logf)
 	if err != nil {
 		errs = append(errs, err)
@@ -490,11 +521,10 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	// Connmark rules for rp_filter compatibility.
 	// Always enabled when netfilter is ON to handle all rp_filter=1 scenarios
 	// (normal operation, exit nodes, subnet routers, and clients using exit nodes).
-	netfilterOn := cfg.NetfilterMode == netfilterOn
 	switch {
-	case netfilterOn == r.connmarkEnabled:
+	case isNetfilterOn == r.connmarkEnabled:
 		// state already correct, nothing to do.
-	case netfilterOn:
+	case isNetfilterOn:
 		r.logf("enabling connmark-based rp_filter workaround")
 		if err := r.nfr.AddConnmarkSaveRule(); err != nil {
 			r.logf("warning: failed to add connmark rules (rp_filter workaround may not work): %v", err)
@@ -531,7 +561,7 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	}
 
 	// Remove the rule to drop off-tailnet CGNAT traffic, if asked.
-	if netfilterOn || cfg.NetfilterMode == netfilterNoDivert {
+	if isNetfilterOn || cfg.NetfilterMode == netfilterNoDivert {
 		var cgnatMode linuxfw.CGNATMode
 		if cfg.RemoveCGNATDropRule {
 			cgnatMode = linuxfw.CGNATModeReturn

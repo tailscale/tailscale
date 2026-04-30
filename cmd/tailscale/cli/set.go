@@ -22,6 +22,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsconst"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/views"
@@ -48,6 +49,7 @@ type setArgsT struct {
 	acceptDNS                  bool
 	exitNodeIP                 string
 	exitNodeAllowLANAccess     bool
+	exitNodeAllowWANPorts      string
 	shieldsUp                  bool
 	runSSH                     bool
 	runWebClient               bool
@@ -78,6 +80,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
 	setf.StringVar(&setArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP, base name, or auto:any) for internet traffic, or empty string to not use an exit node")
 	setf.BoolVar(&setArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "Allow direct access to the local network when routing traffic via an exit node")
+	setf.StringVar(&setArgs.exitNodeAllowWANPorts, "exit-node-allow-wan-ports", "", "allow incoming WAN connections on specified proto:port pairs when using an exit node (comma-separated, e.g. \"tcp:22,tcp:443\")")
 	setf.BoolVar(&setArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	setf.BoolVar(&setArgs.runSSH, "ssh", false, "run an SSH server, permitting access per tailnet admin's declared policy")
 	setf.StringVar(&setArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
@@ -213,6 +216,30 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 	if maskedPrefs.AdvertiseRoutesSet {
 		maskedPrefs.AdvertiseRoutes, err = calcAdvertiseRoutesForSet(advertiseExitNodeSet, advertiseRoutesSet, curPrefs, setArgs)
 		if err != nil {
+			return err
+		}
+	}
+	if maskedPrefs.ExitNodeAllowWANPortsSet {
+		if setArgs.exitNodeAllowWANPorts != "" {
+			maskedPrefs.ExitNodeAllowWANPorts, err = tailcfg.ParseProtoPortRanges(strings.Split(setArgs.exitNodeAllowWANPorts, ","))
+			if err != nil {
+				return fmt.Errorf("invalid --exit-node-allow-wan-ports: %w", err)
+			}
+			if len(maskedPrefs.ExitNodeAllowWANPorts) > 128 {
+				return fmt.Errorf("invalid --exit-node-allow-wan-ports: too many port entries (max 128)")
+			}
+			for _, ppr := range maskedPrefs.ExitNodeAllowWANPorts {
+				if ppr.Proto != 0 && ppr.Proto != 6 && ppr.Proto != 17 {
+					return fmt.Errorf("invalid --exit-node-allow-wan-ports: only tcp and udp protocols are supported")
+				}
+			}
+		} else {
+			maskedPrefs.ExitNodeAllowWANPorts = nil
+		}
+	}
+
+	if maskedPrefs.ExitNodeAllowWANPortsSet && len(maskedPrefs.ExitNodeAllowWANPorts) > 0 {
+		if err := presentRiskToUser(riskWANBypass, riskWANBypassMessage, setArgs.acceptedRisks); err != nil {
 			return err
 		}
 	}
