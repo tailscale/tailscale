@@ -1020,13 +1020,21 @@ func applySchemes(logf logger.Logf, rrs []resolverAndDelay, schemes views.Map[st
 	if schemes.IsNil() {
 		return rrs
 	}
-	result := make([]resolverAndDelay, 0, len(rrs))
-	for _, rr := range rrs {
+	var result []resolverAndDelay
+	for i, rr := range rrs {
 		scheme, _, hasColon := strings.Cut(rr.name.Addr, ":")
 		handler, isCustom := schemes.GetOk(scheme)
 		if !hasColon || !isCustom {
-			result = append(result, rr)
+			if result != nil {
+				result = append(result, rr)
+			}
 			continue
+		}
+		// Avoid making a results slice in the common case where there
+		// are no custom scheme resolvers.
+		if result == nil {
+			result = make([]resolverAndDelay, i, len(rrs))
+			copy(result, rrs)
 		}
 		newAddr, err := handler(rr.name.Addr)
 		if err != nil {
@@ -1038,6 +1046,10 @@ func applySchemes(logf logger.Logf, rrs []resolverAndDelay, schemes views.Map[st
 		newResolver := *rr.name
 		newResolver.Addr = newAddr
 		result = append(result, resolverAndDelay{name: &newResolver, startDelay: rr.startDelay})
+	}
+	// If we didn't have any custom schemes, return the original rrs.
+	if result == nil {
+		return rrs
 	}
 	return result
 }

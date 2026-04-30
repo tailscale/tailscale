@@ -1397,6 +1397,18 @@ func TestResolversCustomScheme(t *testing.T) {
 		wantAddrs []string
 	}{
 		{
+			name:    "no-custom-scheme",
+			domain:  "example.com.",
+			schemes: map[string]CustomSchemeHandler{},
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"example.com.": {
+					{Addr: "192.168.1.1:53"},
+					{Addr: "192.168.1.2:53"},
+				},
+			},
+			wantAddrs: []string{"192.168.1.1:53", "192.168.1.2:53"},
+		},
+		{
 			name:   "single-custom-scheme",
 			domain: "example.com.",
 			schemes: map[string]CustomSchemeHandler{
