@@ -191,7 +191,7 @@ func (sc *ServeConfig) WebHandlerExists(svcName tailcfg.ServiceName, hp HostPort
 }
 
 // GetWebHandler returns the HTTPHandler for the given host:port and mount point.
-// Returns nil if the handler does not exist.
+// It returns nil if the handler does not exist.
 func (sc *ServeConfig) GetWebHandler(svcName tailcfg.ServiceName, hp HostPort, mount string) *HTTPHandler {
 	if sc == nil {
 		return nil

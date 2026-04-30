@@ -20,10 +20,12 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/structs"
+	"tailscale.com/types/views"
 	"tailscale.com/util/backoff"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/execqueue"
 	"tailscale.com/util/testenv"
+	"tailscale.com/wgengine/filter"
 )
 
 type LoginGoal struct {
@@ -479,11 +481,77 @@ func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
 	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
 	defer cancel()
 
-	var ok bool
-	err := c.observerQueue.RunSync(ctx, func() {
-		ok = ndu.UpdateNetmapDelta(muts)
+	ch := make(chan bool, 1)
+	c.observerQueue.Add(func() {
+		ch <- ndu.UpdateNetmapDelta(muts)
 	})
-	return err == nil && ok
+	select {
+	case ok := <-ch:
+		return ok
+	case <-ctx.Done():
+		return false
+	}
+}
+
+var (
+	_ PacketFilterUpdater = mapRoutineState{}
+	_ UserProfileUpdater  = mapRoutineState{}
+)
+
+// UpdatePacketFilter implements [PacketFilterUpdater] by forwarding to
+// [Auto.observer] if it implements [PacketFilterUpdater]. It returns
+// false (signaling fall back to a full netmap rebuild) if the
+// downstream observer doesn't implement [PacketFilterUpdater] or isn't
+// in a state to accept updates.
+func (mrs mapRoutineState) UpdatePacketFilter(rules views.Slice[tailcfg.FilterRule], parsed []filter.Match) bool {
+	c := mrs.c
+	c.mu.Lock()
+	goodState := c.loggedIn && c.inMapPoll
+	pfu, ok := c.observer.(PacketFilterUpdater)
+	c.mu.Unlock()
+	if !goodState || !ok {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	defer cancel()
+	ch := make(chan bool, 1)
+	c.observerQueue.Add(func() {
+		ch <- pfu.UpdatePacketFilter(rules, parsed)
+	})
+	select {
+	case applied := <-ch:
+		return applied
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// UpdateUserProfiles implements [UserProfileUpdater] by forwarding to
+// [Auto.observer] if it implements [UserProfileUpdater]. It returns
+// false (signaling fall back to a full netmap rebuild) if the
+// downstream observer doesn't implement [UserProfileUpdater] or isn't
+// in a state to accept updates.
+func (mrs mapRoutineState) UpdateUserProfiles(profiles map[tailcfg.UserID]tailcfg.UserProfileView) bool {
+	c := mrs.c
+	c.mu.Lock()
+	goodState := c.loggedIn && c.inMapPoll
+	upu, ok := c.observer.(UserProfileUpdater)
+	c.mu.Unlock()
+	if !goodState || !ok {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	defer cancel()
+	ch := make(chan bool, 1)
+	c.observerQueue.Add(func() {
+		ch <- upu.UpdateUserProfiles(profiles)
+	})
+	select {
+	case applied := <-ch:
+		return applied
+	case <-ctx.Done():
+		return false
+	}
 }
 
 var _ patchDiscoKeyer = mapRoutineState{}

@@ -30,7 +30,10 @@ func TestIsNotableNotify(t *testing.T) {
 		{"empty", &ipn.Notify{}, false},
 		{"version", &ipn.Notify{Version: "foo"}, false},
 		{"netmap", &ipn.Notify{NetMap: new(netmap.NetworkMap)}, false},
-		{"peerchanges", &ipn.Notify{PeerChanges: []*tailcfg.PeerChange{{}}}, false},
+		{"peerchanges", &ipn.Notify{PeerChangedPatch: []*tailcfg.PeerChange{{}}}, false},
+		{"peerschanged", &ipn.Notify{PeersChanged: []*tailcfg.Node{{}}}, false},
+		{"peersremoved", &ipn.Notify{PeersRemoved: []tailcfg.NodeID{1}}, false},
+		{"userprofiles", &ipn.Notify{UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{1: (&tailcfg.UserProfile{}).View()}}, false},
 		{"engine", &ipn.Notify{Engine: new(ipn.EngineStatus)}, false},
 		{"selfchange", &ipn.Notify{SelfChange: &tailcfg.Node{}}, true},
 	}
@@ -42,7 +45,7 @@ func TestIsNotableNotify(t *testing.T) {
 	for sf := range rt.Fields() {
 		n := &ipn.Notify{}
 		switch sf.Name {
-		case "_", "NetMap", "PeerChanges", "SelfChange", "Engine", "Version":
+		case "_", "NetMap", "PeerChangedPatch", "SelfChange", "PeersChanged", "PeersRemoved", "UserProfiles", "Engine", "Version":
 			// Already covered above or not applicable.
 			continue
 		case "DriveShares":
@@ -123,8 +126,10 @@ func (st *rateLimitingBusSenderTester) advance(d time.Duration) {
 }
 
 func TestRateLimitingBusSender(t *testing.T) {
-	nm1 := &ipn.Notify{NetMap: new(netmap.NetworkMap)}
-	nm2 := &ipn.Notify{NetMap: new(netmap.NetworkMap)}
+	// Both share NodeID 1 so merge collapses to a single PeerChange and
+	// the later one (nm2) wins.
+	nm1 := &ipn.Notify{PeerChangedPatch: []*tailcfg.PeerChange{{NodeID: 1, DERPRegion: 1}}}
+	nm2 := &ipn.Notify{PeerChangedPatch: []*tailcfg.PeerChange{{NodeID: 1, DERPRegion: 2}}}
 	eng1 := &ipn.Notify{Engine: new(ipn.EngineStatus)}
 	eng2 := &ipn.Notify{Engine: new(ipn.EngineStatus)}
 
@@ -163,8 +168,8 @@ func TestRateLimitingBusSender(t *testing.T) {
 			t.Fatalf("got %d items; want 2", len(st.got))
 		}
 		gotn := st.got[1]
-		if gotn.NetMap != nm2.NetMap {
-			t.Errorf("got wrong NetMap; got %p", gotn.NetMap)
+		if !reflect.DeepEqual(gotn.PeerChangedPatch, nm2.PeerChangedPatch) {
+			t.Errorf("got wrong PeerChangedPatch; got %v want %v", gotn.PeerChangedPatch, nm2.PeerChangedPatch)
 		}
 		if gotn.Engine != eng2.Engine {
 			t.Errorf("got wrong Engine; got %p", gotn.Engine)
@@ -208,8 +213,8 @@ func TestRateLimitingBusSender(t *testing.T) {
 			st.advance(5 * time.Second)
 			select {
 			case n := <-flushc:
-				if n.NetMap != nm2.NetMap {
-					t.Errorf("got wrong NetMap; got %p", n.NetMap)
+				if !reflect.DeepEqual(n.PeerChangedPatch, nm2.PeerChangedPatch) {
+					t.Errorf("got wrong PeerChangedPatch; got %v want %v", n.PeerChangedPatch, nm2.PeerChangedPatch)
 				}
 			case <-time.After(10 * time.Second):
 				t.Error("timeout")
@@ -221,7 +226,7 @@ func TestRateLimitingBusSender(t *testing.T) {
 	})
 }
 
-func TestMergePeerChanges(t *testing.T) {
+func TestMergePeerChangedPatch(t *testing.T) {
 	online := true
 	offline := false
 
@@ -232,7 +237,7 @@ func TestMergePeerChanges(t *testing.T) {
 		new := []*tailcfg.PeerChange{
 			{NodeID: 2, DERPRegion: 2},
 		}
-		got := mergePeerChanges(old, new)
+		got := mergePeerChangedPatch(old, new)
 		if len(got) != 2 {
 			t.Fatalf("len = %d; want 2", len(got))
 		}
@@ -249,7 +254,7 @@ func TestMergePeerChanges(t *testing.T) {
 		new := []*tailcfg.PeerChange{
 			{NodeID: 1, DERPRegion: 5, Online: &offline},
 		}
-		got := mergePeerChanges(old, new)
+		got := mergePeerChangedPatch(old, new)
 		if len(got) != 2 {
 			t.Fatalf("len = %d; want 2 (merged, not appended)", len(got))
 		}
@@ -273,7 +278,7 @@ func TestMergePeerChanges(t *testing.T) {
 			{NodeID: 1, DERPRegion: 2},
 			{NodeID: 3, DERPRegion: 30},
 		}
-		got := mergePeerChanges(old, new)
+		got := mergePeerChangedPatch(old, new)
 		if len(got) != 2 {
 			t.Fatalf("len = %d; want 2", len(got))
 		}
@@ -292,7 +297,7 @@ func TestMergePeerChanges(t *testing.T) {
 		new := []*tailcfg.PeerChange{
 			{NodeID: 1, Online: &offline},
 		}
-		got := mergePeerChanges(old, new)
+		got := mergePeerChangedPatch(old, new)
 		if len(got) != 1 {
 			t.Fatalf("len = %d; want 1", len(got))
 		}
@@ -311,7 +316,7 @@ func TestMergePeerChanges(t *testing.T) {
 		new := []*tailcfg.PeerChange{
 			{NodeID: 1, DERPRegion: 1},
 		}
-		got := mergePeerChanges(nil, new)
+		got := mergePeerChangedPatch(nil, new)
 		if len(got) != 1 {
 			t.Fatalf("len = %d; want 1", len(got))
 		}

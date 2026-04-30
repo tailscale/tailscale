@@ -1022,7 +1022,11 @@ func setUpServiceState(t *testing.T, name, ip string, host, client *Server,
 		t.Helper()
 		w := must.Get(s.localClient.WatchIPNBus(t.Context(), ipn.NotifyInitialNetMap))
 		defer w.Close()
-		for n := must.Get(w.Next()); !netmapUpToDate(n.NetMap); n = must.Get(w.Next()) {
+		for {
+			must.Get(w.Next())
+			if nm := s.lb.NetMapWithPeers(); nm != nil && netmapUpToDate(nm) {
+				return
+			}
 		}
 	}
 	waitForLatestNetmap(t, client)

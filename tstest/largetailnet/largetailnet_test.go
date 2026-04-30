@@ -40,7 +40,7 @@ var (
 // processing peer-add/peer-remove deltas in steady state, with no IPN bus
 // subscribers attached. This represents the headless-tailscaled workload
 // (Linux subnet routers, container sidecars, ...) where the LocalBackend
-// does not pay for fanning Notify.NetMap out to GUI watchers.
+// does not pay for fanning Notify events out to GUI watchers.
 //
 // Use [BenchmarkGiantTailnetBusWatcher] for the GUI-client workload.
 //
@@ -54,9 +54,9 @@ func BenchmarkGiantTailnet(b *testing.B) {
 
 // BenchmarkGiantTailnetBusWatcher is like [BenchmarkGiantTailnet] but
 // attaches one [local.Client.WatchIPNBus] subscriber for the duration of the
-// benchmark. The Notify-fan-out cost (notably Notify.NetMap encoding to
-// every watcher on every full-rebuild path) is therefore included in the
-// per-delta measurement, which approximates the GUI-client workload.
+// benchmark. The Notify-fan-out cost (per-watcher encoding done on every
+// full-rebuild path) is therefore included in the per-delta measurement,
+// which approximates the GUI-client workload.
 //
 // The benchmark is opt-in via --actually-test-giant-tailnet.
 func BenchmarkGiantTailnetBusWatcher(b *testing.B) {
@@ -160,15 +160,17 @@ func benchGiantTailnet(b *testing.B, busWatcher bool) {
 		notifyCh = make(chan struct{}, 1024)
 		go func() {
 			for {
-				n, err := bw.Next()
-				if err != nil {
+				if _, err := bw.Next(); err != nil {
 					return
 				}
-				if n.NetMap != nil || len(n.PeerChanges) > 0 {
-					select {
-					case notifyCh <- struct{}{}:
-					default:
-					}
+				// Any notify counts as a per-delta ack: peer add/remove
+				// in the delta path emits Notify.PeersChanged /
+				// Notify.PeersRemoved, peer patches emit
+				// Notify.PeerChanges, and self-node updates emit
+				// Notify.SelfChange.
+				select {
+				case notifyCh <- struct{}{}:
+				default:
 				}
 			}
 		}()

@@ -5,12 +5,29 @@ package ipnlocal
 
 import (
 	"context"
+	"runtime"
 	"time"
 
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
+	"tailscale.com/util/mak"
 )
+
+// goosGetsLegacyNetmapNotify reports whether tailscaled, when running on the
+// current GOOS, still emits the legacy [ipn.Notify.NetMap] field on runtime
+// (non-initial) bus messages. It is true on platforms whose host GUIs have
+// not yet finished migrating to the narrower bus signals
+// ([ipn.Notify.SelfChange] / [ipn.Notify.PeerChanges]) and the on-demand
+// [LocalClient.NetMap] fetch.
+//
+// runtime.GOOS is a compile-time constant, so the producer-side code that
+// builds and ships NetMap on the bus is dead-code-eliminated on Linux and
+// other geese where this is false.
+const goosGetsLegacyNetmapNotify = runtime.GOOS == "windows" ||
+	runtime.GOOS == "darwin" ||
+	runtime.GOOS == "ios" ||
+	runtime.GOOS == "android"
 
 type rateLimitingBusSender struct {
 	fn              func(*ipn.Notify) (keepGoing bool)
@@ -126,11 +143,21 @@ func mergeBoringNotifies(dst, src *ipn.Notify) *ipn.Notify {
 	if dst == nil {
 		dst = &ipn.Notify{Version: src.Version}
 	}
-	if src.NetMap != nil {
+	if goosGetsLegacyNetmapNotify && src.NetMap != nil {
+		// Full netmap supersedes any accumulated peer-change deltas.
 		dst.NetMap = src.NetMap
-		dst.PeerChanges = nil // full netmap supersedes any accumulated deltas
-	} else if src.PeerChanges != nil {
-		dst.PeerChanges = mergePeerChanges(dst.PeerChanges, src.PeerChanges)
+		dst.PeerChangedPatch = nil
+	} else if src.PeerChangedPatch != nil {
+		dst.PeerChangedPatch = mergePeerChangedPatch(dst.PeerChangedPatch, src.PeerChangedPatch)
+	}
+	if len(src.PeersChanged) > 0 {
+		dst.PeersChanged = append(dst.PeersChanged, src.PeersChanged...)
+	}
+	if len(src.PeersRemoved) > 0 {
+		dst.PeersRemoved = append(dst.PeersRemoved, src.PeersRemoved...)
+	}
+	for id, up := range src.UserProfiles {
+		mak.Set(&dst.UserProfiles, id, up)
 	}
 	if src.Engine != nil {
 		dst.Engine = src.Engine
@@ -138,10 +165,10 @@ func mergeBoringNotifies(dst, src *ipn.Notify) *ipn.Notify {
 	return dst
 }
 
-// mergePeerChanges merges new peer changes from src into dst, either
-// mutating dst or allocating a new slice if dst is nil, returning the merged result.
-// Values in src override those in dst for the same NodeID.
-func mergePeerChanges(dst, src []*tailcfg.PeerChange) []*tailcfg.PeerChange {
+// mergePeerChangedPatch merges new peer-changed patches from src into dst,
+// either mutating dst or allocating a new slice if dst is nil, returning the
+// merged result. Values in src override those in dst for the same NodeID.
+func mergePeerChangedPatch(dst, src []*tailcfg.PeerChange) []*tailcfg.PeerChange {
 	idxByNode := make(map[tailcfg.NodeID]int, len(dst))
 	for i, d := range dst {
 		idxByNode[d.NodeID] = i
@@ -191,8 +218,7 @@ func mergePeerChangeForIpnBus(old, new *tailcfg.PeerChange) *tailcfg.PeerChange 
 // should be sent on the IPN bus immediately (e.g. to GUIs) without
 // rate limiting it for a few seconds.
 //
-// It effectively reports whether n contains any field set that's
-// not NetMap or Engine.
+// PeerChanges and Engine are the only "boring" (rate-limitable) fields.
 func isNotableNotify(n *ipn.Notify) bool {
 	if n == nil {
 		return false
@@ -206,6 +232,7 @@ func isNotableNotify(n *ipn.Notify) bool {
 		n.ErrMessage != nil ||
 		n.LoginFinished != nil ||
 		n.SelfChange != nil ||
+		n.InitialStatus != nil ||
 		!n.DriveShares.IsNil() ||
 		n.Health != nil ||
 		len(n.IncomingFiles) > 0 ||

@@ -90,6 +90,7 @@ var handler = map[string]LocalAPIHandler{
 	"shutdown":             (*Handler).serveShutdown,
 	"start":                (*Handler).serveStart,
 	"status":               (*Handler).serveStatus,
+	"user-profile":         (*Handler).serveUserProfile,
 	"whois":                (*Handler).serveWhoIs,
 }
 
@@ -900,6 +901,12 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 		}
 		mask = ipn.NotifyWatchOpt(v)
 	}
+	// NotifyInitialNetMap is permitted alongside NotifyPeerChanges /
+	// NotifyPeerPatches for backwards compatibility with clients that
+	// set both (e.g. the Apple client). On platforms where
+	// goosGetsLegacyNetmapNotify is true, the initial netmap is
+	// delivered regardless; peer-change subscribers simply receive
+	// deltas after that point.
 
 	w.Header().Set("Content-Type", "application/json")
 	ctx := r.Context()
@@ -1138,12 +1145,14 @@ type peerByIDBackend interface {
 	PeerByID(tailcfg.NodeID) (tailcfg.NodeView, bool)
 }
 
-// servePeerByID returns the current full [tailcfg.Node] for the peer with
-// the NodeID given in the "id" query parameter, in O(1) time. It returns
-// 404 if no such peer is in the current netmap.
+// servePeerByID returns the current full [tailcfg.Node] for the peer with the
+// NodeID given in the "id" query parameter. It returns 404 if no such peer is
+// in the current netmap.
 //
-// It is intended for clients that need the latest state of a single peer
-// without fetching the entire netmap.
+// It is intended for clients that observed a peer-mutation signal (e.g.
+// [ipn.Notify.PeerChangedPatch] or [ipn.Notify.PeersChanged]) and want the
+// latest state of the affected node without having to apply the patch
+// themselves.
 func (h *Handler) servePeerByID(w http.ResponseWriter, r *http.Request) {
 	h.servePeerByIDWithBackend(w, r, h.b)
 }
@@ -1168,6 +1177,45 @@ func (h *Handler) servePeerByIDWithBackend(w http.ResponseWriter, r *http.Reques
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(nv.AsStruct())
+}
+
+// userProfileBackend is the subset of [ipnlocal.LocalBackend] used by
+// [Handler.serveUserProfile]. It exists so the handler can be tested
+// with a trivial mock without spinning up a full LocalBackend.
+type userProfileBackend interface {
+	UserProfile(tailcfg.UserID) (tailcfg.UserProfileView, bool)
+}
+
+// serveUserProfile returns the current [tailcfg.UserProfile] for the User
+// with the UserID given in the "id" query parameter, in O(1) time. It
+// returns 404 if no such user is in the current netmap.
+//
+// It is the LocalAPI fallback for IPN-bus consumers that see a UserID
+// referenced by a peer Node and want to resolve it to a UserProfile.
+func (h *Handler) serveUserProfile(w http.ResponseWriter, r *http.Request) {
+	h.serveUserProfileWithBackend(w, r, h.b)
+}
+
+func (h *Handler) serveUserProfileWithBackend(w http.ResponseWriter, r *http.Request, b userProfileBackend) {
+	if !h.PermitRead {
+		http.Error(w, "user-profile access denied", http.StatusForbidden)
+		return
+	}
+	idStr := r.FormValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid 'id' parameter", http.StatusBadRequest)
+		return
+	}
+	uv, ok := b.UserProfile(tailcfg.UserID(id))
+	if !ok {
+		http.Error(w, "no user with that UserID", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	e := json.NewEncoder(w)
+	e.SetIndent("", "\t")
+	e.Encode(uv.AsStruct())
 }
 
 // serveSetExpirySooner sets the expiry date on the current machine, specified

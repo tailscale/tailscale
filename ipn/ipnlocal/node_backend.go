@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"sync"
@@ -115,6 +116,20 @@ type nodeBackend struct {
 	// nodeByKey is an index of node public key to node ID for fast lookups.
 	// It is mutated in place (with mu held) and must not escape the [nodeBackend].
 	nodeByKey map[key.NodePublic]tailcfg.NodeID
+
+	// userProfiles is the live set of user profiles, updated incrementally
+	// by mergeUserProfiles as deltas arrive. It parallels the peers map:
+	// netMap.UserProfiles is the frozen snapshot from the last full install,
+	// while this field reflects incremental updates. Readers that need a
+	// snapshot (e.g. the legacy Notify.NetMap path) must clone this map.
+	userProfiles map[tailcfg.UserID]tailcfg.UserProfileView
+
+	// packetFilterRules and packetFilter are the live packet filter state,
+	// updated by setPacketFilter as deltas arrive. Like userProfiles, they
+	// exist separately from netMap's frozen fields so that concurrent
+	// JSON-encoding of a Notify.NetMap snapshot doesn't race with writes.
+	packetFilterRules views.Slice[tailcfg.FilterRule]
+	packetFilter      []filter.Match
 
 	// keyWaitersForTest is the test-only registry of channels waiting for
 	// a given peer key to first appear in the netmap. See
@@ -239,12 +254,8 @@ func (nb *nodeBackend) PeerByStableID(id tailcfg.StableNodeID) (_ tailcfg.NodeVi
 
 func (nb *nodeBackend) UserByID(id tailcfg.UserID) (_ tailcfg.UserProfileView, ok bool) {
 	nb.mu.Lock()
-	nm := nb.netMap
-	nb.mu.Unlock()
-	if nm == nil {
-		return tailcfg.UserProfileView{}, false
-	}
-	u, ok := nm.UserProfiles[id]
+	defer nb.mu.Unlock()
+	u, ok := nb.userProfiles[id]
 	return u, ok
 }
 
@@ -465,6 +476,9 @@ func (nb *nodeBackend) netMapWithPeers() *netmap.NetworkMap {
 	slices.SortFunc(nm.Peers, func(a, b tailcfg.NodeView) int {
 		return cmp.Compare(a.ID(), b.ID())
 	})
+	nm.UserProfiles = maps.Clone(nb.userProfiles)
+	nm.PacketFilterRules = nb.packetFilterRules
+	nm.PacketFilter = nb.packetFilter
 	return nm
 }
 
@@ -477,8 +491,14 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) {
 	nb.updatePeersLocked()
 	nb.signalKeyWaitersForTestLocked()
 	if nm != nil {
+		nb.userProfiles = maps.Clone(nm.UserProfiles)
+		nb.packetFilterRules = nm.PacketFilterRules
+		nb.packetFilter = nm.PacketFilter
 		nb.derpMapViewPub.Publish(nm.DERPMap.View())
 	} else {
+		nb.userProfiles = nil
+		nb.packetFilterRules = views.Slice[tailcfg.FilterRule]{}
+		nb.packetFilter = nil
 		nb.derpMapViewPub.Publish(tailcfg.DERPMapView{})
 	}
 }
@@ -612,10 +632,39 @@ func (nb *nodeBackend) updatePeersLocked() {
 	}
 }
 
+// setPacketFilter stores the live packet filter rules and parsed
+// matches. It does not touch the frozen netMap. nb.mu is acquired by
+// this method.
+func (nb *nodeBackend) setPacketFilter(rules views.Slice[tailcfg.FilterRule], parsed []filter.Match) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	nb.packetFilterRules = rules
+	nb.packetFilter = parsed
+}
+
+// PacketFilter returns the current live packet filter matches.
+func (nb *nodeBackend) PacketFilter() []filter.Match {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	return nb.packetFilter
+}
+
+// mergeUserProfiles merges new/updated [tailcfg.UserProfileView]
+// entries into the live userProfiles map. It does not touch
+// netMap.UserProfiles (which is frozen once set). Callers must hold
+// [LocalBackend.mu]. nb.mu is acquired by this method.
+func (nb *nodeBackend) mergeUserProfiles(profiles map[tailcfg.UserID]tailcfg.UserProfileView) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	for id, up := range profiles {
+		mak.Set(&nb.userProfiles, id, up)
+	}
+}
+
 func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	if nb.netMap == nil || len(nb.peers) == 0 {
+	if nb.netMap == nil {
 		return false
 	}
 
@@ -625,9 +674,35 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	var mutableNodes map[tailcfg.NodeID]*tailcfg.Node
 
 	for _, m := range muts {
-		n, ok := mutableNodes[m.NodeIDBeingMutated()]
+		switch m := m.(type) {
+		case netmap.NodeMutationAdd:
+			nid := m.Node.ID()
+			mak.Set(&nb.peers, nid, m.Node)
+			for _, ipp := range m.Node.Addresses().All() {
+				if ipp.IsSingleIP() {
+					mak.Set(&nb.nodeByAddr, ipp.Addr(), nid)
+				}
+			}
+			mak.Set(&nb.nodeByKey, m.Node.Key(), nid)
+			continue
+		case netmap.NodeMutationRemove:
+			nid := m.NodeIDBeingMutated()
+			if old, ok := nb.peers[nid]; ok {
+				for _, ipp := range old.Addresses().All() {
+					if ipp.IsSingleIP() {
+						delete(nb.nodeByAddr, ipp.Addr())
+					}
+				}
+				delete(nb.nodeByKey, old.Key())
+				delete(nb.peers, nid)
+			}
+			continue
+		}
+		// Per-field mutation.
+		nid := m.NodeIDBeingMutated()
+		n, ok := mutableNodes[nid]
 		if !ok {
-			nv, ok := nb.peers[m.NodeIDBeingMutated()]
+			nv, ok := nb.peers[nid]
 			if !ok {
 				// TODO(bradfitz): unexpected metric?
 				return false
@@ -640,6 +715,7 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	for nid, n := range mutableNodes {
 		nb.peers[nid] = n.View()
 	}
+	nb.signalKeyWaitersForTestLocked()
 	return true
 }
 
