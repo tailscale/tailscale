@@ -10,6 +10,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/types/structs"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/testenv"
 )
 
 const (
@@ -50,6 +51,14 @@ func NewNLPrivate() NLPrivate {
 	if err != nil {
 		panic(err)
 	}
+
+	var out NLPrivate
+	copy(out.k[:], priv)
+	return out
+}
+
+func NewNLPrivateFromED25519(priv ed25519.PrivateKey) NLPrivate {
+	testenv.AssertInTest()
 
 	var out NLPrivate
 	copy(out.k[:], priv)

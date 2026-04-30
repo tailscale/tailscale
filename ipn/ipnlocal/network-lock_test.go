@@ -7,21 +7,27 @@ package ipnlocal
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"crypto/ed25519"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
 	go4mem "go4.org/mem"
 
-	"github.com/google/go-cmp/cmp"
+	deepcmp "github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
@@ -294,9 +300,45 @@ func TestTKADisablementFlow(t *testing.T) {
 	}
 }
 
+// returns a random source based on the test name + extraSeed.
+func testingRand(t *testing.T, extraSeed int64) *rand.Rand {
+	var seed int64
+	if err := binary.Read(bytes.NewBuffer([]byte(t.Name())), binary.LittleEndian, &seed); err != nil {
+		panic(err)
+	}
+	return rand.New(rand.NewSource(seed + extraSeed))
+}
+
+// generates a 25519 private key based on the seed + test name.
+func testingKey25519(t *testing.T, seed int64) ed25519.PublicKey {
+	pub, _, err := ed25519.GenerateKey(testingRand(t, seed))
+	if err != nil {
+		panic(err)
+	}
+	return pub
+}
+
 func TestTKASync(t *testing.T) {
-	someKeyPriv := key.NewNLPrivate()
-	someKey := tka.Key{Kind: tka.Key25519, Public: someKeyPriv.Public().Verifier(), Votes: 1}
+	createKeyPair := func(t *testing.T, seed int64) (key.NLPrivate, tka.Key) {
+		pub, priv := must.Get2(ed25519.GenerateKey(testingRand(t, seed)))
+		nlPriv := key.NewNLPrivateFromED25519(priv)
+		key := tka.Key{Kind: tka.Key25519, Public: pub, Votes: 1}
+		return nlPriv, key
+	}
+
+	nlPriv1, key1 := createKeyPair(t, 1)
+	nlPriv2, key2 := createKeyPair(t, 2)
+	key3 := tka.Key{Kind: tka.Key25519, Public: testingKey25519(t, 3), Votes: 1}
+	key4 := tka.Key{Kind: tka.Key25519, Public: testingKey25519(t, 4), Votes: 1}
+	key5 := tka.Key{Kind: tka.Key25519, Public: testingKey25519(t, 5), Votes: 1}
+	key6 := tka.Key{Kind: tka.Key25519, Public: testingKey25519(t, 6), Votes: 1}
+
+	t.Logf("key1 = tlpub:%x", key1.MustID())
+	t.Logf("key2 = tlpub:%x", key2.MustID())
+	t.Logf("key3 = tlpub:%x", key3.MustID())
+	t.Logf("key4 = tlpub:%x", key4.MustID())
+	t.Logf("key5 = tlpub:%x", key5.MustID())
+	t.Logf("key6 = tlpub:%x", key6.MustID())
 
 	type tkaSyncScenario struct {
 		name string
@@ -308,13 +350,22 @@ func TestTKASync(t *testing.T) {
 		nodeAUMs func(*testing.T, *tka.Authority, tka.Chonk, tka.Signer) []tka.AUM
 	}
 
+	printAUM := func(t *testing.T, aum tka.AUM) {
+		if aum.MessageKind == tka.AUMAddKey {
+			parent, _ := aum.Parent()
+			t.Logf("%s:\n\tadd-key: tlpub:%x / parent %s", aum.Hash(), aum.Key.Public, parent)
+		} else {
+			t.Logf("%s:\n\t%+v", aum.Hash(), aum)
+		}
+	}
+
 	tcs := []tkaSyncScenario{
 		{name: "up-to-date"},
 		{
 			name: "control-has-an-update",
 			controlAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
 				b := a.NewUpdater(signer)
-				if err := b.RemoveKey(someKey.MustID()); err != nil {
+				if err := b.RemoveKey(key2.MustID()); err != nil {
 					t.Fatal(err)
 				}
 				aums, err := b.Finalize(storage)
@@ -329,7 +380,7 @@ func TestTKASync(t *testing.T) {
 			name: "node-has-an-update",
 			nodeAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
 				b := a.NewUpdater(signer)
-				if err := b.RemoveKey(someKey.MustID()); err != nil {
+				if err := b.RemoveKey(key2.MustID()); err != nil {
 					t.Fatal(err)
 				}
 				aums, err := b.Finalize(storage)
@@ -344,7 +395,7 @@ func TestTKASync(t *testing.T) {
 			name: "node-and-control-diverge",
 			controlAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
 				b := a.NewUpdater(signer)
-				if err := b.SetKeyMeta(someKey.MustID(), map[string]string{"ye": "swiggity"}); err != nil {
+				if err := b.SetKeyMeta(key2.MustID(), map[string]string{"ye": "swiggity"}); err != nil {
 					t.Fatal(err)
 				}
 				aums, err := b.Finalize(storage)
@@ -355,7 +406,7 @@ func TestTKASync(t *testing.T) {
 			},
 			nodeAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
 				b := a.NewUpdater(signer)
-				if err := b.SetKeyMeta(someKey.MustID(), map[string]string{"ye": "swooty"}); err != nil {
+				if err := b.SetKeyMeta(key2.MustID(), map[string]string{"ye": "swooty"}); err != nil {
 					t.Fatal(err)
 				}
 				aums, err := b.Finalize(storage)
@@ -365,81 +416,173 @@ func TestTKASync(t *testing.T) {
 				return aums
 			},
 		},
+		{
+			// Sketch of this test:
+			//
+			// genesis --> add key --> add key --> add key
+			// k1 k2	   k3		   k4		   k5
+			//				\
+			//				 \
+			//				  +--> revocation --> add key
+			//									  k6
+			//
+			// Before sync:
+			//
+			//	- Control plane has K1/K2/K3/K4, then revoked K4 and added K6.
+			//	- Node has K1/K2/K3/K4/K5
+
+			name: "divergent",
+			controlAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
+				b := a.NewUpdater(signer)
+				must.Do(b.AddKey(key3))
+				must.Do(b.AddKey(key4))
+
+				aums := must.Get(b.Finalize(storage))
+
+				revokeAUM := must.Get(a.MakeRetroactiveRevocation(storage, []tkatype.KeyID{key4.MustID()}, key1.MustID(), aums[1].Hash()))
+
+				signature1 := must.Get(nlPriv1.SignAUM(revokeAUM.SigHash()))
+				signature2 := must.Get(nlPriv2.SignAUM(revokeAUM.SigHash()))
+				revokeAUM.Signatures = slices.Concat(signature1, signature2)
+
+				aums = append(aums, *revokeAUM)
+				must.Do(a.Inform(storage, aums))
+
+				t.Logf("== controlAUMs in setup (1) ==")
+				for _, aum := range aums {
+					printAUM(t, aum)
+				}
+				t.Logf("== END ==")
+
+				b = a.NewUpdater(signer)
+				must.Do(b.AddKey(key6))
+				aums = must.Get(b.Finalize(storage))
+
+				t.Logf("== controlAUMs in setup (2) ==")
+				for _, aum := range aums {
+					printAUM(t, aum)
+				}
+				t.Logf("== END ==")
+
+				return aums
+			},
+			nodeAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
+				b := a.NewUpdater(signer)
+				must.Do(b.AddKey(key3))
+				must.Do(b.AddKey(key4))
+				must.Do(b.AddKey(key5))
+
+				aums := must.Get(b.Finalize(storage))
+				t.Logf("== nodeAUMs in setup ==")
+				for _, aum := range aums {
+					printAUM(t, aum)
+				}
+				t.Logf("== END ==")
+				return aums
+			},
+		},
 	}
 
 	for _, tc := range tcs {
-		t.Run(tc.name, func(t *testing.T) {
-			nodePriv := key.NewNode()
-			nlPriv := key.NewNLPrivate()
-			pm := setupProfileManager(t, nodePriv, nlPriv)
+		if tc.name != "divergent" {
+			t.Run(tc.name, func(t *testing.T) {
+				nodePriv := key.NewNode()
+				pm := setupProfileManager(t, nodePriv, nlPriv1)
 
-			// Setup the tka authority on the control plane.
-			key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
-			controlStorage := tka.ChonkMem()
-			controlState := tka.CreateStateForTest(key, someKey)
-			controlAuthority, bootstrap, err := tka.Create(controlStorage, controlState, nlPriv)
-			if err != nil {
-				t.Fatalf("tka.Create() failed: %v", err)
-			}
-			if tc.controlAUMs != nil {
-				if err := controlAuthority.Inform(controlStorage, tc.controlAUMs(t, controlAuthority, controlStorage, nlPriv)); err != nil {
-					t.Fatalf("controlAuthority.Inform() failed: %v", err)
+				// Setup the tka authority on the control plane.
+				controlStorage := tka.ChonkMem()
+				controlState := tka.CreateStateForTest(key1, key2)
+				controlAuthority, bootstrap, err := tka.Create(controlStorage, controlState, nlPriv1)
+				if err != nil {
+					t.Fatalf("tka.Create() failed: %v", err)
 				}
-			}
-
-			// Setup the TKA authority on the node.
-			varRoot, nodeStorage := setupChonkStorage(t, pm)
-			nodeAuthority, err := tka.Bootstrap(nodeStorage, bootstrap)
-			if err != nil {
-				t.Fatalf("tka.Bootstrap() failed: %v", err)
-			}
-			if tc.nodeAUMs != nil {
-				if err := nodeAuthority.Inform(nodeStorage, tc.nodeAUMs(t, nodeAuthority, nodeStorage, nlPriv)); err != nil {
-					t.Fatalf("nodeAuthority.Inform() failed: %v", err)
-				}
-			}
-
-			// Make a mock control server.
-			ts, client := fakeNoiseServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				defer r.Body.Close()
-				switch r.URL.Path {
-				case "/machine/tka/sync/offer":
-					err := tkatest.HandleTKASyncOffer(w, r, controlAuthority, controlStorage)
-					if err != nil {
-						t.Errorf("HandleTKASyncOffer: %v", err)
+				if tc.controlAUMs != nil {
+					if err := controlAuthority.Inform(controlStorage, tc.controlAUMs(t, controlAuthority, controlStorage, nlPriv1)); err != nil {
+						t.Fatalf("controlAuthority.Inform() failed: %v", err)
 					}
-
-				case "/machine/tka/sync/send":
-					err := tkatest.HandleTKASyncSend(w, r, controlAuthority, controlStorage)
-					if err != nil {
-						t.Errorf("HandleTKASyncSend: %v", err)
-					}
-
-				default:
-					t.Errorf("unhandled endpoint path: %v", r.URL.Path)
-					w.WriteHeader(404)
 				}
-			}))
-			defer ts.Close()
 
-			// Setup the client.
-			b := fakeLocalBackend(t, varRoot, client, pm, nodeAuthority, nodeStorage)
+				t.Logf("bootstrap = %s", bootstrap.Hash())
 
-			// Finally, let's trigger a sync.
-			err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
-				TKAEnabled: true,
-				TKAHead:    controlAuthority.Head(),
-			}, pm.CurrentPrefs())
-			if err != nil {
-				t.Errorf("tkaSyncIfNeededLocked() failed: %v", err)
-			}
+				// Setup the TKA authority on the node.
+				varRoot, nodeStorage := setupChonkStorage(t, pm)
+				nodeAuthority, err := tka.Bootstrap(nodeStorage, bootstrap)
+				if err != nil {
+					t.Fatalf("tka.Bootstrap() failed: %v", err)
+				}
+				if tc.nodeAUMs != nil {
+					if err := nodeAuthority.Inform(nodeStorage, tc.nodeAUMs(t, nodeAuthority, nodeStorage, nlPriv1)); err != nil {
+						t.Fatalf("nodeAuthority.Inform() failed: %v", err)
+					}
+				}
 
-			// Check that at the end of this ordeal, the node and the control
-			// plane are in sync.
-			if nodeHead, controlHead := b.tka.authority.Head(), controlAuthority.Head(); nodeHead != controlHead {
-				t.Errorf("node head = %v, want %v", nodeHead, controlHead)
-			}
-		})
+				// Make a mock control server.
+				ts, client := fakeNoiseServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					defer r.Body.Close()
+					switch r.URL.Path {
+					case "/machine/tka/sync/offer":
+						err := tkatest.HandleTKASyncOffer(w, r, controlAuthority, controlStorage)
+						if err != nil {
+							t.Errorf("HandleTKASyncOffer: %v", err)
+						}
+
+					case "/machine/tka/sync/send":
+						err := tkatest.HandleTKASyncSend(w, r, controlAuthority, controlStorage)
+						if err != nil {
+							t.Errorf("HandleTKASyncSend: %v", err)
+						}
+
+					default:
+						t.Errorf("unhandled endpoint path: %v", r.URL.Path)
+						w.WriteHeader(404)
+					}
+				}))
+				defer ts.Close()
+
+				// Setup the client.
+				b := fakeLocalBackend(t, varRoot, client, pm, nodeAuthority, nodeStorage)
+
+				// Finally, let's trigger a sync.
+				err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
+					TKAEnabled: true,
+					TKAHead:    controlAuthority.Head(),
+				}, pm.CurrentPrefs())
+				if err != nil {
+					t.Errorf("tkaSyncIfNeededLocked() failed: %v", err)
+				}
+
+				// Check that at the end of this ordeal, the node and the control
+				// plane are in sync.
+				if nodeHead, controlHead := b.tka.authority.Head(), controlAuthority.Head(); nodeHead != controlHead {
+					t.Errorf("node head = %v, want %v", nodeHead, controlHead)
+				}
+
+				nodeAUMs := must.Get(nodeStorage.AllAUMs())
+				controlAUMs := must.Get(controlStorage.AllAUMs())
+
+				t.Logf("== node ==")
+				for _, n := range nodeAUMs {
+					aum := must.Get(nodeStorage.AUM(n))
+					printAUM(t, aum)
+				}
+
+				t.Logf("== control ==")
+				for _, n := range controlAUMs {
+					aum := must.Get(controlStorage.AUM(n))
+					printAUM(t, aum)
+				}
+
+				t.Logf("== end ==")
+
+				aumHashCmp := func(a, b tka.AUMHash) int {
+					return cmp.Compare(a.String(), b.String())
+				}
+
+				if diff := deepcmp.Diff(nodeAUMs, controlAUMs, cmpopts.SortSlices(aumHashCmp)); diff != "" {
+					t.Errorf("list of AUMs differs (-node, +control):\n%s", diff)
+				}
+			})
+		}
 	}
 }
 
@@ -667,10 +810,10 @@ func TestTKAFilterNetmap(t *testing.T) {
 		{ID: 60, Key: n60.Public(), KeySignature: n60Sig},
 		{ID: 61, Key: n61.Public(), KeySignature: n61Sig},
 	})
-	nodePubComparer := cmp.Comparer(func(x, y key.NodePublic) bool {
-		return x.Raw32() == y.Raw32()
+	nodePubComparer := deepcmp.Comparer(func(x, y key.NodePublic) bool {
+		return x.Compare(y) == 0
 	})
-	if diff := cmp.Diff(want, nm.Peers, nodePubComparer); diff != "" {
+	if diff := deepcmp.Diff(want, nm.Peers, nodePubComparer); diff != "" {
 		t.Errorf("filtered netmap differs (-want, +got):\n%s", diff)
 	}
 
@@ -697,7 +840,7 @@ func TestTKAFilterNetmap(t *testing.T) {
 	want = nodeViews([]*tailcfg.Node{
 		{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
 	})
-	if diff := cmp.Diff(want, nm.Peers, nodePubComparer); diff != "" {
+	if diff := deepcmp.Diff(want, nm.Peers, nodePubComparer); diff != "" {
 		t.Errorf("filtered netmap differs (-want, +got):\n%s", diff)
 	}
 
@@ -722,7 +865,7 @@ func TestTKAFilterNetmap(t *testing.T) {
 		{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
 		{ID: 51, Key: n51.Public(), KeySignature: n51Sig},
 	})
-	if diff := cmp.Diff(want, nm.Peers, nodePubComparer); diff != "" {
+	if diff := deepcmp.Diff(want, nm.Peers, nodePubComparer); diff != "" {
 		t.Errorf("filtered netmap differs (-want, +got):\n%s", diff)
 	}
 }

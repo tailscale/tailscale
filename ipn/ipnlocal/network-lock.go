@@ -403,12 +403,18 @@ func (b *LocalBackend) tkaSyncLocked(ourNodeKey key.NodePublic) error {
 		return nil
 	}
 
+	behaviour := "existing"
+	behaviour = "proposed"
+
 	// Compute missing AUMs before we apply any AUMs from the control-plane,
 	// so we still submit AUMs to control even if they are not part of the
 	// active chain.
-	toSendAUMs, err := b.tka.authority.MissingAUMs(b.tka.storage, controlOffer)
-	if err != nil {
-		return fmt.Errorf("computing missing AUMs: %w", err)
+	var toSendAUMs []tka.AUM
+	if behaviour == "existing" {
+		toSendAUMs, err = b.tka.authority.MissingAUMs(b.tka.storage, controlOffer)
+		if err != nil {
+			return fmt.Errorf("computing missing AUMs: %w", err)
+		}
 	}
 
 	// If we got this far, then we are not up to date. Either the control-plane
@@ -426,6 +432,13 @@ func (b *LocalBackend) tkaSyncLocked(ourNodeKey key.NodePublic) error {
 
 		if err := b.tka.authority.Inform(b.tka.storage, aums); err != nil {
 			return fmt.Errorf("inform failed: %v", err)
+		}
+	}
+
+	if behaviour != "existing" {
+		toSendAUMs, err = b.tka.authority.MissingAUMs(b.tka.storage, controlOffer)
+		if err != nil {
+			return fmt.Errorf("computing missing AUMs: %w", err)
 		}
 	}
 
