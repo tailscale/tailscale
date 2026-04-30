@@ -2475,6 +2475,10 @@ const (
 	// CapabilityMacUIV2 makes the macOS GUI enable its v2 mode.
 	CapabilityMacUIV2 NodeCapability = "https://tailscale.com/cap/mac-ui-v2"
 
+	// CapabilityServicesInDesktopClients enables services list/menu/section in desktop clients.
+	// If this capability is not present, desktop clients should not show services.
+	CapabilityServicesInDesktopClients NodeCapability = "https://tailscale.com/cap/services-in-desktop-clients"
+
 	// CapabilityBindToInterfaceByRoute changes how Darwin nodes create
 	// sockets (in the net/netns package). See that package for more
 	// details on the behaviour of this capability.
