@@ -3296,7 +3296,7 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 
 	b.mu.Lock()
 
-	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode | ipn.NotifyInitialClientVersion
+	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode | ipn.NotifyInitialClientVersion | ipn.NotifyPeerChanges
 	if mask&initialBits != 0 {
 		cn := b.currentNode()
 		ini = &ipn.Notify{Version: version.Long()}
@@ -3310,7 +3310,10 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		if mask&ipn.NotifyInitialPrefs != 0 {
 			ini.Prefs = new(b.sanitizedPrefsLocked())
 		}
-		if mask&ipn.NotifyInitialNetMap != 0 {
+		if mask&(ipn.NotifyInitialNetMap|ipn.NotifyPeerChanges) != 0 {
+			// Include the initial NetMap if explicitly requested, or if the
+			// client subscribes to peer change deltas. Deltas are useless
+			// without a base netmap to apply them to.
 			ini.NetMap = cn.NetMap()
 		}
 		if mask&ipn.NotifyInitialDriveShares != 0 && b.DriveSharingEnabled() {

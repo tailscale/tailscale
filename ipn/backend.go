@@ -90,7 +90,8 @@ const (
 
 	// NotifyPeerChanges, if set, causes netmap delta updates to be sent as [tailcfg.PeerChange] rather than a full NetMap.
 	// Full netmap responses from the control plane are still sent as a full NetMap.  PeerChanges are only sent to sessions
-	// that have opted in to this mode.
+	// that have opted in to this mode.   Setting this flag also implies NotifyInitialNetMap, as the first message must
+	// contain a full netmap to establish the baseline for future peer changes.
 	NotifyPeerChanges NotifyWatchOpt = 1 << 12
 )
 

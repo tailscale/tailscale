@@ -7642,6 +7642,69 @@ func unexpectedClientVersion(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool 
 	return false
 }
 
+func TestWatchNotificationsPeerChangesImpliesInitialNetMap(t *testing.T) {
+	tests := []struct {
+		name              string
+		mask              ipn.NotifyWatchOpt
+		wantInitialNetMap bool
+	}{
+		{
+			name:              "with_notify_peer_changes",
+			mask:              ipn.NotifyPeerChanges,
+			wantInitialNetMap: true,
+		},
+		{
+			name:              "with_notify_initial_state_only",
+			mask:              ipn.NotifyInitialState,
+			wantInitialNetMap: false,
+		},
+		{
+			name:              "with_no_flags",
+			mask:              0,
+			wantInitialNetMap: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lb := newTestLocalBackend(t)
+
+			testNetMap := &netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					ID:   1,
+					Name: "self.tailscale.ts.net.",
+				}).View(),
+			}
+			lb.mu.Lock()
+			lb.setNetMapLocked(testNetMap)
+			lb.mu.Unlock()
+
+			nw := newNotificationWatcher(t, lb, ipnauth.Self)
+
+			if tt.wantInitialNetMap {
+				nw.watch(tt.mask, []wantedNotification{
+					{
+						name: "InitialNetMap",
+						cond: func(_ testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+							return n.NetMap != nil
+						},
+					},
+				})
+			} else {
+				nw.watch(tt.mask, nil, func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+					if n.NetMap != nil {
+						t.Errorf("unexpected NetMap in initial notification without NotifyInitialNetMap or NotifyPeerChanges")
+						return true
+					}
+					return false
+				})
+			}
+
+			nw.check()
+		})
+	}
+}
+
 func checkError(tb testing.TB, got, want error, fatal bool) {
 	tb.Helper()
 	f := tb.Errorf
