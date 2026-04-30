@@ -76,6 +76,7 @@ const (
 type ipnLocalBackend interface {
 	ShouldRunSSH() bool
 	NetMap() *netmap.NetworkMap
+	NetMapNoPeers() *netmap.NetworkMap
 	WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
 	DoNoiseRequest(req *http.Request) (*http.Response, error)
 	Dialer() *tsdial.Dialer
@@ -598,7 +599,7 @@ func (c *conn) sshPolicy() (_ *tailcfg.SSHPolicy, ok bool) {
 	if !lb.ShouldRunSSH() {
 		return nil, false
 	}
-	nm := lb.NetMap()
+	nm := lb.NetMapNoPeers()
 	if nm == nil {
 		return nil, false
 	}
@@ -717,7 +718,7 @@ func (c *conn) handleSessionPostSSHAuth(s gliderssh.Session) {
 }
 
 func (c *conn) expandDelegateURLLocked(actionURL string) string {
-	nm := c.srv.lb.NetMap()
+	nm := c.srv.lb.NetMapNoPeers()
 	ci := c.info
 	lu := c.localUser
 	var dstNodeID string

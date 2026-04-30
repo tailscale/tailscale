@@ -668,7 +668,7 @@ func (s *Server) doInit() {
 // Server.
 // If the server is not running, it returns nil.
 func (s *Server) CertDomains() []string {
-	nm := s.lb.NetMap()
+	nm := s.lb.NetMapNoPeers()
 	if nm == nil {
 		return nil
 	}
@@ -679,7 +679,7 @@ func (s *Server) CertDomains() []string {
 // has not yet joined a tailnet or is otherwise unaware of its own IP addresses,
 // the returned ip4, ip6 will be !netip.IsValid().
 func (s *Server) TailscaleIPs() (ip4, ip6 netip.Addr) {
-	nm := s.lb.NetMap()
+	nm := s.lb.NetMapNoPeers()
 	if nm == nil {
 		return
 	}

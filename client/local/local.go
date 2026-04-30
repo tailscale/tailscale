@@ -607,6 +607,24 @@ func (lc *Client) DebugResultJSON(ctx context.Context, action string) (any, erro
 	return x, nil
 }
 
+// GetDebugResultJSON invokes a debug action and decodes the JSON response
+// into a value of type T. It avoids the marshal/unmarshal roundtrip that
+// callers of [Client.DebugResultJSON] otherwise need to do to get a typed
+// value.
+//
+// These are development tools and subject to change or removal over time.
+func GetDebugResultJSON[T any](ctx context.Context, lc *Client, action string) (T, error) {
+	var v T
+	body, err := lc.send(ctx, "POST", "/localapi/v0/debug?action="+url.QueryEscape(action), 200, nil)
+	if err != nil {
+		return v, fmt.Errorf("error %w: %s", err, body)
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		return v, err
+	}
+	return v, nil
+}
+
 // QueryOptionalFeatures queries the optional features supported by the Tailscale daemon.
 func (lc *Client) QueryOptionalFeatures(ctx context.Context) (*apitype.OptionalFeatures, error) {
 	body, err := lc.send(ctx, "POST", "/localapi/v0/debug-optional-features", 200, nil)

@@ -422,6 +422,8 @@ func (ts *localState) NetMap() *netmap.NetworkMap {
 	}
 }
 
+func (ts *localState) NetMapNoPeers() *netmap.NetworkMap { return ts.NetMap() }
+
 func (ts *localState) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
 	if proto != "tcp" {
 		return tailcfg.NodeView{}, tailcfg.UserProfile{}, false

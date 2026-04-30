@@ -701,7 +701,9 @@ func (b *LocalBackend) onHomeDERPUpdateLocked(du magicsock.HomeDERPChanged) {
 		return
 	}
 
-	if err := b.writeNetmapToDiskLocked(b.NetMap()); err != nil {
+	// Persist the full netmap (including up-to-date Peers) to disk for
+	// fast restart.
+	if err := b.writeNetmapToDiskLocked(b.NetMapWithPeers()); err != nil {
 		b.logf("write netmap to cache: %v", err)
 	}
 }
@@ -1023,7 +1025,7 @@ func (b *LocalBackend) pauseOrResumeControlClientLocked() {
 		return
 	}
 	networkUp := b.interfaceState.AnyInterfaceUp()
-	pauseForNetwork := (b.state == ipn.Stopped && b.NetMap() != nil) || (!networkUp && !testenv.InTest() && !envknob.AssumeNetworkUp())
+	pauseForNetwork := (b.state == ipn.Stopped && b.NetMapNoPeers() != nil) || (!networkUp && !testenv.InTest() && !envknob.AssumeNetworkUp())
 
 	prefs := b.pm.CurrentPrefs()
 	pauseForSyncPref := prefs.Valid() && prefs.Sync().EqualBool(false)
@@ -4057,7 +4059,8 @@ func (b *LocalBackend) pingPeerAPI(ctx context.Context, ip netip.Addr) (peer tai
 	var zero tailcfg.NodeView
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	nm := b.NetMap()
+	// PeerByTailscaleIP needs an up-to-date Peers slice.
+	nm := b.NetMapWithPeers()
 	if nm == nil {
 		return zero, "", errors.New("no netmap")
 	}
@@ -4967,7 +4970,7 @@ func (b *LocalBackend) handlePeerAPIConn(remote, local netip.AddrPort, c net.Con
 }
 
 func (b *LocalBackend) isLocalIP(ip netip.Addr) bool {
-	nm := b.NetMap()
+	nm := b.NetMapNoPeers()
 	return nm != nil && views.SliceContains(nm.GetAddresses(), netip.PrefixFrom(ip, ip.BitLen()))
 }
 
@@ -5119,7 +5122,43 @@ func extractPeerAPIPorts(services []tailcfg.Service) portPair {
 
 // NetMap returns the latest cached network map received from
 // controlclient, or nil if no network map was received yet.
+//
+// Deprecated: callers should declare their needs explicitly by calling
+// either [LocalBackend.NetMapNoPeers] (cheap; for code that reads
+// non-Peers fields like SelfNode, DNS, PacketFilter, capabilities) or
+// [LocalBackend.NetMapWithPeers] (currently the same; will be made to
+// return an up-to-date Peers slice in a follow-up change, at the cost of
+// O(N) work per call). NetMap will eventually be removed.
 func (b *LocalBackend) NetMap() *netmap.NetworkMap {
+	return b.currentNode().NetMap()
+}
+
+// NetMapNoPeers returns the latest cached network map received from
+// controlclient WITHOUT a freshly-built Peers slice.
+//
+// On a tailnet with frequent peer churn the cached netmap's Peers slice
+// can be stale relative to the live per-node-backend peers map; non-Peers
+// fields (SelfNode, DNS, PacketFilter, capabilities, ...) are always
+// current. Use this for any caller that does not need to iterate Peers,
+// since it's O(1) regardless of tailnet size.
+//
+// Returns nil if no network map has been received yet.
+func (b *LocalBackend) NetMapNoPeers() *netmap.NetworkMap {
+	return b.currentNode().NetMap()
+}
+
+// NetMapWithPeers returns the latest network map with the Peers slice
+// populated.
+//
+// Currently this is the same as [LocalBackend.NetMapNoPeers]: the cached
+// netmap's Peers slice may be stale relative to the live per-node-backend
+// peers map. A follow-up change will switch this method to return a
+// freshly-built netmap with up-to-date Peers, at O(N) cost per call.
+// Callers that genuinely need the up-to-date peer set should use this
+// method (and document why) so the upcoming change reaches them.
+//
+// Returns nil if no network map has been received yet.
+func (b *LocalBackend) NetMapWithPeers() *netmap.NetworkMap {
 	return b.currentNode().NetMap()
 }
 
@@ -6978,7 +7017,7 @@ func (b *LocalBackend) AppConnector() *appc.AppConnector {
 func (b *LocalBackend) allowExitNodeDNSProxyToServeName(name string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	nm := b.NetMap()
+	nm := b.NetMapNoPeers()
 	if nm == nil {
 		return false
 	}

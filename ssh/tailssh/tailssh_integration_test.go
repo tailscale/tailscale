@@ -910,6 +910,8 @@ func (tb *testBackend) NetMap() *netmap.NetworkMap {
 	}
 }
 
+func (tb *testBackend) NetMapNoPeers() *netmap.NetworkMap { return tb.NetMap() }
+
 func (tb *testBackend) WhoIs(_ string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
 	return (&tailcfg.Node{}).View(), tailcfg.UserProfile{
 		LoginName: tb.localUser + "@example.com",

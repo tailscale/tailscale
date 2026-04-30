@@ -192,7 +192,7 @@ func (pln *peerAPIListener) ServeConn(src netip.AddrPort, c net.Conn) {
 		c.Close()
 		return
 	}
-	nm := pln.lb.NetMap()
+	nm := pln.lb.NetMapNoPeers()
 	if nm == nil || !nm.SelfNode.Valid() {
 		logf("peerapi: no netmap")
 		c.Close()
