@@ -310,6 +310,30 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 		t.Errorf("Unexpected result applying ProxyClass with metrics enabled to a StatefulSet (-got +want):\n%s", diff)
 	}
 
+	// 7b. Enable metrics with custom port name.
+	customPortNamePC := &tsapi.ProxyClass{
+		Spec: tsapi.ProxyClassSpec{
+			Metrics: &tsapi.Metrics{Enable: true, PortName: "ts-metrics"},
+			StatefulSet: &tsapi.StatefulSet{
+				Pod: &tsapi.Pod{
+					TailscaleContainer: &tsapi.Container{
+						Debug: &tsapi.Debug{Enable: false},
+					},
+				},
+			},
+		},
+	}
+	wantSS = nonUserspaceProxySS.DeepCopy()
+	wantSS.Spec.Template.Spec.Containers[0].Env = append(wantSS.Spec.Template.Spec.Containers[0].Env,
+		corev1.EnvVar{Name: "TS_LOCAL_ADDR_PORT", Value: "$(POD_IP):9002"},
+		corev1.EnvVar{Name: "TS_ENABLE_METRICS", Value: "true"},
+	)
+	wantSS.Spec.Template.Spec.Containers[0].Ports = []corev1.ContainerPort{{Name: "ts-metrics", Protocol: "TCP", ContainerPort: 9002}}
+	gotSS = applyProxyClassToStatefulSet(customPortNamePC, nonUserspaceProxySS.DeepCopy(), new(tailscaleSTSConfig), zl.Sugar())
+	if diff := cmp.Diff(gotSS, wantSS); diff != "" {
+		t.Errorf("Unexpected result applying ProxyClass with custom metrics port name to a StatefulSet (-got +want):\n%s", diff)
+	}
+
 	// 8. A Kubernetes API proxy with letsencrypt staging enabled
 	gotSS = applyProxyClassToStatefulSet(proxyClassAllOpts, nonUserspaceProxySS.DeepCopy(), &tailscaleSTSConfig{proxyType: string(tsapi.ProxyGroupTypeKubernetesAPIServer)}, zl.Sugar())
 	verifyEnvVar(t, gotSS, "TS_DEBUG_ACME_DIRECTORY_URL", letsEncryptStagingEndpoint)
