@@ -597,12 +597,10 @@ func TestCompactLongButYoung(t *testing.T) {
 	ourPriv := key.NewNLPrivate()
 	ourKey := Key{Kind: Key25519, Public: ourPriv.Public().Verifier(), Votes: 1}
 	someOtherKey := Key{Kind: Key25519, Public: key.NewNLPrivate().Public().Verifier(), Votes: 1}
+	state := CreateStateForTest(ourKey, someOtherKey)
 
 	storage := ChonkMem()
-	auth, _, err := Create(storage, State{
-		Keys:              []Key{ourKey, someOtherKey},
-		DisablementValues: [][]byte{DisablementKDF(bytes.Repeat([]byte{0xa5}, 32))},
-	}, ourPriv)
+	auth, _, err := Create(storage, state, ourPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
 	}

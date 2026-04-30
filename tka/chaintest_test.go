@@ -321,10 +321,8 @@ func optTemplate(name string, template AUM) testchainOpt {
 }
 
 func genesisTemplate(key Key) testchainOpt {
-	return optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-		Keys:              []Key{key},
-		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-	}})
+	state := CreateStateForTest(key)
+	return optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &state})
 }
 
 func checkpointTemplate() testchainOpt {
