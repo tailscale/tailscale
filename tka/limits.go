@@ -10,8 +10,8 @@ import (
 const (
 	// Upper bound on checkpoint elements, chosen arbitrarily. Intended
 	// to cap the size of large AUMs.
-	maxDisablementSecrets = 32
-	maxKeys               = 512
+	maxDisablementValues = 32
+	maxKeys              = 512
 
 	// Max amount of metadata that can be associated with a key, chosen arbitrarily.
 	// Intended to avoid people abusing TKA as a key-value score.

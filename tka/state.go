@@ -261,8 +261,8 @@ func (s *State) staticValidateCheckpoint() error {
 	if len(s.DisablementValues) == 0 {
 		return errors.New("at least one disablement secret required")
 	}
-	if numDS := len(s.DisablementValues); numDS > maxDisablementSecrets {
-		return fmt.Errorf("too many disablement secrets (%d, max %d)", numDS, maxDisablementSecrets)
+	if numDS := len(s.DisablementValues); numDS > maxDisablementValues {
+		return fmt.Errorf("too many disablement values (%d, max %d)", numDS, maxDisablementValues)
 	}
 	for i, ds := range s.DisablementValues {
 		if len(ds) != disablementLength {
