@@ -1064,6 +1064,20 @@ func (lc *Client) DNSConfig(ctx context.Context) (*tailcfg.DNSConfig, error) {
 	return decodeJSON[*tailcfg.DNSConfig](body)
 }
 
+// PeerByID returns a peer's current full [tailcfg.Node] looked up by its
+// [tailcfg.NodeID], in O(1) time on the daemon side. It returns an error
+// if no peer with that NodeID is in the current netmap.
+//
+// It is intended for callers that need the latest state of a single peer
+// without fetching the entire netmap.
+func (lc *Client) PeerByID(ctx context.Context, id tailcfg.NodeID) (*tailcfg.Node, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/peer-by-id?id="+strconv.FormatInt(int64(id), 10))
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[*tailcfg.Node](body)
+}
+
 // PingOpts contains options for the ping request.
 //
 // The zero value is valid, which means to use defaults.

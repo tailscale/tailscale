@@ -202,6 +202,72 @@ func TestWhoIsArgTypes(t *testing.T) {
 	}
 }
 
+type fakePeerByIDBackend map[tailcfg.NodeID]*tailcfg.Node
+
+func (f fakePeerByIDBackend) PeerByID(id tailcfg.NodeID) (tailcfg.NodeView, bool) {
+	n, ok := f[id]
+	if !ok {
+		return tailcfg.NodeView{}, false
+	}
+	return n.View(), true
+}
+
+func TestServePeerByID(t *testing.T) {
+	h := handlerForTest(t, &Handler{PermitRead: true})
+	b := fakePeerByIDBackend{
+		42: {
+			ID:   42,
+			Name: "alpha",
+			Addresses: []netip.Prefix{
+				netip.MustParsePrefix("100.64.0.42/32"),
+			},
+		},
+	}
+
+	tests := []struct {
+		name       string
+		query      string
+		wantCode   int
+		wantNodeID tailcfg.NodeID
+	}{
+		{"hit", "id=42", 200, 42},
+		{"miss", "id=99", 404, 0},
+		{"bad_id", "id=garbage", 400, 0},
+		{"missing_id", "", 400, 0},
+		{"zero_id", "id=0", 400, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", "/v0/peer-by-id?"+tt.query, nil)
+			h.servePeerByIDWithBackend(rec, req, b)
+			if rec.Code != tt.wantCode {
+				t.Fatalf("status = %d, want %d; body=%q", rec.Code, tt.wantCode, rec.Body.String())
+			}
+			if tt.wantCode != 200 {
+				return
+			}
+			var got tailcfg.Node
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("unmarshal body %q: %v", rec.Body.Bytes(), err)
+			}
+			if got.ID != tt.wantNodeID {
+				t.Errorf("Node.ID = %d, want %d", got.ID, tt.wantNodeID)
+			}
+		})
+	}
+
+	t.Run("forbidden", func(t *testing.T) {
+		hh := handlerForTest(t, &Handler{PermitRead: false})
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/v0/peer-by-id?id=42", nil)
+		hh.servePeerByIDWithBackend(rec, req, b)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+		}
+	})
+}
+
 func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 	newHandler := func(connIsLocalAdmin bool) *Handler {
 		return handlerForTest(t, &Handler{

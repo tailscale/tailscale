@@ -80,6 +80,7 @@ var handler = map[string]LocalAPIHandler{
 	"goroutines":           (*Handler).serveGoroutines,
 	"login-interactive":    (*Handler).serveLoginInteractive,
 	"logout":               (*Handler).serveLogout,
+	"peer-by-id":           (*Handler).servePeerByID,
 	"ping":                 (*Handler).servePing,
 	"prefs":                (*Handler).servePrefs,
 	"reload-config":        (*Handler).reloadConfig,
@@ -1108,6 +1109,45 @@ func (h *Handler) serveDNSConfig(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(nm.DNS)
+}
+
+// peerByIDBackend is the subset of [ipnlocal.LocalBackend] used by
+// [Handler.servePeerByID]. It exists so the handler can be tested with a
+// trivial mock without spinning up a full LocalBackend.
+type peerByIDBackend interface {
+	PeerByID(tailcfg.NodeID) (tailcfg.NodeView, bool)
+}
+
+// servePeerByID returns the current full [tailcfg.Node] for the peer with
+// the NodeID given in the "id" query parameter, in O(1) time. It returns
+// 404 if no such peer is in the current netmap.
+//
+// It is intended for clients that need the latest state of a single peer
+// without fetching the entire netmap.
+func (h *Handler) servePeerByID(w http.ResponseWriter, r *http.Request) {
+	h.servePeerByIDWithBackend(w, r, h.b)
+}
+
+func (h *Handler) servePeerByIDWithBackend(w http.ResponseWriter, r *http.Request, b peerByIDBackend) {
+	if !h.PermitRead {
+		http.Error(w, "peer-by-id access denied", http.StatusForbidden)
+		return
+	}
+	idStr := r.FormValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid 'id' parameter", http.StatusBadRequest)
+		return
+	}
+	nv, ok := b.PeerByID(tailcfg.NodeID(id))
+	if !ok {
+		http.Error(w, "no peer with that NodeID", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	e := json.NewEncoder(w)
+	e.SetIndent("", "\t")
+	e.Encode(nv.AsStruct())
 }
 
 // serveSetExpirySooner sets the expiry date on the current machine, specified

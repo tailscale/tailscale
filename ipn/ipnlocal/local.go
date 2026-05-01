@@ -1621,6 +1621,16 @@ func (b *LocalBackend) PeerCaps(src netip.Addr) tailcfg.PeerCapMap {
 	return b.currentNode().PeerCaps(src)
 }
 
+// PeerByID returns the current full [tailcfg.Node] for the peer with the
+// given NodeID, in O(1) time. It returns ok=false if no such peer is in
+// the current netmap.
+//
+// It is intended for callers that need the latest state of a single peer
+// without fetching the entire netmap.
+func (b *LocalBackend) PeerByID(id tailcfg.NodeID) (n tailcfg.NodeView, ok bool) {
+	return b.currentNode().NodeByID(id)
+}
+
 func (b *LocalBackend) GetFilterForTest() *filter.Filter {
 	testenv.AssertInTest()
 	nb := b.currentNode()
