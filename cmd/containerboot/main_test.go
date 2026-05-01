@@ -71,6 +71,12 @@ func TestContainerBoot(t *testing.T) {
 		// Waits below to be true before proceeding to the next phase.
 		Notify *ipn.Notify
 
+		// If non-nil, install this NetMap on the fake LocalAPI before
+		// sending Notify. This is the replacement for the old
+		// Notify.NetMap field; reactive consumers fetch the current
+		// netmap via /localapi/v0/netmap on their own.
+		NetMap *netmap.NetworkMap
+
 		// WantCmds is the commands that containerboot should run in this phase.
 		WantCmds []string
 
@@ -105,12 +111,10 @@ func TestContainerBoot(t *testing.T) {
 	}
 	runningNotify := &ipn.Notify{
 		State: new(ipn.Running),
-		NetMap: &netmap.NetworkMap{
-			SelfNode: (&tailcfg.Node{
-				StableID:  tailcfg.StableNodeID("myID"),
-				Name:      "test-node.test.ts.net.",
-				Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
-			}).View(),
+		SelfChange: &tailcfg.Node{
+			StableID:  tailcfg.StableNodeID("myID"),
+			Name:      "test-node.test.ts.net.",
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
 		},
 	}
 	type testCase struct {
@@ -383,19 +387,24 @@ func TestContainerBoot(t *testing.T) {
 					{
 						Notify: &ipn.Notify{
 							State: new(ipn.Running),
-							NetMap: &netmap.NetworkMap{
-								SelfNode: (&tailcfg.Node{
-									StableID:  tailcfg.StableNodeID("myID"),
-									Name:      "test-node.test.ts.net.",
-									Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+							SelfChange: &tailcfg.Node{
+								StableID:  tailcfg.StableNodeID("myID"),
+								Name:      "test-node.test.ts.net.",
+								Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+							},
+						},
+						NetMap: &netmap.NetworkMap{
+							SelfNode: (&tailcfg.Node{
+								StableID:  tailcfg.StableNodeID("myID"),
+								Name:      "test-node.test.ts.net.",
+								Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+							}).View(),
+							Peers: []tailcfg.NodeView{
+								(&tailcfg.Node{
+									StableID:  tailcfg.StableNodeID("ipv6ID"),
+									Name:      "ipv6-node.test.ts.net.",
+									Addresses: []netip.Prefix{netip.MustParsePrefix("::1/128")},
 								}).View(),
-								Peers: []tailcfg.NodeView{
-									(&tailcfg.Node{
-										StableID:  tailcfg.StableNodeID("ipv6ID"),
-										Name:      "ipv6-node.test.ts.net.",
-										Addresses: []netip.Prefix{netip.MustParsePrefix("::1/128")},
-									}).View(),
-								},
 							},
 						},
 						WantLog:      "no forwarding rules for egress addresses [::1/128], host supports IPv6: false",
@@ -631,13 +640,18 @@ func TestContainerBoot(t *testing.T) {
 					{
 						Notify: &ipn.Notify{
 							State: new(ipn.Running),
-							NetMap: &netmap.NetworkMap{
-								SelfNode: (&tailcfg.Node{
-									StableID:  tailcfg.StableNodeID("newID"),
-									Name:      "new-name.test.ts.net.",
-									Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
-								}).View(),
+							SelfChange: &tailcfg.Node{
+								StableID:  tailcfg.StableNodeID("newID"),
+								Name:      "new-name.test.ts.net.",
+								Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
 							},
+						},
+						NetMap: &netmap.NetworkMap{
+							SelfNode: (&tailcfg.Node{
+								StableID:  tailcfg.StableNodeID("newID"),
+								Name:      "new-name.test.ts.net.",
+								Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+							}).View(),
 						},
 						WantKubeSecret: map[string]string{
 							"authkey":           "tskey-key",
@@ -1095,19 +1109,24 @@ func TestContainerBoot(t *testing.T) {
 					{
 						Notify: &ipn.Notify{
 							State: new(ipn.Running),
-							NetMap: &netmap.NetworkMap{
-								SelfNode: (&tailcfg.Node{
-									StableID:  tailcfg.StableNodeID("myID"),
-									Name:      "test-node.test.ts.net.",
-									Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+							SelfChange: &tailcfg.Node{
+								StableID:  tailcfg.StableNodeID("myID"),
+								Name:      "test-node.test.ts.net.",
+								Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+							},
+						},
+						NetMap: &netmap.NetworkMap{
+							SelfNode: (&tailcfg.Node{
+								StableID:  tailcfg.StableNodeID("myID"),
+								Name:      "test-node.test.ts.net.",
+								Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+							}).View(),
+							Peers: []tailcfg.NodeView{
+								(&tailcfg.Node{
+									StableID:  tailcfg.StableNodeID("fooID"),
+									Name:      "foo.tailnetxyz.ts.net.",
+									Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")},
 								}).View(),
-								Peers: []tailcfg.NodeView{
-									(&tailcfg.Node{
-										StableID:  tailcfg.StableNodeID("fooID"),
-										Name:      "foo.tailnetxyz.ts.net.",
-										Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")},
-									}).View(),
-								},
 							},
 						},
 						WantKubeSecret: map[string]string{
@@ -1275,6 +1294,18 @@ func TestContainerBoot(t *testing.T) {
 					if err := os.Chtimes(fullPath, now, now); err != nil {
 						t.Fatalf("phase %d: updating mtime for %q: %v", i, path, err)
 					}
+				}
+				nmForFake := p.NetMap
+				if nmForFake == nil && p.Notify != nil && p.Notify.SelfChange != nil {
+					// Synthesize a minimal netmap from SelfChange so
+					// containerboot's NetMap() fetch returns
+					// something usable when the test only set Notify.
+					nmForFake = &netmap.NetworkMap{
+						SelfNode: p.Notify.SelfChange.View(),
+					}
+				}
+				if nmForFake != nil {
+					env.lapi.SetNetMap(nmForFake)
 				}
 				env.lapi.Notify(p.Notify)
 				if p.Signal != nil {
@@ -1468,6 +1499,7 @@ type localAPI struct {
 	sync.Mutex
 	cond   *sync.Cond
 	notify *ipn.Notify
+	netmap *netmap.NetworkMap // served by /localapi/v0/netmap
 }
 
 func (lc *localAPI) Start() error {
@@ -1504,8 +1536,44 @@ func (lc *localAPI) Notify(n *ipn.Notify) {
 	lc.cond.Broadcast()
 }
 
+// SetNetMap installs the netmap that the fake /localapi/v0/netmap endpoint
+// will return.
+func (lc *localAPI) SetNetMap(nm *netmap.NetworkMap) {
+	lc.Lock()
+	defer lc.Unlock()
+	lc.netmap = nm
+}
+
 func (lc *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
+	case "/localapi/v0/netmap":
+		w.Header().Set("Content-Type", "application/json")
+		lc.Lock()
+		nm := lc.netmap
+		lc.Unlock()
+		if nm == nil {
+			http.Error(w, "no netmap", http.StatusServiceUnavailable)
+			return
+		}
+		json.NewEncoder(w).Encode(nm)
+		return
+	case "/localapi/v0/debug":
+		// containerboot fetches the netmap via the "current-netmap"
+		// debug action; serve it like /localapi/v0/netmap above.
+		if r.URL.Query().Get("action") != "current-netmap" {
+			http.Error(w, "unsupported debug action", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		lc.Lock()
+		nm := lc.netmap
+		lc.Unlock()
+		if nm == nil {
+			http.Error(w, "no netmap", http.StatusServiceUnavailable)
+			return
+		}
+		json.NewEncoder(w).Encode(nm)
+		return
 	case "/localapi/v0/serve-config":
 		switch r.Method {
 		case "GET":

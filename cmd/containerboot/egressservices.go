@@ -24,10 +24,10 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"tailscale.com/client/local"
-	"tailscale.com/ipn"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/types/netmap"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/linuxfw"
 	"tailscale.com/util/mak"
@@ -55,7 +55,7 @@ type egressProxy struct {
 
 	tsClient *local.Client // never nil
 
-	netmapChan chan ipn.Notify // chan to receive netmap updates on
+	netmapChan chan *netmap.NetworkMap // chan to receive netmap updates on
 
 	podIPv4 string // never empty string, currently only IPv4 is supported
 
@@ -87,7 +87,7 @@ type httpClient interface {
 // - the mounted egress config has changed
 // - the proxy's tailnet IP addresses have changed
 // - tailnet IPs have changed for any backend targets specified by tailnet FQDN
-func (ep *egressProxy) run(ctx context.Context, n ipn.Notify, opts egressProxyRunOpts) error {
+func (ep *egressProxy) run(ctx context.Context, nm *netmap.NetworkMap, opts egressProxyRunOpts) error {
 	ep.configure(opts)
 	var tickChan <-chan time.Time
 	var eventChan <-chan fsnotify.Event
@@ -106,7 +106,7 @@ func (ep *egressProxy) run(ctx context.Context, n ipn.Notify, opts egressProxyRu
 		eventChan = w.Events
 	}
 
-	if err := ep.sync(ctx, n); err != nil {
+	if err := ep.sync(ctx, nm); err != nil {
 		return err
 	}
 	for {
@@ -117,14 +117,14 @@ func (ep *egressProxy) run(ctx context.Context, n ipn.Notify, opts egressProxyRu
 			log.Printf("periodic sync, ensuring firewall config is up to date...")
 		case <-eventChan:
 			log.Printf("config file change detected, ensuring firewall config is up to date...")
-		case n = <-ep.netmapChan:
-			shouldResync := ep.shouldResync(n)
+		case nm = <-ep.netmapChan:
+			shouldResync := ep.shouldResync(nm)
 			if !shouldResync {
 				continue
 			}
 			log.Printf("netmap change detected, ensuring firewall config is up to date...")
 		}
-		if err := ep.sync(ctx, n); err != nil {
+		if err := ep.sync(ctx, nm); err != nil {
 			return fmt.Errorf("error syncing egress service config: %w", err)
 		}
 	}
@@ -136,7 +136,7 @@ type egressProxyRunOpts struct {
 	kc           kubeclient.Client
 	tsClient     *local.Client
 	stateSecret  string
-	netmapChan   chan ipn.Notify
+	netmapChan   chan *netmap.NetworkMap
 	podIPv4      string
 	tailnetAddrs []netip.Prefix
 }
@@ -165,7 +165,7 @@ func (ep *egressProxy) configure(opts egressProxyRunOpts) {
 // any firewall rules need to be updated. Currently using status in state Secret as a reference for what is the current
 // firewall configuration is good enough because - the status is keyed by the Pod IP - we crash the Pod on errors such
 // as failed firewall update
-func (ep *egressProxy) sync(ctx context.Context, n ipn.Notify) error {
+func (ep *egressProxy) sync(ctx context.Context, nm *netmap.NetworkMap) error {
 	cfgs, err := ep.getConfigs()
 	if err != nil {
 		return fmt.Errorf("error retrieving egress service configs: %w", err)
@@ -174,12 +174,12 @@ func (ep *egressProxy) sync(ctx context.Context, n ipn.Notify) error {
 	if err != nil {
 		return fmt.Errorf("error retrieving current egress proxy status: %w", err)
 	}
-	newStatus, err := ep.syncEgressConfigs(cfgs, status, n)
+	newStatus, err := ep.syncEgressConfigs(cfgs, status, nm)
 	if err != nil {
 		return fmt.Errorf("error syncing egress service configs: %w", err)
 	}
 	if !servicesStatusIsEqual(newStatus, status) {
-		if err := ep.setStatus(ctx, newStatus, n); err != nil {
+		if err := ep.setStatus(ctx, newStatus, nm); err != nil {
 			return fmt.Errorf("error setting egress proxy status: %w", err)
 		}
 	}
@@ -188,14 +188,14 @@ func (ep *egressProxy) sync(ctx context.Context, n ipn.Notify) error {
 
 // addrsHaveChanged returns true if the provided netmap update contains tailnet address change for this proxy node.
 // Netmap must not be nil.
-func (ep *egressProxy) addrsHaveChanged(n ipn.Notify) bool {
-	return !reflect.DeepEqual(ep.tailnetAddrs, n.NetMap.SelfNode.Addresses())
+func (ep *egressProxy) addrsHaveChanged(nm *netmap.NetworkMap) bool {
+	return !reflect.DeepEqual(ep.tailnetAddrs, nm.SelfNode.Addresses())
 }
 
 // syncEgressConfigs adds and deletes firewall rules to match the desired
 // configuration. It uses the provided status to determine what is currently
 // applied and updates the status after a successful sync.
-func (ep *egressProxy) syncEgressConfigs(cfgs egressservices.Configs, status *egressservices.Status, n ipn.Notify) (*egressservices.Status, error) {
+func (ep *egressProxy) syncEgressConfigs(cfgs egressservices.Configs, status *egressservices.Status, nm *netmap.NetworkMap) (*egressservices.Status, error) {
 	if !(wantsServicesConfigured(cfgs) || hasServicesConfigured(status)) {
 		return nil, nil
 	}
@@ -214,7 +214,7 @@ func (ep *egressProxy) syncEgressConfigs(cfgs egressservices.Configs, status *eg
 	rulesPerSvcToAdd := make(map[string][]rule, 0)
 	rulesPerSvcToDelete := make(map[string][]rule, 0)
 	for svcName, cfg := range cfgs {
-		tailnetTargetIPs, err := ep.tailnetTargetIPsForSvc(cfg, n)
+		tailnetTargetIPs, err := ep.tailnetTargetIPsForSvc(cfg, nm)
 		if err != nil {
 			return nil, fmt.Errorf("error determining tailnet target IPs: %w", err)
 		}
@@ -229,12 +229,12 @@ func (ep *egressProxy) syncEgressConfigs(cfgs egressservices.Configs, status *eg
 		if len(rulesToDelete) != 0 {
 			mak.Set(&rulesPerSvcToDelete, svcName, rulesToDelete)
 		}
-		if len(rulesToAdd) != 0 || ep.addrsHaveChanged(n) {
+		if len(rulesToAdd) != 0 || ep.addrsHaveChanged(nm) {
 			// For each tailnet target, set up SNAT from the local tailnet device address of the matching
 			// family.
 			for _, t := range tailnetTargetIPs {
 				var local netip.Addr
-				for _, pfx := range n.NetMap.SelfNode.Addresses().All() {
+				for _, pfx := range nm.SelfNode.Addresses().All() {
 					if !pfx.IsSingleIP() {
 						continue
 					}
@@ -424,7 +424,7 @@ func (ep *egressProxy) getStatus(ctx context.Context) (*egressservices.Status, e
 
 // setStatus writes egress proxy's currently configured firewall to the state
 // Secret and updates proxy's tailnet addresses.
-func (ep *egressProxy) setStatus(ctx context.Context, status *egressservices.Status, n ipn.Notify) error {
+func (ep *egressProxy) setStatus(ctx context.Context, status *egressservices.Status, nm *netmap.NetworkMap) error {
 	// Pod IP is used to determine if a stored status applies to THIS proxy Pod.
 	if status == nil {
 		status = &egressservices.Status{}
@@ -447,7 +447,7 @@ func (ep *egressProxy) setStatus(ctx context.Context, status *egressservices.Sta
 	if err := ep.kc.JSONPatchResource(ctx, ep.stateSecret, kubeclient.TypeSecrets, []kubeclient.JSONPatch{patch}); err != nil {
 		return fmt.Errorf("error patching state Secret: %w", err)
 	}
-	ep.tailnetAddrs = n.NetMap.SelfNode.Addresses().AsSlice()
+	ep.tailnetAddrs = nm.SelfNode.Addresses().AsSlice()
 	return nil
 }
 
@@ -457,7 +457,7 @@ func (ep *egressProxy) setStatus(ctx context.Context, status *egressservices.Sta
 // FQDN, resolve the FQDN and return the resolved IPs. It checks if the
 // netfilter runner supports IPv6 NAT and skips any IPv6 addresses if it
 // doesn't.
-func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, n ipn.Notify) (addrs []netip.Addr, err error) {
+func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, nm *netmap.NetworkMap) (addrs []netip.Addr, err error) {
 	if svc.TailnetTarget.IP != "" {
 		addr, err := netip.ParseAddr(svc.TailnetTarget.IP)
 		if err != nil {
@@ -473,11 +473,11 @@ func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, n ipn.N
 	if svc.TailnetTarget.FQDN == "" {
 		return nil, errors.New("unexpected egress service config- neither tailnet target IP nor FQDN is set")
 	}
-	if n.NetMap == nil {
+	if nm == nil {
 		log.Printf("netmap is not available, unable to determine backend addresses for %s", svc.TailnetTarget.FQDN)
 		return addrs, nil
 	}
-	egressAddrs, err := resolveTailnetFQDN(n.NetMap, svc.TailnetTarget.FQDN)
+	egressAddrs, err := resolveTailnetFQDN(nm, svc.TailnetTarget.FQDN)
 	if err != nil {
 		log.Printf("error fetching backend addresses for %q: %v", svc.TailnetTarget.FQDN, err)
 		return addrs, nil
@@ -503,22 +503,22 @@ func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, n ipn.N
 
 // shouldResync parses netmap update and returns true if the update contains
 // changes for which the egress proxy's firewall should be reconfigured.
-func (ep *egressProxy) shouldResync(n ipn.Notify) bool {
-	if n.NetMap == nil {
+func (ep *egressProxy) shouldResync(nm *netmap.NetworkMap) bool {
+	if nm == nil {
 		return false
 	}
 
 	// If proxy's tailnet addresses have changed, resync.
-	if !reflect.DeepEqual(n.NetMap.SelfNode.Addresses().AsSlice(), ep.tailnetAddrs) {
+	if !reflect.DeepEqual(nm.SelfNode.Addresses().AsSlice(), ep.tailnetAddrs) {
 		log.Printf("node addresses have changed, trigger egress config resync")
-		ep.tailnetAddrs = n.NetMap.SelfNode.Addresses().AsSlice()
+		ep.tailnetAddrs = nm.SelfNode.Addresses().AsSlice()
 		return true
 	}
 
 	// If the IPs for any of the egress services configured via FQDN have
 	// changed, resync.
 	for fqdn, ips := range ep.targetFQDNs {
-		for _, nn := range n.NetMap.Peers {
+		for _, nn := range nm.Peers {
 			if equalFQDNs(nn.Name(), fqdn) {
 				if !reflect.DeepEqual(ips, nn.Addresses().AsSlice()) {
 					log.Printf("backend addresses for egress target %q have changed old IPs %v, new IPs %v trigger egress config resync", nn.Name(), ips, nn.Addresses().AsSlice())

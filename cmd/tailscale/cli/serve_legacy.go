@@ -848,10 +848,10 @@ func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string,
 			e.lc.IncrementCounter(ctx, fmt.Sprintf("%s_enablement_lost_connection", feature), 1)
 			return err
 		}
-		if nm := n.NetMap; nm != nil && nm.SelfNode.Valid() {
+		if self := n.SelfChange; self != nil {
 			gotAll := true
 			for _, c := range caps {
-				if !nm.SelfNode.HasCap(c) {
+				if _, has := self.CapMap[c]; !has {
 					// The feature is not yet enabled.
 					// Continue blocking until it is.
 					gotAll = false

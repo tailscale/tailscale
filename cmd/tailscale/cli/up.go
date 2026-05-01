@@ -732,7 +732,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 			if s := n.State; s != nil {
 				ipnIsRunning = *s == ipn.Running
 			}
-			if n.NetMap != nil && n.NetMap.NodeKey != origNodeKey {
+			if n.SelfChange != nil && n.SelfChange.Key != origNodeKey {
 				waitingForKeyChange = false
 			}
 			if ipnIsRunning && !waitingForKeyChange {

@@ -18,7 +18,6 @@ import (
 	klc "tailscale.com/kube/localclient"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/netmap"
 )
 
 func TestSetInitialStateKeys(t *testing.T) {
@@ -133,12 +132,10 @@ func TestKeepStateKeysUpdated(t *testing.T) {
 		{
 			name: "authed",
 			notify: ipn.Notify{
-				NetMap: &netmap.NetworkMap{
-					SelfNode: (&tailcfg.Node{
-						StableID:  "TESTCTRL00000001",
-						Name:      "test-node.test.ts.net",
-						Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32"), netip.MustParsePrefix("fd7a:115c:a1e0:ab12:4843:cd96:0:1/128")},
-					}).View(),
+				SelfChange: &tailcfg.Node{
+					StableID:  "TESTCTRL00000001",
+					Name:      "test-node.test.ts.net",
+					Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32"), netip.MustParsePrefix("fd7a:115c:a1e0:ab12:4843:cd96:0:1/128")},
 				},
 			},
 			expected: []string{
@@ -150,12 +147,10 @@ func TestKeepStateKeysUpdated(t *testing.T) {
 		{
 			name: "updated_fields",
 			notify: ipn.Notify{
-				NetMap: &netmap.NetworkMap{
-					SelfNode: (&tailcfg.Node{
-						StableID:  "TESTCTRL00000001",
-						Name:      "updated.test.ts.net",
-						Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.250/32")},
-					}).View(),
+				SelfChange: &tailcfg.Node{
+					StableID:  "TESTCTRL00000001",
+					Name:      "updated.test.ts.net",
+					Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.250/32")},
 				},
 			},
 			expected: []string{

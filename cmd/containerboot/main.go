@@ -137,6 +137,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"tailscale.com/client/local"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	kubeutils "tailscale.com/k8s-operator"
@@ -536,7 +537,7 @@ authLoop:
 		failedResolveAttempts++
 	}
 
-	var egressSvcsNotify chan ipn.Notify
+	var egressSvcsNotify chan *netmap.NetworkMap
 	notifyChan := make(chan ipn.Notify)
 	errChan := make(chan error)
 	go func() {
@@ -550,10 +551,17 @@ authLoop:
 			}
 		}
 	}()
+	// Peer set changes (Add/Remove) no longer ride on the IPN bus; poll
+	// periodically so egress FQDN resolution and peer-aware work picks
+	// them up. SelfChange covers prompt self changes.
+	const peerPollInterval = 15 * time.Second
+	peerPoll := time.NewTicker(peerPollInterval)
+	defer peerPoll.Stop()
 	var wg sync.WaitGroup
 
 runLoop:
 	for {
+		var processNetmap bool
 		select {
 		case <-ctx.Done():
 			// Although killTailscaled() is deferred earlier, if we
@@ -566,6 +574,8 @@ runLoop:
 			return fmt.Errorf("failed to read from tailscaled: %w", err)
 		case err := <-cfgWatchErrChan:
 			return fmt.Errorf("failed to watch tailscaled config: %w", err)
+		case <-peerPoll.C:
+			processNetmap = true
 		case n := <-notifyChan:
 			// TODO: (ChaosInTheCRD) Add node removed check when supported by ipn
 			if n.State != nil && *n.State != ipn.Running {
@@ -576,235 +586,8 @@ runLoop:
 				// whereupon we'll go through initial auth again.
 				return fmt.Errorf("tailscaled left running state (now in state %q), exiting", *n.State)
 			}
-			if n.NetMap != nil {
-				addrs = n.NetMap.SelfNode.Addresses().AsSlice()
-				newCurrentIPs := deephash.Hash(&addrs)
-				ipsHaveChanged := newCurrentIPs != currentIPs
-
-				// Store device ID in a Kubernetes Secret before
-				// setting up any routing rules. This ensures
-				// that, for containerboot instances that are
-				// Kubernetes operator proxies, the operator is
-				// able to retrieve the device ID from the
-				// Kubernetes Secret to clean up tailnet nodes
-				// for proxies whose route setup continuously
-				// fails.
-				deviceID := n.NetMap.SelfNode.StableID()
-				if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceID, &deviceID) {
-					if err := kc.storeDeviceID(ctx, n.NetMap.SelfNode.StableID()); err != nil {
-						return fmt.Errorf("storing device ID in Kubernetes Secret: %w", err)
-					}
-				}
-				if cfg.TailnetTargetFQDN != "" {
-					egressAddrs, err := resolveTailnetFQDN(n.NetMap, cfg.TailnetTargetFQDN)
-					if err != nil {
-						log.Print(err.Error())
-						break
-					}
-
-					newCurentEgressIPs := deephash.Hash(&egressAddrs)
-					egressIPsHaveChanged := newCurentEgressIPs != currentEgressIPs
-					// The firewall rules get (re-)installed:
-					// - on startup
-					// - when the tailnet IPs of the tailnet target have changed
-					// - when the tailnet IPs of this node have changed
-					if (egressIPsHaveChanged || ipsHaveChanged) && len(egressAddrs) != 0 {
-						var rulesInstalled bool
-						for _, egressAddr := range egressAddrs {
-							ea := egressAddr.Addr()
-							if ea.Is4() || (ea.Is6() && nfr.HasIPV6NAT()) {
-								rulesInstalled = true
-								log.Printf("Installing forwarding rules for destination %v", ea.String())
-								if err := installEgressForwardingRule(ctx, ea.String(), addrs, nfr); err != nil {
-									return fmt.Errorf("installing egress proxy rules for destination %s: %v", ea.String(), err)
-								}
-							}
-						}
-						if !rulesInstalled {
-							return fmt.Errorf("no forwarding rules for egress addresses %v, host supports IPv6: %v", egressAddrs, nfr.HasIPV6NAT())
-						}
-					}
-					currentEgressIPs = newCurentEgressIPs
-				}
-				if cfg.ProxyTargetIP != "" && len(addrs) != 0 && ipsHaveChanged {
-					log.Printf("Installing proxy rules")
-					if err := installIngressForwardingRule(ctx, cfg.ProxyTargetIP, addrs, nfr); err != nil {
-						return fmt.Errorf("installing ingress proxy rules: %w", err)
-					}
-				}
-				if cfg.ProxyTargetDNSName != "" && len(addrs) != 0 && ipsHaveChanged {
-					newBackendAddrs, err := resolveDNS(ctx, cfg.ProxyTargetDNSName)
-					if err != nil {
-						log.Printf("[unexpected] error resolving DNS name %s: %v", cfg.ProxyTargetDNSName, err)
-						resetTimer(true)
-						continue
-					}
-					backendsHaveChanged := !(slices.EqualFunc(backendAddrs, newBackendAddrs, func(ip1 net.IP, ip2 net.IP) bool {
-						return slices.ContainsFunc(newBackendAddrs, func(ip net.IP) bool { return ip.Equal(ip1) })
-					}))
-					if backendsHaveChanged {
-						log.Printf("installing ingress proxy rules for backends %v", newBackendAddrs)
-						if err := installIngressForwardingRuleForDNSTarget(ctx, newBackendAddrs, addrs, nfr); err != nil {
-							return fmt.Errorf("error installing ingress proxy rules: %w", err)
-						}
-					}
-					resetTimer(false)
-					backendAddrs = newBackendAddrs
-				}
-				if cfg.ServeConfigPath != "" {
-					cd := certDomainFromNetmap(n.NetMap)
-					if cd == "" {
-						cd = kubetypes.ValueNoHTTPS
-					}
-					prev := certDomain.Swap(new(cd))
-					if prev == nil || *prev != cd {
-						select {
-						case certDomainChanged <- true:
-						default:
-						}
-					}
-				}
-				if cfg.TailnetTargetIP != "" && ipsHaveChanged && len(addrs) != 0 {
-					log.Printf("Installing forwarding rules for destination %v", cfg.TailnetTargetIP)
-					if err := installEgressForwardingRule(ctx, cfg.TailnetTargetIP, addrs, nfr); err != nil {
-						return fmt.Errorf("installing egress proxy rules: %w", err)
-					}
-				}
-				// If this is a L7 cluster ingress proxy (set up
-				// by Kubernetes operator) and proxying of
-				// cluster traffic to the ingress target is
-				// enabled, set up proxy rule each time the
-				// tailnet IPs of this node change (including
-				// the first time they become available).
-				if cfg.AllowProxyingClusterTrafficViaIngress && cfg.ServeConfigPath != "" && ipsHaveChanged && len(addrs) != 0 {
-					log.Printf("installing rules to forward traffic for %s to node's tailnet IP", cfg.PodIP)
-					if err := installTSForwardingRuleForDestination(ctx, cfg.PodIP, addrs, nfr); err != nil {
-						return fmt.Errorf("installing rules to forward traffic to node's tailnet IP: %w", err)
-					}
-				}
-				currentIPs = newCurrentIPs
-
-				// Only store device FQDN and IP addresses to
-				// Kubernetes Secret when any required proxy
-				// route setup has succeeded. IPs and FQDN are
-				// read from the Secret by the Tailscale
-				// Kubernetes operator and, for some proxy
-				// types, such as Tailscale Ingress, advertized
-				// on the Ingress status. Writing them to the
-				// Secret only after the proxy routing has been
-				// set up ensures that the operator does not
-				// advertize endpoints of broken proxies.
-				// TODO (irbekrm): instead of using the IP and FQDN, have some other mechanism for the proxy signal that it is 'Ready'.
-				deviceEndpoints := []any{n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses()}
-				if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceEndpoints, &deviceEndpoints) {
-					if err := kc.storeDeviceEndpoints(ctx, n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
-						return fmt.Errorf("storing device IPs and FQDN in Kubernetes Secret: %w", err)
-					}
-				}
-
-				if healthCheck != nil {
-					healthCheck.Update(len(addrs) != 0)
-				}
-
-				var prevServeConfig *ipn.ServeConfig
-				if getAutoAdvertiseBool() {
-					prevServeConfig, err = client.GetServeConfig(ctx)
-					if err != nil {
-						return fmt.Errorf("autoadvertisement: failed to get serve config: %w", err)
-					}
-
-					err = refreshAdvertiseServices(ctx, prevServeConfig, klc.New(client))
-					if err != nil {
-						return fmt.Errorf("autoadvertisement: failed to refresh advertise services: %w", err)
-					}
-				}
-
-				if cfg.ServeConfigPath != "" {
-					triggerWatchServeConfigChanges.Do(func() {
-						go watchServeConfigChanges(ctx, certDomainChanged, certDomain, client, kc, cfg, prevServeConfig)
-					})
-				}
-
-				if egressSvcsNotify != nil {
-					egressSvcsNotify <- n
-				}
-			}
-			if !startupTasksDone {
-				// For containerboot instances that act as TCP proxies (proxying traffic to an endpoint
-				// passed via one of the env vars that containerboot reads) and store state in a
-				// Kubernetes Secret, we consider startup tasks done at the point when device info has
-				// been successfully stored to state Secret. For all other containerboot instances, if
-				// we just get to this point the startup tasks can be considered done.
-				if !isL3Proxy(cfg) || !hasKubeStateStore(cfg) || (currentDeviceEndpoints != deephash.Sum{} && currentDeviceID != deephash.Sum{}) {
-					// This log message is used in tests to detect when all
-					// post-auth configuration is done.
-					log.Println("Startup complete, waiting for shutdown signal")
-					startupTasksDone = true
-
-					// Configure egress proxy. Egress proxy will set up firewall rules to proxy
-					// traffic to tailnet targets configured in the provided configuration file. It
-					// will then continuously monitor the config file and netmap updates and
-					// reconfigure the firewall rules as needed. If any of its operations fail, it
-					// will crash this node.
-					if cfg.EgressProxiesCfgPath != "" {
-						log.Printf("configuring egress proxy using configuration file at %s", cfg.EgressProxiesCfgPath)
-						egressSvcsNotify = make(chan ipn.Notify)
-						opts := egressProxyRunOpts{
-							cfgPath:      cfg.EgressProxiesCfgPath,
-							nfr:          nfr,
-							kc:           kc,
-							tsClient:     client,
-							stateSecret:  cfg.KubeSecret,
-							netmapChan:   egressSvcsNotify,
-							podIPv4:      cfg.PodIPv4,
-							tailnetAddrs: addrs,
-						}
-						go func() {
-							if err := ep.run(ctx, n, opts); err != nil {
-								egressSvcsErrorChan <- err
-							}
-						}()
-					}
-					ip := ingressProxy{}
-					if cfg.IngressProxiesCfgPath != "" {
-						log.Printf("configuring ingress proxy using configuration file at %s", cfg.IngressProxiesCfgPath)
-						opts := ingressProxyOpts{
-							cfgPath:     cfg.IngressProxiesCfgPath,
-							nfr:         nfr,
-							kc:          kc,
-							stateSecret: cfg.KubeSecret,
-							podIPv4:     cfg.PodIPv4,
-							podIPv6:     cfg.PodIPv6,
-						}
-						go func() {
-							if err := ip.run(ctx, opts); err != nil {
-								ingressSvcsErrorChan <- err
-							}
-						}()
-					}
-
-					// Wait on tailscaled process. It won't be cleaned up by default when the
-					// container exits as it is not PID1. TODO (irbekrm): perhaps we can replace the
-					// reaper by a running cmd.Wait in a goroutine immediately after starting
-					// tailscaled?
-					reaper := func() {
-						defer wg.Done()
-						for {
-							var status unix.WaitStatus
-							_, err := unix.Wait4(daemonProcess.Pid, &status, 0, nil)
-							if errors.Is(err, unix.EINTR) {
-								continue
-							}
-							if err != nil {
-								log.Fatalf("Waiting for tailscaled to exit: %v", err)
-							}
-							log.Print("tailscaled exited")
-							os.Exit(0)
-						}
-					}
-					wg.Add(1)
-					go reaper()
-				}
+			if n.SelfChange != nil {
+				processNetmap = true
 			}
 		case <-tc:
 			newBackendAddrs, err := resolveDNS(ctx, cfg.ProxyTargetDNSName)
@@ -824,10 +607,249 @@ runLoop:
 			}
 			backendAddrs = newBackendAddrs
 			resetTimer(false)
+			continue
 		case e := <-egressSvcsErrorChan:
 			return fmt.Errorf("egress proxy failed: %v", e)
 		case e := <-ingressSvcsErrorChan:
 			return fmt.Errorf("ingress proxy failed: %v", e)
+		}
+		if !processNetmap {
+			continue
+		}
+		nm, err := fetchNetMap(ctx, client)
+		if err != nil {
+			log.Printf("error fetching netmap: %v", err)
+			continue
+		}
+		if nm != nil {
+			addrs = nm.SelfNode.Addresses().AsSlice()
+			newCurrentIPs := deephash.Hash(&addrs)
+			ipsHaveChanged := newCurrentIPs != currentIPs
+
+			// Store device ID in a Kubernetes Secret before
+			// setting up any routing rules. This ensures
+			// that, for containerboot instances that are
+			// Kubernetes operator proxies, the operator is
+			// able to retrieve the device ID from the
+			// Kubernetes Secret to clean up tailnet nodes
+			// for proxies whose route setup continuously
+			// fails.
+			deviceID := nm.SelfNode.StableID()
+			if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceID, &deviceID) {
+				if err := kc.storeDeviceID(ctx, nm.SelfNode.StableID()); err != nil {
+					return fmt.Errorf("storing device ID in Kubernetes Secret: %w", err)
+				}
+			}
+			if cfg.TailnetTargetFQDN != "" {
+				egressAddrs, err := resolveTailnetFQDN(nm, cfg.TailnetTargetFQDN)
+				if err != nil {
+					log.Print(err.Error())
+					break
+				}
+
+				newCurentEgressIPs := deephash.Hash(&egressAddrs)
+				egressIPsHaveChanged := newCurentEgressIPs != currentEgressIPs
+				// The firewall rules get (re-)installed:
+				// - on startup
+				// - when the tailnet IPs of the tailnet target have changed
+				// - when the tailnet IPs of this node have changed
+				if (egressIPsHaveChanged || ipsHaveChanged) && len(egressAddrs) != 0 {
+					var rulesInstalled bool
+					for _, egressAddr := range egressAddrs {
+						ea := egressAddr.Addr()
+						if ea.Is4() || (ea.Is6() && nfr.HasIPV6NAT()) {
+							rulesInstalled = true
+							log.Printf("Installing forwarding rules for destination %v", ea.String())
+							if err := installEgressForwardingRule(ctx, ea.String(), addrs, nfr); err != nil {
+								return fmt.Errorf("installing egress proxy rules for destination %s: %v", ea.String(), err)
+							}
+						}
+					}
+					if !rulesInstalled {
+						return fmt.Errorf("no forwarding rules for egress addresses %v, host supports IPv6: %v", egressAddrs, nfr.HasIPV6NAT())
+					}
+				}
+				currentEgressIPs = newCurentEgressIPs
+			}
+			if cfg.ProxyTargetIP != "" && len(addrs) != 0 && ipsHaveChanged {
+				log.Printf("Installing proxy rules")
+				if err := installIngressForwardingRule(ctx, cfg.ProxyTargetIP, addrs, nfr); err != nil {
+					return fmt.Errorf("installing ingress proxy rules: %w", err)
+				}
+			}
+			if cfg.ProxyTargetDNSName != "" && len(addrs) != 0 && ipsHaveChanged {
+				newBackendAddrs, err := resolveDNS(ctx, cfg.ProxyTargetDNSName)
+				if err != nil {
+					log.Printf("[unexpected] error resolving DNS name %s: %v", cfg.ProxyTargetDNSName, err)
+					resetTimer(true)
+					continue
+				}
+				backendsHaveChanged := !(slices.EqualFunc(backendAddrs, newBackendAddrs, func(ip1 net.IP, ip2 net.IP) bool {
+					return slices.ContainsFunc(newBackendAddrs, func(ip net.IP) bool { return ip.Equal(ip1) })
+				}))
+				if backendsHaveChanged {
+					log.Printf("installing ingress proxy rules for backends %v", newBackendAddrs)
+					if err := installIngressForwardingRuleForDNSTarget(ctx, newBackendAddrs, addrs, nfr); err != nil {
+						return fmt.Errorf("error installing ingress proxy rules: %w", err)
+					}
+				}
+				resetTimer(false)
+				backendAddrs = newBackendAddrs
+			}
+			if cfg.ServeConfigPath != "" {
+				cd := certDomainFromNetmap(nm)
+				if cd == "" {
+					cd = kubetypes.ValueNoHTTPS
+				}
+				prev := certDomain.Swap(new(cd))
+				if prev == nil || *prev != cd {
+					select {
+					case certDomainChanged <- true:
+					default:
+					}
+				}
+			}
+			if cfg.TailnetTargetIP != "" && ipsHaveChanged && len(addrs) != 0 {
+				log.Printf("Installing forwarding rules for destination %v", cfg.TailnetTargetIP)
+				if err := installEgressForwardingRule(ctx, cfg.TailnetTargetIP, addrs, nfr); err != nil {
+					return fmt.Errorf("installing egress proxy rules: %w", err)
+				}
+			}
+			// If this is a L7 cluster ingress proxy (set up
+			// by Kubernetes operator) and proxying of
+			// cluster traffic to the ingress target is
+			// enabled, set up proxy rule each time the
+			// tailnet IPs of this node change (including
+			// the first time they become available).
+			if cfg.AllowProxyingClusterTrafficViaIngress && cfg.ServeConfigPath != "" && ipsHaveChanged && len(addrs) != 0 {
+				log.Printf("installing rules to forward traffic for %s to node's tailnet IP", cfg.PodIP)
+				if err := installTSForwardingRuleForDestination(ctx, cfg.PodIP, addrs, nfr); err != nil {
+					return fmt.Errorf("installing rules to forward traffic to node's tailnet IP: %w", err)
+				}
+			}
+			currentIPs = newCurrentIPs
+
+			// Only store device FQDN and IP addresses to
+			// Kubernetes Secret when any required proxy
+			// route setup has succeeded. IPs and FQDN are
+			// read from the Secret by the Tailscale
+			// Kubernetes operator and, for some proxy
+			// types, such as Tailscale Ingress, advertized
+			// on the Ingress status. Writing them to the
+			// Secret only after the proxy routing has been
+			// set up ensures that the operator does not
+			// advertize endpoints of broken proxies.
+			// TODO (irbekrm): instead of using the IP and FQDN, have some other mechanism for the proxy signal that it is 'Ready'.
+			deviceEndpoints := []any{nm.SelfNode.Name(), nm.SelfNode.Addresses()}
+			if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceEndpoints, &deviceEndpoints) {
+				if err := kc.storeDeviceEndpoints(ctx, nm.SelfNode.Name(), nm.SelfNode.Addresses().AsSlice()); err != nil {
+					return fmt.Errorf("storing device IPs and FQDN in Kubernetes Secret: %w", err)
+				}
+			}
+
+			if healthCheck != nil {
+				healthCheck.Update(len(addrs) != 0)
+			}
+
+			var prevServeConfig *ipn.ServeConfig
+			if getAutoAdvertiseBool() {
+				prevServeConfig, err = client.GetServeConfig(ctx)
+				if err != nil {
+					return fmt.Errorf("autoadvertisement: failed to get serve config: %w", err)
+				}
+
+				err = refreshAdvertiseServices(ctx, prevServeConfig, klc.New(client))
+				if err != nil {
+					return fmt.Errorf("autoadvertisement: failed to refresh advertise services: %w", err)
+				}
+			}
+
+			if cfg.ServeConfigPath != "" {
+				triggerWatchServeConfigChanges.Do(func() {
+					go watchServeConfigChanges(ctx, certDomainChanged, certDomain, client, kc, cfg, prevServeConfig)
+				})
+			}
+
+			if egressSvcsNotify != nil {
+				egressSvcsNotify <- nm
+			}
+		}
+		if !startupTasksDone {
+			// For containerboot instances that act as TCP proxies (proxying traffic to an endpoint
+			// passed via one of the env vars that containerboot reads) and store state in a
+			// Kubernetes Secret, we consider startup tasks done at the point when device info has
+			// been successfully stored to state Secret. For all other containerboot instances, if
+			// we just get to this point the startup tasks can be considered done.
+			if !isL3Proxy(cfg) || !hasKubeStateStore(cfg) || (currentDeviceEndpoints != deephash.Sum{} && currentDeviceID != deephash.Sum{}) {
+				// This log message is used in tests to detect when all
+				// post-auth configuration is done.
+				log.Println("Startup complete, waiting for shutdown signal")
+				startupTasksDone = true
+
+				// Configure egress proxy. Egress proxy will set up firewall rules to proxy
+				// traffic to tailnet targets configured in the provided configuration file. It
+				// will then continuously monitor the config file and netmap updates and
+				// reconfigure the firewall rules as needed. If any of its operations fail, it
+				// will crash this node.
+				if cfg.EgressProxiesCfgPath != "" {
+					log.Printf("configuring egress proxy using configuration file at %s", cfg.EgressProxiesCfgPath)
+					egressSvcsNotify = make(chan *netmap.NetworkMap)
+					opts := egressProxyRunOpts{
+						cfgPath:      cfg.EgressProxiesCfgPath,
+						nfr:          nfr,
+						kc:           kc,
+						tsClient:     client,
+						stateSecret:  cfg.KubeSecret,
+						netmapChan:   egressSvcsNotify,
+						podIPv4:      cfg.PodIPv4,
+						tailnetAddrs: addrs,
+					}
+					go func() {
+						if err := ep.run(ctx, nm, opts); err != nil {
+							egressSvcsErrorChan <- err
+						}
+					}()
+				}
+				ip := ingressProxy{}
+				if cfg.IngressProxiesCfgPath != "" {
+					log.Printf("configuring ingress proxy using configuration file at %s", cfg.IngressProxiesCfgPath)
+					opts := ingressProxyOpts{
+						cfgPath:     cfg.IngressProxiesCfgPath,
+						nfr:         nfr,
+						kc:          kc,
+						stateSecret: cfg.KubeSecret,
+						podIPv4:     cfg.PodIPv4,
+						podIPv6:     cfg.PodIPv6,
+					}
+					go func() {
+						if err := ip.run(ctx, opts); err != nil {
+							ingressSvcsErrorChan <- err
+						}
+					}()
+				}
+
+				// Wait on tailscaled process. It won't be cleaned up by default when the
+				// container exits as it is not PID1. TODO (irbekrm): perhaps we can replace the
+				// reaper by a running cmd.Wait in a goroutine immediately after starting
+				// tailscaled?
+				reaper := func() {
+					defer wg.Done()
+					for {
+						var status unix.WaitStatus
+						_, err := unix.Wait4(daemonProcess.Pid, &status, 0, nil)
+						if errors.Is(err, unix.EINTR) {
+							continue
+						}
+						if err != nil {
+							log.Fatalf("Waiting for tailscaled to exit: %v", err)
+						}
+						log.Print("tailscaled exited")
+						os.Exit(0)
+					}
+				}
+				wg.Add(1)
+				go reaper()
+			}
 		}
 	}
 	wg.Wait()
@@ -961,6 +983,15 @@ func runHTTPServer(mux *http.ServeMux, addr string) (close func() error) {
 		err := srv.Shutdown(context.Background())
 		return errors.Join(err, ln.Close())
 	}
+}
+
+// fetchNetMap fetches the current netmap from tailscaled via the
+// "current-netmap" localapi debug action. The debug action's payload
+// shape is intentionally not part of any stable API; containerboot
+// reads its own internal-package types out of it. New external consumers
+// should not rely on this — see [local.Client.Status] and friends.
+func fetchNetMap(ctx context.Context, lc *local.Client) (*netmap.NetworkMap, error) {
+	return local.GetDebugResultJSON[*netmap.NetworkMap](ctx, lc, "current-netmap")
 }
 
 // resolveTailnetFQDN resolves a tailnet FQDN to a list of IP prefixes, which

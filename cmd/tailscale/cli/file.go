@@ -287,9 +287,9 @@ func runCp(ctx context.Context, args []string) error {
 // caller's progress display stays at 0 — exactly the right degradation,
 // since the warning timer will then fire on its normal 3-second deadline.
 func watchOutgoingFiles(ctx context.Context, peer tailcfg.StableNodeID, onUpdate func(name string, sent int64)) {
-	// NotifyPeerChanges asks the broadcaster to deliver incremental peer
-	// updates as small PeerChanges blobs in place of the full NetMap, which
-	// we don't read anyway. (See ipn/ipnlocal/local.go's notify-elision.)
+	// NotifyPeerChanges opts in to per-peer add/remove notifications so the
+	// bus stays responsive without us also subscribing to the full NetMap,
+	// which we don't read here.
 	w, err := localClient.WatchIPNBus(ctx, ipn.NotifyInitialOutgoingFiles|ipn.NotifyPeerChanges)
 	if err != nil {
 		return

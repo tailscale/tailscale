@@ -44,9 +44,9 @@ func SetInitialKeys(store ipn.StateStore, podUID string) error {
 
 // KeepKeysUpdated sets state store keys consistent with containerboot to
 // signal proxy readiness to the operator. It runs until its context is
-// cancelled or it hits an error. The passed in next function is expected to be
-// from a local.IPNBusWatcher that is at least subscribed to
-// ipn.NotifyInitialNetMap.
+// cancelled or it hits an error. It watches the IPN bus for SelfChange
+// notifications (which fire whenever the self node changes) and reads
+// the new self node directly from the notify.
 func KeepKeysUpdated(ctx context.Context, store ipn.StateStore, lc klc.LocalClient) error {
 	w, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
 	if err != nil {
@@ -63,25 +63,26 @@ func KeepKeysUpdated(ctx context.Context, store ipn.StateStore, lc klc.LocalClie
 			}
 			return err
 		}
-		if n.NetMap == nil {
+		self := n.SelfChange
+		if self == nil {
 			continue
 		}
 
-		if deviceID := n.NetMap.SelfNode.StableID(); deephash.Update(&currentDeviceID, &deviceID) {
+		if deviceID := self.StableID; deephash.Update(&currentDeviceID, &deviceID) {
 			if err := store.WriteState(keyDeviceID, []byte(deviceID)); err != nil {
 				return fmt.Errorf("failed to store device ID in state: %w", err)
 			}
 		}
 
-		if fqdn := n.NetMap.SelfNode.Name(); deephash.Update(&currentDeviceFQDN, &fqdn) {
+		if fqdn := self.Name; deephash.Update(&currentDeviceFQDN, &fqdn) {
 			if err := store.WriteState(keyDeviceFQDN, []byte(fqdn)); err != nil {
 				return fmt.Errorf("failed to store device FQDN in state: %w", err)
 			}
 		}
 
-		if addrs := n.NetMap.SelfNode.Addresses(); deephash.Update(&currentDeviceIPs, &addrs) {
+		if addrs := self.Addresses; deephash.Update(&currentDeviceIPs, &addrs) {
 			var deviceIPs []string
-			for _, addr := range addrs.AsSlice() {
+			for _, addr := range addrs {
 				deviceIPs = append(deviceIPs, addr.Addr().String())
 			}
 			deviceIPsValue, err := json.Marshal(deviceIPs)

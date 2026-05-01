@@ -12,7 +12,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/kube/localclient"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/netmap"
 )
 
 // TestEnsureCertLoops tests that the certManager correctly starts and stops
@@ -201,12 +200,12 @@ func TestEnsureCertLoops(t *testing.T) {
 
 			notifyChan := make(chan ipn.Notify)
 			go func() {
-				// Drive waitForCertDomain by sending notifications
-				// with empty netmaps as wake-up triggers; the cert
-				// manager queries CertDomains via the local
-				// client and not by reading the bus payload.
+				// SelfChange wakes the cert manager; cert domains are
+				// then fetched via FakeLocalClient.CertDomainsResult.
 				for {
-					notifyChan <- ipn.Notify{NetMap: &netmap.NetworkMap{}}
+					notifyChan <- ipn.Notify{
+						SelfChange: &tailcfg.Node{StableID: "test"},
+					}
 				}
 			}()
 			cm := &CertManager{
