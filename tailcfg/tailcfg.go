@@ -2788,6 +2788,13 @@ const (
 	// that does not originate from the Tailscale network interface.
 	// This enables access to off-tailnet endpoints within that IP range.
 	NodeAttrDisableLinuxCGNATDropRule NodeCapability = "disable-linux-cgnat-drop-rule"
+
+	// NodeAttrPostQuantumCrypto enables the hybrid ML-KEM-768 + Noise_IKpsk2
+	// WireGuard handshake (FIPS 203) on this node.  When set, the node uses
+	// message types 5 and 6 instead of the standard types 1 and 2.  All
+	// nodes in the tailnet must have this attribute set identically; no
+	// mixed-mode operation is supported.
+	NodeAttrPostQuantumCrypto NodeCapability = "post-quantum-crypto"
 )
 
 const (
