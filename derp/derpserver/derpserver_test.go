@@ -969,27 +969,19 @@ func TestPerClientRateLimit(t *testing.T) {
 				ctx: ctx,
 				s:   s,
 			}
-			lim := &parentChildTokenBuckets{
-				// Set parent limit to half of child to enable verification of
-				// rate limiting across both layers with a single sclient.
-				parent: rate.NewLimiter(rate.Limit(minRateLimitTokenBucketSize)/2, minRateLimitTokenBucketSize),
-				child:  rate.NewLimiter(rate.Limit(minRateLimitTokenBucketSize), minRateLimitTokenBucketSize),
-			}
+			lim := rate.NewLimiter(rate.Limit(minRateLimitTokenBucketSize), minRateLimitTokenBucketSize)
 			c.recvLim.Store(lim)
-			wantTokens := func(t *testing.T, wantParentTokens, wantChildTokens float64) {
+			wantTokens := func(t *testing.T, wantTokens float64) {
 				t.Helper()
-				if lim.parent.Tokens() != wantParentTokens {
-					t.Fatalf("want parent tokens: %v got: %v", wantParentTokens, lim.parent.Tokens())
-				}
-				if lim.child.Tokens() != wantChildTokens {
-					t.Fatalf("want child tokens: %v got: %v", wantChildTokens, lim.child.Tokens())
+				if lim.Tokens() != wantTokens {
+					t.Fatalf("want tokens: %v got: %v", wantTokens, lim.Tokens())
 				}
 			}
 
 			// First call within burst should not block.
 			c.rateLimit(minRateLimitTokenBucketSize)
 
-			wantTokens(t, 0, 0)
+			wantTokens(t, 0)
 
 			// Next call exceeds burst, should block until tokens replenish.
 			done := make(chan error, 1)
@@ -1005,21 +997,7 @@ func TestPerClientRateLimit(t *testing.T) {
 			default:
 			}
 
-			// Advance time by 1 second, the goroutine should still be blocked
-			// on the parent bucket (negative tokens).
-			time.Sleep(1 * time.Second)
-			synctest.Wait()
-			select {
-			case err := <-done:
-				t.Fatalf("rateLimit should have blocked, but returned: %v", err)
-			default:
-			}
-
-			// Verify the parent bucket fills at half the rate of the child.
-			wantTokens(t, -(minRateLimitTokenBucketSize / 2), 0)
-
-			// Advance time by another second, parent should have enough tokens
-			// to unblock.
+			// Advance time by 1 second, the goroutine should be unblocked
 			time.Sleep(1 * time.Second)
 			synctest.Wait()
 
@@ -1032,15 +1010,11 @@ func TestPerClientRateLimit(t *testing.T) {
 				t.Fatal("rateLimit should have unblocked after 1s")
 			}
 
-			wantTokens(t, 0, minRateLimitTokenBucketSize)
+			wantTokens(t, 0)
 
-			// The second rateLimit call had to wait for both child and parent
-			// buckets, so both counters should be 1.
+			// The second rateLimit call had to wait
 			if got := s.rateLimitPerClientWaited.Value(); got != 1 {
 				t.Fatalf("rateLimitPerClientWaited = %d, want 1", got)
-			}
-			if got := s.rateLimitGlobalWaited.Value(); got != 1 {
-				t.Fatalf("rateLimitGlobalWaited = %d, want 1", got)
 			}
 		})
 	})
@@ -1056,10 +1030,7 @@ func TestPerClientRateLimit(t *testing.T) {
 				ctx: ctx,
 				s:   s,
 			}
-			lim := &parentChildTokenBuckets{
-				child:  rate.NewLimiter(rate.Limit(minRateLimitTokenBucketSize), minRateLimitTokenBucketSize),
-				parent: rate.NewLimiter(rate.Limit(minRateLimitTokenBucketSize), minRateLimitTokenBucketSize),
-			}
+			lim := rate.NewLimiter(rate.Limit(minRateLimitTokenBucketSize), minRateLimitTokenBucketSize)
 			c.recvLim.Store(lim)
 
 			// Exhaust burst.
@@ -1186,19 +1157,13 @@ func TestRateLimitWait(t *testing.T) {
 	})
 }
 
-func verifyLimiter(t *testing.T, lim *parentChildTokenBuckets, wantRateConfig RateConfig) {
+func verifyLimiter(t *testing.T, lim *rate.Limiter, wantRateConfig RateConfig) {
 	t.Helper()
-	if got := lim.child.Limit(); got != rate.Limit(wantRateConfig.PerClientRateLimitBytesPerSec) {
+	if got := lim.Limit(); got != rate.Limit(wantRateConfig.PerClientRateLimitBytesPerSec) {
 		t.Errorf("client rate limit = %v; want %d", got, wantRateConfig.PerClientRateLimitBytesPerSec)
 	}
-	if got := lim.child.Burst(); got != int(wantRateConfig.PerClientRateBurstBytes) {
+	if got := lim.Burst(); got != int(wantRateConfig.PerClientRateBurstBytes) {
 		t.Errorf("client burst = %v; want %d", got, wantRateConfig.PerClientRateBurstBytes)
-	}
-	if got := lim.parent.Limit(); got != rate.Limit(wantRateConfig.GlobalRateLimitBytesPerSec) {
-		t.Errorf("global rate limit = %v, want %d", got, wantRateConfig.GlobalRateLimitBytesPerSec)
-	}
-	if got := lim.parent.Burst(); got != int(wantRateConfig.GlobalRateBurstBytes) {
-		t.Errorf("global burst = %v, want %d", got, wantRateConfig.GlobalRateBurstBytes)
 	}
 }
 
@@ -1208,10 +1173,6 @@ func TestUpdateRateLimits(t *testing.T) {
 		testClientRate1  = minRateLimitTokenBucketSize + 2
 		testClientBurst2 = minRateLimitTokenBucketSize + 3
 		testClientRate2  = minRateLimitTokenBucketSize + 4
-		testGlobalBurst1 = minRateLimitTokenBucketSize + 5
-		testGlobalRate1  = minRateLimitTokenBucketSize + 6
-		testGlobalBurst2 = minRateLimitTokenBucketSize + 7
-		testGlobalRate2  = minRateLimitTokenBucketSize + 8
 	)
 
 	s := New(key.NewNode(), t.Logf)
@@ -1235,8 +1196,6 @@ func TestUpdateRateLimits(t *testing.T) {
 	rc := RateConfig{
 		PerClientRateLimitBytesPerSec: testClientRate1,
 		PerClientRateBurstBytes:       testClientBurst1,
-		GlobalRateLimitBytesPerSec:    testGlobalRate1,
-		GlobalRateBurstBytes:          testGlobalBurst1,
 	}
 	s.UpdateRateLimits(rc)
 
@@ -1257,8 +1216,6 @@ func TestUpdateRateLimits(t *testing.T) {
 	rc = RateConfig{
 		PerClientRateLimitBytesPerSec: testClientRate2,
 		PerClientRateBurstBytes:       testClientBurst2,
-		GlobalRateLimitBytesPerSec:    testGlobalRate2,
-		GlobalRateBurstBytes:          testGlobalBurst2,
 	}
 	s.UpdateRateLimits(rc)
 	lim = c.recvLim.Load()
@@ -1271,7 +1228,7 @@ func TestUpdateRateLimits(t *testing.T) {
 	s.UpdateRateLimits(RateConfig{})
 
 	if got := c.recvLim.Load(); got != nil {
-		t.Errorf("expected nil limiter after disable, got limit=%v", got.child.Limit())
+		t.Errorf("expected nil limiter after disable, got limit=%v", got.Limit())
 	}
 
 	// Mesh peer should always have nil limiter regardless of update.
@@ -1292,13 +1249,11 @@ func TestUpdateRateLimits(t *testing.T) {
 	rc = RateConfig{
 		PerClientRateLimitBytesPerSec: testClientRate2,
 		PerClientRateBurstBytes:       testClientBurst2,
-		GlobalRateLimitBytesPerSec:    testGlobalRate2,
-		GlobalRateBurstBytes:          testGlobalBurst2,
 	}
 	s.UpdateRateLimits(rc)
 
 	if got := meshClient.recvLim.Load(); got != nil {
-		t.Errorf("mesh peer should have nil limiter, got limit=%v", got.child.Limit())
+		t.Errorf("mesh peer should have nil limiter, got limit=%v", got.Limit())
 	}
 	// Non-mesh client should be updated.
 	lim = c.recvLim.Load()
@@ -1319,8 +1274,6 @@ func TestUpdateRateLimits(t *testing.T) {
 	s.mu.Unlock()
 
 	rc = RateConfig{
-		GlobalRateLimitBytesPerSec:    testGlobalRate1,
-		GlobalRateBurstBytes:          testGlobalBurst1,
 		PerClientRateLimitBytesPerSec: testClientRate1,
 		PerClientRateBurstBytes:       testClientBurst1,
 	}
@@ -1340,17 +1293,14 @@ func TestLoadRateConfig(t *testing.T) {
 		json           string
 		wantRateConfig RateConfig
 	}{
-		{"all_set", `{"PerClientRateLimitBytesPerSec": 1, "PerClientRateBurstBytes": 2, "GlobalRateLimitBytesPerSec": 3, "GlobalRateBurstBytes": 4}`, RateConfig{
+		{"all_set", `{"PerClientRateLimitBytesPerSec": 1, "PerClientRateBurstBytes": 2}`, RateConfig{
 			PerClientRateLimitBytesPerSec: 1,
 			PerClientRateBurstBytes:       2,
-			GlobalRateLimitBytesPerSec:    3,
-			GlobalRateBurstBytes:          4,
 		}},
-		{"rate_only", `{"PerClientRateLimitBytesPerSec": 1, "GlobalRateLimitBytesPerSec": 3}`, RateConfig{
+		{"rate_only", `{"PerClientRateLimitBytesPerSec": 1}`, RateConfig{
 			PerClientRateLimitBytesPerSec: 1,
-			GlobalRateLimitBytesPerSec:    3,
 		}},
-		{"zeros", `{"PerClientRateLimitBytesPerSec": 0, "PerClientRateBurstBytes": 0, "GlobalRateLimitBytesPerSec": 0, "GlobalRateBurstBytes": 0}`, RateConfig{}},
+		{"zeros", `{"PerClientRateLimitBytesPerSec": 0, "PerClientRateBurstBytes": 0}`, RateConfig{}},
 		{"empty_json", `{}`, RateConfig{}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1415,8 +1365,8 @@ func TestLoadAndApplyRateConfig(t *testing.T) {
 		s.clients[clientKey] = cs
 		s.mu.Unlock()
 
-		f := writeConfig(t, fmt.Sprintf(`{"PerClientRateLimitBytesPerSec": %d, "PerClientRateBurstBytes": %d, "GlobalRateLimitBytesPerSec": %d, "GlobalRateBurstBytes": %d}`,
-			minRateLimitTokenBucketSize, minRateLimitTokenBucketSize+1, minRateLimitTokenBucketSize+2, minRateLimitTokenBucketSize+3))
+		f := writeConfig(t, fmt.Sprintf(`{"PerClientRateLimitBytesPerSec": %d, "PerClientRateBurstBytes": %d}`,
+			minRateLimitTokenBucketSize, minRateLimitTokenBucketSize+1))
 		if err := s.LoadAndApplyRateConfig(f); err != nil {
 			t.Fatalf("LoadAndApplyRateConfig: %v", err)
 		}
@@ -1425,8 +1375,6 @@ func TestLoadAndApplyRateConfig(t *testing.T) {
 		wantRateConfig := RateConfig{
 			PerClientRateLimitBytesPerSec: minRateLimitTokenBucketSize,
 			PerClientRateBurstBytes:       minRateLimitTokenBucketSize + 1,
-			GlobalRateLimitBytesPerSec:    minRateLimitTokenBucketSize + 2,
-			GlobalRateBurstBytes:          minRateLimitTokenBucketSize + 3,
 		}
 		s.mu.Lock()
 		if !reflect.DeepEqual(s.rateConfig, wantRateConfig) {
@@ -1446,20 +1394,16 @@ func TestLoadAndApplyRateConfig(t *testing.T) {
 		s := New(key.NewNode(), t.Logf)
 		defer s.Close()
 
-		f := writeConfig(t, `{"PerClientRateLimitBytesPerSec": 1250000, "PerClientRateBurstBytes": 10, "GlobalRateLimitBytesPerSec": 1250000, "GlobalRateBurstBytes": 10}`)
+		f := writeConfig(t, `{"PerClientRateLimitBytesPerSec": 1250000, "PerClientRateBurstBytes": 10}`)
 		if err := s.LoadAndApplyRateConfig(f); err != nil {
 			t.Fatalf("LoadAndApplyRateConfig: %v", err)
 		}
 
 		s.mu.Lock()
 		gotClientBurst := s.rateConfig.PerClientRateBurstBytes
-		gotGlobalBurst := s.rateConfig.GlobalRateBurstBytes
 		s.mu.Unlock()
 		if gotClientBurst != minRateLimitTokenBucketSize {
 			t.Errorf("client burst = %d; want %d", gotClientBurst, minRateLimitTokenBucketSize)
-		}
-		if gotGlobalBurst != minRateLimitTokenBucketSize {
-			t.Errorf("global burst = %d; want %d", gotGlobalBurst, minRateLimitTokenBucketSize)
 		}
 	})
 
@@ -1467,7 +1411,7 @@ func TestLoadAndApplyRateConfig(t *testing.T) {
 		s := New(key.NewNode(), t.Logf)
 		defer s.Close()
 
-		f := writeConfig(t, `{"PerClientRateLimitBytesPerSec": 1250000, "PerClientRateBurstBytes": 2500000, "GlobalRateLimitBytesPerSec": 12500000, "GlobalRateBurstBytes": 25000000}`)
+		f := writeConfig(t, `{"PerClientRateLimitBytesPerSec": 1250000, "PerClientRateBurstBytes": 2500000}`)
 		if err := s.LoadAndApplyRateConfig(f); err != nil {
 			t.Fatal(err)
 		}
