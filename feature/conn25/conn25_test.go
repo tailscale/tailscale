@@ -914,7 +914,7 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 		v6Addrs             []*dnsmessage.AAAAResource
 		selfTags            []string
 		isEligibleConnector bool
-		wantByMagicIP       map[netip.Addr]addrs
+		wantByMagicIP       map[netip.Addr]*addrs
 	}{
 		{
 			name:       "one-ip-matches",
@@ -922,7 +922,7 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 			domain:     "example.com.",
 			v4Addrs:    []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
 			// these are 'expected' because they are the beginning of the provided pools
-			wantByMagicIP: map[netip.Addr]addrs{
+			wantByMagicIP: map[netip.Addr]*addrs{
 				netip.MustParseAddr("100.64.0.0"): {
 					domain:  "example.com.",
 					dst:     netip.MustParseAddr("1.0.0.0"),
@@ -940,7 +940,7 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 				{AAAA: [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}},
 				{AAAA: [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2}},
 			},
-			wantByMagicIP: map[netip.Addr]addrs{
+			wantByMagicIP: map[netip.Addr]*addrs{
 				netip.MustParseAddr("fd7a:115c:a1e0:a99c::"): {
 					domain:  "example.com.",
 					dst:     netip.MustParseAddr("::1"),
@@ -965,7 +965,7 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 				{A: [4]byte{1, 0, 0, 0}},
 				{A: [4]byte{2, 0, 0, 0}},
 			},
-			wantByMagicIP: map[netip.Addr]addrs{
+			wantByMagicIP: map[netip.Addr]*addrs{
 				netip.MustParseAddr("100.64.0.0"): {
 					domain:  "example.com.",
 					dst:     netip.MustParseAddr("1.0.0.0"),
@@ -1007,7 +1007,7 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 			selfTags:   []string{"tag:woo"},
 			// isEligibleConnector is false: tag matches but prefs not set,
 			// so DNS response should be rewritten normally.
-			wantByMagicIP: map[netip.Addr]addrs{
+			wantByMagicIP: map[netip.Addr]*addrs{
 				netip.MustParseAddr("100.64.0.0"): {
 					domain:  "example.com.",
 					dst:     netip.MustParseAddr("1.0.0.0"),
@@ -1026,7 +1026,7 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 			isEligibleConnector: true,
 			// isEligibleConnector is true but tag doesn't match the app,
 			// so DNS response should be rewritten normally.
-			wantByMagicIP: map[netip.Addr]addrs{
+			wantByMagicIP: map[netip.Addr]*addrs{
 				netip.MustParseAddr("100.64.0.0"): {
 					domain:  "example.com.",
 					dst:     netip.MustParseAddr("1.0.0.0"),
@@ -1042,7 +1042,7 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 			domain:     "sub.example.com.",
 			v4Addrs:    []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
 			// these are 'expected' because they are the beginning of the provided pools
-			wantByMagicIP: map[netip.Addr]addrs{
+			wantByMagicIP: map[netip.Addr]*addrs{
 				netip.MustParseAddr("100.64.0.0"): {
 					domain:  "sub.example.com.",
 					dst:     netip.MustParseAddr("1.0.0.0"),
@@ -1058,7 +1058,7 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 			domain:     "sub.example.com.",
 			v4Addrs:    []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
 			// these are 'expected' because they are the beginning of the provided pools
-			wantByMagicIP: map[netip.Addr]addrs{
+			wantByMagicIP: map[netip.Addr]*addrs{
 				netip.MustParseAddr("100.64.0.0"): {
 					domain:  "sub.example.com.",
 					dst:     netip.MustParseAddr("1.0.0.0"),
@@ -1074,7 +1074,7 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 			domain:     "a.sub.example.com.",
 			v4Addrs:    []*dnsmessage.AResource{{A: [4]byte{1, 0, 0, 0}}},
 			// these are 'expected' because they are the beginning of the provided pools
-			wantByMagicIP: map[netip.Addr]addrs{
+			wantByMagicIP: map[netip.Addr]*addrs{
 				netip.MustParseAddr("100.64.0.0"): {
 					domain:  "a.sub.example.com.",
 					dst:     netip.MustParseAddr("1.0.0.0"),
@@ -1177,9 +1177,11 @@ func TestReserveAddressesDeduplicated(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if first.magic != second.magic {
-				t.Errorf("expected same magic addrs on repeated call, got first=%v second=%v", first.magic, second.magic)
+			if first != second {
+				// reserveAddresses should return the existing entry when called for a domain that already has assigned addrs
+				t.Fatalf("want first==second, got first: %v, second: %v", first, second)
 			}
+
 			if got := len(c.assignments.byMagicIP); got != 1 {
 				t.Errorf("want 1 entry in byMagicIP, got %d", got)
 			}
@@ -1314,7 +1316,7 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 	cfg := mustConfig(t, sn)
 	ext.conn25.reconfig(cfg)
 
-	as := addrs{
+	as := &addrs{
 		dst:     netip.MustParseAddr("1.2.3.4"),
 		magic:   netip.MustParseAddr("100.64.0.0"),
 		transit: netip.MustParseAddr("169.254.0.1"),
@@ -1930,12 +1932,12 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 	// and then does the lookups.
 	steps := []struct {
 		name    string
-		as      addrs
+		as      *addrs
 		lookups []lookup
 	}{
 		{
 			name: "step-1-conn1-tip1",
-			as: addrs{
+			as: &addrs{
 				dst:     netip.MustParseAddr("1.2.3.1"),
 				magic:   netip.MustParseAddr("100.64.0.1"),
 				transit: transitIPs[0].Addr(),
@@ -1959,7 +1961,7 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 		},
 		{
 			name: "step-2-conn1-tip2",
-			as: addrs{
+			as: &addrs{
 				dst:     netip.MustParseAddr("1.2.3.2"),
 				magic:   netip.MustParseAddr("100.64.0.2"),
 				transit: transitIPs[1].Addr(),
@@ -1979,7 +1981,7 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 		},
 		{
 			name: "step-3-conn2-tip1",
-			as: addrs{
+			as: &addrs{
 				dst:     netip.MustParseAddr("1.2.3.3"),
 				magic:   netip.MustParseAddr("100.64.0.3"),
 				transit: transitIPs[2].Addr(),
@@ -2040,7 +2042,7 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 func TestTransitIPConnMapping(t *testing.T) {
 	conn25 := newConn25(t.Logf)
 
-	as := addrs{
+	as := &addrs{
 		dst:     netip.MustParseAddr("1.2.3.1"),
 		magic:   netip.MustParseAddr("100.64.0.1"),
 		transit: netip.MustParseAddr("169.254.0.1"),
@@ -2151,14 +2153,14 @@ func TestClientTransitIPForMagicIP(t *testing.T) {
 			c := newConn25(t.Logf)
 			c.reconfig(cfg)
 
-			if err := c.client.assignments.insert(addrs{
+			if err := c.client.assignments.insert(&addrs{
 				magic:   mappedMip,
 				transit: mappedTip,
 				dst:     dst,
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if err := c.client.assignments.insert(addrs{
+			if err := c.client.assignments.insert(&addrs{
 				magic:   v6MappedMip,
 				transit: v6MappedTip,
 				dst:     v6Dst,
@@ -2253,7 +2255,7 @@ func TestIsKnownTransitIP(t *testing.T) {
 	unknownTip := netip.MustParseAddr("100.64.0.42")
 
 	c := newConn25(t.Logf)
-	c.client.assignments.insert(addrs{
+	c.client.assignments.insert(&addrs{
 		transit: knownTip,
 	})
 
@@ -2269,7 +2271,7 @@ func TestLinkLocalAllow(t *testing.T) {
 	knownTip := netip.MustParseAddr("100.64.0.41")
 
 	c := newConn25(t.Logf)
-	c.client.assignments.insert(addrs{
+	c.client.assignments.insert(&addrs{
 		transit: knownTip,
 	})
 

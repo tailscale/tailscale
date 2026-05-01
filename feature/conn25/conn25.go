@@ -748,9 +748,9 @@ func (cfg *config) getAppsForConnectorDomain(domain dnsname.FQDN, prefsAdvertise
 // the app name refers to a configured app.
 // It checks that this domain should be routed and that this client is not itself a connector for the domain
 // and generally if it is valid to make the assignment.
-func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip.Addr) (addrs, error) {
+func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip.Addr) (*addrs, error) {
 	if !dst.IsValid() {
-		return addrs{}, errors.New("dst is not valid")
+		return nil, errors.New("dst is not valid")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -758,30 +758,52 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 		return existing, nil
 	}
 
+	// Before we check out more addresses from the pools try to return some.
+	// Trying to return any number greater than 1 will cause the number of
+	// addresses used to trend down in general. But as we have 2 different
+	// pools for the different IP versions, use a number a bit higher than
+	// 2 to try and process bursty behavior faster.
+	now := c.assignments.clock.Now()
+	for range 10 {
+		a := c.assignments.popExpired(now)
+		if !a.isValid() {
+			break
+		}
+		if a.is4() {
+			c.v4MagicIPPool.returnAddr(a.magic)
+			c.v4TransitIPPool.returnAddr(a.transit)
+		} else if a.is6() {
+			c.v6MagicIPPool.returnAddr(a.magic)
+			c.v6TransitIPPool.returnAddr(a.transit)
+		} else {
+			return nil, errors.New("unexpected neither 4 nor 6")
+		}
+	}
+
 	var mip, tip netip.Addr
 	var err error
 	if dst.Is4() {
 		mip, err = c.v4MagicIPPool.next()
 		if err != nil {
-			return addrs{}, err
+			return nil, err
 		}
 		tip, err = c.v4TransitIPPool.next()
 		if err != nil {
-			return addrs{}, err
+			return nil, err
 		}
 	} else if dst.Is6() {
 		mip, err = c.v6MagicIPPool.next()
 		if err != nil {
-			return addrs{}, err
+			return nil, err
 		}
 		tip, err = c.v6TransitIPPool.next()
 		if err != nil {
-			return addrs{}, err
+			return nil, err
 		}
 	} else {
-		return addrs{}, errors.New("unexpected neither 4 nor 6")
+		return nil, errors.New("unexpected neither 4 nor 6")
 	}
-	as := addrs{
+	as := &addrs{
 		dst:     dst,
 		magic:   mip,
 		transit: tip,
@@ -789,11 +811,11 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 		domain:  domain,
 	}
 	if err := c.assignments.insert(as); err != nil {
-		return addrs{}, err
+		return nil, err
 	}
 	err = c.enqueueAddressAssignment(as)
 	if err != nil {
-		return addrs{}, err
+		return nil, err
 	}
 	return as, nil
 }
@@ -835,11 +857,11 @@ func (e *extension) handleAddressAssignment(ctx context.Context, as addrs) error
 	return nil
 }
 
-func (c *client) enqueueAddressAssignment(addrs addrs) error {
+func (c *client) enqueueAddressAssignment(addrs *addrs) error {
 	select {
 	// TODO(fran) investigate the value of waiting for multiple addresses and sending them
 	// in one ConnectorTransitIPRequest
-	case c.addrsCh <- addrs:
+	case c.addrsCh <- *addrs:
 		return nil
 	default:
 		c.logf("address assignment queue full, dropping transit assignment for %v", addrs.domain)
@@ -1243,8 +1265,16 @@ type addrs struct {
 	expiresAt time.Time
 }
 
-func (c addrs) isValid() bool {
-	return c.dst.IsValid()
+func (as addrs) isValid() bool {
+	return as.dst.IsValid()
+}
+
+func (as addrs) is4() bool {
+	return as.dst.Is4()
+}
+
+func (as addrs) is6() bool {
+	return as.dst.Is6()
 }
 
 // insertTransitConnMapping adds an entry to the byConnKey map
