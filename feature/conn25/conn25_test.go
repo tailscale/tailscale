@@ -877,6 +877,12 @@ func makeDNSResponseForSections(t *testing.T, questions []dnsmessage.Question, a
 				t.Fatalf("unexpected answer type, update test")
 			}
 			b.AAAAResource(ans.Header, *body)
+		case dnsmessage.TypeCNAME:
+			body, ok := (ans.Body).(*dnsmessage.CNAMEResource)
+			if !ok {
+				t.Fatalf("unexpected answer type, update test")
+			}
+			b.CNAMEResource(ans.Header, *body)
 		default:
 			t.Fatalf("unhandled answer type, update test: %v", ans.Header.Type)
 		}
@@ -1662,6 +1668,174 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 				nil,
 			),
 			assertFx: assertParsesToAnswers([]netip.Addr{netip.MustParseAddr("2606:4700::6812:100")}),
+		},
+		{
+			name: "cname-resolves-to-magic-ip",
+			toMap: makeDNSResponseForSections(t,
+				[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+				[]dnsmessage.Resource{
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsMessageName,
+							Type:  dnsmessage.TypeCNAME,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("a.example.com.")},
+					},
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsmessage.MustNewName("a.example.com."),
+							Type:  dnsmessage.TypeCNAME,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("b.example.com.")},
+					},
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsmessage.MustNewName("b.example.com."),
+							Type:  dnsmessage.TypeCNAME,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("c.example.com.")},
+					},
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsmessage.MustNewName("c.example.com."),
+							Type:  dnsmessage.TypeA,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.AResource{A: netip.MustParseAddr("1.2.3.4").As4()},
+					},
+				},
+				nil,
+			),
+			assertFx: assertParsesToAnswers([]netip.Addr{netip.MustParseAddr("100.64.0.0")}),
+		},
+		{
+			name: "cname-aaaa-resolves-to-magic-ip",
+			toMap: makeDNSResponseForSections(t,
+				[]dnsmessage.Question{
+					{
+						Name:  dnsMessageName,
+						Type:  dnsmessage.TypeAAAA,
+						Class: dnsmessage.ClassINET,
+					},
+				},
+				[]dnsmessage.Resource{
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsMessageName,
+							Type:  dnsmessage.TypeCNAME,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("cdn.example.net.")},
+					},
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsmessage.MustNewName("cdn.example.net."),
+							Type:  dnsmessage.TypeAAAA,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.AAAAResource{AAAA: netip.MustParseAddr("2606:4700::6812:1a78").As16()},
+					},
+				},
+				nil,
+			),
+			assertFx: assertParsesToAnswers([]netip.Addr{netip.MustParseAddr("2606:4700::6812:100")}),
+		},
+		{
+			name: "cname-broken-chain-skips-answer",
+			toMap: makeDNSResponseForSections(t,
+				[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+				[]dnsmessage.Resource{
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsMessageName,
+							Type:  dnsmessage.TypeCNAME,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("cdn.example.net.")},
+					},
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsmessage.MustNewName("unrelated.com."),
+							Type:  dnsmessage.TypeA,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.AResource{A: netip.MustParseAddr("1.2.3.4").As4()},
+					},
+				},
+				nil,
+			),
+			assertFx: assertParsesToAnswers(nil),
+		},
+		{
+			name: "cname-multi-source-same-target",
+			toMap: makeDNSResponseForSections(t,
+				[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+				[]dnsmessage.Resource{
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsMessageName,
+							Type:  dnsmessage.TypeCNAME,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("z.example.com.")},
+					},
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsmessage.MustNewName("a.example.com."),
+							Type:  dnsmessage.TypeCNAME,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("z.example.com.")},
+					},
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsmessage.MustNewName("z.example.com."),
+							Type:  dnsmessage.TypeA,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.AResource{A: netip.MustParseAddr("1.2.3.4").As4()},
+					},
+				},
+				nil,
+			),
+			assertFx: assertParsesToAnswers([]netip.Addr{netip.MustParseAddr("100.64.0.0")}),
+		},
+		{
+			name: "cname-has-loop",
+			toMap: makeDNSResponseForSections(t,
+				[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+				[]dnsmessage.Resource{
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsMessageName,
+							Type:  dnsmessage.TypeCNAME,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("a.example.com.")},
+					},
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsmessage.MustNewName("a.example.com."),
+							Type:  dnsmessage.TypeCNAME,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.CNAMEResource{CNAME: dnsMessageName},
+					},
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsmessage.MustNewName("z.example.com."),
+							Type:  dnsmessage.TypeA,
+							Class: dnsmessage.ClassINET,
+						},
+						Body: &dnsmessage.AResource{A: netip.MustParseAddr("1.2.3.4").As4()},
+					},
+				},
+				nil,
+			),
+			assertFx: assertParsesToAnswers(nil),
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
