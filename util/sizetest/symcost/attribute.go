@@ -97,6 +97,14 @@ func (b *Binary) CostByReceiver(receiver string) Cost {
 	}
 	matchTpl := receiverMatcher(receiver)
 
+	// Track what we've already attributed via instruction refs so
+	// the same item doesn't get charged twice (once via the name
+	// match below and again via a ref scan).
+	seenTypeName := map[string]bool{}
+	seenItabAddr := map[uint64]bool{}
+	seenSymName := map[string]bool{}
+	seenRefAddr := map[uint64]bool{}
+
 	// 1. Functions: receiver methods, eq/hash funcs, dicts (which
 	//    live in .rodata, not .text, but we look for them in the
 	//    symbol table).
@@ -112,19 +120,36 @@ func (b *Binary) CostByReceiver(receiver string) Cost {
 		c.Funcs = append(c.Funcs, fc)
 		c.Sections[".text"] += fc.BodyBytes
 		c.Sections[".gopclntab"] += fc.PclntabBytes
+		// On arm64 (and eventually other arches), pull in the
+		// rodata items each method instruction-references. This
+		// captures dictionaries, GC bitmaps, name strings, and
+		// other static data the method body uses but that doesn't
+		// directly mention the receiver in its symbol name.
+		for _, addr := range b.FuncRefs(f) {
+			if seenRefAddr[addr] {
+				continue
+			}
+			seenRefAddr[addr] = true
+			b.attributeAddr(addr, &c, seenTypeName, seenItabAddr, seenSymName)
+		}
 	}
 
 	// 2. Itabs by concrete-name match.
 	for _, it := range b.Itabs {
-		if matchTpl(it.ConcreteName) || matchTpl(it.SymName) {
-			c.Itabs = append(c.Itabs, ItabCost{
-				SymName:       it.SymName,
-				ConcreteName:  it.ConcreteName,
-				InterfaceName: it.InterfaceName,
-				Bytes:         it.Bytes,
-			})
-			c.Sections[".rodata"] += it.Bytes
+		if !(matchTpl(it.ConcreteName) || matchTpl(it.SymName)) {
+			continue
 		}
+		if seenItabAddr[it.Addr] {
+			continue
+		}
+		seenItabAddr[it.Addr] = true
+		c.Itabs = append(c.Itabs, ItabCost{
+			SymName:       it.SymName,
+			ConcreteName:  it.ConcreteName,
+			InterfaceName: it.InterfaceName,
+			Bytes:         it.Bytes,
+		})
+		c.Sections[".rodata"] += it.Bytes
 	}
 
 	// 3. Type descriptors: walk Types map for matching names.
@@ -134,6 +159,10 @@ func (b *Binary) CostByReceiver(receiver string) Cost {
 		if !matchTpl(name) {
 			continue
 		}
+		if seenTypeName[name] {
+			continue
+		}
+		seenTypeName[name] = true
 		for _, t := range ts {
 			c.Types = append(c.Types, TypeCost{
 				Name:      t.Name,
@@ -147,7 +176,8 @@ func (b *Binary) CostByReceiver(receiver string) Cost {
 	// 4. Named symbols not yet accounted for. These are typically
 	//    dicts, eq/hash, and other rodata items the symbol table
 	//    knows about. Skip anything that's a function (already
-	//    counted via Funcs) or an itab (already counted).
+	//    counted via Funcs) or an itab (already counted) or already
+	//    pulled in via instruction refs.
 	covered := make(map[string]bool, len(c.Funcs)+len(c.Itabs))
 	for _, f := range c.Funcs {
 		covered[f.Name] = true
@@ -159,6 +189,10 @@ func (b *Binary) CostByReceiver(receiver string) Cost {
 		if !matchTpl(s.Name) || covered[s.Name] || s.Size == 0 {
 			continue
 		}
+		if seenSymName[s.Name] {
+			continue
+		}
+		seenSymName[s.Name] = true
 		c.NamedSyms = append(c.NamedSyms, SymCost{
 			Name:    s.Name,
 			Section: s.Section,
@@ -176,16 +210,26 @@ func (b *Binary) CostByReceiver(receiver string) Cost {
 // `[…]` placeholder, or any concrete instantiation, and we'll match
 // all instantiations sharing the template).
 //
-// The returned Cost includes the function's body bytes and its
-// share of pclntab. Disassembly-based attribution of referenced
-// rodata is added in a separate code path; see
-// CostByFunctionWithRefs.
+// The returned Cost includes the function's body bytes, its share of
+// pclntab, and (on architectures where we can do instruction-level
+// scanning) the runtime type descriptors, itabs, and named rodata
+// the function references. Each referenced item is counted only
+// once even when several matched functions reference it.
 func (b *Binary) CostByFunction(name string) Cost {
 	c := Cost{
 		Target:   name,
 		Sections: map[string]int64{},
 	}
 	tpl := normalize(name)
+
+	// Track refs already attributed so we don't double-count items
+	// that several matched functions point at (e.g. shared name
+	// strings, dictionaries reachable from sibling instantiations).
+	seenRefAddr := map[uint64]bool{}
+	seenTypeName := map[string]bool{}
+	seenItabAddr := map[uint64]bool{}
+	seenSymName := map[string]bool{}
+
 	for _, f := range b.Funcs {
 		if normalize(f.Name) != tpl && f.Name != name {
 			continue
@@ -198,9 +242,91 @@ func (b *Binary) CostByFunction(name string) Cost {
 		c.Funcs = append(c.Funcs, fc)
 		c.Sections[".text"] += fc.BodyBytes
 		c.Sections[".gopclntab"] += fc.PclntabBytes
+
+		for _, addr := range b.FuncRefs(f) {
+			if seenRefAddr[addr] {
+				continue
+			}
+			seenRefAddr[addr] = true
+			b.attributeAddr(addr, &c, seenTypeName, seenItabAddr, seenSymName)
+		}
 	}
 	c.finalize()
 	return c
+}
+
+// attributeAddr classifies one referenced static-data address and
+// adds its size to c (and to the appropriate per-category list,
+// avoiding duplicates via the seen* maps).
+//
+// Resolution order:
+//
+//  1. If addr names a known itab, charge the itab.
+//  2. If addr is the start of a known type descriptor, charge the
+//     descriptor's bytes (descriptor + name string).
+//  3. If addr is the start of a known named symbol, charge the
+//     symbol's bytes.
+//  4. Otherwise, the address is anonymous rodata (string constant,
+//     name fragment, GC bitmap, etc.) and we don't currently
+//     attribute it. The byte cost is real but cannot reliably be
+//     associated with a single owner; we leave it as part of the
+//     residual rodata gap rather than risk over-attributing.
+func (b *Binary) attributeAddr(addr uint64, c *Cost,
+	seenTypeName map[string]bool,
+	seenItabAddr map[uint64]bool,
+	seenSymName map[string]bool,
+) {
+	for _, it := range b.Itabs {
+		if it.Addr != addr {
+			continue
+		}
+		if seenItabAddr[it.Addr] {
+			return
+		}
+		seenItabAddr[it.Addr] = true
+		c.Itabs = append(c.Itabs, ItabCost{
+			SymName:       it.SymName,
+			ConcreteName:  it.ConcreteName,
+			InterfaceName: it.InterfaceName,
+			Bytes:         it.Bytes,
+		})
+		c.Sections[".rodata"] += it.Bytes
+		return
+	}
+	for name, ts := range b.Types {
+		for _, t := range ts {
+			if t.Addr != addr {
+				continue
+			}
+			if seenTypeName[name] {
+				return
+			}
+			seenTypeName[name] = true
+			c.Types = append(c.Types, TypeCost{
+				Name:      t.Name,
+				Bytes:     t.Bytes,
+				NameBytes: t.NameBytes,
+			})
+			c.Sections[".rodata"] += t.TotalBytes()
+			return
+		}
+	}
+	for _, s := range b.Syms {
+		if s.Addr != addr {
+			continue
+		}
+		if seenSymName[s.Name] {
+			return
+		}
+		seenSymName[s.Name] = true
+		c.NamedSyms = append(c.NamedSyms, SymCost{
+			Name:    s.Name,
+			Section: s.Section,
+			Bytes:   int64(s.Size),
+		})
+		c.Sections[s.Section] += int64(s.Size)
+		return
+	}
 }
 
 // finalize sorts the per-category lists and computes Total.

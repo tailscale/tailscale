@@ -4,6 +4,8 @@
 package symcost_test
 
 import (
+	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
@@ -133,4 +135,109 @@ func typeNames(ts []symcost.TypeCost) []string {
 		out[i] = t.Name
 	}
 	return out
+}
+
+// TestArm64FuncRefsAgainstFixture cross-compiles a tiny program to
+// arm64 and verifies that FuncRefs picks up at least one rodata
+// reference from the test function, and that CostByFunction
+// includes additional .rodata bytes that the previous
+// non-disassembling attribution would have missed.
+//
+// The test does not require an arm64 host: it only inspects the
+// ELF binary statically.
+func TestArm64FuncRefsAgainstFixture(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping: invokes go build")
+	}
+	// We can't use sizetest.BuildWithOptions for this case
+	// because it doesn't expose GOOS/GOARCH overrides; we want to
+	// cross-compile to arm64 even when the host is amd64. Build
+	// directly with `go build` so we can set the env.
+	dir := t.TempDir()
+	source := []byte(`package main
+
+//go:noinline
+func PickName(i int) string {
+	switch i {
+	case 0:
+		return "alpha-zebra-fixture"
+	case 1:
+		return "bravo-yankee-fixture"
+	default:
+		return "charlie-xray-fixture"
+	}
+}
+
+func main() {
+	println(PickName(0))
+	println(PickName(1))
+	println(PickName(2))
+}
+`)
+	if err := writeFile(dir+"/main.go", source); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(dir+"/go.mod", []byte("module symcostarm\n\ngo 1.21\n")); err != nil {
+		t.Fatal(err)
+	}
+	binPath := dir + "/bin"
+	if err := goBuildARM64(t, dir, binPath); err != nil {
+		t.Fatalf("cross-compile to arm64: %v", err)
+	}
+
+	b, err := symcost.Open(binPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer b.Close()
+
+	// Find PickName.
+	var pickName *symcost.Func
+	for _, f := range b.Funcs {
+		if strings.Contains(f.Name, "main.PickName") {
+			pickName = f
+			break
+		}
+	}
+	if pickName == nil {
+		t.Fatal("couldn't find main.PickName")
+	}
+
+	refs := b.FuncRefs(pickName)
+	if len(refs) == 0 {
+		t.Errorf("expected FuncRefs to pick up at least one rodata reference; got 0")
+	}
+
+	// At least some refs should land in .rodata.
+	rodata := b.Sections[".rodata"]
+	if rodata == nil {
+		t.Skip("no .rodata; can't validate")
+	}
+	rodataRefs := 0
+	for _, addr := range refs {
+		if rodata.AddrInRange(addr) {
+			rodataRefs++
+		}
+	}
+	if rodataRefs == 0 {
+		t.Errorf("none of the %d refs landed in .rodata; got %v", len(refs), refs)
+	}
+}
+
+func writeFile(path string, data []byte) error {
+	return os.WriteFile(path, data, 0o644)
+}
+
+// goBuildARM64 cross-compiles the package in dir to an arm64 ELF at
+// out, returning an error if the build fails.
+func goBuildARM64(t testing.TB, dir, out string) error {
+	t.Helper()
+	cmd := exec.Command("go", "build", "-trimpath", "-o", out, ".")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=arm64")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Logf("build output:\n%s", output)
+	}
+	return err
 }

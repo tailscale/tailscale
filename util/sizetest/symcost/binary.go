@@ -327,3 +327,52 @@ func (b *Binary) FuncsByTemplate(tpl string) []*Func {
 	}
 	return out
 }
+
+// FuncBytes returns the raw machine-code bytes of f from the .text
+// section, or nil if the binary has no .text or f's range is out
+// of bounds.
+func (b *Binary) FuncBytes(f *Func) []byte {
+	text := b.Sections[".text"]
+	if text == nil {
+		return nil
+	}
+	return text.Slice(f.Entry, int(f.End-f.Entry))
+}
+
+// FuncRefs returns the set of static-data addresses that f
+// references via its instructions, when those references can be
+// resolved by the architecture-specific scanner. The returned
+// addresses are absolute virtual addresses; callers can look them
+// up against b.Sections to discover which sections (and which named
+// symbols within them) the function touches.
+//
+// FuncRefs is currently implemented for arm64 only; on other
+// architectures it returns nil. Cross-architecture coverage will
+// be added as needed; the existing per-section attribution still
+// works on every architecture even without FuncRefs.
+func (b *Binary) FuncRefs(f *Func) []uint64 {
+	if b.elf == nil {
+		return nil
+	}
+	if !b.isArm64() {
+		return nil
+	}
+	body := b.FuncBytes(f)
+	if body == nil {
+		return nil
+	}
+	return scanArm64Refs(f.Entry, body)
+}
+
+// isArm64 reports whether b is an arm64 ELF.
+func (b *Binary) isArm64() bool {
+	if b.elf == nil {
+		return false
+	}
+	return b.elf.Machine == elfMachineAArch64
+}
+
+// elfMachineAArch64 is elf.EM_AARCH64; we name the constant locally
+// to keep the arm64-only disasm file from needing a debug/elf
+// import.
+const elfMachineAArch64 = 0xB7
