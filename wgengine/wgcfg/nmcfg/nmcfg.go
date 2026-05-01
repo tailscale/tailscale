@@ -53,6 +53,14 @@ func WGCfg(pk key.NodePrivate, nm *netmap.NetworkMap, logf logger.Logf, flags ne
 		Peers:      make([]wgcfg.Peer, 0, len(nm.Peers)),
 	}
 
+	// Enable hybrid ML-KEM-768 handshake when the control plane sets the
+	// NodeAttrPostQuantumCrypto capability on this node.  All nodes in the
+	// tailnet must have this attribute for the network to function; the flag
+	// is network-wide and not per-peer.
+	if nm.SelfNode.Valid() {
+		cfg.MLKEMEnabled = nm.SelfNode.HasCap(tailcfg.NodeAttrPostQuantumCrypto)
+	}
+
 	// Setup log IDs for data plane audit logging.
 	if nm.SelfNode.Valid() {
 		canNetworkLog := nm.SelfNode.HasCap(tailcfg.CapabilityDataPlaneAuditLogs)

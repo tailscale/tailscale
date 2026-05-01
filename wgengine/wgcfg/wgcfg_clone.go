@@ -38,6 +38,7 @@ var _ConfigCloneNeedsRegeneration = Config(struct {
 	MTU            uint16
 	DNS            []netip.Addr
 	Peers          []Peer
+	MLKEMEnabled   bool
 	NetworkLogging struct {
 		NodeID             logid.PrivateID
 		DomainID           logid.PrivateID

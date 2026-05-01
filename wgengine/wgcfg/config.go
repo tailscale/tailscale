@@ -23,6 +23,12 @@ type Config struct {
 	DNS        []netip.Addr
 	Peers      []Peer
 
+	// MLKEMEnabled enables the hybrid ML-KEM-768 + Noise_IKpsk2 WireGuard
+	// handshake (FIPS 203).  When true the device uses message types 5/6
+	// instead of the standard types 1/2.  All nodes in the network must
+	// have this set identically.
+	MLKEMEnabled bool
+
 	// NetworkLogging enables network logging.
 	// It is disabled if either ID is the zero value.
 	// LogExitFlowEnabled indicates whether or not exit flows should be logged.
@@ -39,6 +45,7 @@ func (c *Config) Equal(o *Config) bool {
 	}
 	return c.PrivateKey.Equal(o.PrivateKey) &&
 		c.MTU == o.MTU &&
+		c.MLKEMEnabled == o.MLKEMEnabled &&
 		c.NetworkLogging == o.NetworkLogging &&
 		slices.Equal(c.Addresses, o.Addresses) &&
 		slices.Equal(c.DNS, o.DNS) &&
