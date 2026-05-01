@@ -258,44 +258,50 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 		if n.State != nil {
 			notifyState(*n.State)
 		}
-		if nm := n.NetMap; nm != nil {
-			jsNetMap := jsNetMap{
-				Self: jsNetMapSelfNode{
-					jsNetMapNode: jsNetMapNode{
-						Name:       nm.SelfName(),
-						Addresses:  mapSliceView(nm.GetAddresses(), func(a netip.Prefix) string { return a.Addr().String() }),
-						NodeKey:    nm.NodeKey.String(),
-						MachineKey: nm.MachineKey.String(),
-					},
-					MachineStatus: jsMachineStatus[nm.GetMachineStatus()],
-				},
-				Peers: mapSlice(nm.Peers, func(p tailcfg.NodeView) jsNetMapPeerNode {
-					name := p.Name()
-					if name == "" {
-						// In practice this should only happen for Hello.
-						name = p.Hostinfo().Hostname()
-					}
-					addrs := make([]string, p.Addresses().Len())
-					for i, ap := range p.Addresses().All() {
-						addrs[i] = ap.Addr().String()
-					}
-					return jsNetMapPeerNode{
+		if n.SelfChange != nil {
+			// Self changed: rebuild the JS-side NetMap snapshot. Peers
+			// don't ride on the bus anymore, so fetch them on demand
+			// from LocalBackend.
+			nm := i.lb.NetMapWithPeers()
+			if nm != nil {
+				jsNetMap := jsNetMap{
+					Self: jsNetMapSelfNode{
 						jsNetMapNode: jsNetMapNode{
-							Name:       name,
-							Addresses:  addrs,
-							MachineKey: p.Machine().String(),
-							NodeKey:    p.Key().String(),
+							Name:       nm.SelfName(),
+							Addresses:  mapSliceView(nm.GetAddresses(), func(a netip.Prefix) string { return a.Addr().String() }),
+							NodeKey:    nm.NodeKey.String(),
+							MachineKey: nm.MachineKey.String(),
 						},
-						Online:              p.Online().Clone(),
-						TailscaleSSHEnabled: p.Hostinfo().TailscaleSSHEnabled(),
-					}
-				}),
-				LockedOut: nm.TKAEnabled && nm.SelfNode.KeySignature().Len() == 0,
-			}
-			if jsonNetMap, err := json.Marshal(jsNetMap); err == nil {
-				jsCallbacks.Call("notifyNetMap", string(jsonNetMap))
-			} else {
-				log.Printf("Could not generate JSON netmap: %v", err)
+						MachineStatus: jsMachineStatus[nm.GetMachineStatus()],
+					},
+					Peers: mapSlice(nm.Peers, func(p tailcfg.NodeView) jsNetMapPeerNode {
+						name := p.Name()
+						if name == "" {
+							// In practice this should only happen for Hello.
+							name = p.Hostinfo().Hostname()
+						}
+						addrs := make([]string, p.Addresses().Len())
+						for i, ap := range p.Addresses().All() {
+							addrs[i] = ap.Addr().String()
+						}
+						return jsNetMapPeerNode{
+							jsNetMapNode: jsNetMapNode{
+								Name:       name,
+								Addresses:  addrs,
+								MachineKey: p.Machine().String(),
+								NodeKey:    p.Key().String(),
+							},
+							Online:              p.Online().Clone(),
+							TailscaleSSHEnabled: p.Hostinfo().TailscaleSSHEnabled(),
+						}
+					}),
+					LockedOut: nm.TKAEnabled && nm.SelfNode.KeySignature().Len() == 0,
+				}
+				if jsonNetMap, err := json.Marshal(jsNetMap); err == nil {
+					jsCallbacks.Call("notifyNetMap", string(jsonNetMap))
+				} else {
+					log.Printf("Could not generate JSON netmap: %v", err)
+				}
 			}
 		}
 		if n.BrowseToURL != nil {

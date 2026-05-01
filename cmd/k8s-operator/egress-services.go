@@ -30,6 +30,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
@@ -347,11 +348,11 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 		return nil, false, nil
 	}
 	tailnetSvc := tailnetSvcName(svc)
-	gotCfg := (*cfgs)[tailnetSvc]
+	gotCfg := cfgs[tailnetSvc]
 	wantsCfg := egressSvcCfg(svc, clusterIPSvc, esr.tsNamespace, lg)
 	if !reflect.DeepEqual(gotCfg, wantsCfg) {
 		lg.Debugf("updating egress services ConfigMap %s", cm.Name)
-		mak.Set(cfgs, tailnetSvc, wantsCfg)
+		mak.Set(&cfgs, tailnetSvc, wantsCfg)
 		bs, err := json.Marshal(cfgs)
 		if err != nil {
 			return nil, false, fmt.Errorf("error marshalling egress services configs: %w", err)
@@ -485,19 +486,19 @@ func (esr *egressSvcsReconciler) ensureEgressSvcCfgDeleted(ctx context.Context, 
 		lggr.Debugf("ConfigMap does not contain egress service configs")
 		return nil
 	}
-	cfgs := &egressservices.Configs{}
-	if err := json.Unmarshal(bs, cfgs); err != nil {
+	cfgs := egressservices.Configs{}
+	if err := json.Unmarshal(bs, &cfgs); err != nil {
 		return fmt.Errorf("error unmarshalling egress services configs")
 	}
 	tailnetSvc := tailnetSvcName(svc)
-	_, ok := (*cfgs)[tailnetSvc]
+	_, ok := cfgs[tailnetSvc]
 	if !ok {
 		lggr.Debugf("ConfigMap does not contain egress service config, likely because it was already deleted")
 		return nil
 	}
-	lggr.Infof("before deleting config %+#v", *cfgs)
-	delete(*cfgs, tailnetSvc)
-	lggr.Infof("after deleting config %+#v", *cfgs)
+	lggr.Infof("before deleting config %+#v", cfgs)
+	delete(cfgs, tailnetSvc)
+	lggr.Infof("after deleting config %+#v", cfgs)
 	bs, err := json.Marshal(cfgs)
 	if err != nil {
 		return fmt.Errorf("error marshalling egress services configs: %w", err)
@@ -649,7 +650,7 @@ func isEgressSvcForProxyGroup(obj client.Object) bool {
 
 // egressSvcConfig returns a ConfigMap that contains egress services configuration for the provided ProxyGroup as well
 // as unmarshalled configuration from the ConfigMap.
-func egressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, tsNamespace string) (cm *corev1.ConfigMap, cfgs *egressservices.Configs, err error) {
+func egressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, tsNamespace string) (cm *corev1.ConfigMap, cfgs egressservices.Configs, err error) {
 	name := pgEgressCMName(proxyGroupName)
 	cm = &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -664,9 +665,9 @@ func egressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, ts
 	if err != nil {
 		return nil, nil, fmt.Errorf("error retrieving egress services ConfigMap %s: %v", name, err)
 	}
-	cfgs = &egressservices.Configs{}
+	cfgs = egressservices.Configs{}
 	if len(cm.BinaryData[egressservices.KeyEgressServices]) != 0 {
-		if err := json.Unmarshal(cm.BinaryData[egressservices.KeyEgressServices], cfgs); err != nil {
+		if err := json.Unmarshal(cm.BinaryData[egressservices.KeyEgressServices], &cfgs); err != nil {
 			return nil, nil, fmt.Errorf("error unmarshaling egress services config %v: %w", cm.BinaryData[egressservices.KeyEgressServices], err)
 		}
 	}

@@ -47,10 +47,12 @@ func TestPickSplitDNSPeers(t *testing.T) {
 	nvp4 := makeNodeView(4, "p4", []string{"tag:two", "tag:three2", "tag:four2"})
 
 	for _, tt := range []struct {
-		name   string
-		want   map[string][]tailcfg.NodeView
-		peers  []tailcfg.NodeView
-		config []tailcfg.RawMessage
+		name                string
+		peers               []tailcfg.NodeView
+		config              []tailcfg.RawMessage
+		isEligibleConnector bool
+		selfTags            []string
+		want                map[string][]tailcfg.NodeView
 	}{
 		{
 			name: "empty",
@@ -111,6 +113,85 @@ func TestPickSplitDNSPeers(t *testing.T) {
 				"c.example.com":     {nvp2, nvp4},
 			},
 		},
+		{
+			name: "self-connector-exclude-self-domains",
+			config: []tailcfg.RawMessage{
+				tailcfg.RawMessage(appOneBytes),
+				tailcfg.RawMessage(appTwoBytes),
+				tailcfg.RawMessage(appThreeBytes),
+				tailcfg.RawMessage(appFourBytes),
+			},
+			peers: []tailcfg.NodeView{
+				nvp1,
+				nvp2,
+				nvp3,
+				nvp4,
+			},
+			isEligibleConnector: true,
+			selfTags:            []string{"tag:three1"},
+			want: map[string][]tailcfg.NodeView{
+				// woo.b.example.com and hoo.b.example.com are covered
+				// by tag:three1, and so is this self-node.
+				// So those domains should not be routed to peers.
+				// woo.b.example.com is also covered by another tag,
+				// but still not included since this connector can route to it.
+				"example.com":   {nvp1},
+				"a.example.com": {nvp3, nvp4},
+				"c.example.com": {nvp2, nvp4},
+			},
+		},
+		{
+			name: "self-eligible-connector-no-matching-tag-include-all-domains",
+			config: []tailcfg.RawMessage{
+				tailcfg.RawMessage(appOneBytes),
+				tailcfg.RawMessage(appTwoBytes),
+				tailcfg.RawMessage(appThreeBytes),
+				tailcfg.RawMessage(appFourBytes),
+			},
+			peers: []tailcfg.NodeView{
+				nvp1,
+				nvp2,
+				nvp3,
+				nvp4,
+			},
+			isEligibleConnector: true,
+			selfTags:            []string{"tag:unrelated"},
+			want: map[string][]tailcfg.NodeView{
+				// Self has prefs set but no tags matching any app,
+				// so no domains are self-routed and all appear.
+				"example.com":       {nvp1},
+				"a.example.com":     {nvp3, nvp4},
+				"woo.b.example.com": {nvp2, nvp3, nvp4},
+				"hoo.b.example.com": {nvp3, nvp4},
+				"c.example.com":     {nvp2, nvp4},
+			},
+		},
+		{
+			name: "self-not-eligible-connector-but-tagged-include-all-domains",
+			config: []tailcfg.RawMessage{
+				tailcfg.RawMessage(appOneBytes),
+				tailcfg.RawMessage(appTwoBytes),
+				tailcfg.RawMessage(appThreeBytes),
+				tailcfg.RawMessage(appFourBytes),
+			},
+			peers: []tailcfg.NodeView{
+				nvp1,
+				nvp2,
+				nvp3,
+				nvp4,
+			},
+			selfTags: []string{"tag:three1"},
+			want: map[string][]tailcfg.NodeView{
+				// Even though this self node has a tag for an app
+				// the prefs don't advertise as connector, so
+				// should still route through other connectors.
+				"example.com":       {nvp1},
+				"a.example.com":     {nvp3, nvp4},
+				"woo.b.example.com": {nvp2, nvp3, nvp4},
+				"hoo.b.example.com": {nvp3, nvp4},
+				"c.example.com":     {nvp2, nvp4},
+			},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			selfNode := &tailcfg.Node{}
@@ -119,6 +200,7 @@ func TestPickSplitDNSPeers(t *testing.T) {
 					tailcfg.NodeCapability(AppConnectorsExperimentalAttrName): tt.config,
 				}
 			}
+			selfNode.Tags = append(selfNode.Tags, tt.selfTags...)
 			selfView := selfNode.View()
 			peers := map[tailcfg.NodeID]tailcfg.NodeView{}
 			for _, p := range tt.peers {
@@ -126,7 +208,8 @@ func TestPickSplitDNSPeers(t *testing.T) {
 			}
 			got := PickSplitDNSPeers(func(_ tailcfg.NodeCapability) bool {
 				return true
-			}, selfView, peers)
+			}, selfView, peers, tt.isEligibleConnector)
+
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("got %v, want %v", got, tt.want)
 			}

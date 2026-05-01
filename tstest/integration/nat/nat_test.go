@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,7 +28,6 @@ import (
 	"golang.org/x/mod/modfile"
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/tailscale"
-	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -195,6 +196,22 @@ func sameLAN(c *vnet.Config) *vnet.Node {
 	return c.AddNode(nw)
 }
 
+func sameLANNoDropCGNAT(c *vnet.Config) *vnet.Node {
+	nw := c.FirstNetwork()
+	if nw == nil {
+		return nil
+	}
+	if !nw.CanTakeMoreNodes() {
+		return nil
+	}
+	return c.AddNode(
+		nw,
+		tailcfg.NodeCapMap{
+			tailcfg.NodeAttrDisableLinuxCGNATDropRule: nil,
+		},
+	)
+}
+
 func one2one(c *vnet.Config) *vnet.Node {
 	n := c.NumNodes() + 1
 	return c.AddNode(c.AddNetwork(
@@ -327,6 +344,15 @@ func (nt *natTest) setupTest(ctx context.Context, addNode ...addNodeFunc) (nodes
 		}
 	})
 
+	haveKVM := false
+	if runtime.GOOS == "linux" {
+		if f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0); err == nil {
+			f.Close()
+			haveKVM = true
+		}
+	}
+
+	qmpSocks := make([]string, len(nodes))
 	for i, node := range nodes {
 		disk := fmt.Sprintf("%s/node-%d.qcow2", nt.tempDir, i)
 		out, err := exec.Command("qemu-img", "create",
@@ -349,22 +375,28 @@ func (nt *natTest) setupTest(ctx context.Context, addNode ...addNodeFunc) (nodes
 		}
 		envStr := envBuf.String()
 
-		cmd := exec.Command("qemu-system-x86_64",
+		qmpSocks[i] = fmt.Sprintf("%s/qmp-node-%d.sock", nt.tempDir, i)
+		qemuArgs := []string{
 			"-M", "microvm,isa-serial=off",
 			"-m", "384M",
 			"-nodefaults", "-no-user-config", "-nographic",
 			"-kernel", nt.kernel,
-			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-76baa2d60001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet gokrazy.remote_syslog.target="+sysLogAddr+" tailscale-tta=1"+envStr,
-			"-drive", "id=blk0,file="+disk+",format=qcow2",
+			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-76baa2d60001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb gokrazy.remote_syslog.target=" + sysLogAddr + " tailscale-tta=1" + envStr,
+			"-drive", "id=blk0,file=" + disk + ",format=qcow2",
 			"-device", "virtio-blk-device,drive=blk0",
-			"-netdev", "stream,id=net0,addr.type=unix,addr.path="+sockAddr,
+			"-netdev", "stream,id=net0,addr.type=unix,addr.path=" + sockAddr,
 			"-device", "virtio-serial-device",
 			"-device", "virtio-rng-device",
-			"-device", "virtio-net-device,netdev=net0,mac="+node.MAC().String(),
+			"-device", "virtio-net-device,netdev=net0,mac=" + node.MAC().String(),
 			"-chardev", "stdio,id=virtiocon0,mux=on",
 			"-device", "virtconsole,chardev=virtiocon0",
 			"-mon", "chardev=virtiocon0,mode=readline",
-		)
+			"-qmp", "unix:" + qmpSocks[i] + ",server=on,wait=off",
+		}
+		if haveKVM {
+			qemuArgs = append(qemuArgs, "-enable-kvm", "-cpu", "host")
+		}
+		cmd := exec.Command("qemu-system-x86_64", qemuArgs...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Start(); err != nil {
@@ -374,6 +406,15 @@ func (nt *natTest) setupTest(ctx context.Context, addNode ...addNodeFunc) (nodes
 			cmd.Process.Kill()
 			cmd.Wait()
 		})
+	}
+
+	for i, node := range nodes {
+		if err := nt.vnet.AwaitFirstPacket(ctx, node.MAC()); err != nil {
+			t.Logf("node %v: no boot progress (no packets received): %v", node, err)
+			t.Logf("node %v: QMP status: %s", node, qmpQueryStatus(qmpSocks[i]))
+			t.FailNow()
+		}
+		t.Logf("node %v: boot detected (first packet received)", node)
 	}
 
 	for _, n := range nodes {
@@ -411,6 +452,11 @@ func (nt *natTest) setupTest(ctx context.Context, addNode ...addNodeFunc) (nodes
 					return fmt.Errorf("%v status: %w", node, err)
 				}
 
+				if capMap := node.WantCapMap(); capMap != nil {
+					nt.tb.Logf("using capmap for %s: %+v", node.String(), capMap)
+					nt.vnet.ControlServer().SetNodeCapMap(st.Self.PublicKey, capMap)
+				}
+
 				if st.BackendState != "Running" {
 					return fmt.Errorf("%v state = %q", node, st.BackendState)
 				}
@@ -430,8 +476,24 @@ func (nt *natTest) setupTest(ctx context.Context, addNode ...addNodeFunc) (nodes
 	return nodes, clients, nt.vnet.Close
 }
 
+type hasDeadline interface {
+	Deadline() (deadline time.Time, ok bool)
+}
+
+// testContext returns a context derived from the test's deadline (from -timeout),
+// leaving a small margin for cleanup. Falls back to 60s if no deadline is set.
+func testContext(tb testing.TB) (context.Context, context.CancelFunc) {
+	if t, ok := tb.(hasDeadline); ok {
+		if dl, ok := t.Deadline(); ok {
+			const margin = 5 * time.Second
+			return context.WithDeadline(context.Background(), dl.Add(-margin))
+		}
+	}
+	return context.WithTimeout(context.Background(), 60*time.Second)
+}
+
 func (nt *natTest) runHostConnectivityTest(addNode ...addNodeFunc) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := testContext(nt.tb)
 	defer cancel()
 	nodes, clients, cleanup := nt.setupTest(ctx, addNode...)
 	defer cleanup()
@@ -457,7 +519,7 @@ func (nt *natTest) runHostConnectivityTest(addNode ...addNodeFunc) bool {
 }
 
 func (nt *natTest) runTailscaleConnectivityTest(addNode ...addNodeFunc) pingRoute {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := testContext(nt.tb)
 	defer cancel()
 
 	nodes, clients, cleanup := nt.setupTest(ctx, addNode...)
@@ -580,6 +642,55 @@ func ping(ctx context.Context, t testing.TB, c *vnet.NodeAgentClient, target net
 	return nil, fmt.Errorf("no ping response (ctx: %v)", ctx.Err())
 }
 
+// qmpQueryStatus connects to a QEMU QMP socket and returns the VM status
+// (e.g. "running", "paused", "prelaunch") or an error string.
+func qmpQueryStatus(sockPath string) string {
+	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
+	if err != nil {
+		return fmt.Sprintf("dial error: %v", err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	dec := json.NewDecoder(conn)
+
+	// Read QMP greeting.
+	var greeting json.RawMessage
+	if err := dec.Decode(&greeting); err != nil {
+		return fmt.Sprintf("greeting error: %v", err)
+	}
+
+	// Enter command mode.
+	if _, err := conn.Write([]byte(`{"execute":"qmp_capabilities"}` + "\n")); err != nil {
+		return fmt.Sprintf("write caps: %v", err)
+	}
+	var capsResp json.RawMessage
+	if err := dec.Decode(&capsResp); err != nil {
+		return fmt.Sprintf("caps response: %v", err)
+	}
+
+	// Query status.
+	if _, err := conn.Write([]byte(`{"execute":"query-status"}` + "\n")); err != nil {
+		return fmt.Sprintf("write query-status: %v", err)
+	}
+	var statusResp struct {
+		Return struct {
+			Running bool   `json:"running"`
+			Status  string `json:"status"`
+		} `json:"return"`
+		Error *struct {
+			Class string `json:"class"`
+			Desc  string `json:"desc"`
+		} `json:"error"`
+	}
+	if err := dec.Decode(&statusResp); err != nil {
+		return fmt.Sprintf("status response: %v", err)
+	}
+	if statusResp.Error != nil {
+		return fmt.Sprintf("qmp error: %s: %s", statusResp.Error.Class, statusResp.Error.Desc)
+	}
+	return fmt.Sprintf("status=%s running=%v", statusResp.Return.Status, statusResp.Return.Running)
+}
+
 func up(ctx context.Context, c *vnet.NodeAgentClient) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", "http://unused/up", nil)
 	if err != nil {
@@ -680,8 +791,12 @@ func TestEasyEasy(t *testing.T) {
 	nt.want(routeDirect)
 }
 
+// TestTwoEasyNoControlDiscoRotate tests a situation where two nodes have been
+// online and connected through control, but then loose control access and also
+// rotate keys. It is not a perfect proxy for a cached node, as the node will
+// still have a mapState and not use the backup method of inserting keys into
+// the engine directly.
 func TestTwoEasyNoControlDiscoRotate(t *testing.T) {
-	envknob.Setenv("TS_USE_CACHED_NETMAP", "1")
 	nt := newNatTest(t)
 	nt.runTailscaleConnectivityTest(easyNoControlDiscoRotate, easyNoControlDiscoRotate)
 	nt.want(routeDirect)
@@ -697,11 +812,8 @@ func cgnatNoTailnet(c *vnet.Config) *vnet.Node {
 }
 
 func TestNonTailscaleCGNATEndpoint(t *testing.T) {
-	if !*knownBroken {
-		t.Skip("skipping known-broken test; set --known-broken to run; see https://github.com/tailscale/corp/issues/36270")
-	}
 	nt := newNatTest(t)
-	if !nt.runHostConnectivityTest(cgnatNoTailnet, sameLAN) {
+	if !nt.runHostConnectivityTest(cgnatNoTailnet, sameLANNoDropCGNAT) {
 		t.Fatalf("could not ping")
 	}
 }

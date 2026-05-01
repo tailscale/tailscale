@@ -24,7 +24,14 @@ var stringLazy = sync.OnceValue(func() string {
 	if extraGitCommitStamp != "" {
 		fmt.Fprintf(&ret, "  other commit: %s\n", extraGitCommitStamp)
 	}
-	fmt.Fprintf(&ret, "  go version: %s\n", runtime.Version())
+	if tsGoRev := tailscaleToolchainRev(); tsGoRev != "" {
+		if len(tsGoRev) > 10 {
+			tsGoRev = tsGoRev[:10]
+		}
+		fmt.Fprintf(&ret, "  go version: %s (tailscale/go %s)\n", runtime.Version(), tsGoRev)
+	} else {
+		fmt.Fprintf(&ret, "  go version: %s\n", runtime.Version())
+	}
 	return strings.TrimSpace(ret.String())
 })
 

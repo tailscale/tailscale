@@ -329,7 +329,7 @@ extension Tailmac {
                 }
             }
 
-            dispatchMain()
+            RunLoop.main.run()
         }
     }
 }

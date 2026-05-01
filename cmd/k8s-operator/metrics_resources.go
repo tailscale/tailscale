@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	kube "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 )
@@ -227,13 +228,13 @@ func metricsResourceLabels(opts *metricsOpts) map[string]string {
 		kubetypes.LabelManaged:   "true",
 		labelMetricsTarget:       opts.proxyStsName,
 		labelPromProxyType:       opts.proxyType,
-		labelPromProxyParentName: opts.proxyLabels[LabelParentName],
+		labelPromProxyParentName: kube.TruncateLabelValue(opts.proxyLabels[LabelParentName]),
 	}
 	// Include namespace label for proxies created for a namespaced type.
 	if isNamespacedProxyType(opts.proxyType) {
-		lbls[labelPromProxyParentNamespace] = opts.proxyLabels[LabelParentNamespace]
+		lbls[labelPromProxyParentNamespace] = kube.TruncateLabelValue(opts.proxyLabels[LabelParentNamespace])
 	}
-	lbls[labelPromJob] = promJobName(opts)
+	lbls[labelPromJob] = kube.TruncateLabelValue(promJobName(opts))
 	return lbls
 }
 
@@ -250,11 +251,11 @@ func promJobName(opts *metricsOpts) string {
 func metricsSvcSelector(proxyLabels map[string]string, proxyType string) map[string]string {
 	sel := map[string]string{
 		labelPromProxyType:       proxyType,
-		labelPromProxyParentName: proxyLabels[LabelParentName],
+		labelPromProxyParentName: kube.TruncateLabelValue(proxyLabels[LabelParentName]),
 	}
 	// Include namespace label for proxies created for a namespaced type.
 	if isNamespacedProxyType(proxyType) {
-		sel[labelPromProxyParentNamespace] = proxyLabels[LabelParentNamespace]
+		sel[labelPromProxyParentNamespace] = kube.TruncateLabelValue(proxyLabels[LabelParentNamespace])
 	}
 	return sel
 }

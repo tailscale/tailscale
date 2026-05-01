@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcapgo"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
@@ -137,6 +138,8 @@ func (c *Config) AddNode(opts ...any) *Node {
 			}
 		case MAC:
 			n.mac = o
+		case tailcfg.NodeCapMap:
+			n.capMap = o
 		default:
 			if n.err == nil {
 				n.err = fmt.Errorf("unknown AddNode option type %T", o)
@@ -225,6 +228,7 @@ type Node struct {
 	preICMPPing     bool
 	verboseSyslog   bool
 	dontJoinTailnet bool
+	capMap          tailcfg.NodeCapMap
 
 	// TODO(bradfitz): this is halfway converted to supporting multiple NICs
 	// but not done. We need a MAC-per-Network.
@@ -316,6 +320,12 @@ func (n *Node) PreICMPPing() bool {
 // Tailscale does not break connectivity to resources outside the tailnet.
 func (n *Node) ShouldJoinTailnet() bool {
 	return !n.dontJoinTailnet
+}
+
+// WantCapMap returns the [tailcfg.NodeCapMap] that control should send down to
+// this node, if any.
+func (n *Node) WantCapMap() tailcfg.NodeCapMap {
+	return n.capMap
 }
 
 // IsV6Only reports whether this node is only connected to IPv6 networks.

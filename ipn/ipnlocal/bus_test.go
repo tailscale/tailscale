@@ -32,6 +32,7 @@ func TestIsNotableNotify(t *testing.T) {
 		{"netmap", &ipn.Notify{NetMap: new(netmap.NetworkMap)}, false},
 		{"peerchanges", &ipn.Notify{PeerChanges: []*tailcfg.PeerChange{{}}}, false},
 		{"engine", &ipn.Notify{Engine: new(ipn.EngineStatus)}, false},
+		{"selfchange", &ipn.Notify{SelfChange: &tailcfg.Node{}}, true},
 	}
 
 	// Then for all other fields, assume they're notable.
@@ -41,7 +42,7 @@ func TestIsNotableNotify(t *testing.T) {
 	for sf := range rt.Fields() {
 		n := &ipn.Notify{}
 		switch sf.Name {
-		case "_", "NetMap", "PeerChanges", "Engine", "Version":
+		case "_", "NetMap", "PeerChanges", "SelfChange", "Engine", "Version":
 			// Already covered above or not applicable.
 			continue
 		case "DriveShares":

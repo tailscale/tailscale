@@ -21,11 +21,6 @@ type Knobs struct {
 	// DisableUPnP indicates whether to attempt UPnP mapping.
 	DisableUPnP atomic.Bool
 
-	// KeepFullWGConfig is whether we should disable the lazy wireguard
-	// programming and instead give WireGuard the full netmap always, even for
-	// idle peers.
-	KeepFullWGConfig atomic.Bool
-
 	// RandomizeClientPort is whether control says we should randomize
 	// the client port.
 	RandomizeClientPort atomic.Bool
@@ -61,12 +56,6 @@ type Knobs struct {
 	// LinuxForceNfTables is whether the node should use nftables for Linux
 	// netfiltering, unless overridden by the user.
 	LinuxForceNfTables atomic.Bool
-
-	// SeamlessKeyRenewal is whether to renew node keys without breaking connections.
-	// This is enabled by default in 1.90 and later, but we but we can remotely disable
-	// it from the control plane if there's a problem.
-	// http://go/seamless-key-renewal
-	SeamlessKeyRenewal atomic.Bool
 
 	// ProbeUDPLifetime is whether the node should probe UDP path lifetime on
 	// the tail end of an active direct connection in magicsock.
@@ -131,7 +120,6 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	}
 	has := capMap.Contains
 	var (
-		keepFullWG                           = has(tailcfg.NodeAttrDebugDisableWGTrim)
 		disableUPnP                          = has(tailcfg.NodeAttrDisableUPnP)
 		randomizeClientPort                  = has(tailcfg.NodeAttrRandomizeClientPort)
 		disableDeltaUpdates                  = has(tailcfg.NodeAttrDisableDeltaUpdates)
@@ -142,8 +130,6 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		silentDisco                          = has(tailcfg.NodeAttrSilentDisco)
 		forceIPTables                        = has(tailcfg.NodeAttrLinuxMustUseIPTables)
 		forceNfTables                        = has(tailcfg.NodeAttrLinuxMustUseNfTables)
-		seamlessKeyRenewal                   = has(tailcfg.NodeAttrSeamlessKeyRenewal)
-		disableSeamlessKeyRenewal            = has(tailcfg.NodeAttrDisableSeamlessKeyRenewal)
 		probeUDPLifetime                     = has(tailcfg.NodeAttrProbeUDPLifetime)
 		appCStoreRoutes                      = has(tailcfg.NodeAttrStoreAppCRoutes)
 		userDialUseRoutes                    = has(tailcfg.NodeAttrUserDialUseRoutes)
@@ -161,7 +147,6 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		oneCGNAT.Set(false)
 	}
 
-	k.KeepFullWGConfig.Store(keepFullWG)
 	k.DisableUPnP.Store(disableUPnP)
 	k.RandomizeClientPort.Store(randomizeClientPort)
 	k.OneCGNAT.Store(oneCGNAT)
@@ -181,21 +166,6 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.DisableSkipStatusQueue.Store(disableSkipStatusQueue)
 	k.DisableHostsFileUpdates.Store(disableHostsFileUpdates)
 	k.ForceRegisterMagicDNSIPv4Only.Store(forceRegisterMagicDNSIPv4Only)
-
-	// If both attributes are present, then "enable" should win.  This reflects
-	// the history of seamless key renewal.
-	//
-	// Before 1.90, seamless was a private alpha, opt-in feature.  Devices would
-	// only seamless do if customers opted in using the seamless renewal attr.
-	//
-	// In 1.90 and later, seamless is the default behaviour, and devices will use
-	// seamless unless explicitly told not to by control (e.g. if we discover
-	// a bug and want clients to use the prior behaviour).
-	//
-	// If a customer has opted in to the pre-1.90 seamless implementation, we
-	// don't want to switch it off for them -- we only want to switch it off for
-	// devices that haven't opted in.
-	k.SeamlessKeyRenewal.Store(seamlessKeyRenewal || !disableSeamlessKeyRenewal)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal

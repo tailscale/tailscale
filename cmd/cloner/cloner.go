@@ -143,25 +143,9 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 				writef("if src.%s != nil {", fname)
 				writef("dst.%s = make([]%s, len(src.%s))", fname, n, fname)
 				writef("for i := range dst.%s {", fname)
-				if ptr, isPtr := ft.Elem().(*types.Pointer); isPtr {
-					writef("if src.%s[i] == nil { dst.%s[i] = nil } else {", fname, fname)
-					if codegen.ContainsPointers(ptr.Elem()) {
-						if _, isIface := ptr.Elem().Underlying().(*types.Interface); isIface {
-							writef("\tdst.%s[i] = new((*src.%s[i]).Clone())", fname, fname)
-						} else {
-							writef("\tdst.%s[i] = src.%s[i].Clone()", fname, fname)
-						}
-					} else {
-						writef("\tdst.%s[i] = new(*src.%s[i])", fname, fname)
-					}
-					writef("}")
-				} else if ft.Elem().String() == "encoding/json.RawMessage" {
-					writef("\tdst.%s[i] = append(src.%s[i][:0:0], src.%s[i]...)", fname, fname, fname)
-				} else if _, isIface := ft.Elem().Underlying().(*types.Interface); isIface {
-					writef("\tdst.%s[i] = src.%s[i].Clone()", fname, fname)
-				} else {
-					writef("\tdst.%s[i] = *src.%s[i].Clone()", fname, fname)
-				}
+				writeSliceElemClone(writef, ft.Elem(),
+					fmt.Sprintf("src.%s[i]", fname),
+					fmt.Sprintf("dst.%s[i]", fname))
 				writef("}")
 				writef("}")
 			} else {
@@ -189,11 +173,27 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 				n := it.QualifiedName(sliceType.Elem())
 				writef("if dst.%s != nil {", fname)
 				writef("\tdst.%s = map[%s]%s{}", fname, it.QualifiedName(ft.Key()), it.QualifiedName(elem))
-				writef("\tfor k := range src.%s {", fname)
-				// use zero-length slice instead of nil to ensure
-				// the key is always copied.
-				writef("\t\tdst.%s[k] = append([]%s{}, src.%s[k]...)", fname, n, fname)
-				writef("\t}")
+				if codegen.ContainsPointers(sliceType.Elem()) {
+					writef("\tfor k, sv := range src.%s {", fname)
+					writef("\t\tif sv == nil {")
+					writef("\t\t\tcontinue")
+					writef("\t\t}")
+					writef("\t\tdst.%s[k] = make([]%s, len(sv))", fname, n)
+					writef("\t\tfor i := range sv {")
+					innerWritef := func(format string, args ...any) {
+						writef("\t\t"+format, args...)
+					}
+					writeSliceElemClone(innerWritef, sliceType.Elem(),
+						"sv[i]", fmt.Sprintf("dst.%s[k][i]", fname))
+					writef("\t\t}")
+					writef("\t}")
+				} else {
+					writef("\tfor k := range src.%s {", fname)
+					// use zero-length slice instead of nil to ensure
+					// the key is always copied.
+					writef("\t\tdst.%s[k] = append([]%s{}, src.%s[k]...)", fname, n, fname)
+					writef("\t}")
+				}
 				writef("}")
 			} else if codegen.IsViewType(elem) || !codegen.ContainsPointers(elem) {
 				// If the map values are view types (which are
@@ -240,6 +240,31 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 	fmt.Fprintf(buf, "}\n\n")
 
 	buf.Write(codegen.AssertStructUnchanged(t, name, typeParams, "Clone", it))
+}
+
+// writeSliceElemClone generates code to deep-clone a single slice element
+// from srcExpr to dstExpr. It handles pointer, json.RawMessage, interface,
+// and named struct element types.
+func writeSliceElemClone(writef func(string, ...any), elemType types.Type, srcExpr, dstExpr string) {
+	if ptr, isPtr := elemType.(*types.Pointer); isPtr {
+		writef("if %s == nil { %s = nil } else {", srcExpr, dstExpr)
+		if codegen.ContainsPointers(ptr.Elem()) {
+			if _, isIface := ptr.Elem().Underlying().(*types.Interface); isIface {
+				writef("\t%s = new((*%s).Clone())", dstExpr, srcExpr)
+			} else {
+				writef("\t%s = %s.Clone()", dstExpr, srcExpr)
+			}
+		} else {
+			writef("\t%s = new(*%s)", dstExpr, srcExpr)
+		}
+		writef("}")
+	} else if elemType.String() == "encoding/json.RawMessage" {
+		writef("%s = append(%s[:0:0], %s...)", dstExpr, srcExpr, srcExpr)
+	} else if _, isIface := elemType.Underlying().(*types.Interface); isIface {
+		writef("%s = %s.Clone()", dstExpr, srcExpr)
+	} else {
+		writef("%s = *%s.Clone()", dstExpr, srcExpr)
+	}
 }
 
 // hasBasicUnderlying reports true when typ.Underlying() is a slice or a map.

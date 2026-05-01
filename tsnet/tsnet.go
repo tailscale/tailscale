@@ -1,7 +1,127 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package tsnet provides Tailscale as a library.
+// Package tsnet embeds a Tailscale node directly into a Go program,
+// allowing it to join a tailnet and accept or dial connections without
+// running a separate tailscaled daemon or requiring any system-level
+// configuration.
+//
+// # Overview
+//
+// Normally, Tailscale runs as a background system service (tailscaled)
+// that manages a virtual network interface for the whole machine. tsnet
+// takes a different approach: it runs a fully self-contained Tailscale
+// node inside your process using a userspace TCP/IP stack (gVisor).
+// This means:
+//
+//   - No root privileges required.
+//   - No system daemons to install or manage.
+//   - Multiple independent Tailscale nodes can run within a single binary.
+//   - The node's [Tailscale identity] and state are stored in a directory you control.
+//
+// The core type is [Server], which represents one embedded Tailscale
+// node. Calling [Server.Listen] or [Server.Dial] routes traffic
+// exclusively over the tailnet. The standard library's [net.Listener]
+// and [net.Conn] interfaces are returned, so any existing Go HTTP
+// server, gRPC server, or other net-based code works without
+// modification.
+//
+// # Usage
+//
+//	import "tailscale.com/tsnet"
+//
+//	s := &tsnet.Server{
+//		Hostname: "my-service",
+//		AuthKey:  os.Getenv("TS_AUTHKEY"),
+//	}
+//	defer s.Close()
+//
+//	ln, err := s.Listen("tcp", ":80")
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	log.Fatal(http.Serve(ln, myHandler))
+//
+// On first run, if no [Server.AuthKey] is provided and the node is not
+// already enrolled, the server logs an authentication URL. Open it in a
+// browser to add the node to your tailnet.
+//
+// # Authentication
+//
+// A [Server] authenticates using, in order of precedence:
+//
+//  1. [Server.AuthKey].
+//  2. The TS_AUTHKEY environment variable.
+//  3. The TS_AUTH_KEY environment variable.
+//  4. An OAuth client secret ([Server.ClientSecret] or TS_CLIENT_SECRET),
+//     used to mint an auth key.
+//  5. Workload identity federation ([Server.ClientID] plus
+//     [Server.IDToken] or [Server.Audience]).
+//  6. An interactive login URL printed to [Server.UserLogf].
+//
+// If the node is already enrolled (state found in [Server.Store]), the
+// auth key is ignored unless TSNET_FORCE_LOGIN=1 is set.
+//
+// # Identifying callers
+//
+// Use the WhoIs method on the client returned by [Server.LocalClient]
+// to identify who is making a request:
+//
+//	lc, _ := srv.LocalClient()
+//	http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+//		who, err := lc.WhoIs(r.Context(), r.RemoteAddr)
+//		if err != nil {
+//			http.Error(w, err.Error(), 500)
+//			return
+//		}
+//		fmt.Fprintf(w, "Hello, %s!", who.UserProfile.LoginName)
+//	}))
+//
+// # Tailscale Funnel
+//
+// [Server.ListenFunnel] exposes your service on the public internet.
+// [Tailscale Funnel] currently supports TCP on ports 443, 8443, and
+// 10000. HTTPS must be enabled in the Tailscale admin console.
+//
+//	ln, err := srv.ListenFunnel("tcp", ":443")
+//	// ln is a TLS listener; connections can come from anywhere on the
+//	// internet as well as from your tailnet.
+//
+//	// To restrict to public traffic only:
+//	ln, err = srv.ListenFunnel("tcp", ":443", tsnet.FunnelOnly())
+//
+// # Tailscale Services
+//
+// [Server.ListenService] advertises the node as a host for a named
+// [Tailscale Service]. The node must use a tag-based identity. To
+// advertise multiple ports, call ListenService once per port.
+//
+//	srv.AdvertiseTags = []string{"tag:myservice"}
+//
+//	ln, err := srv.ListenService("svc:my-service", tsnet.ServiceModeHTTP{
+//		HTTPS: true,
+//		Port:  443,
+//	})
+//	log.Printf("Listening on https://%s", ln.FQDN)
+//
+// # Running multiple nodes in one process
+//
+// Each [Server] instance is an independent node. Give each a unique
+// [Server.Dir] and [Server.Hostname]:
+//
+//	for _, name := range []string{"frontend", "backend"} {
+//		srv := &tsnet.Server{
+//			Hostname:  name,
+//			Dir:       filepath.Join(baseDir, name),
+//			AuthKey:   os.Getenv("TS_AUTHKEY"),
+//			Ephemeral: true,
+//		}
+//		srv.Start()
+//	}
+//
+// [Tailscale identity]: https://tailscale.com/docs/concepts/tailscale-identity
+// [Tailscale Funnel]: https://tailscale.com/docs/features/tailscale-funnel
+// [Tailscale Service]: https://tailscale.com/docs/features/tailscale-services
 package tsnet
 
 import (
@@ -283,6 +403,19 @@ func (s *Server) LocalClient() (*local.Client, error) {
 	return s.localClient, nil
 }
 
+// TestHooks are hooks meant for internal-testing only; they're not stable
+// or documented, intentionally.
+var TestHooks testHooks
+
+type testHooks struct{}
+
+// LocalBackend returns the [ipnlocal.LocalBackend] backing s. It panics
+// outside of tests.
+func (testHooks) LocalBackend(s *Server) *ipnlocal.LocalBackend {
+	testenv.AssertInTest()
+	return s.lb
+}
+
 // Loopback starts a routing server on a loopback address.
 //
 // The server has multiple functions.
@@ -535,7 +668,7 @@ func (s *Server) doInit() {
 // Server.
 // If the server is not running, it returns nil.
 func (s *Server) CertDomains() []string {
-	nm := s.lb.NetMap()
+	nm := s.lb.NetMapNoPeers()
 	if nm == nil {
 		return nil
 	}
@@ -546,7 +679,7 @@ func (s *Server) CertDomains() []string {
 // has not yet joined a tailnet or is otherwise unaware of its own IP addresses,
 // the returned ip4, ip6 will be !netip.IsValid().
 func (s *Server) TailscaleIPs() (ip4, ip6 netip.Addr) {
-	nm := s.lb.NetMap()
+	nm := s.lb.NetMapNoPeers()
 	if nm == nil {
 		return
 	}

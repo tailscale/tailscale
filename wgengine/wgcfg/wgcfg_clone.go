@@ -72,5 +72,4 @@ var _PeerCloneNeedsRegeneration = Peer(struct {
 	V6MasqAddr          *netip.Addr
 	IsJailed            bool
 	PersistentKeepalive uint16
-	WGEndpoint          key.NodePublic
 }{})

@@ -27,5 +27,7 @@
     "KernelPackage": "github.com/gokrazy/kernel.arm64",
     "FirmwarePackage": "github.com/gokrazy/kernel.arm64",
     "EEPROMPackage": "",
-    "InternalCompatibilityFlags": {}
+    "InternalCompatibilityFlags": {
+        "InitImportPath": "github.com/tailscale/ts-gokrazy/gokrazyinit"
+    }
 }

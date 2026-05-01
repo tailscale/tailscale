@@ -182,6 +182,32 @@ func TestNamedMapContainer(t *testing.T) {
 	}
 }
 
+func TestMapSlicePointerContainer(t *testing.T) {
+	num := 42
+	orig := &clonerex.MapSlicePointerContainer{
+		Routes: map[string][]*clonerex.SliceContainer{
+			"route1": {
+				{Slice: []*int{&num}},
+				{Slice: []*int{&num, &num}},
+			},
+			"route2": {
+				{Slice: []*int{&num}},
+			},
+		},
+	}
+
+	cloned := orig.Clone()
+	if !reflect.DeepEqual(orig, cloned) {
+		t.Errorf("Clone() = %v, want %v", cloned, orig)
+	}
+
+	// Mutate cloned.Routes pointer values
+	*cloned.Routes["route1"][0].Slice[0] = 999
+	if *orig.Routes["route1"][0].Slice[0] == 999 {
+		t.Errorf("Clone() aliased memory in Routes: original was modified")
+	}
+}
+
 func TestDeeplyNestedMap(t *testing.T) {
 	num := 123
 	orig := &clonerex.DeeplyNestedMap{

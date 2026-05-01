@@ -352,7 +352,7 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
-	if destPort == 8008 && fakeTestAgent.Match(destIP) {
+	if destPort == TestDriverPort && fakeTestAgent.Match(destIP) {
 		node, ok := n.nodeByIP(clientRemoteIP)
 		if !ok {
 			n.logf("unknown client IP %v trying to connect to test driver", clientRemoteIP)
@@ -747,9 +747,14 @@ type Server struct {
 	agentConnWaiter map[*node]chan<- struct{} // signaled after added to set
 	agentConns      set.Set[*agentConn]       //  not keyed by node; should be small/cheap enough to scan all
 	agentDialer     map[*node]netx.DialFunc
+	gotFirstPacket  map[MAC]chan struct{} // closed on first packet from each MAC
 
 	cloudInitData map[int]*CloudInitData // node num → cloud-init config
 	fileContents  map[string][]byte      // filename → file bytes
+
+	// onDHCPEvent, if non-nil, is called when DHCP messages are processed.
+	// Parameters are: source MAC, node number, DHCP message type, assigned IP.
+	onDHCPEvent func(nodeMAC MAC, nodeNum int, msgType layers.DHCPMsgType, assignedIP netip.Addr)
 }
 
 func (s *Server) logf(format string, args ...any) {
@@ -762,6 +767,13 @@ func (s *Server) logf(format string, args ...any) {
 
 func (s *Server) SetLoggerForTest(logf func(format string, args ...any)) {
 	s.optLogf = logf
+}
+
+// SetDHCPCallback registers a function to be called when DHCP messages are
+// processed. The callback receives the source MAC, node number, DHCP message
+// type (Discover, Offer, Request, Ack), and the assigned IP address.
+func (s *Server) SetDHCPCallback(fn func(MAC, int, layers.DHCPMsgType, netip.Addr)) {
+	s.onDHCPEvent = fn
 }
 
 var derpMap = &tailcfg.DERPMap{
@@ -824,6 +836,10 @@ func New(c *Config) (*Server, error) {
 	}
 	if err := s.initFromConfig(c); err != nil {
 		return nil, err
+	}
+	s.gotFirstPacket = make(map[MAC]chan struct{})
+	for mac := range s.nodeByMAC {
+		s.gotFirstPacket[mac] = make(chan struct{})
 	}
 	for n := range s.networks {
 		if err := n.initStack(); err != nil {
@@ -930,6 +946,22 @@ func (s *Server) Close() {
 		s.pcapWriter.Close()
 	}
 	s.wg.Wait()
+}
+
+// AwaitFirstPacket waits until the first ethernet frame is received from the
+// given MAC address, indicating the VM has booted far enough to send network
+// traffic. It returns an error if the context expires first.
+func (s *Server) AwaitFirstPacket(ctx context.Context, mac MAC) error {
+	ch, ok := s.gotFirstPacket[mac]
+	if !ok {
+		return fmt.Errorf("unknown MAC %v", mac)
+	}
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("no network packets received from %v: %w", mac, ctx.Err())
+	}
 }
 
 // MACs returns the MAC addresses of the configured nodes.
@@ -1045,8 +1077,7 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 			n, addr, err := uc.ReadFromUnix(buf)
 			raddr = addr
 			if err != nil {
-				if s.shutdownCtx.Err() != nil {
-					// Return without logging.
+				if s.shutdownCtx.Err() != nil || errors.Is(err, net.ErrClosed) {
 					return
 				}
 				s.logf("ReadFromUnix: %#v", err)
@@ -1088,6 +1119,13 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 		}
 		if !didReg[srcMAC] {
 			didReg[srcMAC] = true
+			if ch, ok := s.gotFirstPacket[srcMAC]; ok {
+				select {
+				case <-ch: // already closed
+				default:
+					close(ch)
+				}
+			}
 			srcNet := srcNode.netForMAC(srcMAC)
 			if srcNet == nil {
 				s.logf("[conn %p] node %v has no network for MAC %v", c.uc, srcNode, srcMAC)
@@ -1131,6 +1169,23 @@ func (s *Server) handleEthernetFrameFromVM(packetRaw []byte) error {
 	}, packetRaw))
 	srcNet.HandleEthernetPacket(ep)
 	return nil
+}
+
+// routeTCPPacket forwards a TCP packet to the network owning the
+// destination IP (looked up by WAN IP). Used for inter-network TCP
+// forwarding so guest VM TCP stacks talk end-to-end through vnet's
+// packet-level NAT.
+func (s *Server) routeTCPPacket(tp TCPPacket) {
+	dstIP := tp.Dst.Addr()
+	netw, ok := s.networkByWAN.Lookup(dstIP)
+	if !ok {
+		if dstIP.IsPrivate() {
+			return
+		}
+		log.Printf("no network to route TCP packet for %v", tp.Dst)
+		return
+	}
+	netw.HandleTCPPacket(tp)
 }
 
 func (s *Server) routeUDPPacket(up UDPPacket) {
@@ -1369,6 +1424,65 @@ func (n *network) nodeByIP(ip netip.Addr) (node *node, ok bool) {
 	return node, ok
 }
 
+// HandleTCPPacket handles a TCP packet arriving from the simulated
+// internet, addressed to the network's WAN IP. It NATs the destination
+// back to a LAN node and writes the rewritten packet onto the LAN.
+func (n *network) HandleTCPPacket(p TCPPacket) {
+	buf, err := n.serializedTCPPacket(p.Src, p.Dst, p.TCP, nil)
+	if err != nil {
+		n.logf("serializing TCP packet: %v", err)
+		return
+	}
+	n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+		Timestamp:      time.Now(),
+		CaptureLength:  len(buf),
+		Length:         len(buf),
+		InterfaceIndex: n.wanInterfaceID,
+	}, buf)
+	if p.Dst.Addr().Is4() && n.breakWAN4 {
+		return
+	}
+	dst := n.doNATIn(p.Src, p.Dst)
+	if !dst.IsValid() {
+		n.logf("Warning: NAT dropped TCP packet; no mapping for %v=>%v", p.Src, p.Dst)
+		return
+	}
+	p.Dst = dst
+	buf, err = n.serializedTCPPacket(p.Src, p.Dst, p.TCP, nil)
+	if err != nil {
+		n.logf("serializing TCP packet: %v", err)
+		return
+	}
+	n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+		Timestamp:      time.Now(),
+		CaptureLength:  len(buf),
+		Length:         len(buf),
+		InterfaceIndex: n.lanInterfaceID,
+	}, buf)
+	n.WriteTCPPacketNoNAT(p)
+}
+
+// WriteTCPPacketNoNAT writes a TCP packet to the network without doing
+// any NAT translation. The src/dst in p must already be in their final
+// form for the LAN.
+func (n *network) WriteTCPPacketNoNAT(p TCPPacket) {
+	node, ok := n.nodeByIP(p.Dst.Addr())
+	if !ok {
+		n.logf("no node for dest IP %v in TCP packet %v=>%v", p.Dst.Addr(), p.Src, p.Dst)
+		return
+	}
+	eth := &layers.Ethernet{
+		SrcMAC: n.mac.HWAddr(),
+		DstMAC: node.macForNet(n).HWAddr(),
+	}
+	ethRaw, err := n.serializedTCPPacket(p.Src, p.Dst, p.TCP, eth)
+	if err != nil {
+		n.logf("serializing TCP packet: %v", err)
+		return
+	}
+	n.writeEth(ethRaw)
+}
+
 // WriteUDPPacketNoNAT writes a UDP packet to the network, without
 // doing any NAT translation.
 //
@@ -1416,6 +1530,27 @@ func mkIPLayer(proto layers.IPProtocol, src, dst netip.Addr) serializableNetwork
 		}
 	}
 	panic("invalid src IP")
+}
+
+// serializedTCPPacket serializes a TCP packet with the given src/dst,
+// using the provided TCP layer (its flags, seq/ack, window, options,
+// and payload are preserved; only the src/dst ports are overwritten).
+//
+// If eth is non-nil, it is used as the Ethernet layer, otherwise the
+// Ethernet layer is omitted.
+func (n *network) serializedTCPPacket(src, dst netip.AddrPort, tcp *layers.TCP, eth *layers.Ethernet) ([]byte, error) {
+	ip := mkIPLayer(layers.IPProtocolTCP, src.Addr(), dst.Addr())
+	// Copy the TCP layer with new ports and a zeroed checksum so
+	// gopacket recomputes it against the new IP pseudo-header.
+	newTCP := *tcp
+	newTCP.SrcPort = layers.TCPPort(src.Port())
+	newTCP.DstPort = layers.TCPPort(dst.Port())
+	newTCP.Checksum = 0
+	payload := gopacket.Payload(tcp.Payload)
+	if eth == nil {
+		return mkPacket(ip, &newTCP, payload)
+	}
+	return mkPacket(eth, ip, &newTCP, payload)
 }
 
 // serializedUDPPacket serializes a UDP packet with the given source and
@@ -1489,6 +1624,19 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 		return
 	}
 
+	// Inter-network TCP forwarding: a guest VM is sending TCP to another
+	// simulated network's WAN IP. Apply egress NAT (rewriting src) and
+	// hand the packet off to the destination network for ingress NAT and
+	// LAN delivery, so the two guest TCP stacks talk end-to-end.
+	if toForward && flow.dst.Is4() {
+		if tcp, ok := packet.Layer(layers.LayerTypeTCP).(*layers.TCP); ok {
+			if _, ok := n.s.networkByWAN.Lookup(flow.dst); ok {
+				n.handleTCPPacketForRouter(tcp, flow)
+				return
+			}
+		}
+	}
+
 	if flow.src.Is6() && flow.src.IsLinkLocalUnicast() && !flow.dst.IsLinkLocalUnicast() {
 		// Don't log.
 		return
@@ -1501,6 +1649,54 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 	}
 
 	n.logf("router got unknown packet: %v", packet)
+}
+
+// handleTCPPacketForRouter handles a TCP packet from a LAN node that
+// targets another simulated network's WAN IP. It rewrites src via the
+// local NAT, then routes the packet to the destination network where
+// HandleTCPPacket rewrites dst and delivers it to the LAN.
+func (n *network) handleTCPPacketForRouter(tcp *layers.TCP, flow ipSrcDst) {
+	if flow.dst.Is4() && n.breakWAN4 {
+		return
+	}
+	src := netip.AddrPortFrom(flow.src, uint16(tcp.SrcPort))
+	dst := netip.AddrPortFrom(flow.dst, uint16(tcp.DstPort))
+
+	buf, err := n.serializedTCPPacket(src, dst, tcp, nil)
+	if err != nil {
+		n.logf("serializing TCP packet: %v", err)
+		return
+	}
+	n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+		Timestamp:      time.Now(),
+		CaptureLength:  len(buf),
+		Length:         len(buf),
+		InterfaceIndex: n.lanInterfaceID,
+	}, buf)
+
+	lanSrc := src
+	src = n.doNATOut(src, dst)
+	if !src.IsValid() {
+		n.logf("warning: NAT dropped TCP packet; no NAT out mapping for %v=>%v", lanSrc, dst)
+		return
+	}
+	buf, err = n.serializedTCPPacket(src, dst, tcp, nil)
+	if err != nil {
+		n.logf("serializing TCP packet: %v", err)
+		return
+	}
+	n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+		Timestamp:      time.Now(),
+		CaptureLength:  len(buf),
+		Length:         len(buf),
+		InterfaceIndex: n.wanInterfaceID,
+	}, buf)
+
+	n.s.routeTCPPacket(TCPPacket{
+		Src: src,
+		Dst: dst,
+		TCP: tcp,
+	})
 }
 
 func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, toForward bool, flow ipSrcDst) {
@@ -1804,6 +2000,10 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 				Length: 4,
 			},
 		)
+		if s.onDHCPEvent != nil {
+			s.onDHCPEvent(srcMAC, node.num, layers.DHCPMsgTypeDiscover, clientIP)
+			s.onDHCPEvent(srcMAC, node.num, layers.DHCPMsgTypeOffer, clientIP)
+		}
 	case layers.DHCPMsgTypeRequest:
 		response.Options = append(response.Options,
 			layers.DHCPOption{
@@ -1832,6 +2032,10 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 				Length: 4,
 			},
 		)
+		if s.onDHCPEvent != nil {
+			s.onDHCPEvent(srcMAC, node.num, layers.DHCPMsgTypeRequest, clientIP)
+			s.onDHCPEvent(srcMAC, node.num, layers.DHCPMsgTypeAck, clientIP)
+		}
 	}
 
 	eth := &layers.Ethernet{
@@ -1902,7 +2106,7 @@ func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
 			return true
 		}
 	}
-	if tcp.DstPort == 8008 && fakeTestAgent.Match(flow.dst) {
+	if tcp.DstPort == TestDriverPort && fakeTestAgent.Match(flow.dst) {
 		// Connection from cmd/tta.
 		return true
 	}
@@ -2290,6 +2494,17 @@ type UDPPacket struct {
 	Src     netip.AddrPort
 	Dst     netip.AddrPort
 	Payload []byte // everything after UDP header
+}
+
+// TCPPacket is a TCP packet flowing through vnet's NAT, used for
+// packet-level TCP forwarding between simulated networks. Unlike UDP
+// (which only needs ports + payload), TCP carries flags, sequence
+// numbers, and options that must be preserved end-to-end so the guest
+// VM kernels' TCP state machines stay in sync.
+type TCPPacket struct {
+	Src netip.AddrPort
+	Dst netip.AddrPort
+	TCP *layers.TCP // full parsed TCP layer (header + options + payload)
 }
 
 func (s *Server) WriteStartingBanner(w io.Writer) {

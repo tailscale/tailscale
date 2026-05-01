@@ -35,7 +35,19 @@ func (b *LocalBackend) writeNetmapToDiskLocked(nm *netmap.NetworkMap) error {
 		b.diskCache.cache = netmapcache.NewCache(netmapcache.FileStore(dir))
 		b.diskCache.dir = dir
 	}
-	return b.diskCache.cache.Store(b.currentNode().Context(), nm)
+
+	// Set the homeDERP on the self node before saving. The self node homeDERP is
+	// generally not used since the homeDERP for self is stored in magicsock, but
+	// to be able to load it during loading the cache, we use the existing field
+	// to save it.
+
+	// Make a shallow copy and mutate a copy of the selfNode.
+	nmCopy := *nm
+	selfNode := nm.SelfNode.AsStruct()
+	selfNode.HomeDERP = int(b.currentNode().homeDERP.Load())
+	nmCopy.SelfNode = selfNode.View()
+
+	return b.diskCache.cache.Store(b.currentNode().Context(), &nmCopy)
 }
 
 func (b *LocalBackend) loadDiskCacheLocked() (om *netmap.NetworkMap, ok bool) {

@@ -173,7 +173,7 @@ func (b *LocalBackend) waitWebClientAuthURL(ctx context.Context, id string, src 
 // one to be completed, based on the presence or absence of the
 // provided id value.
 func (b *LocalBackend) doWebClientNoiseRequest(ctx context.Context, id string, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error) {
-	nm := b.NetMap()
+	nm := b.NetMapNoPeers()
 	if nm == nil || !nm.SelfNode.Valid() {
 		return nil, errors.New("[unexpected] no self node")
 	}

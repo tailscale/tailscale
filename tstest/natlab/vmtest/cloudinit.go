@@ -120,8 +120,11 @@ func (e *Env) generateLinuxUserData(n *Node) string {
 		ud.WriteString("  - [\"sysctl\", \"-w\", \"net.ipv6.conf.all.forwarding=1\"]\n")
 	}
 
-	// Start tailscaled in the background.
-	ud.WriteString("  - [\"/bin/sh\", \"-c\", \"/usr/local/bin/tailscaled --state=mem: &\"]\n")
+	// Start tailscaled in the background. --statedir provides a VarRoot so
+	// features like Taildrop (which needs a place to stash incoming files)
+	// have a directory to work with.
+	ud.WriteString("  - [\"mkdir\", \"-p\", \"/var/lib/tailscale\"]\n")
+	ud.WriteString("  - [\"/bin/sh\", \"-c\", \"/usr/local/bin/tailscaled --state=mem: --statedir=/var/lib/tailscale &\"]\n")
 	ud.WriteString("  - [\"sleep\", \"2\"]\n")
 
 	// Start tta (Tailscale Test Agent).
@@ -173,7 +176,9 @@ func (e *Env) generateFreeBSDUserData(n *Node) string {
 	// Start tailscaled and tta in the background.
 	// Set PATH to include /usr/local/bin so that tta can find "tailscale"
 	// (TTA uses exec.Command("tailscale", ...) without a full path).
-	ud.WriteString("  - \"export PATH=/usr/local/bin:$PATH && /usr/local/bin/tailscaled --state=mem: &\"\n")
+	// --statedir provides a VarRoot so features like Taildrop have a directory.
+	ud.WriteString("  - \"mkdir -p /var/lib/tailscale\"\n")
+	ud.WriteString("  - \"export PATH=/usr/local/bin:$PATH && /usr/local/bin/tailscaled --state=mem: --statedir=/var/lib/tailscale &\"\n")
 	ud.WriteString("  - \"sleep 2\"\n")
 
 	// Start tta (Tailscale Test Agent).

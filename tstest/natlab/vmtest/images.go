@@ -26,10 +26,14 @@ type OSImage struct {
 	SHA256    string // expected SHA256 hash of the image (of the final qcow2, after any decompression)
 	MemoryMB  int    // RAM for the VM
 	IsGokrazy bool   // true for gokrazy images (different QEMU setup)
+	IsMacOS   bool   // true for macOS images (launched via tailmac, not QEMU)
 }
 
 // GOOS returns the Go OS name for this image.
 func (img OSImage) GOOS() string {
+	if img.IsMacOS {
+		return "darwin"
+	}
 	if img.IsGokrazy {
 		return "linux"
 	}
@@ -41,6 +45,9 @@ func (img OSImage) GOOS() string {
 
 // GOARCH returns the Go architecture name for this image.
 func (img OSImage) GOARCH() string {
+	if img.IsMacOS {
+		return "arm64"
+	}
 	return "amd64"
 }
 
@@ -72,6 +79,15 @@ var (
 		Name:     "freebsd-15.0",
 		URL:      "https://download.freebsd.org/releases/VM-IMAGES/15.0-RELEASE/amd64/Latest/FreeBSD-15.0-RELEASE-amd64-BASIC-CLOUDINIT-ufs.qcow2.xz",
 		MemoryMB: 1024,
+	}
+
+	// MacOS is a macOS VM launched via tailmac (Apple Virtualization.framework).
+	// Uses a Tart pre-built base image (ghcr.io/cirruslabs/macos-tahoe-base)
+	// which is automatically pulled on first use. Only runs on macOS arm64 hosts.
+	MacOS = OSImage{
+		Name:     "macos",
+		IsMacOS:  true,
+		MemoryMB: 4096,
 	}
 )
 

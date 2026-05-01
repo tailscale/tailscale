@@ -95,3 +95,5 @@ func (f *FakeNetfilterRunner) DeleteSvc(svc, tun string, targetIPs []netip.Addr,
 func (f *FakeNetfilterRunner) EnsurePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error {
 	return nil
 }
+func (f *FakeNetfilterRunner) AddExternalCGNATRules(mode CGNATMode, tunname string) error { return nil }
+func (f *FakeNetfilterRunner) DelExternalCGNATRules(mode CGNATMode, tunname string) error { return nil }

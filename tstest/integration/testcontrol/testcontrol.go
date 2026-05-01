@@ -69,6 +69,22 @@ type Server struct {
 	// belong to the same user.
 	AllNodesSameUser bool
 
+	// AllOnline, if true, marks every peer entry in MapResponses as
+	// Online=true. This is a coarse stand-in for the per-node
+	// online/offline tracking that production control servers do based
+	// on streaming map sessions: certain disco-key handling fast paths
+	// in [tailscale.com/control/controlclient] and
+	// [tailscale.com/wgengine/userspace] only fire when the peer is
+	// reported online, so without this flag they are silently skipped
+	// in tests, which can mask bugs and slow down recovery from disco
+	// rotations. See [tailscale.com/control/controlclient/map.go]
+	// removeUnwantedDiscoUpdates and
+	// removeUnwantedDiscoUpdatesFromFullNetmapUpdate for callers that
+	// branch on Online.
+	//
+	// Finer-grained per-node online tracking can be added later.
+	AllOnline bool
+
 	// DefaultNodeCapabilities overrides the capability map sent to each client.
 	DefaultNodeCapabilities *tailcfg.NodeCapMap
 
@@ -80,9 +96,17 @@ type Server struct {
 	ExplicitBaseURL string           // e.g. "http://127.0.0.1:1234" with no trailing URL
 	HTTPTestServer  *httptest.Server // if non-nil, used to get BaseURL
 
+	// MaybeRateLimitRegister, if non-nil, is called before processing
+	// register requests. If it returns true, a 429 response is sent
+	// with the given Retry-After header value and body string.
+	MaybeRateLimitRegister func() (reject bool, retryAfter string, msg string)
+
 	// ModifyFirstMapResponse, if non-nil, is called exactly once per
 	// MapResponse stream to modify the first MapResponse sent in response to it.
 	ModifyFirstMapResponse func(*tailcfg.MapResponse, *tailcfg.MapRequest)
+
+	// AltMapStream, if non-nil, takes over serveMap. See [AltMapStreamFunc].
+	AltMapStream AltMapStreamFunc
 
 	initMuxOnce sync.Once
 	mux         *http.ServeMux
@@ -132,12 +156,16 @@ type Server struct {
 	updates       map[tailcfg.NodeID]chan updateType
 	authPath      map[string]*AuthPath
 	nodeKeyAuthed set.Set[key.NodePublic]
-	msgToSend     map[key.NodePublic]any // value is *tailcfg.PingRequest or entire *tailcfg.MapResponse
-	allExpired    bool                   // All nodes will be told their node key is expired.
+	msgToSend     map[key.NodePublic][]any // FIFO queue per node; values are *tailcfg.PingRequest or *tailcfg.MapResponse
+	allExpired    bool                     // All nodes will be told their node key is expired.
 
 	// tkaStorage records the Tailnet Lock state, if any.
 	// If nil, Tailnet Lock is not enabled in the Tailnet.
 	tkaStorage tka.CompactableChonk
+
+	// onMapRequest, if non-nil, is called at the start of each map poll request.
+	// It can be used in tests to panic or fail if a node contacts control unexpectedly.
+	onMapRequest func(nodeKey key.NodePublic)
 }
 
 // BaseURL returns the server's base URL, without trailing slash.
@@ -276,12 +304,14 @@ func (s *Server) AddRawMapResponse(nodeKeyDst key.NodePublic, mr *tailcfg.MapRes
 func (s *Server) addDebugMessage(nodeKeyDst key.NodePublic, msg any) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.msgToSend == nil {
-		s.msgToSend = map[key.NodePublic]any{}
-	}
-	// Now send the update to the channel
 	node := s.nodeLocked(nodeKeyDst)
 	if node == nil {
+		return false
+	}
+	updatesCh := s.updates[node.ID]
+	if updatesCh == nil {
+		// No streaming poll is registered, so there's nobody to deliver
+		// the message to.
 		return false
 	}
 
@@ -292,10 +322,14 @@ func (s *Server) addDebugMessage(nodeKeyDst key.NodePublic, msg any) bool {
 		s.suppressAutoMapResponses.Add(nodeKeyDst)
 	}
 
-	s.msgToSend[nodeKeyDst] = msg
-	nodeID := node.ID
-	oldUpdatesCh := s.updates[nodeID]
-	return sendUpdate(oldUpdatesCh, updateDebugInjection)
+	mak.Set(&s.msgToSend, nodeKeyDst, append(s.msgToSend[nodeKeyDst], msg))
+	// sendUpdate returning false here is fine: the channel is a lossy
+	// wake-up signal whose buffer is single-slot. A full buffer means a
+	// prior wake-up is still pending, and the streaming poll will check
+	// msgToSend when it processes that wake-up. The queue in msgToSend
+	// is the source of truth.
+	sendUpdate(updatesCh, updateDebugInjection)
+	return true
 }
 
 // Mark the Node key of every node as expired
@@ -768,6 +802,16 @@ func (s *Server) CompleteDeviceApproval(controlUrl string, urlStr string, nodeKe
 }
 
 func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.MachinePublic) {
+	if fn := s.MaybeRateLimitRegister; fn != nil {
+		if reject, retryAfter, msg := fn(); reject {
+			if retryAfter != "" {
+				w.Header().Set("Retry-After", retryAfter)
+			}
+			http.Error(w, msg, http.StatusTooManyRequests)
+			return
+		}
+	}
+
 	msg, err := io.ReadAll(io.LimitReader(r.Body, msgLimit))
 	r.Body.Close()
 	if err != nil {
@@ -1129,6 +1173,21 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 		go panic(fmt.Sprintf("bad map request: %v", err))
 	}
 
+	s.mu.Lock()
+	if s.onMapRequest != nil {
+		s.onMapRequest(req.NodeKey)
+	}
+	s.mu.Unlock()
+
+	if s.AltMapStream != nil {
+		// The caller takes over the stream entirely; it must handle
+		// keeping the HTTP response alive until ctx is done.
+		compress := req.Compress != ""
+		w.WriteHeader(200)
+		s.AltMapStream(ctx, &mapStreamSender{s: s, w: w, compress: compress}, req)
+		return
+	}
+
 	jitter := rand.N(8 * time.Second)
 	keepAlive := 50*time.Second + jitter
 
@@ -1142,8 +1201,15 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 		return
 	}
 
+	// Per tailcfg.MapRequest.Stream docs: if Stream is true and Version >= 68,
+	// the server must treat this as read-only and ignore Hostinfo, Endpoints,
+	// DiscoKey, etc. — modern clients send those via a separate non-streaming
+	// POST /machine/map from a dedicated updateRoutine, not piggybacked on the
+	// streaming poll. Without this, the streaming MapRequest's zero-valued
+	// DiscoKey/Endpoints clobber whatever was just pushed out-of-band.
+	streamingNonUpdate := req.Stream && req.Version >= 68
 	var peersToUpdate []tailcfg.NodeID
-	if !req.ReadOnly {
+	if !req.ReadOnly && !streamingNonUpdate {
 		endpoints := filterInvalidIPv6Endpoints(req.Endpoints)
 		node.Endpoints = endpoints
 		node.DiscoKey = req.DiscoKey
@@ -1371,6 +1437,9 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 			p.PrimaryRoutes = routes
 			p.AllowedIPs = append(p.AllowedIPs, routes...)
 		}
+		if s.AllOnline {
+			p.Online = new(true)
+		}
 		res.Peers = append(res.Peers, p)
 	}
 
@@ -1419,13 +1488,27 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	res.Node.PrimaryRoutes = s.nodeSubnetRoutes[nk]
 	res.Node.AllowedIPs = append(res.Node.Addresses, s.nodeSubnetRoutes[nk]...)
 
-	// Consume a PingRequest while protected by mutex if it exists
-	switch m := s.msgToSend[nk].(type) {
-	case *tailcfg.PingRequest:
-		res.PingRequest = m
-		delete(s.msgToSend, nk)
+	// Consume a PingRequest at the head of the queue, if any.
+	if q := s.msgToSend[nk]; len(q) > 0 {
+		if pr, ok := q[0].(*tailcfg.PingRequest); ok {
+			res.PingRequest = pr
+			s.popMsgToSendLocked(nk)
+		}
 	}
 	return res, nil
+}
+
+// popMsgToSendLocked pops the head of the per-node message queue.
+// s.mu must be held.
+func (s *Server) popMsgToSendLocked(nk key.NodePublic) {
+	q := s.msgToSend[nk]
+	if len(q) <= 1 {
+		delete(s.msgToSend, nk)
+		return
+	}
+	// Zero the head to allow GC of any large referenced response.
+	q[0] = nil
+	s.msgToSend[nk] = q[1:]
 }
 
 func (s *Server) canGenerateAutomaticMapResponseFor(nk key.NodePublic) bool {
@@ -1437,22 +1520,21 @@ func (s *Server) canGenerateAutomaticMapResponseFor(nk key.NodePublic) bool {
 func (s *Server) hasPendingRawMapMessage(nk key.NodePublic) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.msgToSend[nk]
-	return ok
+	return len(s.msgToSend[nk]) > 0
 }
 
 func (s *Server) takeRawMapMessage(nk key.NodePublic) (mapResJSON []byte, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	mr, ok := s.msgToSend[nk]
-	if !ok {
+	q := s.msgToSend[nk]
+	if len(q) == 0 {
 		return nil, false
 	}
-	delete(s.msgToSend, nk)
+	mr := q[0]
+	s.popMsgToSendLocked(nk)
 
 	// If it's a bare PingRequest, wrap it in a MapResponse.
-	switch pr := mr.(type) {
-	case *tailcfg.PingRequest:
+	if pr, ok := mr.(*tailcfg.PingRequest); ok {
 		mr = &tailcfg.MapResponse{PingRequest: pr}
 	}
 
@@ -1464,12 +1546,51 @@ func (s *Server) takeRawMapMessage(nk key.NodePublic) (mapResJSON []byte, ok boo
 	return mapResJSON, true
 }
 
+// AltMapStreamFunc is the type of [Server.AltMapStream]: a callback that
+// takes over the serveMap handler entirely. The callback hand-builds and
+// sends MapResponses via the provided [MapStreamWriter] and is responsible
+// for keeping the stream alive until ctx is done. When set, the normal
+// per-node map-stream state machine in serveMap is bypassed.
+//
+// The callback is invoked for every map long-poll, including the
+// non-streaming "lite" polls controlclient issues to push HostInfo updates
+// (req.Stream == false). Implementations that only care about the streaming
+// long-poll typically respond to non-streaming polls with an empty
+// MapResponse and return immediately.
+//
+// This hook is for benchmarks and stress tests that need to drive clients
+// with a controlled sequence of responses.
+type AltMapStreamFunc func(ctx context.Context, w MapStreamWriter, req *tailcfg.MapRequest)
+
+// MapStreamWriter is the interface passed to an [AltMapStreamFunc],
+// letting the callback write framed MapResponse messages directly onto the
+// long-poll HTTP response.
+type MapStreamWriter interface {
+	// SendMapMessage encodes and writes msg as a single framed
+	// MapResponse on the stream. It respects the client's Compress flag
+	// (captured when the stream started).
+	SendMapMessage(msg *tailcfg.MapResponse) error
+}
+
+// mapStreamSender implements [MapStreamWriter] for [Server.AltMapStream]
+// callbacks.
+type mapStreamSender struct {
+	s        *Server
+	w        http.ResponseWriter
+	compress bool
+}
+
+func (m *mapStreamSender) SendMapMessage(msg *tailcfg.MapResponse) error {
+	return m.s.sendMapMsg(m.w, m.compress, msg)
+}
+
 func (s *Server) sendMapMsg(w http.ResponseWriter, compress bool, msg any) error {
 	resBytes, err := s.encode(compress, msg)
 	if err != nil {
 		return err
 	}
-	if len(resBytes) > 16<<20 {
+	const maxMapSize = 256 << 20 // 256MB
+	if len(resBytes) > maxMapSize {
 		return fmt.Errorf("map message too big: %d", len(resBytes))
 	}
 	var siz [4]byte
@@ -1507,6 +1628,15 @@ func (s *Server) encode(compress bool, v any) (b []byte, err error) {
 		b = zstdframe.AppendEncode(nil, b, zstdframe.FastestCompression)
 	}
 	return b, nil
+}
+
+// SetOnMapRequest sets callback used for testing when a new mapRequest happens.
+// Pass nil to remove the callback.
+func (s *Server) SetOnMapRequest(f func(key.NodePublic)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.onMapRequest = f
 }
 
 // filterInvalidIPv6Endpoints removes invalid IPv6 endpoints from eps,

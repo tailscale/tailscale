@@ -126,8 +126,6 @@ func TestAddAndDeleteBase(t *testing.T) {
 
 	// Check that the rules were created.
 	tsRulesV4 := []fakeRule{ // table/chain/rule
-		{"filter", "ts-input", []string{"!", "-i", tunname, "-s", tsaddr.ChromeOSVMRange().String(), "-j", "RETURN"}},
-		{"filter", "ts-input", []string{"!", "-i", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}},
 		{"filter", "ts-forward", []string{"-o", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}},
 	}
 
@@ -503,4 +501,57 @@ func TestAddAndDelConnmarkSaveRule(t *testing.T) {
 			t.Errorf("IPv4 OUTPUT connmark rule still exists after deletion")
 		}
 	})
+}
+
+func TestAddAndDelCGNATRules(t *testing.T) {
+	iptr := newFakeIPTablesRunner()
+	tunname := "tun0"
+
+	// We need the chains to exist so we can add rules into them.
+	if err := iptr.AddChains(); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		mode      CGNATMode
+		wantRules []fakeRule
+	}{
+		{
+			CGNATModeDrop, []fakeRule{
+				{"filter", "ts-input", []string{"!", "-i", tunname, "-s", tsaddr.ChromeOSVMRange().String(), "-j", "RETURN"}},
+				{"filter", "ts-input", []string{"!", "-i", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}},
+			},
+		},
+		{
+			CGNATModeReturn, []fakeRule{
+				{"filter", "ts-input", []string{"!", "-i", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "RETURN"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		if err := iptr.AddExternalCGNATRules(tt.mode, tunname); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, tr := range tt.wantRules {
+			if exists, err := iptr.ipt4.Exists(tr.table, tr.chain, tr.args...); err != nil {
+				t.Fatalf("mode %q: error checking for rule: %v", tt.mode, err)
+			} else if !exists {
+				t.Errorf("mode %q: rule %s/%s/%s doesn't exist", tt.mode, tr.table, tr.chain, strings.Join(tr.args, " "))
+			}
+		}
+
+		if err := iptr.DelExternalCGNATRules(tt.mode, tunname); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, tr := range tt.wantRules {
+			if exists, err := iptr.ipt4.Exists(tr.table, tr.chain, tr.args...); err != nil {
+				t.Fatalf("mode %q: error checking for rule: %v", tt.mode, err)
+			} else if exists {
+				t.Errorf("mode %q: rule %s/%s/%s not deleted", tt.mode, tr.table, tr.chain, strings.Join(tr.args, " "))
+			}
+		}
+	}
 }

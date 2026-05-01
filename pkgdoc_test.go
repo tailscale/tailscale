@@ -4,6 +4,7 @@
 package tailscaleroot
 
 import (
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -12,6 +13,17 @@ import (
 	"strings"
 	"testing"
 )
+
+func hasIgnoreBuildTag(f *ast.File) bool {
+	for _, cg := range f.Comments {
+		for _, c := range cg.List {
+			if c.Text == "//go:build ignore" {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func TestPackageDocs(t *testing.T) {
 	switch runtime.GOOS {
@@ -26,8 +38,8 @@ func TestPackageDocs(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if fi.Mode().IsDir() && path == ".git" {
-			return filepath.SkipDir // No documentation lives in .git
+		if fi.Mode().IsDir() && path != "." && strings.HasPrefix(filepath.Base(path), ".") {
+			return filepath.SkipDir // No documentation lives in dot directories (.git, .claude, etc)
 		}
 		if fi.Mode().IsRegular() && strings.HasSuffix(path, ".go") {
 			if strings.HasSuffix(path, "_test.go") {
@@ -48,6 +60,9 @@ func TestPackageDocs(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to ParseFile %q: %v", fileName, err)
 		}
+		if hasIgnoreBuildTag(f) {
+			continue
+		}
 		dir := filepath.Dir(fileName)
 		if _, ok := byDir[dir]; !ok {
 			byDir[dir] = nil
@@ -61,14 +76,8 @@ func TestPackageDocs(t *testing.T) {
 		}
 	}
 	for dir, ff := range byDir {
-		switch dir {
-		case "tstest/integration/vms":
-			// This package has a couple go:build ignore commands and this test doesn't
-			// handle parsing those. Just allowlist that package for now (2024-07-10).
-			continue
-		}
 		if len(ff) > 1 {
-			t.Logf("multiple files with package doc in %s: %q", dir, ff)
+			t.Errorf("multiple files with package doc in %s: %q", dir, ff)
 		}
 		if len(ff) == 0 {
 			if strings.HasPrefix(dir, "gokrazy/") {

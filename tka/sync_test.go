@@ -11,21 +11,29 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+// getSyncOffer returns a SyncOffer for the given Chonk.
+func getSyncOffer(t *testing.T, storage Chonk) SyncOffer {
+	t.Helper()
+
+	a, err := Open(storage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer, err := a.SyncOffer(storage)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return offer
+}
+
 func TestSyncOffer(t *testing.T) {
 	c := newTestchain(t, `
         A1 -> A2 -> A3 -> A4 -> A5 -> A6 -> A7 -> A8 -> A9 -> A10
         A10 -> A11 -> A12 -> A13 -> A14 -> A15 -> A16 -> A17 -> A18
         A18 -> A19 -> A20 -> A21 -> A22 -> A23 -> A24 -> A25
     `)
-	storage := c.Chonk()
-	a, err := Open(storage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := a.SyncOffer(storage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := getSyncOffer(t, c.Chonk())
 
 	// A SyncOffer includes a selection of AUMs going backwards in the tree,
 	// progressively skipping more and more each iteration.
@@ -52,24 +60,10 @@ func TestComputeSyncIntersection_FastForward(t *testing.T) {
 	a1H, a2H := c.AUMHashes["A1"], c.AUMHashes["A2"]
 
 	chonk1 := c.ChonkWith("A1", "A2")
-	n1, err := Open(chonk1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	offer1, err := n1.SyncOffer(chonk1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	offer1 := getSyncOffer(t, chonk1)
 
 	chonk2 := c.Chonk() // All AUMs
-	n2, err := Open(chonk2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	offer2, err := n2.SyncOffer(chonk2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	offer2 := getSyncOffer(t, chonk2)
 
 	// Node 1 only knows about the first two nodes, so the head of n2 is
 	// alien to it.
@@ -123,40 +117,28 @@ func TestComputeSyncIntersection_ForkSmallDiff(t *testing.T) {
 	}
 
 	chonk1 := c.ChonkWith("A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "F1")
-	n1, err := Open(chonk1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	offer1, err := n1.SyncOffer(chonk1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if diff := cmp.Diff(SyncOffer{
+	offer1 := getSyncOffer(t, chonk1)
+	want1 := SyncOffer{
 		Head: c.AUMHashes["F1"],
 		Ancestors: []AUMHash{
 			c.AUMHashes["A"+strconv.Itoa(9-ancestorsSkipStart)],
 			c.AUMHashes["A1"],
 		},
-	}, offer1); diff != "" {
+	}
+	if diff := cmp.Diff(want1, offer1); diff != "" {
 		t.Errorf("offer1 diff (-want, +got):\n%s", diff)
 	}
 
 	chonk2 := c.ChonkWith("A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10")
-	n2, err := Open(chonk2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	offer2, err := n2.SyncOffer(chonk2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if diff := cmp.Diff(SyncOffer{
+	offer2 := getSyncOffer(t, chonk2)
+	want2 := SyncOffer{
 		Head: c.AUMHashes["A10"],
 		Ancestors: []AUMHash{
 			c.AUMHashes["A"+strconv.Itoa(10-ancestorsSkipStart)],
 			c.AUMHashes["A1"],
 		},
-	}, offer2); diff != "" {
+	}
+	if diff := cmp.Diff(want2, offer2); diff != "" {
 		t.Errorf("offer2 diff (-want, +got):\n%s", diff)
 	}
 
@@ -339,10 +321,7 @@ func TestSyncSimpleE2E(t *testing.T) {
         G1 -> L1 -> L2 -> L3
         G1.template = genesis
     `,
-		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:              []Key{key},
-			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-		}}),
+		genesisTemplate(key),
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
 

@@ -137,4 +137,8 @@ type Engine interface {
 	// packets traversing the data path. The hook can be uninstalled by
 	// calling this function with a nil value.
 	InstallCaptureHook(packet.CaptureCallback)
+
+	// SetPeerByIPPacketFunc installs a callback used by wireguard-go to
+	// look up which peer should handle an outbound packet by destination IP.
+	SetPeerByIPPacketFunc(func(netip.Addr) (_ key.NodePublic, ok bool))
 }

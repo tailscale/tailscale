@@ -29,6 +29,7 @@ import (
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/slicesx"
+	"tailscale.com/util/testenv"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -79,6 +80,13 @@ type nodeBackend struct {
 	eventClient    *eventbus.Client
 	derpMapViewPub *eventbus.Publisher[tailcfg.DERPMapView]
 
+	// homeDERP lives here temporarily. as long as mapSession is short lived, we
+	// don't have a location delivering netmaps to local backend that knows our
+	// homeDERP hence why it is cached here for now.
+	// TODO(cmol): move this field into a refactored mapSession that is not
+	// short lived.
+	homeDERP atomic.Int64
+
 	// TODO(nickkhyl): maybe use sync.RWMutex?
 	mu syncs.Mutex // protects the following fields
 
@@ -107,6 +115,12 @@ type nodeBackend struct {
 	// nodeByKey is an index of node public key to node ID for fast lookups.
 	// It is mutated in place (with mu held) and must not escape the [nodeBackend].
 	nodeByKey map[key.NodePublic]tailcfg.NodeID
+
+	// keyWaitersForTest is the test-only registry of channels waiting for
+	// a given peer key to first appear in the netmap. See
+	// [nodeBackend.AwaitNodeKeyForTest]. It is populated lazily and remains
+	// nil in production, where no test installs a waiter.
+	keyWaitersForTest map[key.NodePublic]chan struct{}
 }
 
 func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *nodeBackend {
@@ -421,10 +435,48 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) {
 	nb.updateNodeByAddrLocked()
 	nb.updateNodeByKeyLocked()
 	nb.updatePeersLocked()
+	nb.signalKeyWaitersForTestLocked()
 	if nm != nil {
 		nb.derpMapViewPub.Publish(nm.DERPMap.View())
 	} else {
 		nb.derpMapViewPub.Publish(tailcfg.DERPMapView{})
+	}
+}
+
+// AwaitNodeKeyForTest returns a channel that is closed once a peer with the
+// given node key first appears in this nodeBackend's peer index, or
+// immediately (a closed channel) if it's already present. It is intended for
+// in-process benchmarks that drive synthetic netmap deltas and need a
+// zero-overhead signal that the client has applied a delta, replacing
+// poll-based [local.Client.WhoIsNodeKey] loops in tests. It panics outside
+// of tests.
+func (nb *nodeBackend) AwaitNodeKeyForTest(k key.NodePublic) <-chan struct{} {
+	testenv.AssertInTest()
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	if _, ok := nb.nodeByKey[k]; ok {
+		return syncs.ClosedChan()
+	}
+	if ch, ok := nb.keyWaitersForTest[k]; ok {
+		return ch
+	}
+	ch := make(chan struct{})
+	mak.Set(&nb.keyWaitersForTest, k, ch)
+	return ch
+}
+
+// signalKeyWaitersForTestLocked closes any waiter channels whose keys now
+// appear in nb.nodeByKey. It is cheap when there are no waiters, which is
+// the common case in production. It is called from [nodeBackend.SetNetMap]
+// after the per-key index has been rebuilt.
+//
+// Caller must hold nb.mu.
+func (nb *nodeBackend) signalKeyWaitersForTestLocked() {
+	for k, ch := range nb.keyWaitersForTest {
+		if _, ok := nb.nodeByKey[k]; ok {
+			close(ch)
+			delete(nb.keyWaitersForTest, k)
+		}
 	}
 }
 
@@ -864,7 +916,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	addSplitDNSRoutes(nm.DNS.Routes)
 
 	// Add split DNS routes for conn25
-	conn25DNSTargets := appc.PickSplitDNSPeers(nm.HasCap, nm.SelfNode, peers)
+	conn25DNSTargets := appc.PickSplitDNSPeers(nm.HasCap, nm.SelfNode, peers, prefs.AppConnector().Advertise)
 	if conn25DNSTargets != nil {
 		var m map[string][]*dnstype.Resolver
 		for domain, candidateSplitDNSPeers := range conn25DNSTargets {

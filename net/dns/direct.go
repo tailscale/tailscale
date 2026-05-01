@@ -442,7 +442,9 @@ func (m *directManager) runFileWatcher() {
 	if !ok {
 		return
 	}
-	if err := watchFile(m.ctx, "/etc/", resolvConf, m.checkForFileTrample); err != nil {
+	dir := m.fs.ActualPath(filepath.Dir(resolvConf))
+	file := m.fs.ActualPath(resolvConf)
+	if err := watchFile(m.ctx, dir, file, m.checkForFileTrample); err != nil {
 		// This is all best effort for now, so surface warnings to users.
 		m.logf("dns: inotify: %s", err)
 	}
@@ -597,6 +599,19 @@ type wholeFileFS interface {
 	ReadFile(name string) ([]byte, error)
 	Remove(name string) error
 	Rename(oldName, newName string) error
+	// ActualPath returns the real filesystem path for the given absolute
+	// logical path. All other methods in this interface accept logical
+	// paths (like "/etc/resolv.conf") and translate them internally;
+	// ActualPath exposes that same translation for callers that need
+	// the real path for use outside the interface (e.g. setting up an
+	// inotify watch on the correct directory).
+	//
+	// For directFS with an empty prefix (production), the input is
+	// returned unchanged ("/etc" → "/etc"). For directFS with a test
+	// prefix like "/tmp/test123", the prefix is joined
+	// ("/etc" → "/tmp/test123/etc"). For wslFS the input is returned
+	// unchanged, since paths are passed through to wsl.exe as-is.
+	ActualPath(name string) string
 	Stat(name string) (isRegular bool, err error)
 	Truncate(name string) error
 	WriteFile(name string, contents []byte, perm os.FileMode) error
@@ -612,6 +627,8 @@ type directFS struct {
 }
 
 func (fs directFS) path(name string) string { return filepath.Join(fs.prefix, name) }
+
+func (fs directFS) ActualPath(name string) string { return fs.path(name) }
 
 func (fs directFS) Stat(name string) (isRegular bool, err error) {
 	fi, err := os.Stat(fs.path(name))

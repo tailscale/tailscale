@@ -14,9 +14,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/cmd/tailscale/cli/jsonoutput"
-	"tailscale.com/ipn"
 	"tailscale.com/types/dnstype"
-	"tailscale.com/types/netmap"
 )
 
 var dnsStatusCmd = &ffcli.Command{
@@ -120,11 +118,10 @@ func runDNSStatus(ctx context.Context, args []string) error {
 			SelfDNSName:     s.Self.DNSName,
 		}
 
-		netMap, err := fetchNetMap()
+		dnsConfig, err := localClient.DNSConfig(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to fetch network map: %w", err)
+			return fmt.Errorf("failed to fetch DNS config: %w", err)
 		}
-		dnsConfig := netMap.DNS
 
 		for _, r := range dnsConfig.Resolvers {
 			data.Resolvers = append(data.Resolvers, makeDNSResolverInfo(r))
@@ -356,20 +353,4 @@ func formatDNSStatusText(data *jsonoutput.DNSStatusResult, all bool) string {
 	fmt.Fprintf(&sb, "\n")
 	fmt.Fprintf(&sb, "[this is a preliminary version of this command; the output format may change in the future]\n")
 	return sb.String()
-}
-
-func fetchNetMap() (netMap *netmap.NetworkMap, err error) {
-	w, err := localClient.WatchIPNBus(context.Background(), ipn.NotifyInitialNetMap)
-	if err != nil {
-		return nil, err
-	}
-	defer w.Close()
-	notify, err := w.Next()
-	if err != nil {
-		return nil, err
-	}
-	if notify.NetMap == nil {
-		return nil, fmt.Errorf("no network map yet available, please try again later")
-	}
-	return notify.NetMap, nil
 }

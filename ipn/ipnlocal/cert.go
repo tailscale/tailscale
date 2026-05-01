@@ -909,7 +909,7 @@ func (b *LocalBackend) resolveCertDomain(domain string) (string, error) {
 	}
 
 	// Read the netmap once to get both CertDomains and capabilities atomically.
-	nm := b.NetMap()
+	nm := b.NetMapNoPeers()
 	if nm == nil {
 		return "", errors.New("no netmap available")
 	}

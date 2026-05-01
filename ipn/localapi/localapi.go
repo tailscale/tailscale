@@ -72,16 +72,20 @@ var handler = map[string]LocalAPIHandler{
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
+	"cert-domains":         (*Handler).serveCertDomains,
 	"check-prefs":          (*Handler).serveCheckPrefs,
 	"check-so-mark-in-use": (*Handler).serveCheckSOMarkInUse,
 	"derpmap":              (*Handler).serveDERPMap,
+	"dns-config":           (*Handler).serveDNSConfig,
 	"goroutines":           (*Handler).serveGoroutines,
 	"login-interactive":    (*Handler).serveLoginInteractive,
 	"logout":               (*Handler).serveLogout,
+	"peer-by-id":           (*Handler).servePeerByID,
 	"ping":                 (*Handler).servePing,
 	"prefs":                (*Handler).servePrefs,
 	"reload-config":        (*Handler).reloadConfig,
 	"reset-auth":           (*Handler).serveResetAuth,
+	"services":             (*Handler).serveServices,
 	"set-expiry-sooner":    (*Handler).serveSetExpirySooner,
 	"shutdown":             (*Handler).serveShutdown,
 	"start":                (*Handler).serveStart,
@@ -346,7 +350,7 @@ func (h *Handler) serveIDToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id-token access denied", http.StatusForbidden)
 		return
 	}
-	nm := h.b.NetMap()
+	nm := h.b.NetMapNoPeers()
 	if nm == nil {
 		http.Error(w, "no netmap", http.StatusServiceUnavailable)
 		return
@@ -416,7 +420,7 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Information about the current node from the netmap
-	if nm := h.b.NetMap(); nm != nil {
+	if nm := h.b.NetMapNoPeers(); nm != nil {
 		if self := nm.SelfNode; self.Valid() {
 			h.logf("user bugreport node info: nodeid=%q stableid=%q expiry=%q", self.ID(), self.StableID(), self.KeyExpiry().Format(time.RFC3339))
 		}
@@ -1072,6 +1076,80 @@ func (h *Handler) serveDERPMap(w http.ResponseWriter, r *http.Request) {
 	e.Encode(h.b.DERPMap())
 }
 
+// serveCertDomains returns the list of DNS.CertDomains from the current
+// netmap, or an empty list if no netmap has been received yet.
+// The returned list is sorted in ascending order.
+func (h *Handler) serveCertDomains(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "cert-domains access denied", http.StatusForbidden)
+		return
+	}
+	var domains []string
+	if nm := h.b.NetMapNoPeers(); nm != nil {
+		domains = slices.Clone(nm.DNS.CertDomains)
+		slices.Sort(domains)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(domains)
+}
+
+// serveDNSConfig returns the [tailcfg.DNSConfig] from the current netmap.
+// It returns 503 if no netmap has been received yet.
+func (h *Handler) serveDNSConfig(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "dns-config access denied", http.StatusForbidden)
+		return
+	}
+	nm := h.b.NetMapNoPeers()
+	if nm == nil {
+		http.Error(w, "no netmap", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	e := json.NewEncoder(w)
+	e.SetIndent("", "\t")
+	e.Encode(nm.DNS)
+}
+
+// peerByIDBackend is the subset of [ipnlocal.LocalBackend] used by
+// [Handler.servePeerByID]. It exists so the handler can be tested with a
+// trivial mock without spinning up a full LocalBackend.
+type peerByIDBackend interface {
+	PeerByID(tailcfg.NodeID) (tailcfg.NodeView, bool)
+}
+
+// servePeerByID returns the current full [tailcfg.Node] for the peer with
+// the NodeID given in the "id" query parameter, in O(1) time. It returns
+// 404 if no such peer is in the current netmap.
+//
+// It is intended for clients that need the latest state of a single peer
+// without fetching the entire netmap.
+func (h *Handler) servePeerByID(w http.ResponseWriter, r *http.Request) {
+	h.servePeerByIDWithBackend(w, r, h.b)
+}
+
+func (h *Handler) servePeerByIDWithBackend(w http.ResponseWriter, r *http.Request, b peerByIDBackend) {
+	if !h.PermitRead {
+		http.Error(w, "peer-by-id access denied", http.StatusForbidden)
+		return
+	}
+	idStr := r.FormValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid 'id' parameter", http.StatusBadRequest)
+		return
+	}
+	nv, ok := b.PeerByID(tailcfg.NodeID(id))
+	if !ok {
+		http.Error(w, "no peer with that NodeID", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	e := json.NewEncoder(w)
+	e.SetIndent("", "\t")
+	e.Encode(nv.AsStruct())
+}
+
 // serveSetExpirySooner sets the expiry date on the current machine, specified
 // by an `expiry` unix timestamp as POST or query param.
 func (h *Handler) serveSetExpirySooner(w http.ResponseWriter, r *http.Request) {
@@ -1168,16 +1246,34 @@ func (h *Handler) serveDial(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing Dial-Host or Dial-Port header", http.StatusBadRequest)
 		return
 	}
+	network := cmp.Or(r.Header.Get("Dial-Network"), "tcp")
+
+	addr := net.JoinHostPort(hostStr, portStr)
+
+	// Check whether the resolved address is a Tailscale route.
+	// If not, tell the client to dial it directly so the connection
+	// comes from the calling user's UID rather than our root-owned daemon.
+	ipp, viaTailscale, err := h.b.Dialer().UserDialPlan(r.Context(), network, addr)
+	if err != nil {
+		http.Error(w, "resolve failure: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	if !viaTailscale {
+		w.Header().Set("Dial-Self", "true")
+		w.Header().Set("Dial-Addr", ipp.String())
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "make request over HTTP/1", http.StatusBadRequest)
 		return
 	}
 
-	network := cmp.Or(r.Header.Get("Dial-Network"), "tcp")
-
-	addr := net.JoinHostPort(hostStr, portStr)
-	outConn, err := h.b.Dialer().UserDial(r.Context(), network, addr)
+	// Dial via Tailscale using the resolved IP:port to avoid a TOCTOU
+	// race with DNS re-resolution.
+	outConn, err := h.b.Dialer().UserDial(r.Context(), network, ipp.String())
 	if err != nil {
 		http.Error(w, "dial failure: "+err.Error(), http.StatusBadGateway)
 		return
@@ -1457,7 +1553,7 @@ func (h *Handler) serveQueryFeature(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing feature", http.StatusInternalServerError)
 		return
 	}
-	nm := h.b.NetMap()
+	nm := h.b.NetMapNoPeers()
 	if nm == nil {
 		http.Error(w, "no netmap", http.StatusServiceUnavailable)
 		return
@@ -1705,6 +1801,20 @@ func (h *Handler) serveShutdown(w http.ResponseWriter, r *http.Request) {
 	}
 
 	eventbus.Publish[Shutdown](ec).Publish(Shutdown{})
+}
+
+func (h *Handler) serveServices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != httpm.GET {
+		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	nm := h.b.NetMapNoPeers()
+	if nm == nil {
+		http.Error(w, "no netmap", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(nm.Services())
 }
 
 func (h *Handler) serveGetAppcRouteInfo(w http.ResponseWriter, r *http.Request) {

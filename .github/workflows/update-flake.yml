@@ -23,8 +23,8 @@ jobs:
       - name: Check out code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Run update-flakes
-        run: ./update-flake.sh
+      - name: Run updateflakes
+        run: ./tool/go run ./tool/updateflakes
 
       - name: Get access token
         uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
@@ -41,8 +41,8 @@ jobs:
           author: Flakes Updater <noreply+flakes-updater@tailscale.com>
           committer: Flakes Updater <noreply+flakes-updater@tailscale.com>
           branch: flakes
-          commit-message: "go.mod.sri: update SRI hash for go.mod changes"
-          title: "go.mod.sri: update SRI hash for go.mod changes"
+          commit-message: "flakehashes.json: update SRI hash for go.mod changes"
+          title: "flakehashes.json: update SRI hash for go.mod changes"
           body: Triggered by ${{ github.repository }}@${{ github.sha }}
           signoff: true
           delete-branch: true

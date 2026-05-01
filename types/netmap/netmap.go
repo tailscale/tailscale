@@ -146,6 +146,34 @@ func (nm *NetworkMap) GetIPVIPServiceMap() IPServiceMappings {
 	return res
 }
 
+// Services returns the Services visible (accessible) to this node,
+// decoded from [tailcfg.NodeAttrPrefixServices] entries in the self node's
+// CapMap. The returned map is keyed by [tailcfg.ServiceDetails.Name],
+// which is the canonical service name. It returns nil if nm is nil
+// or SelfNode is invalid.
+//
+// TODO(adrianosela): cache the result of decoding the capmap so
+// we don't have to decode it multiple times after each netmap update.
+func (nm *NetworkMap) Services() map[tailcfg.ServiceName]tailcfg.ServiceDetails {
+	if nm == nil || !nm.SelfNode.Valid() {
+		return nil
+	}
+	result := make(map[tailcfg.ServiceName]tailcfg.ServiceDetails)
+	for cap := range nm.SelfNode.CapMap().All() {
+		if !strings.HasPrefix(string(cap), string(tailcfg.NodeAttrPrefixServices)) {
+			continue
+		}
+		svcs, err := tailcfg.UnmarshalNodeCapViewJSON[tailcfg.ServiceDetails](nm.SelfNode.CapMap(), cap)
+		if err != nil || len(svcs) < 1 {
+			continue
+		}
+		// NOTE(adrianosela): the NodeCapMap key suffix is opaque and MUST not
+		// be parsed or relied upon (so we extract name from the inner field).
+		result[svcs[0].Name] = svcs[0]
+	}
+	return result
+}
+
 // SelfNodeOrZero returns the self node, or a zero value if nm is nil.
 func (nm *NetworkMap) SelfNodeOrZero() tailcfg.NodeView {
 	if nm == nil {
@@ -282,13 +310,6 @@ func (nm *NetworkMap) TailnetDisplayName() string {
 	}
 
 	return tailnetDisplayNames[0]
-}
-
-// HasSelfCapability reports whether nm.SelfNode contains capability c.
-//
-// It exists to satisify an unused (as of 2025-01-04) interface in the logknob package.
-func (nm *NetworkMap) HasSelfCapability(c tailcfg.NodeCapability) bool {
-	return nm.AllCaps.Contains(c)
 }
 
 func (nm *NetworkMap) String() string {

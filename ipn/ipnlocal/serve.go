@@ -276,7 +276,7 @@ func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint1
 		}
 	}
 
-	nm := b.NetMap()
+	nm := b.NetMapNoPeers()
 	if nm == nil {
 		b.logf("netMap is nil")
 		return
@@ -333,7 +333,7 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 		return errors.New("can't reconfigure tailscaled when using a config file; config file is locked")
 	}
 
-	nm := b.NetMap()
+	nm := b.NetMapNoPeers()
 	if nm == nil {
 		return errors.New("netMap is nil")
 	}

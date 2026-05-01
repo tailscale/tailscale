@@ -1081,7 +1081,7 @@ func certResourceLabels(pgName, domain string) map[string]string {
 	return map[string]string{
 		kubetypes.LabelManaged: "true",
 		labelProxyGroup:        pgName,
-		labelDomain:            domain,
+		labelDomain:            tsoperator.TruncateLabelValue(domain),
 	}
 }
 

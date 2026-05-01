@@ -72,6 +72,8 @@ operatorConfig:
 
   affinity: {}
 
+  priorityClassName: ""
+
   podSecurityContext: {}
 
   securityContext: {}

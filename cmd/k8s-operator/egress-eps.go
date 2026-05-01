@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	"tailscale.com/kube/egressservices"
 )
 
@@ -90,7 +91,7 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		lg.Debugf("No egress config found, likely because ProxyGroup has not been created")
 		return res, nil
 	}
-	cfg, ok := (*cfgs)[tailnetSvc]
+	cfg, ok := cfgs[tailnetSvc]
 	if !ok {
 		lg.Infof("[unexpected] configuration for tailnet service %s not found", tailnetSvc)
 		return res, nil

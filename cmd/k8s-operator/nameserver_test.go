@@ -43,12 +43,32 @@ func TestNameserverReconciler(t *testing.T) {
 					ClusterIP: "5.4.3.2",
 				},
 				Pod: &tsapi.NameserverPod{
+					NodeSelector: map[string]string{
+						"foo": "bar",
+					},
 					Tolerations: []corev1.Toleration{
 						{
 							Key:      "some-key",
 							Operator: corev1.TolerationOpEqual,
 							Value:    "some-value",
 							Effect:   corev1.TaintEffectNoSchedule,
+						},
+					},
+					Affinity: &corev1.Affinity{
+						NodeAffinity: &corev1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+								NodeSelectorTerms: []corev1.NodeSelectorTerm{
+									{
+										MatchExpressions: []corev1.NodeSelectorRequirement{
+											{
+												Key:      "some-key",
+												Operator: corev1.NodeSelectorOpIn,
+												Values:   []string{"some-value"},
+											},
+										},
+									},
+								},
+							},
 						},
 					},
 				},
@@ -96,6 +116,26 @@ func TestNameserverReconciler(t *testing.T) {
 				Value:    "some-value",
 				Effect:   corev1.TaintEffectNoSchedule,
 			},
+		}
+		wantsDeploy.Spec.Template.Spec.Affinity = &corev1.Affinity{
+			NodeAffinity: &corev1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{
+						{
+							MatchExpressions: []corev1.NodeSelectorRequirement{
+								{
+									Key:      "some-key",
+									Operator: corev1.NodeSelectorOpIn,
+									Values:   []string{"some-value"},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		wantsDeploy.Spec.Template.Spec.NodeSelector = map[string]string{
+			"foo": "bar",
 		}
 
 		expectEqual(t, fc, wantsDeploy)

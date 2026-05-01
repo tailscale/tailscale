@@ -53,6 +53,13 @@ const (
 	FirewallModeNfTables FirewallMode = "nftables"
 )
 
+type CGNATMode string
+
+const (
+	CGNATModeDrop   CGNATMode = "DROP"
+	CGNATModeReturn CGNATMode = "RETURN"
+)
+
 // The following bits are added to packet marks for Tailscale use.
 //
 // We tried to pick bits sufficiently out of the way that it's

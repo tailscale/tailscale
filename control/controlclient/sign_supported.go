@@ -1,9 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build windows
-
-// darwin,cgo is also supported by certstore but untested, so it is not enabled.
+//go:build windows || (darwin && !ios && cgo)
 
 package controlclient
 

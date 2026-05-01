@@ -53,11 +53,6 @@ type Peer struct {
 	V6MasqAddr          *netip.Addr // if non-nil, masquerade IPv6 traffic to this peer using this address
 	IsJailed            bool        // if true, this peer is jailed and cannot initiate connections
 	PersistentKeepalive uint16      // in seconds between keep-alives; 0 to disable
-	// wireguard-go's endpoint for this peer. It should always equal Peer.PublicKey.
-	// We represent it explicitly so that we can detect if they diverge and recover.
-	// There is no need to set WGEndpoint explicitly when constructing a Peer by hand.
-	// It is only populated when reading Peers from wireguard-go.
-	WGEndpoint key.NodePublic
 }
 
 func addrPtrEq(a, b *netip.Addr) bool {
@@ -74,8 +69,7 @@ func (p Peer) Equal(o Peer) bool {
 		p.IsJailed == o.IsJailed &&
 		p.PersistentKeepalive == o.PersistentKeepalive &&
 		addrPtrEq(p.V4MasqAddr, o.V4MasqAddr) &&
-		addrPtrEq(p.V6MasqAddr, o.V6MasqAddr) &&
-		p.WGEndpoint == o.WGEndpoint
+		addrPtrEq(p.V6MasqAddr, o.V6MasqAddr)
 }
 
 // PeerWithKey returns the Peer with key k and reports whether it was found.

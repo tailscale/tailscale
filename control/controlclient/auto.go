@@ -356,7 +356,15 @@ func (c *Auto) authRoutine() {
 		if err != nil {
 			c.direct.health.SetAuthRoutineInError(err)
 			report(err, f)
-			bo.BackOff(ctx, err)
+			if rle, ok := errors.AsType[*rateLimitError](err); ok {
+				c.logf("authRoutine: %s", rle)
+				select {
+				case <-ctx.Done():
+				case <-time.After(rle.retryAfter):
+				}
+			} else {
+				bo.BackOff(ctx, err)
+			}
 			continue
 		}
 		if url != "" {

@@ -18,7 +18,7 @@ func init() {
 	maybeSystrayCmd = systrayConfigCmd
 }
 
-var systrayArgs struct {
+var configSystrayArgs struct {
 	initSystem     string
 	installStartup bool
 }
@@ -32,7 +32,7 @@ func systrayConfigCmd() *ffcli.Command {
 		Exec:       configureSystray,
 		FlagSet: (func() *flag.FlagSet {
 			fs := newFlagSet("systray")
-			fs.StringVar(&systrayArgs.initSystem, "enable-startup", "",
+			fs.StringVar(&configSystrayArgs.initSystem, "enable-startup", "",
 				"Install startup script for init system. Currently supported systems are [systemd, freedesktop].")
 			return fs
 		})(),
@@ -40,8 +40,8 @@ func systrayConfigCmd() *ffcli.Command {
 }
 
 func configureSystray(_ context.Context, _ []string) error {
-	if systrayArgs.initSystem != "" {
-		if err := systray.InstallStartupScript(systrayArgs.initSystem); err != nil {
+	if configSystrayArgs.initSystem != "" {
+		if err := systray.InstallStartupScript(configSystrayArgs.initSystem); err != nil {
 			fmt.Printf("%s\n\n", err.Error())
 			return flag.ErrHelp
 		}

@@ -20,6 +20,8 @@ type Buffer any
 
 func Disable() {}
 
+func (*Logger) SetEnabled(enabled bool) {}
+
 func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 	return &Logger{}
 }

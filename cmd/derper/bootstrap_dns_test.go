@@ -41,8 +41,28 @@ func (b *bitbucketResponseWriter) Write(p []byte) (int, error) { return len(p), 
 
 func (b *bitbucketResponseWriter) WriteHeader(statusCode int) {}
 
+// setDNSCache sets the published DNS cache for tests.
+func setDNSCache(tb testing.TB, m *dnsEntryMap) {
+	tb.Helper()
+	j, err := json.Marshal(m.IPs)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tstest.AssertNotParallel(tb)
+	dnsCache.Store(m)
+	dnsCacheBytes.Store(j)
+	tb.Cleanup(func() {
+		dnsCache.Store(nil)
+		dnsCacheBytes.Store(nil)
+	})
+}
+
 func getBootstrapDNS(t *testing.T, q string) map[string][]net.IP {
 	t.Helper()
+	tstest.AssertNotParallel(t)
+	if dnsCache.Load() == nil {
+		t.Fatal("dnsCache not initialized; call setDNSCache before getBootstrapDNS")
+	}
 	req, _ := http.NewRequest("GET", "https://localhost/bootstrap-dns?q="+url.QueryEscape(q), nil)
 	w := httptest.NewRecorder()
 	handleBootstrapDNS(w, req)
@@ -100,7 +120,8 @@ func TestUnpublishedDNS(t *testing.T) {
 	}
 }
 
-func resetMetrics() {
+func resetMetrics(tb testing.TB) {
+	tstest.AssertNotParallel(tb)
 	publishedDNSHits.Set(0)
 	publishedDNSMisses.Set(0)
 	unpublishedDNSHits.Set(0)
@@ -114,8 +135,7 @@ func TestUnpublishedDNSEmptyList(t *testing.T) {
 	pub := &dnsEntryMap{
 		IPs: map[string][]net.IP{"tailscale.com": {net.IPv4(10, 10, 10, 10)}},
 	}
-	dnsCache.Store(pub)
-	dnsCacheBytes.Store([]byte(`{"tailscale.com":["10.10.10.10"]}`))
+	setDNSCache(t, pub)
 
 	unpublishedDNSCache.Store(&dnsEntryMap{
 		IPs: map[string][]net.IP{
@@ -131,7 +151,7 @@ func TestUnpublishedDNSEmptyList(t *testing.T) {
 	t.Run("CacheMiss", func(t *testing.T) {
 		// One domain in map but empty, one not in map at all
 		for _, q := range []string{"log.tailscale.com", "login.tailscale.com"} {
-			resetMetrics()
+			resetMetrics(t)
 			ips := getBootstrapDNS(t, q)
 
 			// Expected our public map to be returned on a cache miss
@@ -149,7 +169,7 @@ func TestUnpublishedDNSEmptyList(t *testing.T) {
 
 	// Verify that we do get a valid response and metric.
 	t.Run("CacheHit", func(t *testing.T) {
-		resetMetrics()
+		resetMetrics(t)
 		ips := getBootstrapDNS(t, "controlplane.tailscale.com")
 		want := map[string][]net.IP{"controlplane.tailscale.com": {net.IPv4(1, 2, 3, 4)}}
 		if !reflect.DeepEqual(ips, want) {
@@ -166,8 +186,10 @@ func TestUnpublishedDNSEmptyList(t *testing.T) {
 }
 
 func TestLookupMetric(t *testing.T) {
+	setDNSCache(t, &dnsEntryMap{})
+
 	d := []string{"a.io", "b.io", "c.io", "d.io", "e.io", "e.io", "e.io", "a.io"}
-	resetMetrics()
+	resetMetrics(t)
 	for _, q := range d {
 		_ = getBootstrapDNS(t, q)
 	}

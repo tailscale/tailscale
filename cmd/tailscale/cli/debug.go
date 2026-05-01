@@ -670,18 +670,11 @@ func runNetmap(ctx context.Context, args []string) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	var mask ipn.NotifyWatchOpt = ipn.NotifyInitialNetMap
-	watcher, err := localClient.WatchIPNBus(ctx, mask)
+	raw, err := localClient.DebugResultJSON(ctx, "current-netmap")
 	if err != nil {
 		return err
 	}
-	defer watcher.Close()
-
-	n, err := watcher.Next()
-	if err != nil {
-		return err
-	}
-	j, _ := json.MarshalIndent(n.NetMap, "", "\t")
+	j, _ := json.MarshalIndent(raw, "", "\t")
 	fmt.Printf("%s\n", j)
 	return nil
 }

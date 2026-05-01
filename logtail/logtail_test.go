@@ -7,34 +7,51 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
-	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-json-experiment/json/jsontext"
+	"tailscale.com/net/memnet"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
 )
 
-func TestFastShutdown(t *testing.T) {
+// TestMain installs a safety net that refuses non-localhost dials for any
+// test in this package. Config.BaseURL defaults to https://log.tailscale.com
+// and Config.HTTPC defaults to http.DefaultClient, so a test that forgets to
+// override either can otherwise silently hit the real logtail server.
+// Tests that need an HTTP server should use memnet (see newTestLogtailServer).
+func TestMain(m *testing.M) {
+	tr := http.DefaultTransport.(*http.Transport)
+	orig := tr.DialContext
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err == nil && (host == "127.0.0.1" || host == "::1" || host == "localhost") {
+			return orig(ctx, network, addr)
+		}
+		return nil, fmt.Errorf("logtail tests: refusing to dial non-localhost address %q; use memnet or a custom Config.HTTPC", addr)
+	}
+	os.Exit(m.Run())
+}
+
+func TestFastShutdown(t *testing.T) { synctest.Test(t, synctestFastShutdown) }
+
+func synctestFastShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	testServ := httptest.NewServer(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {}))
-	defer testServ.Close()
-
-	logger := NewLogger(Config{
-		BaseURL: testServ.URL,
-		Bus:     eventbustest.NewBus(t),
-	}, t.Logf)
-	err := logger.Shutdown(ctx)
-	if err != nil {
+	_, logger := newTestLogtailServer(t)
+	if err := logger.Shutdown(ctx); err != nil {
 		t.Error(err)
 	}
 }
@@ -43,49 +60,60 @@ func TestFastShutdown(t *testing.T) {
 const logLines = 3
 
 type LogtailTestServer struct {
-	srv      *httptest.Server // Log server
 	uploaded chan []byte
 }
 
-func NewLogtailTestHarness(t *testing.T) (*LogtailTestServer, *Logger) {
-	ts := LogtailTestServer{}
+// newTestLogtailServer wires up an in-memory HTTP server (via memnet) and a
+// *Logger whose HTTPC dials it. Lives inside the caller's synctest bubble so
+// the default FlushDelay and any other fake timers advance automatically.
+func newTestLogtailServer(t *testing.T) (*LogtailTestServer, *Logger) {
+	ts := &LogtailTestServer{
+		// max channel backlog = 1 "started" + #logLines x "log line" + 1 "closed"
+		uploaded: make(chan []byte, 2+logLines),
+	}
 
-	// max channel backlog = 1 "started" + #logLines x "log line" + 1 "closed"
-	ts.uploaded = make(chan []byte, 2+logLines)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error("failed to read HTTP request")
+		}
+		ts.uploaded <- body
+	})
 
-	ts.srv = httptest.NewServer(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				t.Error("failed to read HTTP request")
-			}
-			ts.uploaded <- body
-		}))
-
-	t.Cleanup(ts.srv.Close)
+	ln := memnet.Listen("logtail-test:0")
+	httpsrv := &http.Server{Handler: handler}
+	go httpsrv.Serve(ln)
+	t.Cleanup(func() {
+		httpsrv.Close()
+		ln.Close()
+	})
 
 	logger := NewLogger(Config{
-		BaseURL: ts.srv.URL,
+		BaseURL: "http://" + ln.Addr().String(),
 		Bus:     eventbustest.NewBus(t),
+		HTTPC: &http.Client{
+			Transport: &http.Transport{DialContext: ln.Dial},
+		},
 	}, t.Logf)
 
-	// There is always an initial "logtail started" message
+	// There is always an initial "logtail started" message.
 	body := <-ts.uploaded
 	if !strings.Contains(string(body), "started") {
 		t.Errorf("unknown start logging statement: %q", string(body))
 	}
-
-	return &ts, logger
+	return ts, logger
 }
 
-func TestDrainPendingMessages(t *testing.T) {
-	ts, logger := NewLogtailTestHarness(t)
+func TestDrainPendingMessages(t *testing.T) { synctest.Test(t, synctestDrainPendingMessages) }
+
+func synctestDrainPendingMessages(t *testing.T) {
+	ts, logger := newTestLogtailServer(t)
 
 	for range logLines {
 		logger.Write([]byte("log line"))
 	}
 
-	// all of the "log line" messages usually arrive at once, but poll if needed.
+	// All the "log line" messages usually arrive at once, but poll if needed.
 	var body strings.Builder
 	for i := 0; i <= logLines; i++ {
 		body.WriteString(string(<-ts.uploaded))
@@ -93,17 +121,17 @@ func TestDrainPendingMessages(t *testing.T) {
 		if count == logLines {
 			break
 		}
-		// if we never find count == logLines, the test will eventually time out.
 	}
 
-	err := logger.Shutdown(context.Background())
-	if err != nil {
+	if err := logger.Shutdown(context.Background()); err != nil {
 		t.Error(err)
 	}
 }
 
-func TestEncodeAndUploadMessages(t *testing.T) {
-	ts, logger := NewLogtailTestHarness(t)
+func TestEncodeAndUploadMessages(t *testing.T) { synctest.Test(t, synctestEncodeAndUploadMessages) }
+
+func synctestEncodeAndUploadMessages(t *testing.T) {
+	ts, logger := newTestLogtailServer(t)
 
 	tests := []struct {
 		name string
@@ -144,8 +172,7 @@ func TestEncodeAndUploadMessages(t *testing.T) {
 		}
 	}
 
-	err := logger.Shutdown(context.Background())
-	if err != nil {
+	if err := logger.Shutdown(context.Background()); err != nil {
 		t.Error(err)
 	}
 }
@@ -318,6 +345,90 @@ func TestLoggerWriteResult(t *testing.T) {
 	}
 	if got, want := string(back), `{"logtail":{"client_time":"1970-01-01T00:02:03Z"},"v":1,"text":"foo"}`+"\n"; got != want {
 		t.Errorf("mismatch.\n got: %#q\nwant: %#q", back, want)
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestNewLoggerDisabled(t *testing.T) { synctest.Test(t, synctestNewLoggerDisabled) }
+
+func synctestNewLoggerDisabled(t *testing.T) {
+	// When Config.Disabled is true, NewLogger must not emit the usual
+	// "logtail started" banner: the logger should start in the disabled
+	// state before the internal startup write, so nothing ever lands
+	// in the buffer for the upload goroutine to drain.
+	buf := NewMemoryBuffer(100)
+
+	// Any HTTP attempt indicates the banner leaked into the buffer and
+	// the upload goroutine tried to ship it. Report it once (so the
+	// retry spin doesn't drown the log), then block on the request
+	// context so synctest.Wait sees a durable block and Shutdown's
+	// uploadCancel can unblock us cleanly.
+	var once sync.Once
+	httpc := &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			once.Do(func() {
+				t.Errorf("unexpected HTTP request while Disabled=true: %s", r.URL)
+			})
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		}),
+	}
+
+	logger := NewLogger(Config{
+		BaseURL:  "http://logtail.test.invalid",
+		HTTPC:    httpc,
+		Bus:      eventbustest.NewBus(t),
+		Buffer:   buf,
+		Disabled: true,
+	}, t.Logf)
+	defer func() {
+		// Pass an already-cancelled context so Shutdown invokes
+		// uploadCancel immediately; otherwise on the regression path
+		// (Disabled=false) the upload goroutine stays in its retry
+		// loop and synctest.Test never returns.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		logger.Shutdown(ctx)
+	}()
+
+	synctest.Wait()
+
+	if back, _ := buf.TryReadLine(); len(back) != 0 {
+		t.Errorf("Disabled logger buffered a startup entry: %q", back)
+	}
+}
+
+func TestLoggerSetEnabled(t *testing.T) {
+	buf := NewMemoryBuffer(100)
+	lg := &Logger{
+		clock:  tstest.NewClock(tstest.ClockOpts{Start: time.Unix(123, 0)}),
+		buffer: buf,
+	}
+
+	if _, err := lg.Write([]byte("enabled1")); err != nil {
+		t.Fatal(err)
+	}
+	if back, _ := buf.TryReadLine(); !strings.Contains(string(back), "enabled1") {
+		t.Fatalf("initial write not buffered; got %q", back)
+	}
+
+	lg.SetEnabled(false)
+	if _, err := lg.Write([]byte("disabled")); err != nil {
+		t.Fatal(err)
+	}
+	if back, _ := buf.TryReadLine(); len(back) != 0 {
+		t.Errorf("write while disabled leaked into buffer: %q", back)
+	}
+
+	lg.SetEnabled(true)
+	if _, err := lg.Write([]byte("enabled2")); err != nil {
+		t.Fatal(err)
+	}
+	if back, _ := buf.TryReadLine(); !strings.Contains(string(back), "enabled2") {
+		t.Errorf("write after re-enable not buffered; got %q", back)
 	}
 }
 

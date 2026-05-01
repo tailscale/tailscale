@@ -24,7 +24,9 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -102,6 +104,10 @@ func main() {
 		}
 	}
 	flag.Parse()
+
+	// On macOS VMs, start polling the host via vsock for an IP assignment.
+	// This bypasses DHCP for near-instant network configuration.
+	startIPAssignLoop()
 
 	debug := false
 	if distro.Get() == distro.Gokrazy {
@@ -202,6 +208,9 @@ func main() {
 		if routes := r.URL.Query().Get("advertise-routes"); routes != "" {
 			args = append(args, "--advertise-routes="+routes)
 		}
+		if snat := r.URL.Query().Get("snat-subnet-routes"); snat != "" {
+			args = append(args, "--snat-subnet-routes="+snat)
+		}
 		serveCmd(w, "tailscale", args...)
 	})
 	ttaMux.HandleFunc("/ip", func(w http.ResponseWriter, r *http.Request) {
@@ -222,6 +231,20 @@ func main() {
 			serveCmd(w, "ping", "-c", "4", "-W", "1", host)
 		}
 	})
+	ttaMux.HandleFunc("/add-route", func(w http.ResponseWriter, r *http.Request) {
+		prefix := r.URL.Query().Get("prefix")
+		via := r.URL.Query().Get("via")
+		if prefix == "" || via == "" {
+			http.Error(w, "missing prefix or via", http.StatusBadRequest)
+			return
+		}
+		switch runtime.GOOS {
+		case "linux":
+			serveCmd(w, "ip", "route", "add", prefix, "via", via)
+		default:
+			http.Error(w, "add-route not supported on "+runtime.GOOS, http.StatusNotImplemented)
+		}
+	})
 	ttaMux.HandleFunc("/start-webserver", func(w http.ResponseWriter, r *http.Request) {
 		port := r.URL.Query().Get("port")
 		name := r.URL.Query().Get("name")
@@ -236,13 +259,80 @@ func main() {
 		go func() {
 			mux := http.NewServeMux()
 			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-				fmt.Fprintf(w, "Hello world I am %s", name)
+				host, _, _ := net.SplitHostPort(r.RemoteAddr)
+				fmt.Fprintf(w, "Hello world I am %s from %s", name, host)
 			})
 			if err := http.ListenAndServe(":"+port, mux); err != nil {
 				log.Printf("webserver on :%s failed: %v", port, err)
 			}
 		}()
 		io.WriteString(w, "OK\n")
+	})
+	ttaMux.HandleFunc("/taildrop-send", func(w http.ResponseWriter, r *http.Request) {
+		to := r.URL.Query().Get("to") // peer's Tailscale IP
+		name := r.URL.Query().Get("name")
+		if to == "" || name == "" {
+			http.Error(w, "missing to or name", http.StatusBadRequest)
+			return
+		}
+		if strings.ContainsAny(name, "/\\") {
+			http.Error(w, "bad name", http.StatusBadRequest)
+			return
+		}
+		dir, err := os.MkdirTemp("", "taildrop-send-")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer os.RemoveAll(dir)
+		path := filepath.Join(dir, name)
+		f, err := os.Create(path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if _, err := io.Copy(f, r.Body); err != nil {
+			f.Close()
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := f.Close(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		serveCmd(w, "tailscale", "file", "cp", path, to+":")
+	})
+	ttaMux.HandleFunc("/taildrop-recv", func(w http.ResponseWriter, r *http.Request) {
+		dir, err := os.MkdirTemp("", "taildrop-recv-")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer os.RemoveAll(dir)
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, absify("tailscale"), "file", "get", "--wait", dir)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			http.Error(w, fmt.Sprintf("tailscale file get: %v\n%s", err, out), http.StatusInternalServerError)
+			return
+		}
+		ents, err := os.ReadDir(dir)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(ents) != 1 {
+			http.Error(w, fmt.Sprintf("got %d files, want 1", len(ents)), http.StatusInternalServerError)
+			return
+		}
+		data, err := os.ReadFile(filepath.Join(dir, ents[0].Name()))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Taildrop-Filename", ents[0].Name())
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write(data)
 	})
 	ttaMux.HandleFunc("/http-get", func(w http.ResponseWriter, r *http.Request) {
 		targetURL := r.URL.Query().Get("url")
@@ -294,6 +384,25 @@ func main() {
 		io.Copy(w, resp.Body)
 	})
 	ttaMux.HandleFunc("/fw", addFirewallHandler)
+	ttaMux.HandleFunc("/wg-server-up", func(w http.ResponseWriter, r *http.Request) {
+		if wgServerUp == nil {
+			http.Error(w, "wg-server-up not supported on this platform", http.StatusNotImplemented)
+			return
+		}
+		wgServerUp(w, r)
+	})
+	ttaMux.HandleFunc("/restart-tailscaled", func(w http.ResponseWriter, r *http.Request) {
+		if restartTailscaled == nil {
+			http.Error(w, "restart-tailscaled not supported on this platform", http.StatusNotImplemented)
+			return
+		}
+		pid, err := restartTailscaled()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprintf(w, "killed tailscaled pid %d (supervisor will respawn)\n", pid)
+	})
 	ttaMux.HandleFunc("/logs", func(w http.ResponseWriter, r *http.Request) {
 		logBuf.mu.Lock()
 		defer logBuf.mu.Unlock()
@@ -315,10 +424,48 @@ func main() {
 	revSt.runDialOutLoop(conns)
 }
 
+// dialCancels tracks cancel funcs for in-flight connect() and sleep contexts.
+// resetDialCancels cancels them all so the dial loop retries immediately.
+var (
+	dialCancelMu sync.Mutex
+	dialCancels  set.HandleSet[context.CancelFunc]
+)
+
+// registerDialCancel adds a cancel func and returns a handle for removal.
+func registerDialCancel(cancel context.CancelFunc) set.Handle {
+	dialCancelMu.Lock()
+	defer dialCancelMu.Unlock()
+	return dialCancels.Add(cancel)
+}
+
+// unregisterDialCancel removes a previously registered cancel func.
+func unregisterDialCancel(h set.Handle) {
+	dialCancelMu.Lock()
+	defer dialCancelMu.Unlock()
+	delete(dialCancels, h)
+}
+
+// resetDialCancels cancels all in-flight connect and sleep contexts,
+// causing the dial loop to retry immediately with the updated driver address.
+func resetDialCancels() {
+	dialCancelMu.Lock()
+	defer dialCancelMu.Unlock()
+	for h, cancel := range dialCancels {
+		cancel()
+		delete(dialCancels, h)
+	}
+}
+
 func connect() (net.Conn, error) {
-	var d net.Dialer
+	d := net.Dialer{
+		Control: bypassControlFunc,
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
+	h := registerDialCancel(cancel)
+	defer func() {
+		cancel()
+		unregisterDialCancel(h)
+	}()
 	c, err := d.DialContext(ctx, "tcp", *driverAddr)
 	if err != nil {
 		return nil, err
@@ -415,7 +562,11 @@ func (s *revDialState) runDialOutLoop(conns chan<- net.Conn) {
 				log.Printf("[dial-driver] connect failure: %v", s)
 			}
 			lastErr = s
-			time.Sleep(time.Second)
+			sleepCtx, sleepCancel := context.WithTimeout(context.Background(), time.Second)
+			h := registerDialCancel(sleepCancel)
+			<-sleepCtx.Done()
+			sleepCancel()
+			unregisterDialCancel(h)
 			continue
 		}
 		if !connected {
@@ -455,6 +606,16 @@ func addFirewallHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 var addFirewall func() error // set by fw_linux.go
+
+// wgServerUp brings up a userspace WireGuard "Mullvad-style" exit-node
+// server on this VM. It is set by wgserver_linux.go and is nil on
+// non-Linux.
+var wgServerUp func(w http.ResponseWriter, r *http.Request)
+
+// restartTailscaled sends SIGKILL to the local tailscaled process so the
+// gokrazy supervisor restarts it. It is set by restart_tailscaled_linux.go
+// and is nil on non-Linux.
+var restartTailscaled func() (pid int, err error)
 
 // logBuffer is a bytes.Buffer that is safe for concurrent use
 // intended to capture early logs from the process, even if

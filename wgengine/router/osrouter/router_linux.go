@@ -89,6 +89,7 @@ type linuxRouter struct {
 	connmarkEnabled   bool // whether connmark rules are currently enabled
 	netfilterMode     preftype.NetfilterMode
 	netfilterKind     string
+	cgnatMode         linuxfw.CGNATMode
 	magicsockPortV4   uint16
 	magicsockPortV6   uint16
 }
@@ -502,6 +503,14 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 			// Only update state on success to keep it in sync with actual rules
 			r.connmarkEnabled = true
 		}
+		// Enable src_valid_mark so the kernel uses the packet's fwmark
+		// during the rp_filter reverse-path check. Without this, the
+		// connmark restore in mangle/PREROUTING is ineffective — rp_filter
+		// does its routing lookup with fwmark=0, ignoring the restored
+		// bypass mark, and drops reply packets as martians.
+		if err := writeSysctl("net.ipv4.conf.all.src_valid_mark", "1"); err != nil {
+			r.logf("warning: failed to enable src_valid_mark: %v", err)
+		}
 	default:
 		r.logf("disabling connmark-based rp_filter workaround")
 		if err := r.nfr.DelConnmarkSaveRule(); err != nil {
@@ -521,7 +530,48 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		r.enableIPForwarding()
 	}
 
+	// Remove the rule to drop off-tailnet CGNAT traffic, if asked.
+	if netfilterOn || cfg.NetfilterMode == netfilterNoDivert {
+		var cgnatMode linuxfw.CGNATMode
+		if cfg.RemoveCGNATDropRule {
+			cgnatMode = linuxfw.CGNATModeReturn
+		} else {
+			cgnatMode = linuxfw.CGNATModeDrop
+		}
+		err := r.setCGNATDropModeLocked(cgnatMode)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("set cgnat mode: %w", err))
+		}
+	}
+
 	return errors.Join(errs...)
+}
+
+// setCGNATDropModeLocked clears old rules and add new rules for the desired
+// behavior for incoming non-Tailscale CGNAT packets.
+// [linuxRouter.mu] must be held.
+func (r *linuxRouter) setCGNATDropModeLocked(want linuxfw.CGNATMode) error {
+	if want == r.cgnatMode {
+		return nil
+	}
+	// r.cgnatMode is empty at initial startup, before this function has been
+	// called for the first time. In that case, we can skip deleting old
+	// rules, because there aren't any.
+	if r.cgnatMode != "" {
+		err := r.nfr.DelExternalCGNATRules(r.cgnatMode, r.tunname)
+		if err != nil {
+			return fmt.Errorf("clear old cgnat rules: %w", err)
+		}
+	}
+	err := r.nfr.AddExternalCGNATRules(want, r.tunname)
+	if err != nil {
+		// We currently have no rules set, so change the state to reflect that
+		// so we might try again on a future Router update.
+		r.cgnatMode = ""
+		return fmt.Errorf("add new cgnat rules: %w", err)
+	}
+	r.cgnatMode = want
+	return nil
 }
 
 var dockerStatefulFilteringWarnable = health.Register(&health.Warnable{
@@ -769,6 +819,20 @@ func (r *linuxRouter) setNetfilterModeLocked(mode preftype.NetfilterMode) error 
 	for cidr := range r.addrs {
 		if err := r.addLoopbackRule(cidr.Addr()); err != nil {
 			return fmt.Errorf("error adding loopback rule: %w", err)
+		}
+	}
+
+	// Re-add the CGNAT rules if we had any set.
+	// This does not call [linuxRouter.setCGNATDropModeLocked] because that
+	// function assumes that [linuxRouter.cgnatMode] accurately represents the
+	// current state in the firewall. This would not be true when we hit this
+	// code path, and is what we're fixing up here.
+	if r.cgnatMode != "" {
+		if err := r.nfr.AddExternalCGNATRules(r.cgnatMode, r.tunname); err != nil {
+			// We currently have no rules set, so change the state to reflect that
+			// so we might try again on a future Router update.
+			r.cgnatMode = ""
+			return fmt.Errorf("add cgnat rules: %w", err)
 		}
 	}
 

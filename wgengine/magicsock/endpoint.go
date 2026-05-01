@@ -530,11 +530,6 @@ func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
 	elapsed := now.Sub(de.lastRecvWG.LoadAtomic())
 	if elapsed > 10*time.Second {
 		de.lastRecvWG.StoreAtomic(now)
-
-		if de.c.noteRecvActivity == nil {
-			return false
-		}
-		de.c.noteRecvActivity(de.publicKey)
 		return true
 	}
 	return false
@@ -897,7 +892,7 @@ func (de *endpoint) wantUDPRelayPathDiscoveryLocked(now mono.Time) bool {
 	if runtime.GOOS == "js" {
 		return false
 	}
-	if !de.c.hasPeerRelayServers.Load() {
+	if !de.c.relayManager.hasPeerRelayServers.Load() {
 		// Changes in this value between its access and a call to
 		// [endpoint.discoverUDPRelayPathsLocked] are fine, we will eventually
 		// do the "right" thing during future path discovery. The worst case is
@@ -1183,8 +1178,7 @@ func (de *endpoint) discoPingTimeout(txid stun.TxID) {
 		return
 	}
 	bestUntrusted := mono.Now().After(de.trustBestAddrUntil)
-	if sp.to == de.bestAddr.epAddr && sp.to.vni.IsSet() && bestUntrusted {
-		// TODO(jwhited): consider applying this to direct UDP paths as well
+	if sp.to == de.bestAddr.epAddr && bestUntrusted {
 		de.clearBestAddrLocked()
 	}
 	if debugDisco() || !de.bestAddr.ap.IsValid() || bestUntrusted {
@@ -1778,12 +1772,8 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 			latency: latency,
 			wireMTU: pingSizeToPktLen(sp.size, sp.to),
 		}
-		// TODO(jwhited): consider checking de.trustBestAddrUntil as well. If
-		//  de.bestAddr is untrusted we may want to clear it, otherwise we could
-		//  get stuck with a forever untrusted bestAddr that blackholes, since
-		//  we don't clear direct UDP paths on disco ping timeout (see
-		//  discoPingTimeout).
-		if betterAddr(thisPong, de.bestAddr) {
+		bestUntrusted := now.After(de.trustBestAddrUntil)
+		if betterAddr(thisPong, de.bestAddr) || bestUntrusted {
 			de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v tx=%x", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.wireMTU, m.TxID[:6])
 			de.debugUpdates.Add(EndpointChange{
 				When: time.Now(),
@@ -2098,7 +2088,7 @@ func (de *endpoint) setDERPHome(regionID uint16) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 	de.derpAddr = netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(regionID))
-	if de.c.hasPeerRelayServers.Load() {
+	if de.c.relayManager.hasPeerRelayServers.Load() {
 		de.c.relayManager.handleDERPHomeChange(de.publicKey, regionID)
 	}
 }

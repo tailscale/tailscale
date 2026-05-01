@@ -1,11 +1,14 @@
 # Binaries for programs and plugins
 *~
 *.tmp
-*.exe
 *.dll
 *.so
 *.dylib
 *.spk
+
+*.exe
+# tool/go.exe is built specially and committed.
+!/tool/go.exe
 
 cmd/tailscale/tailscale
 cmd/tailscaled/tailscaled

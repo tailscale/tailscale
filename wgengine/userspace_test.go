@@ -8,7 +8,6 @@ import (
 	"math/rand"
 	"net/netip"
 	"os"
-	"reflect"
 	"runtime"
 	"testing"
 
@@ -19,10 +18,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netaddr"
-	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tstest"
-	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
@@ -31,67 +27,6 @@ import (
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
-
-func TestNoteReceiveActivity(t *testing.T) {
-	now := mono.Time(123456)
-	var logBuf tstest.MemLogger
-
-	confc := make(chan bool, 1)
-	gotConf := func() bool {
-		select {
-		case <-confc:
-			return true
-		default:
-			return false
-		}
-	}
-	e := &userspaceEngine{
-		timeNow:               func() mono.Time { return now },
-		recvActivityAt:        map[key.NodePublic]mono.Time{},
-		logf:                  logBuf.Logf,
-		tundev:                new(tstun.Wrapper),
-		testMaybeReconfigHook: func() { confc <- true },
-		trimmedNodes:          map[key.NodePublic]bool{},
-	}
-	ra := e.recvActivityAt
-
-	nk := key.NewNode().Public()
-
-	// Activity on an untracked key should do nothing.
-	e.noteRecvActivity(nk)
-	if len(ra) != 0 {
-		t.Fatalf("unexpected growth in map: now has %d keys; want 0", len(ra))
-	}
-	if logBuf.Len() != 0 {
-		t.Fatalf("unexpected log write (and thus activity): %s", logBuf.Bytes())
-	}
-
-	// Now track it, but don't mark it trimmed, so shouldn't update.
-	ra[nk] = 0
-	e.noteRecvActivity(nk)
-	if len(ra) != 1 {
-		t.Fatalf("unexpected growth in map: now has %d keys; want 1", len(ra))
-	}
-	if got := ra[nk]; got != now {
-		t.Fatalf("time in map = %v; want %v", got, now)
-	}
-	if gotConf() {
-		t.Fatalf("unexpected reconfig")
-	}
-
-	// Now mark it trimmed and expect an update.
-	e.trimmedNodes[nk] = true
-	e.noteRecvActivity(nk)
-	if len(ra) != 1 {
-		t.Fatalf("unexpected growth in map: now has %d keys; want 1", len(ra))
-	}
-	if got := ra[nk]; got != now {
-		t.Fatalf("time in map = %v; want %v", got, now)
-	}
-	if !gotConf() {
-		t.Fatalf("didn't get expected reconfig")
-	}
-}
 
 func nodeViews(v []*tailcfg.Node) []tailcfg.NodeView {
 	nv := make([]tailcfg.NodeView, len(v))
@@ -111,7 +46,6 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(e.Close)
-	ue := e.(*userspaceEngine)
 
 	routerCfg := &router.Config{}
 
@@ -146,20 +80,6 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 		err = e.Reconfig(cfg, routerCfg, &dns.Config{})
 		if err != nil {
 			t.Fatal(err)
-		}
-
-		wantRecvAt := map[key.NodePublic]mono.Time{
-			nkFromHex(nodeHex): 0,
-		}
-		if got := ue.recvActivityAt; !reflect.DeepEqual(got, wantRecvAt) {
-			t.Errorf("wrong recvActivityAt\n got: %v\nwant: %v\n", got, wantRecvAt)
-		}
-
-		wantTrimmedNodes := map[key.NodePublic]bool{
-			nkFromHex(nodeHex): true,
-		}
-		if got := ue.trimmedNodes; !reflect.DeepEqual(got, wantTrimmedNodes) {
-			t.Errorf("wrong wantTrimmedNodes\n got: %v\nwant: %v\n", got, wantTrimmedNodes)
 		}
 	}
 }
@@ -263,8 +183,9 @@ func TestUserspaceEngineTSMPLearnedMismatch(t *testing.T) {
 		wrongKey bool
 	}{
 		{tsmp: false, inMap: false, wrongKey: false},
-		{tsmp: true, inMap: false, wrongKey: true},
-		{tsmp: false, inMap: false, wrongKey: false},
+		{tsmp: true, inMap: false, wrongKey: false},
+		{tsmp: true, inMap: true, wrongKey: true},
+		{tsmp: false, inMap: true, wrongKey: false},
 	}
 
 	nkHex := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

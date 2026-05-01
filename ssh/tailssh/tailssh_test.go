@@ -36,6 +36,7 @@ import (
 	gliderssh "github.com/tailscale/gliderssh"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
+	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/memnet"
@@ -421,6 +422,8 @@ func (ts *localState) NetMap() *netmap.NetworkMap {
 	}
 }
 
+func (ts *localState) NetMapNoPeers() *netmap.NetworkMap { return ts.NetMap() }
+
 func (ts *localState) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
 	if proto != "tcp" {
 		return tailcfg.NodeView{}, tailcfg.UserProfile{}, false
@@ -476,6 +479,9 @@ func newSSHRule(action *tailcfg.SSHAction) *tailcfg.SSHRule {
 }
 
 func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7707")
+	}
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skipf("skipping on %q; only runs on linux and darwin", runtime.GOOS)
 	}

@@ -46,15 +46,15 @@ if [ "${TS_GO_NEXT:-}" != "1" ]; then
     fi
 fi
 
-# Only update go.toolchain.version and go.toolchain.rev.sri for the main toolchain,
+# Only update go.toolchain.version and flakehashes.json for the main toolchain,
 # skipping it if TS_GO_NEXT=1. Those two files are only used by Nix, and as of 2026-01-26
 # don't yet support TS_GO_NEXT=1 with flake.nix or in our corp CI.
 if [ "${TS_GO_NEXT:-}" != "1" ]; then
     ./tool/go version 2>/dev/null | awk '{print $3}' | sed 's/^go//' > go.toolchain.version
     ./tool/go mod edit -go "$(cat go.toolchain.version)"
-    ./update-flake.sh
+    ./tool/go run ./tool/updateflakes
 fi
 
-if [ -n "$(git diff-index --name-only HEAD -- "$go_toolchain_rev_file" go.toolchain.next.rev go.toolchain.rev.sri go.toolchain.version)" ]; then
+if [ -n "$(git diff-index --name-only HEAD -- "$go_toolchain_rev_file" go.toolchain.next.rev flakehashes.json go.toolchain.version)" ]; then
     echo "pull-toolchain.sh: changes imported. Use git commit to make them permanent." >&2
 fi

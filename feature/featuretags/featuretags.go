@@ -171,7 +171,6 @@ var Features = map[FeatureTag]FeatureMeta{
 	"ipnbus":             {Sym: "IPNBus", Desc: "IPN notification bus (watch-ipn-bus) support, used by GUIs, debugging, and nicer 'tailscale up' support"},
 	"iptables":           {Sym: "IPTables", Desc: "Linux iptables support"},
 	"kube":               {Sym: "Kube", Desc: "Kubernetes integration"},
-	"lazywg":             {Sym: "LazyWG", Desc: "Lazy WireGuard configuration for memory-constrained devices with large netmaps"},
 	"linuxdnsfight":      {Sym: "LinuxDNSFight", Desc: "Linux support for detecting DNS fights (inotify watching of /etc/resolv.conf)"},
 	"linkspeed": {
 		Sym:  "LinkSpeed",
