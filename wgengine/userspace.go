@@ -925,6 +925,11 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		}
 	}
 
+	if e.lastCfgFull.MLKEMEnabled != cfg.MLKEMEnabled {
+		e.wgdev.SetMLKEMEnabled(cfg.MLKEMEnabled)
+		e.logf("wgengine: Reconfig: ML-KEM handshake enabled=%v", cfg.MLKEMEnabled)
+	}
+
 	e.lastCfgFull = *cfg.Clone()
 
 	e.magicConn.UpdatePeers(peerSet)
