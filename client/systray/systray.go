@@ -666,20 +666,20 @@ func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
 	if len(mullvadExitNodes.countries) > 0 {
 		menu.exitNodes.AddSeparator()
 		menu.exitNodes.AddSubMenuItem("Location-based Exit Nodes", "").Disable()
-		mullvadMenu := menu.exitNodes.AddSubMenuItemCheckbox("Mullvad VPN", "", false)
+		mullvadMenu := menu.exitNodes.AddSubMenuItem("Mullvad VPN", "")
 
 		for _, country := range mullvadExitNodes.sortedCountries() {
 			flag := countryFlag(country.code)
-			countryMenu := mullvadMenu.AddSubMenuItemCheckbox(flag+" "+country.name, "", false)
+			countryTitle := flag + " " + country.name
 
 			// single-city country, no submenu
 			if len(country.cities) == 1 || hideMullvadCities {
+				countryMenu := mullvadMenu.AddSubMenuItemCheckbox(countryTitle, "", false)
 				setExitNodeOnClick(countryMenu, country.best.ID)
 				if status.ExitNodeStatus != nil {
 					for _, city := range country.cities {
 						for _, ps := range city.peers {
 							if status.ExitNodeStatus.ID == ps.ID {
-								mullvadMenu.Check()
 								countryMenu.Check()
 							}
 						}
@@ -689,6 +689,7 @@ func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
 			}
 
 			// multi-city country, build submenu with "best available" option and cities.
+			countryMenu := mullvadMenu.AddSubMenuItem(countryTitle, "")
 			time.Sleep(newMenuDelay)
 			bm := countryMenu.AddSubMenuItemCheckbox("Best Available", "", false)
 			setExitNodeOnClick(bm, country.best.ID)
@@ -700,8 +701,6 @@ func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
 				if status.ExitNodeStatus != nil {
 					for _, ps := range city.peers {
 						if status.ExitNodeStatus.ID == ps.ID {
-							mullvadMenu.Check()
-							countryMenu.Check()
 							cityMenu.Check()
 						}
 					}
