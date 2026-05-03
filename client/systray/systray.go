@@ -621,11 +621,9 @@ func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
 				title += strings.Split(sugg.Name, ".")[0]
 			}
 			menu.exitNodes.AddSeparator()
-			rm := menu.exitNodes.AddSubMenuItemCheckbox(title, "", false)
+			active := recommendedIsActive(status, sugg.ID, sugg.Location.CountryCode(), sugg.Location.City())
+			rm := menu.exitNodes.AddSubMenuItemCheckbox(title, "", active)
 			setExitNodeOnClick(rm, sugg.ID)
-			if status.ExitNodeStatus != nil && sugg.ID == status.ExitNodeStatus.ID {
-				rm.Check()
-			}
 		}
 	}
 
@@ -647,12 +645,10 @@ func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
 			if !ps.Online {
 				name += " (offline)"
 			}
-			sm := menu.exitNodes.AddSubMenuItemCheckbox(name, "", false)
+			active := status.ExitNodeStatus != nil && ps.ID == status.ExitNodeStatus.ID
+			sm := menu.exitNodes.AddSubMenuItemCheckbox(name, "", active)
 			if !ps.Online {
 				sm.Disable()
-			}
-			if status.ExitNodeStatus != nil && ps.ID == status.ExitNodeStatus.ID {
-				sm.Check()
 			}
 			setExitNodeOnClick(sm, ps.ID)
 		}
@@ -741,6 +737,30 @@ func (mc *mvCountry) sortedCities() []*mvCity {
 		return stringsx.CompareFold(a.name, b.name)
 	})
 	return cities
+}
+
+// recommendedIsActive reports whether the suggested exit node corresponds to
+// the currently active exit node in status.
+func recommendedIsActive(status *ipnstate.Status, suggID tailcfg.StableNodeID, suggCountry, suggCity string) bool {
+	if status == nil || status.ExitNodeStatus == nil || status.ExitNodeStatus.ID.IsZero() {
+		return false
+	}
+	if suggID == status.ExitNodeStatus.ID {
+		return true
+	}
+	if suggCountry == "" || suggCity == "" {
+		return false
+	}
+	for _, p := range status.Peer {
+		if p.ID != status.ExitNodeStatus.ID {
+			continue
+		}
+		if loc := p.Location; loc != nil && loc.CountryCode == suggCountry && loc.City == suggCity {
+			return true
+		}
+		return false
+	}
+	return false
 }
 
 // countryFlag takes a 2-character ASCII string and returns the corresponding emoji flag.
