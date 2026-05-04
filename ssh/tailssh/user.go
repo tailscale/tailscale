@@ -93,7 +93,7 @@ func defaultPathForUser(u *user.User) string {
 	}
 	isRoot := u.Uid == "0"
 	switch distro.Get() {
-	case distro.Debian:
+	case distro.Debian, distro.Crostini:
 		hi := hostinfo.New()
 		if hi.Distro == "ubuntu" {
 			// distro.Get's Debian includes Ubuntu. But see if it's actually Ubuntu.
