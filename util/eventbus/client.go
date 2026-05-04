@@ -181,6 +181,11 @@ func SubscribeFunc[T any](c *Client, f func(T)) *SubscriberFunc[T] {
 // It panics if c is closed.
 func Publish[T any](c *Client) *Publisher[T] {
 	p := newPublisher[T](c)
-	c.addPublisher(p)
+	// Register the non-generic core with the client so the
+	// per-Client publisher set, the publisher interface itab, and
+	// the publisher equality function are not parameterized by T.
+	// This eliminates per-T itab/dictionary/eq cost for every new
+	// event type passed through Publish[T].
+	c.addPublisher(p.core)
 	return p
 }
