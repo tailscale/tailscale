@@ -87,6 +87,16 @@ func defaultTunName() string {
 			// See https://github.com/tailscale/tailscale-synology/issues/35
 			return "tailscale0,userspace-networking"
 		}
+		if buildfeatures.HasNetstack && distro.Get() == distro.Crostini {
+			// cros-garcon NULL-derefs on cold-boot netlink interface
+			// enumeration when tailscale0 is present, preventing the
+			// Crostini container and ChromeOS Terminal from starting
+			// cleanly. Default to userspace-networking until the
+			// upstream ChromiumOS bug is fixed.
+			// See https://github.com/tailscale/tailscale/issues/12090
+			// See https://issuetracker.google.com/issues/517069318
+			return "userspace-networking"
+		}
 	}
 	return "tailscale0"
 }
