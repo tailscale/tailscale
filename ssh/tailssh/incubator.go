@@ -493,6 +493,38 @@ func runningAsRoot() bool {
 	return euid == 0
 }
 
+// shouldUseLogin decides whether tryExecLogin should hand the session off
+// to /usr/bin/login or fall through to other mechanisms. It is pure to keep
+// the per-GOOS policy testable on any host.
+//
+// Constraints encoded here:
+//
+//   - login on linux/freebsd/openbsd cannot exec a command, only launch a
+//     shell, and requires a TTY (without one it exits immediately, breaking
+//     mosh and VSCode).
+//   - login on darwin can exec commands, but /usr/bin/login -pq exits 0 as
+//     soon as the child is spawned, so the child's exit status is lost on
+//     non-TTY exec (#18256). TTY shells keep using login for PAM "remote"
+//     session and utmpx accounting.
+func shouldUseLogin(goos string, hasTTY, isShell bool) (use bool, reason string) {
+	switch goos {
+	case linux, freebsd, openbsd:
+		if !isShell {
+			return false, "login on " + goos + " cannot exec a command, only a shell"
+		}
+		if !hasTTY {
+			return false, "login on " + goos + " requires a TTY"
+		}
+		return true, ""
+	case darwin:
+		if !hasTTY && !isShell {
+			return false, "darwin non-TTY exec swallows child exit status (#18256)"
+		}
+		return true, ""
+	}
+	return false, "unsupported GOOS: " + goos
+}
+
 // tryExecLogin attempts to handle the ssh session by creating a full login
 // shell using the login command. If it never tried, it returns nil. If it
 // failed to do so, it returns an error.
@@ -501,34 +533,22 @@ func runningAsRoot() bool {
 // the login session, trigger PAM authentication, and get the "remote" PAM
 // profile.
 //
-// However, login is subject to some limitations.
+// However, login is subject to some limitations:
 //
-// 1. login cannot be used to execute commands except on macOS.
-// 2. On Linux and BSD, login requires a TTY to keep running.
+//  1. login cannot be used to execute commands except on macOS, and even on
+//     macOS we skip it for non-TTY commands because /usr/bin/login -pq does
+//     not propagate the child's exit status (#18256).
+//  2. On Linux and BSD, login requires a TTY to keep running.
 //
-// In these cases, tryExecLogin returns (false, nil) to indicate that processing
+// In these cases, tryExecLogin returns nil to indicate that processing
 // should fall through to other methods, such as using the su command.
 //
 // Note that this uses unix.Exec to replace the current process, so in cases
 // where we actually do run login, no subsequent Go code will execute.
 func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
-	// Only the macOS version of the login command supports executing a
-	// command, all other versions only support launching a shell without
-	// taking any arguments.
-	if !ia.isShell && runtime.GOOS != darwin {
-		dlogf("won't use login because we're not in a shell or on macOS")
+	if use, reason := shouldUseLogin(runtime.GOOS, ia.hasTTY, ia.isShell); !use {
+		dlogf("not using login: %s", reason)
 		return nil
-	}
-
-	switch runtime.GOOS {
-	case linux, freebsd, openbsd:
-		if !ia.hasTTY {
-			dlogf("can't use login because of missing TTY")
-			// We can only use the login command if a shell was requested with
-			// a TTY. If there is no TTY, login exits immediately, which
-			// breaks things like mosh and VSCode.
-			return nil
-		}
 	}
 
 	loginCmdPath, err := exec.LookPath("login")
