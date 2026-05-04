@@ -306,18 +306,61 @@ func (s *SubscriberFunc[T]) Close() { s.stop.Stop(); s.unregister() }
 func (s *SubscriberFunc[T]) subscribeType() reflect.Type { return reflect.TypeFor[T]() }
 
 // dispatch implements part of the subscriber interface.
+//
+// We deliberately keep this method body small and delegate the
+// dispatch loop to dispatchFunc, a non-generic helper. Each
+// instantiation of SubscriberFunc[T] otherwise produces a fresh
+// stencil of the full ~40-line select loop (including the slow-
+// subscriber timer, snapshot handling, and CI stack-dump branch),
+// which is responsible for hundreds of bytes of binary size per
+// distinct T. By isolating the per-T work to the type assertion
+// and the callback closure, only a small fixed-size wrapper is
+// emitted per T.
 func (s *SubscriberFunc[T]) dispatch(ctx context.Context, vals *queue[DeliveredEvent], acceptCh func() chan DeliveredEvent, snapshot chan chan []DeliveredEvent) bool {
 	t := vals.Peek().Event.(T)
+	return dispatchFunc(ctx, dispatchFuncState{
+		slow:     s.slow,
+		logf:     s.logf,
+		typeName: reflect.TypeFor[T]().String(),
+	}, vals, acceptCh, snapshot, func() { s.read(t) })
+}
+
+// dispatchFuncState is the non-generic state needed by dispatchFunc.
+// Bundling these lets us pass them as one argument and keeps the
+// per-T wrapper at the dispatch call site small.
+type dispatchFuncState struct {
+	slow     *time.Timer
+	logf     logger.Logf
+	typeName string // cached reflect.TypeFor[T]().String()
+}
+
+// dispatchFunc is the non-generic body of SubscriberFunc[T].dispatch.
+// It is identical in observable behavior to the original loop; the
+// only differences are that the dispatched value has already been
+// unboxed by the caller (and is delivered via the invoke closure)
+// and the type name has already been resolved (and is passed as a
+// string).
+//
+// invoke is called from a goroutine; it should run the user
+// callback synchronously on the unboxed value.
+func dispatchFunc(
+	ctx context.Context,
+	st dispatchFuncState,
+	vals *queue[DeliveredEvent],
+	acceptCh func() chan DeliveredEvent,
+	snapshot chan chan []DeliveredEvent,
+	invoke func(),
+) bool {
 	callDone := make(chan struct{})
-	go s.runCallback(t, callDone)
+	go runFuncCallback(invoke, callDone)
 
 	start := time.Now()
-	s.slow.Reset(slowSubscriberTimeout)
-	defer s.slow.Stop()
+	st.slow.Reset(slowSubscriberTimeout)
+	defer st.slow.Stop()
 
 	// Keep the cases in this select in sync with subscribeState.pump
 	// above. The only difference should be that this select
-	// delivers a value by calling s.read.
+	// delivers a value by calling the user callback (via invoke).
 	for {
 		select {
 		case <-callDone:
@@ -327,30 +370,31 @@ func (s *SubscriberFunc[T]) dispatch(ctx context.Context, vals *queue[DeliveredE
 			vals.Add(val)
 		case <-ctx.Done():
 			// Wait for the callback to be complete, but not forever.
-			s.slow.Reset(5 * slowSubscriberTimeout)
+			st.slow.Reset(5 * slowSubscriberTimeout)
 			select {
-			case <-s.slow.C:
-				s.logf("giving up on subscriber for %T after %v at close", t, time.Since(start))
+			case <-st.slow.C:
+				st.logf("giving up on subscriber for %s after %v at close", st.typeName, time.Since(start))
 				if cibuild.On() {
 					all := make([]byte, 2<<20)
 					n := runtime.Stack(all, true)
-					s.logf("goroutine stacks:\n%s", all[:n])
+					st.logf("goroutine stacks:\n%s", all[:n])
 				}
 			case <-callDone:
 			}
 			return false
 		case ch := <-snapshot:
 			ch <- vals.Snapshot()
-		case <-s.slow.C:
-			s.logf("subscriber for %T is slow (%v elapsed)", t, time.Since(start))
-			s.slow.Reset(slowSubscriberTimeout)
+		case <-st.slow.C:
+			st.logf("subscriber for %s is slow (%v elapsed)", st.typeName, time.Since(start))
+			st.slow.Reset(slowSubscriberTimeout)
 		}
 	}
 }
 
-// runCallback invokes the callback on v and closes ch when it returns.
-// This should be run in a goroutine.
-func (s *SubscriberFunc[T]) runCallback(v T, ch chan struct{}) {
+// runFuncCallback runs invoke and closes ch when it returns. It is
+// the non-generic equivalent of the previous (*SubscriberFunc[T]).runCallback.
+// Lifted to a free function so it doesn't get instantiated per T.
+func runFuncCallback(invoke func(), ch chan struct{}) {
 	defer close(ch)
-	s.read(v)
+	invoke()
 }
