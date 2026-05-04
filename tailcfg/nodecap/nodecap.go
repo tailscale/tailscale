@@ -385,6 +385,10 @@ const (
 	// [tailscale.com/util/clientmetric]'s.
 	EmitRuntimeMetrics Cap = "emit-runtime-metrics"
 
+	// ConnReject enables the node's aggregated connection-rejection diagnostic
+	// buffers and the debug-rejects LocalAPI and GET /debug/rejects c2n endpoints.
+	ConnReject Cap = "debug-conn-reject"
+
 	// DisableUDPGRO disables UDP GRO (UDP_GRO socket option on Linux)
 	// on the magicsock UDP socket. It exists so control can mitigate kernel
 	// regressions that cause throughput or correctness issues with UDP GRO on
