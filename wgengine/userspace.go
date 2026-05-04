@@ -76,6 +76,13 @@ type userspaceEngine struct {
 	eventBus    *eventbus.Bus
 	eventClient *eventbus.Client
 
+	// connReject is storage for the optional connection-rejection
+	// callback installed via [SetConnRejectCallback]. The type is
+	// defined per build tag (see connreject.go / connreject_stub.go)
+	// so this always-built file does not reference
+	// tailscale.com/net/connreject.
+	connReject connRejectState
+
 	linkChangeQueue execqueue.ExecQueue
 
 	logf           logger.Logf

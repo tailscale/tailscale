@@ -223,6 +223,13 @@ type Wrapper struct {
 	eventClient              *eventbus.Client
 	discoKeyAdvertisementPub *eventbus.Publisher[events.DiscoKeyAdvertisement]
 
+	// connReject is storage for the optional connection-rejection
+	// callback installed via [SetConnRejectCallback]. The type is
+	// defined per build tag (see connreject.go / connreject_stub.go)
+	// so this always-built file does not reference
+	// tailscale.com/net/connreject.
+	connReject connRejectState
+
 	// tunDevStatsCloser closes TUN device stats polling. It may be nil if
 	// [HookPollTUNDevStats] is unset, or the hook func returned an error.
 	tunDevStatsCloser io.Closer
@@ -1238,6 +1245,8 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook pa
 			t.InjectOutbound(pkt)
 
 			// TODO(bradfitz): also send a TCP RST, after the TSMP message.
+
+			t.notifyConnRejectTSMPSent(rj)
 		}
 
 		return filter.Drop, gro
