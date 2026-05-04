@@ -82,6 +82,14 @@ type BuildOptions struct {
 	// (after the standard flags). Useful for things like
 	// "-tags=foo,bar".
 	GoFlags []string
+	// GOOS, if non-empty, sets GOOS for the build. Useful for
+	// cross-compiling and measuring binary size on a non-host
+	// platform. Note that the resulting binary cannot be run on
+	// the host, but sizetest only stats it; that's fine.
+	GOOS string
+	// GOARCH, if non-empty, sets GOARCH for the build. Same caveats
+	// as GOOS.
+	GOARCH string
 }
 
 // DefaultBuildOptions are the build options used when none are supplied.
@@ -177,9 +185,16 @@ replace tailscale.com => %s
 	cmd.Dir = dir
 	// Force module mode and disable network by default; the parent
 	// module's go.sum + module cache should satisfy us.
-	cmd.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		"GOFLAGS=-mod=mod",
 	)
+	if opts.GOOS != "" {
+		env = append(env, "GOOS="+opts.GOOS)
+	}
+	if opts.GOARCH != "" {
+		env = append(env, "GOARCH="+opts.GOARCH)
+	}
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("sizetest: building variant %q with `go %s`:\n%s\nerror: %v",
