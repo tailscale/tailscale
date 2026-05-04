@@ -39,6 +39,27 @@ func BenchmarkBasicThroughput(b *testing.B) {
 	bus.Close()
 }
 
+// BenchmarkBasicFuncThroughput is the SubscribeFunc analogue of
+// BenchmarkBasicThroughput: one publisher and one SubscribeFunc
+// callback, shoveling events as fast as they can through the
+// plumbing. Useful for tracking per-event allocation behavior on the
+// SubscribeFunc dispatch path.
+func BenchmarkBasicFuncThroughput(b *testing.B) {
+	bus := eventbus.New()
+	pcli := bus.Client(b.Name() + "-pub")
+	scli := bus.Client(b.Name() + "-sub")
+
+	type emptyEvent [0]byte
+
+	pub := eventbus.Publish[emptyEvent](pcli)
+	eventbus.SubscribeFunc(scli, func(emptyEvent) {})
+
+	for b.Loop() {
+		pub.Publish(emptyEvent{})
+	}
+	bus.Close()
+}
+
 func BenchmarkSubsThroughput(b *testing.B) {
 	bus := eventbus.New()
 	pcli := bus.Client(b.Name() + "-pub")
