@@ -457,6 +457,12 @@ main() {
 		gentoo)
 			# Rolling release, no version checking needed.
 			;;
+		solus)
+			# Rolling release, no version checking needed.
+			;;
+		aerynos|serpentos)
+			# Rolling release, no version checking needed.
+			;;
 		freebsd)
 			if [ "$VERSION" != "12" ] && \
 			   [ "$VERSION" != "13" ] && \
