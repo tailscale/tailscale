@@ -118,7 +118,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	upf.BoolVar(&upArgs.advertiseConnector, "advertise-connector", false, "advertise this node as an app connector")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
-	upf.BoolVar(&upArgs.postureChecking, "report-posture", false, hidden+"allow management plane to gather device posture information")
+	upf.BoolVar(&upArgs.postureChecking, "report-posture", false, "allow management plane to gather device posture information")
 
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		upf.StringVar(&upArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
