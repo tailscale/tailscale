@@ -6,7 +6,6 @@ package ipnlocal
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"maps"
 	"net/netip"
 	"slices"
@@ -1031,22 +1030,10 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// Add split DNS routes, with no regard to exit node configuration.
 	addSplitDNSRoutes(nm.DNS.Routes)
 
-	// Add split DNS routes for conn25
-	conn25DNSTargets := appc.PickSplitDNSPeers(nm.HasCap, nm.SelfNode, peers, prefs.AppConnector().Advertise)
-	if conn25DNSTargets != nil {
-		var m map[string][]*dnstype.Resolver
-		for domain, candidateSplitDNSPeers := range conn25DNSTargets {
-			for _, peer := range candidateSplitDNSPeers {
-				base := peerAPIBase(nm, peer)
-				if base == "" {
-					continue
-				}
-				mak.Set(&m, domain, []*dnstype.Resolver{{Addr: fmt.Sprintf("%s/dns-query", base)}})
-				break // Just make one resolver for the first peer we can get a peerAPIBase for.
-			}
-		}
-		if m != nil {
-			addSplitDNSRoutes(m)
+	if buildfeatures.HasConn25 && !prefs.AppConnector().Advertise {
+		// Add split DNS routes for conn25
+		if appRoutes := appc.AppDNSRoutes(nm.HasCap, nm.SelfNode); appRoutes != nil {
+			addSplitDNSRoutes(appRoutes)
 		}
 	}
 

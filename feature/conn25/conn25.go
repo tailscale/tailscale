@@ -147,6 +147,36 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	if !ok {
 		return errors.New("could not access system tun")
 	}
+	resolver := dnsManager.Resolver()
+	if resolver == nil {
+		return errors.New("dns manager resolver not ready")
+	}
+
+	if err := resolver.RegisterCustomScheme(appc.DNSAddrScheme, func(addr string) (string, error) {
+		scheme, appName, ok := strings.Cut(addr, ":")
+		if !ok || scheme != appc.DNSAddrScheme {
+			return "", fmt.Errorf("unexpected conn25 scheme %q", scheme)
+		}
+
+		if !e.conn25.isConfigured() {
+			return "", errors.New("conn25 not configured")
+		}
+		cfg, ok := e.conn25.getConfig()
+		if !ok {
+			return "", errors.New("conn25 no config found")
+		}
+		app, ok := cfg.appsByName[appName]
+		if !ok {
+			return "", errors.New("no app found for app name")
+		}
+		_, urlBase := e.pickConnectorURLBase(app)
+		if urlBase == "" {
+			return "", nil
+		}
+		return urlBase + "/dns-query", nil
+	}); err != nil {
+		return fmt.Errorf("could not register DNS resolver scheme: %w", err)
+	}
 
 	// Set up the DNS manager to rewrite responses for app domains
 	// to answer with Magic IPs.
@@ -925,17 +955,7 @@ func makePeerAPIReq(ctx context.Context, httpClient *http.Client, urlBase string
 	return nil
 }
 
-func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) (tailcfg.NodeView, error) {
-	cfg, ok := e.conn25.getConfig()
-	if !ok {
-		return tailcfg.NodeView{}, errors.New("not configured")
-	}
-	app, ok := cfg.appsByName[as.app]
-	if !ok {
-		e.conn25.logf("App not found for app: %s (domain: %s)", as.app, as.domain)
-		return tailcfg.NodeView{}, errors.New("app not found")
-	}
-
+func (e *extension) pickConnectorURLBase(app appctype.Conn25Attr) (tailcfg.NodeView, string) {
 	nb := e.host.NodeBackend()
 	peers := appc.PickConnector(nb, app)
 	var urlBase string
@@ -947,6 +967,20 @@ func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) (tailcf
 			break
 		}
 	}
+	return conn, urlBase
+}
+
+func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) (tailcfg.NodeView, error) {
+	cfg, ok := e.conn25.getConfig()
+	if !ok {
+		return tailcfg.NodeView{}, errors.New("not configured")
+	}
+	app, ok := cfg.appsByName[as.app]
+	if !ok {
+		e.conn25.client.logf("App not found for app: %s (domain: %s)", as.app, as.domain)
+		return tailcfg.NodeView{}, errors.New("app not found")
+	}
+	conn, urlBase := e.pickConnectorURLBase(app)
 	if urlBase == "" {
 		return tailcfg.NodeView{}, errors.New("no connector peer found to handle address assignment")
 	}

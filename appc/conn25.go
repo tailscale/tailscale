@@ -5,13 +5,14 @@ package appc
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
 	"strings"
 
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/appctype"
-	"tailscale.com/util/mak"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/util/set"
 )
 
@@ -54,71 +55,32 @@ func PickConnector(nb ipnext.NodeBackend, app appctype.Conn25Attr) []tailcfg.Nod
 	return matches
 }
 
-// PickSplitDNSPeers looks at the netmap peers capabilities and finds which peers
-// want to be connectors for which domains.
-func PickSplitDNSPeers(hasCap func(c tailcfg.NodeCapability) bool, self tailcfg.NodeView, peers map[tailcfg.NodeID]tailcfg.NodeView, isSelfEligibleConnector bool) map[string][]tailcfg.NodeView {
-	var m map[string][]tailcfg.NodeView
+// DNSAddrScheme is the custom URI scheme used for conn25-managed split DNS
+// entries to determine the destination at query time rather than configuration
+// time.
+const DNSAddrScheme = "tailscale-app"
+
+func AppDNSRoutes(hasCap func(c tailcfg.NodeCapability) bool, self tailcfg.NodeView) map[string][]*dnstype.Resolver {
 	if !hasCap(AppConnectorsExperimentalAttrName) {
-		return m
+		return nil
 	}
 	apps, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.AppConnectorAttr](self.CapMap(), AppConnectorsExperimentalAttrName)
 	if err != nil {
-		return m
+		return nil
 	}
-
-	// We strip the leading *. from any domains because the OS treats all domains
-	// that we pass to it as wildcard domains, and the OS would treat the * character
-	// as a literal domain component instead of treating it as a wildcard.
-	// We also use a Set to deduplicate the domains we pass to the OS in case removing
-	// the *. prefix resulted in duplicate entries.
-	tagToDomain := make(map[string]set.Set[string])
-	selfTags := set.SetOf(self.Tags().AsSlice())
-	selfRoutedDomains := set.Set[string]{}
+	appNamesByDomain := map[string]string{}
 	for _, app := range apps {
-		domains := make(set.Set[string])
 		for _, domain := range app.Domains {
-			domains.Add(strings.ToLower(strings.TrimPrefix(domain, "*.")))
-		}
-		for _, tag := range app.Connectors {
-			if tagToDomain[tag] == nil {
-				tagToDomain[tag] = set.Set[string]{}
-			}
-			tagToDomain[tag].AddSet(domains)
-			if isSelfEligibleConnector && selfTags.Contains(tag) {
-				selfRoutedDomains.AddSet(domains)
-			}
+			domain, _ = strings.CutPrefix(domain, "*.")
+			domain = strings.ToLower(domain)
+			// in the case of multiple apps specifying the same domain (which is misconfiguration
+			// that should be validated at point of input) last write wins.
+			appNamesByDomain[domain] = app.Name
 		}
 	}
-	// NodeIDs are Comparable, and we have a map of NodeID to NodeView anyway, so
-	// use a Set of NodeIDs to deduplicate, and populate into a []NodeView later.
-	var work map[string]set.Set[tailcfg.NodeID]
-	for _, peer := range peers {
-		if !isPeerEligibleConnector(peer) {
-			continue
-		}
-		for _, t := range peer.Tags().All() {
-			domains := tagToDomain[t]
-			for domain := range domains {
-				if selfRoutedDomains.Contains(domain) {
-					continue
-				}
-				if work[domain] == nil {
-					mak.Set(&work, domain, set.Set[tailcfg.NodeID]{})
-				}
-				work[domain].Add(peer.ID())
-			}
-		}
-	}
-
-	// Populate m. Make a []tailcfg.NodeView from []tailcfg.NodeID using the peers map.
-	// And sort it to our preference.
-	for domain, ids := range work {
-		nodes := make([]tailcfg.NodeView, 0, ids.Len())
-		for id := range ids {
-			nodes = append(nodes, peers[id])
-		}
-		sortByPreference(nodes)
-		mak.Set(&m, domain, nodes)
+	m := make(map[string][]*dnstype.Resolver, len(appNamesByDomain))
+	for domain, appName := range appNamesByDomain {
+		m[domain] = []*dnstype.Resolver{{Addr: fmt.Sprintf("%s:%s", DNSAddrScheme, appName)}}
 	}
 	return m
 }
