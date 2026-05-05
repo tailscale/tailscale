@@ -21,6 +21,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
@@ -32,6 +33,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
 )
@@ -1393,14 +1395,14 @@ type testSafeBackend struct {
 	sys *tsd.System
 }
 
-func newTestSafeBackend() *testSafeBackend {
-	sb := &testSafeBackend{}
-	sys := &tsd.System{}
-	sys.Dialer.Set(&tsdial.Dialer{Logf: logger.Discard})
-	sys.DNSManager.Set(&dns.Manager{})
+func newTestSafeBackend(t *testing.T) *testSafeBackend {
+	sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	sys.Dialer.Set(dialer)
+	ht := sys.HealthTracker.Get()
+	sys.DNSManager.Set(dns.NewManager(logger.Discard, nil, ht, dialer, nil, nil, "", sys.Bus.Get()))
 	sys.Tun.Set(&tstun.Wrapper{})
-	sb.sys = sys
-	return sb
+	return &testSafeBackend{sys: sys}
 }
 
 func (b *testSafeBackend) Sys() *tsd.System { return b.sys }
@@ -1439,7 +1441,7 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 
 	ext := &extension{
 		conn25:  newConn25(logger.Discard),
-		backend: newTestSafeBackend(),
+		backend: newTestSafeBackend(t),
 	}
 	authReconfigAsyncCalled := make(chan struct{}, 1)
 	if err := ext.Init(&testHost{
@@ -2034,7 +2036,7 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 
 	ext := &extension{
 		conn25:  newConn25(logger.Discard),
-		backend: newTestSafeBackend(),
+		backend: newTestSafeBackend(t),
 	}
 	authReconfigAsyncCalled := make(chan struct{}, 1)
 	if err := ext.Init(&testHost{
