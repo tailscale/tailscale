@@ -5458,12 +5458,16 @@ func shouldUseOneCGNATRoute(logf logger.Logf, mon *netmon.Monitor, controlKnobs 
 		return true
 	}
 
-	// Also prefer to do this on the Mac, so that we don't need to constantly
-	// update the network extension configuration (which is disruptive to
-	// Chrome, see https://github.com/tailscale/tailscale/issues/3102). Only
-	// use fine-grained routes if another interfaces is also using the CGNAT
+	// Prefer a single CGNAT route on platforms where updateing the VPN
+	// configuration is espensive. On macOS, changing the network extension
+	// configuration can disrupt existing connections notably Chrome; see
+	// https://github.com/tailscale/tailscale/issues/3102). On Android, updating
+	// VpnService.Builder configuration requires establishing a new VPN interface,
+	// which tears down long lived TCP connections.
+	//
+	// Only use fine-grained routes if another interfaces is also using the CGNAT
 	// IP range.
-	if versionOS == "macOS" {
+	if versionOS == "macOS" || versionOS == "android" {
 		hasCGNATInterface, err := mon.HasCGNATInterface()
 		if err != nil {
 			logf("shouldUseOneCGNATRoute: Could not determine if any interfaces use CGNAT: %v", err)
