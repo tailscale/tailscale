@@ -138,6 +138,13 @@ func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
 func (de *endpoint) setBestAddrLocked(v addrQuality) {
 	if v.epAddr != de.bestAddr.epAddr {
 		de.probeUDPLifetime.resetCycleEndpointLocked()
+
+		// Reaching here, if we are using data from a cached netmap and we are
+		// upgrading from an invalid (missing) address to a valid one, increment
+		// the counter for peers established.
+		if !de.bestAddr.ap.IsValid() && v.ap.IsValid() && de.c.usingCachedNetmap.Load() {
+			metricCachedPeerContactDirect.Add(1)
+		}
 	}
 	de.bestAddr = v
 }

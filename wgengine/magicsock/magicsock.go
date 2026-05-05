@@ -272,6 +272,9 @@ type Conn struct {
 	// discoAtomic is the current disco private and public keypair for this conn.
 	discoAtomic discoAtomic
 
+	// usingCacheNetmap is whether the latest update to self and peersByID are from a cached network map
+	usingCachedNetmap atomic.Bool
+
 	// ============================================================
 	// mu guards all following fields; see userspaceEngine lock
 	// ordering rules against the engine. For derphttp, mu must
@@ -355,18 +358,19 @@ type Conn struct {
 	// magicsock could do with any complexity reduction it can get.
 	netInfoLast *tailcfg.NetInfo
 
-	derpMap            *tailcfg.DERPMap                    // nil (or zero regions/nodes) means DERP is disabled
-	self               tailcfg.NodeView                    // from last SetNetworkMap
-	peersByID          map[tailcfg.NodeID]tailcfg.NodeView // current peer set, keyed by NodeID. Maintained by SetNetworkMap/UpsertPeer/RemovePeer. Note: per-field NodeMutation patches received in UpdateNetmapDelta are never applied to these snapshots.
-	filt               *filter.Filter                      // from last SetFilter
-	relayClientEnabled bool                                // whether we can allocate UDP relay endpoints on UDP relay servers or receive CallMeMaybeVia messages from peers
-	lastFlags          debugFlags                          // at time of last SetNetworkMap
-	privateKey         key.NodePrivate                     // WireGuard private key for this node
-	everHadKey         bool                                // whether we ever had a non-zero private key
-	myDerp             int                                 // nearest DERP region ID; 0 means none/unknown
-	homeless           bool                                // if true, don't try to find & stay conneted to a DERP home (myDerp will stay 0)
-	derpStarted        chan struct{}                       // closed on first connection to DERP; for tests & cleaner Close
-	activeDerp         map[int]activeDerp                  // DERP regionID -> connection to a node in that region
+	derpMap   *tailcfg.DERPMap                    // nil (or zero regions/nodes) means DERP is disabled
+	self      tailcfg.NodeView                    // from last SetNetworkMap
+	peersByID map[tailcfg.NodeID]tailcfg.NodeView // current peer set, keyed by NodeID. Maintained by SetNetworkMap/UpsertPeer/RemovePeer. Note: per-field NodeMutation patches received in UpdateNetmapDelta are never applied to these snapshots.
+
+	filt               *filter.Filter     // from last SetFilter
+	relayClientEnabled bool               // whether we can allocate UDP relay endpoints on UDP relay servers or receive CallMeMaybeVia messages from peers
+	lastFlags          debugFlags         // at time of last SetNetworkMap
+	privateKey         key.NodePrivate    // WireGuard private key for this node
+	everHadKey         bool               // whether we ever had a non-zero private key
+	myDerp             int                // nearest DERP region ID; 0 means none/unknown
+	homeless           bool               // if true, don't try to find & stay conneted to a DERP home (myDerp will stay 0)
+	derpStarted        chan struct{}      // closed on first connection to DERP; for tests & cleaner Close
+	activeDerp         map[int]activeDerp // DERP regionID -> connection to a node in that region
 	prevDerp           map[int]*syncs.WaitGroupChan
 
 	// derpRoute contains optional alternate routes to use as an
@@ -2334,6 +2338,13 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 			c.logf("[unexpected] %s from peer via DERP whose netmap discokey != disco source", msgType)
 			return
 		}
+
+		// Reaching here, if we are using data from a cached network map the
+		// receipt of a CallMeMaybe from a peer indicates we have a sufficiently
+		// viable connection to that peer to count it as active while cached.
+		if c.usingCachedNetmap.Load() {
+			metricCachedPeerContactDERP.Add(1)
+		}
 		if isVia {
 			c.dlogf("[v1] magicsock: disco: %v<-%v via %v (%v, %v)  got call-me-maybe-via, %d endpoints",
 				c.discoAtomic.Short(), epDisco.short, via.ServerDisco.ShortString(),
@@ -2954,9 +2965,10 @@ func (c *candidatePeerRelay) isValid() bool {
 	return !c.nodeKey.IsZero() && !c.discoKey.IsZero()
 }
 
-// SetNetworkMap updates the network map with the given self node and peers.
-// It must be called synchronously from the caller's goroutine to ensure
-// magicsock has the current state before subsequent operations proceed.
+// SetNetworkMap updates the network map with the given self node and peers
+// reported by the control plane (rather than cached).  It must be called
+// synchronously from the caller's goroutine to ensure magicsock has the
+// current state before subsequent operations proceed.
 //
 // self may be invalid if there's no network map.
 //
@@ -2966,6 +2978,18 @@ func (c *candidatePeerRelay) isValid() bool {
 // initial netmap and for changes to self or to global state (filter, DERP,
 // etc.) that aren't covered by the per-peer methods.
 func (c *Conn) SetNetworkMap(self tailcfg.NodeView, peers []tailcfg.NodeView) {
+	c.setNetworkMapInternal(self, peers, false)
+}
+
+// SetNetworkMapCached behaves as SetNetworkMap, but indicates to c that the
+// data provided are from a cache rather than the control plane. The same
+// constraints otherwise apply.
+func (c *Conn) SetNetworkMapCached(self tailcfg.NodeView, peers []tailcfg.NodeView) {
+	c.setNetworkMapInternal(self, peers, true)
+}
+
+// setNetworkMapInternal is the shared implementation of SetNetworkMap and SetNetworkMapCached.
+func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.NodeView, isCached bool) {
 	peersChanged := c.updateNodes(self, peers)
 
 	relayClientEnabled := self.Valid() &&
@@ -2979,6 +3003,7 @@ func (c *Conn) SetNetworkMap(self tailcfg.NodeView, peers []tailcfg.NodeView) {
 	selfView := c.self
 	peersSnap := c.peerSnapshotLocked()
 	isClosed := c.closed
+	c.usingCachedNetmap.Store(isCached)
 	c.mu.Unlock() // release c.mu before potentially calling c.updateRelayServersSet which is O(m * n)
 
 	if isClosed {
@@ -4198,6 +4223,10 @@ var (
 	metricTSMPDiscoKeyAdvertisementReceived  = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_received")
 	metricTSMPDiscoKeyAdvertisementApplied   = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_applied")
 	metricTSMPDiscoKeyAdvertisementUnchanged = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_unchanged")
+
+	// Counters for peer contacts established using cached network map data.
+	metricCachedPeerContactDERP   = clientmetric.NewCounter("magicsock_cached_peer_contact_derp")
+	metricCachedPeerContactDirect = clientmetric.NewCounter("magicsock_cached_peer_contact_direct")
 )
 
 // newUDPLifetimeCounter returns a new *clientmetric.Metric with the provided

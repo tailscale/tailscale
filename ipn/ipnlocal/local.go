@@ -6587,7 +6587,11 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	b.currentNode().SetNetMap(nm)
 	if ms, ok := b.sys.MagicSock.GetOK(); ok {
 		if nm != nil {
-			ms.SetNetworkMap(nm.SelfNode, nm.Peers)
+			if nm.Cached {
+				ms.SetNetworkMapCached(nm.SelfNode, nm.Peers)
+			} else {
+				ms.SetNetworkMap(nm.SelfNode, nm.Peers)
+			}
 		} else {
 			ms.SetNetworkMap(tailcfg.NodeView{}, nil)
 		}
