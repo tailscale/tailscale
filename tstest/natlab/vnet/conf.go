@@ -445,6 +445,12 @@ func (n *Network) PostConnectedToControl() {
 	n.network.SetControlBlackholed(n.postConnectBlackholeControl)
 }
 
+// BlackholeControlForAddr sets weither the network should drop all control
+// traffic for the specified addr starting immediately.
+func (n *Network) BlackholeControlForAddr(addr netip.Addr) {
+	n.network.BlackholeControlForAddr(addr)
+}
+
 // NetworkService is a service that can be added to a network.
 type NetworkService string
 

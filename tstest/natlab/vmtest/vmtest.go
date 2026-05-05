@@ -436,6 +436,14 @@ func (n *Node) LanIP(net *vnet.Network) netip.Addr {
 	return n.vnetNode.LanIP(net)
 }
 
+// DropControlTraffic sets up a blackhole for control traffic for just this
+// node on all the networks belonging to the node.
+func (n *Node) DropControlTraffic() {
+	for _, network := range n.nets {
+		network.BlackholeControlForAddr(n.LanIP(network))
+	}
+}
+
 // NodeOption types for configuring nodes.
 
 type nodeOptOS OSImage
@@ -1668,4 +1676,69 @@ func findKernelPath(goMod string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("gokrazy-kernel not found in %s", goMod)
+}
+
+// PingRoute describes what connection type was used to transfer a Disco ping.
+type PingRoute string
+
+const (
+	PingRouteDirect PingRoute = "direct"
+	PingRouteDERP   PingRoute = "derp"
+	PingRouteLocal  PingRoute = "local"
+	PingRouteNil    PingRoute = "nil"
+)
+
+// classifyPing finds what kind of route has been used on a ping path.
+// It is only really relevant for DiscoPings.
+func classifyPing(pr *ipnstate.PingResult) PingRoute {
+	if pr == nil {
+		return PingRouteNil
+	}
+
+	if pr.Endpoint == "" {
+		return PingRouteDERP
+	}
+
+	ap, err := netip.ParseAddrPort(pr.Endpoint)
+	if err == nil && ap.Addr().IsPrivate() {
+		return PingRouteLocal
+	}
+	return PingRouteDirect
+}
+
+// PingExpect retries disco pings until the result matches wantRoute or the
+// timeout is reached. It is using DiscoPings as this is the only ping type
+// that can classify the connection type.
+func (e *Env) PingExpect(from, to *Node, wantRoute PingRoute, timeout time.Duration) error {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(e.t.Context(), timeout)
+	defer cancel()
+	var lastRoute PingRoute
+	toSt, err := to.agent.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("ping: can't get %s status: %w", to.name, err)
+	}
+	if len(toSt.Self.TailscaleIPs) == 0 {
+		return fmt.Errorf("ping: %s has no Tailscale IPs", to.name)
+	}
+	targetIP := toSt.Self.TailscaleIPs[0]
+	for ctx.Err() == nil {
+		pingCtx, pingCancel := context.WithTimeout(ctx, 3*time.Second)
+		pr, err := from.agent.PingWithOpts(pingCtx, targetIP, tailcfg.PingDisco, local.PingOpts{})
+		pingCancel()
+		if err == nil && pr.Err == "" {
+			if got := classifyPing(pr); got == wantRoute {
+				e.t.Logf("Saw ping type %q", got)
+				return nil
+			} else {
+				e.t.Logf("Saw ping type %q", got)
+				lastRoute = got
+			}
+		}
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-ctx.Done():
+		}
+	}
+	return fmt.Errorf("ping route = %q, want %q (after %v)", lastRoute, wantRoute, timeout)
 }

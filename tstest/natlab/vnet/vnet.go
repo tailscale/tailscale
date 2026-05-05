@@ -588,6 +588,9 @@ type network struct {
 	// writers is a map of MAC -> networkWriters to write packets to that MAC.
 	// It contains entries for connected nodes only.
 	writers syncs.Map[MAC, networkWriter] // MAC -> to networkWriter for that MAC
+
+	blackholeMu  sync.Mutex
+	blackholeMap map[netip.Addr]netip.Addr // blackholeMap contains address pairs for dropping traffic (in either direction)
 }
 
 // registerWriter registers a client address with a MAC address.
@@ -633,6 +636,19 @@ func (n *network) MACOfIP(ip netip.Addr) (_ MAC, ok bool) {
 // network.
 func (n *network) SetControlBlackholed(v bool) {
 	n.blackholeControl = v
+}
+
+// BlackholeControlForAddr sets up a map entry, ensuring that traffic to or from
+// control from the addr is dropped.
+func (n *network) BlackholeControlForAddr(addr netip.Addr) {
+	n.blackholeMu.Lock()
+	defer n.blackholeMu.Unlock()
+
+	if addr.Is6() {
+		mak.Set(&n.blackholeMap, addr, fakeControl.v6)
+	} else {
+		mak.Set(&n.blackholeMap, addr, fakeControl.v4)
+	}
 }
 
 // nodeNIC represents a single network interface on a node.
@@ -1603,6 +1619,17 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 			// Blackhole the packet.
 			return
 		}
+
+		// Drop traffic to/from address pairs in the blackholeMap.
+		n.blackholeMu.Lock()
+		defer n.blackholeMu.Unlock()
+		if src, ok := n.blackholeMap[flow.dst]; ok && flow.src == src {
+			return
+		}
+		if dst, ok := n.blackholeMap[flow.src]; ok && flow.dst == dst {
+			return
+		}
+
 		var base *layers.BaseLayer
 		proto := header.IPv4ProtocolNumber
 		if v4, ok := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4); ok {

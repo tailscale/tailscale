@@ -919,9 +919,6 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 	aNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.EasyNAT)
 	bNet := env.AddNetwork("2.0.0.1", "192.168.2.1/24", vnet.EasyNAT)
 
-	aNet.SetPostConnectControlBlackhole(true)
-	bNet.SetPostConnectControlBlackhole(true)
-
 	a := env.AddNode("a", aNet,
 		vmtest.OS(vmtest.Gokrazy),
 		tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
@@ -945,8 +942,9 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 	connectStep.End(nil)
 
 	cutControlStep.Begin()
-	aNet.PostConnectedToControl()
-	bNet.PostConnectedToControl()
+	// Both nodes lose connection to control
+	a.DropControlTraffic()
+	b.DropControlTraffic()
 	env.ControlServer().SetOnMapRequest(func(nk key.NodePublic) {
 		panic(fmt.Sprintf("got connection from %v", nk))
 	})
@@ -977,4 +975,57 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	pingStep.End(nil)
+}
+
+// TestDirectConnectionWithCachedNetmap verifies that two nodes with netmap
+// caching enabled (NodeAttrCacheNetworkMaps) can re-establish a direct
+// WireGuard tunnel after one is restarted while the control server is
+// unreachable. After restart the node must use only its on-disk cached
+// netmaps to re-connect and ping the other (still online) node.
+func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
+	env := vmtest.New(t)
+
+	aNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.EasyNAT)
+	bNet := env.AddNetwork("2.0.0.1", "192.168.2.1/24", vnet.EasyNAT)
+
+	a := env.AddNode("a", aNet,
+		vmtest.OS(vmtest.Gokrazy),
+		tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
+	b := env.AddNode("b", bNet,
+		vmtest.OS(vmtest.Gokrazy),
+		tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
+
+	cutControlStep := env.AddStep("Cut control server access")
+	restartStep := env.AddStep("Restart tailscaled on a")
+	tsmpPingStep := env.AddStep("Ping a → b TSMP (cached netmap, no control)")
+	DiscoPingStep := env.AddStep("Ping a → b Disco (want Direct)")
+
+	env.Start()
+
+	cutControlStep.Begin()
+	a.DropControlTraffic()
+	env.ControlServer().SetOnMapRequest(func(nk key.NodePublic) {
+		if env.ControlServer().Node(nk).Name == a.Name() {
+			panic(fmt.Sprintf("got connection from %v", a.Name()))
+		}
+	})
+	cutControlStep.End(nil)
+
+	restartStep.Begin()
+	env.RestartTailscaled(a)
+	restartStep.End(nil)
+
+	tsmpPingStep.Begin()
+	if err := env.Ping(a, b, tailcfg.PingTSMP, 30*time.Second); err != nil {
+		tsmpPingStep.End(err)
+		t.Fatal(err)
+	}
+	tsmpPingStep.End(nil)
+
+	DiscoPingStep.Begin()
+	if err := env.PingExpect(a, b, vmtest.PingRouteDirect, 30*time.Second); err != nil {
+		DiscoPingStep.End(err)
+		t.Fatal(err)
+	}
+	DiscoPingStep.End(nil)
 }
