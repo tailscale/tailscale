@@ -566,9 +566,7 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 			},
 			sshCommand:       "echo hello",
 			wantClientOutput: "session rejected\r\n",
-			// 254 once recording failures get their own exit code; the
-			// current code exits 1 here.
-			wantExitCode: 0,
+			wantExitCode:     254,
 
 			clientOutputMustNotContain: []string{"hello"},
 		},
