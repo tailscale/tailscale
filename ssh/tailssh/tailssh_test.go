@@ -20,7 +20,6 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
-	"os/exec"
 	"os/user"
 	"reflect"
 	"runtime"
@@ -33,27 +32,21 @@ import (
 	"testing/synctest"
 	"time"
 
-	gliderssh "github.com/tailscale/gliderssh"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"tailscale.com/cmd/testwrapper/flakytest"
-	"tailscale.com/ipn/ipnlocal"
-	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/memnet"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
 	testssh "tailscale.com/tempfork/sshtest/ssh"
-	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
-	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/lineiter"
 	"tailscale.com/util/must"
 	"tailscale.com/version/distro"
-	"tailscale.com/wgengine"
 )
 
 func TestMatchRule(t *testing.T) {
@@ -523,6 +516,7 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 		handler          func(w http.ResponseWriter, r *http.Request)
 		sshCommand       string
 		wantClientOutput string
+		wantExitCode     int // SSH exit status; 0 = don't check. 254 = recording infra failure.
 
 		clientOutputMustNotContain []string
 	}{
@@ -533,6 +527,7 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 			},
 			sshCommand:       "echo hello",
 			wantClientOutput: "session rejected\r\n",
+			wantExitCode:     254,
 
 			clientOutputMustNotContain: []string{"hello"},
 		},
@@ -579,6 +574,16 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 					t.Logf("client got: %q: %v", got, err)
 				} else {
 					t.Errorf("client did not get kicked out: %q", got)
+				}
+				if tt.wantExitCode != 0 {
+					var exitErr *testssh.ExitError
+					if errors.As(err, &exitErr) {
+						if got := exitErr.ExitStatus(); got != tt.wantExitCode {
+							t.Errorf("exit code = %d, want %d", got, tt.wantExitCode)
+						}
+					} else {
+						t.Errorf("want *ssh.ExitError, got %T: %v", err, err)
+					}
 				}
 				gotStr := string(got)
 				if !strings.HasSuffix(gotStr, tt.wantClientOutput) {
@@ -1061,88 +1066,8 @@ func TestSSHAuthFlow(t *testing.T) {
 }
 
 func TestSSH(t *testing.T) {
-	logf := tstest.WhileTestRunningLogger(t)
-	sys := tsd.NewSystem()
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker.Get(), sys.UserMetricsRegistry(), sys.Bus.Get())
-	if err != nil {
-		t.Fatal(err)
-	}
-	sys.Set(eng)
-	sys.Set(new(mem.Store))
-	lb, err := ipnlocal.NewLocalBackend(logf, logid.PublicID{}, sys, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lb.Shutdown()
-	dir := t.TempDir()
-	lb.SetVarRoot(dir)
-
-	srv := &server{
-		lb:   lb,
-		logf: logf,
-	}
-	sc, err := srv.newConn()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Remove the auth checks for the test
-	sc.insecureSkipTailscaleAuth = true
-
-	u, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-	um, err := userLookup(u.Username)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sc.localUser = um
-	sc.info = &sshConnInfo{
-		sshUser: "test",
-		src:     netip.MustParseAddrPort("1.2.3.4:32342"),
-		dst:     netip.MustParseAddrPort("1.2.3.5:22"),
-		node:    (&tailcfg.Node{}).View(),
-		uprof:   tailcfg.UserProfile{},
-	}
-	sc.action0 = &tailcfg.SSHAction{Accept: true}
-	sc.finalAction = sc.action0
-	sc.authCompleted.Store(true)
-
-	sc.Handler = func(s gliderssh.Session) {
-		sc.newSSHSession(s).run()
-	}
-
-	ln, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	port := ln.Addr().(*net.TCPAddr).Port
-
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				if !errors.Is(err, net.ErrClosed) {
-					t.Errorf("Accept: %v", err)
-				}
-				return
-			}
-			go sc.HandleConn(c)
-		}
-	}()
-
-	execSSH := func(args ...string) *exec.Cmd {
-		cmd := exec.Command("ssh",
-			"-F",
-			"none",
-			"-v",
-			"-p", fmt.Sprint(port),
-			"-o", "StrictHostKeyChecking=no",
-			"user@127.0.0.1")
-		cmd.Args = append(cmd.Args, args...)
-		return cmd
-	}
+	h := newTestSSHHarness(t)
+	u, execSSH := h.user, h.execSSH
 
 	t.Run("env", func(t *testing.T) {
 		if cibuild.On() {
