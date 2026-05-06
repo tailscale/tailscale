@@ -2909,9 +2909,12 @@ func TestDeps(t *testing.T) {
 			"golang.org/x/crypto/ssh/internal/bcrypt_pbkdf": "tsnet should not depend on SSH",
 			"tailscale.com/ipn/store/awsstore":              "tsnet callers wanting AWS state storage should import awsstore themselves",
 			"tailscale.com/ipn/store/kubestore":             "tsnet callers wanting Kubernetes state storage should import kubestore themselves",
+			"tailscale.com/wif":                             "tsnet callers wanting workload identity federation should import tailscale.com/feature/identityfederation themselves",
 		},
 		OnDep: func(dep string) {
-			if strings.Contains(dep, "portlist") {
+			if strings.Contains(dep, "portlist") ||
+				strings.Contains(dep, "github.com/aws/") ||
+				strings.Contains(dep, "k8s.io/") {
 				t.Errorf("unexpected dep: %q", dep)
 			}
 		},

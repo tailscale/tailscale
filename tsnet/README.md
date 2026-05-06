@@ -40,10 +40,19 @@ On first run, if no [Server.AuthKey](https://pkg.go.dev/tailscale.com/tsnet#Serv
 A [Server](https://pkg.go.dev/tailscale.com/tsnet#Server) authenticates using, in order of precedence:
 
  1. [Server.AuthKey](https://pkg.go.dev/tailscale.com/tsnet#Server.AuthKey).
+
  2. The TS\_AUTHKEY environment variable.
+
  3. The TS\_AUTH\_KEY environment variable.
+
  4. An OAuth client secret ([Server.ClientSecret](https://pkg.go.dev/tailscale.com/tsnet#Server.ClientSecret) or TS\_CLIENT\_SECRET), used to mint an auth key.
- 5. Workload identity federation ([Server.ClientID](https://pkg.go.dev/tailscale.com/tsnet#Server.ClientID) plus [Server.IDToken](https://pkg.go.dev/tailscale.com/tsnet#Server.IDToken) or [Server.Audience](https://pkg.go.dev/tailscale.com/tsnet#Server.Audience)).
+
+ 5. Workload identity federation ([Server.ClientID](https://pkg.go.dev/tailscale.com/tsnet#Server.ClientID) plus [Server.IDToken](https://pkg.go.dev/tailscale.com/tsnet#Server.IDToken) or [Server.Audience](https://pkg.go.dev/tailscale.com/tsnet#Server.Audience)). Available only if the program imports the feature:
+
+    import \_ "tailscale.com/feature/identityfederation"
+
+    The feature is not linked by default to keep the AWS SDK and other cloud-provider dependencies out of programs that don't use workload identity federation.
+
  6. An interactive login URL printed to [Server.UserLogf](https://pkg.go.dev/tailscale.com/tsnet#Server.UserLogf).
 
 If the node is already enrolled (state found in [Server.Store](https://pkg.go.dev/tailscale.com/tsnet#Server.Store)), the auth key is ignored unless TSNET\_FORCE\_LOGIN=1 is set.
