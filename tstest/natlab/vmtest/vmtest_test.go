@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/netip"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +22,20 @@ import (
 	"tailscale.com/types/netmap"
 )
 
+// skipIfNotMacOSArm64 skips the test when the host isn't a macOS arm64 host.
+// macOS VM tests require Apple Virtualization.framework via tailmac.
+// AddNode also enforces this when a macOS node is added, but having an
+// explicit skip at the top of macOS-only tests makes the requirement
+// obvious to readers.
+func skipIfNotMacOSArm64(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skipf("macOS VM tests require a macOS arm64 host (got %s/%s)", runtime.GOOS, runtime.GOARCH)
+	}
+}
+
 func TestMacOSAndLinuxCanPing(t *testing.T) {
+	skipIfNotMacOSArm64(t)
 	env := vmtest.New(t)
 
 	lan := env.AddNetwork("192.168.1.1/24")
@@ -39,6 +53,7 @@ func TestMacOSAndLinuxCanPing(t *testing.T) {
 }
 
 func TestTwoMacOSVMsCanPing(t *testing.T) {
+	skipIfNotMacOSArm64(t)
 	env := vmtest.New(t)
 
 	lan := env.AddNetwork("192.168.1.1/24")

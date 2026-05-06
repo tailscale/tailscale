@@ -1,0 +1,89 @@
+# Run the full natlab/vmtest opt-in test suite. These tests boot QEMU VMs
+# (gokrazy, Ubuntu, FreeBSD) and exercise vnet-driven networking scenarios.
+# They are gated behind --run-vm-tests because they need KVM and are slow.
+#
+# This workflow runs:
+#   - on demand (workflow_dispatch)
+#   - on PRs that carry the "natlab" label
+#   - on main, every 12 hours, via cron
+#
+# A separate workflow (.github/workflows/natlab-basic.yml) runs a single
+# canary natlab test on every PR; this one runs the full suite.
+name: "natlab-test"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled, synchronize, reopened]
+  schedule:
+    # Every 12 hours, off-the-hour to avoid GitHub's :00 cron-stampede window.
+    - cron: "23 3,15 * * *"
+
+jobs:
+  natlab-test:
+    # Gate on label for PRs; always run for manual and scheduled triggers.
+    # PR types is broader than [labeled] so an existing labeled PR keeps
+    # running on subsequent pushes; we filter by label name here.
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'natlab'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install qemu
+        run: |
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get -y update
+          sudo apt-get -y remove man-db
+          sudo apt-get install -y qemu-system-x86 qemu-utils
+
+      # Cache the downloaded Ubuntu/FreeBSD cloud images. Each is a few hundred
+      # MB; downloading them on every run dominates wall time. The cache key is
+      # tied to images.go (where URLs and SHA256s live) so it invalidates when
+      # any image source changes.
+      - name: Cache cloud VM images (Ubuntu, FreeBSD)
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cache/tailscale/vmtest/images
+          key: natlab-vmimages-${{ hashFiles('tstest/natlab/vmtest/images.go') }}
+          restore-keys: |
+            natlab-vmimages-
+
+      # Cache the Go build cache. The gokrazy image build below compiles
+      # tailscaled, and the test runs compile per-VM Tailscale binaries.
+      - name: Cache Go build cache
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cache/go-build
+          key: natlab-gobuild-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            natlab-gobuild-${{ hashFiles('go.sum') }}-
+            natlab-gobuild-
+
+      - name: Build gokrazy VM image
+        # The test will build this on demand if missing, but doing it up-front
+        # keeps build errors visible without burning into go test -timeout.
+        run: |
+          make -C gokrazy natlab
+
+      - name: Run natlab vmtest suite
+        run: |
+          ./tool/go test -v -timeout=30m -count=1 ./tstest/natlab/vmtest/... --run-vm-tests
+
+      - name: Run tstest/integration/nat suite
+        run: |
+          ./tool/go test -v -timeout=20m -count=1 ./tstest/integration/nat/... --run-vm-tests
