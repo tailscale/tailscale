@@ -267,7 +267,7 @@ func main() {
 		if cached {
 			lastCol = "(cached)"
 		} else {
-			lastCol = fmt.Sprintf("%.3f", testDur.Seconds())
+			lastCol = fmt.Sprintf("%.3fs", testDur.Seconds())
 		}
 		fmt.Printf("%s\t%s\t%v\n", outcome, pkg, lastCol)
 	}
