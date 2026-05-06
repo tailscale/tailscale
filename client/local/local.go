@@ -1500,8 +1500,13 @@ func (w *IPNBusWatcher) Next() (ipn.Notify, error) {
 }
 
 // SuggestExitNode requests an exit node suggestion and returns the exit node's details.
-func (lc *Client) SuggestExitNode(ctx context.Context) (apitype.ExitNodeSuggestionResponse, error) {
-	body, err := lc.get200(ctx, "/localapi/v0/suggest-exit-node")
+func (lc *Client) SuggestExitNode(ctx context.Context, probe bool) (apitype.ExitNodeSuggestionResponse, error) {
+	var v url.Values
+	if buildfeatures.HasRouteCheck {
+		v.Set("probe", strconv.FormatBool(probe))
+		v.Set("timeout", "") // default
+	}
+	body, err := lc.send(ctx, "POST", "/localapi/v0/suggest-exit-node?"+v.Encode(), 200, nil)
 	if err != nil {
 		return apitype.ExitNodeSuggestionResponse{}, err
 	}

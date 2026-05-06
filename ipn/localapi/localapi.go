@@ -7,6 +7,7 @@ package localapi
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -1669,6 +1670,17 @@ func defBool(a string, def bool) bool {
 	return v
 }
 
+func defDuration(a string, def time.Duration) time.Duration {
+	if a == "" {
+		return def
+	}
+	v, err := time.ParseDuration(a)
+	if err != nil {
+		return def
+	}
+	return v
+}
+
 // serveUpdateCheck returns the ClientVersion from Status, which contains
 // information on whether an update is available, and if so, what version,
 // *if* we support auto-updates on this platform. If we don't, this endpoint
@@ -1818,16 +1830,59 @@ func dnsMessageTypeForString(s string) (t dnsmessage.Type, err error) {
 	return 0, errors.New("unknown DNS message type: " + s)
 }
 
+// HookRouteCheckRefresh is the hook to request a refresh of the routecheck Report
+// for this LocalBackend.
+// It is used by serveSuggestExitNode to probe for reachable exit nodes
+// before it makes a suggestion.
+var HookRouteCheckRefresh feature.Hook[func(*ipnlocal.LocalBackend, context.Context, time.Duration) error]
+
 // serveSuggestExitNode serves a POST endpoint for returning a suggested exit node.
 func (h *Handler) serveSuggestExitNode(w http.ResponseWriter, r *http.Request) {
 	if !buildfeatures.HasUseExitNode {
 		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
 		return
 	}
-	if r.Method != httpm.GET {
-		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
+
+	switch r.Method {
+	case httpm.GET:
+		// The GET method is inappropriate because it isn’t cacheable.
+		// However, we retain it for backwards compatibility.
+		//
+		// The original implementation used to only allow GET requests,
+		// but since this endpoint powers the `tailscale exit-node suggest` command
+		// whose results can change based on the shape of the network,
+		// it was never a proper GET method in the first place.
+		//
+		// Now that the suggestions are backed by routecheck
+		// and we provide the user the ability to trigger a probe,
+		// this is obviously a POST method because it has side-effects.
+		// However, we don’t want to break existing clients,
+		// so we silently support the old GET method
+		// without the extra query parameters.
+		//
+		// This is also why the default case returns a "want POST" error
+		// and not an "only POST allowed" like the other endpoints.
+		// We still accept GET requests but we don’t want them.
+		break
+	case httpm.POST:
+		if !defBool(r.FormValue("probe"), false) {
+			break
+		}
+		timeout := defDuration(r.FormValue("timeout"), 0)
+		routecheckRefresh := HookRouteCheckRefresh.GetOrNil()
+		if routecheckRefresh == nil {
+			break
+		}
+		if err := routecheckRefresh(h.b, r.Context(), timeout); err != nil {
+			WriteErrorJSON(w, err)
+			return
+		}
+	default:
+		// Discourage the GET method:
+		http.Error(w, "want POST", http.StatusMethodNotAllowed)
 		return
 	}
+
 	res, err := h.b.SuggestExitNode()
 	if err != nil {
 		WriteErrorJSON(w, err)
