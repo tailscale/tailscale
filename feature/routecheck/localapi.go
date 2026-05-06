@@ -4,12 +4,15 @@
 package routecheck
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	jsonv2 "github.com/go-json-experiment/json"
 	jsonv1 "github.com/go-json-experiment/json/v1"
 
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/routecheck"
 	"tailscale.com/util/def"
@@ -18,6 +21,7 @@ import (
 
 func init() {
 	localapi.Register("routecheck", serveRouteCheck)
+	localapi.HookRouteCheckRefresh.Set(routeCheckRefresh)
 }
 
 // ServeRouteCheck handles the API endpoint that serves the routecheck Report.
@@ -65,4 +69,16 @@ func clampRouteCheckTimeout(timeout time.Duration) time.Duration {
 		timeout = routecheck.DefaultTimeout
 	}
 	return min(max(0, timeout), 60*time.Second) // clamp to [0s, 60s]
+}
+
+// routeCheckRefresh is a localapi hook for refreshing the [routecheck.Client.Report].
+// If the timeout is 0, all probes will timeout immediately.
+// If the timeout is negative, then all probes will use the [DefaultTimeout].
+func routeCheckRefresh(b *ipnlocal.LocalBackend, ctx context.Context, timeout time.Duration) error {
+	rc := ClientFor(b)
+	if rc == nil {
+		return errors.New("routecheck is not enabled")
+	}
+	_, err := rc.Refresh(ctx, clampRouteCheckTimeout(timeout))
+	return err
 }

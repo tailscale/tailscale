@@ -1512,6 +1512,20 @@ func (lc *Client) SuggestExitNode(ctx context.Context) (apitype.ExitNodeSuggesti
 	return decodeJSON[apitype.ExitNodeSuggestionResponse](body)
 }
 
+// SuggestExitNodeWithProbe requests an exit node suggestion based on an immediate routecheck probe,
+// waits for the probe to finish, and returns the exit node's details.
+func (lc *Client) SuggestExitNodeWithProbe(ctx context.Context) (apitype.ExitNodeSuggestionResponse, error) {
+	if !buildfeatures.HasRouteCheck {
+		return apitype.ExitNodeSuggestionResponse{}, feature.ErrUnavailable
+	}
+	v := url.Values{"probe": {"true"}}
+	body, err := lc.send(ctx, "POST", "/localapi/v0/suggest-exit-node?"+v.Encode(), 200, nil)
+	if err != nil {
+		return apitype.ExitNodeSuggestionResponse{}, err
+	}
+	return decodeJSON[apitype.ExitNodeSuggestionResponse](body)
+}
+
 // CheckSOMarkInUse reports whether the socket mark option is in use. This will only
 // be true if tailscale is running on Linux and tailscaled uses SO_MARK.
 func (lc *Client) CheckSOMarkInUse(ctx context.Context) (bool, error) {
