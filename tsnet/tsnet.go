@@ -51,12 +51,24 @@
 // A [Server] authenticates using, in order of precedence:
 //
 //  1. [Server.AuthKey].
+//
 //  2. The TS_AUTHKEY environment variable.
+//
 //  3. The TS_AUTH_KEY environment variable.
+//
 //  4. An OAuth client secret ([Server.ClientSecret] or TS_CLIENT_SECRET),
 //     used to mint an auth key.
+//
 //  5. Workload identity federation ([Server.ClientID] plus
-//     [Server.IDToken] or [Server.Audience]).
+//     [Server.IDToken] or [Server.Audience]). Available only if the
+//     program imports the feature:
+//
+//     import _ "tailscale.com/feature/identityfederation"
+//
+//     The feature is not linked by default to keep the AWS SDK and
+//     other cloud-provider dependencies out of programs that don't
+//     use workload identity federation.
+//
 //  6. An interactive login URL printed to [Server.UserLogf].
 //
 // If the node is already enrolled (state found in [Server.Store]), the
@@ -151,7 +163,6 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	_ "tailscale.com/feature/c2n"
-	_ "tailscale.com/feature/condregister/identityfederation"
 	_ "tailscale.com/feature/condregister/oauthkey"
 	_ "tailscale.com/feature/condregister/portmapper"
 	_ "tailscale.com/feature/condregister/useproxy"

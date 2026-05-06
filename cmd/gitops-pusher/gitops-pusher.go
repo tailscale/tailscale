@@ -26,7 +26,7 @@ import (
 	"github.com/tailscale/hujson"
 	"golang.org/x/oauth2/clientcredentials"
 	tsclient "tailscale.com/client/tailscale"
-	_ "tailscale.com/feature/condregister/identityfederation"
+	_ "tailscale.com/feature/identityfederation"
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/util/httpm"
 )
