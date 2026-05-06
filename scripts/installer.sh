@@ -266,7 +266,7 @@ main() {
 				VERSION="leap/$VERSION_ID"
 				PACKAGETYPE="zypper"
 				;;
-			opensuse-tumbleweed)
+			opensuse-tumbleweed|opensuse-slowroll)
 				OS="opensuse"
 				VERSION="tumbleweed"
 				PACKAGETYPE="zypper"
