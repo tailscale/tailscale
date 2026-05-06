@@ -206,8 +206,21 @@ type Server struct {
 
 	// Store specifies the state store to use.
 	//
-	// If nil, a new FileStore is initialized at `Dir/tailscaled.state`.
-	// See tailscale.com/ipn/store for supported stores.
+	// If nil, the TS_STATE environment variable is consulted.
+	// TS_STATE uses the same prefixed format as [store.New]
+	// (and the tailscaled --state flag):
+	// "kube:<secret-name>" for a Kubernetes Secret,
+	// "arn:<arn>" for AWS SSM, and so on.
+	// If TS_STATE is also empty, a new FileStore is created at
+	// `Dir/tailscaled.state`.
+	//
+	// To use a Kubernetes Secret programmatically, create a
+	// [kubestore.Store] and assign it here:
+	//
+	//	ks, err := kubestore.New(logger, "my-secret")
+	//	srv := &tsnet.Server{Store: ks}
+	//
+	// See tailscale.com/ipn/store for all supported stores.
 	//
 	// Logs will automatically be uploaded to log.tailscale.com,
 	// where the configuration file for logging will be saved at
@@ -903,9 +916,12 @@ func (s *Server) start() (reterr error) {
 	}
 
 	if s.Store == nil {
-		stateFile := filepath.Join(s.rootPath, "tailscaled.state")
-		s.logf("tsnet running state path %s", stateFile)
-		s.Store, err = store.New(tsLogf, stateFile)
+		statePath := os.Getenv("TS_STATE")
+		if statePath == "" {
+			statePath = filepath.Join(s.rootPath, "tailscaled.state")
+		}
+		s.logf("tsnet running state path %s", statePath)
+		s.Store, err = store.New(tsLogf, statePath)
 		if err != nil {
 			return err
 		}
