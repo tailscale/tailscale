@@ -246,6 +246,12 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 	cmd = exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...)
 	// The incubator will chdir into the home directory after it drops privileges.
 	cmd.Dir = "/"
+
+	// Own process group so SIGHUP via kill(-pgid) reaches the
+	// grandchild user shell, not just the incubator. The PTY path
+	// overrides this in startWithPTY with Setsid (which also creates
+	// a new pgrp), so the assignment is harmless to overwrite there.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	return cmd, nil
 }
 
@@ -1236,4 +1242,24 @@ func groupsMatchCurrent(groupIDs []int) bool {
 	sort.Ints(groupIDs)
 	sort.Ints(existing)
 	return slices.Equal(groupIDs, existing)
+}
+
+// terminateSession delivers sig to the incubator's process group
+// (kill(-pgid)) so it reaches any user shell the incubator spawned.
+// The incubator is the group leader via Setpgid in newIncubatorCommand
+// or Setsid in startWithPTY. ESRCH maps to nil: the session has exited
+// via cmd.Wait.
+func terminateSession(p *os.Process, sig os.Signal) error {
+	if p == nil {
+		return errors.New("nil process")
+	}
+	ssig, ok := sig.(syscall.Signal)
+	if !ok {
+		return p.Signal(sig)
+	}
+	err := syscall.Kill(-p.Pid, ssig)
+	if errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	return err
 }

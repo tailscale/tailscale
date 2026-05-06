@@ -413,9 +413,20 @@ func TestIntegrationSIGHUP(t *testing.T) {
 	debugTest.Store(true)
 	t.Cleanup(func() { debugTest.Store(false) })
 
-	dir := t.TempDir()
-	readyFile := filepath.Join(dir, "ready")
-	markerFile := filepath.Join(dir, "sighup-received")
+	// t.TempDir creates /tmp/<TestName>/NNN, both root-owned, with the
+	// parent at 0700 and the leaf at 0755. The incubator drops
+	// privileges before running the trap, so the > redirect needs the
+	// dropped-privilege shell to traverse the parent and write the
+	// leaf. Open both up; cleanup still runs via t.TempDir.
+	markerDir := t.TempDir()
+	if err := os.Chmod(filepath.Dir(markerDir), 0o755); err != nil {
+		t.Fatalf("chmod parent: %v", err)
+	}
+	if err := os.Chmod(markerDir, 0o777); err != nil {
+		t.Fatalf("chmod marker dir: %v", err)
+	}
+	readyFile := filepath.Join(markerDir, "ready")
+	markerFile := filepath.Join(markerDir, "sighup-received")
 
 	cl := testClient(t, false, false)
 	s, err := cl.NewSession()

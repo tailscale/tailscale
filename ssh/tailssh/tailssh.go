@@ -879,10 +879,13 @@ func (ss *sshSession) killProcessOnContextDone() {
 		// We don't need to Process.Wait here, sshSession.run() does
 		// the waiting regardless of termination reason.
 
-		// SIGHUP = POSIX terminal-disconnect semantics; OpenSSH gets it
-		// implicitly via PTY-master close (session.c:2246), we send it
-		// explicitly because non-PTY sessions use pipes.
-		ss.cmd.Process.Signal(syscall.SIGHUP)
+		// SIGHUP to the incubator's process group (terminateSession),
+		// so the user's shell (grandchild) gets it too, not just the
+		// incubator. POSIX terminal-disconnect semantics; OpenSSH gets
+		// it implicitly via PTY-master close (session.c:2246).
+		if err := terminateSession(ss.cmd.Process, syscall.SIGHUP); err != nil {
+			ss.logf("terminate session: %v", err)
+		}
 	})
 }
 
