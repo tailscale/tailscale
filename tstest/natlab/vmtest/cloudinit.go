@@ -173,16 +173,21 @@ func (e *Env) generateFreeBSDUserData(n *Node) string {
 		ud.WriteString("  - \"sysctl net.inet6.ip6.forwarding=1\"\n")
 	}
 
-	// Start tailscaled and tta in the background.
-	// Set PATH to include /usr/local/bin so that tta can find "tailscale"
-	// (TTA uses exec.Command("tailscale", ...) without a full path).
-	// --statedir provides a VarRoot so features like Taildrop have a directory.
+	// Start tailscaled and tta in the background. Redirect stdio to log
+	// files and away from /dev/null on stdin; otherwise nuageinit's runcmd
+	// executor keeps the backgrounded child's stdout/stderr pipes open and
+	// blocks waiting for them, so subsequent runcmd entries (including the
+	// tta launch below) never run. Linux cloud-init doesn't have this
+	// gotcha. Set PATH to include /usr/local/bin so that tta can find
+	// "tailscale" (TTA uses exec.Command("tailscale", ...) without a full
+	// path). --statedir provides a VarRoot so features like Taildrop have a
+	// directory.
 	ud.WriteString("  - \"mkdir -p /var/lib/tailscale\"\n")
-	ud.WriteString("  - \"export PATH=/usr/local/bin:$PATH && /usr/local/bin/tailscaled --state=mem: --statedir=/var/lib/tailscale &\"\n")
+	ud.WriteString("  - \"export PATH=/usr/local/bin:$PATH && /usr/local/bin/tailscaled --state=mem: --statedir=/var/lib/tailscale </dev/null >/var/log/tailscaled.log 2>&1 &\"\n")
 	ud.WriteString("  - \"sleep 2\"\n")
 
-	// Start tta (Tailscale Test Agent).
-	ud.WriteString("  - \"export PATH=/usr/local/bin:$PATH && /usr/local/bin/tta &\"\n")
+	// Start tta (Tailscale Test Agent), with the same stdio redirection.
+	ud.WriteString("  - \"export PATH=/usr/local/bin:$PATH && /usr/local/bin/tta </dev/null >/var/log/tta.log 2>&1 &\"\n")
 
 	return ud.String()
 }

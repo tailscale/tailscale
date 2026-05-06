@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 
 	"tailscale.com/tstest/natlab/vnet"
@@ -192,22 +193,98 @@ func (e *Env) startCloudQEMU(n *Node) error {
 	return nil
 }
 
-// launchQEMU starts a qemu-system-x86_64 process with the given args.
+// qemuRun is one running qemu-system-x86_64 process plus the file handles
+// the wrapping code holds open on its behalf. kill tears the whole thing
+// down (used both for normal cleanup and for the in-flight retry path).
+type qemuRun struct {
+	cmd        *exec.Cmd
+	parentPipe *os.File
+	devNull    *os.File
+	qemuLog    *os.File
+}
+
+func (r *qemuRun) kill() {
+	killProcessTree(r.cmd)
+	r.cmd.Wait()
+	r.parentPipe.Close()
+	r.devNull.Close()
+	r.qemuLog.Close()
+}
+
+// launchQEMU starts a qemu-system-x86_64 process with the given args and
+// watches for console activity. If the guest produces no output within
+// stuckTimeout (empty console *and* QEMU has not exited with an error),
+// the QEMU process is killed and re-launched. This works around CI
+// hypervisor flakes seen on shared GitHub Actions runners where a QEMU
+// process starts but its vCPU never makes any forward progress (the
+// failure presents as both the virtconsole log and the QEMU stderr log
+// being zero bytes after many minutes, with the vnet stream socket
+// connected but no packet ever sent).
+//
 // VM console output goes to logPath (via QEMU's -serial or -chardev).
 // QEMU's own stdout/stderr go to logPath.qemu for diagnostics.
 func (e *Env) launchQEMU(name, logPath string, args []string) error {
+	// stuckTimeout is generous: a healthy VM prints SeaBIOS/kernel
+	// output within ~1-2s on KVM, but slow shared CI hardware can lag.
+	// Setting it too low risks killing a healthy-but-slow VM; setting it
+	// too high masks the wedge case we want to recover from.
+	const stuckTimeout = 45 * time.Second
+	const maxAttempts = 3
+
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			e.t.Logf("[%s] QEMU made no progress in %v; killing and retrying (attempt %d/%d)", name, stuckTimeout, attempt, maxAttempts)
+			// QEMU's -chardev file backend opens append-mode, so stale
+			// bytes from a previous attempt would falsely trip the
+			// progress check on retry. Truncate it.
+			os.Truncate(logPath, 0)
+		}
+		run, err := e.startQEMUOnce(name, logPath, args)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if waitForConsoleProgress(logPath, stuckTimeout) {
+			e.qemuProcs = append(e.qemuProcs, run.cmd)
+			if e.ctx != nil {
+				go e.tailLogFile(e.ctx, name, logPath)
+			}
+			e.t.Cleanup(func() {
+				run.kill()
+				// Dump tail of VM log and QEMU's own stderr on failure.
+				// The console log (logPath) is empty when the guest never
+				// produced output (e.g. QEMU exited before the kernel ran);
+				// in that case the .qemu file holds the only diagnostic —
+				// KVM errors, "kvm not available", CPU model mismatch, etc.
+				if e.t.Failed() {
+					dumpLogTail(e.t, name, "console", logPath)
+					dumpLogTail(e.t, name, "qemu stderr", logPath+".qemu")
+				}
+			})
+			return nil
+		}
+		lastErr = fmt.Errorf("QEMU for %s produced no console output in %v", name, stuckTimeout)
+		run.kill()
+	}
+	return fmt.Errorf("QEMU for %s failed after %d attempts: %w", name, maxAttempts, lastErr)
+}
+
+// startQEMUOnce starts a single qemu-system-x86_64 process. On success the
+// returned qemuRun owns the process and all file handles; the caller must
+// invoke kill (either inline for a retry or via t.Cleanup for the
+// surviving attempt).
+func (e *Env) startQEMUOnce(name, logPath string, args []string) (*qemuRun, error) {
 	cmd := exec.Command("qemu-system-x86_64", args...)
-	// Send stdout/stderr to the log file for any QEMU diagnostic messages.
-	// Stdin must be /dev/null to prevent QEMU from trying to read.
 	devNull, err := os.Open(os.DevNull)
 	if err != nil {
-		return fmt.Errorf("open /dev/null: %w", err)
+		return nil, fmt.Errorf("open /dev/null: %w", err)
 	}
 	cmd.Stdin = devNull
 	qemuLog, err := os.Create(logPath + ".qemu")
 	if err != nil {
 		devNull.Close()
-		return err
+		return nil, err
 	}
 	cmd.Stdout = qemuLog
 	cmd.Stderr = qemuLog
@@ -215,44 +292,68 @@ func (e *Env) launchQEMU(name, logPath string, args []string) error {
 	if err != nil {
 		devNull.Close()
 		qemuLog.Close()
-		return fmt.Errorf("killWithParent: %w", err)
+		return nil, fmt.Errorf("killWithParent: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
 		parentPipe.Close()
 		devNull.Close()
 		qemuLog.Close()
-		return fmt.Errorf("qemu for %s: %w", name, err)
+		return nil, fmt.Errorf("qemu for %s: %w", name, err)
 	}
 	e.t.Logf("launched QEMU for %s (pid %d), log: %s", name, cmd.Process.Pid, logPath)
-	e.qemuProcs = append(e.qemuProcs, cmd)
-
-	// Start tailing the VM console log for the web UI.
-	if e.ctx != nil {
-		go e.tailLogFile(e.ctx, name, logPath)
-	}
-	e.t.Cleanup(func() {
-		killProcessTree(cmd)
-		cmd.Wait()
-		parentPipe.Close()
-		devNull.Close()
-		qemuLog.Close()
-		// Dump tail of VM log on failure for debugging.
-		if e.t.Failed() {
-			if data, err := os.ReadFile(logPath); err == nil {
-				lines := bytes.Split(data, []byte("\n"))
-				start := 0
-				if len(lines) > 50 {
-					start = len(lines) - 50
-				}
-				e.t.Logf("=== last 50 lines of %s log ===", name)
-				for _, line := range lines[start:] {
-					e.t.Logf("[%s] %s", name, line)
-				}
-			}
-		}
-	})
-	return nil
+	return &qemuRun{
+		cmd:        cmd,
+		parentPipe: parentPipe,
+		devNull:    devNull,
+		qemuLog:    qemuLog,
+	}, nil
 }
+
+// waitForConsoleProgress polls logPath until its size is non-zero or
+// timeout elapses. It returns true on observed forward progress (any
+// bytes written), false on timeout.
+func waitForConsoleProgress(logPath string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fi, err := os.Stat(logPath); err == nil && fi.Size() > 0 {
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return false
+}
+
+// dumpLogTail prints the last 50 lines of the file at path to the test log,
+// prefixed with the VM name and kind (e.g. "console", "qemu stderr"). It is
+// a no-op (with a short note) if the file can't be read or is empty, so
+// callers can use it unconditionally on test failure.
+func dumpLogTail(t testing.TB, name, kind, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Logf("=== %s %s log unavailable: %v ===", name, kind, err)
+		return
+	}
+	if len(data) == 0 {
+		t.Logf("=== %s %s log is empty ===", name, kind)
+		return
+	}
+	lines := bytes.Split(data, []byte("\n"))
+	start := 0
+	if len(lines) > 50 {
+		start = len(lines) - 50
+	}
+	t.Logf("=== last 50 lines of %s %s log ===", name, kind)
+	for _, line := range lines[start:] {
+		t.Logf("[%s] %s", name, line)
+	}
+}
+
+// hostFwdRe matches a single TCP[HOST_FORWARD] line from QEMU's
+// "info usernet" human-monitor command output, e.g.:
+//
+//	TCP[HOST_FORWARD]  12       127.0.0.1 35323       10.0.2.15    22
+var hostFwdRe = regexp.MustCompile(`TCP\[HOST_FORWARD\]\s+\d+\s+127\.0\.0\.1\s+(\d+)\s+`)
 
 // qmpQueryHostFwd connects to a QEMU QMP socket and queries the host port
 // assigned to the first TCP host forward rule (the SSH debug port).
@@ -271,7 +372,7 @@ func qmpQueryHostFwd(sockPath string) (int, error) {
 		return 0, fmt.Errorf("QMP socket %s not available", sockPath)
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	conn.SetDeadline(time.Now().Add(20 * time.Second))
 
 	// Read the QMP greeting.
 	var greeting json.RawMessage
@@ -287,23 +388,30 @@ func qmpQueryHostFwd(sockPath string) (int, error) {
 		return 0, fmt.Errorf("reading qmp_capabilities response: %w", err)
 	}
 
-	// Query "info usernet" via human-monitor-command.
-	fmt.Fprintf(conn, `{"execute":"human-monitor-command","arguments":{"command-line":"info usernet"}}`+"\n")
-	var hmpResp struct {
-		Return string `json:"return"`
+	// Poll "info usernet" until the SLIRP host-forward rule appears.
+	// On slow runners (e.g. GitHub Actions) QEMU sometimes returns an
+	// empty "info usernet" if we query it before user-mode networking
+	// has finished wiring up the forward, so single-shot lookups fail.
+	deadline := time.Now().Add(10 * time.Second)
+	var lastReturn string
+	for {
+		fmt.Fprintf(conn, `{"execute":"human-monitor-command","arguments":{"command-line":"info usernet"}}`+"\n")
+		var hmpResp struct {
+			Return string `json:"return"`
+		}
+		if err := dec.Decode(&hmpResp); err != nil {
+			return 0, fmt.Errorf("reading info usernet response: %w", err)
+		}
+		lastReturn = hmpResp.Return
+		if m := hostFwdRe.FindStringSubmatch(hmpResp.Return); m != nil {
+			return strconv.Atoi(m[1])
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	if err := dec.Decode(&hmpResp); err != nil {
-		return 0, fmt.Errorf("reading info usernet response: %w", err)
-	}
-
-	// Parse the port from output like:
-	//   TCP[HOST_FORWARD]  12       127.0.0.1 35323       10.0.2.15    22
-	re := regexp.MustCompile(`TCP\[HOST_FORWARD\]\s+\d+\s+127\.0\.0\.1\s+(\d+)\s+`)
-	m := re.FindStringSubmatch(hmpResp.Return)
-	if m == nil {
-		return 0, fmt.Errorf("no hostfwd port found in: %s", hmpResp.Return)
-	}
-	return strconv.Atoi(m[1])
+	return 0, fmt.Errorf("no hostfwd port found after waiting: %q", lastReturn)
 }
 
 // tailLogFile tails a VM's serial console log file and publishes each line

@@ -420,6 +420,13 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 		}
 	}
 
+	// macOS VMs require a macOS arm64 host (Apple Virtualization.framework via
+	// tailmac). Skip the test now rather than letting it proceed through the
+	// rest of the setup only to fail later.
+	if n.os.IsMacOS && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
+		e.t.Skipf("macOS VM tests require a macOS arm64 host (got %s/%s)", runtime.GOOS, runtime.GOARCH)
+	}
+
 	n.vnetNode = e.cfg.AddNode(vnetOpts...)
 	n.num = n.vnetNode.Num()
 	return n
@@ -502,12 +509,6 @@ func (e *Env) Start() {
 		}
 		e.testVersion = v
 		t.Logf("using Tailscale release version %s (from --test-version=%q)", v, *testVersion)
-	}
-
-	for _, n := range e.nodes {
-		if n.os.IsMacOS && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
-			t.Skip("macOS VM tests require macOS arm64 host")
-		}
 	}
 
 	// Dry-run: let each platform register its steps with the web UI.

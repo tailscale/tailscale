@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/netip"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +22,20 @@ import (
 	"tailscale.com/types/netmap"
 )
 
+// skipIfNotMacOSArm64 skips the test when the host isn't a macOS arm64 host.
+// macOS VM tests require Apple Virtualization.framework via tailmac.
+// AddNode also enforces this when a macOS node is added, but having an
+// explicit skip at the top of macOS-only tests makes the requirement
+// obvious to readers.
+func skipIfNotMacOSArm64(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skipf("macOS VM tests require a macOS arm64 host (got %s/%s)", runtime.GOOS, runtime.GOARCH)
+	}
+}
+
 func TestMacOSAndLinuxCanPing(t *testing.T) {
+	skipIfNotMacOSArm64(t)
 	env := vmtest.New(t)
 
 	lan := env.AddNetwork("192.168.1.1/24")
@@ -39,6 +53,7 @@ func TestMacOSAndLinuxCanPing(t *testing.T) {
 }
 
 func TestTwoMacOSVMsCanPing(t *testing.T) {
+	skipIfNotMacOSArm64(t)
 	env := vmtest.New(t)
 
 	lan := env.AddNetwork("192.168.1.1/24")
@@ -969,8 +984,18 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 	}
 	netmapCheckStep.End(nil)
 
+	// 90s is generous on purpose. After both nodes restart with stale cached
+	// netmap entries, a's first WG handshake to b's pre-restart endpoint
+	// hits the dead NAT mapping on b's side and is silently dropped (we
+	// see this as "no recent outgoing packet" NAT drops in the vnet log).
+	// Recovery then waits on wireguard-go's REKEY_TIMEOUT (~5s) before the
+	// next handshake attempt, and on disco-via-DERP to teach each side the
+	// other's new endpoint. On an idle host this converges in well under
+	// 15s; on a contended host (a 14/16-CPU-loaded local repro, or any
+	// shared CI runner) the same sequence has been observed at 50-60s
+	// because every timer fires multiple times under scheduling jitter.
 	pingStep.Begin()
-	if err := env.Ping(a, b, tailcfg.PingTSMP, 30*time.Second); err != nil {
+	if err := env.Ping(a, b, tailcfg.PingTSMP, 90*time.Second); err != nil {
 		pingStep.End(err)
 		t.Fatal(err)
 	}

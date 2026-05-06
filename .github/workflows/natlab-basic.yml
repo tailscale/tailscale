@@ -1,6 +1,7 @@
-# Run some natlab integration tests.
+# Run a single natlab smoke test on every PR. The full natlab suite
+# is opt-in and lives in .github/workflows/natlab-test.yml.
 # See https://github.com/tailscale/tailscale/issues/13038
-name: "natlab-integrationtest"
+name: "natlab-basic"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -17,7 +18,7 @@ on:
     branches:
       - "main"
 jobs:
-  natlab-integrationtest:
+  EasyEasy:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code

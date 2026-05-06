@@ -91,6 +91,22 @@ var (
 	}
 )
 
+// CloudImages returns the set of QEMU-bootable cloud OS images natlab can
+// use for vmtests, excluding gokrazy (built from source) and macOS (which
+// uses a separate snapshot pipeline). It is intended for tooling such as
+// a CI prep step that wants to warm the image cache.
+func CloudImages() []OSImage {
+	return []OSImage{Ubuntu2404, Debian12, FreeBSD150}
+}
+
+// EnsureImage downloads img to the local cache if not already present.
+// It is intended for tooling that wants to warm the image cache before
+// running natlab vmtests (e.g. a CI prep step). The test framework also
+// calls into the package-internal equivalent on demand.
+func EnsureImage(ctx context.Context, img OSImage) error {
+	return ensureImage(ctx, img)
+}
+
 // imageCacheDir returns the directory for cached VM images.
 func imageCacheDir() string {
 	if d := os.Getenv("VMTEST_CACHE_DIR"); d != "" {

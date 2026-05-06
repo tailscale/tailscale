@@ -2583,13 +2583,23 @@ func (s *Server) addIdleAgentConn(ac *agentConn) {
 
 func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok bool) {
 	const debug = false
+	// stuckThreshold is how long we wait before deciding the agent is slow
+	// enough to warrant a log line. Below this we stay quiet because, in
+	// healthy runs with many agent dials in flight, even a few-millisecond
+	// wait would otherwise log every poll for every concurrent waiter.
+	const stuckThreshold = 10 * time.Second
+	start := time.Now()
+	var lastWarn time.Time
 	for {
-		ac, ok := s.takeAgentConnOne(n)
-		if ok {
+		ac, miss := s.takeAgentConnOne(n)
+		if ac != nil {
 			if debug {
 				log.Printf("takeAgentConn: got agent conn for %v", n.mac)
 			}
 			return ac, true
+		}
+		if debug && miss > 0 {
+			log.Printf("takeAgentConnOne: missed %d times for %v", miss, n.mac)
 		}
 		s.mu.Lock()
 		ready := make(chan struct{})
@@ -2598,6 +2608,10 @@ func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok b
 
 		if debug {
 			log.Printf("takeAgentConn: waiting for agent conn for %v", n.mac)
+		}
+		if elapsed := time.Since(start); elapsed > stuckThreshold && time.Since(lastWarn) > stuckThreshold {
+			log.Printf("takeAgentConn: still waiting for agent conn for %v after %v (%d idle conns for other nodes)", n.mac, elapsed.Round(time.Second), miss)
+			lastWarn = time.Now()
 		}
 		select {
 		case <-ctx.Done():
@@ -2611,21 +2625,21 @@ func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok b
 	}
 }
 
-func (s *Server) takeAgentConnOne(n *node) (_ *agentConn, ok bool) {
+// takeAgentConnOne returns an idle agent conn for n if one is available,
+// otherwise nil. miss is the number of idle agent conns for other nodes that
+// were walked over while looking; the caller may use it for diagnostics when
+// a wait drags on.
+func (s *Server) takeAgentConnOne(n *node) (ac *agentConn, miss int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	miss := 0
 	for ac := range s.agentConns {
 		if ac.node == n {
 			s.agentConns.Delete(ac)
-			return ac, true
+			return ac, 0
 		}
 		miss++
 	}
-	if miss > 0 {
-		log.Printf("takeAgentConnOne: missed %d times for %v", miss, n.mac)
-	}
-	return nil, false
+	return nil, miss
 }
 
 type NodeAgentClient struct {

@@ -1,0 +1,182 @@
+# Run the full natlab/vmtest opt-in test suite. These tests boot QEMU VMs
+# (gokrazy, Ubuntu, FreeBSD) and exercise vnet-driven networking scenarios.
+# They are gated behind --run-vm-tests because they need KVM and are slow.
+#
+# This workflow runs:
+#   - on demand (workflow_dispatch)
+#   - on PRs that carry the "natlab" label
+#   - on main, every 12 hours, via cron
+#
+# Layout:
+#   - "prepare" builds the gokrazy VM image, downloads the cloud images
+#     (Ubuntu, FreeBSD), and discovers every Test* function in the two
+#     opt-in packages.
+#   - "test" is a per-TestFoo matrix that depends on prepare. Each matrix
+#     job restores the shared caches and runs a single test. Adding a new
+#     TestFoo automatically gets its own job — no workflow edits needed.
+#
+# A separate workflow (.github/workflows/natlab-basic.yml) runs a single
+# canary natlab test on every PR; this one runs the full suite.
+name: "natlab-test"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled, synchronize, reopened]
+  schedule:
+    # Every 12 hours, off-the-hour to avoid GitHub's :00 cron-stampede window.
+    - cron: "23 3,15 * * *"
+
+jobs:
+  # prepare warms the per-workflow-run caches (gokrazy image, cloud VM
+  # images) and emits the dynamic matrix of test names. By doing the work
+  # once here, the matrix test jobs never race to rebuild or re-download
+  # the same artifacts on a cold cache.
+  prepare:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'natlab'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # The cloud VM image cache is keyed only on images.go (image URLs and
+      # SHAs), so it survives across workflow runs and is invalidated only
+      # when a new image source is added.
+      - name: Cache cloud VM images
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cache/tailscale/vmtest/images
+          key: natlab-vmimages-${{ hashFiles('tstest/natlab/vmtest/images.go') }}
+
+      # The gokrazy VM image is keyed by github.sha. That means we rebuild
+      # it once per commit but matrix test jobs in the same run all share
+      # the result. Per-PR re-runs of the same sha (e.g. a rerun-failed)
+      # also get the cache.
+      - name: Cache gokrazy VM image
+        id: gokrazy-cache
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: gokrazy/natlabapp.qcow2
+          key: natlab-gokrazy-${{ github.sha }}
+
+      # qemu-utils provides qemu-img, which the gokrazy Makefile uses to
+      # convert natlabapp.img to qcow2. Only install if we need it (cache
+      # miss); the test matrix jobs install qemu separately for the runtime.
+      - name: Install qemu-utils
+        if: steps.gokrazy-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get -y update
+          sudo apt-get -y remove man-db
+          sudo apt-get install -y qemu-utils
+
+      - name: Download cloud VM images
+        # natlabprep is idempotent: it checks the cache before downloading.
+        run: |
+          ./tool/go run ./tstest/natlab/vmtest/cmd/natlabprep
+
+      - name: Build gokrazy VM image
+        if: steps.gokrazy-cache.outputs.cache-hit != 'true'
+        run: |
+          make -C gokrazy natlab
+
+      - name: Discover tests
+        id: list
+        # Grep the test files directly rather than invoking `go test -list`
+        # so we don't pay the cost of compiling the test binaries here. The
+        # only test functions in these packages use the canonical
+        # `func TestFoo(t *testing.T)` signature.
+        #
+        # exclude is the set of tests that need special invocation
+        # (extra flags, a specific environment) and don't fit the
+        # single-test-per-matrix-job model. They stay runnable locally.
+        run: |
+          set -euo pipefail
+          exclude='^(TestGrid)$'
+          tmp=$(mktemp)
+          for pkg_dir in tstest/natlab/vmtest tstest/integration/nat; do
+            pkg="./${pkg_dir}/"
+            for f in "${pkg_dir}"/*_test.go; do
+              [ -e "$f" ] || continue
+              grep -hE '^func Test[A-Z][A-Za-z0-9_]*\(t \*testing\.T\)' "$f" \
+                | sed -E 's/^func (Test[A-Za-z0-9_]+).*/\1/' \
+                | grep -vE "$exclude" \
+                | while read -r t; do
+                    jq -nc --arg pkg "$pkg" --arg test "$t" \
+                      '{pkg: $pkg, test: $test}' >> "$tmp"
+                  done
+            done
+          done
+          matrix=$(jq -s -c . "$tmp")
+          echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
+          echo "Discovered tests:"
+          jq . "$tmp"
+
+  test:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    name: "${{ matrix.test }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install qemu
+        run: |
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get -y update
+          sudo apt-get -y remove man-db
+          sudo apt-get install -y qemu-system-x86 qemu-utils
+
+      # restore-only: prepare is the single writer of these caches, so
+      # matrix jobs don't write back. fail-on-cache-miss would be too
+      # strict for the gokrazy cache (e.g. a non-fatal cache eviction
+      # between prepare and us); we just rebuild on miss instead.
+      - name: Restore cloud VM images
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cache/tailscale/vmtest/images
+          key: natlab-vmimages-${{ hashFiles('tstest/natlab/vmtest/images.go') }}
+
+      - name: Restore gokrazy VM image
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: gokrazy/natlabapp.qcow2
+          key: natlab-gokrazy-${{ github.sha }}
+
+      # The gokrazy-based tests boot the kernel directly from
+      # vmlinuz that ships in the tailscale/gokrazy-kernel module.
+      # Tests look it up under GOMODCACHE via findKernelPath, so the
+      # module has to be present even though no Go source imports it
+      # in the test package itself.
+      - name: Download gokrazy-kernel module
+        run: |
+          ./tool/go mod download github.com/tailscale/gokrazy-kernel
+
+      - name: Run ${{ matrix.test }}
+        # Per-test timeout is well above the few-minute typical runtime
+        # but small enough that a stuck test fails fast instead of holding
+        # the runner for the job's 20-minute budget.
+        run: |
+          ./tool/go test -v -timeout=15m -count=1 ${{ matrix.pkg }} \
+            -run='^${{ matrix.test }}$' --run-vm-tests
