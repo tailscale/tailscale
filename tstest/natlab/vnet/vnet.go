@@ -205,7 +205,7 @@ func (n *network) initStack() error {
 		return tcpFwd.HandlePacket(tei, pb)
 	})
 
-	go func() {
+	n.s.wg.Go(func() {
 		for {
 			pkt := n.linkEP.ReadContext(n.s.shutdownCtx)
 			if pkt == nil {
@@ -217,7 +217,7 @@ func (n *network) initStack() error {
 			}
 			n.handleIPPacketFromGvisor(pkt.ToView().AsSlice())
 		}
-	}()
+	})
 	return nil
 }
 
@@ -369,8 +369,11 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 	if destPort == 80 && fakeControl.Match(destIP) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
+		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
 		hs := &http.Server{Handler: n.s.control}
-		go hs.Serve(netutil.NewOneConnListener(tc, nil))
+		n.s.wg.Go(func() {
+			hs.Serve(netutil.NewOneConnListener(tc, nil))
+		})
 		return
 	}
 
@@ -383,39 +386,54 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 
 			r.Complete(false)
 			tc := gonet.NewTCPConn(&wq, ep)
+			context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
 			tlsConn := tls.Server(tc, ds.tlsConfig)
 			hs := &http.Server{Handler: ds.handler}
-			go hs.Serve(netutil.NewOneConnListener(tlsConn, nil))
+			n.s.wg.Go(func() {
+				hs.Serve(netutil.NewOneConnListener(tlsConn, nil))
+			})
 			return
 		}
 		if destPort == 80 {
 			r.Complete(false)
 			tc := gonet.NewTCPConn(&wq, ep)
+			context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
 			hs := &http.Server{Handler: n.s.derps[0].handler}
-			go hs.Serve(netutil.NewOneConnListener(tc, nil))
+			n.s.wg.Go(func() {
+				hs.Serve(netutil.NewOneConnListener(tc, nil))
+			})
 			return
 		}
 	}
 	if destPort == 443 && fakeLogCatcher.Match(destIP) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
-		go n.serveLogCatcherConn(clientRemoteIP, tc)
+		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
+		n.s.wg.Go(func() {
+			n.serveLogCatcherConn(clientRemoteIP, tc)
+		})
 		return
 	}
 
 	if destPort == 80 && fakeCloudInit.Match(destIP) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
+		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
 		hs := &http.Server{Handler: n.s.cloudInitHandler()}
-		go hs.Serve(netutil.NewOneConnListener(tc, nil))
+		n.s.wg.Go(func() {
+			hs.Serve(netutil.NewOneConnListener(tc, nil))
+		})
 		return
 	}
 
 	if destPort == 80 && fakeFiles.Match(destIP) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
+		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
 		hs := &http.Server{Handler: n.s.fileServerHandler()}
-		go hs.Serve(netutil.NewOneConnListener(tc, nil))
+		n.s.wg.Go(func() {
+			hs.Serve(netutil.NewOneConnListener(tc, nil))
+		})
 		return
 	}
 
