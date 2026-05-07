@@ -32,6 +32,8 @@ func TestPickSplitDNSPeers(t *testing.T) {
 	appTwoBytes := getBytesForAttr("app2", []string{"a.example.com"}, []string{"tag:two"})
 	appThreeBytes := getBytesForAttr("app3", []string{"woo.b.example.com", "hoo.b.example.com"}, []string{"tag:three1", "tag:three2"})
 	appFourBytes := getBytesForAttr("app4", []string{"woo.b.example.com", "c.example.com"}, []string{"tag:four1", "tag:four2"})
+	appFiveBytes := getBytesForAttr("app5", []string{"*.example.com", "example.com"}, []string{"tag:one"})
+	appSixBytes := getBytesForAttr("app6", []string{"*.Example.com", "EXAMPLE.com", "EXAMPLE.COM"}, []string{"tag:one"})
 
 	makeNodeView := func(id tailcfg.NodeID, name string, tags []string) tailcfg.NodeView {
 		return (&tailcfg.Node{
@@ -190,6 +192,49 @@ func TestPickSplitDNSPeers(t *testing.T) {
 				"woo.b.example.com": {nvp2, nvp3, nvp4},
 				"hoo.b.example.com": {nvp3, nvp4},
 				"c.example.com":     {nvp2, nvp4},
+			},
+		},
+		{
+			name: "wildcards-are-stripped-and-deduped",
+			config: []tailcfg.RawMessage{
+				tailcfg.RawMessage(appOneBytes),
+				tailcfg.RawMessage(appFiveBytes),
+			},
+			peers: []tailcfg.NodeView{
+				nvp1,
+			},
+			want: map[string][]tailcfg.NodeView{
+				// All the domains should be normalized to example.com
+				"example.com": {nvp1},
+			},
+		},
+		{
+			name: "domains-are-normalized-and-deduped",
+			config: []tailcfg.RawMessage{
+				tailcfg.RawMessage(appSixBytes),
+			},
+			peers: []tailcfg.NodeView{
+				nvp1,
+			},
+			want: map[string][]tailcfg.NodeView{
+				// All the domains should be normalized to example.com
+				"example.com": {nvp1},
+			},
+		},
+		{
+			name: "sub-domains-and-top-domains-do-not-collide",
+			config: []tailcfg.RawMessage{
+				tailcfg.RawMessage(appTwoBytes),
+				tailcfg.RawMessage(appFiveBytes),
+			},
+			peers: []tailcfg.NodeView{
+				nvp1,
+				nvp3,
+			},
+			want: map[string][]tailcfg.NodeView{
+				// The sub.example.com should remain distinct from example.com
+				"example.com":   {nvp1},
+				"a.example.com": {nvp3},
 			},
 		},
 	} {

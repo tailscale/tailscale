@@ -6,6 +6,7 @@ package appc
 import (
 	"cmp"
 	"slices"
+	"strings"
 
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/tailcfg"
@@ -64,20 +65,28 @@ func PickSplitDNSPeers(hasCap func(c tailcfg.NodeCapability) bool, self tailcfg.
 	if err != nil {
 		return m
 	}
-	tagToDomain := make(map[string][]string)
+
+	// We strip the leading *. from any domains because the OS treats all domains
+	// that we pass to it as wildcard domains, and the OS would treat the * character
+	// as a literal domain component instead of treating it as a wildcard.
+	// We also use a Set to deduplicate the domains we pass to the OS in case removing
+	// the *. prefix resulted in duplicate entries.
+	tagToDomain := make(map[string]set.Set[string])
 	selfTags := set.SetOf(self.Tags().AsSlice())
 	selfRoutedDomains := set.Set[string]{}
 	for _, app := range apps {
+		domains := make(set.Set[string])
+		for _, domain := range app.Domains {
+			domains.Add(strings.ToLower(strings.TrimPrefix(domain, "*.")))
+		}
 		for _, tag := range app.Connectors {
-			domains := tagToDomain[tag]
-			domains = slices.Grow(domains, len(app.Domains))
-			for _, d := range app.Domains {
-				if isSelfEligibleConnector && selfTags.Contains(tag) {
-					selfRoutedDomains.Add(d)
-				}
-				domains = append(domains, d)
+			if tagToDomain[tag] == nil {
+				tagToDomain[tag] = set.Set[string]{}
 			}
-			tagToDomain[tag] = domains
+			tagToDomain[tag].AddSet(domains)
+			if isSelfEligibleConnector && selfTags.Contains(tag) {
+				selfRoutedDomains.AddSet(domains)
+			}
 		}
 	}
 	// NodeIDs are Comparable, and we have a map of NodeID to NodeView anyway, so
@@ -89,7 +98,7 @@ func PickSplitDNSPeers(hasCap func(c tailcfg.NodeCapability) bool, self tailcfg.
 		}
 		for _, t := range peer.Tags().All() {
 			domains := tagToDomain[t]
-			for _, domain := range domains {
+			for domain := range domains {
 				if selfRoutedDomains.Contains(domain) {
 					continue
 				}

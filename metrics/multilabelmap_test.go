@@ -86,10 +86,10 @@ metricname{foo="si",bar="si"} 5
 
 func TestMultiLabelMapTypes(t *testing.T) {
 	type LabelTypes struct {
-		S string
-		B bool
-		I int
-		U uint
+		S   string
+		B   bool
+		Int int
+		U   uint
 	}
 
 	m := new(MultiLabelMap[LabelTypes])
@@ -100,7 +100,7 @@ func TestMultiLabelMapTypes(t *testing.T) {
 	m.WritePrometheus(&buf, "metricname")
 	const want = `# TYPE metricname counter
 # HELP metricname some good stuff
-metricname{s="a",b="true",i="-1",u="2"} 3
+metricname{s="a",b="true",int="-1",u="2"} 3
 `
 	if got := buf.String(); got != want {
 		t.Errorf("got %q; want %q", got, want)

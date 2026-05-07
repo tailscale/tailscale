@@ -22,13 +22,14 @@ script after a built-in hook. For example, put a custom check in
 only if the built-in hook succeeds; failure aborts the git operation.
 
 
-## Changing the shared code
+## Version bumps
 
-When you change anything under `githook/` or `launcher.sh`, bump
-`HOOK_VERSION` in the same commit so every dev auto rebuilds on their next
-git operation.
+The launcher rebuilds when the installed binary's version differs from
+the concatenation of two files:
 
-Because `tailscale/corp` imports `githook/`, also plan the downstream
-update: after landing here, bump corp's `tailscale.com` dependency and
-bump corp's own `misc/git_hook/HOOK_VERSION` on a separate commit. Both are
-required.
+* `githook/HOOK_VERSION` (shared): bump when changing anything under
+  `githook/` or `git-hook.go`. Downstream repos pick it up after
+  bumping their `tailscale.com` dependency.
+* `misc/git_hook/HOOK_VERSION` (repo-local, optional): bump to force a
+  rebuild for repo-specific config changes without touching the shared
+  version. This repo does not use one.

@@ -84,7 +84,29 @@ func fakeNoiseServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, 
 	return ts, client
 }
 
+// newLocalBackendForTKA creates a new instance of [LocalBackend] for testing
+// Tailnet Lock, in particular setting the tka field.
+func newLocalBackendForTKA(t *testing.T, varRoot string, client *http.Client, pm *profileManager, authority *tka.Authority, chonk tka.CompactableChonk) LocalBackend {
+	t.Helper()
+	cc := fakeControlClient(t, client)
+	return LocalBackend{
+		varRoot: varRoot,
+		cc:      cc,
+		ccAuto:  cc,
+		logf:    t.Logf,
+		health:  health.NewTracker(eventbustest.NewBus(t)),
+		tka: &tkaState{
+			profile:   pm.CurrentProfile().ID(),
+			authority: authority,
+			storage:   chonk,
+		},
+		pm:    pm,
+		store: pm.Store(),
+	}
+}
+
 func setupProfileManager(t *testing.T, nodePriv key.NodePrivate, nlPriv key.NLPrivate) *profileManager {
+	t.Helper()
 	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, health.NewTracker(eventbustest.NewBus(t))))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
@@ -95,6 +117,18 @@ func setupProfileManager(t *testing.T, nodePriv key.NodePrivate, nlPriv key.NLPr
 	return pm
 }
 
+// setupChonkStorage creates a new [tka.FS] in a temporary folder.
+func setupChonkStorage(t *testing.T, pm *profileManager) (varRoot string, chonk *tka.FS) {
+	varRoot = t.TempDir()
+	tkaPath := filepath.Join(varRoot, "tka-profile", string(pm.CurrentProfile().ID()))
+	os.Mkdir(tkaPath, 0755)
+	chonk, err := tka.ChonkDir(tkaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return varRoot, chonk
+}
+
 func TestTKAEnablementFlow(t *testing.T) {
 	nodePriv := key.NewNode()
 
@@ -102,11 +136,9 @@ func TestTKAEnablementFlow(t *testing.T) {
 	// our mock server can communicate.
 	nlPriv := key.NewNLPrivate()
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	state := tka.CreateStateForTest(key)
 	chonk := tka.ChonkMem()
-	a1, genesisAUM, err := tka.Create(chonk, tka.State{
-		Keys:              []tka.Key{key},
-		DisablementValues: [][]byte{bytes.Repeat([]byte{0xa5}, 32)},
-	}, nlPriv)
+	a1, genesisAUM, err := tka.Create(chonk, state, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
 	}
@@ -188,13 +220,7 @@ func TestTKADisablementFlow(t *testing.T) {
 
 	pm := setupProfileManager(t, nodePriv, nlPriv)
 
-	temp := t.TempDir()
-	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
-	os.Mkdir(tkaPath, 0755)
-	chonk, err := tka.ChonkDir(tkaPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	varRoot, chonk := setupChonkStorage(t, pm)
 	authority, _, err := tka.Create(chonk, tka.State{
 		Keys:              []tka.Key{key},
 		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
@@ -239,20 +265,7 @@ func TestTKADisablementFlow(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cc := fakeControlClient(t, client)
-	b := LocalBackend{
-		varRoot: temp,
-		cc:      cc,
-		ccAuto:  cc,
-		logf:    t.Logf,
-		health:  health.NewTracker(eventbustest.NewBus(t)),
-		tka: &tkaState{
-			authority: authority,
-			storage:   chonk,
-		},
-		pm:    pm,
-		store: pm.Store(),
-	}
+	b := newLocalBackendForTKA(t, varRoot, client, pm, authority, chonk)
 
 	// Test that the wrong disablement secret does not shut down the authority.
 	returnWrongSecret = true
@@ -288,8 +301,6 @@ func TestTKADisablementFlow(t *testing.T) {
 func TestTKASync(t *testing.T) {
 	someKeyPriv := key.NewNLPrivate()
 	someKey := tka.Key{Kind: tka.Key25519, Public: someKeyPriv.Public().Verifier(), Votes: 1}
-
-	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
 
 	type tkaSyncScenario struct {
 		name string
@@ -369,10 +380,8 @@ func TestTKASync(t *testing.T) {
 			// Setup the tka authority on the control plane.
 			key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 			controlStorage := tka.ChonkMem()
-			controlAuthority, bootstrap, err := tka.Create(controlStorage, tka.State{
-				Keys:              []tka.Key{key, someKey},
-				DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
-			}, nlPriv)
+			controlState := tka.CreateStateForTest(key, someKey)
+			controlAuthority, bootstrap, err := tka.Create(controlStorage, controlState, nlPriv)
 			if err != nil {
 				t.Fatalf("tka.Create() failed: %v", err)
 			}
@@ -382,14 +391,8 @@ func TestTKASync(t *testing.T) {
 				}
 			}
 
-			temp := t.TempDir()
-			tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
-			os.Mkdir(tkaPath, 0755)
 			// Setup the TKA authority on the node.
-			nodeStorage, err := tka.ChonkDir(tkaPath)
-			if err != nil {
-				t.Fatal(err)
-			}
+			varRoot, nodeStorage := setupChonkStorage(t, pm)
 			nodeAuthority, err := tka.Bootstrap(nodeStorage, bootstrap)
 			if err != nil {
 				t.Fatalf("tka.Bootstrap() failed: %v", err)
@@ -424,20 +427,7 @@ func TestTKASync(t *testing.T) {
 			defer ts.Close()
 
 			// Setup the client.
-			cc := fakeControlClient(t, client)
-			b := LocalBackend{
-				varRoot: temp,
-				cc:      cc,
-				ccAuto:  cc,
-				logf:    t.Logf,
-				health:  health.NewTracker(eventbustest.NewBus(t)),
-				pm:      pm,
-				store:   pm.Store(),
-				tka: &tkaState{
-					authority: nodeAuthority,
-					storage:   nodeStorage,
-				},
-			}
+			b := newLocalBackendForTKA(t, varRoot, client, pm, nodeAuthority, nodeStorage)
 
 			// Finally, let's trigger a sync.
 			err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
@@ -463,8 +453,6 @@ func TestTKASyncTriggersCompact(t *testing.T) {
 	someKeyPriv := key.NewNLPrivate()
 	someKey := tka.Key{Kind: tka.Key25519, Public: someKeyPriv.Public().Verifier(), Votes: 1}
 
-	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
-
 	nodePriv := key.NewNode()
 	nlPriv := key.NewNLPrivate()
 	pm := setupProfileManager(t, nodePriv, nlPriv)
@@ -480,10 +468,8 @@ func TestTKASyncTriggersCompact(t *testing.T) {
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 	controlStorage := tka.ChonkMem()
 	controlStorage.SetClock(clock)
-	controlAuthority, bootstrap, err := tka.Create(controlStorage, tka.State{
-		Keys:              []tka.Key{key, someKey},
-		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
-	}, nlPriv)
+	controlState := tka.CreateStateForTest(key, someKey)
+	controlAuthority, bootstrap, err := tka.Create(controlStorage, controlState, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
 	}
@@ -542,19 +528,8 @@ func TestTKASyncTriggersCompact(t *testing.T) {
 	defer ts.Close()
 
 	// Setup the client.
-	cc := fakeControlClient(t, client)
-	b := LocalBackend{
-		cc:     cc,
-		ccAuto: cc,
-		logf:   t.Logf,
-		health: health.NewTracker(eventbustest.NewBus(t)),
-		pm:     pm,
-		store:  pm.Store(),
-		tka: &tkaState{
-			authority: nodeAuthority,
-			storage:   nodeStorage,
-		},
-	}
+	varRoot := ""
+	b := newLocalBackendForTKA(t, varRoot, client, pm, nodeAuthority, nodeStorage)
 
 	// Trigger a sync.
 	err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
@@ -610,11 +585,9 @@ func TestTKASyncTriggersCompact(t *testing.T) {
 func TestTKAFilterNetmap(t *testing.T) {
 	nlPriv := key.NewNLPrivate()
 	nlKey := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	state := tka.CreateStateForTest(nlKey)
 	storage := tka.ChonkMem()
-	authority, _, err := tka.Create(storage, tka.State{
-		Keys:              []tka.Key{nlKey},
-		DisablementValues: [][]byte{bytes.Repeat([]byte{0xa5}, 32)},
-	}, nlPriv)
+	authority, _, err := tka.Create(storage, state, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
 	}
@@ -764,17 +737,11 @@ func TestTKADisable(t *testing.T) {
 	// Make a fake TKA authority, to seed local state.
 	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
 	nlPriv := key.NewNLPrivate()
+	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 
 	pm := setupProfileManager(t, nodePriv, nlPriv)
 
-	temp := t.TempDir()
-	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
-	os.Mkdir(tkaPath, 0755)
-	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
-	chonk, err := tka.ChonkDir(tkaPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	temp, chonk := setupChonkStorage(t, pm)
 	authority, _, err := tka.Create(chonk, tka.State{
 		Keys:              []tka.Key{key},
 		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
@@ -821,21 +788,7 @@ func TestTKADisable(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cc := fakeControlClient(t, client)
-	b := LocalBackend{
-		varRoot: temp,
-		cc:      cc,
-		ccAuto:  cc,
-		logf:    t.Logf,
-		health:  health.NewTracker(eventbustest.NewBus(t)),
-		tka: &tkaState{
-			profile:   pm.CurrentProfile().ID(),
-			authority: authority,
-			storage:   chonk,
-		},
-		pm:    pm,
-		store: pm.Store(),
-	}
+	b := newLocalBackendForTKA(t, temp, client, pm, authority, chonk)
 
 	// Test that we get an error for an incorrect disablement secret.
 	if err := b.NetworkLockDisable([]byte{1, 2, 3, 4}); err == nil || err.Error() != "incorrect disablement secret" {
@@ -854,20 +807,11 @@ func TestTKASign(t *testing.T) {
 	pm := setupProfileManager(t, nodePriv, nlPriv)
 
 	// Make a fake TKA authority, to seed local state.
-	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	state := tka.CreateStateForTest(key)
 
-	temp := t.TempDir()
-	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
-	os.Mkdir(tkaPath, 0755)
-	chonk, err := tka.ChonkDir(tkaPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	authority, _, err := tka.Create(chonk, tka.State{
-		Keys:              []tka.Key{key},
-		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
-	}, nlPriv)
+	varRoot, chonk := setupChonkStorage(t, pm)
+	authority, _, err := tka.Create(chonk, state, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
 	}
@@ -887,20 +831,8 @@ func TestTKASign(t *testing.T) {
 		}
 	}))
 	defer ts.Close()
-	cc := fakeControlClient(t, client)
-	b := LocalBackend{
-		varRoot: temp,
-		cc:      cc,
-		ccAuto:  cc,
-		logf:    t.Logf,
-		health:  health.NewTracker(eventbustest.NewBus(t)),
-		tka: &tkaState{
-			authority: authority,
-			storage:   chonk,
-		},
-		pm:    pm,
-		store: pm.Store(),
-	}
+
+	b := newLocalBackendForTKA(t, varRoot, client, pm, authority, chonk)
 
 	if err := b.NetworkLockSign(toSign.Public(), nil); err != nil {
 		t.Errorf("NetworkLockSign() failed: %v", err)
@@ -911,23 +843,14 @@ func TestTKAForceDisable(t *testing.T) {
 	nodePriv := key.NewNode()
 
 	// Make a fake TKA authority, to seed local state.
-	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
 	nlPriv := key.NewNLPrivate()
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	state := tka.CreateStateForTest(key)
 
 	pm := setupProfileManager(t, nodePriv, nlPriv)
 
-	temp := t.TempDir()
-	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
-	os.Mkdir(tkaPath, 0755)
-	chonk, err := tka.ChonkDir(tkaPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	authority, genesis, err := tka.Create(chonk, tka.State{
-		Keys:              []tka.Key{key},
-		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
-	}, nlPriv)
+	temp, chonk := setupChonkStorage(t, pm)
+	authority, genesis, err := tka.Create(chonk, state, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
 	}
@@ -1002,20 +925,11 @@ func TestTKAAffectedSigs(t *testing.T) {
 	pm := setupProfileManager(t, nodePriv, nlPriv)
 
 	// Make a fake TKA authority, to seed local state.
-	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
 	tkaKey := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	state := tka.CreateStateForTest(tkaKey)
 
-	temp := t.TempDir()
-	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
-	os.Mkdir(tkaPath, 0755)
-	chonk, err := tka.ChonkDir(tkaPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	authority, _, err := tka.Create(chonk, tka.State{
-		Keys:              []tka.Key{tkaKey},
-		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
-	}, nlPriv)
+	varRoot, chonk := setupChonkStorage(t, pm)
+	authority, _, err := tka.Create(chonk, state, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
 	}
@@ -1084,20 +998,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 				}
 			}))
 			defer ts.Close()
-			cc := fakeControlClient(t, client)
-			b := LocalBackend{
-				varRoot: temp,
-				cc:      cc,
-				ccAuto:  cc,
-				logf:    t.Logf,
-				health:  health.NewTracker(eventbustest.NewBus(t)),
-				tka: &tkaState{
-					authority: authority,
-					storage:   chonk,
-				},
-				pm:    pm,
-				store: pm.Store(),
-			}
+			b := newLocalBackendForTKA(t, varRoot, client, pm, authority, chonk)
 
 			sigs, err := b.NetworkLockAffectedSigs(nlPriv.KeyID())
 			switch {
@@ -1130,22 +1031,13 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 	pm := setupProfileManager(t, nodePriv, nlPriv)
 
 	// Make a fake TKA authority, to seed local state.
-	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 	cosignKey := tka.Key{Kind: tka.Key25519, Public: cosignPriv.Public().Verifier(), Votes: 2}
 	compromisedKey := tka.Key{Kind: tka.Key25519, Public: compromisedPriv.Public().Verifier(), Votes: 1}
+	state := tka.CreateStateForTest(key, compromisedKey, cosignKey)
 
-	temp := t.TempDir()
-	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
-	os.Mkdir(tkaPath, 0755)
-	chonk, err := tka.ChonkDir(tkaPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	authority, _, err := tka.Create(chonk, tka.State{
-		Keys:              []tka.Key{key, compromisedKey, cosignKey},
-		DisablementValues: [][]byte{tka.DisablementKDF(disablementSecret)},
-	}, nlPriv)
+	varRoot, chonk := setupChonkStorage(t, pm)
+	authority, _, err := tka.Create(chonk, state, nlPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
 	}
@@ -1170,20 +1062,7 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 		}
 	}))
 	defer ts.Close()
-	cc := fakeControlClient(t, client)
-	b := LocalBackend{
-		varRoot: temp,
-		cc:      cc,
-		ccAuto:  cc,
-		logf:    t.Logf,
-		health:  health.NewTracker(eventbustest.NewBus(t)),
-		tka: &tkaState{
-			authority: authority,
-			storage:   chonk,
-		},
-		pm:    pm,
-		store: pm.Store(),
-	}
+	b := newLocalBackendForTKA(t, varRoot, client, pm, authority, chonk)
 
 	aum, err := b.NetworkLockGenerateRecoveryAUM([]tkatype.KeyID{compromisedPriv.KeyID()}, tka.AUMHash{})
 	if err != nil {
@@ -1193,17 +1072,7 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 	// Cosign using the cosigning key.
 	{
 		pm := setupProfileManager(t, nodePriv, cosignPriv)
-		b := LocalBackend{
-			varRoot: temp,
-			logf:    t.Logf,
-			health:  health.NewTracker(eventbustest.NewBus(t)),
-			tka: &tkaState{
-				authority: authority,
-				storage:   chonk,
-			},
-			pm:    pm,
-			store: pm.Store(),
-		}
+		b := newLocalBackendForTKA(t, varRoot, client, pm, authority, chonk)
 		if aum, err = b.NetworkLockCosignRecoveryAUM(aum); err != nil {
 			t.Fatalf("NetworkLockCosignRecoveryAUM() failed: %v", err)
 		}

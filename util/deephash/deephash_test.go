@@ -59,7 +59,7 @@ func TestHash(t *testing.T) {
 		I16  int16
 		I32  int32
 		I64  int64
-		I    int
+		Int  int
 		U8   uint8
 		U16  uint16
 		U32  uint32
@@ -92,7 +92,7 @@ func TestHash(t *testing.T) {
 		{in: tuple{scalars{I16: math.MinInt16}, scalars{I16: math.MinInt16 / 2}}, wantEq: false},
 		{in: tuple{scalars{I32: math.MinInt32}, scalars{I32: math.MinInt32 / 2}}, wantEq: false},
 		{in: tuple{scalars{I64: math.MinInt64}, scalars{I64: math.MinInt64 / 2}}, wantEq: false},
-		{in: tuple{scalars{I: -1234}, scalars{I: -1234 / 2}}, wantEq: false},
+		{in: tuple{scalars{Int: -1234}, scalars{Int: -1234 / 2}}, wantEq: false},
 		{in: tuple{scalars{U8: math.MaxUint8}, scalars{U8: math.MaxUint8 / 2}}, wantEq: false},
 		{in: tuple{scalars{U16: math.MaxUint16}, scalars{U16: math.MaxUint16 / 2}}, wantEq: false},
 		{in: tuple{scalars{U32: math.MaxUint32}, scalars{U32: math.MaxUint32 / 2}}, wantEq: false},

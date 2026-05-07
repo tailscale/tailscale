@@ -211,7 +211,14 @@ func (e *Env) launchQEMU(name, logPath string, args []string) error {
 	}
 	cmd.Stdout = qemuLog
 	cmd.Stderr = qemuLog
+	parentPipe, err := killWithParent(cmd)
+	if err != nil {
+		devNull.Close()
+		qemuLog.Close()
+		return fmt.Errorf("killWithParent: %w", err)
+	}
 	if err := cmd.Start(); err != nil {
+		parentPipe.Close()
 		devNull.Close()
 		qemuLog.Close()
 		return fmt.Errorf("qemu for %s: %w", name, err)
@@ -224,8 +231,9 @@ func (e *Env) launchQEMU(name, logPath string, args []string) error {
 		go e.tailLogFile(e.ctx, name, logPath)
 	}
 	e.t.Cleanup(func() {
-		cmd.Process.Kill()
+		killProcessTree(cmd)
 		cmd.Wait()
+		parentPipe.Close()
 		devNull.Close()
 		qemuLog.Close()
 		// Dump tail of VM log on failure for debugging.

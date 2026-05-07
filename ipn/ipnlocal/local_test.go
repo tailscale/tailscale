@@ -32,6 +32,7 @@ import (
 	"tailscale.com/appc"
 	"tailscale.com/appc/appctest"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/drive"
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/feature"
@@ -8156,5 +8157,78 @@ func TestStartPreservesLoginFlags(t *testing.T) {
 	cc.mu.Unlock()
 	if flags&controlclient.LoginEphemeral == 0 {
 		t.Errorf("cc.Login was never called with LoginEphemeral; got flags=%v", flags)
+	}
+}
+
+func TestShouldUseOneCGNATRoute(t *testing.T) {
+	tests := []struct {
+		name      string
+		versionOS string
+		want      bool
+	}{
+		{"android", "android", true},
+		{"macOS", "macOS", true},
+		{"plan9", "plan9", true},
+		{"linux", "linux", false},
+		{"windows", "windows", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldUseOneCGNATRoute(t.Logf, nil, nil, tt.versionOS)
+			if got != tt.want {
+				t.Errorf("shouldUseOneCGNATRoute(%q) = %v; want %v", tt.versionOS, got, tt.want)
+			}
+		})
+	}
+
+	// Control knob takes precedence over everything.
+	t.Run("control-knob-override", func(t *testing.T) {
+		knobs := &controlknobs.Knobs{}
+		knobs.OneCGNAT.Store(opt.NewBool(false))
+		if got := shouldUseOneCGNATRoute(t.Logf, nil, knobs, "android"); got {
+			t.Error("control knob should override android default; got true, want false")
+		}
+		knobs.OneCGNAT.Store(opt.NewBool(true))
+		if got := shouldUseOneCGNATRoute(t.Logf, nil, knobs, "linux"); !got {
+			t.Error("control knob should override linux default; got false, want true")
+		}
+	})
+}
+
+func TestPeerRoutesCGNATCollapse(t *testing.T) {
+	pp := netip.MustParsePrefix
+
+	// With cgnatThreshold=1 (oneCGNATRoute), adding a peer should not
+	// change the route list. Both collapse to a single 100.64.0.0/10.
+	twoPeers := []wgcfg.Peer{
+		{AllowedIPs: []netip.Prefix{pp("100.64.0.1/32")}},
+		{AllowedIPs: []netip.Prefix{pp("100.64.0.2/32")}},
+	}
+	threePeers := []wgcfg.Peer{
+		{AllowedIPs: []netip.Prefix{pp("100.64.0.1/32")}},
+		{AllowedIPs: []netip.Prefix{pp("100.64.0.2/32")}},
+		{AllowedIPs: []netip.Prefix{pp("100.64.0.3/32")}},
+	}
+
+	routesTwo := peerRoutes(t.Logf, twoPeers, 1, true)
+	routesThree := peerRoutes(t.Logf, threePeers, 1, true)
+
+	wantCGNAT := []netip.Prefix{pp("100.64.0.0/10")}
+	if !reflect.DeepEqual(routesTwo, wantCGNAT) {
+		t.Errorf("two peers: got %v; want %v", routesTwo, wantCGNAT)
+	}
+	if !reflect.DeepEqual(routesThree, wantCGNAT) {
+		t.Errorf("three peers: got %v; want %v", routesThree, wantCGNAT)
+	}
+
+	// Subnet routes must still appear alongside the collapsed CGNAT route.
+	peersWithSubnet := []wgcfg.Peer{
+		{AllowedIPs: []netip.Prefix{pp("100.64.0.1/32")}},
+		{AllowedIPs: []netip.Prefix{pp("100.64.0.2/32"), pp("10.0.0.0/24")}},
+	}
+	got := peerRoutes(t.Logf, peersWithSubnet, 1, true)
+	want := []netip.Prefix{pp("100.64.0.0/10"), pp("10.0.0.0/24")}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("with subnet: got %v; want %v", got, want)
 	}
 }

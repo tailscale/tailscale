@@ -14,7 +14,6 @@
 package main
 
 import (
-	_ "embed"
 	"fmt"
 	"log"
 	"os"
@@ -22,9 +21,6 @@ import (
 
 	"tailscale.com/misc/git_hook/githook"
 )
-
-//go:embed HOOK_VERSION
-var compiledHookVersion string
 
 var pushRemotes = []string{
 	"git@github.com:tailscale/tailscale",
@@ -47,7 +43,7 @@ func main() {
 	var err error
 	switch cmd {
 	case "version":
-		fmt.Print(strings.TrimSpace(compiledHookVersion))
+		fmt.Print(strings.TrimSpace(githook.HookVersion) + ":0")
 	case "install":
 		err = githook.WriteHooks(hooks)
 	case "pre-commit":

@@ -239,7 +239,7 @@ func TestLOCK(t *testing.T) {
 	}
 
 	u := fmt.Sprintf("http://%s/%s/%s/%s/%s",
-		s.local.l.Addr(),
+		s.local.ln.Addr(),
 		url.PathEscape(domain),
 		url.PathEscape(remote1),
 		url.PathEscape(share11),
@@ -365,7 +365,7 @@ func TestUNLOCK(t *testing.T) {
 	}
 
 	u := fmt.Sprintf("http://%s/%s/%s/%s/%s",
-		s.local.l.Addr(),
+		s.local.ln.Addr(),
 		url.PathEscape(domain),
 		url.PathEscape(remote1),
 		url.PathEscape(share11),
@@ -428,12 +428,12 @@ func TestUNLOCK(t *testing.T) {
 }
 
 type local struct {
-	l  net.Listener
+	ln net.Listener
 	fs *FileSystemForLocal
 }
 
 type remote struct {
-	l           net.Listener
+	ln          net.Listener
 	fs          *FileSystemForRemote
 	fileServer  *FileServer
 	shares      map[string]string
@@ -487,7 +487,7 @@ func newSystem(t *testing.T) *system {
 	client.SetTransport(&http.Transport{DisableKeepAlives: true})
 	s := &system{
 		t:       t,
-		local:   &local{l: ln, fs: fs},
+		local:   &local{ln: ln, fs: fs},
 		client:  client,
 		remotes: make(map[string]*remote),
 	}
@@ -510,7 +510,7 @@ func (s *system) addRemote(name string) string {
 	s.t.Logf("FileServer for %v listening at %s", name, fileServer.Addr())
 
 	r := &remote{
-		l:           ln,
+		ln:          ln,
 		fileServer:  fileServer,
 		fs:          NewFileSystemForRemote(log.Printf),
 		shares:      make(map[string]string),
@@ -524,7 +524,7 @@ func (s *system) addRemote(name string) string {
 	for name, r := range s.remotes {
 		remotes = append(remotes, &drive.Remote{
 			Name: name,
-			URL:  func() string { return fmt.Sprintf("http://%s", r.l.Addr()) },
+			URL:  func() string { return fmt.Sprintf("http://%s", r.ln.Addr()) },
 		})
 	}
 	s.local.fs.SetRemotes(
@@ -683,7 +683,7 @@ func (s *system) stop() {
 		s.t.Fatalf("failed to Close fs: %s", err)
 	}
 
-	err = s.local.l.Close()
+	err = s.local.ln.Close()
 	if err != nil {
 		s.t.Fatalf("failed to Close listener: %s", err)
 	}
@@ -694,7 +694,7 @@ func (s *system) stop() {
 			s.t.Fatalf("failed to Close remote fs: %s", err)
 		}
 
-		err = r.l.Close()
+		err = r.ln.Close()
 		if err != nil {
 			s.t.Fatalf("failed to Close remote listener: %s", err)
 		}
