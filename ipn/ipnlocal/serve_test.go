@@ -12,9 +12,11 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"expvar"
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -40,6 +42,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/util/syspolicy/policyclient"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 )
@@ -1762,5 +1765,126 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 				t.Error("expected error, got nil;", tt.description)
 			}
 		})
+	}
+}
+
+func counterValue(m *usermetric.MultiLabelMap[serveLabels], svc string) int64 {
+	v, _ := m.Get(serveLabels{Service: svc}).(*expvar.Int)
+	if v == nil {
+		return -1
+	}
+	return v.Value()
+}
+
+func TestServiceMeteredConn(t *testing.T) {
+	b := newTestBackend(t)
+
+	clientSide, serverSide := net.Pipe()
+	defer clientSide.Close()
+	defer serverSide.Close()
+
+	wrapped := b.meteredConnForService(serverSide, tailcfg.ServiceName("svc:foo"))
+
+	const inboundPayload = "hello from client"
+	writeDone := make(chan struct{})
+	go func() {
+		clientSide.Write([]byte(inboundPayload))
+		close(writeDone)
+	}()
+	buf := make([]byte, len(inboundPayload))
+	if _, err := io.ReadFull(wrapped, buf); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	<-writeDone
+	if got := counterValue(b.metrics.serveBytesInbound, "foo"); got != int64(len(inboundPayload)) {
+		t.Errorf("inbound = %d; want %d", got, len(inboundPayload))
+	}
+
+	const outboundPayload = "hello from server"
+	writeDone = make(chan struct{})
+	go func() {
+		wrapped.Write([]byte(outboundPayload))
+		close(writeDone)
+	}()
+	buf = make([]byte, len(outboundPayload))
+	if _, err := io.ReadFull(clientSide, buf); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	<-writeDone
+	if got := counterValue(b.metrics.serveBytesOutbound, "foo"); got != int64(len(outboundPayload)) {
+		t.Errorf("outbound = %d; want %d", got, len(outboundPayload))
+	}
+}
+
+func TestServiceMeteredConnLabelStripsPrefix(t *testing.T) {
+	b := newTestBackend(t)
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	wrapped := b.meteredConnForService(c1, tailcfg.ServiceName("svc:my-app"))
+	go c2.Write([]byte("x"))
+	io.ReadFull(wrapped, make([]byte, 1))
+	if v := counterValue(b.metrics.serveBytesInbound, "my-app"); v != 1 {
+		t.Errorf("inbound for service=\"my-app\" = %d; want 1", v)
+	}
+	if v := counterValue(b.metrics.serveBytesInbound, "svc:my-app"); v != -1 {
+		t.Errorf("counter unexpectedly present under unstripped name; got %d", v)
+	}
+}
+
+func TestEvictRemovedServiceMetrics(t *testing.T) {
+	b := newTestBackend(t)
+	svcIPMap := tailcfg.ServiceIPMappings{
+		"svc:foo": []netip.Addr{netip.MustParseAddr("100.101.101.101")},
+		"svc:bar": []netip.Addr{netip.MustParseAddr("100.99.99.99")},
+	}
+	svcIPMapJSON, err := json.Marshal(svcIPMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.currentNode().SetNetMap(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Name: "example.ts.net",
+			CapMap: tailcfg.NodeCapMap{
+				tailcfg.NodeAttrServiceHost: []tailcfg.RawMessage{tailcfg.RawMessage(svcIPMapJSON)},
+			},
+		}).View(),
+	})
+
+	twoServices := &ipn.ServeConfig{
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			"svc:foo": {TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}}},
+			"svc:bar": {TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}}},
+		},
+	}
+	if err := b.SetServeConfig(twoServices, ""); err != nil {
+		t.Fatalf("SetServeConfig: %v", err)
+	}
+
+	b.metrics.serveBytesInbound.Add(serveLabels{Service: "foo"}, 100)
+	b.metrics.serveBytesOutbound.Add(serveLabels{Service: "foo"}, 50)
+	b.metrics.serveBytesInbound.Add(serveLabels{Service: "bar"}, 200)
+	b.metrics.serveBytesOutbound.Add(serveLabels{Service: "bar"}, 75)
+
+	onlyFoo := &ipn.ServeConfig{
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			"svc:foo": {TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}}},
+		},
+	}
+	if err := b.SetServeConfig(onlyFoo, ""); err != nil {
+		t.Fatalf("SetServeConfig: %v", err)
+	}
+
+	if got := counterValue(b.metrics.serveBytesInbound, "foo"); got != 100 {
+		t.Errorf("svc:foo inbound after eviction = %d; want 100 (preserved)", got)
+	}
+	if got := counterValue(b.metrics.serveBytesOutbound, "foo"); got != 50 {
+		t.Errorf("svc:foo outbound after eviction = %d; want 50 (preserved)", got)
+	}
+	if got := counterValue(b.metrics.serveBytesInbound, "bar"); got != -1 {
+		t.Errorf("svc:bar inbound after eviction = %d; want absent", got)
+	}
+	if got := counterValue(b.metrics.serveBytesOutbound, "bar"); got != -1 {
+		t.Errorf("svc:bar outbound after eviction = %d; want absent", got)
 	}
 }

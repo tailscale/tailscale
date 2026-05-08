@@ -48,6 +48,7 @@ import (
 	"tailscale.com/util/ctxkey"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/slicesx"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 )
 
@@ -393,7 +394,27 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 		}
 	}
 
+	b.evictRemovedServiceMetrics(prevConfig)
+
 	return nil
+}
+
+func (b *LocalBackend) evictRemovedServiceMetrics(prev ipn.ServeConfigView) {
+	if !prev.Valid() || b.metrics.serveBytesInbound == nil {
+		return
+	}
+	stillPresent := func(tailcfg.ServiceName) bool { return false }
+	if b.serveConfig.Valid() {
+		stillPresent = b.serveConfig.Services().Contains
+	}
+	for svc := range prev.Services().All() {
+		if stillPresent(svc) {
+			continue
+		}
+		key := serveLabels{Service: svc.WithoutPrefix()}
+		b.metrics.serveBytesInbound.Delete(key)
+		b.metrics.serveBytesOutbound.Delete(key)
+	}
 }
 
 // ServeConfig provides a view of the current serve mappings.
@@ -534,6 +555,48 @@ func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcf
 	return servicesList
 }
 
+type serviceMeteredConn struct {
+	net.Conn
+	inbound, outbound *usermetric.MultiLabelMap[serveLabels]
+	key               serveLabels
+}
+
+func (c *serviceMeteredConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		c.inbound.Add(c.key, int64(n))
+	}
+	return n, err
+}
+
+func (c *serviceMeteredConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if n > 0 {
+		c.outbound.Add(c.key, int64(n))
+	}
+	return n, err
+}
+
+// CloseWrite preserves TCP half-close so *tls.Conn's graceful shutdown works.
+func (c *serviceMeteredConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return c.Conn.Close()
+}
+
+func (b *LocalBackend) meteredConnForService(c net.Conn, svc tailcfg.ServiceName) net.Conn {
+	if b.metrics.serveBytesInbound == nil || b.metrics.serveBytesOutbound == nil {
+		return c
+	}
+	return &serviceMeteredConn{
+		Conn:     c,
+		inbound:  b.metrics.serveBytesInbound,
+		outbound: b.metrics.serveBytesOutbound,
+		key:      serveLabels{Service: svc.WithoutPrefix()},
+	}
+}
+
 // tcpHandlerForVIPService returns a handler for a TCP connection to a VIP service
 // that is being served via the ipn.ServeConfig. It returns nil if the destination
 // address is not a VIP service or if the VIP service does not have a TCP handler set.
@@ -579,11 +642,13 @@ func (b *LocalBackend) tcpHandlerForVIPService(dstAddr, srcAddr netip.AddrPort) 
 				GetCertificate: b.getTLSServeCertForPort(dport, dstSvc),
 			}
 			return func(c net.Conn) error {
+				c = b.meteredConnForService(c, dstSvc)
 				return hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
 			}
 		}
 
 		return func(c net.Conn) error {
+			c = b.meteredConnForService(c, dstSvc)
 			return hs.Serve(netutil.NewOneConnListener(c, nil))
 		}
 	}
@@ -591,6 +656,7 @@ func (b *LocalBackend) tcpHandlerForVIPService(dstAddr, srcAddr netip.AddrPort) 
 	if backDst := tcph.TCPForward(); backDst != "" {
 		return func(conn net.Conn) error {
 			defer conn.Close()
+			conn = b.meteredConnForService(conn, dstSvc)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
 			cancel()
