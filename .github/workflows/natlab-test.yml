@@ -80,10 +80,10 @@ jobs:
         run: |
           make -C gokrazy natlab
 
-      - name: Run natlab vmtest suite
-        run: |
-          ./tool/go test -v -timeout=30m -count=1 ./tstest/natlab/vmtest/... --run-vm-tests
-
       - name: Run tstest/integration/nat suite
         run: |
           ./tool/go test -v -timeout=20m -count=1 ./tstest/integration/nat/... --run-vm-tests
+
+      - name: Run natlab vmtest suite
+        run: |
+          ./tool/go test -v -timeout=30m -count=1 ./tstest/natlab/vmtest/... --run-vm-tests
