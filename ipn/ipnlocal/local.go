@@ -9,8 +9,6 @@ import (
 	"bufio"
 	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -97,6 +95,7 @@ import (
 	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/syspolicy/ptype"
 	"tailscale.com/util/testenv"
+	"tailscale.com/util/traffic"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/util/vizerror"
 	"tailscale.com/version"
@@ -8133,22 +8132,8 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcf
 		return true
 	})
 
-	scores := make(map[tailcfg.NodeID]int, len(nodes))
-	score := func(n tailcfg.NodeView) int {
-		id := n.ID()
-		s, ok := scores[id]
-		if !ok {
-			s = 0 // score of zero means incomparable
-			if hi := n.Hostinfo(); hi.Valid() {
-				if loc := hi.Location(); loc.Valid() {
-					s = loc.Priority()
-				}
-			}
-			scores[id] = s
-		}
-		return s
-	}
-	rdvHash := makeRendezvousHasher(self.ID())
+	ss := traffic.ScorePeers(nodes)
+	rdvHash := traffic.MakeRendezvousHasher(self.ID())
 
 	var pick tailcfg.NodeView
 	if len(nodes) == 1 {
@@ -8157,7 +8142,7 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcf
 	if len(nodes) > 1 {
 		// Find the highest scoring exit nodes.
 		slices.SortFunc(nodes, func(a, b tailcfg.NodeView) int {
-			c := cmp.Compare(score(b), score(a)) // Highest score first.
+			c := cmp.Compare(ss.Score(b), ss.Score(a)) // Highest score first.
 			if c == 0 {
 				// Rendezvous hashing for reliably picking the
 				// same node from a list: tailscale/tailscale#16551.
@@ -8182,7 +8167,7 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcf
 				bw.WriteString(", ")
 			}
 			name, _, _ := strings.Cut(n.Name(), ".")
-			fmt.Fprintf(bw, "%d:%s", score(n), name)
+			fmt.Fprintf(bw, "%d:%s", ss.Score(n), name)
 		}
 	}))
 
@@ -8282,19 +8267,6 @@ func longLatDistance(fromLat, fromLong, toLat, toLong float64) float64 {
 	const earthRadiusMeters = 6371000
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	return earthRadiusMeters * c
-}
-
-// makeRendezvousHasher returns a function that hashes a node ID to a uint64.
-// https://en.wikipedia.org/wiki/Rendezvous_hashing
-func makeRendezvousHasher(seed tailcfg.NodeID) func(tailcfg.NodeID) uint64 {
-	en := binary.BigEndian
-	return func(n tailcfg.NodeID) uint64 {
-		var b [16]byte
-		en.PutUint64(b[:], uint64(seed))
-		en.PutUint64(b[8:], uint64(n))
-		v := sha256.Sum256(b[:])
-		return en.Uint64(v[:])
-	}
 }
 
 const (
