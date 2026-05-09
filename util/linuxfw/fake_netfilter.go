@@ -19,6 +19,8 @@ type FakeNetfilterRunner struct {
 		TailscaleServiceIP netip.Addr
 		ClusterIP          netip.Addr
 	}
+	// clampedAddrs tracks addresses passed to ClampMSSToPMTU.
+	clampedAddrs []netip.Addr
 }
 
 // NewFakeNetfilterRunner creates a new FakeNetfilterRunner.
@@ -83,7 +85,15 @@ func (f *FakeNetfilterRunner) DNATWithLoadBalancer(origDst netip.Addr, dsts []ne
 }
 func (f *FakeNetfilterRunner) EnsureSNATForDst(src, dst netip.Addr) error               { return nil }
 func (f *FakeNetfilterRunner) DNATNonTailscaleTraffic(tun string, dst netip.Addr) error { return nil }
-func (f *FakeNetfilterRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error         { return nil }
+func (f *FakeNetfilterRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error {
+	f.clampedAddrs = append(f.clampedAddrs, addr)
+	return nil
+}
+
+// GetClampedAddrs returns the addresses passed to ClampMSSToPMTU.
+func (f *FakeNetfilterRunner) GetClampedAddrs() []netip.Addr {
+	return f.clampedAddrs
+}
 func (f *FakeNetfilterRunner) AddMagicsockPortRule(port uint16, network string) error   { return nil }
 func (f *FakeNetfilterRunner) DelMagicsockPortRule(port uint16, network string) error   { return nil }
 func (f *FakeNetfilterRunner) DeletePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error {
