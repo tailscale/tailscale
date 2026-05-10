@@ -73,7 +73,7 @@ func haveDir(file string) bool {
 
 func linuxDistro() Distro {
 	switch {
-	case haveDir("/usr/syno"):
+	case haveDir("/usr/syno") && have("/etc/synoinfo.conf"):
 		return Synology
 	case have("/usr/local/bin/freenas-debug"):
 		// TrueNAS Scale runs on debian
