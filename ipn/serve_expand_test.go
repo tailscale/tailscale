@@ -56,6 +56,21 @@ func TestExpandProxyTargetValueUnix(t *testing.T) {
 			defaultScheme:    "http",
 			wantErr:          true,
 		},
+		{
+			name:             "unix-socket-tcp-supported",
+			target:           "unix:/var/run/app.sock",
+			supportedSchemes: []string{"tcp", "unix"},
+			defaultScheme:    "tcp",
+			want:             "unix:/var/run/app.sock",
+			skipOnWindows:    true,
+		},
+		{
+			name:             "unix-socket-tcp-not-supported",
+			target:           "unix:/var/run/app.sock",
+			supportedSchemes: []string{"tcp"},
+			defaultScheme:    "tcp",
+			wantErr:          true,
+		},
 	}
 
 	for _, tt := range tests {
