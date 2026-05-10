@@ -605,14 +605,14 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 	}
 	order, err := ac.AuthorizeOrder(ctx, authzIDs, opts...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("acme.AuthorizeOrder: %w", err)
 	}
 	traceACME(order)
 
 	for _, aurl := range order.AuthzURLs {
 		az, err := ac.GetAuthorization(ctx, aurl)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("acme.GetAuthorization: %w", err)
 		}
 		traceACME(az)
 		for _, ch := range az.Challenges {
@@ -645,7 +645,7 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 
 				chal, err := ac.Accept(ctx, ch)
 				if err != nil {
-					return nil, fmt.Errorf("Accept: %v", err)
+					return nil, fmt.Errorf("acme.Accept: %w", err)
 				}
 				traceACME(chal)
 				break
@@ -657,14 +657,14 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 	order, err = ac.WaitOrder(ctx, orderURI)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, fmt.Errorf("timed out waiting for ACME certificate order from LetsEncrypt: %w", ctx.Err())
 		}
 		if oe, ok := err.(*acme.OrderError); ok {
 			logf("acme: WaitOrder: OrderError status %q", oe.Status)
 		} else {
 			logf("acme: WaitOrder error: %v", err)
 		}
-		return nil, err
+		return nil, fmt.Errorf("acme.WaitOrder: %w", err)
 	}
 	traceACME(order)
 
@@ -686,7 +686,7 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 	traceACME(csr)
 	der, _, err := ac.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
 	if err != nil {
-		return nil, fmt.Errorf("CreateOrder: %v", err)
+		return nil, fmt.Errorf("acme.CreateOrderCert: %w", err)
 	}
 	logf("got cert")
 
