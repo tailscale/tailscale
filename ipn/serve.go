@@ -139,7 +139,10 @@ type TCPPortHandler struct {
 	// It is mutually exclusive with TCPForward.
 	HTTP bool `json:",omitempty"`
 
-	// TCPForward is the IP:port to forward TCP connections to.
+	// TCPForward is the address to forward TCP connections to.
+	// It is either a host:port (e.g. "127.0.0.1:3128", "localhost:5432")
+	// or a Unix socket path prefixed with "unix:"
+	// (e.g. "unix:/var/run/app.sock" or "unix:relative.sock").
 	// Whether or not TLS is terminated by tailscaled depends on
 	// TerminateTLS.
 	//
@@ -462,10 +465,10 @@ func (sc *ServeConfig) SetWebHandler(handler *HTTPHandler, host string, port uin
 	}
 }
 
-// SetTCPForwarding sets the fwdAddr (IP:port form) to which to forward
-// connections from the given port. If terminateTLS is true, TLS connections
-// are terminated with only the given host name permitted before passing them
-// to the fwdAddr.
+// SetTCPForwarding sets the fwdAddr to which to forward connections from the
+// given port. fwdAddr is either an IP:port or "unix:/path/to/socket".
+// If terminateTLS is true, TLS connections are terminated with only the given
+// host name permitted before passing them to the fwdAddr.
 //
 // If proxyProtocol is non-zero, the corresponding PROXY protocol version
 // header is sent before forwarding the connection.
@@ -483,10 +486,11 @@ func (sc *ServeConfig) SetTCPForwarding(port uint16, fwdAddr string, terminateTL
 	}
 }
 
-// SetTCPForwardingForService sets the fwdAddr (IP:port form) to which to
-// forward connections from the given port on the service. If terminateTLS
-// is true, TLS connections are terminated, with only the FQDN that corresponds
-// to the given service being permitted, before passing them to the fwdAddr.
+// SetTCPForwardingForService sets the fwdAddr to which to forward connections
+// from the given port on the service. fwdAddr is either a host:port or
+// "unix:/path" (absolute or relative). If terminateTLS is true, TLS connections
+// are terminated, with only the FQDN that corresponds to the given service
+// being permitted, before passing them to the fwdAddr.
 func (sc *ServeConfig) SetTCPForwardingForService(port uint16, fwdAddr string, terminateTLS bool, svcName tailcfg.ServiceName, proxyProtocol int, magicDNSSuffix string) {
 	if sc == nil {
 		sc = new(ServeConfig)

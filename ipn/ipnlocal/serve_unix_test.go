@@ -12,12 +12,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"tailscale.com/ipn"
 	"tailscale.com/tstest"
 )
 
@@ -236,5 +238,85 @@ func TestServeBlocksTailscaledSocket(t *testing.T) {
 	}
 	if handler == nil {
 		t.Error("expected valid handler for legitimate socket")
+	}
+}
+
+func TestTCPForwardUnixSocket(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	socketPath := filepath.Join(tmpDir, "backend.sock")
+
+	// Create a Unix socket echo server
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("failed to create unix socket listener: %v", err)
+	}
+	defer listener.Close()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				io.Copy(conn, conn) // echo
+			}()
+		}
+	}()
+
+	// Set up a LocalBackend with a ServeConfig that forwards TCP port 3128 to the unix socket
+	b := newTestBackend(t)
+	b.logf = tstest.WhileTestRunningLogger(t)
+
+	conf := &ipn.ServeConfig{
+		TCP: map[uint16]*ipn.TCPPortHandler{
+			3128: {TCPForward: "unix:" + socketPath},
+		},
+	}
+	if err := b.SetServeConfig(conf, ""); err != nil {
+		t.Fatal("setting serve config:", err)
+	}
+
+	// Get the handler from tcpHandlerForServe
+	srcAddr := netip.MustParseAddrPort("100.100.100.1:12345")
+	handler := b.tcpHandlerForServe(3128, srcAddr, nil)
+	if handler == nil {
+		t.Fatal("tcpHandlerForServe returned nil handler")
+	}
+
+	// Create a pipe to simulate an incoming connection
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+
+	// Run the handler in a goroutine
+	handlerDone := make(chan error, 1)
+	go func() {
+		handlerDone <- handler(serverConn)
+	}()
+
+	// Write data through the "client" side and read the echo back
+	testData := []byte("hello via tcpHandlerForServe")
+	if _, err := clientConn.Write(testData); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	buf := make([]byte, len(testData))
+	if _, err := io.ReadFull(clientConn, buf); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(buf) != string(testData) {
+		t.Fatalf("echo mismatch: got %q, want %q", buf, testData)
+	}
+
+	// Close client side, handler should finish
+	clientConn.Close()
+	select {
+	case err := <-handlerDone:
+		if err != nil {
+			t.Fatalf("handler returned unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not finish in time")
 	}
 }
