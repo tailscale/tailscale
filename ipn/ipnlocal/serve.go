@@ -673,7 +673,14 @@ func (b *LocalBackend) tcpHandlerForServeTCP(tcph ipn.TCPPortHandlerView, dport 
 			defer conn.Close()
 			conn = b.meteredConnForService(conn, forVIPService)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
+			var backConn net.Conn
+			var err error
+			if socketPath, ok := strings.CutPrefix(backDst, "unix:"); ok {
+				var d net.Dialer
+				backConn, err = d.DialContext(ctx, "unix", socketPath)
+			} else {
+				backConn, err = b.dialer.SystemDial(ctx, "tcp", backDst)
+			}
 			cancel()
 			if err != nil {
 				b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
@@ -714,7 +721,13 @@ func (b *LocalBackend) tcpHandlerForServeTCP(tcph ipn.TCPPortHandlerView, dport 
 func (b *LocalBackend) forwardTCPWithProxyProtocol(conn, backConn net.Conn, proxyProtoVer int, srcAddr netip.AddrPort, dport uint16, backDst string) error {
 	var proxyHeader []byte
 	if proxyProtoVer > 0 {
-		backAddr := backConn.RemoteAddr().(*net.TCPAddr)
+		// PROXY protocol requires a valid TCP destination address.
+		// For Unix socket backends, RemoteAddr is *net.UnixAddr;
+		// the CLI rejects this combination, but guard here as well.
+		backAddr, ok := backConn.RemoteAddr().(*net.TCPAddr)
+		if !ok {
+			return fmt.Errorf("PROXY protocol is not supported with non-TCP backend %s", backDst)
+		}
 
 		// We always want to format the PROXY protocol header based on
 		// the IPv4 or IPv6-ness of the client. The SourceAddr and

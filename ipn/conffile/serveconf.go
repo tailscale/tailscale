@@ -92,11 +92,16 @@ type Target struct {
 
 	// If Protocol is ProtoFile, then Destination is a file path.
 	// If Protocol is ProtoTUN, then Destination is empty.
+	// If Protocol is ProtoHTTP, ProtoHTTPS, ProtoHTTPSInsecure, ProtoTCP, or
+	// ProtoTLSTerminatedTCP and Destination starts with "unix:", it is a Unix
+	// socket path (e.g. "unix:/var/run/app.sock" or "unix:relative.sock").
 	// Otherwise, it is a host.
 	Destination string
 
 	// If Protocol is not ProtoFile or ProtoTUN, then DestinationPorts is the
 	// set of ports on which to connect to the host referred to by Destination.
+	// For unix socket targets (Destination starting with "unix:"),
+	// DestinationPorts is unused and left at the zero value.
 	DestinationPorts tailcfg.PortRange
 }
 
@@ -133,13 +138,22 @@ func (t *Target) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 		t.Destination = target
 		t.DestinationPorts = tailcfg.PortRange{}
 	case ProtoHTTP, ProtoHTTPS, ProtoHTTPSInsecure, ProtoTCP, ProtoTLSTerminatedTCP:
-		host, portRange, err := tailcfg.ParseHostPortRange(rest)
-		if err != nil {
-			return err
+		if unixPath, ok := strings.CutPrefix(rest, "unix:"); ok {
+			if unixPath == "" {
+				return errors.New("unix socket path cannot be empty")
+			}
+			t.Protocol = ServiceProtocol(proto)
+			t.Destination = rest
+			t.DestinationPorts = tailcfg.PortRange{}
+		} else {
+			host, portRange, err := tailcfg.ParseHostPortRange(rest)
+			if err != nil {
+				return err
+			}
+			t.Protocol = ServiceProtocol(proto)
+			t.Destination = host
+			t.DestinationPorts = portRange
 		}
-		t.Protocol = ServiceProtocol(proto)
-		t.Destination = host
-		t.DestinationPorts = portRange
 	default:
 		return errors.New("unsupported protocol")
 	}
@@ -155,7 +169,12 @@ func (t *Target) MarshalText() ([]byte, error) {
 	case ProtoTUN:
 		out = "TUN"
 	case ProtoHTTP, ProtoHTTPS, ProtoHTTPSInsecure, ProtoTCP, ProtoTLSTerminatedTCP:
-		out = fmt.Sprintf("%s://%s", t.Protocol, net.JoinHostPort(t.Destination, t.DestinationPorts.String()))
+		if strings.HasPrefix(t.Destination, "unix:") {
+			// Unix socket: serialize as e.g. "tcp://unix:/path/to/sock"
+			out = fmt.Sprintf("%s://%s", t.Protocol, t.Destination)
+		} else {
+			out = fmt.Sprintf("%s://%s", t.Protocol, net.JoinHostPort(t.Destination, t.DestinationPorts.String()))
+		}
 	default:
 		return nil, errors.New("unsupported protocol")
 	}
@@ -261,8 +280,19 @@ func loadConfigV0(json []byte, forService string) (*ServicesConfigFile, error) {
 				}
 				foundTUN = true
 			} else {
-				if ppr.Ports.Last-ppr.Ports.First != target.DestinationPorts.Last-target.DestinationPorts.First {
-					return nil, fmt.Errorf("service %q: source and destination port ranges must be of equal size", svcName.String())
+				// Unix socket targets (Destination starting with "unix:" on an
+				// HTTP/HTTPS/HTTPSInsecure/TCP/TLSTerminatedTCP inbound protocol)
+				// don't have a destination port range; skip the equality check.
+				isUnixSocket := strings.HasPrefix(target.Destination, "unix:") &&
+					(target.Protocol == ProtoHTTP ||
+						target.Protocol == ProtoHTTPS ||
+						target.Protocol == ProtoHTTPSInsecure ||
+						target.Protocol == ProtoTCP ||
+						target.Protocol == ProtoTLSTerminatedTCP)
+				if !isUnixSocket {
+					if ppr.Ports.Last-ppr.Ports.First != target.DestinationPorts.Last-target.DestinationPorts.First {
+						return nil, fmt.Errorf("service %q: source and destination port ranges must be of equal size", svcName.String())
+					}
 				}
 				foundNonTUN = true
 			}
