@@ -382,7 +382,15 @@ func New(bus *eventbus.Bus, logf logger.Logf) (*Monitor, error) {
 	m.changed = eventbus.Publish[ChangeDelta](m.b)
 	st, err := m.interfaceStateUncached()
 	if err != nil {
-		return nil, err
+		if runtime.GOOS != "android" {
+			return nil, err
+		}
+		logf("initial interface state failed on Android; assuming IPv4 connectivity: %v", err)
+		st = &State{
+			HaveV4:       true,
+			InterfaceIPs: make(map[string][]netip.Prefix),
+			Interface:    make(map[string]Interface),
+		}
 	}
 	m.ifState = st
 

@@ -1,0 +1,117 @@
+#!/data/data/com.termux/files/usr/bin/sh
+set -eu
+
+BASE="${TS_PORTFW_BASE:-$HOME/tailscale/forwards}"
+CONF="${TS_PORTFW_CONF:-$BASE/ports.conf}"
+SOCKS="${TS_SOCKS:-127.0.0.1:1055}"
+mkdir -p "$BASE/logs" "$BASE/pids"
+
+need() {
+	command -v "$1" >/dev/null 2>&1 || {
+		echo "missing $1; install with: pkg install nmap" >&2
+		exit 1
+	}
+}
+
+usage() {
+	cat <<EOF
+Usage: ts-portfw start|stop|restart|status|config|test
+
+Config: $CONF
+Format: name listen_host listen_port target_host target_port
+SOCKS proxy: $SOCKS
+EOF
+}
+
+valid_name() {
+	case "$1" in
+		"") return 1 ;;
+		*[!A-Za-z0-9_.-]*) return 1 ;;
+		*) return 0 ;;
+	esac
+}
+
+read_config() {
+	[ -f "$CONF" ] || {
+		echo "config not found: $CONF" >&2
+		exit 1
+	}
+	grep -v '^[[:space:]]*#' "$CONF" | grep -v '^[[:space:]]*$' || true
+}
+
+stop_one() {
+	name="$1"
+	pidfile="$BASE/pids/$name.pid"
+	if [ -f "$pidfile" ]; then
+		pid=$(cat "$pidfile" 2>/dev/null || true)
+		if [ -n "$pid" ]; then
+			kill "$pid" 2>/dev/null || true
+		fi
+		rm -f "$pidfile"
+	fi
+}
+
+start() {
+	need ncat
+	read_config | while read -r name listen_host listen_port target_host target_port extra; do
+		[ -z "${name:-}" ] && continue
+		if [ -n "${extra:-}" ]; then
+			echo "bad config row for $name: too many fields" >&2
+			exit 1
+		fi
+		valid_name "$name" || {
+			echo "bad forward name: $name" >&2
+			exit 1
+		}
+		stop_one "$name"
+		log="$BASE/logs/$name.log"
+		pidfile="$BASE/pids/$name.pid"
+		echo "starting $name: $listen_host:$listen_port -> $target_host:$target_port via SOCKS $SOCKS"
+		nohup ncat -lk "$listen_host" "$listen_port" \
+			--sh-exec "ncat --proxy $SOCKS --proxy-type socks5 $target_host $target_port" \
+			> "$log" 2>&1 &
+		echo $! > "$pidfile"
+	done
+}
+
+stop() {
+	read_config | while read -r name _; do
+		[ -n "${name:-}" ] && stop_one "$name"
+	done
+}
+
+status() {
+	read_config | while read -r name listen_host listen_port target_host target_port extra; do
+		pidfile="$BASE/pids/$name.pid"
+		pid=""
+		[ -f "$pidfile" ] && pid=$(cat "$pidfile" 2>/dev/null || true)
+		if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+			state=running
+		else
+			state=stopped
+		fi
+		printf '%-18s %-8s %s:%s -> %s:%s\n' "$name" "$state" "$listen_host" "$listen_port" "$target_host" "$target_port"
+	done
+}
+
+test_targets() {
+	need ncat
+	read_config | while read -r name listen_host listen_port target_host target_port extra; do
+		printf '%-18s target %s:%s ... ' "$name" "$target_host" "$target_port"
+		if timeout 8s ncat --proxy "$SOCKS" --proxy-type socks5 "$target_host" "$target_port" </dev/null >/dev/null 2>&1; then
+			echo ok
+		else
+			echo failed
+		fi
+	done
+}
+
+case "${1:-}" in
+	start) start ;;
+	stop) stop ;;
+	restart) stop; start ;;
+	status) status ;;
+	config) echo "$CONF"; sed -n '1,200p' "$CONF" ;;
+	test) test_targets ;;
+	*) usage; exit 2 ;;
+esac

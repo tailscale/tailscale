@@ -1,0 +1,11 @@
+# name listen_host listen_port target_host target_port
+#
+# Use listen_host 127.0.0.1 for phone-only access, or 0.0.0.0 for LAN access.
+# These forwards expect tailscaled to expose a local SOCKS5 proxy, for example:
+#
+#   tailscaled --tun=userspace-networking --socks5-server=127.0.0.1:1055
+#
+# Examples:
+work-rdp 0.0.0.0 13389 100.72.229.33 3389
+app-a-rdp 0.0.0.0 13390 100.99.14.15 3389
+db-a-sql 0.0.0.0 11433 100.73.30.5 1433
