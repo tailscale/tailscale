@@ -663,7 +663,11 @@ func printTCPStatusTree(ctx context.Context, sc *ipn.ServeConfig, st *ipnstate.S
 			ipp := net.JoinHostPort(a.String(), strconv.Itoa(int(p)))
 			printf("|-- tcp://%s\n", ipp)
 		}
-		printf("|--> tcp://%s\n", h.TCPForward)
+		if strings.HasPrefix(h.TCPForward, "unix:") {
+			printf("|--> %s\n", h.TCPForward)
+		} else {
+			printf("|--> tcp://%s\n", h.TCPForward)
+		}
 	}
 	return nil
 }

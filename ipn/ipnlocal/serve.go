@@ -25,6 +25,8 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -621,6 +623,26 @@ func (b *LocalBackend) tcpHandlerForVIPService(dstAddr, srcAddr netip.AddrPort) 
 	}, dstSvc)
 }
 
+// dialTCPOrUnix dials the backend target for TCP forwarding.
+// backDst is either a "host:port" or "unix:/absolute/path".
+// It validates unix socket paths and checks for tailscaled socket loops.
+func (b *LocalBackend) dialTCPOrUnix(ctx context.Context, backDst string) (net.Conn, error) {
+	if socketPath, ok := strings.CutPrefix(backDst, "unix:"); ok {
+		if runtime.GOOS == "windows" {
+			return nil, fmt.Errorf("unix socket backend %q is not supported on Windows", socketPath)
+		}
+		if socketPath == "" || !filepath.IsAbs(socketPath) {
+			return nil, fmt.Errorf("invalid unix socket path %q: must be absolute", socketPath)
+		}
+		if b.isTailscaledSocket(socketPath) {
+			return nil, ErrProxyToTailscaledSocket
+		}
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", socketPath)
+	}
+	return b.dialer.SystemDial(ctx, "tcp", backDst)
+}
+
 // tcpHandlerForServe returns a handler for a TCP connection to be served via
 // the ipn.ServeConfig. The funnelFlow can be nil if this is not a funneled
 // connection.
@@ -673,7 +695,7 @@ func (b *LocalBackend) tcpHandlerForServeTCP(tcph ipn.TCPPortHandlerView, dport 
 			defer conn.Close()
 			conn = b.meteredConnForService(conn, forVIPService)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
+			backConn, err := b.dialTCPOrUnix(ctx, backDst)
 			cancel()
 			if err != nil {
 				b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
@@ -701,7 +723,10 @@ func (b *LocalBackend) tcpHandlerForServeTCP(tcph ipn.TCPPortHandlerView, dport 
 
 			// TODO(bradfitz): do the RegisterIPPortIdentity and
 			// UnregisterIPPortIdentity stuff that netstack does
-			return b.forwardTCPWithProxyProtocol(conn, backConn, tcph.ProxyProtocol(), srcAddr, dport, backDst)
+			if err := b.forwardTCPWithProxyProtocol(conn, backConn, tcph.ProxyProtocol(), srcAddr, dport, backDst); err != nil {
+				b.logf("localbackend: TCP proxy port %v (from %v) to %s failed: %v", dport, srcAddr, backDst, err)
+			}
+			return nil
 		}
 	}
 
@@ -714,7 +739,13 @@ func (b *LocalBackend) tcpHandlerForServeTCP(tcph ipn.TCPPortHandlerView, dport 
 func (b *LocalBackend) forwardTCPWithProxyProtocol(conn, backConn net.Conn, proxyProtoVer int, srcAddr netip.AddrPort, dport uint16, backDst string) error {
 	var proxyHeader []byte
 	if proxyProtoVer > 0 {
-		backAddr := backConn.RemoteAddr().(*net.TCPAddr)
+		// PROXY protocol requires a valid TCP destination address.
+		// For Unix socket backends, RemoteAddr is *net.UnixAddr;
+		// the CLI rejects this combination, but guard here as well.
+		backAddr, ok := backConn.RemoteAddr().(*net.TCPAddr)
+		if !ok {
+			return fmt.Errorf("PROXY protocol is not supported with non-TCP backend %s", backDst)
+		}
 
 		// We always want to format the PROXY protocol header based on
 		// the IPv4 or IPv6-ness of the client. The SourceAddr and
