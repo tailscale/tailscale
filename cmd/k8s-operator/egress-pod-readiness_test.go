@@ -420,11 +420,56 @@ func TestEgressPodReadiness(t *testing.T) {
 		expectEqual(t, fc, pod)
 		mustDeleteAll(t, fc, pod, svc, svc2, svc3)
 	})
+	t.Run("ipv6_only_pod_already_routed_to", func(t *testing.T) {
+		pod := podTemplate.DeepCopy()
+		pod.Status.PodIPs = []corev1.PodIP{{IP: "fd00::2"}}
+
+		svc, hep := newSvc("svc", 9002)
+		mustCreateAll(t, fc, svc, pod)
+		resp := readyRespsV6("fd00::2", 1)
+		httpCl := fakeHTTPClient{
+			t:     t,
+			state: map[string][]fakeResponse{hep: resp},
+		}
+		rec.httpClient = &httpCl
+		expectReconciled(t, rec, "operator-ns", pod.Name)
+
+		podSetReady(pod, cl)
+		expectEqual(t, fc, pod)
+		mustDeleteAll(t, fc, pod, svc)
+	})
+	t.Run("dual_stack_pod", func(t *testing.T) {
+		pod := podTemplate.DeepCopy()
+		pod.Status.PodIPs = []corev1.PodIP{{IP: "10.0.0.2"}, {IP: "fd00::2"}}
+
+		svc, hep := newSvc("svc", 9002)
+		mustCreateAll(t, fc, svc, pod)
+		// Dual-stack pod: the reconciler uses PodIPs[0] (the primary IP),
+		// which in this case is IPv4.
+		resp := readyResps("10.0.0.2", 1)
+		httpCl := fakeHTTPClient{
+			t:     t,
+			state: map[string][]fakeResponse{hep: resp},
+		}
+		rec.httpClient = &httpCl
+		expectReconciled(t, rec, "operator-ns", pod.Name)
+
+		podSetReady(pod, cl)
+		expectEqual(t, fc, pod)
+		mustDeleteAll(t, fc, pod, svc)
+	})
 }
 
 func readyResps(ip string, num int) (resps []fakeResponse) {
 	for range num {
 		resps = append(resps, fakeResponse{statusCode: 200, podIP: ip})
+	}
+	return resps
+}
+
+func readyRespsV6(ip string, num int) (resps []fakeResponse) {
+	for range num {
+		resps = append(resps, fakeResponse{statusCode: 200, podIP: ip, header: kubetypes.PodIPv6Header})
 	}
 	return resps
 }
@@ -513,7 +558,11 @@ func (f *fakeHTTPClient) Do(req *http.Request) (*http.Response, error) {
 		Header:     make(http.Header),
 		Body:       io.NopCloser(bytes.NewReader([]byte{})),
 	}
-	r.Header.Add(kubetypes.PodIPv4Header, resp.podIP)
+	h := kubetypes.PodIPv4Header
+	if resp.header != "" {
+		h = resp.header
+	}
+	r.Header.Add(h, resp.podIP)
 	return &r, nil
 }
 
@@ -521,4 +570,5 @@ type fakeResponse struct {
 	err        error
 	statusCode int
 	podIP      string // for the Pod IP header
+	header     string // header key to use; defaults to PodIPv4Header
 }

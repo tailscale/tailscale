@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
@@ -50,6 +51,9 @@ func TestTailscaleEgressServices(t *testing.T) {
 		WithScheme(tsapi.GlobalScheme).
 		WithObjects(pg, cm).
 		WithStatusSubresource(pg).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: clusterIPInterceptor("10.96.0.1"),
+		}).
 		Build()
 	zl, err := zap.NewDevelopment()
 	if err != nil {
@@ -135,10 +139,10 @@ func validateReadyService(t *testing.T, fc client.WithWatch, esr *egressSvcsReco
 	expectReconciled(t, esr, "default", "test")
 	// Verify that a ClusterIP Service has been created.
 	name := findGenNameForEgressSvcResources(t, fc, svc)
-	expectEqual(t, fc, clusterIPSvc(name, svc), removeTargetPortsFromSvc)
+	expectEqual(t, fc, clusterIPSvc(name, svc), removeTargetPortsFromSvc, removeClusterIPsFromSvc)
 	clusterSvc := mustGetClusterIPSvc(t, fc, name)
 	// Verify that an EndpointSlice has been created.
-	expectEqual(t, fc, endpointSlice(name, svc, clusterSvc))
+	expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv4))
 	// Verify that ConfigMap contains configuration for the new egress service.
 	mustHaveConfigForSvc(t, fc, svc, clusterSvc, cm, zl)
 	r := svcConfiguredReason(svc, true, zl.Sugar())
@@ -224,18 +228,22 @@ func mustGetClusterIPSvc(t *testing.T, cl client.Client, name string) *corev1.Se
 	return svc
 }
 
-func endpointSlice(name string, extNSvc, clusterIPSvc *corev1.Service) *discoveryv1.EndpointSlice {
+func endpointSlice(name string, extNSvc, clusterIPSvc *corev1.Service, addrType discoveryv1.AddressType) *discoveryv1.EndpointSlice {
 	labels := egressSvcChildResourceLabels(extNSvc)
 	labels[discoveryv1.LabelManagedBy] = "tailscale.com"
 	labels[discoveryv1.LabelServiceName] = name
+	suffix := "ipv4"
+	if addrType == discoveryv1.AddressTypeIPv6 {
+		suffix = "ipv6"
+	}
 	return &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-ipv4", name),
+			Name:      fmt.Sprintf("%s-%s", name, suffix),
 			Namespace: "operator-ns",
 			Labels:    labels,
 		},
 		Ports:       portsForEndpointSlice(clusterIPSvc),
-		AddressType: discoveryv1.AddressTypeIPv4,
+		AddressType: addrType,
 	}
 }
 
@@ -294,4 +302,102 @@ func configFromCM(t *testing.T, cm *corev1.ConfigMap, svcName string) *egressser
 		return &cfg
 	}
 	return nil
+}
+
+func TestTailscaleEgressServicesDualStack(t *testing.T) {
+	pg := &tsapi.ProxyGroup{
+		TypeMeta: metav1.TypeMeta{Kind: "ProxyGroup", APIVersion: "tailscale.com/v1alpha1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "foo",
+			UID:  types.UID("1234-UID"),
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Replicas: pointer.To[int32](3),
+			Type:     tsapi.ProxyGroupTypeEgress,
+		},
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pgEgressCMName("foo"),
+			Namespace: "operator-ns",
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pg, cm).
+		WithStatusSubresource(pg).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: clusterIPInterceptor("10.96.0.1", "fd00::1"),
+		}).
+		Build()
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := tstest.NewClock(tstest.ClockOpts{})
+
+	esr := &egressSvcsReconciler{
+		Client:      fc,
+		logger:      zl.Sugar(),
+		clock:       clock,
+		tsNamespace: "operator-ns",
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: "foo.bar.ts.net.",
+				AnnotationProxyGroup:        "foo",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ExternalName: "placeholder",
+			Type:         corev1.ServiceTypeExternalName,
+			Selector:     nil,
+			Ports: []corev1.ServicePort{
+				{
+					Protocol: "TCP",
+					Port:     80,
+				},
+			},
+		},
+	}
+
+	t.Run("dual_stack_creates_both_endpoint_slices", func(t *testing.T) {
+		mustCreate(t, fc, svc)
+		expectReconciled(t, esr, "default", "test")
+		validateReadyService(t, fc, esr, svc, clock, zl, cm)
+		// Also verify the IPv6 EndpointSlice was created.
+		name := findGenNameForEgressSvcResources(t, fc, svc)
+		clusterSvc := mustGetClusterIPSvc(t, fc, name)
+		expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv6))
+	})
+
+	t.Run("delete_dual_stack_service", func(t *testing.T) {
+		name := findGenNameForEgressSvcResources(t, fc, svc)
+		if err := fc.Delete(context.Background(), svc); err != nil {
+			t.Fatalf("error deleting ExternalName Service: %v", err)
+		}
+		expectReconciled(t, esr, "default", "test")
+		expectMissing[corev1.Service](t, fc, "operator-ns", name)
+		expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", fmt.Sprintf("%s-ipv4", name))
+		expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", fmt.Sprintf("%s-ipv6", name))
+		mustNotHaveConfigForSvc(t, fc, svc, cm)
+	})
+}
+
+// clusterIPInterceptor returns an interceptor.Funcs Create function that
+// simulates the API server assigning ClusterIPs to ClusterIP Services.
+// This is required because the reconciler iterates ClusterIPs to create
+// per-family EndpointSlices but the fake client does not assign ClusterIPs.
+func clusterIPInterceptor(clusterIPs ...string) func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+	return func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if svc, ok := obj.(*corev1.Service); ok && svc.Spec.Type == corev1.ServiceTypeClusterIP {
+			svc.Spec.ClusterIPs = clusterIPs
+			svc.Spec.ClusterIP = clusterIPs[0]
+		}
+		return c.Create(ctx, obj, opts...)
+	}
 }

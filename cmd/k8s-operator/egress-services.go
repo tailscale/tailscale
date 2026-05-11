@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net/netip"
 	"reflect"
 	"slices"
 	"strings"
@@ -317,26 +318,35 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 	}
 
 	crl := egressSvcEpsLabels(svc, clusterIPSvc)
-	// TODO(irbekrm): support IPv6, but need to investigate how kube proxy
-	// sets up Service -> Pod routing when IPv6 is involved.
-	eps := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-ipv4", clusterIPSvc.Name),
-			Namespace: esr.tsNamespace,
-			Labels:    crl,
-		},
-		AddressType: discoveryv1.AddressTypeIPv4,
-		Ports:       epsPortsFromSvc(clusterIPSvc),
-	}
-	if eps, err = createOrUpdate(ctx, esr.Client, esr.tsNamespace, eps, func(e *discoveryv1.EndpointSlice) {
-		e.Labels = eps.Labels
-		e.AddressType = eps.AddressType
-		e.Ports = eps.Ports
-		for _, p := range e.Endpoints {
-			p.Conditions.Ready = nil
+	// Only create EndpointSlices for IP families supported by the cluster.
+	for _, clusterIP := range clusterIPSvc.Spec.ClusterIPs {
+		ip, err := netip.ParseAddr(clusterIP)
+		if err != nil {
+			return nil, false, fmt.Errorf("error parsing ClusterIP %q: %w", clusterIP, err)
 		}
-	}); err != nil {
-		return nil, false, fmt.Errorf("error ensuring EndpointSlice: %w", err)
+		addrType := discoveryv1.AddressTypeIPv4
+		if ip.Is6() {
+			addrType = discoveryv1.AddressTypeIPv6
+		}
+		eps := &discoveryv1.EndpointSlice{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType))),
+				Namespace: esr.tsNamespace,
+				Labels:    crl,
+			},
+			AddressType: addrType,
+			Ports:       epsPortsFromSvc(clusterIPSvc),
+		}
+		if _, err = createOrUpdate(ctx, esr.Client, esr.tsNamespace, eps, func(e *discoveryv1.EndpointSlice) {
+			e.Labels = eps.Labels
+			e.AddressType = eps.AddressType
+			e.Ports = eps.Ports
+			for _, p := range e.Endpoints {
+				p.Conditions.Ready = nil
+			}
+		}); err != nil {
+			return nil, false, fmt.Errorf("error ensuring %s EndpointSlice: %w", addrType, err)
+		}
 	}
 
 	cm, cfgs, err := egressSvcsConfigs(ctx, esr.Client, proxyGroupName, esr.tsNamespace)
