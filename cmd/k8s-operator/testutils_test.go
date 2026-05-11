@@ -984,6 +984,11 @@ func removeTargetPortsFromSvc(svc *corev1.Service) {
 	svc.Spec.Ports = newPorts
 }
 
+func removeClusterIPsFromSvc(svc *corev1.Service) {
+	svc.Spec.ClusterIP = ""
+	svc.Spec.ClusterIPs = nil
+}
+
 func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {
 	return func(secret *corev1.Secret) {
 		t.Helper()

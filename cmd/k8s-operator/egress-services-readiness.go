@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"go.uber.org/zap"
@@ -72,14 +73,14 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 	}()
 
 	crl := egressSvcChildResourceLabels(svc)
-	eps, err := getSingleObject[discoveryv1.EndpointSlice](ctx, esrr.Client, esrr.tsNamespace, crl)
-	if err != nil {
-		err = fmt.Errorf("error getting EndpointSlice: %w", err)
+	epsList := &discoveryv1.EndpointSliceList{}
+	if err = esrr.List(ctx, epsList, client.InNamespace(esrr.tsNamespace), client.MatchingLabels(crl)); err != nil {
+		err = fmt.Errorf("error listing EndpointSlices: %w", err)
 		reason = reasonReadinessCheckFailed
 		msg = err.Error()
 		return res, err
 	}
-	if eps == nil {
+	if len(epsList.Items) == 0 {
 		lg.Infof("EndpointSlice for Service does not yet exist, waiting...")
 		reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
 		st = metav1.ConditionFalse
@@ -119,6 +120,7 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 	}
 	podLabels := pgLabels(pg.Name, nil)
 	var readyReplicas int32
+nextReplica:
 	for i := range replicas {
 		podLabels[appsv1.PodIndexLabel] = fmt.Sprintf("%d", i)
 		pod, err := getSingleObject[corev1.Pod](ctx, esrr.Client, esrr.tsNamespace, podLabels)
@@ -136,18 +138,16 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 		}
 
 		lg.Debugf("looking at Pod with IPs %v", pod.Status.PodIPs)
-		ready := false
-		for _, ep := range eps.Endpoints {
-			lg.Debugf("looking at endpoint with addresses %v", ep.Addresses)
-			if endpointReadyForPod(&ep, pod, lg) {
-				lg.Debugf("endpoint is ready for Pod")
-				ready = true
-				break
+		for _, eps := range epsList.Items {
+			lg.Debugf("looking at %s EndpointSlice %s", eps.AddressType, eps.Name)
+			if !slices.ContainsFunc(eps.Endpoints, func(ep discoveryv1.Endpoint) bool {
+				return endpointReadyForPod(&ep, pod, eps.AddressType, lg)
+			}) {
+				continue nextReplica
 			}
 		}
-		if ready {
-			readyReplicas++
-		}
+		lg.Debugf("endpoint is ready for Pod")
+		readyReplicas++
 	}
 	msg = fmt.Sprintf(msgReadyToRouteTemplate, readyReplicas, replicas)
 	if readyReplicas == 0 {
@@ -164,12 +164,15 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 	return res, nil
 }
 
-// endpointReadyForPod returns true if the endpoint is for the Pod's IPv4 address and is ready to serve traffic.
-// Endpoint must not be nil.
-func endpointReadyForPod(ep *discoveryv1.Endpoint, pod *corev1.Pod, lg *zap.SugaredLogger) bool {
-	podIP, err := podIPv4(pod)
+// endpointReadyForPod returns true if the endpoint is for the Pod's address (for the given address family)
+// and is ready to serve traffic. Endpoint must not be nil.
+func endpointReadyForPod(ep *discoveryv1.Endpoint, pod *corev1.Pod, addrType discoveryv1.AddressType, lg *zap.SugaredLogger) bool {
+	podIP, err := podIPForFamily(pod, addrType)
 	if err != nil {
-		lg.Warnf("error retrieving Pod's IPv4 address: %v", err)
+		lg.Warnf("error retrieving Pod's %s address: %v", addrType, err)
+		return false
+	}
+	if podIP == "" {
 		return false
 	}
 
