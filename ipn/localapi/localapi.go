@@ -545,6 +545,8 @@ type localBackendWhoIsMethods interface {
 	WhoIs(string, netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
 	WhoIsNodeKey(key.NodePublic) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
 	PeerCaps(netip.Addr) tailcfg.PeerCapMap
+	PeerCapsForIP(src, dst netip.Addr) tailcfg.PeerCapMap
+	PeerCapsForService(src netip.Addr, svcName tailcfg.ServiceName) tailcfg.PeerCapMap
 }
 
 func (h *Handler) serveWhoIsWithBackend(w http.ResponseWriter, r *http.Request, b localBackendWhoIsMethods) {
@@ -592,7 +594,25 @@ func (h *Handler) serveWhoIsWithBackend(w http.ResponseWriter, r *http.Request, 
 		UserProfile: &u,           // always non-nil per WhoIsResponse contract
 	}
 	if n.Addresses().Len() > 0 {
-		res.CapMap = b.PeerCaps(n.Addresses().At(0).Addr())
+		src := n.Addresses().At(0).Addr()
+		switch {
+		case r.FormValue("svc_name") != "":
+			svcName := tailcfg.AsServiceName(r.FormValue("svc_name"))
+			if svcName == "" {
+				http.Error(w, "invalid svc_name", http.StatusBadRequest)
+				return
+			}
+			res.CapMap = b.PeerCapsForService(src, svcName)
+		case r.FormValue("dst_ip") != "":
+			svcAddr, err := netip.ParseAddr(r.FormValue("dst_ip"))
+			if err != nil {
+				http.Error(w, "invalid dst_ip", http.StatusBadRequest)
+				return
+			}
+			res.CapMap = b.PeerCapsForIP(src, svcAddr)
+		default:
+			res.CapMap = b.PeerCaps(src)
+		}
 	}
 	j, err := json.MarshalIndent(res, "", "\t")
 	if err != nil {

@@ -116,9 +116,11 @@ func TestSetPushDeviceToken(t *testing.T) {
 }
 
 type whoIsBackend struct {
-	whoIs        func(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
-	whoIsNodeKey func(key.NodePublic) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
-	peerCaps     map[netip.Addr]tailcfg.PeerCapMap
+	whoIs              func(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
+	whoIsNodeKey       func(key.NodePublic) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
+	peerCaps           map[netip.Addr]tailcfg.PeerCapMap
+	peerCapsForIP      func(src, dst netip.Addr) tailcfg.PeerCapMap
+	peerCapsForSvcName func(src netip.Addr, svcName tailcfg.ServiceName) tailcfg.PeerCapMap
 }
 
 func (b whoIsBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
@@ -131,6 +133,20 @@ func (b whoIsBackend) WhoIsNodeKey(k key.NodePublic) (n tailcfg.NodeView, u tail
 
 func (b whoIsBackend) PeerCaps(ip netip.Addr) tailcfg.PeerCapMap {
 	return b.peerCaps[ip]
+}
+
+func (b whoIsBackend) PeerCapsForIP(src, dst netip.Addr) tailcfg.PeerCapMap {
+	if b.peerCapsForIP != nil {
+		return b.peerCapsForIP(src, dst)
+	}
+	return nil
+}
+
+func (b whoIsBackend) PeerCapsForService(src netip.Addr, svcName tailcfg.ServiceName) tailcfg.PeerCapMap {
+	if b.peerCapsForSvcName != nil {
+		return b.peerCapsForSvcName(src, svcName)
+	}
+	return nil
 }
 
 // Tests that the WhoIs handler accepts IPs, IP:ports, or nodekeys.
@@ -200,6 +216,183 @@ func TestWhoIsArgTypes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWhoIsServiceParams(t *testing.T) {
+	h := handlerForTest(t, &Handler{
+		PermitRead: true,
+	})
+
+	peerAddr := netip.MustParseAddr("100.101.102.103")
+	vipA := netip.MustParseAddr("100.100.0.1")
+	vipB := netip.MustParseAddr("100.100.0.2")
+
+	nodeCapsForAddr := tailcfg.PeerCapMap{"host-cap": {`"host-val"`}}
+	vipACaps := tailcfg.PeerCapMap{"svc-a-cap": {`"a-val"`}}
+	vipBCaps := tailcfg.PeerCapMap{"svc-b-cap": {`"b-val"`}}
+
+	match := func() (tailcfg.NodeView, tailcfg.UserProfile, bool) {
+		return (&tailcfg.Node{
+			ID:        123,
+			Addresses: []netip.Prefix{netip.PrefixFrom(peerAddr, 32)},
+		}).View(), tailcfg.UserProfile{ID: 456}, true
+	}
+
+	backend := whoIsBackend{
+		whoIs: func(proto string, ipp netip.AddrPort) (tailcfg.NodeView, tailcfg.UserProfile, bool) {
+			return match()
+		},
+		peerCaps: map[netip.Addr]tailcfg.PeerCapMap{
+			peerAddr: nodeCapsForAddr,
+		},
+		peerCapsForIP: func(src, dst netip.Addr) tailcfg.PeerCapMap {
+			switch dst {
+			case vipA:
+				return vipACaps
+			case vipB:
+				return vipBCaps
+			}
+			return nil
+		},
+		peerCapsForSvcName: func(src netip.Addr, svcName tailcfg.ServiceName) tailcfg.PeerCapMap {
+			switch svcName {
+			case "svc:db":
+				return vipACaps
+			case "svc:cache":
+				return vipBCaps
+			}
+			return nil
+		},
+	}
+
+	doWhoIs := func(t *testing.T, query string) apitype.WhoIsResponse {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.serveWhoIsWithBackend(rec, httptest.NewRequest("GET", "/v0/whois?"+query, nil), backend)
+		if rec.Code != 200 {
+			t.Fatalf("response code %d; body: %s", rec.Code, rec.Body.String())
+		}
+		var res apitype.WhoIsResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+			t.Fatalf("parsing response: %v", err)
+		}
+		return res
+	}
+
+	doWhoIsStatus := func(t *testing.T, query string) int {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.serveWhoIsWithBackend(rec, httptest.NewRequest("GET", "/v0/whois?"+query, nil), backend)
+		return rec.Code
+	}
+
+	// No service params — uses PeerCaps (host-level).
+	t.Run("no_service_params_uses_PeerCaps", func(t *testing.T) {
+		res := doWhoIs(t, "addr="+peerAddr.String())
+		if _, ok := res.CapMap["host-cap"]; !ok {
+			t.Errorf("expected host-cap from PeerCaps; got %v", res.CapMap)
+		}
+		if _, ok := res.CapMap["svc-a-cap"]; ok {
+			t.Error("VIP cap should not appear without service param")
+		}
+	})
+
+	// dst_ip tests — PeerCapsForIP path.
+	t.Run("dst_ip_uses_PeerCapsForIP", func(t *testing.T) {
+		res := doWhoIs(t, "addr="+peerAddr.String()+"&dst_ip="+vipA.String())
+		if _, ok := res.CapMap["svc-a-cap"]; !ok {
+			t.Errorf("expected svc-a-cap; got %v", res.CapMap)
+		}
+		if _, ok := res.CapMap["host-cap"]; ok {
+			t.Error("host-cap should not appear when dst_ip is specified")
+		}
+	})
+
+	t.Run("dst_ip_scopes_to_specific_service", func(t *testing.T) {
+		resA := doWhoIs(t, "addr="+peerAddr.String()+"&dst_ip="+vipA.String())
+		resB := doWhoIs(t, "addr="+peerAddr.String()+"&dst_ip="+vipB.String())
+
+		if _, ok := resA.CapMap["svc-a-cap"]; !ok {
+			t.Errorf("dst_ip=vipA: expected svc-a-cap; got %v", resA.CapMap)
+		}
+		if _, ok := resA.CapMap["svc-b-cap"]; ok {
+			t.Error("dst_ip=vipA: svc-b-cap should not appear")
+		}
+
+		if _, ok := resB.CapMap["svc-b-cap"]; !ok {
+			t.Errorf("dst_ip=vipB: expected svc-b-cap; got %v", resB.CapMap)
+		}
+		if _, ok := resB.CapMap["svc-a-cap"]; ok {
+			t.Error("dst_ip=vipB: svc-a-cap should not appear")
+		}
+	})
+
+	t.Run("dst_ip_unrelated_ip_returns_empty", func(t *testing.T) {
+		res := doWhoIs(t, "addr="+peerAddr.String()+"&dst_ip=10.0.0.99")
+		if len(res.CapMap) != 0 {
+			t.Errorf("expected empty CapMap for unrelated dst_ip; got %v", res.CapMap)
+		}
+	})
+
+	t.Run("dst_ip_invalid_returns_400", func(t *testing.T) {
+		if code := doWhoIsStatus(t, "addr="+peerAddr.String()+"&dst_ip=not-an-ip"); code != 400 {
+			t.Errorf("expected 400 for invalid dst_ip; got %d", code)
+		}
+	})
+
+	// svc_name tests — PeerCapsForService path.
+	t.Run("svc_name_uses_PeerCapsForService", func(t *testing.T) {
+		res := doWhoIs(t, "addr="+peerAddr.String()+"&svc_name=svc:db")
+		if _, ok := res.CapMap["svc-a-cap"]; !ok {
+			t.Errorf("expected svc-a-cap; got %v", res.CapMap)
+		}
+		if _, ok := res.CapMap["host-cap"]; ok {
+			t.Error("host-cap should not appear when svc_name is specified")
+		}
+	})
+
+	t.Run("svc_name_scopes_to_specific_service", func(t *testing.T) {
+		resA := doWhoIs(t, "addr="+peerAddr.String()+"&svc_name=svc:db")
+		resB := doWhoIs(t, "addr="+peerAddr.String()+"&svc_name=svc:cache")
+
+		if _, ok := resA.CapMap["svc-a-cap"]; !ok {
+			t.Errorf("svc_name=svc:db: expected svc-a-cap; got %v", resA.CapMap)
+		}
+		if _, ok := resA.CapMap["svc-b-cap"]; ok {
+			t.Error("svc_name=svc:db: svc-b-cap should not appear")
+		}
+
+		if _, ok := resB.CapMap["svc-b-cap"]; !ok {
+			t.Errorf("svc_name=svc:cache: expected svc-b-cap; got %v", resB.CapMap)
+		}
+		if _, ok := resB.CapMap["svc-a-cap"]; ok {
+			t.Error("svc_name=svc:cache: svc-a-cap should not appear")
+		}
+	})
+
+	t.Run("svc_name_unknown_service_returns_empty", func(t *testing.T) {
+		res := doWhoIs(t, "addr="+peerAddr.String()+"&svc_name=svc:unknown")
+		if len(res.CapMap) != 0 {
+			t.Errorf("expected empty CapMap for unknown service; got %v", res.CapMap)
+		}
+	})
+
+	t.Run("svc_name_invalid_returns_400", func(t *testing.T) {
+		if code := doWhoIsStatus(t, "addr="+peerAddr.String()+"&svc_name=not-a-service-name"); code != 400 {
+			t.Errorf("expected 400 for invalid svc_name; got %d", code)
+		}
+	})
+
+	// svc_name takes priority over dst_ip when both are specified.
+	t.Run("svc_name_takes_priority_over_dst_ip", func(t *testing.T) {
+		res := doWhoIs(t, "addr="+peerAddr.String()+"&svc_name=svc:cache&dst_ip="+vipA.String())
+		if _, ok := res.CapMap["svc-b-cap"]; !ok {
+			t.Errorf("svc_name should take priority; expected svc-b-cap (cache); got %v", res.CapMap)
+		}
+		if _, ok := res.CapMap["svc-a-cap"]; ok {
+			t.Error("dst_ip result should not appear when svc_name is also specified")
+		}
+	})
 }
 
 type fakePeerByIDBackend map[tailcfg.NodeID]*tailcfg.Node

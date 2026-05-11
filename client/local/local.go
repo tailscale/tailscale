@@ -327,6 +327,35 @@ func (lc *Client) WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsR
 	return decodeJSON[*apitype.WhoIsResponse](body)
 }
 
+// WhoIsForService is like [Client.WhoIs] but scopes the returned CapMap to
+// capabilities that apply to the named VIP service. This enables per-service
+// capability resolution on hosts that advertise multiple VIP services.
+func (lc *Client) WhoIsForService(ctx context.Context, remoteAddr string, svcName tailcfg.ServiceName) (*apitype.WhoIsResponse, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/whois?addr="+url.QueryEscape(remoteAddr)+"&svc_name="+url.QueryEscape(string(svcName)))
+	if err != nil {
+		if hs, ok := err.(httpStatusError); ok && hs.HTTPStatus == http.StatusNotFound {
+			return nil, ErrPeerNotFound
+		}
+		return nil, err
+	}
+	return decodeJSON[*apitype.WhoIsResponse](body)
+}
+
+// WhoIsForIP is like [Client.WhoIs] but scopes the returned CapMap to
+// capabilities that apply to the given destination IP. The IP may be a
+// VIP service address, the node's own tailnet address, or any other
+// routable IP the node handles.
+func (lc *Client) WhoIsForIP(ctx context.Context, remoteAddr string, dst netip.Addr) (*apitype.WhoIsResponse, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/whois?addr="+url.QueryEscape(remoteAddr)+"&dst_ip="+url.QueryEscape(dst.String()))
+	if err != nil {
+		if hs, ok := err.(httpStatusError); ok && hs.HTTPStatus == http.StatusNotFound {
+			return nil, ErrPeerNotFound
+		}
+		return nil, err
+	}
+	return decodeJSON[*apitype.WhoIsResponse](body)
+}
+
 // ErrPeerNotFound is returned by [Client.WhoIs], [Client.WhoIsNodeKey] and
 // [Client.WhoIsProto] when a peer is not found.
 var ErrPeerNotFound = errors.New("peer not found")

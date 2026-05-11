@@ -1621,6 +1621,18 @@ func (b *LocalBackend) PeerCaps(src netip.Addr) tailcfg.PeerCapMap {
 	return b.currentNode().PeerCaps(src)
 }
 
+// PeerCapsForIP returns the capabilities that remote src IP has when
+// talking to the given destination IP on this node.
+func (b *LocalBackend) PeerCapsForIP(src, dst netip.Addr) tailcfg.PeerCapMap {
+	return b.currentNode().PeerCapsForIP(src, dst)
+}
+
+// PeerCapsForService returns the capabilities that remote src IP has when
+// talking to the named VIP service on this node.
+func (b *LocalBackend) PeerCapsForService(src netip.Addr, svcName tailcfg.ServiceName) tailcfg.PeerCapMap {
+	return b.currentNode().PeerCapsForService(src, svcName)
+}
+
 // PeerByID returns the current full [tailcfg.Node] for the peer with the
 // given NodeID, in O(1) time. It returns ok=false if no such peer is in
 // the current netmap.

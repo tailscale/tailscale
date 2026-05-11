@@ -331,6 +331,46 @@ func (nb *nodeBackend) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
 	return nil
 }
 
+// PeerCapsForIP returns the capabilities that remote src IP has when
+// talking to the given destination IP on this node. The destination may
+// be any IP the node handles: its own tailnet address, a VIP service
+// address, or any future routable IP.
+func (nb *nodeBackend) PeerCapsForIP(src, dst netip.Addr) tailcfg.PeerCapMap {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	if nb.netMap == nil {
+		return nil
+	}
+	filt := nb.filterAtomic.Load()
+	if filt == nil {
+		return nil
+	}
+	return filt.CapsWithValues(src, dst)
+}
+
+// PeerCapsForService returns the capabilities that remote src IP has when
+// talking to the named VIP service on this node. The service name is
+// resolved to its VIP addresses via the node's service IP mappings, and
+// the first address matching the src IP family is used for cap lookup.
+func (nb *nodeBackend) PeerCapsForService(src netip.Addr, svcName tailcfg.ServiceName) tailcfg.PeerCapMap {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	if nb.netMap == nil {
+		return nil
+	}
+	filt := nb.filterAtomic.Load()
+	if filt == nil {
+		return nil
+	}
+	addrs := nb.netMap.GetVIPServiceIPMap()[svcName]
+	for _, ip := range addrs {
+		if ip.BitLen() == src.BitLen() {
+			return filt.CapsWithValues(src, ip)
+		}
+	}
+	return nil
+}
+
 // PeerHasCap reports whether the peer contains the given capability string,
 // with any value(s).
 func (nb *nodeBackend) PeerHasCap(peer tailcfg.NodeView, wantCap tailcfg.PeerCapability) bool {
