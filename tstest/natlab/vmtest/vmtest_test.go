@@ -923,6 +923,20 @@ func TestMullvadExitNode(t *testing.T) {
 	check(checkOff2Step, "exit-off (again)", clientWAN)
 }
 
+// checkClientMetrics verifies that each entry in want exists and has the given
+// value in metrics.
+func checkClientMetrics(t *testing.T, label string, metrics vmtest.ClientMetrics, want map[string]int64) {
+	t.Helper()
+	for name, wantValue := range want {
+		got, ok := metrics[name]
+		if !ok {
+			t.Errorf("%s: required metric %q not found", label, name)
+		} else if got.Value != wantValue {
+			t.Errorf("%s: metric %q: got %v, want %v", label, name, got.Value, wantValue)
+		}
+	}
+}
+
 // TestCachedNetmapAfterRestart verifies that two nodes with netmap
 // caching enabled (NodeAttrCacheNetworkMaps) can re-establish a direct
 // WireGuard tunnel after both are restarted while the control server is
@@ -1020,12 +1034,22 @@ func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 		vmtest.OS(vmtest.Gokrazy),
 		tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
 
+	checkInitialMetrics := env.AddStep("Check initial client metrics")
 	cutControlStep := env.AddStep("Cut control server access")
 	restartStep := env.AddStep("Restart tailscaled on a")
 	tsmpPingStep := env.AddStep("Ping a → b TSMP (cached netmap, no control)")
-	DiscoPingStep := env.AddStep("Ping a → b Disco (want Direct)")
+	discoPingStep := env.AddStep("Ping a → b Disco (want Direct)")
+	checkFinalMetrics := env.AddStep("Check final client metrics")
 
 	env.Start()
+
+	// Before: Verify that we have not recorded any cached contacts.
+	checkInitialMetrics.Begin()
+	checkClientMetrics(t, "Node A", env.ClientMetrics(a), map[string]int64{
+		"magicsock_cached_peer_contact_derp":   0,
+		"magicsock_cached_peer_contact_direct": 0,
+	})
+	checkInitialMetrics.End(nil)
 
 	cutControlStep.Begin()
 	a.DropControlTraffic()
@@ -1047,10 +1071,17 @@ func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 	}
 	tsmpPingStep.End(nil)
 
-	DiscoPingStep.Begin()
+	discoPingStep.Begin()
 	if err := env.PingExpect(a, b, vmtest.PingRouteDirect, 30*time.Second); err != nil {
-		DiscoPingStep.End(err)
+		discoPingStep.End(err)
 		t.Fatal(err)
 	}
-	DiscoPingStep.End(nil)
+	discoPingStep.End(nil)
+
+	// After: Verify that we recorded a direct contact on the disconnected node.
+	checkFinalMetrics.Begin()
+	checkClientMetrics(t, "Node A", env.ClientMetrics(a), map[string]int64{
+		"magicsock_cached_peer_contact_direct": 1,
+	})
+	checkFinalMetrics.End(nil)
 }

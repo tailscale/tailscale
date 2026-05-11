@@ -38,6 +38,8 @@ import (
 	"time"
 
 	"github.com/google/gopacket/layers"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/local"
@@ -845,6 +847,68 @@ func (e *Env) Status(n *Node) *ipnstate.Status {
 		e.t.Fatalf("Status(%s): %v", n.name, err)
 	}
 	return st
+}
+
+// ClientMetrics returns the client metrics exported by the given node.
+func (e *Env) ClientMetrics(n *Node) ClientMetrics {
+	e.t.Helper()
+	raw, err := n.Agent().DaemonMetrics(e.t.Context())
+	if err != nil {
+		e.t.Fatalf("Node %q DaemonMetrics: %v", n.Name(), err)
+	}
+
+	// Metrics are reported in Prometheus exposition format.
+	var parser expfmt.TextParser
+	mfs, err := parser.TextToMetricFamilies(bytes.NewReader(raw))
+	if err != nil {
+		e.t.Fatalf("Node %q parse client metrics: %v", n.Name(), err)
+	}
+
+	// Tailscale client metrics are all unlabelled integer-valued counters and
+	// gauges, so we don't need to handle the full generality of the Prometheus
+	// representation. If we see anything else, we'll log and skip it.
+	out := make(ClientMetrics)
+	for _, mf := range mfs {
+		name := mf.GetName()
+		if _, ok := out[name]; ok {
+			e.t.Logf("Node %q: duplicate client metric %q (ignored)", n.Name(), name)
+			continue
+		} else if len(mf.Metric) != 1 {
+			e.t.Logf("Node %q: got %d values for client metric %q, want 1 (ignored)", n.Name(), len(mf.Metric), name)
+			continue
+		}
+
+		var mtype string
+		var value int64
+		switch mf.GetType() {
+		case dto.MetricType_COUNTER:
+			mtype = "counter"
+			value = int64(mf.Metric[0].GetCounter().GetValue())
+		case dto.MetricType_GAUGE:
+			mtype = "gauge"
+			value = int64(mf.Metric[0].GetGauge().GetValue())
+		default:
+			e.t.Logf("Node %q unexpected client metric %q type %q (ignored)", n.Name(), name, mf.GetType().String())
+			continue
+		}
+		out[name] = ClientMetric{
+			Name:  name,
+			Type:  mtype,
+			Value: value,
+		}
+	}
+	return out
+}
+
+// ClientMetrics is a view of the client metrics exported by a node.
+// The keys of the map are the metric names.
+type ClientMetrics map[string]ClientMetric
+
+// ClientMetric is a view of a node client metric.
+type ClientMetric struct {
+	Name  string // as published to the clientmetrics package
+	Type  string // either "gauge" or "counter"
+	Value int64  // the gauge or counter value
 }
 
 // SetAcceptRoutes toggles the node's RouteAll preference (the
