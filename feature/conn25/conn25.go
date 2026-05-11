@@ -707,10 +707,10 @@ func (c *client) reconfig() {
 
 	ipSets := c.getIPSets()
 
-	c.v4MagicIPPool = newIPPool(ipSets.v4Magic)
-	c.v4TransitIPPool = newIPPool(ipSets.v4Transit)
-	c.v6MagicIPPool = newIPPool(ipSets.v6Magic)
-	c.v6TransitIPPool = newIPPool(ipSets.v6Transit)
+	c.v4MagicIPPool = c.v4MagicIPPool.reconfig(ipSets.v4Magic)
+	c.v4TransitIPPool = c.v4TransitIPPool.reconfig(ipSets.v4Transit)
+	c.v6MagicIPPool = c.v6MagicIPPool.reconfig(ipSets.v6Magic)
+	c.v6TransitIPPool = c.v6TransitIPPool.reconfig(ipSets.v6Transit)
 }
 
 // getAppsForConnectorDomain returns the slice of app names which match the

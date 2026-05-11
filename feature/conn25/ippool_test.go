@@ -106,6 +106,26 @@ func TestReturnAddr(t *testing.T) {
 	}
 }
 
+func expectAddrNext(t *testing.T, ipp *ippool, addrString string) {
+	t.Helper()
+	got, err := ipp.next()
+	if err != nil {
+		t.Fatalf("expected nil error, got: %v", err)
+	}
+	want := netip.MustParseAddr(addrString)
+	if want != got {
+		t.Fatalf("want %v; got %v", want, got)
+	}
+}
+
+func expectErrPoolExhaustedNext(t *testing.T, ipp *ippool) {
+	t.Helper()
+	_, err := ipp.next()
+	if !errors.Is(err, errPoolExhausted) {
+		t.Fatalf("expected errPoolExhausted; got %v", err)
+	}
+}
+
 // TestGettingReturnedAddresses tests that when addresses are returned to the IP Pool
 // they are then handed out in the order they were returned.
 func TestGettingReturnedAddresses(t *testing.T) {
@@ -113,33 +133,67 @@ func TestGettingReturnedAddresses(t *testing.T) {
 	isb.AddRange(netipx.IPRangeFrom(netip.MustParseAddr("192.168.0.0"), netip.MustParseAddr("192.168.0.4")))
 	ipset := must.Get(isb.IPSet())
 	ipp := newIPPool(ipset)
-	expectAddrNext := func(addrString string) {
-		t.Helper()
-		got, err := ipp.next()
-		if err != nil {
-			t.Fatalf("expected nil error, got: %v", err)
-		}
-		want := netip.MustParseAddr(addrString)
-		if want != got {
-			t.Fatalf("want %v; got %v", want, got)
-		}
-	}
-	expectErrPoolExhaustedNext := func() {
-		t.Helper()
-		_, err := ipp.next()
-		if !errors.Is(err, errPoolExhausted) {
-			t.Fatalf("expected errPoolExhausted; got %v", err)
-		}
-	}
-	expectAddrNext("192.168.0.0")
-	expectAddrNext("192.168.0.1")
-	expectAddrNext("192.168.0.2")
-	expectAddrNext("192.168.0.3")
-	expectAddrNext("192.168.0.4")
-	expectErrPoolExhaustedNext()
+	expectAddrNext(t, ipp, "192.168.0.0")
+	expectAddrNext(t, ipp, "192.168.0.1")
+	expectAddrNext(t, ipp, "192.168.0.2")
+	expectAddrNext(t, ipp, "192.168.0.3")
+	expectAddrNext(t, ipp, "192.168.0.4")
+	expectErrPoolExhaustedNext(t, ipp)
 	ipp.returnAddr(netip.MustParseAddr("192.168.0.2"))
 	ipp.returnAddr(netip.MustParseAddr("192.168.0.4"))
-	expectAddrNext("192.168.0.2")
-	expectAddrNext("192.168.0.4")
-	expectErrPoolExhaustedNext()
+	expectAddrNext(t, ipp, "192.168.0.2")
+	expectAddrNext(t, ipp, "192.168.0.4")
+	expectErrPoolExhaustedNext(t, ipp)
+}
+
+func TestIPPoolReconfig(t *testing.T) {
+	var isb netipx.IPSetBuilder
+	isb.AddRange(netipx.IPRangeFrom(netip.MustParseAddr("192.168.0.0"), netip.MustParseAddr("192.168.0.4")))
+	ipsetOne := must.Get(isb.IPSet())
+	ipsetOneClone := must.Get(isb.IPSet())
+	isb = netipx.IPSetBuilder{}
+	isb.AddRange(netipx.IPRangeFrom(netip.MustParseAddr("192.168.0.7"), netip.MustParseAddr("192.168.0.10")))
+	ipsetTwo := must.Get(isb.IPSet())
+
+	var ipp *ippool
+	ipp = ipp.reconfig(ipsetOne)
+	if ipp.ipSet != ipsetOne {
+		t.Fatalf("want %v, got %v", ipsetOne, ipp.ipSet)
+	}
+	expectAddrNext(t, ipp, "192.168.0.0")
+
+	// check that we don't lose iterator state when we reconfig with the same ranges
+	expectAddrNext(t, ipp, "192.168.0.1")
+	ipp.returnAddr(netip.MustParseAddr("192.168.0.1"))
+	ipp = ipp.reconfig(ipsetOneClone)
+	expectAddrNext(t, ipp, "192.168.0.2")
+
+	// when we reconfig with different ranges, we only hand out addresses from the new ranges
+	ipp = ipp.reconfig(ipsetTwo)
+	if ipp.ipSet != ipsetTwo {
+		t.Fatalf("want %v, got %v", ipsetTwo, ipp.ipSet)
+	}
+	expectAddrNext(t, ipp, "192.168.0.7")
+	expectAddrNext(t, ipp, "192.168.0.8")
+	expectAddrNext(t, ipp, "192.168.0.9")
+	expectAddrNext(t, ipp, "192.168.0.10")
+	expectErrPoolExhaustedNext(t, ipp)
+
+	// but we have not lost track of the fact that the old addresses are in use
+	if !ipp.inUse.Contains(netip.MustParseAddr("192.168.0.0")) {
+		t.Fatalf("expected inUse to still have the address")
+	}
+
+	// old addresses can be returned
+	ipp.returnAddr(netip.MustParseAddr("192.168.0.0"))
+
+	// but they are not handed out again
+	expectErrPoolExhaustedNext(t, ipp)
+	if ipp.inUse.Contains(netip.MustParseAddr("192.168.0.0")) {
+		t.Fatalf("expected inUse to no longer have the address")
+	}
+
+	// returning addresses from the new ranges works as normal
+	ipp.returnAddr(netip.MustParseAddr("192.168.0.9"))
+	expectAddrNext(t, ipp, "192.168.0.9")
 }
