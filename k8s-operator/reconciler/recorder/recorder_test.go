@@ -3,14 +3,18 @@
 
 //go:build !plan9
 
-package main
+package recorder
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
@@ -18,10 +22,13 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/client/tailscale/v2"
 
 	tsoperator "tailscale.com/k8s-operator"
@@ -55,16 +62,14 @@ func TestRecorder(t *testing.T) {
 	zl, _ := zap.NewDevelopment()
 	fr := record.NewFakeRecorder(2)
 	cl := tstest.NewClock(tstest.ClockOpts{})
-	reconciler := &RecorderReconciler{
-		tsNamespace:       tsNamespace,
-		Client:            fc,
-		clients:           tsclient.NewProvider(tsClient),
-		recorder:          fr,
-		log:               zl.Sugar(),
-		clock:             cl,
-		authKeyRateLimits: make(map[string]*rate.Limiter),
-		authKeyReissuing:  make(map[string]bool),
-	}
+	reconciler := NewReconciler(ReconcilerOptions{
+		Client:             fc,
+		Clients:            tsclient.NewProvider(tsClient),
+		Recorder:           fr,
+		TailscaleNamespace: tsNamespace,
+		Logger:             zl.Sugar(),
+		Clock:              cl,
+	})
 
 	t.Run("invalid_spec_gives_an_error_condition", func(t *testing.T) {
 		expectReconciled(t, reconciler, "", tsr.Name)
@@ -318,3 +323,177 @@ func expectRecorderResources(t *testing.T, fc client.WithWatch, tsr *tsapi.Recor
 		}
 	}
 }
+
+// Test helpers.
+
+func mustCreate(t *testing.T, cl client.Client, obj client.Object) {
+	t.Helper()
+	if err := cl.Create(context.Background(), obj); err != nil {
+		t.Fatalf("creating %q: %v", obj.GetName(), err)
+	}
+}
+
+func mustUpdate[T any, O ptrObject[T]](t *testing.T, cl client.Client, ns, name string, update func(O)) {
+	t.Helper()
+	obj := O(new(T))
+	if err := cl.Get(context.Background(), types.NamespacedName{
+		Name:      name,
+		Namespace: ns,
+	}, obj); err != nil {
+		t.Fatalf("getting %q: %v", name, err)
+	}
+	update(obj)
+	if err := cl.Update(context.Background(), obj); err != nil {
+		t.Fatalf("updating %q: %v", name, err)
+	}
+}
+
+func expectEqual[T any, O ptrObject[T]](t *testing.T, cl client.Client, want O, modifiers ...func(O)) {
+	t.Helper()
+	got := O(new(T))
+	if err := cl.Get(context.Background(), types.NamespacedName{
+		Name:      want.GetName(),
+		Namespace: want.GetNamespace(),
+	}, got); err != nil {
+		t.Fatalf("getting %q: %v", want.GetName(), err)
+	}
+	got.SetResourceVersion("")
+	want.SetResourceVersion("")
+	for _, modifier := range modifiers {
+		modifier(want)
+		modifier(got)
+	}
+	if diff := cmp.Diff(got, want); diff != "" {
+		t.Fatalf("unexpected %s (-got +want):\n%s", reflect.TypeOf(want).Elem().Name(), diff)
+	}
+}
+
+func expectMissing[T any, O ptrObject[T]](t *testing.T, cl client.Client, ns, name string) {
+	t.Helper()
+	obj := O(new(T))
+	err := cl.Get(context.Background(), types.NamespacedName{
+		Name:      name,
+		Namespace: ns,
+	}, obj)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("%s %s/%s unexpectedly present, wanted missing", reflect.TypeOf(obj).Elem().Name(), ns, name)
+	}
+}
+
+func expectReconciled(t *testing.T, r reconcile.Reconciler, ns, name string) {
+	t.Helper()
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{
+			Namespace: ns,
+			Name:      name,
+		},
+	}
+	res, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+	if res.Requeue {
+		t.Fatalf("unexpected immediate requeue")
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("unexpected timed requeue (%v)", res.RequeueAfter)
+	}
+}
+
+func expectEvents(t *testing.T, rec *record.FakeRecorder, wantsEvents []string) {
+	t.Helper()
+	seenEvents := make([]string, 0)
+	for range len(wantsEvents) {
+		timer := time.NewTimer(time.Second * 5)
+		defer timer.Stop()
+		select {
+		case gotEvent := <-rec.Events:
+			if slices.Contains(wantsEvents, gotEvent) {
+				seenEvents = append(seenEvents, gotEvent)
+			} else {
+				t.Errorf("got unexpected event %q, expected events: %+#v", gotEvent, wantsEvents)
+			}
+		case <-timer.C:
+			t.Errorf("timeout waiting for an event, wants events %#+v, got events %+#v", wantsEvents, seenEvents)
+		}
+	}
+}
+
+func removeResourceReqs(sts *appsv1.StatefulSet) {
+	if sts != nil {
+		sts.Spec.Template.Spec.Resources = nil
+	}
+}
+
+// fakeTSClient implements tsclient.Client for tests.
+type fakeTSClient struct {
+	sync.Mutex
+	loginURL    string
+	keyRequests []tailscale.KeyCapabilities
+	deleted     []string
+	devices     []tailscale.Device
+}
+
+func (c *fakeTSClient) Devices() tsclient.DeviceResource {
+	return &fakeDevices{
+		deleted: &c.deleted,
+		devices: &c.devices,
+	}
+}
+
+func (c *fakeTSClient) Keys() tsclient.KeyResource {
+	return &fakeKeys{keyRequests: &c.keyRequests}
+}
+
+func (c *fakeTSClient) VIPServices() tsclient.VIPServiceResource {
+	return &fakeVIPServices{}
+}
+
+func (c *fakeTSClient) LoginURL() string { return c.loginURL }
+
+type fakeDevices struct {
+	deleted *[]string
+	devices *[]tailscale.Device
+}
+
+func (m *fakeDevices) Delete(_ context.Context, id string) error {
+	*m.deleted = append(*m.deleted, id)
+	return tailscale.APIError{Status: 404}
+}
+
+func (m *fakeDevices) List(_ context.Context, _ ...tailscale.ListDevicesOptions) ([]tailscale.Device, error) {
+	return *m.devices, nil
+}
+
+func (m *fakeDevices) Get(_ context.Context, id string) (*tailscale.Device, error) {
+	if m.devices == nil {
+		return nil, tailscale.APIError{Status: 404}
+	}
+	for _, dev := range *m.devices {
+		if dev.ID == id {
+			return &dev, nil
+		}
+	}
+	return nil, tailscale.APIError{Status: 404}
+}
+
+type fakeKeys struct {
+	keyRequests *[]tailscale.KeyCapabilities
+}
+
+func (m *fakeKeys) CreateAuthKey(_ context.Context, ckr tailscale.CreateKeyRequest) (*tailscale.Key, error) {
+	*m.keyRequests = append(*m.keyRequests, ckr.Capabilities)
+	return &tailscale.Key{Key: "new-authkey"}, nil
+}
+
+func (m *fakeKeys) List(_ context.Context, _ bool) ([]tailscale.Key, error) { return nil, nil }
+
+type fakeVIPServices struct{}
+
+func (f *fakeVIPServices) List(_ context.Context) ([]tailscale.VIPService, error)          { return nil, nil }
+func (f *fakeVIPServices) Delete(_ context.Context, _ string) error                        { return nil }
+func (f *fakeVIPServices) Get(_ context.Context, _ string) (*tailscale.VIPService, error)  { return nil, nil }
+func (f *fakeVIPServices) CreateOrUpdate(_ context.Context, _ tailscale.VIPService) error { return nil }
+
+// Ensure *Reconciler can be used as a rate.Limiter holder.
+var _ = (*rate.Limiter)(nil)

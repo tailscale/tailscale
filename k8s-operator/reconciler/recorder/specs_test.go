@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-package main
+package recorder
 
 import (
 	"testing"

@@ -3,7 +3,8 @@
 
 //go:build !plan9
 
-package main
+// Package recorder provides reconciliation logic for the Recorder custom resource.
+package recorder
 
 import (
 	"context"
@@ -26,15 +27,20 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/client/tailscale/v2"
 
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
@@ -51,13 +57,33 @@ const (
 	reasonRecorderTailnetUnavailable = "RecorderTailnetUnavailable"
 
 	currentProfileKey = "_current-profile"
+
+	reconcilerName = "recorder-reconciler"
+
+	shortRequeue = time.Second * 5
+
+	optimisticLockErrorMsg = "the object has been modified; please apply your changes to the latest version and try again"
 )
 
 var gaugeRecorderResources = clientmetric.NewGauge(kubetypes.MetricRecorderCount)
 
-// RecorderReconciler syncs Recorder statefulsets with their definition in
-// Recorder CRs.
-type RecorderReconciler struct {
+// ClientProvider is a type that can return a tsclient.Client for a given tailnet.
+type ClientProvider interface {
+	For(tailnet string) (tsclient.Client, error)
+}
+
+// ReconcilerOptions contains configuration for the Reconciler.
+type ReconcilerOptions struct {
+	Client             client.Client
+	Recorder           record.EventRecorder
+	TailscaleNamespace string
+	Logger             *zap.SugaredLogger
+	Clock              tstime.Clock
+	Clients            ClientProvider
+}
+
+// Reconciler syncs Recorder statefulsets with their definition in Recorder CRs.
+type Reconciler struct {
 	client.Client
 	log               *zap.SugaredLogger
 	recorder          record.EventRecorder
@@ -70,11 +96,40 @@ type RecorderReconciler struct {
 	recorders         set.Slice[types.UID] // for recorders gauge
 }
 
-func (r *RecorderReconciler) logger(name string) *zap.SugaredLogger {
+// NewReconciler returns a new Reconciler.
+func NewReconciler(options ReconcilerOptions) *Reconciler {
+	logger := options.Logger.Named(reconcilerName)
+	return &Reconciler{
+		Client:            options.Client,
+		log:               logger,
+		recorder:          options.Recorder,
+		clock:             options.Clock,
+		clients:           options.Clients,
+		tsNamespace:       options.TailscaleNamespace,
+		authKeyRateLimits: make(map[string]*rate.Limiter),
+		authKeyReissuing:  make(map[string]bool),
+	}
+}
+
+// Register the Reconciler onto the given manager.Manager.
+func (r *Reconciler) Register(mgr manager.Manager) error {
+	recorderFilter := handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &tsapi.Recorder{})
+	return builder.ControllerManagedBy(mgr).
+		For(&tsapi.Recorder{}).
+		Named(reconcilerName).
+		Watches(&appsv1.StatefulSet{}, recorderFilter).
+		Watches(&corev1.ServiceAccount{}, recorderFilter).
+		Watches(&corev1.Secret{}, recorderFilter).
+		Watches(&rbacv1.Role{}, recorderFilter).
+		Watches(&rbacv1.RoleBinding{}, recorderFilter).
+		Complete(r)
+}
+
+func (r *Reconciler) logger(name string) *zap.SugaredLogger {
 	return r.log.With("Recorder", name)
 }
 
-func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := r.logger(req.Name)
 	logger.Debugf("starting reconcile")
 	defer logger.Debugf("reconcile finished")
@@ -108,7 +163,7 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 
 	if markedForDeletion(tsr) {
 		logger.Debugf("Recorder is being deleted, cleaning up resources")
-		ix := xslices.Index(tsr.Finalizers, FinalizerName)
+		ix := xslices.Index(tsr.Finalizers, reconciler.FinalizerName)
 		if ix < 0 {
 			logger.Debugf("no finalizer, nothing to do")
 			return reconcile.Result{}, nil
@@ -128,13 +183,13 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 		return reconcile.Result{}, nil
 	}
 
-	if !slices.Contains(tsr.Finalizers, FinalizerName) {
+	if !slices.Contains(tsr.Finalizers, reconciler.FinalizerName) {
 		// This log line is printed exactly once during initial provisioning,
 		// because once the finalizer is in place this block gets skipped. So,
 		// this is a nice place to log that the high level, multi-reconcile
 		// operation is underway.
 		logger.Infof("ensuring Recorder is set up")
-		tsr.Finalizers = append(tsr.Finalizers, FinalizerName)
+		tsr.Finalizers = append(tsr.Finalizers, reconciler.FinalizerName)
 		if err = r.Update(ctx, tsr); err != nil {
 			return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderCreationFailed, reasonRecorderCreationFailed)
 		}
@@ -164,7 +219,7 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 	return setStatusReady(tsr, metav1.ConditionTrue, reasonRecorderCreated, reasonRecorderCreated)
 }
 
-func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsClient tsclient.Client, tsr *tsapi.Recorder) error {
+func (r *Reconciler) maybeProvision(ctx context.Context, tsClient tsclient.Client, tsr *tsapi.Recorder) error {
 	logger := r.logger(tsr.Name)
 
 	var replicas int32 = 1
@@ -299,7 +354,7 @@ func saOwnedByRecorder(sa *corev1.ServiceAccount, tsr *tsapi.Recorder) error {
 // accumulating a large amount of garbage.
 //
 // This is a no-op if the ServiceAccount name has not changed.
-func (r *RecorderReconciler) maybeCleanupServiceAccounts(ctx context.Context, tsr *tsapi.Recorder, currentName string) error {
+func (r *Reconciler) maybeCleanupServiceAccounts(ctx context.Context, tsr *tsapi.Recorder, currentName string) error {
 	logger := r.logger(tsr.Name)
 
 	options := []client.ListOption{
@@ -330,7 +385,7 @@ func (r *RecorderReconciler) maybeCleanupServiceAccounts(ctx context.Context, ts
 	return nil
 }
 
-func (r *RecorderReconciler) maybeCleanupSecrets(ctx context.Context, tsClient tsclient.Client, tsr *tsapi.Recorder) error {
+func (r *Reconciler) maybeCleanupSecrets(ctx context.Context, tsClient tsclient.Client, tsr *tsapi.Recorder) error {
 	options := []client.ListOption{
 		client.InNamespace(r.tsNamespace),
 		client.MatchingLabels(tsrLabels("recorder", tsr.Name, nil)),
@@ -391,7 +446,7 @@ func (r *RecorderReconciler) maybeCleanupSecrets(ctx context.Context, tsClient t
 // maybeCleanup just deletes the device from the tailnet. All the kubernetes
 // resources linked to a Recorder will get cleaned up via owner references
 // (which we can use because they are all in the same namespace).
-func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Recorder, tsClient tsclient.Client) (bool, error) {
+func (r *Reconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Recorder, tsClient tsclient.Client) (bool, error) {
 	logger := r.logger(tsr.Name)
 
 	var replicas int32 = 1
@@ -444,7 +499,7 @@ func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Record
 	return true, nil
 }
 
-func (r *RecorderReconciler) ensureAuthSecretsCreated(ctx context.Context, tsClient tsclient.Client, tsr *tsapi.Recorder) error {
+func (r *Reconciler) ensureAuthSecretsCreated(ctx context.Context, tsClient tsclient.Client, tsr *tsapi.Recorder) error {
 	var replicas int32 = 1
 	if tsr.Spec.Replicas != nil {
 		replicas = *tsr.Spec.Replicas
@@ -503,7 +558,7 @@ func (r *RecorderReconciler) ensureAuthSecretsCreated(ctx context.Context, tsCli
 // shouldReissueAuthKey returns true if the proxy needs a new auth key. It
 // tracks in-flight reissues via authKeyReissuing to avoid duplicate API calls
 // across reconciles.
-func (r *RecorderReconciler) shouldReissueAuthKey(ctx context.Context, tsClient tsclient.Client, tsr *tsapi.Recorder, replica int32, authSecret *corev1.Secret) (shouldReissue bool, err error) {
+func (r *Reconciler) shouldReissueAuthKey(ctx context.Context, tsClient tsclient.Client, tsr *tsapi.Recorder, replica int32, authSecret *corev1.Secret) (shouldReissue bool, err error) {
 	stateSecret, err := r.getStateSecret(ctx, tsr.Name, replica)
 	if err != nil || stateSecret == nil {
 		return false, err
@@ -565,7 +620,7 @@ func (r *RecorderReconciler) shouldReissueAuthKey(ctx context.Context, tsClient 
 	return true, nil
 }
 
-func (r *RecorderReconciler) ensureDeviceDeleted(ctx context.Context, tsClient tsclient.Client, id tailcfg.StableNodeID, logger *zap.SugaredLogger) error {
+func (r *Reconciler) ensureDeviceDeleted(ctx context.Context, tsClient tsclient.Client, id tailcfg.StableNodeID, logger *zap.SugaredLogger) error {
 	logger.Debugf("deleting device %s from control", string(id))
 	err := tsClient.Devices().Delete(ctx, string(id))
 	switch {
@@ -579,7 +634,7 @@ func (r *RecorderReconciler) ensureDeviceDeleted(ctx context.Context, tsClient t
 	return nil
 }
 
-func (r *RecorderReconciler) validate(ctx context.Context, tsr *tsapi.Recorder) error {
+func (r *Reconciler) validate(ctx context.Context, tsr *tsapi.Recorder) error {
 	if !tsr.Spec.EnableUI && tsr.Spec.Storage.S3 == nil {
 		return errors.New("must either enable UI or use S3 storage to ensure recordings are accessible")
 	}
@@ -621,7 +676,7 @@ func (r *RecorderReconciler) validate(ctx context.Context, tsr *tsapi.Recorder) 
 	return nil
 }
 
-func (r *RecorderReconciler) getStateSecret(ctx context.Context, tsrName string, replica int32) (*corev1.Secret, error) {
+func (r *Reconciler) getStateSecret(ctx context.Context, tsrName string, replica int32) (*corev1.Secret, error) {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: r.tsNamespace,
@@ -639,7 +694,7 @@ func (r *RecorderReconciler) getStateSecret(ctx context.Context, tsrName string,
 	return secret, nil
 }
 
-func (r *RecorderReconciler) getDevicePrefs(ctx context.Context, tsrName string, replica int32) (prefs prefs, ok bool, err error) {
+func (r *Reconciler) getDevicePrefs(ctx context.Context, tsrName string, replica int32) (prefs prefs, ok bool, err error) {
 	secret, err := r.getStateSecret(ctx, tsrName, replica)
 	if err != nil || secret == nil {
 		return prefs, false, err
@@ -668,7 +723,7 @@ func getDevicePrefs(secret *corev1.Secret) (prefs prefs, ok bool, err error) {
 	return prefs, ok, nil
 }
 
-func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tsClient tsclient.Client, tsrName string, replica int32) (d tsapi.RecorderTailnetDevice, ok bool, err error) {
+func (r *Reconciler) getDeviceInfo(ctx context.Context, tsClient tsclient.Client, tsrName string, replica int32) (d tsapi.RecorderTailnetDevice, ok bool, err error) {
 	secret, err := r.getStateSecret(ctx, tsrName, replica)
 	if err != nil || secret == nil {
 		return tsapi.RecorderTailnetDevice{}, false, err
@@ -714,4 +769,102 @@ type prefs struct {
 
 func markedForDeletion(obj metav1.Object) bool {
 	return !obj.GetDeletionTimestamp().IsZero()
+}
+
+func newAuthKey(ctx context.Context, client tsclient.Client, tags []string) (string, error) {
+	var caps tailscale.KeyCapabilities
+	caps.Devices.Create.Reusable = false
+	caps.Devices.Create.Preauthorized = true
+	caps.Devices.Create.Tags = tags
+
+	key, err := client.Keys().CreateAuthKey(ctx, tailscale.CreateKeyRequest{Capabilities: caps})
+	if err != nil {
+		return "", err
+	}
+
+	return key.Key, nil
+}
+
+// ptrObject is a type constraint for pointer types that implement client.Object.
+type ptrObject[T any] interface {
+	client.Object
+	*T
+}
+
+// createOrMaybeUpdate adds obj to the k8s cluster, unless the object already
+// exists, in which case update is called to make changes to it.
+func createOrMaybeUpdate[T any, O ptrObject[T]](ctx context.Context, c client.Client, ns string, obj O, update func(O) error) (O, error) {
+	var (
+		existing O
+		err      error
+	)
+	if obj.GetName() != "" {
+		existing = new(T)
+		existing.SetName(obj.GetName())
+		existing.SetNamespace(obj.GetNamespace())
+		err = c.Get(ctx, client.ObjectKeyFromObject(obj), existing)
+	} else {
+		existing, err = getSingleObject[T, O](ctx, c, ns, obj.GetLabels())
+	}
+	if err == nil && existing != nil {
+		if update != nil {
+			if err := update(existing); err != nil {
+				return nil, err
+			}
+			if err := c.Update(ctx, existing); err != nil {
+				return nil, err
+			}
+		}
+		return existing, nil
+	}
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("failed to get object: %w", err)
+	}
+	if err := c.Create(ctx, obj); err != nil {
+		return nil, err
+	}
+	return obj, nil
+}
+
+// createOrUpdate adds obj to the k8s cluster, unless the object already exists,
+// in which case update is called to make changes to it.
+func createOrUpdate[T any, O ptrObject[T]](ctx context.Context, c client.Client, ns string, obj O, update func(O)) (O, error) {
+	return createOrMaybeUpdate(ctx, c, ns, obj, func(o O) error {
+		if update != nil {
+			update(o)
+		}
+		return nil
+	})
+}
+
+// getSingleObject searches for k8s objects of type T with the given labels,
+// and returns it. Returns nil if no objects match, and an error if more than one matches.
+func getSingleObject[T any, O ptrObject[T]](ctx context.Context, c client.Client, ns string, labels map[string]string) (O, error) {
+	ret := O(new(T))
+	kinds, _, err := c.Scheme().ObjectKinds(ret)
+	if err != nil {
+		return nil, err
+	}
+	if len(kinds) != 1 {
+		return nil, fmt.Errorf("more than 1 GroupVersionKind for %T", ret)
+	}
+
+	gvk := kinds[0]
+	gvk.Kind += "List"
+	lst := unstructured.UnstructuredList{}
+	lst.SetGroupVersionKind(gvk)
+	if err := c.List(ctx, &lst, client.InNamespace(ns), client.MatchingLabels(labels)); err != nil {
+		return nil, err
+	}
+
+	if len(lst.Items) == 0 {
+		return nil, nil
+	}
+	if len(lst.Items) > 1 {
+		return nil, fmt.Errorf("found multiple matching %T objects", ret)
+	}
+	if err := c.Scheme().Convert(&lst.Items[0], ret, nil); err != nil {
+		return nil, err
+	}
+	return ret, nil
 }

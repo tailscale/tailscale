@@ -42,7 +42,9 @@ import (
 )
 
 const (
-	vipTestIP = "5.6.7.8"
+	vipTestIP         = "5.6.7.8"
+	tsNamespace       = "tailscale"
+	currentProfileKey = "_current-profile"
 )
 
 // confgOpts contains configuration options for creating cluster resources for

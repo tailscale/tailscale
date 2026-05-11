@@ -1340,3 +1340,37 @@ type notReadyReason struct {
 	reason  string
 	message string
 }
+
+func markedForDeletion(obj metav1.Object) bool {
+	return !obj.GetDeletionTimestamp().IsZero()
+}
+
+// prefs is a subset of the ipn.Prefs struct used for extracting information
+// from the state Secret of Tailscale devices.
+type prefs struct {
+	Config struct {
+		NodeID      tailcfg.StableNodeID `json:"NodeID"`
+		UserProfile struct {
+			LoginName string `json:"LoginName"`
+		} `json:"UserProfile"`
+	} `json:"Config"`
+
+	AdvertiseServices []string `json:"AdvertiseServices"`
+}
+
+// getDevicePrefs returns 'ok == true' iff the node ID is found in the secret.
+func getDevicePrefs(secret *corev1.Secret) (prefs prefs, ok bool, err error) {
+	currentProfile, ok := secret.Data["_current-profile"]
+	if !ok {
+		return prefs, false, nil
+	}
+	profileBytes, ok := secret.Data[string(currentProfile)]
+	if !ok {
+		return prefs, false, nil
+	}
+	if err := json.Unmarshal(profileBytes, &prefs); err != nil {
+		return prefs, false, fmt.Errorf("failed to extract node profile info from state Secret %s: %w", secret.Name, err)
+	}
+	ok = prefs.Config.NodeID != ""
+	return prefs, ok, nil
+}

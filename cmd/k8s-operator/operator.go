@@ -56,6 +56,7 @@ import (
 	apiproxy "tailscale.com/k8s-operator/api-proxy"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/proxygrouppolicy"
+	"tailscale.com/k8s-operator/reconciler/recorder"
 	"tailscale.com/k8s-operator/reconciler/tailnet"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
@@ -682,26 +683,15 @@ func runReconcilers(opts reconcilerOpts) {
 	}
 
 	// Recorder reconciler.
-	recorderFilter := handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &tsapi.Recorder{})
-	err = builder.ControllerManagedBy(mgr).
-		For(&tsapi.Recorder{}).
-		Named("recorder-reconciler").
-		Watches(&appsv1.StatefulSet{}, recorderFilter).
-		Watches(&corev1.ServiceAccount{}, recorderFilter).
-		Watches(&corev1.Secret{}, recorderFilter).
-		Watches(&rbacv1.Role{}, recorderFilter).
-		Watches(&rbacv1.RoleBinding{}, recorderFilter).
-		Complete(&RecorderReconciler{
-			recorder:          eventRecorder,
-			tsNamespace:       opts.tailscaleNamespace,
-			Client:            mgr.GetClient(),
-			log:               opts.log.Named("recorder-reconciler"),
-			clock:             tstime.DefaultClock{},
-			clients:           clients,
-			authKeyRateLimits: make(map[string]*rate.Limiter),
-			authKeyReissuing:  make(map[string]bool),
-		})
-	if err != nil {
+	recorderOptions := recorder.ReconcilerOptions{
+		Client:             mgr.GetClient(),
+		Recorder:           eventRecorder,
+		TailscaleNamespace: opts.tailscaleNamespace,
+		Logger:             opts.log,
+		Clock:              tstime.DefaultClock{},
+		Clients:            clients,
+	}
+	if err = recorder.NewReconciler(recorderOptions).Register(mgr); err != nil {
 		startlog.Fatalf("could not create Recorder reconciler: %v", err)
 	}
 
