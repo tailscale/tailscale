@@ -98,7 +98,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 
 	t.Run("pods_are_ready_to_route_traffic", func(t *testing.T) {
 		pod, stateS := podAndSecretForProxyGroup("foo")
-		stBs := serviceStatusForPodIP(t, svc, pod.Status.PodIPs[0].IP, port)
+		stBs := serviceStatusForPodIPs(t, svc, pod.Status.PodIPs[0].IP, "", port)
 		mustUpdate(t, fc, "operator-ns", stateS.Name, func(s *corev1.Secret) {
 			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
 		})
@@ -115,14 +115,125 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		expectEqual(t, fc, eps)
 	})
 	t.Run("status_does_not_match_pod_ip", func(t *testing.T) {
-		_, stateS := podAndSecretForProxyGroup("foo")           // replica Pod has IP 10.0.0.1
-		stBs := serviceStatusForPodIP(t, svc, "10.0.0.2", port) // status is for a Pod with IP 10.0.0.2
+		_, stateS := podAndSecretForProxyGroup("foo")                // replica Pod has IP 10.0.0.1
+		stBs := serviceStatusForPodIPs(t, svc, "10.0.0.2", "", port) // status is for a Pod with IP 10.0.0.2
 		mustUpdate(t, fc, "operator-ns", stateS.Name, func(s *corev1.Secret) {
 			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
 		})
 		expectReconciled(t, er, "operator-ns", "foo")
 		eps.Endpoints = []discoveryv1.Endpoint{}
 		expectEqual(t, fc, eps)
+	})
+
+	// Dual-stack.
+	epsV6 := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "foo-ipv6",
+			Namespace: "operator-ns",
+			Labels: map[string]string{
+				LabelParentName:      "test",
+				LabelParentNamespace: "default",
+				labelSvcType:         typeEgress,
+				labelProxyGroup:      "foo",
+			},
+		},
+		AddressType: discoveryv1.AddressTypeIPv6,
+	}
+	mustCreate(t, fc, epsV6)
+	t.Run("dual_stack_pod_ready_to_route", func(t *testing.T) {
+		mustDeleteAll(t, fc, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "foo-0", Namespace: "operator-ns"}})
+		dualPod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "foo-0",
+				Namespace: "operator-ns",
+				Labels:    pgLabels("foo", nil),
+				UID:       "foo",
+			},
+			Status: corev1.PodStatus{
+				PodIPs: []corev1.PodIP{{IP: "10.0.0.1"}, {IP: "fd00::1"}},
+			},
+		}
+		mustCreate(t, fc, dualPod)
+		stBs := serviceStatusForPodIPs(t, svc, "10.0.0.1", "fd00::1", port)
+		mustUpdate(t, fc, "operator-ns", "foo-0", func(s *corev1.Secret) {
+			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
+		})
+		expectReconciled(t, er, "operator-ns", "foo")
+		eps.Endpoints = []discoveryv1.Endpoint{{
+			Addresses: []string{"10.0.0.1"},
+			Hostname:  new("foo"),
+			Conditions: discoveryv1.EndpointConditions{
+				Serving:     new(true),
+				Ready:       new(true),
+				Terminating: new(false),
+			},
+		}}
+		expectEqual(t, fc, eps)
+		expectReconciled(t, er, "operator-ns", "foo-ipv6")
+		epsV6.Endpoints = []discoveryv1.Endpoint{{
+			Addresses: []string{"fd00::1"},
+			Hostname:  new("foo"),
+			Conditions: discoveryv1.EndpointConditions{
+				Serving:     new(true),
+				Ready:       new(true),
+				Terminating: new(false),
+			},
+		}}
+		expectEqual(t, fc, epsV6)
+	})
+
+	// IPv6-only.
+	t.Run("ipv4_only_pod_skipped_for_ipv6_slice", func(t *testing.T) {
+		mustDeleteAll(t, fc, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "foo-0", Namespace: "operator-ns"}})
+		ipv4Pod, _ := podAndSecretForProxyGroup("foo")
+		mustCreate(t, fc, ipv4Pod)
+		stBs := serviceStatusForPodIPs(t, svc, "10.0.0.1", "", port)
+		mustUpdate(t, fc, "operator-ns", "foo-0", func(s *corev1.Secret) {
+			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
+		})
+		expectReconciled(t, er, "operator-ns", "foo-ipv6")
+		// IPv4-only pod should not appear in the IPv6 EndpointSlice.
+		epsV6.Endpoints = []discoveryv1.Endpoint{}
+		expectEqual(t, fc, epsV6)
+	})
+	ipv6Pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "foo-0",
+			Namespace: "operator-ns",
+			Labels:    pgLabels("foo", nil),
+			UID:       "foo",
+		},
+		Status: corev1.PodStatus{
+			PodIPs: []corev1.PodIP{{IP: "fd00::1"}},
+		},
+	}
+	t.Run("ipv6_status_does_not_match_pod_ip", func(t *testing.T) {
+		mustDeleteAll(t, fc, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "foo-0", Namespace: "operator-ns"}})
+		mustCreate(t, fc, ipv6Pod)
+		stBs := serviceStatusForPodIPs(t, svc, "", "fd00::99", port)
+		mustUpdate(t, fc, "operator-ns", "foo-0", func(s *corev1.Secret) {
+			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
+		})
+		expectReconciled(t, er, "operator-ns", "foo-ipv6")
+		epsV6.Endpoints = []discoveryv1.Endpoint{}
+		expectEqual(t, fc, epsV6)
+	})
+	t.Run("ipv6_pod_ready_to_route", func(t *testing.T) {
+		stBs := serviceStatusForPodIPs(t, svc, "", ipv6Pod.Status.PodIPs[0].IP, port)
+		mustUpdate(t, fc, "operator-ns", "foo-0", func(s *corev1.Secret) {
+			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
+		})
+		expectReconciled(t, er, "operator-ns", "foo-ipv6")
+		epsV6.Endpoints = append(epsV6.Endpoints, discoveryv1.Endpoint{
+			Addresses: []string{"fd00::1"},
+			Hostname:  new("foo"),
+			Conditions: discoveryv1.EndpointConditions{
+				Serving:     new(true),
+				Ready:       new(true),
+				Terminating: new(false),
+			},
+		})
+		expectEqual(t, fc, epsV6)
 	})
 }
 
@@ -157,7 +268,7 @@ func configMapForSvc(t *testing.T, svc *corev1.Service, p uint16) *corev1.Config
 	return cm
 }
 
-func serviceStatusForPodIP(t *testing.T, svc *corev1.Service, ip string, p uint16) []byte {
+func serviceStatusForPodIPs(t *testing.T, svc *corev1.Service, ipv4, ipv6 string, p uint16) []byte {
 	t.Helper()
 	ports := make(map[egressservices.PortMap]struct{})
 	for _, port := range svc.Spec.Ports {
@@ -172,7 +283,8 @@ func serviceStatusForPodIP(t *testing.T, svc *corev1.Service, ip string, p uint1
 	}
 	svcName := tailnetSvcName(svc)
 	st := egressservices.Status{
-		PodIPv4:  ip,
+		PodIPv4:  ipv4,
+		PodIPv6:  ipv6,
 		Services: map[string]*egressservices.ServiceStatus{svcName: &svcSt},
 	}
 	bs, err := json.Marshal(st)
