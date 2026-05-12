@@ -66,6 +66,7 @@ type Env struct {
 	nodes   []*Node
 	tempDir string
 
+	sockDir       string // short-path dir for Unix sockets (macOS has 104-byte limit)
 	sockAddr      string // shared Unix socket path for all QEMU netdevs
 	dgramSockAddr string // Unix dgram socket path for macOS VMs (tailmac)
 	binDir        string // directory for compiled binaries
@@ -310,9 +311,20 @@ func New(t testing.TB, opts ...EnvOption) *Env {
 	}
 
 	tempDir := t.TempDir()
+
+	// Unix sockets have a short path limit (104 bytes on macOS). The Go
+	// test TempDir path easily exceeds that, so create a dedicated short
+	// directory under /tmp for sockets.
+	sockDir, err := os.MkdirTemp("", "vmtest")
+	if err != nil {
+		t.Fatalf("creating socket tempdir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(sockDir) })
+
 	e := &Env{
 		t:          t,
 		tempDir:    tempDir,
+		sockDir:    sockDir,
 		binDir:     filepath.Join(tempDir, "bin"),
 		eventBus:   newEventBus(),
 		testStatus: newTestStatus(),
@@ -1295,7 +1307,7 @@ func (e *Env) initVnet() {
 func (e *Env) ensureQEMUSocket() {
 	e.qemuSockOnce.Do(func() {
 		e.initVnet()
-		e.sockAddr = filepath.Join(e.tempDir, "vnet.sock")
+		e.sockAddr = filepath.Join(e.sockDir, "vnet.sock")
 		srv, err := net.Listen("unix", e.sockAddr)
 		if err != nil {
 			e.t.Fatalf("listen unix: %v", err)
@@ -1317,8 +1329,7 @@ func (e *Env) ensureQEMUSocket() {
 func (e *Env) ensureDgramSocket() {
 	e.dgramSockOnce.Do(func() {
 		e.initVnet()
-		e.dgramSockAddr = fmt.Sprintf("/tmp/vmtest-dgram-%d.sock", os.Getpid())
-		e.t.Cleanup(func() { os.Remove(e.dgramSockAddr) })
+		e.dgramSockAddr = filepath.Join(e.sockDir, "dgram.sock")
 		dgramAddr, err := net.ResolveUnixAddr("unixgram", e.dgramSockAddr)
 		if err != nil {
 			e.t.Fatalf("resolve dgram addr: %v", err)

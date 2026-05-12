@@ -162,7 +162,7 @@ func (e *Env) startCloudQEMU(n *Node) error {
 	}
 
 	logPath := filepath.Join(e.tempDir, n.name+".log")
-	qmpSock := filepath.Join(e.tempDir, n.name+"-qmp.sock")
+	qmpSock := filepath.Join(e.sockDir, n.name+"-qmp.sock")
 
 	args := []string{
 		"-machine", "q35",
