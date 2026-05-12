@@ -536,10 +536,14 @@ func (i *iptablesRunner) AddConnmarkSaveRule() error {
 
 	// mangle/PREROUTING: Restore mark from conntrack for ESTABLISHED/RELATED connections
 	// This runs BEFORE routing decision and rp_filter check
+	// The connmark check ensures we only restore when Tailscale has marked the connection,
+	// preventing us from wiping mark bits set by other systems when ct mark is zero.
 	for _, ipt := range i.getTables() {
 		args := []string{
 			"-m", "conntrack",
 			"--ctstate", "ESTABLISHED,RELATED",
+			"-m", "connmark",
+			"!", "--mark", "0x0/" + fwmarkMask, // Only restore if ct mark has Tailscale bits set
 			"-j", "CONNMARK",
 			"--restore-mark",
 			"--nfmask", fwmarkMask,
@@ -577,6 +581,8 @@ func (i *iptablesRunner) DelConnmarkSaveRule() error {
 		args := []string{
 			"-m", "conntrack",
 			"--ctstate", "ESTABLISHED,RELATED",
+			"-m", "connmark",
+			"!", "--mark", "0x0/" + fwmarkMask,
 			"-j", "CONNMARK",
 			"--restore-mark",
 			"--nfmask", fwmarkMask,
