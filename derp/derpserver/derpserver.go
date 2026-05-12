@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/axiomhq/hyperloglog"
+	"github.com/go4org/hashtriemap"
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
 	xrate "golang.org/x/time/rate"
@@ -64,6 +65,8 @@ import (
 // verboseDropKeys is the set of destination public keys that should
 // verbosely log whenever DERP drops a packet.
 var verboseDropKeys = map[key.NodePublic]bool{}
+
+var debugDisablePeerHashTrie = envknob.RegisterBool("TS_DEBUG_DERP_DISABLE_PEER_HASHTRIE")
 
 // IdealNodeContextKey is the context key used to pass the IdealNodeHeader value
 // from the HTTP handler to the DERP server's Accept method.
@@ -206,6 +209,11 @@ type Server struct {
 	// maps from netip.AddrPort to a client's public key
 	keyOfAddr  map[netip.AddrPort]key.NodePublic
 	rateConfig RateConfig // per-client DERP frame rate limiting config
+
+	// clientsAtomic mirrors clients for local active-client lookup without
+	// taking Server.mu. The authoritative clients map is still guarded by
+	// Server.mu; this mirror is only a fast path for handleFrameSendPacket.
+	clientsAtomic hashtriemap.HashTrieMap[key.NodePublic, *clientSet]
 }
 
 // clientSet represents 1 or more *sclients.
@@ -777,6 +785,7 @@ func (s *Server) registerClient(c *sclient) {
 	}
 
 	cs.activeClient.Store(c)
+	s.clientsAtomic.Store(c.key, cs)
 
 	if _, ok := s.clientsMesh[c.key]; !ok {
 		s.clientsMesh[c.key] = nil // just for varz of total users in cluster
@@ -832,6 +841,7 @@ func (s *Server) unregisterClient(c *sclient) {
 		c.debugLogf("removed connection")
 		set.activeClient.Store(nil)
 		delete(s.clients, c.key)
+		s.clientsAtomic.CompareAndDelete(c.key, set)
 		if v, ok := s.clientsMesh[c.key]; ok && v == nil {
 			delete(s.clientsMesh, c.key)
 			s.notePeerGoneFromRegionLocked(c.key)
@@ -1260,6 +1270,45 @@ func (c *sclient) handleFrameForwardPacket(_ derp.FrameType, fl uint32) error {
 	})
 }
 
+// lookupDest returns the local client, mesh forwarder, or duplicate-client
+// count for dst. dstLen is only meaningful when the returned local client is
+// nil; when a local client is returned, dstLen is just non-zero.
+//
+// It first tries clientsAtomic as a lock-free fast path for active local
+// clients. Cache misses, inactive clientSets, duplicate-client accounting, and
+// mesh forwarder lookups fall back to lookupDestUncached.
+func (c *sclient) lookupDest(dst key.NodePublic) (_ *sclient, fwd PacketForwarder, dstLen int) {
+	if !debugDisablePeerHashTrie() {
+		if set, ok := c.s.clientsAtomic.Load(dst); ok {
+			if dst := set.activeClient.Load(); dst != nil {
+				return dst, nil, 1
+			}
+		}
+	}
+	return c.lookupDestUncached(dst)
+}
+
+// lookupDestUncached is the authoritative destination lookup. It takes
+// Server.mu to read Server.clients and Server.clientsMesh. At most one local
+// client and PacketForwarder can be non-nil: local clients win over mesh
+// forwarding, and mesh forwarding is considered only when there is no local
+// clientSet.
+func (c *sclient) lookupDestUncached(dst key.NodePublic) (_ *sclient, fwd PacketForwarder, dstLen int) {
+	s := c.s
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if set, ok := s.clients[dst]; ok {
+		if dst := set.activeClient.Load(); dst != nil {
+			return dst, nil, 1
+		}
+		dstLen = set.Len()
+	}
+	if dstLen < 1 {
+		fwd = s.clientsMesh[dst]
+	}
+	return nil, fwd, dstLen
+}
+
 // handleFrameSendPacket reads a "send packet" frame from the client.
 func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 	s := c.s
@@ -1269,19 +1318,7 @@ func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 		return fmt.Errorf("client %v: recvPacket: %v", c.key, err)
 	}
 
-	var fwd PacketForwarder
-	var dstLen int
-	var dst *sclient
-
-	s.mu.Lock()
-	if set, ok := s.clients[dstKey]; ok {
-		dstLen = set.Len()
-		dst = set.activeClient.Load()
-	}
-	if dst == nil && dstLen < 1 {
-		fwd = s.clientsMesh[dstKey]
-	}
-	s.mu.Unlock()
+	dst, fwd, dstLen := c.lookupDest(dstKey)
 
 	if dst == nil {
 		if fwd != nil {

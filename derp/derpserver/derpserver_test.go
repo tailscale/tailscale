@@ -29,6 +29,8 @@ import (
 	"golang.org/x/time/rate"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derpconst"
+	"tailscale.com/envknob"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/set"
@@ -1441,6 +1443,159 @@ func TestLoadAndApplyRateConfig(t *testing.T) {
 
 		if err := s.LoadAndApplyRateConfig(filepath.Join(t.TempDir(), "nonexistent.json")); err == nil {
 			t.Fatal("expected error")
+		}
+	})
+}
+
+const peerHashTrieDisableEnv = "TS_DEBUG_DERP_DISABLE_PEER_HASHTRIE"
+
+func setPeerHashTrieDisabled(tb testing.TB, disabled bool) {
+	tb.Helper()
+	envknob.Setenv(peerHashTrieDisableEnv, fmt.Sprint(disabled))
+	tb.Cleanup(func() { envknob.Setenv(peerHashTrieDisableEnv, "") })
+}
+
+func TestLookupDestHashTrieFastPath(t *testing.T) {
+	setPeerHashTrieDisabled(t, false)
+
+	s := &Server{
+		clients:     map[key.NodePublic]*clientSet{},
+		clientsMesh: map[key.NodePublic]PacketForwarder{},
+		clock:       tstime.StdClock{},
+	}
+	src := pubAll(1)
+	dst := pubAll(2)
+	dstClient := &sclient{key: dst}
+	cs := &clientSet{}
+	cs.activeClient.Store(dstClient)
+	s.clients[dst] = cs
+	s.clientsAtomic.Store(dst, cs)
+
+	c := &sclient{s: s, key: src}
+	got, fwd, dstLen := c.lookupDest(dst)
+	if got != dstClient || fwd != nil || dstLen != 1 {
+		t.Fatalf("lookupDest = (%v, %v, %d), want (%v, nil, 1)", got, fwd, dstLen, dstClient)
+	}
+
+	// This must not deadlock while s.mu is held; the hashtrie fast path
+	// should not acquire Server.mu.
+	s.mu.Lock()
+	got, _, _ = c.lookupDest(dst)
+	s.mu.Unlock()
+	if got != dstClient {
+		t.Fatalf("lookupDest got %v, want %v", got, dstClient)
+	}
+}
+
+func TestLookupDestHashTrieFallsBackForForwarder(t *testing.T) {
+	setPeerHashTrieDisabled(t, false)
+
+	s := &Server{
+		clients:     map[key.NodePublic]*clientSet{},
+		clientsMesh: map[key.NodePublic]PacketForwarder{},
+		clock:       tstime.StdClock{},
+	}
+	src := pubAll(1)
+	dst := pubAll(2)
+	c := &sclient{s: s, key: src}
+
+	s.clientsMesh[dst] = testFwd(1)
+	got, fwd, dstLen := c.lookupDest(dst)
+	if got != nil || fwd != testFwd(1) || dstLen != 0 {
+		t.Fatalf("lookupDest = (%v, %v, %d), want (nil, testFwd(1), 0)", got, fwd, dstLen)
+	}
+}
+
+func TestLookupDestHashTrieIgnoresInactiveStaleSet(t *testing.T) {
+	setPeerHashTrieDisabled(t, false)
+
+	s := &Server{
+		clients:     map[key.NodePublic]*clientSet{},
+		clientsMesh: map[key.NodePublic]PacketForwarder{},
+		clock:       tstime.StdClock{},
+	}
+	src := pubAll(1)
+	dst := pubAll(2)
+	c := &sclient{s: s, key: src}
+
+	s.clientsAtomic.Store(dst, &clientSet{})
+
+	newClient := &sclient{key: dst}
+	newSet := &clientSet{}
+	newSet.activeClient.Store(newClient)
+	s.clients[dst] = newSet
+
+	got, fwd, dstLen := c.lookupDest(dst)
+	if got != newClient || fwd != nil || dstLen != 1 {
+		t.Fatalf("lookupDest = (%v, %v, %d), want (%v, nil, 1)", got, fwd, dstLen, newClient)
+	}
+}
+
+func TestLookupDestHashTrieNoAlloc(t *testing.T) {
+	setPeerHashTrieDisabled(t, false)
+
+	s := &Server{
+		clients:     map[key.NodePublic]*clientSet{},
+		clientsMesh: map[key.NodePublic]PacketForwarder{},
+		clock:       tstime.StdClock{},
+	}
+	var dstKeys [4]key.NodePublic
+	var dstClients [4]*sclient
+	for i := range dstKeys {
+		dstKeys[i] = pubAll(byte(i + 2))
+		dstClients[i] = &sclient{key: dstKeys[i]}
+		cs := &clientSet{}
+		cs.activeClient.Store(dstClients[i])
+		s.clients[dstKeys[i]] = cs
+		s.clientsAtomic.Store(dstKeys[i], cs)
+	}
+	c := &sclient{s: s, key: pubAll(1)}
+
+	var i int
+	var got *sclient
+	allocs := testing.AllocsPerRun(1000, func() {
+		idx := i & (len(dstKeys) - 1)
+		got, _, _ = c.lookupDest(dstKeys[idx])
+		i++
+	})
+	if got == nil {
+		t.Fatal("lookupDest returned nil")
+	}
+	if allocs != 0 {
+		t.Fatalf("lookupDest allocated %v times per run, want 0", allocs)
+	}
+}
+
+func BenchmarkLookupDestHashTrie(b *testing.B) {
+	s := &Server{
+		clients:     map[key.NodePublic]*clientSet{},
+		clientsMesh: map[key.NodePublic]PacketForwarder{},
+		clock:       tstime.StdClock{},
+	}
+	var dstKeys [4]key.NodePublic
+	var dstClients [4]*sclient
+	for i := range dstKeys {
+		dstKeys[i] = pubAll(byte(i + 2))
+		dstClients[i] = &sclient{key: dstKeys[i]}
+		cs := &clientSet{}
+		cs.activeClient.Store(dstClients[i])
+		s.clients[dstKeys[i]] = cs
+		s.clientsAtomic.Store(dstKeys[i], cs)
+	}
+
+	b.ReportAllocs()
+	b.SetParallelism(32)
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		c := &sclient{s: s, key: pubAll(1)}
+		var i int
+		for pb.Next() {
+			idx := i & (len(dstKeys) - 1)
+			got, fwd, dstLen := c.lookupDest(dstKeys[idx])
+			if got != dstClients[idx] || fwd != nil {
+				b.Fatalf("lookupDest = (%v, %v, %d), want (%v, nil, _)", got, fwd, dstLen, dstClients[idx])
+			}
+			i++
 		}
 	})
 }
