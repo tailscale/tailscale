@@ -446,13 +446,14 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 	return n
 }
 
-// LanIP returns the LAN IPv4 address of this node on the given network.
-// This is only valid after Env.Start() has been called.
-// Name returns the node's name as set in [Env.AddNode].
+// Name returns the name of the Node.
 func (n *Node) Name() string {
 	return n.name
 }
 
+// LanIP returns the LAN IPv4 address of this node on the given network.
+// This is only valid after Env.Start() has been called.
+// Name returns the node's name as set in [Env.AddNode].
 func (n *Node) LanIP(net *vnet.Network) netip.Addr {
 	return n.vnetNode.LanIP(net)
 }
@@ -1817,4 +1818,9 @@ func (e *Env) PingExpect(from, to *Node, wantRoute PingRoute, timeout time.Durat
 		}
 	}
 	return fmt.Errorf("ping route = %q, want %q (after %v)", lastRoute, wantRoute, timeout)
+}
+
+// NumNodes returns the current number of nodes configured in the env.
+func (env *Env) NumNodes() int {
+	return len(env.nodes)
 }

@@ -112,6 +112,7 @@ func (e *Env) startGokrazyQEMU(n *Node) error {
 	}
 	sysLogAddr := net.JoinHostPort(vnet.FakeSyslogIPv4().String(), "995")
 	if n.vnetNode.IsV6Only() {
+		fmt.Fprintf(&envBuf, " tta.nameserver=%s", vnet.FakeDNSIPv6())
 		sysLogAddr = net.JoinHostPort(vnet.FakeSyslogIPv6().String(), "995")
 	}
 

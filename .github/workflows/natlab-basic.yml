@@ -42,4 +42,4 @@ jobs:
           make -C gokrazy natlab
       - name: Run natlab integration tests
         run: |
-          ./tool/go test -v -run=^TestEasyEasy$ -timeout=3m -count=1 ./tstest/integration/nat  --run-vm-tests
+          ./tool/go test -v -run=^TestEasyEasy$ -timeout=3m -count=1 ./tstest/natlab/vmtest --run-vm-tests
