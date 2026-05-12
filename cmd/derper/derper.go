@@ -96,6 +96,9 @@ var (
 	// tcpWriteTimeout is the timeout for writing to client TCP connections. It does not apply to mesh connections.
 	tcpWriteTimeout = flag.Duration("tcp-write-timeout", derpserver.DefaultTCPWiteTimeout, "TCP write timeout; 0 results in no timeout being set on writes")
 
+	peerCacheMaxEntries = flag.Int("peer-cache-max-entries", derpserver.DefaultPeerCacheMaxEntries, "maximum number of local destination peers cached per DERP client; 0 uses the default; -1 disables the cache")
+	peerCacheMaxIdle    = flag.Duration("peer-cache-max-idle", derpserver.DefaultPeerCacheMaxIdle, "maximum idle time for a DERP client's cached local destination peer; 0 uses the default")
+
 	// ACE
 	flagACEEnabled = flag.Bool("ace", false, "whether to enable embedded ACE server [experimental + in-development as of 2025-09-12; not yet documented]")
 )
@@ -194,6 +197,7 @@ func main() {
 	s.SetVerifyClientURL(*verifyClientURL)
 	s.SetVerifyClientURLFailOpen(*verifyFailOpen)
 	s.SetTCPWriteTimeout(*tcpWriteTimeout)
+	s.SetPeerCacheConfig(*peerCacheMaxEntries, *peerCacheMaxIdle)
 	if *rateConfigPath != "" {
 		if err := s.LoadAndApplyRateConfig(*rateConfigPath); err != nil {
 			log.Fatalf("derper: loading rate config: %v", err)

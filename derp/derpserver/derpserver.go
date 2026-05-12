@@ -55,6 +55,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/bufiox"
 	"tailscale.com/util/ctxkey"
+	"tailscale.com/util/lru"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/slicesx"
@@ -166,13 +167,18 @@ type Server struct {
 	multiForwarderCreated      expvar.Int
 	multiForwarderDeleted      expvar.Int
 	removePktForwardOther      expvar.Int
-	sclientWriteTimeouts       expvar.Int
-	avgQueueDuration           *uint64          // In milliseconds; accessed atomically
-	tcpRtt                     metrics.LabelMap // histogram
-	meshUpdateBatchSize        *metrics.Histogram
-	meshUpdateLoopCount        *metrics.Histogram
-	bufferedWriteFrames        *metrics.Histogram // how many sendLoop frames (or groups of related frames) get written per flush
-	rateLimitPerClientWaited   expvar.Int         // number of times per-client rate limit caused a wait
+	// peerLookupCacheMisses counts lookupDest fallbacks to Server.mu.
+	// There is no hit counter because adding a metric to the hit path is
+	// expensive, and hits are redundant with packets_received minus misses
+	// when the cache is enabled.
+	peerLookupCacheMisses    expvar.Int
+	sclientWriteTimeouts     expvar.Int
+	avgQueueDuration         *uint64          // In milliseconds; accessed atomically
+	tcpRtt                   metrics.LabelMap // histogram
+	meshUpdateBatchSize      *metrics.Histogram
+	meshUpdateLoopCount      *metrics.Histogram
+	bufferedWriteFrames      *metrics.Histogram // how many sendLoop frames (or groups of related frames) get written per flush
+	rateLimitPerClientWaited expvar.Int         // number of times per-client rate limit caused a wait
 	// TODO(illotum): add metrics for rate limited wait time, consider total seconds vs a histogram.
 
 	// verifyClientsLocalTailscaled only accepts client connections to the DERP
@@ -206,6 +212,8 @@ type Server struct {
 	// maps from netip.AddrPort to a client's public key
 	keyOfAddr  map[netip.AddrPort]key.NodePublic
 	rateConfig RateConfig // per-client DERP frame rate limiting config
+
+	peerCacheConfig peerCacheConfig
 }
 
 // clientSet represents 1 or more *sclients.
@@ -1174,6 +1182,11 @@ func (c *sclient) handleFramePing(ft derp.FrameType, fl uint32) error {
 	if extra := int64(fl) - int64(len(m)); extra > 0 {
 		_, err = io.CopyN(io.Discard, c.br, extra)
 	}
+	if err != nil {
+		return err
+	}
+
+	c.cleanPeerCache()
 
 	select {
 	case c.sendPongCh <- [8]byte(m):
@@ -1181,7 +1194,7 @@ func (c *sclient) handleFramePing(ft derp.FrameType, fl uint32) error {
 		// They're pinging too fast. Ignore.
 		// TODO(bradfitz): add a rate limiter too.
 	}
-	return err
+	return nil
 }
 
 func (c *sclient) handleFrameClosePeer(ft derp.FrameType, fl uint32) error {
@@ -1269,19 +1282,7 @@ func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 		return fmt.Errorf("client %v: recvPacket: %v", c.key, err)
 	}
 
-	var fwd PacketForwarder
-	var dstLen int
-	var dst *sclient
-
-	s.mu.Lock()
-	if set, ok := s.clients[dstKey]; ok {
-		dstLen = set.Len()
-		dst = set.activeClient.Load()
-	}
-	if dst == nil && dstLen < 1 {
-		fwd = s.clientsMesh[dstKey]
-	}
-	s.mu.Unlock()
+	dst, fwd, dstLen := c.lookupDest(dstKey)
 
 	if dst == nil {
 		if fwd != nil {
@@ -1796,6 +1797,7 @@ type sclient struct {
 	br          *bufio.Reader
 	connectedAt time.Time
 	preferred   bool
+	peerCache   lru.Cache[key.NodePublic, cachedPeer]
 
 	// Owned by sendLoop, not thread-safe.
 	sawSrc map[key.NodePublic]set.Handle
@@ -2401,6 +2403,7 @@ func (s *Server) ExpVar(rateLimitEnabled bool) expvar.Var {
 	m.Set("multiforwarder_created", &s.multiForwarderCreated)
 	m.Set("multiforwarder_deleted", &s.multiForwarderDeleted)
 	m.Set("packet_forwarder_delete_other_value", &s.removePktForwardOther)
+	m.Set("peer_lookup_cache_misses", &s.peerLookupCacheMisses)
 	m.Set("sclient_write_timeouts", &s.sclientWriteTimeouts)
 	m.Set("average_queue_duration_ms", expvar.Func(func() any {
 		return math.Float64frombits(atomic.LoadUint64(s.avgQueueDuration))
