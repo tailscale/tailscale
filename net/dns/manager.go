@@ -334,7 +334,19 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// TODO: for OSes that support it, pass IP:port and DoH
 		// addresses directly to OS.
 		// https://github.com/tailscale/tailscale/issues/1666
-		ocfg.Nameservers = toIPsOnly(cfg.DefaultResolvers)
+		if m.shouldProxyDefaultResolvers() {
+			// On mobile platforms the OS resolver doesn't reliably fail
+			// over between configured upstreams when one becomes
+			// unreachable (NEDNSSettings on iOS, VpnService DNS on
+			// Android). Route through quad-100 so the Go forwarder races
+			// all servers and returns the first success. See #12677.
+			rcfg.Routes = map[dnsname.FQDN][]*dnstype.Resolver{
+				".": cfg.DefaultResolvers,
+			}
+			ocfg.Nameservers = cfg.serviceIPs(m.knobs)
+		} else {
+			ocfg.Nameservers = toIPsOnly(cfg.DefaultResolvers)
+		}
 		return rcfg, ocfg, nil
 	case cfg.hasDefaultResolvers():
 		// Default resolvers plus other stuff always ends up proxying
@@ -446,6 +458,24 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 
 func (m *Manager) disableSplitDNSOptimization() bool {
 	return m.knobs != nil && m.knobs.DisableSplitDNSWhenNoCustomResolvers.Load()
+}
+
+// shouldProxyDefaultResolvers reports whether configured default IP resolvers
+// should be routed through quad-100 (the Go-side forwarder) instead of being
+// handed directly to the OS resolver.
+//
+// On mobile platforms, DNS is configured via thin VPN-service facilities
+// (NEDNSSettings on iOS, VpnService DNS on Android) whose resolvers do not
+// reliably race or fail over between multiple upstreams when one becomes
+// unreachable, breaking redundancy. Routing through quad-100 lets the Go
+// forwarder race all configured servers concurrently and return the first
+// success. See #12677.
+func (m *Manager) shouldProxyDefaultResolvers() bool {
+	switch m.goos {
+	case "ios", "android":
+		return true
+	}
+	return false
 }
 
 // toIPsOnly returns only the IP portion of dnstype.Resolver.
