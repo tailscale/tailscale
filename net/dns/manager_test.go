@@ -187,14 +187,15 @@ func TestManager(t *testing.T) {
 	// reasonable to make this unsupported as well, in which case
 	// these tests will need tweaking.
 	tests := []struct {
-		name  string
-		in    Config
-		split bool
-		bs    OSConfig
-		os    OSConfig
-		knobs *controlknobs.Knobs
-		rs    resolver.Config
-		goos  string // empty means "linux"
+		name          string
+		in            Config
+		split         bool
+		bs            OSConfig
+		os            OSConfig
+		knobs         *controlknobs.Knobs
+		rs            resolver.Config
+		goos          string // empty means "linux"
+		macGUIVariant bool   // override version.IsMacGUIVariant for the test
 	}{
 		{
 			name: "empty",
@@ -376,6 +377,40 @@ func TestManager(t *testing.T) {
 			},
 			rs: resolver.Config{
 				Routes: upstreams(".", "1.1.1.1"),
+			},
+		},
+		{
+			// macOS Network/System Extension variants (Mac App Store,
+			// macsys) configure DNS via NEDNSSettings, just like iOS,
+			// and have the same multi-server failover problem.
+			name: "corp-macos-gui",
+			in: Config{
+				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),
+				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
+			},
+			goos:          "darwin",
+			macGUIVariant: true,
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(".", "1.1.1.1", "9.9.9.9"),
+			},
+		},
+		{
+			// tailscaled-on-macOS uses scutil/resolv.conf and is
+			// unaffected by the NEDNSSettings issue; default resolvers
+			// should still be handed straight to the OS.
+			name: "corp-macos-tailscaled",
+			in: Config{
+				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),
+				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
+			},
+			goos: "darwin",
+			os: OSConfig{
+				Nameservers:   mustIPs("1.1.1.1", "9.9.9.9"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 		},
 		{
@@ -1045,6 +1080,7 @@ func TestManager(t *testing.T) {
 			if goos == "" {
 				goos = "linux"
 			}
+			tstest.Replace(t, &isMacGUIVariant, func() bool { return test.macGUIVariant })
 			knobs := test.knobs
 			if knobs == nil {
 				knobs = &controlknobs.Knobs{}

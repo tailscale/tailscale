@@ -33,6 +33,7 @@ import (
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/syspolicy/policyclient"
+	"tailscale.com/version"
 )
 
 var (
@@ -335,11 +336,9 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// addresses directly to OS.
 		// https://github.com/tailscale/tailscale/issues/1666
 		if m.shouldProxyDefaultResolvers() {
-			// On mobile platforms the OS resolver doesn't reliably fail
-			// over between configured upstreams when one becomes
-			// unreachable (NEDNSSettings on iOS, VpnService DNS on
-			// Android). Route through quad-100 so the Go forwarder races
-			// all servers and returns the first success. See #12677.
+			// Route through quad-100 so the Go forwarder races all
+			// configured upstreams and fails over to a healthy server.
+			// See [Manager.shouldProxyDefaultResolvers] and #12677.
 			rcfg.Routes = map[dnsname.FQDN][]*dnstype.Resolver{
 				".": cfg.DefaultResolvers,
 			}
@@ -460,20 +459,33 @@ func (m *Manager) disableSplitDNSOptimization() bool {
 	return m.knobs != nil && m.knobs.DisableSplitDNSWhenNoCustomResolvers.Load()
 }
 
+// isMacGUIVariant reports whether the current binary is a macOS GUI variant
+// (Mac App Store or macsys System Extension) that configures DNS via the
+// Network/System Extension's NEDNSSettings, rather than tailscaled-on-macOS
+// which uses scutil/resolv.conf. It's a var so tests can override it via
+// [tstest.Replace].
+var isMacGUIVariant = version.IsMacGUIVariant
+
 // shouldProxyDefaultResolvers reports whether configured default IP resolvers
 // should be routed through quad-100 (the Go-side forwarder) instead of being
 // handed directly to the OS resolver.
 //
-// On mobile platforms, DNS is configured via thin VPN-service facilities
-// (NEDNSSettings on iOS, VpnService DNS on Android) whose resolvers do not
-// reliably race or fail over between multiple upstreams when one becomes
-// unreachable, breaking redundancy. Routing through quad-100 lets the Go
-// forwarder race all configured servers concurrently and return the first
-// success. See #12677.
+// It returns true on platforms whose DNS is configured via a VPN-service
+// facility (NEDNSSettings on iOS and macOS Network/System Extensions,
+// VpnService DNS on Android), where the OS resolver doesn't reliably race
+// or fail over between multiple upstreams when one becomes unreachable.
+// Routing through quad-100 lets the Go forwarder race all configured
+// servers concurrently and return the first success. See #12677.
+//
+// tailscaled-on-macOS is intentionally excluded: it uses standard macOS
+// DNS plumbing (scutil/resolv.conf), which handles racing on its own and
+// would gain only an extra hop from this indirection.
 func (m *Manager) shouldProxyDefaultResolvers() bool {
 	switch m.goos {
 	case "ios", "android":
 		return true
+	case "darwin":
+		return isMacGUIVariant()
 	}
 	return false
 }
