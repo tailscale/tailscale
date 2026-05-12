@@ -7,7 +7,7 @@
 // and multi-NIC configurations for scenarios like subnet routing.
 //
 // Prerequisites:
-//   - qemu-system-x86_64 and KVM access (typically the "kvm" group; no root required)
+//   - qemu-system-x86_64 (KVM is used automatically on Linux when /dev/kvm is accessible)
 //   - A built gokrazy natlabapp image (auto-built on first run via "make natlab" in gokrazy/)
 //
 // Run tests with:
@@ -52,7 +52,7 @@ import (
 )
 
 var (
-	runVMTests     = flag.Bool("run-vm-tests", false, "run tests that require VMs with KVM")
+	runVMTests     = flag.Bool("run-vm-tests", false, "run tests that require QEMU VMs")
 	verboseVMDebug = flag.Bool("verbose-vm-debug", false, "enable verbose debug logging for VM tests")
 	testVersion    = flag.String("test-version", "", `if non-empty, download tailscale & tailscaled at the given release version (e.g. "1.97.255", "unstable", or "stable") instead of building from the source tree`)
 )

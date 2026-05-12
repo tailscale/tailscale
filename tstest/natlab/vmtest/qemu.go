@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,6 +21,21 @@ import (
 
 	"tailscale.com/tstest/natlab/vnet"
 )
+
+// qemuAccelArgs returns QEMU command-line flags for hardware-accelerated
+// virtualisation when available, or nil to fall back to TCG (software
+// emulation). On Linux, KVM is used when /dev/kvm is accessible. On other
+// platforms (macOS, etc.) TCG is used, which allows the tests to run
+// without a same-architecture hypervisor at the cost of speed.
+func qemuAccelArgs() []string {
+	if runtime.GOOS == "linux" {
+		if f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0); err == nil {
+			f.Close()
+			return []string{"-enable-kvm", "-cpu", "host"}
+		}
+	}
+	return nil
+}
 
 // gokrazyPlatform boots gokrazy (Linux) VMs via QEMU.
 type gokrazyPlatform struct{}
@@ -125,6 +141,7 @@ func (e *Env) startGokrazyQEMU(n *Node) error {
 		)
 	}
 
+	args = append(args, qemuAccelArgs()...)
 	return e.launchQEMU(n.name, logPath, args)
 }
 
@@ -148,9 +165,8 @@ func (e *Env) startCloudQEMU(n *Node) error {
 	qmpSock := filepath.Join(e.tempDir, n.name+"-qmp.sock")
 
 	args := []string{
-		"-machine", "q35,accel=kvm",
+		"-machine", "q35",
 		"-m", fmt.Sprintf("%dM", n.os.MemoryMB),
-		"-cpu", "host",
 		"-smp", "2",
 		"-display", "none",
 		"-drive", fmt.Sprintf("file=%s,if=virtio", disk),
@@ -178,6 +194,8 @@ func (e *Env) startCloudQEMU(n *Node) error {
 		"-netdev", "user,id=debug0,hostfwd=tcp:127.0.0.1:0-:22",
 		"-device", "virtio-net-pci,netdev=debug0,romfile=",
 	)
+
+	args = append(args, qemuAccelArgs()...)
 
 	if err := e.launchQEMU(n.name, logPath, args); err != nil {
 		return err
