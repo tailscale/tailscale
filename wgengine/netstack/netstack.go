@@ -214,8 +214,9 @@ type Impl struct {
 	mc        *magicsock.Conn
 	logf      logger.Logf
 	dialer    *tsdial.Dialer
-	ctx       context.Context        // alive until Close
-	ctxCancel context.CancelFunc     // called on Close
+	ctx       context.Context    // alive until Close
+	ctxCancel context.CancelFunc // called on Close
+	injectWG  sync.WaitGroup
 	lb        *ipnlocal.LocalBackend // or nil
 	dns       *dns.Manager
 
@@ -449,6 +450,7 @@ func (ns *Impl) Close() error {
 	stacksForMetrics.Delete(ns)
 	ns.ctxCancel()
 	ns.ipstack.Close()
+	ns.injectWG.Wait()
 	ns.ipstack.Wait()
 	return nil
 }
@@ -644,7 +646,11 @@ func (ns *Impl) Start(b LocalBackend) error {
 	udpFwd := udp.NewForwarder(ns.ipstack, ns.acceptUDPNoICMP)
 	ns.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, ns.wrapTCPProtocolHandler(tcpFwd.HandlePacket))
 	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, ns.wrapUDPProtocolHandler(udpFwd.HandlePacket))
-	go ns.inject()
+	ns.injectWG.Add(1)
+	go func() {
+		defer ns.injectWG.Done()
+		ns.inject()
+	}()
 	if ns.ready.Swap(true) {
 		panic("already started")
 	}
