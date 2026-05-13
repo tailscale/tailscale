@@ -245,6 +245,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 				fs.Var(&serviceNameFlag{Value: &e.service}, "service", "Serve for a service with distinct virtual IP instead on node itself.")
 				fs.BoolVar(&e.tun, "tun", false, "Forward all traffic to the local machine (default false), only supported for services. Refer to docs for more information.")
 			}
+			fs.StringVar(&e.host, "host", "", "Serve under the given external hostname (e.g. --host=foo.com) instead of this node's MagicDNS name. Requires CNAMEing the hostname to this node and is intended for use with `tailscale funnel`; the TLS cert is obtained via TLS-ALPN-01.")
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
 			fs.UintVar(&e.proxyProtocol, "proxy-protocol", 0, "PROXY protocol version (1 or 2) for TCP forwarding")
@@ -404,6 +405,9 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		if forService && funnel {
 			return errors.New("Error: --service flag is not supported with funnel")
 		}
+		if e.host != "" && forService {
+			return errors.New("Error: --host and --service are mutually exclusive")
+		}
 
 		if funnel {
 			// verify node has funnel capabilities
@@ -479,6 +483,15 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		if forService {
 			svcName = e.service
 			dnsName = e.service.String()
+		}
+		// BYO ("bring your own") domain. The user has CNAMEd e.host to
+		// this node, and wants the serve config and any cert issued for
+		// it to be keyed under that hostname rather than the node's own
+		// MagicDNS name. tailscaled obtains the cert via TLS-ALPN-01
+		// (see ipn/ipnlocal/cert.go) over the same TLS path that will
+		// eventually serve real traffic.
+		if e.host != "" {
+			dnsName = e.host
 		}
 		tagged := st.Self.Tags != nil && st.Self.Tags.Len() > 0
 		if forService && !tagged && !turnOff {

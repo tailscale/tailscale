@@ -862,6 +862,33 @@ func TestServeDevConfigMutations(t *testing.T) {
 			}},
 		},
 		{
+			// BYO ("bring your own") domain: --host overrides the node's
+			// DNSName as the serve config key. The ServeConfig entries
+			// are keyed under foo.com:443 rather than foo.test.ts.net:443.
+			name: "funnel_byo_host",
+			steps: []step{{
+				command: cmd("funnel --bg --host=foo.com 3000"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.com:443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:3000"},
+						}},
+					},
+					AllowFunnel: map[ipn.HostPort]bool{"foo.com:443": true},
+				},
+			}},
+		},
+		{
+			// --host and --service both override the dnsName, so they
+			// are not allowed together.
+			name: "host_and_service_are_mutually_exclusive",
+			steps: []step{{
+				command: cmd("serve --bg --host=foo.com --service=svc:foo --http=80 text:foo"),
+				wantErr: anyErr(),
+			}},
+		},
+		{
 			name: "forward_grant_header",
 			steps: []step{
 				{

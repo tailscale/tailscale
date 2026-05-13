@@ -10,6 +10,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -5017,6 +5018,22 @@ var (
 
 	hookServeSetTCPPortsInterceptedFromNetmapAndPrefsLocked feature.Hook[func(b *LocalBackend, prefs ipn.PrefsView) (handlePorts []uint16)]
 	hookServeClearVIPServicesTCPPortsInterceptedLocked      feature.Hook[func(*LocalBackend)]
+
+	// hookServeInstallALPNChallengeCert installs a TLS-ALPN-01 ACME
+	// challenge certificate for the given domain into the serve
+	// package's process-wide map. The returned cleanup func removes it.
+	// It is set by serve.go's init() so that the cert acquisition path
+	// in cert.go can drive a tls-alpn-01 challenge through the same TLS
+	// listener that serves real traffic. The hook is unset (and the
+	// challenge type is therefore unavailable) when ts_omit_serve is on.
+	hookServeInstallALPNChallengeCert feature.Hook[func(domain string, cert *tls.Certificate) (cleanup func())]
+
+	// hookServeLookupALPNChallengeCert returns the TLS-ALPN-01 challenge
+	// cert installed for the given domain, or nil if none is in flight.
+	// It is set by serve.go's init() and read from serve.go's TLS
+	// terminator GetCertificate callback when a ClientHello arrives with
+	// the "acme-tls/1" ALPN.
+	hookServeLookupALPNChallengeCert feature.Hook[func(domain string) *tls.Certificate]
 )
 
 func (b *LocalBackend) handleDriveConn(conn net.Conn) error {

@@ -110,8 +110,13 @@ func (b *LocalBackend) GetCertPEM(ctx context.Context, domain string) (*TLSCertK
 //
 //   - An exact CertDomain (e.g., "node.ts.net")
 //   - A wildcard domain (e.g., "*.node.ts.net")
+//   - A user-brought ("BYO") domain referenced by this node's serve config
+//     (e.g., "foo.com" when ServeConfig.Web has a "foo.com:443" key).
 //
 // The wildcard format requires the NodeAttrDNSSubdomainResolve capability.
+// ts.net domains are issued via dns-01 against control's DNSimple-backed
+// zone. BYO domains are issued via tls-alpn-01 directly against the
+// public ACME directory (typically Let's Encrypt).
 func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string, minValidity time.Duration) (*TLSCertKeyPair, error) {
 	b.mu.Lock()
 	getCertForTest := b.getCertForTest
@@ -609,14 +614,27 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 	}
 	traceACME(order)
 
+	// Tailscale-managed (ts.net) domains use dns-01 because control owns
+	// the ts.net DNS zone. User-supplied ("BYO") domains use tls-alpn-01,
+	// because we don't have API access to the user's DNS provider but we
+	// do already terminate TLS on the user's tailscaled — the same path
+	// that will eventually serve the production cert can also serve the
+	// challenge cert.
+	challengeType := b.preferredChallengeType(domain)
+
 	for _, aurl := range order.AuthzURLs {
 		az, err := ac.GetAuthorization(ctx, aurl)
 		if err != nil {
 			return nil, err
 		}
 		traceACME(az)
+		var solved bool
 		for _, ch := range az.Challenges {
-			if ch.Type == "dns-01" {
+			if ch.Type != challengeType {
+				continue
+			}
+			switch ch.Type {
+			case "dns-01":
 				rec, err := ac.DNS01ChallengeRecord(ch.Token)
 				if err != nil {
 					return nil, err
@@ -636,20 +654,44 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 					logf("TXT record already existed for %s", key)
 				} else {
 					logf("starting SetDNS call for %s...", key)
-					err = b.SetDNS(ctx, key, rec)
-					if err != nil {
+					if err := b.SetDNS(ctx, key, rec); err != nil {
 						return nil, fmt.Errorf("SetDNS %q => %q: %w", key, rec, err)
 					}
 					logf("did SetDNS for %s", key)
 				}
-
-				chal, err := ac.Accept(ctx, ch)
-				if err != nil {
-					return nil, fmt.Errorf("Accept: %v", err)
+			case "tls-alpn-01":
+				// The challenge cert must be served over TLS for the
+				// authorization identifier (which equals the SAN of the
+				// production cert we are trying to issue) and must stay
+				// installed until the ACME server finishes validation,
+				// so the deferred cleanup fires at the end of
+				// getCertPEM rather than the end of the loop iteration.
+				// installALPN is provided by serve.go; the hook is
+				// unset in builds without serve (ts_omit_serve), in
+				// which case this challenge type is unavailable.
+				installALPN, ok := hookServeInstallALPNChallengeCert.GetOk()
+				if !ok {
+					return nil, errors.New("tls-alpn-01 challenges require serve support, which is not compiled into this build")
 				}
-				traceACME(chal)
-				break
+				cert, err := ac.TLSALPN01ChallengeCert(ch.Token, az.Identifier.Value)
+				if err != nil {
+					return nil, fmt.Errorf("TLSALPN01ChallengeCert: %w", err)
+				}
+				defer installALPN(az.Identifier.Value, &cert)()
+				logf("installed tls-alpn-01 challenge cert for %s", az.Identifier.Value)
+			default:
+				continue
 			}
+			chal, err := ac.Accept(ctx, ch)
+			if err != nil {
+				return nil, fmt.Errorf("Accept: %v", err)
+			}
+			traceACME(chal)
+			solved = true
+			break
+		}
+		if !solved {
+			return nil, fmt.Errorf("ACME server did not offer a %q challenge for %q", challengeType, az.Identifier.Value)
 		}
 	}
 
@@ -900,6 +942,7 @@ func validLookingCertDomain(name string) bool {
 //
 //   - "node.ts.net" -> "node.ts.net" (exact CertDomain match)
 //   - "*.node.ts.net" -> "*.node.ts.net" (explicit wildcard, requires NodeAttrDNSSubdomainResolve)
+//   - "foo.com" -> "foo.com" (user-brought "BYO" domain referenced by the node's serve config)
 //
 // Subdomain requests like "app.node.ts.net" are rejected; callers should
 // request "*.node.ts.net" explicitly for subdomain coverage.
@@ -914,7 +957,7 @@ func (b *LocalBackend) resolveCertDomain(domain string) (string, error) {
 		return "", errors.New("no netmap available")
 	}
 	certDomains := nm.DNS.CertDomains
-	if len(certDomains) == 0 {
+	if len(certDomains) == 0 && !b.serveConfigHasHost(domain) {
 		return "", errors.New("your Tailscale account does not support getting TLS certs")
 	}
 
@@ -934,7 +977,61 @@ func (b *LocalBackend) resolveCertDomain(domain string) (string, error) {
 		return domain, nil
 	}
 
+	// Bring-your-own-domain: the node's serve config references the
+	// domain as a Funnel target (e.g. "foo.com:443"), so we'll obtain a
+	// cert for it via TLS-ALPN-01 in getCertPEM. resolveCertDomain only
+	// validates that the domain is legitimately associated with this
+	// node; the challenge choice happens later.
+	if b.serveConfigHasHost(domain) {
+		return domain, nil
+	}
+
 	return "", fmt.Errorf("invalid domain %q; must be one of %q", domain, certDomains)
+}
+
+// serveConfigHasHost reports whether the local serve config has any Web
+// entry whose hostname (the SNI portion of the HostPort key) matches
+// host. It is used by resolveCertDomain to allow cert issuance for
+// user-brought ("BYO") domains that are not in the netmap's CertDomains
+// list.
+func (b *LocalBackend) serveConfigHasHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	b.mu.Lock()
+	sc := b.serveConfig
+	b.mu.Unlock()
+	if !sc.Valid() {
+		return false
+	}
+	for hp := range sc.Webs() {
+		h, _, err := net.SplitHostPort(string(hp))
+		if err == nil && h == host {
+			return true
+		}
+	}
+	return false
+}
+
+// preferredChallengeType returns the ACME challenge type to attempt for
+// the given domain.
+//
+// ts.net (Tailscale-managed) domains use dns-01 because control owns
+// the ts.net zone and can publish the challenge TXT record. Any other
+// domain is treated as user-brought ("BYO") and uses tls-alpn-01,
+// which is satisfied by the user's own tailscaled serving the
+// challenge cert over the same TLS path that will eventually serve
+// the production cert (typically via Funnel).
+func (b *LocalBackend) preferredChallengeType(domain string) string {
+	nm := b.NetMapNoPeers()
+	if nm == nil {
+		return "tls-alpn-01"
+	}
+	base := strings.TrimPrefix(domain, "*.")
+	if slices.Contains(nm.DNS.CertDomains, base) || slices.Contains(nm.DNS.CertDomains, domain) {
+		return "dns-01"
+	}
+	return "tls-alpn-01"
 }
 
 // handleC2NTLSCertStatus returns info about the last TLS certificate issued for the
