@@ -737,7 +737,10 @@ func makeHangDialer(tb testing.TB) (netx.DialFunc, chan struct{}) {
 // TestTCPForwardLimits verifies that the limits on the TCP forwarder work in a
 // success case (i.e. when we don't hit the limit).
 func TestTCPForwardLimits(t *testing.T) {
+	tstest.AssertNotParallel(t) // calls envknob.Setenv
 	envknob.Setenv("TS_DEBUG_NETSTACK", "true")
+	t.Cleanup(func() { envknob.Setenv("TS_DEBUG_NETSTACK", "") })
+
 	impl := makeNetstack(t, func(impl *Impl) {
 		impl.ProcessSubnets = true
 	})
@@ -815,6 +818,7 @@ func TestTCPForwardLimits_PerClient(t *testing.T) {
 	clientmetric.ResetForTest(t)
 	tstest.AssertNotParallel(t) // calls envknob.Setenv
 	envknob.Setenv("TS_DEBUG_NETSTACK", "true")
+	t.Cleanup(func() { envknob.Setenv("TS_DEBUG_NETSTACK", "") })
 
 	// Set our test override limits during this test.
 	maxInFlightConnectionAttemptsForTest.Store(2)

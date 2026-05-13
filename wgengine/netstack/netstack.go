@@ -216,6 +216,7 @@ type Impl struct {
 	dialer    *tsdial.Dialer
 	ctx       context.Context        // alive until Close
 	ctxCancel context.CancelFunc     // called on Close
+	injectWG  sync.WaitGroup         // wait for the inject goroutine
 	lb        *ipnlocal.LocalBackend // or nil
 	dns       *dns.Manager
 
@@ -450,6 +451,7 @@ func (ns *Impl) Close() error {
 	ns.ctxCancel()
 	ns.ipstack.Close()
 	ns.ipstack.Wait()
+	ns.injectWG.Wait()
 	return nil
 }
 
@@ -644,7 +646,9 @@ func (ns *Impl) Start(b LocalBackend) error {
 	udpFwd := udp.NewForwarder(ns.ipstack, ns.acceptUDPNoICMP)
 	ns.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, ns.wrapTCPProtocolHandler(tcpFwd.HandlePacket))
 	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, ns.wrapUDPProtocolHandler(udpFwd.HandlePacket))
-	go ns.inject()
+	ns.injectWG.Go(func() {
+		ns.inject()
+	})
 	if ns.ready.Swap(true) {
 		panic("already started")
 	}
