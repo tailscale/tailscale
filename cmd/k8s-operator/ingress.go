@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -232,17 +233,20 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 	hostname := hostnameForIngress(ing)
 
+	backendSelectors := a.serviceSelectorsForIngress(ctx, ing, logger)
 	sts := &tailscaleSTSConfig{
-		Replicas:            1,
-		Hostname:            hostname,
-		ParentResourceName:  ing.Name,
-		ParentResourceUID:   string(ing.UID),
-		ServeConfig:         sc,
-		Tags:                tags,
-		ChildResourceLabels: crl,
-		ProxyClassName:      proxyClass,
-		proxyType:           proxyTypeIngressResource,
-		LoginServer:         a.ssr.loginServer,
+		Replicas:                      1,
+		Hostname:                      hostname,
+		ParentResourceName:            ing.Name,
+		ParentResourceNamespace:       ing.Namespace,
+		ParentResourceUID:             string(ing.UID),
+		ServeConfig:                   sc,
+		Tags:                          tags,
+		ChildResourceLabels:           crl,
+		ProxyClassName:                proxyClass,
+		ClusterTargetServiceSelectors: backendSelectors,
+		proxyType:                     proxyTypeIngressResource,
+		LoginServer:                   a.ssr.loginServer,
 	}
 
 	if val := ing.GetAnnotations()[AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy]; val == "true" {
@@ -288,6 +292,54 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 
 	return nil
+}
+
+func (a *IngressReconciler) serviceSelectorsForIngress(ctx context.Context, ing *networkingv1.Ingress, logger *zap.SugaredLogger) []map[string]string {
+	if ing == nil {
+		return nil
+	}
+	seenSvc := make(map[string]bool)
+	seenSel := make(map[string]bool)
+	var serviceNames []string
+	addService := func(b *networkingv1.IngressBackend) {
+		if b == nil || b.Service == nil || b.Service.Name == "" {
+			return
+		}
+		if seenSvc[b.Service.Name] {
+			return
+		}
+		seenSvc[b.Service.Name] = true
+		serviceNames = append(serviceNames, b.Service.Name)
+	}
+	addService(ing.Spec.DefaultBackend)
+	for _, r := range ing.Spec.Rules {
+		if r.HTTP == nil {
+			continue
+		}
+		for _, p := range r.HTTP.Paths {
+			addService(&p.Backend)
+		}
+	}
+	var selectors []map[string]string
+	for _, svcName := range serviceNames {
+		var svc corev1.Service
+		if err := a.Get(ctx, types.NamespacedName{Namespace: ing.Namespace, Name: svcName}, &svc); err != nil {
+			logger.Debugf("error fetching ingress backend Service %s/%s for affinity inference: %v", ing.Namespace, svcName, err)
+			a.recorder.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "backend service %q not found", svcName)
+			continue
+		}
+		if len(svc.Spec.Selector) == 0 {
+			continue
+		}
+		// Deduplicate selectors by their stringified representation.
+		key := fmt.Sprintf("%v", svc.Spec.Selector)
+		if seenSel[key] {
+			continue
+		}
+		seenSel[key] = true
+		selectors = append(selectors, maps.Clone(svc.Spec.Selector))
+	}
+	return selectors
 }
 
 func (a *IngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
