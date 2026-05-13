@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/preftype"
 )
 
@@ -15,7 +16,8 @@ func TestConfigEqual(t *testing.T) {
 	testedFields := []string{
 		"LocalAddrs", "Routes", "LocalRoutes", "NewMTU",
 		"SubnetRoutes", "SNATSubnetRoutes", "StatefulFiltering",
-		"NetfilterMode", "NetfilterKind", "RemoveCGNATDropRule",
+		"ExitNodeAllowWANPorts", "NetfilterMode", "NetfilterKind",
+		"RemoveCGNATDropRule",
 	}
 	configType := reflect.TypeFor[Config]()
 	configFields := []string{}
@@ -145,6 +147,22 @@ func TestConfigEqual(t *testing.T) {
 		{
 			&Config{NewMTU: 1280},
 			&Config{NewMTU: 0},
+			false,
+		},
+
+		{
+			&Config{ExitNodeAllowWANPorts: []tailcfg.ProtoPortRange{{Proto: 6, Ports: tailcfg.PortRange{First: 443, Last: 443}}}},
+			&Config{ExitNodeAllowWANPorts: []tailcfg.ProtoPortRange{{Proto: 6, Ports: tailcfg.PortRange{First: 443, Last: 443}}}},
+			true,
+		},
+		{
+			&Config{ExitNodeAllowWANPorts: []tailcfg.ProtoPortRange{{Proto: 6, Ports: tailcfg.PortRange{First: 443, Last: 443}}}},
+			&Config{ExitNodeAllowWANPorts: []tailcfg.ProtoPortRange{{Proto: 6, Ports: tailcfg.PortRange{First: 22, Last: 22}}}},
+			false,
+		},
+		{
+			&Config{ExitNodeAllowWANPorts: []tailcfg.ProtoPortRange{{Proto: 6, Ports: tailcfg.PortRange{First: 443, Last: 443}}}},
+			&Config{},
 			false,
 		},
 	}

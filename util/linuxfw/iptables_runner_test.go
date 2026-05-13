@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsconst"
 )
 
@@ -499,6 +500,114 @@ func TestAddAndDelConnmarkSaveRule(t *testing.T) {
 			t.Fatalf("error checking IPv4 OUTPUT rule: %v", err)
 		} else if exists {
 			t.Errorf("IPv4 OUTPUT connmark rule still exists after deletion")
+		}
+	})
+}
+
+func TestAddAndDelWANBypassRule(t *testing.T) {
+	tunname := "tailscale0"
+	ports := []tailcfg.ProtoPortRange{
+		{Proto: 6, Ports: tailcfg.PortRange{First: 443, Last: 443}},
+	}
+
+	preroutingArgs := []string{
+		"!", "-i", tunname,
+		"-p", "tcp", "--dport", "443",
+		"-m", "comment", "--comment", wanBypassComment,
+		"-j", "CONNMARK", "--set-mark", "0x80000/0xff0000",
+	}
+	outputArgs := []string{
+		"-p", "tcp", "--sport", "443",
+		"-m", "connmark", "--mark", "0x80000/0xff0000",
+		"-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED",
+		"-m", "comment", "--comment", wanBypassComment,
+		"-j", "MARK", "--set-mark", "0x80000/0xff0000",
+	}
+
+	t.Run("add_and_delete", func(t *testing.T) {
+		iptr := newFakeIPTablesRunner()
+
+		if err := iptr.AddWANBypassRule(tunname, ports); err != nil {
+			t.Fatalf("AddWANBypassRule failed: %v", err)
+		}
+
+		// Verify rules exist in both IPv4 and IPv6
+		for _, proto := range []iptablesInterface{iptr.ipt4, iptr.ipt6} {
+			if exists, err := proto.Exists("mangle", "PREROUTING", preroutingArgs...); err != nil {
+				t.Fatalf("error checking PREROUTING rule: %v", err)
+			} else if !exists {
+				t.Errorf("PREROUTING WAN bypass rule doesn't exist")
+			}
+
+			if exists, err := proto.Exists("mangle", "OUTPUT", outputArgs...); err != nil {
+				t.Fatalf("error checking OUTPUT rule: %v", err)
+			} else if !exists {
+				t.Errorf("OUTPUT WAN bypass rule doesn't exist")
+			}
+		}
+
+		// Delete
+		if err := iptr.DelWANBypassRule(tunname); err != nil {
+			t.Fatalf("DelWANBypassRule failed: %v", err)
+		}
+
+		for _, proto := range []iptablesInterface{iptr.ipt4, iptr.ipt6} {
+			if exists, err := proto.Exists("mangle", "PREROUTING", preroutingArgs...); err != nil {
+				t.Fatalf("error checking PREROUTING rule: %v", err)
+			} else if exists {
+				t.Errorf("PREROUTING WAN bypass rule still exists after deletion")
+			}
+			if exists, err := proto.Exists("mangle", "OUTPUT", outputArgs...); err != nil {
+				t.Fatalf("error checking OUTPUT rule: %v", err)
+			} else if exists {
+				t.Errorf("OUTPUT WAN bypass rule still exists after deletion")
+			}
+		}
+
+		// Idempotent deletion
+		if err := iptr.DelWANBypassRule(tunname); err != nil {
+			t.Fatalf("DelWANBypassRule (second call) failed: %v", err)
+		}
+	})
+
+	t.Run("port_update", func(t *testing.T) {
+		iptr := newFakeIPTablesRunner()
+
+		// Add tcp:443
+		if err := iptr.AddWANBypassRule(tunname, ports); err != nil {
+			t.Fatalf("AddWANBypassRule failed: %v", err)
+		}
+
+		// Update to tcp:22
+		newPorts := []tailcfg.ProtoPortRange{
+			{Proto: 6, Ports: tailcfg.PortRange{First: 22, Last: 22}},
+		}
+		if err := iptr.AddWANBypassRule(tunname, newPorts); err != nil {
+			t.Fatalf("AddWANBypassRule (update) failed: %v", err)
+		}
+
+		// Old rule should be gone
+		for _, proto := range []iptablesInterface{iptr.ipt4, iptr.ipt6} {
+			if exists, err := proto.Exists("mangle", "PREROUTING", preroutingArgs...); err != nil {
+				t.Fatalf("error checking old PREROUTING rule: %v", err)
+			} else if exists {
+				t.Errorf("old PREROUTING rule for tcp:443 still exists after port update")
+			}
+		}
+
+		// New rule should exist
+		newPreroutingArgs := []string{
+			"!", "-i", tunname,
+			"-p", "tcp", "--dport", "22",
+			"-m", "comment", "--comment", wanBypassComment,
+			"-j", "CONNMARK", "--set-mark", "0x80000/0xff0000",
+		}
+		for _, proto := range []iptablesInterface{iptr.ipt4, iptr.ipt6} {
+			if exists, err := proto.Exists("mangle", "PREROUTING", newPreroutingArgs...); err != nil {
+				t.Fatalf("error checking new PREROUTING rule: %v", err)
+			} else if !exists {
+				t.Errorf("new PREROUTING rule for tcp:22 doesn't exist")
+			}
 		}
 	})
 }

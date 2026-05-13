@@ -18,6 +18,7 @@ import (
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 	"tailscale.com/util/eventbus"
@@ -132,11 +133,12 @@ type Config struct {
 	SubnetRoutes []netip.Prefix
 
 	// Linux-only things below, ignored on other platforms.
-	SNATSubnetRoutes    bool                   // SNAT traffic to local subnets
-	StatefulFiltering   bool                   // Apply stateful filtering to inbound connections
-	NetfilterMode       preftype.NetfilterMode // how much to manage netfilter rules
-	NetfilterKind       string                 // what kind of netfilter to use ("nftables", "iptables", or "" to auto-detect)
-	RemoveCGNATDropRule bool                   // whether to remove the firewall rule to drop non-Tailscale inbound traffic from CGNAT IPs
+	SNATSubnetRoutes      bool                     // SNAT traffic to local subnets
+	StatefulFiltering     bool                     // Apply stateful filtering to inbound connections
+	ExitNodeAllowWANPorts []tailcfg.ProtoPortRange // proto:port pairs that bypass exit node routing for incoming WAN connections
+	NetfilterMode         preftype.NetfilterMode   // how much to manage netfilter rules
+	NetfilterKind         string                   // what kind of netfilter to use ("nftables", "iptables", or "" to auto-detect)
+	RemoveCGNATDropRule   bool                     // whether to remove the firewall rule to drop non-Tailscale inbound traffic from CGNAT IPs
 }
 
 func (a *Config) Equal(b *Config) bool {
@@ -158,5 +160,6 @@ func (c *Config) Clone() *Config {
 	c2.Routes = slices.Clone(c.Routes)
 	c2.LocalRoutes = slices.Clone(c.LocalRoutes)
 	c2.SubnetRoutes = slices.Clone(c.SubnetRoutes)
+	c2.ExitNodeAllowWANPorts = slices.Clone(c.ExitNodeAllowWANPorts)
 	return &c2
 }

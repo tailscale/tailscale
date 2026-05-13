@@ -76,6 +76,7 @@ const (
 	EnableIncomingConnections Key = "AllowIncomingConnections"
 	EnableServerMode          Key = "UnattendedMode"
 	ExitNodeAllowLANAccess    Key = "ExitNodeAllowLANAccess"
+	ExitNodeAllowWANPorts     Key = "ExitNodeAllowWANPorts"
 	EnableTailscaleDNS        Key = "UseTailscaleDNSSettings"
 	EnableTailscaleSubnets    Key = "UseTailscaleSubnets"
 
