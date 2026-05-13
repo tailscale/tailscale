@@ -536,6 +536,8 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		needsCaptiveDetection: make(chan bool),
 	}
 
+	sys.NoiseRoundTripper.Set(noiseRoundTripper{b})
+
 	nb := newNodeBackend(ctx, b.logf, b.sys.Bus.Get())
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
@@ -7272,6 +7274,15 @@ func (b *LocalBackend) DoNoiseRequest(req *http.Request) (*http.Response, error)
 		return nil, errors.New("no client")
 	}
 	return cc.DoNoiseRequest(req)
+}
+
+// noiseRoundTripper adapts LocalBackend.DoNoiseRequest to http.RoundTripper.
+type noiseRoundTripper struct {
+	lb *LocalBackend
+}
+
+func (n noiseRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return n.lb.DoNoiseRequest(req)
 }
 
 // ActiveSSHConns returns the number of active SSH connections,
