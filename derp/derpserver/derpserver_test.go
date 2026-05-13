@@ -29,7 +29,6 @@ import (
 	"golang.org/x/time/rate"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derpconst"
-	"tailscale.com/envknob"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -150,7 +149,6 @@ func pubAll(b byte) (ret key.NodePublic) {
 
 func TestForwarderRegistration(t *testing.T) {
 	s := &Server{
-		clients:     make(map[key.NodePublic]*clientSet),
 		clientsMesh: map[key.NodePublic]PacketForwarder{},
 	}
 	want := func(want map[key.NodePublic]PacketForwarder) {
@@ -232,7 +230,7 @@ func TestForwarderRegistration(t *testing.T) {
 		key:  u1,
 		logf: logger.Discard,
 	}
-	s.clients[u1] = singleClient(u1c)
+	s.clients.Store(u1, singleClient(u1c))
 	s.RemovePacketForwarder(u1, testFwd(100))
 	want(map[key.NodePublic]PacketForwarder{
 		u1: nil,
@@ -252,7 +250,7 @@ func TestForwarderRegistration(t *testing.T) {
 	// Now pretend u1 was already connected locally (so clientsMesh[u1] is nil), and then we heard
 	// that they're also connected to a peer of ours. That shouldn't transition the forwarder
 	// from nil to the new one, not a multiForwarder.
-	s.clients[u1] = singleClient(u1c)
+	s.clients.Store(u1, singleClient(u1c))
 	s.clientsMesh[u1] = nil
 	want(map[key.NodePublic]PacketForwarder{
 		u1: nil,
@@ -284,7 +282,6 @@ func TestMultiForwarder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &Server{
-		clients:     make(map[key.NodePublic]*clientSet),
 		clientsMesh: map[key.NodePublic]PacketForwarder{},
 	}
 	u := pubAll(1)
@@ -393,7 +390,7 @@ func TestServerDupClients(t *testing.T) {
 	}
 	wantSingleClient := func(t *testing.T, want *sclient) {
 		t.Helper()
-		got, ok := s.clients[want.key]
+		got, ok := s.clients.Load(want.key)
 		if !ok {
 			t.Error("no clients for key")
 			return
@@ -416,7 +413,7 @@ func TestServerDupClients(t *testing.T) {
 	}
 	wantNoClient := func(t *testing.T) {
 		t.Helper()
-		_, ok := s.clients[clientPub]
+		_, ok := s.clients.Load(clientPub)
 		if !ok {
 			// Good
 			return
@@ -425,7 +422,7 @@ func TestServerDupClients(t *testing.T) {
 	}
 	wantDupSet := func(t *testing.T) *dupClientSet {
 		t.Helper()
-		cs, ok := s.clients[clientPub]
+		cs, ok := s.clients.Load(clientPub)
 		if !ok {
 			t.Fatal("no set for key; want dup set")
 			return nil
@@ -438,7 +435,7 @@ func TestServerDupClients(t *testing.T) {
 	}
 	wantActive := func(t *testing.T, want *sclient) {
 		t.Helper()
-		set, ok := s.clients[clientPub]
+		set, ok := s.clients.Load(clientPub)
 		if !ok {
 			t.Error("no set for key")
 			return
@@ -779,7 +776,7 @@ func TestServeDebugTrafficUniqueSenders(t *testing.T) {
 	s.mu.Lock()
 	cs := &clientSet{}
 	cs.activeClient.Store(c)
-	s.clients[clientKey] = cs
+	s.clients.Store(clientKey, cs)
 	s.mu.Unlock()
 
 	estimate := c.EstimatedUniqueSenders()
@@ -1192,7 +1189,7 @@ func TestUpdateRateLimits(t *testing.T) {
 	cs.activeClient.Store(c)
 
 	s.mu.Lock()
-	s.clients[clientKey] = cs
+	s.clients.Store(clientKey, cs)
 	s.mu.Unlock()
 
 	rc := RateConfig{
@@ -1245,7 +1242,7 @@ func TestUpdateRateLimits(t *testing.T) {
 	meshCS.activeClient.Store(meshClient)
 
 	s.mu.Lock()
-	s.clients[meshKey] = meshCS
+	s.clients.Store(meshKey, meshCS)
 	s.mu.Unlock()
 
 	rc = RateConfig{
@@ -1272,7 +1269,7 @@ func TestUpdateRateLimits(t *testing.T) {
 	dupCS.activeClient.Store(d1)
 	dupCS.dup = &dupClientSet{set: set.Of(d1, d2)}
 	s.mu.Lock()
-	s.clients[dupKey] = dupCS
+	s.clients.Store(dupKey, dupCS)
 	s.mu.Unlock()
 
 	rc = RateConfig{
@@ -1364,7 +1361,7 @@ func TestLoadAndApplyRateConfig(t *testing.T) {
 		cs := &clientSet{}
 		cs.activeClient.Store(c)
 		s.mu.Lock()
-		s.clients[clientKey] = cs
+		s.clients.Store(clientKey, cs)
 		s.mu.Unlock()
 
 		f := writeConfig(t, fmt.Sprintf(`{"PerClientRateLimitBytesPerSec": %d, "PerClientRateBurstBytes": %d}`,
@@ -1447,19 +1444,8 @@ func TestLoadAndApplyRateConfig(t *testing.T) {
 	})
 }
 
-const peerHashTrieDisableEnv = "TS_DEBUG_DERP_DISABLE_PEER_HASHTRIE"
-
-func setPeerHashTrieDisabled(tb testing.TB, disabled bool) {
-	tb.Helper()
-	envknob.Setenv(peerHashTrieDisableEnv, fmt.Sprint(disabled))
-	tb.Cleanup(func() { envknob.Setenv(peerHashTrieDisableEnv, "") })
-}
-
 func TestLookupDestHashTrieFastPath(t *testing.T) {
-	setPeerHashTrieDisabled(t, false)
-
 	s := &Server{
-		clients:     map[key.NodePublic]*clientSet{},
 		clientsMesh: map[key.NodePublic]PacketForwarder{},
 		clock:       tstime.StdClock{},
 	}
@@ -1468,8 +1454,7 @@ func TestLookupDestHashTrieFastPath(t *testing.T) {
 	dstClient := &sclient{key: dst}
 	cs := &clientSet{}
 	cs.activeClient.Store(dstClient)
-	s.clients[dst] = cs
-	s.clientsAtomic.Store(dst, cs)
+	s.clients.Store(dst, cs)
 
 	c := &sclient{s: s, key: src}
 	got, fwd, dstLen := c.lookupDest(dst)
@@ -1488,10 +1473,7 @@ func TestLookupDestHashTrieFastPath(t *testing.T) {
 }
 
 func TestLookupDestHashTrieFallsBackForForwarder(t *testing.T) {
-	setPeerHashTrieDisabled(t, false)
-
 	s := &Server{
-		clients:     map[key.NodePublic]*clientSet{},
 		clientsMesh: map[key.NodePublic]PacketForwarder{},
 		clock:       tstime.StdClock{},
 	}
@@ -1506,11 +1488,8 @@ func TestLookupDestHashTrieFallsBackForForwarder(t *testing.T) {
 	}
 }
 
-func TestLookupDestHashTrieIgnoresInactiveStaleSet(t *testing.T) {
-	setPeerHashTrieDisabled(t, false)
-
+func TestLookupDestHashTrieIgnoresInactiveSet(t *testing.T) {
 	s := &Server{
-		clients:     map[key.NodePublic]*clientSet{},
 		clientsMesh: map[key.NodePublic]PacketForwarder{},
 		clock:       tstime.StdClock{},
 	}
@@ -1518,24 +1497,28 @@ func TestLookupDestHashTrieIgnoresInactiveStaleSet(t *testing.T) {
 	dst := pubAll(2)
 	c := &sclient{s: s, key: src}
 
-	s.clientsAtomic.Store(dst, &clientSet{})
-
-	newClient := &sclient{key: dst}
-	newSet := &clientSet{}
-	newSet.activeClient.Store(newClient)
-	s.clients[dst] = newSet
+	// A clientSet with no activeClient (a transient state during
+	// register/unregister) must not be returned by the fast path.
+	cs := &clientSet{}
+	s.clients.Store(dst, cs)
 
 	got, fwd, dstLen := c.lookupDest(dst)
+	if got != nil || fwd != nil || dstLen != 0 {
+		t.Fatalf("lookupDest with inactive set = (%v, %v, %d), want (nil, nil, 0)", got, fwd, dstLen)
+	}
+
+	// Setting activeClient on the same in-map entry must make the next
+	// fast-path lookup observe it.
+	newClient := &sclient{key: dst}
+	cs.activeClient.Store(newClient)
+	got, fwd, dstLen = c.lookupDest(dst)
 	if got != newClient || fwd != nil || dstLen != 1 {
-		t.Fatalf("lookupDest = (%v, %v, %d), want (%v, nil, 1)", got, fwd, dstLen, newClient)
+		t.Fatalf("lookupDest after activation = (%v, %v, %d), want (%v, nil, 1)", got, fwd, dstLen, newClient)
 	}
 }
 
 func TestLookupDestHashTrieNoAlloc(t *testing.T) {
-	setPeerHashTrieDisabled(t, false)
-
 	s := &Server{
-		clients:     map[key.NodePublic]*clientSet{},
 		clientsMesh: map[key.NodePublic]PacketForwarder{},
 		clock:       tstime.StdClock{},
 	}
@@ -1546,8 +1529,7 @@ func TestLookupDestHashTrieNoAlloc(t *testing.T) {
 		dstClients[i] = &sclient{key: dstKeys[i]}
 		cs := &clientSet{}
 		cs.activeClient.Store(dstClients[i])
-		s.clients[dstKeys[i]] = cs
-		s.clientsAtomic.Store(dstKeys[i], cs)
+		s.clients.Store(dstKeys[i], cs)
 	}
 	c := &sclient{s: s, key: pubAll(1)}
 
@@ -1568,7 +1550,6 @@ func TestLookupDestHashTrieNoAlloc(t *testing.T) {
 
 func BenchmarkLookupDestHashTrie(b *testing.B) {
 	s := &Server{
-		clients:     map[key.NodePublic]*clientSet{},
 		clientsMesh: map[key.NodePublic]PacketForwarder{},
 		clock:       tstime.StdClock{},
 	}
@@ -1579,8 +1560,7 @@ func BenchmarkLookupDestHashTrie(b *testing.B) {
 		dstClients[i] = &sclient{key: dstKeys[i]}
 		cs := &clientSet{}
 		cs.activeClient.Store(dstClients[i])
-		s.clients[dstKeys[i]] = cs
-		s.clientsAtomic.Store(dstKeys[i], cs)
+		s.clients.Store(dstKeys[i], cs)
 	}
 
 	b.ReportAllocs()
