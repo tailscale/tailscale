@@ -157,7 +157,7 @@ func newClient(tb testing.TB, opts controlclient.Options) *mockControl {
 	return &cc
 }
 
-func (cc *mockControl) assertShutdown(wasPaused bool) {
+func (cc *mockControl) assertShutdown(otherCalls ...string) {
 	cc.tb.Helper()
 	select {
 	case <-cc.shutdown:
@@ -165,11 +165,7 @@ func (cc *mockControl) assertShutdown(wasPaused bool) {
 	case <-time.After(500 * time.Millisecond):
 		cc.tb.Fatalf("timed out waiting for shutdown")
 	}
-	if wasPaused {
-		cc.assertCalls("unpause", "Shutdown")
-	} else {
-		cc.assertCalls("Shutdown")
-	}
+	cc.assertCalls(append(otherCalls, "Shutdown")...)
 }
 
 func (cc *mockControl) populateKeys() (newKeys bool) {
@@ -458,7 +454,7 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(2)
 	c.Assert(b.Start(ipn.Options{}), qt.IsNil)
 	{
-		previousCC.assertShutdown(false)
+		previousCC.assertShutdown()
 		cc.assertCalls("New")
 
 		nn := notifies.drain(2)
@@ -684,9 +680,8 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(5)
 	b.Logout(context.Background(), ipnauth.Self)
 	{
-		b.awaitNoGoroutinesInTest()
 		nn := notifies.drain(5)
-		previousCC.assertCalls("pause", "Logout", "unpause", "Shutdown")
+		previousCC.assertShutdown("pause", "Logout", "unpause")
 		// nn[0] is state notification (Stopped)
 		c.Assert(nn[0].State, qt.IsNotNil)
 		c.Assert(*nn[0].State, qt.Equals, ipn.Stopped)
@@ -748,7 +743,7 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(2)
 	c.Assert(b.Start(ipn.Options{}), qt.IsNil)
 	{
-		previousCC.assertShutdown(false)
+		previousCC.assertShutdown()
 		// BUG: We already called Shutdown(), no need to do it again.
 		// BUG: don't unpause because we're not logged in.
 		cc.assertCalls("New")
@@ -842,7 +837,7 @@ func TestStateMachine(t *testing.T) {
 	{
 		// NOTE: cc.Shutdown() is correct here, since we didn't call
 		// b.Shutdown() explicitly ourselves.
-		previousCC.assertShutdown(false)
+		previousCC.assertShutdown()
 
 		nn := notifies.drain(2)
 		// We already have a netmap for this node,
@@ -973,7 +968,7 @@ func TestStateMachine(t *testing.T) {
 	{
 		// NOTE: cc.Shutdown() is correct here, since we didn't call
 		// b.Shutdown() ourselves.
-		previousCC.assertShutdown(false)
+		previousCC.assertShutdown()
 		cc.assertCalls("New", "Login")
 
 		nn := notifies.drain(2)
