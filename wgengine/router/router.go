@@ -56,6 +56,14 @@ type PortUpdate struct {
 	EndpointNetwork string // either "udp4" or "udp6".
 }
 
+// RelayPortUpdate is an eventbus value, reporting the port and address family
+// the UDP relay server is currently listening on, so it can be threaded
+// through firewalls.
+type RelayPortUpdate struct {
+	UDPPort         uint16
+	EndpointNetwork string // either "udp4" or "udp6".
+}
+
 // HookNewUserspaceRouter is the registration point for router implementations
 // to register a constructor for userspace routers. It's meant for implementations
 // in wgengine/router/osrouter.

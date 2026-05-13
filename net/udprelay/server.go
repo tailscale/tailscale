@@ -1132,6 +1132,12 @@ func (s *Server) getDERPMap() *tailcfg.DERPMap {
 	return s.derpMap
 }
 
+// PortV4 returns the UDP port the server is listening on for IPv4.
+func (s *Server) PortV4() uint16 { return s.uc4Port }
+
+// PortV6 returns the UDP port the server is listening on for IPv6.
+func (s *Server) PortV6() uint16 { return s.uc6Port }
+
 // SetStaticAddrPorts sets addr:port pairs the [Server] will advertise
 // as candidates it is potentially reachable over, in combination with
 // dynamically discovered pairs. This replaces any previously-provided static

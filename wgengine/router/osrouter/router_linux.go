@@ -92,6 +92,8 @@ type linuxRouter struct {
 	cgnatMode         linuxfw.CGNATMode
 	magicsockPortV4   uint16
 	magicsockPortV6   uint16
+	relayPortV4       uint16
+	relayPortV6       uint16
 }
 
 func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
@@ -129,6 +131,12 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 		r.logf("portUpdate(port=%v, network=%s)", pu.UDPPort, pu.EndpointNetwork)
 		if err := r.updateMagicsockPort(pu.UDPPort, pu.EndpointNetwork); err != nil {
 			r.logf("updateMagicsockPort(port=%v, network=%s) failed: %v", pu.UDPPort, pu.EndpointNetwork, err)
+		}
+	})
+	eventbus.SubscribeFunc(ec, func(pu router.RelayPortUpdate) {
+		r.logf("relayPortUpdate(port=%v, network=%s)", pu.UDPPort, pu.EndpointNetwork)
+		if err := r.updateRelayPort(pu.UDPPort, pu.EndpointNetwork); err != nil {
+			r.logf("updateRelayPort(port=%v, network=%s) failed: %v", pu.UDPPort, pu.EndpointNetwork, err)
 		}
 	})
 	r.eventClient = ec
@@ -676,6 +684,55 @@ func (r *linuxRouter) updateMagicsockPort(port uint16, network string) error {
 	return nil
 }
 
+// updateRelayPort updates the firewall rule for the relay server port.
+func (r *linuxRouter) updateRelayPort(port uint16, network string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.nfr == nil {
+		if err := r.setupNetfilterLocked(r.netfilterKind); err != nil {
+			return fmt.Errorf("could not setup netfilter: %w", err)
+		}
+	}
+
+	var relayPort *uint16
+	switch network {
+	case "udp4":
+		relayPort = &r.relayPortV4
+	case "udp6":
+		if !r.getV6FilteringAvailable() {
+			return nil
+		}
+		relayPort = &r.relayPortV6
+	default:
+		return fmt.Errorf("unsupported network %s", network)
+	}
+
+	// set the port, we'll make the firewall rule when netfilter turns back on
+	if r.netfilterMode == netfilterOff {
+		*relayPort = port
+		return nil
+	}
+
+	if *relayPort == port {
+		return nil
+	}
+
+	if *relayPort != 0 {
+		if err := r.nfr.DelMagicsockPortRule(*relayPort, network); err != nil {
+			return fmt.Errorf("del relay port rule: %w", err)
+		}
+	}
+
+	if port != 0 {
+		if err := r.nfr.AddMagicsockPortRule(port, network); err != nil {
+			return fmt.Errorf("add relay port rule: %w", err)
+		}
+	}
+
+	*relayPort = port
+	return nil
+}
+
 // setNetfilterModeLocked switches the router to the given netfilter
 // mode. Netfilter state is created or deleted appropriately to
 // reflect the new mode, and r.snatSubnetRoutes is updated to reflect
@@ -752,6 +809,16 @@ func (r *linuxRouter) setNetfilterModeLocked(mode preftype.NetfilterMode) error 
 					return fmt.Errorf("could not add magicsock port rule v6: %w", err)
 				}
 			}
+			if r.relayPortV4 != 0 {
+				if err := r.nfr.AddMagicsockPortRule(r.relayPortV4, "udp4"); err != nil {
+					return fmt.Errorf("could not add relay port rule v4: %w", err)
+				}
+			}
+			if r.relayPortV6 != 0 && r.getV6FilteringAvailable() {
+				if err := r.nfr.AddMagicsockPortRule(r.relayPortV6, "udp6"); err != nil {
+					return fmt.Errorf("could not add relay port rule v6: %w", err)
+				}
+			}
 			r.snatSubnetRoutes = false
 		case netfilterOn:
 			if err := r.nfr.DelHooks(r.logf); err != nil {
@@ -790,6 +857,16 @@ func (r *linuxRouter) setNetfilterModeLocked(mode preftype.NetfilterMode) error 
 			if r.magicsockPortV6 != 0 && r.getV6FilteringAvailable() {
 				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV6, "udp6"); err != nil {
 					return fmt.Errorf("could not add magicsock port rule v6: %w", err)
+				}
+			}
+			if r.relayPortV4 != 0 {
+				if err := r.nfr.AddMagicsockPortRule(r.relayPortV4, "udp4"); err != nil {
+					return fmt.Errorf("could not add relay port rule v4: %w", err)
+				}
+			}
+			if r.relayPortV6 != 0 && r.getV6FilteringAvailable() {
+				if err := r.nfr.AddMagicsockPortRule(r.relayPortV6, "udp6"); err != nil {
+					return fmt.Errorf("could not add relay port rule v6: %w", err)
 				}
 			}
 			r.snatSubnetRoutes = false

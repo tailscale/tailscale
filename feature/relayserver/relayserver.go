@@ -26,6 +26,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/wgengine/magicsock"
+	"tailscale.com/wgengine/router"
 )
 
 // featureName is the name of the feature implemented by this package.
@@ -75,6 +76,7 @@ func newExtension(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, er
 	}
 	e.ec = sb.Sys().Bus.Get().Client("relayserver.extension")
 	e.respPub = eventbus.Publish[magicsock.UDPRelayAllocResp](e.ec)
+	e.relayPortPub = eventbus.Publish[router.RelayPortUpdate](e.ec)
 	eventbus.SubscribeFunc(e.ec, e.onDERPMapView)
 	eventbus.SubscribeFunc(e.ec, e.onAllocReq)
 	return e, nil
@@ -87,15 +89,18 @@ type relayServer interface {
 	GetSessions() []status.ServerSession
 	SetDERPMapView(tailcfg.DERPMapView)
 	SetStaticAddrPorts(addrPorts views.Slice[netip.AddrPort])
+	PortV4() uint16
+	PortV6() uint16
 }
 
 // extension is an [ipnext.Extension] managing the relay server on platforms
 // that import this package.
 type extension struct {
-	newServerFn func(logf logger.Logf, port uint16, onlyStaticAddrPorts bool) (relayServer, error) // swappable for tests
-	logf        logger.Logf
-	ec          *eventbus.Client
-	respPub     *eventbus.Publisher[magicsock.UDPRelayAllocResp]
+	newServerFn  func(logf logger.Logf, port uint16, onlyStaticAddrPorts bool) (relayServer, error) // swappable for tests
+	logf         logger.Logf
+	ec           *eventbus.Client
+	respPub      *eventbus.Publisher[magicsock.UDPRelayAllocResp]
+	relayPortPub *eventbus.Publisher[router.RelayPortUpdate]
 
 	mu                            syncs.Mutex                 // guards the following fields
 	shutdown                      bool                        // true if Shutdown() has been called
@@ -181,6 +186,12 @@ func (e *extension) tryStartRelayServerLocked() {
 	}
 	e.rs = rs
 	e.rs.SetDERPMapView(e.derpMapView)
+	if p := e.rs.PortV4(); p != 0 {
+		go e.relayPortPub.Publish(router.RelayPortUpdate{UDPPort: p, EndpointNetwork: "udp4"})
+	}
+	if p := e.rs.PortV6(); p != 0 {
+		go e.relayPortPub.Publish(router.RelayPortUpdate{UDPPort: p, EndpointNetwork: "udp6"})
+	}
 }
 
 func (e *extension) relayServerShouldBeRunningLocked() bool {
@@ -232,6 +243,12 @@ func (e *extension) profileStateChanged(_ ipn.LoginProfileView, prefs ipn.PrefsV
 
 func (e *extension) stopRelayServerLocked() {
 	if e.rs != nil {
+		if e.rs.PortV4() != 0 {
+			go e.relayPortPub.Publish(router.RelayPortUpdate{UDPPort: 0, EndpointNetwork: "udp4"})
+		}
+		if e.rs.PortV6() != 0 {
+			go e.relayPortPub.Publish(router.RelayPortUpdate{UDPPort: 0, EndpointNetwork: "udp6"})
+		}
 		e.rs.Close()
 	}
 	e.rs = nil

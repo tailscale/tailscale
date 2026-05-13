@@ -1550,3 +1550,52 @@ func TestUpdateMagicsockPortChange(t *testing.T) {
 			oldPortRule, nfr.ipt4["filter/ts-input"])
 	}
 }
+
+func TestUpdateRelayPortChange(t *testing.T) {
+	nfr := &fakeIPTablesRunner{
+		t:    t,
+		ipt4: make(map[string][]string),
+		ipt6: make(map[string][]string),
+	}
+	nfr.ipt4["filter/ts-input"] = []string{}
+
+	r := &linuxRouter{
+		logf:          logger.Discard,
+		health:        new(health.Tracker),
+		netfilterMode: netfilterOn,
+		nfr:           nfr,
+	}
+
+	// Setting a relay port adds a rule.
+	if err := r.updateRelayPort(12345, "udp4"); err != nil {
+		t.Fatalf("failed to set initial relay port: %v", err)
+	}
+	wantRule := buildMagicsockPortRule(12345)
+	if !slices.Contains(nfr.ipt4["filter/ts-input"], wantRule) {
+		t.Errorf("firewall rule for relay port 12345 not found.\nExpected: %s\nActual rules: %v",
+			wantRule, nfr.ipt4["filter/ts-input"])
+	}
+
+	// Changing the port removes the old rule and adds the new one.
+	if err := r.updateRelayPort(54321, "udp4"); err != nil {
+		t.Fatalf("failed to update relay port: %v", err)
+	}
+	newRule := buildMagicsockPortRule(54321)
+	if !slices.Contains(nfr.ipt4["filter/ts-input"], newRule) {
+		t.Errorf("firewall rule for NEW relay port 54321 not found.\nExpected: %s\nActual rules: %v",
+			newRule, nfr.ipt4["filter/ts-input"])
+	}
+	if slices.Contains(nfr.ipt4["filter/ts-input"], wantRule) {
+		t.Errorf("firewall rule for OLD relay port 12345 still exists.\nFound: %s\nAll rules: %v",
+			wantRule, nfr.ipt4["filter/ts-input"])
+	}
+
+	// Setting port 0 removes the rule.
+	if err := r.updateRelayPort(0, "udp4"); err != nil {
+		t.Fatalf("failed to clear relay port: %v", err)
+	}
+	if slices.Contains(nfr.ipt4["filter/ts-input"], newRule) {
+		t.Errorf("firewall rule for relay port 54321 still exists after clearing.\nAll rules: %v",
+			nfr.ipt4["filter/ts-input"])
+	}
+}

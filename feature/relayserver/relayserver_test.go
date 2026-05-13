@@ -19,6 +19,8 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
+	"tailscale.com/util/eventbus/eventbustest"
+	"tailscale.com/wgengine/router"
 )
 
 func Test_extension_profileStateChanged(t *testing.T) {
@@ -246,6 +248,8 @@ func mockRelayServerNotZeroVal() *mockRelayServer {
 type mockRelayServer struct {
 	set       bool
 	addrPorts views.Slice[netip.AddrPort]
+	portV4    uint16
+	portV6    uint16
 }
 
 func (m *mockRelayServer) Close() error { return nil }
@@ -257,6 +261,8 @@ func (m *mockRelayServer) SetDERPMapView(tailcfg.DERPMapView)  { return }
 func (m *mockRelayServer) SetStaticAddrPorts(aps views.Slice[netip.AddrPort]) {
 	m.addrPorts = aps
 }
+func (m *mockRelayServer) PortV4() uint16 { return m.portV4 }
+func (m *mockRelayServer) PortV6() uint16 { return m.portV6 }
 
 type mockSafeBackend struct {
 	sys *tsd.System
@@ -370,4 +376,47 @@ func Test_extension_handleRelayServerLifetimeLocked(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_extension_relayPortUpdates(t *testing.T) {
+	sys := tsd.NewSystem()
+	bus := sys.Bus.Get()
+	tw := eventbustest.NewWatcher(t, bus)
+
+	ipne, err := newExtension(logger.Discard, mockSafeBackend{sys})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := ipne.(*extension)
+	e.newServerFn = func(logf logger.Logf, port uint16, onlyStaticAddrPorts bool) (relayServer, error) {
+		return &mockRelayServer{portV4: 1234, portV6: 5678}, nil
+	}
+	defer e.Shutdown()
+
+	// Use order-independent collector since events are dispatched concurrently.
+	expectRelayPortUpdates := func(phase string, want map[string]uint16) {
+		t.Helper()
+		got := make(map[string]uint16)
+		collector := func(ev router.RelayPortUpdate) (bool, error) {
+			got[ev.EndpointNetwork] = ev.UDPPort
+			return len(got) == len(want), nil
+		}
+		if err := eventbustest.Expect(tw, collector); err != nil {
+			t.Fatalf("%s: %v", phase, err)
+		}
+		for net := range want {
+			if got[net] != want[net] {
+				t.Errorf("%s: network %s: got port %d, want %d", phase, net, got[net], want[net])
+			}
+		}
+	}
+
+	// Start the relay server. Expect port updates for both families.
+	e.port = new(uint16(1))
+	e.handleRelayServerLifetimeLocked()
+	expectRelayPortUpdates("start", map[string]uint16{"udp4": 1234, "udp6": 5678})
+
+	// Stop the relay server. Expect clearing updates.
+	e.stopRelayServerLocked()
+	expectRelayPortUpdates("stop", map[string]uint16{"udp4": 0, "udp6": 0})
 }
