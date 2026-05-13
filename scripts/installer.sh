@@ -244,7 +244,14 @@ main() {
 			fedora)
 				OS="$ID"
 				VERSION=""
-				PACKAGETYPE="dnf"
+				if [ "${VARIANT_ID:-}" = "silverblue" ] || \
+					[ "${VARIANT_ID:-}" = "kinoite" ] || \
+					[ "${VARIANT_ID:-}" = "sericea" ] || \
+					systemctl is-enabled rpm-ostreed >/dev/null 2>&1; then
+						PACKAGETYPE="rpm-ostree"
+				else
+					PACKAGETYPE="dnf"
+				fi
 				;;
 			rocky|almalinux|nobara|openmandriva|sangoma|risios|cloudlinux|alinux|fedora-asahi-remix|ultramarine)
 				OS="fedora"
@@ -577,6 +584,20 @@ main() {
 			$SUDO systemctl enable --now tailscaled
 			set +x
 		;;
+		rpm-ostree)
+    		set -x
+    		$SUDO wget "https://pkgs.tailscale.com/$TRACK/$OS/tailscale.repo" \
+        		-P /etc/yum.repos.d/
+    		if [ -n "$TAILSCALE_VERSION" ]; then
+        		$SUDO rpm-ostree install "tailscale-$TAILSCALE_VERSION"
+    		else
+        		$SUDO rpm-ostree install tailscale
+    		fi
+    		echo "NOTE: rpm-ostree changes take effect after a reboot."
+    		echo "After rebooting, enable and start tailscaled with:"
+    		echo "  sudo systemctl enable --now tailscaled"
+    		set +x
+    		;;
 		dnf)
 			# DNF 5 has a different argument format; determine which one we have.
 			DNF_VERSION="3"
