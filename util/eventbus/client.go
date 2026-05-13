@@ -146,7 +146,10 @@ func Subscribe[T any](c *Client) *Subscriber[T] {
 
 	r := c.subscribeStateLocked()
 	s := newSubscriber[T](r, logfForCaller(c.logger()))
-	r.addSubscriber(s)
+	// Register the non-generic core with the bus rather than the typed facade,
+	// mirroring SubscribeFunc and Publish: this keeps the bus's outputs map
+	// and subscriber-interface itab out of per-T cost.
+	r.addSubscriber(s.core)
 	return s
 }
 
