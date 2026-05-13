@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"net/netip"
 	"os"
@@ -246,7 +247,13 @@ func (m *windowsManager) setHosts(hosts []*HostEntry) error {
 	}
 	hostsFile := filepath.Join(systemDir, "drivers", "etc", "hosts")
 	b, err := os.ReadFile(hostsFile)
-	if err != nil {
+	switch {
+	case err == nil:
+		// Continue.
+	case errors.Is(err, fs.ErrNotExist):
+		// Non-fatal, we'll just create a new hosts file.
+		m.logf("failed to read the hosts file: %v", err)
+	default:
 		return err
 	}
 	outB, err := setTailscaleHosts(m.logf, b, hosts)
