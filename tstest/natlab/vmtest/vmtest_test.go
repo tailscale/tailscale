@@ -110,8 +110,7 @@ func testSubnetRouterForOS(t testing.TB, srOS vmtest.OSImage) {
 	httpStep.Begin()
 	body := env.HTTPGet(client, fmt.Sprintf("http://%s:8080/", backend.LanIP(internalNet)))
 	if !strings.Contains(body, "Hello world I am backend") {
-		httpStep.End(fmt.Errorf("got %q", body))
-		t.Fatalf("got %q", body)
+		httpStep.Fatalf("got %q", body)
 	}
 	httpStep.End(nil)
 }
@@ -198,16 +197,14 @@ func testSiteToSite(t *testing.T, srOS vmtest.OSImage) {
 	t.Logf("response: %s", body)
 
 	if !strings.Contains(body, "Hello world I am backend-b") {
-		httpStep.End(fmt.Errorf("expected response from backend-b, got %q", body))
-		t.Fatalf("expected response from backend-b, got %q", body)
+		httpStep.Fatalf("expected response from backend-b, got %q", body)
 	}
 
 	// Verify the source IP was preserved. With --snat-subnet-routes=false,
 	// backend-b should see backend-a's LAN IP as the source, not sr-b's LAN IP.
 	backendAIP := backendA.LanIP(lanA).String()
 	if !strings.Contains(body, "from "+backendAIP) {
-		httpStep.End(fmt.Errorf("source IP not preserved: expected %q in response, got %q", backendAIP, body))
-		t.Fatalf("source IP not preserved: expected %q in response, got %q", backendAIP, body)
+		httpStep.Fatalf("source IP not preserved: expected %q in response, got %q", backendAIP, body)
 	}
 	httpStep.End(nil)
 }
@@ -244,12 +241,10 @@ func TestInterNetworkTCP(t *testing.T) {
 	body := env.HTTPGet(client, fmt.Sprintf("http://%s:8080/", webWAN))
 	t.Logf("response: %s", body)
 	if !strings.Contains(body, "Hello world I am webserver") {
-		httpStep.End(fmt.Errorf("unexpected response: %q", body))
-		t.Fatalf("unexpected response: %q", body)
+		httpStep.Fatalf("unexpected response: %q", body)
 	}
 	if !strings.Contains(body, "from "+clientWAN) {
-		httpStep.End(fmt.Errorf("expected source %q in response, got %q", clientWAN, body))
-		t.Fatalf("expected source %q in response, got %q", clientWAN, body)
+		httpStep.Fatalf("expected source %q in response, got %q", clientWAN, body)
 	}
 	httpStep.End(nil)
 }
@@ -308,12 +303,10 @@ func TestSubnetRouterPublicIP(t *testing.T) {
 		body := env.HTTPGet(client, webURL)
 		t.Logf("[%s] response: %s", label, body)
 		if !strings.Contains(body, "Hello world I am webserver") {
-			step.End(fmt.Errorf("[%s] unexpected webserver response: %q", label, body))
-			t.Fatalf("[%s] unexpected webserver response: %q", label, body)
+			step.Fatalf("[%s] unexpected webserver response: %q", label, body)
 		}
 		if !strings.Contains(body, "from "+wantSrc) {
-			step.End(fmt.Errorf("[%s] expected source %q in response, got %q", label, wantSrc, body))
-			t.Fatalf("[%s] expected source %q in response, got %q", label, wantSrc, body)
+			step.Fatalf("[%s] expected source %q in response, got %q", label, wantSrc, body)
 		}
 		step.End(nil)
 	}
@@ -458,15 +451,11 @@ func TestTaildrop(t *testing.T) {
 
 	verifyStep.Begin()
 	if gotName != filename {
-		err := fmt.Errorf("received name = %q; want %q", gotName, filename)
-		verifyStep.End(err)
-		t.Error(err)
+		verifyStep.Fatalf("received name = %q; want %q", gotName, filename)
 		return
 	}
 	if !bytes.Equal(gotContent, want) {
-		err := fmt.Errorf("received content = %q; want %q", gotContent, want)
-		verifyStep.End(err)
-		t.Error(err)
+		verifyStep.Fatalf("received content = %q; want %q", gotContent, want)
 		return
 	}
 	verifyStep.End(nil)
@@ -542,12 +531,10 @@ func TestExitNode(t *testing.T) {
 			body := env.HTTPGet(client, webURL)
 			t.Logf("response: %s", body)
 			if !strings.Contains(body, "Hello world I am webserver") {
-				tt.step.End(fmt.Errorf("unexpected webserver response: %q", body))
-				t.Fatalf("unexpected webserver response: %q", body)
+				tt.step.Fatalf("unexpected webserver response: %q", body)
 			}
 			if !strings.Contains(body, "from "+tt.wantSrc) {
-				tt.step.End(fmt.Errorf("expected source %q in response, got %q", tt.wantSrc, body))
-				t.Fatalf("expected source %q in response, got %q", tt.wantSrc, body)
+				tt.step.Fatalf("expected source %q in response, got %q", tt.wantSrc, body)
 			}
 			tt.step.End(nil)
 		})
@@ -674,8 +661,7 @@ func TestDiscoKeyChange(t *testing.T) {
 
 	pingABStep.Begin()
 	if err := env.Ping(a, b, tailcfg.PingTSMP, 30*time.Second); err != nil {
-		pingABStep.End(err)
-		t.Fatal(err)
+		pingABStep.Fatal(err)
 	}
 	pingABStep.End(nil)
 
@@ -719,9 +705,7 @@ func checkDiscoRotated(t *testing.T, env *vmtest.Env, a, b, pingFrom, pingTo *vm
 	verifyStep.Begin()
 	bSt := env.Status(b)
 	if got := bSt.Self.PublicKey; got != bNodeKey {
-		err := fmt.Errorf("[%s] b's node key changed: %v -> %v", label, bNodeKey, got)
-		verifyStep.End(err)
-		t.Fatal(err)
+		verifyStep.Fatalf("[%s] b's node key changed: %v -> %v", label, bNodeKey, got)
 	}
 	var newDisco key.DiscoPublic
 	if err := tstest.WaitFor(15*time.Second, func() error {
@@ -735,8 +719,7 @@ func checkDiscoRotated(t *testing.T, env *vmtest.Env, a, b, pingFrom, pingTo *vm
 		newDisco = n.DiscoKey
 		return nil
 	}); err != nil {
-		verifyStep.End(err)
-		t.Fatalf("[%s] %v", label, err)
+		verifyStep.Fatalf("[%s] %v", label, err)
 	}
 	t.Logf("[b] after %s: nodekey=%s discokey=%s", label, bNodeKey.ShortString(), newDisco.ShortString())
 	verifyStep.End(nil)
@@ -897,12 +880,10 @@ func TestMullvadExitNode(t *testing.T) {
 		body := env.HTTPGet(client, webURL)
 		t.Logf("[%s] response: %s", label, body)
 		if !strings.Contains(body, "Hello world I am webserver") {
-			step.End(fmt.Errorf("[%s] unexpected webserver response: %q", label, body))
-			t.Fatalf("[%s] unexpected webserver response: %q", label, body)
+			step.Fatalf("[%s] unexpected webserver response: %q", label, body)
 		}
 		if !strings.Contains(body, "from "+wantSrc) {
-			step.End(fmt.Errorf("[%s] expected source %q in response, got %q", label, wantSrc, body))
-			t.Fatalf("[%s] expected source %q in response, got %q", label, wantSrc, body)
+			step.Fatalf("[%s] expected source %q in response, got %q", label, wantSrc, body)
 		}
 		step.End(nil)
 	}
@@ -965,8 +946,7 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 
 	connectStep.Begin()
 	if err := env.Ping(a, b, tailcfg.PingTSMP, 30*time.Second); err != nil {
-		connectStep.End(err)
-		t.Fatal(err)
+		connectStep.Fatal(err)
 	}
 	connectStep.End(nil)
 
@@ -988,12 +968,10 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 	for _, node := range []*vmtest.Node{a, b} {
 		nm, err := local.GetDebugResultJSON[netmap.NetworkMap](t.Context(), node.Agent().Client, "current-netmap")
 		if err != nil {
-			netmapCheckStep.End(fmt.Errorf("[%s] got err fetching netmap %q", node.Name(), err))
-			t.Fatalf("[%s] got err fetching netmap %q", node.Name(), err)
+			netmapCheckStep.Fatalf("[%s] got err fetching netmap %q", node.Name(), err)
 		}
 		if !nm.Cached {
-			netmapCheckStep.End(fmt.Errorf("[%s] expected netmap.Cached = true, got: %t", node.Name(), nm.Cached))
-			t.Fatalf("[%s] expected netmap.Cached = true, got: %t", node.Name(), nm.Cached)
+			netmapCheckStep.Fatalf("[%s] expected netmap.Cached = true, got: %t", node.Name(), nm.Cached)
 		}
 	}
 	netmapCheckStep.End(nil)
@@ -1010,8 +988,7 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 	// because every timer fires multiple times under scheduling jitter.
 	pingStep.Begin()
 	if err := env.Ping(a, b, tailcfg.PingTSMP, 90*time.Second); err != nil {
-		pingStep.End(err)
-		t.Fatal(err)
+		pingStep.Fatal(err)
 	}
 	pingStep.End(nil)
 }
@@ -1066,15 +1043,13 @@ func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 
 	tsmpPingStep.Begin()
 	if err := env.Ping(a, b, tailcfg.PingTSMP, 30*time.Second); err != nil {
-		tsmpPingStep.End(err)
-		t.Fatal(err)
+		tsmpPingStep.Fatal(err)
 	}
 	tsmpPingStep.End(nil)
 
 	discoPingStep.Begin()
 	if err := env.PingExpect(a, b, vmtest.PingRouteDirect, 30*time.Second); err != nil {
-		discoPingStep.End(err)
-		t.Fatal(err)
+		discoPingStep.Fatal(err)
 	}
 	discoPingStep.End(nil)
 

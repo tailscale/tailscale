@@ -129,6 +129,24 @@ func (s *Step) End(err error) {
 	s.env.publishStepChange(s)
 }
 
+// Fatalf marks the step as failed (as [Step.End]), and then logs a test
+// failure to the environment's test, with an error constructed from the given
+// arguments.
+func (s *Step) Fatalf(msg string, args ...any) {
+	s.Fatal(fmt.Errorf(msg, args...))
+}
+
+// Fatal marks the step as failed (as [Step.End]), and then logs a test failure
+// to the environment's test, with the specified (non-nil) error. It will panic
+// if err == nil.
+func (s *Step) Fatal(err error) {
+	if err == nil {
+		panic(fmt.Sprintf("Step %q: Fatal called with a nil error", s.name))
+	}
+	s.End(err)
+	s.env.t.Fatal(err)
+}
+
 // EventType identifies the kind of event published to the EventBus.
 type EventType string
 
