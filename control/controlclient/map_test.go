@@ -1864,11 +1864,6 @@ func TestPathDiscokeyerImplementations(t *testing.T) {
 	if _, ok := e.(patchDiscoKeyer); !ok {
 		t.Error("wgengine.userspaceEngine must implement patchDiscoKeyer")
 	}
-
-	wd := wgengine.NewWatchdog(e)
-	if _, ok := wd.(patchDiscoKeyer); !ok {
-		t.Error("wgengine.watchdogEngine must implement patchDiscoKeyer")
-	}
 }
 
 func TestPeerIDAndKeyByTailscaleIP(t *testing.T) {

@@ -828,7 +828,6 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 	if err != nil {
 		return onlyNetstack, err
 	}
-	e = wgengine.NewWatchdog(e)
 	sys.Set(e)
 	sys.NetstackRouter.Set(netstackSubnetRouter)
 
