@@ -811,6 +811,90 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 	}
 }
 
+// TestFindStaticEndpointsStableOrder verifies that findStaticEndpoints returns
+// the existing endpoint order from the config Secret when the resulting set of
+// addresses is unchanged. nodes.Items from r.List is not order-stable across
+// calls, so without this guarantee the slice can permute on each reconcile,
+// triggering a spurious config Secret rewrite which fires a watch event that
+// re-enqueues the ProxyGroup, looping forever (issue #19700).
+func TestFindStaticEndpointsStableOrder(t *testing.T) {
+	const (
+		addrA = "10.0.0.1"
+		addrB = "10.0.0.2"
+		port  = uint16(30001)
+	)
+
+	pc := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-pc"},
+		Spec: tsapi.ProxyClassSpec{
+			StaticEndpoints: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports:    []tsapi.PortRange{{Port: port}},
+					Selector: map[string]string{"foo/bar": "baz"},
+				},
+			},
+		},
+	}
+
+	// Existing config Secret already pins the order [B, A]. The fake client
+	// lists nodes in name order ([node-a, node-b]) so without the stable-order
+	// guard findStaticEndpoints would return [A, B], differing from currAddrs
+	// and causing a spurious Secret rewrite.
+	currAddrs := []netip.AddrPort{
+		netip.MustParseAddrPort(addrB + ":30001"),
+		netip.MustParseAddrPort(addrA + ":30001"),
+	}
+	cfg := ipn.ConfigVAlpha{StaticEndpoints: currAddrs}
+	cfgJSON, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	existingSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-0-config", Namespace: tsNamespace},
+		Data:       map[string][]byte{tsoperator.TailscaledConfigFileName(106): cfgJSON},
+	}
+
+	nodes := []*corev1.Node{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{"foo/bar": "baz"}},
+			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeExternalIP, Address: addrA},
+			}},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-b", Labels: map[string]string{"foo/bar": "baz"}},
+			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeExternalIP, Address: addrB},
+			}},
+		},
+	}
+
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pc, nodes[0], nodes[1], existingSecret).
+		Build()
+
+	zl, _ := zap.NewDevelopment()
+	r := &ProxyGroupReconciler{Client: fc}
+
+	got, err := r.findStaticEndpoints(t.Context(), existingSecret, pc, port, zl.Sugar())
+	if err != nil {
+		t.Fatalf("findStaticEndpoints: %v", err)
+	}
+	if !slices.Equal(got, currAddrs) {
+		t.Errorf("findStaticEndpoints returned %v, want %v (order must match currAddrs to avoid reconcile churn)", got, currAddrs)
+	}
+
+	// Repeat to confirm the result is stable across calls.
+	got2, err := r.findStaticEndpoints(t.Context(), existingSecret, pc, port, zl.Sugar())
+	if err != nil {
+		t.Fatalf("findStaticEndpoints (2nd call): %v", err)
+	}
+	if !slices.Equal(got, got2) {
+		t.Errorf("findStaticEndpoints not stable across calls: first=%v second=%v", got, got2)
+	}
+}
+
 func TestProxyGroup(t *testing.T) {
 	pc := &tsapi.ProxyClass{
 		ObjectMeta: metav1.ObjectMeta{
