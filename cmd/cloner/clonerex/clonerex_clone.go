@@ -188,6 +188,7 @@ func (src *MapSlicePointerContainer) Clone() *MapSlicePointerContainer {
 		dst.Routes = map[string][]*SliceContainer{}
 		for k, sv := range src.Routes {
 			if sv == nil {
+				dst.Routes[k] = nil
 				continue
 			}
 			dst.Routes[k] = make([]*SliceContainer, len(sv))
