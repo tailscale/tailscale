@@ -100,7 +100,7 @@ type extension struct {
 	logf         logger.Logf
 	ec           *eventbus.Client
 	respPub      *eventbus.Publisher[magicsock.UDPRelayAllocResp]
-	relayPortPub *eventbus.Publisher[router.RelayPortUpdate]
+	relayPortPub *eventbus.Publisher[router.RelayPortUpdate] // subscribed by (already running) wgengine/router/osrouter
 
 	mu                            syncs.Mutex                 // guards the following fields
 	shutdown                      bool                        // true if Shutdown() has been called
