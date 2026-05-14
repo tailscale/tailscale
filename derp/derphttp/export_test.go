@@ -3,8 +3,20 @@
 
 package derphttp
 
+import (
+	"context"
+	"net"
+	"net/url"
+
+	"tailscale.com/tailcfg"
+)
+
 func SetTestHookWatchLookConnectResult(f func(connectError error, wasSelfConnect bool) (keepRunning bool)) {
 	testHookWatchLookConnectResult = f
+}
+
+func (c *Client) DialNodeUsingProxy(ctx context.Context, n *tailcfg.DERPNode, proxyURL *url.URL) (net.Conn, error) {
+	return c.dialNodeUsingProxy(ctx, n, proxyURL)
 }
 
 // breakConnection breaks the connection, which should trigger a reconnect.

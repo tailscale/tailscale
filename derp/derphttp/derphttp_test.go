@@ -4,6 +4,7 @@
 package derphttp_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -11,11 +12,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +29,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpserver"
+	"tailscale.com/feature"
 	"tailscale.com/net/memnet"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netx"
@@ -623,5 +628,164 @@ func TestURLDial(t *testing.T) {
 
 	if err := c.Connect(context.Background()); err != nil {
 		t.Fatalf("rc.Connect: %v", err)
+	}
+}
+
+// startFakeCONNECTProxy starts a loopback HTTP proxy that records each
+// CONNECT target and best-effort tunnels bytes upstream.
+func startFakeCONNECTProxy(t *testing.T) (proxyURL *url.URL, targets <-chan string) {
+	t.Helper()
+	ln, err := net.Listen("tcp4", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	ch := make(chan string, 1)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				br := bufio.NewReader(conn)
+				req, err := http.ReadRequest(br)
+				if err != nil {
+					return
+				}
+				if req.Method != "CONNECT" {
+					fmt.Fprint(conn, "HTTP/1.1 400 Bad Request\r\n\r\n")
+					return
+				}
+				ch <- req.Host
+				fmt.Fprint(conn, "HTTP/1.1 200 OK\r\n\r\n")
+				up, err := net.Dial("tcp", req.Host)
+				if err != nil {
+					return
+				}
+				defer up.Close()
+				done := make(chan struct{}, 2)
+				go func() { io.Copy(up, br); done <- struct{}{} }()
+				go func() { io.Copy(conn, up); done <- struct{}{} }()
+				<-done
+			}(conn)
+		}
+	}()
+	return &url.URL{Scheme: "http", Host: ln.Addr().String()}, ch
+}
+
+// TestDialNodeUsingProxyPort verifies that the CONNECT target sent to an
+// HTTPS_PROXY honors DERPNode.DERPPort, and otherwise falls back to the
+// same defaults as the direct dial path (443 for HTTPS, 3340 for HTTP).
+// Regression test for #19748.
+func TestDialNodeUsingProxyPort(t *testing.T) {
+	tests := []struct {
+		name       string
+		clientURL  string // controls c.useHTTPS()
+		nodePort   int
+		wantTarget string
+	}{
+		{"https_default", "https://unused.example/", 0, "derp.example:443"},
+		{"http_default", "http://unused.example/", 0, "derp.example:3340"},
+		{"https_custom_port", "https://unused.example/", 8765, "derp.example:8765"},
+		{"http_custom_port", "http://unused.example/", 8765, "derp.example:8765"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proxyURL, targets := startFakeCONNECTProxy(t)
+
+			c, err := derphttp.NewClient(key.NewNode(), tt.clientURL, t.Logf, netmon.NewStatic())
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			defer c.Close()
+
+			node := &tailcfg.DERPNode{HostName: "derp.example", DERPPort: tt.nodePort}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			conn, err := c.DialNodeUsingProxy(ctx, node, proxyURL)
+			if err != nil {
+				t.Fatalf("DialNodeUsingProxy: %v", err)
+			}
+			conn.Close()
+
+			if got := <-targets; got != tt.wantTarget {
+				t.Errorf("CONNECT target = %q, want %q", got, tt.wantTarget)
+			}
+		})
+	}
+}
+
+// TestConnectThroughProxyHonorsDERPPort drives the full proxy path
+// end-to-end: a real DERP server on a non-default port, behind a real
+// CONNECT proxy, with the client routed through that proxy via
+// feature.HookProxyFromEnvironment. Without the #19748 fix, the proxy
+// would be asked to tunnel to :443 and the dial would fail.
+func TestConnectThroughProxyHonorsDERPPort(t *testing.T) {
+	// Real DERP server on TLS, ephemeral loopback port.
+	serverKey := key.NewNode()
+	s := derpserver.New(serverKey, t.Logf)
+	defer s.Close()
+
+	derpSrv := httptest.NewUnstartedServer(derpserver.Handler(s))
+	derpSrv.StartTLS()
+	defer derpSrv.Close()
+
+	derpURL, err := url.Parse(derpSrv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derpPort, err := strconv.Atoi(derpURL.Port())
+	if err != nil {
+		t.Fatalf("parsing derp port %q: %v", derpURL.Port(), err)
+	}
+	if derpPort == 443 {
+		t.Fatalf("test server bound to :443; can't distinguish bug from fix")
+	}
+
+	proxyURL, targets := startFakeCONNECTProxy(t)
+	restore := feature.HookProxyFromEnvironment.SetForTest(func(*http.Request) (*url.URL, error) {
+		return proxyURL, nil
+	})
+	defer restore()
+
+	region := &tailcfg.DERPRegion{
+		RegionID:   1,
+		RegionCode: "test",
+		Nodes: []*tailcfg.DERPNode{{
+			Name:             "1a",
+			RegionID:         1,
+			HostName:         "127.0.0.1",
+			IPv4:             "127.0.0.1",
+			DERPPort:         derpPort,
+			InsecureForTests: true,
+		}},
+	}
+	c := derphttp.NewRegionClient(key.NewNode(), t.Logf, netmon.NewStatic(),
+		func() *tailcfg.DERPRegion { return region })
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := c.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	// Pump Recv so the PONG gets dispatched.
+	go func() {
+		for {
+			if _, err := c.Recv(); err != nil {
+				return
+			}
+		}
+	}()
+	if err := c.Ping(ctx); err != nil {
+		t.Fatalf("Ping through proxy tunnel: %v", err)
+	}
+
+	if got, want := <-targets, fmt.Sprintf("127.0.0.1:%d", derpPort); got != want {
+		t.Errorf("proxy CONNECT target = %q, want %q", got, want)
 	}
 }
