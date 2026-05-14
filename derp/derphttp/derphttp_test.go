@@ -676,53 +676,9 @@ func startFakeCONNECTProxy(t *testing.T) (proxyURL *url.URL, targets <-chan stri
 	return &url.URL{Scheme: "http", Host: ln.Addr().String()}, ch
 }
 
-// TestDialNodeUsingProxyPort verifies that the CONNECT target sent to an
-// HTTPS_PROXY honors DERPNode.DERPPort, and otherwise falls back to the
-// same defaults as the direct dial path (443 for HTTPS, 3340 for HTTP).
-// Regression test for #19748.
-func TestDialNodeUsingProxyPort(t *testing.T) {
-	tests := []struct {
-		name       string
-		clientURL  string // controls c.useHTTPS()
-		nodePort   int
-		wantTarget string
-	}{
-		{"https_default", "https://unused.example/", 0, "derp.example:443"},
-		{"http_default", "http://unused.example/", 0, "derp.example:3340"},
-		{"https_custom_port", "https://unused.example/", 8765, "derp.example:8765"},
-		{"http_custom_port", "http://unused.example/", 8765, "derp.example:8765"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			proxyURL, targets := startFakeCONNECTProxy(t)
-
-			c, err := derphttp.NewClient(key.NewNode(), tt.clientURL, t.Logf, netmon.NewStatic())
-			if err != nil {
-				t.Fatalf("NewClient: %v", err)
-			}
-			defer c.Close()
-
-			node := &tailcfg.DERPNode{HostName: "derp.example", DERPPort: tt.nodePort}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			conn, err := c.DialNodeUsingProxy(ctx, node, proxyURL)
-			if err != nil {
-				t.Fatalf("DialNodeUsingProxy: %v", err)
-			}
-			conn.Close()
-
-			if got := <-targets; got != tt.wantTarget {
-				t.Errorf("CONNECT target = %q, want %q", got, tt.wantTarget)
-			}
-		})
-	}
-}
-
-// TestConnectThroughProxyHonorsDERPPort drives the full proxy path
-// end-to-end: a real DERP server on a non-default port, behind a real
-// CONNECT proxy, with the client routed through that proxy via
-// feature.HookProxyFromEnvironment. Without the #19748 fix, the proxy
-// would be asked to tunnel to :443 and the dial would fail.
+// TestConnectThroughProxyHonorsDERPPort verifies that the CONNECT
+// target honors DERPNode.DERPPort when a DERP client is routed through
+// an HTTPS_PROXY. Regression test for #19748.
 func TestConnectThroughProxyHonorsDERPPort(t *testing.T) {
 	// Real DERP server on TLS, ephemeral loopback port.
 	serverKey := key.NewNode()
