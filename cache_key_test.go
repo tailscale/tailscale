@@ -21,8 +21,8 @@ import (
 func TestTsgoRevInCacheKey(t *testing.T) {
 	goRoot := goEnv(t, "GOROOT")
 	isTsgo := strings.Contains(goRoot, "/.cache/tsgo/")
-	if !cibuild.On() && !isTsgo {
-		t.Skip("skipping; not in CI and not using the Tailscale Go toolchain")
+	if !cibuild.OnTailscaleCI() && !isTsgo {
+		t.Skip("skipping; not in Tailscale CI and not using the Tailscale Go toolchain")
 	}
 
 	rev := strings.TrimSpace(GoToolchainRev)
