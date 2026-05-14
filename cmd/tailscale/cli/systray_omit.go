@@ -13,10 +13,9 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 )
 
-// TODO(will): update URL to KB article when available
 var systrayHelp = strings.TrimSpace(`
 The Tailscale systray app is not included in this client build.
-To run it manually, see https://github.com/tailscale/tailscale/tree/main/cmd/systray
+To run it manually, see https://tailscale.com/docs/features/client/linux-systray
 `)
 
 var systrayCmd = &ffcli.Command{
