@@ -490,7 +490,9 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	// Connmark rules for rp_filter compatibility.
 	// Always enabled when netfilter is ON to handle all rp_filter=1 scenarios
 	// (normal operation, exit nodes, subnet routers, and clients using exit nodes).
-	netfilterOn := cfg.NetfilterMode == netfilterOn
+	// Gate on r.netfilterMode (actual state) rather than cfg.NetfilterMode
+	// (desired state) so we don't call into the runner when chain setup failed.
+	netfilterOn := r.netfilterMode == netfilterOn
 	switch {
 	case netfilterOn == r.connmarkEnabled:
 		// state already correct, nothing to do.
@@ -530,8 +532,8 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		r.enableIPForwarding()
 	}
 
-	// Remove the rule to drop off-tailnet CGNAT traffic, if asked.
-	if netfilterOn || cfg.NetfilterMode == netfilterNoDivert {
+	// Remove the rule to drop off-tailnet CGNAT traffic, if needed.
+	if netfilterOn || r.netfilterMode == netfilterNoDivert {
 		var cgnatMode linuxfw.CGNATMode
 		if cfg.RemoveCGNATDropRule {
 			cgnatMode = linuxfw.CGNATModeReturn
