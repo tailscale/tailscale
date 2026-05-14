@@ -5,6 +5,7 @@ package vmtest_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/netip"
 	"runtime"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"tailscale.com/client/local"
+	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
@@ -1059,4 +1061,110 @@ func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 		"magicsock_cached_peer_contact_direct": 1,
 	})
 	checkFinalMetrics.End(nil)
+}
+
+// TestPeerRelay verifies that two Tailscale nodes whose direct UDP path is
+// impossible at the network layer (both behind HardNAT, with no port-mapping
+// services on either of their networks) can still communicate via a third
+// Tailscale node configured as a peer-relay server.
+//
+// Topology:
+//
+//	a     (gokrazy, HardNAT)     — aNet      WAN 1.0.0.1
+//	b     (gokrazy, HardNAT)     — bNet      WAN 2.0.0.1
+//	relay (gokrazy, One2OneNAT)  — relayNet  WAN 3.0.0.1
+//
+// HardNAT in natlab is endpoint-dependent (each (src, dst) tuple gets a fresh
+// outbound port, and the inbound table keys on (wanPort, src)). Without
+// NAT-PMP/UPnP a→b and b→a direct UDP paths cannot be established. The relay
+// uses One2OneNAT so its STUN-discovered WAN endpoint is reachable from both
+// peers. The test then asserts that magicsock chose the peer-relay path
+// (not DERP) and that the relay reports the session.
+func TestPeerRelay(t *testing.T) {
+	env := vmtest.New(t, vmtest.PeerRelayGrants())
+
+	aNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.HardNAT)
+	bNet := env.AddNetwork("2.0.0.1", "192.168.2.1/24", vnet.HardNAT)
+	relayNet := env.AddNetwork("3.0.0.1", "192.168.3.1/24", vnet.One2OneNAT)
+
+	a := env.AddNode("a", aNet, vmtest.OS(vmtest.Gokrazy))
+	b := env.AddNode("b", bNet, vmtest.OS(vmtest.Gokrazy))
+	relay := env.AddNode("relay", relayNet, vmtest.OS(vmtest.Gokrazy))
+
+	enableRelayStep := env.AddStep("Enable peer-relay server on relay")
+	pingStep := env.AddStep("Disco ping a → b (want peer-relay path)")
+	sessionsStep := env.AddStep("Check DebugPeerRelaySessions on relay")
+
+	env.Start()
+
+	// Turn on the relay server. Port 0 picks an unused port.
+	enableRelayStep.Begin()
+	editCtx, editCancel := context.WithTimeout(t.Context(), 30*time.Second)
+	if _, err := relay.Agent().EditPrefs(editCtx, &ipn.MaskedPrefs{
+		Prefs:              ipn.Prefs{RelayServerPort: new(uint16(0))},
+		RelayServerPortSet: true,
+	}); err != nil {
+		editCancel()
+		enableRelayStep.End(err)
+		t.Fatalf("EditPrefs(relay, RelayServerPort=0): %v", err)
+	}
+	editCancel()
+	enableRelayStep.End(nil)
+
+	// Wait for the relay to start, peers to learn about it via netmap,
+	// and the a→b disco ping to traverse it.
+	// PingResult.PeerRelay is set by magicsock to "ip:port:vni:N" when the
+	// disco probe rode a peer relay (vs Endpoint for direct UDP or
+	// DERPRegionID for DERP).
+	pingStep.Begin()
+	bIP := env.Status(b).Self.TailscaleIPs[0]
+	var lastDetail string
+	err := tstest.WaitFor(60*time.Second, func() error {
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		pr, err := a.Agent().PingWithOpts(ctx, bIP, tailcfg.PingDisco, local.PingOpts{})
+		if err != nil {
+			return fmt.Errorf("ping: %w", err)
+		}
+		if pr.Err != "" {
+			return fmt.Errorf("ping err: %s", pr.Err)
+		}
+		if pr.PeerRelay == "" {
+			lastDetail = fmt.Sprintf("endpoint=%q derp=%d", pr.Endpoint, pr.DERPRegionID)
+			return fmt.Errorf("ping did not use a peer relay; %s", lastDetail)
+		}
+		t.Logf("a → b disco ping rode peer-relay %s", pr.PeerRelay)
+		return nil
+	})
+	if err != nil {
+		pingStep.End(err)
+		env.DumpStatus(a)
+		env.DumpStatus(b)
+		env.DumpStatus(relay)
+		t.Fatalf("waiting for peer-relay path a → b: %v (last: %s)", err, lastDetail)
+	}
+	pingStep.End(nil)
+
+	// The relay's local debug-peer-relay-sessions LocalAPI should now
+	// report at least one session (the a↔b one we just exercised).
+	sessionsStep.Begin()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	srv, err := relay.Agent().DebugPeerRelaySessions(ctx)
+	if err != nil {
+		sessionsStep.End(err)
+		t.Fatalf("DebugPeerRelaySessions: %v", err)
+	}
+	if srv.UDPPort == nil {
+		err := fmt.Errorf("relay UDPPort is nil; want set")
+		sessionsStep.End(err)
+		t.Fatal(err)
+	}
+	if len(srv.Sessions) < 1 {
+		err := fmt.Errorf("relay sessions = %d; want >= 1", len(srv.Sessions))
+		sessionsStep.End(err)
+		t.Fatal(err)
+	}
+	t.Logf("relay reports %d session(s) on UDP port %d", len(srv.Sessions), *srv.UDPPort)
+	sessionsStep.End(nil)
 }

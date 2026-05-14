@@ -91,6 +91,7 @@ type Env struct {
 
 	sameTailnetUser bool // all nodes register as the same Tailnet user
 	allOnline       bool // mark every peer as Online=true in MapResponses
+	peerRelayGrants bool // grant peer-relay capabilities on the wildcard packet filter
 
 	// Shared resource initialization (sync.Once for things multiple nodes share).
 	vnetOnce      sync.Once
@@ -371,6 +372,16 @@ func SameTailnetUser() EnvOption {
 // from disco-key rotations.
 func AllOnline() EnvOption {
 	return envOptFunc(func(e *Env) { e.allOnline = true })
+}
+
+// PeerRelayGrants returns an [EnvOption] that makes the test control server
+// grant [tailcfg.PeerCapabilityRelay] and [tailcfg.PeerCapabilityRelayTarget]
+// on the wildcard packet filter (testcontrol.Server.PeerRelayGrants). Without
+// those capabilities, magicsock does not consider any peer a candidate
+// peer-relay server, so a node that has [ipn.Prefs.RelayServerPort] set
+// cannot actually be used as a relay by its peers.
+func PeerRelayGrants() EnvOption {
+	return envOptFunc(func(e *Env) { e.peerRelayGrants = true })
 }
 
 // AddNetwork creates a new virtual network. Arguments follow the same pattern as
@@ -1364,6 +1375,9 @@ func (e *Env) initVnet() {
 		}
 		if e.allOnline {
 			e.server.ControlServer().AllOnline = true
+		}
+		if e.peerRelayGrants {
+			e.server.ControlServer().PeerRelayGrants = true
 		}
 	})
 }
