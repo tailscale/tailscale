@@ -7,7 +7,7 @@
 
 package buildfeatures
 
-// HasRouteCheck is whether the binary was built with support for modular feature "Support checking the reachability of overlapping routers".
+// HasRouteCheck is whether the binary was built with support for modular feature "Support checking the reachability of overlapping routers, for choosing between multiple network paths to the same IP address".
 // Specifically, it's whether the binary was NOT built with the "ts_omit_routecheck" build tag.
 // It's a const so it can be used for dead code elimination.
 const HasRouteCheck = true
