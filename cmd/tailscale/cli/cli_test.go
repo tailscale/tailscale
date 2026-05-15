@@ -1038,6 +1038,10 @@ func TestPrefFlagMapping(t *testing.T) {
 		case "AutoExitNode":
 			// Handled by tailscale {set,up} --exit-node=auto:any.
 			continue
+		case "BlueprintID":
+			// Set exclusively by "tailscale join"; intentionally has
+			// no flag on "tailscale up" or "tailscale set".
+			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
 	}

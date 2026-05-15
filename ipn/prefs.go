@@ -291,6 +291,17 @@ type Prefs struct {
 	// non-nil.
 	RelayServerStaticEndpoints []netip.AddrPort `json:",omitempty"`
 
+	// BlueprintID, if non-empty, is the Blueprint ID that this node was
+	// bound to via `tailscale join`. While set, the node is "blueprint
+	// bound": every blueprint-managed field on this Prefs (advertise
+	// tags, advertise routes, exit node, app connector, hostname,
+	// operator, SSH, accept-dns) is owned by the control plane via the
+	// Node.BlueprintConfig wire field, and `tailscale set` rejects
+	// local edits to those fields.
+	//
+	// `tailscale leave` clears this and logs the node out.
+	BlueprintID string `json:",omitempty"`
+
 	// AllowSingleHosts was a legacy field that was always true
 	// for the past 4.5 years. It controlled whether Tailscale
 	// peers got /32 or /128 routes for each other.
@@ -386,6 +397,7 @@ type MaskedPrefs struct {
 	DriveSharesSet                bool                `json:",omitempty"`
 	RelayServerPortSet            bool                `json:",omitempty"`
 	RelayServerStaticEndpointsSet bool                `json:",omitzero"`
+	BlueprintIDSet                bool                `json:",omitempty"`
 }
 
 // SetsInternal reports whether mp has any of the Internal*Set field bools set
@@ -692,7 +704,24 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
 		p.NetfilterKind == p2.NetfilterKind &&
 		compareUint16Ptrs(p.RelayServerPort, p2.RelayServerPort) &&
-		slices.Equal(p.RelayServerStaticEndpoints, p2.RelayServerStaticEndpoints)
+		slices.Equal(p.RelayServerStaticEndpoints, p2.RelayServerStaticEndpoints) &&
+		p.BlueprintID == p2.BlueprintID
+}
+
+// IsBlueprintBound reports whether this Prefs were brought up via
+// `tailscale join` and is therefore subject to blueprint-owned
+// field locking on `tailscale set`. A nil receiver returns false.
+func (p *Prefs) IsBlueprintBound() bool {
+	return p != nil && p.BlueprintID != ""
+}
+
+// IsBlueprintBound reports whether the underlying Prefs were brought
+// up via `tailscale join`. Invalid views return false.
+func (p PrefsView) IsBlueprintBound() bool {
+	if !p.Valid() {
+		return false
+	}
+	return p.ж.IsBlueprintBound()
 }
 
 func (au AutoUpdatePrefs) Pretty() string {

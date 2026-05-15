@@ -453,6 +453,17 @@ func (v PrefsView) RelayServerStaticEndpoints() views.Slice[netip.AddrPort] {
 	return views.SliceOf(v.ж.RelayServerStaticEndpoints)
 }
 
+// BlueprintID, if non-empty, is the Blueprint ID that this node was
+// bound to via `tailscale join`. While set, the node is "blueprint
+// bound": every blueprint-managed field on this Prefs (advertise
+// tags, advertise routes, exit node, app connector, hostname,
+// operator, SSH, accept-dns) is owned by the control plane via the
+// Node.BlueprintConfig wire field, and `tailscale set` rejects
+// local edits to those fields.
+//
+// `tailscale leave` clears this and logs the node out.
+func (v PrefsView) BlueprintID() string { return v.ж.BlueprintID }
+
 // AllowSingleHosts was a legacy field that was always true
 // for the past 4.5 years. It controlled whether Tailscale
 // peers got /32 or /128 routes for each other.
@@ -506,6 +517,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	DriveShares                []*drive.Share
 	RelayServerPort            *uint16
 	RelayServerStaticEndpoints []netip.AddrPort
+	BlueprintID                string
 	AllowSingleHosts           marshalAsTrueInJSON
 	Persist                    *persist.Persist
 }{})

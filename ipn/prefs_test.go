@@ -70,6 +70,7 @@ func TestPrefsEqual(t *testing.T) {
 		"DriveShares",
 		"RelayServerPort",
 		"RelayServerStaticEndpoints",
+		"BlueprintID",
 		"AllowSingleHosts",
 		"Persist",
 	}
@@ -439,6 +440,45 @@ func checkPrefs(t *testing.T, p Prefs) {
 	p2c = p2.Clone()
 	if !p2b.Equals(p2c) {
 		t.Fatalf("p2b != p2c\n")
+	}
+}
+
+func TestPrefsBlueprintBound(t *testing.T) {
+	if (&Prefs{}).IsBlueprintBound() {
+		t.Errorf("empty Prefs reports BlueprintBound")
+	}
+	if !(&Prefs{BlueprintID: "github-connector"}).IsBlueprintBound() {
+		t.Errorf("Prefs with BlueprintID reports not BlueprintBound")
+	}
+	var nilP *Prefs
+	if nilP.IsBlueprintBound() {
+		t.Errorf("nil Prefs reports BlueprintBound")
+	}
+
+	// PrefsView.IsBlueprintBound should match.
+	v := (&Prefs{BlueprintID: "github-connector"}).View()
+	if !v.IsBlueprintBound() {
+		t.Errorf("PrefsView for bound prefs reports not BlueprintBound")
+	}
+	zero := PrefsView{}
+	if zero.IsBlueprintBound() {
+		t.Errorf("invalid PrefsView reports BlueprintBound")
+	}
+}
+
+func TestPrefsEqualsBlueprintID(t *testing.T) {
+	a := &Prefs{BlueprintID: "github-connector"}
+	b := &Prefs{BlueprintID: "github-connector"}
+	if !a.Equals(b) {
+		t.Errorf("identical BlueprintID prefs reported unequal")
+	}
+	c := &Prefs{BlueprintID: "salesforce"}
+	if a.Equals(c) {
+		t.Errorf("different BlueprintID prefs reported equal")
+	}
+	d := &Prefs{}
+	if a.Equals(d) {
+		t.Errorf("BlueprintID-set prefs reported equal to empty prefs")
 	}
 }
 

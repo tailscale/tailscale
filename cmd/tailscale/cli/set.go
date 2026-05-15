@@ -210,6 +210,9 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 	if err != nil {
 		return err
 	}
+	if err := checkBlueprintSetLocked(curPrefs, maskedPrefs); err != nil {
+		return err
+	}
 	if maskedPrefs.AdvertiseRoutesSet {
 		maskedPrefs.AdvertiseRoutes, err = calcAdvertiseRoutesForSet(advertiseExitNodeSet, advertiseRoutesSet, curPrefs, setArgs)
 		if err != nil {
