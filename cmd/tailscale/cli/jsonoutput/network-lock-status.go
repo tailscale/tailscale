@@ -116,7 +116,7 @@ type tailnetLockStatusV1Base struct {
 	// Enabled is true if Tailnet Lock is enabled.
 	Enabled bool
 
-	// PublicKey describes the node's network-lock public key.
+	// PublicKey describes the node's tailnet-lock public key.
 	PublicKey string `json:"PublicKey,omitzero"`
 
 	// NodeKey describes the node's current node-key. This field is not
@@ -144,7 +144,7 @@ type tailnetLockEnabledStatusV1 struct {
 	NodeKeySignature *tkaNodeKeySignatureV1
 
 	// TrustedKeys describes the keys currently trusted to make changes
-	// to network-lock.
+	// to tailnet-lock.
 	TrustedKeys []tkaKeyV1
 
 	// VisiblePeers describes peers which are visible in the netmap that

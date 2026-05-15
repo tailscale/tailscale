@@ -567,7 +567,7 @@ func Bootstrap(storage Chonk, bootstrap AUM) (*Authority, error) {
 // ValidDisablement returns true if the disablement secret was correct.
 //
 // If this method returns true, the caller should shut down the authority
-// and purge all network-lock state.
+// and purge all tailnet-lock state.
 func (a *Authority) ValidDisablement(secret []byte) bool {
 	return a.state.checkDisablement(secret)
 }

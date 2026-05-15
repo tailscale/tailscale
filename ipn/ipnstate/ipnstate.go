@@ -86,7 +86,7 @@ type Status struct {
 	ClientVersion *tailcfg.ClientVersion
 }
 
-// TKAKey describes a key trusted by network lock.
+// TKAKey describes a key trusted by tailnet lock.
 type TKAKey struct {
 	Kind     string
 	Key      key.NLPublic
@@ -94,7 +94,7 @@ type TKAKey struct {
 	Votes    uint
 }
 
-// TKAPeer describes a peer and its network lock details.
+// TKAPeer describes a peer and its tailnet lock details.
 type TKAPeer struct {
 	Name             string // DNS
 	ID               tailcfg.NodeID
@@ -104,7 +104,7 @@ type TKAPeer struct {
 	NodeKeySignature tka.NodeKeySignature
 }
 
-// NetworkLockStatus represents whether network-lock is enabled,
+// NetworkLockStatus represents whether tailnet-lock is enabled,
 // along with details about the locally-known state of the tailnet
 // key authority.
 type NetworkLockStatus struct {
@@ -115,7 +115,7 @@ type NetworkLockStatus struct {
 	// if network lock is not enabled.
 	Head *[32]byte
 
-	// PublicKey describes the node's network-lock public key.
+	// PublicKey describes the node's tailnet-lock public key.
 	// It may be zero if the node has not logged in.
 	PublicKey key.NLPublic
 
@@ -123,14 +123,14 @@ type NetworkLockStatus struct {
 	// populated if the node is not operating (i.e. waiting for a login).
 	NodeKey *key.NodePublic
 
-	// NodeKeySigned is true if our node is authorized by network-lock.
+	// NodeKeySigned is true if our node is authorized by tailnet-lock.
 	NodeKeySigned bool
 
 	// NodeKeySignature is the current signature of this node's key.
 	NodeKeySignature *tka.NodeKeySignature
 
 	// TrustedKeys describes the keys currently trusted to make changes
-	// to network-lock.
+	// to tailnet-lock.
 	TrustedKeys []TKAKey
 
 	// VisiblePeers describes peers which are visible in the netmap that
@@ -148,7 +148,7 @@ type NetworkLockStatus struct {
 	StateID uint64
 }
 
-// NetworkLockUpdate describes a change to network-lock state.
+// NetworkLockUpdate describes a change to tailnet-lock state.
 type NetworkLockUpdate struct {
 	Hash   [32]byte
 	Change string // values of tka.AUMKind.String()

@@ -159,7 +159,7 @@ type expandedAUMV1 struct {
 }
 
 // tkaKeyV1 is the expanded version of a [tka.Key], which describes
-// the public components of a key known to network-lock.
+// the public components of a key known to tailnet-lock.
 type tkaKeyV1 struct {
 	Kind string `json:"Kind,omitzero"`
 

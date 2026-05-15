@@ -50,7 +50,7 @@ var (
 )
 
 // IsNetworkLockNotActive reports whether the given error indicates that
-// network-lock is not active. Stop-gap for feature/tailnetlock to check this
+// tailnet-lock is not active. Stop-gap for feature/tailnetlock to check this
 // until all of this is code is moved to the feature.
 func IsNetworkLockNotActive(err error) bool {
 	return errors.Is(err, errNetworkLockNotActive)
@@ -80,13 +80,13 @@ func (b *LocalBackend) initTKALocked() error {
 	root := b.TailscaleVarRoot()
 	if root == "" {
 		b.tka = nil
-		b.logf("cannot fetch existing TKA state; no state directory for network-lock")
+		b.logf("cannot fetch existing TKA state; no state directory for tailnet-lock")
 		return nil
 	}
 
 	chonkDir := b.chonkPathLocked()
 	if _, err := os.Stat(chonkDir); err == nil {
-		// The directory exists, which means network-lock has been initialized.
+		// The directory exists, which means tailnet-lock has been initialized.
 		storage, err := tka.ChonkDir(chonkDir)
 		if err != nil {
 			return fmt.Errorf("opening tailchonk: %v", err)
@@ -139,12 +139,12 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 			continue
 		}
 		if p.KeySignature().Len() == 0 {
-			b.logf("Network lock is dropping peer %v(%v) due to missing signature", p.ID(), p.StableID())
+			b.logf("Tailnet lock is dropping peer %v(%v) due to missing signature", p.ID(), p.StableID())
 			mak.Set(&toDelete, i, true)
 		} else {
 			details, err := b.tka.authority.NodeKeyAuthorizedWithDetails(p.Key(), p.KeySignature().AsSlice())
 			if err != nil {
-				b.logf("Network lock is dropping peer %v(%v) due to failed signature check: %v", p.ID(), p.StableID(), err)
+				b.logf("Tailnet lock is dropping peer %v(%v) due to failed signature check: %v", p.ID(), p.StableID(), err)
 				mak.Set(&toDelete, i, true)
 				continue
 			}
@@ -166,7 +166,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 				peers = append(peers, p)
 			} else {
 				if obsoleteByRotation.Contains(p.Key()) {
-					b.logf("Network lock is dropping peer %v(%v) due to key rotation", p.ID(), p.StableID())
+					b.logf("Tailnet lock is dropping peer %v(%v) due to key rotation", p.ID(), p.StableID())
 				}
 				// Record information about the node we filtered out.
 				filtered = append(filtered, tkaStateFromPeer(p))
@@ -496,7 +496,7 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, per
 	var storage tka.CompactableChonk
 	if root == "" {
 		b.health.SetUnhealthy(noNetworkLockStateDirWarnable, nil)
-		b.logf("network-lock using in-memory storage; no state directory")
+		b.logf("tailnet-lock using in-memory storage; no state directory")
 		storage = tka.ChonkMem()
 	} else {
 		chonkDir := b.chonkPathLocked()
@@ -624,7 +624,7 @@ func tkaStateFromPeer(p tailcfg.NodeView) ipnstate.TKAPeer {
 	return fp
 }
 
-// NetworkLockInit enables network-lock for the tailnet, with the tailnets'
+// NetworkLockInit enables tailnet-lock for the tailnet, with the tailnets'
 // key authority initialized to trust the provided keys.
 //
 // Initialization involves two RPCs with control, termed 'begin' and 'finish'.
@@ -632,7 +632,7 @@ func tkaStateFromPeer(p tailcfg.NodeView) ipnstate.TKAPeer {
 // encodes the initial state of the authority, and the list of all nodes
 // needing signatures is returned as a response.
 // The Finish RPC submits signatures for all these nodes, at which point
-// Control has everything it needs to atomically enable network lock.
+// Control has everything it needs to atomically enable tailnet lock.
 func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byte, supportDisablement []byte) error {
 	var ourNodeKey key.NodePublic
 	var nlPriv key.NLPrivate
@@ -667,7 +667,7 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 		return fmt.Errorf("tka.Create: %v", err)
 	}
 
-	b.logf("Generated genesis AUM to initialize network lock, trusting the following keys:")
+	b.logf("Generated genesis AUM to initialize tailnet lock, trusting the following keys:")
 	for i, k := range genesisAUM.State.Keys {
 		b.logf(" - key[%d] = tlpub:%x with %d votes", i, k.Public, k.Votes)
 	}
@@ -682,7 +682,7 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 	// node-key signatures, we need to sign keys for all the existing nodes.
 	// If we don't get these signatures ahead of time, everyone will lose
 	// connectivity because control won't have any signatures to send which
-	// satisfy network-lock checks.
+	// satisfy tailnet-lock checks.
 	sigs := make(map[tailcfg.NodeID]tkatype.MarshaledSignature, len(initResp.NeedSignatures))
 	for _, nodeInfo := range initResp.NeedSignatures {
 		nks, err := signNodeKey(nodeInfo, nlPriv)
@@ -722,7 +722,7 @@ func (b *LocalBackend) NetworkLockKeyTrustedForTest(keyID tkatype.KeyID) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
-		panic("network lock not initialized")
+		panic("tailnet lock not initialized")
 	}
 	return b.tka.authority.KeyTrusted(keyID)
 }
@@ -796,7 +796,7 @@ func (b *LocalBackend) NetworkLockSign(nodeKey key.NodePublic, rotationPublic []
 		return err
 	}
 
-	b.logf("Generated network-lock signature for %v, submitting to control plane", nodeKey)
+	b.logf("Generated tailnet-lock signature for %v, submitting to control plane", nodeKey)
 	if _, err := b.tkaSubmitSignature(ourNodeKey, sig.Serialize()); err != nil {
 		return err
 	}
@@ -883,7 +883,7 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 	return nil
 }
 
-// NetworkLockDisable disables network-lock using the provided disablement secret.
+// NetworkLockDisable disables tailnet-lock using the provided disablement secret.
 func (b *LocalBackend) NetworkLockDisable(secret []byte) error {
 	var (
 		ourNodeKey key.NodePublic

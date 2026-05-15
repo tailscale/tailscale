@@ -32,7 +32,7 @@ func (k KeyKind) String() string {
 	}
 }
 
-// Key describes the public components of a key known to network-lock.
+// Key describes the public components of a key known to tailnet-lock.
 type Key struct {
 	Kind KeyKind `cbor:"1,keyasint"`
 

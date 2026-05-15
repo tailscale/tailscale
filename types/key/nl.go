@@ -29,7 +29,7 @@ const (
 	nlPublicHexPrefixCLI = "tlpub:"
 )
 
-// NLPrivate is a node-managed network-lock key, used for signing
+// NLPrivate is a node-managed tailnet-lock key, used for signing
 // node-key signatures and authority update messages.
 type NLPrivate struct {
 	_ structs.Incomparable // because == isn't constant-time
@@ -42,7 +42,7 @@ func (k NLPrivate) IsZero() bool {
 	return subtle.ConstantTimeCompare(k.k[:], empty.k[:]) == 1
 }
 
-// NewNLPrivate creates and returns a new network-lock key.
+// NewNLPrivate creates and returns a new tailnet-lock key.
 func NewNLPrivate() NLPrivate {
 	// ed25519.GenerateKey 'clamps' the key, not that it
 	// matters given we don't do Diffie-Hellman.
@@ -120,7 +120,7 @@ type NLPublic struct {
 // a type of NLPublic.
 //
 // New uses of this function should be avoided, as it's possible to
-// accidentally construct an NLPublic from a non network-lock key.
+// accidentally construct an NLPublic from a non tailnet-lock key.
 func NLPublicFromEd25519Unsafe(public ed25519.PublicKey) NLPublic {
 	var out NLPublic
 	copy(out.k[:], public)

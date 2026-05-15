@@ -1349,7 +1349,7 @@ func (v RegisterRequestView) Hostinfo() HostinfoView { return v.ж.Hostinfo.View
 func (v RegisterRequestView) Ephemeral() bool { return v.ж.Ephemeral }
 
 // NodeKeySignature is the node's own node-key signature, re-signed
-// for its new node key using its network-lock key.
+// for its new node key using its tailnet-lock key.
 //
 // This field is set when the client retries registration after learning
 // its NodeKeySignature (which is in need of rotation).

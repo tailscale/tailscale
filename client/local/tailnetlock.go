@@ -117,7 +117,7 @@ func (lc *Client) NetworkLockAffectedSigs(ctx context.Context, keyID tkatype.Key
 	return decodeJSON[[]tkatype.MarshaledSignature](body)
 }
 
-// NetworkLockLog returns up to maxEntries number of changes to network-lock state.
+// NetworkLockLog returns up to maxEntries number of changes to tailnet-lock state.
 func (lc *Client) NetworkLockLog(ctx context.Context, maxEntries int) ([]ipnstate.NetworkLockUpdate, error) {
 	v := url.Values{}
 	v.Set("limit", fmt.Sprint(maxEntries))
@@ -128,7 +128,7 @@ func (lc *Client) NetworkLockLog(ctx context.Context, maxEntries int) ([]ipnstat
 	return decodeJSON[[]ipnstate.NetworkLockUpdate](body)
 }
 
-// NetworkLockForceLocalDisable forcibly shuts down network lock on this node.
+// NetworkLockForceLocalDisable forcibly shuts down tailnet lock on this node.
 func (lc *Client) NetworkLockForceLocalDisable(ctx context.Context) error {
 	// This endpoint expects an empty JSON stanza as the payload.
 	var b bytes.Buffer
@@ -142,7 +142,7 @@ func (lc *Client) NetworkLockForceLocalDisable(ctx context.Context) error {
 	return nil
 }
 
-// NetworkLockVerifySigningDeeplink verifies the network lock deeplink contained
+// NetworkLockVerifySigningDeeplink verifies the tailnet lock deeplink contained
 // in url and returns information extracted from it.
 func (lc *Client) NetworkLockVerifySigningDeeplink(ctx context.Context, url string) (*tka.DeeplinkValidationResult, error) {
 	vr := struct {
@@ -193,7 +193,7 @@ func (lc *Client) NetworkLockSubmitRecoveryAUM(ctx context.Context, aum tka.AUM)
 	return nil
 }
 
-// NetworkLockDisable shuts down network-lock across the tailnet.
+// NetworkLockDisable shuts down tailnet-lock across the tailnet.
 func (lc *Client) NetworkLockDisable(ctx context.Context, secret []byte) error {
 	if _, err := lc.send(ctx, "POST", "/localapi/v0/tka/disable", 200, bytes.NewReader(secret)); err != nil {
 		return fmt.Errorf("error: %w", err)

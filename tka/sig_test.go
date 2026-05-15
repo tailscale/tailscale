@@ -51,7 +51,7 @@ func TestSigDirect(t *testing.T) {
 }
 
 func TestSigNested(t *testing.T) {
-	// Network-lock key (the key used to sign the nested sig)
+	// tailnet-lock key (the key used to sign the nested sig)
 	pub, priv := testingKey25519(t, 1)
 	k := Key{Kind: Key25519, Public: pub, Votes: 2}
 	// Rotation key (the key used to sign the outer sig)
@@ -64,7 +64,7 @@ func TestSigNested(t *testing.T) {
 	nodeKeyPub, _ := node.Public().MarshalBinary()
 
 	// The original signature for the old node key, signed by
-	// the network-lock key.
+	// the tailnet-lock key.
 	nestedSig := NodeKeySignature{
 		SigKind:        SigDirect,
 		KeyID:          k.MustID(),
@@ -127,7 +127,7 @@ func TestSigNested(t *testing.T) {
 }
 
 func TestSigNested_DeepNesting(t *testing.T) {
-	// Network-lock key (the key used to sign the nested sig)
+	// tailnet-lock key (the key used to sign the nested sig)
 	pub, priv := testingKey25519(t, 1)
 	k := Key{Kind: Key25519, Public: pub, Votes: 2}
 	// Rotation key (the key used to sign the outer sig)
@@ -137,7 +137,7 @@ func TestSigNested_DeepNesting(t *testing.T) {
 	oldPub, _ := oldNode.Public().MarshalBinary()
 
 	// The original signature for the old node key, signed by
-	// the network-lock key.
+	// the tailnet-lock key.
 	nestedSig := NodeKeySignature{
 		SigKind:        SigDirect,
 		KeyID:          k.MustID(),
@@ -196,7 +196,7 @@ func TestSigNested_DeepNesting(t *testing.T) {
 }
 
 func TestSigCredential(t *testing.T) {
-	// Network-lock key (the key used to sign the nested sig)
+	// tailnet-lock key (the key used to sign the nested sig)
 	pub, priv := testingKey25519(t, 1)
 	k := Key{Kind: Key25519, Public: pub, Votes: 2}
 	// 'credential' key (the one being delegated to)
@@ -513,7 +513,7 @@ func TestResignNKS(t *testing.T) {
 	origPub, _ := origNode.Public().MarshalBinary()
 
 	// The original signature for the old node key, signed by
-	// the network-lock key.
+	// the tailnet-lock key.
 	directSig := NodeKeySignature{
 		SigKind:        SigDirect,
 		KeyID:          authKey.MustID(),

@@ -36,7 +36,7 @@ type TKASignInfo struct {
 	// a NodeKeySignature (NKS), which rotates the node key.
 	//
 	// This is necessary so the node can rotate its node-key without
-	// talking to a node which holds a trusted network-lock key.
+	// talking to a node which holds a trusted tailnet-lock key.
 	// It does this by nesting the original NKS in a 'rotation' NKS,
 	// which it then signs with the key corresponding to RotationPubkey.
 	//
@@ -193,7 +193,7 @@ type TKASyncSendResponse struct {
 	Head string
 }
 
-// TKADisableRequest disables network-lock across the tailnet using the
+// TKADisableRequest disables tailnet-lock across the tailnet using the
 // provided disablement secret.
 //
 // This is the request schema for a /tka/disable noise RPC.

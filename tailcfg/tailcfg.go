@@ -1283,7 +1283,7 @@ type RegisterRequest struct {
 	Ephemeral bool `json:",omitempty"`
 
 	// NodeKeySignature is the node's own node-key signature, re-signed
-	// for its new node key using its network-lock key.
+	// for its new node key using its tailnet-lock key.
 	//
 	// This field is set when the client retries registration after learning
 	// its NodeKeySignature (which is in need of rotation).
