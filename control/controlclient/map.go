@@ -1047,6 +1047,16 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node, onFalse func(string))
 				onFalse(field)
 				return nil, false
 			}
+		case "BlueprintID":
+			if was.BlueprintID() != n.BlueprintID {
+				onFalse(field)
+				return nil, false
+			}
+		case "BlueprintConfig":
+			if !was.BlueprintConfig().Equal(n.BlueprintConfig.View()) {
+				onFalse(field)
+				return nil, false
+			}
 		case "PrimaryRoutes":
 			if !views.SliceEqual(was.PrimaryRoutes(), views.SliceOf(n.PrimaryRoutes)) {
 				onFalse(field)
