@@ -12,6 +12,7 @@ import (
 	"slices"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/mak"
 )
 
 // Scores is a memoization cache for the traffic scores of the current node’s peers.
@@ -21,6 +22,9 @@ type Scores map[tailcfg.NodeID]int
 
 // ScorePeers scores the peer nodes and returns the cache that memoized these scores.
 func ScorePeers(peers []tailcfg.NodeView) Scores {
+	if len(peers) == 0 {
+		return nil
+	}
 	ss := make(Scores, len(peers))
 	for _, n := range peers {
 		ss.Add(n)
@@ -30,23 +34,24 @@ func ScorePeers(peers []tailcfg.NodeView) Scores {
 
 // Add scores the given peer node and returns it after adding the score to the cache.
 // It also reports whether the score had to be added because it was missing.
-func (ss Scores) Add(n tailcfg.NodeView) (score int, added bool) {
+func (ss *Scores) Add(n tailcfg.NodeView) (score int, added bool) {
 	id := n.ID()
-	s, ok := ss[id]
-	if !ok {
-		s := 0 // score of zero means incomparable
-		if hi := n.Hostinfo(); hi.Valid() {
-			if loc := hi.Location(); loc.Valid() {
-				s = loc.Priority()
-			}
-		}
-		ss[id] = s
+	if s, ok := (*ss)[id]; ok {
+		return s, false
 	}
-	return s, ok
+
+	var s int
+	if hi := n.Hostinfo(); hi.Valid() {
+		if loc := hi.Location(); loc.Valid() {
+			s = loc.Priority()
+		}
+	}
+	mak.Set(ss, id, s)
+	return s, true
 }
 
 // Score scores the given peer node and returns it after adding the score to the cache.
-func (ss Scores) Score(n tailcfg.NodeView) int {
+func (ss *Scores) Score(n tailcfg.NodeView) int {
 	s, _ := ss.Add(n)
 	return s
 }
