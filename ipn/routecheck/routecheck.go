@@ -137,3 +137,14 @@ func (c *Client) waitForNetMap(ctx context.Context) (*netmap.NetworkMap, error) 
 		}
 	}
 }
+
+// Close immediately stops all active probes.
+func (c *Client) Close() error {
+	if c == nil {
+		return nil
+	}
+
+	c.netMapAvailable.Broadcast() // Wake goroutines in waitForNetMap.
+
+	return nil
+}

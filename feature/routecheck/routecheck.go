@@ -76,7 +76,8 @@ func (e *Extension) Init(h ipnext.Host) error {
 
 // Shutdown implements the [ipnext.Extension.Shutdown] interface method.
 func (e *Extension) Shutdown() error {
-	return nil
+	err := e.Client.Close()
+	return err
 }
 
 func (e *Extension) onNetMapToggle(nm *netmap.NetworkMap) {
