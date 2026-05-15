@@ -8140,20 +8140,16 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcf
 		pick = nodes[0]
 	}
 	if len(nodes) > 1 {
-		// Find the highest scoring exit nodes.
-		slices.SortFunc(nodes, func(a, b tailcfg.NodeView) int {
-			c := cmp.Compare(ss.Score(b), ss.Score(a)) // Highest score first.
-			if c == 0 {
-				// Rendezvous hashing for reliably picking the
-				// same node from a list: tailscale/tailscale#16551.
-				return cmp.Compare(rdvHash(b.ID()), rdvHash(a.ID()))
-			}
-			return c
+		ss.SortNodes(nodes, func(a, b tailcfg.NodeView) int {
+			// Break ties using rendezvous hashing,
+			// which reliably picks the same node from a list:
+			// tailscale/tailscale#16551.
+			return rdvHash.Compare(a.ID(), b.ID())
 		})
 
 		// TODO(sfllaw): add a temperature knob so that this client has
 		// a chance of picking the next best option.
-		pick = nodes[0]
+		pick = nodes[0] // Pick the highest score.
 	}
 
 	nb.logf("netmap: traffic steering: exit node scores: %v", logger.ArgWriter(func(bw *bufio.Writer) {
