@@ -892,6 +892,28 @@ func TestCheckTag(t *testing.T) {
 		{"bad", "tag:", false},
 		{"no_leading_num", "tag:1foo", false},
 		{"no_punctuation", "tag:foa@bar", false},
+
+		// Blueprint-managed tag namespace (tag:bp//<id>). The double
+		// slash is intentional; it visually marks tags whose
+		// provenance is a blueprint rather than user-authored
+		// tagOwners. The <id> must satisfy the same character rules
+		// as a regular tag name (letter-start, alphanumerics, and
+		// dashes).
+		{"bp_simple", "tag:bp//foo", true},
+		{"bp_dashes", "tag:bp//github-connector", true},
+		{"bp_alnum", "tag:bp//us-east-1", true},
+		{"bp_uppercase_id", "tag:bp//Foo", true},
+		{"bp_empty_id", "tag:bp//", false},
+		{"bp_id_starts_with_digit", "tag:bp//1foo", false},
+		{"bp_id_starts_with_dash", "tag:bp//-foo", false},
+		{"bp_id_has_slash", "tag:bp//foo/bar", false},
+		{"bp_id_has_punctuation", "tag:bp//foo@bar", false},
+		{"bp_triple_slash", "tag:bp///foo", false},
+		{"bp_single_slash", "tag:bp/foo", false},
+		{"bp_no_slash_just_bp", "tag:bp", true},
+		{"bp_uppercase_namespace_is_not_blueprint", "tag:BP//foo", false},
+		{"bp_mixed_case_namespace_is_not_blueprint", "tag:Bp//foo", false},
+		{"bp_prefix_lookalike_is_not_blueprint", "tag:bpx//foo", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -900,6 +922,60 @@ func TestCheckTag(t *testing.T) {
 				t.Errorf("got nil; want error")
 			} else if err != nil && tt.want {
 				t.Errorf("got %v; want nil", err)
+			}
+		})
+	}
+}
+
+func TestIsBlueprintTag(t *testing.T) {
+	tests := []struct {
+		tag  string
+		want bool
+	}{
+		{"tag:bp//foo", true},
+		{"tag:bp//github-connector", true},
+		{"tag:bp//us-east-1", true},
+		{"tag:bp//", false},
+		{"tag:bp//1foo", false},
+		{"tag:bp//foo/bar", false},
+		{"tag:foo", false},
+		{"tag:bp", false},
+		{"tag:BP//foo", false},
+		{"tag:bpx//foo", false},
+		{"", false},
+		{"bp//foo", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.tag, func(t *testing.T) {
+			if got := IsBlueprintTag(tt.tag); got != tt.want {
+				t.Errorf("IsBlueprintTag(%q) = %v; want %v", tt.tag, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBlueprintIDFromTag(t *testing.T) {
+	tests := []struct {
+		tag    string
+		wantID string
+		wantOK bool
+	}{
+		{"tag:bp//foo", "foo", true},
+		{"tag:bp//github-connector", "github-connector", true},
+		{"tag:bp//", "", false},
+		{"tag:bp//1foo", "", false},
+		{"tag:foo", "", false},
+		{"tag:bp", "", false},
+		{"", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.tag, func(t *testing.T) {
+			id, ok := BlueprintIDFromTag(tt.tag)
+			if ok != tt.wantOK {
+				t.Errorf("BlueprintIDFromTag(%q) ok = %v; want %v", tt.tag, ok, tt.wantOK)
+			}
+			if id != tt.wantID {
+				t.Errorf("BlueprintIDFromTag(%q) id = %q; want %q", tt.tag, id, tt.wantID)
 			}
 		})
 	}
