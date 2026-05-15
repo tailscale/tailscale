@@ -73,23 +73,24 @@ func (c *Client) probe(ctx context.Context, nodes iter.Seq[probed], limit int, t
 			// The peer would send a valid but stateless `handshake_response`,
 			// using a random ephemeral_private key and not record any state.
 			// See https://www.wireguard.com/protocol/ and tailscale/tailscale#19670.
-			pong, err := c.ping(ctx, n.addr, tailcfg.PingDisco, timeout)
-			if err != nil {
-				// Returning an error would cancel the errgroup.
-				if err != context.DeadlineExceeded {
-					c.vlogf("ping %s (%s): error: %v", n.addr, n.id, err)
-					metricPingError.Add(1)
-				}
+			switch pong, err := c.ping(ctx, n.addr, tailcfg.PingDisco, timeout); {
+			case err == context.DeadlineExceeded:
 				// Ping timed out, so assume that the node is unreachable.
 				c.vlogf("ping %s (%s): timed out", n.addr, n.id)
 				metricPingTimeout.Add(1)
 				return nil
-			} else if pong == nil {
+			case err != nil:
+				// Returning an error would cancel the errgroup.
+				c.vlogf("ping %s (%s): error: %v", n.addr, n.id, err)
+				metricPingError.Add(1)
+				return nil
+			case pong == nil:
 				c.vlogf("ping %s (%s): error: no response", n.addr, n.id)
 				metricPingError.Add(1)
 				return nil
-			} else {
-				c.vlogf("ping %s (%s): result: %f ms (err: %v)", n.addr, n.id, pong.LatencySeconds*1000, pong.Err)
+			default:
+				c.vlogf("ping %s (%s): result: %f ms (err: %v)",
+					n.addr, n.id, pong.LatencySeconds*1000, pong.Err)
 				metricPingReachable.Add(1)
 			}
 
