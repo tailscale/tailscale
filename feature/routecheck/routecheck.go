@@ -57,7 +57,7 @@ func (e *Extension) Init(h ipnext.Host) error {
 
 	nm, ok := e.backend.(routecheck.NetMapper)
 	if !ok {
-		return fmt.Errorf("backend %T does not implement routecheck.NetMapWaiter", e.backend)
+		return fmt.Errorf("backend %T does not implement routecheck.NetMapper", e.backend)
 	}
 	e.nm = nm
 

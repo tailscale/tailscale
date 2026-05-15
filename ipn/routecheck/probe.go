@@ -28,7 +28,13 @@ var (
 	metricProbe         = clientmetric.NewCounter("routecheck_probe")
 )
 
-// DefaultTimeout is the default time allowed for a response before a peer is considered unreachable.
+// DefaultTimeout is the default time allowed for a response
+// before a peer is considered unreachable.
+//
+// The Linux iputils suite uses a default MAXWAIT timeout of 10 seconds;
+// the BSDs and MacOS also use a default timeout of 10 seconds;
+// and Windows uses a default timeout of 4 seconds.
+// Out of all these options, we decided to choose the minimum default timeout.
 const DefaultTimeout = 4 * time.Second
 
 type probed struct {
@@ -121,12 +127,16 @@ func (c *Client) probe(ctx context.Context, nodes iter.Seq[probed], limit int, t
 // sorted earlier in the sequence. This function may use ordering to skip some probes
 // if it has discovered enough reachable peers.
 //
-// This function tries both the IPv4 and IPv6 addresses.
+// A node’s IPv4 address is preferred, if the current node also supports IPv4.
+// A node’s IPv6 is only probed when the current node only supports IPv6.
+// In 2026, IPv4 is still more common and more likely to work properly.
 func (c *Client) Probe(ctx context.Context, nodes iter.Seq[tailcfg.NodeView], limit int, timeout time.Duration) (*Report, error) {
 	is4, is6 := supportsIPVersions(c.nb.NodeBackend().Self())
 	if is4 == nil && is6 == nil {
 		return nil, nil
 	}
+	// TODO(sfllaw): Probes should fall back to IPv6, if the IPv4 probe times out
+	// and IPv6 is also supported by the current node.
 	addrFor := addrPicker(is4, is6)
 
 	// Assumed nodes are ones that we assume are reachable,
@@ -259,6 +269,9 @@ func supportsIPVersions(n tailcfg.NodeView) (is4, is6 func(netip.Addr) bool) {
 }
 
 func addrPicker(is4, is6 func(netip.Addr) bool) func(n tailcfg.NodeView) netip.Addr {
+	// TODO(sfllaw): Picking just the one address is a little brittle
+	// because this picks just one address and there’s no fallback facility.
+	// [Client.Probe] is the caller that will need refactoring.
 	return func(n tailcfg.NodeView) netip.Addr {
 		var zero netip.Addr
 		for _, ip := range n.Addresses().All() {
