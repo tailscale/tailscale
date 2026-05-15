@@ -21,7 +21,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService,SSHPolicy
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService,SSHPolicy,BlueprintConfig
 
 // View returns a read-only view of User.
 func (p *User) View() UserView {
@@ -375,7 +375,25 @@ func (v NodeView) IsJailed() bool { return v.ж.IsJailed }
 func (v NodeView) ExitNodeDNSResolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
 	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.ExitNodeDNSResolvers)
 }
-func (v NodeView) Equal(v2 NodeView) bool { return v.ж.Equal(v2.ж) }
+
+// BlueprintID, if non-empty, is the ID of the Blueprint this node is
+// bound to. A blueprint-bound node ("brought up via tailscale join")
+// inherits its configuration from the named Blueprint as defined in
+// the tailnet's ACL, and locks out client-side edits to the fields
+// the blueprint owns.
+//
+// See BlueprintConfig for the projected configuration. Available
+// from CapabilityVersion 139.
+func (v NodeView) BlueprintID() string { return v.ж.BlueprintID }
+
+// BlueprintConfig, when non-nil, is the projection of the bound
+// Blueprint's definition onto this node. Edits to the blueprint in
+// the ACL are reflected here on the next map poll.
+//
+// BlueprintConfig is nil for non-blueprint-bound nodes. Available
+// from CapabilityVersion 139.
+func (v NodeView) BlueprintConfig() BlueprintConfigView { return v.ж.BlueprintConfig.View() }
+func (v NodeView) Equal(v2 NodeView) bool               { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _NodeViewNeedsRegeneration = Node(struct {
@@ -415,6 +433,8 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	IsWireGuardOnly               bool
 	IsJailed                      bool
 	ExitNodeDNSResolvers          []*dnstype.Resolver
+	BlueprintID                   string
+	BlueprintConfig               *BlueprintConfig
 }{})
 
 // View returns a read-only view of Hostinfo.
@@ -2701,4 +2721,102 @@ func (v SSHPolicyView) Rules() views.SliceView[*SSHRule, SSHRuleView] {
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _SSHPolicyViewNeedsRegeneration = SSHPolicy(struct {
 	Rules []*SSHRule
+}{})
+
+// View returns a read-only view of BlueprintConfig.
+func (p *BlueprintConfig) View() BlueprintConfigView {
+	return BlueprintConfigView{ж: p}
+}
+
+// BlueprintConfigView provides a read-only view over BlueprintConfig.
+//
+// Its methods should only be called if `Valid()` returns true.
+type BlueprintConfigView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *BlueprintConfig
+}
+
+// Valid reports whether v's underlying value is non-nil.
+func (v BlueprintConfigView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v BlueprintConfigView) AsStruct() *BlueprintConfig {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v BlueprintConfigView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v BlueprintConfigView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
+func (v *BlueprintConfigView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x BlueprintConfig
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *BlueprintConfigView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x BlueprintConfig
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// Tags is the merged set of tags applied to the node by the
+// blueprint. This includes the auto-generated "tag:bp//<id>" tag
+// plus any tags listed in the blueprint's "tags" field.
+func (v BlueprintConfigView) Tags() views.Slice[string] { return views.SliceOf(v.ж.Tags) }
+
+// ServeApps is the list of "app:" identifiers from the blueprint's
+// serves.apps field. Empty if the blueprint does not declare any
+// apps.
+func (v BlueprintConfigView) ServeApps() views.Slice[string] { return views.SliceOf(v.ж.ServeApps) }
+
+// ServeIPSets is the list of "ipset:" identifiers from the
+// blueprint's serves.ipsets field. Empty if the blueprint does not
+// declare any ipset routes.
+func (v BlueprintConfigView) ServeIPSets() views.Slice[string] {
+	return views.SliceOf(v.ж.ServeIPSets)
+}
+
+// Attrs is the list of nodeAttr identifiers granted by the
+// blueprint's attrs field. Empty if the blueprint does not declare
+// any attrs.
+func (v BlueprintConfigView) Attrs() views.Slice[string]        { return views.SliceOf(v.ж.Attrs) }
+func (v BlueprintConfigView) Equal(v2 BlueprintConfigView) bool { return v.ж.Equal(v2.ж) }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _BlueprintConfigViewNeedsRegeneration = BlueprintConfig(struct {
+	Tags        []string
+	ServeApps   []string
+	ServeIPSets []string
+	Attrs       []string
 }{})

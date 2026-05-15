@@ -347,6 +347,7 @@ func TestNodeEqual(t *testing.T) {
 		"ComputedName", "computedHostIfDifferent", "ComputedNameWithHost",
 		"DataPlaneAuditLogID", "Expired", "SelfNodeV4MasqAddrForThisPeer",
 		"SelfNodeV6MasqAddrForThisPeer", "IsWireGuardOnly", "IsJailed", "ExitNodeDNSResolvers",
+		"BlueprintID", "BlueprintConfig",
 	}
 	if have := fieldsOf(reflect.TypeFor[Node]()); !reflect.DeepEqual(have, nodeHandles) {
 		t.Errorf("Node.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
@@ -605,12 +606,132 @@ func TestNodeEqual(t *testing.T) {
 			&Node{IsJailed: true},
 			false,
 		},
+		{
+			&Node{BlueprintID: "github-connector"},
+			&Node{BlueprintID: "github-connector"},
+			true,
+		},
+		{
+			&Node{BlueprintID: "github-connector"},
+			&Node{BlueprintID: "salesforce"},
+			false,
+		},
+		{
+			&Node{BlueprintID: "github-connector"},
+			&Node{},
+			false,
+		},
+		{
+			&Node{BlueprintConfig: &BlueprintConfig{Tags: []string{"tag:bp//x"}}},
+			&Node{BlueprintConfig: &BlueprintConfig{Tags: []string{"tag:bp//x"}}},
+			true,
+		},
+		{
+			&Node{BlueprintConfig: &BlueprintConfig{Tags: []string{"tag:bp//x"}}},
+			&Node{BlueprintConfig: &BlueprintConfig{Tags: []string{"tag:bp//y"}}},
+			false,
+		},
+		{
+			&Node{BlueprintConfig: &BlueprintConfig{}},
+			&Node{},
+			false,
+		},
 	}
 	for i, tt := range tests {
 		got := tt.a.Equal(tt.b)
 		if got != tt.want {
 			t.Errorf("%d. Equal = %v; want %v", i, got, tt.want)
 		}
+	}
+}
+
+func TestBlueprintConfigEqual(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b *BlueprintConfig
+		want bool
+	}{
+		{"both nil", nil, nil, true},
+		{"a nil only", nil, &BlueprintConfig{}, false},
+		{"b nil only", &BlueprintConfig{}, nil, false},
+		{"both empty", &BlueprintConfig{}, &BlueprintConfig{}, true},
+		{
+			"same tags",
+			&BlueprintConfig{Tags: []string{"tag:bp//x", "tag:prod"}},
+			&BlueprintConfig{Tags: []string{"tag:bp//x", "tag:prod"}},
+			true,
+		},
+		{
+			"different tags",
+			&BlueprintConfig{Tags: []string{"tag:bp//x"}},
+			&BlueprintConfig{Tags: []string{"tag:bp//y"}},
+			false,
+		},
+		{
+			"nil vs empty tags",
+			&BlueprintConfig{Tags: nil},
+			&BlueprintConfig{Tags: []string{}},
+			false,
+		},
+		{
+			"same apps",
+			&BlueprintConfig{ServeApps: []string{"app:github"}},
+			&BlueprintConfig{ServeApps: []string{"app:github"}},
+			true,
+		},
+		{
+			"different apps",
+			&BlueprintConfig{ServeApps: []string{"app:github"}},
+			&BlueprintConfig{ServeApps: []string{"app:salesforce"}},
+			false,
+		},
+		{
+			"same ipsets",
+			&BlueprintConfig{ServeIPSets: []string{"ipset:corp"}},
+			&BlueprintConfig{ServeIPSets: []string{"ipset:corp"}},
+			true,
+		},
+		{
+			"different ipsets",
+			&BlueprintConfig{ServeIPSets: []string{"ipset:corp"}},
+			&BlueprintConfig{ServeIPSets: []string{"ipset:build"}},
+			false,
+		},
+		{
+			"same attrs",
+			&BlueprintConfig{Attrs: []string{"funnel"}},
+			&BlueprintConfig{Attrs: []string{"funnel"}},
+			true,
+		},
+		{
+			"different attrs",
+			&BlueprintConfig{Attrs: []string{"funnel"}},
+			&BlueprintConfig{Attrs: []string{"randomize-client-port"}},
+			false,
+		},
+		{
+			"all fields equal",
+			&BlueprintConfig{
+				Tags:        []string{"tag:bp//x"},
+				ServeApps:   []string{"app:github"},
+				ServeIPSets: []string{"ipset:corp"},
+				Attrs:       []string{"funnel"},
+			},
+			&BlueprintConfig{
+				Tags:        []string{"tag:bp//x"},
+				ServeApps:   []string{"app:github"},
+				ServeIPSets: []string{"ipset:corp"},
+				Attrs:       []string{"funnel"},
+			},
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.a.Equal(tt.b); got != tt.want {
+				t.Errorf("Equal = %v; want %v", got, tt.want)
+			}
+		})
 	}
 }
 

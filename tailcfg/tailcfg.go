@@ -5,7 +5,7 @@
 // the node and the coordination server.
 package tailcfg
 
-//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService,SSHPolicy --clonefunc
+//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService,SSHPolicy,BlueprintConfig --clonefunc
 
 import (
 	"bytes"
@@ -185,7 +185,8 @@ type CapabilityVersion int
 //   - 136: 2026-04-09: Client understands [NodeAttrDisableLinuxCGNATDropRule]
 //   - 137: 2026-04-15: Client handles 429 responses to /machine/register.
 //   - 138: 2026-03-31: can handle C2N /debug/tka.
-const CurrentCapabilityVersion CapabilityVersion = 138
+//   - 139: 2026-05-15: Client understands Node.BlueprintID and Node.BlueprintConfig (Blueprints v1)
+const CurrentCapabilityVersion CapabilityVersion = 139
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -532,6 +533,69 @@ type Node struct {
 	// ExitNodeDNSResolvers is the list of DNS servers that should be used when this
 	// node is marked IsWireGuardOnly and being used as an exit node.
 	ExitNodeDNSResolvers []*dnstype.Resolver `json:",omitempty"`
+
+	// BlueprintID, if non-empty, is the ID of the Blueprint this node is
+	// bound to. A blueprint-bound node ("brought up via tailscale join")
+	// inherits its configuration from the named Blueprint as defined in
+	// the tailnet's ACL, and locks out client-side edits to the fields
+	// the blueprint owns.
+	//
+	// See BlueprintConfig for the projected configuration. Available
+	// from CapabilityVersion 139.
+	BlueprintID string `json:",omitzero"`
+
+	// BlueprintConfig, when non-nil, is the projection of the bound
+	// Blueprint's definition onto this node. Edits to the blueprint in
+	// the ACL are reflected here on the next map poll.
+	//
+	// BlueprintConfig is nil for non-blueprint-bound nodes. Available
+	// from CapabilityVersion 139.
+	BlueprintConfig *BlueprintConfig `json:",omitempty"`
+}
+
+// BlueprintConfig is the subset of a Blueprint definition projected onto a
+// blueprint-bound node via the map poll. The fields here correspond 1:1 to
+// the v1 subset of the ACL "blueprints" block: tags, serves.apps,
+// serves.ipsets, and attrs. Future Blueprint capabilities (services,
+// exitNode, funnel, posture) are out of scope for v1.
+//
+// A non-nil BlueprintConfig on a Node means the control plane considers
+// the node bound; the client uses this to disable local edits to the
+// fields the blueprint owns.
+type BlueprintConfig struct {
+	// Tags is the merged set of tags applied to the node by the
+	// blueprint. This includes the auto-generated "tag:bp//<id>" tag
+	// plus any tags listed in the blueprint's "tags" field.
+	Tags []string `json:",omitempty"`
+
+	// ServeApps is the list of "app:" identifiers from the blueprint's
+	// serves.apps field. Empty if the blueprint does not declare any
+	// apps.
+	ServeApps []string `json:",omitempty"`
+
+	// ServeIPSets is the list of "ipset:" identifiers from the
+	// blueprint's serves.ipsets field. Empty if the blueprint does not
+	// declare any ipset routes.
+	ServeIPSets []string `json:",omitempty"`
+
+	// Attrs is the list of nodeAttr identifiers granted by the
+	// blueprint's attrs field. Empty if the blueprint does not declare
+	// any attrs.
+	Attrs []string `json:",omitempty"`
+}
+
+// Equal reports whether c and c2 are equal.
+func (c *BlueprintConfig) Equal(c2 *BlueprintConfig) bool {
+	if c == nil && c2 == nil {
+		return true
+	}
+	if c == nil || c2 == nil {
+		return false
+	}
+	return slicesx.EqualSameNil(c.Tags, c2.Tags) &&
+		slicesx.EqualSameNil(c.ServeApps, c2.ServeApps) &&
+		slicesx.EqualSameNil(c.ServeIPSets, c2.ServeIPSets) &&
+		slicesx.EqualSameNil(c.Attrs, c2.Attrs)
 }
 
 // HasCap reports whether the node has the given capability.
@@ -2440,7 +2504,9 @@ func (n *Node) Equal(n2 *Node) bool {
 		eqPtr(n.SelfNodeV4MasqAddrForThisPeer, n2.SelfNodeV4MasqAddrForThisPeer) &&
 		eqPtr(n.SelfNodeV6MasqAddrForThisPeer, n2.SelfNodeV6MasqAddrForThisPeer) &&
 		n.IsWireGuardOnly == n2.IsWireGuardOnly &&
-		n.IsJailed == n2.IsJailed
+		n.IsJailed == n2.IsJailed &&
+		n.BlueprintID == n2.BlueprintID &&
+		n.BlueprintConfig.Equal(n2.BlueprintConfig)
 }
 
 func eqPtr[T comparable](a, b *T) bool {

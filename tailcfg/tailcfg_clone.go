@@ -80,6 +80,7 @@ func (src *Node) Clone() *Node {
 			}
 		}
 	}
+	dst.BlueprintConfig = src.BlueprintConfig.Clone()
 	return dst
 }
 
@@ -121,6 +122,8 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	IsWireGuardOnly               bool
 	IsJailed                      bool
 	ExitNodeDNSResolvers          []*dnstype.Resolver
+	BlueprintID                   string
+	BlueprintConfig               *BlueprintConfig
 }{})
 
 // Clone makes a deep copy of Hostinfo.
@@ -689,9 +692,32 @@ var _SSHPolicyCloneNeedsRegeneration = SSHPolicy(struct {
 	Rules []*SSHRule
 }{})
 
+// Clone makes a deep copy of BlueprintConfig.
+// The result aliases no memory with the original.
+func (src *BlueprintConfig) Clone() *BlueprintConfig {
+	if src == nil {
+		return nil
+	}
+	dst := new(BlueprintConfig)
+	*dst = *src
+	dst.Tags = append(src.Tags[:0:0], src.Tags...)
+	dst.ServeApps = append(src.ServeApps[:0:0], src.ServeApps...)
+	dst.ServeIPSets = append(src.ServeIPSets[:0:0], src.ServeIPSets...)
+	dst.Attrs = append(src.Attrs[:0:0], src.Attrs...)
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _BlueprintConfigCloneNeedsRegeneration = BlueprintConfig(struct {
+	Tags        []string
+	ServeApps   []string
+	ServeIPSets []string
+	Attrs       []string
+}{})
+
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService,SSHPolicy.
+// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService,SSHPolicy,BlueprintConfig.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *User:
@@ -880,6 +906,15 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **SSHPolicy:
+			*dst = src.Clone()
+			return true
+		}
+	case *BlueprintConfig:
+		switch dst := dst.(type) {
+		case *BlueprintConfig:
+			*dst = *src.Clone()
+			return true
+		case **BlueprintConfig:
 			*dst = src.Clone()
 			return true
 		}
