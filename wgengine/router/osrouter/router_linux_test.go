@@ -562,6 +562,10 @@ type fakeIPTablesRunner struct {
 	ipt4 map[string][]string
 	ipt6 map[string][]string
 	// we always assume ipv6 and ipv6 nat are enabled when testing
+
+	addChainsErr          error // if non-nil, AddChains returns it instead of setting up chains
+	addConnmarkSaveCalls  int
+	addExternalCGNATCalls int
 }
 
 func newIPTablesRunner(t *testing.T) linuxfw.NetfilterRunner {
@@ -794,6 +798,9 @@ func (n *fakeIPTablesRunner) DelHooks(logf logger.Logf) error {
 }
 
 func (n *fakeIPTablesRunner) AddChains() error {
+	if n.addChainsErr != nil {
+		return n.addChainsErr
+	}
 	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
 		for _, chain := range []string{"filter/ts-input", "filter/ts-forward", "nat/ts-postrouting"} {
 			ipt[chain] = nil
@@ -922,6 +929,7 @@ func (n *fakeIPTablesRunner) DelMagicsockPortRule(port uint16, network string) e
 }
 
 func (n *fakeIPTablesRunner) AddConnmarkSaveRule() error {
+	n.addConnmarkSaveCalls++
 	// PREROUTING rule: restore mark from conntrack
 	prerouteRule := "-m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark --nfmask 0xff0000 --ctmask 0xff0000"
 	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
@@ -970,6 +978,7 @@ func buildExternalCGNATRules(mode linuxfw.CGNATMode, tunname string) ([]iptRule,
 }
 
 func (n *fakeIPTablesRunner) AddExternalCGNATRules(mode linuxfw.CGNATMode, tunname string) error {
+	n.addExternalCGNATCalls++
 	rules, err := buildExternalCGNATRules(mode, tunname)
 	if err != nil {
 		return err
@@ -1548,5 +1557,55 @@ func TestUpdateMagicsockPortChange(t *testing.T) {
 	if hasOldRule {
 		t.Errorf("firewall rule for OLD port 12345 still exists (should be deleted).\nFound: %s\nAll rules: %v",
 			oldPortRule, nfr.ipt4["filter/ts-input"])
+	}
+}
+
+// TestSetSkipsNetfilterAddonsWhenSetupFails verifies that Set does not invoke
+// rule-management methods that depend on the ts-* chains existing when chain
+// setup failed.
+func TestSetSkipsNetfilterAddonsWhenSetupFails(t *testing.T) {
+	nfr := newIPTablesRunner(t).(*fakeIPTablesRunner)
+	nfr.addChainsErr = errors.New("kernel lacks netfilter support")
+
+	bus := eventbus.New()
+	defer bus.Close()
+	mon, err := netmon.New(bus, logger.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mon.Start()
+	defer mon.Close()
+
+	fake := NewFakeOS(t)
+	ht := health.NewTracker(bus)
+	r, err := newUserspaceRouterAdvanced(logger.Discard, "tailscale0", mon, fake, ht, bus)
+	if err != nil {
+		t.Fatalf("newUserspaceRouterAdvanced: %v", err)
+	}
+	lr := r.(*linuxRouter)
+	lr.nfr = nfr
+	if err := lr.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	defer lr.Close()
+
+	cfg := &Config{
+		LocalAddrs:    mustCIDRs("100.101.102.103/10"),
+		NetfilterMode: netfilterOn,
+	}
+	// Set must return an error (chain setup failed) but must not panic.
+	if err := lr.Set(cfg); err == nil {
+		t.Fatal("Set returned nil; want error because AddChains failed")
+	}
+	if lr.netfilterMode != netfilterOff {
+		t.Errorf("netfilterMode = %v; want netfilterOff after failed AddChains", lr.netfilterMode)
+	}
+	if nfr.addConnmarkSaveCalls != 0 {
+		t.Errorf("AddConnmarkSaveRule called %d times; want 0 when chain setup failed",
+			nfr.addConnmarkSaveCalls)
+	}
+	if nfr.addExternalCGNATCalls != 0 {
+		t.Errorf("AddExternalCGNATRules called %d times; want 0 when chain setup failed",
+			nfr.addExternalCGNATCalls)
 	}
 }
