@@ -6,7 +6,7 @@ package helloserver
 
 import (
 	"crypto/tls"
-	_ "embed"
+	"embed"
 	"html/template"
 	"log"
 	"net/http"
@@ -20,6 +20,11 @@ import (
 
 //go:embed hello.tmpl.html
 var embeddedTemplate string
+
+//go:embed static/*
+var staticFiles embed.FS
+
+var staticHandler = http.FileServerFS(staticFiles)
 
 var tmpl = template.Must(template.New("home").Parse(embeddedTemplate))
 
@@ -116,6 +121,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "https://"+host, http.StatusFound)
 		return
 	}
+
+	if strings.HasPrefix(r.RequestURI, "/static/") {
+		staticHandler.ServeHTTP(w, r)
+		return
+	}
+
 	if r.RequestURI != "/" {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
