@@ -81,7 +81,8 @@ func (e *Extension) Shutdown() error {
 }
 
 func (e *Extension) onNetMapToggle(nm *netmap.NetworkMap) {
-	if nm := e.nm.NetMapNoPeers(); nm != nil {
-		e.Client.NetMapAvailable(nm)
+	if nm == nil {
+		return
 	}
+	e.Client.NetMapAvailable(nm)
 }
