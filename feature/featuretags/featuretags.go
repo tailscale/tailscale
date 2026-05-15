@@ -237,7 +237,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	},
 	"routecheck": {
 		Sym:  "RouteCheck",
-		Desc: "Support checking the reachability of overlapping routers",
+		Desc: "Support checking the reachability of overlapping routers, for choosing between multiple network paths to the same IP address",
 	},
 	"sdnotify": {
 		Sym:  "SDNotify",
