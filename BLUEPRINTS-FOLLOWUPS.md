@@ -16,4 +16,23 @@ Things explicitly out of scope for v1. Added here whenever the v1 implementation
 
 ## Surfaced during v1 build
 
-(Add items as they come up, with one-line rationale.)
+* **`tailscale leave` does not blocking-wait for server-side reaping.**
+  Today the client logs out and exits; the control plane reaps the
+  registration via the ephemeral-node reaper, which can take a few
+  minutes. Operators running scripted teardown may want a synchronous
+  wait. Track for v1.1.
+* **No GUI client surface.** The macOS/iOS/Windows clients don't
+  display the bound-blueprint indicator. v1 is CLI-only by design,
+  but the `tailcfg.Node.BlueprintID` field is on the wire so GUIs can
+  add it whenever.
+* **`tailscale set` rejection is CLI-only.** A caller hitting LocalAPI
+  EditPrefs directly can still flip blueprint-owned fields. LocalAPI
+  is loopback-only so the threat is "local root" rather than "remote
+  attacker", but we may want to push the check into the daemon for
+  defense in depth. Tracked for v1.1.
+* **Client metric labels.** `clientmetric` doesn't support labels, so
+  blueprint_join_attempts{result} is implemented as four flat
+  counters on the corp side and as a pair of (success, failure)
+  counters on the client. The fine-grained client-side breakdown
+  would require either teaching `clientmetric` about labels or
+  introducing several more counters.
