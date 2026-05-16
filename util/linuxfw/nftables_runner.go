@@ -417,7 +417,7 @@ func (e errorChainNotFound) Error() string {
 // Note that a chain name is unique within a table.
 func getChainFromTable(c *nftables.Conn, table *nftables.Table, name string) (*nftables.Chain, error) {
 	if table == nil {
-		return nil, errors.New("nil table")
+		return nil, fmt.Errorf("could not get chain %q: table not initialized", name)
 	}
 	chains, err := c.ListChainsOfTableFamily(table.Family)
 	if err != nil {
