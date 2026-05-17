@@ -9,64 +9,96 @@ import (
 	"cmp"
 	"crypto/sha256"
 	"encoding/binary"
+	"iter"
+	"maps"
 	"slices"
 
 	"tailscale.com/tailcfg"
-	"tailscale.com/util/mak"
 )
+
+// Score is a node’s traffic score.
+type Score int
 
 // Scores is a memoization cache for the traffic scores of the current node’s peers.
 // A higher traffic score suggests that the client should prefer that peer
 // over one with a lower traffic score. Any int could be a valid score.
-type Scores map[tailcfg.NodeID]int
+type Scores struct {
+	self tailcfg.NodeID
+	hash NodeHasher
 
-// ScorePeers scores the peer nodes and returns the cache that memoized these scores.
-func ScorePeers(peers []tailcfg.NodeView) Scores {
-	if len(peers) == 0 {
-		return nil
+	scores map[tailcfg.NodeID]Score
+}
+
+// ScoresFor returns a new [Scores] cache for the current node’s ID,
+// after scoring the peer nodes and adding these scores to the cache.
+func ScoresFor(self tailcfg.NodeID, peers []tailcfg.NodeView) Scores {
+	ss := Scores{
+		self: self,
+		hash: MakeRendezvousHasher(self),
 	}
-	ss := make(Scores, len(peers))
-	for _, n := range peers {
-		ss.Add(n)
-	}
+	ss.ScorePeers(peers)
 	return ss
+}
+
+// IsValid reports whether ss has been initialized with the current node ID.
+func (ss Scores) IsValid() bool {
+	return !ss.self.IsZero()
+}
+
+// Score scores the given peer node and returns it after adding the score to the cache.
+func (ss *Scores) Score(n tailcfg.NodeView) Score {
+	if ss.scores == nil {
+		ss.scores = make(map[tailcfg.NodeID]Score)
+	}
+	return ss.add(n)
+}
+
+// ScorePeers scores the peer nodes and adds these scores to the cache.
+func (ss *Scores) ScorePeers(peers []tailcfg.NodeView) {
+	if len(peers) == 0 {
+		return
+	}
+	if ss.scores == nil {
+		ss.scores = make(map[tailcfg.NodeID]Score, len(peers))
+	}
+	for _, n := range peers {
+		ss.add(n)
+	}
+}
+
+// All returns an iterator over the scores for every peer in the cache.
+// The iteration order is not specified and is not guaranteed to be the same
+// from one call to the next.
+func (ss Scores) All() iter.Seq2[tailcfg.NodeID, Score] {
+	return maps.All(ss.scores)
 }
 
 // Add scores the given peer node and returns it after adding the score to the cache.
 // It also reports whether the score had to be added because it was missing.
-func (ss *Scores) Add(n tailcfg.NodeView) (score int, added bool) {
+func (ss *Scores) add(n tailcfg.NodeView) Score {
 	id := n.ID()
-	if s, ok := (*ss)[id]; ok {
-		return s, false
+	if s, ok := ss.scores[id]; ok {
+		return s
 	}
 
-	var s int
+	var s Score
 	if hi := n.Hostinfo(); hi.Valid() {
 		if loc := hi.Location(); loc.Valid() {
-			s = loc.Priority()
+			s = Score(loc.Priority())
 		}
 	}
-	mak.Set(ss, id, s)
-	return s, true
-}
-
-// Score scores the given peer node and returns it after adding the score to the cache.
-func (ss *Scores) Score(n tailcfg.NodeView) int {
-	s, _ := ss.Add(n)
+	ss.scores[id] = s // Precondition: caller must ensure this map exists.
 	return s
 }
 
 // SortNodes sorts the slice of nodes in descending order of [Scores.Score],
-// using the tiebreak function to break ties when both nodes have the same score.
+// using rendezvous hashing to break ties when both nodes have the same score.
 // After sorting, the zeroth element is the preferred node.
-//
-// tiebreak(a, b) should return a negative number when a < b and a positive number when a > b;
-// it should never return zero to guarantee a stable ordering.
-func (ss Scores) SortNodes(nodes []tailcfg.NodeView, tiebreak func(a, b tailcfg.NodeView) int) {
+func (ss Scores) SortNodes(nodes []tailcfg.NodeView) {
 	slices.SortFunc(nodes, func(a, b tailcfg.NodeView) int {
 		c := cmp.Compare(ss.Score(b), ss.Score(a)) // Highest score first.
 		if c == 0 {
-			return tiebreak(b, a) // Highest tiebreak first.
+			return ss.hash.Compare(b.ID(), a.ID()) // Descending order.
 		}
 		return c
 	})

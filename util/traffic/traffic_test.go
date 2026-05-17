@@ -4,6 +4,7 @@
 package traffic_test
 
 import (
+	"maps"
 	"testing"
 
 	gocmp "github.com/google/go-cmp/cmp"
@@ -11,15 +12,18 @@ import (
 	"tailscale.com/util/traffic"
 )
 
+// WantScores is a convenience alias for the type of [traffic.Score.scores].
+type wantScores = map[tailcfg.NodeID]traffic.Score
+
 var scoresCases = []struct {
 	name  string
 	peers []*tailcfg.Node
-	want  traffic.Scores
+	want  wantScores
 }{
 	{
 		name:  "none",
 		peers: nil,
-		want:  nil,
+		want:  wantScores{},
 	},
 	{
 		name: "no-scores",
@@ -27,7 +31,7 @@ var scoresCases = []struct {
 			{ID: 37},
 			{ID: 42},
 		},
-		want: traffic.Scores{
+		want: wantScores{
 			37: 0,
 			42: 0,
 		},
@@ -43,21 +47,33 @@ var scoresCases = []struct {
 				}).View(),
 			},
 		},
-		want: traffic.Scores{
+		want: wantScores{
 			37: 0,
 			42: 1,
 		},
 	},
 }
 
-func TestScorePeers(t *testing.T) {
+func TestScoreOne(t *testing.T) {
 	for _, tc := range scoresCases {
+		if len(tc.peers) == 0 {
+			continue
+		}
 		t.Run(tc.name, func(t *testing.T) {
-			var peers []tailcfg.NodeView
+			selfID := tailcfg.NodeID(1)
+			ss := traffic.ScoresFor(selfID, nil)
 			for _, n := range tc.peers {
-				peers = append(peers, n.View())
+				want := tc.want[n.ID]
+				score := ss.Score(n.View())
+				if score != want {
+					t.Errorf("initial Score for nodeid:%d: score %d, want %d", n.ID, score, want)
+				}
+				score = ss.Score(n.View())
+				if score != want {
+					t.Errorf("subsequent Score for nodeid:%d: score %d, want %d", n.ID, score, want)
+				}
 			}
-			got := traffic.ScorePeers(peers)
+			got := maps.Collect(ss.All())
 			if diff := gocmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("-want +got:\n%s", diff)
 			}
@@ -65,42 +81,29 @@ func TestScorePeers(t *testing.T) {
 	}
 }
 
-func TestScoresAdd(t *testing.T) {
+func TestScoreMany(t *testing.T) {
 	for _, tc := range scoresCases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Run("Add", func(t *testing.T) {
-				var ss traffic.Scores
-				for _, n := range tc.peers {
-					want := tc.want[n.ID]
-					score, added := ss.Add(n.View())
-					if score != want || !added {
-						t.Errorf("initial Add for nodeid:%d: score %d, want %d; added %t, want true", n.ID, score, want, added)
-					}
-					score, added = ss.Add(n.View())
-					if score != want || added {
-						t.Errorf("subsequent Add for nodeid:%d: score %d, want %d; added %t, want false", n.ID, score, want, added)
-					}
-				}
-				if diff := gocmp.Diff(tc.want, ss); diff != "" {
-					t.Errorf("-want +ss:\n%s", diff)
+			selfID := tailcfg.NodeID(1)
+			var peers []tailcfg.NodeView
+			for _, n := range tc.peers {
+				peers = append(peers, n.View())
+			}
+
+			t.Run("ScoresFor", func(t *testing.T) {
+				ss := traffic.ScoresFor(selfID, peers)
+				got := maps.Collect(ss.All())
+				if diff := gocmp.Diff(tc.want, got); diff != "" {
+					t.Errorf("-want +got:\n%s", diff)
 				}
 			})
 
-			t.Run("Score", func(t *testing.T) {
-				var ss traffic.Scores
-				for _, n := range tc.peers {
-					want := tc.want[n.ID]
-					score := ss.Score(n.View())
-					if score != want {
-						t.Errorf("initial Score for nodeid:%d: score %d, want %d", n.ID, score, want)
-					}
-					score = ss.Score(n.View())
-					if score != want {
-						t.Errorf("subsequent Score for nodeid:%d: score %d, want %d", n.ID, score, want)
-					}
-				}
-				if diff := gocmp.Diff(tc.want, ss); diff != "" {
-					t.Errorf("-want +ss:\n%s", diff)
+			t.Run("ScorePeers", func(t *testing.T) {
+				ss := traffic.ScoresFor(selfID, nil)
+				ss.ScorePeers(peers)
+				got := maps.Collect(ss.All())
+				if diff := gocmp.Diff(tc.want, got); diff != "" {
+					t.Errorf("-want +got:\n%s", diff)
 				}
 			})
 		})

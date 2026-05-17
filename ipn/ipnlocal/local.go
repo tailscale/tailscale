@@ -8132,20 +8132,14 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcf
 		return true
 	})
 
-	ss := traffic.ScorePeers(nodes)
-	rdvHash := traffic.MakeRendezvousHasher(self.ID())
+	ss := traffic.ScoresFor(self.ID(), nodes)
 
 	var pick tailcfg.NodeView
 	if len(nodes) == 1 {
 		pick = nodes[0]
 	}
 	if len(nodes) > 1 {
-		ss.SortNodes(nodes, func(a, b tailcfg.NodeView) int {
-			// Break ties using rendezvous hashing,
-			// which reliably picks the same node from a list:
-			// tailscale/tailscale#16551.
-			return rdvHash.Compare(a.ID(), b.ID())
-		})
+		ss.SortNodes(nodes)
 
 		// TODO(sfllaw): add a temperature knob so that this client has
 		// a chance of picking the next best option.
