@@ -37,11 +37,12 @@ var metricBlueprintBound = clientmetric.NewGauge("cli_blueprint_bound")
 // node-local concerns the blueprint has no opinion on (hostname,
 // state-dir, operator, ssh).
 type joinArgsT struct {
-	blueprint string
-	authKey   string
-	hostname  string
-	opUser    string
-	runSSH    bool
+	blueprint   string
+	authKey     string
+	loginServer string
+	hostname    string
+	opUser      string
+	runSSH      bool
 }
 
 var joinArgs joinArgsT
@@ -52,6 +53,7 @@ func newJoinFlagSet(a *joinArgsT) *flag.FlagSet {
 	fs := newFlagSet("join")
 	fs.StringVar(&a.blueprint, "blueprint", "", `Blueprint to bind this node to, e.g. "bp:github-connector"`)
 	fs.StringVar(&a.authKey, "auth-key", "", "OAuth client secret paired with the blueprint")
+	fs.StringVar(&a.loginServer, "login-server", "", "base URL of the control server, e.g. http://localhost:31544 for a local devcontrol; defaults to the daemon's currently-configured URL (or controlplane.tailscale.com)")
 	fs.StringVar(&a.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 	fs.StringVar(&a.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
 	fs.BoolVar(&a.runSSH, "ssh", false, "run a Tailscale SSH server, permitting access per tailnet admin's declared policy")
@@ -142,6 +144,9 @@ func runJoin(ctx context.Context, args []string, ja *joinArgsT) (retErr error) {
 
 	prefs := ipn.NewPrefs()
 	prefs.BlueprintID = id
+	if ja.loginServer != "" {
+		prefs.ControlURL = ja.loginServer
+	}
 	if ja.hostname != "" {
 		prefs.Hostname = ja.hostname
 	}
