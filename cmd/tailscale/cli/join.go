@@ -13,6 +13,7 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
 )
 
@@ -159,9 +160,14 @@ func runJoin(ctx context.Context, args []string, ja *joinArgsT) (retErr error) {
 	authKey := ja.authKey
 	if f, ok := tailscale.HookResolveAuthKey.GetOk(); ok {
 		// The OAuth-client-secret -> auth-key exchange. The exchange
-		// itself validates the secret against the blueprint's paired
-		// client server-side.
-		authKey, err = f(ctx, ja.authKey, prefs.AdvertiseTags)
+		// validates the secret against the blueprint's paired client
+		// server-side, which is itself scoped to "tag:bp//<id>"; we
+		// synthesize that tag from the blueprint id here so the hook,
+		// which requires a non-empty tag set, accepts the request
+		// without --advertise-tags (a flag join intentionally does
+		// not expose, because the blueprint owns the node's tags).
+		bpTag := "tag:" + tailcfg.BlueprintTagNamespacePrefix + id
+		authKey, err = f(ctx, ja.authKey, []string{bpTag})
 		if err != nil {
 			return fmt.Errorf("exchanging OAuth client secret for auth key: %w", err)
 		}
