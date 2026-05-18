@@ -26,6 +26,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
+	"tailscale.com/tstest"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -428,7 +429,7 @@ func TestReserveIPs(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			addrs, err := c.client.reserveAddresses(appName, domain, tt.dst)
+			addrs, err := c.client.reserveAddresses(appName, domain, tt.dst, 10)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1122,6 +1123,93 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 	}
 }
 
+func TestMapDNSResponseSetsExpiryBasedOnTTL(t *testing.T) {
+	configuredDomain := "example.com"
+	domainName := configuredDomain + "."
+	dnsMessageName := dnsmessage.MustNewName(domainName)
+	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+		Name:            "app1",
+		Connectors:      []string{"tag:woo"},
+		Domains:         []string{configuredDomain},
+		V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10")},
+		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
+		V6MagicIPPool:   []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6812:100"), netip.MustParseAddr("2606:4700::6812:1ff"))},
+		V6TransitIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6813:100"), netip.MustParseAddr("2606:4700::6813:1ff"))},
+	}}, nil)
+
+	c := newConn25(logger.Discard)
+	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
+	c.client.assignments.clock = clock
+	cfg := mustConfig(t, sn)
+	c.reconfig(cfg)
+
+	ipOne := netip.MustParseAddr("1.0.0.1")
+	ipTwo := netip.MustParseAddr("1.0.0.2")
+	ipTooBig := netip.MustParseAddr("1.0.0.3")
+	ipTooSmall := netip.MustParseAddr("1.0.0.4")
+	dnsResp := makeDNSResponseForSections(t,
+		[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+		[]dnsmessage.Resource{
+			{
+				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 300},
+				Body:   &dnsmessage.AResource{A: ipOne.As4()},
+			},
+			{
+				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 60},
+				Body:   &dnsmessage.AResource{A: ipTwo.As4()},
+			},
+			{
+				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 1000000},
+				Body:   &dnsmessage.AResource{A: ipTooBig.As4()},
+			},
+			{
+				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 1},
+				Body:   &dnsmessage.AResource{A: ipTooSmall.As4()},
+			},
+		},
+		nil,
+	)
+	c.mapDNSResponse(dnsResp)
+
+	assertExpiresAt := func(addr netip.Addr, want time.Time) {
+		t.Helper()
+		as, ok := c.client.assignments.lookupByDomainDst("example.com.", addr)
+		if !ok {
+			t.Fatal("setup wrong expected to find addrs")
+		}
+		got := as.expiresAt
+		if !got.Equal(want) {
+			t.Fatalf("want %v; got %v", want, got)
+		}
+	}
+
+	assertExpiresAt(ipOne, clock.Now().Add(300*time.Second))
+	assertExpiresAt(ipTwo, clock.Now().Add(60*time.Second))
+	assertExpiresAt(ipTooBig, clock.Now().Add(72*time.Hour))     // max we will do is 72 hours
+	assertExpiresAt(ipTooSmall, clock.Now().Add(60*time.Second)) // min we will do is 1 min
+
+	ipThree := netip.MustParseAddr("::1")
+	ipFour := netip.MustParseAddr("::2")
+	dnsRespV6 := makeDNSResponseForSections(t,
+		[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET}},
+		[]dnsmessage.Resource{
+			{
+				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET, TTL: 301},
+				Body:   &dnsmessage.AAAAResource{AAAA: ipThree.As16()},
+			},
+			{
+				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET, TTL: 61},
+				Body:   &dnsmessage.AAAAResource{AAAA: ipFour.As16()},
+			},
+		},
+		nil,
+	)
+	c.mapDNSResponse(dnsRespV6)
+
+	assertExpiresAt(ipThree, clock.Now().Add(301*time.Second))
+	assertExpiresAt(ipFour, clock.Now().Add(61*time.Second))
+}
+
 func TestNormalizedDNSNames(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1168,12 +1256,12 @@ func TestReserveAddressesDeduplicated(t *testing.T) {
 			c.v4TransitIPPool = newIPPool(mustIPSetFromPrefix("169.254.0.0/24"))
 			c.v6TransitIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0200::/80"))
 
-			first, err := c.reserveAddresses(appName, "example.com.", tt.dst)
+			first, err := c.reserveAddresses(appName, "example.com.", tt.dst, 10)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			second, err := c.reserveAddresses(appName, "example.com.", tt.dst)
+			second, err := c.reserveAddresses(appName, "example.com.", tt.dst, 10)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2414,18 +2502,18 @@ func TestReconfigDoesNotReissueInUseAddresses(t *testing.T) {
 				conn25: c,
 			}
 
-			_, err := c.client.reserveAddresses(appName, domain, tt.dstOne)
+			_, err := c.client.reserveAddresses(appName, domain, tt.dstOne, 10)
 			if !errors.Is(err, errUninitializedIPPool) {
 				t.Fatalf("want %v, got %v", errUninitializedIPPool, err)
 			}
 
 			ext.onSelfChange(makeNodeFromMagicRange(beforeRangeV4, beforeRangeV6))
-			beforeAddrs, err := c.client.reserveAddresses(appName, domain, tt.dstOne)
+			beforeAddrs, err := c.client.reserveAddresses(appName, domain, tt.dstOne, 10)
 			if err != nil {
 				t.Fatal(err)
 			}
 			ext.onSelfChange(makeNodeFromMagicRange(afterRangeV4, afterRangeV6))
-			afterAddrs, err := c.client.reserveAddresses(appName, domain, tt.dstTwo)
+			afterAddrs, err := c.client.reserveAddresses(appName, domain, tt.dstTwo, 10)
 			if err != nil {
 				t.Fatal(err)
 			}
