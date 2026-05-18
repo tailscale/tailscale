@@ -6717,6 +6717,64 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 			b.discardDiskCacheLocked()
 		}
 	}
+
+	// For blueprint-bound nodes, the control plane sends the
+	// blueprint's projected AdvertiseRoutes inside Node.BlueprintConfig.
+	// Reconcile our local prefs against that projection so the next
+	// Hostinfo we send back upstream reports the right RoutableIPs.
+	// tailscale set --advertise-routes is rejected on bound nodes (see
+	// cmd/tailscale/cli/blueprint_lock.go) so overwriting prefs here
+	// does not stomp on user intent.
+	b.reconcileBlueprintRoutesLocked(nm)
+}
+
+// reconcileBlueprintRoutesLocked syncs Prefs.AdvertiseRoutes with the
+// BlueprintConfig.Routes carried by the netmap's SelfNode for a
+// blueprint-bound node. It is a no-op for non-bound nodes or when the
+// routes already match. On a change it persists the new prefs,
+// refreshes Hostinfo, and asks controlclient to push the updated
+// Hostinfo so the route advertisement reaches the server without
+// waiting for the next external prefs edit.
+//
+// b.mu must be held.
+func (b *LocalBackend) reconcileBlueprintRoutesLocked(nm *netmap.NetworkMap) {
+	if nm == nil || !nm.SelfNode.Valid() {
+		return
+	}
+	cfg := nm.SelfNode.BlueprintConfig()
+	if !cfg.Valid() {
+		return
+	}
+	want := cfg.Routes().AsSlice()
+	cur := b.pm.CurrentPrefs()
+	if slicesEqualPrefixes(cur.AdvertiseRoutes().AsSlice(), want) {
+		return
+	}
+	newp := cur.AsStruct()
+	newp.AdvertiseRoutes = append([]netip.Prefix(nil), want...)
+	b.logf("blueprint %q: reconciled AdvertiseRoutes from BlueprintConfig (%d route(s))",
+		cur.BlueprintID(), len(want))
+	if err := b.pm.SetPrefs(newp.View(), b.pm.CurrentProfile().NetworkProfile()); err != nil {
+		b.logf("blueprint reconcile: persist prefs: %v", err)
+		return
+	}
+	if b.hostinfo == nil {
+		b.hostinfo = new(tailcfg.Hostinfo)
+	}
+	b.applyPrefsToHostinfoLocked(b.hostinfo, newp.View())
+	b.goTracker.Go(b.doSetHostinfoFilterServices)
+}
+
+func slicesEqualPrefixes(a, b []netip.Prefix) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 var hookSetNetMapLockedDrive feature.Hook[func(*LocalBackend, *netmap.NetworkMap)]
