@@ -69,6 +69,33 @@ func TestResolverEqual(t *testing.T) {
 			want: false,
 		},
 		{
+			// nil and an explicitly-empty slice are distinct on the wire:
+			// nil means "fall back to the client's own resolution" while
+			// an empty list means "skip the client's static-IP fallback".
+			name: "not-equal-bootstrap-nil-vs-empty",
+			a: &Resolver{
+				Addr:                "dns.example.com",
+				BootstrapResolution: nil,
+			},
+			b: &Resolver{
+				Addr:                "dns.example.com",
+				BootstrapResolution: []netip.Addr{},
+			},
+			want: false,
+		},
+		{
+			name: "equal-bootstrap-both-empty",
+			a: &Resolver{
+				Addr:                "dns.example.com",
+				BootstrapResolution: []netip.Addr{},
+			},
+			b: &Resolver{
+				Addr:                "dns.example.com",
+				BootstrapResolution: []netip.Addr{},
+			},
+			want: true,
+		},
+		{
 			name: "equal-UseWithExitNode",
 			a:    &Resolver{Addr: "dns.example.com", UseWithExitNode: true},
 			b:    &Resolver{Addr: "dns.example.com", UseWithExitNode: true},

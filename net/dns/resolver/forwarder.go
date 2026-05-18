@@ -19,6 +19,7 @@ import (
 	"net/netip"
 	"net/url"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -311,7 +312,11 @@ type forwarder struct {
 
 	mu syncs.Mutex // guards following
 
-	dohClient map[string]*http.Client // urlBase -> client
+	// dohClient caches HTTP clients used to dial DoH resolvers.
+	// The cached entry records the IPs the client was built with so the
+	// entry is discarded if a later config provides different IPs for
+	// the same URL.
+	dohClient map[string]dohClientEntry // urlBase -> entry
 
 	// routes are per-suffix resolvers to use, with
 	// the most specific routes first.
@@ -512,31 +517,76 @@ func (f *forwarder) packetListener(ip netip.Addr) (nettype.PacketListenerWithNet
 	return nettype.MakePacketListenerWithNetIP(lc), nil
 }
 
-// getKnownDoHClientForProvider returns an HTTP client for a specific DoH
-// provider named by its DoH base URL (like "https://dns.google/dns-query").
+// dohClientEntry is a cached HTTP client for a DoH resolver, tagged with
+// the IPs it was built with so the cache can be invalidated if a later
+// config provides different IPs for the same URL.
+type dohClientEntry struct {
+	c   *http.Client
+	ips []netip.Addr
+}
+
+// getDoHClient returns an HTTP client to dial the DoH resolver at urlBase.
+// The only failure mode is urlBase failing to parse.
 //
-// The returned client race/Happy Eyeballs dials all IPs for urlBase (usually
-// 4), as statically known by the publicdns package.
-func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client, ok bool) {
+// The IPs used to dial come from one of three sources, in priority order:
+//
+//  1. bootstrap, when non-nil. Typically supplied via
+//     [dnstype.Resolver.BootstrapResolution]. When non-empty those IPs are
+//     dialed; when explicitly empty (non-nil but len 0) the client skips
+//     publicdns and falls through to dial-time resolution.
+//  2. The publicdns package, when urlBase is a well-known DoH provider
+//     (e.g. https://dns.google/dns-query) and bootstrap was nil.
+//  3. Resolved at dial time by [tsdial.Dialer.UserDial]: in-memory MagicDNS
+//     first (so tailnet hostnames like https://coredns.foo.ts.net work
+//     without configuration), then the system resolver. UserDial routes
+//     Tailscale-internal addresses through the peer dialer automatically.
+//
+// In cases 1 (non-empty) and 2 the returned client race/Happy Eyeballs
+// dials all of the IPs in parallel. In case 3, system DNS may return
+// multiple IPs and the same race applies; a MagicDNS hit is single-IP per
+// tailnet name and only that address is dialed.
+//
+// Cached clients are invalidated when the effective IPs change for the
+// same URL.
+func (f *forwarder) getDoHClient(urlBase string, bootstrap []netip.Addr) (c *http.Client, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if c, ok := f.dohClient[urlBase]; ok {
-		return c, true
+
+	// bootstrap takes precedence when set at all. nil means "fall back to
+	// publicdns"; an explicitly empty list means "skip publicdns" and is
+	// preserved as a len-0 slice so the static-IP branch below is bypassed.
+	ips := bootstrap
+	if ips == nil {
+		ips = publicdns.DoHIPsOfBase(urlBase)
 	}
-	allIPs := publicdns.DoHIPsOfBase(urlBase)
-	if len(allIPs) == 0 {
-		return nil, false
-	}
-	dohURL, err := url.Parse(urlBase)
-	if err != nil {
-		return nil, false
+	if len(ips) == 0 {
+		metricDNSFwdDoHAutoResolve.Add(1)
 	}
 
-	dialer := dnscache.Dialer(f.getDialerType(), &dnscache.Resolver{
-		SingleHost:             dohURL.Hostname(),
-		SingleHostStaticResult: allIPs,
-		Logf:                   f.logf,
-	})
+	if ent, ok := f.dohClient[urlBase]; ok && slices.Equal(ent.ips, ips) {
+		return ent.c, nil
+	}
+
+	dohURL, err := url.Parse(urlBase)
+	if err != nil {
+		return nil, fmt.Errorf("parsing DoH URL %q: %w", urlBase, err)
+	}
+
+	var dialer netx.DialFunc
+	if len(ips) > 0 {
+		// Static-IP path: known provider or caller-supplied bootstrap.
+		dialer = dnscache.Dialer(f.getDialerType(), &dnscache.Resolver{
+			SingleHost:             dohURL.Hostname(),
+			SingleHostStaticResult: ips,
+			Logf:                   f.logf,
+		})
+	} else {
+		// Auto-resolve path: UserDial handles MagicDNS, system DNS, and
+		// tailnet-aware routing in one step.
+		f.logf("doh: building auto-resolve client for %q", urlBase)
+		dialer = f.dialer.UserDial
+	}
+
 	tlsConfig := &tls.Config{
 		// Enforce TLS 1.3, as all of our supported DNS-over-HTTPS servers are compatible with it
 		// (see tailscale.com/net/dns/publicdns/publicdns.go).
@@ -559,11 +609,8 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 			TLSClientConfig: tlsConfig,
 		},
 	}
-	if f.dohClient == nil {
-		f.dohClient = map[string]*http.Client{}
-	}
-	f.dohClient[urlBase] = c
-	return c, true
+	mak.Set(&f.dohClient, urlBase, dohClientEntry{c: c, ips: ips})
+	return c, nil
 }
 
 const dohType = "application/dns-message"
@@ -641,24 +688,19 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		return res, nil
 	}
 	if strings.HasPrefix(rr.name.Addr, "https://") {
-		// Only known DoH providers are supported currently. Specifically, we
-		// only support DoH providers where we can TCP connect to them on port
-		// 443 at the same IP address they serve normal UDP DNS from (1.1.1.1,
-		// 8.8.8.8, 9.9.9.9, etc.) That's why OpenDNS and custom DoH providers
-		// aren't currently supported. There's no backup DNS resolution path for
-		// them.
 		urlBase := rr.name.Addr
-		if hc, ok := f.getKnownDoHClientForProvider(urlBase); ok {
-			res, err := f.sendDoH(ctx, urlBase, hc, fq.packet)
-			if err != nil {
-				return nil, err
-			}
-			// Check response size and set TC flag if needed (only for UDP queries)
-			res = checkResponseSizeAndSetTC(res, fq.packet, fq.family, f.logf)
-			return res, nil
+		hc, err := f.getDoHClient(urlBase, rr.name.BootstrapResolution)
+		if err != nil {
+			metricDNSFwdErrorType.Add(1)
+			return nil, err
 		}
-		metricDNSFwdErrorType.Add(1)
-		return nil, fmt.Errorf("arbitrary https:// resolvers not supported yet")
+		res, err := f.sendDoH(ctx, urlBase, hc, fq.packet)
+		if err != nil {
+			return nil, err
+		}
+		// Check response size and set TC flag if needed (only for UDP queries)
+		res = checkResponseSizeAndSetTC(res, fq.packet, fq.family, f.logf)
+		return res, nil
 	}
 	if strings.HasPrefix(rr.name.Addr, "tls://") {
 		metricDNSFwdErrorType.Add(1)
