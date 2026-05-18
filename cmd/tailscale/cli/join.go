@@ -184,6 +184,16 @@ func runJoin(ctx context.Context, args []string, ja *joinArgsT) (retErr error) {
 	}); err != nil {
 		return fmt.Errorf("starting tailscale: %w", err)
 	}
+	// Start alone applies prefs and stores the auth key; the daemon
+	// then waits in NeedsLogin until something asks it to log in.
+	// tailscale up handles this by calling StartLoginInteractive when
+	// the daemon has no node key (see cmd/tailscale/cli/up.go). join
+	// is by definition a fresh registration -- the earlier status
+	// check refuses to run if BackendState is already Running -- so
+	// we always trigger the login here.
+	if err := localClient.StartLoginInteractive(ctx); err != nil {
+		return fmt.Errorf("kicking off blueprint join login: %w", err)
+	}
 
 	metricBlueprintJoinSuccess.Add(1)
 	metricBlueprintBound.Set(1)
