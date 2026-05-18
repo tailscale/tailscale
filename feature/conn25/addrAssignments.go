@@ -38,6 +38,14 @@ func (a *addrAssignments) insert(as *addrs) error {
 	return a.insertWithExpiry(as, defaultExpiry)
 }
 
+func (a *addrAssignments) insertFromTTL(as *addrs, ttl time.Duration) error {
+	const minTTL = time.Minute * 1
+	const maxTTL = time.Hour * 72
+	expiry := max(minTTL, ttl)
+	expiry = min(maxTTL, expiry)
+	return a.insertWithExpiry(as, expiry)
+}
+
 func (a *addrAssignments) insertWithExpiry(as *addrs, d time.Duration) error {
 	now := a.clock.Now()
 	if !as.expiresAt.IsZero() && !as.expiresAt.Before(now) {

@@ -748,7 +748,7 @@ func (cfg *config) getAppsForConnectorDomain(domain dnsname.FQDN, prefsAdvertise
 // the app name refers to a configured app.
 // It checks that this domain should be routed and that this client is not itself a connector for the domain
 // and generally if it is valid to make the assignment.
-func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip.Addr) (*addrs, error) {
+func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip.Addr, ttl time.Duration) (*addrs, error) {
 	if !dst.IsValid() {
 		return nil, errors.New("dst is not valid")
 	}
@@ -810,7 +810,7 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 		app:     appName,
 		domain:  domain,
 	}
-	if err := c.assignments.insert(as); err != nil {
+	if err := c.assignments.insertFromTTL(as, ttl); err != nil {
 		return nil, err
 	}
 	err = c.enqueueAddressAssignment(as)
@@ -952,6 +952,7 @@ func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) (tailcf
 type dnsResponseRewrite struct {
 	domain dnsname.FQDN
 	dst    netip.Addr
+	ttl    time.Duration
 }
 
 func makeServFail(logf logger.Logf, h dnsmessage.Header, q dnsmessage.Question) []byte {
@@ -1143,7 +1144,7 @@ func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 				}
 				dstAddr = netip.AddrFrom16(r.AAAA)
 			}
-			answers = append(answers, dnsResponseRewrite{domain: queriedDomain, dst: dstAddr})
+			answers = append(answers, dnsResponseRewrite{domain: queriedDomain, dst: dstAddr, ttl: time.Second * time.Duration(h.TTL)})
 		default:
 			// we already checked the question was for a supported type, this answer is unexpected
 			c.logf("unexpected type for connector domain dns response: %v %v", queriedDomain, h.Type)
@@ -1178,7 +1179,7 @@ func (c *client) rewriteDNSResponse(appName string, hdr dnsmessage.Header, quest
 
 	// make an answer for each rewrite
 	for _, rw := range answers {
-		as, err := c.reserveAddresses(appName, rw.domain, rw.dst)
+		as, err := c.reserveAddresses(appName, rw.domain, rw.dst, rw.ttl)
 		if err != nil {
 			return nil, err
 		}
