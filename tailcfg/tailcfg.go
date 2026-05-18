@@ -575,8 +575,19 @@ type BlueprintConfig struct {
 
 	// ServeIPSets is the list of "ipset:" identifiers from the
 	// blueprint's serves.ipsets field. Empty if the blueprint does not
-	// declare any ipset routes.
+	// declare any ipset routes. Kept on the wire for operator
+	// debugging (matching what they wrote in the ACL); Routes below
+	// is what the client actually acts on.
 	ServeIPSets []string `json:",omitempty"`
+
+	// Routes is the concrete list of CIDR prefixes derived by the
+	// control plane from ServeIPSets at projection time (each
+	// "ipset:foo" reference is resolved against the policy's
+	// top-level "ipSets" block and its prefixes appended). The
+	// blueprint-bound client uses these as the source of truth for
+	// its advertised subnet routes; user-set --advertise-routes is
+	// rejected on bound nodes (see blueprint_lock.go).
+	Routes []netip.Prefix `json:",omitempty"`
 
 	// Attrs is the list of nodeAttr identifiers granted by the
 	// blueprint's attrs field. Empty if the blueprint does not declare
@@ -595,6 +606,7 @@ func (c *BlueprintConfig) Equal(c2 *BlueprintConfig) bool {
 	return slicesx.EqualSameNil(c.Tags, c2.Tags) &&
 		slicesx.EqualSameNil(c.ServeApps, c2.ServeApps) &&
 		slicesx.EqualSameNil(c.ServeIPSets, c2.ServeIPSets) &&
+		slicesx.EqualSameNil(c.Routes, c2.Routes) &&
 		slicesx.EqualSameNil(c.Attrs, c2.Attrs)
 }
 

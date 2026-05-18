@@ -2802,9 +2802,18 @@ func (v BlueprintConfigView) ServeApps() views.Slice[string] { return views.Slic
 
 // ServeIPSets is the list of "ipset:" identifiers from the
 // blueprint's serves.ipsets field. Empty if the blueprint does not
-// declare any ipset routes.
+// declare any ipset routes. Kept on the wire for operator
+// debugging; Routes below is what the client acts on.
 func (v BlueprintConfigView) ServeIPSets() views.Slice[string] {
 	return views.SliceOf(v.ж.ServeIPSets)
+}
+
+// Routes is the concrete list of CIDR prefixes derived by the
+// control plane from ServeIPSets at projection time. The
+// blueprint-bound client uses these as the source of truth for
+// its advertised subnet routes.
+func (v BlueprintConfigView) Routes() views.Slice[netip.Prefix] {
+	return views.SliceOf(v.ж.Routes)
 }
 
 // Attrs is the list of nodeAttr identifiers granted by the
@@ -2818,5 +2827,6 @@ var _BlueprintConfigViewNeedsRegeneration = BlueprintConfig(struct {
 	Tags        []string
 	ServeApps   []string
 	ServeIPSets []string
+	Routes      []netip.Prefix
 	Attrs       []string
 }{})
