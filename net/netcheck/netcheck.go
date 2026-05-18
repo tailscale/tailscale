@@ -394,8 +394,11 @@ func sortRegions(dm *tailcfg.DERPMap, last *Report, preferredDERP int) (prev []*
 			continue
 		}
 		// include an otherwise avoid region if it is the current preferred region
-		if reg.Avoid && reg.RegionID != preferredDERP {
-			continue
+		if reg.Avoid {
+			metricDERPRegionAvoidTrue.Add(1)
+			if reg.RegionID != preferredDERP {
+				continue
+			}
 		}
 		prev = append(prev, reg)
 	}
@@ -964,6 +967,9 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 		var wg sync.WaitGroup
 		var need []*tailcfg.DERPRegion
 		for rid, reg := range dm.Regions {
+			if reg.Avoid {
+				metricDERPRegionAvoidTrue.Add(1)
+			}
 			if !rs.haveRegionLatency(rid) && regionHasDERPNode(reg) && !reg.Avoid && !reg.NoMeasureNoHome {
 				need = append(need, reg)
 			}
@@ -1713,4 +1719,8 @@ var (
 	metricSTUNRecv4 = clientmetric.NewCounter("netcheck_stun_recv_ipv4")
 	metricSTUNRecv6 = clientmetric.NewCounter("netcheck_stun_recv_ipv6")
 	metricHTTPSend  = clientmetric.NewCounter("netcheck_https_measure")
+
+	// MetricDERPRegionAvoidTrue tracks the usage of DERPRegion.Avoid in the DERPMap
+	// as it gets replaced with better alternatives. See tailscale/corp#24697.
+	metricDERPRegionAvoidTrue = clientmetric.NewCounter("netcheck_derpregion_avoid_true")
 )

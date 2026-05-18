@@ -15,7 +15,12 @@ import (
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 )
+
+// MetricDERPRegionAvoidTrue tracks the usage of DERPRegion.Avoid in the DERPMap
+// as it gets replaced with better alternatives. See tailscale/corp#24697.
+var metricDERPRegionAvoidTrue = clientmetric.NewCounter("captivedetection_derpregion_avoid_true")
 
 // EndpointProvider is an enum that represents the source of an Endpoint.
 type EndpointProvider int
@@ -89,7 +94,11 @@ func availableEndpoints(derpMap *tailcfg.DERPMap, preferredDERPRegionID int, log
 	// Use the DERP IPs as captive portal detection endpoints. Using IPs is better than hostnames
 	// because they do not depend on DNS resolution.
 	for _, region := range derpMap.Regions {
-		if region.Avoid || region.NoMeasureNoHome {
+		if region.Avoid {
+			metricDERPRegionAvoidTrue.Add(1)
+			continue
+		}
+		if region.NoMeasureNoHome {
 			continue
 		}
 		for _, node := range region.Nodes {
