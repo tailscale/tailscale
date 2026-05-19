@@ -71,6 +71,21 @@ var blueprintLockedFields = []blueprintLockedField{
 		plural:    "DNS acceptance",
 		maskField: func(m *ipn.MaskedPrefs) bool { return m.CorpDNSSet },
 	},
+	{
+		flag:      "accept-routes",
+		plural:    "Route acceptance",
+		maskField: func(m *ipn.MaskedPrefs) bool { return m.RouteAllSet },
+	},
+	{
+		flag:      "shields-up",
+		plural:    "Shields-up",
+		maskField: func(m *ipn.MaskedPrefs) bool { return m.ShieldsUpSet },
+	},
+	{
+		flag:      "webclient",
+		plural:    "Web client",
+		maskField: func(m *ipn.MaskedPrefs) bool { return m.RunWebClientSet },
+	},
 }
 
 // checkBlueprintSetLocked returns a non-nil error if curPrefs is

@@ -593,6 +593,19 @@ type BlueprintConfig struct {
 	// blueprint's attrs field. Empty if the blueprint does not declare
 	// any attrs.
 	Attrs []string `json:",omitempty"`
+
+	// Prefs is the list of "pref:<name>" identifiers from the
+	// blueprint's prefs field. Each entry corresponds to a bool field
+	// in ipn.Prefs that the bound daemon must set to true; any
+	// supported pref NOT present here must be forced to false on the
+	// bound node, regardless of its prior local value. The blueprint
+	// is the source of truth: silence means OFF.
+	//
+	// The wire format intentionally uses strings rather than a typed
+	// struct so the control plane can add new supported prefs without
+	// a capver bump on the client; unrecognized entries are ignored
+	// by older clients.
+	Prefs []string `json:",omitempty"`
 }
 
 // Equal reports whether c and c2 are equal.
@@ -607,7 +620,8 @@ func (c *BlueprintConfig) Equal(c2 *BlueprintConfig) bool {
 		slicesx.EqualSameNil(c.ServeApps, c2.ServeApps) &&
 		slicesx.EqualSameNil(c.ServeIPSets, c2.ServeIPSets) &&
 		slicesx.EqualSameNil(c.Routes, c2.Routes) &&
-		slicesx.EqualSameNil(c.Attrs, c2.Attrs)
+		slicesx.EqualSameNil(c.Attrs, c2.Attrs) &&
+		slicesx.EqualSameNil(c.Prefs, c2.Prefs)
 }
 
 // HasCap reports whether the node has the given capability.

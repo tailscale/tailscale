@@ -2819,7 +2819,14 @@ func (v BlueprintConfigView) Routes() views.Slice[netip.Prefix] {
 // Attrs is the list of nodeAttr identifiers granted by the
 // blueprint's attrs field. Empty if the blueprint does not declare
 // any attrs.
-func (v BlueprintConfigView) Attrs() views.Slice[string]        { return views.SliceOf(v.ж.Attrs) }
+func (v BlueprintConfigView) Attrs() views.Slice[string] { return views.SliceOf(v.ж.Attrs) }
+
+// Prefs is the list of "pref:" identifiers from the blueprint's prefs
+// field. Each entry names a bool field in ipn.Prefs the bound daemon
+// must force to true on every netmap apply; supported prefs NOT
+// present here are forced to false. The blueprint is the source of
+// truth: silence means OFF.
+func (v BlueprintConfigView) Prefs() views.Slice[string]        { return views.SliceOf(v.ж.Prefs) }
 func (v BlueprintConfigView) Equal(v2 BlueprintConfigView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -2829,4 +2836,5 @@ var _BlueprintConfigViewNeedsRegeneration = BlueprintConfig(struct {
 	ServeIPSets []string
 	Routes      []netip.Prefix
 	Attrs       []string
+	Prefs       []string
 }{})

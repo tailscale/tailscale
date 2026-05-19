@@ -99,6 +99,21 @@ func TestCheckBlueprintSetLocked_AllLockedFields(t *testing.T) {
 			setMask:   func(m *ipn.MaskedPrefs) { m.CorpDNSSet = true },
 			wantField: "DNS acceptance",
 		},
+		{
+			name:      "accept-routes",
+			setMask:   func(m *ipn.MaskedPrefs) { m.RouteAllSet = true },
+			wantField: "Route acceptance",
+		},
+		{
+			name:      "shields-up",
+			setMask:   func(m *ipn.MaskedPrefs) { m.ShieldsUpSet = true },
+			wantField: "Shields-up",
+		},
+		{
+			name:      "webclient",
+			setMask:   func(m *ipn.MaskedPrefs) { m.RunWebClientSet = true },
+			wantField: "Web client",
+		},
 	}
 	cur := &ipn.Prefs{BlueprintID: "bp1"}
 	for _, tt := range tests {

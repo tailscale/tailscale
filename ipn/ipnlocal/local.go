@@ -6726,6 +6726,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	// cmd/tailscale/cli/blueprint_lock.go) so overwriting prefs here
 	// does not stomp on user intent.
 	b.reconcileBlueprintRoutesLocked(nm)
+	b.reconcileBlueprintPrefsLocked(nm)
 }
 
 // reconcileBlueprintRoutesLocked syncs Prefs.AdvertiseRoutes with the
@@ -6775,6 +6776,119 @@ func slicesEqualPrefixes(a, b []netip.Prefix) bool {
 		}
 	}
 	return true
+}
+
+// blueprintPrefSetters enumerates every "pref:<name>" identifier the
+// blueprint reconcile loop knows how to project onto ipn.Prefs.
+//
+// The blueprint is the source of truth: for each entry in this table
+// we set the matching Prefs bool to true when the pref appears in
+// BlueprintConfig.Prefs and to false when it does not. That "silence
+// equals OFF" rule overrides any pre-existing local setting on every
+// netmap apply so an operator-authored blueprint edit reaches the
+// bound node deterministically.
+//
+// Each metric counter is bumped once per reconcile pass that applies
+// the pref (i.e. when the corresponding bool flips ON). The counters
+// are blueprint-scoped, not per-node, because clientmetrics are
+// process-global.
+//
+// New entries here MUST stay in lockstep with the corp-side
+// allowlist in control/policy/blueprint_prefs.go and the locked-field
+// list in cmd/tailscale/cli/blueprint_lock.go. The three lists form
+// the v1.1 blueprint pref contract.
+var blueprintPrefSetters = []struct {
+	id     string
+	get    func(*ipn.Prefs) bool
+	set    func(*ipn.Prefs, bool)
+	metric *clientmetric.Metric
+}{
+	{
+		id:     "pref:accept-dns",
+		get:    func(p *ipn.Prefs) bool { return p.CorpDNS },
+		set:    func(p *ipn.Prefs, v bool) { p.CorpDNS = v },
+		metric: clientmetric.NewCounter("blueprint_pref_applied_accept_dns"),
+	},
+	{
+		id:     "pref:accept-routes",
+		get:    func(p *ipn.Prefs) bool { return p.RouteAll },
+		set:    func(p *ipn.Prefs, v bool) { p.RouteAll = v },
+		metric: clientmetric.NewCounter("blueprint_pref_applied_accept_routes"),
+	},
+	{
+		id:     "pref:ssh",
+		get:    func(p *ipn.Prefs) bool { return p.RunSSH },
+		set:    func(p *ipn.Prefs, v bool) { p.RunSSH = v },
+		metric: clientmetric.NewCounter("blueprint_pref_applied_ssh"),
+	},
+	{
+		id:     "pref:shields-up",
+		get:    func(p *ipn.Prefs) bool { return p.ShieldsUp },
+		set:    func(p *ipn.Prefs, v bool) { p.ShieldsUp = v },
+		metric: clientmetric.NewCounter("blueprint_pref_applied_shields_up"),
+	},
+	{
+		id:     "pref:webclient",
+		get:    func(p *ipn.Prefs) bool { return p.RunWebClient },
+		set:    func(p *ipn.Prefs, v bool) { p.RunWebClient = v },
+		metric: clientmetric.NewCounter("blueprint_pref_applied_webclient"),
+	},
+}
+
+// reconcileBlueprintPrefsLocked syncs ipn.Prefs bool fields with
+// BlueprintConfig.Prefs for the bound node. Presence of "pref:foo"
+// in the projection forces the corresponding bool true; absence
+// forces it false. Unknown pref identifiers in the projection are
+// ignored silently (forward-compat: a newer control plane may
+// reference a pref this client does not yet implement).
+//
+// Persists prefs only when at least one field actually changed so
+// the disk write and Hostinfo refresh are skipped on the
+// steady-state path. The metric counter for each applied pref is
+// bumped once per reconcile pass that flips the bool ON.
+//
+// b.mu must be held.
+func (b *LocalBackend) reconcileBlueprintPrefsLocked(nm *netmap.NetworkMap) {
+	if nm == nil || !nm.SelfNode.Valid() {
+		return
+	}
+	cfg := nm.SelfNode.BlueprintConfig()
+	if !cfg.Valid() {
+		return
+	}
+	want := map[string]struct{}{}
+	for _, p := range cfg.Prefs().All() {
+		want[p] = struct{}{}
+	}
+
+	cur := b.pm.CurrentPrefs()
+	newp := cur.AsStruct()
+	changed := false
+	for _, s := range blueprintPrefSetters {
+		_, on := want[s.id]
+		if s.get(newp) == on {
+			continue
+		}
+		s.set(newp, on)
+		if on {
+			s.metric.Add(1)
+		}
+		changed = true
+	}
+	if !changed {
+		return
+	}
+	b.logf("blueprint %q: reconciled %d pref(s) from BlueprintConfig",
+		cur.BlueprintID(), len(want))
+	if err := b.pm.SetPrefs(newp.View(), b.pm.CurrentProfile().NetworkProfile()); err != nil {
+		b.logf("blueprint pref reconcile: persist prefs: %v", err)
+		return
+	}
+	if b.hostinfo == nil {
+		b.hostinfo = new(tailcfg.Hostinfo)
+	}
+	b.applyPrefsToHostinfoLocked(b.hostinfo, newp.View())
+	b.goTracker.Go(b.doSetHostinfoFilterServices)
 }
 
 var hookSetNetMapLockedDrive feature.Hook[func(*LocalBackend, *netmap.NetworkMap)]

@@ -705,6 +705,7 @@ func (src *BlueprintConfig) Clone() *BlueprintConfig {
 	dst.ServeIPSets = append(src.ServeIPSets[:0:0], src.ServeIPSets...)
 	dst.Routes = append(src.Routes[:0:0], src.Routes...)
 	dst.Attrs = append(src.Attrs[:0:0], src.Attrs...)
+	dst.Prefs = append(src.Prefs[:0:0], src.Prefs...)
 	return dst
 }
 
@@ -715,6 +716,7 @@ var _BlueprintConfigCloneNeedsRegeneration = BlueprintConfig(struct {
 	ServeIPSets []string
 	Routes      []netip.Prefix
 	Attrs       []string
+	Prefs       []string
 }{})
 
 // Clone duplicates src into dst and reports whether it succeeded.
