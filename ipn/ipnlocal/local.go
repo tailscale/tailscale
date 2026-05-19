@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"net"
@@ -411,6 +412,9 @@ type LocalBackend struct {
 	// getCertForTest is used to retrieve TLS certificates in tests.
 	// See [LocalBackend.ConfigureCertsForTest].
 	getCertForTest func(hostname string) (*TLSCertKeyPair, error)
+
+	// filteredSplitDNSRoutes is the result of the most recent [filterUnreachableSplitDNS] call; nil when nothing was filtered.
+	filteredSplitDNSRoutes map[string][]*dnstype.Resolver
 
 	// existsPendingAuthReconfig tracks if a goroutine is waiting to
 	// acquire [LocalBackend]'s mutex inside of [LocalBackend.AuthReconfig].
@@ -1361,6 +1365,10 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		if nm != nil {
 			s.CertDomains = append([]string(nil), nm.DNS.CertDomains...)
 			s.MagicDNSSuffix = nm.MagicDNSSuffix()
+			if len(b.filteredSplitDNSRoutes) > 0 {
+				// Shallow clone: resolver pointers are effectively immutable, but a caller mutating the map shouldn't be able to reach back into b.
+				s.FilteredSplitDNSRoutes = maps.Clone(b.filteredSplitDNSRoutes)
+			}
 			if s.CurrentTailnet == nil {
 				s.CurrentTailnet = &ipnstate.TailnetStatus{}
 			}
@@ -5439,6 +5447,12 @@ func (b *LocalBackend) authReconfigLocked() {
 			extras := extraAllowedIPsFn(cfg.Peers[i].PublicKey)
 			cfg.Peers[i].AllowedIPs = extras.AppendTo(cfg.Peers[i].AllowedIPs)
 		}
+	}
+
+	// Opt-in client-side filter; see [filterUnreachableSplitDNS]. The cap is checked against the same nm snapshot we're filtering against, rather than via cn.SelfHasCap (which would re-lock the nodeBackend and could read a newer netmap).
+	b.filteredSplitDNSRoutes = nil
+	if nm.AllCaps.Contains(tailcfg.NodeAttrFilterSplitDNSUnreachableTailscaleResolvers) {
+		b.filteredSplitDNSRoutes = filterUnreachableSplitDNS(dcfg, cfg, nm)
 	}
 
 	err = b.e.Reconfig(cfg, rcfg, dcfg)

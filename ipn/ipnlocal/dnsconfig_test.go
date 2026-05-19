@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/netip"
 	"reflect"
+	"slices"
 	"testing"
 
 	"tailscale.com/appc"
@@ -21,6 +22,7 @@ import (
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/set"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 func ipps(ippStrs ...string) (ipps []netip.Prefix) {
@@ -551,4 +553,194 @@ func TestAllowExitNodeDNSProxyToServeName(t *testing.T) {
 		}
 	}
 
+}
+
+// mkResolver builds a [dnstype.Resolver] with optional bootstrap IPs. Used by the split-DNS filter tests.
+func mkResolver(addr string, bootstrap ...string) *dnstype.Resolver {
+	r := &dnstype.Resolver{Addr: addr}
+	for _, b := range bootstrap {
+		r.BootstrapResolution = append(r.BootstrapResolution, netip.MustParseAddr(b))
+	}
+	return r
+}
+
+// TestFilterUnreachableSplitDNS exercises the per-resolver reachability filter against a richly-loaded multi-peer netmap that covers every input shape and reachability source the filter sees in practice. One suffix (example.com) carries the bulk of the resolvers so partial-drop assertions verify each lookup path in a single pass; a second suffix (all-dropped.tailnet) has only an unreachable resolver to exercise full-suffix removal.
+//
+// Tailnet shape ("company.ts.net"):
+//   - self: own CGNAT + ULA address, an approved 10.99.0.0/24 subnet in AllowedIPs, and two unapproved-but-advertised 4via6 prefixes in Hostinfo.RoutableIPs (netstack handles these as loopback even pre-approval, per #12016).
+//   - office-coredns: CGNAT-only peer.
+//   - subnet-router: holds only fd7a:115c:a1e0:b1a:0:1:a00:0/104 in cfg.Peers -- 4via6 SiteID=1 covering IPv4 10.0.0.0/8.
+//   - dual-stack-host: CGNAT + tailnet-ULA, both routed in cfg.Peers.
+//   - invisible-peer: in nm.Peers (so hostname lookup finds it) but absent from cfg.Peers because no grant exposes it to the local node.
+func TestFilterUnreachableSplitDNS(t *testing.T) {
+	const magicSuffix = "company.ts.net"
+
+	nm := &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Name:      "self." + magicSuffix + ".",
+			Addresses: ipps("100.97.96.172", "fd7a:115c:a1e0::c83a:307a"),
+			// AllowedIPs is the union of own addresses and *approved* advertised routes.
+			AllowedIPs: ipps("100.97.96.172", "fd7a:115c:a1e0::c83a:307a", "10.99.0.0/24"),
+			Hostinfo: (&tailcfg.Hostinfo{
+				// RoutableIPs is everything advertised, approved or not. The two 4via6 prefixes below are intentionally *not* in AllowedIPs above (control hasn't approved them) -- the filter must still treat them as reachable because netstack handles them as loopback.
+				RoutableIPs: []netip.Prefix{
+					netip.MustParsePrefix("10.99.0.0/24"),
+					netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:1337:808:808/128"),
+					netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:1338::/96"),
+				},
+			}).View(),
+		}).View(),
+		DNS: tailcfg.DNSConfig{
+			ExtraRecords: []tailcfg.DNSRecord{
+				// Extra-only hostname pointing at a routed peer IP.
+				{Name: "coredns-extra.company.ts.net", Value: "100.64.0.10"},
+				// Same name as the dual-stack-host peer but pointing at an unrouted IP. Peer's real IPs must win, otherwise the unrouted IP would (incorrectly) filter the resolver.
+				{Name: "dual-stack-host.company.ts.net", Value: "100.96.0.99"},
+				// Non-empty Type: skipped.
+				{Name: "skip-me.company.ts.net", Type: "AAAA", Value: "fd7a:115c:a1e0::dead"},
+			},
+		},
+	}
+	addPeer := func(id tailcfg.NodeID, name string, ips ...string) {
+		nm.Peers = append(nm.Peers, (&tailcfg.Node{
+			ID:        id,
+			Name:      name + "." + magicSuffix + ".",
+			Addresses: ipps(ips...),
+		}).View())
+	}
+	addPeer(1, "office-coredns", "100.64.0.10")
+	addPeer(2, "subnet-router", "100.64.0.20", "fd7a:115c:a1e0::20")
+	addPeer(3, "dual-stack-host", "100.64.0.30", "fd7a:115c:a1e0::30")
+	addPeer(4, "invisible-peer", "100.64.0.99") // in nm.Peers; absent from cfg.Peers below (no grant exposes it)
+
+	cfg := &wgcfg.Config{
+		Peers: []wgcfg.Peer{
+			{AllowedIPs: []netip.Prefix{netip.MustParsePrefix("100.64.0.10/32")}},                                                  // office-coredns
+			{AllowedIPs: []netip.Prefix{netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:1:a00:0/104")}},                                // subnet-router 4via6 for 10.0.0.0/8
+			{AllowedIPs: []netip.Prefix{netip.MustParsePrefix("100.64.0.30/32"), netip.MustParsePrefix("fd7a:115c:a1e0::30/128")}}, // dual-stack-host
+			// invisible-peer intentionally absent (no grant from local node).
+		},
+	}
+
+	keep := []*dnstype.Resolver{
+		mkResolver("100.64.0.10:53"),                                                  // peer (CGNAT, IP:port)
+		mkResolver("100.64.0.10"),                                                     // peer (bare IP, no port -- common control-plane form)
+		mkResolver("100.97.96.172"),                                                   // self loopback v4
+		mkResolver("fd7a:115c:a1e0::c83a:307a"),                                       // self loopback v6
+		mkResolver("10.99.0.42"),                                                      // RFC1918: always kept (non-tailnet IP, out of scope)
+		mkResolver("8.8.8.8:53"),                                                      // public UDP
+		mkResolver("fd7a:115c:a1e0:b1a:0:1337:808:808"),                               // 4via6 advertised + unapproved (netstack-local per #12016)
+		mkResolver("[fd7a:115c:a1e0:b1a:0:1338:8efb:d6ce]:53"),                        // inside advertised 4via6 /96
+		mkResolver("[fd7a:115c:a1e0:b1a:0:1:a00:5]:53"),                               // 4via6 routed via subnet-router (SiteID 1, encodes 10.0.0.5)
+		mkResolver("[fd7a:115c:a1e0::30]:53"),                                         // dual-stack-host v6
+		mkResolver("http://100.64.0.10/dns-query"),                                    // URL form with IP literal (routed)
+		mkResolver("https://self.company.ts.net/dns-query"),                           // URL hostname -> self loopback
+		mkResolver("https://office-coredns.company.ts.net/dns-query"),                 // URL hostname -> peer
+		mkResolver("https://OFFICE-COREDNS.Company.TS.NET/dns-query"),                 // case-folded peer lookup
+		mkResolver("https://coredns-extra.company.ts.net/dns-query"),                  // URL hostname -> ExtraRecord
+		mkResolver("https://dual-stack-host.company.ts.net/dns-query"),                // peer shadows ExtraRecord (peer IPs are routed)
+		mkResolver("https://coredns.other.ts.net/dns-query"),                          // non-magic suffix -> out of scope
+		mkResolver("https://dns.google/dns-query"),                                    // public hostname -> out of scope
+		mkResolver("https://nope.example.com/dns-query", "100.64.0.10"),               // bootstrap: routed
+		mkResolver("https://nope.example.com/dns-query", "100.64.0.77", "1.1.1.1"),    // bootstrap: unrouted tailnet IP + public -- public makes it reachable
+		mkResolver("https://nope.example.com/dns-query", "100.64.0.77", "100.64.0.10"), // bootstrap: unrouted + routed tailnet -- routed makes it reachable
+		mkResolver("https://[invalid"),                                                // malformed Addr: conservatively kept (no IPs to decide on)
+	}
+	drop := []*dnstype.Resolver{
+		mkResolver("100.64.0.77:53"),                                       // CGNAT IP with no peer
+		mkResolver("100.64.0.77"),                                          // bare CGNAT, no peer
+		mkResolver("fd7a:115c:a1e0::6a3a:dead"),                            // ULA, no peer
+		mkResolver("[fd7a:115c:a1e0:b1a:0:2:a00:5]:53"),                    // 4via6 wrong SiteID (no covering route)
+		mkResolver("http://100.64.0.77/dns-query"),                         // URL form, unrouted IP literal
+		mkResolver("https://invisible-peer.company.ts.net/dns-query"),      // URL hostname -> peer in nm.Peers but not visible to this node (no grant; absent from cfg.Peers)
+		mkResolver("https://nosuchhost.company.ts.net/dns-query"),          // magic suffix, unresolvable
+		mkResolver("https://nope.example.com/dns-query", "100.64.0.77"),    // bootstrap: only unrouted tailnet IP
+	}
+
+	dcfg := &dns.Config{
+		Routes: map[dnsname.FQDN][]*dnstype.Resolver{
+			// slices.Concat returns a fresh slice so the filter's in-place mutation doesn't disturb keep/drop, which are reused below as expected values.
+			dnsname.FQDN("example.com."):         slices.Concat(keep, drop),
+			dnsname.FQDN("all-dropped.tailnet."): {mkResolver("100.64.0.77:53")},
+		},
+	}
+
+	gotFiltered := filterUnreachableSplitDNS(dcfg, cfg, nm)
+
+	wantSurviving := map[string][]*dnstype.Resolver{"example.com": keep}
+	wantFiltered := map[string][]*dnstype.Resolver{
+		"example.com":         drop,
+		"all-dropped.tailnet": {mkResolver("100.64.0.77:53")},
+	}
+
+	gotSurviving := map[string][]*dnstype.Resolver{}
+	for k, v := range dcfg.Routes {
+		gotSurviving[k.WithoutTrailingDot()] = v
+	}
+	if !reflect.DeepEqual(gotSurviving, wantSurviving) {
+		t.Errorf("surviving routes mismatch\n got: %s\nwant: %s", spew(gotSurviving), spew(wantSurviving))
+	}
+	if !reflect.DeepEqual(gotFiltered, wantFiltered) {
+		t.Errorf("filtered mismatch\n got: %s\nwant: %s", spew(gotFiltered), spew(wantFiltered))
+	}
+}
+
+// TestFilterUnreachableSplitDNS_Edges covers configurations missing setup that the comprehensive scenario assumes (empty resolver lists, no MagicDNSSuffix).
+func TestFilterUnreachableSplitDNS_Edges(t *testing.T) {
+	tests := []struct {
+		name         string
+		magicSuffix  string
+		inRoutes     map[string][]*dnstype.Resolver
+		wantRoutes   map[string][]*dnstype.Resolver
+		wantFiltered map[string][]*dnstype.Resolver
+	}{
+		{
+			// Empty resolver list: nothing to filter, suffix preserved as-is.
+			name:        "empty_resolver_list_preserved",
+			magicSuffix: "foo.ts.net",
+			inRoutes:    map[string][]*dnstype.Resolver{"corp.example": {}},
+			wantRoutes:  map[string][]*dnstype.Resolver{"corp.example": {}},
+		},
+		{
+			// No MagicDNSSuffix (no SelfNode): the magic-suffix gating step is skipped, so a tailnet-looking hostname with no netmap entry is kept (treated as public/out-of-scope).
+			name:        "no_magic_suffix_kept",
+			magicSuffix: "",
+			inRoutes:    map[string][]*dnstype.Resolver{"corp.example": {mkResolver("https://coredns.foo.ts.net/dns-query")}},
+			wantRoutes:  map[string][]*dnstype.Resolver{"corp.example": {mkResolver("https://coredns.foo.ts.net/dns-query")}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nm := &netmap.NetworkMap{}
+			if tt.magicSuffix != "" {
+				nm.SelfNode = (&tailcfg.Node{Name: "self." + tt.magicSuffix + "."}).View()
+			}
+			routes := map[dnsname.FQDN][]*dnstype.Resolver{}
+			for k, v := range tt.inRoutes {
+				routes[dnsname.FQDN(k+".")] = v
+			}
+			dcfg := &dns.Config{Routes: routes}
+			cfg := &wgcfg.Config{}
+			gotFiltered := filterUnreachableSplitDNS(dcfg, cfg, nm)
+
+			gotRoutes := map[string][]*dnstype.Resolver{}
+			for k, v := range dcfg.Routes {
+				gotRoutes[k.WithoutTrailingDot()] = v
+			}
+			if !reflect.DeepEqual(gotRoutes, tt.wantRoutes) {
+				t.Errorf("dcfg.Routes mismatch\n got: %s\nwant: %s", spew(gotRoutes), spew(tt.wantRoutes))
+			}
+			if !reflect.DeepEqual(gotFiltered, tt.wantFiltered) {
+				t.Errorf("filtered mismatch\n got: %s\nwant: %s", spew(gotFiltered), spew(tt.wantFiltered))
+			}
+		})
+	}
+}
+
+func spew(m map[string][]*dnstype.Resolver) string {
+	if m == nil {
+		return "nil"
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
 }

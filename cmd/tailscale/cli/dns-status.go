@@ -84,6 +84,14 @@ var dnsStatusArgs struct {
 	json bool
 }
 
+// dnsResolverKey returns a value comparable across two [jsonoutput.DNSResolverInfo] entries: distinct fields are joined by NUL bytes (which can't appear in Addr or in any IP string), so two infos with the same Addr and BootstrapResolution share a key and no other combination does.
+func dnsResolverKey(r jsonoutput.DNSResolverInfo) string {
+	if len(r.BootstrapResolution) == 0 {
+		return r.Addr
+	}
+	return r.Addr + "\x00" + strings.Join(r.BootstrapResolution, "\x00")
+}
+
 // makeDNSResolverInfo converts a dnstype.Resolver to a jsonoutput.DNSResolverInfo.
 func makeDNSResolverInfo(r *dnstype.Resolver) jsonoutput.DNSResolverInfo {
 	info := jsonoutput.DNSResolverInfo{Addr: r.Addr}
@@ -94,6 +102,20 @@ func makeDNSResolverInfo(r *dnstype.Resolver) jsonoutput.DNSResolverInfo {
 		}
 	}
 	return info
+}
+
+// resolverInfoMap converts a suffix -> resolvers map (as used in [tailcfg.DNSConfig.Routes] and [ipnstate.Status.FilteredSplitDNSRoutes]) into its [jsonoutput] form. Returns nil if src is empty so the JSON encoder can drop the field via omitzero.
+func resolverInfoMap(src map[string][]*dnstype.Resolver) map[string][]jsonoutput.DNSResolverInfo {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string][]jsonoutput.DNSResolverInfo, len(src))
+	for k, v := range src {
+		for _, r := range v {
+			out[k] = append(out[k], makeDNSResolverInfo(r))
+		}
+	}
+	return out
 }
 
 func runDNSStatus(ctx context.Context, args []string) error {
@@ -127,12 +149,8 @@ func runDNSStatus(ctx context.Context, args []string) error {
 			data.Resolvers = append(data.Resolvers, makeDNSResolverInfo(r))
 		}
 
-		data.SplitDNSRoutes = make(map[string][]jsonoutput.DNSResolverInfo)
-		for k, v := range dnsConfig.Routes {
-			for _, r := range v {
-				data.SplitDNSRoutes[k] = append(data.SplitDNSRoutes[k], makeDNSResolverInfo(r))
-			}
-		}
+		data.SplitDNSRoutes = resolverInfoMap(dnsConfig.Routes)
+		data.FilteredSplitDNSRoutes = resolverInfoMap(s.FilteredSplitDNSRoutes)
 
 		for _, r := range dnsConfig.FallbackResolvers {
 			data.FallbackResolvers = append(data.FallbackResolvers, makeDNSResolverInfo(r))
@@ -234,7 +252,18 @@ func formatDNSStatusText(data *jsonoutput.DNSStatusResult, all bool) string {
 		fmt.Fprintf(&sb, "  (no routes configured: split DNS disabled)\n")
 	}
 	for _, k := range slices.Sorted(maps.Keys(data.SplitDNSRoutes)) {
+		// Skip resolvers the local client dropped at reconfig time -- they're not actually installed on the OS, even though the upstream config still lists them. The dropped set stays in --json's FilteredSplitDNSRoutes for diagnostics.
+		var dropped map[string]bool
+		if filtered := data.FilteredSplitDNSRoutes[k]; len(filtered) > 0 {
+			dropped = make(map[string]bool, len(filtered))
+			for _, d := range filtered {
+				dropped[dnsResolverKey(d)] = true
+			}
+		}
 		for _, r := range data.SplitDNSRoutes[k] {
+			if dropped[dnsResolverKey(r)] {
+				continue
+			}
 			fmt.Fprintf(&sb, "  - %-30s -> %v", k, r.Addr)
 			if r.BootstrapResolution != nil {
 				fmt.Fprintf(&sb, " (bootstrap: %v)", r.BootstrapResolution)

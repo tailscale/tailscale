@@ -2660,6 +2660,9 @@ const (
 	// if needed.
 	NodeAttrDisableSplitDNSWhenNoCustomResolvers NodeCapability = "disable-split-dns-when-no-custom-resolvers"
 
+	// NodeAttrFilterSplitDNSUnreachableTailscaleResolvers tells the client to drop a split-DNS resolver from a suffix's resolver list at reconfig time when its destination is in the Tailscale IP space with no covering peer route; a suffix with no surviving resolver is removed entirely so queries fall through to the OS's other resolvers. DefaultResolvers ("." suffix) is untouched. Dropped entries are surfaced as ipnstate.Status.FilteredSplitDNSRoutes (visible via `tailscale dns status`).
+	NodeAttrFilterSplitDNSUnreachableTailscaleResolvers NodeCapability = "filter-split-dns-unreachable-tailscale-resolvers"
+
 	// NodeAttrDisableLocalDNSOverrideViaNRPT indicates that the node's DNS manager should not
 	// create a default (catch-all) Windows NRPT rule when "Override local DNS" is enabled.
 	// Without this rule, Windows 8.1 and newer devices issue parallel DNS requests to DNS servers

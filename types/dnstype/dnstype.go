@@ -8,6 +8,7 @@ package dnstype
 
 import (
 	"net/netip"
+	"net/url"
 	"slices"
 )
 
@@ -59,6 +60,18 @@ func (r *Resolver) IPPort() (ipp netip.AddrPort, ok bool) {
 		return ipp, true
 	}
 	return
+}
+
+// Hostname returns the host portion of r.Addr: the URL host for "https://"/"http://"/"tls://" forms, or the IP for any form accepted by [Resolver.IPPort]. Returns "" if r.Addr is empty or malformed. IPs from the IPPort path are canonicalized by [netip.Addr.String], so e.g. an embedded-IPv4 form like "[fd7a:115c:a1e0:b1a:0:1:1.2.3.4]:53" comes back rewritten as "fd7a:115c:a1e0:b1a:0:1:102:304" -- compare by re-parsing the result rather than string-matching against the original. URL-host IPs are returned verbatim from the URL.
+func (r *Resolver) Hostname() string {
+	if ipp, ok := r.IPPort(); ok {
+		return ipp.Addr().String()
+	}
+	// IPPort returns ok=false for empty Addr and for URL forms (h/t prefix); url.Parse handles both safely (empty input parses to an empty URL with empty Hostname).
+	if u, err := url.Parse(r.Addr); err == nil {
+		return u.Hostname()
+	}
+	return ""
 }
 
 // Equal reports whether r and other are equal.
