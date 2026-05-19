@@ -270,6 +270,7 @@ var Features = map[FeatureTag]FeatureMeta{
 			"peerapiclient", "peerapiserver", // assume Taildrop is both sides for now
 		},
 	},
+	"tailperf":    {Sym: "Tailperf", Desc: "Tailperf performance testing support", Deps: []FeatureTag{"peerapiserver"}},
 	"tailnetlock": {Sym: "TailnetLock", Desc: "Tailnet Lock support"},
 	"tap":         {Sym: "Tap", Desc: "Experimental Layer 2 (ethernet) support"},
 	"tpm":         {Sym: "TPM", Desc: "TPM support"},
