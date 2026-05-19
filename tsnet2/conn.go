@@ -4,48 +4,44 @@
 package tsnet2
 
 import (
+	"bufio"
 	"net"
 	"time"
 )
 
-// conn is the [net.Conn] implementation returned by [Server.Dial] and by
-// the listener's Accept once the datapath channel is wired up.
-//
-// All methods currently panic. The implementation will be filled in by a
-// later agent; the type exists today so the package compiles and so
-// callers can perform interface type assertions.
+// conn wraps a daemon datapath/accept connection and exposes it as a
+// net.Conn to the application. Reads pull from any buffered bytes left
+// over from header parsing first, then fall through to the underlying
+// connection.
 type conn struct {
 	s      *Server
+	nc     net.Conn
+	reader *bufio.Reader // optional; used to drain any pre-buffered bytes
+
 	local  addr
 	remote addr
 }
 
-// Compile-time check that *conn satisfies net.Conn.
 var _ net.Conn = (*conn)(nil)
 
 func (c *conn) Read(b []byte) (int, error) {
-	panic("tsnet2: conn.Read not implemented")
+	if c.reader != nil && c.reader.Buffered() > 0 {
+		return c.reader.Read(b)
+	}
+	return c.nc.Read(b)
 }
 
 func (c *conn) Write(b []byte) (int, error) {
-	panic("tsnet2: conn.Write not implemented")
+	return c.nc.Write(b)
 }
 
 func (c *conn) Close() error {
-	panic("tsnet2: conn.Close not implemented")
+	return c.nc.Close()
 }
 
 func (c *conn) LocalAddr() net.Addr  { return c.local }
 func (c *conn) RemoteAddr() net.Addr { return c.remote }
 
-func (c *conn) SetDeadline(t time.Time) error {
-	panic("tsnet2: conn.SetDeadline not implemented")
-}
-
-func (c *conn) SetReadDeadline(t time.Time) error {
-	panic("tsnet2: conn.SetReadDeadline not implemented")
-}
-
-func (c *conn) SetWriteDeadline(t time.Time) error {
-	panic("tsnet2: conn.SetWriteDeadline not implemented")
-}
+func (c *conn) SetDeadline(t time.Time) error      { return c.nc.SetDeadline(t) }
+func (c *conn) SetReadDeadline(t time.Time) error  { return c.nc.SetReadDeadline(t) }
+func (c *conn) SetWriteDeadline(t time.Time) error { return c.nc.SetWriteDeadline(t) }
