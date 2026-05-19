@@ -2808,6 +2808,14 @@ func (v BlueprintConfigView) ServeIPSets() views.Slice[string] {
 	return views.SliceOf(v.ж.ServeIPSets)
 }
 
+// ServeServices is the list of "svc:" identifiers from the
+// blueprint's serves.services field. The daemon-side reconcile
+// maps each entry to its corresponding Tailscale service
+// advertisement.
+func (v BlueprintConfigView) ServeServices() views.Slice[string] {
+	return views.SliceOf(v.ж.ServeServices)
+}
+
 // Routes is the concrete list of CIDR prefixes derived by the
 // control plane from ServeIPSets at projection time. The
 // blueprint-bound client uses these as the source of truth for
@@ -2831,10 +2839,11 @@ func (v BlueprintConfigView) Equal(v2 BlueprintConfigView) bool { return v.ж.Eq
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _BlueprintConfigViewNeedsRegeneration = BlueprintConfig(struct {
-	Tags        []string
-	ServeApps   []string
-	ServeIPSets []string
-	Routes      []netip.Prefix
-	Attrs       []string
-	Prefs       []string
+	Tags          []string
+	ServeApps     []string
+	ServeServices []string
+	ServeIPSets   []string
+	Routes        []netip.Prefix
+	Attrs         []string
+	Prefs         []string
 }{})

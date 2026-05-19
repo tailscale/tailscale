@@ -6727,6 +6727,74 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	// does not stomp on user intent.
 	b.reconcileBlueprintRoutesLocked(nm)
 	b.reconcileBlueprintPrefsLocked(nm)
+	b.reconcileBlueprintAppConnectorLocked(nm)
+	b.reconcileBlueprintServicesLocked(nm)
+}
+
+// reconcileBlueprintAppConnectorLocked syncs
+// Prefs.AppConnector.Advertise with the BlueprintConfig.ServeApps
+// carried by the netmap's SelfNode for a blueprint-bound node.
+// Presence of any "app:" identifier in ServeApps flips the
+// per-node app-connector advertisement on; an empty ServeApps
+// list (silence-equals-OFF, consistent with the other blueprint
+// reconciles) flips it back off.
+//
+// The per-app routing rules themselves (which domains/CIDRs each
+// app connector handles) live in the existing app-connector
+// machinery — the blueprint reconciler here only toggles the
+// node-level Advertise bit.
+//
+// b.mu must be held.
+func (b *LocalBackend) reconcileBlueprintAppConnectorLocked(nm *netmap.NetworkMap) {
+	if nm == nil || !nm.SelfNode.Valid() {
+		return
+	}
+	cfg := nm.SelfNode.BlueprintConfig()
+	if !cfg.Valid() {
+		return
+	}
+	want := cfg.ServeApps().Len() > 0
+	cur := b.pm.CurrentPrefs()
+	if cur.AppConnector().Advertise == want {
+		return
+	}
+	newp := cur.AsStruct()
+	newp.AppConnector.Advertise = want
+	b.logf("blueprint %q: reconciled AppConnector.Advertise=%v from BlueprintConfig (%d serve-app(s))",
+		cur.BlueprintID(), want, cfg.ServeApps().Len())
+	if err := b.pm.SetPrefs(newp.View(), b.pm.CurrentProfile().NetworkProfile()); err != nil {
+		b.logf("blueprint app-connector reconcile: persist prefs: %v", err)
+		return
+	}
+	if b.hostinfo == nil {
+		b.hostinfo = new(tailcfg.Hostinfo)
+	}
+	b.applyPrefsToHostinfoLocked(b.hostinfo, newp.View())
+	b.goTracker.Go(b.doSetHostinfoFilterServices)
+}
+
+// reconcileBlueprintServicesLocked surfaces the blueprint's
+// ServeServices list for operator visibility. Full reconciliation
+// into the daemon's services machinery is a follow-up — it requires
+// translating "svc:<name>" identifiers into actual ServeConfig
+// entries, which depends on the services backend exposing a
+// reconcile API. For now this just logs the projection so a bound
+// node's expected services are observable via tailscaled logs.
+//
+// b.mu must be held.
+func (b *LocalBackend) reconcileBlueprintServicesLocked(nm *netmap.NetworkMap) {
+	if nm == nil || !nm.SelfNode.Valid() {
+		return
+	}
+	cfg := nm.SelfNode.BlueprintConfig()
+	if !cfg.Valid() {
+		return
+	}
+	if cfg.ServeServices().Len() == 0 {
+		return
+	}
+	b.logf("blueprint %q: %d service(s) declared in ServeServices (full reconcile pending)",
+		b.pm.CurrentPrefs().BlueprintID(), cfg.ServeServices().Len())
 }
 
 // reconcileBlueprintRoutesLocked syncs Prefs.AdvertiseRoutes with the

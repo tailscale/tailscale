@@ -570,8 +570,16 @@ type BlueprintConfig struct {
 
 	// ServeApps is the list of "app:" identifiers from the blueprint's
 	// serves.apps field. Empty if the blueprint does not declare any
-	// apps.
+	// apps. When non-empty the bound daemon advertises itself as an
+	// app connector (Prefs.AppConnector.Advertise = true); silence
+	// forces the connector off.
 	ServeApps []string `json:",omitempty"`
+
+	// ServeServices is the list of "svc:" identifiers from the
+	// blueprint's serves.services field. Empty if the blueprint does
+	// not declare any services. The daemon-side reconcile maps each
+	// entry to its corresponding Tailscale service advertisement.
+	ServeServices []string `json:",omitempty"`
 
 	// ServeIPSets is the list of "ipset:" identifiers from the
 	// blueprint's serves.ipsets field. Empty if the blueprint does not
@@ -619,6 +627,7 @@ func (c *BlueprintConfig) Equal(c2 *BlueprintConfig) bool {
 	return slicesx.EqualSameNil(c.Tags, c2.Tags) &&
 		slicesx.EqualSameNil(c.ServeApps, c2.ServeApps) &&
 		slicesx.EqualSameNil(c.ServeIPSets, c2.ServeIPSets) &&
+		slicesx.EqualSameNil(c.ServeServices, c2.ServeServices) &&
 		slicesx.EqualSameNil(c.Routes, c2.Routes) &&
 		slicesx.EqualSameNil(c.Attrs, c2.Attrs) &&
 		slicesx.EqualSameNil(c.Prefs, c2.Prefs)

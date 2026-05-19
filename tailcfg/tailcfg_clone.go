@@ -703,6 +703,7 @@ func (src *BlueprintConfig) Clone() *BlueprintConfig {
 	dst.Tags = append(src.Tags[:0:0], src.Tags...)
 	dst.ServeApps = append(src.ServeApps[:0:0], src.ServeApps...)
 	dst.ServeIPSets = append(src.ServeIPSets[:0:0], src.ServeIPSets...)
+	dst.ServeServices = append(src.ServeServices[:0:0], src.ServeServices...)
 	dst.Routes = append(src.Routes[:0:0], src.Routes...)
 	dst.Attrs = append(src.Attrs[:0:0], src.Attrs...)
 	dst.Prefs = append(src.Prefs[:0:0], src.Prefs...)
@@ -711,12 +712,13 @@ func (src *BlueprintConfig) Clone() *BlueprintConfig {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _BlueprintConfigCloneNeedsRegeneration = BlueprintConfig(struct {
-	Tags        []string
-	ServeApps   []string
-	ServeIPSets []string
-	Routes      []netip.Prefix
-	Attrs       []string
-	Prefs       []string
+	Tags          []string
+	ServeApps     []string
+	ServeServices []string
+	ServeIPSets   []string
+	Routes        []netip.Prefix
+	Attrs         []string
+	Prefs         []string
 }{})
 
 // Clone duplicates src into dst and reports whether it succeeded.
