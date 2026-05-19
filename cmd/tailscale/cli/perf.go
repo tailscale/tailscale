@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -56,6 +57,7 @@ supports it, then runs the test against the configured or default port.
 		fs.BoolVar(&perfArgs.bothDirections, "both-directions", false, "run forward and reverse tests")
 		fs.BoolVar(&perfArgs.noTUN, "no-tun", false, "use tailscaled userspace dialing instead of the OS TUN path for TCP client tests")
 		fs.BoolVar(&perfArgs.noLog, "no-log", false, "do not emit Tailperf result records to internal Tailperf result logging")
+		fs.StringVar(&perfArgs.logFile, "log-file", "", "write Tailperf result records to this JSONL file")
 		fs.BoolVar(&perfArgs.noMagic, "no-magic", false, hidden+"skip grant-authorized remote server setup")
 		return fs
 	})(),
@@ -81,6 +83,7 @@ var perfArgs struct {
 	bothDirections bool
 	noTUN          bool
 	noLog          bool
+	logFile        string
 	noMagic        bool
 }
 
@@ -144,6 +147,11 @@ func runPerf(ctx context.Context, args []string) error {
 		DestinationNode:  strings.TrimSuffix(perfArgs.client, "."),
 		PathProvider:     pathProvider(ctx, perfArgs.client),
 	}
+	logPath, logSink, err := tailperfLogSinkForConfig(perfArgs.logFile, perfArgs.noLog)
+	if err != nil {
+		return err
+	}
+	cfg.LogSink = logSink
 	if perfArgs.noTUN {
 		cfg.TUNMode = tailperf.TUNModeUserspace
 		if proto == tailperf.ProtoTCP {
@@ -161,7 +169,54 @@ func runPerf(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return tailperf.WriteTextReport(Stdout, perfArgs.client, r)
+	if err := tailperf.WriteTextReport(Stdout, perfArgs.client, r); err != nil {
+		return err
+	}
+	if logPath != "" {
+		fmt.Fprintf(Stdout, "Tailperf result logged to %s\n", logPath)
+	}
+	return nil
+}
+
+func tailperfLogPathFromCacheDir(cacheDir string) string {
+	return filepath.Join(cacheDir, "tailscale", "tailperf.jsonl")
+}
+
+func defaultTailperfLogPath() (string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("getting user cache dir for tailperf log: %w", err)
+	}
+	return tailperfLogPathFromCacheDir(cacheDir), nil
+}
+
+func tailperfLogSinkForConfig(logFile string, noLog bool) (string, tailperf.LogSink, error) {
+	if noLog {
+		return "", nil, nil
+	}
+	if logFile == "" {
+		var err error
+		logFile, err = defaultTailperfLogPath()
+		if err != nil {
+			return "", nil, err
+		}
+	}
+	return logFile, tailperfLogSinkForPath(logFile), nil
+}
+
+func tailperfLogSinkForPath(path string) tailperf.LogSink {
+	return tailperfCLIHistorySink{store: tailperf.HistoryStore{Path: path}}
+}
+
+type tailperfCLIHistorySink struct {
+	store tailperf.HistoryStore
+}
+
+func (s tailperfCLIHistorySink) LogTailperfResult(ctx context.Context, r tailperf.Result) error {
+	if err := os.MkdirAll(filepath.Dir(s.store.Path), 0700); err != nil {
+		return fmt.Errorf("creating tailperf log directory: %w", err)
+	}
+	return s.store.Append(ctx, r)
 }
 
 func localNodeName(st *ipnstate.Status) string {
