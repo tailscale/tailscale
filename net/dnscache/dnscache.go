@@ -422,24 +422,21 @@ func (d *dialer) DialContext(ctx context.Context, network, address string) (retC
 		}
 	}()
 
-	ip, ip6, allIPs, err := d.dnsCache.LookupIP(ctx, host)
+	ip, _, allIPs, err := d.dnsCache.LookupIP(ctx, host)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve %q: %w", host, err)
 	}
-	i4s := v4addrs(allIPs)
-	if len(i4s) < 2 {
+
+	// If we only have one candidate, just dial that, no matter what the
+	// address family is.
+	if len(allIPs) == 1 {
 		d.dnsCache.dlogf("dialing %s, %s for %s", network, ip, address)
-		c, err := dc.dialOne(ctx, ip.Unmap())
-		if err == nil || ctx.Err() != nil || !ip6.IsValid() {
-			return c, err
-		}
-		// Fall back to trying IPv6.
-		return dc.dialOne(ctx, ip6)
+		return dc.dialOne(ctx, ip.Unmap())
 	}
 
-	// Multiple IPv4 candidates, and 0+ IPv6.
-	ipsToTry := append(i4s, v6addrs(allIPs)...)
-	return dc.raceDial(ctx, ipsToTry)
+	// If we have multiple candidates, across address families, use happy
+	// eyeballs to find a connection.
+	return dc.raceDial(ctx, allIPs)
 }
 
 func (d *dialer) shouldTryBootstrap(ctx context.Context, err error, dc *dialCall) bool {
@@ -643,25 +640,6 @@ func (dc *dialCall) raceDial(ctx context.Context, ips []netip.Addr) (net.Conn, e
 			return nil, ctx.Err()
 		}
 	}
-}
-
-func v4addrs(aa []netip.Addr) (ret []netip.Addr) {
-	for _, a := range aa {
-		a = a.Unmap()
-		if a.Is4() {
-			ret = append(ret, a)
-		}
-	}
-	return ret
-}
-
-func v6addrs(aa []netip.Addr) (ret []netip.Addr) {
-	for _, a := range aa {
-		if a.Is6() && !a.Is4In6() {
-			ret = append(ret, a)
-		}
-	}
-	return ret
 }
 
 // TLSDialer is like Dialer but returns a func suitable for using with net/http.Transport.DialTLSContext.

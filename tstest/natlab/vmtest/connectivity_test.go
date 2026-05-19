@@ -4,7 +4,6 @@
 package vmtest_test
 
 import (
-	"flag"
 	"fmt"
 	"testing"
 
@@ -12,8 +11,6 @@ import (
 	"tailscale.com/tstest/natlab/vmtest"
 	"tailscale.com/tstest/natlab/vnet"
 )
-
-var knownBroken = flag.Bool("known-broken", false, "run known-broken tests")
 
 func v6cidr(n int) string {
 	return fmt.Sprintf("2000:%d::1/64", n)
@@ -228,12 +225,7 @@ func TestSingleJustIPv6(t *testing.T) {
 
 // TestSingleDualBrokenIPv4 tests a dual-stack node with broken
 // (blackholed) IPv4.
-//
-// See https://github.com/tailscale/tailscale/issues/13346
 func TestSingleDualBrokenIPv4(t *testing.T) {
-	if !*knownBroken {
-		t.Skip("skipping known-broken test; set --known-broken to run; see https://github.com/tailscale/tailscale/issues/13346")
-	}
 	env := vmtest.New(t)
 	v6AndBlackholedIPv4(env)
 	env.Start()
