@@ -36,3 +36,17 @@ Things explicitly out of scope for v1. Added here whenever the v1 implementation
   counters on the client. The fine-grained client-side breakdown
   would require either teaching `clientmetric` about labels or
   introducing several more counters.
+
+## Surfaced during v2 build
+
+* **`pref:funnel` has no client-side projection.** Spec §6 in-scope #10
+  and §13 list `pref:funnel` in the compile-time pref allowlist
+  (alongside accept-dns / accept-routes / ssh), but there is no
+  matching `ipn.Prefs` boolean for funnel-eligibility on the client.
+  Funnel eligibility is gated today by `tailcfg.NodeAttrFunnel`, which
+  rides the existing nodecap path. For v2 the control-plane accepts
+  `pref:funnel` in a blueprint and rejects unknown pref names, but
+  delivery to the node is via `attrs:` / nodecaps, not via the
+  blueprint reconciler in `ipn/ipnlocal`. If we later add a
+  first-class `Prefs.FunnelEligible` bool, that would justify a new
+  setter in `blueprintPrefSetters` here.

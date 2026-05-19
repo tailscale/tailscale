@@ -23,26 +23,27 @@ import (
 // source of truth: if a blueprint omits pref:accept-dns, the bound
 // node must NOT accept DNS even if its previous local config had
 // CorpDNS=true.
+//
+// The v2 allowlist is three client-side prefs: accept-dns,
+// accept-routes, ssh. pref:funnel is in the spec's compile-time
+// allowlist but has no client-side ipn.Prefs bool to project onto, so
+// it is treated as an unknown pref for projection purposes.
 func TestReconcileBlueprintPrefs_PresenceIsOnAbsenceIsOff(t *testing.T) {
 	for _, tt := range []struct {
-		name           string
-		startCorp      bool
-		startRoute     bool
-		startSSH       bool
-		startShields   bool
-		startWebClient bool
-		bpPrefs        []string
+		name       string
+		startCorp  bool
+		startRoute bool
+		startSSH   bool
+		bpPrefs    []string
 
-		wantCorp      bool
-		wantRoute     bool
-		wantSSH       bool
-		wantShields   bool
-		wantWebClient bool
+		wantCorp  bool
+		wantRoute bool
+		wantSSH   bool
 	}{
 		{
 			name:     "all_supported_prefs_on",
-			bpPrefs:  []string{"pref:accept-dns", "pref:accept-routes", "pref:ssh", "pref:shields-up", "pref:webclient"},
-			wantCorp: true, wantRoute: true, wantSSH: true, wantShields: true, wantWebClient: true,
+			bpPrefs:  []string{"pref:accept-dns", "pref:accept-routes", "pref:ssh"},
+			wantCorp: true, wantRoute: true, wantSSH: true,
 		},
 		{
 			name:     "only_accept_dns",
@@ -51,7 +52,7 @@ func TestReconcileBlueprintPrefs_PresenceIsOnAbsenceIsOff(t *testing.T) {
 		},
 		{
 			name:      "silence_forces_off_overrides_prior_local",
-			startCorp: true, startRoute: true, startSSH: true, startShields: true, startWebClient: true,
+			startCorp: true, startRoute: true, startSSH: true,
 			bpPrefs: nil, // blueprint omits all prefs
 			// all want* default to false: silence equals OFF.
 		},
@@ -67,16 +68,35 @@ func TestReconcileBlueprintPrefs_PresenceIsOnAbsenceIsOff(t *testing.T) {
 			bpPrefs:  []string{"pref:accept-dns", "pref:not-a-real-pref"},
 			wantCorp: true,
 		},
+		{
+			name:     "funnel_is_not_client_side_projected",
+			bpPrefs:  []string{"pref:accept-dns", "pref:funnel"},
+			wantCorp: true,
+			// pref:funnel has no client-side ipn.Prefs bool; it
+			// rides in the compile-time allowlist but is delivered
+			// (if at all) via the existing nodecap path. Here we
+			// just confirm the reconciler does not panic and does
+			// not touch any other field.
+		},
+		{
+			name:      "v1_legacy_prefs_no_longer_projected",
+			startCorp: false,
+			// Includes the v1.1-era pref:shields-up and pref:webclient
+			// in the bp config to confirm we don't accidentally
+			// resurrect them by re-introducing setters. Only
+			// pref:accept-dns flips, and shields-up/webclient have
+			// no observable client-side effect any more.
+			bpPrefs:  []string{"pref:accept-dns", "pref:shields-up", "pref:webclient"},
+			wantCorp: true,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			b := newTestLocalBackend(t)
 			b.SetPrefsForTest(&ipn.Prefs{
-				BlueprintID:  "demo",
-				CorpDNS:      tt.startCorp,
-				RouteAll:     tt.startRoute,
-				RunSSH:       tt.startSSH,
-				ShieldsUp:    tt.startShields,
-				RunWebClient: tt.startWebClient,
+				BlueprintID: "demo",
+				CorpDNS:     tt.startCorp,
+				RouteAll:    tt.startRoute,
+				RunSSH:      tt.startSSH,
 			})
 
 			selfNode := (&tailcfg.Node{
@@ -101,12 +121,6 @@ func TestReconcileBlueprintPrefs_PresenceIsOnAbsenceIsOff(t *testing.T) {
 			}
 			if got.RunSSH() != tt.wantSSH {
 				t.Errorf("RunSSH = %v; want %v", got.RunSSH(), tt.wantSSH)
-			}
-			if got.ShieldsUp() != tt.wantShields {
-				t.Errorf("ShieldsUp = %v; want %v", got.ShieldsUp(), tt.wantShields)
-			}
-			if got.RunWebClient() != tt.wantWebClient {
-				t.Errorf("RunWebClient = %v; want %v", got.RunWebClient(), tt.wantWebClient)
 			}
 		})
 	}
@@ -140,6 +154,68 @@ func TestReconcileBlueprintPrefs_NoOpForUnboundNode(t *testing.T) {
 	}
 	if !got.RunSSH() {
 		t.Error("non-bound node had RunSSH reconciled to false")
+	}
+}
+
+// TestReconcileBlueprintPrefs_LegacyPrefsLeaveLocalFieldsAlone pins
+// the spec v2 narrowing: pref:shields-up and pref:webclient were in
+// the v1.1 allowlist but are no longer projected client-side, so a
+// blueprint that omits them MUST NOT force the local ShieldsUp or
+// RunWebClient bools to false. Conversely, listing them in the
+// projection MUST NOT flip the bools to true.
+//
+// This distinguishes the v1 setter table (which had silence-forces-
+// off semantics for those fields) from the v2 table (which doesn't
+// know about them at all).
+func TestReconcileBlueprintPrefs_LegacyPrefsLeaveLocalFieldsAlone(t *testing.T) {
+	// Case 1: start with ShieldsUp=true and RunWebClient=true; omit
+	// them from BlueprintConfig.Prefs. v1 would force both to false;
+	// v2 must leave them alone.
+	b := newTestLocalBackend(t)
+	b.SetPrefsForTest(&ipn.Prefs{
+		BlueprintID:  "demo",
+		ShieldsUp:    true,
+		RunWebClient: true,
+	})
+	selfNode := (&tailcfg.Node{
+		ID:          1,
+		BlueprintID: "demo",
+		BlueprintConfig: &tailcfg.BlueprintConfig{
+			Prefs: []string{"pref:accept-dns"},
+		},
+	}).View()
+	b.mu.Lock()
+	b.reconcileBlueprintPrefsLocked(&netmap.NetworkMap{SelfNode: selfNode})
+	b.mu.Unlock()
+	got := b.pm.CurrentPrefs()
+	if !got.ShieldsUp() {
+		t.Error("v2 reconciler forced ShieldsUp OFF; pref:shields-up is not in the v2 allowlist")
+	}
+	if !got.RunWebClient() {
+		t.Error("v2 reconciler forced RunWebClient OFF; pref:webclient is not in the v2 allowlist")
+	}
+
+	// Case 2: start with ShieldsUp=false and RunWebClient=false;
+	// include pref:shields-up and pref:webclient. v1 would force
+	// both to true; v2 must leave them alone (unknown prefs).
+	b2 := newTestLocalBackend(t)
+	b2.SetPrefsForTest(&ipn.Prefs{BlueprintID: "demo"})
+	selfNode2 := (&tailcfg.Node{
+		ID:          1,
+		BlueprintID: "demo",
+		BlueprintConfig: &tailcfg.BlueprintConfig{
+			Prefs: []string{"pref:shields-up", "pref:webclient"},
+		},
+	}).View()
+	b2.mu.Lock()
+	b2.reconcileBlueprintPrefsLocked(&netmap.NetworkMap{SelfNode: selfNode2})
+	b2.mu.Unlock()
+	got2 := b2.pm.CurrentPrefs()
+	if got2.ShieldsUp() {
+		t.Error("v2 reconciler set ShieldsUp ON for unknown pref:shields-up")
+	}
+	if got2.RunWebClient() {
+		t.Error("v2 reconciler set RunWebClient ON for unknown pref:webclient")
 	}
 }
 

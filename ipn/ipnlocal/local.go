@@ -6793,10 +6793,15 @@ func slicesEqualPrefixes(a, b []netip.Prefix) bool {
 // are blueprint-scoped, not per-node, because clientmetrics are
 // process-global.
 //
+// Spec v2 (§6 in-scope #10, §13) lists four prefs:
+// accept-dns, accept-routes, ssh, funnel. The first three map cleanly
+// onto ipn.Prefs bools and appear in this table. pref:funnel has no
+// ipn.Prefs boolean today; funnel eligibility flows through the
+// existing nodecap path, so it is not client-side projected here.
+// See BLUEPRINTS-FOLLOWUPS.md for the gap.
+//
 // New entries here MUST stay in lockstep with the corp-side
-// allowlist in control/policy/blueprint_prefs.go and the locked-field
-// list in cmd/tailscale/cli/blueprint_lock.go. The three lists form
-// the v1.1 blueprint pref contract.
+// allowlist in control/policy/blueprint_prefs.go.
 var blueprintPrefSetters = []struct {
 	id     string
 	get    func(*ipn.Prefs) bool
@@ -6820,18 +6825,6 @@ var blueprintPrefSetters = []struct {
 		get:    func(p *ipn.Prefs) bool { return p.RunSSH },
 		set:    func(p *ipn.Prefs, v bool) { p.RunSSH = v },
 		metric: clientmetric.NewCounter("blueprint_pref_applied_ssh"),
-	},
-	{
-		id:     "pref:shields-up",
-		get:    func(p *ipn.Prefs) bool { return p.ShieldsUp },
-		set:    func(p *ipn.Prefs, v bool) { p.ShieldsUp = v },
-		metric: clientmetric.NewCounter("blueprint_pref_applied_shields_up"),
-	},
-	{
-		id:     "pref:webclient",
-		get:    func(p *ipn.Prefs) bool { return p.RunWebClient },
-		set:    func(p *ipn.Prefs, v bool) { p.RunWebClient = v },
-		metric: clientmetric.NewCounter("blueprint_pref_applied_webclient"),
 	},
 }
 
