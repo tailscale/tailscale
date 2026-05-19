@@ -1208,6 +1208,16 @@ func TestMapDNSResponseSetsExpiryBasedOnTTL(t *testing.T) {
 
 	assertExpiresAt(ipThree, clock.Now().Add(301*time.Second))
 	assertExpiresAt(ipFour, clock.Now().Add(61*time.Second))
+
+	elapsed := time.Second * 30
+	clock.Advance(elapsed)
+	assertExpiresAt(ipThree, clock.Now().Add(301*time.Second).Add(-1*elapsed))
+	assertExpiresAt(ipFour, clock.Now().Add(61*time.Second).Add(-1*elapsed))
+	c.mapDNSResponse(dnsRespV6)
+	// after seeing the addresses again, the expiry time is pushed out.
+	assertExpiresAt(ipThree, clock.Now().Add(301*time.Second))
+	assertExpiresAt(ipFour, clock.Now().Add(61*time.Second))
+
 }
 
 func TestNormalizedDNSNames(t *testing.T) {
