@@ -80,16 +80,6 @@ func TestCheckBlueprintSetLocked_AllLockedFields(t *testing.T) {
 			wantField: "App connector advertisement",
 		},
 		{
-			name:      "hostname",
-			setMask:   func(m *ipn.MaskedPrefs) { m.HostnameSet = true },
-			wantField: "Hostname",
-		},
-		{
-			name:      "operator",
-			setMask:   func(m *ipn.MaskedPrefs) { m.OperatorUserSet = true },
-			wantField: "Operator user",
-		},
-		{
 			name:      "ssh",
 			setMask:   func(m *ipn.MaskedPrefs) { m.RunSSHSet = true },
 			wantField: "SSH",
@@ -103,16 +93,6 @@ func TestCheckBlueprintSetLocked_AllLockedFields(t *testing.T) {
 			name:      "accept-routes",
 			setMask:   func(m *ipn.MaskedPrefs) { m.RouteAllSet = true },
 			wantField: "Route acceptance",
-		},
-		{
-			name:      "shields-up",
-			setMask:   func(m *ipn.MaskedPrefs) { m.ShieldsUpSet = true },
-			wantField: "Shields-up",
-		},
-		{
-			name:      "webclient",
-			setMask:   func(m *ipn.MaskedPrefs) { m.RunWebClientSet = true },
-			wantField: "Web client",
 		},
 	}
 	cur := &ipn.Prefs{BlueprintID: "bp1"}
@@ -132,6 +112,35 @@ func TestCheckBlueprintSetLocked_AllLockedFields(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "tailscale leave") {
 				t.Errorf("error missing leave hint: %v", err)
+			}
+		})
+	}
+}
+
+// TestCheckBlueprintSetLocked_NodeLocalFieldsAllowed asserts the spec
+// v2 narrowing: hostname, operator, shields-up, and webclient are
+// node-local concerns that a blueprint has no opinion on. Setting any
+// of them on a blueprint-bound node must NOT be rejected.
+//
+// This catches a regression where v1 (and the legacy v1.1 KB doc)
+// listed these among the locked fields. Spec §11 dropped them.
+func TestCheckBlueprintSetLocked_NodeLocalFieldsAllowed(t *testing.T) {
+	cur := &ipn.Prefs{BlueprintID: "bp1"}
+	tests := []struct {
+		name    string
+		setMask func(*ipn.MaskedPrefs)
+	}{
+		{"hostname", func(m *ipn.MaskedPrefs) { m.HostnameSet = true }},
+		{"operator", func(m *ipn.MaskedPrefs) { m.OperatorUserSet = true }},
+		{"shields-up", func(m *ipn.MaskedPrefs) { m.ShieldsUpSet = true }},
+		{"webclient", func(m *ipn.MaskedPrefs) { m.RunWebClientSet = true }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mp := &ipn.MaskedPrefs{}
+			tt.setMask(mp)
+			if err := checkBlueprintSetLocked(cur, mp); err != nil {
+				t.Errorf("bound prefs rejected node-local field %q: %v", tt.name, err)
 			}
 		})
 	}

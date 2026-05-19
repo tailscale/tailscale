@@ -29,8 +29,13 @@ type blueprintLockedField struct {
 
 // blueprintLockedFields enumerates every Prefs field that
 // `tailscale set` refuses to edit on a blueprint-bound node. The
-// list is sourced verbatim from the Blueprints v1 spec; if you add
-// or remove a locked field here, update the spec and BLUEPRINTS.md.
+// list is sourced from spec §11; if you add or remove a locked field
+// here, update the spec and BLUEPRINTS.md.
+//
+// Spec v2 excludes node-local concerns (hostname, operator) and the
+// v1.1-era node-level toggles shields-up and webclient. AdvertiseRoutes
+// also covers advertise-exit-node, since exit-node advertisement is
+// stored as the v4+v6 default routes in Prefs.AdvertiseRoutes.
 //
 // The order matters: the first matching field in this slice is the
 // one named in the user-visible error message. Ordering follows the
@@ -52,16 +57,6 @@ var blueprintLockedFields = []blueprintLockedField{
 		maskField: func(m *ipn.MaskedPrefs) bool { return m.AppConnectorSet },
 	},
 	{
-		flag:      "hostname",
-		plural:    "Hostname",
-		maskField: func(m *ipn.MaskedPrefs) bool { return m.HostnameSet },
-	},
-	{
-		flag:      "operator",
-		plural:    "Operator user",
-		maskField: func(m *ipn.MaskedPrefs) bool { return m.OperatorUserSet },
-	},
-	{
 		flag:      "ssh",
 		plural:    "SSH",
 		maskField: func(m *ipn.MaskedPrefs) bool { return m.RunSSHSet },
@@ -75,16 +70,6 @@ var blueprintLockedFields = []blueprintLockedField{
 		flag:      "accept-routes",
 		plural:    "Route acceptance",
 		maskField: func(m *ipn.MaskedPrefs) bool { return m.RouteAllSet },
-	},
-	{
-		flag:      "shields-up",
-		plural:    "Shields-up",
-		maskField: func(m *ipn.MaskedPrefs) bool { return m.ShieldsUpSet },
-	},
-	{
-		flag:      "webclient",
-		plural:    "Web client",
-		maskField: func(m *ipn.MaskedPrefs) bool { return m.RunWebClientSet },
 	},
 }
 
