@@ -642,6 +642,13 @@ jobs:
       run: |
         ./tool/go run ./cmd/tsconnect --fast-compression build
         ./tool/go run ./cmd/tsconnect --fast-compression build-pkg
+    - name: verify Google Chrome is available
+      run: |
+        which google-chrome
+        google-chrome --version
+    - name: tsconnect js/wasm headless-browser tests
+      working-directory: src
+      run: ./tool/go test ./tstest/integration/jswasmtest/ -v -timeout 180s --run-headless-browser-tests
     - name: Tidy cache
       working-directory: src
       shell: bash

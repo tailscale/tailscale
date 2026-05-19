@@ -280,10 +280,16 @@ func (c *Client) urlString(node *tailcfg.DERPNode) string {
 		return c.url.String()
 	}
 	proto := "https"
+	defaultPort := 443
 	if debugUseDERPHTTP() {
 		proto = "http"
+		defaultPort = 80
 	}
-	return fmt.Sprintf("%s://%s/derp", proto, node.HostName)
+	host := node.HostName
+	if node.DERPPort != 0 && node.DERPPort != defaultPort {
+		host = net.JoinHostPort(host, fmt.Sprint(node.DERPPort))
+	}
+	return fmt.Sprintf("%s://%s/derp", proto, host)
 }
 
 // AddressFamilySelector decides whether IPv6 is preferred for

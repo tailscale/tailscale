@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-package main
+package derpserver
 
 import (
 	"bufio"
@@ -11,14 +11,20 @@ import (
 	"strings"
 
 	"github.com/coder/websocket"
-	"tailscale.com/derp/derpserver"
 	"tailscale.com/net/wsconn"
 )
 
 var counterWebSocketAccepts = expvar.NewInt("derp_websocket_accepts")
 
-// addWebSocketSupport returns a Handle wrapping base that adds WebSocket server support.
-func addWebSocketSupport(s *derpserver.Server, base http.Handler) http.Handler {
+// AddWebSocketSupport returns an http.Handler wrapping base that adds
+// WebSocket-DERP support. WebSocket-DERP requests (those with an Upgrade:
+// websocket header and a "derp" Sec-WebSocket-Protocol value) are
+// handled here; all other requests pass through to base.
+//
+// The browser-side Tailscale client (cmd/tsconnect/wasm) can only reach DERP
+// via WebSocket, so any DERP server intended to be reachable from browsers
+// must wrap derpserver.Handler with this function.
+func AddWebSocketSupport(s *Server, base http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		up := strings.ToLower(r.Header.Get("Upgrade"))
 
