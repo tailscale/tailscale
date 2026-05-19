@@ -1,0 +1,6 @@
+=== RUN   TestOne
+    a_test.go:6: hello from one
+--- PASS: TestOne (0.00s)
+=== RUN   TestTwo
+--- PASS: TestTwo (0.00s)
+PASS

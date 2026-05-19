@@ -1,0 +1,26 @@
+=== RUN   TestPass
+--- PASS: TestPass (0.00s)
+PASS
+==================
+WARNING: DATA RACE
+Read at 0x0000007f52a8 by goroutine 9:
+  racesurvey/E_testmain.TestMain.func2()
+      /tmp/racesurvey/E_testmain/e_test.go:18 +0x74
+
+Previous write at 0x0000007f52a8 by goroutine 8:
+  racesurvey/E_testmain.TestMain.func1()
+      /tmp/racesurvey/E_testmain/e_test.go:17 +0x8c
+
+Goroutine 9 (running) created at:
+  racesurvey/E_testmain.TestMain()
+      /tmp/racesurvey/E_testmain/e_test.go:18 +0x139
+  main.main()
+      _testmain.go:48 +0x171
+
+Goroutine 8 (finished) created at:
+  racesurvey/E_testmain.TestMain()
+      /tmp/racesurvey/E_testmain/e_test.go:17 +0xcc
+  main.main()
+      _testmain.go:48 +0x171
+==================
+Found 1 data race(s)
