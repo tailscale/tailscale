@@ -315,7 +315,10 @@ func RunDERPAndSTUN(t testing.TB, logf logger.Logf, ipAddress string) (derpMap *
 		t.Fatal(err)
 	}
 
-	httpsrv := httptest.NewUnstartedServer(derpserver.Handler(d))
+	// Wrap with WebSocket support so browser-WASM (cmd/tsconnect) clients,
+	// which can only reach DERP via WebSocket, can use this same server.
+	handler := derpserver.AddWebSocketSupport(d, derpserver.Handler(d))
+	httpsrv := httptest.NewUnstartedServer(handler)
 	httpsrv.Listener.Close()
 	httpsrv.Listener = ln
 	httpsrv.Config.ErrorLog = logger.StdLogger(logf)
