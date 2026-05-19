@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"io"
 	"net"
-	"net/netip"
 	"sync"
 	"time"
 
@@ -18,8 +17,9 @@ import (
 )
 
 // serveDatapath handles a client-initiated outbound dial. The client
-// writes a one-line JSON DatapathHeader; the daemon dials via tsdial,
-// writes a JSON status line, then splices bytes both directions.
+// writes a one-line JSON DatapathHeader; the daemon dials via the
+// hosted tsnet.Server, writes a JSON status line, then splices bytes
+// both directions.
 func (d *Daemon) serveDatapath(c net.Conn) {
 	br := bufio.NewReader(c)
 	c.SetReadDeadline(time.Now().Add(10 * time.Second))
@@ -44,14 +44,15 @@ func (d *Daemon) serveDatapath(c net.Conn) {
 }
 
 func (d *Daemon) handleDial(appConn net.Conn, br *bufio.Reader, hdr proto.DatapathHeader) {
-	if err := d.ensureStarted(); err != nil {
+	ts, err := d.tsServer()
+	if err != nil {
 		d.logf("daemon: dial before start: %v", err)
 		_ = writeDialReply(appConn, err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(d.shutdownCtx, 30*time.Second)
 	defer cancel()
-	netConn, err := d.dialer.UserDial(ctx, hdr.Network, hdr.Addr)
+	netConn, err := ts.Dial(ctx, hdr.Network, hdr.Addr)
 	if err != nil {
 		_ = writeDialReply(appConn, err)
 		return
@@ -66,7 +67,7 @@ func (d *Daemon) handleDial(appConn net.Conn, br *bufio.Reader, hdr proto.Datapa
 	remote := netConn.RemoteAddr().String()
 	var whois map[string]any
 	if ap, ok := parseAddrPort(remote); ok {
-		whois = d.whoIs(ap)
+		whois = d.whoIs(d.shutdownCtx, ap)
 	}
 	d.traffic.Open(connID, traffic.DirOut, "tcp", local, remote, "", map[string]any{
 		"whois": whois,
@@ -254,12 +255,3 @@ func (a *atomicErr) Get() error {
 	return a.err
 }
 
-// parseAddrPort is a tolerant netip.ParseAddrPort wrapper that returns
-// (zero, false) on error instead of panicking.
-func parseAddrPort(s string) (netip.AddrPort, bool) {
-	ap, err := netip.ParseAddrPort(s)
-	if err != nil {
-		return netip.AddrPort{}, false
-	}
-	return ap, true
-}

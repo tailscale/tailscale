@@ -1,11 +1,12 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package daemon implements the body of the tsnet2d daemon: it brings
-// up wgengine + magicsock + netstack + LocalBackend + localapi, serves
-// the Unix socket protocol described in tsnet2/proto, and
-// tees cleartext bytes between netstack and the application process
-// into the traffic logger.
+// Package daemon implements the body of the tsnet2d daemon: it owns a
+// tailscale.com/tsnet.Server (which brings up wgengine + magicsock +
+// netstack + LocalBackend + localapi), serves the Unix socket protocol
+// described in tsnet2/proto, and tees cleartext bytes between the
+// tsnet listeners/dials and the application process into the traffic
+// logger.
 package daemon
 
 import (
@@ -20,29 +21,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"tailscale.com/control/controlclient"
-	"tailscale.com/hostinfo"
-	"tailscale.com/ipn"
-	"tailscale.com/ipn/ipnauth"
-	"tailscale.com/ipn/ipnlocal"
-	"tailscale.com/ipn/localapi"
-	"tailscale.com/ipn/store"
-	"tailscale.com/net/netmon"
-	"tailscale.com/net/tsdial"
-	"tailscale.com/tsd"
+	"tailscale.com/tsnet"
 	"tailscale.com/tsnet2/proto"
 	"tailscale.com/tsnet2/traffic"
-	"tailscale.com/types/bools"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/logid"
-	"tailscale.com/types/nettype"
-	"tailscale.com/wgengine"
-	"tailscale.com/wgengine/netstack"
 )
 
 // Config configures the daemon.
@@ -70,48 +55,39 @@ type Daemon struct {
 	cfg     Config
 	logf    logger.Logf
 	traffic *traffic.Logger
-	logid   logid.PublicID
 
-	// State established lazily by Start; protected by initMu.
-	initMu         sync.Mutex
-	started        bool
-	sys            *tsd.System
-	lb             *ipnlocal.LocalBackend
-	ns             *netstack.Impl
-	dialer         *tsdial.Dialer
-	netMon         *netmon.Monitor
-	localAPI       *localapi.Handler
-	startErr       error
-	shutdownCtx    context.Context
-	shutdownCancel context.CancelFunc
+	// The hosted tsnet.Server. nil until the Start RPC has been
+	// dispatched; subsequent reads must hold initMu.
+	initMu   sync.Mutex
+	ts       *tsnet.Server
+	started  bool
+	startErr error
 
-	// Listener tracking.
-	lmu           sync.Mutex
-	listeners     map[string]*regListener // listener_id -> listener
-	listenerByKey map[listenerKey]*regListener
+	// Listener tracking. The accept-loop goroutine for each entry is
+	// started in MethodRegisterListener and exits when the listener
+	// (and therefore tsnet's underlying gVisor listener) is closed.
+	lmu       sync.Mutex
+	listeners map[string]*regListener
 
 	// Pending accept slots indexed by listener_id (FIFO of parked
-	// accept-channel sockets).
+	// accept-channel sockets). serveAccept parks a slot here; the
+	// per-listener acceptLoop pulls one when it Accepts an inbound conn.
 	amu        sync.Mutex
 	acceptWait map[string][]*acceptSlot
 	acceptCond *sync.Cond
+
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
 
 	closeOnce sync.Once
 	closeErr  error
 }
 
-// listenerKey indexes a (network, port) registered listener so an
-// incoming netstack flow can quickly find its owner.
-type listenerKey struct {
-	network string
-	port    uint16
-}
-
-// regListener tracks one app-registered listener.
+// regListener tracks one tsnet listener registered by the app.
 type regListener struct {
-	id      string
-	key     listenerKey
-	address string // resolved bind address, e.g. ":8080"
+	id   string
+	ln   net.Listener // the listener returned by tsnet.Server.Listen
+	addr string       // canonicalised bind address as reported by ln.Addr
 }
 
 // acceptSlot is a parked accept-channel conn waiting for the daemon
@@ -122,7 +98,7 @@ type acceptSlot struct {
 }
 
 type acceptResult struct {
-	c      net.Conn // the netstack TCP conn to splice with the app conn
+	c      net.Conn // the tsnet TCP conn to splice with the app conn
 	hdr    proto.AcceptHeader
 	connID string // matches the open record already written
 	err    error
@@ -151,12 +127,11 @@ func New(cfg Config) (*Daemon, error) {
 		return nil, err
 	}
 	d := &Daemon{
-		cfg:           cfg,
-		logf:          logf,
-		traffic:       tlog,
-		listeners:     map[string]*regListener{},
-		listenerByKey: map[listenerKey]*regListener{},
-		acceptWait:    map[string][]*acceptSlot{},
+		cfg:        cfg,
+		logf:       logf,
+		traffic:    tlog,
+		listeners:  map[string]*regListener{},
+		acceptWait: map[string][]*acceptSlot{},
 	}
 	d.acceptCond = sync.NewCond(&d.amu)
 	d.shutdownCtx, d.shutdownCancel = context.WithCancel(context.Background())
@@ -204,18 +179,18 @@ func (d *Daemon) Run(ctx context.Context) error {
 func (d *Daemon) Close() error {
 	d.closeOnce.Do(func() {
 		d.shutdownCancel()
+		// Close every registered tsnet listener so the per-listener
+		// acceptLoop goroutines exit.
+		d.lmu.Lock()
+		for _, rl := range d.listeners {
+			rl.ln.Close()
+		}
+		d.listeners = nil
+		d.lmu.Unlock()
+		// Tear down tsnet.
 		d.initMu.Lock()
-		if d.ns != nil {
-			d.ns.Close()
-		}
-		if d.lb != nil {
-			d.lb.Shutdown()
-		}
-		if d.netMon != nil {
-			d.netMon.Close()
-		}
-		if d.dialer != nil {
-			d.dialer.Close()
+		if d.ts != nil {
+			d.closeErr = d.ts.Close()
 		}
 		d.initMu.Unlock()
 		if d.traffic != nil {
@@ -252,240 +227,84 @@ func (d *Daemon) serveConn(c net.Conn) {
 	}
 }
 
-// startBackendLocked brings up wgengine + LocalBackend + netstack +
-// localapi handler on first use. It must be called with d.initMu held.
+// startBackendLocked constructs a tsnet.Server from p and calls
+// Start on it. Must be called with d.initMu held.
+//
+// All of the heavy wiring (wgengine + magicsock + netstack +
+// LocalBackend + localapi handler + store + dialer + netmon) is
+// delegated to tsnet.Server itself rather than reimplemented here.
 func (d *Daemon) startBackendLocked(p proto.StartParams) error {
 	if d.started {
 		return d.startErr
 	}
 	d.started = true
-	hostinfo.SetPackage("tsnet2")
 
-	sys := tsd.NewSystem()
-	d.sys = sys
-
-	tsLogf := d.logf
-	netMon, err := netmon.New(sys.Bus.Get(), tsLogf)
-	if err != nil {
-		d.startErr = fmt.Errorf("netmon.New: %w", err)
+	ts := &tsnet.Server{
+		Dir:           d.cfg.StateDir,
+		Hostname:      p.Hostname,
+		ControlURL:    p.ControlURL,
+		AuthKey:       p.AuthKey,
+		Ephemeral:     p.Ephemeral,
+		AdvertiseTags: p.AdvertiseTags,
+		Logf:          d.logf,
+		// UserLogf intentionally left nil for now; user-visible logs
+		// (auth URLs, etc.) end up in tsnet's default log.Printf. A
+		// future enhancement is to forward UserLogf over the control
+		// channel to the app's UserLogf.
+	}
+	if err := ts.Start(); err != nil {
+		d.startErr = fmt.Errorf("tsnet.Start: %w", err)
 		return d.startErr
 	}
-	d.netMon = netMon
-
-	dialer := &tsdial.Dialer{Logf: tsLogf}
-	dialer.SetBus(sys.Bus.Get())
-	d.dialer = dialer
-
-	eng, err := wgengine.NewUserspaceEngine(tsLogf, wgengine.Config{
-		EventBus:      sys.Bus.Get(),
-		NetMon:        netMon,
-		Dialer:        dialer,
-		SetSubsystem:  sys.Set,
-		ControlKnobs:  sys.ControlKnobs(),
-		HealthTracker: sys.HealthTracker.Get(),
-		ExtraRootCAs:  sys.ExtraRootCAs,
-		Metrics:       sys.UserMetricsRegistry(),
-	})
-	if err != nil {
-		d.startErr = fmt.Errorf("wgengine.NewUserspaceEngine: %w", err)
-		return d.startErr
-	}
-	sys.Set(eng)
-	sys.HealthTracker.Get().SetMetricsRegistry(sys.UserMetricsRegistry())
-
-	ns, err := netstack.Create(tsLogf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper())
-	if err != nil {
-		d.startErr = fmt.Errorf("netstack.Create: %w", err)
-		return d.startErr
-	}
-	sys.Tun.Get().Start()
-	sys.Set(ns)
-	ns.ProcessLocalIPs = true
-	ns.ProcessSubnets = true
-	ns.GetTCPHandlerForFlow = d.getTCPHandlerForFlow
-	ns.GetUDPHandlerForFlow = d.getUDPHandlerForFlow
-	d.ns = ns
-
-	dialer.UseNetstackForIP = func(ip netip.Addr) bool {
-		_, ok := eng.PeerForIP(ip)
-		return ok
-	}
-	dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-		v4, v6 := d.tailscaleIPs()
-		src := bools.IfElse(dst.Addr().Is6(), v6, v4)
-		return ns.DialContextTCPWithBind(ctx, src, dst)
-	}
-	dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-		v4, v6 := d.tailscaleIPs()
-		src := bools.IfElse(dst.Addr().Is6(), v6, v4)
-		return ns.DialContextUDPWithBind(ctx, src, dst)
-	}
-
-	stateFile := filepath.Join(d.cfg.StateDir, "tsnet2.state")
-	st, err := store.New(tsLogf, stateFile)
-	if err != nil {
-		d.startErr = fmt.Errorf("store.New: %w", err)
-		return d.startErr
-	}
-	sys.Set(st)
-
-	loginFlags := controlclient.LoginDefault
-	if p.Ephemeral {
-		loginFlags = controlclient.LoginEphemeral
-	}
-	lb, err := ipnlocal.NewLocalBackend(tsLogf, d.logid, sys, loginFlags|controlclient.LocalBackendStartKeyOSNeutral)
-	if err != nil {
-		d.startErr = fmt.Errorf("NewLocalBackend: %w", err)
-		return d.startErr
-	}
-	lb.SetVarRoot(d.cfg.StateDir)
-	d.lb = lb
-	if err := ns.Start(lb); err != nil {
-		d.startErr = fmt.Errorf("netstack.Start: %w", err)
-		return d.startErr
-	}
-
-	prefs := ipn.NewPrefs()
-	prefs.Hostname = p.Hostname
-	prefs.WantRunning = true
-	if cu := cmpOr(p.ControlURL, os.Getenv("TS_CONTROL_URL")); cu != "" {
-		prefs.ControlURL = cu
-	}
-	prefs.AdvertiseTags = p.AdvertiseTags
-	authKey := cmpOr(p.AuthKey, os.Getenv("TS_AUTHKEY"), os.Getenv("TS_AUTH_KEY"))
-	if err := lb.Start(ipn.Options{UpdatePrefs: prefs, AuthKey: authKey}); err != nil {
-		d.startErr = fmt.Errorf("LocalBackend.Start: %w", err)
-		return d.startErr
-	}
-	state := lb.State()
-	if state == ipn.NeedsLogin {
-		if err := lb.StartLoginInteractive(d.shutdownCtx); err != nil {
-			d.startErr = fmt.Errorf("StartLoginInteractive: %w", err)
-			return d.startErr
-		}
-	}
-
-	lah := localapi.NewHandler(localapi.HandlerConfig{
-		Actor:    ipnauth.Self,
-		Backend:  lb,
-		Logf:     tsLogf,
-		LogID:    d.logid,
-		EventBus: sys.Bus.Get(),
-	})
-	lah.PermitWrite = true
-	lah.PermitRead = true
-	d.localAPI = lah
-
+	d.ts = ts
 	return nil
 }
 
-// cmpOr returns the first non-empty argument, or "".
-func cmpOr(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
+// tsServer returns the hosted tsnet.Server, or an error if Start has
+// not been dispatched yet.
+func (d *Daemon) tsServer() (*tsnet.Server, error) {
+	d.initMu.Lock()
+	defer d.initMu.Unlock()
+	if !d.started {
+		return nil, errors.New("daemon: backend not started; call Start first")
 	}
-	return ""
+	if d.startErr != nil {
+		return nil, d.startErr
+	}
+	return d.ts, nil
 }
 
-// tailscaleIPs returns the node's current IPv4 and IPv6 addresses (or
-// the zero value of netip.Addr if not yet known).
-func (d *Daemon) tailscaleIPs() (ip4, ip6 netip.Addr) {
-	if d.lb == nil {
-		return
-	}
-	nm := d.lb.NetMapNoPeers()
-	if nm == nil {
-		return
-	}
-	for _, addr := range nm.GetAddresses().All() {
-		ip := addr.Addr()
-		if ip.Is6() {
-			ip6 = ip
-		}
-		if ip.Is4() {
-			ip4 = ip
-		}
-	}
-	return ip4, ip6
-}
-
-// getTCPHandlerForFlow is the GetTCPHandlerForFlow callback registered
-// with netstack. It returns a handler that delivers the cleartext conn
-// to the registered tsnet2 listener (if any).
-func (d *Daemon) getTCPHandlerForFlow(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
-	rl, ok := d.lookupListener("tcp", dst)
-	if !ok {
-		return nil, true // intercept = true (drop, don't forward to host)
-	}
-	return func(c net.Conn) {
-		d.deliverInbound(rl, src, dst, c)
-	}, true
-}
-
-// getUDPHandlerForFlow accepts no UDP listeners today. UDP packet flows
-// are dropped.
-func (d *Daemon) getUDPHandlerForFlow(src, dst netip.AddrPort) (handler func(nettype.ConnPacketConn), intercept bool) {
-	return nil, true
-}
-
-// lookupListener finds a registered listener matching network and dst.
-// In v1 we only match on (network, port); host-specific bindings can be
-// added when a test exercises them.
-func (d *Daemon) lookupListener(network string, dst netip.AddrPort) (*regListener, bool) {
-	d.lmu.Lock()
-	defer d.lmu.Unlock()
-	if rl, ok := d.listenerByKey[listenerKey{network: network, port: dst.Port()}]; ok {
-		return rl, true
-	}
-	return nil, false
-}
-
-// deliverInbound hands the netstack conn to a parked accept slot,
-// emits the "open" traffic record (with WhoIs enrichment), and lets
-// serveAccept perform the splice. If no slot is available within a
-// short timeout the conn is dropped.
-func (d *Daemon) deliverInbound(rl *regListener, src, dst netip.AddrPort, nsConn net.Conn) {
-	slot := d.takeAcceptSlot(rl.id, 10*time.Second)
-	if slot == nil {
-		d.logf("daemon: no accept slot for listener %s; dropping conn from %v", rl.id, src)
-		nsConn.Close()
-		return
-	}
-	connID := newID()
-	whois := d.whoIs(src)
-	d.traffic.Open(connID, traffic.DirIn, "tcp", dst.String(), src.String(), rl.id, map[string]any{
-		"whois": whois,
-	})
-	hdr := proto.AcceptHeader{
-		ListenerID: rl.id,
-		Local:      dst.String(),
-		Remote:     src.String(),
-	}
-	slot.done <- acceptResult{c: nsConn, hdr: hdr, connID: connID}
-}
-
-// whoIs returns a small map representing the WhoIs result for ipp.
-// Returns nil if no peer matches. Only node and user identifiers are
-// included so the traffic log doesn't bloat.
-func (d *Daemon) whoIs(ipp netip.AddrPort) map[string]any {
-	if d.lb == nil {
+// whoIs returns a small map representing the WhoIs result for the
+// peer at ipp via the daemon's hosted tsnet.LocalClient. Returns nil
+// if no peer matches or the lookup fails. Only node and user
+// identifiers are included so the traffic log doesn't bloat.
+func (d *Daemon) whoIs(ctx context.Context, ipp netip.AddrPort) map[string]any {
+	ts, err := d.tsServer()
+	if err != nil {
 		return nil
 	}
-	n, u, ok := d.lb.WhoIs("tcp", ipp)
-	if !ok {
+	lc, err := ts.LocalClient()
+	if err != nil {
+		return nil
+	}
+	resp, err := lc.WhoIs(ctx, ipp.String())
+	if err != nil || resp == nil {
 		return nil
 	}
 	m := map[string]any{}
-	if n.Valid() {
-		m["node"] = n.Name()
-		if id := n.StableID(); id != "" {
+	if resp.Node != nil {
+		if resp.Node.Name != "" {
+			m["node"] = resp.Node.Name
+		}
+		if id := resp.Node.StableID; id != "" {
 			m["node_id"] = string(id)
 		}
 	}
-	if u.LoginName != "" {
-		m["user"] = u.LoginName
+	if resp.UserProfile != nil && resp.UserProfile.LoginName != "" {
+		m["user"] = resp.UserProfile.LoginName
+	}
+	if len(m) == 0 {
+		return nil
 	}
 	return m
 }
@@ -494,6 +313,56 @@ func newID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// acceptLoop pulls inbound connections from rl.ln (a tsnet listener)
+// and hands each to a parked accept slot via deliverInbound. It exits
+// when ln.Accept returns net.ErrClosed (i.e. the listener was
+// unregistered or the daemon is shutting down).
+func (d *Daemon) acceptLoop(rl *regListener) {
+	for {
+		c, err := rl.ln.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			if d.shutdownCtx.Err() != nil {
+				return
+			}
+			d.logf("daemon: accept for listener %s: %v", rl.id, err)
+			return
+		}
+		go d.deliverInbound(rl, c)
+	}
+}
+
+// deliverInbound hands the tsnet conn to a parked accept slot, emits
+// the "open" traffic record (with WhoIs enrichment), and lets
+// serveAccept perform the splice. If no slot is available within a
+// short timeout the conn is dropped.
+func (d *Daemon) deliverInbound(rl *regListener, tsConn net.Conn) {
+	slot := d.takeAcceptSlot(rl.id, 10*time.Second)
+	if slot == nil {
+		d.logf("daemon: no accept slot for listener %s; dropping conn", rl.id)
+		tsConn.Close()
+		return
+	}
+	localStr := tsConn.LocalAddr().String()
+	remoteStr := tsConn.RemoteAddr().String()
+	var srcWhois map[string]any
+	if ap, ok := parseAddrPort(remoteStr); ok {
+		srcWhois = d.whoIs(d.shutdownCtx, ap)
+	}
+	connID := newID()
+	d.traffic.Open(connID, traffic.DirIn, "tcp", localStr, remoteStr, rl.id, map[string]any{
+		"whois": srcWhois,
+	})
+	hdr := proto.AcceptHeader{
+		ListenerID: rl.id,
+		Local:      localStr,
+		Remote:     remoteStr,
+	}
+	slot.done <- acceptResult{c: tsConn, hdr: hdr, connID: connID}
 }
 
 // pushAcceptSlot parks an accept-channel conn until the daemon has an
@@ -557,35 +426,12 @@ func (d *Daemon) removeAcceptSlot(listenerID string, target *acceptSlot) {
 	}
 }
 
-// listenAddrFor parses an app-supplied bind string ("[host]:port") and
-// returns a (network, port) key plus the canonicalised address. Port 0
-// is allocated from a small ephemeral pool to keep tsnet2 self-contained.
-func listenAddrFor(network, addr string) (listenerKey, string, error) {
-	host, portStr, err := net.SplitHostPort(addr)
+// parseAddrPort is a tolerant netip.ParseAddrPort wrapper that returns
+// (zero, false) on error instead of panicking.
+func parseAddrPort(s string) (netip.AddrPort, bool) {
+	ap, err := netip.ParseAddrPort(s)
 	if err != nil {
-		return listenerKey{}, "", fmt.Errorf("bad addr %q: %w", addr, err)
+		return netip.AddrPort{}, false
 	}
-	if host != "" && host != "0.0.0.0" && host != "::" {
-		if _, perr := netip.ParseAddr(host); perr != nil {
-			return listenerKey{}, "", fmt.Errorf("bad addr %q: %w", addr, perr)
-		}
-	}
-	port, err := strconv.ParseUint(portStr, 10, 16)
-	if err != nil {
-		return listenerKey{}, "", fmt.Errorf("bad port %q: %w", portStr, err)
-	}
-	if port == 0 {
-		port = pickEphemeralPort()
-		addr = ":" + strconv.FormatUint(port, 10)
-	}
-	return listenerKey{network: network, port: uint16(port)}, addr, nil
-}
-
-var ephemPortCounter atomic.Uint32
-
-func pickEphemeralPort() uint64 {
-	const first = 10002
-	const last = 19999
-	v := uint64(ephemPortCounter.Add(1))
-	return uint64(first) + (v % uint64(last-first+1))
+	return ap, true
 }

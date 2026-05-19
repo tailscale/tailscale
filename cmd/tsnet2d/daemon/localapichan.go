@@ -4,100 +4,68 @@
 package daemon
 
 import (
+	"io"
 	"net"
-	"net/http"
 	"sync"
 )
 
-// serveLocalAPI hands the (already-handshaken) conn off to the daemon's
-// localapi handler. We do that by constructing a one-shot net.Listener
-// that yields exactly c on the first Accept and then blocks; this lets
-// us reuse the stdlib http.Server with its full HTTP semantics
-// (including hijacking and flushing) instead of writing our own loop.
+// serveLocalAPI proxies the (already-handshaken) Unix-socket conn
+// straight to tsnet's in-process LocalAPI listener.
+//
+// tsnet.Server.LocalClient() returns a *local.Client whose Dial field
+// opens a memnet connection into tsnet's in-process localapi
+// http.Server. We just splice bytes between the app-facing Unix conn
+// and that in-process conn. Hijacker and Flusher semantics are
+// preserved because we're not parsing HTTP — we're a dumb byte pipe.
 func (d *Daemon) serveLocalAPI(c net.Conn) {
-	// Wait for the backend to be started; otherwise the localAPI
-	// handler is nil and the client gets a confusing error.
-	d.initMu.Lock()
-	lah := d.localAPI
-	d.initMu.Unlock()
-	if lah == nil {
+	defer c.Close()
+	ts, err := d.tsServer()
+	if err != nil {
 		// Reply with a tiny canned HTTP 503 so the client gets a
 		// readable error rather than a connection-reset.
 		_, _ = c.Write([]byte("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"))
 		return
 	}
-
-	ln := newSingleConnListener(c)
-	srv := &http.Server{Handler: lah}
-	// http.Server.Serve blocks until the listener returns an error;
-	// our single-conn listener returns net.ErrClosed after the first
-	// Accept call returns. http.Server then exits cleanly.
-	_ = srv.Serve(ln)
-}
-
-// singleConnListener is a net.Listener that yields exactly one
-// preloaded connection on Accept and then blocks forever (or until
-// Close is called, in which case Accept returns net.ErrClosed). It
-// exists so we can serve one HTTP request (or one keep-alive session)
-// per Unix-socket connection with http.Server.
-type singleConnListener struct {
-	once sync.Once
-	c    net.Conn
-
-	mu     sync.Mutex
-	closed chan struct{}
-	taken  bool
-}
-
-func newSingleConnListener(c net.Conn) *singleConnListener {
-	return &singleConnListener{
-		c:      c,
-		closed: make(chan struct{}),
+	lc, err := ts.LocalClient()
+	if err != nil {
+		_, _ = c.Write([]byte("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"))
+		return
 	}
-}
-
-func (l *singleConnListener) Accept() (net.Conn, error) {
-	l.mu.Lock()
-	if l.taken {
-		l.mu.Unlock()
-		<-l.closed
-		return nil, net.ErrClosed
+	if lc.Dial == nil {
+		// Shouldn't happen — tsnet always sets Dial — but defend
+		// against future changes.
+		_, _ = c.Write([]byte("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"))
+		return
 	}
-	l.taken = true
-	c := l.c
-	l.mu.Unlock()
-	return &closeNotifyConn{Conn: c, ln: l}, nil
-}
-
-func (l *singleConnListener) Close() error {
-	l.once.Do(func() { close(l.closed) })
-	return nil
-}
-
-func (l *singleConnListener) Addr() net.Addr {
-	if l.c != nil {
-		return l.c.LocalAddr()
+	inner, err := lc.Dial(d.shutdownCtx, "tcp", "local-tailscaled.sock:80")
+	if err != nil {
+		d.logf("daemon: localapi dial: %v", err)
+		return
 	}
-	return &net.UnixAddr{Net: "unix"}
-}
+	defer inner.Close()
 
-// closeNotifyConn wraps the underlying net.Conn and closes its parent
-// listener when the conn itself is closed, so that http.Server.Serve
-// returns instead of hanging forever waiting for a second Accept.
-type closeNotifyConn struct {
-	net.Conn
-	ln   *singleConnListener
-	once sync.Once
-	cErr error
+	// Bidirectional copy. When either side hits EOF/error, half-close
+	// the other so HTTP keep-alive and Hijacker semantics drain
+	// cleanly.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(inner, c)
+		if cw, ok := inner.(closeWriter); ok {
+			_ = cw.CloseWrite()
+		} else {
+			_ = inner.Close()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(c, inner)
+		if cw, ok := c.(closeWriter); ok {
+			_ = cw.CloseWrite()
+		} else {
+			_ = c.Close()
+		}
+	}()
+	wg.Wait()
 }
-
-func (c *closeNotifyConn) Close() error {
-	c.once.Do(func() {
-		c.cErr = c.Conn.Close()
-		c.ln.Close()
-	})
-	return c.cErr
-}
-
-// Compile-time check.
-var _ net.Listener = (*singleConnListener)(nil)

@@ -6,12 +6,10 @@ package daemon
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
 
-	"tailscale.com/ipn"
 	"tailscale.com/tsnet2/proto"
 )
 
@@ -69,29 +67,26 @@ func (d *Daemon) dispatch(ctx context.Context, method string, paramsRaw []byte) 
 		return struct{}{}, nil
 
 	case proto.MethodUp:
-		if err := d.ensureStarted(); err != nil {
+		ts, err := d.tsServer()
+		if err != nil {
 			return nil, err
 		}
-		if err := d.awaitRunning(ctx); err != nil {
+		st, err := ts.Up(ctx)
+		if err != nil {
 			return nil, err
 		}
-		ip4, ip6 := d.tailscaleIPs()
 		out := proto.UpResult{}
+		ip4, ip6 := ts.TailscaleIPs()
 		if ip4.IsValid() {
 			out.TailscaleIPs = append(out.TailscaleIPs, ip4)
 		}
 		if ip6.IsValid() {
 			out.TailscaleIPs = append(out.TailscaleIPs, ip6)
 		}
-		if d.lb != nil {
-			st := d.lb.StatusWithoutPeers()
-			if st != nil && st.Self != nil {
-				out.NodeName = st.Self.HostName
-			}
-			if nm := d.lb.NetMapNoPeers(); nm != nil {
-				out.CertDomains = append(out.CertDomains, nm.DNS.CertDomains...)
-			}
+		if st != nil && st.Self != nil {
+			out.NodeName = st.Self.HostName
 		}
+		out.CertDomains = ts.CertDomains()
 		return out, nil
 
 	case proto.MethodClose:
@@ -99,7 +94,11 @@ func (d *Daemon) dispatch(ctx context.Context, method string, paramsRaw []byte) 
 		return struct{}{}, nil
 
 	case proto.MethodTailscaleIPs:
-		ip4, ip6 := d.tailscaleIPs()
+		ts, err := d.tsServer()
+		if err != nil {
+			return nil, err
+		}
+		ip4, ip6 := ts.TailscaleIPs()
 		r := proto.TailscaleIPsResult{}
 		if ip4.IsValid() {
 			r.V4 = ip4.String()
@@ -110,38 +109,32 @@ func (d *Daemon) dispatch(ctx context.Context, method string, paramsRaw []byte) 
 		return r, nil
 
 	case proto.MethodCertDomains:
-		if d.lb == nil {
+		ts, err := d.tsServer()
+		if err != nil {
 			return proto.CertDomainsResult{}, nil
 		}
-		nm := d.lb.NetMapNoPeers()
-		if nm == nil {
-			return proto.CertDomainsResult{}, nil
-		}
-		return proto.CertDomainsResult{Domains: append([]string(nil), nm.DNS.CertDomains...)}, nil
+		return proto.CertDomainsResult{Domains: ts.CertDomains()}, nil
 
 	case proto.MethodRegisterListener:
 		var p proto.RegisterListenerParams
 		if err := proto.UnmarshalParams(paramsRaw, &p); err != nil {
 			return nil, err
 		}
-		if err := d.ensureStarted(); err != nil {
-			return nil, err
-		}
-		key, addr, err := listenAddrFor(p.Network, p.Addr)
+		ts, err := d.tsServer()
 		if err != nil {
 			return nil, err
 		}
-		id := newID()
-		rl := &regListener{id: id, key: key, address: addr}
-		d.lmu.Lock()
-		if _, dup := d.listenerByKey[key]; dup {
-			d.lmu.Unlock()
-			return nil, fmt.Errorf("daemon: listener already registered for %v", key)
+		ln, err := ts.Listen(p.Network, p.Addr)
+		if err != nil {
+			return nil, fmt.Errorf("tsnet.Listen(%q, %q): %w", p.Network, p.Addr, err)
 		}
+		id := newID()
+		rl := &regListener{id: id, ln: ln, addr: ln.Addr().String()}
+		d.lmu.Lock()
 		d.listeners[id] = rl
-		d.listenerByKey[key] = rl
 		d.lmu.Unlock()
-		return proto.RegisterListenerResult{ListenerID: id, Addr: addr}, nil
+		go d.acceptLoop(rl)
+		return proto.RegisterListenerResult{ListenerID: id, Addr: rl.addr}, nil
 
 	case proto.MethodUnregisterListener:
 		var p proto.UnregisterListenerParams
@@ -152,50 +145,16 @@ func (d *Daemon) dispatch(ctx context.Context, method string, paramsRaw []byte) 
 		rl, ok := d.listeners[p.ListenerID]
 		if ok {
 			delete(d.listeners, p.ListenerID)
-			if cur, ok := d.listenerByKey[rl.key]; ok && cur == rl {
-				delete(d.listenerByKey, rl.key)
-			}
 		}
 		d.lmu.Unlock()
+		if ok {
+			rl.ln.Close() // unblocks acceptLoop
+		}
 		return struct{}{}, nil
 	}
 	return nil, fmt.Errorf("daemon: unknown method %q", method)
 }
 
-func (d *Daemon) ensureStarted() error {
-	d.initMu.Lock()
-	defer d.initMu.Unlock()
-	if !d.started {
-		return errors.New("daemon: backend not started; call Start first")
-	}
-	return d.startErr
-}
-
-// awaitRunning blocks until the LocalBackend reaches ipn.Running or
-// ctx expires.
-func (d *Daemon) awaitRunning(ctx context.Context) error {
-	if d.lb == nil {
-		return errors.New("daemon: no LocalBackend")
-	}
-	st := d.lb.State()
-	if st == ipn.Running {
-		return nil
-	}
-	// Watch until we see Running.
-	d.lb.WatchNotifications(ctx, ipn.NotifyInitialState, nil, func(n *ipn.Notify) (keepGoing bool) {
-		if n.State != nil {
-			st = *n.State
-			if st == ipn.Running {
-				return false
-			}
-		}
-		return true
-	})
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if st != ipn.Running {
-		return fmt.Errorf("daemon: backend ended in state %v", st)
-	}
-	return nil
-}
+// (ensureStarted/awaitRunning were removed: backend-started state is
+// checked via tsServer(), and "wait until Running" is handled inside
+// tsnet.Server.Up.)
