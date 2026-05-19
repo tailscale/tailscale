@@ -18,6 +18,7 @@ const (
 	HealthWarnableDERPRegionError           = "derp-region-error"
 	HealthWarnableNoUDP4Bind                = "no-udp4-bind"
 	HealthWarnableMapResponseTimeout        = "mapresponse-timeout"
+	HealthWarnableNodeNotFound              = "node-not-found"
 	HealthWarnableTLSConnectionFailed       = "tls-connection-failed"
 	HealthWarnableMagicsockReceiveFuncError = "magicsock-receive-func-error"
 	HealthWarnableTestWarnable              = "test-warnable"

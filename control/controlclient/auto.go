@@ -558,6 +558,7 @@ func (c *Auto) mapRoutine() {
 		err := c.direct.PollNetMap(ctx, mrs)
 
 		c.direct.health.SetOutOfPollNetMap()
+		c.direct.health.SetMapRoutineNodeNotFound(err != nil && errors.Is(err, ErrNodeNotFound))
 		c.mu.Lock()
 		c.inMapPoll = false
 		paused := c.paused
@@ -787,6 +788,10 @@ func (c *Auto) Login(flags LoginFlags) {
 }
 
 var ErrClientClosed = errors.New("client closed")
+
+// ErrNodeNotFound is wrapped into errors returned by [Direct.PollNetMap]
+// when control responds to /machine/map with HTTP 404.
+var ErrNodeNotFound = errors.New("node not found")
 
 func (c *Auto) Logout(ctx context.Context) error {
 	c.logf("client.Logout()")
