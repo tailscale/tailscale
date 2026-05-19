@@ -30,6 +30,14 @@ import (
 
 const (
 	maxAttempts = 3
+
+	// raceDetectorMarkerLine is the first line of every Go race
+	// detector report, emitted at column 0. We look for it as a
+	// whole line (not as a substring) so that we don't false-fire
+	// on tests that legitimately print the same text indented in
+	// their own logs — for example, this package's own race tests,
+	// which exec a child testwrapper and dump its captured output.
+	raceDetectorMarkerLine = "WARNING: DATA RACE\n"
 )
 
 type testAttempt struct {
@@ -41,6 +49,10 @@ type testAttempt struct {
 	start, end    time.Time
 	isMarkedFlaky bool   // set if the test is marked as flaky
 	issueURL      string // set if the test is marked as flaky
+	// raceDetected is true on a per-test event if that test's output
+	// contained a race report, and true on a pkgFinished event if any
+	// test in the package -- or the package's own output -- did.
+	raceDetected bool
 
 	pkgFinished bool
 }
@@ -153,14 +165,46 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 					outcome = "fail"
 				}
 				pkgTests[""].logs.WriteString(goOutput.Output)
+				// If a data race was detected anywhere in this
+				// package's output -- whether at the package level or
+				// attributed to a specific test -- consolidate all
+				// per-test logs into the package-level logs so the
+				// full race report is visible regardless of which
+				// test test2json happened to attribute it to. The
+				// pkgFinished testAttempt also carries raceDetected
+				// so the main loop can suppress flaky-test retries.
+				raceDetected := pkgTests[""].raceDetected
+				if !raceDetected {
+					for _, t := range pkgTests {
+						if t.raceDetected {
+							raceDetected = true
+							break
+						}
+					}
+				}
+				if raceDetected {
+					var ts []*testAttempt
+					for _, t := range pkgTests {
+						if t.testName != "" && t.logs.Len() > 0 {
+							ts = append(ts, t)
+						}
+					}
+					slices.SortFunc(ts, func(a, b *testAttempt) int {
+						return a.start.Compare(b.start)
+					})
+					for _, t := range ts {
+						pkgTests[""].logs.Write(t.logs.Bytes())
+					}
+				}
 				ch <- &testAttempt{
-					pkg:         goOutput.Package,
-					outcome:     outcome,
-					start:       pkgTests[""].start,
-					end:         goOutput.Time,
-					logs:        pkgTests[""].logs,
-					pkgFinished: true,
-					cached:      pkgCached[goOutput.Package],
+					pkg:          goOutput.Package,
+					outcome:      outcome,
+					start:        pkgTests[""].start,
+					end:          goOutput.Time,
+					logs:         pkgTests[""].logs,
+					pkgFinished:  true,
+					cached:       pkgCached[goOutput.Package],
+					raceDetected: raceDetected,
 				}
 			case "output":
 				// Capture all output from the package except for the final
@@ -168,6 +212,9 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 				// printPkgOutcome will output a similar line
 				if !strings.HasPrefix(goOutput.Output, fmt.Sprintf("FAIL\t%s\t", goOutput.Package)) {
 					pkgTests[""].logs.WriteString(goOutput.Output)
+					if goOutput.Output == raceDetectorMarkerLine {
+						pkgTests[""].raceDetected = true
+					}
 				}
 			}
 
@@ -178,6 +225,9 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 			testName = test
 			if goOutput.Action == "output" {
 				resultMap[pkg][testName].logs.WriteString(goOutput.Output)
+				if goOutput.Output == raceDetectorMarkerLine {
+					resultMap[pkg][testName].raceDetected = true
+				}
 			}
 			continue
 		}
@@ -200,6 +250,9 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 				pkgTests[testName].issueURL = strings.TrimPrefix(suffix, ": ")
 			} else {
 				pkgTests[testName].logs.WriteString(goOutput.Output)
+				if goOutput.Output == raceDetectorMarkerLine {
+					pkgTests[testName].raceDetected = true
+				}
 			}
 		}
 	}
@@ -305,6 +358,16 @@ func main() {
 					tr.pkg = packages[0]
 				}
 				if tr.pkgFinished {
+					if tr.raceDetected {
+						// A data race is never something we want to
+						// paper over by retrying flaky tests in the
+						// package: the race indicates a real bug
+						// that may not even be in the failing test,
+						// and a retry could hide it. Discard any
+						// retry plans for this pkg and fail fast.
+						delete(toRetry, tr.pkg)
+						failed = true
+					}
 					if tr.outcome == "fail" && len(toRetry[tr.pkg]) == 0 {
 						// If a package fails and we don't have any tests to
 						// retry, then we should fail. This typically happens

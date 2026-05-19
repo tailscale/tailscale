@@ -145,6 +145,118 @@ func TestAlwaysError(t *testing.T) {
 	}
 }
 
+// TestRaceSuppressesFlakyRetry verifies that detecting a data race
+// in a package's output stops testwrapper from retrying any flaky
+// test in that package. Races are too serious to paper over: the
+// flaky test might not even be the one whose code is racy, and a
+// retry without the racy goroutine could silently hide the bug.
+func TestRaceSuppressesFlakyRetry(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("test requires the race detector, which needs linux/amd64")
+	}
+	t.Parallel()
+
+	testfile := filepath.Join(t.TempDir(), "raceretry_test.go")
+	code := []byte(`package raceretry_test
+
+import (
+	"sync"
+	"testing"
+	"tailscale.com/cmd/testwrapper/flakytest"
+)
+
+var counter int
+
+func TestRace(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); counter++ }()
+	go func() { defer wg.Done(); counter++ }()
+	wg.Wait()
+}
+
+func TestFlaky(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/0")
+	t.Fatal("flaky test failing; would normally be retried")
+}
+`)
+	if err := os.WriteFile(testfile, code, 0o644); err != nil {
+		t.Fatalf("writing package: %s", err)
+	}
+
+	out, err := cmdTestwrapper(t, testfile, "-race").CombinedOutput()
+	if code, ok := errExitCode(err); !ok || code != 1 {
+		t.Fatalf("testwrapper %s -race: expected exit code 1, got %v; output was:\n%s", testfile, err, out)
+	}
+	if want := "WARNING: DATA RACE"; !bytes.Contains(out, []byte(want)) {
+		t.Fatalf("expected race report in output, got:\n%s", out)
+	}
+	if want := "Not retrying flaky tests"; !bytes.Contains(out, []byte(want)) {
+		t.Fatalf("expected no-retry message in output, got:\n%s", out)
+	}
+	if got := bytes.Count(out, []byte("Attempt #")); got != 0 {
+		t.Fatalf("expected no retry attempts to be made, but %d were:\n%s", got, out)
+	}
+	if got := bytes.Count(out, []byte("=== RUN   TestFlaky")); got != 1 {
+		t.Fatalf("expected TestFlaky to be run exactly once, ran %d times:\n%s", got, out)
+	}
+
+	if testing.Verbose() {
+		t.Logf("success - output:\n%s", out)
+	}
+}
+
+// TestRaceAttributedToPassingTest covers the case where go test
+// attributes a data race report to a test that itself reports PASS
+// (e.g. when the racing goroutines outlive the test that spawned
+// them and TSan prints during a different test's window). Without
+// the race-detection fix, the WARNING: DATA RACE block would be
+// stuck in a passing test's log buffer and dropped on the floor.
+// See https://github.com/tailscale/tailscale/issues/19603.
+func TestRaceAttributedToPassingTest(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("test requires the race detector, which needs linux/amd64")
+	}
+	t.Parallel()
+
+	testfile := filepath.Join(t.TempDir(), "race_test.go")
+	code := []byte(`package race_test
+
+import (
+	"sync"
+	"testing"
+)
+
+var counter int
+var wg sync.WaitGroup
+
+func TestSpawn(t *testing.T) {
+	wg.Add(2)
+	go func() { defer wg.Done(); counter++ }()
+	go func() { defer wg.Done(); counter++ }()
+}
+
+func TestWait(t *testing.T) {
+	wg.Wait()
+}
+`)
+	if err := os.WriteFile(testfile, code, 0o644); err != nil {
+		t.Fatalf("writing package: %s", err)
+	}
+
+	out, err := cmdTestwrapper(t, testfile, "-race").CombinedOutput()
+	if code, ok := errExitCode(err); !ok || code != 1 {
+		t.Fatalf("testwrapper %s -race: expected exit code 1, got %v; output was:\n%s", testfile, err, out)
+	}
+	if want := "WARNING: DATA RACE"; !bytes.Contains(out, []byte(want)) {
+		t.Fatalf("expected race report in output, got:\n%s", out)
+	}
+
+	if testing.Verbose() {
+		t.Logf("success - output:\n%s", out)
+	}
+}
+
 func TestBuildError(t *testing.T) {
 	t.Parallel()
 
