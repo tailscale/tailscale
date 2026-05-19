@@ -10,10 +10,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,7 +29,7 @@ import (
 
 var perfCmd = &ffcli.Command{
 	Name:       "perf",
-	ShortUsage: "tailscale perf -s [--port=<port>] | tailscale perf -c <hostname-or-IP> [flags]",
+	ShortUsage: "tailscale perf -s [--port=<port>] | tailscale perf -c <hostname-or-IP> [flags] | tailscale perf --history",
 	ShortHelp:  "Run a Tailperf node-to-node performance test",
 	LongHelp: strings.TrimSpace(`
 Tailperf runs a Tailscale-integrated performance test between this node and
@@ -43,6 +45,11 @@ Client mode:
 
 By default client mode attempts grant-authorized remote setup when the peer
 supports it, then runs the test against the configured or default port.
+
+Local history:
+
+  tailscale perf --history
+  tailscale perf --export-support=tailperf-support.json
 `),
 	Exec: runPerf,
 	FlagSet: (func() *flag.FlagSet {
@@ -58,6 +65,10 @@ supports it, then runs the test against the configured or default port.
 		fs.BoolVar(&perfArgs.noTUN, "no-tun", false, "use tailscaled userspace dialing instead of the OS TUN path for TCP client tests")
 		fs.BoolVar(&perfArgs.noLog, "no-log", false, "do not emit Tailperf result records to internal Tailperf result logging")
 		fs.StringVar(&perfArgs.logFile, "log-file", "", "write Tailperf result records to this JSONL file")
+		fs.BoolVar(&perfArgs.history, "history", false, "show local Tailperf result history")
+		fs.IntVar(&perfArgs.historyLimit, "history-limit", 10, "maximum Tailperf history records to show; zero shows all")
+		fs.BoolVar(&perfArgs.baseline, "baseline", false, "compare the result with matching local Tailperf history")
+		fs.StringVar(&perfArgs.exportSupport, "export-support", "", "write redacted Tailperf history support data to this path; use - for stdout")
 		fs.BoolVar(&perfArgs.noMagic, "no-magic", false, hidden+"skip grant-authorized remote server setup")
 		return fs
 	})(),
@@ -84,6 +95,10 @@ var perfArgs struct {
 	noTUN          bool
 	noLog          bool
 	logFile        string
+	history        bool
+	historyLimit   int
+	baseline       bool
+	exportSupport  string
 	noMagic        bool
 }
 
@@ -94,6 +109,26 @@ func runPerf(ctx context.Context, args []string) error {
 	}
 	if len(args) != 0 {
 		return errors.New("usage: tailscale perf -s | tailscale perf -c <hostname-or-IP>")
+	}
+	if perfArgs.history || perfArgs.exportSupport != "" {
+		if perfArgs.server || perfArgs.client != "" {
+			return errors.New("specify --history or --export-support without -s or -c")
+		}
+		if perfArgs.history && perfArgs.exportSupport != "" {
+			return errors.New("specify at most one of --history or --export-support")
+		}
+		logPath, err := tailperfLogPathForConfig(perfArgs.logFile)
+		if err != nil {
+			return err
+		}
+		if perfArgs.history {
+			rs, err := (tailperf.HistoryStore{Path: logPath}).Load(ctx)
+			if err != nil {
+				return err
+			}
+			return writeTailperfHistoryReport(Stdout, rs, perfArgs.historyLimit)
+		}
+		return exportTailperfSupportHistory(ctx, logPath, perfArgs.exportSupport, Stdout)
 	}
 	if perfArgs.server == (perfArgs.client != "") {
 		return errors.New("specify exactly one of -s or -c")
@@ -152,6 +187,20 @@ func runPerf(ctx context.Context, args []string) error {
 		return err
 	}
 	cfg.LogSink = logSink
+	var prior []tailperf.Result
+	if perfArgs.baseline {
+		historyPath := logPath
+		if historyPath == "" {
+			historyPath, err = tailperfLogPathForConfig(perfArgs.logFile)
+			if err != nil {
+				return err
+			}
+		}
+		prior, err = (tailperf.HistoryStore{Path: historyPath}).Load(ctx)
+		if err != nil {
+			return err
+		}
+	}
 	if perfArgs.noTUN {
 		cfg.TUNMode = tailperf.TUNModeUserspace
 		if proto == tailperf.ProtoTCP {
@@ -175,11 +224,23 @@ func runPerf(ctx context.Context, args []string) error {
 	if logPath != "" {
 		fmt.Fprintf(Stdout, "Tailperf result logged to %s\n", logPath)
 	}
+	if perfArgs.baseline {
+		if err := writeTailperfBaselineReport(Stdout, tailperf.BuildNodePairInsight(r, prior)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func tailperfLogPathFromCacheDir(cacheDir string) string {
 	return filepath.Join(cacheDir, "tailscale", "tailperf.jsonl")
+}
+
+func tailperfLogPathForConfig(logFile string) (string, error) {
+	if logFile != "" {
+		return logFile, nil
+	}
+	return defaultTailperfLogPath()
 }
 
 func defaultTailperfLogPath() (string, error) {
@@ -194,12 +255,9 @@ func tailperfLogSinkForConfig(logFile string, noLog bool) (string, tailperf.LogS
 	if noLog {
 		return "", nil, nil
 	}
-	if logFile == "" {
-		var err error
-		logFile, err = defaultTailperfLogPath()
-		if err != nil {
-			return "", nil, err
-		}
+	logFile, err := tailperfLogPathForConfig(logFile)
+	if err != nil {
+		return "", nil, err
 	}
 	return logFile, tailperfLogSinkForPath(logFile), nil
 }
@@ -217,6 +275,145 @@ func (s tailperfCLIHistorySink) LogTailperfResult(ctx context.Context, r tailper
 		return fmt.Errorf("creating tailperf log directory: %w", err)
 	}
 	return s.store.Append(ctx, r)
+}
+
+func writeTailperfHistoryReport(w io.Writer, rs []tailperf.Result, limit int) error {
+	if len(rs) == 0 {
+		_, err := fmt.Fprintln(w, "No Tailperf history found.")
+		return err
+	}
+	if limit < 0 {
+		return fmt.Errorf("tailperf history limit must be non-negative")
+	}
+	rs = append([]tailperf.Result(nil), rs...)
+	sort.SliceStable(rs, func(i, j int) bool {
+		return rs[i].Started.After(rs[j].Started)
+	})
+	if limit > 0 && limit < len(rs) {
+		rs = rs[:limit]
+	}
+	if _, err := fmt.Fprintln(w, "Tailperf history (newest first)"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "Started                 Source -> Destination       Proto  Dir      Transfer     Bitrate        Path"); err != nil {
+		return err
+	}
+	for _, r := range rs {
+		if _, err := fmt.Fprintf(w, "%-23s %-26s %-5s  %-7s  %10s  %13s  %s\n",
+			formatTailperfStarted(r.Started),
+			formatTailperfPair(r),
+			r.Protocol,
+			r.Direction,
+			formatTailperfBytes(r.TransferBytes),
+			formatTailperfBitrate(r.BitrateBitsPerSecond),
+			r.Path.String()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeTailperfBaselineReport(w io.Writer, ins tailperf.NodePairInsight) error {
+	if _, err := fmt.Fprintln(w, "Baseline"); err != nil {
+		return err
+	}
+	if ins.Baseline.Available {
+		if _, err := fmt.Fprintf(w, "Current:  %s\nBaseline: %s\n",
+			formatTailperfBitrate(ins.Baseline.NewBitsPerSec),
+			formatTailperfBitrate(ins.Baseline.BaselineBitsPerSec)); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprintf(w, "Current:  %s\nBaseline: unavailable (%d matching samples)\n",
+		formatTailperfBitrate(ins.Baseline.NewBitsPerSec),
+		ins.Baseline.SampleCount); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Path:     %s\n", ins.PathSummary); err != nil {
+		return err
+	}
+	for _, msg := range ins.Baseline.Messages {
+		if _, err := fmt.Fprintf(w, "- %s\n", msg); err != nil {
+			return err
+		}
+	}
+	if ins.RecommendedNextAction != "" {
+		if _, err := fmt.Fprintf(w, "Recommendation: %s\n", ins.RecommendedNextAction); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func exportTailperfSupportHistory(ctx context.Context, logPath, outPath string, stdout io.Writer) error {
+	if outPath == "" {
+		return errors.New("missing Tailperf support export path")
+	}
+	b, err := (tailperf.HistoryStore{Path: logPath}).ExportSupport(ctx, tailperf.RedactionOptions{
+		HideUserIdentity: true,
+		HideTailnetName:  true,
+		HideNodeNames:    true,
+		HidePrivateIPs:   true,
+		HidePublicIPs:    true,
+		HideDNSAnswers:   true,
+		HideURLs:         true,
+		HideRelayNames:   true,
+	})
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	if outPath == "-" {
+		_, err := stdout.Write(b)
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(outPath), 0700); err != nil {
+		return fmt.Errorf("creating Tailperf support export directory: %w", err)
+	}
+	return os.WriteFile(outPath, b, 0600)
+}
+
+func formatTailperfStarted(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.Local().Format("2006-01-02 15:04:05")
+}
+
+func formatTailperfPair(r tailperf.Result) string {
+	src := r.SourceNode
+	if src == "" {
+		src = "source"
+	}
+	dst := r.DestinationNode
+	if dst == "" {
+		dst = "destination"
+	}
+	return src + " -> " + dst
+}
+
+func formatTailperfBytes(n int64) string {
+	v := float64(n)
+	for _, unit := range []string{"Bytes", "KBytes", "MBytes", "GBytes", "TBytes"} {
+		if v < 1024 || unit == "TBytes" {
+			if unit == "Bytes" {
+				return fmt.Sprintf("%d %s", n, unit)
+			}
+			return fmt.Sprintf("%.2f %s", v, unit)
+		}
+		v /= 1024
+	}
+	return fmt.Sprintf("%d Bytes", n)
+}
+
+func formatTailperfBitrate(bitsPerSecond float64) string {
+	v := bitsPerSecond
+	for _, unit := range []string{"bits/sec", "Kbits/sec", "Mbits/sec", "Gbits/sec", "Tbits/sec"} {
+		if v < 1000 || unit == "Tbits/sec" {
+			return fmt.Sprintf("%.2f %s", v, unit)
+		}
+		v /= 1000
+	}
+	return fmt.Sprintf("%.2f bits/sec", bitsPerSecond)
 }
 
 func localNodeName(st *ipnstate.Status) string {

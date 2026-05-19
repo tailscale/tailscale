@@ -4,17 +4,21 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"tailscale.com/tailperf"
 )
 
-func TestTailperfLogFileFlagRegistered(t *testing.T) {
-	if perfCmd.FlagSet.Lookup("log-file") == nil {
-		t.Fatal("tailscale perf missing --log-file flag")
+func TestTailperfHistoryFlagsRegistered(t *testing.T) {
+	for _, name := range []string{"log-file", "history", "history-limit", "baseline", "export-support"} {
+		if perfCmd.FlagSet.Lookup(name) == nil {
+			t.Fatalf("tailscale perf missing --%s flag", name)
+		}
 	}
 }
 
@@ -79,5 +83,101 @@ func TestTailperfLogSinkForConfig(t *testing.T) {
 	}
 	if sink != nil {
 		t.Fatal("no-log sink is non-nil")
+	}
+}
+
+func TestWriteTailperfHistoryReportLimitsNewest(t *testing.T) {
+	old := tailperf.Result{
+		Started:              time.Unix(1, 0),
+		SourceNode:           "node-a",
+		DestinationNode:      "old-dest",
+		Direction:            tailperf.DirectionForward,
+		Protocol:             tailperf.ProtoTCP,
+		TransferBytes:        1024,
+		BitrateBitsPerSecond: 8192,
+		Path:                 tailperf.PathMetadata{Type: tailperf.PathDERP, DERPRegionCode: "FRA"},
+	}
+	newest := old
+	newest.Started = time.Unix(2, 0)
+	newest.DestinationNode = "new-dest"
+	newest.Path = tailperf.PathMetadata{Type: tailperf.PathDirect}
+
+	var b bytes.Buffer
+	if err := writeTailperfHistoryReport(&b, []tailperf.Result{old, newest}, 1); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	for _, want := range []string{"Tailperf history", "new-dest", "direct"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("history output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "old-dest") {
+		t.Fatalf("history limit included old result:\n%s", out)
+	}
+}
+
+func TestWriteTailperfBaselineReport(t *testing.T) {
+	base := tailperf.Result{
+		SourceNode:           "node-a",
+		DestinationNode:      "node-b",
+		Direction:            tailperf.DirectionForward,
+		Protocol:             tailperf.ProtoTCP,
+		BitrateBitsPerSecond: 100,
+		Path:                 tailperf.PathMetadata{Type: tailperf.PathDirect},
+	}
+	prior := []tailperf.Result{base, base, base}
+	latest := base
+	latest.BitrateBitsPerSecond = 40
+
+	var b bytes.Buffer
+	if err := writeTailperfBaselineReport(&b, tailperf.BuildNodePairInsight(latest, prior)); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	for _, want := range []string{"Baseline", "below recent baseline", "Run a follow-up test"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("baseline output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestExportTailperfSupportHistoryRedacts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tailperf.jsonl")
+	store := tailperf.HistoryStore{Path: path}
+	if err := store.Append(context.Background(), tailperf.Result{
+		SchemaVersion:        tailperf.SchemaVersion,
+		Started:              time.Unix(1, 0),
+		Ended:                time.Unix(2, 0),
+		SourceNode:           "alice-laptop",
+		DestinationNode:      "db.internal",
+		Direction:            tailperf.DirectionForward,
+		Protocol:             tailperf.ProtoTCP,
+		DurationMillis:       1000,
+		TransferBytes:        1024,
+		BitrateBitsPerSecond: 8192,
+		Path: tailperf.PathMetadata{
+			Type:      tailperf.PathDirect,
+			Endpoint:  "192.0.2.1:1234",
+			PeerRelay: "203.0.113.5:443",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var b bytes.Buffer
+	if err := exportTailperfSupportHistory(context.Background(), path, "-", &b); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	for _, private := range []string{"alice-laptop", "db.internal", "192.0.2.1:1234", "203.0.113.5:443"} {
+		if strings.Contains(out, private) {
+			t.Fatalf("support export leaked %q:\n%s", private, out)
+		}
+	}
+	for _, want := range []string{"redacted-source", "redacted-destination", `"redacted": true`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("support export missing %q:\n%s", want, out)
+		}
 	}
 }
