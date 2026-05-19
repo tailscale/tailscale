@@ -1583,7 +1583,18 @@ const (
 	// capabilities, such as the ability to add user groups to the OIDC
 	// claim
 	PeerCapabilityTsIDP PeerCapability = "tailscale.com/cap/tsidp"
+
+	// PeerCapabilityTailperf grants a peer the ability to request a bounded,
+	// on-demand Tailperf listener on this node.
+	PeerCapabilityTailperf PeerCapability = "https://tailscale.com/cap/tailperf"
 )
+
+// TailperfCapRule configures the ports that may be used for grant-authorized
+// Tailperf remote test orchestration.
+type TailperfCapRule struct {
+	UserspaceListenPort uint16 `json:"userspace_listen_port,omitempty"`
+	TUNListenPort       uint16 `json:"tun_listen_port,omitempty"`
+}
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for
 // a capability to have no values (nil slice); such capabilities can be tested

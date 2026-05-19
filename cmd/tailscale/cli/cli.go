@@ -285,6 +285,7 @@ change in the future.
 			statusCmd,
 			metricsCmd,
 			pingCmd,
+			perfCmd,
 			ncCmd,
 			sshCmd,
 			nilOrCall(maybeFunnelCmd),
