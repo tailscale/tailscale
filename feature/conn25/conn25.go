@@ -755,6 +755,7 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if existing, ok := c.assignments.lookupByDomainDst(domain, dst); ok {
+		c.assignments.updateFromTTL(existing, ttl)
 		return existing, nil
 	}
 
@@ -766,7 +767,7 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 	now := c.assignments.clock.Now()
 	for range 10 {
 		a := c.assignments.popExpired(now)
-		if !a.isValid() {
+		if a == nil {
 			break
 		}
 		if a.is4() {
