@@ -15,7 +15,9 @@ import (
 )
 
 const (
-	payloadSize       = 16 << 10
+	tcpPayloadSize    = 16 << 10
+	udpPayloadSize    = 1200
+	udpReadBufferSize = 64 << 10
 	maxControlLineLen = 4 << 10
 )
 
@@ -143,7 +145,7 @@ func handleTCPServerConn(ctx context.Context, c net.Conn) {
 	case DirectionForward:
 		_, _ = io.Copy(io.Discard, br)
 	case DirectionReverse:
-		_ = writeForDuration(ctx, c, duration, req.CapBitsPerSecond, nil)
+		_ = writeForDuration(ctx, c, duration, req.CapBitsPerSecond, tcpPayloadSize, nil)
 	}
 }
 
@@ -157,7 +159,7 @@ func runUDPServer(ctx context.Context, addr string) error {
 		<-ctx.Done()
 		pc.Close()
 	}()
-	buf := make([]byte, payloadSize)
+	buf := make([]byte, udpReadBufferSize)
 	for {
 		if _, _, err := pc.ReadFrom(buf); err != nil {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
@@ -200,7 +202,7 @@ func runTCPClient(ctx context.Context, cfg ClientConfig, dir Direction) (Result,
 	if dir == DirectionReverse {
 		r, err = readForDuration(ctx, c, cfg, dir)
 	} else {
-		r, err = writeForDurationResult(ctx, c, cfg, dir)
+		r, err = writeForDurationResult(ctx, c, cfg, dir, tcpPayloadSize)
 		if cw, ok := c.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
 		}
@@ -232,7 +234,7 @@ func runUDPClient(ctx context.Context, cfg ClientConfig) (Result, error) {
 	stopCancelWatcher := cancelOnContext(ctx, c)
 	defer stopCancelWatcher()
 
-	r, err := writeForDurationResult(ctx, c, cfg, DirectionForward)
+	r, err := writeForDurationResult(ctx, c, cfg, DirectionForward, udpPayloadSize)
 	if err != nil {
 		return r, err
 	}
@@ -244,13 +246,13 @@ func runUDPClient(ctx context.Context, cfg ClientConfig) (Result, error) {
 	return r, nil
 }
 
-func writeForDurationResult(ctx context.Context, w io.Writer, cfg ClientConfig, dir Direction) (Result, error) {
+func writeForDurationResult(ctx context.Context, w io.Writer, cfg ClientConfig, dir Direction, payloadSize int) (Result, error) {
 	m := newMeter(cfg, dir)
-	err := writeForDuration(ctx, w, cfg.Duration, cfg.CapBitsPerSecond, m.add)
+	err := writeForDuration(ctx, w, cfg.Duration, cfg.CapBitsPerSecond, payloadSize, m.add)
 	return m.finish(err), err
 }
 
-func writeForDuration(ctx context.Context, w io.Writer, duration time.Duration, capBitsPerSecond int64, add func(int)) error {
+func writeForDuration(ctx context.Context, w io.Writer, duration time.Duration, capBitsPerSecond int64, payloadSize int, add func(int)) error {
 	buf := make([]byte, payloadSize)
 	start := time.Now()
 	var written int64
@@ -290,7 +292,7 @@ func writeForDuration(ctx context.Context, w io.Writer, duration time.Duration, 
 
 func readForDuration(ctx context.Context, r io.Reader, cfg ClientConfig, dir Direction) (Result, error) {
 	m := newMeter(cfg, dir)
-	buf := make([]byte, payloadSize)
+	buf := make([]byte, tcpPayloadSize)
 	deadline := time.Now().Add(cfg.Duration)
 	if c, ok := r.(net.Conn); ok {
 		_ = c.SetReadDeadline(time.Now().Add(200 * time.Millisecond))

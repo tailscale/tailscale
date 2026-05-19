@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"path/filepath"
 	"strconv"
@@ -137,6 +138,26 @@ func TestUDPClientServerLoopback(t *testing.T) {
 	}
 }
 
+func TestUDPClientUsesConservativeDatagramSize(t *testing.T) {
+	c := &maxPacketConn{max: 1200}
+	_, err := RunClient(context.Background(), ClientConfig{
+		Host:     "unused",
+		Port:     1,
+		Protocol: ProtoUDP,
+		Duration: 2 * time.Millisecond,
+		Interval: time.Millisecond,
+		DialUDP: func(context.Context, string, uint16) (net.Conn, error) {
+			return c, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunClient udp: %v", err)
+	}
+	if c.writes.Load() == 0 {
+		t.Fatal("no UDP datagrams written")
+	}
+}
+
 func TestFormatPathMetadata(t *testing.T) {
 	tests := []struct {
 		p    PathMetadata
@@ -152,6 +173,59 @@ func TestFormatPathMetadata(t *testing.T) {
 			t.Fatalf("%+v String = %q, want %q", tt.p, got, tt.want)
 		}
 	}
+}
+
+var errPacketTooLarge = errors.New("message too long")
+
+type maxPacketConn struct {
+	max    int
+	writes atomic.Int64
+}
+
+func (c *maxPacketConn) Read([]byte) (int, error) {
+	return 0, net.ErrClosed
+}
+
+func (c *maxPacketConn) Write(p []byte) (int, error) {
+	if len(p) > c.max {
+		return 0, errPacketTooLarge
+	}
+	c.writes.Add(1)
+	return len(p), nil
+}
+
+func (*maxPacketConn) Close() error {
+	return nil
+}
+
+func (*maxPacketConn) LocalAddr() net.Addr {
+	return fakeAddr("local")
+}
+
+func (*maxPacketConn) RemoteAddr() net.Addr {
+	return fakeAddr("remote")
+}
+
+func (*maxPacketConn) SetDeadline(time.Time) error {
+	return nil
+}
+
+func (*maxPacketConn) SetReadDeadline(time.Time) error {
+	return nil
+}
+
+func (*maxPacketConn) SetWriteDeadline(time.Time) error {
+	return nil
+}
+
+type fakeAddr string
+
+func (a fakeAddr) Network() string {
+	return string(a)
+}
+
+func (a fakeAddr) String() string {
+	return string(a)
 }
 
 func TestWriteTextReportIncludesPathAndSummary(t *testing.T) {
