@@ -108,17 +108,17 @@ func (dh *datapathHandler) HandlePacketFromWireGuard(p *packet.Parsed) filter.Re
 
 	// Check if this is an existing (return) flow on a client.
 	// If found, perform the action for the existing client flow and return.
-	existing, ok := dh.clientFlowTable.LookupFromWireGuard(flowtrack.MakeTuple(p.IPProto, p.Src, p.Dst))
+	action, ok := dh.clientFlowTable.LookupFromWireGuard(flowtrack.MakeTuple(p.IPProto, p.Src, p.Dst))
 	if ok {
-		existing.Action(p)
+		action(p)
 		return filter.Accept
 	}
 
 	// Check if this is an existing connector outbound flow.
 	// If found, perform the action for the existing connector outbound flow and return.
-	existing, ok = dh.connectorFlowTable.LookupFromWireGuard(flowtrack.MakeTuple(p.IPProto, p.Src, p.Dst))
+	action, ok = dh.connectorFlowTable.LookupFromWireGuard(flowtrack.MakeTuple(p.IPProto, p.Src, p.Dst))
 	if ok {
-		existing.Action(p)
+		action(p)
 		return filter.Accept
 	}
 
@@ -145,15 +145,18 @@ func (dh *datapathHandler) HandlePacketFromWireGuard(p *packet.Parsed) filter.Re
 	// This is a new outbound flow on a connector. Install a DNAT TransitIP-to-RealIP action
 	// for the outgoing direction, and an SNAT RealIP-to-TransitIP action for the
 	// return direction.
-	outgoing := FlowData{
+	outgoing := TupleAndAction{
 		Tuple:  flowtrack.MakeTuple(p.IPProto, p.Src, p.Dst),
 		Action: dh.dnatAction(realIP),
 	}
-	incoming := FlowData{
+	incoming := TupleAndAction{
 		Tuple:  flowtrack.MakeTuple(p.IPProto, netip.AddrPortFrom(realIP, p.Dst.Port()), p.Src),
 		Action: dh.snatAction(transitIP),
 	}
-	if err := dh.connectorFlowTable.NewFlowFromWireGuard(outgoing, incoming); err != nil {
+	if err := dh.connectorFlowTable.NewFlow(FlowData{
+		FromTun: incoming,
+		FromWG:  outgoing,
+	}); err != nil {
 		dh.debugLogf("error installing flow, passing packet unmodified: %v", err)
 		return filter.Accept
 	}
@@ -174,17 +177,17 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed) filter.Re
 
 	// Check if this is an existing client outbound flow.
 	// If found, perform the action for the existing client flow and return.
-	existing, ok := dh.clientFlowTable.LookupFromTunDevice(flowtrack.MakeTuple(p.IPProto, p.Src, p.Dst))
+	action, ok := dh.clientFlowTable.LookupFromTunDevice(flowtrack.MakeTuple(p.IPProto, p.Src, p.Dst))
 	if ok {
-		existing.Action(p)
+		action(p)
 		return filter.Accept
 	}
 
 	// Check if this is an existing connector return flow.
 	// If found, perform the action for the existing connector return flow and return.
-	existing, ok = dh.connectorFlowTable.LookupFromTunDevice(flowtrack.MakeTuple(p.IPProto, p.Src, p.Dst))
+	action, ok = dh.connectorFlowTable.LookupFromTunDevice(flowtrack.MakeTuple(p.IPProto, p.Src, p.Dst))
 	if ok {
-		existing.Action(p)
+		action(p)
 		return filter.Accept
 	}
 
@@ -211,15 +214,18 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed) filter.Re
 	// This is a new outbound client flow. Install a DNAT MagicIP-to-TransitIP action
 	// for the outgoing direction, and an SNAT TransitIP-to-MagicIP action for the
 	// return direction.
-	outgoing := FlowData{
+	outgoing := TupleAndAction{
 		Tuple:  flowtrack.MakeTuple(p.IPProto, p.Src, p.Dst),
 		Action: dh.dnatAction(transitIP),
 	}
-	incoming := FlowData{
+	incoming := TupleAndAction{
 		Tuple:  flowtrack.MakeTuple(p.IPProto, netip.AddrPortFrom(transitIP, p.Dst.Port()), p.Src),
 		Action: dh.snatAction(magicIP),
 	}
-	if err := dh.clientFlowTable.NewFlowFromTunDevice(outgoing, incoming); err != nil {
+	if err := dh.clientFlowTable.NewFlow(FlowData{
+		FromTun: outgoing,
+		FromWG:  incoming,
+	}); err != nil {
 		dh.debugLogf("error installing flow from tun device, passing packet unmodified: %v", err)
 		return filter.Accept
 	}

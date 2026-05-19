@@ -12,114 +12,220 @@ import (
 	"tailscale.com/types/ipproto"
 )
 
-func TestFlowTable(t *testing.T) {
-	ft := NewFlowTable(0)
+var nilPacket *packet.Parsed // nil packet to perform actions against
 
-	fwdTuple := flowtrack.MakeTuple(
+// mkTuple wraps flowtrack.MakeTuple with the UDP proto.
+func mkTuple(src, dst string) flowtrack.Tuple {
+	return flowtrack.MakeTuple(
 		ipproto.UDP,
-		netip.MustParseAddrPort("1.2.3.4:1000"),
-		netip.MustParseAddrPort("4.3.2.1:80"),
+		netip.MustParseAddrPort(src),
+		netip.MustParseAddrPort(dst),
 	)
-	// Reverse tuple is defined by caller. Doesn't have to be mirror image of fwd.
-	// To account for intentional modifications, like NAT.
-	revTuple := flowtrack.MakeTuple(
-		ipproto.UDP,
-		netip.MustParseAddrPort("4.3.2.2:80"),
-		netip.MustParseAddrPort("1.2.3.4:1000"),
-	)
+}
 
-	fwdAction, revAction := 0, 0
-	fwdData := FlowData{
-		Tuple:  fwdTuple,
-		Action: func(_ *packet.Parsed) { fwdAction++ },
-	}
-	revData := FlowData{
-		Tuple:  revTuple,
-		Action: func(_ *packet.Parsed) { revAction++ },
-	}
+func mkFlowWithActions(fromTun, fromWG flowtrack.Tuple) (FlowData, *int, *int) {
+	var tunCalls, wgCalls int
+	fd := mkFlow(fromTun, fromWG)
+	fd.FromTun.Action = func(_ *packet.Parsed) { tunCalls++ }
+	fd.FromWG.Action = func(_ *packet.Parsed) { wgCalls++ }
+	return fd, &tunCalls, &wgCalls
+}
 
-	// For this test setup, from the tun device will be "forward",
-	// and from WG will be "reverse".
-	if err := ft.NewFlowFromTunDevice(fwdData, revData); err != nil {
-		t.Fatalf("got non-nil error for new flow from tun device")
-	}
-
-	// Test basic lookups.
-	lookupFwd, ok := ft.LookupFromTunDevice(fwdTuple)
-	if !ok {
-		t.Fatalf("got not found on first lookup from tun device")
-	}
-	lookupFwd.Action(nil)
-	if fwdAction != 1 {
-		t.Errorf("action for fwd tuple key was not executed")
-	}
-
-	lookupRev, ok := ft.LookupFromWireGuard(revTuple)
-	if !ok {
-		t.Fatalf("got not found on first lookup from WireGuard")
-	}
-	lookupRev.Action(nil)
-	if revAction != 1 {
-		t.Errorf("action for rev tuple key was not executed")
-	}
-
-	// Test not found error.
-	notFoundTuple := flowtrack.MakeTuple(
-		ipproto.UDP,
-		netip.MustParseAddrPort("1.2.3.4:1000"),
-		netip.MustParseAddrPort("4.0.4.4:80"),
-	)
-	if _, ok := ft.LookupFromTunDevice(notFoundTuple); ok {
-		t.Errorf("expected not found for foreign tuple")
-	}
-
-	// Wrong direction is also not found.
-	if _, ok := ft.LookupFromWireGuard(fwdTuple); ok {
-		t.Errorf("expected not found for wrong direction tuple")
-	}
-
-	// Overwriting forward tuple removes its reverse pair as well.
-	newRevData := FlowData{
-		Tuple: flowtrack.MakeTuple(
-			ipproto.UDP,
-			netip.MustParseAddrPort("9.9.9.9:99"),
-			netip.MustParseAddrPort("8.8.8.8:88"),
-		),
-		Action: func(_ *packet.Parsed) {},
-	}
-	if err := ft.NewFlowFromTunDevice(
-		fwdData,
-		newRevData,
-	); err != nil {
-		t.Fatalf("got non-nil error for new flow from tun device")
-	}
-	if _, ok := ft.LookupFromWireGuard(revTuple); ok {
-		t.Errorf("expected not found for removed reverse tuple")
-	}
-
-	// Overwriting reverse tuple removes its forward pair as well.
-	if err := ft.NewFlowFromTunDevice(
-		FlowData{
-			Tuple: flowtrack.MakeTuple(
-				ipproto.UDP,
-				netip.MustParseAddrPort("8.8.8.8:88"),
-				netip.MustParseAddrPort("9.9.9.9:99"),
-			),
+func mkFlow(fromTun, fromWG flowtrack.Tuple) FlowData {
+	return FlowData{
+		FromTun: TupleAndAction{
+			Tuple:  fromTun,
 			Action: func(_ *packet.Parsed) {},
 		},
-		newRevData, // This is the same "reverse" data installed in previous test.
-	); err != nil {
-		t.Fatalf("got non-nil error for new flow from tun device")
+		FromWG: TupleAndAction{
+			Tuple:  fromWG,
+			Action: func(_ *packet.Parsed) {},
+		},
 	}
-	if _, ok := ft.LookupFromTunDevice(fwdTuple); ok {
-		t.Errorf("expected not found for removed forward tuple")
+}
+
+func mustInstallFlow(t *testing.T, ft *FlowTable, flow FlowData) {
+	t.Helper()
+	if err := ft.NewFlow(flow); err != nil {
+		t.Fatalf("error installing flow: %v", err)
+	}
+}
+
+func assertFlowHit(t *testing.T, ft *FlowTable, dir Origin, tuple flowtrack.Tuple) PacketAction {
+	t.Helper()
+	return assertFlowLookup(t, ft, dir, tuple, true)
+}
+
+func assertFlowMiss(t *testing.T, ft *FlowTable, dir Origin, tuple flowtrack.Tuple) {
+	t.Helper()
+	assertFlowLookup(t, ft, dir, tuple, false)
+}
+
+func assertFlowLookup(t *testing.T, ft *FlowTable, dir Origin, tuple flowtrack.Tuple, wantHit bool) PacketAction {
+	t.Helper()
+	var action PacketAction
+	var ok bool
+
+	switch dir {
+	case FromTun:
+		action, ok = ft.LookupFromTunDevice(tuple)
+	case FromWireGuard:
+		action, ok = ft.LookupFromWireGuard(tuple)
+	default:
+		t.Fatalf("invalid direction: %v", dir)
 	}
 
-	// Nil action returns an error.
-	if err := ft.NewFlowFromTunDevice(
-		FlowData{},
-		FlowData{},
-	); err == nil {
-		t.Errorf("expected non-nil error for nil data")
+	if wantHit && !ok {
+		t.Fatalf("expected flow hit for tuple: %v, dir: %v", tuple, dir)
 	}
+	if !wantHit && ok {
+		t.Fatalf("expected flow miss for tuple: %v, dir: %v", tuple, dir)
+	}
+
+	if wantHit {
+		return action
+	}
+	return nil
+}
+
+func TestFlowTable_NewFlow_Lookup(t *testing.T) {
+	ft := NewFlowTable(0)
+
+	// The tuples in both directions are defined by the caller.
+	// The don't have to be mirror images of each other,
+	// to account for intentional modifications, like NAT.
+	fromTunTuple := mkTuple("1.2.3.4:1000", "4.3.2.1:80")
+	fromWGTuple := mkTuple("4.3.2.2:80", "1.2.3.4:1000")
+
+	flow1, tunCount1, wgCount1 := mkFlowWithActions(fromTunTuple, fromWGTuple)
+	mustInstallFlow(t, ft, flow1)
+
+	// Test basic lookups, and perform actions on packet.
+	assertFlowHit(t, ft, FromTun, fromTunTuple)(nilPacket)
+	assertFlowHit(t, ft, FromWireGuard, fromWGTuple)(nilPacket)
+
+	if *tunCount1 != 1 {
+		t.Fatal("action for from-tun tuple key was not executed")
+	}
+	if *wgCount1 != 1 {
+		t.Fatal("action for from-wg tuple key was not executed")
+	}
+
+	// Test tuple not found.
+	notFoundTuple := mkTuple("1.2.3.4:1000", "4.0.4.4:80")
+	assertFlowMiss(t, ft, FromTun, notFoundTuple)
+
+	// Wrong direction is also not found.
+	assertFlowMiss(t, ft, FromWireGuard, fromTunTuple)
+
+	// Overwriting from-tun tuple removes the from-wg tuple as well.
+	newFromWGTuple := mkTuple("9.9.9.9:99", "8.8.8.8:88")
+	flow2 := mkFlow(fromTunTuple, newFromWGTuple)
+	mustInstallFlow(t, ft, flow2)
+	assertFlowMiss(t, ft, FromWireGuard, fromWGTuple)
+
+	// Overwriting the from-wg tuple removes the from-tun tuple as well.
+	newFromTunTuple := mkTuple("8.8.8.8:88", "9.9.9.9:99")
+	flow3 := mkFlow(newFromTunTuple, newFromWGTuple)
+	mustInstallFlow(t, ft, flow3)
+	assertFlowMiss(t, ft, FromTun, fromTunTuple)
+}
+
+// TestFlowTable_OneReplacesTwo targets a specific case
+// in which a single new flow replaces two existing flows
+// because each tuple of the new flow matches one tuple
+// of an existing flow.
+func TestFlowTable_OneReplacesTwo(t *testing.T) {
+	ft := NewFlowTable(0)
+
+	tunTuple1 := mkTuple("1.2.3.4:1000", "4.3.2.1:80")
+	wgTuple1 := mkTuple("4.3.2.2:80", "1.2.3.4:1000")
+	flow1, tunCount1, wgCount1 := mkFlowWithActions(tunTuple1, wgTuple1)
+
+	tunTuple2 := mkTuple("8.8.8.8:88", "9.9.9.9:99")
+	wgTuple2 := mkTuple("9.9.9.9:99", "8.8.8.8:88")
+	flow2, tunCount2, wgCount2 := mkFlowWithActions(tunTuple2, wgTuple2)
+
+	// Install the first two flows.
+	mustInstallFlow(t, ft, flow1)
+	mustInstallFlow(t, ft, flow2)
+
+	// Confirm they are properly installed through lookups.
+	assertFlowHit(t, ft, FromTun, tunTuple1)
+	assertFlowHit(t, ft, FromWireGuard, wgTuple1)
+	assertFlowHit(t, ft, FromTun, tunTuple2)
+	assertFlowHit(t, ft, FromWireGuard, wgTuple2)
+
+	// flow3 tuples overlap with flow1 and flow2.
+	flow3, tunCount3, wgCount3 := mkFlowWithActions(tunTuple1, wgTuple2)
+	mustInstallFlow(t, ft, flow3)
+
+	// flow3 lookups hit on both of their tuples.
+	tunAction3 := assertFlowHit(t, ft, FromTun, tunTuple1)
+	wgAction3 := assertFlowHit(t, ft, FromWireGuard, wgTuple2)
+
+	// The non-overlapping tuples from flow1 and flow2 should now miss.
+	assertFlowMiss(t, ft, FromTun, tunTuple2)
+	assertFlowMiss(t, ft, FromWireGuard, wgTuple1)
+
+	// Perform both actions on a nil packet to bump counters.
+	tunAction3(nilPacket)
+	wgAction3(nilPacket)
+
+	// Only flow3 counters should have been bumped.
+	if *tunCount1 != 0 || *wgCount1 != 0 {
+		t.Fatalf("flow1 counters (tun, wg), want: (0,0), got: (%d,%d)", *tunCount1, *wgCount1)
+	}
+	if *tunCount2 != 0 || *wgCount2 != 0 {
+		t.Fatalf("flow2 counters (tun, wg), want: (0,0), got: (%d,%d)", *tunCount2, *wgCount2)
+	}
+	if *tunCount3 != 1 || *wgCount3 != 1 {
+		t.Fatalf("flow3 counters (tun, wg), want: (1,1), got: (%d,%d)", *tunCount3, *wgCount3)
+	}
+}
+
+func TestFlowTable_Eviction(t *testing.T) {
+	// Table only has two spots.
+	ft := NewFlowTable(2)
+	aTun, aWG := mkTuple("3.0.0.1:1000", "3.0.0.2:80"), mkTuple("3.0.0.2:80", "3.0.0.1:1000")
+	bTun, bWG := mkTuple("3.0.0.3:1000", "3.0.0.4:80"), mkTuple("3.0.0.4:80", "3.0.0.3:1000")
+	cTun, cWG := mkTuple("3.0.0.5:1000", "3.0.0.6:80"), mkTuple("3.0.0.6:80", "3.0.0.5:1000")
+	dTun, dWG := mkTuple("3.0.0.7:1000", "3.0.0.8:80"), mkTuple("3.0.0.8:80", "3.0.0.7:1000")
+
+	a := mkFlow(aTun, aWG)
+	b := mkFlow(bTun, bWG)
+	c := mkFlow(cTun, cWG)
+	d := mkFlow(dTun, dWG)
+
+	// Install a and b.
+	mustInstallFlow(t, ft, a)
+	mustInstallFlow(t, ft, b)
+
+	// Move a to the front from tun side, b is ready for eviction.
+	assertFlowHit(t, ft, FromTun, aTun)
+
+	// Install c.
+	mustInstallFlow(t, ft, c)
+
+	// Check b is out.
+	assertFlowMiss(t, ft, FromTun, bTun)
+	assertFlowMiss(t, ft, FromWireGuard, bWG)
+
+	// Check c is in.
+	assertFlowHit(t, ft, FromTun, cTun)
+	assertFlowHit(t, ft, FromWireGuard, cWG)
+
+	// Move a to the front again, now from WG side.
+	assertFlowHit(t, ft, FromWireGuard, aWG)
+
+	// Install d.
+	mustInstallFlow(t, ft, d)
+
+	// Check c is out.
+	assertFlowMiss(t, ft, FromTun, cTun)
+	assertFlowMiss(t, ft, FromWireGuard, cWG)
+
+	// Check d is in.
+	assertFlowHit(t, ft, FromTun, dTun)
+	assertFlowHit(t, ft, FromWireGuard, dWG)
 }
