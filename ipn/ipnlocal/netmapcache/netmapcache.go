@@ -83,8 +83,8 @@ func (c *Cache) writeJSON(ctx context.Context, key cacheKey, v any) error {
 		return fmt.Errorf("JSON marshalling %q: %w", key, err)
 	}
 
-	// TODO(creachadair): Maybe use a hash instead of the contents? Do we need
-	// this at all?
+	// If the digest of this value has not changed since it was last written,
+	// record that the key is of interest, but do not actually perform a write.
 	last, ok := c.lastWrote[key]
 	if ok && cacheDigest(j) == last.digest {
 		c.wantKeys.Add(key)
@@ -193,6 +193,23 @@ const (
 	packetFilterKey cacheKey = "filter"
 )
 
+// UpdateSelfOnly updates nm in the cache, replacing any previously cached
+// values for nm.Self and other tailnet metadata for the current node, but
+// skipping the Peers and UserProfiles fields. Any existing peer and profile
+// data are left unmodified.
+func (c *Cache) UpdateSelfOnly(ctx context.Context, nm *netmap.NetworkMap) error {
+	if !buildfeatures.HasCacheNetMap || nm == nil || nm.Cached {
+		return nil
+	}
+	if selfID := nm.User(); selfID == 0 {
+		return errors.New("no user in netmap")
+	}
+	// Since we are not modifying peers or users (and in particular, not
+	// removing any), we do not need to do any garbage collection on the storage
+	// keys.
+	return c.updateSelfOnly(ctx, nm)
+}
+
 // Store records nm in the cache, replacing any previously-cached values.
 func (c *Cache) Store(ctx context.Context, nm *netmap.NetworkMap) error {
 	if !buildfeatures.HasCacheNetMap || nm == nil || nm.Cached {
@@ -202,7 +219,32 @@ func (c *Cache) Store(ctx context.Context, nm *netmap.NetworkMap) error {
 		return errors.New("no user in netmap")
 	}
 
+	// Because we may modify which peers and user profiles are valid, we need to
+	// keep track of which storage keys we actually touch during the store.
+	// This is used by c.removeUnwantedKeys to clean up keys that are no longer
+	// referenced after peers and/or profiles are removed from nm.
 	clear(c.wantKeys)
+	if err := c.updateSelfOnly(ctx, nm); err != nil {
+		return err
+	}
+	for _, p := range nm.Peers {
+		key := peerKeyPrefix + cacheKey(p.StableID())
+		if err := c.writeJSON(ctx, key, netmapNode{Node: &p}); err != nil {
+			return err
+		}
+	}
+	for uid, u := range nm.UserProfiles {
+		key := fmt.Sprintf("%s%d", userKeyPrefix, uid)
+		if err := c.writeJSON(ctx, cacheKey(key), netmapUserProfile{UserProfile: &u}); err != nil {
+			return err
+		}
+	}
+	return c.removeUnwantedKeys(ctx)
+}
+
+// updateSelfOnly updates the "static" parts of the netmap in the cache.  It is
+// shared between [Cache.UpdateSelfOnly] and [Cache.Store].
+func (c *Cache) updateSelfOnly(ctx context.Context, nm *netmap.NetworkMap) error {
 	if err := c.writeJSON(ctx, miscKey, netmapMisc{
 		MachineKey:       &nm.MachineKey,
 		CollectServices:  &nm.CollectServices,
@@ -226,29 +268,15 @@ func (c *Cache) Store(ctx context.Context, nm *netmap.NetworkMap) error {
 		// N.B. The NodeKey and AllCaps fields can be recovered from SelfNode on
 		// load, and do not need to be stored separately.
 	}
-	for _, p := range nm.Peers {
-		key := peerKeyPrefix + cacheKey(p.StableID())
-		if err := c.writeJSON(ctx, key, netmapNode{Node: &p}); err != nil {
-			return err
-		}
-	}
-	for uid, u := range nm.UserProfiles {
-		key := fmt.Sprintf("%s%d", userKeyPrefix, uid)
-		if err := c.writeJSON(ctx, cacheKey(key), netmapUserProfile{UserProfile: &u}); err != nil {
-			return err
-		}
-	}
 	if err := c.writeJSON(ctx, packetFilterKey, netmapPacketFilter{Rules: &nm.PacketFilterRules}); err != nil {
 		return err
 	}
-
 	if buildfeatures.HasSSH && nm.SSHPolicy != nil {
 		if err := c.writeJSON(ctx, sshPolicyKey, netmapSSH{SSHPolicy: &nm.SSHPolicy}); err != nil {
 			return err
 		}
 	}
-
-	return c.removeUnwantedKeys(ctx)
+	return nil
 }
 
 // Load loads the cached [netmap.NetworkMap] value stored in c, if one is available.
