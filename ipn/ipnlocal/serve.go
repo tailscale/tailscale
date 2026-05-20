@@ -60,6 +60,8 @@ func init() {
 	hookServeClearVIPServicesTCPPortsInterceptedLocked.Set(func(b *LocalBackend) {
 		b.setVIPServicesTCPPortsInterceptedLocked(nil)
 	})
+	hookServeInstallALPNChallengeCert.Set(installALPNChallengeCert)
+	hookServeLookupALPNChallengeCert.Set(lookupALPNChallengeCert)
 
 	hookMaybeMutateHostinfoLocked.Add(maybeUpdateHostinfoServicesHashLocked)
 	hookMaybeMutateHostinfoLocked.Add(maybeUpdateHostinfoFunnelLocked)
@@ -67,9 +69,59 @@ func init() {
 	RegisterC2N("GET /vip-services", handleC2NVIPServicesGet)
 }
 
+// TLS-ALPN-01 ACME challenge state.
+//
+// alpnChallengeCerts holds per-domain challenge certificates produced
+// during an in-flight TLS-ALPN-01 ACME issuance. Entries are installed
+// by cert.go (via the hookServeInstallALPNChallengeCert hook) just
+// before the ACME server is told to validate, and cleared when the
+// returned cleanup func runs at the end of getCertPEM. The TLS
+// terminator consults this map in getTLSServeCertForPort when a
+// ClientHello arrives whose ALPN list contains "acme-tls/1".
+//
+// Because this state lives in serve.go it is only present in builds
+// that have serve compiled in (i.e. not ts_omit_serve). The hooks in
+// local.go are unset when serve is omitted, so cert.go's tls-alpn-01
+// path errors out cleanly in that case.
+var (
+	alpnChallengeMu    sync.RWMutex
+	alpnChallengeCerts = map[string]*tls.Certificate{}
+)
+
+// installALPNChallengeCert registers cert as the TLS-ALPN-01 challenge
+// response to serve for the given domain, and returns a cleanup func
+// that the caller must invoke once the challenge is no longer active
+// (typically deferred for the lifetime of the ACME order).
+func installALPNChallengeCert(domain string, cert *tls.Certificate) (cleanup func()) {
+	alpnChallengeMu.Lock()
+	alpnChallengeCerts[domain] = cert
+	alpnChallengeMu.Unlock()
+	return func() {
+		alpnChallengeMu.Lock()
+		delete(alpnChallengeCerts, domain)
+		alpnChallengeMu.Unlock()
+	}
+}
+
+// lookupALPNChallengeCert returns the TLS-ALPN-01 challenge certificate
+// installed for domain, or nil if none is currently in flight.
+func lookupALPNChallengeCert(domain string) *tls.Certificate {
+	alpnChallengeMu.RLock()
+	defer alpnChallengeMu.RUnlock()
+	return alpnChallengeCerts[domain]
+}
+
 const (
 	contentTypeHeader   = "Content-Type"
 	grpcBaseContentType = "application/grpc"
+
+	// acmeTLSALPNProto is the ALPN protocol name used for the
+	// TLS-ALPN-01 ACME challenge (RFC 8737). It matches
+	// tailscale.com/tempfork/acme.ALPNProto, redeclared here so this
+	// file does not import the acme package; the dep audit
+	// (TestOmitACME) requires that nothing pulled into a ts_omit_acme
+	// build references tempfork/acme.
+	acmeTLSALPNProto = "acme-tls/1"
 )
 
 // ErrETagMismatch signals that the given
@@ -577,6 +629,12 @@ func (b *LocalBackend) tcpHandlerForVIPService(dstAddr, srcAddr netip.AddrPort) 
 			// in the hostname. How to store the TLS cert is still being discussed.
 			hs.TLSConfig = &tls.Config{
 				GetCertificate: b.getTLSServeCertForPort(dport, dstSvc),
+				// "acme-tls/1" lets in-flight TLS-ALPN-01 ACME
+				// challenges complete handshakes against this same
+				// listener. http.Server.ServeTLS prepends "h2" and
+				// appends "http/1.1" if missing, so real client
+				// protocol selection is unchanged.
+				NextProtos: []string{acmeTLSALPNProto},
 			}
 			return func(c net.Conn) error {
 				return hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
@@ -655,6 +713,8 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, 
 		if tcph.HTTPS() {
 			hs.TLSConfig = &tls.Config{
 				GetCertificate: b.getTLSServeCertForPort(dport, ""),
+				// See the matching comment in tcpHandlerForVIPService.
+				NextProtos: []string{acmeTLSALPNProto},
 			}
 			return func(c net.Conn) error {
 				return hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
@@ -1310,6 +1370,19 @@ func (b *LocalBackend) getTLSServeCertForPort(port uint16, forVIPService tailcfg
 	return func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		if hi == nil || hi.ServerName == "" {
 			return nil, errors.New("no SNI ServerName")
+		}
+		// TLS-ALPN-01 ACME challenge intercept. When a BYO domain is
+		// being issued, the ACME validator connects to this same TLS
+		// listener with ALPN "acme-tls/1"; cert.go has already stashed
+		// a challenge cert keyed by the authorization identifier (SNI).
+		// Returning it completes the validation. If the ALPN is offered
+		// but no challenge is in flight, reject the handshake so we
+		// never accidentally serve a production cert under that ALPN.
+		if slices.Contains(hi.SupportedProtos, acmeTLSALPNProto) {
+			if cert := lookupALPNChallengeCert(hi.ServerName); cert != nil {
+				return cert, nil
+			}
+			return nil, fmt.Errorf("no TLS-ALPN-01 challenge in progress for %q", hi.ServerName)
 		}
 		_, ok := b.webServerConfig(hi.ServerName, forVIPService, port)
 		if !ok {

@@ -173,6 +173,7 @@ type serveEnv struct {
 	subcmd           serveMode                // subcommand
 	yes              bool                     // update without prompt
 	service          tailcfg.ServiceName      // service name
+	host             string                   // BYO ("bring your own") domain, overrides node DNSName
 	tun              bool                     // redirect traffic to OS for service
 	allServices      bool                     // apply config file to all services
 	acceptAppCaps    []tailcfg.PeerCapability // app capabilities to forward

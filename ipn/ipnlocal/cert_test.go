@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/envknob"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -217,6 +218,80 @@ func TestResolveCertDomain(t *testing.T) {
 				t.Errorf("resolveCertDomain(%q) = %q, want %q", tt.domain, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestResolveCertDomainBYO covers user-brought ("BYO") domains: ones
+// not in DNS.CertDomains but referenced by the node's serve config.
+// These are valid targets for cert issuance via TLS-ALPN-01.
+func TestResolveCertDomainBYO(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	b.mu.Lock()
+	b.currentNode().SetNetMap(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{}).View(),
+		DNS:      tailcfg.DNSConfig{CertDomains: []string{"node.ts.net"}},
+	})
+	b.mu.Unlock()
+
+	// Without a serve-config entry, the BYO host is rejected.
+	if _, err := b.resolveCertDomain("foo.com"); err == nil {
+		t.Fatalf("resolveCertDomain(foo.com) before serve config: want error, got nil")
+	}
+
+	// Install a serve config that references foo.com:443.
+	conf := &ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			"foo.com:443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:8080"}}},
+		},
+	}
+	b.mu.Lock()
+	b.serveConfig = conf.View()
+	b.mu.Unlock()
+
+	got, err := b.resolveCertDomain("foo.com")
+	if err != nil {
+		t.Fatalf("resolveCertDomain(foo.com): %v", err)
+	}
+	if got != "foo.com" {
+		t.Errorf("resolveCertDomain(foo.com) = %q, want %q", got, "foo.com")
+	}
+
+	// ts.net still routes through the existing exact-match path.
+	got, err = b.resolveCertDomain("node.ts.net")
+	if err != nil {
+		t.Fatalf("resolveCertDomain(node.ts.net): %v", err)
+	}
+	if got != "node.ts.net" {
+		t.Errorf("resolveCertDomain(node.ts.net) = %q, want node.ts.net", got)
+	}
+}
+
+// TestPreferredChallengeType checks that ts.net-managed domains route
+// to dns-01 (control owns the zone) while BYO domains route to
+// tls-alpn-01 (served by tailscaled directly).
+func TestPreferredChallengeType(t *testing.T) {
+	b := newTestLocalBackend(t)
+	b.mu.Lock()
+	b.currentNode().SetNetMap(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{}).View(),
+		DNS:      tailcfg.DNSConfig{CertDomains: []string{"node.ts.net"}},
+	})
+	b.mu.Unlock()
+
+	tests := []struct {
+		domain string
+		want   string
+	}{
+		{"node.ts.net", "dns-01"},
+		{"*.node.ts.net", "dns-01"},
+		{"foo.com", "tls-alpn-01"},
+		{"unrelated.example", "tls-alpn-01"},
+	}
+	for _, tt := range tests {
+		if got := b.preferredChallengeType(tt.domain); got != tt.want {
+			t.Errorf("preferredChallengeType(%q) = %q, want %q", tt.domain, got, tt.want)
+		}
 	}
 }
 
