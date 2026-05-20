@@ -8161,38 +8161,199 @@ func TestStartPreservesLoginFlags(t *testing.T) {
 }
 
 func TestShouldUseOneCGNATRoute(t *testing.T) {
+	tstest.AssertNotParallel(t)
+
+	makeInterface := func(index int, name, addr string) netmon.Interface {
+		t.Helper()
+
+		_, ipnet, err := net.ParseCIDR(addr)
+		if err != nil {
+			t.Fatalf("invalid CIDR %q: %v", addr, err)
+		}
+
+		// Loopback interface:
+		flags := net.FlagUp
+		if strings.HasPrefix(name, "lo") || strings.HasPrefix(name, "Loopback") || name == "/net/ipifc/0" {
+			flags |= net.FlagLoopback
+		}
+
+		return netmon.Interface{
+			Interface: &net.Interface{
+				Index: index,
+				Name:  name,
+				Flags: flags,
+			},
+			AltAddrs: []net.Addr{ipnet},
+		}
+	}
+
 	tests := []struct {
 		name      string
 		versionOS string
+		ifaces    []netmon.Interface
+		tsName    string
+		tsIndex   int
 		want      bool
 	}{
-		{"android", "android", true},
-		{"macOS", "macOS", true},
-		{"plan9", "plan9", true},
-		{"linux", "linux", false},
-		{"windows", "windows", false},
+		{
+			name:      "android/tailscale-cgnat",
+			versionOS: "android",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "lo", "127.0.0.1/8"),
+				makeInterface(15, "rmnet_data1", "10.203.33.114/23"),
+				makeInterface(26, "tun0", "100.95.71.186/32"),
+			},
+			tsName: "tun0",
+			want:   true,
+		},
+		{
+			name:      "android/multiple-cgnats",
+			versionOS: "android",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "lo", "127.0.0.1/8"),
+				makeInterface(2, "rmnet_data1", "100.124.0.1/32"),
+				makeInterface(26, "tun0", "100.95.71.186/32"),
+			},
+			tsName: "tun0",
+			want:   false,
+		},
+		{
+			name:      "linux/tailscale-cgnat",
+			versionOS: "linux",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "lo", "127.0.0.1/8"),
+				makeInterface(2, "eth0", "10.203.33.114/23"),
+				makeInterface(3, "tailscale0", "100.95.71.186/32"),
+			},
+			tsName:  "tailscale0",
+			tsIndex: 3,
+			want:    false,
+		},
+		{
+			name:      "linux/multiple-cgnats",
+			versionOS: "linux",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "lo", "127.0.0.1/8"),
+				makeInterface(2, "eth0", "100.124.0.1/32"),
+				makeInterface(3, "tailscale0", "100.95.71.186/32"),
+			},
+			tsName:  "tailscale0",
+			tsIndex: 3,
+			want:    false,
+		},
+		{
+			name:      "macOS/tailscale-cgnat",
+			versionOS: "macOS",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "lo0", "127.0.0.1/8"),
+				makeInterface(2, "en0", "10.203.33.114/23"),
+				makeInterface(3, "utun0", "100.95.71.186/32"),
+			},
+			tsName:  "utun0",
+			tsIndex: 3,
+			want:    true,
+		},
+		{
+			name:      "macOS/multiple-cgnats",
+			versionOS: "macOS",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "lo0", "127.0.0.1/8"),
+				makeInterface(2, "en0", "100.124.0.1/32"),
+				makeInterface(3, "utun0", "100.95.71.186/32"),
+			},
+			tsName:  "utun0",
+			tsIndex: 3,
+			want:    false,
+		},
+		{
+			name:      "plan9/tailscale-cgnat",
+			versionOS: "plan9",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "/net/ipifc/0", "127.0.0.1/8"),
+				makeInterface(2, "/net/ipifc/1", "10.203.33.114/23"),
+				makeInterface(3, "/net/ipifc/2", "100.95.71.186/32"),
+			},
+			tsName:  "/net/ipifc/2",
+			tsIndex: 3,
+			want:    true,
+		},
+		{
+			name:      "plan9/multiple-cgnats",
+			versionOS: "plan9",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "/net/ipifc/0", "127.0.0.1/8"),
+				makeInterface(2, "/net/ipifc/1", "100.124.0.1/32"),
+				makeInterface(3, "/net/ipifc/2", "100.95.71.186/32"),
+			},
+			tsName:  "/net/ipifc/2",
+			tsIndex: 3,
+			want:    true,
+		},
+		{
+			name:      "windows/tailscale-cgnat",
+			versionOS: "windows",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "Loopback Pseudo-Interface 1", "127.0.0.1/8"),
+				makeInterface(2, "Wi-Fi", "10.203.33.114/23"),
+				makeInterface(3, "Tailscale", "100.95.71.186/32"),
+			},
+			tsName:  "Tailscale",
+			tsIndex: 3,
+			want:    false,
+		},
+		{
+			name:      "windows/multiple-cgnats",
+			versionOS: "windows",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "Loopback Pseudo-Interface 1", "127.0.0.1/8"),
+				makeInterface(2, "Wi-Fi", "100.124.0.1/32"),
+				makeInterface(3, "Tailscale", "100.95.71.186/32"),
+			},
+			tsName:  "Tailscale",
+			tsIndex: 3,
+			want:    false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			tstest.AssertNotParallel(t)
+
+			// Stub out the network interfaces from the system.
+			t.Cleanup(func() {
+				netmon.RegisterInterfaceGetter(nil)
+			})
+			netmon.RegisterInterfaceGetter(func() ([]netmon.Interface, error) {
+				return tt.ifaces, nil
+			})
+
+			// Stub out the Tailscale interface properties.
+			tsName, _ := netmon.TailscaleInterfaceName()
+			tsIndex, _ := netmon.TailscaleInterfaceIndex()
+			t.Cleanup(func() {
+				netmon.SetTailscaleInterfaceProps(tsName, tsIndex)
+			})
+			netmon.SetTailscaleInterfaceProps(tt.tsName, tt.tsIndex)
+
 			got := shouldUseOneCGNATRoute(t.Logf, nil, nil, tt.versionOS)
 			if got != tt.want {
 				t.Errorf("shouldUseOneCGNATRoute(%q) = %v; want %v", tt.versionOS, got, tt.want)
 			}
+
+			// Control knob takes precedence over everything.
+			t.Run("control-knob-override", func(t *testing.T) {
+				knobs := &controlknobs.Knobs{}
+				knobs.OneCGNAT.Store(opt.NewBool(false))
+				if got := shouldUseOneCGNATRoute(t.Logf, nil, knobs, tt.versionOS); got {
+					t.Errorf("control knob should override %s; got true, want false", tt.versionOS)
+				}
+				knobs.OneCGNAT.Store(opt.NewBool(true))
+				if got := shouldUseOneCGNATRoute(t.Logf, nil, knobs, tt.versionOS); !got {
+					t.Errorf("control knob should override %s; got false, want true", tt.versionOS)
+				}
+			})
 		})
 	}
 
-	// Control knob takes precedence over everything.
-	t.Run("control-knob-override", func(t *testing.T) {
-		knobs := &controlknobs.Knobs{}
-		knobs.OneCGNAT.Store(opt.NewBool(false))
-		if got := shouldUseOneCGNATRoute(t.Logf, nil, knobs, "android"); got {
-			t.Error("control knob should override android default; got true, want false")
-		}
-		knobs.OneCGNAT.Store(opt.NewBool(true))
-		if got := shouldUseOneCGNATRoute(t.Logf, nil, knobs, "linux"); !got {
-			t.Error("control knob should override linux default; got false, want true")
-		}
-	})
 }
 
 func TestPeerRoutesCGNATCollapse(t *testing.T) {
