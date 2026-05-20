@@ -1281,6 +1281,21 @@ func TestListenService(t *testing.T) {
 		},
 	}
 
+	lt := setupTwoClientTest(t, false)
+	serviceHost := lt.s2
+	serviceClient := lt.s1
+
+	const serviceName = "svc:foo"
+	const serviceVIP = "100.11.22.33"
+
+	setUpServiceState(t, serviceName, serviceVIP,
+		serviceHost, serviceClient, lt.control, func(t *testing.T, control *testcontrol.Server) {
+			control.SetGlobalAppCaps(tailcfg.PeerCapMap{
+				"example.com/cap/all-paths": []tailcfg.RawMessage{`true`},
+				"example.com/cap/foo":       []tailcfg.RawMessage{`true`},
+			})
+		})
+
 	for _, tt := range tests {
 		// Overview:
 		// - start test control
@@ -1296,15 +1311,6 @@ func TestListenService(t *testing.T) {
 			// We run each test with and without a TUN device ([Server.Tun]).
 			// Note that this TUN device is distinct from TUN mode for Services.
 			doTest := func(t *testing.T, withTUNDevice bool) {
-				lt := setupTwoClientTest(t, withTUNDevice)
-				serviceHost := lt.s2
-				serviceClient := lt.s1
-
-				const serviceName = "svc:foo"
-				const serviceVIP = "100.11.22.33"
-
-				setUpServiceState(t, serviceName, serviceVIP,
-					serviceHost, serviceClient, lt.control, tt.extraSetup)
 
 				listeners := make([]*ServiceListener, 0, len(tt.modes))
 				for _, input := range tt.modes {
