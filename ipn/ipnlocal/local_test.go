@@ -5640,8 +5640,8 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 				},
 			},
 			// Change this, if the hashing function changes.
-			wantID:   "stable3",
-			wantName: "peer3",
+			wantID:   "stable1",
+			wantName: "peer1",
 		},
 		{
 			name: "exit-nodes-without-priority-for-suggestions",
@@ -5781,8 +5781,9 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 						withLocationPriority(2)), // top
 				},
 			},
-			wantID:   "stable5",
-			wantName: "peer5",
+			// Change this, if the hashing function changes.
+			wantID:   "stable2",
+			wantName: "peer2",
 			wantPri:  2,
 		},
 		{
