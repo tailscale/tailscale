@@ -21,21 +21,29 @@ type diskCache struct {
 	cache *netmapcache.Cache
 }
 
+// updateNetmapToDiskLocked updates nm in the cache, excluding peers and profiles.
+func (b *LocalBackend) updateNetmapToDiskLocked(nm *netmap.NetworkMap) error {
+	if !buildfeatures.HasCacheNetMap || nm == nil || nm.Cached {
+		return nil
+	} else if err := b.ensureDiskCacheLocked(); err != nil {
+		return err
+	}
+	b.logf("updating netmap in disk cache")
+	return b.diskCache.cache.UpdateSelfOnly(b.currentNode().Context(), b.patchNetmapHomeDERPLocked(nm))
+}
+
+// writeNetmapToDiskLocked writes nm into the cache, including peers and profiles.
 func (b *LocalBackend) writeNetmapToDiskLocked(nm *netmap.NetworkMap) error {
 	if !buildfeatures.HasCacheNetMap || nm == nil || nm.Cached {
 		return nil
-	}
-	b.logf("writing netmap to disk cache")
-
-	dir, err := b.profileMkdirAllLocked(b.pm.CurrentProfile().ID(), "netmap-cache")
-	if err != nil {
+	} else if err := b.ensureDiskCacheLocked(); err != nil {
 		return err
 	}
-	if c := b.diskCache; c.cache == nil || c.dir != dir {
-		b.diskCache.cache = netmapcache.NewCache(netmapcache.FileStore(dir))
-		b.diskCache.dir = dir
-	}
+	b.logf("writing netmap to disk cache")
+	return b.diskCache.cache.Store(b.currentNode().Context(), b.patchNetmapHomeDERPLocked(nm))
+}
 
+func (b *LocalBackend) patchNetmapHomeDERPLocked(nm *netmap.NetworkMap) *netmap.NetworkMap {
 	// Set the homeDERP on the self node before saving. The self node homeDERP is
 	// generally not used since the homeDERP for self is stored in magicsock, but
 	// to be able to load it during loading the cache, we use the existing field
@@ -46,8 +54,19 @@ func (b *LocalBackend) writeNetmapToDiskLocked(nm *netmap.NetworkMap) error {
 	selfNode := nm.SelfNode.AsStruct()
 	selfNode.HomeDERP = int(b.currentNode().homeDERP.Load())
 	nmCopy.SelfNode = selfNode.View()
+	return &nmCopy
+}
 
-	return b.diskCache.cache.Store(b.currentNode().Context(), &nmCopy)
+func (b *LocalBackend) ensureDiskCacheLocked() error {
+	dir, err := b.profileMkdirAllLocked(b.pm.CurrentProfile().ID(), "netmap-cache")
+	if err != nil {
+		return err
+	}
+	if c := b.diskCache; c.cache == nil || c.dir != dir {
+		b.diskCache.cache = netmapcache.NewCache(netmapcache.FileStore(dir))
+		b.diskCache.dir = dir
+	}
+	return nil
 }
 
 func (b *LocalBackend) loadDiskCacheLocked() (om *netmap.NetworkMap, ok bool) {
