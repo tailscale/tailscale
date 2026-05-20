@@ -21,6 +21,11 @@ var (
 	fakeSyslog            = newVIP("syslog.tailscale", 9)
 	fakeCloudInit         = newVIP("cloud-init.tailscale", 5) // serves cloud-init metadata/userdata per node
 	fakeFiles             = newVIP("files.tailscale", 6)      // serves binary files (tta, tailscale, tailscaled) to VMs
+
+	// FakeDualStackWeb is a dual-stack webserver VIP used by
+	// TestExitNodeV4Only to verify that traffic works through an
+	// IPv4-only exit node even when DNS returns both A and AAAA.
+	FakeDualStackWeb = newVIP("dualstack-web.example.com", "5.0.0.100", "2052::5:100")
 )
 
 type virtualIP struct {

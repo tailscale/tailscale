@@ -1291,9 +1291,9 @@ func (h *Handler) serveDial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Dial via Tailscale using the resolved IP:port to avoid a TOCTOU
-	// race with DNS re-resolution.
-	outConn, err := h.b.Dialer().UserDial(r.Context(), network, ipp.String())
+	// Dial via Tailscale with the original hostname so UserDial can
+	// resolve all addresses and race across families (happy eyeballs).
+	outConn, err := h.b.Dialer().UserDial(r.Context(), network, addr)
 	if err != nil {
 		http.Error(w, "dial failure: "+err.Error(), http.StatusBadGateway)
 		return
