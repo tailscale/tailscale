@@ -141,7 +141,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
-			Name: "invalid-status-missing-client-secret",
+			Name: "invalid-status-missing-client-secret-and-jwt",
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name: "test",
@@ -171,7 +171,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 					Type:    string(tsapi.TailnetReady),
 					Status:  metav1.ConditionFalse,
 					Reason:  tailnet.ReasonInvalidSecret,
-					Message: `Secret "test" is missing the client_secret field`,
+					Message: `Secret "test" is missing the client_secret or jwt field`,
 				},
 			},
 		},
@@ -289,6 +289,45 @@ func TestReconciler_Reconcile(t *testing.T) {
 					Status:  metav1.ConditionFalse,
 					Reason:  tailnet.ReasonInvalidOAuth,
 					Message: `failed to list auth keys: EOF`,
+				},
+			},
+		},
+		{
+			Name: "valid with jwt instead of client_secret",
+			Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name: "test",
+				},
+			},
+			Tailnet: &tsapi.Tailnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test",
+				},
+				Spec: tsapi.TailnetSpec{
+					Credentials: tsapi.TailnetCredentials{
+						SecretName: "test",
+					},
+				},
+			},
+			Secret: &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test",
+					Namespace: "tailscale",
+				},
+				Data: map[string][]byte{
+					"client_id": []byte("test"),
+					"jwt":       []byte("test-jwt"),
+				},
+			},
+			ClientFunc: func(_ *tsapi.Tailnet, _ *corev1.Secret) tsclient.Client {
+				return &MockTailnetClient{}
+			},
+			ExpectedConditions: []metav1.Condition{
+				{
+					Type:    string(tsapi.TailnetReady),
+					Status:  metav1.ConditionTrue,
+					Reason:  tailnet.ReasonValid,
+					Message: tailnet.ReasonValid,
 				},
 			},
 		},

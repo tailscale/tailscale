@@ -65,8 +65,9 @@ spec:
                   properties:
                     secretName:
                       description: |-
-                        The name of the secret containing the OAuth credentials. This secret must contain two fields "client_id" and
-                        "client_secret".
+                        The name of the secret containing the OAuth credentials. The secret must contain a "client_id" field and one of:
+                        "client_secret" for static OAuth credentials, or "jwt" for workload identity federation.
+                        When "jwt" is present, the operator uses the token exchange endpoint to authenticate.
                       type: string
                 loginUrl:
                   description: URL of the control plane to be used by all resources managed by the operator using this Tailnet.

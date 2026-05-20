@@ -1273,7 +1273,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `secretName` _string_ | The name of the secret containing the OAuth credentials. This secret must contain two fields "client_id" and<br />"client_secret". |  |  |
+| `secretName` _string_ | The name of the secret containing the OAuth credentials. The secret must contain a "client_id" field and one of:<br />"client_secret" for static OAuth credentials, or "jwt" for workload identity federation.<br />When "jwt" is present, the operator uses the token exchange endpoint to authenticate. |  |  |
 
 
 #### TailnetDevice

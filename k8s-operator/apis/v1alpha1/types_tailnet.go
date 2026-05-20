@@ -53,8 +53,9 @@ type TailnetSpec struct {
 }
 
 type TailnetCredentials struct {
-	// The name of the secret containing the OAuth credentials. This secret must contain two fields "client_id" and
-	// "client_secret".
+	// The name of the secret containing the OAuth credentials. The secret must contain a "client_id" field and one of:
+	// "client_secret" for static OAuth credentials, or "jwt" for workload identity federation.
+	// When "jwt" is present, the operator uses the token exchange endpoint to authenticate.
 	SecretName string `json:"secretName"`
 }
 

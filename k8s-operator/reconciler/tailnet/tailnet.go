@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/client/tailscale/v2"
@@ -84,7 +85,10 @@ type (
 	}
 )
 
-const reconcilerName = "tailnet-reconciler"
+const (
+	reconcilerName               = "tailnet-reconciler"
+	indexTailnetCredentialSecret = ".spec.credentials.secretName"
+)
 
 // NewReconciler returns a new instance of the Reconciler type. It watches specifically for changes to Tailnet custom
 // resources. The ReconcilerOptions can be used to modify the behaviour of the Reconciler.
@@ -101,11 +105,45 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 
 // Register the Reconciler onto the given manager.Manager implementation.
 func (r *Reconciler) Register(mgr manager.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), new(tsapi.Tailnet), indexTailnetCredentialSecret, indexCredentialSecret); err != nil {
+		return fmt.Errorf("failed setting up credential Secret indexer for Tailnets: %w", err)
+	}
+
 	return builder.
 		ControllerManagedBy(mgr).
 		For(&tsapi.Tailnet{}).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.tailnetsForSecret)).
 		Named(reconcilerName).
 		Complete(r)
+}
+
+func (r *Reconciler) tailnetsForSecret(ctx context.Context, o client.Object) []reconcile.Request {
+	secret, ok := o.(*corev1.Secret)
+	if !ok || secret.Namespace != r.tailscaleNamespace {
+		return nil
+	}
+
+	var tailnets tsapi.TailnetList
+	if err := r.List(ctx, &tailnets, client.MatchingFields{indexTailnetCredentialSecret: secret.Name}); err != nil {
+		r.logger.Infof("error listing Tailnets, skipping a reconcile for event on Secret %s: %v", secret.Name, err)
+		return nil
+	}
+
+	var reqs []reconcile.Request
+	for _, tailnet := range tailnets.Items {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: tailnet.Name},
+		})
+	}
+	return reqs
+}
+
+func indexCredentialSecret(o client.Object) []string {
+	tailnet, ok := o.(*tsapi.Tailnet)
+	if !ok || tailnet.Spec.Credentials.SecretName == "" {
+		return nil
+	}
+	return []string{tailnet.Spec.Credentials.SecretName}
 }
 
 var (
@@ -243,10 +281,11 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, tailnet *tsapi.Tailnet)
 	return reconcile.Result{}, nil
 }
 
-// Constants for OAuth credential fields within the Secret referenced by the Tailnet.
+// Constants for credential fields within the Secret referenced by the Tailnet.
 const (
 	clientIDKey     = "client_id"
 	clientSecretKey = "client_secret"
+	jwtKey          = "jwt"
 )
 
 func (r *Reconciler) createClient(tailnet *tsapi.Tailnet, secret *corev1.Secret) (tsclient.Client, error) {
@@ -264,14 +303,39 @@ func (r *Reconciler) createClient(tailnet *tsapi.Tailnet, secret *corev1.Secret)
 		return nil, fmt.Errorf("failed to parse base URL %q: %w", baseURL, err)
 	}
 
+	var auth tailscale.Auth
+	if jwt := secret.Data[jwtKey]; len(jwt) > 0 {
+		auth = &tailscale.IdentityFederation{
+			ClientID:    string(secret.Data[clientIDKey]),
+			IDTokenFunc: r.jwtFromSecret(types.NamespacedName{Name: secret.Name, Namespace: secret.Namespace}),
+		}
+	} else {
+		auth = &tailscale.OAuth{
+			ClientID:     string(secret.Data[clientIDKey]),
+			ClientSecret: string(secret.Data[clientSecretKey]),
+		}
+	}
+
 	return tsclient.Wrap(&tailscale.Client{
 		BaseURL:   base,
 		UserAgent: "tailscale-k8s-operator",
-		Auth: &tailscale.OAuth{
-			ClientID:     string(secret.Data[clientIDKey]),
-			ClientSecret: string(secret.Data[clientSecretKey]),
-		},
+		Auth:      auth,
 	}), nil
+}
+
+func (r *Reconciler) jwtFromSecret(name types.NamespacedName) func() (string, error) {
+	return func() (string, error) {
+		var secret corev1.Secret
+		if err := r.Get(context.Background(), name, &secret); err != nil {
+			return "", fmt.Errorf("failed to get Secret %q for Tailnet JWT: %w", name, err)
+		}
+
+		jwt := secret.Data[jwtKey]
+		if len(jwt) == 0 {
+			return "", fmt.Errorf("Secret %q does not contain a Tailnet JWT", name)
+		}
+		return string(jwt), nil
+	}
 }
 
 func (r *Reconciler) ensurePermissions(ctx context.Context, tsClient tsclient.Client, tailnet *tsapi.Tailnet) bool {
@@ -317,8 +381,8 @@ func (r *Reconciler) ensureSecret(tailnet *tsapi.Tailnet, secret *corev1.Secret)
 		message = fmt.Sprintf("Secret %q is empty", secret.Name)
 	case len(secret.Data[clientIDKey]) == 0:
 		message = fmt.Sprintf("Secret %q is missing the client_id field", secret.Name)
-	case len(secret.Data[clientSecretKey]) == 0:
-		message = fmt.Sprintf("Secret %q is missing the client_secret field", secret.Name)
+	case len(secret.Data[clientSecretKey]) == 0 && len(secret.Data[jwtKey]) == 0:
+		message = fmt.Sprintf("Secret %q is missing the client_secret or jwt field", secret.Name)
 	}
 
 	if message == "" {
