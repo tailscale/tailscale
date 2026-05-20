@@ -545,6 +545,65 @@ func TestExitNode(t *testing.T) {
 	}
 }
 
+// TestExitNodeV4Only verifies that when an exit node is on an
+// IPv4-only network, a client can still connect through it to a
+// webserver whose DNS name has both A and AAAA records. This
+// exercises the happy-eyeballs race dial in net/tsdial.UserDial:
+// the AAAA connect attempt fails (exit node has no IPv6 egress),
+// but the A attempt succeeds.
+//
+// Fixes tailscale/tailscale#13257 and #19792.
+func TestExitNodeV4Only(t *testing.T) {
+	env := vmtest.New(t)
+
+	// Exit node network: IPv4 only (no IPv6 prefix → CanV6()=false).
+	// It advertises both 0.0.0.0/0 and ::/0 (required by tailscale up)
+	// but the network has no IPv6 WAN, so v6 traffic will be dropped.
+	exitNet := env.AddNetwork("2.0.0.1", "192.168.2.1/24", vnet.EasyNAT)
+	// Client network: dual-stack so Go's net.Resolver prefers AAAA.
+	clientNet := env.AddNetwork("1.0.0.1", "2000:1::1/64", "192.168.1.1/24", vnet.EasyNAT)
+	// Web server network: use the FakeDualStackWeb VIP's v4 as WAN.
+	webNet := env.AddNetwork("5.0.0.100", "192.168.5.1/24", vnet.One2OneNAT)
+
+	client := env.AddNode("client", clientNet,
+		vmtest.OS(vmtest.Gokrazy),
+		// Force AAAA addresses first in userDialResolveAll results so
+		// the old single-IP code path would pick an unreachable v6 addr.
+		vnet.TailscaledEnv{Key: "TS_DEBUG_PREFER_IPV6_USERDIAL", Value: "1"})
+	exit := env.AddNode("exit", exitNet,
+		vmtest.OS(vmtest.Gokrazy),
+		vmtest.AdvertiseRoutes("0.0.0.0/0,::/0"))
+	env.AddNode("webserver", webNet,
+		vmtest.OS(vmtest.Gokrazy),
+		vmtest.DontJoinTailnet(),
+		vmtest.WebServer(8080))
+
+	approveStep := env.AddStep("Approve exit-node routes")
+	fetchStep := env.AddStep("HTTP GET via exit node using dual-stack DNS name")
+
+	env.Start()
+
+	approveStep.Begin()
+	env.ApproveRoutes(exit, "0.0.0.0/0", "::/0")
+	approveStep.End(nil)
+
+	fetchStep.Begin()
+	env.SetExitNode(client, exit)
+	// Use the VIP hostname so DNS returns both A (5.0.0.100) and AAAA
+	// (2052::5:100). The exit node's network has no IPv6 WAN, so the
+	// AAAA connect attempt will fail and the dialer must fall back to
+	// the A record via happy eyeballs.
+	body := env.HTTPGet(client, "http://dualstack-web.example.com:8080/")
+	t.Logf("response: %s", body)
+	if !strings.Contains(body, "Hello world I am webserver") {
+		fetchStep.Fatalf("unexpected webserver response: %q", body)
+	}
+	if !strings.Contains(body, "from 2.0.0.1") {
+		fetchStep.Fatalf("expected traffic from exit node WAN (2.0.0.1), got: %q", body)
+	}
+	fetchStep.End(nil)
+}
+
 // TestDiscoKeyChange verifies that when one node's disco key rotates without
 // its WireGuard node key changing, peers detect the change, tear down stale
 // WireGuard session state for that peer, and re-establish the tunnel in both
