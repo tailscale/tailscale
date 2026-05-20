@@ -134,7 +134,7 @@ func main() {
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
 	if mode != nil {
-		ap, err := apiproxy.NewAPIServerProxy(zlog, restConfig, s, *mode, true)
+		ap, err := apiproxy.NewAPIServerProxy(zlog, restConfig, s, *mode, true, "")
 		if err != nil {
 			zlog.Fatalf("error creating API server proxy: %v", err)
 		}

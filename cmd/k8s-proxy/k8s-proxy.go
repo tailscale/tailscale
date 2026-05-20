@@ -29,6 +29,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/utils/strings/slices"
+
 	"tailscale.com/client/local"
 	"tailscale.com/cmd/k8s-proxy/internal/config"
 	"tailscale.com/health"
@@ -374,7 +375,7 @@ func run(logger *zap.SugaredLogger) error {
 	if cfg.Parsed.APIServerProxy != nil && cfg.Parsed.APIServerProxy.Mode != nil {
 		mode = *cfg.Parsed.APIServerProxy.Mode
 	}
-	ap, err := apiproxy.NewAPIServerProxy(logger.Named("apiserver-proxy"), restConfig, ts, mode, false)
+	ap, err := apiproxy.NewAPIServerProxy(logger.Named("apiserver-proxy"), restConfig, ts, mode, false, apiServerProxyService(cfg))
 	if err != nil {
 		return fmt.Errorf("error creating api server proxy: %w", err)
 	}
@@ -482,7 +483,7 @@ func apiServerProxyService(cfg *conf.Config) tailcfg.ServiceName {
 		cfg.Parsed.APIServerProxy.Enabled.EqualBool(true) &&
 		cfg.Parsed.APIServerProxy.ServiceName != nil &&
 		*cfg.Parsed.APIServerProxy.ServiceName != "" {
-		return tailcfg.ServiceName(*cfg.Parsed.APIServerProxy.ServiceName)
+		return *cfg.Parsed.APIServerProxy.ServiceName
 	}
 
 	return ""
