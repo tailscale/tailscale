@@ -61,7 +61,7 @@ func TestWriteAndLoadHomeDERP(t *testing.T) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if err := b.writeNetmapToDiskLocked(nm); err != nil {
+	if err := b.writeNetmapToDiskLockedWithPeers(nm); err != nil {
 		t.Fatalf("writeNetmapToDiskLocked: %v", err)
 	}
 
@@ -127,7 +127,7 @@ func TestOnHomeDERPUpdate(t *testing.T) {
 
 		// Write an initial cache entry so we can verify it is not overwritten.
 		b.mu.Lock()
-		if err := b.writeNetmapToDiskLocked(nm); err != nil {
+		if err := b.writeNetmapToDiskLockedWithPeers(nm); err != nil {
 			b.mu.Unlock()
 			t.Fatalf("setup writeNetmapToDiskLocked: %v", err)
 		}
@@ -172,7 +172,7 @@ func TestOnHomeDERPUpdate(t *testing.T) {
 
 		// Write an initial cache entry so we can verify it is not overwritten.
 		b.mu.Lock()
-		if err := b.writeNetmapToDiskLocked(nm); err != nil {
+		if err := b.writeNetmapToDiskLockedWithPeers(nm); err != nil {
 			b.mu.Unlock()
 			t.Fatalf("setup writeNetmapToDiskLocked: %v", err)
 		}
@@ -218,7 +218,7 @@ func TestWriteNetmapDoesNotMutateOriginal(t *testing.T) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if err := b.writeNetmapToDiskLocked(nm); err != nil {
+	if err := b.writeNetmapToDiskLockedWithPeers(nm); err != nil {
 		t.Fatalf("writeNetmapToDiskLocked: %v", err)
 	}
 

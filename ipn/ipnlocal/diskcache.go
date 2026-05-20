@@ -21,8 +21,8 @@ type diskCache struct {
 	cache *netmapcache.Cache
 }
 
-// updateNetmapToDiskLocked updates nm in the cache, excluding peers and profiles.
-func (b *LocalBackend) updateNetmapToDiskLocked(nm *netmap.NetworkMap) error {
+// writeNetmapToDiskLockedWithoutPeers updates nm in the cache, excluding peers and profiles.
+func (b *LocalBackend) writeNetmapToDiskLockedWithoutPeers(nm *netmap.NetworkMap) error {
 	if !buildfeatures.HasCacheNetMap || nm == nil || nm.Cached {
 		return nil
 	} else if err := b.ensureDiskCacheLocked(); err != nil {
@@ -32,8 +32,8 @@ func (b *LocalBackend) updateNetmapToDiskLocked(nm *netmap.NetworkMap) error {
 	return b.diskCache.cache.UpdateSelfOnly(b.currentNode().Context(), b.patchNetmapHomeDERPLocked(nm))
 }
 
-// writeNetmapToDiskLocked writes nm into the cache, including peers and profiles.
-func (b *LocalBackend) writeNetmapToDiskLocked(nm *netmap.NetworkMap) error {
+// writeNetmapToDiskLockedWithPeers writes nm into the cache, including peers and profiles.
+func (b *LocalBackend) writeNetmapToDiskLockedWithPeers(nm *netmap.NetworkMap) error {
 	if !buildfeatures.HasCacheNetMap || nm == nil || nm.Cached {
 		return nil
 	} else if err := b.ensureDiskCacheLocked(); err != nil {

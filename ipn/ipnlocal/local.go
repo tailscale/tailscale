@@ -705,7 +705,7 @@ func (b *LocalBackend) onHomeDERPUpdateLocked(du magicsock.HomeDERPChanged) {
 
 	// Update the relevant parts of the cached copy of the network map, notably
 	// not including the peers.
-	if err := b.updateNetmapToDiskLocked(b.NetMapNoPeers()); err != nil {
+	if err := b.writeNetmapToDiskLockedWithoutPeers(b.NetMapNoPeers()); err != nil {
 		b.logf("update netmap cache: %v", err)
 	}
 }
@@ -6710,7 +6710,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	// the node starts up.
 	if nm != nil {
 		if b.currentNode().SelfHasCap(tailcfg.NodeAttrCacheNetworkMaps) && envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
-			if err := b.writeNetmapToDiskLocked(nm); err != nil {
+			if err := b.writeNetmapToDiskLockedWithPeers(nm); err != nil {
 				b.logf("write netmap to cache: %v", err)
 			}
 		} else {
