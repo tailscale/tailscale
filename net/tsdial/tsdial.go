@@ -360,7 +360,7 @@ func (d *Dialer) SetNetMap(nm *netmap.NetworkMap) {
 
 // userDialResolve resolves addr as if a user initiating the dial. (e.g. from a
 // SOCKS or HTTP outbound proxy)
-func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (netip.AddrPort, error) {
+func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) ([]netip.AddrPort, error) {
 	d.mu.Lock()
 	dns := d.dns
 	exitDNSDoH := d.exitDNSDoHBase
@@ -369,7 +369,10 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 	// MagicDNS or otherwise baked into the NetworkMap? Try that first.
 	ipp, err := dns.resolveMemory(ctx, network, addr)
 	if err != errUnresolved {
-		return ipp, err
+		if err != nil {
+			return nil, err
+		}
+		return []netip.AddrPort{ipp}, nil
 	}
 
 	// Otherwise, hit the network.
@@ -379,7 +382,7 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 	host, port, err := splitHostPort(addr)
 	if err != nil {
 		// addr is malformed.
-		return netip.AddrPort{}, err
+		return nil, err
 	}
 
 	var r net.Resolver
@@ -397,13 +400,17 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 
 	ips, err := r.LookupIP(ctx, ipNetOfNetwork(network), host)
 	if err != nil {
-		return netip.AddrPort{}, err
+		return nil, err
 	}
 	if len(ips) == 0 {
-		return netip.AddrPort{}, fmt.Errorf("DNS lookup returned no results for %q", host)
+		return nil, fmt.Errorf("DNS lookup returned no results for %q", host)
 	}
-	ip, _ := netip.AddrFromSlice(ips[0])
-	return netip.AddrPortFrom(ip.Unmap(), port), nil
+	var ipps []netip.AddrPort
+	for _, ipBytes := range ips {
+		ip, _ := netip.AddrFromSlice(ipBytes)
+		ipps = append(ipps, netip.AddrPortFrom(ip.Unmap(), port))
+	}
+	return ipps, nil
 }
 
 // ipNetOfNetwork returns "ip", "ip4", or "ip6" corresponding
@@ -480,10 +487,25 @@ func (d *Dialer) SystemDial(ctx context.Context, network, addr string) (net.Conn
 // UserDial connects to the provided network address as if a user were
 // initiating the dial. (e.g. from a SOCKS or HTTP outbound proxy)
 func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, error) {
-	ipp, err := d.userDialResolve(ctx, network, addr)
+	ipps, err := d.userDialResolve(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}
+	
+	var firstErr error
+	for _, ipp := range ipps {
+		conn, err := d.userDialIPPort(ctx, network, ipp)
+		if err == nil {
+			return conn, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	return nil, firstErr
+}
+
+func (d *Dialer) userDialIPPort(ctx context.Context, network string, ipp netip.AddrPort) (net.Conn, error) {
 	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.Addr()) {
 		if d.NetstackDialTCP == nil || d.NetstackDialUDP == nil {
 			return nil, errors.New("Dialer not initialized correctly")
@@ -525,10 +547,11 @@ func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, 
 // dial over Tailscale should call [Dialer.UserDial] with the returned
 // ipp.String() (an IP:port) rather than the original DNS name.
 func (d *Dialer) UserDialPlan(ctx context.Context, network, addr string) (ipp netip.AddrPort, viaTailscale bool, err error) {
-	ipp, err = d.userDialResolve(ctx, network, addr)
+	ipps, err := d.userDialResolve(ctx, network, addr)
 	if err != nil {
 		return netip.AddrPort{}, false, err
 	}
+	ipp = ipps[0]
 	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.Addr()) {
 		return ipp, true, nil
 	}
