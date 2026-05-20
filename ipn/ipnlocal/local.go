@@ -703,10 +703,10 @@ func (b *LocalBackend) onHomeDERPUpdateLocked(du magicsock.HomeDERPChanged) {
 		return
 	}
 
-	// Persist the full netmap (including up-to-date Peers) to disk for
-	// fast restart.
-	if err := b.writeNetmapToDiskLocked(b.NetMapWithPeers()); err != nil {
-		b.logf("write netmap to cache: %v", err)
+	// Update the relevant parts of the cached copy of the network map, notably
+	// not including the peers.
+	if err := b.updateNetmapToDiskLocked(b.NetMapNoPeers()); err != nil {
+		b.logf("update netmap cache: %v", err)
 	}
 }
 
