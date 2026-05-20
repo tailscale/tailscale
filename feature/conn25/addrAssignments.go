@@ -58,22 +58,16 @@ func (a *addrAssignments) insertWithExpiry(as *addrs, d time.Duration) error {
 	if !as.expiresAt.IsZero() && !as.expiresAt.Before(now) {
 		return errors.New("expiresAt already set")
 	}
-	// we don't expect for addresses to be reused before expiry
-	if existing, ok := a.byMagicIP[as.magic]; ok {
-		if !existing.expiresAt.Before(now) {
-			return errors.New("byMagicIP key exists")
-		}
+	// addresses must be removed (eg by popExpired) before they can be reused
+	if _, ok := a.byMagicIP[as.magic]; ok {
+		return errors.New("byMagicIP key exists")
 	}
 	ddst := domainDst{domain: as.domain, dst: as.dst}
-	if existing, ok := a.byDomainDst[ddst]; ok {
-		if !existing.expiresAt.Before(now) {
-			return errors.New("byDomainDst key exists")
-		}
+	if _, ok := a.byDomainDst[ddst]; ok {
+		return errors.New("byDomainDst key exists")
 	}
-	if existing, ok := a.byTransitIP[as.transit]; ok {
-		if !existing.expiresAt.Before(now) {
-			return errors.New("byTransitIP key exists")
-		}
+	if _, ok := a.byTransitIP[as.transit]; ok {
+		return errors.New("byTransitIP key exists")
 	}
 	as.expiresAt = now.Add(d)
 	mak.Set(&a.byMagicIP, as.magic, as)

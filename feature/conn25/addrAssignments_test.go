@@ -51,20 +51,10 @@ func TestAssignmentsExpire(t *testing.T) {
 	if foundAsAfter.isValid() {
 		t.Fatal("expected zero val")
 	}
-	// Now we can reuse the addresses
+	// We should only be able to write old addresses again if they've been removed from the maps (eg with popExpired).
 	err = assignments.insert(as)
-	if err != nil {
-		t.Fatal(err)
-	}
-	foundAs, ok = assignments.lookupByMagicIP(as.magic)
-	if !ok {
-		t.Fatal("expected to find")
-	}
-	if foundAs.dst != as.dst {
-		t.Fatalf("want %v; got %v", as.dst, foundAs.dst)
-	}
-	if !foundAs.expiresAt.After(clock.Now()) {
-		t.Fatalf("expected foundAs to expire after now")
+	if err == nil {
+		t.Fatal("expected an error but got nil")
 	}
 }
 
