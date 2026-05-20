@@ -16,7 +16,7 @@ import (
 	"fmt"
 
 	"tailscale.com/ipn/ipnext"
-	"tailscale.com/ipn/routecheck"
+	"tailscale.com/net/routecheck"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 )

@@ -5,7 +5,7 @@ package routecheck
 
 import (
 	"tailscale.com/ipn/ipnext"
-	"tailscale.com/ipn/routecheck"
+	"tailscale.com/net/routecheck"
 )
 
 // NodeBackender is a shim between [ipnext.Host] and [routecheck.NodeBackender].

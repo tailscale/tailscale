@@ -16,7 +16,7 @@ import (
 	gcmpopts "github.com/google/go-cmp/cmp/cmpopts"
 
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/ipn/routecheck"
+	"tailscale.com/net/routecheck"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
