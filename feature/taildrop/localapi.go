@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"tailscale.com/client/tailscale/apitype"
@@ -131,7 +132,21 @@ func serveFilePut(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 	outgoingFiles := make(map[string]*ipn.OutgoingFile)
 	t := time.NewTicker(1 * time.Second)
 	progressUpdates := make(chan ipn.OutgoingFile)
-	defer close(progressUpdates)
+	var progressMu sync.Mutex
+	progressClosed := false
+	sendProgress := func(f ipn.OutgoingFile) {
+		progressMu.Lock()
+		defer progressMu.Unlock()
+		if !progressClosed {
+			progressUpdates <- f
+		}
+	}
+	defer func() {
+		progressMu.Lock()
+		progressClosed = true
+		progressMu.Unlock()
+		close(progressUpdates)
+	}()
 
 	go func() {
 		defer t.Stop()
@@ -157,16 +172,16 @@ func serveFilePut(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 			Name:         filenameEscaped,
 			DeclaredSize: r.ContentLength,
 		}
-		singleFilePut(h, r.Context(), progressUpdates, w, r.Body, dstURL, file)
+		singleFilePut(h, r.Context(), sendProgress, w, r.Body, dstURL, file)
 	case "POST":
-		multiFilePost(h, progressUpdates, w, r, peerID, dstURL)
+		multiFilePost(h, sendProgress, w, r, peerID, dstURL)
 	default:
 		http.Error(w, "want PUT to put file", http.StatusBadRequest)
 		return
 	}
 }
 
-func multiFilePost(h *localapi.Handler, progressUpdates chan (ipn.OutgoingFile), w http.ResponseWriter, r *http.Request, peerID tailcfg.StableNodeID, dstURL *url.URL) {
+func multiFilePost(h *localapi.Handler, sendProgress func(ipn.OutgoingFile), w http.ResponseWriter, r *http.Request, peerID tailcfg.StableNodeID, dstURL *url.URL) {
 	_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("invalid Content-Type for multipart POST: %s", err), http.StatusBadRequest)
@@ -209,13 +224,13 @@ func multiFilePost(h *localapi.Handler, progressUpdates chan (ipn.OutgoingFile),
 
 			for _, file := range manifest {
 				outgoingFilesByName[file.Name] = file
-				progressUpdates <- file
+				sendProgress(file)
 			}
 
 			continue
 		}
 
-		if !singleFilePut(h, r.Context(), progressUpdates, ww, part, dstURL, outgoingFilesByName[part.FileName()]) {
+		if !singleFilePut(h, r.Context(), sendProgress, ww, part, dstURL, outgoingFilesByName[part.FileName()]) {
 			return
 		}
 
@@ -271,7 +286,7 @@ func (ww *multiFilePostResponseWriter) Flush(w http.ResponseWriter) error {
 func singleFilePut(
 	h *localapi.Handler,
 	ctx context.Context,
-	progressUpdates chan (ipn.OutgoingFile),
+	sendProgress func(ipn.OutgoingFile),
 	w http.ResponseWriter,
 	body io.Reader,
 	dstURL *url.URL,
@@ -280,13 +295,13 @@ func singleFilePut(
 	outgoingFile.Started = time.Now()
 	body = progresstracking.NewReader(body, 1*time.Second, func(n int, err error) {
 		outgoingFile.Sent = int64(n)
-		progressUpdates <- outgoingFile
+		sendProgress(outgoingFile)
 	})
 
 	fail := func() {
 		outgoingFile.Finished = true
 		outgoingFile.Succeeded = false
-		progressUpdates <- outgoingFile
+		sendProgress(outgoingFile)
 	}
 
 	// Before we PUT a file we check to see if there are any existing partial file and if so,
@@ -351,7 +366,7 @@ func singleFilePut(
 
 	outgoingFile.Finished = true
 	outgoingFile.Succeeded = true
-	progressUpdates <- outgoingFile
+	sendProgress(outgoingFile)
 
 	return true
 }
