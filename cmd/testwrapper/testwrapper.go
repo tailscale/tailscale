@@ -1,10 +1,17 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// testwrapper is a wrapper for retrying flaky tests. It is an alternative to
-// `go test` and re-runs failed marked flaky tests (using the flakytest pkg). It
-// takes different arguments than go test and requires the first positional
-// argument to be the pattern to test.
+// testwrapper is a wrapper for go test that automatically retries failing
+// tests to detect flakiness.
+//
+// Any failed test is treated as potentially flaky and re-run within a per-test
+// time budget (see the perAttempt* and perTestBudget constants). A test that
+// fails and then later passes is reported as flaky. A test that never passes
+// within the budget is a real failure and causes a non-zero exit.
+//
+// The flakytest package's Mark API is no longer required for retries — it is
+// kept for explicit issue tracking and for the TS_SKIP_FLAKY_TESTS skip
+// behavior.
 package main
 
 import (
@@ -29,11 +36,20 @@ import (
 	"time"
 
 	"tailscale.com/cmd/testwrapper/flakytest"
-	"tailscale.com/util/slicesx"
 )
 
+// Per-test retry policy. See package doc comment.
 const (
-	maxAttempts = 3
+	// perAttemptCap is the upper bound on the per-retry-attempt -timeout we set
+	// when running a single failed test.
+	perAttemptCap = 5 * time.Minute
+	// perAttemptFloor is the lower bound on the per-retry-attempt -timeout, to
+	// give the test binary time to start.
+	perAttemptFloor = 30 * time.Second
+	// maxRetries caps the number of retry attempts for a single test. It
+	// guards against re-running a very fast test thousands of times within
+	// perTestBudget.
+	maxRetries = 10
 
 	// raceDetectorMarkerLine is the first line of every Go race
 	// detector report, emitted at column 0. We look for it as a
@@ -44,11 +60,65 @@ const (
 	raceDetectorMarkerLine = "WARNING: DATA RACE\n"
 )
 
+// Tunables for the per-test retry budget. These default to production values
+// but can be overridden via env vars, primarily for tests of testwrapper
+// itself.
+var (
+	// perTestBudget is the total wall-clock time we are willing to spend
+	// retrying a single test before giving up. Override via
+	// TS_TESTWRAPPER_BUDGET (a time.Duration string).
+	perTestBudget = envDuration("TS_TESTWRAPPER_BUDGET", 10*time.Minute)
+	// minRetries is the minimum number of retry attempts we make for a failed
+	// test, regardless of perTestBudget. Override via TS_TESTWRAPPER_MIN_RETRIES.
+	minRetries = envInt("TS_TESTWRAPPER_MIN_RETRIES", 2)
+)
+
+func envDuration(key string, def time.Duration) time.Duration {
+	s := os.Getenv(key)
+	if s == "" {
+		return def
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		log.Panicf("invalid %s=%q: %v", key, s, err)
+	}
+	return d
+}
+
+func envInt(key string, def int) int {
+	s := os.Getenv(key)
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		log.Panicf("invalid %s=%q: %v", key, s, err)
+	}
+	return n
+}
+
+// flakeUnknownIssueSlug is the trailing path of the fake GitHub issue URL we
+// record for tests that turned out flaky but were not explicitly marked with
+// flakytest.Mark. flakeapp records this as a flake occurrence with no real
+// issue.
+const flakeUnknownIssueSlug = "/issues/UNKNOWN"
+
+// testOutcome is the outcome of a single test (or package) run. Its string
+// values match the Action field in `go test -json` output.
+type testOutcome string
+
+const (
+	outcomeUnknown testOutcome = ""
+	outcomePass    testOutcome = "pass"
+	outcomeFail    testOutcome = "fail"
+	outcomeSkip    testOutcome = "skip"
+)
+
 type testAttempt struct {
-	pkg           string // "tailscale.com/types/key"
-	testName      string // "TestFoo"
-	outcome       string // "pass", "fail", "skip"
-	cached        bool   // whether package-level (non-testName specific) was pass due to being cached
+	pkg           string      // "tailscale.com/types/key"
+	testName      string      // "TestFoo"
+	outcome       testOutcome // outcomePass, outcomeFail, outcomeSkip, or outcomeUnknown
+	cached        bool        // whether package-level (non-testName specific) was pass due to being cached
 	logs          bytes.Buffer
 	start, end    time.Time
 	isMarkedFlaky bool   // set if the test is marked as flaky
@@ -61,8 +131,19 @@ type testAttempt struct {
 	pkgFinished bool
 }
 
+// failedTest tracks per-test state across the retry phase.
+type failedTest struct {
+	pkg, testName     string
+	firstFailDuration time.Duration
+	issueURL          string // non-empty iff the test called flakytest.Mark
+
+	attempts          int           // number of retry attempts run so far
+	totalRetryElapsed time.Duration // total time spent across retry attempts
+	everPassed        bool          // a retry attempt passed
+}
+
 // packageTests describes what to run.
-// It's also JSON-marshalled to output for analysys tools to parse
+// It's also JSON-marshalled to output for analysis tools to parse,
 // so the fields are all exported.
 // TODO(bradfitz): move this type to its own types package?
 type packageTests struct {
@@ -196,7 +277,7 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 			return err
 		}
 		if len(shardTests) == 0 {
-			ch <- &testAttempt{pkg: pt.Pattern, outcome: "skip", pkgFinished: true}
+			ch <- &testAttempt{pkg: pt.Pattern, outcome: outcomeSkip, pkgFinished: true}
 			return nil
 		}
 		quoted := make([]string, len(shardTests))
@@ -262,14 +343,14 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 				pkgTests[""].logs.WriteString(goOutput.Output)
 			case "build-fail", "fail", "pass", "skip":
 				for _, test := range pkgTests {
-					if test.testName != "" && test.outcome == "" {
-						test.outcome = "fail"
+					if test.testName != "" && test.outcome == outcomeUnknown {
+						test.outcome = outcomeFail
 						ch <- test
 					}
 				}
-				outcome := goOutput.Action
-				if outcome == "build-fail" {
-					outcome = "fail"
+				outcome := testOutcome(goOutput.Action)
+				if goOutput.Action == "build-fail" {
+					outcome = outcomeFail
 				}
 				pkgTests[""].logs.WriteString(goOutput.Output)
 				// If a data race was detected anywhere in this
@@ -349,7 +430,7 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 			}
 		case "skip", "pass", "fail":
 			pkgTests[testName].end = goOutput.Time
-			pkgTests[testName].outcome = goOutput.Action
+			pkgTests[testName].outcome = testOutcome(goOutput.Action)
 			ch <- pkgTests[testName]
 		case "output":
 			if suffix, ok := strings.CutPrefix(strings.TrimSpace(goOutput.Output), flakytest.FlakyTestLogMessage); ok {
@@ -370,6 +451,275 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 		return fmt.Errorf("reading go test stdout: %w", err)
 	}
 	return nil
+}
+
+// runOneTest runs a single test in a single package via `go test -run` with a
+// per-attempt -timeout. It returns the test's outcome (outcomePass /
+// outcomeFail / outcomeSkip), the wall-clock time spent on this attempt
+// (used for the per-test retry budget), and any captured test logs.
+//
+// On panic, timeout, or any other failure mode where the test does not emit a
+// pass/fail/skip JSON event, outcome is reported as outcomeFail.
+func runOneTest(ctx context.Context, pkg, testName string, perAttemptTimeout time.Duration, attemptNum int, goTestArgs, testArgs []string) (outcome testOutcome, wallDur time.Duration, logs bytes.Buffer, err error) {
+	goTestArgs, perAttemptTimeout = extractTimeout(goTestArgs, perAttemptTimeout)
+	testArgs, perAttemptTimeout = extractTimeout(testArgs, perAttemptTimeout)
+	args := []string{"test", "-json"}
+	args = append(args, goTestArgs...)
+	args = append(args, "-timeout", perAttemptTimeout.String())
+	args = append(args, pkg)
+	args = append(args, "--run", "^("+regexp.QuoteMeta(testName)+")$")
+	args = append(args, testArgs...)
+
+	if debug {
+		fmt.Println("running", strings.Join(args, " "))
+	}
+	cmd := exec.CommandContext(ctx, "go", args...)
+	// Strip TS_TEST_SHARD so the child doesn't try to shard inside a
+	// single-test retry — we are telling it exactly what to run.
+	cmd.Env = slices.DeleteFunc(os.Environ(), func(s string) bool {
+		return strings.HasPrefix(s, "TS_TEST_SHARD=")
+	})
+	cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%d", flakytest.FlakeAttemptEnv, attemptNum))
+	r, perr := cmd.StdoutPipe()
+	if perr != nil {
+		return "", 0, logs, fmt.Errorf("stdout pipe: %w", perr)
+	}
+	defer r.Close()
+	cmd.Stderr = os.Stderr
+
+	wallStart := time.Now()
+	if err := cmd.Start(); err != nil {
+		return "", 0, logs, fmt.Errorf("starting go test: %w", err)
+	}
+
+	s := bufio.NewScanner(r)
+	for s.Scan() {
+		var ev goTestOutput
+		if err := json.Unmarshal(s.Bytes(), &ev); err != nil {
+			continue
+		}
+		if ev.Test == "" {
+			continue // package-level events ignored for single-test runs
+		}
+		// Collapse subtests to parent.
+		parent, _, _ := strings.Cut(ev.Test, "/")
+		if parent != testName {
+			continue
+		}
+		switch ev.Action {
+		case "pass", "fail", "skip":
+			if ev.Test == testName {
+				outcome = testOutcome(ev.Action)
+			}
+		case "output":
+			logs.WriteString(ev.Output)
+		}
+	}
+	waitErr := cmd.Wait()
+	wallDur = time.Since(wallStart)
+	if scanErr := s.Err(); scanErr != nil && err == nil {
+		err = fmt.Errorf("reading go test stdout: %w", scanErr)
+	}
+	if outcome == outcomeUnknown {
+		// Test never emitted a pass/fail/skip — likely a panic, timeout, or
+		// build error. Treat as fail.
+		outcome = outcomeFail
+	}
+	if waitErr != nil && err == nil && outcome == outcomePass {
+		// A non-zero exit when outcome==outcomePass is unexpected; surface it.
+		err = waitErr
+	}
+	return outcome, wallDur, logs, err
+}
+
+// extractTimeout returns args with any -timeout / -test.timeout flags
+// stripped, and the smaller of cap and the user-supplied timeout (if any).
+// This lets retries use the testwrapper-computed per-attempt timeout, but
+// never exceed an explicit -timeout the user passed on the command line.
+func extractTimeout(args []string, cap time.Duration) (stripped []string, t time.Duration) {
+	t = cap
+	stripped = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		bare := strings.TrimLeft(a, "-")
+		name, val, hasEq := strings.Cut(bare, "=")
+		if name == "timeout" || name == "test.timeout" {
+			var raw string
+			if hasEq {
+				raw = val
+			} else if i+1 < len(args) {
+				raw = args[i+1]
+				i++
+			}
+			if d, err := time.ParseDuration(raw); err == nil && d < t {
+				t = d
+			}
+			continue
+		}
+		stripped = append(stripped, a)
+	}
+	return stripped, t
+}
+
+// computePerAttemptTimeout returns the -timeout we use for each retry attempt
+// of a test that first failed in firstFail.
+//
+// It is the smaller of perAttemptCap (5 min) and 1.5*firstFail, but never
+// smaller than perAttemptFloor (30 s).
+func computePerAttemptTimeout(firstFail time.Duration) time.Duration {
+	t := time.Duration(float64(firstFail) * 1.5)
+	return max(perAttemptFloor, min(perAttemptCap, t))
+}
+
+// retryFailedTest runs the per-test retry loop for ft. It updates ft in place.
+func retryFailedTest(ctx context.Context, ft *failedTest, goTestArgs, testArgs []string) {
+	perAttempt := computePerAttemptTimeout(ft.firstFailDuration)
+	for {
+		if ft.everPassed {
+			return
+		}
+		if ft.attempts >= maxRetries {
+			return
+		}
+		if ft.attempts >= minRetries && ft.totalRetryElapsed >= perTestBudget {
+			return
+		}
+
+		// FlakeAttemptEnv is 1-indexed counting the first pass as attempt 1.
+		// Retry attempt N is FlakeAttemptEnv = 1 + N.
+		attemptNum := 1 + ft.attempts + 1
+		outcome, dur, logs, err := runOneTest(ctx, ft.pkg, ft.testName, perAttempt, attemptNum, goTestArgs, testArgs)
+		ft.attempts++
+		ft.totalRetryElapsed += dur
+
+		fmt.Printf("    [retry %d] %s.%s: %s (%.3fs)\n",
+			ft.attempts, ft.pkg, ft.testName, strings.ToUpper(string(outcome)), dur.Seconds())
+		if err != nil {
+			log.Printf("testwrapper: error running %s.%s: %v", ft.pkg, ft.testName, err)
+		}
+		if testingVerbose || outcome == outcomeFail {
+			io.Copy(os.Stdout, &logs)
+		}
+		if outcome == outcomePass {
+			ft.everPassed = true
+		}
+	}
+}
+
+// detectRepo returns the GitHub "owner/repo" we're running in, used in the
+// fake issue URL recorded for unmarked flaky tests.
+//
+// It checks GITHUB_REPOSITORY (set by GitHub Actions), then `git config --get
+// remote.origin.url`, then falls back to "tailscale/tailscale".
+func detectRepo() string {
+	if r := os.Getenv("GITHUB_REPOSITORY"); r != "" {
+		return r
+	}
+	out, err := exec.Command("git", "config", "--get", "remote.origin.url").Output()
+	if err == nil {
+		if r := parseGitRemote(strings.TrimSpace(string(out))); r != "" {
+			return r
+		}
+	}
+	return "tailscale/tailscale"
+}
+
+// parseGitRemote pulls "owner/repo" out of common git remote URL forms:
+//   - git@github.com:owner/repo.git
+//   - https://github.com/owner/repo.git
+//   - https://github.com/owner/repo
+func parseGitRemote(url string) string {
+	url = strings.TrimSuffix(url, ".git")
+	// SSH form
+	if rest, ok := strings.CutPrefix(url, "git@github.com:"); ok {
+		return rest
+	}
+	// HTTPS form
+	for _, p := range []string{"https://github.com/", "http://github.com/"} {
+		if rest, ok := strings.CutPrefix(url, p); ok {
+			return rest
+		}
+	}
+	return ""
+}
+
+// fakeIssueURL returns the fake GitHub issue URL we record for unmarked tests
+// that turn out to be flaky.
+func fakeIssueURL(repo string) string {
+	return "https://github.com/" + repo + flakeUnknownIssueSlug
+}
+
+// writeFlakeSummary appends a markdown summary of flaky tests to path,
+// creating it if needed. In practice path is the GitHub Actions runner's
+// $GITHUB_STEP_SUMMARY, which testwrapper auto-detects. It logs and
+// continues on errors, as a CI write failure should not poison the test
+// run's exit status.
+func writeFlakeSummary(path string, flaky []*failedTest, repo string) {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Printf("testwrapper: opening summary file %s: %v", path, err)
+		return
+	}
+	defer f.Close()
+	if len(flaky) == 0 {
+		fmt.Fprintln(f, "_No flaky tests detected._")
+		return
+	}
+	fmt.Fprintln(f, "### Flaky tests detected")
+	fmt.Fprintln(f)
+	fmt.Fprintln(f, "Tests that failed at least once and then passed on retry. Rows tagged 🆕 were not annotated with flakytest.Mark; testwrapper auto-detected the flake.")
+	fmt.Fprintln(f)
+	fmt.Fprintln(f, "| Package | Test | Retries | Retry time | Issue |")
+	fmt.Fprintln(f, "|---------|------|--------:|-----------:|-------|")
+	for _, ft := range flaky {
+		url := ft.issueURL
+		if url == "" {
+			url = fakeIssueURL(repo)
+		}
+		var tag string
+		if ft.issueURL == "" {
+			tag = " 🆕"
+		}
+		fmt.Fprintf(f, "| `%s` | `%s`%s | %d | %.1fs | [link](%s) |\n",
+			ft.pkg, ft.testName, tag, ft.attempts, ft.totalRetryElapsed.Seconds(), url)
+	}
+}
+
+// buildPackageTests groups failedTests by package into the wire format
+// flakeapp expects.
+//
+// If fakeRepo is non-empty, tests with no real issue URL (i.e. not marked via
+// flakytest.Mark) get a fake URL of the form
+// https://github.com/{fakeRepo}/issues/UNKNOWN. If fakeRepo is empty, those
+// tests are simply omitted from the IssueURLs map.
+func buildPackageTests(fts []*failedTest, fakeRepo string) []packageTests {
+	byPkg := map[string][]*failedTest{}
+	for _, ft := range fts {
+		byPkg[ft.pkg] = append(byPkg[ft.pkg], ft)
+	}
+	pkgs := make([]string, 0, len(byPkg))
+	for p := range byPkg {
+		pkgs = append(pkgs, p)
+	}
+	sort.Strings(pkgs)
+	out := make([]packageTests, 0, len(pkgs))
+	for _, p := range pkgs {
+		group := byPkg[p]
+		slices.SortFunc(group, func(a, b *failedTest) int { return strings.Compare(a.testName, b.testName) })
+		pt := packageTests{Pattern: p, IssueURLs: map[string]string{}}
+		for _, ft := range group {
+			pt.Tests = append(pt.Tests, ft.testName)
+			url := ft.issueURL
+			if url == "" && fakeRepo != "" {
+				url = fakeIssueURL(fakeRepo)
+			}
+			if url != "" {
+				pt.IssueURLs[ft.testName] = url
+			}
+		}
+		out = append(out, pt)
+	}
+	return out
 }
 
 func main() {
@@ -394,34 +744,22 @@ func main() {
 	}
 
 	ctx := context.Background()
-	type nextRun struct {
-		tests   []*packageTests
-		attempt int // starting at 1
-	}
-	firstRun := &nextRun{
-		attempt: 1,
-	}
-	for _, pkg := range packages {
-		firstRun.tests = append(firstRun.tests, &packageTests{Pattern: pkg})
-	}
-	toRun := []*nextRun{firstRun}
-	printPkgOutcome := func(pkg, outcome string, cached bool, attempt int, testDur time.Duration) {
+	repo := detectRepo()
+
+	printPkgOutcome := func(pkg string, outcome testOutcome, cached bool, testDur time.Duration) {
 		if pkg == "" {
 			return // We reach this path on a build error.
 		}
-		if outcome == "skip" {
+		if outcome == outcomeSkip {
 			fmt.Printf("?\t%s [skipped/no tests] \n", pkg)
 			return
 		}
-		if outcome == "pass" {
-			outcome = "ok"
+		label := string(outcome)
+		if outcome == outcomePass {
+			label = "ok"
 		}
-		if outcome == "fail" {
-			outcome = "FAIL"
-		}
-		if attempt > 1 {
-			fmt.Printf("%s\t%s\t%.3fs\t[attempt=%d]\n", outcome, pkg, testDur.Seconds(), attempt)
-			return
+		if outcome == outcomeFail {
+			label = "FAIL"
 		}
 		var lastCol string
 		if cached {
@@ -429,131 +767,112 @@ func main() {
 		} else {
 			lastCol = fmt.Sprintf("%.3fs", testDur.Seconds())
 		}
-		fmt.Printf("%s\t%s\t%v\n", outcome, pkg, lastCol)
+		fmt.Printf("%s\t%s\t%v\n", label, pkg, lastCol)
 	}
 
-	for len(toRun) > 0 {
-		var thisRun *nextRun
-		thisRun, toRun = toRun[0], toRun[1:]
+	// First pass: run every package once, collect failed tests for retry.
+	var failed []*failedTest
+	var pkgFatal bool // a package produced a non-test fatal (build error, etc.)
+	for _, pkgPattern := range packages {
+		pt := &packageTests{Pattern: pkgPattern}
+		ch := make(chan *testAttempt)
+		runErrCh := make(chan error, 1)
+		go func() {
+			defer close(runErrCh)
+			runErrCh <- runTests(ctx, 1, pt, goTestArgs, testArgs, ch)
+		}()
 
-		if thisRun.attempt > maxAttempts {
-			fmt.Println("max attempts reached")
-			os.Exit(1)
-		}
-		if thisRun.attempt > 1 {
-			j, _ := json.Marshal(thisRun.tests)
-			fmt.Printf("\n\nAttempt #%d: Retrying flaky tests:\n\nflakytest failures JSON: %s\n\n", thisRun.attempt, j)
-		}
-
-		fatalFailures := make(map[string]struct{}) // pkg.Test key
-		toRetry := make(map[string][]*testAttempt) // pkg -> tests to retry
-		for _, pt := range thisRun.tests {
-			ch := make(chan *testAttempt)
-			runErr := make(chan error, 1)
-			go func() {
-				defer close(runErr)
-				runErr <- runTests(ctx, thisRun.attempt, pt, goTestArgs, testArgs, ch)
-			}()
-
-			var failed bool
-			for tr := range ch {
-				// Go assigns the package name "command-line-arguments" when you
-				// `go test FILE` rather than `go test PKG`. It's more
-				// convenient for us to to specify files in tests, so fix tr.pkg
-				// so that subsequent testwrapper attempts run correctly.
-				if tr.pkg == "command-line-arguments" {
-					tr.pkg = packages[0]
+		// Collect failed tests in this package on the side; we use the count
+		// when a package reports a fail to decide if the failure is explained
+		// by retryable test failures or is a separate package-level fatal.
+		var pkgFailedTests []*failedTest
+		for tr := range ch {
+			// Go assigns the package name "command-line-arguments" when you
+			// `go test FILE` rather than `go test PKG`. It's more
+			// convenient for us to to specify files in tests, so fix tr.pkg
+			// so that subsequent testwrapper attempts run correctly.
+			if tr.pkg == "command-line-arguments" {
+				tr.pkg = packages[0]
+			}
+			if tr.pkgFinished {
+				if tr.raceDetected {
+					// A data race is never something we want to paper
+					// over by retrying flaky tests in the package: the
+					// race indicates a real bug that may not even be
+					// in the failing test, and a retry could hide it.
+					// Drop any retry plans for this pkg and fail fast.
+					pkgFailedTests = nil
+					pkgFatal = true
 				}
-				if tr.pkgFinished {
-					if tr.raceDetected {
-						// A data race is never something we want to
-						// paper over by retrying flaky tests in the
-						// package: the race indicates a real bug
-						// that may not even be in the failing test,
-						// and a retry could hide it. Discard any
-						// retry plans for this pkg and fail fast.
-						delete(toRetry, tr.pkg)
-						failed = true
-					}
-					if tr.outcome == "fail" && len(toRetry[tr.pkg]) == 0 {
-						// If a package fails and we don't have any tests to
-						// retry, then we should fail. This typically happens
-						// when a package times out.
-						failed = true
-					}
-					if testingVerbose || tr.outcome == "fail" {
-						// Output package-level output which is where e.g.
-						// panics outside tests will be printed
-						io.Copy(os.Stdout, &tr.logs)
-					}
-					printPkgOutcome(tr.pkg, tr.outcome, tr.cached, thisRun.attempt, tr.end.Sub(tr.start))
-					continue
-				}
-				if testingVerbose || tr.outcome == "fail" {
+				if testingVerbose || tr.outcome == outcomeFail {
 					io.Copy(os.Stdout, &tr.logs)
 				}
-				if tr.outcome != "fail" {
-					continue
+				if tr.outcome == outcomeFail && len(pkgFailedTests) == 0 {
+					// Package failed but no test failed (e.g. the package
+					// timed out, or a build error). Not retryable per-test.
+					pkgFatal = true
 				}
-				if tr.isMarkedFlaky {
-					toRetry[tr.pkg] = append(toRetry[tr.pkg], tr)
-				} else {
-					fatalFailures[tr.pkg+"."+tr.testName] = struct{}{}
-					failed = true
-				}
+				printPkgOutcome(tr.pkg, tr.outcome, tr.cached, tr.end.Sub(tr.start))
+				continue
 			}
-			if failed {
-				fmt.Println("\n\nNot retrying flaky tests because non-flaky tests failed.")
-
-				// Print the list of non-flakytest failures.
-				// We will later analyze the retried GitHub Action runs to see
-				// if non-flakytest failures succeeded upon retry. This will
-				// highlight tests which are flaky but not yet flagged as such.
-				if len(fatalFailures) > 0 {
-					tests := slicesx.MapKeys(fatalFailures)
-					sort.Strings(tests)
-					j, _ := json.Marshal(tests)
-					fmt.Printf("non-flakytest failures: %s\n", j)
-				}
-				fmt.Println()
-				os.Exit(1)
+			if testingVerbose || tr.outcome == outcomeFail {
+				io.Copy(os.Stdout, &tr.logs)
 			}
-
-			// If there's nothing to retry and no non-retryable tests have
-			// failed then we've probably hit a build error.
-			if err := <-runErr; len(toRetry) == 0 && err != nil {
-				if exit, ok := errors.AsType[*exec.ExitError](err); ok {
-					if code := exit.ExitCode(); code > -1 {
-						os.Exit(exit.ExitCode())
-					}
-				}
-				log.Printf("testwrapper: %s", err)
-				os.Exit(1)
+			if tr.outcome != outcomeFail {
+				continue
 			}
-		}
-		if len(toRetry) == 0 {
-			continue
-		}
-		pkgs := slicesx.MapKeys(toRetry)
-		sort.Strings(pkgs)
-		nextRun := &nextRun{
-			attempt: thisRun.attempt + 1,
-		}
-		for _, pkg := range pkgs {
-			tests := toRetry[pkg]
-			slices.SortFunc(tests, func(a, b *testAttempt) int { return strings.Compare(a.testName, b.testName) })
-			issueURLs := map[string]string{} // test name => URL
-			var testNames []string
-			for _, ta := range tests {
-				issueURLs[ta.testName] = ta.issueURL
-				testNames = append(testNames, ta.testName)
-			}
-			nextRun.tests = append(nextRun.tests, &packageTests{
-				Pattern:   pkg,
-				Tests:     testNames,
-				IssueURLs: issueURLs,
+			pkgFailedTests = append(pkgFailedTests, &failedTest{
+				pkg:               tr.pkg,
+				testName:          tr.testName,
+				firstFailDuration: tr.end.Sub(tr.start),
+				issueURL:          tr.issueURL, // real if Mark()'d, else "".
 			})
 		}
-		toRun = append(toRun, nextRun)
+		failed = append(failed, pkgFailedTests...)
+		if err := <-runErrCh; err != nil {
+			if exit, ok := errors.AsType[*exec.ExitError](err); ok {
+				if code := exit.ExitCode(); code > -1 && len(pkgFailedTests) == 0 {
+					// Pure exec failure with no test-level failures to retry:
+					// honor the original exit code.
+					os.Exit(code)
+				}
+			} else {
+				log.Printf("testwrapper: %s", err)
+				pkgFatal = true
+			}
+		}
+	}
+
+	// Second pass: retry each failed test serially with its per-test budget.
+	if len(failed) > 0 {
+		fmt.Printf("\n\nRetrying %d failed test(s) to detect flakiness...\n\n", len(failed))
+		for _, ft := range failed {
+			retryFailedTest(ctx, ft, goTestArgs, testArgs)
+		}
+	}
+
+	// Summarize and exit.
+	var flaky, permanent []*failedTest
+	for _, ft := range failed {
+		if ft.everPassed {
+			flaky = append(flaky, ft)
+		} else {
+			permanent = append(permanent, ft)
+		}
+	}
+	if len(flaky) > 0 {
+		j, _ := json.Marshal(buildPackageTests(flaky, repo))
+		fmt.Printf("\nflakytest failures JSON: %s\n", j)
+	}
+	if path := os.Getenv("GITHUB_STEP_SUMMARY"); path != "" {
+		writeFlakeSummary(path, flaky, repo)
+	}
+	if len(permanent) > 0 {
+		j, _ := json.Marshal(buildPackageTests(permanent, ""))
+		fmt.Printf("\npermanent test failures JSON: %s\n", j)
+	}
+
+	if pkgFatal || len(permanent) > 0 {
+		os.Exit(1)
 	}
 }
