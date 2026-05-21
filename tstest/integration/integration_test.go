@@ -1058,6 +1058,8 @@ func TestC2NPingRequest(t *testing.T) {
 // Issue 2434: when "down" (WantRunning false), tailscaled shouldn't
 // be connected to control.
 func TestNoControlConnWhenDown(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/19831")
+
 	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
