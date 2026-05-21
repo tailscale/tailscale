@@ -106,7 +106,9 @@ func TestSetDERPMapDoReStun(t *testing.T) {
 
 	bus := eventbustest.NewBus(t)
 	ht := health.NewTracker(bus)
-	c := newConn(t.Logf)
+	// Use WhileTestRunningLogger so the goroutine spawned by setDERPMap
+	// (which calls ReSTUN, which logs) doesn't race with test cleanup.
+	c := newConn(tstest.WhileTestRunningLogger(t))
 	ec := bus.Client("magicsock.Conn.Test")
 	c.eventClient = ec
 	c.homeDERPChangedPub = eventbus.Publish[HomeDERPChanged](ec)
