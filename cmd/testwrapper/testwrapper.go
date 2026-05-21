@@ -286,6 +286,17 @@ func main() {
 		packages = strings.Split(strings.TrimSpace(string(out)), "\n")
 	}
 
+	var tw *traceWriter
+	if testTraceFile != "" {
+		var err error
+		tw, err = newTraceWriter(testTraceFile)
+		if err != nil {
+			log.Fatalf("opening trace file: %v", err)
+		}
+		tw.SetRunArgs(os.Args[1:])
+		defer tw.Close()
+	}
+
 	ctx := context.Background()
 	type nextRun struct {
 		tests   []*packageTests
@@ -331,6 +342,7 @@ func main() {
 
 		if thisRun.attempt > maxAttempts {
 			fmt.Println("max attempts reached")
+			tw.Close()
 			os.Exit(1)
 		}
 		if thisRun.attempt > 1 {
@@ -358,6 +370,7 @@ func main() {
 					tr.pkg = packages[0]
 				}
 				if tr.pkgFinished {
+					tw.emitPackage(tr, thisRun.attempt)
 					if tr.raceDetected {
 						// A data race is never something we want to
 						// paper over by retrying flaky tests in the
@@ -382,6 +395,7 @@ func main() {
 					printPkgOutcome(tr.pkg, tr.outcome, tr.cached, thisRun.attempt, tr.end.Sub(tr.start))
 					continue
 				}
+				tw.emitTest(tr, thisRun.attempt)
 				if testingVerbose || tr.outcome == "fail" {
 					io.Copy(os.Stdout, &tr.logs)
 				}
@@ -409,6 +423,7 @@ func main() {
 					fmt.Printf("non-flakytest failures: %s\n", j)
 				}
 				fmt.Println()
+				tw.Close()
 				os.Exit(1)
 			}
 
@@ -417,10 +432,12 @@ func main() {
 			if err := <-runErr; len(toRetry) == 0 && err != nil {
 				if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 					if code := exit.ExitCode(); code > -1 {
+						tw.Close()
 						os.Exit(exit.ExitCode())
 					}
 				}
 				log.Printf("testwrapper: %s", err)
+				tw.Close()
 				os.Exit(1)
 			}
 		}
