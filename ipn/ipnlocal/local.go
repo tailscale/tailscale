@@ -9,8 +9,6 @@ import (
 	"bufio"
 	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,6 +62,7 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/traffic"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
@@ -8133,42 +8132,18 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcf
 		return true
 	})
 
-	scores := make(map[tailcfg.NodeID]int, len(nodes))
-	score := func(n tailcfg.NodeView) int {
-		id := n.ID()
-		s, ok := scores[id]
-		if !ok {
-			s = 0 // score of zero means incomparable
-			if hi := n.Hostinfo(); hi.Valid() {
-				if loc := hi.Location(); loc.Valid() {
-					s = loc.Priority()
-				}
-			}
-			scores[id] = s
-		}
-		return s
-	}
-	rdvHash := makeRendezvousHasher(self.ID())
+	ss := traffic.ScoresFor(self.ID(), nodes)
 
 	var pick tailcfg.NodeView
 	if len(nodes) == 1 {
 		pick = nodes[0]
 	}
 	if len(nodes) > 1 {
-		// Find the highest scoring exit nodes.
-		slices.SortFunc(nodes, func(a, b tailcfg.NodeView) int {
-			c := cmp.Compare(score(b), score(a)) // Highest score first.
-			if c == 0 {
-				// Rendezvous hashing for reliably picking the
-				// same node from a list: tailscale/tailscale#16551.
-				return cmp.Compare(rdvHash(b.ID()), rdvHash(a.ID()))
-			}
-			return c
-		})
+		ss.SortNodes(nodes)
 
 		// TODO(sfllaw): add a temperature knob so that this client has
 		// a chance of picking the next best option.
-		pick = nodes[0]
+		pick = nodes[0] // Pick the highest score.
 	}
 
 	nb.logf("netmap: traffic steering: exit node scores: %v", logger.ArgWriter(func(bw *bufio.Writer) {
@@ -8182,7 +8157,7 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcf
 				bw.WriteString(", ")
 			}
 			name, _, _ := strings.Cut(n.Name(), ".")
-			fmt.Fprintf(bw, "%d:%s", score(n), name)
+			fmt.Fprintf(bw, "%d:%s", ss.Score(n), name)
 		}
 	}))
 
@@ -8282,19 +8257,6 @@ func longLatDistance(fromLat, fromLong, toLat, toLong float64) float64 {
 	const earthRadiusMeters = 6371000
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	return earthRadiusMeters * c
-}
-
-// makeRendezvousHasher returns a function that hashes a node ID to a uint64.
-// https://en.wikipedia.org/wiki/Rendezvous_hashing
-func makeRendezvousHasher(seed tailcfg.NodeID) func(tailcfg.NodeID) uint64 {
-	en := binary.BigEndian
-	return func(n tailcfg.NodeID) uint64 {
-		var b [16]byte
-		en.PutUint64(b[:], uint64(seed))
-		en.PutUint64(b[8:], uint64(n))
-		v := sha256.Sum256(b[:])
-		return en.Uint64(v[:])
-	}
 }
 
 const (
