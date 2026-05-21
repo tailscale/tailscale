@@ -2298,6 +2298,29 @@ type listenTest struct {
 	tun          *chanTUN // nil for netstack mode
 }
 
+// waitForPeerReachable blocks until s's current netmap contains the given peer
+// with a non-zero HomeDERP and endpoints. It fails the test if the watcher
+// closes first.
+func waitForPeerReachable(t *testing.T, s *Server, peer key.NodePublic) {
+	t.Helper()
+	w := must.Get(s.localClient.WatchIPNBus(t.Context(), ipn.NotifyInitialNetMap))
+	defer w.Close()
+	for {
+		n, err := w.Next()
+		if err != nil {
+			t.Fatalf("waitForPeerReachable(%v): %v", peer.ShortString(), err)
+		}
+		if n.NetMap == nil {
+			continue
+		}
+		for _, p := range n.NetMap.Peers {
+			if p.Key() == peer && p.HomeDERP() != 0 && p.Endpoints().Len() != 0 {
+				return
+			}
+		}
+	}
+}
+
 // setupTwoClientTest creates two tsnet servers for testing.
 // If useTUN is true, s2 uses a chanTUN; otherwise it uses netstack only.
 func setupTwoClientTest(t *testing.T, useTUN bool) *listenTest {
@@ -2341,6 +2364,9 @@ func setupTwoClientTest(t *testing.T, useTUN bool) *listenTest {
 	if len(s2status.TailscaleIPs) > 1 {
 		s2ip6 = s2status.TailscaleIPs[1]
 	}
+
+	waitForPeerReachable(t, s1, s2.lb.NodeKey())
+	waitForPeerReachable(t, s2, s1.lb.NodeKey())
 
 	lc1 := must.Get(s1.LocalClient())
 	must.Get(lc1.Ping(ctx, s2ip4, tailcfg.PingTSMP))
