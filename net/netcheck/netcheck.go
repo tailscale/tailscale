@@ -595,7 +595,6 @@ type reportState struct {
 	opts        *GetReportOpts
 	incremental bool // doing a lite, follow-up netcheck
 	stopProbeCh chan struct{}
-	waitPortMap sync.WaitGroup
 
 	mu       syncs.Mutex
 	report   *Report                            // to be returned by GetReport
@@ -722,9 +721,10 @@ func (rs *reportState) setOptBool(b *opt.Bool, v bool) {
 	b.Set(v)
 }
 
+// probePortMapServices probes the LAN for UPnP, PCP, and NAT-PMP services and
+// records what it finds on rs.report asynchronously, a slow port mapper may
+// only deliver usable results via [onPortMapChanged] later.
 func (rs *reportState) probePortMapServices() {
-	defer rs.waitPortMap.Done()
-
 	rs.setOptBool(&rs.report.UPnP, false)
 	rs.setOptBool(&rs.report.PMP, false)
 	rs.setOptBool(&rs.report.PCP, false)
@@ -899,7 +899,8 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	}
 
 	if !c.SkipExternalNetwork && c.PortMapper != nil {
-		rs.waitPortMap.Add(1)
+		// Fire-and-forget: the portmap probe can take ~250ms and we don't
+		// want to block the rest of netcheck on it. See probePortMapServices.
 		go rs.probePortMapServices()
 	}
 
@@ -951,10 +952,6 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 		captivePortalStop()
 	}
 
-	if !c.SkipExternalNetwork && c.PortMapper != nil {
-		rs.waitPortMap.Wait()
-		c.vlogf("portMap done")
-	}
 	rs.stopTimers()
 
 	// Try HTTPS and ICMP latency check if all STUN probes failed due to
