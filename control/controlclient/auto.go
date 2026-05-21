@@ -380,9 +380,15 @@ func (c *Auto) authRoutine() {
 			}
 			c.mu.Lock()
 			c.urlToVisit = url
-			c.loginGoal = &LoginGoal{
-				flags: LoginDefault,
-				url:   url,
+			// Only store the URL follow-up goal if no concurrent Login() call has
+			// replaced the goal we were processing while our control plane request
+			// was in flight. Otherwise, the intent from the more recent goal gets
+			// lost.
+			if c.loginGoal == goal {
+				c.loginGoal = &LoginGoal{
+					flags: LoginDefault,
+					url:   url,
+				}
 			}
 			c.mu.Unlock()
 
@@ -400,13 +406,25 @@ func (c *Auto) authRoutine() {
 		// success
 		c.direct.health.SetAuthRoutineInError(nil)
 		c.mu.Lock()
-		c.urlToVisit = ""
-		c.loggedIn = true
-		c.loginGoal = nil
+		// Only commit the login success if no concurrent Login()
+		// call has reset the goal and no Logout() has moved on
+		// while our control plane request was in flight. In the
+		// first case, clearing the goal would prevent the next
+		// iteration from picking it up and running with it. In
+		// the second case, we would record that we're loggedIn
+		// even though we're logged out.
+		goalStillCurrentGoal := c.loginGoal == goal
+		if goalStillCurrentGoal {
+			c.urlToVisit = ""
+			c.loggedIn = true
+			c.loginGoal = nil
+		}
 		c.mu.Unlock()
 
-		c.sendStatus("authRoutine-success", nil, "", nil)
-		c.restartMap()
+		if goalStillCurrentGoal {
+			c.sendStatus("authRoutine-success", nil, "", nil)
+			c.restartMap()
+		}
 		bo.Reset()
 	}
 }
