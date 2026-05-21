@@ -61,6 +61,10 @@ func splitArgs(args []string) (pre, pkgs, post []string, _ error) {
 		return nil, nil, nil, err
 	}
 	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "testtrace" {
+			// Consumed by testwrapper itself; not a go test flag.
+			return
+		}
 		if f.Name == "cachelink" && !cacheLink.enabled {
 			return
 		}
@@ -114,6 +118,16 @@ func (c *cacheLinkVal) Set(s string) error {
 
 func (*cacheLinkVal) IsBoolFlag() bool { return true }
 
+// testTraceFile is the path passed via -testtrace=PATH. If non-empty,
+// testwrapper writes a Chrome Trace Event Format file (viewable in
+// chrome://tracing or https://ui.perfetto.dev) capturing per-test and
+// per-package spans for the entire run, including retries.
+//
+// The flag is deliberately named -testtrace (rather than -trace or -tracefile)
+// to avoid colliding with "go test -trace=FILE", which writes a Go runtime
+// execution trace.
+var testTraceFile string
+
 func newTestFlagSet() *flag.FlagSet {
 	fs := flag.NewFlagSet("testwrapper", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -127,6 +141,7 @@ func newTestFlagSet() *flag.FlagSet {
 	fs.String("vet", "", "vet checks to run, or 'off' or 'all'")
 
 	fs.Var(&cacheLink, "cachelink", "Go -cachelink value (bool); or 'auto' to enable if GOCACHEPROG is set")
+	fs.StringVar(&testTraceFile, "testtrace", "", "if non-empty, write a Chrome Trace Event Format file of test/package timings to this path (distinct from go test -trace, which writes a runtime execution trace)")
 	return fs
 }
 
