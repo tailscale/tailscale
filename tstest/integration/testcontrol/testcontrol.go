@@ -1215,19 +1215,31 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 	var peersToUpdate []tailcfg.NodeID
 	if !req.ReadOnly && !streamingNonUpdate {
 		endpoints := filterInvalidIPv6Endpoints(req.Endpoints)
-		node.Endpoints = endpoints
-		node.DiscoKey = req.DiscoKey
-		node.Cap = req.Version
+		var hi tailcfg.HostinfoView
+		var newDERP int
 		if req.Hostinfo != nil {
-			node.Hostinfo = req.Hostinfo.View()
-			if ni := node.Hostinfo.NetInfo(); ni.Valid() {
-				if ni.PreferredDERP() != 0 {
-					node.HomeDERP = ni.PreferredDERP()
-				}
+			hi = req.Hostinfo.View()
+			if ni := hi.NetInfo(); ni.Valid() {
+				newDERP = ni.PreferredDERP()
 			}
 		}
+		// Mutate the live node under the mutex; writing back the clone
+		// obtained above would clobber any concurrent writer's changes
+		// to other fields (e.g. UpdateNode, SetNodeCapMap).
 		s.mu.Lock()
-		peersToUpdate = s.updateNodeLocked(node)
+		live := s.nodes[req.NodeKey]
+		if live != nil {
+			live.Endpoints = endpoints
+			live.DiscoKey = req.DiscoKey
+			live.Cap = req.Version
+			if hi.Valid() {
+				live.Hostinfo = hi
+				if newDERP != 0 {
+					live.HomeDERP = newDERP
+				}
+			}
+			peersToUpdate = s.nodeIDsLocked(live.ID)
+		}
 		s.mu.Unlock()
 	}
 
