@@ -282,7 +282,7 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 		wantErr  bool
 	}{
 		{
-			name: "not-path-handler",
+			name: "not-path-or-unix-handler",
 			configIn: &ipn.ServeConfig{
 				Web: map[ipn.HostPort]*ipn.WebServerConfig{
 					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
@@ -311,6 +311,30 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 				Web: map[ipn.HostPort]*ipn.WebServerConfig{
 					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
 						"/": {Path: "/tmp"},
+					}},
+				},
+			},
+			h:       newHandler(false),
+			wantErr: true,
+		},
+		{
+			name: "unix-handler-admin",
+			configIn: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Proxy: "unix:/var/run/foo.sock"},
+					}},
+				},
+			},
+			h:       newHandler(true),
+			wantErr: false,
+		},
+		{
+			name: "unix-handler-not-admin",
+			configIn: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Proxy: "unix:/var/run/foo.sock"},
 					}},
 				},
 			},

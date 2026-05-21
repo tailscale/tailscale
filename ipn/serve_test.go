@@ -417,3 +417,150 @@ func TestIsFunnelOn(t *testing.T) {
 		})
 	}
 }
+
+func TestIsServingUnixAny(t *testing.T) {
+	tests := []struct {
+		name string
+		sc   *ServeConfig
+		want bool
+	}{
+		{
+			name: "empty",
+			sc:   &ServeConfig{},
+			want: false,
+		},
+		{
+			name: "nil",
+			sc:   &ServeConfig{},
+			want: false,
+		},
+		{
+			name: "no_unix",
+			sc: &ServeConfig{
+				TCP: map[uint16]*TCPPortHandler{
+					80: {TCPForward: "localhost:8080"},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "tcp_to_unix",
+			sc: &ServeConfig{
+				TCP: map[uint16]*TCPPortHandler{
+					80: {TCPForward: "unix:/var/run/foo.sock"},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "web_to_unix",
+			sc: &ServeConfig{
+				Web: map[HostPort]*WebServerConfig{
+					"foo.test.ts.net:80": {
+						Handlers: map[string]*HTTPHandler{
+							"/": {Proxy: "unix:/var/run/foo.sock"},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "foreground_tcp_to_unix",
+			sc: &ServeConfig{
+				Foreground: map[string]*ServeConfig{
+					"abc": {
+						TCP: map[uint16]*TCPPortHandler{
+							80: {TCPForward: "unix:/var/run/foo.sock"},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "foreground_web_to_unix",
+			sc: &ServeConfig{
+				Foreground: map[string]*ServeConfig{
+					"abc": {
+						Web: map[HostPort]*WebServerConfig{
+							"foo.test.ts.net:80": {
+								Handlers: map[string]*HTTPHandler{
+									"/": {Proxy: "unix:/var/run/foo.sock"},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "services_tcp_to_unix",
+			sc: &ServeConfig{
+				Services: map[tailcfg.ServiceName]*ServiceConfig{
+					"svc:foo": {
+						TCP: map[uint16]*TCPPortHandler{
+							80: {TCPForward: "unix:/var/run/foo.sock"},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "services_web_to_unix",
+			sc: &ServeConfig{
+				Services: map[tailcfg.ServiceName]*ServiceConfig{
+					"svc:foo": {
+						Web: map[HostPort]*WebServerConfig{
+							"foo.test.ts.net:80": {
+								Handlers: map[string]*HTTPHandler{
+									"/": {Proxy: "unix:/var/run/foo.sock"},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.sc.IsServingUnixAny(); got != tt.want {
+				t.Errorf("ServeConfig.IsServingUnixAny() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// The structural checks below guard against new vulnerabilities in serving Unix
+// socket targets. If [ServeConfig] or [ServiceConfig] is updated, these checks
+// will fail, forcing you to consider updating [ServeConfig.IsServingUnixAny].
+//
+// If your updates have created a new way to serve Unix sockets, please update
+// IsServingUnixAny accordingly. Otherwise, you can just add your new field
+// below and move on.
+//
+// IsServingUnixAny helps avoid a class of vulnerabilities in which tailscaled
+// (by means of tailscale serve) gives non-root users access to Unix sockets
+// they otherwise would not have access to (e.g. /var/run/docker.sock). As of
+// 2026-06-03, serving Unix sockets at all requires root permissions, and
+// IsServingUnixAny is how tailscaled knows when to enforce this restriction.
+//
+// See https://github.com/tailscale/corp/issues/41998
+var _ ServeConfig = struct {
+	TCP         map[uint16]*TCPPortHandler             `json:",omitempty"`
+	Web         map[HostPort]*WebServerConfig          `json:",omitempty"`
+	Services    map[tailcfg.ServiceName]*ServiceConfig `json:",omitempty"`
+	AllowFunnel map[HostPort]bool                      `json:",omitempty"`
+	Foreground  map[string]*ServeConfig                `json:",omitempty"`
+	ETag        string                                 `json:"-"`
+}{}
+var _ ServiceConfig = struct {
+	TCP map[uint16]*TCPPortHandler    `json:",omitempty"`
+	Web map[HostPort]*WebServerConfig `json:",omitempty"`
+	Tun bool                          `json:",omitempty"`
+}{}
