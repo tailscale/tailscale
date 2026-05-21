@@ -7,8 +7,8 @@ package traffic
 
 import (
 	"cmp"
-	"crypto/sha256"
 	"encoding/binary"
+	"hash/fnv"
 	"iter"
 	"maps"
 	"slices"
@@ -107,8 +107,16 @@ func MakeRendezvousHasher(seed tailcfg.NodeID) NodeHasher {
 		var b [16]byte
 		en.PutUint64(b[:], uint64(seed))
 		en.PutUint64(b[8:], uint64(n))
-		v := sha256.Sum256(b[:])
-		return en.Uint64(v[:])
+
+		// FNV-1a is more modern and distributes bits more evenly,
+		// so it is recommended by the designers.
+		//
+		// Note that we don’t use a global hasher and h.Reset
+		// because this closure could be called concurrently.
+		// This is cheap because hash/fnv doesn’t need to allocate.
+		h := fnv.New64a()
+		h.Write(b[:])
+		return h.Sum64()
 	}
 }
 
