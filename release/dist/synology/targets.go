@@ -9,10 +9,6 @@ var v5Models = []string{
 	"armv5",
 	"88f6281",
 	"88f6282",
-	// hi3535 is actually an armv7 under the hood, but with no
-	// hardware floating point. To the Go compiler, that means it's an
-	// armv5.
-	"hi3535",
 }
 
 var v7Models = []string{
@@ -24,6 +20,13 @@ var v7Models = []string{
 	"armadaxp",
 	"comcerto2k",
 	"monaco",
+}
+
+// These models are actually armv7 under the hood, but with no hardware
+// floating point. To the Go compiler, that means we previously treated
+// them as GOARM=5 just to get softfloat, but nowadays we can do GOARM=7,softfloat.
+var v7SoftModels = []string{
+	"hi3535", // https://github.com/tailscale/tailscale/issues/6860
 }
 
 func Targets(forPackageCenter bool, signer dist.Signer) []dist.Target {
@@ -100,6 +103,20 @@ func Targets(forPackageCenter bool, signer dist.Signer) []dist.Target {
 					"GOOS":   "linux",
 					"GOARCH": "arm",
 					"GOARM":  "7",
+				},
+				packageCenter: forPackageCenter,
+				signer:        signer,
+			})
+		}
+		for _, v7SoftArch := range v7SoftModels {
+			ret = append(ret, &target{
+				filenameArch:    v7SoftArch,
+				dsmMajorVersion: dsmVersion.major,
+				dsmMinorVersion: dsmVersion.minor,
+				goenv: map[string]string{
+					"GOOS":   "linux",
+					"GOARCH": "arm",
+					"GOARM":  "7,softfloat",
 				},
 				packageCenter: forPackageCenter,
 				signer:        signer,
