@@ -4,6 +4,7 @@
 package conn25
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 
@@ -83,17 +84,27 @@ type datapathHandler struct {
 	debugLogging bool
 }
 
+const (
+	maxClientFlows    = 10_000
+	maxConnectorFlows = 100_000
+)
+
 func newDatapathHandler(ipMapper IPMapper, logf logger.Logf) *datapathHandler {
 	return &datapathHandler{
-		ipMapper: ipMapper,
-
-		// TODO(mzb): Figure out sensible default max size for flow tables.
-		// Don't do any LRU eviction until we figure out deletion and expiration.
-		clientFlowTable:    NewFlowTable(0),
-		connectorFlowTable: NewFlowTable(0),
+		ipMapper:           ipMapper,
+		clientFlowTable:    NewFlowTable(maxClientFlows),
+		connectorFlowTable: NewFlowTable(maxConnectorFlows),
 		logf:               logf,
 		debugLogging:       envknob.Bool("TS_CONN25_DATAPATH_DEBUG"),
 	}
+}
+
+// StartFlowExpirySweepers starts the sweepers that remove expired flows
+// for both the client and connector flow tables. Each sweeper runs in
+// its own new goroutine.
+func (dh *datapathHandler) StartFlowExpirySweepers(ctx context.Context) {
+	go dh.clientFlowTable.StartExpiredSweeper(ctx)
+	go dh.connectorFlowTable.StartExpiredSweeper(ctx)
 }
 
 // HandlePacketFromWireGuard inspects packets coming from WireGuard, and performs

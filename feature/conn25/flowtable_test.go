@@ -4,11 +4,15 @@
 package conn25
 
 import (
+	"fmt"
 	"net/netip"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
 )
 
@@ -42,6 +46,17 @@ func mkFlow(fromTun, fromWG flowtrack.Tuple) FlowData {
 			Action: func(_ *packet.Parsed) {},
 		},
 	}
+}
+
+func mkFlows(n int) []FlowData {
+	flows := make([]FlowData, n)
+	for i := range n {
+		flows[i] = mkFlow(
+			mkTuple(fmt.Sprintf("1.0.%d.%d:1000", (i>>8)&0xff, i&0xff), "2.0.0.1:80"),
+			mkTuple(fmt.Sprintf("3.0.%d.%d:1000", (i>>8)&0xff, i&0xff), "4.0.0.1:80"),
+		)
+	}
+	return flows
 }
 
 func mustInstallFlow(t *testing.T, ft *FlowTable, flow FlowData) {
@@ -228,4 +243,139 @@ func TestFlowTable_Eviction(t *testing.T) {
 	// Check d is in.
 	assertFlowHit(t, ft, FromTun, dTun)
 	assertFlowHit(t, ft, FromWireGuard, dWG)
+}
+
+func syncSubtest(t *testing.T, name string, f func(*testing.T)) {
+	t.Helper()
+	t.Run(name, func(t *testing.T) {
+		synctest.Test(t, f)
+	})
+}
+
+func TestFlowTable_removeIdle(t *testing.T) {
+	type flowSpec struct {
+		installAt   time.Duration // wall-clock time of install, from test start
+		wantRemoved bool          // do we expect this flow to be removed by the sweep
+	}
+
+	tests := []struct {
+		name               string
+		idleTimeout        time.Duration
+		maxRemovedPerSweep int
+		flowSpecs          []flowSpec
+		removalAt          time.Duration // wall-clock time of sweep, from test start
+	}{
+		{
+			name:        "one-expired-flow",
+			idleTimeout: 1 * time.Minute,
+			flowSpecs: []flowSpec{
+				{installAt: 0, wantRemoved: true}, // age at sweep = 120s
+			},
+			removalAt: 2 * time.Minute,
+		},
+		{
+			name:        "one-not-expired-flow",
+			idleTimeout: 1 * time.Minute,
+			flowSpecs: []flowSpec{
+				{installAt: 0, wantRemoved: false}, // age at sweep = 30s
+			},
+			removalAt: 30 * time.Second,
+		},
+		{
+			name:        "two-flows-one-expired",
+			idleTimeout: 1 * time.Minute,
+			flowSpecs: []flowSpec{
+				{installAt: 0, wantRemoved: true},                 // age at sweep = 75s
+				{installAt: 30 * time.Second, wantRemoved: false}, // age at sweep = 45s
+			},
+			removalAt: 75 * time.Second,
+		},
+		{
+			name:        "two-flows-both-expired",
+			idleTimeout: 1 * time.Minute,
+			flowSpecs: []flowSpec{
+				{installAt: 0, wantRemoved: true},                // age at sweep = 120s
+				{installAt: 30 * time.Second, wantRemoved: true}, // age at sweep = 90s
+			},
+			removalAt: 2 * time.Minute,
+		},
+		{
+			// Both flows are time-expired, but maxRemovedPerSweep=1 caps removal at 1.
+			// Flow 0 is at the back of the LRU (installed first) and is removed; flow 1 stays.
+			name:               "two-flows-both-expired-but-max-count-equal-one",
+			idleTimeout:        1 * time.Minute,
+			maxRemovedPerSweep: 1,
+			flowSpecs: []flowSpec{
+				{installAt: 0, wantRemoved: true},                 // age at sweep = 120s, removed (under cap)
+				{installAt: 30 * time.Second, wantRemoved: false}, // age at sweep = 90s, kept (cap reached)
+			},
+			removalAt: 2 * time.Minute,
+		},
+		{
+			name:        "zero-idle-timeout-means-no-expiration",
+			idleTimeout: 0,
+			flowSpecs: []flowSpec{
+				{installAt: 0, wantRemoved: false},
+				{installAt: 30 * time.Second, wantRemoved: false},
+			},
+			removalAt: 2 * time.Minute,
+		},
+	}
+
+	for _, tt := range tests {
+		syncSubtest(t, tt.name, func(t *testing.T) {
+			ft := NewFlowTable(
+				0, // turn off LRU for these tests
+				WithFlowIdleTimeout(tt.idleTimeout),
+				WithMaxRemovedFlowsPerSweep(tt.maxRemovedPerSweep),
+			)
+
+			start := time.Now()
+			flows := mkFlows(len(tt.flowSpecs))
+			for i, spec := range tt.flowSpecs {
+				time.Sleep(time.Until(start.Add(spec.installAt)))
+				mustInstallFlow(t, ft, flows[i])
+			}
+
+			var wantRemovedCount int
+			for _, spec := range tt.flowSpecs {
+				if spec.wantRemoved {
+					wantRemovedCount++
+				}
+			}
+
+			time.Sleep(time.Until(start.Add(tt.removalAt)))
+
+			gotRemovedCount := ft.removeIdle(mono.Now())
+			if wantRemovedCount != gotRemovedCount {
+				t.Errorf("unexpected remove idle count: want %d, got %d", wantRemovedCount, gotRemovedCount)
+			}
+
+			for i, spec := range tt.flowSpecs {
+				if spec.wantRemoved {
+					assertFlowMiss(t, ft, FromTun, flows[i].FromTun.Tuple)
+				} else {
+					assertFlowHit(t, ft, FromTun, flows[i].FromTun.Tuple)
+				}
+			}
+		})
+	}
+
+	syncSubtest(t, "lookup-resets-lastseen", func(t *testing.T) {
+		ft := NewFlowTable(0, WithFlowIdleTimeout(time.Minute))
+		flows := mkFlows(2)
+
+		mustInstallFlow(t, ft, flows[0])                      // t=0 (flow 0 install)
+		time.Sleep(30 * time.Second)                          //
+		mustInstallFlow(t, ft, flows[1])                      // t=30s (flow 1 install)
+		time.Sleep(60 * time.Second)                          //
+		assertFlowHit(t, ft, FromTun, flows[0].FromTun.Tuple) // t=90s (flow 0 looked up, lastSeen bumped)
+		time.Sleep(15 * time.Second)                          //
+
+		if got := ft.removeIdle(mono.Now()); got != 1 {
+			t.Errorf("removeIdle returned %d, want 1", got)
+		}
+		assertFlowHit(t, ft, FromTun, flows[0].FromTun.Tuple)
+		assertFlowMiss(t, ft, FromTun, flows[1].FromTun.Tuple)
+	})
 }
