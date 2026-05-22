@@ -207,6 +207,7 @@ func (ms *mapSession) updateDiscoForNode(id tailcfg.NodeID, key key.NodePublic, 
 		ms.processQueue.Wait()
 		return ErrChangeQueueClosed
 	}
+	defer ms.cqmu.Unlock()
 
 	resp := responseWithSource{
 		response: &tailcfg.MapResponse{
@@ -220,12 +221,24 @@ func (ms *mapSession) updateDiscoForNode(id tailcfg.NodeID, key key.NodePublic, 
 		},
 		viaTSMP: true,
 	}
-	ms.changeQueue <- resp
-	ms.cqmu.Unlock()
-	return nil
+	return ms.addRespToQueue(resp)
 }
 
+// HandleNonKeepAliveMapResponse handles a non-KeepAlive MapResponse (full or
+// incremental).
+//
+// All fields that are valid on a KeepAlive MapResponse have already been
+// handled.
+//
+// Debug messages are handled first, followed by pushing the response onto a
+// queue for new updates handled sequentially.
 func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *tailcfg.MapResponse) error {
+	if debug := resp.Debug; debug != nil {
+		if err := ms.onDebug(ctx, debug); err != nil {
+			return err
+		}
+	}
+
 	ms.cqmu.Lock()
 
 	if ms.changeQueueClosed {
@@ -234,14 +247,23 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 		return ErrChangeQueueClosed
 	}
 
+	defer ms.cqmu.Unlock()
+
 	change := responseWithSource{
 		response: resp,
 		viaTSMP:  false,
 	}
 
-	ms.changeQueue <- change
-	ms.cqmu.Unlock()
-	return nil
+	return ms.addRespToQueue(change)
+}
+
+func (ms *mapSession) addRespToQueue(resp responseWithSource) error {
+	select {
+	case ms.changeQueue <- resp:
+		return nil
+	case <-ms.sessionAliveCtx.Done():
+		return ErrChangeQueueClosed
+	}
 }
 
 // handleNonKeepAliveMapResponse handles a non-KeepAlive MapResponse (full or
@@ -253,12 +275,6 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 // TODO(bradfitz): make this handle all fields later. For now (2023-08-20) this
 // is [re]factoring progress enough.
 func (ms *mapSession) handleNonKeepAliveMapResponse(ctx context.Context, resp *tailcfg.MapResponse, viaTSMP bool) error {
-	if debug := resp.Debug; debug != nil {
-		if err := ms.onDebug(ctx, debug); err != nil {
-			return err
-		}
-	}
-
 	if DevKnob.StripEndpoints() {
 		for _, p := range resp.Peers {
 			p.Endpoints = nil
