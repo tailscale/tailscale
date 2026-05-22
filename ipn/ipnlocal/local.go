@@ -1037,13 +1037,37 @@ func (b *LocalBackend) pauseOrResumeControlClientLocked() {
 	if b.cc == nil {
 		return
 	}
-	networkUp := b.interfaceState.AnyInterfaceUp()
-	pauseForNetwork := (b.state == ipn.Stopped && b.NetMapNoPeers() != nil) || (!networkUp && !testenv.InTest() && !envknob.AssumeNetworkUp())
+	b.cc.SetPaused(b.shouldPauseControlClientLocked(b.pm.CurrentPrefs()))
+}
 
-	prefs := b.pm.CurrentPrefs()
+// shouldPauseControlClientLocked reports whether the control client should be paused:
+// if the LocalBackend is in Stopped state with a valid NetMap,
+// if there is no network available,
+// or if syncing preferences from the control plane has been disabled.
+//
+// b.mu must be held.
+func (b *LocalBackend) shouldPauseControlClientLocked(prefs ipn.PrefsView) bool {
+	syncs.RequiresMutex(&b.mu)
+
 	pauseForSyncPref := prefs.Valid() && prefs.Sync().EqualBool(false)
+	if pauseForSyncPref {
+		return true
+	}
 
-	b.cc.SetPaused(pauseForNetwork || pauseForSyncPref)
+	// If tailscaled is being restarted, but it is supposed to be stopped,
+	// it mustn’t pause until the initial netmap has been loaded.
+	isStopped := b.state == ipn.Stopped && b.NetMapNoPeers() != nil
+	if isStopped {
+		return true
+	}
+
+	networkUp := b.interfaceState.AnyInterfaceUp()
+	pauseForNetwork := !networkUp && !testenv.InTest() && !envknob.AssumeNetworkUp()
+	if pauseForNetwork {
+		return true
+	}
+
+	return false
 }
 
 // DisconnectControl shuts down control client. This can be run before node shutdown to force control to consider this ndoe
@@ -2961,7 +2985,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		ControlKnobs:         b.sys.ControlKnobs(),
 		Shutdown:             ccShutdown,
 		Bus:                  b.sys.Bus.Get(),
-		StartPaused:          prefs.Sync().EqualBool(false),
+		StartPaused:          b.shouldPauseControlClientLocked(prefs),
 	})
 	if err != nil {
 		return err
