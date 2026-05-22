@@ -1262,6 +1262,14 @@ func (b *LocalBackend) Shutdown() {
 	if cc != nil {
 		cc.Shutdown()
 	}
+	if buildfeatures.HasRuntimeMetrics {
+		// We disable runtime metrics _after_ the control client is shutdown to
+		// ensure we don't leak the metrics polling goroutine in the case where
+		// netmap handling races [LocalBackend] shutdown.
+		if f, ok := HookSetRuntimeMetricsEnabled.GetOk(); ok {
+			f(false)
+		}
+	}
 	b.ctxCancel(errShutdown)
 	b.currentNode().shutdown(errShutdown)
 	b.extHost.Shutdown()
@@ -6868,6 +6876,11 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 
 	b.MagicConn().SetSilentDisco(b.ControlKnobs().SilentDisco.Load())
 	b.MagicConn().SetProbeUDPLifetime(b.ControlKnobs().ProbeUDPLifetime.Load())
+	if buildfeatures.HasRuntimeMetrics {
+		if f, ok := HookSetRuntimeMetricsEnabled.GetOk(); ok {
+			f(b.ControlKnobs().EmitRuntimeMetrics.Load())
+		}
+	}
 
 	if buildfeatures.HasDebug {
 		b.setDebugLogsByCapabilityLocked(nm)
@@ -6945,6 +6958,9 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		}
 	}
 }
+
+// HookSetRuntimeMetricsEnabled is an optional hook for the "runtimemetrics" feature.
+var HookSetRuntimeMetricsEnabled feature.Hook[func(enabled bool)]
 
 var hookSetNetMapLockedDrive feature.Hook[func(*LocalBackend, *netmap.NetworkMap)]
 
