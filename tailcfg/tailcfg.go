@@ -185,7 +185,8 @@ type CapabilityVersion int
 //   - 136: 2026-04-09: Client understands [NodeAttrDisableLinuxCGNATDropRule]
 //   - 137: 2026-04-15: Client handles 429 responses to /machine/register.
 //   - 138: 2026-03-31: can handle C2N /debug/tka.
-const CurrentCapabilityVersion CapabilityVersion = 138
+//   - 139: 2026-05-22: Client understands [NodeAttrEmitRuntimeMetrics]
+const CurrentCapabilityVersion CapabilityVersion = 139
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2788,6 +2789,10 @@ const (
 	// that does not originate from the Tailscale network interface.
 	// This enables access to off-tailnet endpoints within that IP range.
 	NodeAttrDisableLinuxCGNATDropRule NodeCapability = "disable-linux-cgnat-drop-rule"
+
+	// NodeAttrEmitRuntimeMetrics enables emission of [runtime/metrics] as
+	// [tailscale.com/util/clientmetric]'s.
+	NodeAttrEmitRuntimeMetrics NodeCapability = "emit-runtime-metrics"
 )
 
 const (

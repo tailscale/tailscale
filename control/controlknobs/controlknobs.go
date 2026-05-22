@@ -110,6 +110,10 @@ type Knobs struct {
 	// See https://github.com/tailscale/tailscale/issues/15404.
 	// TODO(bradfitz): remove this a few releases after 2026-02-16.
 	ForceRegisterMagicDNSIPv4Only atomic.Bool
+
+	// EmitRuntimeMetrics is whether the node should poll and emit [runtime/metrics]
+	// as [tailscale.com/util/clientmetric]'s.
+	EmitRuntimeMetrics atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -139,6 +143,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		disableSkipStatusQueue               = has(tailcfg.NodeAttrDisableSkipStatusQueue)
 		disableHostsFileUpdates              = has(tailcfg.NodeAttrDisableHostsFileUpdates)
 		forceRegisterMagicDNSIPv4Only        = has(tailcfg.NodeAttrForceRegisterMagicDNSIPv4Only)
+		emitRuntimeMetrics                   = has(tailcfg.NodeAttrEmitRuntimeMetrics)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -166,6 +171,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.DisableSkipStatusQueue.Store(disableSkipStatusQueue)
 	k.DisableHostsFileUpdates.Store(disableHostsFileUpdates)
 	k.ForceRegisterMagicDNSIPv4Only.Store(forceRegisterMagicDNSIPv4Only)
+	k.EmitRuntimeMetrics.Store(emitRuntimeMetrics)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
