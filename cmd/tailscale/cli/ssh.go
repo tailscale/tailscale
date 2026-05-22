@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net/netip"
@@ -25,9 +26,13 @@ import (
 	"tailscale.com/version"
 )
 
+var sshArgs struct {
+	verbose bool
+}
+
 var sshCmd = &ffcli.Command{
 	Name:       "ssh",
-	ShortUsage: "tailscale ssh [user@]<host> [args...]",
+	ShortUsage: "tailscale ssh [flags] [user@]<host> [args...]",
 	ShortHelp:  "SSH to a Tailscale machine",
 	LongHelp: strings.TrimSpace(`
 
@@ -46,6 +51,11 @@ The 'tailscale ssh' wrapper adds a few things:
   node's SSH host key as advertised via the Tailscale coordination server.
 `),
 	Exec: runSSH,
+	FlagSet: (func() *flag.FlagSet {
+		fs := newFlagSet("ssh")
+		fs.BoolVar(&sshArgs.verbose, "verbose", false, "verbose output, showing peer and host key diagnostics")
+		return fs
+	})(),
 }
 
 func runSSH(ctx context.Context, args []string) error {
@@ -55,6 +65,9 @@ func runSSH(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: tailscale ssh [user@]<host>")
 	}
+
+	verbose := sshArgs.verbose || envknob.Bool("TS_DEBUG_SSH_EXEC")
+
 	arg, argRest := args[0], args[1:]
 	username, host, ok := strings.Cut(arg, "@")
 	if !ok {
@@ -95,6 +108,10 @@ func runSSH(ctx context.Context, args []string) error {
 		}
 	}
 
+	if verbose {
+		printPeerDiagnostics(host, ps, ok)
+	}
+
 	ssh, err := findSSH()
 	if err != nil {
 		// TODO(bradfitz): use Go's crypto/ssh client instead
@@ -106,10 +123,16 @@ func runSSH(ctx context.Context, args []string) error {
 		return err
 	}
 
+	if verbose {
+		printKnownHostsDiagnostics(st, knownHostsFile, ps, ok)
+	}
+
 	argv := []string{ssh}
 
 	if envknob.Bool("TS_DEBUG_SSH_EXEC") {
 		argv = append(argv, "-vvv")
+	} else if sshArgs.verbose {
+		argv = append(argv, "-v")
 	}
 	argv = append(argv,
 		// Only trust SSH hosts that we know about.
@@ -150,8 +173,8 @@ func runSSH(ctx context.Context, args []string) error {
 
 	argv = append(argv, argRest...)
 
-	if envknob.Bool("TS_DEBUG_SSH_EXEC") {
-		log.Printf("Running: %q, %q ...", ssh, argv)
+	if verbose {
+		log.Printf("ssh: exec %q %q", ssh, argv)
 	}
 
 	return execSSH(ssh, argv)
@@ -256,6 +279,53 @@ func ipFromPeerStatus(ps *ipnstate.PeerStatus) (string, bool) {
 		}
 	}
 	return ps.TailscaleIPs[0].String(), true
+}
+
+func printPeerDiagnostics(host string, ps *ipnstate.PeerStatus, found bool) {
+	if !found {
+		log.Printf("ssh: peer %q not found in tailnet peer list; host key verification will likely fail", host)
+		return
+	}
+	var ips []string
+	for _, ip := range ps.TailscaleIPs {
+		ips = append(ips, ip.String())
+	}
+	log.Printf("ssh: resolved %q to peer %q (%s), online: %v",
+		host, ps.DNSName, strings.Join(ips, ", "), ps.Online)
+
+	if len(ps.SSH_HostKeys) == 0 {
+		log.Printf("ssh: WARNING: peer %q advertises no SSH host keys; Tailscale SSH may not be enabled on the target (tailscale set --ssh), or coordination data is stale", ps.DNSName)
+		return
+	}
+	var keyTypes []string
+	for _, hk := range ps.SSH_HostKeys {
+		if typ, _, ok := strings.Cut(strings.TrimSpace(hk), " "); ok {
+			keyTypes = append(keyTypes, typ)
+		}
+	}
+	log.Printf("ssh: peer %q advertises %d host key(s): %s",
+		ps.DNSName, len(ps.SSH_HostKeys), strings.Join(keyTypes, ", "))
+}
+
+func printKnownHostsDiagnostics(st *ipnstate.Status, knownHostsFile string, targetPeer *ipnstate.PeerStatus, found bool) {
+	var peersWithKeys, totalEntries int
+	for _, k := range st.Peers() {
+		ps := st.Peer[k]
+		if len(ps.SSH_HostKeys) > 0 {
+			peersWithKeys++
+			for _, hk := range ps.SSH_HostKeys {
+				hostKey := strings.TrimSpace(hk)
+				if strings.ContainsAny(hostKey, "\n\r") {
+					continue
+				}
+				totalEntries += 1 + len(ps.TailscaleIPs)
+			}
+		}
+	}
+	log.Printf("ssh: known_hosts %q: %d entries across %d peers", knownHostsFile, totalEntries, peersWithKeys)
+	if found && len(targetPeer.SSH_HostKeys) == 0 {
+		log.Printf("ssh: WARNING: target peer has 0 entries in known_hosts")
+	}
 }
 
 // getSSHClientEnvVar returns the "SSH_CLIENT" environment variable
