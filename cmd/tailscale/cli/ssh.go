@@ -27,7 +27,8 @@ import (
 )
 
 var sshArgs struct {
-	verbose bool
+	verbose              bool
+	disableStrict bool
 }
 
 var sshCmd = &ffcli.Command{
@@ -49,11 +50,22 @@ The 'tailscale ssh' wrapper adds a few things:
   system 'ssh' command that connects via a pipe through tailscaled.
 * It automatically checks the destination server's SSH host key against the
   node's SSH host key as advertised via the Tailscale coordination server.
+
+The --verbose flag prints diagnostic information before connecting, including
+peer resolution, SSH host key details, and the generated known_hosts file
+path. This is useful for debugging host key errors such as "No ED25519 host
+key is known for". It also passes -v to the underlying system 'ssh' command.
+
+The --disable-strict flag disables strict host key checking, allowing
+connections to peers whose SSH host keys are not yet known. Unknown keys are
+automatically accepted and saved. This can be useful when a peer has just
+enabled Tailscale SSH and its host keys have not yet propagated.
 `),
 	Exec: runSSH,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("ssh")
 		fs.BoolVar(&sshArgs.verbose, "verbose", false, "verbose output, showing peer and host key diagnostics")
+		fs.BoolVar(&sshArgs.disableStrict, "disable-strict", false, "skip strict host key checking (connect even if the host key is unknown)")
 		return fs
 	})(),
 }
@@ -134,11 +146,15 @@ func runSSH(ctx context.Context, args []string) error {
 	} else if sshArgs.verbose {
 		argv = append(argv, "-v")
 	}
+	strictHostKey := "yes"
+	if sshArgs.disableStrict {
+		strictHostKey = "accept-new"
+	}
 	argv = append(argv,
 		// Only trust SSH hosts that we know about.
 		"-o", fmt.Sprintf("UserKnownHostsFile %q", knownHostsFile),
 		"-o", "UpdateHostKeys no",
-		"-o", "StrictHostKeyChecking yes",
+		"-o", "StrictHostKeyChecking "+strictHostKey,
 		"-o", "CanonicalizeHostname no", // https://github.com/tailscale/tailscale/issues/10348
 	)
 
