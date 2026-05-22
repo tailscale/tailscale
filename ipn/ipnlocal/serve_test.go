@@ -952,6 +952,154 @@ func TestServeHTTPProxyGrantHeader(t *testing.T) {
 	}
 }
 
+func TestServeHTTPProxyGrantHeaderForVIPService(t *testing.T) {
+	b := newTestBackend(t)
+
+	// Set up a VIP service with its IP mapping.
+	const vipAddr = "100.200.200.200"
+	svcIPMap := tailcfg.ServiceIPMappings{
+		"svc:mysvc": []netip.Addr{
+			netip.MustParseAddr(vipAddr),
+		},
+	}
+	svcIPMapJSON, err := json.Marshal(svcIPMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Set up filter rules: one grant scoped to the VIP address, one to the node address.
+	nm := b.NetMap()
+	matches, err := filter.MatchesFromFilterRules([]tailcfg.FilterRule{
+		{
+			// Grant scoped to the VIP service address — should appear when ForVIPService is set.
+			SrcIPs: []string{"100.150.151.152"},
+			CapGrant: []tailcfg.CapGrant{{
+				Dsts: []netip.Prefix{
+					netip.MustParsePrefix(vipAddr + "/32"),
+				},
+				CapMap: tailcfg.PeerCapMap{
+					"example.com/cap/svc-only": []tailcfg.RawMessage{
+						`{"svc": true}`,
+					},
+				},
+			}},
+		},
+		{
+			// Grant scoped to the node's own address — should NOT appear for VIP requests.
+			SrcIPs: []string{"100.150.151.152"},
+			CapGrant: []tailcfg.CapGrant{{
+				Dsts: []netip.Prefix{
+					netip.MustParsePrefix("100.150.151.151/32"),
+				},
+				CapMap: tailcfg.PeerCapMap{
+					"example.com/cap/host-only": []tailcfg.RawMessage{
+						`{"host": true}`,
+					},
+				},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nm.PacketFilter = matches
+	nm.SelfNode = (&tailcfg.Node{
+		Name: "example.ts.net",
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.150.151.151/32"),
+		},
+		CapMap: tailcfg.NodeCapMap{
+			tailcfg.NodeAttrServiceHost: []tailcfg.RawMessage{tailcfg.RawMessage(svcIPMapJSON)},
+		},
+	}).View()
+	b.SetControlClientStatus(nil, controlclient.Status{NetMap: nm})
+
+	// Start test serve endpoint that echoes headers back.
+	testServ := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			for key, val := range r.Header {
+				w.Header().Add(key, strings.Join(val, ","))
+			}
+		},
+	))
+	defer testServ.Close()
+
+	// Configure the service web handler. AcceptAppCaps advertises both the
+	// VIP-scoped and node-scoped caps so the handler would forward either
+	// if granted. The test verifies that only VIP-scoped grants appear.
+	// The HostPort key is "mysvc.ts.net:443" because MagicDNSSuffix of
+	// node name "example.ts.net" is "ts.net".
+	conf := &ipn.ServeConfig{
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			"svc:mysvc": {
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {HTTPS: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"mysvc.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {
+							Proxy:         testServ.URL,
+							AcceptAppCaps: []tailcfg.PeerCapability{"example.com/cap/svc-only", "example.com/cap/host-only"},
+						},
+					}},
+				},
+			},
+		},
+	}
+	if err := b.SetServeConfig(conf, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		srcIP   string
+		wantCap string // expected Tailscale-App-Capabilities header value
+	}{
+		{
+			// Peer 100.150.151.152 has a VIP-scoped grant (svc-only) and a
+			// node-scoped grant (host-only). Only the VIP-scoped grant should
+			// appear because the request is for a VIP service.
+			name:    "vip-scoped-grant-returned",
+			srcIP:   "100.150.151.152",
+			wantCap: `{"example.com/cap/svc-only":[{"svc":true}]}`,
+		},
+		{
+			// Peer with no grants at all gets an empty header.
+			name:    "no-grants",
+			srcIP:   "100.160.161.162",
+			wantCap: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &http.Request{
+				URL: &url.URL{Path: "/"},
+				TLS: &tls.ConnectionState{ServerName: "mysvc.ts.net"},
+			}
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
+				DestPort:      443,
+				SrcAddr:       netip.MustParseAddrPort(tt.srcIP + ":1234"),
+				ForVIPService: "svc:mysvc",
+			}))
+
+			w := httptest.NewRecorder()
+			b.serveWebHandler(w, req)
+
+			h := w.Result().Header
+			dec := new(mime.WordDecoder)
+			maybeEncoded := h.Get("Tailscale-App-Capabilities")
+			got, err := dec.DecodeHeader(maybeEncoded)
+			if err != nil {
+				t.Fatalf("failed to decode Tailscale-App-Capabilities header %q: %v", maybeEncoded, err)
+			}
+			if got != tt.wantCap {
+				t.Errorf("Tailscale-App-Capabilities: got %q, want %q", got, tt.wantCap)
+			}
+		})
+	}
+}
+
 func Test_reverseProxyConfiguration(t *testing.T) {
 	b := newTestBackend(t)
 	type test struct {
