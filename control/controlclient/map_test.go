@@ -865,6 +865,53 @@ func TestUpdateDiscoForNodeCallback(t *testing.T) {
 				nu.lastTSMPKey, nu.lastTSMPDisco)
 		}
 	})
+
+	t.Run("test_deadlock", func(t *testing.T) {
+		nu := &rememberLastNetmapUpdater{
+			done: make(chan any, 1),
+		}
+		ms := newTestMapSession(t, nu)
+		// Very barebones onDebug func that will let us exercise sleep command
+		// from control and potentially induce deadlocks.
+		ms.onDebug = func(ctx context.Context, d *tailcfg.Debug) error {
+			time.Sleep(time.Duration(d.SleepSeconds * float64(time.Second)))
+			return nil
+		}
+
+		oldKey := key.NewDisco()
+
+		// Insert existing node
+		node := tailcfg.Node{
+			ID:       1,
+			Key:      key.NewNode().Public(),
+			DiscoKey: oldKey.Public(),
+			Online:   new(false),
+			LastSeen: new(time.Unix(1, 0)),
+		}
+
+		if nm := ms.netmapForResponse(&tailcfg.MapResponse{
+			Peers: []*tailcfg.Node{&node},
+		}); len(nm.Peers) != 1 {
+			t.Fatalf("node not inserted")
+		}
+
+		sleep1 := &tailcfg.MapResponse{
+			Debug: &tailcfg.Debug{
+				SleepSeconds: 1.0,
+			},
+		}
+		ms.HandleNonKeepAliveMapResponse(t.Context(), sleep1)
+
+		// Resembles the disco key advert subscriber running in a separate context.
+		go func() {
+			newKey := key.NewDisco()
+			ms.updateDiscoForNode(node.ID, node.Key, newKey.Public(), time.Now(), false)
+		}()
+
+		ms.Close()
+
+		<-nu.done
+	})
 }
 
 func TestUpdateDiscoForNodeCallbackWithFullNetmap(t *testing.T) {
