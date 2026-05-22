@@ -367,12 +367,14 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// workaround.
 	isWindows := m.goos == "windows"
 	isApple := (m.goos == "darwin" || m.goos == "ios")
-	if len(cfg.singleResolverSet()) > 0 && m.os.SupportsSplitDNS() && !isWindows && !isApple {
-		// Split DNS configuration requested, where all split domains
-		// go to the same resolvers. We can let the OS do it.
-		ocfg.Nameservers = toIPsOnly(cfg.singleResolverSet())
-		ocfg.MatchDomains = cfg.matchDomains()
-		return rcfg, ocfg, nil
+	if m.os.SupportsSplitDNS() && !isWindows && !isApple {
+		if srs := toIPsOnly(cfg.singleResolverSet()); len(srs) > 0 {
+			// Split DNS configuration requested, where all split domains
+			// go to the same resolvers. We can let the OS do it.
+			ocfg.Nameservers = srs
+			ocfg.MatchDomains = cfg.matchDomains()
+			return rcfg, ocfg, nil
+		}
 	}
 
 	// Split DNS configuration with either multiple upstream routes,
