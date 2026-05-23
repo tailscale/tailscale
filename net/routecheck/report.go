@@ -50,7 +50,7 @@ type Report struct {
 	// LastProbed tracks the last time a given node was probed.
 	// This is used to rate-limit reachability probing, so an entry’s
 	// presence doesn’t imply that it is reachable.
-	LastProbed map[tailcfg.NodeID]time.Time
+	LastProbed map[tailcfg.NodeID]time.Time `json:"-"` // not marshaled
 }
 
 // Node represents a node in the reachability report.
@@ -74,8 +74,8 @@ type Node struct {
 // To prevent stuttering, it encodes itself as an array.
 type nodeset map[tailcfg.NodeID]Node
 
-var _ jsonv2.MarshalerTo = nodeset{}
-var _ jsonv2.UnmarshalerFrom = nodeset{}
+var _ jsonv2.MarshalerTo = &nodeset{}
+var _ jsonv2.UnmarshalerFrom = &nodeset{}
 
 // MarshalJSONTo implements [jsonv2.MarshalerTo].
 func (ns nodeset) MarshalJSONTo(enc *jsontext.Encoder) error {
@@ -84,13 +84,16 @@ func (ns nodeset) MarshalJSONTo(enc *jsontext.Encoder) error {
 }
 
 // UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
-func (ns nodeset) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+func (ns *nodeset) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	var nodes []Node
 	if err := jsonv2.UnmarshalDecode(dec, &nodes); err != nil {
 		return err
 	}
+	if *ns == nil {
+		*ns = make(nodeset, len(nodes))
+	}
 	for _, n := range nodes {
-		ns[n.ID] = n
+		(*ns)[n.ID] = n
 	}
 	return nil
 }

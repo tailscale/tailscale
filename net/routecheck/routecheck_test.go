@@ -135,11 +135,14 @@ func TestRefresh(t *testing.T) {
 				self := makeNode(99, withName("self"))
 				var b *stubBackend
 				if !tt.init {
-					b = newStubBackend(self, tt.peers, withGone(tt.gone...))
+					b = newStubBackend(self, tt.peers,
+						withGone(t, tt.gone...))
 				} else {
 					// The backend is initialized without a NetMap,
 					// which gets “retrieved” after a delay.
-					b = newStubBackend(self, tt.peers, withGone(tt.gone...), withDelay(10*time.Second))
+					b = newStubBackend(self, tt.peers,
+						withGone(t, tt.gone...),
+						withDelay(t, 10*time.Second))
 				}
 				t.Cleanup(func() { b.Close() })
 				c, err := routecheck.NewClient(t.Logf, b, b, b)
@@ -534,10 +537,11 @@ func (b *stubBackend) Ping(ip netip.Addr, pingType tailcfg.PingType, size int, c
 	}
 }
 
-func withDelay(d time.Duration) backendOptFunc {
+func withDelay(t *testing.T, d time.Duration) backendOptFunc {
 	return func(b *stubBackend) {
+		t.Helper()
 		var stopf func() bool
-		ctx, cancel := context.WithTimeout(context.Background(), d)
+		ctx, cancel := context.WithTimeout(t.Context(), d)
 		stopf = context.AfterFunc(ctx, func() {
 			if donef := b.donef.Load(); donef != nil {
 				(*donef)()
@@ -549,8 +553,9 @@ func withDelay(d time.Duration) backendOptFunc {
 	}
 }
 
-func withGone(gone ...tailcfg.NodeID) backendOptFunc {
+func withGone(t *testing.T, gone ...tailcfg.NodeID) backendOptFunc {
 	return func(b *stubBackend) {
+		t.Helper()
 		b.gone = set.SetOf(gone)
 	}
 

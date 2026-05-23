@@ -8,17 +8,22 @@ package local
 import (
 	"context"
 	"fmt"
-	"net/url"
-	"strconv"
 
 	"tailscale.com/net/routecheck"
 )
 
-// RouteCheck performs a routecheck probe to the provided IPs and waits for its report.
+// RouteCheckProbe performs a routecheck probe and waits for its report.
+func (lc *Client) RouteCheckProbe(ctx context.Context) (*routecheck.Report, error) {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/routecheck?probe=true", 200, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error %w: %s", err, body)
+	}
+	return decodeJSON[*routecheck.Report](body)
+}
+
+// RouteCheck requests the report compiled by the latest routecheck probe.
 func (lc *Client) RouteCheck(ctx context.Context, force bool) (*routecheck.Report, error) {
-	v := url.Values{}
-	v.Set("force", strconv.FormatBool(force))
-	body, err := lc.send(ctx, "POST", "/localapi/v0/routecheck?"+v.Encode(), 200, nil)
+	body, err := lc.send(ctx, "POST", "/localapi/v0/routecheck", 200, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error %w: %s", err, body)
 	}

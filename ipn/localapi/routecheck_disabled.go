@@ -12,5 +12,5 @@ import (
 )
 
 func (h *Handler) serveRouteCheck(w http.ResponseWriter, r *http.Request) {
-	panic(feature.ErrUnavailable.Error())
+	http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotFound)
 }

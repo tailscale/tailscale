@@ -11,7 +11,12 @@ import (
 	"tailscale.com/feature"
 )
 
-// RouteCheck performs a routecheck probe to the provided IPs and waits for its report.
+// RouteCheckProbe performs a routecheck probe and waits for its report.
+func (lc *Client) RouteCheckProbe(ctx context.Context) (any, error) {
+	return nil, feature.ErrUnavailable
+}
+
+// RouteCheck requests the report compiled by the latest routecheck probe.
 func (lc *Client) RouteCheck(ctx context.Context, force bool) (any, error) {
 	return nil, feature.ErrUnavailable
 }

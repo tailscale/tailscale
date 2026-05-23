@@ -10,18 +10,11 @@ import (
 	"net/http"
 	"time"
 
-	"tailscale.com/feature"
-	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/feature/routecheck"
 	"tailscale.com/util/httpm"
 )
 
 func (h *Handler) serveRouteCheck(w http.ResponseWriter, r *http.Request) {
-	if !buildfeatures.HasRouteCheck {
-		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
-		return
-	}
-
 	rc := routecheck.ClientFor(h.b)
 	if rc == nil {
 		http.Error(w, "routecheck is not enabled", http.StatusServiceUnavailable)
@@ -29,13 +22,13 @@ func (h *Handler) serveRouteCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != httpm.POST {
-		http.Error(w, "want POST", http.StatusBadRequest)
+		http.Error(w, "want POST", http.StatusMethodNotAllowed)
 		return
 	}
 
 	var err error
 	var report *routecheck.Report
-	if defBool(r.FormValue("force"), false) {
+	if defBool(r.FormValue("probe"), false) {
 		timeout := defDuration(r.FormValue("timeout"), routecheck.DefaultTimeout)
 		timeout = min(max(0, timeout), 60*time.Second) // clamp to [0s, 60s]
 		report, err = rc.Refresh(r.Context(), timeout)
