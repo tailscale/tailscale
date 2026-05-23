@@ -115,6 +115,8 @@ func (c *Client) NetMapAvailable(nm *netmap.NetworkMap) {
 
 func (c *Client) waitForNetMap(ctx context.Context) (*netmap.NetworkMap, error) {
 	cond := &c.netMapAvailable
+	cond.L.Lock()
+	defer cond.L.Unlock()
 
 	stopf := context.AfterFunc(ctx, func() {
 		// Lock cond to ensure that Broadcast is called after the Wait below.
@@ -124,8 +126,6 @@ func (c *Client) waitForNetMap(ctx context.Context) (*netmap.NetworkMap, error) 
 	})
 	defer stopf()
 
-	cond.L.Lock()
-	defer cond.L.Unlock()
 	for {
 		nm := c.nm.NetMapNoPeers()
 		if nm != nil {
