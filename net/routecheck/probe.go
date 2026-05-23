@@ -133,13 +133,13 @@ func (c *Client) probe(ctx context.Context, nodes iter.Seq[probed], limit int, t
 // A node’s IPv6 is only probed when the current node only supports IPv6.
 // In 2026, IPv4 is still more common and more likely to work properly.
 func (c *Client) Probe(ctx context.Context, nodes iter.Seq[tailcfg.NodeView], limit int, timeout time.Duration) (*Report, error) {
-	is4, is6 := supportsIPVersions(c.nb.NodeBackend().Self())
-	if is4 == nil && is6 == nil {
+	can4, can6 := supportsIPVersions(c.nb.NodeBackend().Self())
+	if !can4 && !can6 {
 		return nil, nil
 	}
 	// TODO(sfllaw): Probes should fall back to IPv6, if the IPv4 probe times out
 	// and IPv6 is also supported by the current node.
-	addrFor := addrPicker(is4, is6)
+	addrFor := addrPicker(can4, can6)
 
 	// Assumed nodes are ones that we assume are reachable,
 	// because we can’t probe nodes that don’t understand Disco pings.
@@ -252,25 +252,26 @@ func (c *Client) ping(ctx context.Context, ip netip.Addr, pingType tailcfg.PingT
 	}
 }
 
-func supportsIPVersions(n tailcfg.NodeView) (is4, is6 func(netip.Addr) bool) {
+// SupportsIPVersions reports whether n supports IPv4 or IPv6.
+func supportsIPVersions(n tailcfg.NodeView) (can4, can6 bool) {
 	if !n.Valid() {
-		return nil, nil
+		return false, false
 	}
 	for _, ip := range n.Addresses().All() {
 		addr := ip.Addr()
 		if addr.Is4() {
-			is4 = func(addr netip.Addr) bool { return addr.Is4() }
+			can4 = true
 		} else if addr.Is6() {
-			is6 = func(addr netip.Addr) bool { return addr.Is6() }
+			can6 = true
 		}
-		if is4 != nil && is6 != nil {
+		if can4 && can6 {
 			break
 		}
 	}
-	return is4, is6
+	return can4, can6
 }
 
-func addrPicker(is4, is6 func(netip.Addr) bool) func(n tailcfg.NodeView) netip.Addr {
+func addrPicker(can4, can6 bool) func(n tailcfg.NodeView) netip.Addr {
 	// TODO(sfllaw): Picking just the one address is a little brittle
 	// because this picks just one address and there’s no fallback facility.
 	// [Client.Probe] is the caller that will need refactoring.
@@ -279,10 +280,10 @@ func addrPicker(is4, is6 func(netip.Addr) bool) func(n tailcfg.NodeView) netip.A
 		for _, ip := range n.Addresses().All() {
 			// Find a compatible IP address.
 			addr := ip.Addr()
-			if is4 != nil && is4(addr) {
+			if can4 && addr.Is4() {
 				return addr
 			}
-			if is6 != nil && is6(addr) {
+			if can6 && addr.Is6() {
 				return addr
 			}
 		}
