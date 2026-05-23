@@ -1058,8 +1058,6 @@ func TestC2NPingRequest(t *testing.T) {
 // Issue 2434: when "down" (WantRunning false), tailscaled shouldn't
 // be connected to control.
 func TestNoControlConnWhenDown(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/19831")
-
 	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
@@ -1083,14 +1081,24 @@ func TestNoControlConnWhenDown(t *testing.T) {
 
 	n1.AwaitBackendState("Stopped")
 
+	// The real test: verify our daemon doesn't have an HTTP request open.
+	// Stopping the client may take some time to disconnect from testcontrol.
+	if err := tstest.WaitFor(time.Second, func() error {
+		if n := env.Control.InServeMap(); n != 0 {
+			return fmt.Errorf("in serve map = %d; want 0", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("unexpected connections while stopped: %v", err)
+	}
+
 	ip2 := n1.AwaitIP4()
 	if ip1 != ip2 {
 		t.Errorf("IPs different: %q vs %q", ip1, ip2)
 	}
 
-	// The real test: verify our daemon doesn't have an HTTP request open.
 	if n := env.Control.InServeMap(); n != 0 {
-		t.Errorf("in serve map = %d; want 0", n)
+		t.Fatalf("unexpected connection triggered by tailscale ip: in serve map = %d; want 0", n)
 	}
 
 	d2.MustCleanShutdown(t)
