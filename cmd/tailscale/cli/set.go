@@ -18,6 +18,7 @@ import (
 	"tailscale.com/client/web"
 	"tailscale.com/clientupdate"
 	"tailscale.com/cmd/tailscale/cli/ffcomplete"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
@@ -65,6 +66,9 @@ type setArgsT struct {
 	statefulFiltering      bool
 	netfilterMode          string
 	relayServerPort        string
+	locationCoords         string
+	locationCountry        string
+	locationCity           string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -112,6 +116,12 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 		setf.StringVar(&setArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
 	case "windows":
 		setf.BoolVar(&setArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
+	}
+
+	if envknob.Bool("TS_DEBUG_TRAFFIC_STEERING") {
+		setf.StringVar(&setArgs.locationCoords, "location-coords", "", "latitude and longitude for this node, in decimal degrees \"+45.5-73.6\"")
+		setf.StringVar(&setArgs.locationCountry, "location-country", "", "name of this node’ country")
+		setf.StringVar(&setArgs.locationCity, "location-city", "", "name of this node’s city")
 	}
 
 	registerAcceptRiskFlag(setf, &setArgs.acceptedRisks)
