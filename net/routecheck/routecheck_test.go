@@ -109,7 +109,7 @@ func TestReport(t *testing.T) {
 				return nil
 			}
 			db := make(map[tailcfg.NodeID]routecheck.Node)
-			for _, n := range tt.peers {
+			for _, n := range nodes {
 				db[n.ID()] = routecheck.Node{
 					ID:     n.ID(),
 					Name:   n.Name(),

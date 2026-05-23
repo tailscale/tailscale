@@ -106,7 +106,9 @@ func NewClient(logf logger.Logf, nb NodeBackender, nm NetMapper, pinger Pinger) 
 	return c, nil
 }
 
-func (c *Client) NetMapAvailable(nm *netmap.NetworkMap) {
+// NotifyNetMapAvailable wakes up goroutines that have been waiting for the
+// non-nil network map that the control plane sends after reconnecting.
+func (c *Client) NotifyNetMapAvailable(nm *netmap.NetworkMap) {
 	if nm == nil {
 		return // client disconnected
 	}

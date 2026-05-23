@@ -84,5 +84,5 @@ func (e *Extension) onNetMapToggle(nm *netmap.NetworkMap) {
 	if nm == nil {
 		return
 	}
-	e.Client.NetMapAvailable(nm)
+	e.Client.NotifyNetMapAvailable(nm)
 }

@@ -7,6 +7,7 @@ import (
 	"net/netip"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/views"
 	"tailscale.com/util/mak"
 )
 
@@ -40,10 +41,8 @@ func routes(n tailcfg.NodeView) []netip.Prefix {
 AllowedIPs:
 	for _, pfx := range n.AllowedIPs().All() {
 		// Routers never forward their own local addresses.
-		for _, addr := range n.Addresses().All() {
-			if pfx == addr {
-				continue AllowedIPs
-			}
+		if views.SliceContains(n.Addresses(), pfx) {
+			continue AllowedIPs
 		}
 		routes = append(routes, pfx)
 	}

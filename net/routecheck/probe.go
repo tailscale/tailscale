@@ -69,16 +69,18 @@ func (c *Client) probe(ctx context.Context, nodes iter.Seq[probed], limit int, t
 			// while a Disco ping only proves that the peer can be found using DERP.
 			// However, TSMP is wrapped in a long-lived WireGuard connection,
 			// which is too expensive when generating a reachability report.
+			// Although different nodes theoretically could share the same Disco key,
+			// in practice there is a 1:1 mapping between a Disco key and a node key.
 			//
-			// Since WireGuard connections are established using a single round-trip,
-			// there is no existing way to confirm that a WireGuard connection
+			// TODO(#19670): WireGuard establishes connections with a single round-trip,
+			// so there is no existing way to confirm that a WireGuard connection
 			// can be established without burdening the peer with lingering state.
 			// WireGuard could be extended with a special `handshake_initiation`
 			// that only verifies that a connection could be established,
 			// requesting this with a sentinel in `handshake_initiation.mac2`.
 			// The peer would send a valid but stateless `handshake_response`,
 			// using a random ephemeral_private key and not record any state.
-			// See https://www.wireguard.com/protocol/ and tailscale/tailscale#19670.
+			// See https://www.wireguard.com/protocol/.
 			switch pong, err := c.ping(ctx, n.addr, tailcfg.PingDisco, timeout); {
 			case err == context.DeadlineExceeded:
 				// Ping timed out, so assume that the node is unreachable.
