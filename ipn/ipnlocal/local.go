@@ -2925,7 +2925,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	// policy (as we have not yet spoken to the control plane).
 	//
 	// However, since we do not create or update a netmap cache unless we observe the
-	// [tailcfg.NodeAttrCachedNetworkMaps] capability, we can use the presence
+	// [tailcfg.NodeAttrCacheNetworkMaps] capability, we can use the presence
 	// of the cached netmap as a signal that we were expected to do so as of the
 	// last time we updated the cache.
 	//
