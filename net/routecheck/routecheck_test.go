@@ -25,7 +25,7 @@ import (
 )
 
 func TestReport(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name  string
 		init  bool // true before the netmap has been loaded
 		peers []tailcfg.NodeView
@@ -109,7 +109,7 @@ func TestReport(t *testing.T) {
 				return nil
 			}
 			db := make(map[tailcfg.NodeID]routecheck.Node)
-			for _, n := range tc.peers {
+			for _, n := range tt.peers {
 				db[n.ID()] = routecheck.Node{
 					ID:     n.ID(),
 					Name:   n.Name(),
@@ -124,13 +124,13 @@ func TestReport(t *testing.T) {
 				gcmpopts.EquateComparable(netip.Addr{}, netip.Prefix{}))
 		}
 
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				// The backend is initialized without a NetMap.
-				b := newStubBackend(tailcfg.NodeView{}, nil, withGone(tc.gone...))
-				if !tc.init {
+				b := newStubBackend(tailcfg.NodeView{}, nil, withGone(tt.gone...))
+				if !tt.init {
 					self := makeNode(99, withName("self"))
-					b = newStubBackend(self, tc.peers, withGone(tc.gone...))
+					b = newStubBackend(self, tt.peers, withGone(tt.gone...))
 				}
 				c, err := routecheck.NewClient(t.Logf, b, b, b)
 				if err != nil {
@@ -141,12 +141,12 @@ func TestReport(t *testing.T) {
 				now := time.Now() // synctest will freeze time.
 
 				var want *routecheck.Report
-				peers := makeDB(tc.peers)
-				if !tc.init {
+				peers := makeDB(tt.peers)
+				if !tt.init {
 					want = &routecheck.Report{
 						Done: now,
 					}
-					for _, nid := range tc.want {
+					for _, nid := range tt.want {
 						mak.Set(&want.Reachable, nid, peers[nid])
 					}
 				}
@@ -172,7 +172,7 @@ func TestRoutersByPrefix(t *testing.T) {
 		return out
 	}
 
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name  string
 		peers []tailcfg.NodeView
 		want  routersByPrefix
@@ -347,17 +347,17 @@ func TestRoutersByPrefix(t *testing.T) {
 			},
 		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			self := makeNode(99, withName("self"))
-			b := newStubBackend(self, tc.peers)
+			b := newStubBackend(self, tt.peers)
 			c, err := routecheck.NewClient(t.Logf, b, b, b)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
 			got := simplify(c.RoutersByPrefix())
-			if !maps.EqualFunc(got, tc.want, slices.Equal) {
-				t.Errorf("got %+v, want %+v", got, tc.want)
+			if !maps.EqualFunc(got, tt.want, slices.Equal) {
+				t.Errorf("got %+v, want %+v", got, tt.want)
 			}
 		})
 	}
