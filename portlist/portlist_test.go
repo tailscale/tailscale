@@ -6,6 +6,7 @@ package portlist
 import (
 	"net"
 	"runtime"
+	"sync"
 	"testing"
 
 	"tailscale.com/tstest"
@@ -205,6 +206,44 @@ func TestClose(t *testing.T) {
 	}
 }
 
+func TestConcurrentPoll(t *testing.T) {
+	maybeSkip(t)
+
+	var p Poller
+	p.IncludeLocalhost = true
+
+	// Do an initial poll to initialize.
+	if _, _, err := p.Poll(); err != nil {
+		t.Skipf("skipping due to poll error: %v", err)
+	}
+	defer p.Close()
+
+	// Run multiple goroutines calling Poll concurrently to verify
+	// there are no data races on the Poller's internal state.
+	const goroutines = 4
+	const iterations = 10
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			for range iterations {
+				ports, changed, err := p.Poll()
+				if err != nil {
+					t.Errorf("Poll: %v", err)
+					return
+				}
+				// Access the returned data to ensure it's not
+				// aliased with the Poller's internal state.
+				if changed {
+					_ = List(ports).String()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
 func BenchmarkGetList(b *testing.B) {
 	benchmarkGetList(b, false)
 }
@@ -223,7 +262,7 @@ func benchmarkGetList(b *testing.B, incremental bool) {
 	}
 	b.Cleanup(func() { p.Close() })
 	for range b.N {
-		pl, err := p.getList()
+		pl, err := p.getListLocked()
 		if err != nil {
 			b.Fatal(err)
 		}
