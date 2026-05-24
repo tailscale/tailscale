@@ -353,7 +353,7 @@ main() {
 				;;
 			kde-linux)
 				echo "The maintainers of KDE Linux provide documentation on multiple ways to install Tailscale. These instructions are not officially supported by Tailscale:"
-				echo "https://kde.org/linux/docs/more-software/#tailscale"
+				echo "https://linux.kde.org/docs/more-software/#tailscale"
 				exit 1
 				;;
 
