@@ -87,6 +87,7 @@ func main() {
 		h.Set("Tailscale-Login", strings.Split(info.UserProfile.LoginName, "@")[0])
 		h.Set("Tailscale-User", info.UserProfile.LoginName)
 		h.Set("Tailscale-Name", info.UserProfile.DisplayName)
+		h.Set("Tailscale-Node", info.Node.ComputedName)
 		h.Set("Tailscale-Profile-Picture", info.UserProfile.ProfilePicURL)
 		h.Set("Tailscale-Tailnet", tailnet)
 		w.WriteHeader(http.StatusNoContent)
