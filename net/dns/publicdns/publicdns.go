@@ -278,6 +278,29 @@ func populate() {
 	addDoH("2606:1a40::4", "https://freedns.controld.com/family")
 	addDoH("2606:1a40:1::4", "https://freedns.controld.com/family")
 
+	// Control D - Hagezi Light
+	addDoH("76.76.2.37", "https://freedns.controld.com/x-hagezi-light")
+	addDoH("76.76.10.37", "https://freedns.controld.com/x-hagezi-light")
+	addDoH("2606:1a40::37", "https://freedns.controld.com/x-hagezi-light")
+	addDoH("2606:1a40:1::37", "https://freedns.controld.com/x-hagezi-light")
+
+	// Control D - Hagezi Normal
+	addDoH("76.76.2.40", "https://freedns.controld.com/x-hagezi-normal")
+	addDoH("76.76.10.40", "https://freedns.controld.com/x-hagezi-normal")
+	addDoH("2606:1a40::40", "https://freedns.controld.com/x-hagezi-normal")
+	addDoH("2606:1a40:1::40", "https://freedns.controld.com/x-hagezi-normal")
+
+	// Control D - Hagezi Pro
+	addDoH("76.76.2.41", "https://freedns.controld.com/x-hagezi-pro")
+	addDoH("76.76.10.41", "https://freedns.controld.com/x-hagezi-pro")
+	addDoH("2606:1a40::41", "https://freedns.controld.com/x-hagezi-pro")
+	addDoH("2606:1a40:1::41", "https://freedns.controld.com/x-hagezi-pro")
+
+	// Control D - Hagezi Pro Plus
+	addDoH("76.76.2.42", "https://freedns.controld.com/x-hagezi-proplus")
+	addDoH("76.76.10.42", "https://freedns.controld.com/x-hagezi-proplus")
+	addDoH("2606:1a40::42", "https://freedns.controld.com/x-hagezi-proplus")
+	addDoH("2606:1a40:1::42", "https://freedns.controld.com/x-hagezi-proplus")
 	// CIRA Canadian Shield: https://www.cira.ca/en/canadian-shield/configure/summary-cira-canadian-shield-dns-resolver-addresses/
 
 	// CIRA Canadian Shield Private (DNS resolution only)
