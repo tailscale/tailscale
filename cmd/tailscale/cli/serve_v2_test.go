@@ -1755,6 +1755,13 @@ func TestIsLegacyInvocation(t *testing.T) {
 			args:     []string{"localhost:3000"},
 			expected: false,
 		},
+		{
+			// "tailscale serve tcp://localhost:3000 off" was a common mistake;
+			// the port arg is not a valid port so we should not emit a hint.
+			subcmd:   serve,
+			args:     []string{"tcp://localhost:3000", "off"},
+			expected: false,
+		},
 	}
 
 	for idx, tt := range tests {
