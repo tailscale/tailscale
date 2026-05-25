@@ -206,6 +206,9 @@ func tailscaleIPFromArg(ctx context.Context, hostOrIP string) (ip string, self b
 	match := func(ps *ipnstate.PeerStatus) bool {
 		return strings.EqualFold(hostOrIP, dnsOrQuoteHostname(st, ps)) || hostOrIP == ps.DNSName
 	}
+	prefixMatch := func(ps *ipnstate.PeerStatus) bool {
+		return strings.HasPrefix(dnsOrQuoteHostname(st, ps), hostOrIP) 
+	}
 	for _, ps := range st.Peer {
 		if match(ps) {
 			if len(ps.TailscaleIPs) == 0 {
@@ -216,6 +219,14 @@ func tailscaleIPFromArg(ctx context.Context, hostOrIP string) (ip string, self b
 	}
 	if match(st.Self) && len(st.Self.TailscaleIPs) > 0 {
 		return st.Self.TailscaleIPs[0].String(), true, nil
+	}
+	for _, ps := range st.Peer {
+		if prefixMatch(ps) {
+			if len(ps.TailscaleIPs) == 0 {
+				return "", false, errors.New("node found but lacks an IP")
+			}
+			return ps.TailscaleIPs[0].String(), false, nil
+		}
 	}
 
 	// Finally, use DNS.
