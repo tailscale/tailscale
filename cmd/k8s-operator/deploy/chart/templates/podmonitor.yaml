@@ -1,0 +1,35 @@
+{{- if .Values.operatorConfig.podMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: operator
+  labels:
+    {{- range $key, $value := .Values.operatorConfig.podMonitor.additionalLabels }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  podMetricsEndpoints:
+  - port: metrics
+    path: /metrics
+    {{- with .Values.operatorConfig.podMonitor.interval }}
+    interval: {{ . }}
+    {{- end }}
+    {{- with .Values.operatorConfig.podMonitor.scrapeTimeout }}
+    scrapeTimeout: {{ . }}
+    {{- end }}
+    {{- with .Values.operatorConfig.podMonitor.relabelings }}
+    relabelings:
+    {{ toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.operatorConfig.podMonitor.metricRelabelings }}
+    metricRelabelings:
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      app: operator
+{{- end }}
