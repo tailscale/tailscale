@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -624,4 +625,141 @@ func TestURLDial(t *testing.T) {
 	if err := c.Connect(context.Background()); err != nil {
 		t.Fatalf("rc.Connect: %v", err)
 	}
+}
+
+// TestWatchdogTearsDownStaleConn covers the core behavior of the connection
+// watchdog: when the connection has been silent past the idle threshold and
+// the probe ping does not get a pong, the watchdog must close the connection
+// so the next Send/Recv reconnects.
+//
+// The "stale" condition is simulated by not running a Recv loop, so any pong
+// the server sends sits unread in the buffer and Ping times out — exactly
+// what would happen on a half-open TCP connection where writes are absorbed
+// by the kernel buffer but no reply ever returns.
+func TestWatchdogTearsDownStaleConn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		tstest.Replace(t, derphttp.WatchdogIdleThreshold, 100*time.Millisecond)
+		tstest.Replace(t, derphttp.WatchdogTickInterval, 25*time.Millisecond)
+		tstest.Replace(t, derphttp.WatchdogPongTimeout, 100*time.Millisecond)
+
+		_, s, ln := newTestServer(t, key.NewNode())
+		defer s.Close()
+		defer ln.Close()
+
+		c := newWatcherClient(t, key.NewNode(), "http://"+ln.Addr().String(), ln)
+		defer c.Close()
+
+		if err := c.Connect(context.Background()); err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+
+		// Drain the initial ServerInfoMessage so the connection is settled
+		// and lastRecv reflects a known time.
+		_, gen1, err := c.RecvDetail()
+		if err != nil {
+			t.Fatalf("first RecvDetail: %v", err)
+		}
+
+		// Watchdog runs on virtual time. Sleep past the idle threshold + pong
+		// timeout so the watchdog has time to tick, probe, fail, and tear
+		// down the connection.
+		time.Sleep(500 * time.Millisecond)
+		synctest.Wait()
+
+		// The next Recv triggers a reconnect; connGen must have advanced.
+		_, gen2, err := c.RecvDetail()
+		if err != nil {
+			t.Fatalf("RecvDetail after watchdog tear-down: %v", err)
+		}
+		if gen2 <= gen1 {
+			t.Fatalf("expected connGen to advance after watchdog reconnect; got gen1=%d gen2=%d", gen1, gen2)
+		}
+	})
+}
+
+// TestWatchdogQuietWhenTrafficFlowing verifies the watchdog does NOT tear
+// down a healthy connection: the watchdog's probe ping receives a pong and
+// the connection's generation does not advance even after several idle
+// thresholds elapse. This guards against false-positive reconnects.
+func TestWatchdogQuietWhenTrafficFlowing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		tstest.Replace(t, derphttp.WatchdogIdleThreshold, 100*time.Millisecond)
+		tstest.Replace(t, derphttp.WatchdogTickInterval, 25*time.Millisecond)
+		tstest.Replace(t, derphttp.WatchdogPongTimeout, 100*time.Millisecond)
+
+		_, s, ln := newTestServer(t, key.NewNode())
+		defer s.Close()
+		defer ln.Close()
+
+		c := newWatcherClient(t, key.NewNode(), "http://"+ln.Addr().String(), ln)
+		defer c.Close()
+
+		if err := c.Connect(context.Background()); err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+
+		// Drain the initial ServerInfoMessage so we know the connection is
+		// up and lastRecv has been bumped.
+		_, initialGen, err := c.RecvDetail()
+		if err != nil {
+			t.Fatalf("first RecvDetail: %v", err)
+		}
+
+		// Run a Recv loop so the watchdog's probe pongs are processed.
+		// It also records the latest connGen; any watchdog-induced reconnect
+		// would advance it past initialGen.
+		var latestGen atomic.Int64
+		latestGen.Store(int64(initialGen))
+		recvErr := make(chan error, 1)
+		go func() {
+			for {
+				_, gen, err := c.RecvDetail()
+				if err != nil {
+					recvErr <- err
+					return
+				}
+				latestGen.Store(int64(gen))
+			}
+		}()
+
+		// Sleep well past several idle thresholds + pong timeouts so the
+		// watchdog probes many times. With a working pong path, none should
+		// trigger a tear-down.
+		time.Sleep(time.Second)
+		synctest.Wait()
+
+		select {
+		case err := <-recvErr:
+			t.Fatalf("recv loop unexpectedly errored (watchdog false-positive?): %v", err)
+		default:
+		}
+		if got := int(latestGen.Load()); got != initialGen {
+			t.Fatalf("connGen advanced during idle: initial=%d, latest=%d (watchdog reconnected a healthy connection?)",
+				initialGen, got)
+		}
+	})
+}
+
+// TestWatchdogStopsOnClientClose ensures the watchdog goroutine exits when
+// the client is closed, so the test for goroutine leaks (and the synctest
+// bubble shutdown) does not block.
+func TestWatchdogStopsOnClientClose(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		tstest.Replace(t, derphttp.WatchdogIdleThreshold, 100*time.Millisecond)
+		tstest.Replace(t, derphttp.WatchdogTickInterval, 25*time.Millisecond)
+
+		_, s, ln := newTestServer(t, key.NewNode())
+		defer s.Close()
+		defer ln.Close()
+
+		c := newWatcherClient(t, key.NewNode(), "http://"+ln.Addr().String(), ln)
+		if err := c.Connect(context.Background()); err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		if err := c.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		// If the watchdog leaked, synctest.Wait would deadlock the bubble.
+		synctest.Wait()
+	})
 }

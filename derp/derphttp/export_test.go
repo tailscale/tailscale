@@ -14,6 +14,7 @@ func (c *Client) BreakConnection(brokenClient *Client) {
 	if c.client != brokenClient.client {
 		return
 	}
+	c.stopWatchdogLocked()
 	if c.netConn != nil {
 		c.netConn.Close()
 		c.netConn = nil
@@ -22,3 +23,9 @@ func (c *Client) BreakConnection(brokenClient *Client) {
 }
 
 var RetryInterval = &retryInterval
+
+var (
+	WatchdogIdleThreshold = &derpWatchdogIdleThreshold
+	WatchdogTickInterval  = &derpWatchdogTickInterval
+	WatchdogPongTimeout   = &derpWatchdogPongTimeout
+)
