@@ -1,0 +1,95 @@
+# -- Do not change! Only `1` is currently supported.
+replicas: 1
+
+subnetrouterConfig:
+  hostname: "tailscale-subnet-router"
+
+image:
+  # -- **Build your own image and override this!**
+  repository: ghcr.io/tailscale/tailscale
+  pullPolicy: Always
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+# -- List the secrets containing the Docker creds for images in this Chart
+imagePullSecrets: []
+# -- Optional override for app name
+nameOverride: ""
+# -- Optional override for app fullname
+fullnameOverride: ""
+
+tailscale:
+  auth:
+    # -- The name of the secret containing a Tailscale auth key
+    secretName: tailscale-subnet-router-secrets
+    # -- The key within the above Secret that contains a Tailscale auth key
+    secretKey: AUTH_KEY
+  state:
+    # -- The secret that the subnet router will store its state in
+    secretName: tailscale-subnet-router-state
+  # -- Routes for the subnet router to publish
+  routes:
+    # Default service CIDR
+    - "172.20.0.0/16"
+    # Default pod CIDR
+    - "10.125.0.0/16"
+
+  # -- Additional environment values
+  extraEnv: []
+  #   - name: TS_EXTRA_ARGS
+  #     value: "--advertise-exit-node"
+  #   - name: ARG_WITH_TPL
+  #     value: "{{ .Chart.Name }}"
+
+# -- The service account to create or attach
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# -- Additional volumes to add to the pod
+volumes: []
+
+# -- Additional volumes to add to mount to the primary container
+volumeMounts: []
+
+# -- Additional annotations for the pods
+podAnnotations: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext:
+  # -- The UID of the user to run the router as
+  runAsUser: 1000
+  # -- The GID of the user to run the router as
+  runAsGroup: 1000
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+
+# -- Resources to allocate to the pods
+resources: {}
+#  limits:
+#    cpu: 50m
+#    memory: 64Mi
+#  requests:
+#    cpu: 50m
+#    memory: 64Mi
+
+# -- Node labels for [pod assignment](https://kubernetes.io/docs/user-guide/node-selection/)
+nodeSelector: {}
+
+# -- [Tolerations](https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/)
+# for pod assignment
+tolerations: []
+
+# -- [Affinity](https://kubernetes.io/docs/concepts/configuration/assign-pod-node/#affinity-and-anti-affinity)
+# for pod assignment
+affinity: {}
