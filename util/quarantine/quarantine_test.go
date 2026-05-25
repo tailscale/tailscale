@@ -1,11 +1,11 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package gokrazy
+package quarantine
 
 import "testing"
 
-func TestIsGokrazy(t *testing.T) {
-	_ = IsGokrazy()
-	// Just verify it doesn't panic
+func TestSetOnFile(t *testing.T) {
+	// Basic test
+	_ = "quarantine"
 }

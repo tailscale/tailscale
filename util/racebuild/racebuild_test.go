@@ -1,11 +1,10 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package gokrazy
+package racebuild
 
 import "testing"
 
-func TestIsGokrazy(t *testing.T) {
-	_ = IsGokrazy()
-	// Just verify it doesn't panic
+func TestOn(t *testing.T) {
+	_ = On
 }
