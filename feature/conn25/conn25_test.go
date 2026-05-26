@@ -458,6 +458,9 @@ func TestReconfig(t *testing.T) {
 		tailcfg.NodeCapability(AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
 			tailcfg.RawMessage(rawCfg),
 		},
+		tailcfg.NodeCapability(AppConnectorsExperimentalIPPoolsAttrName): []tailcfg.RawMessage{
+			tailcfg.RawMessage("{}"),
+		},
 	}
 
 	c := newConn25(logger.Discard)
@@ -485,11 +488,26 @@ func TestReconfig(t *testing.T) {
 	}
 }
 
+func getRawMessages[T any](t *testing.T, attrs []T) []tailcfg.RawMessage {
+	t.Helper()
+	toRet := make([]tailcfg.RawMessage, 0, len(attrs))
+	for _, attr := range attrs {
+		bs, err := json.Marshal(attr)
+		if err != nil {
+			t.Fatalf("unexpected error in test setup: %v", err)
+		}
+		toRet = append(toRet, tailcfg.RawMessage(bs))
+	}
+	return toRet
+}
+
 func TestConfigFromNodeView(t *testing.T) {
 	for _, tt := range []struct {
 		name               string
-		rawCfg             string
-		cfg                []appctype.Conn25Attr
+		rawAppCfg          string
+		appCfg             []appctype.Conn25Attr
+		rawPoolsCfg        string
+		poolsCfg           []appctype.Conn25PoolsAttr
 		tags               []string
 		wantErr            bool
 		wantAppsByDomain   map[dnsname.FQDN][]string
@@ -497,17 +515,27 @@ func TestConfigFromNodeView(t *testing.T) {
 		wantSelfAppNames   set.Set[string]
 	}{
 		{
-			name:    "bad-config",
-			rawCfg:  `bad`,
-			wantErr: true,
+			name:        "bad-app-config",
+			rawAppCfg:   `bad`,
+			rawPoolsCfg: "{}",
+			wantErr:     true,
+		},
+		{
+			name: "bad-pool-config",
+			appCfg: []appctype.Conn25Attr{
+				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}},
+			},
+			rawPoolsCfg: "bad",
+			wantErr:     true,
 		},
 		{
 			name: "simple",
-			cfg: []appctype.Conn25Attr{
+			appCfg: []appctype.Conn25Attr{
 				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}},
 				{Name: "two", Domains: []string{"b.example.com"}, Connectors: []string{"tag:two"}},
 			},
-			tags: []string{"tag:one"},
+			rawPoolsCfg: "{}",
+			tags:        []string{"tag:one"},
 			wantAppsByDomain: map[dnsname.FQDN][]string{
 				"a.example.com.": {"one"},
 				"b.example.com.": {"two"},
@@ -517,13 +545,14 @@ func TestConfigFromNodeView(t *testing.T) {
 		},
 		{
 			name: "more-complex-with-connector-self-domains",
-			cfg: []appctype.Conn25Attr{
+			appCfg: []appctype.Conn25Attr{
 				{Name: "one", Domains: []string{"1.a.example.com", "1.b.example.com"}, Connectors: []string{"tag:one", "tag:onea"}},
 				{Name: "two", Domains: []string{"2.b.example.com", "2.c.example.com"}, Connectors: []string{"tag:two", "tag:twoa"}},
 				{Name: "three", Domains: []string{"1.b.example.com", "1.c.example.com"}, Connectors: []string{}},
 				{Name: "four", Domains: []string{"4.b.example.com", "4.d.example.com"}, Connectors: []string{"tag:four"}},
 			},
-			tags: []string{"tag:onea", "tag:four", "tag:unrelated"},
+			rawPoolsCfg: "{}",
+			tags:        []string{"tag:onea", "tag:four", "tag:unrelated"},
 			wantAppsByDomain: map[dnsname.FQDN][]string{
 				"1.a.example.com.": {"one"},
 				"1.b.example.com.": {"one", "three"},
@@ -538,11 +567,12 @@ func TestConfigFromNodeView(t *testing.T) {
 		},
 		{
 			name: "eligible-connector-no-matching-tag-no-self-domains",
-			cfg: []appctype.Conn25Attr{
+			appCfg: []appctype.Conn25Attr{
 				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}},
 				{Name: "two", Domains: []string{"b.example.com"}, Connectors: []string{"tag:two"}},
 			},
-			tags: []string{"tag:unrelated"},
+			rawPoolsCfg: "{}",
+			tags:        []string{"tag:unrelated"},
 			wantAppsByDomain: map[dnsname.FQDN][]string{
 				"a.example.com.": {"one"},
 				"b.example.com.": {"two"},
@@ -550,11 +580,12 @@ func TestConfigFromNodeView(t *testing.T) {
 			wantAppsByWCDomain: map[dnsname.FQDN][]string{}},
 		{
 			name: "wildcard-collapse-and-deduplication",
-			cfg: []appctype.Conn25Attr{
+			appCfg: []appctype.Conn25Attr{
 				{Name: "one", Domains: []string{"*.example.com", "example.com"}, Connectors: []string{"tag:one"}},
 				{Name: "two", Domains: []string{"example.com", "sub.example.com"}, Connectors: []string{"tag:two"}},
 			},
-			tags: []string{"tag:one", "tag:two"},
+			rawPoolsCfg: "{}",
+			tags:        []string{"tag:one", "tag:two"},
 			wantAppsByDomain: map[dnsname.FQDN][]string{
 				"example.com.":     {"one", "two"},
 				"sub.example.com.": {"two"},
@@ -569,10 +600,11 @@ func TestConfigFromNodeView(t *testing.T) {
 			// domain and the app name must appear exactly once in appNamesByDomain,
 			// not once per case variant.
 			name: "case-variant-exact-domains-deduplicated-within-app",
-			cfg: []appctype.Conn25Attr{
+			appCfg: []appctype.Conn25Attr{
 				{Name: "one", Domains: []string{"EXAMPLE.com", "example.COM", "Example.COM"}, Connectors: []string{"tag:one"}},
 			},
-			tags: []string{"tag:one"},
+			rawPoolsCfg: "{}",
+			tags:        []string{"tag:one"},
 			wantAppsByDomain: map[dnsname.FQDN][]string{
 				"example.com.": {"one"},
 			},
@@ -583,29 +615,39 @@ func TestConfigFromNodeView(t *testing.T) {
 			// Same as above but for wildcard domains: *.EXAMPLE.com and *.example.COM
 			// must collapse to a single entry in appNamesByWCDomain.
 			name: "case-variant-wildcard-domains-deduplicated-within-app",
-			cfg: []appctype.Conn25Attr{
+			appCfg: []appctype.Conn25Attr{
 				{Name: "one", Domains: []string{"*.EXAMPLE.com", "*.example.COM"}, Connectors: []string{"tag:one"}},
 			},
+			rawPoolsCfg:        "{}",
 			tags:               []string{"tag:one"},
 			wantAppsByDomain:   map[dnsname.FQDN][]string{},
 			wantAppsByWCDomain: map[dnsname.FQDN][]string{"example.com.": {"one"}},
 			wantSelfAppNames:   set.SetOf([]string{"one"}),
 		},
+		{
+			name: "too-many-pools",
+			appCfg: []appctype.Conn25Attr{
+				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}},
+			},
+			poolsCfg: []appctype.Conn25PoolsAttr{
+				{},
+				{},
+			},
+			wantErr: true,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := []tailcfg.RawMessage{tailcfg.RawMessage(tt.rawCfg)}
-			if tt.cfg != nil {
-				cfg = []tailcfg.RawMessage{}
-				for _, attr := range tt.cfg {
-					bs, err := json.Marshal(attr)
-					if err != nil {
-						t.Fatalf("unexpected error in test setup: %v", err)
-					}
-					cfg = append(cfg, tailcfg.RawMessage(bs))
-				}
+			appCfg := []tailcfg.RawMessage{tailcfg.RawMessage(tt.rawAppCfg)}
+			if tt.appCfg != nil {
+				appCfg = getRawMessages(t, tt.appCfg)
+			}
+			poolsCfg := []tailcfg.RawMessage{tailcfg.RawMessage(tt.rawPoolsCfg)}
+			if tt.poolsCfg != nil {
+				poolsCfg = getRawMessages(t, tt.poolsCfg)
 			}
 			capMap := tailcfg.NodeCapMap{
-				tailcfg.NodeCapability(AppConnectorsExperimentalAttrName): cfg,
+				tailcfg.NodeCapability(AppConnectorsExperimentalAttrName):        appCfg,
+				tailcfg.NodeCapability(AppConnectorsExperimentalIPPoolsAttrName): poolsCfg,
 			}
 			sn := (&tailcfg.Node{
 				CapMap: capMap,
@@ -639,6 +681,7 @@ func TestGetAppsForDomainName(t *testing.T) {
 			{Name: "four", Domains: []string{"a.sub.example.com"}, Connectors: []string{"tag:four"}},
 			{Name: "self-routed", Domains: []string{"*.wildcard.com", "exact-match.com"}, Connectors: []string{"tag:self-routed"}},
 		},
+		appctype.Conn25PoolsAttr{},
 		[]string{"tag:self-routed"},
 	)
 
@@ -732,7 +775,7 @@ func TestGetAppsForDomainName(t *testing.T) {
 	}
 }
 
-func makeSelfNode(t *testing.T, attrs []appctype.Conn25Attr, tags []string) tailcfg.NodeView {
+func makeSelfNode(t *testing.T, attrs []appctype.Conn25Attr, pools appctype.Conn25PoolsAttr, tags []string) tailcfg.NodeView {
 	t.Helper()
 	cfg := make([]tailcfg.RawMessage, 0, len(attrs))
 	for i, attr := range attrs {
@@ -742,8 +785,13 @@ func makeSelfNode(t *testing.T, attrs []appctype.Conn25Attr, tags []string) tail
 		}
 		cfg = append(cfg, tailcfg.RawMessage(bs))
 	}
+	poolsBytes, err := json.Marshal(pools)
+	if err != nil {
+		t.Fatalf("unexpected error marshaling pools in test setup: %v", err)
+	}
 	capMap := tailcfg.NodeCapMap{
-		tailcfg.NodeCapability(AppConnectorsExperimentalAttrName): cfg,
+		tailcfg.NodeCapability(AppConnectorsExperimentalAttrName):        cfg,
+		tailcfg.NodeCapability(AppConnectorsExperimentalIPPoolsAttrName): {tailcfg.RawMessage(poolsBytes)},
 	}
 
 	return (&tailcfg.Node{
@@ -1095,14 +1143,15 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 				dnsResp = makeV6DNSResponse(t, tt.domain, tt.v6Addrs)
 			}
 			sn := makeSelfNode(t, []appctype.Conn25Attr{{
-				Name:            "app1",
-				Connectors:      []string{"tag:woo"},
-				Domains:         tt.appDomains,
+				Name:       "app1",
+				Connectors: []string{"tag:woo"},
+				Domains:    tt.appDomains,
+			}}, appctype.Conn25PoolsAttr{
 				V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10"), v4RangeFrom("20", "30")},
 				V6MagicIPPool:   []netipx.IPRange{v6RangeFrom("0", "10"), v6RangeFrom("20", "30")},
 				V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
 				V6TransitIPPool: []netipx.IPRange{v6RangeFrom("40", "50")},
-			}}, tt.selfTags)
+			}, tt.selfTags)
 
 			c := newConn25(logger.Discard)
 			cfg := mustConfig(t, sn)
@@ -1128,14 +1177,15 @@ func TestMapDNSResponseSetsExpiryBasedOnTTL(t *testing.T) {
 	domainName := configuredDomain + "."
 	dnsMessageName := dnsmessage.MustNewName(domainName)
 	sn := makeSelfNode(t, []appctype.Conn25Attr{{
-		Name:            "app1",
-		Connectors:      []string{"tag:woo"},
-		Domains:         []string{configuredDomain},
+		Name:       "app1",
+		Connectors: []string{"tag:woo"},
+		Domains:    []string{configuredDomain},
+	}}, appctype.Conn25PoolsAttr{
 		V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10")},
 		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
 		V6MagicIPPool:   []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6812:100"), netip.MustParseAddr("2606:4700::6812:1ff"))},
 		V6TransitIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6813:100"), netip.MustParseAddr("2606:4700::6813:1ff"))},
-	}}, nil)
+	}, nil)
 
 	c := newConn25(logger.Discard)
 	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
@@ -1410,7 +1460,7 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 		Name:       "app1",
 		Connectors: []string{"tag:woo"},
 		Domains:    []string{"example.com"},
-	}}, []string{})
+	}}, appctype.Conn25PoolsAttr{}, []string{})
 
 	cfg := mustConfig(t, sn)
 	ext.conn25.reconfig(cfg)
@@ -1484,14 +1534,15 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 	domainName := configuredDomain + "."
 	dnsMessageName := dnsmessage.MustNewName(domainName)
 	sn := makeSelfNode(t, []appctype.Conn25Attr{{
-		Name:            "app1",
-		Connectors:      []string{"tag:connector"},
-		Domains:         []string{configuredDomain},
+		Name:       "app1",
+		Connectors: []string{"tag:connector"},
+		Domains:    []string{configuredDomain},
+	}}, appctype.Conn25PoolsAttr{
 		V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10")},
 		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
 		V6MagicIPPool:   []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6812:100"), netip.MustParseAddr("2606:4700::6812:1ff"))},
 		V6TransitIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6813:100"), netip.MustParseAddr("2606:4700::6813:1ff"))},
-	}}, []string{})
+	}, []string{})
 
 	cfg := mustConfig(t, sn)
 
@@ -2011,7 +2062,7 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 			Connectors: []string{"tag:hoo"},
 			Domains:    []string{"hoo.example.com"},
 		},
-	}, []string{})
+	}, appctype.Conn25PoolsAttr{}, []string{})
 
 	cfg := mustConfig(t, sn)
 	ext.conn25.reconfig(cfg)
@@ -2187,10 +2238,10 @@ func TestTransitIPConnMapping(t *testing.T) {
 }
 
 func TestClientTransitIPForMagicIP(t *testing.T) {
-	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+	sn := makeSelfNode(t, []appctype.Conn25Attr{{Name: "app1"}}, appctype.Conn25PoolsAttr{
 		V4MagicIPPool: []netipx.IPRange{v4RangeFrom("0", "10")}, // 100.64.0.0 - 100.64.0.10
 		V6MagicIPPool: []netipx.IPRange{v6RangeFrom("0", "10")},
-	}}, []string{})
+	}, []string{})
 	cfg := mustConfig(t, sn)
 
 	mappedMip := netip.MustParseAddr("100.64.0.0")
@@ -2278,9 +2329,9 @@ func TestClientTransitIPForMagicIP(t *testing.T) {
 }
 
 func TestConnectorRealIPForTransitIPConnection(t *testing.T) {
-	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+	sn := makeSelfNode(t, []appctype.Conn25Attr{{Name: "app1"}}, appctype.Conn25PoolsAttr{
 		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")}, // 100.64.0.40 - 100.64.0.50
-	}}, []string{})
+	}, []string{})
 	cfg := mustConfig(t, sn)
 
 	mappedSrc := netip.MustParseAddr("100.0.0.1")
@@ -2421,12 +2472,13 @@ func TestConnectorPacketFilterAllow(t *testing.T) {
 
 func TestGetMagicRange(t *testing.T) {
 	sn := makeSelfNode(t, []appctype.Conn25Attr{{
-		Name:          "app1",
-		Connectors:    []string{"tag:woo"},
-		Domains:       []string{"example.com"},
+		Name:       "app1",
+		Connectors: []string{"tag:woo"},
+		Domains:    []string{"example.com"},
+	}}, appctype.Conn25PoolsAttr{
 		V4MagicIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("0.0.0.1"), netip.MustParseAddr("0.0.0.3"))},
 		V6MagicIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("::1"), netip.MustParseAddr("::3"))},
-	}}, []string{})
+	}, []string{})
 	cfg := mustConfig(t, sn)
 	c := newConn25(t.Logf)
 	c.reconfig(cfg)
@@ -2479,14 +2531,15 @@ func TestReconfigDoesNotReissueInUseAddresses(t *testing.T) {
 	afterRangeV6 := mustRange("::4", "::7")
 	makeNodeFromMagicRange := func(v4, v6 netipx.IPRange) tailcfg.NodeView {
 		return makeSelfNode(t, []appctype.Conn25Attr{{
-			Name:            appName,
-			Connectors:      []string{"tag:woo"},
-			Domains:         []string{"example.com"},
+			Name:       appName,
+			Connectors: []string{"tag:woo"},
+			Domains:    []string{"example.com"},
+		}}, appctype.Conn25PoolsAttr{
 			V4MagicIPPool:   []netipx.IPRange{v4},
 			V6MagicIPPool:   []netipx.IPRange{v6},
 			V4TransitIPPool: []netipx.IPRange{mustRange("169.254.0.0", "169.254.0.10")},
 			V6TransitIPPool: []netipx.IPRange{mustRange("fd7a:115c:a1e0:a99c:0200::", "fd7a:115c:a1e0:a99c:0200::10")},
-		}}, []string{})
+		}, []string{})
 	}
 	domain := must.Get(dnsname.ToFQDN("example.com."))
 

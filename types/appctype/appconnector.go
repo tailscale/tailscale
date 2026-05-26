@@ -104,7 +104,10 @@ type Conn25Attr struct {
 	// Connectors enumerates the app connectors which service these domains.
 	// These can either be "*" to match any advertising connector, or a
 	// tag of the form tag:<tag-name>.
-	Connectors      []string         `json:"connectors,omitempty"`
+	Connectors []string `json:"connectors,omitempty"`
+}
+
+type Conn25PoolsAttr struct {
 	V4MagicIPPool   []netipx.IPRange `json:"v4MagicIPPool,omitempty"`
 	V4TransitIPPool []netipx.IPRange `json:"v4TransitIPPool,omitempty"`
 	V6MagicIPPool   []netipx.IPRange `json:"v6MagicIPPool,omitempty"`
