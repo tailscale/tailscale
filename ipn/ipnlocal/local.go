@@ -1417,6 +1417,7 @@ func (b *LocalBackend) updateStatusLocked(sb *ipnstate.StatusBuilder) {
 		}
 		if nm != nil {
 			s.CertDomains = append([]string(nil), nm.DNS.CertDomains...)
+			s.ExtraRecords = append([]tailcfg.DNSRecord(nil), nm.DNS.ExtraRecords...)
 			s.MagicDNSSuffix = nm.MagicDNSSuffix()
 			if s.CurrentTailnet == nil {
 				s.CurrentTailnet = &ipnstate.TailnetStatus{}
@@ -2325,6 +2326,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	defer b.mu.Unlock()
 
 	cn := b.currentNode()
+	needsAuthReconfig := netmapDeltaNeedsAuthReconfig(cn, muts)
 	cn.UpdateNetmapDelta(muts)
 
 	// Dispatch Upsert/Remove per-peer to magicsock, and any per-field
@@ -2348,6 +2350,9 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		}
 	}
 	ms.UpdateNetmapDelta(muts)
+	if needsAuthReconfig {
+		b.authReconfigLocked()
+	}
 
 	// If auto exit nodes are enabled and our exit node went offline,
 	// we need to schedule picking a new one.
@@ -2409,6 +2414,33 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		notify = new(ipn.Notify)
 	}
 	return true
+}
+
+func netmapDeltaNeedsAuthReconfig(cn *nodeBackend, muts []netmap.NodeMutation) bool {
+	for _, m := range muts {
+		switch m := m.(type) {
+		case netmap.NodeMutationUpsert:
+			old, ok := cn.NodeByID(m.Node.ID())
+			if !ok {
+				continue
+			}
+			if peerRouteConfigChanged(old, m.Node) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func peerRouteConfigChanged(old, new tailcfg.NodeView) bool {
+	return old.Key() != new.Key() ||
+		old.DiscoKey() != new.DiscoKey() ||
+		!views.SliceEqual(old.AllowedIPs(), new.AllowedIPs()) ||
+		old.Expired() != new.Expired() ||
+		old.IsJailed() != new.IsJailed() ||
+		old.IsWireGuardOnly() != new.IsWireGuardOnly() ||
+		old.SelfNodeV4MasqAddrForThisPeer() != new.SelfNodeV4MasqAddrForThisPeer() ||
+		old.SelfNodeV6MasqAddrForThisPeer() != new.SelfNodeV6MasqAddrForThisPeer()
 }
 
 // UpdatePacketFilter implements [controlclient.PacketFilterUpdater].
@@ -2506,7 +2538,7 @@ func mutationsAreWorthyOfRecalculatingSuggestedExitNode(muts []netmap.NodeMutati
 // [tailcfg.PeerChange] for use in [ipn.Notify.PeerChangedPatch]. Multiple
 // mutations against the same node are merged into a single PeerChange.
 //
-// Add/Remove mutations are skipped (they ride
+// Upsert/Remove mutations are skipped (they ride
 // [ipn.Notify.PeersChanged]/[ipn.Notify.PeersRemoved]). Any other mutation
 // type that doesn't fit a [tailcfg.PeerChange] causes ok=false; the caller
 // should fall back to a full netmap rebuild.
@@ -5662,7 +5694,7 @@ func (b *LocalBackend) authReconfigLocked() {
 
 	cn := b.currentNode()
 
-	nm := cn.NetMap()
+	nm := cn.netMapWithPeers()
 	if nm == nil {
 		b.logf("[v1] authReconfig: netmap not yet valid. Skipping.")
 		return

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1571,6 +1572,48 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEngineReconfigOnPeerRouteDelta(t *testing.T) {
+	connect := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: true}, WantRunningSet: true}
+	peerAddr := netip.MustParsePrefix("100.64.1.1/32")
+	vipAddr := netip.MustParsePrefix("100.99.99.99/32")
+
+	peer := makePeer(1, withName("node-1"), withAddresses(peerAddr))
+	peerStruct := peer.AsStruct()
+	peerStruct.AllowedIPs = []netip.Prefix{peerAddr}
+	peer = peerStruct.View()
+
+	nm := buildNetmapWithPeers(
+		makePeer(2, withName("node-2"), withAddresses(netip.MustParsePrefix("100.64.1.2/32"))),
+		peer,
+	)
+
+	lb, engine, cc := newLocalBackendWithMockEngineAndControl(t, false)
+	mustDo(t)(lb.Start(ipn.Options{}))
+	mustDo2(t)(lb.EditPrefs(connect))
+	cc().authenticated(nm)
+
+	replacement := nm.Peers[0].AsStruct()
+	replacement.AllowedIPs = append(replacement.AllowedIPs, vipAddr)
+	if !lb.UpdateNetmapDelta([]netmap.NodeMutation{netmap.NodeMutationUpsert{Node: replacement.View()}}) {
+		t.Fatal("UpdateNetmapDelta = false, want true")
+	}
+
+	cfg := engine.Config()
+	if cfg == nil {
+		t.Fatal("engine config is nil")
+	}
+	for _, peer := range cfg.Peers {
+		if peer.PublicKey != replacement.Key {
+			continue
+		}
+		if !slices.Contains(peer.AllowedIPs, vipAddr) {
+			t.Fatalf("peer AllowedIPs = %v; want %v", peer.AllowedIPs, vipAddr)
+		}
+		return
+	}
+	t.Fatalf("engine config missing peer %v", replacement.Key.ShortString())
 }
 
 // TestSendPreservesAuthURL tests that wgengine updates arriving in the middle of

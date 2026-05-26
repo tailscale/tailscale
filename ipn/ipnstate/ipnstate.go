@@ -73,6 +73,9 @@ type Status struct {
 	// trailing periods, and without any "_acme-challenge." prefix.
 	CertDomains []string
 
+	// ExtraRecords contains extra DNS records to add to the DNS resolver.
+	ExtraRecords []tailcfg.DNSRecord
+
 	// Peer is the state of each peer, keyed by each peer's current public key.
 	Peer map[key.NodePublic]*PeerStatus
 

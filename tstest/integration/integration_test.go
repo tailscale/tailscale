@@ -914,6 +914,96 @@ func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
 	d2.MustCleanShutdown(t)
 }
 
+// TestIncrementalMapUpdatePeerAllowedIPsReachability verifies that an incremental
+// peer upsert changing a peer's AllowedIPs reprograms the local WireGuard config.
+// This covers VIP additions at runtime, where the VIP route is not reachable
+// before the map mutation but is reachable over TSMP afterward.
+func TestIncrementalMapUpdatePeerAllowedIPsReachability(t *testing.T) {
+	tstest.Shard(t)
+	tstest.Parallel(t)
+	env := NewTestEnv(t)
+
+	n1 := NewTestNode(t, env)
+	d1 := n1.StartDaemon()
+	defer d1.MustCleanShutdown(t)
+	n1.AwaitListening()
+	n1.MustUp()
+	n1.AwaitRunning()
+
+	n2 := NewTestNode(t, env)
+	d2 := n2.StartDaemon()
+	defer d2.MustCleanShutdown(t)
+	n2.AwaitListening()
+	n2.MustUp()
+	n2.AwaitRunning()
+
+	n1Status := n1.MustStatus()
+	n2Status := n2.MustStatus()
+	tnode1 := env.Control.Node(n1Status.Self.PublicKey)
+	if tnode1 == nil {
+		t.Fatalf("control has no node for %v", n1Status.Self.PublicKey)
+	}
+	tnode2 := env.Control.Node(n2Status.Self.PublicKey)
+	if tnode2 == nil {
+		t.Fatalf("control has no node for %v", n2Status.Self.PublicKey)
+	}
+
+	vip := netip.MustParseAddr("100.99.99.99")
+	vipPrefix := netip.PrefixFrom(vip, vip.BitLen())
+
+	if err := n1.Tailscale("ping", "--tsmp", "--c=1", "--timeout=5s", n2.AwaitIP4().String()).Run(); err != nil {
+		t.Fatalf("initial ping n1 -> n2: %v", err)
+	}
+	if err := n1.Tailscale("ping", "--tsmp", "--c=1", "--timeout=1s", vip.String()).Run(); err == nil {
+		t.Fatalf("ping n1 -> n2 VIP %v before AllowedIPs delta succeeded unexpectedly", vip)
+	}
+
+	mr, err := env.Control.MapResponse(&tailcfg.MapRequest{NodeKey: tnode1.Key})
+	if err != nil {
+		t.Fatalf("MapResponse: %v", err)
+	}
+	var replacement *tailcfg.Node
+	for _, p := range mr.Peers {
+		if p.ID == tnode2.ID {
+			replacement = p.Clone()
+			break
+		}
+	}
+	if replacement == nil {
+		t.Fatalf("MapResponse for n1 has no peer n2")
+	}
+
+	replacement.AllowedIPs = append(replacement.AllowedIPs, vipPrefix)
+	if !env.Control.AddRawMapResponse(tnode1.Key, &tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{replacement},
+	}) {
+		t.Fatalf("failed to add map response")
+	}
+
+	if err := tstest.WaitFor(5*time.Second, func() error {
+		st := n1.MustStatus()
+		p, ok := st.Peer[tnode2.Key]
+		if !ok {
+			return fmt.Errorf("node 1 doesn't see node 2 as a peer")
+		}
+		if p.AllowedIPs == nil {
+			return fmt.Errorf("node 1 sees node 2 with no AllowedIPs")
+		}
+		for _, allowedIP := range p.AllowedIPs.All() {
+			if allowedIP == vipPrefix {
+				return nil
+			}
+		}
+		return fmt.Errorf("node 1 sees node 2 AllowedIPs %v; want %v", p.AllowedIPs, vipPrefix)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := n1.Tailscale("ping", "--tsmp", "--c=1", "--timeout=5s", vip.String()).Run(); err != nil {
+		t.Fatalf("ping n1 -> n2 VIP %v after AllowedIPs delta: %v", vip, err)
+	}
+}
+
 func TestNodeAddressIPFields(t *testing.T) {
 	tstest.Shard(t)
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7008")

@@ -5,6 +5,7 @@ package ipn
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -35,15 +36,27 @@ const (
 // ID tokens used by the Android client.
 const GoogleIDTokenType = "ts_android_google_login"
 
+var stateStrings = [...]string{
+	"NoState",
+	"InUseOtherUser",
+	"NeedsLogin",
+	"NeedsMachineAuth",
+	"Stopped",
+	"Starting",
+	"Running",
+}
+
 func (s State) String() string {
-	return [...]string{
-		"NoState",
-		"InUseOtherUser",
-		"NeedsLogin",
-		"NeedsMachineAuth",
-		"Stopped",
-		"Starting",
-		"Running"}[s]
+	return stateStrings[s]
+}
+
+// StateFromString parses s as a State string value.
+func StateFromString(s string) (_ State, ok bool) {
+	i := slices.Index(stateStrings[:], s)
+	if i == -1 {
+		return NoState, false
+	}
+	return State(i), true
 }
 
 // EngineStatus contains WireGuard engine stats.
