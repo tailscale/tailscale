@@ -10,6 +10,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"embed"
@@ -23,8 +24,10 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/envknob"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tempfork/acme"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -247,6 +250,87 @@ func TestValidLookingCertDomain(t *testing.T) {
 		if got := validLookingCertDomain(tt.in); got != tt.want {
 			t.Errorf("validLookingCertDomain(%q) = %v, want %v", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestACMETLSALPNCertHook(t *testing.T) {
+	b := newTestLocalBackend(t)
+	cert := &tls.Certificate{}
+	cleanup := b.storeACMETLSALPNCert("example.com", cert)
+	defer cleanup()
+
+	if got, ok := b.getACMETLSALPNCert(&tls.ClientHelloInfo{
+		ServerName:      "example.com",
+		SupportedProtos: []string{acme.ALPNProto},
+	}); !ok || got != cert {
+		t.Fatalf("getACMETLSALPNCert = %v, %v; want stored cert, true", got, ok)
+	}
+	if _, ok := b.getACMETLSALPNCert(&tls.ClientHelloInfo{
+		ServerName:      "example.com",
+		SupportedProtos: []string{"http/1.1"},
+	}); ok {
+		t.Fatal("getACMETLSALPNCert without acme ALPN = ok, want false")
+	}
+	if _, ok := b.getACMETLSALPNCert(&tls.ClientHelloInfo{
+		ServerName:      "other.example.com",
+		SupportedProtos: []string{acme.ALPNProto},
+	}); ok {
+		t.Fatal("getACMETLSALPNCert for other name = ok, want false")
+	}
+
+	otherBackend := newTestLocalBackend(t)
+	if _, ok := otherBackend.getACMETLSALPNCert(&tls.ClientHelloInfo{
+		ServerName:      "example.com",
+		SupportedProtos: []string{acme.ALPNProto},
+	}); ok {
+		t.Fatal("getACMETLSALPNCert on different LocalBackend = ok, want false")
+	}
+}
+
+func TestServeTLSConfigNextProtos(t *testing.T) {
+	b := newTestLocalBackend(t)
+	getCert := func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		return nil, nil
+	}
+
+	httpsConfig := b.serveTLSConfig(getCert, serveTLSNextProtos())
+	if got, want := httpsConfig.NextProtos, []string{"h2", "http/1.1"}; !slices.Equal(got, want) {
+		t.Fatalf("HTTPS NextProtos = %q; want %q", got, want)
+	}
+
+	tcpForwardConfig := b.serveTLSConfig(getCert, nil)
+	if got := tcpForwardConfig.NextProtos; got != nil {
+		t.Fatalf("TLS-terminated TCP forward NextProtos = %q; want nil", got)
+	}
+}
+
+func TestShouldUseACMETLSALPN01(t *testing.T) {
+	const domain = "example.com"
+	b := newTestLocalBackend(t)
+	b.mu.Lock()
+	b.serveConfig = (&ipn.ServeConfig{
+		AllowFunnel: map[ipn.HostPort]bool{
+			domain + ":443": true,
+		},
+	}).View()
+	b.mu.Unlock()
+
+	previous := &TLSCertKeyPair{}
+	if !b.shouldUseACMETLSALPN01(domain, previous, t.Logf) {
+		t.Fatal("shouldUseACMETLSALPN01 = false, want true")
+	}
+	if b.shouldUseACMETLSALPN01(domain, nil, t.Logf) {
+		t.Fatal("shouldUseACMETLSALPN01 without cached cert = true, want false")
+	}
+	if b.shouldUseACMETLSALPN01("*."+domain, previous, t.Logf) {
+		t.Fatal("shouldUseACMETLSALPN01 for wildcard = true, want false")
+	}
+
+	b.mu.Lock()
+	b.serveConfig = (&ipn.ServeConfig{}).View()
+	b.mu.Unlock()
+	if b.shouldUseACMETLSALPN01(domain, previous, t.Logf) {
+		t.Fatal("shouldUseACMETLSALPN01 without Funnel = true, want false")
 	}
 }
 

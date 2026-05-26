@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"cmp"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -244,6 +245,13 @@ type LocalBackend struct {
 	// It is set once during initialization, and can be nil if SetTCPHandlerForFunnelFlow
 	// is never called.
 	getTCPHandlerForFunnelFlow func(srcAddr netip.AddrPort, dstPort uint16) (handler func(net.Conn))
+
+	// pendingACMETLSALPNCerts maps SNI names to short-lived ACME tls-alpn-01
+	// challenge certificates while an ACME order is waiting for validation.
+	// Entries are deleted by the cleanup function returned from
+	// storeACMETLSALPNCert after the challenge validation path finishes,
+	// whether it succeeds or fails.
+	pendingACMETLSALPNCerts syncs.Map[string, *tls.Certificate] // "foo.bar.com" => challenge cert
 
 	containsViaIPFuncAtomic                 syncs.AtomicValue[func(netip.Addr) bool]     // TODO(nickkhyl): move to nodeBackend
 	shouldInterceptTCPPortAtomic            syncs.AtomicValue[func(uint16) bool]         // TODO(nickkhyl): move to nodeBackend
