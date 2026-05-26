@@ -1317,6 +1317,56 @@ func (nu *countingNetmapUpdater) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	nu.full.Add(1)
 }
 
+type countingDeltaNetmapUpdater struct {
+	countingNetmapUpdater
+	delta atomic.Int64
+}
+
+func (nu *countingDeltaNetmapUpdater) UpdateNetmapDelta([]netmap.NodeMutation) bool {
+	nu.delta.Add(1)
+	return true
+}
+
+func TestExistingPeerReplacementHandledIncrementally(t *testing.T) {
+	nu := &countingDeltaNetmapUpdater{}
+	ms := newTestMapSession(t, nu)
+	ctx := t.Context()
+
+	peer := &tailcfg.Node{
+		ID:         1,
+		StableID:   "peer",
+		Name:       "peer.example.ts.net.",
+		Key:        key.NewNode().Public(),
+		DiscoKey:   key.NewDisco().Public(),
+		Addresses:  []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		AllowedIPs: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		Hostinfo:   (&tailcfg.Hostinfo{}).View(),
+	}
+	if err := ms.handleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
+		Node:  &tailcfg.Node{Name: "self.example.ts.net."},
+		Peers: []*tailcfg.Node{peer},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := nu.full.Load(); got != 1 {
+		t.Fatalf("full updates after initial response = %d; want 1", got)
+	}
+
+	replacement := peer.Clone()
+	replacement.AllowedIPs = append(replacement.AllowedIPs, netip.MustParsePrefix("100.64.0.2/32"))
+	if err := ms.handleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{replacement},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := nu.full.Load(); got != 1 {
+		t.Errorf("full updates after route-changing peer replacement = %d; want 1", got)
+	}
+	if got := nu.delta.Load(); got != 1 {
+		t.Errorf("delta updates after route-changing peer replacement = %d; want 1", got)
+	}
+}
+
 // tests (*mapSession).patchifyPeersChanged; smaller tests are in TestPeerChangeDiff
 func TestPatchifyPeersChanged(t *testing.T) {
 	hi := (&tailcfg.Hostinfo{}).View()
