@@ -547,6 +547,7 @@ type ConnectorTransitIPResponse struct {
 }
 
 const AppConnectorsExperimentalAttrName = "tailscale.com/app-connectors-experimental"
+const AppConnectorsExperimentalIPPoolsAttrName = "tailscale.com/app-connectors-experimental-ippools"
 
 // ipSets wraps all the IPSets the config needs.
 type ipSets struct {
@@ -586,6 +587,14 @@ func configFromNodeView(n tailcfg.NodeView) (*config, error) {
 	if len(apps) == 0 {
 		return &config{}, nil
 	}
+	poolsSlice, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.Conn25PoolsAttr](n.CapMap(), AppConnectorsExperimentalIPPoolsAttrName)
+	if err != nil {
+		return &config{}, err
+	}
+	if len(poolsSlice) != 1 {
+		return &config{}, errors.New("must be one conn25 pools nodeattr")
+	}
+	pools := poolsSlice[0]
 	selfTags := set.SetOf(n.Tags().AsSlice())
 	cfg := &config{
 		isConfigured:       true,
@@ -620,34 +629,29 @@ func configFromNodeView(n tailcfg.NodeView) (*config, error) {
 
 	}
 
-	// TODO(fran) 2026-03-18 we don't yet have a proper way to communicate the
-	// global IP pool config. For now just take it from the first app.
-	if len(apps) != 0 {
-		app := apps[0]
-		v4Mipp, err := ipSetFromIPRanges(app.V4MagicIPPool)
-		if err != nil {
-			return &config{}, err
-		}
-		v4Tipp, err := ipSetFromIPRanges(app.V4TransitIPPool)
-		if err != nil {
-			return &config{}, err
-		}
-		v6Mipp, err := ipSetFromIPRanges(app.V6MagicIPPool)
-		if err != nil {
-			return &config{}, err
-		}
-		v6Tipp, err := ipSetFromIPRanges(app.V6TransitIPPool)
-		if err != nil {
-			return &config{}, err
-		}
-		ipSets := ipSets{
-			v4Magic:   v4Mipp,
-			v4Transit: v4Tipp,
-			v6Magic:   v6Mipp,
-			v6Transit: v6Tipp,
-		}
-		cfg.ipSets = ipSets
+	v4Mipp, err := ipSetFromIPRanges(pools.V4MagicIPPool)
+	if err != nil {
+		return &config{}, err
 	}
+	v4Tipp, err := ipSetFromIPRanges(pools.V4TransitIPPool)
+	if err != nil {
+		return &config{}, err
+	}
+	v6Mipp, err := ipSetFromIPRanges(pools.V6MagicIPPool)
+	if err != nil {
+		return &config{}, err
+	}
+	v6Tipp, err := ipSetFromIPRanges(pools.V6TransitIPPool)
+	if err != nil {
+		return &config{}, err
+	}
+	ipSets := ipSets{
+		v4Magic:   v4Mipp,
+		v4Transit: v4Tipp,
+		v6Magic:   v6Mipp,
+		v6Transit: v6Tipp,
+	}
+	cfg.ipSets = ipSets
 	return cfg, nil
 }
 
