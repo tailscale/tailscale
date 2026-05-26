@@ -44,6 +44,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/acme"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/testenv"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -64,6 +65,63 @@ var (
 	renewMu     syncs.Mutex // lock order: acmeMu before renewMu
 	renewCertAt = map[string]time.Time{}
 )
+
+var (
+	metricACMEDNS01Start       = clientmetric.NewCounter("cert_acme_dns01_start")
+	metricACMEDNS01Success     = clientmetric.NewCounter("cert_acme_dns01_success")
+	metricACMEDNS01Failure     = clientmetric.NewCounter("cert_acme_dns01_failure")
+	metricACMETLSALPN01Start   = clientmetric.NewCounter("cert_acme_tls_alpn01_start")
+	metricACMETLSALPN01Success = clientmetric.NewCounter("cert_acme_tls_alpn01_success")
+	metricACMETLSALPN01Failure = clientmetric.NewCounter("cert_acme_tls_alpn01_failure")
+)
+
+type acmeChallengeType string
+
+const (
+	acmeChallengeDNS01     acmeChallengeType = "dns-01"
+	acmeChallengeTLSALPN01 acmeChallengeType = "tls-alpn-01"
+)
+
+// serveTLSNextProtos returns the baseline ALPN protocols for ordinary Serve
+// TLS traffic. ACME tls-alpn-01 is intentionally not advertised here; it is
+// added dynamically by serveTLSConfig only while a matching challenge
+// certificate is pending.
+func serveTLSNextProtos() []string {
+	return []string{"h2", "http/1.1"}
+}
+
+// getACMETLSALPNCert returns the short-lived ACME challenge certificate for
+// hi.ServerName. The ok result reports whether hi offered acme-tls/1 and an
+// ACME order is actively waiting on that challenge for hi.ServerName.
+func (b *LocalBackend) getACMETLSALPNCert(hi *tls.ClientHelloInfo) (cert *tls.Certificate, ok bool) {
+	if hi == nil || hi.ServerName == "" || !slices.Contains(hi.SupportedProtos, acme.ALPNProto) {
+		return nil, false
+	}
+	cert, ok = b.pendingACMETLSALPNCerts.Load(hi.ServerName)
+	return cert, ok
+}
+
+// getACMETLSALPNProto reports whether serveTLSConfig should advertise an ACME
+// ALPN protocol for this ClientHello. The proto result is the protocol to
+// advertise, and ok reports whether hi offered acme-tls/1 and an ACME order is
+// actively waiting on that challenge for hi.ServerName. It is separate from
+// getACMETLSALPNCert because Go selects ALPN before calling GetCertificate;
+// both hooks must agree for the challenge handshake to complete.
+func (b *LocalBackend) getACMETLSALPNProto(hi *tls.ClientHelloInfo) (proto string, ok bool) {
+	if _, ok := b.getACMETLSALPNCert(hi); !ok {
+		return "", false
+	}
+	return acme.ALPNProto, true
+}
+
+// storeACMETLSALPNCert publishes cert to Serve TLS handshakes for domain until
+// the returned cleanup function is called.
+func (b *LocalBackend) storeACMETLSALPNCert(domain string, cert *tls.Certificate) (cleanup func()) {
+	b.pendingACMETLSALPNCerts.Store(domain, cert)
+	return func() {
+		b.pendingACMETLSALPNCerts.Delete(domain)
+	}
+}
 
 // certDir returns (creating if needed) the directory in which cached
 // cert keypairs are stored.
@@ -242,6 +300,36 @@ func (b *LocalBackend) domainRenewalTimeByExpiry(pair *TLSCertKeyPair) (time.Tim
 	renewalDuration := certLifetime * 2 / 3
 	renewAt := cert.NotBefore.Add(renewalDuration)
 	return renewAt, nil
+}
+
+func (b *LocalBackend) shouldUseACMETLSALPN01(domain string, previous *TLSCertKeyPair, logf logger.Logf) bool {
+	if isWildcardDomain(domain) {
+		logf("acme: using dns-01: tls-alpn-01 does not support wildcard certificates")
+		return false
+	}
+	if !b.hasFunnelForHostPort(domain, 443) {
+		logf("acme: using dns-01: Funnel is not enabled for %s:443", domain)
+		return false
+	}
+	if previous == nil {
+		logf("acme: using dns-01: no cached certificate for Funnel renewal")
+		return false
+	}
+	logf("acme: using tls-alpn-01")
+	return true
+}
+
+func challengeByType(challenges []*acme.Challenge, typ string) *acme.Challenge {
+	for _, ch := range challenges {
+		if ch.Type == typ {
+			return ch
+		}
+	}
+	return nil
+}
+
+func isWildcardDomain(domain string) bool {
+	return strings.HasPrefix(domain, "*.")
 }
 
 func (b *LocalBackend) domainRenewalTimeByARI(cs certStore, pair *TLSCertKeyPair) (time.Time, error) {
@@ -527,8 +615,6 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 	acmeMu.Lock()
 	defer acmeMu.Unlock()
 
-	baseDomain, isWildcard := strings.CutPrefix(domain, "*.")
-
 	// In case this method was triggered multiple times in parallel (when
 	// serving incoming requests), check whether one of the other goroutines
 	// already renewed the cert before us.
@@ -593,63 +679,113 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 		}
 	}
 
+	issueArgs := acmeCertIssueArgs{
+		cs:        cs,
+		logf:      logf,
+		traceACME: traceACME,
+		domain:    domain,
+		opts:      opts,
+	}
+	if b.shouldUseACMETLSALPN01(domain, previous, logf) {
+		issueArgs.challengeType = acmeChallengeTLSALPN01
+		pair, err := b.issueACMECert(ctx, ac, issueArgs)
+		if err == nil {
+			return pair, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		logf("acme: tls-alpn-01 failed; falling back to dns-01: %v", err)
+	}
+	issueArgs.challengeType = acmeChallengeDNS01
+	return b.issueACMECert(ctx, ac, issueArgs)
+}
+
+type acmeCertIssueArgs struct {
+	cs            certStore          // certificate and ACME account storage
+	logf          logger.Logf        // logs ACME progress and failures
+	traceACME     func(any)          // optional hook for logging ACME messages
+	domain        string             // certificate domain being issued
+	opts          []acme.OrderOption // ACME order options
+	challengeType acmeChallengeType  // challenge type to fulfill
+}
+
+func (args acmeCertIssueArgs) baseDomain() string { return strings.TrimPrefix(args.domain, "*.") }
+func (args acmeCertIssueArgs) isWildcard() bool   { return isWildcardDomain(args.domain) }
+
+func (b *LocalBackend) issueACMECert(ctx context.Context, ac *acme.Client, args acmeCertIssueArgs) (ret *TLSCertKeyPair, err error) {
+	if args.traceACME == nil {
+		args.traceACME = func(any) {}
+	}
+
+	switch args.challengeType {
+	case acmeChallengeTLSALPN01:
+		metricACMETLSALPN01Start.Add(1)
+		defer func() {
+			if err == nil {
+				metricACMETLSALPN01Success.Add(1)
+			} else {
+				metricACMETLSALPN01Failure.Add(1)
+			}
+		}()
+	case acmeChallengeDNS01:
+		metricACMEDNS01Start.Add(1)
+		defer func() {
+			if err == nil {
+				metricACMEDNS01Success.Add(1)
+			} else {
+				metricACMEDNS01Failure.Add(1)
+			}
+		}()
+	default:
+		return nil, fmt.Errorf("unknown ACME challenge type %q", args.challengeType)
+	}
+
 	// For wildcards, we need to authorize both the wildcard and base domain.
 	var authzIDs []acme.AuthzID
-	if isWildcard {
+	if args.isWildcard() {
 		authzIDs = []acme.AuthzID{
-			{Type: "dns", Value: domain},
-			{Type: "dns", Value: baseDomain},
+			{Type: "dns", Value: args.domain},
+			{Type: "dns", Value: args.baseDomain()},
 		}
 	} else {
-		authzIDs = []acme.AuthzID{{Type: "dns", Value: domain}}
+		authzIDs = []acme.AuthzID{{Type: "dns", Value: args.domain}}
 	}
-	order, err := ac.AuthorizeOrder(ctx, authzIDs, opts...)
+	order, err := ac.AuthorizeOrder(ctx, authzIDs, args.opts...)
 	if err != nil {
 		return nil, err
 	}
-	traceACME(order)
+	args.traceACME(order)
 
 	for _, aurl := range order.AuthzURLs {
 		az, err := ac.GetAuthorization(ctx, aurl)
 		if err != nil {
 			return nil, err
 		}
-		traceACME(az)
-		for _, ch := range az.Challenges {
-			if ch.Type == "dns-01" {
-				rec, err := ac.DNS01ChallengeRecord(ch.Token)
-				if err != nil {
-					return nil, err
-				}
-				// For wildcards, the challenge is on the base domain.
-				// e.g., "*.node.ts.net" -> "_acme-challenge.node.ts.net"
-				key := "_acme-challenge." + strings.TrimPrefix(az.Identifier.Value, "*.")
-
-				// Do a best-effort lookup to see if we've already created this DNS name
-				// in a previous attempt. Don't burn too much time on it, though. Worst
-				// case we ask the server to create something that already exists.
-				var resolver net.Resolver
-				lookupCtx, lookupCancel := context.WithTimeout(ctx, 500*time.Millisecond)
-				txts, _ := resolver.LookupTXT(lookupCtx, key)
-				lookupCancel()
-				if slices.Contains(txts, rec) {
-					logf("TXT record already existed for %s", key)
-				} else {
-					logf("starting SetDNS call for %s...", key)
-					err = b.SetDNS(ctx, key, rec)
-					if err != nil {
-						return nil, fmt.Errorf("SetDNS %q => %q: %w", key, rec, err)
-					}
-					logf("did SetDNS for %s", key)
-				}
-
-				chal, err := ac.Accept(ctx, ch)
-				if err != nil {
-					return nil, fmt.Errorf("Accept: %v", err)
-				}
-				traceACME(chal)
-				break
+		args.traceACME(az)
+		switch args.challengeType {
+		case acmeChallengeTLSALPN01:
+			ch := challengeByType(az.Challenges, string(acmeChallengeTLSALPN01))
+			if ch == nil {
+				return nil, errors.New("tls-alpn-01 challenge not offered")
 			}
+			cert, err := ac.TLSALPN01ChallengeCert(ch.Token, az.Identifier.Value)
+			if err != nil {
+				return nil, fmt.Errorf("TLSALPN01ChallengeCert: %w", err)
+			}
+			cleanup := b.storeACMETLSALPNCert(az.Identifier.Value, &cert)
+			defer cleanup()
+			chal, err := ac.Accept(ctx, ch)
+			if err != nil {
+				return nil, fmt.Errorf("Accept: %v", err)
+			}
+			args.traceACME(chal)
+		case acmeChallengeDNS01:
+			if err := b.fulfillACMEDNS01Challenge(ctx, ac, az, args.logf, args.traceACME); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, fmt.Errorf("unknown ACME challenge type %q", args.challengeType)
 		}
 	}
 
@@ -660,13 +796,13 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 			return nil, ctx.Err()
 		}
 		if oe, ok := err.(*acme.OrderError); ok {
-			logf("acme: WaitOrder: OrderError status %q", oe.Status)
+			args.logf("acme: WaitOrder: OrderError status %q", oe.Status)
 		} else {
-			logf("acme: WaitOrder error: %v", err)
+			args.logf("acme: WaitOrder error: %v", err)
 		}
 		return nil, err
 	}
-	traceACME(order)
+	args.traceACME(order)
 
 	certPrivKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -677,18 +813,18 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 		return nil, err
 	}
 
-	csr, err := certRequest(certPrivKey, domain, nil)
+	csr, err := certRequest(certPrivKey, args.domain, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	logf("requesting cert...")
-	traceACME(csr)
+	args.logf("requesting cert...")
+	args.traceACME(csr)
 	der, _, err := ac.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
 	if err != nil {
 		return nil, fmt.Errorf("CreateOrder: %v", err)
 	}
-	logf("got cert")
+	args.logf("got cert")
 
 	var certPEM bytes.Buffer
 	for _, b := range der {
@@ -697,12 +833,53 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 			return nil, err
 		}
 	}
-	if err := cs.WriteTLSCertAndKey(domain, certPEM.Bytes(), privPEM.Bytes()); err != nil {
+	if err := args.cs.WriteTLSCertAndKey(args.domain, certPEM.Bytes(), privPEM.Bytes()); err != nil {
 		return nil, err
 	}
-	b.domainRenewed(domain)
+	b.domainRenewed(args.domain)
 
 	return &TLSCertKeyPair{CertPEM: certPEM.Bytes(), KeyPEM: privPEM.Bytes()}, nil
+}
+
+func (b *LocalBackend) fulfillACMEDNS01Challenge(ctx context.Context, ac *acme.Client, az *acme.Authorization, logf logger.Logf, traceACME func(any)) error {
+	for _, ch := range az.Challenges {
+		if ch.Type != string(acmeChallengeDNS01) {
+			continue
+		}
+		rec, err := ac.DNS01ChallengeRecord(ch.Token)
+		if err != nil {
+			return err
+		}
+		// For wildcards, the challenge is on the base domain.
+		// e.g., "*.node.ts.net" -> "_acme-challenge.node.ts.net"
+		key := "_acme-challenge." + strings.TrimPrefix(az.Identifier.Value, "*.")
+
+		// Do a best-effort lookup to see if we've already created this DNS name
+		// in a previous attempt. Don't burn too much time on it, though. Worst
+		// case we ask the server to create something that already exists.
+		var resolver net.Resolver
+		lookupCtx, lookupCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		txts, _ := resolver.LookupTXT(lookupCtx, key)
+		lookupCancel()
+		if slices.Contains(txts, rec) {
+			logf("TXT record already existed for %s", key)
+		} else {
+			logf("starting SetDNS call for %s...", key)
+			err = b.SetDNS(ctx, key, rec)
+			if err != nil {
+				return fmt.Errorf("SetDNS %q => %q: %w", key, rec, err)
+			}
+			logf("did SetDNS for %s", key)
+		}
+
+		chal, err := ac.Accept(ctx, ch)
+		if err != nil {
+			return fmt.Errorf("Accept: %v", err)
+		}
+		traceACME(chal)
+		return nil
+	}
+	return errors.New("dns-01 challenge not offered")
 }
 
 // certRequest generates a CSR for the given domain and optional SANs.
