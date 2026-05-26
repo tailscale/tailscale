@@ -28,10 +28,12 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tsconst"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/preftype"
+	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/linuxfw"
 	"tailscale.com/version/distro"
@@ -94,10 +96,17 @@ type linuxRouter struct {
 	magicsockPortV4   uint16
 	magicsockPortV6   uint16
 
+	// rpfIifEnabled is true when the host is using a Tailscale exit node
+	// (i.e., cfg.Routes contains a default route), which is the only
+	// configuration where the catch-all "lookup table 52" rule causes
+	// rp_filter on the physical NIC to misresolve reply traffic. See
+	// [linuxRouter.setRPFIifEnabledLocked].
+	rpfIifEnabled bool
+
 	// rpfIifLinks tracks the set of non-Tailscale interface names for which
 	// we have installed pref-rpfIif rules diverting reverse-path-filter
-	// lookups to the main routing table. Keyed by interface name. See
-	// installRPFIifRules / [linuxRouter.onLinkChanged].
+	// lookups to the main routing table. Keyed by interface name. Empty
+	// unless rpfIifEnabled is true. See [linuxRouter.onLinkChanged].
 	rpfIifLinks map[string]bool
 }
 
@@ -360,8 +369,10 @@ func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
 			r.mu.Lock()
 			// Drop the bookkeeping for any rules that might have been
 			// flushed; reseeding will reinstall them and re-populate the map.
-			r.rpfIifLinks = map[string]bool{}
-			r.seedRPFIifRulesLocked()
+			if r.rpfIifEnabled {
+				r.rpfIifLinks = map[string]bool{}
+				r.seedRPFIifRulesLocked()
+			}
 			r.mu.Unlock()
 		}
 	})
@@ -376,7 +387,11 @@ func (r *linuxRouter) Up() error {
 	if err := r.addIPRules(); err != nil {
 		return fmt.Errorf("adding IP rules: %w", err)
 	}
-	r.seedRPFIifRulesLocked()
+	// Sweep up any pref-rpfIif rules left behind by a previous tailscaled
+	// process that crashed without cleanup. We don't install rules here;
+	// that happens via Set() once we know whether this host is using an
+	// exit node.
+	r.flushRPFIifRulesLocked()
 	if err := r.upInterface(); err != nil {
 		return fmt.Errorf("bringing interface up: %w", err)
 	}
@@ -398,13 +413,11 @@ func (r *linuxRouter) Close() error {
 		r.logf("warning: failed to delete connmark rules: %v", err)
 	}
 
-	// Remove the per-interface rp_filter diversion rules we installed.
-	for name := range r.rpfIifLinks {
-		if err := r.delRPFIifRule(name); err != nil {
-			r.logf("warning: failed to remove rp_filter iif rule for %q: %v", name, err)
-		}
-	}
+	// Remove any per-interface rp_filter diversion rules we installed,
+	// regardless of bookkeeping state.
+	r.flushRPFIifRulesLocked()
 	r.rpfIifLinks = nil
+	r.rpfIifEnabled = false
 
 	if err := r.downInterface(); err != nil {
 		return err
@@ -477,6 +490,15 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		errs = append(errs, err)
 	}
 	r.routes = newRoutes
+
+	// rp_filter diversion rules are only needed when this host is using an
+	// exit node — that's the only configuration where table 52 contains a
+	// route (0.0.0.0/0 dev tailscale0) that competes with the physical
+	// interface during reverse-path filtering. Outside that case the rules
+	// are unneeded; on a subnet router or exit-node server they actively
+	// break forwarding by short-circuiting the FIB lookup for traffic
+	// destined to a Tailscale CGNAT peer away from table 52.
+	r.setRPFIifEnabledLocked(tsaddr.ContainsExitRoute(views.SliceOf(cfg.Routes)))
 
 	newAddrs, err := cidrDiff("addr", r.addrs, cfg.LocalAddrs, r.addAddress, r.delAddress, r.logf)
 	if err != nil {
@@ -1616,7 +1638,7 @@ func (r *linuxRouter) onLinkChanged(lc netmon.LinkChanged) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.closed.Load() {
+	if r.closed.Load() || !r.rpfIifEnabled {
 		return
 	}
 
@@ -1641,10 +1663,30 @@ func (r *linuxRouter) onLinkChanged(lc netmon.LinkChanged) {
 	}
 }
 
+// setRPFIifEnabledLocked turns the per-interface rp_filter diversion rules on
+// or off based on whether this host is using a Tailscale exit node. Idempotent.
+//
+// linuxRouter.mu must be held.
+func (r *linuxRouter) setRPFIifEnabledLocked(enabled bool) {
+	if enabled == r.rpfIifEnabled {
+		return
+	}
+	r.rpfIifEnabled = enabled
+	if !r.ipRuleAvailable || r.useIPCommand() {
+		return
+	}
+	if enabled {
+		r.seedRPFIifRulesLocked()
+		return
+	}
+	r.flushRPFIifRulesLocked()
+	r.rpfIifLinks = map[string]bool{}
+}
+
 // seedRPFIifRulesLocked installs an rp_filter diversion rule for every
-// non-Tailscale link the netmon currently knows about. Called once at startup
-// so we don't have to wait for an RTM_NEWLINK to install rules for interfaces
-// that already exist.
+// non-Tailscale link the netmon currently knows about. Called when this host
+// starts using an exit node so we don't have to wait for an RTM_NEWLINK to
+// install rules for interfaces that already exist.
 //
 // linuxRouter.mu must be held.
 func (r *linuxRouter) seedRPFIifRulesLocked() {

@@ -1639,6 +1639,10 @@ func TestRPFIifRuleLifecycle(t *testing.T) {
 	// command, so we exercise the real installer.
 	r.cmd = osCommandRunner{}
 	r.ipRuleAvailable = true
+	// Pretend the host is using an exit node so the rules are active.
+	r.mu.Lock()
+	r.rpfIifEnabled = true
+	r.mu.Unlock()
 
 	const fakeIface = "tstest-rpfiif0"
 	r.onLinkChanged(netmon.LinkChanged{Name: fakeIface, Index: 9999, Up: true})
@@ -1692,6 +1696,7 @@ func TestRPFIifEligible(t *testing.T) {
 			r := &linuxRouter{
 				logf:             logger.Discard,
 				rpfIifLinks:      map[string]bool{},
+				rpfIifEnabled:    true,
 				ipPolicyPrefBase: 5200,
 				ipRuleAvailable:  true,
 				cmd:              fakeCmdRunner{},
@@ -1701,6 +1706,26 @@ func TestRPFIifEligible(t *testing.T) {
 				t.Errorf("rpfIifLinks = %v; want empty for ineligible iface %q", r.rpfIifLinks, name)
 			}
 		})
+	}
+}
+
+// TestRPFIifGatedOnExitNodeUse verifies that LinkChanged events are ignored
+// unless the host is using an exit node. Subnet routers and exit-node servers
+// must not get pref-rpfIif rules installed because those rules short-circuit
+// the FIB lookup for forwarded traffic destined to a Tailscale CGNAT peer
+// away from table 52.
+func TestRPFIifGatedOnExitNodeUse(t *testing.T) {
+	r := &linuxRouter{
+		logf:             logger.Discard,
+		rpfIifLinks:      map[string]bool{},
+		ipPolicyPrefBase: 5200,
+		ipRuleAvailable:  true,
+		cmd:              fakeCmdRunner{},
+		// rpfIifEnabled defaults to false: not using an exit node.
+	}
+	r.onLinkChanged(netmon.LinkChanged{Name: "eth0", Index: 1, Up: true})
+	if len(r.rpfIifLinks) != 0 {
+		t.Errorf("rpfIifLinks = %v; want empty when rpfIifEnabled is false", r.rpfIifLinks)
 	}
 }
 
