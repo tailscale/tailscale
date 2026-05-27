@@ -14,6 +14,30 @@ import (
 	core "tailscale.com/tailperf"
 )
 
+func TestTailperfCapRules(t *testing.T) {
+	caps := tailcfg.PeerCapMap{
+		tailcfg.PeerCapability("tailscale.io/cap/tailperf"): []tailcfg.RawMessage{
+			`{"tun_listen_port":22345}`,
+		},
+		tailcfg.PeerCapability("https://tailscale.com/cap/tailperf"): []tailcfg.RawMessage{
+			`{"userspace_listen_port":12345}`,
+		},
+	}
+	rules, err := tailperfCapRules(caps)
+	if err != nil {
+		t.Fatalf("tailperfCapRules: %v", err)
+	}
+	if len(rules) != 2 {
+		t.Fatalf("len(rules) = %d, want 2", len(rules))
+	}
+	if rules[0].TUNListenPort != 22345 {
+		t.Fatalf("rules[0].TUNListenPort = %d, want 22345", rules[0].TUNListenPort)
+	}
+	if rules[1].UserspaceListenPort != 12345 {
+		t.Fatalf("rules[1].UserspaceListenPort = %d, want 12345", rules[1].UserspaceListenPort)
+	}
+}
+
 func TestAllowedPort(t *testing.T) {
 	rules := []tailcfg.TailperfCapRule{{
 		UserspaceListenPort: 12345,

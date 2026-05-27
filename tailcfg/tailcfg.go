@@ -1539,7 +1539,8 @@ type CapGrant struct {
 // the peer communicates with the node that has this rule. Its meaning is
 // application-defined.
 //
-// It must be a URL like "https://tailscale.com/cap/file-send".
+// It is usually a URL like "https://tailscale.com/cap/file-send", or a
+// domain/path capability name like "tailscale.io/cap/tailperf".
 type PeerCapability string
 
 const (
@@ -1586,7 +1587,10 @@ const (
 
 	// PeerCapabilityTailperf grants a peer the ability to request a bounded,
 	// on-demand Tailperf listener on this node.
-	PeerCapabilityTailperf PeerCapability = "https://tailscale.com/cap/tailperf"
+	PeerCapabilityTailperf PeerCapability = "tailscale.io/cap/tailperf"
+	// PeerCapabilityTailperfLegacy is the original Tailperf capability name.
+	// Tailperf accepts it for compatibility with older policy experiments.
+	PeerCapabilityTailperfLegacy PeerCapability = "https://tailscale.com/cap/tailperf"
 )
 
 // TailperfCapRule configures the ports that may be used for grant-authorized

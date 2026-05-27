@@ -46,6 +46,11 @@ type manager struct {
 
 var errBusy = errors.New("another performance test is already running")
 
+var tailperfCapabilityNames = []tailcfg.PeerCapability{
+	tailcfg.PeerCapabilityTailperf,
+	tailcfg.PeerCapabilityTailperfLegacy,
+}
+
 func (m *manager) Start(ctx context.Context, cfg core.ServerConfig, maxAge time.Duration) (time.Time, error) {
 	cfg, err := core.NormalizeServerConfig(cfg)
 	if err != nil {
@@ -85,13 +90,13 @@ func handlePeerAPIStart(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *htt
 		http.Error(w, "Tailperf denied: unsigned PeerAPI clients are not allowed.", http.StatusForbidden)
 		return
 	}
-	rules, err := tailcfg.UnmarshalCapJSON[tailcfg.TailperfCapRule](h.PeerCaps(), tailcfg.PeerCapabilityTailperf)
+	rules, err := tailperfCapRules(h.PeerCaps())
 	if err != nil {
-		http.Error(w, "Tailperf denied: invalid tailscale.com/cap/tailperf grant.", http.StatusForbidden)
+		http.Error(w, "Tailperf denied: invalid tailscale.io/cap/tailperf grant.", http.StatusForbidden)
 		return
 	}
 	if len(rules) == 0 {
-		http.Error(w, "Tailperf denied: this user or node is not granted tailscale.com/cap/tailperf for the target.", http.StatusForbidden)
+		http.Error(w, "Tailperf denied: this user or node is not granted tailscale.io/cap/tailperf for the target.", http.StatusForbidden)
 		return
 	}
 	var req startRequest
@@ -130,6 +135,18 @@ func handlePeerAPIStart(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *htt
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(startResponse{Port: port, ExpiresAt: expires})
+}
+
+func tailperfCapRules(caps tailcfg.PeerCapMap) ([]tailcfg.TailperfCapRule, error) {
+	var rules []tailcfg.TailperfCapRule
+	for _, capName := range tailperfCapabilityNames {
+		rs, err := tailcfg.UnmarshalCapJSON[tailcfg.TailperfCapRule](caps, capName)
+		if err != nil {
+			return nil, err
+		}
+		rules = append(rules, rs...)
+	}
+	return rules, nil
 }
 
 func allowedPort(rules []tailcfg.TailperfCapRule, noTUN bool, requested uint16) (uint16, bool) {
