@@ -245,6 +245,13 @@ type PeerStatus struct {
 	// See tailscale.com/tailcfg#Node.Tags for more information.
 	Tags *views.Slice[string] `json:",omitempty"`
 
+	// BlueprintID, if non-empty, is the Blueprint this node is bound to.
+	// Populated from tailcfg.Node.BlueprintID. Empty for nodes that
+	// were not brought up via `tailscale join`, and for blueprint-bound
+	// peers whose BlueprintID is not visible to the local node per the
+	// tailnet's policy.
+	BlueprintID string `json:",omitempty"`
+
 	// PrimaryRoutes are the routes this node is currently the primary
 	// subnet router for, as determined by the control plane. It does
 	// not include the IPs in TailscaleIPs.
@@ -445,6 +452,9 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	}
 	if v := st.HostName; v != "" {
 		e.HostName = v
+	}
+	if v := st.BlueprintID; v != "" {
+		e.BlueprintID = v
 	}
 	if v := st.DNSName; v != "" {
 		e.DNSName = v
