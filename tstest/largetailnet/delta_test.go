@@ -57,7 +57,6 @@ func metricByName(t testing.TB, name string) *clientmetric.Metric {
 // [tstest/largetailnet/BenchmarkGiantTailnet], which only measures cost
 // of the same fast path — this test verifies correctness.
 func TestNetmapDeltaFastPath(t *testing.T) {
-	tstest.Shard(t)
 
 	logf := logger.Discard
 	if testing.Verbose() {
@@ -105,7 +104,7 @@ func TestNetmapDeltaFastPath(t *testing.T) {
 	// Snapshot baseline metric values; we'll assert deltas against
 	// these. Globals make per-test isolation impossible, but deltas
 	// are robust against interleaving (assuming no other test runs in
-	// parallel here, hence tstest.Shard above).
+	// parallel here).
 	mFast := metricByName(t, "controlclient_map_response_handled_incrementally")
 	mFull := metricByName(t, "controlclient_map_response_handled_full_rebuild")
 	mUpsert := metricByName(t, "localbackend_netmap_delta_peer_upserted")

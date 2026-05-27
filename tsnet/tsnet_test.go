@@ -340,7 +340,6 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 }
 
 func TestDialBlocks(t *testing.T) {
-	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -387,7 +386,6 @@ func TestDialBlocks(t *testing.T) {
 //   - s2 can dial through the subnet router functionality (getting a synthetic RST
 //     that we verify we generated & saw)
 func TestConn(t *testing.T) {
-	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -520,7 +518,6 @@ func TestConn(t *testing.T) {
 
 func TestLoopbackLocalAPI(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8557")
-	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -596,7 +593,6 @@ func TestLoopbackLocalAPI(t *testing.T) {
 
 func TestLoopbackSOCKS5(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8198")
-	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -647,7 +643,6 @@ func TestLoopbackSOCKS5(t *testing.T) {
 }
 
 func TestTailscaleIPs(t *testing.T) {
-	tstest.Shard(t)
 	controlURL, _ := startControl(t)
 
 	tmp := t.TempDir()
@@ -690,7 +685,6 @@ func TestTailscaleIPs(t *testing.T) {
 // TestListenerCleanup is a regression test to verify that s.Close doesn't
 // deadlock if a listener is still open.
 func TestListenerCleanup(t *testing.T) {
-	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -733,7 +727,6 @@ func (wc *closeTrackConn) Close() error {
 // tests https://github.com/tailscale/tailscale/issues/6973 -- that we can start a tsnet server,
 // stop it, and restart it, even on Windows.
 func TestStartStopStartGetsSameIP(t *testing.T) {
-	tstest.Shard(t)
 	controlURL, _ := startControl(t)
 
 	tmp := t.TempDir()
@@ -783,7 +776,6 @@ func TestStartStopStartGetsSameIP(t *testing.T) {
 }
 
 func TestFunnel(t *testing.T) {
-	tstest.Shard(t)
 	ctx, dialCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer dialCancel()
 
@@ -848,7 +840,6 @@ func TestFunnel(t *testing.T) {
 // after itself when closed. Specifically, changes made to the serve config
 // should be cleared.
 func TestFunnelClose(t *testing.T) {
-	tstest.Shard(t)
 
 	marshalServeConfig := func(t *testing.T, sc ipn.ServeConfigView) string {
 		t.Helper()
@@ -1034,7 +1025,6 @@ func setUpServiceState(t *testing.T, name, ip string, host, client *Server,
 }
 
 func TestListenService(t *testing.T) {
-	tstest.Shard(t)
 
 	type dialFn func(context.Context, string, string) (net.Conn, error)
 
@@ -1430,7 +1420,6 @@ func TestListenService(t *testing.T) {
 }
 
 func TestListenServiceClose(t *testing.T) {
-	tstest.Shard(t)
 	const serviceName = "svc:foo"
 
 	diffServeConfig := func(a, b ipn.ServeConfigView) string {
@@ -1586,7 +1575,6 @@ func TestListenServiceClose(t *testing.T) {
 }
 
 func TestListenerClose(t *testing.T) {
-	tstest.Shard(t)
 	ctx := context.Background()
 	controlURL, _ := startControl(t)
 
@@ -1666,7 +1654,6 @@ func (c *bufferedConn) Read(b []byte) (int, error) {
 }
 
 func TestFallbackTCPHandler(t *testing.T) {
-	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1709,7 +1696,6 @@ func TestFallbackTCPHandler(t *testing.T) {
 }
 
 func TestCapturePcap(t *testing.T) {
-	tstest.Shard(t)
 	const timeLimit = 120
 	ctx, cancel := context.WithTimeout(context.Background(), timeLimit*time.Second)
 	defer cancel()
@@ -1763,7 +1749,6 @@ func TestCapturePcap(t *testing.T) {
 }
 
 func TestUDPConn(t *testing.T) {
-	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1955,7 +1940,6 @@ func sendData(logf func(format string, args ...any), ctx context.Context, bytesC
 }
 
 func TestUserMetricsByteCounters(t *testing.T) {
-	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -2070,7 +2054,6 @@ func TestUserMetricsByteCounters(t *testing.T) {
 }
 
 func TestUserMetricsRouteGauges(t *testing.T) {
-	tstest.Shard(t)
 	// Windows does not seem to support or report back routes when running in
 	// userspace via tsnet. So, we skip this check on Windows.
 	// TODO(kradalby): Figure out if this is correct.
@@ -2306,7 +2289,6 @@ type listenTest struct {
 // If useTUN is true, s2 uses a chanTUN; otherwise it uses netstack only.
 func setupTwoClientTest(t *testing.T, useTUN bool) *listenTest {
 	t.Helper()
-	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx := t.Context()
 	controlURL, control := startControl(t)
@@ -2904,7 +2886,6 @@ func buildDNSQuery(name string, srcIP netip.Addr) []byte {
 }
 
 func TestDeps(t *testing.T) {
-	tstest.Shard(t)
 	deptest.DepChecker{
 		GOOS:   "linux",
 		GOARCH: "amd64",
@@ -3168,7 +3149,6 @@ func TestResolveAuthKey(t *testing.T) {
 // packets were sent to WireGuard (which has no peer for the node's own IP)
 // and silently dropped, causing Dial to hang indefinitely.
 func TestSelfDial(t *testing.T) {
-	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
