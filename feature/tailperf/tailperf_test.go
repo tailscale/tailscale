@@ -91,6 +91,24 @@ func TestManagerStartRejectsConcurrent(t *testing.T) {
 	t.Fatal("manager did not clean up after cancellation")
 }
 
+func TestManagerStartReportsListenFailure(t *testing.T) {
+	var m manager
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	port := uint16(ln.Addr().(*net.TCPAddr).Port)
+	if _, err := m.Start(context.Background(), core.ServerConfig{
+		Addr:     "127.0.0.1",
+		Port:     port,
+		Protocol: core.ProtoTCP,
+	}, time.Second); err == nil {
+		t.Fatal("Start succeeded on an already-bound port")
+	}
+}
+
 func freeTCPPort(t *testing.T) uint16 {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

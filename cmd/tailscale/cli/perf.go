@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,8 +44,8 @@ Client mode:
 
   tailscale perf -c node-a --duration=10s --cap=100mbit
 
-By default client mode attempts grant-authorized remote setup when the peer
-supports it, then runs the test against the configured or default port.
+By default client mode attempts grant-authorized remote setup and uses the
+target's Tailperf grant-configured port unless --port is set.
 
 Local history:
 
@@ -56,7 +57,8 @@ Local history:
 		fs := newFlagSet("perf")
 		fs.BoolVar(&perfArgs.server, "s", false, "run in server mode")
 		fs.StringVar(&perfArgs.client, "c", "", "run in client mode against hostname, MagicDNS name, or Tailscale IP")
-		fs.UintVar(&perfArgs.port, "port", uint(tailperf.DefaultPort), "tailperf listen/connect port")
+		perfArgs.port = uint(tailperf.DefaultPort)
+		fs.Var(tailperfPortFlag{dst: &perfArgs.port, explicit: &perfArgs.portSet}, "port", "tailperf listen/connect port")
 		fs.StringVar(&perfArgs.proto, "proto", string(tailperf.ProtoTCP), "protocol: tcp or udp")
 		fs.DurationVar(&perfArgs.duration, "duration", tailperf.DefaultDuration, "test duration")
 		fs.StringVar(&perfArgs.cap, "cap", "", "bandwidth cap, such as 100mbit; empty or 0 means unlimited")
@@ -69,7 +71,7 @@ Local history:
 		fs.IntVar(&perfArgs.historyLimit, "history-limit", 10, "maximum Tailperf history records to show; zero shows all")
 		fs.BoolVar(&perfArgs.baseline, "baseline", false, "compare the result with matching local Tailperf history")
 		fs.StringVar(&perfArgs.exportSupport, "export-support", "", "write redacted Tailperf history support data to this path; use - for stdout")
-		fs.BoolVar(&perfArgs.noMagic, "no-magic", false, hidden+"skip grant-authorized remote server setup")
+		fs.BoolVar(&perfArgs.noMagic, "no-magic", false, "skip grant-authorized remote server setup and use a manually started server")
 		return fs
 	})(),
 }
@@ -87,6 +89,7 @@ var perfArgs struct {
 	server         bool
 	client         string
 	port           uint
+	portSet        bool
 	proto          string
 	duration       time.Duration
 	cap            string
@@ -100,6 +103,31 @@ var perfArgs struct {
 	baseline       bool
 	exportSupport  string
 	noMagic        bool
+}
+
+type tailperfPortFlag struct {
+	dst      *uint
+	explicit *bool
+}
+
+func (f tailperfPortFlag) String() string {
+	if f.dst == nil {
+		return ""
+	}
+	return strconv.FormatUint(uint64(*f.dst), 10)
+}
+
+func (f tailperfPortFlag) Set(s string) error {
+	if f.dst == nil || f.explicit == nil {
+		return errors.New("missing tailperf port flag storage")
+	}
+	v, err := strconv.ParseUint(s, 10, 0)
+	if err != nil {
+		return err
+	}
+	*f.dst = uint(v)
+	*f.explicit = true
+	return nil
 }
 
 func runPerf(ctx context.Context, args []string) error {
@@ -208,7 +236,7 @@ func runPerf(ctx context.Context, args []string) error {
 		}
 	}
 	if !perfArgs.noMagic {
-		if startedPort, err := maybeStartRemoteTailperf(ctx, perfArgs.client, cfg); err != nil {
+		if startedPort, err := maybeStartRemoteTailperf(ctx, perfArgs.client, cfg, perfArgs.portSet); err != nil {
 			return err
 		} else if startedPort != 0 {
 			cfg.Port = startedPort
@@ -463,7 +491,29 @@ type tailperfStartResponse struct {
 	Port uint16 `json:"port"`
 }
 
-func maybeStartRemoteTailperf(ctx context.Context, target string, cfg tailperf.ClientConfig) (uint16, error) {
+type tailperfStartRequest struct {
+	Protocol       tailperf.Protocol `json:"protocol"`
+	DurationMillis int64             `json:"durationMillis"`
+	Port           uint16            `json:"port,omitempty"`
+	NoTUN          bool              `json:"noTun,omitempty"`
+	NoLog          bool              `json:"noLog,omitempty"`
+}
+
+func remoteTailperfStartRequest(cfg tailperf.ClientConfig, explicitPort bool) tailperfStartRequest {
+	var port uint16
+	if explicitPort {
+		port = cfg.Port
+	}
+	return tailperfStartRequest{
+		Protocol:       cfg.Protocol,
+		DurationMillis: cfg.Duration.Milliseconds(),
+		Port:           port,
+		NoTUN:          cfg.TUNMode == tailperf.TUNModeUserspace,
+		NoLog:          cfg.NoLog,
+	}
+}
+
+func maybeStartRemoteTailperf(ctx context.Context, target string, cfg tailperf.ClientConfig, explicitPort bool) (uint16, error) {
 	if cfg.Protocol != tailperf.ProtoTCP {
 		return 0, nil
 	}
@@ -478,28 +528,29 @@ func maybeStartRemoteTailperf(ctx context.Context, target string, cfg tailperf.C
 	pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	pr, err := localClient.PingWithOpts(pctx, addr, tailcfg.PingPeerAPI, local.PingOpts{})
-	if err != nil || pr == nil || pr.PeerAPIURL == "" {
-		return 0, nil
+	if err != nil {
+		return 0, fmt.Errorf("Tailperf remote setup discovery failed: %w", err)
 	}
-	body, _ := json.Marshal(map[string]any{
-		"protocol":       cfg.Protocol,
-		"durationMillis": cfg.Duration.Milliseconds(),
-		"port":           cfg.Port,
-		"noTun":          cfg.TUNMode == tailperf.TUNModeUserspace,
-		"noLog":          cfg.NoLog,
-	})
-	req, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(pr.PeerAPIURL, "/")+"/v0/tailperf/start", bytes.NewReader(body))
+	if pr == nil || pr.PeerAPIURL == "" {
+		return 0, errors.New("Tailperf target does not advertise PeerAPI remote setup; make sure the target is running a build with Magic Perf support, or run 'tailscale perf -s' on the target and retry with --no-magic")
+	}
+	return postRemoteTailperfStart(ctx, pr.PeerAPIURL, remoteTailperfStartRequest(cfg, explicitPort))
+}
+
+func postRemoteTailperfStart(ctx context.Context, peerAPIURL string, start tailperfStartRequest) (uint16, error) {
+	body, _ := json.Marshal(start)
+	req, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(peerAPIURL, "/")+"/v0/tailperf/start", bytes.NewReader(body))
 	if err != nil {
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return 0, nil
+		return 0, fmt.Errorf("Tailperf remote setup failed: %w", err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusNotImplemented || res.StatusCode == http.StatusMethodNotAllowed {
-		return 0, nil
+		return 0, errors.New("Tailperf target does not support Magic Perf remote setup; make sure the target is running a build with Magic Perf support, or run 'tailscale perf -s' on the target and retry with --no-magic")
 	}
 	if res.StatusCode != http.StatusOK {
 		var b bytes.Buffer
@@ -509,6 +560,9 @@ func maybeStartRemoteTailperf(ctx context.Context, target string, cfg tailperf.C
 	var sr tailperfStartResponse
 	if err := json.NewDecoder(res.Body).Decode(&sr); err != nil {
 		return 0, err
+	}
+	if sr.Port == 0 {
+		return 0, errors.New("Tailperf target returned no remote listen port")
 	}
 	return sr.Port, nil
 }

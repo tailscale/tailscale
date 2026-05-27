@@ -6,6 +6,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"flag"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,6 +22,67 @@ func TestTailperfHistoryFlagsRegistered(t *testing.T) {
 		if perfCmd.FlagSet.Lookup(name) == nil {
 			t.Fatalf("tailscale perf missing --%s flag", name)
 		}
+	}
+}
+
+func TestTailperfPortFlagTracksExplicitSet(t *testing.T) {
+	var port uint
+	var explicit bool
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	port = uint(tailperf.DefaultPort)
+	fs.Var(tailperfPortFlag{dst: &port, explicit: &explicit}, "port", "")
+	if err := fs.Parse(nil); err != nil {
+		t.Fatal(err)
+	}
+	if explicit {
+		t.Fatal("port reported explicit when unset")
+	}
+
+	port = uint(tailperf.DefaultPort)
+	explicit = false
+	fs = flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.Var(tailperfPortFlag{dst: &port, explicit: &explicit}, "port", "")
+	if err := fs.Parse([]string{"--port=22345"}); err != nil {
+		t.Fatal(err)
+	}
+	if !explicit {
+		t.Fatal("port not reported explicit when set")
+	}
+	if port != 22345 {
+		t.Fatalf("port = %d, want 22345", port)
+	}
+}
+
+func TestRemoteTailperfStartRequestPortSelection(t *testing.T) {
+	cfg := tailperf.ClientConfig{
+		Port:     tailperf.DefaultPort,
+		Protocol: tailperf.ProtoTCP,
+		Duration: 5 * time.Second,
+		TUNMode:  tailperf.TUNModeDefault,
+	}
+	if got := remoteTailperfStartRequest(cfg, false).Port; got != 0 {
+		t.Fatalf("implicit port request = %d, want 0", got)
+	}
+
+	cfg.Port = 22345
+	if got := remoteTailperfStartRequest(cfg, true).Port; got != 22345 {
+		t.Fatalf("explicit port request = %d, want 22345", got)
+	}
+}
+
+func TestPostRemoteTailperfStartUnsupportedTarget(t *testing.T) {
+	ts := httptest.NewServer(http.NotFoundHandler())
+	defer ts.Close()
+
+	_, err := postRemoteTailperfStart(context.Background(), ts.URL, tailperfStartRequest{
+		Protocol:       tailperf.ProtoTCP,
+		DurationMillis: int64((5 * time.Second).Milliseconds()),
+	})
+	if err == nil {
+		t.Fatal("postRemoteTailperfStart returned nil error for unsupported target")
+	}
+	if !strings.Contains(err.Error(), "does not support Magic Perf remote setup") {
+		t.Fatalf("unsupported target error = %q", err)
 	}
 }
 

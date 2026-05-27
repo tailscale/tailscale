@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -40,8 +41,14 @@ type startResponse struct {
 var defaultManager manager
 
 type manager struct {
-	mu     sync.Mutex
-	cancel context.CancelFunc
+	mu       sync.Mutex
+	cancel   context.CancelFunc
+	starting bool
+}
+
+type boundServer struct {
+	serve func(context.Context) error
+	close func() error
 }
 
 var errBusy = errors.New("another performance test is already running")
@@ -60,8 +67,23 @@ func (m *manager) Start(ctx context.Context, cfg core.ServerConfig, maxAge time.
 		return time.Time{}, fmt.Errorf("invalid tailperf listener lifetime")
 	}
 	m.mu.Lock()
+	if m.cancel != nil || m.starting {
+		m.mu.Unlock()
+		return time.Time{}, errBusy
+	}
+	m.starting = true
+	m.mu.Unlock()
+
+	srv, err := listenServer(cfg)
+	m.mu.Lock()
+	m.starting = false
+	if err != nil {
+		m.mu.Unlock()
+		return time.Time{}, err
+	}
 	if m.cancel != nil {
 		m.mu.Unlock()
+		_ = srv.close()
 		return time.Time{}, errBusy
 	}
 	runCtx, cancel := context.WithTimeout(context.Background(), maxAge)
@@ -76,9 +98,35 @@ func (m *manager) Start(ctx context.Context, cfg core.ServerConfig, maxAge time.
 			m.mu.Unlock()
 			cancel()
 		}()
-		_ = core.RunServer(runCtx, cfg)
+		_ = srv.serve(runCtx)
 	}()
 	return expires, nil
+}
+
+func listenServer(cfg core.ServerConfig) (boundServer, error) {
+	addr := fmt.Sprintf("%s:%d", cfg.Addr, cfg.Port)
+	switch cfg.Protocol {
+	case core.ProtoTCP:
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return boundServer{}, err
+		}
+		return boundServer{
+			serve: func(ctx context.Context) error { return core.ServeTCP(ctx, ln) },
+			close: ln.Close,
+		}, nil
+	case core.ProtoUDP:
+		pc, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			return boundServer{}, err
+		}
+		return boundServer{
+			serve: func(ctx context.Context) error { return core.ServeUDP(ctx, pc) },
+			close: pc.Close,
+		}, nil
+	default:
+		return boundServer{}, fmt.Errorf("unsupported tailperf protocol %q", cfg.Protocol)
+	}
 }
 
 func handlePeerAPIStart(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {

@@ -103,6 +103,11 @@ func runTCPServer(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
+	return ServeTCP(ctx, ln)
+}
+
+// ServeTCP serves Tailperf TCP traffic on ln until ctx is done.
+func ServeTCP(ctx context.Context, ln net.Listener) error {
 	defer ln.Close()
 	go func() {
 		<-ctx.Done()
@@ -154,6 +159,11 @@ func runUDPServer(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
+	return ServeUDP(ctx, pc)
+}
+
+// ServeUDP serves Tailperf UDP traffic on pc until ctx is done.
+func ServeUDP(ctx context.Context, pc net.PacketConn) error {
 	defer pc.Close()
 	go func() {
 		<-ctx.Done()
