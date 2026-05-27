@@ -1407,6 +1407,9 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 			ss.UserID = nm.User()
 			if sn := nm.SelfNode; sn.Valid() {
 				peerStatusFromNode(ss, sn)
+				if bc := sn.BlueprintConfig(); bc.Valid() {
+					ss.BlueprintConfig = bc.AsStruct()
+				}
 				if cm := sn.CapMap(); cm.Len() > 0 {
 					ss.Capabilities = make([]tailcfg.NodeCapability, 1, cm.Len()+1)
 					ss.Capabilities[0] = "HTTPS://TAILSCALE.COM/s/DEPRECATED-NODE-CAPS#see-https://github.com/tailscale/tailscale/issues/11508"
@@ -1500,9 +1503,6 @@ func peerStatusFromNode(ps *ipnstate.PeerStatus, n tailcfg.NodeView) {
 	ps.PublicKey = n.Key()
 	ps.ID = n.StableID()
 	ps.BlueprintID = n.BlueprintID()
-	if bc := n.BlueprintConfig(); bc.Valid() {
-		ps.BlueprintConfig = bc.AsStruct()
-	}
 	ps.Created = n.Created()
 	ps.ExitNodeOption = buildfeatures.HasUseExitNode && tsaddr.ContainsExitRoutes(n.AllowedIPs())
 	if n.Tags().Len() != 0 {
