@@ -397,6 +397,16 @@ type Conn struct {
 	// experiencing a write error, and is used to throttle the rate of rebinds.
 	lastErrRebind syncs.AtomicValue[time.Time]
 
+	// appliedDisableUDPGRO and appliedDisableUDPGSO cache the last UDP offload
+	// controlknobs values we reacted to. They are compared against the live
+	// knob values during netmap updates so we can detect a control-plane
+	// transition and trigger a [Conn.Rebind] to re-evaluate the
+	// UDP_GRO/UDP_SEGMENT socket options. Guarded by c.mu. Only consulted on
+	// Linux; on other platforms tryEnableUDPOffload is a no-op so any
+	// transition is meaningless and no rebind is fired.
+	appliedDisableUDPGRO bool
+	appliedDisableUDPGSO bool
+
 	// staticEndpoints are user set endpoints that this node should
 	// advertise amongst its wireguard endpoints. It is user's
 	// responsibility to ensure that traffic from these endpoints is routed
@@ -634,6 +644,15 @@ func NewConn(opts Options) (*Conn, error) {
 	c.eventBus = opts.EventBus
 	c.port.Store(uint32(opts.Port))
 	c.controlKnobs = opts.ControlKnobs
+	if runtime.GOOS == "linux" && c.controlKnobs != nil {
+		// Seed the cached "last applied" UDP offload knob values so the first
+		// netmap update doesn't spuriously trigger a rebind: bindSocket (called
+		// shortly after NewConn) will read these same knob values when
+		// configuring UDP_GRO/UDP_SEGMENT, so they're already in sync. We only
+		// do this on Linux because tryEnableUDPOffload is a no-op elsewhere.
+		c.appliedDisableUDPGRO = c.controlKnobs.DisableUDPGRO.Load()
+		c.appliedDisableUDPGSO = c.controlKnobs.DisableUDPGSO.Load()
+	}
 	c.epFunc = opts.endpointsFunc()
 	c.derpActiveFunc = opts.derpActiveFunc()
 	c.idleFunc = opts.IdleFunc
@@ -2996,6 +3015,8 @@ func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.Node
 		!self.HasCap(tailcfg.NodeAttrDisableRelayClient) &&
 		!self.HasCap(tailcfg.NodeAttrOnlyTCP443)
 
+	udpOffloadKnobsChanged := false
+	var curGRO, curGSO bool
 	c.mu.Lock()
 	relayClientChanged := c.relayClientEnabled != relayClientEnabled
 	c.relayClientEnabled = relayClientEnabled
@@ -3004,10 +3025,29 @@ func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.Node
 	peersSnap := c.peerSnapshotLocked()
 	isClosed := c.closed
 	c.usingCachedNetmap.Store(isCached)
+	if runtime.GOOS == "linux" && c.controlKnobs != nil {
+		curGRO = c.controlKnobs.DisableUDPGRO.Load()
+		curGSO = c.controlKnobs.DisableUDPGSO.Load()
+		if curGRO != c.appliedDisableUDPGRO || curGSO != c.appliedDisableUDPGSO {
+			c.appliedDisableUDPGRO = curGRO
+			c.appliedDisableUDPGSO = curGSO
+			udpOffloadKnobsChanged = true
+		}
+	}
 	c.mu.Unlock() // release c.mu before potentially calling c.updateRelayServersSet which is O(m * n)
 
 	if isClosed {
 		return // nothing to do here, the conn is closed and the update is no longer relevant
+	}
+
+	if udpOffloadKnobsChanged {
+		// A control-plane node attribute toggled UDP GRO or UDP GSO. Rebind
+		// the UDP sockets so tryEnableUDPOffload re-runs and applies the new
+		// values, then ReSTUN to refresh endpoints.
+		c.logf("magicsock: UDP offload knobs changed (DisableUDPGRO=%v DisableUDPGSO=%v); rebinding",
+			curGRO, curGSO)
+		c.Rebind()
+		go c.ReSTUN("udp-offload-knobs-changed")
 	}
 
 	if peersChanged || relayClientChanged {
@@ -3631,13 +3671,13 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	defer ruc.mu.Unlock()
 
 	if runtime.GOOS == "js" {
-		ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize())
+		ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize(), c.controlKnobs)
 		return nil
 	}
 
 	if debugAlwaysDERP() {
 		c.logf("disabled %v per TS_DEBUG_ALWAYS_USE_DERP", network)
-		ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize())
+		ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize(), c.controlKnobs)
 		return nil
 	}
 
@@ -3696,7 +3736,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 		if debugBindSocket() {
 			c.logf("magicsock: bindSocket: successfully listened %v port %d", network, port)
 		}
-		ruc.setConnLocked(pconn, network, c.bind.BatchSize())
+		ruc.setConnLocked(pconn, network, c.bind.BatchSize(), c.controlKnobs)
 		if network == "udp4" {
 			c.health.SetUDP4Unbound(false)
 		}
@@ -3707,7 +3747,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	// Set pconn to a dummy conn whose reads block until closed.
 	// This keeps the receive funcs alive for a future in which
 	// we get a link change and we can try binding again.
-	ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize())
+	ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize(), c.controlKnobs)
 	if network == "udp4" {
 		c.health.SetUDP4Unbound(true)
 	}
