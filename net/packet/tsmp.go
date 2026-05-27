@@ -29,7 +29,7 @@ const minTSMPSize = 7 // the rejected body is 7 bytes
 // On the wire, after the IP header, it's currently 7 or 8 bytes:
 //   - '!'
 //   - IPProto byte (IANA protocol number: TCP or UDP)
-//   - 'A' or 'S' (RejectedDueToACLs, RejectedDueToShieldsUp)
+//   - byte stating rejection reason (see [TailscaleRejectReason] for valid values)
 //   - srcPort big endian uint16
 //   - dstPort big endian uint16
 //   - [optional] byte of flag bits:
@@ -101,6 +101,11 @@ const (
 	// RejectedDueToHostFirewall means that the target host's
 	// firewall is blocking the traffic.
 	RejectedDueToHostFirewall TailscaleRejectReason = 'W'
+
+	// RejectedDueToUnknownAppConnectorTransitIP means that the connector host has no real IP
+	// mapping that matches the provided transit IP for this client, so the
+	// connector has no destination to forward the connection to.
+	RejectedDueToUnknownAppConnectorTransitIP TailscaleRejectReason = 'T'
 )
 
 func (r TailscaleRejectReason) String() string {
@@ -113,6 +118,8 @@ func (r TailscaleRejectReason) String() string {
 		return "host-ip-forwarding-unavailable"
 	case RejectedDueToHostFirewall:
 		return "host-firewall"
+	case RejectedDueToUnknownAppConnectorTransitIP:
+		return "app-connector-transit-ip-unknown"
 	}
 	return fmt.Sprintf("0x%02x", byte(r))
 }

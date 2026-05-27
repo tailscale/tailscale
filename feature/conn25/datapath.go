@@ -11,6 +11,7 @@ import (
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
+	"tailscale.com/net/tstun"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
@@ -100,7 +101,7 @@ func newDatapathHandler(ipMapper IPMapper, logf logger.Logf) *datapathHandler {
 // that the packet should pass through subsequent stages of the datapath pipeline.
 // Returning [filter.Drop] signals the packet should be dropped. This method handles all
 // packets coming from WireGuard, on both connectors, and clients of connectors.
-func (dh *datapathHandler) HandlePacketFromWireGuard(p *packet.Parsed) filter.Response {
+func (dh *datapathHandler) HandlePacketFromWireGuard(p *packet.Parsed, tun *tstun.Wrapper) filter.Response {
 	// TODO(tailscale/corp#38764): Support other protocols, like ICMP for error messages.
 	if p.IPProto != ipproto.TCP && p.IPProto != ipproto.UDP {
 		return filter.Accept
@@ -130,7 +131,17 @@ func (dh *datapathHandler) HandlePacketFromWireGuard(p *packet.Parsed) filter.Re
 	realIP, err := dh.ipMapper.ConnectorRealIPForTransitIPConnection(p.Src.Addr(), transitIP)
 	if err != nil {
 		if errors.Is(err, ErrUnmappedSrcAndTransitIP) {
-			// TODO(tailscale/corp#34256): This path should deliver an ICMP error to the client.
+			rj := packet.TailscaleRejectedHeader{
+				IPSrc:  p.Dst.Addr(),
+				IPDst:  p.Src.Addr(),
+				Src:    p.Src,
+				Dst:    p.Dst,
+				Proto:  p.IPProto,
+				Reason: packet.RejectedDueToUnknownAppConnectorTransitIP,
+			}
+			if err := tun.InjectOutbound(packet.Generate(rj, nil)); err != nil {
+				dh.debugLogf("error sending TSMP flow rejection packet: %v", err)
+			}
 			return filter.Drop
 		}
 		dh.debugLogf("error mapping src and transit IP, passing packet unmodified: %v", err)
