@@ -107,6 +107,10 @@ To detach this node, run "tailscale leave".
 	},
 }
 
+func init() {
+	joinCmd.Subcommands = []*ffcli.Command{joinStatusCmd}
+}
+
 // blueprintIDFromFlag extracts the bare <id> portion from the user's
 // --blueprint flag value. The spec accepts the prefixed form
 // "bp:<id>"; this helper also accepts the bare "<id>" for shell
