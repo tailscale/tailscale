@@ -4,13 +4,20 @@
 package conn25
 
 import (
+	"bytes"
 	"errors"
 	"net/netip"
 	"testing"
 
+	"go4.org/netipx"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tstun"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/types/views"
+	"tailscale.com/util/eventbus/eventbustest"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/filter/filtertype"
 )
 
 type testConn25 struct {
@@ -131,6 +138,39 @@ func TestHandlePacketFromTunDevice(t *testing.T) {
 	}
 }
 
+func newFakeTUN(t *testing.T) *tstun.Wrapper {
+	t.Helper()
+
+	// Create a TUN device and wrap it.
+	fake := tstun.NewFake()
+	reg := new(usermetric.Registry)
+	bus := eventbustest.NewBus(t)
+	tun := tstun.Wrap(t.Logf, fake, reg, bus)
+
+	// Create a packet filter. We're not testing the filter, so just make
+	// one that allows everything through.
+	protos := views.SliceOf([]ipproto.Proto{
+		ipproto.TCP,
+		ipproto.UDP,
+	})
+	allIPs := netip.MustParsePrefix("0.0.0.0/0")
+	matches := []filter.Match{
+		{
+			IPProto: protos,
+			Srcs:    []netip.Prefix{allIPs},
+			Dsts:    []filtertype.NetPortRange{{Net: allIPs, Ports: filtertype.AllPorts}},
+		},
+	}
+	var sb netipx.IPSetBuilder
+	sb.AddPrefix(allIPs)
+	ipSet, _ := sb.IPSet()
+	tun.SetFilter(filter.New(matches, nil, ipSet, ipSet, nil, t.Logf))
+
+	// Start the TUN device.
+	tun.Start()
+	return tun
+}
+
 func TestHandlePacketFromWireGuard(t *testing.T) {
 	clientSrcIP := netip.MustParseAddr("100.70.0.1")
 	unknownSrcIP := netip.MustParseAddr("100.99.99.99")
@@ -147,6 +187,7 @@ func TestHandlePacketFromWireGuard(t *testing.T) {
 		expectedSrc            netip.AddrPort
 		expectedDst            netip.AddrPort
 		expectedFilterResponse filter.Response
+		expectedInjectedPkt    []byte
 	}{
 		{
 			description: "accept-and-nat-new-connector-flow-mapped-src-and-transit-ip",
@@ -167,6 +208,14 @@ func TestHandlePacketFromWireGuard(t *testing.T) {
 			expectedSrc:            netip.AddrPortFrom(unknownSrcIP, clientPort),
 			expectedDst:            netip.AddrPortFrom(transitIP, serverPort),
 			expectedFilterResponse: filter.Drop,
+			expectedInjectedPkt: packet.Generate(packet.TailscaleRejectedHeader{
+				IPSrc:  transitIP,
+				IPDst:  unknownSrcIP,
+				Proto:  ipproto.UDP,
+				Src:    netip.AddrPortFrom(unknownSrcIP, clientPort),
+				Dst:    netip.AddrPortFrom(transitIP, serverPort),
+				Reason: packet.RejectedDueToUnknownAppConnectorTransitIP,
+			}, nil),
 		},
 		{
 			description: "accept-dont-nat-other-mapping-error",
@@ -218,12 +267,14 @@ func TestHandlePacketFromWireGuard(t *testing.T) {
 				return netip.Addr{}, nil
 			}
 			dph := newDatapathHandler(mock, t.Logf)
+			tun := newFakeTUN(t)
+			defer tun.Close()
 
 			tt.p.IPProto = ipproto.UDP
 			tt.p.IPVersion = 4
 			tt.p.StuffForTesting(40)
 
-			if want, got := tt.expectedFilterResponse, dph.HandlePacketFromWireGuard(tt.p); want != got {
+			if want, got := tt.expectedFilterResponse, dph.HandlePacketFromWireGuard(tt.p, tun); want != got {
 				t.Errorf("unexpected filter response: want %v, got %v", want, got)
 			}
 			if want, got := tt.expectedSrc, tt.p.Src; want != got {
@@ -231,6 +282,22 @@ func TestHandlePacketFromWireGuard(t *testing.T) {
 			}
 			if want, got := tt.expectedDst, tt.p.Dst; want != got {
 				t.Errorf("unexpected packet dst: want %v, got %v", want, got)
+			}
+			if tt.expectedInjectedPkt != nil {
+				var buf [tstun.MaxPacketSize]byte
+				bufs := [][]byte{buf[:]}
+				sizes := []int{0}
+				n, err := tun.Read(bufs, sizes, 0)
+				if err != nil {
+					t.Errorf("error reading injected packet: %v", err)
+				}
+				if n != 1 {
+					t.Errorf("expected to read 1 packet, got %d", n)
+				}
+				if want, got := tt.expectedInjectedPkt, buf[:sizes[0]]; !bytes.Equal(want, got) {
+					t.Errorf("unexpected contents of injected packet: want %+x, got %+x", want, got)
+
+				}
 			}
 		})
 	}
@@ -290,7 +357,10 @@ func TestClientFlowCache(t *testing.T) {
 	}
 	incoming.StuffForTesting(40)
 
-	if dph.HandlePacketFromWireGuard(incoming) != filter.Accept {
+	tun := newFakeTUN(t)
+	defer tun.Close()
+
+	if dph.HandlePacketFromWireGuard(incoming, tun) != filter.Accept {
 		t.Errorf("call to HandlePacketFromWireGuard was not accepted")
 	}
 	if want, got := netip.AddrPortFrom(magicIP, serverPort), incoming.Src; want != got {
@@ -326,8 +396,11 @@ func TestConnectorFlowCache(t *testing.T) {
 	}
 	outgoing.StuffForTesting(40)
 
+	tun := newFakeTUN(t)
+	defer tun.Close()
+
 	o1 := outgoing
-	if dph.HandlePacketFromWireGuard(&o1) != filter.Accept {
+	if dph.HandlePacketFromWireGuard(&o1, tun) != filter.Accept {
 		t.Errorf("first call to HandlePacketFromWireGuard was not accepted")
 	}
 	if want, got := netip.AddrPortFrom(realIP, serverPort), o1.Dst; want != got {
@@ -335,7 +408,7 @@ func TestConnectorFlowCache(t *testing.T) {
 	}
 	// The second call should use the cache.
 	o2 := outgoing
-	if dph.HandlePacketFromWireGuard(&o2) != filter.Accept {
+	if dph.HandlePacketFromWireGuard(&o2, tun) != filter.Accept {
 		t.Errorf("second call to HandlePacketFromWireGuard was not accepted")
 	}
 	if want, got := netip.AddrPortFrom(realIP, serverPort), o2.Dst; want != got {
