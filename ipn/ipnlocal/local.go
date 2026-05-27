@@ -1500,6 +1500,9 @@ func peerStatusFromNode(ps *ipnstate.PeerStatus, n tailcfg.NodeView) {
 	ps.PublicKey = n.Key()
 	ps.ID = n.StableID()
 	ps.BlueprintID = n.BlueprintID()
+	if bc := n.BlueprintConfig(); bc.Valid() {
+		ps.BlueprintConfig = bc.AsStruct()
+	}
 	ps.Created = n.Created()
 	ps.ExitNodeOption = buildfeatures.HasUseExitNode && tsaddr.ContainsExitRoutes(n.AllowedIPs())
 	if n.Tags().Len() != 0 {

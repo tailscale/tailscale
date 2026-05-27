@@ -252,6 +252,11 @@ type PeerStatus struct {
 	// tailnet's policy.
 	BlueprintID string `json:",omitempty"`
 
+	// BlueprintConfig, if non-nil, is the local node's projected
+	// Blueprint configuration. Populated only on Self (from
+	// tailcfg.Node.BlueprintConfig); always nil on peer entries.
+	BlueprintConfig *tailcfg.BlueprintConfig `json:",omitempty"`
+
 	// PrimaryRoutes are the routes this node is currently the primary
 	// subnet router for, as determined by the control plane. It does
 	// not include the IPs in TailscaleIPs.
@@ -455,6 +460,9 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	}
 	if v := st.BlueprintID; v != "" {
 		e.BlueprintID = v
+	}
+	if v := st.BlueprintConfig; v != nil {
+		e.BlueprintConfig = v
 	}
 	if v := st.DNSName; v != "" {
 		e.DNSName = v
