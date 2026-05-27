@@ -12,7 +12,6 @@ import (
 
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tstest"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
@@ -45,7 +44,6 @@ func waitFor(t testing.TB, ctx context.Context, s *Server, f func(*netmap.Networ
 // netmaps and turning them into packet filters together. Only the control-plane
 // side is mocked out.
 func TestPacketFilterFromNetmap(t *testing.T) {
-	tstest.Shard(t)
 	t.Parallel()
 
 	var key key.NodePublic
