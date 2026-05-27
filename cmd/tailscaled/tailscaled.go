@@ -460,9 +460,6 @@ func run() (err error) {
 		return nil
 	}
 
-	if envknob.Bool("TS_DEBUG_MEMORY") {
-		logf = logger.RusagePrefixLog(logf)
-	}
 	logf = logger.RateLimitedFn(logf, 5*time.Second, 5, 100)
 
 	if envknob.Bool("TS_PLEASE_PANIC") {
