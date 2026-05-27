@@ -8,7 +8,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
-	"sync"
+	"sync/atomic"
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -31,9 +31,11 @@ type Client struct {
 	nm     NetMapper
 	pinger Pinger
 
-	// NetMapAvailable is raised when the first network map is received
-	// after connecting to the control plane.
-	netMapAvailable sync.Cond
+	// HasNetMap is a channel that can be closed to wake up goroutines
+	// waiting for the netmap received after connecting to the control plane.
+	// This channel gets swapped out for a new one whenever it is closed,
+	// to handle disconnecting and reconnecting to the control plane.
+	hasNetMap atomic.Pointer[chan struct{}]
 }
 
 // NetMapper is the interface that returns the current [netmap.NetworkMap].
@@ -102,7 +104,7 @@ func NewClient(logf logger.Logf, nb NodeBackender, nm NetMapper, pinger Pinger) 
 		nm:     nm,
 		pinger: pinger,
 	}
-	c.netMapAvailable.L = new(sync.Mutex)
+	c.hasNetMap.Store(new(make(chan struct{})))
 	return c, nil
 }
 
@@ -112,30 +114,26 @@ func (c *Client) NotifyNetMapAvailable(nm *netmap.NetworkMap) {
 	if nm == nil {
 		return // client disconnected
 	}
-	c.netMapAvailable.Broadcast()
+	ch := c.hasNetMap.Load()
+	c.hasNetMap.Store(new(make(chan struct{}))) // prepare for next non-nil netmap
+	close(*ch)                                  // broadcast to waitForNetMap
 }
 
 func (c *Client) waitForNetMap(ctx context.Context) (*netmap.NetworkMap, error) {
-	cond := &c.netMapAvailable
-	cond.L.Lock()
-	defer cond.L.Unlock()
-
-	stopf := context.AfterFunc(ctx, func() {
-		// Lock cond to ensure that Broadcast is called after the Wait below.
-		cond.L.Lock()
-		defer cond.L.Unlock()
-		cond.Broadcast()
-	})
-	defer stopf()
-
 	for {
-		nm := c.nm.NetMapNoPeers()
-		if nm != nil {
+		ch := c.hasNetMap.Load()
+		if *ch == nil {
+			return nil, errors.New("routecheck client closed")
+		}
+
+		if nm := c.nm.NetMapNoPeers(); nm != nil {
 			return nm, nil
 		}
-		cond.Wait()
-		if err := ctx.Err(); err != nil {
-			return nil, err
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-*ch: // woken up by NotifyNetMapAvailable
 		}
 	}
 }
@@ -146,7 +144,11 @@ func (c *Client) Close() error {
 		return nil
 	}
 
-	c.netMapAvailable.Broadcast() // Wake goroutines in waitForNetMap.
+	ch := c.hasNetMap.Load()
+	c.hasNetMap.Store(new(chan struct{})) // clear and unlock before waking anything up
+	if ch != nil {
+		close(*ch)
+	}
 
 	return nil
 }
