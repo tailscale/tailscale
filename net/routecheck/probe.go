@@ -38,8 +38,7 @@ var (
 const DefaultTimeout = 4 * time.Second
 
 type probed struct {
-	id     tailcfg.NodeID
-	name   string
+	tailcfg.NodeView
 	addr   netip.Addr
 	routes []netip.Prefix
 }
@@ -55,12 +54,41 @@ func (c *Client) probe(ctx context.Context, nodes iter.Seq[probed], limit int, t
 	var mu syncs.Mutex
 	r := &Report{}
 
+	markReachable := func(n probed) {
+		mu.Lock()
+		defer mu.Unlock()
+		nid := n.ID()
+		if _, ok := r.Reachable[nid]; !ok {
+			mak.Set(&r.Reachable, nid, Node{
+				ID:     nid,
+				Name:   n.Name(),
+				Addr:   n.addr,
+				Routes: n.routes,
+			})
+		}
+	}
+
 	// TODO(sfllaw): Since the nodes are sorted by priority,
 	// where earlier nodes have high traffic-steering scores,
 	// it should be possible to deprioritize or skip probes
 	// if there are already enough responses for a particular resource.
 	// This optimization has not been implemented yet, so all nodes are probed.
 	for n := range nodes {
+		// WireGuard-only nodes are assumed to be reachable, since
+		// we don’t want to probe nodes that don’t understand Disco pings.
+		//
+		// We could establish a WireGuard session to probe them,
+		// which would allow us to exclude nodes that won’t respond,
+		// but all the other nodes would hold unnecessary session state.
+		// This would be incredibly rude and could potentially DDOS them.
+		//
+		// TODO(sfllaw): Add a mechanism to mark a node as unreachable
+		// because it fails of establish a new WireGuard connection.
+		if n.IsWireGuardOnly() {
+			markReachable(n)
+			continue
+		}
+
 		g.Go(func() error {
 			metricPing.Add(1)
 			// TODO(sfllaw): Why did we choose Disco ping instead of TSMP ping?
@@ -84,34 +112,25 @@ func (c *Client) probe(ctx context.Context, nodes iter.Seq[probed], limit int, t
 			switch pong, err := c.ping(ctx, n.addr, tailcfg.PingDisco, timeout); {
 			case err == context.DeadlineExceeded:
 				// Ping timed out, so assume that the node is unreachable.
-				c.vlogf("ping %s (%s): timed out", n.addr, n.id)
+				c.vlogf("ping %s (%s): timed out", n.addr, n.ID())
 				metricPingTimeout.Add(1)
 				return nil
 			case err != nil:
 				// Returning an error would cancel the errgroup.
-				c.vlogf("ping %s (%s): error: %v", n.addr, n.id, err)
+				c.vlogf("ping %s (%s): error: %v", n.addr, n.ID(), err)
 				metricPingError.Add(1)
 				return nil
 			case pong == nil:
-				c.vlogf("ping %s (%s): error: no response", n.addr, n.id)
+				c.vlogf("ping %s (%s): error: no response", n.addr, n.ID())
 				metricPingError.Add(1)
 				return nil
 			default:
 				c.vlogf("ping %s (%s): result: %f ms (err: %v)",
-					n.addr, n.id, pong.LatencySeconds*1000, pong.Err)
+					n.addr, n.ID(), pong.LatencySeconds*1000, pong.Err)
 				metricPingReachable.Add(1)
 			}
 
-			mu.Lock()
-			defer mu.Unlock()
-			if _, ok := r.Reachable[n.id]; !ok {
-				mak.Set(&r.Reachable, n.id, Node{
-					ID:     n.id,
-					Name:   n.name,
-					Addr:   n.addr,
-					Routes: n.routes,
-				})
-			}
+			markReachable(n)
 			return nil
 		})
 	}
@@ -141,55 +160,24 @@ func (c *Client) Probe(ctx context.Context, nodes iter.Seq[tailcfg.NodeView], li
 	// and IPv6 is also supported by the current node.
 	addrFor := addrPicker(can4, can6)
 
-	// Assumed nodes are ones that we assume are reachable,
-	// because we can’t probe nodes that don’t understand Disco pings.
-	var assumed []tailcfg.NodeView
-
 	var dsts iter.Seq[probed] = func(yield func(probed) bool) {
 		for n := range nodes {
-			if n.IsWireGuardOnly() {
-				assumed = append(assumed, n)
-				continue // Probably can’t speak Disco or DERP.
-			}
-
 			// Probe one of the tailnet addresses.
 			addr := addrFor(n)
 			if !addr.IsValid() {
 				continue // No valid addresses.
 			}
 			if !yield(probed{
-				id:     n.ID(),
-				name:   n.Name(),
-				addr:   addr,
-				routes: routes(n),
+				NodeView: n,
+				addr:     addr,
+				routes:   routes(n),
 			}) {
 				return
 			}
 		}
 	}
 
-	r, err := c.probe(ctx, dsts, limit, timeout)
-	if err != nil {
-		return nil, err
-	}
-
-	// Mix in the assumed nodes.
-	for _, n := range assumed {
-		addr := addrFor(n)
-		if !addr.IsValid() {
-			continue // No valid addresses.
-		}
-		id := n.ID()
-		if _, ok := r.Reachable[id]; !ok {
-			mak.Set(&r.Reachable, id, Node{
-				ID:     id,
-				Name:   n.Name(),
-				Addr:   addr,
-				Routes: routes(n),
-			})
-		}
-	}
-	return r, nil
+	return c.probe(ctx, dsts, limit, timeout)
 }
 
 // ProbeAllHARouters actively probes all High Availability routers in parallel
