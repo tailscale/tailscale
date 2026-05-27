@@ -5,11 +5,17 @@ package tailperf
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/tailcfg"
 	core "tailscale.com/tailperf"
 )
@@ -54,6 +60,79 @@ func TestAllowedPort(t *testing.T) {
 	}
 	if _, ok := allowedPort([]tailcfg.TailperfCapRule{{}}, false, 0); ok {
 		t.Fatal("empty port config accepted")
+	}
+}
+
+func TestHandlePeerAPIStatusReportsRulesAndBusy(t *testing.T) {
+	var m manager
+	m.mu.Lock()
+	m.cancel = func() {}
+	m.mu.Unlock()
+
+	h := &peerAPIHandler{
+		peerNode: (&tailcfg.Node{}).View(),
+		caps: tailcfg.PeerCapMap{
+			tailcfg.PeerCapabilityTailperf: []tailcfg.RawMessage{
+				`{"tun_listen_port":22345,"userspace_listen_port":12345}`,
+			},
+		},
+	}
+	rr := httptest.NewRecorder()
+	handlePeerAPIStatusWithManager(h, rr, httptest.NewRequest("GET", "/v0/tailperf/status", nil), &m)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body: %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	var got statusResponse
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Busy {
+		t.Fatal("status Busy = false, want true")
+	}
+	if len(got.Rules) != 1 {
+		t.Fatalf("len(status rules) = %d, want 1", len(got.Rules))
+	}
+	if got.Rules[0].TUNListenPort != 22345 || got.Rules[0].UserspaceListenPort != 12345 {
+		t.Fatalf("status rules = %+v, want tun 22345 and userspace 12345", got.Rules[0])
+	}
+}
+
+func TestHandlePeerAPIStatusRejectsUnauthorizedPeers(t *testing.T) {
+	tests := []struct {
+		name    string
+		handler *peerAPIHandler
+		want    string
+	}{
+		{
+			name: "unsigned",
+			handler: &peerAPIHandler{
+				peerNode: (&tailcfg.Node{UnsignedPeerAPIOnly: true}).View(),
+				caps: tailcfg.PeerCapMap{
+					tailcfg.PeerCapabilityTailperf: []tailcfg.RawMessage{`{"tun_listen_port":22345}`},
+				},
+			},
+			want: "unsigned PeerAPI clients are not allowed",
+		},
+		{
+			name: "no grant",
+			handler: &peerAPIHandler{
+				peerNode: (&tailcfg.Node{}).View(),
+			},
+			want: "not granted tailscale.io/cap/tailperf",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			handlePeerAPIStatusWithManager(tt.handler, rr, httptest.NewRequest("GET", "/v0/tailperf/status", nil), &manager{})
+			if rr.Code != http.StatusForbidden {
+				t.Fatalf("status code = %d, want %d; body: %s", rr.Code, http.StatusForbidden, rr.Body.String())
+			}
+			if body := rr.Body.String(); !strings.Contains(body, tt.want) {
+				t.Fatalf("body = %q, want substring %q", body, tt.want)
+			}
+		})
 	}
 }
 
@@ -118,3 +197,17 @@ func freeTCPPort(t *testing.T) uint16 {
 	defer ln.Close()
 	return uint16(ln.Addr().(*net.TCPAddr).Port)
 }
+
+type peerAPIHandler struct {
+	peerNode tailcfg.NodeView
+	caps     tailcfg.PeerCapMap
+}
+
+func (h *peerAPIHandler) Peer() tailcfg.NodeView               { return h.peerNode }
+func (h *peerAPIHandler) PeerCaps() tailcfg.PeerCapMap         { return h.caps }
+func (h *peerAPIHandler) CanDebug() bool                       { return false }
+func (h *peerAPIHandler) Self() tailcfg.NodeView               { return (&tailcfg.Node{}).View() }
+func (h *peerAPIHandler) LocalBackend() *ipnlocal.LocalBackend { panic("unexpected") }
+func (h *peerAPIHandler) IsSelfUntagged() bool                 { return false }
+func (h *peerAPIHandler) RemoteAddr() netip.AddrPort           { return netip.AddrPort{} }
+func (h *peerAPIHandler) Logf(format string, a ...any)         {}

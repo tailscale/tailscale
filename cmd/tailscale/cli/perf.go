@@ -18,23 +18,30 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/local"
 	"tailscale.com/cmd/tailscale/cli/ffcomplete"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/paths"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailperf"
 )
 
 var perfCmd = &ffcli.Command{
 	Name:       "perf",
-	ShortUsage: "tailscale perf -s [--port=<port>] | tailscale perf -c <hostname-or-IP> [flags] | tailscale perf --history",
+	ShortUsage: "tailscale perf list [--all] | tailscale perf -s [--port=<port>] | tailscale perf -c <hostname-or-IP> [flags] | tailscale perf --history",
 	ShortHelp:  "Run a Tailperf node-to-node performance test",
 	LongHelp: strings.TrimSpace(`
 Tailperf runs a Tailscale-integrated performance test between this node and
 another node in the tailnet.
+
+List usable targets:
+
+  tailscale perf list
+  tailscale perf list --all
 
 Manual server mode:
 
@@ -72,6 +79,7 @@ Local history:
 		fs.BoolVar(&perfArgs.baseline, "baseline", false, "compare the result with matching local Tailperf history")
 		fs.StringVar(&perfArgs.exportSupport, "export-support", "", "write redacted Tailperf history support data to this path; use - for stdout")
 		fs.BoolVar(&perfArgs.noMagic, "no-magic", false, "skip grant-authorized remote server setup and use a manually started server")
+		fs.BoolVar(&perfArgs.listAll, "all", false, "with 'perf list', show all peers instead of truncating")
 		return fs
 	})(),
 }
@@ -103,7 +111,14 @@ var perfArgs struct {
 	baseline       bool
 	exportSupport  string
 	noMagic        bool
+	listAll        bool
 }
+
+const (
+	tailperfListDefaultLimit     = 20
+	tailperfListProbeTimeout     = 1500 * time.Millisecond
+	tailperfListProbeConcurrency = 8
+)
 
 type tailperfPortFlag struct {
 	dst      *uint
@@ -130,7 +145,59 @@ func (f tailperfPortFlag) Set(s string) error {
 	return nil
 }
 
+func parseTailperfListArgs(args []string, flagAll bool) (list bool, all bool, rest []string, err error) {
+	if len(args) == 0 || args[0] != "list" {
+		return false, flagAll, args, nil
+	}
+	all = flagAll
+	for _, arg := range args[1:] {
+		switch arg {
+		case "--all":
+			all = true
+		default:
+			return true, all, nil, errors.New("usage: tailscale perf list [--all]")
+		}
+	}
+	return true, all, nil, nil
+}
+
+type tailperfRemoteStatus struct {
+	Busy  bool                      `json:"busy"`
+	Rules []tailcfg.TailperfCapRule `json:"rules,omitempty"`
+}
+
+type tailperfListPeer struct {
+	Name       string
+	IP         string
+	OS         string
+	State      string
+	Path       string
+	Reachable  bool
+	PeerAPIURL string
+	Status     *tailperfRemoteStatus
+	StatusErr  string
+}
+
+type tailperfListOptions struct {
+	All           bool
+	Limit         int
+	CommandPrefix []string
+}
+
 func runPerf(ctx context.Context, args []string) error {
+	list, listAll, _, err := parseTailperfListArgs(args, perfArgs.listAll)
+	if err != nil {
+		return err
+	}
+	if list {
+		if perfArgs.server || perfArgs.client != "" || perfArgs.history || perfArgs.exportSupport != "" {
+			return errors.New("specify 'tailscale perf list' without -s, -c, --history, or --export-support")
+		}
+		return runPerfList(ctx, listAll)
+	}
+	if perfArgs.listAll {
+		return errors.New("--all is only valid with 'tailscale perf list'")
+	}
 	if len(args) == 1 && perfArgs.client == "" && !perfArgs.server {
 		perfArgs.client = args[0]
 		args = nil
@@ -258,6 +325,428 @@ func runPerf(ctx context.Context, args []string) error {
 		}
 	}
 	return nil
+}
+
+func runPerfList(ctx context.Context, all bool) error {
+	st, err := localClient.Status(ctx)
+	if err != nil {
+		return fixTailscaledConnectError(err)
+	}
+	description, ok := isRunningOrStarting(st)
+	if !ok {
+		printf("%s\n", description)
+		os.Exit(1)
+	}
+	peers := tailperfListPeersFromStatus(st, all)
+	toProbe := peers
+	if !all && len(toProbe) > tailperfListDefaultLimit {
+		toProbe = toProbe[:tailperfListDefaultLimit]
+	}
+	probeTailperfListPeers(ctx, toProbe)
+	return writeTailperfListReport(Stdout, peers, tailperfListOptions{
+		All:           all,
+		Limit:         tailperfListDefaultLimit,
+		CommandPrefix: tailperfListCommandPrefix(),
+	})
+}
+
+func tailperfListPeersFromStatus(st *ipnstate.Status, all bool) []tailperfListPeer {
+	if st == nil {
+		return nil
+	}
+	peers := make([]tailperfListPeer, 0, len(st.Peer))
+	for _, ps := range st.Peer {
+		if ps == nil {
+			continue
+		}
+		reachable := ps.Active || ps.Online
+		if !all && !reachable {
+			continue
+		}
+		ip, ok := preferredTailscaleIP(ps.TailscaleIPs)
+		if !ok {
+			continue
+		}
+		var peerAPIURL string
+		if len(ps.PeerAPIURL) > 0 {
+			peerAPIURL = ps.PeerAPIURL[0]
+		}
+		peers = append(peers, tailperfListPeer{
+			Name:       tailperfListPeerName(st, ps),
+			IP:         ip.String(),
+			OS:         ps.OS,
+			State:      tailperfListState(ps),
+			Path:       tailperfListPath(ps),
+			Reachable:  reachable,
+			PeerAPIURL: peerAPIURL,
+		})
+	}
+	sort.SliceStable(peers, func(i, j int) bool {
+		if peers[i].Reachable != peers[j].Reachable {
+			return peers[i].Reachable
+		}
+		if peers[i].State != peers[j].State {
+			return peers[i].State < peers[j].State
+		}
+		return strings.ToLower(peers[i].Name) < strings.ToLower(peers[j].Name)
+	})
+	return peers
+}
+
+func preferredTailscaleIP(ips []netip.Addr) (netip.Addr, bool) {
+	for _, ip := range ips {
+		if ip.Is4() {
+			return ip, true
+		}
+	}
+	if len(ips) == 0 {
+		return netip.Addr{}, false
+	}
+	return ips[0], true
+}
+
+func tailperfListPeerName(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
+	if ps.DNSName != "" || ps.HostName != "" {
+		return dnsOrQuoteHostname(st, ps)
+	}
+	if len(ps.TailscaleIPs) > 0 {
+		return ps.TailscaleIPs[0].String()
+	}
+	return "-"
+}
+
+func tailperfListState(ps *ipnstate.PeerStatus) string {
+	switch {
+	case ps.Active:
+		return "active"
+	case ps.Online:
+		return "online"
+	case !ps.LastSeen.IsZero():
+		return "offline"
+	default:
+		return "unknown"
+	}
+}
+
+func tailperfListPath(ps *ipnstate.PeerStatus) string {
+	switch {
+	case ps.CurAddr != "":
+		return "direct " + ps.CurAddr
+	case ps.PeerRelay != "":
+		return "peer relay " + ps.PeerRelay
+	case ps.Relay != "":
+		return "derp " + ps.Relay
+	default:
+		return ""
+	}
+}
+
+func probeTailperfListPeers(ctx context.Context, peers []tailperfListPeer) {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, tailperfListProbeConcurrency)
+	for i := range peers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				peers[i].StatusErr = ctx.Err().Error()
+				return
+			}
+			probeTailperfListPeer(ctx, &peers[i])
+		}(i)
+	}
+	wg.Wait()
+}
+
+func probeTailperfListPeer(ctx context.Context, p *tailperfListPeer) {
+	if p.Status != nil || p.StatusErr != "" {
+		return
+	}
+	if !p.Reachable && p.PeerAPIURL == "" {
+		p.StatusErr = "peer is offline"
+		return
+	}
+	if p.PeerAPIURL == "" {
+		addr, err := netip.ParseAddr(p.IP)
+		if err != nil {
+			p.StatusErr = "bad Tailscale IP: " + err.Error()
+			return
+		}
+		pctx, cancel := context.WithTimeout(ctx, tailperfListProbeTimeout)
+		pr, err := localClient.PingWithOpts(pctx, addr, tailcfg.PingPeerAPI, local.PingOpts{})
+		cancel()
+		if err != nil {
+			p.StatusErr = "PeerAPI discovery failed: " + err.Error()
+			return
+		}
+		if pr == nil {
+			p.StatusErr = "PeerAPI discovery failed: no response"
+			return
+		}
+		if pr.PeerAPIURL == "" {
+			if pr.Err != "" {
+				p.StatusErr = "PeerAPI discovery failed: " + pr.Err
+			} else {
+				p.StatusErr = "PeerAPI discovery failed: no PeerAPI URL"
+			}
+			return
+		}
+		p.PeerAPIURL = pr.PeerAPIURL
+	}
+	pctx, cancel := context.WithTimeout(ctx, tailperfListProbeTimeout)
+	status, err := getRemoteTailperfStatus(pctx, p.PeerAPIURL)
+	cancel()
+	if err != nil {
+		p.StatusErr = err.Error()
+		return
+	}
+	p.Status = &status
+}
+
+func getRemoteTailperfStatus(ctx context.Context, peerAPIURL string) (tailperfRemoteStatus, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(peerAPIURL, "/")+"/v0/tailperf/status", nil)
+	if err != nil {
+		return tailperfRemoteStatus{}, err
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return tailperfRemoteStatus{}, fmt.Errorf("Tailperf status failed: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusNotImplemented || res.StatusCode == http.StatusMethodNotAllowed {
+		return tailperfRemoteStatus{}, errors.New("Tailperf status unavailable: target build does not support Magic Perf status; update the target or try 'tailscale perf -c <ip>'")
+	}
+	if res.StatusCode != http.StatusOK {
+		var b bytes.Buffer
+		_, _ = b.ReadFrom(res.Body)
+		msg := strings.TrimSpace(b.String())
+		if msg == "" {
+			msg = res.Status
+		}
+		return tailperfRemoteStatus{}, fmt.Errorf("%s", msg)
+	}
+	var st tailperfRemoteStatus
+	if err := json.NewDecoder(res.Body).Decode(&st); err != nil {
+		return tailperfRemoteStatus{}, err
+	}
+	return st, nil
+}
+
+func writeTailperfListReport(w io.Writer, peers []tailperfListPeer, opts tailperfListOptions) error {
+	if opts.Limit == 0 {
+		opts.Limit = tailperfListDefaultLimit
+	}
+	if len(opts.CommandPrefix) == 0 {
+		opts.CommandPrefix = []string{"tailscale"}
+	}
+	total := len(peers)
+	shown := total
+	if !opts.All && opts.Limit > 0 && len(peers) > opts.Limit {
+		peers = peers[:opts.Limit]
+		shown = opts.Limit
+	}
+	if _, err := fmt.Fprintln(w, "Tailperf targets"); err != nil {
+		return err
+	}
+	if total == 0 {
+		_, err := fmt.Fprintln(w, "No reachable peers found.")
+		return err
+	}
+	if shown != total {
+		if _, err := fmt.Fprintf(w, "showing %d of %d peers; use 'tailscale perf list --all' to show every peer\n", shown, total); err != nil {
+			return err
+		}
+	}
+
+	var active, candidates, unavailable []tailperfListPeer
+	for _, p := range peers {
+		if p.Status != nil && len(tailperfListCommands(opts.CommandPrefix, p, true)) > 0 && p.Status.Busy {
+			active = append(active, p)
+			continue
+		}
+		if p.Status != nil && len(tailperfListCommands(opts.CommandPrefix, p, false)) > 0 {
+			candidates = append(candidates, p)
+			continue
+		}
+		unavailable = append(unavailable, p)
+	}
+	if len(active) > 0 {
+		if err := writeTailperfListSection(w, "Active Tailperf listeners", active, opts.CommandPrefix, true); err != nil {
+			return err
+		}
+	}
+	if len(candidates) > 0 {
+		if err := writeTailperfListSection(w, "Magic Perf candidates", candidates, opts.CommandPrefix, false); err != nil {
+			return err
+		}
+	}
+	if len(active) == 0 && len(candidates) == 0 {
+		if _, err := fmt.Fprintln(w, "No grant-authorized Magic Perf candidates found in the displayed peers."); err != nil {
+			return err
+		}
+	}
+	if len(unavailable) > 0 {
+		if err := writeTailperfUnavailableSection(w, unavailable, opts.CommandPrefix); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeTailperfListSection(w io.Writer, title string, peers []tailperfListPeer, commandPrefix []string, noMagic bool) error {
+	if _, err := fmt.Fprintln(w, title); err != nil {
+		return err
+	}
+	for _, p := range peers {
+		if err := writeTailperfListPeerLine(w, p); err != nil {
+			return err
+		}
+		for _, cmd := range tailperfListCommands(commandPrefix, p, noMagic) {
+			if _, err := fmt.Fprintf(w, "  %s: %s\n", cmd.Label, cmd.Command); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func writeTailperfUnavailableSection(w io.Writer, peers []tailperfListPeer, commandPrefix []string) error {
+	if _, err := fmt.Fprintln(w, "Peers without usable Magic Perf setup"); err != nil {
+		return err
+	}
+	for _, p := range peers {
+		if err := writeTailperfListPeerLine(w, p); err != nil {
+			return err
+		}
+		reason := p.StatusErr
+		if reason == "" {
+			reason = "no configured Tailperf listen ports returned"
+		}
+		if _, err := fmt.Fprintf(w, "  Reason: %s\n", reason); err != nil {
+			return err
+		}
+		if p.IP != "" {
+			if _, err := fmt.Fprintf(w, "  PeerAPI check: %s\n", shellJoin(append(append([]string{}, commandPrefix...), "ping", "--peerapi", p.IP))); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func writeTailperfListPeerLine(w io.Writer, p tailperfListPeer) error {
+	var attrs []string
+	if p.IP != "" {
+		attrs = append(attrs, p.IP)
+	}
+	if p.OS != "" {
+		attrs = append(attrs, p.OS)
+	}
+	if p.State != "" {
+		attrs = append(attrs, p.State)
+	}
+	if p.Path != "" {
+		attrs = append(attrs, p.Path)
+	}
+	if len(attrs) == 0 {
+		_, err := fmt.Fprintf(w, "- %s\n", p.Name)
+		return err
+	}
+	_, err := fmt.Fprintf(w, "- %s (%s)\n", p.Name, strings.Join(attrs, ", "))
+	return err
+}
+
+type tailperfListCommand struct {
+	Label   string
+	Command string
+}
+
+func tailperfListCommands(commandPrefix []string, p tailperfListPeer, noMagic bool) []tailperfListCommand {
+	if p.Status == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []tailperfListCommand
+	for _, rule := range p.Status.Rules {
+		if rule.TUNListenPort != 0 {
+			key := fmt.Sprintf("tun:%d", rule.TUNListenPort)
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, tailperfListCommand{
+					Label:   "TUN",
+					Command: formatTailperfRunCommand(commandPrefix, p.IP, false, noMagic, rule.TUNListenPort),
+				})
+			}
+		}
+		if rule.UserspaceListenPort != 0 {
+			key := fmt.Sprintf("userspace:%d", rule.UserspaceListenPort)
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, tailperfListCommand{
+					Label:   "userspace",
+					Command: formatTailperfRunCommand(commandPrefix, p.IP, true, noMagic, rule.UserspaceListenPort),
+				})
+			}
+		}
+	}
+	return out
+}
+
+func formatTailperfRunCommand(commandPrefix []string, ip string, noTUN, noMagic bool, port uint16) string {
+	args := append([]string{}, commandPrefix...)
+	args = append(args, "perf", "-c", ip)
+	if noTUN {
+		args = append(args, "--no-tun")
+	}
+	if noMagic {
+		args = append(args, "--no-magic")
+	}
+	if port != 0 {
+		args = append(args, fmt.Sprintf("--port=%d", port))
+	}
+	return shellJoin(args)
+}
+
+func tailperfListCommandPrefix() []string {
+	cmd := "tailscale"
+	if len(os.Args) > 0 && os.Args[0] != "" {
+		cmd = os.Args[0]
+	}
+	args := []string{cmd}
+	if localClient.Socket != "" && localClient.Socket != paths.DefaultTailscaledSocket() {
+		args = append(args, "--socket="+localClient.Socket)
+	}
+	return args
+}
+
+func shellJoin(args []string) string {
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = shellQuoteArg(arg)
+	}
+	return strings.Join(quoted, " ")
+}
+
+func shellQuoteArg(s string) string {
+	if s == "" {
+		return "''"
+	}
+	for _, r := range s {
+		if !isShellSafeRune(r) {
+			return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+		}
+	}
+	return s
+}
+
+func isShellSafeRune(r rune) bool {
+	return r >= 'a' && r <= 'z' ||
+		r >= 'A' && r <= 'Z' ||
+		r >= '0' && r <= '9' ||
+		strings.ContainsRune("@%_+=:,./-", r)
 }
 
 func tailperfLogPathFromCacheDir(cacheDir string) string {

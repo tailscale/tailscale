@@ -23,6 +23,7 @@ import (
 func init() {
 	feature.Register("tailperf")
 	ipnlocal.RegisterPeerAPIHandler("/v0/tailperf/start", handlePeerAPIStart)
+	ipnlocal.RegisterPeerAPIHandler("/v0/tailperf/status", handlePeerAPIStatus)
 }
 
 type startRequest struct {
@@ -36,6 +37,11 @@ type startRequest struct {
 type startResponse struct {
 	Port      uint16    `json:"port"`
 	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+type statusResponse struct {
+	Busy  bool                      `json:"busy"`
+	Rules []tailcfg.TailperfCapRule `json:"rules,omitempty"`
 }
 
 var defaultManager manager
@@ -103,6 +109,12 @@ func (m *manager) Start(ctx context.Context, cfg core.ServerConfig, maxAge time.
 	return expires, nil
 }
 
+func (m *manager) Busy() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cancel != nil || m.starting
+}
+
 func listenServer(cfg core.ServerConfig) (boundServer, error) {
 	addr := fmt.Sprintf("%s:%d", cfg.Addr, cfg.Port)
 	switch cfg.Protocol {
@@ -129,22 +141,33 @@ func listenServer(cfg core.ServerConfig) (boundServer, error) {
 	}
 }
 
+func handlePeerAPIStatus(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
+	handlePeerAPIStatusWithManager(h, w, r, &defaultManager)
+}
+
+func handlePeerAPIStatusWithManager(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request, m *manager) {
+	if r.Method != "GET" {
+		http.Error(w, "bad method", http.StatusMethodNotAllowed)
+		return
+	}
+	rules, ok := peerAPITailperfRules(h, w)
+	if !ok {
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(statusResponse{
+		Busy:  m.Busy(),
+		Rules: rules,
+	})
+}
+
 func handlePeerAPIStart(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "bad method", http.StatusMethodNotAllowed)
 		return
 	}
-	if h.Peer().UnsignedPeerAPIOnly() {
-		http.Error(w, "Tailperf denied: unsigned PeerAPI clients are not allowed.", http.StatusForbidden)
-		return
-	}
-	rules, err := tailperfCapRules(h.PeerCaps())
-	if err != nil {
-		http.Error(w, "Tailperf denied: invalid tailscale.io/cap/tailperf grant.", http.StatusForbidden)
-		return
-	}
-	if len(rules) == 0 {
-		http.Error(w, "Tailperf denied: this user or node is not granted tailscale.io/cap/tailperf for the target.", http.StatusForbidden)
+	rules, ok := peerAPITailperfRules(h, w)
+	if !ok {
 		return
 	}
 	var req startRequest
@@ -183,6 +206,23 @@ func handlePeerAPIStart(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *htt
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(startResponse{Port: port, ExpiresAt: expires})
+}
+
+func peerAPITailperfRules(h ipnlocal.PeerAPIHandler, w http.ResponseWriter) ([]tailcfg.TailperfCapRule, bool) {
+	if h.Peer().UnsignedPeerAPIOnly() {
+		http.Error(w, "Tailperf denied: unsigned PeerAPI clients are not allowed.", http.StatusForbidden)
+		return nil, false
+	}
+	rules, err := tailperfCapRules(h.PeerCaps())
+	if err != nil {
+		http.Error(w, "Tailperf denied: invalid tailscale.io/cap/tailperf grant.", http.StatusForbidden)
+		return nil, false
+	}
+	if len(rules) == 0 {
+		http.Error(w, "Tailperf denied: this user or node is not granted tailscale.io/cap/tailperf for the target.", http.StatusForbidden)
+		return nil, false
+	}
+	return rules, true
 }
 
 func tailperfCapRules(caps tailcfg.PeerCapMap) ([]tailcfg.TailperfCapRule, error) {

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"flag"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/tailcfg"
 	"tailscale.com/tailperf"
 )
 
@@ -50,6 +52,165 @@ func TestTailperfPortFlagTracksExplicitSet(t *testing.T) {
 	}
 	if port != 22345 {
 		t.Fatalf("port = %d, want 22345", port)
+	}
+}
+
+func TestParseTailperfListArgs(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		flagAll    bool
+		wantList   bool
+		wantAll    bool
+		wantErrSub string
+	}{
+		{
+			name:     "not list",
+			args:     []string{"node-a"},
+			wantList: false,
+		},
+		{
+			name:     "list",
+			args:     []string{"list"},
+			wantList: true,
+		},
+		{
+			name:     "list all after subcommand",
+			args:     []string{"list", "--all"},
+			wantList: true,
+			wantAll:  true,
+		},
+		{
+			name:     "list all from flag parser",
+			args:     []string{"list"},
+			flagAll:  true,
+			wantList: true,
+			wantAll:  true,
+		},
+		{
+			name:       "unknown list arg",
+			args:       []string{"list", "node-a"},
+			wantList:   true,
+			wantErrSub: "usage: tailscale perf list",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotList, gotAll, _, err := parseTailperfListArgs(tt.args, tt.flagAll)
+			if tt.wantErrSub != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErrSub) {
+					t.Fatalf("error = %v, want substring %q", err, tt.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if gotList != tt.wantList || gotAll != tt.wantAll {
+				t.Fatalf("parseTailperfListArgs = list %v all %v, want list %v all %v", gotList, gotAll, tt.wantList, tt.wantAll)
+			}
+		})
+	}
+}
+
+func TestWriteTailperfListReportCommands(t *testing.T) {
+	peers := []tailperfListPeer{
+		{
+			Name:  "busy-mac",
+			IP:    "100.64.0.1",
+			OS:    "macOS",
+			State: "active",
+			Path:  "direct",
+			Status: &tailperfRemoteStatus{
+				Busy: true,
+				Rules: []tailcfg.TailperfCapRule{{
+					TUNListenPort:       22345,
+					UserspaceListenPort: 12345,
+				}},
+			},
+		},
+		{
+			Name:  "linux-target",
+			IP:    "100.64.0.2",
+			OS:    "linux",
+			State: "online",
+			Path:  "derp sfo",
+			Status: &tailperfRemoteStatus{
+				Rules: []tailcfg.TailperfCapRule{{
+					TUNListenPort:       22346,
+					UserspaceListenPort: 12346,
+				}},
+			},
+		},
+	}
+
+	var b bytes.Buffer
+	if err := writeTailperfListReport(&b, peers, tailperfListOptions{
+		All:           true,
+		Limit:         20,
+		CommandPrefix: []string{"tailscale"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	for _, want := range []string{
+		"Active Tailperf listeners",
+		"busy-mac",
+		"tailscale perf -c 100.64.0.1 --no-magic --port=22345",
+		"tailscale perf -c 100.64.0.1 --no-tun --no-magic --port=12345",
+		"Magic Perf candidates",
+		"linux-target",
+		"tailscale perf -c 100.64.0.2 --port=22346",
+		"tailscale perf -c 100.64.0.2 --no-tun --port=12346",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("list output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestWriteTailperfListReportTruncates(t *testing.T) {
+	var peers []tailperfListPeer
+	for i := range 3 {
+		peers = append(peers, tailperfListPeer{
+			Name:  fmt.Sprintf("node-%d", i),
+			IP:    fmt.Sprintf("100.64.0.%d", i+1),
+			State: "online",
+			Status: &tailperfRemoteStatus{
+				Rules: []tailcfg.TailperfCapRule{{TUNListenPort: uint16(22000 + i)}},
+			},
+		})
+	}
+
+	var b bytes.Buffer
+	if err := writeTailperfListReport(&b, peers, tailperfListOptions{
+		Limit:         2,
+		CommandPrefix: []string{"tailscale"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	if !strings.Contains(out, "showing 2 of 3 peers; use 'tailscale perf list --all'") {
+		t.Fatalf("list output missing truncation notice:\n%s", out)
+	}
+	if strings.Contains(out, "node-2") {
+		t.Fatalf("list output included truncated peer:\n%s", out)
+	}
+
+	b.Reset()
+	if err := writeTailperfListReport(&b, peers, tailperfListOptions{
+		All:           true,
+		Limit:         2,
+		CommandPrefix: []string{"tailscale"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out = b.String()
+	if !strings.Contains(out, "node-2") {
+		t.Fatalf("--all output omitted final peer:\n%s", out)
+	}
+	if strings.Contains(out, "showing 2 of 3") {
+		t.Fatalf("--all output still had truncation notice:\n%s", out)
 	}
 }
 
