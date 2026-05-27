@@ -186,7 +186,8 @@ type CapabilityVersion int
 //   - 137: 2026-04-15: Client handles 429 responses to /machine/register.
 //   - 138: 2026-03-31: can handle C2N /debug/tka.
 //   - 139: 2026-05-22: Client understands [NodeAttrEmitRuntimeMetrics]
-const CurrentCapabilityVersion CapabilityVersion = 139
+//   - 140: 2026-05-27: Client understands [NodeAttrDisableUDPGRO], [NodeAttrDisableUDPGSO], [NodeAttrDisableTUNUDPGRO], [NodeAttrDisableTUNTCPGRO]
+const CurrentCapabilityVersion CapabilityVersion = 140
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2793,6 +2794,42 @@ const (
 	// NodeAttrEmitRuntimeMetrics enables emission of [runtime/metrics] as
 	// [tailscale.com/util/clientmetric]'s.
 	NodeAttrEmitRuntimeMetrics NodeCapability = "emit-runtime-metrics"
+
+	// NodeAttrDisableUDPGRO disables UDP GRO (UDP_GRO socket option on Linux)
+	// on the magicsock UDP socket. It exists so control can mitigate kernel
+	// regressions that cause throughput or correctness issues with UDP GRO on
+	// specific OS/kernel versions, without requiring a client release. See
+	// https://github.com/tailscale/tailscale/issues/19777 for example.
+	// Currently only consulted on Linux; may apply to other platforms as they
+	// gain UDP GRO support.
+	NodeAttrDisableUDPGRO NodeCapability = "disable-udp-gro"
+
+	// NodeAttrDisableUDPGSO disables UDP GSO (UDP_SEGMENT socket option on
+	// Linux) on the magicsock UDP socket. It exists so control can mitigate
+	// kernel regressions that cause throughput or correctness issues with UDP
+	// GSO on specific OS/kernel versions, without requiring a client release.
+	// See https://github.com/tailscale/tailscale/issues/19777 for example.
+	// Currently only consulted on Linux; may apply to other platforms as they
+	// gain UDP GSO support.
+	NodeAttrDisableUDPGSO NodeCapability = "disable-udp-gso"
+
+	// NodeAttrDisableTUNUDPGRO disables UDP GRO on the Tailscale TUN device.
+	// It exists so control can mitigate kernel regressions that cause
+	// throughput or correctness issues with TUN UDP GRO on specific OS/kernel
+	// versions, without requiring a client release. See
+	// https://github.com/tailscale/tailscale/issues/13041 for example.
+	// Currently only consulted on Linux; may apply to other platforms as they
+	// gain TUN UDP GRO support.
+	NodeAttrDisableTUNUDPGRO NodeCapability = "disable-tun-udp-gro"
+
+	// NodeAttrDisableTUNTCPGRO disables TCP GRO on the Tailscale TUN device.
+	// It exists so control can mitigate kernel regressions that cause
+	// throughput or correctness issues with TUN TCP GRO on specific OS/kernel
+	// versions, without requiring a client release. See
+	// https://github.com/tailscale/tailscale/issues/13041 for example.
+	// Currently only consulted on Linux; may apply to other platforms as they
+	// gain TUN TCP GRO support.
+	NodeAttrDisableTUNTCPGRO NodeCapability = "disable-tun-tcp-gro"
 )
 
 const (

@@ -20,6 +20,7 @@ import (
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"golang.org/x/sys/unix"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/neterror"
@@ -426,8 +427,14 @@ func tryEnableRXQOverflowsCounter(pconn nettype.PacketConn) (enabled bool) {
 }
 
 // tryEnableUDPOffload attempts to enable the UDP_GRO socket option on pconn,
-// and returns two booleans indicating TX and RX UDP offload support.
-func tryEnableUDPOffload(pconn nettype.PacketConn) (hasTX bool, hasRX bool) {
+// and returns two booleans indicating TX and RX UDP offload support. If knobs
+// is non-nil, UDP GSO and/or UDP GRO may be disabled via control-plane node
+// attributes.
+func tryEnableUDPOffload(pconn nettype.PacketConn, knobs *controlknobs.Knobs) (hasTX bool, hasRX bool) {
+	disableGSO := envknob.Bool("TS_DEBUG_DISABLE_UDP_GSO") ||
+		(knobs != nil && knobs.DisableUDPGSO.Load())
+	disableGRO := envknob.Bool("TS_DEBUG_DISABLE_UDP_GRO") ||
+		(knobs != nil && knobs.DisableUDPGRO.Load())
 	if c, ok := pconn.(*net.UDPConn); ok {
 		rc, err := c.SyscallConn()
 		if err != nil {
@@ -435,11 +442,11 @@ func tryEnableUDPOffload(pconn nettype.PacketConn) (hasTX bool, hasRX bool) {
 		}
 		err = rc.Control(func(fd uintptr) {
 			var errSyscall error
-			if !envknob.Bool("TS_DEBUG_DISABLE_UDP_GSO") {
+			if !disableGSO {
 				_, errSyscall = syscall.GetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_SEGMENT)
 				hasTX = errSyscall == nil
 			}
-			if !envknob.Bool("TS_DEBUG_DISABLE_UDP_GRO") {
+			if !disableGRO {
 				errSyscall = syscall.SetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_GRO, 1)
 				hasRX = errSyscall == nil
 			}
@@ -518,8 +525,9 @@ func getRXQOverflowsMetric(name string) *clientmetric.Metric {
 // pconn to a [Conn] if appropriate. A batch size of [IdealBatchSize] is
 // suggested for the best performance. If len(rxqOverflowsMetricName) is
 // nonzero, then read ops will propagate the SO_RXQ_OVFL control message counter
-// to a clientmetric with the supplied name.
-func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int, rxqOverflowsMetricName string) nettype.PacketConn {
+// to a clientmetric with the supplied name. If knobs is non-nil, UDP GSO
+// and/or UDP GRO may be disabled via control-plane node attributes.
+func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int, rxqOverflowsMetricName string, knobs *controlknobs.Knobs) nettype.PacketConn {
 	if runtime.GOOS != "linux" {
 		// Exclude Android.
 		return pconn
@@ -569,7 +577,7 @@ func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int, r
 		panic("bogus network")
 	}
 	var txOffload bool
-	txOffload, b.rxOffload = tryEnableUDPOffload(uc)
+	txOffload, b.rxOffload = tryEnableUDPOffload(uc, knobs)
 	b.txOffload.Store(txOffload)
 	if len(rxqOverflowsMetricName) > 0 && tryEnableRXQOverflowsCounter(uc) {
 		// Don't register the metric unless the socket option has been
