@@ -791,10 +791,13 @@ func runDaemonLogs(ctx context.Context, args []string) error {
 	}
 	d := json.NewDecoder(logs)
 	for {
+		type logtail struct {
+			Time string `json:"client_time"`
+		}
 		var line struct {
-			Text    string `json:"text"`
-			Verbose int    `json:"v"`
-			Time    string `json:"client_time"`
+			Text    string  `json:"text"`
+			Verbose int     `json:"v"`
+			Logtail logtail `json:"logtail"`
 		}
 		err := d.Decode(&line)
 		if err != nil {
@@ -804,8 +807,8 @@ func runDaemonLogs(ctx context.Context, args []string) error {
 		if line.Text == "" || line.Verbose > daemonLogsArgs.verbose {
 			continue
 		}
-		if daemonLogsArgs.time {
-			fmt.Printf("%s %s\n", line.Time, line.Text)
+		if daemonLogsArgs.time && line.Logtail.Time != "" {
+			fmt.Printf("%s %s\n", line.Logtail.Time, line.Text)
 		} else {
 			fmt.Println(line.Text)
 		}
