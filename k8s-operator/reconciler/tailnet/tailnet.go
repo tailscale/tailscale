@@ -288,7 +288,12 @@ func (r *Reconciler) ensurePermissions(ctx context.Context, tsClient tsclient.Cl
 		errs = errors.Join(errs, fmt.Errorf("failed to list auth keys: %w", err))
 	}
 
-	if _, err := tsClient.VIPServices().List(ctx); err != nil {
+	// A 404 from the VIP services endpoint is not an authentication problem: it is returned when the
+	// tailnet has no VIP services defined (or the feature is otherwise unavailable to it), even when the
+	// OAuth credentials are valid. VIP services are only required for ingress ProxyGroups, so we treat a
+	// not-found response as "services unavailable" rather than folding it into the OAuth validity check,
+	// where it would surface as a misleading InvalidOAuth condition.
+	if _, err := tsClient.VIPServices().List(ctx); err != nil && !tailscale.IsNotFound(err) {
 		errs = errors.Join(errs, fmt.Errorf("failed to list tailscale services: %w", err))
 	}
 

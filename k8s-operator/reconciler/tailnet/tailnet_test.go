@@ -293,6 +293,45 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
+			Name: "ready-services-not-found-tolerated",
+			Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name: "default",
+				},
+			},
+			Tailnet: &tsapi.Tailnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "default",
+				},
+				Spec: tsapi.TailnetSpec{
+					Credentials: tsapi.TailnetCredentials{
+						SecretName: "test",
+					},
+				},
+			},
+			Secret: &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test",
+					Namespace: "tailscale",
+				},
+				Data: map[string][]byte{
+					"client_id":     []byte("test"),
+					"client_secret": []byte("test"),
+				},
+			},
+			ClientFunc: func(_ *tsapi.Tailnet, _ *corev1.Secret) tsclient.Client {
+				return &MockTailnetClient{NotFoundOnServices: true}
+			},
+			ExpectedConditions: []metav1.Condition{
+				{
+					Type:    string(tsapi.TailnetReady),
+					Status:  metav1.ConditionTrue,
+					Reason:  tailnet.ReasonValid,
+					Message: tailnet.ReasonValid,
+				},
+			},
+		},
+		{
 			Name: "ready-valid-scopes-correct",
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{

@@ -8,6 +8,7 @@ package tailnet_test
 import (
 	"context"
 	"io"
+	"net/http"
 
 	"tailscale.com/client/tailscale/v2"
 
@@ -16,9 +17,10 @@ import (
 
 type (
 	MockTailnetClient struct {
-		ErrorOnDevices  bool
-		ErrorOnKeys     bool
-		ErrorOnServices bool
+		ErrorOnDevices     bool
+		ErrorOnKeys        bool
+		ErrorOnServices    bool
+		NotFoundOnServices bool
 	}
 
 	MockDeviceResource struct {
@@ -36,7 +38,8 @@ type (
 	MockVIPServiceResource struct {
 		tsclient.VIPServiceResource
 
-		Error bool
+		Error    bool
+		NotFound bool
 	}
 )
 
@@ -57,6 +60,10 @@ func (m MockDeviceResource) List(_ context.Context, _ ...tailscale.ListDevicesOp
 }
 
 func (m MockVIPServiceResource) List(_ context.Context) ([]tailscale.VIPService, error) {
+	if m.NotFound {
+		return nil, tailscale.APIError{Status: http.StatusNotFound, Message: "not found"}
+	}
+
 	if m.Error {
 		return nil, io.EOF
 	}
@@ -73,7 +80,7 @@ func (m MockTailnetClient) Keys() tsclient.KeyResource {
 }
 
 func (m MockTailnetClient) VIPServices() tsclient.VIPServiceResource {
-	return MockVIPServiceResource{Error: m.ErrorOnServices}
+	return MockVIPServiceResource{Error: m.ErrorOnServices, NotFound: m.NotFoundOnServices}
 }
 
 func (m MockTailnetClient) LoginURL() string {
