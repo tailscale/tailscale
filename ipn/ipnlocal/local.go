@@ -1998,6 +1998,13 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 			selfChange = st.NetMap.SelfNode.AsStruct()
 		}
 		notify := ipn.Notify{SelfChange: selfChange}
+		if b.hasPeerChangeWatcherLocked() {
+			notify.UserProfiles = st.NetMap.UserProfiles
+			notify.PeersChanged = make([]*tailcfg.Node, 0, len(st.NetMap.Peers))
+			for _, p := range st.NetMap.Peers {
+				notify.PeersChanged = append(notify.PeersChanged, p.AsStruct())
+			}
+		}
 		if goosGetsLegacyNetmapNotify {
 			notify.NetMap = st.NetMap
 		}
@@ -3885,6 +3892,18 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 		nCopy.UserProfiles = sessUserProfiles
 	}
 	return &nCopy
+}
+
+// hasPeerChangeWatcherLocked reports whether any active watcher wants peer-set
+// notifications. b.mu must be held.
+func (b *LocalBackend) hasPeerChangeWatcherLocked() bool {
+	syncs.AssertLocked(&b.mu)
+	for _, sess := range b.notifyWatchers {
+		if sess.mask&(ipn.NotifyPeerChanges|ipn.NotifyPeerPatches) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // setAuthURLLocked sets the authURL and triggers [LocalBackend.popBrowserAuthNow] if the URL has changed.
