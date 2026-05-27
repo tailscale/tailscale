@@ -675,7 +675,7 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 
 	for _, m := range muts {
 		switch m := m.(type) {
-		case netmap.NodeMutationAdd:
+		case netmap.NodeMutationUpsert:
 			nid := m.Node.ID()
 			mak.Set(&nb.peers, nid, m.Node)
 			for _, ipp := range m.Node.Addresses().All() {

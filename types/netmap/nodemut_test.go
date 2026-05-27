@@ -55,7 +55,7 @@ func TestMapResponseContainsNonPatchFields(t *testing.T) {
 			// The three legacy delta fields handled via NodeMutation patches.
 			want = false
 		case "PeersChanged", "PeersRemoved":
-			// Now carried as NodeMutationAdd / NodeMutationRemove entries.
+			// Now carried as NodeMutationUpsert / NodeMutationRemove entries.
 			want = false
 		case "PacketFilter", "PacketFilters":
 			// Now delivered separately via PacketFilterUpdater.
@@ -196,7 +196,7 @@ func TestMutationsFromMapResponse(t *testing.T) {
 			mr: &tailcfg.MapResponse{
 				PeersChanged: []*tailcfg.Node{{ID: 7}},
 			},
-			want: muts(NodeMutationAdd{Node: (&tailcfg.Node{ID: 7}).View()}),
+			want: muts(NodeMutationUpsert{Node: (&tailcfg.Node{ID: 7}).View()}),
 		},
 		{
 			name: "add-and-remove-mixed-with-patch",
@@ -211,7 +211,7 @@ func TestMutationsFromMapResponse(t *testing.T) {
 			want: muts(
 				NodeMutationRemove{3},
 				NodeMutationDERPHome{5, 2},
-				NodeMutationAdd{Node: (&tailcfg.Node{ID: 7}).View()},
+				NodeMutationUpsert{Node: (&tailcfg.Node{ID: 7}).View()},
 			),
 		},
 	}

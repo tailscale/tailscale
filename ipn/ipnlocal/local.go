@@ -2312,21 +2312,21 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	cn := b.currentNode()
 	cn.UpdateNetmapDelta(muts)
 
-	// Dispatch Add/Remove per-peer to magicsock, and any per-field
+	// Dispatch Upsert/Remove per-peer to magicsock, and any per-field
 	// patches via the existing UpdateNetmapDelta path. The per-peer
 	// methods take c.mu themselves, so we can't call them from inside
 	// magicsock.UpdateNetmapDelta which already holds c.mu.
-	peersAddedOrRemoved := false
+	peersUpsertedOrRemoved := false
 	ms := b.MagicConn()
 	for _, m := range muts {
 		switch m := m.(type) {
-		case netmap.NodeMutationAdd:
+		case netmap.NodeMutationUpsert:
 			ms.UpsertPeer(m.Node)
-			peersAddedOrRemoved = true
-			metricNetmapDeltaPeerAdded.Add(1)
+			peersUpsertedOrRemoved = true
+			metricNetmapDeltaPeerUpserted.Add(1)
 		case netmap.NodeMutationRemove:
 			ms.RemovePeer(m.NodeIDBeingMutated())
-			peersAddedOrRemoved = true
+			peersUpsertedOrRemoved = true
 			metricNetmapDeltaPeerRemoved.Add(1)
 		default:
 			metricNetmapDeltaPeerPatched.Add(1)
@@ -2363,17 +2363,17 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		return true
 	}
 
-	// A single MapResponse can carry adds/removes (full Nodes) AND
+	// A single MapResponse can carry upserts/removes (full Nodes) AND
 	// per-field patches in the same delta. Build one Notify that
 	// reflects all of them; per-session stripping in [sendToLocked]
 	// hides fields the watcher didn't opt in to (and promotes patches
 	// into full Nodes for watchers that asked for PeerChanges but not
 	// PeerPatches).
-	if peersAddedOrRemoved || mutationsAreWorthyOfTellingIPNBus(muts) {
+	if peersUpsertedOrRemoved || mutationsAreWorthyOfTellingIPNBus(muts) {
 		notify = &ipn.Notify{}
 		for _, m := range muts {
 			switch m := m.(type) {
-			case netmap.NodeMutationAdd:
+			case netmap.NodeMutationUpsert:
 				notify.PeersChanged = append(notify.PeersChanged, m.Node.AsStruct())
 			case netmap.NodeMutationRemove:
 				notify.PeersRemoved = append(notify.PeersRemoved, m.NodeIDBeingMutated())
@@ -2509,7 +2509,7 @@ func ipnBusPeerChangedPatchFromNodeMutations(muts []netmap.NodeMutation) ([]*tai
 	}
 	for _, m := range muts {
 		switch v := m.(type) {
-		case netmap.NodeMutationAdd, netmap.NodeMutationRemove:
+		case netmap.NodeMutationUpsert, netmap.NodeMutationRemove:
 			// These go in PeersChanged / PeersRemoved, not as patches.
 			continue
 		case netmap.NodeMutationOnline:
@@ -8590,11 +8590,11 @@ var (
 	// [mapSession.tryHandleIncrementally]. Useful as test signals that a
 	// MapResponse landed on the incremental path with the expected
 	// payload shape.
-	metricNetmapDeltaPeerAdded   = clientmetric.NewCounter("localbackend_netmap_delta_peer_added")
-	metricNetmapDeltaPeerRemoved = clientmetric.NewCounter("localbackend_netmap_delta_peer_removed")
-	metricNetmapDeltaPeerPatched = clientmetric.NewCounter("localbackend_netmap_delta_peer_patched")
-	metricUpdatePacketFilter     = clientmetric.NewCounter("localbackend_update_packet_filter")
-	metricUpdateUserProfiles     = clientmetric.NewCounter("localbackend_update_user_profiles")
+	metricNetmapDeltaPeerUpserted = clientmetric.NewCounter("localbackend_netmap_delta_peer_upserted")
+	metricNetmapDeltaPeerRemoved  = clientmetric.NewCounter("localbackend_netmap_delta_peer_removed")
+	metricNetmapDeltaPeerPatched  = clientmetric.NewCounter("localbackend_netmap_delta_peer_patched")
+	metricUpdatePacketFilter      = clientmetric.NewCounter("localbackend_update_packet_filter")
+	metricUpdateUserProfiles      = clientmetric.NewCounter("localbackend_update_user_profiles")
 )
 
 func (b *LocalBackend) stateEncrypted() opt.Bool {
