@@ -165,6 +165,12 @@ type watchSession struct {
 	// "control re-announces the same profile" case is a pointer-cheap
 	// equality check.
 	lastSentUserProfile map[tailcfg.UserID]tailcfg.UserProfileView
+
+	// lastSentSelf identifies the self node most recently delivered to
+	// this session via [Notify.SelfChange]. A change to self is a profile
+	// boundary for implicit bus state, so per-session dedup state such as
+	// lastSentUserProfile must be reset when this identity changes.
+	lastSentSelf tailcfg.NodeView
 }
 
 var (
@@ -3873,6 +3879,10 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	stripPatches := len(n.PeerChangedPatch) > 0 && !wantsPeerPatches
 	promotePatches := len(n.PeerChangedPatch) > 0 && wantsPeerChanges && !wantsPeerPatches
 
+	if sess.selfChangeResetsImplicitState(n.SelfChange.View()) {
+		sess.lastSentUserProfile = nil
+	}
+
 	// UserProfiles ride alongside peer changes and are gated on the
 	// same opt-in. Sessions that didn't ask for peer changes get the
 	// field stripped entirely; opted-in sessions get a per-session
@@ -3932,6 +3942,28 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 		nCopy.UserProfiles = sessUserProfiles
 	}
 	return &nCopy
+}
+
+// selfChangeResetsImplicitState reports whether self changes the identity of
+// the self node last delivered to sess. WatchIPNBus sessions survive profile
+// switches, but a self-node identity change is a boundary for implicit bus
+// state: publishers must resend any implicit state, such as UserProfiles,
+// needed to interpret subsequent peer deltas.
+func (sess *watchSession) selfChangeResetsImplicitState(self tailcfg.NodeView) bool {
+	if !self.Valid() {
+		return false
+	}
+	reset := !sess.lastSentSelf.Valid() || !sameSelfNode(sess.lastSentSelf, self)
+	sess.lastSentSelf = self
+	return reset
+}
+
+func sameSelfNode(a, b tailcfg.NodeView) bool {
+	// Include User in the identity even though a node can move users, for
+	// example when an untagged auth-key node is later tagged. Treating that as
+	// a boundary only causes redundant implicit-state delivery; missing the
+	// boundary would leave consumers unable to resolve newly referenced users.
+	return a.ID() == b.ID() && a.StableID() == b.StableID() && a.User() == b.User()
 }
 
 // hasPeerChangeWatcherLocked reports whether any active watcher wants peer-set
