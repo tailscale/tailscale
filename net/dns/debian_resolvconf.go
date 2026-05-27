@@ -53,6 +53,8 @@ type resolvconfManager struct {
 	scriptInstalled bool // libc update script has been installed
 }
 
+func (*resolvconfManager) osMode() string { return "debian-resolvconf" }
+
 func newDebianResolvconfManager(logf logger.Logf) (*resolvconfManager, error) {
 	ret := &resolvconfManager{
 		logf:            logf,

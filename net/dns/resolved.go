@@ -70,6 +70,8 @@ type resolvedManager struct {
 	configCR chan changeRequest // tracks OSConfigs changes and error responses
 }
 
+func (*resolvedManager) osMode() string { return "systemd-resolved" }
+
 func init() {
 	optNewResolvedManager.Set(newResolvedManager)
 }

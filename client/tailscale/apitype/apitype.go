@@ -87,6 +87,12 @@ type DNSOSConfig struct {
 	MatchDomains  []string
 }
 
+// DNSManagerInfo contains diagnostic information about the DNS manager selected
+// by tailscaled for the current platform.
+type DNSManagerInfo struct {
+	Mode string `json:",omitempty"`
+}
+
 // DNSQueryResponse is the response to a DNS query request sent via LocalAPI.
 type DNSQueryResponse struct {
 	// Bytes is the raw DNS response bytes.

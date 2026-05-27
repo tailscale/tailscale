@@ -6,6 +6,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -63,6 +64,12 @@ var netcheckArgs struct {
 	verbose     bool
 	bindAddress string
 	bindPort    int
+}
+
+type netcheckOutput struct {
+	dm      *tailcfg.DERPMap
+	report  *netcheck.Report
+	dnsMode string
 }
 
 func runNetcheck(ctx context.Context, args []string) error {
@@ -133,6 +140,12 @@ func runNetcheck(ctx context.Context, args []string) error {
 			return err
 		}
 	}
+	dnsMode := ""
+	if info, err := localClient.GetDNSManagerInfo(ctx); err == nil && info != nil {
+		dnsMode = info.Mode
+	} else if err != nil && netcheckArgs.verbose && !errors.Is(err, context.Canceled) {
+		log.Printf("Failed to fetch DNS manager info from tailscaled: %v", err)
+	}
 	for {
 		t0 := time.Now()
 		report, err := c.GetReport(ctx, dm, nil)
@@ -143,7 +156,11 @@ func runNetcheck(ctx context.Context, args []string) error {
 		if err != nil {
 			return fmt.Errorf("netcheck: %w", err)
 		}
-		if err := printReport(dm, report); err != nil {
+		if err := printReport(netcheckOutput{
+			dm:      dm,
+			report:  report,
+			dnsMode: dnsMode,
+		}); err != nil {
 			return err
 		}
 		if netcheckArgs.every == 0 {
@@ -153,9 +170,11 @@ func runNetcheck(ctx context.Context, args []string) error {
 	}
 }
 
-func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
+func printReport(out netcheckOutput) error {
 	var j []byte
 	var err error
+	dm := out.dm
+	report := out.report
 	switch netcheckArgs.format {
 	case "":
 	case "json":
@@ -193,6 +212,9 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 	}
 	printf("\t* MappingVariesByDestIP: %v\n", report.MappingVariesByDestIP)
 	printf("\t* PortMapping: %v\n", portMapping(report))
+	if out.dnsMode != "" {
+		printf("\t* DNS Mode: %v\n", out.dnsMode)
+	}
 	if report.CaptivePortal != "" {
 		printf("\t* CaptivePortal: %v\n", report.CaptivePortal)
 	}
