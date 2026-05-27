@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/go-json-experiment/json/jsontext"
+	"tailscale.com/envknob"
 	"tailscale.com/net/memnet"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
@@ -67,6 +68,8 @@ type LogtailTestServer struct {
 // *Logger whose HTTPC dials it. Lives inside the caller's synctest bubble so
 // the default FlushDelay and any other fake timers advance automatically.
 func newTestLogtailServer(t *testing.T) (*LogtailTestServer, *Logger) {
+	// Enable the logtail started message
+	envknob.Setenv("TS_DEBUG_LOGTAIL", "1")
 	ts := &LogtailTestServer{
 		// max channel backlog = 1 "started" + #logLines x "log line" + 1 "closed"
 		uploaded: make(chan []byte, 2+logLines),

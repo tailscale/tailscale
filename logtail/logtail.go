@@ -138,7 +138,9 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 	logger.uploadCancel = cancel
 
 	go logger.uploading(ctx)
-	logger.Write([]byte("logtail started"))
+	if envknob.Bool("TS_DEBUG_LOGTAIL") {
+		logger.Write([]byte("logtail started"))
+	}
 	return logger
 }
 
