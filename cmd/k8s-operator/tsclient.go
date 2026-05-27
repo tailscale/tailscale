@@ -6,16 +6,11 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/url"
 	"os"
-	"sync"
-	"time"
 
 	"go.uber.org/zap"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/clientcredentials"
 	"tailscale.com/client/tailscale/v2"
 
 	"tailscale.com/ipn"
@@ -58,67 +53,18 @@ func newTSClient(logger *zap.SugaredLogger, clientID, clientIDPath, clientSecret
 		}
 	} else {
 		// Use workload identity federation.
-		tokenSrc := &jwtTokenSource{
-			logger:  logger,
-			jwtPath: oidcJWTPath,
-			baseCfg: clientcredentials.Config{
-				ClientID: clientID,
-				TokenURL: fmt.Sprintf("%s%s", baseURL, "/api/v2/oauth/token-exchange"),
-			},
-		}
-
 		client.Auth = &tailscale.IdentityFederation{
 			ClientID: clientID,
 			IDTokenFunc: func() (string, error) {
-				token, err := tokenSrc.Token()
+				token, err := os.ReadFile(oidcJWTPath)
 				if err != nil {
 					return "", err
 				}
 
-				return token.AccessToken, nil
+				return string(token), nil
 			},
 		}
 	}
 
 	return client, nil
-}
-
-// jwtTokenSource implements the [oauth2.TokenSource] interface, but with the
-// ability to regenerate a fresh underlying token source each time a new value
-// of the JWT parameter is needed due to expiration.
-type jwtTokenSource struct {
-	logger  *zap.SugaredLogger
-	jwtPath string                   // Path to the file containing an automatically refreshed JWT.
-	baseCfg clientcredentials.Config // Holds config that doesn't change for the lifetime of the process.
-
-	mu         sync.Mutex         // Guards underlying.
-	underlying oauth2.TokenSource // The oauth2 client implementation. Does its own separate caching of the access token.
-}
-
-func (s *jwtTokenSource) Token() (*oauth2.Token, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.underlying != nil {
-		t, err := s.underlying.Token()
-		if err == nil && t != nil && t.Valid() {
-			return t, nil
-		}
-	}
-
-	s.logger.Debugf("Refreshing JWT from %s", s.jwtPath)
-	tk, err := os.ReadFile(s.jwtPath)
-	if err != nil {
-		return nil, fmt.Errorf("error reading JWT from %q: %w", s.jwtPath, err)
-	}
-
-	// Shallow copy of the base config.
-	credentials := s.baseCfg
-	credentials.EndpointParams = map[string][]string{
-		"jwt": {string(tk)},
-	}
-
-	src := credentials.TokenSource(context.Background())
-	s.underlying = oauth2.ReuseTokenSourceWithExpiry(nil, src, time.Minute)
-	return s.underlying.Token()
 }
