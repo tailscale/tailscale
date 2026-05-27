@@ -273,7 +273,7 @@ type Conn struct {
 	// discoAtomic is the current disco private and public keypair for this conn.
 	discoAtomic discoAtomic
 
-	// usingCacheNetmap is whether the latest update to self and peersByID are from a cached network map
+	// usingCacheNetmap is whether the latest update to self and peersByID are from a cached network map.
 	usingCachedNetmap atomic.Bool
 
 	// ============================================================
@@ -416,6 +416,11 @@ type Conn struct {
 
 	// metrics contains the metrics for the magicsock instance.
 	metrics *metrics
+
+	// initializedAt records the latest time at which the conn was
+	// (re)initialized for latency metrics. This is set at construction, and
+	// updated by netmap resets.
+	initializedAt mono.Time
 
 	// homeDERPGauge is the usermetric gauge for the home DERP region ID.
 	// This can be nil when [Options.Metrics] are not enabled.
@@ -570,13 +575,14 @@ type UDPRelayAllocResp struct {
 func newConn(logf logger.Logf) *Conn {
 	discoPrivate := key.NewDisco()
 	c := &Conn{
-		logf:         logf,
-		derpRecvCh:   make(chan derpReadResult, 1), // must be buffered, see issue 3736
-		derpStarted:  make(chan struct{}),
-		peerLastDerp: make(map[key.NodePublic]int),
-		peerMap:      newPeerMap(),
-		discoInfo:    make(map[key.DiscoPublic]*discoInfo),
-		cloudInfo:    cloudinfo.New(logf),
+		logf:          logf,
+		derpRecvCh:    make(chan derpReadResult, 1), // must be buffered, see issue 3736
+		derpStarted:   make(chan struct{}),
+		peerLastDerp:  make(map[key.NodePublic]int),
+		peerMap:       newPeerMap(),
+		discoInfo:     make(map[key.DiscoPublic]*discoInfo),
+		cloudInfo:     cloudinfo.New(logf),
+		initializedAt: mono.Now(),
 	}
 	c.discoAtomic.Set(discoPrivate)
 	c.bind = &connBind{Conn: c, closed: true}
@@ -2362,8 +2368,15 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		// Reaching here, if we are using data from a cached network map the
 		// receipt of a CallMeMaybe from a peer indicates we have a sufficiently
 		// viable connection to that peer to count it as active while cached.
-		if c.usingCachedNetmap.Load() {
+		isCached := c.usingCachedNetmap.Load()
+		if isCached {
 			metricCachedPeerContactDERP.Add(1)
+		}
+		// If we did not already have an an endpoint for this peer, even a stale
+		// one, record how long it has been since the endpoint was initialized.
+		if !lastBest.ap.IsValid() {
+			c.logf("magicsock: new contact: peer=%s usec=%d cached=%v via=derp",
+				nodeKey.ShortString(), int64(mono.Since(c.initializedAt)/time.Microsecond), isCached)
 		}
 		if isVia {
 			c.dlogf("[v1] magicsock: disco: %v<-%v via %v (%v, %v)  got call-me-maybe-via, %d endpoints",
@@ -3025,7 +3038,11 @@ func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.Node
 	selfView := c.self
 	peersSnap := c.peerSnapshotLocked()
 	isClosed := c.closed
-	c.usingCachedNetmap.Store(isCached)
+	wasCached := c.usingCachedNetmap.Swap(isCached)
+	if !self.Valid() {
+		c.initializedAt = mono.Now() // the netmap is being reset
+	}
+	initializedAt := c.initializedAt
 	if runtime.GOOS == "linux" && c.controlKnobs != nil {
 		curGRO = c.controlKnobs.DisableUDPGRO.Load()
 		curGSO = c.controlKnobs.DisableUDPGSO.Load()
@@ -3039,6 +3056,12 @@ func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.Node
 
 	if isClosed {
 		return // nothing to do here, the conn is closed and the update is no longer relevant
+	}
+	if self.Valid() && wasCached && !isCached {
+		// Reaching here, we have a "real" netmap (self is valid), and we are
+		// transitioning from cached to non-cached, so record the latency from
+		// reset.
+		c.logf("magicsock: new contact: control-netmap usec=%d", int64(mono.Since(initializedAt)/time.Microsecond))
 	}
 
 	if udpOffloadKnobsChanged {
