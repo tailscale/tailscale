@@ -1288,6 +1288,9 @@ func TestContainerBoot(t *testing.T) {
 					}
 				}
 				if p.Notify != nil && p.Notify.InitialStatus == nil {
+					// Shallow-copy before mutating to avoid a race with
+					// parallel subtests that share the same *ipn.Notify.
+					p.Notify = new(*p.Notify)
 					p.Notify.InitialStatus = statusFromNotify(p.Notify)
 				}
 				env.lapi.Notify(p.Notify)
