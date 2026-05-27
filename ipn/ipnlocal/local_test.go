@@ -2319,6 +2319,54 @@ func TestNotifyForSessionUserProfilesGating(t *testing.T) {
 	})
 }
 
+func TestNotifyForSessionUserProfilesDedupResetsOnSelfChange(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	deliver := func(sess *watchSession, n *ipn.Notify) *ipn.Notify {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.notifyForSessionLocked(sess, n)
+	}
+
+	sess := &watchSession{mask: ipn.NotifyPeerChanges}
+	self1 := &tailcfg.Node{ID: 1, StableID: "self1", User: 10}
+	self2 := &tailcfg.Node{ID: 2, StableID: "self2", User: 20}
+	profiles1 := map[tailcfg.UserID]tailcfg.UserProfileView{
+		10: (&tailcfg.UserProfile{ID: 10, LoginName: "alice@example.com", DisplayName: "Alice"}).View(),
+		11: (&tailcfg.UserProfile{ID: 11, LoginName: "peer@example.com", DisplayName: "Peer"}).View(),
+	}
+	profiles2 := map[tailcfg.UserID]tailcfg.UserProfileView{
+		20: (&tailcfg.UserProfile{ID: 20, LoginName: "bob@example.com", DisplayName: "Bob"}).View(),
+	}
+
+	n := deliver(sess, &ipn.Notify{SelfChange: self1, UserProfiles: profiles1})
+	if got, want := len(n.UserProfiles), len(profiles1); got != want {
+		t.Fatalf("initial UserProfiles len = %d; want %d", got, want)
+	}
+	n = deliver(sess, &ipn.Notify{SelfChange: self1, UserProfiles: profiles1})
+	if len(n.UserProfiles) != 0 {
+		t.Fatalf("same self duplicate UserProfiles = %v; want empty", n.UserProfiles)
+	}
+	n = deliver(sess, &ipn.Notify{SelfChange: self2, UserProfiles: profiles2})
+	if got, want := len(n.UserProfiles), len(profiles2); got != want {
+		t.Fatalf("new self UserProfiles len = %d; want %d", got, want)
+	}
+	n = deliver(sess, &ipn.Notify{SelfChange: self1, UserProfiles: profiles1})
+	if got, want := len(n.UserProfiles), len(profiles1); got != want {
+		t.Fatalf("returned self UserProfiles len = %d; want %d", got, want)
+	}
+
+	sess = &watchSession{mask: ipn.NotifyPeerChanges}
+	n = deliver(sess, &ipn.Notify{UserProfiles: profiles1})
+	if got, want := len(n.UserProfiles), len(profiles1); got != want {
+		t.Fatalf("pre-self UserProfiles len = %d; want %d", got, want)
+	}
+	n = deliver(sess, &ipn.Notify{SelfChange: self1, UserProfiles: profiles1})
+	if got, want := len(n.UserProfiles), len(profiles1); got != want {
+		t.Fatalf("first self UserProfiles len = %d; want %d", got, want)
+	}
+}
+
 // tests LocalBackend.updateNetmapDeltaLocked
 func TestUpdateNetmapDelta(t *testing.T) {
 	b := newTestLocalBackend(t)
