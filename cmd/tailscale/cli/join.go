@@ -8,7 +8,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/internal/client/tailscale"
@@ -31,6 +33,19 @@ var metricBlueprintJoinFailure = clientmetric.NewCounter("cli_blueprint_join_fai
 // via `tailscale join` (i.e. Prefs.BlueprintID is non-empty), 0
 // otherwise. Updated on join success and on leave.
 var metricBlueprintBound = clientmetric.NewGauge("cli_blueprint_bound")
+
+// metricBlueprintJoinProjectionTimeout counts join invocations where
+// the binding succeeded but the wait-for-first-projection loop exited
+// without seeing Node.BlueprintConfig. The join itself is unaffected;
+// only the display deadline lapsed.
+var metricBlueprintJoinProjectionTimeout = clientmetric.NewCounter("cli_blueprint_join_projection_timeout")
+
+// Wait-loop tunables. Package-level so tests can override before
+// invoking runJoin in-process if needed.
+var (
+	joinProjectionPollInterval = 250 * time.Millisecond
+	joinProjectionPollTimeout  = 30 * time.Second
+)
 
 // joinArgs captures the flags accepted by `tailscale join`. The flag
 // set is deliberately small: blueprint, auth-key, and the handful of
@@ -244,6 +259,26 @@ func runJoin(ctx context.Context, args []string, ja *joinArgsT) (retErr error) {
 
 	metricBlueprintJoinSuccess.Add(1)
 	metricBlueprintBound.Set(1)
-	fmt.Printf("Bound to blueprint bp:%s\n", id)
+	fmt.Printf("Bound to blueprint bp:%s.\n", id)
+
+	// Block briefly for the first map poll so the operator sees what
+	// the blueprint actually projected onto this node. The binding
+	// itself has succeeded; if the projection takes longer than the
+	// deadline, fall back to a pointer to `tailscale join status`.
+	cfg, err := waitForBlueprintProjection(ctx, localClient.Status, id, joinProjectionPollInterval, joinProjectionPollTimeout)
+	if errors.Is(err, errProjectionTimeout) {
+		metricBlueprintJoinProjectionTimeout.Add(1)
+		fmt.Println("Projection not yet received; run 'tailscale join status' to see it.")
+		return nil
+	}
+	if err != nil {
+		// Context canceled or other unexpected error. Still treat the
+		// join as successful (which it is — the binding landed), but
+		// surface the failure so the operator can re-run `tailscale
+		// join status` themselves.
+		fmt.Printf("Projection wait failed: %v\n", err)
+		return nil
+	}
+	renderBlueprintConfig(os.Stdout, id, cfg)
 	return nil
 }
