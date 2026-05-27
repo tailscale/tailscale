@@ -16,6 +16,7 @@ import (
 	"tailscale.com/net/traffic"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsconst"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 )
@@ -30,12 +31,7 @@ var (
 
 // DefaultTimeout is the default time allowed for a response
 // before a peer is considered unreachable.
-//
-// The Linux iputils suite uses a default MAXWAIT timeout of 10 seconds;
-// the BSDs and MacOS also use a default timeout of 10 seconds;
-// and Windows uses a default timeout of 4 seconds.
-// Out of all these options, we decided to choose the minimum default timeout.
-const DefaultTimeout = 4 * time.Second
+const DefaultTimeout = tsconst.DefaultPingTimeout
 
 type probed struct {
 	tailcfg.NodeView
