@@ -67,26 +67,23 @@ func runJoinStatus(ctx context.Context, args []string) error {
 	if err != nil {
 		return fixTailscaledConnectError(err)
 	}
-	var rc int
-	if joinStatusArgs.json {
-		rc = renderJoinStatusJSON(os.Stdout, st)
-	} else {
-		rc = renderJoinStatus(os.Stdout, st)
+	if st == nil || st.Self == nil || st.Self.BlueprintID == "" {
+		fmt.Fprintln(os.Stderr, "this node is not blueprint-bound; run 'tailscale join --blueprint=<id> --auth-key=...' to bind it")
+		os.Exit(1)
 	}
-	if rc != 0 {
-		os.Exit(rc)
+	if joinStatusArgs.json {
+		renderJoinStatusJSON(os.Stdout, st)
+	} else {
+		renderJoinStatus(os.Stdout, st)
 	}
 	return nil
 }
 
 // renderJoinStatus writes the text representation of st's blueprint
-// state to w and returns a process exit code (0 ok, 1 not-bound).
+// state to w and returns 0. The caller is responsible for checking
+// whether the node is bound before calling; see runJoinStatus.
 // Pure: no I/O beyond w.
 func renderJoinStatus(w io.Writer, st *ipnstate.Status) int {
-	if st == nil || st.Self == nil || st.Self.BlueprintID == "" {
-		fmt.Fprintln(w, "this node is not blueprint-bound; run 'tailscale join --blueprint=<id> --auth-key=...' to bind it")
-		return 1
-	}
 	id := st.Self.BlueprintID
 	renderBlueprintConfig(w, id, st.Self.BlueprintConfig)
 
@@ -118,15 +115,10 @@ func renderJoinStatus(w io.Writer, st *ipnstate.Status) int {
 	return 0
 }
 
-// renderJoinStatusJSON writes the JSON shape to w; returns exit code.
+// renderJoinStatusJSON writes the JSON shape to w; returns 0. The caller
+// is responsible for checking whether the node is bound before calling;
+// see runJoinStatus.
 func renderJoinStatusJSON(w io.Writer, st *ipnstate.Status) int {
-	if st == nil || st.Self == nil || st.Self.BlueprintID == "" {
-		// Match the text exit-code behavior. Still emit a small JSON
-		// object so scripted callers can distinguish empty-but-parseable
-		// from connect failure.
-		json.NewEncoder(w).Encode(joinStatusJSON{})
-		return 1
-	}
 	out := joinStatusJSON{
 		BlueprintID:     st.Self.BlueprintID,
 		BlueprintConfig: st.Self.BlueprintConfig,

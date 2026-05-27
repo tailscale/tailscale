@@ -26,21 +26,6 @@ func mkPeer(host, bpID string, ip string) (key.NodePublic, *ipnstate.PeerStatus)
 	return key.NewNode().Public(), ps
 }
 
-func TestRenderJoinStatus_NotBound(t *testing.T) {
-	st := &ipnstate.Status{
-		BackendState: ipn.Running.String(),
-		Self:         &ipnstate.PeerStatus{},
-	}
-	var sb strings.Builder
-	rc := renderJoinStatus(&sb, st)
-	if rc != 1 {
-		t.Errorf("returncode = %d; want 1", rc)
-	}
-	if !strings.Contains(sb.String(), "not blueprint-bound") {
-		t.Errorf("output missing 'not blueprint-bound'; got:\n%s", sb.String())
-	}
-}
-
 func TestRenderJoinStatus_BoundWithPeers(t *testing.T) {
 	k1, p1 := mkPeer("node-a", "github-connector", "100.64.0.5")
 	k2, p2 := mkPeer("node-b", "github-connector", "100.64.0.7")
@@ -151,11 +136,22 @@ func TestRenderJoinStatusJSON(t *testing.T) {
 	}
 }
 
-func TestRenderJoinStatusJSON_NotBound(t *testing.T) {
-	st := &ipnstate.Status{Self: &ipnstate.PeerStatus{}}
+// TestRenderJoinStatusAlwaysReturnsZero verifies that the render helpers
+// always return 0 when called with a bound status. The not-bound case is
+// handled by runJoinStatus before the renderers are ever called.
+func TestRenderJoinStatusAlwaysReturnsZero(t *testing.T) {
+	st := &ipnstate.Status{
+		BackendState: ipn.Running.String(),
+		Self: &ipnstate.PeerStatus{
+			BlueprintID: "foo",
+		},
+	}
 	var sb strings.Builder
-	rc := renderJoinStatusJSON(&sb, st)
-	if rc != 1 {
-		t.Errorf("returncode = %d; want 1", rc)
+	if rc := renderJoinStatus(&sb, st); rc != 0 {
+		t.Errorf("renderJoinStatus returncode = %d; want 0", rc)
+	}
+	sb.Reset()
+	if rc := renderJoinStatusJSON(&sb, st); rc != 0 {
+		t.Errorf("renderJoinStatusJSON returncode = %d; want 0", rc)
 	}
 }
