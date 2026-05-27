@@ -2184,6 +2184,55 @@ func TestNotifyForSessionPeerVisibility(t *testing.T) {
 	})
 }
 
+func TestSetControlClientStatusSendsFullNetmapAsPeerChanges(t *testing.T) {
+	b := newTestLocalBackend(t)
+	nw := newNotificationWatcher(t, b, ipnauth.Self)
+	nw.watch(ipn.NotifyPeerChanges|ipn.NotifyNoNetMap, []wantedNotification{{
+		name: "full netmap as peer changes",
+		cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+			if n.SelfChange == nil {
+				return false
+			}
+			if n.NetMap != nil {
+				t.Errorf("NetMap was delivered to NotifyNoNetMap watcher")
+			}
+			if got, want := len(n.PeersChanged), 2; got != want {
+				t.Errorf("PeersChanged len = %d; want %d", got, want)
+				return false
+			}
+			if got, want := len(n.UserProfiles), 3; got != want {
+				t.Errorf("UserProfiles len = %d; want %d", got, want)
+				return false
+			}
+			gotPeers := set.Of(n.PeersChanged[0].ID, n.PeersChanged[1].ID)
+			wantPeers := set.Of(tailcfg.NodeID(10), tailcfg.NodeID(20))
+			if !gotPeers.Equal(wantPeers) {
+				t.Errorf("PeersChanged IDs = %v; want %v", gotPeers, wantPeers)
+			}
+			return true
+		},
+	}})
+
+	nm := &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:   1,
+			User: 1,
+			Key:  makeNodeKeyFromID(1),
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{ID: 10, User: 2, Key: makeNodeKeyFromID(10)}).View(),
+			(&tailcfg.Node{ID: 20, User: 3, Key: makeNodeKeyFromID(20)}).View(),
+		},
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+			1: (&tailcfg.UserProfile{ID: 1, LoginName: "self@example.com"}).View(),
+			2: (&tailcfg.UserProfile{ID: 2, LoginName: "peer1@example.com"}).View(),
+			3: (&tailcfg.UserProfile{ID: 3, LoginName: "peer2@example.com"}).View(),
+		},
+	}
+	b.SetControlClientStatus(b.cc, controlclient.Status{NetMap: nm, LoggedIn: true})
+	nw.check()
+}
+
 // TestNotifyForSessionUserProfilesGating verifies that
 // [Notify.UserProfiles] is only delivered to sessions opted in to
 // NotifyPeerChanges/NotifyPeerPatches, and is deduped per-UserID
