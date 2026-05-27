@@ -1196,12 +1196,70 @@ func setGroups(groupIDs []int) error {
 		groupIDs = groupIDs[:16]
 	}
 
+	// If the process already effectively holds exactly the requested group
+	// memberships, the Setgroups call is a no-op semantically. Skip it: the
+	// syscall itself still requires CAP_SETGID on Linux, which is unavailable
+	// in many sandboxed or rootless environments (user namespaces, gVisor,
+	// etc.) where tailscaled runs as the target user. This mirrors the
+	// conditional skip already used below for Setgid and Setuid in
+	// doDropPrivileges.
+	//
+	// We consider a target satisfied when the access rights granted by the
+	// process's primary GID plus current supplementary groups exactly equal
+	// the access rights that would be granted by the primary GID plus the
+	// requested supplementary groups. That covers both the strict
+	// set-equality case (current supplementary == requested) and the common
+	// "requested set only restates the primary GID" case that arises when
+	// the user has no real secondary group memberships.
+	if effectiveGroupsEqual(groupIDs) {
+		return nil
+	}
+
 	err := syscall.Setgroups(groupIDs)
 	if err != nil && os.Geteuid() != 0 && groupsMatchCurrent(groupIDs) {
 		// If we're not root, ignore a Setgroups failure if all groups are the same.
+		// (Kept as a defense-in-depth fallback; the pre-check above should already
+		// have short-circuited for any case it could recover.)
 		return nil
 	}
 	return err
+}
+
+// effectiveGroupsEqual reports whether the access rights conveyed by the
+// process's primary GID plus its current supplementary groups already equal
+// those that would be conveyed by the primary GID plus the requested
+// supplementary groups. When true, calling syscall.Setgroups(groupIDs) would
+// not change any ACL check outcome and can be safely skipped.
+//
+// Returning false here is always safe (the caller falls through to the
+// syscall); returning true must only happen when skipping the syscall would
+// leave the process with the exact same effective set, never a superset.
+func effectiveGroupsEqual(groupIDs []int) bool {
+	existing, err := syscall.Getgroups()
+	if err != nil {
+		return false
+	}
+	egid := os.Getegid()
+
+	want := make(map[int]struct{}, len(groupIDs)+1)
+	want[egid] = struct{}{}
+	for _, g := range groupIDs {
+		want[g] = struct{}{}
+	}
+	have := make(map[int]struct{}, len(existing)+1)
+	have[egid] = struct{}{}
+	for _, g := range existing {
+		have[g] = struct{}{}
+	}
+	if len(want) != len(have) {
+		return false
+	}
+	for g := range want {
+		if _, ok := have[g]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func groupsMatchCurrent(groupIDs []int) bool {

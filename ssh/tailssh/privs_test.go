@@ -272,6 +272,168 @@ func maybeValidUID(id int) bool {
 	return true
 }
 
+// TestSetGroupsSkipsSyscallWhenEffectivelyEqual verifies that setGroups
+// short-circuits without invoking syscall.Setgroups when the requested
+// groups would leave the process's effective access rights unchanged. This
+// matters in sandboxed environments (rootless containers, gVisor, etc.)
+// where the process lacks CAP_SETGID and the syscall would fail with
+// EPERM even when the call is a semantic no-op. The test is intentionally
+// non-root-only so we have non-privileged coverage of the fast path.
+//
+// Two skip cases are exercised:
+//
+//   - the requested supplementary set equals the current one (the case the
+//     #6888 EPERM-recovery already covered, now lifted to a pre-check).
+//   - the requested set restates the primary GID and contains no other
+//     entry, while the current supplementary set is empty — the typical
+//     shape we hit when tailscaled runs as the target user but the user
+//     has no real secondary group memberships (the box+gVisor case).
+func TestSetGroupsSkipsSyscallWhenEffectivelyEqual(t *testing.T) {
+	current, err := syscall.Getgroups()
+	if err != nil {
+		t.Fatalf("Getgroups: %v", err)
+	}
+
+	// Case 1: identical set (reversed, to also pin set-equality semantics).
+	reversed := slices.Clone(current)
+	slices.Reverse(reversed)
+	if err := setGroups(reversed); err != nil {
+		t.Fatalf("setGroups(identical current) returned error: %v", err)
+	}
+
+	// Case 2: target equals only the primary GID. This is a no-op when the
+	// current supplementary set is empty, because the primary GID already
+	// grants the same access. We only exercise it when getgroups() is
+	// empty; if the test environment has supplementary groups we'd be
+	// expanding access by skipping, which must NOT happen.
+	if len(current) == 0 {
+		egid := os.Getegid()
+		if err := setGroups([]int{egid}); err != nil {
+			t.Fatalf("setGroups([egid]) returned error: %v", err)
+		}
+	}
+
+	after, err := syscall.Getgroups()
+	if err != nil {
+		t.Fatalf("Getgroups: %v", err)
+	}
+	wantSet := make(map[int]struct{}, len(current))
+	for _, g := range current {
+		wantSet[g] = struct{}{}
+	}
+	gotSet := make(map[int]struct{}, len(after))
+	for _, g := range after {
+		gotSet[g] = struct{}{}
+	}
+	if !reflect.DeepEqual(wantSet, gotSet) {
+		t.Errorf("supplementary groups changed unexpectedly: before=%v after=%v",
+			current, after)
+	}
+}
+
+// TestEffectiveGroupsEqual pins the helper's semantics: it must return
+// true exactly when skipping syscall.Setgroups would leave the
+// (primary GID ∪ supplementary) effective set unchanged. False negatives
+// are merely a missed optimisation; false positives are a correctness
+// hazard (skipping a real privilege drop), so the test is careful to
+// exercise both sides of that line.
+func TestEffectiveGroupsEqual(t *testing.T) {
+	current, err := syscall.Getgroups()
+	if err != nil {
+		t.Fatalf("Getgroups: %v", err)
+	}
+	egid := os.Getegid()
+
+	// Identical supplementary sets (any order) must match.
+	if !effectiveGroupsEqual(current) {
+		t.Errorf("effectiveGroupsEqual(%v) = false; want true (identical)", current)
+	}
+	reversed := slices.Clone(current)
+	slices.Reverse(reversed)
+	if !effectiveGroupsEqual(reversed) {
+		t.Errorf("effectiveGroupsEqual(%v) = false; want true (reordered)", reversed)
+	}
+
+	// The primary GID is implicitly part of the effective set. Asking for
+	// it as a supplementary group when no other supplementary groups exist
+	// must be treated as effectively equal to the current state.
+	if len(current) == 0 {
+		if !effectiveGroupsEqual([]int{egid}) {
+			t.Errorf("effectiveGroupsEqual([egid]) = false; want true (egid covers it)")
+		}
+	}
+
+	// A request that adds a group not currently held (and not the primary
+	// GID) must not be treated as effectively equal: skipping would leave
+	// access strictly narrower than the caller asked for.
+	other := 0xDEAD
+	for _, g := range current {
+		if g == other {
+			other++
+		}
+	}
+	if other == egid {
+		other++
+	}
+	if effectiveGroupsEqual(append(slices.Clone(current), other)) {
+		t.Errorf("effectiveGroupsEqual(current+other) = true; want false (extra group)")
+	}
+
+	// Conversely, a request that drops a real supplementary group (one
+	// that is not the primary GID) must not be treated as effectively
+	// equal: skipping would leave access strictly wider than the caller
+	// asked for, which would defeat the privilege drop.
+	var realSupp int
+	hasRealSupp := false
+	for _, g := range current {
+		if g != egid {
+			realSupp = g
+			hasRealSupp = true
+			break
+		}
+	}
+	if hasRealSupp {
+		without := make([]int, 0, len(current)-1)
+		for _, g := range current {
+			if g != realSupp {
+				without = append(without, g)
+			}
+		}
+		if effectiveGroupsEqual(without) {
+			t.Errorf("effectiveGroupsEqual(current without %d) = true; want false (dropping a real group)",
+				realSupp)
+		}
+	}
+}
+
+// TestGroupsMatchCurrent keeps explicit coverage of the strict
+// set-equality helper that the EPERM-recovery fallback still relies on.
+func TestGroupsMatchCurrent(t *testing.T) {
+	current, err := syscall.Getgroups()
+	if err != nil {
+		t.Fatalf("Getgroups: %v", err)
+	}
+
+	if !groupsMatchCurrent(current) {
+		t.Errorf("groupsMatchCurrent(%v) = false, want true (identical slice)", current)
+	}
+
+	reversed := slices.Clone(current)
+	slices.Reverse(reversed)
+	if !groupsMatchCurrent(reversed) {
+		t.Errorf("groupsMatchCurrent(%v) = false; ordering should not matter", reversed)
+	}
+
+	if got := groupsMatchCurrent(nil); got != (len(current) == 0) {
+		t.Errorf("groupsMatchCurrent(nil) = %v; want %v", got, len(current) == 0)
+	}
+
+	extra := append(slices.Clone(current), 0xDEAD)
+	if groupsMatchCurrent(extra) {
+		t.Errorf("groupsMatchCurrent(%v) = true; want false (extra entry)", extra)
+	}
+}
+
 func maybeValidGID(id int) bool {
 	_, err := user.LookupGroupId(strconv.Itoa(id))
 	if err == nil {
