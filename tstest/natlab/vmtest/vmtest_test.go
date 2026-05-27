@@ -1061,7 +1061,97 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 // WireGuard tunnel after one is restarted while the control server is
 // unreachable. After restart the node must use only its on-disk cached
 // netmaps to re-connect and ping the other (still online) node.
+//
+// The test has two modes, pinging from the offline node to the online node,
+// and pinging from the online node to the offline node.
 func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
+	for _, testPingFrom := range []string{"offline", "online"} {
+		t.Run(fmt.Sprintf("ping_from_%s", testPingFrom), func(t *testing.T) {
+			env := vmtest.New(t)
+
+			aNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.EasyNAT)
+			bNet := env.AddNetwork("2.0.0.1", "192.168.2.1/24", vnet.EasyNAT)
+
+			// Node "a" is the offline peer, node "b" is the online peer.
+			a := env.AddNode("a", aNet,
+				vmtest.OS(vmtest.Gokrazy),
+				tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
+			b := env.AddNode("b", bNet,
+				vmtest.OS(vmtest.Gokrazy),
+				tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
+
+			pStr := "Ping a → b"
+			if testPingFrom == "online" {
+				pStr = "Ping b → a"
+			}
+			checkInitialMetrics := env.AddStep("Check initial client metrics")
+			cutControlStep := env.AddStep("Cut control server access from a")
+			restartStep := env.AddStep("Restart tailscaled on a")
+			tsmpPingStep := env.AddStep(fmt.Sprintf("%s TSMP (cached netmap, no control)", pStr))
+			discoPingStep := env.AddStep(fmt.Sprintf("%s Disco (want Direct)", pStr))
+			checkFinalMetrics := env.AddStep("Check final client metrics")
+
+			env.Start()
+
+			// Before: Verify that we have not recorded any cached contacts.
+			checkInitialMetrics.Begin()
+			checkClientMetrics(t, "Node A", env.ClientMetrics(a), map[string]int64{
+				"magicsock_cached_peer_contact_derp":   0,
+				"magicsock_cached_peer_contact_direct": 0,
+			})
+			checkInitialMetrics.End(nil)
+
+			cutControlStep.Begin()
+			a.DropControlTraffic()
+			env.ControlServer().SetOnMapRequest(func(nk key.NodePublic) {
+				if env.ControlServer().Node(nk).Name == a.Name() {
+					panic(fmt.Sprintf("got connection from %v", a.Name()))
+				}
+			})
+			cutControlStep.End(nil)
+
+			restartStep.Begin()
+			env.RestartTailscaled(a)
+			restartStep.End(nil)
+
+			// Set the direction of the ping.
+			pFrom, pTo := a, b
+			if testPingFrom == "online" {
+				pFrom, pTo = b, a
+			}
+
+			tsmpPingStep.Begin()
+			if err := env.Ping(pFrom, pTo, tailcfg.PingTSMP, 30*time.Second); err != nil {
+				tsmpPingStep.Fatal(err)
+			}
+			tsmpPingStep.End(nil)
+
+			discoPingStep.Begin()
+			if err := env.PingExpect(pFrom, pTo, vmtest.PingRouteDirect, 90*time.Second); err != nil {
+				discoPingStep.Fatal(err)
+			}
+			// Ping back, mostly to give time for the metrics to be set.
+			if err := env.PingExpect(pTo, pFrom, vmtest.PingRouteDirect, 30*time.Second); err != nil {
+				discoPingStep.Fatal(err)
+			}
+			discoPingStep.End(nil)
+
+			// After: Verify that we recorded a direct contact on the disconnected node.
+			checkFinalMetrics.Begin()
+			checkClientMetrics(t, "Node A", env.ClientMetrics(a), map[string]int64{
+				"magicsock_cached_peer_contact_direct": 1,
+			})
+			checkFinalMetrics.End(nil)
+		})
+	}
+}
+
+// TestDirectWithCachedNetmapOnTwoNodes verifies that two nodes with netmap
+// caching enabled (NodeAttrCacheNetworkMaps) can re-establish a direct
+// WireGuard tunnel after both restarted while the control server is
+// unreachable. After restart one node must use only its on-disk cached
+// netmaps to re-connect and ping the other node.
+func TestDirectConnectionWithCachedNetmapOnTwoNodes(t *testing.T) {
 	env := vmtest.New(t)
 
 	aNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.EasyNAT)
@@ -1093,15 +1183,18 @@ func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 
 	cutControlStep.Begin()
 	a.DropControlTraffic()
+	b.DropControlTraffic()
 	env.ControlServer().SetOnMapRequest(func(nk key.NodePublic) {
-		if env.ControlServer().Node(nk).Name == a.Name() {
-			panic(fmt.Sprintf("got connection from %v", a.Name()))
+		nodeName := env.ControlServer().Node(nk).Name
+		if nodeName == a.Name() || nodeName == b.Name() {
+			panic(fmt.Sprintf("got connection from %v", nodeName))
 		}
 	})
 	cutControlStep.End(nil)
 
 	restartStep.Begin()
 	env.RestartTailscaled(a)
+	env.RestartTailscaled(b)
 	restartStep.End(nil)
 
 	tsmpPingStep.Begin()

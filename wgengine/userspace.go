@@ -614,6 +614,9 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	})
 	var tsmpRequestGroup singleflight.Group[netip.Addr, struct{}]
 	eventbus.SubscribeFunc(ec, func(req magicsock.NewDiscoKeyAvailable) {
+		if !req.NodeFirstAddr.IsValid() {
+			return
+		}
 		go tsmpRequestGroup.Do(req.NodeFirstAddr, func() (struct{}, error) {
 			e.sendTSMPDiscoAdvertisement(req.NodeFirstAddr)
 			e.logf("wgengine: sending TSMP disco key advertisement to %v", req.NodeFirstAddr)

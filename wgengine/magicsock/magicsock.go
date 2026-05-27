@@ -4444,6 +4444,10 @@ func (c *Conn) maybeSendTSMPDiscoAdvert(de *endpoint) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
+	if !de.nodeAddr.IsValid() {
+		return
+	}
+
 	now := mono.Now()
 	if now.Sub(de.lastDiscoKeyAdvertisement) <= discoKeyAdvertisementInterval ||
 		(!de.lastDiscoKeyAdvertisement.IsZero() && de.bestAddr.isDirect()) {
