@@ -22,7 +22,7 @@ func (lc *Client) RouteCheckProbe(ctx context.Context) (*routecheck.Report, erro
 }
 
 // RouteCheck requests the report compiled by the latest routecheck probe.
-func (lc *Client) RouteCheck(ctx context.Context, force bool) (*routecheck.Report, error) {
+func (lc *Client) RouteCheck(ctx context.Context) (*routecheck.Report, error) {
 	body, err := lc.send(ctx, "POST", "/localapi/v0/routecheck", 200, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error %w: %s", err, body)
