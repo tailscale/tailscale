@@ -35,6 +35,7 @@ import (
 	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
 	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store"
@@ -43,8 +44,11 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/acme"
+	"tailscale.com/tsconst"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/set"
+	"tailscale.com/util/slicesx"
 	"tailscale.com/util/testenv"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -52,6 +56,7 @@ import (
 
 func init() {
 	RegisterC2N("GET /tls-cert-status", handleC2NTLSCertStatus)
+	hookCertRefreshLoop.Set(certRefreshLoop)
 }
 
 // Process-wide cache. (A new *Handler is created per connection,
@@ -74,6 +79,18 @@ var (
 	metricACMETLSALPN01Success = clientmetric.NewCounter("cert_acme_tls_alpn01_success")
 	metricACMETLSALPN01Failure = clientmetric.NewCounter("cert_acme_tls_alpn01_failure")
 )
+
+// certPendingWarnable fires while ACME is fetching a TLS certificate for
+// which no usable cached copy exists (initial issuance or after the cached
+// cert has expired). Async renewal of a still-valid cert does not fire it.
+var certPendingWarnable = health.Register(&health.Warnable{
+	Code:     tsconst.HealthWarnableTLSCertPending,
+	Title:    "Fetching TLS certificate",
+	Severity: health.SeverityLow,
+	Text: func(args health.Args) string {
+		return fmt.Sprintf("Fetching TLS certificate via ACME for: %s", args[health.ArgDomains])
+	},
+})
 
 type acmeChallengeType string
 
@@ -660,6 +677,16 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 		return nil, err
 	}
 
+	// If we have no usable cached cert (either nothing on disk, or what is
+	// on disk has expired or otherwise failed verification), surface a
+	// health warning to the user for the duration of the ACME flow. We
+	// don't fire the warning when previous is non-nil because then we have
+	// a working cert and the renewal is happening behind the scenes.
+	if previous == nil {
+		b.setCertPending(domain, true)
+		defer b.setCertPending(domain, false)
+	}
+
 	ac, err := acmeClient(cs)
 	if err != nil {
 		return nil, err
@@ -1206,4 +1233,120 @@ func handleC2NTLSCertStatus(b *LocalBackend, w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, ret)
+}
+
+// setCertPending sets or clears the in-flight ACME issuance state for
+// domain and updates the [certPendingWarnable] to reflect the current set
+// of pending domains.
+func (b *LocalBackend) setCertPending(domain string, pending bool) {
+	b.pendingCertDomainsMu.Lock()
+	defer b.pendingCertDomainsMu.Unlock()
+	if pending {
+		b.pendingCertDomains.Make()
+		b.pendingCertDomains.Add(domain)
+	} else {
+		b.pendingCertDomains.Delete(domain)
+	}
+	if b.pendingCertDomains.Len() == 0 {
+		b.health.SetHealthy(certPendingWarnable)
+		return
+	}
+	b.health.SetUnhealthy(certPendingWarnable, health.Args{
+		health.ArgDomains: joinedPendingCertDomainsLocked(b.pendingCertDomains),
+	})
+}
+
+func joinedPendingCertDomainsLocked(s set.Set[string]) string {
+	ds := slicesx.MapKeys(s)
+	slices.Sort(ds)
+	return strings.Join(ds, ", ")
+}
+
+// certRefreshInterval is how often the background loop iterates the set of
+// applicable cert domains and pokes the renewal machinery. The loop is
+// only started while there's at least one HTTPS Web entry in the
+// ServeConfig, so this cadence doesn't tick on idle/mobile nodes.
+const certRefreshInterval = time.Hour
+
+// certRefreshLoop periodically iterates the domains configured for Serve or
+// Funnel HTTPS and calls GetCertPEM on each. The existing renewal machinery
+// in getCertPEM decides whether anything needs to happen (ARI check or
+// expiry-based fallback); the loop just ensures it runs even on nodes that
+// see no inbound TLS traffic.
+//
+// The first iteration runs immediately so that a node coming back online
+// with stale or absent certs starts ACME within seconds rather than
+// waiting a full interval.
+//
+// Set as [hookCertRefreshLoop] in cert.go's init.
+func certRefreshLoop(b *LocalBackend, ctx context.Context) {
+	if envknob.IsCertShareReadOnlyMode() {
+		b.logf("cert refresh loop: cert-share read-only mode; loop is a no-op")
+		return
+	}
+
+	b.refreshApplicableCerts(ctx)
+
+	ticker, tickerCh := b.clock.NewTicker(certRefreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-tickerCh:
+			b.refreshApplicableCerts(ctx)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// refreshApplicableCerts is one iteration of the cert refresh loop.
+//
+// It enumerates the Serve/Funnel-configured HTTPS hostnames, keeps those
+// that [LocalBackend.resolveCertDomain] accepts (CertDomain, wildcard, or
+// BYO Funnel domain), and calls [LocalBackend.GetCertPEM] for each. The
+// renewal decision is delegated to the existing logic in [getCertPEM].
+func (b *LocalBackend) refreshApplicableCerts(ctx context.Context) {
+	sc := b.ServeConfig()
+	if !sc.Valid() {
+		return
+	}
+
+	want := set.Set[string]{}
+	consider := func(host string) {
+		if host == "" {
+			return
+		}
+		if _, err := b.resolveCertDomain(host); err != nil {
+			return
+		}
+		want.Add(host)
+	}
+	for hp := range sc.Webs() {
+		host, _, err := net.SplitHostPort(string(hp))
+		if err != nil {
+			continue
+		}
+		consider(host)
+	}
+	for _, tcp := range sc.TCPs() {
+		consider(tcp.TerminateTLS())
+	}
+	for _, svc := range sc.Services().All() {
+		for _, tcp := range svc.TCP().All() {
+			consider(tcp.TerminateTLS())
+		}
+	}
+	if want.Len() == 0 {
+		return
+	}
+
+	for d := range want {
+		b.goTracker.Go(func() {
+			ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			defer cancel()
+			if _, err := b.GetCertPEM(ctx, d); err != nil {
+				b.logf("cert refresh: %s: %v", d, err)
+			}
+		})
+	}
 }

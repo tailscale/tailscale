@@ -15,6 +15,7 @@ import (
 	"crypto/x509/pkix"
 	"embed"
 	"encoding/pem"
+	"maps"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -24,10 +25,12 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/acme"
+	"tailscale.com/tsconst"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -846,5 +849,174 @@ func TestGetCertPEMWithValidity(t *testing.T) {
 				t.Errorf("wants getCertPem to be called: %v, got called %v", tt.wantIssuance, gotIssuance)
 			}
 		})
+	}
+}
+
+func TestCertPendingWarnable(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	// currentWarning returns the pending warning's rendered text and
+	// domain-list arg, or "", "" if the warnable is currently healthy.
+	currentWarning := func() (text, domains string) {
+		ws, ok := b.health.CurrentState().Warnings[tsconst.HealthWarnableTLSCertPending]
+		if !ok {
+			return "", ""
+		}
+		return ws.Text, ws.Args[health.ArgDomains]
+	}
+
+	if b.health.IsUnhealthy(certPendingWarnable) {
+		t.Fatal("warnable unexpectedly unhealthy before any setCertPending")
+	}
+
+	b.setCertPending("a.example.com", true)
+	if !b.health.IsUnhealthy(certPendingWarnable) {
+		t.Fatal("warnable not unhealthy after first setCertPending")
+	}
+	if text, domains := currentWarning(); domains != "a.example.com" ||
+		text != "Fetching TLS certificate via ACME for: a.example.com" {
+		t.Errorf("after first setCertPending: text=%q domains=%q", text, domains)
+	}
+
+	b.setCertPending("b.example.com", true)
+	if !b.health.IsUnhealthy(certPendingWarnable) {
+		t.Fatal("warnable not unhealthy after second setCertPending")
+	}
+	if text, domains := currentWarning(); domains != "a.example.com, b.example.com" ||
+		text != "Fetching TLS certificate via ACME for: a.example.com, b.example.com" {
+		t.Errorf("after second setCertPending: text=%q domains=%q", text, domains)
+	}
+
+	b.setCertPending("a.example.com", false)
+	if !b.health.IsUnhealthy(certPendingWarnable) {
+		t.Fatal("warnable cleared too early; one domain still pending")
+	}
+	if text, domains := currentWarning(); domains != "b.example.com" ||
+		text != "Fetching TLS certificate via ACME for: b.example.com" {
+		t.Errorf("after clearing a.example.com: text=%q domains=%q", text, domains)
+	}
+
+	b.setCertPending("b.example.com", false)
+	if b.health.IsUnhealthy(certPendingWarnable) {
+		t.Fatal("warnable still unhealthy after clearing all domains")
+	}
+	if text, domains := currentWarning(); text != "" || domains != "" {
+		t.Errorf("after clearing all domains: text=%q domains=%q", text, domains)
+	}
+}
+
+func TestServeConfigUsesACMECerts(t *testing.T) {
+	tests := []struct {
+		name string
+		sc   *ipn.ServeConfig
+		want bool
+	}{
+		{"nil", nil, false},
+		{"empty", &ipn.ServeConfig{}, false},
+		{
+			name: "background_web",
+			sc: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"node.ts.net:443": {},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "tcp_forward_no_tls",
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{443: {TCPForward: "127.0.0.1:443"}},
+			},
+			want: false,
+		},
+		{
+			name: "tls_terminated_tcp",
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {TCPForward: "127.0.0.1:443", TerminateTLS: "node.ts.net"},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "service_tls_terminated_tcp",
+			sc: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:web": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							443: {TCPForward: "127.0.0.1:443", TerminateTLS: "web.svc.ts.net"},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var v ipn.ServeConfigView
+			if tt.sc != nil {
+				v = tt.sc.View()
+			}
+			if got := serveConfigUsesACMECerts(v); got != tt.want {
+				t.Errorf("serveConfigUsesACMECerts = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRefreshApplicableCerts(t *testing.T) {
+	const (
+		certDomain = "node1.example.com"
+		byoDomain  = "byo.example.org"
+	)
+	b := newTestLocalBackend(t)
+	b.varRoot = t.TempDir()
+
+	b.mu.Lock()
+	b.currentNode().SetNetMap(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{}).View(),
+		DNS: tailcfg.DNSConfig{
+			CertDomains: []string{certDomain},
+		},
+	})
+	b.serveConfig = (&ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			ipn.HostPort(certDomain + ":443"): {},
+			ipn.HostPort(byoDomain + ":443"):  {},
+			// Not in CertDomains and no Funnel entry; must be filtered out.
+			ipn.HostPort("not-ours.other.tld:443"): {},
+		},
+		AllowFunnel: map[ipn.HostPort]bool{
+			ipn.HostPort(byoDomain + ":443"): true,
+		},
+	}).View()
+	b.mu.Unlock()
+
+	gotCh := make(chan string, 4)
+	b.ConfigureCertsForTest(func(host string) (*TLSCertKeyPair, error) {
+		gotCh <- host
+		return &TLSCertKeyPair{}, nil
+	})
+
+	b.refreshApplicableCerts(context.Background())
+
+	want := set.Of(certDomain, byoDomain)
+	got := set.Set[string]{}
+	for got.Len() < want.Len() {
+		select {
+		case h := <-gotCh:
+			got.Add(h)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for refresh workers; got %v, want %v", got, want)
+		}
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("got fetches %v, want %v", got, want)
+	}
+	select {
+	case h := <-gotCh:
+		t.Errorf("unexpected extra fetch for %q", h)
+	default:
 	}
 }

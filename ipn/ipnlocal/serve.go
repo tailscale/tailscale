@@ -1544,6 +1544,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 	if err != nil {
 		b.lastServeConfJSON = mem.B(nil)
 		b.serveConfig = ipn.ServeConfigView{}
+		b.updateCertRefreshLoopLocked()
 		return
 	}
 	if b.lastServeConfJSON.Equal(mem.B(confj)) {
@@ -1554,6 +1555,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 	if err := json.Unmarshal(confj, &conf); err != nil {
 		b.logf("invalid ServeConfig %q in StateStore: %v", confKey, err)
 		b.serveConfig = ipn.ServeConfigView{}
+		b.updateCertRefreshLoopLocked()
 		return
 	}
 
@@ -1564,6 +1566,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 	})
 
 	b.serveConfig = conf.View()
+	b.updateCertRefreshLoopLocked()
 }
 
 func (b *LocalBackend) setVIPServicesTCPPortsInterceptedLocked(svcPorts map[tailcfg.ServiceName][]uint16) {
