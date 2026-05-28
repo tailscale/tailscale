@@ -157,11 +157,11 @@
     };
 
     nixosModules = {
-      tailscale = import ./nixos/default.nix self;
+      tailscale = import ./nix/nixos/default.nix self;
       # Module that disables upstream nixpkgs tailscale and uses this one.
       # This is the recommended import for most users.
       override = {
-        imports = [(import ./nixos/default.nix self)];
+        imports = [(import ./nix/nixos/default.nix self)];
         # Disable both upstream modules: tailscale.nix defines individual
         # options under services.tailscale.* that conflict with our submodule,
         # and tailscale-derper.nix nests its options under services.tailscale.derper
@@ -175,15 +175,15 @@
     };
 
     checks = eachSystem (pkgs: {
-      single = import ./nixos/tests/single.nix {
+      single = import ./nix/nixos/tests/single.nix {
         inherit self pkgs;
         inherit (pkgs) lib;
       };
-      multi = import ./nixos/tests/multi.nix {
+      multi = import ./nix/nixos/tests/multi.nix {
         inherit self pkgs;
         inherit (pkgs) lib;
       };
-      shared-services = import ./nixos/tests/shared-services.nix {
+      shared-services = import ./nix/nixos/tests/shared-services.nix {
         inherit self pkgs;
         inherit (pkgs) lib;
       };
