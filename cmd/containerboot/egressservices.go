@@ -250,6 +250,9 @@ func (ep *egressProxy) syncEgressConfigs(cfgs egressservices.Configs, status *eg
 				if err := ep.nfr.EnsureSNATForDst(local, t); err != nil {
 					return nil, fmt.Errorf("error setting up SNAT rule: %w", err)
 				}
+				if err := ep.nfr.ClampMSSToPMTU(tailscaleTunInterface, t); err != nil {
+					return nil, fmt.Errorf("error clamping MSS to PMTU: %w", err)
+				}
 			}
 		}
 		// Update the status. Status will be written back to the state Secret by the caller.
