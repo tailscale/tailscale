@@ -117,7 +117,7 @@ func (c *Client) NotifyNetMapAvailable(nm *netmap.NetworkMap) {
 	var nextCh *chan struct{}
 	for {
 		ch := c.hasNetMap.Load()
-		if *ch == nil {
+		if ch == nil || *ch == nil {
 			return // Client has been Closed
 		}
 
@@ -134,7 +134,7 @@ func (c *Client) NotifyNetMapAvailable(nm *netmap.NetworkMap) {
 func (c *Client) waitForNetMap(ctx context.Context) (*netmap.NetworkMap, error) {
 	for {
 		ch := c.hasNetMap.Load()
-		if *ch == nil {
+		if ch == nil || *ch == nil {
 			return nil, errors.New("routecheck client closed")
 		}
 
@@ -156,9 +156,8 @@ func (c *Client) Close() error {
 		return nil
 	}
 
-	nilCh := new(chan struct{})
-	ch := c.hasNetMap.Swap(nilCh) // clear before waking anything up
-	if *ch != nil {
+	ch := c.hasNetMap.Swap(nil) // clear before waking anything up
+	if ch != nil && *ch != nil {
 		close(*ch)
 	}
 
