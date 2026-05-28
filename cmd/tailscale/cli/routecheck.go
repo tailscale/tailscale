@@ -73,12 +73,15 @@ func printRouteCheckReport(rp *routecheck.Report) error {
 		return fmt.Errorf("unknown output format %q", routecheckArgs.format)
 	}
 
+	if rp == nil {
+		return fmt.Errorf("routecheck: no report")
+	}
 	routes := rp.RoutablePrefixes()
 
 	if enc != nil {
 		out := struct {
-			Done   time.Time               `json:"done"`
-			Routes routecheck.RoutingTable `json:"routes"`
+			Done   time.Time                   `json:"done"`
+			Routes routecheck.RoutablePrefixes `json:"routes"`
 		}{
 			Done:   rp.Done,
 			Routes: routes,
@@ -96,7 +99,7 @@ func printRouteCheckReport(rp *routecheck.Report) error {
 	defer w.Flush()
 	fmt.Fprintf(w, "\nReachable routers at %s:\n", rp.Done.UTC().Format(time.DateTime+"Z07:00"))
 	fmt.Fprintf(w, "\n %s\t%s\t%s\t", "PREFIX", "IP", "HOSTNAME")
-	for prefix, nodes := range routes {
+	for prefix, nodes := range routes.Sorted() {
 		for _, n := range nodes {
 			fmt.Fprintf(w, "\n %s\t%s\t%s\t", prefix, n.Addr, strings.TrimSuffix(n.Name, "."))
 		}
