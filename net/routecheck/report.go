@@ -4,6 +4,7 @@
 package routecheck
 
 import (
+	"cmp"
 	"context"
 	"maps"
 	"net/netip"
@@ -45,7 +46,7 @@ type Report struct {
 
 	// Reachable is the set of nodes that were reachable from the current host
 	// when this report was compiled. Missing nodes may or may not be reachable.
-	Reachable nodeset `json:"reachable"`
+	Reachable NodeSet `json:"reachable"`
 
 	// LastProbed tracks the last time a given node was probed.
 	// This is used to rate-limit reachability probing, so an entry’s
@@ -70,27 +71,29 @@ type Node struct {
 	Routes []netip.Prefix `json:"routes"`
 }
 
-// Nodeset is a set of nodes keyed by node ID, so duplicates are easily detected.
-// To prevent stuttering, it encodes itself as an array.
-type nodeset map[tailcfg.NodeID]Node
+// NodeSet is a set of nodes keyed by node ID, so duplicates are easily detected.
+// To prevent stuttering, it marshals itself as a JSON array, sorted by node ID.
+type NodeSet map[tailcfg.NodeID]Node
 
-var _ jsonv2.MarshalerTo = &nodeset{}
-var _ jsonv2.UnmarshalerFrom = &nodeset{}
+var _ jsonv2.MarshalerTo = &NodeSet{}
+var _ jsonv2.UnmarshalerFrom = &NodeSet{}
 
 // MarshalJSONTo implements [jsonv2.MarshalerTo].
-func (ns nodeset) MarshalJSONTo(enc *jsontext.Encoder) error {
-	nodes := maps.Values(ns)
-	return jsonv2.MarshalEncode(enc, slices.Collect(nodes))
+func (ns NodeSet) MarshalJSONTo(enc *jsontext.Encoder) error {
+	nodes := slices.SortedFunc(maps.Values(ns), func(a, b Node) int {
+		return cmp.Compare(a.ID, b.ID)
+	})
+	return jsonv2.MarshalEncode(enc, nodes)
 }
 
 // UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
-func (ns *nodeset) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+func (ns *NodeSet) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	var nodes []Node
 	if err := jsonv2.UnmarshalDecode(dec, &nodes); err != nil {
 		return err
 	}
 	if *ns == nil {
-		*ns = make(nodeset, len(nodes))
+		*ns = make(NodeSet, len(nodes))
 	}
 	for _, n := range nodes {
 		(*ns)[n.ID] = n
