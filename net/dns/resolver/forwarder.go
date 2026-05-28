@@ -35,6 +35,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/netx"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tsdial"
@@ -498,11 +499,18 @@ func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolve
 var stdNetPacketListener nettype.PacketListenerWithNetIP = nettype.MakePacketListenerWithNetIP(new(net.ListenConfig))
 
 func (f *forwarder) packetListener(ip netip.Addr) (nettype.PacketListenerWithNetIP, error) {
-	if f.linkSel == nil || initListenConfig == nil {
+	var linkName string
+	if f.linkSel != nil {
+		linkName = f.linkSel.PickLink(ip)
+	}
+	if linkName == "" {
+		if runtime.GOOS == "android" {
+			f.logf("packetListener: using netns.Listener for %v", ip)
+			return nettype.MakePacketListenerWithNetIP(netns.Listener(f.logf, f.netMon)), nil
+		}
 		return stdNetPacketListener, nil
 	}
-	linkName := f.linkSel.PickLink(ip)
-	if linkName == "" {
+	if initListenConfig == nil {
 		return stdNetPacketListener, nil
 	}
 	lc := new(net.ListenConfig)
