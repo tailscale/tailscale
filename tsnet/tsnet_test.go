@@ -2285,6 +2285,37 @@ type listenTest struct {
 	tun          *chanTUN // nil for netstack mode
 }
 
+// waitForPeerReachable blocks until s's current netmap contains the given peer
+// with a non-zero HomeDERP and endpoints.
+//
+// This is polled via the LocalBackend's netmap rather than via the IPN bus
+// because the bus does not carry HomeDERP or Endpoint deltas; the netmap
+// itself is the source of truth for those fields.
+func waitForPeerReachable(t *testing.T, s *Server, peer key.NodePublic) {
+	t.Helper()
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		nm := s.lb.NetMapWithPeers()
+		if nm == nil {
+			return errors.New("no netmap yet")
+		}
+		for _, p := range nm.Peers {
+			if p.Key() != peer {
+				continue
+			}
+			if p.HomeDERP() == 0 {
+				return fmt.Errorf("peer %v: no HomeDERP", peer.ShortString())
+			}
+			if p.Endpoints().Len() == 0 {
+				return fmt.Errorf("peer %v: no endpoints", peer.ShortString())
+			}
+			return nil
+		}
+		return fmt.Errorf("peer %v not in netmap", peer.ShortString())
+	}); err != nil {
+		t.Fatalf("waitForPeerReachable(%v): %v", peer.ShortString(), err)
+	}
+}
+
 // setupTwoClientTest creates two tsnet servers for testing.
 // If useTUN is true, s2 uses a chanTUN; otherwise it uses netstack only.
 func setupTwoClientTest(t *testing.T, useTUN bool) *listenTest {
@@ -2327,6 +2358,9 @@ func setupTwoClientTest(t *testing.T, useTUN bool) *listenTest {
 	if len(s2status.TailscaleIPs) > 1 {
 		s2ip6 = s2status.TailscaleIPs[1]
 	}
+
+	waitForPeerReachable(t, s1, s2.lb.NodeKey())
+	waitForPeerReachable(t, s2, s1.lb.NodeKey())
 
 	lc1 := must.Get(s1.LocalClient())
 	must.Get(lc1.Ping(ctx, s2ip4, tailcfg.PingTSMP))
