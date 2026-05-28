@@ -14,14 +14,16 @@ on:
       - main
       - "release-branch/*"
     paths:
+      - .github/workflows/vet.yml
       - "**.go"
   pull_request:
     paths:
+      - .github/workflows/vet.yml
       - "**.go"
 
 jobs:
   vet:
-    runs-on: [ self-hosted, linux ]
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     steps:
