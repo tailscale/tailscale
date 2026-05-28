@@ -303,7 +303,7 @@ func TestSigSerializeUnserialize(t *testing.T) {
 }
 
 func TestNodeKeySignatureRotationDetails(t *testing.T) {
-	// Trusted network lock key
+	// Trusted tailnet lock key
 	pub, priv := testingKey25519(t, 1)
 	k := Key{Kind: Key25519, Public: pub, Votes: 2}
 
