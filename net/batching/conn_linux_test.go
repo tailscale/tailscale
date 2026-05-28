@@ -140,8 +140,6 @@ func Test_linuxBatchingConn_splitCoalescedMessages(t *testing.T) {
 }
 
 func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
-	c := &linuxBatchingConn{}
-
 	withGeneveSpace := func(len, cap int) []byte {
 		return make([]byte, len+packet.GeneveFixedHeaderLength, cap+packet.GeneveFixedHeaderLength)
 	}
@@ -152,13 +150,17 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 	geneve.VNI.Set(1)
 
 	cases := []struct {
-		name   string
-		buffs  [][]byte
-		geneve packet.GeneveHeader
+		name              string
+		buffs             [][]byte
+		geneve            packet.GeneveHeader
+		neverGSOEqualTail bool
 		// Each wantLens slice corresponds to the Buffers of a single coalesced message,
 		// and each int is the expected length of the corresponding Buffer[i].
 		wantLens [][]int
 		wantGSO  []int
+		// wantSentinelAtTail[i], when true, asserts that the tail entry of
+		// msgs[i].Buffers is the shared neverGSOEqualTailSentinelPayload slice.
+		wantSentinelAtTail []bool
 	}{
 		{
 			name: "one-message-no-coalesce",
@@ -257,10 +259,113 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			wantLens: [][]int{{2 + packet.GeneveFixedHeaderLength, 2 + packet.GeneveFixedHeaderLength, 2 + packet.GeneveFixedHeaderLength}},
 			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength},
 		},
+		{
+			name: "two-equal-len-coalesce-neverGSOEqualTail-appends-sentinel",
+			buffs: [][]byte{
+				withGeneveSpace(3, 3),
+				withGeneveSpace(3, 3),
+			},
+			neverGSOEqualTail:  true,
+			wantLens:           [][]int{{3, 3, len(neverGSOEqualTailSentinelPayload)}},
+			wantGSO:            []int{3},
+			wantSentinelAtTail: []bool{true},
+		},
+		{
+			name: "two-equal-len-coalesce-neverGSOEqualTail-vni-isSet-appends-sentinel",
+			buffs: [][]byte{
+				withGeneveSpace(3, 3+packet.GeneveFixedHeaderLength),
+				withGeneveSpace(3, 3),
+			},
+			geneve:             geneve,
+			neverGSOEqualTail:  true,
+			wantLens:           [][]int{{3 + packet.GeneveFixedHeaderLength, 3 + packet.GeneveFixedHeaderLength, len(neverGSOEqualTailSentinelPayload)}},
+			wantGSO:            []int{3 + packet.GeneveFixedHeaderLength},
+			wantSentinelAtTail: []bool{true},
+		},
+		{
+			name: "two-unequal-len-coalesce-neverGSOEqualTail-smaller-tail-no-sentinel",
+			buffs: [][]byte{
+				withGeneveSpace(3, 3),
+				withGeneveSpace(2, 2),
+			},
+			neverGSOEqualTail: true,
+			wantLens:          [][]int{{3, 2}},
+			wantGSO:           []int{3},
+		},
+		{
+			name: "one-byte-tail-neverGSOEqualTail-not-coalesced",
+			// okToCoalesceWithSentinel is false when msgLen == 1 and
+			// neverGSOEqualTail is set; the 1-byte tail is split into
+			// its own non-coalesced singleton msg.
+			buffs: [][]byte{
+				withGeneveSpace(2, 2),
+				withGeneveSpace(1, 1),
+			},
+			neverGSOEqualTail: true,
+			wantLens:          [][]int{{2}, {1}},
+			wantGSO:           []int{0, 0},
+		},
+		{
+			name: "one-byte-tail-neverGSOEqualTail-vni-isSet-coalesced",
+			// With vniIsSet, msgLen always includes the Geneve header, so
+			// okToCoalesceWithSentinel is true even for "1-byte payloads".
+			// The naturally smaller tail short-circuits the sentinel.
+			buffs: [][]byte{
+				withGeneveSpace(2, 2+packet.GeneveFixedHeaderLength),
+				withGeneveSpace(1, 1),
+			},
+			geneve:            geneve,
+			neverGSOEqualTail: true,
+			wantLens:          [][]int{{2 + packet.GeneveFixedHeaderLength, 1 + packet.GeneveFixedHeaderLength}},
+			wantGSO:           []int{2 + packet.GeneveFixedHeaderLength},
+		},
+		{
+			name: "batch-boundary-sentinel-appended-on-prior-batch-neverGSOEqualTail",
+			// The 4th buff (length 5) is larger than gsoSize=3 so it
+			// closes the first batch. The first batch has dgramCnt > 1 and
+			// no smaller tail, so the sentinel is appended before starting
+			// the new batch.
+			buffs: [][]byte{
+				withGeneveSpace(3, 3),
+				withGeneveSpace(3, 3),
+				withGeneveSpace(3, 3),
+				withGeneveSpace(5, 5),
+			},
+			neverGSOEqualTail:  true,
+			wantLens:           [][]int{{3, 3, 3, len(neverGSOEqualTailSentinelPayload)}, {5}},
+			wantGSO:            []int{3, 0},
+			wantSentinelAtTail: []bool{true, false},
+		},
+		{
+			name: "single-buff-neverGSOEqualTail-no-sentinel",
+			// Only one datagram, no GSO happening, no sentinel.
+			buffs: [][]byte{
+				withGeneveSpace(3, 3),
+			},
+			neverGSOEqualTail: true,
+			wantLens:          [][]int{{3}},
+			wantGSO:           []int{0},
+		},
+		{
+			name: "equal-len-then-smaller-tail-then-equal-neverGSOEqualTail",
+			// The smaller tail ends the first batch with no sentinel
+			// (variation already provided), then a second singleton batch
+			// is started for the trailing equal-length buff.
+			buffs: [][]byte{
+				withGeneveSpace(3, 3),
+				withGeneveSpace(3, 3),
+				withGeneveSpace(2, 2),
+				withGeneveSpace(3, 3),
+			},
+			neverGSOEqualTail: true,
+			wantLens:          [][]int{{3, 3, 2}, {3}},
+			wantGSO:           []int{3, 0},
+		},
 	}
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
+			c := &linuxBatchingConn{}
 			addr := &net.UDPAddr{
 				IP:   net.ParseIP("127.0.0.1"),
 				Port: 1,
@@ -270,7 +375,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				msgs[i].Buffers = make([][]byte, 1)
 				msgs[i].OOB = make([]byte, controlMessageSize)
 			}
-			got := c.coalesceMessages(addr, tt.geneve, tt.buffs, msgs, packet.GeneveFixedHeaderLength)
+			got := c.coalesceMessages(addr, tt.geneve, tt.buffs, msgs, packet.GeneveFixedHeaderLength, tt.neverGSOEqualTail)
 			if got != len(tt.wantLens) {
 				t.Fatalf("got len %d want: %d", got, len(tt.wantLens))
 			}
@@ -285,6 +390,15 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 					gotLen := len(msgs[i].Buffers[j])
 					if gotLen != tt.wantLens[i][j] {
 						t.Errorf("len(msgs[%d].Buffers[%d]) %d != %d", i, j, gotLen, tt.wantLens[i][j])
+					}
+				}
+
+				wantSentinel := i < len(tt.wantSentinelAtTail) && tt.wantSentinelAtTail[i]
+				if wantSentinel {
+					tail := msgs[i].Buffers[len(msgs[i].Buffers)-1]
+					if len(tail) != len(neverGSOEqualTailSentinelPayload) ||
+						&tail[0] != &neverGSOEqualTailSentinelPayload[0] {
+						t.Errorf("msgs[%d] tail buffer is not neverGSOEqualTailSentinelPayload", i)
 					}
 				}
 

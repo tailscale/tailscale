@@ -130,6 +130,11 @@ type Knobs struct {
 	// DisableTUNTCPGRO disables TCP GRO on the Tailscale TUN device. See
 	// [tailcfg.NodeAttrDisableTUNTCPGRO].
 	DisableTUNTCPGRO atomic.Bool
+
+	// NeverGSOEqualTail enables a UDP GSO sentinel-tail workaround in the
+	// underlay UDP packet TX path on Linux. Applies to magicsock and peer relay
+	// UDP sockets. See [tailcfg.NodeAttrNeverGSOEqualTail].
+	NeverGSOEqualTail atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -164,6 +169,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		disableUDPGSO                        = has(tailcfg.NodeAttrDisableUDPGSO)
 		disableTUNUDPGRO                     = has(tailcfg.NodeAttrDisableTUNUDPGRO)
 		disableTUNTCPGRO                     = has(tailcfg.NodeAttrDisableTUNTCPGRO)
+		neverGSOEqualTail                    = has(tailcfg.NodeAttrNeverGSOEqualTail)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -196,6 +202,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.DisableUDPGSO.Store(disableUDPGSO)
 	k.DisableTUNUDPGRO.Store(disableTUNUDPGRO)
 	k.DisableTUNTCPGRO.Store(disableTUNTCPGRO)
+	k.NeverGSOEqualTail.Store(neverGSOEqualTail)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
