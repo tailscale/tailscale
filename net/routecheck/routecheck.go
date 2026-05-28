@@ -114,9 +114,21 @@ func (c *Client) NotifyNetMapAvailable(nm *netmap.NetworkMap) {
 	if nm == nil {
 		return // client disconnected
 	}
-	ch := c.hasNetMap.Load()
-	c.hasNetMap.Store(new(make(chan struct{}))) // prepare for next non-nil netmap
-	close(*ch)                                  // broadcast to waitForNetMap
+	var nextCh *chan struct{}
+	for {
+		ch := c.hasNetMap.Load()
+		if *ch == nil {
+			return // Client has been Closed
+		}
+
+		if nextCh == nil {
+			nextCh = new(make(chan struct{})) // prepare for next non-nil netmap
+		}
+		if c.hasNetMap.CompareAndSwap(ch, nextCh) {
+			close(*ch)
+			return
+		}
+	}
 }
 
 func (c *Client) waitForNetMap(ctx context.Context) (*netmap.NetworkMap, error) {
@@ -144,9 +156,9 @@ func (c *Client) Close() error {
 		return nil
 	}
 
-	ch := c.hasNetMap.Load()
-	c.hasNetMap.Store(new(chan struct{})) // clear and unlock before waking anything up
-	if ch != nil {
+	nilCh := new(chan struct{})
+	ch := c.hasNetMap.Swap(nilCh) // clear before waking anything up
+	if *ch != nil {
 		close(*ch)
 	}
 
