@@ -18,7 +18,7 @@ import (
 	"tailscale.com/types/tkatype"
 )
 
-func TestNetworkLockLogOutput(t *testing.T) {
+func TestTailnetLockLogOutput(t *testing.T) {
 	votes := uint(1)
 	aum1 := tka.AUM{
 		MessageKind: tka.AUMAddKey,
@@ -88,7 +88,7 @@ func TestNetworkLockLogOutput(t *testing.T) {
 		json := jsonoutput.JSONSchemaVersion{}
 		useColor := false
 
-		printNetworkLockLog(updates, &outBuf, json, useColor)
+		printTailnetLockLog(updates, &outBuf, json, useColor)
 
 		t.Logf("%s", outBuf.String())
 
@@ -195,7 +195,7 @@ KeyID: tlpub:0202
 		}
 		useColor := false
 
-		printNetworkLockLog(updates, &outBuf, json, useColor)
+		printTailnetLockLog(updates, &outBuf, json, useColor)
 
 		want := jsonV1
 
@@ -205,7 +205,7 @@ KeyID: tlpub:0202
 	})
 }
 
-func TestNetworkLockStatusOutput(t *testing.T) {
+func TestTailnetLockStatusOutput(t *testing.T) {
 	aum := tka.AUM{
 		MessageKind: tka.AUMNoOp,
 	}

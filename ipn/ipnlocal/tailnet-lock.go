@@ -46,14 +46,14 @@ import (
 
 var (
 	errMissingNetmap        = errors.New("missing netmap: verify that you are logged in")
-	errNetworkLockNotActive = errors.New("tailnet-lock is not active")
+	errTailnetLockNotActive = errors.New("tailnet-lock is not active")
 )
 
 // IsNetworkLockNotActive reports whether the given error indicates that
 // tailnet-lock is not active. Stop-gap for feature/tailnetlock to check this
 // until all of this is code is moved to the feature.
 func IsNetworkLockNotActive(err error) bool {
-	return errors.Is(err, errNetworkLockNotActive)
+	return errors.Is(err, errTailnetLockNotActive)
 }
 
 type tkaState struct {
@@ -107,10 +107,10 @@ func (b *LocalBackend) initTKALocked() error {
 	return nil
 }
 
-// noNetworkLockStateDirWarnable is a Warnable to warn the user that Tailnet Lock data
+// noTailnetLockStateDirWarnable is a Warnable to warn the user that Tailnet Lock data
 // (in particular, the list of AUMs in the TKA state) is being stored in memory and will
 // be lost when tailscaled restarts.
-var noNetworkLockStateDirWarnable = health.Register(&health.Warnable{
+var noTailnetLockStateDirWarnable = health.Register(&health.Warnable{
 	Code:     "no-tailnet-lock-state-dir",
 	Title:    "No statedir for Tailnet Lock",
 	Severity: health.SeverityMedium,
@@ -495,7 +495,7 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, per
 	root := b.TailscaleVarRoot()
 	var storage tka.CompactableChonk
 	if root == "" {
-		b.health.SetUnhealthy(noNetworkLockStateDirWarnable, nil)
+		b.health.SetUnhealthy(noTailnetLockStateDirWarnable, nil)
 		b.logf("tailnet-lock using in-memory storage; no state directory")
 		storage = tka.ChonkMem()
 	} else {
@@ -711,7 +711,7 @@ func (b *LocalBackend) NetworkLockVerifySignatureForTest(nks tkatype.MarshaledSi
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
-		return errNetworkLockNotActive
+		return errTailnetLockNotActive
 	}
 	return b.tka.authority.NodeKeyAuthorized(nodeKey, nks)
 }
@@ -733,7 +733,7 @@ func (b *LocalBackend) NetworkLockForceLocalDisable() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
-		return errNetworkLockNotActive
+		return errTailnetLockNotActive
 	}
 
 	id1, id2 := b.tka.authority.StateIDs()
@@ -769,7 +769,7 @@ func (b *LocalBackend) NetworkLockSign(nodeKey key.NodePublic, rotationPublic []
 		}
 
 		if b.tka == nil {
-			return key.NodePublic{}, tka.NodeKeySignature{}, errNetworkLockNotActive
+			return key.NodePublic{}, tka.NodeKeySignature{}, errTailnetLockNotActive
 		}
 		if !b.tka.authority.KeyTrusted(nlPriv.KeyID()) {
 			return key.NodePublic{}, tka.NodeKeySignature{}, errors.New(tsconst.TailnetLockNotTrustedMsg)
@@ -830,7 +830,7 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 		return errMissingNetmap
 	}
 	if b.tka == nil {
-		return errNetworkLockNotActive
+		return errTailnetLockNotActive
 	}
 	if !b.tka.authority.KeyTrusted(nlPriv.KeyID()) {
 		return errors.New("this node does not have a trusted tailnet lock key")
@@ -896,7 +896,7 @@ func (b *LocalBackend) NetworkLockDisable(secret []byte) error {
 		ourNodeKey = p.Persist().PublicNodeKey()
 	}
 	if b.tka == nil {
-		err = errNetworkLockNotActive
+		err = errTailnetLockNotActive
 	} else {
 		head = b.tka.authority.Head()
 		if !b.tka.authority.ValidDisablement(secret) {
@@ -921,7 +921,7 @@ func (b *LocalBackend) NetworkLockLog(maxEntries int) ([]ipnstate.NetworkLockUpd
 	defer b.mu.Unlock()
 
 	if b.tka == nil {
-		return nil, errNetworkLockNotActive
+		return nil, errTailnetLockNotActive
 	}
 
 	var out []ipnstate.NetworkLockUpdate
@@ -964,7 +964,7 @@ func (b *LocalBackend) NetworkLockAffectedSigs(keyID tkatype.KeyID) ([]tkatype.M
 		ourNodeKey = p.Persist().PublicNodeKey()
 	}
 	if b.tka == nil {
-		err = errNetworkLockNotActive
+		err = errTailnetLockNotActive
 	}
 	b.mu.Unlock()
 	if err != nil {
@@ -979,7 +979,7 @@ func (b *LocalBackend) NetworkLockAffectedSigs(keyID tkatype.KeyID) ([]tkatype.M
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
-		return nil, errNetworkLockNotActive
+		return nil, errTailnetLockNotActive
 	}
 
 	// Confirm for ourselves tha the signatures would actually be invalidated
@@ -1019,7 +1019,7 @@ func (b *LocalBackend) NetworkLockGenerateRecoveryAUM(removeKeys []tkatype.KeyID
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
-		return nil, errNetworkLockNotActive
+		return nil, errTailnetLockNotActive
 	}
 	var nlPriv key.NLPrivate
 	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() {
@@ -1052,7 +1052,7 @@ func (b *LocalBackend) NetworkLockCosignRecoveryAUM(aum *tka.AUM) (*tka.AUM, err
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
-		return nil, errNetworkLockNotActive
+		return nil, errTailnetLockNotActive
 	}
 	var nlPriv key.NLPrivate
 	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() {
@@ -1081,7 +1081,7 @@ func (b *LocalBackend) NetworkLockSubmitRecoveryAUM(aum *tka.AUM) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
-		return errNetworkLockNotActive
+		return errTailnetLockNotActive
 	}
 	var ourNodeKey key.NodePublic
 	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() && !p.Persist().PrivateNodeKey().IsZero() {
@@ -1109,7 +1109,7 @@ func (b *LocalBackend) NetworkLockWrapPreauthKey(preauthKey string, tkaKey key.N
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
-		return "", errNetworkLockNotActive
+		return "", errTailnetLockNotActive
 	}
 
 	pub, priv, err := ed25519.GenerateKey(nil) // nil == crypto/rand
@@ -1137,7 +1137,7 @@ func (b *LocalBackend) NetworkLockVerifySigningDeeplink(url string) tka.Deeplink
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
-		return tka.DeeplinkValidationResult{IsValid: false, Error: errNetworkLockNotActive.Error()}
+		return tka.DeeplinkValidationResult{IsValid: false, Error: errTailnetLockNotActive.Error()}
 	}
 
 	return b.tka.authority.ValidateDeeplink(url)

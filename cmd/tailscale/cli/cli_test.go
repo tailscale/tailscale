@@ -1614,7 +1614,7 @@ func TestParseNLArgs(t *testing.T) {
 
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
-			keys, disablements, err := parseNLArgs(tc.input, tc.parseKeys, tc.parseDisablements)
+			keys, disablements, err := parseTLArgs(tc.input, tc.parseKeys, tc.parseDisablements)
 			if (tc.wantErr == nil && err != nil) ||
 				(tc.wantErr != nil && err == nil) ||
 				(tc.wantErr != nil && err != nil && tc.wantErr.Error() != err.Error()) {
