@@ -4,10 +4,12 @@
 package routecheck
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
+
+	jsonv2 "github.com/go-json-experiment/json"
+	jsonv1 "github.com/go-json-experiment/json/v1"
 
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/routecheck"
@@ -54,7 +56,10 @@ func serveRouteCheck(h *localapi.Handler, w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	json.NewEncoder(w).Encode(report)
+
+	// TODO(sfllaw): Since ipn/localapi is still using encoding/json
+	// with its default options, marshal with DefaultOptionsV1.
+	jsonv2.MarshalWrite(w, report, jsonv1.DefaultOptionsV1())
 }
 
 func defBool(a string, def bool) bool {
