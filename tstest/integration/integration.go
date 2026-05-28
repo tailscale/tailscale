@@ -1130,7 +1130,7 @@ func (n *TestNode) PublicKey() string {
 	return st.Self.PublicKey
 }
 
-// NLPublicKey returns the hex-encoded network lock public key of
+// NLPublicKey returns the hex-encoded tailnet lock public key of
 // this node, e.g. `tlpub:123456abc`
 func (n *TestNode) NLPublicKey() string {
 	tb := n.env.t

@@ -111,11 +111,11 @@ type TKAPeer struct {
 // along with details about the locally-known state of the tailnet
 // key authority.
 type NetworkLockStatus struct {
-	// Enabled is true if network lock is enabled.
+	// Enabled is true if tailnet lock is enabled.
 	Enabled bool
 
 	// Head describes the AUM hash of the leaf AUM. Head is nil
-	// if network lock is not enabled.
+	// if tailnet lock is not enabled.
 	Head *[32]byte
 
 	// PublicKey describes the node's tailnet-lock public key.
@@ -145,9 +145,9 @@ type NetworkLockStatus struct {
 	// checks.
 	FilteredPeers []*TKAPeer
 
-	// StateID is a nonce associated with the network lock authority,
+	// StateID is a nonce associated with the tailnet lock authority,
 	// generated upon enablement. This field is not populated if the
-	// network lock is disabled.
+	// tailnet lock is disabled.
 	StateID uint64
 }
 

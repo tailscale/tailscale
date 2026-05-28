@@ -111,7 +111,7 @@ type TKABootstrapRequest struct {
 	NodeKey key.NodePublic
 
 	// Head represents the node's head AUMHash (tka.Authority.Head), if
-	// network lock is enabled.
+	// tailnet lock is enabled.
 	Head string
 }
 
