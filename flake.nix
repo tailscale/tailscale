@@ -174,6 +174,13 @@
       default = self.nixosModules.override;
     };
 
+    # nix-darwin module: multi-instance userspace Tailscale via launchd
+    # LaunchAgents. Layers on top of the user's existing Tailscale GUI app.
+    darwinModules = {
+      tailscales = import ./nix/darwin/default.nix self;
+      default = self.darwinModules.tailscales;
+    };
+
     checks = eachSystem (pkgs: {
       single = import ./nix/nixos/tests/single.nix {
         inherit self pkgs;
@@ -184,6 +191,12 @@
         inherit (pkgs) lib;
       };
       shared-services = import ./nix/nixos/tests/shared-services.nix {
+        inherit self pkgs;
+        inherit (pkgs) lib;
+      };
+      # Eval-only test for the darwin module; runs on every system so we
+      # catch breakage from a Linux dev machine. No nix-darwin runtime.
+      darwin-eval = import ./nix/darwin/tests/eval.nix {
         inherit self pkgs;
         inherit (pkgs) lib;
       };
