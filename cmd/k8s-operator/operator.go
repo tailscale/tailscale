@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	kzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -292,6 +293,20 @@ func serviceManagedResourceFilterPredicate() predicate.Predicate {
 	})
 }
 
+// Check to verify that either the new OR old object had the ProxyGroup annotation, allowing
+// either cleanup (if on old, but not new) or skip (on neither)
+func serviceHasProxyGroupAnnotationPredicate() predicate.Predicate {
+	has := func(o client.Object) bool {
+		return o != nil && o.GetAnnotations()[AnnotationProxyGroup] != ""
+	}
+	return predicate.Funcs{
+		CreateFunc:  func(e event.CreateEvent) bool { return has(e.Object) },
+		DeleteFunc:  func(e event.DeleteEvent) bool { return has(e.Object) },
+		UpdateFunc:  func(e event.UpdateEvent) bool { return has(e.ObjectOld) || has(e.ObjectNew) },
+		GenericFunc: func(e event.GenericEvent) bool { return has(e.Object) },
+	}
+}
+
 type (
 	ClientProvider interface {
 		For(tailnet string) (tsclient.Client, error)
@@ -495,7 +510,10 @@ func runReconcilers(opts reconcilerOpts) {
 	ingressSvcFromEpsFilter := handler.EnqueueRequestsFromMapFunc(ingressSvcFromEps(mgr.GetClient(), opts.log.Named("service-pg-reconciler")))
 	err = builder.
 		ControllerManagedBy(mgr).
-		For(&corev1.Service{}, builder.WithPredicates(serviceManagedResourceFilterPredicate())).
+		For(&corev1.Service{}, builder.WithPredicates(
+			serviceManagedResourceFilterPredicate(),
+			serviceHasProxyGroupAnnotationPredicate(),
+		)).
 		Named("service-pg-reconciler").
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(HAServicesFromSecret(mgr.GetClient(), startlog))).
 		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
