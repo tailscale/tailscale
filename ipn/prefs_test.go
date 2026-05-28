@@ -1006,10 +1006,19 @@ func TestExitNodeIPOfArg(t *testing.T) {
 			want: mustIP("1.2.3.4"),
 		},
 		{
-			name:    "no_match",
-			arg:     "unknown",
-			st:      &ipnstate.Status{MagicDNSSuffix: ".foo"},
-			wantErr: `invalid value "unknown" for --exit-node; must be IP or hostname`,
+			name: "no_match",
+			arg:  "unknown",
+			st: &ipnstate.Status{
+				MagicDNSSuffix: ".foo",
+				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
+					key.NewNode().Public(): {
+						DNSName:        "skippy.foo.",
+						TailscaleIPs:   []netip.Addr{mustIP("1.0.0.2")},
+						ExitNodeOption: true,
+					},
+				},
+			},
+			wantErr: `invalid value "unknown" for --exit-node; must be IP or peer hostname`,
 		},
 		{
 			name: "name",
@@ -1057,6 +1066,12 @@ func TestExitNodeIPOfArg(t *testing.T) {
 			want: mustIP("1.0.0.2"),
 		},
 		{
+			name:    "hostname_no_peer",
+			arg:     "skippy.foo",
+			st:      &ipnstate.Status{},
+			wantErr: `cannot resolve exit node by hostname while Tailscale is starting up; please use its Tailscale IP address instead`,
+		},
+		{
 			name: "name_not_exit",
 			arg:  "skippy",
 			st: &ipnstate.Status{
@@ -1082,7 +1097,7 @@ func TestExitNodeIPOfArg(t *testing.T) {
 					},
 				},
 			},
-			wantErr: `invalid value "skippy.bar." for --exit-node; must be IP or hostname`,
+			wantErr: `invalid value "skippy.bar." for --exit-node; must be IP or peer hostname`,
 		},
 		{
 			name: "ambiguous",
