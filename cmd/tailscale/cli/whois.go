@@ -13,6 +13,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/client/tailscale/apitype"
 )
 
 var whoisCmd = &ffcli.Command{
@@ -46,7 +47,13 @@ func runWhoIs(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if whoIsArgs.json {
+	return printWhoIs(who, whoIsArgs.json)
+}
+
+// printWhoIs prints the WhoIsResponse to Stdout, either as JSON (if asJSON is
+// true) or in a human-readable form.
+func printWhoIs(who *apitype.WhoIsResponse, asJSON bool) error {
+	if asJSON {
 		ec := json.NewEncoder(Stdout)
 		ec.SetIndent("", "  ")
 		ec.Encode(who)

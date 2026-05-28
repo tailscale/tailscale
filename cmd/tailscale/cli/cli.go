@@ -299,6 +299,7 @@ change in the future.
 			exitNodeCmd(),
 			nilOrCall(maybeUpdateCmd),
 			whoisCmd,
+			whoamiCmd,
 			debugCmd(),
 			nilOrCall(maybeDriveCmd),
 			idTokenCmd,
