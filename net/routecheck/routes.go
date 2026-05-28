@@ -12,9 +12,6 @@ import (
 )
 
 // RoutersByPrefix represents a map of nodes grouped by the subnet that they route.
-type RoutersByPrefix map[netip.Prefix][]tailcfg.NodeView
-
-// RoutersByPrefix returns a map of nodes grouped by the subnet that they route.
 // Nodes that route for /0 prefixes are exit nodes, their subnet is the Internet.
 // The result omits any prefix that is one of a node’s local addresses.
 //
@@ -22,6 +19,10 @@ type RoutersByPrefix map[netip.Prefix][]tailcfg.NodeView
 // contained within another more general prefix has no reachable routers,
 // traffic is still sent to one of those unreachable routers.
 // Routers for the general prefix aren’t candidates. See tailscale/tailscale#18550.
+type RoutersByPrefix map[netip.Prefix][]tailcfg.NodeView
+
+// RoutersByPrefix returns a map of nodes grouped by the subnet that they route.
+// See [RoutersByPrefix] for more detail.
 func (c *Client) RoutersByPrefix() RoutersByPrefix {
 	var routers RoutersByPrefix
 	for _, n := range c.nb.NodeBackend().Peers() {
