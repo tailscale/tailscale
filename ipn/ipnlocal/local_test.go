@@ -8683,3 +8683,33 @@ func TestPeerRoutesCGNATCollapse(t *testing.T) {
 		t.Errorf("with subnet: got %v; want %v", got, want)
 	}
 }
+
+func TestResetAuthClearsMachineKey(t *testing.T) {
+	store := new(mem.Store)
+
+	// Write a machine key to the store.
+	machineKey := key.NewMachine()
+	keyText, _ := machineKey.MarshalText()
+	if err := store.WriteState(ipn.MachineKeyStateKey, keyText); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify key is readable.
+	if bs, err := store.ReadState(ipn.MachineKeyStateKey); err != nil {
+		t.Fatalf("ReadState before clear: %v", err)
+	} else if len(bs) == 0 {
+		t.Fatal("machine key is empty before clear")
+	}
+
+	// Clear the key the same way ResetAuth does.
+	if err := ipn.WriteState(store, ipn.MachineKeyStateKey, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify key is gone. It should return ErrStateNotExist,
+	// not nil/nil which would cause initMachineKeyLocked to
+	// fail with "invalid key ... doesn't have expected type prefix".
+	if _, err := store.ReadState(ipn.MachineKeyStateKey); err != ipn.ErrStateNotExist {
+		t.Fatalf("ReadState after clear: got err %v, want ErrStateNotExist", err)
+	}
+}

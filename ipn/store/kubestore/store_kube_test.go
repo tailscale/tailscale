@@ -172,6 +172,32 @@ func TestWriteState(t *testing.T) {
 			},
 			allowPatch: true,
 		},
+		{
+			name: "delete_with_patch",
+			initial: map[string][]byte{
+				"foo": []byte("bar"),
+				"baz": []byte("quux"),
+			},
+			key:   "foo",
+			value: nil,
+			wantData: map[string][]byte{
+				"baz": []byte("quux"),
+			},
+			allowPatch: true,
+		},
+		{
+			name: "delete_with_update",
+			initial: map[string][]byte{
+				"foo": []byte("bar"),
+				"baz": []byte("quux"),
+			},
+			key:   "foo",
+			value: nil,
+			wantData: map[string][]byte{
+				"baz": []byte("quux"),
+			},
+			allowPatch: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -208,6 +234,9 @@ func TestWriteState(t *testing.T) {
 						} else if p.Op == "add" && strings.HasPrefix(p.Path, "/data/") {
 							key := strings.TrimPrefix(p.Path, "/data/")
 							secret[key] = p.Value.([]byte)
+						} else if p.Op == "remove" && strings.HasPrefix(p.Path, "/data/") {
+							key := strings.TrimPrefix(p.Path, "/data/")
+							delete(secret, key)
 						}
 					}
 					return nil
@@ -234,11 +263,17 @@ func TestWriteState(t *testing.T) {
 
 			// Verify memory store was updated
 			got, err := s.memory.ReadState(ipn.StateKey(sanitizeKey(string(tt.key))))
-			if err != nil {
-				t.Errorf("reading from memory store: %v", err)
-			}
-			if !cmp.Equal(got, tt.value) {
-				t.Errorf("memory store key %q = %v, want %v", tt.key, got, tt.value)
+			if tt.value == nil {
+				if err != ipn.ErrStateNotExist {
+					t.Errorf("reading deleted key from memory store: got err %v, want ErrStateNotExist", err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("reading from memory store: %v", err)
+				}
+				if !cmp.Equal(got, tt.value) {
+					t.Errorf("memory store key %q = %v, want %v", tt.key, got, tt.value)
+				}
 			}
 		})
 	}
