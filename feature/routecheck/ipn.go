@@ -9,16 +9,9 @@ import (
 	"tailscale.com/net/routecheck"
 )
 
-// DefaultTimeout is the default time allowed for a response before a peer is considered unreachable.
-const DefaultTimeout = routecheck.DefaultTimeout
-
-// Client generates Reports describing the result of both passive and active
-// reachability probing.
-type Client = routecheck.Client
-
 // ClientFor returns the [routecheck.Client] for a given backend,
 // or nil if route checking is not available for that backend.
-func ClientFor(b *ipnlocal.LocalBackend) *Client {
+func ClientFor(b *ipnlocal.LocalBackend) *routecheck.Client {
 	e, ok := ipnlocal.GetExt[*Extension](b)
 	if e == nil || !ok {
 		return nil
