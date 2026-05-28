@@ -332,6 +332,37 @@ func TestIgnoreRegularService(t *testing.T) {
 	}
 }
 
+func TestServiceHasProxyGroupAnnotationPredicate(t *testing.T) {
+    p := serviceHasProxyGroupAnnotationPredicate()
+    with := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+        Annotations: map[string]string{AnnotationProxyGroup: "pg"},
+    }}
+    without := &corev1.Service{}
+
+    // Update must pass if either side has the annotation, so removal events
+    // still reach Reconcile and the finalizer cleanup path can run.
+    for _, tc := range []struct {
+        name string
+        got  bool
+        want bool
+    }{
+        {"create_with_annotation",        p.Create(event.CreateEvent{Object: with}),                           true},
+        {"create_without_annotation",     p.Create(event.CreateEvent{Object: without}),                        false},
+        {"delete_with_annotation",        p.Delete(event.DeleteEvent{Object: with}),                           true},
+        {"delete_without_annotation",     p.Delete(event.DeleteEvent{Object: without}),                        false},
+        {"update_annotation_removed",     p.Update(event.UpdateEvent{ObjectOld: with, ObjectNew: without}),    true},
+        {"update_annotation_added",       p.Update(event.UpdateEvent{ObjectOld: without, ObjectNew: with}),    true},
+        {"update_both_have_annotation",   p.Update(event.UpdateEvent{ObjectOld: with, ObjectNew: with}),       true},
+        {"update_neither_has_annotation", p.Update(event.UpdateEvent{ObjectOld: without, ObjectNew: without}), false},
+    } {
+        t.Run(tc.name, func(t *testing.T) {
+            if tc.got != tc.want {
+                t.Fatalf("predicate returned %v, want %v", tc.got, tc.want)
+            }
+        })
+    }
+}
+
 func removeEl(s []string, value string) []string {
 	result := s[:0]
 	for _, v := range s {
