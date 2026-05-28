@@ -168,8 +168,13 @@ func (b *LocalBackend) GetCertPEM(ctx context.Context, domain string) (*TLSCertK
 //
 //   - An exact CertDomain (e.g., "node.ts.net")
 //   - A wildcard domain (e.g., "*.node.ts.net")
+//   - A bring-your-own Funnel domain referenced by the local serve config
+//     (e.g., "foo.com" when ServeConfig.AllowFunnel has "foo.com:443").
 //
 // The wildcard format requires the NodeAttrDNSSubdomainResolve capability.
+// ts.net domains are issued via dns-01 against control's DNS zone; BYO
+// Funnel domains are issued via tls-alpn-01 over the same Funnel TLS path
+// that serves real traffic.
 func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string, minValidity time.Duration) (*TLSCertKeyPair, error) {
 	b.mu.Lock()
 	getCertForTest := b.getCertForTest
@@ -311,12 +316,35 @@ func (b *LocalBackend) shouldUseACMETLSALPN01(domain string, previous *TLSCertKe
 		logf("acme: using dns-01: Funnel is not enabled for %s:443", domain)
 		return false
 	}
+	if b.isBYOFunnelDomain(domain) {
+		// BYO Funnel domain: dns-01 is not a viable path because control
+		// does not own the user's DNS zone. Use tls-alpn-01 even on
+		// first issuance.
+		logf("acme: using tls-alpn-01 (BYO Funnel domain)")
+		return true
+	}
 	if previous == nil {
 		logf("acme: using dns-01: no cached certificate for Funnel renewal")
 		return false
 	}
 	logf("acme: using tls-alpn-01")
 	return true
+}
+
+// isBYOFunnelDomain reports whether domain is a "bring your own" Funnel
+// hostname: a domain that is not in the netmap's CertDomains but is
+// referenced as a Funnel target on :443 by the local serve config.
+// BYO domains can only be issued via tls-alpn-01 because control does
+// not own their DNS zone.
+func (b *LocalBackend) isBYOFunnelDomain(domain string) bool {
+	if domain == "" || isWildcardDomain(domain) {
+		return false
+	}
+	nm := b.NetMapNoPeers()
+	if nm != nil && slices.Contains(nm.DNS.CertDomains, domain) {
+		return false
+	}
+	return b.hasFunnelForHostPort(domain, 443)
 }
 
 func challengeByType(challenges []*acme.Challenge, typ string) *acme.Challenge {
@@ -694,6 +722,12 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if b.isBYOFunnelDomain(domain) {
+			// BYO domains have no working dns-01 path (control does not
+			// own the zone), so surface the tls-alpn-01 error instead of
+			// burning an ACME attempt on a guaranteed-to-fail fallback.
+			return nil, err
 		}
 		logf("acme: tls-alpn-01 failed; falling back to dns-01: %v", err)
 	}
@@ -1077,6 +1111,8 @@ func validLookingCertDomain(name string) bool {
 //
 //   - "node.ts.net" -> "node.ts.net" (exact CertDomain match)
 //   - "*.node.ts.net" -> "*.node.ts.net" (explicit wildcard, requires NodeAttrDNSSubdomainResolve)
+//   - "foo.com" -> "foo.com" (bring-your-own Funnel domain referenced by the
+//     local serve config; issued via tls-alpn-01 in getCertPEM)
 //
 // Subdomain requests like "app.node.ts.net" are rejected; callers should
 // request "*.node.ts.net" explicitly for subdomain coverage.
@@ -1091,7 +1127,7 @@ func (b *LocalBackend) resolveCertDomain(domain string) (string, error) {
 		return "", errors.New("no netmap available")
 	}
 	certDomains := nm.DNS.CertDomains
-	if len(certDomains) == 0 {
+	if len(certDomains) == 0 && !b.isBYOFunnelDomain(domain) {
 		return "", errors.New("your Tailscale account does not support getting TLS certs")
 	}
 
@@ -1108,6 +1144,13 @@ func (b *LocalBackend) resolveCertDomain(domain string) (string, error) {
 
 	// Exact CertDomain match.
 	if slices.Contains(certDomains, domain) {
+		return domain, nil
+	}
+
+	// Bring-your-own Funnel domain (e.g. "foo.com"). The serve config
+	// references the domain as a Funnel target on :443; cert acquisition
+	// happens via tls-alpn-01 in getCertPEM.
+	if b.isBYOFunnelDomain(domain) {
 		return domain, nil
 	}
 

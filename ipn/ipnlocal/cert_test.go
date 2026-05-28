@@ -305,32 +305,208 @@ func TestServeTLSConfigNextProtos(t *testing.T) {
 }
 
 func TestShouldUseACMETLSALPN01(t *testing.T) {
-	const domain = "example.com"
+	const (
+		tsNetDomain = "node.ts.net"
+		byoDomain   = "foo.com"
+	)
+	previous := &TLSCertKeyPair{}
+
+	setFunnel := func(b *LocalBackend, hosts ...string) {
+		funnel := map[ipn.HostPort]bool{}
+		for _, h := range hosts {
+			funnel[ipn.HostPort(h+":443")] = true
+		}
+		b.mu.Lock()
+		b.serveConfig = (&ipn.ServeConfig{AllowFunnel: funnel}).View()
+		b.mu.Unlock()
+	}
+	setNetmap := func(b *LocalBackend, certDomains ...string) {
+		b.mu.Lock()
+		b.currentNode().SetNetMap(&netmap.NetworkMap{
+			SelfNode: (&tailcfg.Node{}).View(),
+			DNS:      tailcfg.DNSConfig{CertDomains: certDomains},
+		})
+		b.mu.Unlock()
+	}
+
+	tests := []struct {
+		name     string
+		domain   string
+		previous *TLSCertKeyPair
+		funnel   []string
+		netmap   []string // CertDomains; if nil, no netmap installed
+		want     bool
+	}{
+		{
+			name:     "tsnet_renewal",
+			domain:   tsNetDomain,
+			previous: previous,
+			funnel:   []string{tsNetDomain},
+			netmap:   []string{tsNetDomain},
+			want:     true,
+		},
+		{
+			name:     "tsnet_first_issuance_prefers_dns01",
+			domain:   tsNetDomain,
+			previous: nil,
+			funnel:   []string{tsNetDomain},
+			netmap:   []string{tsNetDomain},
+			want:     false,
+		},
+		{
+			name:     "tsnet_wildcard_rejected",
+			domain:   "*." + tsNetDomain,
+			previous: previous,
+			funnel:   []string{tsNetDomain},
+			netmap:   []string{tsNetDomain},
+			want:     false,
+		},
+		{
+			name:     "tsnet_without_funnel_rejected",
+			domain:   tsNetDomain,
+			previous: previous,
+			funnel:   nil,
+			netmap:   []string{tsNetDomain},
+			want:     false,
+		},
+		{
+			name:     "byo_first_issuance_uses_alpn",
+			domain:   byoDomain,
+			previous: nil,
+			funnel:   []string{byoDomain},
+			netmap:   []string{tsNetDomain},
+			want:     true,
+		},
+		{
+			name:     "byo_renewal_uses_alpn",
+			domain:   byoDomain,
+			previous: previous,
+			funnel:   []string{byoDomain},
+			netmap:   []string{tsNetDomain},
+			want:     true,
+		},
+		{
+			name:     "byo_without_funnel_rejected",
+			domain:   byoDomain,
+			previous: previous,
+			funnel:   nil,
+			netmap:   []string{tsNetDomain},
+			want:     false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestLocalBackend(t)
+			if tt.netmap != nil {
+				setNetmap(b, tt.netmap...)
+			}
+			setFunnel(b, tt.funnel...)
+			if got := b.shouldUseACMETLSALPN01(tt.domain, tt.previous, t.Logf); got != tt.want {
+				t.Errorf("shouldUseACMETLSALPN01(%q, previous=%v) = %v, want %v",
+					tt.domain, tt.previous != nil, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsBYOFunnelDomain(t *testing.T) {
+	setFunnel := func(b *LocalBackend, hosts ...string) {
+		funnel := map[ipn.HostPort]bool{}
+		for _, h := range hosts {
+			funnel[ipn.HostPort(h+":443")] = true
+		}
+		b.mu.Lock()
+		b.serveConfig = (&ipn.ServeConfig{AllowFunnel: funnel}).View()
+		b.mu.Unlock()
+	}
+	setNetmap := func(b *LocalBackend, certDomains ...string) {
+		b.mu.Lock()
+		b.currentNode().SetNetMap(&netmap.NetworkMap{
+			SelfNode: (&tailcfg.Node{}).View(),
+			DNS:      tailcfg.DNSConfig{CertDomains: certDomains},
+		})
+		b.mu.Unlock()
+	}
+
+	tests := []struct {
+		name        string
+		domain      string
+		certDomains []string
+		funnel      []string
+		want        bool
+	}{
+		{name: "byo_with_funnel", domain: "foo.com", certDomains: []string{"node.ts.net"}, funnel: []string{"foo.com"}, want: true},
+		{name: "byo_without_funnel", domain: "foo.com", certDomains: []string{"node.ts.net"}, want: false},
+		{name: "tsnet_exact_match_not_byo", domain: "node.ts.net", certDomains: []string{"node.ts.net"}, funnel: []string{"node.ts.net"}, want: false},
+		{name: "wildcard_never_byo", domain: "*.foo.com", certDomains: []string{"node.ts.net"}, funnel: []string{"foo.com"}, want: false},
+		{name: "empty_never_byo", domain: "", certDomains: []string{"node.ts.net"}, funnel: []string{"foo.com"}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestLocalBackend(t)
+			setNetmap(b, tt.certDomains...)
+			setFunnel(b, tt.funnel...)
+			if got := b.isBYOFunnelDomain(tt.domain); got != tt.want {
+				t.Errorf("isBYOFunnelDomain(%q) = %v, want %v", tt.domain, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveCertDomainBYO(t *testing.T) {
+	const (
+		tsNetDomain = "node.ts.net"
+		byoDomain   = "foo.com"
+	)
 	b := newTestLocalBackend(t)
 	b.mu.Lock()
+	b.currentNode().SetNetMap(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{}).View(),
+		DNS:      tailcfg.DNSConfig{CertDomains: []string{tsNetDomain}},
+	})
+	b.mu.Unlock()
+
+	// Without a serve config, BYO is rejected.
+	if _, err := b.resolveCertDomain(byoDomain); err == nil {
+		t.Fatalf("resolveCertDomain(%q) without serve config: want error, got nil", byoDomain)
+	}
+
+	// Web entry alone (no AllowFunnel) is not enough; the gate is Funnel.
+	b.mu.Lock()
 	b.serveConfig = (&ipn.ServeConfig{
-		AllowFunnel: map[ipn.HostPort]bool{
-			domain + ":443": true,
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			byoDomain + ":443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:8080"}}},
 		},
 	}).View()
 	b.mu.Unlock()
-
-	previous := &TLSCertKeyPair{}
-	if !b.shouldUseACMETLSALPN01(domain, previous, t.Logf) {
-		t.Fatal("shouldUseACMETLSALPN01 = false, want true")
-	}
-	if b.shouldUseACMETLSALPN01(domain, nil, t.Logf) {
-		t.Fatal("shouldUseACMETLSALPN01 without cached cert = true, want false")
-	}
-	if b.shouldUseACMETLSALPN01("*."+domain, previous, t.Logf) {
-		t.Fatal("shouldUseACMETLSALPN01 for wildcard = true, want false")
+	if _, err := b.resolveCertDomain(byoDomain); err == nil {
+		t.Fatalf("resolveCertDomain(%q) with Web but no Funnel: want error, got nil", byoDomain)
 	}
 
+	// With AllowFunnel, BYO is accepted.
 	b.mu.Lock()
-	b.serveConfig = (&ipn.ServeConfig{}).View()
+	b.serveConfig = (&ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			byoDomain + ":443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:8080"}}},
+		},
+		AllowFunnel: map[ipn.HostPort]bool{byoDomain + ":443": true},
+	}).View()
 	b.mu.Unlock()
-	if b.shouldUseACMETLSALPN01(domain, previous, t.Logf) {
-		t.Fatal("shouldUseACMETLSALPN01 without Funnel = true, want false")
+	got, err := b.resolveCertDomain(byoDomain)
+	if err != nil {
+		t.Fatalf("resolveCertDomain(%q): %v", byoDomain, err)
+	}
+	if got != byoDomain {
+		t.Errorf("resolveCertDomain(%q) = %q, want %q", byoDomain, got, byoDomain)
+	}
+
+	// The ts.net path still works alongside BYO entries.
+	got, err = b.resolveCertDomain(tsNetDomain)
+	if err != nil {
+		t.Fatalf("resolveCertDomain(%q): %v", tsNetDomain, err)
+	}
+	if got != tsNetDomain {
+		t.Errorf("resolveCertDomain(%q) = %q, want %q", tsNetDomain, got, tsNetDomain)
 	}
 }
 
