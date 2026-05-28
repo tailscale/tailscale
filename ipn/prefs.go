@@ -872,10 +872,14 @@ func (e ExitNodeLocalIPError) Error() string {
 	return fmt.Sprintf("cannot use %s as an exit node as it is a local IP address to this machine", e.hostOrIP)
 }
 
+// exitNodeIPOfArg returns the IP address of the exit node based on the
+// user-provided string.
 func exitNodeIPOfArg(s string, st *ipnstate.Status) (ip netip.Addr, err error) {
 	if s == "" {
 		return ip, os.ErrInvalid
 	}
+
+	// If the string is a valid IP address, that's the exit node.
 	ip, err = netip.ParseAddr(s)
 	if err == nil {
 		if !isRemoteIP(st, ip) {
@@ -893,6 +897,13 @@ func exitNodeIPOfArg(s string, st *ipnstate.Status) (ip netip.Addr, err error) {
 			}
 		}
 		return ip, nil
+	}
+
+	// If the string is not a valid IP address, assume it's a hostname.
+	// Search the list of peers for a matching hostname.
+	if len(st.Peer) == 0 {
+		return ip, errors.New("cannot resolve exit node by hostname while Tailscale is starting up; " +
+			"please use its Tailscale IP address instead")
 	}
 	match := 0
 	for _, ps := range st.Peer {
@@ -920,7 +931,7 @@ func exitNodeIPOfArg(s string, st *ipnstate.Status) (ip netip.Addr, err error) {
 	}
 	switch match {
 	case 0:
-		return ip, fmt.Errorf("invalid value %q for --exit-node; must be IP or hostname", s)
+		return ip, fmt.Errorf("invalid value %q for --exit-node; must be IP or peer hostname", s)
 	case 1:
 		if !isRemoteIP(st, ip) {
 			return ip, ExitNodeLocalIPError{s}
