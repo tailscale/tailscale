@@ -107,6 +107,15 @@ const (
 	maxIPv6PayloadLen = 1<<16 - 1 - 8
 )
 
+var gsoTailSentinel = [1]byte{0}
+
+func maybeAppendGSOTailSentinel(msg *ipv6.Message, coalescedLen, gsoSize int) {
+	if coalescedLen%gsoSize != 0 {
+		return
+	}
+	msg.Buffers = append(msg.Buffers, gsoTailSentinel[:])
+}
+
 // coalesceMessages iterates 'buffs', setting and coalescing them in 'msgs'
 // where possible while maintaining datagram order.
 //
@@ -142,7 +151,7 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.Ge
 		}
 		if i > 0 {
 			msgLen := len(buff)
-			if msgLen+coalescedLen <= maxPayloadLen &&
+			if msgLen+coalescedLen+len(gsoTailSentinel) <= maxPayloadLen &&
 				msgLen <= gsoSize &&
 				dgramCnt < udpSegmentMaxDatagrams &&
 				!endBatch {
@@ -150,6 +159,7 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.Ge
 				// This appends a struct iovec element in the underlying struct msghdr (scatter-gather).
 				msgs[base].Buffers = append(msgs[base].Buffers, buff)
 				if i == len(buffs)-1 {
+					maybeAppendGSOTailSentinel(&msgs[base], coalescedLen+msgLen, gsoSize)
 					setGSOSizeInControl(&msgs[base].OOB, uint16(gsoSize))
 				}
 				dgramCnt++
@@ -163,6 +173,7 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.Ge
 			}
 		}
 		if dgramCnt > 1 {
+			maybeAppendGSOTailSentinel(&msgs[base], coalescedLen, gsoSize)
 			setGSOSizeInControl(&msgs[base].OOB, uint16(gsoSize))
 		}
 		// Reset prior to incrementing base since we are preparing to start a
