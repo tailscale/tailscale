@@ -187,7 +187,8 @@ type CapabilityVersion int
 //   - 138: 2026-03-31: can handle C2N /debug/tka.
 //   - 139: 2026-05-22: Client understands [NodeAttrEmitRuntimeMetrics]
 //   - 140: 2026-05-27: Client understands [NodeAttrDisableUDPGRO], [NodeAttrDisableUDPGSO], [NodeAttrDisableTUNUDPGRO], [NodeAttrDisableTUNTCPGRO]
-const CurrentCapabilityVersion CapabilityVersion = 140
+//   - 141: 2026-05-28: Client understands [NodeAttrNeverGSOEqualTail]
+const CurrentCapabilityVersion CapabilityVersion = 141
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2830,6 +2831,15 @@ const (
 	// Currently only consulted on Linux; may apply to other platforms as they
 	// gain TUN TCP GRO support.
 	NodeAttrDisableTUNTCPGRO NodeCapability = "disable-tun-tcp-gro"
+
+	// NodeAttrNeverGSOEqualTail enables a sentinel-tail workaround in the
+	// underlay UDP packet TX path on Linux. Applies to magicsock and peer relay
+	// UDP sockets. The workaround avoids emitting UDP GSO batches whose
+	// fragments are all equal in length, at a small payload and packet overhead
+	// cost. It exists so control can mitigate kernel regressions that mangle
+	// UDP headers or checksums for equal-length GSO batches, without requiring
+	// a client release. See https://github.com/tailscale/tailscale/issues/19777.
+	NodeAttrNeverGSOEqualTail NodeCapability = "never-gso-equal-tail"
 )
 
 const (
