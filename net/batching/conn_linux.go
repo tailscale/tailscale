@@ -296,15 +296,20 @@ retry:
 	if c.txOffload.Load() && (!neverGSOEqualTail || len(buffs) >= appendSentinelTailBatchSizeThreshold) {
 		n = c.coalesceMessages(batch.ua, geneve, buffs, batch.msgs, offset, neverGSOEqualTail)
 	} else {
+		mutableOffset := offset // don't mutate offset across retries
 		vniIsSet := geneve.VNI.IsSet()
 		if vniIsSet {
-			offset -= packet.GeneveFixedHeaderLength
+			mutableOffset -= packet.GeneveFixedHeaderLength
 		}
 		for i := range buffs {
 			if vniIsSet {
 				geneve.Encode(buffs[i])
 			}
-			batch.msgs[i].Buffers[0] = buffs[i][offset:]
+			batch.msgs[i].Buffers[0] = buffs[i][mutableOffset:]
+			// Buffers length may be > 1 (scatter-gather) if we passed through
+			// coalesceMessages during a first pass, and landed here as part of
+			// goto retry.
+			batch.msgs[i].Buffers = batch.msgs[i].Buffers[:1]
 			batch.msgs[i].Addr = batch.ua
 			batch.msgs[i].OOB = batch.msgs[i].OOB[:0]
 		}
