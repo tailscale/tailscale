@@ -5,6 +5,8 @@ package traffic_test
 
 import (
 	"maps"
+	"math/rand/v2"
+	"slices"
 	"testing"
 
 	gocmp "github.com/google/go-cmp/cmp"
@@ -134,6 +136,79 @@ func FuzzNodeHasherCompare(f *testing.F) {
 		}
 		if d := h.Compare(b, a); c != -d {
 			t.Fatalf("c %d, d %d: expected inverse values", c, d)
+		}
+	})
+}
+
+// FuzzSortNodes tests that nodes are sorted such that every node
+// with an equal score has an equal chance of being first.
+func FuzzSortNodes(f *testing.F) {
+	nodeIDs := func(nodes []tailcfg.NodeView) []tailcfg.NodeID {
+		nids := make([]tailcfg.NodeID, len(nodes))
+		for i, n := range nodes {
+			nids[i] = n.ID()
+		}
+		return nids
+	}
+
+	for _, seed := range [][]uint64{
+		{0, 0},
+		{1, 2},
+		{37, 42},
+		{5376970906336561236, 2417489263451880030},
+	} {
+		f.Add(seed[0], seed[1])
+	}
+	f.Fuzz(func(t *testing.T, seed1, seed2 uint64) {
+		t.Logf("using random seeds %d %d", seed1, seed2)
+		rnd := rand.New(rand.NewPCG(seed1, seed2))
+
+		wantScore := traffic.Score(rnd.IntN(2000))
+
+		// Create a reasonably large tailnet, between 20 and 40 nodes.
+		// If the number of nodes is too small, the chances of one node
+		// getting ranked best becomes non-trivial.
+		nodes := make([]tailcfg.NodeView, rnd.IntN(20)+20)
+		for i := range len(nodes) {
+			n := tailcfg.Node{
+				ID: tailcfg.NodeID(rnd.Int64()),
+				Hostinfo: (&tailcfg.Hostinfo{
+					Location: &tailcfg.Location{
+						Priority: int(wantScore),
+					},
+				}).View(),
+			}
+			nodes[i] = n.View()
+		}
+		t.Logf("node ids: %v", nodeIDs(nodes))
+
+		// All scores should be the same.
+		ss := traffic.ScoresFor(nodes[0].ID(), nodes)
+		for _, n := range nodes {
+			s := ss.Score(n)
+			if s != wantScore {
+				t.Errorf("%s: score %d, want %d", n.ID(), s, wantScore)
+			}
+		}
+
+		// Sort nodes from the point-of-view of each node and ensure that
+		// every node is equally represented by ensuring one node isn’t
+		// sorted highest too often.
+		best := make(map[tailcfg.NodeID][]tailcfg.NodeID, len(nodes))
+		for i := range len(nodes) {
+			peers := slices.Clone(nodes)
+			selfID := peers[i].ID()
+			ss := traffic.ScoresFor(selfID, peers)
+			ss.SortNodes(peers)
+			t.Logf("self %s, sorted %v", selfID, nodeIDs(peers))
+			bestID := peers[0].ID()
+			best[bestID] = append(best[bestID], selfID)
+		}
+		for nid, selfIDs := range best {
+			if count := len(selfIDs); count > len(nodes)/2 {
+				t.Errorf("%s is best too frequently: %d", nid, selfIDs)
+				t.Fatalf("best map: %v", best)
+			}
 		}
 	})
 }
