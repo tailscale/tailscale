@@ -1185,3 +1185,47 @@ func (k *failingHardwareAttestationKey) UnmarshalJSON([]byte) error {
 	k.unmarshalCalled = true
 	return errors.New("failed to unmarshal attestation key!")
 }
+
+func TestDeleteProfileClearsState(t *testing.T) {
+	store := new(mem.Store)
+
+	pm, err := newProfileManagerWithGOOS(store, logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pm.SetCurrentUserID("user1")
+	pm.SwitchToNewProfile()
+	p := pm.CurrentPrefs().AsStruct()
+	p.Persist = &persist.Persist{
+		NodeID:         "node1",
+		PrivateNodeKey: key.NewNode(),
+		UserProfile: tailcfg.UserProfile{
+			ID:        1,
+			LoginName: "user@example.com",
+		},
+	}
+	if err := pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
+		t.Fatal(err)
+	}
+
+	profileKey := pm.currentProfile.Key()
+	if profileKey == "" {
+		t.Fatal("profile key is empty")
+	}
+
+	// Verify profile state exists in store.
+	if _, err := store.ReadState(profileKey); err != nil {
+		t.Fatalf("ReadState before delete: %v", err)
+	}
+
+	profileID := pm.currentProfile.ID()
+	if err := pm.DeleteProfile(profileID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify profile state is deleted from store.
+	if _, err := store.ReadState(profileKey); err != ipn.ErrStateNotExist {
+		t.Fatalf("ReadState after delete: got err %v, want ErrStateNotExist", err)
+	}
+}
