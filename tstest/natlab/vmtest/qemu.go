@@ -41,20 +41,14 @@ func qemuAccelArgs() []string {
 type gokrazyPlatform struct{}
 
 func (gokrazyPlatform) planSteps(e *Env, n *Node) {
-	e.Step("Build gokrazy image")
+	e.Step("Build gokrazy image: " + n.os.Name)
 	e.Step("Launch QEMU: " + n.name)
 }
 
 func (gokrazyPlatform) boot(ctx context.Context, e *Env, n *Node) error {
-	e.gokrazyOnce.Do(func() {
-		step := e.Step("Build gokrazy image")
-		step.Begin()
-		if err := e.ensureGokrazy(ctx); err != nil {
-			step.End(err)
-			e.t.Fatalf("ensureGokrazy: %v", err)
-		}
-		step.End(nil)
-	})
+	if _, err := e.ensureGokrazy(ctx, n.os); err != nil {
+		return err
+	}
 
 	e.ensureQEMUSocket()
 
@@ -101,8 +95,12 @@ func (qemuCloudPlatform) boot(ctx context.Context, e *Env, n *Node) error {
 // startGokrazyQEMU launches a QEMU process for a gokrazy node.
 // This follows the same pattern as tstest/integration/nat/nat_test.go.
 func (e *Env) startGokrazyQEMU(n *Node) error {
+	gb, err := e.gokrazyBuild(n.os)
+	if err != nil {
+		return err
+	}
 	disk := filepath.Join(e.tempDir, fmt.Sprintf("%s.qcow2", n.name))
-	if err := createOverlay(e.gokrazyBase, disk); err != nil {
+	if err := createOverlay(gb.base, disk); err != nil {
 		return err
 	}
 
@@ -118,27 +116,49 @@ func (e *Env) startGokrazyQEMU(n *Node) error {
 
 	logPath := filepath.Join(e.tempDir, n.name+".log")
 
+	console := "hvc0"
+	extraKernelArgs := "pci=off nousb "
+	if n.os.gokrazyMachine() != "microvm" {
+		console = "ttyS0"
+		extraKernelArgs = ""
+	}
+
 	args := []string{
-		"-M", "microvm,isa-serial=off",
 		"-m", fmt.Sprintf("%dM", n.os.MemoryMB),
 		"-nodefaults", "-no-user-config", "-nographic",
-		"-kernel", e.gokrazyKernel,
-		"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-76baa2d60001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet gokrazy.remote_syslog.target=" + sysLogAddr + " tailscale-tta=1" + envBuf.String(),
-		"-drive", "id=blk0,file=" + disk + ",format=qcow2",
-		"-device", "virtio-blk-device,drive=blk0",
-		"-device", "virtio-serial-device",
-		"-device", "virtio-rng-device",
-		"-chardev", "file,id=virtiocon0,path=" + logPath,
-		"-device", "virtconsole,chardev=virtiocon0",
+		"-kernel", gb.kernel,
+		"-append", "console=" + console + " root=PARTUUID=60c24cc1-f3f9-427a-8199-76baa2d60001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic " + extraKernelArgs + "tsc=unstable clocksource=hpet gokrazy.remote_syslog.target=" + sysLogAddr + " tailscale-tta=1" + envBuf.String(),
+	}
+	if n.os.gokrazyMachine() == "microvm" {
+		args = append(args,
+			"-M", "microvm,isa-serial=off",
+			"-drive", "id=blk0,file="+disk+",format=qcow2",
+			"-device", "virtio-blk-device,drive=blk0",
+			"-device", "virtio-serial-device",
+			"-device", "virtio-rng-device",
+			"-chardev", "file,id=virtiocon0,path="+logPath,
+			"-device", "virtconsole,chardev=virtiocon0",
+		)
+	} else {
+		args = append(args,
+			"-M", n.os.gokrazyMachine(),
+			"-drive", "file="+disk+",if=virtio,format=qcow2",
+			"-serial", "file:"+logPath,
+			"-device", "virtio-rng-pci",
+		)
 	}
 
 	// Add network devices — one per NIC.
 	for i := range n.vnetNode.NumNICs() {
 		mac := n.vnetNode.NICMac(i)
 		netdevID := fmt.Sprintf("net%d", i)
+		device := n.os.gokrazyNetDevice()
+		if device != "virtio-net-device" {
+			device += ",romfile="
+		}
 		args = append(args,
 			"-netdev", fmt.Sprintf("stream,id=%s,addr.type=unix,addr.path=%s", netdevID, e.sockAddr),
-			"-device", fmt.Sprintf("virtio-net-device,netdev=%s,mac=%s", netdevID, mac),
+			"-device", fmt.Sprintf("%s,netdev=%s,mac=%s", device, netdevID, mac),
 		)
 	}
 

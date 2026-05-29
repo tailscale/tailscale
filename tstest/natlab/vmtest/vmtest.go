@@ -79,8 +79,10 @@ type Env struct {
 	testVersion string
 
 	// gokrazy-specific paths
-	gokrazyBase   string // path to gokrazy base qcow2 image
-	gokrazyKernel string // path to gokrazy kernel
+	gokrazyMu     sync.Mutex
+	gokrazyBuilds map[string]gokrazyBuild // keyed by OSImage.Name
+	gokrazyOnce   map[string]*sync.Once   // keyed by OSImage.Name
+	gokrazyErr    map[string]error        // keyed by OSImage.Name
 
 	// tailmac-specific paths (macOS VMs)
 	tailmacDir        string // path to tailmac bin/ directory containing Host.app
@@ -95,7 +97,6 @@ type Env struct {
 
 	// Shared resource initialization (sync.Once for things multiple nodes share).
 	vnetOnce      sync.Once
-	gokrazyOnce   sync.Once
 	qemuSockOnce  sync.Once
 	dgramSockOnce sync.Once
 	compileMu     sync.Mutex
@@ -112,6 +113,11 @@ type Env struct {
 
 	nodeStatusMu sync.Mutex
 	nodeStatus   map[string]*NodeStatus // keyed by node name
+}
+
+type gokrazyBuild struct {
+	base   string // path to gokrazy base qcow2 image
+	kernel string // path to gokrazy kernel
 }
 
 // logVerbosef logs a message only when --verbose-vm-debug is set.
@@ -718,6 +724,58 @@ func (e *Env) startWebServer(ctx context.Context, n *Node) error {
 	return nil
 }
 
+// StartTCPSink tells TTA on the node to start a TCP server that discards all
+// bytes it receives.
+func (e *Env) StartTCPSink(n *Node, port uint16) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	reqURL := fmt.Sprintf("http://unused/start-tcp-sink?port=%d", port)
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		e.t.Fatalf("StartTCPSink: %v", err)
+	}
+	res, err := n.agent.HTTPClient.Do(req)
+	if err != nil {
+		e.t.Fatalf("StartTCPSink(%s): %v", n.name, err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 {
+		e.t.Fatalf("StartTCPSink(%s): %s: %s", n.name, res.Status, body)
+	}
+	e.t.Logf("[%s] TCP sink started on port %d: %s", n.name, port, strings.TrimSpace(string(body)))
+}
+
+// TCPSend sends total bytes from from to target in chunk-sized writes.
+func (e *Env) TCPSend(from *Node, target netip.AddrPort, totalBytes int64, chunk int, timeout time.Duration) (string, error) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout+5*time.Second)
+	defer cancel()
+	v := url.Values{
+		"target":  {target.String()},
+		"bytes":   {strconv.FormatInt(totalBytes, 10)},
+		"chunk":   {strconv.Itoa(chunk)},
+		"timeout": {timeout.String()},
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://unused/tcp-send?"+v.Encode(), nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := from.agent.HTTPClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 {
+		return "", fmt.Errorf("%s: %s", res.Status, body)
+	}
+	out := strings.TrimSpace(string(body))
+	e.t.Logf("[%s] TCP send: %s", from.name, out)
+	return out, nil
+}
+
 // SetExitNode sets the client node's exit node to use for internet traffic.
 // If exitNode is nil, the client's exit node is cleared (i.e., turned off).
 // Otherwise exitNode must be a tailnet node with an approved 0.0.0.0/0 (and
@@ -921,6 +979,42 @@ type ClientMetric struct {
 	Name  string // as published to the clientmetrics package
 	Type  string // either "gauge" or "counter"
 	Value int64  // the gauge or counter value
+}
+
+// NetdevFeatureReport is TTA's view of a Linux network interface's ethtool
+// feature set.
+type NetdevFeatureReport struct {
+	Name     string          `json:"name"`
+	Flags    uint            `json:"flags"`
+	Driver   string          `json:"driver,omitempty"`
+	BusInfo  string          `json:"busInfo,omitempty"`
+	Features map[string]bool `json:"features,omitempty"`
+	Error    string          `json:"error,omitempty"`
+}
+
+// NetdevFeatures returns the node's ethtool feature report from TTA.
+func (e *Env) NetdevFeatures(n *Node) []NetdevFeatureReport {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://unused/netdev-features", nil)
+	if err != nil {
+		e.t.Fatalf("NetdevFeatures: %v", err)
+	}
+	res, err := n.agent.HTTPClient.Do(req)
+	if err != nil {
+		e.t.Fatalf("NetdevFeatures(%s): %v", n.name, err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 {
+		e.t.Fatalf("NetdevFeatures(%s): %s: %s", n.name, res.Status, body)
+	}
+	var out []NetdevFeatureReport
+	if err := json.Unmarshal(body, &out); err != nil {
+		e.t.Fatalf("NetdevFeatures(%s): decode: %v: %s", n.name, err, body)
+	}
+	return out
 }
 
 // SetAcceptRoutes toggles the node's RouteAll preference (the
@@ -1613,44 +1707,117 @@ func (e *Env) RecvTaildropFile(ctx context.Context, n *Node) (name string, conte
 	return name, body
 }
 
-var buildGokrazy sync.Once
+var (
+	buildGokrazyMu   sync.Mutex
+	buildGokrazyOnce = map[string]*sync.Once{}
+	buildGokrazyErr  = map[string]error{}
+)
 
 // ensureGokrazy builds the gokrazy base image (once per test process) and
 // locates the kernel. The build is fast (~4s) so we always rebuild to ensure
 // the baked-in binaries (tta, tailscale, tailscaled) match the current source.
-func (e *Env) ensureGokrazy(ctx context.Context) error {
-	if e.gokrazyBase != "" {
-		return nil // already found
+func (e *Env) ensureGokrazy(ctx context.Context, img OSImage) (gokrazyBuild, error) {
+	e.gokrazyMu.Lock()
+	once, ok := e.gokrazyOnce[img.Name]
+	if !ok {
+		once = new(sync.Once)
+		mak.Set(&e.gokrazyOnce, img.Name, once)
 	}
+	e.gokrazyMu.Unlock()
 
+	once.Do(func() {
+		e.ensureGokrazyOnce(ctx, img)
+	})
+
+	if gb, err := e.gokrazyBuild(img); err == nil {
+		return gb, nil
+	}
+	e.gokrazyMu.Lock()
+	err := e.gokrazyErr[img.Name]
+	e.gokrazyMu.Unlock()
+	if err == nil {
+		err = fmt.Errorf("gokrazy image %s was not prepared", img.Name)
+	}
+	return gokrazyBuild{}, err
+}
+
+func (e *Env) ensureGokrazyOnce(ctx context.Context, img OSImage) {
 	modRoot, err := findModRoot()
 	if err != nil {
-		return err
+		e.setGokrazyErr(img, err)
+		return
 	}
 
-	var buildErr error
-	buildGokrazy.Do(func() {
-		e.t.Logf("building gokrazy natlab image...")
-		cmd := exec.CommandContext(ctx, "make", "natlab")
+	app := img.gokrazyApp()
+	makeTarget := "natlab"
+	if app != "natlabapp" {
+		makeTarget = strings.TrimPrefix(app, "natlabapp.")
+		makeTarget = "natlab-" + makeTarget
+	}
+
+	buildGokrazyMu.Lock()
+	once, ok := buildGokrazyOnce[app]
+	if !ok {
+		once = new(sync.Once)
+		buildGokrazyOnce[app] = once
+	}
+	buildGokrazyMu.Unlock()
+
+	step := e.Step("Build gokrazy image: " + img.Name)
+	step.Begin()
+	once.Do(func() {
+		e.t.Logf("building gokrazy natlab image %s...", img.Name)
+		cmd := exec.CommandContext(ctx, "make", makeTarget)
 		cmd.Dir = filepath.Join(modRoot, "gokrazy")
 		cmd.Stderr = os.Stderr
 		cmd.Stdout = os.Stdout
 		if err := cmd.Run(); err != nil {
-			buildErr = fmt.Errorf("make natlab: %w", err)
+			buildGokrazyMu.Lock()
+			buildGokrazyErr[app] = fmt.Errorf("make %s: %w", makeTarget, err)
+			buildGokrazyMu.Unlock()
 		}
 	})
+	buildGokrazyMu.Lock()
+	buildErr := buildGokrazyErr[app]
+	buildGokrazyMu.Unlock()
 	if buildErr != nil {
-		return buildErr
+		step.End(buildErr)
+		e.setGokrazyErr(img, buildErr)
+		return
 	}
 
-	e.gokrazyBase = filepath.Join(modRoot, "gokrazy/natlabapp.qcow2")
-
-	kernel, err := findKernelPath(filepath.Join(modRoot, "go.mod"))
+	kernel, err := findKernelPath(modRoot, img.gokrazyKernelPackage())
 	if err != nil {
-		return fmt.Errorf("finding kernel: %w", err)
+		err = fmt.Errorf("finding kernel for %s: %w", img.gokrazyKernelPackage(), err)
+		step.End(err)
+		e.setGokrazyErr(img, err)
+		return
 	}
-	e.gokrazyKernel = kernel
-	return nil
+
+	gb := gokrazyBuild{
+		base:   filepath.Join(modRoot, "gokrazy", app+".qcow2"),
+		kernel: kernel,
+	}
+	e.gokrazyMu.Lock()
+	mak.Set(&e.gokrazyBuilds, img.Name, gb)
+	e.gokrazyMu.Unlock()
+	step.End(nil)
+}
+
+func (e *Env) gokrazyBuild(img OSImage) (gokrazyBuild, error) {
+	e.gokrazyMu.Lock()
+	defer e.gokrazyMu.Unlock()
+	gb, ok := e.gokrazyBuilds[img.Name]
+	if !ok {
+		return gokrazyBuild{}, os.ErrNotExist
+	}
+	return gb, nil
+}
+
+func (e *Env) setGokrazyErr(img OSImage, err error) {
+	e.gokrazyMu.Lock()
+	defer e.gokrazyMu.Unlock()
+	mak.Set(&e.gokrazyErr, img.Name, err)
 }
 
 // compileBinariesForOS prepares the tta, tailscale, and tailscaled binaries
@@ -1742,31 +1909,19 @@ func findModRoot() (string, error) {
 	return filepath.Dir(gomod), nil
 }
 
-// findKernelPath finds the gokrazy kernel vmlinuz path from go.mod.
-func findKernelPath(goMod string) (string, error) {
-	// Import the same logic as nat_test.go.
-	b, err := os.ReadFile(goMod)
+// findKernelPath finds the gokrazy kernel vmlinuz path for kernelPackage.
+func findKernelPath(modRoot, kernelPackage string) (string, error) {
+	cmd := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", kernelPackage)
+	cmd.Dir = modRoot
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("go list -m %s: %w\n%s", kernelPackage, err, out)
 	}
-
-	goModCacheB, err := exec.Command("go", "env", "GOMODCACHE").CombinedOutput()
-	if err != nil {
-		return "", err
+	kernel := filepath.Join(strings.TrimSpace(string(out)), "vmlinuz")
+	if _, err := os.Stat(kernel); err != nil {
+		return "", fmt.Errorf("%s not found: %w", kernel, err)
 	}
-	goModCache := strings.TrimSpace(string(goModCacheB))
-
-	// Parse go.mod to find gokrazy-kernel version.
-	for _, line := range strings.Split(string(b), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "github.com/tailscale/gokrazy-kernel") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				return filepath.Join(goModCache, parts[0]+"@"+parts[1], "vmlinuz"), nil
-			}
-		}
-	}
-	return "", fmt.Errorf("gokrazy-kernel not found in %s", goMod)
+	return kernel, nil
 }
 
 // PingRoute describes what connection type was used to transfer a Disco ping.

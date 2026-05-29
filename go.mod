@@ -97,6 +97,7 @@ require (
 	github.com/tailscale/gliderssh v0.3.4-0.20260330083525-c1389c70ff89
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
 	github.com/tailscale/gokrazy-kernel v0.0.0-20240728225134-3d23beabda2e
+	github.com/tailscale/gokrazy-kernel-buggy-linux-7_0 v0.0.0-20260529210628-b94e221beeb4
 	github.com/tailscale/golang-x-crypto v0.0.0-20250404221719-a5573b049869
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
 	github.com/tailscale/mkctr v0.0.0-20260107121656-ea857e3e500b
