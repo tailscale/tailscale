@@ -15,8 +15,25 @@ Runs on Linux and macOS via:
 nix flake check
 ```
 
-There is no real darwin VM available in `nix-build`, so this is as close as
-we can get without spinning up a Mac.
+## Automated: end-to-end (`ci/`)
+
+`ci/` contains a self-contained test that brings up a real Headscale on
+loopback, applies a sample nix-darwin configuration via
+`nix run github:LnL7/nix-darwin`, and verifies that two userspace
+tailscaled instances register against separate Headscale users and stay
+isolated.
+
+It runs on every PR via `.github/workflows/nix.yml` on a `macos-latest`
+GitHub Actions runner. To run it locally on a Mac with Nix installed:
+
+```
+cd nix/darwin/tests/ci
+bash run.sh
+```
+
+`run.sh` cleans up after itself via a `trap` (boots out the LaunchAgents
+and kills Headscale). The first run is slow because it builds Tailscale
+and Headscale from source.
 
 ## Manual: integration on a Mac
 
