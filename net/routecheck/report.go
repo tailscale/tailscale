@@ -14,6 +14,7 @@ import (
 
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
+	jsonv1 "github.com/go-json-experiment/json/v1"
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
@@ -105,8 +106,12 @@ func (n Node) Compare(n2 Node) int {
 // To prevent stuttering, it marshals itself as a JSON array, sorted by node ID.
 type NodeSet map[tailcfg.NodeID]Node
 
-var _ jsonv2.MarshalerTo = &NodeSet{}
-var _ jsonv2.UnmarshalerFrom = &NodeSet{}
+var (
+	_ jsonv1.Marshaler       = &NodeSet{}
+	_ jsonv1.Unmarshaler     = &NodeSet{}
+	_ jsonv2.MarshalerTo     = &NodeSet{}
+	_ jsonv2.UnmarshalerFrom = &NodeSet{}
+)
 
 // MarshalJSONTo implements [jsonv2.MarshalerTo].
 func (ns NodeSet) MarshalJSONTo(enc *jsontext.Encoder) error {
@@ -127,6 +132,17 @@ func (ns *NodeSet) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 		(*ns)[n.ID] = n
 	}
 	return nil
+}
+
+// MarshalJSON implements [jsonv1.Marshaler].
+func (ns *NodeSet) MarshalJSON() ([]byte, error) {
+	return jsonv2.Marshal(ns, jsonv1.DefaultOptionsV1())
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
+func (ns *NodeSet) UnmarshalJSON(b []byte) error {
+	return jsonv2.Unmarshal(b, ns, jsonv1.DefaultOptionsV1())
+
 }
 
 // RoutablePrefixes is a map of routers,
