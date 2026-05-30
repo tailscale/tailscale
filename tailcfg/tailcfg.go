@@ -3396,6 +3396,48 @@ const LBHeader = "Ts-Lb"
 // this client is hosting can be ignored.
 type ServiceIPMappings map[ServiceName][]netip.Addr
 
+// ServiceActionAttribute represents an attribute key for a [ServiceAction].
+// A given attribute's applicability depends on the [ServiceAction.Type].
+//
+// Well-known Tailscale attributes are defined as constants in this package.
+// Values are [RawMessage] (raw JSON) whose schema depends on the attribute.
+//
+// Clients should ignore attributes they do not recognize.
+type ServiceActionAttribute string
+
+const (
+	// ServiceActionAttributeWebClientURL is a [ServiceActionAttribute]
+	// that indicates to clients that a browser based client for the
+	// action is available at the URL in the value.
+	//
+	// The value is a JSON string containing a URL with an http(s) scheme.
+	ServiceActionAttributeWebClientURL ServiceActionAttribute = "tailscale.com/cap/web-client-url"
+
+	// ServiceActionAttributeResourceName is a [ServiceActionAttribute]
+	// that indicates to clients that the resource specified by the value
+	// should be selected when opening the application corresponding to
+	// the [ServiceAction.Type].
+	//
+	// This is particularly relevant for PostgreSQL services, where a
+	// database must be specified while opening a connection.
+	//
+	// The value is a JSON string containing the resource name
+	// (e.g. a database name).
+	ServiceActionAttributeResourceName ServiceActionAttribute = "tailscale.com/cap/resource-name"
+
+	// ServiceActionAttributeSkipUsername is a [ServiceActionAttribute]
+	// that indicates to clients that a username is not required.
+	//
+	// This attribute is typically used for services that are backed by
+	// an application-layer proxy. The proxy injects the appropriate
+	// credentials on behalf of the user, and any username provided by
+	// the user is ignored. This attribute informs clients that the
+	// username is irrelevant, and any username prompt should be skipped.
+	//
+	// The value is a JSON boolean.
+	ServiceActionAttributeSkipUsername ServiceActionAttribute = "tailscale.com/cap/skip-username"
+)
+
 // ServiceAction describes an action that a Tailscale
 // client can invoke for a [ServiceDetails].
 type ServiceAction struct {
@@ -3412,6 +3454,10 @@ type ServiceAction struct {
 	// in client menus when there are multiple actions to select from.
 	// If empty, a display name may be inferred from the Type field.
 	DisplayName string `json:",omitzero"`
+
+	// Attributes is an optional key-value map carrying additional metadata
+	// to help clients drive UI or behavior related to this action.
+	Attributes map[ServiceActionAttribute]RawMessage `json:",omitzero"`
 }
 
 // ServiceDetails describes a Service visible to this node.
