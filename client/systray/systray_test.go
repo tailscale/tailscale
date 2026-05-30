@@ -13,6 +13,33 @@ import (
 	"tailscale.com/types/key"
 )
 
+func TestProfileTitleMultiline(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		login     string
+		tailnet   string
+		multiline bool
+		want      string
+	}{
+		{"no_tailnet", "alice@example.com", "", true, "alice@example.com"},
+		{"dup_exact", "example.com", "example.com", true, "example.com"},
+		{"dup_casefold", "Example.com", "example.com", false, "Example.com"},
+		{"distinct_multiline", "alice@example.com", "example.com", true, "alice@example.com\nexample.com"},
+		{"distinct_singleline", "alice@example.com", "example.com", false, "alice@example.com (example.com)"},
+		{"empty", "", "", true, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := formatProfileTitle(tt.login, tt.tailnet, tt.multiline); got != tt.want {
+				t.Errorf("profileTitleMultiline; got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRecommendedIsActive(t *testing.T) {
 	t.Parallel()
 
