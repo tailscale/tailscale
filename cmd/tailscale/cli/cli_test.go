@@ -1054,6 +1054,10 @@ func TestPrefFlagMapping(t *testing.T) {
 		case "AutoExitNode":
 			// Handled by tailscale {set,up} --exit-node=auto:any.
 			continue
+		case "AcceptedRoutes":
+			// Handled by tailscale {set,up} --accept-routes when CIDR list is provided.
+			// Only set when user provides specific CIDRs, not for boolean values.
+			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
 	}

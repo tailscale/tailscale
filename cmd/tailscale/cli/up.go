@@ -106,7 +106,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.StringVar(&upArgs.idTokenOrFile, "id-token", "", `ID token from the identity provider to exchange with the control server for workload identity federation; if it begins with "file:", then it's a path to a file containing the token`)
 
 	upf.StringVar(&upArgs.server, "login-server", ipn.DefaultControlURL, "base URL of control server")
-	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", acceptRouteDefault(goos), "accept routes advertised by other Tailscale nodes")
+	upf.Var(acceptRoutesFlag{&upArgs.acceptRoutes}, "accept-routes", "accept routes advertised by other Tailscale nodes (true/false/CIDR list); can be used without value for true")
 	upf.BoolVar(&upArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
 	upf.Var(notFalseVar{}, "host-routes", hidden+"install host routes to other Tailscale nodes (must be true as of Tailscale 1.67+)")
 	upf.StringVar(&upArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP, base name, or auto:any) for internet traffic, or empty string to not use an exit node")
@@ -178,7 +178,7 @@ type upArgsT struct {
 	qrFormat               string
 	reset                  bool
 	server                 string
-	acceptRoutes           bool
+	acceptRoutes           string
 	acceptDNS              bool
 	exitNodeIP             string
 	exitNodeAllowLANAccess bool
@@ -208,6 +208,36 @@ type upArgsT struct {
 	postureChecking        bool
 }
 
+// acceptRoutesFlag is a custom flag type that handles --accept-routes with optional values.
+// It supports the old boolean behavior (--accept-routes without value means true)
+// and the new CIDR list behavior (--accept-routes=10.0.0.0/8,192.168.0.0/16).
+type acceptRoutesFlag struct {
+	v *string
+}
+
+func (f acceptRoutesFlag) String() string {
+	if f.v == nil {
+		return ""
+	}
+	return *f.v
+}
+
+func (f acceptRoutesFlag) Set(s string) error {
+	// When used as a bool flag without a value (--accept-routes), s will be ""
+	// Treat this as "true" for backward compatibility with the old bool behavior
+	if s == "" {
+		*f.v = "true"
+	} else {
+		*f.v = s
+	}
+	return nil
+}
+
+func (f acceptRoutesFlag) IsBoolFlag() bool {
+	// This tells the flag parser that this flag can be used without a value
+	return true
+}
+
 // resolveValueFromFile returns the value as-is, or if it starts with "file:",
 // reads and returns the trimmed contents of the file.
 func resolveValueFromFile(v string) (string, error) {
@@ -219,6 +249,51 @@ func resolveValueFromFile(v string) (string, error) {
 		return strings.TrimSpace(string(b)), nil
 	}
 	return v, nil
+}
+
+// parseAcceptRoutes parses the --accept-routes flag value.
+// It supports:
+//   - "" (empty): use platform default
+//   - "true": accept all routes (RouteAll=true, AcceptedRoutes=nil)
+//   - "false": accept no routes (RouteAll=false, AcceptedRoutes=nil)
+//   - "CIDR,CIDR,...": accept only specific CIDRs (RouteAll=true, AcceptedRoutes=list)
+func parseAcceptRoutes(v string, goos string) (routeAll bool, acceptedRoutes []netip.Prefix, err error) {
+	v = strings.TrimSpace(v)
+
+	// Empty means use default
+	if v == "" {
+		return acceptRouteDefault(goos), nil, nil
+	}
+
+	// Boolean values
+	if v == "true" {
+		return true, nil, nil
+	}
+	if v == "false" {
+		return false, nil, nil
+	}
+
+	// Parse as comma-separated CIDR list
+	cidrs := strings.Split(v, ",")
+	acceptedRoutes = make([]netip.Prefix, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(cidr)
+		if err != nil {
+			return false, nil, fmt.Errorf("invalid CIDR %q: %w", cidr, err)
+		}
+		acceptedRoutes = append(acceptedRoutes, prefix)
+	}
+	
+	if len(acceptedRoutes) == 0 {
+		return false, nil, fmt.Errorf("--accept-routes: no valid CIDR blocks provided")
+	}
+
+	// When specific CIDRs are provided, set RouteAll=true so the filtering logic activates
+	return true, acceptedRoutes, nil
 }
 
 // resolveValueFromParameterStore resolves a value from AWS Parameter Store if
@@ -330,7 +405,15 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs := ipn.NewPrefs()
 	prefs.ControlURL = upArgs.server
 	prefs.WantRunning = true
-	prefs.RouteAll = upArgs.acceptRoutes
+
+	// Parse accept-routes flag
+	routeAll, acceptedRoutes, err := parseAcceptRoutes(upArgs.acceptRoutes, goos)
+	if err != nil {
+		return nil, err
+	}
+	prefs.RouteAll = routeAll
+	prefs.AcceptedRoutes = acceptedRoutes
+
 	if distro.Get() == distro.Synology {
 		// ipn.NewPrefs returns a non-zero Netfilter default. But Synology only
 		// supports "off" mode.
@@ -482,6 +565,10 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 		visitFlags(func(f *flag.Flag) {
 			updateMaskedPrefsFromUpOrSetFlag(justEditMP, f.Name)
 		})
+		// AcceptedRoutes should only be set when a CIDR list is provided, not for boolean values
+		if len(prefs.AcceptedRoutes) > 0 {
+			justEditMP.AcceptedRoutesSet = true
+		}
 	}
 
 	return simpleUp, justEditMP, nil
@@ -536,7 +623,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 
 	if distro.Get() == distro.Synology {
 		notSupported := "not supported on Synology; see https://github.com/tailscale/tailscale/issues/1995"
-		if upArgs.acceptRoutes {
+		if upArgs.acceptRoutes != "" && upArgs.acceptRoutes != "false" {
 			return errors.New("--accept-routes is " + notSupported)
 		}
 		if upArgs.exitNodeIP != "" {
@@ -1155,7 +1242,20 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 		case "login-server":
 			set(prefs.ControlURL)
 		case "accept-routes":
-			set(prefs.RouteAll)
+			if len(prefs.AcceptedRoutes) > 0 {
+				// If specific routes are set, return them as comma-separated list
+				var sb strings.Builder
+				for i, r := range prefs.AcceptedRoutes {
+					if i > 0 {
+						sb.WriteByte(',')
+					}
+					sb.WriteString(r.String())
+				}
+				set(sb.String())
+			} else {
+				// Otherwise return boolean value
+				set(prefs.RouteAll)
+			}
 		case "accept-dns":
 			set(prefs.CorpDNS)
 		case "shields-up":
