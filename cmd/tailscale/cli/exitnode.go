@@ -159,7 +159,7 @@ func runExitNodeList(ctx context.Context, args []string) error {
 func runExitNodeSuggest(ctx context.Context, args []string) error {
 	if exitNodeArgs.probe && buildfeatures.HasRouteCheck {
 		// Force a routecheck probe before suggesting an exit node.
-		if _, err := localClient.RouteCheckProbe(ctx); err != nil {
+		if err := routeCheckProbe(ctx); err != nil {
 			return fmt.Errorf("suggest exit node: routecheck: %w", err)
 		}
 	}
