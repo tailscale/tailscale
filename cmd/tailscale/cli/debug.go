@@ -39,6 +39,7 @@ import (
 	"tailscale.com/net/ace"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
@@ -989,7 +990,7 @@ func runTS2021(ctx context.Context, args []string) error {
 
 	keysURL := "https://" + ts2021Args.host + "/key?v=" + strconv.Itoa(ts2021Args.version)
 
-	keyTransport := http.DefaultTransport.(*http.Transport).Clone()
+	keyTransport := netutil.NewDefaultTransport()
 	if ts2021Args.aceHost != "" {
 		log.Printf("using ACE server %q", ts2021Args.aceHost)
 		keyTransport.Proxy = nil
