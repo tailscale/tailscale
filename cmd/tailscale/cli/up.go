@@ -106,7 +106,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.StringVar(&upArgs.idTokenOrFile, "id-token", "", `ID token from the identity provider to exchange with the control server for workload identity federation; if it begins with "file:", then it's a path to a file containing the token`)
 
 	upf.StringVar(&upArgs.server, "login-server", ipn.DefaultControlURL, "base URL of control server")
-	upf.StringVar(&upArgs.acceptRoutes, "accept-routes", "", "accept routes advertised by other Tailscale nodes (true/false) or comma-separated list of CIDR blocks to selectively accept")
+	upf.Var(acceptRoutesFlag{&upArgs.acceptRoutes}, "accept-routes", "accept routes advertised by other Tailscale nodes (true/false/CIDR list); can be used without value for true")
 	upf.BoolVar(&upArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
 	upf.Var(notFalseVar{}, "host-routes", hidden+"install host routes to other Tailscale nodes (must be true as of Tailscale 1.67+)")
 	upf.StringVar(&upArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP, base name, or auto:any) for internet traffic, or empty string to not use an exit node")
@@ -206,6 +206,36 @@ type upArgsT struct {
 	acceptedRisks          string
 	profileName            string
 	postureChecking        bool
+}
+
+// acceptRoutesFlag is a custom flag type that handles --accept-routes with optional values.
+// It supports the old boolean behavior (--accept-routes without value means true)
+// and the new CIDR list behavior (--accept-routes=10.0.0.0/8,192.168.0.0/16).
+type acceptRoutesFlag struct {
+	v *string
+}
+
+func (f acceptRoutesFlag) String() string {
+	if f.v == nil {
+		return ""
+	}
+	return *f.v
+}
+
+func (f acceptRoutesFlag) Set(s string) error {
+	// When used as a bool flag without a value (--accept-routes), s will be ""
+	// Treat this as "true" for backward compatibility with the old bool behavior
+	if s == "" {
+		*f.v = "true"
+	} else {
+		*f.v = s
+	}
+	return nil
+}
+
+func (f acceptRoutesFlag) IsBoolFlag() bool {
+	// This tells the flag parser that this flag can be used without a value
+	return true
 }
 
 // resolveValueFromFile returns the value as-is, or if it starts with "file:",

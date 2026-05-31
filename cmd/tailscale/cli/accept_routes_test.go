@@ -50,6 +50,14 @@ func TestParseAcceptRoutes(t *testing.T) {
 			wantErr:      false,
 		},
 		{
+			name:         "flag without value (backward compat)",
+			input:        "true", // This is what the custom flag sets when used without value
+			goos:         "linux",
+			wantRouteAll: true,
+			wantAccepted: nil,
+			wantErr:      false,
+		},
+		{
 			name:         "single CIDR",
 			input:        "10.0.0.0/8",
 			goos:         "linux",
