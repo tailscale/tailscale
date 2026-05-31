@@ -39,11 +39,10 @@ func (c *Client) RoutersByPrefix() RoutersByPrefix {
 // The result omits any prefix that is one of the node’s local addresses.
 func routes(n tailcfg.NodeView) []netip.Prefix {
 	var routes []netip.Prefix
-AllowedIPs:
 	for _, pfx := range n.AllowedIPs().All() {
 		// Routers never forward their own local addresses.
 		if views.SliceContains(n.Addresses(), pfx) {
-			continue AllowedIPs
+			continue
 		}
 		routes = append(routes, pfx)
 	}
