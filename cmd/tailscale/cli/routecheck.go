@@ -6,9 +6,11 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"flag"
 	"fmt"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -36,19 +38,19 @@ var routecheckCmd = func() *ffcli.Command {
 
 var routecheckFlagSet = func() *flag.FlagSet {
 	fs := newFlagSet("routecheck")
-	fs.BoolVar(&routecheckArgs.force, "force", false, "force probe to generate a new reachability report")
+	fs.BoolVar(&routecheckArgs.probe, "probe", false, "probe now to generate a new reachability report")
 	fs.StringVar(&routecheckArgs.format, "format", "", `output format: empty (for human-readable), "json" or "json-line"`)
 	return fs
 }()
 
 var routecheckArgs struct {
-	force  bool
+	probe  bool
 	format string
 }
 
 func runRoutecheck(ctx context.Context, args []string) error {
 	routeCheck := localClient.RouteCheck
-	if routecheckArgs.force {
+	if routecheckArgs.probe {
 		routeCheck = localClient.RouteCheckProbe
 	}
 	rp, err := routeCheck(ctx)
@@ -74,9 +76,16 @@ func printRouteCheckReport(rp *routecheck.Report) error {
 	}
 
 	if rp == nil {
-		return fmt.Errorf("routecheck: no report")
+		return fmt.Errorf("routecheck: report unavailable")
 	}
 	routes := rp.RoutablePrefixes()
+
+	// Don’t render prefixes that only have one router:
+	for pfx, nodes := range routes {
+		if len(nodes) <= 1 {
+			delete(routes, pfx)
+		}
+	}
 
 	if enc != nil {
 		out := struct {
@@ -97,11 +106,14 @@ func printRouteCheckReport(rp *routecheck.Report) error {
 
 	w := tabwriter.NewWriter(Stdout, 10, 5, 5, ' ', 0)
 	defer w.Flush()
-	fmt.Fprintf(w, "\nReachable routers at %s:\n", rp.Done.UTC().Format(time.DateTime+"Z07:00"))
-	fmt.Fprintf(w, "\n %s\t%s\t%s\t", "PREFIX", "IP", "HOSTNAME")
+	fmt.Fprintf(w, "\nReachable routers at %s:\n", rp.Done.Local().Format(time.DateTime+"Z07:00"))
+	fmt.Fprintf(w, "\n %s\t%s\t%s", "PREFIX", "IP", "HOSTNAME")
 	for prefix, nodes := range routes.Sorted() {
+		slices.SortFunc(nodes, func(a, b routecheck.Node) int {
+			return cmp.Compare(a.Name, b.Name) // order by hostname
+		})
 		for _, n := range nodes {
-			fmt.Fprintf(w, "\n %s\t%s\t%s\t", prefix, n.Addr, strings.TrimSuffix(n.Name, "."))
+			fmt.Fprintf(w, "\n %s\t%s\t%s", prefix, n.Addr, strings.TrimSuffix(n.Name, "."))
 		}
 	}
 	fmt.Fprintln(w)
