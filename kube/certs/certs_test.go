@@ -14,6 +14,29 @@ import (
 	"tailscale.com/tailcfg"
 )
 
+// TestNextRetryInterval verifies that the cert-issuance retry schedule matches
+// Let's Encrypt's recommended `1m → 10m → 100m → 24h` ramp and caps at 24h for
+// any additional retries.
+func TestNextRetryInterval(t *testing.T) {
+	tests := []struct {
+		retryCount int
+		want       time.Duration
+	}{
+		{retryCount: 0, want: 1 * time.Minute},   // defensive: treat as first retry
+		{retryCount: 1, want: 1 * time.Minute},
+		{retryCount: 2, want: 10 * time.Minute},
+		{retryCount: 3, want: 100 * time.Minute},
+		{retryCount: 4, want: 24 * time.Hour},
+		{retryCount: 5, want: 24 * time.Hour},    // capped
+		{retryCount: 100, want: 24 * time.Hour},  // still capped
+	}
+	for _, tt := range tests {
+		if got := nextRetryInterval(tt.retryCount); got != tt.want {
+			t.Errorf("nextRetryInterval(%d) = %v, want %v", tt.retryCount, got, tt.want)
+		}
+	}
+}
+
 // TestEnsureCertLoops tests that the certManager correctly starts and stops
 // update loops for certs when the serve config changes. It tracks goroutine
 // count and uses that as a validator that the expected number of cert loops are
