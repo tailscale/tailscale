@@ -46,7 +46,7 @@ func cidrIsSubnet(node tailcfg.NodeView, cidr netip.Prefix) bool {
 }
 
 // WGCfg returns the NetworkMaps's WireGuard configuration.
-func WGCfg(pk key.NodePrivate, nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, exitNode tailcfg.StableNodeID) (*wgcfg.Config, error) {
+func WGCfg(pk key.NodePrivate, nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, exitNode tailcfg.StableNodeID, acceptedRoutes []netip.Prefix) (*wgcfg.Config, error) {
 	cfg := &wgcfg.Config{
 		PrivateKey: pk,
 		Addresses:  nm.GetAddresses().AsSlice(),
@@ -114,6 +114,21 @@ func WGCfg(pk key.NodePrivate, nm *netmap.NetworkMap, logf logger.Logf, flags ne
 				if (flags & netmap.AllowSubnetRoutes) == 0 {
 					skippedSubnetRouter = append(skippedSubnetRouter, peer)
 					continue
+				}
+				// If specific routes are configured, only accept routes that match
+				if len(acceptedRoutes) > 0 {
+					accepted := false
+					for _, acceptedRoute := range acceptedRoutes {
+						// Check if the advertised route matches or is contained within an accepted route
+						if acceptedRoute.Contains(allowedIP.Addr()) || allowedIP.Contains(acceptedRoute.Addr()) {
+							accepted = true
+							break
+						}
+					}
+					if !accepted {
+						skippedSubnetRouter = append(skippedSubnetRouter, peer)
+						continue
+					}
 				}
 			}
 			cpeer.AllowedIPs = append(cpeer.AllowedIPs, allowedIP)

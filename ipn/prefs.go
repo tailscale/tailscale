@@ -79,6 +79,14 @@ type Prefs struct {
 	// controlled by ExitNodeID/IP below.
 	RouteAll bool
 
+	// AcceptedRoutes specifies a list of specific CIDR blocks to accept
+	// from advertised routes. If non-empty, only routes matching these
+	// CIDR blocks will be accepted, regardless of the RouteAll setting.
+	// This allows selective route acceptance to avoid routing conflicts
+	// with local networks. If empty and RouteAll is true, all advertised
+	// routes are accepted (backward compatible behavior).
+	AcceptedRoutes []netip.Prefix
+
 	// ExitNodeID and ExitNodeIP specify the node that should be used
 	// as an exit node for internet traffic. At most one of these
 	// should be non-zero.
@@ -355,6 +363,7 @@ type MaskedPrefs struct {
 
 	ControlURLSet                 bool                `json:",omitempty"`
 	RouteAllSet                   bool                `json:",omitempty"`
+	AcceptedRoutesSet             bool                `json:",omitempty"`
 	ExitNodeIDSet                 bool                `json:",omitempty"`
 	ExitNodeIPSet                 bool                `json:",omitempty"`
 	AutoExitNodeSet               bool                `json:",omitempty"`
@@ -662,6 +671,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 
 	return p.ControlURL == p2.ControlURL &&
 		p.RouteAll == p2.RouteAll &&
+		slices.Equal(p.AcceptedRoutes, p2.AcceptedRoutes) &&
 		p.ExitNodeID == p2.ExitNodeID &&
 		p.ExitNodeIP == p2.ExitNodeIP &&
 		p.AutoExitNode == p2.AutoExitNode &&

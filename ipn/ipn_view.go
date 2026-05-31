@@ -233,6 +233,16 @@ func (v PrefsView) ControlURL() string { return v.ж.ControlURL }
 // controlled by ExitNodeID/IP below.
 func (v PrefsView) RouteAll() bool { return v.ж.RouteAll }
 
+// AcceptedRoutes specifies a list of specific CIDR blocks to accept
+// from advertised routes. If non-empty, only routes matching these
+// CIDR blocks will be accepted, regardless of the RouteAll setting.
+// This allows selective route acceptance to avoid routing conflicts
+// with local networks. If empty and RouteAll is true, all advertised
+// routes are accepted (backward compatible behavior).
+func (v PrefsView) AcceptedRoutes() views.Slice[netip.Prefix] {
+	return views.SliceOf(v.ж.AcceptedRoutes)
+}
+
 // ExitNodeID and ExitNodeIP specify the node that should be used
 // as an exit node for internet traffic. At most one of these
 // should be non-zero.
@@ -475,6 +485,7 @@ func (v PrefsView) Persist() persist.PersistView { return v.ж.Persist.View() }
 var _PrefsViewNeedsRegeneration = Prefs(struct {
 	ControlURL                 string
 	RouteAll                   bool
+	AcceptedRoutes             []netip.Prefix
 	ExitNodeID                 tailcfg.StableNodeID
 	ExitNodeIP                 netip.Addr
 	AutoExitNode               ExitNodeExpression

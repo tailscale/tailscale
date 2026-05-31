@@ -49,6 +49,7 @@ func (src *Prefs) Clone() *Prefs {
 	dst := new(Prefs)
 	*dst = *src
 	dst.AdvertiseTags = append(src.AdvertiseTags[:0:0], src.AdvertiseTags...)
+	dst.AcceptedRoutes = append(src.AcceptedRoutes[:0:0], src.AcceptedRoutes...)
 	dst.AdvertiseRoutes = append(src.AdvertiseRoutes[:0:0], src.AdvertiseRoutes...)
 	dst.AdvertiseServices = append(src.AdvertiseServices[:0:0], src.AdvertiseServices...)
 	if src.DriveShares != nil {
@@ -73,6 +74,7 @@ func (src *Prefs) Clone() *Prefs {
 var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	ControlURL                 string
 	RouteAll                   bool
+	AcceptedRoutes             []netip.Prefix
 	ExitNodeID                 tailcfg.StableNodeID
 	ExitNodeIP                 netip.Addr
 	AutoExitNode               ExitNodeExpression

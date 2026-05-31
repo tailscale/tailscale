@@ -5790,7 +5790,7 @@ func (b *LocalBackend) authReconfigLocked() {
 		priv = key.NodePrivate{}
 	}
 
-	cfg, err := nmcfg.WGCfg(priv, nm, b.logf, flags, prefs.ExitNodeID())
+	cfg, err := nmcfg.WGCfg(priv, nm, b.logf, flags, prefs.ExitNodeID(), prefs.AcceptedRoutes().AsSlice())
 	if err != nil {
 		b.logf("wgcfg: %v", err)
 		return

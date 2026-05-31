@@ -44,7 +44,7 @@ Only settings explicitly mentioned will be set. There are no default values.`,
 }
 
 type setArgsT struct {
-	acceptRoutes               bool
+	acceptRoutes               string
 	acceptDNS                  bool
 	exitNodeIP                 string
 	exitNodeAllowLANAccess     bool
@@ -74,7 +74,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf := newFlagSet("set")
 
 	setf.StringVar(&setArgs.profileName, "nickname", "", "nickname for the current account")
-	setf.BoolVar(&setArgs.acceptRoutes, "accept-routes", acceptRouteDefault(goos), "accept routes advertised by other Tailscale nodes")
+	setf.StringVar(&setArgs.acceptRoutes, "accept-routes", "", "accept routes advertised by other Tailscale nodes (true/false) or comma-separated list of CIDR blocks to selectively accept")
 	setf.BoolVar(&setArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
 	setf.StringVar(&setArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP, base name, or auto:any) for internet traffic, or empty string to not use an exit node")
 	setf.BoolVar(&setArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "Allow direct access to the local network when routing traffic via an exit node")
@@ -138,13 +138,20 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		return err
 	}
 
+	// Parse accept-routes flag
+	routeAll, acceptedRoutes, err := parseAcceptRoutes(setArgs.acceptRoutes, effectiveGOOS())
+	if err != nil {
+		return err
+	}
+
 	// Note that even though we set the values here regardless of whether the
 	// user passed the flag, the value is only used if the user passed the flag.
 	// See updateMaskedPrefsFromUpOrSetFlag.
 	maskedPrefs := &ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			ProfileName:            setArgs.profileName,
-			RouteAll:               setArgs.acceptRoutes,
+			RouteAll:               routeAll,
+			AcceptedRoutes:         acceptedRoutes,
 			CorpDNS:                setArgs.acceptDNS,
 			ExitNodeAllowLANAccess: setArgs.exitNodeAllowLANAccess,
 			ShieldsUp:              setArgs.shieldsUp,
@@ -200,6 +207,11 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			advertiseExitNodeSet = true
 		case "advertise-routes":
 			advertiseRoutesSet = true
+		case "accept-routes":
+			// AcceptedRoutes should only be set when a CIDR list is provided
+			if len(acceptedRoutes) > 0 {
+				maskedPrefs.AcceptedRoutesSet = true
+			}
 		}
 	})
 	if maskedPrefs.IsEmpty() {
