@@ -8,6 +8,9 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -35,6 +38,158 @@ func skipIfNotMacOSArm64(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
 		t.Skipf("macOS VM tests require a macOS arm64 host (got %s/%s)", runtime.GOOS, runtime.GOARCH)
+	}
+}
+
+func skipIfBuggyLinux70KernelMissing(t *testing.T) {
+	t.Helper()
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/tailscale/gokrazy-kernel-buggy-linux-7_0").CombinedOutput()
+	if err != nil {
+		t.Skipf("buggy Linux 7.0 gokrazy kernel module is not available: %v\n%s", err, out)
+	}
+	kernel := filepath.Join(strings.TrimSpace(string(out)), "vmlinuz")
+	if _, err := os.Stat(kernel); err != nil {
+		t.Skipf("buggy Linux 7.0 gokrazy kernel missing at %s: %v", kernel, err)
+	}
+}
+
+func TestGokrazyBuggyLinux70IGBOffloadDiagnostics(t *testing.T) {
+	skipIfBuggyLinux70KernelMissing(t)
+	env := vmtest.New(t)
+
+	wan := env.AddNetwork("2.1.1.1", "192.168.1.1/24", vnet.EasyNAT)
+	n := env.AddNode("buggy", wan,
+		vmtest.OS(vmtest.GokrazyBuggyLinux70),
+		vmtest.DontJoinTailnet())
+
+	env.Start()
+
+	features := env.NetdevFeatures(n)
+	t.Logf("netdev features: %+v", features)
+	for _, iface := range features {
+		if iface.Driver != "igb" {
+			continue
+		}
+		if !iface.Features["tx-udp-segmentation"] {
+			t.Fatalf("igb interface %s does not advertise tx-udp-segmentation; features=%v", iface.Name, iface.Features)
+		}
+		if !iface.Features["tx-gso-partial"] {
+			t.Fatalf("igb interface %s does not advertise tx-gso-partial; features=%v", iface.Name, iface.Features)
+		}
+		return
+	}
+	t.Fatalf("no igb interface found in netdev feature report: %+v", features)
+}
+
+func TestGokrazyBuggyLinux70NeverGSOEqualTailMitigation(t *testing.T) {
+	skipIfBuggyLinux70KernelMissing(t)
+	env := vmtest.New(t)
+
+	buggyNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.EasyNAT)
+	regularNet := env.AddNetwork("2.0.0.1", "192.168.2.1/24", vnet.EasyNAT)
+
+	buggy := env.AddNode("buggy", buggyNet, vmtest.OS(vmtest.GokrazyBuggyLinux70))
+	regular := env.AddNode("regular", regularNet, vmtest.OS(vmtest.Gokrazy))
+
+	directStep := env.AddStep("Establish direct path")
+	featureStep := env.AddStep("Verify buggy igb offload features")
+	echoStep := env.AddStep("Start TCP sink on regular node")
+	bugStep := env.AddStep("TCP bulk send without mitigation fails")
+	mitigateStep := env.AddStep("Enable never-gso-equal-tail")
+	fixedStep := env.AddStep("TCP bulk send with mitigation succeeds")
+
+	env.Start()
+
+	directStep.Begin()
+	if err := env.PingExpect(buggy, regular, vmtest.PingRouteDirect, 30*time.Second); err != nil {
+		directStep.End(err)
+		t.Fatal(err)
+	}
+	directStep.End(nil)
+
+	featureStep.Begin()
+	if err := requireIGBUDPPartialGSO(env, buggy); err != nil {
+		featureStep.End(err)
+		t.Fatal(err)
+	}
+	featureStep.End(nil)
+
+	const sinkPort = 41999
+	echoStep.Begin()
+	env.StartTCPSink(regular, sinkPort)
+	regularIP := env.Status(regular).Self.TailscaleIPs[0]
+	target := netip.AddrPortFrom(regularIP, sinkPort)
+	echoStep.End(nil)
+
+	const (
+		probeBytes   = 1 << 20
+		probeChunk   = 64 << 10
+		probeTimeout = 8 * time.Second
+	)
+
+	bugStep.Begin()
+	_, err := env.TCPSend(buggy, target, probeBytes, probeChunk, probeTimeout)
+	if err == nil {
+		err = fmt.Errorf("TCP bulk send unexpectedly succeeded without %s", tailcfg.NodeAttrNeverGSOEqualTail)
+		bugStep.End(err)
+		t.Fatal(err)
+	}
+	t.Logf("TCP bulk send failed without mitigation, as expected: %v", err)
+	bugStep.End(nil)
+
+	mitigateStep.Begin()
+	enableNodeCap(t, env, buggy, tailcfg.NodeAttrNeverGSOEqualTail)
+	mitigateStep.End(nil)
+
+	fixedStep.Begin()
+	if _, err := env.TCPSend(buggy, target, probeBytes, probeChunk, probeTimeout); err != nil {
+		fixedStep.End(err)
+		t.Fatal(err)
+	}
+	fixedStep.End(nil)
+}
+
+func requireIGBUDPPartialGSO(env *vmtest.Env, n *vmtest.Node) error {
+	features := env.NetdevFeatures(n)
+	for _, iface := range features {
+		if iface.Driver != "igb" {
+			continue
+		}
+		if !iface.Features["tx-udp-segmentation"] {
+			return fmt.Errorf("igb interface %s does not advertise tx-udp-segmentation; features=%v", iface.Name, iface.Features)
+		}
+		if !iface.Features["tx-gso-partial"] {
+			return fmt.Errorf("igb interface %s does not advertise tx-gso-partial; features=%v", iface.Name, iface.Features)
+		}
+		return nil
+	}
+	return fmt.Errorf("no igb interface found in netdev feature report: %+v", features)
+}
+
+func enableNodeCap(t *testing.T, env *vmtest.Env, n *vmtest.Node, cap tailcfg.NodeCapability) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st, err := n.Agent().Status(ctx)
+	if err != nil {
+		t.Fatalf("status for %s: %v", n.Name(), err)
+	}
+	cm := tailcfg.NodeCapMap{cap: nil}
+	env.ControlServer().SetNodeCapMap(st.Self.PublicKey, cm)
+	if err := tstest.WaitFor(15*time.Second, func() error {
+		st, err := n.Agent().Status(ctx)
+		if err != nil {
+			return err
+		}
+		if st.Self == nil {
+			return fmt.Errorf("self is nil")
+		}
+		if !st.Self.HasCap(cap) {
+			return fmt.Errorf("cap %v not yet received", cap)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("%s did not receive cap %s: %v", n.Name(), cap, err)
 	}
 }
 

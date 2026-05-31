@@ -13,6 +13,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"flag"
 	"fmt"
@@ -383,6 +384,94 @@ func main() {
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
 	})
+	ttaMux.HandleFunc("/start-tcp-sink", func(w http.ResponseWriter, r *http.Request) {
+		port := r.URL.Query().Get("port")
+		if port == "" {
+			http.Error(w, "missing port", http.StatusBadRequest)
+			return
+		}
+		ln, err := net.Listen("tcp", ":"+port)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					log.Printf("tcp sink on %s stopped: %v", ln.Addr(), err)
+					return
+				}
+				go func(c net.Conn) {
+					defer c.Close()
+					n, err := io.Copy(io.Discard, c)
+					if err != nil {
+						log.Printf("tcp sink read from %s after %d bytes: %v", c.RemoteAddr(), n, err)
+					}
+				}(c)
+			}
+		}()
+		fmt.Fprintf(w, "OK %s\n", ln.Addr())
+	})
+	ttaMux.HandleFunc("/tcp-send", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		target := q.Get("target")
+		if target == "" {
+			http.Error(w, "missing target", http.StatusBadRequest)
+			return
+		}
+		total, err := strconv.ParseInt(q.Get("bytes"), 10, 64)
+		if err != nil || total <= 0 {
+			http.Error(w, "invalid bytes", http.StatusBadRequest)
+			return
+		}
+		chunk, err := strconv.Atoi(q.Get("chunk"))
+		if err != nil || chunk <= 0 || chunk > 1<<20 {
+			http.Error(w, "invalid chunk", http.StatusBadRequest)
+			return
+		}
+		timeout := 30 * time.Second
+		if v := q.Get("timeout"); v != "" {
+			timeout, err = time.ParseDuration(v)
+			if err != nil {
+				http.Error(w, "invalid timeout", http.StatusBadRequest)
+				return
+			}
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+		var d net.Dialer
+		c, err := d.DialContext(ctx, "tcp", target)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer c.Close()
+		buf := make([]byte, chunk)
+		if _, err := rand.Read(buf); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		deadline, _ := ctx.Deadline()
+		start := time.Now()
+		var sent int64
+		for sent < total {
+			if err := c.SetWriteDeadline(deadline); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			n := min(int64(len(buf)), total-sent)
+			wrote, err := c.Write(buf[:n])
+			sent += int64(wrote)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("write after %d/%d bytes: %v", sent, total, err), http.StatusBadGateway)
+				return
+			}
+		}
+		elapsed := time.Since(start)
+		mbps := float64(sent*8) / elapsed.Seconds() / 1e6
+		fmt.Fprintf(w, "OK sent=%d elapsed=%s mbps=%.1f target=%s\n", sent, elapsed, mbps, target)
+	})
 	ttaMux.HandleFunc("/fw", addFirewallHandler)
 	ttaMux.HandleFunc("/wg-server-up", func(w http.ResponseWriter, r *http.Request) {
 		if wgServerUp == nil {
@@ -409,6 +498,7 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write(logBuf.buf.Bytes())
 	})
+	ttaMux.HandleFunc("/netdev-features", handleNetdevFeatures)
 	go hs.Serve(chanListener(conns))
 
 	// For doing agent operations locally from gokrazy:

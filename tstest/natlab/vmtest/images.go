@@ -21,12 +21,16 @@ import (
 
 // OSImage describes a VM operating system image.
 type OSImage struct {
-	Name      string
-	URL       string // download URL for the cloud image
-	SHA256    string // expected SHA256 hash of the image (of the final qcow2, after any decompression)
-	MemoryMB  int    // RAM for the VM
-	IsGokrazy bool   // true for gokrazy images (different QEMU setup)
-	IsMacOS   bool   // true for macOS images (launched via tailmac, not QEMU)
+	Name                 string
+	URL                  string // download URL for the cloud image
+	SHA256               string // expected SHA256 hash of the image (of the final qcow2, after any decompression)
+	MemoryMB             int    // RAM for the VM
+	IsGokrazy            bool   // true for gokrazy images (different QEMU setup)
+	IsMacOS              bool   // true for macOS images (launched via tailmac, not QEMU)
+	GokrazyApp           string // gokrazy app directory/image basename; defaults to "natlabapp"
+	GokrazyKernelPackage string // gokrazy kernel module path; defaults to github.com/tailscale/gokrazy-kernel
+	GokrazyMachine       string // QEMU machine type; defaults to microvm
+	GokrazyNetDevice     string // QEMU NIC device; defaults to virtio-net-device
 }
 
 // GOOS returns the Go OS name for this image.
@@ -51,12 +55,58 @@ func (img OSImage) GOARCH() string {
 	return "amd64"
 }
 
+func (img OSImage) gokrazyApp() string {
+	if img.GokrazyApp != "" {
+		return img.GokrazyApp
+	}
+	return "natlabapp"
+}
+
+func (img OSImage) gokrazyKernelPackage() string {
+	if img.GokrazyKernelPackage != "" {
+		return img.GokrazyKernelPackage
+	}
+	return "github.com/tailscale/gokrazy-kernel"
+}
+
+func (img OSImage) gokrazyMachine() string {
+	if img.GokrazyMachine != "" {
+		return img.GokrazyMachine
+	}
+	return "microvm"
+}
+
+func (img OSImage) gokrazyNetDevice() string {
+	if img.GokrazyNetDevice != "" {
+		return img.GokrazyNetDevice
+	}
+	return "virtio-net-device"
+}
+
 var (
 	// Gokrazy is a minimal Tailscale appliance image built from the gokrazy/natlabapp directory.
 	Gokrazy = OSImage{
-		Name:      "gokrazy",
-		IsGokrazy: true,
-		MemoryMB:  384,
+		Name:                 "gokrazy",
+		IsGokrazy:            true,
+		MemoryMB:             384,
+		GokrazyApp:           "natlabapp",
+		GokrazyKernelPackage: "github.com/tailscale/gokrazy-kernel",
+		GokrazyMachine:       "microvm",
+		GokrazyNetDevice:     "virtio-net-device",
+	}
+
+	// GokrazyBuggyLinux70 is a natlab gokrazy appliance that boots a Linux 7.0
+	// kernel with the UDP GSO bug from tailscale/tailscale#19777. It uses QEMU's
+	// emulated Intel igb NIC rather than virtio-net so the guest driver exposes
+	// NETIF_F_GSO_UDP_L4 and NETIF_F_GSO_PARTIAL.
+	GokrazyBuggyLinux70 = OSImage{
+		Name:                 "gokrazy-buggy-linux-7.0",
+		IsGokrazy:            true,
+		MemoryMB:             384,
+		GokrazyApp:           "natlabapp.buggy-linux-7_0",
+		GokrazyKernelPackage: "github.com/tailscale/gokrazy-kernel-buggy-linux-7_0",
+		GokrazyMachine:       "q35",
+		GokrazyNetDevice:     "igb",
 	}
 
 	// Ubuntu2404 is Ubuntu 24.04 LTS (Noble Numbat) cloud image.
