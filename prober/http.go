@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"tailscale.com/net/netutil"
 )
 
 const maxHTTPBody = 4 << 20 // MiB
@@ -35,7 +37,7 @@ func probeHTTP(ctx context.Context, url string, want []byte) error {
 
 	// Get a completely new transport each time, so we don't reuse a
 	// past connection.
-	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr := netutil.NewDefaultTransport()
 	defer tr.CloseIdleConnections()
 	c := &http.Client{
 		Transport: tr,

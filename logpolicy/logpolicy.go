@@ -43,6 +43,7 @@ import (
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/netutil"
 	"tailscale.com/net/netx"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/paths"
@@ -878,7 +879,7 @@ func (opts TransportOptions) New() http.RoundTripper {
 		opts.NetMon = netmon.NewStatic()
 	}
 	// Start with a copy of http.DefaultTransport and tweak it a bit.
-	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr := netutil.NewDefaultTransport()
 	if opts.TLSClientConfig != nil {
 		tr.TLSClientConfig = opts.TLSClientConfig.Clone()
 	}

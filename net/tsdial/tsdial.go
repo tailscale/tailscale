@@ -27,6 +27,7 @@ import (
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/netutil"
 	"tailscale.com/net/netx"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
@@ -684,7 +685,7 @@ func (d *Dialer) PeerAPIHTTPClient() *http.Client {
 		panic("unreachable")
 	}
 	d.peerClientOnce.Do(func() {
-		t := http.DefaultTransport.(*http.Transport).Clone()
+		t := netutil.NewDefaultTransport()
 		t.Dial = nil
 		t.DialContext = d.dialPeerAPI
 		// Do not use the environment proxy for PeerAPI.
