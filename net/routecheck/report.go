@@ -4,9 +4,15 @@
 package routecheck
 
 import (
+	"cmp"
 	"context"
+	"maps"
 	"net/netip"
+	"slices"
 	"time"
+
+	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
@@ -26,9 +32,9 @@ func (c *Client) Report() *Report {
 	}
 
 	// TODO(sfllaw): Return the latest snapshot produced by background probing.
-	r, err := c.ProbeAllHARouters(context.TODO(), 5, DefaultTimeout)
+	r, err := c.Refresh(context.TODO(), DefaultTimeout)
 	if err != nil {
-		c.logf("reachability report error: %v", err)
+		c.logf("%v", err)
 	}
 	return r
 }
@@ -36,26 +42,61 @@ func (c *Client) Report() *Report {
 // Report contains the result of a single routecheck.
 type Report struct {
 	// Done is the time when the report was finished.
-	Done time.Time
+	Done time.Time `json:"done"`
 
 	// Reachable is the set of nodes that were reachable from the current host
 	// when this report was compiled. Missing nodes may or may not be reachable.
-	Reachable map[tailcfg.NodeID]Node
+	Reachable NodeSet `json:"reachable"`
+
+	// LastProbed tracks the last time a given node was probed.
+	// This is used to rate-limit reachability probing, so an entry’s
+	// presence doesn’t imply that it is reachable.
+	LastProbed map[tailcfg.NodeID]time.Time `json:"-"` // not marshaled
 }
 
 // Node represents a node in the reachability report.
 type Node struct {
-	ID tailcfg.NodeID
+	ID tailcfg.NodeID `json:"id"`
 
 	// Name is the FQDN of the node.
 	// It is also the MagicDNS name for the node.
 	// It has a trailing dot.
 	// e.g. "host.tail-scale.ts.net."
-	Name string
+	Name string `json:"name"`
 
 	// Addr is the IP address that was probed.
-	Addr netip.Addr
+	Addr netip.Addr `json:"addr"`
 
 	// Routes are the subnets that the node will route.
-	Routes []netip.Prefix
+	Routes []netip.Prefix `json:"routes"`
+}
+
+// NodeSet is a set of nodes keyed by node ID, so duplicates are easily detected.
+// To prevent stuttering, it marshals itself as a JSON array, sorted by node ID.
+type NodeSet map[tailcfg.NodeID]Node
+
+var _ jsonv2.MarshalerTo = &NodeSet{}
+var _ jsonv2.UnmarshalerFrom = &NodeSet{}
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (ns NodeSet) MarshalJSONTo(enc *jsontext.Encoder) error {
+	nodes := slices.SortedFunc(maps.Values(ns), func(a, b Node) int {
+		return cmp.Compare(a.ID, b.ID)
+	})
+	return jsonv2.MarshalEncode(enc, nodes)
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (ns *NodeSet) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	var nodes []Node
+	if err := jsonv2.UnmarshalDecode(dec, &nodes); err != nil {
+		return err
+	}
+	if *ns == nil {
+		*ns = make(NodeSet, len(nodes))
+	}
+	for _, n := range nodes {
+		(*ns)[n.ID] = n
+	}
+	return nil
 }
