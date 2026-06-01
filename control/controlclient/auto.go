@@ -472,13 +472,14 @@ func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
 	c.mu.Lock()
 	goodState := c.loggedIn && c.inMapPoll
 	ndu, canDelta := c.observer.(NetmapDeltaUpdater)
+	mapCtx := c.mapCtx
 	c.mu.Unlock()
 
 	if !goodState || !canDelta {
 		return false
 	}
 
-	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
 	defer cancel()
 
 	ch := make(chan bool, 1)
@@ -508,11 +509,12 @@ func (mrs mapRoutineState) UpdatePacketFilter(rules views.Slice[tailcfg.FilterRu
 	c.mu.Lock()
 	goodState := c.loggedIn && c.inMapPoll
 	pfu, ok := c.observer.(PacketFilterUpdater)
+	mapCtx := c.mapCtx
 	c.mu.Unlock()
 	if !goodState || !ok {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
 	defer cancel()
 	ch := make(chan bool, 1)
 	c.observerQueue.Add(func() {
@@ -536,11 +538,12 @@ func (mrs mapRoutineState) UpdateUserProfiles(profiles map[tailcfg.UserID]tailcf
 	c.mu.Lock()
 	goodState := c.loggedIn && c.inMapPoll
 	upu, ok := c.observer.(UserProfileUpdater)
+	mapCtx := c.mapCtx
 	c.mu.Unlock()
 	if !goodState || !ok {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
 	defer cancel()
 	ch := make(chan bool, 1)
 	c.observerQueue.Add(func() {
@@ -561,13 +564,14 @@ func (mrs mapRoutineState) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPubl
 	c.mu.Lock()
 	goodState := c.loggedIn && c.inMapPoll
 	dun, ok := c.observer.(patchDiscoKeyer)
+	mapCtx := c.mapCtx
 	c.mu.Unlock()
 
 	if !goodState || !ok {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
 	defer cancel()
 
 	c.observerQueue.RunSync(ctx, func() {
