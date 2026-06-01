@@ -85,6 +85,14 @@ const (
 	defaultInitialRetransmitTime = 100 * time.Millisecond
 )
 
+func derpProbeURL(node *tailcfg.DERPNode) string {
+	host := node.HostName
+	if node.DERPPort != 0 && node.DERPPort != 443 {
+		host = net.JoinHostPort(host, fmt.Sprint(node.DERPPort))
+	}
+	return "https://" + host + "/derp/probe"
+}
+
 // Report contains the result of a single netcheck.
 type Report struct {
 	Now         time.Time // the time the report was run
@@ -1072,7 +1080,7 @@ func (c *Client) runHTTPOnlyChecks(ctx context.Context, last *Report, rs *report
 		}
 		wg.Go(func() {
 			node := rg.Nodes[0]
-			req, _ := http.NewRequestWithContext(ctx, "HEAD", "https://"+node.HostName+"/derp/probe", nil)
+			req, _ := http.NewRequestWithContext(ctx, "HEAD", derpProbeURL(node), nil)
 			// One warm-up one to get HTTP connection set
 			// up and get a connection from the browser's
 			// pool.
