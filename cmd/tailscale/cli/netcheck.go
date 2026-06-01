@@ -26,6 +26,7 @@ import (
 	"tailscale.com/net/portmapper/portmappertype"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/set"
@@ -175,7 +176,7 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 	}
 
 	printf("\nReport:\n")
-	printf("\t* Time: %v\n", report.Now.Format(time.RFC3339Nano))
+	printf("\t* Time: %v\n", report.Now.Local().Format(tstime.DateSpTimeNanoZ))
 	printf("\t* UDP: %v\n", report.UDP)
 	if report.GlobalV4.IsValid() {
 		printf("\t* IPv4: yes, %s\n", report.GlobalV4)

@@ -401,7 +401,7 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	defer h.b.TryFlushLogs() // kick off upload after bugreport's done logging
 
 	logMarker := func() string {
-		return fmt.Sprintf("BUG-%v-%v-%v", h.backendLogID, h.clock.Now().UTC().Format("20060102150405Z"), rands.HexString(16))
+		return fmt.Sprintf("BUG-%v-%v-%v", h.backendLogID, h.clock.Now().UTC().Format(tstime.NumericDateTimeZ), rands.HexString(16))
 	}
 	if envknob.NoLogsNoSupport() {
 		logMarker = func() string { return "BUG-NO-LOGS-NO-SUPPORT-this-node-has-had-its-logging-disabled" }
