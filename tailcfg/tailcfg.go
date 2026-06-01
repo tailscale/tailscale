@@ -2785,6 +2785,12 @@ const (
 	// discard existing cached maps, and will not store any.
 	NodeAttrCacheNetworkMaps NodeCapability = "cache-network-maps"
 
+	// NodeAttrDisableCacheNetworkMaps indicates that the node should not cache
+	// network maps (as per [NodeAttrCacheNetworkMaps]) when it normally would.
+	// This attribute exists to allow the policy document to override the default.
+	// When set, it takes precedence over [NodeAttrCacheNetworkMaps].
+	NodeAttrDisableCacheNetworkMaps NodeCapability = "disable-cache-network-maps"
+
 	// NodeAttrDisableLinuxCGNATDropRule tells Linux clients to not insert a
 	// blanket firewall DROP rule for inbound traffic from the CGNAT IP range
 	// that does not originate from the Tailscale network interface.
