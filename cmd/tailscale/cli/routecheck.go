@@ -13,12 +13,13 @@ import (
 	"slices"
 	"strings"
 	"text/tabwriter"
-	"time"
 
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
 	"github.com/peterbourgon/ff/v3/ffcli"
 
+	"tailscale.com/cmd/tailscale/cli/jsonoutput"
+	"tailscale.com/cmd/tailscale/tsroutecheckjsonv0"
 	"tailscale.com/net/routecheck"
 	"tailscale.com/tstime"
 )
@@ -41,16 +42,19 @@ var routecheckCmd = func() *ffcli.Command {
 var routecheckFlagSet = func() *flag.FlagSet {
 	fs := newFlagSet("routecheck")
 	fs.BoolVar(&routecheckArgs.probe, "probe", false, "probe now to generate a new reachability report")
-	fs.StringVar(&routecheckArgs.format, "format", "", `output format: empty (for human-readable), "json" or "json-line"`)
+	fs.Var(&routecheckArgs.format, "format", `output format: empty (for human-readable), "json" or "json-line"`)
+	fs.Var(routecheckArgs.format.Bool(), "json", "output in JSON format")
 	return fs
 }()
 
 var routecheckArgs struct {
 	probe  bool
-	format string
+	format jsonoutput.Format
 }
 
 func runRoutecheck(ctx context.Context, args []string) error {
+	fmt.Printf("format: %q\n", routecheckArgs.format)
+	return nil
 	routeCheck := localClient.RouteCheck
 	if routecheckArgs.probe {
 		routeCheck = localClient.RouteCheckProbe
@@ -67,7 +71,7 @@ func runRoutecheck(ctx context.Context, args []string) error {
 
 func printRouteCheckReport(rp *routecheck.Report) error {
 	var enc *jsontext.Encoder
-	switch routecheckArgs.format {
+	switch routecheckArgs.format.String() {
 	case "":
 	case "json":
 		enc = jsontext.NewEncoder(Stdout, jsontext.WithIndent("\t"))
@@ -90,10 +94,7 @@ func printRouteCheckReport(rp *routecheck.Report) error {
 	}
 
 	if enc != nil {
-		out := struct {
-			Done   time.Time                   `json:"done"`
-			Routes routecheck.RoutablePrefixes `json:"routes"`
-		}{
+		out := tsroutecheckjsonv0.ReportResponse{
 			Done:   rp.Done,
 			Routes: routes,
 		}
