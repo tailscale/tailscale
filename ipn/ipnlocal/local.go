@@ -1514,6 +1514,15 @@ func (b *LocalBackend) updateStatusLocked(sb *ipnstate.StatusBuilder) {
 	// TODO: hostinfo, and its networkinfo
 	// TODO: EngineStatus copy (and deprecate it?)
 
+	// Always add the self user's profile, even when peers are omitted, so that
+	// callers can resolve the self node's owner to a login name.
+	// See https://github.com/tailscale/tailscale/issues/19894.
+	if nm != nil {
+		if up, ok := nm.UserProfiles[nm.User()]; ok {
+			sb.AddUser(nm.User(), up)
+		}
+	}
+
 	if sb.WantPeers {
 		b.populatePeerStatusLocked(sb)
 	}

@@ -2025,6 +2025,44 @@ func TestStatusPeerCapabilities(t *testing.T) {
 	}
 }
 
+// TestStatusWithoutPeersSelfUserProfile verifies that the self user's
+// UserProfile is reported in Status.User even when peers are omitted, so that
+// callers like `tailscale status --peers=false` can resolve the self node's
+// owner to a login name rather than a bare user ID.
+// Regression test for https://github.com/tailscale/tailscale/issues/19894.
+func TestStatusWithoutPeersSelfUserProfile(t *testing.T) {
+	b := newTestLocalBackend(t)
+	const selfUID = tailcfg.UserID(42)
+	const loginName = "alice@example.com"
+	b.setNetMapLocked(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			MachineAuthorized: true,
+			Addresses:         ipps("100.101.101.101"),
+			User:              selfUID,
+		}).View(),
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+			selfUID: (&tailcfg.UserProfile{
+				ID:        selfUID,
+				LoginName: loginName,
+			}).View(),
+		},
+	})
+	st := b.StatusWithoutPeers()
+	if st.Self == nil {
+		t.Fatal("Status.Self is nil")
+	}
+	if got, want := st.Self.UserID, selfUID; got != want {
+		t.Errorf("Status.Self.UserID = %v; want %v", got, want)
+	}
+	up, ok := st.User[selfUID]
+	if !ok {
+		t.Fatalf("Status.User missing entry for self UserID %v; got %v", selfUID, st.User)
+	}
+	if got, want := up.LoginName, loginName; got != want {
+		t.Errorf("Status.User[%v].LoginName = %q; want %q", selfUID, got, want)
+	}
+}
+
 // legacyBackend was the interface between Tailscale frontends
 // (e.g. cmd/tailscale, iOS/MacOS/Windows GUIs) and the tailscale
 // backend (e.g. cmd/tailscaled) running on the same machine.
