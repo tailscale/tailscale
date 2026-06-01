@@ -51,6 +51,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsconst"
 	"tailscale.com/tstime"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
@@ -3995,18 +3996,18 @@ const (
 var (
 	// pingTimeoutDuration is how long we wait for a pong reply before
 	// assuming it's never coming.
-	pingTimeoutDuration = 5 * time.Second
+	pingTimeoutDuration = tsconst.DefaultPingTimeout
 
 	// discoPingInterval is the minimum time between pings
 	// to an endpoint. (Except in the case of CallMeMaybe frames
 	// resetting the counter, as the first pings likely didn't through
 	// the firewall)
-	discoPingInterval = 5 * time.Second
+	discoPingInterval = tsconst.DefaultPingInterval
 
 	// wireguardPingInterval is the minimum time between pings to an endpoint.
 	// Pings are only sent if we have not observed bidirectional traffic with an
 	// endpoint in at least this duration.
-	wireguardPingInterval = 5 * time.Second
+	wireguardPingInterval = tsconst.DefaultPingInterval
 )
 
 // indexSentinelDeleted is the temporary value that endpointState.index takes while
