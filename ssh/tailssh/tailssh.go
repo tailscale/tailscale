@@ -39,6 +39,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -479,7 +480,7 @@ func (srv *server) newConn() (*conn, error) {
 	srv.mu.Unlock()
 	c := &conn{srv: srv}
 	now := srv.now()
-	c.connID = fmt.Sprintf("ssh-conn-%s-%02x", now.UTC().Format("20060102T150405"), randBytes(5))
+	c.connID = fmt.Sprintf("ssh-conn-%s-%02x", now.UTC().Format(tstime.BasicDateTTime), randBytes(5))
 	fwdHandler := &gliderssh.ForwardedTCPHandler{}
 	streamLocalFwdHandler := &gliderssh.ForwardedUnixHandler{}
 	c.Server = &gliderssh.Server{
@@ -776,7 +777,7 @@ func (ss *sshSession) vlogf(format string, args ...any) {
 }
 
 func (c *conn) newSSHSession(s gliderssh.Session) *sshSession {
-	sharedID := fmt.Sprintf("sess-%s-%02x", c.srv.now().UTC().Format("20060102T150405"), randBytes(5))
+	sharedID := fmt.Sprintf("sess-%s-%02x", c.srv.now().UTC().Format(tstime.BasicDateTTime), randBytes(5))
 	c.logf("starting session: %v", sharedID)
 	ctx, cancel := context.WithCancelCause(s.Context())
 	return &sshSession{
