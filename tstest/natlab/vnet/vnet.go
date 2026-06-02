@@ -445,6 +445,17 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
+	if destPort == 80 && fakeACME.Match(destIP) && n.s.fakeACME != nil {
+		r.Complete(false)
+		tc := gonet.NewTCPConn(&wq, ep)
+		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
+		hs := &http.Server{Handler: n.s.fakeACME}
+		n.s.wg.Go(func() {
+			hs.Serve(netutil.NewOneConnListener(tc, nil))
+		})
+		return
+	}
+
 	var targetDial string
 	if n.s.derpIPs.Contains(destIP) {
 		targetDial = destIP.String() + ":" + strconv.Itoa(int(destPort))
@@ -831,6 +842,7 @@ type Server struct {
 
 	control    *testcontrol.Server
 	derps      []*derpServer
+	fakeACME   *fakeACMEServer
 	pcapWriter *pcapWriter
 
 	// writeMu serializes all writes to VM clients.
@@ -845,6 +857,7 @@ type Server struct {
 
 	cloudInitData map[int]*CloudInitData // node num → cloud-init config
 	fileContents  map[string][]byte      // filename → file bytes
+	dnsTXTRecords map[string][]string
 
 	// onDHCPEvent, if non-nil, is called when DHCP messages are processed.
 	// Parameters are: source MAC, node number, DHCP message type, assigned IP.
@@ -922,14 +935,21 @@ func New(c *Config) (*Server, error) {
 			DERPMap:         derpMap,
 			ExplicitBaseURL: "http://control.tailscale",
 		},
+		fakeACME: newFakeACMEServer("http://acme.example"),
 
 		blendReality: c.blendReality,
 		derpIPs:      set.Of[netip.Addr](),
 
-		nodeByMAC:    map[MAC]*node{},
-		networkByWAN: &bart.Table[*network]{},
-		networks:     set.Of[*network](),
+		nodeByMAC:     map[MAC]*node{},
+		networkByWAN:  &bart.Table[*network]{},
+		networks:      set.Of[*network](),
+		dnsTXTRecords: map[string][]string{},
 	}
+	s.control.OnSetDNS = func(req *tailcfg.SetDNSRequest) error {
+		s.setDNSRecord(req.Name, req.Value)
+		return nil
+	}
+	s.fakeACME.lookupTXT = s.lookupTXT
 	for _, host := range derpHostnames {
 		s.derps = append(s.derps, newDERPServer(host))
 	}
@@ -966,6 +986,28 @@ func (s *Server) DERPHostname(idx int) string {
 // "sha256-raw:<hex>". idx must be 0 or 1.
 func (s *Server) DERPCertSHA256Hex(idx int) string {
 	return s.derps[idx].certSHA256Hex
+}
+
+// FakeACMEDirectoryURL returns the directory URL for vnet's in-process ACME CA.
+func (s *Server) FakeACMEDirectoryURL() string {
+	return s.fakeACME.directoryURL()
+}
+
+// FakeACMERootPEM returns the PEM-encoded root certificate for vnet's fake ACME CA.
+func (s *Server) FakeACMERootPEM() []byte {
+	return s.fakeACME.rootPEM()
+}
+
+func (s *Server) setDNSRecord(name, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dnsTXTRecords[name] = append(s.dnsTXTRecords[name], value)
+}
+
+func (s *Server) lookupTXT(name string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.dnsTXTRecords[name]...)
 }
 
 // CloudInitData holds the cloud-init configuration for a node.
@@ -2270,7 +2312,7 @@ func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
 	}
 
 	if tcp.DstPort == 80 || tcp.DstPort == 443 {
-		for _, v := range []virtualIP{fakeControl, fakeDERP1, fakeDERP2, fakeLogCatcher, fakeCloudInit, fakeFiles} {
+		for _, v := range []virtualIP{fakeControl, fakeDERP1, fakeDERP2, fakeLogCatcher, fakeCloudInit, fakeFiles, fakeACME} {
 			if v.Match(flow.dst) {
 				return true
 			}
@@ -2396,6 +2438,17 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 					Type:  q.Type,
 					Class: q.Class,
 					IP:    ip.AsSlice(),
+					TTL:   60,
+				})
+			}
+		} else if q.Type == layers.DNSTypeTXT {
+			for _, txt := range s.lookupTXT(string(q.Name)) {
+				response.ANCount++
+				response.Answers = append(response.Answers, layers.DNSResourceRecord{
+					Name:  q.Name,
+					Type:  q.Type,
+					Class: q.Class,
+					TXTs:  [][]byte{[]byte(txt)},
 					TTL:   60,
 				})
 			}
