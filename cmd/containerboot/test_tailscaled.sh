@@ -7,7 +7,7 @@
 
 set -eu
 
-echo $0 $@ >>$TS_TEST_RECORD_ARGS
+echo "$0" "$@" >>"$TS_TEST_RECORD_ARGS"
 
 socket=""
 while [[ $# -gt 0 ]]; do

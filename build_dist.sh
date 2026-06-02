@@ -16,7 +16,7 @@ if [ -n "${TS_USE_TOOLCHAIN:-}" ]; then
 	go="./tool/go"
 fi
 
-eval `CGO_ENABLED=0 GOOS=$($go env GOHOSTOS) GOARCH=$($go env GOHOSTARCH) $go run ./cmd/mkversion`
+eval "$(CGO_ENABLED=0 GOOS=$($go env GOHOSTOS) GOARCH=$($go env GOHOSTARCH) $go run ./cmd/mkversion)"
 
 if [ "$#" -ge 1 ] && [ "$1" = "shellvars" ]; then
 	cat <<EOF
@@ -41,7 +41,7 @@ while [ "$#" -gt 1 ]; do
 		fi
 		shift
 		ldflags="$ldflags -w -s"
-		tags="${tags:+$tags,},$(GOOS= GOARCH= $go run ./cmd/featuretags --min --add=osrouter)"
+		tags="${tags:+$tags,},$(GOOS='' GOARCH='' $go run ./cmd/featuretags --min --add=osrouter)"
 		;;
 	--min)
 	    # --min is like --extra-small but even smaller, removing all features,
@@ -49,7 +49,7 @@ while [ "$#" -gt 1 ]; do
 		# osrouter). It exists for benchmarking purposes only.
 		shift
 		ldflags="$ldflags -w -s"
-		tags="${tags:+$tags,},$(GOOS= GOARCH= $go run ./cmd/featuretags --min)"
+		tags="${tags:+$tags,},$(GOOS='' GOARCH='' $go run ./cmd/featuretags --min)"
 		;;
 	--box)
 		if [ ! -z "${TAGS:-}" ]; then

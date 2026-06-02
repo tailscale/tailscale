@@ -1,7 +1,8 @@
+# shellcheck shell=sh
 # $1 == 1 for initial installation.
 # $1 == 2 for upgrades.
 
-if [ $1 -eq 1 ] ; then
+if [ "$1" -eq 1 ] ; then
     # Normally, the tailscale-relay package would request shutdown of
     # its service before uninstallation. Unfortunately, the
     # tailscale-relay package we distributed doesn't have those

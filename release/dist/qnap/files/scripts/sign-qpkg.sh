@@ -8,11 +8,12 @@ gcloud config set project "$GCLOUD_PROJECT"
 echo "---
 tokens:
   - key_ring: \"$GCLOUD_KEYRING\"
-log_directory: "/tmp/kmsp11"
+log_directory: \"/tmp/kmsp11\"
 " > pkcs11-config.yaml
 chmod 0600 pkcs11-config.yaml
 
-export KMS_PKCS11_CONFIG=`readlink -f pkcs11-config.yaml`
+KMS_PKCS11_CONFIG=$(readlink -f pkcs11-config.yaml)
+export KMS_PKCS11_CONFIG
 export PKCS11_MODULE_PATH=/libkmsp11-1.7-linux-amd64/libkmsp11.so
 
 # Verify signature of pkcs11 module

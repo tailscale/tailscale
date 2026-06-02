@@ -66,7 +66,7 @@ case "$REV" in
 
         # This works for linux and darwin, which is sufficient
         # (we do not build tailscale-go for other targets).
-        HOST_OS=$(uname -s | tr A-Z a-z)
+        HOST_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
         HOST_ARCH="$(uname -m)"
         if [[ "$HOST_ARCH" == "aarch64" ]]; then
             # Go uses the name "arm64".

@@ -51,6 +51,7 @@ main() {
 		#  - VERSION_ID: the numeric release version for the OS, if any (e.g. "18.04")
 		#  - VERSION_CODENAME: the codename of the OS release, if any (e.g. "buster")
 		#  - UBUNTU_CODENAME: if it exists, use instead of VERSION_CODENAME
+		# shellcheck disable=SC1091
 		. /etc/os-release
 		VERSION_MAJOR="${VERSION_ID:-}"
 		VERSION_MAJOR="${VERSION_MAJOR%%.*}"
@@ -415,7 +416,7 @@ main() {
 		echo "The installer cannot reach $TEST_URL"
 		echo "Please make sure that your machine has internet access."
 		echo "Test output:"
-		echo $TEST_OUT
+		echo "$TEST_OUT"
 		exit 1
 	fi
 
@@ -534,7 +535,6 @@ main() {
 	[ "$VERSION" != "" ] && OSVERSION="$OSVERSION $VERSION"
 
 	# Prepare package name with optional version
-	PACKAGE_NAME="tailscale"
 	if [ -n "$TAILSCALE_VERSION" ]; then
 		echo "Installing Tailscale $TAILSCALE_VERSION for $OSVERSION, using method $PACKAGETYPE"
 	else

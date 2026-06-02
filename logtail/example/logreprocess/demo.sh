@@ -16,6 +16,8 @@
 #        https://log.tailscale.com
 #
 # Then set the three variables below.
+
+# shellcheck disable=SC2154
 trap 'rv=$?; [ "$rv" = 0 ] || echo "-- exiting with code $rv"; exit $rv' EXIT
 set -e
 
@@ -59,20 +61,20 @@ privateid2=$(hexdump -n 32 -e '8/4 "%08X"' /dev/urandom)
 privateid3=$(hexdump -n 32 -e '8/4 "%08X"' /dev/urandom)
 
 # Public IDs are the SHA-256 of the private ID.
-publicid1=$(echo -n $privateid1 | xxd -r -p - | shasum -a 256 | sed 's/ -//')
-publicid2=$(echo -n $privateid2 | xxd -r -p - | shasum -a 256 | sed 's/ -//')
-publicid3=$(echo -n $privateid3 | xxd -r -p - | shasum -a 256 | sed 's/ -//')
+publicid1=$(echo -n "$privateid1" | xxd -r -p - | shasum -a 256 | sed 's/ -//')
+publicid2=$(echo -n "$privateid2" | xxd -r -p - | shasum -a 256 | sed 's/ -//')
+# publicid3=$(echo -n "$privateid3" | xxd -r -p - | shasum -a 256 | sed 's/ -//')
 
 # Write the machine logs to the input collection.
 # Notice that this doesn't require an API key.
 msg "Producing new logs..."
-echo "$LOG_TEXT" | logtail -c $COLLECTION_IN -k $privateid1 >/dev/null
-echo "$LOG_TEXT" | logtail -c $COLLECTION_IN -k $privateid2 >/dev/null
+echo "$LOG_TEXT" | logtail -c "$COLLECTION_IN" -k "$privateid1" >/dev/null
+echo "$LOG_TEXT" | logtail -c "$COLLECTION_IN" -k "$privateid2" >/dev/null
 
 # Adopt the logs, so they will be kept and are readable.
 msg "Adopting logs..."
-logadopt -p "$LOGTAIL_API_KEY" -c "$COLLECTION_IN" -m $publicid1
-logadopt -p "$LOGTAIL_API_KEY" -c "$COLLECTION_IN" -m $publicid2
+logadopt -p "$LOGTAIL_API_KEY" -c "$COLLECTION_IN" -m "$publicid1"
+logadopt -p "$LOGTAIL_API_KEY" -c "$COLLECTION_IN" -m "$publicid2"
 
 # Reprocess the logs, amalgamating python tracebacks.
 #
@@ -83,4 +85,4 @@ logadopt -p "$LOGTAIL_API_KEY" -c "$COLLECTION_IN" -m $publicid2
 # above) have already been processed.
 msg "Reprocessing logs..."
 logreprocess -t 3s -c "$COLLECTION_IN" -p "$LOGTAIL_API_KEY" 2>&1 |
-  logtail -c "$COLLECTION_OUT" -k $privateid3
+  logtail -c "$COLLECTION_OUT" -k "$privateid3"
