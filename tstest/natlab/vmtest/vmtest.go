@@ -89,9 +89,10 @@ type Env struct {
 
 	qemuProcs []*exec.Cmd // launched QEMU processes
 
-	sameTailnetUser bool // all nodes register as the same Tailnet user
-	allOnline       bool // mark every peer as Online=true in MapResponses
-	peerRelayGrants bool // grant peer-relay capabilities on the wildcard packet filter
+	sameTailnetUser           bool // all nodes register as the same Tailnet user
+	allOnline                 bool // mark every peer as Online=true in MapResponses
+	peerRelayGrants           bool // grant peer-relay capabilities on the wildcard packet filter
+	selfSignedDERPCertPinning bool // serve test DERP map with sha256-raw cert pins
 
 	// Shared resource initialization (sync.Once for things multiple nodes share).
 	vnetOnce      sync.Once
@@ -382,6 +383,15 @@ func AllOnline() EnvOption {
 // cannot actually be used as a relay by its peers.
 func PeerRelayGrants() EnvOption {
 	return envOptFunc(func(e *Env) { e.peerRelayGrants = true })
+}
+
+// SelfSignedDERPCertPinning returns an [EnvOption] that makes the test control
+// server advertise a DERP map whose nodes use CertName="sha256-raw:<hex>"
+// pinning against the self-signed certs vnet's fake DERP servers serve. This
+// exercises the sha256-raw verification path end-to-end (in tailscaled and in
+// `tailscale debug derp`) without involving a real CA.
+func SelfSignedDERPCertPinning() EnvOption {
+	return envOptFunc(func(e *Env) { e.selfSignedDERPCertPinning = true })
 }
 
 // AddNetwork creates a new virtual network. Arguments follow the same pattern as
@@ -1379,7 +1389,42 @@ func (e *Env) initVnet() {
 		if e.peerRelayGrants {
 			e.server.ControlServer().PeerRelayGrants = true
 		}
+		if e.selfSignedDERPCertPinning {
+			e.server.ControlServer().DERPMap = e.buildSelfSignedDERPMap()
+		}
 	})
+}
+
+// buildSelfSignedDERPMap returns a DERP map identical in structure to the
+// stock test map (same regions, hostnames, virtual IPs) but with each node's
+// CertName set to "sha256-raw:<hex>" pinning the actual self-signed cert
+// served by vnet's fake DERP server, and InsecureForTests cleared so the
+// pin is actually exercised. Nodes are matched to certs by HostName.
+func (e *Env) buildSelfSignedDERPMap() *tailcfg.DERPMap {
+	hostToHash := make(map[string]string, 2)
+	for i := range 2 {
+		hostToHash[e.server.DERPHostname(i)] = e.server.DERPCertSHA256Hex(i)
+	}
+	src := e.server.ControlServer().DERPMap
+	dm := &tailcfg.DERPMap{
+		Regions: make(map[int]*tailcfg.DERPRegion, len(src.Regions)),
+	}
+	for id, srcRegion := range src.Regions {
+		r := *srcRegion
+		r.Nodes = make([]*tailcfg.DERPNode, len(srcRegion.Nodes))
+		for i, srcNode := range srcRegion.Nodes {
+			n := *srcNode
+			hash, ok := hostToHash[n.HostName]
+			if !ok {
+				e.t.Fatalf("buildSelfSignedDERPMap: no cert hash for HostName %q", n.HostName)
+			}
+			n.InsecureForTests = false
+			n.CertName = "sha256-raw:" + hash
+			r.Nodes[i] = &n
+		}
+		dm.Regions[id] = &r
+	}
+	return dm
 }
 
 // ensureQEMUSocket creates the Unix stream socket for QEMU VMs. Called once.
