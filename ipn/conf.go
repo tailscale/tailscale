@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/netip"
 
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/preftype"
@@ -31,8 +32,9 @@ type ConfigVAlpha struct {
 	ExitNode                   *string  `json:"exitNode,omitempty"` // IP, StableID, or MagicDNS base name
 	AllowLANWhileUsingExitNode opt.Bool `json:"allowLANWhileUsingExitNode,omitempty"`
 
-	AdvertiseRoutes []netip.Prefix `json:",omitempty"`
-	DisableSNAT     opt.Bool       `json:",omitempty"`
+	AdvertiseRoutes   []netip.Prefix `json:",omitempty"`
+	AdvertiseExitNode opt.Bool       `json:",omitzero"`
+	DisableSNAT       opt.Bool       `json:",omitzero"`
 
 	AdvertiseServices []string `json:",omitempty"`
 
@@ -123,6 +125,14 @@ func (c *ConfigVAlpha) ToPrefs() (MaskedPrefs, error) {
 		}
 		mp.AdvertiseRoutes = c.AdvertiseRoutes
 		mp.AdvertiseRoutesSet = true
+	}
+	if c.AdvertiseExitNode.EqualBool(true) {
+		if mp.AdvertiseRoutesSet {
+			mp.AdvertiseRoutes = append(mp.AdvertiseRoutes, tsaddr.AllIPv4(), tsaddr.AllIPv6())
+		} else {
+			mp.AdvertiseRoutes = tsaddr.ExitRoutes()
+			mp.AdvertiseRoutesSet = true
+		}
 	}
 	if c.DisableSNAT != "" {
 		mp.NoSNAT = c.DisableSNAT.EqualBool(true)
