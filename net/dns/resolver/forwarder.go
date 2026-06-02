@@ -347,6 +347,11 @@ type forwarder struct {
 	acceptDNS bool
 }
 
+func (f *forwarder) probeLocks() {
+	f.mu.Lock()
+	f.mu.Unlock()
+}
+
 func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, health *health.Tracker, knobs *controlknobs.Knobs) *forwarder {
 	if !buildfeatures.HasDNS {
 		return nil

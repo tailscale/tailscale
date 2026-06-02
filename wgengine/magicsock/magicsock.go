@@ -1151,6 +1151,12 @@ func (c *Conn) LastRecvActivityOfNodeKey(nk key.NodePublic) string {
 	return mono.Since(saw).Round(time.Second).String()
 }
 
+// ProbeLocks acquires and releases Conn's internal mutex.
+func (c *Conn) ProbeLocks() {
+	c.mu.Lock()
+	c.mu.Unlock()
+}
+
 // Ping handles a "tailscale ping" CLI query.
 func (c *Conn) Ping(peer tailcfg.NodeView, res *ipnstate.PingResult, size int, cb func(*ipnstate.PingResult)) {
 	c.mu.Lock()
