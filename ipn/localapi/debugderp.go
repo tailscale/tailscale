@@ -25,7 +25,12 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/nettype"
+	"tailscale.com/util/clientmetric"
 )
+
+// MetricDERPRegionAvoidTrue tracks the usage of DERPRegion.Avoid in the DERPMap
+// as it gets replaced with better alternatives. See tailscale/corp#24697.
+var metricDERPRegionAvoidTrue = clientmetric.NewCounter("localapi_derpregion_avoid_true")
 
 func (h *Handler) serveDebugDERPRegion(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {
@@ -70,6 +75,7 @@ func (h *Handler) serveDebugDERPRegion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if reg.Avoid {
+		metricDERPRegionAvoidTrue.Add(1)
 		st.Warnings = append(st.Warnings, "Region is marked with Avoid bit")
 	}
 	if len(reg.Nodes) == 0 {
