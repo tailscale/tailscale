@@ -170,6 +170,7 @@ type serveEnv struct {
 	tcp              uint                     // TCP port
 	tlsTerminatedTCP uint                     // a TLS terminated TCP port
 	proxyProtocol    uint                     // PROXY protocol version (1 or 2)
+	redirect         string                   // HTTP redirect target
 	subcmd           serveMode                // subcommand
 	yes              bool                     // update without prompt
 	service          tailcfg.ServiceName      // service name
